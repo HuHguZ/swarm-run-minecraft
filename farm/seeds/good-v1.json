@@ -1,0 +1,4507 @@
+{
+ "version": "1.21.11",
+ "made": "2026-10-02 seedtool search --rp 150 --village 350 --bastion 150 --fortress 250 --sh 1700",
+ "note": "хорошие сиды (решение пользователя 02.10: пока тренируем спидран только на них). Лаву seedtool не знает — проверка сканом: поле lava (null — не проверено).",
+ "seeds": [
+  {
+   "seed": "2911374257081450067",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 301,
+   "shipwreck": 332,
+   "bastion": 144,
+   "fortress": 116,
+   "sh": 1696,
+   "lava": null
+  },
+  {
+   "seed": "5647002953211837822",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 45,
+   "village": 336,
+   "shipwreck": 422,
+   "bastion": 147,
+   "fortress": 167,
+   "sh": 1433,
+   "lava": null
+  },
+  {
+   "seed": "-8877121381267541911",
+   "biome": "desert",
+   "spawn": [
+    -48,
+    160
+   ],
+   "rp": 135,
+   "village": 294,
+   "shipwreck": 773,
+   "bastion": 125,
+   "fortress": 237,
+   "sh": 1402,
+   "lava": null
+  },
+  {
+   "seed": "6162616963942616824",
+   "biome": "savanna",
+   "spawn": [
+    96,
+    144
+   ],
+   "rp": 128,
+   "village": 164,
+   "shipwreck": null,
+   "bastion": 140,
+   "fortress": 229,
+   "sh": 1421,
+   "lava": null
+  },
+  {
+   "seed": "-4332886356280409547",
+   "biome": "plains",
+   "spawn": [
+    16,
+    112
+   ],
+   "rp": 93,
+   "village": 288,
+   "shipwreck": 466,
+   "bastion": 128,
+   "fortress": 222,
+   "sh": 1671,
+   "lava": null
+  },
+  {
+   "seed": "-5289050370803891447",
+   "biome": "forest",
+   "spawn": [
+    48,
+    -32
+   ],
+   "rp": 71,
+   "village": 248,
+   "shipwreck": 222,
+   "bastion": 136,
+   "fortress": 164,
+   "sh": 1621,
+   "lava": null
+  },
+  {
+   "seed": "6513512356422513636",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 113,
+   "village": 279,
+   "shipwreck": 624,
+   "bastion": 137,
+   "fortress": 160,
+   "sh": 1583,
+   "lava": null
+  },
+  {
+   "seed": "2192918442896024032",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 16,
+   "shipwreck": 692,
+   "bastion": 131,
+   "fortress": 187,
+   "sh": 1414,
+   "lava": null
+  },
+  {
+   "seed": "-2205806275449654407",
+   "biome": "forest",
+   "spawn": [
+    16,
+    -32
+   ],
+   "rp": 57,
+   "village": 304,
+   "shipwreck": 150,
+   "bastion": 107,
+   "fortress": 244,
+   "sh": 1460,
+   "lava": null
+  },
+  {
+   "seed": "-2599479239087634673",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 242,
+   "shipwreck": 332,
+   "bastion": 136,
+   "fortress": 144,
+   "sh": 1663,
+   "lava": null
+  },
+  {
+   "seed": "3127151558809526834",
+   "biome": "plains",
+   "spawn": [
+    384,
+    -864
+   ],
+   "rp": 35,
+   "village": 64,
+   "shipwreck": 283,
+   "bastion": 101,
+   "fortress": 212,
+   "sh": 953,
+   "lava": null
+  },
+  {
+   "seed": "-955261348487910180",
+   "biome": "savanna",
+   "spawn": [
+    592,
+    -320
+   ],
+   "rp": 131,
+   "village": 112,
+   "shipwreck": 329,
+   "bastion": 55,
+   "fortress": 191,
+   "sh": 1272,
+   "lava": null
+  },
+  {
+   "seed": "-3617111967252238031",
+   "biome": "desert",
+   "spawn": [
+    16,
+    144
+   ],
+   "rp": 90,
+   "village": 35,
+   "shipwreck": 266,
+   "bastion": 90,
+   "fortress": 192,
+   "sh": 1460,
+   "lava": null
+  },
+  {
+   "seed": "8388397891651367710",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 64,
+   "village": 288,
+   "shipwreck": 737,
+   "bastion": 64,
+   "fortress": 217,
+   "sh": 1477,
+   "lava": null
+  },
+  {
+   "seed": "-4254586417553246384",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 144,
+   "shipwreck": null,
+   "bastion": 116,
+   "fortress": 237,
+   "sh": 1502,
+   "lava": null
+  },
+  {
+   "seed": "-4351371514053413278",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 289,
+   "shipwreck": 624,
+   "bastion": 80,
+   "fortress": 200,
+   "sh": 1439,
+   "lava": null
+  },
+  {
+   "seed": "-4149939803213510731",
+   "biome": "forest",
+   "spawn": [
+    240,
+    288
+   ],
+   "rp": 97,
+   "village": 150,
+   "shipwreck": 217,
+   "bastion": 28,
+   "fortress": 164,
+   "sh": 1445,
+   "lava": null
+  },
+  {
+   "seed": "-2257687179256378915",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 248,
+   "shipwreck": 744,
+   "bastion": 124,
+   "fortress": 135,
+   "sh": 1367,
+   "lava": null
+  },
+  {
+   "seed": "-2411669811112812129",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 172,
+   "shipwreck": 368,
+   "bastion": 137,
+   "fortress": 244,
+   "sh": 1670,
+   "lava": null
+  },
+  {
+   "seed": "-3335818075162626100",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 90,
+   "shipwreck": 609,
+   "bastion": 97,
+   "fortress": 248,
+   "sh": 1636,
+   "lava": null
+  },
+  {
+   "seed": "5708846779205048338",
+   "biome": "cherry_grove",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 131,
+   "shipwreck": 918,
+   "bastion": 147,
+   "fortress": 86,
+   "sh": 1527,
+   "lava": null
+  },
+  {
+   "seed": "1619383808589565669",
+   "biome": "jungle",
+   "spawn": [
+    128,
+    -64
+   ],
+   "rp": 137,
+   "village": 295,
+   "shipwreck": 236,
+   "bastion": 142,
+   "fortress": 215,
+   "sh": 1243,
+   "lava": null
+  },
+  {
+   "seed": "8513781155319731981",
+   "biome": "forest",
+   "spawn": [
+    -368,
+    144
+   ],
+   "rp": 137,
+   "village": 48,
+   "shipwreck": 492,
+   "bastion": 130,
+   "fortress": 231,
+   "sh": 1126,
+   "lava": null
+  },
+  {
+   "seed": "-2601087059190465086",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 208,
+   "shipwreck": null,
+   "bastion": 124,
+   "fortress": 164,
+   "sh": 1667,
+   "lava": null
+  },
+  {
+   "seed": "2631719127963822673",
+   "biome": "forest",
+   "spawn": [
+    -384,
+    -352
+   ],
+   "rp": 136,
+   "village": 237,
+   "shipwreck": 301,
+   "bastion": 118,
+   "fortress": 183,
+   "sh": 1308,
+   "lava": null
+  },
+  {
+   "seed": "6196238357603427589",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 283,
+   "shipwreck": 708,
+   "bastion": 81,
+   "fortress": 243,
+   "sh": 1366,
+   "lava": null
+  },
+  {
+   "seed": "-2368033077439397313",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 93,
+   "shipwreck": 432,
+   "bastion": 101,
+   "fortress": 248,
+   "sh": 1378,
+   "lava": null
+  },
+  {
+   "seed": "9123766181046481267",
+   "biome": "forest",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 93,
+   "village": 286,
+   "shipwreck": 186,
+   "bastion": 79,
+   "fortress": 161,
+   "sh": 1529,
+   "lava": null
+  },
+  {
+   "seed": "-8796138599160490550",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 328,
+   "shipwreck": 374,
+   "bastion": 135,
+   "fortress": 208,
+   "sh": 1632,
+   "lava": null
+  },
+  {
+   "seed": "-1813801250779563871",
+   "biome": "plains",
+   "spawn": [
+    16,
+    80
+   ],
+   "rp": 128,
+   "village": 81,
+   "shipwreck": 329,
+   "bastion": 146,
+   "fortress": 102,
+   "sh": 1602,
+   "lava": null
+  },
+  {
+   "seed": "-7209986004417482349",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 260,
+   "shipwreck": 470,
+   "bastion": 35,
+   "fortress": 101,
+   "sh": 1643,
+   "lava": null
+  },
+  {
+   "seed": "-1438498926029987630",
+   "biome": "savanna",
+   "spawn": [
+    208,
+    0
+   ],
+   "rp": 112,
+   "village": 144,
+   "shipwreck": 93,
+   "bastion": 129,
+   "fortress": 162,
+   "sh": 1388,
+   "lava": null
+  },
+  {
+   "seed": "-5335069584978810514",
+   "biome": "plains",
+   "spawn": [
+    -368,
+    -368
+   ],
+   "rp": 93,
+   "village": 50,
+   "shipwreck": 571,
+   "bastion": 130,
+   "fortress": 230,
+   "sh": 1443,
+   "lava": null
+  },
+  {
+   "seed": "642797990296007991",
+   "biome": "windswept_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 178,
+   "shipwreck": null,
+   "bastion": 86,
+   "fortress": 136,
+   "sh": 1697,
+   "lava": null
+  },
+  {
+   "seed": "3719094367066254184",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 279,
+   "shipwreck": 883,
+   "bastion": 115,
+   "fortress": 243,
+   "sh": 1484,
+   "lava": null
+  },
+  {
+   "seed": "-2248820251805084418",
+   "biome": "plains",
+   "spawn": [
+    -32,
+    0
+   ],
+   "rp": 97,
+   "village": 284,
+   "shipwreck": 490,
+   "bastion": 148,
+   "fortress": 192,
+   "sh": 1655,
+   "lava": null
+  },
+  {
+   "seed": "1211151717225185602",
+   "biome": "windswept_gravelly_hills",
+   "spawn": [
+    80,
+    96
+   ],
+   "rp": 86,
+   "village": 266,
+   "shipwreck": 200,
+   "bastion": 140,
+   "fortress": 207,
+   "sh": 1461,
+   "lava": null
+  },
+  {
+   "seed": "354266577883396282",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 208,
+   "shipwreck": 240,
+   "bastion": 35,
+   "fortress": 202,
+   "sh": 1524,
+   "lava": null
+  },
+  {
+   "seed": "5580642117557572847",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 240,
+   "shipwreck": 432,
+   "bastion": 115,
+   "fortress": 244,
+   "sh": 1482,
+   "lava": null
+  },
+  {
+   "seed": "8993525728608770490",
+   "biome": "savanna",
+   "spawn": [
+    112,
+    48
+   ],
+   "rp": 102,
+   "village": 229,
+   "shipwreck": 510,
+   "bastion": 119,
+   "fortress": 191,
+   "sh": 1425,
+   "lava": null
+  },
+  {
+   "seed": "-4366942264827208814",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 64,
+   "village": 332,
+   "shipwreck": 617,
+   "bastion": 102,
+   "fortress": 151,
+   "sh": 1534,
+   "lava": null
+  },
+  {
+   "seed": "8490094785712640077",
+   "biome": "plains",
+   "spawn": [
+    80,
+    240
+   ],
+   "rp": 116,
+   "village": 329,
+   "shipwreck": 416,
+   "bastion": 92,
+   "fortress": 102,
+   "sh": 1684,
+   "lava": null
+  },
+  {
+   "seed": "-5333945747613101683",
+   "biome": "forest",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 81,
+   "village": 182,
+   "shipwreck": 744,
+   "bastion": 132,
+   "fortress": 172,
+   "sh": 1513,
+   "lava": null
+  },
+  {
+   "seed": "224602811715602709",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 204,
+   "shipwreck": 215,
+   "bastion": 90,
+   "fortress": 208,
+   "sh": 1642,
+   "lava": null
+  },
+  {
+   "seed": "3432579183344257717",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 323,
+   "shipwreck": 485,
+   "bastion": 128,
+   "fortress": 240,
+   "sh": 1485,
+   "lava": null
+  },
+  {
+   "seed": "-8736038639115074186",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 96,
+   "shipwreck": 256,
+   "bastion": 71,
+   "fortress": 182,
+   "sh": 1447,
+   "lava": null
+  },
+  {
+   "seed": "5430450334316499112",
+   "biome": "savanna",
+   "spawn": [
+    -48,
+    80
+   ],
+   "rp": 144,
+   "village": 288,
+   "shipwreck": 197,
+   "bastion": 114,
+   "fortress": 184,
+   "sh": 1492,
+   "lava": null
+  },
+  {
+   "seed": "6125381221520321917",
+   "biome": "plains",
+   "spawn": [
+    64,
+    -64
+   ],
+   "rp": 80,
+   "village": 115,
+   "shipwreck": 453,
+   "bastion": 132,
+   "fortress": 136,
+   "sh": 1618,
+   "lava": null
+  },
+  {
+   "seed": "1200637347027346519",
+   "biome": "savanna",
+   "spawn": [
+    128,
+    368
+   ],
+   "rp": 32,
+   "village": 272,
+   "shipwreck": 369,
+   "bastion": 122,
+   "fortress": 218,
+   "sh": 1318,
+   "lava": null
+  },
+  {
+   "seed": "-8319675571877080183",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 279,
+   "shipwreck": 800,
+   "bastion": 143,
+   "fortress": 172,
+   "sh": 1525,
+   "lava": null
+  },
+  {
+   "seed": "-7738305185419200556",
+   "biome": "savanna",
+   "spawn": [
+    -512,
+    96
+   ],
+   "rp": 97,
+   "village": 346,
+   "shipwreck": 368,
+   "bastion": 109,
+   "fortress": 183,
+   "sh": 1468,
+   "lava": null
+  },
+  {
+   "seed": "-4525550490800152422",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    96
+   ],
+   "rp": 71,
+   "village": 300,
+   "shipwreck": 208,
+   "bastion": 93,
+   "fortress": 230,
+   "sh": 1524,
+   "lava": null
+  },
+  {
+   "seed": "306868845640326405",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 336,
+   "shipwreck": 534,
+   "bastion": 136,
+   "fortress": 240,
+   "sh": 1316,
+   "lava": null
+  },
+  {
+   "seed": "-8580208908665329635",
+   "biome": "stony_shore",
+   "spawn": [
+    80,
+    -16
+   ],
+   "rp": 97,
+   "village": 288,
+   "shipwreck": 706,
+   "bastion": 143,
+   "fortress": 202,
+   "sh": 1236,
+   "lava": null
+  },
+  {
+   "seed": "8278439981614665727",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 279,
+   "shipwreck": 716,
+   "bastion": 128,
+   "fortress": 116,
+   "sh": 1454,
+   "lava": null
+  },
+  {
+   "seed": "8858690025364718884",
+   "biome": "windswept_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 307,
+   "shipwreck": 314,
+   "bastion": 116,
+   "fortress": 160,
+   "sh": 1684,
+   "lava": null
+  },
+  {
+   "seed": "752959673641917013",
+   "biome": "desert",
+   "spawn": [
+    16,
+    112
+   ],
+   "rp": 137,
+   "village": 160,
+   "shipwreck": 128,
+   "bastion": 130,
+   "fortress": 227,
+   "sh": 1289,
+   "lava": null
+  },
+  {
+   "seed": "9197610517005639938",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 271,
+   "shipwreck": 694,
+   "bastion": 64,
+   "fortress": 170,
+   "sh": 1566,
+   "lava": null
+  },
+  {
+   "seed": "-1812931485449117380",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 151,
+   "shipwreck": 236,
+   "bastion": 71,
+   "fortress": 81,
+   "sh": 1693,
+   "lava": null
+  },
+  {
+   "seed": "3120757888047869208",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 178,
+   "shipwreck": null,
+   "bastion": 147,
+   "fortress": 215,
+   "sh": 1523,
+   "lava": null
+  },
+  {
+   "seed": "3292227454314326185",
+   "biome": "taiga",
+   "spawn": [
+    -560,
+    160
+   ],
+   "rp": 32,
+   "village": 193,
+   "shipwreck": 336,
+   "bastion": 74,
+   "fortress": 144,
+   "sh": 1302,
+   "lava": null
+  },
+  {
+   "seed": "-7093385278280286966",
+   "biome": "snowy_plains",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 80,
+   "village": 337,
+   "shipwreck": 860,
+   "bastion": 75,
+   "fortress": 241,
+   "sh": 1410,
+   "lava": null
+  },
+  {
+   "seed": "-1193860419017898229",
+   "biome": "forest",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 71,
+   "village": 45,
+   "shipwreck": 923,
+   "bastion": 112,
+   "fortress": 206,
+   "sh": 1556,
+   "lava": null
+  },
+  {
+   "seed": "-4078908706138966191",
+   "biome": "snowy_taiga",
+   "spawn": [
+    128,
+    -208
+   ],
+   "rp": 96,
+   "village": 329,
+   "shipwreck": 339,
+   "bastion": 138,
+   "fortress": 145,
+   "sh": 1321,
+   "lava": null
+  },
+  {
+   "seed": "5055659656338551240",
+   "biome": "plains",
+   "spawn": [
+    -304,
+    256
+   ],
+   "rp": 107,
+   "village": 229,
+   "shipwreck": 81,
+   "bastion": 126,
+   "fortress": 209,
+   "sh": 1582,
+   "lava": null
+  },
+  {
+   "seed": "2453623233943470436",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 294,
+   "shipwreck": 124,
+   "bastion": 65,
+   "fortress": 248,
+   "sh": 1548,
+   "lava": null
+  },
+  {
+   "seed": "-7739221160127747720",
+   "biome": "plains",
+   "spawn": [
+    240,
+    160
+   ],
+   "rp": 102,
+   "village": 50,
+   "shipwreck": 112,
+   "bastion": 101,
+   "fortress": 212,
+   "sh": 1541,
+   "lava": null
+  },
+  {
+   "seed": "-5721510345718949541",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 71,
+   "shipwreck": 705,
+   "bastion": 80,
+   "fortress": 240,
+   "sh": 1527,
+   "lava": null
+  },
+  {
+   "seed": "-3115876765235569188",
+   "biome": "plains",
+   "spawn": [
+    -160,
+    48
+   ],
+   "rp": 97,
+   "village": 116,
+   "shipwreck": 204,
+   "bastion": 108,
+   "fortress": 116,
+   "sh": 1609,
+   "lava": null
+  },
+  {
+   "seed": "4344771480677378081",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 187,
+   "shipwreck": 501,
+   "bastion": 116,
+   "fortress": 80,
+   "sh": 1620,
+   "lava": null
+  },
+  {
+   "seed": "3816274920780408390",
+   "biome": "plains",
+   "spawn": [
+    176,
+    64
+   ],
+   "rp": 143,
+   "village": 102,
+   "shipwreck": 346,
+   "bastion": 90,
+   "fortress": 208,
+   "sh": 1606,
+   "lava": null
+  },
+  {
+   "seed": "8246832525845841087",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 248,
+   "shipwreck": null,
+   "bastion": 147,
+   "fortress": 237,
+   "sh": 1440,
+   "lava": null
+  },
+  {
+   "seed": "3911306015352487558",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 102,
+   "shipwreck": null,
+   "bastion": 86,
+   "fortress": 124,
+   "sh": 1493,
+   "lava": null
+  },
+  {
+   "seed": "-202055692020729192",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 135,
+   "village": 307,
+   "shipwreck": 931,
+   "bastion": 124,
+   "fortress": 248,
+   "sh": 1364,
+   "lava": null
+  },
+  {
+   "seed": "-4175549013178991703",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 35,
+   "shipwreck": 364,
+   "bastion": 113,
+   "fortress": 170,
+   "sh": 1571,
+   "lava": null
+  },
+  {
+   "seed": "7220656985006407029",
+   "biome": "snowy_taiga",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 81,
+   "village": 266,
+   "shipwreck": 197,
+   "bastion": 114,
+   "fortress": 244,
+   "sh": 1570,
+   "lava": null
+  },
+  {
+   "seed": "5117019564373344784",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 214,
+   "shipwreck": 994,
+   "bastion": 124,
+   "fortress": 208,
+   "sh": 1462,
+   "lava": null
+  },
+  {
+   "seed": "9216217623880035124",
+   "biome": "mangrove_swamp",
+   "spawn": [
+    64,
+    48
+   ],
+   "rp": 35,
+   "village": 336,
+   "shipwreck": null,
+   "bastion": 128,
+   "fortress": 182,
+   "sh": 1672,
+   "lava": null
+  },
+  {
+   "seed": "3731187846081722628",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 81,
+   "village": 339,
+   "shipwreck": 210,
+   "bastion": 128,
+   "fortress": 229,
+   "sh": 1664,
+   "lava": null
+  },
+  {
+   "seed": "1558834569106645949",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 147,
+   "shipwreck": 480,
+   "bastion": 137,
+   "fortress": 244,
+   "sh": 1581,
+   "lava": null
+  },
+  {
+   "seed": "7777656317636356572",
+   "biome": "desert",
+   "spawn": [
+    -576,
+    48
+   ],
+   "rp": 50,
+   "village": 332,
+   "shipwreck": 143,
+   "bastion": 86,
+   "fortress": 62,
+   "sh": 1500,
+   "lava": null
+  },
+  {
+   "seed": "-7145914149339214824",
+   "biome": "sparse_jungle",
+   "spawn": [
+    32,
+    -16
+   ],
+   "rp": 35,
+   "village": 343,
+   "shipwreck": 947,
+   "bastion": 137,
+   "fortress": 223,
+   "sh": 1460,
+   "lava": null
+  },
+  {
+   "seed": "-1092107071076849005",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    -32
+   ],
+   "rp": 113,
+   "village": 288,
+   "shipwreck": 124,
+   "bastion": 82,
+   "fortress": 157,
+   "sh": 1427,
+   "lava": null
+  },
+  {
+   "seed": "4120493553820331231",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 144,
+   "shipwreck": 364,
+   "bastion": 144,
+   "fortress": 48,
+   "sh": 1401,
+   "lava": null
+  },
+  {
+   "seed": "6288463690505284125",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 135,
+   "village": 343,
+   "shipwreck": 309,
+   "bastion": 124,
+   "fortress": 124,
+   "sh": 1528,
+   "lava": null
+  },
+  {
+   "seed": "-7323879397883702598",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 16,
+   "shipwreck": 652,
+   "bastion": 107,
+   "fortress": 236,
+   "sh": 1629,
+   "lava": null
+  },
+  {
+   "seed": "-8347778287700359058",
+   "biome": "taiga",
+   "spawn": [
+    32,
+    -16
+   ],
+   "rp": 116,
+   "village": 45,
+   "shipwreck": 541,
+   "bastion": 78,
+   "fortress": 206,
+   "sh": 1589,
+   "lava": null
+  },
+  {
+   "seed": "8085414653972517487",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 279,
+   "shipwreck": 667,
+   "bastion": 147,
+   "fortress": 160,
+   "sh": 1415,
+   "lava": null
+  },
+  {
+   "seed": "959549910934800019",
+   "biome": "snowy_plains",
+   "spawn": [
+    192,
+    -432
+   ],
+   "rp": 136,
+   "village": 337,
+   "shipwreck": 80,
+   "bastion": 83,
+   "fortress": 127,
+   "sh": 1238,
+   "lava": null
+  },
+  {
+   "seed": "4439089890433626752",
+   "biome": "plains",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 67,
+   "village": 309,
+   "shipwreck": 636,
+   "bastion": 140,
+   "fortress": 76,
+   "sh": 1511,
+   "lava": null
+  },
+  {
+   "seed": "6027006796750306762",
+   "biome": "plains",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 147,
+   "village": 315,
+   "shipwreck": null,
+   "bastion": 145,
+   "fortress": 90,
+   "sh": 1394,
+   "lava": null
+  },
+  {
+   "seed": "6334294051371245855",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 32,
+   "village": 71,
+   "shipwreck": 744,
+   "bastion": 124,
+   "fortress": 157,
+   "sh": 1696,
+   "lava": null
+  },
+  {
+   "seed": "-8007157593629110510",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 71,
+   "village": 193,
+   "shipwreck": null,
+   "bastion": 138,
+   "fortress": 162,
+   "sh": 1529,
+   "lava": null
+  },
+  {
+   "seed": "6606437763528487482",
+   "biome": "beach",
+   "spawn": [
+    96,
+    -32
+   ],
+   "rp": 113,
+   "village": 268,
+   "shipwreck": 320,
+   "bastion": 108,
+   "fortress": 236,
+   "sh": 1505,
+   "lava": null
+  },
+  {
+   "seed": "188669368069139646",
+   "biome": "taiga",
+   "spawn": [
+    368,
+    16
+   ],
+   "rp": 86,
+   "village": 128,
+   "shipwreck": 320,
+   "bastion": 139,
+   "fortress": 209,
+   "sh": 1273,
+   "lava": null
+  },
+  {
+   "seed": "-4723782648139917612",
+   "biome": "plains",
+   "spawn": [
+    128,
+    144
+   ],
+   "rp": 135,
+   "village": 93,
+   "shipwreck": 369,
+   "bastion": 24,
+   "fortress": 232,
+   "sh": 1668,
+   "lava": null
+  },
+  {
+   "seed": "1805338637552891468",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 116,
+   "village": 337,
+   "shipwreck": 339,
+   "bastion": 98,
+   "fortress": 192,
+   "sh": 1448,
+   "lava": null
+  },
+  {
+   "seed": "-2726951400217948070",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 131,
+   "village": 336,
+   "shipwreck": 976,
+   "bastion": 112,
+   "fortress": 85,
+   "sh": 1682,
+   "lava": null
+  },
+  {
+   "seed": "-5990217304969715928",
+   "biome": "forest",
+   "spawn": [
+    48,
+    0
+   ],
+   "rp": 50,
+   "village": 307,
+   "shipwreck": 131,
+   "bastion": 131,
+   "fortress": 128,
+   "sh": 1691,
+   "lava": null
+  },
+  {
+   "seed": "-7095790318293749744",
+   "biome": "plains",
+   "spawn": [
+    48,
+    0
+   ],
+   "rp": 128,
+   "village": 256,
+   "shipwreck": null,
+   "bastion": 137,
+   "fortress": 196,
+   "sh": 1698,
+   "lava": null
+  },
+  {
+   "seed": "-3223218131217413776",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 240,
+   "shipwreck": 618,
+   "bastion": 128,
+   "fortress": 197,
+   "sh": 1529,
+   "lava": null
+  },
+  {
+   "seed": "-3104695712495535733",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 268,
+   "shipwreck": 651,
+   "bastion": 128,
+   "fortress": 86,
+   "sh": 1342,
+   "lava": null
+  },
+  {
+   "seed": "-5050408734781383333",
+   "biome": "beach",
+   "spawn": [
+    44,
+    140
+   ],
+   "rp": 132,
+   "village": 349,
+   "shipwreck": 244,
+   "bastion": 143,
+   "fortress": 208,
+   "sh": 1352,
+   "lava": null
+  },
+  {
+   "seed": "3761306392524496971",
+   "biome": "savanna",
+   "spawn": [
+    64,
+    -48
+   ],
+   "rp": 147,
+   "village": 178,
+   "shipwreck": 240,
+   "bastion": 137,
+   "fortress": 231,
+   "sh": 1471,
+   "lava": null
+  },
+  {
+   "seed": "-3524465509694543244",
+   "biome": "forest",
+   "spawn": [
+    -48,
+    64
+   ],
+   "rp": 107,
+   "village": 260,
+   "shipwreck": 470,
+   "bastion": 148,
+   "fortress": 217,
+   "sh": 1507,
+   "lava": null
+  },
+  {
+   "seed": "1190553472159881436",
+   "biome": "swamp",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 115,
+   "village": 217,
+   "shipwreck": 729,
+   "bastion": 113,
+   "fortress": 81,
+   "sh": 1552,
+   "lava": null
+  },
+  {
+   "seed": "6807950087555476060",
+   "biome": "old_growth_birch_forest",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 136,
+   "village": 346,
+   "shipwreck": 64,
+   "bastion": 134,
+   "fortress": 243,
+   "sh": 1616,
+   "lava": null
+  },
+  {
+   "seed": "-6173794530120996898",
+   "biome": "beach",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 97,
+   "village": 178,
+   "shipwreck": 336,
+   "bastion": 123,
+   "fortress": 167,
+   "sh": 1462,
+   "lava": null
+  },
+  {
+   "seed": "-9217604711371812908",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 16,
+   "village": 197,
+   "shipwreck": 80,
+   "bastion": 113,
+   "fortress": 124,
+   "sh": 1640,
+   "lava": null
+  },
+  {
+   "seed": "-3911120814006239239",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 176,
+   "shipwreck": 401,
+   "bastion": 107,
+   "fortress": 240,
+   "sh": 1482,
+   "lava": null
+  },
+  {
+   "seed": "-381256968153993584",
+   "biome": "plains",
+   "spawn": [
+    496,
+    16
+   ],
+   "rp": 113,
+   "village": 124,
+   "shipwreck": 349,
+   "bastion": 87,
+   "fortress": 158,
+   "sh": 1232,
+   "lava": null
+  },
+  {
+   "seed": "3186780866298590719",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 284,
+   "shipwreck": 260,
+   "bastion": 102,
+   "fortress": 204,
+   "sh": 1625,
+   "lava": null
+  },
+  {
+   "seed": "-951805284034807825",
+   "biome": "savanna",
+   "spawn": [
+    -48,
+    64
+   ],
+   "rp": 80,
+   "village": 135,
+   "shipwreck": 452,
+   "bastion": 75,
+   "fortress": 227,
+   "sh": 1568,
+   "lava": null
+  },
+  {
+   "seed": "-8617721639159030159",
+   "biome": "flower_forest",
+   "spawn": [
+    0,
+    192
+   ],
+   "rp": 143,
+   "village": 283,
+   "shipwreck": 256,
+   "bastion": 108,
+   "fortress": 134,
+   "sh": 1375,
+   "lava": null
+  },
+  {
+   "seed": "-5849787220399289736",
+   "biome": "forest",
+   "spawn": [
+    0,
+    -16
+   ],
+   "rp": 128,
+   "village": 315,
+   "shipwreck": 229,
+   "bastion": 100,
+   "fortress": 237,
+   "sh": 1410,
+   "lava": null
+  },
+  {
+   "seed": "3819436260285513926",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 121,
+   "shipwreck": 994,
+   "bastion": 128,
+   "fortress": 113,
+   "sh": 1515,
+   "lava": null
+  },
+  {
+   "seed": "-1893880784313590310",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 48,
+   "village": 151,
+   "shipwreck": 567,
+   "bastion": 101,
+   "fortress": 182,
+   "sh": 1572,
+   "lava": null
+  },
+  {
+   "seed": "643471065809965580",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    96
+   ],
+   "rp": 143,
+   "village": 257,
+   "shipwreck": 374,
+   "bastion": 114,
+   "fortress": 222,
+   "sh": 1693,
+   "lava": null
+  },
+  {
+   "seed": "6800885364460892173",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    48
+   ],
+   "rp": 115,
+   "village": 80,
+   "shipwreck": 588,
+   "bastion": 84,
+   "fortress": 146,
+   "sh": 1410,
+   "lava": null
+  },
+  {
+   "seed": "3447736608277477919",
+   "biome": "frozen_peaks",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 288,
+   "shipwreck": 309,
+   "bastion": 57,
+   "fortress": 135,
+   "sh": 1595,
+   "lava": null
+  },
+  {
+   "seed": "-5370724426775690035",
+   "biome": "desert",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 128,
+   "village": 323,
+   "shipwreck": 662,
+   "bastion": 114,
+   "fortress": 150,
+   "sh": 1297,
+   "lava": null
+  },
+  {
+   "seed": "6608747429973297170",
+   "biome": "swamp",
+   "spawn": [
+    -12,
+    16
+   ],
+   "rp": 135,
+   "village": 291,
+   "shipwreck": 766,
+   "bastion": 109,
+   "fortress": 152,
+   "sh": 1413,
+   "lava": null
+  },
+  {
+   "seed": "228244971826913063",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 328,
+   "shipwreck": 684,
+   "bastion": 124,
+   "fortress": 151,
+   "sh": 1578,
+   "lava": null
+  },
+  {
+   "seed": "3626516150200494488",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 323,
+   "shipwreck": 320,
+   "bastion": 97,
+   "fortress": 192,
+   "sh": 1439,
+   "lava": null
+  },
+  {
+   "seed": "9027898062959304666",
+   "biome": "stony_shore",
+   "spawn": [
+    208,
+    112
+   ],
+   "rp": 65,
+   "village": 128,
+   "shipwreck": 526,
+   "bastion": 35,
+   "fortress": 182,
+   "sh": 1596,
+   "lava": null
+  },
+  {
+   "seed": "-7792140786078916748",
+   "biome": "plains",
+   "spawn": [
+    144,
+    192
+   ],
+   "rp": 124,
+   "village": 200,
+   "shipwreck": 350,
+   "bastion": 100,
+   "fortress": 185,
+   "sh": 1485,
+   "lava": null
+  },
+  {
+   "seed": "-563899954367680229",
+   "biome": "flower_forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 16,
+   "village": 227,
+   "shipwreck": 368,
+   "bastion": 144,
+   "fortress": 167,
+   "sh": 1499,
+   "lava": null
+  },
+  {
+   "seed": "-3514963074131601530",
+   "biome": "desert",
+   "spawn": [
+    -848,
+    160
+   ],
+   "rp": 50,
+   "village": 248,
+   "shipwreck": 568,
+   "bastion": 118,
+   "fortress": 215,
+   "sh": 1246,
+   "lava": null
+  },
+  {
+   "seed": "-4746357060675508820",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 244,
+   "shipwreck": null,
+   "bastion": 80,
+   "fortress": 144,
+   "sh": 1384,
+   "lava": null
+  },
+  {
+   "seed": "8231072584223877132",
+   "biome": "plains",
+   "spawn": [
+    -256,
+    -16
+   ],
+   "rp": 124,
+   "village": 257,
+   "shipwreck": 288,
+   "bastion": 91,
+   "fortress": 185,
+   "sh": 1583,
+   "lava": null
+  },
+  {
+   "seed": "-2600683389588605354",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 257,
+   "shipwreck": 615,
+   "bastion": 93,
+   "fortress": 249,
+   "sh": 1506,
+   "lava": null
+  },
+  {
+   "seed": "5342445326147899552",
+   "biome": "savanna",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 147,
+   "village": 337,
+   "shipwreck": 364,
+   "bastion": 121,
+   "fortress": 148,
+   "sh": 1380,
+   "lava": null
+  },
+  {
+   "seed": "4182871780107749134",
+   "biome": "desert",
+   "spawn": [
+    16,
+    4
+   ],
+   "rp": 128,
+   "village": 262,
+   "shipwreck": 970,
+   "bastion": 114,
+   "fortress": 228,
+   "sh": 1337,
+   "lava": null
+  },
+  {
+   "seed": "-9170169599233635408",
+   "biome": "snowy_plains",
+   "spawn": [
+    64,
+    64
+   ],
+   "rp": 101,
+   "village": 222,
+   "shipwreck": 101,
+   "bastion": 33,
+   "fortress": 153,
+   "sh": 1310,
+   "lava": null
+  },
+  {
+   "seed": "-6128323777120879031",
+   "biome": "forest",
+   "spawn": [
+    64,
+    -224
+   ],
+   "rp": 57,
+   "village": 309,
+   "shipwreck": 128,
+   "bastion": 133,
+   "fortress": 151,
+   "sh": 1629,
+   "lava": null
+  },
+  {
+   "seed": "-2604297099184598647",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 346,
+   "shipwreck": 701,
+   "bastion": 71,
+   "fortress": 222,
+   "sh": 1373,
+   "lava": null
+  },
+  {
+   "seed": "1480442249593539175",
+   "biome": "plains",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 113,
+   "village": 178,
+   "shipwreck": 279,
+   "bastion": 149,
+   "fortress": 120,
+   "sh": 1675,
+   "lava": null
+  },
+  {
+   "seed": "-898450232211532617",
+   "biome": "taiga",
+   "spawn": [
+    -576,
+    -496
+   ],
+   "rp": 71,
+   "village": 121,
+   "shipwreck": 208,
+   "bastion": 130,
+   "fortress": 236,
+   "sh": 889,
+   "lava": null
+  },
+  {
+   "seed": "9139737676540183486",
+   "biome": "desert",
+   "spawn": [
+    -528,
+    -32
+   ],
+   "rp": 65,
+   "village": 222,
+   "shipwreck": 272,
+   "bastion": 129,
+   "fortress": 82,
+   "sh": 1024,
+   "lava": null
+  },
+  {
+   "seed": "-2096790943837705875",
+   "biome": "plains",
+   "spawn": [
+    -16,
+    96
+   ],
+   "rp": 107,
+   "village": 137,
+   "shipwreck": 353,
+   "bastion": 123,
+   "fortress": 98,
+   "sh": 1603,
+   "lava": null
+  },
+  {
+   "seed": "-6372907209364824866",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 48,
+   "village": 307,
+   "shipwreck": 373,
+   "bastion": 113,
+   "fortress": 192,
+   "sh": 1579,
+   "lava": null
+  },
+  {
+   "seed": "7196342929142483883",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 288,
+   "shipwreck": 45,
+   "bastion": 115,
+   "fortress": 81,
+   "sh": 1663,
+   "lava": null
+  },
+  {
+   "seed": "1903820021687708337",
+   "biome": "snowy_plains",
+   "spawn": [
+    -464,
+    128
+   ],
+   "rp": 107,
+   "village": 323,
+   "shipwreck": 303,
+   "bastion": 148,
+   "fortress": 223,
+   "sh": 1530,
+   "lava": null
+  },
+  {
+   "seed": "-4550989878077439872",
+   "biome": "savanna",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 136,
+   "village": 256,
+   "shipwreck": 565,
+   "bastion": 122,
+   "fortress": 202,
+   "sh": 1676,
+   "lava": null
+  },
+  {
+   "seed": "-7289317173196565224",
+   "biome": "forest",
+   "spawn": [
+    320,
+    -432
+   ],
+   "rp": 128,
+   "village": 326,
+   "shipwreck": 57,
+   "bastion": 109,
+   "fortress": 213,
+   "sh": 1177,
+   "lava": null
+  },
+  {
+   "seed": "8876274862897286186",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 121,
+   "village": 305,
+   "shipwreck": 562,
+   "bastion": 149,
+   "fortress": 249,
+   "sh": 1464,
+   "lava": null
+  },
+  {
+   "seed": "-5493949162059883301",
+   "biome": "plains",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 137,
+   "village": 346,
+   "shipwreck": 549,
+   "bastion": 144,
+   "fortress": 209,
+   "sh": 1577,
+   "lava": null
+  },
+  {
+   "seed": "8934094659845942893",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 64,
+   "village": 224,
+   "shipwreck": 692,
+   "bastion": 101,
+   "fortress": 217,
+   "sh": 1583,
+   "lava": null
+  },
+  {
+   "seed": "2160111723935308014",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 339,
+   "shipwreck": null,
+   "bastion": 137,
+   "fortress": 151,
+   "sh": 1550,
+   "lava": null
+  },
+  {
+   "seed": "9175733687916661189",
+   "biome": "forest",
+   "spawn": [
+    -32,
+    32
+   ],
+   "rp": 128,
+   "village": 217,
+   "shipwreck": 633,
+   "bastion": 78,
+   "fortress": 108,
+   "sh": 1484,
+   "lava": null
+  },
+  {
+   "seed": "5955226839201573818",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 273,
+   "shipwreck": 576,
+   "bastion": 32,
+   "fortress": 150,
+   "sh": 1662,
+   "lava": null
+  },
+  {
+   "seed": "-6947885218876113731",
+   "biome": "plains",
+   "spawn": [
+    -96,
+    48
+   ],
+   "rp": 136,
+   "village": 272,
+   "shipwreck": 641,
+   "bastion": 145,
+   "fortress": 79,
+   "sh": 1423,
+   "lava": null
+  },
+  {
+   "seed": "7646447341542460528",
+   "biome": "forest",
+   "spawn": [
+    0,
+    48
+   ],
+   "rp": 16,
+   "village": 310,
+   "shipwreck": 595,
+   "bastion": 86,
+   "fortress": 154,
+   "sh": 1660,
+   "lava": null
+  },
+  {
+   "seed": "1050600908483827536",
+   "biome": "badlands",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 16,
+   "village": 339,
+   "shipwreck": 450,
+   "bastion": 85,
+   "fortress": 202,
+   "sh": 1583,
+   "lava": null
+  },
+  {
+   "seed": "5834576846634688864",
+   "biome": "savanna",
+   "spawn": [
+    144,
+    192
+   ],
+   "rp": 57,
+   "village": 101,
+   "shipwreck": 415,
+   "bastion": 145,
+   "fortress": 179,
+   "sh": 1532,
+   "lava": null
+  },
+  {
+   "seed": "1115714259723197336",
+   "biome": "forest",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 80,
+   "village": 307,
+   "shipwreck": 340,
+   "bastion": 147,
+   "fortress": 2,
+   "sh": 1401,
+   "lava": null
+  },
+  {
+   "seed": "6232965645297688936",
+   "biome": "stony_shore",
+   "spawn": [
+    240,
+    432
+   ],
+   "rp": 137,
+   "village": 224,
+   "shipwreck": 93,
+   "bastion": 146,
+   "fortress": 170,
+   "sh": 1367,
+   "lava": null
+  },
+  {
+   "seed": "7516278957463786054",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 131,
+   "village": 316,
+   "shipwreck": 320,
+   "bastion": 144,
+   "fortress": 203,
+   "sh": 1663,
+   "lava": null
+  },
+  {
+   "seed": "7614069464297889343",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 215,
+   "shipwreck": 609,
+   "bastion": 136,
+   "fortress": 107,
+   "sh": 1555,
+   "lava": null
+  },
+  {
+   "seed": "6520139407132075259",
+   "biome": "plains",
+   "spawn": [
+    -512,
+    96
+   ],
+   "rp": 32,
+   "village": 65,
+   "shipwreck": 386,
+   "bastion": 147,
+   "fortress": 224,
+   "sh": 1310,
+   "lava": null
+  },
+  {
+   "seed": "8340411484014290806",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 81,
+   "village": 67,
+   "shipwreck": 444,
+   "bastion": 124,
+   "fortress": 22,
+   "sh": 1675,
+   "lava": null
+  },
+  {
+   "seed": "806391470271100850",
+   "biome": "cherry_grove",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 284,
+   "shipwreck": 551,
+   "bastion": 147,
+   "fortress": 170,
+   "sh": 1421,
+   "lava": null
+  },
+  {
+   "seed": "3743681968546605735",
+   "biome": "grove",
+   "spawn": [
+    -32,
+    0
+   ],
+   "rp": 81,
+   "village": 315,
+   "shipwreck": 403,
+   "bastion": 48,
+   "fortress": 212,
+   "sh": 1359,
+   "lava": null
+  },
+  {
+   "seed": "-1063403295944998409",
+   "biome": "savanna",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 131,
+   "village": 283,
+   "shipwreck": 912,
+   "bastion": 137,
+   "fortress": 170,
+   "sh": 1677,
+   "lava": null
+  },
+  {
+   "seed": "6775636614882470719",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 86,
+   "village": 294,
+   "shipwreck": 945,
+   "bastion": 98,
+   "fortress": 123,
+   "sh": 1450,
+   "lava": null
+  },
+  {
+   "seed": "8418140317894295569",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 329,
+   "shipwreck": 164,
+   "bastion": 97,
+   "fortress": 249,
+   "sh": 1349,
+   "lava": null
+  },
+  {
+   "seed": "6446889655832247632",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 57,
+   "shipwreck": 407,
+   "bastion": 128,
+   "fortress": 240,
+   "sh": 1440,
+   "lava": null
+  },
+  {
+   "seed": "-5958388349660930544",
+   "biome": "plains",
+   "spawn": [
+    16,
+    80
+   ],
+   "rp": 71,
+   "village": 121,
+   "shipwreck": 592,
+   "bastion": 26,
+   "fortress": 121,
+   "sh": 1668,
+   "lava": null
+  },
+  {
+   "seed": "-2328778196920814544",
+   "biome": "plains",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 144,
+   "village": 160,
+   "shipwreck": 627,
+   "bastion": 40,
+   "fortress": 226,
+   "sh": 1369,
+   "lava": null
+  },
+  {
+   "seed": "-4863492902744516946",
+   "biome": "savanna",
+   "spawn": [
+    64,
+    48
+   ],
+   "rp": 128,
+   "village": 316,
+   "shipwreck": 379,
+   "bastion": 136,
+   "fortress": 74,
+   "sh": 1605,
+   "lava": null
+  },
+  {
+   "seed": "-2642876175319085974",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 121,
+   "village": 321,
+   "shipwreck": 901,
+   "bastion": 71,
+   "fortress": 136,
+   "sh": 1404,
+   "lava": null
+  },
+  {
+   "seed": "8986491751038016085",
+   "biome": "forest",
+   "spawn": [
+    -48,
+    64
+   ],
+   "rp": 67,
+   "village": 217,
+   "shipwreck": 458,
+   "bastion": 110,
+   "fortress": 24,
+   "sh": 1486,
+   "lava": null
+  },
+  {
+   "seed": "3872425923991837399",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 295,
+   "shipwreck": 252,
+   "bastion": 121,
+   "fortress": 124,
+   "sh": 1559,
+   "lava": null
+  },
+  {
+   "seed": "4961758722860627209",
+   "biome": "birch_forest",
+   "spawn": [
+    -240,
+    -384
+   ],
+   "rp": 35,
+   "village": 93,
+   "shipwreck": 97,
+   "bastion": 126,
+   "fortress": 217,
+   "sh": 1223,
+   "lava": null
+  },
+  {
+   "seed": "-2533041237106467348",
+   "biome": "snowy_taiga",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 128,
+   "village": 249,
+   "shipwreck": null,
+   "bastion": 141,
+   "fortress": 161,
+   "sh": 1479,
+   "lava": null
+  },
+  {
+   "seed": "-6023241539173652970",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 275,
+   "shipwreck": 786,
+   "bastion": 137,
+   "fortress": 226,
+   "sh": 1384,
+   "lava": null
+  },
+  {
+   "seed": "-2791903048069190631",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 131,
+   "village": 305,
+   "shipwreck": 823,
+   "bastion": 32,
+   "fortress": 192,
+   "sh": 1380,
+   "lava": null
+  },
+  {
+   "seed": "-2539329166435971222",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 121,
+   "village": 310,
+   "shipwreck": null,
+   "bastion": 124,
+   "fortress": 192,
+   "sh": 1616,
+   "lava": null
+  },
+  {
+   "seed": "-4937211117985950546",
+   "biome": "desert",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 80,
+   "village": 57,
+   "shipwreck": 224,
+   "bastion": 112,
+   "fortress": 228,
+   "sh": 1692,
+   "lava": null
+  },
+  {
+   "seed": "-7152625818930678320",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 263,
+   "shipwreck": 815,
+   "bastion": 80,
+   "fortress": 113,
+   "sh": 1523,
+   "lava": null
+  },
+  {
+   "seed": "-5970544057081285760",
+   "biome": "savanna",
+   "spawn": [
+    112,
+    240
+   ],
+   "rp": 131,
+   "village": 143,
+   "shipwreck": 337,
+   "bastion": 114,
+   "fortress": 150,
+   "sh": 1503,
+   "lava": null
+  },
+  {
+   "seed": "-7092001928005398638",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 137,
+   "village": 128,
+   "shipwreck": 276,
+   "bastion": 137,
+   "fortress": 116,
+   "sh": 1492,
+   "lava": null
+  },
+  {
+   "seed": "-7538698798116556409",
+   "biome": "old_growth_birch_forest",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 57,
+   "village": 316,
+   "shipwreck": 855,
+   "bastion": 132,
+   "fortress": 231,
+   "sh": 1446,
+   "lava": null
+  },
+  {
+   "seed": "-7447495799567659291",
+   "biome": "swamp",
+   "spawn": [
+    -748,
+    -16
+   ],
+   "rp": 132,
+   "village": 349,
+   "shipwreck": 304,
+   "bastion": 118,
+   "fortress": 125,
+   "sh": 1531,
+   "lava": null
+  },
+  {
+   "seed": "-8134451311359931829",
+   "biome": "beach",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 65,
+   "village": 268,
+   "shipwreck": 452,
+   "bastion": 134,
+   "fortress": 159,
+   "sh": 1682,
+   "lava": null
+  },
+  {
+   "seed": "-84426036230739247",
+   "biome": "dark_forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 90,
+   "village": 271,
+   "shipwreck": 630,
+   "bastion": 144,
+   "fortress": 236,
+   "sh": 1562,
+   "lava": null
+  },
+  {
+   "seed": "5020586261555265684",
+   "biome": "jagged_peaks",
+   "spawn": [
+    16,
+    112
+   ],
+   "rp": 48,
+   "village": 317,
+   "shipwreck": 501,
+   "bastion": 2,
+   "fortress": 199,
+   "sh": 1677,
+   "lava": null
+  },
+  {
+   "seed": "1455137963391432329",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 176,
+   "shipwreck": 643,
+   "bastion": 147,
+   "fortress": 208,
+   "sh": 1471,
+   "lava": null
+  },
+  {
+   "seed": "-1026697901667084990",
+   "biome": "badlands",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 101,
+   "village": 342,
+   "shipwreck": 450,
+   "bastion": 117,
+   "fortress": 242,
+   "sh": 1389,
+   "lava": null
+  },
+  {
+   "seed": "8586764189181332994",
+   "biome": "snowy_plains",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 131,
+   "village": 86,
+   "shipwreck": null,
+   "bastion": 110,
+   "fortress": 74,
+   "sh": 1515,
+   "lava": null
+  },
+  {
+   "seed": "7364109858755270873",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 65,
+   "shipwreck": null,
+   "bastion": 101,
+   "fortress": 172,
+   "sh": 1614,
+   "lava": null
+  },
+  {
+   "seed": "-4155164016911616191",
+   "biome": "swamp",
+   "spawn": [
+    -16,
+    44
+   ],
+   "rp": 146,
+   "village": 273,
+   "shipwreck": 291,
+   "bastion": 133,
+   "fortress": 184,
+   "sh": 1517,
+   "lava": null
+  },
+  {
+   "seed": "-3679778118065848290",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 342,
+   "shipwreck": 369,
+   "bastion": 113,
+   "fortress": 113,
+   "sh": 1503,
+   "lava": null
+  },
+  {
+   "seed": "5730218751502857564",
+   "biome": "plains",
+   "spawn": [
+    272,
+    -224
+   ],
+   "rp": 147,
+   "village": 305,
+   "shipwreck": 128,
+   "bastion": 67,
+   "fortress": 148,
+   "sh": 1357,
+   "lava": null
+  },
+  {
+   "seed": "8852278275738718229",
+   "biome": "eroded_badlands",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 279,
+   "shipwreck": 494,
+   "bastion": 93,
+   "fortress": 204,
+   "sh": 1479,
+   "lava": null
+  },
+  {
+   "seed": "-6041998515681645600",
+   "biome": "forest",
+   "spawn": [
+    64,
+    -48
+   ],
+   "rp": 102,
+   "village": 283,
+   "shipwreck": 321,
+   "bastion": 106,
+   "fortress": 243,
+   "sh": 1551,
+   "lava": null
+  },
+  {
+   "seed": "-4754040550695912497",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 137,
+   "village": 272,
+   "shipwreck": 701,
+   "bastion": 144,
+   "fortress": 143,
+   "sh": 1613,
+   "lava": null
+  },
+  {
+   "seed": "2402572069721238669",
+   "biome": "beach",
+   "spawn": [
+    32,
+    -64
+   ],
+   "rp": 80,
+   "village": 294,
+   "shipwreck": 418,
+   "bastion": 143,
+   "fortress": 137,
+   "sh": 1677,
+   "lava": null
+  },
+  {
+   "seed": "-293257007417762881",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 101,
+   "village": 328,
+   "shipwreck": 528,
+   "bastion": 101,
+   "fortress": 202,
+   "sh": 1509,
+   "lava": null
+  },
+  {
+   "seed": "375161439383958098",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 301,
+   "shipwreck": null,
+   "bastion": 128,
+   "fortress": 178,
+   "sh": 1513,
+   "lava": null
+  },
+  {
+   "seed": "1047614601138435306",
+   "biome": "forest",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 144,
+   "village": 257,
+   "shipwreck": 848,
+   "bastion": 131,
+   "fortress": 191,
+   "sh": 1676,
+   "lava": null
+  },
+  {
+   "seed": "3740187953169953402",
+   "biome": "forest",
+   "spawn": [
+    -32,
+    0
+   ],
+   "rp": 101,
+   "village": 121,
+   "shipwreck": 639,
+   "bastion": 144,
+   "fortress": 117,
+   "sh": 1604,
+   "lava": null
+  },
+  {
+   "seed": "302403168674977867",
+   "biome": "sparse_jungle",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 50,
+   "village": 256,
+   "shipwreck": 389,
+   "bastion": 142,
+   "fortress": 167,
+   "sh": 1566,
+   "lava": null
+  },
+  {
+   "seed": "-67532274011381912",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 227,
+   "shipwreck": 715,
+   "bastion": 81,
+   "fortress": 182,
+   "sh": 1402,
+   "lava": null
+  },
+  {
+   "seed": "-3490963328707093861",
+   "biome": "taiga",
+   "spawn": [
+    32,
+    48
+   ],
+   "rp": 112,
+   "village": 276,
+   "shipwreck": null,
+   "bastion": 95,
+   "fortress": 247,
+   "sh": 1598,
+   "lava": null
+  },
+  {
+   "seed": "-2363867561791975485",
+   "biome": "plains",
+   "spawn": [
+    -480,
+    288
+   ],
+   "rp": 101,
+   "village": 135,
+   "shipwreck": 116,
+   "bastion": 123,
+   "fortress": 202,
+   "sh": 1417,
+   "lava": null
+  },
+  {
+   "seed": "-1592523219400223177",
+   "biome": "windswept_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 321,
+   "shipwreck": 688,
+   "bastion": 143,
+   "fortress": 217,
+   "sh": 1490,
+   "lava": null
+  },
+  {
+   "seed": "5309806270733967638",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 301,
+   "shipwreck": 314,
+   "bastion": 124,
+   "fortress": 160,
+   "sh": 1374,
+   "lava": null
+  },
+  {
+   "seed": "-1916258304016700532",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 113,
+   "village": 214,
+   "shipwreck": 772,
+   "bastion": 35,
+   "fortress": 222,
+   "sh": 1482,
+   "lava": null
+  },
+  {
+   "seed": "4866852215538203158",
+   "biome": "forest",
+   "spawn": [
+    112,
+    -48
+   ],
+   "rp": 57,
+   "village": 256,
+   "shipwreck": 135,
+   "bastion": 138,
+   "fortress": 155,
+   "sh": 1495,
+   "lava": null
+  },
+  {
+   "seed": "4642520846218599330",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 147,
+   "shipwreck": 350,
+   "bastion": 128,
+   "fortress": 172,
+   "sh": 1348,
+   "lava": null
+  },
+  {
+   "seed": "517271315555786001",
+   "biome": "forest",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 124,
+   "village": 150,
+   "shipwreck": null,
+   "bastion": 148,
+   "fortress": 204,
+   "sh": 1485,
+   "lava": null
+  },
+  {
+   "seed": "-1732947536382384698",
+   "biome": "taiga",
+   "spawn": [
+    -64,
+    16
+   ],
+   "rp": 86,
+   "village": 176,
+   "shipwreck": 147,
+   "bastion": 147,
+   "fortress": 216,
+   "sh": 1451,
+   "lava": null
+  },
+  {
+   "seed": "-8732060075576826199",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 337,
+   "shipwreck": 395,
+   "bastion": 115,
+   "fortress": 128,
+   "sh": 1581,
+   "lava": null
+  },
+  {
+   "seed": "-8988003645469319247",
+   "biome": "forest",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 81,
+   "village": 283,
+   "shipwreck": null,
+   "bastion": 145,
+   "fortress": 204,
+   "sh": 1465,
+   "lava": null
+  },
+  {
+   "seed": "4104420970566917565",
+   "biome": "snowy_plains",
+   "spawn": [
+    16,
+    80
+   ],
+   "rp": 102,
+   "village": 35,
+   "shipwreck": 226,
+   "bastion": 136,
+   "fortress": 182,
+   "sh": 1472,
+   "lava": null
+  },
+  {
+   "seed": "-3044899307472865752",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 45,
+   "village": 323,
+   "shipwreck": 301,
+   "bastion": 115,
+   "fortress": 147,
+   "sh": 1570,
+   "lava": null
+  },
+  {
+   "seed": "7279151025070305824",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 160,
+   "shipwreck": 477,
+   "bastion": 96,
+   "fortress": 101,
+   "sh": 1426,
+   "lava": null
+  },
+  {
+   "seed": "7091890929526586275",
+   "biome": "flower_forest",
+   "spawn": [
+    0,
+    48
+   ],
+   "rp": 102,
+   "village": 112,
+   "shipwreck": 273,
+   "bastion": 134,
+   "fortress": 160,
+   "sh": 1691,
+   "lava": null
+  },
+  {
+   "seed": "3276567560844550341",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 64,
+   "shipwreck": 780,
+   "bastion": 116,
+   "fortress": 131,
+   "sh": 1485,
+   "lava": null
+  },
+  {
+   "seed": "-3082090342584734251",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 345,
+   "shipwreck": 186,
+   "bastion": 116,
+   "fortress": 182,
+   "sh": 1627,
+   "lava": null
+  },
+  {
+   "seed": "-7802814307857195468",
+   "biome": "plains",
+   "spawn": [
+    96,
+    -544
+   ],
+   "rp": 81,
+   "village": 268,
+   "shipwreck": 288,
+   "bastion": 131,
+   "fortress": 80,
+   "sh": 961,
+   "lava": null
+  },
+  {
+   "seed": "-7490594588031832020",
+   "biome": "snowy_beach",
+   "spawn": [
+    -512,
+    96
+   ],
+   "rp": 71,
+   "village": 116,
+   "shipwreck": 260,
+   "bastion": 118,
+   "fortress": 212,
+   "sh": 1148,
+   "lava": null
+  },
+  {
+   "seed": "-3121327915139974891",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 67,
+   "village": 342,
+   "shipwreck": 317,
+   "bastion": 124,
+   "fortress": 240,
+   "sh": 1669,
+   "lava": null
+  },
+  {
+   "seed": "3704211245743775715",
+   "biome": "sunflower_plains",
+   "spawn": [
+    -640,
+    -320
+   ],
+   "rp": 121,
+   "village": 329,
+   "shipwreck": 400,
+   "bastion": 144,
+   "fortress": 100,
+   "sh": 1370,
+   "lava": null
+  },
+  {
+   "seed": "5342841399581572130",
+   "biome": "forest",
+   "spawn": [
+    -64,
+    96
+   ],
+   "rp": 143,
+   "village": 337,
+   "shipwreck": 395,
+   "bastion": 128,
+   "fortress": 95,
+   "sh": 1331,
+   "lava": null
+  },
+  {
+   "seed": "-934104854272733353",
+   "biome": "forest",
+   "spawn": [
+    64,
+    -96
+   ],
+   "rp": 143,
+   "village": 318,
+   "shipwreck": 752,
+   "bastion": 149,
+   "fortress": 240,
+   "sh": 1492,
+   "lava": null
+  },
+  {
+   "seed": "-1327703647350108848",
+   "biome": "snowy_plains",
+   "spawn": [
+    -480,
+    352
+   ],
+   "rp": 147,
+   "village": 50,
+   "shipwreck": 128,
+   "bastion": 70,
+   "fortress": 235,
+   "sh": 1315,
+   "lava": null
+  },
+  {
+   "seed": "447302852382510250",
+   "biome": "forest",
+   "spawn": [
+    -496,
+    160
+   ],
+   "rp": 90,
+   "village": 107,
+   "shipwreck": 187,
+   "bastion": 136,
+   "fortress": 228,
+   "sh": 1225,
+   "lava": null
+  },
+  {
+   "seed": "6803883883271536740",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 113,
+   "village": 157,
+   "shipwreck": 492,
+   "bastion": 134,
+   "fortress": 239,
+   "sh": 1614,
+   "lava": null
+  },
+  {
+   "seed": "8324584926638139164",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 214,
+   "shipwreck": 834,
+   "bastion": 81,
+   "fortress": 208,
+   "sh": 1457,
+   "lava": null
+  },
+  {
+   "seed": "-4247911143839940059",
+   "biome": "sunflower_plains",
+   "spawn": [
+    16,
+    64
+   ],
+   "rp": 0,
+   "village": 310,
+   "shipwreck": 147,
+   "bastion": 117,
+   "fortress": 63,
+   "sh": 1597,
+   "lava": null
+  },
+  {
+   "seed": "-2469006779234142356",
+   "biome": "stony_shore",
+   "spawn": [
+    144,
+    -416
+   ],
+   "rp": 137,
+   "village": 194,
+   "shipwreck": 273,
+   "bastion": 124,
+   "fortress": 127,
+   "sh": 1261,
+   "lava": null
+  },
+  {
+   "seed": "-7055908231226631692",
+   "biome": "savanna",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 101,
+   "village": 248,
+   "shipwreck": null,
+   "bastion": 70,
+   "fortress": 166,
+   "sh": 1549,
+   "lava": null
+  },
+  {
+   "seed": "5364484741827342840",
+   "biome": "ice_spikes",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 340,
+   "shipwreck": null,
+   "bastion": 143,
+   "fortress": 237,
+   "sh": 1359,
+   "lava": null
+  },
+  {
+   "seed": "-278322427144878835",
+   "biome": "desert",
+   "spawn": [
+    32,
+    256
+   ],
+   "rp": 0,
+   "village": 81,
+   "shipwreck": 410,
+   "bastion": 20,
+   "fortress": 212,
+   "sh": 1142,
+   "lava": null
+  },
+  {
+   "seed": "-1278639654554966805",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 32,
+   "village": 279,
+   "shipwreck": 623,
+   "bastion": 16,
+   "fortress": 224,
+   "sh": 1446,
+   "lava": null
+  },
+  {
+   "seed": "-2237684949228120400",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 71,
+   "village": 291,
+   "shipwreck": 587,
+   "bastion": 102,
+   "fortress": 112,
+   "sh": 1359,
+   "lava": null
+  },
+  {
+   "seed": "3490910500546002217",
+   "biome": "windswept_gravelly_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 226,
+   "shipwreck": 350,
+   "bastion": 64,
+   "fortress": 137,
+   "sh": 1379,
+   "lava": null
+  },
+  {
+   "seed": "3073767824218301971",
+   "biome": "savanna_plateau",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 101,
+   "village": 222,
+   "shipwreck": 638,
+   "bastion": 137,
+   "fortress": 158,
+   "sh": 1543,
+   "lava": null
+  },
+  {
+   "seed": "-1923950023711132943",
+   "biome": "plains",
+   "spawn": [
+    -512,
+    208
+   ],
+   "rp": 121,
+   "village": 213,
+   "shipwreck": 354,
+   "bastion": 88,
+   "fortress": 157,
+   "sh": 915,
+   "lava": null
+  },
+  {
+   "seed": "785230804176122315",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 160,
+   "shipwreck": 321,
+   "bastion": 90,
+   "fortress": 224,
+   "sh": 1586,
+   "lava": null
+  },
+  {
+   "seed": "5363417777198755938",
+   "biome": "bamboo_jungle",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 113,
+   "village": 229,
+   "shipwreck": 492,
+   "bastion": 49,
+   "fortress": 165,
+   "sh": 1314,
+   "lava": null
+  },
+  {
+   "seed": "7188181131114376763",
+   "biome": "beach",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 50,
+   "village": 288,
+   "shipwreck": 396,
+   "bastion": 128,
+   "fortress": 145,
+   "sh": 1683,
+   "lava": null
+  },
+  {
+   "seed": "-7056955690096581976",
+   "biome": "savanna",
+   "spawn": [
+    112,
+    0
+   ],
+   "rp": 0,
+   "village": 229,
+   "shipwreck": 93,
+   "bastion": 142,
+   "fortress": 109,
+   "sh": 1529,
+   "lava": null
+  },
+  {
+   "seed": "8529694716124008611",
+   "biome": "savanna",
+   "spawn": [
+    -256,
+    64
+   ],
+   "rp": 107,
+   "village": 320,
+   "shipwreck": 384,
+   "bastion": 130,
+   "fortress": 130,
+   "sh": 1540,
+   "lava": null
+  },
+  {
+   "seed": "4836965335433418541",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    -16,
+    -16
+   ],
+   "rp": 121,
+   "village": 343,
+   "shipwreck": 301,
+   "bastion": 148,
+   "fortress": 223,
+   "sh": 1631,
+   "lava": null
+  },
+  {
+   "seed": "4471325627226790544",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 107,
+   "shipwreck": null,
+   "bastion": 112,
+   "fortress": 237,
+   "sh": 1556,
+   "lava": null
+  },
+  {
+   "seed": "-2902910821753969629",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 194,
+   "shipwreck": 222,
+   "bastion": 124,
+   "fortress": 213,
+   "sh": 1453,
+   "lava": null
+  },
+  {
+   "seed": "-524707452957027352",
+   "biome": "badlands",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 81,
+   "village": 116,
+   "shipwreck": 224,
+   "bastion": 48,
+   "fortress": 237,
+   "sh": 1484,
+   "lava": null
+  },
+  {
+   "seed": "-6761255284647561621",
+   "biome": "stony_shore",
+   "spawn": [
+    64,
+    656
+   ],
+   "rp": 102,
+   "village": 57,
+   "shipwreck": 213,
+   "bastion": 65,
+   "fortress": 143,
+   "sh": 900,
+   "lava": null
+  },
+  {
+   "seed": "1153389582276151446",
+   "biome": "savanna",
+   "spawn": [
+    240,
+    432
+   ],
+   "rp": 107,
+   "village": 158,
+   "shipwreck": 289,
+   "bastion": 82,
+   "fortress": 164,
+   "sh": 1161,
+   "lava": null
+  },
+  {
+   "seed": "-7811099950291281390",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 96,
+   "village": 295,
+   "shipwreck": 683,
+   "bastion": 137,
+   "fortress": 204,
+   "sh": 1544,
+   "lava": null
+  },
+  {
+   "seed": "-5285637566844997715",
+   "biome": "forest",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 96,
+   "village": 257,
+   "shipwreck": null,
+   "bastion": 101,
+   "fortress": 233,
+   "sh": 1663,
+   "lava": null
+  },
+  {
+   "seed": "-4016955842302937262",
+   "biome": "plains",
+   "spawn": [
+    32,
+    48
+   ],
+   "rp": 22,
+   "village": 273,
+   "shipwreck": 337,
+   "bastion": 140,
+   "fortress": 118,
+   "sh": 1606,
+   "lava": null
+  },
+  {
+   "seed": "-6882420687155426784",
+   "biome": "cherry_grove",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 346,
+   "shipwreck": null,
+   "bastion": 80,
+   "fortress": 182,
+   "sh": 1475,
+   "lava": null
+  },
+  {
+   "seed": "2853887247649374496",
+   "biome": "jungle",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 65,
+   "village": 329,
+   "shipwreck": 562,
+   "bastion": 146,
+   "fortress": 237,
+   "sh": 1583,
+   "lava": null
+  },
+  {
+   "seed": "-4082387994915889327",
+   "biome": "beach",
+   "spawn": [
+    -304,
+    64
+   ],
+   "rp": 121,
+   "village": 326,
+   "shipwreck": 300,
+   "bastion": 119,
+   "fortress": 161,
+   "sh": 1350,
+   "lava": null
+  },
+  {
+   "seed": "5893001706836794001",
+   "biome": "snowy_plains",
+   "spawn": [
+    -288,
+    80
+   ],
+   "rp": 86,
+   "village": 300,
+   "shipwreck": 249,
+   "bastion": 142,
+   "fortress": 249,
+   "sh": 1530,
+   "lava": null
+  },
+  {
+   "seed": "-78437954124845853",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 208,
+   "shipwreck": 680,
+   "bastion": 113,
+   "fortress": 158,
+   "sh": 1602,
+   "lava": null
+  },
+  {
+   "seed": "-5871342643303735362",
+   "biome": "taiga",
+   "spawn": [
+    -624,
+    176
+   ],
+   "rp": 112,
+   "village": 237,
+   "shipwreck": 86,
+   "bastion": 131,
+   "fortress": 173,
+   "sh": 1483,
+   "lava": null
+  },
+  {
+   "seed": "-4484413963813330110",
+   "biome": "sparse_jungle",
+   "spawn": [
+    64,
+    -192
+   ],
+   "rp": 128,
+   "village": 343,
+   "shipwreck": 412,
+   "bastion": 148,
+   "fortress": 147,
+   "sh": 1436,
+   "lava": null
+  },
+  {
+   "seed": "255097961873466141",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 48,
+   "village": 71,
+   "shipwreck": 244,
+   "bastion": 132,
+   "fortress": 234,
+   "sh": 1496,
+   "lava": null
+  },
+  {
+   "seed": "-367953399616197515",
+   "biome": "savanna",
+   "spawn": [
+    64,
+    -32
+   ],
+   "rp": 71,
+   "village": 300,
+   "shipwreck": 797,
+   "bastion": 108,
+   "fortress": 226,
+   "sh": 1607,
+   "lava": null
+  },
+  {
+   "seed": "2019777629653473623",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 240,
+   "shipwreck": 640,
+   "bastion": 107,
+   "fortress": 137,
+   "sh": 1536,
+   "lava": null
+  },
+  {
+   "seed": "5754789532607385380",
+   "biome": "forest",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 144,
+   "village": 321,
+   "shipwreck": null,
+   "bastion": 105,
+   "fortress": 142,
+   "sh": 1596,
+   "lava": null
+  },
+  {
+   "seed": "554110317233127206",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 32,
+   "village": 337,
+   "shipwreck": null,
+   "bastion": 113,
+   "fortress": 200,
+   "sh": 1397,
+   "lava": null
+  },
+  {
+   "seed": "-5358942405600145316",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 323,
+   "shipwreck": 582,
+   "bastion": 107,
+   "fortress": 226,
+   "sh": 1638,
+   "lava": null
+  },
+  {
+   "seed": "-339597130119853861",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 244,
+   "shipwreck": 71,
+   "bastion": 112,
+   "fortress": 230,
+   "sh": 1475,
+   "lava": null
+  },
+  {
+   "seed": "2990892254515876834",
+   "biome": "plains",
+   "spawn": [
+    208,
+    288
+   ],
+   "rp": 80,
+   "village": 102,
+   "shipwreck": 224,
+   "bastion": 149,
+   "fortress": 42,
+   "sh": 1085,
+   "lava": null
+  },
+  {
+   "seed": "9206796854924993634",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 147,
+   "village": 197,
+   "shipwreck": 800,
+   "bastion": 92,
+   "fortress": 202,
+   "sh": 1411,
+   "lava": null
+  },
+  {
+   "seed": "-4941016962628613673",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 113,
+   "village": 305,
+   "shipwreck": 915,
+   "bastion": 144,
+   "fortress": 144,
+   "sh": 1463,
+   "lava": null
+  },
+  {
+   "seed": "-6624971212520746704",
+   "biome": "plains",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 101,
+   "village": 80,
+   "shipwreck": 160,
+   "bastion": 118,
+   "fortress": 174,
+   "sh": 1447,
+   "lava": null
+  },
+  {
+   "seed": "4957575841898292303",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 342,
+   "shipwreck": 897,
+   "bastion": 143,
+   "fortress": 227,
+   "sh": 1605,
+   "lava": null
+  },
+  {
+   "seed": "2347565099734863476",
+   "biome": "desert",
+   "spawn": [
+    704,
+    592
+   ],
+   "rp": 136,
+   "village": 230,
+   "shipwreck": 208,
+   "bastion": 24,
+   "fortress": 190,
+   "sh": 1684,
+   "lava": null
+  },
+  {
+   "seed": "-8440051278668503788",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    0,
+    112
+   ],
+   "rp": 121,
+   "village": 295,
+   "shipwreck": 776,
+   "bastion": 36,
+   "fortress": 156,
+   "sh": 1442,
+   "lava": null
+  },
+  {
+   "seed": "-2199880889535428949",
+   "biome": "snowy_plains",
+   "spawn": [
+    -496,
+    416
+   ],
+   "rp": 147,
+   "village": 288,
+   "shipwreck": 151,
+   "bastion": 49,
+   "fortress": 182,
+   "sh": 1410,
+   "lava": null
+  },
+  {
+   "seed": "1049124005993980408",
+   "biome": "plains",
+   "spawn": [
+    32,
+    -64
+   ],
+   "rp": 121,
+   "village": 167,
+   "shipwreck": null,
+   "bastion": 76,
+   "fortress": 236,
+   "sh": 1481,
+   "lava": null
+  },
+  {
+   "seed": "8622838365913858321",
+   "biome": "meadow",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 147,
+   "village": 316,
+   "shipwreck": 780,
+   "bastion": 144,
+   "fortress": 234,
+   "sh": 1638,
+   "lava": null
+  },
+  {
+   "seed": "6402065827972367766",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 289,
+   "shipwreck": 512,
+   "bastion": 81,
+   "fortress": 236,
+   "sh": 1366,
+   "lava": null
+  },
+  {
+   "seed": "-2590992711190260908",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 200,
+   "shipwreck": 249,
+   "bastion": 48,
+   "fortress": 226,
+   "sh": 1684,
+   "lava": null
+  },
+  {
+   "seed": "9093238718612888055",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 293,
+   "shipwreck": null,
+   "bastion": 97,
+   "fortress": 244,
+   "sh": 1621,
+   "lava": null
+  },
+  {
+   "seed": "-8333391120284220142",
+   "biome": "birch_forest",
+   "spawn": [
+    -48,
+    -32
+   ],
+   "rp": 128,
+   "village": 326,
+   "shipwreck": 430,
+   "bastion": 111,
+   "fortress": 187,
+   "sh": 1626,
+   "lava": null
+  },
+  {
+   "seed": "-2833578498636864124",
+   "biome": "forest",
+   "spawn": [
+    -32,
+    32
+   ],
+   "rp": 80,
+   "village": 263,
+   "shipwreck": null,
+   "bastion": 148,
+   "fortress": 154,
+   "sh": 1518,
+   "lava": null
+  },
+  {
+   "seed": "-4303052558471782926",
+   "biome": "wooded_badlands",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 157,
+   "shipwreck": 257,
+   "bastion": 128,
+   "fortress": 131,
+   "sh": 1592,
+   "lava": null
+  },
+  {
+   "seed": "2148070388788796056",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 151,
+   "shipwreck": 652,
+   "bastion": 115,
+   "fortress": 93,
+   "sh": 1668,
+   "lava": null
+  },
+  {
+   "seed": "7997574859891931341",
+   "biome": "plains",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 144,
+   "village": 279,
+   "shipwreck": 186,
+   "bastion": 91,
+   "fortress": 95,
+   "sh": 1499,
+   "lava": null
+  },
+  {
+   "seed": "-3614922246769742354",
+   "biome": "jungle",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 264,
+   "shipwreck": 885,
+   "bastion": 64,
+   "fortress": 213,
+   "sh": 1580,
+   "lava": null
+  },
+  {
+   "seed": "6544823240143604989",
+   "biome": "plains",
+   "spawn": [
+    224,
+    32
+   ],
+   "rp": 90,
+   "village": 272,
+   "shipwreck": 355,
+   "bastion": 84,
+   "fortress": 212,
+   "sh": 1283,
+   "lava": null
+  },
+  {
+   "seed": "2983475852786545815",
+   "biome": "plains",
+   "spawn": [
+    16,
+    144
+   ],
+   "rp": 121,
+   "village": 242,
+   "shipwreck": 467,
+   "bastion": 104,
+   "fortress": 149,
+   "sh": 1492,
+   "lava": null
+  },
+  {
+   "seed": "-8272133901128842531",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 275,
+   "shipwreck": 688,
+   "bastion": 147,
+   "fortress": 147,
+   "sh": 1536,
+   "lava": null
+  },
+  {
+   "seed": "-693989681624431355",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 275,
+   "shipwreck": 566,
+   "bastion": 115,
+   "fortress": 237,
+   "sh": 1381,
+   "lava": null
+  },
+  {
+   "seed": "6429901993422488788",
+   "biome": "forest",
+   "spawn": [
+    48,
+    -320
+   ],
+   "rp": 22,
+   "village": 186,
+   "shipwreck": 222,
+   "bastion": 91,
+   "fortress": 238,
+   "sh": 1289,
+   "lava": null
+  },
+  {
+   "seed": "1698879115659673672",
+   "biome": "snowy_plains",
+   "spawn": [
+    96,
+    64
+   ],
+   "rp": 48,
+   "village": 102,
+   "shipwreck": 279,
+   "bastion": 120,
+   "fortress": 68,
+   "sh": 1422,
+   "lava": null
+  },
+  {
+   "seed": "-1534042351646127491",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 202,
+   "shipwreck": 279,
+   "bastion": 113,
+   "fortress": 192,
+   "sh": 1361,
+   "lava": null
+  },
+  {
+   "seed": "-4382440433321270218",
+   "biome": "plains",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 113,
+   "village": 315,
+   "shipwreck": 368,
+   "bastion": 101,
+   "fortress": 199,
+   "sh": 1394,
+   "lava": null
+  },
+  {
+   "seed": "5068384282065020773",
+   "biome": "forest",
+   "spawn": [
+    48,
+    80
+   ],
+   "rp": 93,
+   "village": 257,
+   "shipwreck": 436,
+   "bastion": 144,
+   "fortress": 196,
+   "sh": 1473,
+   "lava": null
+  },
+  {
+   "seed": "6728984710535677735",
+   "biome": "plains",
+   "spawn": [
+    16,
+    160
+   ],
+   "rp": 101,
+   "village": 160,
+   "shipwreck": 144,
+   "bastion": 100,
+   "fortress": 195,
+   "sh": 1521,
+   "lava": null
+  },
+  {
+   "seed": "5985567265418287019",
+   "biome": "meadow",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 96,
+   "village": 208,
+   "shipwreck": 727,
+   "bastion": 107,
+   "fortress": 237,
+   "sh": 1383,
+   "lava": null
+  },
+  {
+   "seed": "7929552689642589330",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 101,
+   "village": 326,
+   "shipwreck": 680,
+   "bastion": 107,
+   "fortress": 121,
+   "sh": 1561,
+   "lava": null
+  }
+ ]
+}

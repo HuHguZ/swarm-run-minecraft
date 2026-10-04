@@ -1,0 +1,10620 @@
+{
+ "version": "1.21.11",
+ "made": "2026-10-02 seedtool search --rp 150 --village 350 --bastion 150 --fortress 250 --sh 1700; лава — скан farm/portal-scan/scan.js (агент G), 2026-10-02T19:36",
+ "note": "хорошие сиды (решение пользователя 02.10: пока тренируем спидран только на них). Лаву seedtool не знает — проверка сканом: поле lava (null — не проверено). v2: lava — до годной лавы (≥ 10 источников) в 200 м, класс rp/surface/open-cave; rpLava — лава у руин; отсортировано по start (быстрота старта: лава, руина с лавой, деревня). Сканировано 300 из 300.",
+ "seeds": [
+  {
+   "seed": "4961758722860627209",
+   "biome": "birch_forest",
+   "spawn": [
+    -240,
+    -384
+   ],
+   "rp": 35,
+   "village": 93,
+   "shipwreck": 97,
+   "bastion": 126,
+   "fortress": 217,
+   "sh": 1223,
+   "lava": 26,
+   "lavaClass": "rp",
+   "lavaSrc": 13,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -264,
+    68,
+    -393
+   ],
+   "lavaEst": 7,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 28,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 26,
+    "cls": "rp",
+    "at": [
+     -264,
+     68,
+     -393
+    ],
+    "src": 13
+   },
+   "start": -41
+  },
+  {
+   "seed": "3819436260285513926",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 121,
+   "shipwreck": 994,
+   "bastion": 128,
+   "fortress": 113,
+   "sh": 1515,
+   "lava": 39,
+   "lavaClass": "rp",
+   "lavaSrc": 16,
+   "lavaDepth": 0,
+   "lavaAt": [
+    19,
+    64,
+    34
+   ],
+   "lavaEst": 10,
+   "rpLava": 18,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 41,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 39,
+    "cls": "rp",
+    "at": [
+     19,
+     64,
+     34
+    ],
+    "src": 16
+   },
+   "start": -35
+  },
+  {
+   "seed": "-6624971212520746704",
+   "biome": "plains",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 101,
+   "village": 80,
+   "shipwreck": 160,
+   "bastion": 118,
+   "fortress": 174,
+   "sh": 1447,
+   "lava": 78,
+   "lavaClass": "surface",
+   "lavaSrc": 145,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -39,
+    72,
+    56
+   ],
+   "lavaEst": 20,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 106,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 78,
+    "cls": "surface",
+    "at": [
+     -39,
+     72,
+     56
+    ],
+    "src": 145
+   },
+   "start": -30
+  },
+  {
+   "seed": "1049124005993980408",
+   "biome": "plains",
+   "spawn": [
+    32,
+    -64
+   ],
+   "rp": 121,
+   "village": 167,
+   "shipwreck": null,
+   "bastion": 76,
+   "fortress": 236,
+   "sh": 1481,
+   "lava": 44,
+   "lavaClass": "surface",
+   "lavaSrc": 104,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -12,
+    63,
+    -70
+   ],
+   "lavaEst": 11,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 128,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 44,
+    "cls": "surface",
+    "at": [
+     -12,
+     63,
+     -70
+    ],
+    "src": 104
+   },
+   "start": -28
+  },
+  {
+   "seed": "8340411484014290806",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 81,
+   "village": 67,
+   "shipwreck": 444,
+   "bastion": 124,
+   "fortress": 22,
+   "sh": 1675,
+   "lava": 98,
+   "lavaClass": "rp",
+   "lavaSrc": 10,
+   "lavaDepth": 0,
+   "lavaAt": [
+    96,
+    104,
+    22
+   ],
+   "lavaEst": 25,
+   "rpLava": 15,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 100,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 98,
+    "cls": "rp",
+    "at": [
+     96,
+     104,
+     22
+    ],
+    "src": 10
+   },
+   "start": -27
+  },
+  {
+   "seed": "-7092001928005398638",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 137,
+   "village": 128,
+   "shipwreck": 276,
+   "bastion": 137,
+   "fortress": 116,
+   "sh": 1492,
+   "lava": 75,
+   "lavaClass": "surface",
+   "lavaSrc": 69,
+   "lavaDepth": 0,
+   "lavaAt": [
+    43,
+    68,
+    62
+   ],
+   "lavaEst": 19,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 145,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 75,
+    "cls": "surface",
+    "at": [
+     43,
+     68,
+     62
+    ],
+    "src": 69
+   },
+   "start": -25
+  },
+  {
+   "seed": "6125381221520321917",
+   "biome": "plains",
+   "spawn": [
+    64,
+    -64
+   ],
+   "rp": 80,
+   "village": 115,
+   "shipwreck": 453,
+   "bastion": 132,
+   "fortress": 136,
+   "sh": 1618,
+   "lava": 86,
+   "lavaClass": "rp",
+   "lavaSrc": 12,
+   "lavaDepth": 0,
+   "lavaAt": [
+    20,
+    63,
+    10
+   ],
+   "lavaEst": 22,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 88,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 86,
+    "cls": "rp",
+    "at": [
+     20,
+     63,
+     10
+    ],
+    "src": 12
+   },
+   "start": -24
+  },
+  {
+   "seed": "188669368069139646",
+   "biome": "taiga",
+   "spawn": [
+    368,
+    16
+   ],
+   "rp": 86,
+   "village": 128,
+   "shipwreck": 320,
+   "bastion": 139,
+   "fortress": 209,
+   "sh": 1273,
+   "lava": 86,
+   "lavaClass": "rp",
+   "lavaSrc": 15,
+   "lavaDepth": 0,
+   "lavaAt": [
+    339,
+    63,
+    97
+   ],
+   "lavaEst": 22,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 89,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 86,
+    "cls": "rp",
+    "at": [
+     339,
+     63,
+     97
+    ],
+    "src": 15
+   },
+   "start": -22
+  },
+  {
+   "seed": "-8007157593629110510",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 71,
+   "village": 193,
+   "shipwreck": null,
+   "bastion": 138,
+   "fortress": 162,
+   "sh": 1529,
+   "lava": 77,
+   "lavaClass": "rp",
+   "lavaSrc": 18,
+   "lavaDepth": 0,
+   "lavaAt": [
+    21,
+    69,
+    83
+   ],
+   "lavaEst": 19,
+   "rpLava": 20,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 78,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 77,
+    "cls": "rp",
+    "at": [
+     21,
+     69,
+     83
+    ],
+    "src": 18
+   },
+   "start": -17
+  },
+  {
+   "seed": "-3911120814006239239",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 176,
+   "shipwreck": 401,
+   "bastion": 107,
+   "fortress": 240,
+   "sh": 1482,
+   "lava": 60,
+   "lavaClass": "open-cave",
+   "lavaSrc": 76,
+   "lavaDepth": 6,
+   "lavaAt": [
+    -50,
+    66,
+    -34
+   ],
+   "lavaEst": 21,
+   "rpLava": 18,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 71,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": -17
+  },
+  {
+   "seed": "-5285637566844997715",
+   "biome": "forest",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 96,
+   "village": 257,
+   "shipwreck": null,
+   "bastion": 101,
+   "fortress": 233,
+   "sh": 1663,
+   "lava": 46,
+   "lavaClass": "surface",
+   "lavaSrc": 101,
+   "lavaDepth": 0,
+   "lavaAt": [
+    13,
+    70,
+    -2
+   ],
+   "lavaEst": 12,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 100,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 46,
+    "cls": "surface",
+    "at": [
+     13,
+     70,
+     -2
+    ],
+    "src": 101
+   },
+   "start": -16
+  },
+  {
+   "seed": "4182871780107749134",
+   "biome": "desert",
+   "spawn": [
+    16,
+    4
+   ],
+   "rp": 128,
+   "village": 262,
+   "shipwreck": 970,
+   "bastion": 114,
+   "fortress": 228,
+   "sh": 1337,
+   "lava": 53,
+   "lavaClass": "surface",
+   "lavaSrc": 59,
+   "lavaDepth": 0,
+   "lavaAt": [
+    41,
+    63,
+    47
+   ],
+   "lavaEst": 13,
+   "rpLava": 17,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 135,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 53,
+    "cls": "surface",
+    "at": [
+     41,
+     63,
+     47
+    ],
+    "src": 59
+   },
+   "start": -14
+  },
+  {
+   "seed": "-955261348487910180",
+   "biome": "savanna",
+   "spawn": [
+    592,
+    -320
+   ],
+   "rp": 131,
+   "village": 112,
+   "shipwreck": 329,
+   "bastion": 55,
+   "fortress": 191,
+   "sh": 1272,
+   "lava": 131,
+   "lavaClass": "surface",
+   "lavaSrc": 113,
+   "lavaDepth": 0,
+   "lavaAt": [
+    697,
+    69,
+    -241
+   ],
+   "lavaEst": 33,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 137,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 131,
+    "cls": "surface",
+    "at": [
+     697,
+     69,
+     -241
+    ],
+    "src": 113
+   },
+   "start": -13
+  },
+  {
+   "seed": "5117019564373344784",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 214,
+   "shipwreck": 994,
+   "bastion": 124,
+   "fortress": 208,
+   "sh": 1462,
+   "lava": 81,
+   "lavaClass": "surface",
+   "lavaSrc": 71,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -57,
+    65,
+    58
+   ],
+   "lavaEst": 20,
+   "rpLava": 16,
+   "rpPlacement": "underground",
+   "rpScanD": 77,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 81,
+    "cls": "surface",
+    "at": [
+     -57,
+     65,
+     58
+    ],
+    "src": 71
+   },
+   "start": -13
+  },
+  {
+   "seed": "-3514963074131601530",
+   "biome": "desert",
+   "spawn": [
+    -848,
+    160
+   ],
+   "rp": 50,
+   "village": 248,
+   "shipwreck": 568,
+   "bastion": 118,
+   "fortress": 215,
+   "sh": 1246,
+   "lava": 62,
+   "lavaClass": "surface",
+   "lavaSrc": 86,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -880,
+    68,
+    107
+   ],
+   "lavaEst": 16,
+   "rpLava": 20,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 46,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 62,
+    "cls": "surface",
+    "at": [
+     -880,
+     68,
+     107
+    ],
+    "src": 86
+   },
+   "start": -13
+  },
+  {
+   "seed": "-2791903048069190631",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 131,
+   "village": 305,
+   "shipwreck": 823,
+   "bastion": 32,
+   "fortress": 192,
+   "sh": 1380,
+   "lava": 35,
+   "lavaClass": "surface",
+   "lavaSrc": 102,
+   "lavaDepth": 0,
+   "lavaAt": [
+    27,
+    62,
+    23
+   ],
+   "lavaEst": 9,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 137,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 35,
+    "cls": "surface",
+    "at": [
+     27,
+     62,
+     23
+    ],
+    "src": 102
+   },
+   "start": -13
+  },
+  {
+   "seed": "2453623233943470436",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 294,
+   "shipwreck": 124,
+   "bastion": 65,
+   "fortress": 248,
+   "sh": 1548,
+   "lava": 45,
+   "lavaClass": "surface",
+   "lavaSrc": 71,
+   "lavaDepth": 0,
+   "lavaAt": [
+    45,
+    71,
+    -5
+   ],
+   "lavaEst": 11,
+   "rpLava": 21,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 91,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 45,
+    "cls": "surface",
+    "at": [
+     45,
+     71,
+     -5
+    ],
+    "src": 71
+   },
+   "start": -12
+  },
+  {
+   "seed": "4344771480677378081",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 187,
+   "shipwreck": 501,
+   "bastion": 116,
+   "fortress": 80,
+   "sh": 1620,
+   "lava": 102,
+   "lavaClass": "rp",
+   "lavaSrc": 12,
+   "lavaDepth": 0,
+   "lavaAt": [
+    21,
+    65,
+    100
+   ],
+   "lavaEst": 26,
+   "rpLava": 14,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 103,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 102,
+    "cls": "rp",
+    "at": [
+     21,
+     65,
+     100
+    ],
+    "src": 12
+   },
+   "start": -11
+  },
+  {
+   "seed": "5730218751502857564",
+   "biome": "plains",
+   "spawn": [
+    272,
+    -224
+   ],
+   "rp": 147,
+   "village": 305,
+   "shipwreck": 128,
+   "bastion": 67,
+   "fortress": 148,
+   "sh": 1357,
+   "lava": 43,
+   "lavaClass": "surface",
+   "lavaSrc": 99,
+   "lavaDepth": 0,
+   "lavaAt": [
+    315,
+    79,
+    -230
+   ],
+   "lavaEst": 11,
+   "rpLava": 11,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 141,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 43,
+    "cls": "surface",
+    "at": [
+     315,
+     79,
+     -230
+    ],
+    "src": 99
+   },
+   "start": -11
+  },
+  {
+   "seed": "6196238357603427589",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 283,
+   "shipwreck": 708,
+   "bastion": 81,
+   "fortress": 243,
+   "sh": 1366,
+   "lava": 61,
+   "lavaClass": "surface",
+   "lavaSrc": 80,
+   "lavaDepth": 0,
+   "lavaAt": [
+    60,
+    69,
+    -10
+   ],
+   "lavaEst": 15,
+   "rpLava": 22,
+   "rpPlacement": "underground",
+   "rpScanD": 148,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 61,
+    "cls": "surface",
+    "at": [
+     60,
+     69,
+     -10
+    ],
+    "src": 80
+   },
+   "start": -10
+  },
+  {
+   "seed": "-4863492902744516946",
+   "biome": "savanna",
+   "spawn": [
+    64,
+    48
+   ],
+   "rp": 128,
+   "village": 316,
+   "shipwreck": 379,
+   "bastion": 136,
+   "fortress": 74,
+   "sh": 1605,
+   "lava": 40,
+   "lavaClass": "surface",
+   "lavaSrc": 84,
+   "lavaDepth": 0,
+   "lavaAt": [
+    95,
+    63,
+    74
+   ],
+   "lavaEst": 10,
+   "rpLava": 15,
+   "rpPlacement": "underground",
+   "rpScanD": 131,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 40,
+    "cls": "surface",
+    "at": [
+     95,
+     63,
+     74
+    ],
+    "src": 84
+   },
+   "start": -10
+  },
+  {
+   "seed": "6803883883271536740",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 113,
+   "village": 157,
+   "shipwreck": 492,
+   "bastion": 134,
+   "fortress": 239,
+   "sh": 1614,
+   "lava": 118,
+   "lavaClass": "rp",
+   "lavaSrc": 12,
+   "lavaDepth": 0,
+   "lavaAt": [
+    84,
+    64,
+    69
+   ],
+   "lavaEst": 30,
+   "rpLava": 16,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 120,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 118,
+    "cls": "rp",
+    "at": [
+     84,
+     64,
+     69
+    ],
+    "src": 12
+   },
+   "start": -10
+  },
+  {
+   "seed": "7188181131114376763",
+   "biome": "beach",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 50,
+   "village": 288,
+   "shipwreck": 396,
+   "bastion": 128,
+   "fortress": 145,
+   "sh": 1683,
+   "lava": 57,
+   "lavaClass": "rp",
+   "lavaSrc": 15,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -5,
+    63,
+    120
+   ],
+   "lavaEst": 14,
+   "rpLava": 21,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 56,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 57,
+    "cls": "rp",
+    "at": [
+     -5,
+     63,
+     120
+    ],
+    "src": 15
+   },
+   "start": -10
+  },
+  {
+   "seed": "-3614922246769742354",
+   "biome": "jungle",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 264,
+   "shipwreck": 885,
+   "bastion": 64,
+   "fortress": 213,
+   "sh": 1580,
+   "lava": 66,
+   "lavaClass": "rp",
+   "lavaSrc": 21,
+   "lavaDepth": 0,
+   "lavaAt": [
+    42,
+    66,
+    51
+   ],
+   "lavaEst": 17,
+   "rpLava": 22,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 68,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 66,
+    "cls": "rp",
+    "at": [
+     42,
+     66,
+     51
+    ],
+    "src": 21
+   },
+   "start": -10
+  },
+  {
+   "seed": "-5970544057081285760",
+   "biome": "savanna",
+   "spawn": [
+    112,
+    240
+   ],
+   "rp": 131,
+   "village": 143,
+   "shipwreck": 337,
+   "bastion": 114,
+   "fortress": 150,
+   "sh": 1503,
+   "lava": 137,
+   "lavaClass": "rp",
+   "lavaSrc": 14,
+   "lavaDepth": 0,
+   "lavaAt": [
+    245,
+    66,
+    273
+   ],
+   "lavaEst": 34,
+   "rpLava": 20,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 140,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 137,
+    "cls": "rp",
+    "at": [
+     245,
+     66,
+     273
+    ],
+    "src": 14
+   },
+   "start": -8
+  },
+  {
+   "seed": "-3679778118065848290",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 342,
+   "shipwreck": 369,
+   "bastion": 113,
+   "fortress": 113,
+   "sh": 1503,
+   "lava": 37,
+   "lavaClass": "rp",
+   "lavaSrc": 22,
+   "lavaDepth": 0,
+   "lavaAt": [
+    37,
+    112,
+    5
+   ],
+   "lavaEst": 9,
+   "rpLava": 22,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 40,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 37,
+    "cls": "rp",
+    "at": [
+     37,
+     112,
+     5
+    ],
+    "src": 22
+   },
+   "start": -8
+  },
+  {
+   "seed": "-339597130119853861",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 244,
+   "shipwreck": 71,
+   "bastion": 112,
+   "fortress": 230,
+   "sh": 1475,
+   "lava": 82,
+   "lavaClass": "rp",
+   "lavaSrc": 17,
+   "lavaDepth": 0,
+   "lavaAt": [
+    23,
+    69,
+    79
+   ],
+   "lavaEst": 21,
+   "rpLava": 22,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 85,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 82,
+    "cls": "rp",
+    "at": [
+     23,
+     69,
+     79
+    ],
+    "src": 17
+   },
+   "start": -8
+  },
+  {
+   "seed": "642797990296007991",
+   "biome": "windswept_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 178,
+   "shipwreck": null,
+   "bastion": 86,
+   "fortress": 136,
+   "sh": 1697,
+   "lava": 125,
+   "lavaClass": "surface",
+   "lavaSrc": 92,
+   "lavaDepth": 0,
+   "lavaAt": [
+    122,
+    63,
+    -27
+   ],
+   "lavaEst": 31,
+   "rpLava": 18,
+   "rpPlacement": "underground",
+   "rpScanD": 104,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 125,
+    "cls": "surface",
+    "at": [
+     122,
+     63,
+     -27
+    ],
+    "src": 92
+   },
+   "start": -7
+  },
+  {
+   "seed": "-7145914149339214824",
+   "biome": "sparse_jungle",
+   "spawn": [
+    32,
+    -16
+   ],
+   "rp": 35,
+   "village": 343,
+   "shipwreck": 947,
+   "bastion": 137,
+   "fortress": 223,
+   "sh": 1460,
+   "lava": 41,
+   "lavaClass": "rp",
+   "lavaSrc": 22,
+   "lavaDepth": 0,
+   "lavaAt": [
+    55,
+    63,
+    18
+   ],
+   "lavaEst": 10,
+   "rpLava": 23,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 42,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 41,
+    "cls": "rp",
+    "at": [
+     55,
+     63,
+     18
+    ],
+    "src": 22
+   },
+   "start": -7
+  },
+  {
+   "seed": "3626516150200494488",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 323,
+   "shipwreck": 320,
+   "bastion": 97,
+   "fortress": 192,
+   "sh": 1439,
+   "lava": 50,
+   "lavaClass": "surface",
+   "lavaSrc": 72,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -28,
+    63,
+    42
+   ],
+   "lavaEst": 13,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 149,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 50,
+    "cls": "surface",
+    "at": [
+     -28,
+     63,
+     42
+    ],
+    "src": 72
+   },
+   "start": -7
+  },
+  {
+   "seed": "8993525728608770490",
+   "biome": "savanna",
+   "spawn": [
+    112,
+    48
+   ],
+   "rp": 102,
+   "village": 229,
+   "shipwreck": 510,
+   "bastion": 119,
+   "fortress": 191,
+   "sh": 1425,
+   "lava": 99,
+   "lavaClass": "rp",
+   "lavaSrc": 14,
+   "lavaDepth": 0,
+   "lavaAt": [
+    37,
+    63,
+    113
+   ],
+   "lavaEst": 25,
+   "rpLava": 19,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 100,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 99,
+    "cls": "rp",
+    "at": [
+     37,
+     63,
+     113
+    ],
+    "src": 14
+   },
+   "start": -6
+  },
+  {
+   "seed": "-4016955842302937262",
+   "biome": "plains",
+   "spawn": [
+    32,
+    48
+   ],
+   "rp": 22,
+   "village": 273,
+   "shipwreck": 337,
+   "bastion": 140,
+   "fortress": 118,
+   "sh": 1606,
+   "lava": 80,
+   "lavaClass": "surface",
+   "lavaSrc": 34,
+   "lavaDepth": 0,
+   "lavaAt": [
+    95,
+    69,
+    98
+   ],
+   "lavaEst": 20,
+   "rpLava": 22,
+   "rpPlacement": "underground",
+   "rpScanD": 15,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 80,
+    "cls": "surface",
+    "at": [
+     95,
+     69,
+     98
+    ],
+    "src": 34
+   },
+   "start": -6
+  },
+  {
+   "seed": "2631719127963822673",
+   "biome": "forest",
+   "spawn": [
+    -384,
+    -352
+   ],
+   "rp": 136,
+   "village": 237,
+   "shipwreck": 301,
+   "bastion": 118,
+   "fortress": 183,
+   "sh": 1308,
+   "lava": 99,
+   "lavaClass": "surface",
+   "lavaSrc": 86,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -288,
+    62,
+    -378
+   ],
+   "lavaEst": 25,
+   "rpLava": 11,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 139,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 99,
+    "cls": "surface",
+    "at": [
+     -288,
+     62,
+     -378
+    ],
+    "src": 86
+   },
+   "start": -5
+  },
+  {
+   "seed": "-5958388349660930544",
+   "biome": "plains",
+   "spawn": [
+    16,
+    80
+   ],
+   "rp": 71,
+   "village": 121,
+   "shipwreck": 592,
+   "bastion": 26,
+   "fortress": 121,
+   "sh": 1668,
+   "lava": 158,
+   "lavaClass": "surface",
+   "lavaSrc": 129,
+   "lavaDepth": 0,
+   "lavaAt": [
+    155,
+    126,
+    156
+   ],
+   "lavaEst": 40,
+   "rpLava": 14,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 86,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 158,
+    "cls": "surface",
+    "at": [
+     155,
+     126,
+     156
+    ],
+    "src": 129
+   },
+   "start": -5
+  },
+  {
+   "seed": "2853887247649374496",
+   "biome": "jungle",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 65,
+   "village": 329,
+   "shipwreck": 562,
+   "bastion": 146,
+   "fortress": 237,
+   "sh": 1583,
+   "lava": 58,
+   "lavaClass": "rp",
+   "lavaSrc": 18,
+   "lavaDepth": 0,
+   "lavaAt": [
+    25,
+    73,
+    35
+   ],
+   "lavaEst": 15,
+   "rpLava": 20,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 61,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 58,
+    "cls": "rp",
+    "at": [
+     25,
+     73,
+     35
+    ],
+    "src": 18
+   },
+   "start": -4
+  },
+  {
+   "seed": "3120757888047869208",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 178,
+   "shipwreck": null,
+   "bastion": 147,
+   "fortress": 215,
+   "sh": 1523,
+   "lava": 140,
+   "lavaClass": "surface",
+   "lavaSrc": 197,
+   "lavaDepth": 0,
+   "lavaAt": [
+    16,
+    121,
+    139
+   ],
+   "lavaEst": 35,
+   "rpLava": 18,
+   "rpPlacement": "in_mountain",
+   "rpScanD": 91,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 140,
+    "cls": "surface",
+    "at": [
+     16,
+     121,
+     139
+    ],
+    "src": 197
+   },
+   "start": -3
+  },
+  {
+   "seed": "5893001706836794001",
+   "biome": "snowy_plains",
+   "spawn": [
+    -288,
+    80
+   ],
+   "rp": 86,
+   "village": 300,
+   "shipwreck": 249,
+   "bastion": 142,
+   "fortress": 249,
+   "sh": 1530,
+   "lava": 74,
+   "lavaClass": "rp",
+   "lavaSrc": 22,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -357,
+    63,
+    53
+   ],
+   "lavaEst": 19,
+   "rpLava": 22,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 79,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 74,
+    "cls": "rp",
+    "at": [
+     -357,
+     63,
+     53
+    ],
+    "src": 22
+   },
+   "start": -3
+  },
+  {
+   "seed": "9093238718612888055",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 293,
+   "shipwreck": null,
+   "bastion": 97,
+   "fortress": 244,
+   "sh": 1621,
+   "lava": 81,
+   "lavaClass": "rp",
+   "lavaSrc": 20,
+   "lavaDepth": 0,
+   "lavaAt": [
+    6,
+    64,
+    81
+   ],
+   "lavaEst": 20,
+   "rpLava": 22,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 84,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 81,
+    "cls": "rp",
+    "at": [
+     6,
+     64,
+     81
+    ],
+    "src": 20
+   },
+   "start": -3
+  },
+  {
+   "seed": "5068384282065020773",
+   "biome": "forest",
+   "spawn": [
+    48,
+    80
+   ],
+   "rp": 93,
+   "village": 257,
+   "shipwreck": 436,
+   "bastion": 144,
+   "fortress": 196,
+   "sh": 1473,
+   "lava": 98,
+   "lavaClass": "rp",
+   "lavaSrc": 12,
+   "lavaDepth": 0,
+   "lavaAt": [
+    132,
+    66,
+    131
+   ],
+   "lavaEst": 25,
+   "rpLava": 18,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 100,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 98,
+    "cls": "rp",
+    "at": [
+     132,
+     66,
+     131
+    ],
+    "src": 12
+   },
+   "start": -3
+  },
+  {
+   "seed": "-4366942264827208814",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 64,
+   "village": 332,
+   "shipwreck": 617,
+   "bastion": 102,
+   "fortress": 151,
+   "sh": 1534,
+   "lava": 65,
+   "lavaClass": "surface",
+   "lavaSrc": 111,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -61,
+    111,
+    -23
+   ],
+   "lavaEst": 16,
+   "rpLava": 14,
+   "rpPlacement": "underground",
+   "rpScanD": 82,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 65,
+    "cls": "surface",
+    "at": [
+     -61,
+     111,
+     -23
+    ],
+    "src": 111
+   },
+   "start": -2
+  },
+  {
+   "seed": "3816274920780408390",
+   "biome": "plains",
+   "spawn": [
+    176,
+    64
+   ],
+   "rp": 143,
+   "village": 102,
+   "shipwreck": 346,
+   "bastion": 90,
+   "fortress": 208,
+   "sh": 1606,
+   "lava": 150,
+   "lavaClass": "rp",
+   "lavaSrc": 14,
+   "lavaDepth": 3,
+   "lavaAt": [
+    310,
+    88,
+    132
+   ],
+   "lavaEst": 47,
+   "rpLava": 19,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 151,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 150,
+    "cls": "rp",
+    "at": [
+     310,
+     88,
+     132
+    ],
+    "src": 14
+   },
+   "start": 0
+  },
+  {
+   "seed": "-4941016962628613673",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 113,
+   "village": 305,
+   "shipwreck": 915,
+   "bastion": 144,
+   "fortress": 144,
+   "sh": 1463,
+   "lava": 60,
+   "lavaClass": "open-cave",
+   "lavaSrc": 10,
+   "lavaDepth": 7,
+   "lavaAt": [
+    -60,
+    84,
+    -7
+   ],
+   "lavaEst": 22,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 118,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 138,
+    "cls": "surface",
+    "at": [
+     77,
+     91,
+     -115
+    ],
+    "src": 100
+   },
+   "start": 0
+  },
+  {
+   "seed": "6606437763528487482",
+   "biome": "beach",
+   "spawn": [
+    96,
+    -32
+   ],
+   "rp": 113,
+   "village": 268,
+   "shipwreck": 320,
+   "bastion": 108,
+   "fortress": 236,
+   "sh": 1505,
+   "lava": 109,
+   "lavaClass": "surface",
+   "lavaSrc": 113,
+   "lavaDepth": 0,
+   "lavaAt": [
+    196,
+    66,
+    12
+   ],
+   "lavaEst": 27,
+   "rpLava": 15,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 118,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 109,
+    "cls": "surface",
+    "at": [
+     196,
+     66,
+     12
+    ],
+    "src": 113
+   },
+   "start": 1
+  },
+  {
+   "seed": "-4254586417553246384",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 144,
+   "shipwreck": null,
+   "bastion": 116,
+   "fortress": 237,
+   "sh": 1502,
+   "lava": 177,
+   "lavaClass": "surface",
+   "lavaSrc": 43,
+   "lavaDepth": 0,
+   "lavaAt": [
+    126,
+    70,
+    -125
+   ],
+   "lavaEst": 44,
+   "rpLava": 11,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 116,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 177,
+    "cls": "surface",
+    "at": [
+     126,
+     70,
+     -125
+    ],
+    "src": 43
+   },
+   "start": 2
+  },
+  {
+   "seed": "-7538698798116556409",
+   "biome": "old_growth_birch_forest",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 57,
+   "village": 316,
+   "shipwreck": 855,
+   "bastion": 132,
+   "fortress": 231,
+   "sh": 1446,
+   "lava": 65,
+   "lavaClass": "rp",
+   "lavaSrc": 13,
+   "lavaDepth": 8,
+   "lavaAt": [
+    33,
+    136,
+    107
+   ],
+   "lavaEst": 24,
+   "rpLava": 16,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 68,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 252,
+    "cls": "surface",
+    "at": [
+     -178,
+     118,
+     -129
+    ],
+    "src": 63
+   },
+   "start": 4
+  },
+  {
+   "seed": "-6882420687155426784",
+   "biome": "cherry_grove",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 346,
+   "shipwreck": null,
+   "bastion": 80,
+   "fortress": 182,
+   "sh": 1475,
+   "lava": 86,
+   "lavaClass": "surface",
+   "lavaSrc": 75,
+   "lavaDepth": 0,
+   "lavaAt": [
+    73,
+    122,
+    -46
+   ],
+   "lavaEst": 22,
+   "rpLava": 22,
+   "rpPlacement": "underground",
+   "rpScanD": 147,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 86,
+    "cls": "surface",
+    "at": [
+     73,
+     122,
+     -46
+    ],
+    "src": 75
+   },
+   "start": 5
+  },
+  {
+   "seed": "-8333391120284220142",
+   "biome": "birch_forest",
+   "spawn": [
+    -48,
+    -32
+   ],
+   "rp": 128,
+   "village": 326,
+   "shipwreck": 430,
+   "bastion": 111,
+   "fortress": 187,
+   "sh": 1626,
+   "lava": 83,
+   "lavaClass": "open-cave",
+   "lavaSrc": 83,
+   "lavaDepth": 5,
+   "lavaAt": [
+    11,
+    67,
+    -91
+   ],
+   "lavaEst": 26,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 134,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 208,
+    "cls": "surface",
+    "at": [
+     -245,
+     141,
+     36
+    ],
+    "src": 74
+   },
+   "start": 7
+  },
+  {
+   "seed": "7929552689642589330",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 101,
+   "village": 326,
+   "shipwreck": 680,
+   "bastion": 107,
+   "fortress": 121,
+   "sh": 1561,
+   "lava": 104,
+   "lavaClass": "rp",
+   "lavaSrc": 23,
+   "lavaDepth": 0,
+   "lavaAt": [
+    38,
+    63,
+    97
+   ],
+   "lavaEst": 26,
+   "rpLava": 24,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 106,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 104,
+    "cls": "rp",
+    "at": [
+     38,
+     63,
+     97
+    ],
+    "src": 23
+   },
+   "start": 7
+  },
+  {
+   "seed": "-8440051278668503788",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    0,
+    112
+   ],
+   "rp": 121,
+   "village": 295,
+   "shipwreck": 776,
+   "bastion": 36,
+   "fortress": 156,
+   "sh": 1442,
+   "lava": 124,
+   "lavaClass": "rp",
+   "lavaSrc": 19,
+   "lavaDepth": 0,
+   "lavaAt": [
+    113,
+    63,
+    164
+   ],
+   "lavaEst": 31,
+   "rpLava": 19,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 127,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 124,
+    "cls": "surface",
+    "at": [
+     58,
+     64,
+     222
+    ],
+    "src": 45
+   },
+   "start": 8
+  },
+  {
+   "seed": "-4382440433321270218",
+   "biome": "plains",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 113,
+   "village": 315,
+   "shipwreck": 368,
+   "bastion": 101,
+   "fortress": 199,
+   "sh": 1394,
+   "lava": 117,
+   "lavaClass": "rp",
+   "lavaSrc": 10,
+   "lavaDepth": 0,
+   "lavaAt": [
+    72,
+    91,
+    147
+   ],
+   "lavaEst": 29,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 118,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 117,
+    "cls": "rp",
+    "at": [
+     72,
+     91,
+     147
+    ],
+    "src": 10
+   },
+   "start": 8
+  },
+  {
+   "seed": "-4082387994915889327",
+   "biome": "beach",
+   "spawn": [
+    -304,
+    64
+   ],
+   "rp": 121,
+   "village": 326,
+   "shipwreck": 300,
+   "bastion": 119,
+   "fortress": 161,
+   "sh": 1350,
+   "lava": 113,
+   "lavaClass": "rp",
+   "lavaSrc": 11,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -409,
+    63,
+    21
+   ],
+   "lavaEst": 28,
+   "rpLava": 20,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 114,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 113,
+    "cls": "rp",
+    "at": [
+     -409,
+     63,
+     21
+    ],
+    "src": 11
+   },
+   "start": 9
+  },
+  {
+   "seed": "-8580208908665329635",
+   "biome": "stony_shore",
+   "spawn": [
+    80,
+    -16
+   ],
+   "rp": 97,
+   "village": 288,
+   "shipwreck": 706,
+   "bastion": 143,
+   "fortress": 202,
+   "sh": 1236,
+   "lava": 135,
+   "lavaClass": "surface",
+   "lavaSrc": 142,
+   "lavaDepth": 0,
+   "lavaAt": [
+    24,
+    62,
+    -139
+   ],
+   "lavaEst": 34,
+   "rpLava": 23,
+   "rpPlacement": "underground",
+   "rpScanD": 94,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 135,
+    "cls": "surface",
+    "at": [
+     24,
+     62,
+     -139
+    ],
+    "src": 142
+   },
+   "start": 10
+  },
+  {
+   "seed": "-2604297099184598647",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 346,
+   "shipwreck": 701,
+   "bastion": 71,
+   "fortress": 222,
+   "sh": 1373,
+   "lava": 95,
+   "lavaClass": "open-cave",
+   "lavaSrc": 120,
+   "lavaDepth": 3,
+   "lavaAt": [
+    -60,
+    82,
+    74
+   ],
+   "lavaEst": 27,
+   "rpLava": 27,
+   "rpPlacement": "underground",
+   "rpScanD": 105,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 210,
+    "cls": "surface",
+    "at": [
+     -184,
+     63,
+     102
+    ],
+    "src": 132
+   },
+   "start": 10
+  },
+  {
+   "seed": "6520139407132075259",
+   "biome": "plains",
+   "spawn": [
+    -512,
+    96
+   ],
+   "rp": 32,
+   "village": 65,
+   "shipwreck": 386,
+   "bastion": 147,
+   "fortress": 224,
+   "sh": 1310,
+   "lava": 8,
+   "lavaClass": "surface",
+   "lavaSrc": 164,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -519,
+    76,
+    92
+   ],
+   "lavaEst": 2,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 27,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 8,
+    "cls": "surface",
+    "at": [
+     -519,
+     76,
+     92
+    ],
+    "src": 164
+   },
+   "start": 10
+  },
+  {
+   "seed": "-2833578498636864124",
+   "biome": "forest",
+   "spawn": [
+    -32,
+    32
+   ],
+   "rp": 80,
+   "village": 263,
+   "shipwreck": null,
+   "bastion": 148,
+   "fortress": 154,
+   "sh": 1518,
+   "lava": 147,
+   "lavaClass": "surface",
+   "lavaSrc": 125,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -131,
+    62,
+    -77
+   ],
+   "lavaEst": 37,
+   "rpLava": 19,
+   "rpPlacement": "underground",
+   "rpScanD": 91,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 147,
+    "cls": "surface",
+    "at": [
+     -131,
+     62,
+     -77
+    ],
+    "src": 125
+   },
+   "start": 10
+  },
+  {
+   "seed": "1190553472159881436",
+   "biome": "swamp",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 115,
+   "village": 217,
+   "shipwreck": 729,
+   "bastion": 113,
+   "fortress": 81,
+   "sh": 1552,
+   "lava": 174,
+   "lavaClass": "surface",
+   "lavaSrc": 85,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -22,
+    63,
+    173
+   ],
+   "lavaEst": 44,
+   "rpLava": 16,
+   "rpPlacement": "in_mountain",
+   "rpScanD": 117,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 174,
+    "cls": "surface",
+    "at": [
+     -22,
+     63,
+     173
+    ],
+    "src": 85
+   },
+   "start": 11
+  },
+  {
+   "seed": "-3490963328707093861",
+   "biome": "taiga",
+   "spawn": [
+    32,
+    48
+   ],
+   "rp": 112,
+   "village": 276,
+   "shipwreck": null,
+   "bastion": 95,
+   "fortress": 247,
+   "sh": 1598,
+   "lava": 144,
+   "lavaClass": "surface",
+   "lavaSrc": 148,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -36,
+    104,
+    -79
+   ],
+   "lavaEst": 36,
+   "rpLava": 19,
+   "rpPlacement": "underground",
+   "rpScanD": 108,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 144,
+    "cls": "surface",
+    "at": [
+     -36,
+     104,
+     -79
+    ],
+    "src": 148
+   },
+   "start": 11
+  },
+  {
+   "seed": "1619383808589565669",
+   "biome": "jungle",
+   "spawn": [
+    128,
+    -64
+   ],
+   "rp": 137,
+   "village": 295,
+   "shipwreck": 236,
+   "bastion": 142,
+   "fortress": 215,
+   "sh": 1243,
+   "lava": 141,
+   "lavaClass": "rp",
+   "lavaSrc": 15,
+   "lavaDepth": 0,
+   "lavaAt": [
+    210,
+    63,
+    51
+   ],
+   "lavaEst": 35,
+   "rpLava": 18,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 143,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 141,
+    "cls": "rp",
+    "at": [
+     210,
+     63,
+     51
+    ],
+    "src": 15
+   },
+   "start": 12
+  },
+  {
+   "seed": "-5849787220399289736",
+   "biome": "forest",
+   "spawn": [
+    0,
+    -16
+   ],
+   "rp": 128,
+   "village": 315,
+   "shipwreck": 229,
+   "bastion": 100,
+   "fortress": 237,
+   "sh": 1410,
+   "lava": 131,
+   "lavaClass": "rp",
+   "lavaSrc": 19,
+   "lavaDepth": 0,
+   "lavaAt": [
+    67,
+    68,
+    97
+   ],
+   "lavaEst": 33,
+   "rpLava": 21,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 134,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 131,
+    "cls": "rp",
+    "at": [
+     67,
+     68,
+     97
+    ],
+    "src": 19
+   },
+   "start": 12
+  },
+  {
+   "seed": "4471325627226790544",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 107,
+   "shipwreck": null,
+   "bastion": 112,
+   "fortress": 237,
+   "sh": 1556,
+   "lava": 53,
+   "lavaClass": "rp",
+   "lavaSrc": 21,
+   "lavaDepth": 14,
+   "lavaAt": [
+    19,
+    51,
+    50
+   ],
+   "lavaEst": 59,
+   "rpLava": 22,
+   "rpPlacement": "underground",
+   "rpScanD": 56,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 246,
+    "cls": "surface",
+    "at": [
+     110,
+     73,
+     220
+    ],
+    "src": 43
+   },
+   "start": 12
+  },
+  {
+   "seed": "5309806270733967638",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 301,
+   "shipwreck": 314,
+   "bastion": 124,
+   "fortress": 160,
+   "sh": 1374,
+   "lava": 139,
+   "lavaClass": "surface",
+   "lavaSrc": 131,
+   "lavaDepth": 0,
+   "lavaAt": [
+    98,
+    68,
+    99
+   ],
+   "lavaEst": 35,
+   "rpLava": 19,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 172,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 139,
+    "cls": "surface",
+    "at": [
+     98,
+     68,
+     99
+    ],
+    "src": 131
+   },
+   "start": 13
+  },
+  {
+   "seed": "4957575841898292303",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 342,
+   "shipwreck": 897,
+   "bastion": 143,
+   "fortress": 227,
+   "sh": 1605,
+   "lava": 122,
+   "lavaClass": "surface",
+   "lavaSrc": 72,
+   "lavaDepth": 0,
+   "lavaAt": [
+    46,
+    73,
+    -113
+   ],
+   "lavaEst": 31,
+   "rpLava": 13,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 136,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 122,
+    "cls": "surface",
+    "at": [
+     46,
+     73,
+     -113
+    ],
+    "src": 72
+   },
+   "start": 14
+  },
+  {
+   "seed": "2192918442896024032",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 16,
+   "shipwreck": 692,
+   "bastion": 131,
+   "fortress": 187,
+   "sh": 1414,
+   "lava": 52,
+   "lavaClass": "surface",
+   "lavaSrc": 29,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -2,
+    84,
+    52
+   ],
+   "lavaEst": 13,
+   "rpLava": 2,
+   "rpPlacement": "underground",
+   "rpScanD": 117,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 52,
+    "cls": "surface",
+    "at": [
+     -2,
+     84,
+     52
+    ],
+    "src": 29
+   },
+   "start": 15
+  },
+  {
+   "seed": "7646447341542460528",
+   "biome": "forest",
+   "spawn": [
+    0,
+    48
+   ],
+   "rp": 16,
+   "village": 310,
+   "shipwreck": 595,
+   "bastion": 86,
+   "fortress": 154,
+   "sh": 1660,
+   "lava": 57,
+   "lavaClass": "open-cave",
+   "lavaSrc": 14523,
+   "lavaDepth": 23,
+   "lavaAt": [
+    57,
+    -29,
+    53
+   ],
+   "lavaEst": 37,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 21,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 16
+  },
+  {
+   "seed": "-5493949162059883301",
+   "biome": "plains",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 137,
+   "village": 346,
+   "shipwreck": 549,
+   "bastion": 144,
+   "fortress": 209,
+   "sh": 1577,
+   "lava": 147,
+   "lavaClass": "rp",
+   "lavaSrc": 17,
+   "lavaDepth": 0,
+   "lavaAt": [
+    97,
+    63,
+    123
+   ],
+   "lavaEst": 37,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 150,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 167,
+    "cls": "surface",
+    "at": [
+     -87,
+     63,
+     132
+    ],
+    "src": 26
+   },
+   "start": 20
+  },
+  {
+   "seed": "255097961873466141",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 48,
+   "village": 71,
+   "shipwreck": 244,
+   "bastion": 132,
+   "fortress": 234,
+   "sh": 1496,
+   "lava": 98,
+   "lavaClass": "open-cave",
+   "lavaSrc": 87,
+   "lavaDepth": 46,
+   "lavaAt": [
+    65,
+    49,
+    106
+   ],
+   "lavaEst": 71,
+   "rpLava": 19,
+   "rpPlacement": "underground",
+   "rpScanD": 52,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 20
+  },
+  {
+   "seed": "-5335069584978810514",
+   "biome": "plains",
+   "spawn": [
+    -368,
+    -368
+   ],
+   "rp": 93,
+   "village": 50,
+   "shipwreck": 571,
+   "bastion": 130,
+   "fortress": 230,
+   "sh": 1443,
+   "lava": 61,
+   "lavaClass": "surface",
+   "lavaSrc": 90,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -356,
+    62,
+    -428
+   ],
+   "lavaEst": 15,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 99,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 61,
+    "cls": "surface",
+    "at": [
+     -356,
+     62,
+     -428
+    ],
+    "src": 90
+   },
+   "start": 21
+  },
+  {
+   "seed": "3740187953169953402",
+   "biome": "forest",
+   "spawn": [
+    -32,
+    0
+   ],
+   "rp": 101,
+   "village": 121,
+   "shipwreck": 639,
+   "bastion": 144,
+   "fortress": 117,
+   "sh": 1604,
+   "lava": 25,
+   "lavaClass": "surface",
+   "lavaSrc": 133,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -55,
+    78,
+    -11
+   ],
+   "lavaEst": 6,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 116,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 25,
+    "cls": "surface",
+    "at": [
+     -55,
+     78,
+     -11
+    ],
+    "src": 133
+   },
+   "start": 21
+  },
+  {
+   "seed": "-367953399616197515",
+   "biome": "savanna",
+   "spawn": [
+    64,
+    -32
+   ],
+   "rp": 71,
+   "village": 300,
+   "shipwreck": 797,
+   "bastion": 108,
+   "fortress": 226,
+   "sh": 1607,
+   "lava": 171,
+   "lavaClass": "surface",
+   "lavaSrc": 62,
+   "lavaDepth": 0,
+   "lavaAt": [
+    25,
+    74,
+    135
+   ],
+   "lavaEst": 43,
+   "rpLava": 19,
+   "rpPlacement": "underground",
+   "rpScanD": 70,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 171,
+    "cls": "surface",
+    "at": [
+     25,
+     74,
+     135
+    ],
+    "src": 62
+   },
+   "start": 21
+  },
+  {
+   "seed": "-4937211117985950546",
+   "biome": "desert",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 80,
+   "village": 57,
+   "shipwreck": 224,
+   "bastion": 112,
+   "fortress": 228,
+   "sh": 1692,
+   "lava": 60,
+   "lavaClass": "surface",
+   "lavaSrc": 78,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -72,
+    74,
+    93
+   ],
+   "lavaEst": 15,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 86,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 60,
+    "cls": "surface",
+    "at": [
+     -72,
+     74,
+     93
+    ],
+    "src": 78
+   },
+   "start": 22
+  },
+  {
+   "seed": "-4175549013178991703",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 35,
+   "shipwreck": 364,
+   "bastion": 113,
+   "fortress": 170,
+   "sh": 1571,
+   "lava": 76,
+   "lavaClass": "surface",
+   "lavaSrc": 101,
+   "lavaDepth": 0,
+   "lavaAt": [
+    33,
+    95,
+    -69
+   ],
+   "lavaEst": 19,
+   "rpLava": 9,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 102,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 76,
+    "cls": "surface",
+    "at": [
+     33,
+     95,
+     -69
+    ],
+    "src": 101
+   },
+   "start": 23
+  },
+  {
+   "seed": "-7056955690096581976",
+   "biome": "savanna",
+   "spawn": [
+    112,
+    0
+   ],
+   "rp": 0,
+   "village": 229,
+   "shipwreck": 93,
+   "bastion": 142,
+   "fortress": 109,
+   "sh": 1529,
+   "lava": 139,
+   "lavaClass": "open-cave",
+   "lavaSrc": 143,
+   "lavaDepth": 20,
+   "lavaAt": [
+    165,
+    -3,
+    -129
+   ],
+   "lavaEst": 55,
+   "rpLava": 73,
+   "rpPlacement": "underground",
+   "rpScanD": 4,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 24
+  },
+  {
+   "seed": "-7739221160127747720",
+   "biome": "plains",
+   "spawn": [
+    240,
+    160
+   ],
+   "rp": 102,
+   "village": 50,
+   "shipwreck": 112,
+   "bastion": 101,
+   "fortress": 212,
+   "sh": 1541,
+   "lava": 81,
+   "lavaClass": "surface",
+   "lavaSrc": 95,
+   "lavaDepth": 0,
+   "lavaAt": [
+    288,
+    63,
+    225
+   ],
+   "lavaEst": 20,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 106,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 81,
+    "cls": "surface",
+    "at": [
+     288,
+     63,
+     225
+    ],
+    "src": 95
+   },
+   "start": 26
+  },
+  {
+   "seed": "8622838365913858321",
+   "biome": "meadow",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 147,
+   "village": 316,
+   "shipwreck": 780,
+   "bastion": 144,
+   "fortress": 234,
+   "sh": 1638,
+   "lava": 59,
+   "lavaClass": "open-cave",
+   "lavaSrc": 83,
+   "lavaDepth": 31,
+   "lavaAt": [
+    6,
+    108,
+    13
+   ],
+   "lavaEst": 46,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 154,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 26
+  },
+  {
+   "seed": "-951805284034807825",
+   "biome": "savanna",
+   "spawn": [
+    -48,
+    64
+   ],
+   "rp": 80,
+   "village": 135,
+   "shipwreck": 452,
+   "bastion": 75,
+   "fortress": 227,
+   "sh": 1568,
+   "lava": 99,
+   "lavaClass": "rp",
+   "lavaSrc": 18,
+   "lavaDepth": 14,
+   "lavaAt": [
+    51,
+    45,
+    69
+   ],
+   "lavaEst": 70,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 101,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 27
+  },
+  {
+   "seed": "6334294051371245855",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 32,
+   "village": 71,
+   "shipwreck": 744,
+   "bastion": 124,
+   "fortress": 157,
+   "sh": 1696,
+   "lava": 75,
+   "lavaClass": "surface",
+   "lavaSrc": 56,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -3,
+    103,
+    75
+   ],
+   "lavaEst": 19,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 29,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 75,
+    "cls": "surface",
+    "at": [
+     -3,
+     103,
+     75
+    ],
+    "src": 56
+   },
+   "start": 28
+  },
+  {
+   "seed": "-2368033077439397313",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 93,
+   "shipwreck": 432,
+   "bastion": 101,
+   "fortress": 248,
+   "sh": 1378,
+   "lava": 16,
+   "lavaClass": "open-cave",
+   "lavaSrc": 24898,
+   "lavaDepth": 13,
+   "lavaAt": [
+    15,
+    -15,
+    6
+   ],
+   "lavaEst": 17,
+   "rpLava": 3,
+   "rpPlacement": "underground",
+   "rpScanD": 135,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 233,
+    "cls": "surface",
+    "at": [
+     -81,
+     63,
+     219
+    ],
+    "src": 43
+   },
+   "start": 29
+  },
+  {
+   "seed": "-1193860419017898229",
+   "biome": "forest",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 71,
+   "village": 45,
+   "shipwreck": 923,
+   "bastion": 112,
+   "fortress": 206,
+   "sh": 1556,
+   "lava": 102,
+   "lavaClass": "surface",
+   "lavaSrc": 110,
+   "lavaDepth": 0,
+   "lavaAt": [
+    50,
+    61,
+    105
+   ],
+   "lavaEst": 26,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 75,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 102,
+    "cls": "surface",
+    "at": [
+     50,
+     61,
+     105
+    ],
+    "src": 110
+   },
+   "start": 32
+  },
+  {
+   "seed": "5834576846634688864",
+   "biome": "savanna",
+   "spawn": [
+    144,
+    192
+   ],
+   "rp": 57,
+   "village": 101,
+   "shipwreck": 415,
+   "bastion": 145,
+   "fortress": 179,
+   "sh": 1532,
+   "lava": 78,
+   "lavaClass": "surface",
+   "lavaSrc": 98,
+   "lavaDepth": 0,
+   "lavaAt": [
+    213,
+    68,
+    229
+   ],
+   "lavaEst": 20,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 70,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 78,
+    "cls": "surface",
+    "at": [
+     213,
+     68,
+     229
+    ],
+    "src": 98
+   },
+   "start": 33
+  },
+  {
+   "seed": "-1438498926029987630",
+   "biome": "savanna",
+   "spawn": [
+    208,
+    0
+   ],
+   "rp": 112,
+   "village": 144,
+   "shipwreck": 93,
+   "bastion": 129,
+   "fortress": 162,
+   "sh": 1388,
+   "lava": 73,
+   "lavaClass": "surface",
+   "lavaSrc": 62,
+   "lavaDepth": 0,
+   "lavaAt": [
+    247,
+    91,
+    -62
+   ],
+   "lavaEst": 18,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 116,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 73,
+    "cls": "surface",
+    "at": [
+     247,
+     91,
+     -62
+    ],
+    "src": 62
+   },
+   "start": 36
+  },
+  {
+   "seed": "6800885364460892173",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    48
+   ],
+   "rp": 115,
+   "village": 80,
+   "shipwreck": 588,
+   "bastion": 84,
+   "fortress": 146,
+   "sh": 1410,
+   "lava": 130,
+   "lavaClass": "open-cave",
+   "lavaSrc": 740,
+   "lavaDepth": 53,
+   "lavaAt": [
+    -4,
+    -30,
+    -82
+   ],
+   "lavaEst": 86,
+   "rpLava": 21,
+   "rpPlacement": "underground",
+   "rpScanD": 117,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 36
+  },
+  {
+   "seed": "-2328778196920814544",
+   "biome": "plains",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 144,
+   "village": 160,
+   "shipwreck": 627,
+   "bastion": 40,
+   "fortress": 226,
+   "sh": 1369,
+   "lava": 65,
+   "lavaClass": "surface",
+   "lavaSrc": 79,
+   "lavaDepth": 0,
+   "lavaAt": [
+    58,
+    62,
+    -98
+   ],
+   "lavaEst": 16,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 148,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 65,
+    "cls": "surface",
+    "at": [
+     58,
+     62,
+     -98
+    ],
+    "src": 79
+   },
+   "start": 36
+  },
+  {
+   "seed": "-4550989878077439872",
+   "biome": "savanna",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 136,
+   "village": 256,
+   "shipwreck": 565,
+   "bastion": 122,
+   "fortress": 202,
+   "sh": 1676,
+   "lava": 21,
+   "lavaClass": "surface",
+   "lavaSrc": 52,
+   "lavaDepth": 0,
+   "lavaAt": [
+    41,
+    62,
+    52
+   ],
+   "lavaEst": 5,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 133,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 21,
+    "cls": "surface",
+    "at": [
+     41,
+     62,
+     52
+    ],
+    "src": 52
+   },
+   "start": 37
+  },
+  {
+   "seed": "8513781155319731981",
+   "biome": "forest",
+   "spawn": [
+    -368,
+    144
+   ],
+   "rp": 137,
+   "village": 48,
+   "shipwreck": 492,
+   "bastion": 130,
+   "fortress": 231,
+   "sh": 1126,
+   "lava": 131,
+   "lavaClass": "surface",
+   "lavaSrc": 78,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -367,
+    62,
+    13
+   ],
+   "lavaEst": 33,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 131,
+    "cls": "surface",
+    "at": [
+     -367,
+     62,
+     13
+    ],
+    "src": 78
+   },
+   "start": 39
+  },
+  {
+   "seed": "-9217604711371812908",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 16,
+   "village": 197,
+   "shipwreck": 80,
+   "bastion": 113,
+   "fortress": 124,
+   "sh": 1640,
+   "lava": 55,
+   "lavaClass": "surface",
+   "lavaSrc": 137,
+   "lavaDepth": 0,
+   "lavaAt": [
+    27,
+    63,
+    48
+   ],
+   "lavaEst": 14,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 31,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 55,
+    "cls": "surface",
+    "at": [
+     27,
+     63,
+     48
+    ],
+    "src": 137
+   },
+   "start": 39
+  },
+  {
+   "seed": "6232965645297688936",
+   "biome": "stony_shore",
+   "spawn": [
+    240,
+    432
+   ],
+   "rp": 137,
+   "village": 224,
+   "shipwreck": 93,
+   "bastion": 146,
+   "fortress": 170,
+   "sh": 1367,
+   "lava": 42,
+   "lavaClass": "surface",
+   "lavaSrc": 68,
+   "lavaDepth": 0,
+   "lavaAt": [
+    256,
+    76,
+    471
+   ],
+   "lavaEst": 11,
+   "rpLava": 3,
+   "rpPlacement": "underground",
+   "rpScanD": 136,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 42,
+    "cls": "surface",
+    "at": [
+     256,
+     76,
+     471
+    ],
+    "src": 68
+   },
+   "start": 39
+  },
+  {
+   "seed": "-2411669811112812129",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 172,
+   "shipwreck": 368,
+   "bastion": 137,
+   "fortress": 244,
+   "sh": 1670,
+   "lava": 70,
+   "lavaClass": "surface",
+   "lavaSrc": 80,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -65,
+    63,
+    27
+   ],
+   "lavaEst": 18,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 92,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 70,
+    "cls": "surface",
+    "at": [
+     -65,
+     63,
+     27
+    ],
+    "src": 80
+   },
+   "start": 40
+  },
+  {
+   "seed": "5955226839201573818",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 273,
+   "shipwreck": 576,
+   "bastion": 32,
+   "fortress": 150,
+   "sh": 1662,
+   "lava": 28,
+   "lavaClass": "surface",
+   "lavaSrc": 169,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -19,
+    79,
+    -21
+   ],
+   "lavaEst": 7,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 152,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 28,
+    "cls": "surface",
+    "at": [
+     -19,
+     79,
+     -21
+    ],
+    "src": 169
+   },
+   "start": 41
+  },
+  {
+   "seed": "785230804176122315",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 160,
+   "shipwreck": 321,
+   "bastion": 90,
+   "fortress": 224,
+   "sh": 1586,
+   "lava": 83,
+   "lavaClass": "surface",
+   "lavaSrc": 114,
+   "lavaDepth": 0,
+   "lavaAt": [
+    72,
+    59,
+    -42
+   ],
+   "lavaEst": 21,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 132,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 83,
+    "cls": "surface",
+    "at": [
+     72,
+     59,
+     -42
+    ],
+    "src": 114
+   },
+   "start": 41
+  },
+  {
+   "seed": "643471065809965580",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    96
+   ],
+   "rp": 143,
+   "village": 257,
+   "shipwreck": 374,
+   "bastion": 114,
+   "fortress": 222,
+   "sh": 1693,
+   "lava": 56,
+   "lavaClass": "open-cave",
+   "lavaSrc": 4141,
+   "lavaDepth": 56,
+   "lavaAt": [
+    -1,
+    -24,
+    42
+   ],
+   "lavaEst": 70,
+   "rpLava": 12,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 148,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 42
+  },
+  {
+   "seed": "-1812931485449117380",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 151,
+   "shipwreck": 236,
+   "bastion": 71,
+   "fortress": 81,
+   "sh": 1693,
+   "lava": 94,
+   "lavaClass": "surface",
+   "lavaSrc": 110,
+   "lavaDepth": 0,
+   "lavaAt": [
+    32,
+    72,
+    88
+   ],
+   "lavaEst": 24,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 98,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 94,
+    "cls": "surface",
+    "at": [
+     32,
+     72,
+     88
+    ],
+    "src": 110
+   },
+   "start": 43
+  },
+  {
+   "seed": "-1063403295944998409",
+   "biome": "savanna",
+   "spawn": [
+    -32,
+    48
+   ],
+   "rp": 131,
+   "village": 283,
+   "shipwreck": 912,
+   "bastion": 137,
+   "fortress": 170,
+   "sh": 1677,
+   "lava": 30,
+   "lavaClass": "surface",
+   "lavaSrc": 165,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -8,
+    64,
+    66
+   ],
+   "lavaEst": 8,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 135,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 30,
+    "cls": "surface",
+    "at": [
+     -8,
+     64,
+     66
+    ],
+    "src": 165
+   },
+   "start": 43
+  },
+  {
+   "seed": "-2590992711190260908",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 200,
+   "shipwreck": 249,
+   "bastion": 48,
+   "fortress": 226,
+   "sh": 1684,
+   "lava": 72,
+   "lavaClass": "surface",
+   "lavaSrc": 57,
+   "lavaDepth": 0,
+   "lavaAt": [
+    14,
+    65,
+    71
+   ],
+   "lavaEst": 18,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 116,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 72,
+    "cls": "surface",
+    "at": [
+     14,
+     65,
+     71
+    ],
+    "src": 57
+   },
+   "start": 43
+  },
+  {
+   "seed": "-7323879397883702598",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 16,
+   "shipwreck": 652,
+   "bastion": 107,
+   "fortress": 236,
+   "sh": 1629,
+   "lava": 166,
+   "lavaClass": "surface",
+   "lavaSrc": 54,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -162,
+    118,
+    37
+   ],
+   "lavaEst": 42,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 166,
+    "cls": "surface",
+    "at": [
+     -162,
+     118,
+     37
+    ],
+    "src": 54
+   },
+   "start": 44
+  },
+  {
+   "seed": "8586764189181332994",
+   "biome": "snowy_plains",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 131,
+   "village": 86,
+   "shipwreck": null,
+   "bastion": 110,
+   "fortress": 74,
+   "sh": 1515,
+   "lava": 121,
+   "lavaClass": "open-cave",
+   "lavaSrc": 104,
+   "lavaDepth": 3,
+   "lavaAt": [
+    42,
+    91,
+    -166
+   ],
+   "lavaEst": 33,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 136,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 44
+  },
+  {
+   "seed": "3127151558809526834",
+   "biome": "plains",
+   "spawn": [
+    384,
+    -864
+   ],
+   "rp": 35,
+   "village": 64,
+   "shipwreck": 283,
+   "bastion": 101,
+   "fortress": 212,
+   "sh": 953,
+   "lava": 152,
+   "lavaClass": "surface",
+   "lavaSrc": 88,
+   "lavaDepth": 0,
+   "lavaAt": [
+    533,
+    59,
+    -833
+   ],
+   "lavaEst": 38,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 37,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 152,
+    "cls": "surface",
+    "at": [
+     533,
+     59,
+     -833
+    ],
+    "src": 88
+   },
+   "start": 46
+  },
+  {
+   "seed": "-2642876175319085974",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 121,
+   "village": 321,
+   "shipwreck": 901,
+   "bastion": 71,
+   "fortress": 136,
+   "sh": 1404,
+   "lava": 25,
+   "lavaClass": "surface",
+   "lavaSrc": 115,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -4,
+    68,
+    -25
+   ],
+   "lavaEst": 6,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 127,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 25,
+    "cls": "surface",
+    "at": [
+     -4,
+     68,
+     -25
+    ],
+    "src": 115
+   },
+   "start": 46
+  },
+  {
+   "seed": "1211151717225185602",
+   "biome": "windswept_gravelly_hills",
+   "spawn": [
+    80,
+    96
+   ],
+   "rp": 86,
+   "village": 266,
+   "shipwreck": 200,
+   "bastion": 140,
+   "fortress": 207,
+   "sh": 1461,
+   "lava": 57,
+   "lavaClass": "surface",
+   "lavaSrc": 122,
+   "lavaDepth": 0,
+   "lavaAt": [
+    135,
+    71,
+    112
+   ],
+   "lavaEst": 14,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 107,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 57,
+    "cls": "surface",
+    "at": [
+     135,
+     71,
+     112
+    ],
+    "src": 122
+   },
+   "start": 47
+  },
+  {
+   "seed": "228244971826913063",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 328,
+   "shipwreck": 684,
+   "bastion": 124,
+   "fortress": 151,
+   "sh": 1578,
+   "lava": 108,
+   "lavaClass": "rp",
+   "lavaSrc": 13,
+   "lavaDepth": 39,
+   "lavaAt": [
+    65,
+    47,
+    86
+   ],
+   "lavaEst": 66,
+   "rpLava": 16,
+   "rpPlacement": "underground",
+   "rpScanD": 112,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 215,
+    "cls": "surface",
+    "at": [
+     -20,
+     67,
+     214
+    ],
+    "src": 123
+   },
+   "start": 47
+  },
+  {
+   "seed": "-898450232211532617",
+   "biome": "taiga",
+   "spawn": [
+    -576,
+    -496
+   ],
+   "rp": 71,
+   "village": 121,
+   "shipwreck": 208,
+   "bastion": 130,
+   "fortress": 236,
+   "sh": 889,
+   "lava": 15,
+   "lavaClass": "open-cave",
+   "lavaSrc": 104,
+   "lavaDepth": 28,
+   "lavaAt": [
+    -590,
+    39,
+    -502
+   ],
+   "lavaEst": 32,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 66,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 149,
+    "cls": "surface",
+    "at": [
+     -660,
+     69,
+     -619
+    ],
+    "src": 71
+   },
+   "start": 47
+  },
+  {
+   "seed": "3872425923991837399",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 295,
+   "shipwreck": 252,
+   "bastion": 121,
+   "fortress": 124,
+   "sh": 1559,
+   "lava": 99,
+   "lavaClass": "open-cave",
+   "lavaSrc": 80,
+   "lavaDepth": 45,
+   "lavaAt": [
+    74,
+    9,
+    -66
+   ],
+   "lavaEst": 70,
+   "rpLava": 16,
+   "rpPlacement": "underground",
+   "rpScanD": 135,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 47
+  },
+  {
+   "seed": "752959673641917013",
+   "biome": "desert",
+   "spawn": [
+    16,
+    112
+   ],
+   "rp": 137,
+   "village": 160,
+   "shipwreck": 128,
+   "bastion": 130,
+   "fortress": 227,
+   "sh": 1289,
+   "lava": 113,
+   "lavaClass": "surface",
+   "lavaSrc": 37,
+   "lavaDepth": 0,
+   "lavaAt": [
+    91,
+    70,
+    27
+   ],
+   "lavaEst": 28,
+   "rpLava": 8,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 137,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 113,
+    "cls": "surface",
+    "at": [
+     91,
+     70,
+     27
+    ],
+    "src": 37
+   },
+   "start": 48
+  },
+  {
+   "seed": "-4723782648139917612",
+   "biome": "plains",
+   "spawn": [
+    128,
+    144
+   ],
+   "rp": 135,
+   "village": 93,
+   "shipwreck": 369,
+   "bastion": 24,
+   "fortress": 232,
+   "sh": 1668,
+   "lava": 93,
+   "lavaClass": "open-cave",
+   "lavaSrc": 145,
+   "lavaDepth": 73,
+   "lavaAt": [
+    43,
+    -22,
+    182
+   ],
+   "lavaEst": 96,
+   "rpLava": 24,
+   "rpPlacement": "underground",
+   "rpScanD": 134,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 48
+  },
+  {
+   "seed": "-1893880784313590310",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 48,
+   "village": 151,
+   "shipwreck": 567,
+   "bastion": 101,
+   "fortress": 182,
+   "sh": 1572,
+   "lava": 115,
+   "lavaClass": "surface",
+   "lavaSrc": 45,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -112,
+    63,
+    -24
+   ],
+   "lavaEst": 29,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 55,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 115,
+    "cls": "surface",
+    "at": [
+     -112,
+     63,
+     -24
+    ],
+    "src": 45
+   },
+   "start": 48
+  },
+  {
+   "seed": "-6023241539173652970",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 275,
+   "shipwreck": 786,
+   "bastion": 137,
+   "fortress": 226,
+   "sh": 1384,
+   "lava": 54,
+   "lavaClass": "surface",
+   "lavaSrc": 109,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -45,
+    65,
+    30
+   ],
+   "lavaEst": 14,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 149,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 54,
+    "cls": "surface",
+    "at": [
+     -45,
+     65,
+     30
+    ],
+    "src": 109
+   },
+   "start": 48
+  },
+  {
+   "seed": "-5289050370803891447",
+   "biome": "forest",
+   "spawn": [
+    48,
+    -32
+   ],
+   "rp": 71,
+   "village": 248,
+   "shipwreck": 222,
+   "bastion": 136,
+   "fortress": 164,
+   "sh": 1621,
+   "lava": 23,
+   "lavaClass": "open-cave",
+   "lavaSrc": 46716,
+   "lavaDepth": 73,
+   "lavaAt": [
+    65,
+    -20,
+    -48
+   ],
+   "lavaEst": 79,
+   "rpLava": 16,
+   "rpPlacement": "underground",
+   "rpScanD": 70,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 50
+  },
+  {
+   "seed": "224602811715602709",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 204,
+   "shipwreck": 215,
+   "bastion": 90,
+   "fortress": 208,
+   "sh": 1642,
+   "lava": 94,
+   "lavaClass": "surface",
+   "lavaSrc": 77,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -42,
+    63,
+    -84
+   ],
+   "lavaEst": 24,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 151,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 94,
+    "cls": "surface",
+    "at": [
+     -42,
+     63,
+     -84
+    ],
+    "src": 77
+   },
+   "start": 50
+  },
+  {
+   "seed": "354266577883396282",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 208,
+   "shipwreck": 240,
+   "bastion": 35,
+   "fortress": 202,
+   "sh": 1524,
+   "lava": 93,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2538,
+   "lavaDepth": 62,
+   "lavaAt": [
+    57,
+    -37,
+    74
+   ],
+   "lavaEst": 85,
+   "rpLava": 17,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 135,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 51
+  },
+  {
+   "seed": "8324584926638139164",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 214,
+   "shipwreck": 834,
+   "bastion": 81,
+   "fortress": 208,
+   "sh": 1457,
+   "lava": 94,
+   "lavaClass": "surface",
+   "lavaSrc": 88,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -93,
+    69,
+    -15
+   ],
+   "lavaEst": 24,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 133,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 94,
+    "cls": "surface",
+    "at": [
+     -93,
+     69,
+     -15
+    ],
+    "src": 88
+   },
+   "start": 51
+  },
+  {
+   "seed": "-8736038639115074186",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 96,
+   "shipwreck": 256,
+   "bastion": 71,
+   "fortress": 182,
+   "sh": 1447,
+   "lava": 0,
+   "lavaClass": "open-cave",
+   "lavaSrc": 92,
+   "lavaDepth": 100,
+   "lavaAt": [
+    0,
+    -30,
+    0
+   ],
+   "lavaEst": 100,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 124,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 246,
+    "cls": "surface",
+    "at": [
+     -134,
+     63,
+     -206
+    ],
+    "src": 70
+   },
+   "start": 52
+  },
+  {
+   "seed": "4642520846218599330",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 147,
+   "shipwreck": 350,
+   "bastion": 128,
+   "fortress": 172,
+   "sh": 1348,
+   "lava": 134,
+   "lavaClass": "surface",
+   "lavaSrc": 78,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -11,
+    69,
+    -134
+   ],
+   "lavaEst": 34,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 92,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 134,
+    "cls": "surface",
+    "at": [
+     -11,
+     69,
+     -134
+    ],
+    "src": 78
+   },
+   "start": 52
+  },
+  {
+   "seed": "2019777629653473623",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 240,
+   "shipwreck": 640,
+   "bastion": 107,
+   "fortress": 137,
+   "sh": 1536,
+   "lava": 21,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2209,
+   "lavaDepth": 77,
+   "lavaAt": [
+    -13,
+    -33,
+    -17
+   ],
+   "lavaEst": 82,
+   "rpLava": 23,
+   "rpPlacement": "underground",
+   "rpScanD": 63,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 52
+  },
+  {
+   "seed": "-3335818075162626100",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 90,
+   "shipwreck": 609,
+   "bastion": 97,
+   "fortress": 248,
+   "sh": 1636,
+   "lava": 167,
+   "lavaClass": "surface",
+   "lavaSrc": 106,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -93,
+    68,
+    -139
+   ],
+   "lavaEst": 42,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 149,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 167,
+    "cls": "surface",
+    "at": [
+     -93,
+     68,
+     -139
+    ],
+    "src": 106
+   },
+   "start": 53
+  },
+  {
+   "seed": "-8988003645469319247",
+   "biome": "forest",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 81,
+   "village": 283,
+   "shipwreck": null,
+   "bastion": 145,
+   "fortress": 204,
+   "sh": 1465,
+   "lava": 74,
+   "lavaClass": "surface",
+   "lavaSrc": 87,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -36,
+    110,
+    -101
+   ],
+   "lavaEst": 19,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 86,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 74,
+    "cls": "surface",
+    "at": [
+     -36,
+     110,
+     -101
+    ],
+    "src": 87
+   },
+   "start": 54
+  },
+  {
+   "seed": "-2237684949228120400",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 71,
+   "village": 291,
+   "shipwreck": 587,
+   "bastion": 102,
+   "fortress": 112,
+   "sh": 1359,
+   "lava": 72,
+   "lavaClass": "surface",
+   "lavaSrc": 40,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -71,
+    65,
+    -11
+   ],
+   "lavaEst": 18,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 86,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 72,
+    "cls": "surface",
+    "at": [
+     -71,
+     65,
+     -11
+    ],
+    "src": 40
+   },
+   "start": 54
+  },
+  {
+   "seed": "4836965335433418541",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    -16,
+    -16
+   ],
+   "rp": 121,
+   "village": 343,
+   "shipwreck": 301,
+   "bastion": 148,
+   "fortress": 223,
+   "sh": 1631,
+   "lava": 44,
+   "lavaClass": "surface",
+   "lavaSrc": 157,
+   "lavaDepth": 0,
+   "lavaAt": [
+    8,
+    62,
+    -53
+   ],
+   "lavaEst": 11,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 125,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 44,
+    "cls": "surface",
+    "at": [
+     8,
+     62,
+     -53
+    ],
+    "src": 157
+   },
+   "start": 54
+  },
+  {
+   "seed": "-4351371514053413278",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 289,
+   "shipwreck": 624,
+   "bastion": 80,
+   "fortress": 200,
+   "sh": 1439,
+   "lava": 77,
+   "lavaClass": "surface",
+   "lavaSrc": 36,
+   "lavaDepth": 0,
+   "lavaAt": [
+    37,
+    68,
+    -68
+   ],
+   "lavaEst": 19,
+   "rpLava": 2,
+   "rpPlacement": "underground",
+   "rpScanD": 91,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 77,
+    "cls": "surface",
+    "at": [
+     37,
+     68,
+     -68
+    ],
+    "src": 36
+   },
+   "start": 55
+  },
+  {
+   "seed": "5342445326147899552",
+   "biome": "savanna",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 147,
+   "village": 337,
+   "shipwreck": 364,
+   "bastion": 121,
+   "fortress": 148,
+   "sh": 1380,
+   "lava": 50,
+   "lavaClass": "surface",
+   "lavaSrc": 117,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -34,
+    62,
+    7
+   ],
+   "lavaEst": 13,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 154,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 50,
+    "cls": "surface",
+    "at": [
+     -34,
+     62,
+     7
+    ],
+    "src": 117
+   },
+   "start": 55
+  },
+  {
+   "seed": "-2257687179256378915",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 248,
+   "shipwreck": 744,
+   "bastion": 124,
+   "fortress": 135,
+   "sh": 1367,
+   "lava": 100,
+   "lavaClass": "surface",
+   "lavaSrc": 156,
+   "lavaDepth": 0,
+   "lavaAt": [
+    91,
+    66,
+    -42
+   ],
+   "lavaEst": 25,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 134,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 100,
+    "cls": "surface",
+    "at": [
+     91,
+     66,
+     -42
+    ],
+    "src": 156
+   },
+   "start": 56
+  },
+  {
+   "seed": "8246832525845841087",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 248,
+   "shipwreck": null,
+   "bastion": 147,
+   "fortress": 237,
+   "sh": 1440,
+   "lava": 98,
+   "lavaClass": "surface",
+   "lavaSrc": 34,
+   "lavaDepth": 0,
+   "lavaAt": [
+    82,
+    78,
+    54
+   ],
+   "lavaEst": 25,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 98,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 98,
+    "cls": "surface",
+    "at": [
+     82,
+     78,
+     54
+    ],
+    "src": 34
+   },
+   "start": 56
+  },
+  {
+   "seed": "-6173794530120996898",
+   "biome": "beach",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 97,
+   "village": 178,
+   "shipwreck": 336,
+   "bastion": 123,
+   "fortress": 167,
+   "sh": 1462,
+   "lava": 99,
+   "lavaClass": "rp",
+   "lavaSrc": 17,
+   "lavaDepth": 69,
+   "lavaAt": [
+    82,
+    2,
+    76
+   ],
+   "lavaEst": 94,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 101,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 56
+  },
+  {
+   "seed": "-1534042351646127491",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 202,
+   "shipwreck": 279,
+   "bastion": 113,
+   "fortress": 192,
+   "sh": 1361,
+   "lava": 122,
+   "lavaClass": "surface",
+   "lavaSrc": 64,
+   "lavaDepth": 0,
+   "lavaAt": [
+    24,
+    70,
+    -120
+   ],
+   "lavaEst": 31,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 140,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 122,
+    "cls": "surface",
+    "at": [
+     24,
+     70,
+     -120
+    ],
+    "src": 64
+   },
+   "start": 56
+  },
+  {
+   "seed": "8231072584223877132",
+   "biome": "plains",
+   "spawn": [
+    -256,
+    -16
+   ],
+   "rp": 124,
+   "village": 257,
+   "shipwreck": 288,
+   "bastion": 91,
+   "fortress": 185,
+   "sh": 1583,
+   "lava": 100,
+   "lavaClass": "surface",
+   "lavaSrc": 137,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -257,
+    62,
+    84
+   ],
+   "lavaEst": 25,
+   "rpLava": 3,
+   "rpPlacement": "underground",
+   "rpScanD": 130,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 100,
+    "cls": "surface",
+    "at": [
+     -257,
+     62,
+     84
+    ],
+    "src": 137
+   },
+   "start": 57
+  },
+  {
+   "seed": "-7289317173196565224",
+   "biome": "forest",
+   "spawn": [
+    320,
+    -432
+   ],
+   "rp": 128,
+   "village": 326,
+   "shipwreck": 57,
+   "bastion": 109,
+   "fortress": 213,
+   "sh": 1177,
+   "lava": 36,
+   "lavaClass": "open-cave",
+   "lavaSrc": 115,
+   "lavaDepth": 7,
+   "lavaAt": [
+    353,
+    74,
+    -447
+   ],
+   "lavaEst": 16,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 127,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 57
+  },
+  {
+   "seed": "1558834569106645949",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 147,
+   "shipwreck": 480,
+   "bastion": 137,
+   "fortress": 244,
+   "sh": 1581,
+   "lava": 134,
+   "lavaClass": "open-cave",
+   "lavaSrc": 124,
+   "lavaDepth": 6,
+   "lavaAt": [
+    105,
+    57,
+    84
+   ],
+   "lavaEst": 40,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 56,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 168,
+    "cls": "surface",
+    "at": [
+     155,
+     64,
+     -65
+    ],
+    "src": 91
+   },
+   "start": 58
+  },
+  {
+   "seed": "-7152625818930678320",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 65,
+   "village": 263,
+   "shipwreck": 815,
+   "bastion": 80,
+   "fortress": 113,
+   "sh": 1523,
+   "lava": 98,
+   "lavaClass": "surface",
+   "lavaSrc": 48,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -48,
+    133,
+    -86
+   ],
+   "lavaEst": 25,
+   "rpLava": 2,
+   "rpPlacement": "underground",
+   "rpScanD": 78,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 98,
+    "cls": "surface",
+    "at": [
+     -48,
+     133,
+     -86
+    ],
+    "src": 48
+   },
+   "start": 58
+  },
+  {
+   "seed": "-67532274011381912",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 227,
+   "shipwreck": 715,
+   "bastion": 81,
+   "fortress": 182,
+   "sh": 1402,
+   "lava": 120,
+   "lavaClass": "surface",
+   "lavaSrc": 127,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -88,
+    59,
+    82
+   ],
+   "lavaEst": 30,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 147,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 120,
+    "cls": "surface",
+    "at": [
+     -88,
+     59,
+     82
+    ],
+    "src": 127
+   },
+   "start": 58
+  },
+  {
+   "seed": "-934104854272733353",
+   "biome": "forest",
+   "spawn": [
+    64,
+    -96
+   ],
+   "rp": 143,
+   "village": 318,
+   "shipwreck": 752,
+   "bastion": 149,
+   "fortress": 240,
+   "sh": 1492,
+   "lava": 90,
+   "lavaClass": "open-cave",
+   "lavaSrc": 79,
+   "lavaDepth": 55,
+   "lavaAt": [
+    -19,
+    -18,
+    -60
+   ],
+   "lavaEst": 78,
+   "rpLava": 20,
+   "rpPlacement": "underground",
+   "rpScanD": 141,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 58
+  },
+  {
+   "seed": "-4303052558471782926",
+   "biome": "wooded_badlands",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 157,
+   "shipwreck": 257,
+   "bastion": 128,
+   "fortress": 131,
+   "sh": 1592,
+   "lava": 153,
+   "lavaClass": "surface",
+   "lavaSrc": 89,
+   "lavaDepth": 0,
+   "lavaAt": [
+    40,
+    63,
+    148
+   ],
+   "lavaEst": 38,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 149,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 153,
+    "cls": "surface",
+    "at": [
+     40,
+     63,
+     148
+    ],
+    "src": 89
+   },
+   "start": 58
+  },
+  {
+   "seed": "-693989681624431355",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 275,
+   "shipwreck": 566,
+   "bastion": 115,
+   "fortress": 237,
+   "sh": 1381,
+   "lava": 95,
+   "lavaClass": "surface",
+   "lavaSrc": 92,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -93,
+    68,
+    20
+   ],
+   "lavaEst": 24,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 95,
+    "cls": "surface",
+    "at": [
+     -93,
+     68,
+     20
+    ],
+    "src": 92
+   },
+   "start": 58
+  },
+  {
+   "seed": "-2601087059190465086",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 208,
+   "shipwreck": null,
+   "bastion": 124,
+   "fortress": 164,
+   "sh": 1667,
+   "lava": 133,
+   "lavaClass": "surface",
+   "lavaSrc": 33,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -132,
+    63,
+    -19
+   ],
+   "lavaEst": 33,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 125,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 133,
+    "cls": "surface",
+    "at": [
+     -132,
+     63,
+     -19
+    ],
+    "src": 33
+   },
+   "start": 59
+  },
+  {
+   "seed": "7364109858755270873",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 65,
+   "shipwreck": null,
+   "bastion": 101,
+   "fortress": 172,
+   "sh": 1614,
+   "lava": 193,
+   "lavaClass": "open-cave",
+   "lavaSrc": 89,
+   "lavaDepth": 3,
+   "lavaAt": [
+    59,
+    106,
+    184
+   ],
+   "lavaEst": 51,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 65,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 59
+  },
+  {
+   "seed": "-8732060075576826199",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 337,
+   "shipwreck": 395,
+   "bastion": 115,
+   "fortress": 128,
+   "sh": 1581,
+   "lava": 72,
+   "lavaClass": "surface",
+   "lavaSrc": 48,
+   "lavaDepth": 0,
+   "lavaAt": [
+    71,
+    70,
+    14
+   ],
+   "lavaEst": 18,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 72,
+    "cls": "surface",
+    "at": [
+     71,
+     70,
+     14
+    ],
+    "src": 48
+   },
+   "start": 60
+  },
+  {
+   "seed": "-2902910821753969629",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 194,
+   "shipwreck": 222,
+   "bastion": 124,
+   "fortress": 213,
+   "sh": 1453,
+   "lava": 143,
+   "lavaClass": "surface",
+   "lavaSrc": 110,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -92,
+    63,
+    -110
+   ],
+   "lavaEst": 36,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 148,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 143,
+    "cls": "surface",
+    "at": [
+     -92,
+     63,
+     -110
+    ],
+    "src": 110
+   },
+   "start": 60
+  },
+  {
+   "seed": "2911374257081450067",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 301,
+   "shipwreck": 332,
+   "bastion": 144,
+   "fortress": 116,
+   "sh": 1696,
+   "lava": 91,
+   "lavaClass": "surface",
+   "lavaSrc": 86,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -8,
+    63,
+    -91
+   ],
+   "lavaEst": 23,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 56,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 91,
+    "cls": "surface",
+    "at": [
+     -8,
+     63,
+     -91
+    ],
+    "src": 86
+   },
+   "start": 61
+  },
+  {
+   "seed": "-6128323777120879031",
+   "biome": "forest",
+   "spawn": [
+    64,
+    -224
+   ],
+   "rp": 57,
+   "village": 309,
+   "shipwreck": 128,
+   "bastion": 133,
+   "fortress": 151,
+   "sh": 1629,
+   "lava": 87,
+   "lavaClass": "surface",
+   "lavaSrc": 72,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -2,
+    68,
+    -281
+   ],
+   "lavaEst": 22,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 58,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 87,
+    "cls": "surface",
+    "at": [
+     -2,
+     68,
+     -281
+    ],
+    "src": 72
+   },
+   "start": 61
+  },
+  {
+   "seed": "3073767824218301971",
+   "biome": "savanna_plateau",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 101,
+   "village": 222,
+   "shipwreck": 638,
+   "bastion": 137,
+   "fortress": 158,
+   "sh": 1543,
+   "lava": 130,
+   "lavaClass": "surface",
+   "lavaSrc": 94,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -65,
+    127,
+    -113
+   ],
+   "lavaEst": 33,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 99,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 130,
+    "cls": "surface",
+    "at": [
+     -65,
+     127,
+     -113
+    ],
+    "src": 94
+   },
+   "start": 61
+  },
+  {
+   "seed": "1047614601138435306",
+   "biome": "forest",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 144,
+   "village": 257,
+   "shipwreck": 848,
+   "bastion": 131,
+   "fortress": 191,
+   "sh": 1676,
+   "lava": 103,
+   "lavaClass": "open-cave",
+   "lavaSrc": 60,
+   "lavaDepth": 4,
+   "lavaAt": [
+    -83,
+    104,
+    93
+   ],
+   "lavaEst": 30,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 148,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 172,
+    "cls": "surface",
+    "at": [
+     -167,
+     183,
+     74
+    ],
+    "src": 93
+   },
+   "start": 62
+  },
+  {
+   "seed": "1153389582276151446",
+   "biome": "savanna",
+   "spawn": [
+    240,
+    432
+   ],
+   "rp": 107,
+   "village": 158,
+   "shipwreck": 289,
+   "bastion": 82,
+   "fortress": 164,
+   "sh": 1161,
+   "lava": 169,
+   "lavaClass": "surface",
+   "lavaSrc": 54,
+   "lavaDepth": 0,
+   "lavaAt": [
+    109,
+    64,
+    325
+   ],
+   "lavaEst": 42,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 106,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 169,
+    "cls": "surface",
+    "at": [
+     109,
+     64,
+     325
+    ],
+    "src": 54
+   },
+   "start": 62
+  },
+  {
+   "seed": "6027006796750306762",
+   "biome": "plains",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 147,
+   "village": 315,
+   "shipwreck": null,
+   "bastion": 145,
+   "fortress": 90,
+   "sh": 1394,
+   "lava": 110,
+   "lavaClass": "open-cave",
+   "lavaSrc": 65,
+   "lavaDepth": 56,
+   "lavaAt": [
+    66,
+    57,
+    141
+   ],
+   "lavaEst": 84,
+   "rpLava": 17,
+   "rpPlacement": "underground",
+   "rpScanD": 151,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 63
+  },
+  {
+   "seed": "1115714259723197336",
+   "biome": "forest",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 80,
+   "village": 307,
+   "shipwreck": 340,
+   "bastion": 147,
+   "fortress": 2,
+   "sh": 1401,
+   "lava": 99,
+   "lavaClass": "surface",
+   "lavaSrc": 59,
+   "lavaDepth": 0,
+   "lavaAt": [
+    42,
+    64,
+    106
+   ],
+   "lavaEst": 25,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 87,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 99,
+    "cls": "surface",
+    "at": [
+     42,
+     64,
+     106
+    ],
+    "src": 59
+   },
+   "start": 63
+  },
+  {
+   "seed": "-2205806275449654407",
+   "biome": "forest",
+   "spawn": [
+    16,
+    -32
+   ],
+   "rp": 57,
+   "village": 304,
+   "shipwreck": 150,
+   "bastion": 107,
+   "fortress": 244,
+   "sh": 1460,
+   "lava": 105,
+   "lavaClass": "surface",
+   "lavaSrc": 116,
+   "lavaDepth": 0,
+   "lavaAt": [
+    17,
+    67,
+    -137
+   ],
+   "lavaEst": 26,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 61,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 105,
+    "cls": "surface",
+    "at": [
+     17,
+     67,
+     -137
+    ],
+    "src": 116
+   },
+   "start": 64
+  },
+  {
+   "seed": "1200637347027346519",
+   "biome": "savanna",
+   "spawn": [
+    128,
+    368
+   ],
+   "rp": 32,
+   "village": 272,
+   "shipwreck": 369,
+   "bastion": 122,
+   "fortress": 218,
+   "sh": 1318,
+   "lava": 121,
+   "lavaClass": "surface",
+   "lavaSrc": 48,
+   "lavaDepth": 0,
+   "lavaAt": [
+    151,
+    69,
+    487
+   ],
+   "lavaEst": 30,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 38,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 121,
+    "cls": "surface",
+    "at": [
+     151,
+     69,
+     487
+    ],
+    "src": 48
+   },
+   "start": 64
+  },
+  {
+   "seed": "3731187846081722628",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 81,
+   "village": 339,
+   "shipwreck": 210,
+   "bastion": 128,
+   "fortress": 229,
+   "sh": 1664,
+   "lava": 89,
+   "lavaClass": "surface",
+   "lavaSrc": 130,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -75,
+    71,
+    -48
+   ],
+   "lavaEst": 22,
+   "rpLava": 7,
+   "rpPlacement": "underground",
+   "rpScanD": 91,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 89,
+    "cls": "surface",
+    "at": [
+     -75,
+     71,
+     -48
+    ],
+    "src": 130
+   },
+   "start": 64
+  },
+  {
+   "seed": "959549910934800019",
+   "biome": "snowy_plains",
+   "spawn": [
+    192,
+    -432
+   ],
+   "rp": 136,
+   "village": 337,
+   "shipwreck": 80,
+   "bastion": 83,
+   "fortress": 127,
+   "sh": 1238,
+   "lava": 87,
+   "lavaClass": "surface",
+   "lavaSrc": 110,
+   "lavaDepth": 0,
+   "lavaAt": [
+    212,
+    76,
+    -517
+   ],
+   "lavaEst": 22,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 144,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 87,
+    "cls": "surface",
+    "at": [
+     212,
+     76,
+     -517
+    ],
+    "src": 110
+   },
+   "start": 64
+  },
+  {
+   "seed": "-2599479239087634673",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 242,
+   "shipwreck": 332,
+   "bastion": 136,
+   "fortress": 144,
+   "sh": 1663,
+   "lava": 141,
+   "lavaClass": "surface",
+   "lavaSrc": 79,
+   "lavaDepth": 0,
+   "lavaAt": [
+    90,
+    67,
+    -109
+   ],
+   "lavaEst": 35,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 141,
+    "cls": "surface",
+    "at": [
+     90,
+     67,
+     -109
+    ],
+    "src": 79
+   },
+   "start": 65
+  },
+  {
+   "seed": "-202055692020729192",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 135,
+   "village": 307,
+   "shipwreck": 931,
+   "bastion": 124,
+   "fortress": 248,
+   "sh": 1364,
+   "lava": 83,
+   "lavaClass": "open-cave",
+   "lavaSrc": 50,
+   "lavaDepth": 7,
+   "lavaAt": [
+    83,
+    106,
+    -3
+   ],
+   "lavaEst": 28,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 148,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 149,
+    "cls": "surface",
+    "at": [
+     14,
+     108,
+     -148
+    ],
+    "src": 89
+   },
+   "start": 66
+  },
+  {
+   "seed": "-1327703647350108848",
+   "biome": "snowy_plains",
+   "spawn": [
+    -480,
+    352
+   ],
+   "rp": 147,
+   "village": 50,
+   "shipwreck": 128,
+   "bastion": 70,
+   "fortress": 235,
+   "sh": 1315,
+   "lava": 172,
+   "lavaClass": "open-cave",
+   "lavaSrc": 79,
+   "lavaDepth": 17,
+   "lavaAt": [
+    -512,
+    79,
+    521
+   ],
+   "lavaEst": 60,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 152,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 66
+  },
+  {
+   "seed": "-3104695712495535733",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 268,
+   "shipwreck": 651,
+   "bastion": 128,
+   "fortress": 86,
+   "sh": 1342,
+   "lava": 131,
+   "lavaClass": "surface",
+   "lavaSrc": 105,
+   "lavaDepth": 0,
+   "lavaAt": [
+    111,
+    62,
+    70
+   ],
+   "lavaEst": 33,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 132,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 131,
+    "cls": "surface",
+    "at": [
+     111,
+     62,
+     70
+    ],
+    "src": 105
+   },
+   "start": 67
+  },
+  {
+   "seed": "2983475852786545815",
+   "biome": "plains",
+   "spawn": [
+    16,
+    144
+   ],
+   "rp": 121,
+   "village": 242,
+   "shipwreck": 467,
+   "bastion": 104,
+   "fortress": 149,
+   "sh": 1492,
+   "lava": 105,
+   "lavaClass": "open-cave",
+   "lavaSrc": 784,
+   "lavaDepth": 71,
+   "lavaAt": [
+    -59,
+    -36,
+    70
+   ],
+   "lavaEst": 97,
+   "rpLava": 13,
+   "rpPlacement": "underground",
+   "rpScanD": 129,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 67
+  },
+  {
+   "seed": "-2726951400217948070",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 131,
+   "village": 336,
+   "shipwreck": 976,
+   "bastion": 112,
+   "fortress": 85,
+   "sh": 1682,
+   "lava": 104,
+   "lavaClass": "surface",
+   "lavaSrc": 96,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -22,
+    120,
+    97
+   ],
+   "lavaEst": 26,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 147,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 104,
+    "cls": "surface",
+    "at": [
+     -22,
+     120,
+     97
+    ],
+    "src": 96
+   },
+   "start": 68
+  },
+  {
+   "seed": "1480442249593539175",
+   "biome": "plains",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 113,
+   "village": 178,
+   "shipwreck": 279,
+   "bastion": 149,
+   "fortress": 120,
+   "sh": 1675,
+   "lava": 183,
+   "lavaClass": "surface",
+   "lavaSrc": 76,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -22,
+    64,
+    174
+   ],
+   "lavaEst": 46,
+   "rpLava": 3,
+   "rpPlacement": "underground",
+   "rpScanD": 124,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 183,
+    "cls": "surface",
+    "at": [
+     -22,
+     64,
+     174
+    ],
+    "src": 76
+   },
+   "start": 68
+  },
+  {
+   "seed": "-4754040550695912497",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 137,
+   "village": 272,
+   "shipwreck": 701,
+   "bastion": 144,
+   "fortress": 143,
+   "sh": 1613,
+   "lava": 137,
+   "lavaClass": "surface",
+   "lavaSrc": 132,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -102,
+    71,
+    92
+   ],
+   "lavaEst": 34,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 145,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 137,
+    "cls": "surface",
+    "at": [
+     -102,
+     71,
+     92
+    ],
+    "src": 132
+   },
+   "start": 68
+  },
+  {
+   "seed": "3186780866298590719",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 284,
+   "shipwreck": 260,
+   "bastion": 102,
+   "fortress": 204,
+   "sh": 1625,
+   "lava": 130,
+   "lavaClass": "surface",
+   "lavaSrc": 95,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -86,
+    71,
+    -98
+   ],
+   "lavaEst": 33,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 35,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 130,
+    "cls": "surface",
+    "at": [
+     -86,
+     71,
+     -98
+    ],
+    "src": 95
+   },
+   "start": 69
+  },
+  {
+   "seed": "517271315555786001",
+   "biome": "forest",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 124,
+   "village": 150,
+   "shipwreck": null,
+   "bastion": 148,
+   "fortress": 204,
+   "sh": 1485,
+   "lava": 200,
+   "lavaClass": "surface",
+   "lavaSrc": 103,
+   "lavaDepth": 0,
+   "lavaAt": [
+    8,
+    66,
+    228
+   ],
+   "lavaEst": 50,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 130,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 200,
+    "cls": "surface",
+    "at": [
+     8,
+     66,
+     228
+    ],
+    "src": 103
+   },
+   "start": 69
+  },
+  {
+   "seed": "-78437954124845853",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 208,
+   "shipwreck": 680,
+   "bastion": 113,
+   "fortress": 158,
+   "sh": 1602,
+   "lava": 139,
+   "lavaClass": "open-cave",
+   "lavaSrc": 84,
+   "lavaDepth": 9,
+   "lavaAt": [
+    -34,
+    92,
+    135
+   ],
+   "lavaEst": 44,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 70
+  },
+  {
+   "seed": "-5370724426775690035",
+   "biome": "desert",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 128,
+   "village": 323,
+   "shipwreck": 662,
+   "bastion": 114,
+   "fortress": 150,
+   "sh": 1297,
+   "lava": 125,
+   "lavaClass": "surface",
+   "lavaSrc": 17,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -35,
+    66,
+    140
+   ],
+   "lavaEst": 31,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 132,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 125,
+    "cls": "surface",
+    "at": [
+     -35,
+     66,
+     140
+    ],
+    "src": 17
+   },
+   "start": 71
+  },
+  {
+   "seed": "4439089890433626752",
+   "biome": "plains",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 67,
+   "village": 309,
+   "shipwreck": 636,
+   "bastion": 140,
+   "fortress": 76,
+   "sh": 1511,
+   "lava": 132,
+   "lavaClass": "surface",
+   "lavaSrc": 34,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -126,
+    65,
+    -8
+   ],
+   "lavaEst": 33,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 80,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 132,
+    "cls": "surface",
+    "at": [
+     -126,
+     65,
+     -8
+    ],
+    "src": 34
+   },
+   "start": 72
+  },
+  {
+   "seed": "-7802814307857195468",
+   "biome": "plains",
+   "spawn": [
+    96,
+    -544
+   ],
+   "rp": 81,
+   "village": 268,
+   "shipwreck": 288,
+   "bastion": 131,
+   "fortress": 80,
+   "sh": 961,
+   "lava": 152,
+   "lavaClass": "surface",
+   "lavaSrc": 160,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -56,
+    62,
+    -535
+   ],
+   "lavaEst": 38,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 85,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 152,
+    "cls": "surface",
+    "at": [
+     -56,
+     62,
+     -535
+    ],
+    "src": 160
+   },
+   "start": 72
+  },
+  {
+   "seed": "-6041998515681645600",
+   "biome": "forest",
+   "spawn": [
+    64,
+    -48
+   ],
+   "rp": 102,
+   "village": 283,
+   "shipwreck": 321,
+   "bastion": 106,
+   "fortress": 243,
+   "sh": 1551,
+   "lava": 138,
+   "lavaClass": "open-cave",
+   "lavaSrc": 159,
+   "lavaDepth": 3,
+   "lavaAt": [
+    170,
+    61,
+    41
+   ],
+   "lavaEst": 38,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 95,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 221,
+    "cls": "surface",
+    "at": [
+     -94,
+     68,
+     107
+    ],
+    "src": 97
+   },
+   "start": 73
+  },
+  {
+   "seed": "-7055908231226631692",
+   "biome": "savanna",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 101,
+   "village": 248,
+   "shipwreck": null,
+   "bastion": 70,
+   "fortress": 166,
+   "sh": 1549,
+   "lava": 169,
+   "lavaClass": "surface",
+   "lavaSrc": 114,
+   "lavaDepth": 0,
+   "lavaAt": [
+    182,
+    89,
+    -34
+   ],
+   "lavaEst": 42,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 169,
+    "cls": "surface",
+    "at": [
+     182,
+     89,
+     -34
+    ],
+    "src": 114
+   },
+   "start": 73
+  },
+  {
+   "seed": "6807950087555476060",
+   "biome": "old_growth_birch_forest",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 136,
+   "village": 346,
+   "shipwreck": 64,
+   "bastion": 134,
+   "fortress": 243,
+   "sh": 1616,
+   "lava": 113,
+   "lavaClass": "open-cave",
+   "lavaSrc": 146,
+   "lavaDepth": 3,
+   "lavaAt": [
+    -40,
+    65,
+    -45
+   ],
+   "lavaEst": 31,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 140,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 230,
+    "cls": "surface",
+    "at": [
+     188,
+     96,
+     -194
+    ],
+    "src": 71
+   },
+   "start": 74
+  },
+  {
+   "seed": "8986491751038016085",
+   "biome": "forest",
+   "spawn": [
+    -48,
+    64
+   ],
+   "rp": 67,
+   "village": 217,
+   "shipwreck": 458,
+   "bastion": 110,
+   "fortress": 24,
+   "sh": 1486,
+   "lava": 171,
+   "lavaClass": "open-cave",
+   "lavaSrc": 132,
+   "lavaDepth": 4,
+   "lavaAt": [
+    -56,
+    88,
+    235
+   ],
+   "lavaEst": 47,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 63,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 216,
+    "cls": "surface",
+    "at": [
+     1,
+     93,
+     -146
+    ],
+    "src": 77
+   },
+   "start": 74
+  },
+  {
+   "seed": "6162616963942616824",
+   "biome": "savanna",
+   "spawn": [
+    96,
+    144
+   ],
+   "rp": 128,
+   "village": 164,
+   "shipwreck": null,
+   "bastion": 140,
+   "fortress": 229,
+   "sh": 1421,
+   "lava": 180,
+   "lavaClass": "open-cave",
+   "lavaSrc": 456,
+   "lavaDepth": 69,
+   "lavaAt": [
+    276,
+    -22,
+    134
+   ],
+   "lavaEst": 114,
+   "rpLava": 10,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 124,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 245,
+    "cls": "surface",
+    "at": [
+     231,
+     68,
+     349
+    ],
+    "src": 77
+   },
+   "start": 75
+  },
+  {
+   "seed": "5055659656338551240",
+   "biome": "plains",
+   "spawn": [
+    -304,
+    256
+   ],
+   "rp": 107,
+   "village": 229,
+   "shipwreck": 81,
+   "bastion": 126,
+   "fortress": 209,
+   "sh": 1582,
+   "lava": 184,
+   "lavaClass": "surface",
+   "lavaSrc": 82,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -308,
+    71,
+    440
+   ],
+   "lavaEst": 46,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 119,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 184,
+    "cls": "surface",
+    "at": [
+     -308,
+     71,
+     440
+    ],
+    "src": 82
+   },
+   "start": 75
+  },
+  {
+   "seed": "-8347778287700359058",
+   "biome": "taiga",
+   "spawn": [
+    32,
+    -16
+   ],
+   "rp": 116,
+   "village": 45,
+   "shipwreck": 541,
+   "bastion": 78,
+   "fortress": 206,
+   "sh": 1589,
+   "lava": 116,
+   "lavaClass": "open-cave",
+   "lavaSrc": 51,
+   "lavaDepth": 40,
+   "lavaAt": [
+    103,
+    38,
+    76
+   ],
+   "lavaEst": 69,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 120,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 75
+  },
+  {
+   "seed": "3276567560844550341",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 64,
+   "shipwreck": 780,
+   "bastion": 116,
+   "fortress": 131,
+   "sh": 1485,
+   "lava": 87,
+   "lavaClass": "open-cave",
+   "lavaSrc": 78,
+   "lavaDepth": 45,
+   "lavaAt": [
+    -48,
+    22,
+    73
+   ],
+   "lavaEst": 67,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 151,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 75
+  },
+  {
+   "seed": "6544823240143604989",
+   "biome": "plains",
+   "spawn": [
+    224,
+    32
+   ],
+   "rp": 90,
+   "village": 272,
+   "shipwreck": 355,
+   "bastion": 84,
+   "fortress": 212,
+   "sh": 1283,
+   "lava": 164,
+   "lavaClass": "surface",
+   "lavaSrc": 130,
+   "lavaDepth": 0,
+   "lavaAt": [
+    356,
+    70,
+    -66
+   ],
+   "lavaEst": 41,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 99,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 164,
+    "cls": "surface",
+    "at": [
+     356,
+     70,
+     -66
+    ],
+    "src": 130
+   },
+   "start": 75
+  },
+  {
+   "seed": "-4525550490800152422",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    96
+   ],
+   "rp": 71,
+   "village": 300,
+   "shipwreck": 208,
+   "bastion": 93,
+   "fortress": 230,
+   "sh": 1524,
+   "lava": 77,
+   "lavaClass": "open-cave",
+   "lavaSrc": 133,
+   "lavaDepth": 79,
+   "lavaAt": [
+    -87,
+    -27,
+    126
+   ],
+   "lavaEst": 98,
+   "rpLava": 19,
+   "rpPlacement": "underground",
+   "rpScanD": 78,
+   "rpLavaOk": true,
+   "sky": {
+    "d": 283,
+    "cls": "surface",
+    "at": [
+     189,
+     73,
+     291
+    ],
+    "src": 92
+   },
+   "start": 76
+  },
+  {
+   "seed": "7614069464297889343",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 35,
+   "village": 215,
+   "shipwreck": 609,
+   "bastion": 136,
+   "fortress": 107,
+   "sh": 1555,
+   "lava": 194,
+   "lavaClass": "surface",
+   "lavaSrc": 47,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -168,
+    111,
+    98
+   ],
+   "lavaEst": 49,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 38,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 194,
+    "cls": "surface",
+    "at": [
+     -168,
+     111,
+     98
+    ],
+    "src": 47
+   },
+   "start": 76
+  },
+  {
+   "seed": "8852278275738718229",
+   "biome": "eroded_badlands",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 136,
+   "village": 279,
+   "shipwreck": 494,
+   "bastion": 93,
+   "fortress": 204,
+   "sh": 1479,
+   "lava": 165,
+   "lavaClass": "surface",
+   "lavaSrc": 97,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -161,
+    63,
+    35
+   ],
+   "lavaEst": 41,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 149,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 165,
+    "cls": "surface",
+    "at": [
+     -161,
+     63,
+     35
+    ],
+    "src": 97
+   },
+   "start": 76
+  },
+  {
+   "seed": "3719094367066254184",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 279,
+   "shipwreck": 883,
+   "bastion": 115,
+   "fortress": 243,
+   "sh": 1484,
+   "lava": 167,
+   "lavaClass": "surface",
+   "lavaSrc": 111,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -46,
+    63,
+    -161
+   ],
+   "lavaEst": 42,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 114,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 167,
+    "cls": "surface",
+    "at": [
+     -46,
+     63,
+     -161
+    ],
+    "src": 111
+   },
+   "start": 77
+  },
+  {
+   "seed": "7279151025070305824",
+   "biome": "taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 160,
+   "shipwreck": 477,
+   "bastion": 96,
+   "fortress": 101,
+   "sh": 1426,
+   "lava": 142,
+   "lavaClass": "open-cave",
+   "lavaSrc": 31,
+   "lavaDepth": 21,
+   "lavaAt": [
+    -96,
+    45,
+    105
+   ],
+   "lavaEst": 57,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 116,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 77
+  },
+  {
+   "seed": "3911306015352487558",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 102,
+   "shipwreck": null,
+   "bastion": 86,
+   "fortress": 124,
+   "sh": 1493,
+   "lava": 191,
+   "lavaClass": "open-cave",
+   "lavaSrc": 108,
+   "lavaDepth": 17,
+   "lavaAt": [
+    -160,
+    62,
+    105
+   ],
+   "lavaEst": 65,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 151,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 205,
+    "cls": "surface",
+    "at": [
+     47,
+     75,
+     200
+    ],
+    "src": 62
+   },
+   "start": 78
+  },
+  {
+   "seed": "-84426036230739247",
+   "biome": "dark_forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 90,
+   "village": 271,
+   "shipwreck": 630,
+   "bastion": 144,
+   "fortress": 236,
+   "sh": 1562,
+   "lava": 177,
+   "lavaClass": "surface",
+   "lavaSrc": 80,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -10,
+    63,
+    -177
+   ],
+   "lavaEst": 44,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 97,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 177,
+    "cls": "surface",
+    "at": [
+     -10,
+     63,
+     -177
+    ],
+    "src": 80
+   },
+   "start": 78
+  },
+  {
+   "seed": "-7811099950291281390",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 96,
+   "village": 295,
+   "shipwreck": 683,
+   "bastion": 137,
+   "fortress": 204,
+   "sh": 1544,
+   "lava": 162,
+   "lavaClass": "surface",
+   "lavaSrc": 98,
+   "lavaDepth": 0,
+   "lavaAt": [
+    151,
+    62,
+    -60
+   ],
+   "lavaEst": 41,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 100,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 162,
+    "cls": "surface",
+    "at": [
+     151,
+     62,
+     -60
+    ],
+    "src": 98
+   },
+   "start": 78
+  },
+  {
+   "seed": "8858690025364718884",
+   "biome": "windswept_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 307,
+   "shipwreck": 314,
+   "bastion": 116,
+   "fortress": 160,
+   "sh": 1684,
+   "lava": 165,
+   "lavaClass": "surface",
+   "lavaSrc": 137,
+   "lavaDepth": 0,
+   "lavaAt": [
+    127,
+    63,
+    106
+   ],
+   "lavaEst": 41,
+   "rpLava": 2,
+   "rpPlacement": "in_mountain",
+   "rpScanD": 84,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 165,
+    "cls": "surface",
+    "at": [
+     127,
+     63,
+     106
+    ],
+    "src": 137
+   },
+   "start": 79
+  },
+  {
+   "seed": "5647002953211837822",
+   "biome": "desert",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 45,
+   "village": 336,
+   "shipwreck": 422,
+   "bastion": 147,
+   "fortress": 167,
+   "sh": 1433,
+   "lava": 153,
+   "lavaClass": "surface",
+   "lavaSrc": 64,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -109,
+    67,
+    -108
+   ],
+   "lavaEst": 38,
+   "rpLava": 1,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 63,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 153,
+    "cls": "surface",
+    "at": [
+     -109,
+     67,
+     -108
+    ],
+    "src": 64
+   },
+   "start": 80
+  },
+  {
+   "seed": "8085414653972517487",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 279,
+   "shipwreck": 667,
+   "bastion": 147,
+   "fortress": 160,
+   "sh": 1415,
+   "lava": 178,
+   "lavaClass": "surface",
+   "lavaSrc": 113,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -160,
+    94,
+    79
+   ],
+   "lavaEst": 45,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 178,
+    "cls": "surface",
+    "at": [
+     -160,
+     94,
+     79
+    ],
+    "src": 113
+   },
+   "start": 80
+  },
+  {
+   "seed": "-1026697901667084990",
+   "biome": "badlands",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 101,
+   "village": 342,
+   "shipwreck": 450,
+   "bastion": 117,
+   "fortress": 242,
+   "sh": 1389,
+   "lava": 147,
+   "lavaClass": "surface",
+   "lavaSrc": 64,
+   "lavaDepth": 0,
+   "lavaAt": [
+    100,
+    70,
+    -92
+   ],
+   "lavaEst": 37,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 105,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 147,
+    "cls": "surface",
+    "at": [
+     100,
+     70,
+     -92
+    ],
+    "src": 64
+   },
+   "start": 80
+  },
+  {
+   "seed": "3490910500546002217",
+   "biome": "windswept_gravelly_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 226,
+   "shipwreck": 350,
+   "bastion": 64,
+   "fortress": 137,
+   "sh": 1379,
+   "lava": 195,
+   "lavaClass": "open-cave",
+   "lavaSrc": 93,
+   "lavaDepth": 3,
+   "lavaAt": [
+    191,
+    73,
+    41
+   ],
+   "lavaEst": 52,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 107,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 80
+  },
+  {
+   "seed": "-4332886356280409547",
+   "biome": "plains",
+   "spawn": [
+    16,
+    112
+   ],
+   "rp": 93,
+   "village": 288,
+   "shipwreck": 466,
+   "bastion": 128,
+   "fortress": 222,
+   "sh": 1671,
+   "lava": 151,
+   "lavaClass": "open-cave",
+   "lavaSrc": 59,
+   "lavaDepth": 67,
+   "lavaAt": [
+    5,
+    1,
+    -39
+   ],
+   "lavaEst": 105,
+   "rpLava": 14,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 102,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 81
+  },
+  {
+   "seed": "-7093385278280286966",
+   "biome": "snowy_plains",
+   "spawn": [
+    -16,
+    64
+   ],
+   "rp": 80,
+   "village": 337,
+   "shipwreck": 860,
+   "bastion": 75,
+   "fortress": 241,
+   "sh": 1410,
+   "lava": 155,
+   "lavaClass": "surface",
+   "lavaSrc": 61,
+   "lavaDepth": 0,
+   "lavaAt": [
+    127,
+    67,
+    124
+   ],
+   "lavaEst": 39,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 80,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 155,
+    "cls": "surface",
+    "at": [
+     127,
+     67,
+     124
+    ],
+    "src": 61
+   },
+   "start": 81
+  },
+  {
+   "seed": "9216217623880035124",
+   "biome": "mangrove_swamp",
+   "spawn": [
+    64,
+    48
+   ],
+   "rp": 35,
+   "village": 336,
+   "shipwreck": null,
+   "bastion": 128,
+   "fortress": 182,
+   "sh": 1672,
+   "lava": 155,
+   "lavaClass": "surface",
+   "lavaSrc": 88,
+   "lavaDepth": 0,
+   "lavaAt": [
+    218,
+    68,
+    27
+   ],
+   "lavaEst": 39,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 39,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 155,
+    "cls": "surface",
+    "at": [
+     218,
+     68,
+     27
+    ],
+    "src": 88
+   },
+   "start": 81
+  },
+  {
+   "seed": "-9170169599233635408",
+   "biome": "snowy_plains",
+   "spawn": [
+    64,
+    64
+   ],
+   "rp": 101,
+   "village": 222,
+   "shipwreck": 101,
+   "bastion": 33,
+   "fortress": 153,
+   "sh": 1310,
+   "lava": 48,
+   "lavaClass": "open-cave",
+   "lavaSrc": 17,
+   "lavaDepth": 41,
+   "lavaAt": [
+    96,
+    22,
+    100
+   ],
+   "lavaEst": 53,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 107,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 81
+  },
+  {
+   "seed": "5364484741827342840",
+   "biome": "ice_spikes",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 340,
+   "shipwreck": null,
+   "bastion": 143,
+   "fortress": 237,
+   "sh": 1359,
+   "lava": 160,
+   "lavaClass": "surface",
+   "lavaSrc": 97,
+   "lavaDepth": 0,
+   "lavaAt": [
+    158,
+    107,
+    28
+   ],
+   "lavaEst": 40,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 102,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 160,
+    "cls": "surface",
+    "at": [
+     158,
+     107,
+     28
+    ],
+    "src": 97
+   },
+   "start": 83
+  },
+  {
+   "seed": "-5358942405600145316",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 323,
+   "shipwreck": 582,
+   "bastion": 107,
+   "fortress": 226,
+   "sh": 1638,
+   "lava": 68,
+   "lavaClass": "open-cave",
+   "lavaSrc": 74,
+   "lavaDepth": 26,
+   "lavaAt": [
+    44,
+    90,
+    -52
+   ],
+   "lavaEst": 43,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 83
+  },
+  {
+   "seed": "-2248820251805084418",
+   "biome": "plains",
+   "spawn": [
+    -32,
+    0
+   ],
+   "rp": 97,
+   "village": 284,
+   "shipwreck": 490,
+   "bastion": 148,
+   "fortress": 192,
+   "sh": 1655,
+   "lava": 192,
+   "lavaClass": "surface",
+   "lavaSrc": 160,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -120,
+    74,
+    -171
+   ],
+   "lavaEst": 48,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 103,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 192,
+    "cls": "surface",
+    "at": [
+     -120,
+     74,
+     -171
+    ],
+    "src": 160
+   },
+   "start": 84
+  },
+  {
+   "seed": "6402065827972367766",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 289,
+   "shipwreck": 512,
+   "bastion": 81,
+   "fortress": 236,
+   "sh": 1366,
+   "lava": 189,
+   "lavaClass": "open-cave",
+   "lavaSrc": 74,
+   "lavaDepth": 61,
+   "lavaAt": [
+    70,
+    3,
+    176
+   ],
+   "lavaEst": 108,
+   "rpLava": 13,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 149,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 84
+  },
+  {
+   "seed": "6608747429973297170",
+   "biome": "swamp",
+   "spawn": [
+    -12,
+    16
+   ],
+   "rp": 135,
+   "village": 291,
+   "shipwreck": 766,
+   "bastion": 109,
+   "fortress": 152,
+   "sh": 1413,
+   "lava": 194,
+   "lavaClass": "surface",
+   "lavaSrc": 143,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -209,
+    69,
+    37
+   ],
+   "lavaEst": 49,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 152,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 194,
+    "cls": "surface",
+    "at": [
+     -209,
+     69,
+     37
+    ],
+    "src": 143
+   },
+   "start": 85
+  },
+  {
+   "seed": "3743681968546605735",
+   "biome": "grove",
+   "spawn": [
+    -32,
+    0
+   ],
+   "rp": 81,
+   "village": 315,
+   "shipwreck": 403,
+   "bastion": 48,
+   "fortress": 212,
+   "sh": 1359,
+   "lava": 101,
+   "lavaClass": "open-cave",
+   "lavaSrc": 14,
+   "lavaDepth": 21,
+   "lavaAt": [
+    -20,
+    70,
+    -100
+   ],
+   "lavaEst": 46,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 85,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 194,
+    "cls": "surface",
+    "at": [
+     -168,
+     92,
+     139
+    ],
+    "src": 78
+   },
+   "start": 85
+  },
+  {
+   "seed": "5985567265418287019",
+   "biome": "meadow",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 96,
+   "village": 208,
+   "shipwreck": 727,
+   "bastion": 107,
+   "fortress": 237,
+   "sh": 1383,
+   "lava": 108,
+   "lavaClass": "open-cave",
+   "lavaSrc": 97,
+   "lavaDepth": 93,
+   "lavaAt": [
+    -36,
+    18,
+    -102
+   ],
+   "lavaEst": 120,
+   "rpLava": 10,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 103,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 86
+  },
+  {
+   "seed": "1805338637552891468",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 116,
+   "village": 337,
+   "shipwreck": 339,
+   "bastion": 98,
+   "fortress": 192,
+   "sh": 1448,
+   "lava": 181,
+   "lavaClass": "surface",
+   "lavaSrc": 76,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -173,
+    81,
+    107
+   ],
+   "lavaEst": 45,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 120,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 181,
+    "cls": "surface",
+    "at": [
+     -173,
+     81,
+     107
+    ],
+    "src": 76
+   },
+   "start": 87
+  },
+  {
+   "seed": "2160111723935308014",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 339,
+   "shipwreck": null,
+   "bastion": 137,
+   "fortress": 151,
+   "sh": 1550,
+   "lava": 123,
+   "lavaClass": "open-cave",
+   "lavaSrc": 78,
+   "lavaDepth": 14,
+   "lavaAt": [
+    123,
+    49,
+    11
+   ],
+   "lavaEst": 45,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 97,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 87
+  },
+  {
+   "seed": "-3044899307472865752",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 45,
+   "village": 323,
+   "shipwreck": 301,
+   "bastion": 115,
+   "fortress": 147,
+   "sh": 1570,
+   "lava": 187,
+   "lavaClass": "surface",
+   "lavaSrc": 89,
+   "lavaDepth": 0,
+   "lavaAt": [
+    160,
+    108,
+    -97
+   ],
+   "lavaEst": 47,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 50,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 187,
+    "cls": "surface",
+    "at": [
+     160,
+     108,
+     -97
+    ],
+    "src": 89
+   },
+   "start": 87
+  },
+  {
+   "seed": "-1278639654554966805",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 32,
+   "village": 279,
+   "shipwreck": 623,
+   "bastion": 16,
+   "fortress": 224,
+   "sh": 1446,
+   "lava": 196,
+   "lavaClass": "open-cave",
+   "lavaSrc": 80,
+   "lavaDepth": 3,
+   "lavaAt": [
+    196,
+    64,
+    13
+   ],
+   "lavaEst": 52,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 38,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 87
+  },
+  {
+   "seed": "5754789532607385380",
+   "biome": "forest",
+   "spawn": [
+    64,
+    0
+   ],
+   "rp": 144,
+   "village": 321,
+   "shipwreck": null,
+   "bastion": 105,
+   "fortress": 142,
+   "sh": 1596,
+   "lava": 187,
+   "lavaClass": "surface",
+   "lavaSrc": 100,
+   "lavaDepth": 0,
+   "lavaAt": [
+    55,
+    123,
+    -187
+   ],
+   "lavaEst": 47,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 149,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 187,
+    "cls": "surface",
+    "at": [
+     55,
+     123,
+     -187
+    ],
+    "src": 100
+   },
+   "start": 87
+  },
+  {
+   "seed": "8388397891651367710",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 64,
+   "village": 288,
+   "shipwreck": 737,
+   "bastion": 64,
+   "fortress": 217,
+   "sh": 1477,
+   "lava": 112,
+   "lavaClass": "open-cave",
+   "lavaSrc": 128,
+   "lavaDepth": 24,
+   "lavaAt": [
+    62,
+    21,
+    -93
+   ],
+   "lavaEst": 52,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 62,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 202,
+    "cls": "surface",
+    "at": [
+     -163,
+     65,
+     120
+    ],
+    "src": 34
+   },
+   "start": 88
+  },
+  {
+   "seed": "9027898062959304666",
+   "biome": "stony_shore",
+   "spawn": [
+    208,
+    112
+   ],
+   "rp": 65,
+   "village": 128,
+   "shipwreck": 526,
+   "bastion": 35,
+   "fortress": 182,
+   "sh": 1596,
+   "lava": 32,
+   "lavaClass": "open-cave",
+   "lavaSrc": 1487,
+   "lavaDepth": 64,
+   "lavaAt": [
+    185,
+    -22,
+    90
+   ],
+   "lavaEst": 72,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 60,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 214,
+    "cls": "surface",
+    "at": [
+     359,
+     100,
+     264
+    ],
+    "src": 119
+   },
+   "start": 88
+  },
+  {
+   "seed": "1050600908483827536",
+   "biome": "badlands",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 16,
+   "village": 339,
+   "shipwreck": 450,
+   "bastion": 85,
+   "fortress": 202,
+   "sh": 1583,
+   "lava": 183,
+   "lavaClass": "surface",
+   "lavaSrc": 126,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -83,
+    62,
+    154
+   ],
+   "lavaEst": 46,
+   "rpLava": 0,
+   "rpPlacement": "in_mountain",
+   "rpScanD": 21,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 183,
+    "cls": "surface",
+    "at": [
+     -83,
+     62,
+     154
+    ],
+    "src": 126
+   },
+   "start": 88
+  },
+  {
+   "seed": "1698879115659673672",
+   "biome": "snowy_plains",
+   "spawn": [
+    96,
+    64
+   ],
+   "rp": 48,
+   "village": 102,
+   "shipwreck": 279,
+   "bastion": 120,
+   "fortress": 68,
+   "sh": 1422,
+   "lava": 166,
+   "lavaClass": "open-cave",
+   "lavaSrc": 94,
+   "lavaDepth": 34,
+   "lavaAt": [
+    252,
+    51,
+    122
+   ],
+   "lavaEst": 76,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 57,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 89
+  },
+  {
+   "seed": "5342841399581572130",
+   "biome": "forest",
+   "spawn": [
+    -64,
+    96
+   ],
+   "rp": 143,
+   "village": 337,
+   "shipwreck": 395,
+   "bastion": 128,
+   "fortress": 95,
+   "sh": 1331,
+   "lava": 191,
+   "lavaClass": "surface",
+   "lavaSrc": 33,
+   "lavaDepth": 0,
+   "lavaAt": [
+    -255,
+    62,
+    83
+   ],
+   "lavaEst": 48,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 155,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 191,
+    "cls": "surface",
+    "at": [
+     -255,
+     62,
+     83
+    ],
+    "src": 33
+   },
+   "start": 90
+  },
+  {
+   "seed": "-5990217304969715928",
+   "biome": "forest",
+   "spawn": [
+    48,
+    0
+   ],
+   "rp": 50,
+   "village": 307,
+   "shipwreck": 131,
+   "bastion": 131,
+   "fortress": 128,
+   "sh": 1691,
+   "lava": 67,
+   "lavaClass": "open-cave",
+   "lavaSrc": 86,
+   "lavaDepth": 36,
+   "lavaAt": [
+    13,
+    20,
+    -57
+   ],
+   "lavaEst": 53,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 56,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 291,
+    "cls": "surface",
+    "at": [
+     -138,
+     87,
+     -224
+    ],
+    "src": 28
+   },
+   "start": 91
+  },
+  {
+   "seed": "9197610517005639938",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 271,
+   "shipwreck": 694,
+   "bastion": 64,
+   "fortress": 170,
+   "sh": 1566,
+   "lava": 127,
+   "lavaClass": "open-cave",
+   "lavaSrc": 9228,
+   "lavaDepth": 86,
+   "lavaAt": [
+    19,
+    -29,
+    126
+   ],
+   "lavaEst": 118,
+   "rpLava": 15,
+   "rpPlacement": "underground",
+   "rpScanD": 95,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 92
+  },
+  {
+   "seed": "5020586261555265684",
+   "biome": "jagged_peaks",
+   "spawn": [
+    16,
+    112
+   ],
+   "rp": 48,
+   "village": 317,
+   "shipwreck": 501,
+   "bastion": 2,
+   "fortress": 199,
+   "sh": 1677,
+   "lava": 188,
+   "lavaClass": "open-cave",
+   "lavaSrc": 89,
+   "lavaDepth": 5,
+   "lavaAt": [
+    196,
+    82,
+    57
+   ],
+   "lavaEst": 52,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 44,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 92
+  },
+  {
+   "seed": "6513512356422513636",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 113,
+   "village": 279,
+   "shipwreck": 624,
+   "bastion": 137,
+   "fortress": 160,
+   "sh": 1583,
+   "lava": 55,
+   "lavaClass": "open-cave",
+   "lavaSrc": 94,
+   "lavaDepth": 44,
+   "lavaAt": [
+    5,
+    70,
+    55
+   ],
+   "lavaEst": 58,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 118,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 93
+  },
+  {
+   "seed": "7091890929526586275",
+   "biome": "flower_forest",
+   "spawn": [
+    0,
+    48
+   ],
+   "rp": 102,
+   "village": 112,
+   "shipwreck": 273,
+   "bastion": 134,
+   "fortress": 160,
+   "sh": 1691,
+   "lava": 29,
+   "lavaClass": "open-cave",
+   "lavaSrc": 16460,
+   "lavaDepth": 75,
+   "lavaAt": [
+    -22,
+    -24,
+    67
+   ],
+   "lavaEst": 82,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 101,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 96
+  },
+  {
+   "seed": "-3524465509694543244",
+   "biome": "forest",
+   "spawn": [
+    -48,
+    64
+   ],
+   "rp": 107,
+   "village": 260,
+   "shipwreck": 470,
+   "bastion": 148,
+   "fortress": 217,
+   "sh": 1507,
+   "lava": 14,
+   "lavaClass": "open-cave",
+   "lavaSrc": 111,
+   "lavaDepth": 60,
+   "lavaAt": [
+    -56,
+    9,
+    52
+   ],
+   "lavaEst": 64,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 102,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 97
+  },
+  {
+   "seed": "-524707452957027352",
+   "biome": "badlands",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 81,
+   "village": 116,
+   "shipwreck": 224,
+   "bastion": 48,
+   "fortress": 237,
+   "sh": 1484,
+   "lava": 6,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2660,
+   "lavaDepth": 81,
+   "lavaAt": [
+    4,
+    -33,
+    -5
+   ],
+   "lavaEst": 83,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 85,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 98
+  },
+  {
+   "seed": "-381256968153993584",
+   "biome": "plains",
+   "spawn": [
+    496,
+    16
+   ],
+   "rp": 113,
+   "village": 124,
+   "shipwreck": 349,
+   "bastion": 87,
+   "fortress": 158,
+   "sh": 1232,
+   "lava": 137,
+   "lavaClass": "open-cave",
+   "lavaSrc": 6631,
+   "lavaDepth": 50,
+   "lavaAt": [
+    410,
+    -32,
+    123
+   ],
+   "lavaEst": 84,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 100,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 100
+  },
+  {
+   "seed": "9206796854924993634",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    48,
+    32
+   ],
+   "rp": 147,
+   "village": 197,
+   "shipwreck": 800,
+   "bastion": 92,
+   "fortress": 202,
+   "sh": 1411,
+   "lava": 62,
+   "lavaClass": "open-cave",
+   "lavaSrc": 500,
+   "lavaDepth": 61,
+   "lavaAt": [
+    12,
+    -26,
+    83
+   ],
+   "lavaEst": 77,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 153,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 102
+  },
+  {
+   "seed": "-1813801250779563871",
+   "biome": "plains",
+   "spawn": [
+    16,
+    80
+   ],
+   "rp": 128,
+   "village": 81,
+   "shipwreck": 329,
+   "bastion": 146,
+   "fortress": 102,
+   "sh": 1602,
+   "lava": 138,
+   "lavaClass": "open-cave",
+   "lavaSrc": 94,
+   "lavaDepth": 58,
+   "lavaAt": [
+    146,
+    34,
+    33
+   ],
+   "lavaEst": 93,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 131,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 261,
+    "cls": "surface",
+    "at": [
+     -142,
+     65,
+     288
+    ],
+    "src": 93
+   },
+   "start": 103
+  },
+  {
+   "seed": "6446889655832247632",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 57,
+   "shipwreck": 407,
+   "bastion": 128,
+   "fortress": 240,
+   "sh": 1440,
+   "lava": 121,
+   "lavaClass": "open-cave",
+   "lavaSrc": 87,
+   "lavaDepth": 68,
+   "lavaAt": [
+    -106,
+    4,
+    59
+   ],
+   "lavaEst": 98,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 83,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 105
+  },
+  {
+   "seed": "8934094659845942893",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 64,
+   "village": 224,
+   "shipwreck": 692,
+   "bastion": 101,
+   "fortress": 217,
+   "sh": 1583,
+   "lava": 178,
+   "lavaClass": "open-cave",
+   "lavaSrc": 139,
+   "lavaDepth": 35,
+   "lavaAt": [
+    165,
+    21,
+    -68
+   ],
+   "lavaEst": 80,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 68,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 108
+  },
+  {
+   "seed": "-4155164016911616191",
+   "biome": "swamp",
+   "spawn": [
+    -16,
+    44
+   ],
+   "rp": 146,
+   "village": 273,
+   "shipwreck": 291,
+   "bastion": 133,
+   "fortress": 184,
+   "sh": 1517,
+   "lava": 106,
+   "lavaClass": "open-cave",
+   "lavaSrc": 384,
+   "lavaDepth": 47,
+   "lavaAt": [
+    101,
+    -24,
+    47
+   ],
+   "lavaEst": 74,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 135,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 108
+  },
+  {
+   "seed": "-6947885218876113731",
+   "biome": "plains",
+   "spawn": [
+    -96,
+    48
+   ],
+   "rp": 136,
+   "village": 272,
+   "shipwreck": 641,
+   "bastion": 145,
+   "fortress": 79,
+   "sh": 1423,
+   "lava": 81,
+   "lavaClass": "open-cave",
+   "lavaSrc": 18,
+   "lavaDepth": 58,
+   "lavaAt": [
+    -35,
+    -27,
+    -6
+   ],
+   "lavaEst": 78,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 138,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 248,
+    "cls": "surface",
+    "at": [
+     -259,
+     70,
+     -139
+    ],
+    "src": 61
+   },
+   "start": 112
+  },
+  {
+   "seed": "-8319675571877080183",
+   "biome": "old_growth_spruce_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 279,
+   "shipwreck": 800,
+   "bastion": 143,
+   "fortress": 172,
+   "sh": 1525,
+   "lava": 149,
+   "lavaClass": "open-cave",
+   "lavaSrc": 85,
+   "lavaDepth": 42,
+   "lavaAt": [
+    -108,
+    25,
+    103
+   ],
+   "lavaEst": 79,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 80,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 114
+  },
+  {
+   "seed": "-5721510345718949541",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 71,
+   "shipwreck": 705,
+   "bastion": 80,
+   "fortress": 240,
+   "sh": 1527,
+   "lava": 188,
+   "lavaClass": "open-cave",
+   "lavaSrc": 1720,
+   "lavaDepth": 59,
+   "lavaAt": [
+    91,
+    -27,
+    165
+   ],
+   "lavaEst": 106,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 136,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 235,
+    "cls": "surface",
+    "at": [
+     215,
+     77,
+     96
+    ],
+    "src": 110
+   },
+   "start": 115
+  },
+  {
+   "seed": "-3223218131217413776",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 240,
+   "shipwreck": 618,
+   "bastion": 128,
+   "fortress": 197,
+   "sh": 1529,
+   "lava": 17,
+   "lavaClass": "open-cave",
+   "lavaSrc": 402,
+   "lavaDepth": 81,
+   "lavaAt": [
+    5,
+    -18,
+    16
+   ],
+   "lavaEst": 85,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 120,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 210,
+    "cls": "surface",
+    "at": [
+     195,
+     72,
+     78
+    ],
+    "src": 60
+   },
+   "start": 115
+  },
+  {
+   "seed": "6429901993422488788",
+   "biome": "forest",
+   "spawn": [
+    48,
+    -320
+   ],
+   "rp": 22,
+   "village": 186,
+   "shipwreck": 222,
+   "bastion": 91,
+   "fortress": 238,
+   "sh": 1289,
+   "lava": 154,
+   "lavaClass": "open-cave",
+   "lavaSrc": 79,
+   "lavaDepth": 53,
+   "lavaAt": [
+    170,
+    15,
+    -414
+   ],
+   "lavaEst": 92,
+   "rpLava": 7,
+   "rpPlacement": "underground",
+   "rpScanD": 26,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 115
+  },
+  {
+   "seed": "8278439981614665727",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 128,
+   "village": 279,
+   "shipwreck": 716,
+   "bastion": 128,
+   "fortress": 116,
+   "sh": 1454,
+   "lava": 189,
+   "lavaClass": "open-cave",
+   "lavaSrc": 128,
+   "lavaDepth": 34,
+   "lavaAt": [
+    -157,
+    29,
+    106
+   ],
+   "lavaEst": 81,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 116
+  },
+  {
+   "seed": "-3115876765235569188",
+   "biome": "plains",
+   "spawn": [
+    -160,
+    48
+   ],
+   "rp": 97,
+   "village": 116,
+   "shipwreck": 204,
+   "bastion": 108,
+   "fortress": 116,
+   "sh": 1609,
+   "lava": 111,
+   "lavaClass": "open-cave",
+   "lavaSrc": 110,
+   "lavaDepth": 73,
+   "lavaAt": [
+    -102,
+    -27,
+    -47
+   ],
+   "lavaEst": 101,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 91,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 116
+  },
+  {
+   "seed": "7220656985006407029",
+   "biome": "snowy_taiga",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 81,
+   "village": 266,
+   "shipwreck": 197,
+   "bastion": 114,
+   "fortress": 244,
+   "sh": 1570,
+   "lava": 0,
+   "lavaClass": "open-cave",
+   "lavaSrc": 10235,
+   "lavaDepth": 83,
+   "lavaAt": [
+    16,
+    -24,
+    0
+   ],
+   "lavaEst": 83,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 93,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 116
+  },
+  {
+   "seed": "447302852382510250",
+   "biome": "forest",
+   "spawn": [
+    -496,
+    160
+   ],
+   "rp": 90,
+   "village": 107,
+   "shipwreck": 187,
+   "bastion": 136,
+   "fortress": 228,
+   "sh": 1225,
+   "lava": 59,
+   "lavaClass": "open-cave",
+   "lavaSrc": 109,
+   "lavaDepth": 88,
+   "lavaAt": [
+    -509,
+    -20,
+    217
+   ],
+   "lavaEst": 103,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 87,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 309,
+    "cls": "surface",
+    "at": [
+     -696,
+     62,
+     -59
+    ],
+    "src": 67
+   },
+   "start": 116
+  },
+  {
+   "seed": "-7209986004417482349",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 93,
+   "village": 260,
+   "shipwreck": 470,
+   "bastion": 35,
+   "fortress": 101,
+   "sh": 1643,
+   "lava": 98,
+   "lavaClass": "open-cave",
+   "lavaSrc": 288,
+   "lavaDepth": 61,
+   "lavaAt": [
+    -9,
+    -29,
+    -98
+   ],
+   "lavaEst": 86,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 105,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 119
+  },
+  {
+   "seed": "9139737676540183486",
+   "biome": "desert",
+   "spawn": [
+    -528,
+    -32
+   ],
+   "rp": 65,
+   "village": 222,
+   "shipwreck": 272,
+   "bastion": 129,
+   "fortress": 82,
+   "sh": 1024,
+   "lava": 138,
+   "lavaClass": "open-cave",
+   "lavaSrc": 53,
+   "lavaDepth": 56,
+   "lavaAt": [
+    -404,
+    11,
+    -92
+   ],
+   "lavaEst": 91,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 73,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 119
+  },
+  {
+   "seed": "1455137963391432329",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 143,
+   "village": 176,
+   "shipwreck": 643,
+   "bastion": 147,
+   "fortress": 208,
+   "sh": 1471,
+   "lava": 36,
+   "lavaClass": "open-cave",
+   "lavaSrc": 152,
+   "lavaDepth": 88,
+   "lavaAt": [
+    -17,
+    -27,
+    -32
+   ],
+   "lavaEst": 97,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 148,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 119
+  },
+  {
+   "seed": "-7490594588031832020",
+   "biome": "snowy_beach",
+   "spawn": [
+    -512,
+    96
+   ],
+   "rp": 71,
+   "village": 116,
+   "shipwreck": 260,
+   "bastion": 118,
+   "fortress": 212,
+   "sh": 1148,
+   "lava": 104,
+   "lavaClass": "open-cave",
+   "lavaSrc": 242,
+   "lavaDepth": 78,
+   "lavaAt": [
+    -592,
+    -27,
+    163
+   ],
+   "lavaEst": 104,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 70,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 119
+  },
+  {
+   "seed": "2347565099734863476",
+   "biome": "desert",
+   "spawn": [
+    704,
+    592
+   ],
+   "rp": 136,
+   "village": 230,
+   "shipwreck": 208,
+   "bastion": 24,
+   "fortress": 190,
+   "sh": 1684,
+   "lava": 112,
+   "lavaClass": "open-cave",
+   "lavaSrc": 4208,
+   "lavaDepth": 62,
+   "lavaAt": [
+    731,
+    -24,
+    701
+   ],
+   "lavaEst": 90,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 119
+  },
+  {
+   "seed": "6728984710535677735",
+   "biome": "plains",
+   "spawn": [
+    16,
+    160
+   ],
+   "rp": 101,
+   "village": 160,
+   "shipwreck": 144,
+   "bastion": 100,
+   "fortress": 195,
+   "sh": 1521,
+   "lava": 44,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2163,
+   "lavaDepth": 89,
+   "lavaAt": [
+    10,
+    -24,
+    204
+   ],
+   "lavaEst": 100,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 104,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 120
+  },
+  {
+   "seed": "-1732947536382384698",
+   "biome": "taiga",
+   "spawn": [
+    -64,
+    16
+   ],
+   "rp": 86,
+   "village": 176,
+   "shipwreck": 147,
+   "bastion": 147,
+   "fortress": 216,
+   "sh": 1451,
+   "lava": 164,
+   "lavaClass": "open-cave",
+   "lavaSrc": 322,
+   "lavaDepth": 58,
+   "lavaAt": [
+    65,
+    -24,
+    -86
+   ],
+   "lavaEst": 99,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 89,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 121
+  },
+  {
+   "seed": "5363417777198755938",
+   "biome": "bamboo_jungle",
+   "spawn": [
+    0,
+    32
+   ],
+   "rp": 113,
+   "village": 229,
+   "shipwreck": 492,
+   "bastion": 49,
+   "fortress": 165,
+   "sh": 1314,
+   "lava": 138,
+   "lavaClass": "open-cave",
+   "lavaSrc": 22,
+   "lavaDepth": 58,
+   "lavaAt": [
+    -110,
+    24,
+    -52
+   ],
+   "lavaEst": 93,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 119,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 122
+  },
+  {
+   "seed": "3761306392524496971",
+   "biome": "savanna",
+   "spawn": [
+    64,
+    -48
+   ],
+   "rp": 147,
+   "village": 178,
+   "shipwreck": 240,
+   "bastion": 137,
+   "fortress": 231,
+   "sh": 1471,
+   "lava": 192,
+   "lavaClass": "open-cave",
+   "lavaSrc": 55,
+   "lavaDepth": 53,
+   "lavaAt": [
+    156,
+    -24,
+    -214
+   ],
+   "lavaEst": 101,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 156,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 226,
+    "cls": "surface",
+    "at": [
+     -88,
+     69,
+     -212
+    ],
+    "src": 115
+   },
+   "start": 123
+  },
+  {
+   "seed": "3432579183344257717",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 323,
+   "shipwreck": 485,
+   "bastion": 128,
+   "fortress": 240,
+   "sh": 1485,
+   "lava": 146,
+   "lavaClass": "open-cave",
+   "lavaSrc": 166,
+   "lavaDepth": 49,
+   "lavaAt": [
+    -134,
+    13,
+    59
+   ],
+   "lavaEst": 86,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 78,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 205,
+    "cls": "surface",
+    "at": [
+     -51,
+     69,
+     -199
+    ],
+    "src": 96
+   },
+   "start": 126
+  },
+  {
+   "seed": "-1092107071076849005",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    -32
+   ],
+   "rp": 113,
+   "village": 288,
+   "shipwreck": 124,
+   "bastion": 82,
+   "fortress": 157,
+   "sh": 1427,
+   "lava": 92,
+   "lavaClass": "open-cave",
+   "lavaSrc": 207,
+   "lavaDepth": 67,
+   "lavaAt": [
+    -86,
+    -21,
+    2
+   ],
+   "lavaEst": 90,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 114,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 126
+  },
+  {
+   "seed": "-2600683389588605354",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 257,
+   "shipwreck": 615,
+   "bastion": 93,
+   "fortress": 249,
+   "sh": 1506,
+   "lava": 42,
+   "lavaClass": "open-cave",
+   "lavaSrc": 515,
+   "lavaDepth": 83,
+   "lavaAt": [
+    -25,
+    -27,
+    -34
+   ],
+   "lavaEst": 94,
+   "rpLava": 2,
+   "rpPlacement": "underground",
+   "rpScanD": 156,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 126
+  },
+  {
+   "seed": "-2539329166435971222",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 121,
+   "village": 310,
+   "shipwreck": null,
+   "bastion": 124,
+   "fortress": 192,
+   "sh": 1616,
+   "lava": 5,
+   "lavaClass": "open-cave",
+   "lavaSrc": 10545,
+   "lavaDepth": 87,
+   "lavaAt": [
+    5,
+    -39,
+    0
+   ],
+   "lavaEst": 88,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 124,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 267,
+    "cls": "surface",
+    "at": [
+     221,
+     62,
+     149
+    ],
+    "src": 14
+   },
+   "start": 127
+  },
+  {
+   "seed": "-293257007417762881",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 101,
+   "village": 328,
+   "shipwreck": 528,
+   "bastion": 101,
+   "fortress": 202,
+   "sh": 1509,
+   "lava": 97,
+   "lavaClass": "open-cave",
+   "lavaSrc": 75,
+   "lavaDepth": 64,
+   "lavaAt": [
+    -93,
+    3,
+    -27
+   ],
+   "lavaEst": 88,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 107,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 237,
+    "cls": "surface",
+    "at": [
+     211,
+     68,
+     109
+    ],
+    "src": 123
+   },
+   "start": 129
+  },
+  {
+   "seed": "-2469006779234142356",
+   "biome": "stony_shore",
+   "spawn": [
+    144,
+    -416
+   ],
+   "rp": 137,
+   "village": 194,
+   "shipwreck": 273,
+   "bastion": 124,
+   "fortress": 127,
+   "sh": 1261,
+   "lava": 30,
+   "lavaClass": "open-cave",
+   "lavaSrc": 102,
+   "lavaDepth": 99,
+   "lavaAt": [
+    118,
+    -23,
+    -431
+   ],
+   "lavaEst": 107,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 136,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 131
+  },
+  {
+   "seed": "-8877121381267541911",
+   "biome": "desert",
+   "spawn": [
+    -48,
+    160
+   ],
+   "rp": 135,
+   "village": 294,
+   "shipwreck": 773,
+   "bastion": 125,
+   "fortress": 237,
+   "sh": 1402,
+   "lava": 197,
+   "lavaClass": "open-cave",
+   "lavaSrc": 65,
+   "lavaDepth": 46,
+   "lavaAt": [
+    -225,
+    25,
+    73
+   ],
+   "lavaEst": 95,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 137,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 132
+  },
+  {
+   "seed": "-4746357060675508820",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 102,
+   "village": 244,
+   "shipwreck": null,
+   "bastion": 80,
+   "fortress": 144,
+   "sh": 1384,
+   "lava": 72,
+   "lavaClass": "open-cave",
+   "lavaSrc": 126,
+   "lavaDepth": 84,
+   "lavaAt": [
+    37,
+    -28,
+    62
+   ],
+   "lavaEst": 102,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 103,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 133
+  },
+  {
+   "seed": "-1923950023711132943",
+   "biome": "plains",
+   "spawn": [
+    -512,
+    208
+   ],
+   "rp": 121,
+   "village": 213,
+   "shipwreck": 354,
+   "bastion": 88,
+   "fortress": 157,
+   "sh": 915,
+   "lava": 125,
+   "lavaClass": "open-cave",
+   "lavaSrc": 758,
+   "lavaDepth": 75,
+   "lavaAt": [
+    -420,
+    -23,
+    123
+   ],
+   "lavaEst": 106,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 124,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 133
+  },
+  {
+   "seed": "8490094785712640077",
+   "biome": "plains",
+   "spawn": [
+    80,
+    240
+   ],
+   "rp": 116,
+   "village": 329,
+   "shipwreck": 416,
+   "bastion": 92,
+   "fortress": 102,
+   "sh": 1684,
+   "lava": 156,
+   "lavaClass": "open-cave",
+   "lavaSrc": 85,
+   "lavaDepth": 54,
+   "lavaAt": [
+    -68,
+    -24,
+    191
+   ],
+   "lavaEst": 93,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 115,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 228,
+    "cls": "surface",
+    "at": [
+     289,
+     68,
+     333
+    ],
+    "src": 82
+   },
+   "start": 134
+  },
+  {
+   "seed": "8529694716124008611",
+   "biome": "savanna",
+   "spawn": [
+    -256,
+    64
+   ],
+   "rp": 107,
+   "village": 320,
+   "shipwreck": 384,
+   "bastion": 130,
+   "fortress": 130,
+   "sh": 1540,
+   "lava": 117,
+   "lavaClass": "open-cave",
+   "lavaSrc": 523,
+   "lavaDepth": 65,
+   "lavaAt": [
+    -143,
+    -18,
+    96
+   ],
+   "lavaEst": 94,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 108,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 134
+  },
+  {
+   "seed": "-8272133901128842531",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 116,
+   "village": 275,
+   "shipwreck": 688,
+   "bastion": 147,
+   "fortress": 147,
+   "sh": 1536,
+   "lava": 18,
+   "lavaClass": "open-cave",
+   "lavaSrc": 140,
+   "lavaDepth": 95,
+   "lavaAt": [
+    -12,
+    -27,
+    14
+   ],
+   "lavaEst": 100,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 122,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 205,
+    "cls": "surface",
+    "at": [
+     119,
+     63,
+     -167
+    ],
+    "src": 86
+   },
+   "start": 134
+  },
+  {
+   "seed": "7997574859891931341",
+   "biome": "plains",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 144,
+   "village": 279,
+   "shipwreck": 186,
+   "bastion": 91,
+   "fortress": 95,
+   "sh": 1499,
+   "lava": 176,
+   "lavaClass": "open-cave",
+   "lavaSrc": 549,
+   "lavaDepth": 56,
+   "lavaAt": [
+    -56,
+    -24,
+    161
+   ],
+   "lavaEst": 100,
+   "rpLava": 3,
+   "rpPlacement": "underground",
+   "rpScanD": 148,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 135
+  },
+  {
+   "seed": "4120493553820331231",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 107,
+   "village": 144,
+   "shipwreck": 364,
+   "bastion": 144,
+   "fortress": 48,
+   "sh": 1401,
+   "lava": 121,
+   "lavaClass": "open-cave",
+   "lavaSrc": 173,
+   "lavaDepth": 89,
+   "lavaAt": [
+    -118,
+    -21,
+    28
+   ],
+   "lavaEst": 119,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 109,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 213,
+    "cls": "surface",
+    "at": [
+     24,
+     62,
+     -212
+    ],
+    "src": 92
+   },
+   "start": 137
+  },
+  {
+   "seed": "-6761255284647561621",
+   "biome": "stony_shore",
+   "spawn": [
+    64,
+    656
+   ],
+   "rp": 102,
+   "village": 57,
+   "shipwreck": 213,
+   "bastion": 65,
+   "fortress": 143,
+   "sh": 900,
+   "lava": 142,
+   "lavaClass": "open-cave",
+   "lavaSrc": 13,
+   "lavaDepth": 94,
+   "lavaAt": [
+    205,
+    -21,
+    672
+   ],
+   "lavaEst": 130,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 108,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 137
+  },
+  {
+   "seed": "302403168674977867",
+   "biome": "sparse_jungle",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 50,
+   "village": 256,
+   "shipwreck": 389,
+   "bastion": 142,
+   "fortress": 167,
+   "sh": 1566,
+   "lava": 163,
+   "lavaClass": "open-cave",
+   "lavaSrc": 86,
+   "lavaDepth": 66,
+   "lavaAt": [
+    11,
+    -3,
+    177
+   ],
+   "lavaEst": 107,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 61,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 139
+  },
+  {
+   "seed": "-7738305185419200556",
+   "biome": "savanna",
+   "spawn": [
+    -512,
+    96
+   ],
+   "rp": 97,
+   "village": 346,
+   "shipwreck": 368,
+   "bastion": 109,
+   "fortress": 183,
+   "sh": 1468,
+   "lava": 109,
+   "lavaClass": "open-cave",
+   "lavaSrc": 3033,
+   "lavaDepth": 70,
+   "lavaAt": [
+    -530,
+    -24,
+    204
+   ],
+   "lavaEst": 97,
+   "rpLava": 2,
+   "rpPlacement": "underground",
+   "rpScanD": 102,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 140
+  },
+  {
+   "seed": "1903820021687708337",
+   "biome": "snowy_plains",
+   "spawn": [
+    -464,
+    128
+   ],
+   "rp": 107,
+   "village": 323,
+   "shipwreck": 303,
+   "bastion": 148,
+   "fortress": 223,
+   "sh": 1530,
+   "lava": 147,
+   "lavaClass": "open-cave",
+   "lavaSrc": 18962,
+   "lavaDepth": 63,
+   "lavaAt": [
+    -403,
+    -37,
+    -6
+   ],
+   "lavaEst": 100,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 102,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 140
+  },
+  {
+   "seed": "6775636614882470719",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    16
+   ],
+   "rp": 86,
+   "village": 294,
+   "shipwreck": 945,
+   "bastion": 98,
+   "fortress": 123,
+   "sh": 1450,
+   "lava": 116,
+   "lavaClass": "open-cave",
+   "lavaSrc": 487,
+   "lavaDepth": 74,
+   "lavaAt": [
+    -1,
+    -21,
+    -100
+   ],
+   "lavaEst": 103,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 91,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 140
+  },
+  {
+   "seed": "5708846779205048338",
+   "biome": "cherry_grove",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 80,
+   "village": 131,
+   "shipwreck": 918,
+   "bastion": 147,
+   "fortress": 86,
+   "sh": 1527,
+   "lava": 126,
+   "lavaClass": "open-cave",
+   "lavaSrc": 57,
+   "lavaDepth": 93,
+   "lavaAt": [
+    121,
+    2,
+    -35
+   ],
+   "lavaEst": 125,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 85,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 240,
+    "cls": "surface",
+    "at": [
+     132,
+     93,
+     201
+    ],
+    "src": 65
+   },
+   "start": 141
+  },
+  {
+   "seed": "806391470271100850",
+   "biome": "cherry_grove",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 147,
+   "village": 284,
+   "shipwreck": 551,
+   "bastion": 147,
+   "fortress": 170,
+   "sh": 1421,
+   "lava": 100,
+   "lavaClass": "open-cave",
+   "lavaSrc": 87,
+   "lavaDepth": 80,
+   "lavaAt": [
+    -99,
+    9,
+    -15
+   ],
+   "lavaEst": 105,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 153,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 245,
+    "cls": "surface",
+    "at": [
+     -170,
+     92,
+     -177
+    ],
+    "src": 162
+   },
+   "start": 141
+  },
+  {
+   "seed": "6288463690505284125",
+   "biome": "savanna",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 135,
+   "village": 343,
+   "shipwreck": 309,
+   "bastion": 124,
+   "fortress": 124,
+   "sh": 1528,
+   "lava": 151,
+   "lavaClass": "open-cave",
+   "lavaSrc": 123,
+   "lavaDepth": 62,
+   "lavaAt": [
+    5,
+    46,
+    -151
+   ],
+   "lavaEst": 100,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 136,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 143
+  },
+  {
+   "seed": "375161439383958098",
+   "biome": "old_growth_pine_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 86,
+   "village": 301,
+   "shipwreck": null,
+   "bastion": 128,
+   "fortress": 178,
+   "sh": 1513,
+   "lava": 72,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2743,
+   "lavaDepth": 87,
+   "lavaAt": [
+    50,
+    -30,
+    -52
+   ],
+   "lavaEst": 105,
+   "rpLava": 1,
+   "rpPlacement": "underground",
+   "rpScanD": 91,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 143
+  },
+  {
+   "seed": "-563899954367680229",
+   "biome": "flower_forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 16,
+   "village": 227,
+   "shipwreck": 368,
+   "bastion": 144,
+   "fortress": 167,
+   "sh": 1499,
+   "lava": 126,
+   "lavaClass": "open-cave",
+   "lavaSrc": 129,
+   "lavaDepth": 84,
+   "lavaAt": [
+    15,
+    0,
+    125
+   ],
+   "lavaEst": 116,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 21,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 144
+  },
+  {
+   "seed": "-8134451311359931829",
+   "biome": "beach",
+   "spawn": [
+    16,
+    0
+   ],
+   "rp": 65,
+   "village": 268,
+   "shipwreck": 452,
+   "bastion": 134,
+   "fortress": 159,
+   "sh": 1682,
+   "lava": 169,
+   "lavaClass": "open-cave",
+   "lavaSrc": 11,
+   "lavaDepth": 70,
+   "lavaAt": [
+    -135,
+    -21,
+    -76
+   ],
+   "lavaEst": 112,
+   "rpLava": 0,
+   "rpPlacement": "in_mountain",
+   "rpScanD": 69,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 146
+  },
+  {
+   "seed": "-8796138599160490550",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 328,
+   "shipwreck": 374,
+   "bastion": 135,
+   "fortress": 208,
+   "sh": 1632,
+   "lava": 88,
+   "lavaClass": "open-cave",
+   "lavaSrc": 246,
+   "lavaDepth": 85,
+   "lavaAt": [
+    20,
+    -27,
+    -86
+   ],
+   "lavaEst": 107,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 57,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 202,
+    "cls": "surface",
+    "at": [
+     -196,
+     61,
+     50
+    ],
+    "src": 50
+   },
+   "start": 148
+  },
+  {
+   "seed": "-7792140786078916748",
+   "biome": "plains",
+   "spawn": [
+    144,
+    192
+   ],
+   "rp": 124,
+   "village": 200,
+   "shipwreck": 350,
+   "bastion": 100,
+   "fortress": 185,
+   "sh": 1485,
+   "lava": 145,
+   "lavaClass": "open-cave",
+   "lavaSrc": 30,
+   "lavaDepth": 87,
+   "lavaAt": [
+    266,
+    -24,
+    271
+   ],
+   "lavaEst": 123,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 130,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 148
+  },
+  {
+   "seed": "7516278957463786054",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 131,
+   "village": 316,
+   "shipwreck": 320,
+   "bastion": 144,
+   "fortress": 203,
+   "sh": 1663,
+   "lava": 86,
+   "lavaClass": "open-cave",
+   "lavaSrc": 1189,
+   "lavaDepth": 86,
+   "lavaAt": [
+    80,
+    -22,
+    31
+   ],
+   "lavaEst": 108,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 138,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 202,
+    "cls": "surface",
+    "at": [
+     192,
+     69,
+     64
+    ],
+    "src": 99
+   },
+   "start": 148
+  },
+  {
+   "seed": "7196342929142483883",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 288,
+   "shipwreck": 45,
+   "bastion": 115,
+   "fortress": 81,
+   "sh": 1663,
+   "lava": 98,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2745,
+   "lavaDepth": 89,
+   "lavaAt": [
+    -13,
+    -36,
+    -97
+   ],
+   "lavaEst": 114,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 220,
+    "cls": "surface",
+    "at": [
+     -115,
+     62,
+     -188
+    ],
+    "src": 105
+   },
+   "start": 150
+  },
+  {
+   "seed": "-2363867561791975485",
+   "biome": "plains",
+   "spawn": [
+    -480,
+    288
+   ],
+   "rp": 101,
+   "village": 135,
+   "shipwreck": 116,
+   "bastion": 123,
+   "fortress": 202,
+   "sh": 1417,
+   "lava": 137,
+   "lavaClass": "open-cave",
+   "lavaSrc": 1181,
+   "lavaDepth": 99,
+   "lavaAt": [
+    -450,
+    -36,
+    422
+   ],
+   "lavaEst": 133,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 99,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 150
+  },
+  {
+   "seed": "-7095790318293749744",
+   "biome": "plains",
+   "spawn": [
+    48,
+    0
+   ],
+   "rp": 128,
+   "village": 256,
+   "shipwreck": null,
+   "bastion": 137,
+   "fortress": 196,
+   "sh": 1698,
+   "lava": 119,
+   "lavaClass": "open-cave",
+   "lavaSrc": 486,
+   "lavaDepth": 89,
+   "lavaAt": [
+    -49,
+    -23,
+    -69
+   ],
+   "lavaEst": 119,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 134,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 151
+  },
+  {
+   "seed": "-8617721639159030159",
+   "biome": "flower_forest",
+   "spawn": [
+    0,
+    192
+   ],
+   "rp": 143,
+   "village": 283,
+   "shipwreck": 256,
+   "bastion": 108,
+   "fortress": 134,
+   "sh": 1375,
+   "lava": 44,
+   "lavaClass": "open-cave",
+   "lavaSrc": 40,
+   "lavaDepth": 109,
+   "lavaAt": [
+    -11,
+    -61,
+    235
+   ],
+   "lavaEst": 120,
+   "rpLava": 2,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 142,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 155
+  },
+  {
+   "seed": "9123766181046481267",
+   "biome": "forest",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 93,
+   "village": 286,
+   "shipwreck": 186,
+   "bastion": 79,
+   "fortress": 161,
+   "sh": 1529,
+   "lava": 75,
+   "lavaClass": "open-cave",
+   "lavaSrc": 16,
+   "lavaDepth": 101,
+   "lavaAt": [
+    -83,
+    -21,
+    -18
+   ],
+   "lavaEst": 120,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 97,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 156
+  },
+  {
+   "seed": "3447736608277477919",
+   "biome": "frozen_peaks",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 144,
+   "village": 288,
+   "shipwreck": 309,
+   "bastion": 57,
+   "fortress": 135,
+   "sh": 1595,
+   "lava": 122,
+   "lavaClass": "open-cave",
+   "lavaSrc": 104,
+   "lavaDepth": 93,
+   "lavaAt": [
+    -10,
+    10,
+    122
+   ],
+   "lavaEst": 124,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 160
+  },
+  {
+   "seed": "9175733687916661189",
+   "biome": "forest",
+   "spawn": [
+    -32,
+    32
+   ],
+   "rp": 128,
+   "village": 217,
+   "shipwreck": 633,
+   "bastion": 78,
+   "fortress": 108,
+   "sh": 1484,
+   "lava": 147,
+   "lavaClass": "open-cave",
+   "lavaSrc": 226,
+   "lavaDepth": 97,
+   "lavaAt": [
+    -23,
+    -21,
+    -115
+   ],
+   "lavaEst": 134,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 132,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 161
+  },
+  {
+   "seed": "554110317233127206",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 32,
+   "village": 337,
+   "shipwreck": null,
+   "bastion": 113,
+   "fortress": 200,
+   "sh": 1397,
+   "lava": 114,
+   "lavaClass": "open-cave",
+   "lavaSrc": 700,
+   "lavaDepth": 96,
+   "lavaAt": [
+    -102,
+    -25,
+    52
+   ],
+   "lavaEst": 125,
+   "rpLava": 7,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 36,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 167
+  },
+  {
+   "seed": "-1916258304016700532",
+   "biome": "snowy_taiga",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 113,
+   "village": 214,
+   "shipwreck": 772,
+   "bastion": 35,
+   "fortress": 222,
+   "sh": 1482,
+   "lava": 136,
+   "lavaClass": "open-cave",
+   "lavaSrc": 14,
+   "lavaDepth": 107,
+   "lavaAt": [
+    -65,
+    -27,
+    120
+   ],
+   "lavaEst": 141,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 110,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 168
+  },
+  {
+   "seed": "-4247911143839940059",
+   "biome": "sunflower_plains",
+   "spawn": [
+    16,
+    64
+   ],
+   "rp": 0,
+   "village": 310,
+   "shipwreck": 147,
+   "bastion": 117,
+   "fortress": 63,
+   "sh": 1597,
+   "lava": 100,
+   "lavaClass": "open-cave",
+   "lavaSrc": 16,
+   "lavaDepth": 108,
+   "lavaAt": [
+    95,
+    -25,
+    125
+   ],
+   "lavaEst": 133,
+   "rpLava": 3,
+   "rpPlacement": "underground",
+   "rpScanD": 5,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 172
+  },
+  {
+   "seed": "7777656317636356572",
+   "biome": "desert",
+   "spawn": [
+    -576,
+    48
+   ],
+   "rp": 50,
+   "village": 332,
+   "shipwreck": 143,
+   "bastion": 86,
+   "fortress": 62,
+   "sh": 1500,
+   "lava": 168,
+   "lavaClass": "open-cave",
+   "lavaSrc": 2848,
+   "lavaDepth": 93,
+   "lavaAt": [
+    -737,
+    -24,
+    95
+   ],
+   "lavaEst": 135,
+   "rpLava": 7,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 48,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 177
+  },
+  {
+   "seed": "306868845640326405",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 336,
+   "shipwreck": 534,
+   "bastion": 136,
+   "fortress": 240,
+   "sh": 1316,
+   "lava": 194,
+   "lavaClass": "open-cave",
+   "lavaSrc": 100,
+   "lavaDepth": 89,
+   "lavaAt": [
+    156,
+    5,
+    116
+   ],
+   "lavaEst": 138,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 126,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 180
+  },
+  {
+   "seed": "8876274862897286186",
+   "biome": "savanna",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 121,
+   "village": 305,
+   "shipwreck": 562,
+   "bastion": 149,
+   "fortress": 249,
+   "sh": 1464,
+   "lava": 165,
+   "lavaClass": "open-cave",
+   "lavaSrc": 4948,
+   "lavaDepth": 102,
+   "lavaAt": [
+    145,
+    -22,
+    -20
+   ],
+   "lavaEst": 143,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 127,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 181
+  },
+  {
+   "seed": "-3082090342584734251",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 57,
+   "village": 345,
+   "shipwreck": 186,
+   "bastion": 116,
+   "fortress": 182,
+   "sh": 1627,
+   "lava": 147,
+   "lavaClass": "open-cave",
+   "lavaSrc": 1889,
+   "lavaDepth": 108,
+   "lavaAt": [
+    147,
+    -55,
+    -8
+   ],
+   "lavaEst": 145,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 63,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 188
+  },
+  {
+   "seed": "-3121327915139974891",
+   "biome": "snowy_plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 67,
+   "village": 342,
+   "shipwreck": 317,
+   "bastion": 124,
+   "fortress": 240,
+   "sh": 1669,
+   "lava": 124,
+   "lavaClass": "open-cave",
+   "lavaSrc": 1155,
+   "lavaDepth": 115,
+   "lavaAt": [
+    31,
+    -55,
+    -120
+   ],
+   "lavaEst": 146,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 74,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 189
+  },
+  {
+   "seed": "5580642117557572847",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 112,
+   "village": 240,
+   "shipwreck": 432,
+   "bastion": 115,
+   "fortress": 244,
+   "sh": 1482,
+   "lava": 116,
+   "lavaClass": "rp",
+   "lavaSrc": 189,
+   "lavaDepth": 70,
+   "lavaAt": [
+    116,
+    -22,
+    3
+   ],
+   "lavaEst": 257,
+   "rpLava": 194,
+   "rpPlacement": "underground",
+   "rpScanD": 116,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 227
+  },
+  {
+   "seed": "3292227454314326185",
+   "biome": "taiga",
+   "spawn": [
+    -560,
+    160
+   ],
+   "rp": 32,
+   "village": 193,
+   "shipwreck": 336,
+   "bastion": 74,
+   "fortress": 144,
+   "sh": 1302,
+   "lava": 33,
+   "lavaClass": "rp",
+   "lavaSrc": 17,
+   "lavaDepth": 108,
+   "lavaAt": [
+    -539,
+    -45,
+    134
+   ],
+   "lavaEst": 359,
+   "rpLava": 23,
+   "rpPlacement": "underground",
+   "rpScanD": 35,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 323
+  },
+  {
+   "seed": "2402572069721238669",
+   "biome": "beach",
+   "spawn": [
+    32,
+    -64
+   ],
+   "rp": 80,
+   "village": 294,
+   "shipwreck": 418,
+   "bastion": 143,
+   "fortress": 137,
+   "sh": 1677,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 15,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 81,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 577
+  },
+  {
+   "seed": "3704211245743775715",
+   "biome": "sunflower_plains",
+   "spawn": [
+    -640,
+    -320
+   ],
+   "rp": 121,
+   "village": 329,
+   "shipwreck": 400,
+   "bastion": 144,
+   "fortress": 100,
+   "sh": 1370,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 14,
+   "rpPlacement": "underground",
+   "rpScanD": 129,
+   "rpLavaOk": true,
+   "sky": null,
+   "start": 581
+  },
+  {
+   "seed": "-3617111967252238031",
+   "biome": "desert",
+   "spawn": [
+    16,
+    144
+   ],
+   "rp": 90,
+   "village": 35,
+   "shipwreck": 266,
+   "bastion": 90,
+   "fortress": 192,
+   "sh": 1460,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 96,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 604
+  },
+  {
+   "seed": "4104420970566917565",
+   "biome": "snowy_plains",
+   "spawn": [
+    16,
+    80
+   ],
+   "rp": 102,
+   "village": 35,
+   "shipwreck": 226,
+   "bastion": 136,
+   "fortress": 182,
+   "sh": 1472,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 109,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 604
+  },
+  {
+   "seed": "-278322427144878835",
+   "biome": "desert",
+   "spawn": [
+    32,
+    256
+   ],
+   "rp": 0,
+   "village": 81,
+   "shipwreck": 410,
+   "bastion": 20,
+   "fortress": 212,
+   "sh": 1142,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "partly_buried",
+   "rpScanD": 13,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 610
+  },
+  {
+   "seed": "2990892254515876834",
+   "biome": "plains",
+   "spawn": [
+    208,
+    288
+   ],
+   "rp": 80,
+   "village": 102,
+   "shipwreck": 224,
+   "bastion": 149,
+   "fortress": 42,
+   "sh": 1085,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 69,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 613
+  },
+  {
+   "seed": "-2096790943837705875",
+   "biome": "plains",
+   "spawn": [
+    -16,
+    96
+   ],
+   "rp": 107,
+   "village": 137,
+   "shipwreck": 353,
+   "bastion": 123,
+   "fortress": 98,
+   "sh": 1603,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 108,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 223,
+    "cls": "surface",
+    "at": [
+     206,
+     63,
+     72
+    ],
+    "src": 16
+   },
+   "start": 617
+  },
+  {
+   "seed": "-4149939803213510731",
+   "biome": "forest",
+   "spawn": [
+    240,
+    288
+   ],
+   "rp": 97,
+   "village": 150,
+   "shipwreck": 217,
+   "bastion": 28,
+   "fortress": 164,
+   "sh": 1445,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 102,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 619
+  },
+  {
+   "seed": "2148070388788796056",
+   "biome": "forest",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 97,
+   "village": 151,
+   "shipwreck": 652,
+   "bastion": 115,
+   "fortress": 93,
+   "sh": 1668,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": null,
+   "rpPlacement": null,
+   "rpScanD": null,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 238,
+    "cls": "surface",
+    "at": [
+     137,
+     97,
+     -195
+    ],
+    "src": 73
+   },
+   "start": 619
+  },
+  {
+   "seed": "-5333945747613101683",
+   "biome": "forest",
+   "spawn": [
+    -16,
+    16
+   ],
+   "rp": 81,
+   "village": 182,
+   "shipwreck": 744,
+   "bastion": 132,
+   "fortress": 172,
+   "sh": 1513,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 2,
+   "rpPlacement": "underground",
+   "rpScanD": 88,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 623
+  },
+  {
+   "seed": "-5871342643303735362",
+   "biome": "taiga",
+   "spawn": [
+    -624,
+    176
+   ],
+   "rp": 112,
+   "village": 237,
+   "shipwreck": 86,
+   "bastion": 131,
+   "fortress": 173,
+   "sh": 1483,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 137,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 630
+  },
+  {
+   "seed": "-2533041237106467348",
+   "biome": "snowy_taiga",
+   "spawn": [
+    16,
+    -48
+   ],
+   "rp": 128,
+   "village": 249,
+   "shipwreck": null,
+   "bastion": 141,
+   "fortress": 161,
+   "sh": 1479,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 134,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 631
+  },
+  {
+   "seed": "4866852215538203158",
+   "biome": "forest",
+   "spawn": [
+    112,
+    -48
+   ],
+   "rp": 57,
+   "village": 256,
+   "shipwreck": 135,
+   "bastion": 138,
+   "fortress": 155,
+   "sh": 1495,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 3,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 59,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 632
+  },
+  {
+   "seed": "5430450334316499112",
+   "biome": "savanna",
+   "spawn": [
+    -48,
+    80
+   ],
+   "rp": 144,
+   "village": 288,
+   "shipwreck": 197,
+   "bastion": 114,
+   "fortress": 184,
+   "sh": 1492,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 149,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 636
+  },
+  {
+   "seed": "-2199880889535428949",
+   "biome": "snowy_plains",
+   "spawn": [
+    -496,
+    416
+   ],
+   "rp": 147,
+   "village": 288,
+   "shipwreck": 151,
+   "bastion": 49,
+   "fortress": 182,
+   "sh": 1410,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 140,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 636
+  },
+  {
+   "seed": "-6372907209364824866",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 48,
+   "village": 307,
+   "shipwreck": 373,
+   "bastion": 113,
+   "fortress": 192,
+   "sh": 1579,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 1,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 52,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 638
+  },
+  {
+   "seed": "-1592523219400223177",
+   "biome": "windswept_hills",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 50,
+   "village": 321,
+   "shipwreck": 688,
+   "bastion": 143,
+   "fortress": 217,
+   "sh": 1490,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_land_surface",
+   "rpScanD": 57,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 640
+  },
+  {
+   "seed": "-4078908706138966191",
+   "biome": "snowy_taiga",
+   "spawn": [
+    128,
+    -208
+   ],
+   "rp": 96,
+   "village": 329,
+   "shipwreck": 339,
+   "bastion": 138,
+   "fortress": 145,
+   "sh": 1321,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "underground",
+   "rpScanD": 93,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 641
+  },
+  {
+   "seed": "8418140317894295569",
+   "biome": "plains",
+   "spawn": [
+    0,
+    0
+   ],
+   "rp": 124,
+   "village": 329,
+   "shipwreck": 164,
+   "bastion": 97,
+   "fortress": 249,
+   "sh": 1349,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 130,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 641
+  },
+  {
+   "seed": "-4484413963813330110",
+   "biome": "sparse_jungle",
+   "spawn": [
+    64,
+    -192
+   ],
+   "rp": 128,
+   "village": 343,
+   "shipwreck": 412,
+   "bastion": 148,
+   "fortress": 147,
+   "sh": 1436,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 125,
+   "rpLavaOk": false,
+   "sky": {
+    "d": 226,
+    "cls": "surface",
+    "at": [
+     -155,
+     66,
+     -248
+    ],
+    "src": 49
+   },
+   "start": 643
+  },
+  {
+   "seed": "-5050408734781383333",
+   "biome": "beach",
+   "spawn": [
+    44,
+    140
+   ],
+   "rp": 132,
+   "village": 349,
+   "shipwreck": 244,
+   "bastion": 143,
+   "fortress": 208,
+   "sh": 1352,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 151,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 644
+  },
+  {
+   "seed": "-7447495799567659291",
+   "biome": "swamp",
+   "spawn": [
+    -748,
+    -16
+   ],
+   "rp": 132,
+   "village": 349,
+   "shipwreck": 304,
+   "bastion": 118,
+   "fortress": 125,
+   "sh": 1531,
+   "lava": false,
+   "lavaClass": null,
+   "lavaSrc": null,
+   "lavaDepth": null,
+   "lavaAt": null,
+   "lavaEst": null,
+   "rpLava": 0,
+   "rpPlacement": "on_ocean_floor",
+   "rpScanD": 132,
+   "rpLavaOk": false,
+   "sky": null,
+   "start": 644
+  }
+ ]
+}

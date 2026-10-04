@@ -1,0 +1,214 @@
+'use strict'
+// One session owns the hands. AsyncLocalStorage distinguishes a suspended worker,
+// its late continuations, and the reflex, including callbacks created before takeover.
+const { AsyncLocalStorage } = require('node:async_hooks')
+const context = new AsyncLocalStorage()
+const on = () => process.env.ND_GUARD !== '0' && process.env.ND_GUARD_REFLEX !== '0'
+const cancelled = () => Object.assign(new Error('reflex: действие прервано'), { code: 'REFLEX_CANCELLED' })
+const interrupted = () => Object.assign(new Error('reflex: повторить локальное действие'), { code: 'REFLEX_RETRY' })
+const abortCtl = () => {
+  const ctl = { aborted: false, onAbort: [] }
+  ctl.abort = () => { if (ctl.aborted) return; ctl.aborted = true; for (const f of [...ctl.onAbort]) { try { f() } catch {} } }
+  return ctl
+}
+function state (s) { return s._reflexState || (s._reflexState = { epoch: 0, pausedMs: 0, active: null }) }
+function clock (s) {
+  if (!s) return Date.now()
+  const st = state(s)
+  const owner = context.getStore()?.reflex === st.active && st.active
+  return Date.now() - st.pausedMs - (st.active && !owner ? Date.now() - st.active.startedAt : 0)
+}
+function allowed (s) {
+  const st = state(s); const c = context.getStore()
+  if (c && c.session === s && (c.ctl?.aborted || (c.reflex && st.active !== c.reflex))) return false
+  return !st.active || !!(c && c.session === s && c.reflex === st.active)
+}
+async function wait (s, ctl) {
+  while (s.reflex && context.getStore()?.reflex !== state(s).active) {
+    if (ctl?.aborted) throw cancelled()
+    await s.reflex
+  }
+  if (ctl?.aborted || (context.getStore()?.reflex && !allowed(s))) throw cancelled()
+}
+function run (s, ctl, fn) { return context.run({ session: s, ctl }, fn) }
+function cancel (s) { state(s).active?.ctl.abort() }
+function mark (s, how) {
+  const a = state(s).active
+  if (!a || a.firstAction != null || context.getStore()?.reflex !== a) return
+  a.firstAction = Date.now()
+  s.bot.emit('nd_guard_reflex', { how, reflexMs: a.firstAction - a.triggerAt, source: a.source, during: s.current?.name || null })
+}
+function take (s) {
+  const b = s.bot
+  try { b.pathfinder?.setGoal(null) } catch {}
+  try { b.stopDigging?.() } catch {}
+  try { if (b.currentWindow) b.closeWindow(b.currentWindow) } catch {}
+  try { b.clearControlStates?.() } catch {}
+  try { b.deactivateItem?.() } catch {}
+}
+// Set the promise BEFORE calling any bot API: a nested damage/physics callback
+// sees the same lock. Neither current nor its ctl is replaced/aborted.
+function start (s, fn, { triggerAt = Date.now(), source = 'melee' } = {}) {
+  install(s)
+  const st = state(s)
+  if (st.active) return s.reflex
+  const a = { ctl: abortCtl(), triggerAt, startedAt: Date.now(), source, firstAction: null }
+  st.epoch++; st.active = a
+  let release
+  const done = new Promise(resolve => { release = resolve })
+  s.reflex = done
+  const cleanup = result => {
+    if (st.active !== a) return
+    context.run({ session: s, reflex: a }, () => take(s))
+    st.pausedMs += Date.now() - a.startedAt
+    st.active = null; s.reflex = null
+    release(result)
+  }
+  const ended = () => a.ctl.abort()
+  const b = s.bot
+  b.once('death', ended); b.once('end', ended)
+  a.ctl.onAbort.push(() => cleanup({ acted: false, cancelled: true }))
+  context.run({ session: s, ctl: a.ctl, reflex: a }, () => {
+    take(s)
+    Promise.resolve().then(() => fn(a.ctl)).then(cleanup, error => cleanup({ acted: false, error: error.message }))
+      .finally(() => { b.removeListener('death', ended); b.removeListener('end', ended) })
+  })
+  // Remove event hooks even when a third-party action fails to settle after death.
+  done.then(() => { b.removeListener('death', ended); b.removeListener('end', ended) })
+  return done
+}
+const ASYNC = ['dig', 'equip', 'unequip', 'look', 'lookAt', 'placeBlock', 'openContainer', 'openBlock', 'openEntity', 'consume', 'craft', 'transfer', 'clickWindow', 'moveSlotItem', 'putAway', 'putSelectedItemRange', 'toss', 'tossStack']
+const SYNC = ['setControlState', 'clearControlStates', 'attack', 'activateItem', 'deactivateItem', 'activateBlock', 'activateEntity', 'setQuickBarSlot', 'stopDigging', 'closeWindow']
+function inventoryCount (b, id, metadata) {
+  return b.inventory.items().filter(i => i.type === id && (metadata == null || i.metadata === metadata)).reduce((n, i) => n + i.count, 0)
+}
+async function operation (s, obj, name, raw, args) {
+  const parent = context.getStore()
+  if (parent?.session === s && parent.op) {
+    // Unwind an interrupted plugin stack rather than clicking slots of a CLOSED
+    // crafting/container window after resumption. Its root restarts locally.
+    if (!allowed(s) || parent.op.epoch !== state(s).epoch) throw interrupted()
+    if (name === 'craft') craftSafe(s)
+    return raw.apply(obj, args)
+  }
+  const ctl = parent?.session === s ? parent.ctl : null
+  const b = s.bot
+  let craftRemaining = name === 'craft' ? Math.max(0, parseInt(args[1] ?? 1, 10)) : null
+  for (;;) {
+    await wait(s, ctl)
+    const epoch = state(s).epoch
+    const op = { epoch }
+    const c = { session: s, ctl, reflex: parent?.reflex, op }
+    let value, error
+    const output = name === 'craft' ? args[0]?.result : null
+    const before = output ? inventoryCount(b, output.id, output.metadata) : 0
+    const attempt = args.slice()
+    if (name === 'craft') {
+      craftSafe(s)
+      if (!craftRemaining) return
+      attempt[1] = craftRemaining
+      if (attempt[2]?.position) attempt[2] = b.blockAt(attempt[2].position)
+      // A table/pick can be invalidated by the defence. Fail this LOCAL operation
+      // honestly; do not teleport/replay the entire bastion intent.
+      if (args[0]?.requiresTable && attempt[2]?.name !== 'crafting_table') throw new Error('reflex: верстак больше недоступен')
+    }
+    if (name === 'dig' && attempt[0]?.position) {
+      attempt[0] = b.blockAt(attempt[0].position)
+      if (attempt[0] && /^(air|cave_air|void_air)$/.test(attempt[0].name)) return
+    }
+    if (name === 'equip' && attempt[0]?.type != null) attempt[0] = b.inventory.items().find(i => i.type === attempt[0].type) || attempt[0]
+    try { value = await context.run(c, () => raw.apply(obj, attempt)) } catch (e) { error = e }
+    const changed = epoch !== state(s).epoch
+    if (ctl?.aborted || (parent?.reflex && !allowed(s))) throw cancelled()
+    if (!changed) {
+      if (error) throw error
+      if (/^open(Container|Block|Entity)$/.test(name) && value) wrapWindow(s, value, obj, name, raw, args)
+      if (name === 'placeBlock') mark(s, 'place')
+      return value
+    }
+    await wait(s, ctl)
+    if (output) {
+      // Count only credited output; never duplicate crafts whose result was
+      // collected before takeover. Raw mineflayer.craft cleans its cached window
+      // in catch (craft.js); retry opens a fresh one.
+      const made = Math.max(0, inventoryCount(b, output.id, output.metadata) - before)
+      craftRemaining -= Math.min(craftRemaining, Math.floor(made / output.count))
+      if (!craftRemaining) return
+    } else if (!error && !['dig', 'goto', 'look', 'lookAt', 'equip', 'unequip'].includes(name)) {
+      // Successful inventory/placement actions are committed, not replayable.
+      return value
+    } else if (error && !['dig', 'goto', 'look', 'lookAt', 'equip', 'unequip', 'openContainer', 'openBlock', 'openEntity'].includes(name)) {
+      throw Object.assign(new Error('reflex: незавершённая транзакция, требуется пересчитать локальное действие'), { code: 'REFLEX_TRANSACTION' })
+    }
+  }
+}
+function craftSafe (s) {
+  if (context.getStore()?.reflex) return
+  if (require('./worlds').worldOf(s.bot) === 'the_nether' && require('./ne-guard').meleeFoes(s.bot, 12).length) {
+    throw Object.assign(new Error('reflex: крафт отложен, враг в 12 блоках'), { code: 'REFLEX_UNSAFE_CRAFT' })
+  }
+}
+function wrapWindow (s, w, obj, opener, rawOpen, openArgs) {
+  if (w._ndReflexWindow) return
+  w._ndReflexWindow = true
+  let live = w
+  for (const name of ['deposit', 'withdraw']) {
+    if (typeof w[name] !== 'function') continue
+    const raw = w[name]
+    w[name] = async (...args) => {
+      await wait(s, context.getStore()?.ctl)
+      if (s.bot.currentWindow !== live) live = await rawOpen.apply(obj, openArgs)
+      // Child clicks run inside a root transaction; a closed window cannot
+      // become inventory window 0. No automatic replay of a partial transfer.
+      return operation(s, live, name, live === w ? raw : live[name], args)
+    }
+  }
+  if (typeof w.close === 'function') w.close = () => { if (s.bot.currentWindow === live) s.bot.closeWindow(live) }
+}
+function install (s) {
+  const b = s.bot
+  if (!b || b._ndReflexLock) return
+  b._ndReflexLock = true
+  b._ndReflexSession = s
+  const wrapAsync = (obj, name) => {
+    const raw = obj?.[name]
+    if (typeof raw !== 'function') return
+    obj[name] = function (...args) { return operation(s, obj, name, raw, args) }
+  }
+  for (const name of ASYNC) wrapAsync(b, name)
+  for (const name of SYNC) {
+    const raw = b[name]
+    if (typeof raw !== 'function') continue
+    b[name] = function (...args) {
+      const c = context.getStore()
+      if (/^activate(Block|Entity)$/.test(name) && c?.op && (!allowed(s) || c.op.epoch !== state(s).epoch)) throw interrupted()
+      if (!allowed(s)) return
+      if (c?.op && c.op.epoch !== state(s).epoch) return
+      // A stale craft catch must not close the reflex's/new operation's window.
+      if (name === 'closeWindow' && args[0] !== b.currentWindow && args[0] !== b.inventory) return
+      const r = raw.apply(this, args)
+      if (name === 'attack') mark(s, 'attack')
+      if (name === 'activateItem' && args[0] === true && b.inventory.slots[45]?.name === 'shield') mark(s, 'shield')
+      return r
+    }
+  }
+  wrapAsync(b.pathfinder, 'goto')
+  for (const name of ['setGoal', 'setMovements', 'stop']) {
+    const raw = b.pathfinder?.[name]
+    if (!raw) continue
+    b.pathfinder[name] = function (...args) { if (allowed(s)) return raw.apply(this, args) }
+  }
+  // inventory.clickWindow can sleep AFTER entry (hotbar/DIG_CLICK_TIMEOUT).
+  // Fence its final write too, so an old craft never clicks inventory window 0.
+  if (typeof b._client?.write === 'function') {
+    const raw = b._client.write
+    b._client.write = function (name, data) {
+      const c = context.getStore()
+      if (name === 'window_click' && c?.session === s && c.op && (!allowed(s) || c.op.epoch !== state(s).epoch)) throw interrupted()
+      const out = raw.call(this, name, data)
+      if (name === 'block_place' && c?.reflex && data?.location) mark(s, 'place')
+      return out
+    }
+  }
+}
+module.exports = { on, run, wait, start, install, cancel, mark, clock }

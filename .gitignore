@@ -1,0 +1,91 @@
+# NeuroDown — в репозиторий попадает только перечисленное ниже (белый список).
+# Всё остальное в папке проекта — миры серверов, память и логи бота, журналы агентов,
+# лаборатория Codex, живая арена — остаётся только на диске.
+
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/AGENTS.md
+!/BRAIN.md
+!/PERSONA.md
+!/SPEEDRUN.md
+!/PVP-RESEARCH.md
+!/daemon/
+!/farm/
+!/mcp/
+!/run/
+!/tools/
+
+# daemon — тело бота: код, тесты, сцены лаборатории
+/daemon/*
+!/daemon/src/
+!/daemon/test/
+!/daemon/data/
+!/daemon/*.js
+!/daemon/*.ps1
+!/daemon/package.json
+!/daemon/package-lock.json
+!/daemon/COMBAT.md
+
+# farm — ферма тестовых миров: только код, сиды и наборы сидов
+/farm/*
+!/farm/*.js
+!/farm/*.sh
+!/farm/limits.json
+!/farm/seeds/
+!/farm/crystal/
+!/farm/dragon/
+!/farm/movement/
+!/farm/portal-scan/
+!/farm/route-scan/
+!/farm/stronghold_route/
+!/farm/stuck/
+/farm/*/**/*.json
+/farm/*/**/*.jsonl
+/farm/*/**/*.txt
+/farm/*/**/*.yml
+/farm/*/**/*.diff
+/farm/*/**/*.md5
+!/farm/seeds/*.json
+!/farm/route-scan/set-*.txt
+!/farm/crystal/*.md
+/farm/dragon/codex-*/
+
+# mcp — MCP-сервер для Claude
+/mcp/*
+!/mcp/src/
+!/mcp/package.json
+!/mcp/package-lock.json
+!/mcp/smoke.js
+
+# run — скрипты основного мира
+/run/backups/
+/run/*.txt
+/run/*.pid
+/run/.codex-limit.json
+
+# tools/seedtool — исходник; exe и объектники собираются build.cmd
+/tools/seedtool/*.exe
+/tools/seedtool/obj/
+/tools/seedtool/build.log
+
+# везде
+node_modules/
+.codegraph/
+*.log
+*.out
+*.err
+*.bak
+*.bak2
+*.orig
+*.cpuprofile
+*.jar
+*.javap
+*.class
+*.exe
+*.mca
+*.dat
+*.dat_old
+.env
+.env.*
