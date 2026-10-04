@@ -144,7 +144,17 @@ async function operation (s, obj, name, raw, args) {
 }
 function craftSafe (s) {
   if (context.getStore()?.reflex) return
-  if (require('./worlds').worldOf(s.bot) === 'the_nether' && require('./ne-guard').meleeFoes(s.bot, 12).length) {
+  const covered = e => {
+    if (process.env.ND_CRAFT_COVER === '0') return false
+    try {
+      const P = require('./perception'); const eye = P.eyePos(s.bot)
+      // Do not relax the check for a gap at feet/torso while only the eyes are
+      // hidden. Missing chunks/errors retain the original refusal.
+      return [0.1, (e.height || 1.8) * 0.5, (e.height || 1.8) * 0.9]
+        .every(y => !P.raySees(s.bot, eye, e.position.offset(0, y, 0)))
+    } catch { return false }
+  }
+  if (require('./worlds').worldOf(s.bot) === 'the_nether' && require('./ne-guard').meleeFoes(s.bot, 12).some(e => !covered(e))) {
     throw Object.assign(new Error('reflex: крафт отложен, враг в 12 блоках'), { code: 'REFLEX_UNSAFE_CRAFT' })
   }
 }

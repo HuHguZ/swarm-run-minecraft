@@ -3534,6 +3534,7 @@ const routeMod = (() => { try { return require('./src/route') } catch (e) { retu
 let routeInfoV
 let routeDone = false
 let routeT0 = 0
+let routeStructureSeconds = 0
 const routeAvoid = new Set()
 // ND_ROUTE_SKIP=wood,stone,… — шаги, которые считать сделанными (лаборатория отрезка: набор выдан, сразу к лаве).
 const routeDoneIds = new Set(String(process.env.ND_ROUTE_SKIP || '').split(',').map(x => x.trim()).filter(Boolean))
@@ -4319,7 +4320,7 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     // Время от утра (план кровати): часы мира (старт сцены — 1000 тиков), иначе — от начала маршрута.
     const elapsed = todNow() !== null ? Math.max(0, Math.round((todNow() - 1000) / 20)) : Math.round((Date.now() - routeT0) / 1000)
     // Портал уже горит — только вход.
-    const p = routeMod.plan(info, { from: state.pos, fromY: state.pos ? state.pos.y : undefined, have: state.inventory || {}, avoid: routeAvoid, done: routeDoneIds, portal: !!known.portal, elapsed, frame: known.portal ? null : routeFrame })
+    const p = routeMod.plan(info, { from: state.pos, fromY: state.pos ? state.pos.y : undefined, have: state.inventory || {}, avoid: routeAvoid, done: routeDoneIds, portal: !!known.portal, elapsed, structureSeconds: routeStructureSeconds, frame: known.portal ? null : routeFrame })
     if (first) { rlog(routeMod.describe(p)); first = false }
     const s = p.steps.find(x => !routeDoneIds.has(x.id))
     if (!s) break
@@ -4327,6 +4328,12 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     let ok = false
     rlog(`шаг ${s.id}: ${s.why || ''} (бюджет ${s.budget} с)`)
     routeDeadline = Date.now() + (/^(wood|stone)$/.test(s.kind) ? (process.env.ND_ROUTE_DEADLINE === '0' ? 600 : Math.min(300, Math.max(150, (s.budget || 60) * 2))) : Math.max(150, (s.budget || 60) * 3)) * 1000
+    const structureStep = /^(ruin|village|treasure|ship)$/.test(s.kind)
+    const structureLeft = routeMod.structureSearchLeft(routeStructureSeconds)
+    if (structureStep && Number.isFinite(structureLeft)) {
+      routeDeadline = Math.min(routeDeadline, Date.now() + structureLeft * 1000)
+      rlog(`постройки: использовано ${Math.round(routeStructureSeconds)} из 180 с, осталось ${Math.floor(structureLeft)} с; затем руда`)
+    }
     try { ok = await routeStep(s) } catch (e) {
       routeDeadline = 0
       if (e.stopCampaign || manualControl) throw e
@@ -4343,6 +4350,8 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
         try { await stageRun('food')() } catch (e2) { if (e2.stopCampaign || manualControl) throw e2 }
         continue
       }
+    } finally {
+      if (structureStep) routeStructureSeconds += (Date.now() - t0) / 1000
     }
     routeDeadline = 0
     const sec = Math.round((Date.now() - t0) / 1000)
@@ -5145,7 +5154,78 @@ let shNetherTries = 0
 const canLink = () => pendingExitFrame() || (shNetherTries < 2 && lighter() && (have('obsidian') >= 10 || have(PICK_DIAMOND) > 0))
 // Не начинаем длинную дорогу с изношенными кирками и без переносного верстака.
 // Крафты напрямую: отказ тесного места не должен отправлять тело наверх.
+async function prepareExitSupply (T) {
+  await refresh(); await sense()
+  const n = { x: Math.floor(T.x / 8), z: Math.floor(T.z / 8) }
+  const me = state.pos || n
+  const want = Math.ceil(2 * (Math.abs(n.x - me.x) + Math.abs(n.z - me.z))) + 128
+  // Fully made tools already cover the journey: loose sticks are materials,
+  // not an additional gate after those materials have become pickaxes.
+  if ((sit.pickLeft || 0) >= want && have('crafting_table')) return true
+  const until = Date.now() + 180000
+  const step = async (method, args = {}) => {
+    if (died || Date.now() >= until) return null
+    const p = { ...args }
+    if (p.timeoutSeconds) p.timeoutSeconds = Math.max(1, Math.min(p.timeoutSeconds, Math.floor((until - Date.now()) / 1000)))
+    const r = await act(method, p); await refresh(); return r
+  }
+  log('набор на выход: пополнение ≤180 с; сначала сундуки и железо, затем чёрный камень; дерево из сундука ≤20 с, стебли ≤60 с')
+  if (sit.foes) {
+    const r = await step('ne_burrow', { why: 'набор на выход: крафт под укрытием', timeoutSeconds: 30 })
+    if (!r?.detail?.ok) { log('набор на выход: укрытие не подтвердилось — пополнение не начинаю'); return false }
+    await sense()
+  }
+  // Structure loot first. An iron block/nuggets are not a shortage of iron.
+  for (let k = 0; k < 2; k++) {
+    const iron = have('iron_block') * 9 + Math.floor(have('iron_nugget') / 9)
+    if (!iron) break
+    const before = have('iron_ingot'); await step('craft', { item: 'iron_ingot', count: iron })
+    if (have('iron_ingot') <= before) break
+  }
+  await sense()
+  const deficit = Math.max(0, want - (sit.pickLeft || 0))
+  const ironPicks = Math.min(Math.floor(have('iron_ingot') / 3), Math.ceil(deficit / 250))
+  const stonePicks = Math.ceil(Math.max(0, deficit - ironPicks * 250) / 131)
+  const picks = ironPicks + stonePicks
+  if (picks > 8) { log(`набор на выход: нужно ${picks} кирок — отдельный путь пополнения, один крафт не решит`); return false }
+  const planksNeeded = () => (!have('crafting_table') ? 4 : 0) + 2 * Math.ceil(Math.max(0, 2 * picks - have('stick')) / 4)
+  if (have(/_planks$/) + 4 * have(LOGS) < planksNeeded()) {
+    await step('chest_take', { item: 'all', timeoutSeconds: 20 })
+    if (have(/_planks$/) + 4 * have(LOGS) < planksNeeded()) await step('mine', {
+      block: 'crimson_stem,warped_stem', count: Math.ceil((planksNeeded() - have(/_planks$/)) / 4), radius: 32, timeoutSeconds: 60
+    })
+  }
+  while (!died && Date.now() < until && have(/_planks$/) < planksNeeded() && have(LOGS)) {
+    const item = planksFor(); if (!item) break
+    const before = have(/_planks$/); await step('craft', { item, count: 4 })
+    if (have(/_planks$/) <= before) break
+  }
+  if (!have('crafting_table') && have(/_planks$/) >= 4) await step('craft', { item: 'crafting_table', count: 1 })
+  if (!have('crafting_table')) return false
+  const sticks = 4 * Math.ceil(Math.max(0, 2 * picks - have('stick')) / 4)
+  if (sticks && have(/_planks$/) >= sticks / 2) await step('craft', { item: 'stick', count: sticks })
+  // Blackstone is a stone-tool ingredient in 1.21.11; the bastion is the first
+  // source at this seam. The existing mine action keeps pick/LOS validation.
+  for (let i = 0; i < picks && !died && Date.now() < until; i++) {
+    await sense()
+    if ((sit.pickLeft || 0) >= want) break
+    // Craft the iron pick before mining blackstone: it is also the bootstrap
+    // when all old picks have broken (col04N3ax25, iron nuggets still in bag).
+    if (have('iron_ingot') < 3 && have(COBBLE) < 3) await step('mine', {
+      block: 'blackstone', count: Math.max(3, 3 * stonePicks - have(COBBLE)), radius: 16, timeoutSeconds: 45
+    })
+    const item = have('iron_ingot') >= 3 ? 'iron_pickaxe' : have(COBBLE) >= 3 ? 'stone_pickaxe' : null
+    if (!item || have('stick') < 2) break
+    const before = have(item); await step('craft', { item, count: 1 })
+    if (have(item) <= before) break
+  }
+  await refresh(); await sense()
+  const ok = !died && (sit.pickLeft || 0) >= want && !!have('crafting_table')
+  log(`набор на выход: удары ${sit.pickLeft || 0}/${want}, верстак ${have('crafting_table')}, палки ${have('stick')}; ${ok ? 'готов' : 'пополнение не завершено за один бюджет'}`)
+  return ok
+}
 async function prepareExitTools (T) {
+  if (process.env.ND_EXIT_SUPPLY !== '0' && state.dimension === 'the_nether') return prepareExitSupply(T)
   await refresh(); await sense()
   if (sit.foes) { log('набор на выход: сначала закончить бой, крафт не начинаю'); return false }
   const n = { x: Math.floor(T.x / 8), z: Math.floor(T.z / 8) }

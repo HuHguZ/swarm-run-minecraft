@@ -307,13 +307,16 @@ async function cmdUp (args) {
     seeds = pick.slice(0, ids.length)
     log(`пул ${path.basename(pf)}: ${all.length} сидов, взяты ${seeds.join(', ')}`)
   }
-  const st = readState(); st.slots = st.slots || {}
+  const mine = {}
   for (const [k, i] of ids.entries()) {
     const s = slot(i)
     const seed = args.random ? randomSeed() : seeds ? seeds[k % seeds.length] : (args.seed || TWIN_SEED)
     prepareSlot(s, { seed, fresh: !!args.fresh, world: args.world || null })
-    st.slots[i] = { seed, since: new Date().toISOString(), world: args.world || null }
+    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null }
   }
+  // Чтение и запись slots.json — подряд, после долгой подготовки миров: параллельные up/down других слотов
+  // (два потока серий) иначе затирали свои записи (rt-R6 03.10).
+  const st = readState(); st.slots = Object.assign(st.slots || {}, mine)
   writeState(st)
   // Старт лесенкой: генерация спавна на всех сразу — пик CPU.
   for (const i of ids) { await startServer(slot(i)); await sleep(4000) }

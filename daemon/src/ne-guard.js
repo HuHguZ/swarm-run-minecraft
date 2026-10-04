@@ -20,8 +20,11 @@ const { sleep } = require('./movement')
 const { Vec3 } = require('vec3')
 
 const log = (what, o) => console.log('[guard]', new Date().toTimeString().slice(0, 8), what, JSON.stringify(o))
-// Стрелки (скелет, блейз, гаст) — не здесь: им яма не нужна, у них свои ответы (заложиться, лук, огнестойкость).
+// Стрелки — со своими ответами; ближний удар блейза также требует стража.
 const MELEE = /^(piglin|piglin_brute|hoglin|zoglin|zombified_piglin|wither_skeleton|magma_cube|zombie|husk|vindicator)$/
+// Blaze melee is dangerous even under fire resistance; distant fireballs stay
+// with the ranged/fire handler. Protect crafting and walking after farmRods too.
+const meleeName = n => MELEE.test(n || '') || (process.env.ND_GUARD_BLAZE !== '0' && n === 'blaze')
 // От этих — вниз (бой на земле — смерть: брут 50 хп и 13 урона, хоглин швыряет, иссушитель — иссушение).
 // Иссушитель — не здесь (B2-22 03.10: коробка 8 блоков за 11 с под ударами, 17 → 6 хп): его каменный меч щит держит целиком —
 // бой со щитом; двое и больше, хп < 9 — «толпа».
@@ -60,7 +63,7 @@ function install (bot) {
       if (/piglin/.test(src.name || '')) g.angerAt = Date.now()
       // First attack, not second: own the hands before a health packet/craft
       // continuation arrives. The original intent remains alive under the lock.
-      if (require('./reflex-lock').on() && g.session && g.session.bot === bot && worldIsNether(bot) && MELEE.test(src.name || '')) {
+      if (require('./reflex-lock').on() && g.session && g.session.bot === bot && worldIsNether(bot) && meleeName(src.name || '') && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5)) {
         react(g.session, g.session.current?.ctl || { aborted: false, onAbort: [] }, {
           force: { e: src, why: 'первый удар ' + src.name }, triggerAt: g.hits.at(-1).t
         }).catch(() => null)
@@ -69,7 +72,7 @@ function install (bot) {
       }
       // Щит-рефлекс (ND_GUARD=1): удар ближнего моба, а ответ ещё не начат (тело считает план/крафтит/копает) — сразу
       // взгляд на него и щит на 1.2 с: удар меча пиглина щит снимает целиком, топор брута — первый (потом щит выбит на 5 с).
-      if (process.env.ND_GUARD !== '0' && !g.reacting && MELEE.test(src.name || '') && src.position.distanceTo(bot.entity.position) < 4.5 &&
+      if (process.env.ND_GUARD !== '0' && !g.reacting && meleeName(src.name || '') && src.position.distanceTo(bot.entity.position) < 4.5 && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5) &&
         bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield' && Date.now() - (g.shieldAt || 0) > 1500) {
         g.shieldAt = Date.now()
         bot.lookAt(src.position.offset(0, (src.height || 1.9) * 0.8, 0), true).catch(() => {})
@@ -79,9 +82,9 @@ function install (bot) {
       if (g.hits.length > 24) g.hits.shift()
       // Сторож (ND_GUARD=1): второй удар ближнего моба за 4 с, а ответа нет (дело тела — ходьба к точке обзора, ожидание,
       // план — без проверок стража: B1-32 03.10, хоглин 7 ударов за 13 с при обходе бастиона) — ответ сам, мимо цикла дела.
-      if (process.env.ND_GUARD !== '0' && !g.reacting && g.session && MELEE.test(src.name || '') && worldIsNether(bot)) {
+      if (process.env.ND_GUARD !== '0' && !g.reacting && g.session && meleeName(src.name || '') && worldIsNether(bot) && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5)) {
         const now = Date.now()
-        const recent = g.hits.filter(h => now - h.t < 4000 && MELEE.test(h.name || '')).length
+        const recent = g.hits.filter(h => now - h.t < 4000 && meleeName(h.name || '') && (h.name !== 'blaze' || h.d < 3.5)).length
         if (recent >= 2 && now - (g.autoAt || 0) > 6000) {
           g.autoAt = now
           const ctl = { aborted: false, onAbort: [] }
@@ -103,9 +106,9 @@ function install (bot) {
       hp0 = hp
       if (drop < 6 || process.env.ND_GUARD === '0' || g.reacting || !g.session || !worldIsNether(bot)) return
       const last = g.hits[g.hits.length - 1]
-      if (!last || Date.now() - last.t > 1000 || !MELEE.test(last.name || '') || Date.now() - (g.autoAt || 0) < 6000) return
+      if (!last || Date.now() - last.t > 1000 || !meleeName(last.name || '') || Date.now() - (g.autoAt || 0) < 6000) return
       const src = bot.entities[last.id]
-      if (!src || !src.position || src.position.distanceTo(bot.entity.position) > 5.5) return
+      if (!src || !src.position || src.position.distanceTo(bot.entity.position) > 5.5 || (src.name === 'blaze' && src.position.distanceTo(bot.entity.position) >= 3.5)) return
       g.autoAt = Date.now()
       const ctl = { aborted: false, onAbort: [] }
       const onDeath = () => { ctl.aborted = true; for (const f of ctl.onAbort) { try { f() } catch {} } }
@@ -142,7 +145,7 @@ function meleeFoes (bot, r = 6) {
   return Object.values(bot.entities || {}).filter(e => {
     if (!e || !e.position || e === bot.entity || e.isValid === false) return false
     const n = e.name || ''
-    if (!MELEE.test(n)) return false
+    if (!meleeName(n)) return false
     if (e.position.distanceTo(me) > r) return false
     if (n === 'piglin') return aggressive(bot, e) && !isBaby(bot, e) && angryAtUs(bot)
     if (n === 'zombified_piglin') return aggressive(bot, e) && !isBaby(bot, e)
@@ -167,9 +170,9 @@ function hot (bot, { ms = 1500, near = 3.0 } = {}) {
     for (let i = g.hits.length - 1; i >= 0; i--) {
       const h = g.hits[i]
       if (now - h.t > ms) break
-      if (!MELEE.test(h.name || '')) continue
+      if (!meleeName(h.name || '') || (h.name === 'blaze' && h.d >= 3.5)) continue
       const e = bot.entities[h.id]
-      if (e && e.isValid !== false && e.position && e.position.distanceTo(bot.entity.position) < 5.5) return { e, why: 'удар ' + e.name }
+      if (e && e.isValid !== false && e.position && e.position.distanceTo(bot.entity.position) < 5.5 && (e.name !== 'blaze' || e.position.distanceTo(bot.entity.position) < 3.5)) return { e, why: 'удар ' + e.name }
     }
   }
   const me = bot.entity.position
@@ -178,6 +181,11 @@ function hot (bot, { ms = 1500, near = 3.0 } = {}) {
     const d = e.position.distanceTo(me)
     const lim = e.name === 'wither_skeleton' ? near + 0.5 : near + 4
     // Мы выше на 2.5+ (свой столб) — он не достаёт: не повод строить ещё (иначе столб растёт каждый план хода).
+    if (e.name === 'blaze') {
+      // No mob_flags prerequisite: BlazeAttackGoal has its own target logic.
+      if (d <= 2.7 && require('./pick').canHit(bot, e)) return { e, why: 'блейз вплотную' }
+      continue
+    }
     if (me.y - e.position.y >= 2.5) continue
     if ((HIDE_FROM.test(e.name) || e.name === 'wither_skeleton') && d <= lim && aggressive(bot, e) && sees(bot, e)) {
       // Издали (> 3 бл.) по тому же — не чаще раза в 20 с, пока он не ударил: брут за окном закрытого штрека виден и зол,
@@ -194,6 +202,7 @@ function hot (bot, { ms = 1500, near = 3.0 } = {}) {
   return null
 }
 
+function sealOn () { return process.env.ND_GUARD_SEAL !== '0' }
 function cls (bot, v) { return require('./sealed').classOf(bot.blockAt(v)) }
 // Клетка — толща (твёрдое: можно копать и стоять, не руда-охрана, не гравий).
 function solidish (k, SL) { return k === SL.SOLID || k === SL.HOT }
@@ -262,7 +271,7 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false } = {}) {
   const g = bot._ndGuard
   while (!ctl.aborted && Date.now() - t0 < ms && (bot.health ?? 0) > 0) {
     // Бьют сквозь «коробку» (диагональ, щель) — сидеть дальше нельзя (V2-1 03.10: брут на (−1,+1,−1) — 3 удара за 13 с, смерть).
-    if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && Date.now() - h.t < 1500 && MELEE.test(h.name || ''))) return { s: Math.round((Date.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
+    if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && Date.now() - h.t < 1500 && meleeName(h.name || ''))) return { s: Math.round((Date.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
     const foes = meleeFoes(bot, 6)
     if (!foes.length) { if (!quiet) quiet = Date.now(); if (Date.now() - quiet > 3000) break } else quiet = 0
     if (swing && foes.length) {
@@ -310,7 +319,7 @@ function guardCount (bot) {
 async function guardFill (bot, v) {
   const SL = require('./sealed')
   const b = bot.blockAt(v)
-  if (b && SL.classOf(b) !== SL.AIR && SL.classOf(b) !== SL.PARTIAL) return true
+  if (b && SL.classOf(b) !== SL.AIR && SL.classOf(b) !== SL.PARTIAL) return sealOn() ? fullWall(b) : true
   const item = guardItem(bot)
   if (!item) return false
   try { const r = await require('./build').placeBlockAt(bot, v, { item, timeoutMs: 1500 }); return !!(r && r.ok) } catch { return false }
@@ -318,6 +327,25 @@ async function guardFill (bot, v) {
 
 // Коробка вокруг тела: блоки в открытые клетки у ног и головы (4 стороны) и над головой, ближние к врагу — первыми.
 // Клетка, где стоит сущность, — не заложить (ok:false, если открытой осталась). { ok, placed, left }.
+function fullWall (b) {
+  return !!b && b.boundingBox === 'block' && !/lava|water|fire/.test(b.name || '') &&
+    Array.isArray(b.shapes) && b.shapes.some(a => a.length === 6 && a.every((n, i) => n === (i < 3 ? 0 : 1)))
+}
+function shellCells (f) {
+  const cells = []
+  for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) for (let y = 0; y <= 2; y++) {
+    if (x || z || y === 2) cells.push(f.offset(x, y, z))
+  }
+  return cells
+}
+function sealedAt (bot, f) {
+  const p = bot.entity.position; const half = (bot.entity.width || 0.6) / 2
+  // Knockback can put the body into a neighbouring cell while placements still
+  // finish around the old cell. A shell around that cell is no longer cover.
+  return p.y >= f.y && p.y + (bot.entity.height || 1.8) <= f.y + 2 &&
+    p.x - half >= f.x && p.x + half <= f.x + 1 && p.z - half >= f.z && p.z + half <= f.z + 1 &&
+    shellCells(f).every(v => fullWall(bot.blockAt(v)))
+}
 async function boxIn (bot, foe = null, { diag = false } = {}) {
   const SL = require('./sealed')
   if (guardCount(bot) < 2) return { ok: false, why: 'нечем' }
@@ -326,11 +354,13 @@ async function boxIn (bot, foe = null, { diag = false } = {}) {
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) cells.push(f.offset(dx, dy, dz))
   cells.push(f.offset(0, 2, 0))
   if (diag) for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) for (const dy of [0, 1]) cells.push(f.offset(dx, dy, dz))
+  if (sealOn()) cells.splice(0, cells.length, ...shellCells(f))
   const open = v => { const b = bot.blockAt(v); return !!b && (SL.classOf(b) === SL.AIR || SL.classOf(b) === SL.PARTIAL || SL.classOf(b) === SL.FLUID) }
   const occupied = v => Object.values(bot.entities || {}).some(e => e && e !== bot.entity && e.position && e.isValid !== false && e.name !== 'item' &&
     Math.abs(e.position.x - (v.x + 0.5)) < 0.5 + (e.width || 0.6) / 2 && Math.abs(e.position.z - (v.z + 0.5)) < 0.5 + (e.width || 0.6) / 2 &&
     e.position.y < v.y + 1 && e.position.y + (e.height || 1.8) > v.y)
   const todo = cells.filter(open).sort((a, b) => foe ? a.distanceTo(foe.position) - b.distanceTo(foe.position) : 0)
+  if (sealOn() && todo.some(occupied)) return { ok: false, placed: 0, left: todo.filter(occupied).map(SL.keyV), pressure: true }
   // Сперва уровень ног (опора для уровня головы), ближние к врагу.
   todo.sort((a, b) => (a.y - b.y) || (foe ? a.distanceTo(foe.position) - b.distanceTo(foe.position) : 0))
   let placed = 0
@@ -338,6 +368,10 @@ async function boxIn (bot, foe = null, { diag = false } = {}) {
   for (const v of todo) {
     if (occupied(v)) { left.push(SL.keyV(v)); continue }
     if (await guardFill(bot, v)) placed++; else left.push(SL.keyV(v))
+  }
+  if (sealOn()) {
+    for (const v of cells) if (!fullWall(bot.blockAt(v)) && !left.includes(SL.keyV(v))) left.push(SL.keyV(v))
+    return { ok: left.length === 0 && sealedAt(bot, f), placed, left }
   }
   return { ok: left.length === 0, placed, left }
 }
@@ -369,6 +403,7 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
       // Не достать 4 с (за стеной, в щели, не подходит) — не стоять: бой не задался.
       if (Date.now() - Math.max(last, t0) > 4000 && !swings) { out.stopped = 'не достать'; break }
       const d = foe.position.distanceTo(bot.entity.position)
+      if (foe.name === 'blaze' && d >= 3.5) { out.stopped = 'блейз вне ближнего боя'; break }
       try { await bot.lookAt(foe.position.offset(0, (foe.height || 1.9) * 0.75, 0), true) } catch {}
       if (Date.now() - last >= 640 && pick.canHit(bot, foe)) {
         shield(false)
@@ -457,7 +492,7 @@ async function reactBody (session, ctl, opts, h) {
     let bx = await boxIn(bot, e).catch(err => ({ ok: false, why: err.message }))
     const tb = Date.now()
     const hasShield = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
-    while (!bx.ok && Date.now() - tb < 3000 && !ctl.aborted && (bot.health ?? 0) > 0 && bx.left && bx.left.length) {
+    while (!bx.ok && !bx.pressure && Date.now() - tb < 3000 && !ctl.aborted && (bot.health ?? 0) > 0 && bx.left && bx.left.length) {
       try { await bot.lookAt(e.position.offset(0, 1.6, 0), true) } catch {}
       if (hasShield) { try { bot.activateItem(true) } catch {} }
       await sleep(250)

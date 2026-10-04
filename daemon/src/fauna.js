@@ -398,6 +398,10 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
   const weapon = () => bot.inventory.items().filter(i => /_(axe|sword)$/.test(i.name))
     .sort((a, b) => (/_axe$/.test(b.name) ? 1 : 0) - (/_axe$/.test(a.name) ? 1 : 0) || tier(b.name) - tier(a.name))[0] || null
   const id = g.id
+  // Следующий RPC может не успеть нанести ни одного нового удара, но голем
+  // помнит предыдущие. Ключ — объект сущности: новый моб с тем же id не наследует злость.
+  const angerOn = process.env.ND_GOLEM_ANGER !== '0'
+  const angry = () => out.hits > 0 || (angerOn && !!session._golemAngry?.has(bot.entities[id] || g))
   let gone = false
   const onGone = e => { if (e && e.id === id) gone = true }
   bot.on('entityGone', onGone)
@@ -464,6 +468,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
       const h = bot.entity.position.floored().y - base.y
       if (h < GOLEM_PILLAR || !safe() || bot.entity.position.y < needY - 0.01) {
         mark(`высоты нет (${h})`)
+        if (angerOn && angry()) { mark('злой голем — со столба не слезаю'); break }
         if (h > 0) await descendPillar(bot, ctl, base.y)
         base = null
         continue
@@ -503,7 +508,10 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
             try { await bot.lookAt(a.point, true) } catch {}
             const blocked0 = bot._ndBlockedHits || 0
             try { bot.attack(g); lastHit = Date.now() } catch {}
-            if ((bot._ndBlockedHits || 0) === blocked0) out.hits++
+            if ((bot._ndBlockedHits || 0) === blocked0) {
+              out.hits++
+              if (angerOn) { session._golemAngry ||= new WeakSet(); session._golemAngry.add(g) }
+            }
             else out.blocked = (out.blocked || 0) + 1
           }
         } else if (Date.now() - farSince > 6000 && !out.hits) {
@@ -517,7 +525,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
       if (gone || late()) break
       // Слезать к живому голему рядом нельзя — он внизу и зол (lab ow-golem1: хп 20 → 4).
       const gNow = bot.entities[id]
-      if (gNow && hd(gNow) < 6 && out.hits) { mark('голем у столба — остаюсь наверху'); break }
+      if (gNow && hd(gNow) < 6 && angry()) { mark('голем у столба — остаюсь наверху'); break }
       if (bot.entity.position.floored().y > base.y) await descendPillar(bot, ctl, base.y)
       base = null
     }
@@ -528,7 +536,8 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
   mark(gone ? 'голем убит' : 'голем жив')
   if (gone) await sleep(600, ctl)
   const gEnd = bot.entities[id]
-  if (base && bot.entity.position.floored().y > base.y && (gone || !gEnd || hd(gEnd) >= 6 || !out.hits)) await descendPillar(bot, ctl, base.y)
+  if (base && bot.entity.position.floored().y > base.y && (gone || !gEnd || hd(gEnd) >= 6 || !angry())) await descendPillar(bot, ctl, base.y)
+  if (gone && session._golemAngry) session._golemAngry.delete(g)
   if (gone) {
     const until = Date.now() + 6000
     while (Date.now() < until && !ctl.aborted) {

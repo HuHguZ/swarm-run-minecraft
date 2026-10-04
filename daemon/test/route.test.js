@@ -17,13 +17,14 @@ const base = {
   ores: null
 }
 
-test('план с пустым рюкзаком: дерево, камень, руины и деревня, вёдра, вода, литьё поверху, вход', () => {
+test('план с пустым рюкзаком: руины сначала, дальняя деревня вне общего бюджета, затем железо и портал', () => {
   const p = route.plan(base)
   const ids = p.steps.map(s => s.id)
   assert.deepStrictEqual(ids.slice(0, 2), ['wood', 'stone'])
   assert.ok(ids.includes('ruin'), ids.join(','))
-  assert.ok(ids.includes('village'), ids.join(','))
-  assert.ok(ids.indexOf('smelt') > ids.indexOf('village'))
+  assert.ok(!ids.includes('village'), ids.join(','))
+  assert.ok(ids.includes('mine'), ids.join(','))
+  assert.ok(ids.indexOf('smelt') > ids.indexOf('mine'))
   assert.ok(ids[ids.length - 2].startsWith('lava:sky'), ids.join(','))
   assert.strictEqual(ids[ids.length - 1], 'enter')
   assert.strictEqual(p.lava.kind, 'sky')

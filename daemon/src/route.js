@@ -27,6 +27,11 @@ const CACHE = path.join(ROOT, 'farm', 'seeds', 'route-info.json')
 const ORES = path.join(ROOT, 'farm', 'route-scan')
 
 const SPEED = 2.5 // м/с по рельефу
+// Общий бюджет поиска ресурсов в постройках, включая переходы. Это политика
+// маршрута, не коэффициент механики; ND_ROUTE_STRUCTURE_BUDGET=0 — прежний выбор.
+function structureSearchLeft (seconds = 0) {
+  return process.env.ND_ROUTE_STRUCTURE_BUDGET === '0' ? Infinity : Math.max(0, 180 - Math.max(0, Number(seconds) || 0))
+}
 // Ожидания по луту (см. шапку).
 const LOOT = {
   ruin: { lighter: 0.73, obsidian: 0.9, iron: 0.47 },
@@ -393,10 +398,14 @@ function plan (info, opts = {}) {
   // Выбор: руины — если крюк ≤ 100 с (огонь, обсидиан — дешевле, чем кремень и литьё лишней клетки); железо — по цене
   // слитка (с), пока ожидаемого не хватит с запасом (×1.25), а гарантированного — хотя бы на ведро.
   const chosen = []
+  const structureBudgetSeconds = structureSearchLeft(opts.structureSeconds)
+  let structureLeft = structureBudgetSeconds
   const ruin = cand.find(c => c.kind === 'ruin')
   // Без огня — руины и подальше: кремень из гравия в rt-R3/R4 — 1 из 7 и 2 из 8 (гравий у рек под водой, «не вижу»),
   // а сундук руин даёт огниво или заряд в 73 %.
-  if (ruin && (ruin.cost <= 100 || (!lighter && ruin.cost <= 260))) { chosen.push(ruin); iron -= ruin.gives.iron * 0.5 }
+  if (ruin && ruin.cost <= structureLeft && (ruin.cost <= 100 || (!lighter && ruin.cost <= 260))) {
+    chosen.push(ruin); structureLeft -= ruin.cost; iron -= ruin.gives.iron * 0.5
+  }
   if (ruin && chosen.includes(ruin) && !lighter) iron -= LOOT.ruin.lighter // огонь из сундука снимает слиток на огниво
   const structuresFirst = process.env.ND_ROUTE_STRUCTURES_FIRST !== '0'
   const ironCand = cand.filter(c => c.kind !== 'ruin' && c.d <= (c.kind === 'ore' ? 160 : 360))
@@ -407,8 +416,9 @@ function plan (info, opts = {}) {
   const need = Math.max(0, iron)
   for (const c of ironCand) {
     if (expect >= need && sure >= Math.min(need - 1, 2)) break
-    if (c.cost > 420) continue
+    if (c.cost > 420 || (c.kind !== 'ore' && c.cost > structureLeft)) continue
     chosen.push(c)
+    if (c.kind !== 'ore') structureLeft -= c.cost
     expect += c.gives.iron
     sure += c.gives.ironMin || 0
   }
@@ -488,7 +498,7 @@ function plan (info, opts = {}) {
   }
   if (bedStep) steps.splice(bedAt, 0, bedStep)
   const budget = steps.reduce((n, s) => n + (s.budget || 0), 0)
-  return { seed: info.seed, lava, ironNeed: need, ironExpect: Math.round(expect * 10) / 10, short, steps, budget, route: routeName(steps) }
+  return { seed: info.seed, lava, ironNeed: need, ironExpect: Math.round(expect * 10) / 10, short, steps, budget, structureBudgetSeconds, route: routeName(steps) }
 }
 
 function whyOf (c) {
@@ -510,7 +520,9 @@ function routeName (steps) {
 
 // Строка для журнала: шаги с бюджетом.
 function describe (p) {
-  return `маршрут [${p.route}], бюджет ${Math.round(p.budget / 60 * 10) / 10} мин: ` + p.steps.map(s => `${s.id}${s.d !== undefined ? `(${s.d} м)` : ''} ${s.budget} с`).join(' → ')
+  return `маршрут [${p.route}], бюджет ${Math.round(p.budget / 60 * 10) / 10} мин` +
+    (Number.isFinite(p.structureBudgetSeconds) ? `; поиск построек осталось ${Math.floor(p.structureBudgetSeconds)} с, затем руда` : '') + ': ' +
+    p.steps.map(s => `${s.id}${s.d !== undefined ? `(${s.d} м)` : ''} ${s.budget} с`).join(' → ')
 }
 
 // Кэш seedtool по пулу: node daemon/src/route.js cache  (300 сидов — ~10 с).
@@ -541,4 +553,4 @@ if (require.main === module) {
   } else console.log('node daemon/src/route.js cache | plan <сид> | stats')
 }
 
-module.exports = { outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }
+module.exports = { structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }

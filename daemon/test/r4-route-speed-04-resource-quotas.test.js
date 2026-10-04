@@ -89,9 +89,9 @@ test('cast1 carry target is 12; two-bucket casting keeps 24', async () => {
     else process.env.ND_ROUTE_ONE = previous
   }
 })
-test('known structures are tried before cheaper ore, within the explicit 420s search budget', () => {
+test('known structures are tried before cheaper ore, within the shared 180s search budget', () => {
   const route = nativeRequire('./src/route')
-  const info = { seed: '1', spawn: { x: 0, z: 0 }, village: { x: 200, z: 0 },
+  const info = { seed: '1', spawn: { x: 0, z: 0 }, village: { x: 40, z: 0 },
     sky: { x: 50, y: 64, z: 0, src: 100 }, ores: { ironBuried: [{ x: 1, y: 60, z: 0, n: 8, depth: 4, top: 64 }] } }
   const p = route.plan(info, { have: { stone_pickaxe: 1 }, done: ['wood', 'stone', 'bed'] })
   const ids = p.steps.map(s => s.id)
