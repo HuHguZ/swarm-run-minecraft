@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Побег с оглядкой (flee.js) на тестовом Paper. Бот на ровном поле, вокруг
 // толпа: зомби с двух сторон, скелет, крипер. Проверяем, что он бежит в
 // свободную сторону, а не в соседнего моба, и сколько хп это стоит.
@@ -14,13 +15,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(400) }
 
 const X = -300; const Y = 100; const Z = -300

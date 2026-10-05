@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория куска «бастион» (поток nether-end) на новом мире: тело строит портал у спавна и входит в Ад (как
 // try-lab-ne-run.js), бастион — ближайший к порталу Ада (/locate, только постановка) — передаётся кампании так, как его
 // записала бы разведка крепости («бастион (ад)» через ND_EXTRA_PLACES). Рюкзак — std сквозной сцены + 7 стержней (этап
@@ -111,7 +112,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await kit.cmd('/random reset *')
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
@@ -144,7 +145,7 @@ async function main () {
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
     console.log(JSON.stringify(rec))
   }
-  if (s0.dimension !== 'the_nether') { fail('в Ад не вошёл на подготовке'); try { await Promise.race([call('disconnect', {}), sleep(8000)]) } catch {} process.exit(0) }
+  if (s0.dimension !== 'the_nether') { fail('в Ад не вошёл на подготовке'); try { await Promise.race([call('disconnect', {}), gameClock.wall.sleep(8000)]) } catch {} process.exit(0) }
   const entry = { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) }
   const B = locate('bastion_remnant', 'the_nether', entry)
   if (!B) { fail('бастиона /locate не нашёл'); process.exit(0) }
@@ -163,7 +164,7 @@ async function main () {
     map = { mapped: (w.detail && w.detail.mapped) || w.error || null, error: m.error, bastions: (m.bastions || []).map(b => ({ x: b.x, z: b.z, type: b.type, gold: (b.gold || []).length })) }
     // GRID=1 — сетка Ада «из копии мира» от входа до бастиона (+ его коробка) для nether-route (ND_NE_ROUTE=1 у демона).
     if (process.env.GRID === '1') {
-      const tg = Date.now()
+      const tg = gameClock.wall.now()
       try {
         const M = require('./try-lab-ne-map')
         const b0 = (m.bastions || []).find(b => b.gold && b.gold.length) || null
@@ -173,7 +174,7 @@ async function main () {
         if (b0 && b0.bbAll) rects.push([b0.bbAll[0] - 8, b0.bbAll[2] - 8, b0.bbAll[3] + 8, b0.bbAll[5] + 8])
         const r = await M.netherGrid(Number(process.env.FARM_SLOT), rects, {})
         require('./src/nether-grid').save(path.join(__dirname, '..', 'farm', `memory-${process.env.FARM_SLOT}`), r.grid, { pts })
-        map.grid = { seconds: Math.round((Date.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded }
+        map.grid = { seconds: Math.round((gameClock.wall.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded }
       } catch (e) { map.grid = { error: e.message } }
       console.log('сетка', JSON.stringify(map.grid))
     }
@@ -182,7 +183,7 @@ async function main () {
   const size = logSize()
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
   try { fs.writeFileSync(clog, '') } catch {}
-  const tc = Date.now()
+  const tc = gameClock.now()
   const places = { 'бастион (ад)': { x: B.x, y: 50, z: B.z, dimension: 'the_nether', note: 'сцена: как записала бы разведка' } }
   const child = spawn(process.execPath, [CAMPAIGN, STAGES], {
     cwd: __dirname,
@@ -198,15 +199,15 @@ async function main () {
   const marks = {}
   let lastCheck = 0
   const until = tc + MINUTES * 60000
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(5000)
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
-    if (Date.now() - lastCheck > (METRICS ? 4500 : 20000)) {
-      lastCheck = Date.now()
+    if (gameClock.now() - lastCheck > (METRICS ? 4500 : 20000)) {
+      lastCheck = gameClock.now()
       const s = await status()
       best.pearls = Math.max(best.pearls, cnt(s.inventory, /^(ender_pearl|ender_eye)$/))
-      if (METRICS && !deathLines(size).length) markPearls(marks, s.inventory || {}, (Date.now() - tc) / 1000)
+      if (METRICS && !deathLines(size).length) markPearls(marks, s.inventory || {}, (gameClock.now() - tc) / 1000)
     }
     if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
     const deaths = deathLines(size)
@@ -228,7 +229,7 @@ async function main () {
     at: new Date().toISOString(),
     seed: seedOf(),
     near: process.env.NEAR === '1',
-    minutes: Math.round((Date.now() - tc) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - tc) / 6000) / 10,
     stoppedBy,
     exitCode: exited,
     deathCount: deaths.length,
@@ -257,7 +258,7 @@ async function main () {
   rec.tail = text.split('\n').filter(l => /ВЕХА|БЛОКЕР|итог этапа|этап упал|умер|прогон упал|бастион|выработан|штрек/.test(l)).slice(-14).map(l => l.slice(0, 220))
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-bastion окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-bastion окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

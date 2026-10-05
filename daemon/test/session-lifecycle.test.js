@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 const { EventEmitter } = require('node:events')
 const Vec3 = require('vec3')
 function fixture () {
@@ -20,7 +21,7 @@ function fixture () {
       if (name === './gamedata') return require('../src/gamedata')
       return fallback
     } }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), context)
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), withClockFixture(context))
   const { Session } = context.module.exports
   const journal = { state: {}, append () {}, patch: fn => fn(journal.state) }
   const s = new Session({ lowHealth: 6 }, { emit: (type, detail) => events.push({ type, ...detail }) }, journal)
@@ -222,7 +223,7 @@ test('падение в выкопанную клетку перед копко�
   const fs2 = require('node:fs')
   const vm2 = require('node:vm')
   const ctx = { console, module: { exports: {} }, setTimeout, clearTimeout, setInterval, clearInterval, require: n => n === 'vec3' ? Vec3 : new Proxy({}, { get: () => () => {} }) }
-  vm2.runInNewContext(fs2.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), ctx)
+  vm2.runInNewContext(fs2.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), withClockFixture(ctx))
   const { steerIntoDig } = ctx.module.exports
   const node = { x: 3049, y: 258, z: 3000, toBreak: [{ x: 3049, y: 258, z: 3000 }] }
   // mlg-reg-dbg1, 8.1 с: x 3049.54, едет на восток 0.11 бл/тик, в воздухе — прогноз 3049.98, вне центра: толкать назад.

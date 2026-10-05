@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Общая граница риска для боевых модулей. Тактика моба выбирает атаки,
 // но не может отменить решение о сохранении жизни близостью противника.
 const assess = require('./assess')
@@ -119,12 +120,12 @@ function watch (bot) {
   let hits = []
   const health = () => {
     const next = bot.health ?? 0
-    if (next < hp && next > 0) hits.push({ at: Date.now(), lost: hp - next })
+    if (next < hp && next > 0) hits.push({ at: gameClock.now(), lost: hp - next })
     hp = next
   }
   bot.on('health', health)
   const hit = () => {
-    hits = hits.filter(h => Date.now() - h.at < 8000)
+    hits = hits.filter(h => gameClock.now() - h.at < 8000)
     return Math.max(0, ...hits.map(h => h.lost))
   }
   return { hit, check: opts => inspect(bot, { ...opts, observedHit: hit() }),
@@ -150,7 +151,7 @@ async function disengage (session, ctl, foes, { kite, ms = 4000 } = {}) {
 
 async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat } = {}) {
   const bot = session.bot
-  const start = Date.now()
+  const start = gameClock.now()
   const hp0 = bot.health
   const consume = eat || (() => require('./actions').eat(session, {}))
   let ate = 0
@@ -161,7 +162,7 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat } =
     if (!safeGround(bot)) { hazard = true; why = 'опасность под ногами: прерываю лечение'; break }
     if (!safe || !safe()) { why = 'небезопасно лечиться: контакт или линия огня'; break }
     if (healthy()) break
-    if (Date.now() - start >= maxMs) { why = 'время восстановления закончилось'; break }
+    if (gameClock.now() - start >= maxMs) { why = 'время восстановления закончилось'; break }
     if ((bot.food ?? 0) < 20) {
       const before = bot.food
       try { await consume() } catch {}
@@ -172,7 +173,7 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat } =
   }
   return { rested: !ctl.aborted && (bot.health ?? 0) > 0 && healthy() && safeGround(bot) && !!safe?.(), hazard,
     why: why || (ctl.aborted ? 'прервано' : undefined), hp: `${hp0} -> ${bot.health}`, ate,
-    seconds: Math.round((Date.now() - start) / 1000) }
+    seconds: Math.round((gameClock.now() - start) / 1000) }
 }
 
 module.exports = { evaluate, inspect, watch, disengage, recover, safeGround }

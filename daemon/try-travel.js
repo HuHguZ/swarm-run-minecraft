@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Срез 3 (NETHER.md): портал туда и обратно, одним вызовом mc_portal mode=enter
 // в каждую сторону. Ложь, которую ловит сцена: «простоял в портале» вместо
 // «перешёл». Переход засчитывается только по смене мира в шапке И по полу,
@@ -83,11 +84,11 @@ async function arena () {
 }
 
 async function enter (label) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('portal', { mode: 'enter', timeoutSeconds: 90 })
   const d = r.detail || {}
-  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((Date.now() - t0) / 100) / 10}с — ${d.stopped || d.note || ''}`)
-  return { r, d, t0, t1: Date.now() }
+  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((gameClock.now() - t0) / 100) / 10}с — ${d.stopped || d.note || ''}`)
+  return { r, d, t0, t1: gameClock.now() }
 }
 
 conn.ready.then(async () => {
@@ -140,7 +141,7 @@ conn.ready.then(async () => {
     check('(а) в памяти «портал» верхнего мира у своей рамы, не затёрт', !!up && (up.dimension || 'overworld') === 'overworld' && Math.abs(up.x - X) <= 3 && Math.abs(up.z - Z) <= 3, up && { x: up.x, y: up.y, z: up.z, dimension: up.dimension })
     check('(а) «портал (ад)» с dimension the_nether', !!down && down.dimension === 'the_nether', down && { x: down.x, y: down.y, z: down.z, dimension: down.dimension })
     check('(а) пара связана leadsTo в обе стороны', !!(up && down && up.leadsTo && down.leadsTo && up.leadsTo.world === 'the_nether' && down.leadsTo.world === 'overworld'), { up: up && up.leadsTo, down: down && down.leadsTo })
-    check('(а) огниво в рюкзаке, смерти в окне нет', (hA.inventory || {}).flint_and_steel >= 1 && kit.between(a.t0, Date.now(), 'death').length === 0, hA.inventory && hA.inventory.flint_and_steel)
+    check('(а) огниво в рюкзаке, смерти в окне нет', (hA.inventory || {}).flint_and_steel >= 1 && kit.between(a.t0, gameClock.now(), 'death').length === 0, hA.inventory && hA.inventory.flint_and_steel)
     const whereR = await call('portal', { mode: 'where' })
     console.log(`   where из Ада: ${(whereR.detail || {}).note}`)
 
@@ -159,8 +160,8 @@ conn.ready.then(async () => {
     await sleep(1000)
     const pending = call('portal', { mode: 'enter', timeoutSeconds: 60 })
     let stoppedInside = false
-    const tE = Date.now()
-    while (Date.now() - tE < 15000) {
+    const tE = gameClock.now()
+    while (gameClock.now() - tE < 15000) {
       const h = await header()
       if (h.dimension !== 'overworld') break
       if (inCells(h.pos, INNER)) { await call('stop'); stoppedInside = true; break }

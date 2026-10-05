@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Арбалет, фейерверки и выбор стрел (PVP-RESEARCH б.4, б.5, б.14, в.5, в.11;
 // просьба 2026-09-26: «все приёмы про-игроков, по максимуму того, что даёт
 // версия»). Раньше бой искал только лук: арбалет в рюкзаке лежал мёртвым
@@ -310,7 +311,7 @@ function afterPacket (bot, fn) {
 // появится снаряд (сервер пришлёт слот), отпустить. Фейерверк — из левой руки:
 // на время зарядки он туда, прежнее (щит, тотем) — обратно.
 async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = null, onTick = null } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const info = read.crossbowInfo(bot, item)
   if (!info) return { ok: false, why: 'не арбалет' }
   if (info.loaded) return { ok: true, already: true, ms: 0 }
@@ -340,9 +341,9 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
     }
     const ticks = chargeTicks(info.quickCharge)
     bot.activateItem()
-    const limit = Date.now() + (ticks + 8) * TICK_MS + 250
+    const limit = gameClock.now() + (ticks + 8) * TICK_MS + 250
     let loaded = false
-    while (Date.now() < limit) {
+    while (gameClock.now() < limit) {
       if (ctl && ctl.aborted) break
       const held = bot.heldItem
       const hi = held && held.name === 'crossbow' ? read.crossbowInfo(bot, held) : null
@@ -359,7 +360,7 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
       const hi = bot.heldItem && bot.heldItem.name === 'crossbow' ? read.crossbowInfo(bot, bot.heldItem) : null
       loaded = !!(hi && hi.loaded)
     }
-    return { ok: loaded, ms: Date.now() - t0, ammo, why: loaded ? null : 'не зарядился' }
+    return { ok: loaded, ms: gameClock.now() - t0, ammo, why: loaded ? null : 'не зарядился' }
   } finally {
     await restore()
   }
@@ -383,7 +384,7 @@ function fire (bot, entity, item, { velFn = null, frac = null, onHit = null } = 
     const onT = () => {
       if (done) return
       done = true
-      clearTimeout(timer)
+      gameClock.clearTimeout(timer)
       bot.removeListener('physicsTick', onT)
       const eyeY = bot.entity.position.y + EYE
       const from = new Vec3(bot.entity.position.x, eyeY - (rocket ? ROCKET_DROP : ARROW_DROP), bot.entity.position.z)
@@ -405,7 +406,7 @@ function fire (bot, entity, item, { velFn = null, frac = null, onHit = null } = 
         // упреждение, и чем ушёл use_item (взгляд в пакете — bot.entity.yaw/pitch
         // в этот миг: если его перебил другой таймер, стрела ушла не туда).
         const shotLog = process.env.ND_DEBUG_XBOW ? {
-          t: Date.now(), d: Math.round(from.distanceTo(entity.position) * 10) / 10,
+          t: gameClock.now(), d: Math.round(from.distanceTo(entity.position) * 10) / 10,
           me: [+bot.entity.position.x.toFixed(2), +bot.entity.position.y.toFixed(2), +bot.entity.position.z.toFixed(2)],
           him: [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)],
           vel: (() => { const v = velFn ? velFn() : { x: 0, y: 0, z: 0 }; return [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)] })(),
@@ -422,11 +423,11 @@ function fire (bot, entity, item, { velFn = null, frac = null, onHit = null } = 
         } catch {} finally { bot._ndXbowFiring = false }
         if (shotLog) {
           // Где он был в расчётный миг попадания (упреждение против его хода).
-          setTimeout(() => { try { shotLog.himAtImpact = [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] } catch {} }, Math.max(0, (sol.ticks || 0) * TICK_MS))
+          gameClock.setTimeout(() => { try { shotLog.himAtImpact = [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] } catch {} }, Math.max(0, (sol.ticks || 0) * TICK_MS))
           let hitLogged = false
-          const onH = (victim) => { if (victim === entity && !hitLogged) { hitLogged = true; console.log('[xshot]', JSON.stringify({ ...shotLog, hit: Date.now() - shotLog.t })) } }
+          const onH = (victim) => { if (victim === entity && !hitLogged) { hitLogged = true; console.log('[xshot]', JSON.stringify({ ...shotLog, hit: gameClock.now() - shotLog.t })) } }
           bot.on('entityHurt', onH)
-          setTimeout(() => { bot.removeListener('entityHurt', onH); if (!hitLogged) console.log('[xshot]', JSON.stringify({ ...shotLog, hit: null, himAfter: [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] })) }, Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
+          gameClock.setTimeout(() => { bot.removeListener('entityHurt', onH); if (!hitLogged) console.log('[xshot]', JSON.stringify({ ...shotLog, hit: null, himAfter: [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] })) }, Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
         }
         // Выстрел не «использование»: mineflayer иначе считает руку занятой.
         bot.usingHeldItem = false
@@ -438,12 +439,12 @@ function fire (bot, entity, item, { velFn = null, frac = null, onHit = null } = 
           if (onHit) { try { onHit() } catch {} }
         }
         bot.on('entityHurt', onHurt)
-        setTimeout(() => bot.removeListener('entityHurt', onHurt), Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
+        gameClock.setTimeout(() => bot.removeListener('entityHurt', onHurt), Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
         resolve({ fired: true, ammo: info.ammo, multishot: info.multishot, piercing: info.piercing, ticks: Math.round((sol.ticks || 0) * 10) / 10, dist: Math.round(from.distanceTo(entity.position) * 10) / 10, hp0 })
       })
     }
     bot.on('physicsTick', onT)
-    const timer = setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ fired: false, why: 'физика стоит' }) } }, 400)
+    const timer = gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ fired: false, why: 'физика стоит' }) } }, 400)
   })
 }
 

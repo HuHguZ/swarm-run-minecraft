@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория куска «блейзы» (поток nether-end) на НОВОМ мире: крепость Ада ближайшая к 0,0 (/locate, только
 // постановка), тело — командами на пол зала у спавнера (3..6 бл. сбоку, его уровень ±1; спавнер ищет правда мира —
 // blocks_around, не зрение бота), набор KIT (std — как сквозная сцена; std+fr — ещё 3 зелья огнестойкости, как после
@@ -97,7 +98,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const fail = why => {
     const rec = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: true, stoppedBy: why }
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n'); console.log(JSON.stringify(rec))
@@ -144,21 +145,21 @@ async function main () {
   await sleep(1500)
   await call('armor', {}).catch(() => null)
   const size = logSize()
-  const tc = Date.now()
+  const tc = gameClock.now()
   const steps = []
   let approach = null
   if (process.env.APPROACH) {
     const a = await call('fortress', { mode: 'spawner', timeoutSeconds: 300 }).catch(e => ({ error: e.message }))
-    approach = { reached: !!(a.detail && a.detail.reached), dist: a.detail && a.detail.dist, stopped: a.detail && a.detail.stopped, s: Math.round((Date.now() - tc) / 1000) }
+    approach = { reached: !!(a.detail && a.detail.reached), dist: a.detail && a.detail.dist, stopped: a.detail && a.detail.stopped, s: Math.round((gameClock.now() - tc) / 1000) }
   }
   for (let k = 0; k < TRIES; k++) {
     const s0 = await status()
     if (cnt(s0.inventory, /^blaze_rod$/) >= 7) break
     if ((s0.food ?? 20) < 18) await call('eat', {}).catch(() => null)
-    const t = Date.now()
+    const t = gameClock.now()
     const r = await call('blaze', { rods: 7, timeoutSeconds: 400, box: false }).catch(e => ({ error: e.message }))
     const d = r.detail || {}
-    steps.push({ s: Math.round((Date.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType })
+    steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType })
     const s1 = await status()
     if (s1.dimension !== 'the_nether') break
     if (deathLines(size).length >= 3) break
@@ -176,7 +177,7 @@ async function main () {
     place,
     ok: cnt(s.inventory, /^blaze_rod$/) >= 7,
     rods: cnt(s.inventory, /^blaze_rod$/),
-    seconds: Math.round((Date.now() - tc) / 1000),
+    seconds: Math.round((gameClock.now() - tc) / 1000),
     deathCount: deaths.length,
     deaths,
     steps,
@@ -185,7 +186,7 @@ async function main () {
   }
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-blaze окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-blaze окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

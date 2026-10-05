@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Лук. Один модуль и для боя (pvp.js), и для тира (try-bow.js), чтобы то,
 // что проверено в тире, и было тем, что стреляет в бою.
 //
@@ -282,7 +283,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   if (!bot.heldItem || bot.heldItem.name !== 'bow') await bot.equip(bow, 'hand')
   let sol = null
   bot.activateItem()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   // Что сервер прибавит к стреле — это смещение стрелка за последний тик
   // (замер /data get entity Motion: лишняя скорость стрелы ≈ 2 × velocity
   // mineflayer). velocity в mineflayer — уже после трения за тик (×0.546 на
@@ -301,12 +302,12 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
     ? aimMoving(eye(), target, myVel(), !bot.entity.onGround, speed, GRAVITY, steep)
     : aim(eye(), target, speed, GRAVITY, steep)
   let settled = false
-  while (Date.now() - t0 < drawMs) {
+  while (gameClock.now() - t0 < drawMs) {
     if (shouldStop && shouldStop()) { stopTick(); cancelDraw(); return { shot: false, why: 'отменил натяжение' } }
     sol = solve()
     if (sol) await bot.look(sol.yaw, sol.pitch, true).catch(() => {})
-    if (mode !== 'settle' || Date.now() - t0 < drawMs - SETTLE_MS) {
-      if (onDraw) onDraw(Date.now() - t0)
+    if (mode !== 'settle' || gameClock.now() - t0 < drawMs - SETTLE_MS) {
+      if (onDraw) onDraw(gameClock.now() - t0)
     } else if (!settled) {
       settled = true
       for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) { try { bot.setControlState(k, false) } catch {} }
@@ -320,19 +321,19 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   // а щит он опустит, чтобы ударить. Короткое натяжение (вред) не держим: сила
   // выросла бы. Не дольше holdMaxMs (2026-09-26).
   if (holdWhile && !short) {
-    const until = Date.now() + holdMaxMs
-    while (Date.now() < until && holdWhile()) {
+    const until = gameClock.now() + holdMaxMs
+    while (gameClock.now() < until && holdWhile()) {
       if (shouldStop && shouldStop()) { stopTick(); cancelDraw(); return { shot: false, why: 'отменил натяжение' } }
       sol = solve()
       if (sol) await bot.look(sol.yaw, sol.pitch, true).catch(() => {})
-      if (onDraw) onDraw(Date.now() - t0)
+      if (onDraw) onDraw(gameClock.now() - t0)
       await sleep(50)
     }
   }
   if (mode === 'settle') {
     // Ещё скользим — дождаться, пока гаснет, но не дольше 150 мс.
-    const still = Date.now() + 150
-    while (Date.now() < still && bot.entity.velocity && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) > 0.02) await sleep(25)
+    const still = gameClock.now() + 150
+    while (gameClock.now() < still && bot.entity.velocity && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) > 0.02) await sleep(25)
   }
   if (mode === 'snap' || mode === 'snap2') {
     // Эксперимент: клавиши отпустить в момент спуска (snap) или за тик (snap2).
@@ -360,7 +361,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
     }
     bot.on('physicsTick', onT)
     // Физика стоит (чанк не прогружен) — по-старому, без привязки к тику.
-    setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve(null) } }, 300)
+    gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve(null) } }, 300)
   })
   sol = fin ? fin.s : solve()
   // Путь закрылся за время натяжения (сдвинулись за угол, цель ушла за
@@ -417,7 +418,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   }
   if (!follow) {
     // Стрела на 40 блоков летит ~20 тиков: 2.5 с хватает.
-    setTimeout(() => { bot.removeListener('entitySpawn', onSpawn); bot.removeListener('entityHurt', onHurt) }, Math.min(3000, sol.ticks * 50 + 1000))
+    gameClock.setTimeout(() => { bot.removeListener('entitySpawn', onSpawn); bot.removeListener('entityHurt', onHurt) }, Math.min(3000, sol.ticks * 50 + 1000))
     return out
   }
   // Диагностика: куда реально полетела стрела в первые тики против того, куда
@@ -425,10 +426,10 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   const firstPos = []
   // Следим за стрелой: попала, или где ближе всего прошла мимо цели.
   let closest = Infinity
-  const deadline = Date.now() + Math.max(1500, sol.ticks * 50 + 1200)
-  while (Date.now() < deadline && !hit) {
+  const deadline = gameClock.now() + Math.max(1500, sol.ticks * 50 + 1200)
+  while (gameClock.now() < deadline && !hit) {
     if (arrow && arrow.position && entity.position) {
-      if (firstPos.length < 3) firstPos.push({ p: arrow.position.clone(), t: Date.now() })
+      if (firstPos.length < 3) firstPos.push({ p: arrow.position.clone(), t: gameClock.now() })
       const c = point ? point(0) : entity.position.offset(0, (entity.height || 1.8) / 2, 0)
       const dd = arrow.position.distanceTo(c)
       if (dd < closest) closest = dd

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater } = require('./movement')
@@ -161,7 +162,7 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
   if (noTool) throw new Error(noTool)
 
   // Dusk is short; a shaft that is not finished in a minute is not a shelter.
-  const deadline = Date.now() + 60000
+  const deadline = gameClock.now() + 60000
   const startY = Math.floor(bot.entity.position.y)
   // Depth is how far the body actually fell, not how many times we swung:
   // gravel and sand pour straight back into the shaft, so a counted swing can
@@ -173,7 +174,7 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
   // maxSwings — refuge: яма, которая не углубляется, под зомби — 9 взмахов (~9 с)
   // стоят жизни (H); два лишних — и хватит.
   const swingCap = maxSwings || want * 3
-  while (depthNow() < want && swings < swingCap && !ctl.aborted && Date.now() < deadline) {
+  while (depthNow() < want && swings < swingCap && !ctl.aborted && gameClock.now() < deadline) {
     // center (refuge): тело, сдвинутое к краю клетки (толкнул моб), стоит и на
     // соседнем блоке — вырытый под floored-клеткой не роняет его, и яма «не
     // углубляется» (I: 5 взмахов впустую под зомби). В центр — до и после взмаха.
@@ -185,7 +186,7 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
   }
   if (!stopped && depthNow() < want) {
     if (ctl.aborted) stopped = 'прервано'
-    else if (Date.now() >= deadline) stopped = 'время вышло'
+    else if (gameClock.now() >= deadline) stopped = 'время вышло'
     else stopped = 'яма не углубляется — сверху осыпается'
   }
 
@@ -219,7 +220,7 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
   // retries at the same spot can fix. One more block down and the roof lands
   // between the walls of the shaft — and the block it is made of is the one we
   // just dug, so this also answers "нечем строить".
-  if (!seal.ok && dug < 3 && !stopped && !ctl.aborted && Date.now() < deadline) {
+  if (!seal.ok && dug < 3 && !stopped && !ctl.aborted && gameClock.now() < deadline) {
     const step = await sinkOne(bot, mcData)
     if (step.stopped) stopped = step.stopped
     if (depthNow() > dug) {
@@ -312,14 +313,14 @@ function armShelterGuard (session) {
   const inside = () => bot.entity && bot.entity.position.floored().equals(feet)
 
   const tell = (type, extra) => {
-    const now = Date.now()
+    const now = gameClock.now()
     if (type === 'shelter_patched' && now - guard.lastSaid < 15000) return
     guard.lastSaid = now
     session.bus.emit(type, { patched: guard.patched, ...extra })
   }
 
   const patch = async (pos) => {
-    if (guard.busy) { setTimeout(() => patch(pos), 150); return }
+    if (guard.busy) { gameClock.setTimeout(() => patch(pos), 150); return }
     guard.busy = true
     try {
       const b = bot.blockAt(pos)
@@ -357,11 +358,11 @@ function armShelterGuard (session) {
   const disarm = () => {
     bot.removeListener('blockUpdate', onUpdate)
     bot.removeListener('death', disarm)
-    clearInterval(leave)
+    gameClock.clearInterval(leave)
     if (session.shelterGuard === guard) session.shelterGuard = null
   }
   // Вылез сам — караул снят. Раз в секунду, а не по каждому движению.
-  const leave = setInterval(() => { if (!inside()) disarm() }, 1000)
+  const leave = gameClock.setInterval(() => { if (!inside()) disarm() }, 1000)
   if (leave.unref) leave.unref()
 
   guard.disarm = disarm
@@ -412,12 +413,12 @@ async function exitShelter (session, ctl, { depth }) {
   // fell in on top of us while we sat there.
   const limit = clampDepth(depth) + 2
   const from = bot.entity.position.y
-  const deadline = Date.now() + 60000
+  const deadline = gameClock.now() + 60000
   let stopped = null
 
   ctl.onAbort.push(() => { try { bot.clearControlStates() } catch {} })
 
-  for (let i = 0; i < limit && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; i < limit && !ctl.aborted && gameClock.now() < deadline; i++) {
     if (canStepOut(bot)) break
     const was = bot.entity.position.y
     const r = await digUp(bot, ctl, { blocks: 1, mcData: session.mcData, tower: true })
@@ -597,21 +598,21 @@ async function hopOnto (bot, ctl, e, until) {
   const gap = () => e.position.distanceTo(bot.entity.position)
   let best = gap()
   let anchor = bot.entity.position.clone()
-  let movedAt = Date.now()
+  let movedAt = gameClock.now()
   let tick = null
   // A witness on state, polled: whether the stack still exists, how far it is
   // and whether the body is going anywhere. The alternative — waiting for goto
   // to say something — is the hang.
   const watch = new Promise(resolve => {
-    tick = setInterval(() => {
+    tick = gameClock.setInterval(() => {
       if (ctl.aborted) return resolve('прервано')
       if (e.isValid === false) return resolve('взял')
       const d = gap()
-      if (d < best - 0.5) { best = d; movedAt = Date.now() }
+      if (d < best - 0.5) { best = d; movedAt = gameClock.now() }
       // 0.6 is movement.stuckGuard's threshold for «moved at all».
-      if (bot.entity.position.distanceTo(anchor) > 0.6) { anchor = bot.entity.position.clone(); movedAt = Date.now() }
-      if (Date.now() - movedAt >= SWEEP_STALL_MS) return resolve('встал')
-      if (Date.now() >= until) return resolve('время')
+      if (bot.entity.position.distanceTo(anchor) > 0.6) { anchor = bot.entity.position.clone(); movedAt = gameClock.now() }
+      if (gameClock.now() - movedAt >= SWEEP_STALL_MS) return resolve('встал')
+      if (gameClock.now() >= until) return resolve('время')
     }, 200)
   })
   // A resolved goto is not arrival either: lib/goto.js resolves on ANY
@@ -623,7 +624,7 @@ async function hopOnto (bot, ctl, e, until) {
     .then(() => (e.isValid === false ? 'взял' : gap() <= 2 ? 'дошёл' : 'нет пути'),
       err => `нет пути${err && err.message ? ': ' + err.message : ''}`)
   const how = await Promise.race([walk, watch])
-  clearInterval(tick)
+  gameClock.clearInterval(tick)
   // Always, whoever won. A goto that lost the race is still steering; one that
   // «resolved» on an empty path leaves its goal set, and pathfinder re-plans a
   // live goal on the next block update — the body would walk off after a stack
@@ -650,10 +651,10 @@ async function sweepDrops (bot, ctl, { radius, until, tried }) {
     if (ctl.aborted) { out.ended = 'прервано'; break }
     const waiting = lying().filter(e => pile.has(e.id))
     if (!waiting.length) break
-    if (Date.now() >= until) { out.ended = 'срок'; out.unvisited = waiting.length; break }
+    if (gameClock.now() >= until) { out.ended = 'срок'; out.unvisited = waiting.length; break }
     const next = waiting[0]
     tried.add(next.id)
-    const how = await hopOnto(bot, ctl, next, Math.min(until, Date.now() + SWEEP_HOP_MS))
+    const how = await hopOnto(bot, ctl, next, Math.min(until, gameClock.now() + SWEEP_HOP_MS))
     if (ctl.aborted) { out.ended = 'прервано'; break }
     if (how === 'дошёл') await sleep(350) // the collect packet trails the arrival by a tick or two
     if (how === 'дошёл' || how === 'взял') out.walked++
@@ -666,7 +667,7 @@ async function sweepDrops (bot, ctl, { radius, until, tried }) {
     // top of the loop counts it as unvisited — «за 8 с не дошёл» about a hop cut
     // at three seconds would be false, and a ledger entry for it would make the
     // advised repeat skip a stack nobody tried.
-    if (how === 'время' && Date.now() >= until) { tried.delete(next.id); continue }
+    if (how === 'время' && gameClock.now() >= until) { tried.delete(next.id); continue }
     out.left.push({ ent: next, what: stackLabel(next), at: xyz(next.position), why: how })
   }
   return out
@@ -736,7 +737,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   if (!Number.isFinite(target.y)) target.y = Math.floor(bot.entity.position.y)
 
   const died = diedAt ? Date.parse(diedAt) : NaN
-  const ageSeconds = Number.isFinite(died) ? Math.round((Date.now() - died) / 1000) : null
+  const ageSeconds = Number.isFinite(died) ? Math.round((gameClock.wall.now() - died) / 1000) : null
   const ageMinutes = ageSeconds === null ? null : Math.round(ageSeconds / 60)
   // Explicit coordinates carry no clock — a stash the brain dropped on purpose
   // is not a death — so there the despawn arithmetic has nothing to say and
@@ -747,7 +748,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   const leftSeconds = ageSeconds === null ? null : DESPAWN_MINUTES * 60 - (ticked ?? ageSeconds)
 
   const budgetSeconds = Math.max(15, Math.min(280, Number(timeoutSeconds) || 90))
-  const deadline = Date.now() + budgetSeconds * 1000
+  const deadline = gameClock.now() + budgetSeconds * 1000
   // Same reason clampDepth guards against null: a null radius sails through the
   // default and turns every `distanceTo <= radius` into false, so the bot walks
   // to the pile and picks up nothing at all.
@@ -837,7 +838,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   // Keep the last twenty seconds back for the pickup itself: arriving with an
   // empty budget is the same as not arriving, and the walk will happily eat
   // everything it is given — including the digging.
-  const walkUntil = Math.max(Date.now() + 5000, deadline - PICKUP_RESERVE_MS - digSeconds * 1000)
+  const walkUntil = Math.max(gameClock.now() + 5000, deadline - PICKUP_RESERVE_MS - digSeconds * 1000)
   const trip = await travelXZ(bot, ctl, plan.from.x, plan.from.z, { range: 2, retries: 1, deadline: walkUntil })
   const offStart = () => Math.round(Math.hypot(bot.entity.position.x - plan.from.x, bot.entity.position.z - plan.from.z))
 
@@ -852,7 +853,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
     // second death and the second pile.
     health = `здоровья ${Math.round(bot.health ?? 20)} — вниз за вещами не полезу`
   } else if (plan.down >= 2 && !ctl.aborted && (trip.ok || offStart() <= 4)) {
-    const left = Math.round((deadline - PICKUP_RESERVE_MS - Date.now()) / 1000)
+    const left = Math.round((deadline - PICKUP_RESERVE_MS - gameClock.now()) / 1000)
     // The depth is read again at the head of the staircase: the plan was drawn
     // from wherever the body stood when the tool was called, and two hundred
     // blocks of terrain later that height is a different one.
@@ -861,7 +862,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
       // Timed here rather than trusted from the estimate. SECONDS_PER_LEVEL is
       // the number the whole refusal turns on and the only way it ever gets
       // better is a run reporting what a level actually cost.
-      const began = Date.now()
+      const began = gameClock.now()
       // A cave on the way down is priced the way mc_dig_down prices it and paid
       // only on the brain's word. Until 2026-09-15 this staircase took a
       // four-block drop for a point without asking anyone; now it stops there,
@@ -874,7 +875,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
         depth: drop, direction: plan.direction, torchEvery: 8, timeoutSeconds: left,
         maxFallHp, call: reach === 6 ? again : `${again} radius=${reach}`
       })
-      road.digActual = Math.round((Date.now() - began) / 1000)
+      road.digActual = Math.round((gameClock.now() - began) / 1000)
       road.levels = drop
     }
   }
@@ -894,11 +895,11 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   // was not the height the plan assumed, or the leg stopped on water. The last
   // few blocks underground are the one thing pathfinder with a pickaxe is
   // genuinely good at.
-  if (stairs && !ledged && !ctl.aborted && away() > 2 && Date.now() < deadline - 12000) {
+  if (stairs && !ledged && !ctl.aborted && away() > 2 && gameClock.now() < deadline - 12000) {
     // Ends ten seconds before the deadline, not five: the sweep still has to
     // happen after it, and a leg that finishes exactly on the line leaves the
     // pickup — the entire point of the trip — outside the budget.
-    const leg = Math.min(deadline - 10000, Date.now() + 12000)
+    const leg = Math.min(deadline - 10000, gameClock.now() + 12000)
     await travelXZ(bot, ctl, target.x, target.z, { range: 2, retries: 0, deadline: leg })
   }
 
@@ -928,7 +929,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   for (const [id, rec] of ledger) {
     const e = bot.entities[id]
     const stale = !e || !isDrop(e) || e.isValid === false ||
-      spot(e.position.floored()) !== rec.cell || Date.now() - rec.t > WRITTEN_OFF_MS
+      spot(e.position.floored()) !== rec.cell || gameClock.now() - rec.t > WRITTEN_OFF_MS
     if (stale) { ledger.delete(id); continue }
     tried.add(id)
     carried.push({ ent: e, rec })
@@ -955,12 +956,12 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   // answer every hop by tunnelling three blocks into the wall.
   if (arrived && !stairs) {
     for (const [dx, dz] of AROUND) {
-      if (ctl.aborted || Date.now() >= deadline - 12000) break
+      if (ctl.aborted || gameClock.now() >= deadline - 12000) break
       if (hurt()) { health = `здоровья ${Math.round(bot.health ?? 20)} — дальше по куче не хожу`; break }
       // travelXZ hands a single leg the whole remaining budget, and pathfinder
       // will spend all of it circling three blocks it cannot cross. A sweep hop
       // is worth ten seconds and not one more.
-      const leg = Math.min(deadline - 6000, Date.now() + 8000)
+      const leg = Math.min(deadline - 6000, gameClock.now() + 8000)
       await travelXZ(bot, ctl, target.x + dx, target.z + dz, { range: 1, retries: 0, deadline: leg })
       await gather()
       guard = guard || nearestHostile(bot, 8)
@@ -1070,7 +1071,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
       ' — стак подбирается сам, когда встаю на его клетку')
   }
   if (arrived && skipped.length) {
-    const wait = Math.max(...skipped.map(c => Math.ceil((WRITTEN_OFF_MS - (Date.now() - c.rec.t)) / 1000)))
+    const wait = Math.max(...skipped.map(c => Math.ceil((WRITTEN_OFF_MS - (gameClock.now() - c.rec.t)) / 1000)))
     const shown = skipped.slice(0, 3).map(c => {
       const p = xyz(c.ent.position)
       return `${c.rec.what} — mc_goto ${p.x} ${p.y} ${p.z} (${leftWhy(c.rec.why)})`
@@ -1101,7 +1102,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   // Written off by this call, stamped at its end. Skipped stacks keep their old
   // stamp: a call that did not try a stack does not buy it more time off.
   for (const l of lost) {
-    ledger.set(l.ent.id, { cell: spot(l.ent.position.floored()), what: l.what, why: l.why, t: Date.now() })
+    ledger.set(l.ent.id, { cell: spot(l.ent.position.floored()), what: l.what, why: l.why, t: gameClock.now() })
   }
 
   const spoils = Object.entries(gained).map(([k, v]) => `${k}×${v}`).join(', ')
@@ -1373,7 +1374,7 @@ function levelWord (n) {
 // Levels one call can realistically deliver: never more than the climb has
 // left, never less than one, and otherwise whatever the clock allows.
 function legLevels (deadline, wantY, y) {
-  const byClock = Math.max(1, Math.floor(Math.max(0, deadline - Date.now()) / 1000 / SECONDS_PER_CLIMB_LEVEL))
+  const byClock = Math.max(1, Math.floor(Math.max(0, deadline - gameClock.now()) / 1000 / SECONDS_PER_CLIMB_LEVEL))
   // No targetY means the depth is unknown, and guessing it high here would
   // stop a three-block climb to craft a pickaxe it does not need.
   if (wantY === null) return 1
@@ -1569,7 +1570,7 @@ async function buildColumn (bot, cell, height, deadline) {
     // of six faces. Skip the square it is standing in and say so.
     const squatter = occupiedByEntity(bot, at)
     if (squatter) { why.push(`в клетке ${squatter}`); continue }
-    const left = deadline - Date.now()
+    const left = deadline - gameClock.now()
     if (left <= 0) { why.push('время на стену вышло'); break }
     const r = await putBlock(bot, at, left)
     if (r.ok) { placed++; cells.push(at); if (r.late) late++ } else {
@@ -1598,7 +1599,7 @@ function wallRecord (bot, wall, mob, built, began) {
   // Said out loud because it is the number that decides whether the leash is
   // too short or the server is saying no, and only a run can tell us.
   if (built.late) wall.late = built.late
-  wall.seconds = Math.round((Date.now() - began) / 100) / 10
+  wall.seconds = Math.round((gameClock.now() - began) / 100) / 10
   wall.from = Math.round(mob.dist)
   return { ok: true, wall }
 }
@@ -1609,7 +1610,7 @@ function wallRecord (bot, wall, mob, built, began) {
 async function sealDrift (session, ctl, mob, shape, deadline) {
   const bot = session.bot
   const cell = bot.entity.position.floored().offset(shape.step.dx, 0, shape.step.dz)
-  const began = Date.now()
+  const began = gameClock.now()
   const built = await buildColumn(bot, cell, shape.headroom, deadline)
   const wall = { cell, height: shape.headroom, step: shape.step, who: mob.who.name, id: mob.who.id, kind: 'штрек' }
   // Solid is not the same as safe — mining.sealOff learned this the same way:
@@ -1658,12 +1659,12 @@ async function screenOff (session, ctl, mob, deadline) {
     ? { dx: dx >= 0 ? 1 : -1, dz: 0 }
     : { dx: 0, dz: dz >= 0 ? 1 : -1 }
 
-  const began = Date.now()
+  const began = gameClock.now()
   const total = { placed: 0, late: 0, refused: 0, already: 0, why: [], cells: [] }
   let last = null
   for (const d of [1, 2]) {
     if (ctl && ctl.aborted) break
-    if (Date.now() >= deadline) { total.why.push('время на стену вышло'); break }
+    if (gameClock.now() >= deadline) { total.why.push('время на стену вышло'); break }
     const cell = feet.offset(step.dx * d, 0, step.dz * d)
     // The id rides along so the climb can tell, later in the same call, that
     // the thing now at contact is the one this screen was built against.
@@ -1809,7 +1810,7 @@ async function wallOff (session, ctl, mob) {
     return { ok: false, why: `он вплотную (${Math.round(mob.dist)} бл.) — в занятую им клетку блок не встанет, тут сначала бой (mc_fight) или уход` }
   }
 
-  const deadline = Date.now() + WALL_BUDGET_MS
+  const deadline = gameClock.now() + WALL_BUDGET_MS
   const shape = corridorShape(bot, eye)
   let first = null
   // What both shapes did with their cells, summed, because the verdict below
@@ -1919,7 +1920,7 @@ async function breakAt (bot, mcData, ctl, pos, deadline) {
   let last = null
   for (let tries = 0; tries < 6; tries++) {
     if (ctl.aborted) return { dug, reason: 'прервано' }
-    if (Date.now() >= deadline) return { dug, reason: 'время вышло в забое' }
+    if (gameClock.now() >= deadline) return { dug, reason: 'время вышло в забое' }
 
     const b = bot.blockAt(pos)
     if (!b) return { dug, reason: `мир на ${spot(pos)} не прогружен` }
@@ -1958,12 +1959,12 @@ async function breakAt (bot, mcData, ctl, pos, deadline) {
 // by itself and a step is a whole one.
 async function stepUpInto (bot, ctl, cell) {
   const centre = cell.offset(0.5, 0, 0.5)
-  const until = Date.now() + 3000
+  const until = gameClock.now() + 3000
   try {
     await bot.lookAt(centre.offset(0, 1.6, 0), true)
     bot.setControlState('forward', true)
     bot.setControlState('jump', true)
-    while (Date.now() < until && !ctl.aborted) {
+    while (gameClock.now() < until && !ctl.aborted) {
       if (bot.entity.position.y >= cell.y && flat(bot.entity.position, centre) < 0.35) break
       await sleep(60)
     }
@@ -2064,7 +2065,7 @@ async function stairStep (bot, mcData, ctl, feet, dir, deadline, guard = null) {
   // cheaper than giving this level to the pillar.
   for (let tries = 0; tries < 2; tries++) {
     if (ctl.aborted) return { dug, reason: 'прервано' }
-    if (Date.now() >= deadline) return { dug, reason: 'время вышло на ступеньке' }
+    if (gameClock.now() >= deadline) return { dug, reason: 'время вышло на ступеньке' }
     if (await stepUpInto(bot, ctl, stand)) return { ok: true, dug }
   }
   return { dug, reason: `не смог шагнуть на ${spot(stand)}` }
@@ -2091,7 +2092,7 @@ async function sideStep (bot, mcData, ctl, deadline, away) {
   // escape, and one that walks back is how a bot paces between two squares.
   const order = SIDES.slice().sort((a, b) => flat(feet.plus(b), away) - flat(feet.plus(a), away))
   for (const d of order) {
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     const to = feet.plus(d)
     if (flat(to, away) <= flat(feet, away)) continue
     // The height has to survive the move: this is a detour, not a descent, and
@@ -2260,10 +2261,10 @@ async function outOfWater (bot, ctl, deadline) {
   // The roof directly overhead says nothing about the adjacent water column.
   const route = findSwimRoute(bot)
   if (route) {
-    const swim = await escapeWater(bot, ctl, { timeoutMs: Math.min(12000, Math.max(0, deadline - Date.now())) })
+    const swim = await escapeWater(bot, ctl, { timeoutMs: Math.min(12000, Math.max(0, deadline - gameClock.now())) })
     if (swim.ok) return { ok: true, how: 'выплыл на берег', plugged, swam: Math.max(0, Math.round(bot.entity.position.y - feet.y)), to: swim.target }
     tried.push(swim.error)
-    if (ctl.aborted || Date.now() >= deadline) return { ok: false, plugged, tried }
+    if (ctl.aborted || gameClock.now() >= deadline) return { ok: false, plugged, tried }
   }
 
   // 1. Shut what is coming in. Keeps the staircase, costs a block a leak, and is
@@ -2277,19 +2278,19 @@ async function outOfWater (bot, ctl, deadline) {
     tried.push(`заткнуть ${spot(inflow[0].position)} нечем — в сумке ни одного блока`)
   } else {
     for (const b of inflow) {
-      if (ctl.aborted || Date.now() >= deadline) break
+      if (ctl.aborted || gameClock.now() >= deadline) break
       const r = await placeBlockAt(bot, b.position, { timeoutMs: PLUG_MS })
       if (r.ok && !r.already) plugged.push(xyz(b.position))
       else if (!r.ok) tried.push(`заткнуть ${spot(b.position)} не вышло: ${r.reason}`)
     }
     if (plugged.length) {
-      const until = Math.min(deadline, Date.now() + DRAIN_MS)
-      while (Date.now() < until && !ctl.aborted && inWater(bot)) await sleep(100)
+      const until = Math.min(deadline, gameClock.now() + DRAIN_MS)
+      while (gameClock.now() < until && !ctl.aborted && inWater(bot)) await sleep(100)
       if (!inWater(bot)) return { ok: true, how: 'заткнул', plugged }
       tried.push(`заткнул ${plugged.map(spot).join(', ')}, а вода за ${DRAIN_MS / 1000} с не сошла`)
     }
   }
-  if (ctl.aborted || Date.now() >= deadline) return { ok: false, plugged, tried }
+  if (ctl.aborted || gameClock.now() >= deadline) return { ok: false, plugged, tried }
 
   // 2. Up, when all that is over the head is water and then air.
   let swam = 0
@@ -2300,14 +2301,14 @@ async function outOfWater (bot, ctl, deadline) {
     else if (col.unread) tried.push(`над головой мир на ${spot(col.unread)} не прогружен — всплывать вслепую не стану`)
     else {
       const y0 = bot.entity.position.y
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       try {
         bot.setControlState('jump', true)
         const until = Math.min(deadline, t0 + SWIM_MS_PER_BLOCK * Math.max(1, col.water) + 1500)
-        while (Date.now() < until && !ctl.aborted && eyeWet(bot)) await sleep(80)
+        while (gameClock.now() < until && !ctl.aborted && eyeWet(bot)) await sleep(80)
         swam = Math.max(0, Math.round(bot.entity.position.y - y0))
         if (eyeWet(bot)) {
-          tried.push(`всплывал ${Math.round((Date.now() - t0) / 100) / 10} с к воздуху на ${spot(col.air)} (воды ${col.water} бл.) и не вынырнул`)
+          tried.push(`всплывал ${Math.round((gameClock.now() - t0) / 100) / 10} с к воздуху на ${spot(col.air)} (воды ${col.water} бл.) и не вынырнул`)
         } else {
           // Eyes out is not yet feet high enough to step: a body holding jump
           // keeps rising until only its ankles are under, and the ledge beside a
@@ -2319,12 +2320,12 @@ async function outOfWater (bot, ctl, deadline) {
           // straight back under, so the step has to come from inside the swim.
           let to = null
           let top = bot.entity.position.y
-          let stall = Date.now()
-          while (!ctl.aborted && Date.now() < deadline && Date.now() - stall < 500) {
+          let stall = gameClock.now()
+          while (!ctl.aborted && gameClock.now() < deadline && gameClock.now() - stall < 500) {
             to = dryStep(bot, bot.entity.position.floored())
             if (to) break
             await sleep(80)
-            if (bot.entity.position.y > top + 0.05) { top = bot.entity.position.y; stall = Date.now() }
+            if (bot.entity.position.y > top + 0.05) { top = bot.entity.position.y; stall = gameClock.now() }
           }
           swam = Math.max(0, Math.round(bot.entity.position.y - y0))
           if (to && await stepUpInto(bot, ctl, to)) return { ok: true, how: 'всплыл и вышел', plugged, swam, to: xyz(to) }
@@ -2335,7 +2336,7 @@ async function outOfWater (bot, ctl, deadline) {
       }
     }
   }
-  if (ctl.aborted || Date.now() >= deadline) return { ok: false, plugged, swam, tried }
+  if (ctl.aborted || gameClock.now() >= deadline) return { ok: false, plugged, swam, tried }
 
   // 3. Aside onto something dry. The water may follow into the square just left;
   //    the next move then finds that square among the feeders and shuts it.
@@ -2388,7 +2389,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
   const wantY = targetY === null || targetY === undefined ? null : Math.round(Number(targetY))
   if (wantY !== null && !Number.isFinite(wantY)) throw new Error(`это не высота: ${targetY}`)
   const budgetSeconds = Math.max(10, Math.min(600, Math.round(Number(timeoutSeconds)) || 240))
-  const deadline = Date.now() + budgetSeconds * 1000
+  const deadline = gameClock.now() + budgetSeconds * 1000
 
   const from = xyz(bot.entity.position)
   const startY = bot.entity.position.y
@@ -2587,7 +2588,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
   // and then arrived() ends the loop on the next turn, or spends one of WET_LIMIT.
   for (let level = 0; level < 400 && (!arrived() || inWater(bot)); level++) {
     if (ctl.aborted) { stopped = 'прервано'; break }
-    if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
 
     // Ahead of health, ahead of the pickaxe and ahead of the mob — and this
     // order is the whole of the fix. Measured: on the поход the body stopped in
@@ -2614,7 +2615,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
       swum += w.swam || 0
       if (w.ok) continue
       if (ctl.aborted) { stopped = 'прервано'; break }
-      if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
       stopped = waterStop(bot, w.tried)
       break
     }
@@ -2692,7 +2693,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
       dug += up.dug
       if (bot.entity.position.y - was >= 0.9) { pillar++; wetRun = 0; continue }
       if (ctl.aborted) { stopped = 'прервано'; break }
-      if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
     }
     // Stick to the direction that worked last time: a staircase that changes
     // its mind every level is a spiral nobody can walk back down. Minus the
@@ -2714,7 +2715,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
     let intruder = null
 
     for (const d of order) {
-      if (ctl.aborted || Date.now() >= deadline) break
+      if (ctl.aborted || gameClock.now() >= deadline) break
       // The body is read again for every direction. A step that failed held
       // `forward` for three seconds and can leave the feet a square over;
       // cutting the next attempt from where we stood before it would put the
@@ -2740,7 +2741,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
     // Four directions of swinging can eat the rest of the budget on their own,
     // and the pillar below would then spend it twice over.
     if (ctl.aborted) { stopped = 'прервано'; break }
-    if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
 
     // Nowhere to cut a step. The pillar costs a block a level and any hit
     // knocks the body off the one block it just placed, which is exactly why it
@@ -2833,7 +2834,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
   const pickaxe = Number.isFinite(swings)
     ? {
         left: Math.round(swings),
-        leg: Math.ceil(legLevels(Date.now() + budgetSeconds * 1000, wantY, nowY) * estimate + (estimate === 1 ? 1 : 0)),
+        leg: Math.ceil(legLevels(gameClock.now() + budgetSeconds * 1000, wantY, nowY) * estimate + (estimate === 1 ? 1 : 0)),
         // Swings are what the tool has; levels are what the brain plans in.
         // The division was being done in prose in one branch of the note and
         // nowhere else, so the one number the refusal turns on never left the
@@ -3173,7 +3174,7 @@ function grounded (bot) {
 // Оценка места, без хода и без ожиданий. Всё, что нужно выбору (chooseRefuge).
 function refugeLook (session, { radius = 16 } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const fortify = require('./fortify')
   const flee = require('./flee')
   const assess = require('./assess')
@@ -3235,7 +3236,7 @@ function refugeLook (session, { radius = 16 } = {}) {
       if (np) a.niche = { side: np.side, cell: np.cell, digMs: np.digMs, ms: np.digMs + 300 + 2 * 180 + 300 }
     } catch {}
   }
-  a.ms = Date.now() - t0
+  a.ms = gameClock.now() - t0
   return a
 }
 const nicheOn = () => process.env.ND_REFUGE_NICHE !== '0'
@@ -3368,7 +3369,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
     holdMouth(session, ctl)
     const hp = bot.health ?? 0
     if (hp <= 0) { st.why = 'died'; break }
-    if (hp < lastHp) { hurtAt = Date.now(); hurtTimes.push(hurtAt) }
+    if (hp < lastHp) { hurtAt = gameClock.now(); hurtTimes.push(hurtAt) }
     lastHp = hp
     if (hp >= minHp) {
       // Вылечился — доесть до 18 перед выходом, если есть что: снаружи бой.
@@ -3379,13 +3380,13 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
       st.why = 'healed'
       break
     }
-    if (Date.now() >= deadline) { st.why = 'timeout'; break }
+    if (gameClock.now() >= deadline) { st.why = 'timeout'; break }
     // Стены. Нору латает её караул (armShelterGuard); коробку — здесь.
     if (kind === 'box' && box) {
       const enc = fortify.enclosure(bot, box.cell)
-      if (!enc.sealed && Date.now() - lastPatch > 400) {
+      if (!enc.sealed && gameClock.now() - lastPatch > 400) {
         st.breaches++
-        lastPatch = Date.now()
+        lastPatch = gameClock.now()
         const n = await fortify.refugePatch(bot, box, { ctl })
         st.patched += n
         if (!n && !st.noFill && !require('./build').pickFiller(bot, { steady: true })) { st.noFill = true; note('латать нечем — коробка открыта') }
@@ -3394,11 +3395,11 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
     // Бьют внутри закрытого укрытия — кто-то внутри или рядом с дырой, которую
     // не заложить: сидеть дальше значит умереть на месте.
     const closeFoe = flee.hostilesAround(bot, 3).find(h => !REFUGE_NEUTRAL.test(h.e.name) && h.d < 2.2)
-    if (Date.now() - hurtAt < 700 && closeFoe && kind !== 'open') {
+    if (gameClock.now() - hurtAt < 700 && closeFoe && kind !== 'open') {
       const sealedNow = kind === 'box' && box ? fortify.enclosure(bot, box.cell).sealed : true
       // Один удар в закрытой коробке — это чаще стрела, пущенная до крыши (E:
       // «вскрыли» при целой коробке): вскрыли — если бьют снова за 3 с.
-      const again = hurtTimes.filter(t => Date.now() - t < 3000).length >= 2
+      const again = hurtTimes.filter(t => gameClock.now() - t < 3000).length >= 2
       if ((sealedNow && again) || st.breaches >= 6) { st.why = 'breached'; st.by = closeFoe.e.name; break }
     }
     // На столбе: достают — стрелок видит или бьют — слезать и бежать.
@@ -3406,7 +3407,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
       if (topY !== null && bot.entity.position.y < topY - 0.6 && !st.fell) { st.fell = true; note(`со столба упал: ноги y${bot.entity.position.y.toFixed(1)} при верхе ${topY}`) }
       const shot = flee.hostilesAround(bot, 16).some(h => !REFUGE_NEUTRAL.test(h.e.name) && h.doc.range && h.d <= h.doc.range && require('./assess').inSight(bot, h.e))
       if (shot) { st.why = 'breached'; break }
-      if (Date.now() - hurtAt < 700) {
+      if (gameClock.now() - hurtAt < 700) {
         // Достают снизу — выше, пока есть блоки (до +2), и только потом слезать.
         if ((st.raised || 0) < 2 && require('./pack').buildCount(bot, worlds.worldOf(bot)) > 0) {
           let r = null
@@ -3437,7 +3438,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
 
 async function refuge (session, ctl, p = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) && v !== null && v !== '' ? Math.max(lo, Math.min(hi, n)) : d }
   const minHp = num(p.minHp, 16, 6, 20)
   const maxMs = num(p.maxSeconds, 120, 10, 300) * 1000
@@ -3453,7 +3454,7 @@ async function refuge (session, ctl, p = {}) {
   // крыша коробки над головой): ночью «укрытие → вниз работать», а не выход к тем, от кого прятался.
   if (p.stayIn) out.stayIn = true
   // Шаг — с секундой от начала отхода: где ушло время (рывок, стройка, еда).
-  const step = s => { out.steps.push(`${((Date.now() - t0) / 1000).toFixed(1)}с ${s}`) }
+  const step = s => { out.steps.push(`${((gameClock.now() - t0) / 1000).toFixed(1)}с ${s}`) }
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} try { bot.clearControlStates() } catch {} })
   try { if (typeof session.updateMovements === 'function') session.updateMovements() } catch {}
 
@@ -3466,7 +3467,7 @@ async function refuge (session, ctl, p = {}) {
     const src = pk.sourceCauseId > 0 && bot.entities ? bot.entities[pk.sourceCauseId - 1] : null
     // Откуда бил: смещение моба от нас (разбор «достают на столбе»).
     const off = src && src.position ? ` @${(src.position.x - bot.entity.position.x).toFixed(1)},${(src.position.y - bot.entity.position.y).toFixed(1)},${(src.position.z - bot.entity.position.z).toFixed(1)}` : ''
-    hurts.push(`${((Date.now() - t0) / 1000).toFixed(1)}с ${type || pk.sourceTypeId}${src ? ' ' + (src.username || src.name) : ''}${off} y${bot.entity.position.y.toFixed(1)}${bot.entity.onGround ? '' : ' в воздухе'}`)
+    hurts.push(`${((gameClock.now() - t0) / 1000).toFixed(1)}с ${type || pk.sourceTypeId}${src ? ' ' + (src.username || src.name) : ''}${off} y${bot.entity.position.y.toFixed(1)}${bot.entity.onGround ? '' : ' в воздухе'}`)
   }
   try { bot._client.on('damage_event', onHurt) } catch {}
   ctl.onAbort.push(() => { try { bot._client.removeListener('damage_event', onHurt) } catch {} })
@@ -3483,7 +3484,7 @@ async function refuge (session, ctl, p = {}) {
       out.hp = hp
       out.healed = hp >= minHp
       out.dry = !inWater(bot)
-      out.seconds = Math.round((Date.now() - t0) / 100) / 10
+      out.seconds = Math.round((gameClock.now() - t0) / 100) / 10
       if (hurts.length) out.hurts = hurts
       if (hp <= 0 || out.diedInside()) { out.code = 'DIED'; out.healed = false }
       out.note = `берег: ${out.dry ? 'на суше' : 'в воде'}, хп ${out.hp0} → ${hp}, ${out.seconds} с`
@@ -3641,7 +3642,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       }
       // Вскрыли — не ждать у дыры, выходить с дальней стороны.
       if (hold.why !== 'breached' && require('./fortify').enclosure(bot, b.cell).sealed) {
-        const clear = await waitClear(session, ctl, b.cell, { deadline: Math.min(deadline + 20000, Date.now() + 30000), reach: 4, step })
+        const clear = await waitClear(session, ctl, b.cell, { deadline: Math.min(deadline + 20000, gameClock.now() + 30000), reach: 4, step })
         // Срок вышел и хп полное — не повод вскрывать целую коробку к толпе (как у норы ниже; Codex ne-deaths №4:
         // VR25-3 — вышел к 10 ифритам, VR26-1 — к эндерменам). Дальше — вниз/вбок из коробки, как stayIn.
         if (!clear && sitOn() && !ctl.aborted && (bot.health ?? 0) > 0 && require('./fortify').enclosure(bot, b.cell).sealed) {
@@ -3676,7 +3677,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       // (smoke 30.09: из норы на 16 хп вылез к зомби и умер). Ждать, пока отойдут
       // (без прямой видимости цель теряют за 3 с, NearestAttackableTargetGoal).
       const top = bot.entity.position.floored().offset(0, h.depth, 0)
-      const clear = await waitClear(session, ctl, top, { deadline: Math.min(deadline + 30000, Date.now() + 30000), reach: 4, step })
+      const clear = await waitClear(session, ctl, top, { deadline: Math.min(deadline + 30000, gameClock.now() + 30000), reach: 4, step })
       // Не ушли от края — наверх не лезть (ND_REFUGE_SIT): pool1 02.10 слот 18 — нора в штреке, «у выхода ждал 30 с —
       // не ушли, выхожу» → вылез к трём зомби, «прижали» → бой → смерть. Нора закрыта сверху, работа — отсюда, вниз и вбок
       // (лесенка, штрек), к ним наверх ход не ведёт.
@@ -3703,8 +3704,8 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
     out.how = 'flee'
     if (pick.code) out.code = pick.code
     // Круги «оторваться — поесть»: зомби 2.3 бл/с, кусок 1.6 с — на круг один-два куска.
-    for (let k = 0; k < 10 && !ctl.aborted && Date.now() < deadline && (bot.health ?? 0) > 0; k++) {
-      const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(15000, Math.max(3000, deadline - Date.now())), safeDist: 16 })
+    for (let k = 0; k < 10 && !ctl.aborted && gameClock.now() < deadline && (bot.health ?? 0) > 0; k++) {
+      const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(15000, Math.max(3000, deadline - gameClock.now())), safeDist: 16 })
       out.ran = (out.ran || 0) + (f.ran || 0)
       step(`бегство: ${f.mode}`)
       if (f.cornered) { out.code = 'CORNERED'; break }
@@ -3730,7 +3731,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
   const hp = Math.round(bot.health ?? 0)
   out.hp = hp
   out.healed = hp >= minHp
-  out.seconds = Math.round((Date.now() - t0) / 100) / 10
+  out.seconds = Math.round((gameClock.now() - t0) / 100) / 10
   if (hold) {
     if (hold.ate.length) out.ate = hold.ate
     if (hold.patched) out.patched = hold.patched
@@ -3853,9 +3854,9 @@ async function takeBox (session, ctl, a, step) {
 async function stepTo (bot, ctl, cell, ms = 1500) {
   const fortify = require('./fortify')
   try { bot.pathfinder.setGoal(null) } catch {}
-  const until = Date.now() + ms
+  const until = gameClock.now() + ms
   try {
-    while (Date.now() < until && !ctl.aborted && !fortify.feetCell(bot).equals(cell)) {
+    while (gameClock.now() < until && !ctl.aborted && !fortify.feetCell(bot).equals(cell)) {
       const p = bot.entity.position
       const dx = cell.x + 0.5 - p.x
       const dz = cell.z + 0.5 - p.z
@@ -3950,7 +3951,7 @@ function openSkyOver (bot, at) {
 async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = false }) {
   const bot = session.bot
   const fortify = require('./fortify')
-  const s0 = Date.now()
+  const s0 = gameClock.now()
   let why = outsideDanger(bot, at, { untilDawn })
   if (!why) return { sat: 0 }
   step(`снаружи опасно (${why}) — сижу`)
@@ -3961,11 +3962,11 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
   const t = bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : 6000
   const night = t >= 12542 && t <= 23459 && worlds.worldOf(bot) === 'overworld'
   const nightSky = night && openSkyOver(bot, at)
-  const cap = (nightSky && ((bot.health ?? 0) < 12 || process.env.ND_REFUGE_SIT2 === '1')) || (night && untilDawn) ? SIT_CAP_MS : Math.min(SIT_CAP_MS, Date.now() - t0 + 180000)
-  while (!ctl.aborted && (bot.health ?? 0) > 0 && Date.now() - t0 < cap) {
+  const cap = (nightSky && ((bot.health ?? 0) < 12 || process.env.ND_REFUGE_SIT2 === '1')) || (night && untilDawn) ? SIT_CAP_MS : Math.min(SIT_CAP_MS, gameClock.now() - t0 + 180000)
+  while (!ctl.aborted && (bot.health ?? 0) > 0 && gameClock.now() - t0 < cap) {
     holdMouth(session, ctl)
-    if (box && Date.now() - lastPatch > 600 && !fortify.enclosure(bot, box.cell).sealed) {
-      lastPatch = Date.now()
+    if (box && gameClock.now() - lastPatch > 600 && !fortify.enclosure(bot, box.cell).sealed) {
+      lastPatch = gameClock.now()
       let n = 0
       try { n = await fortify.refugePatch(bot, box, { ctl }) } catch {}
       // Дыру не заложить (нечем, моб в клетке стены) — сидеть в открытой коробке незачем.
@@ -3973,13 +3974,13 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
     }
     await healStep(session, ctl, 20).catch(() => null)
     const w = outsideDanger(bot, at, { untilDawn })
-    if (w) { why = w; clearSince = 0 } else if (!clearSince) clearSince = Date.now()
+    if (w) { why = w; clearSince = 0 } else if (!clearSince) clearSince = gameClock.now()
     // Стихло 8 с подряд — выходить.
-    if (clearSince && Date.now() - clearSince >= 8000) break
+    if (clearSince && gameClock.now() - clearSince >= 8000) break
     await sleep(500)
   }
-  const sat = Date.now() - s0
-  step(`сидел ${Math.round(sat / 1000)} с${Date.now() - t0 >= cap ? ' — до предела' : ''}`)
+  const sat = gameClock.now() - s0
+  step(`сидел ${Math.round(sat / 1000)} с${gameClock.now() - t0 >= cap ? ' — до предела' : ''}`)
   return { sat, why }
 }
 
@@ -3988,19 +3989,19 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
 async function waitClear (session, ctl, at, { deadline, reach = 3, step }) {
   const bot = session.bot
   const flee = require('./flee')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const near = () => flee.hostilesAround(bot, 12).some(h => !REFUGE_NEUTRAL.test(h.e.name) && h.doc.radius > 0 &&
     Math.hypot(h.e.position.x - (at.x + 0.5), h.e.position.z - (at.z + 0.5)) <= reach &&
     h.e.position.y - at.y >= -1 && h.e.position.y - at.y <= 4)
   if (!near()) return true
-  while (!ctl.aborted && Date.now() < deadline && (bot.health ?? 0) > 0 && near()) {
+  while (!ctl.aborted && gameClock.now() < deadline && (bot.health ?? 0) > 0 && near()) {
     // Ждём сытыми: доесть, пока стоят.
     holdMouth(session, ctl)
     await healStep(session, ctl, 21).catch(() => null)
     await sleep(400)
   }
   const ok = !near()
-  if (step) step(`у выхода ждал ${Math.round((Date.now() - t0) / 1000)} с${ok ? '' : ' — не ушли, выхожу'}`)
+  if (step) step(`у выхода ждал ${Math.round((gameClock.now() - t0) / 1000)} с${ok ? '' : ' — не ушли, выхожу'}`)
   return ok
 }
 
@@ -4160,7 +4161,7 @@ function shoreRoute (bot, { radius = 16, rise = 6, drop = 4, foes = [] } = {}) {
 async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} } = {}) {
   const bot = session.bot
   const flee = require('./flee')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
   const stop = () => { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(k, false) }
   const dry = () => !inWater(bot) && bot.entity.onGround
@@ -4169,13 +4170,13 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} } = {
   let planAt = 0
   let target = null
   try {
-    while (!ctl.aborted && Date.now() - t0 < timeoutMs && (bot.health ?? 0) > 0 && !dry()) {
-      if (!route || Date.now() - planAt > 600) {
+    while (!ctl.aborted && gameClock.now() - t0 < timeoutMs && (bot.health ?? 0) > 0 && !dry()) {
+      if (!route || gameClock.now() - planAt > 600) {
         const foes = flee.hostilesAround(bot, 20).filter(h => !REFUGE_NEUTRAL.test(h.e.name)).map(h => h.e.position)
         // Ближнего берега нет — шире и выше (затопленная лесенка: сухие ступени выше 6 бл.; pool1 02.10 слот 16 — «берега в
         // 16 бл. не вижу» за 0.1 с, утопленник добил).
         route = shoreRoute(bot, { foes }) || shoreRoute(bot, { foes, radius: 24, rise: 14, drop: 8 })
-        planAt = Date.now()
+        planAt = gameClock.now()
         if (!route) { step('берега в 16 бл. не вижу'); break }
         if (!target || !target.equals(route.target)) { target = route.target; step(`к берегу ${target.x},${target.y},${target.z} (${route.path.length} кл.)`) }
       }
@@ -4205,10 +4206,10 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} } = {
       }
       if (n) {
         const yaw = Math.atan2(wx / n, wz / n) // прочь от середины воды
-        const until = Date.now() + 900
+        const until = gameClock.now() + 900
         await bot.look(yaw, 0, true).catch(() => {})
         const { stepSafe, keyDir } = require('./moves')
-        while (Date.now() < until && !ctl.aborted && (bot.health ?? 0) > 0) {
+        while (gameClock.now() < until && !ctl.aborted && (bot.health ?? 0) > 0) {
           const f = keyDir(bot, 'forward')
           set('forward', stepSafe(bot, f))
           set('sprint', (bot.food ?? 20) > 6)
@@ -4221,7 +4222,7 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} } = {
       }
     } catch {} finally { stop() }
   }
-  return { ok, seconds: Math.round((Date.now() - t0) / 100) / 10, target: target ? xyz(target) : null }
+  return { ok, seconds: Math.round((gameClock.now() - t0) / 100) / 10, target: target ? xyz(target) : null }
 }
 
 // Уход от крипера (автопилот, autopilot.creeperReflex): крипер шипит рядом или подошёл вплотную, а тело занято
@@ -4234,7 +4235,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
   const bot = session.bot
   const flee = require('./flee')
   const { stepSafe, keyDir } = require('./moves')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const hp0 = Math.round(bot.health ?? 0)
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
   const stop = () => { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(k, false) }
@@ -4267,12 +4268,12 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
   let lastPos = bot.entity.position.clone()
   let stuckSince = 0
   try {
-    while (!ctl.aborted && Date.now() - t0 < maxMs && (bot.health ?? 0) > 0) {
+    while (!ctl.aborted && gameClock.now() - t0 < maxMs && (bot.health ?? 0) > 0) {
       const c = creeper()
       if (!c) { dist = null; break }
       dist = c.position.distanceTo(bot.entity.position)
       if (dist >= minDist) break
-      const now = Date.now()
+      const now = gameClock.now()
       if (!plan || now >= replanAt) {
         plan = flee.pickDirection(bot, flee.hostilesAround(bot, 16), prevYaw)
         replanAt = now + 250
@@ -4313,7 +4314,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
             bot.attack(c)
             hits++
           } catch {}
-          hitAt = Date.now()
+          hitAt = gameClock.now()
           await sleep(100)
           continue
         }
@@ -4343,7 +4344,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
     dist: dist === null ? null : Math.round(dist * 10) / 10,
     hits: hits || undefined,
     wall: wall || undefined,
-    seconds: Math.round((Date.now() - t0) / 100) / 10
+    seconds: Math.round((gameClock.now() - t0) / 100) / 10
   }
   out.note = `крипер: ушёл на ${out.dist ?? '?'} бл. за ${out.seconds} с, хп ${hp0} → ${hp}`
   if (out.code !== 'OK') out.stopped = `${out.code}: ${out.note}`

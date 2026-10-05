@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Удушье: единственная смерть, которая не оставляет следов.
 //
 // Поход за алмазами 2026-08-31 кончился строкой в логе сервера — «NeuroDown
@@ -51,7 +52,7 @@ const between = (a, b, type) => heard.slice(a, b).filter(e => !type || e.type ==
 const types = list => list.map(e => e.type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -59,7 +60,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 // Ждать, не переставая слушать. Шина хранит последние 60 событий (events.js
 // MAX_BUFFER) и выгребается ЛЮБЫМ ответом демона, поэтому окно ожидания без
@@ -68,9 +69,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 // immediate-операция (session.js), она ничего не отменяет и только забирает
 // накопленное.
 async function settle (ms, every = 2000) {
-  const until = Date.now() + ms
-  while (Date.now() < until) {
-    await sleep(Math.min(every, until - Date.now()))
+  const until = gameClock.now() + ms
+  while (gameClock.now() < until) {
+    await sleep(Math.min(every, until - gameClock.now()))
     await call('status').catch(() => null)
   }
 }

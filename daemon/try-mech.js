@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Механизм из чертежа: mc_mechanism kind=cane (src/mechanism.js) — самосрез
 // тростника. Тело строит ряд само (копает жёлоб, льёт воду, ставит поршни и
 // наблюдателей с нужным поворотом, провод, сажает), потом тростник растёт
@@ -15,7 +17,6 @@
 //
 // Запуск: node try-mech.js. Сервер build (127.0.0.1:25566), демон ND_WS (8771).
 const path = require('path')
-const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { connect, createKit, sleep } = require('./scene-kit')
 
@@ -41,9 +42,9 @@ let kit = null
 let eye = null
 
 async function step (label, method, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call(method, params).catch(e => ({ status: 'RPC', error: e.message }))
-  console.log(`${label.padEnd(10)} ${String(r.status).padEnd(10)} ${Math.round((Date.now() - t0) / 1000)}с ${JSON.stringify(r.detail || {}).slice(0, 900)}${r.error ? ' ← ' + r.error : ''}`)
+  console.log(`${label.padEnd(10)} ${String(r.status).padEnd(10)} ${Math.round((gameClock.now() - t0) / 1000)}с ${JSON.stringify(r.detail || {}).slice(0, 900)}${r.error ? ' ← ' + r.error : ''}`)
   return r
 }
 
@@ -75,7 +76,7 @@ const drops = () => Object.values(eye.entities).filter(e => e && e.name === 'ite
   await kit.fillExact(null, [[X - 8, Y + 1, Z - 8], [X + 12, Y + 8, Z + 8]], 'air')
   await kit.cmd(`/tp @s ${X} ${Y + 1} ${Z - 3} 0 0`)
   await kit.cmd('/clear @s')
-  eye = mineflayer.createBot({ host: HOST, port: PORT, username: 'MechEye', version: '1.21.11', auth: 'offline' })
+  eye = createGameBot({ host: HOST, port: PORT, username: 'MechEye', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { eye.once('spawn', resolve); eye.once('error', reject) })
   await kit.cmd('/gamemode spectator MechEye')
   await kit.cmd(`/tp MechEye ${X + 2} ${Y + 10} ${Z}`)
@@ -112,15 +113,15 @@ const drops = () => Object.values(eye.entities).filter(e => e && e.name === 'ite
     await kit.cmd(`/kill @e[type=item,x=${X},y=${Y},z=${Z},distance=..12]`)
     await sleep(500)
     await kit.gamerule('random_tick_speed', '2000')
-    const t0 = Date.now()
-    while (Date.now() - t0 < 120000 && drops().reduce((n, e) => n + ((e.metadata && e.metadata[8] && e.metadata[8].itemCount) || 1), 0) < N * 2) await sleep(1000)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 120000 && drops().reduce((n, e) => n + ((e.metadata && e.metadata[8] && e.metadata[8].itemCount) || 1), 0) < N * 2) await sleep(1000)
     await kit.gamerule('random_tick_speed', '0')
     await sleep(1500)
     const roots = cols().filter(x => (at(x, Y + 1, Z) || {}).name === 'sugar_cane').length
     const third = cols().filter(x => (at(x, Y + 3, Z) || {}).name === 'sugar_cane').length
     const ext = cols().filter(x => props(at(x, Y + 2, Z + 1)).extended === 'true' || props(at(x, Y + 2, Z + 1)).extended === true).length
     const seen = drops()
-    check('дроп тростника у фермы появился (механизм срезал)', seen.length > 0, `предметов ${seen.length} за ${Math.round((Date.now() - t0) / 1000)}с`)
+    check('дроп тростника у фермы появился (механизм срезал)', seen.length > 0, `предметов ${seen.length} за ${Math.round((gameClock.now() - t0) / 1000)}с`)
     check('корни на месте все', roots === N, `корней ${roots}`)
     check('до третьего блока не стоит (срезано)', third === 0, `третьих ${third}`)
     check('поршни вернулись', ext === 0, `выдвинуто ${ext}`)

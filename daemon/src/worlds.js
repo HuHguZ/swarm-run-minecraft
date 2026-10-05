@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // В каком мире тело и какому миру принадлежит запись памяти. Одно определение
 // на весь демон (NETHER.md срез 1 и 2).
 //
@@ -224,7 +225,7 @@ function snapshot (bot) {
       if (b && /^(nether_portal|end_portal|end_gateway)$/.test(b.name)) { portal = b.name; break }
     }
   } catch {}
-  return { from: worldOf(bot), pos, portal, t0: Date.now() }
+  return { from: worldOf(bot), pos, portal, t0: gameClock.wall.now() }
 }
 
 function purgeEntities (bot) {
@@ -254,7 +255,7 @@ function installWorldTracker (session, bot) {
   let seq = session.worldChange?.seq || 0
   let watch = null
 
-  bot.on('death', () => { deathAt = Date.now() })
+  bot.on('death', () => { deathAt = gameClock.now() })
   bot._client.prependListener('respawn', () => { snap = session.bot === bot ? snapshot(bot) : null })
   bot._client.on('respawn', () => {
     const s = snap
@@ -263,30 +264,30 @@ function installWorldTracker (session, bot) {
     const to = worldOf(bot)
     if (to === s.from) return
     const purged = purgeEntities(bot)
-    const via = s.portal ? 'portal' : (Date.now() - deathAt < 60000 ? 'death' : 'teleport')
-    if (watch) clearInterval(watch.timer)
+    const via = s.portal ? 'portal' : (gameClock.now() - deathAt < 60000 ? 'death' : 'teleport')
+    if (watch) gameClock.clearInterval(watch.timer)
     const w = { seq: ++seq, from: s.from, to, via, portal: s.portal, purged, t0: s.t0, moved: false, fromPos: s.pos }
-    session.worldChange = { seq: w.seq, from: w.from, to, via, ready: false, at: Date.now() }
-    w.timer = setInterval(() => settle(w), 100)
+    session.worldChange = { seq: w.seq, from: w.from, to, via, ready: false, at: gameClock.now() }
+    w.timer = gameClock.wall.setInterval(() => settle(w), 100)
     watch = w
   })
   bot.on('forcedMove', () => { if (watch) watch.moved = true })
-  bot.on('end', () => { if (watch) clearInterval(watch.timer); watch = null })
+  bot.on('end', () => { if (watch) gameClock.clearInterval(watch.timer); watch = null })
 
   function settle (w) {
-    if (!session.bot || session.bot !== bot) { clearInterval(w.timer); return }
+    if (!session.bot || session.bot !== bot) { gameClock.clearInterval(w.timer); return }
     let under = null
     try { under = bot.entity && bot.blockAt(bot.entity.position.offset(0, -1, 0)) } catch {}
     const ready = w.moved && bot.isAlive !== false && (bot.health ?? 0) > 0 && !!under
-    const late = Date.now() - w.t0 > READY_MS
+    const late = gameClock.wall.now() - w.t0 > READY_MS
     if (!ready && !late) return
-    clearInterval(w.timer)
+    gameClock.clearInterval(w.timer)
     if (watch === w) watch = null
     const pos = bot.entity ? bot.entity.position.floored() : null
     const standingOn = under ? under.name : null
-    const ms = Date.now() - w.t0
+    const ms = gameClock.wall.now() - w.t0
     session.worldChange = {
-      seq: w.seq, from: w.from, to: w.to, via: w.via, ready, at: Date.now(),
+      seq: w.seq, from: w.from, to: w.to, via: w.via, ready, at: gameClock.now(),
       pos: pos ? { x: pos.x, y: pos.y, z: pos.z } : null, standingOn, ms
     }
     try { session.updateMovements(true) } catch {}

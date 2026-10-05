@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // The fight that killed the expedition: a mob in a mine drift at diamond depth.
 //
 // What the first run of this scene established, and what the doctrine is now
@@ -36,14 +37,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })

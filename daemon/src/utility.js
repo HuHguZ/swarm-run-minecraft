@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Удочка, трезубец, хорус, ловушки (2026-09-26, «мега-бот»: всё, чем дерутся
 // про-игроки; PVP-RESEARCH б.6, б.12, б.15, б.17; в.12–в.15). Взрывчатки нет
 // намеренно: TNT и кристаллы ломают небесную арену пользователя.
@@ -74,7 +75,7 @@ function onTickThen (bot, compute, act, timeoutMs = 400) {
     const onT = () => {
       if (done) return
       done = true
-      clearTimeout(t)
+      gameClock.clearTimeout(t)
       bot.removeListener('physicsTick', onT)
       let sol = null
       try { sol = compute() } catch {}
@@ -82,7 +83,7 @@ function onTickThen (bot, compute, act, timeoutMs = 400) {
       if (sol.yaw != null) bot.look(sol.yaw, sol.pitch, true).catch(() => {})
       afterPacket(bot, () => { try { act(sol) } catch {} resolve(sol) })
     }
-    const t = setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve(null) } }, timeoutMs)
+    const t = gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve(null) } }, timeoutMs)
     bot.on('physicsTick', onT)
   })
 }
@@ -140,7 +141,7 @@ function installRodPull (bot) {
     bot._client.on('spawn_entity', (p) => {
       if (!p || p.type !== typeId) return
       R.owners.set(p.entityId, p.objectData)
-      if (bot.entity && p.objectData === bot.entity.id) R.mine = { id: p.entityId, at: Date.now() }
+      if (bot.entity && p.objectData === bot.entity.id) R.mine = { id: p.entityId, at: gameClock.now() }
       if (R.owners.size > 64) R.owners.delete(R.owners.keys().next().value)
     })
     bot._client.on('entity_status', (p) => {
@@ -157,7 +158,7 @@ function installRodPull (bot) {
         bot.entity.velocity.y += v.y
         bot.entity.velocity.z += v.z
         R.pulled++
-        R.last = { at: Date.now(), v, from: owner.username || owner.name }
+        R.last = { at: gameClock.now(), v, from: owner.username || owner.name }
         bot.emit('nd_rodPulled', R.last)
       } catch {}
     })
@@ -229,9 +230,9 @@ async function rodPull (bot, ctl, e, { velFn = () => ({ x: 0, y: 0, z: 0 }), max
     return sol
   }, () => bot.activateItem())
   if (!cast) return { ok: false, why: 'не долетит' }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let hooked = false
-  while (!ctl.aborted && Date.now() - t0 < Math.min(maxMs, cast.ticks * 50 + 700)) {
+  while (!ctl.aborted && gameClock.now() - t0 < Math.min(maxMs, cast.ticks * 50 + 700)) {
     const h = myHook(bot)
     if (h && h.hooked === e.id) { hooked = true; break }
     await sleep(TICK_MS)
@@ -318,9 +319,9 @@ async function throwTrident (bot, e, t, { velFn = null, onDraw = null } = {}) {
   bot.on('physicsTick', onTick)
   const hp0 = hpOf(bot, e)
   bot.activateItem()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 650) {
+    while (gameClock.now() - t0 < 650) {
       const s = bowMod.aimMoving(eye(), target, moved, !bot.entity.onGround, TRIDENT_SPEED, TRIDENT_G)
       if (s) bot.look(s.yaw, s.pitch, true).catch(() => {})
       if (onDraw) onDraw()
@@ -471,7 +472,7 @@ function chorusOdds (bot, foes = [], { n = 300 } = {}) {
 // всё: ожидаемый урон — по его заряду и оружию (totem.burstOf).
 function escapeChoice (bot, { hp, foes = [], trapped = null, pearls = 0, canHeal = false, pearlAt = 9, burst = 4 } = {}) {
   if (!findItem(bot, i => i.name === 'chorus_fruit')) return null
-  if (Date.now() < (bot._ndChorusCd || 0)) return null
+  if (gameClock.now() < (bot._ndChorusCd || 0)) return null
   // Жемчуг сам почти убивает: 5 хп, меньше с «Невесомостью» и «Защитой»
   // (tempo.pearlDamage — арена с чарами).
   let pd = 5
@@ -495,20 +496,20 @@ async function chorusEscape (bot, ctl) {
   const had = countOf(bot, 'chorus_fruit')
   const from = bot.entity.position.clone()
   let tpAt = null
-  const onMove = () => { if (!tpAt && bot.entity.position.distanceTo(from) > 1.5) tpAt = Date.now() }
+  const onMove = () => { if (!tpAt && bot.entity.position.distanceTo(from) > 1.5) tpAt = gameClock.now() }
   bot.on('forcedMove', onMove)
   bot.activateItem()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (!ctl.aborted && Date.now() - t0 < 2400 && countOf(bot, 'chorus_fruit') >= had) await sleep(TICK_MS)
+    while (!ctl.aborted && gameClock.now() - t0 < 2400 && countOf(bot, 'chorus_fruit') >= had) await sleep(TICK_MS)
     await sleep(150)
   } finally {
     bot.removeListener('forcedMove', onMove)
   }
   if (countOf(bot, 'chorus_fruit') >= had) { try { bot.deactivateItem() } catch {} return { ok: false, why: 'не доел' } }
-  bot._ndChorusCd = Date.now() + 1000
+  bot._ndChorusCd = gameClock.now() + 1000
   const moved = bot.entity.position.distanceTo(from)
-  return { ok: moved > 1.5, moved: Math.round(moved * 10) / 10, ms: Date.now() - t0 }
+  return { ok: moved > 1.5, moved: Math.round(moved * 10) / 10, ms: gameClock.now() - t0 }
 }
 
 // ================================================================ ловушки
@@ -588,8 +589,8 @@ async function dropAnvil (bot, ctl, e, plan) {
   if (!r.ok) return { ok: false, why: 'наковальня не встала: ' + (r.reason || '?') }
   // Падает через 2 тика (FallingBlock: delay after place), летит ~k блоков.
   let hpMin = hp0
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1300) { const h = hpOf(bot, e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; await sleep(TICK_MS) }
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1300) { const h = hpOf(bot, e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; await sleep(TICK_MS) }
   return { ok: true, k: plan.k, dmg: plan.dmg, dealt: hp0 != null && hpMin != null ? Math.round((hp0 - hpMin) * 10) / 10 : null, built: plan.support.length }
 }
 
@@ -666,8 +667,8 @@ function create (bot, { used = () => {}, tt = null } = {}) {
   installRodPull(bot)
   const st = { rod: 0, rodHooked: 0, trident: 0, tridentHit: 0, riptide: 0, chorus: 0, anvils: 0, anvilDmg: [], boxes: 0, lava: 0, pulledMe: 0 }
   const cd = {}
-  const ready = (k) => Date.now() >= (cd[k] || 0)
-  const rest = (k, ms) => { cd[k] = Date.now() + ms }
+  const ready = (k) => gameClock.now() >= (cd[k] || 0)
+  const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
   const pending = [] // своя лава: забрать ведром
   const onPulled = () => { st.pulledMe++ }
   bot.on('nd_rodPulled', onPulled)
@@ -676,7 +677,7 @@ function create (bot, { used = () => {}, tt = null } = {}) {
   const scoop = async () => {
     for (let i = pending.length - 1; i >= 0; i--) {
       const p = pending[i]
-      if (Date.now() - p.at < 3000) continue
+      if (gameClock.now() - p.at < 3000) continue
       pending.splice(i, 1)
       const b = bot.blockAt(p.cell)
       const bucket = findItem(bot, it => it.name === 'bucket')
@@ -701,7 +702,7 @@ function create (bot, { used = () => {}, tt = null } = {}) {
       if (lp) {
         rest('trap', 4000)
         const r = await pourLava(bot, e, lp)
-        if (r.ok) { st.lava++; pending.push({ cell: r.cell, at: Date.now() }); used(`ловушка: лава на него (${stuck})`); return { did: 'lava' } }
+        if (r.ok) { st.lava++; pending.push({ cell: r.cell, at: gameClock.now() }); used(`ловушка: лава на него (${stuck})`); return { did: 'lava' } }
       }
       if (stuck === 'паутина' && ctx.d <= 3.4 && !(ctx.others || []).some(o => o.position.distanceTo(bot.entity.position) < 5) && ready('box')) {
         const bp = blockInPlan(bot, e)
@@ -743,8 +744,8 @@ function create (bot, { used = () => {}, tt = null } = {}) {
         if (r.ok) {
           used(tp.why)
           // Попал ли: его хп в полёте (≤ 1 с).
-          const t0 = Date.now()
-          while (Date.now() - t0 < Math.min(1200, (r.ticks || 10) * 50 + 300)) { const h = hpOf(bot, e); if (h != null && r.hp0 != null && h < r.hp0 - 0.4) { st.tridentHit++; used('трезубец попал'); break } await sleep(TICK_MS) }
+          const t0 = gameClock.now()
+          while (gameClock.now() - t0 < Math.min(1200, (r.ticks || 10) * 50 + 300)) { const h = hpOf(bot, e); if (h != null && r.hp0 != null && h < r.hp0 - 0.4) { st.tridentHit++; used('трезубец попал'); break } await sleep(TICK_MS) }
           return { did: 'trident' }
         }
       }

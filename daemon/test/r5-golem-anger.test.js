@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 const { createRequire } = require('node:module')
 const { EventEmitter } = require('node:events')
 const Vec3 = require('vec3')
@@ -34,7 +35,7 @@ function fixture (rememberAnger, canAim = false) {
     approachFixture: async () => false }
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
     sleep = advance; visible = () => true; descendPillar = descend; approach = approachFixture;
-  `, ctx)
+  `, withClockFixture(ctx))
   return { session, golem, digs, run: () => ctx.module.exports.golemKill(session, { aborted: false, onAbort: [] }, { timeoutSeconds: 20 }) }
 }
 test('retry with zero new hits never descends to a previously attacked live golem', async () => {

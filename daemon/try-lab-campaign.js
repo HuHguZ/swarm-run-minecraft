@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория кампании: этап bastion настоящим campaign.js (как в прохождении) — бастионы по памяти по
 // порядку, тело в Аду у 52,8 (где стоит основное), набор кампании + 7 стержней. Сцена только ставит тело
 // и места (ND_EXTRA_PLACES), дальше решает кампания. Итог попытки (строка JSON в LAB_OUT): жемчуг,
@@ -60,7 +61,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await scene()
   const size = logSize()
   const places = {
@@ -86,7 +87,7 @@ async function main () {
   child.on('exit', code => { exited = code })
   let stoppedBy = 'время'
   const until = t0 + MINUTES * 60000
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(5000)
     if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
     let text = ''
@@ -108,7 +109,7 @@ async function main () {
   const deaths = deathLines(size)
   const rec = {
     at: new Date().toISOString(),
-    minutes: Math.round((Date.now() - t0) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - t0) / 6000) / 10,
     stoppedBy,
     pearls: countOf(inv, /^ender_pearl$/),
     eyes: countOf(inv, /^ender_eye$/),

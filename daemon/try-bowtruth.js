@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Правда о стреле из игры: после каждого выстрела сервер отвечает точными
 // Motion и Pos стрелы (/data get entity), а бот записывает, как он в момент
 // спуска двигался и куда смотрел. Стоя и в стрейфе — чтобы увидеть, что
@@ -15,13 +16,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(350) }
 
 const X = -500; const Y = 100; const Z = -500

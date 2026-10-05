@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Постройки игры (src/structures.js): узнать глазами, зайти, обезвредить,
 // взять ценное и оставить хлам. Подготовка — командами оператора (/place
 // structure, /locate structure, /setblock с таблицей лута), дальше — честно:
@@ -31,13 +32,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(350) }
 
 let failures = 0
@@ -89,10 +90,10 @@ async function scan (radius = 48) {
 }
 
 async function explore (params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('structure', { mode: 'explore', timeoutSeconds: 300, ...params })
   const d = r.detail || {}
-  console.log(`  explore ${r.status} за ${Math.round((Date.now() - t0) / 1000)} с${r.error ? ' — ' + r.error : ''}${d.stopped ? ' — встал: ' + d.stopped : ''}`)
+  console.log(`  explore ${r.status} за ${Math.round((gameClock.now() - t0) / 1000)} с${r.error ? ' — ' + r.error : ''}${d.stopped ? ' — встал: ' + d.stopped : ''}`)
   if (d.lines) console.log('    ' + lines(r))
   return r
 }

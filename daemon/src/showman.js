@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Человек в бою (2026-09-26, просьба пользователя: «боты просто бегут и бьют
 // вслепую, тактики одинаковые; пусть затаиваются, отбегают, подзывают, жмут
 // шифт, машут мечом, кивают — как в боксе: подозвал, отбежал, и только потом
@@ -147,12 +148,12 @@ function create (opts) {
   const human = !isBotName(me0 && me0.username)
   const persona = personaOf(bot.username)
   if (styleOut) { styleOut.нрав = persona.name; styleOut.противник = human ? 'человек' : 'бот' }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const stats = { showMs: 0, tacticMs: 0, acts: {}, phaseMs: {} }
   const tally = (label) => { if (!label) return; stats.acts[label] = (stats.acts[label] || 0) + 1; used(label) }
   const cds = {}
-  const ready = (k) => Date.now() >= (cds[k] || 0)
-  const rest = (k, ms) => { cds[k] = Date.now() + ms }
+  const ready = (k) => gameClock.now() >= (cds[k] || 0)
+  const rest = (k, ms) => { cds[k] = gameClock.now() + ms }
 
   // ------------------------------------------------------------ его жесты
   // Всё на событиях и на тике физики: цикл pvp.js бывает занят луком или
@@ -172,13 +173,13 @@ function create (opts) {
     const cz = clamp(eye.z, p.z - 0.3, p.z + 0.3)
     return Math.hypot(eye.x - cx, eye.y - cy, eye.z - cz)
   }
-  const onCrouch = (e) => { const t = tgt(); if (t && e && e.id === t.id) seen.crouches.push(Date.now()) }
+  const onCrouch = (e) => { const t = tgt(); if (t && e && e.id === t.id) seen.crouches.push(gameClock.now()) }
   // Взмах: вне его руки — промах (или дразнит), это и ловит финт.
   let whiff = null
   const onSwing = (e) => {
     const t = tgt()
     if (!t || !e || e.id !== t.id) return
-    const now = Date.now()
+    const now = gameClock.now()
     const tr = theirReachNow()
     seen.swings.push({ at: now, tr })
     if (tr > 3.08) {
@@ -191,7 +192,7 @@ function create (opts) {
   const onHurt = (victim, source) => {
     const t = tgt()
     if (!t || !bot.entity || !victim) return
-    const now = Date.now()
+    const now = gameClock.now()
     if (victim === bot.entity && source && source.id === t.id) { hits.took.push(now); lastExchange = now }
     if (victim.id === t.id && source && source.id === bot.entity.id) { hits.gave.push(now); lastExchange = now }
   }
@@ -199,7 +200,7 @@ function create (opts) {
   const onTick = () => {
     const e = tgt()
     if (!e || !e.position) return
-    const now = Date.now()
+    const now = gameClock.now()
     // Своя высота: прыгаем за критом — его голова ходит за нами вверх-вниз, и
     // это не кивок.
     if (bot.entity) { seen.myY.push({ t: now, y: bot.entity.position.y }); while (seen.myY.length > 40) seen.myY.shift() }
@@ -231,7 +232,7 @@ function create (opts) {
 
   // Колебания угла — сколько раз он сменил направление с размахом ≥ amp за ms.
   const swingsOf = (arr, ms, amp) => {
-    const now = Date.now()
+    const now = gameClock.now()
     const xs = arr.filter(s => now - s.t <= ms)
     if (xs.length < 4) return 0
     let ext = xs[0].v; let dir = 0; let n = 0
@@ -244,7 +245,7 @@ function create (opts) {
   const mirrored = {}
   let mirror = null
   const readGestures = (c) => {
-    const now = Date.now()
+    const now = gameClock.now()
     seen.crouches = seen.crouches.filter(t => now - t < 2500)
     seen.swings = seen.swings.filter(s => now - s.at < 2500)
     seen.jumps = seen.jumps.filter(j => now - j.at < 3500)
@@ -276,7 +277,7 @@ function create (opts) {
 
   // ---------------------------------------------------------------- фазы
   let phase = null
-  let phaseAt = Date.now()
+  let phaseAt = gameClock.now()
   const nextPhase = (c) => {
     const w = {}
     for (const p of PHASES) w[p] = persona.bias[p]
@@ -289,11 +290,11 @@ function create (opts) {
     if (phase) w[phase.name] *= 0.45 // тянет сменить
     const name = weighted(w)
     const was = phase ? phase.name : null
-    phase = { name, since: Date.now(), until: Date.now() + (FIXP ? between(6000, 14000) : between(10000, 30000)) * persona.rhythm }
+    phase = { name, since: gameClock.now(), until: gameClock.now() + (FIXP ? between(6000, 14000) : between(10000, 30000)) * persona.rhythm }
     if (name !== was) tally('фаза: ' + name)
   }
   const tickPhase = (c) => {
-    const now = Date.now()
+    const now = gameClock.now()
     if (phase) stats.phaseMs[phase.name] = (stats.phaseMs[phase.name] || 0) + Math.min(200, now - phaseAt)
     phaseAt = now
     if (!phase || now >= phase.until) nextPhase(c)
@@ -305,7 +306,7 @@ function create (opts) {
   let posture = null // { budgetUntil, act }
   let engaged = false
   let lullRolled = false
-  let lastTick = Date.now()
+  let lastTick = gameClock.now()
   let rushSwings = 0
   let honorRush = null
   let circleKey = Math.random() < 0.5 ? 'left' : 'right'
@@ -319,7 +320,7 @@ function create (opts) {
   }
   const drive = (ctl) => {
     driving = true
-    lease = Date.now() + 150
+    lease = gameClock.now() + 150
     for (const k of keys) set(k, !!ctl[k])
   }
   let chatSlot = null
@@ -328,7 +329,7 @@ function create (opts) {
   const say = (slot) => {
     if (!CHAT || chatSlot !== slot) return
     chatSlot = null
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - (lastChat.get(bot) || 0) < 60000) return
     lastChat.set(bot, now)
     const line = pick(LINES[slot])
@@ -349,7 +350,7 @@ function create (opts) {
     if (!swingOk(theirR, both)) return false
     try { bot.swingArm() } catch { return false }
     if (swingCostly()) {
-      if (bot._ndMelee) bot._ndMelee.resetAt = Math.max(bot._ndMelee.resetAt || 0, Date.now())
+      if (bot._ndMelee) bot._ndMelee.resetAt = Math.max(bot._ndMelee.resetAt || 0, gameClock.now())
       if (onAirSwing) onAirSwing()
     }
     return true
@@ -374,7 +375,7 @@ function create (opts) {
     if (c.others) return 'второй рядом'
     if (c.hp < 11) return 'мало хп'
     if (c.theirHp != null && c.theirHp > c.hp + 6) return 'проигрываю'
-    if (Date.now() - (tt ? tt.myHurtAt : 0) < 1200) return 'по мне попали'
+    if (gameClock.now() - (tt ? tt.myHurtAt : 0) < 1200) return 'по мне попали'
     if (c.theirR < THEIR_REACH + 1.3) return 'он близко'
     if (closing > 0.17) return 'он идёт в атаку'
     if (Math.abs(c.dy) > 2.5) return 'разная высота'
@@ -388,7 +389,7 @@ function create (opts) {
   }
   const startAct = (kind) => {
     const a = ACTS[kind]
-    const act = { kind, t0: Date.now(), until: Date.now() + between(a.ms[0], a.ms[1]), n: 0, nextAt: 0, seq: null }
+    const act = { kind, t0: gameClock.now(), until: gameClock.now() + between(a.ms[0], a.ms[1]), n: 0, nextAt: 0, seq: null }
     if (kind === 'присед') { act.on = between(150, 230); act.off = between(130, 200); act.taps = 2 + Math.floor(Math.random() * 3) }
     if (kind === 'кивок') act.seq = [-0.55, 0.05, -0.55, 0.05].concat(Math.random() < 0.4 ? [-0.5, 0.05] : []).map(v => v + between(-0.08, 0.08))
     if (kind === 'головой') act.seq = [0.42, -0.42, 0.42, -0.42, 0].map(v => v + between(-0.08, 0.08))
@@ -400,7 +401,7 @@ function create (opts) {
   }
   const nextAct = (c) => {
     // Сначала — ответ тем же на его жест (зеркало), если созрела реакция.
-    if (mirror && Date.now() >= mirror.after) {
+    if (mirror && gameClock.now() >= mirror.after) {
       let kind = mirror.kind === 'головой' && Math.random() < 0.5 ? 'кивок' : mirror.kind
       if (kind === 'взмах' && !swingOk(c.theirR)) kind = 'присед'
       mirror = null
@@ -428,7 +429,7 @@ function create (opts) {
   }
   // Один тик действия стойки: клавиши и взгляд.
   const actTick = (act, c) => {
-    const now = Date.now()
+    const now = gameClock.now()
     const el = now - act.t0
     const k = {}
     // Держать среднюю дистанцию: дальше 7.5 — подойти шагом, ближе его руки
@@ -491,7 +492,7 @@ function create (opts) {
     // вернуть.
     if (process.env.ND_HIDE !== '1') return false
     if (!cover || !fillerCount || fillerCount() < 4) return false
-    if (!ready('hide') || !bot.entity.onGround || Date.now() - t0 < 1500) return false
+    if (!ready('hide') || !bot.entity.onGround || gameClock.now() - t0 < 1500) return false
     const cunningNow = phase && (phase.name === 'хитрость' || phase.name === 'оборона') ? persona.cunning : persona.cunning * 0.25
     // От лучника — всегда повод (стрела в колонну). От бегущего — только
     // издалека и в хитрости: смена предмета на блок сбрасывает заряд меча
@@ -515,18 +516,18 @@ function create (opts) {
     const e = tgt()
     const placed = await cover(e.position.clone())
     if (!placed) return false
-    hide = { since: Date.now(), until: Date.now() + between(2500, 4200), hpAt: c.hp }
+    hide = { since: gameClock.now(), until: gameClock.now() + between(2500, 4200), hpAt: c.hp }
     tally(`засада: спрятался за колонной (${why})`)
     return true
   }
   const hideTick = (c) => {
-    const now = Date.now()
+    const now = gameClock.now()
     const e = tgt()
     const end = (label) => { hide = null; release(); if (label) tally(label) }
     if (!e || !e.isValid) { end(null); return false }
     if (c.seesBody && c.theirR < THEIR_REACH + 1.2) { end('засада: он вышел — бью первым'); return false }
     if (c.seesBody && c.theyBow) { end('засада: обошёл с луком — выхожу'); return false }
-    if (Date.now() - (tt ? tt.myHurtAt : 0) < 400 || c.hp < hide.hpAt - 1) { end('засада: достали — выхожу'); return false }
+    if (gameClock.now() - (tt ? tt.myHurtAt : 0) < 400 || c.hp < hide.hpAt - 1) { end('засада: достали — выхожу'); return false }
     if (now > hide.until || c.d > 18) { end('засада: выглянул из-за колонны'); return false }
     stats.tacticMs += Math.min(100, now - lastTick)
     drive({ sneak: true })
@@ -536,7 +537,7 @@ function create (opts) {
 
   // ------------------------------------------------------------------ pre
   const pre = async (c) => {
-    const now = Date.now()
+    const now = gameClock.now()
     const dt = Math.min(100, now - lastTick)
     tickPhase(c)
     readGestures(c)
@@ -628,9 +629,9 @@ function create (opts) {
   let retreat = null
   let pauseUntil = 0
   let pauseRolledAt = 0
-  let lastSteer = Date.now()
+  let lastSteer = gameClock.now()
   const steer = (k, c) => {
-    const now = Date.now()
+    const now = gameClock.now()
     // Свои часы: pre зовут в том же проходе цикла раньше steer.
     const dt = Math.min(100, now - lastSteer)
     lastSteer = now
@@ -741,9 +742,9 @@ function create (opts) {
     // по нам попали или мозг дал новое дело.
     const cur0 = session && session.current
     const hp0 = bot.health ?? 20
-    const tv0 = Date.now()
-    const off = () => !bot.entity || (bot.health ?? 0) < hp0 - 0.5 || (session && session.current && session.current !== cur0) || Date.now() - tv0 > 3500
-    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+    const tv0 = gameClock.now()
+    const off = () => !bot.entity || (bot.health ?? 0) < hp0 - 0.5 || (session && session.current && session.current !== cur0) || gameClock.now() - tv0 > 3500
+    const wait = (ms) => new Promise(resolve => gameClock.setTimeout(resolve, ms))
     Promise.resolve().then(async () => {
       await wait(between(250, 450))
       if (off()) return
@@ -769,7 +770,7 @@ function create (opts) {
   // ---------------------------------------------------------------- отчёт
   let closed = false
   const report = () => {
-    const total = Date.now() - t0
+    const total = gameClock.now() - t0
     const ph = {}
     for (const [k, v] of Object.entries(stats.phaseMs)) ph[k] = Math.round(v / 100) / 10
     return {

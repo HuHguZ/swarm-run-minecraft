@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Подручное (utility.js, 2026-09-26): удочка, трезубец, «Тягун», хорус, ловушки —
 // по сцене на приём. NeuroDown (A) дерётся, NeuroDown2 (B) — цель (стоит, не
 // бьёт), NeuroBuild (C) — судья: спрашивает сервер (/data get entity) и читает
@@ -15,12 +16,15 @@ const WebSocket = require('ws')
 const fs = require('fs')
 const path = require('path')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -34,7 +38,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 const C = client(process.env.C || 'ws://127.0.0.1:8793')
@@ -98,11 +102,11 @@ async function posOf (c) { const st = await c.call('status').catch(() => null); 
         // Судья: Motion у B на сервере, пока A тянет (рывок — это setDeltaMovement на сервере).
         probe: () => (async () => {
           const seen = []
-          const t0 = Date.now()
-          while (Date.now() - t0 < 6000) {
+          const t0 = gameClock.now()
+          while (gameClock.now() - t0 < 6000) {
             const lines = await ask(`/data get entity ${NB} Motion`, 'Motion|has the following', 600)
             const l = lines.find(x => /Motion|has the following/.test(x))
-            if (l) { const m = l.match(/\[([^\]]+)\]/); if (m && !/^\s*0\.0d?,\s*-0\.0784/.test(m[1])) seen.push(`${((Date.now() - t0) / 1000).toFixed(1)}с [${m[1]}]`) }
+            if (l) { const m = l.match(/\[([^\]]+)\]/); if (m && !/^\s*0\.0d?,\s*-0\.0784/.test(m[1])) seen.push(`${((gameClock.now() - t0) / 1000).toFixed(1)}с [${m[1]}]`) }
             await sleep(150)
           }
           const rod = await ask(`/data get entity ${NA} Inventory[{id:"minecraft:fishing_rod"}].components`, 'damage|has the following|Found no', 1200)

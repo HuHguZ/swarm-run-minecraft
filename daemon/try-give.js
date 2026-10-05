@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Обмен вещами с живым человеком: отдать в руки и взять с земли.
 //
 // До этого файла у тела был только mc_drop: бросить стак под ноги там, где
@@ -101,7 +102,7 @@ const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 const types = list => list.map(e => e.type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -109,7 +110,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -288,8 +289,8 @@ function igrokAt (igrok) {
 // Пакеты инвентаря приезжают своим темпом, поэтому ждём числа, а не спим
 // наугад; если не дождались — возвращаем то, что есть, и это и попадёт в отчёт.
 async function untilBag (igrok, name, want, ms = 4000) {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + ms
+  while (gameClock.now() < deadline) {
     if (bagOf(igrok, name) >= want) break
     await sleep(200)
   }
@@ -324,7 +325,7 @@ async function igrokTosses (igrok, name, count) {
 const MIN_FLIGHT_MS = 500
 
 async function untilDrop (ms) {
-  const started = Date.now()
+  const started = gameClock.now()
   const deadline = started + ms
   const trace = []
   let last = null
@@ -335,17 +336,17 @@ async function untilDrop (ms) {
     const items = itemsOf(d).filter(e => inArena(e.pos))
     const now = items[0] || null
     if (now) {
-      trace.push(`${Date.now() - deadline + ms}мс:${now.dist}`)
+      trace.push(`${gameClock.now() - deadline + ms}мс:${now.dist}`)
       // observe не отдаёт точных координат, но отдаёт dist с точностью 0.1 —
       // этого хватает, чтобы отличить летящий стак от лежащего, пока тело стоит
       // на месте. Остановился — два одинаковых замера подряд.
-      if (last !== null && Math.abs(now.dist - last) < 0.05 && Date.now() - started >= MIN_FLIGHT_MS) {
+      if (last !== null && Math.abs(now.dist - last) < 0.05 && gameClock.now() - started >= MIN_FLIGHT_MS) {
         return { items, entities: d.entities || [], fair: d.fair, settled: true, trace }
       }
       last = now.dist
       seen = { items, entities: d.entities || [], fair: d.fair }
     }
-    if (Date.now() >= deadline) {
+    if (gameClock.now() >= deadline) {
       return seen
         ? { ...seen, settled: false, trace }
         : { items: [], entities: (r.detail || {}).entities || [], fair: (r.detail || {}).fair, settled: false, trace }

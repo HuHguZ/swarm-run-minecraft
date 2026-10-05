@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Замеры ядра ближнего боя (2026-09-26), два голых mineflayer-клиента
 // (NeuroNether и NeuroEnd — опы тестового сервера nether), вдали от арены:
 //  1. честность: скорость хода с предметом в руке (itemuse.js) — идёт вперёд,
@@ -7,19 +9,18 @@
 //  2. отброс от спринт-удара B по A: без jump-reset и с ним (melee.fight,
 //     skill.jumpReset 0 и 1) — путь A по направлению удара за 12 тиков.
 //   MC_PORT=25567 node try-melee.js
-const mineflayer = require('mineflayer')
 const edges = require('./src/edges')
 const melee = require('./src/melee')
 const itemuse = require('./src/itemuse')
 
 const PORT = Number(process.env.MC_PORT || 25567)
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const X = 300; const Y = 150; const Z = 300
 const ONLY = process.env.ONLY || ''
 
 function join (username) {
   return new Promise((resolve, reject) => {
-    const bot = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' })
+    const bot = createGameBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' }, { primary: true })
     bot.once('spawn', () => resolve(bot))
     bot.once('error', reject)
   })
@@ -91,7 +92,7 @@ const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { 
       A.setQuickBarSlot(0)
       await cmd(`/tp NeuroNether ${X + 0.5} ${Y} ${Z + 0.5} 0 0`)
       await sleep(1200)
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       let dead = false
       A.once('death', () => { dead = true })
       await cmd('/damage NeuroNether 100 minecraft:generic')
@@ -100,7 +101,7 @@ const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { 
       await ticks(A, 10)
       await cmd('/damage NeuroNether 100 minecraft:generic')
       await sleep(800)
-      console.log(`[тотем] сработал ${T.pops} раз, снова в руке ${T.reequips} (быстро ${T.fast}, кликами ${T.slow}); в левой руке через 3 тика после первого: ${off1}; второй смертельный удар — ${dead ? 'УМЕР' : 'жив, хп ' + A.health}; в руке ${A.heldItem && A.heldItem.name}; ${Date.now() - t0} мс`)
+      console.log(`[тотем] сработал ${T.pops} раз, снова в руке ${T.reequips} (быстро ${T.fast}, кликами ${T.slow}); в левой руке через 3 тика после первого: ${off1}; второй смертельный удар — ${dead ? 'УМЕР' : 'жив, хп ' + A.health}; в руке ${A.heldItem && A.heldItem.name}; ${gameClock.now() - t0} мс`)
     }
 
     if (!ONLY || ONLY === 'kb') {
@@ -141,6 +142,6 @@ const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { 
     process.exitCode = 1
   } finally {
     A.quit(); B.quit()
-    setTimeout(() => process.exit(), 500)
+    gameClock.wall.setTimeout(() => process.exit(), 500)
   }
 })()

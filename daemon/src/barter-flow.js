@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Opt-in until the independent farm series: ND_BARTER_FLOW=1; =0 restores the old policy.
 const enabled = () => process.env.ND_BARTER_FLOW === '1'
 const ADMIRE_MS = 119 * 50
@@ -27,7 +28,7 @@ function stillNeeds (bag, { pearls = 10, fireRes = 0, obsidian = 0 } = {}) {
   return (bag.ender_pearl || 0) < pearls || (bag.fire_res || 0) < fireRes || (bag.obsidian || 0) < obsidian
 }
 // Successful clicks are reserved locally before delayed equipment packets arrive.
-function ready (bot, pg, busy, now = Date.now()) {
+function ready (bot, pg, busy, now = gameClock.now()) {
   if (!pg || pg.isValid === false || !pg.position || (busy.get(pg.id) || 0) > now) return false
   const keys = bot.registry.entitiesByName.piglin.metadataKeys
   if (pg.metadata && (pg.metadata[keys.indexOf('baby')] || ((Number(pg.metadata[keys.indexOf('mob_flags')]) || 0) & 4))) return false
@@ -35,6 +36,10 @@ function ready (bot, pg, busy, now = Date.now()) {
   return !offhand || !/^(gold_ingot|gold_block|golden_.*)$/.test(offhand.name || '')
 }
 function retry (detail, bag) {
-  return stock(bag) >= 18 && !(detail.ingotsTraded > 0) && !!detail.barterRetry
+  // The ordinary trader-search branch can stop before it creates a booth;
+  // it has no barterRetry field even though the gold is still in the bag.
+  const searchGap = process.env.ND_BARTER_RETRY_GAP !== '0' &&
+    /^бартер встал: (?:пиглинов рядом нет|пиглины рядом есть, но ни до одного не дойти)/.test(detail.stopped || '')
+  return stock(bag) >= 18 && !(detail.ingotsTraded > 0) && (!!detail.barterRetry || searchGap)
 }
 module.exports = { enabled, ADMIRE_MS, pearlChance, pearlBudget, stock, stillNeeds, ready, retry }

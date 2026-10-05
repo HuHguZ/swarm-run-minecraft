@@ -1,15 +1,20 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Тушение вне боя (2026-09-26, autopilot.extinguish): бот загорелся (полсекунды
 // в лаве), стоит на полу; в сцене «ведро» у него ведро воды, в сцене «вода»
 // ведра нет, а в DIST блоках — вода. Сколько хп сняло за 10 с и был ли в воде.
 //   A=ws://127.0.0.1:8791 MC_PORT=25565 node try-extinguish.js
 const WebSocket = require('ws')
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -23,7 +28,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }
 const X = 1000; const Y = 150; const Z = 1400
@@ -31,8 +36,7 @@ const DIST = Number(process.env.DIST || 6)
 
 let ob = null
 async function observer () {
-  const mineflayer = require('mineflayer')
-  const o = mineflayer.createBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const o = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { o.once('spawn', resolve); o.once('error', reject); o.once('kicked', reject) })
   await sleep(3000)
   o.chat('/gamemode spectator'); await sleep(300)
@@ -56,12 +60,12 @@ async function scene (name, give, water = true) {
   await sleep(500)
   await cmd(`/tp NeuroDown ${X + 0.5} ${Y} ${Z + 0.5}`)
   await cmd(`/setblock ${X} ${Y - 1} ${Z + 4} minecraft:stone`)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let lit = 0; let out = 0
-  while (Date.now() - t0 < 12000) {
+  while (gameClock.now() - t0 < 12000) {
     const b = burning()
-    if (b && !lit) lit = Date.now() - t0
-    if (lit && !b && !out) out = Date.now() - t0
+    if (b && !lit) lit = gameClock.now() - t0
+    if (lit && !b && !out) out = gameClock.now() - t0
     if (out) break
     await sleep(100)
   }
@@ -91,6 +95,6 @@ async function scene (name, give, water = true) {
   } finally {
     if (ob) try { ob.quit() } catch {}
     A.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

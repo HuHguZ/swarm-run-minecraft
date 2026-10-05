@@ -1,20 +1,21 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Всплеск заряда ветра под ногами — в паутине и без (mace.windSmash,
 // 2026-09-26): в арене взлёт «не поднимал» с подписью «всплеск пришёл, vy
 // 1.02 … vy max −0.08». Голый клиент NeuroEnd (оп на end): стоит на площадке,
 // заряд из левой руки строго вниз; раз — чисто, раз — паутина в ногах, раз —
 // паутина на уровне головы. Итог: скорость сразу после всплеска и высшая точка.
 //   MC_PORT=25568 node try-webwind.js
-const mineflayer = require('mineflayer')
 const mace = require('./src/mace')
 const edges = require('./src/edges')
 
 const PORT = Number(process.env.MC_PORT || 25568)
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const X = 720; const Y = 150; const Z = 720
 
 ;(async () => {
-  const bot = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username: 'NeuroEnd', version: '1.21.11', auth: 'offline' })
+  const bot = createGameBot({ host: '127.0.0.1', port: PORT, username: 'NeuroEnd', version: '1.21.11', auth: 'offline' }, { primary: true })
   await new Promise((resolve, reject) => { bot.once('spawn', resolve); bot.once('error', reject) })
   edges.fixSelfKnockback(bot)
   mace.install(bot)
@@ -51,6 +52,6 @@ const X = 720; const Y = 150; const Z = 720
   } finally {
     await cmd(`/forceload remove ${X - 6} ${Z - 6} ${X + 6} ${Z + 6}`).catch(() => {})
     bot.quit()
-    setTimeout(() => process.exit(), 500)
+    gameClock.wall.setTimeout(() => process.exit(), 500)
   }
 })()

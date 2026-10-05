@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория механики литья глубоко (поток overworld, 02.10.2026): арена из команд (только ферма) — сланцевый
 // блок у дна, штрек 1×2 на ногах −54, озеро лавы под потолком на −55 (как у водоносной лавы). Тело — в конце штрека
 // у лавы «в 1 впереди», набор после железа. Дальше без команд — RPC portal mode=cast (windows, hint, maxDig, keep,
@@ -58,18 +59,18 @@ async function trial (k, pool) {
   await kit.cmd('/effect give @s minecraft:saturation 2 20 true')
   await sleep(2500)
   const hint = pool === 'under' ? { x: X + 11, y: -55, z: Z } : pool === 'side' ? { x: X + 10, y: -55, z: Z + 1 } : { x: X + 12, y: -55, z: Z }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const calls = []
   let ok = false
   for (let i = 0; i < 3 && !ok; i++) {
     const r = await call('portal', { mode: 'cast', windows: true, hint, maxDig: 64, keep: 8, radius: 12, timeoutSeconds: 540 }).catch(e => ({ status: 'failed', error: e.message }))
     const d = r.detail || {}
-    calls.push({ status: r.status, code: r.code, stopped: d.stopped || r.error || null, frame: d.frame, cast: (d.cast || []).length, refills: d.refills, dug: d.dug, placed: d.placed, windows: d.windows, skipped: d.skipped, site: d.site, lit: d.lit, trace: d.trace, sec: Math.round((Date.now() - t0) / 1000) })
+    calls.push({ status: r.status, code: r.code, stopped: d.stopped || r.error || null, frame: d.frame, cast: (d.cast || []).length, refills: d.refills, dug: d.dug, placed: d.placed, windows: d.windows, skipped: d.skipped, site: d.site, lit: d.lit, trace: d.trace, sec: Math.round((gameClock.now() - t0) / 1000) })
     ok = !!d.lit
   }
   const st = await call('status', {}).catch(() => ({}))
   const s = st.state || {}
-  const rec = { at: new Date().toISOString(), trial: k, pool, ok, minutes: Math.round((Date.now() - t0) / 6000) / 10, calls, hp: s.health, pos: s.pos, bag: Object.entries(s.inventory || {}).map(([n, v]) => `${n}×${v}`).join(' ') }
+  const rec = { at: new Date().toISOString(), trial: k, pool, ok, minutes: Math.round((gameClock.now() - t0) / 6000) / 10, calls, hp: s.health, pos: s.pos, bag: Object.entries(s.inventory || {}).map(([n, v]) => `${n}×${v}`).join(' ') }
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
   await call('stop').catch(() => {})
@@ -88,7 +89,7 @@ async function main () {
   await kit.cmd('/time set 1000')
   let k = 0
   for (let n = 0; n < TRIALS; n++) for (const pool of POOLS) await trial(k++, pool)
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ow-cast окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ow-cast окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

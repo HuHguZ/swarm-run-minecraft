@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Тотем (PVP-RESEARCH в.2, просьба 2026-09-26): проверка «тотем в левую руку
 // при ≤ 14 хп» стояла в главном цикле боя, а тот бывает занят по 1–1.6 с
 // (натяжение, еда, коробка) — бот мог умереть с тотемом в рюкзаке. Здесь:
@@ -94,7 +95,7 @@ function install (bot) {
         if (hb !== back) bot.setQuickBarSlot(back)
         T.fast++
         T.why[why] = (T.why[why] || 0) + 1
-        T.lastSwitch = Date.now()
+        T.lastSwitch = gameClock.now()
         return true
       } catch { return false }
     }
@@ -103,7 +104,7 @@ function install (bot) {
     busy = true
     T.slow++
     T.why[why] = (T.why[why] || 0) + 1
-    T.lastSwitch = Date.now()
+    T.lastSwitch = gameClock.now()
     bot.equip(it, 'off-hand').catch(() => { T.reequipFails++ }).finally(() => { busy = false })
     return true
   }
@@ -111,7 +112,7 @@ function install (bot) {
     try {
       if (!bot.entity || p.entityId !== bot.entity.id || p.entityStatus !== 35) return
       T.pops++
-      T.lastPop = Date.now()
+      T.lastPop = gameClock.now()
       // Сервер уже списал сработавший тотем (shrink до события): левая рука
       // пуста — новый из хотбара встаёт на её место тем же тиком.
       if (T.equip('сработал')) T.reequips++
@@ -124,6 +125,7 @@ function install (bot) {
 // Угроза прямо сейчас — нужен ли тотем в левой руке вместо щита.
 // ctx: { entity, maceThreat, hisReadyMs, theirR }
 function wantTotem (bot, ctx = {}) {
+  if (offName(bot) !== 'totem_of_undying' && !anyTotem(bot)) return { yes: false }
   const hp = (bot.health ?? 20) + absorption(bot)
   const e = ctx.entity
   // Взрывчатка рядом: кристалл, TNT, якорь — удар в десятки хп (PVP-RESEARCH б.10).
@@ -132,7 +134,8 @@ function wantTotem (bot, ctx = {}) {
     const me = bot.entity.position
     boom = bot.nearestEntity(x => x && x.position && (x.name === 'end_crystal' || x.name === 'tnt' || x.name === 'tnt_minecart') && x.position.distanceTo(me) < 8)
     if (!boom) {
-      const anchor = bot.findBlock({ matching: b => b && b.name === 'respawn_anchor', maxDistance: 6 })
+      const id = bot.registry.blocksByName.respawn_anchor.id
+      const anchor = require('./sight').visibleOf(bot, [id], 6, { max: 1, fair: false })[0]
       if (anchor) boom = anchor
     }
   } catch {}

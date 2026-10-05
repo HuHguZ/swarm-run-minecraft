@@ -1,19 +1,20 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Честный спринт (itemuse.js, 2026-09-26): скорость и пакеты спринта при
 // зажатом спринте без «вперёд» — вбок, назад, вперёд+назад — у голого
 // mineflayer и с правилом клиента (LocalPlayer.aiStep: canStartSprinting /
 // shouldStopRunSprinting — нужен «вперёд»). Один клиент NeuroEnd (оп на end).
 //   MC_PORT=25568 node try-sprintfair.js
-const mineflayer = require('mineflayer')
 const itemuse = require('./src/itemuse')
 
 const PORT = Number(process.env.MC_PORT || 25568)
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const X = 500; const Y = 150; const Z = 500
 const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { if (++k >= n) { bot.removeListener('physicsTick', f); resolve() } }; bot.on('physicsTick', f) })
 
 ;(async () => {
-  const bot = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username: 'NeuroEnd', version: '1.21.11', auth: 'offline' })
+  const bot = createGameBot({ host: '127.0.0.1', port: PORT, username: 'NeuroEnd', version: '1.21.11', auth: 'offline' }, { primary: true })
   await new Promise((resolve, reject) => { bot.once('spawn', resolve); bot.once('error', reject) })
   const cmd = async (t) => { bot.chat(t); await sleep(150) }
   let starts = 0; let stops = 0
@@ -59,6 +60,6 @@ const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { 
     process.exitCode = 1
   } finally {
     bot.quit()
-    setTimeout(() => process.exit(), 500)
+    gameClock.wall.setTimeout(() => process.exit(), 500)
   }
 })()

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Темп боя с человеком (жалобы пользователя после живых дуэлей 2026-09-25):
 //  · «ел, пока его забивали насмерть» — есть и пить только когда безопасно, и
 //    бросать глоток в тот же тик, когда безопасно быть перестало;
@@ -160,7 +161,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   const onUpdate = (e) => {
     if (!isFoe(e)) return
     const s = S(e)
-    const now = Date.now()
+    const now = gameClock.now()
     const f = flagsOf(e)
     const using = (f & 1) !== 0
     if (using && !s.use) {
@@ -179,12 +180,12 @@ function track (bot, { threats, reactMs = 150 } = {}) {
       }
     }
   }
-  const onSwing = (e) => { if (isFoe(e)) S(e).swungAt = Date.now() }
+  const onSwing = (e) => { if (isFoe(e)) S(e).swungAt = gameClock.now() }
   // Поставил блок рядом с собой сразу после взмаха — строит; под себя — столб.
   const onBlock = (oldB, newB) => {
     try {
       if (!newB || newB.boundingBox !== 'block' || (oldB && oldB.boundingBox === 'block')) return
-      const now = Date.now()
+      const now = gameClock.now()
       for (const e of foeList()) {
         const s = S(e)
         if (now - s.swungAt > 400) continue
@@ -202,7 +203,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   const onDig = (block, stage, breaker) => {
     if (!breaker || !isFoe(breaker) || !block || !block.position) return
     const s = S(breaker)
-    const now = Date.now()
+    const now = gameClock.now()
     const key = `${block.position.x},${block.position.y},${block.position.z}`
     if (s.digKey !== key || now - s.digAt > 1500) {
       s.digKey = key
@@ -220,11 +221,11 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   // Сколько ему ещё ломать текущий блок (мс); null — не ломает или неизвестно.
   T.digLeftMs = (e) => {
     const s = S(e)
-    if (!s.digAt || Date.now() - s.digAt > 1200 || !s.digTotal || !Number.isFinite(s.digTotal)) return null
-    return Math.max(0, s.digStart + s.digTotal - Date.now())
+    if (!s.digAt || gameClock.now() - s.digAt > 1200 || !s.digTotal || !Number.isFinite(s.digTotal)) return null
+    return Math.max(0, s.digStart + s.digTotal - gameClock.now())
   }
   const onHurt = (victim, source) => {
-    const now = Date.now()
+    const now = gameClock.now()
     if (victim === bot.entity) T.myHurtAt = now
     if (victim && source && bot.entity && source.id === bot.entity.id && isFoe(victim)) {
       const b = T.busy(victim)
@@ -234,7 +235,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   // Скорость — по тикам физики: пик за 2 с. Скачок больше 4 блоков за тик —
   // телепорт (жемчуг), в скорость не идёт.
   const onTick = () => {
-    const now = Date.now()
+    const now = gameClock.now()
     for (const e of foeList()) {
       const s = S(e)
       const p = e.position
@@ -272,7 +273,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   T.state = (e) => {
     if (!e || !e.position) return {}
     const s = S(e)
-    const now = Date.now()
+    const now = gameClock.now()
     const out = {}
     if (s.use && (s.use.kind === 'eat' || s.use.kind === 'drink')) {
       out.consuming = { item: s.use.potion || s.use.name, since: s.use.since, left: Math.max(0, consumeMs(s.use.name) - (now - s.use.since)) }
@@ -307,7 +308,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
     const me = bot.entity
     if (!me || !e || !e.position) return Infinity
     const s = S(e)
-    const now = Date.now()
+    const now = gameClock.now()
     const eye = e.position.offset(0, 1.62, 0)
     const r = reachFrom(eye, me)
     const gap = Math.max(0, r - PLAYER_REACH)
@@ -333,7 +334,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   // никто не ломает.
   // ignoreFire — пьём саму огнестойкость: горение ей не помеха, а причина.
   T.safe = (ms = 1600, { fortSealed = false, ignoreFire = false } = {}) => {
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - T.myHurtAt < HURT_WINDOW_MS) return { ok: false, why: 'по мне попали' }
     if (!ignoreFire && burning(bot.entity) && !hasEffect(bot, 'fire_resistance')) return { ok: false, why: 'горю' }
     const foes = foeList()
@@ -361,10 +362,10 @@ function track (bot, { threats, reactMs = 150 } = {}) {
   // Сторож глотка: зовётся каждый тик, пока едим; true — бросать. Считает по
   // оставшемуся времени, а не по полному.
   T.guard = (name, opts = {}) => {
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const total = consumeMs(name)
     return () => {
-      const left = Math.max(100, total - (Date.now() - t0))
+      const left = Math.max(100, total - (gameClock.now() - t0))
       const s = T.safe(left, { fortSealed: typeof opts.fortSealed === 'function' ? opts.fortSealed() : !!opts.fortSealed })
       if (!s.ok) T.lastAbort = String(s.why).replace(/ через \d+ мс/, '')
       return !s.ok
@@ -401,7 +402,7 @@ function track (bot, { threats, reactMs = 150 } = {}) {
       return { kind: 'rush', why: ai.why, left: ai.left }
     }
     const b = T.state(e)
-    const now = Date.now()
+    const now = gameClock.now()
     const reacted = (since) => !since || now - since >= T.reactMs
     const reachMs = Math.max(0, r - hitReach) / SPRINT_BPT * TICK_MS
     if (b.consuming && reacted(b.consuming.since)) {
@@ -463,19 +464,19 @@ function pickOpening ({ d, hp, aggression = 0.5, has = {}, foeBusy = false }) {
 // Взгляд ведёт сам: aim в pvp.js на это время 'free'.
 async function kite (bot, ctl, threats, { ms = 1500, until = null, stop = null } = {}) {
   const flee = require('./flee')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let plan = null
   let planAt = 0
   let out = 'время'
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms) {
       if (until && until()) { out = 'оторвался'; break }
       if (stop && stop()) { out = 'догнал'; break }
-      if (Date.now() >= planAt) {
+      if (gameClock.now() >= planAt) {
         const me = bot.entity.position
         const hs = (threats() || []).filter(e => e && e.position).map(e => ({ e, doc: { radius: 12, weight: 10 }, d: e.position.distanceTo(me) }))
         plan = flee.pickDirection(bot, hs, plan ? plan.yaw : null)
-        planAt = Date.now() + 300
+        planAt = gameClock.now() + 300
       }
       if (!plan) { out = 'некуда'; break }
       await bot.look(plan.yaw, 0, true).catch(() => {})

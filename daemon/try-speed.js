@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Скорость под зельем: атрибут movement_speed приходит под чужим именем
 // (gamedata.fixAttributes). С фиксом Скорость II ускоряет шаг тела, без —
 // тело идёт базовой скоростью, а сервер ждёт быстрее.
@@ -7,8 +8,8 @@ const ws = new WebSocket(process.env.ND_WS || 'ws://127.0.0.1:8766')
 let id = 0
 const pending = new Map()
 const call = (method, params = {}) => new Promise((resolve, reject) => { const rid = ++id; pending.set(rid, { resolve, reject }); ws.send(JSON.stringify({ id: rid, method, params })) })
-ws.on('message', raw => { const m = JSON.parse(raw.toString()); const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error)) })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+ws.on('message', raw => { const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock); const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error)) })
+const sleep = ms => gameClock.sleep(ms)
 const cmd = async (t) => { await call('say', { text: t }); await sleep(350) }
 const X = 2200; const Y = 100; const Z = 1700
 async function run (label, effect) {
@@ -16,9 +17,9 @@ async function run (label, effect) {
   await cmd('/effect clear @s')
   if (effect) await cmd(effect)
   await sleep(800)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('goto', { x: X + 60, y: Y, z: Z, range: 1, timeoutSeconds: 40 })
-  const s = (Date.now() - t0) / 1000
+  const s = (gameClock.now() - t0) / 1000
   console.log(`${label}: ${r.status} ${s.toFixed(1)} с → ${(60 / s).toFixed(2)} бл/с`)
   return s
 }

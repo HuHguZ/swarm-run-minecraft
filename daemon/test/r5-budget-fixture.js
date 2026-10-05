@@ -2,6 +2,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 const { createRequire } = require('node:module')
 function fixture (info) {
   const clock = { t: 1000 }; const calls = []; const steps = []; const logs = []
@@ -27,7 +28,7 @@ function fixture (info) {
     state = fixtureState; sit = fixtureSit; routeInfoGet = () => fixtureInfo;
     routeStep = async s => { if (s.kind === 'treasure') await act('structure', { timeoutSeconds: 900 }); return step(s) };
     stage = 'route'; module.exports = { run: () => STAGES.find(s => s.name === 'route').run() };
-  `, ctx)
+  `, withClockFixture(ctx))
   return { ...ctx.module.exports, calls, steps, logs }
 }
 module.exports = { fixture }

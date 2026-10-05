@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Operator-prepared test pond, on farm worlds only. The escape uses surface,
 // with no coordinates of the bank passed to the bot and no rescue commands.
 const fs = require('fs')
@@ -32,9 +33,9 @@ async function main () {
     await kit.cmd('/gamemode survival')
     result.start = (await call('situation')).detail
     if (!result.start.inWater || result.start.surface) throw new Error('пруд не загружен — сцена недействительна')
-    const start = Date.now()
+    const start = gameClock.now()
     result.escape = await call('surface', { targetY: 104, timeoutSeconds: 12, preferPillar: false })
-    result.elapsedMs = Date.now() - start
+    result.elapsedMs = gameClock.now() - start
     await sleep(3000) // an airborne jump over water is not a stable landing
     result.end = (await call('situation')).detail
     result.body = (await call('status', { physics: true })).detail.physics

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Предметы на земле — общий слой подбора.
 //
 // Корень «бот не видит выпавшее» (замер pickprobe на ферме, 2026-09-29): mineflayer не
@@ -43,7 +44,7 @@ const FIREPROOF = /netherite|^ancient_debris$/
 // выброшенное игроком — 40 (Player.drop). Дольше этого плюс запас — не наш случай.
 const MAX_PICKUP_DELAY_MS = 2000 + 400
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => new Promise(resolve => gameClock.setTimeout(resolve, ms))
 
 // ------------------------------------------------------------------ записи о предметах
 
@@ -57,7 +58,7 @@ function install (bot) {
   const S = { items: new Map(), mine: new Map(), rawVel: new Map(), itemType: null }
   bot._ndDrops = S
   try { S.itemType = bot.registry.entitiesByName.item.id } catch {}
-  const now = () => Date.now()
+  const now = () => gameClock.now()
   const show = r => {
     const e = bot.entities && bot.entities[r.id]
     if (!e || !e.position || typeof e.position.set !== 'function') return
@@ -216,7 +217,7 @@ function recordOf (bot, e) {
     const p = e.position
     const st = stackOf(e)
     const fireproof = !!st && FIREPROOF.test(st.name)
-    r = { id: e.id, t0: 0, synced: true, bx: p.x, by: p.y, bz: p.z, x: p.x, y: p.y, z: p.z, vx: 0, vy: 0, vz: 0, onGround: false, tSync: Date.now(), count: st ? st.count : undefined, fireproof }
+    r = { id: e.id, t0: 0, synced: true, bx: p.x, by: p.y, bz: p.z, x: p.x, y: p.y, z: p.z, vx: 0, vy: 0, vz: 0, onGround: false, tSync: gameClock.now(), count: st ? st.count : undefined, fireproof }
     r.sim = { id: r.id, age: 0, x: p.x, y: p.y, z: p.z, vx: 0, vy: 0, vz: 0, onGround: false, fireproof }
     S.items.set(e.id, r)
   }
@@ -443,7 +444,7 @@ function lying (bot, { radius = 8, from = null, match = null, skip = null } = {}
     if (dist > radius) continue
     const stack = stackOf(e)
     if (match && !match(e, stack)) continue
-    out.push({ e, id: e.id, stack, name: stack ? stack.name : null, rest, dist, age: r.t0 ? Date.now() - r.t0 : Infinity })
+    out.push({ e, id: e.id, stack, name: stack ? stack.name : null, rest, dist, age: r.t0 ? gameClock.now() - r.t0 : Infinity })
   }
   S.lastLying = out.length
   return out.sort((a, b) => a.dist - b.dist)
@@ -456,13 +457,13 @@ function lying (bot, { radius = 8, from = null, match = null, skip = null } = {}
 async function pickOne (bot, ctl, item, { timeoutMs = 6000 } = {}) {
   const S = install(bot)
   const id = item.id
-  const deadline = Date.now() + timeoutMs
+  const deadline = gameClock.now() + timeoutMs
   const getBlock = blockGetter(bot)
   const r0 = S.items.get(id) || recordOf(bot, item.e)
   let target = predictRest(bot, r0, getBlock)
   let goal = null
   let noPath = false
-  let lastProgress = Date.now()
+  let lastProgress = gameClock.now()
   let best = Infinity
   let inRangeSince = 0
   const onPath = res => { if (res && res.status === 'noPath' && (!res.path || !res.path.length)) noPath = true }
@@ -481,7 +482,7 @@ async function pickOne (bot, ctl, item, { timeoutMs = 6000 } = {}) {
     for (;;) {
       if (!bot.entities[id]) return S.mine.has(id) ? 'picked' : 'gone'
       if (ctl.aborted) return 'прервано'
-      if (Date.now() > deadline) return 'время вышло'
+      if (gameClock.now() > deadline) return 'время вышло'
       const r = S.items.get(id) || r0
       const now = predictNow(bot, r)
       const feet = bot.entity.position
@@ -490,10 +491,10 @@ async function pickOne (bot, ctl, item, { timeoutMs = 6000 } = {}) {
         // от слияния стопок — ItemEntity.merge берёт max задержек).
         if (goal) { dropGoal(); goal = null }
         bot.clearControlStates()
-        if (!inRangeSince) inRangeSince = Date.now()
+        if (!inRangeSince) inRangeSince = gameClock.now()
         const born = Math.max(r.t0 || 0, r.tMerge || 0)
-        const age = born ? Date.now() - born : Infinity
-        if (Date.now() - inRangeSince > 700 && age > MAX_PICKUP_DELAY_MS) return 'рядом, но не отдают'
+        const age = born ? gameClock.now() - born : Infinity
+        if (gameClock.now() - inRangeSince > 700 && age > MAX_PICKUP_DELAY_MS) return 'рядом, но не отдают'
         await sleep(TICK_MS)
         continue
       }
@@ -501,25 +502,25 @@ async function pickOne (bot, ctl, item, { timeoutMs = 6000 } = {}) {
       const rest = predictRest(bot, r, getBlock)
       const flat = Math.hypot(rest.x - feet.x, rest.z - feet.z)
       const d = flat + Math.abs(rest.y - feet.y)
-      if (d < best - 0.25) { best = d; lastProgress = Date.now() }
+      if (d < best - 0.25) { best = d; lastProgress = gameClock.now() }
       // Рядом и на том же уровне, а pathfinder встал (путь кончился в соседней клетке) —
       // шаг прямо к предмету, как делает человек.
       let moving = false
       try { moving = bot.pathfinder.isMoving() } catch {}
-      if (goal && !moving && flat < 2.2 && Math.abs(rest.y - feet.y) < 0.9 && Date.now() - lastProgress > 600) {
+      if (goal && !moving && flat < 2.2 && Math.abs(rest.y - feet.y) < 0.9 && gameClock.now() - lastProgress > 600) {
         dropGoal()
         goal = null
         await nudge(bot, ctl, rest, 600)
-        lastProgress = Date.now()
+        lastProgress = gameClock.now()
         continue
       }
       if (!goal || Math.hypot(rest.x - target.x, rest.y - target.y, rest.z - target.z) > 0.3) {
         target = rest
-        if (process.env.ND_DEBUG_DROPS) console.log('[drops] goal', id, JSON.stringify({ rec: { x: r.x, y: r.y, z: r.z, vx: r.vx, vy: r.vy, vz: r.vz, og: r.onGround, synced: r.synced, age: Date.now() - r.t0, sinceSync: Date.now() - r.tSync }, now: { x: now.x, y: now.y, z: now.z }, rest: { x: rest.x, y: rest.y, z: rest.z, rest: rest.rest }, feet: { x: feet.x, y: feet.y, z: feet.z } }))
+        if (process.env.ND_DEBUG_DROPS) console.log('[drops] goal', id, JSON.stringify({ rec: { x: r.x, y: r.y, z: r.z, vx: r.vx, vy: r.vy, vz: r.vz, og: r.onGround, synced: r.synced, age: gameClock.now() - r.t0, sinceSync: gameClock.now() - r.tSync }, now: { x: now.x, y: now.y, z: now.z }, rest: { x: rest.x, y: rest.y, z: rest.z, rest: rest.rest }, feet: { x: feet.x, y: feet.y, z: feet.z } }))
         setGoal(rest)
       }
       if (noPath) return 'пути нет'
-      if (Date.now() - lastProgress > 3500) return 'не приближаюсь'
+      if (gameClock.now() - lastProgress > 3500) return 'не приближаюсь'
       await sleep(TICK_MS)
     }
   } finally {
@@ -535,7 +536,7 @@ async function pickOne (bot, ctl, item, { timeoutMs = 6000 } = {}) {
 // 29.09: старый шаг гасил чужой «вперёд», а отмена по сроку (runIntent → ctl.abort без
 // clearControlStates) оставляла «вперёд» нажатым.
 async function nudge (bot, ctl, p, ms) {
-  const until = Date.now() + ms
+  const until = gameClock.now() + ms
   let mine = false
   const release = () => {
     if (!mine) return
@@ -545,7 +546,7 @@ async function nudge (bot, ctl, p, ms) {
   const hooked = Array.isArray(ctl.onAbort)
   if (hooked) ctl.onAbort.push(release)
   try {
-    while (Date.now() < until && !ctl.aborted) {
+    while (gameClock.now() < until && !ctl.aborted) {
       const me = bot.entity.position
       const dx = p.x - me.x
       const dz = p.z - me.z
@@ -570,17 +571,17 @@ async function nudge (bot, ctl, p, ms) {
 // после слома или смерти). Возвращает число подобранных стопок; подробности — в bot._ndLastCollect.
 async function collect (bot, ctl, { radius = 6, timeoutMs = 8000, from = null, match = null, appearMs = 600, onStack = null } = {}) {
   install(bot)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + timeoutMs
   const center = from ? new Vec3(from.x, from.y, from.z) : bot.entity.position.clone()
   const skip = new Map()
   const report = { picked: 0, gone: 0, skipped: [], seen: 0 }
   bot._ndLastCollect = report
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     const cands = lying(bot, { radius, from: center, match, skip })
     report.seen = Math.max(report.seen, cands.length + report.picked)
     if (!cands.length) {
-      if (Date.now() - t0 < appearMs) { await sleep(TICK_MS * 2); continue }
+      if (gameClock.now() - t0 < appearMs) { await sleep(TICK_MS * 2); continue }
       break
     }
     // Ближайший к телу (не к центру поиска): обход кучи по порядку, без метаний.
@@ -591,7 +592,7 @@ async function collect (bot, ctl, { radius = 6, timeoutMs = 8000, from = null, m
       if (verdict === 'skip') { skip.set(it.id, 'не берём'); continue }
     }
     const far = Math.hypot(it.rest.x - me.x, it.rest.z - me.z)
-    const res = await pickOne(bot, ctl, it, { timeoutMs: Math.min(3000 + 450 * far, Math.max(0, deadline - Date.now())) })
+    const res = await pickOne(bot, ctl, it, { timeoutMs: Math.min(3000 + 450 * far, Math.max(0, deadline - gameClock.now())) })
     if (res === 'picked') report.picked++
     else if (res === 'gone') report.gone++
     else { skip.set(it.id, res); report.skipped.push({ item: it.name, at: { x: +it.rest.x.toFixed(1), y: +it.rest.y.toFixed(1), z: +it.rest.z.toFixed(1) }, why: res }) }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 const { sleep, xyz, inWater, escapeWater } = require('./movement')
@@ -68,14 +69,14 @@ function clamp (value, lo, hi, fallback) {
 const LAST_SEEN = new Map()
 
 function rememberSeen (name, pos) {
-  LAST_SEEN.set(name, { ...pos, at: Date.now() })
+  LAST_SEEN.set(name, { ...pos, at: gameClock.now() })
 }
 
 // This process first, then memory: LAST_SEEN dies with the daemon, and the
 // journal is the only copy that survives a restart.
 function recallSeen (session, name) {
   const live = LAST_SEEN.get(name)
-  if (live) return { x: live.x, y: live.y, z: live.z, agoSeconds: Math.round((Date.now() - live.at) / 1000) }
+  if (live) return { x: live.x, y: live.y, z: live.z, agoSeconds: Math.round((gameClock.now() - live.at) / 1000) }
   try {
     const rec = session.journal.state.people[name]
     const seen = rec && typeof rec === 'object' ? rec.lastSeen : null
@@ -183,10 +184,10 @@ async function escort (session, ctl, { player, distance = 3, forSeconds = 60 } =
 
   const keep = clamp(distance, 1, 16, 3)
   const budget = clamp(forSeconds, 5, 300, 60)
-  const startedAt = Date.now()
+  const startedAt = gameClock.now()
   const deadline = startedAt + budget * 1000
   const from = xyz(bot.entity.position)
-  const elapsed = () => Math.round((Date.now() - startedAt) / 1000)
+  const elapsed = () => Math.round((gameClock.now() - startedAt) / 1000)
 
   // A nick typed from memory in the wrong case must not come back as "такого
   // игрока нет" about somebody standing two blocks away.
@@ -275,7 +276,7 @@ async function escort (session, ctl, { player, distance = 3, forSeconds = 60 } =
       // re-arm the goal that abort just cleared.
       await sleep(WATCH_MS)
       if (ctl.aborted) { stopped = `прервано на ${elapsed()}-й секунде`; break }
-      if (Date.now() >= deadline) break
+      if (gameClock.now() >= deadline) break
 
       const here = bot.entity.position
       walked += flat(here, last)
@@ -344,8 +345,8 @@ async function escort (session, ctl, { player, distance = 3, forSeconds = 60 } =
       }
 
       if (inWater(bot)) {
-        if (!wetSince) wetSince = Date.now()
-        else if (Date.now() - wetSince > WET_MS) {
+        if (!wetSince) wetSince = gameClock.now()
+        else if (gameClock.now() - wetSince > WET_MS) {
           wetSince = null
           const out = await escapeWater(bot, ctl)
           if (!out.ok) {
@@ -366,8 +367,8 @@ async function escort (session, ctl, { player, distance = 3, forSeconds = 60 } =
       // cancelling any bite already in flight, so two eaters is two failed meals.
       // The autopilot cannot do this for us — it stands down while an intent runs.
       const eatBelow = session.cfg.eatBelowFood ?? 16
-      if ((bot.food ?? 20) <= eatBelow && !session.eating && Date.now() - lastMeal > EAT_RETRY_MS) {
-        lastMeal = Date.now()
+      if ((bot.food ?? 20) <= eatBelow && !session.eating && gameClock.now() - lastMeal > EAT_RETRY_MS) {
+        lastMeal = gameClock.now()
         session.eating = true
         const meal = await eat(session, {}).catch(() => null).finally(() => { session.eating = false })
         if (meal && meal.ate) {

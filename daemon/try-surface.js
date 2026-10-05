@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // «Я ещё в шахте?» — и что бывает, когда ответ неверный.
 //
 // mc_surface должен различать три места, которые сверху выглядят одинаково:
@@ -39,7 +40,7 @@ const mark = () => heard.length
 const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -47,7 +48,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const pos = async () => (await call('status')).state.pos
 const health = async () => (await call('status')).state.health
 
@@ -494,10 +495,10 @@ async function caseShallowLoot () {
   await cmd('/summon minecraft:item 761 67 761 {Item:{id:"minecraft:diamond",count:5}}')
 
   const from = await pos()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await step('recover x=761 y=66 z=761', 'recover',
     { x: 761, y: 66, z: 761, radius: 8, timeoutSeconds: 240 })
-  const took = Math.round((Date.now() - t0) / 1000)
+  const took = Math.round((gameClock.now() - t0) / 1000)
   const d = r.detail || {}
   const at = await pos()
   // Срок — первая проверка, а не следствие остальных. Прогон, в котором это

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Честность (просьба 2026-09-26: «бот должен играть с людьми честно»): пока
 // предмет «в ходу» — ест, пьёт, тянет лук, заряжает арбалет, держит щит, —
 // ванильный клиент режет ввод движения и не даёт начать спринт. Сервер этого
@@ -157,13 +158,13 @@ function install (bot) {
     if (!U.cur) return
     U.stats.ended[why] = (U.stats.ended[why] || 0) + 1
     U.cur = null
-    U.endedAt = Date.now()
+    U.endedAt = gameClock.now()
     // Спринт, который хотели начать, пока ели, начнётся на ближайшем тике
     // (canStartSprinting в обёртке физики ниже) — если есть «вперёд».
   }
   const start = (hand, item, why, confirmed = false) => {
     const fx = effectsOf(item && item.name)
-    U.cur = { hand, name: item ? item.name : null, since: Date.now(), mult: fx.mult, canSprint: fx.canSprint, confirmed, why }
+    U.cur = { hand, name: item ? item.name : null, since: gameClock.now(), mult: fx.mult, canSprint: fx.canSprint, confirmed, why }
     U.stats.uses++
   }
 
@@ -306,7 +307,7 @@ function install (bot) {
         // Player.tick/LivingEntity.updatingUsingItem: другой предмет в руке — конец.
         if (U.cur && U.cur.hand === 0 && (!bot.heldItem || bot.heldItem.name !== U.cur.name)) end('сменил предмет')
       }
-      if (U.cur && !U.cur.confirmed && Date.now() - U.cur.since > UNCONFIRMED_MS) end('сервер не начал')
+      if (U.cur && !U.cur.confirmed && gameClock.now() - U.cur.since > UNCONFIRMED_MS) end('сервер не начал')
     } catch {}
   })
   return U

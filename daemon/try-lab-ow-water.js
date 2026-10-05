@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория «ведро воды» (поток overworld, 02.10.2026): почему ведро не набирается. В сериях ow-E2/E3 у воды за
 // блоком штрека (portal cast waterHint) ведро набралось 2 раза из ~27, у пруда поверху — «ведро не набралось ни из
 // одного из N источников» десятки раз. Арена из команд (только ферма), мобы выкл.; дальше без команд — те же RPC, что
@@ -77,9 +78,9 @@ async function trial (k, pool) {
   await kit.cmd('/gamemode survival')
   await kit.cmd('/effect clear @s')
   await sleep(2500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const calls = []
-  const push = (m, r) => { const d = r.detail || {}; calls.push({ m, status: r.status, stopped: d.stopped || d.note || r.error || null, from: d.from, water: d.water, sec: Math.round((Date.now() - t0) / 1000) }); return d }
+  const push = (m, r) => { const d = r.detail || {}; calls.push({ m, status: r.status, stopped: d.stopped || d.note || r.error || null, from: d.from, water: d.water, sec: Math.round((gameClock.now() - t0) / 1000) }); return d }
   let ok = false
   const has = async () => { const st = await call('status', {}).catch(() => ({})); return cnt((st.state || {}).inventory, 'water_bucket') > 0 }
   if (!deep) {
@@ -99,7 +100,7 @@ async function trial (k, pool) {
   }
   const st = await call('status', {}).catch(() => ({}))
   const s = st.state || {}
-  const rec = { at: new Date().toISOString(), trial: k, pool, ok, seconds: Math.round((Date.now() - t0) / 1000), calls, hp: s.health, pos: s.pos }
+  const rec = { at: new Date().toISOString(), trial: k, pool, ok, seconds: Math.round((gameClock.now() - t0) / 1000), calls, hp: s.health, pos: s.pos }
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
   await call('stop').catch(() => {})
@@ -118,7 +119,7 @@ async function main () {
   await kit.cmd('/time set 1000')
   let k = 0
   for (let n = 0; n < TRIALS; n++) for (const pool of POOLS) await trial(k++, pool)
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ow-water окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ow-water окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

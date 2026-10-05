@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 
@@ -42,7 +43,7 @@ const DUSK_FROM = 11840
 const BUNKER_DEPTH = 6
 const CARDINALS = [[0, -1], [0, 1], [-1, 0], [1, 0]]
 
-function sleep (ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+function sleep (ms) { return new Promise(resolve => gameClock.setTimeout(resolve, ms)) }
 const tod = (bot) => bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : 6000
 // Гроза — по уровню грозы (perception.thundering, 2026-09-26): флаг
 // bot.isRaining на Paper вывернут и под дождём не встаёт.
@@ -124,7 +125,7 @@ async function bunker (session, ctl, { depth = BUNKER_DEPTH, deadline }) {
   let stopped = null
   let lid = 0
   let swings = 0
-  while (dug() < depth && swings < depth * 3 && !ctl.aborted && Date.now() < deadline) {
+  while (dug() < depth && swings < depth * 3 && !ctl.aborted && gameClock.now() < deadline) {
     const r = await survival.sinkOne(bot, mcData)
     swings++
     if (r.stopped) { stopped = r.stopped; break }
@@ -226,7 +227,7 @@ async function night (session, ctl, p = {}) {
   if (dim && dim !== 'overworld') {
     throw new Error(`${dim === 'the_nether' ? 'в Аду' : 'здесь'} кровать взрывается (BedRule explodes) — не ставлю. Переждать — mc_shelter`)
   }
-  const deadline = Date.now() + Math.max(60, Math.min(600, p.timeoutSeconds ?? 300)) * 1000
+  const deadline = gameClock.now() + Math.max(60, Math.min(600, p.timeoutSeconds ?? 300)) * 1000
 
   if (!bot.isSleeping) {
     const t0 = tod(bot)
@@ -276,21 +277,21 @@ async function night (session, ctl, p = {}) {
     // Сумерки: кровать стоит, ложимся с первым тиком ночи — раньше мобов.
     if (!sleepTime(bot)) {
       note(`сумерки (${tod(bot)}) — жду ${NIGHT_FROM}`)
-      while (!sleepTime(bot) && !ctl.aborted && Date.now() < deadline) await sleep(400)
+      while (!sleepTime(bot) && !ctl.aborted && gameClock.now() < deadline) await sleep(400)
     }
 
     // Мобы в коробке у изголовья: подождать (в бункере они не дойдут), а на
     // поверхности, если бункера ещё не было, — забрать кровать и вниз.
     let waited = 0
     for (;;) {
-      if (ctl.aborted || Date.now() >= deadline || !sleepTime(bot)) break
+      if (ctl.aborted || gameClock.now() >= deadline || !sleepTime(bot)) break
       threats = bedThreats(bot, head.position)
       if (!threats.length) break
       if (!bunk && allowBunker && near.own) {
         const got = await takeBed(session, ctl, near.block)
         if (got.took) {
           note(`мобы подошли (${threatText(threats)}) — ухожу под землю`)
-          return await night(session, ctl, { ...p, _bunker: true, timeoutSeconds: Math.max(60, (deadline - Date.now()) / 1000) })
+          return await night(session, ctl, { ...p, _bunker: true, timeoutSeconds: Math.max(60, (deadline - gameClock.now()) / 1000) })
         }
       }
       if (!waited) note(`не уснуть — рядом ${threatText(threats)}; жду, пока уйдут`)
@@ -350,8 +351,8 @@ async function night (session, ctl, p = {}) {
 
   // Ждём пропуска ночи. Сервер будит всех сам, как только нужная доля
   // игроков (playersSleepingPercentage) в кроватях ~100 тиков.
-  const until = Math.min(deadline, Date.now() + Math.max(5, Math.min(300, waitSeconds)) * 1000)
-  while (Date.now() < until && !ctl.aborted && bot.isSleeping && sleepTime(bot)) await sleep(500)
+  const until = Math.min(deadline, gameClock.now() + Math.max(5, Math.min(300, waitSeconds)) * 1000)
+  while (gameClock.now() < until && !ctl.aborted && bot.isSleeping && sleepTime(bot)) await sleep(500)
   // Сервер будит сразу, а время шлёт своим чередом (раз в 20 тиков) — «встал,
   // а на часах ночь» ещё не значит, что ночь не проскочила.
   await sleep(600)
@@ -365,7 +366,7 @@ async function night (session, ctl, p = {}) {
     out.othersAwake = true
     return out
   }
-  session.lastRest = Date.now()
+  session.lastRest = gameClock.now()
   note('утро')
 
   // Утро: своя кровать — с собой, чужая — на месте. Сон ставит точку

@@ -1,6 +1,9 @@
 'use strict'
+const gameClock = require('./game-clock')
 const mineflayer = require('mineflayer')
-const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const { Movements, goals } = require('mineflayer-pathfinder')
+const tickPlugins = require('./tick-plugins')
+const { pathfinder } = tickPlugins
 const mcDataLoader = require('minecraft-data')
 const Vec3 = require('vec3')
 const { observe, stateSummary, biomeName } = require('./perception')
@@ -48,9 +51,10 @@ const playPolicy = require('./play-policy')
 // an intent that ignores its abort signal keeps running after the brain has
 // already moved on.
 function sleep (ms, ctl) {
+  if (ctl?.aborted) return Promise.resolve()
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -216,9 +220,15 @@ class Session {
         username: this.cfg.username,
         version: this.cfg.version,
         auth: this.cfg.auth,
+        plugins: tickPlugins.plugins,
         hideErrors: false
       })
       this.bot = bot
+      gameClock.bind(bot)
+      // Autopilot starts before connect. Replace its initial wall timer with
+      // this connection's game timer, also on every reconnect.
+      this.autopilot?.stop()
+      this.autopilot?.start()
       this.wireHealth(bot)
       bot.ndPlayPolicy = this.playPolicy
       require('./client-loaded').install(bot)
@@ -277,7 +287,7 @@ class Session {
           // Wait for neighbouring columns too: a portal across the chunk border
           // otherwise looks absent. client-loaded's earlier listener sends its
           // acknowledgement after the same load, before connect becomes ready.
-          await withTimeout(bot.waitForChunksToLoad(), 12000, 'чанки вокруг игрока не загрузились — вход не готов')
+          await withTimeout(bot.waitForChunksToLoad(), 12000, 'чанки вокруг игрока не загрузились — вход не готов', gameClock.wall)
           await this.waitUntilWorldLoaded(10000)
           if (settled || this.bot !== bot) return
           this.journal.append('вход', `зашёл на сервер как ${bot.username} (${bot.version})`, bot.entity.position)
@@ -488,8 +498,8 @@ class Session {
     // Проверить заново, когда встанем.
     if (!bot.entity.onGround && !bot.entity.isInWater) {
       // Не дольше 10 с: планер, лодка, лестница — «в воздухе» надолго.
-      if (!this.dropRecheck) this.dropRecheckSince = Date.now()
-      if (Date.now() - this.dropRecheckSince < 10000) {
+      if (!this.dropRecheck) this.dropRecheckSince = gameClock.now()
+      if (gameClock.now() - this.dropRecheckSince < 10000) {
         this.dropRecheck = true
         this.dropRetry(100)
       }
@@ -507,8 +517,8 @@ class Session {
   }
 
   dropRetry (ms) {
-    if (this.dropRetryTimer) return
-    this.dropRetryTimer = setTimeout(() => { this.dropRetryTimer = null; try { this.refreshDrop() } catch {} }, ms)
+    if (this.dropRetryTimer && !this.dropRetryTimer.clock?.disposed) return
+    this.dropRetryTimer = gameClock.setTimeout(() => { this.dropRetryTimer = null; try { this.refreshDrop() } catch {} }, ms)
   }
 
   watchDrop () {
@@ -519,7 +529,7 @@ class Session {
     const later = () => {
       if (queued) return
       queued = true
-      setTimeout(() => { queued = false; try { this.refreshDrop() } catch {} }, 0)
+      gameClock.setTimeout(() => { queued = false; try { this.refreshDrop() } catch {} }, 0)
     }
     // Узлы пути пишет notePath (wire): здесь же писали lastPath = r.path, но обработчик wire, подписанный позже,
     // тут же затирал его сводкой поиска.
@@ -579,13 +589,13 @@ class Session {
   // first observe() after connect returns real terrain instead of nulls.
   async waitUntilWorldLoaded (timeoutMs = 10000) {
     const bot = this.bot
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+    const deadline = gameClock.wall.now() + timeoutMs
+    while (gameClock.wall.now() < deadline) {
       try {
         const feet = bot.blockAt(bot.entity.position.offset(0, -1, 0))
         if (feet && (bot.health ?? 0) > 0) return true
       } catch {}
-      await sleep(200)
+      await gameClock.wall.sleep(200)
     }
     return false
   }
@@ -613,7 +623,7 @@ class Session {
       bot._client.on('damage_event', pk => {
         if (this.bot !== bot || !bot.entity || !pk || pk.entityId !== bot.entity.id) return
         const src = pk.sourceCauseId > 0 && bot.entities ? bot.entities[pk.sourceCauseId - 1] : null
-        hit = { cause: gamedata.damageTypeName(pk.sourceTypeId) || `type_${pk.sourceTypeId}`, source: src ? (src.username || src.name) : null, at: Date.now() }
+        hit = { cause: gamedata.damageTypeName(pk.sourceTypeId) || `type_${pk.sourceTypeId}`, source: src ? (src.username || src.name) : null, at: gameClock.now() }
       })
     } catch {}
     // Mineflayer starts with hp20 before the first server update. That first
@@ -623,7 +633,7 @@ class Session {
       if (this.bot !== bot) return
       const hp = bot.health ?? 20
       if (last !== null && hp < last) {
-        const typed = hit && Date.now() - hit.at <= 250 ? hit : null
+        const typed = hit && gameClock.now() - hit.at <= 250 ? hit : null
         if (typed) hit = null
         this.bus.emit('damage', { health: Math.round(hp), lost: Math.round(last - hp), ...(typed ? { cause: typed.cause, ...(typed.source ? { source: typed.source } : {}) } : {}) })
       }
@@ -635,8 +645,8 @@ class Session {
       // The initial dead state must still request respawn after the server
       // starts accepting client commands.
       if (hp <= 0 && !this.respawnNudge) {
-        this.respawnNudge = setInterval(() => {
-          if (this.bot !== bot || (bot.health ?? 20) > 0) { clearInterval(this.respawnNudge); this.respawnNudge = null; return }
+        this.respawnNudge = gameClock.wall.setInterval(() => {
+          if (this.bot !== bot || (bot.health ?? 20) > 0) { gameClock.wall.clearInterval(this.respawnNudge); this.respawnNudge = null; return }
           try { bot._client.write('client_command', bot.supportFeature('respawnIsPayload') ? { payload: 0 } : { actionId: 0 }) } catch {}
         }, 3000)
       }
@@ -675,7 +685,7 @@ class Session {
         bot.setControlState('left', false)
         bot.setControlState('right', false)
         bot.setControlState('forward', c.forward)
-        if (!this.steerSaid || Date.now() - this.steerSaid > 5000) { this.steerSaid = Date.now(); console.log('[path] в воздухе перед копкой — веду в колонну узла', JSON.stringify({ at: nodes[0].x + ',' + nodes[0].y + ',' + nodes[0].z })) }
+        if (!this.steerSaid || gameClock.now() - this.steerSaid > 5000) { this.steerSaid = gameClock.now(); console.log('[path] в воздухе перед копкой — веду в колонну узла', JSON.stringify({ at: nodes[0].x + ',' + nodes[0].y + ',' + nodes[0].z })) }
       } catch {}
     })
 
@@ -711,7 +721,7 @@ class Session {
     // дорогого — факт; выбросить нечего — мозгу решать про схрон.
     bot.on('nd_tossed', (e) => this.bus.emit('tossed', e))
     bot.on('nd_bag_full', (e) => {
-      const now = Date.now()
+      const now = gameClock.now()
       if (this.bagFullSaid && now - this.bagFullSaid < 20000) return
       this.bagFullSaid = now
       this.bus.emit('bag_full', { ...e, text: `РЮКЗАК ПОЛОН: ${e.item}×${e.count} лежит на ${e.at.x},${e.at.y},${e.at.z}, а выкинуть дешевле нечего — поставь схрон (mc_cache) или разгрузись (mc_pack tidy)` })
@@ -750,7 +760,7 @@ class Session {
         if (s.deaths.length > 50) s.deaths.splice(0, s.deaths.length - 50)
       })
       this.journal.append('смерть', `умер${pos ? '' : ' (координаты неизвестны)'}`, bot.entity && bot.entity.position)
-      this.lastDeath = { at: Date.now(), pos, dimension: worlds.worldOf(bot) }
+      this.lastDeath = { at: gameClock.now(), pos, dimension: worlds.worldOf(bot) }
       this.noteDeathCause()
     })
     // Причина смерти — строка сервера «NeuroRun tried to swim in lava»; она
@@ -758,7 +768,7 @@ class Session {
     bot.on('messagestr', (msg) => {
       const t = String(msg || '')
       if (!t.startsWith(bot.username + ' ') || t.length > 160) return
-      this.pendingCause = { text: t, at: Date.now() }
+      this.pendingCause = { text: t, at: gameClock.now() }
       this.noteDeathCause()
     })
 
@@ -838,6 +848,7 @@ class Session {
       // События читают несколько наблюдателей; смерть не должна потеряться
       // после drain() или перезапуска тела. Журнал сохраняется на диске.
       lastDeathAt: this.journal.state.deaths?.at(-1)?.at || null,
+      clock: this.bot?.ndClock?.snapshot() || null,
       busy: this.current ? this.current.name : null
     })
   }
@@ -914,7 +925,12 @@ class Session {
     // mineflayer-pathfinder's own English. And chat, which gets no grace, never
     // sees that throw at all — the flag is all it has.
     let entered = false
-    const begin = async () => { await ctl.waitReflex(); entered = true; return worker(ctl) }
+    const begin = async () => {
+      await ctl.waitReflex()
+      if (ctl.aborted) throw new Error('прервано ещё до начала: к работе не приступал')
+      entered = true
+      return worker(ctl)
+    }
     const start = spec
       ? () => gear.preflight(this, ctl, spec, kit).then(() => {
           // Interrupted while dressing: the answer has already gone out, and a
@@ -933,7 +949,10 @@ class Session {
         err => ({ status: 'failed', error: String((err && err.message) || err), ...(err && typeof err.code === 'string' && /^[A-Z][A-Z_]+$/.test(err.code) ? { code: err.code } : {}) })
       ).catch(err => ({ status: 'failed', error: String(err?.message || err), ...(err?.code ? { code: err.code } : {}) }))
 
-    const racers = [work]
+    // stop/disconnect must answer even when gameplay timers are frozen.
+    const racers = [work, new Promise(resolve => {
+      ctl.onAbort.push(() => resolve({ status: 'interrupted', by: { type: 'cancelled' } }))
+    })]
     let pending = null
     if (interruptible) {
       let waiter
@@ -951,7 +970,7 @@ class Session {
     let timer = null
     if (timeoutMs > 0) {
       racers.push(new Promise(resolve => {
-        timer = setTimeout(
+        timer = gameClock.setTimeout(
           () => resolve({ status: 'timeout', afterSeconds: Math.round(timeoutMs / 1000) }),
           timeoutMs
         )
@@ -960,7 +979,7 @@ class Session {
 
     const result = await Promise.race(racers)
     if (pending) pending.cancel()
-    if (timer) clearTimeout(timer)
+    if (timer) gameClock.clearTimeout(timer)
 
     ctl.abort()
     if (this.current && this.current.ctl === ctl) this.current = null
@@ -1002,7 +1021,7 @@ class Session {
     // 10-30 seconds anyway.
     const by = result.status === 'interrupted' && result.by ? result.by.type : null
     if (result.status === 'timeout' || (by && by !== 'chat' && by !== 'gesture')) {
-      const settled = await Promise.race([work, sleep(1000)])
+      const settled = await Promise.race([work, gameClock.wall.sleep(1000)])
       if (settled && settled.detail && typeof settled.detail === 'object') {
         result.detail = settled.detail
         result.partial = true
@@ -1097,7 +1116,7 @@ class Session {
     const secs = Math.max(5, Math.min(600, timeoutSeconds))
     return this.runIntent('goto', async (ctl) => {
       const bot = this.require()
-      const deadline = Date.now() + secs * 1000
+      const deadline = gameClock.now() + secs * 1000
       // Мост на ходу на этот переход (сцены A/B на одном демоне): bridge true/false поверх ND_BRIDGE; не задан —
       // как в окружении. Держится до следующего goto.
       this.bridgeWanted = typeof bridge === 'boolean' ? bridge : undefined
@@ -1214,7 +1233,7 @@ class Session {
       const tried = []
       let settledRetry = false
       let lastError = null
-      const outOfTime = () => Date.now() >= deadline
+      const outOfTime = () => gameClock.now() >= deadline
       // Horizontal only: the caller asked for a column, and «до цели ещё 3
       // блока» and «ещё 900» are different orders — one is «позови ещё раз»,
       // the other «эта дорога не работает, думай заново».
@@ -1281,8 +1300,8 @@ class Session {
               // план ещё раз — один раз за goto. Только в новом goto (waitPartial).
               if (waitPartial && !settledRetry && (!bot.entity.onGround || bot.entity.isInWater)) {
                 settledRetry = true
-                const t0 = Date.now()
-                while (Date.now() - t0 < 1500 && !ctl.aborted && (!bot.entity.onGround || bot.entity.isInWater)) await new Promise(resolve => setTimeout(resolve, 50))
+                const t0 = gameClock.now()
+                while (gameClock.now() - t0 < 1500 && !ctl.aborted && (!bot.entity.onGround || bot.entity.isInWater)) await new Promise(resolve => gameClock.setTimeout(resolve, 50))
                 tried.push('ждал посадки')
                 continue
               }
@@ -1626,14 +1645,14 @@ class Session {
       for (const fn of ctl.onAbort) { try { fn() } catch {} }
     }
     this.current = { name: 'loot', ctl }
-    const t = setTimeout(() => ctl.abort(), 60000)
+    const t = gameClock.setTimeout(() => ctl.abort(), 60000)
     try {
       this.updateMovements()
       return await lootMod.loot(this, ctl, target.entityId !== undefined ? { entityId: target.entityId } : target.at)
     } catch (err) {
       return { error: String((err && err.message) || err) }
     } finally {
-      clearTimeout(t)
+      gameClock.clearTimeout(t)
       ctl.abort()
       if (this.current && this.current.ctl === ctl) this.current = null
     }
@@ -1651,7 +1670,7 @@ class Session {
       let last = null
       let vel = { x: 0, y: 0, z: 0 }
       const velFn = () => {
-        const now = Date.now()
+        const now = gameClock.now()
         const pos = target.position
         if (last) {
           const dt = (now - last.t) / 50
@@ -1786,16 +1805,16 @@ class Session {
       await bot.lookAt(to, true)
       // Разогнаться: к броску тело идёт с установившейся скоростью.
       let side = 'left'
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const drive = () => {
         if (move === 'strafe' || move === 'jump') {
-          if ((Date.now() - t0) % 700 < 60) side = side === 'left' ? 'right' : 'left'
+          if ((gameClock.now() - t0) % 700 < 60) side = side === 'left' ? 'right' : 'left'
           set('left', side === 'left'); set('right', side === 'right')
         }
         if (move === 'run') { set('forward', true); set('sprint', true) }
         if (move === 'back') set('back', true)
       }
-      while (Date.now() - t0 < 900 && !ctl.aborted) {
+      while (gameClock.now() - t0 < 900 && !ctl.aborted) {
         drive()
         await bot.lookAt(to, true).catch(() => {})
         await sleep(50)
@@ -1803,8 +1822,8 @@ class Session {
       if (move === 'jump') {
         set('jump', true)
         // В воздух и чуть после вершины.
-        const j0 = Date.now()
-        while (Date.now() - j0 < 600 && (bot.entity.onGround || bot.entity.velocity.y > 0.1)) { drive(); await sleep(10) }
+        const j0 = gameClock.now()
+        while (gameClock.now() - j0 < 600 && (bot.entity.onGround || bot.entity.velocity.y > 0.1)) { drive(); await sleep(10) }
         set('jump', false)
       }
       let landed = null
@@ -1818,8 +1837,8 @@ class Session {
       try {
         r = await throwMod.throwAt(bot, to, { item: bot.heldItem, mode: p.mode || 'exact' })
         for (const k of keys) set(k, false)
-        const w0 = Date.now()
-        while (!landed && Date.now() - w0 < 5000 && !ctl.aborted) await sleep(50)
+        const w0 = gameClock.now()
+        while (!landed && gameClock.now() - w0 < 5000 && !ctl.aborted) await sleep(50)
       } finally {
         for (const k of keys) set(k, false)
         bot.removeListener('forcedMove', onMove)
@@ -2061,7 +2080,7 @@ class Session {
       const t = { x: Number(p.x), y: p.y !== undefined ? Number(p.y) : undefined, z: Number(p.z) }
       if (!Number.isFinite(t.x) || !Number.isFinite(t.z)) throw new Error('tunnel: нужны x и z')
       const nb = p.noBreachNear && Number.isFinite(Number(p.noBreachNear.x)) ? { x: Number(p.noBreachNear.x), z: Number(p.noBreachNear.z), r: Number(p.noBreachNear.r) || 48 } : null
-      const r = await tunnelTo(this, ctl, t, { band: p.band, radius: p.radius ?? 4, via: p.via, budgetCheck: p.budgetCheck === true, ironOk: p.ironOk === true, noBreachNear: nb, deadline: Date.now() + budget * 1000, log: (w, d) => console.log('[tunnel] ' + w + ' ' + JSON.stringify(d)) })
+      const r = await tunnelTo(this, ctl, t, { band: p.band, radius: p.radius ?? 4, via: p.via, budgetCheck: p.budgetCheck === true, ironOk: p.ironOk === true, noBreachNear: nb, deadline: gameClock.now() + budget * 1000, log: (w, d) => console.log('[tunnel] ' + w + ' ' + JSON.stringify(d)) })
       delete r.own
       return { ...r, note: r.ok ? `штреком дошёл: кусков ${r.segs}, вскрытий ${r.breach}, обходов ${r.detours}, копок ${r.dug}` : `штрек встал: ${r.why}` }
     }, {

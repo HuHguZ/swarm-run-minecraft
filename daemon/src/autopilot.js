@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { escapeWater, inWater, sleep } = require('./movement')
 const {
   equipBestTool, missingHarvestTool, toolPlan, toolBudget, itemNamed, plankCount
@@ -118,7 +119,7 @@ function damageTypeName (id) {
 
 // Нужен ли отход прямо сейчас. Чистая функция по телу и последнему урону:
 // null — нет, иначе { hp, threshold, from, dist, why }.
-function emergencyNeed (bot, { lastHurt = null, lowHealth = 8, now = Date.now() } = {}) {
+function emergencyNeed (bot, { lastHurt = null, lowHealth = 8, now = gameClock.now() } = {}) {
   const hp = bot.health ?? 20
   if (!bot.entity || hp <= 0 || hp >= EMERGENCY.rearmHp) return null
   // Горим или в лаве — это огонь, не моб: тушение и огнестойкость (fightkit,
@@ -172,11 +173,11 @@ class Autopilot {
 
   start () {
     if (this.timer) return
-    this.timer = setInterval(() => { this.tick().catch(() => {}) }, 1000)
+    this.timer = gameClock.setInterval(() => { this.tick().catch(() => {}) }, 1000)
   }
 
   stop () {
-    if (this.timer) clearInterval(this.timer)
+    if (this.timer) gameClock.clearInterval(this.timer)
     this.timer = null
   }
 
@@ -241,12 +242,12 @@ class Autopilot {
     }
     bot._client.on('damage_event', pk => {
       if (!bot.entity || !pk || pk.entityId !== bot.entity.id) return
-      if (pk.sourceTypeId === IN_WALL_DAMAGE) this.inWallAt = Date.now()
+      if (pk.sourceTypeId === IN_WALL_DAMAGE) this.inWallAt = gameClock.now()
       // Кто и чем ударил последним — для EMERGENCY (моб или не моб).
       const type = damageTypeName(pk.sourceTypeId) || `type_${pk.sourceTypeId}`
       const src = pk.sourceCauseId > 0 && bot.entities ? bot.entities[pk.sourceCauseId - 1] : null
       const byMob = MOB_DAMAGE.test(type) || !!(src && src !== bot.entity && src.name && src.name !== 'player' && !src.username)
-      this.lastHurt = { at: Date.now(), type, byMob, source: src ? (src.username || src.name) : null }
+      this.lastHurt = { at: gameClock.now(), type, byMob, source: src ? (src.username || src.name) : null }
       // Удар моба посреди «стоячего» дела (печь, верстак, сундук) — разбудить мозг сразу (ND_HURT_WAKE=1): эти дела
       // рвёт только low_health (≤ 8), и зомби у печи ночью снимал 20 → 7, пока не сработал отход (camp1 02.10, слот 20:
       // smelt → «прервано: emergency» на 7 хп, смерть в бегстве). Мозг ответит сам (answerThreat: бой или отход).
@@ -271,7 +272,7 @@ class Autopilot {
     if (cur && cur.name === 'retaliate') return
     // Мозг сам дерётся с ним же — не мешать.
     if (cur && cur.name === 'fight') return
-    const now = Date.now()
+    const now = gameClock.now()
     const rec = this.grudges.get(name) || { hits: [] }
     rec.hits = rec.hits.filter(at => now - at < t.windowMs)
     rec.hits.push(now)
@@ -316,7 +317,7 @@ class Autopilot {
   // Не ждёт в тике: лут идёт своим ходом, как реванш.
   lootIfSeen (bot) {
     if (this.bodyBusy() || this.lootRunning || this.session.lootAuto === false) return
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - (this.lootScanAt || 0) < 5000) return
     this.lootScanAt = now
     if ((bot.health ?? 20) < 12) return
@@ -432,8 +433,8 @@ class Autopilot {
     const { goals } = require('mineflayer-pathfinder')
     try {
       bot.pathfinder.setGoal(new goals.GoalBlock(pool.position.x, pool.position.y, pool.position.z))
-      const t0 = Date.now()
-      while (Date.now() - t0 < 5000 && !bot.entity.isInWater) await sleep(100)
+      const t0 = gameClock.now()
+      while (gameClock.now() - t0 < 5000 && !bot.entity.isInWater) await sleep(100)
     } catch {}
     try { if (bot.entity.isInWater) bot.pathfinder.setGoal(null) } catch {}
     if (bot.entity.isInWater) this.session.bus.emit('extinguished', { how: 'water', at: { x: pool.position.x, y: pool.position.y, z: pool.position.z } })
@@ -448,8 +449,8 @@ class Autopilot {
       this.wetSince = null
       return
     }
-    if (!this.wetSince) { this.wetSince = Date.now(); return }
-    if (Date.now() - this.wetSince < 3000) return
+    if (!this.wetSince) { this.wetSince = gameClock.now(); return }
+    if (gameClock.now() - this.wetSince < 3000) return
 
     this.wetSince = null
     const result = await escapeWater(bot, { aborted: false, onAbort: [] })
@@ -559,7 +560,7 @@ class Autopilot {
   async creeperReflex (bot, need) {
     if (this.dodging || this.refuging || this.freeing) return
     // Пауза между уклонами — не для шипящего: фитиль 30 тиков не ждёт 2.5 с (camp2 02.10: «dodge OK» → через 15 с взрыв).
-    if (!need.swelling && Date.now() - (this.dodgeAt || 0) < CREEPER.cooldownMs) return
+    if (!need.swelling && gameClock.now() - (this.dodgeAt || 0) < CREEPER.cooldownMs) return
     const cur = this.session.current
     const busy = !!(cur && cur.name !== 'wait')
     // Бой (fight/retaliate/defend) сам отвечает за крипера-цель, но не за чужого, шипящего за спиной: шипит в зоне урона
@@ -568,8 +569,8 @@ class Autopilot {
     if (busy && CREEPER_GUARDED.has(cur.name) && !fightHot) return
     this.dodging = true
     this.refuging = true
-    this.dodgeAt = Date.now()
-    const t0 = Date.now()
+    this.dodgeAt = gameClock.now()
+    const t0 = gameClock.now()
     const bus = this.session.bus
     const dist = Math.round(need.d * 10) / 10
     try {
@@ -580,11 +581,11 @@ class Autopilot {
       const d = (r && r.detail) || {}
       console.log('[creeper]', JSON.stringify({ dist0: dist, swelling: need.swelling, during: busy ? cur.name : null, ...d }))
       bus.emit('refuge', { how: 'dodge', code: d.code || (r && r.status !== 'done' ? String(r.status).toUpperCase() : null), hp0: d.hp0, hp: d.hp ?? Math.round(bot.health ?? 0),
-        healed: !!d.healed, seconds: Math.round((Date.now() - t0) / 1000), note: d.note, by: r && r.by ? r.by.type : undefined })
+        healed: !!d.healed, seconds: Math.round((gameClock.now() - t0) / 1000), note: d.note, by: r && r.by ? r.by.type : undefined })
     } finally {
       this.dodging = false
       this.refuging = false
-      this.dodgeAt = Date.now()
+      this.dodgeAt = gameClock.now()
     }
   }
 
@@ -603,7 +604,7 @@ class Autopilot {
       if (hp >= EMERGENCY.rearmHp) this.emergencyArmed = true
       else return
     }
-    if (Date.now() - (this.emergencyAt || 0) < EMERGENCY.cooldownMs) return
+    if (gameClock.now() - (this.emergencyAt || 0) < EMERGENCY.cooldownMs) return
     const cur = this.session.current
     const busy = !!(cur && cur.name !== 'wait')
     if (busy && SELF_GUARDED.has(cur.name)) return
@@ -612,7 +613,7 @@ class Autopilot {
     // Коробки с 7–9 хп вставали и лечили (A5: 7 → 17, 8 → 20, 9 → 19), но запас на стройку нужен.
     const need = emergencyNeed(bot, { lastHurt: this.lastHurt, lowHealth: Math.max(EMERGENCY.minHp, this.cfg.lowHealth) })
     if (!need) return
-    this.emergencyAt = Date.now()
+    this.emergencyAt = gameClock.now()
     this.emergencyArmed = false
     const ev = this.session.bus.emit('emergency', { ...need, during: busy ? cur.name : null })
     if (busy) {
@@ -620,7 +621,7 @@ class Autopilot {
       await this.takeTheMouth(bot)
     }
     this.refuging = true
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let run
     try {
       run = require('./survival').runRefuge(this.session, { why: `emergency: ${need.why}`, minHp: EMERGENCY.rearmHp, maxSeconds: 120 })
@@ -643,7 +644,7 @@ class Autopilot {
         hp0: d.hp0 ?? need.hp,
         hp: d.hp ?? Math.round(bot.health ?? 0),
         healed: !!d.healed,
-        seconds: Math.round((Date.now() - t0) / 1000),
+        seconds: Math.round((gameClock.now() - t0) / 1000),
         by: r && r.by ? r.by.type : undefined,
         note: d.note || r?.error || undefined,
         // Для разбора (сцена, журнал): что увидел, почему так, что делал.
@@ -658,9 +659,9 @@ class Autopilot {
       // секунду) — это не отход, а гонка: не ждать 30 с, снова через 3 с, если
       // опасность ещё тут. Смерть и чат — не гонка.
       const cut = (d.aborted || !r || r.status !== 'done') && !(r && r.by) && !d.healed
-      if (cut && Date.now() - t0 < 5000) {
+      if (cut && gameClock.now() - t0 < 5000) {
         this.emergencyArmed = true
-        this.emergencyAt = Date.now() - EMERGENCY.cooldownMs + 3000
+        this.emergencyAt = gameClock.now() - EMERGENCY.cooldownMs + 3000
       }
     }).catch(() => {}).finally(() => {
       this.refuging = false
@@ -725,9 +726,9 @@ class Autopilot {
     // верхушка столба с водой, обрыв на 4 хп, следующий вызов начался в облаке,
     // смерть. Во время намерения dragon — только настоящее удушье (in_wall за 2 с).
     const cur0 = this.session.current
-    if (cur0 && cur0.name === 'dragon' && Date.now() - (this.inWallAt || 0) > 2000) return
+    if (cur0 && cur0.name === 'dragon' && gameClock.now() - (this.inWallAt || 0) > 2000) return
     this.stuck = true
-    if (!this.buriedSince) this.buriedSince = Date.now()
+    if (!this.buriedSince) this.buriedSince = gameClock.now()
 
     const busy = this.bodyBusy()
     // A body already at the low-health line with its head inside a block gets
@@ -743,7 +744,7 @@ class Autopilot {
       // stay out of the intent's way entirely — without the health signal there
       // is nothing here to tell a wall from a ceiling being built on purpose.
       if (busy) return
-      if (Date.now() - this.buriedSince < 2000) return
+      if (gameClock.now() - this.buriedSince < 2000) return
     }
     // ...and when health is falling there is no wait at all: the two-second
     // debounce is four hit points, and the pair has already said what this is.
@@ -778,8 +779,8 @@ class Autopilot {
       // not the exotic one — one swing is not a rescue. Bounded by the clock
       // rather than by a swing count, because waiting out a falling block is
       // part of the work and must not spend an attempt.
-      const until = Date.now() + 6000
-      for (let i = 0; i < 12 && Date.now() < until; i++) {
+      const until = gameClock.now() + 6000
+      for (let i = 0; i < 12 && gameClock.now() < until; i++) {
         const now = this.buriedBy(bot)
         if (!now) break
         if (!now.block) {
@@ -858,7 +859,7 @@ class Autopilot {
 
     // Still in it. Throttled, unlike the closing report: the pass repeats every
     // tick and low_health fires on its own at 8 hp, which does interrupt.
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - (this.buriedSaidAt || 0) <= 10000) return
     this.buriedSaidAt = now
 
@@ -1004,7 +1005,7 @@ class Autopilot {
   // to remember. Rate-limited because it walks the inventory every call, and
   // skipped while an intent is running so a swap cannot land mid-swing.
   async wearArmor (bot) {
-    const now = Date.now()
+    const now = gameClock.now()
     // Пустой слот брони при броне в рюкзаке — надеть сразу (раз в секунду), даже
     // посреди намерения: голым драться хуже, чем пара кликов (арена 2026-09-25:
     // «когда у тебя есть броня — сразу автоматом быстро надевать»).
@@ -1062,7 +1063,7 @@ class Autopilot {
 
     // Rate-limited like wearArmor and for the same reason: it walks the whole
     // inventory and the recipe table, and neither changes between ticks.
-    const now = Date.now()
+    const now = gameClock.now()
     if (now < (this.toolCheckAt || 0)) return
     this.toolCheckAt = now + 15000
 
@@ -1194,18 +1195,18 @@ class Autopilot {
   // table is unreliable on 1.21.11 by the server's doing, not ours).
   async bounded (label, bot, ms, work) {
     const startHp = bot.health ?? 20
-    const started = Date.now()
+    const started = gameClock.now()
     let watch = null
     const giveUp = new Promise((_, reject) => {
-      watch = setInterval(() => {
+      watch = gameClock.setInterval(() => {
         if ((bot.health ?? 20) < startHp - 1) reject(new Error(`${label}: здоровье падает, бросаю`))
-        else if (Date.now() - started > ms) reject(new Error(`${label}: не уложился в ${Math.round(ms / 1000)}с`))
+        else if (gameClock.now() - started > ms) reject(new Error(`${label}: не уложился в ${Math.round(ms / 1000)}с`))
       }, 250)
     })
     try {
       return await Promise.race([work(), giveUp])
     } finally {
-      clearInterval(watch)
+      gameClock.clearInterval(watch)
       // Losing a race does not stop what lost it. Anything still holding a
       // pathfinder goal or a key would keep moving the body long after this
       // routine reported failure — the exact shape of the eleven-level drop.
@@ -1221,7 +1222,7 @@ class Autopilot {
   toolTrouble (bot, job, why) {
     this.toolFails = (this.toolFails || 0) + 1
     const wait = Math.min(300000, 15000 * Math.pow(2, this.toolFails))
-    this.toolNextTry = Date.now() + wait
+    this.toolNextTry = gameClock.now() + wait
     // A window left open by a half-finished craft blocks every window after it.
     try { if (bot.currentWindow) bot.closeWindow(bot.currentWindow) } catch {}
     this.session.bus.emit('no_tool', {
@@ -1237,7 +1238,7 @@ class Autopilot {
   // Logs the physics tick rate once every 5s. Healthy is ~20/s; anything near
   // zero means the body is frozen and no amount of pathfinding will help.
   heartbeat (bot) {
-    const now = Date.now()
+    const now = gameClock.now()
     if (!this.lastBeat) { this.lastBeat = now; this.lastTicks = this.session.ticks || 0; return }
     if (now - this.lastBeat < 5000) return
     const ticks = this.session.ticks || 0

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Зачарование (src/enchant.js), честно: из сырья (тростник, кожа, доски,
 // обсидиан, алмазы, лазурит) бот сам делает бумагу → книги → полки → стол,
 // ставит 15 полок кольцом через клетку воздуха, читает подсказки стола и
@@ -21,13 +22,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(350) }
 // Автопилот сам крафтит инструмент (keepTools) — тогда крафт мозга отвечает
 // «повтори через секунду». Повторяем, как и сказано.
@@ -113,11 +114,11 @@ async function main () {
   }
 
   if (on('б')) {
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('enchant', { mode: 'setup' })
     const d = r.detail || {}
     check('(б) стол поставлен', r.status === 'done' && !!d.table, brief(r))
-    check('(б) стол видит 15 полок', d.shelves === 15, `shelves=${d.shelves}, поставил ${d.placedShelves}, за ${Math.round((Date.now() - t0) / 1000)} с`)
+    check('(б) стол видит 15 полок', d.shelves === 15, `shelves=${d.shelves}, поставил ${d.placedShelves}, за ${Math.round((gameClock.now() - t0) / 1000)} с`)
     const f = await call('blocks_around', { find: 'bookshelf', radius: 12, count: 64 })
     const n = (f.detail && f.detail.found && f.detail.found.length) || 0
     check('(б) в мире ≥15 полок', n >= 15, `нашёл ${n}`)

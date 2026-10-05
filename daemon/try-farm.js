@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Грядки: mc_farm (src/farm.js) — полный цикл от травы до урожая.
 //
 // Что здесь проверяется и почему именно это:
@@ -24,7 +26,6 @@
 // Сервер — свой, build (127.0.0.1:25566), демон ND_WS (ws://127.0.0.1:8771),
 // игрок NeuroBuild — оператор.
 const path = require('path')
-const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { connect, createKit, sleep } = require('./scene-kit')
 
@@ -63,15 +64,15 @@ async function step (label, method, params) {
 }
 
 async function eyeOpen () {
-  eye = mineflayer.createBot({ host: HOST, port: PORT, username: 'FarmEye', version: '1.21.11', auth: 'offline' })
+  eye = createGameBot({ host: HOST, port: PORT, username: 'FarmEye', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { eye.once('spawn', resolve); eye.once('error', reject); eye.once('kicked', r => reject(new Error('зрителя выкинули: ' + r))) })
   await kit.cmd('/gamemode spectator FarmEye')
 }
 
 async function eyeTo (x, y, z) {
   await kit.cmd(`/tp FarmEye ${x} ${y} ${z}`)
-  const t0 = Date.now()
-  while (Date.now() - t0 < 15000) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 15000) {
     const p = eye.entity && eye.entity.position
     if (p && Math.abs(p.x - x) < 2 && Math.abs(p.z - z) < 2 && eye.blockAt(new Vec3(x, Y, z))) break
     await sleep(300)
@@ -174,15 +175,15 @@ async function caseGrow () {
   await kit.cmd('/clear @s')
   await kit.gamerule('random_tick_speed', '600')
   await eyeTo(P.x, Y + 10, P.z)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let ripe = 0
-  while (Date.now() - t0 < 90000) {
+  while (gameClock.now() - t0 < 90000) {
     ripe = cropsAbove().filter(b => Number(props(b).age) === 7).length
     if (ripe >= 76) break
     await sleep(2000)
   }
   await kit.gamerule('random_tick_speed', '0')
-  check('поле выросло само (random ticks)', ripe >= 60, `спелых ${ripe} за ${Math.round((Date.now() - t0) / 1000)}с`)
+  check('поле выросло само (random ticks)', ripe >= 60, `спелых ${ripe} за ${Math.round((gameClock.now() - t0) / 1000)}с`)
   // Влажность ставит случайный тик (FarmBlock.randomTick), а не мотыга: смотреть
   // её можно только после того, как тики прошли.
   const wet = inPlot(b => b.name === 'farmland' && Number(props(b).moisture) > 0).length
@@ -225,9 +226,9 @@ async function caseCane () {
   const bases = () => scan(X - 3, Y + 1, Z0, X + 3, Y + 1, Z0, b => b.name === 'sugar_cane').length
   check('тростник посажен 7 штук у воды', bases() === 7, `корней ${bases()}; planted ${(r1.detail || {}).planted}`)
   await kit.gamerule('random_tick_speed', '900')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let tall = 0
-  while (Date.now() - t0 < 90000) {
+  while (gameClock.now() - t0 < 90000) {
     tall = scan(X - 3, Y + 3, Z0, X + 3, Y + 3, Z0, b => b.name === 'sugar_cane').length
     if (tall >= 6) break
     await sleep(2000)
@@ -267,9 +268,9 @@ async function caseMelon () {
   const stems = () => scan(X - 3, Y + 1, Z0, X + 3, Y + 1, Z0, b => /stem$/.test(b.name))
   check('посажено 4 стебля', stems().length === 4, `стеблей ${stems().length}; ${(r1.detail || {}).planted}+${(r2.detail || {}).planted}`)
   await kit.gamerule('random_tick_speed', '900')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let fruit = 0
-  while (Date.now() - t0 < 120000) {
+  while (gameClock.now() - t0 < 120000) {
     fruit = scan(X - 4, Y + 1, Z0 - 1, X + 4, Y + 1, Z0 + 1, b => b.name === 'melon' || b.name === 'pumpkin').length
     if (fruit >= 4) break
     await sleep(2000)

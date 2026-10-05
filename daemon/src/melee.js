@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Ядро ближнего боя (просьба 2026-09-26: «все приёмы про-игроков, по максимуму
 // того, что даёт версия»). В арене боты делали 30–60 критов и 0–5 спринт-ударов
 // за раунд и «ездили» от каждого чужого удара. Здесь:
@@ -127,7 +128,7 @@ function install (bot) {
   bot._client.write = function (name, params) {
     try {
       if (name === 'use_entity' && params && (params.mouse === 1 || params.type === 1 || params.mouse === 'attack')) {
-        const now = Date.now()
+        const now = gameClock.now()
         const c = M.charge(0)
         M.lastAttack = { t: now, id: params.target, c, sprint: M.srvSprint, local: bot.getControlState('sprint') }
         M.resetAt = now
@@ -147,7 +148,7 @@ function install (bot) {
         // ServerGamePacketListenerImpl.handleAnimate только resetLastActionTime и
         // swing. Взмах самого удара (bot.attack шлёт use_entity, потом взмах) —
         // не в счёт: удар и так обнулил.
-        if (M.paperLike() && !(M.lastAttack && Date.now() - M.lastAttack.t < 5)) { M.resetAt = Date.now(); M.airSwings = (M.airSwings || 0) + 1 }
+        if (M.paperLike() && !(M.lastAttack && gameClock.now() - M.lastAttack.t < 5)) { M.resetAt = gameClock.now(); M.airSwings = (M.airSwings || 0) + 1 }
       }
     } catch {}
     return w0.apply(this, arguments)
@@ -163,32 +164,23 @@ function install (bot) {
   M.dy = 0
   bot.on('physicsTick', () => {
     const h = heldName(bot)
-    if (h !== M.held) { M.held = h; M.resetAt = Date.now() }
+    if (h !== M.held) { M.held = h; M.resetAt = gameClock.now() }
     const y = bot.entity && bot.entity.position ? bot.entity.position.y : null
     M.dy = y != null && M.y != null ? y - M.y : 0
     M.y = y
   })
   M.critNow = () => !!bot.entity && !bot.entity.onGround && M.dy < -1e-3 && !bot.entity.isInWater
-  // Скорость тиков сервера — по возрасту мира (update_time раз в 20 тиков):
-  // на лагающем сервере 12 тиков меча длиннее 600 мс.
-  let t0 = null
-  bot._client.on('update_time', (p) => {
-    try {
-      const age = Number(p.age ?? p.worldAge)
-      const now = Date.now()
-      if (!Number.isFinite(age)) return
-      if (!t0 || now - t0.t > 20000 || age < t0.age) { t0 = { t: now, age }; return }
-      if (age - t0.age >= 40) M.msPerTick = Math.max(TICK_MS, Math.min(250, (now - t0.t) / (age - t0.age)))
-    } catch {}
-  })
+  // Tempo and server stalls are handled once by game-clock. A game tick is
+  // always 50 nominal ms; estimating it again would stretch attack cooldowns.
+  M.msPerTick = TICK_MS
   // Заряд, каким его увидит сервер, если удар уйдёт через aheadMs.
-  M.ticksSince = (aheadMs = 0) => Math.max(0, Math.floor((Date.now() + aheadMs - M.resetAt - SEND_MARGIN_MS) / M.msPerTick))
+  M.ticksSince = (aheadMs = 0) => Math.max(0, Math.floor((gameClock.now() + aheadMs - M.resetAt - SEND_MARGIN_MS) / M.msPerTick))
   M.T = () => cooldownTicks(heldName(bot))
   M.charge = (aheadMs = 0) => Math.min(1, (M.ticksSince(aheadMs) + 0.5) / M.T())
   // Через сколько мс заряд дойдёт до need (1 — полный, 0.91 — крит/спринт).
   M.leftMs = (need = 1) => {
     const k = ticksFor(M.T(), need)
-    return Math.max(0, M.resetAt + SEND_MARGIN_MS + k * M.msPerTick - Date.now())
+    return Math.max(0, M.resetAt + SEND_MARGIN_MS + k * M.msPerTick - gameClock.now())
   }
   // Звуки удара — правда сервера: чей удар — по тому, у кого ноги ближе к точке.
   // Имя — по номеру в реестре со сдвигом: в minecraft-data 1.21.11 номера
@@ -239,7 +231,7 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
   // Замер отброса: где были в тик удара, где через 12 тиков, по его направлению.
   const kbMeasures = []
   const onTick = () => {
-    if (pend && Date.now() - pend.t > 400) convResolve(null)
+    if (pend && gameClock.now() - pend.t > 400) convResolve(null)
     if (plan) {
       if (plan.i >= plan.steps.length) plan = null
       else {
@@ -304,7 +296,7 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
       if (/item\.shield\.break/.test(x.n)) { if (his) st.shieldBreaks++; return }
       if (/item\.totem/.test(x.n)) return
       if (mine) {
-        if (pend && Date.now() - pend.t < 400) convResolve(tail)
+        if (pend && gameClock.now() - pend.t < 400) convResolve(tail)
         if (tail === 'knockback') { st.sprintHits++; M.srvSprint = false } else if (tail === 'crit') st.crits++
         else if (tail === 'strong') st.strong++
         else if (tail === 'weak') st.weak++
@@ -339,7 +331,7 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     if (kind === 'crit') {
       if (pend) convResolve(null)
       conv.tries++
-      pend = { t: Date.now(), c, srv, ground: !!bot.entity.onGround, dy: M.dy, water: !!bot.entity.isInWater, web: !!bot.entity.isInWeb, diag }
+      pend = { t: gameClock.now(), c, srv, ground: !!bot.entity.onGround, dy: M.dy, water: !!bot.entity.isInWater, web: !!bot.entity.isInWeb, diag }
     }
     if (swapped) { bot.setQuickBarSlot(back); st.swaps++ }
     st.swings++

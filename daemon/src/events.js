@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 
 // Interrupt policy, decided during design:
 //   INTERRUPTING  - a real player talks to us, we take damage, health gets low,
@@ -49,7 +50,7 @@ class EventBus {
   }
 
   emit (type, data = {}) {
-    const ev = { seq: ++this.seq, at: Date.now(), type, ...data }
+    const ev = { seq: ++this.seq, at: Date.now(), gameAt: gameClock.now(), type, ...data }
     if (wakes(type, data)) {
       // Interrupts are delivered as the reason the action stopped, and are
       // also kept in the buffer so nothing is silently lost.

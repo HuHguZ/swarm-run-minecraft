@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // База и общак: место, которое бот считает своим, и сундук, про который он
 // знает, что в нём лежит, не открывая его.
 //
@@ -73,7 +74,7 @@ const mark = () => heard.length
 const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -81,7 +82,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -329,10 +330,10 @@ async function sceneWhere (at) {
   await standAt(X0 - 30, Z0)
   const before = await pos()
 
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   // Без единого параметра — ровно так, как это вызовет мозг.
   const r = await call('base', {})
-  const ms = Date.now() - t0
+  const ms = gameClock.now() - t0
   const d = detail(r)
   console.log(`  base{}                       ${r.status} ${JSON.stringify(d)}`)
 

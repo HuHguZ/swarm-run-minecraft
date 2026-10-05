@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Поиск крепости оком эндера (mc_stronghold mode=find | throw | solve | blind).
 //
 // Механика — исходники 1.21.11 (extremeheat/extracted_minecraft_data, ветка
@@ -100,8 +101,8 @@ const snap16 = v => Math.round(v / 16) * 16
 const r1 = v => Math.round(v * 10) / 10
 function withTimeout (promise, ms) {
   let timer = null
-  return Promise.race([promise, new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), ms) })])
-    .finally(() => clearTimeout(timer))
+  return Promise.race([promise, new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), ms) })])
+    .finally(() => gameClock.clearTimeout(timer))
 }
 
 // Кольца — тот же цикл, что в generateRingPositions (целочисленное деление Java).
@@ -246,16 +247,16 @@ async function climbFor (bot, ctl, item) {
     const xz = (a, b) => Math.hypot(a.x - b.x, a.z - b.z)
     try {
       bot.setControlState('sneak', true)
-      const t0 = Date.now()
-      while (!ctl.aborted && Date.now() - t0 < 3500 && bot.entities[item.id] && xz(bot.entity.position, item.position) > 0.4) {
+      const t0 = gameClock.now()
+      while (!ctl.aborted && gameClock.now() - t0 < 3500 && bot.entities[item.id] && xz(bot.entity.position, item.position) > 0.4) {
         await bot.lookAt(new Vec3(item.position.x, bot.entity.position.y + 1.62, item.position.z), true).catch(() => {})
         bot.setControlState('forward', true)
         await sleep(50)
       }
       bot.setControlState('forward', false)
       await sleep(300)
-      const t1 = Date.now()
-      while (!ctl.aborted && Date.now() - t1 < 3500 && xz(bot.entity.position, top) > 0.25) {
+      const t1 = gameClock.now()
+      while (!ctl.aborted && gameClock.now() - t1 < 3500 && xz(bot.entity.position, top) > 0.25) {
         await bot.lookAt(new Vec3(top.x, bot.entity.position.y + 1.62, top.z), true).catch(() => {})
         bot.setControlState('forward', true)
         await sleep(50)
@@ -296,11 +297,11 @@ async function climbFor (bot, ctl, item) {
 
 async function fetchDrop (bot, ctl, item, had, { maxMs = 30000 } = {}) {
   const { inWater, escapeWater } = require('./movement')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let how = 'пешком'
   let swam = 0
   try {
-    while (!ctl.aborted && bot.entities[item.id] && item.isValid !== false && Date.now() - t0 < maxMs) {
+    while (!ctl.aborted && bot.entities[item.id] && item.isValid !== false && gameClock.now() - t0 < maxMs) {
       const p = item.position
       const cell = bot.blockAt(p.floored())
       const under = bot.blockAt(p.floored().offset(0, -1, 0))
@@ -328,7 +329,7 @@ async function fetchDrop (bot, ctl, item, had, { maxMs = 30000 } = {}) {
       if (bot.entities[item.id] && item.position.y - bot.entity.position.y > 1.6) {
         how = 'столбом'
         const c = await climbFor(bot, ctl, item)
-        if (!c.ok && bot.entities[item.id]) return { ok: countOf(bot, 'ender_eye') >= had, how, why: c.why || 'не достал', seconds: Math.round((Date.now() - t0) / 1000) }
+        if (!c.ok && bot.entities[item.id]) return { ok: countOf(bot, 'ender_eye') >= had, how, why: c.why || 'не достал', seconds: Math.round((gameClock.now() - t0) / 1000) }
       }
       await sleep(300)
     }
@@ -337,7 +338,7 @@ async function fetchDrop (bot, ctl, item, had, { maxMs = 30000 } = {}) {
   }
   let back = null
   if (inWater(bot)) back = await escapeWater(bot, ctl, { timeoutMs: 25000 }).catch(e => ({ ok: false, error: e.message }))
-  return { ok: countOf(bot, 'ender_eye') >= had, how, seconds: Math.round((Date.now() - t0) / 1000), back: back ? back.ok : undefined }
+  return { ok: countOf(bot, 'ender_eye') >= had, how, seconds: Math.round((gameClock.now() - t0) / 1000), back: back ? back.ok : undefined }
 }
 
 async function throwEye (session, ctl) {
@@ -357,7 +358,7 @@ async function throwEye (session, ctl) {
   let gone = false
   let dropped = null
   const track = []
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const onSpawn = (e) => {
     if (!e || !e.position) return
     if (!flying) {
@@ -365,7 +366,7 @@ async function throwEye (session, ctl) {
       flying = e
       // Точка появления — из пакета spawn_entity, пока ни одной дельты не пришло.
       start = e.position.clone()
-      track.push({ ms: Date.now() - t0, p: start })
+      track.push({ ms: gameClock.now() - t0, p: start })
       return
     }
     // Око кончилось, и на его месте появился предмет — не разбилось
@@ -373,7 +374,7 @@ async function throwEye (session, ctl) {
     // и есть «видно глазами»: упало или рассыпалось.
     if (!dropped && e.name === 'item' && track.length && e.position.distanceTo(track[track.length - 1].p) < 2.5) dropped = e
   }
-  const onMove = (e) => { if (flying && e === flying) track.push({ ms: Date.now() - t0, p: e.position.clone() }) }
+  const onMove = (e) => { if (flying && e === flying) track.push({ ms: gameClock.now() - t0, p: e.position.clone() }) }
   const onGone = (e) => { if (flying && e === flying) gone = true }
   bot.on('entitySpawn', onSpawn)
   bot.on('entityMoved', onMove)
@@ -384,13 +385,13 @@ async function throwEye (session, ctl) {
     await bot.look(bot.entity.yaw, 0.6, true)
     await sleep(50)
     bot.activateItem()
-    while (!flying && Date.now() - t0 < 1500 && !ctl.aborted) await sleep(25)
+    while (!flying && gameClock.now() - t0 < 1500 && !ctl.aborted) await sleep(25)
     if (!flying) {
       return { thrown: false, why: 'око не полетело: сервер не создал сущность (в Аду и Краю крепостей нет — око не бросается)' }
     }
     // Полёт — 80 тиков; к 34-му око уже у цели. Ждём ухода сущности, но не
     // дольше 5 с.
-    while (!gone && flying.isValid !== false && bot.entities[flying.id] && Date.now() - t0 < 5000 && !ctl.aborted) await sleep(50)
+    while (!gone && flying.isValid !== false && bot.entities[flying.id] && gameClock.now() - t0 < 5000 && !ctl.aborted) await sleep(50)
     const last = track[track.length - 1].p
     const dx = last.x - start.x
     const dz = last.z - start.z
@@ -402,8 +403,8 @@ async function throwEye (session, ctl) {
     const bearing = flew > 0.5 ? Math.atan2(dx, dz) : null
     const sigma = flew > 0.5 ? Math.max(SIGMA_MIN, POS_ERR * Math.SQRT2 / flew) : null
     // Предмет на месте ока — в том же тике, что и уход ока; пакеты — рядом.
-    const t1 = Date.now()
-    while (!dropped && Date.now() - t1 < 800) await sleep(50)
+    const t1 = gameClock.now()
+    while (!dropped && gameClock.now() - t1 < 800) await sleep(50)
     let lost = false
     let fetched = null
     if (dropped) {
@@ -411,8 +412,8 @@ async function throwEye (session, ctl) {
       // подойти. Общий подборщик шёл к стопке в воздухе и сдавался.
       let lastY = null
       let still = 0
-      const t2 = Date.now()
-      while (bot.entities[dropped.id] && Date.now() - t2 < 3500 && still < 3) {
+      const t2 = gameClock.now()
+      while (bot.entities[dropped.id] && gameClock.now() - t2 < 3500 && still < 3) {
         const y = dropped.position.y
         still = lastY !== null && Math.abs(y - lastY) < 0.01 ? still + 1 : 0
         lastY = y
@@ -421,8 +422,8 @@ async function throwEye (session, ctl) {
       // За оком — и по суше, и вплавь (fetchDrop); в лаву — нет.
       if (bot.entities[dropped.id] && !ctl.aborted) {
         fetched = await fetchDrop(bot, ctl, dropped, had)
-        const t3 = Date.now()
-        while (bot.entities[dropped.id] && Date.now() - t3 < 1500) await sleep(100)
+        const t3 = gameClock.now()
+        while (bot.entities[dropped.id] && gameClock.now() - t3 < 1500) await sleep(100)
       }
       lost = countOf(bot, 'ender_eye') < had
     }
@@ -600,7 +601,7 @@ function rememberThrow (session, t) {
   if (!ray) return
   session.journal.patch(s => {
     const list = Array.isArray(s.eyeThrows) ? s.eyeThrows : []
-    list.push({ ms: Date.now(), ...ray, flew: t.flew })
+    list.push({ ms: gameClock.now(), ...ray, flew: t.flew })
     s.eyeThrows = list.slice(-8)
   })
 }
@@ -608,7 +609,7 @@ function rememberThrow (session, t) {
 // Броски из памяти моложе maxAgeMin (для mode=solve: мозг бросал сам по одному).
 function storedThrows (session, { maxAgeMin = 60 } = {}) {
   const list = (session.journal.state && session.journal.state.eyeThrows) || []
-  const since = Date.now() - maxAgeMin * 60000
+  const since = gameClock.now() - maxAgeMin * 60000
   return list.filter(t => t && t.ms >= since)
 }
 
@@ -682,14 +683,14 @@ function dryAt (bot, x, z, y) {
 // другую сторону: дорога не пропадает.
 async function findStronghold (session, ctl, { sideways = 24, maxThrows = 4, want = 0.95, timeoutSeconds = 240 } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + timeoutSeconds * 1000 - 3000
   const throws = []
   const walks = []
   let sol = null
   let side = 1
   let misses = 0
-  while (!ctl.aborted && Date.now() < deadline && throws.length < maxThrows) {
+  while (!ctl.aborted && gameClock.now() < deadline && throws.length < maxThrows) {
     if (!itemNamed(bot, 'ender_eye')) break
     if (throws.length) {
       // Отход: вбок от направления на лучшего кандидата и вперёд к нему.
@@ -709,7 +710,7 @@ async function findStronghold (session, ctl, { sideways = 24, maxThrows = 4, wan
         if (tx === null) { tx = x; tz = z }
         if (dryAt(bot, x, z, Math.floor(me.y))) { tx = x; tz = z; side = sd; break }
       }
-      const w = await travelXZ(bot, ctl, tx, tz, { range: 3, retries: 1, deadline: Math.min(deadline, Date.now() + 60000) })
+      const w = await travelXZ(bot, ctl, tx, tz, { range: 3, retries: 1, deadline: Math.min(deadline, gameClock.now() + 60000) })
       walks.push({ to: { x: tx, z: tz }, ok: w.ok, error: w.ok ? undefined : w.error })
       if (ctl.aborted) break
       side = -side
@@ -735,7 +736,7 @@ async function findStronghold (session, ctl, { sideways = 24, maxThrows = 4, wan
     console.log('[stronghold] бросок', JSON.stringify({ n: throws.length, from: t.from, deg: t.bearingDeg, flew: t.flew, near: t.near, best: sol && sol.best, ls: sol && sol.ls }))
     if (t.near || (sol && sol.best && sol.best.p >= want && throws.length >= 2)) break
   }
-  const seconds = Math.round((Date.now() - t0) / 1000)
+  const seconds = Math.round((gameClock.now() - t0) / 1000)
   if (!sol || !sol.best) {
     return { stopped: ctl.aborted ? 'прервано' : (throws.length ? 'броски не сошлись ни в одном углу чанка' : 'ни одного броска: нет ока?'), throws, walks, seconds }
   }

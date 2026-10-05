@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Огненные стержни у спавнера (blaze.js, RPC blaze / mc_blaze). Ложь, которую
 // ловит сцена: «убил N» вместо «принёс N». Лут блейза — blaze_rod 0..1 и только
 // при убийстве игроком (loot_table/entities/blaze.json), поэтому прибыль
@@ -109,17 +110,17 @@ conn.ready.then(async () => {
       const seen = await mobs('blaze')
       check('(а) блейз в мире перед замером (observe fair:false)', seen.length > 0, seen.map(e => `${e.name} ${e.dist}`))
       const before = await inv('blaze_rod')
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const r = await call('blaze', { count: RODS, timeoutSeconds: 400 })
       const d = r.detail || {}
       const after = await inv('blaze_rod')
       const h = await header()
-      console.log(`   blaze: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((Date.now() - t0) / 1000)}с — ${d.stopped || ''} ${d.note || ''}`)
+      console.log(`   blaze: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((gameClock.now() - t0) / 1000)}с — ${d.stopped || ''} ${d.note || ''}`)
       console.log(`   убито ${d.kills}, стержней +${d.rods && d.rods.gained}, хп потеряно ${d.hpLost}, снежки ${JSON.stringify(d.snowballs)}, бои ${JSON.stringify(d.fights)}`)
       console.log(`   отдых ${JSON.stringify(d.rests)}, укрытия ${JSON.stringify(d.covers)}, еда ${JSON.stringify(d.ate)}`)
       // Смерть, оборвавшая намерение, приезжает в r.by, а не в событиях
       // (session.js runIntent вычитает её из списка) — считать обе.
-      const deaths = kit.between(t0, Date.now(), 'death').length + (r.by && r.by.type === 'death' ? 1 : 0)
+      const deaths = kit.between(t0, gameClock.now(), 'death').length + (r.by && r.by.type === 'death' ? 1 : 0)
       if (r.by) console.log(`   оборвано событием ${r.by.type}`)
       check('(а) смерти в окне нет', deaths === 0 && h.health > 0, deaths)
       check(`(а) стержней прибавилось >= ${RODS}`, after - before >= RODS, `${before} → ${after}`)
@@ -142,13 +143,13 @@ conn.ready.then(async () => {
       await kit.cmd(nether(`setblock ${SPAWNER.x} ${SPAWNER.y} ${SPAWNER.z} minecraft:spawner{SpawnData:{entity:{id:"minecraft:blaze"}},Delay:20}`))
       await sleep(1500)
       const before = await inv('blaze_rod')
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const r = await call('blaze', { count: RODS, timeoutSeconds: 300 })
       const d = r.detail || {}
       const after = await inv('blaze_rod')
       const h = await header()
-      const deaths = kit.between(t0, Date.now(), 'death').length + (r.by && r.by.type === 'death' ? 1 : 0)
-      console.log(`   blaze: ${r.status} за ${Math.round((Date.now() - t0) / 1000)}с — ${d.stopped || d.note || ''}`)
+      const deaths = kit.between(t0, gameClock.now(), 'death').length + (r.by && r.by.type === 'death' ? 1 : 0)
+      console.log(`   blaze: ${r.status} за ${Math.round((gameClock.now() - t0) / 1000)}с — ${d.stopped || d.note || ''}`)
       console.log(`   убито ${d.kills}, стержней +${d.rods && d.rods.gained}, хп ${h.health}, укрытия ${JSON.stringify(d.covers)}, отдых ${JSON.stringify(d.rests)}, бег ${JSON.stringify(d.fled)}`)
       check('(г) не умер', deaths === 0 && h.health > 0, `смертей ${deaths}, хп ${h.health}`)
       check('(г) либо набрал, либо назвал, почему бросил', after - before >= RODS || (typeof d.stopped === 'string' && d.stopped.length > 10), d.stopped || `${before} → ${after}`)
@@ -166,10 +167,10 @@ conn.ready.then(async () => {
       await sleep(1000)
       const seen = await mobs('blaze')
       check('(б) висящий блейз в мире', seen.length === 1, seen.map(e => `${e.name} y=${e.pos && e.pos.y}`))
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const r = await call('blaze', { count: 1, timeoutSeconds: 150 })
       const d = r.detail || {}
-      const secs = Math.round((Date.now() - t0) / 1000)
+      const secs = Math.round((gameClock.now() - t0) / 1000)
       console.log(`   blaze: ${r.status} за ${secs}с — ${d.stopped || ''}; бои ${JSON.stringify(d.fights)}`)
       check('(б) встал со словами «нужен лук ... или снежки», а не по таймауту', r.status === 'done' && /лук|снежк/.test(d.stopped || ''), d.stopped)
     }
@@ -181,12 +182,12 @@ conn.ready.then(async () => {
       const had = (await mobs('blaze')).length
       if (!had) await kit.cmd(nether(`summon minecraft:blaze ${CX + 0.5} ${FY + 7} ${CZ + 2.5} {NoAI:1b,NoGravity:1b,PersistenceRequired:1b}`))
       await sleep(800)
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const r = await call('blaze', { count: 1, timeoutSeconds: 120 })
       const d = r.detail || {}
       const left = await inv('snowball')
       const alive = await mobs('blaze')
-      console.log(`   blaze: ${r.status} за ${Math.round((Date.now() - t0) / 1000)}с — ${d.stopped || d.note}; снежки ${JSON.stringify(d.snowballs)}`)
+      console.log(`   blaze: ${r.status} за ${Math.round((gameClock.now() - t0) / 1000)}с — ${d.stopped || d.note}; снежки ${JSON.stringify(d.snowballs)}`)
       check('(в) висящий блейз убит', alive.length === 0 && d.kills >= 1, `живых ${alive.length}, убито ${d.kills}`)
       check('(в) снежков ушло >= 7 (3 урона из 20 хп)', 16 - left >= 7, 16 - left)
     }

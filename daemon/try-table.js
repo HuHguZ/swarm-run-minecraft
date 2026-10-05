@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Верстак — расходник, который обязан возвращаться, и четыре доски, которые
 // нельзя трогать.
 //
@@ -57,7 +58,7 @@ const mark = () => heard.length
 const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -65,7 +66,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -81,9 +82,9 @@ async function step (label, method, params) {
 
 // Крафт с секундомером: (д) меряет именно круг RPC мозга.
 async function timedCraft (label, params) {
-  const t = Date.now()
+  const t = gameClock.now()
   const r = await step(label, 'craft', params)
-  r.ms = Date.now() - t
+  r.ms = gameClock.now() - t
   console.log(`${''.padEnd(28)} ${r.ms}мс`)
   return r
 }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Ведро и обсидиан (src/obsidian.js): набрать воду, залить лаву, добыть
 // обсидиан алмазной киркой — то, без чего честный портал в Ад не построить.
 //
@@ -16,13 +17,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(450) }
 
 let failures = 0
@@ -85,12 +86,12 @@ async function main () {
   // (в) Обсидиан из лужи 3x3.
   await cmd('/give @s minecraft:diamond_pickaxe')
   {
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('obsidian', { count: 6, timeoutSeconds: 240 })
     const d = r.detail || {}
     const i = await inv()
     check('(в) 6 обсидиана из мелкой лужи', (i.obsidian || 0) >= 6,
-      `за ${Math.round((Date.now() - t0) / 1000)} с: got ${d.got}, poured ${d.poured}, stopped ${d.stopped || '-'}, skipped ${JSON.stringify(d.skipped || {})}`)
+      `за ${Math.round((gameClock.now() - t0) / 1000)} с: got ${d.got}, poured ${d.poured}, stopped ${d.stopped || '-'}, skipped ${JSON.stringify(d.skipped || {})}`)
     check('(в) ведро воды вернулось в рюкзак', (i.water_bucket || 0) >= 1, JSON.stringify(i))
   }
 

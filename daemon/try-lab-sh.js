@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория дороги к крепости основного прогона: копия мира server-run (farm/pristine-run) и его память
 // (MEMORY=memory-run/state.json: крепость -400,30,1776, портал), тело у портала верхнего мира с 10 очами и
 // набором на дракона. campaign.js полным порядком: endkit (если чего-то не хватает) → stronghold. Успех —
@@ -67,7 +68,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await scene()
   const size = logSize()
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
@@ -83,12 +84,12 @@ async function main () {
   let best = { eyes: 0, pearls: 0 }
   const until = t0 + MINUTES * 60000
   let lastCheck = 0
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(5000)
     if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
     if (deathLines(size).length >= 3) { stoppedBy = 'три смерти'; break }
-    if (Date.now() - lastCheck > 30000) {
-      lastCheck = Date.now()
+    if (gameClock.now() - lastCheck > 30000) {
+      lastCheck = gameClock.now()
       const s = await status()
       const eyes = cnt(s.inventory, /^ender_eye$/); const pearls = cnt(s.inventory, /^ender_pearl$/)
       if (eyes > best.eyes || pearls > best.pearls) best = { eyes: Math.max(eyes, best.eyes), pearls: Math.max(pearls, best.pearls) }
@@ -108,7 +109,7 @@ async function main () {
   const miles = [...text.matchAll(/ВЕХА (\S+): готово в (\S+), (\d+) мин/g)].map(m => `${m[1]}@${m[3]}м`)
   const rec = {
     at: new Date().toISOString(),
-    minutes: Math.round((Date.now() - t0) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - t0) / 6000) / 10,
     stoppedBy,
     eyes: cnt(inv, /^ender_eye$/),
     pearls: cnt(inv, /^ender_pearl$/),

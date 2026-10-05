@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Булава и заряды ветра (просьба 2026-09-26: «всё, что даёт версия»).
 // Четыре вещи:
 //  1. Удар с падения: взлёт на заряде ветра под ноги (или спуск со своего
@@ -184,8 +185,8 @@ function afterPacket (bot, fn) {
 }
 
 const nextTick = (bot) => new Promise(resolve => {
-  const on = () => { clearTimeout(t); resolve(true) }
-  const t = setTimeout(() => { bot.removeListener('physicsTick', on); resolve(false) }, 300)
+  const on = () => { gameClock.clearTimeout(t); resolve(true) }
+  const t = gameClock.setTimeout(() => { bot.removeListener('physicsTick', on); resolve(false) }, 300)
   bot.once('physicsTick', on)
 })
 
@@ -199,19 +200,19 @@ function install (bot) {
   try {
     bot._client.on('set_cooldown', (p) => {
       const g = String((p && p.cooldownGroup) || '')
-      if (/wind_charge/.test(g)) bot._ndWindCd = Date.now() + Math.max(0, p.cooldownTicks || 0) * 50
+      if (/wind_charge/.test(g)) bot._ndWindCd = gameClock.now() + Math.max(0, p.cooldownTicks || 0) * 50
     })
   } catch {}
   // Когда булава взята в правую: заряд (33 тика) считается от смены предмета.
   bot._ndMaceHeldAt = 0
   bot.on('heldItemChanged', (it) => {
-    if (it && it.name === 'mace') { if (!bot._ndMaceHeldAt) bot._ndMaceHeldAt = Date.now() } else bot._ndMaceHeldAt = 0
+    if (it && it.name === 'mace') { if (!bot._ndMaceHeldAt) bot._ndMaceHeldAt = gameClock.now() } else bot._ndMaceHeldAt = 0
   })
   // Сторож ведра (edges.installFallGuard) спрашивает, не прикрыто ли падение
   // зарядом ветра: тогда вода не нужна, а рука занята булавой.
   bot._ndWindFall = (top) => {
     const w = bot._ndWind
-    if (!w || Date.now() > w.until) return false
+    if (!w || gameClock.now() > w.until) return false
     // Урон = floor(min(падение, всплеск − y) − 3): сел не ниже всплеска − 3 — ноль.
     return top >= w.impactY - 3 + 0.2
   }
@@ -229,7 +230,7 @@ function windCount (bot) {
 }
 
 function windReady (bot) {
-  return Date.now() >= (bot._ndWindCd || 0) && windCount(bot) > 0
+  return gameClock.now() >= (bot._ndWindCd || 0) && windCount(bot) > 0
 }
 
 // Нужное — в хотбар (свап берёт слоты хотбара, из рюкзака — только кликами).
@@ -262,12 +263,12 @@ function fireWind (bot, aim, { swap = SWAP, before = null, hand = null } = {}) {
     const off = hand === 'off' || (hand == null && offWind(bot))
     const wi = off ? -1 : hotbarIndex(bot, 'wind_charge')
     if (!off && wi < 0) return resolve({ fired: false, why: 'заряда нет в хотбаре' })
-    if (Date.now() < (bot._ndWindCd || 0)) return resolve({ fired: false, why: 'перезарядка' })
+    if (gameClock.now() < (bot._ndWindCd || 0)) return resolve({ fired: false, why: 'перезарядка' })
     let done = false
     const onT = () => {
       if (done) return
       done = true
-      clearTimeout(timer)
+      gameClock.clearTimeout(timer)
       bot.removeListener('physicsTick', onT)
       let sol = null
       try { if (before) before(); sol = aim() } catch {}
@@ -284,12 +285,12 @@ function fireWind (bot, aim, { swap = SWAP, before = null, hand = null } = {}) {
           }
           // Заряд — не «натягивают»: mineflayer иначе считает руку занятой.
           bot.usingHeldItem = false
-          bot._ndWindCd = Date.now() + WIND_CD_MS
+          bot._ndWindCd = gameClock.now() + WIND_CD_MS
           resolve({ fired: true, yaw: sol.yaw, pitch: sol.pitch, from: bot.entity.position.clone(), off, swapped: !off && swap && back !== wi })
         } catch (e) { resolve({ fired: false, why: e.message }) }
       })
     }
-    const timer = setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ fired: false, why: 'физика стоит' }) } }, 400)
+    const timer = gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ fired: false, why: 'физика стоит' }) } }, 400)
     bot.on('physicsTick', onT)
   })
 }
@@ -415,7 +416,7 @@ function track (bot, { enemy }) {
       const y = e.position.y
       // Позиции чужих приходят пакетами, не в такт нашему тику: скорость — по
       // окну в ~150 мс, иначе она скачет между нулём и двойной.
-      const now = Date.now()
+      const now = gameClock.now()
       his.hist.push({ y, t: now })
       while (his.hist.length > 2 && now - his.hist[0].t > 160) his.hist.shift()
       const h0 = his.hist[0]
@@ -423,18 +424,18 @@ function track (bot, { enemy }) {
       his.y = y
       his.vy = vy
       const air = !grounded(bot, e, vy)
-      if (air && !his.air) { his.airSince = Date.now(); his.peak = y }
+      if (air && !his.air) { his.airSince = gameClock.now(); his.peak = y }
       if (!air) { his.peak = null; his.launchedAt = 0 }
       his.air = air
       if (air && (his.peak == null || y > his.peak)) his.peak = y
-      if (air && vy > 0.55) his.launchedAt = Date.now()
-      if (heldName(e) === 'mace') his.maceAt = Date.now()
+      if (air && vy > 0.55) his.launchedAt = gameClock.now()
+      if (heldName(e) === 'mace') his.maceAt = gameClock.now()
       // Итог толчка: упал ниже, чем стоял, на 3+ — сбили.
       if (pushWatch && pushWatch.id === e.id) {
         if (y < pushWatch.y0 - 3 && !pushWatch.fell) { pushWatch.fell = true; st.knockoffs++ }
         const hp = healthOf(bot, e)
         if (hp != null && pushWatch.hp0 != null && hp < pushWatch.hp0 - 0.4 && !pushWatch.hurt) { pushWatch.hurt = true; st.pushHits++ }
-        if (Date.now() > pushWatch.until) pushWatch = null
+        if (gameClock.now() > pushWatch.until) pushWatch = null
       }
     } catch {}
   }
@@ -449,10 +450,10 @@ function track (bot, { enemy }) {
     const me = bot.entity.position
     const dy = e.position.y - me.y
     const dh = Math.hypot(e.position.x - me.x, e.position.z - me.z)
-    const mace = Date.now() - his.maceAt < 4000
+    const mace = gameClock.now() - his.maceAt < 4000
     // Подбросили его мы сами (свой заряд в него) — это не его взлёт.
-    const ours = pushWatch && pushWatch.id === e.id && Date.now() - pushWatch.at < 2000
-    const launched = his.launchedAt && Date.now() - his.launchedAt < 2500 && !ours
+    const ours = pushWatch && pushWatch.id === e.id && gameClock.now() - pushWatch.at < 2000
+    const launched = his.launchedAt && gameClock.now() - his.launchedAt < 2500 && !ours
     let out = null
     // Без взлёта и без булавы — только настоящее падение на нас (уже летит
     // вниз и упал от вершины на 1.5+): подпрыгивать на своём столбе — не угроза
@@ -482,7 +483,7 @@ function track (bot, { enemy }) {
     notePush (e, why) {
       st.pushes++
       st.pushWhy[why] = (st.pushWhy[why] || 0) + 1
-      pushWatch = { id: e.id, y0: e.position.y, hp0: healthOf(bot, e), at: Date.now(), until: Date.now() + 3000 }
+      pushWatch = { id: e.id, y0: e.position.y, hp0: healthOf(bot, e), at: gameClock.now(), until: gameClock.now() + 3000 }
     },
     report () {
       const avg = a => a.length ? Math.round(a.reduce((s, x) => s + x, 0) / a.length * 10) / 10 : undefined
@@ -572,7 +573,7 @@ function smashPlan (bot, e, { minRoom = 5 } = {}) {
 // Без спринта: спринт снимает крит.
 function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null } = {}) {
   return new Promise(resolve => {
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let peak = bot.entity.position.y
     let hit = null
     let done = false
@@ -587,7 +588,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
     let burnNext = 0
     let burnPlan = null
     const burnSteer = () => {
-      const now = Date.now()
+      const now = gameClock.now()
       if (now < burnNext) return burnPlan
       burnNext = now + 100
       if (bot.entity.onGround || bot.entity.isInWater) return (burnPlan = null)
@@ -612,7 +613,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
       if (bot._ndDescend === mark) bot._ndDescend = null
       bot.removeListener('physicsTick', onT)
       for (const k of KEYS) set(k, false)
-      resolve({ peak, hit, why, ms: Date.now() - t0 })
+      resolve({ peak, hit, why, ms: gameClock.now() - t0 })
     }
     const onT = () => {
       try {
@@ -621,9 +622,9 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         const b = bot.entity
         const p = b.position
         if (p.y > peak) peak = p.y
-        if (b.onGround && Date.now() - t0 > 120) return finish(hit ? 'сел после удара' : 'сел')
+        if (b.onGround && gameClock.now() - t0 > 120) return finish(hit ? 'сел после удара' : 'сел')
         if (b.isInWater) return finish('в воде')
-        if (Date.now() - t0 > maxMs) return finish('долго')
+        if (gameClock.now() - t0 > maxMs) return finish('долго')
         const v = b.velocity
         const top = floorTop(bot, p)
         // Посадка в лаву или огонь (2026-09-26): он вылил лаву или поджёг
@@ -680,12 +681,12 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         const pNext = p.plus(v)
         const rNext = reachFrom(pNext.offset(0, EYE, 0), { position: ep.offset(tv.x, tv.y || 0, tv.z), width: e.width, height: e.height })
         const landNext = v.y < 0 && pNext.y <= top + 0.05
-        if (process.env.ND_DEBUG_MACE) console.log('[mace]', JSON.stringify({ t: Date.now() - t0, y: +(p.y - top).toFixed(2), vy: +v.y.toFixed(3), fall: +(peak - p.y).toFixed(2), r: +rNow.toFixed(2), rN: +rNext.toFixed(2), landNext, dh: +dh.toFixed(2), ey: +(ep.y - top).toFixed(2) }))
+        if (process.env.ND_DEBUG_MACE) console.log('[mace]', JSON.stringify({ t: gameClock.now() - t0, y: +(p.y - top).toFixed(2), vy: +v.y.toFixed(3), fall: +(peak - p.y).toFixed(2), r: +rNow.toFixed(2), rN: +rNext.toFixed(2), landNext, dh: +dh.toFixed(2), ey: +(ep.y - top).toFixed(2) }))
         // Удар — только если он под прицелом, как у клиента: сквозь крышу его
         // коробки или стенку сервер удар бы принял, а игрок так не может.
         if (v.y < 0 && fall > SMASH_MIN + 0.1 && rNow <= REACH - 0.05 && (landNext || rNext > REACH - 0.1 || fall > 14) && pick.canHit(bot, e, { eye, range: REACH })) {
           const hp0 = healthOf(bot, e)
-          hit = { fall: Math.round(fall * 100) / 100, r: Math.round(rNow * 100) / 100, hp0, at: Date.now(), charged: !!(bot._ndMaceHeldAt && Date.now() - bot._ndMaceHeldAt >= 1550), selfHp: bot.health ?? 20 }
+          hit = { fall: Math.round(fall * 100) / 100, r: Math.round(rNow * 100) / 100, hp0, at: gameClock.now(), charged: !!(bot._ndMaceHeldAt && gameClock.now() - bot._ndMaceHeldAt >= 1550), selfHp: bot.health ?? 20 }
           const doHit = () => {
             try {
               const mi = hotbarIndex(bot, 'mace')
@@ -704,11 +705,11 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         // второй заряд под ноги за пару тиков до земли, если ведра нет.
         const w = bot._ndWind
         const h = p.y - top
-        const hurtFall = w && Date.now() < w.until ? (w.impactY - top) : (peak - top)
+        const hurtFall = w && gameClock.now() < w.until ? (w.impactY - top) : (peak - top)
         if (windMlg && !mlgFired && v.y < -0.35 && hurtFall > 3.6 && h > 1.0 && h < 3.2 && !findItem(bot, 'water_bucket') && windReady(bot)) {
           mlgFired = true
           fireWind(bot, () => ({ yaw: bot.entity.yaw, pitch: -Math.PI / 2 }), { swap: true }).then(r => {
-            if (r.fired) { bot._ndWind = { impactY: bot.entity.position.y, until: Date.now() + 2000 }; if (stats) stats.mlg++ }
+            if (r.fired) { bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }; if (stats) stats.mlg++ }
           })
         }
       } catch (err) { finish('ошибка: ' + err.message) }
@@ -728,14 +729,14 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
 async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null } = {}) {
   const out = { launched: false, hit: false, swung: false, note: '' }
   install(bot)
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+  const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
   const offBefore = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null
   const restoreOff = async () => {
     if (!offBefore || offBefore === 'wind_charge') return
     const it = findItem(bot, offBefore)
     if (it && !(bot.inventory.slots[45] && bot.inventory.slots[45].name === offBefore)) { try { await bot.equip(it, 'off-hand') } catch {} }
   }
-  let armedAt = Date.now()
+  let armedAt = gameClock.now()
   if (swap) {
     if (!(await ensureHotbar(bot, ['wind_charge', 'mace']))) { out.note = 'булава: заряд или булава не в хотбаре'; return out }
     armedAt = 0
@@ -743,7 +744,7 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
     const m = findItem(bot, 'mace')
     if (!m) { out.note = 'булава: нет булавы'; return out }
     if (!bot.heldItem || bot.heldItem.name !== 'mace') { try { await bot.equip(m, 'hand') } catch {} }
-    armedAt = Date.now()
+    armedAt = gameClock.now()
     if (!offWind(bot)) {
       const w = findItem(bot, 'wind_charge')
       if (w) { try { await bot.equip(w, 'off-hand') } catch {} }
@@ -751,15 +752,15 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
     if (!offWind(bot) || !bot.heldItem || bot.heldItem.name !== 'mace') { await restoreOff(); out.note = 'булава: не взял булаву и заряд в руки'; return out }
   }
   // Заряд булавы до взлёта: сам полёт ~25 тиков.
-  while (Date.now() - armedAt < chargeTicks * 50 && !ctl.aborted) {
+  while (gameClock.now() - armedAt < chargeTicks * 50 && !ctl.aborted) {
     await sleep(50)
     if (stillOk && !stillOk()) { await restoreOff(); out.note = 'булава: передумал взлетать'; out.cancelled = true; return out }
   }
   // Пока заряжалась булава, его удар мог подбросить: прыжок — только с земли,
   // а всплеск под летящим телом — вдалеке от ног. Ждём землю до 300 мс, иначе
   // не взлетать (2026-09-26).
-  const tg = Date.now()
-  while (!bot.entity.onGround && !ctl.aborted && Date.now() - tg < 300) await nextTick(bot)
+  const tg = gameClock.now()
+  while (!bot.entity.onGround && !ctl.aborted && gameClock.now() - tg < 300) await nextTick(bot)
   if (!bot.entity.onGround) { await restoreOff(); out.note = 'булава: передумал взлетать (не на земле)'; out.cancelled = true; return out }
   // Паутина на теле или блок над головой — всплеск не поднимет: в паутине
   // скорость гасится каждый тик (WebBlock.entityInside → makeStuckInBlock),
@@ -809,7 +810,7 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
   if (!fired.fired) { unDiag(); await restoreOff(); out.note = 'булава: заряд не ушёл — ' + fired.why; return out }
   // Точка всплеска для урона от падения: сервер ставит позицию игрока в тик
   // всплеска (onExplosionHit); на подъёме это чуть выше пола — берём пол.
-  bot._ndWind = { impactY: y0, until: Date.now() + 2000 }
+  bot._ndWind = { impactY: y0, until: gameClock.now() + 2000 }
   // Толчок приходит пакетом explosion (mineflayer прибавляет его к скорости):
   // ждём скачок вертикальной скорости.
   let launched = false
@@ -833,14 +834,14 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
   // Не поднял — второй заряд стоя, строго под ноги (стоя всплеск даёт
   // v ≈ 1.09, замер probe-mace): как сядем (слабый всплеск подкинул на блок),
   // после перезарядки (10 тиков).
-  if (!launched) { const t2 = Date.now(); while (!bot.entity.onGround && !ctl.aborted && Date.now() - t2 < 1500) await nextTick(bot) }
+  if (!launched) { const t2 = gameClock.now(); while (!bot.entity.onGround && !ctl.aborted && gameClock.now() - t2 < 1500) await nextTick(bot) }
   if (!launched && bot.entity.onGround && windCount(bot) > 0 && !ctl.aborted && (!stillOk || stillOk())) {
     const why1 = diagText(dg)
-    const t1 = Date.now()
-    while (Date.now() < (bot._ndWindCd || 0) && Date.now() - t1 < 700) await sleep(25)
+    const t1 = gameClock.now()
+    while (gameClock.now() < (bot._ndWindCd || 0) && gameClock.now() - t1 < 700) await sleep(25)
     const f2 = await fireWind(bot, () => ({ yaw: bot.entity.yaw, pitch: -Math.PI / 2 }), { swap, hand: swap ? 'main' : 'off' })
     if (f2.fired) {
-      bot._ndWind = { impactY: bot.entity.position.y, until: Date.now() + 2000 }
+      bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }
       launched = await waitLift()
       if (launched) { out.retry = why1; if (stats) stats.retries = (stats.retries || 0) + 1 }
     }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const fs = require('fs')
 const path = require('path')
 
@@ -54,6 +55,10 @@ class WorldMap {
     this.seen = {} // dimension -> { 'cx,cz': t }
     this.hints = {} // dimension -> { 'cx,cz': { trees, water, lava, stone, animals } }
     this.last = {} // dimension -> { 'cx,cz': когда был там последний раз } — в памяти, не на диске
+    // Disk timestamps keep their epoch across daemon restarts. Live freshness
+    // uses the current game's clock, so acceleration/freeze changes its age.
+    this.liveHints = {}
+    this.liveLast = {}
     this.saveAt = 0
     try { const s = JSON.parse(fs.readFileSync(this.file, 'utf8')); this.seen = s.seen || {}; this.hints = s.hints || {} } catch {}
   }
@@ -63,19 +68,23 @@ class WorldMap {
   visit (dim, pos) {
     const m = this.seen[dim] || (this.seen[dim] = {})
     const k = this.key(pos.x, pos.z)
-    if (!m[k]) m[k] = Date.now()
-    ;(this.last[dim] || (this.last[dim] = {}))[k] = Date.now()
-    if (Date.now() - this.saveAt > 30000) this.save()
+    const wallNow = gameClock.wall.now()
+    if (!m[k]) m[k] = wallNow
+    ;(this.last[dim] || (this.last[dim] = {}))[k] = wallNow
+    ;(this.liveLast[dim] || (this.liveLast[dim] = {}))[k] = { at: gameClock.now(), id: gameClock.snapshot()?.id ?? null }
+    if (wallNow - this.saveAt > 30000) this.save()
   }
 
   hint (dim, pos, what) {
     const m = this.hints[dim] || (this.hints[dim] = {})
     const k = this.key(pos.x, pos.z)
-    m[k] = { ...(m[k] || {}), [what]: Date.now() }
+    m[k] = { ...(m[k] || {}), [what]: gameClock.wall.now() }
+    const live = this.liveHints[dim] || (this.liveHints[dim] = {})
+    live[k] = { ...(live[k] || {}), [what]: { at: gameClock.now(), id: gameClock.snapshot()?.id ?? null } }
   }
 
   save () {
-    this.saveAt = Date.now()
+    this.saveAt = gameClock.wall.now()
     if (!this.file) return
     try { fs.writeFileSync(this.file, JSON.stringify({ seen: this.seen, hints: this.hints })) } catch {}
   }
@@ -88,6 +97,11 @@ class WorldMap {
     const seen = this.seen[dim] || {}
     const hints = this.hints[dim] || {}
     const last = this.last[dim] || {}
+    const liveHints = this.liveHints[dim] || {}
+    const liveLast = this.liveLast[dim] || {}
+    const clockId = gameClock.snapshot()?.id ?? null
+    const gameNow = gameClock.now()
+    const wallNow = gameClock.wall.now()
     // Подсказка живая, только если она новее последнего визита в тот чанк:
     // пришёл, а там пусто — значит, ушли (директор 2026-09-25: roam_animals
     // гонял между двумя соседними чанками по старой подсказке). Разведка
@@ -96,7 +110,15 @@ class WorldMap {
     const fresh = (k) => {
       const h = hints[k] && hints[k][want]
       if (!h) return false
-      if (want === 'animals' && Date.now() - h > 300000) return false
+      const live = liveHints[k]?.[want]
+      if (live && live.id === clockId) {
+        if (want === 'animals' && gameNow - live.at > 300000) return false
+        const visited = liveLast[k]
+        if (visited && visited.id === clockId) return live.at >= visited.at - 15000
+        return !last[k] || h >= last[k] - 15000
+      }
+      // A loaded record (or a previous connection's clock) has only wall age.
+      if (want === 'animals' && wallNow - h > 300000) return false
       return !last[k] || h >= last[k] - 15000
     }
     const sx = Math.floor(pos.x / CHUNK)

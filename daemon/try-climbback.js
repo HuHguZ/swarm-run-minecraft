@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Возвращение на арену снизу (2026-09-27, пользователь: «поднимался на блоке,
 // упёрся в обсидиан, в потолок — не увидел, что не может подняться»).
 // NeuroDown на земле под обсидиановым полом (DEPTH блоков ниже), NeuroDown2
@@ -7,12 +8,15 @@
 // подняться через дыру или быстрый пол, а в сплошной обсидиан не упираться.
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-climbback.js
 const WebSocket = require('ws')
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -26,7 +30,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await B.call('say', { text }); await sleep(40) }
@@ -59,7 +63,7 @@ async function scene (name) {
   else if (name !== 'стрелок') await cmd(`/tp NeuroDown ${X + 0.5} ${Y - DEPTH} ${Z + 0.5}`)
   await cmd('/effect give NeuroDown minecraft:instant_health 1 10 true')
   await sleep(1500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let upAt = 0
   let maxY = -1e9
   let polling = true
@@ -68,7 +72,7 @@ async function scene (name) {
       try {
         const st = (await A.call('status')).state || {}
         const y = st.pos && st.pos.y
-        if (y != null) { maxY = Math.max(maxY, y); if (!upAt && y >= Y - 0.1) upAt = Date.now() - t0 }
+        if (y != null) { maxY = Math.max(maxY, y); if (!upAt && y >= Y - 0.1) upAt = gameClock.now() - t0 }
       } catch {}
       await sleep(200)
     }
@@ -106,6 +110,6 @@ async function scene (name) {
     process.exitCode = 1
   } finally {
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

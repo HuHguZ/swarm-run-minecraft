@@ -21,6 +21,10 @@
 const fs = require('fs')
 const path = require('path')
 const WebSocket = require('ws')
+const gameClock = require('./src/game-clock')
+// Телеметрия навыков (TODO «Стратегический граф…», шаг 1): этап, шаг маршрута и вызов навыка — строкой JSONL. Только запись.
+const telemetry = (() => { try { return require('./src/telemetry') } catch { return { on: () => false, snapshot: () => null, delta: () => ({}), outcome: () => ({}), record () {} } } })()
+const telParams = p => { try { return JSON.stringify(p).slice(0, 300) } catch { return null } }
 
 const WS = process.env.ND_WS || 'ws://127.0.0.1:8769'
 const LOG = process.env.ND_CAMPAIGN_LOG || path.join(__dirname, 'campaign.log')
@@ -36,14 +40,17 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 ws.on('message', raw => {
   const m = JSON.parse(raw.toString())
+  gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
+  if (m.type === 'clock') return
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
-const T0 = Date.now()
+let T0 = gameClock.now()
+gameClock.changes.once('bound', clock => { if (clock) T0 = clock.now() })
 let stage = '-'
 let lastStage = '-'
 // Политика повторов (главный цикл): паузы этапа по счёту пустых заходов и сторож прогресса.
@@ -63,7 +70,7 @@ const SEAM_FLAGS = ['ND_E2E', 'ND_END_SEAM', 'ND_ENDKIT', 'ND_WORLD_SEED', 'ND_E
   'ND_RUNNER', 'ND_RUN_SWORD', 'ND_RUN_SWORD_PED', 'ND_CRYSTALS', 'ND_CRYS_KEEP', 'ND_DIGUP', 'ND_DIGUP_FIRST']
 function seamSnapshot (seam) {
   if (!E2E) return
-  log(`СТЫК ${JSON.stringify({ at: new Date().toISOString(), seconds: Math.round((Date.now() - T0) / 1000),
+  log(`СТЫК ${JSON.stringify({ at: new Date().toISOString(), seconds: Math.round((gameClock.now() - T0) / 1000),
     seam, stage, body: { dimension: state.dimension, pos: state.pos, health: state.health, food: state.food,
       inventory: state.inventory || {}, armor: state.armor || {}, offHand: state.offHand || null,
       potions: state.potions || null, effects: state.effects || null },
@@ -76,7 +83,7 @@ if (require.main === module) { try { fs.appendFileSync(LOG, `==== ${new Date().t
 `) } catch {} }
 function log (line) {
   const t = new Date().toTimeString().slice(0, 8)
-  const m = Math.round((Date.now() - T0) / 60000)
+  const m = Math.round((gameClock.now() - T0) / 60000)
   const s = `[${t} +${String(m).padStart(3)}м] ${stage.padEnd(10)} ${line}`
   console.log(s)
   try { fs.appendFileSync(LOG, s + '\n') } catch {}
@@ -105,7 +112,7 @@ function acceptResult (r) {
   }
   // Аварийный отход автопилота: начало (emergency) и итог (refuge {how, code, hp, healed}) — события шины.
   for (const e of [...(r.by ? [r.by] : []), ...(r.events || [])]) {
-    if (e && e.type === 'emergency') refugeSeenAt = Date.now()
+    if (e && e.type === 'emergency') refugeSeenAt = gameClock.now()
     if (e && e.type === 'refuge') { lastRefuge = e; refugeSeenAt = 0 }
   }
 }
@@ -247,7 +254,7 @@ async function act (method, params = {}, again = 0) {
   const routeSafety = REFUGE_PASS.has(method) || /^(observe|eat|flee|refuge|shelter|sleep|escape_fire|surface|wait)$/.test(method) ||
     (method === 'fight' && !/^(food|resource)$/.test(params.purpose || ''))
   if (stage === 'route' && routeDeadline && process.env.ND_ROUTE_DEADLINE !== '0' && !routeSafety) {
-    const left = Math.floor((routeDeadline - Date.now()) / 1000)
+    const left = Math.floor((routeDeadline - gameClock.now()) / 1000)
     if (left < 1) throw Object.assign(new Error(`ROUTE_BUDGET: шаг вышел за бюджет (${method})`), { routeBudget: true })
     params = { ...params, timeoutSeconds: Math.min(params.timeoutSeconds ?? left, left) }
   }
@@ -266,13 +273,19 @@ async function act (method, params = {}, again = 0) {
   if (method === 'stronghold' && params.mode === 'fill' && params.enter) seamSnapshot('before-end')
   let r
   const dimBefore = state.dimension || 'overworld'
+  const tel = telemetry.on() ? { t0: gameClock.now(), wallT0: gameClock.wall.now(), before: telemetry.snapshot(state, sit) } : null
   try {
     r = await call(method, params)
   } catch (e) {
     log(`${method} RPC-ОШИБКА ${e.message}`)
+    if (tel) telemetry.record({ level: 'act', skill: method, stage, step: routeStepNow, again, params: telParams(params), sec: Math.round((gameClock.now() - tel.t0) / 100) / 10, wallSec: (gameClock.wall.now() - tel.wallT0) / 1000, ok: false, status: 'rpc_error', why: String(e.message).slice(0, 240), before: tel.before })
     return { status: 'failed', error: e.message, detail: {} }
   }
   acceptResult(r)
+  if (tel) {
+    const after = telemetry.snapshot(state, sit)
+    telemetry.record({ level: 'act', skill: method, stage, step: routeStepNow, again, params: telParams(params), sec: Math.round((gameClock.now() - tel.t0) / 100) / 10, wallSec: (gameClock.wall.now() - tel.wallT0) / 1000, ...telemetry.outcome(r), before: tel.before, after, gained: telemetry.delta(tel.before, after) })
+  }
   if (state.dimension && state.dimension !== dimBefore) seamSnapshot(`${dimBefore}->${state.dimension}`)
   // Был в Аду (хоть на секунду) — первый вход маршрута состоялся (routeEnter не тащит обратно второй раз).
   if (state.dimension === 'the_nether' || /Мир сменился \(верхний мир → Ад\)/.test(String((r.detail && r.detail.stopped) || ''))) routeEntered = true
@@ -370,7 +383,7 @@ async function act (method, params = {}, again = 0) {
   // рядом враги или темно), а не слать тело дальше. Кампания 2026-09-25
   // умерла именно так: четыре прогулки подряд по пещере на 17→13→2 хп.
   if (!resting && !fighting && method !== 'wait' && (state.health ?? 20) < 10 && !died &&
-    (Date.now() > restIdleUntil || have(FOOD) || have(RAW))) await rest()
+    (gameClock.now() > restIdleUntil || have(FOOD) || have(RAW))) await rest()
   // Ранен и есть нечего, а этап — не охота: бросить этап, выбор начнёт с еды.
   // 2026-09-26 (13:22-13:27) этап камня копал на 5 → 1 → 2 хп без куска в
   // рюкзаке и кончился «NeuroRun drowned» в карьере у воды.
@@ -681,7 +694,7 @@ async function rest () {
       }
       log('еды нет, день — лечит только охота, иду')
       // Не звать отлёжку на каждом шаге охоты, пока нечем лечиться (act).
-      restIdleUntil = Date.now() + 60000
+      restIdleUntil = gameClock.now() + 60000
       return
     }
     // Поесть сразу: автопилот ест, только когда тело свободно, а тут шаг за
@@ -709,7 +722,7 @@ async function rest () {
         await sense()
         if ((state.health ?? 0) >= 16) return
         if (r.detail?.morning && !sit.night && !have(FOOD) && !have(RAW) && (state.food ?? 20) < 18) {
-          restIdleUntil = Date.now() + 60000
+          restIdleUntil = gameClock.now() + 60000
           await act('shelter', { mode: 'exit' })
           log('ночь пропущена — иду за едой, ожидание не восстановит хп')
           return
@@ -767,8 +780,8 @@ async function rest () {
 let nightSatUntil = 0
 async function holeTillMorning () {
   // Нора недавно не вышла (shelterFailed) — не копать ту же яму снова.
-  if (Date.now() < shelterFailUntil) return
-  if (NIGHT_DOWN && Date.now() < nightSatUntil) { log('ночь: аварийно уже отсидел — работаю внизу'); restIdleUntil = Math.max(restIdleUntil, nightSatUntil); return }
+  if (gameClock.now() < shelterFailUntil) return
+  if (NIGHT_DOWN && gameClock.now() < nightSatUntil) { log('ночь: аварийно уже отсидел — работаю внизу'); restIdleUntil = Math.max(restIdleUntil, nightSatUntil); return }
   // Нора в камне — только киркой: без неё «stone голыми руками не
   // ломается», и ночь на 1 хп в неглубокой яме (2026-09-26, 13:31). Кирка —
   // из того, что в рюкзаке (ensurePick).
@@ -783,7 +796,7 @@ async function holeTillMorning () {
     if (!sit.night) break
   }
   // Отлёжка не зовётся снова 10 мин: иначе следующий же шаг на хп < 10 вернул бы сюда (act → rest).
-  if (NIGHT_DOWN && sit.night && !died) { nightIdleS += 240; restIdleUntil = Date.now() + 600000; nightSatUntil = Date.now() + 600000; log('ночь: 4 мин в норе — дальше работаю внизу, наверх не лезу'); return }
+  if (NIGHT_DOWN && sit.night && !died) { nightIdleS += 240; restIdleUntil = gameClock.now() + 600000; nightSatUntil = gameClock.now() + 600000; log('ночь: 4 мин в норе — дальше работаю внизу, наверх не лезу'); return }
   log('еды нет — лечиться нечем, иду за едой')
   if (!died) await act('shelter', { mode: 'exit' })
 }
@@ -806,7 +819,7 @@ async function restShelter () {
   if (!closedShelter(r)) {
     await refresh()
     if (died) return false
-    if ((state.health ?? 0) >= 8) { log(`нора не закрылась, хп ${Math.round(state.health)} — дальше без отлёжки`); restIdleUntil = Date.now() + 90000; return false }
+    if ((state.health ?? 0) >= 8) { log(`нора не закрылась, хп ${Math.round(state.health)} — дальше без отлёжки`); restIdleUntil = gameClock.now() + 90000; return false }
     await shelterFailed('NO_SEAL', 'укрытие не закрыто — лечение ожиданием небезопасно')
     return false
   }
@@ -821,8 +834,8 @@ let shelterFailUntil = 0
 let shelterRisks = 0
 async function shelterFailed (klass, reason) {
   shelterRisks++
-  shelterFailUntil = Date.now() + 180000
-  restIdleUntil = Math.max(restIdleUntil, Date.now() + 90000)
+  shelterFailUntil = gameClock.now() + 180000
+  restIdleUntil = Math.max(restIdleUntil, gameClock.now() + 90000)
   log(`РИСК укрытие:${klass} — ${reason}; не отключаюсь: ухожу от угроз и продолжаю (${shelterRisks}-й за запуск)`)
   await sense()
   // От угроз и на малом хп — аварийный отход (коробка у стены / бегство; research/dev-B-refuge.md, правка 2), а не
@@ -968,9 +981,9 @@ async function nightGuardBody ({ afterDeath = false, dusk = false } = {}) {
   const duskDown = dusk && NIGHT_DOWN2() && sit.dusk && sit.surface && !sit.night
   if (!(sit.night || duskDown || (sit.dusk && bed))) return
   if (!bed && !afterDeath && !duskDown && canWorkAtNight()) {
-    if (Date.now() - nightWorkSaidAt > 60000) {
+    if (gameClock.now() - nightWorkSaidAt > 60000) {
       log('ночь без видимых угроз: продолжаю работу; кровать — ближайшая цель охоты')
-      nightWorkSaidAt = Date.now()
+      nightWorkSaidAt = gameClock.now()
     }
     return
   }
@@ -1042,7 +1055,7 @@ async function nightGuardBody ({ afterDeath = false, dusk = false } = {}) {
     if (died || !sit.night || (r && r.detail && r.detail.code === 'OK' && r.detail.how !== 'flee')) return
   }
   // Нора здесь недавно не вышла (shelterFailed) — не копать снова: работать дальше, от угроз — бегом.
-  if (Date.now() < shelterFailUntil) return
+  if (gameClock.now() < shelterFailUntil) return
   // Нору под мобом не копать: копка 8–15 с, урон её не рвёт (разбор A1–A4: 17 смертей в норе рядом с бьющим
   // мобом; A4 слот 13 — 20 → 6 хп за копку). Враги рядом — сперва ответ: 1–2 и есть меч — бой, иначе отход.
   await sense()
@@ -1117,7 +1130,7 @@ let nightHoles = 0
 let nightIdleS = 0
 async function nightBelow (why) {
   log(`ночь (${why}) — утра не жду, работаю внизу; хп ${Math.round(state.health ?? 0)}, еда ${state.food ?? '?'}`)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   for (let i = 0; i < 8 && !died; i++) {
     await sense()
     if (!sit.night || canWorkAtNight()) break
@@ -1131,11 +1144,11 @@ async function nightBelow (why) {
     const heals = hp < 16 && ((state.food ?? 0) >= 18 || food)
     const emergency = hp < 10 && !food
     const capS = emergency ? 240 : 180
-    if (!(heals || emergency) || Date.now() - t0 > capS * 1000) break
+    if (!(heals || emergency) || gameClock.now() - t0 > capS * 1000) break
     if (i === 0) log(emergency ? `хп ${Math.round(hp)} и лечиться нечем — авария: сижу в норе (до ${capS / 60} мин)` : `хп ${Math.round(hp)} — отлёживаюсь (реген), до ${capS / 60} мин`)
     await act('wait', { seconds: 30 })
   }
-  const s = Math.round((Date.now() - t0) / 1000)
+  const s = Math.round((gameClock.now() - t0) / 1000)
   nightIdleS += s
   if (s >= 20) log(`ночь: ожидание ${s} с (за запуск ${nightIdleS} с) — дальше работа`)
 }
@@ -2098,7 +2111,7 @@ const DEFER = {
   // Воду искать ходьбой поверху — днём; ночью с железной киркой — вниз за
   // алмазами (они воды не ждут, ждёт только обсидиан).
   water: () => (nightWork() && have(PICK_IRON) > 0) ||
-    (OW_DEEP && !known.portal && !sit.surface && y() < 50 && Date.now() - waterDeepFailAt < 8 * 60000),
+    (OW_DEEP && !known.portal && !sit.surface && y() < 50 && gameClock.now() - waterDeepFailAt < 8 * 60000),
   // Лаву искать поверху ночью — это ходить среди мобов; под землёй — можно.
   // Глубоко с алмазной киркой — обсидиан ведром (этап obsidian), а не литьё: под землёй раме негде расти
   // («столб не вырос (потолок cobblestone)» ×3 на месте), fresh-A1 слот 12 30.09 — литьё на y −53 сорок минут,
@@ -2285,8 +2298,8 @@ const FOOD_CAP_MS = 180000
 defStage('food', () => foodUnits() < FOOD_STOCK, async () => {
   hunting = true
   const before = foodUnits()
-  const t0 = Date.now()
-  try { await foodRun() } finally { hunting = false; if (OW_DEEP && !known.portal) foodSpentMs += Date.now() - t0 }
+  const t0 = gameClock.now()
+  try { await foodRun() } finally { hunting = false; if (OW_DEEP && !known.portal) foodSpentMs += gameClock.now() - t0 }
   if (foodUnits() > before) foodHuntEmpty = 0
   else if (!died && ++foodHuntEmpty === 2) log('охота пуста дважды подряд — железо пойдёт и при сытости ≥ 8 (в горах оно на склонах)')
 })
@@ -2310,7 +2323,7 @@ async function foodRun () {
   if (deepEarly && /frozen|peaks|ice_spikes|snowy_slopes|grove/.test(String(state.biome || ''))) { log(`охота: ${state.biome} — рыхлый снег, звери редки; без охоты`); return }
   const remaining = deepEarly ? Math.max(0, FOOD_CAP_MS - foodSpentMs) : 120000
   if (deepEarly && remaining < 10000 && !weakAndHungry()) { log('охота: бюджет до портала (3 мин) исчерпан'); return }
-  const deadline = Date.now() + (deepEarly ? Math.min(60000, remaining) : 120000)
+  const deadline = gameClock.now() + (deepEarly ? Math.min(60000, remaining) : 120000)
   if (!(await toSurface())) { log('за едой не вышел на поверхность — сначала устранить причину подъёма'); return }
   // Без места под новое мясо даже успешный бой не даёт запас еды.
   await unclutter()
@@ -2322,14 +2335,14 @@ async function foodRun () {
   let searchedMelons = false
   // Сборы в Ад (prep) охотятся и за шерстью: кровать у портала — точка
   // возрождения. Три шерсти одного цвета — одна кровать.
-  for (let i = 0; i < 4 && Date.now() < deadline && (foodUnits() < FOOD_STOCK || wantWool()); i++) {
+  for (let i = 0; i < 4 && gameClock.now() < deadline && (foodUnits() < FOOD_STOCK || wantWool()); i++) {
     await sense()
     // Стемнело посреди охоты — жарить, что есть, и вниз работать (см. nightWork).
     if (nightWork()) break
     await nightGuard()
     await recoverGuard()
     if (died) return
-    if (Date.now() >= deadline) break
+    if (gameClock.now() >= deadline) break
     // 64, а не 32: на равнине стадо видно издалека, а каждая пустая прогулка
     // в 60 блоков — минута (охота была узким местом прогона 2026-09-26).
     const o = await act('observe', { radius: 64 })
@@ -2373,7 +2386,7 @@ async function foodRun () {
       // дальний зверь давал «не вижу цель» ход за ходом, без единого шага к
       // нему. Сначала подойти.
       if ((prey.dist ?? 0) > 20 && prey.pos) await act('goto', { x: prey.pos.x, z: prey.pos.z, range: 8, timeoutSeconds: 45, surface: 'strict' })
-      for (let k = 0; k < 4 && Date.now() < deadline && (foodUnits() < FOOD_STOCK || (kind === 'sheep' && wantWool())) && !died; k++) {
+      for (let k = 0; k < 4 && gameClock.now() < deadline && (foodUnits() < FOOD_STOCK || (kind === 'sheep' && wantWool())) && !died; k++) {
         // retreatAtHealth 0: овца не бьёт, а порог отхода (pvp.duel, 4-6 хп) на
         // малом хп кончал бой с ней за секунду — «done» без мяса (2026-09-26,
         // 09:34: четыре овцы, корова и курица на 1-2 хп, ноль добычи).
@@ -2412,10 +2425,10 @@ async function foodRun () {
 async function quickHunt () {
   await sense()
   if (!sit.surface || sit.night || (state.health ?? 20) < 10) return
-  const until = Date.now() + 60000
+  const until = gameClock.now() + 60000
   hunting = true
   try {
-    for (let k = 0; k < 3 && Date.now() < until && !died; k++) {
+    for (let k = 0; k < 3 && gameClock.now() < until && !died; k++) {
       const o = await act('observe', { radius: 32 })
       const ents = (o.detail && o.detail.entities) || []
       const prey = ents.filter(e => /^(cow|pig|sheep|chicken|rabbit|mooshroom)$/.test(String(e.name || '').toLowerCase()) &&
@@ -2864,7 +2877,7 @@ defStage('water', () => have(/^bucket$/) > 0 && !have('water_bucket') && !known.
     // Не нашлась штреками — не наверх (ночью там нора и мобы, ow-E3: смерти на 2-й ночи поверху): вода ищется дальше
     // попутно в литье у дна (deepCast берёт её у штрека), этап воды отложен на 8 мин.
     // Третий пустой заход подряд — наверх (поверху вода почти всегда видна).
-    if (!died && have(/bucket$/) >= 2 && ++waterDeepFails < 3) { waterDeepFailAt = Date.now(); log(`вода глубоко: штреками не нашлась (${waterDeepFails}-й раз) — ищу попутно у лавы, наверх не иду`); return }
+    if (!died && have(/bucket$/) >= 2 && ++waterDeepFails < 3) { waterDeepFailAt = gameClock.now(); log(`вода глубоко: штреками не нашлась (${waterDeepFails}-й раз) — ищу попутно у лавы, наверх не иду`); return }
   }
   for (let i = 0; i < 6 && !have('water_bucket'); i++) {
     await recoverGuard()
@@ -2894,7 +2907,7 @@ async function ensureFlint () {
   if (have('flint_and_steel') || have('fire_charge')) return true
   if (flintTries >= 2) return false
   flintTries++
-  const until = Date.now() + 180000
+  const until = gameClock.now() + 180000
   // Гравий в рюкзаке — поставить и сломать, пока не выпадет кремень: 10% за
   // блок без удачи (loot_table/blocks/gravel.json, table_bonus [0.1, …] — jar
   // 1.21.11). 2026-09-27 (01:53) в Ад не пустили без огнива при 12 гравия.
@@ -2904,7 +2917,7 @@ async function ensureFlint () {
     await act('mine', { block: 'gravel', dry: true, count: 1, radius: 6, timeoutSeconds: 20 })
     await refresh()
   }
-  for (let k = 0; k < 4 && !have('flint') && !died && Date.now() < until; k++) {
+  for (let k = 0; k < 4 && !have('flint') && !died && gameClock.now() < until; k++) {
     // Бьют (урон прервал копку) или мало хп — прекратить: 2026-09-29 13:40
     // поиск гравия четырежды подряд звал mine под ударами, 18 → 6 хп.
     if ((state.health ?? 20) < 12) { log('кремень: мало хп — поиск гравия прекращаю'); break }
@@ -3047,18 +3060,18 @@ async function naturalCast () {
 // сланец. Услышанное — направление, дальность и высота от места, где слышал (cast.hearLava); литьё идёт к нему до спуска.
 let heardLava = null
 async function listenForLava (where) {
-  if (heardLava && Date.now() - heardLava.t < 20 * 60000 && near3(heardLava.from, 32)) return
+  if (heardLava && gameClock.now() - heardLava.t < 20 * 60000 && near3(heardLava.from, 32)) return
   const h = await act('portal', { mode: 'cast', listen: 16, timeoutSeconds: 30 })
   const heard = h.detail && Array.isArray(h.detail.heard) && h.detail.heard[0]
   if (!heard || !state.pos) return
-  heardLava = { ...heard, from: { x: Math.floor(state.pos.x), y: Math.floor(state.pos.y), z: Math.floor(state.pos.z) }, t: Date.now() }
+  heardLava = { ...heard, from: { x: Math.floor(state.pos.x), y: Math.floor(state.pos.y), z: Math.floor(state.pos.z) }, t: gameClock.now() }
   log(`слышу лаву (${where}): ${heard.dir}, ~${heard.dist} бл., высота ${heard.height ?? '?'} — запомнил для литья`)
 }
 // К услышанной по пути лаве: вернуться туда, где слышал, подойти по оценке (сторона × flat, высота), оглядеться.
 async function toHeardLava () {
   const H = heardLava
   heardLava = null
-  if (!H || !state.pos || Date.now() - H.t > 30 * 60000 || !near3(H.from, 96)) return null
+  if (!H || !state.pos || gameClock.now() - H.t > 30 * 60000 || !near3(H.from, 96)) return null
   log(`литьё: к лаве, услышанной у ${H.from.x},${H.from.y},${H.from.z} (${H.dir}, ~${H.dist} бл.)`)
   if (!near3(H.from, 3)) await act('goto', { x: H.from.x, y: H.from.y, z: H.from.z, range: 2, timeoutSeconds: 90 })
   if (died || !near3(H.from, 6)) return null
@@ -3135,7 +3148,7 @@ async function deepCast () {
         if (died) return
         if (!have('water_bucket')) {
           // Один поиск воды на заход (Codex ow-review1: иначе до 10 вызовов deepWater по 5 штреков за один заход литья).
-          waterDeepFailAt = Date.now()
+          waterDeepFailAt = gameClock.now()
           log('литьё глубоко: воды у дна не нашёл — заход кончаю, без повторных штреков')
           return
         }
@@ -3581,8 +3594,29 @@ function routeRememberShaft (from, extend = false) {
   surfaceShaft = old && next && old.x === next.x && old.z === next.z && Math.abs(old.bottom - next.top) <= 1
     ? { ...old, bottom: next.bottom } : null
 }
+// Preserve the furnace recipe before the route shaft spends rubble on its pillar.
+// ND_ROUTE_FURNACE_SUPPLY=0 restores the former route supply handling.
+async function routeFurnaceSupply () {
+  await refresh()
+  if (have('furnace')) return true
+  await furnaceBack()
+  await refresh()
+  if (!have('furnace') && have(COBBLE) < 8) {
+    await act('mine', { block: 'stone', count: 8 - have(COBBLE), radius: 14, dry: true, timeoutSeconds: 75 })
+    await refresh()
+  }
+  if (!have('furnace') && have(COBBLE) >= 8) { await ensureTable(); await craft('furnace'); await refresh() }
+  return have('furnace') > 0
+}
 async function routeReturnShaft (why) {
-  try { if (!sit.surface && !(await climbOwnShaft(why))) await toSurface() }
+  try {
+    if (!sit.surface && routeShaftBackOn() && process.env.ND_ROUTE_FURNACE_SUPPLY !== '0' &&
+        have('raw_iron') && !have('furnace') && have(COBBLE) >= 8 && !(await routeFurnaceSupply())) {
+      await toSurface()
+      return
+    }
+    if (!sit.surface && !(await climbOwnShaft(why))) await toSurface()
+  }
   finally { if (routeShaftBackOn()) surfaceShaft = null }
 }
 async function routeGoPush (at, range = 10) {
@@ -3649,10 +3683,10 @@ async function routeFood ({ cookRaw = true } = {}) {
 async function routeHunt (r = 40, limitS = 60) {
   await sense()
   if (!sit.surface || (state.health ?? 20) < 10) return
-  const until = Date.now() + limitS * 1000
+  const until = gameClock.now() + limitS * 1000
   hunting = true
   try {
-    for (let k = 0; k < 4 && Date.now() < until && foodUnits() < 8 && !died; k++) {
+    for (let k = 0; k < 4 && gameClock.now() < until && foodUnits() < 8 && !died; k++) {
       const o = await act('observe', { radius: 48 })
       const ents = (o.detail && o.detail.entities) || []
       // Кровати нет — овцы первыми: ночь (~10-я мин) в кровати — 10 с, без неё — нора и работа внизу.
@@ -3723,6 +3757,14 @@ async function castOneAt (L, { maxDig = 60 } = {}) {
     }
     rlog(`литьё одним ведром: ${d.lit ? 'горит' : 'нет'}${d.frame ? `, рама ${d.frame}` : ''}${d.stopped ? `; ${String(d.stopped).slice(0, 140)}` : ''}${d.seconds ? ` (${d.seconds} с)` : ''}`)
     if (known.portal || d.lit) return true
+    // A previous attempt spent its supports; replaying the same shortage cannot
+    // finish the frame. Refill in the existing step budget, with its safety gate.
+    if (process.env.ND_ROUTE_CAST_RESUPPLY !== '0' && d.need?.what === 'cobblestone' &&
+        Number.isFinite(d.need.count) && d.need.count > 0) {
+      await routeBlocks(Math.max(routeBlockTarget(), d.need.count))
+      if (fillerCount() < d.need.count) return false
+      continue
+    }
     // Рама готова, а зажечь нечем — кремень (гравий по карте/на виду), огниво из слитка, поджечь ту же раму.
     if (d.built && !d.lit) {
       if (!lighter()) { await ensureFlint(); await refresh(); if (!lighter() && have('flint') && have('iron_ingot')) await craft('flint_and_steel') }
@@ -3765,15 +3807,15 @@ async function routeSleep (why = '') {
   if (!(nightNow() || dusk)) return false
   if (!have(/_bed$/) && have(/_wool$/) >= 3) { await makeBed(); await refresh() }
   if (!have(/_bed$/) && !sit.bed) return false
-  if (Date.now() - routeSleptAt < 20000) return false
-  routeSleptAt = Date.now()
-  const t0 = Date.now()
+  if (gameClock.now() - routeSleptAt < 20000) return false
+  routeSleptAt = gameClock.now()
+  const t0 = gameClock.now()
   // В зоне аванпоста не спать: пиллагеры стреляют в кровать (rt3-A5 слот 10) — сперва выйти из зоны.
   await routeLeaveOutpost(null)
   rlog(`ночь (${t ?? '?'} тиков${why ? `, ${why}` : ''}) — кровать есть, сплю здесь`)
   await nightGuard()
   await sense()
-  rlog(`сон: ${nightNow() ? 'ночь не проскочила' : 'утро'} за ${Math.round((Date.now() - t0) / 1000)} с`)
+  rlog(`сон: ${nightNow() ? 'ночь не проскочила' : 'утро'} за ${Math.round((gameClock.now() - t0) / 1000)} с`)
   return !nightNow()
 }
 // Кровать поздно (шага bed не было или он не вышел): к вечеру (≥ 9000 тиков, ~6.7 мин от утра 1000) — стадо одного
@@ -3837,6 +3879,7 @@ async function routeFlintFromBag () {
 let routeFrame = null
 // Срок шага маршрута (act бросает ROUTE_BUDGET после него): 3× бюджет, не меньше 150 с; дерево и камень — 600 с.
 let routeDeadline = 0
+let routeStepNow = null // id текущего шага плана маршрута — для телеметрии вызовов внутри шага
 let routeHealing = false
 // Лечение и уход перед опасной работой маршрута (ROUTE_UNSAFE): вода → берег, завал → откопаться, враги → ответ,
 // хп < 13 → еда (сытость 18 даёт реген) или охота, отлёжка.
@@ -3887,6 +3930,8 @@ async function routeStep (s) {
   const ironNow = () => have('iron_ingot') + have('raw_iron') + Math.floor(have('iron_nugget') / 9)
   switch (s.kind) {
     case 'wood': {
+      // A replan can already carry the starter made by recoverGuard/autopilot.
+      if (process.env.ND_ROUTE_STARTER_CHECKPOINT !== '0' && have(/_pickaxe$/) && have('crafting_table')) return true
       // Брёвна — по рощам из скана копии (ближняя непосещённая), а не разведкой на 2 мин: на равнине с редкими дубами по
       // 2 бревна этап дерева ходил 711 с (rt-R3 слот 15). Нет скана — как раньше (этап дерева с разведкой).
       // Спавн в зоне аванпоста — сперва выйти из неё (rt3-A1 слот 10: брёвна у аванпоста, смерть на 1-й мин).
@@ -4134,7 +4179,12 @@ async function routeStep (s) {
       // Плавить только нужное: 3 на ведро (сколько ещё нет), 1 на огниво (если огня нет) — 10 с на слиток.
       const wantB = routeMod.BUCKETS()
       const wantIngots = 3 * Math.max(0, wantB - have(/bucket$/)) + (lighter() ? 0 : 1)
-      await smeltAll('raw_iron', 'iron_ingot', { fetchCoal: false, max: Math.max(0, wantIngots - have('iron_ingot') - Math.floor(have('iron_nugget') / 9)) })
+      const max = Math.max(0, wantIngots - have('iron_ingot') - Math.floor(have('iron_nugget') / 9))
+      if (max > 0 && have('raw_iron') && process.env.ND_ROUTE_FURNACE_SUPPLY !== '0' && !(await routeFurnaceSupply())) {
+        rlog('плавка: печь не подготовлена — одинаковые вызовы smelt не повторяю')
+        return false
+      }
+      await smeltAll('raw_iron', 'iron_ingot', { fetchCoal: false, max })
       await refresh()
       if (have('iron_nugget') >= 9 && have('iron_ingot') < 6) { await ensureTable(); await act('craft', { item: 'iron_ingot', count: Math.floor(have('iron_nugget') / 9) }); await refresh() }
       for (let k = 0; k < 2 && have(/bucket$/) < wantB && have('iron_ingot') >= 3; k++) await craft('bucket')
@@ -4285,8 +4335,8 @@ async function routeStep (s) {
     }
     case 'ironStage': {
       // Этап железа кампании (лесенка к y 16, штреки, плавка) — до вёдер маршрута (одно при литье одним ведром).
-      const t0 = Date.now()
-      for (let k = 0; k < 3 && have(/bucket$/) < routeMod.BUCKETS() && routeMod.ironNeed(state.inventory || {}) > 0 && Date.now() - t0 < 600000 && !died; k++) {
+      const t0 = gameClock.now()
+      for (let k = 0; k < 3 && have(/bucket$/) < routeMod.BUCKETS() && routeMod.ironNeed(state.inventory || {}) > 0 && gameClock.now() - t0 < 600000 && !died; k++) {
         try { await stageRun('iron')() } catch (e) { if (e.stopCampaign || manualControl || e.routeBudget || /умер/.test(e.message)) throw e; rlog(`этап железа: ${e.message}`) }
         await refresh()
       }
@@ -4308,7 +4358,7 @@ async function routeStep (s) {
 }
 defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.portal || !routeDoneIds.has('enter')) && !!routeInfoGet(), async () => {
   const info = routeInfoGet()
-  if (!routeT0) routeT0 = Date.now()
+  if (!routeT0) routeT0 = gameClock.now()
   let first = true
   for (let round = 0; round < 24 && !died && dim() === 'overworld'; round++) {
     await refresh()
@@ -4318,24 +4368,34 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     if (died) break
     await sense()
     // Время от утра (план кровати): часы мира (старт сцены — 1000 тиков), иначе — от начала маршрута.
-    const elapsed = todNow() !== null ? Math.max(0, Math.round((todNow() - 1000) / 20)) : Math.round((Date.now() - routeT0) / 1000)
+    const elapsed = todNow() !== null ? Math.max(0, Math.round((todNow() - 1000) / 20)) : Math.round((gameClock.now() - routeT0) / 1000)
     // Портал уже горит — только вход.
     const p = routeMod.plan(info, { from: state.pos, fromY: state.pos ? state.pos.y : undefined, have: state.inventory || {}, avoid: routeAvoid, done: routeDoneIds, portal: !!known.portal, elapsed, structureSeconds: routeStructureSeconds, frame: known.portal ? null : routeFrame })
     if (first) { rlog(routeMod.describe(p)); first = false }
     const s = p.steps.find(x => !routeDoneIds.has(x.id))
     if (!s) break
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let ok = false
+    const telStepWall = gameClock.wall.now()
+    const telStep = telemetry.on() ? telemetry.snapshot(state, sit) : null
+    let telErr = null
+    routeStepNow = s.id
     rlog(`шаг ${s.id}: ${s.why || ''} (бюджет ${s.budget} с)`)
-    routeDeadline = Date.now() + (/^(wood|stone)$/.test(s.kind) ? (process.env.ND_ROUTE_DEADLINE === '0' ? 600 : Math.min(300, Math.max(150, (s.budget || 60) * 2))) : Math.max(150, (s.budget || 60) * 3)) * 1000
+    // r4 shortened the starter steps to 150-300 s; six logs followed by a second
+    // exploration exhausted 180 s before the first pick. Keep the base deadline
+    // by default; ND_ROUTE_BOOTSTRAP_LIMIT=1 opts into the shorter policy.
+    routeDeadline = gameClock.now() + (/^(wood|stone)$/.test(s.kind) ?
+      (process.env.ND_ROUTE_BOOTSTRAP_LIMIT === '1' && process.env.ND_ROUTE_DEADLINE !== '0' ? Math.min(300, Math.max(150, (s.budget || 60) * 2)) : 600) :
+      Math.max(150, (s.budget || 60) * 3)) * 1000
     const structureStep = /^(ruin|village|treasure|ship)$/.test(s.kind)
     const structureLeft = routeMod.structureSearchLeft(routeStructureSeconds)
     if (structureStep && Number.isFinite(structureLeft)) {
-      routeDeadline = Math.min(routeDeadline, Date.now() + structureLeft * 1000)
+      routeDeadline = Math.min(routeDeadline, gameClock.now() + structureLeft * 1000)
       rlog(`постройки: использовано ${Math.round(routeStructureSeconds)} из 180 с, осталось ${Math.floor(structureLeft)} с; затем руда`)
     }
     try { ok = await routeStep(s) } catch (e) {
       routeDeadline = 0
+      telErr = String(e.message).slice(0, 240)
       if (e.stopCampaign || manualControl) throw e
       rlog(`шаг ${s.id} упал: ${e.message}`)
       // Копка/спуск на малом хп, при враге, в воде (act: ROUTE_UNSAFE) — сперва лечение и уход, потом тот же шаг; не более
@@ -4351,20 +4411,27 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
         continue
       }
     } finally {
-      if (structureStep) routeStructureSeconds += (Date.now() - t0) / 1000
+      if (structureStep) routeStructureSeconds += (gameClock.now() - t0) / 1000
+      routeStepNow = null
+      if (telStep) {
+        const after = telemetry.snapshot(state, sit)
+        telemetry.record({ level: 'step', stage, step: s.id, kind: s.kind, budget: s.budget ?? null, cost: s.cost ?? null, why: s.why ? String(s.why).slice(0, 200) : null,
+          sec: Math.round((gameClock.now() - t0) / 100) / 10, wallSec: (gameClock.wall.now() - telStepWall) / 1000, ok: ok === true, result: typeof ok === 'string' ? ok : (ok ? 'ok' : 'fail'), error: telErr, death: !!died,
+          sinceStart: Math.round((gameClock.now() - routeT0) / 1000), before: telStep, after, gained: telemetry.delta(telStep, after) })
+      }
     }
     routeDeadline = 0
-    const sec = Math.round((Date.now() - t0) / 1000)
-    if (ok === 'delegate') { rlog(`шаг ${s.id}: дальше обычные этапы (глубокое литьё) — с начала ${Math.round((Date.now() - routeT0) / 1000)} с`); break }
+    const sec = Math.round((gameClock.now() - t0) / 1000)
+    if (ok === 'delegate') { rlog(`шаг ${s.id}: дальше обычные этапы (глубокое литьё) — с начала ${Math.round((gameClock.now() - routeT0) / 1000)} с`); break }
     if (ok === 'water') {
       // Воды не нашлось — лава не виновата: не в avoid; второй раз подряд — дальше обычные этапы (там поиск воды шире).
       const n = (routeFails.get('water!') || 0) + 1
       routeFails.set('water!', n)
-      rlog(`шаг ${s.id}: воды в ведро не нашлось (${n}-й раз) за ${Math.round((Date.now() - t0) / 1000)} с`)
+      rlog(`шаг ${s.id}: воды в ведро не нашлось (${n}-й раз) за ${Math.round((gameClock.now() - t0) / 1000)} с`)
       if (n >= 2) break
       continue
     }
-    rlog(`шаг ${s.id} ${ok ? 'ok' : 'НЕ ВЫШЕЛ'} за ${sec} с (бюджет ${s.budget} с), с начала ${Math.round((Date.now() - routeT0) / 1000)} с; рюкзак: ${bag()}`)
+    rlog(`шаг ${s.id} ${ok ? 'ok' : 'НЕ ВЫШЕЛ'} за ${sec} с (бюджет ${s.budget} с), с начала ${Math.round((gameClock.now() - routeT0) / 1000)} с; рюкзак: ${bag()}`)
     if (ok) routeDoneIds.add(s.id)
     else if (/^(food|water)$/.test(s.id)) routeDoneIds.add(s.id) // мягкие: еда — ещё перед входом, вода — у литья (ensureWater)
     else if (s.id === 'smelt' && (routeFails.get('smelt') || 0) < 2) { routeFails.set('smelt', (routeFails.get('smelt') || 0) + 1) /* железа не хватило — следующий план позовёт копку */ }
@@ -4380,7 +4447,7 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     if (died) break
   }
   routeDone = true
-  rlog(`маршрут кончился: ${dim() === 'the_nether' ? 'в Аду' : known.portal ? 'портал горит' : 'без портала — дальше обычные этапы'}, ${Math.round((Date.now() - routeT0) / 1000)} с`)
+  rlog(`маршрут кончился: ${dim() === 'the_nether' ? 'в Аду' : known.portal ? 'портал горит' : 'без портала — дальше обычные этапы'}, ${Math.round((gameClock.now() - routeT0) / 1000)} с`)
   // Маршрут кончился у лавового озера (литьё не вышло) — обычные этапы начинали тут же: кровать-точка, верстак, плавка на
   // краю лавы (rt3-A5: 2 смерти «tried to swim in lava» на 7-й и 25-й мин). Сперва отойти от лавы на 12 бл.
   if (!died && dim() === 'overworld' && !known.portal && process.env.ND_ROUTE_LAVAEDGE !== '0') {
@@ -4565,7 +4632,7 @@ const bState = b => {
 }
 const nextBastion = () => {
   const left = (known.bastions || []).filter(b => !bState(b).spent)
-  return left.find(b => !barterFlow.enabled() || (bState(b).barterUntil || 0) <= Date.now()) || left[0] || null
+  return left.find(b => !barterFlow.enabled() || (bState(b).barterUntil || 0) <= gameClock.now()) || left[0] || null
 }
 // Поиск бастиона (fortress mode=bastion: обход регионов, как у крепости): на новых мирах «бастион (ад)» в памяти бывал,
 // только если разведка крепости случайно его видела, — крепость в регионе портала, и после стержней шли эндермены
@@ -4657,7 +4724,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     const d = r.detail || {}
     if (barterFlow.enabled() && barterFlow.retry(d, state.inventory || {})) {
       barterRetryPending = true; bastionDry = 0; bs.dry = 0
-      bs.barterUntil = Date.now() + 60000
+      bs.barterUntil = gameClock.now() + 60000
       log(`${b.key}: золото сохранено, нужен другой этаж/торговцы — повтор без многоминутной паузы`)
       // A temporary routing failure is never an exhaustion checkpoint. Prefer another mapped bastion on the next call.
       break
@@ -4939,8 +5006,8 @@ defStage('eyes', () => have('ender_eye') < eyesWant() && have('ender_pearl') > 0
 // блейзы не подлетают» (кампания 2026-09-28, 13:58: 0 стержней за 400 с при 2
 // стрелах; лаборатория — 64 стрелы на 7 стержней).
 async function arrowsRun (want = 48) {
-  const t0 = Date.now()
-  for (let k = 0; k < 24 && arrowsNow() < want && !died && Date.now() - t0 < 12 * 60000; k++) {
+  const t0 = gameClock.now()
+  for (let k = 0; k < 24 && arrowsNow() < want && !died && gameClock.now() - t0 < 12 * 60000; k++) {
     await nightGuard()
     await refresh()
     if (have('stick') < 1) await sticks(4)
@@ -5151,7 +5218,11 @@ const SH_NETHER = process.env.ND_SH_NETHER === '1'
 const SH_BLIND = process.env.ND_SH_BLIND === '1'
 const SH_NETHER_MIN = 500
 let shNetherTries = 0
-const canLink = () => pendingExitFrame() || (shNetherTries < 2 && lighter() && (have('obsidian') >= 10 || have(PICK_DIAMOND) > 0))
+// The two-journey cap must not make frame work unreachable after arrival.
+// Local failures retain the campaign's normal backoff and progress watchdog.
+const atExitTarget = () => process.env.ND_EXIT_LOCAL_RETRY !== '0' && dim() === 'the_nether' && known.stronghold && state.pos &&
+  Math.hypot(state.pos.x - Math.floor(known.stronghold.x / 8), state.pos.z - Math.floor(known.stronghold.z / 8)) <= 12
+const canLink = () => pendingExitFrame() || ((shNetherTries < 2 || atExitTarget()) && lighter() && (have('obsidian') >= 10 || have(PICK_DIAMOND) > 0))
 // Не начинаем длинную дорогу с изношенными кирками и без переносного верстака.
 // Крафты напрямую: отказ тесного места не должен отправлять тело наверх.
 async function prepareExitSupply (T) {
@@ -5162,11 +5233,11 @@ async function prepareExitSupply (T) {
   // Fully made tools already cover the journey: loose sticks are materials,
   // not an additional gate after those materials have become pickaxes.
   if ((sit.pickLeft || 0) >= want && have('crafting_table')) return true
-  const until = Date.now() + 180000
+  const until = gameClock.now() + 180000
   const step = async (method, args = {}) => {
-    if (died || Date.now() >= until) return null
+    if (died || gameClock.now() >= until) return null
     const p = { ...args }
-    if (p.timeoutSeconds) p.timeoutSeconds = Math.max(1, Math.min(p.timeoutSeconds, Math.floor((until - Date.now()) / 1000)))
+    if (p.timeoutSeconds) p.timeoutSeconds = Math.max(1, Math.min(p.timeoutSeconds, Math.floor((until - gameClock.now()) / 1000)))
     const r = await act(method, p); await refresh(); return r
   }
   log('набор на выход: пополнение ≤180 с; сначала сундуки и железо, затем чёрный камень; дерево из сундука ≤20 с, стебли ≤60 с')
@@ -5195,7 +5266,7 @@ async function prepareExitSupply (T) {
       block: 'crimson_stem,warped_stem', count: Math.ceil((planksNeeded() - have(/_planks$/)) / 4), radius: 32, timeoutSeconds: 60
     })
   }
-  while (!died && Date.now() < until && have(/_planks$/) < planksNeeded() && have(LOGS)) {
+  while (!died && gameClock.now() < until && have(/_planks$/) < planksNeeded() && have(LOGS)) {
     const item = planksFor(); if (!item) break
     const before = have(/_planks$/); await step('craft', { item, count: 4 })
     if (have(/_planks$/) <= before) break
@@ -5206,7 +5277,7 @@ async function prepareExitSupply (T) {
   if (sticks && have(/_planks$/) >= sticks / 2) await step('craft', { item: 'stick', count: sticks })
   // Blackstone is a stone-tool ingredient in 1.21.11; the bastion is the first
   // source at this seam. The existing mine action keeps pick/LOS validation.
-  for (let i = 0; i < picks && !died && Date.now() < until; i++) {
+  for (let i = 0; i < picks && !died && gameClock.now() < until; i++) {
     await sense()
     if ((sit.pickLeft || 0) >= want) break
     // Craft the iron pick before mining blackstone: it is also the bootstrap
@@ -5492,16 +5563,16 @@ ws.on('open', async () => {
     // минута днём), а не остановка. Неудачная нора — РИСК и жить дальше (shelterFailed). Единственный останов
     // кампании — сторож: WATCHDOG_MIN (45) минут без ВЕХИ и без полезного результата ни в одном этапе.
     const fails = new Map()
-    const cooling = s => { const f = fails.get(s.name); return !!f && f.until > Date.now() }
+    const cooling = s => { const f = fails.get(s.name); return !!f && f.until > gameClock.now() }
     const failStage = name => {
       const f = fails.get(name) || { n: 0, level: 0, until: 0 }
       f.n++
-      f.at = Date.now()
+      f.at = gameClock.now()
       if (f.n >= (f.level ? 1 : 2)) {
         // ND_NE_STAY=1: в Аду паузы короткие (1–4 мин) — 5–40 мин ожидания съедали прогон (B2 03.10: 4 тела по 15+ мин в толще).
         const PM = process.env.ND_NE_STAY === '1' && dim() === 'the_nether' ? [1, 2, 3, 4] : PAUSE_MIN
         const min = PM[Math.min(f.level, PM.length - 1)]
-        f.until = Date.now() + min * 60000
+        f.until = gameClock.now() + min * 60000
         f.level++
         f.n = 0
         log(`этап ${name}: ${f.level > 1 ? 'снова пустой заход' : 'два пустых захода подряд'} — пауза ${min} мин`)
@@ -5509,7 +5580,7 @@ ws.on('open', async () => {
       fails.set(name, f)
     }
     const resetPauses = why => { if (fails.size) { log(`паузы этапов сняты: ${why}`); fails.clear() } }
-    let lastProgressAt = Date.now()
+    let lastProgressAt = gameClock.now()
     let lastDim = dim()
     let wasNight = !!sit.night
     for (let turn = 1; turn <= 5000; turn++) {
@@ -5523,7 +5594,7 @@ ws.on('open', async () => {
         log('тело не в игре — переподключаюсь')
         await act('connect')
         await refresh()
-        if (state.connected === false) await sleep(30000)
+        if (state.connected === false) await gameClock.wall.sleep(30000)
         continue
       }
       if (dim() !== lastDim) { resetPauses(`смена измерения ${lastDim} → ${dim()}`); await readMemory(); seamSnapshot(`observed:${lastDim}->${dim()}`); lastDim = dim() }
@@ -5537,14 +5608,14 @@ ws.on('open', async () => {
         try { await recoverGuard() } catch (e) { if (e.stopCampaign) throw e; log(`после смерти: ${e.message}`) }
       }
       // Сторож прогресса — единственная остановка кампании.
-      if (Date.now() - lastProgressAt >= WATCHDOG_MIN * 60000) {
+      if (gameClock.now() - lastProgressAt >= WATCHDOG_MIN * 60000) {
         stage = '-'
-        log(`БЛОКЕР: сторож — ${Math.round((Date.now() - lastProgressAt) / 60000)} мин без прогресса ни в одном этапе (последний этап ${lastStage}); останавливаю кампанию`)
+        log(`БЛОКЕР: сторож — ${Math.round((gameClock.now() - lastProgressAt) / 60000)} мин без прогресса ни в одном этапе (последний этап ${lastStage}); останавливаю кампанию`)
         await act('stop')
         process.exitCode = 2
         break
       }
-      const turnStart = Date.now()
+      const turnStart = gameClock.now()
       // В Аду и Энде — только свои этапы: дерево, камень, еда и железо — этапы
       // верхнего мира. 2026-09-26 (14:34): кирки стёрлись о незерак, и первым
       // «нужным» оказалось дерево — разведка за брёвнами по Аду кончилась на
@@ -5583,7 +5654,7 @@ ws.on('open', async () => {
       // охота, отказавшая за секунду (не вышел наверх), иначе крутится по ходу в секунду (fresh-A2 слот 15:
       // 30 ходов еды за минуту).
       const foodFail = fails.get('food')
-      const urgentOk = x => !cooling(x) || !foodFail || Date.now() - (foodFail.at || 0) > 90000
+      const urgentOk = x => !cooling(x) || !foodFail || gameClock.now() - (foodFail.at || 0) > 90000
       const urgent = weakAndHungry() ? need.find(x => x.name === 'food' && urgentOk(x) && x.ready() && !x.defer()) : null
       const s = urgent || need.find(x => !cooling(x) && x.ready() && !x.defer())
       if (!s) {
@@ -5605,7 +5676,7 @@ ws.on('open', async () => {
           await returnFromNether()
           continue
         }
-        const paused = need.filter(x => cooling(x)).map(x => Math.ceil((fails.get(x.name).until - Date.now()) / 60000))
+        const paused = need.filter(x => cooling(x)).map(x => Math.ceil((fails.get(x.name).until - gameClock.now()) / 60000))
         const blocked = need.every(x => !x.defer() && (cooling(x) || !x.ready()))
         log(`${blocked ? 'нет доступного шага' : 'нужные этапы отложены'} (${need.map(x => `${x.name}${cooling(x) ? '·пауза' : ''}${x.ready() ? '' : '·нечем'}${x.defer() ? '·отложен' : ''}`).join(', ')}) — жду${paused.length ? `: ближайшая пауза кончится через ${Math.min(...paused)} мин` : ' изменения обстановки'}`)
         // Ждать ночью наверху — в норе, не посреди поля. В Аду не ждать —
@@ -5617,17 +5688,20 @@ ws.on('open', async () => {
         // Ход без ожидания (нора не нужна или не вышла, портал не дошёл) — всё равно ждать: иначе круг ходов
         // без паузы жжёт процессор до сторожа.
         // Ждать — не в воде (A4 слот 20: wait 60 в реке, утопленник добил за три ожидания).
-        if (Date.now() - turnStart < 20000) { if (dim() === 'overworld') await leaveWater(); await act('wait', { seconds: 60 }) }
+        if (gameClock.now() - turnStart < 20000) { if (dim() === 'overworld') await leaveWater(); await act('wait', { seconds: 60 }) }
         continue
       }
       stage = s.name
       lastStage = s.name
       log(`ход ${turn}: начинаю; рюкзак: ${bag()}`)
       const before = stageProgress(s.name)
+      const telStage = telemetry.on() ? { t0: gameClock.now(), wallT0: gameClock.wall.now(), before: telemetry.snapshot(state, sit), dead: died } : null
+      let telStageErr = null
       try {
         await recoverGuard()
         await s.run()
       } catch (e) {
+        if (telStage) telStageErr = String(e.message).slice(0, 240)
         if (e.stopCampaign) throw e
         log(`этап упал: ${e.message}`)
       }
@@ -5639,6 +5713,12 @@ ws.on('open', async () => {
       const ok = off && s.done()
       const after = stageProgress(s.name)
       const progressed = Object.entries(after).some(([key, value]) => value > (before[key] || 0))
+      if (telStage) {
+        const snap = telemetry.snapshot(state, sit)
+        telemetry.record({ level: 'stage', stage: s.name, turn, sec: Math.round((gameClock.now() - telStage.t0) / 100) / 10, wallSec: (gameClock.wall.now() - telStage.wallT0) / 1000, ok, off, progressed,
+          error: telStageErr, death: died && !telStage.dead, sinceStart: Math.round((gameClock.now() - T0) / 1000), before: telStage.before, after: snap,
+          gained: telemetry.delta(telStage.before, snap) })
+      }
       if (!off && s.defer()) {
         log(`этап отложен (${s.name === 'food' ? 'ночь — охота с рассветом' : 'не сейчас'}); рюкзак: ${bag()}`)
         continue
@@ -5647,12 +5727,12 @@ ws.on('open', async () => {
       if (off) {
         fails.delete(s.name)
         if (ok) {
-          lastProgressAt = Date.now()
-          log(`ВЕХА ${s.name}: готово в ${new Date().toTimeString().slice(0, 8)}, ${Math.round((Date.now() - T0) / 60000)} мин от запуска`)
+          lastProgressAt = gameClock.now()
+          log(`ВЕХА ${s.name}: готово в ${new Date().toTimeString().slice(0, 8)}, ${Math.round((gameClock.now() - T0) / 60000)} мин от запуска`)
         }
       } else if (progressed) {
         fails.delete(s.name)
-        lastProgressAt = Date.now()
+        lastProgressAt = gameClock.now()
         log('частичный полезный результат — продолжаю без ожидания и отката')
       } else if (s.name === 'bastion' && barterFlow.enabled() && barterRetryPending) {
         barterRetryPending = false
@@ -5673,7 +5753,7 @@ ws.on('open', async () => {
     // Отключение само отменяет текущее намерение (session.disconnect → cancel).
     if (!detached && !manualControl && state.playPolicy?.mode !== 'free') {
       try {
-        await Promise.race([call('disconnect', { reason: 'кампания завершена' }), sleep(15000)])
+        await Promise.race([call('disconnect', { reason: 'кампания завершена' }), gameClock.wall.sleep(15000)])
         log('кампания завершена — бот отключён от сервера')
       } catch (e) { log(`disconnect RPC-ОШИБКА ${e.message}`) }
     }

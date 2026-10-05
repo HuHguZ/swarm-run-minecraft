@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Атрибут-свап в 1.21.11 (PVP-RESEARCH б.3, MC-28289) — проверка на Paper.
 // Два голых mineflayer-клиента (не демоны: их имена NeuroDown/NeuroDown2
 // заняты ареной; NeuroNether и NeuroEnd — опы тестового сервера nether):
@@ -11,18 +13,17 @@
 //     для сравнения то же с честной сменой (топор, тик, меч) — слабый (weak);
 //  3. урон свап-удара по B без щита: 7 (атрибут меча), а не 9 (топор).
 //   MC_PORT=25567 node try-swap.js
-const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const edges = require('./src/edges')
 const melee = require('./src/melee')
 
 const PORT = Number(process.env.MC_PORT || 25567)
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const X = 60; const Y = 150; const Z = 60
 
 function join (username) {
   return new Promise((resolve, reject) => {
-    const bot = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' })
+    const bot = createGameBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' }, { primary: true })
     bot.once('spawn', () => resolve(bot))
     bot.once('error', reject)
     bot.once('kicked', (r) => reject(new Error('kicked ' + JSON.stringify(r))))
@@ -38,9 +39,9 @@ const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { 
   const sounds = []
   // Имя звука — с поправкой номера (melee.soundName, 2026-09-26): soundEffectHeard
   // mineflayer на 1.21.11 называет звуки соседним именем.
-  A._client.on('sound_effect', (p) => { const n = melee.soundName(A, p); const pt = new Vec3(p.x / 8, p.y / 8, p.z / 8); if (/attack|shield/.test(n)) sounds.push({ n: String(n).replace(/^.*?(entity|item)\./, '$1.'), t: Date.now(), d: pt.distanceTo(A.entity.position).toFixed(1) }) })
+  A._client.on('sound_effect', (p) => { const n = melee.soundName(A, p); const pt = new Vec3(p.x / 8, p.y / 8, p.z / 8); if (/attack|shield/.test(n)) sounds.push({ n: String(n).replace(/^.*?(entity|item)\./, '$1.'), t: gameClock.now(), d: pt.distanceTo(A.entity.position).toFixed(1) }) })
   const cooldowns = []
-  B._client.on('set_cooldown', (p) => cooldowns.push({ g: p.cooldownGroup, ticks: p.cooldownTicks, t: Date.now() }))
+  B._client.on('set_cooldown', (p) => cooldowns.push({ g: p.cooldownGroup, ticks: p.cooldownTicks, t: gameClock.now() }))
   const hpB = () => B.health
   try {
     await cmd(`/fill ${X - 6} ${Y - 1} ${Z - 6} ${X + 6} ${Y - 1} ${Z + 6} minecraft:stone`)
@@ -118,6 +119,6 @@ const ticks = (bot, n) => new Promise(resolve => { let k = 0; const f = () => { 
     process.exitCode = 1
   } finally {
     A.quit(); B.quit()
-    setTimeout(() => process.exit(), 500)
+    gameClock.wall.setTimeout(() => process.exit(), 500)
   }
 })()

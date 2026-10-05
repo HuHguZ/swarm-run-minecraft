@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Природная лава для портала без алмазной кирки (агент G, 02.10.2026; research/07-portal-techniques.md).
 // Найти ГЛАЗАМИ ближайшую годную лаву, выбрать технику, дойти, отлить раму (cast.js — не правлю, только зову) и
 // зажечь (nether.portal). Новое поведение — RPC portal_natural (index.js); активный ход — под ND_PORTAL_NATURAL=1.
@@ -225,7 +226,7 @@ function skyLava (bot, radius, { up = 40, down = 48, rays = 1500 } = {}) {
 // Что видно отсюда. radius — сфера взгляда (лава светится, озеро видно издалека, если чанк прогружен);
 // rays — потолок лучей на вызов (visibleOf). Возвращает площадки, лучшие первыми.
 function survey (bot, { radius = 128, rays = 3000, need = NEED } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.wall.now()
   const reg = bot.registry
   const me = bot.entity.position.floored()
   // Сначала лава под небом (дальний взгляд), потом ближняя любая (пещера, овраг — сфера 40).
@@ -271,7 +272,7 @@ function survey (bot, { radius = 128, rays = 3000, need = NEED } = {}) {
   return {
     me: xyz(me),
     biome: biomeAt(bot, me),
-    ms: Date.now() - t0,
+    ms: gameClock.wall.now() - t0,
     seenSources: lavaSeen.length,
     skyCandidates: sky.candidates,
     skySample: sky.sample,
@@ -321,7 +322,7 @@ async function walkNear (bot, ctl, at, range, ms) {
   try {
     await Promise.race([
       bot.pathfinder.goto(new goals.GoalNear(at.x, at.y, at.z, range)),
-      new Promise((resolve, reject) => setTimeout(() => reject(new Error('не дошёл')), ms))
+      new Promise((resolve, reject) => gameClock.setTimeout(() => reject(new Error('не дошёл')), ms))
     ])
     return true
   } catch { try { bot.pathfinder.setGoal(null) } catch {} return false }
@@ -556,12 +557,12 @@ async function pillarLook (session, ctl, { height = 10, radius = 128 } = {}) {
 
 async function run (session, ctl, p = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const secs = Math.max(60, Math.min(900, p.timeoutSeconds ?? 600))
   const deadline = t0 + secs * 1000 - 5000
-  const late = () => Date.now() > deadline || ctl.aborted
+  const late = () => gameClock.now() > deadline || ctl.aborted
   const steps = []
-  const mark = (what, extra = {}) => steps.push({ s: Math.round((Date.now() - t0) / 100) / 10, what, ...extra })
+  const mark = (what, extra = {}) => steps.push({ s: Math.round((gameClock.now() - t0) / 100) / 10, what, ...extra })
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
 
   const R = p.radius ?? 128
@@ -603,7 +604,7 @@ async function run (session, ctl, p = {}) {
       const d = hd(); const k = Math.min(1, 64 / d)
       const tx = bot.entity.position.x + (hint.x - bot.entity.position.x) * k
       const tz = bot.entity.position.z + (hint.z - bot.entity.position.z) * k
-      const r = await travelXZ(bot, ctl, tx, tz, { range: k < 1 ? 6 : 12, retries: 1, deadline: Math.min(deadline, Date.now() + 45000) })
+      const r = await travelXZ(bot, ctl, tx, tz, { range: k < 1 ? 6 : 12, retries: 1, deadline: Math.min(deadline, gameClock.now() + 45000) })
       legsTo++
       fails = r.ok ? 0 : fails + 1
       if (k >= 1 && r.ok) break
@@ -613,7 +614,7 @@ async function run (session, ctl, p = {}) {
     // 11 м — снизу глади не видно): подняться/спуститься к ней с копкой, как goto.
     const dy = hint.y - bot.entity.position.y
     if ((dy > 3 || dy < -6) && hd() <= 24 && !late()) {
-      const ok = await walkNear(bot, ctl, { x: hint.x, y: hint.y + 1, z: hint.z }, 6, Math.min(60000, Math.max(5000, deadline - Date.now())))
+      const ok = await walkNear(bot, ctl, { x: hint.x, y: hint.y + 1, z: hint.z }, 6, Math.min(60000, Math.max(5000, deadline - gameClock.now())))
       mark('к подсказке по высоте', { ok, dy: Math.round(dy), me: xyz(bot.entity.position.floored()) })
     }
     s = survey(bot, { radius: R })
@@ -623,7 +624,7 @@ async function run (session, ctl, p = {}) {
     for (const [ox, oz] of [[8, 0], [0, 8], [-8, 0], [0, -8]]) {
       if (s.best || late() || hd() > 32) break
       const to = { x: hint.x + ox, y: hint.y + 1, z: hint.z + oz }
-      const ok = await walkNear(bot, ctl, to, 2, Math.min(25000, Math.max(3000, deadline - Date.now())))
+      const ok = await walkNear(bot, ctl, to, 2, Math.min(25000, Math.max(3000, deadline - gameClock.now())))
       s = survey(bot, { radius: R })
       mark('обход подсказки', { ok, to, seen: s.seenSources, best: s.best && s.best.kind })
     }
@@ -657,7 +658,7 @@ async function run (session, ctl, p = {}) {
     session.surfaceWalk = true
     let r
     try {
-      r = await travelXZ(bot, ctl, to.x, to.z, { range: 6, retries: 1, deadline: Math.min(deadline, Date.now() + 45000) })
+      r = await travelXZ(bot, ctl, to.x, to.z, { range: 6, retries: 1, deadline: Math.min(deadline, gameClock.now() + 45000) })
     } finally {
       session.surfaceWalk = false
       if (mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
@@ -667,7 +668,7 @@ async function run (session, ctl, p = {}) {
     if (!s.best && p.lookout !== false && !late()) s = await lookout(`луч ${dx},${dz}`)
   }
   if (!s.best) {
-    return { found: false, hintUsed: hint || null, seconds: Math.round((Date.now() - t0) / 1000), steps, order: searchOrder(s.biome), last: s.sites.slice(0, 3), ruins: s.ruins, stopped: 'годной лавы не видно — дальше путь вниз (ND_OW_DEEP) или разведка' }
+    return { found: false, hintUsed: hint || null, seconds: Math.round((gameClock.now() - t0) / 1000), steps, order: searchOrder(s.biome), last: s.sites.slice(0, 3), ruins: s.ruins, stopped: 'годной лавы не видно — дальше путь вниз (ND_OW_DEEP) или разведка' }
   }
   const site = s.best
   const found = { kind: site.kind, at: site.at, open: site.open, dist: site.dist, est: site.est, water: site.water, biome: site.biome, ruins: site.ruins }
@@ -676,7 +677,7 @@ async function run (session, ctl, p = {}) {
   // дальше 18 от рамы. Не вышло с одной стороны — с другой.
   // Далеко — сперва поверху отрезком (travelXZ: страж застревания), потом точный подход.
   if (Math.hypot(site.at.x - bot.entity.position.x, site.at.z - bot.entity.position.z) > 24 && !late()) {
-    const r = await travelXZ(bot, ctl, site.at.x, site.at.z, { range: 10, retries: 2, deadline: Math.min(deadline, Date.now() + 120000) })
+    const r = await travelXZ(bot, ctl, site.at.x, site.at.z, { range: 10, retries: 2, deadline: Math.min(deadline, gameClock.now() + 120000) })
     mark('к лаве поверху', { ok: r.ok, error: r.error, me: xyz(bot.entity.position.floored()) })
   }
   // Литьё — как этап cast кампании, заходами. «Места под раму нет» — к следующей стороне озера; «не вижу лавы» —
@@ -697,12 +698,12 @@ async function run (session, ctl, p = {}) {
     if (approach) {
       const [ox, oz] = tries[Math.min(side, tries.length - 1)]
       const goal = { x: site.at.x + ox, y: site.at.y + 1, z: site.at.z + oz }
-      const ok = await walkNear(bot, ctl, goal, ox || oz ? 3 : 7, Math.min(90000, Math.max(5000, deadline - Date.now())))
+      const ok = await walkNear(bot, ctl, goal, ox || oz ? 3 : 7, Math.min(90000, Math.max(5000, deadline - gameClock.now())))
       mark('подошёл', { ok, to: goal, me: xyz(bot.entity.position.floored()) })
     }
-    const left = Math.round((deadline - Date.now()) / 1000)
+    const left = Math.round((deadline - gameClock.now()) / 1000)
     if (left < 45) break
-    const t1 = Date.now()
+    const t1 = gameClock.now()
     const castMod = require('./cast')
     cast = await castMod.castPortal(session, ctl, { timeoutSeconds: Math.min(540, left), radius: 9 })
     mark('литьё', { built: cast.built, frame: cast.frame, stopped: cast.stopped, refills: cast.refills, trace: Array.isArray(cast.trace) ? cast.trace.slice(-6) : undefined, buckets: ['bucket', 'water_bucket', 'lava_bucket'].map(n => bot.inventory.items().filter(i => i.name === n).reduce((a, i) => a + i.count, 0)).join('/') })
@@ -713,7 +714,7 @@ async function run (session, ctl, p = {}) {
     // место негодно для тела — забыть план (он и в журнале мира) и зайти с другой стороны озера.
     const empty = /^0\/10/.test(cast.frame || '0/10')
     const frameN = Number((/^(\d+)\//.exec(cast.frame || '') || [])[1] || 0)
-    const fast = Date.now() - t1 < 5000
+    const fast = gameClock.now() - t1 < 5000
     // Трава или снег не дали выкопать место или налить — снять и тот же заход ещё раз.
     if (!/лава кончилась|места под раму/.test(why)) {
       const soft = softCells(cast)
@@ -758,7 +759,7 @@ async function run (session, ctl, p = {}) {
     site: found,
     built: !!(cast && cast.built),
     lit: !!(light && light.lit),
-    seconds: Math.round((Date.now() - t0) / 1000),
+    seconds: Math.round((gameClock.now() - t0) / 1000),
     cast: cast ? { frame: cast.frame, refills: cast.refills, placed: cast.placed, dug: cast.dug, stopped: cast.stopped, site: cast.site } : null,
     steps
   }

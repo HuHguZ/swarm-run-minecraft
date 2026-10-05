@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Ловушки выживания (поток survival, research/dev-B-refuge.md, 02.10): тело в типовой смертельной
 // обстановке начала игры, дальше решает НАСТОЯЩАЯ кампания (campaign.js, все этапы) — без команд и без
 // сцены-мозга. Сцена только готовит место, набор и мобов, ждёт ROUND_MIN минут и смотрит со стороны:
@@ -98,7 +99,7 @@ async function main () {
     for (let round = 1; round <= ROUNDS; round++) {
       const variant = VARIANTS[(round - 1 + slot) % VARIANTS.length]
       const rec = { labFixture: true, slot, variant, round, ok: false }
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       let child = null
       try {
         const site = await prepare(kit, round, base, variant)
@@ -107,7 +108,7 @@ async function main () {
       } catch (e) { rec.error = e.message }
       if (child && child.exitCode === null) { try { child.kill() } catch {} }
       try { await call('stop') } catch {}
-      rec.seconds = Math.round((Date.now() - t0) / 1000)
+      rec.seconds = Math.round((gameClock.now() - t0) / 1000)
       rec.ok = !!(rec.fixtureReady && rec.survived)
       fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
       console.log(JSON.stringify({ slot, variant, round, ok: rec.ok, survived: rec.survived, deaths: rec.deaths, minHp: rec.minHp, firstHitS: rec.firstHitS,
@@ -116,7 +117,7 @@ async function main () {
     }
   } finally {
     try { await call('stop') } catch {}
-    try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-surv-trap окончена' }), sleep(8000)]) } catch {}
+    try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-surv-trap окончена' }), gameClock.wall.sleep(8000)]) } catch {}
     conn.close()
   }
 }
@@ -182,8 +183,8 @@ async function prepare (kit, round, base, VARIANT) {
   if (VARIANT === 'lowhp') {
     // Сытость 6 без насыщения: регенерации нет (FoodData.tick — с 18), еды в рюкзаке нет.
     await cmd('/effect give @s minecraft:hunger 30 200 true')
-    const until = Date.now() + 15000
-    while (Date.now() < until && (await call('status')).state.food > 6) await sleep(40)
+    const until = gameClock.now() + 15000
+    while (gameClock.now() < until && (await call('status')).state.food > 6) await sleep(40)
     await cmd('/effect clear @s minecraft:hunger')
     await kit.cmd('/damage @s 15 minecraft:generic')
   }
@@ -227,7 +228,7 @@ async function play (kit, rec, site) {
   rec.campaignLog = path.basename(clog)
   const args = [CAMPAIGN]
   if (ONLY) args.push(ONLY)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const child = spawn(process.execPath, args, { cwd: __dirname, env: { ...process.env, ND_CAMPAIGN_LOG: clog }, stdio: 'ignore' })
   let exited = null
   child.on('exit', code => { exited = code })
@@ -239,13 +240,30 @@ async function play (kit, rec, site) {
   let calm = null
   let lastNear = null
   const hits = []
+  const work = []
+  let workLines = 0
+  // Campaign log headers are calendar time. Record completion when observed
+  // on the game clock instead of comparing those headers with tick deadlines.
+  const captureWork = () => {
+    let log = ''
+    try { log = fs.readFileSync(clog, 'utf8') } catch {}
+    const complete = log.slice(0, log.lastIndexOf('\n') + 1).split('\n').slice(0, -1)
+    for (const l of complete.slice(workLines)) {
+      const m = /^\[[^\]]+\] \S+\s+([a-z_]+) (\{.*?\}) → (\w+)/.exec(l)
+      if (!m || !WORK.test(m[1]) || m[3] !== 'done') continue
+      if (m[1] === 'fight' && !/"purpose":"food"/.test(m[2])) continue
+      work.push({ ms: gameClock.now(), method: m[1] })
+    }
+    workLines = complete.length
+  }
   let died = false
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(500)
     let pk = null
     try { pk = await call('peek') } catch {}
+    captureWork()
     const st = pk && pk.state
-    const now = Date.now()
+    const now = gameClock.now()
     if (st && typeof st.health === 'number') {
       if (st.health < lastHp - 0.01) { hits.push(Math.round((now - t0) / 100) / 10); lastHit = now; if (!firstHit) firstHit = now; calm = null }
       lastHp = st.health
@@ -259,6 +277,7 @@ async function play (kit, rec, site) {
     if (deathLines(size).length) { died = true; await sleep(1500); break }
     if (exited !== null) break
   }
+  captureWork()
   const text = (() => { try { return fs.readFileSync(clog, 'utf8') } catch { return '' } })()
   const deaths = deathLines(size)
   rec.deaths = deaths.length
@@ -271,15 +290,6 @@ async function play (kit, rec, site) {
   rec.campaignExit = exited
   // Возврат к делу: первый рабочий шаг этапа (done), кончившийся после «стихло».
   const lines = text.split('\n')
-  const at = l => { const m = /^\[(\d\d):(\d\d):(\d\d)/.exec(l); if (!m) return null; const d = new Date(t0); d.setHours(+m[1], +m[2], +m[3], 0); let ms = d.getTime(); if (ms < t0 - 3600000) ms += 86400000; return ms }
-  const work = []
-  for (const l of lines) {
-    const m = /^\[[^\]]+\] \S+\s+([a-z_]+) (\{.*?\}) → (\w+)/.exec(l)
-    if (!m || !WORK.test(m[1]) || m[3] !== 'done') continue
-    // fight как работа — только охота (purpose food), не самозащита.
-    if (m[1] === 'fight' && !/"purpose":"food"/.test(m[2])) continue
-    work.push({ ms: at(l), method: m[1] })
-  }
   const after = calm ? work.find(w => w.ms !== null && w.ms >= calm - 1000) : null
   rec.backS = after ? Math.round((after.ms - t0) / 1000) : null
   rec.backMethod = after ? after.method : null

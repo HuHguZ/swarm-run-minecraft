@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Ферма: пять пар baseline/fixed. Команды только задают лабораторный старт;
 // добыча еды затем идёт настоящей campaign.js. Основной run не допускается.
 // Старый campaign сохранён до правок еды; демон у обеих групп одинаковый.
@@ -87,8 +88,8 @@ async function main () {
     if (VARIANT === 'baseline') {
       fs.writeFileSync(pairFile, JSON.stringify(start.pos))
     } else {
-      const until = Date.now() + 90000
-      while (!fs.existsSync(pairFile) && Date.now() < until) await sleep(200)
+      const until = gameClock.wall.now() + 90000
+      while (!fs.existsSync(pairFile) && gameClock.wall.now() < until) await gameClock.wall.sleep(200)
       if (!fs.existsSync(pairFile)) throw new Error('нет исходной позиции второй половины пары')
       const p = JSON.parse(fs.readFileSync(pairFile, 'utf8'))
       await kit.ensureWorld('overworld', { tp: `${p.x + 0.5} ${p.y} ${p.z + 0.5}` })
@@ -105,10 +106,12 @@ async function main () {
     result.sourceSha256 = crypto.createHash('sha256').update(original).digest('hex')
     const source = path.join(path.dirname(OUT), `slot-${SLOT}-policy.js`)
     fs.writeFileSync(source, original
+      // The policy copy lives in LAB_OUT, outside daemon/src.
+      .replace(/require\((['"])\.\/src\/game-clock\1\)/g, () => `require(${JSON.stringify(path.join(__dirname, 'src', 'game-clock'))})`)
       .replace("const LOG = path.join(__dirname, 'campaign.log')", "const LOG = process.env.ND_CAMPAIGN_LOG || path.join(__dirname, 'campaign.log')")
       .replace(headingDecl, `let heading = ${result.heading}`))
     serverMark = fs.readFileSync(logFile, 'utf8').length
-    t0 = Date.now()
+    t0 = gameClock.now()
     child = spawn(process.execPath, [source, 'food'], { cwd: __dirname, windowsHide: true,
       env: { ...process.env, NODE_PATH: path.join(__dirname, 'node_modules'), ND_CAMPAIGN_LOG: liveLog },
       stdio: ['ignore', 'pipe', 'pipe'] })
@@ -117,10 +120,10 @@ async function main () {
     result.exitCode = await new Promise((resolve, reject) => {
       child.once('error', reject)
       child.once('exit', code => resolve(code))
-      timer = setTimeout(() => { result.timedOut = true; child.kill() }, BUDGET * 1000)
+      timer = gameClock.setTimeout(() => { result.timedOut = true; child.kill() }, BUDGET * 1000)
     })
-    clearTimeout(timer)
-    result.seconds = Math.round((Date.now() - t0) / 1000)
+    gameClock.clearTimeout(timer)
+    result.seconds = Math.round((gameClock.now() - t0) / 1000)
     await conn.call('stop')
     const end = ((await conn.call('status')) || {}).state || {}
     result.food = stock(end)
@@ -148,9 +151,9 @@ async function main () {
     if (stderr.trim()) result.stderr = stderr.trim().slice(-1200)
   } catch (error) {
     result.error = error.stack || error.message
-    result.seconds = t0 ? Math.round((Date.now() - t0) / 1000) : 0
+    result.seconds = t0 ? Math.round((gameClock.now() - t0) / 1000) : 0
   } finally {
-    if (timer) clearTimeout(timer)
+    if (timer) gameClock.clearTimeout(timer)
     if (child && child.exitCode === null && !child.killed) child.kill()
     await conn.call('stop').catch(() => {})
     await conn.call('disconnect', { reason: 'лабораторная проверка окончена' }).catch(() => {})

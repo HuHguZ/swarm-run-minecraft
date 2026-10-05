@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Короткие падения 7–9 блоков посреди боя (edges.installFallGuard, 2026-09-26):
 // в арене со столба и с крыши коробки ведро «срабатывало», а воды не было —
 // бой в те же тики менял предмет и взгляд. Здесь NeuroDown дерётся с
@@ -9,12 +10,15 @@
 //   A=ws://127.0.0.1:8785 B=ws://127.0.0.1:8786 node try-mlg-short.js [раз на высоту]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -28,7 +32,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8785')
 const B = client(process.env.B || 'ws://127.0.0.1:8786')
 const cmd = async (text) => { await A.call('say', { text }); await sleep(120) }
@@ -53,12 +57,12 @@ async function trial (h, mace) {
   const s0 = await state(A)
   const hp0 = s0 ? s0.health : null
   await cmd(`/tp NeuroDown ${X + 0.5} ${FLOOR + 1 + h} ${Z + 0.5}`)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let landed = null
-  while (Date.now() - t0 < 6000) {
+  while (gameClock.now() - t0 < 6000) {
     const s = await state(A)
-    if (s && s.pos && !landed && s.pos.y < FLOOR + 2.2) landed = { at: Date.now() - t0, hp: s.health }
-    if (landed && Date.now() - t0 > landed.at + 2200) break
+    if (s && s.pos && !landed && s.pos.y < FLOOR + 2.2) landed = { at: gameClock.now() - t0, hp: s.health }
+    if (landed && gameClock.now() - t0 > landed.at + 2200) break
     await sleep(100)
   }
   const s1 = await state(A)

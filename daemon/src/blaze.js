@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const drops = require('./drops')
 // Огненные стержни: бой у спавнера блейзов, пока в рюкзаке не станет N
 // стержней. Сам бой — combat.fight (и pvp.duel под ним: лук с упреждением,
@@ -89,7 +90,7 @@ function damageLedger (bot, phaseOf) {
     if (!bot.entity || !pk || pk.entityId !== bot.entity.id) return
     const src = pk.sourceCauseId > 0 ? bot.entities[pk.sourceCauseId - 1] : null
     const direct = pk.sourceDirectId > 0 ? bot.entities[pk.sourceDirectId - 1] : null
-    last = { type: DAMAGE_TYPES[pk.sourceTypeId] || String(pk.sourceTypeId), by: src ? src.name : undefined, t: Date.now() }
+    last = { type: DAMAGE_TYPES[pk.sourceTypeId] || String(pk.sourceTypeId), by: src ? src.name : undefined, t: gameClock.now() }
     // Геометрия щита в миг удара: куда смотрим, откуда прилетело (снаряд или
     // тот, кто бил), поднят ли щит по метаданным и сколько мс назад.
     try {
@@ -106,12 +107,12 @@ function damageLedger (bot, phaseOf) {
     const now = bot.health ?? 0
     if (now < hp) {
       const lost = hp - now
-      const fresh = last && Date.now() - last.t < 600
+      const fresh = last && gameClock.now() - last.t < 600
       const key = fresh ? last.type + (last.by && last.by !== last.type ? ':' + last.by : '') : 'unknown'
       const phase = phaseOf() || '-'
       byType[key] = (byType[key] || 0) + lost
       byPhase[phase] = (byPhase[phase] || 0) + lost
-      if (hits.length < 60) hits.push({ t: Date.now(), k: key, lost: Math.round(lost * 10) / 10, hp: Math.round(now * 10) / 10, ph: phase, geo: fresh && last.geo && key !== 'on_fire' ? last.geo : undefined })
+      if (hits.length < 60) hits.push({ t: gameClock.now(), k: key, lost: Math.round(lost * 10) / 10, hp: Math.round(now * 10) / 10, ph: phase, geo: fresh && last.geo && key !== 'on_fire' ? last.geo : undefined })
       if (fresh && last.geo && key !== 'on_fire') log('удар', { k: key, lost: Math.round(lost * 10) / 10, hp: Math.round(now * 10) / 10, ph: phase, ...last.geo })
     }
     hp = now
@@ -225,20 +226,20 @@ function arrowsOnFloor (bot, radius = 14) {
 }
 
 async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, stopIf = null } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let walks = 0
   const skip = new Set()
   // Опасность посреди вылазки (заряд, шар к нам) — бросить и назад: замер 20,
   // 14.5 хп за одну вылазку с опущенным щитом, смерть.
   const sub = { aborted: false, onAbort: [] }
-  const watch = stopIf ? setInterval(() => {
+  const watch = stopIf ? gameClock.setInterval(() => {
     if (!sub.aborted && (ctl.aborted || stopIf())) { sub.aborted = true; try { bot.pathfinder.setGoal(null) } catch {} }
   }, 100) : null
   if (!stopIf) ctl = ctl
   const outer = ctl
   ctl = stopIf ? { get aborted () { return outer.aborted || sub.aborted }, onAbort: outer.onAbort } : ctl
   try {
-  while (!ctl.aborted && Date.now() - t0 < ms && walks < 6) {
+  while (!ctl.aborted && gameClock.now() - t0 < ms && walks < 6) {
     const me = bot.entity.position
     // Где стержень ляжет (drops.js): убитый блейз висит в воздухе, и mineflayer до
     // секунды показывает дроп там, а не на полу.
@@ -255,7 +256,7 @@ async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, 
     // Прежний GoalNear(клетка, 1) считал дошедшим и в 1.45 от стержня при рамке 1.425 — и
     // шёл к тому же стержню до шести раз (ревью Codex, 29.09). Стрела — не предмет: к ней
     // по-прежнему шагом.
-    const left = () => Math.max(1000, ms - (Date.now() - t0))
+    const left = () => Math.max(1000, ms - (gameClock.now() - t0))
     const go = async (limit) => rod.name === 'item'
       ? (await drops.pickOne(bot, ctl, { id: rod.id, e: rod }, { timeoutMs: limit })) === 'picked'
       : (await walkNear(bot, ctl, rod.position.floored(), 1, limit)).ok
@@ -283,7 +284,7 @@ async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, 
     if (bot.entities[rod.id] && rod.name === 'item') skip.add(rod.id)
     await sleep(300)
   }
-  } finally { if (watch) clearInterval(watch) }
+  } finally { if (watch) gameClock.clearInterval(watch) }
   return stopIf && sub.aborted ? -walks - 1 : walks
 }
 
@@ -345,7 +346,7 @@ function makeTrack (e) {
   let v = new Vec3(0, 0, 0)
   return {
     update () {
-      const now = Date.now()
+      const now = gameClock.now()
       const p = e.position.clone()
       if (last) {
         const dt = (now - last.t) / 50
@@ -364,7 +365,7 @@ async function walkNear (bot, ctl, target, range, ms) {
     await Promise.race([
       bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, range)),
       guard.promise,
-      new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), ms) })
+      new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), ms) })
     ])
     // goto «успешен» и на пустом пути (noPath длины 0, mineflayer-pathfinder
     // lib/goto.js) — дошёл, только если правда рядом.
@@ -375,7 +376,7 @@ async function walkNear (bot, ctl, target, range, ms) {
     return { ok: false, error: e.message }
   } finally {
     guard.stop()
-    if (timer) clearTimeout(timer)
+    if (timer) gameClock.clearTimeout(timer)
   }
 }
 
@@ -464,9 +465,9 @@ async function rest (session, ctl, dead, { until = 18, maxMs = 45000 } = {}) {
     break
   }
   if (!at) return { rested: false, why: spots.length ? `до укрытия не дошёл (пробовал ${tried})` : 'укрытия от блейзов рядом нет', hp: hp0 }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let ate = null
-  while (!ctl.aborted && Date.now() - t0 < maxMs && (bot.health ?? 0) < until) {
+  while (!ctl.aborted && gameClock.now() - t0 < maxMs && (bot.health ?? 0) < until) {
     if ((bot.food ?? 20) < 20) {
       try { const r = await actions.eat(session, {}); if (r && r.ate) ate = r.ate } catch {}
     }
@@ -477,7 +478,7 @@ async function rest (session, ctl, dead, { until = 18, maxMs = 45000 } = {}) {
     await sleep(1000)
   }
   const rested = !ctl.aborted && (bot.health ?? 0) >= until && (bot.food ?? 0) >= 18
-  return { rested, why: rested ? undefined : 'за укрытием не восстановился', at: xyz(at), seconds: Math.round((Date.now() - t0) / 1000), hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, ate: ate || undefined }
+  return { rested, why: rested ? undefined : 'за укрытием не восстановился', at: xyz(at), seconds: Math.round((gameClock.now() - t0) / 1000), hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, ate: ate || undefined }
 }
 
 // ============================================================ бой у спавнера
@@ -651,7 +652,7 @@ function makeRadar (bot) {
     if (!e || e.name !== 'blaze') return
     const on = chargedNow(bot, e, idx)
     const c = charge.get(e.id)
-    const now = Date.now()
+    const now = gameClock.now()
     if (!c) { charge.set(e.id, { on, since: null, off: on ? 0 : now, first: now }); return }
     if (on && !c.on) { c.on = true; c.since = now }
     if (!on && c.on) { c.on = false; c.off = now }
@@ -663,7 +664,7 @@ function makeRadar (bot) {
       const v = r.vel
       const n = Math.hypot(v.x, v.y, v.z)
       if (n < 1e-6) return
-      balls.set(r.entityId, { p0: new Vec3(r.pos.x, r.pos.y, r.pos.z), dir: new Vec3(v.x / n, v.y / n, v.z / n), t0: Date.now() })
+      balls.set(r.entityId, { p0: new Vec3(r.pos.x, r.pos.y, r.pos.z), dir: new Vec3(v.x / n, v.y / n, v.z / n), t0: gameClock.now() })
       stats.balls++
       // Разбор: куда метил шар (промах мимо тела в миг вылета).
       try {
@@ -674,7 +675,7 @@ function makeRadar (bot) {
         const miss = Math.hypot(rr.x - b.dir.x * s2, rr.y - b.dir.y * s2, rr.z - b.dir.z * s2)
         if (miss < 2.5 && s2 > 0) { stats.aimed = (stats.aimed || 0) + 1; log('шар', { d: Math.round(s2 * 10) / 10, miss: Math.round(miss * 10) / 10, eta: fbTicksTo(s2) * 50 }) }
       } catch {}
-      if (balls.size > 64) for (const [k, b] of balls) if (Date.now() - b.t0 > 5000) balls.delete(k)
+      if (balls.size > 64) for (const [k, b] of balls) if (gameClock.now() - b.t0 > 5000) balls.delete(k)
     } catch {}
   }
   const onGone = e => { if (e) { charge.delete(e.id); balls.delete(e.id) } }
@@ -694,7 +695,7 @@ function makeRadar (bot) {
     // мс после подъёма флага и летят fl; щит поднят за 400 мс до первого
     // попадания (0.25 с блок + пакеты) и до 100 мс после последнего — ~1.1 с
     // на очередь вместо 2.4 (второй замер: трое видящих держали щит всё время).
-    untilDanger (e, now = Date.now()) {
+    untilDanger (e, now = gameClock.now()) {
       const c = charge.get(e.id)
       const on = c ? c.on : chargedNow(bot, e, idx)
       const fl = fbTicksTo(e.position.offset(0, 1.4, 0).distanceTo(bot.entity.position.offset(0, 0.9, 0))) * 50
@@ -713,7 +714,7 @@ function makeRadar (bot) {
     },
     charged (e) { const c = charge.get(e.id); return c ? c.on : chargedNow(bot, e, idx) },
     // Шары, чья прямая проходит у нашего тела и ещё не прилетели: [{ from, eta }].
-    incoming (now = Date.now()) {
+    incoming (now = gameClock.now()) {
       const out = []
       const body = bot.entity.position.offset(0, 0.9, 0)
       for (const [id, b] of balls) {
@@ -879,7 +880,7 @@ async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardM
   if (!enc || !enc.sealed) {
     return { rested: false, why: 'коробка не закрылась', tries }
   }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let ate = 0
   // Лечение идёт — сидеть и после maxMs (до hardMs), пока хп растёт: 2026-09-29
   // 12:27 закрытая коробка за 60 с вылечила дольками арбуза 11 → 18, отдых
@@ -889,7 +890,7 @@ async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardM
   let riseAt = t0
   onPhase('отдых в коробке')
   while (!ctl.aborted && (bot.health ?? 0) < until) {
-    const now = Date.now()
+    const now = gameClock.now()
     if ((bot.health ?? 0) > bestHp) { bestHp = bot.health ?? 0; riseAt = now }
     if (now - t0 >= maxMs && (now - t0 >= hardMs || now - riseAt > 20000)) break
     if ((bot.food ?? 20) < 20) {
@@ -901,7 +902,7 @@ async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardM
   const healed = `${hp0} -> ${Math.round(bot.health ?? 0)}`
   const rested = !ctl.aborted && (bot.health ?? 0) >= until && (bot.food ?? 0) >= 18
   if (!rested) return { rested: false, why: 'лечение в коробке не завершено', placed: box.placed,
-    sealed: enc.sealed, seconds: Math.round((Date.now() - t0) / 1000), hp: healed, ate, exited: false }
+    sealed: enc.sealed, seconds: Math.round((gameClock.now() - t0) / 1000), hp: healed, ate, exited: false }
   onPhase('выход из коробки')
   const out = await fortify.breakOut(bot, box.cell, { toward }).catch(e => ({ ok: false, steps: [e.message] }))
   // Выломанное — в рюкзак (коробка ест 10 блоков, запас 64).
@@ -919,7 +920,7 @@ async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardM
     placed: box.placed,
     tries: tries.length > 1 ? tries : undefined,
     sealed: enc.sealed,
-    seconds: Math.round((Date.now() - t0) / 1000),
+    seconds: Math.round((gameClock.now() - t0) / 1000),
     hp: healed,
     ate: ate || undefined,
     exited,
@@ -1033,10 +1034,10 @@ async function jumpPlaceTop (bot, below, timeoutMs = 900) {
   if (!solidB(ref)) return { ok: false, why: 'опоры нет' }
   const up = new Vec3(0, 1, 0)
   bot.setControlState('jump', true)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let seen = false
   try {
-    while (Date.now() - t0 < 900) {
+    while (gameClock.now() - t0 < 900) {
       await sleep(20)
       if (bot.entity.position.y + 1.62 > below.y + 1.2 && faceAim(bot, below, up)) { seen = true; break }
     }
@@ -1221,7 +1222,7 @@ function bystanderOnLine (bot, e) {
 
 async function meleeGuarded (session, ctl, foe, { guard, bailAt = 7, maxMs = 25000, face = null, shouldStop = null } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let swings = 0
   let last = 0
   let blocks = guard.stats.blocked
@@ -1229,18 +1230,18 @@ async function meleeGuarded (session, ctl, foe, { guard, bailAt = 7, maxMs = 250
   const hp0 = Math.round(bot.health ?? 20)
   let why = null
   try {
-    while (!ctl.aborted && Date.now() - t0 < maxMs && foe.isValid !== false && bot.entities[foe.id]) {
+    while (!ctl.aborted && gameClock.now() - t0 < maxMs && foe.isValid !== false && bot.entities[foe.id]) {
       await sleep(40)
       if ((bot.health ?? 20) <= bailAt) { why = 'мало хп'; break }
       if (shouldStop && shouldStop()) { why = 'общая опасность'; break }
       const aim = foe.position.offset(0, (foe.height || 1.8) * 0.6, 0)
       try { await bot.lookAt(aim, true) } catch {}
-      if (guard.stats.blocked > blocks) { blocks = guard.stats.blocked; blockAt = Date.now() }
+      if (guard.stats.blocked > blocks) { blocks = guard.stats.blocked; blockAt = gameClock.now() }
       const r = reachTo(bot, foe)
-      const win = Date.now() - blockAt < 700 || Date.now() - Math.max(last, t0) > 1200
-      if (r <= MELEE && Date.now() - last >= 625 && win) {
+      const win = gameClock.now() - blockAt < 700 || gameClock.now() - Math.max(last, t0) > 1200
+      if (r <= MELEE && gameClock.now() - last >= 625 && win) {
         await guard.raise(false)
-        try { bot.attack(foe); swings++; last = Date.now() } catch {}
+        try { bot.attack(foe); swings++; last = gameClock.now() } catch {}
         continue
       }
       if (r > 6) { why = 'ушёл'; break }
@@ -1296,8 +1297,8 @@ async function holdSpawner (session, ctl, ctx) {
     weapon = bestWeapon(bot)
     if (weapon && (!bot.heldItem || bot.heldItem.name !== weapon.name)) { try { await bot.equip(weapon, 'hand') } catch {} }
   }
-  let lastSwing = Date.now()
-  let idleSince = Date.now()
+  let lastSwing = gameClock.now()
+  let idleSince = gameClock.now()
   let lastBeat = 0
   let shieldOn = false
   let shieldAt = 0
@@ -1305,9 +1306,9 @@ async function holdSpawner (session, ctl, ctx) {
   let stopped = null
   let bail = false
   let bunker = null
-  let lastBow = Date.now()
+  let lastBow = gameClock.now()
   let sortieAfter = 0
-  let lastVisAt = Date.now()
+  let lastVisAt = gameClock.now()
   let reposts = 0
   let approaches = 0
   let seenBlocks = 0
@@ -1325,9 +1326,9 @@ async function holdSpawner (session, ctl, ctx) {
   const startedFireproof = fireproof()
   const setShield = async (on, face = null) => {
     if (face) { try { await bot.lookAt(face, true) } catch {} }
-    if (on && !shieldOn) { shieldOn = true; shieldAt = Date.now(); await guard.raise(true) } else if (!on && shieldOn) { shieldOn = false; out.shieldMs += Date.now() - shieldAt; await guard.raise(false) }
+    if (on && !shieldOn) { shieldOn = true; shieldAt = gameClock.now(); await guard.raise(true) } else if (!on && shieldOn) { shieldOn = false; out.shieldMs += gameClock.now() - shieldAt; await guard.raise(false) }
   }
-  if (ctx.ledger) ctx.ledger.probe = () => ({ up: combat.shieldUp(bot), want: shieldOn, ms: shieldOn ? Date.now() - shieldAt : undefined })
+  if (ctx.ledger) ctx.ledger.probe = () => ({ up: combat.shieldUp(bot), want: shieldOn, ms: shieldOn ? gameClock.now() - shieldAt : undefined })
   const stopWalking = () => { try { bot.pathfinder.setGoal(null) } catch {}; bot.clearControlStates() }
   const inBunker = () => bunker && bot.entity.position.floored().equals(bunker.cell)
   const doorPoint = () => bunker ? bunker.cell.plus(bunker.front).offset(0.5, 1.6, 0.5).plus(bunker.front.scaled(3)) : null
@@ -1382,7 +1383,7 @@ async function holdSpawner (session, ctl, ctx) {
       if (safe()) {
         setPhase('лечение за общим укрытием')
         const healed = await survival.recover(session, ctl, { safe, until: 19,
-          maxMs: Math.min(30000, Math.max(0, deadline - Date.now() - 2000)) })
+          maxMs: Math.min(30000, Math.max(0, deadline - gameClock.now() - 2000)) })
         if (healed.rested) return { ...healed, where: 'за стенкой или углом', escape }
         if (healed.hazard) {
           setPhase('из опасного блока вместо лечения')
@@ -1396,9 +1397,9 @@ async function holdSpawner (session, ctl, ctx) {
       setPhase('отдых в шалаше')
       const hp0 = Math.round(bot.health ?? 0)
       const shut = await shutDoor(bot, bunker)
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       let ate = 0
-      while (!ctl.aborted && Date.now() - t0 < 60000 && (bot.health ?? 0) < 19) {
+      while (!ctl.aborted && gameClock.now() - t0 < 60000 && (bot.health ?? 0) < 19) {
         if (!shut && meleeThreat()) break
         if ((bot.food ?? 20) < 20) { try { const r = await actions.eat(session, {}); if (r && r.ate) ate++ } catch {} }
         if ((bot.food ?? 20) < 18 && !bot.inventory.items().some(i => FOOD_RE.test(i.name))) break
@@ -1408,13 +1409,13 @@ async function holdSpawner (session, ctl, ctx) {
       try { await actions.collectNearbyDrops(bot, ctl, { radius: 2, timeoutMs: 1500 }) } catch {}
       if (!inBunker()) await walkNear(bot, ctl, bunker.cell, 0, 5000)
       const rested = (bot.health ?? 0) >= 18 && (bot.food ?? 0) >= 18
-      return { rested, why: rested ? undefined : 'шалаш не дал восстановиться', where: 'шалаш', shut, opened, hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, seconds: Math.round((Date.now() - t0) / 1000), ate: ate || undefined }
+      return { rested, why: rested ? undefined : 'шалаш не дал восстановиться', where: 'шалаш', shut, opened, hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, seconds: Math.round((gameClock.now() - t0) / 1000), ate: ate || undefined }
     }
     // Ифрит вплотную — не строить у него под рукой: сразу бегство (ниже).
     const r = meleeThreat() ? { rested: false, threat: true, why: 'враг вплотную — коробку не строю' }
       : await boxRest(session, ctl, { toward: spawner || null, onPhase: setPhase, threat: () => !!meleeThreat(),
-        maxMs: Math.min(60000, Math.max(0, deadline - Date.now() - 2000)),
-        hardMs: Math.min(150000, Math.max(0, deadline - Date.now() - 2000)) })
+        maxMs: Math.min(60000, Math.max(0, deadline - gameClock.now() - 2000)),
+        hardMs: Math.min(150000, Math.max(0, deadline - gameClock.now() - 2000)) })
     if (r.rested) {
       if (r.exited === false) { stopped = 'отлечился, но из коробки не вышел — нужен безопасный проход'; bail = true }
       return { ...r, escape }
@@ -1428,8 +1429,8 @@ async function holdSpawner (session, ctl, ctx) {
     setPhase('бегство на отдых')
     let fled = null
     try { fled = await require('./flee').smartFlee(session, ctl, { timeoutMs: 12000, safeDist: 24, reason: 'блейзы' }) } catch (e) { fled = { error: e.message } }
-    const t1 = Date.now()
-    while (!ctl.aborted && Date.now() - t1 < 30000 && (bot.health ?? 0) < 18 && !liveBlazes(bot, dead, 32).some(e => seesMe(bot, e))) {
+    const t1 = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - t1 < 30000 && (bot.health ?? 0) < 18 && !liveBlazes(bot, dead, 32).some(e => seesMe(bot, e))) {
       if ((bot.food ?? 20) < 20) { try { await actions.eat(session, {}) } catch {} }
       await sleep(500)
     }
@@ -1520,7 +1521,7 @@ async function holdSpawner (session, ctl, ctx) {
       // Каждый оборот — через таймер: ветка без sleep (вылазка, которой нечего
       // собрать) иначе держит цикл событий, и пакеты мира не читаются.
       await sleep(20)
-      const now = Date.now()
+      const now = gameClock.now()
       if (countOf(bot, 'blaze_rod') >= want) break
       if (now > deadline) { stopped = 'время вышло'; break }
       if (startedFireproof && !fireproof()) {
@@ -1608,8 +1609,8 @@ async function holdSpawner (session, ctl, ctx) {
       }
       const blazes = liveBlazes(bot, dead, 32)
       const vis = blazes.filter(e => seesMe(bot, e))
-      if (Date.now() - lastBeat > 2000) {
-        lastBeat = Date.now()
+      if (gameClock.now() - lastBeat > 2000) {
+        lastBeat = gameClock.now()
         // Рюкзак полон — стержни не подбираются (B16f21 03.10): лишнее за спину.
         if (process.env.ND_NE_ROUTE !== '0' && bot.inventory.emptySlotCount() < 3 && !vis.some(e => e.position.distanceTo(bot.entity.position) < 4)) { try { await require('./nether-route').makeRoom(bot, 5) } catch {} }
         const me = bot.entity.position
@@ -1648,7 +1649,7 @@ async function holdSpawner (session, ctl, ctx) {
         // blockUsingItem). Стрелку — 'ranged'.
         const melee = f.name !== 'skeleton' && f.name !== 'ghast'
         const r = melee
-          ? await meleeGuarded(session, ctl, f, { guard, bailAt: Math.max(ctx.bailAt, 8), shouldStop: () => checkSafety('continue').action === 'leave' || dangersNow(liveBlazes(bot, dead, 32).filter(e => seesMe(bot, e)), Date.now()).length > 0 }).catch(e => ({ error: e.message }))
+          ? await meleeGuarded(session, ctl, f, { guard, bailAt: Math.max(ctx.bailAt, 8), shouldStop: () => checkSafety('continue').action === 'leave' || dangersNow(liveBlazes(bot, dead, 32).filter(e => seesMe(bot, e)), gameClock.now()).length > 0 }).catch(e => ({ error: e.message }))
           : await combat.fight(session, ctl, { target: '#' + f.id, purpose: 'defense', allowRanged: p0(ctx).allowRanged, timeoutSeconds: 20, retreatAtHealth: Math.max(ctx.bailAt, 9), shield: 'ranged' }).catch(e => ({ error: e.message }))
         shieldOn = false
         try { await guard.raise(false) } catch {}
@@ -1661,14 +1662,14 @@ async function holdSpawner (session, ctl, ctx) {
       const dangers = dangersNow(vis, now)
       // Опасен тот, кого достаёт меч, и шаров к нам не летит: бить его, а не
       // стоять за щитом (замер 23: блейз в 1.3 блока, заряжен, 0 взмахов за 20 с).
-      if (dangers.length && Date.now() - lastSwing >= 625 && !radar.incoming(now).length) {
+      if (dangers.length && gameClock.now() - lastSwing >= 625 && !radar.incoming(now).length) {
         const close = blazes.filter(e => reachTo(bot, e) <= MELEE && (losClear(bot, myEye(bot), e.position.offset(0, 0.9, 0)) || losClear(bot, myEye(bot), blazeEye(e))))
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
         if (close) {
           await setShield(false)
           await equipSword()
           try { await bot.lookAt(close.position.offset(0, (close.height || 1.8) * 0.6, 0), true) } catch {}
-          try { bot.attack(close); lastSwing = Date.now(); out.melee++ } catch {}
+          try { bot.attack(close); lastSwing = gameClock.now(); out.melee++ } catch {}
           setPhase('меч под огнём')
           await sleep(80)
           await setShield(true, faceFor(dangers))
@@ -1691,7 +1692,7 @@ async function holdSpawner (session, ctl, ctx) {
         setPhase('достройка коробки')
         const b = await buildBunker(session, ctl, boxPlan, setPhase)
         log('достройка коробки', { n: boxTries, ok: b.ok, placed: b.placed, open: b.open, roofed: b.roofed, failed: b.failed })
-        if (b.ok) { bunker = { cell: boxPlan.cell, front: boxPlan.front, window: true }; boxPlan = null; out.bunker = { ...(out.bunker || {}), built: true, retries: boxTries } } else boxRetryAt = Date.now() + 8000
+        if (b.ok) { bunker = { cell: boxPlan.cell, front: boxPlan.front, window: true }; boxPlan = null; out.bunker = { ...(out.bunker || {}), built: true, retries: boxTries } } else boxRetryAt = gameClock.now() + 8000
         await equipSword()
         continue
       }
@@ -1705,14 +1706,14 @@ async function holdSpawner (session, ctl, ctx) {
         // Блейз в 2 блоках бьёт сам раз в 20 тиков (BlazeAttackGoal, d² < 4):
         // щит к нему, взмах — сразу после его удара в щит или если он молчит
         // 1.2 с (замер 12: 24 хп ударами блейзов у спавнера).
-        if (guard.stats.blocked > seenBlocks) { seenBlocks = guard.stats.blocked; blockAt = Date.now() }
+        if (guard.stats.blocked > seenBlocks) { seenBlocks = guard.stats.blocked; blockAt = gameClock.now() }
         const close = e.position.distanceTo(bot.entity.position) < 2.4
-        const window = !close || Date.now() - blockAt < 700 || Date.now() - lastSwing > 1200
-        if (Date.now() - lastSwing >= 625 && window) {
+        const window = !close || gameClock.now() - blockAt < 700 || gameClock.now() - lastSwing > 1200
+        if (gameClock.now() - lastSwing >= 625 && window) {
           await setShield(false)
           await equipSword()
           try { await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.6, 0), true) } catch {}
-          try { bot.attack(e); lastSwing = Date.now(); out.melee++ } catch {}
+          try { bot.attack(e); lastSwing = gameClock.now(); out.melee++ } catch {}
           setPhase('меч')
         } else {
           await setShield(true, blazeEye(e))
@@ -1742,7 +1743,7 @@ async function holdSpawner (session, ctl, ctx) {
         const track = makeTrack(e)
         track.update()
         setPhase('лук')
-        const t1 = Date.now()
+        const t1 = gameClock.now()
         const frac = aimFrac(bot, e) ?? 0.55
         const r = await require('./bow').shoot(bot, e, {
           velFn: () => { track.update(); return track.vel() },
@@ -1751,7 +1752,7 @@ async function holdSpawner (session, ctl, ctx) {
           follow: false,
           mode: 'settle',
           shouldStop: () => {
-            const n = Date.now()
+            const n = gameClock.now()
             if (!canUseRanged(session, e, p0(ctx))) return true
             if (!e.isValid) return true
             if (meleeThreat() || checkSafety('continue').action === 'leave') return true
@@ -1760,9 +1761,9 @@ async function holdSpawner (session, ctl, ctx) {
             return liveBlazes(bot, dead, 32).some(b => seesMe(bot, b) && b.position.distanceTo(bot.entity.position) <= NEAR && radar.untilDanger(b, n) < 300)
           }
         }).catch(err => ({ shot: false, why: err.message }))
-        if (r.shot) { out.arrows++; lastBow = Date.now() } else if (r.blocked || /не долетит/.test(r.why || '')) { noShot.set(e.id, Date.now()) }
+        if (r.shot) { out.arrows++; lastBow = gameClock.now() } else if (r.blocked || /не долетит/.test(r.why || '')) { noShot.set(e.id, gameClock.now()) }
         if (!r.shot) log('лук', { d: Math.round(e.position.distanceTo(bot.entity.position) * 10) / 10, why: r.why })
-        if (Date.now() - t1 < 200) await sleep(200)
+        if (gameClock.now() - t1 < 200) await sleep(200)
         await equipSword()
         continue
       }
@@ -1777,7 +1778,7 @@ async function holdSpawner (session, ctl, ctx) {
       const quietAll = vis.reduce((m, e) => Math.min(m, radar.untilDanger(e)), Infinity)
       // Под огнестойкостью шар не жжёт вовсе (fireball в #is_fire) — опасен только удар вплотную. neF-XF22-2 03.10: под
       // зельем 24 убийства, 10 стержней в 1–5 бл. на полу, подобрано 0 — каждую вылазку рвал «шар летит».
-      const danger = () => (FP_SORTIE && fireproof()) ? !!meleeThreat() : (radar.incoming(Date.now()).length > 0 || liveBlazes(bot, dead, 32).some(b => seesMe(bot, b) && radar.untilDanger(b) < 900))
+      const danger = () => (FP_SORTIE && fireproof()) ? !!meleeThreat() : (radar.incoming(gameClock.now()).length > 0 || liveBlazes(bot, dead, 32).some(b => seesMe(bot, b) && radar.untilDanger(b) < 900))
       // Дальняя вылазка — только между волнами (живых блейзов в 20 блоках нет):
       // стержни лежат у спавнера, и при живых её рвало на полпути (замер 27:
       // 2 стержня в 8 блоках, 0 подобрано). Ближний стержень — при тишине.
@@ -1815,7 +1816,7 @@ async function holdSpawner (session, ctl, ctx) {
           walks = await collectRods(bot, ctl, 10, 7000, { arrows: arrowRun, stopIf: sortieStop })
         }
         if (walks < 0) log('вылазка прервана', { walks: -walks - 1 })
-        if (walks <= 0 || countOf(bot, 'blaze_rod') === got) sortieAfter = Date.now() + 8000
+        if (walks <= 0 || countOf(bot, 'blaze_rod') === got) sortieAfter = gameClock.now() + 8000
         if (bunker && !inBunker()) { setPhase('назад в шалаш'); await walkNear(bot, ctl, bunker.cell, 0, 8000) }
         continue
       }
@@ -1858,7 +1859,7 @@ async function holdSpawner (session, ctl, ctx) {
             setPhase('к ифриту за стеной')
             log('к ифриту за стеной', { n: approaches, to: xyz(hidden.position) })
             await walkNear(bot, ctl, floorUnder(bot, hidden.position) || hidden.position.floored(), 2, 6000)
-            lastVisAt = Date.now()
+            lastVisAt = gameClock.now()
             continue
           }
           stopped = 'ифриты за стеной, доступной точки обзора нет — бой без прогресса прекращён'
@@ -1868,8 +1869,8 @@ async function holdSpawner (session, ctl, ctx) {
       // --- без шалаша: далеко от места боя (отдых бегом, погоня) — назад.
       if (!bunker && home && bot.entity.position.distanceTo(home) > 8 && quiet > 1500) {
         await setShield(false)
-        if (Date.now() - goalAt > 800) {
-          goalAt = Date.now()
+        if (gameClock.now() - goalAt > 800) {
+          goalAt = gameClock.now()
           setPhase('назад к спавнеру')
           try { bot.pathfinder.setGoal(new goals.GoalNear(home.x, home.y, home.z, 2), true) } catch {}
         }
@@ -1886,8 +1887,8 @@ async function holdSpawner (session, ctl, ctx) {
         if (stepTo && quiet > 1200) {
           await setShield(false)
           const f = floorUnder(bot, stepTo.position)
-          if (f && Date.now() - goalAt > 400) {
-            goalAt = Date.now()
+          if (f && gameClock.now() - goalAt > 400) {
+            goalAt = gameClock.now()
             setPhase('шаг к блейзу')
             try { bot.pathfinder.setGoal(new goals.GoalNear(f.x, f.y, f.z, 1.5), true) } catch {}
           }
@@ -1900,8 +1901,8 @@ async function holdSpawner (session, ctl, ctx) {
         continue
       } else if (!inBunker()) {
         await setShield(false)
-        if (Date.now() - goalAt > 800) {
-          goalAt = Date.now()
+        if (gameClock.now() - goalAt > 800) {
+          goalAt = gameClock.now()
           setPhase('назад в шалаш')
           try { bot.pathfinder.setGoal(new goals.GoalBlock(bunker.cell.x, bunker.cell.y, bunker.cell.z), true) } catch {}
         }
@@ -1976,7 +1977,7 @@ async function holdSpawner (session, ctl, ctx) {
     // Не ниже 12 хп и с обрывом по опасности: этот сбор без проверок брал до
     // 26 хп за вызов (замеры 34–35), а стержни пролежат 5 минут — следующий
     // вызов их поднимет.
-    const finalStop = () => (bot.health ?? 20) < 10 || radar.incoming(Date.now()).length > 0 || liveBlazes(bot, dead, 32).some(b => seesMe(bot, b) && radar.untilDanger(b) < 900)
+    const finalStop = () => (bot.health ?? 20) < 10 || radar.incoming(gameClock.now()).length > 0 || liveBlazes(bot, dead, 32).some(b => seesMe(bot, b) && radar.untilDanger(b) < 900)
     if (!ctl.aborted && !bail && droppedRods(bot, 16) > 0 && (bot.health ?? 20) >= 12) {
       await setShield(false)
       setPhase('сбор')
@@ -2029,14 +2030,14 @@ async function holeCamp (session, ctl, { spawner, want, deadline, dead, setPhase
   // Блейз вплотную — сперва бить (удар раз в секунду по 3.4 — пока копал, B13f31 03.10: смерть за 6 с).
   let lastSwing0 = 0
   const fightClose = async (ms = 4000) => {
-    const t1 = Date.now()
-    while (Date.now() - t1 < ms && !ctl.aborted) {
+    const t1 = gameClock.now()
+    while (gameClock.now() - t1 < ms && !ctl.aborted) {
       const close = liveBlazes(bot, dead, 6).filter(e => reachTo(bot, e) <= 3.0 && pick.canHit(bot, e)).sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
       if (!close) return
-      if (Date.now() - lastSwing0 >= 640) {
+      if (gameClock.now() - lastSwing0 >= 640) {
         await shield(false)
         try { await bot.lookAt(close.position.offset(0, (close.height || 1.8) * 0.5, 0), true) } catch {}
-        try { bot.attack(close); lastSwing0 = Date.now(); out.swings++ } catch {}
+        try { bot.attack(close); lastSwing0 = gameClock.now(); out.swings++ } catch {}
         await sleep(60)
       }
       await shield(true, close.position.offset(0, (close.height || 1.8) * 0.5, 0))
@@ -2076,10 +2077,10 @@ async function holeCamp (session, ctl, { spawner, want, deadline, dead, setPhase
   log('яма у спавнера', { at: xyz(H), y: Math.round(bot.entity.position.y * 10) / 10 })
   await equipSword()
   let lastSwing = 0
-  let lastKill = Date.now()
+  let lastKill = gameClock.now()
   let kills0 = dead.size
   let lastLog = 0
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     if (countOf(bot, 'blaze_rod') >= out.want) { out.stopped = 'набрал'; break }
     if (!hasEffect(bot, 'fire_resistance')) {
       if (frLeft() > 0) { await drinkFireResistance(bot).catch(() => null); out.drinks++; for (let i = 0; i < 20 && !hasEffect(bot, 'fire_resistance'); i++) await sleep(100); await equipSword(); continue }
@@ -2088,8 +2089,8 @@ async function holeCamp (session, ctl, { spawner, want, deadline, dead, setPhase
     // Сытость ≥ 19 — быстрое лечение (FoodData: при 20 и насыщении — 1 хп за 10 тиков); есть, когда вплотную никого.
     if (((bot.food ?? 20) <= 18 || ((bot.health ?? 20) < 14 && (bot.food ?? 20) < 20)) && !liveBlazes(bot, dead, 4).some(e => reachTo(bot, e) <= 2.6)) { try { await require('./actions').eat(session, {}) } catch {} ; await equipSword() }
     if ((bot.health ?? 20) < 7) { out.stopped = `хп ${Math.round(bot.health ?? 0)} в яме`; break }
-    if (dead.size > kills0) { kills0 = dead.size; lastKill = Date.now() }
-    const now = Date.now()
+    if (dead.size > kills0) { kills0 = dead.size; lastKill = gameClock.now() }
+    const now = gameClock.now()
     const blazes = liveBlazes(bot, dead, 12)
     if (now - lastLog > 5000 && bot.inventory.emptySlotCount() < 3) { try { await require('./nether-route').makeRoom(bot, 5) } catch {} }
     if (now - lastLog > 5000) { lastLog = now; log('яма', { t: Math.round((now - lastKill) / 1000), hp: Math.round(bot.health ?? 0), rods: countOf(bot, 'blaze_rod'), blazes: blazes.length, near: blazes.filter(e => e.position.distanceTo(bot.entity.position) < 4).length, swings: out.swings, kills: dead.size }) }
@@ -2099,7 +2100,7 @@ async function holeCamp (session, ctl, { spawner, want, deadline, dead, setPhase
       if (now - lastSwing >= 640) {
         await shield(false)
         try { await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.5, 0), true) } catch {}
-        try { bot.attack(e); lastSwing = Date.now(); out.swings++ } catch {}
+        try { bot.attack(e); lastSwing = gameClock.now(); out.swings++ } catch {}
         await sleep(60)
       }
       if (reachTo(bot, e) <= 2.4) await shield(true, e.position.offset(0, (e.height || 1.8) * 0.5, 0))
@@ -2136,10 +2137,10 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
   // Помост тронного зала — ноги на высоте спавнера (MonsterThrone: спавнер на помосте). «Наверху» — ноги на +2.6 и выше.
   const floorY = spawner ? spawner.y : base.y
   const out = { swings: 0, drinks: 0, picks: 0, fights: 0, shots: 0, towers: 0, descents: 0, wsShots: 0, rods0: countOf(bot, 'blaze_rod'), stopped: null, post: xyz(base) }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let lastSwing = 0
   let lastLog = 0
-  let lastAct = Date.now()
+  let lastAct = gameClock.now()
   let post = base
   const noShot = new Map()
   const swordOf = () => bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => ['wooden', 'golden', 'stone', 'iron', 'diamond', 'netherite'].indexOf(b.name.split('_')[0]) - ['wooden', 'golden', 'stone', 'iron', 'diamond', 'netherite'].indexOf(a.name.split('_')[0]))[0]
@@ -2181,7 +2182,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
   const climb = async () => {
     if (onTop()) return true
     if (p.campPillar === false || fillers() < PILLAR) return false
-    if (Date.now() - climbFailAt < 6000) return false
+    if (gameClock.now() - climbFailAt < 6000) return false
     // Столб — с пола у спавнера (помост, ступени, стенка: ±2 от уровня помоста — B11f31 03.10 стоял на +1 и столб
     // не строился, иссушитель убил).
     if (Math.abs(bot.entity.position.y - floorY) > 2.2 || !bot.entity.onGround) return false
@@ -2190,7 +2191,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
     const r = await require('./build').towerUp(bot, ctl, PILLAR, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
     out.towers++
     let walls = 0
-    if (onTop()) { bot.setControlState('sneak', true); walls = await cup() } else climbFailAt = Date.now()
+    if (onTop()) { bot.setControlState('sneak', true); walls = await cup() } else climbFailAt = gameClock.now()
     log('лагерь: столб', { ok: !!(r && r.ok), placed: r && r.placed, walls, reason: r && r.reason, y: Math.round(bot.entity.position.y * 10) / 10, post: xyz(post) })
     await equipSword()
     setPhase('лагерь у спавнера')
@@ -2300,7 +2301,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
   let up = onTop()
   setPhase('лагерь у спавнера')
   const WS = /^(wither_skeleton|piglin_brute|hoglin|zoglin)$/
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     const have = countOf(bot, 'blaze_rod')
     if (have >= want) { out.stopped = 'набрал'; break }
     if (!hasEffect(bot, 'fire_resistance')) {
@@ -2326,7 +2327,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
     up = onTop()
     if (up !== !!bot.getControlState('sneak')) bot.setControlState('sneak', up)
     const me = bot.entity.position
-    const now = Date.now()
+    const now = gameClock.now()
     const blazes = liveBlazes(bot, dead, 20)
     const others = Object.values(bot.entities).filter(e => e && e.position && e.isValid !== false && OTHER.test(e.name || '') && e.position.distanceTo(me) < 12)
     // Иссушитель/брут рядом на уровне помоста (по горизонтали ≤ 8, по высоте ≤ 3) — угроза ближнего боя.
@@ -2337,15 +2338,15 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
     if (now - lastLog > 5000) { lastLog = now; log('лагерь', { t: Math.round((now - t0) / 1000), hp: Math.round(bot.health ?? 0), up, rods: have, blazes: blazes.length, ws: melee.length, swings: out.swings, shots: out.shots, picks: out.picks, kills: dead.size }) }
     if (!up && melee.length) {
       // Наверх (столб с чашкой); не вышло — бой.
-      if (await climb()) { lastAct = Date.now(); continue }
+      if (await climb()) { lastAct = gameClock.now(); continue }
       const foe = melee.filter(e => pick.canHit(bot, e, { range: 6 })).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
       if (foe && now - (noShot.get('f' + foe.id) || 0) > 5000) {
         out.fights++
         setPhase('лагерь: бой ' + foe.name)
-        const tf = Date.now()
+        const tf = gameClock.now()
         const r = await require('./combat').fight(session, ctl, { target: '#' + foe.id, timeoutSeconds: 20, retreatAtHealth: 7, shield: 'always', clearArea: 0 }).catch(e => ({ error: e.message }))
-        log('лагерь: чужой', { name: foe.name, killed: !!(r && (r.killed || (r.kills && r.kills.length))), hp: Math.round(bot.health ?? 0), ms: Date.now() - tf })
-        if (Date.now() - tf < 1500) { noShot.set('f' + foe.id, Date.now()); await sleep(250) }
+        log('лагерь: чужой', { name: foe.name, killed: !!(r && (r.killed || (r.kills && r.kills.length))), hp: Math.round(bot.health ?? 0), ms: gameClock.now() - tf })
+        if (gameClock.now() - tf < 1500) { noShot.set('f' + foe.id, gameClock.now()); await sleep(250) }
         await equipSword()
         setPhase('лагерь у спавнера')
         continue
@@ -2357,7 +2358,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
       if (ws && bowReady()) {
         setPhase('лагерь: лук по ' + ws.name)
         const r = await shootAt(ws, 0.6)
-        if (r.shot) { out.wsShots++; lastAct = Date.now() } else noShot.set(ws.id, Date.now())
+        if (r.shot) { out.wsShots++; lastAct = gameClock.now() } else noShot.set(ws.id, gameClock.now())
         if (onTop()) bot.setControlState('sneak', true)
         continue
       }
@@ -2369,7 +2370,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
       if (now - lastSwing >= 640) {
         await shield(false)
         try { await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.6, 0), true) } catch {}
-        try { bot.attack(e); lastSwing = Date.now(); out.swings++; lastAct = Date.now() } catch {}
+        try { bot.attack(e); lastSwing = gameClock.now(); out.swings++; lastAct = gameClock.now() } catch {}
         await sleep(60)
       }
       if (reachTo(bot, e) <= 2.4) await shield(true, e.position.offset(0, (e.height || 1.8) * 0.6, 0))
@@ -2379,8 +2380,8 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
     if (shieldOn) await shield(false)
     // Наверху, иссушителей рядом нет — вниз, к спавнеру (там блейзы).
     if (up && !melee.length && !others.some(e => WS.test(e.name) && e.position.distanceTo(me) < 10 && vis(e)) && now - (noShot.get('down') || 0) > 5000) {
-      if (await descend()) { lastAct = Date.now(); continue }
-      noShot.set('down', Date.now())
+      if (await descend()) { lastAct = gameClock.now(); continue }
+      noShot.set('down', gameClock.now())
       log('лагерь: слезть не вышло', { at: xyz(bot.entity.position), floorY, why: descWhy })
     }
     // Стержни рядом на помосте — подобрать сразу (под зельем шары не страшны).
@@ -2392,8 +2393,8 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
         await collectRods(bot, ctl, 7, 4000)
         // Не прибавилось — эти стержни недостижимы (под спавнером, за забором): 10 с не пробовать (B13f21: 32 захода, 0).
         if (countOf(bot, 'blaze_rod') > r0) out.picks++
-        else noShot.set('rods', Date.now())
-        lastAct = Date.now()
+        else noShot.set('rods', gameClock.now())
+        lastAct = gameClock.now()
         await equipSword()
         setPhase('лагерь у спавнера')
         continue
@@ -2409,7 +2410,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
       if (chase) {
         setPhase('лагерь: к блейзу')
         const w = await walkNear(bot, ctl, chase.c, 1, 2500)
-        if (!w || !w.ok) noShot.set('c' + chase.e.id, Date.now())
+        if (!w || !w.ok) noShot.set('c' + chase.e.id, gameClock.now())
         setPhase('лагерь у спавнера')
         continue
       }
@@ -2420,7 +2421,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
     if (target) {
       setPhase('лагерь: лук')
       const r = await shootAt(target, aimFrac(bot, target) ?? 0.55)
-      if (r.shot) { out.shots++; lastAct = Date.now() } else noShot.set(target.id, Date.now())
+      if (r.shot) { out.shots++; lastAct = gameClock.now() } else noShot.set(target.id, gameClock.now())
       if (onTop()) bot.setControlState('sneak', true)
       setPhase('лагерь у спавнера')
       continue
@@ -2431,8 +2432,8 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
         const a = bot.blockAt(c); const b = bot.blockAt(c.offset(0, 1, 0)); const u = bot.blockAt(c.offset(0, -1, 0))
         return a && b && u && a.boundingBox === 'empty' && b.boundingBox === 'empty' && u.boundingBox === 'block' && !/lava|fire|magma/.test(u.name)
       }).sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))[0]
-      if (hug) { const w = await walkNear(bot, ctl, hug, 0, 3000); if (!w || !w.ok) noShot.set('hug', Date.now()); else base = hug }
-      else noShot.set('hug', Date.now())
+      if (hug) { const w = await walkNear(bot, ctl, hug, 0, 3000); if (!w || !w.ok) noShot.set('hug', gameClock.now()); else base = hug }
+      else noShot.set('hug', gameClock.now())
       continue
     }
     await sleep(120)
@@ -2440,7 +2441,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
   try { await shield(false) } catch {}
   bot.setControlState('sneak', false)
   out.rods = countOf(bot, 'blaze_rod') - out.rods0
-  out.seconds = Math.round((Date.now() - t0) / 1000)
+  out.seconds = Math.round((gameClock.now() - t0) / 1000)
   out.kills = dead.size
   if (!out.stopped) out.stopped = ctl.aborted ? 'прервано' : 'время вышло'
   log('лагерь итог', out)
@@ -2454,7 +2455,7 @@ async function farmRods (session, ctl, p = {}) {
   const mcData = session.mcData
   const combat = require('./combat')
   const actions = require('./actions')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const retreatAt = clamp(p.retreatAtHealth ?? 8, 3, 16)
   // Раньше порога отхода — отдых за углом: пять блейзов разом снимают 16 хп за
@@ -2488,14 +2489,14 @@ async function farmRods (session, ctl, p = {}) {
   // них. Иначе смена мира (worlds.js чистит все сущности) и смерть самого бота
   // рождали «убил 8» у бота, убившего одного.
   const hurtAt = new Map()
-  const onHurt = e => { if (e && e.name === 'blaze') hurtAt.set(e.id, Date.now()) }
+  const onHurt = e => { if (e && e.name === 'blaze') hurtAt.set(e.id, gameClock.now()) }
   bot.on('entityHurt', onHurt)
   const onDead = (e, how) => {
     if (!e || e.name !== 'blaze' || !e.position || dead.has(e.id)) return
     if (e.position.distanceTo(bot.entity.position) > 24) return
-    if (how === 'gone' && !(Date.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
     dead.add(e.id)
-    kills.push({ at: xyz(e.position), t: Math.round((Date.now() - t0) / 100) / 10 })
+    kills.push({ at: xyz(e.position), t: Math.round((gameClock.now() - t0) / 100) / 10 })
   }
   const onGone = e => onDead(e, 'gone')
   // entityDead приходит не всегда (pvp.js: «сущность снимается с мира через
@@ -2548,7 +2549,7 @@ async function farmRods (session, ctl, p = {}) {
       const known = fortress.placeOf(session, fortress.PLACE)
       if (known && worlds.worldOfRecord(known) === here) {
         phase = 'обход крепости'
-        toured = await fortress.tour(session, ctl, { deadline: Math.min(deadline, Date.now() + 240000) })
+        toured = await fortress.tour(session, ctl, { deadline: Math.min(deadline, gameClock.now() + 240000) })
         // Спавнера не нашёл, а блейзов видел — бить тех, что есть (крепость
         // спавнит их и без спавнера): дальше обычных 20 блоков.
         if (toured.blazes && !p.radius) radius = 32
@@ -2573,8 +2574,8 @@ async function farmRods (session, ctl, p = {}) {
       // (nether.js walkToward): одним GoalNear pathfinder по Аду не находит.
       phase = 'путь к спавнеру'
       walked = bot.entity.position.distanceTo(spawner) > 32
-        ? await require('./nether').walkToward(session, ctl, spawner, Math.min(deadline, Date.now() + 150000), { range: 7 })
-        : await walkNear(bot, ctl, spawner, 7, Math.max(5000, Math.min(60000, deadline - Date.now())))
+        ? await require('./nether').walkToward(session, ctl, spawner, Math.min(deadline, gameClock.now() + 150000), { range: 7 })
+        : await walkNear(bot, ctl, spawner, 7, Math.max(5000, Math.min(60000, deadline - gameClock.now())))
     }
 
     // Место под стержни — до боя (рюкзак после хода по Аду бывает полон: стержень рядом не подбирается — B16f21 03.10).
@@ -2616,13 +2617,13 @@ async function farmRods (session, ctl, p = {}) {
       stopped = held.stopped
       bail = held.bail
     }
-    let idleSince = Date.now()
+    let idleSince = gameClock.now()
     while (p.legacy && !noFr) {
       const have = countOf(bot, 'blaze_rod')
       const hp = Math.round(bot.health ?? 0)
       if (ctl.aborted) { stopped = 'прервано'; break }
       if (have >= want) break
-      if (Date.now() > deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
       // Сначала отдых за углом, и только если его нет — конец боя.
       if (restsLeft > 0 && hp <= restAt) {
         restsLeft--
@@ -2650,9 +2651,9 @@ async function farmRods (session, ctl, p = {}) {
       // Больше двух видят нас — сначала укрытие, потом бой (замер (а): пять
       // блейзов разом сняли 20 хп за 24 с, и бот умер посреди второго боя).
       const watching = watchers(bot, dead)
-      if (Date.now() - lastBeat > 2000) {
-        lastBeat = Date.now()
-        log('шаг', { t: Math.round((Date.now() - t0) / 1000), hp, watching, fire: !!(bot.entity.metadata && (bot.entity.metadata[0] & 1)), pos: xyz(bot.entity.position) })
+      if (gameClock.now() - lastBeat > 2000) {
+        lastBeat = gameClock.now()
+        log('шаг', { t: Math.round((gameClock.now() - t0) / 1000), hp, watching, fire: !!(bot.entity.metadata && (bot.entity.metadata[0] & 1)), pos: xyz(bot.entity.position) })
       }
       // Под огнестойкостью шары не жгут вовсе (fireball в #is_fire) — прятаться
       // не от чего, опасен только удар в упор, и бой идёт в открытую.
@@ -2661,12 +2662,12 @@ async function farmRods (session, ctl, p = {}) {
       // держал бы тело там вечно (прогон с зельем простоял 396 с при шести
       // видящих и не ударил ни разу).
       if (fireproof) anchor = null
-      if (!fireproof && covers.length < 12 && watching >= 2 && Date.now() - coverFailAt > 15000) {
+      if (!fireproof && covers.length < 12 && watching >= 2 && gameClock.now() - coverFailAt > 15000) {
         phase = 'укрытие'
         const c = await takeCover(bot, ctl, dead)
         covers.push(c)
         log('укрытие', { watching, hp: Math.round(bot.health ?? 0), ...c })
-        if (c.at) { coverAt = Date.now(); anchor = new Vec3(c.at.x, c.at.y, c.at.z); farSince = 0 } else { coverFailAt = Date.now(); coverFails++ }
+        if (c.at) { coverAt = gameClock.now(); anchor = new Vec3(c.at.x, c.at.y, c.at.z); farSince = 0 } else { coverFailAt = gameClock.now(); coverFails++ }
         continue
       }
       // Трое и больше видят, укрыться не вышло дважды, а огнестойкости нет —
@@ -2674,7 +2675,7 @@ async function farmRods (session, ctl, p = {}) {
       // открытого стояния (замеры (а)). Уйти, пока хп есть, и сказать почему.
       // Или: укрыться только что не вышло, а видят трое — ждать второго отказа
       // значит стоять под очередями (прогон (г): 16 → 5 хп между отказами).
-      if (!fireproof && watching >= 3 && (coverFails >= 2 || Date.now() - coverFailAt < 15000)) {
+      if (!fireproof && watching >= 3 && (coverFails >= 2 || gameClock.now() - coverFailAt < 15000)) {
         stopped = `видят сразу ${watching} блейза, а укрыться не вышло — под перекрёстным огнём не стою. ` +
           'Нужна огнестойкость (зелье: бартер пиглинов или варка) или укрытие у спавнера — поставь блоки и позови снова'
         bail = true
@@ -2688,7 +2689,7 @@ async function farmRods (session, ctl, p = {}) {
           await collectRods(bot, ctl, 12, 6000)
           continue
         }
-        const idle = Date.now() - idleSince
+        const idle = gameClock.now() - idleSince
         if (idle > (spawner ? 50000 : toured ? 30000 : 6000)) {
           stopped = spawner
             ? `спавнер молчит ${Math.round(idle / 1000)}с (блейзов в ${radius} бл. нет) — встань в 16 блоках от него на ${spawner.x},${spawner.y},${spawner.z}`
@@ -2699,10 +2700,10 @@ async function farmRods (session, ctl, p = {}) {
         await sleep(400)
         continue
       }
-      idleSince = Date.now()
+      idleSince = gameClock.now()
       // Только что ушли в укрытие и никого не видно — подождать, пока выйдут
       // из-за угла, а не гнаться pathfinder'ом обратно под огонь.
-      if (!seesMob(bot, blaze) && Date.now() - coverAt < 6000) {
+      if (!seesMob(bot, blaze) && gameClock.now() - coverAt < 6000) {
         await sleep(400)
         continue
       }
@@ -2743,8 +2744,8 @@ async function farmRods (session, ctl, p = {}) {
       // (замер (а), шестой прогон). Далёкого бьют лук и снежки; мечом — только
       // того, кто сам подлетел, или если ждать уже 15 с, а видит нас он один.
       if (anchor && blaze.position.distanceTo(anchor) > CHASE_FROM_COVER) {
-        if (!farSince) farSince = Date.now()
-        if (Date.now() - farSince < 15000 || watching > 1) {
+        if (!farSince) farSince = gameClock.now()
+        if (gameClock.now() - farSince < 15000 || watching > 1) {
           await sleep(400)
           continue
         }
@@ -2756,7 +2757,7 @@ async function farmRods (session, ctl, p = {}) {
       // блоков от угла, и там тело увидели одиннадцать (try-blaze-rods (г),
       // 2026-09-25: смерть). Дальше LEASH от угла — бой обрывается, назад в угол.
       const sub = { aborted: false, onAbort: [] }
-      const leash = setInterval(() => {
+      const leash = gameClock.setInterval(() => {
         const far = anchor && !fireproof && bot.entity && bot.entity.position.distanceTo(anchor) > LEASH
         if ((ctl.aborted || far) && !sub.aborted) {
           sub.aborted = true
@@ -2779,7 +2780,7 @@ async function farmRods (session, ctl, p = {}) {
         // прогона — 20 → 11 хп при двух видящих).
         timeoutSeconds: 12,
         shield: p.shield || 'ranged'
-      }).catch(e => ({ error: String(e.message || e) })).finally(() => clearInterval(leash))
+      }).catch(e => ({ error: String(e.message || e) })).finally(() => gameClock.clearInterval(leash))
       if (sub.aborted && !ctl.aborted) f.leashed = true
       const brief = {
         killed: f.killed || (f.kills ? f.kills.join(', ') : undefined),
@@ -2850,7 +2851,7 @@ async function farmRods (session, ctl, p = {}) {
     toured: toured ? { hops: toured.hops.length, spawners: toured.spawners, seen: toured.seen, at: toured.at } : undefined,
     groundLeft: left || undefined,
     eyesPossible: countOf(bot, 'ender_eye') + countOf(bot, 'blaze_powder') + 2 * rods,
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   const places = (session.journal.state && session.journal.state.places) || {}
   if (places[SPAWNER_PLACE] && worlds.worldOfRecord(places[SPAWNER_PLACE]) === here) {

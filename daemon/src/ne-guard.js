@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Страж ближнего боя в Аду (поток nether, 03.10): ответ на удар — сразу, посреди хода/штрека/ямы, а не между шагами.
 //
 // Разбор смертей проверки VR (03.10, 16 смертей из 19 партий): 9 — бруты/пиглины/хоглин в бастионе, и почти везде
@@ -59,8 +60,8 @@ function install (bot) {
       if (!pk || !bot.entity || pk.entityId !== bot.entity.id) return
       const src = bot.entities[(pk.sourceCauseId ?? 0) - 1] || bot.entities[(pk.sourceDirectId ?? 0) - 1]
       if (!src || !src.position || src === bot.entity) return
-      g.hits.push({ t: Date.now(), id: src.id, name: src.name || src.type, d: +src.position.distanceTo(bot.entity.position).toFixed(1) })
-      if (/piglin/.test(src.name || '')) g.angerAt = Date.now()
+      g.hits.push({ t: gameClock.now(), id: src.id, name: src.name || src.type, d: +src.position.distanceTo(bot.entity.position).toFixed(1) })
+      if (/piglin/.test(src.name || '')) g.angerAt = gameClock.now()
       // First attack, not second: own the hands before a health packet/craft
       // continuation arrives. The original intent remains alive under the lock.
       if (require('./reflex-lock').on() && g.session && g.session.bot === bot && worldIsNether(bot) && meleeName(src.name || '') && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5)) {
@@ -73,17 +74,17 @@ function install (bot) {
       // Щит-рефлекс (ND_GUARD=1): удар ближнего моба, а ответ ещё не начат (тело считает план/крафтит/копает) — сразу
       // взгляд на него и щит на 1.2 с: удар меча пиглина щит снимает целиком, топор брута — первый (потом щит выбит на 5 с).
       if (process.env.ND_GUARD !== '0' && !g.reacting && meleeName(src.name || '') && src.position.distanceTo(bot.entity.position) < 4.5 && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5) &&
-        bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield' && Date.now() - (g.shieldAt || 0) > 1500) {
-        g.shieldAt = Date.now()
+        bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield' && gameClock.now() - (g.shieldAt || 0) > 1500) {
+        g.shieldAt = gameClock.now()
         bot.lookAt(src.position.offset(0, (src.height || 1.9) * 0.8, 0), true).catch(() => {})
         try { bot.activateItem(true) } catch {}
-        setTimeout(() => { try { if (!g.reacting && Date.now() - g.shieldAt >= 1100) bot.deactivateItem() } catch {} }, 1200)
+        gameClock.setTimeout(() => { try { if (!g.reacting && gameClock.now() - g.shieldAt >= 1100) bot.deactivateItem() } catch {} }, 1200)
       }
       if (g.hits.length > 24) g.hits.shift()
       // Сторож (ND_GUARD=1): второй удар ближнего моба за 4 с, а ответа нет (дело тела — ходьба к точке обзора, ожидание,
       // план — без проверок стража: B1-32 03.10, хоглин 7 ударов за 13 с при обходе бастиона) — ответ сам, мимо цикла дела.
       if (process.env.ND_GUARD !== '0' && !g.reacting && g.session && meleeName(src.name || '') && worldIsNether(bot) && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5)) {
-        const now = Date.now()
+        const now = gameClock.now()
         const recent = g.hits.filter(h => now - h.t < 4000 && meleeName(h.name || '') && (h.name !== 'blaze' || h.d < 3.5)).length
         if (recent >= 2 && now - (g.autoAt || 0) > 6000) {
           g.autoAt = now
@@ -106,10 +107,10 @@ function install (bot) {
       hp0 = hp
       if (drop < 6 || process.env.ND_GUARD === '0' || g.reacting || !g.session || !worldIsNether(bot)) return
       const last = g.hits[g.hits.length - 1]
-      if (!last || Date.now() - last.t > 1000 || !meleeName(last.name || '') || Date.now() - (g.autoAt || 0) < 6000) return
+      if (!last || gameClock.now() - last.t > 1000 || !meleeName(last.name || '') || gameClock.now() - (g.autoAt || 0) < 6000) return
       const src = bot.entities[last.id]
       if (!src || !src.position || src.position.distanceTo(bot.entity.position) > 5.5 || (src.name === 'blaze' && src.position.distanceTo(bot.entity.position) >= 3.5)) return
-      g.autoAt = Date.now()
+      g.autoAt = gameClock.now()
       const ctl = { aborted: false, onAbort: [] }
       const onDeath = () => { ctl.aborted = true; for (const f of ctl.onAbort) { try { f() } catch {} } }
       bot.once('death', onDeath)
@@ -122,8 +123,8 @@ function install (bot) {
   // видит) — 600 тиков. «Агрессивен» (mob_flags) пиглин бывает и на охоте за хоглином — это не злость на нас (B1 03.10:
   // «злой пиглин в 2.2» — бой 15 с без взмаха, коробка 25 с ×3).
   const GUARDED = /^(gold_block|raw_gold_block|gilded_blackstone|chest|trapped_chest|barrel|ender_chest|gold_ore|deepslate_gold_ore|nether_gold_ore|[a-z_]*shulker_box|[a-z_]*copper_chest[a-z_]*)$/
-  const onDug = b => { try { if (b && GUARDED.test(b.name || '')) g.angerAt = Date.now() } catch {} }
-  const onWin = w => { try { if (w && /chest|barrel|shulker|generic_9x3|generic_9x6/i.test(String(w.type || ''))) g.angerAt = Date.now() } catch {} }
+  const onDug = b => { try { if (b && GUARDED.test(b.name || '')) g.angerAt = gameClock.now() } catch {} }
+  const onWin = w => { try { if (w && /chest|barrel|shulker|generic_9x3|generic_9x6/i.test(String(w.type || ''))) g.angerAt = gameClock.now() } catch {} }
   bot.on('diggingCompleted', onDug)
   bot.on('windowOpen', onWin)
   const onTick = () => {
@@ -156,7 +157,7 @@ function meleeFoes (bot, r = 6) {
 // Пиглины злы на нас: 32 с после ломки/открытия охраняемого или удара пиглина; без золотой брони — всегда.
 function angryAtUs (bot) {
   const g = bot._ndGuard
-  if (g && Date.now() - (g.angerAt || 0) < 32000) return true
+  if (g && gameClock.now() - (g.angerAt || 0) < 32000) return true
   try { return ![5, 6, 7, 8].some(s => bot.inventory.slots[s] && /^golden_/.test(bot.inventory.slots[s].name)) } catch { return false }
 }
 
@@ -165,7 +166,7 @@ function angryAtUs (bot) {
 function hot (bot, { ms = 1500, near = 3.0 } = {}) {
   if (!bot || !bot.entity) return null
   const g = install(bot)
-  const now = Date.now()
+  const now = gameClock.now()
   if (g) {
     for (let i = g.hits.length - 1; i >= 0; i--) {
       const h = g.hits[i]
@@ -193,7 +194,7 @@ function hot (bot, { ms = 1500, near = 3.0 } = {}) {
       if (d > 3 && g) { g.pre = g.pre || new Map(); if (now - (g.pre.get(e.id) || 0) < 20000) continue; g.pre.set(e.id, now) }
       return { e, why: `${e.name} в ${d.toFixed(1)} бл.` }
     }
-    if (/^(piglin|zombified_piglin)$/.test(e.name) && d <= 2.2 && Date.now() - (g && g.reactEnd || 0) > 3000) {
+    if (/^(piglin|zombified_piglin)$/.test(e.name) && d <= 2.2 && gameClock.now() - (g && g.reactEnd || 0) > 3000) {
       let can = false
       try { can = require('./pick').canHit(bot, e) } catch {}
       if (can) return { e, why: `злой ${e.name} в ${d.toFixed(1)} бл.` }
@@ -265,31 +266,31 @@ async function hideDown (session, ctl) {
 // Сидеть в яме/на столбе, пока ближние рядом (≤ ms), есть, если голодно. Сверху (столб) — мечом по видимым.
 async function sit (session, ctl, ms, { swing = false, hitStop = false } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let quiet = 0
   let swings = 0
   const g = bot._ndGuard
-  while (!ctl.aborted && Date.now() - t0 < ms && (bot.health ?? 0) > 0) {
+  while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
     // Бьют сквозь «коробку» (диагональ, щель) — сидеть дальше нельзя (V2-1 03.10: брут на (−1,+1,−1) — 3 удара за 13 с, смерть).
-    if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && Date.now() - h.t < 1500 && meleeName(h.name || ''))) return { s: Math.round((Date.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
+    if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && gameClock.now() - h.t < 1500 && meleeName(h.name || ''))) return { s: Math.round((gameClock.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
     const foes = meleeFoes(bot, 6)
-    if (!foes.length) { if (!quiet) quiet = Date.now(); if (Date.now() - quiet > 3000) break } else quiet = 0
+    if (!foes.length) { if (!quiet) quiet = gameClock.now(); if (gameClock.now() - quiet > 3000) break } else quiet = 0
     if (swing && foes.length) {
       const pick = require('./pick')
       const e = foes[0]
-      if (pick.canHit(bot, e) && Date.now() - (sit.lastSwing || 0) > 640) {
+      if (pick.canHit(bot, e) && gameClock.now() - (sit.lastSwing || 0) > 640) {
         try {
           const sw = bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => rank(b) - rank(a))[0]
           if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) await bot.equip(sw, 'hand')
           await bot.lookAt(e.position.offset(0, (e.height || 1.9) * 0.7, 0), true)
-          bot.attack(e); sit.lastSwing = Date.now(); swings++
+          bot.attack(e); sit.lastSwing = gameClock.now(); swings++
         } catch {}
       }
     }
     if ((bot.food ?? 20) < 18 && (bot.health ?? 20) < 18) { try { await require('./actions').eat(session, {}) } catch {} }
     await sleep(250)
   }
-  return { s: Math.round((Date.now() - t0) / 1000), swings, left: meleeFoes(bot, 6).length }
+  return { s: Math.round((gameClock.now() - t0) / 1000), swings, left: meleeFoes(bot, 6).length }
 }
 const rank = i => /netherite/.test(i.name) ? 5 : /diamond/.test(i.name) ? 4 : /iron/.test(i.name) ? 3 : /stone/.test(i.name) ? 2 : 1
 
@@ -388,11 +389,11 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
   const hasShield = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
   let up = false
   const shield = on => { if (!hasShield || on === up) return; try { if (on) bot.activateItem(true); else bot.deactivateItem() } catch {} up = on }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let last = 0; let swings = 0; let far = 0; let foe = target
   const out = { swings: 0 }
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms && (bot.health ?? 0) > 0) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
       if (!foe || foe.isValid === false || !bot.entities[foe.id]) {
         foe = meleeFoes(bot, 6)[0]
         if (!foe) { out.killed = true; break }
@@ -401,24 +402,24 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
       const canBox = guardCount(bot) >= 4
       if (((bot.health ?? 20) < 7 && canBox && !lastStand) || (!crowdOk && meleeFoes(bot, 6).length >= 3)) { out.stopped = (bot.health ?? 20) < 7 ? 'хп' : 'толпа'; break }
       // Не достать 4 с (за стеной, в щели, не подходит) — не стоять: бой не задался.
-      if (Date.now() - Math.max(last, t0) > 4000 && !swings) { out.stopped = 'не достать'; break }
+      if (gameClock.now() - Math.max(last, t0) > 4000 && !swings) { out.stopped = 'не достать'; break }
       const d = foe.position.distanceTo(bot.entity.position)
       if (foe.name === 'blaze' && d >= 3.5) { out.stopped = 'блейз вне ближнего боя'; break }
       try { await bot.lookAt(foe.position.offset(0, (foe.height || 1.9) * 0.75, 0), true) } catch {}
-      if (Date.now() - last >= 640 && pick.canHit(bot, foe)) {
+      if (gameClock.now() - last >= 640 && pick.canHit(bot, foe)) {
         shield(false)
         await sleep(50)
-        try { bot.attack(foe); swings++; last = Date.now() } catch {}
+        try { bot.attack(foe); swings++; last = gameClock.now() } catch {}
         await sleep(50)
         shield(true)
       } else shield(true)
-      if (d > 3.2 && sees(bot, foe)) { if (!far) far = Date.now() } else far = 0
-      bot.setControlState('forward', !!(far && Date.now() - far > 2000 && d > 3.2 && d < 10))
+      if (d > 3.2 && sees(bot, foe)) { if (!far) far = gameClock.now() } else far = 0
+      bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10))
       await sleep(60)
     }
   } finally { bot.setControlState('forward', false); shield(false) }
   out.swings = swings
-  out.s = Math.round((Date.now() - t0) / 1000)
+  out.s = Math.round((gameClock.now() - t0) / 1000)
   return out
 }
 
@@ -437,20 +438,20 @@ async function react (session, ctl, opts = {}) {
         try { await b.lookAt(h.e.position.offset(0, (h.e.height || 1.9) * .7, 0), true); b.attack(h.e) } catch {}
       }
       return react(session, sub, { ...opts, force: h, _owned: true })
-    }, { triggerAt: opts.triggerAt ?? Date.now(), source: h.e.name })
+    }, { triggerAt: opts.triggerAt ?? gameClock.now(), source: h.e.name })
   }
   const g = install(session.bot)
   // Ответ уже идёт (сторож отвечает сам) — дождаться его конца, а не второй поверх.
-  if (g && g.reacting) { const tw = Date.now(); while (g.reacting && Date.now() - tw < 30000 && !ctl.aborted) await sleep(200); return { acted: true, how: 'ждал ответа' } }
+  if (g && g.reacting) { const tw = gameClock.now(); while (g.reacting && gameClock.now() - tw < 30000 && !ctl.aborted) await sleep(200); return { acted: true, how: 'ждал ответа' } }
   if (g) g.reacting = true
-  try { return await reactCatch(session, ctl, opts, h) } finally { if (g) { g.reacting = false; g.reactEnd = Date.now() } }
+  try { return await reactCatch(session, ctl, opts, h) } finally { if (g) { g.reacting = false; g.reactEnd = gameClock.now() } }
 }
 async function reactCatch (session, ctl, opts, h) {
   try { return await reactBody(session, ctl, opts, h) } catch (e) { log('ошибка ответа', { error: e.message, foe: h.e && h.e.name }); return { acted: true, how: 'ошибка', error: e.message } }
 }
 async function reactBody (session, ctl, opts, h) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const hp0 = Math.round(bot.health ?? 0)
   try { bot.pathfinder && bot.pathfinder.setGoal(null) } catch {}
   bot.clearControlStates()
@@ -482,7 +483,7 @@ async function reactBody (session, ctl, opts, h) {
         bot.setControlState('sneak', false)
         // Врагов в 8 нет — слезть (копать столб под собой), иначе дальше план со столба.
         if (!meleeFoes(bot, 8).length && !ctl.aborted) { try { out.down = (await require('./pearls').pillarDown(bot, ctl, session.mcData, f0)).ok } catch {} }
-        out.hp = Math.round(bot.health ?? 0); out.s = Math.round((Date.now() - t0) / 1000)
+        out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
         log('ответ', out)
         return out
       }
@@ -490,9 +491,9 @@ async function reactBody (session, ctl, opts, h) {
     }
     // Коробка: клетка занята сущностью — щит к врагу и ещё раз (до 3 с): моб у рта ямы отходит на полшага.
     let bx = await boxIn(bot, e).catch(err => ({ ok: false, why: err.message }))
-    const tb = Date.now()
+    const tb = gameClock.now()
     const hasShield = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
-    while (!bx.ok && !bx.pressure && Date.now() - tb < 3000 && !ctl.aborted && (bot.health ?? 0) > 0 && bx.left && bx.left.length) {
+    while (!bx.ok && !bx.pressure && gameClock.now() - tb < 3000 && !ctl.aborted && (bot.health ?? 0) > 0 && bx.left && bx.left.length) {
       try { await bot.lookAt(e.position.offset(0, 1.6, 0), true) } catch {}
       if (hasShield) { try { bot.activateItem(true) } catch {} }
       await sleep(250)
@@ -512,7 +513,7 @@ async function reactBody (session, ctl, opts, h) {
         out.sat2 = await sit(session, ctl, opts.sitMs ?? 25000, { hitStop: true })
         if (out.sat2.hit && !ctl.aborted) { out.last = await duel(session, ctl, e, 20000, { crowdOk: true, lastStand: true }).catch(err => ({ error: err.message })); out.how = 'коробка → бой' }
       }
-      out.hp = Math.round(bot.health ?? 0); out.s = Math.round((Date.now() - t0) / 1000)
+      out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
       log('ответ', out)
       return out
     }
@@ -530,7 +531,7 @@ async function reactBody (session, ctl, opts, h) {
       out.how = 'бой до конца'
     }
   }
-  out.hp = Math.round(bot.health ?? 0); out.s = Math.round((Date.now() - t0) / 1000)
+  out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
   log('ответ', out)
   return out
 }
@@ -565,11 +566,11 @@ function swatInstall (bot) {
         if (!fb || fb.name !== 'fireball' || !fb.position || fb.isValid === false) continue
         const d = fb.position.offset(0, 0.5, 0).distanceTo(eye)
         if (d > 3.4) continue
-        if (Date.now() - (st.last.get(fb.id) || 0) < 250) continue
+        if (gameClock.now() - (st.last.get(fb.id) || 0) < 250) continue
         if (!best || d < best.d) best = { fb, d }
       }
       if (!best) return
-      st.last.set(best.fb.id, Date.now())
+      st.last.set(best.fb.id, gameClock.now())
       if (st.last.size > 64) st.last.clear()
       const g = bot.nearestEntity(e => e && e.name === 'ghast' && e.position && e.position.distanceTo(bot.entity.position) < 96)
       const aimAt = g
@@ -585,6 +586,6 @@ function swatInstall (bot) {
 
 // Идёт ответ стража (сторож мимо цикла дела) — подождать его конца (ходьба/план не должны тянуть тело со столба/из коробки).
 function busy (bot) { return !!(bot && bot._ndGuard && bot._ndGuard.reacting) }
-async function waitIdle (bot, ms = 30000) { const t = Date.now(); while (busy(bot) && Date.now() - t < ms) await sleep(200) }
+async function waitIdle (bot, ms = 30000) { const t = gameClock.now(); while (busy(bot) && gameClock.now() - t < ms) await sleep(200) }
 
 module.exports = { busy, waitIdle, attach, duel, boxIn, swatInstall, install, hot, react, hideDown, meleeFoes, holeOk, sit, aggressive, HIDE_FROM }

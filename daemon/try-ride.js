@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Езда: mc_ride (src/ride.js) — лошадь и лодка, честно, без /tp и без NBT Tame.
 //
 //  А. ЛОШАДЬ: дикая лошадь (/summon без Tame). Тело приручает её посадками —
@@ -17,7 +19,6 @@
 // Сервер — свой, build (127.0.0.1:25566), демон ND_WS (ws://127.0.0.1:8771),
 // игрок NeuroBuild — оператор.
 const path = require('path')
-const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { connect, createKit, sleep } = require('./scene-kit')
 const ride = require('./src/ride')
@@ -47,15 +48,15 @@ let kit = null
 let eye = null
 
 async function step (label, method, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call(method, params).catch(e => ({ status: 'RPC', error: e.message }))
   const d = r.detail || {}
-  console.log(`${label.padEnd(16)} ${String(r.status).padEnd(10)} ${Math.round((Date.now() - t0) / 1000)}с ${JSON.stringify(d).slice(0, 900)}${r.error ? ' ← ' + r.error : ''}`)
+  console.log(`${label.padEnd(16)} ${String(r.status).padEnd(10)} ${Math.round((gameClock.now() - t0) / 1000)}с ${JSON.stringify(d).slice(0, 900)}${r.error ? ' ← ' + r.error : ''}`)
   return r
 }
 
 async function eyeOpen () {
-  eye = mineflayer.createBot({ host: HOST, port: PORT, username: 'RideEye', version: '1.21.11', auth: 'offline' })
+  eye = createGameBot({ host: HOST, port: PORT, username: 'RideEye', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { eye.once('spawn', resolve); eye.once('error', reject); eye.once('kicked', r => reject(new Error('зрителя выкинули: ' + r))) })
   await kit.cmd('/gamemode spectator RideEye')
   eye._client.on('set_passengers', ({ entityId, passengers }) => riders.set(entityId, passengers))
@@ -63,8 +64,8 @@ async function eyeOpen () {
 
 async function eyeTo (x, y, z) {
   await kit.cmd(`/tp RideEye ${x} ${y} ${z}`)
-  const t0 = Date.now()
-  while (Date.now() - t0 < 15000) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 15000) {
     const p = eye.entity && eye.entity.position
     if (p && Math.abs(p.x - x) < 2 && Math.abs(p.z - z) < 2 && eye.blockAt(new Vec3(x, Y, z))) break
     await sleep(300)
@@ -191,9 +192,9 @@ async function caseHorse () {
   const heard = []
   const onAttach = pk => { heard.push(pk) }
   eye._client.on('attach_entity', onAttach)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await step('go', 'ride', { mode: 'go', x: GOAL.x, z: GOAL.z, tie: true, timeoutSeconds: 180 })
-  const secs = (Date.now() - t0) / 1000
+  const secs = (gameClock.now() - t0) / 1000
   const d = r.detail || {}
   await eyeTo(GOAL.x, Y + 8, GOAL.z)
   await sleep(1000)

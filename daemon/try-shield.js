@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Щит: ветка, которая в коде была, а в игре не была ни разу.
 //
 // В combat.js больше года стоял вызов bot.activateItem(true) против стрелков, и
@@ -65,7 +66,7 @@ const mark = () => heard.length
 const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -73,7 +74,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -253,9 +254,9 @@ async function bout (label, { kind, mob, at, params, shield = true, pickaxe = fa
   // должны.
   for (const line of postSummon) await cmd(line)
 
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('fight', params).catch(e => ({ status: 'RPC', error: e.message }))
-  const seconds = Math.round((Date.now() - t0) / 100) / 10
+  const seconds = Math.round((gameClock.now() - t0) / 100) / 10
   const after = r.state || (await call('status')).state
 
   const d = r.detail || {}

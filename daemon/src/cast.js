@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Портал в Ад без алмазной кирки: литьё рамы вёдрами (спидран-приём).
 //
 // Механика — по исходникам 1.21.11 (extracted_minecraft_data, client1.21.11):
@@ -474,8 +475,8 @@ async function pour (bot, full, ref, face = UP) {
   await sleep(60)
   const before = countOf(bot, full)
   try { bot.activateItem() } catch {}
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1200) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1200) {
     if (countOf(bot, full) < before) return { ok: true }
     await sleep(40)
   }
@@ -556,8 +557,8 @@ async function scoop (bot, cell, fluid = 'water') {
   await sleep(60)
   const before = countOf(bot, `${fluid}_bucket`)
   try { bot.activateItem() } catch {}
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1200) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1200) {
     if (countOf(bot, `${fluid}_bucket`) > before) return true
     await sleep(40)
   }
@@ -605,8 +606,8 @@ async function centreOn (bot, ctl, cell) {
     await bot.lookAt(c.offset(0, bot.entity.height || 1.62, 0), true)
     bot.setControlState('sneak', true)
     bot.setControlState('forward', true)
-    const t0 = Date.now()
-    while (Date.now() - t0 < 1500 && !ctl.aborted && flat() > 0.15) await sleep(30)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 1500 && !ctl.aborted && flat() > 0.15) await sleep(30)
   } catch {} finally {
     try { bot.setControlState('forward', false) } catch {}
     try { bot.setControlState('sneak', false) } catch {}
@@ -905,8 +906,8 @@ async function dryFeet (bot, ctl, ms = 3000) {
     const f = feetCell(bot)
     return [f, f.offset(0, 1, 0)].some(p => { const b = bot.blockAt(p); return !!b && /water|bubble_column/.test(b.name) }) || !!bot.entity.isInWater
   }
-  const t0 = Date.now()
-  while (wet() && Date.now() - t0 < ms && !ctl.aborted) await sleep(100)
+  const t0 = gameClock.now()
+  while (wet() && gameClock.now() - t0 < ms && !ctl.aborted) await sleep(100)
   return !wet()
 }
 
@@ -1008,8 +1009,8 @@ async function castCell (session, ctl, g, t, report) {
       await scoop(bot, cell, 'lava')
       return { ok: false, why: `вода: ${w.why}` }
     }
-    const t0 = Date.now()
-    while (Date.now() - t0 < 1500 && (bot.blockAt(cell) || {}).name !== 'obsidian') await sleep(50)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 1500 && (bot.blockAt(cell) || {}).name !== 'obsidian') await sleep(50)
     const b2 = bot.blockAt(cell)
     if (b2 && b2.name === 'lava') {
       // Легла не туда (луч задел другую грань) — воду назад, лаву назад.
@@ -1068,7 +1069,7 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
     const r = await require('./obsidian').fillBucket(session, ctl, { fluid: 'water', radius: 8 })
     return { ...rep0, water: !!(r && (r.filled || r.already)), built: false, stopped: r && r.stopped }
   }
-  const deadline = Date.now() + Math.max(60, Math.min(600, timeoutSeconds)) * 1000 - 5000
+  const deadline = gameClock.now() + Math.max(60, Math.min(600, timeoutSeconds)) * 1000 - 5000
   const report = { cast: [], refills: 0, placed: 0, dug: 0 }
   ctl.onAbort.push(() => {
     try { bot.pathfinder.setGoal(null) } catch {}
@@ -1133,7 +1134,7 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
   }
   const g = geomOf(plan)
   report.site = { origin: plan.origin, axis: plan.axis, side: plan.side, lavaDist: plan.lavaDist }
-  const late = () => Date.now() > deadline || ctl.aborted
+  const late = () => gameClock.now() > deadline || ctl.aborted
   const groundY = g.F(0, -1).y
 
   // 1. Расчистка. Сначала проход на уровне ног и головы (ряд перед рамой, j=-1..0) — от ближней клетки: так тело

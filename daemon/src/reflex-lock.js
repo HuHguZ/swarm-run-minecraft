@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // One session owns the hands. AsyncLocalStorage distinguishes a suspended worker,
 // its late continuations, and the reflex, including callbacks created before takeover.
 const { AsyncLocalStorage } = require('node:async_hooks')
@@ -13,10 +14,10 @@ const abortCtl = () => {
 }
 function state (s) { return s._reflexState || (s._reflexState = { epoch: 0, pausedMs: 0, active: null }) }
 function clock (s) {
-  if (!s) return Date.now()
+  if (!s) return gameClock.now()
   const st = state(s)
   const owner = context.getStore()?.reflex === st.active && st.active
-  return Date.now() - st.pausedMs - (st.active && !owner ? Date.now() - st.active.startedAt : 0)
+  return gameClock.now() - st.pausedMs - (st.active && !owner ? gameClock.now() - st.active.startedAt : 0)
 }
 function allowed (s) {
   const st = state(s); const c = context.getStore()
@@ -35,7 +36,7 @@ function cancel (s) { state(s).active?.ctl.abort() }
 function mark (s, how) {
   const a = state(s).active
   if (!a || a.firstAction != null || context.getStore()?.reflex !== a) return
-  a.firstAction = Date.now()
+  a.firstAction = gameClock.now()
   s.bot.emit('nd_guard_reflex', { how, reflexMs: a.firstAction - a.triggerAt, source: a.source, during: s.current?.name || null })
 }
 function take (s) {
@@ -48,11 +49,11 @@ function take (s) {
 }
 // Set the promise BEFORE calling any bot API: a nested damage/physics callback
 // sees the same lock. Neither current nor its ctl is replaced/aborted.
-function start (s, fn, { triggerAt = Date.now(), source = 'melee' } = {}) {
+function start (s, fn, { triggerAt = gameClock.now(), source = 'melee' } = {}) {
   install(s)
   const st = state(s)
   if (st.active) return s.reflex
-  const a = { ctl: abortCtl(), triggerAt, startedAt: Date.now(), source, firstAction: null }
+  const a = { ctl: abortCtl(), triggerAt, startedAt: gameClock.now(), source, firstAction: null }
   st.epoch++; st.active = a
   let release
   const done = new Promise(resolve => { release = resolve })
@@ -60,7 +61,7 @@ function start (s, fn, { triggerAt = Date.now(), source = 'melee' } = {}) {
   const cleanup = result => {
     if (st.active !== a) return
     context.run({ session: s, reflex: a }, () => take(s))
-    st.pausedMs += Date.now() - a.startedAt
+    st.pausedMs += gameClock.now() - a.startedAt
     st.active = null; s.reflex = null
     release(result)
   }

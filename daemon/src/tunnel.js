@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Переход по Аду закрытым штреком (общий: бастион, крепость, портал; любой сид).
 //
 // Пешком по Аду тело гибло в каждой второй попытке на ~560 блоков (ферма 30.09, trip*: падения у
@@ -11,7 +12,7 @@
 // время штрека, железная — для золота; запас по бюджету прочности на кусок, не хватает — делаем
 // из булыжника/чернокамня и палок (actions.craft). Клетки прежних штреков (session._tunnelOwn) —
 // свои: обратный путь по тому же штреку почти без копки.
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => new Promise(r => gameClock.setTimeout(r, ms))
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
 const LOW_PICK = /^(stone|wooden|golden)_pickaxe$/
 const HIGH_PICK = /^(iron|diamond|netherite)_pickaxe$/
@@ -111,7 +112,7 @@ function rememberOwn (session, cells) {
   const keep = ownSet(session)
   for (const k of (cells || [])) keep.add(k)
   if (keep.size > OWN_MAX) { const arr = [...keep].slice(-OWN_MAX); keep.clear(); for (const k of arr) keep.add(k) }
-  try { const f = ownFile(session); if (f) require('fs').writeFileSync(f, JSON.stringify({ t: Date.now(), cells: [...keep] })) } catch {}
+  try { const f = ownFile(session); if (f) require('fs').writeFileSync(f, JSON.stringify({ t: gameClock.now(), cells: [...keep] })) } catch {}
 }
 
 // Сколько копок у пути (клетки не воздух и не свои).
@@ -176,7 +177,7 @@ async function tunnelTo (session, ctl, target, opts = {}) {
     return wi < via.length ? via[wi] : null
   }
   const radius = opts.radius ?? 4
-  const deadline = opts.deadline ?? Date.now() + 15 * 60000
+  const deadline = opts.deadline ?? gameClock.now() + 15 * 60000
   const segLen = opts.seg ?? 18
   const nb = opts.noBreachNear || null
   const S = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0, noBonus: true, deadline }
@@ -230,7 +231,7 @@ async function tunnelTo (session, ctl, target, opts = {}) {
     let fails = 0
     let side = 1
     while (!ctl.aborted) {
-      if (Date.now() > deadline) return out(false, 'время')
+      if (gameClock.now() > deadline) return out(false, 'время')
       const me = bot.entity.position.floored()
       const dist = Math.hypot(target.x - me.x, target.z - me.z)
       const yOk = !Number.isFinite(target.y) || Math.abs(me.y - target.y) <= 4
@@ -262,7 +263,7 @@ async function tunnelTo (session, ctl, target, opts = {}) {
           y0: Math.max(33, Math.min(me.y, ty) - 10), y1: Math.min(120, Math.max(me.y, ty) + 12),
           z0: Math.min(me.z, target.z) - 14, z1: Math.max(me.z, target.z) + 14
         }
-        const t0 = Date.now()
+        const t0 = gameClock.wall.now()
         refreshFoes()
         const baseF = { cls: view.cls, dig: view.dig, own: S.own, starts: [{ x: me.x, y: me.y, z: me.z, g: 0 }], goal: goalF, h: hF, box: boxF, maxNodes: 160000, vup: SL.fillerCount(bot) >= 6 }
         let rF = await SL.plan(baseF)
@@ -271,8 +272,8 @@ async function tunnelTo (session, ctl, target, opts = {}) {
         // двора у бастиона (chain6: хоглин у открытого края сдвинул тело в лаву).
         let breachF = false
         if (!rF.ok) { rF = await SL.plan({ ...baseF, breachOk: breachFn, breachCost: 25 }); breachF = rF.ok }
-        S.plans++; S.planMs += Date.now() - t0
-        log('штрек по Аду: план к цели', { ok: rF.ok, moves: rF.ok ? rF.path.length : 0, nodes: rF.nodes, ms: Date.now() - t0, why: rF.ok ? undefined : rF.why })
+        S.plans++; S.planMs += gameClock.wall.now() - t0
+        log('штрек по Аду: план к цели', { ok: rF.ok, moves: rF.ok ? rF.path.length : 0, nodes: rF.nodes, ms: gameClock.wall.now() - t0, why: rF.ok ? undefined : rF.why })
         if (rF.ok && rF.path.length) {
           const need = digsOf(SL, view, S.own, rF.path)
           if (lowUses(bot) < need + 8) { st.crafted += await restockPicks(session, ctl, Math.min(6, Math.ceil((need + 8 - lowUses(bot)) / 120))); for (const v of body()) S.own.add(SL.keyV(v)) }
@@ -329,7 +330,7 @@ async function tunnelTo (session, ctl, target, opts = {}) {
       const goal = (x, y, z) => Math.hypot(x - ex, z - ez) <= tol && Math.abs(y - ey) <= ytol
       const h = (x, y, z) => Math.max(0, Math.abs(x - ex) + Math.abs(z - ez) - tol) + 0.3 * Math.max(0, Math.abs(y - ey) - (last ? 0 : 3))
       const base = { cls: view.cls, dig: view.dig, own: S.own, starts: [{ x: me.x, y: me.y, z: me.z, g: 0 }], goal, h, box, maxNodes: 60000, vup: SL.fillerCount(bot) >= 6 }
-      const t0 = Date.now()
+      const t0 = gameClock.wall.now()
       let r = await SL.plan(base)
       let breach = false
       // Старт в «чужом» кармане (ни одного хода: кругом воздух не из своих — стена бастиона, main 30.09) —
@@ -351,7 +352,7 @@ async function tunnelTo (session, ctl, target, opts = {}) {
         breach = r.ok
       }
       S.plans++
-      S.planMs += Date.now() - t0
+      S.planMs += gameClock.wall.now() - t0
       // У площадки портала стартовый воздух чужой и незамкнутый: localAir его не разрешает.
       // Единственный короткий вход ногами допустим и для via, но только у портала, вне запрета и без врагов.
       let portalIngress = false
@@ -370,13 +371,13 @@ async function tunnelTo (session, ctl, target, opts = {}) {
         try {
           const { goals } = require('mineflayer-pathfinder')
           const gx = Math.round(me.x + ux * 8); const gz = Math.round(me.z + uz * 8)
-          const lim = Math.max(1000, Math.min(20000, deadline - Date.now()))
+          const lim = Math.max(1000, Math.min(20000, deadline - gameClock.now()))
           await Promise.race([
             bot.pathfinder.goto(new goals.GoalNearXZ(gx, gz, 2)),
-            new Promise(resolve => { timer = setTimeout(resolve, lim) }),
-            new Promise(resolve => { watch = setInterval(() => { if (ctl.aborted) resolve() }, 100) })
+            new Promise(resolve => { timer = gameClock.setTimeout(resolve, lim) }),
+            new Promise(resolve => { watch = gameClock.setInterval(() => { if (ctl.aborted) resolve() }, 100) })
           ])
-        } catch {} finally { if (timer) clearTimeout(timer); if (watch) clearInterval(watch); try { bot.pathfinder.setGoal(null) } catch {} }
+        } catch {} finally { if (timer) gameClock.clearTimeout(timer); if (watch) gameClock.clearInterval(watch); try { bot.pathfinder.setGoal(null) } catch {} }
         for (const v of body()) S.own.add(SL.keyV(v))
         log('штрек по Аду: со старта не войти — отошёл ногами', { from: me, at: bot.entity.position.floored() })
         continue

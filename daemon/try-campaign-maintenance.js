@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Короткая проверка на существующем рюкзаке NeuroRun: без /give и сброса мира.
 const assert = require('node:assert/strict')
 const WebSocket = require('ws')
@@ -8,16 +9,16 @@ let id = 0
 function call (method, params = {}) {
   return new Promise((resolve, reject) => {
     const rid = ++id
-    const timer = setTimeout(() => { pending.delete(rid); reject(new Error(`${method}: время вышло`)) }, 25000)
+    const timer = gameClock.wall.setTimeout(() => { pending.delete(rid); reject(new Error(`${method}: время вышло`)) }, 25000)
     pending.set(rid, { resolve, reject, timer })
     ws.send(JSON.stringify({ id: rid, method, params }))
   })
 }
 ws.on('message', raw => {
-  const r = JSON.parse(raw)
+  const r = JSON.parse(raw); gameClock.follow(r.clock || r.result?.state?.clock || r.result?.clock)
   const p = pending.get(r.id)
   if (!p) return
-  clearTimeout(p.timer)
+  gameClock.wall.clearTimeout(p.timer)
   pending.delete(r.id)
   r.ok ? p.resolve(r.result) : p.reject(new Error(r.error))
 })
@@ -32,7 +33,7 @@ ws.on('open', async () => {
     const cleaned = await call('pack', { mode: 'tidy', also: 'cobblestone:128, cobbled_deepslate:128, netherrack:64, raw_copper:0, copper_ingot:0, leaf_litter:0, magma_block:0, nether_brick_fence:0, nether_bricks:0' })
     // Задержка подбора выброшенного — 2 с: результат сразу после броска
     // не доказывает, что свободные клетки сохранились.
-    await new Promise(resolve => setTimeout(resolve, 3500))
+    await gameClock.sleep(3500)
     const after = await call('pack', { mode: 'status' })
     for (const [name, count] of Object.entries(before.state.inventory || {})) {
       if (/_(pickaxe|sword|axe|shovel)$|^(bow|arrow|blaze_rod|ender_pearl|ender_eye|obsidian|gold_ingot|potion|splash_potion|water_bucket|crafting_table)$/.test(name)) {
@@ -46,7 +47,7 @@ ws.on('open', async () => {
     console.error(err.stack || err.message)
     process.exitCode = 1
   } finally {
-    for (const p of pending.values()) clearTimeout(p.timer)
+    for (const p of pending.values()) gameClock.wall.clearTimeout(p.timer)
     ws.close()
   }
 })

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const armor = require('./armor')
 const { countOf, craftPlan, plankCount, spendablePlanks, GROUPS, TABLE_PLANKS } = require('./items')
 const actions = require('./actions')
@@ -323,8 +324,8 @@ async function untilHandsFree (session, sub, onBusy) {
 function pause (ms, sub) {
   return new Promise(resolve => {
     if (sub && sub.aborted) return resolve()
-    const t = setTimeout(resolve, ms)
-    if (sub) sub.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (sub) sub.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -673,8 +674,8 @@ async function arm (session, sub, kit) {
   let why = null
   try {
     await bot.equip(again, 'hand')
-    const until = Date.now() + HAND_SETTLE_MS
-    while (Date.now() < until && !sub.aborted) await pause(50)
+    const until = gameClock.now() + HAND_SETTLE_MS
+    while (gameClock.now() < until && !sub.aborted) await pause(50)
   } catch (err) {
     why = refusal(err)
   } finally {
@@ -710,12 +711,12 @@ async function rearm (session, ctl) {
   try {
     await Promise.race([
       bot.equip(best, 'hand'),
-      new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('timeout')), REARM_TIMEOUT_MS) })
+      new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('timeout')), REARM_TIMEOUT_MS) })
     ])
   } catch {
     return null
   } finally {
-    clearTimeout(timer)
+    gameClock.clearTimeout(timer)
     session.armorBusy = false
   }
   const now = bot.heldItem
@@ -725,7 +726,7 @@ async function rearm (session, ctl) {
 // ------------------------------------------------------------------ run
 
 function freshKit () {
-  return { started: Date.now(), did: [], skipped: [], need: [], error: null, ms: null, pending: null }
+  return { started: gameClock.now(), did: [], skipped: [], need: [], error: null, ms: null, pending: null }
 }
 
 // Never rejects: a preflight that throws must not cost the intent it guards.
@@ -750,13 +751,13 @@ async function preflight (session, ctl, spec, kit) {
   // clicked while the intent that replaced this one held the cursor
   // (reproduced: goto cancelled by craft, one torso click inside the craft).
   if (ctl.aborted) stop('ended')
-  const timer = setTimeout(() => stop('budget'), PREFLIGHT_MS)
+  const timer = gameClock.setTimeout(() => stop('budget'), PREFLIGHT_MS)
   try {
     // One macrotask before anything is read or clicked. An interrupt that was
     // already waiting in the bus (events.js pending) resolves runIntent's race
     // in microtasks; this lets its abort land first, so a person who spoke
     // before the call does not get a swap clicked in front of the answer.
-    // setImmediate and not setTimeout(0): the timer is ~15 ms on Windows, and
+    // setImmediate and not gameClock.setTimeout(0): the timer is ~15 ms on Windows, and
     // this is paid by every table intent, including the ones with nothing to do.
     await new Promise(resolve => setImmediate(resolve))
     const bot = session.bot
@@ -791,8 +792,8 @@ async function preflight (session, ctl, spec, kit) {
     // the same answer already says where the body went.
     if (!(sub.why === 'ended' && gone(session))) kit.error = String((err && err.message) || err)
   } finally {
-    clearTimeout(timer)
-    kit.ms = Date.now() - kit.started
+    gameClock.clearTimeout(timer)
+    kit.ms = gameClock.now() - kit.started
   }
   return kit
 }
@@ -830,7 +831,7 @@ function summary (kit) {
   if (need.length) out.need = need
   if (kit.error) out.error = kit.error
   if (!Object.keys(out).length) return undefined
-  out.ms = kit.ms ?? (Date.now() - kit.started)
+  out.ms = kit.ms ?? (gameClock.now() - kit.started)
   return out
 }
 

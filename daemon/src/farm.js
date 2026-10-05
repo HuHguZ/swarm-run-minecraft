@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals, Movements } = require('mineflayer-pathfinder')
 const { withTimeout } = require('./build')
@@ -84,8 +85,8 @@ const HORIZ = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
 function sleep (ms, ctl) {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -196,8 +197,8 @@ function hoeUses (bot) {
 }
 
 async function waitBlock (bot, pos, test, ms = 1200) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < ms) {
     const b = bot.blockAt(pos)
     if (b && test(b)) return b
     await sleep(50)
@@ -721,7 +722,7 @@ async function run (session, ctl, p = {}) {
   const bot = session.bot
   const mode = String(p.mode || 'status').toLowerCase()
   const before = countItems(bot)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const report = { mode }
   const center = p.at ? new Vec3(Math.floor(p.at.x), Math.floor(p.at.y), Math.floor(p.at.z)) : null
   const radius = Math.max(2, Math.min(24, Math.round(p.radius ?? (mode === 'plot' ? 4 : 10))))
@@ -732,7 +733,7 @@ async function run (session, ctl, p = {}) {
   ctl.abort = () => { if (ctl.aborted) return; ctl.aborted = true; for (const fn of ctl.onAbort) { try { fn() } catch {} } }
   outer.onAbort.push(() => ctl.abort())
   const budget = Math.min(600, p.timeoutSeconds ?? 180) * 1000
-  const timer = setTimeout(() => { report.timedOut = true; ctl.abort() }, budget)
+  const timer = gameClock.setTimeout(() => { report.timedOut = true; ctl.abort() }, budget)
   const old = bot.pathfinder.movements
   bot.pathfinder.setMovements(farmMovements(bot))
   try {
@@ -743,7 +744,7 @@ async function run (session, ctl, p = {}) {
     else if (mode === 'harvest') await harvest(session, ctl, { center, radius, max: p.count ?? 400, replant: p.replant !== false, what: p.what || null, report })
     else throw new Error(`не знаю режим ${mode}: status / plot / till / plant / bonemeal / harvest`)
   } finally {
-    clearTimeout(timer)
+    gameClock.clearTimeout(timer)
     try { bot.pathfinder.setGoal(null) } catch {}
     if (old) { try { bot.pathfinder.setMovements(old) } catch {} }
     session.updateMovements(true)
@@ -752,7 +753,7 @@ async function run (session, ctl, p = {}) {
   report.gained = diffItems(before, countItems(bot))
   const spent = diffItems(countItems(bot), before)
   if (Object.keys(spent).length) report.spent = spent
-  report.seconds = Math.round((Date.now() - t0) / 100) / 10
+  report.seconds = Math.round((gameClock.now() - t0) / 100) / 10
   try { report.field = survey(session, { radius: Math.max(radius, 6), center: center || null }) } catch {}
   if (!report.stopped) {
     const done = report.tilled || report.planted || report.harvested || report.bonemealed || report.replanted

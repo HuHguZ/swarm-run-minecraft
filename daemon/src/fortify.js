@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Крепость из блоков — «кошки-мышки» из PvP-роликов: закрыться в своей
 // клетке (стены по 2 блока с 4 сторон и крыша), отлечиться, латать дыры,
 // которые выламывает противник, выйти с нужной стороны. И обратное — осада:
@@ -112,9 +113,9 @@ function enclosure (bot, cell) {
 async function centerInCell (bot, ms = 700, at = null) {
   const cell = at || feetCell(bot)
   const c = { x: cell.x + 0.5, z: cell.z + 0.5 }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < ms) {
+    while (gameClock.now() - t0 < ms) {
       const p = bot.entity.position
       const dx = c.x - p.x
       const dz = c.z - p.z
@@ -373,8 +374,8 @@ async function jumpPlace (bot, pos, { ctl = null, timeoutMs = 900 } = {}) {
 
 // Дождаться, пока тело на полу (после прыжка, толчка) — до ms.
 async function landed (bot, ms = 900) {
-  const until = Date.now() + ms
-  while (Date.now() < until && !bot.entity.onGround) await sleep(25)
+  const until = gameClock.now() + ms
+  while (gameClock.now() < until && !bot.entity.onGround) await sleep(25)
   return !!bot.entity.onGround
 }
 
@@ -416,7 +417,7 @@ function bodyIn (bot, pos) {
 // Закрыться в клетке cell (тело уже в ней): план refugePlan, честная
 // установка. Возвращает, сколько поставлено и что вышло (enclosure).
 async function refugeBox (bot, cell, { toward = null, ctl = null, timeoutMs = 800, honest = true, budgetMs = 4500 } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await centerInCell(bot)
   // Тело сползло в соседнюю клетку (толчок, шаг по инерции) — строить вокруг той,
   // где стоит: иначе стена плана приходится на свою же клетку («это моя же
@@ -430,7 +431,7 @@ async function refugeBox (bot, cell, { toward = null, ctl = null, timeoutMs = 80
     if (ctl && ctl.aborted) break
     // Стройка затянулась (толкают, сервер молчит) — дальше по списку отхода, а
     // не стоять под ударами (J: коробка 9.8 с).
-    if (Date.now() - t0 > budgetMs) { failed.push('стройка дольше ' + Math.round(budgetMs / 1000) + ' с'); break }
+    if (gameClock.now() - t0 > budgetMs) { failed.push('стройка дольше ' + Math.round(budgetMs / 1000) + ' с'); break }
     if (solidAt(bot, step.pos)) continue
     try {
       const steady = step.kind !== 'wall'
@@ -672,9 +673,9 @@ async function takeNicheBody (bot, c, plan, { ctl = null, toward = null } = {}) 
     out.dug++
   }
   // Шагнуть в нишу (по прямой, как stepTo).
-  const until = Date.now() + 1200
+  const until = gameClock.now() + 1200
   try {
-    while (Date.now() < until && !(ctl && ctl.aborted) && !feetCell(bot).equals(w)) {
+    while (gameClock.now() < until && !(ctl && ctl.aborted) && !feetCell(bot).equals(w)) {
       const p = bot.entity.position
       await bot.look(Math.atan2(-(w.x + 0.5 - p.x), -(w.z + 0.5 - p.z)), 0, true).catch(() => {})
       bot.setControlState('forward', true)

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals, Movements } = require('mineflayer-pathfinder')
 const { sleep, xyz, describeStall, stuckGuard } = require('./movement')
@@ -199,7 +200,7 @@ async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null
     // swing instead of trusting a plan made three swings ago.
     for (let tries = 0; tries < 6; tries++) {
       if (ctl.aborted) return { dug, stopped: 'прервано' }
-      if (Date.now() >= deadline) return { dug, stopped: `время вышло в забое на ${at(pos)}` }
+      if (gameClock.now() >= deadline) return { dug, stopped: `время вышло в забое на ${at(pos)}` }
       const alarm = watch && watch()
       if (alarm) return { dug, alarm }
 
@@ -242,11 +243,11 @@ async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null
 // out of the corridor we are trying to keep straight.
 async function walkTo (bot, ctl, cell, ms = STEP_MS) {
   const centre = cell.offset(0.5, 0, 0.5)
-  const until = Date.now() + ms
+  const until = gameClock.now() + ms
   try {
     await bot.lookAt(centre.offset(0, 1.6, 0), true)
     bot.setControlState('forward', true)
-    while (Date.now() < until && !ctl.aborted) {
+    while (gameClock.now() < until && !ctl.aborted) {
       if (flatDist(bot.entity.position, centre) < 0.35) break
       await sleep(60)
     }
@@ -288,9 +289,9 @@ function axisSign (from, dir, pos) {
 // because the same lost cobblestone is in range for the next four steps too and
 // counting it four times would read as four losses.
 async function sweepDrops (bot, ctl, onLine, budgetMs, abandoned) {
-  const until = Date.now() + budgetMs
+  const until = gameClock.now() + budgetMs
   const tried = new Set(abandoned)
-  while (Date.now() < until && !ctl.aborted) {
+  while (gameClock.now() < until && !ctl.aborted) {
     const me = bot.entity.position
     const drop = bot.nearestEntity(e =>
       e && e.name === 'item' && e.position && !tried.has(e.id) && e.position.distanceTo(me) <= 4)
@@ -716,7 +717,7 @@ async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180 } = 
   const bot = session.bot
   const mcData = session.mcData
   const want = clamp(length, 1, MAX_LENGTH, 16)
-  const deadline = Date.now() + clamp(timeoutSeconds, 10, 600, 180) * 1000
+  const deadline = gameClock.now() + clamp(timeoutSeconds, 10, 600, 180) * 1000
   const before = countItems(bot)
   const from = xyz(bot.entity.position)
   let dug = 0
@@ -736,7 +737,7 @@ async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180 } = 
   for (let i = 0; i < want * 2 && !ctl.aborted; i++) {
     const feet = bot.entity.position.floored()
     if (startY - feet.y >= want) break
-    if (Date.now() > deadline) { stopped = `время вышло на ${startY - feet.y}-м уровне`; break }
+    if (gameClock.now() > deadline) { stopped = `время вышло на ${startY - feet.y}-м уровне`; break }
     if ((bot.health ?? 20) <= LOW_HEALTH) { stopped = `хп ${Math.round(bot.health ?? 0)} — колодец бросаю`; break }
     // Моб — помеха, только если может до нас добраться (reach.reachOf: удар, выстрел, путь) или стоит прямо под
     // колодцем (вскроем его следующим ударом). Крипер в пещере за камнем в 5 блоках ниже — фон (ow-L2 02.10, слот 12:
@@ -805,8 +806,8 @@ async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180 } = 
       await withTimeout(bot.dig(below, true, new Vec3(0, 1, 0)), 8000, 'не копается')
       dug++
     } catch (e) { stopped = `не копается ${below.name}: ${e.message}`; break }
-    const t0 = Date.now()
-    while (Date.now() - t0 < 1200 && bot.entity.position.floored().y >= feet.y && !ctl.aborted) await sleep(50)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 1200 && bot.entity.position.floored().y >= feet.y && !ctl.aborted) await sleep(50)
     for (let k = 0; k < 10 && !bot.entity.onGround && !ctl.aborted; k++) await sleep(50)
     // Удар без спуска (листва кроны, трава, блок вернулся) — три подряд: колодец здесь не идёт (ow-E2 02.10, слот 9:
     // 3 мин на месте на кроне тёмного дуба).
@@ -836,7 +837,7 @@ async function shaftUp (session, ctl, { length = 16, timeoutSeconds = 120, toY =
   const mcData = session.mcData
   const build = require('./build')
   const want = clamp(length, 1, MAX_LENGTH, 16)
-  const deadline = Date.now() + clamp(timeoutSeconds, 10, 600, 120) * 1000
+  const deadline = gameClock.now() + clamp(timeoutSeconds, 10, 600, 120) * 1000
   const from = xyz(bot.entity.position)
   const startY = bot.entity.position.y
   let stopped = null
@@ -848,7 +849,7 @@ async function shaftUp (session, ctl, { length = 16, timeoutSeconds = 120, toY =
     const y = bot.entity.position.y
     if (toY !== null && Math.floor(y) >= toY) break
     if (y - startY >= want) break
-    if (Date.now() > deadline) { stopped = `время вышло на +${Math.round(y - startY)}`; break }
+    if (gameClock.now() > deadline) { stopped = `время вышло на +${Math.round(y - startY)}`; break }
     if ((bot.health ?? 20) <= LOW_HEALTH) { stopped = `хп ${Math.round(bot.health ?? 0)} — подъём бросаю`; break }
     const r = await build.digUp(bot, ctl, { blocks: 1, mcData, tower: true, guard })
     if (bot.entity.position.y - y < 0.5) { stopped = r.stopped || 'выше не поднимаюсь'; break }
@@ -876,7 +877,7 @@ async function tunnel (session, ctl, {
   // failure on the first step.
   const tall = clamp(height, 2, 3, 2)
   const every = clamp(torchEvery, 0, MAX_LENGTH, 8)
-  const deadline = Date.now() + clamp(timeoutSeconds, 10, 600, 180) * 1000
+  const deadline = gameClock.now() + clamp(timeoutSeconds, 10, 600, 180) * 1000
 
   const useFair = session.cfg.fairPlay !== false
 
@@ -1081,7 +1082,7 @@ async function tunnel (session, ctl, {
 
   for (let step = 1; step <= len; step++) {
     if (ctl.aborted) { stopped = `прервано на ${walked}-м блоке из ${len}`; break }
-    if (Date.now() >= deadline) { stopped = `время вышло на ${walked}-м блоке из ${len} — позови ещё раз, продолжу отсюда`; break }
+    if (gameClock.now() >= deadline) { stopped = `время вышло на ${walked}-м блоке из ${len} — позови ещё раз, продолжу отсюда`; break }
 
     const alarm = watch()
     if (alarm) { stopped = await answerAlarm(alarm); break }
@@ -1467,12 +1468,12 @@ function verify (bot, row) {
 // wall from an earlier drift is the usual reason.
 async function travelTo (session, ctl, target, budgetMs) {
   const bot = session.bot
-  const started = Date.now()
+  const started = gameClock.now()
   const swingsBefore = toolBudget(bot, 'pickaxe')
   const from = bot.entity.position.clone()
   const goal = new Vec3(target.x + 0.5, target.y, target.z + 0.5)
 
-  const left = () => Math.max(0, budgetMs - (Date.now() - started))
+  const left = () => Math.max(0, budgetMs - (gameClock.now() - started))
   let error = null
   let dugOnTheWay = false
 
@@ -1496,7 +1497,7 @@ async function travelTo (session, ctl, target, budgetMs) {
           bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 3)),
           guard.promise,
           new Promise((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('дорога не уложилась в срок')), left())
+            timer = gameClock.setTimeout(() => reject(new Error('дорога не уложилась в срок')), left())
           })
         ])
         dugOnTheWay = leg.dug
@@ -1507,7 +1508,7 @@ async function travelTo (session, ctl, target, budgetMs) {
         try { bot.pathfinder.setGoal(null) } catch {}
       } finally {
         guard.stop()
-        if (timer) clearTimeout(timer)
+        if (timer) gameClock.clearTimeout(timer)
       }
     }
     session.updateMovements(true)
@@ -1518,7 +1519,7 @@ async function travelTo (session, ctl, target, budgetMs) {
     from: xyz(from),
     to: xyz(to),
     meters: Math.round(from.distanceTo(to) * 10) / 10,
-    seconds: Math.round((Date.now() - started) / 100) / 10,
+    seconds: Math.round((gameClock.now() - started) / 100) / 10,
     // The number the brain budgets with. Down a corridor that is already cut
     // this is zero, and zero is the entire point of the walk-only leg.
     swings: Math.max(0, swingsBefore - toolBudget(bot, 'pickaxe')),
@@ -1545,13 +1546,13 @@ async function approach (session, ctl, pos, deadline) {
   walkOnly.canDig = false
   walkOnly.allowSprinting = false
   for (const mv of [walkOnly, null]) {
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     if (mv) bot.pathfinder.setMovements(mv)
     else session.updateMovements(true)
     try {
       await withTimeout(
         bot.pathfinder.goto(new goals.GoalLookAtBlock(pos, bot.world, { reach: 4 })),
-        Math.min(20000, Math.max(4000, deadline - Date.now())),
+        Math.min(20000, Math.max(4000, deadline - gameClock.now())),
         'не подойти'
       )
     } catch {
@@ -1566,7 +1567,7 @@ async function approach (session, ctl, pos, deadline) {
   // not where we thought the corridor was.
   let notch = 0
   for (let i = 0; i < 2; i++) {
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     const me = bot.entity.position.floored()
     const dx = pos.x - me.x
     const dz = pos.z - me.z
@@ -1582,7 +1583,7 @@ async function approach (session, ctl, pos, deadline) {
     // before the swing, instead of in the face after it.
     const risk = danger(bot, me, cell, 2, dir)
     if (risk) return { ok: false, reason: risk, notch }
-    const cut = await digColumn(bot, mcData, ctl, cell, 2, Math.min(deadline, Date.now() + 25000))
+    const cut = await digColumn(bot, mcData, ctl, cell, 2, Math.min(deadline, gameClock.now() + 25000))
     if (cut.stopped) return { ok: false, reason: cut.stopped, need: cut.need, notch }
     if (!(await walkTo(bot, ctl, cell))) {
       const stall = describeStall(bot)
@@ -1620,7 +1621,7 @@ async function approach (session, ctl, pos, deadline) {
 const DROP_NEAR = 3.5
 
 async function collectVein (bot, ctl, spots, { waitMs = 1500, budgetMs = 8000 } = {}) {
-  const until = Date.now() + budgetMs
+  const until = gameClock.now() + budgetMs
   const mine = () => Object.values(bot.entities).filter(e =>
     e && e.name === 'item' && e.position &&
     spots.some(s => e.position.distanceTo(s) <= DROP_NEAR))
@@ -1629,8 +1630,8 @@ async function collectVein (bot, ctl, spots, { waitMs = 1500, budgetMs = 8000 } 
   // about a packet that has not landed. Its own short window, not the whole
   // budget — a block that drops nothing (or drops it down a cave) must cost
   // a second and a half, not eight.
-  const waitUntil = Date.now() + waitMs
-  while (Date.now() < waitUntil && !ctl.aborted && !mine().length) await sleep(150)
+  const waitUntil = gameClock.now() + waitMs
+  while (gameClock.now() < waitUntil && !ctl.aborted && !mine().length) await sleep(150)
 
   // Then sweep for as long as sweeping is still achieving something. Each pass
   // is the drift's own collector with the axis rule switched off — outside a
@@ -1639,9 +1640,9 @@ async function collectVein (bot, ctl, spots, { waitMs = 1500, budgetMs = 8000 } 
   // wasted pass is the cheapest possible way to establish that.
   const abandoned = new Set()
   let guard = 0
-  while (Date.now() < until && !ctl.aborted && mine().length && guard++ < 4) {
+  while (gameClock.now() < until && !ctl.aborted && mine().length && guard++ < 4) {
     const before = mine().length
-    await sweepDrops(bot, ctl, () => true, Math.min(2500, until - Date.now()), abandoned)
+    await sweepDrops(bot, ctl, () => true, Math.min(2500, until - gameClock.now()), abandoned)
     await sleep(300) // the server hands the stack over a beat after we stand on it
     if (mine().length >= before) break
   }
@@ -1682,7 +1683,7 @@ async function mineSeen (session, ctl, {
 } = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const deadline = Date.now() + clamp(timeoutSeconds, 20, 600, 180) * 1000
+  const deadline = gameClock.now() + clamp(timeoutSeconds, 20, 600, 180) * 1000
   const want = clamp(count, 1, 64, 8)
 
   const chosen = pickTarget(session, asked, block)
@@ -1743,7 +1744,7 @@ async function mineSeen (session, ctl, {
   }
 
   const travel = await travelTo(session, ctl, first,
-    Math.min(90000, Math.max(15000, (deadline - Date.now()) * 0.6)))
+    Math.min(90000, Math.max(15000, (deadline - gameClock.now()) * 0.6)))
 
   const taken = []
   const struck = []
@@ -1767,7 +1768,7 @@ async function mineSeen (session, ctl, {
     if (done.has(posKey(pos))) continue
     done.add(posKey(pos))
     if (ctl.aborted) { stopped = `прервано, взято ${taken.length}`; break }
-    if (Date.now() >= deadline) { stopped = `время вышло, взято ${taken.length} из ${want}`; break }
+    if (gameClock.now() >= deadline) { stopped = `время вышло, взято ${taken.length} из ${want}`; break }
 
     const alarm = watch()
     if (alarm) { stopped = mobStop(alarm); break }
@@ -1849,7 +1850,7 @@ async function mineSeen (session, ctl, {
     }
 
     const name = here.name
-    const cut = await digColumn(bot, mcData, ctl, pos, 1, Math.min(deadline, Date.now() + 30000), watch)
+    const cut = await digColumn(bot, mcData, ctl, pos, 1, Math.min(deadline, gameClock.now() + 30000), watch)
     if (cut.alarm) { stopped = mobStop(cut.alarm); break }
     if (!cut.dug) {
       if (!taken.length) { stopped = cut.stopped; need = cut.need || null; break }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория штрека по маршруту (via) между бастионами: тело у бастиона 1 в закрытой ячейке на старте
 // маршрута, рюкзак — как у основного тела после бастиона 1 (кирки, чернокамень, палки, доски, железная кирка).
 // Туда: nether_tunnel по via «бастион 2 (ад)» из памяти основного (memory-run/state.json) до конца маршрута;
@@ -56,18 +57,18 @@ async function main () {
   const size = logSize()
   const rec = { at: new Date().toISOString(), start: { x: sx, y: sy, z: sz } }
   const end = B2.via[B2.via.length - 1]
-  let t0 = Date.now()
+  let t0 = gameClock.now()
   const r1 = await call('nether_tunnel', { x: end[0], y: end[1], z: end[2], radius: 5, via: B2.via, budgetCheck: true, noBreachNear: { x: B2.x, z: B2.z, r: 48 }, timeoutSeconds: 2700 }).catch(e => ({ status: 'failed', error: e.message }))
   const d1 = r1.detail || {}
-  rec.there = { ok: !!d1.ok, why: d1.why || r1.error, min: +((Date.now() - t0) / 60000).toFixed(1), dug: d1.dug, moves: d1.moves, crafted: d1.crafted, viaDone: d1.viaDone, need: d1.need, budget: d1.budget, at: await where(), deaths: deathLines(size) }
+  rec.there = { ok: !!d1.ok, why: d1.why || r1.error, min: +((gameClock.now() - t0) / 60000).toFixed(1), dug: d1.dug, moves: d1.moves, crafted: d1.crafted, viaDone: d1.viaDone, need: d1.need, budget: d1.budget, at: await where(), deaths: deathLines(size) }
   console.log(JSON.stringify(rec.there))
   if (BACK && rec.there.deaths.length === 0) {
     const via = [...B2.via].reverse().concat([...B1.via].reverse())
-    t0 = Date.now()
+    t0 = gameClock.now()
     const size2 = logSize()
     const r2 = await call('nether_tunnel', { x: PORTAL.x, y: PORTAL.y, z: PORTAL.z, radius: 6, via, ironOk: true, timeoutSeconds: 2700 }).catch(e => ({ status: 'failed', error: e.message }))
     const d2 = r2.detail || {}
-    rec.back = { ok: !!d2.ok, why: d2.why || r2.error, min: +((Date.now() - t0) / 60000).toFixed(1), dug: d2.dug, moves: d2.moves, crafted: d2.crafted, viaDone: d2.viaDone, at: await where(), deaths: deathLines(size2) }
+    rec.back = { ok: !!d2.ok, why: d2.why || r2.error, min: +((gameClock.now() - t0) / 60000).toFixed(1), dug: d2.dug, moves: d2.moves, crafted: d2.crafted, viaDone: d2.viaDone, at: await where(), deaths: deathLines(size2) }
     console.log(JSON.stringify(rec.back))
   }
   const st = await call('status', {}).catch(() => null)

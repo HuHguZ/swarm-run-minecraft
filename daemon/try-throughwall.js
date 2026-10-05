@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Удар сквозь стенку (арена 2026-09-26, пользователь: «боты через один блок
 // пробивают… он построил крепость, а второй летит с булавой и через блоки его
 // выносит»). NeuroDown закрыт в коробке (пустота 1×2, стены, пол и крыша),
@@ -11,12 +13,15 @@
 const WebSocket = require('ws')
 const { Vec3 } = require('vec3')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -30,7 +35,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }
@@ -44,8 +49,7 @@ const SCENES = {
 }
 
 async function observer () {
-  const mineflayer = require('mineflayer')
-  const ob = mineflayer.createBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { ob.once('spawn', resolve); ob.once('error', reject); ob.once('kicked', reject) })
   await sleep(4000)
   ob.chat('/gamemode spectator'); await sleep(300)
@@ -76,7 +80,7 @@ async function scene (ob, name) {
   for (const who of ['NeuroDown', 'NeuroDown2']) { await cmd(`/effect give ${who} minecraft:instant_health 1 10 true`); await cmd(`/effect give ${who} minecraft:saturation 1 20 true`) }
   await sleep(1500)
   const cells = boxCells()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let firstBreak = 0
   let hp = ((await A.call('status')).state || {}).health ?? 20
   const hits = []
@@ -84,10 +88,10 @@ async function scene (ob, name) {
   const poll = (async () => {
     while (polling) {
       const intact = cells.every(c => { const b = ob.blockAt(c); return b && b.name === sc.box })
-      if (!intact && !firstBreak) firstBreak = Date.now()
+      if (!intact && !firstBreak) firstBreak = gameClock.now()
       try {
         const h = ((await A.call('status')).state || {}).health
-        if (h != null && h < hp - 0.4) hits.push({ t: Date.now() - t0, dmg: +(hp - h).toFixed(1), intact })
+        if (h != null && h < hp - 0.4) hits.push({ t: gameClock.now() - t0, dmg: +(hp - h).toFixed(1), intact })
         if (h != null) hp = h
       } catch {}
       await sleep(100)
@@ -129,6 +133,6 @@ async function scene (ob, name) {
   } finally {
     if (ob) try { ob.quit() } catch {}
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

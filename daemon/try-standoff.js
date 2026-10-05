@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Стояние на столбах (интеграционная арена 2026-09-26): оба бота на своих
 // столбах в 4–5 блоках над полом, в 4.8 друг от друга, минутами без удара.
 // Сцена: два столба высотой H, между ними пусто; оба дерутся друг с другом.
@@ -6,12 +7,15 @@
 //   A=ws://127.0.0.1:8783 B=ws://127.0.0.1:8784 node try-standoff.js
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -25,7 +29,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8783')
 const B = client(process.env.B || 'ws://127.0.0.1:8784')
 async function cmd (text) { await A.call('say', { text }); await sleep(60) }
@@ -48,19 +52,19 @@ async function stage (name, { h = 5, gap = 4, blocks = true }) {
   await cmd(`/tp NeuroDown ${X + 0.5} ${Y + h} ${Z + 0.5} 0 0`)
   await cmd(`/tp NeuroDown2 ${X + 0.5} ${Y + h} ${Z + gap + 1.5} 180 0`)
   await sleep(1500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let firstHit = null
-  const watch = setInterval(async () => {
+  const watch = gameClock.setInterval(async () => {
     const [sa, sb] = await Promise.all([A.call('status').catch(() => null), B.call('status').catch(() => null)])
     const hurt = (s) => s && s.state && s.state.health < 19.5
-    if (!firstHit && (hurt(sa) || hurt(sb))) firstHit = Date.now() - t0
+    if (!firstHit && (hurt(sa) || hurt(sb))) firstHit = gameClock.now() - t0
   }, 300)
   const opts = (t) => ({ target: t, allowPlayer: true, timeoutSeconds: 25, retreatAtHealth: 2 })
   const [ra, rb] = await Promise.all([
     A.call('fight', opts('NeuroDown2')).catch(e => ({ error: e.message })),
     B.call('fight', opts('NeuroDown')).catch(e => ({ error: e.message }))
   ])
-  clearInterval(watch)
+  gameClock.clearInterval(watch)
   const pick = (r) => {
     const d = (r && r.detail) || {}
     const tricks = Object.entries(d.tricks || {}).filter(([k]) => /мост|спрыг|столб|застря/.test(k)).map(([k, v]) => `${k}×${v}`).join(', ')

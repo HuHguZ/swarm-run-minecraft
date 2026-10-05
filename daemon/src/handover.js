@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { goals } = require('mineflayer-pathfinder')
 const { sleep, xyz } = require('./movement')
 const { withTimeout } = require('./build')
@@ -381,7 +382,7 @@ function lyingAround (bot, { name = null, radius = 8, from = null } = {}) {
 // way. One poll would answer «на земле ничего не лежит» about a stack landing
 // at our feet.
 async function waitForDrops (bot, ctl, { name = null, radius = 8, from = null, windowMs = DROP_WINDOW_MS } = {}) {
-  const deadline = Date.now() + windowMs
+  const deadline = gameClock.now() + windowMs
   let seen = []
   for (;;) {
     // Asked without the name filter on purpose: a stack whose item_stack
@@ -391,7 +392,7 @@ async function waitForDrops (bot, ctl, { name = null, radius = 8, from = null, w
     const all = lyingAround(bot, { radius, from })
     seen = name ? all.filter(d => d.item === name) : all
     const named = all.length && all.every(d => d.item)
-    if ((seen.length && named) || ctl.aborted || Date.now() >= deadline) break
+    if ((seen.length && named) || ctl.aborted || gameClock.now() >= deadline) break
     await sleep(POLL_MS)
   }
   return seen
@@ -416,7 +417,7 @@ function dropIds (bot) {
 // needs neither: whatever it ends up being called and however far it flew, a
 // stack that was not there before we let go is ours.
 async function waitForOwnDrop (bot, ctl, known, stood, windowMs = DROP_WINDOW_MS) {
-  const deadline = Date.now() + windowMs
+  const deadline = gameClock.now() + windowMs
   let best = null
   let id = null
   let guessed = false
@@ -451,7 +452,7 @@ async function waitForOwnDrop (bot, ctl, known, stood, windowMs = DROP_WINDOW_MS
       if (settled && cur.item) break
     }
 
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     await sleep(POLL_MS)
   }
 
@@ -479,7 +480,7 @@ function listenCollect (bot, key) {
     const who = collector && (collector.username || collector.name)
     if (who !== key) return
     const it = collected ? droppedItem(collected) : null
-    got.push({ at: Date.now(), id: collected ? collected.id : null, item: it ? it.name : null, count: it ? it.count : null })
+    got.push({ at: gameClock.now(), id: collected ? collected.id : null, item: it ? it.name : null, count: it ? it.count : null })
   }
   bot.on('playerCollect', on)
   return { got, off: () => { try { bot.removeListener('playerCollect', on) } catch {} } }
@@ -558,8 +559,8 @@ async function give (session, ctl, { player, item: ask, count = 1, force = false
   const mcData = session.mcData
   const from = xyz(bot.entity.position)
   const budget = Math.max(15, Math.min(180, Math.round(Number(timeoutSeconds) || 60)))
-  const deadline = Date.now() + budget * 1000
-  const left = () => Math.max(0, deadline - Date.now())
+  const deadline = gameClock.now() + budget * 1000
+  const left = () => Math.max(0, deadline - gameClock.now())
 
   const asked = String(player || '').trim()
   if (!asked) throw new Error('кому отдавать? give нужен player — ник игрока')
@@ -721,7 +722,7 @@ async function give (session, ctl, { player, item: ask, count = 1, force = false
       // The witness has to belong to THIS toss: heard.got keeps every collect
       // this player made since the intent started, and a stack he picked up on
       // the previous attempt must not sign for the current one.
-      const tossedAt = Date.now()
+      const tossedAt = gameClock.now()
       let error = null
       try { await bot.toss(item.type, null, Math.min(want, before)) } catch (err) { error = String(err.message || err) }
       // The bag, not the promise: bot.toss resolves on its own click bookkeeping,
@@ -740,9 +741,9 @@ async function give (session, ctl, { player, item: ask, count = 1, force = false
       const tooClose = !mine || mine.dist <= PICKUP + 0.5
       const back = tooClose ? await stepBack(bot, ctl, ent, Math.min(left(), 8000)) : xyz(bot.entity.position)
 
-      const watchUntil = Date.now() + Math.min(WATCH_MS, left())
+      const watchUntil = gameClock.now() + Math.min(WATCH_MS, left())
       let taken = null
-      while (Date.now() < watchUntil && !ctl.aborted && !taken) {
+      while (gameClock.now() < watchUntil && !ctl.aborted && !taken) {
         taken = heard.got.find(g => g.at >= tossedAt && ((mine && g.id === mine.id) || g.item === item.name)) || null
         if (!taken) await sleep(POLL_MS)
       }
@@ -904,7 +905,7 @@ async function take (session, ctl, { item: ask = null, radius = 8, timeoutSecond
   const mcData = session.mcData
   const from = xyz(bot.entity.position)
   const budget = Math.max(5, Math.min(120, Math.round(Number(timeoutSeconds) || 25)))
-  const deadline = Date.now() + budget * 1000
+  const deadline = gameClock.now() + budget * 1000
   const reach = Math.max(2, Math.min(24, Math.round(Number(radius) || 8)))
 
   const before = countItems(bot)
@@ -980,10 +981,10 @@ async function take (session, ctl, { item: ask = null, radius = 8, timeoutSecond
   for (let round = 0; round < 2; round++) {
     picked += await collectNearbyDrops(bot, ctl, {
       radius: reach,
-      timeoutMs: Math.max(3000, Math.min(20000, deadline - Date.now()))
+      timeoutMs: Math.max(3000, Math.min(20000, deadline - gameClock.now()))
     })
     await sleep(500) // the last stack lands a tick or two after the walk (survival.js:526)
-    if (ctl.aborted || Date.now() > deadline - 2000) break
+    if (ctl.aborted || gameClock.now() > deadline - 2000) break
     if (!wanted || hasWanted()) break
     if (!(await waitForDrops(bot, ctl, { radius: reach, windowMs: 800 })).filter(matches).length) break
   }

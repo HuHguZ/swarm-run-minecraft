@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Путь от «игрок написал» до «мозг это увидел» — целиком, по частям, с часами.
 //
 // Подозрение, ради которого сцена написана: `bus.nextInterrupt()` (events.js:49)
@@ -47,7 +48,7 @@ const mark = () => heard.length
 const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -59,7 +60,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -142,7 +143,7 @@ async function checkBus () {
   // Живой путь не должен сломаться правкой: пришло во время ожидания — будит.
   const d = new EventBus()
   const p = d.nextInterrupt()
-  setTimeout(() => d.emit('chat', { from: 'Igrok', text: 'на ходу' }), 120)
+  gameClock.setTimeout(() => d.emit('chat', { from: 'Igrok', text: 'на ходу' }), 120)
   const live = await Promise.race([p, sleep(800).then(() => 'ЖДЁТ')])
   check('chat во время ожидания будит по-прежнему',
     live !== 'ЖДЁТ' && live.text === 'на ходу', JSON.stringify(live))
@@ -180,8 +181,8 @@ async function checkFormat () {
   // Прерывание: текст приезжает в `by`.
   const one = fmt.render('wait', {
     status: 'interrupted',
-    by: { seq: 7, at: Date.now(), type: 'chat', from: 'Igrok', text: 'ты где?' },
-    events: [{ seq: 8, at: Date.now(), type: 'ate', item: 'bread', food: 18 }],
+    by: { seq: 7, at: gameClock.now(), type: 'chat', from: 'Igrok', text: 'ты где?' },
+    events: [{ seq: 8, at: gameClock.now(), type: 'ate', item: 'bread', food: 18 }],
     state
   }).split('\n')
   console.log(one.map(l => '    | ' + l).join('\n'))
@@ -197,8 +198,8 @@ async function checkFormat () {
     status: 'done',
     detail: null,
     events: [
-      { seq: 3, at: Date.now(), type: 'chat', from: 'Igrok', text: 'открой дверь' },
-      { seq: 4, at: Date.now(), type: 'chat', from: 'Igrok', text: 'это лично', whisper: true }
+      { seq: 3, at: gameClock.now(), type: 'chat', from: 'Igrok', text: 'открой дверь' },
+      { seq: 4, at: gameClock.now(), type: 'chat', from: 'Igrok', text: 'это лично', whisper: true }
     ],
     state
   }).split('\n')
@@ -245,9 +246,9 @@ async function sceneWaitAfter (igrok) {
   await igrok.say('эй, ответь мне')
   await sleep(1500)
 
-  const t = Date.now()
+  const t = gameClock.now()
   const r = await call('wait', { seconds: 30 })
-  const ms = Date.now() - t
+  const ms = gameClock.now() - t
   console.log(`  wait вернулся за ${ms}мс, статус ${r.status}, by=${JSON.stringify(r.by || null)}`)
 
   check('wait не проспал все 30 секунд', ms < 5000, `${ms}мс`)
@@ -265,12 +266,12 @@ async function sceneWaitAfter (igrok) {
 // заменила одну глухоту другой.
 async function sceneWaitBefore (igrok) {
   console.log('\n=== 3. wait(30) уже идёт, сообщение приходит потом ===')
-  const t = Date.now()
+  const t = gameClock.now()
   const p = call('wait', { seconds: 30 })
   await sleep(2500)
   await igrok.say('просыпайся')
   const r = await p
-  const ms = Date.now() - t
+  const ms = gameClock.now() - t
   console.log(`  wait вернулся за ${ms}мс, статус ${r.status}`)
 
   check('wait прервался на сообщении, а не по сроку', ms < 12000 && r.status === 'interrupted',

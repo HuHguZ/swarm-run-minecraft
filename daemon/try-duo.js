@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // 1 против 2 (duo.js, 2026-09-26): NeuroDown защищается, NeuroDown2 и NeuroBuild
 // бьют его вдвоём (одна команда, огонь по своим выключен — иначе взмах мечом
 // задевает напарника, и они начинают драться между собой). Счёт на раунд:
@@ -22,12 +23,15 @@ const WebSocket = require('ws')
 const fs = require('fs')
 const path = require('path')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -37,13 +41,13 @@ function client (url) {
   // Без ответа — не висеть вечно (демон мог зависнуть): предел на вызов.
   const call = (method, params = {}, limitMs = method === 'fight' ? 200000 : 15000) => new Promise((resolve, reject) => {
     const rid = ++id
-    const t = setTimeout(() => { if (pending.delete(rid)) reject(new Error(`${method}: нет ответа ${limitMs} мс`)) }, limitMs)
-    pending.set(rid, { resolve: (v) => { clearTimeout(t); resolve(v) }, reject: (e) => { clearTimeout(t); reject(e) } })
+    const t = gameClock.wall.setTimeout(() => { if (pending.delete(rid)) reject(new Error(`${method}: нет ответа ${limitMs} мс`)) }, limitMs)
+    pending.set(rid, { resolve: (v) => { gameClock.wall.clearTimeout(t); resolve(v) }, reject: (e) => { gameClock.wall.clearTimeout(t); reject(e) } })
     ws.send(JSON.stringify({ id: rid, method, params }))
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 const C = client(process.env.C || 'ws://127.0.0.1:8793')
@@ -143,7 +147,7 @@ async function round (n) {
     for (const who of [NA, NB, NC]) await cmd(`/effect give ${who} minecraft:instant_health 1 10 true`)
   }
   await sleep(1500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const hp = { [NA]: await hpOf(A), [NB]: await hpOf(B), [NC]: await hpOf(C) }
   const lost = { [NA]: 0, [NB]: 0, [NC]: 0 }
   const died = {}
@@ -151,19 +155,19 @@ async function round (n) {
   let aDetail = null
   const cl = { [NA]: A, [NB]: B, [NC]: C }
   // Счёт хп: сумма падений — урон (лечение между опросами не мешает).
-  const watch = setInterval(async () => {
+  const watch = gameClock.setInterval(async () => {
     for (const who of [NA, NB, NC]) {
       if (died[who]) continue
       const p = await probe(cl[who])
       if (!p) continue
-      if (p.dead) { if (hp[who] != null) lost[who] += hp[who]; died[who] = Date.now() - t0; continue }
+      if (p.dead) { if (hp[who] != null) lost[who] += hp[who]; died[who] = gameClock.now() - t0; continue }
       const h = p.h
       if (h == null) continue
       if (hp[who] != null && h < hp[who]) lost[who] += hp[who] - h
       hp[who] = h
-      if (h <= 0 && !died[who]) died[who] = Date.now() - t0
+      if (h <= 0 && !died[who]) died[who] = gameClock.now() - t0
     }
-    if (died[NA] || (died[NB] && died[NC]) || Date.now() - t0 > ROUND_MS) {
+    if (died[NA] || (died[NB] && died[NC]) || gameClock.now() - t0 > ROUND_MS) {
       if (!over.done) { over.done = true; for (const c of [A, B, C]) c.call('stop').catch(() => {}) }
     }
   }, 250)
@@ -172,9 +176,9 @@ async function round (n) {
     while (!over.done) {
       const left = foes.filter(f => !died[f])
       if (!left.length) break
-      const r = await c.call('fight', { target: left[turn++ % left.length], allowPlayer: true, timeoutSeconds: Math.max(5, Math.round((ROUND_MS - (Date.now() - t0)) / 1000)), retreatAtHealth: 2 }).catch(e => ({ status: 'failed', error: e.message }))
+      const r = await c.call('fight', { target: left[turn++ % left.length], allowPlayer: true, timeoutSeconds: Math.max(5, Math.round((ROUND_MS - (gameClock.now() - t0)) / 1000)), retreatAtHealth: 2 }).catch(e => ({ status: 'failed', error: e.message }))
       if (c === A && r && r.detail) aDetail = aDetail ? { ...r.detail, tricks: { ...(aDetail.tricks || {}), ...(r.detail.tricks || {}) } } : r.detail
-      if (diedIn(r) && !died[me]) { if (hp[me] != null) lost[me] += hp[me]; died[me] = Date.now() - t0 }
+      if (diedIn(r) && !died[me]) { if (hp[me] != null) lost[me] += hp[me]; died[me] = gameClock.now() - t0 }
       if (died[NA] || (died[NB] && died[NC])) { if (!over.done) { over.done = true; for (const x of [A, B, C]) x.call('stop').catch(() => {}) } }
       if (over.done) break
       await sleep(r && r.status === 'failed' ? 800 : 200)
@@ -182,12 +186,12 @@ async function round (n) {
   }
   await Promise.all([fightLoop(A, NA, [NB, NC]), fightLoop(B, NB, [NA]), fightLoop(C, NC, [NA])])
   while (!over.done) await sleep(200)
-  clearInterval(watch)
+  gameClock.clearInterval(watch)
   const alive = died[NA] ? died[NA] / 1000 : null
   const kills = [NB, NC].filter(w => died[w] && (!died[NA] || died[w] < died[NA])).length
   const out = {
     round: n,
-    alive: alive == null ? `>${Math.round((Date.now() - t0) / 1000)}` : +alive.toFixed(1),
+    alive: alive == null ? `>${Math.round((gameClock.now() - t0) / 1000)}` : +alive.toFixed(1),
     dealt: Math.round(lost[NB] + lost[NC]),
     taken: Math.round(lost[NA]),
     kills,
@@ -196,7 +200,7 @@ async function round (n) {
   const tr = aDetail && aDetail.tricks ? Object.entries(aDetail.tricks).filter(([k]) => /1 против 2|разворот|паутина|булава|вред|арбалет|лава|добив|зелье/.test(k)).map(([k, v]) => `${k}×${v}`).join(' | ') : ''
   log(`[${LABEL}] ${JSON.stringify(out)} ${tr}`)
   await sleep(2500)
-  return { ...out, aliveN: alive == null ? (Date.now() - t0) / 1000 : alive }
+  return { ...out, aliveN: alive == null ? (gameClock.now() - t0) / 1000 : alive }
 }
 
 ;(async () => {

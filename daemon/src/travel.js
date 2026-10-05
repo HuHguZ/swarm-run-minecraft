@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Дорога к крепости через Ад — как у спидраннеров (mc_stronghold mode=travel,
 // 2026-09-26).
 //
@@ -43,8 +44,8 @@ function clamp (v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 // необработанное исключение.
 function withTimeout (promise, ms, msg) {
   let timer = null
-  return Promise.race([promise, new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error(msg)), ms) })])
-    .finally(() => clearTimeout(timer))
+  return Promise.race([promise, new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error(msg)), ms) })])
+    .finally(() => gameClock.clearTimeout(timer))
 }
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z)
 const log = (what, o) => console.log('[travel]', what, JSON.stringify(o))
@@ -103,7 +104,7 @@ async function takeFrame (session, ctl, { need = FRAME_NEED, deadline }) {
   if (!cells.length) return { ...out, why: 'рамы рядом не вижу' }
   const start0 = countOf(bot, 'obsidian')
   const feet = () => bot.entity.position.floored()
-  for (let guard = 0; guard < 24 && countOf(bot, 'obsidian') < need && !ctl.aborted && Date.now() < deadline; guard++) {
+  for (let guard = 0; guard < 24 && countOf(bot, 'obsidian') < need && !ctl.aborted && gameClock.now() < deadline; guard++) {
     const me = bot.entity.position
     const eye = me.offset(0, 1.62, 0)
     // Не копать то, на чём стоим, и то, что держит нас над лавой.
@@ -186,9 +187,9 @@ async function ensureDoorway (session, ctl) {
 async function travel (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 300, 30, 600) * 1000 - 4000
-  const left = () => Math.max(20, Math.round((deadline - Date.now()) / 1000))
+  const left = () => Math.max(20, Math.round((deadline - gameClock.now()) / 1000))
   const legs = []
   let target = null
   const done = (extra = {}) => {
@@ -199,7 +200,7 @@ async function travel (session, ctl, p = {}) {
       target: target ? { x: target.x, z: target.z, from: target.from } : null,
       away: target && worlds.worldOf(bot) === 'overworld' ? Math.round(flat(me, target)) : undefined,
       legs,
-      seconds: Math.round((Date.now() - t0) / 1000),
+      seconds: Math.round((gameClock.now() - t0) / 1000),
       ...extra
     }
     return out
@@ -218,11 +219,11 @@ async function travel (session, ctl, p = {}) {
   }
   const guarded = []
   const step = async (what, fn) => {
-    const s0 = Date.now()
+    const s0 = gameClock.now()
     let r
     noFrames()
     try { r = await fn() } catch (e) { r = { stopped: e.message } }
-    const rec = { what, s: Math.round((Date.now() - s0) / 1000) }
+    const rec = { what, s: Math.round((gameClock.now() - s0) / 1000) }
     for (const k of ['went', 'built', 'lit', 'took', 'tried', 'errors', 'obsidian', 'stopped', 'why', 'offBlocks', 'p', 'dist']) if (r && r[k] !== undefined) rec[k] = r[k]
     legs.push(rec)
     log(what, rec)
@@ -255,7 +256,7 @@ async function travel (session, ctl, p = {}) {
   }
 
   // --- 2. Шаги по мирам
-  for (let i = 0; i < 8 && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; i < 8 && !ctl.aborted && gameClock.now() < deadline; i++) {
     const world = worlds.worldOf(bot)
     if (world === 'overworld') {
       const cost = routeCost(bot, session, target)

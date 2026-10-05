@@ -1,8 +1,9 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const sleep = (ms) => gameClock.sleep(ms)
 // Floor, not round. An entity standing at x=121.5 is in block 121, but rounding
 // reports 122 — and the brain then hands 122 to /setblock or to its own
 // coordinate arithmetic and acts on the block next door. This is what the game
@@ -61,7 +62,7 @@ function stuckGuard (bot, ctl, stagnantLimitMs = 8000) {
   let stagnant = 0
   let timer = null
   const promise = new Promise((_resolve, reject) => {
-    timer = setInterval(() => {
+    timer = gameClock.setInterval(() => {
       const now = bot.entity.position
       if (now.distanceTo(last) > 0.6) {
         last = now.clone()
@@ -70,7 +71,7 @@ function stuckGuard (bot, ctl, stagnantLimitMs = 8000) {
         stagnant += 1500
       }
       if (stagnant >= stagnantLimitMs) {
-        clearInterval(timer)
+        gameClock.clearInterval(timer)
         const diag = describeStall(bot)
         console.log('[stuck]', JSON.stringify(diag))
         try { bot.pathfinder.setGoal(null) } catch {}
@@ -78,8 +79,8 @@ function stuckGuard (bot, ctl, stagnantLimitMs = 8000) {
       }
     }, 1500)
   })
-  ctl.onAbort.push(() => clearInterval(timer))
-  return { promise, stop: () => clearInterval(timer) }
+  ctl.onAbort.push(() => gameClock.clearInterval(timer))
+  return { promise, stop: () => gameClock.clearInterval(timer) }
 }
 
 // mineflayer-pathfinder is a 2023-era library driving a 2026 game; it
@@ -138,10 +139,10 @@ async function centerOnFloor (bot, ctl, timeoutMs = 1000) {
   const target = cell.offset(0.5, 0, 0.5)
   const away = () => Math.hypot(bot.entity.position.x - target.x, bot.entity.position.z - target.z)
   if (away() <= 0.08) return true
-  const end = Date.now() + timeoutMs
+  const end = gameClock.now() + timeoutMs
   try {
     bot.clearControlStates()
-    while (!(ctl && ctl.aborted) && Date.now() < end && away() > 0.08) {
+    while (!(ctl && ctl.aborted) && gameClock.now() < end && away() > 0.08) {
       await bot.lookAt(target.offset(0, 1.62, 0), true)
       bot.setControlState('forward', true)
       await sleep(50)
@@ -245,11 +246,11 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000 } = {}) {
   if (!inWater(bot)) return { ok: true, wasInWater: false }
 
   try { bot.pathfinder.setGoal(null) } catch {}
-  const deadline = Date.now() + timeoutMs
+  const deadline = gameClock.now() + timeoutMs
   let target = null
 
   try {
-    while (Date.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
+    while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
       const route = findSwimRoute(bot)
       target = route?.target || null
       if (!route) break
@@ -282,7 +283,7 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
   let lastError = null
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (ctl.aborted) return { ok: false, error: 'прервано' }
-    if (deadline && Date.now() >= deadline) return { ok: false, error: 'время вышло', outOfTime: true }
+    if (deadline && gameClock.now() >= deadline) return { ok: false, error: 'время вышло', outOfTime: true }
 
     // Never start a walk from inside a river — pathfinder will just thrash.
     if (inWater(bot)) {
@@ -300,9 +301,9 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
     // still "moving".
     let timer = null
     if (deadline) {
-      const left = Math.max(1000, deadline - Date.now())
+      const left = Math.max(1000, deadline - gameClock.now())
       racers.push(new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error('время вышло'), { outOfTime: true })), left)
+        timer = gameClock.setTimeout(() => reject(Object.assign(new Error('время вышло'), { outOfTime: true })), left)
       }))
     }
 
@@ -329,7 +330,7 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
       await unstick(bot)
     } finally {
       guard.stop()
-      if (timer) clearTimeout(timer)
+      if (timer) gameClock.clearTimeout(timer)
     }
   }
   return { ok: false, error: lastError ? lastError.message : 'не дошёл' }
@@ -411,7 +412,7 @@ function gotoGoal (bot, goal, opts = {}) {
       bot.removeListener('path_stop', onStop)
       bot.removeListener('physicsTick', onTick)
       bot.removeListener('path_reset', onReset)
-      setTimeout(() => (err ? reject(err) : resolve()), 0)
+      gameClock.setTimeout(() => (err ? reject(err) : resolve()), 0)
     }
     const onReached = () => { if (un && un.busy()) return; cleanup() }
     // A* не уложился в 5 с ('timeout'), но лучший путь есть — pathfinder идёт по нему (index.js: path = лучший), а в

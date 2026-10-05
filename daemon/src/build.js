@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { sleep, xyz, centerOnFloor } = require('./movement')
 const { itemNamed, itemMatching, equipBestTool, missingHarvestTool } = require('./items')
@@ -50,12 +51,12 @@ function pickFiller (bot, { steady = false } = {}) {
 // A promise that cannot hang the intent. bot.placeBlock waits for a block
 // update the server does not always send on 1.21.11 — the same class of bug
 // that makes crafting tables hang for 20s.
-function withTimeout (p, ms, message = 'ответа от сервера нет') {
+function withTimeout (p, ms, message = 'ответа от сервера нет', clock = gameClock) {
   let timer = null
   const guard = new Promise((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms)
+    timer = clock.setTimeout(() => reject(new Error(message)), ms)
   })
-  return Promise.race([p, guard]).finally(() => clearTimeout(timer))
+  return Promise.race([p, guard]).finally(() => clock.clearTimeout(timer))
 }
 
 // The two blocks our own body occupies. Placing into them is rejected by the
@@ -68,8 +69,8 @@ function isOurOwnSpace (bot, pos) {
 // Poll for a block to actually exist. Used where we fire a placement packet
 // and cannot afford to wait on mineflayer's own block-update round trip.
 async function waitForBlock (bot, pos, ms = 900) {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + ms
+  while (gameClock.now() < deadline) {
     const b = bot.blockAt(pos)
     if (b && b.boundingBox !== 'empty') return true
     await sleep(50)

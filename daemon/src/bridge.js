@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Стояние на столбах (интеграционная арена 2026-09-26): оба бота на своих
 // столбах в 4–5 блоках над полом, в 4.8 друг от друга, и минутами никто
 // никого не бьёт: рефлекс края (edges.guard) не пускает шагнуть с обрыва
@@ -16,7 +17,7 @@ const { placeBlockAt, pickFiller } = require('./build')
 
 const EYE = 1.62
 const HIT_REACH = 2.9
-const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
 
 function reachFrom (eye, e) {
   const hw = (e.width || 0.6) / 2
@@ -53,9 +54,9 @@ async function stepOnto (bot, ctl, cell) {
   const tgt = cell.offset(0.5, 1, 0.5)
   await bot.lookAt(tgt.offset(0, 0.2, 0), true).catch(() => {})
   bot.setControlState('forward', true)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 900 && !ctl.aborted) {
+    while (gameClock.now() - t0 < 900 && !ctl.aborted) {
       const p = bot.entity.position
       if (Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z && Math.hypot(p.x - tgt.x, p.z - tgt.z) < 0.35) break
       await sleep(50)
@@ -65,13 +66,13 @@ async function stepOnto (bot, ctl, cell) {
 
 // Мост к нему. Вернёт { ok, placed, why }.
 async function build (bot, ctl, foe, { maxBlocks = 6, timeoutMs = 8000 } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let placed = 0
   if (!pickFiller(bot)) return { ok: false, placed, why: 'нечем мостить' }
   bot.setControlState('sprint', false)
   bot.setControlState('sneak', true)
   try {
-    while (!ctl.aborted && Date.now() - t0 < timeoutMs && placed <= maxBlocks) {
+    while (!ctl.aborted && gameClock.now() - t0 < timeoutMs && placed <= maxBlocks) {
       if (!foe.isValid) return { ok: false, placed, why: 'он пропал' }
       const eye = bot.entity.position.offset(0, EYE, 0)
       if (reachFrom(eye, foe) <= HIT_REACH) return { ok: true, placed, why: 'достаю рукой' }
@@ -119,9 +120,9 @@ async function dropDown (bot, ctl, foe, { edgeGuard, minHpAfter = 8 } = {}) {
   bot.setControlState('sneak', false)
   bot.setControlState('forward', true)
   const y0 = me.y
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 900 && bot.entity.position.y > y0 - 0.6 && !ctl.aborted) await sleep(50)
+    while (gameClock.now() - t0 < 900 && bot.entity.position.y > y0 - 0.6 && !ctl.aborted) await sleep(50)
   } finally { bot.setControlState('forward', false) }
   return { ok: bot.entity.position.y < y0 - 0.5, dmg: best.dmg, drop: Math.round(best.drop * 10) / 10 }
 }

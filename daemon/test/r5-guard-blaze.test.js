@@ -3,6 +3,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 const path = require('node:path')
 const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
@@ -20,7 +21,7 @@ function fixture ({ distance = 1.5, visible = true } = {}) {
   const s = { bot: b, current: { name: 'ne_route', ctl: { aborted: false, onAbort: [] } } }
   const context = { module: { exports: {} }, console: { log () {} }, process, setTimeout, clearTimeout,
     require: n => n === 'vec3' ? { Vec3 } : n === './movement' ? { sleep: ms => new Promise(r => setTimeout(r, Math.min(ms,1))) } : n === './worlds' ? { worldOf: () => 'the_nether' } : n === './reflex-lock' ? R : n === './perception' ? { eyePos: () => b.entity.position, raySees: () => visible } : n === './pick' ? { canHit: () => visible && distance < 3 } : n === './sealed' ? { fillerCount: () => 0 } : {} }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/ne-guard.js'),'utf8'),context)
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/ne-guard.js'),'utf8'),withClockFixture(context))
   const G = context.module.exports; G.attach(s)
   return { b,s,G,calls,hit: () => b._client.emit('damage_event',{ entityId: 1, sourceCauseId: 3, sourceDirectId: 3 }) }
 }

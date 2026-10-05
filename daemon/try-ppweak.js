@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Стрелы не берут (2026-09-26: на живой арене с чарами «Защита от снарядов»
 // на броне — перестрелка на 7 минут вничью). NeuroDown в алмазе с «Защитой от
 // снарядов IV» на всех кусках, с мечом; NeuroDown2 с арбалетом (быстрая
@@ -7,12 +8,15 @@
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-ppweak.js
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -26,7 +30,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }
@@ -98,6 +102,6 @@ async function round (k) {
     process.exitCode = 1
   } finally {
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

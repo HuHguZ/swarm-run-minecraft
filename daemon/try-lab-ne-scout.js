@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория куска «найти крепость / бастион в Аду» (поток nether-end) на новом мире: портал у спавна (RPC portal),
 // вход в Ад, дальше — вызовы разведки, как кампания: fortress {timeoutSeconds: 300} до TRIES раз (этап nether), потом
 // fortress {mode: 'bastion'} (поиск бастиона этапа bastion). Ничего не трогаем, кроме разведки: меряем время до
@@ -98,21 +99,21 @@ async function main () {
   const entry = { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) }
   const truth = { fortress: locateNear('fortress', entry), bastion: locateNear('bastion_remnant', entry) }
   const size = logSize()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const marks = {}
   const calls = []
   const mark = async () => {
     const pl = await places()
-    const m = Math.round((Date.now() - t0) / 6000) / 10
+    const m = Math.round((gameClock.now() - t0) / 6000) / 10
     if (pl['крепость (ад)'] && marks.fortress == null) { marks.fortress = m; marks.fortressAt = { x: pl['крепость (ад)'].x, z: pl['крепость (ад)'].z } }
     if (pl['бастион (ад)'] && marks.bastion == null) { marks.bastion = m; marks.bastionAt = { x: pl['бастион (ад)'].x, z: pl['бастион (ад)'].z } }
   }
   const run = async (params) => {
-    const t = Date.now()
+    const t = gameClock.now()
     const r = await call('fortress', params).catch(e => ({ error: e.message }))
     const d = r.detail || {}
     const st = await status()
-    calls.push({ mode: params.mode || 'auto', s: Math.round((Date.now() - t) / 1000), found: !!d.found, walked: d.walked, looks: d.looks, stopped: String(d.stopped || r.error || '').slice(0, 100), at: st.pos ? { x: Math.round(st.pos.x), y: Math.round(st.pos.y), z: Math.round(st.pos.z) } : null })
+    calls.push({ mode: params.mode || 'auto', s: Math.round((gameClock.now() - t) / 1000), found: !!d.found, walked: d.walked, looks: d.looks, stopped: String(d.stopped || r.error || '').slice(0, 100), at: st.pos ? { x: Math.round(st.pos.x), y: Math.round(st.pos.y), z: Math.round(st.pos.z) } : null })
     await mark()
     if ((st.health ?? 20) < 10) await call('eat', {}).catch(() => null)
   }
@@ -128,7 +129,7 @@ async function main () {
     want: WANT,
     high: HIGH,
     ok: (WANT === 'bastion' || marks.fortress != null) && (WANT === 'fortress' || marks.bastion != null),
-    minutes: Math.round((Date.now() - t0) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - t0) / 6000) / 10,
     marks,
     entry,
     truth,
@@ -139,7 +140,7 @@ async function main () {
   }
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-scout окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-scout окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

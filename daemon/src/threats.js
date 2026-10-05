@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Что летит в бота и куда от этого деваться. Общий для PvP и для побега от
 // мобов: стрела скелета и стрела человека — одна и та же сущность, и уклоняться
 // от неё надо одинаково.
@@ -86,7 +87,7 @@ const GRAVITY = {
 // Всё, что летит в нас и попадёт в ближайшие horizonTicks. Самые срочные первыми.
 function incoming (bot, { horizonTicks = 24, hitRadius = 0.9 } = {}) {
   if (!bot || !bot.entity) return []
-  const now = Date.now()
+  const now = gameClock.now()
   const out = []
   const me = bot.entity.position
   for (const e of Object.values(bot.entities)) {

@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Паутина под ногами посреди подъёма столбом (живая арена 2026-09-26, раунд 8:
 // NeuroDown2 лез столбом к противнику на столбе, ему кинули паутину и лаву —
 // он ковырял паутину булыжником в руке и сгорел: «не поднялся: … мешает cobweb»).
@@ -9,12 +11,15 @@
 //   A=ws://127.0.0.1:8781 B=ws://127.0.0.1:8782 node try-webclimb.js [паутина,лава]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -28,7 +33,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8781')
 const B = client(process.env.B || 'ws://127.0.0.1:8782')
 async function cmd (text) { await A.call('say', { text }); await sleep(60) }
@@ -37,8 +42,7 @@ async function cmd (text) { await A.call('say', { text }); await sleep(60) }
 // точное время, когда паутина снята (сервер 25566, Probe1 — оператор).
 let OBS = null
 async function observer () {
-  const mineflayer = require('mineflayer')
-  const ob = mineflayer.createBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25566), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25566), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { ob.once('spawn', resolve); ob.once('error', reject); ob.once('kicked', reject) })
   await sleep(4000)
   ob.chat('/gamemode spectator'); await sleep(300)
@@ -72,7 +76,7 @@ async function stageMelee (name, { head = false, water = true, seconds = 12 }) {
   if (head) await cmd(`/setblock ${X} ${Y + 1} ${Z} minecraft:cobweb`)
   await sleep(300)
   const hp0 = ((await B.call('status')).state || {}).health
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const fa = A.call('fight', { target: 'NeuroDown2', allowPlayer: true, timeoutSeconds: seconds, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
   let done = null
   const fb = B.call('fight', { target: 'NeuroDown', allowPlayer: true, timeoutSeconds: seconds, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message })).then(r => { done = r; return r })
@@ -83,11 +87,11 @@ async function stageMelee (name, { head = false, water = true, seconds = 12 }) {
   let hpAtGone = null
   const { Vec3 } = require('vec3')
   const cells = head ? [new Vec3(X, Y, Z), new Vec3(X, Y + 1, Z)] : [new Vec3(X, Y, Z)]
-  const obsIv = OBS ? setInterval(() => {
+  const obsIv = OBS ? gameClock.setInterval(() => {
     if (gone != null) return
-    if (!cells.some(c => (OBS.blockAt(c) || {}).name === 'cobweb')) { gone = Date.now() - t0; hpAtGone = hpNow }
+    if (!cells.some(c => (OBS.blockAt(c) || {}).name === 'cobweb')) { gone = gameClock.now() - t0; hpAtGone = hpNow }
   }, 50) : null
-  while (!done && Date.now() - t0 < (seconds + 2) * 1000) {
+  while (!done && gameClock.now() - t0 < (seconds + 2) * 1000) {
     const st = await B.call('status').catch(() => null)
     const s = st && st.state
     if (s && s.health != null) hpNow = s.health
@@ -95,12 +99,12 @@ async function stageMelee (name, { head = false, water = true, seconds = 12 }) {
       held[s.held || 'рука'] = (held[s.held || 'рука'] || 0) + 1
       // Вышел из паутины: клетки тела не те, где паутина стояла, или
       // поднялся/сместился — проверяем по приёмам в конце, здесь — по сдвигу.
-      if (Math.hypot(s.pos.x - (X + 0.5), s.pos.z - (Z + 0.5)) > 0.9) outAt = Date.now() - t0
+      if (Math.hypot(s.pos.x - (X + 0.5), s.pos.z - (Z + 0.5)) > 0.9) outAt = gameClock.now() - t0
     }
     await sleep(100)
   }
   const [ra, rb] = await Promise.all([fa, fb])
-  if (obsIv) clearInterval(obsIv)
+  if (obsIv) gameClock.clearInterval(obsIv)
   await A.call('stop').catch(() => {}); await B.call('stop').catch(() => {})
   if (OBS) console.log(`   паутина снята через ${gone != null ? (gone / 1000).toFixed(2) + ' с' : '— (не снята)'}; хп к этому моменту ${hpAtGone ?? '?'} из ${hp0}`)
   const d = (rb && rb.detail) || {}
@@ -129,7 +133,7 @@ async function stage (name, { lava = false, water = false, seconds = 25 }) {
   for (const w of ['NeuroDown', 'NeuroDown2']) { await cmd(`/effect give ${w} minecraft:instant_health 1 10 true`); await cmd(`/effect give ${w} minecraft:saturation 1 20 true`) }
   await sleep(1800)
   const hp0 = ((await B.call('status')).state || {}).health
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let fight = B.call('fight', { target: 'NeuroDown', allowPlayer: true, timeoutSeconds: seconds, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
   let done = null
   fight = fight.then(r => { done = r; return r })
@@ -137,20 +141,20 @@ async function stage (name, { lava = false, water = false, seconds = 25 }) {
   let web = null
   let heldInWeb = {}
   let lastY = null
-  while (!done && Date.now() - t0 < (seconds + 3) * 1000) {
+  while (!done && gameClock.now() - t0 < (seconds + 3) * 1000) {
     const st = await B.call('status').catch(() => null)
     const s = st && st.state
     if (s && s.pos) {
       lastY = s.pos.y
-      const t = ((Date.now() - t0) / 1000).toFixed(1)
+      const t = ((gameClock.now() - t0) / 1000).toFixed(1)
       if (!web && s.pos.y >= Y + 2) {
         const f = { x: Math.floor(s.pos.x), y: Math.floor(s.pos.y), z: Math.floor(s.pos.z) }
-        web = { ...f, at: Date.now() }
+        web = { ...f, at: gameClock.now() }
         await cmd(`/setblock ${f.x} ${f.y} ${f.z} minecraft:cobweb`)
         await cmd(`/setblock ${f.x} ${f.y + 1} ${f.z} minecraft:cobweb`)
         if (lava) await cmd(`/setblock ${f.x + 1} ${f.y} ${f.z} minecraft:lava`)
         trace.push(`${t}с паутина в ${f.x},${f.y},${f.z}${lava ? ' + лава рядом' : ''}`)
-      } else if (web && Date.now() - web.at < 12000) {
+      } else if (web && gameClock.now() - web.at < 12000) {
         heldInWeb[s.held || 'рука'] = (heldInWeb[s.held || 'рука'] || 0) + 1
         if (trace.length < 60) trace.push(`${t}с y=${s.pos.y.toFixed(2)} в руке ${s.held || '-'} хп ${Math.round(s.health)}`)
       }
@@ -197,6 +201,6 @@ async function stage (name, { lava = false, water = false, seconds = 25 }) {
   } finally {
     if (OBS) try { OBS.quit() } catch {}
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

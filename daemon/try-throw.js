@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Тир бросков: жемчуг и оседающие зелья в точки на полу — стоя, в стрейфе,
 // на бегу, пятясь и в прыжке. Правда из игры: жемчуг переносит бота туда, где
 // упал, оседающее зелье оставляет облако там, где разбилось. Сравнение
@@ -15,13 +16,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(300) }
 
 const X = -700; const Y = 100; const Z = -700

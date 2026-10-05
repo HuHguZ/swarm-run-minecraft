@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Коробка в дуэли (2026-09-26, пользователь: «крепость бессмысленна — он её
 // всё равно пробивает; надо, чтобы сопернику пришлось ломать киркой»).
 // NeuroDown побит (10 хп), с обсидианом, булыжником и яблоками; NeuroDown2 с
@@ -8,12 +10,15 @@
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-duelbox.js
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -27,7 +32,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }
@@ -36,8 +41,7 @@ const SECONDS = Number(process.env.SECONDS || 45)
 const DIST = Number(process.env.DIST || 18)
 
 async function observer () {
-  const mineflayer = require('mineflayer')
-  const ob = mineflayer.createBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { ob.once('spawn', resolve); ob.once('error', reject); ob.once('kicked', reject) })
   await sleep(4000)
   ob.chat('/gamemode spectator'); await sleep(300)
@@ -74,7 +78,7 @@ async function round (ob, k) {
   await sleep(1200)
   await cmd(`/damage NeuroDown ${Number(process.env.DMG || 10)} minecraft:generic`)
   await sleep(600)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let hp = ((await A.call('status')).state || {}).health ?? 20
   const ev = { built: 0, mats: null, breached: 0, hits: [], hpMax: hp, hpMin: hp }
   let polling = true
@@ -85,12 +89,12 @@ async function round (ob, k) {
       if (e) {
         const bx = boxAround(ob, e.position.floored())
         sealed = bx.sealed
-        if (sealed && !ev.built) { ev.built = Date.now() - t0; ev.mats = bx.mats }
-        if (ev.built && !sealed && !ev.breached) ev.breached = Date.now() - t0
+        if (sealed && !ev.built) { ev.built = gameClock.now() - t0; ev.mats = bx.mats }
+        if (ev.built && !sealed && !ev.breached) ev.breached = gameClock.now() - t0
       }
       try {
         const h = ((await A.call('status')).state || {}).health
-        if (h != null && h < hp - 0.4) ev.hits.push({ t: Date.now() - t0, dmg: +(hp - h).toFixed(1), sealed })
+        if (h != null && h < hp - 0.4) ev.hits.push({ t: gameClock.now() - t0, dmg: +(hp - h).toFixed(1), sealed })
         if (h != null) { hp = h; ev.hpMax = Math.max(ev.hpMax, h); ev.hpMin = Math.min(ev.hpMin, h) }
       } catch {}
       await sleep(100)
@@ -135,6 +139,6 @@ async function round (ob, k) {
   } finally {
     if (ob) try { ob.quit() } catch {}
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

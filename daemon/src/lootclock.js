@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Часы кучи после смерти. Предмет стареет только в своём tick()
 // (ItemEntity.age++, исчезает на despawnRate = 6000 тиков), а тикают лишь
 // сущности в чанках в пределах дистанции симуляции от игрока
@@ -17,9 +18,9 @@ function chunkDist (a, b) {
 }
 
 function install (session) {
-  if (session._lootclock) return
-  let lastSave = Date.now()
-  session._lootclock = setInterval(() => {
+  if (session._lootclock && !session._lootclock.clock?.disposed) return
+  let lastSave = gameClock.wall.now()
+  session._lootclock = gameClock.setInterval(() => {
     const bot = session.bot
     const deaths = session.journal && session.journal.state && session.journal.state.deaths
     if (!bot || !bot.entity || !Array.isArray(deaths)) return
@@ -35,8 +36,8 @@ function install (session) {
       const atSpawn = (d.dimension || 'overworld') === 'overworld' && bot.spawnPoint && chunkDist(bot.spawnPoint, d.pos) <= SPAWN_CHUNKS
       if (near || atSpawn) { d.ticking++; changed = true }
     }
-    if (changed && Date.now() - lastSave > 20000) {
-      lastSave = Date.now()
+    if (changed && gameClock.wall.now() - lastSave > 20000) {
+      lastSave = gameClock.wall.now()
       try { session.journal.patch(() => {}) } catch {}
     }
   }, 1000)

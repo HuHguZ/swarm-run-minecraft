@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Чары 1.21.11 глазами тела (арена с чарами, 2026-09-26): видит ли бот чары
 // выданного предмета и копает ли зачарованной киркой быстрее — по своей оценке
 // и на сервере.
@@ -22,12 +23,15 @@
 // булыжник 0.4 с и 0.1 с; паутина мечом 0.4 с, рукой 20 с.
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -44,7 +48,7 @@ function client (url) {
 
 const A = client(process.env.ND_WS || 'ws://127.0.0.1:8785')
 const B = client(process.env.ND_WS2 || 'ws://127.0.0.1:8786')
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const cmd = async (text) => { await A.call('say', { text }); await sleep(250) }
 // Место проверки — в стороне от арены (200 100 200, R 15).
 const X = Number(process.env.T_X || 260); const Y = Number(process.env.T_Y || 100); const Z = Number(process.env.T_Z || 200)

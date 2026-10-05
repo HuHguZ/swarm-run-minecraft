@@ -14,16 +14,20 @@
 //   node farm/farm.js up 8 --seeds 1,2,3        сиды по кругу
 //   node farm/farm.js up 8 --pool [файл]         хорошие сиды: farm/seeds/good-v2.json (с лавой) или v1, без повтора
 //   node farm/farm.js up 4 --from 9             слоты 9..12
+//   node farm/farm.js up 4 --tick-rate 100      целевые 100 тиков/с; TICK_RATE=100 — то же (умолчание 20)
 //   node farm/farm.js up 8 --fresh              стереть миры и память слотов (чистый старт)
 //   node farm/farm.js up 8 --world server-twin  миры — копия чужой папки (тот сервер должен
 //                                               стоять или быть в save-off; сид — из level.dat)
 //   node farm/farm.js status
+//   node farm/farm.js tick 1-4 rate 100         RCON: скорость серверов (query / freeze / unfreeze / step 40)
+//   node farm/farm.js tick --all query         состояние тиков всех поднятых слотов
 //   node farm/farm.js daemons 1-10              перезапустить только тела, миры не трогать
 //   node farm/farm.js rcon all "time set day"   команда на все поднятые слоты (или 3, 1-4)
 //   node farm/farm.js run try-lab-pearls.js --slots 1-8 --tag pearls-a STYLE=duel -- 2
 //        сцена на каждом слоте (cwd daemon/), env: ND_WS, MC_USERNAME, MC_PORT,
 //        ND_SERVER_LOG, LAB_OUT=farm/results/<tag>/slot-<i>.jsonl, плюс KEY=VAL;
 //        аргументы после «--» — сцене. Ждёт всех, печатает сводку (report).
+//        --tick-rate / TICK_RATE — скорость перед сценой; бюджеты MINUTES — игровые минуты.
 //   node farm/farm.js report <tag>              сводка по итогам (ok, числа: среднее/мин/макс)
 //   node farm/farm.js kill-runs <tag>           оборвать сцены партии
 //   node farm/farm.js down [слоты]              штатно: RCON stop (мир сохраняется), демоны — стоп
@@ -36,6 +40,7 @@ const path = require('path')
 const net = require('net')
 const crypto = require('crypto')
 const { spawn, execFileSync } = require('child_process')
+const { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter } = require('./tick-control')
 
 const ROOT = path.resolve(__dirname, '..')
 const FARM = __dirname
@@ -154,6 +159,28 @@ function cmdLine (pid) {
 function rmrf (p) { fs.rmSync(p, { recursive: true, force: true }) }
 function copyDir (src, dst) { fs.cpSync(src, dst, { recursive: true, force: true }) }
 
+function preparePacketLimiter (s) {
+  const file = path.join(s.dir, 'config', 'paper-global.yml')
+  const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+  const after = disablePacketLimiter(before)
+  if (after === before) return false
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, after)
+  return { file, before }
+}
+async function reloadPaper (s, changed) {
+  try { checkedReply('paper reload', await slotRcon(s, 'paper reload')) }
+  catch (error) {
+    if (changed?.file) fs.writeFileSync(changed.file, changed.before)
+    throw error
+  }
+  log(`слот ${s.i}: packet-limiter отключён, Paper config обновлён`)
+}
+async function ensurePacketLimiter (s) {
+  const changed = preparePacketLimiter(s)
+  if (changed) await reloadPaper(s, changed)
+}
+
 function props (dir) {
   const f = path.join(dir, 'server.properties')
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''
@@ -257,11 +284,13 @@ function prepareSlot (s, { seed, fresh, world }) {
     'simulation-distance': 8,
     'spawn-protection': 0,
     'online-mode': 'false',
+    'allow-flight': 'true',
     'pause-when-empty-seconds': -1
   }
   for (const [k, v] of Object.entries(set)) p = propSet(p, k, v)
   fs.writeFileSync(path.join(s.dir, 'server.properties'), p)
   fs.writeFileSync(path.join(s.dir, 'ops.json'), JSON.stringify([{ uuid: offlineUuid(s.name), name: s.name, level: 4, bypassesPlayerLimit: false }], null, 2))
+  return preparePacketLimiter(s)
 }
 
 async function startServer (s) {
@@ -273,17 +302,18 @@ async function startServer (s) {
   log(`слот ${s.i}: java pid ${p.pid}, жду порт ${s.mc}`)
   return p.pid
 }
-async function startDaemon (s) {
+async function startDaemon (s, rate = readState().slots?.[s.i]?.tickRate ?? tickRate({}, process.env, LIMITS.tickRate)) {
   if (await portOpen(s.ws)) return log(`слот ${s.i}: демон уже слушает ${s.ws}`)
   const out = fs.openSync(path.join(FARM, `daemon-${s.i}.out.log`), 'w')
   const err = fs.openSync(path.join(FARM, `daemon-${s.i}.err.log`), 'w')
-  const env = { ...process.env, ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem }
+  const env = runEnv(process.env, { ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem }, rate)
   const p = spawn(process.execPath, ['src/index.js'], { cwd: DAEMON, env, detached: true, stdio: ['ignore', out, err], windowsHide: true })
   p.unref()
   return p.pid
 }
 
 async function cmdUp (args) {
+  const rate = tickRate(args, process.env, LIMITS.tickRate)
   const n = Number(args._[0] || 4)
   const from = Number(args.from || 1)
   const ids = []; for (let i = from; i < from + n && i <= MAX_SLOTS; i++) ids.push(i)
@@ -307,12 +337,13 @@ async function cmdUp (args) {
     seeds = pick.slice(0, ids.length)
     log(`пул ${path.basename(pf)}: ${all.length} сидов, взяты ${seeds.join(', ')}`)
   }
-  const mine = {}
+  const mine = {}; const reloadPackets = new Map()
   for (const [k, i] of ids.entries()) {
     const s = slot(i)
     const seed = args.random ? randomSeed() : seeds ? seeds[k % seeds.length] : (args.seed || TWIN_SEED)
-    prepareSlot(s, { seed, fresh: !!args.fresh, world: args.world || null })
-    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null }
+    const changed = prepareSlot(s, { seed, fresh: !!args.fresh, world: args.world || null })
+    if (changed && up.includes(s.mc)) reloadPackets.set(i, changed)
+    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null, tickRate: rate }
   }
   // Чтение и запись slots.json — подряд, после долгой подготовки миров: параллельные up/down других слотов
   // (два потока серий) иначе затирали свои записи (rt-R6 03.10).
@@ -324,7 +355,12 @@ async function cmdUp (args) {
     const s = slot(i)
     const ok = await waitPort(s.mc, true, 300000)
     if (!ok) { log(`слот ${s.i}: сервер НЕ поднялся — смотри ${path.join(s.dir, 'console.out.log')}`); continue }
-    await startDaemon(s)
+    if (!(await waitPort(s.rcon, true, 30000))) throw new Error(`слот ${s.i}: RCON ${s.rcon} не поднялся`)
+    if (reloadPackets.has(i)) await reloadPaper(s, reloadPackets.get(i))
+    // level.dat сохраняет tick rate и freeze: явное 20 тоже надо применить.
+    const ticks = await configureTick(command => slotRcon(s, command), rate)
+    log(`слот ${s.i}: запрос ${rate} тиков/с — ${ticks.replace(/\s+/g, ' ').trim()}`)
+    await startDaemon(s, rate)
     const dOk = await waitPort(s.ws, true, 30000)
     log(`слот ${s.i}: сервер ${s.mc} ✓, демон ${s.ws} ${dOk ? '✓' : 'НЕ поднялся'} (${s.name}, сид ${st.slots[i].seed})`)
   }
@@ -390,9 +426,33 @@ async function cmdStatus () {
   for (const i of ids) {
     const s = slot(i)
     const srv = await portOpen(s.mc); const dmn = await portOpen(s.ws)
-    let online = ''
+    let online = ''; let ticks = ''
     if (srv) { try { online = (await slotRcon(s, 'list')).replace(/\s+/g, ' ').trim() } catch {} }
-    console.log(`слот ${i}: сервер ${s.mc} ${srv ? 'up' : 'down'}, демон ${s.ws} ${dmn ? 'up' : 'down'}, сид ${st.slots[i].seed}${st.slots[i].world ? ' (мир ' + st.slots[i].world + ')' : ''} ${online}`)
+    if (srv) { try { ticks = (await slotRcon(s, 'tick query')).replace(/\s+/g, ' ').trim() } catch (e) { ticks = `tick query: ${e.message}` } }
+    console.log(`слот ${i}: сервер ${s.mc} ${srv ? 'up' : 'down'}, демон ${s.ws} ${dmn ? 'up' : 'down'}, сид ${st.slots[i].seed}${st.slots[i].world ? ' (мир ' + st.slots[i].world + ')' : ''}, tick-rate запрос ${st.slots[i].tickRate ?? 'не записан'} ${online}${ticks ? ' | ' + ticks : ''}`)
+  }
+}
+
+function tickSelection (args) {
+  const flagged = typeof args.slots === 'string' || args.all
+  const spec = flagged ? args.slots : args._[0]
+  if (!spec && !args.all) throw new Error('tick: укажи слоты (tick 3-5 query или --slots 3-5); все разом — tick --all query')
+  const action = tickAction(flagged ? args._ : args._.slice(1))
+  return { spec, action }
+}
+
+async function cmdTick (args) {
+  const { spec, action } = tickSelection(args)
+  const ids = parseSlots(spec, upSlots())
+  if (!ids.length) throw new Error('tick: нет выбранных слотов')
+  for (const i of ids) {
+    if (action.command !== 'tick query') await ensurePacketLimiter(slot(i))
+    const response = checkedReply(action.command, await slotRcon(slot(i), action.command))
+    if (action.rate !== undefined) {
+      const st = readState()
+      if (st.slots?.[i]) { st.slots[i].tickRate = action.rate; writeState(st) }
+    }
+    console.log(`слот ${i}: ${response}`)
   }
 }
 
@@ -405,6 +465,7 @@ async function cmdRcon (args) {
 }
 
 async function cmdRun (args, sceneArgs) {
+  const rate = tickRate(args, process.env, LIMITS.tickRate)
   const scene = args._[0]
   if (!scene) throw new Error('run: какая сцена?')
   const ids = parseSlots(args.slots, upSlots())
@@ -413,11 +474,19 @@ async function cmdRun (args, sceneArgs) {
   fs.mkdirSync(dir, { recursive: true })
   const extra = {}
   for (const kv of args.env) { const k = kv.slice(0, kv.indexOf('=')); extra[k] = kv.slice(kv.indexOf('=') + 1) }
+  // Применить всем выбранным серверам до старта любой сцены; сервер может быть
+  // восстановленной копией с сохранённой другой скоростью или заморозкой.
+  for (const i of ids) {
+    await ensurePacketLimiter(slot(i))
+    const ticks = await configureTick(command => slotRcon(slot(i), command), rate)
+    const st = readState()
+    if (st.slots?.[i]) { st.slots[i].tickRate = rate; writeState(st) }
+    log(`слот ${i}: запрос ${rate} тиков/с — ${ticks.replace(/\s+/g, ' ').trim()}`)
+  }
   const pids = {}
   const runs = ids.map(i => new Promise(resolve => {
     const s = slot(i)
-    const env = {
-      ...process.env,
+    const env = runEnv(process.env, {
       ND_WS: `ws://127.0.0.1:${s.ws}`,
       MC_USERNAME: s.name,
       MC_PORT: String(s.mc),
@@ -425,7 +494,7 @@ async function cmdRun (args, sceneArgs) {
       LAB_OUT: path.join(dir, `slot-${i}.jsonl`),
       FARM_SLOT: String(i),
       ...extra
-    }
+    }, rate)
     const out = fs.openSync(path.join(dir, `slot-${i}.out`), 'a')
     const err = fs.openSync(path.join(dir, `slot-${i}.err`), 'a')
     const p = spawn(process.execPath, [scene, ...sceneArgs], { cwd: DAEMON, env, stdio: ['ignore', out, err], windowsHide: true })
@@ -434,7 +503,7 @@ async function cmdRun (args, sceneArgs) {
     log(`слот ${i}: ${scene} ${sceneArgs.join(' ')} → pid ${p.pid}`)
     p.on('exit', code => { log(`слот ${i}: сцена кончилась, код ${code}`); resolve() })
   }))
-  fs.writeFileSync(path.join(dir, 'batch.json'), JSON.stringify({ scene, sceneArgs, env: extra, slots: ids, at: new Date().toISOString() }, null, 2))
+  fs.writeFileSync(path.join(dir, 'batch.json'), JSON.stringify({ scene, sceneArgs, env: runEnv({}, extra, rate), tickRate: rate, clock: 'game', slots: ids, at: new Date().toISOString() }, null, 2))
   await Promise.all(runs)
   report(tag)
 }
@@ -499,9 +568,10 @@ function parseArgs (argv) {
   for (let k = 0; k < main.length; k++) {
     const t = main[k]
     if (t.startsWith('--')) {
+      if (t.startsWith('--tick-rate=')) { a['tick-rate'] = t.slice(12); continue }
       const key = t.slice(2)
       const next = main[k + 1]
-      if (next !== undefined && !next.startsWith('--') && !/^[A-Z_][A-Z0-9_]*=/.test(next) && ['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool'].includes(key)) { a[key] = next; k++ } else a[key] = true
+      if (next !== undefined && !next.startsWith('--') && !/^[A-Z_][A-Z0-9_]*=/.test(next) && ['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate'].includes(key)) { a[key] = next; k++ } else a[key] = true
     } else if (/^[A-Z_][A-Z0-9_]*=/.test(t) && a._.length >= 1) a.env.push(t)
     else a._.push(t)
   }
@@ -512,6 +582,9 @@ function parseArgs (argv) {
   const [cmd, ...rest] = process.argv.slice(2)
   const { a, sceneArgs } = parseArgs(rest)
   try {
+    // Неверный rate отсекается до подготовки миров, nice и любых процессов.
+    if (['up', 'run'].includes(cmd)) tickRate(a)
+    if (cmd === 'tick') tickSelection(a)
     if (['up', 'daemons', 'run', 'nice'].includes(cmd)) gentle()
     if (cmd === 'nice') {
       const pids = [...new Set([...listeners()].filter(([p]) => farmPort(p)).map(([, pid]) => pid))]
@@ -523,11 +596,12 @@ function parseArgs (argv) {
     else if (cmd === 'down') await cmdDown(a)
     else if (cmd === 'status') await cmdStatus(a)
     else if (cmd === 'rcon') await cmdRcon(a)
+    else if (cmd === 'tick') await cmdTick(a)
     else if (cmd === 'run') await cmdRun(a, sceneArgs)
     else if (cmd === 'report') report(a._[0], a.by || null)
     else if (cmd === 'kill-runs') cmdKillRuns(a)
     else if (cmd === 'uuid') console.log(offlineUuid(a._[0]))
-    else console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 31).map(l => l.replace(/^\/\/ ?/, '')).join('\n'))
+    else console.log(fs.readFileSync(__filename, 'utf8').split(/\r?\nconst fs/)[0].split(/\r?\n/).slice(1).map(l => l.replace(/^\/\/ ?/, '')).join('\n'))
   } catch (e) {
     console.error('ОШИБКА', e.stack || e.message)
     process.exitCode = 1

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Крепость Ада: увидеть её честно и дойти до неё (mc_fortress). Зрение — как у
 // человека: блок засчитан, только если луч от глаз упирается в него
 // (bot.canSeeBlock), кирпич за стеной не подсказывает ничего.
@@ -164,11 +165,11 @@ async function legTo (session, ctl, tx, tz, deadline) {
   // (nether.js guarded: эндермен убил тело посреди разведки, 2026-09-25).
   const w = await nether.guarded(session, ctl, sub => walkLeg(session.bot, sub, tx, tz, deadline))
   if (w.fought) return w
-  if (w.ok || ctl.aborted || Date.now() > deadline) return w
+  if (w.ok || ctl.aborted || gameClock.now() > deadline) return w
   // Ногами не вышло (лавовое озеро, обрыв, «путь длиной 0») — штреком по
   // netherrack на высоту крепости (nether.js bore): забой сам не трогает лаву.
   const b = await nether.bore(session, ctl, { x: tx, z: tz }, {
-    deadline: Math.min(deadline, Date.now() + 40000), maxSteps: 20, minY: 64
+    deadline: Math.min(deadline, gameClock.now() + 40000), maxSteps: 20, minY: 64
   })
   if (b.ok || b.moved >= 8) return { ok: true, bored: b.dug, bricks: b.bricks }
   return { ok: false, error: `${w.error}; штрек: ${b.why}`, bored: b.dug || undefined }
@@ -186,7 +187,7 @@ async function walkLeg (bot, ctl, tx, tz, deadline) {
       await Promise.race([
         bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 4)),
         guard.promise,
-        new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(15000, deadline - Date.now()))) })
+        new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(15000, deadline - gameClock.now()))) })
       ])
       const p = bot.entity.position
       if (Math.hypot(p.x - tx, p.z - tz) <= 6 && p.y < y) return { ok: true, down: Math.round(y - p.y) }
@@ -194,13 +195,13 @@ async function walkLeg (bot, ctl, tx, tz, deadline) {
       try { bot.pathfinder.setGoal(null) } catch {}
     } finally {
       guard.stop()
-      if (timer) clearTimeout(timer)
+      if (timer) gameClock.clearTimeout(timer)
     }
   }
   // 20 с на отрезок в 16 блоков: дольше — это pathfinder, копающий путь с
   // перерасчётом на каждый сломанный блок («reset: block_updated», прогон 7:
   // минута на 8 блоков); штрек (bore) то же пройдёт за 15 с.
-  return travelXZ(bot, ctl, tx, tz, { range: 3, retries: 0, deadline: Math.min(deadline, Date.now() + 20000) })
+  return travelXZ(bot, ctl, tx, tz, { range: 3, retries: 0, deadline: Math.min(deadline, gameClock.now() + 20000) })
 }
 
 // mode=look — только глаза, тело не двигается. mode=explore — ноги по прямой
@@ -223,7 +224,7 @@ async function scout (session, ctl, p = {}) {
 async function scoutBody (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 20, 600) * 1000 - 4000
   // В обходе — 96: при 64 полоса z=176 прошла в 131 блоке от крепости и не
   // задела ни одного кирпича, а в 96 от той же линии их 418 (прогон 8, замер
@@ -316,7 +317,7 @@ async function scoutBody (session, ctl, p = {}) {
     legs: legs.length ? legs.slice(-10) : undefined,
     search: search || undefined,
     at: xyz(bot.entity.position),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (v.seen) {
     remember(session, v.nearest, `крепость Ада: кирпич виден на ${v.nearest.x},${v.nearest.y},${v.nearest.z} (${v.dist} бл. на ${v.bearing} от ${detail.at.x},${detail.at.z})`)
@@ -388,7 +389,7 @@ async function bastionSearch (session, ctl, { deadline, radius, t0, high = false
     legs: legs.length ? legs.slice(-10) : undefined,
     search: search || undefined,
     at: xyz(bot.entity.position),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (bastion) {
     detail.note = `Вижу бастион: ${bastion.seen} видимых блоков блэкстоун-кирпича, ближайший в ${bastion.dist} бл. на ${bastion.bearing} (${bastion.nearest.x},${bastion.nearest.y},${bastion.nearest.z}) — записал «${BASTION_PLACE}».`
@@ -439,7 +440,7 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
   let fails = 0
   let v = { seen: 0 }
   let stopped = null
-  while (!ctl.aborted && Date.now() < deadline && along < maxWalk) {
+  while (!ctl.aborted && gameClock.now() < deadline && along < maxWalk) {
     const step = 16
     const me = bot.entity.position
     // Цель — впереди по направлению, со сдвигом вбок, если прямо не пройти.
@@ -531,7 +532,7 @@ async function walkTo (session, ctl, to, { deadline, glance, legs, stopWhen = nu
   // блоков можно пройти и на 40 блоков севернее — взгляд в 64 её покроет
   // (прогон 8: юг с z=263 закрыт, и вся последняя полоса ушла в «пройдено»).
   const closed = new Set()
-  for (let turn = 0; turn < 6 && !ctl.aborted && Date.now() < deadline; turn++) {
+  for (let turn = 0; turn < 6 && !ctl.aborted && gameClock.now() < deadline; turn++) {
     const me = bot.entity.position
     const dx = to.x - me.x
     const dz = to.z - me.z
@@ -614,19 +615,19 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
   save()
   let stopped = null
   let blocked = 0
-  while (high && plan.rings && plan.rings.i < plan.rings.wps.length && !ctl.aborted && Date.now() < deadline) {
+  while (high && plan.rings && plan.rings.i < plan.rings.wps.length && !ctl.aborted && gameClock.now() < deadline) {
     const to = plan.rings.wps[plan.rings.i]
     const r = await walkTo(session, ctl, to, { deadline, glance, legs, stopWhen: hit })
     v = r.v
     if (hit(v)) { stopped = null; save(); return { v, stopped, plan: { origin: plan.origin, rings: plan.rings.i, of: plan.rings.wps.length } } }
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     const h = await highLook(session, ctl, glance)
     log(forBastion ? 'бастион: точка обзора' : 'точка обзора', { i: plan.rings.i, to, at: xyz(bot.entity.position), up: h.up, skipped: h.skipped, seen: h.seen, bastion: h.bastion })
     plan.rings.i++
     save()
     if (h.v && hit(h.v)) { v = h.v; return { v, stopped: null, plan: { origin: plan.origin, rings: plan.rings.i, of: plan.rings.wps.length } } }
   }
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     if (plan.i >= plan.wps.length || (!forBastion && v && v.bastion)) {
       // Регион пройден, или в нём бастион (одна постройка на регион) — дальше.
       plan.done.push(plan.region)
@@ -644,7 +645,7 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
     v = r.v
     stopped = r.stopped
     if (hit(v)) { stopped = null; break }
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     if (r.stopped) blocked++
     else blocked = 0
     plan.i++
@@ -664,14 +665,14 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
 // не видно ни глазами, ни в памяти.
 async function climbTo (session, ctl, top, deadline) {
   const w = await climbWalk(session, ctl, top, deadline)
-  if (w.ok || w.fought || ctl.aborted || Date.now() > deadline) return w
+  if (w.ok || w.fought || ctl.aborted || gameClock.now() > deadline) return w
   const bot = session.bot
   if (top.y + 1 - bot.entity.position.y < 3) return w
   // Ногами наверх не вышло (в Аду pathfinder без столба 1x1, worlds.js) —
   // ступеньками штрека: вверх на 1 за шаг к точке, пустоту под ногами
   // закладывает наш placeBlockAt.
   const b = await require('./nether').bore(session, ctl, { x: top.x, z: top.z }, {
-    deadline: Math.min(deadline, Date.now() + 60000), maxSteps: 40, maxY: top.y + 1, throughBricks: true
+    deadline: Math.min(deadline, gameClock.now() + 60000), maxSteps: 40, maxY: top.y + 1, throughBricks: true
   })
   const p = bot.entity.position
   return p.y >= top.y - 1 && Math.hypot(p.x - top.x, p.z - top.z) <= 6
@@ -694,7 +695,7 @@ async function climbWalk (session, ctl, top, deadline) {
       await Promise.race([
         bot.pathfinder.goto(new goals.GoalNear(top.x, top.y + 1, top.z, 3)),
         guard.promise,
-        new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(40000, deadline - Date.now()))) })
+        new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(40000, deadline - gameClock.now()))) })
       ])
       const p = bot.entity.position
       return p.distanceTo(new Vec3(top.x + 0.5, top.y + 1, top.z + 0.5)) <= 5 ? { ok: true } : { ok: false, error: 'на мост не вышел' }
@@ -704,7 +705,7 @@ async function climbWalk (session, ctl, top, deadline) {
     } finally {
       bot.pathfinder.thinkTimeout = think
       guard.stop()
-      if (timer) clearTimeout(timer)
+      if (timer) gameClock.clearTimeout(timer)
     }
   })
 }
@@ -723,7 +724,7 @@ async function tour (session, ctl, { deadline, hops = 8 } = {}) {
     return v
   }
   let v = lookNow()
-  for (let i = 0; i < hops && !v.spawners && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; i < hops && !v.spawners && !ctl.aborted && gameClock.now() < deadline; i++) {
     const me = bot.entity.position
     visited.push(me.clone())
     // Видны блейзы — к ним: они висят у спавнера (±4 от него), а спавнер
@@ -801,7 +802,7 @@ async function digDownTo (session, ctl, sp, deadline) {
   const fireproof = () => !!(bot.entity.effects && Object.values(bot.entity.effects).some(e => e && (e.id === 12 || /fire_resistance/.test(String(e.name || '')))))
   const lavaAt = v => { const b = bot.blockAt(v); return !!b && /lava/.test(b.name) }
   let dug = 0
-  for (let k = 0; k < 40 && !ctl.aborted && Date.now() < deadline; k++) {
+  for (let k = 0; k < 40 && !ctl.aborted && gameClock.now() < deadline; k++) {
     const f = bot.entity.position.floored()
     if (f.y <= sp.y + 1) return { ok: true, dug }
     const c = f.offset(0, -1, 0)
@@ -849,7 +850,7 @@ async function breachToSpawner (session, ctl, sp, deadline) {
   const goal = goals0[0] || sp.offset(Math.sign(me0.x - sp.x) || 1, 0, 0)
   const out = { ok: false, steps: 0, dug: 0, goal: xyz(goal) }
   const lavaAround = c => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => { const b = bot.blockAt(c.offset(x, y, z)); return !!b && /lava/.test(b.name) })
-  for (let s = 0; s < 16 && !ctl.aborted && Date.now() < deadline; s++) {
+  for (let s = 0; s < 16 && !ctl.aborted && gameClock.now() < deadline; s++) {
     if (seesSp()) { out.ok = true; break }
     const f = bot.entity.position.floored()
     if (f.equals(goal)) break
@@ -944,14 +945,14 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
       // ND_THRONE_HOT=1: открытое на уровне помоста (ноги от −2 до +2 к спавнеру, ±7 по горизонтали) — +12 за шаг: к точке
       // +3 — мостом сверху или штреком в толще, а не подъёмом с помоста (D6-26 03.10, сид 6: подъём у помоста — иссушитель, смерть).
       const hot = process.env.ND_THRONE_HOT === '1' ? [[sp.x - 7, sp.y - 2, sp.z - 7, sp.x + 7, sp.y + 2, sp.z + 7, 12]] : undefined
-      const r0 = await NR.routeTo(session, ctl, { x: sp.x, y: sp.y + 3, z: sp.z, r: 3, dy: 0, solidFloor: true, frKeep: 3, frNear: { x: sp.x, y: sp.y, z: sp.z, r: 22 }, ironOk: true, hot, timeoutSeconds: Math.max(60, Math.round((deadline - Date.now()) / 1000) - 60) })
+      const r0 = await NR.routeTo(session, ctl, { x: sp.x, y: sp.y + 3, z: sp.z, r: 3, dy: 0, solidFloor: true, frKeep: 3, frNear: { x: sp.x, y: sp.y, z: sp.z, r: 22 }, ironOk: true, hot, timeoutSeconds: Math.max(60, Math.round((deadline - gameClock.now()) / 1000) - 60) })
       log('к спавнеру: точка над помостом', { ok: r0.ok, why: r0.why, steps: r0.steps, s: r0.seconds })
       if (r0.ok) {
         const c0 = await NR.rangedClear(session, ctl, { ranged: 0 }, { radius: 14, maxMs: 45000, tower: false }).catch(e => e.message)
         log('к спавнеру: помост сверху луком', { done: c0 })
       }
     }
-    const rr = await NR.routeTo(session, ctl, { x: sp.x, y: hole ? sp.y : sp.y + 3, z: sp.z, r: hole ? 2 : 3, dy: 0, solidFloor: true, frKeep: 3, frNear: { x: sp.x, y: sp.y, z: sp.z, r: 22 }, ironOk: true, timeoutSeconds: Math.max(60, Math.round((deadline - Date.now()) / 1000) - 30) })
+    const rr = await NR.routeTo(session, ctl, { x: sp.x, y: hole ? sp.y : sp.y + 3, z: sp.z, r: hole ? 2 : 3, dy: 0, solidFloor: true, frKeep: 3, frNear: { x: sp.x, y: sp.y, z: sp.z, r: 22 }, ironOk: true, timeoutSeconds: Math.max(60, Math.round((deadline - gameClock.now()) / 1000) - 30) })
     const seen = (() => { try { const b = bot.blockAt(sp); return !!b && bot.canSeeBlock(b) } catch { return false } })()
     log('к спавнеру по сетке', { ok: rr.ok, why: rr.why, steps: rr.steps, dug: rr.dug, placed: rr.placed, plans: rr.plans, s: rr.seconds, seen })
     // Дошёл до точки над помостом — «дошёл», даже если сам спавнер не виден (стоим на блоках над ним: B8f23 03.10).
@@ -968,7 +969,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
     got.sort((a, b) => a.distanceTo(me) - b.distanceTo(me))
     return got[0] || null
   }
-  for (let i = 0; !sp && fort && worlds.worldOfRecord(fort) === 'the_nether' && i < 40 && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; !sp && fort && worlds.worldOfRecord(fort) === 'the_nether' && i < 40 && !ctl.aborted && gameClock.now() < deadline; i++) {
     const me = bot.entity.position
     const flat = Math.hypot(fort.x - me.x, fort.z - me.z)
     if (flat <= 24) break
@@ -1040,7 +1041,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
   // Спавнер из памяти далеко (карта копии мира: neF-map21-1 02.10 — 589 бл.): 12 отрезков по 24 бл. кончались на
   // 404 бл. «не на его уровне». Отрезков — сколько нужно на расстояние, плюс 12 на сам зал.
   const legsMax = 12 + Math.ceil(Math.hypot(sp.x - bot.entity.position.x, sp.z - bot.entity.position.z) / 24)
-  for (let i = 0; i < legsMax && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; i < legsMax && !ctl.aborted && gameClock.now() < deadline; i++) {
     const me = bot.entity.position
     const d = me.distanceTo(sp.offset(0.5, 0.5, 0.5))
     // Штреком дошли «на уровень», но тело в толще у зала, спавнер не виден (neF-Sb23-1 02.10: 6 бл. от спавнера в своём
@@ -1049,7 +1050,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
     // Спавнер рядом (≤ 9 бл.), на уровне, но не виден — ход сквозь стену зала к помосту (до 2 раз), а не «дошёл» за стеной.
     if (atLevel() && !seesSp() && breachTries < 2 && process.env.ND_SPAWNER_BREACH === '1') {
       breachTries++
-      const br = await breachToSpawner(session, ctl, sp, Math.min(deadline, Date.now() + 60000))
+      const br = await breachToSpawner(session, ctl, sp, Math.min(deadline, gameClock.now() + 60000))
       if (br.ok) return { found: true, reached: true, spawner: xyz(sp), dist: Math.round(bot.entity.position.distanceTo(sp.offset(0.5, 0.5, 0.5))), legs, seen: true, breach: br }
     }
     if (atLevel() && (!tunnel || seesSp() || viewTries >= 3)) return { found: true, reached: true, spawner: xyz(sp), dist: Math.round(d), legs, seen: seesSp() }
@@ -1098,11 +1099,11 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
       if (col && col.distanceTo(me.floored()) > 0.5) {
         const { goals } = require('mineflayer-pathfinder')
         let t = null
-        try { await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(col.x, col.y, col.z)), new Promise((_r, rej) => { t = setTimeout(() => rej(new Error('время')), 10000) })]) } catch { try { bot.pathfinder.setGoal(null) } catch {} } finally { if (t) clearTimeout(t) }
+        try { await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(col.x, col.y, col.z)), new Promise((_r, rej) => { t = gameClock.setTimeout(() => rej(new Error('время')), 10000) })]) } catch { try { bot.pathfinder.setGoal(null) } catch {} } finally { if (t) gameClock.clearTimeout(t) }
       }
       const dh = Math.hypot(bot.entity.position.x - sp.x - 0.5, bot.entity.position.z - sp.z - 0.5)
       if (dh >= 1.6) {
-        const dw = await digDownTo(session, ctl, sp, Math.min(deadline, Date.now() + 60000))
+        const dw = await digDownTo(session, ctl, sp, Math.min(deadline, gameClock.now() + 60000))
         console.log('[fortress] вниз к залу', JSON.stringify({ col: col ? xyz(col) : null, ...dw, at: xyz(bot.entity.position.floored()) }))
         w = { ok: dw.ok, error: dw.ok ? undefined : `вниз к залу: ${dw.why}` }
       } else w = { ok: false, error: 'над самым спавнером — колонны рядом нет' }
@@ -1122,8 +1123,8 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
           if (!a0 || !b0 || !u0 || a0.boundingBox !== 'empty' || b0.boundingBox !== 'empty' || u0.boundingBox !== 'block') continue
           let t = null
           try {
-            await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(c.x, c.y, c.z)), new Promise((_r, rej) => { t = setTimeout(() => rej(new Error('время')), 8000) })])
-          } catch { try { bot.pathfinder.setGoal(null) } catch {} } finally { if (t) clearTimeout(t) }
+            await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(c.x, c.y, c.z)), new Promise((_r, rej) => { t = gameClock.setTimeout(() => rej(new Error('время')), 8000) })])
+          } catch { try { bot.pathfinder.setGoal(null) } catch {} } finally { if (t) gameClock.clearTimeout(t) }
           break
         }
       }
@@ -1133,7 +1134,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
       const SL = require('./sealed')
       const need = Math.min(12, sp.y - Math.floor(bot.entity.position.y))
       let climbed = 0; let why = ''
-      for (let s2 = 0; s2 < need && !ctl.aborted && Date.now() < deadline; s2++) {
+      for (let s2 = 0; s2 < need && !ctl.aborted && gameClock.now() < deadline; s2++) {
         const f0 = bot.entity.position.floored()
         const h2 = f0.offset(0, 2, 0)
         const hb = bot.blockAt(h2)
@@ -1168,7 +1169,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
       const { tunnelTo } = require('./tunnel')
       // ironOk: к спавнеру идут после бастиона (порядок BASTION_FIRST) — железная кирка золоту больше не нужна; без неё
       // каменные кончались, и штрек копал рукой (neF-R23-1 02.10: «кирок нет — копаю чем есть», 0.2 бл/с).
-      const tOpts = () => ({ radius: 6, band: Math.max(40, Math.min(100, sp.y)), ironOk: true, deadline: Math.min(deadline - 20000, Date.now() + 90000 + flat * 2500), log: (wh, d) => console.log('[fortress] ' + wh, JSON.stringify(d)) })
+      const tOpts = () => ({ radius: 6, band: Math.max(40, Math.min(100, sp.y)), ironOk: true, deadline: Math.min(deadline - 20000, gameClock.now() + 90000 + flat * 2500), log: (wh, d) => console.log('[fortress] ' + wh, JSON.stringify(d)) })
       let tr = await tunnelTo(session, ctl, P, tOpts())
       if (!tr.ok && !tr.segs && !tr.dug && !ctl.aborted) {
         const bw = await require('./bastion').burrow(session, ctl, {}, 'штрек к спавнеру не начался')
@@ -1203,12 +1204,12 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
         const { goals } = require('mineflayer-pathfinder')
         let t = null
         try {
-          await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(c.x, c.y, c.z)), new Promise((_r, rej) => { t = setTimeout(() => rej(new Error('время')), 40000) })])
+          await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(c.x, c.y, c.z)), new Promise((_r, rej) => { t = gameClock.setTimeout(() => rej(new Error('время')), 40000) })])
           // goto «дошёл», а тело на месте (neF-map21-1 02.10: 4 шага «ok» у 554,27,105 при поле зала на y 67–69) — провал.
           const f = bot.entity.position
           if (Math.hypot(f.x - c.x - 0.5, f.z - c.z - 0.5) > 1.6 || Math.abs(Math.floor(f.y) - c.y) > 1) throw new Error(`goto кончился в ${Math.round(f.x)},${Math.floor(f.y)},${Math.round(f.z)}`)
           w = { ok: true }
-        } catch (e) { try { bot.pathfinder.setGoal(null) } catch {} floorFails++; badFloor.add(`${c.x},${c.y},${c.z}`); w = { ok: false, error: `к полу зала ${c.x},${c.y},${c.z}: ${e.message}` } } finally { if (t) clearTimeout(t) }
+        } catch (e) { try { bot.pathfinder.setGoal(null) } catch {} floorFails++; badFloor.add(`${c.x},${c.y},${c.z}`); w = { ok: false, error: `к полу зала ${c.x},${c.y},${c.z}: ${e.message}` } } finally { if (t) gameClock.clearTimeout(t) }
       } else {
         // Ногами к полу не выйти — подъём ступеньками штрека (climbTo → nether.bore) не к самому спавнеру (штрек
         // встал бы вплотную к нему, а «дошёл» — это 2..6 сбоку), а к точке в 3.5 блока от него со своей стороны.
@@ -1218,7 +1219,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }) {
       }
     }
     legs.push({ ok: !!w.ok, at: xyz(bot.entity.position), error: w.ok ? undefined : w.error })
-    console.log('[fortress] к спавнеру', JSON.stringify({ i, floorFails, aborted: ctl.aborted, left: Math.round((deadline - Date.now()) / 1000), at: xyz(bot.entity.position), sp: xyz(sp), ok: !!w.ok, error: w.ok ? undefined : String(w.error || '').slice(0, 120) }))
+    console.log('[fortress] к спавнеру', JSON.stringify({ i, floorFails, aborted: ctl.aborted, left: Math.round((deadline - gameClock.now()) / 1000), at: xyz(bot.entity.position), sp: xyz(sp), ok: !!w.ok, error: w.ok ? undefined : String(w.error || '').slice(0, 120) }))
     if (w.fought && (bot.health ?? 0) < 10) return { found: true, reached: false, spawner: xyz(sp), stopped: `бой по дороге, хп ${Math.round(bot.health ?? 0)}`, legs }
   }
   const d = bot.entity.position.distanceTo(sp.offset(0.5, 0.5, 0.5))

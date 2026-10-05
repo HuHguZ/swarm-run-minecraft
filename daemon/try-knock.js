@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Замер отбрасывания против модели edges.js (та же формула LivingEntity.
 // knockback и та же физика prismarine-physics). NeuroDown2 стоит на ровном
 // камне, по нему /damage ... by NeuroDown из точки в 2 блоках — это толчок
@@ -7,12 +8,15 @@
 const WebSocket = require('ws')
 const Vec3 = require('vec3')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -26,7 +30,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 // Модель: плоский камень под y=100, тело стоит, толчок 0.4 по +x.
 function model (strength, sprintExtra = 0) {

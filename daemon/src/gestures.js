@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const social = require('./social')
@@ -109,7 +110,7 @@ function distTo (bot, e) {
   return e.position.distanceTo(bot.entity.position)
 }
 
-function sleep (ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+function sleep (ms) { return new Promise(resolve => gameClock.setTimeout(resolve, ms)) }
 
 // Зов: «иди сюда», «ко мне», «смотри», «глянь», «зацени». И отбой: «стой».
 // Грубо, по словам: разбирать смысл — дело мозга, а бежать надо сразу.
@@ -196,7 +197,7 @@ function hook (ap, bot) {
   }
   // Один жест одного человека — не чаще SAME_GESTURE_MS.
   const fresh = (r, kind, ms = SAME_GESTURE_MS) => {
-    const now = Date.now()
+    const now = gameClock.now()
     if (r.said[kind] && now - r.said[kind] < ms) return false
     r.said[kind] = now
     return true
@@ -207,7 +208,7 @@ function hook (ap, bot) {
     // «смотрит в упор»: присел, глядя на меня, — это один жест, не два.
     if (kind !== 'смотрит') {
       const r = rec(name)
-      r.lastGesture = Date.now()
+      r.lastGesture = gameClock.now()
       // Смотрел на меня, пока жестикулировал, — этот взгляд уже сказан
       // жестом; следующий «в упор» — только когда отведёт глаза и посмотрит
       // снова (иначе через три секунды после «привета» приходит второй
@@ -248,7 +249,7 @@ function hook (ap, bot) {
     const r = rec(name)
     let g = gaze(bot, ent)
     // Показывал раньше, чем мы дошли, — тоже годится (в пределах 20 с).
-    if ((!g || g.atMe || !g.block) && r.pointing && Date.now() - r.pointing.at < 20000) {
+    if ((!g || g.atMe || !g.block) && r.pointing && gameClock.now() - r.pointing.at < 20000) {
       g = { block: r.pointing.block, x: r.pointing.x, y: r.pointing.y, z: r.pointing.z }
     }
     if (g && g.block && !g.atMe) {
@@ -292,11 +293,11 @@ function hook (ap, bot) {
     Promise.resolve().then(async () => {
       await sleep(dec.delayMs)
       try { session.updateMovements() } catch {}
-      const deadline = Date.now() + 10000 + d / 4.3 * 1600
+      const deadline = gameClock.now() + 10000 + d / 4.3 * 1600
       let goal = null
       let goalAt = null
       let result = 'не дошёл: время вышло'
-      while (!me.abort && Date.now() < deadline) {
+      while (!me.abort && gameClock.now() < deadline) {
         if (!freeForSummon()) { result = 'передумал: мозг дал другое дело'; break }
         const e = bot.players[name] && bot.players[name].entity
         if (!e || !e.position) { result = 'потерял его из виду'; break }
@@ -343,7 +344,7 @@ function hook (ap, bot) {
     const d = distTo(bot, p)
     if (d > GESTURE_R) return
     const r = rec(p.username)
-    const now = Date.now()
+    const now = gameClock.now()
     r.crouches = r.crouches.filter(t => now - t < 2500)
     r.crouches.push(now)
     if (r.crouches.length < 2) return
@@ -369,7 +370,7 @@ function hook (ap, bot) {
     const d = distTo(bot, p)
     if (d > 6 || !looksAtBody(bot, p, 0.5)) return
     const r = rec(p.username)
-    const now = Date.now()
+    const now = gameClock.now()
     r.swings = r.swings.filter(t => now - t < 2500)
     r.swings.push(now)
     if (r.swings.length < 2 || !fresh(r, 'машет')) return
@@ -438,14 +439,14 @@ function hook (ap, bot) {
   // метаданными, и предмет к тому времени уже пролетел тик-другой.
   const spawned = new Map()
   bot.on('entitySpawn', (e) => {
-    if (e && (e.name === 'item' || e.displayName === 'Item')) spawned.set(e.id, { at: Date.now(), pos: e.position.clone(), vel: e.velocity ? e.velocity.clone() : null })
+    if (e && (e.name === 'item' || e.displayName === 'Item')) spawned.set(e.id, { at: gameClock.now(), pos: e.position.clone(), vel: e.velocity ? e.velocity.clone() : null })
     if (spawned.size > 200) spawned.delete(spawned.keys().next().value)
   })
   const throws = new Map()
   bot.on('itemDrop', (item) => {
     const born = spawned.get(item.id)
     spawned.delete(item.id)
-    if (!born || Date.now() - born.at > 1500) return
+    if (!born || gameClock.now() - born.at > 1500) return
     // Чей: предмет, выброшенный игроком, появляется у его глаз (Player.drop:
     // getEyeY() - 0.3). Ближайший игрок, у чьих глаз он родился.
     let who = null
@@ -481,7 +482,7 @@ function hook (ap, bot) {
     if (!t) {
       t = { items: [], toMe: false, dist: d, ents: [] }
       throws.set(key, t)
-      setTimeout(() => {
+      gameClock.setTimeout(() => {
         throws.delete(key)
         // /give выбрасывает игроку «фальшивый» предмет у его глаз и тут же
         // забирает его обратно (GiveCommand: player.drop(...) + makeFakeItem)
@@ -523,9 +524,9 @@ function hook (ap, bot) {
 
   // Прыжки и взгляды — по таймеру: позиции чужих игроков приходят каждый тик,
   // а решать чаще четырёх раз в секунду незачем.
-  const timer = setInterval(() => {
+  const timer = gameClock.setInterval(() => {
     if (!bot.entity) return
-    const now = Date.now()
+    const now = gameClock.now()
     for (const name of Object.keys(bot.players)) {
       const p = playerEnt(bot, bot.players[name] && bot.players[name].entity)
       if (!p) continue
@@ -603,7 +604,7 @@ function hook (ap, bot) {
       }
     }
   }, 250)
-  bot.once('end', () => clearInterval(timer))
+  bot.once('end', () => gameClock.clearInterval(timer))
 }
 
 // Для mc_players: куда человек смотрит прямо сейчас и на что указывал

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Жесты человека и ответ телом (src/gestures.js): присед, долгий взгляд,
 // прыжки на месте, брошенная вещь, взмах рукой, указание взглядом на блок.
 //
@@ -26,13 +27,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(500) }
 
 let failures = 0
@@ -48,12 +49,12 @@ const ME = 'NeuroDown'
 
 // wait, оборванный жестом: позвать до жеста, жест, дождаться ответа.
 async function waitFor (kind, doGesture, seconds = 15) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const waiting = call('wait', { seconds })
   await sleep(300)
   await doGesture()
   const r = await waiting
-  const ms = Date.now() - t0
+  const ms = gameClock.now() - t0
   const by = r.by && r.by.type === 'gesture' ? r.by : null
   const all = [by, ...(r.events || []).filter(e => e.type === 'gesture' || e.type === 'picked_up')].filter(Boolean)
   return { r, ms, by, all, hit: all.find(e => e.kind === kind) }
@@ -226,7 +227,7 @@ async function main () {
     await sleep(1200)
     await ib.lookAt(new Vec3(X + 5.5, Y + 0.5, Z + 5.5), true)
     await call('status')
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     // Зов — дело случая (настроение), как у живого: не пошёл с первого раза —
     // позвать ещё раз, второй зов настойчивее.
     let arrived = null
@@ -244,7 +245,7 @@ async function main () {
     }
     check('(и) решил идти на зов', !!summon && summon.come !== false, summon ? summon.text : 'события summon нет')
     check('(и) прибежал и смотрит, что показывают', !!arrived && arrived.block === 'gold_block',
-      arrived ? `${Math.round((Date.now() - t0) / 1000)} с: ${arrived.text}` : 'не пришёл')
+      arrived ? `${Math.round((gameClock.now() - t0) / 1000)} с: ${arrived.text}` : 'не пришёл')
   }
 
   // (з) Друга бьёт зомби — бот вступается и видит его хп.
@@ -256,13 +257,13 @@ async function main () {
     await ib.lookAt(new Vec3(X + 0.5, Y + 1.6, Z + 20), true)
     await sleep(800)
     await call('status')
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const waiting = call('wait', { seconds: 25 })
     await sleep(300)
     await cmd(`/summon minecraft:zombie ${X + 0.5} ${Y} ${Z + 8.5} {PersistenceRequired:1b}`)
     const r = await waiting
     const ev = [r.by, ...(r.events || [])].find(e => e && e.type === 'friend_hurt')
-    check('(з) удар по другу будит wait', !!ev, ev ? `${Date.now() - t0} мс: ${ev.text}` : `wait ${r.status} by ${JSON.stringify(r.by || null).slice(0, 100)}: ${JSON.stringify((r.events || []).map(e => e.type))}`)
+    check('(з) удар по другу будит wait', !!ev, ev ? `${gameClock.now() - t0} мс: ${ev.text}` : `wait ${r.status} by ${JSON.stringify(r.by || null).slice(0, 100)}: ${JSON.stringify((r.events || []).map(e => e.type))}`)
     check('(з) видно его хп', !!ev && typeof ev.hp === 'number', ev ? `hp ${ev.hp}` : '')
     let done = null
     for (let i = 0; i < 40 && !done; i++) {

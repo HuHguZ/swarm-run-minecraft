@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Застревания (поток unstuck, 02.10.2026): стенды по настоящим случаям из журналов фермы (research/stuck-cases.md),
 // goto с лестницей выхода (unstuck:true) против без неё (unstuck:false) на одном демоне; режимы чередуются в паре.
 // Стенд в небе (y 200) — чужой рельеф не мешает. Каждый стенд строится один раз образцом (x 9000+), перед пробой —
@@ -270,23 +271,23 @@ async function trial (conn, kit, { slot, name, mode, k, rep, idx }) {
     const poll = (async () => {
       while (going) {
         const s = await conn.call('status').catch(() => null)
-        if (s && s.state) track.push({ t: Date.now(), y: s.state.pos.y, hp: s.state.health })
+        if (s && s.state) track.push({ t: gameClock.now(), y: s.state.pos.y, hp: s.state.health })
         await sleep(200)
       }
     })()
     const gx = cx + sc.goal[0]; const gy = sc.goal[1]; const gz = cz + sc.goal[2]
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const SEC = sc.sec || TIMEOUT
     const params = { x: gx, y: gy, z: gz, range: 1, timeoutSeconds: SEC, unstuck: mode === 'unstuck' }
     let g = await conn.call('goto', params)
     // Урон (лава, падение) рвёт goto «damage» — как кампания: позвать ещё раз, пока есть время.
     // Горит (лава рядом) — урон рвёт goto каждую секунду: пауза 1 с и снова, пока есть срок (до 10 раз).
-    for (let i = 0; i < 10 && g.status === 'interrupted' && Date.now() - t0 < SEC * 1000 - 5000; i++) {
+    for (let i = 0; i < 10 && g.status === 'interrupted' && gameClock.now() - t0 < SEC * 1000 - 5000; i++) {
       r.reGoto = (r.reGoto || 0) + 1
       await sleep(1000)
-      g = await conn.call('goto', { ...params, timeoutSeconds: Math.max(5, Math.round(SEC - (Date.now() - t0) / 1000)) })
+      g = await conn.call('goto', { ...params, timeoutSeconds: Math.max(5, Math.round(SEC - (gameClock.now() - t0) / 1000)) })
     }
-    r.ms = Date.now() - t0
+    r.ms = gameClock.now() - t0
     await sleep(500)
     going = false
     await poll

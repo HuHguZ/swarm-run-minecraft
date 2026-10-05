@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Мост на ходу против обычного goto (blockmoves.js, поток movement 02.10.2026).
 // Стенд в небе (y 200, чужой рельеф не мешает), один и тот же для обоих режимов; режимы чередуются в паре.
 //   gapW_R   — провал шириной W поперёк пути, длиной 2R+1 по z; обход — перемычка в конце провала (z = R+1..R+3);
@@ -147,21 +148,21 @@ async function trial (conn, kit, { slot, name, mode, k, rep }) {
     const poll = (async () => {
       while (going) {
         const s = await conn.call('status').catch(() => null)
-        if (s && s.state) track.push({ t: Date.now(), y: s.state.pos.y, hp: s.state.health })
+        if (s && s.state) track.push({ t: gameClock.now(), y: s.state.pos.y, hp: s.state.health })
         await sleep(100)
       }
     })()
     const gx = cx + sc.W + 8
     const gy = sc.kind === 'cliff' ? F - sc.H : F
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const pearl = /pearl/.test(mode) ? { reserve: 0, minGain: 3, hpMin: 10 } : false
     let g = await conn.call('goto', { x: gx, y: gy, z: cz, range: 1, timeoutSeconds: 75, bridge: /bridge/.test(mode), pathWait: mode !== 'base', pearl, sprint: /sprint/.test(mode) })
     // Урон жемчуга (5 хп) рвёт goto как «damage» (events.js QUIET_DAMAGE его не знает) — как кампания: позвать ещё раз.
-    for (let i = 0; i < 2 && g.status === 'interrupted' && Date.now() - t0 < 70000; i++) {
+    for (let i = 0; i < 2 && g.status === 'interrupted' && gameClock.now() - t0 < 70000; i++) {
       r.reGoto = (r.reGoto || 0) + 1
       g = await conn.call('goto', { x: gx, y: gy, z: cz, range: 1, timeoutSeconds: 75, bridge: /bridge/.test(mode), pathWait: mode !== 'base', pearl, sprint: /sprint/.test(mode) })
     }
-    r.ms = Date.now() - t0
+    r.ms = gameClock.now() - t0
     await sleep(600)
     going = false
     await poll

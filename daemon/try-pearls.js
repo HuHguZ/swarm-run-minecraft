@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Жемчуг эндера (pearls.js, RPC pearls / mc_pearls). Ложь, которую ловит сцена:
 // «убил — значит, жемчуг» и «бросил слиток — значит, выменял». Лут эндермена —
 // 0..1 жемчуга, бартер даёт жемчуг в 2.1% сделок, поэтому прибыль меряется
@@ -73,10 +74,10 @@ async function reset (extra = []) {
 }
 
 async function run (label, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('pearls', params)
   const d = r.detail || {}
-  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((Date.now() - t0) / 1000)}с — ${d.stopped || ''} ${d.note || ''}`)
+  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((gameClock.now() - t0) / 1000)}с — ${d.stopped || ''} ${d.note || ''}`)
   return { r, d, t0 }
 }
 
@@ -101,7 +102,7 @@ conn.ready.then(async () => {
       const p1 = await inv('ender_pearl')
       const h = await header()
       const left = await mobs(/enderman/i)
-      const deaths = kit.between(t0, Date.now(), 'death').length + (r.by && r.by.type === 'death' ? 1 : 0)
+      const deaths = kit.between(t0, gameClock.now(), 'death').length + (r.by && r.by.type === 'death' ? 1 : 0)
       console.log(`   раунды ${JSON.stringify(d.rounds)}; хп ${hp0} → ${h.health}`)
       check('(а) эндермена больше нет в мире', left.length === 0, left.map(e => `${e.name} ${e.dist}`))
       check('(а) бот жив', deaths === 0 && h.health > 0, `смертей ${deaths}`)
@@ -137,7 +138,7 @@ conn.ready.then(async () => {
       const { d, t0 } = await run('barter (auto)', { count: 12, timeoutSeconds: 120 })
       check('(б) без mode выбран бартер', d.auto === true && d.mode === 'barter', `${d.mode} auto=${d.auto}`)
       const h = await header()
-      const dmg = kit.between(t0, Date.now(), 'damage')
+      const dmg = kit.between(t0, gameClock.now(), 'damage')
       console.log(`   выменял ${JSON.stringify(d.gained)}; жемчуга ${d.pearls}; хп ${hp0} → ${h.health}`)
       check('(б) отдано 6 слитков (по рюкзаку, не по броскам)', d.spent === 6 && (await inv('gold_ingot')) === 0, `отдано ${d.spent}, бросков ${d.thrown}, осталось ${d.ingotsLeft}`)
       check('(б) что-то выменяно и подобрано', Object.keys(d.gained || {}).length > 0, d.gained)

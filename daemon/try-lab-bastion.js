@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория этапов — бастион (server-nether, 25567): золото бастиона без
 // злости пиглинов и бартер (bastion.js, RPC bastion). Сцена командами только
 // ставит тело у бастиона и выдаёт набор кампании; дальше — ровно тот вызов,
@@ -107,7 +108,7 @@ async function truthType () {
 
 async function run (k) {
   kit = createKit({ call, heard: conn.heard, logFile: LOG, player: PLAYER })
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await scene()
   const size = logSize()
   const tt = process.env.LOCATE ? await truthType().catch(e => ({ type: 'ошибка', error: e.message })) : null
@@ -118,7 +119,7 @@ async function run (k) {
   const d = r.detail || {}
   const deaths = deathLines(size)
   const rec = {
-    at: new Date().toISOString(), k, mode: MODE, status: r.status, seconds: Math.round((Date.now() - t0) / 1000),
+    at: new Date().toISOString(), k, mode: MODE, status: r.status, seconds: Math.round((gameClock.now() - t0) / 1000),
     bastionType: tt ? tt.type : undefined, bastionPiece: tt ? tt.piece : undefined, truthGold: tt ? tt.gold : undefined, bastionAt: located ? `${located.x},${located.z}` : undefined,
     hp: Math.round(st.health ?? -1), deaths, stopped: d.stopped, goldBlocksDug: d.goldBlocksDug, bribed: d.bribed, ingotsTraded: d.ingotsTraded,
     chests: (d.chests || []).length, gained: d.gained, bag: d.bag, towered: d.towered, predLeft: d.predLeft, predWrong: d.predWrong, predMiss: d.predMiss, pearls: (d.bag || {}).ender_pearl, ingots: (d.bag || {}).gold_ingot, blocks: (d.bag || {}).gold_block, fireRes: (d.bag || {}).fire_res, fights: d.fights, brutes: d.brutesAvoided, lastBlocked: d.lastBlocked, error: r.error,

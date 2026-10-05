@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Арбалет, фейерверки, чтение врага, стрелы с эффектом (ranged.js, read.js;
 // 2026-09-26). A — демон NeuroDown (бой как в арене), D — голый mineflayer
 // NeuroBuild (оп тестового сервера build): мишень, которой управляет сцена, W —
@@ -7,7 +9,6 @@
 // Этапы: read, xarrow, xrocket, xpierce, xplain, hisxbow, totem, tipped.
 // Поправка протокола minecraft-data (intangible_projectile) — до создания ботов.
 require('./src/gamedata')
-const mineflayer = require('mineflayer')
 const WebSocket = require('ws')
 const Vec3 = require('vec3')
 const read = require('./src/read')
@@ -16,15 +17,18 @@ const edges = require('./src/edges')
 const { soundName } = require('./src/melee')
 
 const PORT = Number(process.env.MC_PORT || 25566)
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const X = 600; const Y = 150; const Z = 600
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -40,7 +44,7 @@ function client (url) {
 }
 function join (username) {
   return new Promise((resolve, reject) => {
-    const bot = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' })
+    const bot = createGameBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' })
     bot.once('spawn', () => resolve(bot))
     bot.once('error', reject)
     bot.once('kicked', (r) => reject(new Error('kicked ' + JSON.stringify(r))))
@@ -69,8 +73,8 @@ async function cmd (text, who = null) {
 async function dataGet (path) {
   const n0 = chatLog.length
   W.chat(mapNames(`/data get entity NeuroBuild ${path}`))
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1500) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1500) {
     const hit = chatLog.slice(n0).find(s => s.includes(DN) || /has the following|не найден|No elements/.test(s))
     if (hit) return hit
     await sleep(50)
@@ -112,7 +116,7 @@ async function heal (who) { await cmd(`/effect give ${who} minecraft:instant_hea
 function hpWatch (bot) {
   const ev = []
   let last = bot.health
-  const on = () => { const h = bot.health; if (h < last - 0.01) ev.push({ t: Date.now(), dmg: Math.round((last - h) * 100) / 100, hp: Math.round(h * 100) / 100 }); last = h }
+  const on = () => { const h = bot.health; if (h < last - 0.01) ev.push({ t: gameClock.now(), dmg: Math.round((last - h) * 100) / 100, hp: Math.round(h * 100) / 100 }); last = h }
   bot.on('health', on)
   return { ev, stop: () => bot.removeListener('health', on), reset: () => { last = bot.health; ev.length = 0 } }
 }
@@ -205,17 +209,17 @@ async function stageShoot (name, kit, { shield = false, dArmor = IRON, secs = 12
   if (shield) {
     await D.lookAt(new Vec3(X + 0.5, Y + 1.5, Z + 0.5), true)
     D.activateItem(true)
-    lookT = setInterval(() => { try { D.lookAt(new Vec3(X + 0.5, Y + 1.5, Z + 0.5), true) } catch {} }, 250)
+    lookT = gameClock.setInterval(() => { try { D.lookAt(new Vec3(X + 0.5, Y + 1.5, Z + 0.5), true) } catch {} }, 250)
   }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await fightA(secs)
-  if (lookT) clearInterval(lookT)
+  if (lookT) gameClock.clearInterval(lookT)
   if (shield) D.deactivateItem()
   hw.stop()
   const d = r.detail || {}
   const total = hw.ev.reduce((s, x) => s + x.dmg, 0)
   if (r.status !== 'done') console.log(`[${name}] прерван: ${JSON.stringify(r.by || r.error || r.detail).slice(0, 300)}`)
-  console.log(`[${name}] ${r.status} ${Math.round((Date.now() - t0) / 100) / 10}с | урон по D: ${hw.ev.map(x => x.dmg).join(', ') || 'нет'} (всего ${Math.round(total * 10) / 10}, хп D ${Math.round(D.health * 10) / 10}) | ${tricksOf(r, /арбалет|стрела|выстрел|лук/)}`)
+  console.log(`[${name}] ${r.status} ${Math.round((gameClock.now() - t0) / 100) / 10}с | урон по D: ${hw.ev.map(x => x.dmg).join(', ') || 'нет'} (всего ${Math.round(total * 10) / 10}, хп D ${Math.round(D.health * 10) / 10}) | ${tricksOf(r, /арбалет|стрела|выстрел|лук/)}`)
   return { r, hw }
 }
 
@@ -237,7 +241,7 @@ async function stageHisXbow (piercing = false) {
   const aHp = []
   const fightP = fightA(7)
   // D целится (голова за A), через 3.0 с — выстрел, потом ещё зарядка и выстрел.
-  const aimT = setInterval(() => {
+  const aimT = gameClock.setInterval(() => {
     try { const a = D.players[AN] && D.players[AN].entity; if (a) D.lookAt(a.position.offset(0, 1.0, 0), true) } catch {}
   }, 50)
   const shots = []
@@ -255,13 +259,13 @@ async function stageHisXbow (piercing = false) {
   const aE = D.players[AN] && D.players[AN].entity
   const vA = aE && aE.velocity ? Math.round(Math.hypot(aE.velocity.x, aE.velocity.z) * 100) / 100 : null
   D.activateItem() // выстрел
-  shots.push(Date.now())
+  shots.push(gameClock.now())
   await sleep(1200)
   D.removeListener('entityHurt', onHurtA)
   D._client.removeListener('sound_effect', onSnd)
   const st2 = await A.call('status').catch(() => null)
   aHp.push({ before: hp1, after: st2 && st2.state ? st2.state.health : null })
-  clearInterval(aimT)
+  gameClock.clearInterval(aimT)
   const r = await fightP
   const verdict = hurt ? 'ПОПАЛА' : 'мимо/щит'
   XB_TRIALS.push({ piercing, hurt })
@@ -283,8 +287,8 @@ async function stageTotem () {
   await heal('NeuroDown'); await heal('NeuroBuild')
   await sleep(900)
   let popAt = 0; let deadAt = 0
-  D._client.on('entity_status', p => { if (p.entityId === D.entity.id && p.entityStatus === 35) popAt = Date.now() })
-  D.on('death', () => { if (!deadAt) deadAt = Date.now() })
+  D._client.on('entity_status', p => { if (p.entityId === D.entity.id && p.entityStatus === 35) popAt = gameClock.now() })
+  D.on('death', () => { if (!deadAt) deadAt = gameClock.now() })
   const fightP = fightA(12)
   await sleep(1500)
   await cmd('/damage NeuroBuild 40 minecraft:generic')
@@ -345,9 +349,9 @@ async function stageSpear () {
   await sleep(1000)
   const hw = hpWatch(D)
   // D идёт на A шагом, как мечник на сближение.
-  const walk = setInterval(() => { try { const a = D.players[AN] && D.players[AN].entity; if (a) { D.lookAt(a.position.offset(0, 1.6, 0), true); const dd = a.position.distanceTo(D.entity.position); D.setControlState('forward', dd > 2.5); D.setControlState('sprint', dd > 5) } } catch {} }, 100)
+  const walk = gameClock.setInterval(() => { try { const a = D.players[AN] && D.players[AN].entity; if (a) { D.lookAt(a.position.offset(0, 1.6, 0), true); const dd = a.position.distanceTo(D.entity.position); D.setControlState('forward', dd > 2.5); D.setControlState('sprint', dd > 5) } } catch {} }, 100)
   const r = await fightA(10)
-  clearInterval(walk)
+  gameClock.clearInterval(walk)
   for (const k of ['forward', 'sprint']) D.setControlState(k, false)
   hw.stop()
   console.log(`[spear] урон по D (железо): ${hw.ev.map(x => x.dmg).join(', ') || 'нет'} | хп D ${Math.round(D.health * 10) / 10} | ${tricksOf(r, /коп|укол|разгон|меч/)}`)
@@ -364,7 +368,7 @@ async function stageSpear () {
     // Мишень убита в прошлом прогоне — возродиться, иначе бой кончается сразу.
     await sleep(500)
     if ((D.health ?? 20) <= 0) { try { D.respawn() } catch {} await sleep(1200) }
-    D.on('death', () => setTimeout(() => { try { D.respawn() } catch {} }, 300))
+    D.on('death', () => gameClock.wall.setTimeout(() => { try { D.respawn() } catch {} }, 300))
     for (const b of [D, W]) { try { edges.fixSelfKnockback(b) } catch {} }
     W.on('messagestr', (m) => chatLog.push(m))
     D.on('messagestr', (m) => chatLog.push(m))
@@ -401,6 +405,6 @@ async function stageSpear () {
     try { D && D.quit() } catch {}
     try { W && W.quit() } catch {}
     A.ws.close()
-    setTimeout(() => process.exit(), 500)
+    gameClock.wall.setTimeout(() => process.exit(), 500)
   }
 })()

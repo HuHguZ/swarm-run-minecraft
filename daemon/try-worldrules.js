@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Slice 0 (NETHER.md): does a scene command run, and which world is the body in.
 // Everything here is a measurement printed with numbers; red only where the
 // INSTRUMENT is wrong, because every later Nether verdict leans on these.
@@ -67,10 +68,10 @@ async function timeWindow (label, value) {
   await kit.must('/time set 10900', /^Set the time to 10900$/, 'время 10900 не выставлено')
   await sleep(2000) // update_time comes once per 20 ticks
   const before = (await header()).time
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await sleep(8000)
   const after = (await header()).time
-  const secs = (Date.now() - t0) / 1000
+  const secs = (gameClock.now() - t0) / 1000
   console.log(`   ${label}: метка ${before} → ${after} за ${secs.toFixed(1)} с (при ходе 10900+40 → ~11100, «закат» с 11000)`)
   return { before, after, secs }
 }

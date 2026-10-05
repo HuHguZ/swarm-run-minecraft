@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Закрытый штрек: путь к цели сквозь твёрдое, при котором ни одна наша клетка
 // не касается гранью чужого воздуха, лавы или огня. Так бастион копают без
 // брутов, злых пиглинов и лавы: злые не дойдут (пути нет), арбалетчик не видит
@@ -254,7 +255,7 @@ function reachCells (view, from, { radius = 24, maxNodes = 4000 } = {}) {
 // (карман связан с чужим воздухом), счётчики. Путь исполняется ход за ходом,
 // каждый ход сперва сверяется с живым миром (лава могла натечь, моб встать);
 // не сошлось — отказ, вызывающий перепланирует.
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => new Promise(r => gameClock.setTimeout(r, ms))
 const vec = c => new Vec3(c.x, c.y, c.z)
 const liveCls = (bot, v) => classOf(bot.blockAt(v, false))
 // Клетка ног: на песке душ, грязи, грядке (высота 0.875–0.94) ноги на y−0.125 — floored() дал бы клетку пола
@@ -459,7 +460,7 @@ async function bonusGold (bot, S) {
       }
       if (!safe) continue
       const r = await digCell(bot, n, { allowGuard: true })
-      if (r === 'ok') { S.own.add(nk); got++; if (b.name === 'nether_gold_ore') S.ores++; else S.bonusBlocks++; S.lastBreak = Date.now() }
+      if (r === 'ok') { S.own.add(nk); got++; if (b.name === 'nether_gold_ore') S.ores++; else S.bonusBlocks++; S.lastBreak = gameClock.now() }
     }
   }
   if (got) await sleep(250)
@@ -474,7 +475,7 @@ async function execute (session, ctl, path, S) {
     if (ctl.waitReflex) await ctl.waitReflex()
     const mv = path[i]
     if (ctl.aborted) return { ok: false, why: 'прервано', done: i }
-    if (Date.now() > S.deadline) return { ok: false, why: 'время', done: i }
+    if (gameClock.now() > S.deadline) return { ok: false, why: 'время', done: i }
     for (const q of bodyCells(bot)) { const b = bot.blockAt(q); if (b && /lava|fire/.test(b.name)) return { ok: false, why: 'огонь или лава в клетке тела', done: i } }
     // Страж ближнего боя (ne-guard, 03.10): удар/брут вплотную — ответ сразу (яма на 2 вниз, столб, бой), а не после
     // шага: VR23-2/VR26-2/VR31-3 — пиглин бил 5 раз за 5 с посреди хода штрека/ямы, тело шло дальше. По умолчанию вкл. (03.10, замер B0→B2→B4), ND_GUARD=0 — выкл.
@@ -524,8 +525,8 @@ async function execute (session, ctl, path, S) {
       if (r !== 'ok' && r !== 'air') return { ok: false, why: `копка ${k}: ${r}`, done: i }
       if (r === 'ok') {
         S.dug++
-        if (b0 && b0.name === 'gold_block') { S.goldPassed = (S.goldPassed || 0) + 1; S.lastBreak = Date.now() }
-        if (b0 && b0.name === 'nether_gold_ore') { S.ores++; S.lastBreak = Date.now() }
+        if (b0 && b0.name === 'gold_block') { S.goldPassed = (S.goldPassed || 0) + 1; S.lastBreak = gameClock.now() }
+        if (b0 && b0.name === 'nether_gold_ore') { S.ores++; S.lastBreak = gameClock.now() }
       }
       S.own.add(k)
     }

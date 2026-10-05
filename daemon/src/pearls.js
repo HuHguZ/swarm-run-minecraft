@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Жемчуг эндера: охота на эндерменов из укрытия и бартер с пиглинами (mc_pearls).
 //
 // Механика — байткод paper-1.21.11 (EnderMan, Mob.getAttackBoundingBox,
@@ -69,8 +70,8 @@ async function walkTo (bot, ctl, target, range, ms, stopIf = null) {
     await Promise.race([
       bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, range)),
       guard.promise,
-      new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), Math.max(500, ms)) }),
-      new Promise((_resolve, reject) => { if (stopIf) poll = setInterval(() => { try { if (stopIf()) reject(new Error('опасность рядом')) } catch {} }, 250) })
+      new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(500, ms)) }),
+      new Promise((_resolve, reject) => { if (stopIf) poll = gameClock.setInterval(() => { try { if (stopIf()) reject(new Error('опасность рядом')) } catch {} }, 250) })
     ])
     return { ok: true }
   } catch (e) {
@@ -78,8 +79,8 @@ async function walkTo (bot, ctl, target, range, ms, stopIf = null) {
     return { ok: false, error: e.message }
   } finally {
     guard.stop()
-    if (timer) clearTimeout(timer)
-    if (poll) clearInterval(poll)
+    if (timer) gameClock.clearTimeout(timer)
+    if (poll) gameClock.clearInterval(poll)
   }
 }
 
@@ -123,9 +124,9 @@ function hazardNear (bot, c) {
 
 async function stepInto (bot, cell) {
   const target = cell.offset(0.5, 0, 0.5)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 2000 && bot.entity.position.floored().distanceTo(cell) >= 0.5) {
+    while (gameClock.now() - t0 < 2000 && bot.entity.position.floored().distanceTo(cell) >= 0.5) {
       await bot.lookAt(target.offset(0, 1.6, 0), true)
       bot.setControlState('forward', true)
       await sleep(50)
@@ -325,7 +326,7 @@ async function searchWalk (bot, ctl, dist = 16, stopIf = null, { high = false } 
     // случайную сторону.
     const a = Math.random() * Math.PI * 2
     const tx = Math.round(me.x + Math.sin(a) * dist); const tz = Math.round(me.z + Math.cos(a) * dist)
-    const w = await require('./movement').travelXZ(bot, ctl, tx, tz, { range: 3, retries: 1, deadline: Date.now() + 20000 })
+    const w = await require('./movement').travelXZ(bot, ctl, tx, tz, { range: 3, retries: 1, deadline: gameClock.now() + 20000 })
     return { x: tx, z: tz, ok: w.ok, blind: true }
   }
   // high — на возвышенность (верхняя четверть по высоте): с гребня видно глаза,
@@ -360,7 +361,7 @@ async function openFight (session, ctl, em, { retreatAt = 8, dead, maxMs = 25000
   const combat = require('./combat')
   const guard = combat.makeShield(session, ctl, { shield: 'ranged' })
   const safety = survival.watch(bot)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let swings = 0
   let last = 0
   let blocks = 0
@@ -372,14 +373,14 @@ async function openFight (session, ctl, em, { retreatAt = 8, dead, maxMs = 25000
   let stale = false
   let crowd = false
   let retargets = 0
-  const onSwing = e => { if (e && e.id === em.id) { blockAt = Date.now(); hisSwings++ } }
+  const onSwing = e => { if (e && e.id === em.id) { blockAt = gameClock.now(); hisSwings++ } }
   bot.on('entitySwingArm', onSwing)
   try {
     const w = bestWeapon(bot)
     if (w) { try { await bot.equip(w, 'hand') } catch {} }
     await guard.wear()
-    let lastNear = Date.now()
-    while (!ctl.aborted && Date.now() - t0 < maxMs && em.isValid !== false && !dead.has(em.id)) {
+    let lastNear = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - t0 < maxMs && em.isValid !== false && !dead.has(em.id)) {
       const risk = safety.check({ target: em, entities: Object.values(bot.entities).filter(e =>
         e?.name === 'enderman' && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy')),
       minHealth: Math.max(8, retreatAt) })
@@ -394,18 +395,18 @@ async function openFight (session, ctl, em, { retreatAt = 8, dead, maxMs = 25000
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
         if (closer && reachTo(bot, closer) + 0.5 < reachTo(bot, em)) { em = closer; retargets++ }
       }
-      if (reachTo(bot, em) <= 8) lastNear = Date.now()
-      else if (Date.now() - lastNear > 8000) { stale = true; break }
+      if (reachTo(bot, em) <= 8) lastNear = gameClock.now()
+      else if (gameClock.now() - lastNear > 8000) { stale = true; break }
       const body = em.position.offset(0, 1.0, 0)
       try { await bot.lookAt(body, true) } catch {}
       const r = reachTo(bot, em)
       // Взмах — сразу после его удара в щит (звук блока): у него перезарядка
       // 20 тиков, наш щит снова держит через 5. Или если он молчит 1.5 с.
-      if (guard.stats.blocked > blocks) { blocks = guard.stats.blocked; blockAt = Date.now() }
-      const window = Date.now() - blockAt < 700 || Date.now() - Math.max(last, t0) > 1500
-      if (r <= 3.0 && Date.now() - last >= SWING_MS && window) {
+      if (guard.stats.blocked > blocks) { blocks = guard.stats.blocked; blockAt = gameClock.now() }
+      const window = gameClock.now() - blockAt < 700 || gameClock.now() - Math.max(last, t0) > 1500
+      if (r <= 3.0 && gameClock.now() - last >= SWING_MS && window) {
         await guard.raise(false)
-        try { bot.attack(em); swings++; last = Date.now() } catch {}
+        try { bot.attack(em); swings++; last = gameClock.now() } catch {}
       } else if (r <= 5) {
         await guard.raise(true)
       } else if (r <= 8 && Math.abs(em.position.y - bot.entity.position.y) <= 2) {
@@ -426,7 +427,7 @@ async function openFight (session, ctl, em, { retreatAt = 8, dead, maxMs = 25000
     try { await guard.raise(false) } catch {}
     guard.close()
   }
-  return { killed: dead.has(em.id), target: em, retargets, stale, crowd, swings, hisSwings, blocked: guard.stats.blocked, hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, seconds: Math.round((Date.now() - t0) / 1000) }
+  return { killed: dead.has(em.id), target: em, retargets, stale, crowd, swings, hisSwings, blocked: guard.stats.blocked, hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, seconds: Math.round((gameClock.now() - t0) / 1000) }
 }
 
 // ------------------------------------------------------------ hunt: столб
@@ -615,7 +616,7 @@ async function pillarDown (bot, ctl, mcData, base) {
 async function huntPillar (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const radius = clamp(p.radius ?? 40, 8, 64)
   const pearls0 = countOf(bot, 'ender_pearl')
@@ -625,13 +626,13 @@ async function huntPillar (session, ctl, p = {}) {
   const kills = []
   const dead = new Set()
   const hurtAt = new Map()
-  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, Date.now()) }
+  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, gameClock.now()) }
   const onDead = (e, how) => {
     if (!e || e.name !== 'enderman' || dead.has(e.id) || !e.position) return
     if (e.position.distanceTo(bot.entity.position) > 12) return
-    if (how === 'gone' && !(Date.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
     dead.add(e.id)
-    kills.push({ at: xyz(e.position), t: Math.round((Date.now() - t0) / 1000) })
+    kills.push({ at: xyz(e.position), t: Math.round((gameClock.now() - t0) / 1000) })
   }
   const onGone = e => onDead(e, 'gone')
   bot.on('entityHurt', onHurt)
@@ -658,7 +659,7 @@ async function huntPillar (session, ctl, p = {}) {
   try {
     while (!ctl.aborted) {
       if (countOf(bot, 'ender_pearl') >= want) break
-      if (Date.now() > deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
       // На столбе хп мало — есть и ждать наверху (с земли злой не достаёт).
       if (onTop() && (bot.health ?? 20) < 14) {
         if ((bot.food ?? 20) < 20) { try { await require('./actions').eat(session, {}) } catch {} }
@@ -673,7 +674,7 @@ async function huntPillar (session, ctl, p = {}) {
       if (!onTop()) {
         let up = angryClose(12) ? await emergencyPillar(bot, ctl) : await pillarUp(bot, ctl, { skip, stopIf: () => angryClose(10) })
         // Ад — пещеры с низким сводом: места под столб нет — пройти дальше.
-        for (let k = 0; k < 8 && !up.ok && !ctl.aborted && Date.now() + 30000 < deadline; k++) {
+        for (let k = 0; k < 8 && !up.ok && !ctl.aborted && gameClock.now() + 30000 < deadline; k++) {
           if (angryClose(12)) {
             up = await emergencyPillar(bot, ctl)
             if (up.ok) break
@@ -714,7 +715,7 @@ async function huntPillar (session, ctl, p = {}) {
         if (!em) {
           // Никого на виду: подождать (они ходят и телепортируются), потом
           // сменить место — вниз, пройтись, новый столб.
-          if (searches++ < 8 || Date.now() + 20000 < deadline) {
+          if (searches++ < 8 || gameClock.now() + 20000 < deadline) {
             try { await bot.look(bot.entity.yaw + 1.2, -0.6, true) } catch {}
             await sleep(2500)
             // Столб стоит ~10 с — менять место не чаще раза в 20 с.
@@ -735,9 +736,9 @@ async function huntPillar (session, ctl, p = {}) {
           break
         }
         round.from = Math.round(em.position.distanceTo(me))
-        const tA = Date.now()
+        const tA = gameClock.now()
         let looks = 0
-        while (!ctl.aborted && Date.now() - tA < 6000 && !meta(bot, em, 'creepy') && em.isValid !== false) {
+        while (!ctl.aborted && gameClock.now() - tA < 6000 && !meta(bot, em, 'creepy') && em.isValid !== false) {
           if (eyesSeen(bot, em)) { await bot.lookAt(em.position.offset(0, 2.55, 0), true); looks++ }
           await sleep(100)
         }
@@ -751,19 +752,19 @@ async function huntPillar (session, ctl, p = {}) {
       try { await bot.look(bot.entity.yaw, -1.5, true) } catch {}
       if (weapon) { try { await bot.equip(weapon, 'hand') } catch {} }
       // 3. Ждать у подножия и бить сверху.
-      const tB = Date.now()
+      const tB = gameClock.now()
       let swings = 0
       let last = 0
       const hpTop = bot.health ?? 20
       let dbgAt = 0
-      while (!ctl.aborted && Date.now() - tB < 35000 && em.isValid !== false && !dead.has(em.id)) {
+      while (!ctl.aborted && gameClock.now() - tB < 35000 && em.isValid !== false && !dead.has(em.id)) {
         if ((bot.health ?? 20) <= retreatAt) break
         const r = reachTo(bot, em)
-        if (Date.now() - dbgAt > 3000) { dbgAt = Date.now(); log('ждёт', { t: Math.round((Date.now() - tB) / 1000), r: Math.round(r * 10) / 10, creepy: !!meta(bot, em, 'creepy'), pos: xyz(em.position) }) }
+        if (gameClock.now() - dbgAt > 3000) { dbgAt = gameClock.now(); log('ждёт', { t: Math.round((gameClock.now() - tB) / 1000), r: Math.round(r * 10) / 10, creepy: !!meta(bot, em, 'creepy'), pos: xyz(em.position) }) }
         // Встал ниже и не подходит (лаборатория, прогон 11: злой 12 с стоял
         // в 5.1 блока на 3 ниже подножия): спуститься по столбу, пока его
         // макушка ниже наших ног, — с края обрыва меч достаёт, он нас нет.
-        if (r > 3.0 && Date.now() - tB > 4000 && pillar && bot.entity.position.floored().y > pillar.base.y) {
+        if (r > 3.0 && gameClock.now() - tB > 4000 && pillar && bot.entity.position.floored().y > pillar.base.y) {
           const feetY = bot.entity.position.floored().y
           if (feetY - 1 > em.position.y + 2.95) {
             const e2 = await digCell(bot, mcData, bot.entity.position.floored().offset(0, -1, 0))
@@ -773,7 +774,7 @@ async function huntPillar (session, ctl, p = {}) {
         const aim = r <= 3.2 ? safeAim(bot, em) : null
         if (aim) {
           try { await bot.lookAt(aim.pt, true) } catch {}
-          if (Date.now() - last >= SWING_MS) { try { bot.attack(em); swings++; last = Date.now(); round.aim = aim.deg } catch {} }
+          if (gameClock.now() - last >= SWING_MS) { try { bot.attack(em); swings++; last = gameClock.now(); round.aim = aim.deg } catch {} }
         } else {
           try { await bot.look(bot.entity.yaw, -1.5, true) } catch {}
           if (r <= 3.0) round.noAim = (round.noAim || 0) + 1
@@ -783,7 +784,7 @@ async function huntPillar (session, ctl, p = {}) {
       round.swings = swings
       round.killed = dead.has(em.id)
       round.hurtOnTop = Math.round(hpTop - (bot.health ?? 20))
-      round.seconds = Math.round((Date.now() - tB) / 1000)
+      round.seconds = Math.round((gameClock.now() - tB) / 1000)
       rounds.push(round)
       log('раунд', round)
       if (round.killed) {
@@ -820,7 +821,7 @@ async function huntPillar (session, ctl, p = {}) {
     rounds: rounds.slice(-8),
     hpLost: Math.max(0, hp0 - Math.round(bot.health ?? 0)),
     at: xyz(bot.entity.position),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (pearls < want) {
     detail.need = { what: 'ender_pearl', count: want - pearls, have: pearls }
@@ -1013,7 +1014,7 @@ async function buildBooth (bot, ctl, mcData, { radius = 32, exclude = [] } = {})
 async function huntTunnel (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const pearls0 = countOf(bot, 'ender_pearl')
   const want = pearls0 + Math.max(1, p.count ?? 4)
@@ -1021,10 +1022,10 @@ async function huntTunnel (session, ctl, p = {}) {
   const rounds = []
   const dead = new Set()
   const hurtAt = new Map()
-  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, Date.now()) }
+  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, gameClock.now()) }
   const onDead = (e, how) => {
     if (!e || e.name !== 'enderman' || !e.position || e.position.distanceTo(bot.entity.position) > 12) return
-    if (how === 'gone' && !(Date.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
     dead.add(e.id)
   }
   const onGone = e => onDead(e, 'gone')
@@ -1044,21 +1045,21 @@ async function huntTunnel (session, ctl, p = {}) {
   const weapon = bestWeapon(bot)
   const isPearl = e => { try { const it = e.getDroppedItem && e.getDroppedItem(); return !!it && it.name === 'ender_pearl' } catch { return false } }
   const endermen = () => Object.values(bot.entities).filter(e => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id))
-  const skipped = e => (skip.get(e.id) || 0) > Date.now()
-  const ignored = e => (ignore.get(e.id) || 0) > Date.now()
+  const skipped = e => (skip.get(e.id) || 0) > gameClock.now()
+  const ignored = e => (ignore.get(e.id) || 0) > gameClock.now()
   // Злые, что ещё идут к нам. В штреке их можно ждать сколько угодно: у входа
   // встаёт только один (рост 2.9 в штрек 1x2 не лезет), бьём его из глубины.
   const pending = () => endermen().filter(e => meta(bot, e, 'creepy') && !ignored(e) && e.position.distanceTo(bot.entity.position) < 40)
   const nearMouth = r => endermen().some(e => meta(bot, e, 'creepy') && !ignored(e) && e.position.distanceTo(tun.mouth.offset(0.5, 0, 0.5)) < r)
   const stare = async (target, ms) => {
-    const tS = Date.now()
-    while (!ctl.aborted && Date.now() - tS < ms && !meta(bot, target, 'creepy') && target.isValid !== false) {
+    const tS = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - tS < ms && !meta(bot, target, 'creepy') && target.isValid !== false) {
       if (eyesSeen(bot, target)) await bot.lookAt(target.position.offset(0, 2.55, 0), true).catch(() => {})
       await sleep(100)
     }
     const ok = !!meta(bot, target, 'creepy')
     if (ok) aggros++
-    else skip.set(target.id, Date.now() + 30000)
+    else skip.set(target.id, gameClock.now() + 30000)
     return ok
   }
   const targetsFrom = (me, max = 32) => endermen().filter(e => !skipped(e) && !meta(bot, e, 'creepy') && !trappedEm(bot, e))
@@ -1094,7 +1095,7 @@ async function huntTunnel (session, ctl, p = {}) {
     await home()
     return res
   }
-  let lastChance = Date.now()
+  let lastChance = gameClock.now()
   try {
     // Будка на месте с обзором; не вышла — штрек в стене.
     tun = p.booth === false ? { ok: false } : await buildBooth(bot, ctl, mcData, { radius: 32 })
@@ -1103,27 +1104,27 @@ async function huntTunnel (session, ctl, p = {}) {
     if (!tun.ok) { stopped = tun.why; tun = null }
     while (tun && !ctl.aborted) {
       if (countOf(bot, 'ender_pearl') >= want) break
-      if (Date.now() > deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
       if (!bot.entity.position.floored().equals(tun.stand)) await home()
       const all = endermen()
       // Злой 25 с и не у входа — застрял: не ждать его.
       for (const e of all) {
         if (!meta(bot, e, 'creepy')) { angrySince.delete(e.id); continue }
-        if (!angrySince.has(e.id)) angrySince.set(e.id, Date.now())
-        else if (Date.now() - angrySince.get(e.id) > 25000 && reachTo(bot, e) > 3.2) ignore.set(e.id, Date.now() + 60000)
+        if (!angrySince.has(e.id)) angrySince.set(e.id, gameClock.now())
+        else if (gameClock.now() - angrySince.get(e.id) > 25000 && reachTo(bot, e) > 3.2) ignore.set(e.id, gameClock.now() + 60000)
       }
       // 1. У входа — бить в тело (в глаза не смотреть: ближе 4 — телепорт).
       const near = all.filter(e => reachTo(bot, e) <= 3.0).sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
       if (near) {
         if (weapon && (!bot.heldItem || bot.heldItem.name !== weapon.name)) { try { await bot.equip(weapon, 'hand') } catch {} }
-        const r = { id: near.id, t: Math.round((Date.now() - t0) / 1000), swings: 0 }
+        const r = { id: near.id, t: Math.round((gameClock.now() - t0) / 1000), swings: 0 }
         const hpA = bot.health ?? 20
         let last = 0
-        const tA = Date.now()
-        while (!ctl.aborted && Date.now() - tA < 20000 && near.isValid !== false && !dead.has(near.id)) {
-          if (reachTo(bot, near) > 3.2) { await sleep(100); if (Date.now() - tA > 6000) break; continue }
+        const tA = gameClock.now()
+        while (!ctl.aborted && gameClock.now() - tA < 20000 && near.isValid !== false && !dead.has(near.id)) {
+          if (reachTo(bot, near) > 3.2) { await sleep(100); if (gameClock.now() - tA > 6000) break; continue }
           try { await bot.lookAt(near.position.offset(0, 1.0, 0), true) } catch {}
-          if (Date.now() - last >= SWING_MS) { try { bot.attack(near); r.swings++; last = Date.now() } catch {} }
+          if (gameClock.now() - last >= SWING_MS) { try { bot.attack(near); r.swings++; last = gameClock.now() } catch {} }
           await sleep(60)
         }
         await sleep(200)
@@ -1132,7 +1133,7 @@ async function huntTunnel (session, ctl, p = {}) {
         if (r.killed) {
           kills++
           Object.assign(r, await collect(near.position.clone()))
-        } else skip.set(near.id, Date.now() + 20000)
+        } else skip.set(near.id, gameClock.now() + 20000)
         r.pearls = countOf(bot, 'ender_pearl')
         rounds.push(r)
         log('штрек: бой', r)
@@ -1144,7 +1145,7 @@ async function huntTunnel (session, ctl, p = {}) {
       // 3. Злить отсюда (из глубины видно узко).
       const here = targetsFrom(bot.entity.position)
       if (here.length) {
-        lastChance = Date.now()
+        lastChance = gameClock.now()
         await stare(here[0], 5000)
         try { await bot.lookAt(tun.mouth.offset(0.5, 0.8, 0.5), true) } catch {}
         continue
@@ -1169,9 +1170,9 @@ async function huntTunnel (session, ctl, p = {}) {
           const cap = () => { if (bot.entity && bot.entity.pitch > -0.45) bot.entity.pitch = -0.45 }
           bot.on('physicsTick', cap)
           bot._ndNoMobAvoid = true
-          const tP = Date.now()
+          const tP = gameClock.now()
           try {
-            while (!ctl.aborted && Date.now() - tP < 9000 && calm.isValid !== false && bot.entities[calm.id] && !meta(bot, calm, 'creepy')) {
+            while (!ctl.aborted && gameClock.now() - tP < 9000 && calm.isValid !== false && bot.entities[calm.id] && !meta(bot, calm, 'creepy')) {
               if (reachTo(bot, calm) <= 2.9) {
                 const a = pick.aim(bot, calm)
                 if (a && a.point) {
@@ -1189,9 +1190,9 @@ async function huntTunnel (session, ctl, p = {}) {
           }
           await home()
           pk.angry = !!meta(bot, calm, 'creepy')
-          pk.s = Math.round((Date.now() - tP) / 1000)
+          pk.s = Math.round((gameClock.now() - tP) / 1000)
           log('штрек: удар-вызов', pk)
-          if (pk.angry) { aggros++; lastChance = Date.now() } else skip.set(calm.id, Date.now() + 30000)
+          if (pk.angry) { aggros++; lastChance = gameClock.now() } else skip.set(calm.id, gameClock.now() + 30000)
           continue
         }
       }
@@ -1200,7 +1201,7 @@ async function huntTunnel (session, ctl, p = {}) {
         await stepInto(bot, tun.c1)
         await stepInto(bot, tun.mouth)
         const out = targetsFrom(bot.entity.position)
-        if (out.length) lastChance = Date.now()
+        if (out.length) lastChance = gameClock.now()
         let n = 0
         for (const t of out.slice(0, 4)) {
           if (n >= 2 || nearMouth(8) || ctl.aborted) break
@@ -1214,7 +1215,7 @@ async function huntTunnel (session, ctl, p = {}) {
         if (!n) await sleep(700)
       } else await sleep(300)
       // 5. Две минуты некого злить — новый штрек в 40 блоках (до 3 раз).
-      if (Date.now() - lastChance > 120000 && !pending().length && moves < 3) {
+      if (gameClock.now() - lastChance > 120000 && !pending().length && moves < 3) {
         moves++
         mouths.push(tun.mouth)
         const old = tun
@@ -1225,7 +1226,7 @@ async function huntTunnel (session, ctl, p = {}) {
         log('штрек: новое место', t2.ok ? { mouth: xyz(t2.mouth), n: moves } : t2)
         if (t2.ok) tun = t2
         else { tun = old; await home() }
-        lastChance = Date.now()
+        lastChance = gameClock.now()
       }
     }
   } finally {
@@ -1236,7 +1237,7 @@ async function huntTunnel (session, ctl, p = {}) {
   // Из штрека — наружу (к входу).
   if (tun) { await stepInto(bot, tun.c1).catch(() => false); await stepInto(bot, tun.mouth).catch(() => false) }
   const pearls = countOf(bot, 'ender_pearl')
-  const secs = Math.round((Date.now() - t0) / 1000)
+  const secs = Math.round((gameClock.now() - t0) / 1000)
   const detail = {
     mode: 'hunt',
     style: 'штрек',
@@ -1360,9 +1361,9 @@ function foxHere (bot, mcData) {
 }
 
 async function foxDropIn (bot, fox) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 2500 && !bot.entity.position.floored().equals(fox.H)) {
+    while (gameClock.now() - t0 < 2500 && !bot.entity.position.floored().equals(fox.H)) {
       await bot.lookAt(fox.P.offset(0.5, 0.2, 0.5), true)
       bot.setControlState('forward', bot.entity.position.floored().y > fox.H.y)
       await sleep(50)
@@ -1424,8 +1425,8 @@ async function foxBuild (bot, ctl, mcData, site, danger = null) {
   try { await fortify.centerInCell(bot, 700) } catch {}
   const e = await digCell(bot, mcData, site.H)
   if (e) return { ok: false, why: `яма не копается: ${e}` }
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1500 && !bot.entity.position.floored().equals(site.H)) await sleep(50)
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1500 && !bot.entity.position.floored().equals(site.H)) await sleep(50)
   if (!bot.entity.position.floored().equals(site.H) && !(await foxDropIn(bot, site))) return { ok: false, why: 'в яму не спустился' }
   try { await fortify.centerInCell(bot, 500) } catch {}
   // Стенки ямы из того, что эндермен уносит (#enderman_holdable: нилий, земля,
@@ -1454,9 +1455,9 @@ async function foxBuild (bot, ctl, mcData, site, danger = null) {
 // отвечал «goal_reached» или «stuck», а тело так и стояло на дне (ферма 29.09,
 // foxhole-4: новое место не искалось — заливка из ямы не выходила наружу).
 async function climbOut (bot, fox) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 1800 && bot.entity.position.floored().y < fox.P.y) {
+    while (gameClock.now() - t0 < 1800 && bot.entity.position.floored().y < fox.P.y) {
       await bot.lookAt(fox.out.offset(0.5, 1.6, 0.5), true)
       bot.setControlState('forward', true)
       bot.setControlState('jump', true)
@@ -1488,7 +1489,7 @@ async function foxEnter (bot, ctl, fox) {
 async function huntFoxhole (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const pearls0 = countOf(bot, 'ender_pearl')
   const want = pearls0 + Math.max(1, p.count ?? 4)
@@ -1496,10 +1497,10 @@ async function huntFoxhole (session, ctl, p = {}) {
   const rounds = []
   const dead = new Set()
   const hurtAt = new Map()
-  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, Date.now()) }
+  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, gameClock.now()) }
   const onDead = (e, how) => {
     if (!e || e.name !== 'enderman' || !e.position || e.position.distanceTo(bot.entity.position) > 12) return
-    if (how === 'gone' && !(Date.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
     dead.add(e.id)
   }
   const onGone = e => onDead(e, 'gone')
@@ -1525,13 +1526,13 @@ async function huntFoxhole (session, ctl, p = {}) {
   // после того, как метка «злой» снята (цель потеряна без луча за 3 с), — увидит
   // нас снова и сразу бьёт. Таких не подкрадываться и из ямы при них не выходить.
   const recentAngry = new Map()
-  const hot = e => angry(e) || Date.now() - (recentAngry.get(e.id) || 0) < 45000
+  const hot = e => angry(e) || gameClock.now() - (recentAngry.get(e.id) || 0) < 45000
   const ignore = new Map()
   const weapon = bestWeapon(bot)
   const isPearl = e => { try { const it = e.getDroppedItem && e.getDroppedItem(); return !!it && it.name === 'ender_pearl' } catch { return false } }
   const endermen = () => Object.values(bot.entities).filter(e => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id))
-  const skipped = e => (skip.get(e.id) || 0) > Date.now()
-  const ignored = e => (ignore.get(e.id) || 0) > Date.now()
+  const skipped = e => (skip.get(e.id) || 0) > gameClock.now()
+  const ignored = e => (ignore.get(e.id) || 0) > gameClock.now()
   const angry = e => !!meta(bot, e, 'creepy')
   const pending = () => endermen().filter(e => angry(e) && !ignored(e) && e.position.distanceTo(bot.entity.position) < 40)
   let reach = null
@@ -1542,9 +1543,9 @@ async function huntFoxhole (session, ctl, p = {}) {
   const stare = async (target, ms) => {
     stares++
     pitchCap = null
-    const tS = Date.now()
+    const tS = gameClock.now()
     try {
-      while (!ctl.aborted && Date.now() - tS < ms && !angry(target) && target.isValid !== false && bot.entities[target.id]) {
+      while (!ctl.aborted && gameClock.now() - tS < ms && !angry(target) && target.isValid !== false && bot.entities[target.id]) {
         if (target.position.distanceTo(bot.entity.position) < 5) break
         if (eyesSeen(bot, target)) await bot.lookAt(target.position.offset(0, 2.55, 0), true).catch(() => {})
         await sleep(100)
@@ -1555,7 +1556,7 @@ async function huntFoxhole (session, ctl, p = {}) {
     }
     const ok = angry(target)
     if (ok) aggros++
-    else skip.set(target.id, Date.now() + 30000)
+    else skip.set(target.id, gameClock.now() + 30000)
     return ok
   }
   const starePool = (maxD = 24) => {
@@ -1636,12 +1637,12 @@ async function huntFoxhole (session, ctl, p = {}) {
     }
     return last || { ok: false, why: 'окоп не построился' }
   }
-  let lastChance = Date.now()
-  let lastPeek = Date.now()
+  let lastChance = gameClock.now()
+  let lastPeek = gameClock.now()
   let lastPoke = 0
   let pokes = 0
-  let lastNear = Date.now()
-  let lastReach = Date.now()
+  let lastNear = gameClock.now()
+  let lastReach = gameClock.now()
   let stalks = 0
   let openFights = 0
   const avoid0 = bot._ndMobAvoidOnly
@@ -1664,7 +1665,7 @@ async function huntFoxhole (session, ctl, p = {}) {
     r.pearls = countOf(bot, 'ender_pearl')
     // Ни одного взмаха (не достать: выше, за блоком) — не крутиться на нём: 20 с мимо
     // (ферма 29.09, foxhole-8 слот 13: «бой снаружи» с 0 взмахов по кругу).
-    if (!r.killed && !(f && f.swings)) ignore.set(em.id, Date.now() + 20000)
+    if (!r.killed && !(f && f.swings)) ignore.set(em.id, gameClock.now() + 20000)
     rounds.push(r)
     log('окоп: бой снаружи', r)
     return true
@@ -1680,7 +1681,7 @@ async function huntFoxhole (session, ctl, p = {}) {
     }
     while (fox && !ctl.aborted) {
       if (countOf(bot, 'ender_pearl') >= want) break
-      if (Date.now() > deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
       // Без кирки окоп не копается — выйти, пусть этап сделает запасные (campaign spares).
       if (!bot.inventory.items().some(i => /_pickaxe$/.test(i.name))) { stopped = 'кирка кончилась'; break }
       if (!inHole()) {
@@ -1702,9 +1703,9 @@ async function huntFoxhole (session, ctl, p = {}) {
       const all = endermen()
       for (const e of all) {
         if (!angry(e)) { angrySince.delete(e.id); continue }
-        recentAngry.set(e.id, Date.now())
-        if (!angrySince.has(e.id)) angrySince.set(e.id, Date.now())
-        else if (Date.now() - angrySince.get(e.id) > 25000 && reachTo(bot, e) > 3.2) ignore.set(e.id, Date.now() + 60000)
+        recentAngry.set(e.id, gameClock.now())
+        if (!angrySince.has(e.id)) angrySince.set(e.id, gameClock.now())
+        else if (gameClock.now() - angrySince.get(e.id) > 25000 && reachTo(bot, e) > 3.2) ignore.set(e.id, gameClock.now() + 60000)
       }
       // 1. В досягаемости — бить в тело (в глаза не смотреть).
       // Запас 0.2 до 3.0: сервер меряет досягаемость от своей позиции тела, и на краю
@@ -1712,13 +1713,13 @@ async function huntFoxhole (session, ctl, p = {}) {
       const zpNear = Object.values(bot.entities).filter(o => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(bot.entity.position) < 8)
       const near = all.filter(e => reachTo(bot, e) <= 2.8 && safeAim(bot, e) && !zpNear.some(o => o.position.distanceTo(e.position) < 3)).sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
       if (near) {
-        lastReach = Date.now()
+        lastReach = gameClock.now()
         if (weapon && (!bot.heldItem || bot.heldItem.name !== weapon.name)) { try { await bot.equip(weapon, 'hand') } catch {} }
-        const r = { id: near.id, t: Math.round((Date.now() - t0) / 1000), swings: 0, angry: angry(near) }
+        const r = { id: near.id, t: Math.round((gameClock.now() - t0) / 1000), swings: 0, angry: angry(near) }
         const hpA = bot.health ?? 20
         const onMe0 = hitsOnMe
         let last = 0
-        const tA = Date.now()
+        const tA = gameClock.now()
         let gone = 0
         // Сколько взмахов дошло (его entityHurt) — на ферме бывало 31–37 взмахов без
         // убийства, а он в это время бил нас в яме (foxhole-13, слоты 15 и 19).
@@ -1730,16 +1731,16 @@ async function huntFoxhole (session, ctl, p = {}) {
         const guard = require('./combat').makeShield(session, ctl, { shield: 'ranged' })
         try {
           await guard.wear()
-          while (!ctl.aborted && Date.now() - tA < 30000 && near.isValid !== false && bot.entities[near.id] && !dead.has(near.id)) {
+          while (!ctl.aborted && gameClock.now() - tA < 30000 && near.isValid !== false && bot.entities[near.id] && !dead.has(near.id)) {
             const aim = reachTo(bot, near) <= 2.8 ? safeAim(bot, near) : null
-            if (!aim) { if (!gone) gone = Date.now(); if (Date.now() - gone > 6000) break; await sleep(100); continue }
+            if (!aim) { if (!gone) gone = gameClock.now(); if (gameClock.now() - gone > 6000) break; await sleep(100); continue }
             gone = 0
             try { await bot.lookAt(aim.pt, true) } catch {}
-            if (Date.now() - last >= SWING_MS) {
+            if (gameClock.now() - last >= SWING_MS) {
               await guard.raise(false)
               if (weapon && (!bot.heldItem || bot.heldItem.name !== weapon.name)) { try { await bot.equip(weapon, 'hand') } catch {} }
-              try { bot.attack(near); r.swings++; hits++; last = Date.now() } catch {}
-            } else if (Date.now() - last > 150) await guard.raise(true)
+              try { bot.attack(near); r.swings++; hits++; last = gameClock.now() } catch {}
+            } else if (gameClock.now() - last > 150) await guard.raise(true)
             await sleep(60)
           }
         } finally {
@@ -1755,7 +1756,7 @@ async function huntFoxhole (session, ctl, p = {}) {
         r.hitsOnMe = hitsOnMe - onMe0
         if (r.killed) {
           kills++
-          lastChance = Date.now()
+          lastChance = gameClock.now()
           const at = near.position.clone()
           await sleep(1500)
           const had = countOf(bot, 'ender_pearl')
@@ -1773,7 +1774,7 @@ async function huntFoxhole (session, ctl, p = {}) {
             }
           }
           r.got = countOf(bot, 'ender_pearl') - had
-        } else skip.set(near.id, Date.now() + 15000)
+        } else skip.set(near.id, gameClock.now() + 15000)
         r.pearls = countOf(bot, 'ender_pearl')
         rounds.push(r)
         log('окоп: бой', r)
@@ -1781,11 +1782,11 @@ async function huntFoxhole (session, ctl, p = {}) {
       }
       // 2. Злые идут — ждать (взгляд вниз).
       const pend = pending()
-      if (pend.length) { lastChance = Date.now(); lastReach = Date.now(); await sleep(400); continue }
+      if (pend.length) { lastChance = gameClock.now(); lastReach = gameClock.now(); await sleep(400); continue }
       // 3. Злить отсюда: глаза видно из ямы (щель под крышей).
       const pool = starePool()
       if (pool.length) {
-        lastChance = Date.now()
+        lastChance = gameClock.now()
         await stare(pool[0], 5000)
         continue
       }
@@ -1797,14 +1798,14 @@ async function huntFoxhole (session, ctl, p = {}) {
       // задевает соседей и злит и их. Дойти до ямы он должен уметь (reach).
       const hole = fox.P.offset(0.5, 0, 0.5)
       const pool2 = endermen()
-      if (pool2.some(e => !trappedEm(bot, e) && e.position.distanceTo(hole) <= POKE_R && canCome(e))) lastNear = Date.now()
-      if (p.poke === true && Date.now() - lastPoke > 6000) {
+      if (pool2.some(e => !trappedEm(bot, e) && e.position.distanceTo(hole) <= POKE_R && canCome(e))) lastNear = gameClock.now()
+      if (p.poke === true && gameClock.now() - lastPoke > 6000) {
         const calm = pool2.filter(e => !angry(e) && !skipped(e) && !trappedEm(bot, e) && e.position.distanceTo(hole) <= POKE_R &&
           Math.abs(e.position.y - fox.P.y) <= 6 && canCome(e) && !pool2.some(o => o !== e && o.position.distanceTo(e.position) < 3))
           .sort((a, c) => a.position.distanceTo(hole) - c.position.distanceTo(hole))[0]
         // Раз в 30 с — почему некого звать (кто в POKE_R и что мешает).
-        if (!calm && Date.now() - (huntFoxhole._why || 0) > 30000) {
-          huntFoxhole._why = Date.now()
+        if (!calm && gameClock.now() - (huntFoxhole._why || 0) > 30000) {
+          huntFoxhole._why = gameClock.now()
           const why = {}
           const inc = k => { why[k] = (why[k] || 0) + 1 }
           for (const e of pool2) {
@@ -1819,15 +1820,15 @@ async function huntFoxhole (session, ctl, p = {}) {
           if (Object.keys(why).length) log('окоп: звать некого', why)
         }
         if (calm) {
-          lastPoke = Date.now()
+          lastPoke = gameClock.now()
           pokes++
           const pk = { id: calm.id, from: Math.round(calm.position.distanceTo(hole)), hit: false }
           const hp1 = bot.health ?? 20
           if (await foxExit(bot, ctl, mcData, fox)) {
-            const tP = Date.now()
+            const tP = gameClock.now()
             bot._ndNoMobAvoid = true
             try {
-              while (!ctl.aborted && Date.now() - tP < 10000 && calm.isValid !== false && bot.entities[calm.id] && !angry(calm)) {
+              while (!ctl.aborted && gameClock.now() - tP < 10000 && calm.isValid !== false && bot.entities[calm.id] && !angry(calm)) {
                 if (reachTo(bot, calm) <= 2.9) {
                   const a = require('./pick').aim(bot, calm)
                   if (a && a.point) {
@@ -1855,11 +1856,11 @@ async function huntFoxhole (session, ctl, p = {}) {
             }
             await foxEnter(bot, ctl, fox)
             pk.angry = angry(calm)
-            pk.s = Math.round((Date.now() - tP) / 1000)
+            pk.s = Math.round((gameClock.now() - tP) / 1000)
             pk.hpLost = Math.round((hp1 - (bot.health ?? 20)) * 10) / 10
             pk.pearls = countOf(bot, 'ender_pearl')
             log('окоп: удар-вызов', pk)
-            if (pk.angry) { aggros++; lastChance = Date.now() } else skip.set(calm.id, Date.now() + 30000)
+            if (pk.angry) { aggros++; lastChance = gameClock.now() } else skip.set(calm.id, gameClock.now() + 30000)
           } else log('окоп: удар-вызов — из ямы не вышел', { id: calm.id, at: xyz(bot.entity.position) })
           continue
         }
@@ -1874,8 +1875,8 @@ async function huntFoxhole (session, ctl, p = {}) {
       if (endermen().some(e => hot(e) && !trappedEm(bot, e) && e.position.distanceTo(bot.entity.position) < 20)) { await sleep(700); continue }
       // Выглядывать — только по просьбе (peek: true): глаз с земли в лесу почти не видно
       // (ферма: «seen 0» в 30+ выглядываниях), а каждый выход — копка крыши и износ кирки.
-      if (p.peek === true && Date.now() - lastPeek > 45000) {
-        lastPeek = Date.now()
+      if (p.peek === true && gameClock.now() - lastPeek > 45000) {
+        lastPeek = gameClock.now()
         peeks++
         if (await foxExit(bot, ctl, mcData, fox)) {
           const out = starePool(28)
@@ -1885,7 +1886,7 @@ async function huntFoxhole (session, ctl, p = {}) {
             if (endermen().some(e => angry(e) && e.position.distanceTo(bot.entity.position) < 10)) break
             if (await stare(t, 4000)) n++
           }
-          if (out.length) lastChance = Date.now()
+          if (out.length) lastChance = gameClock.now()
           await foxEnter(bot, ctl, fox)
           log('окоп: выглянул', { seen: out.length, angered: n })
         }
@@ -1915,7 +1916,7 @@ async function huntFoxhole (session, ctl, p = {}) {
           continue
         }
       }
-      if (Date.now() - lastReach > 5000 && stalks < 20) {
+      if (gameClock.now() - lastReach > 5000 && stalks < 20) {
         const me = bot.entity.position
         // Зомби-пиглины рядом с целью — нет: взмах задевает соседей, и злится вся стая
         // (foxhole-14r: «slain by Zombified Piglin»; то же правило у дуэли).
@@ -1941,23 +1942,23 @@ async function huntFoxhole (session, ctl, p = {}) {
         // Брут, хоглин, гаст рядом — из окопа не выходить ни сдвинуться, ни подкрасться (chain6-14 30.09: окоп у
         // бастиона, «минуту некого злить — сдвинуться», вышел — брут; разбор Codex).
         const foesNear = Object.values(bot.entities).some(e => e && e.position && ((/^(piglin_brute|hoglin|zoglin|wither_skeleton)$/.test(e.name || '') && e.position.distanceTo(bot.entity.position) < 24) || (e.name === 'ghast' && e.position.distanceTo(bot.entity.position) < 48)))
-        if (foesNear) { lastChance = Date.now(); await sleep(700); continue }
+        if (foesNear) { lastChance = gameClock.now(); await sleep(700); continue }
         if (!t) {
           // Спокойных, к кому дойти, в 40 нет — старое правило: минуту некого злить — сдвинуться.
-          if (Date.now() - lastChance > 60000 && moves < 6) {
+          if (gameClock.now() - lastChance > 60000 && moves < 6) {
             moves++
             used.push(fox.P)
             await foxExit(bot, ctl, mcData, fox)
             const s = await newSite()
             log('окоп: новое место', s.ok ? { at: xyz(s.fox.P), n: moves } : s)
             if (s.ok) fox = s.fox
-            lastChance = Date.now()
+            lastChance = gameClock.now()
           }
           await sleep(700)
           continue
         }
         stalks++
-        lastReach = Date.now()
+        lastReach = gameClock.now()
         used.push(fox.P)
         await foxExit(bot, ctl, mcData, fox)
         const st = { id: t.id, from: Math.round(t.position.distanceTo(bot.entity.position)), steps: pick.n.d }
@@ -1966,12 +1967,12 @@ async function huntFoxhole (session, ctl, p = {}) {
           const w = await walkTo(bot, ctl, g, 1, 15000, () => endermen().some(e => angry(e) && e.position.distanceTo(bot.entity.position) < 6))
           st.walk = w.ok ? 'ok' : w.error
         }
-        if (!bot.entities[t.id] || t.isValid === false || angry(t)) { st.why = 'ушёл или злой'; log('окоп: подкрасться', st); skip.set(t.id, Date.now() + 20000); continue }
+        if (!bot.entities[t.id] || t.isValid === false || angry(t)) { st.why = 'ушёл или злой'; log('окоп: подкрасться', st); skip.set(t.id, gameClock.now() + 20000); continue }
         const s = await newSite({ near: t.position.clone() })
         st.site = s.ok ? xyz(s.fox.P) : s.why
         st.dist = s.ok ? Math.round(t.position.distanceTo(s.fox.P.offset(0.5, 0, 0.5)) * 10) / 10 : undefined
         log('окоп: подкрасться', st)
-        if (s.ok) { fox = s.fox; lastChance = Date.now() } else skip.set(t.id, Date.now() + 30000)
+        if (s.ok) { fox = s.fox; lastChance = gameClock.now() } else skip.set(t.id, gameClock.now() + 30000)
         continue
       }
       await sleep(700)
@@ -1987,7 +1988,7 @@ async function huntFoxhole (session, ctl, p = {}) {
   // Жемчуга хватает — наружу (дальше идти ногами); нет — сидеть в окопе до следующего вызова.
   if (fox && countOf(bot, 'ender_pearl') >= want) await foxExit(bot, ctl, mcData, fox).catch(() => false)
   const pearls = countOf(bot, 'ender_pearl')
-  const secs = Math.round((Date.now() - t0) / 1000)
+  const secs = Math.round((gameClock.now() - t0) / 1000)
   const detail = {
     mode: 'hunt',
     style: 'окоп',
@@ -2023,7 +2024,7 @@ async function huntFoxhole (session, ctl, p = {}) {
 async function huntDuel (session, ctl, p = {}) {
   const bot = session.bot
   const combat = require('./combat')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const pearls0 = countOf(bot, 'ender_pearl')
   const want = pearls0 + Math.max(1, p.count ?? 4)
@@ -2038,11 +2039,11 @@ async function huntDuel (session, ctl, p = {}) {
   // «убит» с двух взмахов).
   const deadIds = new Set()
   const hurtAt = new Map()
-  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, Date.now()) }
+  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, gameClock.now()) }
   const onDead = (e, how) => {
     if (!e || e.name !== 'enderman' || !e.position) return
     if (e.position.distanceTo(bot.entity.position) > 12) return
-    if (how === 'gone' && !(Date.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
     deadIds.add(e.id)
   }
   const onGone = e => onDead(e, 'gone')
@@ -2094,7 +2095,7 @@ async function huntDuel (session, ctl, p = {}) {
   // не дальше 64 от места старта.
   const pickTarget = (all, me) => all.filter(e => !skip.has(e.id) && eyesSeen(bot, e))
     .filter(e => { const d = e.position.distanceTo(me); return d >= 6 && d <= 28 })
-    .filter(e => !all.some(o => o !== e && (o.position.distanceTo(e.position) < 3 || (meta(bot, o, 'creepy') && !((ignoreAngry.get(o.id) || 0) > Date.now()) && !trappedEm(bot, o) && o.position.distanceTo(e.position) < 16))))
+    .filter(e => !all.some(o => o !== e && (o.position.distanceTo(e.position) < 3 || (meta(bot, o, 'creepy') && !((ignoreAngry.get(o.id) || 0) > gameClock.now()) && !trappedEm(bot, o) && o.position.distanceTo(e.position) < 16))))
     .filter(e => !Object.values(bot.entities).some(o => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10))
     .filter(e => e.position.distanceTo(home0) < 64 && !trappedEm(bot, e))
     .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
@@ -2146,8 +2147,8 @@ async function huntDuel (session, ctl, p = {}) {
       if (target) {
         res.from = Math.round(target.position.distanceTo(bot.entity.position))
         pitchCap = null
-        const tA = Date.now()
-        while (!ctl.aborted && Date.now() - tA < 5000 && !meta(bot, target, 'creepy') && target.isValid !== false) {
+        const tA = gameClock.now()
+        while (!ctl.aborted && gameClock.now() - tA < 5000 && !meta(bot, target, 'creepy') && target.isValid !== false) {
           if (eyesSeen(bot, target)) await bot.lookAt(target.position.offset(0, 2.55, 0), true).catch(() => {})
           await sleep(100)
         }
@@ -2174,7 +2175,7 @@ async function huntDuel (session, ctl, p = {}) {
   let idle = 0
   while (!ctl.aborted) {
     if (countOf(bot, 'ender_pearl') >= want) break
-    if (Date.now() > deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
     // Лечиться до боя: сытость 18+ и хп 16+. Хп мало — в коробку 1x1 с
     // крышей (blaze.boxRest): злой эндермен без луча не бьёт (MeleeAttackGoal:
     // hasLineOfSight) и через 60 тиков теряет цель (лаборатория, дуэль 1:
@@ -2197,13 +2198,13 @@ async function huntDuel (session, ctl, p = {}) {
     // Злить нового — только если злых в 24 блоках нет вовсе.
     // Злой, который 15 с не подходит (застрял за обрывом), — не в счёт на минуту
     // (прогон дуэли 3: бот простоял 6 минут, ожидая застрявшего).
-    const angryNear = all.some(e => meta(bot, e, 'creepy') && e.position.distanceTo(me) < 24 && !((ignoreAngry.get(e.id) || 0) > Date.now()))
+    const angryNear = all.some(e => meta(bot, e, 'creepy') && e.position.distanceTo(me) < 24 && !((ignoreAngry.get(e.id) || 0) > gameClock.now()))
     let em = angry.sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
-    const round = { t: Math.round((Date.now() - t0) / 1000) }
+    const round = { t: Math.round((gameClock.now() - t0) / 1000) }
     if (!em && angryNear) {
-      if (!angryWait) angryWait = Date.now()
-      if (Date.now() - angryWait > 15000) {
-        for (const e of all) if (meta(bot, e, 'creepy')) ignoreAngry.set(e.id, Date.now() + 60000)
+      if (!angryWait) angryWait = gameClock.now()
+      if (gameClock.now() - angryWait > 15000) {
+        for (const e of all) if (meta(bot, e, 'creepy')) ignoreAngry.set(e.id, gameClock.now() + 60000)
         angryWait = 0
       }
       await sleep(1000)
@@ -2224,8 +2225,8 @@ async function huntDuel (session, ctl, p = {}) {
         .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
       if (calm) {
         const pk = { id: calm.id, from: Math.round(calm.position.distanceTo(me)) }
-        const tP = Date.now()
-        while (!ctl.aborted && Date.now() - tP < 15000 && calm.isValid !== false && bot.entities[calm.id] && !meta(bot, calm, 'creepy')) {
+        const tP = gameClock.now()
+        while (!ctl.aborted && gameClock.now() - tP < 15000 && calm.isValid !== false && bot.entities[calm.id] && !meta(bot, calm, 'creepy')) {
           if (reachTo(bot, calm) <= 2.9) {
             const a = require('./pick').aim(bot, calm)
             if (a && a.point) {
@@ -2244,10 +2245,10 @@ async function huntDuel (session, ctl, p = {}) {
         }
         pitchCap = -0.5
         pk.angry = !!meta(bot, calm, 'creepy')
-        pk.s = Math.round((Date.now() - tP) / 1000)
+        pk.s = Math.round((gameClock.now() - tP) / 1000)
         log('удар-вызов', pk)
         if (pk.angry) { idle = 0; continue }
-        skip.add(calm.id); setTimeout(() => skip.delete(calm.id), 30000)
+        skip.add(calm.id); gameClock.setTimeout(() => skip.delete(calm.id), 30000)
       }
     }
     if (!em) {
@@ -2278,7 +2279,7 @@ async function huntDuel (session, ctl, p = {}) {
         .filter(e => { const d = e.position.distanceTo(me); return d >= 6 && d <= 28 })
         // В лесу по 20 штук в 48 блоках — «никого в 16» не бывает: рядом с ним
         // никого в 6 и ни одного злого в 16.
-        .filter(e => !all.some(o => o !== e && (o.position.distanceTo(e.position) < 3 || (meta(bot, o, 'creepy') && !((ignoreAngry.get(o.id) || 0) > Date.now()) && !trappedEm(bot, o) && o.position.distanceTo(e.position) < 16))))
+        .filter(e => !all.some(o => o !== e && (o.position.distanceTo(e.position) < 3 || (meta(bot, o, 'creepy') && !((ignoreAngry.get(o.id) || 0) > gameClock.now()) && !trappedEm(bot, o) && o.position.distanceTo(e.position) < 16))))
         // Зомби-пиглины рядом — нет: удар с размаха задевает соседей, и стая злится
         // (дуэль 5: «slain by Zombified Piglin»).
         .filter(e => !Object.values(bot.entities).some(o => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10))
@@ -2303,9 +2304,9 @@ async function huntDuel (session, ctl, p = {}) {
       }
       idle = 0
       pitchCap = null
-      const tA = Date.now()
+      const tA = gameClock.now()
       let looks = 0
-      while (!ctl.aborted && Date.now() - tA < 5000 && !meta(bot, em, 'creepy') && em.isValid !== false) {
+      while (!ctl.aborted && gameClock.now() - tA < 5000 && !meta(bot, em, 'creepy') && em.isValid !== false) {
         if (eyesSeen(bot, em)) { await bot.lookAt(em.position.offset(0, 2.55, 0), true); looks++ }
         await sleep(100)
       }
@@ -2335,20 +2336,20 @@ async function huntDuel (session, ctl, p = {}) {
       round.pillar = up.placed
       const w = bestWeapon(bot)
       if (w) { try { await bot.equip(w, 'hand') } catch {} }
-      const tP = Date.now()
+      const tP = gameClock.now()
       let last = 0
-      let nearAt = Date.now()
-      while (!ctl.aborted && Date.now() - tP < 30000 && em.isValid !== false && bot.entities[em.id]) {
+      let nearAt = gameClock.now()
+      while (!ctl.aborted && gameClock.now() - tP < 30000 && em.isValid !== false && bot.entities[em.id]) {
         // Злые к столбу не идут 10 с (стоят в 6+ блоках) — слезть и дальше: на
         // двойнике три столба подряд по 35 с без единого взмаха.
-        if (Object.values(bot.entities).some(e => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) < 6)) nearAt = Date.now()
-        if (Date.now() - nearAt > 10000) break
+        if (Object.values(bot.entities).some(e => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) < 6)) nearAt = gameClock.now()
+        if (gameClock.now() - nearAt > 10000) break
         // Со столба бьём любого злого, кто под нами в досягаемости (их бывает двое).
         const near = Object.values(bot.entities).filter(e => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) <= 3.0)
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0] || em
         const r = reachTo(bot, near)
         try { await bot.lookAt(near.position.offset(0, 2.2, 0), true) } catch {}
-        if (r <= 3.0 && Date.now() - last >= SWING_MS) { try { bot.attack(near); last = Date.now() } catch {} }
+        if (r <= 3.0 && gameClock.now() - last >= SWING_MS) { try { bot.attack(near); last = gameClock.now() } catch {} }
         if ((bot.food ?? 20) < 18 && r > 4) { try { await require('./actions').eat(session, {}) } catch {} }
         await sleep(80)
       }
@@ -2368,7 +2369,7 @@ async function huntDuel (session, ctl, p = {}) {
     if (f.target && f.target !== em) { round.retarget = f.retargets; em = f.target }
     round.killed = deadIds.has(em.id)
     round.swings = f.swings
-    if (f.stale) { round.stale = true; ignoreAngry.set(em.id, Date.now() + 60000) }
+    if (f.stale) { round.stale = true; ignoreAngry.set(em.id, gameClock.now() + 60000) }
     round.his = f.hisSwings
     round.blocked = f.blocked
     round.hpLost = Math.round(lost * 10) / 10
@@ -2396,7 +2397,7 @@ async function huntDuel (session, ctl, p = {}) {
         await pickUp(bot, ctl, 3, 1500)
       }
       await pickUp(bot, ctl, 6, 2000)
-    } else { skip.add(em.id); setTimeout(() => skip.delete(em.id), 20000) }
+    } else { skip.add(em.id); gameClock.setTimeout(() => skip.delete(em.id), 20000) }
     rounds.push(round)
     log('дуэль', round)
     if ((bot.health ?? 20) <= retreatAt) {
@@ -2410,7 +2411,7 @@ async function huntDuel (session, ctl, p = {}) {
   bot.removeListener('physicsTick', capPitch)
   bot.removeListener('entityHurt', onMeHurt)
   const pearls = countOf(bot, 'ender_pearl')
-  const secs = Math.round((Date.now() - t0) / 1000)
+  const secs = Math.round((gameClock.now() - t0) / 1000)
   const detail = {
     mode: 'hunt',
     style: 'дуэль',
@@ -2438,7 +2439,7 @@ async function hunt (session, ctl, p = {}) {
   if (p.style !== 'shaft') return huntTunnel(session, ctl, p)
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const radius = clamp(p.radius ?? 40, 8, 64)
   const pearls0 = countOf(bot, 'ender_pearl')
@@ -2448,13 +2449,13 @@ async function hunt (session, ctl, p = {}) {
   const kills = []
   const dead = new Set()
   const hurtAt = new Map()
-  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, Date.now()) }
+  const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, gameClock.now()) }
   const onDead = (e, how) => {
     if (!e || e.name !== 'enderman' || dead.has(e.id) || !e.position) return
     if (e.position.distanceTo(bot.entity.position) > 12) return
-    if (how === 'gone' && !(Date.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
     dead.add(e.id)
-    kills.push({ at: xyz(e.position), t: Math.round((Date.now() - t0) / 1000) })
+    kills.push({ at: xyz(e.position), t: Math.round((gameClock.now() - t0) / 1000) })
   }
   const onGone = e => onDead(e, 'gone')
   bot.on('entityHurt', onHurt)
@@ -2472,7 +2473,7 @@ async function hunt (session, ctl, p = {}) {
     const weapon = bestWeapon(bot)
     while (!ctl.aborted) {
       if (countOf(bot, 'ender_pearl') >= want) break
-      if (Date.now() > deadline) { stopped = 'время вышло'; break }
+      if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
       if ((bot.health ?? 20) <= retreatAt) { stopped = `хп ${Math.round(bot.health)} — дальше не охочусь`; break }
       // Автопилот в намерении не ест — между раундами ест охота сама: хп
       // восстанавливаются только при сытости 18+.
@@ -2482,7 +2483,7 @@ async function hunt (session, ctl, p = {}) {
       const em = nearestEnderman(bot, radius, skip.size ? new Set([...dead, ...skip]) : dead)
       if (!em) {
         // Никого на виду — пройтись: в лесу за грибами их не видно с места.
-        if (searches < 4 && deadline - Date.now() > 30000) {
+        if (searches < 4 && deadline - gameClock.now() > 30000) {
           searches++
           if (hide) { await climbOut(bot, ctl, hide).catch(() => null); hide = null }
           const w = await searchWalk(bot, ctl, rounds.length ? 20 : 16)
@@ -2525,10 +2526,10 @@ async function hunt (session, ctl, p = {}) {
       //    уходит телепортом.
       if (hide) { round.climbFirst = await climbOut(bot, ctl, hide); hide = null }
       const angryBefore = !!meta(bot, em, 'creepy')
-      const tA = Date.now()
+      const tA = gameClock.now()
       const stare = { looks: 0, blind: 0 }
       try { bot.clearControlStates() } catch {}
-      while (!ctl.aborted && Date.now() - tA < 8000 && !meta(bot, em, 'creepy') && em.isValid !== false) {
+      while (!ctl.aborted && gameClock.now() - tA < 8000 && !meta(bot, em, 'creepy') && em.isValid !== false) {
         const eyes = em.position.offset(0, 2.55, 0)
         if (em.position.distanceTo(bot.entity.position) < 5) break
         if (eyesSeen(bot, em)) { await bot.lookAt(eyes, true); stare.looks++ } else stare.blind++
@@ -2582,7 +2583,7 @@ async function hunt (session, ctl, p = {}) {
       //    не смотреть: взгляд в глаза ближе 4 блоков — и он уходит телепортом.
       try { await bot.lookAt(hide.shaft.offset(0.5, 0.3, 0.5), true) } catch {}
       if (weapon) { try { await bot.equip(weapon, 'hand') } catch {} }
-      const tB = Date.now()
+      const tB = gameClock.now()
       let swings = 0
       let lastSwing = 0
       // Свидетель «укрытие держит»: хп, потерянные уже В штреке (до него —
@@ -2590,24 +2591,24 @@ async function hunt (session, ctl, p = {}) {
       const hpHide = bot.health ?? 20
       let hpMin = hpHide
       round.hpAtHide = Math.round(hpHide)
-      while (!ctl.aborted && Date.now() - tB < 30000 && em.isValid !== false && !dead.has(em.id)) {
+      while (!ctl.aborted && gameClock.now() - tB < 30000 && em.isValid !== false && !dead.has(em.id)) {
         hpMin = Math.min(hpMin, bot.health ?? 20)
         round.hurtInHide = Math.round(hpHide - hpMin)
         if ((bot.health ?? 20) <= retreatAt) break
         const r = reachTo(bot, em)
-        if (r <= 3.0 && Date.now() - lastSwing >= SWING_MS) {
+        if (r <= 3.0 && gameClock.now() - lastSwing >= SWING_MS) {
           try {
             await bot.lookAt(em.position.offset(0, 0.3, 0), true)
             bot.attack(em)
             swings++
-            lastSwing = Date.now()
+            lastSwing = gameClock.now()
           } catch {}
         }
         await sleep(60)
       }
       round.swings = swings
       round.killed = dead.has(em.id)
-      round.seconds = Math.round((Date.now() - tB) / 1000)
+      round.seconds = Math.round((gameClock.now() - tB) / 1000)
       log('раунд', round)
       if (round.killed) {
         // Жемчуг лежит на дне шахты, где он умер: два шага туда.
@@ -2641,7 +2642,7 @@ async function hunt (session, ctl, p = {}) {
     hpLost: Math.max(0, hp0 - Math.round(bot.health ?? 0)),
     climbedOut: out ? out.ok : undefined,
     at: xyz(bot.entity.position),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (pearls < want) {
     detail.need = { what: 'ender_pearl', count: want - pearls, have: pearls }
@@ -2701,7 +2702,7 @@ function reachable (set, pos) {
 
 async function barter (session, ctl, p = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 180, 20, 600) * 1000 - 4000
   if (worlds.worldOf(bot) !== 'the_nether') {
     return { mode: 'barter', traded: 0, stopped: 'пиглины живут в Аду; в верхнем мире они через 15 с становятся зомби-пиглинами — бартер только там' }
@@ -2743,7 +2744,7 @@ async function barter (session, ctl, p = {}) {
   // не берёт, и подбор добычи возвращает его нам (первый прогон: брошено 6,
   // в рюкзаке снова 2). Такой слиток бросается ещё раз.
   const spent = () => ingots0 - countOf(bot, 'gold_ingot')
-  while (!ctl.aborted && Date.now() < deadline && spent() < toTrade && thrown < toTrade * 3) {
+  while (!ctl.aborted && gameClock.now() < deadline && spent() < toTrade && thrown < toTrade * 3) {
     const me = bot.entity.position
     if (BF.enabled()) {
       const G = require('./ne-guard')
@@ -2756,7 +2757,7 @@ async function barter (session, ctl, p = {}) {
     // стеной взял 17 слитков, а добыча легла у его ног в загоне (прогон 9).
     const reach = reachCells(bot)
     const piglins = Object.values(bot.entities).filter(e => e && e.name === 'piglin' && e.position && e.isValid !== false &&
-      !meta(bot, e, 'baby') && e.position.distanceTo(me) <= 16 && seesMob(bot, e) && (busy.get(e.id) || 0) < Date.now() &&
+      !meta(bot, e, 'baby') && e.position.distanceTo(me) <= 16 && seesMob(bot, e) && (busy.get(e.id) || 0) < gameClock.now() &&
       reachable(reach, e.position) && (!BF.enabled() || BF.ready(bot, e, busy)))
       .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))
     if (!piglins.length) {
@@ -2764,9 +2765,9 @@ async function barter (session, ctl, p = {}) {
       if (!anyone) { stopped = 'взрослых пиглинов в 16 блоках не вижу'; break }
       // Есть, но ни до кого не дойти (за стеной, на другом этаже), а сделок в
       // работе нет — не ждать до конца срока (лаборатория: 176 с впустую).
-      if (!nobodySince) nobodySince = Date.now()
-      const trading = [...busy.values()].some(t => t > Date.now() && t - Date.now() < ADMIRE_MS + 1600)
-      if (!trading && Date.now() - nobodySince > 10000) { stopped = 'пиглины рядом есть, но ни до одного не дойти (стены, другой этаж)'; break }
+      if (!nobodySince) nobodySince = gameClock.now()
+      const trading = [...busy.values()].some(t => t > gameClock.now() && t - gameClock.now() < ADMIRE_MS + 1600)
+      if (!trading && gameClock.now() - nobodySince > 10000) { stopped = 'пиглины рядом есть, но ни до одного не дойти (стены, другой этаж)'; break }
       // Все заняты разглядыванием — собрать то, что уже бросили к нам.
       const loot = Object.values(bot.entities).some(e => e && e.name === 'item' && e.position && e.position.distanceTo(me) <= 8)
       if (loot && !BF.enabled()) picked += await pickUp(bot, ctl, 8, 2500)
@@ -2786,14 +2787,14 @@ async function barter (session, ctl, p = {}) {
     // Досягаемость по сущности — 3 блока (entity_interaction_range).
     if (p.how !== 'toss') {
       if (pg.position.distanceTo(bot.entity.position) > 2.6) {
-        await walkTo(bot, ctl, pg.position.floored(), 1, Math.min(8000, deadline - Date.now()))
+        await walkTo(bot, ctl, pg.position.floored(), 1, Math.min(8000, deadline - gameClock.now()))
       }
       if (pg.isValid !== false && bot.entities[pg.id] && pg.position.distanceTo(bot.entity.position) <= 3.2) {
         const had = countOf(bot, 'gold_ingot')
         try {
           await bot.equip(ingot, 'hand')
           const aim = BF.enabled() ? require('./pick').aim(bot, pg) : null
-          if (BF.enabled() && (!aim || !aim.point)) { busy.set(pg.id, Date.now() + 1000); continue }
+          if (BF.enabled() && (!aim || !aim.point)) { busy.set(pg.id, gameClock.now() + 1000); continue }
           await bot.lookAt(aim ? aim.point : pg.position.offset(0, 1.2, 0), true)
           await bot.activateEntity(pg)
         } catch (e) { stopped = `слиток не вручил: ${e.message}`; break }
@@ -2802,10 +2803,10 @@ async function barter (session, ctl, p = {}) {
           thrown++
           handed++
           tosses.push({ piglin: pg.id, handed: true })
-          busy.set(pg.id, Date.now() + ADMIRE_MS + (BF.enabled() ? 150 : 1500))
+          busy.set(pg.id, gameClock.now() + ADMIRE_MS + (BF.enabled() ? 150 : 1500))
         } else {
           // Не взял: уже держит золото или злой — к следующему.
-          busy.set(pg.id, Date.now() + 4000)
+          busy.set(pg.id, gameClock.now() + 4000)
         }
         if (BF.enabled() || piglins.length > 1) continue
         await sleep(ADMIRE_MS)
@@ -2813,20 +2814,20 @@ async function barter (session, ctl, p = {}) {
         continue
       }
     }
-    if (BF.enabled() && p.how !== 'toss') { busy.set(pg.id, Date.now() + 1000); continue }
+    if (BF.enabled() && p.how !== 'toss') { busy.set(pg.id, gameClock.now() + 1000); continue }
     // Бросок: не подошёл на 3 блока (стена, лава) или how:'toss'. Пиглин идёт
     // за предметом только ближе 9 — и только если дойдёт до него: дальше 6
     // блоков не бросать (слиток лежал, пиглин стоял за стеной).
-    if (p.how !== 'toss' && pg.position.distanceTo(bot.entity.position) > 6) { busy.set(pg.id, Date.now() + 8000); continue }
+    if (p.how !== 'toss' && pg.position.distanceTo(bot.entity.position) > 6) { busy.set(pg.id, gameClock.now() + 8000); continue }
     if (pg.position.distanceTo(bot.entity.position) > 4) {
-      await walkTo(bot, ctl, pg.position.floored(), 3, Math.min(10000, deadline - Date.now()))
+      await walkTo(bot, ctl, pg.position.floored(), 3, Math.min(10000, deadline - gameClock.now()))
     }
     try {
       await bot.lookAt(pg.position.offset(0, 0.2, 0), true)
       await bot.toss(ingot.type, null, 1)
       thrown++
       tosses.push({ piglin: pg.id, dist: Math.round(pg.position.distanceTo(bot.entity.position) * 10) / 10 })
-      busy.set(pg.id, Date.now() + ADMIRE_MS + 1500)
+      busy.set(pg.id, gameClock.now() + ADMIRE_MS + 1500)
     } catch (e) {
       stopped = `слиток не бросил: ${e.message}`
       break
@@ -2840,7 +2841,7 @@ async function barter (session, ctl, p = {}) {
   }
   // Последние сделки ещё идут — дождаться и подобрать.
   if (thrown && !ctl.aborted) {
-    await sleep(Math.min(ADMIRE_MS + 1500, Math.max(0, deadline - Date.now())))
+    await sleep(Math.min(ADMIRE_MS + 1500, Math.max(0, deadline - gameClock.now())))
     picked += await pickUp(bot, ctl, 8, 6000)
   }
   const got = diffItems(before, countItems(bot))
@@ -2858,7 +2859,7 @@ async function barter (session, ctl, p = {}) {
     pearls,
     hpLost: Math.max(0, hp0 - Math.round(bot.health ?? 0)),
     tosses: tosses.slice(-8),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (stopped) detail.stopped = stopped
   detail.note = `Отдал ${detail.spent} слитк(ов) (бросков ${thrown}), выменял: ${Object.entries(gained).map(([k, v]) => `${k}×${v}`).join(', ') || 'ничего не подобрал'}. ` +

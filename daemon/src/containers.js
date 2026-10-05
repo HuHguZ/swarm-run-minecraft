@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { sleep, xyz, travelXZ } = require('./movement')
@@ -241,11 +242,11 @@ async function raceOpen (bot, opening, ms, message) {
 function waitUpdate (win, ms) {
   return new Promise(resolve => {
     const done = () => {
-      clearTimeout(timer)
+      gameClock.clearTimeout(timer)
       win.removeListener('update', done)
       resolve()
     }
-    const timer = setTimeout(done, ms)
+    const timer = gameClock.setTimeout(done, ms)
     win.once('update', done)
   })
 }
@@ -590,14 +591,14 @@ async function smelt (session, ctl, { item, count = 1, fuel = null, timeoutSecon
     }
     await sleep(250)
 
-    const deadline = Date.now() + runMs
+    const deadline = gameClock.now() + runMs
     // Progress is unreadable on this version — it is null until packets arrive
     // and the first reading is a spurious 0, because the fraction is computed
     // against a total that only lands afterwards. So watch the slots move, and
     // treat "nothing has moved for longer than one item takes" as gone dark.
     const stallMs = kind.ms + 8000
     let seen = null
-    let lastChange = Date.now()
+    let lastChange = gameClock.now()
 
     while (!ctl.aborted) {
       if (!live(bot, furnace)) { stopped = 'печка закрылась'; break }
@@ -606,21 +607,21 @@ async function smelt (session, ctl, { item, count = 1, fuel = null, timeoutSecon
       const mark = `${inCount}/${outCount}`
       if (mark !== seen) {
         seen = mark
-        lastChange = Date.now()
+        lastChange = gameClock.now()
       }
       made = outCount - started
       if (made >= target) break
-      if (Date.now() >= deadline) {
+      if (gameClock.now() >= deadline) {
         stopped = 'время вышло'
         break
       }
       // The last item leaves the input slot a tick before it lands in the
       // output, so an empty input is only final once nothing else moves.
-      if (!inCount && Date.now() - lastChange > 3000) {
+      if (!inCount && gameClock.now() - lastChange > 3000) {
         stopped = made < target ? 'плавить больше нечего' : null
         break
       }
-      if (Date.now() - lastChange > stallMs) {
+      if (gameClock.now() - lastChange > stallMs) {
         // Only an empty fuel slot is a furnace that ran out. If our coal is
         // still lying in there unburnt then the fuel was never the problem,
         // and topping it up just feeds a furnace that is stuck for some other
@@ -638,7 +639,7 @@ async function smelt (session, ctl, { item, count = 1, fuel = null, timeoutSecon
             stopped = 'печка погасла, подбросить не вышло'
             break
           }
-          lastChange = Date.now()
+          lastChange = gameClock.now()
           await sleep(250)
           continue
         }
@@ -759,7 +760,7 @@ async function reachContainer (bot, ctl, block, deadline) {
   let last = null
   for (const make of plans) {
     if (ctl.aborted) return
-    const left = deadline - Date.now()
+    const left = deadline - gameClock.now()
     if (left <= 0) break
     try {
       await walkTo(bot, make(), Math.min(WALK_MS, left))
@@ -782,7 +783,7 @@ async function openContainerAt (bot, ctl, block, deadline) {
     // The first attempt goes ahead whatever the clock says — opening the thing
     // is the point of the call, and refusing to try at all is a worse answer
     // than trying once and failing.
-    if (attempt && Date.now() >= deadline) break
+    if (attempt && gameClock.now() >= deadline) break
     await closeStray(bot)
     await bot.lookAt(aim, true) // force: see openFurnaceAt
     try {
@@ -793,7 +794,7 @@ async function openContainerAt (bot, ctl, block, deadline) {
       // Out of reach is far and away the usual cause, and the reach check above
       // only guarantees we were close enough when we started walking.
       const p = block.position
-      const left = deadline - Date.now()
+      const left = deadline - gameClock.now()
       if (left <= 0) break
       try { await walkTo(bot, new goals.GoalNear(p.x, p.y, p.z, 1), Math.min(WALK_MS, left)) } catch {}
     }
@@ -827,7 +828,7 @@ function shelfFacts (win) {
 }
 
 async function chestList (session, ctl, { x, y, z } = {}) {
-  const { block, win } = await findAndOpen(session, ctl, { x, y, z }, Date.now() + CHEST_MS)
+  const { block, win } = await findAndOpen(session, ctl, { x, y, z }, gameClock.now() + CHEST_MS)
   const shut = guardWindow(ctl, win)
   try {
     const facts = { contents: mapOf(win.containerItems()), ...shelfFacts(win) }
@@ -858,7 +859,7 @@ async function depositPass (bot, mcData, win, names, { budget = Infinity, caps =
 
   for (const name of names) {
     if ((ctl && ctl.aborted) || budget <= 0) break
-    if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
     if (!live(bot, win)) { left[name] = 'сундук закрылся'; break }
     const data = mcData.itemsByName[name]
     if (!data) { left[name] = 'нет такого предмета'; continue }
@@ -912,7 +913,7 @@ async function withdrawPass (bot, mcData, win, names, { budget = Infinity, caps 
 
   for (const name of names) {
     if ((ctl && ctl.aborted) || budget <= 0) break
-    if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
     if (!live(bot, win)) { left[name] = 'сундук закрылся'; break }
     const data = mcData.itemsByName[name]
     if (!data) { left[name] = 'нет такого предмета'; continue }
@@ -970,7 +971,7 @@ async function chestPut (session, ctl, { item, count = null, x, y, z } = {}) {
   // means 32 items, not 32 of each kind of ore.
   let budget = budgetOf(count)
 
-  const deadline = Date.now() + CHEST_MS
+  const deadline = gameClock.now() + CHEST_MS
   const { block, win } = await findAndOpen(session, ctl, { x, y, z }, deadline)
   const shut = guardWindow(ctl, win)
 
@@ -1029,7 +1030,7 @@ async function chestTake (session, ctl, { item, count = null, x, y, z } = {}) {
 
   let budget = budgetOf(count)
 
-  const deadline = Date.now() + CHEST_MS
+  const deadline = gameClock.now() + CHEST_MS
   const { block, win } = await findAndOpen(session, ctl, { x, y, z }, deadline)
   const shut = guardWindow(ctl, win)
 
@@ -1105,7 +1106,7 @@ const DIAGONALS = [[1, 1], [-1, -1], [1, -1], [-1, 1]]
 const iso = () => new Date().toISOString()
 const minutesSince = s => {
   const t = Date.parse(s || '')
-  return Number.isFinite(t) ? Math.max(0, Math.round((Date.now() - t) / 60000)) : null
+  return Number.isFinite(t) ? Math.max(0, Math.round((gameClock.wall.now() - t) / 60000)) : null
 }
 const samePos = (c, p) => c.x === p.x && c.y === p.y && c.z === p.z
 
@@ -1425,8 +1426,8 @@ function checkChest (bot, c) {
 }
 
 async function waitLoaded (bot, pos, ms = LOAD_MS) {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + ms
+  while (gameClock.now() < deadline) {
     if (bot.blockAt(pos)) return true
     await sleep(250)
   }
@@ -1690,7 +1691,7 @@ async function walkHome (session, ctl, rec, { range = 3, deadline }) {
 async function baseGo (session, ctl, { name = BASE, range = 3, timeoutSeconds = 120 } = {}) {
   const bot = session.bot
   const rec = needBase(session, name)
-  const deadline = Date.now() + Math.max(10, Math.min(600, timeoutSeconds)) * 1000
+  const deadline = gameClock.now() + Math.max(10, Math.min(600, timeoutSeconds)) * 1000
 
   // База в другом мире: ни шага. Pathfinder честно пошёл бы к тем же числам в
   // Аду — к лаве, а не домой (NETHER.md §4, строка 5).
@@ -1789,10 +1790,10 @@ async function baseSet (session, ctl, { name = BASE, x, y, z, radius = 10, move 
     why = found.best.why
   }
 
-  const deadline = Date.now() + 60000
+  const deadline = gameClock.now() + 60000
   if (bot.entity.position.distanceTo(spot) > 1.5) {
     try {
-      await walkTo(bot, new goals.GoalNear(spot.x, spot.y, spot.z, 1), Math.min(WALK_MS * 2, Math.max(2000, deadline - Date.now())))
+      await walkTo(bot, new goals.GoalNear(spot.x, spot.y, spot.z, 1), Math.min(WALK_MS * 2, Math.max(2000, deadline - gameClock.now())))
     } catch (e) {
       throw new Error(`до места ${spot.x},${spot.y},${spot.z} не дошёл: ${e.message}`)
     }
@@ -1907,7 +1908,7 @@ async function stashPut (session, ctl, { name = BASE, item = null, count = null,
   const bot = session.bot
   const mcData = session.mcData
   const rec = needBase(session, name)
-  const deadline = Date.now() + 70000
+  const deadline = gameClock.now() + 70000
 
   const asks = String(item === null || item === undefined ? '' : item)
     .split(',').map(s => s.trim()).filter(Boolean)
@@ -1982,7 +1983,7 @@ async function stashPut (session, ctl, { name = BASE, item = null, count = null,
   const rebuilt = home.shelves.built && home.shelves.built.ok ? home.shelves.built.block : null
   for (const block of home.shelves.ok) {
     if (ctl.aborted || budget <= 0 || stopped) break
-    if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
     await spendOn(block, block === rebuilt)
   }
 
@@ -1998,7 +1999,7 @@ async function stashPut (session, ctl, { name = BASE, item = null, count = null,
   const short = () => (budget > 0 ? Object.entries(remain).filter(([, k]) => k > 0) : [])
 
   let grew = null
-  if (short().length && !stopped && !ctl.aborted && Date.now() < deadline) {
+  if (short().length && !stopped && !ctl.aborted && gameClock.now() < deadline) {
     grew = await growStash(session, ctl, readBase(session, name))
     if (grew.ok) await spendOn(grew.block, true)
   }
@@ -2043,7 +2044,7 @@ async function stashTake (session, ctl, { name = BASE, item, count = null } = {}
   const mcData = session.mcData
   if (!String(item || '').trim()) throw new Error('не сказано, что брать из общака')
   const rec = needBase(session, name)
-  const deadline = Date.now() + 70000
+  const deadline = gameClock.now() + 70000
 
   // A full backpack is why "взял 0" used to be indistinguishable from "там
   // пусто". Say which one it is before walking anywhere.
@@ -2063,7 +2064,7 @@ async function stashTake (session, ctl, { name = BASE, item, count = null } = {}
 
   for (const block of home.shelves.ok) {
     if (ctl.aborted || budget <= 0 || stopped) break
-    if (Date.now() >= deadline) { stopped = 'время вышло'; break }
+    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
     let done
     try {
       done = await useShelf(session, ctl, name, block, deadline, win =>
@@ -2104,13 +2105,13 @@ async function stashTake (session, ctl, { name = BASE, item, count = null } = {}
 // cache is old or somebody else has been here.
 async function stashCheck (session, ctl, { name = BASE } = {}) {
   const rec = needBase(session, name)
-  const deadline = Date.now() + 70000
+  const deadline = gameClock.now() + 70000
   const home = await atStash(session, ctl, rec, { grow: false, deadline })
   if (home.far) return { at: { x: rec.x, y: rec.y, z: rec.z }, went: false, stopped: home.far, note: home.far }
 
   const seen = []
   for (const block of home.shelves.ok) {
-    if (ctl.aborted || Date.now() >= deadline) break
+    if (ctl.aborted || gameClock.now() >= deadline) break
     // chestList writes the cache itself through touchChest, so this loop is
     // both the recount and the refresh.
     try { seen.push(await chestList(session, ctl, xyz(block.position))) } catch (e) {

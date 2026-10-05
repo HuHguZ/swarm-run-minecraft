@@ -19,6 +19,7 @@ export function header (state) {
     `NeuroDown hp${state.health} еда${state.food}`,
     `(${fmtPos(state.pos)}) ${state.biome || '?'} ${state.dimension || ''}`.trim(),
     state.time,
+    state.clock ? `тики: ${state.clock.ticks}, ${state.clock.tickRate} TPS${state.clock.frozen ? ' (пауза)' : ''}` : null,
     state.isRaining ? 'дождь' : null,
     state.held ? `в руке: ${state.held}` : null,
     `инвентарь: ${fmtInventory(state.inventory)}`,

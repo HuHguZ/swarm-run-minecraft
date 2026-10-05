@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория одного шага боя (01.10.2026, агент дракона): дракон заходит на снижение → бот взрывает кровать со
 // станции у столба → сервер меряет урон. Целые бои не гоняются: подход, стройка и облака уже работают.
 //
@@ -64,8 +65,8 @@ function rcon () {
   })
   const send = body => (chain = chain.then(() => new Promise(resolve => {
     const i = ++id
-    const to = setTimeout(() => { wait.delete(i); resolve('') }, 8000)
-    wait.set(i, r => { clearTimeout(to); resolve(r) })
+    const to = gameClock.wall.setTimeout(() => { wait.delete(i); resolve('') }, 8000)
+    wait.set(i, r => { gameClock.wall.clearTimeout(to); resolve(r) })
     sock.write(pkt(i, 2, body))
   })))
   return { open, send, close: () => { try { sock.end() } catch {} } }
@@ -95,10 +96,14 @@ function partDmg (d, seen, isHead) {
   return isHead ? raw : raw / 4 + Math.min(raw, 1)
 }
 
-function analyse (evs, lab, arm, cyc) {
+function analyse (evs, lab, arm, cyc, tickRate = gameClock.snapshot()?.tickRate) {
   const me = e => e.name === PLAYER
   const blasts = []
   const beds = (lab && lab.beds) || []
+  // DragonLab ms — календарные часы сервера. Игровые sent/fcT на ускорении
+  // несопоставимы; старые записи допускаются только при известных 20 TPS.
+  const wallStamp = (r, wallKey, gameKey) => Number.isFinite(r[wallKey]) ? r[wallKey]
+    : Number(r.tickRate ?? tickRate) === 20 && Number.isFinite(r[gameKey]) ? r[gameKey] : null
   const bx = evs.filter(e => e.t === 'bx' && /BED/.test(e.type || ''))
   const poseAt = new Map()
   for (const e of evs) if (e.t === 'pose') poseAt.set(e.tick, e)
@@ -134,16 +139,22 @@ function analyse (evs, lab, arm, cyc) {
     rec.self = r2(self.reduce((s, e) => s + e.fin, 0))
     // запись бота — по времени щелчка (sent ≤ bx.ms, ближайшая, не «съели»): по номеру нельзя — съеденная кровать
     // даёт запись бота без взрыва (Codex dragon-blast, 02.10)
-    let bot = null
-    for (const r of beds) { if (!r.sent || b.ms == null || r.sent > b.ms + 5 || b.ms - r.sent > 400) continue; if (!bot || r.sent > bot.sent) bot = r }
+    let bot = null; let sentWall = null
+    for (const r of beds) {
+      const sent = wallStamp(r, 'sentWall', 'sent')
+      if (sent == null || b.ms == null || sent > b.ms + 5 || b.ms - sent > 400) continue
+      if (!bot || sent > sentWall) { bot = r; sentWall = sent }
+    }
     if (bot) {
       rec.bot = { dist: bot.dist, headNow: bot.headNow, early: bot.early, pass: bot.pass, runnerY: bot.runnerY, seenP: bot.seenP, bodyDy: bot.bodyDy, salvage: bot.salvage, lagMs: bot.lagMs, ph: bot.ph, dmg: bot.dmg }
       // Тайминг: тик, в который ушёл щелчок (по началу тиков pose.ms), и задуманный — тик пакета прогноза + pass + 1
       const tickOf = ms => { let t = null; for (const [tk, p] of poseAt) if (p.ms <= ms && (t == null || tk > t)) t = tk; return t }
-      if (bot.sent) { const ts = tickOf(bot.sent); if (ts != null) { rec.sentTick = ts - b.tick; rec.sentInTick = bot.sent - poseAt.get(ts).ms } }
+      const ts = tickOf(sentWall)
+      if (ts != null) { rec.sentTick = ts - b.tick; rec.sentInTick = sentWall - poseAt.get(ts).ms }
       // пакет прогноза приходит в начале тика tb (1–4 мс после pose) и несёт дракона после тика tb − 1; path[pass] —
       // после тика tb − 1 + pass + 1 = tb + pass. aimErr > 0 — взрыв позже задуманного
-      if (bot.fcT && bot.pass != null) { const tb = tickOf(bot.fcT); if (tb != null) { rec.aimErr = b.tick - (tb + bot.pass); rec.fcInTick = bot.fcT - poseAt.get(tb).ms } }
+      const fcWall = wallStamp(bot, 'fcWall', 'fcT')
+      if (fcWall != null && bot.pass != null) { const tb = tickOf(fcWall); if (tb != null) { rec.aimErr = b.tick - (tb + bot.pass); rec.fcInTick = fcWall - poseAt.get(tb).ms } }
     }
     blasts.push(rec)
   }
@@ -178,7 +189,7 @@ async function giveKit () {
 }
 
 conn.ready.then(async () => {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const res = { t: 'summary', at: new Date().toISOString(), arms: ARMS.map(a => a.name), cycles: 0 }
   try {
     // под нагрузкой фермы connect падает на «10 chunks to load» — ещё раз
@@ -186,7 +197,7 @@ conn.ready.then(async () => {
     await call('stop')
     await rc.open()
     try { evPos = fs.statSync(EVF).size } catch { evPos = 0 }
-    const poll = setInterval(pollEvents, 100)
+    const poll = gameClock.setInterval(pollEvents, 100)
     await rc.send(`gamemode survival ${PLAYER}`)
     if (!(await toEnd())) throw new Error('не в Энде')
     await E('forceload add -16 -16 15 15')
@@ -220,7 +231,7 @@ conn.ready.then(async () => {
     const P = plans[armsOk[0].name].P
     res.P = P
     const tEnd = t0 + MIN * 60000
-    for (let cyc = 0; Date.now() < tEnd - 20000; cyc++) {
+    for (let cyc = 0; gameClock.now() < tEnd - 20000; cyc++) {
       const arm = armsOk[cyc % armsOk.length]
       const pl = plans[arm.name]
       const h = await header()
@@ -249,7 +260,7 @@ conn.ready.then(async () => {
       await E(`data merge entity ${DRAGON} {DragonPhase:0,Health:1024f}`)
       await sleep(1200)
       const from = events.length
-      const tc = Date.now()
+      const tc = gameClock.now()
       let done = false; let lab = null
       const runP = call('dragon', { mode: 'labRun', arm: arm.name, env: arm.env || {}, waitSeconds: 65, timeoutSeconds: 90 })
         .then(r => { lab = (r && r.detail && r.detail.lab) || null; done = true }, () => { done = true })
@@ -259,7 +270,7 @@ conn.ready.then(async () => {
       while (!done) {
         await sleep(250)
         const landed = events.slice(from).some(e => e.t === 'ph' && e.to === 'LAND_ON_PORTAL')
-        if (!landed && forced < 3 && Date.now() - tc > 20000 * forced) { forced++; await E(`data merge entity ${DRAGON} {DragonPhase:2}`) }
+        if (!landed && forced < 3 && gameClock.now() - tc > 20000 * forced) { forced++; await E(`data merge entity ${DRAGON} {DragonPhase:2}`) }
       }
       await runP
       // цепочка кончилась (сел/взлетел/кровати) — дракона прочь, пока не дохнул на окоп
@@ -275,17 +286,17 @@ conn.ready.then(async () => {
       console.log(`[${arm.name} #${cyc}] ${cycRec.landed ? 'снижение' : 'НЕ СЕЛ'}: взрывов ${cycRec.blasts}, урон ${blasts.map(b => `${b.dmg}(${b.dHead}/${b.seen}/${b.part})`).join(' ')}; ${cycRec.why}; нам ${cycRec.self} ${JSON.stringify(cycRec.selfBy)}${cycRec.deaths ? ' СМЕРТЬ' : ''}`)
       if (events.length > 20000) events.splice(0, events.length - 5000)
     }
-    clearInterval(poll)
+    gameClock.clearInterval(poll)
   } catch (e) {
     res.error = e.message
     console.log('сцена оборвалась:', e.stack || e.message)
   } finally {
-    res.seconds = Math.round((Date.now() - t0) / 1000)
+    res.seconds = Math.round((gameClock.now() - t0) / 1000)
     res.ok = !res.error && res.cycles > 0
     out(res)
     try { await call('stop') } catch {}
     rc.close()
     conn.close()
-    setTimeout(() => process.exit(0), 500)
+    gameClock.wall.setTimeout(() => process.exit(0), 500)
   }
 }).catch(e => { console.error('ws:', e.message); process.exitCode = 1 })

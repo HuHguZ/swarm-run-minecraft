@@ -1,11 +1,12 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 const fs = require('fs')
 const { connect, createKit, sleep } = require('./scene-kit')
 async function main () {
   const slot = Number(process.env.FARM_SLOT)
   if (!(slot >= 1 && slot <= 10) || process.env.ND_WS !== `ws://127.0.0.1:${8800 + slot}` || process.env.MC_USERNAME !== `NeuroFarm${slot}`) throw new Error('только ферма')
   const conn = connect(process.env.ND_WS)
-  const timer = setTimeout(() => conn.ws.terminate(), 120000)
+  const timer = gameClock.wall.setTimeout(() => conn.ws.terminate(), 120000)
   const result = { labFixture: true, slot, ok: false }
   try {
     await conn.ready
@@ -44,9 +45,9 @@ async function main () {
       throw new Error('сцена не готова: верхний мир, 6 клеток портала, 16 блоков и 20 хп обязательны')
     }
     result.fixtureReady = true
-    const start = Date.now()
+    const start = gameClock.now()
     result.enter = await conn.call('portal', { mode: 'enter', timeoutSeconds: 60 })
-    result.elapsedMs = Date.now() - start
+    result.elapsedMs = gameClock.now() - start
     await sleep(500)
     result.end = (await conn.call('status')).state
     result.ok = result.enter.detail?.went === true && result.enter.detail?.access?.ok === true &&
@@ -58,7 +59,7 @@ async function main () {
     }
   } catch (e) { result.error = e.message } finally {
     try { await conn.call('disconnect') } catch {}
-    clearTimeout(timer)
+    gameClock.wall.clearTimeout(timer)
     conn.close()
     fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(result) + '\n')
     console.log(JSON.stringify({ slot, ok: result.ok, elapsedMs: result.elapsedMs, error: result.error, access: result.enter?.detail?.access, stopped: result.enter?.detail?.stopped }))

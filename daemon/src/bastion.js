@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Бастион (mc_bastion): золото бастиона и бартер с пиглинами — путь
 // спидраннеров под 1.21.11 (SPEEDRUN.md): золотые блоки (9 слитков каждый) и
 // сундуки, потом слитки пиглинам — огнестойкость (зелья), жемчуг, обсидиан,
@@ -136,7 +137,7 @@ async function walkGoal (session, ctl, goal, ms, { dig = true } = {}) {
       await Promise.race([
         bot.pathfinder.goto(goal),
         // Лава под шагом — сразу стоп и прыжок к полу (в Аду ведро не работает).
-        new Promise((_resolve, reject) => { watch = setInterval(() => { if (session.reflex) return; if (clock() >= until) reject(new Error('время вышло')); else if (inLava(bot)) reject(new Error('лава')); else if (process.env.ND_GUARD !== '0' && process.env.ND_GUARD_REFLEX === '0' && require('./ne-guard').busy(bot)) reject(new Error('ответ стража')) }, 100) })
+        new Promise((_resolve, reject) => { watch = gameClock.setInterval(() => { if (session.reflex) return; if (clock() >= until) reject(new Error('время вышло')); else if (inLava(bot)) reject(new Error('лава')); else if (process.env.ND_GUARD !== '0' && process.env.ND_GUARD_REFLEX === '0' && require('./ne-guard').busy(bot)) reject(new Error('ответ стража')) }, 100) })
       ])
       // goto (mineflayer-pathfinder 2.4.5, lib/goto.js) «успешно» кончается и
       // на пустом пути — noPath с длиной 0: репетиция 3 — шесть «ok» подряд без
@@ -148,8 +149,8 @@ async function walkGoal (session, ctl, goal, ms, { dig = true } = {}) {
       if (e.message === 'лава') { stop(); await lavaEscape(bot) }
       return { ok: false, error: e.message }
     } finally {
-      if (timer) clearTimeout(timer)
-      if (watch) clearInterval(watch)
+      if (timer) gameClock.clearTimeout(timer)
+      if (watch) gameClock.clearInterval(watch)
       stop()
       if (mv && !dig && was) { mv.canDig = was.canDig; mv.scafoldingBlocks = was.scaf }
     }
@@ -208,9 +209,9 @@ async function drinkFireRes (bot) {
 // lava», ближней опоры в ±3 нет): огнестойкость, если есть, и вплавь вверх к ближней твёрдой опоре в ±6.
 async function lavaEscapeDeep (bot) {
   const fr = await drinkFireRes(bot).catch(() => null)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (inLava(bot) && Date.now() - t0 < (fr === 'выпил' || fr === 'уже' ? 20000 : 5000)) {
+    while (inLava(bot) && gameClock.now() - t0 < (fr === 'выпил' || fr === 'уже' ? 20000 : 5000)) {
       const me = bot.entity.position.floored()
       let best = null
       for (let dx = -6; dx <= 6; dx++) {
@@ -231,7 +232,7 @@ async function lavaEscapeDeep (bot) {
       await sleep(150)
     }
   } finally { bot.clearControlStates() }
-  log('из лавы вплавь', { ok: !inLava(bot), fireRes: fr, hp: Math.round(bot.health ?? 0), ms: Date.now() - t0 })
+  log('из лавы вплавь', { ok: !inLava(bot), fireRes: fr, hp: Math.round(bot.health ?? 0), ms: gameClock.now() - t0 })
   return !inLava(bot)
 }
 
@@ -263,9 +264,9 @@ async function makeIronPick (session, ctl) {
 // 15 с ×2 на открытом, гаст поджёг — 11 ударов огнём стоя на месте, смерть). Возвращает причину обрыва или null.
 async function waitWatched (session, ctl, ms) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let hp0 = bot.health ?? 20
-  while (Date.now() - t0 < ms && !ctl.aborted) {
+  while (gameClock.now() - t0 < ms && !ctl.aborted) {
     const f = bot.blockAt(bot.entity.position.floored())
     if (inLava(bot)) { if (!(await lavaEscape(bot))) await lavaEscapeDeep(bot); return 'лава' }
     if (f && /fire/.test(f.name)) { await fireStep(bot); return 'огонь' }
@@ -293,8 +294,8 @@ async function fireStep (bot) {
   try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
   bot.setControlState('forward', true)
   if (best.c.y > me.y) bot.setControlState('jump', true)
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1500) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1500) {
     const p = bot.entity.position
     if (Math.hypot(p.x - best.c.x - 0.5, p.z - best.c.z - 0.5) < 0.35) break
     await sleep(60)
@@ -329,9 +330,9 @@ async function lavaEscape (bot) {
   bot.setControlState('forward', true)
   bot.setControlState('jump', true)
   // До центра клетки: рамка целиком вне лавы (раньше 0.9 с — и стоп, рамка могла остаться в лаве).
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await sleep(500)
-  while (Date.now() - t0 < 2500) {
+  while (gameClock.now() - t0 < 2500) {
     const p = bot.entity.position
     if (!inLava(bot) && bot.entity.onGround && Math.hypot(p.x - best.c.x - 0.5, p.z - best.c.z - 0.5) < 0.3) break
     try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
@@ -382,7 +383,7 @@ async function takeGoldBlock (session, ctl, pos, st) {
   if (ctl.aborted) return 'aborted'
   let b = bot.blockAt(pos)
   if (!b || b.name !== 'gold_block') { st.gold.delete(key); return 'gone' }
-  if (!canReach(bot, pos)) { st.skip.set(key, Date.now() + 90000); return 'unreachable' }
+  if (!canReach(bot, pos)) { st.skip.set(key, gameClock.now() + 90000); return 'unreachable' }
   // Вплотную (общая грань с клеткой ног или головы — её мы сами открыли
   // штреком) — видим эту грань, даже если луч к центру блока идёт через соседний
   // (ферма 29.09: «hidden» у золота прямо у ног после штрека).
@@ -391,9 +392,9 @@ async function takeGoldBlock (session, ctl, pos, st) {
     for (const c of [f, f.offset(0, 1, 0)]) for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) if (c.offset(dx, dy, dz).equals(pos)) return true
     return false
   }
-  if (!seesBlock(bot, b) && !adjacentFace()) { st.skip.set(key, Date.now() + 60000); return 'hidden' }
+  if (!seesBlock(bot, b) && !adjacentFace()) { st.skip.set(key, gameClock.now() + 60000); return 'hidden' }
   const brute = mobs(bot, 'piglin_brute', 12).find(e => seesMob(bot, e))
-  if (brute) { st.skip.set(key, Date.now() + 30000); return 'brute' }
+  if (brute) { st.skip.set(key, gameClock.now() + 30000); return 'brute' }
   // Кого разозлит: вручить им слитки (не больше 4 на блок; каждый — бартер).
   // Кто до нас не дойдёт и не видит (мы в стене, в своей камере) — не в счёт.
   const reach0 = reachSet(bot)
@@ -412,7 +413,7 @@ async function takeGoldBlock (session, ctl, pos, st) {
     angry = dangerous()
   }
   if (angry.length) {
-    st.skip.set(key, Date.now() + 20000)
+    st.skip.set(key, gameClock.now() + 20000)
     st.lastBlocked = { at: key, piglins: angry.length, nearest: Math.round(Math.min(...angry.map(e => e.position.distanceTo(bot.entity.position)))) }
     return 'piglins'
   }
@@ -435,11 +436,11 @@ async function takeGoldBlock (session, ctl, pos, st) {
   } finally {
     bot.setControlState('sneak', false)
   }
-  if (!dug) { st.skip.set(key, Date.now() + 30000); return 'failed' }
+  if (!dug) { st.skip.set(key, gameClock.now() + 30000); return 'failed' }
   st.gold.delete(key)
   st.pred.delete(key)
   st.blocks++
-  st.lastBreak = Date.now()
+  st.lastBreak = gameClock.now()
   // Блок — любимое пиглинов: подобрать раньше них.
   await pickUp(bot, ctl, 5, 3500)
   return 'dug'
@@ -454,7 +455,7 @@ async function lootChest (session, ctl, pos, st) {
     await walkGoal(session, ctl, new goals.GoalLookAtBlock(pos, bot.world, { reach: 3.8 }), 20000)
   }
   if (ctl.aborted) return 'aborted'
-  if (!canReach(bot, pos, 4.4)) { st.skip.set(key, Date.now() + 90000); return 'unreachable' }
+  if (!canReach(bot, pos, 4.4)) { st.skip.set(key, gameClock.now() + 90000); return 'unreachable' }
   const eyes = S.piglinsWatching(bot).filter(e => e.name === 'piglin' && !isBaby(bot, e) && !admiring(e))
   if (eyes.length) {
     // Разглядывающих не злит: вручить слитки смотрящим, если их двое-трое рядом.
@@ -464,16 +465,16 @@ async function lootChest (session, ctl, pos, st) {
       if (await handIngot(session, ctl, pg, 4000)) { bribes++; st.traded++ }
     }
     const still = S.piglinsWatching(bot).filter(e => e.name === 'piglin' && !isBaby(bot, e) && !admiring(e))
-    if (still.length) { st.skip.set(key, Date.now() + 25000); return 'watched' }
+    if (still.length) { st.skip.set(key, gameClock.now() + 25000); return 'watched' }
   }
   try {
     const r = await S.takeWorth(session, ctl, pos, { kind: 'bastion' })
     st.chests.push({ at: key, took: r.took || {}, stopped: r.stopped })
-    if (r.stopped && /видят/.test(r.stopped)) { st.skip.set(key, Date.now() + 25000); return 'watched' }
+    if (r.stopped && /видят/.test(r.stopped)) { st.skip.set(key, gameClock.now() + 25000); return 'watched' }
     st.looted.add(key)
     return 'looted'
   } catch (e) {
-    st.skip.set(key, Date.now() + 60000)
+    st.skip.set(key, gameClock.now() + 60000)
     st.chests.push({ at: key, error: e.message })
     return 'failed'
   }
@@ -572,7 +573,7 @@ function centerGuess (bot, fallback) {
 // Осмотр: видимые золотые блоки и сундуки (память этого вызова).
 function survey (bot, st, goldR = 30) {
   const R = bot.registry.blocksByName
-  const now = Date.now()
+  const now = gameClock.now()
   for (const b of visibleOf(bot, [R.gold_block.id], goldR, { max: 40, rays: 2500 })) {
     const k = keyOf(b.position)
     if (!st.gold.has(k)) st.gold.set(k, { pos: b.position.clone(), seen: now })
@@ -593,7 +594,7 @@ function survey (bot, st, goldR = 30) {
 
 // Ближайшая цель, не отложенная: золото или сундук.
 function nextTarget (bot, st, kinds = ['gold', 'chest']) {
-  const now = Date.now()
+  const now = gameClock.now()
   const me = bot.entity.position
   const brutes = mobs(bot, 'piglin_brute', 40)
   const cand = []
@@ -638,12 +639,12 @@ async function bruteDefense (session, ctl, st, forced = null) {
     if (!aggressive(bot, e) || !seesMob(bot, e)) return false
     // Идёт к нам: за последнюю секунду ближе на 1+ блок (st.bruteSeen — прошлые расстояния).
     const prev = st.bruteSeen.get(e.id)
-    st.bruteSeen.set(e.id, { d, at: Date.now() })
-    return prev && Date.now() - prev.at < 2500 && prev.d - d > 1
+    st.bruteSeen.set(e.id, { d, at: gameClock.now() })
+    return prev && gameClock.now() - prev.at < 2500 && prev.d - d > 1
   })
   if (!brute) return false
   st.brutes++
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const base = bot.entity.position.floored()
   let pil = null
   try { pil = await require('./pearls').emergencyPillar(bot, ctl) } catch (e) { pil = { ok: false, why: e.message } }
@@ -675,27 +676,27 @@ async function bruteDefense (session, ctl, st, forced = null) {
   let lastSwing = 0
   let away = 0
   let close = 0
-  while (!ctl.aborted && Date.now() - t0 < 60000) {
+  while (!ctl.aborted && gameClock.now() - t0 < 60000) {
     const e = bot.entities[brute.id]
     if (!e || e.isValid === false) { st.fights.push('брут убит со столба'); break }
     const d = e.position.distanceTo(bot.entity.position)
     const flat = Math.hypot(e.position.x - bot.entity.position.x, e.position.z - bot.entity.position.z)
-    if (flat < 4) close = Date.now()
+    if (flat < 4) close = gameClock.now()
     // Ушёл, или 12 с не подходит к столбу и не злится — слезть и дальше.
-    if (d > 12) { if (!away) away = Date.now(); if (Date.now() - away > 6000) break } else away = 0
-    if (Date.now() - Math.max(t0, close) > 12000 && !aggressive(bot, e)) break
-    if (Date.now() - Math.max(t0, close) > 20000 && !arrows) break
-    if (Date.now() - t0 > 45000 && !swings) break
+    if (d > 12) { if (!away) away = gameClock.now(); if (gameClock.now() - away > 6000) break } else away = 0
+    if (gameClock.now() - Math.max(t0, close) > 12000 && !aggressive(bot, e)) break
+    if (gameClock.now() - Math.max(t0, close) > 20000 && !arrows) break
+    if (gameClock.now() - t0 > 45000 && !swings) break
     if ((bot.health ?? 20) < 6) break
     const below = e.position.y <= bot.entity.position.y - 1.5
     const a = below ? pick.aim(bot, e) : null
-    if (a && a.point && Date.now() - lastSwing >= 650) {
+    if (a && a.point && gameClock.now() - lastSwing >= 650) {
       try {
         if (sword && (!bot.heldItem || bot.heldItem.name !== sword.name)) await bot.equip(sword, 'hand')
         await bot.lookAt(a.point, true)
         bot.attack(e)
         swings++
-        lastSwing = Date.now()
+        lastSwing = gameClock.now()
       } catch {}
     } else if (!a && flat >= 3 && d <= 20 && seesMob(bot, e) && bot.inventory.items().some(i => i.name === 'bow') && bot.inventory.items().some(i => /arrow$/.test(i.name))) {
       // Не под столбом — лук: брут до нас не достаёт, а стрела достаёт его.
@@ -706,7 +707,7 @@ async function bruteDefense (session, ctl, st, forced = null) {
     }
     await sleep(100)
   }
-  log('брут со столба', { swings, arrows, hp: Math.round(bot.health ?? 0), alive: !!bot.entities[brute.id], s: Math.round((Date.now() - t0) / 1000) })
+  log('брут со столба', { swings, arrows, hp: Math.round(bot.health ?? 0), alive: !!bot.entities[brute.id], s: Math.round((gameClock.now() - t0) / 1000) })
   // Слезть: копать столб под собой (блоки назад в рюкзак).
   try { await require('./pearls').pillarDown(bot, ctl, session.mcData, base) } catch {}
   return true
@@ -758,7 +759,7 @@ async function hunker (session, ctl, st, why, attacker = null) {
   if (!inOwnTunnel(bot, S) || SL.fillerCount(bot) < 3) return false
   try { bot.pathfinder.setGoal(null) } catch {}
   bot.clearControlStates()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const seal = async () => {
     const r = await sealBody(bot, S)
     const top = bot.entity.position.floored().offset(0, 2, 0)
@@ -801,8 +802,8 @@ async function hunker (session, ctl, st, why, attacker = null) {
   // Сидеть, пока злые рядом. Бьют и в кармане (враг уже внутри: R26 02.10 — пиглин в 0.3 бл., «заложился», 4 удара
   // за 4 с, 20 → 0) — не сидеть: бой с ближним (обычный пиглин — 16 хп, три удара железным мечом).
   let hp0 = bot.health ?? 20
-  while (!ctl.aborted && Date.now() - t0 < 25000) {
-    if (!foesNear(bot, 10).length && Date.now() - t0 > 4000) break
+  while (!ctl.aborted && gameClock.now() - t0 < 25000) {
+    if (!foesNear(bot, 10).length && gameClock.now() - t0 > 4000) break
     const hp = bot.health ?? 20
     const inside = foesNear(bot, 2.2)[0]
     if (inside || hp <= hp0 - 3) {
@@ -907,9 +908,9 @@ async function lavaWatched (bot, ctl, fn) {
   const cut = () => { if (sub.aborted) return; sub.aborted = true; for (const f of sub.onAbort) { try { f() } catch {} } }
   ctl.onAbort && ctl.onAbort.push(cut)
   if (ctl.aborted) cut()
-  const watch = setInterval(() => { if (ctl.aborted || inLava(bot)) cut() }, 100)
+  const watch = gameClock.setInterval(() => { if (ctl.aborted || inLava(bot)) cut() }, 100)
   let r
-  try { r = await fn(sub) } finally { clearInterval(watch) }
+  try { r = await fn(sub) } finally { gameClock.clearInterval(watch) }
   if (inLava(bot)) {
     try { bot.pathfinder.setGoal(null) } catch {}
     bot.clearControlStates()
@@ -938,10 +939,10 @@ async function answerAttack (session, ctl, st) {
     // ND_BRUTE_HUNKER=1: брут ближе 9 бл., а ход вскрыт — заложиться до удара (D6-24 03.10: выход штреком после
     // бартера, брут — 3 удара за 2 с, 20 → 0; ответ на удар запаздывает). Не чаще раза в 8 с.
     const S = st.sealedState
-    if (process.env.ND_BRUTE_HUNKER === '1' && S && S.exposed && Date.now() - (st.bruteHunkAt || 0) > 8000 && inOwnTunnel(bot, S)) {
+    if (process.env.ND_BRUTE_HUNKER === '1' && S && S.exposed && gameClock.now() - (st.bruteHunkAt || 0) > 8000 && inOwnTunnel(bot, S)) {
       const b = mobs(bot, 'piglin_brute', 9).sort((x, y) => x.position.distanceTo(bot.entity.position) - y.position.distanceTo(bot.entity.position))[0]
       if (b) {
-        st.bruteHunkAt = Date.now()
+        st.bruteHunkAt = gameClock.now()
         st.preHunkers = (st.preHunkers || 0) + 1
         if (await hunker(session, ctl, st, `брут в ${b.position.distanceTo(bot.entity.position).toFixed(1)} бл.`, b)) return true
       }
@@ -980,7 +981,7 @@ async function eatIfHungry (session, ctl) {
 async function barterRound (session, ctl, st, count, deadline) {
   const bot = session.bot
   const pearls = require('./pearls')
-  const secs = Math.max(20, Math.min(180, Math.round((deadline - Date.now()) / 1000) - 5))
+  const secs = Math.max(20, Math.min(180, Math.round((deadline - gameClock.now()) / 1000) - 5))
   const r = await pearls.barter(session, ctl, { count, timeoutSeconds: secs, force: !BF.enabled() })
   st.traded += r.spent || 0
   for (const [k, v] of Object.entries(r.gained || {})) st.gained[k] = (st.gained[k] || 0) + v
@@ -1219,7 +1220,7 @@ async function towerScan (session, ctl, st) {
   // С вышки видно золото и сундуки двора — их тоже в цели (закрытый штрек).
   try { survey(bot, st, 56) } catch {}
   const w0 = pg.walls[0]
-  if (w0) for (const c of [w0.wall, w0.conn]) { const P = bp.lib()[c.piece]; for (const [x, y, z] of (P.chests || [])) { const v = bp.toWorld(c, x, y, z); const k = keyOf(v); if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos: v, seen: Date.now(), pred: true }) } }
+  if (w0) for (const c of [w0.wall, w0.conn]) { const P = bp.lib()[c.piece]; for (const [x, y, z] of (P.chests || [])) { const v = bp.toWorld(c, x, y, z); const k = keyOf(v); if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos: v, seen: gameClock.now(), pred: true }) } }
   // Вниз — свой столб из-под ног (блоки вернутся), не прыжком.
   for (let i = 0; i < 30 && !ctl.aborted; i++) {
     const f = bot.entity.position.floored()
@@ -1251,16 +1252,16 @@ function bruteComing (bot) {
 async function walkUnlessBrute (session, ctl, goal, ms, opts) {
   const bot = session.bot
   let hit = false
-  const iv = setInterval(() => { if (bruteComing(bot)) { hit = true; try { bot.pathfinder.setGoal(null) } catch {} } }, 300)
+  const iv = gameClock.setInterval(() => { if (bruteComing(bot)) { hit = true; try { bot.pathfinder.setGoal(null) } catch {} } }, 300)
   try {
     const w = await walkGoal(session, ctl, goal, ms, opts)
     return hit ? { ok: false, error: 'брут идёт' } : w
-  } finally { clearInterval(iv) }
+  } finally { gameClock.clearInterval(iv) }
 }
 async function stepCell (bot, next, up) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (Date.now() - t0 < 2500 && !bot.entity.position.floored().equals(next)) {
+    while (gameClock.now() - t0 < 2500 && !bot.entity.position.floored().equals(next)) {
       await bot.lookAt(next.offset(0.5, 1.6, 0.5), true)
       bot.setControlState('forward', true)
       bot.setControlState('jump', !!up)
@@ -1521,7 +1522,7 @@ async function digToPredictedBody (session, ctl, st, t) {
     }
   } catch {}
   const trail = []
-  const samp = setInterval(() => { try { const f = bot.entity.position.floored(); const last = trail[trail.length - 1]; if (!last || !last.equals(f)) trail.push(f) } catch {} }, 200)
+  const samp = gameClock.setInterval(() => { try { const f = bot.entity.position.floored(); const last = trail[trail.length - 1]; if (!last || !last.equals(f)) trail.push(f) } catch {} }, 200)
   let w
   // Свой штрек по шагу; упёрся — pathfinder с копкой (до 12 с на решение).
   let tun = null
@@ -1535,10 +1536,10 @@ async function digToPredictedBody (session, ctl, st, t) {
       if (pf) pf.thinkTimeout = 12000
       try { w = await walkGoal(session, ctl, new goals.GoalGetToBlock(t.pos.x, t.pos.y, t.pos.z), 45000, { dig: true }) } finally { if (pf) pf.thinkTimeout = think }
     }
-  } finally { clearInterval(samp) }
+  } finally { gameClock.clearInterval(samp) }
   const b = bot.blockAt(t.pos)
   const res = { walk: w && w.ok ? 'ok' : (w && w.error) || '?', block: b ? b.name : '?', tunnel: tun ? { ok: tun.ok, steps: tun.steps, why: tun.why } : undefined }
-  if (!(w && w.ok)) { st.skip.set(t.k, Date.now() + 45000); st.predMiss = (st.predMiss || 0) + 1; return res }
+  if (!(w && w.ok)) { st.skip.set(t.k, gameClock.now() + 45000); st.predMiss = (st.predMiss || 0) + 1; return res }
   if (b && b.boundingBox === 'empty' && st.blocks > 0 && t.pos.distanceTo(bot.entity.position) < 3) {
     // Воздух на месте предсказанного — уже выкопан (с видимого списка), не промах.
     st.pred.delete(t.k)
@@ -1571,7 +1572,7 @@ async function digToPredictedBody (session, ctl, st, t) {
     }
   }
   st.pred.delete(t.k)
-  st.gold.set(t.k, { pos: t.pos.clone(), seen: Date.now() })
+  st.gold.set(t.k, { pos: t.pos.clone(), seen: gameClock.now() })
   res.r = await takeGoldBlock(session, ctl, t.pos, st)
   return res
 }
@@ -1599,7 +1600,7 @@ async function routeGold (session, ctl, st, until) {
   const zone = [Math.min(...xs) - 12, Math.min(...ys) - 6, Math.min(...zs) - 12, Math.max(...xs) + 12, Math.max(...ys) + 8, Math.max(...zs) + 12]
   const tried = new Set()
   const home = bot.entity.position.floored()
-  for (let n = 0; n < 40 && !ctl.aborted && Date.now() < until - 20000; n++) {
+  for (let n = 0; n < 40 && !ctl.aborted && gameClock.now() < until - 20000; n++) {
     if (st.fastSafe && st.stopMining && st.stopMining()) break
     // ND_GUARD=1: злой пиглин/брут бьёт — ответ до следующего золота (B0-31/B0-3 03.10: пиглин, разозлённый ломкой, 5 ударов
     // за 4 с, а тело ломало следующее золото по сетке).
@@ -1621,7 +1622,7 @@ async function routeGold (session, ctl, st, until) {
     if ([...mobs(bot, 'piglin_brute', 40), ...mobs(bot, 'hoglin', 40)].some(e => e.position.distanceTo(G) < 12)) { out.skipped++; continue }
     if (NR.bruteSpots(session).some(b => Math.hypot(b[0] - G.x, b[2] - G.z) < 10 && Math.abs(b[1] - G.y) < 6)) { out.skipped++; out.bruteHome = (out.bruteHome || 0) + 1; continue }
     out.tried++
-    const rr = await NR.routeTo(session, ctl, { x: G.x, y: G.y, z: G.z, r: 1, dy: 1, zone, zoneExpo: 14, abortNear: { re: /^(piglin_brute|hoglin)$/, r: 10 }, timeoutSeconds: Math.max(30, Math.min(180, Math.round((until - Date.now()) / 1000) - 20)) })
+    const rr = await NR.routeTo(session, ctl, { x: G.x, y: G.y, z: G.z, r: 1, dy: 1, zone, zoneExpo: 14, abortNear: { re: /^(piglin_brute|hoglin)$/, r: 10 }, timeoutSeconds: Math.max(30, Math.min(180, Math.round((until - gameClock.now()) / 1000) - 20)) })
     if (!rr.ok) {
       out.routeFails++
       // Ход брошен из-за брута/хоглина рядом — всё золото по сетке бросить, а не следующее (D7e-25 03.10: три цели подряд
@@ -1648,7 +1649,7 @@ async function routeGold (session, ctl, st, until) {
     if (r !== 'ok' && r !== 'air') { log('золото по сетке: не сломал', { at: xyz(G), r }); continue }
     out.dug++
     // Ломка злит пиглинов на 30 с — отметка для ND_ANGER_SAFE (ревью Codex ne-deaths.md №2: золото по сетке её не ставило).
-    st.lastBreak = Date.now()
+    st.lastBreak = gameClock.now()
     if (st.sealedState) st.sealedState.lastBreak = st.lastBreak
     st.pred.delete(k)
     st.blocks++
@@ -1686,7 +1687,7 @@ async function sealedGold (session, ctl, st, until) {
   // BonusGold обходит проверку цели; в этом эксперименте охраняемое копаем только здесь.
   if (st.fastSafe) S.noBonus = true
   let noPlan = 0
-  while (!ctl.aborted && Date.now() < until - 10000) {
+  while (!ctl.aborted && gameClock.now() < until - 10000) {
     if (st.fastSafe && st.stopMining && st.stopMining()) break
     if (inLava(bot)) { if (!(await lavaEscape(bot))) await lavaEscapeDeep(bot); continue }
     // Злые пиглины у вскрытого хода (золото касалось двора): сперва ответить — neF-map23-3 02.10: 4 удара и стрела
@@ -1721,8 +1722,8 @@ async function sealedGold (session, ctl, st, until) {
     for (const [k, v] of [...st.pred.entries()]) { const b = bot.blockAt(v.pos); if (b && b.boundingBox === 'empty' && S.own.has(k)) st.pred.delete(k) }
     for (const [k, g] of st.gold) if (!st.pred.has(k) && !S.own.has(k)) st.pred.set(k, { pos: g.pos, piece: 'видно', rank: 0 })
     // Без железной кирки (st.chestsOnly) — только сундуки: золото ей не взять, а железо в сундуках есть.
-    const preds = st.chestsOnly ? [] : [...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < Date.now())
-    const chestsT = st.lootChests ? [...st.chestSeen.entries()].filter(([k]) => !st.looted.has(k) && (st.skip.get(k) || 0) < Date.now()).map(([k, v]) => ({ k, pos: v.pos, chest: true })) : []
+    const preds = st.chestsOnly ? [] : [...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now())
+    const chestsT = st.lootChests ? [...st.chestSeen.entries()].filter(([k]) => !st.looted.has(k) && (st.skip.get(k) || 0) < gameClock.now()).map(([k, v]) => ({ k, pos: v.pos, chest: true })) : []
     if (!preds.length && !chestsT.length) break
     const minRank = preds.length ? Math.min(...preds.map(([, v]) => v.rank || 0)) : 0
     const tg = [...preds.filter(([, v]) => (v.rank || 0) === minRank).map(([k, v]) => ({ k, pos: v.pos })), ...(minRank === 0 ? chestsT : [])]
@@ -1749,7 +1750,7 @@ async function sealedGold (session, ctl, st, until) {
     const ys = [...starts.map(s => s.y), ...tg.map(t => t.pos.y)]
     const zs = [...starts.map(s => s.z), ...tg.map(t => t.pos.z)]
     const box = { x0: Math.min(...xs) - 14, x1: Math.max(...xs) + 14, y0: Math.max(5, Math.min(...ys) - 8), y1: Math.min(120, Math.max(...ys) + 12), z0: Math.min(...zs) - 14, z1: Math.max(...zs) + 14 }
-    const t0 = Date.now()
+    const t0 = gameClock.wall.now()
     const planO = {
       cls: view.cls, dig: view.dig, own: S.own, starts, box, maxNodes: inTunnel ? 60000 : 160000,
       goal: (x, y, z) => tgGoals.some(q => q.g(x, y, z)),
@@ -1766,10 +1767,10 @@ async function sealedGold (session, ctl, st, until) {
     let entryBreach = null
     // ND_ANGER_SAFE=1: золото сломано меньше 30 с назад (злость пиглинов — 600 тиков), злые в 16 — не вскрывать ход во двор,
     // а переждать заложившись (D7s9c-31 03.10: золото в закрытом ходе, следом «вход со вскрытием» — пиглины, смерть).
-    if (!r.ok && st.breach && process.env.ND_ANGER_SAFE === '1' && st.lastBreak && Date.now() - st.lastBreak < 30000 && angerSet(bot, null, false).length) {
-      log('штрек: злость после золота — вскрытие подожду', { s: Math.round((Date.now() - st.lastBreak) / 1000), n: angerSet(bot, null, false).length })
+    if (!r.ok && st.breach && process.env.ND_ANGER_SAFE === '1' && st.lastBreak && gameClock.now() - st.lastBreak < 30000 && angerSet(bot, null, false).length) {
+      log('штрек: злость после золота — вскрытие подожду', { s: Math.round((gameClock.now() - st.lastBreak) / 1000), n: angerSet(bot, null, false).length })
       await sealBody(bot, S).catch(() => null)
-      while (!ctl.aborted && Date.now() - st.lastBreak < 31000) await sleep(500)
+      while (!ctl.aborted && gameClock.now() - st.lastBreak < 31000) await sleep(500)
     }
     if (!r.ok && st.breach && (starts.length || tg.length)) {
       const near = new Set()
@@ -1783,7 +1784,7 @@ async function sealedGold (session, ctl, st, until) {
       else entryBreach = null
     }
     S.plans++
-    S.planMs += Date.now() - t0
+    S.planMs += gameClock.wall.now() - t0
     // Снаружи пути нет (все входы касаются чужого воздуха) — закопаться и планировать из своего кармана.
     if (!r.ok && !inTunnel && (st.burrowsSG || 0) < 2 && process.env.ND_BURROW !== '0') {
       st.burrowsSG = (st.burrowsSG || 0) + 1
@@ -1792,13 +1793,13 @@ async function sealedGold (session, ctl, st, until) {
       log('закопаться не вышло', { why: bw.why })
     }
     if (!r.ok) {
-      log('штрек: пути нет', { targets: tg.length, rank: minRank, nodes: r.nodes, why: r.why, from: inTunnel ? 'штрек' : 'снаружи', ms: Date.now() - t0 })
+      log('штрек: пути нет', { targets: tg.length, rank: minRank, nodes: r.nodes, why: r.why, from: inTunnel ? 'штрек' : 'снаружи', ms: gameClock.wall.now() - t0 })
       // Нет пути ни к одной цели этого ранга — отложить их; из штрека попробовать снаружи.
-      for (const t of tg) st.skip.set(t.k, Date.now() + 10 * 60000)
+      for (const t of tg) st.skip.set(t.k, gameClock.now() + 10 * 60000)
       if (++noPlan >= 3) break
       continue
     }
-    log('штрек: план', { from: r.start, moves: r.path.length, dig: r.path.reduce((n, m) => n + m.clear.length, 0), cost: Math.round(r.cost), nodes: r.nodes, ms: Date.now() - t0 })
+    log('штрек: план', { from: r.start, moves: r.path.length, dig: r.path.reduce((n, m) => n + m.clear.length, 0), cost: Math.round(r.cost), nodes: r.nodes, ms: gameClock.wall.now() - t0 })
     // Вход из открытого — сперва дойти ногами (без копки) до клетки входа.
     if (!inTunnel && !(me.x === r.start.x && me.y === r.start.y && me.z === r.start.z)) {
       S.walks++
@@ -1881,7 +1882,7 @@ async function sealedGold (session, ctl, st, until) {
     ] : []
     if (st.fastSafe && opens && windowOk) log('штрек: золото окном 1×1 — ломаю и сразу заделываю', { at: t.k, piglins: mobs(bot, 'piglin', 18).length })
     if (exposedFoes.length || (st.fastSafe && opens && SL.fillerCount(bot) < 3)) {
-      st.skip.set(t.k, Date.now() + 600000)
+      st.skip.set(t.k, gameClock.now() + 600000)
       log('штрек: небезопасное вскрытие — пропустил', { at: t.k, foes: exposedFoes.length })
       continue
     }
@@ -1892,27 +1893,27 @@ async function sealedGold (session, ctl, st, until) {
       await sealBody(bot, S).catch(() => null)
       S.exposed = SL.exposure(bot, S.own).length > 0
       if (S.exposed) {
-        st.skip.set(t.k, Date.now() + 60000)
+        st.skip.set(t.k, gameClock.now() + 60000)
         log('штрек: ход открыт, пиглины в 16 — золото отложил', { at: t.k, n: angerSet(bot, null, true).length })
         continue
       }
     }
     const watchers = st.fastSafe ? [] : mobs(bot, 'piglin', 16).filter(p => seesMob(bot, p))
-    if (watchers.length) { st.skip.set(t.k, Date.now() + 20000); log('штрек: золото — видят пиглины, отложил', { at: t.k, n: watchers.length, exposed: S.exposed }); await sleep(500); continue }
+    if (watchers.length) { st.skip.set(t.k, gameClock.now() + 20000); log('штрек: золото — видят пиглины, отложил', { at: t.k, n: watchers.length, exposed: S.exposed }); await sleep(500); continue }
     // Ломка вскроет штрек во двор, а брут рядом (сквозь стены он не видит — но пролом увидит): отложить (neF-Pa22-1).
     // Только бруты, которые ВИДЯТ клетку золота (луч от глаз брута до неё): после ломки они смотрят в пролом. Брут за
     // стенами пролома не увидит — ломать и сразу заделать (Q24 02.10: 4 брута в 16 бл. за стенами — «отложил» по кругу).
     const brutes = mobs(bot, 'piglin_brute', 16).filter(e => raySees(bot, e.position.offset(0, (e.height || 1.95) * 0.92, 0), t.pos.offset(0.5, 0.5, 0.5)))
-    if (brutes.length && goldExposes(bot, S, t.pos)) { st.skip.set(t.k, Date.now() + 30000); log('штрек: золото у двора, брут рядом — отложил', { at: t.k, n: brutes.length, d: Math.round(Math.min(...brutes.map(e => e.position.distanceTo(t.pos)))) }); await sleep(500); continue }
+    if (brutes.length && goldExposes(bot, S, t.pos)) { st.skip.set(t.k, gameClock.now() + 30000); log('штрек: золото у двора, брут рядом — отложил', { at: t.k, n: brutes.length, d: Math.round(Math.min(...brutes.map(e => e.position.distanceTo(t.pos)))) }); await sleep(500); continue }
     const had = countOf(bot, 'gold_block')
     bot.setControlState('sneak', true)
     let dr
     try { dr = await SL.digCell(bot, t.pos, { allowGuard: true }) } finally { bot.setControlState('sneak', false) }
-    if (dr !== 'ok') { st.skip.set(t.k, Date.now() + 60000); log('штрек: золото не ломается', { at: t.k, r: dr }); continue }
+    if (dr !== 'ok') { st.skip.set(t.k, gameClock.now() + 60000); log('штрек: золото не ломается', { at: t.k, r: dr }); continue }
     S.own.add(t.k)
     st.pred.delete(t.k)
     st.blocks++
-    st.lastBreak = Date.now()
+    st.lastBreak = gameClock.now()
     // Гипотеза подтверждена (3 золота на местах шаблона) — соседние гипотезы
     // других рангов (та же стена со сдвигом на блок) снять.
     const rk = hit.rank ?? 0
@@ -2043,7 +2044,7 @@ async function digBooth (session, ctl, st, until) {
   if (!S) return null
   S.deadline = until
   S.noBonus = true // руда золота Ада злит пиглинов — у окна её не трогать
-  for (let tries = 0; tries < 3 && !ctl.aborted && Date.now() < until - 20000; tries++) {
+  for (let tries = 0; tries < 3 && !ctl.aborted && gameClock.now() < until - 20000; tries++) {
     const view = SL.worldView(bot)
     const cands = boothCandidates(bot, view, S.own).slice(0, 16)
     if (!cands.length) { log('окно: места у пиглинов нет', { pigs: mobs(bot, 'piglin', 40).length }); return null }
@@ -2065,7 +2066,7 @@ async function digBooth (session, ctl, st, until) {
     const ex = await tradeExecute(session, ctl, r.path, S)
     if (!ex.ok) { S.fails.push('окно: ' + ex.why); continue }
     // Окно вскрывать, когда злость от золота остыла (600 тиков): злой арбалетчик стреляет в окно.
-    for (let w = 0; w < 40 && Date.now() - lastGoldBreak(st) < 33000 && !ctl.aborted; w++) await sleep(1000)
+    for (let w = 0; w < 40 && gameClock.now() - lastGoldBreak(st) < 33000 && !ctl.aborted; w++) await sleep(1000)
     const Wv = new Vec3(bo.W.x, bo.W.y, bo.W.z)
     if (bo.wide) {
       // Сперва ниши у головы (закрыто), потом боковые окна и среднее.
@@ -2308,7 +2309,7 @@ async function digTrap (session, ctl, st, until) {
   if (!S) return null
   S.deadline = until
   S.noBonus = true
-  for (let tries = 0; tries < 3 && !ctl.aborted && Date.now() < until - 20000; tries++) {
+  for (let tries = 0; tries < 3 && !ctl.aborted && gameClock.now() < until - 20000; tries++) {
     const view = SL.worldView(bot)
     const cands = trapCandidates(bot, view, S.own).slice(0, 16)
     if (!cands.length) { log('ловушка: места нет', { pigs: mobs(bot, 'piglin', 40).length }); return null }
@@ -2351,7 +2352,7 @@ async function buildTrap (session, ctl, st, bo, S) {
   step('дошёл')
   if (!(await centerIn(bot, bo.H))) { S.fails.push('ловушка: не встал в центр'); step('не в центре'); return null }
   st.doing = 'ловушка: жду злость'
-  for (let w = 0; w < 40 && Date.now() - lastGoldBreak(st) < 33000 && !ctl.aborted; w++) await sleep(1000)
+  for (let w = 0; w < 40 && gameClock.now() - lastGoldBreak(st) < 33000 && !ctl.aborted; w++) await sleep(1000)
   // Камера, пока всё закрыто (над ней ещё пол пиглинов): низ C0, дальняя C2.
   st.doing = 'ловушка: камера'
   let bad = null
@@ -2479,9 +2480,9 @@ async function sealBody (bot, S, keep = [], open = [], mouth = null) {
 
 async function centerIn (bot, c, ms = 2500) {
   const tx = c.x + 0.5; const tz = c.z + 0.5
-  const until = Date.now() + ms
+  const until = gameClock.now() + ms
   try {
-    while (Date.now() < until) {
+    while (gameClock.now() < until) {
       const p = bot.entity.position
       const dx = tx - p.x; const dz = tz - p.z
       if (Math.hypot(dx, dz) < 0.15) break
@@ -2529,7 +2530,7 @@ async function digPit (session, ctl, st, until) {
       log('яма: ко входу штрека', { entry: S.entry, ok: !!(w && w.ok), at: xyz(bot.entity.position.floored()) })
       S.exposed = true
     } }
-  for (let tries = 0; tries < 3 && !ctl.aborted && Date.now() < until - 20000; tries++) {
+  for (let tries = 0; tries < 3 && !ctl.aborted && gameClock.now() < until - 20000; tries++) {
     const view = SL.worldView(bot)
     const cands = pitCandidates(bot, view, S.own, BF.enabled() ? 64 : 40).filter(b => !(S.badPits && S.badPits.has(SL.key(b.M.x, b.M.y, b.M.z)))).slice(0, 16)
     if (!cands.length) { log('яма: места у пиглинов нет', { pigs: mobs(bot, 'piglin', 40).length }); return null }
@@ -2622,7 +2623,7 @@ async function digPit (session, ctl, st, until) {
     if (bo.sealed.risky.length) { (S.badPits || (S.badPits = new Set())).add(SL.key(bo.M.x, bo.M.y, bo.M.z)); S.fails.push('яма: угол открыт наружу'); continue }
     // Рот вскрывать, когда злость от золота остыла (600 тиков): злой арбалетчик стреляет в рот.
     st.doing = 'яма: жду злость'
-    for (let w = 0; w < 40 && Date.now() - lastGoldBreak(st) < 33000 && !ctl.aborted; w++) await sleep(1000)
+    for (let w = 0; w < 40 && gameClock.now() - lastGoldBreak(st) < 33000 && !ctl.aborted; w++) await sleep(1000)
     st.doing = 'яма: рот'
     const mr = await SL.digCell(bot, new Vec3(bo.M.x, bo.M.y, bo.M.z))
     if (mr !== 'ok' && mr !== 'air') { S.fails.push('яма: рот ' + mr); continue }
@@ -2638,12 +2639,12 @@ async function digPit (session, ctl, st, until) {
 // Bounded movement to a different observed group or mapped floor; grid execution still checks live blocks.
 async function moveBarterSite (session, ctl, st, p, until) {
   const NR = require('./nether-route'); const SL = require('./sealed'); const bot = session.bot
-  if (!NR.enabled() || !NR.gridOf(session) || !st.sealedState || ctl.aborted || Date.now() > until - 20000 || (st.flowMoves || 0) >= 3) return false
+  if (!NR.enabled() || !NR.gridOf(session) || !st.sealedState || ctl.aborted || gameClock.now() > until - 20000 || (st.flowMoves || 0) >= 3) return false
   if ((bot.health ?? 20) < 16 || SL.fillerCount(bot) < 16) return false
   // Cool down behind cover, never at the open courtyard. The subsequent route is guarded and bounded.
-  if (Date.now() - lastGoldBreak(st) < 33000) {
+  if (gameClock.now() - lastGoldBreak(st) < 33000) {
     if (!inOwnTunnel(bot, st.sealedState)) return false
-    const why = await waitWatched(session, ctl, Math.min(33000, lastGoldBreak(st) + 33000 - Date.now()))
+    const why = await waitWatched(session, ctl, Math.min(33000, lastGoldBreak(st) + 33000 - gameClock.now()))
     if (why || ctl.aborted) return false
   }
   const view = SL.worldView(bot); const me = bot.entity.position
@@ -2657,7 +2658,7 @@ async function moveBarterSite (session, ctl, st, p, until) {
     const key = `${target.x},${target.y},${target.z}`
     if (seen.has(key) || Math.hypot(target.x - me.x, target.z - me.z) < 6 && Math.abs(target.y - me.y) < 3) continue
     seen.add(key); st.flowMoves = (st.flowMoves || 0) + 1
-    const sec = Math.min(60, Math.floor((until - Date.now()) / 1000))
+    const sec = Math.min(60, Math.floor((until - gameClock.now()) / 1000))
     if (sec < 20) return false
     const rr = await NR.routeTo(session, ctl, { ...target, timeoutSeconds: sec, ironOk: false, zoneExpo: 14,
       abortNear: { re: '^(piglin_brute|hoglin)$', r: 10 } }).catch(e => ({ ok: false, why: e.message }))
@@ -3011,11 +3012,11 @@ function tossLands (bot, aim, getBlock = null, dvy = 0) {
 
 async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () => false } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let lastToss = 0
   let lures = null
   let lastLure = null
-  let idleSince = Date.now()
+  let idleSince = gameClock.now()
   const r = { handed: 0, tossed: 0, hits: 0, pearls0: countOf(bot, 'ender_pearl'), ingots0: countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block'), waitedAnger: 0, junked: {}, bag0: Object.fromEntries(bot.inventory.items().reduce((m, i) => m.set(i.name, (m.get(i.name) || 0) + i.count), new Map())) }
   const O = new Vec3(bo.O.x + 0.5, bo.O.y, bo.O.z + 0.5)
   // Журнал бросков: предмет, появившийся у глаз взрослого пиглина (BehaviorUtils.throwItem:
@@ -3033,8 +3034,8 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     if (!pg) return
     // Чья сделка: вручённая нами (в 12 с до броска) или приманка; где стоял пиглин относительно нас.
     const me = bot.entity.position
-    const src = handedAt.has(pg.id) && Date.now() - handedAt.get(pg.id) < 12000 ? 'hand' : 'lure'
-    throws.set(p.entityId, { t: Date.now(), src, cell: Math.floor(pg.position.x) + ',' + Math.floor(pg.position.y) + ',' + Math.floor(pg.position.z), rel: [+(pg.position.x - me.x).toFixed(1), +(pg.position.y - me.y).toFixed(1), +(pg.position.z - me.z).toFixed(1)] })
+    const src = handedAt.has(pg.id) && gameClock.now() - handedAt.get(pg.id) < 12000 ? 'hand' : 'lure'
+    throws.set(p.entityId, { t: gameClock.now(), src, cell: Math.floor(pg.position.x) + ',' + Math.floor(pg.position.y) + ',' + Math.floor(pg.position.z), rel: [+(pg.position.x - me.x).toFixed(1), +(pg.position.y - me.y).toFixed(1), +(pg.position.z - me.z).toFixed(1)] })
   }
   const onCollect = (collector, collected) => {
     if (!collector || collector !== bot.entity || !collected) return
@@ -3052,7 +3053,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   // Перед торгом — место в рюкзаке: штрек набил его чернокамнем, гравием, добычей сундуков.
   if (pitLike(bo)) await junkOut(bot, bo, r.junked)
   try {
-  while (!ctl.aborted && Date.now() < until - 3000) {
+  while (!ctl.aborted && gameClock.now() < until - 3000) {
     if (done()) { r.stopped = 'цель'; break }
     if (BF.enabled()) {
       const G = require('./ne-guard')
@@ -3065,8 +3066,8 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     // Брут у окна — мечом, пока стоит (злость пиглинов от удара — 30 с, переждём).
     // Бить брута сквозь окно — только по параметру: каждый удар злит пиглинов на 30 с (broadcastAngerTarget),
     // booth-1: 23 удара — 337 с ожидания; до нас брут и так не достаёт.
-    if (st.hitBrutes && await hitThroughWindow(bot)) { r.hits++; st.lastBreak = Date.now(); idleSince = Date.now(); continue }
-    const cool = lastGoldBreak(st) + 33000 - Date.now()
+    if (st.hitBrutes && await hitThroughWindow(bot)) { r.hits++; st.lastBreak = gameClock.now(); idleSince = gameClock.now(); continue }
+    const cool = lastGoldBreak(st) + 33000 - gameClock.now()
     if (cool > 0) { r.waitedAnger += Math.min(cool, 1000); await sleep(Math.min(cool, 1000)); continue }
     if (countOf(bot, 'gold_ingot') - keep < 1) {
       // Место под слитки: хлам — в окно (брошенное под ноги подберётся назад через 2 с).
@@ -3091,7 +3092,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     if (pitLike(bo)) {
       let n = 0; let got = 0
       for (const [id, t] of throws) {
-        if (!t.eval && Date.now() - t.t > 4000) {
+        if (!t.eval && gameClock.now() - t.t > 4000) {
           t.eval = true
           if (!t.got && bot.entities[id] && t.cell && t.src === 'hand') { badCells.set(t.cell, (badCells.get(t.cell) || 0) + 1); r.badCells = badCells.size }
         }
@@ -3118,11 +3119,11 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
         if ((badCells.get(Math.floor(pg.position.x) + ',' + Math.floor(pg.position.y) + ',' + Math.floor(pg.position.z)) || 0) >= 2) { r.badCellSkip = (r.badCellSkip || 0) + 1; continue }
         if (!eyeSees(pg)) { r.unseen = (r.unseen || 0) + 1; continue }
         if (!throwLands(bot, pg.position, bot.entity.position, getBlock).ok) { r.wontLand = (r.wontLand || 0) + 1; continue }
-      } else if (!eyeSees(pg) && Date.now() - (r.lastSeenHand || t0) < 15000) { r.unseen = (r.unseen || 0) + 1; continue }
+      } else if (!eyeSees(pg) && gameClock.now() - (r.lastSeenHand || t0) < 15000) { r.unseen = (r.unseen || 0) + 1; continue }
       if (await handNoWalk(bot, pg)) {
-        handedAt.set(pg.id, Date.now())
-        if (BF.enabled()) busyUntil.set(pg.id, Date.now() + BF.ADMIRE_MS + 150)
-        r.handed++; st.traded++; handed = true; idleSince = Date.now(); r.lastHandT = Date.now(); if (eyeSees(pg)) r.lastSeenHand = Date.now()
+        handedAt.set(pg.id, gameClock.now())
+        if (BF.enabled()) busyUntil.set(pg.id, gameClock.now() + BF.ADMIRE_MS + 150)
+        r.handed++; st.traded++; handed = true; idleSince = gameClock.now(); r.lastHandT = gameClock.now(); if (eyeSees(pg)) r.lastSeenHand = gameClock.now()
         // Кривая жемчуга по сделкам (опыты: последовательность бартера у мира одна — random_sequence).
         if (r.handed % 32 === 0) { r.curve = r.curve || []; r.curve.push([r.handed + r.tossed, countOf(bot, 'ender_pearl')]) }
         break
@@ -3153,15 +3154,15 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
       } else if (bo.kind === 'pit') {
         // Прицелы приманки — раз на яму; порог оценки снижается, пока сделок нет: лучше приманка,
         // чей бросок долетит из 5 точек из 9, чем 120 с простоя (pit-tick 30.09: 387 удержаний, 0 сделок).
-        if (!lures) { const t1 = Date.now(); lures = bo.lureAims || (bo.lureAims = pitLures(bot, bo)); r.lureBest = lures.length ? lures[0].score : -1; r.lureMs = Date.now() - t1 }
+        if (!lures) { const t1 = gameClock.now(); lures = bo.lureAims || (bo.lureAims = pitLures(bot, bo)); r.lureBest = lures.length ? lures[0].score : -1; r.lureMs = gameClock.now() - t1 }
         let lastTrade = Math.max(t0, r.lastHandT || 0)
         for (const t of throws.values()) if (t.t > lastTrade) lastTrade = t.t
-        const quiet = Date.now() - lastTrade
+        const quiet = gameClock.now() - lastTrade
         // Сделка с приманки доходит хуже вручённой (pit-v4 30.09: руки 93–95%, приманки 11 из 26): манить,
         // только когда 30 с не было ни одной сделки, и не больше 12 приманок на яму.
         const need = r.tossed >= 12 ? 99 : quiet > 70000 ? 3 : quiet > 50000 ? 5 : quiet > 30000 ? 7 : 99
         // Прошлую приманку не взяли за 25 с (лежит у места посадки) — это место не годится.
-        if (lastLure && Date.now() - lastLure.t > 25000 && !lastLure.L.bad) {
+        if (lastLure && gameClock.now() - lastLure.t > 25000 && !lastLure.L.bad) {
           const still = Object.values(bot.entities).some(e => e.name === 'item' && e.position && Math.hypot(e.position.x - lastLure.L.at.x, e.position.z - lastLure.L.at.z) < 1 && Math.abs(e.position.y - lastLure.L.at.y) < 1 &&
             (() => { try { const d = e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } })())
           if (still) { lastLure.L.bad = true; r.lureBad = (r.lureBad || 0) + 1 }
@@ -3178,20 +3179,20 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
         if (L) { r.lureScores = [...(r.lureScores || []).slice(-40), L.score]; pendingLure = L }
         if (!tossOk) r.tossHeld = (r.tossHeld || 0) + 1
       }
-      if (tossOk && near.length && (lying < 1 || Date.now() - lastToss > 10000) && Date.now() - lastToss > 2500) {
-        if (await tossOut(bot, bo, 'gold_ingot', 1, lureAim)) { r.tossed++; st.traded++; lastToss = Date.now(); if (!BF.enabled()) idleSince = Date.now(); if (pendingLure) lastLure = { L: pendingLure, t: Date.now() } }
+      if (tossOk && near.length && (lying < 1 || gameClock.now() - lastToss > 10000) && gameClock.now() - lastToss > 2500) {
+        if (await tossOut(bot, bo, 'gold_ingot', 1, lureAim)) { r.tossed++; st.traded++; lastToss = gameClock.now(); if (!BF.enabled()) idleSince = gameClock.now(); if (pendingLure) lastLure = { L: pendingLure, t: gameClock.now() } }
       }
     }
     // Яма не работает — не жечь золото: приманки не берут или 150 с ни одного броска пиглина.
     // Вызывающий копает другую яму (pit-v3-1 30.09: 50 приманок, 0 сделок за 520 с).
-    if (bo.kind === 'pit' && !throws.size && (r.tossed >= 8 || Date.now() - t0 > (BF.enabled() ? 45000 : 150000))) { r.stopped = 'яма не работает'; break }
+    if (bo.kind === 'pit' && !throws.size && (r.tossed >= 8 || gameClock.now() - t0 > (BF.enabled() ? 45000 : 150000))) { r.stopped = 'яма не работает'; break }
     // Из ямы вручаем только тем, чей бросок долетит, — ждать их дольше.
     const idleMax = BF.enabled() ? 30000 : pitLike(bo) ? 120000 : 60000
-    if (Date.now() - idleSince > idleMax) { r.stopped = `пиглины не подходят ${idleMax / 1000} с`; break }
+    if (gameClock.now() - idleSince > idleMax) { r.stopped = `пиглины не подходят ${idleMax / 1000} с`; break }
     await sleep(300)
   }
   // Последние сделки: добыча разглядывающих прилетит через ~6 с.
-  for (let i = 0; i < 16 && !ctl.aborted && Date.now() < until; i++) {
+  for (let i = 0; i < 16 && !ctl.aborted && gameClock.now() < until; i++) {
     if (!mobs(bot, 'piglin', 12).some(e => admiring(e))) break
     await sleep(500)
   }
@@ -3212,7 +3213,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   }
   r.bySrc = bySrc
   r.missed = missed
-  r.seconds = Math.round((Date.now() - t0) / 1000)
+  r.seconds = Math.round((gameClock.now() - t0) / 1000)
   r.pearls = countOf(bot, 'ender_pearl') - r.pearls0
   r.spent = r.ingots0 - countOf(bot, 'gold_ingot') - 9 * countOf(bot, 'gold_block')
   const out = {}
@@ -3322,7 +3323,7 @@ async function bastion (session, ctl, p = {}) {
   try { require('./ne-guard').swatInstall(bot) } catch {}
   try { require('./ne-guard').attach(session) } catch {}
   FAST_SAFE = p.fastSafe === true || process.env.ND_GOLD_FAST_SAFE === '1'
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 400, 30, 1800) * 1000 - 5000
   const mode = p.mode || 'auto'
   const wantPearls = p.pearls ?? 12
@@ -3352,7 +3353,7 @@ async function bastion (session, ctl, p = {}) {
   const out = (stopped = null) => {
     const d = {
       mode,
-      seconds: Math.round((Date.now() - t0) / 1000),
+      seconds: Math.round((gameClock.now() - t0) / 1000),
       goldBlocksDug: st.blocks,
       bribed: st.bribed,
       ingotsTraded: st.traded,
@@ -3397,10 +3398,10 @@ async function bastion (session, ctl, p = {}) {
     const pf = bot.pathfinder
     const th = pf && pf.thinkTimeout
     if (pf) pf.thinkTimeout = p.think || 12000
-    const t0g = Date.now()
+    const t0g = gameClock.now()
     let w
     try { w = await walkGoal(session, ctl, new goals.GoalNear(p.tx, p.ty, p.tz, p.range ?? 1), (p.seconds || 45) * 1000, { dig: !!p.dig }) } finally { bot._ndNoMobAvoid = false; bot._ndNetherFloor = f0; if (pf) pf.thinkTimeout = th }
-    return { ...out(), goto: { ...w, s: Math.round((Date.now() - t0g) / 1000), at: xyz(bot.entity.position.floored()) } }
+    return { ...out(), goto: { ...w, s: Math.round((gameClock.now() - t0g) / 1000), at: xyz(bot.entity.position.floored()) } }
   }
   // booth — отладка окна бартера: тело уже стоит в клетке F, окно — F+d+1 (dx,dz), пиглины за ним (сцены).
   if (mode === 'trap') {
@@ -3414,10 +3415,10 @@ async function bastion (session, ctl, p = {}) {
     const P = { x: f.x, y: f.y - 1, z: f.z }
     const bo = { kind: 'trap', O: C0, C0, C1: { x: C0.x, y: C0.y + 1, z: C0.z }, C2, M, R: { x: M.x, y: M.y + 1, z: M.z }, H: xyz(f), P, d, p: [px, pz], dump: null, F: P, W: M, C: xyz(f), sill: true }
     if (p.dump) bo.dump = { Dh: { x: f.x + px, y: f.y, z: f.z + pz }, D1: { x: P.x + px, y: P.y, z: P.z + pz }, D2: { x: P.x + px, y: P.y - 1, z: P.z + pz } }
-    const S = { own: new Set([require('./sealed').key(f.x, f.y, f.z), require('./sealed').key(M.x, M.y, M.z)]), fails: [], deadline: Date.now() + 600000 }
+    const S = { own: new Set([require('./sealed').key(f.x, f.y, f.z), require('./sealed').key(M.x, M.y, M.z)]), fails: [], deadline: gameClock.now() + 600000 }
     const built = await buildTrap(session, ctl, st, bo, S)
     if (!built) return { ...out('ловушка не построилась: ' + S.fails.join('; ')), trap: bo }
-    const r = await boothTrade(session, ctl, st, built, Date.now() + clamp(p.seconds ?? 60, 10, 600) * 1000, { keep: p.keep ?? 0 })
+    const r = await boothTrade(session, ctl, st, built, gameClock.now() + clamp(p.seconds ?? 60, 10, 600) * 1000, { keep: p.keep ?? 0 })
     return { ...out(), booth: r, trap: { baited: built.baited, C2: !!built.C2 } }
   }
   if (mode === 'pit') {
@@ -3427,14 +3428,14 @@ async function bastion (session, ctl, p = {}) {
     const M = { x: f.x, y: f.y + 2, z: f.z }
     const bo = { kind: 'pit', P: xyz(f), H: { x: f.x, y: f.y + 1, z: f.z }, M, R: { x: M.x, y: M.y + 1, z: M.z }, O: { x: M.x + d[0], y: M.y, z: M.z + d[1] }, d, p: [d[1], d[0]], dump: null, F: xyz(f), W: M, C: { x: f.x, y: f.y + 1, z: f.z }, sill: true }
     if (p.dump) bo.dump = { Dh: { x: f.x + d[1], y: f.y + 1, z: f.z + d[0] }, D1: { x: f.x + d[1], y: f.y, z: f.z + d[0] }, D2: { x: f.x + d[1], y: f.y - 1, z: f.z + d[0] } }
-    const r = await boothTrade(session, ctl, st, bo, Date.now() + clamp(p.seconds ?? 60, 10, 600) * 1000, { keep: p.keep ?? 0 })
+    const r = await boothTrade(session, ctl, st, bo, gameClock.now() + clamp(p.seconds ?? 60, 10, 600) * 1000, { keep: p.keep ?? 0 })
     return { ...out(), booth: r }
   }
   if (mode === 'booth') {
     const f = bot.entity.position.floored()
     const d = [p.dx || 0, p.dz || 0]
     const bo = { F: xyz(f), C: { x: f.x + d[0], y: f.y, z: f.z + d[1] }, W: { x: f.x + d[0], y: f.y + 1, z: f.z + d[1] }, O: { x: f.x + 2 * d[0], y: f.y, z: f.z + 2 * d[1] }, d, sill: p.sill === false }
-    const r = await boothTrade(session, ctl, st, bo, Date.now() + clamp(p.seconds ?? 60, 10, 600) * 1000, { keep: p.keep ?? 0 })
+    const r = await boothTrade(session, ctl, st, bo, gameClock.now() + clamp(p.seconds ?? 60, 10, 600) * 1000, { keep: p.keep ?? 0 })
     return { ...out(), booth: r }
   }
   // tunnel — отладка своего штрека к клетке tx,ty,tz (сцены).
@@ -3462,7 +3463,7 @@ async function bastion (session, ctl, p = {}) {
   // строил бы вышку и шёл к уже выкопанным клеткам.
   const memoKey = rec ? `${Math.round(rec.x)},${Math.round(rec.z)}` : null
   const memo = memoKey && MEMO.get(memoKey)
-  if (st.sealed && memo && Date.now() - memo.t < 3600e3) {
+  if (st.sealed && memo && gameClock.now() - memo.t < 3600e3) {
     for (const [k, v] of memo.pred) if (!memo.mined.has(k)) st.pred.set(k, { ...v, pos: new Vec3(v.pos.x, v.pos.y, v.pos.z) })
     st.towered = 2
     st.sealedState = { own: memo.own, filled: memo.filled, exposed: memo.exposed, entry: memo.entry, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0 }
@@ -3479,7 +3480,7 @@ async function bastion (session, ctl, p = {}) {
     const old = memo || { pred: new Map(), mined: new Set() }
     for (const [k, v] of st.pred) old.pred.set(k, { rank: v.rank, piece: v.piece, pos: { x: v.pos.x, y: v.pos.y, z: v.pos.z } })
     for (const [k] of old.pred) if (!st.pred.has(k)) { const b = bot.blockAt(new Vec3(...k.split(',').map(Number))); if (b && b.name !== 'gold_block') old.mined.add(k) }
-    MEMO.set(memoKey, { pred: old.pred, mined: old.mined, own: st.sealedState.own, filled: st.sealedState.filled, exposed: st.sealedState.exposed, entry: st.sealedState.entry, t: Date.now() })
+    MEMO.set(memoKey, { pred: old.pred, mined: old.mined, own: st.sealedState.own, filled: st.sealedState.filled, exposed: st.sealedState.exposed, entry: st.sealedState.entry, t: gameClock.now() })
   }
 
   const done = () => countOf(bot, 'ender_pearl') >= wantPearls && fireRes(bot) >= wantFire && countOf(bot, 'obsidian') >= wantObs && exitReserveReady(bot, p)
@@ -3501,14 +3502,14 @@ async function bastion (session, ctl, p = {}) {
   let barterNext = 0
   const piglinsAround = () => mobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && seesMob(bot, e))
   const tryBarter = async (force = false) => {
-    if (mode === 'gold' || done() || Date.now() < barterNext) return false
+    if (mode === 'gold' || done() || gameClock.now() < barterNext) return false
     if (!force && spare() < 24) return false
     if (countOf(bot, 'gold_ingot') - keep < 8 && countOf(bot, 'gold_block')) await unpackGold(session, ctl, keep + 27)
     const can = countOf(bot, 'gold_ingot') - keep
     if (can <= 0 || !piglinsAround().length) return false
     const r = await barterRound(session, ctl, st, Math.min(can, 24), deadline)
     log('бартер', { spent: r.spent, handed: r.handed, thrown: r.thrown, stopped: r.stopped, gained: r.gained, s: r.seconds })
-    barterNext = Date.now() + (r.spent > 0 ? 1500 : 20000)
+    barterNext = gameClock.now() + (r.spent > 0 ? 1500 : 20000)
     if (!(r.spent > 0)) st.lastBarter = r.stopped || 'пиглины не берут'
     return r.spent > 0
   }
@@ -3524,7 +3525,7 @@ async function bastion (session, ctl, p = {}) {
     const cause = id => { const e = bot.entities[id]; return e ? (e.name || e.username || e.type) : (id >= 0 ? '#' + id : null) }
     const src = bot.entities[(pk.sourceCauseId ?? 0) - 1]
     const rel = src && src.position ? [+(src.position.x - f.x).toFixed(2), +(src.position.y - f.y).toFixed(2), +(src.position.z - f.z).toFixed(2)] : null
-    const rec = { t: Math.round((Date.now() - t0) / 1000), type: DAMAGE_TYPES[pk.sourceTypeId] || pk.sourceTypeId, by: cause((pk.sourceCauseId ?? 0) - 1), rel, hpBefore: Math.round(lastHp), at: [+f.x.toFixed(2), +f.y.toFixed(2), +f.z.toFixed(2)], feet: nm(f), under: nm(f.offset(0, -0.5, 0)), head: nm(f.offset(0, 1.6, 0)), doing: st.doing || null }
+    const rec = { t: Math.round((gameClock.now() - t0) / 1000), type: DAMAGE_TYPES[pk.sourceTypeId] || pk.sourceTypeId, by: cause((pk.sourceCauseId ?? 0) - 1), rel, hpBefore: Math.round(lastHp), at: [+f.x.toFixed(2), +f.y.toFixed(2), +f.z.toFixed(2)], feet: nm(f), under: nm(f.offset(0, -0.5, 0)), head: nm(f.offset(0, 1.6, 0)), doing: st.doing || null }
     st.hurts.push(rec)
     log('урон', rec)
   }
@@ -3577,8 +3578,8 @@ async function bastion (session, ctl, p = {}) {
       const walk = async (ms, to = null) => {
         const sub = { aborted: false, onAbort: [] }
         const cut = () => { if (sub.aborted) return; sub.aborted = true; for (const fn of sub.onAbort) { try { fn() } catch {} } }
-        const watch = setInterval(() => { if (ctl.aborted || inLava(bot)) cut() }, 100)
-        try { await walkToward(session, sub, to || goal, Math.min(deadline, Date.now() + ms), to ? { range: 8, xz: true } : goal === rec || V ? { range: V ? 4 : 6 } : { range: 6, xz: true }) } finally { clearInterval(watch) }
+        const watch = gameClock.setInterval(() => { if (ctl.aborted || inLava(bot)) cut() }, 100)
+        try { await walkToward(session, sub, to || goal, Math.min(deadline, gameClock.now() + ms), to ? { range: 8, xz: true } : goal === rec || V ? { range: V ? 4 : 6 } : { range: 6, xz: true }) } finally { gameClock.clearInterval(watch) }
         if (inLava(bot)) { try { bot.pathfinder.setGoal(null) } catch {} ; if (!(await lavaEscape(bot))) await lavaEscapeDeep(bot); st.lavaEscapes = (st.lavaEscapes || 0) + 1; return true }
         return false
       }
@@ -3595,7 +3596,7 @@ async function bastion (session, ctl, p = {}) {
         const xs = KG0.map(q => q.x); const ys = KG0.map(q => q.y); const zs = KG0.map(q => q.z)
         const zone = [Math.min(...xs) - 12, Math.min(...ys) - 6, Math.min(...zs) - 12, Math.max(...xs) + 12, Math.max(...ys) + 8, Math.max(...zs) + 12]
         const rStart = bot.entity.position.floored()
-        const rr = await lavaWatched(bot, ctl, sub => NR.routeTo(session, sub, { x: goal.x, y: goal.y, z: goal.z, r: 4, dy: 3, zone, zoneExpo: 5, timeoutSeconds: Math.max(60, Math.min(600, Math.round((deadline - Date.now()) / 1000) - 300)) }))
+        const rr = await lavaWatched(bot, ctl, sub => NR.routeTo(session, sub, { x: goal.x, y: goal.y, z: goal.z, r: 4, dy: 3, zone, zoneExpo: 5, timeoutSeconds: Math.max(60, Math.min(600, Math.round((deadline - gameClock.now()) / 1000) - 300)) }))
         log('к бастиону по сетке', { ok: rr.ok, why: rr.why, steps: rr.steps, dug: rr.dug, placed: rr.placed, plans: rr.plans, s: rr.seconds, at: rr.at })
         if (rr.ok) {
           routed = true
@@ -3609,7 +3610,7 @@ async function bastion (session, ctl, p = {}) {
         // Вход штрека подхода — клетка, откуда он начат: без него exitTunnel отвечал «входа нет», и после бастиона тело
         // оставалось в своём штреке под лавовым морем (neF-mB26-1 02.10: y 21, все шаги к спавнеру и порталу — на месте).
         let tStart = bot.entity.position.floored()
-        const tOpts = () => ({ band: p.band ?? 40, radius: nearG ? 10 : 5, noBreachNear: rec ? { x: rec.x, z: rec.z, r: 48 } : null, deadline: Math.min(deadline - 240000, Date.now() + 90000 + far1 * 3000), log: (w, d) => log(w, d) })
+        const tOpts = () => ({ band: p.band ?? 40, radius: nearG ? 10 : 5, noBreachNear: rec ? { x: rec.x, z: rec.z, r: 48 } : null, deadline: Math.min(deadline - 240000, gameClock.now() + 90000 + far1 * 3000), log: (w, d) => log(w, d) })
         let tr = await lavaWatched(bot, ctl, sub => tunnelTo(session, sub, goal, tOpts()))
         // Штрек не начался (тело на открытом, «со старта не войти»): закопаться и снова.
         if (!tr.ok && !tr.segs && (tr.dug || 0) < 8 && !ctl.aborted && process.env.ND_BURROW !== '0') {
@@ -3623,7 +3624,7 @@ async function bastion (session, ctl, p = {}) {
         // Известное золото, а штрек встал далеко («пути нет»: лавовые озёра по дороге — neF-map26-1 02.10: 145 бл. до
         // бастиона, dug 405, и «до бастиона не дошёл» без шага пешком): пешком (строгий обход лавы) к точке в 40 бл.
         // не доходя до золота, оттуда штрек ещё раз. Во двор пешком не входим — последние 40 бл. только штреком.
-        for (let k = 0; k < 2 && nearG && !tr.ok && !ctl.aborted && Date.now() < deadline - 300000; k++) {
+        for (let k = 0; k < 2 && nearG && !tr.ok && !ctl.aborted && gameClock.now() < deadline - 300000; k++) {
           const me1 = bot.entity.position
           const d1 = Math.hypot(nearG.x - me1.x, nearG.z - me1.z)
           if (d1 <= 60) break
@@ -3642,7 +3643,7 @@ async function bastion (session, ctl, p = {}) {
           log('подход пешком к штреку', { k, from: { x: Math.round(me1.x), y: Math.round(me1.y), z: Math.round(me1.z) }, to: mid, left: Math.round(d2), was: Math.round(d1) })
           if (d2 > d1 - 16 && k > 0) break
           let tStart2 = bot.entity.position.floored()
-          const tOpts2 = () => ({ band: p.band ?? 40, radius: 10, noBreachNear: rec ? { x: rec.x, z: rec.z, r: 48 } : null, deadline: Math.min(deadline - 240000, Date.now() + 90000 + d2 * 3000), log: (w, d) => log(w, d) })
+          const tOpts2 = () => ({ band: p.band ?? 40, radius: 10, noBreachNear: rec ? { x: rec.x, z: rec.z, r: 48 } : null, deadline: Math.min(deadline - 240000, gameClock.now() + 90000 + d2 * 3000), log: (w, d) => log(w, d) })
           let tr2 = await lavaWatched(bot, ctl, sub => tunnelTo(session, sub, goal, tOpts2()))
           if (!tr2.ok && !tr2.segs && (tr2.dug || 0) < 8 && !ctl.aborted && process.env.ND_BURROW !== '0') {
             const bw = await burrow(session, ctl, st, 'штрек после подхода не начался')
@@ -3658,7 +3659,7 @@ async function bastion (session, ctl, p = {}) {
         const left = () => goal === rec ? bot.entity.position.distanceTo(new Vec3(rec.x, rec.y, rec.z)) : Math.hypot(goal.x - bot.entity.position.x, goal.z - bot.entity.position.z)
         let again = !nearG && left() > (goal === rec ? 40 : 12) ? await walk(180000 + (p.tripSeconds || 0) * 1000) : false
         // Второй заход (бой по дороге, обрыв: booth-2 — «не дошёл: 76 блоков» за 38 с; вынырнули из лавы).
-        for (let k = 0; k < 3 && !nearG && !ctl.aborted && (again || left() > (goal === rec ? 48 : 20)) && Date.now() < deadline - 300000; k++) {
+        for (let k = 0; k < 3 && !nearG && !ctl.aborted && (again || left() > (goal === rec ? 48 : 20)) && gameClock.now() < deadline - 300000; k++) {
           if ((bot.health ?? 20) < 12) await eatIfHungry(session, ctl)
           again = await walk(150000)
         }
@@ -3672,7 +3673,7 @@ async function bastion (session, ctl, p = {}) {
     if ((p.knownGold || []).length && !st.knownLoaded) {
       st.knownLoaded = true
       for (const [x, y, z] of p.knownGold) { const v = new Vec3(x, y, z); const b = bot.blockAt(v); if (b && b.name !== 'gold_block' && b.boundingBox === 'empty') continue; const k = keyOf(v); if (!st.pred.has(k)) st.pred.set(k, { pos: v, piece: 'память', rank: 0 }) }
-      for (const [x, y, z] of (p.knownChests || [])) { const v = new Vec3(x, y, z); const k = keyOf(v); if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos: v, seen: Date.now(), pred: true }) }
+      for (const [x, y, z] of (p.knownChests || [])) { const v = new Vec3(x, y, z); const k = keyOf(v); if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos: v, seen: gameClock.now(), pred: true }) }
       st.towered = 3
       log('бастион по памяти', { gold: st.pred.size, chests: st.chestSeen.size })
     }
@@ -3682,7 +3683,7 @@ async function bastion (session, ctl, p = {}) {
     let idle = 0
     let vantage = 0
     let barterWalks = 0
-    while (!ctl.aborted && Date.now() < deadline - 12000) {
+    while (!ctl.aborted && gameClock.now() < deadline - 12000) {
       if (inLava(bot)) { if (!(await lavaEscape(bot))) await lavaEscapeDeep(bot); continue }
       if ((bot.health ?? 20) < 8) return out(`хп ${Math.round(bot.health)} — ухожу лечиться`)
       await eatIfHungry(session, ctl)
@@ -3700,7 +3701,7 @@ async function bastion (session, ctl, p = {}) {
           // Места у пиглинов нет (все на открытом полу, без стены под рот) — ждать в штреке и
           // искать снова: пиглины бродят (pit-tick 30.09: 3 из 16 заходов встали на «ни ямы, ни окна»).
           let bo = null
-          for (let tryN = 0; tryN < (BF.enabled() ? 2 : 6) && !bo && !ctl.aborted && Date.now() < deadline - 90000; tryN++) {
+          for (let tryN = 0; tryN < (BF.enabled() ? 2 : 6) && !bo && !ctl.aborted && gameClock.now() < deadline - 90000; tryN++) {
             if (tryN && BF.enabled()) {
               if (!(await moveBarterSite(session, ctl, st, p, deadline - 60000))) break
             }
@@ -3730,7 +3731,7 @@ async function bastion (session, ctl, p = {}) {
             // «Не подходят» — и после частичной торговли: пиглины ушли в другой зал, а золото осталось
             // (pit-v7 30.09: 5 из 9 торговавших заходов встали так, золото в рюкзаке).
             const notWorking = t => t && (t.stopped === 'яма не работает' || t.stopped === 'яма не доносит' || /не подходят|страж изменил место|ушёл из места/.test(t.stopped || ''))
-            for (let k = 0; k < 2 && bo.kind === 'pit' && notWorking(st.pitTrade) && countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') >= 18 && !ctl.aborted && Date.now() < deadline - 150000; k++) {
+            for (let k = 0; k < 2 && bo.kind === 'pit' && notWorking(st.pitTrade) && countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') >= 18 && !ctl.aborted && gameClock.now() < deadline - 150000; k++) {
               const S2 = st.sealedState
               ;(S2.badPits || (S2.badPits = new Set())).add(require('./sealed').key(bo.M.x, bo.M.y, bo.M.z))
               log('яма не работает — другая', { at: bo.P, tossed: st.pitTrade.tossed, seconds: st.pitTrade.seconds })
@@ -3749,7 +3750,7 @@ async function bastion (session, ctl, p = {}) {
             // ND_OPEN_BARTER=1: ни ямы, ни окна, а золото есть — бартер на открытом, как у спидраннеров (золотая броня, брутов и
             // хоглинов в 24 нет): D7b-32 03.10 — 15 золотых блоков, 0 сделок, бастион «выработан».
             if (!BF.enabled() && process.env.ND_OPEN_BARTER === '1' && !ctl.aborted && goldWorn(bot) && countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') >= 9 &&
-              ![...mobs(bot, 'piglin_brute', 24), ...mobs(bot, 'hoglin', 24)].length && Date.now() < deadline - 60000) {
+              ![...mobs(bot, 'piglin_brute', 24), ...mobs(bot, 'hoglin', 24)].length && gameClock.now() < deadline - 60000) {
               await unpackGold(session, ctl, 9 * countOf(bot, 'gold_block') + countOf(bot, 'gold_ingot'))
               const n = countOf(bot, 'gold_ingot')
               const ob = await barterRound(session, ctl, st, n, deadline - 40000).catch(e => ({ error: e.message }))
@@ -3764,7 +3765,7 @@ async function bastion (session, ctl, p = {}) {
             const isPearl = e => { try { const d = e.getDroppedItem && e.getDroppedItem(); return !!d && d.name === 'ender_pearl' } catch { return false } }
             const pk = { seen: 0, went: 0, got: 0 }
             const p0 = countOf(bot, 'ender_pearl')
-            for (let k = 0; k < 5 && NR.enabled() && NR.gridOf(session) && !ctl.aborted && Date.now() < deadline - 60000; k++) {
+            for (let k = 0; k < 5 && NR.enabled() && NR.gridOf(session) && !ctl.aborted && gameClock.now() < deadline - 60000; k++) {
               const me = bot.entity.position
               const its = Object.values(bot.entities).filter(e => e && e.name === 'item' && e.position && isPearl(e) && e.position.distanceTo(me) < 14 && e.position.distanceTo(me) > 1.3).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))
               if (!k) pk.seen = its.length
@@ -3784,8 +3785,8 @@ async function bastion (session, ctl, p = {}) {
         // нору в Аду, нора не закрылась — «БЛОКЕР», тело отключено (ферма 30.09, camp-10).
         if ((bot.health ?? 20) < 14 && !ctl.aborted) {
           const h0 = Math.round(bot.health ?? 0)
-          const until2 = Math.min(deadline - 20000, Date.now() + 120000)
-          while ((bot.health ?? 20) < 16 && Date.now() < until2 && !ctl.aborted && !inLava(bot)) {
+          const until2 = Math.min(deadline - 20000, gameClock.now() + 120000)
+          while ((bot.health ?? 20) < 16 && gameClock.now() < until2 && !ctl.aborted && !inLava(bot)) {
             if ((bot.food ?? 20) < 18) await eatIfHungry(session, ctl)
             if ((bot.food ?? 20) < 18 && (bot.food ?? 20) < 20 && !bot.inventory.items().some(i => /cooked|bread|apple|carrot|potato|melon_slice|stew|porkchop|beef|mutton|chicken|rabbit|cod|salmon/.test(i.name))) break
             await sleep(2000)
@@ -3797,7 +3798,7 @@ async function bastion (session, ctl, p = {}) {
         // продолжит отсюда (ревью Codex 30.09: выход при хп 7 после неудачного лечения).
         if (p.exit !== false && (!BF.enabled() || done()) && (bot.health ?? 20) >= 14 && exitReserveReady(bot, p)) { st.exit = await exitTunnel(session, ctl, st, deadline); log('выход', st.exit) } else if (p.exit !== false && (!BF.enabled() || done())) { st.exit = { ok: false, why: !exitReserveReady(bot, p) ? 'набор на выход не готов (обсидиан/огонь) — остаюсь в штреке' : `лечение не завершилось (хп ${Math.round(bot.health ?? 0)}) — остаюсь в штреке` }; log('выход', st.exit) }
         if (BF.enabled() && mode !== 'gold' && !done() && !ctl.aborted) {
-          if (spare() < 18 && st.pred.size && !st.noPick && Date.now() < deadline - 60000) {
+          if (spare() < 18 && st.pred.size && !st.noPick && gameClock.now() < deadline - 60000) {
             st.pitDone = false; st.sealedDone = false
             log('бартер: следующий пакет золота', { left: st.pred.size, pearls: countOf(bot, 'ender_pearl') })
             continue
@@ -3809,12 +3810,12 @@ async function bastion (session, ctl, p = {}) {
       // Бартер между делом: слитков много и пиглины рядом — сделки идут, пока
       // копаем (и разглядывающие золото не злятся от следующего блока).
       if (!st.sealed || !st.sealedState) { if (await tryBarter()) continue }
-      const goldOver = mode === 'barter' || spare() >= goldTarget() || Date.now() > goldPhaseEnd
+      const goldOver = mode === 'barter' || spare() >= goldTarget() || gameClock.now() > goldPhaseEnd
       if (goldOver) {
         if (mode === 'gold') break
         // Злость пиглинов от сломанного золота — 600 тиков (30 с): торговать,
         // когда остынут, а до того сидеть там, где копал (они до нас не доходят).
-        if (Date.now() - (st.lastBreak || 0) < 33000) { await sleep(2000); continue }
+        if (gameClock.now() - (st.lastBreak || 0) < 33000) { await sleep(2000); continue }
         if (spare() <= 0) break
         if (await tryBarter(true)) continue
         // Пиглинов в 16 не видно — к ближайшему известному (до 48 блоков).
@@ -3847,7 +3848,7 @@ async function bastion (session, ctl, p = {}) {
           continue
         }
         if (st.chestsOnly) {
-          await sealedGold(session, ctl, st, Math.max(Date.now() + 60000, deadline - 300000))
+          await sealedGold(session, ctl, st, Math.max(gameClock.now() + 60000, deadline - 300000))
           const made = await makeIronPick(session, ctl)
           log('железная кирка из сундуков', { made, ingots: countOf(bot, 'iron_ingot'), raw: countOf(bot, 'raw_iron'), nuggets: countOf(bot, 'iron_nugget'), blocks: countOf(bot, 'iron_block') })
           st.chestsOnly = false
@@ -3855,11 +3856,11 @@ async function bastion (session, ctl, p = {}) {
           continue
         }
         if (st.pred.size || st.gold.size) {
-          await sealedGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(Date.now() + 60000, deadline - 240000))
+          await sealedGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 240000))
           // Золото карты осталось — ходом по сетке к каждому (ND_GOLD_ROUTE=1).
-          if (process.env.ND_GOLD_ROUTE === '1' && st.pred.size && !ctl.aborted) st.routeGold = await routeGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(Date.now() + 60000, deadline - 200000))
+          if (process.env.ND_GOLD_ROUTE === '1' && st.pred.size && !ctl.aborted) st.routeGold = await routeGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 200000))
           st.sealedDone = true
-          goldPhaseEnd = Date.now()
+          goldPhaseEnd = gameClock.now()
           continue
         }
         // Бастион не узнан — в закрытом режиме не бродить по двору (старый обход: booth-3, две смерти в лаве).
@@ -3896,7 +3897,7 @@ async function bastion (session, ctl, p = {}) {
         await towerScan(session, ctl, st)
         continue
       }
-      const pt = [...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < Date.now())
+      const pt = [...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now())
         .map(([k, v]) => ({ k, pos: v.pos, rank: v.rank || 0, d: v.pos.distanceTo(bot.entity.position) })).sort((a, c) => (a.rank - c.rank) || (a.d - c.d))[0]
       if (pt) {
         idle = 0
@@ -3905,7 +3906,7 @@ async function bastion (session, ctl, p = {}) {
         continue
       }
       // Отложенные есть — подождать, пока пиглины разойдутся (или раздать слитки).
-      const waiting = [...st.gold.keys()].some(k => (st.skip.get(k) || 0) >= Date.now())
+      const waiting = [...st.gold.keys()].some(k => (st.skip.get(k) || 0) >= gameClock.now())
       if (waiting && idle < 3) {
         idle++
         if (!countOf(bot, 'gold_ingot') && countOf(bot, 'gold_block')) await unpackGold(session, ctl, 9)
@@ -3930,7 +3931,7 @@ async function bastion (session, ctl, p = {}) {
         if (score < best) { best = score; next = b }
       }
       if (!next) next = points.filter(q => !st.visited.has(keyOf(q))).sort((a, c) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(c.x - me.x, c.z - me.z))[0] || null
-      if (!next || vantage >= 16) { goldPhaseEnd = Date.now(); if (mode === 'gold') break; continue }
+      if (!next || vantage >= 16) { goldPhaseEnd = gameClock.now(); if (mode === 'gold') break; continue }
       st.visited.add(keyOf(next))
       vantage++
       idle = 0
@@ -3966,7 +3967,7 @@ async function bastion (session, ctl, p = {}) {
   else if (done()) stopped = null
   else if (spare() <= 0 && leftGold === 0 && memLeft > 0) stopped = `золото по памяти осталось (${memLeft}), пути к нему нет${st.lastBarter ? `; бартер: ${st.lastBarter}` : ''}`
   else if (spare() <= 0 && leftGold === 0) stopped = `золото кончилось: видимых блоков больше нет${st.lastBarter ? `; бартер: ${st.lastBarter}` : ''}`
-  else if (Date.now() >= deadline - 20000) stopped = 'время вышло — позови ещё раз, продолжу'
+  else if (gameClock.now() >= deadline - 20000) stopped = 'время вышло — позови ещё раз, продолжу'
   else if (st.lastBarter) stopped = `бартер встал: ${st.lastBarter}`
   return out(stopped)
 }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Темп (tempo.js, 2026-09-25) — сцена «прижат в паутине»: живая дуэль, где
 // NeuroDown2 застрял в паутине перед обсидианом, враг стоял вне досягаемости
 // руки, бот «отвечал ударами» в пустоту и умер с golden_apple×4,
@@ -14,12 +15,15 @@
 // idle — A стоит (враг вне руки, как в жалобе); fight — A сам бьёт B.
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -33,7 +37,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.ARENA_A || 'ws://127.0.0.1:8783')
 const B = client(process.env.ARENA_B || 'ws://127.0.0.1:8784')
 const NA = 'NeuroDown'
@@ -69,7 +73,7 @@ async function scene (n) {
   await sleep(700)
   const st0 = await B.call('status')
   const hp0 = st0 && st0.state ? st0.state.health : '?'
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let outAt = null
   let minHp = hp0
   const fight = B.call('fight', { target: NA, allowPlayer: true, timeoutSeconds: 20, retreatAtHealth: 3 })
@@ -77,11 +81,11 @@ async function scene (n) {
   const fa = MODE === 'fight' ? A.call('fight', { target: NB, allowPlayer: true, timeoutSeconds: 20, retreatAtHealth: 3 }).catch(() => null) : null
   let done = false
   fight.finally(() => { done = true })
-  while (!done && Date.now() - t0 < 22000) {
+  while (!done && gameClock.now() - t0 < 22000) {
     const s = await B.call('status').catch(() => null)
     const p = s && s.state && s.state.pos
     if (s && s.state && typeof s.state.health === 'number') minHp = Math.min(minHp, s.state.health)
-    if (p && !outAt && (Math.floor(p.x) !== X || Math.floor(p.z) !== Z)) outAt = Date.now() - t0
+    if (p && !outAt && (Math.floor(p.x) !== X || Math.floor(p.z) !== Z)) outAt = gameClock.now() - t0
     await sleep(150)
   }
   const r = await fight.catch(e => ({ error: e.message }))

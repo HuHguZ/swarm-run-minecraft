@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Проба осмотра portal_natural survey с точек (агент G, ферма 29–30): POINTS="x z;x z" (y — верх столба + 2).
 const { connect, createKit, sleep } = require('./scene-kit')
 const slot = Number(process.env.FARM_SLOT || 30)
@@ -18,10 +19,10 @@ async function main () {
     // встать на верх столба
     await kit.cmd(`/spreadplayers ${x} ${z} 0 1 false @s`)
     await sleep(3500)
-    const t = Date.now()
+    const t = gameClock.now()
     const r = await conn.call('portal_natural', { mode: 'survey', radius: Number(process.env.R || 96) })
     const d = r.detail || r
-    console.log(JSON.stringify({ at: d.me, ms: Date.now() - t, seen: d.seenSources, skyCand: d.skyCandidates, best: d.best, sites: (d.sites || []).slice(0, 3), ruins: d.ruins, error: r.error }))
+    console.log(JSON.stringify({ at: d.me, ms: gameClock.now() - t, seen: d.seenSources, skyCand: d.skyCandidates, best: d.best, sites: (d.sites || []).slice(0, 3), ruins: d.ruins, error: r.error }))
   }
   await conn.call('disconnect')
   process.exit(0)

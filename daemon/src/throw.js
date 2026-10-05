@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Броски: жемчуг, взрывные и оседающие зелья, снежки. Задача та же, что у лука
 // (bow.js), но физика своя, и прошлый прицел (pvp.ballisticPitch) её не знал:
 //   * порядок тика другой: у брошенного предмета (ThrowableProjectile.tick,
@@ -223,7 +224,7 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
       setImmediate(() => resolve({ sol, land, from, airborne, moved: { ...moved } }))
     }
     bot.on('physicsTick', onT)
-    setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve(null) } }, 400)
+    gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve(null) } }, 400)
   })
   if (!res || !res.sol) return { thrown: false, why: res ? 'не долетит' : 'физика стоит' }
   if (onAim) {

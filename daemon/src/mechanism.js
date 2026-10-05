@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { withTimeout, placeBlockAt, pickFiller } = require('./build')
@@ -48,8 +49,8 @@ const isWaterSource = b => !!b && b.name === 'water' && Number((b.getProperties 
 
 function sleep (ms, ctl) {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 const xyz = p => ({ x: p.x, y: p.y, z: p.z })
@@ -108,15 +109,15 @@ async function clearCell (bot, pos) {
 
 function waitLook (bot) {
   return new Promise(resolve => {
-    const t = setTimeout(done, 160)
-    function done () { clearTimeout(t); bot.removeListener('move', done); resolve() }
+    const t = gameClock.setTimeout(done, 160)
+    function done () { gameClock.clearTimeout(t); bot.removeListener('move', done); resolve() }
     bot.once('move', done)
   })
 }
 
 async function waitBlock (bot, pos, pred, ms = 1500) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < ms) {
     const b = bot.blockAt(pos)
     if (pred(b)) return b
     await sleep(50)
@@ -175,8 +176,8 @@ async function scoop (bot, col) {
   await waitLook(bot)
   const before = countItems(bot).water_bucket || 0
   try { bot.activateItem() } catch {}
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1500 && (countItems(bot).water_bucket || 0) <= before) await sleep(50)
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1500 && (countItems(bot).water_bucket || 0) <= before) await sleep(50)
   return (countItems(bot).water_bucket || 0) > before
 }
 
@@ -323,8 +324,8 @@ async function buildCane (session, ctl, p, report) {
     if (await pourAt(bot, c)) steps.poured = (steps.poured || 0) + 1
     else fail(`вода ${i}`, 'не налил')
   }
-  const w0 = Date.now()
-  while (Date.now() - w0 < 4000 && L.cols.some(c => !isWaterSource(bot.blockAt(c.water)))) await sleep(200, ctl)
+  const w0 = gameClock.now()
+  while (gameClock.now() - w0 < 4000 && L.cols.some(c => !isWaterSource(bot.blockAt(c.water)))) await sleep(200, ctl)
   // 5. Камни под механикой: за жёлобом, над водой, за поршнем.
   for (const c of L.cols) {
     if (ctl.aborted) return report

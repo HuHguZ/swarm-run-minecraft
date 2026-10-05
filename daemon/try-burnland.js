@@ -1,19 +1,20 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Посадка в огонь (mace.descend, 2026-09-26): прогон физики до земли видит
 // лаву под точкой посадки и находит клавиши, с которыми сядем мимо. Голый
 // клиент NeuroEnd (оп на end) висит в 9 блоках над площадкой, под ним лава
 // 1×1 (прямо под ногами) или 3×3; спрашиваем mace.landing без клавиш и с
 // каждой из восьми сторон, потом отпускаем и падаем с выбранными клавишами.
 //   MC_PORT=25568 node try-burnland.js
-const mineflayer = require('mineflayer')
 const mace = require('./src/mace')
 
 const PORT = Number(process.env.MC_PORT || 25568)
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const X = 700; const Y = 150; const Z = 700
 
 ;(async () => {
-  const bot = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username: 'NeuroEnd', version: '1.21.11', auth: 'offline' })
+  const bot = createGameBot({ host: '127.0.0.1', port: PORT, username: 'NeuroEnd', version: '1.21.11', auth: 'offline' }, { primary: true })
   await new Promise((resolve, reject) => { bot.once('spawn', resolve); bot.once('error', reject) })
   const cmd = async (t) => { bot.chat(t); await sleep(200) }
   try {
@@ -39,8 +40,8 @@ const X = 700; const Y = 150; const Z = 700
       // Падаем с первой чистой стороной — где сели на самом деле.
       const pick = safe.find(c => c.k !== 'без клавиш')
       if (pick) for (const x of ['forward', 'back', 'left', 'right']) bot.setControlState(x, !!mace.AIR_KEYS.find(k => (Object.keys(k).filter(y => k[y]).join('+') || 'без клавиш') === pick.k)[x])
-      const t0 = Date.now()
-      while (!bot.entity.onGround && !bot.entity.isInLava && Date.now() - t0 < 4000) await sleep(50)
+      const t0 = gameClock.now()
+      while (!bot.entity.onGround && !bot.entity.isInLava && gameClock.now() - t0 < 4000) await sleep(50)
       await sleep(150)
       const feet = bot.blockAt(bot.entity.position.floored())
       const under = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0))
@@ -55,6 +56,6 @@ const X = 700; const Y = 150; const Z = 700
     await cmd(`/fill ${X - 6} ${Y - 1} ${Z - 6} ${X + 6} ${Y - 1} ${Z + 6} minecraft:stone`).catch(() => {})
     await cmd(`/forceload remove ${X - 8} ${Z - 8} ${X + 8} ${Z + 8}`).catch(() => {})
     bot.quit()
-    setTimeout(() => process.exit(), 500)
+    gameClock.wall.setTimeout(() => process.exit(), 500)
   }
 })()

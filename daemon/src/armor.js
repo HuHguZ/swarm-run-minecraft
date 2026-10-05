@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { sleep } = require('./movement')
 
 // Putting armour on. mineflayer never does it by itself, and the bot has spent
@@ -299,8 +300,8 @@ function isWorn (bot, step) {
 // on window 0. Hence: make all the clicks, sit out one settle window, then
 // look. One wait for the whole plan, not one per piece.
 async function settle (ctl, ms) {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline && !ctl.aborted) await sleep(50)
+  const deadline = gameClock.now() + ms
+  while (gameClock.now() < deadline && !ctl.aborted) await sleep(50)
 }
 
 // Wear the best of what we are carrying. Cheap to call on a timer: with

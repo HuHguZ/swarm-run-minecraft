@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Жемчуг как быстрое перемещение (2026-10-01, агент дракона). Общий модуль: «добраться до точки goal
 // одним-тремя бросками вместо пешего пути/моста», если это быстрее с учётом цены в хп.
 //
@@ -360,11 +361,11 @@ function planHop (world, feet, goal, { maxR = 70, minR = 6, lateral = [0, -2, 2,
 const r1 = (x) => Math.round(x * 10) / 10
 const xyz = (p) => p ? `${r1(p.x)},${r1(p.y)},${r1(p.z)}` : '?'
 const countPearls = (bot) => bot.inventory.items().filter(i => i.name === 'ender_pearl').reduce((n, i) => n + i.count, 0)
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = (ms) => new Promise(resolve => gameClock.setTimeout(resolve, ms))
 
 async function waitTeleport (bot, from, ms) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < ms) {
     await sleep(50)
     const p = bot.entity && bot.entity.position
     if (p && p.distanceTo(from) > 2.5) return true
@@ -374,14 +375,14 @@ async function waitTeleport (bot, from, ms) {
 
 // Еда/регенерация между бросками: доесть до сытости и подождать хп (не дольше maxMs).
 async function recover (bot, want, maxMs = 5000, stopIf = null) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   if ((bot.food ?? 20) < 20) {
     const food = bot.inventory.items().find(i => /cooked_|bread|baked_potato|golden_carrot|steak|apple$/.test(i.name) && !/golden_apple|enchanted/.test(i.name))
     if (food) {
       try { await bot.equip(food, 'hand'); await bot.consume() } catch {}
     }
   }
-  while ((bot.health ?? 20) < want && Date.now() - t0 < maxMs && (bot.food ?? 20) >= 18 && !(stopIf && stopIf())) await sleep(250)
+  while ((bot.health ?? 20) < want && gameClock.now() - t0 < maxMs && (bot.food ?? 20) >= 18 && !(stopIf && stopIf())) await sleep(250)
   return bot.health
 }
 
@@ -429,7 +430,7 @@ async function hopTo (bot, goal, opts = {}) {
   const log = opts.log || ((m) => console.log('[pearl] ' + m))
   const { reserve = 1, hpMin = 12, hpSec = 1.5, minGain = 3, maxHops = 3, arriveR = 4 } = opts
   const out = { hops: 0, pearls: 0, hpLost: 0, ms: 0, misses: 0, saved: 0, steps: [] }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   for (let k = 0; k < maxHops; k++) {
     if (opts.abortIf && opts.abortIf()) { out.stop = 'прервано'; break }
     const world = worldOf(bot)
@@ -439,9 +440,9 @@ async function hopTo (bot, goal, opts = {}) {
     const pearls = countPearls(bot)
     if (pearls - reserve <= 0) { out.stop = `жемчуга ${pearls} (резерв ${reserve})`; break }
     const obstacles = typeof opts.obstacles === 'function' ? opts.obstacles() : (opts.obstacles || obstaclesOf(bot))
-    const tPlan = Date.now()
+    const tPlan = gameClock.wall.now()
     const ph = planHop(world, me, goal, { floorOk: opts.floorOk, avoid: opts.avoid, obstacles, lookOk: opts.lookOk, maxR: opts.maxR || 70 })
-    const planMs = Date.now() - tPlan
+    const planMs = gameClock.wall.now() - tPlan
     if (!ph.plan) { out.stop = 'нет броска'; log(`нет броска к ${xyz(goal)} (${Math.round(rem)} бл.): ${JSON.stringify(ph.why)} за ${planMs} мс`); break }
     const pl = ph.plan
     // opts.walkSec — время пешком, посчитанное зовущим по настоящему пути (hopgoto: A* pathfinder'а), только для
@@ -505,7 +506,7 @@ async function hopTo (bot, goal, opts = {}) {
     const sf = await stepFromEdge(bot, world2, opts)
     if (sf.moved) log(`у края (пустота с ${sf.voids} сторон) — шаг от пустоты`)
   }
-  out.ms = Date.now() - t0
+  out.ms = gameClock.now() - t0
   return out
 }
 

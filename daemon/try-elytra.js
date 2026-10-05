@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Элитры в бою (elytra.js) на двух демонах тестового сервера. Арена-коробка
 // в небе (как у arena.js): обсидиановый пол с полосами светокамня, стены из
 // стекла, барьер-потолок на Y+CEIL, две дыры в полу. Сцены (строка итога на
@@ -15,12 +16,15 @@
 //   A=ws://127.0.0.1:8793 B=ws://127.0.0.1:8794 node try-elytra.js [сцены] [повторов]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -34,7 +38,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8793')
 const B = client(process.env.B || 'ws://127.0.0.1:8794')
 async function cmd (text) { await A.call('say', { text }); await sleep(60) }
@@ -94,7 +98,7 @@ async function stage (name, { aItems, aBody = DIAMOND, bItems = [], bBody = DIAM
   await sleep(1500)
   if (aHurt) { await cmd(`/damage NeuroDown ${aHurt}`); await sleep(300) }
   const hpA0 = await hpOf(A); const hpB0 = await hpOf(B)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const over = { done: false }
   const go = (c, target, peer) => c.call('fight', { target, allowPlayer: true, timeoutSeconds: seconds, retreatAtHealth: 1 })
     .catch(e => ({ status: 'failed', error: e.message }))
@@ -108,7 +112,7 @@ async function stage (name, { aItems, aBody = DIAMOND, bItems = [], bBody = DIAM
   const key = name.replace(/ #\d+$/, '')
   const s = score[key] || (score[key] = { A: 0, B: 0, '=': 0 })
   s[win]++
-  console.log(`[${name}] ${Math.round((Date.now() - t0) / 1000)} с | NeuroDown ${hpA0}→${hpA} | NeuroDown2 ${hpB0}→${hpB} | итог ${win === 'A' ? 'A' : win === 'B' ? 'B' : 'ничья'} | счёт ${s.A}:${s.B} (=${s['=']})`)
+  console.log(`[${name}] ${Math.round((gameClock.now() - t0) / 1000)} с | NeuroDown ${hpA0}→${hpA} | NeuroDown2 ${hpB0}→${hpB} | итог ${win === 'A' ? 'A' : win === 'B' ? 'B' : 'ничья'} | счёт ${s.A}:${s.B} (=${s['=']})`)
   console.log(`   A: ${line(ra)}`)
   console.log(`   B: ${line(rb)}`)
 }
@@ -141,5 +145,5 @@ async function stage (name, { aItems, aBody = DIAMOND, bItems = [], bBody = DIAM
   console.log('ИТОГ:', JSON.stringify(score))
   await cmd('/gamerule send_command_feedback true')
   A.ws.close(); B.ws.close()
-  setTimeout(() => process.exit(0), 300)
+  gameClock.wall.setTimeout(() => process.exit(0), 300)
 })().catch(e => { console.error('FAILED', e); process.exit(1) })

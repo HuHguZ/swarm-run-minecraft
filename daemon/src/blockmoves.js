@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Спидраннерские ходы блоками как ходы pathfinder'а (TODO.md «Спидраннерское перемещение блоками», шаги 2–4;
 // поток movement, 02.10.2026). Включается ND_BRIDGE=1 (по умолчанию — выкл. до замера на ферме).
 //
@@ -271,7 +272,7 @@ function install (session, deps = {}) {
   const bot = session.bot
   if (!bot || bot._ndBridgeExec) return bot && bot._ndBridgeExec
   const faceAim = deps.faceAim || require('./pick').faceAim
-  const now = deps.now || Date.now
+  const now = deps.now || gameClock.now
   const hand = deps.hand || bot._ndHandLock || { hold () {}, on: () => false, as: fn => fn() }
   const log = deps.log || ((m, o) => console.log('[bridge] ' + m, o ? JSON.stringify(o) : ''))
   const stats = { placed: 0, confirmed: 0, denied: 0, timeout: 0, noFace: 0, stale: 0, noItem: 0, segments: 0, fell: 0 }

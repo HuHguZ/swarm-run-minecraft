@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // The run that matters: surface -> bedrock-ish -> drift for ore -> home alive.
 // Every piece of this has been proven on its own; nothing has been proven
 // together, and "works alone" is the weakest kind of works.
@@ -18,14 +19,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const DIAMOND_Y = Number(process.env.DIAMOND_Y || -58)
 
 async function cmd (text) {

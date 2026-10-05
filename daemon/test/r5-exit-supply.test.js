@@ -3,6 +3,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
+const { clockFixture } = require('./clock-fixture')
 const path = require('node:path')
 function fixture (inventory, { foes = 0, sealed = true, wood = true, stone = true, needsPick = false, target = { x: 0, z: 0 } } = {}) {
   const inv = { ...inventory }; const calls = []; let pickLeft = inventory.pickLeft || 0
@@ -35,6 +36,7 @@ function fixture (inventory, { foes = 0, sealed = true, wood = true, stone = tru
   const context = { state, sit, have, act, refresh: async () => state, sense: async () => sit, died: false, process,
     LOGS: /_(log|stem)$/, COBBLE: /^(cobblestone|cobbled_deepslate|blackstone)$/, planksFor: () => have('crimson_stem') ? 'crimson_planks' : null,
     lighter: () => true, log () {}, Date, Math }
+  context.gameClock = clockFixture(context)
   const src = fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8')
   const a = src.includes('async function prepareExitSupply') ? src.indexOf('async function prepareExitSupply') : src.indexOf('async function prepareExitTools')
   const b = src.indexOf('// К точке верхнего мира T', a)

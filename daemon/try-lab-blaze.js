@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория этапов, этап 1 — огненные стержни в НАСТОЯЩЕЙ крепости Ада
 // (server-nether, 25567). Сцена командами только ставит тело: /tp к спавнеру,
 // набор кампании, лечение между попытками. Дальше — ровно те вызовы, что
@@ -85,13 +86,13 @@ async function scene () {
 
 async function run (k) {
   kit = createKit({ call, heard: conn.heard, logFile: LOG, player: PLAYER })
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const from = logSize()
   await scene()
   const h0 = await header()
   const res = { run: k, at: new Date().toISOString(), start: h0.pos, calls: [], deaths: 0, minHp: 20 }
   res.rodsMax = 0
-  let hpTimer = setInterval(async () => {
+  let hpTimer = gameClock.setInterval(async () => {
     try {
       const h = await header()
       if (typeof h.health === 'number') res.minHp = Math.min(res.minHp, h.health)
@@ -102,12 +103,12 @@ async function run (k) {
     for (let i = 0; i < CALLS; i++) {
       const have = await inv('blaze_rod')
       if (have >= RODS) break
-      const c0 = Date.now()
+      const c0 = gameClock.now()
       const r = await call('blaze', { rods: RODS, timeoutSeconds: 400, ...(process.env.BLAZE_PARAMS ? JSON.parse(process.env.BLAZE_PARAMS) : {}) })
       const d = r.detail || {}
       const h = await header()
       const brief = {
-        s: Math.round((Date.now() - c0) / 1000),
+        s: Math.round((gameClock.now() - c0) / 1000),
         status: r.status,
         by: r.by ? r.by.type : undefined,
         rods: d.rods,
@@ -128,15 +129,15 @@ async function run (k) {
       if ((h.health || 0) <= 0) break
       if (/не вижу/.test(String(d.stopped || '')) && i >= 1) break
     }
-  } finally { clearInterval(hpTimer) }
+  } finally { gameClock.clearInterval(hpTimer) }
   const h = await header()
-  const deaths = kit.between(t0, Date.now(), 'death').length
+  const deaths = kit.between(t0, gameClock.now(), 'death').length
   res.deaths = deaths + (res.calls.some(c => c.by === 'death') && !deaths ? 1 : 0)
   res.causes = deathLines(from).filter(l => /was|died|burn|fell|lava|drown|blew|killed|slain|fireball|flames|withered|shot/.test(l))
   res.rods = await inv('blaze_rod')
   res.rodsMax = Math.max(res.rodsMax, res.rods)
   res.hp = h.health
-  res.seconds = Math.round((Date.now() - t0) / 1000)
+  res.seconds = Math.round((gameClock.now() - t0) / 1000)
   res.ok = res.rods >= RODS && res.deaths === 0
   fs.appendFileSync(OUT, JSON.stringify(res) + '\n')
   console.log(`ПОПЫТКА ${k}: ${res.ok ? 'OK' : 'ПЛОХО'} стержней ${res.rods}, смертей ${res.deaths} ${JSON.stringify(res.causes)}, мин.хп ${res.minHp}, ${res.seconds} с`)

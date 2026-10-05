@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Жемчуг как ход goto (TODO.md «Жемчуг как перемещение», п. 1, общий ход; поток movement, 02.10.2026).
 // Включается параметром goto { pearl: true | {reserve, hpMin, hpSec, minGain, minShare, maxHops} } или ND_PEARL_GOTO=1.
 //
@@ -43,14 +44,14 @@ async function planWalk (bot, goal, { ms = 3000, slice = 30, abortIf = null } = 
   if (!pf || !pf.movements || typeof pf.getPathFromTo !== 'function') return null
   const gen = pf.getPathFromTo(pf.movements, bot.entity.position, goal, { timeout: ms, tickTimeout: slice })
   let res = null
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms + 500) {
+  const t0 = gameClock.wall.now()
+  while (gameClock.wall.now() - t0 < ms + 500) {
     if (abortIf && abortIf()) return res
     const it = gen.next()
     if (it.done) break
     res = it.value.result
     if (res.status !== 'partial') break
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await new Promise(resolve => gameClock.wall.setTimeout(resolve, 10))
   }
   return res
 }
@@ -83,9 +84,9 @@ async function maybeHop (session, ctl, goalXYZ, goal, opt = {}) {
   const tgt = new Vec3(goalXYZ.x + 0.5, goalXYZ.y ?? bot.entity.position.y, goalXYZ.z + 0.5)
   const flat = Math.hypot(tgt.x - bot.entity.position.x, tgt.z - bot.entity.position.z)
   if (flat < 8) return { hopped: false, why: 'цель рядом' }
-  const t0 = Date.now()
+  const t0 = gameClock.wall.now()
   const walk = await planWalk(bot, goal, { ms: o.planMs, abortIf: () => ctl && ctl.aborted })
-  const planMs = Date.now() - t0
+  const planMs = gameClock.wall.now() - t0
   const liquidAt = (n) => { const b = bot.blockAt(new Vec3(Math.floor(n.x), Math.floor(n.y), Math.floor(n.z))); return !!(b && /water/.test(b.name)) }
   const speed = bot.pathfinder.movements && bot.pathfinder.movements.allowSprinting ? RUN : WALK
   let walkSec

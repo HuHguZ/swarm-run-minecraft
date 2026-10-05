@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Сборы и рефлексы (src/fightkit.js):
 //   (а) чек-лист Энда без крафта: чего не хватает и зачем
 //   (б) сборы в Ад из сырья: щит, лук, стрелы, огниво, 2 золотых яблока,
@@ -18,13 +19,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(350) }
 
 let failures = 0
@@ -55,9 +56,9 @@ async function stage () {
 // что ждём кусками, пока не придёт нужное или не выйдет время.
 async function waitEvents (seconds, want = null) {
   const out = []
-  const t0 = Date.now()
-  while (Date.now() - t0 < seconds * 1000) {
-    const r = await call('wait', { seconds: Math.max(1, Math.ceil(seconds - (Date.now() - t0) / 1000)) })
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < seconds * 1000) {
+    const r = await call('wait', { seconds: Math.max(1, Math.ceil(seconds - (gameClock.now() - t0) / 1000)) })
     out.push(...(r.events || []), ...(r.by ? [r.by] : []))
     if (want && out.some(want)) break
   }
@@ -101,11 +102,11 @@ async function main () {
     await cmd('/give @s minecraft:cobblestone 64')
     await cmd('/give @s minecraft:cooked_beef 8')
     await sleep(800)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('kit', { for: 'nether' })
     const d = r.detail || {}
     const i = inv(r)
-    const s = Math.round((Date.now() - t0) / 1000)
+    const s = Math.round((gameClock.now() - t0) / 1000)
     check('(б) к Аду готов', r.status === 'done' && d.ready === true, `${brief(r)} за ${s} с`)
     check('(б) 2 золотых яблока скрафтил', i.golden_apple === 2, `golden_apple=${i.golden_apple}`)
     check('(б) щит, лук, стрелы, огниво', !!(i.shield || (r.state && r.state.offHand === 'shield')) && i.bow === 1 && (i.arrow || 0) >= 8 && i.flint_and_steel === 1, JSON.stringify(i))

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { xyz } = require('./movement')
@@ -193,7 +194,7 @@ async function sort (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const containers = require('./containers')
-  const deadline = Date.now() + Math.min(600, p.timeoutSeconds ?? 180) * 1000
+  const deadline = gameClock.now() + Math.min(600, p.timeoutSeconds ?? 180) * 1000
   const chests = findStorage(session, { radius: Math.max(4, Math.min(24, p.radius ?? 12)), at: p.at || null })
   if (!chests.length) {
     return { sorted: false, stopped: 'сундуков рядом нет — сначала mc_build kind=storage (склад с табличками) или поставь сундуки' }
@@ -237,16 +238,16 @@ async function sort (session, ctl, p = {}) {
   let moves = 0
   let passes = 0
 
-  for (let pass = 0; pass < 3 && !ctl.aborted && Date.now() < deadline; pass++) {
+  for (let pass = 0; pass < 3 && !ctl.aborted && gameClock.now() < deadline; pass++) {
     passes++
     let movedThisPass = 0
     let misplacedSeen = 0
-    for (let i = 0; i < chests.length && !ctl.aborted && Date.now() < deadline; i++) {
+    for (let i = 0; i < chests.length && !ctl.aborted && gameClock.now() < deadline; i++) {
       const ch = chests[i]
       const rep = report[i]
       let win = null; let shut = null
       try {
-        const opened = await containers.findAndOpen(session, ctl, ch.pos, Date.now() + 25000)
+        const opened = await containers.findAndOpen(session, ctl, ch.pos, gameClock.now() + 25000)
         win = opened.win
         shut = containers.guardWindow(ctl, win)
       } catch (e) { rep.error = e.message; continue }
@@ -307,7 +308,7 @@ async function sort (session, ctl, p = {}) {
   let signed = 0
   const signFails = []
   if (p.label !== false) {
-    for (let i = 0; i < chests.length && !ctl.aborted && Date.now() < deadline; i++) {
+    for (let i = 0; i < chests.length && !ctl.aborted && gameClock.now() < deadline; i++) {
       const ch = chests[i]
       if (ch.sign) continue
       const r = await labelChest(session, ctl, ch, ch.category)
@@ -346,7 +347,7 @@ async function sort (session, ctl, p = {}) {
   }
 }
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => new Promise(resolve => gameClock.setTimeout(resolve, ms))
 
 // ---------------------------------------------------------------- sign
 

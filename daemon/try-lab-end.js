@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория этапов, этап 3 — очи → крепость → портал → Энд (server-nether,
 // верхний мир). Сцена командами только ставит тело: набор кампании после
 // этапов стержней и жемчуга (7 стержней, 12 жемчужин), точка на суше в
@@ -41,11 +42,11 @@ async function locate () {
 
 const steps = []
 async function act (method, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call(method, params)
   const d = r.detail || {}
   const h = await header()
-  const brief = { method, params, s: Math.round((Date.now() - t0) / 1000), status: r.status, by: r.by ? r.by.type : undefined, err: r.error, dim: h.dimension, pos: h.pos, hp: h.health, stopped: d.stopped ? String(d.stopped).slice(0, 160) : undefined }
+  const brief = { method, params, s: Math.round((gameClock.now() - t0) / 1000), status: r.status, by: r.by ? r.by.type : undefined, err: r.error, dim: h.dimension, pos: h.pos, hp: h.health, stopped: d.stopped ? String(d.stopped).slice(0, 160) : undefined }
   for (const k of ['found', 'room', 'at', 'estimate', 'went', 'entered', 'lit', 'placed', 'frames', 'withEye', 'walked', 'legs', 'throws', 'refined']) if (d[k] !== undefined) brief[k] = typeof d[k] === 'object' ? JSON.stringify(d[k]).slice(0, 200) : d[k]
   steps.push(brief)
   console.log(`  ${method} ${JSON.stringify(params)}: ${JSON.stringify(brief).slice(0, 600)}`)
@@ -55,7 +56,7 @@ async function act (method, params) {
 conn.ready.then(async () => {
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const res = { at: new Date().toISOString() }
   try {
     await kit.cmd('/gamemode survival')
@@ -137,8 +138,8 @@ conn.ready.then(async () => {
     res.error = e.message
     console.log('сцена оборвалась:', e.message)
   } finally {
-    res.deaths = kit.between(t0, Date.now(), 'death').length + (steps.some(s => s.by === 'death') ? 1 : 0)
-    res.seconds = Math.round((Date.now() - t0) / 1000)
+    res.deaths = kit.between(t0, gameClock.now(), 'death').length + (steps.some(s => s.by === 'death') ? 1 : 0)
+    res.seconds = Math.round((gameClock.now() - t0) / 1000)
     res.steps = steps
     res.ok = res.dimension === 'the_end' && !res.deaths
     fs.appendFileSync(OUT, JSON.stringify(res) + '\n')

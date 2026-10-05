@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Поле с брошенной паутиной (арена 2026-09-26: «боты часто в паутине
 // застревают, как будто её не видят»). Площадка 17×17, на ней N паутин в
 // случайных клетках (у ног), два бота с мечами и щитами без паутины и воды
@@ -9,12 +11,15 @@
 const WebSocket = require('ws')
 const { Vec3 } = require('vec3')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -28,7 +33,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(50) }
@@ -42,8 +47,7 @@ let seed = Number(process.env.SEED || 7)
 const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff }
 
 async function observer () {
-  const mineflayer = require('mineflayer')
-  const ob = mineflayer.createBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { ob.once('spawn', resolve); ob.once('error', reject); ob.once('kicked', reject) })
   await sleep(4000)
   ob.chat('/gamemode spectator'); await sleep(300)
@@ -75,7 +79,7 @@ async function round (ob, k) {
   await cmd(`/tp NeuroDown2 ${X + 4 + 0.5} ${Y} ${Z + 0.5} 90 0`)
   await sleep(1500)
   const stat = { NeuroDown: { ticks: 0, entries: 0, was: false }, NeuroDown2: { ticks: 0, entries: 0, was: false } }
-  const iv = setInterval(() => {
+  const iv = gameClock.setInterval(() => {
     for (const name of Object.keys(stat)) {
       const e = ob.players[name] && ob.players[name].entity
       if (!e) continue
@@ -88,7 +92,7 @@ async function round (ob, k) {
   const fa = A.call('fight', { target: 'NeuroDown2', allowPlayer: true, timeoutSeconds: SECONDS, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
   const fb = B.call('fight', { target: 'NeuroDown', allowPlayer: true, timeoutSeconds: SECONDS, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
   const [ra, rb] = await Promise.all([fa, fb])
-  clearInterval(iv)
+  gameClock.clearInterval(iv)
   await A.call('stop').catch(() => {}); await B.call('stop').catch(() => {})
   const left = webs.filter(w => (ob.blockAt(new Vec3(w.x, Y, w.z)) || {}).name === 'cobweb').length
   const notes = (r) => Object.entries(((r && r.detail) || {}).tricks || {}).filter(([k]) => /паутин/.test(k)).map(([k, v]) => `${k}×${v}`).join(', ')
@@ -125,6 +129,6 @@ async function round (ob, k) {
   } finally {
     if (ob) try { ob.quit() } catch {}
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Арена: два NeuroDown дерутся друг с другом через свои демоны, чтобы PvP
 // оттачивался на равном противнике, а человек смотрел со стороны.
 //
@@ -24,7 +25,7 @@ const ROUNDS = Number(process.argv[2] || 1) // 0 — без конца, пока
 const NOTIMER = !!process.env.ARENA_NOTIMER
 // «хватит» в чате — стоп. Читаем лог клиента хоста (там весь чат сервера).
 const MC_LOG = path.join(process.env.APPDATA || '', '.minecraft', 'logs', 'latest.log')
-const startedAt = Date.now()
+const startedAt = gameClock.wall.now()
 function stopRequested () {
   try {
     const st = fs.statSync(MC_LOG)
@@ -48,19 +49,22 @@ const ONLY = process.argv[3] || null
 const A_PORT = (A_URL.match(/:(\d+)\/?$/) || [])[1] || 'x'
 const LOG = path.join(__dirname, A_PORT === '8765' ? 'arena.log' : `arena-${A_PORT}.log`)
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const log = (...a) => {
   const line = `[${new Date().toISOString().slice(11, 19)}] ${a.join(' ')}`
   console.log(line)
   fs.appendFileSync(LOG, line + '\n')
 }
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -105,10 +109,10 @@ const NB = HUMANS.length > 1 ? HUMANS.join('+') : HUMAN || 'NeuroDown2'
 // только ARENA_THROTTLE=1 — на чужом сервере, где бот не оп.
 const THROTTLE = !!process.env.ARENA_THROTTLE
 let spam = 0
-let spamAt = Date.now()
+let spamAt = gameClock.now()
 async function cmd (text) {
   if (THROTTLE) {
-    const decay = () => { const now = Date.now(); spam = Math.max(0, spam - (now - spamAt) / 50); spamAt = now }
+    const decay = () => { const now = gameClock.now(); spam = Math.max(0, spam - (now - spamAt) / 50); spamAt = now }
     decay()
     if (spam + 20 > 185) { await sleep((spam + 20 - 185) * 50); decay() }
   }
@@ -651,7 +655,7 @@ async function round (kit, n) {
   if (HUMANS.length) {
     ACTIVE = await onlineHumans()
     if (!ACTIVE.length) log('людей на сервере нет — жду, пока кто-нибудь зайдёт')
-    while (!ACTIVE.length && !stopRequested()) { await sleep(10000); ACTIVE = await onlineHumans() }
+    while (!ACTIVE.length && !stopRequested()) { await gameClock.wall.sleep(10000); ACTIVE = await onlineHumans() }
     if (!ACTIVE.length) return
     const gone = HUMANS.filter(h => !ACTIVE.includes(h))
     if (gone.length) log(`вышли: ${gone.join(', ')} — раунд без них`)
@@ -666,11 +670,11 @@ async function round (kit, n) {
   await alive(A); await alive(B)
   // Наборы раунда — с чарами (kitSides) или как в KITS.
   const sides = kitSides(kit, n)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await equipChecked(A, NA, sides.a, { onBody: !!kit.onBody })
-  const t1 = Date.now()
+  const t1 = gameClock.now()
   await equipChecked(B, NB, sides.b, { onBody: !!kit.onBody })
-  if (sides.ench) await enchLog(sides.ench, [t1 - t0, Date.now() - t1])
+  if (sides.ench) await enchLog(sides.ench, [t1 - t0, gameClock.now() - t1])
   await cmd(`/tp ${NA} ${X - 6} ${Y} ${Z} -90 0`)
   if (HUMANS.length) {
     for (let i = 0; i < ACTIVE.length; i++) { await cmd(`/tp ${ACTIVE[i]} ${X + 8} ${Y} ${Z + (i - (ACTIVE.length - 1) / 2) * 4} 90 0`); await heal(ACTIVE[i]) }
@@ -710,17 +714,17 @@ async function round (kit, n) {
       const d = pr.detail || {}
       log(`${me} [${strategy}] крафт ${d.seconds ?? '?'} с: ${(d.made || []).map(m => `${m.what}@${m.s}`).join(', ') || pr.error || pr.status}${pr.status === 'interrupted' ? ' — прервали' : ''}`)
     }
-    const end = NOTIMER ? Infinity : Date.now() + fight.timeoutSeconds * 1000
+    const end = NOTIMER ? Infinity : gameClock.now() + fight.timeoutSeconds * 1000
     const dead = new Set()
     let last = { status: 'done', detail: {} }
     let turn = 0
     const finish = () => { if (!over.done) { over.done = true; if (peer) peer.call('stop').catch(() => {}) } }
-    while (!over.done && Date.now() < end) {
+    while (!over.done && gameClock.now() < end) {
       let left = foes.filter(f => !dead.has(f))
       if (HUMANS.length) { const on = await onlineHumans(); left = left.filter(f => on.includes(f)) }
       if (!left.length) break
       const foeNow = left[turn++ % left.length]
-      last = await c.call('fight', { ...fight, target: foeNow, timeoutSeconds: NOTIMER ? 300 : Math.max(5, Math.round((end - Date.now()) / 1000)) }).catch(e => ({ status: 'failed', error: e.message }))
+      last = await c.call('fight', { ...fight, target: foeNow, timeoutSeconds: NOTIMER ? 300 : Math.max(5, Math.round((end - gameClock.now()) / 1000)) }).catch(e => ({ status: 'failed', error: e.message }))
       const dd = last.detail || (last.detail = {})
       const at = diedIn(last) ? 'dead' : await where(c)
       if (at === 'dead') { dd.died = true; finish(); break }
@@ -748,24 +752,25 @@ async function round (kit, n) {
   // него, что боец давно внизу, — поздно.
   const outSince = {}
   const hpWas = {}
-  let hurtAt = Date.now()
-  const roundAt = Date.now()
-  const stopWatch = setInterval(async () => {
+  let hurtAt = gameClock.now()
+  const roundAt = gameClock.now()
+  // Human stop requests still work while ticks are frozen.
+  const stopWatch = gameClock.wall.setInterval(() => {
+    if (over.done || !stopRequested()) return
+    over.done = true
+    A.call('stop').catch(() => {})
+    if (!HUMAN) B.call('stop').catch(() => {})
+  }, 3000)
+  const gameWatch = gameClock.setInterval(async () => {
     if (over.done) return
-    if (stopRequested()) {
-      over.done = true
-      A.call('stop').catch(() => {})
-      if (!HUMAN) B.call('stop').catch(() => {})
-      return
-    }
     for (const [c, who] of HUMAN ? [[A, NA]] : [[A, NA], [B, NB]]) {
       const got = {}
       const at = await where(c, got)
-      if (got.hp !== undefined) { if (hpWas[who] !== undefined && got.hp < hpWas[who]) hurtAt = Date.now(); hpWas[who] = got.hp }
-      if (at !== 'out' && at !== 'gone') { if (outSince[who]) log(`${who} вернулся на арену за ${Math.round((Date.now() - outSince[who]) / 1000)} с`); delete outSince[who]; continue }
+      if (got.hp !== undefined) { if (hpWas[who] !== undefined && got.hp < hpWas[who]) hurtAt = gameClock.now(); hpWas[who] = got.hp }
+      if (at !== 'out' && at !== 'gone') { if (outSince[who]) log(`${who} вернулся на арену за ${Math.round((gameClock.now() - outSince[who]) / 1000)} с`); delete outSince[who]; continue }
       const limit = at === 'gone' ? GONE_MS : RETURN_MS
-      if (!outSince[who]) { outSince[who] = Date.now(); log(at === 'gone' ? `${who} за стеной поля — ${limit / 1000} с, и вылет` : `${who} выпал с арены — ${limit / 1000} с на возвращение`) }
-      if (Date.now() - outSince[who] > limit && !over.done) {
+      if (!outSince[who]) { outSince[who] = gameClock.now(); log(at === 'gone' ? `${who} за стеной поля — ${limit / 1000} с, и вылет` : `${who} выпал с арены — ${limit / 1000} с на возвращение`) }
+      if (gameClock.now() - outSince[who] > limit && !over.done) {
         over.done = true
         over.ringout = who
         log(`${who} не вернулся — вылет с ринга`)
@@ -773,13 +778,13 @@ async function round (kit, n) {
         if (!HUMAN) B.call('stop').catch(() => {})
       }
     }
-    if (!HUMAN && MAX_MS > 0 && !over.done && Date.now() - roundAt > MAX_MS) {
+    if (!HUMAN && MAX_MS > 0 && !over.done && gameClock.now() - roundAt > MAX_MS) {
       over.done = true
       log(`раунд затянулся: ${Math.round(MAX_MS / 60000)} мин — ничья`)
       A.call('stop').catch(() => {})
       B.call('stop').catch(() => {})
     }
-    if (!HUMAN && STALL_MS > 0 && !over.done && Date.now() - hurtAt > STALL_MS) {
+    if (!HUMAN && STALL_MS > 0 && !over.done && gameClock.now() - hurtAt > STALL_MS) {
       over.done = true
       log(`застой: ${Math.round(STALL_MS / 1000)} с никто не получал урона — ничья`)
       A.call('stop').catch(() => {})
@@ -792,7 +797,8 @@ async function round (kit, n) {
     go(A, NA, HUMAN ? ACTIVE : [NB], kit.craft && kit.craft.a, HUMAN ? null : B),
     HUMAN ? Promise.resolve({ status: 'done', detail: {} }) : go(B, NB, [NA], kit.craft && kit.craft.b, A)
   ])
-  clearInterval(stopWatch)
+  gameClock.wall.clearInterval(stopWatch)
+  gameClock.clearInterval(gameWatch)
   log(`${NA}: ${short(ra)}`)
   log(`${NB}: ${short(rb)}`)
   const da = ra.detail || {}

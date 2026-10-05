@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Бой с человеком. Не «подойти и махать», как с зомби, а то, что делает живой
 // игрок: бьёт с края дальности, отходит на время перезарядки, чтобы его не
 // достали в ответ, крутится вокруг, бьёт в прыжке ради крита, W-tap'ом
@@ -281,7 +282,7 @@ function makeTracker (entity) {
   let vel = { x: 0, y: 0, z: 0 }
   return {
     update () {
-      const now = Date.now()
+      const now = gameClock.now()
       const p = entity.position
       const last = hist[hist.length - 1]
       if (!last || now - last.t >= 40) hist.push({ x: p.x, y: p.y, z: p.z, t: now })
@@ -422,7 +423,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     arena = null
   } = opts
   let label = entity.username || entity.name
-  const deadline = Date.now() + Math.min(300, timeoutSeconds) * 1000
+  const deadline = gameClock.now() + Math.min(300, timeoutSeconds) * 1000
   let track = makeTracker(entity)
   let prof = profileOf(entity)
   const kills = []
@@ -430,7 +431,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   let fleeingSwell = false
   let swellPlan = null
   let swellPlanAt = 0
-  let seenAt = Date.now()
+  let seenAt = gameClock.now()
   let unseen = false
   let repositionUntil = 0
   let stuckTicks = 0
@@ -449,13 +450,13 @@ async function duelBody (session, ctl, entity, opts = {}) {
   }
   // Лента решений (ND_TRACE_PVP=1): время от начала боя, приём, где я и где он —
   // чтобы по логу восстановить цепочку («сломал стену → убежал → столб → вниз»).
-  const traceT0 = Date.now()
+  const traceT0 = gameClock.now()
   const used = (what) => {
     st.tricks[what] = (st.tricks[what] || 0) + 1
     if (process.env.ND_TRACE_PVP) {
       try {
         const m = bot.entity.position; const h = entity && entity.position
-        console.log(`[trace] ${bot.username} +${((Date.now() - traceT0) / 1000).toFixed(1)}s ${what} | я ${m.x.toFixed(1)},${m.y.toFixed(1)},${m.z.toFixed(1)} хп ${Math.round(bot.health ?? 0)}${h ? ` | он ${h.x.toFixed(1)},${h.y.toFixed(1)},${h.z.toFixed(1)} d=${m.distanceTo(h).toFixed(1)}` : ''}`)
+        console.log(`[trace] ${bot.username} +${((gameClock.now() - traceT0) / 1000).toFixed(1)}s ${what} | я ${m.x.toFixed(1)},${m.y.toFixed(1)},${m.z.toFixed(1)} хп ${Math.round(bot.health ?? 0)}${h ? ` | он ${h.x.toFixed(1)},${h.y.toFixed(1)},${h.z.toFixed(1)} d=${m.distanceTo(h).toFixed(1)}` : ''}`)
       } catch {}
     }
   }
@@ -463,15 +464,15 @@ async function duelBody (session, ctl, entity, opts = {}) {
   // происходит», «вдвоём пьют и смотрят друг на друга», «ставил блоки под
   // собой, а его забивали»): окна без размена ударами, оба пьют разом,
   // стройка под его рукой. Только счёт — поведение ниже, под FIX.
-  const quiet = { at: Date.now(), gaps10: 0, total10: 0, longest: 0 }
+  const quiet = { at: gameClock.now(), gaps10: 0, total10: 0, longest: 0 }
   const noteExchange = () => {
-    const now = Date.now()
+    const now = gameClock.now()
     const gap = now - quiet.at
     if (gap >= 10000) { quiet.gaps10++; quiet.total10 += gap }
     if (gap > quiet.longest) quiet.longest = gap
     quiet.at = now
   }
-  const ovl = { ms: 0, n: 0, at: Date.now(), was: false }
+  const ovl = { ms: 0, n: 0, at: gameClock.now(), was: false }
   st.build = { box: 0, pillar: 0, counter: 0, pit: 0, boxHot: 0, pillarHot: 0, counterHot: 0, pitHot: 0, aborted: 0, refused: 0, boxMs: [] }
   st.eatPunish = { tries: 0, swaps: 0 }
 
@@ -494,7 +495,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   // подряд); слежка за тем, чем занят враг, — на событиях, не в цикле.
   style.openDelayMs = Math.round(Math.random() * (FIX ? 1200 : 700))
   const tt = tempo.track(bot, {
-    threats: () => [entity, ...[...attackers.values()].filter(a => Date.now() - a.at < 8000).map(a => a.e)],
+    threats: () => [entity, ...[...attackers.values()].filter(a => gameClock.now() - a.at < 8000).map(a => a.e)],
     reactMs: style.reactMs
   })
   session.tempo = tt
@@ -529,8 +530,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
   const noticed = {}
   const after = (key, cond, ms = style.reactMs) => {
     if (!cond) { delete noticed[key]; return false }
-    if (!noticed[key]) noticed[key] = Date.now()
-    return Date.now() - noticed[key] >= ms
+    if (!noticed[key]) noticed[key] = gameClock.now()
+    return gameClock.now() - noticed[key] >= ms
   }
   // Бросок кубика на событие (одно решение на одно «он начал есть»).
   const rolls = {}
@@ -545,7 +546,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   let nextReady = 0
   let lastSwing = 0
   let swingCrit = false
-  let lastHurtByTarget = Date.now()
+  let lastHurtByTarget = gameClock.now()
   let killed = false
   let strafeKey = Math.random() < 0.5 ? 'left' : 'right'
   let strafeFlipAt = 0
@@ -560,8 +561,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
   let theirDrawAt = 0
   const sawRelease = () => {
     const using = usingItem(bot, entity)
-    if (using === 'bow') { if (!theirDrawAt) theirDrawAt = Date.now(); return false }
-    const shot = theirDrawAt && Date.now() - theirDrawAt > 350
+    if (using === 'bow') { if (!theirDrawAt) theirDrawAt = gameClock.now(); return false }
+    const shot = theirDrawAt && gameClock.now() - theirDrawAt > 350
     theirDrawAt = 0
     return !!shot
   }
@@ -589,32 +590,32 @@ async function duelBody (session, ctl, entity, opts = {}) {
     if (reachFrom(bot.entity.position.offset(0, EYE, 0), e) > HIT_REACH) return false
     if (mf.clock.charge(0) <= 0.9 || usingItem(bot, e) === 'shield') return false
     const use = bot._ndUse
-    if (use && (use.cur || Date.now() - (use.endedAt || 0) < mf.clock.msPerTick)) return false
+    if (use && (use.cur || gameClock.now() - (use.endedAt || 0) < mf.clock.msPerTick)) return false
     const sprintHit = mf.clock.srvSprint
     mf.hit(e, { after: sprintHit ? 'wtap' : null, kind: 'counter' })
     st.swings++
-    lastSwing = Date.now()
+    lastSwing = gameClock.now()
     firstHitDone = true
     hitKind = null
     used('ответный удар на его удар')
     return true
   })
   const cd = {} // когда какой приём снова можно
-  const ready = (k) => Date.now() >= (cd[k] || 0)
-  const rest = (k, ms) => { cd[k] = Date.now() + ms }
+  const ready = (k) => gameClock.now() >= (cd[k] || 0)
+  const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
 
   let targetHurtAt = 0
   let shieldUpAt = 0
   let shieldDownAt = 0
   const onHurt = (victim, source) => {
-    if (victim === entity) targetHurtAt = Date.now()
+    if (victim === entity) targetHurtAt = gameClock.now()
     // Размен между нами — в любую сторону (рука, стрела, зелье): счёт тишины и нажим.
     if (source && bot.entity && ((victim === entity && source.id === bot.entity.id) || (victim === bot.entity && source.id === entity.id))) noteExchange()
     if (victim === entity && source === bot.entity) {
       st.landed++
-      if (Date.now() - lastSwing < 400 && swingCrit) st.crits++
+      if (gameClock.now() - lastSwing < 400 && swingCrit) st.crits++
     }
-    if (victim === bot.entity && source && source.id === entity.id) lastHurtByTarget = Date.now()
+    if (victim === bot.entity && source && source.id === entity.id) lastHurtByTarget = gameClock.now()
     // Кто ещё нас бьёт, кроме цели: вдвоём на одного второй лупил в спину,
     // пока бот гонялся за первым (арена 2026-09-25, двое против бота).
     // Не сам себе обидчик: своё зелье вреда/свой огонь приходят с source = мы,
@@ -622,7 +623,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     // (latest.log 2026-09-25, четыре вылета с арены).
     if (victim === bot.entity && source && isPlayer(source) && source.id !== entity.id && source.id !== bot.entity.id && source.username !== bot.username) {
       const a = attackers.get(source.id) || { e: source, n: 0 }
-      a.at = Date.now(); a.n++; a.e = source
+      a.at = gameClock.now(); a.n++; a.e = source
       attackers.set(source.id, a)
     }
   }
@@ -630,7 +631,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   let switchedAt = 0
   // Самый опасный из тех, кто бил последние 4 с и ещё жив рядом.
   const otherAttacker = () => {
-    const now = Date.now()
+    const now = gameClock.now()
     let best = null
     for (const [id, a] of attackers) {
       const e = a.e
@@ -656,7 +657,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     try {
       if (victim !== bot.entity || !source || isPlayer(source)) return
       const nm = source.name || ''
-      if (HOSTILE_MOB.test(nm) || ANGRY_IF_HIT.test(nm)) mobHits.set(source.id, Date.now())
+      if (HOSTILE_MOB.test(nm) || ANGRY_IF_HIT.test(nm)) mobHits.set(source.id, gameClock.now())
     } catch {}
   }
   bot.on('entityHurt', onMobHurt)
@@ -666,7 +667,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     if (!bot.entity) return null
     const me = bot.entity.position
     const eyeM = me.offset(0, EYE, 0)
-    const now = Date.now()
+    const now = gameClock.now()
     let best = null
     for (const e of Object.values(bot.entities)) {
       if (!e || e === bot.entity || !e.position || isPlayer(e)) continue
@@ -710,8 +711,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
         const rr = reachFrom(eyeNow, fb)
         if (rr > 3.0) continue
         const last = swatted.get(fb.id) || 0
-        if (Date.now() - last < 150) continue
-        swatted.set(fb.id, Date.now())
+        if (gameClock.now() - last < 150) continue
+        swatted.set(fb.id, gameClock.now())
         const g = bot.nearestEntity(e => e && e.name === 'ghast' && e.position && e.position.distanceTo(bot.entity.position) < 64)
         if (g) {
           const tgt = g.position.offset(0, 2, 0)
@@ -735,7 +736,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   const onTickArcher = () => {
     try {
       if (!entity.isValid || !prof.player) return
-      const now = Date.now()
+      const now = gameClock.now()
       // Выстрел — по рождению его стрелы (arrows.track): флаги и предмет в руке
       // запаздывают и теряются (сцена «две дыры» 2026-09-27: из 4 попаданий
       // натяжение с луком в руке видно одно).
@@ -783,7 +784,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       const under = bp.x === feet.x && bp.z === feet.z && bp.y < feet.y && bp.y >= feet.y - 3
       if (!under) return
       const dir = safeNeighbor(feet)
-      if (dir) floorEscape = { dir, until: Date.now() + 700 }
+      if (dir) floorEscape = { dir, until: gameClock.now() + 700 }
       if (ready('floorNote')) { rest('floorNote', 3000); used('ломают пол подо мной — схожу') }
     } catch {}
   }
@@ -812,7 +813,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         bot.activateItem()
         used('вода под себя (MLG)')
         groundY = e.position.y
-        setTimeout(() => { try { const b = findItem(bot, i => i.name === 'bucket'); const w = bot.findBlock({ matching: bb => bb && bb.name === 'water', maxDistance: 3 }); if (b && w) bot.equip(b, 'hand').then(() => bot.activateBlock(w)).catch(() => {}) } catch {} }, 900)
+        gameClock.setTimeout(() => { try { const b = findItem(bot, i => i.name === 'bucket'); const w = bot.findBlock({ matching: bb => bb && bb.name === 'water', maxDistance: 3 }); if (b && w) bot.equip(b, 'hand').then(() => bot.activateBlock(w)).catch(() => {}) } catch {} }, 900)
       }
     } catch {}
   }
@@ -835,12 +836,12 @@ async function duelBody (session, ctl, entity, opts = {}) {
   let aimPoint = null
   // Куда на его рамке целиться, когда грудь за блоком, а голова видна (pick.aim).
   let sightOff = null
-  const aimTimer = setInterval(() => {
+  const aimTimer = gameClock.setInterval(() => {
     if (!bot.entity || !entity.isValid) return
     // Оба едят или пьют разом (счёт для арены): мы — предмет в ходу (itemuse.js)
     // или глоток eatHeld, он — метаданные «рука занята» с едой или зельем (tempo).
     try {
-      const nowO = Date.now()
+      const nowO = gameClock.now()
       const u = bot._ndUse && bot._ndUse.cur
       const k = u ? tempo.useKind(u.name) : null
       const both = prof.player && (session.eating || k === 'eat' || k === 'drink') && !!tt.state(entity).consuming
@@ -898,7 +899,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     cover: async (pos) => { const n = await coverFrom(pos, { what: 'засада: колонна между нами' }); await holdWeapon(); return n },
     // Взмах в воздух на Paper сбрасывает заряд (замер try-showman.js swing).
     weaponMs: () => cooldownMs(bot.heldItem),
-    onAirSwing: () => { nextReady = Math.max(nextReady, Date.now() + cooldownMs(bot.heldItem)) },
+    onAirSwing: () => { nextReady = Math.max(nextReady, gameClock.now() + cooldownMs(bot.heldItem)) },
     // Жест «прыжки» — не у ямы по линии его толчка (FIX, edges.dropAlong).
     nearDrop: () => { try { return FIX && !!entity.position && edges.dropAlong(bot, entity.position, 4.5) } catch { return false } }
   })
@@ -1065,7 +1066,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   }
 
   ctl.onAbort.push(() => {
-    clearInterval(aimTimer)
+    gameClock.clearInterval(aimTimer)
     clear()
     try { bot.pathfinder.setGoal(null) } catch {}
     try { bot.deactivateItem() } catch {}
@@ -1083,7 +1084,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   // первый удар после приёма уходит с 20% урона.
   const heldName = () => (bot.heldItem ? bot.heldItem.name : null)
   const switched = (before) => {
-    if (heldName() !== before) nextReady = Math.max(nextReady, Date.now() + cooldownMs(bot.heldItem))
+    if (heldName() !== before) nextReady = Math.max(nextReady, gameClock.now() + cooldownMs(bot.heldItem))
   }
 
   // Оружие под цель: против моба в алмазной броне топор может бить больнее
@@ -1344,7 +1345,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     if (buildDone(gP, 'столб')) return false
     const top = bot.entity.position.y
     if (top - y0 < 3) return false
-    perch = { since: Date.now(), y0, top, h: Math.round(top - y0) }
+    perch = { since: gameClock.now(), y0, top, h: Math.round(top - y0) }
     used(`ушёл на столб ${perch.h} бл. (спуск −${Math.max(0, perch.h - 3)} хп)`)
     st.blocks = (st.blocks || 0) + perch.h
     return true
@@ -1375,8 +1376,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
     if (smashDrop) {
       const m = findItem(bot, i => i.name === 'mace')
       if (m && (!bot.heldItem || bot.heldItem.name !== 'mace')) await holdItem(m)
-      const t1 = Date.now()
-      while (Date.now() - t1 < 1100 && !ctl.aborted && mace.fallSmashReady(bot, entity)) await sleep(TICK_MS)
+      const t1 = gameClock.now()
+      while (gameClock.now() - t1 < 1100 && !ctl.aborted && mace.fallSmashReady(bot, entity)) await sleep(TICK_MS)
     }
     aim = 'free'
     await bot.look(yaw, 0, true).catch(() => {})
@@ -1384,13 +1385,13 @@ async function duelBody (session, ctl, entity, opts = {}) {
     // Спуск со своего столба — намеренный: рефлекс края его пропускает.
     edgeGuard.allow(PERCH_MAX + 2, 1500)
     set('forward', true)
-    const t0 = Date.now()
-    while (Date.now() - t0 < 900 && bot.entity.position.y > perch.top - 0.6 && !ctl.aborted) await sleep(TICK_MS)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 900 && bot.entity.position.y > perch.top - 0.6 && !ctl.aborted) await sleep(TICK_MS)
     set('forward', false)
     if (smashDrop) {
       const fr = await mace.descend(bot, ctl, entity, { vel: () => track.vel(), stats: mc.st })
       mc.st.fallSmash++
-      if (fr.hit) { st.swings++; lastSwing = Date.now(); mc.st.smashHits++ }
+      if (fr.hit) { st.swings++; lastSwing = gameClock.now(); mc.st.smashHits++ }
       used(fr.hit ? 'булава: удар со столба' : 'булава: со столба не достал')
       await holdWeapon()
     }
@@ -1467,8 +1468,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
       used('отбегаю на чистое место под коробку')
       try {
         bot.pathfinder.setGoal(new goals.GoalBlock(spot.x, spot.y, spot.z))
-        const t0 = Date.now()
-        while (Date.now() - t0 < 3000 && !ctl.aborted && !fortify.feetCell(bot).equals(spot)) await sleep(50)
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 3000 && !ctl.aborted && !fortify.feetCell(bot).equals(spot)) await sleep(50)
       } catch {}
       bot.pathfinder.setGoal(null)
       clear()
@@ -1480,10 +1481,10 @@ async function duelBody (session, ctl, entity, opts = {}) {
     // Бьют посреди стройки (два попадания или одно на малом хп) или булава
     // сверху — бросить и драться (buildGuard).
     const gB = buildGuard()
-    const boxT0 = Date.now()
+    const boxT0 = gameClock.now()
     const box = await fortify.boxIn(bot, { toward: entity.position, roof: true, ctl: guardCtl(gB) })
     // Сколько стройка заняла на деле (сверка с BOX_MS).
-    if (st.build.boxMs.length < 12) st.build.boxMs.push(Date.now() - boxT0)
+    if (st.build.boxMs.length < 12) st.build.boxMs.push(gameClock.now() - boxT0)
     if (process.env.ND_DEBUG_PVP) console.log('[fort]', JSON.stringify({ placed: box.placed, walls: box.walls, roof: box.roof, failed: box.failed, cell: box.cell, pos: bot.entity.position }))
     if (box.walls < 3 || (gB.why && !box.sealed)) {
       aim = 'target'
@@ -1495,7 +1496,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     st.blocks = (st.blocks || 0) + box.placed
     used(`закрылся в коробке (${box.placed} бл.)`)
     if (box.hardN) used(`коробка: лицо, бока и крыша — ${box.hard}`)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let patchedTotal = 0
     let hitThrough = 0
     // Осада в реальном времени: сколько раз стену вскрывали и когда, сколько
@@ -1505,7 +1506,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     let budget = style.patchBudget
     let why = null
     let breakAway = false
-    while (!ctl.aborted && Date.now() - t0 < 70000) {
+    while (!ctl.aborted && gameClock.now() - t0 < 70000) {
       if ((bot.health ?? 0) <= 0) break
       const hpNow = bot.health ?? 20
       const swell = bot.nearestEntity(e => e && e.name === 'creeper' && e.position.distanceTo(bot.entity.position) < 6 && creeperSwelling(bot, e))
@@ -1513,7 +1514,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       const eye0 = bot.entity.position.offset(0, EYE, 0)
       // Он в дыре и достаётся рукой — бить через неё (прицел как у клиента:
       // pick.aim, а не raySees — тот прощал блок у самой цели).
-      const holeAim = entity.isValid && reachFrom(eye0, entity) <= HIT_REACH && Date.now() >= nextReady
+      const holeAim = entity.isValid && reachFrom(eye0, entity) <= HIT_REACH && gameClock.now() >= nextReady
         ? pick.aim(bot, entity, { eye: pick.eyeOf(bot), range: HIT_REACH }) : null
       if (holeAim && holeAim.point) {
         await holdWeapon()
@@ -1521,7 +1522,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         try { bot.attack(entity) } catch {}
         st.swings++
         hitThrough++
-        lastSwing = Date.now()
+        lastSwing = gameClock.now()
         nextReady = lastSwing + cooldownMs(bot.heldItem)
         await sleep(TICK_MS)
         continue
@@ -1550,10 +1551,10 @@ async function duelBody (session, ctl, entity, opts = {}) {
         // Копает стену: доломает больше чем через 1.2 с (обсидиан, tempo.
         // digLeftMs) — ещё не вскрыли, лечиться дальше; скоро — вскрыли.
         const digLeft = entity.isValid ? tt.digLeftMs(entity) : null
-        const digging = !!(fs && Date.now() - fs.digAt < 1200 && fs.digPos && fs.digPos.distanceTo(box.cell) <= 2.5) && (digLeft == null || digLeft < 1200)
+        const digging = !!(fs && gameClock.now() - fs.digAt < 1200 && fs.digPos && fs.digPos.distanceTo(box.cell) <= 2.5) && (digLeft == null || digLeft < 1200)
         if (!digging && digLeft != null && digLeft >= 1200 && fs && fs.digPos && fs.digPos.distanceTo(box.cell) <= 2.5 && ready('hardDigNote')) { rest('hardDigNote', 3000); used('он ломает крепкую стену — ещё лечусь') }
         const nearHole = !encB.sealed && entity.isValid && entity.position.distanceTo(bot.entity.position) < 5
-        const hurtNow = Date.now() - tt.myHurtAt < 1000
+        const hurtNow = gameClock.now() - tt.myHurtAt < 1000
         const breach = canHitMe ? 'он достаёт через дыру' : digging ? 'он ломает стену' : hurtNow ? 'по мне попали' : nearHole ? 'дыра, он рядом' : burningNow ? 'горю, воды нет' : null
         if (breach) {
           tt.stats.breaches++
@@ -1571,11 +1572,11 @@ async function duelBody (session, ctl, entity, opts = {}) {
       // стороны.
       const enc = fortify.enclosure(bot, box.cell)
       if (!enc.sealed) {
-        if (!holeSince) { holeSince = Date.now(); breaches++ }
+        if (!holeSince) { holeSince = gameClock.now(); breaches++ }
         const filler = pickFiller(bot)
         if (!filler || budget <= 0) { why = 'латать нечем или хватит'; break }
-        if (breaches >= 3 && Date.now() - t0 < 12000) { why = 'ломает быстрее, чем латаю'; break }
-        if (Date.now() - holeSince >= style.reactMs) {
+        if (breaches >= 3 && gameClock.now() - t0 < 12000) { why = 'ломает быстрее, чем латаю'; break }
+        if (gameClock.now() - holeSince >= style.reactMs) {
           const n = await fortify.patch(bot, box.plan, { mats: box.mats })
           if (n) { patchedTotal += n; budget -= n; st.blocks = (st.blocks || 0) + n; holeSince = 0 }
         }
@@ -1607,7 +1608,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       // регенерацию (идёт при сытости от 18); без неё ждать нечего. Живой
       // прогон: бот съел в коробке три яблока, по таймеру в 30 с полез наружу
       // на 8 хп, а тот ждал у стены и добил его в выломанную дыру.
-      const waited = Date.now() - t0
+      const waited = gameClock.now() - t0
       const regen = (bot.food ?? 0) >= 18
       if (hpNow >= 18) break
       if (!healItem() && hpNow >= 14 && waited > 12000) break
@@ -1639,13 +1640,13 @@ async function duelBody (session, ctl, entity, opts = {}) {
         const eye0 = bot.entity.position.offset(0, EYE, 0)
         if (!entity.isValid || reachFrom(eye0, entity) > HIT_REACH) return false
         await holdWeapon()
-        if (Date.now() < nextReady) await sleep(nextReady - Date.now())
+        if (gameClock.now() < nextReady) await sleep(nextReady - gameClock.now())
         const ha = pick.aim(bot, entity, { eye: pick.eyeOf(bot), range: HIT_REACH })
         if (!ha || !ha.point) return false
         await bot.lookAt(ha.point, true).catch(() => {})
         try { bot.attack(entity) } catch {}
         st.swings++
-        lastSwing = Date.now()
+        lastSwing = gameClock.now()
         nextReady = lastSwing + cooldownMs(bot.heldItem)
         return true
       }
@@ -1793,8 +1794,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
         await bot.lookAt(step.offset(0.5, 1.5, 0.5), true).catch(() => {})
         set('forward', true); set('jump', true)
         const y0 = bot.entity.position.y
-        const t0 = Date.now()
-        while (Date.now() - t0 < 700 && bot.entity.position.y < y0 + 0.9) await sleep(TICK_MS)
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 700 && bot.entity.position.y < y0 + 0.9) await sleep(TICK_MS)
         set('jump', false)
         await sleep(150)
         set('forward', false)
@@ -1832,8 +1833,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
         await bot.lookAt(step.offset(0.5, 1.6, 0.5), true).catch(() => {})
         clear()
         set('forward', true)
-        const t0 = Date.now()
-        while (Date.now() - t0 < 700 && !ctl.aborted) {
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 700 && !ctl.aborted) {
           const p = bot.entity.position.floored()
           if (p.x === step.x && p.z === step.z) break
           await sleep(TICK_MS)
@@ -1963,7 +1964,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     if (!shield) return null
     const held = entity.equipment && entity.equipment[0] ? entity.equipment[0].name : ''
     const xbow = held === 'crossbow' && !!bowWatch.loadedAt
-    const drawMs = bowWatch.drawAt ? Date.now() - bowWatch.drawAt : -1
+    const drawMs = bowWatch.drawAt ? gameClock.now() - bowWatch.drawAt : -1
     // Не тянет или только начал — блок успеваем до выстрела.
     if (!xbow && drawMs < TOWER_SAFE_DRAW_MS) return null
     // Не видит нас — и выстрела не будет.
@@ -1971,11 +1972,11 @@ async function duelBody (session, ctl, entity, opts = {}) {
     try { await bot.lookAt(entity.position.offset(0, 1.4, 0), true) } catch {}
     const raised = await guard.raise(true)
     if (process.env.ND_DEBUG_TOWER) console.log('[towerShield] raise', JSON.stringify({ drawMs, xbow, raised, shots: bowWatch.shots }))
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const shots0 = bowWatch.shots
     let shot = false
     // Его терпение с поднятым щитом — 2.5 с (bow.js holdMaxMs); ждать дольше.
-    while (Date.now() - t0 < 4000 && !ctl.aborted && entity.isValid) {
+    while (gameClock.now() - t0 < 4000 && !ctl.aborted && entity.isValid) {
       if (bowWatch.shots > shots0) { shot = true; break }
       // Опустил лук, не выстрелив (сменил оружие), арбалет разряжен иначе — блок.
       if (!bowWatch.drawAt && !bowWatch.loadedAt) break
@@ -1987,7 +1988,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     // Стрела ещё летит — щит держать, пока не долетит.
     if (shot) await sleep(Math.min(400, 60 + entity.position.distanceTo(bot.entity.position) * 17))
     await guard.raise(false)
-    if (process.env.ND_DEBUG_TOWER) console.log('[towerShield] lower', JSON.stringify({ shot, waited: Date.now() - t0 }))
+    if (process.env.ND_DEBUG_TOWER) console.log('[towerShield] lower', JSON.stringify({ shot, waited: gameClock.now() - t0 }))
     if (shot) { st.towerShots = (st.towerShots || 0) + 1; if (ready('towerShieldNote')) { rest('towerShieldNote', 3000); used('на столбе — стрела в щит, строю дальше') } }
     return 'waited'
   }
@@ -2039,7 +2040,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     const wb = lava ? findItem(bot, i => i.name === 'water_bucket') : null
     if (wb && !/nether/.test(String((bot.game && bot.game.dimension) || ''))) {
       await useOnGroundAt(wb, h.cell, 'лава между нами — залил водой')
-      pendingWater.push({ cell: h.cell, at: Date.now() })
+      pendingWater.push({ cell: h.cell, at: gameClock.now() })
       await holdWeapon()
       return true
     }
@@ -2051,12 +2052,12 @@ async function duelBody (session, ctl, entity, opts = {}) {
   const digWatch = async (block, abortIf) => {
     let why = null
     const plan = tools.bestFor(bot, block)
-    const iv = setInterval(() => {
+    const iv = gameClock.setInterval(() => {
       if (why) return
       const w = abortIf()
       if (w) { why = w; try { bot.stopDigging() } catch {} }
     }, TICK_MS)
-    try { await withTimeout(bot.dig(block, true), (Number.isFinite(plan.ms) ? plan.ms : 1000) + 500) } catch {} finally { clearInterval(iv) }
+    try { await withTimeout(bot.dig(block, true), (Number.isFinite(plan.ms) ? plan.ms : 1000) + 500) } catch {} finally { gameClock.clearInterval(iv) }
     return why
   }
 
@@ -2118,8 +2119,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
     session.eating = true
     try {
       bot.activateItem()
-      const t0 = Date.now()
-      while (Date.now() - t0 < 2400 && countOf(bot, name) >= had && !ctl.aborted && !(abortIf && abortIf())) {
+      const t0 = gameClock.now()
+      while (gameClock.now() - t0 < 2400 && countOf(bot, name) >= had && !ctl.aborted && !(abortIf && abortIf())) {
         if (unsafe && unsafe()) { dropped = true; break }
         if (FIX && maceNow()) { dropped = 'mace'; break }
         if (punishFirst()) { dropped = 'punish'; break }
@@ -2162,7 +2163,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
   }
 
   const finish = async (out) => {
-    clearInterval(aimTimer)
+    gameClock.clearInterval(aimTimer)
     clear()
     pathTo(false)
     restoreMoves()
@@ -2198,7 +2199,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     const tricks = Object.keys(st.tricks).length ? st.tricks : undefined
     const ts = tt.stats
     // Тишина до конца боя — тоже окно.
-    { const gapEnd = Date.now() - quiet.at; if (gapEnd >= 10000) { quiet.gaps10++; quiet.total10 += gapEnd } if (gapEnd > quiet.longest) quiet.longest = gapEnd }
+    { const gapEnd = gameClock.now() - quiet.at; if (gapEnd >= 10000) { quiet.gaps10++; quiet.total10 += gapEnd } if (gapEnd > quiet.longest) quiet.longest = gapEnd }
     return {
       pvp: prof.player || undefined,
       micro: true,
@@ -2281,11 +2282,11 @@ async function duelBody (session, ctl, entity, opts = {}) {
     entity = e
     label = entity.username || entity.name
     track = makeTracker(entity)
-    seenAt = Date.now()
+    seenAt = gameClock.now()
     prof = profileOf(entity)
     killed = false
     targetHurtAt = 0
-    lastHurtByTarget = Date.now()
+    lastHurtByTarget = gameClock.now()
     if (guard) guard.watch(entity, 3.2)
     pickWeaponFor(entity)
   }
@@ -2382,8 +2383,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
     st.style.начало = plan.kind
     used('начало: ' + ({ rush: 'рывок', bow: 'лук издалека', buff: 'баффы', splash: 'зелья в него', pearl: 'жемчуг к нему', fort: 'коробка с баффами' })[plan.kind])
     if (plan.kind === 'buff') await buffUp(0)
-    else if (plan.kind === 'rush') rushUntil = Date.now() + 3000
-    else if (plan.kind === 'bow') bowFirstUntil = Date.now() + 6000
+    else if (plan.kind === 'rush') rushUntil = gameClock.now() + 3000
+    else if (plan.kind === 'bow') bowFirstUntil = gameClock.now() + 6000
     else if (plan.kind === 'splash') splashFirst = true
     else if (plan.kind === 'pearl') {
       const pearl = findItem(bot, i => i.name === 'ender_pearl')
@@ -2397,7 +2398,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       aim = 'target'
       if (pr && pr.thrown) { used('жемчуг к нему'); await sleep(800) }
       await holdWeapon()
-      rushUntil = Date.now() + 2500
+      rushUntil = gameClock.now() + 2500
     } else if (plan.kind === 'fort') {
       rest('fort', 15000)
       if (!(await fortOut())) await buffUp(0)
@@ -2440,7 +2441,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     else if (++loopSpins >= 50) { loopSpins = 0; await new Promise(resolve => setImmediate(resolve)) }
     loopYielded = false
     setImmediate(markLoopYield)
-    const now = Date.now()
+    const now = gameClock.now()
     if (!bot.entity || (bot.health ?? 20) <= 0 || selfDied) return finish({ died: true })
     // Падаем с высоты, ведро наготове (edges.installFallGuard) — рука его, не
     // боя: смена предмета посреди падения уносила ведро из руки.
@@ -2659,8 +2660,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
       if (farH > AR.r + 10) {
         used('далеко от поля — иду под него')
         try { bot.pathfinder.setGoal(new goals.GoalNearXZ(AR.x, AR.z, Math.max(4, AR.r - 4))) } catch {}
-        const tW = Date.now()
-        while (Date.now() - tW < 25000 && !ctl.aborted && !selfDied && !mobThreat() && Math.max(Math.abs(bot.entity.position.x - AR.x), Math.abs(bot.entity.position.z - AR.z)) > AR.r) await sleep(250)
+        const tW = gameClock.now()
+        while (gameClock.now() - tW < 25000 && !ctl.aborted && !selfDied && !mobThreat() && Math.max(Math.abs(bot.entity.position.x - AR.x), Math.abs(bot.entity.position.z - AR.z)) > AR.r) await sleep(250)
         try { bot.pathfinder.setGoal(null) } catch {}
       }
       const need = Math.max(2, Math.ceil(AR.y - bot.entity.position.y) + 1)
@@ -2674,7 +2675,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         have = edges.fillerCount(bot)
       }
       if (have >= need && !mobThreat()) {
-        const t0c = Date.now()
+        const t0c = gameClock.now()
         const gK = buildGuard()
         let cb = null
         try { cb = await edges.climbBack(bot, guardCtl(gK), entity, { beforeStep: towerShield, archer: bowWatch.shots > 0 || !!findItem(bot, i => i.name === 'bow' || i.name === 'crossbow'), floorY: AR.y, exclude: badShafts, digNear: 12000 }) } catch (e) { cb = { ok: false, why: e.message } }
@@ -2682,7 +2683,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         // Не вышло — вся дыра (клетки рядом) из выбора: иначе следующая клетка той же дыры.
         if (cb && !cb.ok && cb.shaft && /не дошёл|не выломал|не растёт|не подпрыгнул/.test(cb.why || '')) for (let ax = -2; ax <= 2; ax++) for (let az = -2; az <= 2; az++) badShafts.add((cb.shaft.x + ax) + ',' + (cb.shaft.z + az))
         if (cb && cb.ok) st.returns = (st.returns || 0) + 1
-        used(cb && cb.ok ? `вернулся на поле (${cb.how}, ${Math.round((Date.now() - t0c) / 1000)} с)` : `не вернулся: ${(cb && (cb.why || cb.how)) || '?'}`)
+        used(cb && cb.ok ? `вернулся на поле (${cb.how}, ${Math.round((gameClock.now() - t0c) / 1000)} с)` : `не вернулся: ${(cb && (cb.why || cb.how)) || '?'}`)
       }
       aim = 'target'
       await holdWeapon()
@@ -2757,7 +2758,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         try { bot.attack(entity) } catch {}
         st.swings++
         mc.st.counterHits++
-        lastSwing = Date.now()
+        lastSwing = gameClock.now()
         nextReady = lastSwing + cooldownMs(bot.heldItem)
         used('ударил его в полёте')
       }
@@ -2806,7 +2807,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         try { bot.attack(entity) } catch {}
         st.swings++
         sky.fl.st.counterHits++
-        lastSwing = Date.now()
+        lastSwing = gameClock.now()
         nextReady = lastSwing + cooldownMs(bot.heldItem)
         used('ударил летуна в пролёте')
       }
@@ -2928,7 +2929,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
           })
           aim = 'target'
           rest('smash', 5000)
-          if (res.swung) { st.swings++; lastSwing = Date.now() }
+          if (res.swung) { st.swings++; lastSwing = gameClock.now() }
           if (!res.aborted) used('1 против 2: ' + (res.hit ? 'булава в добиваемого — удар с падения' : res.launched ? 'булава в добиваемого — взлёт, не достал' : res.cancelled ? 'булава в добиваемого — передумал' : 'булава в добиваемого — не взлетел'))
           await holdWeapon()
           continue
@@ -3089,7 +3090,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
           try { bot.activateItem() } catch {}
           await sleep(TICK_MS)
           aim = 'target'
-          pendingWater.push({ cell: webPlan.cell, at: Date.now() })
+          pendingWater.push({ cell: webPlan.cell, at: gameClock.now() })
           used(onFire(bot) ? 'вода на себя: потушился и смыл паутину' : `вода: смыл паутину (${webCells.length} кл.)`)
         }
         await holdWeapon()
@@ -3161,8 +3162,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
         await bot.lookAt(best.c.offset(0.5, 1, 0.5), true).catch(() => {})
         clear()
         set('forward', true); set('jump', true); set('sprint', true)
-        const t0 = Date.now()
-        while (Date.now() - t0 < 500 && /^(lava|fire|soul_fire)$/.test(blockName(bot, bot.entity.position.floored())) && !ctl.aborted) await sleep(TICK_MS)
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 500 && /^(lava|fire|soul_fire)$/.test(blockName(bot, bot.entity.position.floored())) && !ctl.aborted) await sleep(TICK_MS)
         clear()
         aim = 'target'
         used(feetName === 'lava' ? 'выпрыгнул из лавы' : 'вышел из огня')
@@ -3184,18 +3185,18 @@ async function duelBody (session, ctl, entity, opts = {}) {
       if (pool) {
         aim = 'free'
         const near = pool.position.offset(0.5, 0, 0.5).distanceTo(here) <= 4.5
-        const t0 = Date.now()
+        const t0 = gameClock.now()
         if (near) {
           await bot.lookAt(pool.position.offset(0.5, 0.5, 0.5), true).catch(() => {})
           set('forward', true); set('sprint', true); set('back', false); set('left', false); set('right', false)
-          while (Date.now() - t0 < 1800 && !bot.entity.isInWater && !ctl.aborted) {
+          while (gameClock.now() - t0 < 1800 && !bot.entity.isInWater && !ctl.aborted) {
             set('jump', wantsJump(bot, keyDir(bot, 'forward')))
             await sleep(TICK_MS)
           }
           clear()
         } else {
           pathTo(true, new goals.GoalBlock(pool.position.x, pool.position.y, pool.position.z)); pathing = true
-          while (Date.now() - t0 < 3500 && !bot.entity.isInWater && !ctl.aborted) await sleep(TICK_MS)
+          while (gameClock.now() - t0 < 3500 && !bot.entity.isInWater && !ctl.aborted) await sleep(TICK_MS)
           pathTo(false); pathing = false
           clear()
         }
@@ -3257,9 +3258,9 @@ async function duelBody (session, ctl, entity, opts = {}) {
         aim = 'target'
         clear()
         if (res && res.note) used(res.note)
-        if (res && res.hit) { st.swings++; lastSwing = Date.now() }
+        if (res && res.hit) { st.swings++; lastSwing = gameClock.now() }
         if (res && res.ate) for (const a of res.ate) st.healed.push(a + ' (в воздухе)')
-        nextReady = Math.max(nextReady, Date.now() + cooldownMs(bot.heldItem))
+        nextReady = Math.max(nextReady, gameClock.now() + cooldownMs(bot.heldItem))
         await holdWeapon()
         if (guard) await guard.wear()
         continue
@@ -3305,7 +3306,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       // угол) и хп на исходе — самое сильное, что есть, даже под ударами:
       // зачарованное яблоко (поглощение IV + сопротивление, Consumables),
       // черепашье зелье (сопротивление III, Potions.TURTLE_MASTER), яблоко.
-      const desperate = tempo.ON && prof.player && hp <= 6 && ((meInWeb && !webSafe) || Date.now() - (st.corneredAt || 0) < 3000)
+      const desperate = tempo.ON && prof.player && hp <= 6 && ((meInWeb && !webSafe) || gameClock.now() - (st.corneredAt || 0) < 3000)
       const turtle = desperate ? findItem(bot, i => i.name === 'potion' && /turtle_master$/.test(potionOf(i) || '')) : null
       const gapple = findItem(bot, i => i.name === 'enchanted_golden_apple') ||
         (!absorbing && findItem(bot, i => i.name === 'golden_apple'))
@@ -3356,7 +3357,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
             aim = 'target'
             tt.stats.kites++
             // Бежать некуда или он догнал (скорость та же или больше) — прижат.
-            if (how === 'некуда' || how === 'догнал') st.corneredAt = Date.now()
+            if (how === 'некуда' || how === 'догнал') st.corneredAt = gameClock.now()
           }
           // Не оторвался — не бегать по кругу: два пустых отрыва подряд —
           // пауза в лечении на 6 с, драться (или коробка, жемчуг — ниже и выше).
@@ -3620,14 +3621,14 @@ async function duelBody (session, ctl, entity, opts = {}) {
       pathTo(false); pathing = false
       clear()
       aim = 'free'
-      const t0c = Date.now()
+      const t0c = gameClock.now()
       let cb = null
       const gK = buildGuard()
       try { cb = await edges.climbBack(bot, guardCtl(gK), entity, { beforeStep: towerShield, archer: bowWatch.shots > 0 || !!findItem(bot, i => i.name === 'bow' || i.name === 'crossbow') }) } catch (e) { cb = { ok: false, why: e.message } }
       if (buildDone(gK, 'подъём к нему')) cb = { ok: false, why: gK.why }
       aim = 'target'
       await holdWeapon()
-      used(cb && cb.ok ? `поднялся к нему (${cb.how}, ${Math.round((Date.now() - t0c) / 1000)} с)` : `не поднялся: ${(cb && (cb.why || cb.how)) || '?'}`)
+      used(cb && cb.ok ? `поднялся к нему (${cb.how}, ${Math.round((gameClock.now() - t0c) / 1000)} с)` : `не поднялся: ${(cb && (cb.why || cb.how)) || '?'}`)
       if (process.env.ND_DEBUG_PVP) console.log('[climb]', JSON.stringify(cb))
       continue
     }
@@ -3685,7 +3686,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         if (wr.fired) {
           mc.notePush(entity, pp.why)
           used('заряд ветра: ' + pp.why)
-          nextReady = Math.max(nextReady, Date.now() + cooldownMs(bot.heldItem))
+          nextReady = Math.max(nextReady, gameClock.now() + cooldownMs(bot.heldItem))
           await holdWeapon()
           continue
         }
@@ -3709,14 +3710,14 @@ async function duelBody (session, ctl, entity, opts = {}) {
         aim = 'free'
         const beforeA = heldName()
         let sideA = Math.random() < 0.5 ? 'left' : 'right'
-        let flipA = Date.now() + 300 + Math.random() * 400
+        let flipA = gameClock.now() + 300 + Math.random() * 400
         const shotA = await bowShoot(bot, entity, {
           point: (t) => { const q = sky.fl.at(Math.min(30, Math.max(0, Math.round(t)))); return q ? q.offset(0, 0.3, 0) : entity.position.offset(0, 0.3, 0) },
           follow: false,
           onHit: () => { st.arrowHits = (st.arrowHits || 0) + 1; sky.fl.st.hits++ },
           shouldStop: () => ctl.aborted || !sky.gliding() || !!sky.threat() || (FIX && maceNow()),
           onDraw: () => {
-            if (Date.now() > flipA) { sideA = sideA === 'left' ? 'right' : 'left'; flipA = Date.now() + 300 + Math.random() * 500 }
+            if (gameClock.now() > flipA) { sideA = sideA === 'left' ? 'right' : 'left'; flipA = gameClock.now() + 300 + Math.random() * 500 }
             set('left', sideA === 'left' && stepSafe(bot, keyDir(bot, 'left')))
             set('right', sideA === 'right' && stepSafe(bot, keyDir(bot, 'right')))
           }
@@ -3812,7 +3813,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
     // не короче заряда без запаса на отпускание; лук его — не помеха (от стрелы
     // щит и уклон, а не отказ от зарядки); по нам только что попали — нет.
     const xbLoadSafe = (ms) => {
-      if (Date.now() - tt.myHurtAt < 300) return false
+      if (gameClock.now() - tt.myHurtAt < 300) return false
       const gap = Math.max(0, theirR - tempo.PLAYER_REACH)
       return (gap / tempo.SPRINT_BPT) * TICK_MS >= ms - 250
     }
@@ -3828,13 +3829,13 @@ async function duelBody (session, ctl, entity, opts = {}) {
         kite: xbKite, hisShield, theyDraw: theyBow, weak: arrowsWeak,
         safe: (ms) => (xbKite ? xbLoadSafe(ms) : tt.safe(ms, { fortSealed: fortSealed() }).ok),
         shieldAtUs: mace.shieldAtUs(bot, entity),
-        others: [...attackers.values()].filter(a => Date.now() - a.at < 8000).map(a => a.e),
+        others: [...attackers.values()].filter(a => gameClock.now() - a.at < 8000).map(a => a.e),
         opening: !firstHitDone, rushing: punRush || now < rushUntil,
         totemOff: !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'totem_of_undying'),
         velFn: () => track.vel(),
-        abortIf: () => Date.now() - tt.myHurtAt < 300 || (entity.isValid && reachFrom(entity.position.offset(0, EYE, 0), bot.entity) <= tempo.PLAYER_REACH + 0.5) || (FIX && maceNow()),
+        abortIf: () => gameClock.now() - tt.myHurtAt < 300 || (entity.isValid && reachFrom(entity.position.offset(0, EYE, 0), bot.entity) <= tempo.PLAYER_REACH + 0.5) || (FIX && maceNow()),
         onLoadTick: () => {
-          if (Date.now() > xFlip) { xSide = xSide === 'left' ? 'right' : 'left'; xFlip = Date.now() + 300 + Math.random() * 500 }
+          if (gameClock.now() > xFlip) { xSide = xSide === 'left' ? 'right' : 'left'; xFlip = gameClock.now() + 300 + Math.random() * 500 }
           set('forward', false); set('sprint', false)
           set('left', xSide === 'left' && stepSafe(bot, keyDir(bot, 'left')))
           set('right', xSide === 'right' && stepSafe(bot, keyDir(bot, 'right')))
@@ -3856,7 +3857,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       }
       if (xb && xb.did === 'fire' && xb.ok) {
         // Смена слота в одном тике — заряд меча сервер обнулил (Paper, замер mace.js).
-        nextReady = Math.max(nextReady, Date.now() + cooldownMs(bot.heldItem))
+        nextReady = Math.max(nextReady, gameClock.now() + cooldownMs(bot.heldItem))
         continue
       }
       if (xb && xb.did === 'load') continue
@@ -3932,7 +3933,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       const before = heldName()
       aim = 'free'
       let side = Math.random() < 0.5 ? 'left' : 'right'
-      let flipAt = Date.now() + 300 + Math.random() * 400
+      let flipAt = gameClock.now() + 300 + Math.random() * 400
       const closeAt = theyUp ? 0 : prof.player ? 5 : 3.5
       // Какой стрелой (ranged.js, 2026-09-26): лук берёт левую руку, потом слоты
       // 0..35 по порядку (Player.getProjectile) — выбранную пачку ставим первой.
@@ -3965,8 +3966,8 @@ async function duelBody (session, ctl, entity, opts = {}) {
         onDraw: () => {
           track.update()
           // Он выстрелил, пока мы тянем, — сменить сторону сейчас же.
-          if (sawRelease()) { side = side === 'left' ? 'right' : 'left'; flipAt = Date.now() + 400 + Math.random() * 400; st.dodges++; used('ушёл с линии выстрела') }
-          if (Date.now() > flipAt) { side = side === 'left' ? 'right' : 'left'; flipAt = Date.now() + 300 + Math.random() * 500 }
+          if (sawRelease()) { side = side === 'left' ? 'right' : 'left'; flipAt = gameClock.now() + 400 + Math.random() * 400; st.dodges++; used('ушёл с линии выстрела') }
+          if (gameClock.now() > flipAt) { side = side === 'left' ? 'right' : 'left'; flipAt = gameClock.now() + 300 + Math.random() * 500 }
           const v = track.vel()
           const mp = bot.entity.position
           const dist = Math.max(0.1, mp.distanceTo(entity.position))
@@ -3985,7 +3986,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       // пока путь не откроется.
       if (shot.blocked) {
         rest('bow', 2500)
-        repositionUntil = Date.now() + 2500
+        repositionUntil = gameClock.now() + 2500
         if (!st.blockedShots) used('стена на линии — обхожу')
         st.blockedShots = (st.blockedShots || 0) + 1
       }
@@ -4002,7 +4003,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       aim = 'free'
       const ua = await util.step({ entity, d, dy, r, hp, sees: seesBody, theyUp, busy: tt.state(entity), vel: () => track.vel(), others: duo.foes().filter(e => e !== entity), ctl })
       aim = 'target'
-      if (ua) { if (ua.rush) rushUntil = Date.now() + 1500; await holdWeapon(); continue }
+      if (ua) { if (ua.rush) rushUntil = gameClock.now() + 1500; await holdWeapon(); continue }
     }
 
     // ---- Человек (showman.js, 2026-09-26): до сшибки и в затишье — стойка
@@ -4065,7 +4066,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
             // ломался вовсе, и осаждающий 25 с стоял у стены).
             const stop = await digWatch(bot.blockAt(plan.breakAt), () => (prof.player && mc.threat()) ? 'булава летит'
               : !entity.isValid ? 'он пропал' : entity.position.floored().distanceTo(theirCell) > 1.5 ? 'он вышел'
-                : Date.now() - tt.myHurtAt < 300 ? 'бьют меня' : null)
+                : gameClock.now() - tt.myHurtAt < 300 ? 'бьют меня' : null)
             aim = 'target'
             await holdWeapon()
             if (!fortify.solidAt(bot, plan.breakAt)) used(plan.digMs > 2500 ? 'выломал блок его крепкой коробки' : 'выломал блок его коробки киркой')
@@ -4363,7 +4364,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
           stillOk: () => entity.isValid && Math.hypot(entity.position.x - bot.entity.position.x, entity.position.z - bot.entity.position.z) < 4.6 && !mace.shieldAtUs(bot, entity)
         })
         aim = 'target'
-        if (res.swung) { st.swings++; lastSwing = Date.now() }
+        if (res.swung) { st.swings++; lastSwing = gameClock.now() }
         if (res.launched && !res.hit) { st.smashMiss = (st.smashMiss || 0) + 1; if (st.smashMiss >= 2) { rest('smash', 12000); st.smashMiss = 0 } } else if (res.hit) st.smashMiss = 0
         // Отказ — с причиной (mace.windSmash: паутина на теле, блок над головой,
         // не на земле, ушёл или поднял щит) — проверка правок 2026-09-26 в арене.
@@ -4429,7 +4430,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       if (blockName(bot, cell) === 'air' || blockName(bot, cell) === 'cobweb') {
         rest('lava', 8000)
         if (await useOnGroundAt(lava, cell, 'лава под него')) {
-          pendingLava.push({ cell, at: Date.now() })
+          pendingLava.push({ cell, at: gameClock.now() })
           await holdWeapon()
           continue
         }
@@ -4531,7 +4532,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         aim = 'free'
         const j = await spear.jab(bot, entity)
         aim = 'target'
-        if (j.ok) { st.swings++; lastSwing = Date.now(); used('укол копьём') }
+        if (j.ok) { st.swings++; lastSwing = gameClock.now(); used('укол копьём') }
         await sleep(TICK_MS)
         continue
       }
@@ -4915,7 +4916,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
       }
     }
 
-    if (floorEscape && Date.now() < floorEscape.until) {
+    if (floorEscape && gameClock.now() < floorEscape.until) {
       let best = null; let bd = -2
       for (const k of ['forward', 'back', 'left', 'right']) {
         const v = keyDir(bot, k); const dot = v.x * floorEscape.dir.x + v.z * floorEscape.dir.z
@@ -5025,7 +5026,7 @@ async function duelBody (session, ctl, entity, opts = {}) {
         // в этот тик съедает (Minecraft.handleKeybinds, пока isUsingItem);
         // отпустили меньше тика назад — удар на следующем проходе.
         const use = bot._ndUse
-        if (!(use && (use.cur || Date.now() - (use.endedAt || 0) < mf.clock.msPerTick))) {
+        if (!(use && (use.cur || gameClock.now() - (use.endedAt || 0) < mf.clock.msPerTick))) {
           const sprintHit = mf.clock.srvSprint && mf.clock.charge(0) > 0.9
           swingCrit = falling && !mf.clock.srvSprint
           // После спринт-удара — W-tap (тик без «вперёд» и START: следующий
@@ -5037,12 +5038,12 @@ async function duelBody (session, ctl, entity, opts = {}) {
           rushUntil = 0
           firstHitDone = true
           hitKind = null
-          lastSwing = Date.now()
+          lastSwing = gameClock.now()
           nextReady = lastSwing + cooldownMs(swungWith)
           if (sprintHit) st.sprintHits++
           if (blocking && !shieldFresh && (swapTo >= 0 || (swungWith && /_axe$/.test(swungWith.name)))) st.axeOnShield++
           if (swungWith !== weapon) await holdWeapon()
-          if (prof.creeper) backOffUntil = Date.now() + 700
+          if (prof.creeper) backOffUntil = gameClock.now() + 700
         }
       }
     }

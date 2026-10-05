@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { Physics } = require('prismarine-physics')
 const AABB = require('prismarine-physics/lib/aabb')
@@ -60,8 +61,8 @@ const DEBUG = !!process.env.ND_DEBUG_RIDE
 
 function sleep (ms, ctl) {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -69,11 +70,11 @@ function sleep (ms, ctl) {
 // и транспорт ехал бы медленнее, чем в игре. Отстали больше чем на 5 тиков
 // (перестройка маршрута) — не догонять рывком, а считать заново отсюда.
 function pacer (ctl) {
-  let base = Date.now(); let n = 0
+  let base = gameClock.now(); let n = 0
   return () => {
     n++
-    let wait = base + n * TICK - Date.now()
-    if (wait < -5 * TICK) { base = Date.now(); n = 0; wait = 0 }
+    let wait = base + n * TICK - gameClock.now()
+    if (wait < -5 * TICK) { base = gameClock.now(); n = 0; wait = 0 }
     return sleep(Math.max(0, wait), ctl)
   }
 }
@@ -175,8 +176,8 @@ async function dismount (bot, ms = 2500) {
   patchVehicle(bot)
   if (!bot.vehicle) return true
   const gone = new Promise(resolve => {
-    const t = setTimeout(() => resolve(false), ms)
-    bot.once('dismount', () => { clearTimeout(t); resolve(true) })
+    const t = gameClock.setTimeout(() => resolve(false), ms)
+    bot.once('dismount', () => { gameClock.clearTimeout(t); resolve(true) })
   })
   sendInput(bot, { shift: true })
   await sleep(120)
@@ -192,10 +193,10 @@ async function mountOn (bot, ctl, e, ms = 3000) {
   patchVehicle(bot)
   if (bot.vehicle && bot.vehicle.id === e.id) return true
   const on = new Promise(resolve => {
-    const t = setTimeout(() => resolve(false), ms)
-    const h = () => { if (bot.vehicle && bot.vehicle.id === e.id) { clearTimeout(t); bot.removeListener('mount', h); resolve(true) } }
+    const t = gameClock.setTimeout(() => resolve(false), ms)
+    const h = () => { if (bot.vehicle && bot.vehicle.id === e.id) { gameClock.clearTimeout(t); bot.removeListener('mount', h); resolve(true) } }
     bot.on('mount', h)
-    ctl.onAbort.push(() => { clearTimeout(t); bot.removeListener('mount', h); resolve(false) })
+    ctl.onAbort.push(() => { gameClock.clearTimeout(t); bot.removeListener('mount', h); resolve(false) })
   })
   // Пустая рука: с предметом в руке клик — это его применение (седло, морковь…).
   await emptyHand(bot)
@@ -219,8 +220,8 @@ async function approach (bot, ctl, e, range = 2, ms = 15000) {
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
   try {
     bot.pathfinder.setGoal(goal, true)
-    const t0 = Date.now()
-    while (Date.now() - t0 < ms && !ctl.aborted && e.isValid !== false) {
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < ms && !ctl.aborted && e.isValid !== false) {
       if (e.position.distanceTo(bot.entity.position) <= range + 0.5) return true
       await sleep(150)
     }
@@ -449,7 +450,7 @@ async function tameHorse (session, ctl, e, report, { tries = 20 } = {}) {
   const events = []
   const onStatus = pk => { if (pk.entityId === e.id) events.push(pk.entityStatus) }
   bot._client.on('entity_status', onStatus)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
     for (let i = 0; i < tries + 6 && t.tries < tries && !ctl.aborted; i++) {
       if (!bot.entities[e.id]) { report.stopped = 'лошадь пропала из виду'; return false }
@@ -458,8 +459,8 @@ async function tameHorse (session, ctl, e, report, { tries = 20 } = {}) {
       const n0 = events.length
       if (!(await mountOn(bot, ctl, e))) { await sleep(600, ctl); continue }
       t.tries++
-      const s0 = Date.now()
-      while (Date.now() - s0 < 12000 && !ctl.aborted) {
+      const s0 = gameClock.now()
+      while (gameClock.now() - s0 < 12000 && !ctl.aborted) {
         const ev = events.slice(n0)
         if (ev.includes(7) || isTamedHorse(e) || ev.includes(6) || !bot.vehicle || bot.vehicle.id !== e.id) break
         await sleep(100, ctl)
@@ -475,10 +476,10 @@ async function tameHorse (session, ctl, e, report, { tries = 20 } = {}) {
     bot._client.removeListener('entity_status', onStatus)
   }
   // Флаг приходит метаданными следом за событием.
-  const w0 = Date.now()
-  while (!isTamedHorse(e) && events.includes(7) && Date.now() - w0 < 2000) await sleep(100)
+  const w0 = gameClock.now()
+  while (!isTamedHorse(e) && events.includes(7) && gameClock.now() - w0 < 2000) await sleep(100)
   t.tamed = isTamedHorse(e) || events.includes(7)
-  t.seconds = Math.round((Date.now() - t0) / 100) / 10
+  t.seconds = Math.round((gameClock.now() - t0) / 100) / 10
   if (t.tamed) {
     session.bus && session.bus.emit('tamed', { kind: e.name, id: e.id, text: `приручил ${e.name} (посадок ${t.tries})` })
     return true
@@ -499,8 +500,8 @@ async function saddleUp (session, ctl, e, report) {
   try { await bot.equip(saddle, 'hand') } catch {}
   try { await bot.lookAt(e.position.offset(0, (e.height || 1.6) * 0.7, 0), true) } catch {}
   try { bot.activateEntity(e) } catch {}
-  const t0 = Date.now()
-  while (Date.now() - t0 < 2000 && !isSaddled(e)) await sleep(100)
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 2000 && !isSaddled(e)) await sleep(100)
   if (isSaddled(e)) { report.saddled = true; return true }
   report.stopped = 'седло не надел (сервер не принял клик седлом)'
   return false
@@ -572,7 +573,7 @@ async function rideHorse (session, ctl, e, target, report, { deadline, range = 1
   bot._client.on('vehicle_move', onSnap)
   let lastInput = ''
   const input = inp => { const k = JSON.stringify(inp); if (k !== lastInput) { sendInput(bot, inp); lastInput = k } }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let stuckSince = null
   // Остаток маршрута: до текущей точки и дальше по ногам.
   const remaining = () => {
@@ -582,14 +583,14 @@ async function rideHorse (session, ctl, e, target, report, { deadline, range = 1
     for (let i = wp; i < path.length - 1; i++) { const a = aim(path[i]); const b = aim(path[i + 1]); s += Math.hypot(b.x - a.x, b.z - a.z) }
     return s
   }
-  let lastProgress = { at: Date.now(), d: remaining() }
+  let lastProgress = { at: gameClock.now(), d: remaining() }
   let stuckPlans = 0
   let ticks = 0
   let jumps = 0
   let arrived = false
   const tick = pacer(ctl)
   try {
-    while (!ctl.aborted && Date.now() < deadline) {
+    while (!ctl.aborted && gameClock.now() < deadline) {
       if (!bot.vehicle || bot.vehicle.id !== e.id) { report.stopped = 'выпал из седла'; break }
       const here = flat(state.pos, target)
       if (here <= range && (target.y === undefined || Math.abs(state.pos.y - target.y) <= 2)) { arrived = true; break }
@@ -604,7 +605,7 @@ async function rideHorse (session, ctl, e, target, report, { deadline, range = 1
       // Прыжок: следующая точка выше на 2 (шаг берёт только 1), или упёрлись.
       const need2 = goal.jump || (goal.y - Math.floor(state.pos.y + 0.01) >= 2)
       const close = Math.hypot(dx, dz) < 2.2
-      if (state.onGround && ((need2 && close) || (stuckSince && Date.now() - stuckSince > 600))) {
+      if (state.onGround && ((need2 && close) || (stuckSince && gameClock.now() - stuckSince > 600))) {
         const dir = new Vec3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw))
         state.vel.y = jumpStrength
         state.vel.x += dir.x * 0.4; state.vel.z += dir.z * 0.4
@@ -620,16 +621,16 @@ async function rideHorse (session, ctl, e, target, report, { deadline, range = 1
       e.position = state.pos.clone()
       bot.entity.position = state.pos.offset(0, dims.h * 0.75, 0)
       bot.entity.yaw = state.yaw
-      if (state.isCollidedHorizontally) { if (!stuckSince) stuckSince = Date.now() } else stuckSince = null
+      if (state.isCollidedHorizontally) { if (!stuckSince) stuckSince = gameClock.now() } else stuckSince = null
       // Продвижение — по остатку МАРШРУТА, не по прямой до цели: объезд стены
       // уводит от цели, и это не «застрял». Нет продвижения 3 с — новый маршрут
       // отсюда; шесть таких подряд — дорога не для лошади.
       const d = remaining()
-      if (d < lastProgress.d - 0.5) lastProgress = { at: Date.now(), d }
-      else if (Date.now() - lastProgress.at > 3000) {
+      if (d < lastProgress.d - 0.5) lastProgress = { at: gameClock.now(), d }
+      else if (gameClock.now() - lastProgress.at > 3000) {
         if (++stuckPlans > 6) { report.stopped = `застрял верхом в ${Math.round(flat(state.pos, target))} блоках от цели — дорога не для лошади`; break }
         plan()
-        lastProgress = { at: Date.now(), d: remaining() }
+        lastProgress = { at: gameClock.now(), d: remaining() }
       }
       if (DEBUG && ticks % 10 === 0) console.log(`[ride] t${ticks} pos ${state.pos.x.toFixed(2)},${state.pos.y.toFixed(2)},${state.pos.z.toFixed(2)} v ${Math.hypot(state.vel.x, state.vel.z).toFixed(3)} wp ${wp}/${path.length - 1} aim ${ga.x},${goal.y},${ga.z} ground ${state.onGround} hit ${state.isCollidedHorizontally} rest ${d.toFixed(1)}`)
       ticks++
@@ -650,7 +651,7 @@ async function rideHorse (session, ctl, e, target, report, { deadline, range = 1
     bot._client.removeListener('vehicle_move', onSnap)
     sendInput(bot, {})
   }
-  const secs = (Date.now() - t0) / 1000
+  const secs = (gameClock.now() - t0) / 1000
   report.rode = { seconds: Math.round(secs * 10) / 10, ticks, jumps, corrections: snapped || undefined, at: xyz(state.pos), left: Math.round(flat(state.pos, target) * 10) / 10 }
   return arrived
 }
@@ -748,9 +749,9 @@ async function launchBoat (session, ctl, report) {
   try { await bot.lookAt(spot.position.offset(0.5, 0.88, 0.5), true) } catch {}
   await sleep(100)
   try { bot.activateItem() } catch {}
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let boat = null
-  while (!boat && Date.now() - t0 < 2500) {
+  while (!boat && gameClock.now() - t0 < 2500) {
     boat = Object.values(bot.entities).find(e => e && isBoatName(e.name) && !before.has(e.id) && e.position.distanceTo(spot.position) < 3)
     if (!boat) await sleep(100)
   }
@@ -813,14 +814,14 @@ async function rideBoat (session, ctl, boat, target, report, { deadline, stay = 
   const onSnap = p => { pos = new Vec3(p.x, p.y, p.z); vel = new Vec3(0, 0, 0); snapped++ }
   bot._client.on('vehicle_move', onSnap)
   let lastInput = ''
-  const t0 = Date.now()
-  let lastProgress = { at: Date.now(), d: Infinity }
+  const t0 = gameClock.now()
+  let lastProgress = { at: gameClock.now(), d: Infinity }
   let arrived = false
   let bumps = 0
   let ticks = 0
   const tick = pacer(ctl)
   try {
-    while (!ctl.aborted && Date.now() < deadline) {
+    while (!ctl.aborted && gameClock.now() < deadline) {
       if (!bot.vehicle || bot.vehicle.id !== boat.id) { report.stopped = 'выпал из лодки'; break }
       const cell = path[wp]
       const gx = cell.x + 0.5; const gz = cell.z + 0.5
@@ -866,8 +867,8 @@ async function rideBoat (session, ctl, boat, target, report, { deadline, stay = 
       // Продвижение — по остатку маршрута (обход острова уводит от цели).
       let d = Math.hypot(path[wp].x + 0.5 - pos.x, path[wp].z + 0.5 - pos.z)
       for (let i = wp; i < path.length - 1; i++) d += Math.hypot(path[i + 1].x - path[i].x, path[i + 1].z - path[i].z)
-      if (d < lastProgress.d - 1) lastProgress = { at: Date.now(), d }
-      else if (Date.now() - lastProgress.at > 6000) { report.stopped = `лодка застряла в ${Math.round(Math.hypot(goalCell.x + 0.5 - pos.x, goalCell.z + 0.5 - pos.z))} блоках от места высадки (упор в берег ${bumps} раз)`; break }
+      if (d < lastProgress.d - 1) lastProgress = { at: gameClock.now(), d }
+      else if (gameClock.now() - lastProgress.at > 6000) { report.stopped = `лодка застряла в ${Math.round(Math.hypot(goalCell.x + 0.5 - pos.x, goalCell.z + 0.5 - pos.z))} блоках от места высадки (упор в берег ${bumps} раз)`; break }
       if (DEBUG && ticks % 10 === 0) console.log(`[boat] t${ticks} pos ${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)} v ${Math.hypot(vel.x, vel.z).toFixed(3)} yaw ${yawDeg.toFixed(0)} want ${want.toFixed(0)} wp ${wp}/${path.length - 1} bumps ${bumps} rest ${d.toFixed(1)}`)
       ticks++
       await tick()
@@ -930,7 +931,7 @@ async function rideBoat (session, ctl, boat, target, report, { deadline, stay = 
     bot._client.removeListener('vehicle_move', onSnap)
     sendInput(bot, {})
   }
-  report.rode = { seconds: Math.round((Date.now() - t0) / 100) / 10, bumps: bumps || undefined, corrections: snapped || undefined, at: xyz(pos) }
+  report.rode = { seconds: Math.round((gameClock.now() - t0) / 100) / 10, bumps: bumps || undefined, corrections: snapped || undefined, at: xyz(pos) }
   return arrived
 }
 
@@ -954,9 +955,9 @@ async function pickUpBoat (session, ctl, boat, report) {
   // вбок (Player.aiStep, inflate(1, 0.5, 1)): с кромки берега дотягивается,
   // в воду лезть не надо. Сначала подойти на 1.5 (кромка), потом ближе; залез
   // в воду — выплыть (pathfinder из воды на берег выше воды не строит).
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let close = 1.5
-  while (Date.now() - t0 < 8000 && !ctl.aborted) {
+  while (gameClock.now() - t0 < 8000 && !ctl.aborted) {
     const got = diffItems(before, countItems(bot))
     if (Object.keys(got).some(n => /(_boat|_raft)$/.test(n))) break
     const drop = Object.values(bot.entities).find(e => e && e.name === 'item' && e.position.distanceTo(bot.entity.position) < 8)
@@ -1001,7 +1002,7 @@ async function run (session, ctl, p = {}) {
   let mode = String(p.mode || 'go').toLowerCase()
   if (mode === 'ride' || mode === 'to' || mode === 'cross') mode = 'go'
   const report = { kind, mode }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + Math.min(600, p.timeoutSeconds ?? 120) * 1000
   const target = (p.x !== undefined && p.z !== undefined) ? { x: Number(p.x) + 0.5, y: p.y !== undefined ? Number(p.y) : undefined, z: Number(p.z) + 0.5 } : null
 
@@ -1088,8 +1089,8 @@ async function tie (session, ctl, e, report) {
     try { await bot.equip(lead, 'hand') } catch {}
     try { await bot.lookAt(e.position.offset(0, 1, 0), true) } catch {}
     try { bot.activateEntity(e) } catch {}
-    const t0 = Date.now()
-    while (!leashed && Date.now() - t0 < 1500) await sleep(100)
+    const t0 = gameClock.now()
+    while (!leashed && gameClock.now() - t0 < 1500) await sleep(100)
     if (!leashed) { report.tied = false; report.note = 'поводок не накинулся'; return false }
     try { await withTimeout(bot.pathfinder.goto(new goals.GoalNear(post.position.x, post.position.y, post.position.z, 2)), 8000) } catch { try { bot.pathfinder.setGoal(null) } catch {} }
     await emptyHand(bot)
@@ -1099,8 +1100,8 @@ async function tie (session, ctl, e, report) {
     bot._client.on('attach_entity', onKnot)
     try {
       await bot.activateBlock(post, new Vec3(0, 1, 0), new Vec3(0.5, 1, 0.5))
-      const t1 = Date.now()
-      while (!knot && Date.now() - t1 < 1500) await sleep(100)
+      const t1 = gameClock.now()
+      while (!knot && gameClock.now() - t1 < 1500) await sleep(100)
     } finally { bot._client.removeListener('attach_entity', onKnot) }
     report.tied = knot
     if (knot) report.tiedTo = xyz(post.position)

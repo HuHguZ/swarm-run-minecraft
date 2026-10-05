@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория «голем деревни на железо» (поток route, 03.10.2026): новый мир сида с големом у спавна (по скану копии
 // farm/route-scan/<сид>.json), набор — каменные топор и меч, 16 булыжника; дойти к голему, fauna.golem {mode:'kill'}
 // (столб 3, удары сверху), итог — железо и урон телу. Только ферма (подготовка командами до старта).
@@ -31,7 +32,7 @@ async function main () {
   const seed = seedOf()
   let golem = null
   try { golem = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'farm', 'route-scan', `${seed}.json`), 'utf8')).golems[0] } catch {}
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const rec = { at: new Date().toISOString(), seed, golem }
   if (golem) {
     const g = await call('goto', { x: golem.x, z: golem.z, range: 10, timeoutSeconds: 90 })
@@ -46,7 +47,7 @@ async function main () {
   rec.hp1 = st1.health
   rec.iron = (st1.inventory || {}).iron_ingot || 0
   rec.ok = rec.iron >= 3
-  rec.seconds = Math.round((Date.now() - t0) / 1000)
+  rec.seconds = Math.round((gameClock.now() - t0) / 1000)
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
   try { await call('disconnect', { reason: 'сцена окончена' }) } catch {}

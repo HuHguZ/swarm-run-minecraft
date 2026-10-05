@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Ход по Аду по сетке «из копии этого же мира» (nether-grid.js; поток nether, 03.10).
 //
 // Пешком по Аду тело гибло на обрывах, в лаве и под гастами, а закрытый штрек (tunnel.js / sealed.plan) кусками по
@@ -20,7 +21,7 @@ const { C, DIG } = NG
 const { performance } = require('node:perf_hooks')
 const budgetOn = () => process.env.ND_NE_PLAN !== '0'
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => new Promise(resolve => gameClock.setTimeout(resolve, ms))
 const log = (what, o) => console.log('[route]', new Date().toTimeString().slice(0, 8), what, JSON.stringify(o))
 const xyz = p => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) })
 
@@ -172,7 +173,7 @@ async function plan (g, from, goal, opts = {}) {
 // from — клетка ног {x,y,z}; goal — {x, y, z, r (по горизонтали, по умолчанию 0), dy (допуск по высоте, 0)}.
 // opts: maxNodes, weight (эвристика), blocks (сколько можно поставить: мост, столб), fireproof (пол из магмы), partial.
 async function planFull (g, from, goal, opts = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.wall.now()
   const bounded = opts._deadline != null
   const deadline = opts._deadline ?? Infinity
   let lastYield = performance.now()
@@ -408,7 +409,7 @@ async function planFull (g, from, goal, opts = {}) {
     if (blocks > 0) tryMove(x, y + 1, z, K.VUP, [x, y + 2, z], W.vup, true)
   }
   const end = found >= 0 ? found : (opts.partial ? best : -1)
-  const out = { ok: found >= 0, nodes: visited, ms: Date.now() - t0, why, limit: found < 0 && (budgetLimit || visited > maxNodes) }
+  const out = { ok: found >= 0, nodes: visited, ms: gameClock.wall.now() - t0, why, limit: found < 0 && (budgetLimit || visited > maxNodes) }
   if (end < 0 || end === k0) { if (!out.ok) out.why2 = budgetLimit ? 'бюджет без прогресса' : 'пути нет'; out.path = []; return out }
   const pathK = []
   for (let k = end; k !== k0 && k >= 0; k = par[k]) pathK.push(k)
@@ -473,10 +474,10 @@ async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower
     .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
   let foe = pick()
   if (!foe) return false
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let towered = false
   st.ranged = (st.ranged || 0) + 1
-  while (foe && !ctl.aborted && Date.now() - t0 < maxMs && (bot.health ?? 20) > 7) {
+  while (foe && !ctl.aborted && gameClock.now() - t0 < maxMs && (bot.health ?? 20) > 7) {
     const above = bot.entity.position.y - foe.position.y >= 2.6
     const d = foe.position.distanceTo(bot.entity.position)
     if (!above && tower && !towered && d > 3.2 && bot.entity.onGround) {
@@ -493,7 +494,7 @@ async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower
     foe = pick()
   }
   bot.setControlState('sneak', false)
-  log('сверху луком', { s: Math.round((Date.now() - t0) / 1000), left: !!foe, hp: Math.round(bot.health ?? 0) })
+  log('сверху луком', { s: Math.round((gameClock.now() - t0) / 1000), left: !!foe, hp: Math.round(bot.health ?? 0) })
   return true
 }
 
@@ -515,11 +516,11 @@ async function threatCheck (session, ctl, st) {
   // если в досягаемости и виден, и дальше по пути.
   if (foe.e.name === 'blaze') {
     const pick = require('./pick')
-    if (foe.d <= 3.2 && pick.canHit(bot, foe.e) && Date.now() - (st.lastSwing || 0) > 640) {
+    if (foe.d <= 3.2 && pick.canHit(bot, foe.e) && gameClock.now() - (st.lastSwing || 0) > 640) {
       const sw = bot.inventory.items().find(i => /_sword$/.test(i.name))
       if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
       try { await bot.lookAt(foe.e.position.offset(0, (foe.e.height || 1.8) * 0.6, 0), true) } catch {}
-      try { bot.attack(foe.e); st.lastSwing = Date.now(); st.swings = (st.swings || 0) + 1 } catch {}
+      try { bot.attack(foe.e); st.lastSwing = gameClock.now(); st.swings = (st.swings || 0) + 1 } catch {}
     }
     return false
   }
@@ -530,22 +531,22 @@ async function threatCheck (session, ctl, st) {
     const y0 = bot.entity.position.y
     const tw = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
     const up = bot.entity.position.y >= y0 + 1.9
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let swings = 0
-    while (up && !ctl.aborted && Date.now() - t0 < 30000 && (bot.health ?? 0) > 4) {
+    while (up && !ctl.aborted && gameClock.now() - t0 < 30000 && (bot.health ?? 0) > 4) {
       const e = bot.entities[foe.e.id]
       if (!e || e.isValid === false || e.position.distanceTo(bot.entity.position) > 10) break
-      if (pick.canHit(bot, e) && Date.now() - (st.lastSwing || 0) > 640) {
+      if (pick.canHit(bot, e) && gameClock.now() - (st.lastSwing || 0) > 640) {
         const sw = bot.inventory.items().find(i => /_sword$/.test(i.name))
         if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
         try { await bot.lookAt(e.position.offset(0, (e.height || 1.9) * 0.7, 0), true) } catch {}
-        try { bot.attack(e); st.lastSwing = Date.now(); swings++ } catch {}
+        try { bot.attack(e); st.lastSwing = gameClock.now(); swings++ } catch {}
       }
       await sleep(100)
     }
     bot.setControlState('sneak', false)
     st.towers = (st.towers || 0) + 1
-    log('столб от ' + foe.e.name, { up, placed: tw && tw.placed, swings, s: Math.round((Date.now() - t0) / 1000), left: !!(bot.entities[foe.e.id] && bot.entities[foe.e.id].isValid !== false), hp: Math.round(bot.health ?? 0) })
+    log('столб от ' + foe.e.name, { up, placed: tw && tw.placed, swings, s: Math.round((gameClock.now() - t0) / 1000), left: !!(bot.entities[foe.e.id] && bot.entities[foe.e.id].isValid !== false), hp: Math.round(bot.health ?? 0) })
     if (up) return true
   }
   st.fights++
@@ -755,11 +756,11 @@ async function lavaSwim (bot, ctl, st) {
   }
   if (!best) return false
   st.swims = (st.swims || 0) + 1
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
     // Из лавы — всегда до конца, и при оборванном ходе: обёртка lavaWatched (bastion) рвёт ход именно на лаве, и выход
     // обрывался за 0.1 с, а потом 5 с считался план — тело горело (VR22-1 03.10: смерть на 14-й с после входа в Ад).
-    while (Date.now() - t0 < 9000) {
+    while (gameClock.now() - t0 < 9000) {
       const p = bot.entity.position
       await bot.lookAt(new Vec3(best.c.x + 0.5, p.y + 1.2, best.c.z + 0.5), true).catch(() => {})
       bot.setControlState('forward', true)
@@ -768,7 +769,7 @@ async function lavaSwim (bot, ctl, st) {
       if (!inLava(bot) && bot.entity.onGround) break
     }
   } finally { bot.setControlState('forward', false); bot.setControlState('jump', false) }
-  log('из лавы', { to: xyz(best.c), ok: !inLava(bot), s: Math.round((Date.now() - t0) / 100) / 10, hp: Math.round(bot.health ?? 0) })
+  log('из лавы', { to: xyz(best.c), ok: !inLava(bot), s: Math.round((gameClock.now() - t0) / 100) / 10, hp: Math.round(bot.health ?? 0) })
   return !inLava(bot)
 }
 
@@ -860,8 +861,8 @@ async function routeTo (session, ctl, p = {}) {
   const goal = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), r: p.r ?? 0, dy: p.dy ?? 0 }
   const st = { ok: false, steps: 0, dug: 0, plans: 0, mismatch: 0, digFails: 0, stepFails: 0, fights: 0, goal, fireproof: false, piglinsAngry: !!p.piglinsAngry }
   if (!g) return { ...st, why: 'сетки Ада нет (знание карты не снято)' }
-  const deadline = Date.now() + (p.timeoutSeconds ?? 600) * 1000
-  const t0 = Date.now()
+  const deadline = gameClock.now() + (p.timeoutSeconds ?? 600) * 1000
+  const t0 = gameClock.now()
   // Кирки: железная — золоту бастиона; обёртка bot.dig берёт «лучший» инструмент, и без фильтра железная стиралась о
   // незерак за 250 копок (neF-B3f25-1 03.10). ironOk (после бастиона) — любая.
   const filter0 = bot._ndToolFilter
@@ -888,7 +889,7 @@ async function routeTo (session, ctl, p = {}) {
   const planLog = (pl, from, speculative) => log('план', { from: xyz(from), goal, leg: pl.leg, more: pl.more, prefetched: speculative, ok: pl.ok, steps: pl.steps, digs: pl.digs, expo: pl.expo, risk: pl.risk || 0, cost: pl.cost, nodes: pl.nodes, ms: pl.ms, why2: pl.why2, why: pl.ok ? undefined : pl.why,
     head: (pl.path || []).slice(0, pl.steps <= 12 ? 12 : 4).map(m => `${m.kind}@${m.to.x},${m.to.y},${m.to.z}`).join(' ') })
   { const f0 = feetCell(bot); own.add(`${f0.x},${f0.y},${f0.z}`); own.add(`${f0.x},${f0.y + 1},${f0.z}`) }
-  while (!ctl.aborted && Date.now() < deadline && st.plans < planCap) {
+  while (!ctl.aborted && gameClock.now() < deadline && st.plans < planCap) {
     if (ctl.waitReflex) await ctl.waitReflex()
     if (reached()) { st.ok = true; break }
     st.fireproof = require('./blaze').hasEffect(bot, 'fire_resistance')
@@ -927,7 +928,7 @@ async function routeTo (session, ctl, p = {}) {
     if (!pl.path || !pl.path.length) { st.why = pl.why2 || 'пути нет'; st.planWhy = pl.why; break }
     // Неполный план (цель недостижима по сетке) — идём до ближней точки, дальше — решает вызывающий.
     let res = 'ok'
-    for (let i = 0; i < pl.path.length && !ctl.aborted && Date.now() < deadline; i++) {
+    for (let i = 0; i < pl.path.length && !ctl.aborted && gameClock.now() < deadline; i++) {
       if (ctl.waitReflex) await ctl.waitReflex()
       // Start the next leg while the last 12 physical moves of this one run.
       // Snapshot/arrays belong to that plan; projected digs/blocks describe only
@@ -1004,7 +1005,7 @@ async function routeTo (session, ctl, p = {}) {
       if (r !== 'ok') { res = r; break }
       if (i % 20 === 0) st.fireproof = require('./blaze').hasEffect(bot, 'fire_resistance')
       st.steps++
-      if (st.steps % 50 === 0) log('ход', { steps: st.steps, of: pl.steps, dug: st.dug, s: Math.round((Date.now() - t0) / 1000), at: xyz(bot.entity.position), hp: Math.round(bot.health ?? 0) })
+      if (st.steps % 50 === 0) log('ход', { steps: st.steps, of: pl.steps, dug: st.dug, s: Math.round((gameClock.now() - t0) / 1000), at: xyz(bot.entity.position), hp: Math.round(bot.health ?? 0) })
       // Свои клетки (тело прошло, копал) — для штрека бастиона (sealedGold: «свои» не чужой воздух).
       const t = pl.path[i].to
       own.add(`${t.x},${t.y},${t.z}`); own.add(`${t.x},${t.y + 1},${t.z}`)
@@ -1016,8 +1017,8 @@ async function routeTo (session, ctl, p = {}) {
   }
   } finally { if (prefetch) { prefetch.cancelled = true; await prefetch.promise }; bot._ndToolFilter = filter0; session.emergencyOff = emOff0 }
   st.ok = st.ok || reached()
-  if (!st.ok && !st.why) st.why = ctl.aborted ? 'прервано' : Date.now() >= deadline ? 'время вышло' : 'планов много'
-  st.seconds = Math.round((Date.now() - t0) / 1000)
+  if (!st.ok && !st.why) st.why = ctl.aborted ? 'прервано' : gameClock.now() >= deadline ? 'время вышло' : 'планов много'
+  st.seconds = Math.round((gameClock.now() - t0) / 1000)
   st.at = xyz(bot.entity.position)
   st.speed = st.seconds ? Math.round(st.steps / st.seconds * 100) / 100 : null
   log('итог', st)

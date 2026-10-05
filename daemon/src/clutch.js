@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Блочный клатч от падения (TODO.md «Спидраннерское перемещение блоками», шаг 1;
 // Codex 30.09.2026, codex-lab/clutch — механика по javap Paper 1.21.11, таблицы
 // там же: placement-mechanics.md, fall-mechanics.md). Там, где вода не годится —
@@ -177,7 +178,7 @@ function install (session, opts) {
   if (bot._ndClutch) return bot._ndClutch
   const { Vec3, PlayerState, faceAim, hand } = opts
   if (!hand || !hand.as || !hand.hold || !bot.world || !bot._genericPlace) throw new TypeError('shared hand, world and _genericPlace required')
-  const now = opts.now || Date.now
+  const now = opts.now || gameClock.now
   const eyeHeight = () => typeof opts.eyeHeight === 'function' ? opts.eyeHeight(bot) : (opts.eyeHeight ?? (bot.getControlState?.('sneak') ? 1.27 : 1.62))
   const simulate = opts.simulate || ((s, w) => (bot._ndSimOrig || bot.physics.simulatePlayer).call(bot.physics, s, w))
   const makeBlock = opts.makeBlock

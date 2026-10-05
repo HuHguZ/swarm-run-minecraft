@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Спуск под охраной: лесенка вниз и моб, который приходит сзади по ней же.
 //
 // Откуда сцена: поход 2026-09-16, «--- вниз ---». Нога west с y=-7 принесла
@@ -40,14 +41,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const state = async () => (await call('status')).state
 const pos = async () => (await state()).pos
 

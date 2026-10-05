@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Fighting underground, which is where the expedition actually dies. Two shapes
 // matter and they are opposites:
 //
@@ -22,14 +23,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const pos = async () => (await call('status')).state.pos
 
 async function cmd (text) {

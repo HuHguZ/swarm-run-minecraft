@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Сцена для трёх правок, где врал не текст описания, а код под ним.
 //
 //   А. Автопилот внутри mc_wait. Инструкция мозгу кончается словами «паркуйся
@@ -46,7 +47,7 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const r = m.result
   if (r) {
     if (Array.isArray(r.events)) for (const e of r.events) journal.set(e.seq, e)
@@ -59,7 +60,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(r) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 let pass = 0
 let fail = 0
@@ -91,19 +92,19 @@ async function step (label, method, params) {
 // прошлой ветки не должны считаться за события этой.
 async function open () {
   await call('status')
-  return { from: Date.now() }
+  return { from: gameClock.now() }
 }
 function close (win) {
-  win.to = Date.now()
+  win.to = gameClock.now()
   return win
 }
 function inside (win, type) {
   return [...journal.values()].filter(e =>
-    e.type === type && e.at >= win.from && e.at <= (win.to ?? Date.now()))
+    e.type === type && (e.gameAt ?? e.at) >= win.from && (e.gameAt ?? e.at) <= (win.to ?? gameClock.now()))
 }
 function typesInside (win) {
   const seen = [...journal.values()]
-    .filter(e => e.at >= win.from && e.at <= (win.to ?? Date.now()))
+    .filter(e => (e.gameAt ?? e.at) >= win.from && (e.gameAt ?? e.at) <= (win.to ?? gameClock.now()))
     .map(e => e.type)
   return [...new Set(seen)].join(', ') || 'ничего'
 }
@@ -146,8 +147,8 @@ async function give (...gives) {
 // ниже food 16 автопилот ест каждую секунду и отменит слив быстрее, чем он идёт.
 async function drainTo (target, timeoutMs = 120000) {
   await cmd('/effect give @s minecraft:hunger 120 20 true')
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + timeoutMs
+  while (gameClock.now() < deadline) {
     const s = await state()
     if (s.food <= target) break
     await sleep(500)

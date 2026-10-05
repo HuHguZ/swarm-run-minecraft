@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const cfg = require('./config')
 const { canSeePoint } = require('./perception')
 
@@ -214,7 +215,7 @@ async function noticePlayers (ap) {
 
   for (const p of seen) {
     if (p.dist > NEAR || known.has(p.name)) continue
-    known.set(p.name, { at: Date.now(), last: p.dist })
+    known.set(p.name, { at: gameClock.now(), last: p.dist })
     // Everything a person notices in the same glance, so that the brain's first
     // reaction does not have to start with another tool call.
     session.bus.emit('player_near', {
@@ -243,7 +244,7 @@ async function noticePlayers (ap) {
     session.bus.emit('player_gone', {
       name,
       dist: now ? now.dist : null,
-      seconds: Math.round((Date.now() - rec.at) / 1000),
+      seconds: Math.round((gameClock.now() - rec.at) / 1000),
       why: now ? 'отошёл' : 'пропал из виду'
     })
   }
@@ -274,7 +275,7 @@ function players (session, { radius = SCAN, fair } = {}) {
     const hp = ent ? gestures.hpOf(ent) : null
     if (hp !== null) p.hp = hp
     const r = people && people.get(p.name)
-    if (r && r.pointing && Date.now() - r.pointing.at < 60000) p.pointed = r.pointing
+    if (r && r.pointing && gameClock.now() - r.pointing.at < 60000) p.pointed = r.pointing
   }
   const words = (p) => {
     let line = describe(p)

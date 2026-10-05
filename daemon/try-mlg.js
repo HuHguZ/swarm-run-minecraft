@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Ведро воды при падении (edges.installFallGuard): бот с ведром в рюкзаке
 // (не в хотбаре) телепортируется на H блоков над каменной площадкой и падает.
 // Должен выжить без урона и забрать воду обратно. Второй заход — посреди боя
@@ -6,12 +7,15 @@
 //   ND_WS=ws://127.0.0.1:8781 ND_WS2=ws://127.0.0.1:8782 node try-mlg.js [раз на высоту]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -25,7 +29,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.ND_WS || 'ws://127.0.0.1:8781')
 const B = client(process.env.ND_WS2 || 'ws://127.0.0.1:8782')
 const cmd = async (text) => { await A.call('say', { text }); await sleep(250) }
@@ -53,16 +57,16 @@ async function trial (h, inFight) {
   const s0 = await state(A)
   const hp0 = s0 ? s0.health : null
   await cmd(`/tp NeuroDown ${X + 0.5} ${FLOOR + 1 + h} ${Z + 0.5}`)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let landed = null
   let low = 99
-  while (Date.now() - t0 < 9000) {
+  while (gameClock.now() - t0 < 9000) {
     const s = await state(A)
     if (s && s.pos) {
       low = Math.min(low, s.pos.y)
-      if (!landed && s.pos.y < FLOOR + 2.5) landed = { at: Date.now() - t0, hp: s.health }
+      if (!landed && s.pos.y < FLOOR + 2.5) landed = { at: gameClock.now() - t0, hp: s.health }
     }
-    if (landed && Date.now() - t0 > landed.at + 2500) break
+    if (landed && gameClock.now() - t0 > landed.at + 2500) break
     await sleep(150)
   }
   const s1 = await state(A)

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Прыжок с ведром как ход (edges.mlgDrop + сторож падения, 30.09.2026).
 // Тело стоит на каменном столбе 3×3 высотой H над ровным полом в небе, цель — на полу
 // в 9 блоках. Лестниц нет; кирка и булыжник в рюкзаке, так что без ведра путь
@@ -8,7 +9,8 @@
 // Хотбар забит — ведро в рюкзаке: его в хотбар должен переложить сам демон.
 //   node farm/farm.js run try-lab-mlg-drop.js --slots 1-4 --tag mlg-drop HS=8,12,16,20 MODES=mlg,none
 const fs = require('fs')
-const { connect, createKit, sleep } = require('./scene-kit')
+const path = require('path')
+const { connect, createKit, createServerLog, sleep } = require('./scene-kit')
 
 async function main () {
   const slot = Number(process.env.FARM_SLOT)
@@ -86,19 +88,29 @@ async function trial (conn, kit, { slot, H, mode, k, surf = 'stone' }) {
     const s0 = (await conn.call('status')).state
     r.start = { pos: s0.pos, hp: s0.health }
     if (Math.round(s0.pos.y) !== F + H) throw new Error(`не на столбе: ${JSON.stringify(s0.pos)}`)
+    // nd_mlg сейчас пишется Session в журнал демона, а не в RPC events.
+    // Отметка по байтам исключает спасение прошлого захода и не смешивает часы.
+    const daemonLog = createServerLog(process.env.ND_DAEMON_LOG || path.join(__dirname, '..', 'farm', `daemon-${slot}.out.log`))
+    const mlgFrom = daemonLog.mark()
     // Трек тела во время пути: минимум хп, самый быстрый спуск за 1 с.
     const track = []
     let going = true
     const poll = (async () => {
       while (going) {
         const s = await conn.call('status').catch(() => null)
-        if (s && s.state) track.push({ t: Date.now(), y: s.state.pos.y, hp: s.state.health })
+        if (s && s.state) track.push({ t: gameClock.now(), y: s.state.pos.y, hp: s.state.health })
         await sleep(120)
       }
     })()
-    const t0 = Date.now()
+    const t0 = gameClock.now()
+    const wall0 = gameClock.wall.monotonic()
     const g = await conn.call('goto', { x: cx + 9, y: F, z: cz, range: 1, timeoutSeconds: 90 })
-    r.ms = Date.now() - t0
+    r.wallSecs = +((gameClock.wall.monotonic() - wall0) / 1000).toFixed(3)
+    r.rate = s0.clock?.tickRate ?? null
+    r.gameTicks = s0.clock && g.state?.clock ? g.state.clock.ticks - s0.clock.ticks : null
+    r.serverTicks = s0.clock?.serverTicks != null && g.state?.clock?.serverTicks != null ? g.state.clock.serverTicks - s0.clock.serverTicks : null
+    r.lagTicks = g.state?.clock?.lagTicks ?? null
+    r.ms = gameClock.now() - t0
     await sleep(2500) // сторож забирает воду после посадки
     going = false
     await poll
@@ -114,12 +126,20 @@ async function trial (conn, kit, { slot, H, mode, k, surf = 'stone' }) {
     r.waterBack = (s1.inventory.water_bucket || 0) > 0
     r.bucketEmpty = (s1.inventory.bucket || 0) > 0
     r.dug = Math.max(0, 32 - (s1.inventory.cobblestone || 0)) // сколько булыжника ушло в столбы/мосты
+    const mlg = []
+    for (const l of daemonLog.linesFrom(mlgFrom).lines) {
+      const match = /\[mlg\]\s+(\{.*\})\s*$/.exec(l.text)
+      if (match) { try { const e = JSON.parse(match[1]); if (e.what) mlg.push(e) } catch {} }
+    }
+    r.mlgFired = mlg.some(e => e.what === 'fired')
+    r.mlgEvents = mlg
+    r.died = g.by?.type === 'death' || conn.heard.some(e => e.type === 'death' && (e.gameAt ?? e.at ?? 0) >= t0)
     const arrived = Math.abs(s1.pos.x - (cx + 9.5)) <= 2 && Math.abs(s1.pos.z - (cz + 0.5)) <= 2 && Math.abs(s1.pos.y - F) <= 1
     r.arrived = arrived
-    r.ok = arrived && s1.health > 0 && (mode !== 'mlg' || r.waterBack)
+    r.ok = arrived && s1.health > 0 && !r.died && (mode !== 'mlg' || (r.mlgFired && r.waterBack))
   } catch (e) { r.error = e.message }
   fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(r) + '\n')
-  console.log(JSON.stringify({ slot: r.slot, H: r.H, mode: r.mode, surf: r.surf, ok: r.ok, ms: r.ms, jump: r.jump, minHp: r.minHp, hp: r.end && r.end.hp, water: r.waterBack, goto: r.goto && r.goto.status, error: r.error }))
+  console.log(JSON.stringify({ slot: r.slot, H: r.H, mode: r.mode, surf: r.surf, ok: r.ok, rate: r.rate, gameTicks: r.gameTicks, ms: r.ms, wallSecs: r.wallSecs, jump: r.jump, minHp: r.minHp, hp: r.end && r.end.hp, died: r.died, water: r.waterBack, mlg: r.mlgFired, goto: r.goto && r.goto.status, error: r.error }))
   return r
 }
 

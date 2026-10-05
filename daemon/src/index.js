@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // 03.10: require('./src/index') ради проверки загрузки поднимал демон на 8765 (порт арены) → 25565 — дважды за день.
 // Демон запускается только как точка входа (node src/index.js); проверка загрузки — node --check.
 if (require.main !== module) throw new Error('index.js — точка входа демона, не модуль; проверка загрузки — node --check src/index.js')
@@ -173,10 +174,10 @@ const methods = {
     bot.on('messagestr', on)
     try {
       bot.chat(String((p && p.command) || '').slice(0, 250))
-      const t0 = Date.now()
-      while (Date.now() - t0 < Math.min(20000, (p && p.ms) || 3000)) {
+      const t0 = gameClock.wall.now()
+      while (gameClock.wall.now() - t0 < Math.min(20000, (p && p.ms) || 3000)) {
         if (re && lines.some(l => re.test(l))) break
-        await new Promise(resolve => setTimeout(resolve, 100))
+        await gameClock.wall.sleep(100)
       }
     } finally { bot.removeListener('messagestr', on) }
     return { lines }
@@ -290,17 +291,17 @@ const methods = {
       await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true)
       bot._client.write('block_dig', { status: 0, location: pos, face: 1, sequence: 0 })
       bot.swingArm()
-      await new Promise(r => setTimeout(r, p.ms))
+      await new Promise(r => gameClock.setTimeout(r, p.ms))
       bot._client.write('block_dig', { status: 2, location: pos, face: 1, sequence: 0 })
       out.digMs = p.ms
     } else if (p.dig) {
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       try { await bot.dig(block, true) } catch (e) { out.digError = e.message }
-      out.digMs = Date.now() - t0
+      out.digMs = gameClock.now() - t0
       out.heldAfter = bot.heldItem ? bot.heldItem.name : null
     }
     if (p.dig || p.ms) {
-      await new Promise(r => setTimeout(r, p.settleMs || 800))
+      await new Promise(r => gameClock.setTimeout(r, p.settleMs || 800))
       const now = bot.blockAt(pos)
       out.after = now ? now.name : null
     }
@@ -340,7 +341,7 @@ const methods = {
     const bot = session.bot
     if (!bot) return { status: 'failed', error: 'нет бота' }
     const t0 = session.ticks || 0
-    await new Promise(r => setTimeout(r, 2000))
+    await new Promise(r => gameClock.setTimeout(r, 2000))
     const ev = (n) => bot.listenerCount(n)
     return {
       status: 'done',
@@ -365,7 +366,7 @@ const methods = {
     const post = (m, a) => new Promise((resolve, reject) => s.post(m, a || {}, (e, r) => e ? reject(e) : resolve(r)))
     await post('Profiler.enable')
     await post('Profiler.start')
-    await new Promise(r => setTimeout(r, Math.min(60, (p && p.seconds) || 10) * 1000))
+    await new Promise(r => gameClock.setTimeout(r, Math.min(60, (p && p.seconds) || 10) * 1000))
     const { profile } = await post('Profiler.stop')
     s.disconnect()
     const self = new Map()
@@ -459,6 +460,31 @@ let clients = 0
 wss.on('connection', (ws) => {
   clients++
   session.brainAttached = clients > 0
+  const sendClock = (clock = gameClock.snapshot()) => {
+    if (clock && ws.readyState === 1 && (ws.bufferedAmount || 0) < 65536) ws.send(JSON.stringify({ type: 'clock', clock }))
+  }
+  let sourceClock
+  // Followers have no independent prediction loop. Publish every five game
+  // ticks so short game sleeps don't wait 250 wall ms at an accelerated rate.
+  const onTick = ticks => { if (sourceClock.frozen || ticks % 5 === 0) sendClock() }
+  const bindClock = clock => {
+    sourceClock?.off('tick', onTick)
+    sourceClock?.off('state', sendClock)
+    sourceClock = clock
+    sourceClock?.on('tick', onTick)
+    sourceClock?.on('state', sendClock)
+    if (sourceClock) sendClock(sourceClock.snapshot())
+  }
+  gameClock.changes.on('bound', bindClock)
+  bindClock(session.bot?.ndClock)
+  // Wall heartbeat is deliberate: freeze must be observable while there are
+  // zero gameplay ticks, and campaigns must see stalls and rate changes.
+  const clockTimer = gameClock.wall.setInterval(sendClock, 250)
+  ws.on('close', () => {
+    gameClock.wall.clearInterval(clockTimer)
+    gameClock.changes.off('bound', bindClock)
+    bindClock(null)
+  })
   ws.on('close', () => { clients--; session.brainAttached = clients > 0 })
   log('brain attached')
   ws.on('message', async (raw) => {
@@ -472,6 +498,7 @@ wss.on('connection', (ws) => {
     }
     try {
       const result = await fn(params || {})
+      if (result && typeof result === 'object' && !result.state) result.clock = gameClock.snapshot()
       ws.send(JSON.stringify({ id, ok: true, result }))
     } catch (err) {
       ws.send(JSON.stringify({ id, ok: false, error: String((err && err.message) || err) }))

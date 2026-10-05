@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Общие куски сцен потока nether-end (try-lab-ne-*.js), 03.10.
 //   deaths(LOG, PLAYER, from) — смерти тела в журнале сервера с отметки from (байты). В полночь Paper перекладывает
 //     logs/latest.log (файл короче отметки) — тогда читаем новый файл с начала, найденное раньше не теряем
@@ -6,7 +7,7 @@
 //   portalTp(kit, status, inner) — запасной вход на подготовке: тело в клетку портала командой (ферма). Портал горит,
 //     а «к порталу не подойти» (neF-A0f22-1 03.10: рама на y 113, у нижнего ряда нет клетки, где встать).
 const fs = require('fs')
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 const DEATH_RE = /was |died|drowned|burned|tried to swim|fell|blew up|hit the ground|went up|withered|suffocated|starved|froze|walked into|experienced|discovered the floor|didn't want to live|squashed|skewered|stung|obliterated|impaled|poked|killed/
 function deaths (LOG, PLAYER, from) {

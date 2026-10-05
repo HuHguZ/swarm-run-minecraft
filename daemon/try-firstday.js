@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Walks the whole first-day chain: log -> planks -> table -> sticks -> pickaxe
 // -> stone -> stone pickaxe. Each step prints what actually happened.
 const WebSocket = require('ws')
@@ -13,7 +14,7 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)

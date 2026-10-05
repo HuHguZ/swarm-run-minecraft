@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Поход в настоящий Ад целиком (NETHER.md срез 7) — той же цепочкой вызовов,
 // какой пошёл бы автомат (director.js), без арены: свой портал в верхнем мире
 // (try-travel.js X=800) → portal enter → fortress без mode (обход регионов
@@ -42,13 +43,13 @@ function check (what, ok, saw) {
 }
 const header = async () => ((await call('status')) || {}).state || {}
 async function step (label, method, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call(method, params)
   const d = r.detail || {}
   if (r.by && r.by.type === 'death') deaths++
   deaths += (r.events || []).filter(e => e.type === 'death').length
   const h = r.state || {}
-  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((Date.now() - t0) / 1000)}с, ` +
+  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((gameClock.now() - t0) / 1000)}с, ` +
     `${h.dimension} ${h.pos ? `${h.pos.x},${h.pos.y},${h.pos.z}` : ''} хп ${h.health} — ${d.stopped || ''} ${d.note || ''}`.slice(0, 600))
   return { r, d }
 }

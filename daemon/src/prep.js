@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Подготовка к бою из сырья: брёвна, слитки, алмазы → доски, палки, верстак,
 // меч, броня, щит, кирка. Рецепты — из самой игры (mineflayer recipesFor по
 // minecraft-data), здесь только порядок и выбор материала: из чего хватит на
@@ -125,15 +126,15 @@ const PLANS = {
 async function prepare (session, ctl, { strategy = 'full', shouldStop = null } = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const made = []
   const stop = () => ctl.aborted || (shouldStop && shouldStop())
-  const mark = (what) => made.push({ what, s: Math.round((Date.now() - t0) / 100) / 10 })
+  const mark = (what) => made.push({ what, s: Math.round((gameClock.now() - t0) / 100) / 10 })
 
   await closeWindow(bot)
   const planks = await logsToPlanks(bot, mcData)
   if (planks) mark(`доски ×${planks}`)
-  if (stop()) return { strategy, made, stopped: true, seconds: (Date.now() - t0) / 1000 }
+  if (stop()) return { strategy, made, stopped: true, seconds: (gameClock.now() - t0) / 1000 }
   await ensureSticks(bot, mcData, 6)
   const table = await placeTable(bot, mcData)
   if (table) mark('верстак')
@@ -178,7 +179,7 @@ async function prepare (session, ctl, { strategy = 'full', shouldStop = null } =
     strategy,
     made,
     stopped: stop() || undefined,
-    seconds: Math.round((Date.now() - t0) / 100) / 10,
+    seconds: Math.round((gameClock.now() - t0) / 100) / 10,
     planksLeft: planksCount(bot) || undefined
   }
 }

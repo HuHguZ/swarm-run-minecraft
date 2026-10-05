@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Короткая проверка общей защиты. Только выделенные миры фермы. Команды
 // оператора создают сцену; после fixtureReady измеряется обычный survival.
 const fs = require('fs')
@@ -10,7 +11,7 @@ async function main () {
   const conn = connect(process.env.ND_WS)
   const result = { labFixture: true, slot, ok: false, method: slot <= 5 ? 'blaze' : 'fight', noFood: slot === 2 || slot === 7,
     healthyEntry: process.env.HEALTHY_ENTRY === '1' }
-  const timer = setTimeout(() => conn.ws.terminate(), 150000)
+  const timer = gameClock.wall.setTimeout(() => conn.ws.terminate(), 150000)
   let poll = null
   try {
     await conn.ready
@@ -63,8 +64,8 @@ async function main () {
     if (!result.noFood && !result.healthyEntry) {
       await cmd('/damage @s 12 minecraft:magic')
       // Командный ответ приходит раньше клиентского пакета здоровья.
-      const until = Date.now() + 1500
-      while (Date.now() < until && (await conn.call('status')).state.health > 12) await sleep(50)
+      const until = gameClock.now() + 1500
+      while (gameClock.now() < until && (await conn.call('status')).state.health > 12) await sleep(50)
     }
     await cmd('/execute as @e[type=blaze,tag=nd_safety] run data merge entity @s {NoAI:0b}')
     result.before = (await conn.call('status')).state
@@ -76,7 +77,7 @@ async function main () {
     result.hpMax = result.before.health
     result.maxRan = 0
     let polling = false
-    poll = setInterval(async () => {
+    poll = gameClock.setInterval(async () => {
       if (polling) return
       polling = true
       try {
@@ -87,12 +88,12 @@ async function main () {
           Math.hypot(s.pos.x - result.before.pos.x, s.pos.z - result.before.pos.z))
       } catch {} finally { polling = false }
     }, 250)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     result.battle = await conn.call(result.method, result.method === 'blaze'
       ? { rods: 1, timeoutSeconds: 30, box: false, restAtHealth: 12 }
       : { target: 'blaze', purpose: 'resource', resourceGoal: { item: 'blaze_rod', count: 1 }, timeoutSeconds: 30 })
-    result.elapsedMs = Date.now() - t0
-    clearInterval(poll); poll = null
+    result.elapsedMs = gameClock.now() - t0
+    gameClock.clearInterval(poll); poll = null
     result.end = (await conn.call('status')).state
     result.minHp = Math.min(result.minHp, result.end.health)
     result.events = conn.heard.filter(e => /death|damage|low_health|flee/.test(e.type))
@@ -111,9 +112,9 @@ async function main () {
     // Возврат к спавнеру после лечения не отменяет предыдущего отхода.
     // Дистанция в конце не доказывает отрыв: проверяем весь путь/состояние.
   } catch (e) { result.error = e.message } finally {
-    if (poll) clearInterval(poll)
+    if (poll) gameClock.clearInterval(poll)
     try { await conn.call('stop'); await conn.call('disconnect') } catch {}
-    clearTimeout(timer)
+    gameClock.wall.clearTimeout(timer)
     conn.close()
     fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(result) + '\n')
     console.log(JSON.stringify({ slot, method: result.method, noFood: result.noFood, ok: result.ok,

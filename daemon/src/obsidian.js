@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const tools = require('./tools')
@@ -32,8 +33,8 @@ const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
 function sleep (ms, ctl) {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -99,8 +100,8 @@ async function walk (bot, ctl, goal, ms = 15000) {
 
 // Предмет в руке сменился: ведро наполнилось или опустело.
 async function waitHeld (bot, name, ms = 1500) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < ms) {
     if (countOf(bot, name) > 0) return true
     await sleep(50)
   }
@@ -228,8 +229,8 @@ async function pourOnto (bot, ground) {
   try { await bot.lookAt(ground.offset(0.5, 1, 0.5), true) } catch {}
   await sleep(80)
   try { bot.activateItem() } catch {}
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1200) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1200) {
     if (countOf(bot, 'water_bucket') === 0) return true
     await sleep(50)
   }
@@ -303,14 +304,14 @@ async function mineOne (session, ctl, block) {
   try { await bot.equip(pick, 'hand') } catch {}
   // В воде и в прыжке копается в 5 раз медленнее (digTime: /5 за каждое) —
   // после заливки вода сходит секунду-другую: подождать, а не ломать 47 с.
-  const t1 = Date.now()
-  while (Date.now() - t1 < 4000 && !ctl.aborted && (bot.entity.isInWater || !bot.entity.onGround)) await sleep(100)
+  const t1 = gameClock.now()
+  while (gameClock.now() - t1 < 4000 && !ctl.aborted && (bot.entity.isInWater || !bot.entity.onGround)) await sleep(100)
   const before = countOf(bot, 'obsidian')
   const r = await tools.breakFast(bot, p, { maxMs: 20000 })
   if (!r.ok) return { ok: false, why: r.why === 'слишком долго' ? `ломать ${Math.round(r.ms / 1000)} с — стою в воде или не на земле` : 'не сломал', retry: true }
   // Дроп падает в ямку на месте блока: подойти и подобрать.
-  const t0 = Date.now()
-  while (Date.now() - t0 < 4000 && !ctl.aborted && countOf(bot, 'obsidian') <= before) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 4000 && !ctl.aborted && countOf(bot, 'obsidian') <= before) {
     const drop = bot.nearestEntity(e => e && e.name === 'item' && e.position && e.position.distanceTo(p.offset(0.5, 0.5, 0.5)) < 2.5)
     if (drop && drop.position.distanceTo(bot.entity.position) > 1) {
       try { bot.pathfinder.setGoal(new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 0.5)) } catch {}
@@ -325,7 +326,7 @@ async function mineOne (session, ctl, block) {
 // захода), потом залить водой ближнюю лаву и ломать то, что застыло.
 async function obsidian (session, ctl, { count = 10, radius = 20, timeoutSeconds = 300 } = {}) {
   const bot = session.bot
-  const deadline = Date.now() + Math.min(600, timeoutSeconds) * 1000
+  const deadline = gameClock.now() + Math.min(600, timeoutSeconds) * 1000
   const have0 = countOf(bot, 'obsidian')
   const want = have0 + count
   const report = { want: count, got: 0, poured: 0, skipped: {} }
@@ -337,7 +338,7 @@ async function obsidian (session, ctl, { count = 10, radius = 20, timeoutSeconds
   const tried = new Set()
   const fails = new Map()
   const pouredAt = new Set()
-  while (!ctl.aborted && Date.now() < deadline && countOf(bot, 'obsidian') < want) {
+  while (!ctl.aborted && gameClock.now() < deadline && countOf(bot, 'obsidian') < want) {
     // 1. Готовый видимый обсидиан, который можно ломать.
     const obsId = bot.registry.blocksByName.obsidian.id
     const ready = bot.findBlocks({ matching: obsId, maxDistance: radius, count: 200 })
@@ -402,7 +403,7 @@ async function obsidian (session, ctl, { count = 10, radius = 20, timeoutSeconds
   }
   report.got = countOf(bot, 'obsidian') - have0
   report.have = countOf(bot, 'obsidian')
-  if (!report.stopped && report.have < want) report.stopped = Date.now() >= deadline ? 'время вышло' : (ctl.aborted ? 'прервано' : 'не набрал')
+  if (!report.stopped && report.have < want) report.stopped = gameClock.now() >= deadline ? 'время вышло' : (ctl.aborted ? 'прервано' : 'не набрал')
   if (!Object.keys(report.skipped).length) delete report.skipped
   return report
 }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Зачарование: стол, книжные полки, лазурит, уровни опыта — и главное, ЧТО
 // зачаровывать и ЗАЧЕМ. Все числа — из самой игры (paper-1.21.11, байткод и
 // data/minecraft/enchantment/*.json), см. SPEEDRUN.md «Зачарование».
@@ -313,14 +314,14 @@ async function takeOut (bot, win, slot) {
 // Свойства окна (craft_progress_bar = container_set_data) с отметкой времени.
 function watchProps (bot, win) {
   const st = { props: {}, at: 0 }
-  const on = p => { if (p.windowId !== win.id) return; st.props[p.property] = p.value; st.at = Date.now() }
+  const on = p => { if (p.windowId !== win.id) return; st.props[p.property] = p.value; st.at = gameClock.now() }
   bot._client.on('craft_progress_bar', on)
   st.stop = () => bot._client.removeListener('craft_progress_bar', on)
   return st
 }
 async function freshProps (st, since, ms = 3000) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms && st.at <= since) await sleep(50)
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < ms && st.at <= since) await sleep(50)
   await sleep(250)
   return st.at > since
 }
@@ -652,7 +653,7 @@ async function enchantOne (session, ctl, table, target, { rerolls = 2, patient =
     const putTarget = async () => {
       const it = win.items().find(i => i.name === name && !enchantsOf(bot, i).length)
       if (!it) throw new Error(`${name} нет в рюкзаке`)
-      const since = Date.now()
+      const since = gameClock.now()
       await putOne(bot, win, it, 0)
       await freshProps(st, since)
     }
@@ -697,13 +698,13 @@ async function enchantOne (session, ctl, table, target, { rerolls = 2, patient =
       if ((best.junk || weakTop) && rolled < rerolls && spareBook && level >= 2 && lapis >= 2) {
         const tSlot = 0
         await takeOut(bot, win, tSlot)
-        const since = Date.now()
+        const since = gameClock.now()
         await putOne(bot, win, spareBook, 0)
         await freshProps(st, since)
         const before = win.slots[0]
         bot._client.write('enchant_item', { windowId: win.id, enchantment: 0 })
-        const t0 = Date.now()
-        while (Date.now() - t0 < 3000 && win.slots[0] === before) await sleep(50)
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 3000 && win.slots[0] === before) await sleep(50)
         await takeOut(bot, win, 0)
         rolled++
         lines.push(`▸ переброс: на ${name} стол давал ${best.junk ? best.clue + " (мусор)" : "наверху " + top.clue + " (слабо)"} — зачаровал книгу за 1 ур., смотрю заново`)
@@ -737,10 +738,10 @@ async function enchantOne (session, ctl, table, target, { rerolls = 2, patient =
     }
 
     const levelBefore = levelOf(bot)
-    const since = Date.now()
+    const since = gameClock.now()
     bot._client.write('enchant_item', { windowId: win.id, enchantment: pick.slot })
     let got = []
-    while (Date.now() - since < 4000) {
+    while (gameClock.now() - since < 4000) {
       got = enchantsOf(bot, win.slots[0])
       if (got.length) break
       await sleep(80)
@@ -873,10 +874,10 @@ async function anvilRun (session, ctl, p, lines) {
     const { it, bk } = got
     if (!it || !bk) throw new Error('вещь или книга пропали из рюкзака')
     await putOne(bot, win, it, 0)
-    const since = Date.now()
+    const since = gameClock.now()
     await putOne(bot, win, bk, 1)
-    const t0 = Date.now()
-    while (Date.now() - t0 < 3000 && !win.slots[2]) await sleep(50)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 3000 && !win.slots[2]) await sleep(50)
     await freshProps(st, since, 1500)
     const cost = st.props[0] ?? best.est.cost
     if (!win.slots[2]) throw new Error('наковальня не собрала результат')

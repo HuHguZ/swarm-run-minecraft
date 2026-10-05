@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Копьё (новое в 1.21.11; PVP-RESEARCH б.9, в.8; просьба 2026-09-26: «все
 // приёмы про-игроков, по максимуму того, что даёт версия»).
 //
@@ -144,7 +145,7 @@ function readyIn (bot, name) {
   const M = bot._ndMelee
   const msPerTick = (M && M.msPerTick) || TICK_MS
   const from = Math.max(S.lastJab, (M && M.resetAt) || 0)
-  return Math.max(0, from + chargeTicks(name) * msPerTick + 60 - Date.now())
+  return Math.max(0, from + chargeTicks(name) * msPerTick + 60 - gameClock.now())
 }
 
 // Укол: взгляд на тике физики (уйдёт в пакете позиции этого тика), после пакета —
@@ -158,7 +159,7 @@ function jab (bot, e) {
     const onT = () => {
       if (done) return
       done = true
-      clearTimeout(timer)
+      gameClock.clearTimeout(timer)
       bot.removeListener('physicsTick', onT)
       const jr = jabReach(bot, e)
       if (!jr.ok) return resolve({ ok: false, why: jr.why })
@@ -168,13 +169,13 @@ function jab (bot, e) {
           bot._client.write('block_dig', { status: 7, location: { x: 0, y: 0, z: 0 }, face: 0, sequence: 0 })
           bot.swingArm('right')
         } catch {}
-        S.lastJab = Date.now()
+        S.lastJab = gameClock.now()
         S.jabs++
         resolve({ ok: true, dist: Math.round(jr.t * 10) / 10 })
       })
     }
     bot.on('physicsTick', onT)
-    const timer = setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ ok: false, why: 'физика стоит' }) } }, 400)
+    const timer = gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ ok: false, why: 'физика стоит' }) } }, 400)
   })
 }
 
@@ -197,17 +198,17 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
   let slow = 0
   const onHurt = (victim, src) => { if (victim === e && src && bot.entity && src.id === bot.entity.id) { hit = true; if (onHit) { try { onHit() } catch {} } } }
   bot.on('entityHurt', onHurt)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const delayMs = spec.delay * 1000
   bot.activateItem()
   try {
-    while (Date.now() - t0 < maxMs && !(ctl && ctl.aborted) && e.isValid !== false) {
+    while (gameClock.now() - t0 < maxMs && !(ctl && ctl.aborted) && e.isValid !== false) {
       const a = aimAt(bot, e)
       await bot.look(a.yaw, Math.abs(a.pitch) > 0.2 ? a.pitch : 0, true).catch(() => {})
       const f = safe ? safe('forward') : true
       bot.setControlState('forward', f)
       bot.setControlState('sprint', f && (bot.food ?? 20) > 6)
-      const el = Date.now() - t0
+      const el = gameClock.now() - t0
       if (hit && el > delayMs) break
       if (!hit && el > delayMs + 100 && bot.entity) {
         const eye = bot.entity.position.offset(0, EYE, 0)
@@ -228,7 +229,7 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
     bot.setControlState('sprint', false)
     bot.removeListener('entityHurt', onHurt)
   }
-  return { ok: true, hit, ms: Date.now() - t0, why }
+  return { ok: true, hit, ms: gameClock.now() - t0, why }
 }
 
 // Когда начинать разгон (2026-09-26): рамка его должна войти в луч 2.0–4.5

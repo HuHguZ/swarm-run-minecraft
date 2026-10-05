@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Края, ямы и пустота: не упасть самому, выбить туда другого, пережить
 // падение ведром воды. Арена в небе (2026-09-25): дыра в полу, бот «не
 // увидел» её и разбился о землю в полусотне блоков внизу.
@@ -20,7 +21,7 @@
 // extracted_minecraft_data, ветка client1.21.11).
 
 const Vec3 = require('vec3')
-const { PlayerState } = require('prismarine-physics')
+const { PlayerState } = require('./tick-plugins').getPhysics()
 const clutch = require('./clutch')
 
 // LivingEntity.hurtServer: любой урон с источником — knockback(0.4) от него
@@ -53,8 +54,24 @@ const CORNERS = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
 const RING8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
 
 function worldOf (bot) {
-  if (!bot._ndEdgeWorld) bot._ndEdgeWorld = { getBlock: (p) => bot.blockAt(p, false) }
-  return bot._ndEdgeWorld
+  // Один синхронный прогноз многократно читает те же клетки. Храним полный
+  // Block (shapes/properties тоже), только до конца синхронного run/pushPlan:
+  // следующий вызов заново увидит обновления мира и незагруженные колонки.
+  const xs = new Map()
+  const absent = Symbol('undefined Block')
+  return { getBlock (p) {
+    const x = Math.floor(p.x); const z = Math.floor(p.z); const y = Math.floor(p.y)
+    let zs = xs.get(x)
+    if (zs === undefined) xs.set(x, (zs = new Map()))
+    let ys = zs.get(z)
+    if (ys === undefined) zs.set(z, (ys = new Map()))
+    let block = ys.get(y)
+    if (block === undefined) {
+      block = bot.blockAt(p, false)
+      ys.set(y, block === undefined ? absent : block)
+    }
+    return block === absent ? undefined : block
+  } }
 }
 
 // Настоящий simulatePlayer — мимо обёртки рефлекса (прогнозы не должны
@@ -154,9 +171,8 @@ function cloneState (base, control) {
 // пяти блоках — рефлекс рулил в каждом прыжке и отбросе рядом с дырой (арена
 // «арсенал»: «в полёте рулю от ямы» ×515 за 10 раундов у одного бота). После
 // посадки ход решает рефлекс на земле, тик за тиком.
-function run (bot, base, control, { hold = 2, max = 18, groundY, cache, safe = SAFE_FALL, land = false }) {
+function run (bot, base, control, { hold = 2, max = 18, groundY, cache, safe = SAFE_FALL, land = false, world = worldOf(bot) }) {
   const sim = simOf(bot)
-  const world = worldOf(bot)
   const st = cloneState(base, control)
   let held = true
   for (let t = 0; t < max; t++) {
@@ -206,7 +222,7 @@ function guard (bot, { margin = () => 0 } = {}) {
   const seen = new WeakMap()
   const isReal = (c) => {
     if (realControl) return c === realControl
-    const now = Date.now()
+    const now = gameClock.now()
     const s = seen.get(c)
     if (!s) { seen.set(c, { last: now, n: 1 }); return false }
     if (now - s.last > 30) { s.n++; s.last = now }
@@ -220,7 +236,7 @@ function guard (bot, { margin = () => 0 } = {}) {
     if (state.isInWater || state.isInLava) return
     // Уже летим вниз с края — рулить поздно, дальше дело ведра (fallGuard).
     if (!state.onGround && state.pos.y < lastGroundY - 2) return
-    const safe = Date.now() < allowUntil ? allowSafe : SAFE_FALL
+    const safe = gameClock.now() < allowUntil ? allowSafe : SAFE_FALL
     const groundY = state.onGround ? state.pos.y : lastGroundY
     const cache = new Map()
     // Дешёвая проверка: опасности в 5 блоках нет — нечего и считать.
@@ -316,7 +332,7 @@ function guard (bot, { margin = () => 0 } = {}) {
     // Клатч блоком (clutch.js) тоже видит намеренный спуск: bot._ndClutchAllowUntil.
     allow (depth, ms = 1500) {
       allowSafe = Math.max(SAFE_FALL, depth)
-      allowUntil = Date.now() + ms
+      allowUntil = gameClock.now() + ms
       bot._ndClutchAllowUntil = allowUntil
     },
     stop () {
@@ -364,7 +380,7 @@ function hitVelocity ({ vel, pos, onGround }, from, lookYaw, { sprint = false, r
 
 // Полёт тела после удара той же физикой. Жертва смотрит на бьющего и держит
 // «вперёд» (counter) — так гасят отбрасывание в воздухе; без counter — стоит.
-function knockRun (bot, base, pos, vel, onGround, faceYaw, counter, cache) {
+function knockRun (bot, base, pos, vel, onGround, faceYaw, counter, cache, world) {
   const st = cloneState(base, counter ? { ...IDLE, forward: true, sprint: true } : IDLE)
   st.pos = pos.clone()
   st.vel = vel.clone()
@@ -375,7 +391,7 @@ function knockRun (bot, base, pos, vel, onGround, faceYaw, counter, cache) {
   st.yaw = faceYaw
   const groundY = onGround ? pos.y : pos.y - Math.max(0, support(bot, pos, cache).drop)
   // Полёт после удара ~10 тиков, потом скольжение: 28 тиков с запасом.
-  return run(bot, st, st.control, { hold: 28, max: 28, groundY, cache })
+  return run(bot, st, st.control, { hold: 28, max: 28, groundY, cache, world })
 }
 
 function yawFrom (a, b) { return Math.atan2(-(b.x - a.x), -(b.z - a.z)) }
@@ -426,6 +442,7 @@ function pushPlan (bot, foe, { vel = null, reach = 2.7, kb = null } = {}) {
   const cache = new Map()
   const fp = foe.position
   if (!hazardAround(bot, fp, 5, cache)) return null
+  const world = worldOf(bot)
   const base = stateOf(bot)
   const resist = resistOf(bot, foe)
   const fv = vel ? new Vec3(vel.x, 0, vel.z) : new Vec3(0, 0, 0)
@@ -438,7 +455,7 @@ function pushPlan (bot, foe, { vel = null, reach = 2.7, kb = null } = {}) {
   const outcome = (from, sprint, counter) => {
     const look = yawFrom(from, fp)
     const v = hitVelocity({ vel: fv, pos: fp, onGround }, from, look, { sprint, resist, kb })
-    return knockRun(bot, base, fp, v, onGround, yawFrom(fp, from), counter, cache).fall
+    return knockRun(bot, base, fp, v, onGround, yawFrom(fp, from), counter, cache, world).fall
   }
   let now = null
   if (outcome(me, false, true)) now = 'hit'
@@ -501,8 +518,8 @@ function lockHand (bot) {
   if (bot._ndHandLock) return bot._ndHandLock
   const L = { until: 0, own: false, blocked: { slot: 0, equip: 0, use: 0 } }
   bot._ndHandLock = L
-  L.on = () => !L.own && Date.now() < L.until
-  L.hold = (ms) => { L.until = Math.max(L.until, Date.now() + ms) }
+  L.on = () => !L.own && gameClock.now() < L.until
+  L.hold = (ms) => { L.until = Math.max(L.until, gameClock.now() + ms) }
   L.as = (fn) => { const was = L.own; L.own = true; try { return fn() } finally { L.own = was } }
   // Слот, который ставит сервер (held_item_slot), — всегда: иначе рассинхрон.
   let srv = false
@@ -512,7 +529,7 @@ function lockHand (bot) {
     if (L.on() && !srv && slot !== bot.quickBarSlot) { L.blocked.slot++; return }
     return origSlot.apply(this, arguments)
   }
-  const wait = async () => { const t0 = Date.now(); while (L.on() && Date.now() - t0 < 2500) await new Promise(r => setTimeout(r, 25)) }
+  const wait = async () => { const t0 = gameClock.now(); while (L.on() && gameClock.now() - t0 < 2500) await new Promise(r => gameClock.setTimeout(r, 25)) }
   const origEquip = bot.equip
   bot.equip = async function (item, dest) {
     if ((dest == null || dest === 'hand') && L.on()) { L.blocked.equip++; await wait() }
@@ -578,13 +595,13 @@ function installFallGuard (session, { minFall = 6 } = {}) {
   const toHotbar = async () => {
     // Перекладка не дольше 3 с: зависший флаг навсегда оставил бы ведро в
     // рюкзаке, а прыжки — выключенными.
-    if (st.moving && Date.now() - st.moving < 3000) return
+    if (st.moving && gameClock.now() - st.moving < 3000) return
     // В творческом клики по рюкзаку сервер ведёт иначе, и ведро «в хотбаре»
     // было только у клиента (ферма 30.09, mlg-final-1: первый заход, −5 хп).
     if (!survivalMode(bot)) return
     const wb = bot.inventory.items().find(i => i.name === 'water_bucket')
     if (!wb || (wb.slot >= 36 && wb.slot <= 44)) return
-    st.moving = Date.now()
+    st.moving = gameClock.now()
     try {
       // Свободный слот хотбара или самый дешёвый — не оружие и не то, что в руке.
       const sel = 36 + bot.quickBarSlot
@@ -616,7 +633,7 @@ function installFallGuard (session, { minFall = 6 } = {}) {
           if (ee && ee.onGround) blockClutch._whySaid = false
         } catch (err) {
           // Ошибка клатча не должна молчать (и не должна валить ведро): раз в 10 с — в журнал.
-          if (Date.now() - (blockClutch._errAt || 0) > 10000) { blockClutch._errAt = Date.now(); console.log('[clutch] ошибка', err && err.stack ? err.stack.split(String.fromCharCode(10)).slice(0, 3).join(' | ') : err) }
+          if (gameClock.now() - (blockClutch._errAt || 0) > 10000) { blockClutch._errAt = gameClock.now(); console.log('[clutch] ошибка', err && err.stack ? err.stack.split(String.fromCharCode(10)).slice(0, 3).join(' | ') : err) }
         }
       }
       const e = bot.entity
@@ -634,13 +651,13 @@ function installFallGuard (session, { minFall = 6 } = {}) {
       if (st.placed) {
         const pl = st.placed
         if (e.onGround || inWaterNow()) {
-          if (!pl.landed) { pl.landed = Date.now(); pl.hpLand = bot.health ?? 20 }
-          const since = Date.now() - pl.landed
+          if (!pl.landed) { pl.landed = gameClock.now(); pl.hpLand = bot.health ?? 20 }
+          const since = gameClock.now() - pl.landed
           // Спасло ли — по здоровью: блок воды приходит клиенту позже, чем
           // сервер уже погасил им падение (прогон 2026-09-26: «промах» без урона).
           if (!pl.said && since >= 300) {
             pl.said = true
-            if ((bot.health ?? 0) >= pl.hpAir - 0.5) { st.saved++; emit('saved', { fall: pl.fall, hp: bot.health }) } else { st.missed++; st.missedAt = Date.now(); emit('missed', { fall: pl.fall, hp: bot.health }) }
+            if ((bot.health ?? 0) >= pl.hpAir - 0.5) { st.saved++; emit('saved', { fall: pl.fall, hp: bot.health }) } else { st.missed++; st.missedAt = gameClock.now(); emit('missed', { fall: pl.fall, hp: bot.health }) }
           }
           if (since < 150) return
           // Вода — в клетке посадки или внутри залитого блока под ней (нижний
@@ -652,29 +669,34 @@ function installFallGuard (session, { minFall = 6 } = {}) {
             if (pl.tries && hotbar('water_bucket') >= 0) { st.picked++; emit('picked'); st.placed = null } else if (since > 1200) { emit(pl.tries ? 'pickup_failed' : 'no_water_block'); st.placed = null }
             return
           }
-          if (Date.now() - (pl.lastTry || 0) < 250) return
+          if (gameClock.now() - (pl.lastTry || 0) < 250) return
           if (pl.tries >= 6) { st.placed = null; emit('pickup_failed'); return }
           if (hotbar('bucket') < 0) { st.placed = null; return }
           pl.tries = (pl.tries || 0) + 1
-          pl.lastTry = Date.now()
-          // Слот, взгляд на воду и use_item — одним куском (lockHand выше).
+          pl.lastTry = gameClock.now()
+          // reflex-lock делает даже force-look асинхронным: клик ждёт поворота.
           hand.hold(200)
-          setImmediate(() => hand.as(() => {
+          setImmediate(async () => {
             try {
-              const b = hotbar('bucket')
-              if (b < 0) return
-              if (bot.quickBarSlot !== b - 36) bot.setQuickBarSlot(b - 36)
               const q = bot.entity.position
               const c = pl.pos.offset(0.5, 0.3, 0.5)
               const eye = q.offset(0, EYE, 0)
-              bot.look(Math.atan2(-(c.x - eye.x), -(c.z - eye.z)), Math.atan2(c.y - eye.y, Math.hypot(c.x - eye.x, c.z - eye.z)), true).catch(() => {})
-              bot.activateItem()
+              const yaw = Math.atan2(-(c.x - eye.x), -(c.z - eye.z))
+              const pitch = Math.atan2(c.y - eye.y, Math.hypot(c.x - eye.x, c.z - eye.z))
+              await bot.look(yaw, pitch, true)
+              if (st.placed !== pl) return
+              hand.as(() => {
+                const b = hotbar('bucket')
+                if (b < 0) return
+                if (bot.quickBarSlot !== b - 36) bot.setQuickBarSlot(b - 36)
+                bot.activateItem()
+                hand.hold(150)
+              })
             } catch {}
-            hand.hold(150)
-          }))
+          })
           return
         }
-        if (Date.now() - pl.t > 3000) { st.placed = null; st.missed++; st.missedAt = Date.now(); emit('missed') }
+        if (gameClock.now() - pl.t > 3000) { st.placed = null; st.missed++; st.missedAt = gameClock.now(); emit('missed') }
         return
       }
       if (e.onGround || inWaterNow() || e.isInLava) { st.peak = null; st.busy = false; return }
@@ -732,25 +754,34 @@ function installFallGuard (session, { minFall = 6 } = {}) {
       if (!land && cell) { land = cell; aim = cell.offset(0.5, 0, 0.5) }
       const landCell = land || new Vec3(cx, top, cz)
       st.fired++
-      st.placed = { t: Date.now(), pos: landCell, fall: Math.round(fall), hpAir: hp }
+      st.placed = { t: gameClock.now(), pos: landCell, fall: Math.round(fall), hpAir: hp }
+      const pl = st.placed
       emit('fired', { fall: Math.round(fall), h: Math.round(h * 100) / 100 })
-      afterPacket(bot, () => hand.as(() => {
-        // Удар булавы этого же тика (mace.descend) — первым: он с высоты.
-        const smash = bot._ndSmashNow
-        if (typeof smash === 'function') { bot._ndSmashNow = null; try { smash() } catch {} }
-        const s = hotbar('water_bucket')
-        if (s < 0) { if (process.env.ND_DEBUG_MLG) console.log('[mlg-dbg] нет ведра в хотбаре на выстреле'); return }
-        const slot0 = bot.quickBarSlot
-        if (bot.quickBarSlot !== s - 36) bot.setQuickBarSlot(s - 36)
-        const q = bot.entity.position
-        if (process.env.ND_DEBUG_MLG) console.log('[mlg-dbg] выстрел', JSON.stringify({ dt: Date.now() - st.placed.t, y: Math.round(q.y * 100) / 100, vy: Math.round(bot.entity.velocity.y * 100) / 100, slot0, slot: bot.quickBarSlot, want: s - 36, held: bot.heldItem && bot.heldItem.name, aim: !!aim, barAgo: st.barAt ? Date.now() - st.barAt : null }))
-        if (aim) {
-          const eye = q.offset(0, EYE, 0)
-          bot.look(Math.atan2(-(aim.x - eye.x), -(aim.z - eye.z)), Math.atan2(aim.y - eye.y, Math.hypot(aim.x - eye.x, aim.z - eye.z)), true).catch(() => {})
-        } else bot.look(bot.entity.yaw, -Math.PI / 2, true).catch(() => {})
-        bot.activateItem()
-        hand.hold(150)
-      }))
+      afterPacket(bot, async () => {
+        try {
+          // Удар булавы этого же тика (mace.descend) — первым: он с высоты.
+          hand.as(() => {
+            const smash = bot._ndSmashNow
+            if (typeof smash === 'function') { bot._ndSmashNow = null; try { smash() } catch {} }
+          })
+          if (hotbar('water_bucket') < 0) return
+          const q = bot.entity.position
+          if (aim) {
+            const eye = q.offset(0, EYE, 0)
+            await bot.look(Math.atan2(-(aim.x - eye.x), -(aim.z - eye.z)), Math.atan2(aim.y - eye.y, Math.hypot(aim.x - eye.x, aim.z - eye.z)), true)
+          } else await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+          if (st.placed !== pl) return
+          hand.as(() => {
+            const s = hotbar('water_bucket')
+            if (s < 0) return
+            const slot0 = bot.quickBarSlot
+            if (bot.quickBarSlot !== s - 36) bot.setQuickBarSlot(s - 36)
+            if (process.env.ND_DEBUG_MLG) console.log('[mlg-dbg] выстрел', JSON.stringify({ dt: gameClock.now() - pl.t, y: Math.round(q.y * 100) / 100, vy: Math.round(bot.entity.velocity.y * 100) / 100, slot0, slot: bot.quickBarSlot, want: s - 36, held: bot.heldItem && bot.heldItem.name, aim: !!aim, barAgo: st.barAt ? gameClock.now() - st.barAt : null }))
+            bot.activateItem()
+            hand.hold(150)
+          })
+        } catch {}
+      })
     } catch (err) {
       if (process.env.ND_DEBUG_EDGES) console.log('[edges] fall', err.message)
     }
@@ -762,7 +793,7 @@ function installFallGuard (session, { minFall = 6 } = {}) {
   // перекладка и прыжок за 1.3 с — промах, −5 хп).
   try {
     bot.inventory.on('updateSlot', (slot, was, now) => {
-      if (slot >= 36 && slot <= 44 && now && now.name === 'water_bucket' && !(was && was.name === 'water_bucket')) st.barAt = Date.now()
+      if (slot >= 36 && slot <= 44 && now && now.name === 'water_bucket' && !(was && was.name === 'water_bucket')) st.barAt = gameClock.now()
     })
   } catch {}
   bot._ndFallGuard = st
@@ -807,11 +838,11 @@ function mlgDrop (session) {
   // Только из хотбара, и не в первые MLG_SETTLE мс после перекладки (см. barAt).
   const inBar = bot.inventory.slots.some((it, k) => k >= 36 && k <= 44 && it && it.name === 'water_bucket')
   if (!inBar) return { ok: false, why: 'ведро не в хотбаре', toBar: true }
-  if (st.barAt && Date.now() - st.barAt < MLG_SETTLE) return { ok: false, why: 'ведро только что в хотбаре', retryMs: MLG_SETTLE - (Date.now() - st.barAt) + 20 }
+  if (st.barAt && gameClock.now() - st.barAt < MLG_SETTLE) return { ok: false, why: 'ведро только что в хотбаре', retryMs: MLG_SETTLE - (gameClock.now() - st.barAt) + 20 }
   const hp = Math.floor(bot.health ?? 20)
   const max = envNum('ND_MLG_MAX') > 0 ? envNum('ND_MLG_MAX') : 60
   const reserve = envNum('ND_MLG_RESERVE')
-  const recentMiss = !!(st.missedAt && Date.now() - st.missedAt < MLG_MISS_MS)
+  const recentMiss = !!(st.missedAt && gameClock.now() - st.missedAt < MLG_MISS_MS)
   const bold = reserve == null && !recentMiss && hp >= MLG_BOLD_HP
   const drop = bold ? max : Math.min(max, hp + SAFE_FALL - (reserve == null ? MLG_SAFE_RESERVE : reserve))
   if (drop < MLG_MIN) return { ok: false, why: 'мало хп', drop }
@@ -974,8 +1005,8 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
   const { goals } = require('mineflayer-pathfinder')
   const { towerUp, pickFiller } = require('./build')
   const tools = require('./tools')
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-  const t0 = Date.now()
+  const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
+  const t0 = gameClock.now()
   const Ty = floorY != null ? Math.floor(floorY + 1e-6) : Math.floor(target.position.y + 1e-6)
   const fillers = () => fillerCount(bot)
   // Обсидиан — последним: он нужен на коробки, но лучше подняться им, чем стоять внизу.
@@ -990,13 +1021,13 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
     how = shaft.digMs ? `под быстрый пол у ${shaft.x},${shaft.z} (${shaft.n} бл., ломать ${(shaft.digMs / 1000).toFixed(1)} с)` : `через дыру в полу у ${shaft.x},${shaft.z} (${shaft.n} бл.${shaft.bridge ? ', мостом' : ''})`
     try {
       bot.pathfinder.setGoal(new goals.GoalBlock(shaft.x, shaft.gy, shaft.z))
-      const until = Date.now() + (shaft.bridge ? 30000 : 20000)
+      const until = gameClock.now() + (shaft.bridge ? 30000 : 20000)
       // Пути нет (стоим на своём столбе под полом) — не ждать 20 с впустую.
       let noPath = 0
       const onPath = (r) => { if (r && r.status === 'noPath') noPath++ }
       bot.on('path_update', onPath)
       try {
-        while (Date.now() < until && !ctl.aborted && noPath < 2) {
+        while (gameClock.now() < until && !ctl.aborted && noPath < 2) {
           const p = bot.entity.position
           if (Math.floor(p.x) === shaft.x && Math.floor(p.z) === shaft.z && Math.abs(p.y - shaft.gy) < 1.1) break
           await sleep(100)
@@ -1020,12 +1051,12 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
         p = bot.entity.position
         how += br.ok ? ' — мостом под полом' : ' — мост под полом не вышел: ' + br.why
       }
-      if (!(Math.floor(p.x) === shaft.x && Math.floor(p.z) === shaft.z)) return { ok: false, how, placed: 0, why: 'до места под дырой не дошёл', shaft, seconds: Math.round((Date.now() - t0) / 1000) }
+      if (!(Math.floor(p.x) === shaft.x && Math.floor(p.z) === shaft.z)) return { ok: false, how, placed: 0, why: 'до места под дырой не дошёл', shaft, seconds: Math.round((gameClock.now() - t0) / 1000) }
     }
   }
   // Вверх, кусками: наполнитель пересчитывать (стопка кончается).
   let placed = 0
-  while (!ctl.aborted && Date.now() - t0 < maxMs && Math.floor(bot.entity.position.y + 1e-6) < Ty) {
+  while (!ctl.aborted && gameClock.now() - t0 < maxMs && Math.floor(bot.entity.position.y + 1e-6) < Ty) {
     const f = bot.entity.position.floored()
     for (const up of [2, 3]) {
       const b = bot.blockAt(f.offset(0, up, 0), false)
@@ -1037,7 +1068,7 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
         // «слишком долго» при пределе 3.5 с, и 50 блоков столба впустую).
         const r = await tools.breakFast(bot, b.position, { maxMs: Math.max(12000, ((shaft && shaft.digMs) || 0) + 2000) }).catch(() => ({ ok: false }))
         if (process.env.ND_DEBUG_CLIMB) console.log('[climbBack] ceiling', JSON.stringify({ at: b.position, name: b.name, up, r, onGround: bot.entity.onGround, held: bot.heldItem && bot.heldItem.name, plan: tools.bestFor(bot, bot.blockAt(b.position) || b) && tools.bestFor(bot, bot.blockAt(b.position) || b).ms }))
-        if (!r.ok && up === 2) return { ok: false, how, placed, why: `не выломал потолок ${b.name}`, shaft, seconds: Math.round((Date.now() - t0) / 1000) }
+        if (!r.ok && up === 2) return { ok: false, how, placed, why: `не выломал потолок ${b.name}`, shaft, seconds: Math.round((gameClock.now() - t0) / 1000) }
       }
     }
     const left = Ty - Math.floor(bot.entity.position.y + 1e-6)
@@ -1047,14 +1078,14 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
       const again = await towerUp(bot, ctl, 1, { sneak: true, fast: true, beforeStep, item: towerItem() })
       if (!again || !again.placed) {
         const why = [].concat((again && (again.why || again.reason)) || [], (r && (r.why || r.reason)) || []).join('; ')
-        return { ok: false, how, placed, why: why || 'столб не растёт', shaft, seconds: Math.round((Date.now() - t0) / 1000) }
+        return { ok: false, how, placed, why: why || 'столб не растёт', shaft, seconds: Math.round((gameClock.now() - t0) / 1000) }
       }
       placed++
     }
   }
   try { bot.setControlState('sneak', false) } catch {}
   const ok = Math.floor(bot.entity.position.y + 1e-6) >= Ty
-  return { ok, how, placed, shaft, seconds: Math.round((Date.now() - t0) / 1000) }
+  return { ok, how, placed, shaft, seconds: Math.round((gameClock.now() - t0) / 1000) }
 }
 
 // Мост на своём уровне к столбу (x, z): клетка за клеткой по большей оси,
@@ -1062,12 +1093,12 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
 async function bridgeUnder (bot, ctl, x, z, { maxBlocks = 24, timeoutMs = 20000 } = {}) {
   const bridge = require('./bridge')
   const { placeBlockAt } = require('./build')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let placed = 0
   const goal = new Vec3(x + 0.5, 0, z + 0.5)
   try { bot.setControlState('sprint', false); bot.setControlState('sneak', true) } catch {}
   try {
-    while (!ctl.aborted && Date.now() - t0 < timeoutMs && placed <= maxBlocks) {
+    while (!ctl.aborted && gameClock.now() - t0 < timeoutMs && placed <= maxBlocks) {
       const cell = bridge.nextCell(bot, goal)
       if (!cell) return { ok: true, placed }
       const b = bot.blockAt(cell)
@@ -1103,8 +1134,8 @@ const GATHER = /^(dirt|grass_block|podzol|mycelium|sand|gravel|stone|cobblestone
 async function gatherBlocks (bot, ctl, { want = 20, maxMs = 30000, radius = 10 } = {}) {
   const tools = require('./tools')
   const { goals } = require('mineflayer-pathfinder')
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-  const t0 = Date.now()
+  const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
+  const t0 = gameClock.now()
   const before = fillerCount(bot)
   const what = {}
   const bad = new Set()
@@ -1126,9 +1157,9 @@ async function gatherBlocks (bot, ctl, { want = 20, maxMs = 30000, radius = 10 }
   }
   // Шаг в соседнюю клетку (в ямку или по траншее): вперёд, пока ноги не там.
   const stepTo = async (cell) => {
-    const t1 = Date.now()
+    const t1 = gameClock.now()
     try {
-      while (Date.now() - t1 < 1500 && !ctl.aborted) {
+      while (gameClock.now() - t1 < 1500 && !ctl.aborted) {
         const p = bot.entity.position
         if (Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z && Math.abs(p.y - cell.y) < 0.6) break
         const dx = cell.x + 0.5 - p.x; const dz = cell.z + 0.5 - p.z
@@ -1150,7 +1181,7 @@ async function gatherBlocks (bot, ctl, { want = 20, maxMs = 30000, radius = 10 }
   // (2) нет стенок — шаг по траншее к клетке, у которой они есть;
   // (3) и её нет — сломать землю рядом и шагнуть в ямку (яма в блок глубиной:
   // стенки вокруг — это и есть земля).
-  while (!ctl.aborted && Date.now() - t0 < maxMs && fillerCount(bot) - before < want) {
+  while (!ctl.aborted && gameClock.now() - t0 < maxMs && fillerCount(bot) - before < want) {
     const feet = bot.entity.position.floored()
     let wall = null
     for (const dy of [0, 1]) {
@@ -1194,8 +1225,8 @@ async function gatherBlocks (bot, ctl, { want = 20, maxMs = 30000, radius = 10 }
     if (t.offset(0.5, 0.5, 0.5).distanceTo(eye) > 4.3) {
       try {
         bot.pathfinder.setGoal(new goals.GoalNear(t.x, t.y, t.z, 2))
-        const until = Date.now() + 6000
-        while (Date.now() < until && !ctl.aborted && t.offset(0.5, 0.5, 0.5).distanceTo(bot.entity.position.offset(0, 1.62, 0)) > 4.2) await sleep(100)
+        const until = gameClock.now() + 6000
+        while (gameClock.now() < until && !ctl.aborted && t.offset(0.5, 0.5, 0.5).distanceTo(bot.entity.position.offset(0, 1.62, 0)) > 4.2) await sleep(100)
       } catch {}
       try { bot.pathfinder.setGoal(null) } catch {}
       if (t.offset(0.5, 0.5, 0.5).distanceTo(bot.entity.position.offset(0, 1.62, 0)) > 4.5) { bad.add(key(t)); continue }
@@ -1203,8 +1234,8 @@ async function gatherBlocks (bot, ctl, { want = 20, maxMs = 30000, radius = 10 }
     if (await hit(t)) await pickupNear(bot, ctl, t, 1600)
   }
   // Задержка подбора выпавшего из блока — 10 тиков (ItemEntity): дождаться.
-  const t2 = Date.now()
-  while (Date.now() - t2 < 700 && !ctl.aborted) {
+  const t2 = gameClock.now()
+  while (gameClock.now() - t2 < 700 && !ctl.aborted) {
     const me = bot.entity.position
     if (!Object.values(bot.entities).some(e => e && e.name === 'item' && e.position && e.position.distanceTo(me) < 2.2)) break
     await sleep(100)
@@ -1214,20 +1245,20 @@ async function gatherBlocks (bot, ctl, { want = 20, maxMs = 30000, radius = 10 }
     got,
     broke,
     what: Object.entries(what).map(([k, v]) => k + '×' + v).join(', '),
-    ms: Date.now() - t0,
-    why: got >= want ? null : (why || (ctl.aborted ? 'прервали' : Date.now() - t0 >= maxMs ? 'не успел' : 'не вышло'))
+    ms: gameClock.now() - t0,
+    why: got >= want ? null : (why || (ctl.aborted ? 'прервали' : gameClock.now() - t0 >= maxMs ? 'не успел' : 'не вышло'))
   }
 }
 
 // Подобрать выпавшее из клетки pos: подойти к предмету (подбирается, когда
 // рамка игрока, раздутая на блок по горизонтали, его касается).
 async function pickupNear (bot, ctl, pos, maxMs = 1500) {
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-  const t0 = Date.now()
+  const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
+  const t0 = gameClock.now()
   const c = pos.offset(0.5, 0.5, 0.5)
   await sleep(120)
   try {
-    while (Date.now() - t0 < maxMs && !ctl.aborted) {
+    while (gameClock.now() - t0 < maxMs && !ctl.aborted) {
       const it = Object.values(bot.entities).find(e => e && e.name === 'item' && e.position && e.position.distanceTo(c) < 3)
       if (!it) return true
       const me = bot.entity.position

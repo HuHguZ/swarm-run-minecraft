@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Эндер-дракон (dragon.js, RPC dragon / mc_dragon) на своём сервере server-end
 // (25568): мир — Энд с живым драконом, бот NeuroEnd — оператор.
 //
@@ -61,7 +62,7 @@ const end = c => `/execute in minecraft:the_end run ${c.replace(/^\//, '')}`
 // Смерть приходит двумя путями: событием в шине — и причиной прерывания
 // (runIntent забирает прервавшее событие из events в by). Считать оба.
 const deathAt = []
-const deaths = (t0) => conn.heard.filter(e => e && e.type === 'death' && (e.at || 0) >= t0).length + deathAt.filter(t => t >= t0).length
+const deaths = (t0) => conn.heard.filter(e => e && e.type === 'death' && (e.gameAt ?? e.at ?? 0) >= t0).length + deathAt.filter(t => t >= t0).length
 
 // ------------------------------------------------------------ свидетели
 
@@ -123,7 +124,7 @@ async function giveKit () {
 async function dragonCall (params) {
   const r = await call('dragon', params)
   const d = (r && r.detail) || {}
-  if (r && r.by && r.by.type === 'death') deathAt.push(r.by.at || Date.now())
+  if (r && r.by && r.by.type === 'death') deathAt.push(r.by.gameAt ?? r.by.at ?? gameClock.now())
   console.log(`   ${r.status}${r.partial ? ' (partial)' : ''}${r.error ? ' — ' + r.error : ''}${d.stopped ? ` · stopped: ${d.stopped}` : ''}`)
   return { r, d }
 }
@@ -152,7 +153,7 @@ async function caseArrive () {
   await giveKit()
   await kit.cmd(end('tp @s 100.5 49 0.5'))
   await sleep(3000)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const { d } = await dragonCall({ mode: 'arrive', timeoutSeconds: 300 })
   const st = await header()
   const pos = st.pos || {}
@@ -169,8 +170,8 @@ async function caseArrive () {
 // генерирует остров, и мир бота переключается позже ответа сервера. Ждать,
 // пока сам модуль согласится, что он в Энде.
 async function inEnd (ms = 30000) {
-  const t0 = Date.now()
-  while (Date.now() - t0 < ms) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < ms) {
     const r = await call('dragon', { mode: 'look' })
     if (r && r.status === 'done') return true
     await sleep(1500)
@@ -213,7 +214,7 @@ async function caseCrystals () {
   if (!before) { note('кристаллов нет — случай нечего проверять'); return }
   const need = Number(process.env.CRYSTALS || before)
   await fair()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let last = null
   for (let i = 0; i < 3; i++) {
     last = await dragonCall({ mode: 'crystals', timeoutSeconds: 600 })
@@ -240,7 +241,7 @@ async function casePerch () {
   if (hp0 == null) { note('дракона нет — случай нечего проверять'); return }
   await dragonPhase(2)
   await fair()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const botHp0 = (await header()).health
   const { d } = await dragonCall({ mode: 'dragon', perches: 1, timeoutSeconds: 180 })
   const hp1 = await dragonHp()
@@ -261,7 +262,7 @@ async function caseFull () {
   const hp0 = await dragonHp()
   if (hp0 == null) { note('дракона нет'); return }
   await fair()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const from = kit.serverLog.mark()
   let won = false
   let last = null
@@ -280,7 +281,7 @@ async function caseFull () {
   const portal = !!(look && look.detail && look.detail.portal)
   const killed = dragonsLeft === 0 && portal
   const d = last.d
-  const secs = Math.round((Date.now() - t0) / 1000)
+  const secs = Math.round((gameClock.now() - t0) / 1000)
   console.log(`   за ${secs} с, хп бота ${d.hp}; ближний: ${JSON.stringify(d.dragon && d.dragon.melee)}; стрелы: ${JSON.stringify(d.dragon && d.dragon.arrows)}; уклоны ${JSON.stringify(d.dodged)}; эндермены ${JSON.stringify(d.endermen)}`)
   check('не умер', deaths(t0) === 0, deaths(t0))
   check('сервер: дракона нет и выходной портал горит', killed, { драконов: dragonsLeft, портал: portal, ачивка: adv })
@@ -309,11 +310,24 @@ async function caseBed () {
   if (hp0 == null) { note('дракона нет — случай нечего проверять'); return }
   await dragonPhase(2)
   await fair()
-  const t0 = Date.now()
-  const { d } = await dragonCall({ mode: 'dragon', perches: 1, timeoutSeconds: 180 })
-  const hp1 = await dragonHp()
+  const t0 = gameClock.now()
+  const clock0 = (await header()).clock
+  const wall0 = gameClock.wall.monotonic()
+  const { r: response, d } = await dragonCall({ mode: 'dragon', perches: 1, timeoutSeconds: 180 })
+  const wallSecs = +((gameClock.wall.monotonic() - wall0) / 1000).toFixed(3)
+  const clock1 = response.state?.clock
+  const timing = { rate: clock0?.tickRate ?? null, gameTicks: clock0 && clock1 ? clock1.ticks - clock0.ticks : null,
+    serverTicks: clock0?.serverTicks != null && clock1?.serverTicks != null ? clock1.serverTicks - clock0.serverTicks : null,
+    wallSecs, lagTicks: clock1?.lagTicks ?? null }
   const beds = (d.dragon && d.dragon.beds) || {}
+  let hp1 = null; let hpError = null
+  try { hp1 = await dragonHp() } catch (error) { hpError = error.message; throw error }
+  finally {
+    if (process.env.LAB_OUT) require('fs').appendFileSync(process.env.LAB_OUT, JSON.stringify({ case: 'bed', ...timing,
+      hp0, hp1, hpError, beds, died: deaths(t0) > 0 || !!d.died, status: response.status, code: response.code, error: response.error, by: response.by }) + '\n')
+  }
   console.log(`   кровати: ${JSON.stringify(beds)}; хп бота ${d.hp}; фазы: ${(d.dragon && d.dragon.phases || []).join(' → ')}`)
+  console.log(`   часы: ${JSON.stringify(timing)}`)
   check('не умер', deaths(t0) === 0, deaths(t0))
   check('взорвал хоть одну кровать', (beds.used || 0) > 0, beds.used)
   check('сервер: здоровье дракона упало', hp0 != null && hp1 != null && hp1 < hp0, { было: hp0, стало: hp1 })
@@ -334,10 +348,10 @@ async function caseCage () {
   const before = await serverCount('end_crystal')
   note(`сервер видит кристаллов: ${before}`)
   await fair()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const { d } = await dragonCall({ mode: 'crystals', timeoutSeconds: 600 })
   const after = await serverCount('end_crystal', { settle: 1 })
-  console.log(`   клетки: ${JSON.stringify(d.cages)}; падения ${JSON.stringify(d.clutch)}; хп ${d.hp}; за ${Math.round((Date.now() - t0) / 1000)} с`)
+  console.log(`   клетки: ${JSON.stringify(d.cages)}; падения ${JSON.stringify(d.clutch)}; хп ${d.hp}; за ${Math.round((gameClock.now() - t0) / 1000)} с`)
   if (d.crystals && d.crystals.notes) note(`заметки: ${d.crystals.notes.join(' | ')}`)
   check('не умер', deaths(t0) === 0, deaths(t0))
   check(`сервер: кристаллов не осталось (было ${before})`, after === 0, after)
@@ -368,7 +382,7 @@ async function caseStation () {
   if (hp0 == null) { note('дракона нет — случай нечего проверять'); return }
   await dragonPhase(2)
   await fair()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const { d } = await dragonCall({ mode: 'dragon', perches: P, timeoutSeconds: 300 })
   const hp1 = await dragonHp()
   const beds = (d.dragon && d.dragon.beds) || {}
@@ -392,7 +406,7 @@ async function caseClutch () {
   await fair()
   await sleep(500)
   const st0 = await header()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const pr = call('dragon', { mode: 'arrive', timeoutSeconds: 60 })
   await sleep(1500)
   const gy = Math.floor(st0.pos.y)
@@ -409,7 +423,7 @@ async function caseClutch () {
   await sleep(6000)
   const st1 = await header()
   const r = await pr
-  if (r && r.by && r.by.type === 'death') deathAt.push(r.by.at || Date.now())
+  if (r && r.by && r.by.type === 'death') deathAt.push(r.by.gameAt ?? r.by.at ?? gameClock.now())
   const d = (r && r.detail) || {}
   console.log(`   ведро: ${JSON.stringify(d.clutch)}; хп ${st0.health} -> ${st1.health}; вода в рюкзаке: ${JSON.stringify((st1.inventory || {}).water_bucket)}`)
   check('не умер', deaths(t0) === 0, deaths(t0))
@@ -615,7 +629,9 @@ async function caseE2E () {
     await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
     await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
     await sleep(1000)
-    const t0 = Date.now()
+    const clock0 = (await header()).clock
+    const t0 = gameClock.now()
+    const wall0 = gameClock.wall.monotonic()
     let last = null; let won = false
     let killSecs = null; let crystalSecs = null
     // Подход (01.10): прибыл к центру (< 30), станция у столба построена, жемчуг на подходе.
@@ -629,8 +645,8 @@ async function caseE2E () {
     // Срок на бой (2026-09-30): E2E_MIN минут (по умолчанию 30) вызовами по ≤ 600 с. Трёх вызовов
     // по 600 с бывало мало: d12-27 оборвался при драконе 2 хп.
     const budgetMs = Number(process.env.E2E_MIN || 30) * 60000
-    for (let i = 0; !won && Date.now() - t0 < budgetMs - 30000; i++) {
-      const tc = Date.now()
+    for (let i = 0; !won && gameClock.now() - t0 < budgetMs - 30000; i++) {
+      const tc = gameClock.now()
       const left = Math.round((budgetMs - (tc - t0)) / 1000)
       // E2E_MODE — режим боя; без него — режим по умолчанию (как зовёт кампания).
       const modeP = process.env.E2E_MODE ? { mode: process.env.E2E_MODE } : {}
@@ -656,9 +672,13 @@ async function caseE2E () {
       // Отказ на входе («не хватает снаряжения») — дальше звать без толку (ab-22:
       // 920 тысяч вызовов подряд за 33 минуты).
       if (last.d.need || /ни шагу не сделал/.test(last.d.stopped || '')) break
-      if (Date.now() - tc < 2000) await sleep(2000)
+      if (gameClock.now() - tc < 2000) await sleep(2000)
     }
-    const secs = Math.round((Date.now() - t0) / 1000)
+    const clock1 = (await header()).clock
+    const wallSecs = +((gameClock.wall.monotonic() - wall0) / 1000).toFixed(3)
+    const gameTicks = clock0 && clock1 ? clock1.ticks - clock0.ticks : null
+    const serverTicks = clock0?.serverTicks != null && clock1?.serverTicks != null ? clock1.serverTicks - clock0.serverTicks : null
+    const secs = Math.round((gameClock.now() - t0) / 1000)
     await sleep(3000)
     // Убийство — без ожидания портала (02.10, fr1-s18/s19: дракон убит 4 кроватями, но через 3 с он ещё «умирает» —
     // анимация 200 тиков, под нагрузкой фермы дольше — и бой записался «не убил»). Бот видел смерть (won) — ждать,
@@ -684,7 +704,7 @@ async function caseE2E () {
     // центр острова держит forceload, обелиски в 42 блоках могут быть не
     // прогружены: тогда null, а не «сбиты»).
     const crystals1 = await serverCountOnce('end_crystal')
-    const r = { a, kit: kitName, mode: process.env.E2E_MODE || 'default', params: Object.keys(params).length ? params : undefined, calls: callsMade, killed: dragons === 0 && (won || portal || credits), portal, died, home: st.dimension === 'overworld', secs, killSecs, crystalSecs, centerSecs, stationSecs, pearl, hp: d.hp, dragonHp: d.dragon && d.dragon.hp, crystals: d.crystals && `${d.crystals.destroyed}/${d.crystals.seen}`, crystalsServer: `${crystals0}->${crystals1}`, crysWait: d.crystals && d.crystals.wait, perches: perchCount, meleePerches: d.dragon && d.dragon.melee && d.dragon.melee.perches, perchCount, bedsTotal: bedsUsed, dragonHpMin: bedPerches.reduce((m, p) => p.hp1 != null ? Math.min(m, p.hp1) : m, 200), bestPerch: bedPerches.reduce((m, p) => p.hp0 != null && p.hp1 != null ? Math.max(m, p.hp0 - p.hp1) : m, 0), bedPerches: bedPerches.map(p => ({ at: p.at, hp0: p.hp0, hp1: p.hp1, beds: p.beds, why: p.why || p.lastWhy, s: p.secs })), beds: d.dragon && d.dragon.beds && d.dragon.beds.used, arrows: d.dragon && d.dragon.arrows, sword: d.dragon && d.dragon.sword, dodged: d.dodged, ate: d.ate, clutch: d.clutch, credits: d.home && d.home.credits, stopped: d.stopped, traces }
+    const r = { a, kit: kitName, mode: process.env.E2E_MODE || 'default', params: Object.keys(params).length ? params : undefined, calls: callsMade, killed: dragons === 0 && (won || portal || credits), portal, died, home: st.dimension === 'overworld', secs, wallSecs, gameTicks, serverTicks, rate: clock0?.tickRate ?? null, lagTicks: clock1?.lagTicks ?? null, killSecs, crystalSecs, centerSecs, stationSecs, pearl, hp: d.hp, dragonHp: d.dragon && d.dragon.hp, crystals: d.crystals && `${d.crystals.destroyed}/${d.crystals.seen}`, crystalsServer: `${crystals0}->${crystals1}`, crysWait: d.crystals && d.crystals.wait, perches: perchCount, meleePerches: d.dragon && d.dragon.melee && d.dragon.melee.perches, perchCount, bedsTotal: bedsUsed, dragonHpMin: bedPerches.reduce((m, p) => p.hp1 != null ? Math.min(m, p.hp1) : m, 200), bestPerch: bedPerches.reduce((m, p) => p.hp0 != null && p.hp1 != null ? Math.max(m, p.hp0 - p.hp1) : m, 0), bedPerches: bedPerches.map(p => ({ at: p.at, hp0: p.hp0, hp1: p.hp1, beds: p.beds, why: p.why || p.lastWhy, s: p.secs })), beds: d.dragon && d.dragon.beds && d.dragon.beds.used, arrows: d.dragon && d.dragon.arrows, sword: d.dragon && d.dragon.sword, dodged: d.dodged, ate: d.ate, clutch: d.clutch, credits: d.home && d.home.credits, stopped: d.stopped, traces }
     if (died && traces.length) r.cause = deathCause(traces[traces.length - 1])
     results.push(r)
     console.log(`   попытка ${a}: ${JSON.stringify(r)}`)
@@ -695,7 +715,7 @@ async function caseE2E () {
   const wins = results.filter(r => r.killed && !r.died).length
   const times = results.filter(r => r.killed && !r.died && r.killSecs != null).map(r => r.killSecs).sort((x, y) => x - y)
   if (times.length) console.log(`   время до смерти дракона, с: ${times.join(', ')} (медиана ${times[Math.floor(times.length / 2)]})`)
-  console.log(`   ИТОГ e2e: убил дракона без смерти ${wins} из ${N}; домой через портал ${results.filter(r => r.home).length} из ${N}`)
+  console.log(`   ИТОГ e2e: убил дракона без смерти ${wins} из ${N}; домой через портал ${results.filter(r => r.killed && !r.died && r.home && (r.portal || r.credits)).length} из ${N}`)
   check(`e2e: побед без смерти ${wins}/${N}`, wins === N, results.map(r => ({ a: r.a, killed: r.killed, died: r.died, home: r.home, secs: r.secs })))
 }
 

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория куска «после крепости Ада → вход в Энд» (поток nether-end): новый мир (farm.js up --fresh --random/--seeds),
 // тело строит портал у спавна и входит в Ад (как сквозная try-lab-ne-run.js), потом сцена ставит его (команды — только
 // постановка) туда, где кончается крепость Ада, с рюкзаком «после Ада»: 12 очей, обсидиан, огниво, еда, блоки и набор на
@@ -93,7 +94,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await kit.cmd('/random reset *')
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
@@ -128,7 +129,7 @@ async function main () {
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
     console.log(JSON.stringify(rec))
   }
-  if (s0.dimension !== 'the_nether') { fail('в Ад не вошёл на подготовке'); try { await Promise.race([call('disconnect', {}), sleep(8000)]) } catch {} process.exit(0) }
+  if (s0.dimension !== 'the_nether') { fail('в Ад не вошёл на подготовке'); try { await Promise.race([call('disconnect', {}), gameClock.wall.sleep(8000)]) } catch {} process.exit(0) }
   const entry = { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) }
   const truth = { fortress: locate('fortress', 'the_nether', entry), stronghold: locate('stronghold', 'overworld', { x: entry.x * 8, z: entry.z * 8 }) }
   // MAP_SH=1 — крепость Края из копии мира (комната портала, пустые рамки): запись «крепость» у стены комнаты и очей —
@@ -144,11 +145,11 @@ async function main () {
     const M = require('./try-lab-ne-map')
     const R0 = shMap.room || shMap.start
     const exit = { x: Math.floor(R0.x / 8), z: Math.floor(R0.z / 8) }
-    const tg = Date.now()
+    const tg = gameClock.wall.now()
     try {
       const r = await M.netherGrid(Number(process.env.FARM_SLOT), M.corridorRects([{ x: truth.fortress.x, z: truth.fortress.z }, exit], 40), {})
       require('./src/nether-grid').save(path.join(__dirname, '..', 'farm', `memory-${process.env.FARM_SLOT}`), r.grid, { pts: [truth.fortress, exit] })
-      gridInfo = { seconds: Math.round((Date.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, exit }
+      gridInfo = { seconds: Math.round((gameClock.wall.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, exit }
     } catch (e) { gridInfo = { error: e.message } }
     console.log('сетка', JSON.stringify(gridInfo))
   }
@@ -180,7 +181,7 @@ async function main () {
   const size = logSize()
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
   try { fs.writeFileSync(clog, '') } catch {}
-  const tc = Date.now()
+  const tc = gameClock.now()
   const child = spawn(process.execPath, [CAMPAIGN], {
     cwd: __dirname,
     env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ND_EYES_NEED: String(shMap && shMap.need ? Math.min(EYES, shMap.need) : Math.min(12, EYES)), ...(process.env.ENDKIT === '1' ? {} : { ND_ENDKIT: '0' }), ...CENV },
@@ -189,19 +190,19 @@ async function main () {
   let exited = null
   child.on('exit', code => { exited = code })
   const marks = {}
-  const mark = (k) => { if (marks[k] == null) marks[k] = Math.round((Date.now() - tc) / 6000) / 10 }
+  const mark = (k) => { if (marks[k] == null) marks[k] = Math.round((gameClock.now() - tc) / 6000) / 10 }
   let stoppedBy = 'время'
   let ok = false
   let lastCheck = 0
   const until = tc + MINUTES * 60000
   let lastDim = sA.dimension
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(4000)
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
     if (/ВЕХА stronghold/.test(text)) mark('room')
-    if (Date.now() - lastCheck > 10000 || exited !== null) {
-      lastCheck = Date.now()
+    if (gameClock.now() - lastCheck > 10000 || exited !== null) {
+      lastCheck = gameClock.now()
       const s = await status()
       if (s.dimension && s.dimension !== lastDim) { mark(`${lastDim}->${s.dimension}`); lastDim = s.dimension }
       const rec = await call('recall', { lines: 1 }).catch(() => null)
@@ -232,7 +233,7 @@ async function main () {
     seed: seedOf(),
     start: START,
     ok,
-    minutes: Math.round((Date.now() - tc) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - tc) / 6000) / 10,
     marks,
     stoppedBy,
     exitCode: exited,
@@ -258,7 +259,7 @@ async function main () {
   rec.tail = text.split('\n').filter(l => /ВЕХА|БЛОКЕР|итог этапа|этап упал|умер|прогон упал|крепост|stronghold|travel|портал/.test(l)).slice(-14).map(l => l.slice(0, 220))
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-sh окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-sh окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

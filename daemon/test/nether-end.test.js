@@ -47,6 +47,7 @@ test('мост: якорь bridge задаёт старт, золото мост
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 function campaignNeeds (inventory, places) {
   const state = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory }
   class Socket {
@@ -67,7 +68,7 @@ function campaignNeeds (inventory, places) {
   }
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8') + `
     module.exports = { readMemory, needs: name => STAGES.find(s => s.name === name).needed(), init: () => { state = testState; sit = {} } }
-  `, Object.assign(context, { testState: state }))
+  `, withClockFixture(Object.assign(context, { testState: state })))
   context.module.exports.init()
   return context.module.exports
 }

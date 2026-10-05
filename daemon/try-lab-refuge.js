@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Аварийный отход (research/05-synthesis.md H5–H6, research/dev-B-refuge.md):
 // тело идёт по делу (goto или mine), хп мало, мобы рядом — автопилот сам
 // (EMERGENCY) бросает дело, уходит в укрытие (survival.refuge), лечится и
@@ -78,13 +79,13 @@ async function main () {
       const task = TASKS[(round - 1) % TASKS.length]
       const wall = round % 2 === 0
       const rec = { labFixture: true, slot, variant: VARIANT, task, round, wall, ok: false }
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       try {
         // Перерыв отхода автопилота (30 с от начала прошлого) — иначе раунд не мерит ничего.
-        for (const e of conn.heard) if (e && e.type === 'emergency' && e.at > lastEmergency) lastEmergency = e.at
+        for (const e of conn.heard) if (e && e.type === 'emergency' && (e.gameAt ?? e.at) > lastEmergency) lastEmergency = e.gameAt ?? e.at
         // Авария, прервавшая дело, приходит в by, а не в events.
         if (lastRec && lastRec.emergencyAt > lastEmergency) lastEmergency = lastRec.emergencyAt
-        const wait = lastEmergency + REFUGE_COOLDOWN_MS - Date.now()
+        const wait = lastEmergency + REFUGE_COOLDOWN_MS - gameClock.now()
         if (wait > 0) await sleep(wait)
         await prepare(kit, cmd, call, { wall, round })
         rec.before = await st()
@@ -93,7 +94,7 @@ async function main () {
         const res = await play(conn, call, st, task, rec)
         Object.assign(rec, res)
       } catch (e) { rec.error = e.message }
-      rec.seconds = Math.round((Date.now() - t0) / 1000)
+      rec.seconds = Math.round((gameClock.now() - t0) / 1000)
       rec.ok = !!(rec.fixtureReady && rec.survived && rec.healed && rec.returned)
       lastRec = rec
       fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(rec) + '\n')
@@ -141,8 +142,8 @@ async function prepare (kit, cmd, call, { wall, round }) {
   // только еда из рюкзака. Иначе при 20 и насыщении хп 6 → 20 за 7 с само, и
   // отходить незачем (первый прогон сцены). Голод 200 — 1 ед. истощения за тик.
   await cmd('/effect give @s minecraft:hunger 30 200 true')
-  const drainUntil = Date.now() + 15000
-  while (Date.now() < drainUntil && (await call('status')).state.food > 17) await sleep(40)
+  const drainUntil = gameClock.now() + 15000
+  while (gameClock.now() < drainUntil && (await call('status')).state.food > 17) await sleep(40)
   await cmd('/effect clear @s minecraft:hunger')
   await cmd('/effect give @s minecraft:instant_health 1 10 true')
   await call('armor')
@@ -161,15 +162,15 @@ async function play (conn, call, st, task, rec) {
   let refuge = null
   let emergency = null
   let done = false
-  const deadline = Date.now() + ROUND_MS
+  const deadline = gameClock.now() + ROUND_MS
   const heardFrom = conn.heard.length
   const newEvents = () => conn.heard.slice(heardFrom)
   // Мобам — ИИ: с этой секунды никакой помощи, кроме одного удара ниже.
   await call('ask', { command: '/execute as @e[tag=nd_refuge] run data merge entity @s {NoAI:0b}', ms: 400 })
   // Хп 6 — уже на ходу (иначе в простое перед делом автопилот доедает и лечится
   // сам): удар падения (тихий — дело не рвёт, и это не моб: отход решает по мобам).
-  setTimeout(() => { call('ask', { command: '/damage @s 14 minecraft:fall', ms: 300 }).catch(() => {}) }, 500)
-  let poll = setInterval(async () => {
+  gameClock.setTimeout(() => { call('ask', { command: '/damage @s 14 minecraft:fall', ms: 300 }).catch(() => {}) }, 500)
+  let poll = gameClock.setInterval(async () => {
     try {
       const s = (await call('status')).state
       out.minHp = Math.min(out.minHp, s.health)
@@ -177,7 +178,7 @@ async function play (conn, call, st, task, rec) {
     } catch {}
   }, 400)
   try {
-    while (!done && Date.now() < deadline) {
+    while (!done && gameClock.now() < deadline) {
       // Отход автопилота идёт — не мешать (новое дело его оборвёт): ждать, как мозг по «занят: refuge».
       await waitRefuge(st)
       const r = await call(task, params)
@@ -188,17 +189,17 @@ async function play (conn, call, st, task, rec) {
       // между отходами руда кончается, и mine отвечает «не вижу».
       if (taskDone(task, r, s) || (task === 'mine' && /не вижу/.test(r.error || '') && await oreGone(call))) { done = true; break }
       // Прервали (урон, мало хп, авария) — отход автопилота начинается в пределах тика.
-      const t1 = Date.now()
+      const t1 = gameClock.now()
       let busy = s.busy
-      while (busy !== 'refuge' && Date.now() - t1 < 2500) { await sleep(250); busy = (await st()).busy }
+      while (busy !== 'refuge' && gameClock.now() - t1 < 2500) { await sleep(250); busy = (await st()).busy }
       if (busy === 'refuge') await waitRefuge(st)
       const evs = newEvents()
       emergency = emergency || evs.find(e => e.type === 'emergency') || (r.by && r.by.type === 'emergency' ? r.by : null)
-      for (const e of [...evs, r.by]) if (e && e.type === 'emergency' && e.at) out.emergencyAt = Math.max(out.emergencyAt || 0, e.at)
+      for (const e of [...evs, r.by]) if (e && e.type === 'emergency' && (e.gameAt ?? e.at)) out.emergencyAt = Math.max(out.emergencyAt || 0, e.gameAt ?? e.at)
       const ref = [...evs].reverse().find(e => e.type === 'refuge')
       if (ref && ref !== refuge) {
         refuge = ref
-        out.refugeEndAt = Date.now()
+        out.refugeEndAt = gameClock.now()
         out.refuges = (out.refuges || 0) + 1
       }
       const now = await st()
@@ -216,7 +217,7 @@ async function play (conn, call, st, task, rec) {
         if ((f.state || {}).lastDeathAt !== d0 || (f.by && f.by.type === 'death')) { deaths++; break }
       }
     }
-  } finally { clearInterval(poll); poll = null }
+  } finally { gameClock.clearInterval(poll); poll = null }
   const end = await st()
   out.end = { hp: end.health, food: end.food, pos: end.pos, dim: end.dimension, inventory: end.inventory }
   if (end.lastDeathAt !== d0) deaths = Math.max(deaths, 1)
@@ -243,8 +244,8 @@ async function oreGone (call) {
 }
 
 async function waitRefuge (st) {
-  const t0 = Date.now()
-  while ((await st()).busy === 'refuge' && Date.now() - t0 < 180000) await sleep(400)
+  const t0 = gameClock.now()
+  while ((await st()).busy === 'refuge' && gameClock.now() - t0 < 180000) await sleep(400)
 }
 
 function taskDone (task, r, s) {

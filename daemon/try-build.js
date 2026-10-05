@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Архитектор: mc_build, mc_sort, mc_sign.
 //
 // Что здесь проверяется и почему именно это:
@@ -44,7 +46,6 @@
 // Сервер — свой, build (127.0.0.1:25566): правила игры и время меняются тут
 // свободно. Демон — ND_WS (по умолчанию ws://127.0.0.1:8771), игрок NeuroBuild.
 const path = require('path')
-const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { connect, createKit, sleep } = require('./scene-kit')
 const sorting = require('./src/sorting')
@@ -85,15 +86,15 @@ async function step (label, method, params) {
 
 // Зритель: второй клиент в режиме наблюдателя. Блоки мира читает он.
 async function eyeOpen () {
-  eye = mineflayer.createBot({ host: HOST, port: PORT, username: 'BuildEye', version: '1.21.11', auth: 'offline' })
+  eye = createGameBot({ host: HOST, port: PORT, username: 'BuildEye', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { eye.once('spawn', resolve); eye.once('error', reject); eye.once('kicked', r => reject(new Error('зрителя выкинули: ' + r))) })
   await kit.cmd('/gamemode spectator BuildEye')
 }
 
 async function eyeTo (x, y, z) {
   await kit.cmd(`/tp BuildEye ${x} ${y} ${z}`)
-  const t0 = Date.now()
-  while (Date.now() - t0 < 15000) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 15000) {
     const p = eye.entity && eye.entity.position
     if (p && Math.abs(p.x - x) < 2 && Math.abs(p.z - z) < 2 && eye.blockAt(new Vec3(x, Y, z))) break
     await sleep(300)

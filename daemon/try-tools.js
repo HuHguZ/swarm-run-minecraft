@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Инструмент как расходник, проверенный против рюкзака, а не против ощущений.
 //
 // Прогон try-diamond довёл бота с y=82 до y=-58 живым и там замуровал: две
@@ -64,7 +65,7 @@ const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 const types = list => list.map(e => e.type + (e.made ? ':' + e.made : ''))
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -72,7 +73,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -515,7 +516,7 @@ async function sceneTwice () {
   await give(worn)
   await standAt(lane, Y_DEEP)
   let t0 = mark()
-  let began = Date.now()
+  let began = gameClock.now()
   await giveMore(stock)
   const from1 = await where()
   await sleep(40000)
@@ -532,7 +533,7 @@ async function sceneTwice () {
   await sleep(2500)
   await give(worn)
   t0 = mark()
-  began = Date.now()
+  began = gameClock.now()
   await giveMore(stock)
   const from2 = await where()
   await sleep(40000)
@@ -565,9 +566,9 @@ async function sceneTwice () {
   await cmd(`/tp @s ${at1.x + 12}.5 ${Y_DEEP} ${lane}.5`)
   await sleep(2500)
   const beforeBrain = await where()
-  const t = Date.now()
+  const t = gameClock.now()
   const r = await step('мозг: stone_pickaxe', 'craft', { item: 'stone_pickaxe', count: 1 })
-  const brainMs = Date.now() - t
+  const brainMs = gameClock.now() - t
   const afterBrain = await where()
   const brainWalked = flat(beforeBrain, afterBrain)
   console.log(`  мозг: ${r.status} за ${brainMs}мс, тело прошло ${brainWalked} бл.`)

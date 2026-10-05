@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Арена: держать поле и возвращаться на него (2026-09-27, пользователь:
 // «один упал, второй его скинул и сам спрыгнул на его колонну, стал рукой
 // бить булыжник; тот внизу поднял голову и ничего не делал; нет блоков —
@@ -11,12 +12,15 @@
 //   потом поднимается.
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-arenahold.js [сцена]
 const WebSocket = require('ws')
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -30,7 +34,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await B.call('say', { text }); await sleep(40) }
@@ -82,7 +86,7 @@ async function scene (name) {
   }
   for (const who of ['NeuroDown', 'NeuroDown2']) { await cmd(`/effect give ${who} minecraft:instant_health 1 10 true`); await cmd(`/effect give ${who} minecraft:saturation 1 20 true`) }
   await sleep(1500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const track = { aMinY: 1e9, bBackAt: 0, aBackAt: 0, bMinY: 1e9 }
   let polling = true
   const poll = (async () => {
@@ -90,8 +94,8 @@ async function scene (name) {
       try {
         const sa = (await A.call('status')).state || {}
         const sb = (await B.call('status')).state || {}
-        if (sa.pos) { track.aMinY = Math.min(track.aMinY, sa.pos.y); if (name === 'мобы' && !track.aBackAt && sa.pos.y >= Y - 0.2) track.aBackAt = Date.now() - t0 }
-        if (sb.pos) { track.bMinY = Math.min(track.bMinY, sb.pos.y); if (name !== 'мобы' && !track.bBackAt && sb.pos.y >= Y - 0.2) track.bBackAt = Date.now() - t0 }
+        if (sa.pos) { track.aMinY = Math.min(track.aMinY, sa.pos.y); if (name === 'мобы' && !track.aBackAt && sa.pos.y >= Y - 0.2) track.aBackAt = gameClock.now() - t0 }
+        if (sb.pos) { track.bMinY = Math.min(track.bMinY, sb.pos.y); if (name !== 'мобы' && !track.bBackAt && sb.pos.y >= Y - 0.2) track.bBackAt = gameClock.now() - t0 }
       } catch {}
       await sleep(250)
     }
@@ -130,6 +134,6 @@ async function scene (name) {
     process.exitCode = 1
   } finally {
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

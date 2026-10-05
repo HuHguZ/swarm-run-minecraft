@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Лава на закрывшегося (живая арена 2026-09-26: противник закрылся в коробке,
 // бот прыгнул ему на крышу и вылил лаву себе под ноги — на крышу, потом
 // заложил её блоком). NeuroDown2 стоит в коробке из булыжника 1×2 с крышей
@@ -10,12 +12,15 @@
 const WebSocket = require('ws')
 const { Vec3 } = require('vec3')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -29,7 +34,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8781')
 const B = client(process.env.B || 'ws://127.0.0.1:8782')
 async function cmd (text) { await A.call('say', { text }); await sleep(60) }
@@ -38,8 +43,7 @@ const X = 800; const Y = 150; const Z = 800
 
 let OBS = null
 async function observer () {
-  const mineflayer = require('mineflayer')
-  const ob = mineflayer.createBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25566), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25566), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise((resolve, reject) => { ob.once('spawn', resolve); ob.once('error', reject); ob.once('kicked', reject) })
   await sleep(4000)
   ob.chat('/gamemode spectator'); await sleep(300)
@@ -64,17 +68,17 @@ async function stage (name, { roof = true, seconds = 20 }) {
   for (const w of ['NeuroDown', 'NeuroDown2']) { await cmd(`/effect give ${w} minecraft:instant_health 1 10 true`); await cmd(`/effect give ${w} minecraft:saturation 1 20 true`) }
   await sleep(1500)
   const hp0 = ((await B.call('status')).state || {}).health
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let lavaAt = null
   const col = [new Vec3(X, Y, Z), new Vec3(X, Y + 1, Z), new Vec3(X, Y + 2, Z)]
   const ownFeet = new Vec3(X, Y + 3, Z)
   let lavaOnRoof = null
-  const iv = OBS ? setInterval(() => {
-    if (lavaAt == null && col.some(c => /lava/.test((OBS.blockAt(c) || {}).name || ''))) lavaAt = Date.now() - t0
-    if (lavaOnRoof == null && /lava/.test((OBS.blockAt(ownFeet) || {}).name || '')) lavaOnRoof = Date.now() - t0
+  const iv = OBS ? gameClock.setInterval(() => {
+    if (lavaAt == null && col.some(c => /lava/.test((OBS.blockAt(c) || {}).name || ''))) lavaAt = gameClock.now() - t0
+    if (lavaOnRoof == null && /lava/.test((OBS.blockAt(ownFeet) || {}).name || '')) lavaOnRoof = gameClock.now() - t0
   }, 50) : null
   const r = await A.call('fight', { target: 'NeuroDown2', allowPlayer: true, timeoutSeconds: seconds, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
-  if (iv) clearInterval(iv)
+  if (iv) gameClock.clearInterval(iv)
   await A.call('stop').catch(() => {})
   const hp1 = ((await B.call('status').catch(() => ({}))).state || {}).health
   const d = r.detail || {}
@@ -109,6 +113,6 @@ async function stage (name, { roof = true, seconds = 20 }) {
   } finally {
     if (OBS) try { OBS.quit() } catch {}
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

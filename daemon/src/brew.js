@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Зелья: варочная стойка, огненный порошок, бутылки с водой, адский нарост →
 // «неловкое», дальше то, что нужно для прохождения. Рецепты — из самой игры:
 // PotionBrewing.addVanillaMixes (paper-1.21.11), см. SPEEDRUN.md «Зелья».
@@ -359,7 +360,7 @@ function findStand (bot, mcData, r = 16) {
 
 function watchProps (bot, win) {
   const st = { props: {}, at: 0 }
-  const on = p => { if (p.windowId !== win.id) return; st.props[p.property] = p.value; st.at = Date.now() }
+  const on = p => { if (p.windowId !== win.id) return; st.props[p.property] = p.value; st.at = gameClock.now() }
   bot._client.on('craft_progress_bar', on)
   st.stop = () => bot._client.removeListener('craft_progress_bar', on)
   return st
@@ -372,13 +373,13 @@ async function brewStep (bot, win, st, ingredient, ctl) {
   const sig = () => [0, 1, 2].map(s => win.slots[s] ? `${win.slots[s].name}:${potionName(win.slots[s])}` : '-').join('|')
   const before = sig()
   await putOne(bot, win, it, 3)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let started = false
-  while (Date.now() - t0 < 30000 && !ctl.aborted) {
+  while (gameClock.now() - t0 < 30000 && !ctl.aborted) {
     if ((st.props[0] || 0) > 0) started = true
-    if (sig() !== before) return { seconds: Math.round((Date.now() - t0) / 1000) }
+    if (sig() !== before) return { seconds: Math.round((gameClock.now() - t0) / 1000) }
     // Три секунды без отсчёта — стойка этот ингредиент не берёт.
-    if (!started && Date.now() - t0 > 3500) {
+    if (!started && gameClock.now() - t0 > 3500) {
       await takeOut(bot, win, 3)
       throw new Error(`стойка не варит ${ingredient} с тем, что в бутылках (${before})`)
     }

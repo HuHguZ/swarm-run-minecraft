@@ -1,3 +1,4 @@
+const gameClock = require('./src/game-clock')
 ﻿'use strict'
 // Арена против мобов на тестовом Paper: волны по типам, у бота — набор под
 // волну. Бот зачищает арену одним fight с clearArea (pvp.js duel).
@@ -24,13 +25,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const log = (...a) => {
   const line = `[${new Date().toISOString().slice(11, 19)}] ${a.join(' ')}`
   console.log(line)

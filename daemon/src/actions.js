@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 const { sleep, xyz, travelXZ } = require('./movement')
@@ -233,11 +234,11 @@ async function digDown (session, ctl, p = {}) {
   // budgeted the intent with and keeps twenty seconds more for itself, so
   // stopping here is the normal ending and the brain gets numbers rather than a
   // bare clock. The fallback repeats session.js's formula for a direct call.
-  const deadline = Date.now() + Math.max(10, Math.min(600,
+  const deadline = gameClock.now() + Math.max(10, Math.min(600,
     p.budgetSeconds ?? p.timeoutSeconds ?? (25 + Math.max(1, Math.min(128, depth)) * 4))) * 1000
 
   for (let i = 0; i < depth && !ctl.aborted; i++) {
-    if (Date.now() >= deadline) {
+    if (gameClock.now() >= deadline) {
       return finish(`время вышло на ${dug}-м блоке`)
     }
     // Before the swing: a swing is seconds and the answer to a mob is a block.
@@ -556,8 +557,8 @@ function dropFields (v) {
 // landing: the server applies fall damage on the landing tick and update_health
 // reaches us a packet later.
 async function settleFall (bot, ctl, fromY, fall) {
-  const until = Date.now() + 1500 + fall * 150
-  while (Date.now() < until && !ctl.aborted) {
+  const until = gameClock.now() + 1500 + fall * 150
+  while (gameClock.now() < until && !ctl.aborted) {
     if (bot.entity.onGround && bot.entity.position.floored().y < fromY) break
     await sleep(50)
   }
@@ -727,14 +728,14 @@ function ledgeReport (bot, feet, dir, put, other, noFooting, verdict, { canBuild
 // a single step, and with canDig on it digs its own detour straight out of the
 // staircase we are cutting.
 async function stepForward (bot, ctl, target, ms = 2500) {
-  const deadline = Date.now() + ms
+  const deadline = gameClock.now() + ms
   const cx = target.x + 0.5
   const cz = target.z + 0.5
   const near = () => Math.hypot(bot.entity.position.x - cx, bot.entity.position.z - cz)
   try {
     await bot.lookAt(new Vec3(cx, bot.entity.position.y, cz), true)
     bot.setControlState('forward', true)
-    while (Date.now() < deadline && !ctl.aborted && near() > 0.55) await sleep(60)
+    while (gameClock.now() < deadline && !ctl.aborted && near() > 0.55) await sleep(60)
   } catch {
   } finally {
     try { bot.setControlState('forward', false) } catch {}
@@ -784,14 +785,14 @@ function standingCell (bot) {
 // fraction of a block. Returns false if the body never left the lip.
 async function walkOff (bot, ctl, step, [dx, dz], fromY, ms = 4000) {
   const e = bot.entity
-  const deadline = Date.now() + ms
+  const deadline = gameClock.now() + ms
   // How far the centre is past the face between the lip and the step cell. The
   // hitbox leaves the lip at +0.3.
   const face = dx > 0 ? step.x : dx < 0 ? -(step.x + 1) : dz > 0 ? step.z : -(step.z + 1)
   const past = () => e.position.x * dx + e.position.z * dz - face
   let left = false
   const airborne = () => (left = left || (!e.onGround && e.position.y < fromY - 0.01))
-  const going = () => !ctl.aborted && Date.now() < deadline
+  const going = () => !ctl.aborted && gameClock.now() < deadline
   try {
     await bot.lookAt(new Vec3(step.x + 0.5, e.position.y + 1.6, step.z + 0.5), true)
     // Walking speed is 0.22 a tick and the glide after letting go about a
@@ -799,8 +800,8 @@ async function walkOff (bot, ctl, step, [dx, dz], fromY, ms = 4000) {
     bot.setControlState('forward', true)
     while (going() && !airborne() && past() < -0.1) await sleep(20)
     bot.setControlState('forward', false)
-    const calm = Date.now() + 700
-    while (going() && Date.now() < calm && !airborne() && Math.hypot(e.velocity.x, e.velocity.z) > 0.01) await sleep(20)
+    const calm = gameClock.now() + 700
+    while (going() && gameClock.now() < calm && !airborne() && Math.hypot(e.velocity.x, e.velocity.z) > 0.01) await sleep(20)
     if (!airborne()) {
       bot.setControlState('forward', true)
       while (going() && !airborne()) await sleep(20)
@@ -928,7 +929,7 @@ function guardFaces (bot, mob) {
 // an abort there leaves the way open with one block lying in it.
 async function guardWall (bot, mob) {
   const { reachOf } = require('./reach')
-  const deadline = Date.now() + GUARD_WALL_MS
+  const deadline = gameClock.now() + GUARD_WALL_MS
   const put = []
   const why = []
   let left = null
@@ -940,14 +941,14 @@ async function guardWall (bot, mob) {
   if (!faces.length) why.push('между нами нет ни одной открытой клетки, которую я могу заложить')
   for (const f of faces) {
     for (const cell of f.cells) {
-      if (Date.now() >= deadline) break
+      if (gameClock.now() >= deadline) break
       const r = await placeBlockAt(bot, cell, { timeoutMs: GUARD_LEASH_MS })
       if (r.ok && !r.already) put.push({ at: cell, bearing: f.bearing })
       else if (!r.ok && !why.includes(r.reason)) why.push(r.reason)
     }
     left = mob.isValid === false ? null : reachOf(bot, mob)
     if (!left || !left.reaches) return { sealed: true, put, why }
-    if (Date.now() >= deadline) { why.push('время на стену вышло'); break }
+    if (gameClock.now() >= deadline) { why.push('время на стену вышло'); break }
   }
   if (!left) left = mob.isValid === false ? null : reachOf(bot, mob)
   if (!left || !left.reaches) return { sealed: true, put, why }
@@ -1177,7 +1178,7 @@ async function digStairs (session, ctl, {
   const dir = direction && STAIR_DIRS[direction] ? STAIR_DIRS[direction] : facingDir(bot)
   const [dx, dz] = dir
   const want = Math.max(1, Math.min(128, depth))
-  const deadline = Date.now() + Math.max(10, Math.min(600, timeoutSeconds)) * 1000
+  const deadline = gameClock.now() + Math.max(10, Math.min(600, timeoutSeconds)) * 1000
   const again = call || `mc_dig_down mode=stairs direction=${dirName(dir)}`
 
   const before = countItems(bot)
@@ -1207,7 +1208,7 @@ async function digStairs (session, ctl, {
   // and a lip-stop that costs an iteration should not cost a metre of descent.
   // The iteration cap is only a runaway guard.
   for (let i = 0; cut < want && i < want * 3 && !ctl.aborted; i++) {
-    if (Date.now() >= deadline) { stopped = `время вышло на ${cut}-й ступеньке`; break }
+    if (gameClock.now() >= deadline) { stopped = `время вышло на ${cut}-й ступеньке`; break }
     const hp = bot.health ?? 20
     if (hp < 6) { stopped = `здоровья ${Math.round(hp)} — дальше не копаю`; break }
 
@@ -1349,8 +1350,8 @@ async function digStairs (session, ctl, {
     // A long drop needs a long wait: twelve blocks take most of a second in the
     // air, and reading the height mid-fall counts a stall.
     const settleFor = drop > 1 ? 1500 + drop * 150 : 1200
-    let settle = Date.now() + settleFor
-    while (Date.now() < settle && !ctl.aborted) {
+    let settle = gameClock.now() + settleFor
+    while (gameClock.now() < settle && !ctl.aborted) {
       if (bot.entity.position.floored().y <= low.y && bot.entity.onGround) break
       if (drop > 1 && bot.entity.position.floored().y < feet.y && bot.entity.onGround) break
       await sleep(60)
@@ -1364,8 +1365,8 @@ async function digStairs (session, ctl, {
     // on a bridged step the landing block is still under it at +0.4.
     if (bot.entity.position.floored().y >= feet.y && !ctl.aborted) {
       await stepForward(bot, ctl, low.offset(dx * 0.4, 0, dz * 0.4), 900)
-      settle = Date.now() + settleFor
-      while (Date.now() < settle && !ctl.aborted) {
+      settle = gameClock.now() + settleFor
+      while (gameClock.now() < settle && !ctl.aborted) {
         if (bot.entity.position.floored().y < feet.y && bot.entity.onGround) break
         await sleep(60)
       }
@@ -1456,7 +1457,7 @@ async function explore (session, ctl, {
   const ids = resolveBlockIds(block, session.mcData)
   const useFair = fair === undefined ? session.cfg.fairPlay : !!fair
   const from = xyz(bot.entity.position)
-  const deadline = Date.now() + Math.min(280, timeoutSeconds) * 1000
+  const deadline = gameClock.now() + Math.min(280, timeoutSeconds) * 1000
 
   let hit = firstVisible(bot, ids, radius, useFair, dry)
   if (hit) return { found: hit.name, at: xyz(hit.position), walked: 0, note: 'уже видно отсюда' }
@@ -1466,7 +1467,7 @@ async function explore (session, ctl, {
   // Разведка из-под неба верхнего мира — поверху (session.underSky,
   // underRoofCost): отрезок «по прямой» иначе уходил в пещеры.
   const walkTop = typeof session.underSky === 'function' && session.underSky()
-  while (Date.now() < deadline && !ctl.aborted) {
+  while (gameClock.now() < deadline && !ctl.aborted) {
     const [dx, dz] = direction && COMPASS[direction] ? COMPASS[direction] : SWEEP[i % SWEEP.length]
     const spread = direction ? i + 1 : 1 + Math.floor(i / SWEEP.length)
     const here = bot.entity.position
@@ -1665,7 +1666,7 @@ function rememberOwnBlock (session, name, pos) {
   if (name !== 'crafting_table') return
   if (!session.ownBlocks) session.ownBlocks = new Map()
   session.ownBlocks.delete(posKey(pos)) // re-insert so the eviction order is age
-  session.ownBlocks.set(posKey(pos), Date.now())
+  session.ownBlocks.set(posKey(pos), gameClock.now())
   while (session.ownBlocks.size > OWN_BLOCKS_KEPT) {
     session.ownBlocks.delete(session.ownBlocks.keys().next().value)
   }
@@ -1673,7 +1674,7 @@ function rememberOwnBlock (session, name, pos) {
 
 function isOwnBlock (session, pos) {
   const at = session.ownBlocks && session.ownBlocks.get(posKey(pos))
-  return !!at && Date.now() - at < OWN_BLOCK_TTL_MS
+  return !!at && gameClock.now() - at < OWN_BLOCK_TTL_MS
 }
 
 function forgetOwnBlock (session, pos) {
@@ -1737,8 +1738,8 @@ async function reclaimTable (session, ctl, table) {
   // Vanilla only vacuums up a drop within about a block, and the table is one
   // to three squares away. Wait for the free pickup first, walk only if it does
   // not come — walking is what cost eleven levels of altitude last time.
-  const deadline = Date.now() + 1500
-  while (Date.now() < deadline && countOf(bot, 'crafting_table') <= before) await sleep(150)
+  const deadline = gameClock.now() + 1500
+  while (gameClock.now() < deadline && countOf(bot, 'crafting_table') <= before) await sleep(150)
   if (countOf(bot, 'crafting_table') <= before) {
     try { await withTimeout(collectNearbyDrops(bot, ctl, { radius: 3, timeoutMs: 3000 }), 5000) } catch {}
     try { bot.pathfinder.setGoal(null) } catch {}
@@ -2214,8 +2215,8 @@ function bestFood (bot, mcData) {
 // ours with "Consuming cancelled due to calling bot.consume() again". If the
 // food bar went up, the bot ate, whatever the promise says.
 async function untilFoodRises (bot, before, timeoutMs, giveUp) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + timeoutMs
+  while (gameClock.now() < deadline) {
     if ((bot.food ?? 0) > before) return true
     if (giveUp && giveUp()) break
     await sleep(200)
@@ -2561,8 +2562,8 @@ async function sleepInBed (session, ctl, { untilMorning = true, waitSeconds = 40
   // Lying down is not the point — skipping the night is. The server only fires
   // the skip about 100 ticks after everyone is in bed, so a call that returns
   // the instant the bot is horizontal has done nothing useful yet.
-  const deadline = Date.now() + Math.max(5, Math.min(120, waitSeconds)) * 1000
-  while (Date.now() < deadline && !ctl.aborted && bot.isSleeping) {
+  const deadline = gameClock.now() + Math.max(5, Math.min(120, waitSeconds)) * 1000
+  while (gameClock.now() < deadline && !ctl.aborted && bot.isSleeping) {
     const t = bot.time ? bot.time.timeOfDay : 0
     if (t < 12541 || t > 23458) break
     await sleep(500)

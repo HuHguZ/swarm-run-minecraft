@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Подбор стрел в бою. Просьба 2026-09-25: «они видят, где стрелы падают, могут
 // специально к ним подбегать и собирать, чтобы потом на дальнике атаковать».
 //
@@ -45,7 +46,7 @@ function track (bot) {
     // Стрелок вне видимости или стрелы без стрелка (/summon) — неизвестно:
     // такие пробуем. Отсекаем только те, что точно выпустил моб.
     const owner = p.objectData ? bot.entities[p.objectData] : null
-    if (p.objectData) { const s = t.shots.get(p.objectData) || { n: 0, at: 0 }; s.n++; s.at = Date.now(); t.shots.set(p.objectData, s) }
+    if (p.objectData) { const s = t.shots.get(p.objectData) || { n: 0, at: 0 }; s.n++; s.at = gameClock.now(); t.shots.set(p.objectData, s) }
     t.player.set(p.entityId, owner ? owner.type === 'player' : null)
     if (t.player.size > 2000) t.player.delete(t.player.keys().next().value)
     try {
@@ -59,7 +60,7 @@ function track (bot) {
   // Когда воткнулась — по метке in_ground в момент, когда она пришла: от него
   // считаются 7 тиков дрожи и минута жизни.
   bot.on('entityUpdate', e => {
-    if ((e.name === 'arrow' || e.name === 'spectral_arrow') && !t.landed.has(e.id) && inGround(bot, e)) t.landed.set(e.id, Date.now())
+    if ((e.name === 'arrow' || e.name === 'spectral_arrow') && !t.landed.has(e.id) && inGround(bot, e)) t.landed.set(e.id, gameClock.now())
   })
   return t
 }
@@ -125,7 +126,7 @@ function lineClear (bot, from, to) {
 function pickable (bot, { maxDist = 12 } = {}) {
   const t = track(bot)
   const me = bot.entity.position
-  const now = Date.now()
+  const now = gameClock.now()
   const out = []
   for (const e of Object.values(bot.entities)) {
     if (!e || e === bot.entity || !e.position) continue
@@ -191,14 +192,14 @@ function stopPoint (me, pos, stop) {
   return { x: me.x + dx / len * stop, y: me.y, z: me.z + dz / len * stop }
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => new Promise(r => gameClock.setTimeout(r, ms))
 
 // Сбегать за стрелой (и за соседними — в пределах 3 блоков от следующей) и
 // вернуться к бою. Бросаем, как только: ударили нас, враг сократил до abortIf,
 // шаг опасен (safe), стрелы нет, вышло maxMs. Управление по возвращении пустое —
 // главный цикл боя выставит своё на следующем тике.
 async function collect (bot, ctl, { target, safe = null, abortIf = null, maxMs = 3500 } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const before = arrowCount(bot)
   const hp0 = bot.health ?? 20
   let cur = target
@@ -208,7 +209,7 @@ async function collect (bot, ctl, { target, safe = null, abortIf = null, maxMs =
   try {
     while (cur) {
       if (ctl && ctl.aborted) { why = 'прервали'; break }
-      if (Date.now() - t0 > maxMs) { why = 'не успел'; break }
+      if (gameClock.now() - t0 > maxMs) { why = 'не успел'; break }
       if ((bot.health ?? 20) < hp0) { why = 'ударили'; break }
       if (abortIf && abortIf()) { why = 'враг рядом'; break }
       if (!cur.e.isValid || !bot.entities[cur.e.id]) {
@@ -239,7 +240,7 @@ async function collect (bot, ctl, { target, safe = null, abortIf = null, maxMs =
   // подождать, иначе подобранное считается нулём.
   for (let i = 0; i < 6 && arrowCount(bot) === before && moved; i++) await sleep(50)
   const got = Math.max(0, arrowCount(bot) - before)
-  return { got, moved, why, ms: Date.now() - t0 }
+  return { got, moved, why, ms: gameClock.now() - t0 }
 }
 
 module.exports = { track, plan, collect, pickable, arrowCount, hasRoom }

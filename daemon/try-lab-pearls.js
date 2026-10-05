@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория этапов, этап 2 — жемчуг эндера (server-nether, 25567). Сцена
 // командами только ставит тело: /tp в искажённый лес Ада (или в верхний мир
 // ночью), набор кампании после этапа стержней, лечение. Дальше — ровно тот
@@ -130,7 +131,7 @@ async function scoreGet (k) {
 
 async function run (k) {
   kit = createKit({ call, heard: conn.heard, logFile: LOG, player: PLAYER })
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const from = logSize()
   await scene()
   for (const [key, crit] of Object.entries(SCORES)) {
@@ -139,7 +140,7 @@ async function run (k) {
   }
   const h0 = await header()
   const res = { run: k, at: new Date().toISOString(), where: `${DIMENSION} ${XYZ.join(' ')}`, start: h0.pos, biome: h0.biome, calls: [], minHp: 20, pearlsMax: 0 }
-  const hpTimer = setInterval(async () => {
+  const hpTimer = gameClock.setInterval(async () => {
     try {
       const h = await header()
       if (typeof h.health === 'number') res.minHp = Math.min(res.minHp, h.health)
@@ -150,12 +151,12 @@ async function run (k) {
     for (let i = 0; i < CALLS; i++) {
       const have = (await inv('ender_pearl')) + (await inv('ender_eye'))
       if (have >= WANT) break
-      const c0 = Date.now()
+      const c0 = gameClock.now()
       const r = await call('pearls', { count: WANT - have, timeoutSeconds: 400, ...(process.env.STYLE ? { style: process.env.STYLE } : {}) })
       const d = r.detail || {}
       const h = await header()
       const brief = {
-        s: Math.round((Date.now() - c0) / 1000),
+        s: Math.round((gameClock.now() - c0) / 1000),
         status: r.status,
         by: r.by ? r.by.type : undefined,
         mode: d.mode,
@@ -174,8 +175,8 @@ async function run (k) {
       if (r.by && r.by.type === 'death') break
       if ((h.health || 0) <= 0) break
     }
-  } finally { clearInterval(hpTimer) }
-  const deaths = kit.between(t0, Date.now(), 'death').length
+  } finally { gameClock.clearInterval(hpTimer) }
+  const deaths = kit.between(t0, gameClock.now(), 'death').length
   res.deaths = deaths + (res.calls.some(c => c.by === 'death') && !deaths ? 1 : 0)
   res.causes = serverLines(from).filter(l => /was|died|burn|fell|lava|drown|blew|killed|slain|fireball|flames|withered|shot/.test(l))
   res.pearls = await inv('ender_pearl')
@@ -183,7 +184,7 @@ async function run (k) {
   res.kills = res.calls.reduce((n, c) => n + (c.kills || 0), 0)
   for (const key of Object.keys(SCORES)) res[key] = await scoreGet(key)
   res.hp = (await header()).health
-  res.seconds = Math.round((Date.now() - t0) / 1000)
+  res.seconds = Math.round((gameClock.now() - t0) / 1000)
   res.ok = res.pearls >= WANT && res.deaths === 0
   fs.appendFileSync(OUT, JSON.stringify(res) + '\n')
   console.log(`ПОПЫТКА ${k}: ${res.ok ? 'OK' : 'ПЛОХО'} жемчуга ${res.pearls}, смертей ${res.deaths} ${JSON.stringify(res.causes)}, мин.хп ${res.minHp}, ${res.seconds} с`)

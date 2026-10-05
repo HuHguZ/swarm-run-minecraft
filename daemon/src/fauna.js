@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { placeBlockAt, withTimeout } = require('./build')
@@ -45,8 +46,8 @@ const BREED = {
 
 function sleep (ms, ctl) {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -113,8 +114,8 @@ async function approach (bot, ctl, e, range = 2.2, ms = 15000) {
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
   try {
     bot.pathfinder.setGoal(goal, true)
-    const t0 = Date.now()
-    while (Date.now() - t0 < ms && !ctl.aborted && e.isValid !== false) {
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < ms && !ctl.aborted && e.isValid !== false) {
       if (e.position.distanceTo(bot.entity.position) <= range + 0.5) return true
       await sleep(150)
     }
@@ -171,8 +172,8 @@ async function tame (session, ctl, { kind = 'wolf', tries = 15, radius = 32 } = 
       const before = watch.seen.length
       try { bot.activateEntity(target) } catch {}
       used++
-      const t0 = Date.now()
-      while (Date.now() - t0 < 1200 && watch.seen.length === before) await sleep(80)
+      const t0 = gameClock.now()
+      while (gameClock.now() - t0 < 1200 && watch.seen.length === before) await sleep(80)
       if (watch.seen.slice(before).includes(7)) break
     }
   } finally {
@@ -214,8 +215,8 @@ async function pet (session, ctl, { kind = null, sit = true, radius = 16 } = {})
       await holdNothing(bot)
       try { await bot.lookAt(e.position.offset(0, 0.5, 0), true) } catch {}
       try { bot.activateEntity(e) } catch {}
-      const t0 = Date.now()
-      while (Date.now() - t0 < 900 && isSitting(e) !== !!sit) await sleep(100, ctl)
+      const t0 = gameClock.now()
+      while (gameClock.now() - t0 < 900 && isSitting(e) !== !!sit) await sleep(100, ctl)
     }
     if (isSitting(e) === !!sit) changed++
   }
@@ -248,8 +249,8 @@ async function breed (session, ctl, { kind = 'cow', pairs = 1, radius = 24 } = {
         await sleep(400, ctl)
       }
       // Сердечки (18) у обоих — ждать детёныша, до 8 с.
-      const t0 = Date.now()
-      while (Date.now() - t0 < 8000 && !ctl.aborted) {
+      const t0 = gameClock.now()
+      while (gameClock.now() - t0 < 8000 && !ctl.aborted) {
         const kids = Object.values(bot.entities).filter(e => e.name === kind && isBaby(e)).length
         if (kids > kidsBefore) { bred++; break }
         await sleep(250)
@@ -378,12 +379,12 @@ function golemSpotNear (bot, g) {
 }
 async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + Math.max(20, Math.min(110, timeoutSeconds)) * 1000
-  const late = () => Date.now() > deadline || ctl.aborted
+  const late = () => gameClock.now() > deadline || ctl.aborted
   const ironBefore = countOf(bot, 'iron_ingot')
   const out = { killed: false, hits: 0, pillar: 0, iron: 0, steps: [] }
-  const mark = (s) => out.steps.push(`${Math.round((Date.now() - t0) / 100) / 10}с ${s}`)
+  const mark = (s) => out.steps.push(`${Math.round((gameClock.now() - t0) / 100) / 10}с ${s}`)
   const golems = () => Object.values(bot.entities).filter(e => e && e.name === 'iron_golem' && e.position && e.isValid !== false &&
     e.position.distanceTo(bot.entity.position) <= radius).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
   let g = golems().find(e => visible(bot, e)) || golems()[0]
@@ -432,7 +433,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
       if (!base) {
         g = bot.entities[id]
         if (!g) { gone = true; break }
-        if (!(await approach(bot, ctl, g, 3, Math.min(20000, deadline - Date.now())))) { mark('не подошёл'); continue }
+        if (!(await approach(bot, ctl, g, 3, Math.min(20000, deadline - gameClock.now())))) { mark('не подошёл'); continue }
         bot.pathfinder.setGoal(null)
         await sleep(150, ctl)
         // Ровное место в 1.8–2.8 бл. от голема: вокруг (3 бл.) голему не на что встать выше пола столба, над головой
@@ -447,8 +448,8 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
         const f0 = bot.entity.position.floored()
         if (!f0.equals(spot)) {
           try { bot.pathfinder.setGoal(new goals.GoalBlock(spot.x, spot.y, spot.z)) } catch {}
-          const tw = Date.now()
-          while (Date.now() - tw < 8000 && !ctl.aborted && !bot.entity.position.floored().equals(spot)) await sleep(150, ctl)
+          const tw = gameClock.now()
+          while (gameClock.now() - tw < 8000 && !ctl.aborted && !bot.entity.position.floored().equals(spot)) await sleep(150, ctl)
           bot.pathfinder.setGoal(null)
         }
         if (!bot.entity.position.floored().equals(spot)) { mark(`не встал на ${spot.x},${spot.y},${spot.z}`); continue }
@@ -479,7 +480,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
       if (w) { try { await bot.equip(w, 'hand') } catch {} }
       const cd = w && /_axe$/.test(w.name) ? 1250 : 650
       let lastHit = 0
-      let farSince = Date.now()
+      let farSince = gameClock.now()
       let lastHp = bot.health
       while (!gone && !late()) {
         g = bot.entities[id]
@@ -502,24 +503,24 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
         // уходил в свой же блок столба, сторож прицела удар не пускал (rt-R3 слот 30: 43 взмаха — голем жив).
         const a = d <= 2.95 ? require('./pick').aim(bot, g) : null
         if (a && a.point) {
-          farSince = Date.now()
+          farSince = gameClock.now()
           if (w && (!bot.heldItem || bot.heldItem.name !== w.name)) { try { await bot.equip(w, 'hand') } catch {} }
-          if (Date.now() - lastHit >= cd) {
+          if (gameClock.now() - lastHit >= cd) {
             try { await bot.lookAt(a.point, true) } catch {}
             const blocked0 = bot._ndBlockedHits || 0
-            try { bot.attack(g); lastHit = Date.now() } catch {}
+            try { bot.attack(g); lastHit = gameClock.now() } catch {}
             if ((bot._ndBlockedHits || 0) === blocked0) {
               out.hits++
               if (angerOn) { session._golemAngry ||= new WeakSet(); session._golemAngry.add(g) }
             }
             else out.blocked = (out.blocked || 0) + 1
           }
-        } else if (Date.now() - farSince > 6000 && !out.hits) {
+        } else if (gameClock.now() - farSince > 6000 && !out.hits) {
           mark(`голем ушёл (${d.toFixed(1)} бл.) до удара`)
           break
-        } else if (Date.now() - farSince > 15000 && !out.hits) { mark('голем не подходит'); break }
+        } else if (gameClock.now() - farSince > 15000 && !out.hits) { mark('голем не подходит'); break }
         // Голем уже зол (был удар) — со столба не уходить, ждать, пока подойдёт (он идёт к нам сам).
-        else if (Date.now() - farSince > 30000) { mark('злой голем не подходит 30 с'); break }
+        else if (gameClock.now() - farSince > 30000) { mark('злой голем не подходит 30 с'); break }
         await sleep(60, ctl)
       }
       if (gone || late()) break
@@ -539,8 +540,8 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
   if (base && bot.entity.position.floored().y > base.y && (gone || !gEnd || hd(gEnd) >= 6 || !angry())) await descendPillar(bot, ctl, base.y)
   if (gone && session._golemAngry) session._golemAngry.delete(g)
   if (gone) {
-    const until = Date.now() + 6000
-    while (Date.now() < until && !ctl.aborted) {
+    const until = gameClock.now() + 6000
+    while (gameClock.now() < until && !ctl.aborted) {
       const drop = Object.values(bot.entities).filter(e => e && e.name === 'item' && e.position && e.position.distanceTo(bot.entity.position) <= 8)
         .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
       if (!drop) break
@@ -552,7 +553,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 } = {
   }
   out.iron = countOf(bot, 'iron_ingot') - ironBefore
   out.hpLost = Math.max(0, Math.round((hp0 ?? 20) - (bot.health ?? 20)))
-  out.seconds = Math.round((Date.now() - t0) / 1000)
+  out.seconds = Math.round((gameClock.now() - t0) / 1000)
   if (!gone) out.stopped = `голем не убит за ${out.seconds} с (ударов ${out.hits})`
   return out
 }
@@ -605,8 +606,8 @@ async function golem (session, ctl, { kind = 'iron', mode = 'build', ...rest } =
       try { await bot.lookAt(top.offset(0.5, 0.5, 0.5), true) } catch {}
       try { await bot.activateBlock(b) } catch {}
     }
-    const t0 = Date.now()
-    while (!spawned && Date.now() - t0 < 2500) await sleep(100)
+    const t0 = gameClock.now()
+    while (!spawned && gameClock.now() - t0 < 2500) await sleep(100)
   } finally {
     bot.removeListener('entitySpawn', onSpawn)
   }
@@ -705,23 +706,23 @@ async function wool (session, ctl, { count = 3, radius = 40, x = null, z = null,
   const bot = session.bot
   const combat = require('./combat')
   const actions = require('./actions')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const out = { color: null, killed: 0, sheared: 0, seen: 0, steps: [] }
-  const step = s => { out.steps.push(`${Math.round((Date.now() - t0) / 100) / 10}с ${s}`) }
+  const step = s => { out.steps.push(`${Math.round((gameClock.now() - t0) / 100) / 10}с ${s}`) }
   const deadline = t0 + Math.max(10, Math.min(240, timeoutSeconds)) * 1000
   // К стаду по карте (скан копии: овцы при генерации) — если его не видно отсюда.
   if (Number.isFinite(x) && Number.isFinite(z) && !sheepAround(bot, radius).length) {
     const far = Math.hypot(bot.entity.position.x - x, bot.entity.position.z - z)
     if (far > 12) {
       step(`к стаду по карте ${Math.round(far)} бл.`)
-      try { await withTimeout(bot.pathfinder.goto(new goals.GoalNearXZ(x, z, 8)), Math.min(60000, deadline - Date.now()), 'путь к стаду') } catch (e) { step(`путь: ${String(e.message).slice(0, 60)}`) }
+      try { await withTimeout(bot.pathfinder.goto(new goals.GoalNearXZ(x, z, 8)), Math.min(60000, deadline - gameClock.now()), 'путь к стаду') } catch (e) { step(`путь: ${String(e.message).slice(0, 60)}`) }
     }
   }
   const done = () => out.color && countOf(bot, `${out.color}_wool`) >= count
   let misses = 0
   // Овца, с которой не вышло (не дошёл, в яме, за водой), — мимо: следующая того же цвета.
   const skip = new Set()
-  while (!ctl.aborted && Date.now() < deadline && !done()) {
+  while (!ctl.aborted && gameClock.now() < deadline && !done()) {
     const list = sheepAround(bot, radius).filter(s => !skip.has(s.e.id))
     out.seen = Math.max(out.seen, list.length)
     const c = color || out.color || woolColorPick(bot, list, count)
@@ -767,7 +768,7 @@ async function wool (session, ctl, { count = 3, radius = 40, x = null, z = null,
   }
   out.wool = out.color ? countOf(bot, `${out.color}_wool`) : 0
   out.ok = !!done()
-  out.seconds = Math.round((Date.now() - t0) / 1000)
+  out.seconds = Math.round((gameClock.now() - t0) / 1000)
   return out
 }
 

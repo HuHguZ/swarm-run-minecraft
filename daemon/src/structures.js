@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Постройки игры: узнать по тому, что видно, запомнить, рассудить, где искать
 // следующую, зайти, обезвредить ловушку и забрать ценное — объяснив, зачем.
 //
@@ -256,7 +257,7 @@ function groupNames (g) { return Array.isArray(g) ? g : g.names }
 function groupMin (g) { return Array.isArray(g) ? 1 : (g.min || 1) }
 function withTimeout (p, ms, what = 'время вышло') {
   let t
-  return Promise.race([p, new Promise((resolve, reject) => { t = setTimeout(() => reject(new Error(what)), ms) })]).finally(() => clearTimeout(t))
+  return Promise.race([p, new Promise((resolve, reject) => { t = gameClock.setTimeout(() => reject(new Error(what)), ms) })]).finally(() => gameClock.clearTimeout(t))
 }
 
 function kindsFor (dim) {
@@ -480,15 +481,15 @@ function remember (session, d, dim) {
   const same = list.find(s => s.kind === d.kind && s.dim === dim && flat(s, d.at) < Math.max(24, K.r * 2))
   if (same) {
     // Раз в минуту — обновить «видел» и улики, не чаще: patch пишет файл.
-    if (Date.now() - (same.t || 0) > 60000 || d.evidence.some(e => !(same.ev || []).includes(e))) {
+    if (gameClock.now() - (same.t || 0) > 60000 || d.evidence.some(e => !(same.ev || []).includes(e))) {
       session.journal.patch(s => {
         const r = (s.structures || []).find(x => x === same || (x.kind === same.kind && x.dim === same.dim && x.x === same.x && x.z === same.z))
-        if (r) { r.t = Date.now(); r.ev = [...new Set([...(r.ev || []), ...d.evidence])].slice(0, 8) }
+        if (r) { r.t = gameClock.now(); r.ev = [...new Set([...(r.ev || []), ...d.evidence])].slice(0, 8) }
       })
     }
     return { fresh: false, rec: same }
   }
-  const rec = { kind: d.kind, dim, x: d.at.x, y: d.at.y, z: d.at.z, t: Date.now(), ev: d.evidence.slice(0, 8), done: false }
+  const rec = { kind: d.kind, dim, x: d.at.x, y: d.at.y, z: d.at.z, t: gameClock.now(), ev: d.evidence.slice(0, 8), done: false }
   session.journal.patch(s => {
     if (!Array.isArray(s.structures)) s.structures = []
     s.structures.push(rec)
@@ -928,12 +929,12 @@ function headWet (bot) {
 
 async function breathe (bot, ctl, ms = 15000) {
   try { bot.pathfinder.setGoal(null) } catch {}
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   bot.setControlState('jump', true)
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms && headWet(bot)) await sleep(100)
-    const t1 = Date.now()
-    while (!ctl.aborted && Date.now() - t1 < 5000 && air(bot) < 19) await sleep(200)
+    while (!ctl.aborted && gameClock.now() - t0 < ms && headWet(bot)) await sleep(100)
+    const t1 = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - t1 < 5000 && air(bot) < 19) await sleep(200)
   } finally { bot.setControlState('jump', false) }
   return !headWet(bot)
 }
@@ -963,9 +964,9 @@ async function swimTo (session, ctl, pos, { reach = 4, ms = 25000 } = {}) {
   const bot = session.bot
   const aim = v3(pos).floored()
   const target = aim.offset(0.5, 0.5, 0.5)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let best = Infinity
-  let bestAt = Date.now()
+  let bestAt = gameClock.now()
   const off = () => { for (const c of ['forward', 'sneak', 'jump']) bot.setControlState(c, false) }
   // Присесть в воде — тонуть быстрее (ванильный LivingEntity.goDownInWater:
   // -0.04 к скорости за тик); prismarine-physics этого не умеет, добавляем.
@@ -977,7 +978,7 @@ async function swimTo (session, ctl, pos, { reach = 4, ms = 25000 } = {}) {
     bot.setControlState = function (c, v) { if (c === 'jump' && v) console.log('[swim] jump by', new Error().stack.split(String.fromCharCode(10)).slice(2, 5).join(' | ')); return orig.call(this, c, v) }
   }
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms) {
       const eye = bot.entity.position.offset(0, 1.62, 0)
       if (eye.distanceTo(target) <= reach) return true
       try { await bot.lookAt(target, true) } catch {}
@@ -993,12 +994,12 @@ async function swimTo (session, ctl, pos, { reach = 4, ms = 25000 } = {}) {
       const now = bot.entity.position
       const d = now.offset(0, 1.62, 0).distanceTo(target)
       if (process.env.ND_DEBUG_STRUCT) console.log('[swim]', now.x.toFixed(1), now.y.toFixed(1), now.z.toFixed(1), 'dy', dy.toFixed(1), 'flat', flatD.toFixed(1), 'air', air(bot).toFixed(1))
-      if (d < best - 0.4) { best = d; bestAt = Date.now() }
+      if (d < best - 0.4) { best = d; bestAt = gameClock.now() }
       // Полторы секунды без продвижения — упёрся: сломать, что между нами
       // (луч к цели), а нет — что перед ногами/головой по курсу.
-      if (Date.now() - bestAt > 1500) {
+      if (gameClock.now() - bestAt > 1500) {
         off()
-        bestAt = Date.now()
+        bestAt = gameClock.now()
         const dir = target.minus(eye).normalize()
         let hit = null
         try { hit = bot.world.raycast(eye, dir, 4.5, b => b.boundingBox === 'block' && !b.position.equals(aim)) } catch {}
@@ -1046,7 +1047,7 @@ async function takeWorth (session, ctl, pos, opts = {}) {
   for (let dive = 0; dive < 3 && !ctl.aborted; dive++) {
     const sub = childCtl(ctl)
     let drowning = false
-    const guard = setInterval(() => {
+    const guard = gameClock.setInterval(() => {
       if (air(bot) < 7 && headWet(bot)) { drowning = true; sub.abort() }
     }, 250)
     try {
@@ -1054,7 +1055,7 @@ async function takeWorth (session, ctl, pos, opts = {}) {
     } catch (e) {
       lastErr = e
       if (!drowning) throw e
-    } finally { clearInterval(guard) }
+    } finally { gameClock.clearInterval(guard) }
     await breathe(bot, ctl)
   }
   throw lastErr || new Error('прервано')
@@ -1072,7 +1073,7 @@ async function takeOnce (session, ctl, pos, { kind = null } = {}) {
   if (bot.inventory.emptySlotCount() < 3) {
     try { await pack.makeRoom(bot, { slots: 3, forItem: 'iron_ingot' }) } catch {}
   }
-  const deadline = Date.now() + 25000
+  const deadline = gameClock.now() + 25000
   armTraps(session)
   if (underwater(bot, at) || swimming(bot)) await swimTo(session, ctl, at, { reach: 3.4 })
   // Сундук под твёрдым блоком не открывается (ChestBlock.isChestBlockedAt):
@@ -1114,10 +1115,10 @@ async function takeOnce (session, ctl, pos, { kind = null } = {}) {
 // Вагонетка с сундуком: shift-клик только ценного.
 async function takeCart (session, ctl, cart) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   bot.pathfinder.setGoal(new goals.GoalFollow(cart, 2))
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
-  while (!ctl.aborted && Date.now() - t0 < 30000 && cart.isValid !== false && cart.position.distanceTo(bot.entity.position) > 3) await sleep(200)
+  while (!ctl.aborted && gameClock.now() - t0 < 30000 && cart.isValid !== false && cart.position.distanceTo(bot.entity.position) > 3) await sleep(200)
   bot.pathfinder.setGoal(null)
   if (cart.position.distanceTo(bot.entity.position) > 3.5) return { stopped: 'не дошёл до вагонетки', took: {} }
   const win = await withTimeout(bot.openContainer(cart), 6000, 'вагонетка не открылась')
@@ -1479,8 +1480,8 @@ async function treasureDig (session, ctl, p) {
     const r = await digAt(session, ctl, under.position, { maxMs: 8000, walkMs: 1 })
     if (!r.ok) { out.stopped = `не копается ${under.name}: ${r.why || '?'}`; break }
     // Дождаться падения на клетку ниже (сыпучее сверху — успеть увернуться не нужно: столбец 1×1 копаем под собой).
-    const t0 = Date.now()
-    while (Date.now() - t0 < 1500 && bot.entity.position.floored().y >= f.y && !ctl.aborted) await sleep(80)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 1500 && bot.entity.position.floored().y >= f.y && !ctl.aborted) await sleep(80)
     if (headWet(bot)) { out.stopped = 'в столбце вода — клад бросаю'; break }
   }
   if (!chest) { if (!out.stopped) out.stopped = 'сундука клада не нашёл в столбце'; return out }
@@ -1581,8 +1582,8 @@ async function explore (session, ctl, p = {}) {
 
 // Раз в 8 с — честный осмотр; новая постройка — событие structure_seen.
 function install (session) {
-  if (session._structuresTimer) return
-  session._structuresTimer = setInterval(() => {
+  if (session._structuresTimer && !session._structuresTimer.clock?.disposed) return
+  session._structuresTimer = gameClock.setInterval(() => {
     try {
       const bot = session.bot
       if (!bot || !bot.entity || session.structuresAuto === false) return

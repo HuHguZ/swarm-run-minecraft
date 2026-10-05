@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // The strip mine, checked against ground truth instead of against a screenshot.
 //
 // Four things go wrong in a drift and all four are invisible from the outside:
@@ -35,14 +36,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -313,10 +314,10 @@ async function sceneMob (label, gives, expectSealed) {
   await sleep(800)
 
   const before = await call('status')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await step(`штрек east ${LEN}`, 'tunnel',
     { direction: 'east', length: LEN, timeoutSeconds: 90 })
-  const answeredIn = Date.now() - t0
+  const answeredIn = gameClock.now() - t0
   const d = r.detail
   const afterIntent = await call('status')
 

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Блочный клатч от падения (edges.js, сторож падения, 30.09.2026): падаем там, где вода
 // не годится — Ад, нет ведра, посадка на листву, — блок на видимую грань, и тело садится
 // на него с безопасной высоты. Стенд в закрытой коробке (в Аду — от лавы вокруг):
@@ -114,25 +115,25 @@ async function trial (conn, kit, { slot, site, dim, H, k, rep, floor, bucket }) 
     const poll = (async () => {
       while (going) {
         const s = await conn.call('status', { physics: true }).catch(() => null)
-        if (s && s.state) track.push({ t: Date.now(), y: s.state.pos.y, x: s.state.pos.x, hp: s.state.health, g: !!(s.detail && s.detail.physics && s.detail.physics.onGround) })
+        if (s && s.state) track.push({ t: gameClock.now(), y: s.state.pos.y, x: s.state.pos.x, hp: s.state.health, g: !!(s.detail && s.detail.physics && s.detail.physics.onGround) })
         await sleep(60)
       }
     })()
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     if (site === 'wall') await kit.cmd(w(`setblock ${cx} ${F + H - 1} ${cz} minecraft:air`))
     else await kit.cmd(`/damage @s 0.01 minecraft:mob_attack by @e[type=minecraft:armor_stand,tag=ndkb,limit=1]`)
     // Ждём, пока тело не простоит на земле 1.5 с (или 8 с всего).
     for (;;) {
       await sleep(100)
       const last = track[track.length - 1]
-      const since = track.filter(p => p.t > Date.now() - 1500)
-      if (Date.now() - t0 > 1200 && since.length >= 5 && since.every(p => p.g) && last) break
-      if (Date.now() - t0 > 8000) break
+      const since = track.filter(p => p.t > gameClock.now() - 1500)
+      if (gameClock.now() - t0 > 1200 && since.length >= 5 && since.every(p => p.g) && last) break
+      if (gameClock.now() - t0 > 8000) break
     }
     going = false
     await poll
     const s1 = (await conn.call('status')).state
-    r.ms = Date.now() - t0
+    r.ms = gameClock.now() - t0
     r.end = { pos: s1.pos, hp: s1.health }
     const after = track.filter(p => p.t >= t0)
     r.minHp = Math.min(...after.map(p => p.hp), s1.health)
@@ -140,7 +141,7 @@ async function trial (conn, kit, { slot, site, dim, H, k, rep, floor, bucket }) 
     r.landY = Math.round(s1.pos.y * 100) / 100
     r.fall = Math.round((r.peak - s1.pos.y) * 100) / 100
     r.drift = Math.round((s1.pos.x - s0.pos.x) * 100) / 100
-    const falls = kit.between(t0, Date.now() + 1000, 'damage').filter(e => e.cause === 'fall')
+    const falls = kit.between(t0, gameClock.now() + 1000, 'damage').filter(e => e.cause === 'fall')
     r.fallHits = falls.map(e => e.lost)
     r.blocks = blocks0 - (s1.inventory[B] || 0)
     r.water = bucket ? (s1.inventory.water_bucket || 0) > 0 : null

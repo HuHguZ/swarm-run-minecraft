@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория «новый мир → ступень» (research/05-synthesis.md J1): новый мир со случайным сидом
 // (farm.js up N --fresh --random), тело на спавне с пустым рюкзаком, дальше — campaign.js полным порядком
 // этапов, без команд и без человека. Подготовка — только до старта кампании (ферма): /random reset,
@@ -126,7 +127,7 @@ async function main () {
       await sleep(8000)
     }
   }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   for (let k = 0; ; k++) {
     try { await scene(); break } catch (e) {
       if (k >= 3 || !/Timeout waiting for|chunks/.test(String(e.message))) throw e
@@ -137,7 +138,7 @@ async function main () {
   const size = logSize()
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
   try { fs.writeFileSync(clog, '') } catch {}
-  const tc = Date.now()
+  const tc = gameClock.now()
   // MAP_LAVA=1 — место лавы под небом из скана копии мира (good-v2 / portal-scan, portal-natural.poolInfo) кампании
   // (ND_OW_LAVA_HINT); правило AGENTS.md: знание карты из копии этого же мира разрешено. Отдельная метрика.
   let lavaHint = null
@@ -154,14 +155,14 @@ async function main () {
   let reachedAt = null
   let lastCheck = 0
   const until = tc + MINUTES * 60000
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(5000)
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
-    if (Date.now() - lastCheck > 30000 || exited !== null) {
-      lastCheck = Date.now()
+    if (gameClock.now() - lastCheck > 30000 || exited !== null) {
+      lastCheck = gameClock.now()
       const s = await status()
-      if (reached(s, text)) { ok = true; reachedAt = Math.round((Date.now() - tc) / 6000) / 10; stoppedBy = `ступень ${UNTIL} пройдена`; break }
+      if (reached(s, text)) { ok = true; reachedAt = Math.round((gameClock.now() - tc) / 6000) / 10; stoppedBy = `ступень ${UNTIL} пройдена`; break }
     }
     if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
     const deaths = deathLines(size)
@@ -178,7 +179,7 @@ async function main () {
   if (!ok && reached(s, text)) {
     ok = true
     const m = /ВЕХА (?:cast|portal): готово в \S+, (\d+) мин/.exec(text)
-    reachedAt = m && UNTIL === 'portal' ? Number(m[1]) : Math.round((Date.now() - tc) / 6000) / 10
+    reachedAt = m && UNTIL === 'portal' ? Number(m[1]) : Math.round((gameClock.now() - tc) / 6000) / 10
     stoppedBy = `ступень ${UNTIL} пройдена`
   }
   const facts = campaignFacts(text)
@@ -194,7 +195,7 @@ async function main () {
     keepInv: KEEP_INV,
     ...(process.env.MAP_LAVA === '1' ? { lavaHint } : {}),
     ok,
-    minutes: Math.round((Date.now() - tc) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - tc) / 6000) / 10,
     reachedAt,
     stoppedBy,
     exitCode: exited,
@@ -214,7 +215,7 @@ async function main () {
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
   // Тело без кампании в мире — лёгкая добыча; мир слота остаётся контрольной точкой следующей ступени.
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-fresh окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-fresh окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

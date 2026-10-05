@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Кристаллы Края в бою с игроком (просьба 2026-09-30: «они много урона наносят
 // и тоже зрелищно драться ими, научи ботов ими биться зрелищно»). Бой — не
 // ваншот, а размен: взрывы, «попы» тотемов, обсидиан вокруг ног, подрыв
@@ -58,7 +59,7 @@ const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec
 const ANCHOR_P = 5
 const ANCHOR_WORLDS = /overworld|end$|the_end/
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
 const r1 = (x) => Math.round(x * 10) / 10
 
 // ---------------------------------------------------------------- геометрия
@@ -309,7 +310,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
   const onGone = (e) => {
     try {
       if (!e || e.name !== 'end_crystal' || !e.position) return
-      gone.push({ id: e.id, pos: e.position.clone(), at: Date.now() })
+      gone.push({ id: e.id, pos: e.position.clone(), at: gameClock.now() })
       while (gone.length > 30) gone.shift()
     } catch {}
   }
@@ -318,7 +319,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       if (!e || e.name !== 'end_crystal') return
       if (!mine.has(e.id)) {
         const foe = enemy()
-        if (foe && foe.position && e.position.distanceTo(foe.position) < 6) sawHis = Date.now()
+        if (foe && foe.position && e.position.distanceTo(foe.position) < 6) sawHis = gameClock.now()
       }
     } catch {}
   }
@@ -327,7 +328,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
   const onHurt = (e) => {
     try {
       const foe = enemy()
-      const now = Date.now()
+      const now = gameClock.now()
       if (bot.entity && e && e.id === bot.entity.id) myHurtAt = now
       else if (foe && e && e.id === foe.id) {
         hisHurtAt = now
@@ -347,7 +348,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
         st.anchorSeen = (st.anchorSeen || 0) + 1
         const at5 = new Vec3(c.x, c.y, c.z)
         const f5 = enemy()
-        const now5 = Date.now()
+        const now5 = gameClock.now()
         if (bot.entity) { const m = boom.blast(bot, at5, 5, bot.entity.position, { def: boom.defenseOf(bot, bot.entity) }); if (m.raw > 1.01) myWin = winUpdate(myWin, now5, m.raw) }
         if (f5 && f5.position) { const h = boom.blast(bot, at5, 5, f5.position, { def: boom.defenseOf(bot, f5) }); if (h.raw > 1.01) hisWin = winUpdate(hisWin, now5, h.raw) }
         return
@@ -358,14 +359,14 @@ function create (bot, { enemy, used = () => {} } = {}) {
       // сразу, взрыв — после explode): ищем и среди только что снятых.
       let ent = null
       for (const e of Object.values(bot.entities)) if (e && e.name === 'end_crystal' && e.position && e.position.distanceTo(at) < 0.2) { ent = e; break }
-      if (!ent) { const g = gone.find(x => Date.now() - x.at < 1000 && x.pos.distanceTo(at) < 0.2); if (g) ent = { id: g.id } }
+      if (!ent) { const g = gone.find(x => gameClock.now() - x.at < 1000 && x.pos.distanceTo(at) < 0.2); if (g) ent = { id: g.id } }
       const rec = ent && mine.get(ent.id)
-      const own = !!(rec && rec.hitAt && Date.now() - rec.hitAt < 600)
+      const own = !!(rec && rec.hitAt && gameClock.now() - rec.hitAt < 600)
       st.booms++
       if (own) st.mine++; else st.his++
       const foe = enemy()
       const cache = new Map()
-      const now = Date.now()
+      const now = gameClock.now()
       if (bot.entity) {
         const m = boom.blast(bot, at, P, bot.entity.position, { def: boom.defenseOf(bot, bot.entity), cache })
         if (m.raw > 1.01) myWin = winUpdate(myWin, now, m.raw)
@@ -380,7 +381,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       const ev = { at: now, center: at, own, hisBefore, myBefore, popHim: false, popMe: false }
       exploded.push(ev)
       while (exploded.length > 40) exploded.shift()
-      setTimeout(() => {
+      gameClock.setTimeout(() => {
         try {
           // «Поп» тотема (событие 35) сервер шлёт из hurtServer — РАНЬШЕ пакета
           // взрыва (ServerLevel.explode: explode(), потом ClientboundExplode).
@@ -411,14 +412,14 @@ function create (bot, { enemy, used = () => {} } = {}) {
   const onDamage = (p) => {
     try {
       if (!bot.entity || p.entityId !== bot.entity.id) return
-      lastDmg = { at: Date.now(), self: p.sourceCauseId === bot.entity.id + 1 }
+      lastDmg = { at: gameClock.now(), self: p.sourceCauseId === bot.entity.id + 1 }
     } catch {}
   }
   const onStatus = (p) => {
     try {
       if (p.entityStatus !== 35) return
       const foe = enemy()
-      const now = Date.now()
+      const now = gameClock.now()
       if (bot.entity && p.entityId === bot.entity.id) {
         st.myPops++
         pops.push({ at: now, who: 'me' })
@@ -442,20 +443,20 @@ function create (bot, { enemy, used = () => {} } = {}) {
     try { bot._client.removeListener('damage_event', onDamage) } catch {}
   }
 
-  const inWin = (w, ms = IFRAME_MS - 20) => w && Date.now() - w.at < ms ? w : null
+  const inWin = (w, ms = IFRAME_MS - 20) => w && gameClock.now() - w.at < ms ? w : null
   // Только кристалл (в руке или поставленный у нас): обсидиан в руке — ещё не
   // кристаллы («арсенал»: обсидиан — на коробку), и «бой кристаллами» с его
   // запретом коробки и перестрелки тогда включался бы зря.
   const heShows = (foe) => {
     const eq = (foe && foe.equipment) || []
-    if ((eq[0] && eq[0].name === 'end_crystal') || (eq[1] && eq[1].name === 'end_crystal')) sawHis = Date.now()
-    return Date.now() - sawHis < 60000
+    if ((eq[0] && eq[0].name === 'end_crystal') || (eq[1] && eq[1].name === 'end_crystal')) sawHis = gameClock.now()
+    return gameClock.now() - sawHis < 60000
   }
 
   // Худший для меня кристалл, который он может поставить прямо сейчас
   // (обсидиан/бедрок в 4.5 от его глаз, рядом со мной, столб свободен).
   function worstVsMe (foe, cache, dMe) {
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - worstCache.at < 250) return worstCache.v
     const me = bot.entity.position
     const cell = feetCell(me)
@@ -496,7 +497,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
     if (!ON || !bot.entity) return null
     const foe = enemy()
     if (!foe || !foe.position || foe.isValid === false) return null
-    const now = Date.now()
+    const now = gameClock.now()
     const me = bot.entity.position
     const eye = me.offset(0, EYE, 0)
     const k = kitOf(bot)
@@ -739,8 +740,8 @@ function create (bot, { enemy, used = () => {} } = {}) {
   function waitSpawn (at, ms = 450) {
     return new Promise(resolve => {
       const on = (e) => { if (e && e.name === 'end_crystal' && e.position && e.position.distanceTo(at) < 0.3) done(e) }
-      const t = setTimeout(() => done(null), ms)
-      function done (e) { clearTimeout(t); bot.removeListener('entitySpawn', on); resolve(e) }
+      const t = gameClock.setTimeout(() => done(null), ms)
+      function done (e) { gameClock.clearTimeout(t); bot.removeListener('entitySpawn', on); resolve(e) }
       bot.on('entitySpawn', on)
     })
   }
@@ -767,7 +768,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
     } catch (e) { fail('клик: ' + e.message); return null }
     const c = await w
     if (!c) { fail('кристалл не появился'); return null }
-    mine.set(c.id, { at: Date.now(), base })
+    mine.set(c.id, { at: gameClock.now(), base })
     st.placed++
     return c
   }
@@ -781,18 +782,18 @@ function create (bot, { enemy, used = () => {} } = {}) {
     const before = bot._ndBlockedHits || 0
     try { bot.attack(c) } catch { return false }
     if ((bot._ndBlockedHits || 0) > before) { fail('сторож прицела'); return false }
-    const rec = mine.get(c.id) || { at: Date.now() }
-    rec.hitAt = Date.now()
+    const rec = mine.get(c.id) || { at: gameClock.now() }
+    rec.hitAt = gameClock.now()
     mine.set(c.id, rec)
     st.hits++
     return true
   }
 
   async function backOff (ctl, from, { ms = 900, until = null, stepSafe = null } = {}) {
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
     try {
-      while (Date.now() - t0 < ms && !ctl.aborted) {
+      while (gameClock.now() - t0 < ms && !ctl.aborted) {
         if (until && until()) break
         const me = bot.entity.position
         const yaw = Math.atan2(-(me.x - from.x), -(me.z - from.z))
@@ -875,8 +876,8 @@ function create (bot, { enemy, used = () => {} } = {}) {
     }
     const r = await boom.shootAt(bot, ctl, c, { anyBow: true, drawMs: c.position.distanceTo(bot.entity.position) > 10 ? 900 : 550, shouldStop: () => (ctx.stop && ctx.stop()) || selfRisk() || lineRisk() }).catch(e => ({ shot: false, why: e.message }))
     if (r && r.shot) {
-      const rec = mine.get(c.id) || { at: Date.now() }
-      rec.hitAt = Date.now() + 400 // стрела летит
+      const rec = mine.get(c.id) || { at: gameClock.now() }
+      rec.hitAt = gameClock.now() + 400 // стрела летит
       mine.set(c.id, rec)
       st.shots++
       return true
@@ -936,7 +937,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'dodge') {
-      lastDodge = Date.now()
+      lastDodge = gameClock.now()
       const dMe = boom.defenseOf(bot, bot.entity)
       await backOff(ctl, a.from, { ms: 500, stepSafe: ctx.stepSafe, until: () => boom.blast(bot, a.from, P, bot.entity.position, { def: dMe }).dmg < Math.max(3, a.t.me * 0.5) })
       st.dodges++
@@ -964,7 +965,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       if (!c) { out.note = 'кристалл: не поставил'; out.wait = 250; return out }
       if (a.kind === 'place') {
         st.pre++
-        pendingAt = Date.now()
+        pendingAt = gameClock.now()
         out.ok = true
         out.keepItem = true
         out.note = `кристалл заранее — жду конца его неуязвимости (прогноз ${r1(a.t.him)})`
@@ -986,7 +987,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'place-shoot') {
-      lastPlaceShoot = Date.now()
+      lastPlaceShoot = gameClock.now()
       const c = await place(a.base, a.f)
       if (!c) { out.note = 'кристалл: не поставил'; out.wait = 250; return out }
       const dMe = boom.defenseOf(bot, bot.entity)
@@ -1009,7 +1010,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'anchor') {
-      lastAnchor = Date.now()
+      lastAnchor = gameClock.now()
       const { placeBlockAt } = require('./build')
       let r = null
       try { r = await placeBlockAt(bot, a.cell, { item: 'respawn_anchor', honest: true, timeoutMs: 500 }) } catch (e) { r = { ok: false, reason: e.message } }
@@ -1030,9 +1031,9 @@ function create (bot, { enemy, used = () => {} } = {}) {
       }
       // Заряд: светокамнем; ждать, пока блок покажет заряд (свойство charges).
       if (!(await click('glowstone'))) { fail('якорь: заряд'); out.note = 'якорь поставил, зарядить не вышло'; out.wait = 200; return out }
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const charged = () => { const b = ab(); if (!b || b.name !== 'respawn_anchor') return false; try { const p = b.getProperties && b.getProperties(); return !!(p && Number(p.charges) > 0) } catch { return false } }
-      while (Date.now() - t0 < 300 && !charged()) await sleep(TICK)
+      while (gameClock.now() - t0 < 300 && !charged()) await sleep(TICK)
       if (!charged()) { fail('якорь: заряд не подтвердился'); out.note = 'якорь: заряд не подтвердился'; out.wait = 150; return out }
       // Взрыв: «использовать» мечом (не светокамнем, в левой руке тотем) — если
       // размен на миг клика всё ещё годен (за перенос меча и взгляд хп и место уходят).
@@ -1045,7 +1046,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'obby') {
-      lastObby = Date.now()
+      lastObby = gameClock.now()
       const { placeBlockAt } = require('./build')
       let r = null
       try { r = await placeBlockAt(bot, a.cell, { item: 'obsidian', honest: true, timeoutMs: 500 }) } catch (e) { r = { ok: false, reason: e.message } }
@@ -1066,7 +1067,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'mend') {
-      lastMend = Date.now()
+      lastMend = gameClock.now()
       const idx = await toHotbar('experience_bottle')
       if (idx < 0) { out.note = 'бутылки опыта: не в хотбаре'; out.wait = 300; return out }
       if (bot.quickBarSlot !== idx) bot.setQuickBarSlot(idx)
@@ -1100,10 +1101,10 @@ function create (bot, { enemy, used = () => {} } = {}) {
       // Сферы впитываются по порции в 2 тика (бутылка 3–11 опыта, 2 прочности за
       // очко; 12 бутылок ≈ 24 порции ≈ 2.5 с) — стоять, пока рядом есть сферы и
       // броня чинится, не дольше 3.5 с, бросить при опасности.
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const orbsNear = () => Object.values(bot.entities).some(e => e && e.name === 'experience_orb' && e.position && e.position.distanceTo(bot.entity.position) < 6)
       await sleep(300)
-      while (Date.now() - t0 < 3500 && !ctl.aborted && !danger() && orbsNear()) await sleep(TICK)
+      while (gameClock.now() - t0 < 3500 && !ctl.aborted && !danger() && orbsNear()) await sleep(TICK)
       // Починено — только по уцелевшим вещам (сломанная пропала бы как «починенная»).
       let fixed = 0
       for (const sl of [5, 6, 7, 8]) {
@@ -1121,7 +1122,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'eat') {
-      lastEat = Date.now()
+      lastEat = gameClock.now()
       const idx = await toHotbar(a.item)
       if (idx < 0) { out.note = 'яблоко: не в хотбаре'; out.wait = 300; return out }
       if (bot.quickBarSlot !== idx) bot.setQuickBarSlot(idx)
@@ -1130,8 +1131,8 @@ function create (bot, { enemy, used = () => {} } = {}) {
       let why = null
       try {
         bot.activateItem()
-        const t0 = Date.now()
-        while (Date.now() - t0 < 1900 && !ctl.aborted) {
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 1900 && !ctl.aborted) {
           await sleep(TICK)
           if (countOf(bot, a.item) < had) break
           // Его кристалл у меня и мне от него смертельно — бросить есть.
@@ -1154,7 +1155,7 @@ function create (bot, { enemy, used = () => {} } = {}) {
       return out
     }
     if (a.kind === 'surround') {
-      lastSurround = Date.now()
+      lastSurround = gameClock.now()
       const n = await doSurround(ctl, foe)
       if (n > 0) { st.surround++; st.surroundBlocks += n }
       out.ok = n > 0

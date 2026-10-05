@@ -90,15 +90,34 @@ function visibleOf (bot, ids, radius, { max = 12, rays = 800, skip = null, fair 
   const r = Math.ceil(radius)
   const r2 = radius * radius
   const hits = []
+  const sectionTargets = new Map()
   for (let dx = -r; dx <= r; dx++) {
     for (let dz = -r; dz <= r; dz++) {
       const h2 = dx * dx + dz * dz
       if (h2 > r2) continue
       const x = c.x + dx
       const z = c.z + dz
-      if (!column(x, z)) continue
+      const col = column(x, z)
+      if (!col) continue
       const dy = Math.floor(Math.sqrt(r2 - h2))
       for (let y = Math.max(minY, c.y - dy); y <= Math.min(maxY, c.y + dy); y++) {
+        // Палитра доказывает отсутствие целей во всей секции (как structures.gather).
+        // Нет метаданных палитры — читаем состояния прежним способом.
+        const sy = Math.floor((y - minY) / 16)
+        const data = col.sections?.[sy]?.data
+        let eligible = true
+        if (data) {
+          eligible = sectionTargets.get(data)
+          if (eligible === undefined) {
+            eligible = data.palette ? data.palette.some(st => want.has(st)) :
+              data.value === undefined || want.has(data.value)
+            sectionTargets.set(data, eligible)
+          }
+        }
+        if (!eligible) {
+          y = minY + (sy + 1) * 16 - 1
+          continue
+        }
         if (!want.has(stateAt(x, y, z))) continue
         if (fair && !(isOpen(stateAt(x, y + 1, z)) || isOpen(stateAt(x, y - 1, z)) ||
           isOpen(stateAt(x + 1, y, z)) || isOpen(stateAt(x - 1, y, z)) ||

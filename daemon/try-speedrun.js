@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Спидран-приёмы на настоящем мире своего сервера (2026-09-26). Сцена ставит
 // тело командами оператора, а дальше всё делает демон теми же вызовами, что и
 // мозг/кампания — честно, без команд:
@@ -122,7 +123,7 @@ conn.ready.then(async () => {
         if (!again || again.x !== S.x || again.z !== S.z) { console.log(`   точка ${sp.x},${sp.z}: ближайшая другая (${JSON.stringify(again)}) — пропуск`); continue }
         await gear()
         for (let k = 0; k < 2; k++) {
-          const t0 = Date.now()
+          const t0 = gameClock.now()
           const r = await call('stronghold', { mode: 'throw' })
           const t = r.detail || {}
           if (!t.thrown || !t.start || !Number.isFinite(t.bearing)) { console.log(`   бросок не вышел: ${t.why || r.error || JSON.stringify(t).slice(0, 200)}`); continue }
@@ -130,7 +131,7 @@ conn.ready.then(async () => {
           const res = wrap(t.bearing - truth)
           const dist = Math.hypot(S.x - t.start.x, S.z - t.start.z)
           stats.throws.push({ res, dist, flew: t.flew, samples: t.samples })
-          console.log(`   ${Math.round(dist)} бл.: угол ${t.bearingDeg}°, правда ${(truth * DEG).toFixed(4)}°, невязка ${(res * DEG).toFixed(5)}° (${(res * dist).toFixed(2)} бл. поперёк у крепости), пролёт ${t.flew}, пакетов ${t.samples}, разбилось ${t.broke}, ${Math.round((Date.now() - t0) / 1000)}с`)
+          console.log(`   ${Math.round(dist)} бл.: угол ${t.bearingDeg}°, правда ${(truth * DEG).toFixed(4)}°, невязка ${(res * DEG).toFixed(5)}° (${(res * dist).toFixed(2)} бл. поперёк у крепости), пролёт ${t.flew}, пакетов ${t.samples}, разбилось ${t.broke}, ${Math.round((gameClock.now() - t0) / 1000)}с`)
           // Второй бросок — с другой точки в 30 блоках вбок (для решателя из памяти).
           if (k === 0) {
             const side = t.bearing + Math.PI / 2
@@ -155,10 +156,10 @@ conn.ready.then(async () => {
         const sp = await landSpot(S)
         if (!sp) { console.log('   суши с этой крепостью не нашлось'); continue }
         await gear()
-        const t0 = Date.now()
+        const t0 = gameClock.now()
         const r = await call('stronghold', { mode: 'find', timeoutSeconds: 300 })
         const d = r.detail || {}
-        const secs = Math.round((Date.now() - t0) / 1000)
+        const secs = Math.round((gameClock.now() - t0) / 1000)
         const err = d.stronghold ? Math.round(Math.hypot(d.stronghold.x - S.x, d.stronghold.z - S.z)) : null
         stats.finds.push({ err, secs, throws: (d.throws || []).length, p: d.p, d: sp.d, broke: (d.throws || []).filter(t => t.broke).length })
         console.log(`   ${sp.d} бл.: ${d.stronghold ? `${d.stronghold.x},${d.stronghold.z}` : d.stopped} p=${d.p} ошибка ${err} бл., бросков ${(d.throws || []).length}, разбилось ${(d.throws || []).filter(t => t.broke).length}, ${secs}с, ls ${JSON.stringify(d.ls)}`)
@@ -183,12 +184,12 @@ conn.ready.then(async () => {
       await sleep(5000)
       await kit.cmd(`/execute in minecraft:the_nether run spreadplayers ${sx} ${sz} 0 20 under 100 false @s`, { reply: /Spread|Could not/, ms: 30000 })
       await sleep(3000)
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       // Цель — лестница старта по правде /locate (как её дал бы find): x,z явно.
       const r = await call('stronghold', { mode: 'travel', x: S.x + 4, z: S.z + 4, go: false, timeoutSeconds: 540 })
       const d = r.detail || {}
       const h = await header()
-      const secs = Math.round((Date.now() - t0) / 1000)
+      const secs = Math.round((gameClock.now() - t0) / 1000)
       const off = h.pos ? Math.round(Math.hypot(h.pos.x - (S.x + 4), h.pos.z - (S.z + 4))) : null
       console.log(`   travel: ${r.status} ${d.stopped || ''} за ${secs}с; мир ${h.dimension}, тело ${JSON.stringify(h.pos)}, до лестницы ${off} бл.; шаги ${JSON.stringify(d.legs)}`)
       check('(п) вышел в верхний мир ближе 64 блоков к лестнице старта', h.dimension === 'overworld' && off !== null && off <= 64, `${h.dimension} ${off}`)
@@ -207,10 +208,10 @@ conn.ready.then(async () => {
       await kit.cmd(`/execute in minecraft:the_nether run spreadplayers ${B.x + 8} ${B.z + 8} 0 24 under 100 false @s`, { reply: /Spread|Could not/, ms: 30000 })
       await sleep(3000)
       await call('armor', {})
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const r = await call('pearls', { mode: 'barter', count: Number(process.env.BARTER || 16), timeoutSeconds: 150 })
       const d = r.detail || {}
-      const secs = Math.round((Date.now() - t0) / 1000)
+      const secs = Math.round((gameClock.now() - t0) / 1000)
       console.log(`   barter: ${r.status} за ${secs}с — отдал ${d.spent}, жемчуг ${d.pearls}, добыча ${JSON.stringify(d.gained)}, урон ${d.hpLost}, ${d.stopped || ''}`)
       check('(б) хоть одна сделка', (d.spent || 0) > 0, d.spent)
     }

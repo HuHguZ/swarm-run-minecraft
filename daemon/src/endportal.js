@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // От «крепость» в памяти до горящего портала в Край: дойти, уточнить точку оком,
 // прокопаться вниз, найти портальную комнату по коридорам и вставить глаза в
 // рамки (mc_stronghold mode=go / room / fill). Бросок ока и пересечение лучей —
@@ -68,7 +69,7 @@ async function walkTo (bot, ctl, target, range, ms) {
     await Promise.race([
       bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, range)),
       guard.promise,
-      new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), Math.max(500, ms)) }),
+      new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(500, ms)) }),
       // Обрыв (nether.guarded: ударили по дороге) — не ждать конца пути.
       new Promise((_resolve, reject) => { if (ctl && Array.isArray(ctl.onAbort)) ctl.onAbort.push(() => reject(new Error('прервано'))) })
     ])
@@ -78,7 +79,7 @@ async function walkTo (bot, ctl, target, range, ms) {
     return { ok: false, error: e.message }
   } finally {
     guard.stop()
-    if (timer) clearTimeout(timer)
+    if (timer) gameClock.clearTimeout(timer)
   }
 }
 
@@ -95,7 +96,7 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }) 
   const startY = bot.entity.position.floored().y
   for (;;) {
     if (ctl.aborted) return { stopped: 'прервано', dug }
-    if (Date.now() > deadline) return { stopped: 'время вышло', dug }
+    if (gameClock.now() > deadline) return { stopped: 'время вышло', dug }
     const feet = bot.entity.position.floored()
     if (Number.isFinite(targetY) && feet.y <= targetY) return feet.y === targetY
       ? { reached: true, at: xyz(feet), dug, fromY: startY }
@@ -173,7 +174,7 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }) 
         // спуски с проверкой падения), дальше снова шахтой.
         if (stairsTries++ < 2) {
           const y0 = feet.y
-          const st = await require('./actions').digDown(session, ctl, { mode: 'stairs', depth: Math.min(24, gap + 3, Number.isFinite(targetY) ? feet.y - targetY : 128), timeoutSeconds: Math.max(20, Math.min(120, Math.round((deadline - Date.now()) / 1000) - 10)) }).catch(e => ({ stopped: e.message }))
+          const st = await require('./actions').digDown(session, ctl, { mode: 'stairs', depth: Math.min(24, gap + 3, Number.isFinite(targetY) ? feet.y - targetY : 128), timeoutSeconds: Math.max(20, Math.min(120, Math.round((deadline - gameClock.now()) / 1000) - 10)) }).catch(e => ({ stopped: e.message }))
           const y1 = bot.entity.position.floored().y
           if (y1 < y0) { dug += (st && st.dug) || 0; continue }
         }
@@ -234,9 +235,9 @@ async function sideStepShaft (bot, mcData, feet) {
       try { await equipBestTool(bot, b); await bot.dig(b); dug++ } catch { ok = false; break }
     }
     if (!ok) continue
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     try {
-      while (Date.now() - t0 < 1500 && !bot.entity.position.floored().equals(n)) {
+      while (gameClock.now() - t0 < 1500 && !bot.entity.position.floored().equals(n)) {
         await bot.lookAt(n.offset(0.5, 1.6, 0.5), true)
         bot.setControlState('forward', true)
         await sleep(50)
@@ -321,8 +322,8 @@ async function enterByBricks (session, ctl, { deadline }) {
   cands = cands.slice(0, 16).filter(k => insideHold(bot, k.c))
   const tries = []
   for (const k of cands.slice(0, 4)) {
-    if (ctl.aborted || Date.now() > deadline) break
-    const w = await walkTo(bot, ctl, k.c, 0, Math.min(30000, Math.max(3000, deadline - Date.now())))
+    if (ctl.aborted || gameClock.now() > deadline) break
+    const w = await walkTo(bot, ctl, k.c, 0, Math.min(30000, Math.max(3000, deadline - gameClock.now())))
     const f = bot.entity.position.floored()
     const inside = insideHold(bot, f)
     tries.push({ to: xyz(k.c), ok: w.ok, inside, why: w.ok ? undefined : w.error })
@@ -377,9 +378,9 @@ async function breakIn (session, ctl, { deadline, tries = 8, toward = null } = {
   // Шаг клавишами в соседнюю клетку: pathfinder'у в шахте 1x1 не развернуться.
   const stepInto = async (cell) => {
     const target = cell.offset(0.5, 0, 0.5)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     try {
-      while (Date.now() - t0 < 1500 && bot.entity.position.floored().distanceTo(cell) >= 0.5) {
+      while (gameClock.now() - t0 < 1500 && bot.entity.position.floored().distanceTo(cell) >= 0.5) {
         await bot.lookAt(target.offset(0, 1.6, 0), true)
         bot.setControlState('forward', true)
         await sleep(50)
@@ -399,7 +400,7 @@ async function breakIn (session, ctl, { deadline, tries = 8, toward = null } = {
     }
     return n
   }
-  for (let i = 0; i < tries && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; i < tries && !ctl.aborted && gameClock.now() < deadline; i++) {
     if (roomy()) return { inside: true, steps }
     const feet = bot.entity.position.floored()
     const down = feet.offset(0, -1, 0)
@@ -589,7 +590,7 @@ async function goAround (session, ctl, target, { deadline }) {
     const r = await tunnelUnder(session, ctl, target, deadline)
     dug += r.dug || 0
     if (r.ok || r.bricks) return { ok: true, from: xyz(from), dug, bricks: r.bricks }
-    if (!r.wet || ctl.aborted || Date.now() > deadline) return { ok: false, from: xyz(from), dug, why: r.why }
+    if (!r.wet || ctl.aborted || gameClock.now() > deadline) return { ok: false, from: xyz(from), dug, why: r.why }
     const cur = bot.entity.position.floored()
     const deeper = await shaftToBricks(session, ctl, { minY: cur.y - 6, deadline })
     dug += deeper.dug || 0
@@ -604,7 +605,7 @@ async function tunnelUnder (session, ctl, target, deadline) {
   const mcData = session.mcData
   let dug = 0
   let wet = false
-  for (let steps = 0; steps < 40 && !ctl.aborted && Date.now() < deadline; steps++) {
+  for (let steps = 0; steps < 40 && !ctl.aborted && gameClock.now() < deadline; steps++) {
     const f = bot.entity.position.floored()
     const ddx = target.x - f.x
     const ddz = target.z - f.z
@@ -636,9 +637,9 @@ async function tunnelUnder (session, ctl, target, deadline) {
         try { await equipBestTool(bot, b); await bot.dig(b); dug++ } catch (e) { err = e.message; break }
       }
       if (err) continue
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       try {
-        while (Date.now() - t0 < 1500 && !bot.entity.position.floored().equals(feet)) {
+        while (gameClock.now() - t0 < 1500 && !bot.entity.position.floored().equals(feet)) {
           await bot.lookAt(feet.offset(0.5, 1.6, 0.5), true)
           bot.setControlState('forward', true)
           await sleep(50)
@@ -659,12 +660,12 @@ async function tunnelUnder (session, ctl, target, deadline) {
 // пока не выйдем на сушу (1.5 с не в воде) или не выйдет время.
 async function swimAcross (bot, ctl, target, ms = 90000) {
   const { inWater } = require('./movement')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const start = bot.entity.position.clone()
   let dry = 0
   let wasWet = false
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms) {
       const me = bot.entity.position
       if (Math.hypot(target.x - me.x, target.z - me.z) <= 6) break
       await bot.lookAt(new Vec3(target.x, me.y + 1.2, target.z), true)
@@ -673,18 +674,18 @@ async function swimAcross (bot, ctl, target, ms = 90000) {
       await sleep(250)
       if (inWater(bot)) { wasWet = true; dry = 0 } else if (wasWet) { dry += 250; if (dry >= 1500) break }
       // Не заходит в воду 8 с (обрыв, стена) — стоп.
-      if (!wasWet && Date.now() - t0 > 8000) break
+      if (!wasWet && gameClock.now() - t0 > 8000) break
     }
   } finally { try { bot.clearControlStates() } catch {} }
-  return { moved: Math.round(bot.entity.position.distanceTo(start)), seconds: Math.round((Date.now() - t0) / 1000), ashore: wasWet && dry >= 1500 }
+  return { moved: Math.round(bot.entity.position.distanceTo(start)), seconds: Math.round((gameClock.now() - t0) / 1000), ashore: wasWet && dry >= 1500 }
 }
 
 async function swimToward (bot, ctl, target, ms = 90000) {
   const { inWater, findNearestLand } = require('./movement')
   if (!inWater(bot) || findNearestLand(bot, 24)) return { swam: false }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms && inWater(bot) && !findNearestLand(bot, 24)) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms && inWater(bot) && !findNearestLand(bot, 24)) {
       const me = bot.entity.position
       await bot.lookAt(new Vec3(target.x, me.y + 1.2, target.z), true)
       bot.setControlState('forward', true)
@@ -694,7 +695,7 @@ async function swimToward (bot, ctl, target, ms = 90000) {
   } finally {
     try { bot.clearControlStates() } catch {}
   }
-  return { swam: true, seconds: Math.round((Date.now() - t0) / 1000), land: !!findNearestLand(bot, 24) }
+  return { swam: true, seconds: Math.round((gameClock.now() - t0) / 1000), land: !!findNearestLand(bot, 24) }
 }
 
 // Мост по воде (лаборатория 2026-09-27: в воду pathfinder заходит, а выходит
@@ -743,13 +744,13 @@ function altStrongholds (corner) {
   const ang = Math.atan2(corner.x, corner.z)
   return [2 * Math.PI / 3, -2 * Math.PI / 3].map(d => ({ bearingDeg: Math.round((ang + d) * 180 / Math.PI), ringFrom: 1408, ringTo: 2688 }))
 }
-async function bridgeAcross (bot, ctl, target, { maxBlocks = 64, deadline = Date.now() + 120000 } = {}) {
+async function bridgeAcross (bot, ctl, target, { maxBlocks = 64, deadline = gameClock.now() + 120000 } = {}) {
   const { placeBlockAt, pickFiller } = require('./build')
   let placed = 0
   let dryRun = 0
   try {
     bot.setControlState('sneak', true)
-    for (let i = 0; i < 300 && !ctl.aborted && Date.now() < deadline; i++) {
+    for (let i = 0; i < 300 && !ctl.aborted && gameClock.now() < deadline; i++) {
       const me = bot.entity.position
       const dx = target.x - me.x; const dz = target.z - me.z
       if (Math.hypot(dx, dz) < 3) break
@@ -781,9 +782,9 @@ async function bridgeAcross (bot, ctl, target, { maxBlocks = 64, deadline = Date
         }
       }
       // Шаг вперёд.
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const goal = (/water/.test(nb.name) ? next.offset(0, 1, 0) : next)
-      while (Date.now() - t0 < 1800 && !bot.entity.position.floored().equals(goal) && !bot.entity.position.floored().equals(next)) {
+      while (gameClock.now() - t0 < 1800 && !bot.entity.position.floored().equals(goal) && !bot.entity.position.floored().equals(next)) {
         await bot.lookAt(goal.offset(0.5, 1.6, 0.5), true).catch(() => {})
         bot.setControlState('forward', true)
         if (/water/.test(nb.name)) bot.setControlState('jump', true)
@@ -824,9 +825,9 @@ async function chopToward (bot, ctl, mcData, target, steps = 6) {
       if (missingHarvestTool(bot, b, mcData)) return moved
       try { await equipBestTool(bot, b); await bot.dig(b) } catch { return moved }
     }
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     try {
-      while (Date.now() - t0 < 1500 && !bot.entity.position.floored().equals(goal)) {
+      while (gameClock.now() - t0 < 1500 && !bot.entity.position.floored().equals(goal)) {
         await bot.lookAt(goal.offset(0.5, 1.6, 0.5), true)
         bot.setControlState('forward', true)
         if (up) bot.setControlState('jump', true)
@@ -846,7 +847,7 @@ async function walkOrBridge (session, ctl, corner, deadline) {
   const legs = []
   let bridged = 0
   let boats = 0
-  for (let k = 0; k < 40 && !ctl.aborted && Date.now() < deadline; k++) {
+  for (let k = 0; k < 40 && !ctl.aborted && gameClock.now() < deadline; k++) {
     const me = bot.entity.position
     const dist = Math.hypot(corner.x - me.x, corner.z - me.z)
     if (dist <= 8) return { ok: true, legs, bridged }
@@ -860,11 +861,11 @@ async function walkOrBridge (session, ctl, corner, deadline) {
         // Море или большое озеро — лодкой, как спидраннеры (ride.js: сделать из 5
         // досок, спустить, плыть к цели, у берега высадка и лодку с собой).
         // Ферма, крепость A: с севера к ней «воды 94–96+ блоков по прямой».
-        if (boats < 3 && !ctl.aborted && Date.now() < deadline - 30000) {
+        if (boats < 3 && !ctl.aborted && gameClock.now() < deadline - 30000) {
           boats++
           const before = bot.entity.position.clone()
           let r = null
-          try { r = await require('./ride').run(session, ctl, { kind: 'boat', mode: 'go', x: corner.x, z: corner.z, timeoutSeconds: Math.max(30, Math.min(240, Math.round((deadline - Date.now()) / 1000) - 10)) }) } catch (e) { r = { stopped: e.message } }
+          try { r = await require('./ride').run(session, ctl, { kind: 'boat', mode: 'go', x: corner.x, z: corner.z, timeoutSeconds: Math.max(30, Math.min(240, Math.round((deadline - gameClock.now()) / 1000) - 10)) }) } catch (e) { r = { stopped: e.message } }
           const moved = Math.round(bot.entity.position.distanceTo(before))
           legs.push({ boat: true, moved, arrived: !!(r && r.arrived), stopped: r && r.stopped })
           log('лодкой', { moved, arrived: !!(r && r.arrived), stopped: r && r.stopped })
@@ -873,7 +874,7 @@ async function walkOrBridge (session, ctl, corner, deadline) {
           // вплавь поперёк озера, как человек: поверху, прыжком держаться у
           // поверхности, до суши на том берегу (ферма, крепость A: над портальной
           // комнатой озеро ~100 блоков, лодка «спустить некуда» в 2 из 5).
-          const sw = await swimAcross(bot, ctl, corner, Math.min(120000, Math.max(0, deadline - Date.now() - 20000)))
+          const sw = await swimAcross(bot, ctl, corner, Math.min(120000, Math.max(0, deadline - gameClock.now() - 20000)))
           legs.push({ swim: true, ...sw })
           log('вплавь', sw)
           if (sw.moved >= 16) continue
@@ -891,7 +892,7 @@ async function walkOrBridge (session, ctl, corner, deadline) {
         const far = Math.min(d2, wl.firstWet + wl.run + 4)
         const fx = Math.round(me2.x + (corner.x - me2.x) / d2 * far)
         const fz = Math.round(me2.z + (corner.z - me2.z) / d2 * far)
-        const w = await require('./nether').guarded(session, ctl, sub => travelXZ(bot, sub, fx, fz, { range: 3, retries: 1, deadline: Math.min(deadline, Date.now() + 90000) }))
+        const w = await require('./nether').guarded(session, ctl, sub => travelXZ(bot, sub, fx, fz, { range: 3, retries: 1, deadline: Math.min(deadline, gameClock.now() + 90000) }))
         legs.push({ acrossWater: wl.run, to: { x: fx, z: fz }, ok: w.ok, error: w.ok ? undefined : w.error })
         if (!w.ok) {
           const { inWater, escapeWater } = require('./movement')
@@ -900,7 +901,7 @@ async function walkOrBridge (session, ctl, corner, deadline) {
         }
         continue
       }
-      const b = await bridgeAcross(bot, ctl, corner, { maxBlocks: 64, deadline: Math.min(deadline, Date.now() + 120000) })
+      const b = await bridgeAcross(bot, ctl, corner, { maxBlocks: 64, deadline: Math.min(deadline, gameClock.now() + 120000) })
       bridged += b.placed
       legs.push({ bridge: b.placed, ok: b.ok, why: b.why })
       // Мост не встал (глубоко, не к чему прислонить блок; прогон 23) — дальше
@@ -912,7 +913,7 @@ async function walkOrBridge (session, ctl, corner, deadline) {
     const tx = Math.round(me.x + (corner.x - me.x) / dist * step)
     const tz = Math.round(me.z + (corner.z - me.z) / dist * step)
     // Под охраной: ударили по дороге (джунгли: зомби, скелеты) — бой и дальше.
-    const w = await require('./nether').guarded(session, ctl, sub => travelXZ(bot, sub, tx, tz, { range: 2, retries: 1, deadline: Math.min(deadline, Date.now() + 40000) }))
+    const w = await require('./nether').guarded(session, ctl, sub => travelXZ(bot, sub, tx, tz, { range: 2, retries: 1, deadline: Math.min(deadline, gameClock.now() + 40000) }))
     if (w.fought) { legs.push({ fought: w.fought }); if ((bot.health ?? 20) < 8) { try { await require('./actions').eat(session, {}) } catch {} } continue }
     legs.push({ to: { x: tx, z: tz }, ok: w.ok, error: w.ok ? undefined : w.error })
     if (!w.ok) {
@@ -926,7 +927,7 @@ async function walkOrBridge (session, ctl, corner, deadline) {
       }
       // Обход вбок отрезками и штрек (nether.walkToward) — к самой цели, а не к
       // концу отрезка: для цели ближе 24 он ничего не делает.
-      const nw = await require('./nether').walkToward(session, ctl, { x: corner.x, y: Math.floor(bot.entity.position.y), z: corner.z }, Math.min(deadline, Date.now() + 90000), { range: 6, xz: true })
+      const nw = await require('./nether').walkToward(session, ctl, { x: corner.x, y: Math.floor(bot.entity.position.y), z: corner.z }, Math.min(deadline, gameClock.now() + 90000), { range: 6, xz: true })
       legs.push({ around: true, ok: !!(nw && nw.ok) })
       if (legs.filter(l => l.around && !l.ok).length >= 3) return { ok: false, legs, bridged, error: w.error }
     }
@@ -1029,7 +1030,7 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   let stopped = null
   // К комнате прямо на её высоте. Лава/вода — обойти по сухому на этом же
   // уровне; пустота — твёрдая подпорка перед шагом, никакого падения к лаве.
-  for (let i = 0; i < 160 && !ctl.aborted && Date.now() < deadline; i++) {
+  for (let i = 0; i < 160 && !ctl.aborted && gameClock.now() < deadline; i++) {
     const feet = bot.entity.position.floored()
     if (feet.y !== target.y) { stopped = 'сбило с уровня комнаты — нужен новый подход'; break }
     if (feet.x === target.x && feet.z === target.z) return { went: true, inside: true, mapped: true, room: room.centre, target: xyz(target), dug, walks }
@@ -1046,12 +1047,12 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
         const build = require('./build')
         const fill = build.pickFiller(bot, { steady: true })
         if (!fill) { stopped = 'пустота: нет твёрдых блоков на пол'; continue }
-        const b = await build.placeBlockAt(bot, floor, { item: fill.name, timeoutMs: Math.min(2000, Math.max(1, deadline - Date.now())) })
+        const b = await build.placeBlockAt(bot, floor, { item: fill.name, timeoutMs: Math.min(2000, Math.max(1, deadline - gameClock.now())) })
         if (!b.ok) { stopped = `пустота: не поставил опору (${b.reason})`; continue }
       }
       // Видимость проверяет обёртка каждого dig: голова сначала открывает ноги.
       if (require('./tunnel').lowPicks(bot) < 2) await require('./tunnel').restockPicks(session, ctl, 2).catch(() => 0)
-      const r = await require('./nether').guarded(session, ctl, sub => require('./mining').tunnel(session, sub, { direction, length: 1, torchEvery: 0, timeoutSeconds: Math.max(1, Math.min(20, (deadline - Date.now()) / 1000)) }))
+      const r = await require('./nether').guarded(session, ctl, sub => require('./mining').tunnel(session, sub, { direction, length: 1, torchEvery: 0, timeoutSeconds: Math.max(1, Math.min(20, (deadline - gameClock.now()) / 1000)) }))
       dug += r.dug || 0
       if (bot.entity.position.floored().equals(cell)) { moved = true; walks.push({ to: xyz(cell) }); break }
       stopped = r.stopped || r.error || 'шаг штрека не выполнен'
@@ -1059,12 +1060,12 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
     }
     if (!moved) break
   }
-  return { went: false, mapped: true, dug, walks, room: room.centre, stopped: ctl.aborted ? 'прервано' : Date.now() >= deadline ? 'время вышло' : stopped || 'прямой штрек к комнате не закончен' }
+  return { went: false, mapped: true, dug, walks, room: room.centre, stopped: ctl.aborted ? 'прервано' : gameClock.now() >= deadline ? 'время вышло' : stopped || 'прямой штрек к комнате не закончен' }
 }
 
 async function goStronghold (session, ctl, p = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 300, 30, 600) * 1000 - 4000
   if (worlds.worldOf(bot) !== 'overworld') {
     return { went: false, stopped: `крепость — в верхнем мире, а я ${worlds.inWorld(worlds.worldOf(bot))}: сначала портал (mc_portal mode=enter)` }
@@ -1079,7 +1080,7 @@ async function goStronghold (session, ctl, p = {}) {
   const walks = []
   const far = Math.hypot(bot.entity.position.x - corner.x, bot.entity.position.z - corner.z)
   if (far > 10) {
-    const sw = await swimToward(bot, ctl, corner, Math.min(120000, Math.max(0, deadline - Date.now() - 30000)))
+    const sw = await swimToward(bot, ctl, corner, Math.min(120000, Math.max(0, deadline - gameClock.now() - 30000)))
     if (sw.swam) walks.push({ swam: sw })
     const w = await walkOrBridge(session, ctl, corner, deadline)
     walks.push({ to: corner, ok: w.ok, error: w.error, bridged: w.bridged || undefined, legs: w.legs.length })
@@ -1117,7 +1118,7 @@ async function goStronghold (session, ctl, p = {}) {
   let refined = !!rec.refined
   if (!refined && p.refine !== false && itemNamed(bot, 'ender_eye')) {
     const stronghold = require('./stronghold')
-    for (let i = 0; i < 4 && !ctl.aborted && Date.now() < deadline; i++) {
+    for (let i = 0; i < 4 && !ctl.aborted && gameClock.now() < deadline; i++) {
       const t = await stronghold.throwEye(session, ctl)
       throws.push({ from: t.from, landed: t.landed, flew: t.flew, bearingDeg: t.bearingDeg, below: t.below, broke: t.broke })
       if (!t.thrown) break
@@ -1193,7 +1194,7 @@ async function goStronghold (session, ctl, p = {}) {
     inside: broke ? broke.inside : false,
     brokeIn: broke && broke.steps.length ? broke.steps : undefined,
     eyesLeft: countOf(bot, 'ender_eye'),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (dig.found) {
     savePlace(session, PLACE, { x: corner.x, z: corner.z, y: here.y, dimension: 'overworld', entered: xyz(here) },
@@ -1228,7 +1229,7 @@ function visibleOf (bot, ids, radius, count = 64) {
 async function findRoom (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 300, 30, 600) * 1000 - 4000
   if (worlds.worldOf(bot) !== 'overworld') return { found: false, stopped: 'крепости бывают только в верхнем мире' }
   const frameId = mcData.blocksByName.end_portal_frame.id
@@ -1241,7 +1242,7 @@ async function findRoom (session, ctl, p = {}) {
   let went = null
   const map = process.env.ND_ROOM_MAP !== '0' && require('./stronghold').mappedRoom(placeOf(session, PLACE))
   if (p.go !== false && ((!visibleOf(bot, brickIds, 12, 4).length && placeOf(session, PLACE)) || (map && !visibleOf(bot, [frameId], 16, 16).length))) {
-    const secs = Math.max(30, Math.round((deadline - Date.now()) / 1000 * 0.6))
+    const secs = Math.max(30, Math.round((deadline - gameClock.now()) / 1000 * 0.6))
     went = await goStronghold(session, ctl, { ...p, timeoutSeconds: secs })
     if (!went.went) return { found: false, went, stopped: `до крепости не добрался: ${went.stopped}` }
   }
@@ -1268,8 +1269,8 @@ async function findRoom (session, ctl, p = {}) {
     walked += bot.entity.position.distanceTo(last)
     last = bot.entity.position.clone()
   }
-  const markTimer = setInterval(mark, 500)
-  ctl.onAbort.push(() => clearInterval(markTimer))
+  const markTimer = gameClock.setInterval(mark, 500)
+  ctl.onAbort.push(() => gameClock.clearInterval(markTimer))
 
   let seenFrames = []
   let digOuts = 0
@@ -1297,15 +1298,15 @@ async function findRoom (session, ctl, p = {}) {
   if (!eb.inside) pre = await breakIn(session, ctl, { deadline, tries: 8, toward: recS && recS.refined ? { x: recS.x + 4, z: recS.z + 4 } : null })
   if (pre.steps.length) legs.push({ why: 'пробился внутрь', steps: pre.steps, inside: pre.inside })
   try {
-    while (!ctl.aborted && Date.now() < deadline) {
+    while (!ctl.aborted && gameClock.now() < deadline) {
       mark()
       // Лечиться, пока не поздно: в тёмных коридорах зомби и скелеты снимают
       // по 2–4 хп за бой, и обход умирал на третьем-четвёртом (репетиция:
       // «slain», хп 6 → 0). Врагов в 10 блоках нет — есть и стоять до 16.
       if ((bot.health ?? 20) < 12 && !require('./combat').nearestHostile(bot, 10)) {
         try { await require('./actions').eat(session, {}) } catch {}
-        const tH = Date.now()
-        while (!ctl.aborted && Date.now() - tH < 40000 && (bot.health ?? 20) < 16 && Date.now() < deadline && !require('./combat').nearestHostile(bot, 8)) {
+        const tH = gameClock.now()
+        while (!ctl.aborted && gameClock.now() - tH < 40000 && (bot.health ?? 20) < 16 && gameClock.now() < deadline && !require('./combat').nearestHostile(bot, 8)) {
           if ((bot.food ?? 20) < 18) { try { await require('./actions').eat(session, {}) } catch {} }
           await sleep(1000)
         }
@@ -1318,7 +1319,7 @@ async function findRoom (session, ctl, p = {}) {
         spawner = sp[0].position
         // Спавнер в крепости — на лестнице портальной комнаты: подойти к нему,
         // рамки откроются с площадки.
-        const w = await walkTo(bot, ctl, spawner, 2, Math.min(20000, deadline - Date.now()))
+        const w = await walkTo(bot, ctl, spawner, 2, Math.min(20000, deadline - gameClock.now()))
         legs.push({ to: xyz(spawner), why: 'спавнер', ok: w.ok })
         seenFrames = visibleOf(bot, [frameId], 48, 24)
         if (seenFrames.length) break
@@ -1389,13 +1390,13 @@ async function findRoom (session, ctl, p = {}) {
       if (lure) {
         const dl = me.distanceTo(lure)
         if (lureBest === null || dl < lureBest - 2) { lureBest = dl; lureStale = 0 } else lureStale++
-        if (lureStale >= 4 && lureBores < 4 && !ctl.aborted && Date.now() < deadline - 20000) {
+        if (lureStale >= 4 && lureBores < 4 && !ctl.aborted && gameClock.now() < deadline - 20000) {
           lureBores++
           lureStale = 0
           const yLvl = Math.floor(lure.y) + 1
           try {
             const b = await require('./nether').bore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, {
-              deadline: Math.min(deadline, Date.now() + 45000), maxSteps: 24, minY: yLvl, maxY: yLvl, throughBricks: true
+              deadline: Math.min(deadline, gameClock.now() + 45000), maxSteps: 24, minY: yLvl, maxY: yLvl, throughBricks: true
             })
             legs.push({ why: 'к приманке штреком', to: xyz(lure.floored ? lure.floored() : lure), moved: b.moved, dug: b.dug, stop: b.why })
             log('штрек к приманке', { to: xyz(lure.floored ? lure.floored() : lure), moved: b.moved, dug: b.dug, why: b.why })
@@ -1432,9 +1433,9 @@ async function findRoom (session, ctl, p = {}) {
           // прямой штрек их пересекает. Раньше тупик кончал вызов сразу:
           // «куда идти дальше, не вижу» за 0 с (двойник 2, лестница после
           // прошлых обходов — 9 клеток).
-          if (digOuts < 3 && !ctl.aborted && Date.now() < deadline - 20000) {
+          if (digOuts < 3 && !ctl.aborted && gameClock.now() < deadline - 20000) {
             digOuts++
-            const bi = await breakIn(session, ctl, { deadline: Math.min(deadline, Date.now() + 40000), tries: 6 })
+            const bi = await breakIn(session, ctl, { deadline: Math.min(deadline, gameClock.now() + 40000), tries: 6 })
             legs.push({ why: 'тупик — пробиваюсь', steps: bi.steps.slice(-4), inside: bi.inside })
             if (!bi.inside || walkable(bot, bot.entity.position, { radius: 8, maxNodes: 60, doors: true }).length < 20) {
               const me2 = bot.entity.position
@@ -1442,7 +1443,7 @@ async function findRoom (session, ctl, p = {}) {
               const dir = digOuts % 2 ? 1 : -1
               const tgt = ax ? { x: Math.round(me2.x + dir * 12), z: Math.round(me2.z) } : { x: Math.round(me2.x), z: Math.round(me2.z + dir * 12) }
               try {
-                const b = await require('./nether').bore(session, ctl, tgt, { deadline: Math.min(deadline, Date.now() + 40000), maxSteps: 12, minY: Math.floor(me2.y), maxY: Math.floor(me2.y), throughBricks: true })
+                const b = await require('./nether').bore(session, ctl, tgt, { deadline: Math.min(deadline, gameClock.now() + 40000), maxSteps: 12, minY: Math.floor(me2.y), maxY: Math.floor(me2.y), throughBricks: true })
                 legs.push({ why: 'тупик — штрек', to: tgt, moved: b.moved, dug: b.dug })
               } catch {}
             }
@@ -1458,7 +1459,7 @@ async function findRoom (session, ctl, p = {}) {
       // (nether.guarded: ударили — бой, еда, потом дальше). Лаборатория
       // 2026-09-27, джунгли 1232,2208: в крепость дошёл, 7 минут обходил
       // комнаты и умер от зомби («slain by Zombie»), ни разу не ответив.
-      const w = await require('./nether').guarded(session, ctl, sub => walkTo(bot, sub, next, 1, Math.min(25000, deadline - Date.now())))
+      const w = await require('./nether').guarded(session, ctl, sub => walkTo(bot, sub, next, 1, Math.min(25000, deadline - gameClock.now())))
       await torchIfDark(bot, torches).catch(() => false)
       if (w.fought) {
         legs.push({ fought: w.fought })
@@ -1467,8 +1468,8 @@ async function findRoom (session, ctl, p = {}) {
         if ((bot.health ?? 20) < 8 && !ctl.aborted) {
           // Мало хп — поесть и постоять (сытость 18+ лечит), не ходить дальше вслепую.
           try { await require('./actions').eat(session, {}) } catch {}
-          const tH = Date.now()
-          while (!ctl.aborted && Date.now() - tH < 25000 && (bot.health ?? 20) < 14 && Date.now() < deadline) await sleep(1000)
+          const tH = gameClock.now()
+          while (!ctl.aborted && gameClock.now() - tH < 25000 && (bot.health ?? 20) < 14 && gameClock.now() < deadline) await sleep(1000)
         }
         continue
       }
@@ -1481,12 +1482,12 @@ async function findRoom (session, ctl, p = {}) {
       const tk = key(next)
       picks.set(tk, (picks.get(tk) || 0) + 1)
       if (picks.get(tk) >= 3) failed.add(tk)
-      log('переход', { to: xyz(next), ok: w.ok, frontier: frontier.size, visited: visited.length, t: Math.round((Date.now() - t0) / 1000) })
+      log('переход', { to: xyz(next), ok: w.ok, frontier: frontier.size, visited: visited.length, t: Math.round((gameClock.now() - t0) / 1000) })
       if (!w.ok) failed.add(key(next))
       if (legs.length > 200) break
     }
   } finally {
-    clearInterval(markTimer)
+    gameClock.clearInterval(markTimer)
     restoreInfested()
   }
 
@@ -1501,7 +1502,7 @@ async function findRoom (session, ctl, p = {}) {
     bricksSeen,
     went: went ? { dug: went.dug, refined: went.refined, bricks: went.bricks, inside: went.inside, seconds: went.seconds } : undefined,
     at: xyz(bot.entity.position),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (seenFrames.length) {
     const all = bot.findBlocks({ matching: [frameId], maxDistance: 12, point: seenFrames[0].position, count: 24 })
@@ -1514,7 +1515,7 @@ async function findRoom (session, ctl, p = {}) {
     detail.note = `Вижу портальную комнату: ${all.length} рамок, с оком уже ${withEye}, пустых ${all.length - withEye}. ` +
       `Вставить: mc_stronghold mode=fill (глаз в рюкзаке ${countOf(bot, 'ender_eye')}).`
   } else {
-    detail.stopped = ctl.aborted ? 'прервано' : (Date.now() >= deadline ? 'время вышло' : 'куда идти дальше, не вижу')
+    detail.stopped = ctl.aborted ? 'прервано' : (gameClock.now() >= deadline ? 'время вышло' : 'куда идти дальше, не вижу')
     detail.note = `Рамок не увидел: прошёл ${detail.walked} блоков, ${legs.length} переходов, кирпича видно ${bricksSeen}. ` +
       'Позови ещё раз — граница разведки строится заново от того места, где стою.'
   }
@@ -1540,7 +1541,7 @@ async function breakRoomSpawner (session, ctl, anchor, deadline) {
   if (!sp) return null
   const out = { at: xyz(sp), broken: false }
   const c = sp.offset(0.5, 0.5, 0.5)
-  if (eyePos(bot).distanceTo(c) > 4.2) await walkTo(bot, ctl, sp, 3, Math.max(1000, Math.min(20000, deadline - Date.now() - 60000)))
+  if (eyePos(bot).distanceTo(c) > 4.2) await walkTo(bot, ctl, sp, 3, Math.max(1000, Math.min(20000, deadline - gameClock.now() - 60000)))
   const b = bot.blockAt(sp)
   if (!b || b.name !== 'spawner') { out.broken = true; return out }
   if (eyePos(bot).distanceTo(c) > 4.5 || !seesBlock(bot, b)) { out.why = 'не дотянулся или не видно'; return out }
@@ -1556,7 +1557,7 @@ async function breakRoomSpawner (session, ctl, anchor, deadline) {
 async function fillFrames (session, ctl, p = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 180, 20, 600) * 1000 - 3000
   const frameId = mcData.blocksByName.end_portal_frame.id
   const portalId = mcData.blocksByName.end_portal.id
@@ -1572,7 +1573,7 @@ async function fillFrames (session, ctl, p = {}) {
     return { lit: false, stopped: `рамок не вижу, а комната в памяти в ${Math.round(bot.entity.position.distanceTo(anchor))} блоках на ${anchor.x},${anchor.y},${anchor.z} — сначала дойди до неё (mc_stronghold mode=room)` }
   }
   if (bot.entity.position.distanceTo(anchor) > 10) {
-    await walkTo(bot, ctl, anchor, 3, Math.min(30000, deadline - Date.now()))
+    await walkTo(bot, ctl, anchor, 3, Math.min(30000, deadline - gameClock.now()))
   }
   const frames = bot.findBlocks({ matching: [frameId], maxDistance: 8, point: anchor, count: 24 })
     .map(pos => frameState(bot, pos)).filter(Boolean)
@@ -1621,10 +1622,10 @@ async function fillFrames (session, ctl, p = {}) {
   // туда, откуда её видно (ферма, крепость A: 11 из 12 — одна рамка «не
   // дотянулся: 5 бл.», и портал не загорелся).
   for (const f of order) {
-    if (ctl.aborted || Date.now() > deadline) break
+    if (ctl.aborted || gameClock.now() > deadline) break
     const centre = f.pos.offset(0.5, 0.8, 0.5)
     if (eyePos(bot).distanceTo(centre) > REACH) {
-      await walkTo(bot, ctl, f.pos, 2, Math.min(20000, deadline - Date.now()))
+      await walkTo(bot, ctl, f.pos, 2, Math.min(20000, deadline - gameClock.now()))
     }
     if (eyePos(bot).distanceTo(centre) > REACH && !f.retried) {
       f.retried = true
@@ -1633,7 +1634,7 @@ async function fillFrames (session, ctl, p = {}) {
       // рамку видно с 4 блоков.
       for (const g of [new goals.GoalLookAtBlock(f.pos, bot.world, { reach: 4 })]) {
         if (eyePos(bot).distanceTo(centre) <= REACH || ctl.aborted) break
-        try { await Promise.race([bot.pathfinder.goto(g), sleep(Math.min(15000, Math.max(1000, deadline - Date.now())))]) } catch {}
+        try { await Promise.race([bot.pathfinder.goto(g), sleep(Math.min(15000, Math.max(1000, deadline - gameClock.now())))]) } catch {}
         try { bot.pathfinder.setGoal(null) } catch {}
       }
     }
@@ -1678,7 +1679,7 @@ async function fillFrames (session, ctl, p = {}) {
     eyesLeft: countOf(bot, 'ender_eye'),
     spawner: spawnerRoom || undefined,
     at: xyz(bot.entity.position),
-    seconds: Math.round((Date.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000)
   }
   if (lit) {
     const c = portal.reduce((a, v) => a.plus(v), new Vec3(0, 0, 0)).scaled(1 / portal.length)
@@ -1715,16 +1716,16 @@ async function enterPortal (session, ctl, portal, deadline) {
   const switched = new Promise(resolve => {
     const f = () => { if (worlds.worldOf(bot) !== from) { bot.removeListener('respawn', f); resolve(true) } }
     bot.on('respawn', f)
-    setTimeout(() => { bot.removeListener('respawn', f); resolve(false) }, Math.max(3000, deadline - Date.now()))
+    gameClock.setTimeout(() => { bot.removeListener('respawn', f); resolve(false) }, Math.max(3000, deadline - gameClock.now()))
   })
   for (const f of frames.slice(0, 4)) {
-    if (ctl.aborted || Date.now() > deadline || worlds.worldOf(bot) !== from) break
+    if (ctl.aborted || gameClock.now() > deadline || worlds.worldOf(bot) !== from) break
     out.tries++
-    const w = await walkTo(bot, ctl, f.offset(0.5, 1, 0.5), 0.6, Math.min(20000, deadline - Date.now()))
+    const w = await walkTo(bot, ctl, f.offset(0.5, 1, 0.5), 0.6, Math.min(20000, deadline - gameClock.now()))
     if (!w.ok && bot.entity.position.distanceTo(f.offset(0.5, 1, 0.5)) > 2) { out.why = `к рамке не подошёл: ${w.error}`; continue }
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     try {
-      while (!ctl.aborted && Date.now() - t0 < 4000 && worlds.worldOf(bot) === from) {
+      while (!ctl.aborted && gameClock.now() - t0 < 4000 && worlds.worldOf(bot) === from) {
         await bot.lookAt(centre.offset(0, 0.5, 0), true).catch(() => {})
         bot.setControlState('forward', true)
         bot.setControlState('jump', bot.entity.onGround && bot.entity.position.y < f.y + 0.7)

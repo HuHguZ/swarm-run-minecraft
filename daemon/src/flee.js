@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Побег от мобов, который смотрит на ВСЕХ, кто рядом, а не на одного.
 //
 // Старый отход (combat.retreat) считал направление «прочь от этого моба» и
@@ -207,7 +208,7 @@ function pickDirection (bot, hs, prevYaw = null) {
 async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null } = {}) {
   const bot = session.bot
   try { bot.pathfinder.setGoal(null) } catch {}
-  const deadline = Date.now() + timeoutMs
+  const deadline = gameClock.now() + timeoutMs
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
   const stop = () => { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(k, false) }
   ctl.onAbort.push(stop)
@@ -227,7 +228,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   let cornered = 0
 
   try {
-    while (!ctl.aborted && Date.now() < deadline) {
+    while (!ctl.aborted && gameClock.now() < deadline) {
       if (!bot.entity || (bot.health ?? 20) <= 0) return { mode: 'погиб на бегу', from: [...fromNames] }
       const hs = hostilesAround(bot, 32)
       for (const h of hs) if (h.d < 16) fromNames.add(h.e.name)
@@ -247,7 +248,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
         }
       }
 
-      const now = Date.now()
+      const now = gameClock.now()
       const swell = hs.find(h => h.swelling && h.d < 6)
       if (!plan || now >= replanAt || swell) {
         plan = pickDirection(bot, hs, prevYaw)
@@ -335,7 +336,7 @@ function mobAvoidance (bot) {
     // выключен на время этого шага — иначе в искажённом лесу (20+ эндерменов в
     // 40 блоках) каждая клетка у цели стоила 50+ и тело к ней не подходило.
     if (bot._ndNoMobAvoid) return 0
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - cache.at > 500) {
       cache = { at: now, list: bot.entity ? hostilesAround(bot, 40).map(h => ({ p: h.e.position, doc: h.doc, swelling: h.swelling, name: h.e.name })) : [] }
     }

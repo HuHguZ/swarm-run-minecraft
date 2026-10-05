@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Снимок для замеров (A/B, 2026-09-30): ND_DRAGON_IMPL=<файл рядом> — демон берёт бой из
 // замороженной копии, пока этот файл правится. Без переменной — как обычно.
 {
@@ -232,7 +233,7 @@ function makeTrack (bot) {
       if (!d) { hist.length = 0; id = null; return null }
       if (d.id !== id) { hist.length = 0; id = d.id }
       const p = d.position
-      hist.push({ x: p.x, y: p.y, z: p.z, t: Date.now() })
+      hist.push({ x: p.x, y: p.y, z: p.z, t: gameClock.now() })
       if (hist.length > 80) hist.shift()
       return d
     },
@@ -248,7 +249,7 @@ function makeTrack (bot) {
     },
     yAgo (ticks) {
       if (!hist.length) return null
-      const want = Date.now() - ticks * 50
+      const want = gameClock.now() - ticks * 50
       for (let i = hist.length - 1; i >= 0; i--) if (hist[i].t <= want) return hist[i].y
       return null
     }
@@ -391,8 +392,8 @@ async function padOverVoid (bot, sup) {
       // к краю крадучись ~0.8 от середины опоры в сторону d
       bot.setControlState('sneak', true)
       const goal = centre.offset(d[0] * 0.8, 0, d[1] * 0.8)
-      const t0 = Date.now()
-      while (Date.now() - t0 < 1500) {
+      const t0 = gameClock.now()
+      while (gameClock.now() - t0 < 1500) {
         const q = bot.entity.position
         if (Math.abs(q.x - goal.x) < 0.12 && Math.abs(q.z - goal.z) < 0.12) break
         await lookSafe(bot, Math.atan2(-(goal.x - q.x), -(goal.z - q.z)), -0.6)
@@ -406,8 +407,8 @@ async function padOverVoid (bot, sup) {
       const r = await placeItemAt(bot, c, FILLER_RE).catch(() => ({ ok: false }))
       if (r && r.ok) out.placed++
       // назад в середину крадучись
-      const t1 = Date.now()
-      while (Date.now() - t1 < 1200) {
+      const t1 = gameClock.now()
+      while (gameClock.now() - t1 < 1200) {
         const q = bot.entity.position
         if (Math.hypot(q.x - centre.x, q.z - centre.z) < 0.15) break
         await lookSafe(bot, Math.atan2(-(centre.x - q.x), -(centre.z - q.z)), -0.3)
@@ -641,7 +642,7 @@ function crystalsOf (bot) {
 // шага pathfinder'а.
 const zoneCache = { t: 0, z: [], bot: null }
 function cloudZones (bot) {
-  const now = Date.now()
+  const now = gameClock.now()
   if (zoneCache.bot === bot && now - zoneCache.t < 100) return zoneCache.z
   const out = zonesOf(cloudsOf(bot), fireballsOf(bot))
   zoneCache.t = now; zoneCache.z = out; zoneCache.bot = bot
@@ -682,7 +683,7 @@ function cloudsOf (bot) {
   for (const e of Object.values(bot.entities)) {
     if (!e || e.name !== 'area_effect_cloud' || !e.position || e.isValid === false) continue
     const r = metaOf(bot, e, 'radius')
-    if (!cloudBorn.has(e.id)) cloudBorn.set(e.id, Date.now())
+    if (!cloudBorn.has(e.id)) cloudBorn.set(e.id, gameClock.now())
     out.push({ e, pos: e.position, r: typeof r === 'number' && r > 0 ? r : 3 })
   }
   return out
@@ -797,17 +798,17 @@ function fallGuard (bot, stats, ctl = null) {
       // падение со столба у клетки без ведра, смерть).
       peak = null
       if (!placed.landed) { placed.landed = true; const w0 = bot.blockAt(placed.pos); ev('clutchLand', { y: r1(p.y), x: r1(p.x), z: r1(p.z), at: [placed.pos.x, placed.pos.y, placed.pos.z], block: w0 ? w0.name : null, water: !!e.isInWater, hp: r1(bot.health ?? 0) }) }
-      if (Date.now() - placed.t > 3000) { placed = null; return }
+      if (gameClock.now() - placed.t > 3000) { placed = null; return }
       if (placed.picking) return
       const w = bot.blockAt(placed.pos)
-      if (!w || w.name !== 'water') { if (Date.now() - placed.t > 600) placed = null; return }
+      if (!w || w.name !== 'water') { if (gameClock.now() - placed.t > 600) placed = null; return }
       const b = hotbar('bucket')
       if (b < 0) return
       // Взгляд — на середину источника (не прямо вниз): отнесло на блок — и луч
       // вниз шёл мимо воды, ведро оставалось пустым до следующего падения
       // (d9-4, 30.09: восемь попыток мимо, следующий сброс со столба — смерть).
       const eyeW = e.position.offset(0, EYE, 0)
-      if (eyeW.distanceTo(placed.pos.offset(0.5, 0.5, 0.5)) > 4.3) { if (Date.now() - placed.t > 600) placed = null; return }
+      if (eyeW.distanceTo(placed.pos.offset(0.5, 0.5, 0.5)) > 4.3) { if (gameClock.now() - placed.t > 600) placed = null; return }
       placed.picking = true
       if (bot.quickBarSlot !== b - 36) bot.setQuickBarSlot(b - 36)
       const at = placed
@@ -823,7 +824,7 @@ function fallGuard (bot, stats, ctl = null) {
         aimW()
         bot.activateItem()
         stats.clutch.pickedUp = (stats.clutch.pickedUp || 0) + 1
-        setTimeout(() => {
+        gameClock.setTimeout(() => {
           if (placed !== at) return
           const w2 = bot.blockAt(at.pos)
           if (w2 && w2.name === 'water') at.picking = false
@@ -843,7 +844,7 @@ function fallGuard (bot, stats, ctl = null) {
       if (isSolid(b)) { gy = y + 1; break }
     }
     if (gy == null) {
-      if (peak - p.y > 4 && !placed) { placed = { t: Date.now(), pos: new Vec3(0, -999, 0) }; stats.clutch.void = (stats.clutch.void || 0) + 1 }
+      if (peak - p.y > 4 && !placed) { placed = { t: gameClock.now(), pos: new Vec3(0, -999, 0) }; stats.clutch.void = (stats.clutch.void || 0) + 1 }
       return
     }
     const fall = peak - gy
@@ -887,7 +888,7 @@ function fallGuard (bot, stats, ctl = null) {
       try { bot.pathfinder.setGoal(null) } catch {}
       clearControls(bot)
       if (bot.quickBarSlot !== wb - 36) bot.setQuickBarSlot(wb - 36)
-      placed = { t: Date.now(), pos: new Vec3(land.x, gyBox, land.z) }
+      placed = { t: gameClock.now(), pos: new Vec3(land.x, gyBox, land.z) }
       stats.clutch.water = (stats.clutch.water || 0) + 1
       stats.clutch.above = r1(above)
       ev('clutch', { y: r1(p.y), x: r1(p.x), z: r1(p.z), gy: gyBox, land: [land.x, land.z], above: r1(above), vy: r1(e.velocity.y), vx: +e.velocity.x.toFixed(2), vz: +e.velocity.z.toFixed(2), held: bot.heldItem ? bot.heldItem.name : null, fall: r1(fall) })
@@ -914,7 +915,7 @@ function fallGuard (bot, stats, ctl = null) {
     // Ведра в хотбаре нет: свидетель для разбора (e2e3, 303 с: падение с 23
     // блоков без попытки ведра) — где оно было в этот миг.
     if (peak - p.y > 3 && !stats.clutch.noBucketAt) {
-      stats.clutch.noBucketAt = Date.now()
+      stats.clutch.noBucketAt = gameClock.now()
       const where = bot.inventory.slots.map((it, k) => it && /bucket/.test(it.name) ? `${k}:${it.name}` : null).filter(Boolean)
       stats.clutch.noBucket = (stats.clutch.noBucket || 0) + 1
       ev('noBucket', { where, held: bot.heldItem ? bot.heldItem.name : null, fall: r1(fall) })
@@ -952,7 +953,7 @@ function afterPositionPacket (bot, fn) {
   let done = false
   const once = () => { if (done) return; done = true; fn() }
   c._ndAfterPos.push(once)
-  setTimeout(() => { const i = c._ndAfterPos.indexOf(once); if (i >= 0) c._ndAfterPos.splice(i, 1); once() }, 120)
+  gameClock.setTimeout(() => { const i = c._ndAfterPos.indexOf(once); if (i >= 0) c._ndAfterPos.splice(i, 1); once() }, 120)
 }
 // Рефлекс облака: ноги в облаке (фаербол, огонь) — блок под себя тут же, чем
 // бы ни было занято тело. Облако высотой полблока (AreaEffectCloud), на блок
@@ -973,11 +974,11 @@ function aboveCloudY (me, c) {
 // Длинные шаги (standAt, placeItemAt, tsTrench, heal) смотрят fbAlarm и выходят. ND_FB_ALARM=0 — выкл.
 const FB_ALARM_R = Number(process.env.ND_FB_ALARM_R ?? 5)
 const fbAlarmAt = new WeakMap()
-function fbAlarm (bot) { const a = fbAlarmAt.get(bot); return a && Date.now() < a.until ? a : null }
+function fbAlarm (bot) { const a = fbAlarmAt.get(bot); return a && gameClock.now() < a.until ? a : null }
 function fireballAlarm (bot, ctl, stats) {
   if (process.env.ND_FB_ALARM === '0') return () => {}
   const seen = new Set()
-  const iv = setInterval(() => {
+  const iv = gameClock.setInterval(() => {
     try {
       const e = bot.entity
       if (!e || !e.position || ctl.aborted) return
@@ -986,7 +987,7 @@ function fireballAlarm (bot, ctl, stats) {
         if (!fb.at || fb.ticks > 60) continue
         const h = Math.hypot(fb.at.x - me.x, fb.at.z - me.z)
         if (!fb.direct && !(h < FB_ALARM_R && Math.abs(fb.at.y - me.y) < 4)) continue
-        fbAlarmAt.set(bot, { t: Date.now(), until: Date.now() + fb.ticks * 50 + 800, at: fb.at, id: fb.e.id })
+        fbAlarmAt.set(bot, { t: gameClock.now(), until: gameClock.now() + fb.ticks * 50 + 800, at: fb.at, id: fb.e.id })
         if (seen.has(fb.e.id)) continue
         seen.add(fb.e.id)
         if (seen.size > 200) seen.clear()
@@ -1001,7 +1002,7 @@ function fireballAlarm (bot, ctl, stats) {
       }
     } catch {}
   }, 100)
-  return () => clearInterval(iv)
+  return () => gameClock.clearInterval(iv)
 }
 function cloudReflex (bot, ctl, stats) {
   let inSince = 0
@@ -1016,8 +1017,8 @@ function cloudReflex (bot, ctl, stats) {
     const age = ctl.evading ? 700 : 300
     const c = cloudsOf(bot).find(k => cloudHits(k, me, 0.2) && cloudAgeMs(k) > age)
     if (!c) { inSince = 0; return }
-    if (!inSince) { inSince = Date.now(); return }
-    if (Date.now() - inSince < 100) return
+    if (!inSince) { inSince = gameClock.now(); return }
+    if (gameClock.now() - inSince < 100) return
     if (!bot.inventory.items().some(i => FILLER_RE.test(i.name))) return
     if (!isAirish(bot.blockAt(me.floored().offset(0, 2, 0)))) return
     busy = true
@@ -1075,8 +1076,8 @@ async function refillBucket (session, ctl, stats) {
       await bot.lookAt(w.offset(0.5, 0.5, 0.5), true)
       bot.activateItem()
     } catch (e) { dbg('refill', e.message) }
-    const t0 = Date.now()
-    while (!findItem(bot, /^water_bucket$/) && Date.now() - t0 < 800) await sleep(50)
+    const t0 = gameClock.now()
+    while (!findItem(bot, /^water_bucket$/) && gameClock.now() - t0 < 800) await sleep(50)
     const ok = !!findItem(bot, /^water_bucket$/)
     stats.refill = (stats.refill || 0) + (ok ? 1 : 0)
     if (ctl.trace) ctl.trace.ev('refill', { at: [w.x, w.y, w.z], ok })
@@ -1118,7 +1119,7 @@ function hitTracker (bot) {
     // причиной дракона, а прямым — само облако; такое «дракон нас ударил» уводило
     // тело от головы на всю посадку (c1-27, 30.09: дракон с 1.3 хп сидел 45 с,
     // тело ушло после облака на 3 и так и стояло в стороне).
-    if (bot.entity && pk && pk.entityId === bot.entity.id && pk.sourceCauseId > 0 && (!pk.sourceDirectId || pk.sourceDirectId === pk.sourceCauseId)) hitBy.set(pk.sourceCauseId - 1, Date.now())
+    if (bot.entity && pk && pk.entityId === bot.entity.id && pk.sourceCauseId > 0 && (!pk.sourceDirectId || pk.sourceDirectId === pk.sourceCauseId)) hitBy.set(pk.sourceCauseId - 1, gameClock.now())
   }
   bot._client.on('damage_event', f)
   return () => bot._client.removeListener('damage_event', f)
@@ -1149,9 +1150,9 @@ function makeTrace (bot, ctl, stats) {
   const path = require('path')
   try { fs.mkdirSync(TRACE_DIR, { recursive: true }) } catch {}
   const file = path.join(TRACE_DIR, `dragon-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let buf = []
-  const put = o => { buf.push(JSON.stringify({ t: Date.now() - t0, ...o })) }
+  const put = o => { buf.push(JSON.stringify({ t: gameClock.now() - t0, ...o })) }
   const flush = () => { if (!buf.length) return; const s = buf.join('\n') + '\n'; buf = []; fs.appendFile(file, s, () => {}) }
   const nameOf = id => { const e = bot.entities[id]; return e ? (e.name || e.username || e.type) : (id >= 0 ? `#${id}` : null) }
   const seenClouds = new Set()
@@ -1219,7 +1220,7 @@ function makeTrace (bot, ctl, stats) {
       const c = metaOf(bot, en, 'creepy') === true
       if (c && !angry.get(en.id)) {
         const h = enderHurt.get(en.id)
-        put({ k: 'angry', id: en.id, at: [r1(en.position.x), r1(en.position.y), r1(en.position.z)], dist: r1(en.position.distanceTo(me)), stared: stareTicks.get(en.id) || 0, hurt: h && Date.now() - h.t < 3000 ? h : null, doing: ctl.doing || null })
+        put({ k: 'angry', id: en.id, at: [r1(en.position.x), r1(en.position.y), r1(en.position.z)], dist: r1(en.position.distanceTo(me)), stared: stareTicks.get(en.id) || 0, hurt: h && gameClock.now() - h.t < 3000 ? h : null, doing: ctl.doing || null })
       }
       angry.set(en.id, c)
     }
@@ -1229,7 +1230,7 @@ function makeTrace (bot, ctl, stats) {
     if (!bot.entity || !pk) return
     const victim = bot.entities[pk.entityId]
     if (victim && victim.name === 'enderman' && pk.entityId !== bot.entity.id) {
-      enderHurt.set(pk.entityId, { t: Date.now(), type: DAMAGE_TYPES[pk.sourceTypeId] || pk.sourceTypeId, cause: nameOf(pk.sourceCauseId - 1), byMe: pk.sourceCauseId - 1 === bot.entity.id })
+      enderHurt.set(pk.entityId, { t: gameClock.now(), type: DAMAGE_TYPES[pk.sourceTypeId] || pk.sourceTypeId, cause: nameOf(pk.sourceCauseId - 1), byMe: pk.sourceCauseId - 1 === bot.entity.id })
       return
     }
     if (pk.entityId !== bot.entity.id) return
@@ -1248,14 +1249,14 @@ function makeTrace (bot, ctl, stats) {
   bot.on('health', onHealth)
   bot.on('death', onDeath)
   bot.on('entityGone', onGone)
-  const iv = setInterval(sample, 250)
-  const fl = setInterval(flush, 1000)
+  const iv = gameClock.setInterval(sample, 250)
+  const fl = gameClock.setInterval(flush, 1000)
   put({ k: 'start', kit: kitOf(bot), p: bot.entity ? [r1(bot.entity.position.x), r1(bot.entity.position.y), r1(bot.entity.position.z)] : null })
   return {
     file,
     ev (k, o = {}) { put({ k, ...o }) },
     close (extra = {}) {
-      clearInterval(iv); clearInterval(fl)
+      gameClock.clearInterval(iv); gameClock.clearInterval(fl)
       bot._client.removeListener('damage_event', onDmg)
       bot.removeListener('entityMoved', onMoved)
       bot._client.removeListener('entity_velocity', onVel)
@@ -1279,7 +1280,7 @@ const doing = (ctl, what) => { if (ctl) ctl.doing = what }
 function hunters (bot, r = 24) {
   return angryEndermen(bot, r).filter(e => {
     const t = hitBy.get(e.id)
-    return t && Date.now() - t < 8000
+    return t && gameClock.now() - t < 8000
   })
 }
 
@@ -1572,9 +1573,9 @@ function embeddedNow (bot) {
 // Сколько раз сервер вернул нас на место за последние 2 с (пакет position).
 function makeRubberband (bot) {
   const times = []
-  const f = () => { times.push(Date.now()); while (times.length && Date.now() - times[0] > 2000) times.shift() }
+  const f = () => { times.push(gameClock.now()); while (times.length && gameClock.now() - times[0] > 2000) times.shift() }
   bot._client.on('position', f)
-  return { count: () => { while (times.length && Date.now() - times[0] > 2000) times.shift(); return times.length }, close: () => bot._client.removeListener('position', f) }
+  return { count: () => { while (times.length && gameClock.now() - times[0] > 2000) times.shift(); return times.length }, close: () => bot._client.removeListener('position', f) }
 }
 
 async function walkOnce (session, ctl, target, { range = 1, timeoutMs = 30000, xz = false, hazards = true, maxDrop = 3, portal = false, stopIf = null, noDig = false, sprint = false, digCost = 1 } = {}) {
@@ -1583,7 +1584,7 @@ async function walkOnce (session, ctl, target, { range = 1, timeoutMs = 30000, x
   // такой ход жил бы свои 30 с за спиной ответа (прогон: тело после смерти
   // «шло» к кристаллу в верхнем мире).
   if (ctl.aborted) return { ok: false, why: 'прервано' }
-  if (ctl.deadline) timeoutMs = Math.max(1000, Math.min(timeoutMs, ctl.deadline - Date.now()))
+  if (ctl.deadline) timeoutMs = Math.max(1000, Math.min(timeoutMs, ctl.deadline - gameClock.now()))
   if (runnerBowl(bot, ctl)) portal = true
   bot.pathfinder.setMovements(endMovements(bot, hazards === 'noclouds' ? null : () => cloudsOf(bot), { maxDrop, portal, noDig, sprint, digCost }))
   const goal = xz ? new goals.GoalNearXZ(target.x, target.z, range) : new goals.GoalNear(target.x, target.y, target.z, range)
@@ -1609,15 +1610,15 @@ async function walkOnce (session, ctl, target, { range = 1, timeoutMs = 30000, x
   // воронке от взрыва у портала, x = ровно полуширина хитбокса, путь не
   // обновлялся; облако фаербола добило). Копка — не застревание.
   let stalled = false
-  let moved = { p: bot.entity.position.clone(), t: Date.now() }
+  let moved = { p: bot.entity.position.clone(), t: gameClock.now() }
   let stopped = null
-  const poll = setInterval(() => {
+  const poll = gameClock.setInterval(() => {
     if (hazard || embedded || pest || stalled || blocked || stopped) return
     if (stopIf) { const w = stopIf(); if (w) { stopped = w; stop(); return } }
     if (band.count() >= 4) { embedded = true; stop(); return }
     const here = bot.entity.position
-    if (here.distanceTo(moved.p) > 0.25 || bot.targetDigBlock || !bot.getControlState('forward')) moved = { p: here.clone(), t: Date.now() }
-    else if (Date.now() - moved.t > 2500) { stalled = true; stop(); return }
+    if (here.distanceTo(moved.p) > 0.25 || bot.targetDigBlock || !bot.getControlState('forward')) moved = { p: here.clone(), t: gameClock.now() }
+    else if (gameClock.now() - moved.t > 2500) { stalled = true; stop(); return }
     // Злой эндермен вплотную: остановиться и отбиться, а не идти с ним на спине.
     const e = hunters(bot, 3)[0]
     if (e) { pest = e; stop(); return }
@@ -1638,7 +1639,7 @@ async function walkOnce (session, ctl, target, { range = 1, timeoutMs = 30000, x
     }
   }, 150)
   const sampler = DEBUG
-    ? setInterval(() => {
+    ? gameClock.setInterval(() => {
       const e = bot.entity
       const c = ['forward', 'jump', 'sprint', 'sneak'].filter(k => bot.getControlState(k)).join('+')
       const blk = bot.blockAt(e.position)
@@ -1648,7 +1649,7 @@ async function walkOnce (session, ctl, target, { range = 1, timeoutMs = 30000, x
   try {
     await Promise.race([
       bot.pathfinder.goto(goal),
-      new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`не дошёл за ${Math.round(timeoutMs / 1000)}с`)), timeoutMs) })
+      new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error(`не дошёл за ${Math.round(timeoutMs / 1000)}с`)), timeoutMs) })
     ])
     // «Дошёл» от pathfinder'а — не свидетель: goal_reached от прошлой цели
     // резолвит новый goto сразу (бот на мостке в 8 блоках над краем портала
@@ -1662,10 +1663,10 @@ async function walkOnce (session, ctl, target, { range = 1, timeoutMs = 30000, x
     if (stopped) return { ok: false, why: stopped, stopped: true }
     return { ok: false, why: embedded ? 'замурован: сервер отбивает шаги' : pest ? 'напал эндермен' : hazard ? `опасность: ${hazard.kind}` : blocked ? `на пути ${blocked.kind}` : stalled ? 'встал: упёрся и не двигается' : String((e && e.message) || e), hazard, embedded, stalled, enderman: !!pest, blocked }
   } finally {
-    clearTimeout(timer)
+    gameClock.clearTimeout(timer)
     band.close()
-    clearInterval(poll)
-    if (sampler) clearInterval(sampler)
+    gameClock.clearInterval(poll)
+    if (sampler) gameClock.clearInterval(sampler)
     bot.removeListener('path_update', onPath)
     for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) { try { bot.setControlState(k, false) } catch {} }
   }
@@ -1679,19 +1680,19 @@ function clearControls (bot) {
 // шагом смотрит, есть ли впереди земля: в Энде шаг в пустоту — смерть.
 async function stepTo (bot, ctl, target, { ms = 2500, sprint = true, stopAt = 0.3, stop = null, portal = false, clouds = true, stuckMs = 700 } = {}) {
   if (runnerBowl(bot, ctl)) portal = true
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let why = null
   // Упёрся (стенка в 2 блока, яма-воронка: прыгает на месте — fin3-26, 1.5 с прыжков у ямы)
   // — бросить: пусть ведёт pathfinder.
   let best = Infinity; let bestT = t0
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms) {
       if (stop && stop()) { why = 'прервал'; break }
       const p = bot.entity.position
       const dx = target.x - p.x; const dz = target.z - p.z
       const dist = Math.hypot(dx, dz)
       if (dist < stopAt) break
-      if (dist < best - 0.25) { best = dist; bestT = Date.now() } else if (stuckMs && Date.now() - bestT > stuckMs) { why = 'застрял'; break }
+      if (dist < best - 0.25) { best = dist; bestT = gameClock.now() } else if (stuckMs && gameClock.now() - bestT > stuckMs) { why = 'застрял'; break }
       // Облако над головой (легло на стенку станции, на столб) не трогает, пока
       // стоим: его коробка — полблока от его y. Прыжок (+1.25) поднимает нас в
       // неё: сцена station (2026-09-26) — два удара по 3, тело прыгало через
@@ -1798,7 +1799,7 @@ async function bridgeToIsland (session, ctl, rep) {
       if (t.placed) continue
     }
     if (blocking && (out.waitMs || 0) < 45000) {
-      const tw = Date.now()
+      const tw = gameClock.now()
       i--
       const need = blocking.r + 3
       let back = null
@@ -1814,7 +1815,7 @@ async function bridgeToIsland (session, ctl, rep) {
         await stepTo(bot, ctl, new Vec3(back.x + 0.5, back.y + 1, back.z + 0.5), { ms: 3000, stopAt: 0.25, portal: true })
       }
       await sleep(500)
-      out.waitMs = (out.waitMs || 0) + (Date.now() - tw)
+      out.waitMs = (out.waitMs || 0) + (gameClock.now() - tw)
       continue
     }
     const bad = hazardNow(bot)
@@ -1958,10 +1959,10 @@ async function creepToEdge (bot, ctl, d) {
 // Шагнуть крадучись на соседнюю клетку (центр). Крадучись с края не упасть.
 async function stepOnto (bot, ctl, x, z) {
   const target = new Vec3(x + 0.5, 0, z + 0.5)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   bot.setControlState('sneak', true)
   try {
-    while (!ctl.aborted && Date.now() - t0 < 2500) {
+    while (!ctl.aborted && gameClock.now() - t0 < 2500) {
       const p = bot.entity.position
       const dx = target.x - p.x; const dz = target.z - p.z
       if (Math.hypot(dx, dz) < 0.2) break
@@ -2117,9 +2118,9 @@ async function juke (session, ctl, stats, ms = 3000) {
   const bot = session.bot
   doing(ctl, 'juke')
   stats.dodges.заход = (stats.dodges.заход || 0) + 1
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let side = 1
-  while (!ctl.aborted && Date.now() - t0 < ms) {
+  while (!ctl.aborted && gameClock.now() - t0 < ms) {
     await yieldTick()
     const bad = hazardNow(bot)
     if (bad) { await evade(bot, ctl, stats, bad); continue }
@@ -2179,8 +2180,8 @@ async function shootCrystal (session, ctl, cr, rep, stats) {
     }
     stats.arrows++
     // Стрела в полёте (навесом — до четырёх секунд): стоять можно, пока тихо.
-    const wait = Date.now() + Math.min(6000, (r.flightTicks || 20) * 50 + 700)
-    while (Date.now() < wait && alive() && !ctl.aborted) {
+    const wait = gameClock.now() + Math.min(6000, (r.flightTicks || 20) * 50 + 700)
+    while (gameClock.now() < wait && alive() && !ctl.aborted) {
       const bad = hazardNow(bot)
       if (bad) { await evade(bot, ctl, stats, bad); break }
       await sleep(50)
@@ -2321,7 +2322,7 @@ async function crystalWait (session, ctl, stats, d, ph) {
   const targets = crysTargets(bot, ctl)
   if (!targets.length) { C.active = false; return false }
   C.active = true
-  const now = Date.now()
+  const now = gameClock.now()
   // свои стрелы в полёте — ждать (промах — после полёта + 0.6 с: кристалл цел)
   const free = targets.filter(t => !((C.pending.get(t.id) || 0) > now))
   // почему не стреляем (трасса, не чаще раза в 3 с на причину)
@@ -2361,7 +2362,7 @@ async function crystalWait (session, ctl, stats, d, ph) {
       steep: s.mode,
       follow: false,
       mode: 'settle',
-      onRelease: () => { const dd = dragonOf(bot); releasePh = dd ? phaseOf(bot, dd) : null; releaseAt = Date.now() },
+      onRelease: () => { const dd = dragonOf(bot); releasePh = dd ? phaseOf(bot, dd) : null; releaseAt = gameClock.now() },
       shouldStop: () => {
         const dd = dragonOf(bot); const p2 = dd ? phaseOf(bot, dd) : null
         const why = ctl.aborted ? 'прервано' : !alive() ? 'кристалла нет'
@@ -2380,8 +2381,8 @@ async function crystalWait (session, ctl, stats, d, ph) {
     stats.arrows++
     stats.crysArrows = (stats.crysArrows || 0) + 1
     C.tries.set(t.id, (C.tries.get(t.id) || 0) + 1)
-    C.pending.set(t.id, Date.now() + (r.flightTicks || s.ticks || 20) * 50 + 600)
-    if (C.firstShot == null) C.firstShot = Date.now()
+    C.pending.set(t.id, gameClock.now() + (r.flightTicks || s.ticks || 20) * 50 + 600)
+    if (C.firstShot == null) C.firstShot = gameClock.now()
     if (ctl.trace) ctl.trace.ev('crysShot', { id: t.id, y: r1(t.pos.y), mode: s.mode === 'lob' ? 'lob' : 'steep', ticks: r1(s.ticks), dist: r1(feet.distanceTo(t.pos)), pitch: r.pitchDeg, ph, releasePh, releaseAt, dHp: hp0 != null ? r1(hp0) : null, at: [r1(feet.x), r1(feet.y), r1(feet.z)], n: C.tries.get(t.id), arrows: countOf(bot, /arrow$/) })
     return true
   }
@@ -2399,7 +2400,7 @@ async function crystalWait (session, ctl, stats, d, ph) {
   else await stepTo(bot, ctl, spot.feet, { ms: 2500, stopAt: 0.4 })
   clearControls(bot)
   // не дошли (облако, путь) — к этой точке 10 с не возвращаться
-  if (bot.entity.position.distanceTo(spot.feet) > 2) C.noSpotUntil = Date.now() + 10000
+  if (bot.entity.position.distanceTo(spot.feet) > 2) C.noSpotUntil = gameClock.now() + 10000
   return true
 }
 
@@ -2419,14 +2420,14 @@ async function fastTower (bot, ctl, toY, { abortIf = null, maxMs = 40000 } = {})
   await bot.look(bot.entity.yaw, -Math.PI / 2, true).catch(() => {})
   const fx = Math.floor(bot.entity.position.x); const fz = Math.floor(bot.entity.position.z)
   let top = Math.floor(bot.entity.position.y + 0.01)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let placed = 0
   let pending = 0
   let why = null
   bot.setControlState('sneak', true)
   bot.setControlState('jump', true)
   try {
-    while (!ctl.aborted && top < toY && Date.now() - t0 < maxMs) {
+    while (!ctl.aborted && top < toY && gameClock.now() - t0 < maxMs) {
       await new Promise(resolve => bot.once('physicsTick', resolve))
       why = abortIf ? abortIf() : null
       if (why) break
@@ -2434,7 +2435,7 @@ async function fastTower (bot, ctl, toY, { abortIf = null, maxMs = 40000 } = {})
       if (cell && isSolid(cell)) { top++; placed++; pending = 0; continue }
       const head = bot.blockAt(new Vec3(fx, top + 2, fz))
       if (head && isSolid(head)) { why = `потолок ${head.name}`; break }
-      if (pending && Date.now() - pending < 450) continue
+      if (pending && gameClock.now() - pending < 450) continue
       if (bot.entity.position.y - top < 1.02) continue
       if (!bot.heldItem || !FILLER_RE.test(bot.heldItem.name)) {
         it = filler()
@@ -2444,7 +2445,7 @@ async function fastTower (bot, ctl, toY, { abortIf = null, maxMs = 40000 } = {})
       }
       const ref = bot.blockAt(new Vec3(fx, top - 1, fz))
       if (!ref || !isSolid(ref)) { why = 'под столбом пусто'; break }
-      pending = Date.now()
+      pending = gameClock.now()
       afterPositionPacket(bot, () => { bot._genericPlace(ref, new Vec3(0, 1, 0), { forceLook: 'ignore', swingArm: 'right' }).catch(() => {}) })
     }
   } finally {
@@ -2452,12 +2453,12 @@ async function fastTower (bot, ctl, toY, { abortIf = null, maxMs = 40000 } = {})
     bot.setControlState('forward', false); bot.setControlState('back', false)
     bot.setControlState('left', false); bot.setControlState('right', false)
     // Встать на поставленный блок крадучись — потом отпускать.
-    const tl = Date.now()
-    while (!ctl.aborted && !bot.entity.onGround && Date.now() - tl < 600) await sleep(50)
+    const tl = gameClock.now()
+    while (!ctl.aborted && !bot.entity.onGround && gameClock.now() - tl < 600) await sleep(50)
     bot.setControlState('sneak', false)
   }
   if (!why && top < toY) why = ctl.aborted ? 'прервано' : 'не успел'
-  return { ok: top >= toY, placed, y: top, why, ms: Date.now() - t0 }
+  return { ok: top >= toY, placed, y: top, why, ms: gameClock.now() - t0 }
 }
 
 // Выстрел в упор по точке: натянуть 1.15 с, глядя в точку, отпустить. Сервер
@@ -2472,8 +2473,8 @@ async function pointBlank (bot, ctl, pointOf, stop = null) {
   try { await bot.equip(bowItem, 'hand') } catch (e) { return { shot: false, why: e.message } }
   await bot.lookAt(point(), true).catch(() => {})
   bot.activateItem()
-  const t0 = Date.now()
-  while (Date.now() - t0 < 1200) {
+  const t0 = gameClock.now()
+  while (gameClock.now() - t0 < 1200) {
     if (ctl.aborted || (stop && stop())) { bot.deactivateItem(); return { shot: false, why: 'отменил натяжение' } }
     await bot.lookAt(point(), true).catch(() => {})
     await sleep(50)
@@ -2521,16 +2522,16 @@ async function dropOff (bot, ctl, stats, dir, why) {
   // Сперва на ноги: сброс, начатый в прыжке (последний блок столба), сразу видел
   // «не на земле», шагал 120 мс и оставался на краю — «спрыгнул», а стоял
   // на столбе в 20 блоках (v2-26, 30.09, 188 с; дальше облако, крылья, смерть).
-  const tg = Date.now()
-  while (!ctl.aborted && !bot.entity.onGround && Date.now() - tg < 800) await sleep(50)
+  const tg = gameClock.now()
+  while (!ctl.aborted && !bot.entity.onGround && gameClock.now() - tg < 800) await sleep(50)
   bot.setControlState('sneak', false)
   bot.setControlState('forward', true)
-  const t0 = Date.now()
-  while (!ctl.aborted && Date.now() - t0 < 1500 && bot.entity.onGround) await sleep(50)
+  const t0 = gameClock.now()
+  while (!ctl.aborted && gameClock.now() - t0 < 1500 && bot.entity.onGround) await sleep(50)
   await sleep(120)
   bot.setControlState('forward', false)
-  const t1 = Date.now()
-  while (!ctl.aborted && Date.now() - t1 < 4000 && !bot.entity.onGround && !bot.entity.isInWater) await sleep(50)
+  const t1 = gameClock.now()
+  while (!ctl.aborted && gameClock.now() - t1 < 4000 && !bot.entity.onGround && !bot.entity.isInWater) await sleep(50)
   await sleep(600)
   await waterToHotbar(bot).catch(() => {})
   if (y0 - bot.entity.position.y < 2) return { ok: false, why: 'не спрыгнул — стою на столбе' }
@@ -2598,11 +2599,11 @@ async function getDown (session, ctl, stats) {
     const yaw = Math.atan2(-(spot.x - bot.entity.position.x), -(spot.z - bot.entity.position.z))
     await bot.look(yaw, 0, true).catch(() => {})
     bot.setControlState('forward', true)
-    const t0 = Date.now()
-    while (!ctl.aborted && Date.now() - t0 < 900 && bot.entity.onGround) await sleep(50)
+    const t0 = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - t0 < 900 && bot.entity.onGround) await sleep(50)
     bot.setControlState('forward', false)
-    const t1 = Date.now()
-    while (!ctl.aborted && Date.now() - t1 < 4000 && !bot.entity.onGround) await sleep(50)
+    const t1 = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - t1 < 4000 && !bot.entity.onGround) await sleep(50)
     return true
   }
   return false
@@ -2629,8 +2630,8 @@ async function digDownTo (bot, ctl, gy, max = 40, abortIf = null) {
     // блок выше облака, пока не уйдёт (живёт 30 с).
     const lower = new Vec3(bot.entity.position.x, feet.y - 1, bot.entity.position.z)
     if (cloudsOf(bot).some(c => cloudHits(c, lower, 0.6) || cloudHits(c, lower.offset(0, -1, 0), 0.6))) {
-      if (cloudWait === 0) cloudWait = Date.now()
-      if (Date.now() - cloudWait > 32000) return { dug, patched, why: 'облако под столбом' }
+      if (cloudWait === 0) cloudWait = gameClock.now()
+      if (gameClock.now() - cloudWait > 32000) return { dug, patched, why: 'облако под столбом' }
       clearControls(bot)
       await sleep(250)
       continue
@@ -2649,9 +2650,9 @@ async function digDownTo (bot, ctl, gy, max = 40, abortIf = null) {
         bot.setControlState('forward', true)
         await sleep(110)
         bot.setControlState('forward', false)
-        const tn = Date.now()
-        while (bot.entity.onGround && Math.floor(bot.entity.position.y + 0.01) === feet.y && Date.now() - tn < 400) await sleep(50)
-        while (!bot.entity.onGround && Date.now() - tn < 1200) await sleep(50)
+        const tn = gameClock.now()
+        while (bot.entity.onGround && Math.floor(bot.entity.position.y + 0.01) === feet.y && gameClock.now() - tn < 400) await sleep(50)
+        while (!bot.entity.onGround && gameClock.now() - tn < 1200) await sleep(50)
         if (Math.floor(bot.entity.position.y + 0.01) < feet.y) continue
       }
       await sleep(150); fails++; continue
@@ -2669,10 +2670,10 @@ async function digDownTo (bot, ctl, gy, max = 40, abortIf = null) {
       await bot.look(bot.entity.yaw, -Math.PI / 2, true)
       await build.withTimeout(bot.dig(under, true), 6000)
       dug++
-      const t0 = Date.now()
-      while (bot.entity.position.y > under.position.y + 0.05 && Date.now() - t0 < 1500) await sleep(50)
-      const t1 = Date.now()
-      while (!bot.entity.onGround && Date.now() - t1 < 1000) await sleep(50)
+      const t0 = gameClock.now()
+      while (bot.entity.position.y > under.position.y + 0.05 && gameClock.now() - t0 < 1500) await sleep(50)
+      const t1 = gameClock.now()
+      while (!bot.entity.onGround && gameClock.now() - t1 < 1000) await sleep(50)
     } catch (e) { dbg('down', e.message); fails++; await sleep(200) }
   }
   return { dug, patched, why: Math.floor(bot.entity.position.y + 0.01) > gy ? 'не спустился до земли' : null }
@@ -2709,7 +2710,7 @@ function towerUnsafe (bot) {
 // #dragon_immune). Любая угроза на столбе — шаг вниз (ведро гасит падение).
 async function openCage (session, ctl, cr, rep, stats) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const toC = { x: CENTER.x - cr.pos.x, z: CENTER.z - cr.pos.z }
   // Сторона — к центру острова (там земля и туда же прыгать вниз), потом
   // боковые, потом дальняя. Сторону, где уже стоит наш столб от прошлой
@@ -2762,9 +2763,9 @@ async function openCage (session, ctl, cr, rep, stats) {
   rep.cages.push(cage)
   // Окно: на столбе от тарана и фаербола не уйти — только вниз.
   doing(ctl, 'cage:wait')
-  const tw = Date.now()
+  const tw = gameClock.now()
   let stage = null
-  while (!ctl.aborted && towerUnsafe(bot) && Date.now() - tw < 60000) {
+  while (!ctl.aborted && towerUnsafe(bot) && gameClock.now() - tw < 60000) {
     await yieldTick()
     const bad = hazardNow(bot)
     if (bad) { await evade(bot, ctl, stats, bad); continue }
@@ -2780,7 +2781,7 @@ async function openCage (session, ctl, cr, rep, stats) {
     if (Math.hypot(bot.entity.position.x - stage.x, bot.entity.position.z - stage.z) > 1.5) await walkTo(session, ctl, stage, { range: 1, timeoutMs: 8000 })
     else await sleep(250)
   }
-  cage.waited = Math.round((Date.now() - tw) / 1000)
+  cage.waited = Math.round((gameClock.now() - tw) / 1000)
   if (towerUnsafe(bot)) return { ok: false, why: `ждал окна минуту: ${towerUnsafe(bot)}`, moved: true }
   // Пока ждали, могли уйти от облака далеко: столб строится только у клетки
   // (прогон e2e3, 283 с: уклон увёл на 13 блоков, столб вырос в стороне,
@@ -2827,8 +2828,8 @@ async function openCage (session, ctl, cr, rep, stats) {
   // Прут: средний столбец стены клетки, верхний ряд. Копать — стоя: в прыжке
   // копка впятеро медленнее (Player.getDestroySpeed: не на земле ÷5), а
   // столб кончается в воздухе — прут ковырялся 4.6 с вместо 0.9.
-  const tl = Date.now()
-  while (!bot.entity.onGround && Date.now() - tl < 800) await sleep(50)
+  const tl = gameClock.now()
+  while (!bot.entity.onGround && gameClock.now() - tl < 800) await sleep(50)
   doing(ctl, 'cage:bar')
   const barPos = new Vec3(cr.cx + 2 * s.x - s.z * off, cr.top + 3, cr.cz + 2 * s.z + s.x * off)
   const bar = bot.blockAt(barPos)
@@ -2871,8 +2872,8 @@ async function openCage (session, ctl, cr, rep, stats) {
       const r = await pointBlank(bot, ctl, aimAt, () => !alive() || !!threat())
       if (!r.shot) { cage.refused = r.why; continue }
       stats.arrows++
-      const tw2 = Date.now()
-      while (alive() && Date.now() - tw2 < 1500) await sleep(50)
+      const tw2 = gameClock.now()
+      while (alive() && gameClock.now() - tw2 < 1500) await sleep(50)
     }
   }
   const destroyed = !alive()
@@ -2881,7 +2882,7 @@ async function openCage (session, ctl, cr, rep, stats) {
   // Вниз: шагом в сторону острова (ведро), без ведра — копать.
   doing(ctl, 'cage:down')
   if (Math.floor(bot.entity.position.y + 0.01) - gy >= 3) await bailOut(destroyed ? 'сбит' : (threat() || 'не сбит'))
-  cage.secs = Math.round((Date.now() - t0) / 1000)
+  cage.secs = Math.round((gameClock.now() - t0) / 1000)
   if (ctl.trace) ctl.trace.ev('cage', cage)
   return destroyed ? { ok: true, destroyed: true } : { ok: false, why: cage.bailed && cage.bailed !== 'не сбит' ? `слез со столба: ${cage.bailed}` : (cage.refused || 'кристалл цел'), moved: !!cage.bailed }
 }
@@ -2893,7 +2894,7 @@ async function destroyCrystals (session, ctl, rep, stats, { deadline = Infinity 
   // (d5-17, d5-22: 9 из 10, дракон 200 через 8 минут боя). Кругов — три.
   let reprieve = 3
   const note = t => { if (!rep.crystals.notes.includes(t)) rep.crystals.notes.push(t) }
-  for (let round = 0; round < 60 && !ctl.aborted && Date.now() < deadline; round++) {
+  for (let round = 0; round < 60 && !ctl.aborted && gameClock.now() < deadline; round++) {
     await yieldTick()
     doing(ctl, 'crystals')
     // Сначала — не стоять в облаке. Прогон 2026-09-25: pathfinder дважды ответил
@@ -3025,11 +3026,11 @@ async function heal (session, ctl, rep, stats, { hard = false } = {}) {
   if (fbAlarm(bot)) return false
   const was = ctl.doing
   doing(ctl, 'heal')
-  const iv = setInterval(() => {
+  const iv = gameClock.setInterval(() => {
     const c = inClouds(cloudsOf(bot), bot.entity.position, 0.2)
     if (c && cloudAgeMs(c) > 300) { try { bot.deactivateItem() } catch {} }
   }, 100)
-  try { return await healRaw(session, ctl, rep, stats, { hard }) } finally { clearInterval(iv); doing(ctl, was) }
+  try { return await healRaw(session, ctl, rep, stats, { hard }) } finally { gameClock.clearInterval(iv); doing(ctl, was) }
 }
 async function healRaw (session, ctl, rep, stats, { hard = false } = {}) {
   const bot = session.bot
@@ -3074,7 +3075,7 @@ async function clearOfClouds (session, ctl, stats, margin = 4) {
 async function hideAndHeal (session, ctl, rep, stats, { until = 16, maxMs = 60000 } = {}) {
   const bot = session.bot
   // Сперва приземлиться (ведро в падении делает своё): путь в воздухе уносит от воды.
-  { const tg = Date.now(); while (!ctl.aborted && !bot.entity.onGround && !bot.entity.isInWater && Date.now() - tg < 3000) await sleep(50) }
+  { const tg = gameClock.now(); while (!ctl.aborted && !bot.entity.onGround && !bot.entity.isInWater && gameClock.now() - tg < 3000) await sleep(50) }
   // Бьёт эндермен — в яму от него не уйти (он лезет следом и бьёт в яме:
   // d4-4, 30.09, 203–206 с — три удара в яме, смерть). Сперва отбиться.
   const pest = hunters(bot, 5).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
@@ -3108,16 +3109,16 @@ async function hideAndHeal (session, ctl, rep, stats, { until = 16, maxMs = 6000
         await bot.look(bot.entity.yaw, -Math.PI / 2, true)
         await build.withTimeout(bot.dig(under, true), 6000)
         hole.dug++
-        const t0 = Date.now()
-        while (!bot.entity.onGround && Date.now() - t0 < 1500) await sleep(50)
+        const t0 = gameClock.now()
+        while (!bot.entity.onGround && gameClock.now() - t0 < 1500) await sleep(50)
       } catch { break }
     }
     const lid = bot.entity.position.floored().offset(0, 2, 0)
     const l = await build.placeBlockAt(bot, lid, { timeoutMs: 3000 })
     hole.lid = !!l.ok
   }
-  const t0 = Date.now()
-  while (!ctl.aborted && Date.now() - t0 < maxMs && bot.health < until) {
+  const t0 = gameClock.now()
+  while (!ctl.aborted && gameClock.now() - t0 < maxMs && bot.health < until) {
     // Отдых — не глухой: облако, фаербол, коридор взлёта сидящего — уйти.
     const bad = hazardNow(bot)
     if (bad) { await evade(bot, ctl, stats, bad); continue }
@@ -3136,7 +3137,7 @@ async function hideAndHeal (session, ctl, rep, stats, { until = 16, maxMs = 6000
     await build.towerUp(bot, ctl, hole.dug)
   }
   hole.hp = Math.round(bot.health)
-  hole.seconds = Math.round((Date.now() - t0) / 1000)
+  hole.seconds = Math.round((gameClock.now() - t0) / 1000)
   stats.hid.push(hole)
 }
 
@@ -3298,7 +3299,7 @@ function noteNear (rec, d, bot, now) {
   // Непрерывно в круге: вышли — отсчёт заново.
   rec.nearAt = me.distanceTo(d.position) <= r && Math.abs(me.y - d.position.y) <= 9.5 ? (rec.nearAt || now) : null
 }
-function blindKnown (rec, now = Date.now()) {
+function blindKnown (rec, now = gameClock.now()) {
   if (!rec || rec.roared) return false
   if (rec.blind) return true
   const b = !!rec.nearAt && now - rec.nearAt > 450
@@ -3339,7 +3340,7 @@ function takeoffBoxes (pos, yaw, len = 24) {
 // Верх фонтана (где садится дракон): ноги на нём. Кэш — фонтан не меняется.
 let podiumCache = null
 function podiumTop (bot) {
-  if (podiumCache && Date.now() - podiumCache.t < 30000) return podiumCache.y
+  if (podiumCache && gameClock.now() - podiumCache.t < 30000) return podiumCache.y
   const s = surfaceY(bot, CENTER.x - 0.5, CENTER.z - 0.5, 90)
   if (!s) return podiumCache ? podiumCache.y : null
   // верх столба — бедрок: над ним бывает чужое (кровать R, блок) — тогда ниже, до 4 блоков (rs6-s3: P 66 вместо 65, план R пуст)
@@ -3347,7 +3348,7 @@ function podiumTop (bot) {
   if (s.name !== 'bedrock') {
     for (let k = 1; k <= 4; k++) { const b = bot.blockAt(new Vec3(Math.floor(CENTER.x - 0.5), s.y - 1 - k, Math.floor(CENTER.z - 0.5))); if (b && b.name === 'bedrock') { y = s.y - k; break } }
   }
-  podiumCache = { y, t: Date.now() }
+  podiumCache = { y, t: gameClock.now() }
   return y
 }
 
@@ -3404,14 +3405,14 @@ function fireballTracker (bot) {
       if (!info || info.name !== 'dragon_fireball') return
       const v = r.vel
       const n = Math.hypot(v.x, v.y, v.z)
-      fbSpawn.set(r.entityId, { p0: new Vec3(r.pos.x, r.pos.y, r.pos.z), dir: n > 1e-6 ? new Vec3(v.x / n, v.y / n, v.z / n) : null, t0: Date.now(), hit: null, hitAt: 0 })
+      fbSpawn.set(r.entityId, { p0: new Vec3(r.pos.x, r.pos.y, r.pos.z), dir: n > 1e-6 ? new Vec3(v.x / n, v.y / n, v.z / n) : null, t0: gameClock.now(), hit: null, hitAt: 0 })
     } catch {}
   }
   // Облака — когда родились: первый удар через 20 тиков (evade считает запас).
   const g = e => {
     if (!e || e.name !== 'area_effect_cloud') return
-    cloudBorn.set(e.id, Date.now())
-    if (cloudBorn.size > 200) for (const [id, t] of cloudBorn) if (Date.now() - t > 60000) cloudBorn.delete(id)
+    cloudBorn.set(e.id, gameClock.now())
+    if (cloudBorn.size > 200) for (const [id, t] of cloudBorn) if (gameClock.now() - t > 60000) cloudBorn.delete(id)
   }
   bot._client.on('raw.spawn_entity', f)
   bot.on('entitySpawn', g)
@@ -3444,7 +3445,7 @@ const fbSeen = new Map()
 function fireballsOf (bot) {
   const out = []
   const me = bot.entity.position
-  const now = Date.now()
+  const now = gameClock.now()
   const alive = new Set()
   for (const e of Object.values(bot.entities)) {
     if (!e || e.name !== 'dragon_fireball' || !e.position) continue
@@ -3511,7 +3512,7 @@ function hazardNow (bot, extra = {}) {
 // каждые полсекунды) и дуга, которую голова метёт, поворачиваясь. Любой уход
 // от облака или фаербола должен знать об этом — иначе «безопасная» клетка
 // оказывается у морды (так бот и погиб: ушёл от облака под поворот головы).
-function dragonZones (bot, now = Date.now()) {
+function dragonZones (bot, now = gameClock.now()) {
   if (bot.entity) sightMe = bot.entity.id
   const d = dragonOf(bot)
   if (!d) { sitState(null, null, now); return {} }
@@ -3572,8 +3573,8 @@ function dragonZones (bot, now = Date.now()) {
 let chargeRec = null
 function chargeOf (bot, d, ph) {
   if (ph !== PHASE.CHARGING) { chargeRec = null; return null }
-  if (!chargeRec || chargeRec.id !== d.id || Date.now() - chargeRec.t0 > 8000) {
-    chargeRec = { id: d.id, t0: Date.now(), from: d.position.clone(), target: bot.entity.position.clone(), yaw: d.yaw }
+  if (!chargeRec || chargeRec.id !== d.id || gameClock.now() - chargeRec.t0 > 8000) {
+    chargeRec = { id: d.id, t0: gameClock.now(), from: d.position.clone(), target: bot.entity.position.clone(), yaw: d.yaw }
   }
   return chargeRec
 }
@@ -3592,7 +3593,7 @@ function inCharge (ch, feet) {
 // Для pathfinder'а: не прокладывать путь через дракона и его голову.
 let zonesCache = { t: 0, z: {} }
 function dragonStepCost (bot, pos) {
-  if (Date.now() - zonesCache.t > 250) zonesCache = { t: Date.now(), z: dragonZones(bot) }
+  if (gameClock.now() - zonesCache.t > 250) zonesCache = { t: gameClock.now(), z: dragonZones(bot) }
   const z = zonesCache.z
   if (z.charge) return inCharge(z.charge, new Vec3(pos.x + 0.5, pos.y, pos.z + 0.5)) ? 200 : 0
   if (!z.parts && !z.wings && !z.landing) return 0
@@ -3664,7 +3665,7 @@ async function evadeRaw (bot, ctl, stats, bad, prefer = null) {
     {
       const dn = dragonOf(bot)
       if (dn) {
-        const v = dragonVel(dn, Date.now())
+        const v = dragonVel(dn, gameClock.now())
         const sp = Math.max(0.8, Math.hypot(v.x, v.z))
         const etaMs = Math.hypot(dn.position.x - me.x, dn.position.z - me.z) / sp * 50
         const lat = Math.abs((me.x - ch.from.x) * (az / L) - (me.z - ch.from.z) * (ax / L))
@@ -3724,7 +3725,7 @@ async function evadeRaw (bot, ctl, stats, bad, prefer = null) {
   // облако уже на нас.
   // Куда уже пробовали и не сдвинулись (упёрлись) — не туда (ab-25: пять раз
   // подряд одна и та же цель, тело на месте).
-  ctl.evadeBad = (ctl.evadeBad || []).filter(b => Date.now() - b.t < 8000)
+  ctl.evadeBad = (ctl.evadeBad || []).filter(b => gameClock.now() - b.t < 8000)
   const esc = escapeSpot(bot, ctx, { away, budgetMs, cloudMargin: cloudOnMe && bad.c.r < 4 ? 1.0 : 2.2, through: !!(bad.f || cloudOnMe), skip: ctl.evadeBad.map(b => b.feet) })
   stats.dodges[bad.kind] = (stats.dodges[bad.kind] || 0) + 1
   dbg('evade', bad.kind, esc ? `${esc.feet} за ${esc.etaMs} мс, бюджет ${budgetMs}` : 'некуда')
@@ -3743,8 +3744,8 @@ async function evadeRaw (bot, ctl, stats, bad, prefer = null) {
       .map(p => bot.blockAt(p)).find(b => b && isSolid(b) && /^(end_stone|cobblestone|stone|dirt)$/.test(b.name))
     if (cand) {
       try { await bot.equip(pick, 'hand'); await build.withTimeout(bot.dig(cand, true), 2500) } catch {}
-      const tp = Date.now()
-      while (countOf(bot, FILLER_RE) === 0 && Date.now() - tp < 700) await sleep(50)
+      const tp = gameClock.now()
+      while (countOf(bot, FILLER_RE) === 0 && gameClock.now() - tp < 700) await sleep(50)
       stats.dodges['выломал блок'] = (stats.dodges['выломал блок'] || 0) + 1
     }
   }
@@ -3752,8 +3753,8 @@ async function evadeRaw (bot, ctl, stats, bad, prefer = null) {
   // ступеньку), и правило молчало, пока шли удары (camp2, 144–147 с).
   if (cloudOnMe && (!esc || esc.etaMs > graceMs) && countOf(bot, FILLER_RE) > 0 && !bot.entity.onGround) {
     clearControls(bot)
-    const tg = Date.now()
-    while (!bot.entity.onGround && Date.now() - tg < 400) await sleep(50)
+    const tg = gameClock.now()
+    while (!bot.entity.onGround && gameClock.now() - tg < 400) await sleep(50)
   }
   if (cloudOnMe && (!esc || esc.etaMs > graceMs) && countOf(bot, FILLER_RE) > 0 && bot.entity.onGround &&
       isAirish(bot.blockAt(bot.entity.position.floored().offset(0, 2, 0)))) {
@@ -3788,7 +3789,7 @@ async function evadeRaw (bot, ctl, stats, bad, prefer = null) {
   const before = bot.entity.position.clone()
   const r = await stepTo(bot, ctl, esc.feet, { ms: Math.max(1500, esc.etaMs + 800), stopAt: 0.5, clouds: esc.through ? 'fb' : true })
   if (!r.ok && Math.hypot(bot.entity.position.x - before.x, bot.entity.position.z - before.z) < 0.5) {
-    ctl.evadeBad.push({ feet: esc.feet, t: Date.now() })
+    ctl.evadeBad.push({ feet: esc.feet, t: gameClock.now() })
     if (ctl.trace) ctl.trace.ev('evadeStuck', { to: [r1(esc.feet.x), esc.feet.y, r1(esc.feet.z)], why: r.why })
   }
   return r.ok
@@ -3799,7 +3800,7 @@ const cloudBorn = new Map()
 function cloudAgeMs (c) {
   if (!c || !c.e) return 0
   const t = cloudBorn.get(c.e.id)
-  return t ? Date.now() - t : 5000
+  return t ? gameClock.now() - t : 5000
 }
 
 // Можно ли пройти по прямой клавишами (stepTo): под каждой точкой пути — пол
@@ -3929,13 +3930,13 @@ async function fightEnderman (session, ctl, stats, e, stop) {
   doing(ctl, 'enderman')
   stats.endermen++
   const id = e.id
-  const t0 = Date.now()
-  let ready = Date.now() + 100
+  const t0 = gameClock.now()
+  let ready = gameClock.now() + 100
   let swings = 0
   let killed = false
   if (ctl.trace) ctl.trace.ev('endermanFight', { id, dist: +e.position.distanceTo(bot.entity.position).toFixed(1), hp: bot.health })
   try {
-    while (!ctl.aborted && Date.now() - t0 < 15000) {
+    while (!ctl.aborted && gameClock.now() - t0 < 15000) {
       await yieldTick()
       if (stop && stop()) break
       const en = bot.entities[id]
@@ -3949,13 +3950,13 @@ async function fightEnderman (session, ctl, stats, e, stop) {
       if (bot.health <= 9 && !hasEffect(bot, 'absorption') && findItem(bot, /golden_apple$/)) {
         clearControls(bot)
         await heal(session, ctl, null, stats, { hard: true })
-        ready = Date.now() + 100
+        ready = gameClock.now() + 100
         continue
       }
       const w = items.bestWeapon(bot)
       if (w && (!bot.heldItem || bot.heldItem.name !== w.name)) {
         await bot.equip(w, 'hand').catch(() => {})
-        ready = Date.now() + pvp.cooldownMs(w)
+        ready = gameClock.now() + pvp.cooldownMs(w)
         continue
       }
       const box = { min: en.position.offset(-0.3, 0, -0.3), max: en.position.offset(0.3, 2.9, 0.3) }
@@ -3970,7 +3971,7 @@ async function fightEnderman (session, ctl, stats, e, stop) {
       const intoCloud = !!stepIntoZone(cloudZones(bot), me, new Vec3(me.x + fx, me.y, me.z + fz))
       const safeStep = (cliff == null || cliff > 1.2) && !intoCloud
       bot.setControlState('forward', reach > 2.6 && safeStep)
-      const now = Date.now()
+      const now = gameClock.now()
       bot.setControlState('jump', now >= ready - 300 && bot.entity.onGround && reach < 3.8 && cliff == null)
       const falling = !bot.entity.onGround && bot.entity.velocity.y < -0.04
       if (now >= ready && reach <= 2.95 && (falling || now >= ready + 450)) {
@@ -3983,7 +3984,7 @@ async function fightEnderman (session, ctl, stats, e, stop) {
   } finally {
     clearControls(bot)
     if (killed) stats.endermenKilled = (stats.endermenKilled || 0) + 1
-    if (ctl.trace) ctl.trace.ev('endermanDone', { id, killed, swings, secs: Math.round((Date.now() - t0) / 100) / 10, hp: bot.health })
+    if (ctl.trace) ctl.trace.ev('endermanDone', { id, killed, swings, secs: Math.round((gameClock.now() - t0) / 100) / 10, hp: bot.health })
     dbg('enderman', JSON.stringify({ killed, swings }))
   }
 }
@@ -4108,7 +4109,7 @@ async function bedBlast (session, ctl, rep, stats, track) {
   const blast = { at: Math.round(hpOf(bot, d0) ?? 0), beds: 0, dmg: 0, dist: [] }
   // Дракон ударил, пока шли к месту кровати (голова довернулась) — бросить:
   // d8-22 (30.09, 269–270 с) — два удара по 6 на пути к кровати, смерть позже.
-  const tBed = Date.now()
+  const tBed = gameClock.now()
   const struck = () => (hitBy.get(d0.id) || 0) > tBed
   // Взрыв кровати поджигает (fire = true): огнестойкость, если есть.
   if (bot.entity.position.distanceTo(d0.position) > HEAD_AHEAD + 4) await usePotion(bot, stats, 'fire_resistance')
@@ -4131,9 +4132,9 @@ async function bedBlast (session, ctl, rep, stats, track) {
       // головы на 7 с не успевал: «не дошёл за 7с» три посадки подряд).
       const near = bot.entity.position.distanceTo(plan.feet) < 7 && Math.abs(bot.entity.position.y - plan.feet.y) < 1.2
       const s1 = near ? await stepTo(bot, ctl, plan.feet, { ms: 3000, sprint: false, stopAt: 0.3, stop: struck }) : { ok: false }
-      if (struck()) { blast.why = 'ударил дракон'; const rs = sitRec && !sitRec.ended ? sitRec : null; if (rs) rs.hitBack = Date.now(); break }
+      if (struck()) { blast.why = 'ударил дракон'; const rs = sitRec && !sitRec.ended ? sitRec : null; if (rs) rs.hitBack = gameClock.now(); break }
       const w = s1.ok ? s1 : await walkTo(session, ctl, plan.feet, { range: 0, timeoutMs: 12000, hazards: brave ? 'noclouds' : true })
-      if (struck()) { blast.why = 'ударил дракон'; const rs = sitRec && !sitRec.ended ? sitRec : null; if (rs) rs.hitBack = Date.now(); break }
+      if (struck()) { blast.why = 'ударил дракон'; const rs = sitRec && !sitRec.ended ? sitRec : null; if (rs) rs.hitBack = gameClock.now(); break }
       if (!w.ok && Math.hypot(bot.entity.position.x - plan.feet.x, bot.entity.position.z - plan.feet.z) > 0.9) { blast.why = `не дошёл до места: ${w.why}`; break }
       await stepTo(bot, ctl, plan.feet, { ms: 800, sprint: false, stopAt: 0.15 })
     }
@@ -4295,7 +4296,7 @@ async function perchApproach (session, ctl, stats) {
   if (!dd) return false
   const ph = phaseOf(bot, dd)
   if (ph !== PHASE.SCANNING) return false
-  { const rc = sitState(dd, ph, Date.now()); if (rc) noteNear(rc, dd, bot, Date.now()) }
+  { const rc = sitState(dd, ph, gameClock.now()); if (rc) noteNear(rc, dd, bot, gameClock.now()) }
   if (!perchFar(bot)) return false
   {
     const P = podiumTop(bot)
@@ -4394,7 +4395,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
   // девять слепых посадок, взлёт на 4.6–5 с, пять заходов под крылья) — к нему
   // тоже, но без подставки (огня не будет), а к 3.4 с — нырнуть в яму под
   // собой: коробки взлёта (крылья, шея: низ Y − 2) пройдут поверх.
-  const rec = sitState(d, phaseOf(bot, d), Date.now())
+  const rec = sitState(d, phaseOf(bot, d), gameClock.now())
   // Дракон бил нас в эту посадку (где угодно: у кровати, на подходе) — к голове
   // больше не лезть.
   const hitAt0 = hitBy.get(d.id)
@@ -4412,7 +4413,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
   // высматривает — ждать поодаль. Первые 1.6 с посадки — тоже ждать: слепой он
   // или видящий, ещё не ясно (d8-17, d10-26, d7-21: удары головой на
   // повороте). Слепой — к голове сразу, как стало ясно.
-  if (rec) noteNear(rec, d, bot, Date.now())
+  if (rec) noteNear(rec, d, bot, gameClock.now())
   // Видящий (или пока не ясно) высматривает, а мы дальше STAY_R — ближе, в
   // сторону от морды: иначе через 100 тиков таран (см. SCAN_RANGE).
   if (rec && phaseOf(bot, d) === PHASE.SCANNING && !blindKnown(rec) && bot.entity.position.distanceTo(d.position) > STAY_R + 0.5) {
@@ -4466,7 +4467,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
   if (ctl.beds && !blindKnown(rec) && countOf(bot, /_bed$/) > 0 && bot.health >= 12 && !((stats.bedTried || 0) >= 3 && !stats.bedsUsed)) {
     const soonFlame = ph0 === PHASE.ROARING ? breathOf(bot, d, parts) : null
     const plan = bedPlan(bot, d, parts, { brave: bot.health >= 19 || (hasEffect(bot, 'absorption') && bot.health >= 14) })
-    if (!plan) { stats.bedNoPlan = stats.bedNoPlan || {}; for (const [k, v] of Object.entries(bedPlan.why || {})) stats.bedNoPlan[k] = (stats.bedNoPlan[k] || 0) + v; if (DEBUG && Date.now() - (stats.bedPlanLog || 0) > 2000) { stats.bedPlanLog = Date.now(); dbg('bed plan', PHASE_RU[ph0], JSON.stringify(bedPlan.why)) } }
+    if (!plan) { stats.bedNoPlan = stats.bedNoPlan || {}; for (const [k, v] of Object.entries(bedPlan.why || {})) stats.bedNoPlan[k] = (stats.bedNoPlan[k] || 0) + v; if (DEBUG && gameClock.now() - (stats.bedPlanLog || 0) > 2000) { stats.bedPlanLog = gameClock.now(); dbg('bed plan', PHASE_RU[ph0], JSON.stringify(bedPlan.why)) } }
     if (plan && !(soonFlame && cloudHits(soonFlame, plan.feet, 0.8))) {
       stats.bedTried = (stats.bedTried || 0) + 1
       const b = await bedBlast(session, ctl, rep, stats, track)
@@ -4571,11 +4572,11 @@ async function perchAttack (session, ctl, rep, stats, track) {
   perch.low = Math.floor(bot.entity.position.y + 0.01) < spot.feet.y
   const weapon = items.bestWeapon(bot)
   if (weapon) await bot.equip(weapon, 'hand').catch(() => {})
-  let nextReady = Date.now() + 100
+  let nextReady = gameClock.now() + 100
   let lastSwing = 0
   let lastHp = hpOf(bot, d)
-  const t0 = Date.now()
-  while (!ctl.aborted && Date.now() - t0 < 30000) {
+  const t0 = gameClock.now()
+  while (!ctl.aborted && gameClock.now() - t0 < 30000) {
     await yieldTick()
     d = track.tick()
     if (!d) break
@@ -4587,22 +4588,22 @@ async function perchAttack (session, ctl, rep, stats, track) {
       if (ph === PHASE.TAKEOFF) { perch.left = 'взлёт — вбок'; await takeoffSidestep(bot, ctl, d, 'взлёт от удара') }
       break
     }
-    const rc = sitState(d, ph, Date.now())
+    const rc = sitState(d, ph, gameClock.now())
     // Подставки нет (кончились блоки), а видящий ревёт или дышит — облако огня
     // ляжет под ноги у морды: уйти до следующего «высматривает» (d7-26, 30.09,
     // 569–573 с: у головы без подставки — пять ударов огнём и голова, смерть).
-    if (perch.low && !blindNow() && (ph === PHASE.ROARING || ph === PHASE.FLAMING)) { perch.left = 'огонь, подставки нет'; if (rc) rc.noPedestal = Date.now(); break }
+    if (perch.low && !blindNow() && (ph === PHASE.ROARING || ph === PHASE.FLAMING)) { perch.left = 'огонь, подставки нет'; if (rc) rc.noPedestal = gameClock.now(); break }
     // Видящий снова высматривает — голова пойдёт по дуге: отойти до рёва.
     if (ph === PHASE.SCANNING && rc && rc.roared) { perch.left = 'высматривает — отойти'; await stepTo(bot, ctl, awayFromHead(d, parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 }); break }
     // Четвёртый огонь или ≥ 44 за посадку — уходить от морды до взлёта.
     if (rc && (rc.flames >= 4 || (rc.dmg || 0) >= 44)) { perch.left = rc.flames >= 4 ? 'четвёртый огонь' : 'снято 44'; break }
     // Слепой взлетит на ~4.6 с — к 3.4 с нырнуть (или уйти, если не копается).
-    if (rc && !rc.roared && Date.now() - rc.t0 > 3400) {
+    if (rc && !rc.roared && gameClock.now() - rc.t0 > 3400) {
       clearControls(bot)
       const F = Math.floor(d.position.y - HOLE_TOP - 0.15)
       perch.ducked = duckPlan(bot, F) ? await duck(bot, ctl, F) : false
       if (perch.ducked) rc.ducked = true
-      else rc.hitBack = Date.now()
+      else rc.hitBack = gameClock.now()
       perch.left = perch.ducked ? 'нырнул до взлёта' : 'взлёт скоро, нырнуть нельзя'
       break
     }
@@ -4619,7 +4620,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
     const hitAt = hitBy.get(d.id)
     if (hitAt && hitAt > t0) {
       perch.left = 'ударил дракон'
-      if (rc) rc.hitBack = Date.now()
+      if (rc) rc.hitBack = gameClock.now()
       clearControls(bot)
       await stepTo(bot, ctl, awayFromHead(d, parts, feet, 4), { ms: 1200, stopAt: 0.4 })
       break
@@ -4636,8 +4637,8 @@ async function perchAttack (session, ctl, rep, stats, track) {
       if (perch.backed > 3) break
       continue
     }
-    if (DEBUG && (!perch.dbgAt || Date.now() - perch.dbgAt > 1000)) {
-      perch.dbgAt = Date.now()
+    if (DEBUG && (!perch.dbgAt || gameClock.now() - perch.dbgAt > 1000)) {
+      perch.dbgAt = gameClock.now()
       dbg('perch', 'phase', PHASE_RU[ph], 'head', parts.headC.toString(), 'me', feet.toString(), 'reach', reach.toFixed(2), 'hp', hpOf(bot, d), 'yaw', d.yaw.toFixed(2))
     }
     if (reach > 3.4) {
@@ -4658,11 +4659,11 @@ async function perchAttack (session, ctl, rep, stats, track) {
     // Злой эндермен вплотную посреди посадки: ударить его в перезарядку головы,
     // не сходя с места (его 7 урона за удар против окна посадки).
     const pest = hunters(bot, 3.2)[0]
-    if (pest && Date.now() >= nextReady) {
+    if (pest && gameClock.now() >= nextReady) {
       await bot.lookAt(pest.position.offset(0, 1.5, 0), true).catch(() => {})
       bot.attack(pest)
       perch.pests = (perch.pests || 0) + 1
-      nextReady = Date.now() + pvp.cooldownMs(bot.heldItem)
+      nextReady = gameClock.now() + pvp.cooldownMs(bot.heldItem)
       await sleep(50)
       continue
     }
@@ -4672,7 +4673,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
     // в игре «крит» в прыжке дал ровно 7, как без него). Прыгаем ради другого:
     // в воздухе нет размашистого удара мечом, который задел бы эндерменов у
     // головы и разозлил их. Бьём по перезарядке, как только оторвались от земли.
-    const now = Date.now()
+    const now = gameClock.now()
     const hp = hpOf(bot, d)
     if (hp != null && lastHp != null && hp < lastHp) {
       const lost = lastHp - hp
@@ -4691,7 +4692,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
       const w = items.bestWeapon(bot)
       if (w && (!bot.heldItem || bot.heldItem.name !== w.name)) {
         await bot.equip(w, 'hand').catch(() => {})
-        nextReady = Date.now() + pvp.cooldownMs(w)
+        nextReady = gameClock.now() + pvp.cooldownMs(w)
         await sleep(50)
         continue
       }
@@ -4702,7 +4703,7 @@ async function perchAttack (session, ctl, rep, stats, track) {
         nextReady = now + pvp.cooldownMs(bot.heldItem)
         // Урон головой или телом — по тому, на сколько упало здоровье.
         const before = hpOf(bot, d)
-        setTimeout(() => {
+        gameClock.setTimeout(() => {
           const dd = dragonOf(bot)
           const after = dd ? hpOf(bot, dd) : null
           if (before != null && after != null) {
@@ -4747,7 +4748,7 @@ async function rangedShot (session, ctl, stats, track, d, hazardSoon) {
   stats.arrows++
   if (headOn) stats.headShots++
   // Попадание — по здоровью из метаданных, когда стрела долетит.
-  setTimeout(() => {
+  gameClock.setTimeout(() => {
     const dd = dragonOf(bot)
     const hp = dd ? hpOf(bot, dd) : null
     if (hp0 != null && hp != null && hp < hp0) { stats.arrowHits++; stats.dmg += hp0 - hp }
@@ -4870,7 +4871,7 @@ function makeDragonFeed (bot) {
   const onHit = pk => {
     if (!pk || !bot.entity || pk.entityId !== bot.entity.id) return
     const src = bot.entities[pk.sourceCauseId - 1]
-    if (DAMAGE_TYPES[pk.sourceTypeId] === 'mob_attack' && src && src.name === 'ender_dragon') lastDragonHit = Date.now()
+    if (DAMAGE_TYPES[pk.sourceTypeId] === 'mob_attack' && src && src.name === 'ender_dragon') lastDragonHit = gameClock.now()
   }
   bot._client.on('damage_event', onHit)
   const list = []
@@ -4888,18 +4889,18 @@ function makeDragonFeed (bot) {
       ;[id, off] = readVarIntAt(buf, off)
       const e = bot.entities[id]
       if (!e || e.name !== 'ender_dragon') return
-      vel = { t: Date.now(), id, ...lpVec3At(buf, off) }
+      vel = { t: gameClock.now(), id, ...lpVec3At(buf, off) }
       const last = list[list.length - 1]
       if (last && last.id === id && vel.t - last.t < 25 && last.vx == null) { last.vx = vel.x; last.vy = vel.y; last.vz = vel.z; refresh(id) }
     } catch {}
   }
   const onMoved = e => {
     if (!e || e.name !== 'ender_dragon') return
-    const t = Date.now()
+    const t = gameClock.now()
     const last = list[list.length - 1]
     const p = e.position
     if (last && last.id === e.id && t - last.t < 25 && Math.abs(last.x - p.x) < 1e-6 && Math.abs(last.z - p.z) < 1e-6 && Math.abs(last.y - p.y) < 1e-6) { last.yRot = yRotOf(e.yaw); return }
-    const r = { t, id: e.id, x: p.x, y: p.y, z: p.z, yRot: yRotOf(e.yaw), ph: phaseOf(bot, e), vx: null, vy: null, vz: null }
+    const r = { t, wallMs: gameClock.wall.now(), id: e.id, x: p.x, y: p.y, z: p.z, yRot: yRotOf(e.yaw), ph: phaseOf(bot, e), vx: null, vy: null, vz: null }
     if (vel && vel.id === e.id && t - vel.t < 25) { r.vx = vel.x; r.vy = vel.y; r.vz = vel.z }
     list.push(r)
     if (list.length > 40) list.shift()
@@ -4911,12 +4912,12 @@ function makeDragonFeed (bot) {
     if (!e || e.name !== 'ender_dragon') return
     const ph = phaseOf(bot, e)
     const last = list[list.length - 1]
-    if (last && last.id === e.id && Date.now() - last.t < 25) last.ph = ph
+    if (last && last.id === e.id && gameClock.now() - last.t < 25) last.ph = ph
     const f = feed.fc
-    if (!SITTING.has(ph) || !f || f.id !== e.id || Date.now() - f.t > 700 || feed.fixed === f.t) return
+    if (!SITTING.has(ph) || !f || f.id !== e.id || gameClock.now() - f.t > 700 || feed.fixed === f.t) return
     feed.fixed = f.t
-    sitFix.set(e.id, { yRotA: f.yRotA, yaw: e.yaw, t: Date.now(), head: f.head, sit: simClone(f.sit), pos: e.position.clone(), pushes: [], me: bot.entity && bot.entity.position.clone() })
-    if (feed.onSit) feed.onSit({ pred: [r3(f.sit.x), r3(f.sit.y), r3(f.sit.z), r1(f.sit.yRot)], act: [r3(e.position.x), r3(e.position.y), r3(e.position.z), r1(yRotOf(e.yaw))], yRotA: r1(f.yRotA), n: f.n, late: Date.now() - f.t, head: [r1(f.head.x), r1(f.head.y), r1(f.head.z)] })
+    sitFix.set(e.id, { yRotA: f.yRotA, yaw: e.yaw, t: gameClock.now(), head: f.head, sit: simClone(f.sit), pos: e.position.clone(), pushes: [], me: bot.entity && bot.entity.position.clone() })
+    if (feed.onSit) feed.onSit({ pred: [r3(f.sit.x), r3(f.sit.y), r3(f.sit.z), r1(f.sit.yRot)], act: [r3(e.position.x), r3(e.position.y), r3(e.position.z), r1(yRotOf(e.yaw))], yRotA: r1(f.yRotA), n: f.n, late: gameClock.now() - f.t, head: [r1(f.head.x), r1(f.head.y), r1(f.head.z)] })
   }
   const feed = { list, fc: null, fixed: null, onSit: null, close () { bot._client.removeListener('raw.entity_velocity', onVel); bot.removeListener('entityMoved', onMoved); bot.removeListener('entityUpdate', onUpd); bot._client.removeListener('damage_event', onHit) } }
   bot._client.on('raw.entity_velocity', onVel)
@@ -4947,7 +4948,7 @@ function landingForecast (feed, P) {
     const dx = s.x - T.x; const dy = s.y - T.y; const dz = s.z - T.z
     if (dx * dx + dy * dy + dz * dz < 1) {
       const sit = simClone(s)
-      return { t: b.t, n: k - 1 + 1, fitErr: best.e, sit, head: simHead(sit, true), neck: simNeck(sit, true), path, yRotA: s.yRotA }
+      return { t: b.t, wallMs: b.wallMs, n: k - 1 + 1, fitErr: best.e, sit, head: simHead(sit, true), neck: simNeck(sit, true), path, yRotA: s.yRotA }
     }
     simStep(s, T, 1.5, turnLanding)
     path.push({ k, head: simHead(s, false), neck: simNeck(s, false), pos: new Vec3(s.x, s.y, s.z), yRot: s.yRot, st: simClone(s) })
@@ -4969,7 +4970,7 @@ function pushedForecast (fc, i0, centre, seen, P) {
     const dx = s.x - T.x; const dy = s.y - T.y; const dz = s.z - T.z
     if (dx * dx + dy * dy + dz * dz < 1) {
       const sit = simClone(s)
-      return { t: fc.t, n: k, fitErr: fc.fitErr, sit, head: simHead(sit, true), neck: simNeck(sit, true), path, yRotA: s.yRotA, pushed: push }
+      return { t: fc.t, wallMs: fc.wallMs, n: k, fitErr: fc.fitErr, sit, head: simHead(sit, true), neck: simNeck(sit, true), path, yRotA: s.yRotA, pushed: push }
     }
     simStep(s, T, 1.5, turnLanding)
     path.push({ k, head: simHead(s, false), neck: simNeck(s, false), pos: new Vec3(s.x, s.y, s.z), yRot: s.yRot, st: simClone(s) })
@@ -4988,7 +4989,7 @@ const sitFix = new Map()
 const NODE_ADJ = [6146, 8197, 8202, 16404, 32808, 32848, 65696, 131392, 131712, 263424, 526848, 525313, 1581057, 3166214, 2138120, 6373424, 4358208, 12910976, 9044480, 9706496, 15216640, 13688832, 11763712, 8257536]
 let nodesCache = null
 function dragonNodes (bot) {
-  if (nodesCache && nodesCache.dim === bot.game.dimension && Date.now() - nodesCache.t < 600000) return nodesCache.nodes
+  if (nodesCache && nodesCache.dim === bot.game.dimension && gameClock.now() - nodesCache.t < 600000) return nodesCache.nodes
   const h = (x, z) => { const s = surfaceY(bot, x + 0.5, z + 0.5, 200); return s ? s.y : null }
   const out = []
   for (let i = 0; i < 24; i++) {
@@ -5002,7 +5003,7 @@ function dragonNodes (bot) {
     if (hy == null) hy = i < 12 ? 0 : 62
     out.push({ i, x: k, y: Math.max(73, hy + j), z: l })
   }
-  nodesCache = { nodes: out, t: Date.now(), dim: bot.game.dimension }
+  nodesCache = { nodes: out, t: gameClock.now(), dim: bot.game.dimension }
   return out
 }
 const nd2 = (a, b) => { const x = a.x - b.x; const y = a.y - b.y; const z = a.z - b.z; return Math.fround(x * x + y * y + z * z) }
@@ -5150,7 +5151,7 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
   stats.oc = stats.oc || { tries: 0, built: 0, booms: 0, why: {} }
   const no = w => { stats.oc.why[w] = (stats.oc.why[w] || 0) + 1; ev('ocL', { why: w, n: fc.n }); return false }
   stats.oc.tries++
-  const tPlan0 = Date.now()
+  const tPlan0 = gameClock.now()
   const tgt = (fc.path[fc.n - 3] || fc.path[fc.path.length - 1]).head
   let plan = null
   const whyAll = {}
@@ -5287,22 +5288,22 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
     if (fcA) {
       const acc = sitAcc.id === d.id ? sitAcc.dmg : 0
       const cap = acc < 25 ? 49 - acc : null
-      const tA = Date.now()
+      const tA = gameClock.now()
       ownA = tsOwnPlan(bot, plan, fcA, { cap, dpos: new Vec3(fcA.sit.x, fcA.sit.y, fcA.sit.z) })
-      ev('ocA', ownA ? { ms: Date.now() - tA, H: [ownA.H.x, ownA.yb, ownA.H.z], B: [ownA.B.x, ownA.G, ownA.B.z], depth: ownA.depth, expect: ownA.expect, dist: r1(ownA.centre.distanceTo(fcA.head)), seen: ownA.seen, cap, acc: r1(acc) } : { ms: Date.now() - tA, no: tsOwnPlan.why, cap, acc: r1(acc) })
+      ev('ocA', ownA ? { ms: gameClock.now() - tA, H: [ownA.H.x, ownA.yb, ownA.H.z], B: [ownA.B.x, ownA.G, ownA.B.z], depth: ownA.depth, expect: ownA.expect, dist: r1(ownA.centre.distanceTo(fcA.head)), seen: ownA.seen, cap, acc: r1(acc) } : { ms: gameClock.now() - tA, no: tsOwnPlan.why, cap, acc: r1(acc) })
       // B — тоже свой окоп у головы сидящего, без потолка (её взрыв поднимет на взлёт); цела после
       // взрывов L и A, её окоп не в их воронках.
       if (ownA && process.env.ND_OC_B !== '0') {
-        const tB = Date.now()
+        const tB = gameClock.now()
         const world = stationWorld(ownA, stationWorld(plan, plan.world))
         ownB = tsOwnStation(bot, fcA.head, { fc: { ...fcA, n: fcA.n + 3 }, dpos: new Vec3(fcA.sit.x, fcA.sit.y, fcA.sit.z), world, priors: [plan, ownA], avoid: [plan, ownA], sitP: predParts(fcA) })
         if (ownB) ownB.role = 'B'
-        ev('ocB', ownB ? { ms: Date.now() - tB, H: [ownB.H.x, ownB.yb, ownB.H.z], B: [ownB.B.x, ownB.G, ownB.B.z], depth: ownB.depth, expect: ownB.expect, dist: r1(ownB.centre.distanceTo(fcA.head)), seen: ownB.seen } : { ms: Date.now() - tB, no: tsOwnStation.why })
+        ev('ocB', ownB ? { ms: gameClock.now() - tB, H: [ownB.H.x, ownB.yb, ownB.H.z], B: [ownB.B.x, ownB.G, ownB.B.z], depth: ownB.depth, expect: ownB.expect, dist: r1(ownB.centre.distanceTo(fcA.head)), seen: ownB.seen } : { ms: gameClock.now() - tB, no: tsOwnStation.why })
       }
     } else ev('ocA', { no: { 'посадка после L не считается': 1 } })
   }
 
-  ev('ocPlan', { ms: Date.now() - tPlan0, anchor: plan.anchor || undefined, n: fc.n, head: [r1(tgt.x), r1(tgt.y), r1(tgt.z)], sitHead: [r1(fc.head.x), r1(fc.head.y), r1(fc.head.z)], yRotA: r1(fc.yRotA), H: [plan.H.x, plan.yb, plan.H.z], lift: plan.lift, depth: plan.depth, dist: plan.dist, seen: plan.seen, expect: plan.expect, u: [plan.u.x, plan.u.z], a: [plan.a.x, plan.a.z], no: whyAll })
+  ev('ocPlan', { ms: gameClock.now() - tPlan0, anchor: plan.anchor || undefined, n: fc.n, head: [r1(tgt.x), r1(tgt.y), r1(tgt.z)], sitHead: [r1(fc.head.x), r1(fc.head.y), r1(fc.head.z)], yRotA: r1(fc.yRotA), H: [plan.H.x, plan.yb, plan.H.z], lift: plan.lift, depth: plan.depth, dist: plan.dist, seen: plan.seen, expect: plan.expect, u: [plan.u.x, plan.u.z], a: [plan.a.x, plan.a.z], no: whyAll })
   doing(ctl, 'oc:build')
   // Опасно стоять там, где мы сейчас: коробки снижающегося по свежему прогнозу на ~1.5 с вперёд.
   const danger = () => {
@@ -5310,14 +5311,14 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
     const ph = dd ? phaseOf(bot, dd) : null
     if (ph !== PHASE.LANDING) return `фаза ${PHASE_RU[ph] ?? ph}`
     const f = feed.fc && feed.fc.id === d.id ? feed.fc : fc
-    if (f.n - Math.round((Date.now() - f.t) / 50) < 8) return 'не успеть до посадки'
+    if (f.n - Math.round((gameClock.now() - f.t) / 50) < 8) return 'не успеть до посадки'
     const soon = { ...f, path: f.path.slice(0, 30) }
     const h = landingHits(soon, bot.entity.position, 0.5)
     return h ? `${h.what} через ${h.k} тиков` : null
   }
   ctl.holdStation = true
   let b
-  const leftTicks = () => { const f = feed.fc && feed.fc.id === d.id ? feed.fc : fc; return f.n - Math.round((Date.now() - f.t) / 50) }
+  const leftTicks = () => { const f = feed.fc && feed.fc.id === d.id ? feed.fc : fc; return f.n - Math.round((gameClock.now() - f.t) / 50) }
   try {
     if (!ownA) b = await tsBuild(session, ctl, stats, plan, danger, leftTicks)
     else {
@@ -5358,10 +5359,10 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
         // До L0 дракон летит по прогнозу без толчка: тик L0 — i0 + 1 от пакета плана, сдвиг —
         // по свежему прогнозу того же (ещё не толкнутого) полёта.
         t0c = plan.nPlan ? last0.t + 50 * (last0.n - plan.nPlan + s2.i0 + 1) - 30 : last0.t + 50 * (last0.n - 2) - 30 - 50 * plan.gapTicks
-        if (t0c - Date.now() < 70) break
+        if (t0c - gameClock.now() < 70) break
         await sleep(15)
       }
-      if (okWait && t0c > Date.now() - 30) {
+      if (okWait && t0c > gameClock.now() - 30) {
         const at0 = plan.nPlan ? last0.path[last0.n - plan.nPlan + s2.i0] : last0.path[last0.n - 3 - plan.gapTicks]
         const hd0 = at0 ? r1(at0.head.distanceTo(s2.centre)) : null
         const b0 = await bedsBoom(session, ctl, stats, { ...s2, reuse: true }, hit0, 'снижение', { aimed: true, until: t0c, uncounted: true, phCheck: p => p === PHASE.LANDING, note: { headDist: hd0, oc: 'L0' } })
@@ -5391,7 +5392,7 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
     // Щелчок, обработанный после тика g + n − 2 (за два тика до посадки): опоздание на тик
     // — ещё снижение; на тик раньше «в самый раз» — уже сидит (урон в сидячий счёт; oc2-26).
     tClick = last.t + 50 * (last.n - 2) - 55
-    if (tClick - Date.now() < 70) break
+    if (tClick - gameClock.now() < 70) break
     await sleep(15)
   }
   const at = last.path[last.n - 3] || last.path[last.path.length - 1]
@@ -5423,11 +5424,11 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
   if (blindLid) {
     // Дождаться «высматривает» (запрос видимости — в тик посадки), потом вылезти.
     const lidPos = new Vec3(plan.B.x, plan.G, plan.B.z)
-    const t0 = Date.now(); let sat = 0; let roared = false
-    while (!ctl.aborted && Date.now() - t0 < 4000) {
+    const t0 = gameClock.now(); let sat = 0; let roared = false
+    while (!ctl.aborted && gameClock.now() - t0 < 4000) {
       const dd = dragonOf(bot); const ph = dd ? phaseOf(bot, dd) : null
       if (ph === PHASE.ROARING || ph === PHASE.FLAMING) { roared = true; break }
-      if (SITTING.has(ph)) { if (!sat) sat = Date.now(); if (Date.now() - sat > 150) break }
+      if (SITTING.has(ph)) { if (!sat) sat = gameClock.now(); if (gameClock.now() - sat > 150) break }
       await sleep(20)
     }
     const lidUp = isSolid(bot.blockAt(lidPos))
@@ -5439,7 +5440,7 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
   stats.oc.booms++
   stats.oc.L = stats.oc.L || []
   stats.oc.L.push({ dmg: boom.dmg, headDist, took: boom.ph })
-  if (tk && plan.second) ctl.ocTk = { dId: d.id, t: Date.now(), plan: { ...plan, second: null }, T2: tk.T2, A: tk.A, path: tk.path, S: tk.S }
+  if (tk && plan.second) ctl.ocTk = { dId: d.id, t: gameClock.now(), plan: { ...plan, second: null }, T2: tk.T2, A: tk.A, path: tk.path, S: tk.S }
   // Видящий: «высматривает» 25 тиков поворачивает голову к нам — переждать в окопе (в окопе в 2
   // голова/шея и облако не достают), неподвижно: тогда конечное положение головы точно считается
   // (seeCalibrate по нашему месту на посадке). Вылезти — когда рёв/огонь.
@@ -5447,8 +5448,8 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
     const dd = dragonOf(bot)
     if (dd && sight.get(dd.id + ':' + bot.entity.id) === 'seeing') {
       doing(ctl, 'oc:scanWait')
-      const tw = Date.now()
-      while (!ctl.aborted && Date.now() - tw < 3500) {
+      const tw = gameClock.now()
+      while (!ctl.aborted && gameClock.now() - tw < 3500) {
         const d2 = dragonOf(bot); const ph2 = d2 ? phaseOf(bot, d2) : null
         if (!d2 || ph2 === PHASE.ROARING || ph2 === PHASE.FLAMING) break
         if (!SITTING.has(ph2) && ph2 !== PHASE.LANDING) break
@@ -5472,7 +5473,7 @@ async function ocLanding (session, ctl, rep, stats, track, feed, { blindLid = fa
 async function ocOwnClick (session, ctl, stats, st, fcA, track, { tag = 'A', build: doBuild = false } = {}) {
   const bot = session.bot
   const ev = (k, o) => { if (ctl.trace) ctl.trace.ev(k, o) }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let why = null
   let ok = false
   const sittingNow = () => { const dd = dragonOf(bot); return !!dd && SITTING.has(phaseOf(bot, dd)) }
@@ -5500,9 +5501,9 @@ async function ocOwnClick (session, ctl, stats, st, fcA, track, { tag = 'A', bui
     await lookAtSafe(bot, hit.point)
     await new Promise(resolve => bot.once('physicsTick', resolve))
     doing(ctl, `oc:wait${tag}`)
-    const tw = Date.now()
+    const tw = gameClock.now()
     let sat = false
-    while (!ctl.aborted && Date.now() - tw < 3000) {
+    while (!ctl.aborted && gameClock.now() - tw < 3000) {
       const dd = dragonOf(bot); const ph = dd ? phaseOf(bot, dd) : null
       if (SITTING.has(ph)) { sat = true; break }
       if (ph !== PHASE.LANDING) break
@@ -5510,14 +5511,14 @@ async function ocOwnClick (session, ctl, stats, st, fcA, track, { tag = 'A', bui
     }
     if (!sat) { why = 'не сидит'; return false }
     const hd = fcA ? r1(fcA.head.distanceTo(st.centre)) : null
-    const r = await bedsBoom(session, ctl, stats, { ...st, reuse: true }, hit, 'сидит', { aimed: true, until: Math.max(Date.now(), (stats.lastBoom || 0) + BED_GAP_MS), phCheck: p => SITTING.has(p), note: { oc: tag, headDist: hd, ms: Date.now() - t0, prebuilt: !doBuild } })
+    const r = await bedsBoom(session, ctl, stats, { ...st, reuse: true }, hit, 'сидит', { aimed: true, until: Math.max(gameClock.now(), (stats.lastBoom || 0) + BED_GAP_MS), phCheck: p => SITTING.has(p), note: { oc: tag, headDist: hd, ms: gameClock.now() - t0, prebuilt: !doBuild } })
     stats.oc[tag] = stats.oc[tag] || []
     stats.oc[tag].push({ ok: r.ok, dmg: r.dmg, headDist: hd })
     if (!r.ok) { why = `щелчок: ${r.why}`; return false }
     ok = true
     return true
   } finally {
-    ev('oc' + tag, { done: ok, why, ms: Date.now() - t0 })
+    ev('oc' + tag, { done: ok, why, ms: gameClock.now() - t0 })
     const q = bot.entity.position
     if (Math.floor(q.y + 0.01) < st.G && Math.floor(q.x) === st.B.x && Math.floor(q.z) === st.B.z) { doing(ctl, `oc:out${tag}`); await build.towerUp(bot, ctl, st.G - Math.floor(q.y + 0.01)).catch(() => {}); clearControls(bot) }
   }
@@ -6175,8 +6176,8 @@ async function runnerSupport (bot, plan, dy) {
     await bot.equip(tool, 'hand')
     if (bot.digTime(b) > 650) return why(`снять: долго ${bot.digTime(b)}`)
     runnerAim(bot, hit.point)
-    const stop = setTimeout(() => bot.stopDigging(), 800)
-    try { await bot.dig(b, true) } catch (e) { return why('снять: ' + e.message) } finally { clearTimeout(stop) }
+    const stop = gameClock.setTimeout(() => bot.stopDigging(), 800)
+    try { await bot.dig(b, true) } catch (e) { return why('снять: ' + e.message) } finally { gameClock.clearTimeout(stop) }
     return isAirish(bot.blockAt(pos)) || why('снять: осталась')
   }
   if (b && b.name === 'cobblestone') return true
@@ -6189,8 +6190,8 @@ async function runnerSupport (bot, plan, dy) {
   const pc = hit.point.minus(K)
   bot._client.write('block_place', { location: K, direction: FACE_IDX(low.place.face), hand: 0,
     cursorX: pc.x, cursorY: pc.y, cursorZ: pc.z, insideBlock: false, sequence: 0, worldBorderHit: false })
-  const end = Date.now() + 400
-  while (Date.now() < end && (bot.blockAt(pos) || {}).name !== 'cobblestone') await sleep(20)
+  const end = gameClock.now() + 400
+  while (gameClock.now() < end && (bot.blockAt(pos) || {}).name !== 'cobblestone') await sleep(20)
   if ((bot.blockAt(pos) || {}).name === 'cobblestone') return true
   const dd = dragonOf(bot)
   return why(`поставить: не встал${dd ? ` (тело ${r1(dd.position.x)},${r1(dd.position.y)},${r1(dd.position.z)})` : ''}`)
@@ -6460,7 +6461,7 @@ function tsAPlan (bot, plan, fcL, { cap = null, dpos = null } = {}) {
 // дуге r = 7.5; шаги клавишами (pathfinder у фонтана стоял по 4 с: oc3-25), не вышло — walkTo.
 async function walkAround (session, ctl, target, { timeoutMs = 8000, stop = null } = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const me = bot.entity.position
   const pts = []
   const segNear = (a, b) => segPoint2({ x: a.x, z: a.z }, { x: b.x, z: b.z }, CENTER)
@@ -6472,7 +6473,7 @@ async function walkAround (session, ctl, target, { timeoutMs = 8000, stop = null
   }
   pts.push(target)
   for (let i = 0; i < pts.length; i++) {
-    if (ctl.aborted || Date.now() - t0 > timeoutMs) break
+    if (ctl.aborted || gameClock.now() - t0 > timeoutMs) break
     const p = pts[i]
     const last = i === pts.length - 1
     const y = standY(bot, p.x, p.z, bot.entity.position.y, 3, 4)
@@ -6481,21 +6482,21 @@ async function walkAround (session, ctl, target, { timeoutMs = 8000, stop = null
     const r = await stepTo(bot, ctl, q, { ms: 2500, sprint: true, stopAt: last ? 0.3 : 1.0, stop })
     if (stop && stop()) break
     if (!r.ok && Math.hypot(bot.entity.position.x - q.x, bot.entity.position.z - q.z) > (last ? 0.6 : 2)) {
-      await walkTo(session, ctl, q, { range: last ? 0.35 : 1.5, timeoutMs: Math.max(1500, timeoutMs - (Date.now() - t0)), hazards: true, stopIf: stop ? () => (stop() ? 'опасно' : null) : undefined })
+      await walkTo(session, ctl, q, { range: last ? 0.35 : 1.5, timeoutMs: Math.max(1500, timeoutMs - (gameClock.now() - t0)), hazards: true, stopIf: stop ? () => (stop() ? 'опасно' : null) : undefined })
     }
   }
   clearControls(bot)
   const m = bot.entity.position
-  return { ok: Math.hypot(m.x - target.x, m.z - target.z) <= 0.6, why: Date.now() - t0 > timeoutMs ? 'не успел' : null }
+  return { ok: Math.hypot(m.x - target.x, m.z - target.z) <= 0.6, why: gameClock.now() - t0 > timeoutMs ? 'не успел' : null }
 }
 // Стройка станции: опора F, заслон W, кровать с PS (взгляд вдоль a), окоп B.
 async function tsBuild (session, ctl, stats, plan, danger = null, left = null, { skipTrench = false, onlyTrench = false, parts = null } = {}) {
   const bot = session.bot
   const v = (c, y) => new Vec3(c.x, y, c.z)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const lap = {}
-  const mark = k => { lap[k] = Date.now() - t0; doing(ctl, 'ts:' + k) }
-  const risky = () => { const w = (Date.now() - lastDragonHit < 1500 ? 'удар дракона' : null) || (danger && danger()); if (w) { lap.danger = w; return true } return false }
+  const mark = k => { lap[k] = gameClock.now() - t0; doing(ctl, 'ts:' + k) }
+  const risky = () => { const w = (gameClock.now() - lastDragonHit < 1500 ? 'удар дракона' : null) || (danger && danger()); if (w) { lap.danger = w; return true } return false }
   const res = r => { if (ctl.trace) ctl.trace.ev('tsBuild', { ok: r.ok, why: r.why, lap, role: plan.role || undefined, part: skipTrench ? 'стройка' : onlyTrench ? 'окоп' : undefined }); return r }
   const trench = async () => { const r = await tsTrench(bot, ctl, plan, mark, session); Object.assign(lap, r.lap || {}); delete r.lap; return res(r) }
   if (onlyTrench) return trench()
@@ -6506,7 +6507,7 @@ async function tsBuild (session, ctl, stats, plan, danger = null, left = null, {
   // Идти — пока не опасно: сел/крыло/голова рядом — стоп (see1-30: шёл к месту ставки L, дракон
   // сел, четыре удара головой на ходу — смерть).
   const walkStop = () => {
-    if (Date.now() - lastDragonHit < 1500) return true
+    if (gameClock.now() - lastDragonHit < 1500) return true
     const dd = dragonOf(bot)
     if (dd && SITTING.has(phaseOf(bot, dd))) { const pp = partsOf(bot, dd, null); if (hurtNear(playerBox(bot.entity.position), pp)) return true }
     return !!(danger && danger())
@@ -6658,8 +6659,8 @@ async function chargeAnchor (bot, plan, n = 1, clickFn = null) {
     const cur = hit.point.minus(hit.block.position)
     bot._client.write('block_place', { location: hit.block.position, direction: FACE_IDX(hit.face), hand: 0, cursorX: cur.x, cursorY: cur.y, cursorZ: cur.z, insideBlock: false, sequence: 0, worldBorderHit: false })
     bot.swingArm()
-    const t0 = Date.now()
-    while (Date.now() - t0 < 600 && anchorCharges(bot, Hp) < n) await sleep(30)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 600 && anchorCharges(bot, Hp) < n) await sleep(30)
   }
   const wpn = items.bestWeapon(bot)
   if (wpn) await bot.equip(wpn, 'hand').catch(() => {})
@@ -6742,7 +6743,7 @@ async function meleeFinish (session, ctl, stats, track, { blind = true } = {}) {
   const g = await bedsGo(session, ctl, { feet: spot.ground, B: { x: Math.floor(spot.ground.x), z: Math.floor(spot.ground.z) }, y: spot.ground.y }, true, parts)
   if (!g.ok) return { ok: false, why: g.why }
   await bot.equip(w, 'hand').catch(() => {})
-  let next = Date.now() + 100; let hits = 0
+  let next = gameClock.now() + 100; let hits = 0
   stats.melee = stats.melee || 0
   while (!ctl.aborted) {
     d = track.tick()
@@ -6755,11 +6756,11 @@ async function meleeFinish (session, ctl, stats, track, { blind = true } = {}) {
     const reach = boxDist(eye, parts.head)
     if (reach > 3.0 || hurtNear(playerBox(bot.entity.position), parts)) break
     await lookAtSafe(bot, parts.headC)
-    if (Date.now() >= next) {
+    if (gameClock.now() >= next) {
       bot.attack({ id: d.id + PART.head })
       hits++; stats.melee++
-      next = Date.now() + pvp.cooldownMs(bot.heldItem)
-      setTimeout(() => { const dd = dragonOf(bot); if (dd) noteSitDamage(bot, dd, phaseOf(bot, dd)) }, 150)
+      next = gameClock.now() + pvp.cooldownMs(bot.heldItem)
+      gameClock.setTimeout(() => { const dd = dragonOf(bot); if (dd) noteSitDamage(bot, dd, phaseOf(bot, dd)) }, 150)
     }
     await sleep(50)
   }
@@ -6818,13 +6819,13 @@ async function runnerSword (session, ctl, stats, track, feed, plan) {
   const out = { hits: 0, by: {}, hp0: null, hpMin: null, phases: [], why: null, ms: 0, back: 0 }
   const w = items.bestWeapon(bot)
   if (!w) { out.why = 'нет меча'; return out }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try { await bot.equip(w, 'hand') } catch (e) { out.why = 'меч: ' + e.message; return out }
   // смена предмета обнуляет силу удара (attackStrengthTicker): первый удар — через полную перезарядку
-  let next = Date.now() + pvp.cooldownMs(bot.heldItem)
+  let next = gameClock.now() + pvp.cooldownMs(bot.heldItem)
   let lastPh = null; let sitT = null
   const P = plan.P
-  while (!ctl.aborted && Date.now() - t0 < envNum('ND_RUN_SWORD_MS', 45000)) {
+  while (!ctl.aborted && gameClock.now() - t0 < envNum('ND_RUN_SWORD_MS', 45000)) {
     const d = track.tick()
     if (!d) { out.why = 'дракона нет'; break }
     const ph = phaseOf(bot, d); const hp = hpOf(bot, d)
@@ -6835,10 +6836,10 @@ async function runnerSword (session, ctl, stats, track, feed, plan) {
     if (ph === PHASE.DYING) { out.why = 'умирает'; break }
     // v2: на взлёте — пока есть кого бить (до 2.5 с без цели — конец)
     const takeoff = SWORD_V2() && ph === PHASE.TAKEOFF
-    if (takeoff) { out.toT = out.toT || Date.now(); if (Date.now() - (out.lastTgt || out.toT) > 2500 || Date.now() - out.toT > 6000) { out.why = 'взлетел'; break } }
+    if (takeoff) { out.toT = out.toT || gameClock.now(); if (gameClock.now() - (out.lastTgt || out.toT) > 2500 || gameClock.now() - out.toT > 6000) { out.why = 'взлетел'; break } }
     if (ph !== PHASE.LANDING && !SITTING.has(ph) && !takeoff) { out.why = `фаза ${PHASE_RU[ph] ?? ph}`; break }
     if (bot.health < 8) { out.why = 'мало хп'; break }
-    const now = Date.now()
+    const now = gameClock.now()
     if (SITTING.has(ph)) { const rc = sitState(d, ph, now); if (rc) noteNear(rc, d, bot, now); noteSitDamage(bot, d, ph); if (!sitT) sitT = now } else sitT = null
     const q = bot.entity.position
     const home = out.ped ? plan.feet.offset(0, 1, 0) : plan.feet
@@ -6849,7 +6850,7 @@ async function runnerSword (session, ctl, stats, track, feed, plan) {
       out.ped = !!(tw && tw.placed); out.pedWhy = out.ped ? null : (tw && tw.reason) || 'не встал'
       if (!out.ped) out.pedTried = true
       try { await bot.equip(w, 'hand') } catch {}
-      next = Date.now() + 600
+      next = gameClock.now() + 600
       if (ctl.trace) ctl.trace.ev('swPed', { ok: out.ped, why: out.pedWhy || null, Y: r1(d.position.y - P) })
       continue
     }
@@ -6871,7 +6872,7 @@ async function runnerSword (session, ctl, stats, track, feed, plan) {
       const parts = partsOf(bot, d, track)
       const t = swordPick(bot, parts, q.offset(0, EYE, 0))
       if (t) {
-        if (!bot.heldItem || bot.heldItem.name !== w.name) { try { await bot.equip(w, 'hand') } catch {} next = Date.now() + pvp.cooldownMs(bot.heldItem); continue }
+        if (!bot.heldItem || bot.heldItem.name !== w.name) { try { await bot.equip(w, 'hand') } catch {} next = gameClock.now() + pvp.cooldownMs(bot.heldItem); continue }
         runnerAim(bot, t.point)
         bot.attack({ id: d.id + t.id })
         out.hits++; out.by[t.name] = (out.by[t.name] || 0) + 1
@@ -6885,7 +6886,7 @@ async function runnerSword (session, ctl, stats, track, feed, plan) {
     }
     await sleep(SWORD_V2() ? 8 : 25)
   }
-  out.ms = Date.now() - t0
+  out.ms = gameClock.now() - t0
   return out
 }
 
@@ -6905,7 +6906,7 @@ async function blindPit (session, ctl, stats, deadline) {
   const ev = (k, v) => { if (ctl.trace) ctl.trace.ev(k, v) }
   doing(ctl, 'blind:await-approach')
   let ok = false
-  while (!ctl.aborted && bot.health > 0 && Date.now() < deadline - 15000) {
+  while (!ctl.aborted && bot.health > 0 && gameClock.now() < deadline - 15000) {
     clearControls(bot)
     const dd = dragonOf(bot)
     const ph = dd ? phaseOf(bot, dd) : null
@@ -6935,14 +6936,14 @@ async function blindPit (session, ctl, stats, deadline) {
   // из ямы у кольца 15 до головы шли 2–3 с, первая посадка без кроватей).
   if (OC_ON && ctl.feed) {
     doing(ctl, 'blind:await-forecast')
-    const tw = Date.now()
+    const tw = gameClock.now()
     let fc = null
-    while (!ctl.aborted && Date.now() - tw < 45000) {
+    while (!ctl.aborted && gameClock.now() - tw < 45000) {
       const dd = dragonOf(bot)
       const ph = dd ? phaseOf(bot, dd) : null
       if (SITTING.has(ph) || !dd) break
       const f = ctl.feed.fc
-      if (ph === PHASE.LANDING && f && f.id === dd.id && Date.now() - f.t < 400 && f.n >= 70) { fc = f; break }
+      if (ph === PHASE.LANDING && f && f.id === dd.id && gameClock.now() - f.t < 400 && f.n >= 70) { fc = f; break }
       const danger = hazardNow(bot)
       if (danger) await evade(bot, ctl, stats, danger)
       await sleep(100)
@@ -6952,25 +6953,25 @@ async function blindPit (session, ctl, stats, deadline) {
     // fin2: крышка к упору не встала ни разу из 4 (упор у окопа сносит взрыв L / путь после
     // толчка), 14 раз не дошло до стройки — по умолчанию выключено, яма надёжнее (fin1: 15 из 15).
     if (fc && process.env.ND_OC_LID === '1') {
-      const tw2 = Date.now()
-      while (!ctl.aborted && Date.now() - tw2 < 15000) {
+      const tw2 = gameClock.now()
+      while (!ctl.aborted && gameClock.now() - tw2 < 15000) {
         const f = ctl.feed.fc
-        const left = f ? f.n - (Date.now() - f.t) / 50 : 999
+        const left = f ? f.n - (gameClock.now() - f.t) / 50 : 999
         const ddw = dragonOf(bot)
         if (!ddw || SITTING.has(phaseOf(bot, ddw))) break
-        if (f && Date.now() - f.t < 400 && left <= 185) break
+        if (f && gameClock.now() - f.t < 400 && left <= 185) break
         const danger = hazardNow(bot)
         if (danger) await evade(bot, ctl, stats, danger)
         await sleep(60)
       }
       const r = await ocLanding(session, ctl, null, stats, makeTrack(bot), ctl.feed, { blindLid: true })
       const fv = ctl.feed.fc
-      ev('blind:viaL', { ok: !!r, blind: sight.get(key) || null, n: fv ? Math.round(fv.n - (Date.now() - fv.t) / 50) : null })
+      ev('blind:viaL', { ok: !!r, blind: sight.get(key) || null, n: fv ? Math.round(fv.n - (gameClock.now() - fv.t) / 50) : null })
       if (sight.get(key) === 'blind') return
       const f = ctl.feed.fc
       const dd0 = dragonOf(bot)
       if (!dd0 || SITTING.has(phaseOf(bot, dd0))) return
-      fc = f && Date.now() - f.t < 500 && f.n - (Date.now() - f.t) / 50 > 75 ? f : null
+      fc = f && gameClock.now() - f.t < 500 && f.n - (gameClock.now() - f.t) / 50 > 75 ? f : null
       if (!fc) { ev('blind', { r: 'после L — не успеть с ямой' }); return }
     }
     if (fc) {
@@ -6980,13 +6981,13 @@ async function blindPit (session, ctl, stats, deadline) {
       // яма на месте (oc5-19: шёл к месту 12 с, крышка встала уже после посадки — видящий).
       const spot = plan && new Vec3(plan.B.x + 0.5, plan.y, plan.B.z + 0.5)
       const far = spot ? Math.hypot(spot.x - bot.entity.position.x, spot.z - bot.entity.position.z) : 99
-      if (plan && far <= 9 && fc.n - (Date.now() - fc.t) / 50 > 80 + far * 5) {
+      if (plan && far <= 9 && fc.n - (gameClock.now() - fc.t) / 50 > 80 + far * 5) {
         ev('blind:spot', { n: fc.n, feet: [r1(plan.feet.x), plan.feet.y, r1(plan.feet.z)], expect: plan.expect, far: r1(far) })
         doing(ctl, 'blind:go-spot')
-        await walkAround(session, ctl, spot, { timeoutMs: Math.min(3500, Math.max(1000, (fc.n - 80) * 50 - (Date.now() - fc.t))) })
+        await walkAround(session, ctl, spot, { timeoutMs: Math.min(3500, Math.max(1000, (fc.n - 80) * 50 - (gameClock.now() - fc.t))) })
         // Кровать A и заслон — сейчас (снижающийся их не заденет: голова в G + 2.9 и выше,
         // кровать — на земле), яма — под собой на месте стоящего у A: вылез — и щелчок.
-        const left = () => fc.n - (Date.now() - fc.t) / 50
+        const left = () => fc.n - (gameClock.now() - fc.t) / 50
         const at = bot.entity.position
         if (left() > 90 && Math.floor(at.x) === plan.B.x && Math.floor(at.z) === plan.B.z) {
           await bedsGo(session, ctl, plan, true, predParts(fc))
@@ -7034,14 +7035,14 @@ async function blindPit (session, ctl, stats, deadline) {
   ev('blind:sealed', { depth, lid: !!lid.ok, down: down.why })
   let sat = 0; let roared = false
   doing(ctl, 'blind:wait')
-  while (!ctl.aborted && bot.health > 0 && depth >= 3 && lid.ok && Date.now() < deadline - 15000) {
+  while (!ctl.aborted && bot.health > 0 && depth >= 3 && lid.ok && gameClock.now() < deadline - 15000) {
     clearControls(bot)
     const dd = dragonOf(bot)
     if (!dd) break
     const ph = phaseOf(bot, dd)
     if (ph === PHASE.ROARING || ph === PHASE.FLAMING) { roared = true; break }
     // Сел: первое «высматривает» (мы в 20) уже спросило Sensing — через 3 тика выходим.
-    if (SITTING.has(ph)) { if (!sat) sat = Date.now(); if (Date.now() - sat > 150) break }
+    if (SITTING.has(ph)) { if (!sat) sat = gameClock.now(); if (gameClock.now() - sat > 150) break }
     if (!SITTING.has(ph) && ph !== PHASE.LANDING && ph !== PHASE.APPROACH) break
     await sleep(25)
   }
@@ -7318,13 +7319,13 @@ async function clickBedAt (bot, hit, { aimed = false, until = 0, prePlace = null
     await lookAtSafe(bot, hit.point)
     await new Promise(resolve => bot.once('physicsTick', resolve))
   }
-  // Точный миг (снижение: тик до посадки): дожидаемся таймером, последние мс — вращением.
+  // Точный миг (снижение: тик до посадки): ждём игровой таймер, освобождая цикл событий для следующих тиков.
   if (until) {
-    while (until - Date.now() > 12) await sleep(Math.min(40, until - Date.now() - 10))
-    while (Date.now() < until) {}
+    while (until - gameClock.now() > 12) await sleep(Math.min(40, until - gameClock.now() - 10))
+    while (gameClock.now() < until) await sleep(until - gameClock.now())
     // Опоздание цикла событий (02.10, rs17: CPU ПК 100 % — щелчок уходил на 2–6 тиков позже плана, голова в 4–8 бл. вместо 1–2):
     // опоздали больше ND_CLICK_LATE_MS — кровать не тратить, ждать следующий проход. 0 — выкл. (по умолчанию, не замерено).
-    const late = Date.now() - until, lim = envNum('ND_CLICK_LATE_MS', 0)
+    const late = gameClock.now() - until, lim = envNum('ND_CLICK_LATE_MS', 0)
     if (lim > 0 && late > lim) { hit.guardWhy = `опоздал на ${late} мс`; return false }
   }
   if (hit.runnerGuard) { const g = hit.runnerGuard(); if (g !== true) { hit.guardWhy = typeof g === 'string' ? g : null; return false } }
@@ -7432,14 +7433,14 @@ async function bedsBoom (session, ctl, stats, plan, hit, why, opts = {}) {
   const before = d ? hpOf(bot, d) : null
   const me0 = bot.health
   let boomAt = 0
-  const onDmg = pk => { if (d && pk && pk.entityId === d.id && DAMAGE_TYPES[pk.sourceTypeId] === 'bad_respawn_point' && !boomAt) boomAt = Date.now() }
+  const onDmg = pk => { if (d && pk && pk.entityId === d.id && DAMAGE_TYPES[pk.sourceTypeId] === 'bad_respawn_point' && !boomAt) boomAt = gameClock.now() }
   bot._client.on('damage_event', onDmg)
   // Свидетель клиента (02.10, rs1: 14 из 25 ставок+щелчков R без взрыва и без причины в трассе): что сервер прислал по клеткам
   // кровати (ставка встала? снесена?), взрыв, телепорт; рука, крадучись, тело дракона против клетки F (коробка 16×8 мешает ставке).
-  const wit = { blk: [] }; const tw0 = Date.now()
+  const wit = { blk: [] }; const tw0 = gameClock.now()
   const watch = opts.prePlace || hit.runnerGuard ? new Set([`${plan.H.x},${plan.y},${plan.H.z}`, ...(opts.prePlace ? [`${opts.prePlace.pos.x + opts.prePlace.face.x},${plan.y},${opts.prePlace.pos.z + opts.prePlace.face.z}`] : [])]) : null
-  const onBlk = (o, n) => { if (watch && n && watch.has(`${n.position.x},${n.position.y},${n.position.z}`) && wit.blk.length < 8) wit.blk.push([Date.now() - tw0, n.position.x, n.position.z, n.name]) }
-  const onExp = pk => { if (!wit.exp) wit.exp = Date.now() - tw0 }
+  const onBlk = (o, n) => { if (watch && n && watch.has(`${n.position.x},${n.position.y},${n.position.z}`) && wit.blk.length < 8) wit.blk.push([gameClock.now() - tw0, n.position.x, n.position.z, n.name]) }
+  const onExp = pk => { if (!wit.exp) wit.exp = gameClock.now() - tw0 }
   const onTp = () => { wit.tp = (wit.tp || 0) + 1 }
   if (watch) { bot.on('blockUpdate', onBlk); bot._client.on('explosion', onExp); bot._client.on('position', onTp) }
   const unwatch = () => { if (watch) { bot.removeListener('blockUpdate', onBlk); bot._client.removeListener('explosion', onExp); bot._client.removeListener('position', onTp) } }
@@ -7451,9 +7452,10 @@ async function bedsBoom (session, ctl, stats, plan, hit, why, opts = {}) {
   }
   doing(ctl, `beds:click:${why}`)
   if (ctl.trace) ctl.trace.ev('bed', { ph, why, dist: plan.dist, expect: plan.expect, dragonHp: before, me: me0, D: [plan.D.x, plan.D.z], y: plan.y, at: [plan.H.x, plan.y, plan.H.z], ...(opts.note || {}) })
-  let tc = Date.now()
+  let tc = gameClock.now()
+  let tcWall = gameClock.wall.now()
   const failW = (w) => { unwatch(); if (watch && ctl.trace) { const dc = dragonOf(bot); if (dc) wit.body2 = [r1(dc.position.x), r1(dc.position.y), r1(dc.position.z)]; ctl.trace.ev('bedFail', { why: w, ...wit, ...(opts.note || {}) }) } return { ok: false, why: w } }
-  try { const sent = await clickBedAt(bot, hit, { aimed: !!opts.aimed, until: opts.until || 0, prePlace: opts.prePlace || null }); if (sent === false) { bot._client.removeListener('damage_event', onDmg); return failW('R: поздняя проверка безопасности' + (hit.guardWhy ? ': ' + hit.guardWhy : '')) } tc = Date.now(); wit.sentMs = tc - tw0 } catch (e) { dbg('beds click', e.message) }
+  try { const sent = await clickBedAt(bot, hit, { aimed: !!opts.aimed, until: opts.until || 0, prePlace: opts.prePlace || null }); if (sent === false) { bot._client.removeListener('damage_event', onDmg); return failW('R: поздняя проверка безопасности' + (hit.guardWhy ? ': ' + hit.guardWhy : '')) } tc = gameClock.now(); tcWall = gameClock.wall.now(); wit.sentMs = tc - tw0 } catch (e) { dbg('beds click', e.message) }
   // В тик щелчка (01.10): голова по клиенту — расстояние от центра взрыва (клетка подушки H) и фаза.
   let atClick = null
   try {
@@ -7465,7 +7467,7 @@ async function bedsBoom (session, ctl, stats, plan, hit, why, opts = {}) {
     }
   } catch {}
   if (opts.afterClick) { try { await opts.afterClick() } catch (e) { dbg('afterClick', e.message) } }
-  while (!boomAt && Date.now() - tc < 700) await sleep(25)
+  while (!boomAt && gameClock.now() - tc < 700) await sleep(25)
   bot._client.removeListener('damage_event', onDmg)
   await sleep(120)
   const nameAt = (bot.blockAt(new Vec3(plan.H.x, plan.y, plan.H.z)) || {}).name || ''
@@ -7485,7 +7487,7 @@ async function bedsBoom (session, ctl, stats, plan, hit, why, opts = {}) {
   if (dd && opts.uncounted) { const h = hpOf(bot, dd); if (h != null) sitAcc.hp = h; sitAcc.sitting = false } else if (dd) noteSitDamage(bot, dd, phaseOf(bot, dd))
   stats.bedsUsed = (stats.bedsUsed || 0) + 1
   if (dmg) stats.dmg += dmg
-  const rec = { ph: PHASE_RU[ph] ?? ph, why, dist: plan.dist, expect: plan.expect, dmg: dmg != null ? r1(dmg) : null, self: r1(Math.max(0, me0 - bot.health)), took: dd ? phaseOf(bot, dd) === PHASE.TAKEOFF : false, lagMs: boomAt ? boomAt - tc : null, sent: tc, ...(opts.note || {}), ...(atClick || {}) }
+  const rec = { ph: PHASE_RU[ph] ?? ph, why, dist: plan.dist, expect: plan.expect, dmg: dmg != null ? r1(dmg) : null, self: r1(Math.max(0, me0 - bot.health)), took: dd ? phaseOf(bot, dd) === PHASE.TAKEOFF : false, lagMs: boomAt ? boomAt - tc : null, sent: tc, sentWall: tcWall, tickRate: gameClock.snapshot()?.tickRate ?? 20, ...(opts.note || {}), ...(atClick || {}) }
   console.log(`[bed] ${why}: фаза ${rec.ph}${atClick ? '/' + atClick.phNow : ''}, голова ${atClick ? atClick.headNow : '?'} бл. (прогноз ${plan.dist}), урон ${rec.dmg} (ждали ${plan.expect}), нам ${rec.self}`)
   stats.beds.push(rec)
   if (ctl.trace) ctl.trace.ev('bedDone', rec)
@@ -7880,7 +7882,7 @@ async function doubleRunAt (session, ctl, rep, stats, track, P, plan, onSpot) {
   stats.pendingC = { C: plan.C, y: plan.y, plan }
   let booms = 0
   for (let k = 0; k < 3 && !ctl.aborted; k++) {
-    while (!ctl.aborted && Date.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(20)
+    while (!ctl.aborted && gameClock.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(20)
     const d = dragonOf(bot)
     if (!d) break
     const ph = phaseOf(bot, d)
@@ -7888,8 +7890,8 @@ async function doubleRunAt (session, ctl, rep, stats, track, P, plan, onSpot) {
     // Новый круг «высматривает» у видящего: голова доворачивает к нам (мы вне её
     // круга) — ждать рёва и проверить, что голова всё ещё над X.
     if (ph === PHASE.SCANNING && !blindKnown(sitRec)) {
-      const tw = Date.now()
-      while (!ctl.aborted && Date.now() - tw < 2000) {
+      const tw = gameClock.now()
+      while (!ctl.aborted && gameClock.now() - tw < 2000) {
         dragonZones(bot)
         const dd = dragonOf(bot)
         if (!dd || phaseOf(bot, dd) !== PHASE.SCANNING || blindKnown(sitRec)) break
@@ -7939,11 +7941,11 @@ async function tryC (session, ctl, stats, track, P) {
   const bot = session.bot
   const pc = stats.pendingC
   const d3 = dragonOf(bot)
-  if (!pc || !d3 || phaseOf(bot, d3) !== PHASE.TAKEOFF || Date.now() - (stats.lastBoom || 0) > 900) return false
+  if (!pc || !d3 || phaseOf(bot, d3) !== PHASE.TAKEOFF || gameClock.now() - (stats.lastBoom || 0) > 900) return false
   const hb = bot.blockAt(new Vec3(pc.C.H.x, pc.y, pc.C.H.z))
   if (!hb || !/_bed$/.test(hb.name)) { stats.pendingC = null; return false }
   if (exposedNow(bot, pc.y, pc.C)) { if (ctl.trace) ctl.trace.ev('bedFail', { why: 'C: взрыв видит нас' }); return false }
-  while (!ctl.aborted && Date.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(15)
+  while (!ctl.aborted && gameClock.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(15)
   const hit = doubleHit(bot, { y: pc.y }, pc.C)
   if (!hit) { if (ctl.trace) ctl.trace.ev('bedFail', { why: 'C не видно' }); return false }
   const hd = headPoint(bot, d3, track, 0)
@@ -7962,8 +7964,8 @@ async function ocTakeoffRun (session, ctl, rep, stats, track, P, tkP) {
   const bot = session.bot
   const ev = (k, o) => { if (ctl.trace) ctl.trace.ev(k, o) }
   const rec = sitRec
-  const t0 = rec && !rec.ended ? rec.t0 : Date.now()
-  const el = () => Date.now() - t0
+  const t0 = rec && !rec.ended ? rec.t0 : gameClock.now()
+  const el = () => gameClock.now() - t0
   const sitting = () => { const dd = dragonOf(bot); return !!dd && SITTING.has(phaseOf(bot, dd)) }
   const out = { A: null, T1: null, T2: null, why: null }
   try {
@@ -7975,7 +7977,7 @@ async function ocTakeoffRun (session, ctl, rep, stats, track, P, tkP) {
         ctl.holdStation = true
         let b
         try { b = await bedsBuild(session, ctl, stats, A) } finally { ctl.holdStation = false }
-        while (!ctl.aborted && Date.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(20)
+        while (!ctl.aborted && gameClock.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(20)
         const hit = b.ok && sitting() ? bedClickPoint(bot, A) : null
         if (hit) { const bo = await bedsBoom(session, ctl, stats, A, hit, 'сидит', { note: { oc: 'A' } }); if (bo.ok) { out.A = bo.dmg; P.beds.push(bo.dmg) } }
       }
@@ -7994,8 +7996,8 @@ async function ocTakeoffRun (session, ctl, rep, stats, track, P, tkP) {
     await new Promise(resolve => bot.once('physicsTick', resolve))
     doing(ctl, 'tk:wait')
     // сам-взлёт: фаза TAKEOFF
-    const tw = Date.now()
-    while (!ctl.aborted && Date.now() - tw < 6000) {
+    const tw = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - tw < 6000) {
       const dd = dragonOf(bot)
       if (!dd) break
       const ph = phaseOf(bot, dd)
@@ -8003,7 +8005,7 @@ async function ocTakeoffRun (session, ctl, rep, stats, track, P, tkP) {
       if (!SITTING.has(ph)) { out.why = `фаза ${PHASE_RU[ph] ?? ph}`; return out }
       await sleep(5)
     }
-    const tT1 = Date.now()
+    const tT1 = gameClock.now()
     const d1 = dragonOf(bot)
     if (!d1 || phaseOf(bot, d1) !== PHASE.TAKEOFF) { out.why = 'взлёта не дождался'; return out }
     const b1 = await bedsBoom(session, ctl, stats, tkP.plan, hit1, 'взлёт', { aimed: true, uncounted: true, note: { oc: 'T1', headDist: r1(tkP.path[1].head.distanceTo(tkP.plan.centre)) } })
@@ -8032,7 +8034,7 @@ async function ocTakeoffRun (session, ctl, rep, stats, track, P, tkP) {
 async function ocT1 (session, ctl, stats, track, d, rec, P) {
   const bot = session.bot
   const ev = (k, o) => { if (ctl.trace) ctl.trace.ev(k, o) }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const out = { why: null }
   const sittingNow = () => { const dd = dragonOf(bot); return !!dd && SITTING.has(phaseOf(bot, dd)) }
   try {
@@ -8050,7 +8052,7 @@ async function ocT1 (session, ctl, stats, track, d, rec, P) {
     const sitHead = simHead(S, true); const sitNeck = simNeck(S, true)
     const fcT = { n: 3, path: [{ k: 0, head: path[0].head, neck: path[0].neck, pos: path[0].pos, yRot: path[0].yRot }], sit: S, head: sitHead, neck: sitNeck }
     const sitP = predParts(fcT)
-    const left = () => rec.t0 + 4950 - Date.now()
+    const left = () => rec.t0 + 4950 - gameClock.now()
     if (left() < 2300) { out.why = `некогда (${left()} мс)`; return out }
     let plan = null; const why = {}
     for (const lift of [2, 1, 0]) {
@@ -8079,15 +8081,15 @@ async function ocT1 (session, ctl, stats, track, d, rec, P) {
     await lookAtSafe(bot, hit.point)
     await new Promise(resolve => bot.once('physicsTick', resolve))
     doing(ctl, 'oc:waitT1')
-    const tw = Date.now()
+    const tw = gameClock.now()
     let took = false
-    while (!ctl.aborted && Date.now() - tw < 4000) {
+    while (!ctl.aborted && gameClock.now() - tw < 4000) {
       const dd = dragonOf(bot); const ph = dd ? phaseOf(bot, dd) : null
       if (ph === PHASE.TAKEOFF) { took = true; break }
       if (!SITTING.has(ph)) break
       await sleep(3)
     }
-    out.wait = Date.now() - tw
+    out.wait = gameClock.now() - tw
     if (!took) { out.why = 'взлёта не дождался'; return out }
     const r = await bedsBoom(session, ctl, stats, { ...plan, reuse: true }, hit, 'взлёт', { aimed: true, uncounted: true, phCheck: p => p === PHASE.TAKEOFF, note: { oc: 'T1', headDist: plan.dist } })
     out.dmg = r.ok ? r.dmg : null
@@ -8096,7 +8098,7 @@ async function ocT1 (session, ctl, stats, track, d, rec, P) {
   } finally {
     const st = out.st
     delete out.st
-    out.ms = Date.now() - t0
+    out.ms = gameClock.now() - t0
     ev('ocT1', out)
     const q = bot.entity.position
     if (st && Math.floor(q.y + 0.01) < st.G && Math.floor(q.x) === st.B.x && Math.floor(q.z) === st.B.z) { doing(ctl, 'oc:outT1'); await build.towerUp(bot, ctl, st.G - Math.floor(q.y + 0.01)).catch(() => {}); clearControls(bot) }
@@ -8128,7 +8130,7 @@ function seeCalibrate (bot, d) {
 async function seeStation (session, ctl, stats, track, d, P, { cap = null } = {}) {
   const bot = session.bot
   const ev = (k, o) => { if (ctl.trace) ctl.trace.ev(k, o) }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const out = { cap }
   try {
     const fx = sitFix.get(d.id)
@@ -8173,13 +8175,13 @@ async function seeStation (session, ctl, stats, track, d, P, { cap = null } = {}
     await lookAtSafe(bot, hit.point)
     await new Promise(resolve => bot.once('physicsTick', resolve))
     if (sittingSettled()) { out.why = sittingSettled(); return out }
-    const r = await bedsBoom(session, ctl, stats, { ...plan, reuse: true }, hit, 'сидит', { aimed: true, until: Math.max(Date.now(), (stats.lastBoom || 0) + BED_GAP_MS), phCheck: p => SITTING.has(p) && p !== PHASE.SCANNING, note: { oc: cap != null ? 'SA' : 'SB', headDist: plan.dist } })
+    const r = await bedsBoom(session, ctl, stats, { ...plan, reuse: true }, hit, 'сидит', { aimed: true, until: Math.max(gameClock.now(), (stats.lastBoom || 0) + BED_GAP_MS), phCheck: p => SITTING.has(p) && p !== PHASE.SCANNING, note: { oc: cap != null ? 'SA' : 'SB', headDist: plan.dist } })
     if (r.ok) { out.dmg = r.dmg; P.beds.push(r.dmg) } else out.why = `щелчок: ${r.why}`
     return out
   } finally {
     const st = out.st
     delete out.st
-    out.ms = Date.now() - t0
+    out.ms = gameClock.now() - t0
     ev('seeStation', out)
     const q = bot.entity.position
     if (st && Math.floor(q.y + 0.01) < st.G && Math.floor(q.x) === st.B.x && Math.floor(q.z) === st.B.z) { doing(ctl, 'see:out'); await build.towerUp(bot, ctl, st.G - Math.floor(q.y + 0.01)).catch(() => {}); clearControls(bot) }
@@ -8445,9 +8447,9 @@ async function runnerClean (session, ctl, plan) {
 async function pillarBuild (session, ctl, stats, plan) {
   const bot = session.bot
   const ev = (k, o) => { if (ctl.trace) ctl.trace.ev(k, o) }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const lap = { placed: [], scaffold: 0 }
-  const res = r => { ev('pillarBuild', { ok: r.ok, why: r.why || null, ms: Date.now() - t0, ...lap }); return r }
+  const res = r => { ev('pillarBuild', { ok: r.ok, why: r.why || null, ms: gameClock.now() - t0, ...lap }); return r }
   const OBS_RE = /^(obsidian|crying_obsidian)$/
   const runner = runnerOn() && plan.runner
   const cells = runner ? plan.cells.filter(c => OBS_RE.test(c[3])).map(c => ({ x: c[0], y: c[1], z: c[2] })) : []
@@ -8468,7 +8470,7 @@ async function pillarBuild (session, ctl, stats, plan) {
   const abortIf = () => { if (hunters(bot, 5).length) return 'эндермен бьёт'; if (bot.health < 10) return 'мало хп'; const hz = hazardNow(bot); return hz ? `опасно: ${hz.kind || 'угроза'}` : null }
   for (let guard = 0; left.length && guard < 20; guard++) {
     // st2-s5: одна стройка шла 74.6 с (до 4 мест ставки × 3 маршрута по 9 с) — дольше BUILD_MAX — бросить, план заново
-    if (BUILD_MAX_MS && Date.now() - t0 > BUILD_MAX_MS) return res({ ok: false, why: 'стройка долго' })
+    if (BUILD_MAX_MS && gameClock.now() - t0 > BUILD_MAX_MS) return res({ ok: false, why: 'стройка долго' })
     const dd = dragonOf(bot)
     const ph = dd ? phaseOf(bot, dd) : null
     if ((ph === PHASE.APPROACH && !approachFar(dd)) || ph === PHASE.LANDING || SITTING.has(ph)) return res({ ok: false, why: 'дракон садится — потом' })
@@ -8544,7 +8546,7 @@ async function pillarBuild (session, ctl, stats, plan) {
     lap.here = { y: here.feet.y, expo: r1(here.expo * 100) / 100 }
     plan.feet = here.feet; plan.dig = Math.max(0, plan.G - here.feet.y); plan.G = here.feet.y + plan.dig
   }
-  ctl.pillar = { plan, built: true, t: Date.now(), booms: 0 }
+  ctl.pillar = { plan, built: true, t: gameClock.now(), booms: 0 }
   return res({ ok: true })
 }
 // Подушка — как можно выше (01.10, правило спидраннеров: кровать вплотную к голове): перебор высоты сверху вниз, первая
@@ -8720,15 +8722,15 @@ async function runnerGapArrow (session, ctl, feed, P, { minHit, maxHit, deadline
   const out = {}
   try { await bot.equip(bow, 'hand') } catch (e) { return { why: 'лук: ' + e.message } }
   bot.activateItem()
-  const tDraw = Date.now()
+  const tDraw = gameClock.now()
   try {
-    while (!ctl.aborted && Date.now() < deadline) {
+    while (!ctl.aborted && gameClock.now() < deadline) {
       const dd = dragonOf(bot)
       if (!dd || phaseOf(bot, dd) !== PHASE.LANDING) { out.why = 'фаза'; return out }
       const fc = landingForecast(feed, P)
       if (!fc) { await sleep(20); continue }
       const eye = bot.entity.position.offset(0, EYE, 0)
-      const nowTick = Math.round((Date.now() - fc.t) / 50)
+      const nowTick = Math.round((gameClock.now() - fc.t) / 50)
       let best = null
       for (let k = nowTick + 1; k < Math.min(fc.path.length, nowTick + 30, (fc.n || fc.path.length) - 3); k++) {
         const tHit = fc.t + 50 * k
@@ -8742,13 +8744,13 @@ async function runnerGapArrow (session, ctl, feed, P, { minHit, maxHit, deadline
         if (pick.blockOnRay(bot, eye, dir, d - 0.55)) continue
         if (!best || d < best.d) best = { k, d, hc, travel }
       }
-      const drawn = Date.now() - tDraw >= 1000
+      const drawn = gameClock.now() - tDraw >= 1000
       if (best && drawn && best.k - best.travel <= nowTick) {
         const hpB = hpOf(bot, dd)
         // падение стрелы за полёт (гравитация 0.05/тик): цель чуть выше
         runnerAim(bot, best.hc.offset(0, 0.025 * best.travel * best.travel, 0))
         bot.deactivateItem()
-        out.shot = { d: r1(best.d), ahead: best.k - nowTick, drawMs: Date.now() - tDraw, hp: hpB != null ? r1(hpB) : null }
+        out.shot = { d: r1(best.d), ahead: best.k - nowTick, drawMs: gameClock.now() - tDraw, hp: hpB != null ? r1(hpB) : null }
         await sleep(250)
         const d2 = dragonOf(bot); out.hpAfter = d2 ? r1(hpOf(bot, d2) ?? -1) : 0
         return out
@@ -8771,10 +8773,10 @@ async function runnerArrow (session, ctl, feed, P, lastBoom) {
   const out = {}
   try { await bot.equip(bow, 'hand') } catch (e) { return { why: 'лук: ' + e.message } }
   bot.activateItem()
-  const tDraw = Date.now()
+  const tDraw = gameClock.now()
   const hp0 = (() => { const dd = dragonOf(bot); return dd ? hpOf(bot, dd) : null })()
   try {
-    while (!ctl.aborted && Date.now() - tDraw < 6000) {
+    while (!ctl.aborted && gameClock.now() - tDraw < 6000) {
       const dd = dragonOf(bot)
       if (!dd) { out.why = 'дракона нет'; return out }
       const ph = phaseOf(bot, dd)
@@ -8784,7 +8786,7 @@ async function runnerArrow (session, ctl, feed, P, lastBoom) {
       const fc = landingForecast(feed, P)
       const eye = bot.entity.position.offset(0, EYE, 0)
       if (!fc) { await sleep(25); continue }
-      const nowTick = Math.round((Date.now() - fc.t) / 50)
+      const nowTick = Math.round((gameClock.now() - fc.t) / 50)
       const minTick = Math.max(nowTick + 1, Math.ceil(((lastBoom || 0) + 560 - fc.t) / 50))
       let best = null
       // стрела должна застать голову до посадки: сидячему стрелы — 0 (rs4: 3 выстрела в последний тик снижения — мимо урона)
@@ -8798,11 +8800,11 @@ async function runnerArrow (session, ctl, feed, P, lastBoom) {
       }
       if (!best) { const pc = partsOf(bot, dd, makeTrack(bot)); if (pc && pc.headC) await lookAtSafe(bot, pc.headC); await sleep(25); continue }
       const travel = Math.max(1, Math.round(best.d / 2.9))
-      const drawn = Date.now() - tDraw >= 1050
+      const drawn = gameClock.now() - tDraw >= 1050
       if (drawn && best.k - travel <= nowTick) {
         runnerAim(bot, best.hc)
         bot.deactivateItem()
-        out.shot = { d: r1(best.d), ahead: best.k - nowTick, drawMs: Date.now() - tDraw, hp: hp0 != null ? r1(hp0) : null }
+        out.shot = { d: r1(best.d), ahead: best.k - nowTick, drawMs: gameClock.now() - tDraw, hp: hp0 != null ? r1(hp0) : null }
         await sleep(400)
         const d2 = dragonOf(bot); out.hpAfter = d2 ? r1(hpOf(bot, d2) ?? -1) : 0
         return out
@@ -8825,7 +8827,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
   const runnerLevels = plan.runnerLevels
   const P = podiumTop(bot)
   const out = { booms: [], why: null }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let H = plan.H; let F = plan.F; let yb = plan.yb
   const bedHere = () => /_bed$/.test((bot.blockAt(new Vec3(H.x, yb, H.z)) || {}).name || '') && /_bed$/.test((bot.blockAt(new Vec3(F.x, yb, F.z)) || {}).name || '')
   const bedCells = [{ x: F.x, y: yb, z: F.z }, { x: H.x, y: yb, z: H.z }]
@@ -8885,9 +8887,9 @@ async function pillarRun (session, ctl, stats, track, feed) {
     // снимок мира у станции R для seen (без клеток кровати и опоры под F — их форма зависит от яруса), один на цепочку
     let smSnap = null; const smCache = new Map()
     if (runnerLevels && RUN_SEEN()) {
-      const t0s = Date.now()
+      const t0s = gameClock.now()
       try { smSnap = smCompile(bot, [-16, P - 6, -16, 16, P + 16, 16], (x, y, z) => x === 0 && (z === 0 || z === F.z) && y >= P && y <= P + 1) } catch (e) { smSnap = null }
-      out.smMs = Date.now() - t0s; out.smN = smSnap ? smSnap.colliders.length : null
+      out.smMs = gameClock.now() - t0s; out.smN = smSnap ? smSnap.colliders.length : null
     }
     // прогноз seen родителя и высоты тела над ярусом в тик щелчка — в событие bed (сверка с сервером, DragonLab)
     let fcNow = null
@@ -8906,7 +8908,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
     // прохода» с кроватью у столба — сел на неё, checkWalls снёс без взрыва: s15 −2, s22 −2 из 6). На снижении взрыв ещё и
     // толкает — сесть не даст, цепочка живёт; сидящему — сидячий урон (голова в ~5.5 от подушки).
     const salvage = async (tag) => {
-      if (!bedHere() || Date.now() < (stats.lastBoom || 0) + BED_GAP_MS) return false
+      if (!bedHere() || gameClock.now() < (stats.lastBoom || 0) + BED_GAP_MS) return false
       const eye = bot.entity.position.offset(0, EYE, 0)
       let hitCell = new Vec3(plan.click.cell.x, yb, plan.click.cell.z)
       let hit = faceClick(bot, eye, hitCell, new Vec3(plan.click.face.x, plan.click.face.y, plan.click.face.z))
@@ -8915,14 +8917,14 @@ async function pillarRun (session, ctl, stats, track, feed) {
       if (!hit) { out.salvageFail = (out.salvageFail || 0) + 1; return false }
       await lookAtSafe(bot, hit.point)
       await new Promise(resolve => bot.once('physicsTick', resolve))
-      const r = await bedsBoom(session, ctl, stats, { ...plan, dist: null, expect: null, D: plan.a, y: yb, reuse: true }, { point: hit.point, block: bot.blockAt(hitCell) }, 'снижение', { aimed: true, until: Date.now(), uncounted: true, phCheck: p => p === PHASE.LANDING || SITTING.has(p), note: { oc: 'P', salvage: tag } })
+      const r = await bedsBoom(session, ctl, stats, { ...plan, dist: null, expect: null, D: plan.a, y: yb, reuse: true }, { point: hit.point, block: bot.blockAt(hitCell) }, 'снижение', { aimed: true, until: gameClock.now(), uncounted: true, phCheck: p => p === PHASE.LANDING || SITTING.has(p), note: { oc: 'P', salvage: tag } })
       out.booms.push(r.ok ? r.dmg : null)
       out.salvage = (out.salvage || 0) + 1
-      if (r.ok) { lastBoom = stats.lastBoom || Date.now(); st.booms++; placedSince = false; pushed = null }
+      if (r.ok) { lastBoom = stats.lastBoom || gameClock.now(); st.booms++; placedSince = false; pushed = null }
       return r.ok
     }
-    const tEnd = Date.now() + 60000
-    while (!ctl.aborted && Date.now() < tEnd) {
+    const tEnd = gameClock.now() + 60000
+    while (!ctl.aborted && gameClock.now() < tEnd) {
       const dd = dragonOf(bot)
       if (!dd) { out.why = 'дракона нет'; break }
       const ph = phaseOf(bot, dd)
@@ -8953,7 +8955,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
       if (pushed && (!fc || fc.t < pushed.after)) fc = pushed.fc
       if (!fc) { await sleep(20); continue }
       fcNow = fc
-      const nowTick = Math.round((Date.now() - fc.t) / 50)
+      const nowTick = Math.round((gameClock.now() - fc.t) / 50)
       const minTick = Math.max(nowTick + 3, Math.ceil((lastBoom + BED_GAP_MS + 60 - fc.t) / 50))
       if (runnerLevels) {
         const q = bot.entity.position
@@ -8967,7 +8969,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
         // Опора под F для P + 1 — сразу после взрыва, если её снесло (labS1: P + 1 выбран лишь в 43 % взрывов — к проходу булыжник
         // не успевал встать, окно подготовки < 20 тиков; P при этом слабее: 38 против 53). ND_RUN_KEEPCOB=0 — как было.
         // один раз на взрыв (иначе спор с ярусом P: ему эта клетка нужна пустой — изножье)
-        if (RUN_KEEPCOB() && keepKey !== lastBoom && !bedHere() && runnerLevels.some(p => p.yb > P) && Date.now() - (lastBoom || 0) > 120 && !supBan.has('keep')) {
+        if (RUN_KEEPCOB() && keepKey !== lastBoom && !bedHere() && runnerLevels.some(p => p.yb > P) && gameClock.now() - (lastBoom || 0) > 120 && !supBan.has('keep')) {
           keepKey = lastBoom
           const sb = bot.blockAt(new Vec3(0, P, F.z))
           if (isAirish(sb) && !landingHits({ path: fc.path.slice(Math.max(0, nowTick), nowTick + 8) }, q)) {
@@ -9006,7 +9008,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
             const b = bot.blockAt(new Vec3(0, P, F.z))
             const ready = c.p.yb > P ? (b || {}).name === 'cobblestone' : isAirish(b)
             // ярус, опору которого только что не удалось подготовить, — не раньше, чем через 2.5 с (rs3-s2: цепочка рвалась)
-            if (!ready && supBan.has(c.p.yb) && Date.now() < supBan.get(c.p.yb)) { rej[c.p.yb - P] = 'бан'; return false }
+            if (!ready && supBan.has(c.p.yb) && gameClock.now() < supBan.get(c.p.yb)) { rej[c.p.yb - P] = 'бан'; return false }
             if (!ready && c.i - nowTick < 20) { rej[c.p.yb - P] = `не готов (${c.i - nowTick} т.)`; return false }
             return true
           }).sort((a, b) => (a.score != null && b.score != null ? b.score - a.score : 0) || (RUN_HIGH() ? b.p.yb - a.p.yb : 0) || a.dist - b.dist)
@@ -9020,7 +9022,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
               if (best.i - nowTick < 20 || landingHits({ path: fc.path.slice(Math.max(0, nowTick), nowTick + 20) }, q)) { await sleep(30); continue }
               // 02.10 (rs3-s2: «R: опора не подтверждена» рвал цепочку после 2 взрывов, и второй заход — сразу): не рвать — на 2.5 с
               // этот ярус не брать, взять готовый (на P опоре быть воздухом — после взрыва булыжник обычно снесён)
-              if (!await runnerSupport(bot, plan, dy)) { out.supFail = (out.supFail || 0) + 1; (out.supWhy || (out.supWhy = [])).push(runnerSupport.why); supBan.set(best.p.yb, Date.now() + 2500); if (out.supFail > 6) { out.why = 'R: опора не подтверждена'; break } continue }
+              if (!await runnerSupport(bot, plan, dy)) { out.supFail = (out.supFail || 0) + 1; (out.supWhy || (out.supWhy = [])).push(runnerSupport.why); supBan.set(best.p.yb, gameClock.now() + 2500); if (out.supFail > 6) { out.why = 'R: опора не подтверждена'; break } continue }
               continue // после await только свежий landingForecast/pushedForecast
             }
             plan = { ...best.p, runnerLevels }; st.plan = plan
@@ -9131,7 +9133,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
       }
       if (useAn && hereAn < 1) {
         // якорь: поставить и зарядить сейчас (дракон его не сносит), не раньше 120 мс после взрыва
-        if (Date.now() < (lastBoom || 0) + 120) { await sleep(40); continue }
+        if (gameClock.now() < (lastBoom || 0) + 120) { await sleep(40); continue }
         doing(ctl, 'pillar:anchor')
         if (hereAn < 0) {
           // как кровать: к той же грани опоры K, прицел — по видимой точке (без факелов на луче)
@@ -9146,8 +9148,8 @@ async function pillarRun (session, ctl, stats, track, feed) {
             const cur = fcl.point.minus(K.position)
             bot._client.write('block_place', { location: K.position, direction: FACE_IDX(plan.place.face), hand: 0, cursorX: cur.x, cursorY: cur.y, cursorZ: cur.z, insideBlock: false, sequence: 0, worldBorderHit: false })
             bot.swingArm()
-            const tw = Date.now()
-            while (Date.now() - tw < 400 && anchorAt() < 0) await sleep(20)
+            const tw = gameClock.now()
+            while (gameClock.now() - tw < 400 && anchorAt() < 0) await sleep(20)
           }
           if (!fcl && await recenter()) continue
           if (anchorAt() < 0) { out.anFail = (out.anFail || 0) + 1; if (out.anFail > 2) { st.noAnchor = true; out.anchor = fcl ? 'не встаёт' : 'опору не видно' } continue }
@@ -9170,8 +9172,8 @@ async function pillarRun (session, ctl, stats, track, feed) {
         console.log(`[bed] пропала до щелчка (съели коробки дракона?), тик ${nowTick} из ${fc.n}`)
       }
       if (!useAn && !bedHere() && !placeClick) {
-        if (tPlace - Date.now() > 120) { await sleep(Math.min(200, tPlace - Date.now() - 100)); continue }
-        if (Date.now() < (lastBoom || 0) + 120) { await sleep(40); continue }
+        if (tPlace - gameClock.now() > 120) { await sleep(Math.min(200, tPlace - gameClock.now() - 100)); continue }
+        if (gameClock.now() < (lastBoom || 0) + 120) { await sleep(40); continue }
         doing(ctl, 'pillar:bed')
         const K = bot.blockAt(new Vec3(plan.place.K.x, plan.place.K.y, plan.place.K.z))
         const fcl = K && (runnerLevels && RUN_FACING() ? faceClickFacing(bot, bot.entity.position.offset(0, EYE, 0), K.position, plan.place.face, { x: H.x - F.x, z: H.z - F.z }) : faceClick(bot, bot.entity.position.offset(0, EYE, 0), K.position, plan.place.face))
@@ -9193,8 +9195,8 @@ async function pillarRun (session, ctl, stats, track, feed) {
         const cur = fcl.point.minus(K.position)
         bot._client.write('block_place', { location: K.position, direction: FACE_IDX(plan.place.face), hand: 0, cursorX: cur.x, cursorY: cur.y, cursorZ: cur.z, insideBlock: false, sequence: 0, worldBorderHit: false })
         bot.swingArm()
-        const tw = Date.now()
-        while (Date.now() - tw < 400 && !bedHere()) await sleep(20)
+        const tw = gameClock.now()
+        while (gameClock.now() - tw < 400 && !bedHere()) await sleep(20)
         if (!bedHere()) { out.bedFail = (out.bedFail || 0) + 1; if (out.bedFail > 3) { out.why = 'кровать не встаёт'; break } continue }
         placedSince = true
       }
@@ -9220,19 +9222,19 @@ async function pillarRun (session, ctl, stats, track, feed) {
       // ошибается на 2–3 блока: pil1-8 — ждали 41, вышло 15)
       const aimAt = pre ? pre.point : hit.point
       // R: стрела в промежутке, пока до щелчка ≥ 1.5 с (ND_RUN_GAPARROW=1); одна попытка на промежуток
-      if (runnerLevels && RUN_GAPARROW() && tClick - Date.now() > 1500 && gapKey !== lastBoom && bot.health >= 10 && countOf(bot, /arrow$/) > 0) {
+      if (runnerLevels && RUN_GAPARROW() && tClick - gameClock.now() > 1500 && gapKey !== lastBoom && bot.health >= 10 && countOf(bot, /arrow$/) > 0) {
         gapKey = lastBoom
         const ga = await runnerGapArrow(session, ctl, feed, P, { minHit: (lastBoom || 0) + 560, maxHit: tClick - 560, deadline: tClick - 330 })
         ;(out.gapLog || (out.gapLog = [])).push(ga.shot ? { ...ga.shot, hpAfter: ga.hpAfter } : ga.why)
         continue
       }
-      if (tClick - Date.now() > 260) { await lookAtSafe(bot, aimAt); await sleep(30); continue }
+      if (tClick - gameClock.now() > 260) { await lookAtSafe(bot, aimAt); await sleep(30); continue }
       await lookAtSafe(bot, aimAt)
       if (pre) { const bi = findItem(bot, /_bed$/); if (!bi) { out.why = 'кровати кончились'; break } if (!bot.heldItem || !/_bed$/.test(bot.heldItem.name)) await bot.equip(bi, 'hand').catch(() => {}) }
       await new Promise(resolve => bot.once('physicsTick', resolve))
       const r = await bedsBoom(session, ctl, stats, { ...plan, ...(useAn ? { H: { x: F.x, z: F.z }, centre: Acentre } : {}), anchor: useAn, dist: r1(dClick), expect: bedDamage(dClick, plan.seen || 1), D: plan.a, y: yb, reuse: true }, { point: hit.point, face: runnerLevels ? plan.click.face : null, runnerGuard: runnerLevels ? () => {
         const q = bot.entity.position, f = landingForecast(feed, P) || fc
-        const k = Math.max(0, Math.round((Date.now() - f.t) / 50))
+        const k = Math.max(0, Math.round((gameClock.now() - f.t) / 50))
         const dd = dragonOf(bot)
         // причина отказа — строкой (в трассу bedFail), годится — true
         if (ctl.aborted) return 'прервано'
@@ -9250,7 +9252,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
         if (!faceClick(v, eye, new Vec3(F.x, yb, F.z), plan.click.face)) return 'бок кровати не виден'
         if (!(RUN_FACING() ? faceClickFacing(bot, eye, new Vec3(plan.place.K.x, yb, plan.place.K.z), plan.place.face, { x: H.x - F.x, z: H.z - F.z }, { minCos: 0.75 }) : faceClick(bot, eye, new Vec3(plan.place.K.x, yb, plan.place.K.z), plan.place.face))) return 'грань K не видна'
         return true
-      } : null, block: useAn ? bot.blockAt(Apos) : bot.blockAt(new Vec3(plan.click.cell.x, yb, plan.click.cell.z)) }, 'снижение', { aimed: true, until: Math.max(tClick, (stats.lastBoom || 0) + BED_GAP_MS), uncounted: true, ...(pre ? { keepHand: true, prePlace: pre } : {}), phCheck: p => p === PHASE.LANDING, note: { ...(pre ? { pc: 1 } : {}), ...(runnerLevels ? { runnerY: yb, ...seenNote(clickI) } : {}), oc: useAn ? 'PA' : 'P', pass: clickI, headDist: r1(dClick), fcT: fc.t, tClick, ...(clickI !== pass.i ? { early: pass.i - clickI } : {}) } })
+      } : null, block: useAn ? bot.blockAt(Apos) : bot.blockAt(new Vec3(plan.click.cell.x, yb, plan.click.cell.z)) }, 'снижение', { aimed: true, until: Math.max(tClick, (stats.lastBoom || 0) + BED_GAP_MS), uncounted: true, ...(pre ? { keepHand: true, prePlace: pre } : {}), phCheck: p => p === PHASE.LANDING, note: { ...(pre ? { pc: 1 } : {}), ...(runnerLevels ? { runnerY: yb, ...seenNote(clickI) } : {}), oc: useAn ? 'PA' : 'P', pass: clickI, headDist: r1(dClick), fcT: fc.t, fcWall: fc.wallMs, tClick, ...(clickI !== pass.i ? { early: pass.i - clickI } : {}) } })
       // кровать пропала без удара по дракону и без урона нам — её снесли коробки дракона (checkWalls), взрыва
       // не было: толчка нет, прогноз — свежий (pil6-15, pil6-21: «съеденная» кровать на последнем заходе)
       const eaten = r.ok && !useAn && r.lagMs == null && !r.dmg && !r.self
@@ -9259,15 +9261,15 @@ async function pillarRun (session, ctl, stats, track, feed) {
       if (!r.ok) (out.fails || (out.fails = [])).push(r.why)
       if (eaten) { out.eaten = (out.eaten || 0) + 1; pushed = null; continue }
       if (r.ok) {
-        lastBoom = stats.lastBoom || Date.now()
+        lastBoom = stats.lastBoom || gameClock.now()
         st.booms++
         const pf = pushedForecast(fc, clickI, ctr, plan.seen || 1, P)
-        pushed = pf ? { fc: { ...pf, t: fc.t }, after: Date.now() + 150 } : null
+        pushed = pf ? { fc: { ...pf, t: fc.t }, after: gameClock.now() + 150 } : null
       } else if (!useAn && !bedHere()) { /* снесло — следующая */ }
     }
     return out
   } finally {
-    out.ms = Date.now() - t0
+    out.ms = gameClock.now() - t0
     ev('pillarRun', out)
   }
 }
@@ -9276,7 +9278,7 @@ async function bedsPerch (session, ctl, rep, stats, track) {
   const bot = session.bot
   let d = track.tick()
   if (!d) return
-  const tIn = Date.now()
+  const tIn = gameClock.now()
   const rec0 = sitState(d, phaseOf(bot, d), tIn)
   const key = rec0 ? rec0.t0 : tIn
   stats.bedPerches = stats.bedPerches || []
@@ -9287,7 +9289,7 @@ async function bedsPerch (session, ctl, rep, stats, track) {
     if (ctl.trace) ctl.trace.ev('bedsPerch', { hp: P.hp0, acc: Math.round(sitAcc.dmg) })
   }
   // План «взлёт» с этой посадки (ocLanding: L уже взорвана) — A, T1, T2 вместо A, B.
-  if (ctl.ocTk && ctl.ocTk.dId === d.id && Date.now() - ctl.ocTk.t < 8000 && blindKnown(rec0) && !P.tk) {
+  if (ctl.ocTk && ctl.ocTk.dId === d.id && gameClock.now() - ctl.ocTk.t < 8000 && blindKnown(rec0) && !P.tk) {
     const tkP = ctl.ocTk; ctl.ocTk = null; P.tk = true
     const r = await ocTakeoffRun(session, ctl, rep, stats, track, P, tkP)
     const dd = dragonOf(bot)
@@ -9298,7 +9300,7 @@ async function bedsPerch (session, ctl, rep, stats, track) {
   let stayAt = null
   // Планы, что сейчас не вышли (пол не встал, кровать не легла): ключ → до когда.
   const failed = new Map()
-  const skipNow = () => { const s = new Set(); for (const [k, t] of failed) if (t > Date.now()) s.add(k); return s }
+  const skipNow = () => { const s = new Set(); for (const [k, t] of failed) if (t > gameClock.now()) s.add(k); return s }
   while (!ctl.aborted && tries < 14) {
     await yieldTick()
     d = track.tick()
@@ -9306,7 +9308,7 @@ async function bedsPerch (session, ctl, rep, stats, track) {
     const ph = phaseOf(bot, d)
     const hpD = hpOf(bot, d)
     if (hpD != null && hpD <= 0) break
-    const now = Date.now()
+    const now = gameClock.now()
     const sitting = SITTING.has(ph)
     const takeoffWin = BEDS_TAKEOFF && ph === PHASE.TAKEOFF && now - (stats.lastBoom || 0) < 700
     if (!sitting && !takeoffWin) break
@@ -9414,7 +9416,7 @@ async function bedsPerch (session, ctl, rep, stats, track) {
         if (r.ok) { if (!r.booms) tries++; continue }
         P.doubleFails = (P.doubleFails || 0) + 1
         P.lastWhy = r.why
-        failed.set(dp.key, Date.now() + 5000)
+        failed.set(dp.key, gameClock.now() + 5000)
         if (ctl.trace) ctl.trace.ev('bedFail', { why: `двойная: ${r.why}` })
         tries++
         continue
@@ -9458,13 +9460,13 @@ async function bedsPerch (session, ctl, rep, stats, track) {
       continue
     }
     const g = await bedsGo(session, ctl, plan, brave, parts)
-    if (!g.ok) { tries++; P.lastWhy = g.why; failed.set(plan.key, Date.now() + 1500); continue }
+    if (!g.ok) { tries++; P.lastWhy = g.why; failed.set(plan.key, gameClock.now() + 1500); continue }
     ctl.holdStation = true
     let b
     try { b = await bedsBuild(session, ctl, stats, plan) } finally { ctl.holdStation = false }
-    if (!b.ok) { tries++; P.fails++; P.lastWhy = b.why; failed.set(plan.key, Date.now() + 4000); if (ctl.trace) ctl.trace.ev('bedFail', { why: b.why, takeoff: takeoffWin || undefined }); continue }
+    if (!b.ok) { tries++; P.fails++; P.lastWhy = b.why; failed.set(plan.key, gameClock.now() + 4000); if (ctl.trace) ctl.trace.ev('bedFail', { why: b.why, takeoff: takeoffWin || undefined }); continue }
     // Неуязвимость дракона после прошлого взрыва — 10 тиков.
-    while (!ctl.aborted && Date.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(20)
+    while (!ctl.aborted && gameClock.now() < (stats.lastBoom || 0) + BED_GAP_MS) await sleep(20)
     const d2 = dragonOf(bot)
     if (!d2) break
     const ph2 = phaseOf(bot, d2)
@@ -9490,7 +9492,7 @@ async function bedsPerch (session, ctl, rep, stats, track) {
   }
   const dd = dragonOf(bot)
   P.hp1 = dd ? Math.round(hpOf(bot, dd) ?? 0) : 0
-  P.secs = Math.round((Date.now() - key) / 100) / 10
+  P.secs = Math.round((gameClock.now() - key) / 100) / 10
 }
 
 // ------------------------------------------------------------ станция кроватей
@@ -9721,7 +9723,7 @@ async function mineEndStone (session, ctl, want, stats) {
   const bot = session.bot
   const pick = findItem(bot, /_pickaxe$/)
   if (!pick) return 0
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const have0 = countOf(bot, FILLER_RE)
   const was = ctl.doing
   doing(ctl, 'mine-endstone')
@@ -9737,7 +9739,7 @@ async function mineEndStone (session, ctl, want, stats) {
     if (!ub || ub.name !== 'end_stone') { doing(ctl, was); if (ctl.trace) ctl.trace.ev('mined', { got: 0, secs: 0, have: countOf(bot, FILLER_RE), why: ub ? ub.name : 'нет опоры' }); return 0 }
   }
   try {
-    for (let round = 0; round < 8 && !ctl.aborted && !perched() && countOf(bot, FILLER_RE) < want && Date.now() - t0 < 60000; round++) {
+    for (let round = 0; round < 8 && !ctl.aborted && !perched() && countOf(bot, FILLER_RE) < want && gameClock.now() - t0 < 60000; round++) {
       const me = bot.entity.position
       const fy = Math.floor(me.y + 0.01) - 1
       const ring = []
@@ -9772,7 +9774,7 @@ async function mineEndStone (session, ctl, want, stats) {
   } finally { doing(ctl, was) }
   const got = countOf(bot, FILLER_RE) - have0
   stats.mined = (stats.mined || 0) + Math.max(0, got)
-  if (ctl.trace) ctl.trace.ev('mined', { got, secs: Math.round((Date.now() - t0) / 1000), have: countOf(bot, FILLER_RE) })
+  if (ctl.trace) ctl.trace.ev('mined', { got, secs: Math.round((gameClock.now() - t0) / 1000), have: countOf(bot, FILLER_RE) })
   return got
 }
 
@@ -9836,8 +9838,8 @@ async function stationBlow (session, ctl, st, stats, d, track, why) {
   const onDmg = pk => { if (pk && (pk.entityId === d.id || pk.entityId === bot.entity.id) && DAMAGE_TYPES[pk.sourceTypeId] === 'bad_respawn_point') boom = true }
   bot._client.on('damage_event', onDmg)
   try { await bot.activateBlock(f, new Vec3(0, 1, 0), new Vec3(0.5, 0.56, 0.5)) } catch (e) { dbg('bed use', e.message) }
-  const tb = Date.now()
-  while (!boom && Date.now() - tb < 600) await sleep(50)
+  const tb = gameClock.now()
+  while (!boom && gameClock.now() - tb < 600) await sleep(50)
   bot._client.removeListener('damage_event', onDmg)
   await sleep(100)
   const gone = !bot.blockAt(st.F) || !/_bed$/.test(bot.blockAt(st.F).name)
@@ -10043,27 +10045,27 @@ async function stationStep (session, ctl, rep, stats, track, st, d, ph) {
     const dist = head.distanceTo(st.blast)
     const was = st.lastDist
     st.lastDist = dist
-    if (ctl.trace && (!st.headLog || Date.now() - st.headLog > 250)) {
-      st.headLog = Date.now()
+    if (ctl.trace && (!st.headLog || gameClock.now() - st.headLog > 250)) {
+      st.headLog = gameClock.now()
       ctl.trace.ev('head', { ph, dist: r1(dist), head: [r1(head.x), r1(head.y), r1(head.z)], d: [r1(d.position.x), r1(d.position.y), r1(d.position.z)], yaw: +d.yaw.toFixed(2) })
     }
     let go = null
     if (ph === PHASE.LANDING) {
       if (dist <= 2.0 || (was != null && dist > was && was <= 3.2)) go = 'садится'
     } else if (SITTING.has(ph)) {
-      if (!st.sitSince) st.sitSince = Date.now()
+      if (!st.sitSince) st.sitSince = gameClock.now()
       if (dist <= 3.2) go = 'сидит'
-      else if (Date.now() - st.sitSince > 2500 && dist <= 4.5) go = 'сидит'
+      else if (gameClock.now() - st.sitSince > 2500 && dist <= 4.5) go = 'сидит'
       // Готовая станция: ждать на месте — высматривая, дракон сам повернёт
       // голову к нам (к B, а значит, к изголовью), не в этот огонь — так в
       // следующий. Уходить к «станции под головой» (headPlan) — только со
       // своей же такой станции, если голова ушла.
-      else if (st.dynamic && Date.now() - st.sitSince > 700 && dist > 4.5) { st.lastDist = null; st.sitSince = null; return 'далеко' }
+      else if (st.dynamic && gameClock.now() - st.sitSince > 700 && dist > 4.5) { st.lastDist = null; st.sitSince = null; return 'далеко' }
       // Голова не идёт к станции: дракон не видит нас (его Sensing у дракона
       // не чистится — EnderDragon.aiStep не зовёт serverAiStep, и первое «не
       // видно» остаётся навсегда: не повернётся, не дохнёт, не протаранит) или
       // сел не туда. Тогда — кровать у самой головы, как раньше (perchAttack).
-      else if (Date.now() - st.sitSince > 1500) { st.lastDist = null; return 'далеко' }
+      else if (gameClock.now() - st.sitSince > 1500) { st.lastDist = null; return 'далеко' }
     } else if (ph === PHASE.TAKEOFF) {
       if (dist <= 3.6) go = 'взлетает'
     }
@@ -10095,9 +10097,9 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
   // словами «дракона не видно — убит?», а он был жив; в основном мире это
   // значило бы уйти из Энда с живым драконом).
   const lookFor = async (ms) => {
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let dd = track.tick()
-    while (!dd && !ctl.aborted && Date.now() - t0 < ms && Date.now() < deadline) {
+    while (!dd && !ctl.aborted && gameClock.now() - t0 < ms && gameClock.now() < deadline) {
       if (portalBlocks(bot).length) return null
       doing(ctl, 'fight:search')
       const m = bot.entity.position
@@ -10129,13 +10131,13 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
   // Когда дракон последний раз поворачивался (голова «встала» — можно
   // собирать станцию под ней).
   let yawWas = null
-  let yawSince = Date.now()
+  let yawSince = gameClock.now()
   let sitStart = 0
   let mineRetry = 0
   let refillAt = 0
-  let crystalRetry = Date.now() + 20000
+  let crystalRetry = gameClock.now() + 20000
   stats.perchCount = stats.perchCount || 0
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     await yieldTick()
     doing(ctl, 'fight')
     d = track.tick()
@@ -10153,10 +10155,10 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
     }
     const ph = phaseOf(bot, d)
     const hp = hpOf(bot, d)
-    if (yawWas == null || Math.abs(d.yaw - yawWas) > 0.01) { yawWas = d.yaw; yawSince = Date.now() }
-    if (SITTING.has(ph) && !sitStart) sitStart = Date.now()
+    if (yawWas == null || Math.abs(d.yaw - yawWas) > 0.01) { yawWas = d.yaw; yawSince = gameClock.now() }
+    if (SITTING.has(ph) && !sitStart) sitStart = gameClock.now()
     if (!SITTING.has(ph)) sitStart = 0
-    noteTakeoff(d, ph, Date.now())
+    noteTakeoff(d, ph, gameClock.now())
     if (ph !== lastPhase) {
       stats.phases.push(`${PHASE_RU[ph] ?? ph}${hp != null ? ` (${Math.round(hp)})` : ''}`)
       dbg('phase', PHASE_RU[ph], 'hp', hp)
@@ -10185,7 +10187,7 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
     // Один цикл: снижается — кровать у места головы сидящего, щелчок в тик до посадки.
     // Начало снижения — по собственной прошлой фазе (lastPhase выше уже обновлён: ключ был
     // один на весь бой — L только в одной посадке, oc7/oc8).
-    if (ph === PHASE.LANDING && ocPrevPh !== PHASE.LANDING) ocLandStart = Date.now()
+    if (ph === PHASE.LANDING && ocPrevPh !== PHASE.LANDING) ocLandStart = gameClock.now()
     ocPrevPh = ph
     // Станция у столба (ctl.pillarMode): строится, пока дракон далеко; на каждом снижении — цепочка кроватей.
     if (ctl.bedsOnly && ctl.pillarMode) {
@@ -10219,11 +10221,11 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
       const far = ph === PHASE.HOLDING || ph === PHASE.STRAFE || ph === PHASE.CHARGING || (ph === PHASE.APPROACH && approachFar(d))
       const nearC = Math.hypot(bot.entity.position.x - 0.5, bot.entity.position.z - 0.5) < 30
       // не чаще раза в 2.5 с (pil5-28: 6 попыток за 3 с у облака — и больше ни одной за бой)
-      if ((!ctl.pillar || !ctl.pillar.built) && far && nearC && (ctl.pillarTries || 0) < pillarTriesMax() && Date.now() >= (ctl.pillarNext || 0) && (runnerOn() || countOf(bot, /^(obsidian|crying_obsidian)$/) >= 1) && !hunters(bot, 6).length && bot.health >= 12) {
+      if ((!ctl.pillar || !ctl.pillar.built) && far && nearC && (ctl.pillarTries || 0) < pillarTriesMax() && gameClock.now() >= (ctl.pillarNext || 0) && (runnerOn() || countOf(bot, /^(obsidian|crying_obsidian)$/) >= 1) && !hunters(bot, 6).length && bot.health >= 12) {
         ctl.pillarTries = (ctl.pillarTries || 0) + 1
-        ctl.pillarNext = Date.now() + 2500
+        ctl.pillarNext = gameClock.now() + 2500
         const P0 = podiumTop(bot)
-        const tP = Date.now()
+        const tP = gameClock.now()
         // план — заново на каждую попытку (hb6: план «на весь бой» устаревал после частичной стройки и окопа —
         // «окоп: не встал над окопом» ×22, станций 18 из 26 против 13 из 14 в hb3)
         // R (02.10): плана R нет дважды (fr1 s13/s24: 10 пустых планов — бой без станции, кровати сидящему) — станция A
@@ -10237,7 +10239,7 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
         }
         if (!pp && P0 != null && runnerOn() && (ctl.runnerNull || 0) < 2) { pp = runnerPlan(bot, P0); if (!pp) { ctl.runnerNull = (ctl.runnerNull || 0) + 1; rNo = runnerPlan.why } }
         if (P0 != null && !pp && (envv('ND_RUNNER') !== '1' || (ctl.runnerNull || 0) >= 2)) pp = await pillarPlanAutoAsync(bot, P0, PILLAR_BAD ? (ctl.pillarBad || (ctl.pillarBad = new Map())) : null)
-        if (ctl.trace) ctl.trace.ev('pillarPlan', pp ? { ms: Date.now() - tP, R: !!pp.runner, try: ctl.pillarTries, H: [pp.H.x, pp.yb, pp.H.z], F: [pp.F.x, pp.F.z], B: [pp.B.x, pp.feet.y, pp.B.z], dig: pp.dig, nObs: pp.nObs, seen: pp.seen, n: (pillarPlan.all || []).length, ...(rNo ? { rNo } : {}) } : { ms: Date.now() - tP, no: rNo || pillarPlan.why, P: P0 })
+        if (ctl.trace) ctl.trace.ev('pillarPlan', pp ? { ms: gameClock.now() - tP, R: !!pp.runner, try: ctl.pillarTries, H: [pp.H.x, pp.yb, pp.H.z], F: [pp.F.x, pp.F.z], B: [pp.B.x, pp.feet.y, pp.B.z], dig: pp.dig, nObs: pp.nObs, seen: pp.seen, n: (pillarPlan.all || []).length, ...(rNo ? { rNo } : {}) } : { ms: gameClock.now() - tP, no: rNo || pillarPlan.why, P: P0 })
         if (pp) {
           doing(ctl, 'pillar:build')
           const rb = await pillarBuild(session, ctl, stats, pp)
@@ -10363,19 +10365,19 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
     // Блоков на станцию (10) и заслоны нет — наломать эндерняка, пока летает.
     const lowBlocks = countOf(bot, FILLER_RE) < (ctl.beds && countOf(bot, /_bed$/) > 0 ? 14 : 6)
     if (!bot.inventory.slots.some((it, k) => k >= 36 && k <= 44 && it && it.name === 'water_bucket') && findItem(bot, /^water_bucket$/)) await waterToHotbar(bot)
-    if (!window && !perched && Date.now() >= refillAt && !findItem(bot, /^water_bucket$/) && findItem(bot, /^bucket$/)) {
-      refillAt = Date.now() + 20000
+    if (!window && !perched && gameClock.now() >= refillAt && !findItem(bot, /^water_bucket$/) && findItem(bot, /^bucket$/)) {
+      refillAt = gameClock.now() + 20000
       await refillBucket(session, ctl, stats)
       continue
     }
-    if (lowBlocks && !window && !perched && Date.now() >= mineRetry && findItem(bot, /_pickaxe$/)) {
+    if (lowBlocks && !window && !perched && gameClock.now() >= mineRetry && findItem(bot, /_pickaxe$/)) {
       const got = await mineEndStone(session, ctl, 20, stats)
-      if (got < 4) mineRetry = Date.now() + 30000
+      if (got < 4) mineRetry = gameClock.now() + 30000
       continue
     }
     // Добить из лука в полёте: после посадки у дракона ≤ 20 хп (лечится 2 хп/с — только сейчас).
-    if (ctl.bedsOnly && hp != null && hp <= 20 && !SITTING.has(ph) && ph !== PHASE.LANDING && !perched && Date.now() - lastShot > 900) {
-      lastShot = Date.now()
+    if (ctl.bedsOnly && hp != null && hp <= 20 && !SITTING.has(ph) && ph !== PHASE.LANDING && !perched && gameClock.now() - lastShot > 900) {
+      lastShot = gameClock.now()
       // (02.10 вечер, rs12-s8/s15/s18: сюда передавали false — bow.shoot звал hazardSoon() и вызов «сорвался» при драконе 0.2–12 хп
       // сразу после взлёта с меча; добивания из лука в полёте не было ни разу)
       if (await rangedShot(session, ctl, stats, track, d, () => !!hazardNow(bot))) { stats.finishArrows = (stats.finishArrows || 0) + 1; continue }
@@ -10389,8 +10391,8 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
       // в облёте лечение у клеток 0–2 хп/с — 3-я посадка нужна, а предел 40 оборвал бой при 41).
       const swordMore = countOf(bot, /_bed$/) < 1 && !stationBedPlaced(bot, ctl) && crysOn() && envv('ND_SWORD_MORE') !== '0' && RUN_SWORD() &&
         !!(ctl.pillar && ctl.pillar.built && ctl.pillar.plan && ctl.pillar.plan.runner) && !!items.bestWeapon(bot) && crysAlive(ctl) != null && crysAlive(ctl) <= 3 &&
-        hp != null && hp <= envNum('ND_SWORD_MORE_HP', 80) && bot.health >= 12 && deadline - Date.now() > 45000
-      if (swordMore && !ctl.swordMoreT) { ctl.swordMoreT = Date.now(); if (ctl.trace) ctl.trace.ev('swordMore', { hp: r1(hp), alive: crysAlive(ctl) }) }
+        hp != null && hp <= envNum('ND_SWORD_MORE_HP', 80) && bot.health >= 12 && deadline - gameClock.now() > 45000
+      if (swordMore && !ctl.swordMoreT) { ctl.swordMoreT = gameClock.now(); if (ctl.trace) ctl.trace.ev('swordMore', { hp: r1(hp), alive: crysAlive(ctl) }) }
       if (countOf(bot, /_bed$/) < 1 && !stationBedPlaced(bot, ctl) && !swordMore) {
         rep.dragon.lost = 'кровати кончились — бой только кроватями нечем продолжать'; rep.need = { what: 'red_bed', count: BEDS_KIT, have: 0 }
         // 02.10 (rs2-s9): кровати кончились в окопе/чаше у фонтана — бот стоял под сидящим драконом после конца вызова и
@@ -10453,11 +10455,11 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
       continue
     }
     if (ctl.beds && countOf(bot, /_bed$/) > 0 && countOf(bot, FILLER_RE) > 0) {
-      if (!st && !window && Date.now() >= stationRetry) {
+      if (!st && !window && gameClock.now() >= stationRetry) {
         st = chooseStation(bot, stFails)
         if (!st) {
           stats.stationNone = chooseStation.why
-          stationRetry = Date.now() + 5000
+          stationRetry = gameClock.now() + 5000
         } else {
           stats.stations = (stats.stations || 0) + 1
           if (ctl.trace) ctl.trace.ev('station', { key: st.key, B: [st.B.x, st.B.y, st.B.z], yb: st.yb, g: st.g, place: st.place.length })
@@ -10517,11 +10519,11 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
     if (!stationed && SITTING.has(ph)) { await perchAttack(session, ctl, rep, stats, track); await sleep(50); continue }
     // Кристалл на обелиске ещё жив (не сбили в начале) — снова за ним, пока
     // дракон летает: иначе он лечит дракона на 2 хп/с (d5-17, d5-22).
-    if (!window && !perched && Date.now() >= crystalRetry && crystalsOf(bot).some(c => c.pillar)) {
-      crystalRetry = Date.now() + 60000
+    if (!window && !perched && gameClock.now() >= crystalRetry && crystalsOf(bot).some(c => c.pillar)) {
+      crystalRetry = gameClock.now() + 60000
       stats.crystalRetry = (stats.crystalRetry || 0) + 1
       if (ctl.trace) ctl.trace.ev('crystalRetry', { left: crystalsOf(bot).filter(c => c.pillar).length })
-      await destroyCrystals(session, ctl, rep, stats, { deadline: Math.min(deadline, Date.now() + 150000) })
+      await destroyCrystals(session, ctl, rep, stats, { deadline: Math.min(deadline, gameClock.now() + 150000) })
       continue
     }
     // 6. Летает: без станции — держаться у портала в 10–16 блоках.
@@ -10539,13 +10541,13 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
     }
     const hazardSoon = () => !!hazardNow(bot)
     // 7. Стрелы по летящему (сидящему — без толку: onHurt → 0).
-    if (!window && Date.now() - lastShot > 300 && countOf(bot, /arrow$/) > 0) {
+    if (!window && gameClock.now() - lastShot > 300 && countOf(bot, /arrow$/) > 0) {
       const dist = d.position.distanceTo(me)
       const good = dist < 44 && (ph === PHASE.STRAFE || ph === PHASE.CHARGING || ph === PHASE.APPROACH || dist < 30)
       if (good && !hazardSoon()) {
         doing(ctl, 'fight:shoot')
         await rangedShot(session, ctl, stats, track, d, hazardSoon)
-        lastShot = Date.now()
+        lastShot = gameClock.now()
         continue
       }
     }
@@ -10556,7 +10558,7 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 })
   }
   rep.dragon.hpLog = hpLog.slice(-40)
   rep.dragon.won = won
-  if (won && ctl.started) rep.timing.killed = Math.round((Date.now() - ctl.started) / 1000)
+  if (won && ctl.started) rep.timing.killed = Math.round((gameClock.now() - ctl.started) / 1000)
   if (stats.perchCount) rep.dragon.perchCount = stats.perchCount
   if (stats.bedPerches && stats.bedPerches.length) rep.dragon.bedPerches = stats.bedPerches.slice(-12).map(({ key, ...p }) => p)
   {
@@ -10579,9 +10581,9 @@ function portalBlocks (bot) {
 
 async function collectXp (session, ctl, ms = 6000) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const xp0 = bot.experience ? bot.experience.points : 0
-  while (!ctl.aborted && Date.now() - t0 < ms) {
+  while (!ctl.aborted && gameClock.now() - t0 < ms) {
     // Опыт сыплется над порталом: за шаром в портал не шагать (унесёт домой).
     const orb = bot.nearestEntity(e => e && e.name === 'experience_orb' && e.position && e.position.distanceTo(bot.entity.position) < 16 &&
       Math.hypot(e.position.x - CENTER.x, e.position.z - CENTER.z) > 6.5)
@@ -10616,8 +10618,8 @@ async function pickUp (session, ctl, item, name) {
     const at = item.position.clone()
     await stepTo(bot, ctl, at, { ms: 2500, stopAt: 0.25, sprint: false })
     if (Math.hypot(bot.entity.position.x - at.x, bot.entity.position.z - at.z) > 0.8) await walkTo(session, ctl, at, { range: 0, timeoutMs: 6000 })
-    const t0 = Date.now()
-    while (Date.now() - t0 < 1500 && countOf(bot, new RegExp(`^${name}$`)) <= had) await sleep(100)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 1500 && countOf(bot, new RegExp(`^${name}$`)) <= had) await sleep(100)
     if (countOf(bot, new RegExp(`^${name}$`)) > had) break
   }
   const torch = bot.blockAt(bot.entity.position.floored())
@@ -10704,8 +10706,8 @@ async function goHome (session, ctl, rep) {
     // шагнуть клавишами.
     const w = await walkTo(session, ctl, target.offset(0.5, 0, 0.5), { range: 3, timeoutMs: 25000, xz: true, portal: true })
     out.walk = w.ok ? 'дошёл до края' : w.why
-    const t0 = Date.now()
-    while (!ctl.aborted && Date.now() - t0 < 12000 && bot.game.dimension === dim0) {
+    const t0 = gameClock.now()
+    while (!ctl.aborted && gameClock.now() - t0 < 12000 && bot.game.dimension === dim0) {
       if (credits) {
         try { bot._client.write('client_command', bot.supportFeature('respawnIsPayload') ? { payload: 0 } : { actionId: 0 }) } catch {}
         credits = false
@@ -10821,8 +10823,8 @@ async function pearlApproach (session, ctl, stats) {
     let pp = null
     // план станции — цель броска; считать не чаще раза в 20 с (pearlApproach зовётся на ходу раз в 2 с)
     const pc = ctl.pearlPlan
-    if (pc && Date.now() - pc.t < 20000) pp = pc.pp
-    else { try { pp = await pillarPlanAutoAsync(bot, P0) } catch { pp = null } ctl.pearlPlan = { t: Date.now(), pp } }
+    if (pc && gameClock.now() - pc.t < 20000) pp = pc.pp
+    else { try { pp = await pillarPlanAutoAsync(bot, P0) } catch { pp = null } ctl.pearlPlan = { t: gameClock.now(), pp } }
     if (pp) { goal = new Vec3(pp.feet.x, pp.G, pp.feet.z); goalWhy = 'станция' }
   }
   if (!goal) {
@@ -10871,9 +10873,9 @@ async function pearlApproach (session, ctl, stats) {
       const inner = platformInner(bot)
       if (inner && Math.hypot(inner.x - bot.entity.position.x, inner.z - bot.entity.position.z) > 0.3) await stepTo(bot, ctl, inner, { ms: 2500, sprint: false, stopAt: 0.2 })
       doing(ctl, 'pearl:rise')
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const t = await fastTower(bot, ctl, Math.floor(bot.entity.position.y + 0.01) + rise.k, { maxMs: 15000, abortIf: () => angryEndermen(bot, 3).length ? 'эндермен рядом' : null })
-      rise.ok = t.ok; rise.ms = Date.now() - t0
+      rise.ok = t.ok; rise.ms = gameClock.now() - t0
       log('столб +' + rise.k + ' для броска: ' + (t.ok ? 'ок' : t.why) + ' за ' + rise.ms + ' мс')
       doing(ctl, 'pearl')
     }
@@ -10895,13 +10897,13 @@ async function pearlApproach (session, ctl, stats) {
   if (out.hops && embeddedNow(bot)) { out.embedded = (embeddedNow(bot) || {}).name; await unembed(bot, ctl) }
   // К станции — не с просевшим хп (01.10): после бросков поесть и дождаться регенерации (до 8 с, пока дракон не заходит).
   if (out.hops && bot.health < 19 && !ctl.aborted) {
-    const hp0 = bot.health; const t0 = Date.now()
+    const hp0 = bot.health; const t0 = gameClock.now()
     const busy = () => { const dd = dragonOf(bot); const ph = dd ? phaseOf(bot, dd) : null; return ph === PHASE.APPROACH || ph === PHASE.LANDING || ph === PHASE.STRAFE || ph === PHASE.CHARGING || hunters(bot, 6).length > 0 || !!embeddedNow(bot) }
     if (!busy()) {
       doing(ctl, 'pearl:heal')
       try { await pearlHop.recover(bot, 19.5, 8000, busy) } catch {}
-      out.healed = { from: r1(hp0), to: r1(bot.health), ms: Date.now() - t0 }
-      log(`после бросков: хп ${r1(hp0)} → ${r1(bot.health)} за ${Date.now() - t0} мс`)
+      out.healed = { from: r1(hp0), to: r1(bot.health), ms: gameClock.now() - t0 }
+      log(`после бросков: хп ${r1(hp0)} → ${r1(bot.health)} за ${gameClock.now() - t0} мс`)
     }
   }
   if (rise) out.rise = rise
@@ -10935,22 +10937,22 @@ async function dragonLab (session, ctl, stats, p, mode, deadline) {
     if (mode === 'labPlan') {
       const P0 = podiumTop(bot)
       if (P0 == null) return { stop: 'нет вершины столба' }
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const pp = runnerOn() ? runnerPlan(bot, P0) : await pillarPlanAutoAsync(bot, P0)
       LAB_PLANS.set(arm, pp)
       if (!pp) return { stop: 'плана нет', why: pillarPlan.why, P: P0 }
-      return { arm, ms: Date.now() - t0, plan: labCells(pp) }
+      return { arm, ms: gameClock.now() - t0, plan: labCells(pp) }
     }
     const plan = LAB_PLANS.get(arm)
     if (!plan) return { stop: `нет плана плеча ${arm}` }
-    ctl.pillar = { plan, built: true, t: Date.now(), booms: 0 }
+    ctl.pillar = { plan, built: true, t: gameClock.now(), booms: 0 }
     ctl.bedsOnly = true; ctl.pillarMode = true
     const feed = ctl.feed || (ctl.feed = makeDragonFeed(bot))
     const track = makeTrack(bot)
-    const t0 = Date.now()
-    const tEnd = Math.min(deadline, Date.now() + (p.waitSeconds ?? 60) * 1000)
+    const t0 = gameClock.now()
+    const tEnd = Math.min(deadline, gameClock.now() + (p.waitSeconds ?? 60) * 1000)
     let run = null; let entered = 0
-    while (!ctl.aborted && Date.now() < tEnd) {
+    while (!ctl.aborted && gameClock.now() < tEnd) {
       track.tick()
       const d = dragonOf(bot)
       const ph = d ? phaseOf(bot, d) : null
@@ -10959,7 +10961,7 @@ async function dragonLab (session, ctl, stats, p, mode, deadline) {
       await sleep(50)
     }
     const me = bot.entity.position
-    return { arm, run, beds: stats.beds, entered, ms: Date.now() - t0, hp: r1(bot.health), at: [r1(me.x), r1(me.y), r1(me.z)], inTrench: !!pillarHere(bot, plan), ...(run ? {} : { stop: 'снижения не было' }) }
+    return { arm, run, beds: stats.beds, entered, ms: gameClock.now() - t0, hp: r1(bot.health), at: [r1(me.x), r1(me.y), r1(me.z)], inTrench: !!pillarHere(bot, plan), ...(run ? {} : { stop: 'снижения не было' }) }
   } finally {
     for (const k of Object.keys(LABENV)) delete LABENV[k]
   }
@@ -10968,7 +10970,7 @@ async function dragonLab (session, ctl, stats, p, mode, deadline) {
 async function dragon (session, ctl, p = {}) {
   const bot = session.bot
   const mode = p.mode || 'beds'
-  const started = Date.now()
+  const started = gameClock.now()
   const deadline = started + Math.min(600, p.timeoutSeconds ?? 300) * 1000 - 5000
   const hp0 = Math.round(bot.health)
   const rep = {
@@ -10989,7 +10991,7 @@ async function dragon (session, ctl, p = {}) {
     const d = dragonOf(bot)
     rep.hp = died ? `${hp0} -> УМЕР` : `${hp0} -> ${Math.round(bot.health)}`
     if (died) rep.died = true
-    rep.seconds = Math.round((Date.now() - started) / 1000)
+    rep.seconds = Math.round((gameClock.now() - started) / 1000)
     // Счёт — только из Энда: после смерти тело в верхнем мире и «видит» ноль.
     if (/end/.test(bot.game.dimension)) rep.crystals.left = crystalsOf(bot).filter(c => c.pillar).length
     rep.crystals.destroyed = stats.crystals
@@ -11121,8 +11123,8 @@ async function dragon (session, ctl, p = {}) {
     taps.push(() => { bot._client.write = origWrite })
     let lastLog = 0
     const f = pk => {
-      if (Date.now() - lastLog < 3000) return
-      lastLog = Date.now()
+      if (gameClock.now() - lastLog < 3000) return
+      lastLog = gameClock.now()
       dbg('server pos', pk.x.toFixed(4), pk.y.toFixed(4), pk.z.toFixed(4), 'tp', pk.teleportId, 'sent:', sent.join(' | '))
     }
     bot._client.on('position', f)
@@ -11165,7 +11167,7 @@ async function dragon (session, ctl, p = {}) {
       if (!ph) return null
       const was = rep.pearl
       rep.pearl = was ? { ...ph, hops: was.hops + ph.hops, pearls: was.pearls + ph.pearls, hpLost: r1(was.hpLost + ph.hpLost), misses: was.misses + ph.misses, secs: r1(was.secs + ph.secs), steps: [...(was.steps || []), ...(ph.steps || [])], where: [...(was.where || []), where] } : { ...ph, where: [where] }
-      if (ph.hops) rep.timing.pearl = Math.round((Date.now() - started) / 100) / 10
+      if (ph.hops) rep.timing.pearl = Math.round((gameClock.now() - started) / 100) / 10
       return ph
     }
     if (pearlOn) await pearlStep('платформа')
@@ -11201,8 +11203,8 @@ async function dragon (session, ctl, p = {}) {
       // с неё не бросить, а пешком к центру 60–70 с).
       let pearlAt = 0
       const pearlStop = pearlOn && (ctl.pearlWalkStops || 0) < 3 ? () => {
-        if (Date.now() - pearlAt < 2000 || !bot.entity.onGround) return null
-        pearlAt = Date.now()
+        if (gameClock.now() - pearlAt < 2000 || !bot.entity.onGround) return null
+        pearlAt = gameClock.now()
         const mm = bot.entity.position
         if (Math.hypot(mm.x - CENTER.x, mm.z - CENTER.z) < 35) return null
         const under = bot.blockAt(mm.floored().offset(0, -1, 0))
@@ -11226,9 +11228,9 @@ async function dragon (session, ctl, p = {}) {
         if (ceil) {
           ctl.digUpFirst = true
           doing(ctl, 'to-center:dig-up')
-          const t0u = Date.now()
+          const t0u = gameClock.now()
           const up = await digUpThrough(session, ctl)
-          up.ms = Date.now() - t0u; up.first = true
+          up.ms = gameClock.now() - t0u; up.first = true
           if (ctl.trace) ctl.trace.ev('digUp', up)
           // бросок сразу с верха шахты дважды «не перенесло» (cp1-s7, ca1-s5: −5…6 с) — жемчуг только «на ходу», под открытым небом
           if (ctl.aborted) return { walk: 'прервано', up }
@@ -11294,12 +11296,12 @@ async function dragon (session, ctl, p = {}) {
     if (ctl.voidStop) { const sv = supportCell(bot); if (sv && offIsland(bot, sv)) return report('до центра острова не дошёл: над пустотой, напролом нельзя') }
     {
       const m = bot.entity.position
-      if (Math.hypot(m.x - CENTER.x, m.z - CENTER.z) < 30) rep.timing.center = Math.round((Date.now() - started) / 100) / 10
+      if (Math.hypot(m.x - CENTER.x, m.z - CENTER.z) < 30) rep.timing.center = Math.round((gameClock.now() - started) / 100) / 10
     }
     if (mode === 'full' || mode === 'crystals') {
       await destroyCrystals(session, ctl, rep, stats, { deadline })
       noteCrystalClear(bot, rep.crystals)
-      if (!ctl.aborted && /end/.test(bot.game.dimension) && rep.crystals.left === 0) rep.timing.crystals = Math.round((Date.now() - started) / 1000)
+      if (!ctl.aborted && /end/.test(bot.game.dimension) && rep.crystals.left === 0) rep.timing.crystals = Math.round((gameClock.now() - started) / 1000)
       if (ctl.aborted) return report()
       if (mode === 'crystals') return report(rep.crystals.left ? `кристаллов осталось ${rep.crystals.left}` : null)
     }
@@ -11311,7 +11313,7 @@ async function dragon (session, ctl, p = {}) {
     await fightDragon(session, ctl, rep, stats, { deadline, perches: p.perches || 0 })
     if (ctl.aborted) return report()
     if (!rep.dragon.won) {
-      return report(Date.now() >= deadline ? 'время вышло — позови mc_dragon ещё раз, продолжит с того места' : (rep.dragon.lost || 'дракон жив'))
+      return report(gameClock.now() >= deadline ? 'время вышло — позови mc_dragon ещё раз, продолжит с того места' : (rep.dragon.lost || 'дракон жив'))
     }
     // Победа: опыт, яйцо, домой.
     await sleep(3000)

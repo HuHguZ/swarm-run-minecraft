@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Подбор стрел в бою (arrows.js). У NeuroDown лук без стрел, вокруг воткнуты
 // стрелы, NeuroDown2 стоит далеко без оружия. Надо: сбегать за стрелами, не
 // лезть через дыру в полу за той, что за ней, и начать стрелять. Вторая часть —
@@ -6,12 +7,15 @@
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 node try-arrows.js
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -25,7 +29,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }

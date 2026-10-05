@@ -5,6 +5,7 @@ const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
 const fs = require('node:fs')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 const path = require('node:path')
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 function fixture () {
@@ -29,7 +30,7 @@ function fixture () {
   const fallback = new Proxy({}, { get: () => () => {} })
   const context = { module: { exports: {} }, console: { log () {} }, process, setTimeout, clearTimeout, setImmediate,
     require (n) { if (n === 'vec3') return { Vec3 }; if (n === './worlds') return { worldOf: () => 'the_nether' }; if (n === './movement') return { sleep: delay }; if (n === './perception') return { eyePos: () => b.entity.position, raySees: () => true }; if (n === './reflex-lock') return require('../src/reflex-lock'); return fallback } }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/ne-guard.js'), 'utf8'), context)
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/ne-guard.js'), 'utf8'), withClockFixture(context))
   const G = context.module.exports
   G.attach(s)
   return { b, s, calls, foe, G, hit: () => b._client.emit('damage_event', { entityId: 1, sourceCauseId: 3, sourceDirectId: 3 }) }

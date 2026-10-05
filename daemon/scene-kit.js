@@ -36,6 +36,7 @@
 // with a refusal instead of surviving it.
 const fs = require('fs')
 const path = require('path')
+const gameClock = require('./src/game-clock')
 
 // session.js say() cuts the text at 250: a longer command reaches the server as
 // a different command, and its echo simply never matches.
@@ -56,7 +57,9 @@ class ArenaError extends Error {
   }
 }
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+// Scene durations follow server ticks; command replies and world loading are
+// transport readiness and must still progress when the game is frozen.
+const sleep = ms => gameClock.sleep(ms)
 const escapeRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // ------------------------------------------------------------------ pure parts
@@ -175,10 +178,10 @@ function createServerLog (file = DEFAULT_LOG, player = 'NeuroDown') {
   // of the same player, or `ms` on the clock. `re` null means «the echo is
   // enough» — the command reached the server as this text, nothing more.
   async function expectReply (cmdText, re, { from = mark(), ms = 6000 } = {}) {
-    const t0 = Date.now()
+    const t0 = gameClock.wall.now()
     for (;;) {
       const { rotated, lines } = linesFrom(from)
-      if (rotated) return { ok: false, why: 'rotated', echo: false, reply: null, saw: [], ms: Date.now() - t0 }
+      if (rotated) return { ok: false, why: 'rotated', echo: false, reply: null, saw: [], ms: gameClock.wall.now() - t0 }
       let echoEnd = null; let reply = null; let closedBy = null
       const saw = []
       for (const l of lines) {
@@ -197,11 +200,11 @@ function createServerLog (file = DEFAULT_LOG, player = 'NeuroDown') {
         if (re.test(msg)) { reply = msg; break }
         saw.push(msg)
       }
-      const took = Date.now() - t0
+      const took = gameClock.wall.now() - t0
       if (echoEnd !== null && (!re || reply !== null)) return { ok: true, why: null, echo: true, echoEnd, reply, saw, ms: took }
       if (closedBy !== null) return { ok: false, why: 'silent', echo: true, echoEnd, reply: null, saw, closedBy, ms: took }
       if (took >= ms) return { ok: false, why: echoEnd === null ? 'no-echo' : 'silent', echo: echoEnd !== null, echoEnd, reply: null, saw, ms: took }
-      await sleep(100)
+      await gameClock.wall.sleep(100)
     }
   }
 
@@ -223,9 +226,28 @@ function describe (r) {
 
 // The same RPC shape every try-*.js builds by hand: events from every reply are
 // kept in `heard`, because any daemon answer drains the bus.
+const clockSockets = new Set()
+let clockSocket = null
+// Native observers also need tick-driven physics. Each bot gets its own plugin
+// scope; only a standalone scene's primary bot supplies the process clock.
+function createGameBot (options, { primary = false } = {}) {
+  const clock = new gameClock.GameClock()
+  const { plugins } = require('./src/tick-plugins').createTickPlugins(clock)
+  const bot = require('mineflayer').createBot({ ...options, plugins: { ...plugins, ...options.plugins } })
+  clock.attach(bot)
+  if (primary && !gameClock.snapshot()) gameClock.activate(clock)
+  return bot
+}
+
 function connect (url = process.env.ND_WS || 'ws://127.0.0.1:8765') {
   const WebSocket = require('ws')
   const ws = new WebSocket(url)
+  clockSockets.add(ws)
+  clockSocket ??= ws
+  ws.on('close', () => {
+    clockSockets.delete(ws)
+    if (clockSocket === ws) clockSocket = clockSockets.values().next().value ?? null
+  })
   let id = 0
   const pending = new Map()
   const heard = []
@@ -237,6 +259,9 @@ function connect (url = process.env.ND_WS || 'ws://127.0.0.1:8765') {
   })
   ws.on('message', raw => {
     const m = JSON.parse(raw.toString())
+    // Multiple bots in a scene share server ticks. Switching snapshot IDs on
+    // every second bot's heartbeat would dispose the current game timers.
+    if (ws === clockSocket) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -359,7 +384,7 @@ function createKit ({ call, heard = [], logFile = DEFAULT_LOG, player = 'NeuroDo
         await cmd(inWorld(dim, `fill ${coords} ${other}`))
         r = await cmd(inWorld(dim, `fill ${coords} ${target}`), { reply: want })
         if (r.ok) break
-        await sleep(waitMs)
+        await gameClock.wall.sleep(waitMs)
       }
       if (!r.ok) throw new ArenaError(`не залил ${coords} в ${dim || 'текущем мире'} блоком ${target}: ждал ${v} блоков, ${describe(r)}; попыток ${tries}`, r)
       filled += v
@@ -384,7 +409,7 @@ function createKit ({ call, heard = [], logFile = DEFAULT_LOG, player = 'NeuroDo
   async function ensureWorld (dim, { floor = null, tp = null, seconds = 15 } = {}) {
     if (!DIMS.has(dim)) throw new ArenaError(`неизвестный мир «${dim}»`)
     if (tp) await must(inWorld(dim, `tp @s ${tp}`), new RegExp(`^Teleported ${escapeRe(player)} to `), `телепорт в ${dim} не подтверждён`)
-    const t0 = Date.now()
+    const t0 = gameClock.wall.now()
     let last = null
     for (;;) {
       const st = await call('status')
@@ -394,15 +419,19 @@ function createKit ({ call, heard = [], logFile = DEFAULT_LOG, player = 'NeuroDo
         const o = await call('observe', { radius: 4, fair: false })
         standingOn = (((o && o.detail) || {}).terrain || {}).standingOn || null
       }
-      last = { dimension: state.dimension || null, standingOn, pos: state.pos || null, ms: Date.now() - t0 }
+      last = { dimension: state.dimension || null, standingOn, pos: state.pos || null, ms: gameClock.wall.now() - t0 }
       if (last.dimension === dim && (!floor || standingOn === floor)) return last
-      if (Date.now() - t0 >= seconds * 1000) break
-      await sleep(500)
+      if (gameClock.wall.now() - t0 >= seconds * 1000) break
+      await gameClock.wall.sleep(500)
     }
     throw new ArenaError(`я не в ${dim}${floor ? ` на ${floor}` : ''}: заголовок говорит ${last.dimension}, под ногами ${last.standingOn}, позиция ${JSON.stringify(last.pos)} — ждал ${seconds} с`, last)
   }
 
-  const between = (t0, t1, type) => heard.filter(e => e && e.at >= t0 && e.at <= t1 && (!type || e.type === type))
+  const between = (t0, t1, type, domain = 'game') => heard.filter(e => {
+    if (!e) return false
+    const at = domain === 'wall' ? e.at : (e.gameAt ?? e.at)
+    return at >= t0 && at <= t1 && (!type || e.type === type)
+  })
 
   return { call, heard, serverLog, cmd, must, gamerule, forceload, unforceload, fillExact, setDifficulty, ensureWorld, between }
 }
@@ -492,6 +521,6 @@ function classify (rec = {}, text = '') {
 module.exports = {
   MAX_CMD, MAX_FILL, MAX_FORCELOAD_CHUNKS, DEFAULT_LOG, LANES,
   ArenaError, checkCommand, inWorld, normBox, volume, splitBox, chunkSpan, lane,
-  createServerLog, describe, connect, createKit, sleep,
+  createServerLog, describe, connect, createGameBot, createKit, sleep,
   campaignFacts, deathCause, mainDeathCause, classify
 }

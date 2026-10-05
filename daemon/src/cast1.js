@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Литьё рамы ОДНИМ ведром, стоя на берегу лавового озера (поток route, 03.10.2026) — раннерский приём.
 //
 // Зачем. cast.js льёт двумя вёдрами (лава + вода, 6 железа) и ходит к лаве на каждую клетку, со столбами у рамы
@@ -138,13 +139,13 @@ async function useAt (bot, aim, from, { tries = 2, wait = 260 } = {}) {
     // С флагом =0 сохраняется прежний порядок для парной проверки.
     if (process.env.ND_CAST1_AIM === '0') { try { await bot.lookAt(aim, true) } catch {} }
     const gap = GAP()
-    if (gap > 0 && bot._ndCast1Last) { const w = bot._ndCast1Last + gap - Date.now(); if (w > 0) await sleep(w) }
+    if (gap > 0 && bot._ndCast1Last) { const w = bot._ndCast1Last + gap - gameClock.now(); if (w > 0) await sleep(w) }
     // Между наведением и use_item нет таймера: пакет несёт текущие yaw/pitch.
     if (process.env.ND_CAST1_AIM !== '0') { try { await bot.lookAt(aim, true) } catch { return false } }
-    bot._ndCast1Last = Date.now()
+    bot._ndCast1Last = gameClock.now()
     try { bot.activateItem() } catch {}
-    const t0 = Date.now()
-    while (Date.now() - t0 < wait) {
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < wait) {
       if (C().countOf(bot, from) < before) { if (k) bot._ndCast1Resent = (bot._ndCast1Resent || 0) + 1; return true }
       await sleep(10)
     }
@@ -354,14 +355,14 @@ async function pourInto (bot, full, refs) {
 
 async function castOne (session, ctl, p = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + Math.max(1, Math.min(600, p.timeoutSeconds || 420)) * 1000
-  const late = () => Date.now() > deadline || ctl.aborted
+  const late = () => gameClock.now() > deadline || ctl.aborted
   const report = { mode: 'one', cast: [], refills: 0, placed: 0, dug: 0, trace: [] }
   const hazard = at => process.env.ND_CAST1_SAFE === '0' ? null : require('./fauna').castHazard(bot, at)
   const firstThreat = hazard(bot.entity.position)
   if (firstThreat) return { ...report, code: 'CAST_UNSAFE', hazard: firstThreat, built: false, stopped: `CAST_UNSAFE: ${firstThreat.name}` }
-  const tr = m => { report.trace.push(`${Math.round((Date.now() - t0) / 100) / 10}с ${m}`); if (report.trace.length > 60) report.trace.shift() }
+  const tr = m => { report.trace.push(`${Math.round((gameClock.now() - t0) / 100) / 10}с ${m}`); if (report.trace.length > 60) report.trace.shift() }
   const cnt = n => C().countOf(bot, n)
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} try { bot.clearControlStates() } catch {} })
   const buckets = cnt('bucket') + cnt('water_bucket') + cnt('lava_bucket')
@@ -596,8 +597,8 @@ async function castOne (session, ctl, p = {}) {
       if (!wb || !/water/.test(wb.name)) continue
       const lr = await pourInto(bot, 'lava_bucket', t.lava)
       if (lr.ok) {
-        const tq = Date.now()
-        while (Date.now() - tq < 800 && (bot.blockAt(t.c) || {}).name !== 'obsidian') await sleep(40)
+        const tq = gameClock.now()
+        while (gameClock.now() - tq < 800 && (bot.blockAt(t.c) || {}).name !== 'obsidian') await sleep(40)
         tr(`лава из ведра → ${t.c.x},${t.c.y},${t.c.z}: ${(bot.blockAt(t.c) || {}).name}`)
         if ((bot.blockAt(t.c) || {}).name === 'obsidian') report.cast.push(xyz(t.c))
         fixed = true
@@ -674,9 +675,9 @@ async function castOne (session, ctl, p = {}) {
     const L = Ls[0]
     const sAim = C().scoopAim(bot, t.w) || t.w.offset(0.5, 0.5, 0.5)
     // Четыре клика подряд: вода → черпак лавы → лава в клетку → вода назад.
-    const t1 = Date.now()
+    const t1 = gameClock.now()
     if (!(await useAt(bot, wa.aim, 'water_bucket'))) return { ok: false, why: 'ведро воды не опустело — луч упёрся не туда' }
-    const st = [Date.now() - t1]
+    const st = [gameClock.now() - t1]
     if (!(await useAt(bot, L.aim, 'bucket')) || !cnt('lava_bucket')) {
       used.add(keyOf(L.p))
       if (!cnt('water_bucket')) await useAt(bot, sAim, 'bucket')
@@ -685,23 +686,23 @@ async function castOne (session, ctl, p = {}) {
     }
     used.add(keyOf(L.p))
     report.refills++
-    st.push(Date.now() - t1)
+    st.push(gameClock.now() - t1)
     if (!(await useAt(bot, ca.aim, 'lava_bucket'))) {
       await dumpLava()
       await useAt(bot, sAim, 'bucket')
       if (!cnt('water_bucket')) await regainWater()
       return { ok: false, why: 'лава не вылилась в клетку' }
     }
-    st.push(Date.now() - t1)
+    st.push(gameClock.now() - t1)
     let nowC = bot.blockAt(t.c)
     if (!nowC || nowC.name !== 'obsidian') {
-      const tq = Date.now()
-      while (Date.now() - tq < 120 && (bot.blockAt(t.c) || {}).name !== 'obsidian') await sleep(10)
+      const tq = gameClock.now()
+      while (gameClock.now() - tq < 120 && (bot.blockAt(t.c) || {}).name !== 'obsidian') await sleep(10)
       nowC = bot.blockAt(t.c)
     }
     if (nowC && nowC.name === 'obsidian') {
       let back = await useAt(bot, sAim, 'bucket')
-      const win = Date.now() - t1
+      const win = gameClock.now() - t1
       const wb = bot.blockAt(t.w)
       const dbg = [`шаги ${st.join('/')}/${win} мс, w ${wb ? wb.name : '?'}${wb && /water/.test(wb.name) ? C().levelOf(wb) : ''}, вёдра в${cnt('water_bucket')} л${cnt('lava_bucket')} п${cnt('bucket')}`]
       if (process.env.ND_CAST1_DEBUG === '1') { await sleep(300); const wb2 = bot.blockAt(t.w); const ch = []; for (let i = -1; i <= 2; i++) for (let j = -1; j <= 4; j++) { const b = bot.blockAt(g.F(i, j)); if (b && /water/.test(b.name)) ch.push(`F${i},${j}:${C().levelOf(b)}`) } dbg.push(`через 300 мс w ${wb2 ? wb2.name : '?'}; жёлоб ${ch.join(' ') || 'сух'}; вне ${strayWater().length}`) }
@@ -766,7 +767,7 @@ async function castOne (session, ctl, p = {}) {
   const frame = [g.at(0, -1), g.at(1, -1), g.at(-1, 0), g.at(-1, 1), g.at(-1, 2), g.at(2, 0), g.at(2, 1), g.at(2, 2), g.at(0, 3), g.at(1, 3)]
   const done = frame.filter(q => (bot.blockAt(q) || {}).name === 'obsidian').length
   const built = done === 10
-  return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((Date.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`) }
+  return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((gameClock.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`) }
 }
 
 module.exports = { castOne, plan1, judge1, geom1, cells, lakeReach, useAt, PLACE1 }

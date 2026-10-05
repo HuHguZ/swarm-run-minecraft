@@ -156,6 +156,29 @@ function installFake (m, s, extra = {}) {
   const guard = clutch.install({ bot }, { Vec3, PlayerState, faceAim: pick.faceAim, makeBlock: p => block('cobblestone', p), hand, ...extra })
   return { bot, guard }
 }
+
+test('ускоренные часы: готовое ведро проверяется по игровому barAt', () => {
+  const gameClock = require('../src/game-clock')
+  const clock = new gameClock.GameClock({ manual: true })
+  gameClock.activate(clock)
+  clock.advanceTicks(2000)
+  const m = model(p => p.x === -1 || p.y < 0 ? 'stone' : 'air')
+  const { bot, guard } = installFake(m, state(new Vec3(0.5, 20, 0.5)), {
+    inventory: [{ name: 'water_bucket', count: 1, slot: 36 }, { name: 'cobblestone', count: 8, slot: 38 }]
+  })
+  try {
+    bot.game.dimension = 'minecraft:overworld'
+    bot._ndFallGuard = { peak: null, barAt: gameClock.now() }
+    clock.advanceTicks(6)
+    bot.emit('physicsTick'); bot.emit('move')
+    assert.equal(guard.lastDecision.action, 'water')
+    assert.equal(bot.packets.includes('place'), false)
+  } finally {
+    guard.stop()
+    clock.dispose()
+    gameClock.activate(null)
+  }
+})
 test('сторож: position -> look -> slot -> place, prediction до следующей физики', async () => {
   const m = model(p => p.x === -1 || p.y < 0 ? 'stone' : 'air')
   const { bot, guard } = installFake(m, state(new Vec3(0.5, 20, 0.5)))

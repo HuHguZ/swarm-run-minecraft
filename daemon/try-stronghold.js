@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // От ока до горящего портала в Край — на НАСТОЯЩЕЙ крепости своего сервера
 // (server-nether): /locate даёт, где она, сцена ставит тело в 60–80 блоках, а
 // дальше всё делает демон теми же вызовами, что и мозг:
@@ -46,10 +47,10 @@ async function blocksNear (name, radius = 16) {
   return ((((o && o.detail) || {}).blocks) || []).find(b => b.name === name) || null
 }
 async function run (label, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('stronghold', params)
   const d = r.detail || {}
-  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((Date.now() - t0) / 1000)}с — ${d.stopped || ''} ${d.note || ''}`)
+  console.log(`   ${label}: ${r.status}${r.error ? ' ' + r.error : ''} за ${Math.round((gameClock.now() - t0) / 1000)}с — ${d.stopped || ''} ${d.note || ''}`)
   return { r, d }
 }
 
@@ -177,14 +178,14 @@ conn.ready.then(async () => {
       // шагом: сам бот в end_portal не шагает, pathfinder его обходит). Сервер
       // переносит мгновенно (EndPortalBlock: задержки нет). Потом назад.
       console.log('(е) портал переносит в Край')
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       await kit.cmd(`/tp @s ${PORTAL.x + 0.5} ${PORTAL.y + 0.5} ${PORTAL.z + 0.5}`)
       let dim = null
       for (let i = 0; i < 30 && dim !== 'the_end'; i++) { await sleep(300); dim = (await header()).dimension }
       // Событие уходит на «устроился» (позиция + пол), а не на сам пакет: ждать
       // его, прежде чем уводить тело назад, иначе новый переход его отменит.
       let ev = []
-      for (let i = 0; i < 25 && !ev.some(e => e.to === 'the_end'); i++) { await sleep(200); await header(); ev = kit.between(t0, Date.now(), 'dimension') }
+      for (let i = 0; i < 25 && !ev.some(e => e.to === 'the_end'); i++) { await sleep(200); await header(); ev = kit.between(t0, gameClock.now(), 'dimension') }
       check('(е) в Крае: шапка the_end', dim === 'the_end', dim)
       check('(е) событие dimension overworld → the_end, via portal', ev.some(e => e.to === 'the_end' && e.via === 'portal'), ev.map(e => `${e.from}→${e.to} ${e.via}`))
       await kit.cmd('/effect give @s minecraft:slow_falling 30 0 true')
@@ -195,11 +196,11 @@ conn.ready.then(async () => {
     if (ONLY.includes('ж')) {
       // Войти шагом (fill enter:true): встать на рамку и шагнуть к центру.
       console.log('(ж) fill enter:true — шагом в портал')
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const { d } = await run('fill enter', { mode: 'fill', enter: true, timeoutSeconds: 120 })
       let h = await header()
       for (let i = 0; i < 20 && h.dimension !== 'the_end'; i++) { await sleep(300); h = await header() }
-      const ev = kit.between(t0, Date.now(), 'dimension')
+      const ev = kit.between(t0, gameClock.now(), 'dimension')
       check('(ж) entered:true и шапка the_end', d.entered === true && h.dimension === 'the_end', { entered: d.entered, dim: h.dimension, why: d.stopped, enter: d.enter })
       check('(ж) событие dimension → the_end, via portal', ev.some(e => e.to === 'the_end' && e.via === 'portal'), ev.map(e => `${e.from}→${e.to} ${e.via}`))
       const P = d.portal || PORTAL

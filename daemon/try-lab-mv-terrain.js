@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Мост на ходу / ожидание поиска / жемчуг / бег на НАСТОЯЩЕМ рельефе (поток movement, 02.10.2026): нет ли регресса там,
 // где провалов нет или они не те, что на стенде. Ноги: старт S (/spreadplayers на поверхность) → цель T в 40–90 блоках
 // (по XZ, goto без y). Каждая нога проходится всеми режимами по очереди, каждый раз — от того же S (телепорт обратно).
@@ -25,7 +26,7 @@ function rcon (cmd, timeoutMs = 5000) {
     const sock = net.connect(Number(prop('rcon.port')), '127.0.0.1', () => sock.write(pkt(1, 3, prop('rcon.password'))))
     let acc = Buffer.alloc(0)
     let authed = false
-    const t = setTimeout(() => { sock.destroy(); reject(new Error('rcon timeout')) }, timeoutMs)
+    const t = gameClock.wall.setTimeout(() => { sock.destroy(); reject(new Error('rcon timeout')) }, timeoutMs)
     sock.on('data', d => {
       acc = Buffer.concat([acc, d])
       while (acc.length >= 4) {
@@ -35,13 +36,13 @@ function rcon (cmd, timeoutMs = 5000) {
         const body = acc.slice(12, len + 2).toString('utf8')
         acc = acc.slice(len + 4)
         if (!authed) {
-          if (id === -1) { clearTimeout(t); sock.end(); return reject(new Error('rcon auth')) }
+          if (id === -1) { gameClock.wall.clearTimeout(t); sock.end(); return reject(new Error('rcon auth')) }
           authed = true
           sock.write(pkt(2, 2, cmd))
-        } else { clearTimeout(t); sock.end(); return resolve(body) }
+        } else { gameClock.wall.clearTimeout(t); sock.end(); return resolve(body) }
       }
     })
-    sock.on('error', e => { clearTimeout(t); reject(e) })
+    sock.on('error', e => { gameClock.wall.clearTimeout(t); reject(e) })
   })
 }
 
@@ -140,7 +141,7 @@ async function trial (conn, kit, { slot, leg, mode, sx, sz, tx, tz, start = {} }
     const poll = (async () => {
       while (going) {
         const s = await conn.call('status').catch(() => null)
-        if (s && s.state) track.push({ t: Date.now(), y: s.state.pos.y, hp: s.state.health })
+        if (s && s.state) track.push({ t: gameClock.now(), y: s.state.pos.y, hp: s.state.health })
         await sleep(150)
       }
     })()
@@ -149,10 +150,10 @@ async function trial (conn, kit, { slot, leg, mode, sx, sz, tx, tz, start = {} }
     const params = mode === 'def' ? { x: tx, z: tz, range: 2, timeoutSeconds: 90 }
       : { x: tx, z: tz, range: 2, timeoutSeconds: 90, bridge: /bridge/.test(mode), pathWait: mode !== 'base', pearl, sprint: /sprint/.test(mode) }
     const h0 = await hunger().catch(() => null)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     let g = await conn.call('goto', params)
-    for (let i = 0; i < 2 && g.status === 'interrupted' && Date.now() - t0 < 85000; i++) { r.reGoto = (r.reGoto || 0) + 1; g = await conn.call('goto', params) }
-    r.ms = Date.now() - t0
+    for (let i = 0; i < 2 && g.status === 'interrupted' && gameClock.now() - t0 < 85000; i++) { r.reGoto = (r.reGoto || 0) + 1; g = await conn.call('goto', params) }
+    r.ms = gameClock.now() - t0
     await sleep(500)
     going = false
     await poll

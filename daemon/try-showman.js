@@ -1,4 +1,6 @@
 'use strict'
+const gameClock = require('./src/game-clock')
+const { createGameBot } = require('./scene-kit')
 // Человек в бою (showman.js, 2026-09-26) — две сцены на тестовом сервере.
 //
 //  swing  — замер: сбрасывает ли взмах в воздух (arm_animation, bot.swingArm)
@@ -14,15 +16,17 @@
 //
 //   ARENA_A=ws://127.0.0.1:8785 MC_PORT=25568 node try-showman.js swing|mirror [повторов]
 const WebSocket = require('ws')
-const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -36,7 +40,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.ARENA_A || 'ws://127.0.0.1:8785')
 const NA = 'NeuroDown'
 const PORT = Number(process.env.MC_PORT || 25568)
@@ -47,7 +51,7 @@ const N = Number(process.argv[3] || 3)
 
 function join (username) {
   return new Promise((resolve, reject) => {
-    const b = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' })
+    const b = createGameBot({ host: '127.0.0.1', port: PORT, username, version: '1.21.11', auth: 'offline' })
     b.once('spawn', () => resolve(b))
     b.once('error', reject)
     b.once('kicked', r => reject(new Error('kicked ' + JSON.stringify(r))))
@@ -133,8 +137,8 @@ async function mirror () {
   await sleep(800)
   const nd = () => vas.players[NA] && vas.players[NA].entity
   const ndP = () => pet.players[NA] && pet.players[NA].entity
-  const t0 = Date.now()
-  const at = () => ((Date.now() - t0) / 1000).toFixed(2)
+  const t0 = gameClock.now()
+  const at = () => ((gameClock.now() - t0) / 1000).toFixed(2)
   const log = []
   const note = (who, what) => { const line = `${at()}с ${who}: ${what}`; log.push(line); console.log(line) }
   // Зритель: присед, взмахи, кивки NeuroDown.
@@ -142,7 +146,7 @@ async function mirror () {
   let nods = 0
   pet.on('entityCrouch', e => { if (e.username === NA) note('Petya видит', 'NeuroDown присел') })
   pet.on('entitySwingArm', e => { if (e.username === NA) note('Petya видит', 'NeuroDown взмахнул рукой') })
-  const pitchTimer = setInterval(() => {
+  const pitchTimer = gameClock.setInterval(() => {
     const e = ndP()
     if (!e) return
     const n = pc(e.pitch || 0)
@@ -171,9 +175,9 @@ async function mirror () {
   // который бьёт с края и не достаёт.
   note('Vasya', 'держит край руки и машет')
   let hp = vas.health
-  const tWalk = Date.now()
+  const tWalk = gameClock.now()
   let swungAt = 0
-  while (!done && Date.now() - tWalk < 16000 && vas.health > 0) {
+  while (!done && gameClock.now() - tWalk < 16000 && vas.health > 0) {
     const e = nd()
     if (!e) break
     if (vas.health < hp - 0.01) note('Vasya', `получил урон ${(hp - vas.health).toFixed(2)}`)
@@ -183,14 +187,14 @@ async function mirror () {
     const d = Math.hypot(e.position.x - eye.x, e.position.z - eye.z)
     vas.setControlState('forward', d > 4.2)
     vas.setControlState('back', d < 3.3)
-    if (d >= 3.3 && d <= 4.2 && Date.now() - swungAt > 700) { vas.swingArm(); swungAt = Date.now(); note('Vasya', `машет мимо с ${d.toFixed(2)} бл. по земле`) }
+    if (d >= 3.3 && d <= 4.2 && gameClock.now() - swungAt > 700) { vas.swingArm(); swungAt = gameClock.now(); note('Vasya', `машет мимо с ${d.toFixed(2)} бл. по земле`) }
     await sleep(50)
   }
   vas.setControlState('back', false)
   vas.setControlState('forward', false)
   const res = await fight
   await sleep(3500) // победный жест — рефлекс после боя
-  clearInterval(pitchTimer)
+  gameClock.clearInterval(pitchTimer)
   const d = res.detail || {}
   console.log('БОЙ:', res.status, d.killed ? 'убил ' + d.killed : d.lost || d.timeout || '', 'хп', d.hp)
   console.log('HUMAN:', JSON.stringify(d.human))

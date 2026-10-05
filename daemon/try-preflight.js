@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Снаряжение на входе в долгое намерение: сцена для daemon/src/preflight.js.
 //
 // До этой правки тело уходило в работу в том, что случайно было на нём.
@@ -70,7 +71,7 @@ const mark = () => heard.length
 const since = (n, type) => heard.slice(n).filter(e => !type || e.type === type)
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
@@ -78,7 +79,7 @@ ws.on('message', raw => {
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -110,9 +111,9 @@ const offHandName = s => {
 }
 
 async function step (label, method, params) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call(method, params).catch(e => ({ status: 'RPC', error: e.message }))
-  const ms = Date.now() - t0
+  const ms = gameClock.now() - t0
   const tail = r.error ? ` ← ${r.error}` : ''
   console.log(`  ${label.padEnd(28)} ${String(r.status).padEnd(11)} ${ms} мс${tail}`)
   if (r.gear) console.log(`  ${''.padEnd(28)} gear ${JSON.stringify(r.gear)}`)
@@ -329,8 +330,8 @@ async function caseRecoverDown () {
 
 async function drainTo (target, timeoutMs = 120000) {
   await cmd('/effect give @s minecraft:hunger 120 20 true')
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + timeoutMs
+  while (gameClock.now() < deadline) {
     const s = await state()
     if (s.food <= target) break
     await sleep(500)
@@ -381,18 +382,18 @@ async function caseInterrupt (kind, igrok = null) {
   await sleep(350)
   const before = await state()
   const bare = !!before.inventory.iron_chestplate && !(before.armor && before.armor.torso)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const mining = call('mine', { block: 'stone', count: 1, radius: 8, timeoutSeconds: 30 })
     .catch(e => ({ status: 'RPC', error: e.message }))
   await sleep(500)
-  const sentAt = Date.now()
+  const sentAt = gameClock.now()
   const eatingWhenSent = !eatDone
   if (kind === 'chat') igrok.bot.chat('стой, ты куда')
   else call('say', { text: '/damage @s 1 minecraft:generic' }).catch(() => {})
   const r = await mining
-  const answeredMs = Date.now() - sentAt
+  const answeredMs = gameClock.now() - sentAt
   const ate = await eating
-  console.log(`  mine ${r.status} через ${Date.now() - t0} мс, после ${kind} ${answeredMs} мс; error ${r.error || '-'}; notStarted ${r.notStarted}`)
+  console.log(`  mine ${r.status} через ${gameClock.now() - t0} мс, после ${kind} ${answeredMs} мс; error ${r.error || '-'}; notStarted ${r.notStarted}`)
   console.log(`  gear ${JSON.stringify(r.gear || null)}`)
 
   const landed = gate('кираса в рюкзаке и не на теле перед mine', bare,

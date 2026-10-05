@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Застой у лавы (живая арена 2026-09-26: лава под ним, он на блоке посреди
 // лавы, второй у края; две минуты оба стояли — «застой, ничья»). NeuroDown на
 // блоке посреди лавы 5×5, NeuroDown2 в DIST блоках на полу. Оба дерутся
@@ -6,12 +7,15 @@
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-lavaisland.js
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -25,7 +29,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }
@@ -50,7 +54,7 @@ async function round (k) {
   await cmd(`/tp NeuroDown2 ${X + 0.5} ${Y} ${Z + DIST + 0.5} 180 0`)
   for (const who of ['NeuroDown', 'NeuroDown2']) { await cmd(`/effect give ${who} minecraft:instant_health 1 10 true`); await cmd(`/effect give ${who} minecraft:saturation 1 20 true`) }
   await sleep(1500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let first = 0
   const hp = { a: 20, b: 20 }
   let polling = true
@@ -59,7 +63,7 @@ async function round (k) {
       try {
         const ha = ((await A.call('status')).state || {}).health
         const hb = ((await B.call('status')).state || {}).health
-        if (!first && ((ha != null && ha < hp.a - 0.4) || (hb != null && hb < hp.b - 0.4))) first = Date.now() - t0
+        if (!first && ((ha != null && ha < hp.a - 0.4) || (hb != null && hb < hp.b - 0.4))) first = gameClock.now() - t0
         if (ha != null) hp.a = ha
         if (hb != null) hp.b = hb
       } catch {}
@@ -98,6 +102,6 @@ async function round (k) {
     process.exitCode = 1
   } finally {
     A.ws.close(); B.ws.close()
-    setTimeout(() => process.exit(process.exitCode || 0), 300)
+    gameClock.wall.setTimeout(() => process.exit(process.exitCode || 0), 300)
   }
 })()

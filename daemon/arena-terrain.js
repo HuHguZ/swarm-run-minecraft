@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Рельеф арены: ямы, из которых не выпрыгнуть (3-4 блока), лавовые ямы,
 // бассейн, возвышенности и укрытия. Каждый раунд — по-новому (seed), точки
 // появления бойцов и полоса между ними свободны. Позиционная война: столкнуть в
@@ -25,7 +26,7 @@ async function clearTerrain (cmd, fillBox, { X, Y, Z, R, top = Y + 8 }) {
 
 // Построить рельеф. avoid — точки [x, z], вокруг которых (радиус 4) и между
 // которыми (полоса шириной 3) ничего не ставим: бойцы появляются там.
-async function buildTerrain (cmd, { X, Y, Z, R, seed = Date.now(), avoid = [] }) {
+async function buildTerrain (cmd, { X, Y, Z, R, seed = gameClock.wall.now(), avoid = [] }) {
   const rand = rng(seed)
   const ri = (a, b) => a + Math.floor(rand() * (b - a + 1))
   const taken = []

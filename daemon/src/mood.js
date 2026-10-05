@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const fs = require('fs')
 const path = require('path')
 
@@ -46,7 +47,7 @@ class Mood {
   constructor (session, memoryDir) {
     this.session = session
     this.file = memoryDir ? path.join(memoryDir, 'mood.json') : null
-    this.state = { mood: BASE_MOOD, at: Date.now(), players: {} }
+    this.state = { mood: BASE_MOOD, at: gameClock.wall.now(), players: {} }
     this.load()
     this.saveTimer = null
   }
@@ -55,13 +56,13 @@ class Mood {
     if (!this.file) return
     try {
       const s = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (s && typeof s.mood === 'number') this.state = { mood: s.mood, at: s.at || Date.now(), players: s.players || {} }
+      if (s && typeof s.mood === 'number') this.state = { mood: s.mood, at: s.at || gameClock.wall.now(), players: s.players || {} }
     } catch {}
   }
 
   save () {
     if (!this.file || this.saveTimer) return
-    this.saveTimer = setTimeout(() => {
+    this.saveTimer = gameClock.setTimeout(() => {
       this.saveTimer = null
       try { fs.writeFileSync(this.file, JSON.stringify(this.state, null, 2)) } catch {}
     }, SAVE_MS)
@@ -69,7 +70,7 @@ class Mood {
 
   // Остывание к нейтральному, по прошедшему времени.
   decay () {
-    const now = Date.now()
+    const now = gameClock.wall.now()
     const dtMin = (now - (this.state.at || now)) / 60000
     if (dtMin <= 0) return
     this.state.mood = BASE_MOOD + (this.state.mood - BASE_MOOD) * Math.exp(-dtMin / MOOD_TAU_MIN)
@@ -96,7 +97,7 @@ class Mood {
       p.affinity = clamp(p.affinity + aff)
       if (kind === 'подарок') p.gifts++
       if (kind === 'ударил') p.hits++
-      p.why = [...(p.why || []), { kind, aff, at: Date.now() }].slice(-8)
+      p.why = [...(p.why || []), { kind, aff, at: gameClock.wall.now() }].slice(-8)
     }
     this.state.mood = clamp(this.state.mood + mood)
     this.save()
@@ -117,7 +118,7 @@ class Mood {
     this.decay()
     const bot = this.session.bot
     const p = this.person(name)
-    const now = Date.now()
+    const now = gameClock.wall.now()
     p.calls = (p.calls || []).filter(t => now - t < 180000)
     p.calls.push(now)
     const aff = p.affinity

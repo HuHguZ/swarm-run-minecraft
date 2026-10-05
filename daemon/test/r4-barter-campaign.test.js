@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 function fakeDate (clock) { return class extends Date { static now () { return clock.t } } }
 
 function campaign (state, situation, handle = () => ({}), { logs = null, env = {}, argv = [], clock = null, onStatus = null } = {}) {
@@ -41,7 +42,7 @@ function campaign (state, situation, handle = () => ({}), { logs = null, env = {
         if (h.recoverGuard) recoverGuard = h.recoverGuard; if (h.toSurface) toSurface = h.toSurface; },
       init: () => { state = testState; sit = testSituation; }
     }
-  `, Object.assign(context, { testState: state, testSituation: situation }))
+  `, withClockFixture(Object.assign(context, { testState: state, testSituation: situation })))
   context.module.exports.init()
   return context.module.exports
 }

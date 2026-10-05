@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория этапов — возврат брошенных очей (stronghold.js throwEye →
 // fetchDrop). Тело на суше в точке AT (верхний мир), 8 бросков подряд вызовом
 // кампании/мозга stronghold {mode: 'throw'}; каждый следующий — оттуда, где
@@ -27,7 +28,7 @@ const have = async n => ((await header()).inventory || {})[n] || 0
 conn.ready.then(async () => {
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const res = { at: new Date().toISOString(), where: AT, throws: [] }
   try {
     await kit.cmd('/gamemode survival')
@@ -63,8 +64,8 @@ conn.ready.then(async () => {
     res.broke = th.filter(t => t.broke).length
     res.back = th.filter(t => t.back).length
     res.lost = th.filter(t => !t.back && !t.broke).length
-    res.deaths = kit.between(t0, Date.now(), 'death').length
-    res.seconds = Math.round((Date.now() - t0) / 1000)
+    res.deaths = kit.between(t0, gameClock.now(), 'death').length
+    res.seconds = Math.round((gameClock.now() - t0) / 1000)
     fs.appendFileSync(OUT, JSON.stringify(res) + '\n')
     console.log(`\nИТОГ: брошено ${res.thrown}, вернулось ${res.back}, разбилось ${res.broke}, потеряно ${res.lost}, смертей ${res.deaths}, ${res.seconds} с`)
     try { await call('stop') } catch {}

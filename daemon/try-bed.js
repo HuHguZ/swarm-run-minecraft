@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Ночь с кроватью (src/bedtime.js): (а) сумерки — поставить кровать, лечь с
 // первым тиком ночи, утром забрать; (б) рядом мобы — сервер не даст лечь
 // (Monster в коробке ±8/±5 от изголовья), значит бункер на 6 вниз, сон там,
@@ -16,13 +17,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(350) }
 
 let failures = 0
@@ -71,11 +72,11 @@ async function main () {
     await cmd('/give @s minecraft:white_bed 1')
     await cmd('/time set 12150')
     await sleep(800)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('sleep', { untilMorning: true })
     const d = r.detail || {}
     check('(а) лёг в сумерки с первым тиком ночи', d.sleeping === true, brief(r))
-    check('(а) ночь проскочила', d.morning === true, `за ${Math.round((Date.now() - t0) / 1000)} с`)
+    check('(а) ночь проскочила', d.morning === true, `за ${Math.round((gameClock.now() - t0) / 1000)} с`)
     check('(а) кровать забрал утром', d.tookBed === true && beds(r.state) === 1, `в рюкзаке кроватей ${beds(r.state)}`)
   }
 
@@ -87,12 +88,12 @@ async function main () {
     await cmd(`/summon minecraft:zombie ${X + 6} ${Y} ${Z + 1} {NoAI:1b,PersistenceRequired:1b}`)
     await cmd(`/summon minecraft:zombie ${X - 5} ${Y} ${Z - 4} {NoAI:1b,PersistenceRequired:1b}`)
     await sleep(1000)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('sleep', { untilMorning: true })
     const d = r.detail || {}
     check('(б) ушёл в бункер от мобов', !!(d.bunker && d.bunker.depth >= 5), brief(r))
     check('(б) уснул под землёй', d.sleeping === true)
-    check('(б) ночь проскочила', d.morning === true, `за ${Math.round((Date.now() - t0) / 1000)} с`)
+    check('(б) ночь проскочила', d.morning === true, `за ${Math.round((gameClock.now() - t0) / 1000)} с`)
     check('(б) кровать с собой', d.tookBed === true && beds(r.state) === 1, `кроватей ${beds(r.state)}`)
     const y = r.state && r.state.pos ? r.state.pos.y : null
     check('(б) вылез наверх', d.climbed === true && y >= Y - 1, `y=${y}`)

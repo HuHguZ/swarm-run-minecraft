@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // A second engine for the same body, standing NEXT TO movement.js instead of
 // replacing it. movement.js is the floor the other six modules stand on, and
 // swapping the pathfinder underneath them blind costs a day of debugging in
@@ -170,10 +171,10 @@ async function unwedge (bot, nxgGoal) {
   try {
     await Promise.race([
       pf.cleanupAll(goal),
-      new Promise(resolve => { timer = setTimeout(resolve, 3000) })
+      new Promise(resolve => { timer = gameClock.setTimeout(resolve, 3000) })
     ])
   } catch {} finally {
-    if (timer) clearTimeout(timer)
+    if (timer) gameClock.clearTimeout(timer)
   }
 }
 
@@ -279,11 +280,11 @@ function installShim (bot, pf) {
       await Promise.race([
         rawGoto(translated),
         new Promise(resolve => {
-          timer = setTimeout(() => { expired = true; stopPathing(bot); resolve() }, limit)
+          timer = gameClock.setTimeout(() => { expired = true; stopPathing(bot); resolve() }, limit)
         })
       ])
     } finally {
-      if (timer) clearTimeout(timer)
+      if (timer) gameClock.clearTimeout(timer)
       await unwedge(bot, translated)
     }
     if (reachedGoal(bot, goal)) return
@@ -323,14 +324,14 @@ class Movements {
 async function escapeWater (bot, ctl, { timeoutMs = 25000 } = {}) {
   if (!inWater(bot)) return { ok: true, wasInWater: false }
 
-  const deadline = Date.now() + timeoutMs
+  const deadline = gameClock.now() + timeoutMs
   const target = findNearestLand(bot, 24)
 
   if (target && !ctl.aborted) {
     try {
       await bot.pathfinder.goto(
         new legacy.goals.GoalNearXZ(target.x, target.z, 1),
-        { timeoutMs: Math.max(4000, Math.min(timeoutMs, deadline - Date.now())) })
+        { timeoutMs: Math.max(4000, Math.min(timeoutMs, deadline - gameClock.now())) })
     } catch {}
     if (!inWater(bot)) {
       return { ok: true, wasInWater: true, target: xyz(target), via: 'pathfinder' }
@@ -342,7 +343,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000 } = {}) {
   stopPathing(bot)
   let aimed = target
   try {
-    while (Date.now() < deadline && !ctl.aborted && inWater(bot)) {
+    while (gameClock.now() < deadline && !ctl.aborted && inWater(bot)) {
       aimed = findNearestLand(bot, 24)
       if (aimed) {
         await bot.lookAt(aimed.offset(0.5, 1.6, 0.5), true)
@@ -375,7 +376,7 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
   let lastError = null
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (ctl.aborted) return { ok: false, error: 'прервано' }
-    if (deadline && Date.now() >= deadline) return { ok: false, error: 'время вышло', outOfTime: true }
+    if (deadline && gameClock.now() >= deadline) return { ok: false, error: 'время вышло', outOfTime: true }
 
     if (inWater(bot)) {
       const esc = await escapeWater(bot, ctl)
@@ -389,9 +390,9 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
     ]
     let timer = null
     if (deadline) {
-      const left = Math.max(1000, deadline - Date.now())
+      const left = Math.max(1000, deadline - gameClock.now())
       racers.push(new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error('время вышло'), { outOfTime: true })), left)
+        timer = gameClock.setTimeout(() => reject(Object.assign(new Error('время вышло'), { outOfTime: true })), left)
       }))
     }
 
@@ -406,7 +407,7 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
       await unstick(bot)
     } finally {
       guard.stop()
-      if (timer) clearTimeout(timer)
+      if (timer) gameClock.clearTimeout(timer)
     }
   }
   return { ok: false, error: lastError ? lastError.message : 'не дошёл' }

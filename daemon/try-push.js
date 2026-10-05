@@ -1,16 +1,20 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Столкнуть в яму (edges.pushPlan): площадка в небе с дырой 3×3, NeuroDown2
 // стоит в 1-2.5 блоках от края дыры (не отвечает), NeuroDown начинает с
 // разных сторон. Считаем: сбил ли его в дыру за 25 с и не упал ли сам.
 //   ND_WS=ws://127.0.0.1:8781 ND_WS2=ws://127.0.0.1:8782 node try-push.js [раз]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -24,7 +28,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.ND_WS || 'ws://127.0.0.1:8781')
 const B = client(process.env.ND_WS2 || 'ws://127.0.0.1:8782')
 const say = async (t) => { await A.call('say', { text: t }); await sleep(200) }
@@ -52,17 +56,17 @@ async function trial (i) {
   await say('/effect give NeuroDown2 minecraft:instant_health 1 5 true')
   await say('/effect give NeuroDown2 minecraft:resistance 60 1 true')
   await sleep(2500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const fight = A.call('fight', { target: 'NeuroDown2', allowPlayer: true, timeoutSeconds: 25, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
   let his = null; let mine = null; let killed = false
-  while (Date.now() - t0 < 26000) {
+  while (gameClock.now() - t0 < 26000) {
     const [a, b] = await Promise.all([A.call('status').catch(() => null), B.call('status').catch(() => null)])
     const ay = a && a.state && a.state.pos ? a.state.pos.y : Y
     const by = b && b.state && b.state.pos ? b.state.pos.y : Y
     const bAlive = !!(b && b.state && b.state.health > 0)
     if (!bAlive) { killed = true; break }
-    if (by < Y - 3 && his == null) his = Math.round((Date.now() - t0) / 100) / 10
-    if (ay < Y - 3 && mine == null) mine = Math.round((Date.now() - t0) / 100) / 10
+    if (by < Y - 3 && his == null) his = Math.round((gameClock.now() - t0) / 100) / 10
+    if (ay < Y - 3 && mine == null) mine = Math.round((gameClock.now() - t0) / 100) / 10
     if (his != null || mine != null) break
     await sleep(200)
   }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Сквозная лаборатория потока nether-end: «вход в Ад → вход в Энд» на новом мире (farm.js up N --fresh --random или
 // --seeds). Подготовка — только до входа в Ад (ферма, команды): /random reset, выживание, normal, keep_inventory, набор
 // «как после верхнего мира» (KIT=std|light), утро. Портал верхнего мира тело строит само (RPC portal из 10 обсидиана в
@@ -125,7 +126,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   await setup()
   // Портал верхнего мира — сам (этап portal кампании: тот же RPC), кровать у него — точка возрождения (этап prep).
   let pr = null
@@ -148,10 +149,10 @@ async function main () {
   let map = null
   let mapPlaces = null
   if (process.env.MAP === '1' && est && process.env.FARM_SLOT) {
-    const tm = Date.now()
+    const tm = gameClock.now()
     const m = await require('./try-lab-ne-map').netherMap(Number(process.env.FARM_SLOT), est, { bastions: Number(process.env.MAP_BASTIONS || 2) }).catch(e => ({ error: e.message, places: {} }))
     mapPlaces = m.places
-    map = { seconds: Math.round((Date.now() - tm) / 1000), est, error: m.error,
+    map = { seconds: Math.round((gameClock.now() - tm) / 1000), est, error: m.error,
       bastions: (m.bastions || []).map(b => ({ x: b.x, z: b.z, dist: b.dist, type: b.type, gold: (b.gold || []).length, bb: b.bbAll || undefined })), fortressBB: (m.fortress && m.fortress.bbAll) || undefined,
       fortress: m.fortress ? { x: m.fortress.x, z: m.fortress.z, dist: m.fortress.dist, spawner: m.fortress.spawner } : null, route: m.route || null }
     console.log('карта', JSON.stringify(map))
@@ -171,7 +172,7 @@ async function main () {
   // (nether-route, ND_NE_ROUTE=1 в CENV/окружении демона). Снимается до входа в Ад, как и карта.
   let gridInfo = null
   if (process.env.GRID === '1' && process.env.FARM_SLOT && est && mapPlaces) {
-    const tg = Date.now()
+    const tg = gameClock.wall.now()
     try {
       const M = require('./try-lab-ne-map')
       const pts = [est]
@@ -201,7 +202,7 @@ async function main () {
       const r = await M.netherGrid(Number(process.env.FARM_SLOT), rects, {})
       const NG = require('./src/nether-grid')
       NG.save(path.join(__dirname, '..', 'farm', `memory-${process.env.FARM_SLOT}`), r.grid, { pts, rects: rects.length })
-      gridInfo = { seconds: Math.round((Date.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, box: r.box, cells: r.grid.data.length, pts }
+      gridInfo = { seconds: Math.round((gameClock.wall.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, box: r.box, cells: r.grid.data.length, pts }
     } catch (e) { gridInfo = { error: e.message } }
     console.log('сетка', JSON.stringify(gridInfo))
   }
@@ -227,7 +228,7 @@ async function main () {
     const rec = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: true, stoppedBy: 'в Ад не вошёл на подготовке', portal: String(pr && (pr.error || (pr.detail && pr.detail.note)) || '').slice(0, 200), enter: String(en && (en.error || (en.detail && (en.detail.note || en.detail.stopped))) || '').slice(0, 200) }
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
     console.log(JSON.stringify(rec))
-    try { await Promise.race([call('disconnect', { reason: 'сцена окончена' }), sleep(10000)]) } catch {}
+    try { await Promise.race([call('disconnect', { reason: 'сцена окончена' }), gameClock.wall.sleep(10000)]) } catch {}
     process.exit(0)
   }
   const entry = s0.pos ? { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) } : null
@@ -237,7 +238,7 @@ async function main () {
   }
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
   try { fs.writeFileSync(clog, '') } catch {}
-  const tc = Date.now()
+  const tc = gameClock.now()
   const child = spawn(process.execPath, [CAMPAIGN, ...(process.env.STAGES ? [process.env.STAGES] : [])], {
     cwd: __dirname,
     env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ...(ENDERMEN === '1' ? { ND_ENDERMEN: '1' } : {}), ...(process.env.ENDKIT === '1' ? {} : { ND_ENDKIT: '0' }), ND_WATCHDOG_MIN: String(MINUTES + 5), ...(process.env.EYES ? { ND_EYES_NEED: process.env.EYES } : {}), ...CENV },
@@ -259,15 +260,15 @@ async function main () {
   // Отметки кусков (минуты от входа в Ад): увидел крепость/бастион, золото, стержни, жемчуг, очи, выход наверх,
   // крепость Края, комната — по памяти тела и рюкзаку раз в 20 с.
   const marks = {}
-  const mark = k => { if (marks[k] == null) marks[k] = Math.round((Date.now() - tc) / 6000) / 10 }
+  const mark = k => { if (marks[k] == null) marks[k] = Math.round((gameClock.now() - tc) / 6000) / 10 }
   let lastDim = 'the_nether'
   const until = tc + MINUTES * 60000
-  while (Date.now() < until) {
+  while (gameClock.now() < until) {
     await sleep(5000)
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
-    if (Date.now() - lastCheck > 20000 || exited !== null) {
-      lastCheck = Date.now()
+    if (gameClock.now() - lastCheck > 20000 || exited !== null) {
+      lastCheck = gameClock.now()
       const s = await status()
       const inv = s.inventory || {}
       best = {
@@ -287,7 +288,7 @@ async function main () {
       if (pl['спавнер блейзов']) mark('spawner')
       if (pl['крепость']) mark('stronghold')
       if (pl['портал в Край']) mark('room')
-      if (s.dimension === 'the_end') { ok = true; reachedAt = Math.round((Date.now() - tc) / 6000) / 10; stoppedBy = 'в Энде'; break }
+      if (s.dimension === 'the_end') { ok = true; reachedAt = Math.round((gameClock.now() - tc) / 6000) / 10; stoppedBy = 'в Энде'; break }
     }
     if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
     const deaths = deathLines(size)
@@ -309,7 +310,7 @@ async function main () {
     seed: seedOf(),
     kit: KIT_NAME,
     ok,
-    minutes: Math.round((Date.now() - tc) / 6000) / 10,
+    minutes: Math.round((gameClock.now() - tc) / 6000) / 10,
     reachedAt,
     stoppedBy,
     exitCode: exited,
@@ -343,7 +344,7 @@ async function main () {
   rec.tail = text.split('\n').filter(l => /ВЕХА|БЛОКЕР|итог этапа|этап упал|умер|прогон упал|РИСК|сторож|нет доступного|выработан|стержней:|жемчуг:|бастион|крепост/.test(l)).slice(-16).map(l => l.slice(0, 220))
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec))
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-run окончена' }), sleep(10000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-run окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

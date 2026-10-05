@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Один и тот же набор маршрутов, два разных pathfinder'а под телом.
 //
 // Прогон меряет ровно те пять случаев, ради которых в movement.js написаны
@@ -46,14 +47,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const pos = async () => (await call('status')).state.pos
 
 async function cmd (text) {
@@ -243,10 +244,10 @@ async function run (route) {
   const ok = before.x === route.from.x && before.z === route.from.z && Math.abs(before.y - route.from.y) <= 1
   if (!ok) console.log(`   ! стартовал не там, где думал: ${JSON.stringify(before)} вместо ${JSON.stringify(route.from)}`)
 
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const r = await call('goto', { ...route.to, timeoutSeconds: route.seconds })
     .catch(e => ({ status: 'RPC', error: e.message }))
-  const secs = Math.round((Date.now() - t0) / 100) / 10
+  const secs = Math.round((gameClock.now() - t0) / 100) / 10
 
   const after = r.state ? r.state.pos : await pos()
   const detail = r.detail || {}

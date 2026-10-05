@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals, Movements } = require('mineflayer-pathfinder')
 const { xyz, unstick } = require('./movement')
@@ -61,7 +62,7 @@ const V = {
 const HORIZ = ['north', 'east', 'south', 'west']
 const JOB = 'build'
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => new Promise(resolve => gameClock.setTimeout(resolve, ms))
 const k3 = p => `${p.x},${p.y},${p.z}`
 
 // ---------------------------------------------------------------- world bits
@@ -489,7 +490,7 @@ async function peekChests (session, ctl, radius = 12, max = 6) {
     if (ctl.aborted || seen.length >= max) break
     if (done.has(k3(pos))) continue
     try {
-      const { block, win } = await c.findAndOpen(session, ctl, pos, Date.now() + 20000)
+      const { block, win } = await c.findAndOpen(session, ctl, pos, gameClock.now() + 20000)
       const shut = c.guardWindow(ctl, win)
       try {
         const contents = {}
@@ -515,7 +516,7 @@ async function takeFromChests (session, ctl, chests, want) {
     const names = Object.keys(want).filter(n => want[n] > 0 && ch.contents[n])
     if (!names.length) continue
     try {
-      const { win } = await c.findAndOpen(session, ctl, ch.at, Date.now() + 20000)
+      const { win } = await c.findAndOpen(session, ctl, ch.at, gameClock.now() + 20000)
       const shut = c.guardWindow(ctl, win)
       try {
         const caps = {}
@@ -673,15 +674,15 @@ const insideBox = (p, box) => p.x >= box.x1 && p.x <= box.x2 && p.z >= box.z1 &&
 
 function waitLook (bot) {
   return new Promise(resolve => {
-    const t = setTimeout(done, 160)
-    function done () { clearTimeout(t); bot.removeListener('move', done); resolve() }
+    const t = gameClock.setTimeout(done, 160)
+    function done () { gameClock.clearTimeout(t); bot.removeListener('move', done); resolve() }
     bot.once('move', done)
   })
 }
 
 async function waitChange (bot, pos, before, ms) {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + ms
+  while (gameClock.now() < deadline) {
     const b = bot.blockAt(pos)
     if (b && b.name !== before) return b
     await sleep(50)
@@ -880,8 +881,8 @@ async function descend (bot, tower, ctx) {
       await equipBestTool(bot, below)
       await withTimeout(bot.dig(below, true), 8000, 'леса не ломаются')
     } catch { break }
-    const t0 = Date.now()
-    while (Date.now() - t0 < 1500 && bot.entity.position.y > below.position.y + 0.05) await sleep(50)
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 1500 && bot.entity.position.y > below.position.y + 0.05) await sleep(50)
   }
   await sweepTower(bot, tower, ctx)
 }
@@ -910,13 +911,13 @@ async function sweepTower (bot, tower, ctx) {
 
 async function execute (session, ctl, job, cells, { deadline }) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const byKey = new Map(cells.map(c => [c.key, c]))
   const box = boxOf(cells)
   const stats = { placed: 0, dug: 0, scaffold: 0, redo: 0 }
   // Куда ушло время: без этого «медленно» не разобрать на ходьбу и на руки.
   const clock = { walk: 0, walks: 0, place: 0, dig: 0 }
-  const timed = async (k, fn) => { const t = Date.now(); try { return await fn() } finally { clock[k] += Date.now() - t } }
+  const timed = async (k, fn) => { const t = gameClock.now(); try { return await fn() } finally { clock[k] += gameClock.now() - t } }
   const skipped = new Map()
   const tries = new Map()
   const missing = new Set()
@@ -1013,7 +1014,7 @@ async function execute (session, ctl, job, cells, { deadline }) {
   }
 
   while (!ctl.aborted) {
-    if (Date.now() > deadline - (tower ? 9000 : 2500)) { stopped = 'время вышло'; break }
+    if (gameClock.now() > deadline - (tower ? 9000 : 2500)) { stopped = 'время вышло'; break }
     const pending = refresh()
     if (!pending.length) break
     const phase = Math.min(...pending.map(c => c.phase))
@@ -1220,7 +1221,7 @@ async function execute (session, ctl, job, cells, { deadline }) {
     missing: missing.size ? [...missing] : undefined,
     walledIn: walledIn || undefined,
     stopped,
-    seconds: Math.round((Date.now() - t0) / 1000),
+    seconds: Math.round((gameClock.now() - t0) / 1000),
     timing: { walk: Math.round(clock.walk / 1000), walks: clock.walks, place: Math.round(clock.place / 1000), dig: Math.round(clock.dig / 1000) }
   }
 }
@@ -1237,9 +1238,9 @@ function onceSignEditor (bot, ms) {
   let timer = null
   const p = new Promise(resolve => { settle = resolve })
   const on = packet => { cleanup(); settle(packet) }
-  const cleanup = () => { clearTimeout(timer); bot._client.removeListener('open_sign_entity', on) }
+  const cleanup = () => { gameClock.clearTimeout(timer); bot._client.removeListener('open_sign_entity', on) }
   bot._client.on('open_sign_entity', on)
-  timer = setTimeout(() => { cleanup(); settle(null) }, ms)
+  timer = gameClock.setTimeout(() => { cleanup(); settle(null) }, ms)
   p.cancel = () => { cleanup(); settle(null) }
   return p
 }
@@ -1291,8 +1292,8 @@ async function writeSign (bot, pos, lines, { opened = null } = {}) {
   if (!pk) return { ok: false, why: 'сервер не открыл табличку для записи (воском покрыта или её правит другой)' }
   const block = bot.blockAt(pos)
   bot.updateSign(block, want.join('\n'), pk.isFrontText === false)
-  const deadline = Date.now() + 2000
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + 2000
+  while (gameClock.now() < deadline) {
     const t = signText(bot, pos)
     const side = t && (pk.isFrontText === false ? t.back : t.front)
     if (side && want.every((s, i) => (side[i] || '') === s)) return { ok: true, side: pk.isFrontText === false ? 'back' : 'front' }
@@ -1488,7 +1489,7 @@ async function preview (session, ctl, p) {
 async function build (session, ctl, p) {
   const bot = session.bot
   p = cleanParams(p)
-  const deadline = Date.now() + Math.min(600, p.timeoutSeconds ?? 240) * 1000
+  const deadline = gameClock.now() + Math.min(600, p.timeoutSeconds ?? 240) * 1000
   const pr = await prepare(session, ctl, p)
   if (pr.refused) return { mode: 'build', built: false, ...pr.refused }
   const { plan, kind, spec, front, origin, site, L, cells, tally: t, lift, stock } = pr

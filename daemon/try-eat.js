@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Why this scene exists: diamond4.log has two "поесть RPC null" lines and not a
 // word about what went wrong, because eat() rejected the WebSocket call and the
 // run printed only `detail`. So the first duty of this file is to print the
@@ -32,14 +33,14 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
 })
 
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 
 async function cmd (text) {
   await call('say', { text })
@@ -107,8 +108,8 @@ async function give (...gives) {
 // autopilot eats every second and would undo the drain as fast as it happens.
 async function drainTo (target, timeoutMs = 120000) {
   await cmd(`/effect give @s minecraft:hunger 120 20 true`)
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  const deadline = gameClock.now() + timeoutMs
+  while (gameClock.now() < deadline) {
     const s = await state()
     if (s.food <= target) break
     await sleep(500)

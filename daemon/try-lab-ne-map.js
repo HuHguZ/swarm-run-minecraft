@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Знание карты Ада для сцен фермы (поток nether-end, 02.10): «как из копии этого же мира» — AGENTS.md разрешает основному
 // телу знание карты из копии мира (бастионы, точки обзора, крепость). Здесь та же запись, снятая с правды фермы:
 //   бастионы — /locate из центров 9 регионов (сетка Ада 432), forceload, save-all, NBT начала постройки (structures.starts:
@@ -16,7 +17,7 @@ const nbt = require('prismarine-nbt')
 const bp = require('./src/bastion-pieces')
 
 const FARM = path.join(__dirname, '..', 'farm')
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => gameClock.wall.sleep(ms)
 
 function props (slot) {
   const t = fs.readFileSync(path.join(FARM, `server-${slot}`, 'server.properties'), 'utf8')
@@ -34,7 +35,7 @@ function rconOnce (port, pass, cmd, timeoutMs = 15000) {
     const sock = net.connect(port, '127.0.0.1', () => sock.write(pkt(1, 3, pass)))
     let acc = Buffer.alloc(0)
     let authed = false
-    const t = setTimeout(() => { sock.destroy(); reject(new Error('rcon timeout')) }, timeoutMs)
+    const t = gameClock.wall.setTimeout(() => { sock.destroy(); reject(new Error('rcon timeout')) }, timeoutMs)
     sock.on('data', d => {
       acc = Buffer.concat([acc, d])
       while (acc.length >= 4) {
@@ -44,13 +45,13 @@ function rconOnce (port, pass, cmd, timeoutMs = 15000) {
         const body = acc.slice(12, len + 2).toString('utf8')
         acc = acc.slice(len + 4)
         if (!authed) {
-          if (id === -1) { clearTimeout(t); sock.end(); return reject(new Error('rcon auth failed')) }
+          if (id === -1) { gameClock.wall.clearTimeout(t); sock.end(); return reject(new Error('rcon auth failed')) }
           authed = true
           sock.write(pkt(2, 2, cmd))
-        } else { clearTimeout(t); sock.end(); return resolve(body) }
+        } else { gameClock.wall.clearTimeout(t); sock.end(); return resolve(body) }
       }
     })
-    sock.on('error', e => { clearTimeout(t); reject(e) })
+    sock.on('error', e => { gameClock.wall.clearTimeout(t); reject(e) })
   })
 }
 function rconOf (slot) {
@@ -352,7 +353,7 @@ async function netherGrid (slot, rects, { y1 = 8, y2 = 122, waitS = 150, log = (
   const xs = list.map(c => c[0]); const zs = list.map(c => c[1])
   const box = [Math.min(...xs) * 16, y1, Math.min(...zs) * 16, Math.max(...xs) * 16 + 15, y2, Math.max(...zs) * 16 + 15]
   const grid = new NG.Grid(NG.headerOf(box))
-  const t0 = Date.now()
+  const t0 = gameClock.wall.now()
   // forceload — по прямоугольникам коридоров (≤ 256 чанков на команду).
   const fl = async add => {
     for (const [ax, az, bx, bz] of rects) {
@@ -368,7 +369,7 @@ async function netherGrid (slot, rects, { y1 = 8, y2 = 122, waitS = 150, log = (
   }
   await fl(true)
   const done = new Set()
-  for (let k = 0; Date.now() - t0 < waitS * 1000 && done.size < list.length; k++) {
+  for (let k = 0; gameClock.wall.now() - t0 < waitS * 1000 && done.size < list.length; k++) {
     await sleep(k ? 3000 : 1500)
     await rcon('save-all flush')
     for (const [cx, cz] of list) {
@@ -383,12 +384,12 @@ async function netherGrid (slot, rects, { y1 = 8, y2 = 122, waitS = 150, log = (
       }
       done.add(key)
     }
-    log('сетка: чанков', { done: done.size, of: list.length, s: Math.round((Date.now() - t0) / 1000) })
+    log('сетка: чанков', { done: done.size, of: list.length, s: Math.round((gameClock.wall.now() - t0) / 1000) })
   }
   await fl(false)
   const counts = {}
   for (let i = 0; i < grid.data.length; i += 7) counts[NG.NAMES[grid.data[i]]] = (counts[NG.NAMES[grid.data[i]]] || 0) + 1
-  return { grid, box, chunks: list.length, loaded: done.size, seconds: Math.round((Date.now() - t0) / 1000), sample: counts }
+  return { grid, box, chunks: list.length, loaded: done.size, seconds: Math.round((gameClock.wall.now() - t0) / 1000), sample: counts }
 }
 
 // Коридоры маршрута: отрезки между точками (портал → бастион → спавнер → выход) с запасом m по бокам.

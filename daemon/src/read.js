@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Чтение противника (PVP-RESEARCH б.20 и в.7; просьба 2026-09-26: «все приёмы
 // про-игроков, по максимуму того, что даёт версия»). Что сервер сам говорит о
 // нём всем, кто рядом, — и что бот раньше пропускал:
@@ -172,7 +173,7 @@ function spearIn (e) {
 function installLoaded (bot) {
   if (bot._ndLoadedHook) return
   bot._ndLoadedHook = true
-  bot.on('spawn', () => setTimeout(() => { try { bot._client.write('player_loaded', {}) } catch {} }, 150))
+  bot.on('spawn', () => gameClock.wall.setTimeout(() => { try { bot._client.write('player_loaded', {}) } catch {} }, 150))
 }
 
 function watch (bot, { threats = () => [] } = {}) {
@@ -190,7 +191,7 @@ function watch (bot, { threats = () => [] } = {}) {
       if (!p || p.entityStatus !== 35) return
       if (bot.entity && p.entityId === bot.entity.id) return
       const s = st(p.entityId)
-      s.popAt = Date.now()
+      s.popAt = gameClock.now()
       s.pops++
       stats.pops++
       if (process.env.ND_DEBUG_PVP) console.log('[read] totem pop', p.entityId, (bot.entities[p.entityId] || {}).username)
@@ -213,8 +214,8 @@ function watch (bot, { threats = () => [] } = {}) {
       for (const e of foes()) { const dd = dist(e.position); if (dd <= 1.2 && (!best || dd < best.dd)) best = { e, dd } }
       if (!best || (bot.entity && dist(bot.entity.position) < best.dd)) return
       const s = st(best.e.id)
-      if (Date.now() < s.shieldOffUntil - SHIELD_OFF_MS + 500) return
-      s.shieldOffUntil = Date.now() + SHIELD_OFF_MS
+      if (gameClock.now() < s.shieldOffUntil - SHIELD_OFF_MS + 500) return
+      s.shieldOffUntil = gameClock.now() + SHIELD_OFF_MS
       stats.shieldBreaks++
     } catch {}
   }
@@ -227,14 +228,14 @@ function watch (bot, { threats = () => [] } = {}) {
     try { bot._client.removeListener('sound_effect', onSound) } catch {}
   }
   // Сколько мс назад сработал его тотем (Infinity — не было).
-  W.poppedAgo = (e) => { const s = e && S.get(e.id); return s && s.popAt ? Date.now() - s.popAt : Infinity }
+  W.poppedAgo = (e) => { const s = e && S.get(e.id); return s && s.popAt ? gameClock.now() - s.popAt : Infinity }
   // Эффективное здоровье: здоровье + поглощение.
   W.ehp = (e) => { const h = healthRaw(bot, e); return h == null ? null : h + absorptionOf(bot, e) }
   // Всё о нём одним объектом — для решений и для отчёта.
   W.state = (e) => {
     if (!e || !e.position) return {}
     const s = st(e.id)
-    const now = Date.now()
+    const now = gameClock.now()
     const hp = healthRaw(bot, e)
     const abs = absorptionOf(bot, e)
     const eff = effectsOf(bot, e)
@@ -270,7 +271,7 @@ function watch (bot, { threats = () => [] } = {}) {
     const ang = aimAngle(bot, e)
     if (ang > maxDeg) return null
     const s = st(e.id)
-    const now = Date.now()
+    const now = gameClock.now()
     if (now - s.aimedAt > 2000) stats.aimedAtMe++
     // Сколько он держит прицел без перерыва (перерыв > 250 мс — новый прицел):
     // чем дольше держит, тем ближе спуск (2026-09-26).
@@ -278,7 +279,7 @@ function watch (bot, { threats = () => [] } = {}) {
     s.aimedAt = now
     return { ...cb, angle: Math.round(ang), steadyMs: now - (s.aimedSince || now) }
   }
-  W.shieldOff = (e) => { const s = e && S.get(e.id); return s ? Math.max(0, s.shieldOffUntil - Date.now()) : 0 }
+  W.shieldOff = (e) => { const s = e && S.get(e.id); return s ? Math.max(0, s.shieldOffUntil - gameClock.now()) : 0 }
   W.has = (e, effect) => effectsOf(bot, e).has(effect)
   return W
 }

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { AsyncLocalStorage } = require('async_hooks')
 const assess = require('./assess')
 const bedtime = require('./bedtime')
@@ -43,7 +44,7 @@ function isNight (bot) {
   return t >= NIGHT_FROM && t <= NIGHT_TO
 }
 
-function sleep (ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+function sleep (ms) { return gameClock.sleep(ms) }
 
 function count (bot, re) {
   let n = 0
@@ -80,7 +81,7 @@ function situation (d) {
   const flags = e.metadata && typeof e.metadata[0] === 'number' ? e.metadata[0] : 0
   let fight = null
   try { fight = assess.plan(bot, { radius: 16 }) } catch {}
-  const now = Date.now()
+  const now = gameClock.now()
   return {
     hp: bot.health ?? 20,
     food: bot.food ?? 20,
@@ -366,6 +367,7 @@ class Director {
   constructor (session) {
     this.session = session
     this.on = false
+    this.loopToken = null
     this.goal = 'beat_game'
     this.rules = { sleepAtNight: true, flee: true }
     this.step = null
@@ -392,7 +394,7 @@ class Director {
       if (!d || d.recovered || !d.pos || typeof d.pos.x !== 'number') continue
       if ((d.dimension || 'overworld') !== s.dimension) continue
       // Сколько куча тикала (lootclock.js); нет счёта — настенные часы.
-      const age = Date.now() - Date.parse(d.at)
+      const age = gameClock.wall.now() - Date.parse(d.at)
       const ticked = typeof d.ticking === 'number' ? d.ticking : null
       if (ticked !== null ? ticked >= 280 : !(age < 5 * 60000)) continue
       if (!(age < 3 * 3600000)) continue
@@ -434,7 +436,7 @@ class Director {
   // Шаг не отложен (не проваливался 3 раза подряд в последние 5 минут).
   ok (name) {
     const f = this.fails.get(name)
-    return !f || f.n < 3 || Date.now() - f.at > 300000
+    return !f || f.n < 3 || gameClock.now() - f.at > 300000
   }
 
   foodStep (s) {
@@ -522,8 +524,8 @@ class Director {
     const bot = this.session.bot
     const dim = bot.game ? bot.game.dimension : 'overworld'
     this.map.visit(dim, bot.entity.position)
-    if (Date.now() - (this.scoutAt || 0) < 10000) return
-    this.scoutAt = Date.now()
+    if (gameClock.now() - (this.scoutAt || 0) < 10000) return
+    this.scoutAt = gameClock.now()
     const R = bot.registry.blocksByName
     const groups = {
       trees: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log'],
@@ -729,10 +731,10 @@ class Director {
       try {
         await Promise.race([
           bot.pathfinder.goto(goal),
-          new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), 150000) }),
+          new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), 150000) }),
           new Promise((_resolve, reject) => { ctl.onAbort.push(() => reject(new Error('прервано'))) })
         ])
-      } catch (e) { err = e.message } finally { clearTimeout(timer); try { bot.pathfinder.setGoal(null) } catch {}; S.updateMovements(true) }
+      } catch (e) { err = e.message } finally { gameClock.clearTimeout(timer); try { bot.pathfinder.setGoal(null) } catch {}; S.updateMovements(true) }
       const y = Math.floor(bot.entity.position.y)
       return { from: startY, y, out: sky(bot.entity.position.floored()), stopped: err || undefined }
     }, { timeoutMs: 160000 })
@@ -742,7 +744,7 @@ class Director {
     const S = this.session
     for (let i = 0; i < 30 && this.on && isNight(S.bot); i++) {
       await S.wait({ seconds: 20 })
-      if (this.lastHurt && Date.now() - this.lastHurt < 3000) break
+      if (this.lastHurt && gameClock.now() - this.lastHurt < 3000) break
     }
     return { status: 'done', detail: { waited: true } }
   }
@@ -754,7 +756,7 @@ class Director {
     const bot = S.bot
     let r = await S.shelter({ mode: 'enter', depth: 2 })
     for (let i = 0; i < 3 && this.on && !(r && r.detail && r.detail.sealed); i++) {
-      if (this.lastHurt && Date.now() - this.lastHurt < 3000) break
+      if (this.lastHurt && gameClock.now() - this.lastHurt < 3000) break
       const here = bot.entity.position
       const firm = bot.findBlocks({
         matching: b => b && /^(grass_block|dirt|coarse_dirt|podzol|stone|deepslate|andesite|diorite|granite|tuff|mud|clay|terracotta)$/.test(b.name),
@@ -773,7 +775,7 @@ class Director {
     // Ждём утра короткими ожиданиями: каждое будит урон и чат.
     for (let i = 0; i < 30 && this.on && isNight(S.bot); i++) {
       await S.wait({ seconds: 20 })
-      if (this.lastHurt && Date.now() - this.lastHurt < 3000) break
+      if (this.lastHurt && gameClock.now() - this.lastHurt < 3000) break
     }
     await S.shelter({ mode: 'exit' })
     return r
@@ -782,7 +784,7 @@ class Director {
   async rest () {
     const S = this.session
     for (let i = 0; i < 8 && this.on && (S.bot.health ?? 20) < 16; i++) {
-      if (this.lastHurt && Date.now() - this.lastHurt < 3000) break
+      if (this.lastHurt && gameClock.now() - this.lastHurt < 3000) break
       await S.wait({ seconds: 10 })
     }
     return { status: 'done' }
@@ -797,10 +799,10 @@ class Director {
     let last = bot.health ?? 20
     bot.on('health', () => {
       const hp = bot.health ?? 20
-      if (hp < last) this.lastHurt = Date.now()
+      if (hp < last) this.lastHurt = gameClock.now()
       last = hp
     })
-    bot.on('chat', (u) => { if (u !== bot.username) this.brainQuietUntil = Date.now() + 20000 })
+    bot.on('chat', (u) => { if (u !== bot.username) this.brainQuietUntil = gameClock.now() + 20000 })
   }
 
   // Мозг ведёт тело своим намерением — не мешать.
@@ -824,12 +826,17 @@ class Director {
     if (rules && typeof rules === 'object') Object.assign(this.rules, rules)
     if (this.on) return this.status()
     this.on = true
-    this.loop().catch(e => { this.note(`цикл упал: ${e.message}`); this.on = false })
+    const token = this.loopToken = {}
+    this.loop(token).catch(e => {
+      if (this.loopToken !== token) return
+      this.note(`цикл упал: ${e.message}`); this.on = false
+    })
     return this.status()
   }
 
   stop () {
     this.on = false
+    this.loopToken = null
     const cur = this.session.current
     if (cur && cur.byDirector && cur.ctl) { try { cur.ctl.abort() } catch {} }
     return this.status()
@@ -850,7 +857,7 @@ class Director {
       rules: this.rules,
       step: this.step ? { name: this.step.name, why: this.step.why, prio: this.step.prio, since: this.step.since } : null,
       situation: s ? sitText(s) : null,
-      blocked: [...this.fails.entries()].filter(([, f]) => f.n >= 3 && Date.now() - f.at < 300000).map(([n]) => n),
+      blocked: [...this.fails.entries()].filter(([, f]) => f.n >= 3 && gameClock.now() - f.at < 300000).map(([n]) => n),
       recent: this.history.slice(-10),
       memo: this.memo,
       text: this.on
@@ -859,16 +866,17 @@ class Director {
     }
   }
 
-  async loop () {
+  async loop (token = this.loopToken) {
     const S = this.session
-    while (this.on) {
+    while (this.on && this.loopToken === token) {
       await sleep(TICK_MS)
+      if (!this.on || this.loopToken !== token) break
       const bot = S.bot
       if (!bot || !bot.entity || (bot.health ?? 0) <= 0) continue
       this.hook()
       if (this.brainHolds() || this.refugeRuns()) { this.step = null; continue }
       // Кто-то говорит — дать мозгу ответить (он решит, продолжать ли).
-      if (Date.now() < this.brainQuietUntil && S.brainAttached) continue
+      if (gameClock.now() < this.brainQuietUntil && S.brainAttached) continue
       try { this.scout() } catch {}
       let s
       try { s = situation(this) } catch { continue }
@@ -892,6 +900,7 @@ class Director {
       } catch (e) {
         r = { status: 'failed', error: e.message }
       }
+      if (!this.on || this.loopToken !== token) break
       // Шаг сам говорит, что считать успехом (ok), иначе — общее правило.
       const bad = step.ok
         ? !(r && r.status !== 'failed' && step.ok(r))
@@ -902,12 +911,12 @@ class Director {
       this.lastStepName = step.name
       const stuck = this.idle >= 2
       const f = this.fails.get(step.name) || { n: 0, at: 0 }
-      if (bad || stuck) { f.n++; f.at = Date.now(); this.fails.set(step.name, f) } else this.fails.delete(step.name)
+      if (bad || stuck) { f.n++; f.at = gameClock.now(); this.fails.set(step.name, f) } else this.fails.delete(step.name)
       if (stuck && f.n === 3) this.note(`${step.name}: трижды без перемен — откладываю`)
       this.note(`${step.name}: ${r ? r.status : '?'}${r && r.error ? ' — ' + r.error : ''}${r && r.detail && r.detail.stopped ? ' — ' + r.detail.stopped : ''}`.slice(0, 200))
       if (r && r.by && r.by.type === 'death') this.note('умер')
     }
-    this.step = null
+    if (!this.on || this.loopToken === token) this.step = null
   }
 }
 

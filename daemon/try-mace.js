@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Булава и заряды ветра (mace.js) на двух демонах тестового сервера.
 // Сцены (по одной строке итога на каждую):
 //   удар      — NeuroDown с булавой и зарядами против стоящего NeuroDown2 в алмазе;
@@ -9,12 +10,15 @@
 //   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 node try-mace.js [сцены через запятую]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -28,7 +32,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.A || 'ws://127.0.0.1:8791')
 const B = client(process.env.B || 'ws://127.0.0.1:8792')
 async function cmd (text) { await A.call('say', { text }); await sleep(60) }
@@ -111,5 +115,5 @@ async function stage (name, { aItems, aBody = DIAMOND, bItems = [], bBody = DIAM
   await cmd(`/forceload remove ${X - 12} ${Z - 12} ${X + 12} ${Z + 12}`)
   await cmd('/gamerule send_command_feedback true')
   A.ws.close(); B.ws.close()
-  setTimeout(() => process.exit(0), 300)
+  gameClock.wall.setTimeout(() => process.exit(0), 300)
 })().catch(e => { console.error('FAILED', e); process.exit(1) })

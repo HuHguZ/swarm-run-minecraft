@@ -3,6 +3,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
+const { withClockFixture } = require('./clock-fixture')
 const path = require('node:path')
 const { Vec3 } = require('vec3')
 function fixture (visible) {
@@ -11,7 +12,7 @@ function fixture (visible) {
   const s = { bot: b }; const foe = { position: new Vec3(3,64,.5), height: 1.95 }
   const ctx = { module: { exports: {} }, process, Date,
     require: n => n === 'node:async_hooks' ? require(n) : n === './worlds' ? { worldOf: () => 'the_nether' } : n === './ne-guard' ? { meleeFoes: () => [foe] } : n === './perception' ? { eyePos: () => b.entity.position, raySees: () => visible } : {} }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/reflex-lock.js'),'utf8'),ctx)
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/reflex-lock.js'),'utf8'),withClockFixture(ctx))
   const R = ctx.module.exports; R.install(s)
   return { run: () => R.run(s,{ aborted: false },() => b.craft({ result: { id: 1, count: 1 } },1)), crafts: () => crafts }
 }

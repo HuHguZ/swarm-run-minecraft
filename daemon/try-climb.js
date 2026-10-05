@@ -1,16 +1,20 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Вертикальная погоня (edges.climbBack): NeuroDown внизу, NeuroDown2 на
 // площадке в небе (как арена, из которой выпали). Бой — бот должен подняться
 // к нему: столбом через дыру в полу (есть дыра) или сквозь пол (дыры нет).
 //   ND_WS=ws://127.0.0.1:8781 ND_WS2=ws://127.0.0.1:8782 node try-climb.js [раз]
 const WebSocket = require('ws')
 
+// Both bots share server ticks; keep the first connection as the time source.
+let clockSource = null
 function client (url) {
+  clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString())
+    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -24,7 +28,7 @@ function client (url) {
   })
   return { ws, ready, call }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 const A = client(process.env.ND_WS || 'ws://127.0.0.1:8781')
 const B = client(process.env.ND_WS2 || 'ws://127.0.0.1:8782')
 const say = async (t) => { await A.call('say', { text: t }); await sleep(200) }
@@ -47,13 +51,13 @@ async function trial (hole) {
   await say(`/tp NeuroDown ${X + 7.5} ${G} ${Z + 7.5}`)
   await say('/effect give NeuroDown minecraft:instant_health 1 5 true')
   await sleep(1500)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const fight = A.call('fight', { target: 'NeuroDown2', allowPlayer: true, timeoutSeconds: 70, retreatAtHealth: 1 }).catch(e => ({ status: 'failed', error: e.message }))
   let up = null
-  while (Date.now() - t0 < 72000) {
+  while (gameClock.now() - t0 < 72000) {
     const s = await A.call('status').catch(() => null)
     const y = s && s.state && s.state.pos ? s.state.pos.y : 0
-    if (y >= P) { up = Math.round((Date.now() - t0) / 100) / 10; break }
+    if (y >= P) { up = Math.round((gameClock.now() - t0) / 100) / 10; break }
     await sleep(500)
   }
   await A.call('stop').catch(() => {})

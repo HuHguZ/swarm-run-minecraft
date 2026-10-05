@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // «Динамит» на арене (просьба 2026-09-26: «про-игроки динамитом выстреливают и
 // убивают им, очень быстро, механизм какой-то»). Это cart PvP 1.21: рельс под
 // ноги, на него вагонетка с TNT, и горящая стрела из лука с «Огнём» — взрыв в
@@ -53,7 +54,7 @@ const DEBUG = !!process.env.ND_DEBUG_BOOM
 // ND_BOOM=0 — не пользоваться взрывчаткой (прогон «до»); защита остаётся.
 const ON = process.env.ND_BOOM !== '0'
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const sleep = (ms) => new Promise(r => gameClock.setTimeout(r, ms))
 const r2 = (x) => Math.round(x * 100) / 100
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
 
@@ -283,8 +284,8 @@ async function useOn (bot, idx, pos, face = { x: 0, y: 1, z: 0 }) {
 function waitSpawn (bot, name, near, ms = 600) {
   return new Promise(resolve => {
     const on = (e) => { if (e && e.name === name && e.position && e.position.distanceTo(near) < 1.6) { done(e) } }
-    const t = setTimeout(() => done(null), ms)
-    function done (e) { clearTimeout(t); bot.removeListener('entitySpawn', on); resolve(e) }
+    const t = gameClock.setTimeout(() => done(null), ms)
+    function done (e) { gameClock.clearTimeout(t); bot.removeListener('entitySpawn', on); resolve(e) }
     bot.on('entitySpawn', on)
   })
 }
@@ -403,8 +404,8 @@ async function placeCart (bot, spot) {
   const cellB = bot.blockAt(spot.cell, false)
   if (!cellB || !/rail$/.test(cellB.name)) {
     if (!(await useOn(bot, rIdx, spot.base))) return { ok: false, why: 'рельс не поставить' }
-    const t0 = Date.now()
-    while (Date.now() - t0 < 400) { const b = bot.blockAt(spot.cell, false); if (b && /rail$/.test(b.name)) break; await sleep(25) }
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 400) { const b = bot.blockAt(spot.cell, false); if (b && /rail$/.test(b.name)) break; await sleep(25) }
   }
   const rail = bot.blockAt(spot.cell, false)
   if (!rail || !/rail$/.test(rail.name)) return { ok: false, why: 'рельса нет' }
@@ -426,9 +427,9 @@ async function placeCrystal (bot, spot) {
 
 // Отойти от точки (клавиши, спринт) на ms: прочь от неё, не в яму.
 async function backOff (bot, ctl, from, { ms = 900, until = null, stepSafe = null } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
-  while (Date.now() - t0 < ms && !ctl.aborted) {
+  while (gameClock.now() - t0 < ms && !ctl.aborted) {
     if (until && until()) break
     const me = bot.entity.position
     const yaw = Math.atan2(-(me.x - from.x), -(me.z - from.z))
@@ -458,13 +459,13 @@ function create (bot, { enemy, used = () => {}, crystals = true } = {}) {
       const c = pkt && (pkt.center || pkt)
       const at = new Vec3(c.x ?? c.center?.x ?? 0, c.y ?? 0, c.z ?? 0)
       st.booms++
-      const t0 = Date.now()
+      const t0 = gameClock.now()
       const onB = (o, n) => {
-        if (Date.now() - t0 > 120) { bot.removeListener('blockUpdate', onB); return }
+        if (gameClock.now() - t0 > 120) { bot.removeListener('blockUpdate', onB); return }
         if (o && n && o.name !== 'air' && n.name === 'air' && o.position.distanceTo(at) < 12) { st.broken++; if (/glowstone/.test(o.name)) st.holes++ }
       }
       bot.on('blockUpdate', onB)
-      setTimeout(() => bot.removeListener('blockUpdate', onB), 150)
+      gameClock.setTimeout(() => bot.removeListener('blockUpdate', onB), 150)
     } catch {}
   }
   try { bot._client.on('explosion', onExplosion) } catch {}
@@ -475,12 +476,12 @@ function create (bot, { enemy, used = () => {}, crystals = true } = {}) {
     const h0 = (healthOf(bot, e) ?? 20)
     const my0 = bot.health ?? 20
     let low = h0
-    const t0 = Date.now()
-    const iv = setInterval(() => {
+    const t0 = gameClock.now()
+    const iv = gameClock.setInterval(() => {
       const hh = healthOf(bot, e)
       if (hh != null && hh < low) low = hh
-      if (Date.now() - t0 > 1000 || e.isValid === false) {
-        clearInterval(iv)
+      if (gameClock.now() - t0 > 1000 || e.isValid === false) {
+        gameClock.clearInterval(iv)
         const dealt = e.isValid === false && h0 > 0 ? h0 : Math.max(0, h0 - low)
         st.dealt.push(r2(dealt))
         st.self = r2(st.self + Math.max(0, my0 - (bot.health ?? 20)))
@@ -574,8 +575,8 @@ function create (bot, { enemy, used = () => {}, crystals = true } = {}) {
         st.placed.crystal = (st.placed.crystal || 0) + 1
         // Удар в тот же тик, как появился: честно — в прицеле (pick.canHit).
         let hit = false
-        const t0 = Date.now()
-        while (Date.now() - t0 < 250 && !hit) {
+        const t0 = gameClock.now()
+        while (gameClock.now() - t0 < 250 && !hit) {
           if (pc.crystal.isValid === false) break
           if (hitReach(bot, pc.crystal) <= REACH) {
             await bot.lookAt(pc.crystal.position.offset(0, 1, 0), true).catch(() => {})

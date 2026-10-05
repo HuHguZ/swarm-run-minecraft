@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Сборы перед большим делом и «не забыть» в бою: золотые яблоки, зелья, лук и
 // стрелы, щит, еда, блоки, ведро, кровати на дракона. Чек-лист на поход
 // (nether, bastion, end/dragon, fight) — что есть, чего нет, что скрафчено
@@ -60,8 +61,8 @@ async function consume (bot, item, effect, ms = 3500) {
   try {
     await bot.equip(item, 'hand')
     const eating = bot.consume().catch(() => {})
-    const t0 = Date.now()
-    while (Date.now() - t0 < ms) {
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < ms) {
       if ((effect && hasEffect(bot, effect)) || countOf(bot, item.name) < had) { ok = true; break }
       await sleep(100)
     }
@@ -88,7 +89,7 @@ function foeNear (bot, r = 8) {
 async function autoUse (autopilot, bot) {
   const s = autopilot.session
   if (!bot || !bot.entity || s.eating || autopilot.kitBusy) return
-  const now = Date.now()
+  const now = gameClock.now()
   // Флаг «горит» (метаданные, бит 0x01) своему игроку сервер шлёт не всегда —
   // проба в лаве: isInLava true, флаг undefined. Поэтому ещё и клетка: огонь
   // или лава в ногах/голове — и 8 с после неё (столько горит игрок).
@@ -148,7 +149,7 @@ async function healInFight (session, ctl, { weapon = null, retreatAtHealth = 6 }
   const hp = bot.health ?? 20
   const line = Math.max(10, retreatAtHealth + 4)
   if (hp > line || ctl.aborted || session.eating) return false
-  const now = Date.now()
+  const now = gameClock.now()
   if (now < (session.kitAppleAt || 0) || hasEffect(bot, 'absorption')) return false
   const apple = (hp <= 6 && bot.inventory.items().find(i => i.name === 'enchanted_golden_apple')) ||
     bot.inventory.items().find(i => i.name === 'golden_apple')

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { xyz, stuckGuard, unstick } = require('./movement')
@@ -539,8 +540,8 @@ function igniterShortfall (bot) {
 
 function sleep (ms, ctl) {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { clearTimeout(t); resolve() })
+    const t = gameClock.setTimeout(resolve, ms)
+    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
   })
 }
 
@@ -577,8 +578,26 @@ async function inReach (session, ctl, cell) {
 async function clearCells (session, ctl, cells) {
   const bot = session.bot
   let dug = 0
-  for (const c of cells) {
+  const pending = cells.slice()
+  while (pending.length) {
     if (ctl.aborted) return { dug, stopped: 'прервано' }
+    let next = 0
+    if (process.env.ND_FRAME_FRONTIER !== '0') {
+      // Top-down remains the preference, but an opaque upper/far cell may be
+      // exposed only by another cell in this same approved clearing list.
+      // Never enlarge that list or swing through the occluding block.
+      for (const c of pending) {
+        const b = bot.blockAt(c)
+        if (!b) return { dug, stopped: `клетка ${c.x},${c.y},${c.z} не прогружена` }
+        if (/water|lava/.test(b.name)) return { dug, stopped: `${b.name} внутри рамы — сначала заделать источник` }
+      }
+      const visible = pending.findIndex(c => {
+        const b = bot.blockAt(c)
+        return !PORTAL_EMPTY.test(b.name) && eyes(bot).distanceTo(centre(c)) <= REACH && require('./sight').seesBlock(bot, b)
+      })
+      if (visible >= 0) next = visible
+    }
+    const c = pending.splice(next, 1)[0]
     const b = bot.blockAt(c)
     if (!b) return { dug, stopped: `клетка ${c.x},${c.y},${c.z} не прогружена` }
     if (PORTAL_EMPTY.test(b.name)) continue
@@ -659,7 +678,7 @@ async function buildFrame (session, ctl, plan, deadline) {
     const pb = prop && bot.blockAt(prop)
     if (!prop || !pb || pb.boundingBox !== 'empty') return
     const filler = pickFiller(bot)
-    const pr = await putFrameBlock(bot, prop, filler ? filler.name : null, deadline - Date.now())
+    const pr = await putFrameBlock(bot, prop, filler ? filler.name : null, deadline - gameClock.now())
     if (pr.ok && !pr.already) propped.push(xyz(prop))
   }
 
@@ -676,10 +695,10 @@ async function buildFrame (session, ctl, plan, deadline) {
     if (existing && existing.name === FRAME_BLOCK) { failed.delete(k(c)); return true }
     if (!(await inReach(session, ctl, c))) { failed.set(k(c), 'не дотянуться'); return false }
     let why = null
-    for (let n = 0; n < ATTEMPTS && !ctl.aborted && Date.now() < deadline; n++) {
+    for (let n = 0; n < ATTEMPTS && !ctl.aborted && gameClock.now() < deadline; n++) {
       if (n) { attempts++; await sleep(300, ctl) }
       await propUp(c)
-      const r = await putFrameBlock(bot, c, FRAME_BLOCK, deadline - Date.now())
+      const r = await putFrameBlock(bot, c, FRAME_BLOCK, deadline - gameClock.now())
       if (r.ok) {
         if (!r.already) placed++
         if (r.late) late++
@@ -704,7 +723,7 @@ async function buildFrame (session, ctl, plan, deadline) {
     passes++
     let missing = 0
     for (const c of plan.frame) {
-      if (ctl.aborted || Date.now() > deadline) break
+      if (ctl.aborted || gameClock.now() > deadline) break
       const b = bot.blockAt(c)
       if (b && b.name === FRAME_BLOCK) continue
       if (!(await putOne(c))) missing++
@@ -775,8 +794,8 @@ async function ignite (session, ctl, plan) {
       }
       // Poll rather than wait on an event: fire and nether_portal are two
       // different block updates in the same cell within a tick or two.
-      const deadline = Date.now() + 2000
-      while (Date.now() < deadline) {
+      const deadline = gameClock.now() + 2000
+      while (gameClock.now() < deadline) {
         const b = bot.blockAt(target)
         if (b && b.name === 'nether_portal') return { lit: true, aim: xyz(aim.ref) }
         await sleep(100, ctl)
@@ -828,7 +847,7 @@ async function portal (session, ctl, p = {}) {
   // Бюджет на всю работу, а не на попытку. Из него putFrameBlock берёт себе
   // поводок на клетку, и из-за него десять безнадёжных клеток по шесть граней
   // не могут съесть весь интент. Пять секунд с конца — на поджиг и на ответ.
-  const deadline = Date.now() + Math.max(20, Math.min(600, p.timeoutSeconds ?? 150)) * 1000 - 5000
+  const deadline = gameClock.now() + Math.max(20, Math.min(600, p.timeoutSeconds ?? 150)) * 1000 - 5000
 
   // --- 1. is there already one? Never build a second, never break the first.
   // Asked two ways on purpose. bot.findBlock spots the portal blocks even when
@@ -1077,7 +1096,7 @@ function exitKit (inventory) {
 // в Аду x,z = место назначения наверху (крепость, база) — выйдешь в ~16 от него.
 async function link (session, ctl, p = {}) {
   const bot = session.bot
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const deadline = t0 + Math.max(30, Math.min(600, p.timeoutSeconds ?? 300)) * 1000 - 5000
   const here = worlds.worldOf(bot)
   const other = here === 'the_nether' ? 'overworld' : 'the_nether'
@@ -1113,7 +1132,7 @@ async function link (session, ctl, p = {}) {
       stopped: `до точки ${target.x},${target.z} не дошёл (осталось ${off} бл.${walked && walked.error ? `: ${walked.error}` : ''}) — позови снова, продолжу`
     }
   }
-  const r = await portal(session, ctl, { ...p, mode: 'build', timeoutSeconds: Math.max(20, Math.round((deadline - Date.now()) / 1000)) })
+  const r = await portal(session, ctl, { ...p, mode: 'build', timeoutSeconds: Math.max(20, Math.round((deadline - gameClock.now()) / 1000)) })
   return {
     ...r,
     ...base,
@@ -1223,7 +1242,7 @@ async function prepareDoorway (session, ctl, door, deadline) {
       a.pos.distanceTo(bot.entity.position) - b.pos.distanceTo(bot.entity.position))
   const result = { placed: 0, dug: 0 }
   for (const d of candidates) {
-    if (ctl.aborted || Date.now() > deadline) break
+    if (ctl.aborted || gameClock.now() > deadline) break
     const target = d.plan.floor || d.plan.dig[0]
     if (!(await inReach(session, ctl, target))) continue
     const plan = doorwayPlan(read, d.pos)
@@ -1235,7 +1254,7 @@ async function prepareDoorway (session, ctl, door, deadline) {
       if (!put.already) result.placed++
     }
     for (const c of plan.dig) {
-      if (ctl.aborted || Date.now() > deadline || !doorwayPlan(read, d.pos)) break
+      if (ctl.aborted || gameClock.now() > deadline || !doorwayPlan(read, d.pos)) break
       const r = await clearCells(session, ctl, [c])
       result.dug += r.dug
       if (r.stopped) { result.stopped = r.stopped; break }
@@ -1270,9 +1289,9 @@ function sameCell (pos, c) {
 // Идём к центру клетки и отпускаем клавишу в 0.15 от него — инерция доносит
 // ещё на десятую, а портал внутри клетки тоньше её.
 async function stepTo (bot, ctl, target, { ms = 3000 } = {}) {
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   try {
-    while (!ctl.aborted && Date.now() - t0 < ms) {
+    while (!ctl.aborted && gameClock.now() - t0 < ms) {
       const pos = bot.entity.position
       const dx = target.x - pos.x
       const dz = target.z - pos.z
@@ -1310,7 +1329,7 @@ function portalChanged (session, bot, from, seq) {
 // Ответ в форме endportal.tunnelUnder: { ok, dug, moved, placed, lava, why, bricks }.
 const HEAT = /lava|water/
 const BRICK = /^nether_brick/
-async function bore (session, ctl, target, { deadline = Date.now() + 60000, maxSteps = 24, minY = null, maxY = null, throughBricks = false } = {}) {
+async function bore (session, ctl, target, { deadline = gameClock.now() + 60000, maxSteps = 24, minY = null, maxY = null, throughBricks = false } = {}) {
   const bot = session.bot
   const mcData = session.mcData
   let dug = 0
@@ -1329,7 +1348,7 @@ async function bore (session, ctl, target, { deadline = Date.now() + 60000, maxS
   try { bot.pathfinder.setGoal(null) } catch {}
   for (let s = 0; s < maxSteps; s++) {
     if (ctl.aborted) return out(false, { why: 'прервано' })
-    if (Date.now() > deadline) return out(false, { why: 'время вышло' })
+    if (gameClock.now() > deadline) return out(false, { why: 'время вышло' })
     const f = bot.entity.position.floored()
     const ddx = target.x - f.x
     const ddz = target.z - f.z
@@ -1390,9 +1409,9 @@ async function bore (session, ctl, target, { deadline = Date.now() + 60000, maxS
           if (!r.ok) { why = `пол забоя не заложить: ${r.reason}`; continue }
           placed++
         }
-        const t0 = Date.now()
+        const t0 = gameClock.now()
         try {
-          while (Date.now() - t0 < 1800 && !sameCell(bot.entity.position, feet)) {
+          while (gameClock.now() - t0 < 1800 && !sameCell(bot.entity.position, feet)) {
             await bot.lookAt(feet.offset(0.5, 1.6, 0.5), true)
             bot.setControlState('forward', true)
             if (dy > 0) bot.setControlState('jump', true)
@@ -1433,7 +1452,7 @@ async function guarded (session, ctl, run) {
     hitBy = a
     cut()
   }
-  const relay = setInterval(() => { if (ctl.aborted) cut() }, 200)
+  const relay = gameClock.setInterval(() => { if (ctl.aborted) cut() }, 200)
   // Взгляд в пол на ходу (только Ад). pathfinder идёт с pitch 0
   // (mineflayer-pathfinder index.js: bot.look(yaw, 0)), а эндермен злится, если
   // игрок смотрит ему в глаза: EnderMan.isLookingAtMe — dot > 1 - 0.025/d, то
@@ -1448,7 +1467,7 @@ async function guarded (session, ctl, run) {
   bot.on('entityHurt', onHurt)
   let r
   try { r = await run(sub) } finally {
-    clearInterval(relay)
+    gameClock.clearInterval(relay)
     bot.removeListener('entityHurt', onHurt)
     if (inNether) bot.removeListener('physicsTick', lookDown)
   }
@@ -1488,14 +1507,14 @@ async function standAndSwing (session, ctl, mob, ms) {
   const w = bestWeapon(bot)
   if (w) { try { await bot.equip(w, 'hand') } catch {} }
   try { bot.clearControlStates() } catch {}
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let swings = 0
   let last = 0
-  while (!ctl.aborted && Date.now() - t0 < ms && mob.isValid !== false && bot.entities[mob.id]) {
+  while (!ctl.aborted && gameClock.now() - t0 < ms && mob.isValid !== false && bot.entities[mob.id]) {
     if ((bot.health ?? 0) <= 5) return { stopped: `хп ${Math.round(bot.health ?? 0)}`, swings }
     const d = mob.position.distanceTo(bot.entity.position)
-    if (d <= 3.2 && Date.now() - last >= 650) {
-      try { await bot.lookAt(mob.position.offset(0, 1.0, 0), true); bot.attack(mob); swings++; last = Date.now() } catch {}
+    if (d <= 3.2 && gameClock.now() - last >= 650) {
+      try { await bot.lookAt(mob.position.offset(0, 1.0, 0), true); bot.attack(mob); swings++; last = gameClock.now() } catch {}
     }
     await sleep(60)
   }
@@ -1514,7 +1533,7 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
   let side = 0
   let fails = 0
   let dug = 0
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     const me = bot.entity.position
     const dx = target.x - me.x
     const dz = target.z - me.z
@@ -1524,13 +1543,13 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
     const uz = dz / dist
     const tx = Math.round(me.x + ux * 24 - uz * side)
     const tz = Math.round(me.z + uz * 24 + ux * side)
-    const w = await guarded(session, ctl, sub => travelXZ(bot, sub, tx, tz, { range: 3, retries: 1, deadline: Math.min(deadline, Date.now() + 40000) }))
+    const w = await guarded(session, ctl, sub => travelXZ(bot, sub, tx, tz, { range: 3, retries: 1, deadline: Math.min(deadline, gameClock.now() + 40000) }))
     if (w.fought && (bot.health ?? 0) < 8) return { ok: false, error: w.error, fought: w.fought }
     if (w.ok || w.fought) { side = 0; fails = 0; continue }
     // Два обхода не вышло — штрек прямо к порталу (на его высоту) на 16 шагов.
     if (fails >= 2) {
       const b = await bore(session, ctl, { x: Math.round(target.x), z: Math.round(target.z) }, {
-        deadline: Math.min(deadline, Date.now() + 45000), maxSteps: 16, minY: target.y, maxY: target.y, throughBricks: true
+        deadline: Math.min(deadline, gameClock.now() + 45000), maxSteps: 16, minY: target.y, maxY: target.y, throughBricks: true
       })
       dug += b.dug
       if (b.moved >= 4) { side = 0; fails = 0; continue }
@@ -1545,7 +1564,7 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
       await Promise.race([
         bot.pathfinder.goto(xz ? new goals.GoalNearXZ(target.x, target.z, range) : new goals.GoalNear(target.x, target.y, target.z, range)),
         guard.promise,
-        new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(60000, deadline - Date.now()))) })
+        new Promise((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(60000, deadline - gameClock.now()))) })
       ])
       const p1 = bot.entity.position
       if ((xz ? Math.hypot(p1.x - target.x, p1.z - target.z) : p1.distanceTo(new Vec3(target.x, target.y, target.z))) > range + 3) return { ok: false, error: 'pathfinder не нашёл ни шага к цели' }
@@ -1555,7 +1574,7 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
       return { ok: false, error: e.message }
     } finally {
       guard.stop()
-      if (timer) clearTimeout(timer)
+      if (timer) gameClock.clearTimeout(timer)
     }
   }
   const r = await last()
@@ -1564,14 +1583,14 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
   // path», а goto отвечал «done» без шага). Подняться лестницей штрека (bore:
   // ступенька вверх на каждый шаг, пока ниже maxY) в ту сторону, где места
   // больше, — прочь от цели, чтобы хватило длины, — и снова к цели.
-  if (!r.ok && !xz && Number.isFinite(target.y) && target.y - bot.entity.position.y > 3 && !ctl.aborted && Date.now() < deadline - 15000) {
+  if (!r.ok && !xz && Number.isFinite(target.y) && target.y - bot.entity.position.y > 3 && !ctl.aborted && gameClock.now() < deadline - 15000) {
     const f = bot.entity.position.floored()
     const up = Math.ceil(target.y - f.y)
     const tries = []
     for (const [sx, sz] of [[Math.sign(f.x - target.x) || 1, 0], [0, Math.sign(f.z - target.z) || 1], [-(Math.sign(f.x - target.x) || 1), 0], [0, -(Math.sign(f.z - target.z) || 1)]]) {
       if (ctl.aborted || bot.entity.position.y >= target.y - 1) break
       const b = await bore(session, ctl, { x: f.x + sx * (up + 12), z: f.z + sz * (up + 12) }, {
-        deadline: Math.min(deadline - 5000, Date.now() + 60000), maxSteps: up + 4, maxY: Math.floor(target.y), throughBricks: true
+        deadline: Math.min(deadline - 5000, gameClock.now() + 60000), maxSteps: up + 4, maxY: Math.floor(target.y), throughBricks: true
       })
       tries.push({ dir: [sx, sz], moved: b.moved, y: Math.floor(bot.entity.position.y), why: b.why })
       if (bot.entity.position.y >= target.y - 1) break
@@ -1614,7 +1633,7 @@ async function enter (session, ctl, p = {}) {
   const read = reader(bot)
   const from = worlds.worldOf(bot)
   const scan = Math.max(4, Math.min(32, p.scan ?? 16))
-  const deadline = Date.now() + Math.max(20, Math.min(600, p.timeoutSeconds ?? 90)) * 1000 - 3000
+  const deadline = gameClock.now() + Math.max(20, Math.min(600, p.timeoutSeconds ?? 90)) * 1000 - 3000
   const base = { mode: 'enter', world: from }
 
   const hp = Math.round(bot.health ?? 0)
@@ -1665,7 +1684,7 @@ async function enter (session, ctl, p = {}) {
     const obs = bot.findBlocks({ matching: [mcData.blocksByName[FRAME_BLOCK].id], maxDistance: scan, count: 64 })
     const frames = findFrames(read, obs)
     if (frames.some(f => !f.lit) && IGNITERS.some(n => itemNamed(bot, n))) {
-      lit = await portal(session, ctl, { scan, timeoutSeconds: Math.max(20, Math.round((deadline - Date.now()) / 1000)) })
+      lit = await portal(session, ctl, { scan, timeoutSeconds: Math.max(20, Math.round((deadline - gameClock.now()) / 1000)) })
       door = findLitPortal(bot, mcData, scan)
     }
   }
@@ -1685,7 +1704,7 @@ async function enter (session, ctl, p = {}) {
   let spots = doorways(door).filter(d => clearStand(read, d.pos))
     .sort((a, b) => a.pos.distanceTo(me) - b.pos.distanceTo(me))
   if (!spots.length) {
-    base.access = await prepareDoorway(session, ctl, door, Math.min(deadline, Date.now() + 30000))
+    base.access = await prepareDoorway(session, ctl, door, Math.min(deadline, gameClock.now() + 30000))
     spots = doorways(door).filter(d => clearStand(read, d.pos))
       .sort((a, b) => a.pos.distanceTo(bot.entity.position) - b.pos.distanceTo(bot.entity.position))
   }
@@ -1700,7 +1719,7 @@ async function enter (session, ctl, p = {}) {
   }
   let spot = null
   for (const s of spots.slice(0, 4)) {
-    if (ctl.aborted || Date.now() > deadline) break
+    if (ctl.aborted || gameClock.now() > deadline) break
     await walkNear(session, ctl, s.pos, 0)
     if (sameCell(bot.entity.position, s.pos)) { spot = s; break }
   }
@@ -1717,20 +1736,20 @@ async function enter (session, ctl, p = {}) {
   const seq0 = session.worldChange ? session.worldChange.seq : 0
   const changed = () => portalChanged(session, bot, from, seq0)
   const centre = spot.cell.offset(0.5, 0, 0.5)
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let inAt = null
   let steps = 0
   while (!changed()) {
-    if (ctl.aborted || Date.now() > deadline || Date.now() - t0 > HOLD_LIMIT_MS) break
+    if (ctl.aborted || gameClock.now() > deadline || gameClock.now() - t0 > HOLD_LIMIT_MS) break
     if (!insidePortal(bot, door)) {
       if (steps >= 4) break
       steps++
       await stepTo(bot, ctl, centre, { ms: 2500 })
     }
-    if (inAt === null && insidePortal(bot, door)) inAt = Date.now()
+    if (inAt === null && insidePortal(bot, door)) inAt = gameClock.now()
     await sleep(100, ctl)
   }
-  const heldSeconds = inAt ? Math.round((Date.now() - inAt) / 100) / 10 : 0
+  const heldSeconds = inAt ? Math.round((gameClock.now() - inAt) / 100) / 10 : 0
   if (!changed()) {
     // Обрыв или «сервер не пустил»: из портала — назад на порог.
     if (insidePortal(bot, door)) await stepTo(bot, { aborted: false }, spot.pos.offset(0.5, 0, 0.5), { ms: 1500 })
@@ -1748,10 +1767,10 @@ async function enter (session, ctl, p = {}) {
   }
 
   // --- 4. Прибытие: ждём «устроился» от трекера.
-  const t1 = Date.now()
+  const t1 = gameClock.now()
   const arrivalReady = () => session.worldChange && session.worldChange.seq > seq0 &&
     session.worldChange.from === from && session.worldChange.to === worlds.worldOf(bot) && session.worldChange.ready
-  while (!arrivalReady() && Date.now() - t1 < SETTLE_MS && !ctl.aborted) await sleep(100)
+  while (!arrivalReady() && gameClock.now() - t1 < SETTLE_MS && !ctl.aborted) await sleep(100)
   const wc = session.worldChange
   const to = worlds.worldOf(bot)
   const departure = { world: from, ...xyz(spot.pos) }
@@ -1797,7 +1816,7 @@ async function enter (session, ctl, p = {}) {
     // (prepareDoorway: пол заложить, камень выкопать, у жидкости не трогать) — neF-map23-2 02.10: тело осталось в
     // портале прибытия, и штрек, и ноги к бастиону и спавнеру отказали на месте 6 раз подряд.
     if (!out && insidePortal(bot, arrival)) {
-      const pd = await prepareDoorway(session, ctl, arrival, Date.now() + 15000).catch(e => ({ ok: false, stopped: e.message }))
+      const pd = await prepareDoorway(session, ctl, arrival, gameClock.now() + 15000).catch(e => ({ ok: false, stopped: e.message }))
       if (pd.ok && pd.at) {
         await stepTo(bot, { aborted: false }, new Vec3(pd.at.x + 0.5, pd.at.y, pd.at.z + 0.5), { ms: 2500 })
         if (!insidePortal(bot, arrival)) out = bot.entity.position.floored()

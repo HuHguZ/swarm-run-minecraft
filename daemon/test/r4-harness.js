@@ -1,6 +1,7 @@
 'use strict'
 const fs = require('fs')
 const vm = require('vm')
+const { withClockFixture } = require('./clock-fixture')
 const path = require('path')
 const { createRequire } = require('module')
 function campaign (inventory = {}, situation = {}, env = {}) {
@@ -33,7 +34,7 @@ function campaign (inventory = {}, situation = {}, env = {}) {
         if (h.routeInfo) routeInfoGet = () => h.routeInfo; },
       portal: p => { known.portal = p },
     }
-  `, context)
+  `, withClockFixture(context))
   return { ...context.module.exports, clock, calls, state, sit }
 }
 module.exports = { campaign }

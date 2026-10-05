@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 const { sleep, xyz, standableY, travelXZ, inWater, escapeWater } = require('./movement')
@@ -78,7 +79,7 @@ function trackAttackers (session) {
       id: source.id,
       name: source.username || source.name || 'кто-то',
       pos: xyz(source.position),
-      at: Date.now(),
+      at: gameClock.now(),
       how,
       // Remembered, not filtered out. Who hit us is worth knowing even when the
       // answer is a person — attackerHint() below still says it out loud, and
@@ -112,7 +113,7 @@ function liveAttacker (session) {
   const rec = session && session.lastAttacker
   const bot = session && session.bot
   if (!rec || !bot || !bot.entity) return null
-  if (Date.now() - rec.at > ATTACKER_TTL_MS) return null
+  if (gameClock.now() - rec.at > ATTACKER_TTL_MS) return null
   const live = bot.entities[rec.id]
   if (!live || live === bot.entity || live.isValid === false || !live.position) return null
   // A person is never handed back as something to swing at. This is the door
@@ -129,7 +130,7 @@ function liveAttacker (session) {
 function attackerHint (session) {
   const rec = session && session.lastAttacker
   if (!rec) return ''
-  const ago = Math.round((Date.now() - rec.at) / 1000)
+  const ago = Math.round((gameClock.now() - rec.at) / 1000)
   if (ago > 120) return ''
   return `; последним бил ${rec.name} ${ago}с назад у ${rec.pos.x},${rec.pos.y},${rec.pos.z}`
 }
@@ -443,7 +444,7 @@ async function shieldFlanks (session, ctl, threat, { budget = 6, deadline = 0 } 
 
   for (const d of openSides(bot, 2)) {
     if ((ctl && ctl.aborted) || placed >= budget) break
-    if (deadline && Date.now() >= deadline) break
+    if (deadline && gameClock.now() >= deadline) break
     if (d.dx === toward.dx && d.dz === toward.dz) continue
     const cell = feet.offset(d.dx, 0, d.dz)
     // A refused placement into a mob costs a full timeout; skip the side it is
@@ -479,14 +480,14 @@ async function holdTheLine (session, ctl, shape, entity, deadline) {
 
   let swings = 0
   let lastSeal = 0
-  while (!(ctl && ctl.aborted) && Date.now() < deadline) {
+  while (!(ctl && ctl.aborted) && gameClock.now() < deadline) {
     if (!entity.isValid) return { held: true, killed: entity.username || entity.name, swings }
     const dist = entity.position.distanceTo(bot.entity.position)
 
     // Only a drift can be sealed: filling one cell of a cave just gives the
     // mob a step to walk around.
-    if (shape && dist >= SEAL_GAP && Date.now() - lastSeal > 3000) {
-      lastSeal = Date.now()
+    if (shape && dist >= SEAL_GAP && gameClock.now() - lastSeal > 3000) {
+      lastSeal = gameClock.now()
       const seal = await sealCorridor(session, ctl, shape, { levels: walkerLevels(shape) })
       if (seal.ok) {
         // The floor block already denies entry; the rest of the column is a
@@ -679,7 +680,7 @@ async function retreat (session, ctl, entity, { maxRadius = 20, timeoutMs = 1500
   const threat = threatPoint(entity)
   if (!threat) return { mode: 'цель пропала' }
   const ranged = !!(entity.name && RANGED.has(entity.name))
-  const deadline = Date.now() + timeoutMs
+  const deadline = gameClock.now() + timeoutMs
   let towerTrouble = null
 
   // Shape before doctrine. Inside a drift this is the answer for archers too:
@@ -694,7 +695,7 @@ async function retreat (session, ctl, entity, { maxRadius = 20, timeoutMs = 1500
   // бежим с оглядкой на всех (flee.js); прижали — дальше старая доктрина.
   const crowd = countHostiles(bot, 14)
   if (headroomAt(bot, 6) > 6 && (crowd >= 2 || DO_NOT_TRADE_WITH.has(entity.name))) {
-    const ran = await flee.smartFlee(session, ctl, { timeoutMs: Math.max(3000, deadline - Date.now()) })
+    const ran = await flee.smartFlee(session, ctl, { timeoutMs: Math.max(3000, deadline - gameClock.now()) })
     if (!ran.cornered) return { ...ran, mode: `убежал с оглядкой: ${ran.mode}` }
   }
 
@@ -768,9 +769,9 @@ async function retreat (session, ctl, entity, { maxRadius = 20, timeoutMs = 1500
     if (wall.ok) return { mode: 'заложился блоком', at: xyz(bot.entity.position), placed: wall.placed }
 
     for (const spot of coverSpots(bot, threat, maxRadius).slice(0, 3)) {
-      if (ctl.aborted || Date.now() >= deadline) break
+      if (ctl.aborted || gameClock.now() >= deadline) break
       // One bad candidate must not eat the whole budget.
-      const leg = Math.min(deadline, Date.now() + 5000)
+      const leg = Math.min(deadline, gameClock.now() + 5000)
       const r = await travelXZ(bot, ctl, spot.x, spot.z, { range: 1, retries: 0, deadline: leg })
       tried.push(`${spot.x},${spot.z}${r.ok ? '' : ' ✗'}`)
       if (!r.ok) continue
@@ -823,7 +824,7 @@ async function retreat (session, ctl, entity, { maxRadius = 20, timeoutMs = 1500
 
   // Последний довод — бег. Не по прямой «прочь от этого» пешком, а спринтом и
   // с оглядкой на всех, кто рядом (flee.js).
-  const ran = await flee.smartFlee(session, ctl, { timeoutMs: Math.max(3000, deadline - Date.now()) })
+  const ran = await flee.smartFlee(session, ctl, { timeoutMs: Math.max(3000, deadline - gameClock.now()) })
   return {
     ...ran,
     mode: ranged ? `укрытия не нашёл — ${ran.mode}` : `столб не вышел — ${ran.mode}`,
@@ -1025,7 +1026,7 @@ function makeShield (session, ctl, { shield: policy = 'ranged' } = {}) {
     const group = String((pkt && pkt.cooldownGroup) || '')
     if (!/shield/.test(group)) return
     st.disabled++
-    disabledUntil = Date.now() + Math.max(0, (pkt.cooldownTicks || 0)) * 50
+    disabledUntil = gameClock.now() + Math.max(0, (pkt.cooldownTicks || 0)) * 50
   }
 
   // Damage split by whether the block was actually up when it landed. This is
@@ -1044,7 +1045,7 @@ function makeShield (session, ctl, { shield: policy = 'ranged' } = {}) {
   // server drops the block under us (an axe does exactly that) and a tally of
   // what we asked for would never notice.
   const tick = () => {
-    const now = Date.now()
+    const now = gameClock.now()
     const dt = lastTick ? now - lastTick : 0
     lastTick = now
     const nowUp = shieldUp(bot)
@@ -1099,16 +1100,16 @@ function makeShield (session, ctl, { shield: policy = 'ranged' } = {}) {
   try { bot._client.on('sound_effect', onRawSound) } catch {}
   bot.on('health', onHealth)
   try { bot._client.on('set_cooldown', onCooldown) } catch {}
-  const timer = setInterval(tick, 100)
+  const timer = gameClock.setInterval(tick, 100)
   if (timer.unref) timer.unref()
 
-  const phase0 = Date.now()
+  const phase0 = gameClock.now()
   const guard = {
     melee: policy === 'always',
     measure: policy === 'measure',
     // Ровно половину времени щит поднят, ровно половину опущен, фазами по три
     // секунды. Обе колонки урона набираются в одном бою под одним обстрелом.
-    phase () { return Math.floor((Date.now() - phase0) / MEASURE_PHASE_MS) % 2 === 0 },
+    phase () { return Math.floor((gameClock.now() - phase0) / MEASURE_PHASE_MS) % 2 === 0 },
     stats: st,
     // Предполётный отчёт живёт здесь по той же причине, что и щитовой: это
     // единственный объект, переживающий все выходы из тела боя, а «что я
@@ -1206,13 +1207,13 @@ function makeShield (session, ctl, { shield: policy = 'ranged' } = {}) {
         // so a bot that re-sent every tick because it could not see its own
         // metadata would hold a shield that never finishes raising. If nothing
         // has ever been confirmed, ask once and leave it: the packet did go out.
-        if (!st.confirmed || Date.now() - lastAsk < 1000) return false
+        if (!st.confirmed || gameClock.now() - lastAsk < 1000) return false
       }
       // Do not spam the packet at a shield the server is holding on cooldown;
       // the disable is timed and re-asking cannot shorten it.
-      if (Date.now() < disabledUntil) return false
+      if (gameClock.now() < disabledUntil) return false
       want = true
-      lastAsk = Date.now()
+      lastAsk = gameClock.now()
       st.raises++
       try {
         bot.activateItem(true)
@@ -1220,8 +1221,8 @@ function makeShield (session, ctl, { shield: policy = 'ranged' } = {}) {
         why = String((err && err.message) || err)
         return false
       }
-      const deadline = Date.now() + SHIELD_CONFIRM_MS
-      while (Date.now() < deadline && !ctl.aborted) {
+      const deadline = gameClock.now() + SHIELD_CONFIRM_MS
+      while (gameClock.now() < deadline && !ctl.aborted) {
         // tick() and not a counter of our own: the rising edge has exactly one
         // owner, and polling at 40ms sees blocks that go up and back down
         // between two 100ms samples — five melee raises came back as three
@@ -1288,7 +1289,7 @@ function makeShield (session, ctl, { shield: policy = 'ranged' } = {}) {
     close () {
       if (closed) return
       closed = true
-      clearInterval(timer)
+      gameClock.clearInterval(timer)
       try { bot._client.removeListener('sound_effect', onRawSound) } catch {}
       bot.removeListener('health', onHealth)
       try { bot._client.removeListener('set_cooldown', onCooldown) } catch {}
@@ -1375,7 +1376,7 @@ async function dressForFight (session, ctl, entity) {
   // спросить до кликов дешевле, чем получить отказ после.
   if (session.eating) return { skipped: 'ем — дерусь в чём есть' }
 
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let r
   try {
     r = await armor.equipBestArmor(session, ctl, { confirmMs: 400 })
@@ -1384,7 +1385,7 @@ async function dressForFight (session, ctl, entity) {
     // словами и решит сам, стоит ли отступать.
     return { skipped: String((err && err.message) || err) }
   }
-  const seconds = Math.round((Date.now() - t0) / 100) / 10
+  const seconds = Math.round((gameClock.now() - t0) / 100) / 10
   if (r.stopped) return { skipped: r.stopped, defense: r.defense }
   if (!r.equipped.length) return { already: true, defense: r.defense }
   // Цена видна: это клики, и они стоят секунд перед контактом.
@@ -1423,19 +1424,19 @@ function watchFight (bot, parent) {
   if (parent.aborted) sub.abort()
   if (!FIGHT_WATCH() || !bot) return { ctl: sub, close: () => {} }
   const hp0 = bot.health ?? 20
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   let swings = 0
   const attack = bot.attack
   bot.attack = function (...args) { swings++; return attack.apply(this, args) }
-  const timer = setInterval(() => {
+  const timer = gameClock.setInterval(() => {
     const lost = hp0 - (bot.health ?? 0)
-    const dt = Date.now() - t0
+    const dt = gameClock.now() - t0
     if (swings === 0 && ((dt >= 4000 && lost >= 4) || (dt >= 8000 && lost >= 8))) {
       sub.why = `ни одного удара за ${Math.round(dt / 1000)} с, а потерял ${Math.round(lost)} хп — бросил бой`
       sub.abort()
     }
   }, 250)
-  return { ctl: sub, close: () => { clearInterval(timer); if (bot.attack !== attack) bot.attack = attack } }
+  return { ctl: sub, close: () => { gameClock.clearInterval(timer); if (bot.attack !== attack) bot.attack = attack } }
 }
 
 async function fight (session, ctl, opts = {}) {
@@ -1635,12 +1636,12 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
     try { bot.deactivateItem() } catch {}
   })
 
-  const deadline = Date.now() + Math.min(300, timeoutSeconds) * 1000
+  const deadline = gameClock.now() + Math.min(300, timeoutSeconds) * 1000
   let swings = 0
   let stood = null
   let lastSeal = 0
 
-  while (!ctl.aborted && Date.now() < deadline) {
+  while (!ctl.aborted && gameClock.now() < deadline) {
     if (!entity.isValid) {
       await guard.raise(false)
       try { bot.pathfinder.setGoal(null) } catch {}
@@ -1693,7 +1694,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       return { retreated: true, from: label, health: Math.round(bot.health), swings, safety, escape, ...how }
     }
 
-    const tick = Date.now()
+    const tick = gameClock.now()
     guard.sawMobs(countHostiles(bot, 8))
     const dist = entity.position.distanceTo(bot.entity.position)
     if (dist <= reach) {
@@ -1722,7 +1723,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
     // above it takes real time: lookAt awaits a packet and a shield raise
     // waits for the server to confirm. A flat sleep turned the stated 650 into
     // a second and more, and then a shield comparison measures the sleep.
-    await sleep(Math.max(0, SWING_MS - (Date.now() - tick)))
+    await sleep(Math.max(0, SWING_MS - (gameClock.now() - tick)))
   }
 
   await guard.raise(false)

@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Лаборатория «от спавна до горящего портала без алмазной кирки» (агент G, 02.10.2026, research/07-portal-techniques.md).
 // Ферма, только слоты 29–30. Пара слотов с ОДНИМ сидом (farm up 2 --from 29 --fresh --seeds S,S), /random reset,
 // тело на точке спавна мира (из level.dat), одинаковый набор; дальше без команд:
@@ -70,7 +71,7 @@ const track = r => {
     const hp = r.state.health
     if (typeof hp === 'number') {
       minHp = Math.min(minHp, hp)
-      if (t0Scene && hp < prevHp - 0.5 && hpDrops.length < 12) hpDrops.push({ s: Math.round((Date.now() - t0Scene) / 1000), hp: Math.round(hp * 10) / 10, from: Math.round(prevHp * 10) / 10, pos: r.state.pos, before: prevPos })
+      if (t0Scene && hp < prevHp - 0.5 && hpDrops.length < 12) hpDrops.push({ s: Math.round((gameClock.now() - t0Scene) / 1000), hp: Math.round(hp * 10) / 10, from: Math.round(prevHp * 10) / 10, pos: r.state.pos, before: prevPos })
       prevHp = hp
       prevPos = r.state.pos || prevPos
     }
@@ -86,7 +87,7 @@ async function portalLit () {
 
 // Как этап cast кампании (campaign.js, поверху): observe → к лаве → литьё; нет лавы — разведка.
 async function baseline (deadline, steps, t0) {
-  const mark = (what, extra = {}) => steps.push({ s: Math.round((Date.now() - t0) / 100) / 10, what, ...extra })
+  const mark = (what, extra = {}) => steps.push({ s: Math.round((gameClock.now() - t0) / 100) / 10, what, ...extra })
   let lava = null
   const seenLava = r => {
     const d = r && r.detail
@@ -101,8 +102,8 @@ async function baseline (deadline, steps, t0) {
   mark('observe', { lava })
   const far = () => lava && lastState && lastState.pos && Math.hypot(lava.x - lastState.pos.x, lava.z - lastState.pos.z) > 16
   if (far()) { const g = await act('goto', { x: lava.x, y: lava.y, z: lava.z, range: 8, timeoutSeconds: 90 }); mark('goto', { status: g.status }) }
-  for (let i = 0; i < 6 && Date.now() < deadline; i++) {
-    const left = Math.round((deadline - Date.now()) / 1000)
+  for (let i = 0; i < 6 && gameClock.now() < deadline; i++) {
+    const left = Math.round((deadline - gameClock.now()) / 1000)
     if (left < 30) break
     const r = await act('portal', { mode: 'cast', timeoutSeconds: Math.min(540, left) })
     const why = String((r.detail && r.detail.stopped) || r.error || '')
@@ -114,7 +115,7 @@ async function baseline (deadline, steps, t0) {
       if (lava && lastState && lastState.pos && Math.hypot(lava.x - lastState.pos.x, lava.y - lastState.pos.y, lava.z - lastState.pos.z) > 12 && i < 3) {
         const g = await act('goto', { x: lava.x, y: lava.y, z: lava.z, range: 8, timeoutSeconds: 90 }); mark('goto', { status: g.status }); continue
       }
-      const e = await act('explore', { block: 'lava', radius: 48, stepDistance: 60, timeoutSeconds: Math.min(150, Math.max(20, Math.round((deadline - Date.now()) / 1000) - 10)) })
+      const e = await act('explore', { block: 'lava', radius: 48, stepDistance: 60, timeoutSeconds: Math.min(150, Math.max(20, Math.round((deadline - gameClock.now()) / 1000) - 10)) })
       const f = seenLava(e)
       mark('explore', { found: f })
       if (f) { lava = f; if (far()) { const g = await act('goto', { x: lava.x, y: lava.y, z: lava.z, range: 8, timeoutSeconds: 90 }); mark('goto', { status: g.status }) } }
@@ -154,7 +155,7 @@ async function main () {
   await kit.cmd('/gamemode survival')
   await sleep(1500)
   const size = logSize()
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   t0Scene = t0
   const deadline = t0 + MINUTES * 60000
   const steps = []
@@ -180,7 +181,7 @@ async function main () {
     polling = false
     await poller
   }
-  const seconds = Math.round((Date.now() - t0) / 1000)
+  const seconds = Math.round((gameClock.now() - t0) / 1000)
   try { await call('stop') } catch {}
   const st = await act('status')
   const deaths = deathLines(size)
@@ -209,7 +210,7 @@ async function main () {
   }
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify({ slot, mode: MODE, ok, seconds, minHp, deaths: deaths.length, site: rec.site && rec.site.kind, stopped: rec.stopped }))
-  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-portal-natural окончена' }), sleep(8000)]) } catch {}
+  try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-portal-natural окончена' }), gameClock.wall.sleep(8000)]) } catch {}
   process.exit(0)
 }
 main().catch(e => { console.error(e); process.exit(1) })

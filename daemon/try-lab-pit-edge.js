@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 const fs = require('fs')
 const { connect, createKit, sleep } = require('./scene-kit')
 async function main () {
@@ -27,9 +28,9 @@ async function main () {
     await conn.call('disconnect')
     await conn.call('connect')
     result.start = (await conn.call('status', { physics: true })).detail.physics
-    const start = Date.now()
+    const start = gameClock.now()
     result.climb = await conn.call('surface', { targetY: 105, preferPillar: true, timeoutSeconds: 12 })
-    result.elapsedMs = Date.now() - start
+    result.elapsedMs = gameClock.now() - start
     await sleep(1000)
     result.end = await conn.call('situation')
     result.ok = result.end.detail.surface && result.end.state.health === 20 && result.end.state.pos.y >= 105

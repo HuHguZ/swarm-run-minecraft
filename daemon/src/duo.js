@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // 1 против 2 (2026-09-26: пользователь с другом часто бьют одного бота вдвоём;
 // PVP-RESEARCH б.21, в.9). Что делает про-игрок против двоих:
 //  · держит обоих в передней полусфере: угол между ними из его точки больше
@@ -68,8 +69,8 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     hurt: [], dmg2: 0, hitsOn: {}
   }
   const cd = {}
-  const ready = (k) => Date.now() >= (cd[k] || 0)
-  const rest = (k, ms) => { cd[k] = Date.now() + ms }
+  const ready = (k) => gameClock.now() >= (cd[k] || 0)
+  const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
   // Одна надпись на приём раз в ms — чтобы лог читался, а счёт шёл.
   const note = (what, ms = 3000) => { if (ready('note:' + what)) { rest('note:' + what, ms); used(what) } }
   let lastSwitch = 0
@@ -93,7 +94,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   // Враги этого боя: цель, кто бил последние 10 с, кто бил нас минуту назад (прошлый кусок).
   const foes = () => {
     if (!bot.entity) return []
-    const now = Date.now()
+    const now = gameClock.now()
     const out = new Map()
     const t = target()
     if (t && t.position && t.isValid !== false) out.set(t.id, t)
@@ -114,9 +115,9 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     try {
       if (!bot.entity) return
       if (victim === bot.entity) {
-        st.hurt.push(Date.now())
+        st.hurt.push(gameClock.now())
         while (st.hurt.length > 8) st.hurt.shift()
-        if (source && isPlayer(source) && source.id !== bot.entity.id && source.username && source.username !== bot.username) mem.seen.set(source.username, Date.now())
+        if (source && isPlayer(source) && source.id !== bot.entity.id && source.username && source.username !== bot.username) mem.seen.set(source.username, gameClock.now())
       } else if (source && source.id === bot.entity.id && isPlayer(victim)) {
         const k = victim.username || String(victim.id)
         st.hitsOn[k] = (st.hitsOn[k] || 0) + 1
@@ -166,7 +167,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     const busy = s.consuming ? 'ест или пьёт' : s.drawing ? 'тянет лук' : s.inWeb ? 'в паутине' : null
     const fsx = tt && tt.foes ? tt.foes.get(e.id) : null
     const held = e.equipment && e.equipment[0] ? e.equipment[0].name : null
-    const readyMs = fsx && fsx.swungAt ? Math.max(0, fsx.swungAt + tempo.swingCooldownMs(held) - Date.now()) : 0
+    const readyMs = fsx && fsx.swungAt ? Math.max(0, fsx.swungAt + tempo.swingCooldownMs(held) - gameClock.now()) : 0
     return {
       e, ehp, busy, readyMs,
       d: Math.hypot(e.position.x - me.x, e.position.z - me.z),
@@ -191,10 +192,10 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   const pushCache = new Map()
   const pushable = (e) => {
     const c = pushCache.get(e.id)
-    if (c && Date.now() - c.at < 600) return c.v
+    if (c && gameClock.now() - c.at < 600) return c.v
     let v = false
     try { const p = edges.pushPlan(bot, e, {}); v = !!(p && p.now) } catch {}
-    pushCache.set(e.id, { at: Date.now(), v })
+    pushCache.set(e.id, { at: gameClock.now(), v })
     return v
   }
   // Чем меньше, тем лучше бить его: слабый, занятый, у края, в руке; щит к нам без топора — хуже.
@@ -215,7 +216,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     if (!ON || closed || !bot.entity) return null
     const fs = foes()
     if (fs.length < 2) return null
-    const now = Date.now()
+    const now = gameClock.now()
     const cur = ctx.entity
     const xs = fs.map(info)
     const curX = xs.find(x => x.e.id === (cur && cur.id)) || null
@@ -302,7 +303,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     return null
   }
   const switched = (from, to, why) => {
-    lastSwitch = Date.now()
+    lastSwitch = gameClock.now()
     prevTarget = from ? from.id : null
     const k = why.replace(/ \(.*$/, '')
     st.switches[k] = (st.switches[k] || 0) + 1
@@ -363,7 +364,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     try {
       await bot.equip(web, 'hand')
       await bot.lookAt(below.position.offset(0.5, 1, 0.5), true)
-      await Promise.race([bot.placeBlock(below, new Vec3(0, 1, 0)), new Promise((resolve, reject) => setTimeout(() => reject(new Error('timeout')), 600))])
+      await Promise.race([bot.placeBlock(below, new Vec3(0, 1, 0)), new Promise((resolve, reject) => gameClock.setTimeout(() => reject(new Error('timeout')), 600))])
     } catch {}
     const b = bot.blockAt(below.position.offset(0, 1, 0))
     ok = !!(b && b.name === 'cobweb')
@@ -412,7 +413,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
       strong = true
       if (ready('pincerNote')) { rest('pincerNote', 3000); st.escapes++; used('1 против 2: ухожу из клещей') }
     } else if (ctx.cooldownLeft > 150 || ctx.r > HIT_REACH + 0.5) {
-      const now = Date.now()
+      const now = gameClock.now()
       if (now >= spotAt) { spotAt = now + 400; spot = bestSpot(t, o) }
       if (spot && Math.hypot(spot.x - me.x, spot.z - me.z) > 0.6) {
         w = unit(spot.x - me.x, spot.z - me.z)

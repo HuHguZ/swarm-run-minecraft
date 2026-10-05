@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./src/game-clock')
 // Зелья (src/brew.js), честно: только сырьё через /give — стержни ифрита,
 // булыжник, песок, уголь, слизь, адский нарост, редстоун, порох. Стойку,
 // порошок, сливки магмы, стекло (печь), бутылки и воду в них бот делает сам.
@@ -17,13 +18,13 @@ const call = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id: rid, method, params }))
 })
 ws.on('message', raw => {
-  const m = JSON.parse(raw.toString())
+  const m = JSON.parse(raw.toString()); gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
   const p = pending.get(m.id)
   if (!p) return
   pending.delete(m.id)
   m.ok ? p.resolve(m.result) : p.reject(new Error(m.error))
 })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const sleep = ms => gameClock.sleep(ms)
 async function cmd (text) { await call('say', { text }); await sleep(350) }
 
 let failures = 0
@@ -81,10 +82,10 @@ async function main () {
     await cmd('/give @s minecraft:slime_ball 1')
     await cmd('/give @s minecraft:nether_wart 1')
     await sleep(800)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('brew', { potion: 'fire_resistance', count: 3 })
     const d = r.detail || {}
-    const s = Math.round((Date.now() - t0) / 1000)
+    const s = Math.round((gameClock.now() - t0) / 1000)
     check('(б) огнестойкость сварена ×3', r.status === 'done' && d.made === 3, `${brief(r)} за ${s} с`)
     const inv = (r.state && r.state.inventory) || {}
     check('(б) стойку, стекло, бутылки сделал сам', !!d.stand && !inv.sand && !inv.blaze_rod, JSON.stringify(inv))
@@ -98,10 +99,10 @@ async function main () {
     await cmd('/give @s minecraft:gunpowder 1')
     await cmd('/give @s minecraft:glass_bottle 3')
     await sleep(800)
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     const r = await call('brew', { potion: 'long_strength', splash: true, count: 3 })
     const d = r.detail || {}
-    check('(в) взрывная долгая сила ×3', r.status === 'done' && d.made === 3, `${brief(r)} за ${Math.round((Date.now() - t0) / 1000)} с`)
+    check('(в) взрывная долгая сила ×3', r.status === 'done' && d.made === 3, `${brief(r)} за ${Math.round((gameClock.now() - t0) / 1000)} с`)
     console.log('     шаги:', (d.steps || []).join(' | '))
   }
 

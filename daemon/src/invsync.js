@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Рюкзак клиента расходится с сервером после окон — и это не наша догадка, а
 // замер: крафт на верстаке ответил «сделал кирку, верстак вернул», рюкзак
 // тела показывал ни кирки, ни верстака, а /clear @s crafting_table 0 на
@@ -38,7 +39,7 @@ function install (bot) {
   })
 
   // После любого закрытия окна — попросить у сервера полный рюкзак.
-  bot.on('windowClose', () => setTimeout(() => resync(bot), 150))
+  bot.on('windowClose', () => gameClock.wall.setTimeout(() => resync(bot), 150))
 }
 
 function resync (bot) {
@@ -73,7 +74,7 @@ function flushGrid (bot) {
   if (!bot || !bot._client || bot.currentWindow) return false
   try {
     bot._client.write('close_window', { windowId: 0 })
-    setTimeout(() => resync(bot), 150)
+    gameClock.wall.setTimeout(() => resync(bot), 150)
     return true
   } catch {
     return false

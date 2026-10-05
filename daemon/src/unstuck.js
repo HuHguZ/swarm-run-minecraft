@@ -1,4 +1,5 @@
 'use strict'
+const gameClock = require('./game-clock')
 // Общий выход из застреваний (поток unstuck, 02.10.2026; журнал research/dev-H-unstuck.md, разбор research/stuck-cases.md).
 //
 // До этого выход был разбросан по модулям: stuckGuard (8 с без сдвига → отказ), unstick (рывок назад с прыжком),
@@ -31,7 +32,7 @@ function on (override) {
   return DEFAULT_ON
 }
 
-const sleepReal = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleepReal = ms => new Promise(resolve => gameClock.setTimeout(resolve, ms))
 
 // ------------------------------------------------------------------ блоки
 const solid = b => !!b && b.boundingBox === 'block'
@@ -247,7 +248,7 @@ async function digVisible (ctx, pos, opts = {}) {
 
 function withTimeout (p, ms) {
   let t = null
-  return Promise.race([p, new Promise((_r, reject) => { t = setTimeout(() => reject(new Error('копка не кончилась')), ms) })]).finally(() => clearTimeout(t))
+  return Promise.race([p, new Promise((_r, reject) => { t = gameClock.setTimeout(() => reject(new Error('копка не кончилась')), ms) })]).finally(() => gameClock.clearTimeout(t))
 }
 
 async function hold (ctx, keys, ms) {
@@ -300,7 +301,7 @@ const RUNGS = {
     const back = new Vec3(Math.sin(yaw), 0, Math.cos(yaw))
     const behind = p0.plus(back).floored()
     if (groundNear(bot, behind) && !solid(at(bot, behind)) && !solid(at(bot, behind.offset(0, 1, 0)))) await hold(ctx, ['back'], 350)
-    const side = (Math.floor(Date.now() / 1000) % 2) ? 'left' : 'right'
+    const side = (Math.floor(gameClock.now() / 1000) % 2) ? 'left' : 'right'
     if (frontOk) await hold(ctx, ['forward', 'jump', side], 550)
     const moved = bot.entity.position.distanceTo(p0)
     return { applied: moved >= 0.3, why: `назад и прыжок, сдвиг ${moved.toFixed(2)}` }
@@ -365,10 +366,10 @@ const RUNGS = {
     }
     if (solid(at(bot, front.offset(0, 1, 0))) || solid(at(bot, front.offset(0, 2, 0)))) return { applied: false, why: `выемку не сделал: ${skip.slice(0, 2).join('; ')}` }
     try { await bot.look(Math.atan2(-dir.x, -dir.z), 0, true) } catch {}
-    const t0 = Date.now()
+    const t0 = gameClock.now()
     try {
       bot.setControlState('forward', true); bot.setControlState('jump', true)
-      while (Date.now() - t0 < 3000 && !aborted(ctx) && !(bot.entity.onGround && !m.inWater(bot))) await (ctx.sleep || sleepReal)(100)
+      while (gameClock.now() - t0 < 3000 && !aborted(ctx) && !(bot.entity.onGround && !m.inWater(bot))) await (ctx.sleep || sleepReal)(100)
     } finally { try { bot.clearControlStates() } catch {} }
     const out = bot.entity.onGround && !m.inWater(bot)
     return { applied: out || dug.length > 0, why: `выемка ${dug.join(', ') || 'уже была'}${out ? ', вылез' : ', не вылез'}` }
@@ -426,17 +427,17 @@ const RUNGS = {
     const left = () => Math.hypot(toward.x - bot.entity.position.x, toward.z - bot.entity.position.z)
     const len = Math.min(22, dist * 0.6)
     const tried = []
-    const tw = Date.now()
+    const tw = gameClock.now()
     for (const deg of [0, 35, -35, 70, -70]) {
-      if (aborted(ctx) || Date.now() - tw > 25000 || (ctx.deadline && (ctx.now ? ctx.now() : Date.now()) > ctx.deadline - 8000)) break
+      if (aborted(ctx) || gameClock.now() - tw > 25000 || (ctx.deadline && (ctx.now ? ctx.now() : gameClock.now()) > ctx.deadline - 8000)) break
       const a = deg * Math.PI / 180
       const ux = (dx * Math.cos(a) - dz * Math.sin(a)) / dist; const uz = (dx * Math.sin(a) + dz * Math.cos(a)) / dist
       const wx = Math.floor(p0.x + ux * len); const wz = Math.floor(p0.z + uz * len)
       const sub = new goals.GoalNearXZ(wx, wz, 3)
       let t = null
       try {
-        await Promise.race([gotoGoal(bot, sub), new Promise((_r, reject) => { t = setTimeout(() => reject(new Error('промежуточная: 15 с')), 15000) })])
-      } catch (err) { tried.push(`${deg}°: ${String(err.message).slice(0, 40)}`) } finally { clearTimeout(t); try { bot.pathfinder.setGoal(null) } catch {} }
+        await Promise.race([gotoGoal(bot, sub), new Promise((_r, reject) => { t = gameClock.setTimeout(() => reject(new Error('промежуточная: 15 с')), 15000) })])
+      } catch (err) { tried.push(`${deg}°: ${String(err.message).slice(0, 40)}`) } finally { gameClock.clearTimeout(t); try { bot.pathfinder.setGoal(null) } catch {} }
       if (dist - left() >= 6) return { applied: true, why: `промежуточная ${wx},${wz} (${deg}°): ближе на ${Math.round(dist - left())}` }
       if (bot.entity.position.distanceTo(p0) < 1) tried.push(`${deg}°: ни шага`)
     }
@@ -506,17 +507,17 @@ async function swimTo (ctx, fluid, inFluid, { radius = 8, ms = 8000 } = {}) {
   const toward = ctx.toward || null
   const route = fluidRoute(bot, fluid, { radius, toward })
   if (!route) return { applied: false, why: 'берега рядом нет' }
-  const t0 = Date.now()
+  const t0 = gameClock.now()
   const p0 = bot.entity.position.clone()
   // До сухой опоры: тело на земле и не в жидкости. «Вышел из воды» на миг (прыжок у стенки) — ещё не берег: отпустить
   // клавиши там — упасть обратно (kelp, us-main1).
   const dry = () => !inFluid() && !!bot.entity.onGround
   try {
-    let bestD = Infinity; let bestT = Date.now()
-    while (Date.now() - t0 < ms && !aborted(ctx) && !dry()) {
+    let bestD = Infinity; let bestT = gameClock.now()
+    while (gameClock.now() - t0 < ms && !aborted(ctx) && !dry()) {
       // 3 с не ближе к берегу (упёрся в стенку, не вылезти) — бросить: следующая ступень (выемка, ступенька).
       const dT = bot.entity.position.distanceTo(route.target.offset(0.5, 0, 0.5))
-      if (dT < bestD - 0.2) { bestD = dT; bestT = Date.now() } else if (Date.now() - bestT > 3000) break
+      if (dT < bestD - 0.2) { bestD = dT; bestT = gameClock.now() } else if (gameClock.now() - bestT > 3000) break
       const r = (inFluid() && fluidRoute(bot, fluid, { radius, toward })) || route
       const next = inFluid() ? (r.path[0] || r.target) : r.target
       await bot.lookAt(next.offset(0.5, 1.6, 0.5), true)
@@ -569,7 +570,7 @@ async function breakToward (ctx, depth) {
 // эвристика цели не улучшилась на 1.5, а тело топчется в радиусе roam; (в) dig — одна и та же копка дольше digMs.
 // Не застревание: идёт поиск (последний path_update — 'partial' с пустым путём, свежий), pathfinder копает/ставит,
 // исполнитель моста/спуска держит своё (bot._ndBridgeExec).
-function createDetector (bot, { goal = null, stillMs = 3000, minMove = 0.4, progressMs = 20000, roam = 5, digMs = 10000, buildMs = 6000, now = () => Date.now() } = {}) {
+function createDetector (bot, { goal = null, stillMs = 3000, minMove = 0.4, progressMs = 20000, roam = 5, digMs = 10000, buildMs = 6000, now = () => gameClock.now() } = {}) {
   let anchor = null; let anchorT = 0
   let best = Infinity; let bestT = 0; let roamAt = null
   let lastPath = null; let lastPathT = 0; let lastPartialT = -Infinity
@@ -639,7 +640,7 @@ function createDetector (bot, { goal = null, stillMs = 3000, minMove = 0.4, prog
 // ------------------------------------------------------------------ память отказов (между вызовами goto)
 // Один и тот же отказ поиска в той же точке: кампания звала goto 6801 раз за 5 мин у ямы под лавой (neF-S26-1).
 const memory = new WeakMap()
-function noteRefusal (bot, kind, pos, t = Date.now()) {
+function noteRefusal (bot, kind, pos, t = gameClock.now()) {
   let m = memory.get(bot)
   if (!m) { m = []; memory.set(bot, m) }
   m.push({ kind, pos: pos.clone ? pos.clone() : new Vec3(pos.x, pos.y, pos.z), t })
@@ -651,7 +652,7 @@ function noteRefusal (bot, kind, pos, t = Date.now()) {
 // watch(session, ctl, { deadline }) → { attach(bot, goal, { resume, fail }) → handle, stats, report() }.
 // handle (на один gotoGoal): busy() — идёт ступень (gotoGoal не реагирует на свои setGoal(null)); refused(r) — отказ поиска:
 // true — забрали себе (ступень и resume/fail), false — пусть gotoGoal отвечает как раньше; stop().
-function watch (session, ctl, { deadline = Infinity, maxRungs = 7, maxTotal = 30, log = console.log, now = () => Date.now(), sleep = sleepReal, tickMs = 250, detector = {} } = {}) {
+function watch (session, ctl, { deadline = Infinity, maxRungs = 7, maxTotal = 30, log = console.log, now = () => gameClock.now(), sleep = sleepReal, tickMs = 250, detector = {} } = {}) {
   const st = { detected: 0, refusals: 0, rungs: [], freed: 0, gaveUp: null, cls: {} }
   let spot = null; let tried = []; let spotH = null; let total = 0
   // Лестница в этой точке исчерпана — до конца перехода не вмешиваемся (дальше прежний goto: сторож 8 с, рывки, план XZ).
@@ -667,7 +668,7 @@ function watch (session, ctl, { deadline = Infinity, maxRungs = 7, maxTotal = 30
     let stopped = false
     const onPath = r => det.feed(r)
     bot.on('path_update', onPath)
-    const timer = setInterval(() => {
+    const timer = gameClock.setInterval(() => {
       if (busy || stopped || (ctl && ctl.aborted)) return
       let v = null
       try { v = det.check() } catch {}
@@ -737,7 +738,7 @@ function watch (session, ctl, { deadline = Infinity, maxRungs = 7, maxTotal = 30
       if (detached) return
       detached = true
       stopped = true
-      clearInterval(timer)
+      gameClock.clearInterval(timer)
       bot.removeListener('path_update', onPath)
     }
 
