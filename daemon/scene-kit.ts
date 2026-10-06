@@ -234,7 +234,7 @@ let clockSocket = null
 // Native observers also need tick-driven physics. Each bot gets its own plugin
 // scope; only a standalone scene's primary bot supplies the process clock.
 function createGameBot (options, { primary = false }: any = {} as Record<string, any>) {
-  const clock = new gameClock.GameClock()
+  const clock = new gameClock.GameClock(gameClock.lockstepOptions())
   const { plugins } = require('./src/tick-plugins').createTickPlugins(clock)
   const bot = require('mineflayer').createBot({ ...options, plugins: { ...plugins, ...options.plugins } })
   clock.attach(bot)
@@ -430,13 +430,32 @@ function createKit ({ call, heard = [], logFile = DEFAULT_LOG, player = 'NeuroDo
     throw new ArenaError(`я не в ${dim}${floor ? ` на ${floor}` : ''}: заголовок говорит ${last.dimension}, под ногами ${last.standingOn}, позиция ${JSON.stringify(last.pos)} — ждал ${seconds} с`, last)
   }
 
+  // «/random reset *» без соли — та же последовательность лута (бартер!) на каждой копии одного сида мира (разбор
+  // 06.10: все бартерные акты на сиде-двойнике дали ровно +2 жемчуга). Соль по умолчанию случайная; RNG_SEED= — повтор
+  // (A/B-сцены с намеренно одинаковой последовательностью). Ответ сервера сверяется; соль возвращается для итога сцены.
+  // В Аду — отдельной командой: у Paper последовательности могут быть свои у каждого мира, лишний сброс той же солью безвреден.
+  // Ответ «Reset N random sequence(s)» сервер в журнал не пишет (RandomCommand: sendSuccess(…, false)) — он только в чате
+  // тела, поэтому через RPC ask. Соль — int (resetAllSequencesAndSetNewDefaults(…, int, boolean, boolean)).
+  async function randomReset (seed: unknown = process.env.RNG_SEED) {
+    const salt = seed != null && String(seed).trim() !== '' ? Math.trunc(Number(seed)) : Math.floor(Math.random() * 2 ** 31)
+    if (!Number.isSafeInteger(salt) || Math.abs(salt) > 2 ** 31 - 1) throw new ArenaError(`соль ГСЧ «${seed}» — не int`)
+    for (const dim of [null, 'the_nether']) {
+      const command = inWorld(dim, `random reset * ${salt}`)
+      const r = await call('ask', { command, match: 'random sequence', ms: replyMs })
+      const lines = (r && r.detail && r.detail.lines) || []
+      if (!lines.some(l => /Reset \d+ random sequence\(s\)/.test(l))) throw new ArenaError(`сброс ГСЧ «${command}» не подтверждён: ${JSON.stringify(lines).slice(0, 200)}`, r)
+    }
+    console.log('соль ГСЧ', salt)
+    return salt
+  }
+
   const between = (t0, t1, type, domain = 'game') => heard.filter(e => {
     if (!e) return false
     const at = domain === 'wall' ? e.at : (e.gameAt ?? e.at)
     return at >= t0 && at <= t1 && (!type || e.type === type)
   })
 
-  return { call, heard, serverLog, cmd, must, gamerule, forceload, unforceload, fillExact, setDifficulty, ensureWorld, between }
+  return { call, heard, serverLog, cmd, must, gamerule, forceload, unforceload, fillExact, setDifficulty, ensureWorld, randomReset, between }
 }
 
 // ------------------------------------------------------------------ итог прогона кампании

@@ -48,7 +48,22 @@ export async function runAuthorMap(): Promise<void> {
     assert.ok(/has the following entity data: 0$/.test(modeReply), `author map measurement requires actual Survival: ${modeReply}`)
     const gameModeReceipt = { source: 'native_rcon', query: modeQuery, reply: modeReply, playerGameType: 0 }
     const respawnQuery = 'data get entity NeuroFarm29 respawn'
+    // Preparation only (farm): MAP_START="x,y,z" returns a body that left the course
+    // after an earlier run (e.g. fell below) to the authored checkpoint it holds.
+    if (process.env.MAP_START) {
+      const [sx, sy, sz] = process.env.MAP_START.split(',').map(Number)
+      assert.ok([sx, sy, sz].every(Number.isFinite), 'MAP_START must be x,y,z')
+      native(`tp NeuroFarm29 ${sx} ${sy} ${sz}`)
+      for (let i = 0; i < 50; i++) {
+        const at = ((await connection.call('status', { physics: true })).detail?.physics as { pos?: Point; onGround?: boolean } | undefined)
+        if (at?.pos && Math.hypot(at.pos.x - sx, at.pos.y - sy, at.pos.z - sz) < .05 && at.onGround) break
+        await new Promise<void>(resolve => setTimeout(resolve, 100))
+      }
+    }
     const respawnBefore = native(respawnQuery)
+    // Native death receipt: vanilla stores the last death position in player data.
+    const deathQuery = 'data get entity NeuroFarm29 LastDeathLocation'
+    const deathBefore = native(deathQuery)
     before = await connection.call('status', { physics: true })
     const began = Date.now()
     // Semantic author landmarks orient the search. Every intermediate landing
@@ -70,10 +85,22 @@ export async function runAuthorMap(): Promise<void> {
     })
     const options = await connection.call('parkour', { mode: 'options', target })
     const maxFallDamage = Number(process.env.MAP_MAX_FALL_DAMAGE ?? 0)
-    assert.ok(maxFallDamage === 0 || maxFallDamage === 1, 'only explicit MAP_MAX_FALL_DAMAGE=1 permits a controlled mitigated drop')
+    // 1: a controlled drop onto a mitigating floor only; 2..4: an explicit plain-floor drop budget (CP28: 6–7 blocks, no mitigator).
+    assert.ok(Number.isInteger(maxFallDamage) && maxFallDamage >= 0 && maxFallDamage <= 4, 'MAP_MAX_FALL_DAMAGE must be 0..4 (explicit)')
     const progress = await connection.call('parkour', { mode: 'route', target, waypoints, maxLandings: Number(process.env.MAX_LANDINGS ?? 80), beam: 24, maxTicks: 38, timeoutSeconds: Number(process.env.MAP_TIMEOUT ?? 600), maxFallDamage })
       .catch(async (error: Error): Promise<Reply> => ({ status: 'error', state: (await connection.call('status')).state, detail: { ok: false, error: error.message } }))
-    const after = await connection.call('status', { physics: true })
+    // A stopped route can leave the body mid-air (Author49: an interrupted jump fell
+    // into lava as the scene ended, and the row said died:false). Read the result only
+    // once the body rests on a floor or in a fluid, then compare the native death record.
+    let after = await connection.call('status', { physics: true })
+    for (const settleUntil = Date.now() + 10_000; Date.now() < settleUntil && after.state.health > 0;) {
+      const body = after.detail?.physics as { onGround?: boolean; isInWater?: boolean; isInLava?: boolean } | undefined
+      if (body?.onGround || body?.isInWater) break
+      await new Promise<void>(resolve => setTimeout(resolve, 100))
+      after = await connection.call('status', { physics: true })
+    }
+    const settled = !!((after.detail?.physics as { onGround?: boolean; isInWater?: boolean } | undefined)?.onGround || (after.detail?.physics as { isInWater?: boolean } | undefined)?.isInWater)
+    const deathAfter = native(deathQuery)
     const start = (before.detail.physics as { pos: Point } | undefined)?.pos
     const end = (after.detail?.physics as { pos: Point } | undefined)?.pos
     assert.ok(start && end, 'exact physics coordinates are required; state.pos is floored')
@@ -82,7 +109,8 @@ export async function runAuthorMap(): Promise<void> {
     const events = connection.heard ?? []
     const checkpoints = events.filter(event => /checkpoint/i.test(event.text ?? ''))
     const started = events.some(event => /time started/i.test(event.text ?? ''))
-    const died = events.some(event => event.type === 'death') || after.state.health <= 0
+    const nativeDeath = deathAfter !== deathBefore
+    const died = events.some(event => event.type === 'death') || after.state.health <= 0 || nativeDeath
     const finished = events.some(event => event.type === 'advancement' && event.id === 'main:finish' || event.type === 'author_win' && event.finished === true)
     const boundedProgress = !died && landings.some(landing => landing.ok) && Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z) > .2
     const wallMs = Date.now() - began
@@ -98,7 +126,7 @@ export async function runAuthorMap(): Promise<void> {
       return { pos, ordinal: index != null && index >= 0 ? index + 1 : undefined, reply }
     }
     const authoredCheckpoint = { source: 'native_rcon', query: respawnQuery, before: checkpoint(respawnBefore), after: checkpoint(respawnAfter), changed: JSON.stringify(authorRespawn(respawnBefore)) !== JSON.stringify(authorRespawn(respawnAfter)) }
-    const row = { authorMap: true, physical: true, slot: 29, phase, target, nextCheckpoint, maxFallDamage, semanticWaypoints: waypoints, gameMode: 'survival', gameModeReceipt, wallMs, clocks, before, options, progress, after, startExact: start, endExact: end, maxLandingY, boundedProgress, startedTextObserved: started, died, checkpoints, authoredCheckpoint, finished, events }
+    const row = { authorMap: true, physical: true, slot: 29, phase, target, nextCheckpoint, maxFallDamage, semanticWaypoints: waypoints, gameMode: 'survival', gameModeReceipt, wallMs, clocks, before, options, progress, after, startExact: start, endExact: end, maxLandingY, boundedProgress, startedTextObserved: started, died, settled, deathReceipt: { query: deathQuery, before: deathBefore, after: deathAfter, changed: nativeDeath }, checkpoints, authoredCheckpoint, finished, events }
     const text = JSON.stringify(row)
     console.log(text)
     if (process.env.LAB_OUT) fs.appendFileSync(process.env.LAB_OUT, text + '\n')

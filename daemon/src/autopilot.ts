@@ -230,7 +230,7 @@ class Autopilot {
       const type = damageTypeName(pk.sourceTypeId) || `type_${pk.sourceTypeId}`
       const src = pk.sourceCauseId > 0 && bot.entities ? bot.entities[pk.sourceCauseId - 1] : null
       const byMob = MOB_DAMAGE.test(type) || !!(src && src !== bot.entity && src.name && src.name !== 'player' && !src.username)
-      this.lastHurt = { at: gameClock.now(), type, byMob, source: src ? (src.username || src.name) : null, dimension: String(bot.game?.dimension || '') }
+      this.lastHurt = { at: gameClock.now(), type, byMob, source: src ? (src.username || src.name) : null, sourceId: src && src !== bot.entity ? src.id : null, dimension: String(bot.game?.dimension || '') }
       if (byMob && process.env.ND_HURT_WAKE === '1' && !this.refuging && !this.dodging) {
         const cur = this.session.current
         if (cur && HOLD_INTENTS.has(cur.name)) {
@@ -594,10 +594,15 @@ class Autopilot {
 
     this.fleeing = true
     this.session.bus.emit('fleeing', { from: threat?.name || 'опасный блок', health: Math.round(hp), reason: safety.reason, threshold: safety.threshold })
-    try {
-      const ctl = { aborted: false, onAbort: [] }
+    const run = async ctl => {
       await survival.disengage(this.session, ctl, () => require('./flee').hostilesAround(bot, 16).map(h => h.e))
-      if (threat) await retreat(this.session, ctl, threat, { timeoutMs: 12000 })
+      if (threat && !ctl.aborted) await retreat(this.session, ctl, threat, { timeoutMs: 12000 })
+    }
+    try {
+      // With the tactics on, this idle flight is a low-priority lease (reflex-lock): one owner of the body, and a tactical
+      // action cancels it instead of pausing it under its own lease and letting the stale flight resume afterwards.
+      if (this.session.tactics?.enabled?.()) await require('./reflex-lock').start(this.session, run, { source: 'fleeIfDying', owner: 'Tactical', priority: 1 })
+      else await run({ aborted: false, onAbort: [] })
     } catch {
     } finally {
       this.fleeing = false

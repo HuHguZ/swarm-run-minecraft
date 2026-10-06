@@ -556,7 +556,7 @@ function lockHand (bot) {
   }
   const origAct = bot.activateItem
   bot.activateItem = function (offHand) {
-    if (!offHand && L.on()) { L.blocked.use++; return }
+    if (!offHand && L.on()) { L.blocked.use++; if (process.env.ND_DROP_LOG) console.log('[hand-lock] use_item не отправлен: рука у края/клатча'); return }
     return origAct.apply(this, arguments)
   }
   const origConsume = bot.consume
@@ -1338,8 +1338,10 @@ function fixSelfKnockback (bot) {
   bot._client.on('raw.entity_velocity', (buf) => {
     try {
       if (!bot.entity || !buf) return
-      // Буфер — с номером пакета впереди или без него: сверяем id сущности.
-      for (const start of [readVarInt(buf, 0).off, 0]) {
+      // Буфер raw.* — весь пакет с номером впереди (protodef parsePacketBuffer: buffer = пакет целиком), id сущности —
+      // после номера. Прежняя попытка «и без номера» (start 0) читала номер пакета 0x63 = 99 как id: у тела с id 99 (слот 31
+      // 06.10, S2b: 106 753 «странных скоростей» за 2 мин) ЧУЖИЕ скорости шли в тело — оно прыгало в яме.
+      for (const start of [readVarInt(buf, 0).off]) {
         const id = readVarInt(buf, start)
         if (id.v !== bot.entity.id) continue
         const { x, y, z } = readLpVec3BE(buf, id.off)

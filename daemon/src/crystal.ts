@@ -58,6 +58,8 @@ const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec
 // Якорь: сила 5, взрывается там, где не работает (верхний мир, Край).
 const ANCHOR_P = 5
 const ANCHOR_WORLDS = /overworld|end$|the_end/
+// Якорь готов к бою: якоря и светокамень есть, измерение — где он взрывается.
+const anchorReady = (bot, k) => k.anchors > 0 && k.glowstone > 0 && ANCHOR_WORLDS.test(bot.game && bot.game.dimension || 'overworld')
 
 const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
 const r1 = (x) => Math.round(x * 10) / 10
@@ -516,7 +518,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     const hisBow = /^(bow|crossbow)$/.test(hisHand)
     const crystals = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'end_crystal' && e.position && e.isValid !== false &&
       (e.position.distanceTo(me) < 13 || e.position.distanceTo(foe.position) < 13))
-    if (!crystals.length && !k.crystals) return null
+    if (!crystals.length && !k.crystals && !anchorReady(bot, k)) return null
     const shows = heShows(foe)
     const press = !!ctx.press
     const eqF = foe.equipment || []
@@ -653,7 +655,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     // Якорь — не только когда кристаллу нечего делать: при годном размене — то
     //     якорь, то кристалл (разнообразие для зрителя), лучший — всегда.
     let anchorBest = null
-    if (k.anchors > 0 && k.glowstone > 0 && dist < 6.5 && now - lastAnchor > 2500 && !hisW && ANCHOR_WORLDS.test(bot.game && bot.game.dimension || 'overworld')) {
+    if (anchorReady(bot, k) && dist < 6.5 && now - lastAnchor > 2500 && !hisW) {
       const fc = feetCell(foe.position)
       const mc = feetCell(me)
       const ents = (Object.values(bot.entities) as any[])
@@ -1171,7 +1173,9 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
   function engaged () {
     const foe = enemy()
     if (!ON || !foe) return false
-    return kitOf(bot).crystals > 0 || heShows(foe)
+    const k = kitOf(bot)
+    // Набор только с якорями (без кристаллов) — тоже взрывной бой (TODO п.8).
+    return k.crystals > 0 || heShows(foe) || anchorReady(bot, k)
   }
   // Кристаллы — главное оружие (набор «кристаллы»: 96 штук): без коробки и без
   // перестрелки из лука. В «небе и порохе» (16 кристаллов среди элитр, булавы,

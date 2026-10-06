@@ -167,15 +167,16 @@ test('a nearby visible table returns before the interrupted native kit requests 
       assert.equal(f.state.inventory.crafting_table, 1)
       assert.equal(f.actions.length, 1)
     } else {
-      assert.deepEqual(f.crafts, [])
+      // Без своего стола 10 досок хватает на новый (резерв 4 + 4 на стол): лишь отказ стенда считать столы.
+      assert.deepEqual(f.crafts, mode === 'interrupted' ? [] : [{ item: 'crafting_table', count: 1 }])
       assert.equal(f.state.pickSwings, 253)
       if (mode === 'interrupted') assert.equal(f.actions.length, 1)
     }
   }
 })
 
-test('real missing stick or table costs cannot spend the eight-plank reserve while wood is inaccessible', async () => {
-  for (const stock of [{ oak_planks: 9, crafting_table: 1, stick: 1 }, { oak_planks: 11, crafting_table: 0, stick: 3 }]) {
+test('real missing stick or table costs cannot spend the four-plank reserve while wood is inaccessible', async () => {
+  for (const stock of [{ oak_planks: 5, crafting_table: 1, stick: 1 }, { oak_planks: 7, crafting_table: 0, stick: 3 }]) {
     const f = carriedIronFixture({ oak_log: 0, blackstone: 4, ...stock })
     f.state.pickSwings = 176
     assert.equal((await replenishNetherTools(f.port)).ready, false)
@@ -190,7 +191,7 @@ test('real missing stick or table costs cannot spend the eight-plank reserve whi
 
 test('a second stick batch replenishes only its actual shortfall and preserves the reserve through the bounded pick loop', async () => {
   for (const blocked of [false, true]) {
-    const f = carriedIronFixture({ oak_log: 0, oak_planks: 13, iron_pickaxe: 0, stick: 0 })
+    const f = carriedIronFixture({ oak_log: 0, oak_planks: 9, iron_pickaxe: 0, stick: 0 })
     f.state.pickSwings = 0
     const craft = f.port.craft
     f.port.craft = async (item, count) => {
@@ -208,7 +209,7 @@ test('a second stick batch replenishes only its actual shortfall and preserves t
         f.state.inventory.crimson_planks = (f.state.inventory.crimson_planks || 0) + count
         made = true
       } else made = await craft(item, count)
-      if (made) assert.ok((f.state.inventory.oak_planks || 0) + (f.state.inventory.crimson_planks || 0) >= 8)
+      if (made) assert.ok((f.state.inventory.oak_planks || 0) + (f.state.inventory.crimson_planks || 0) >= 4)
       return made
     }
     f.port.act = async (method, params) => {
@@ -226,15 +227,26 @@ test('a second stick batch replenishes only its actual shortfall and preserves t
     assert.deepEqual(f.crafts.slice(0, 3), [{ item: 'stick', count: 4 }, { item: 'wooden_pickaxe', count: 1 }, { item: 'stone_pickaxe', count: 1 }])
     assert.equal(f.state.inventory.crafting_table, 1)
     if (blocked) {
-      assert.equal(f.state.inventory.oak_planks, 8)
+      assert.equal(f.state.inventory.oak_planks, 4)
       assert.equal(f.state.pickSwings, 184)
       assert.equal(f.crafts.length, 3)
       assert.deepEqual(f.actions, ['mine', 'mine', 'explore', 'mine'])
     } else {
       assert.deepEqual(f.actions, ['mine', 'mine'])
       assert.deepEqual(f.crafts.slice(3), [{ item: 'crimson_planks', count: 4 }, { item: 'stick', count: 4 }, { item: 'stone_pickaxe', count: 1 }])
-      assert.equal(f.state.inventory.oak_planks + f.state.inventory.crimson_planks, 10)
+      assert.equal(f.state.inventory.oak_planks + f.state.inventory.crimson_planks, 6)
       assert.equal(f.state.pickSwings, 315)
     }
   }
+})
+
+test('a failed nugget conversion falls back to stone picks when the bag holds stone (s1-full48)', async () => {
+  const f = carriedIronFixture({ iron_ingot: 2, iron_nugget: 64, iron_pickaxe: 0, blackstone: 64, stick: 4 }, false)
+  f.state.pickSwings = 0
+  const result = await replenishNetherTools(f.port)
+  assert.equal(result.ready, true)
+  assert.equal(f.crafts.filter(c => c.item === 'stone_pickaxe').length, 2)
+  assert.equal(f.crafts.some(c => c.item === 'iron_pickaxe'), false)
+  assert.equal(f.state.pickSwings, 262)
+  assert.equal(f.state.inventory.iron_nugget, 64)
 })

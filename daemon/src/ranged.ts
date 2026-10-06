@@ -112,10 +112,16 @@ function crossbows (bot) {
   return out
 }
 function arrowCount (bot) { return bot.inventory.items().reduce((n, i) => n + (ARROW_RE.test(i.name) ? i.count : 0), 0) }
+// Ракета для арбалета — с наибольшим числом звёзд; пустая (для элитр, 0 звёзд)
+// не ранит вовсе (FireworkRocketEntity.dealExplosionDamage) — не годится.
 function rocketsOf (bot) {
   const off = bot.inventory.slots[OFF]
-  if (off && off.name === 'firework_rocket') return off
-  return bot.inventory.items().find(i => i.name === 'firework_rocket') || null
+  let best = null
+  for (const it of [off, ...bot.inventory.items()]) {
+    if (!it || it.name !== 'firework_rocket') continue
+    if (rocketStars(it) > (best ? rocketStars(best) : 0)) best = it
+  }
+  return best
 }
 // Звёзд в ракете (компонент fireworks { flightDuration, explosions: [...] }).
 function rocketStars (item) {
@@ -216,6 +222,7 @@ function expectedDamage (bot, e, kind, stars = 3) {
   const eq = (e && e.equipment) || []
   const armor = eq.slice(2)
   const g = assess.gearOf(armor)
+  if (kind === 'firework' && !(stars > 0)) return 0
   const raw = kind === 'firework' ? (5 + 2 * stars) * Math.sqrt(0.8) : 8.75
   const special = kind === 'firework' ? 'blast_protection' : 'projectile_protection'
   const epf = Math.min(20, armor.reduce((s, it) => s + (it ? read.enchLevel(bot, it, 'protection') + 2 * read.enchLevel(bot, it, special) : 0), 0))
@@ -260,6 +267,39 @@ function rocketSafe (bot, from, sol, multishot) {
     }
   }
   return { ok: true, wall: !!wall }
+}
+
+// Фейерверк в обход его щита (s7b 06.10, javap 1.21.11 FireworkRocketEntity.dealExplosionDamage): урон
+// (5 + 2·звёзд)·√((5 − d)/5) всем в 5 бл. с прямой видимостью от ракеты; щит (BlocksAttacks 90°) держит, только
+// если точка взрыва (позиция ракеты — источник урона) у него спереди. Поэтому — в пол сбоку-сзади от него: луч из
+// наших глаз до точки не задевает его рамку (+0.45), первым упирается в пол у точки; угол от его взгляда > 95°.
+// { point, dist, raw } или null.
+function shieldBypassPoint (bot, entity, from, stars = 3) {
+  const p = entity.position
+  const ux = from.x - p.x; const uz = from.z - p.z
+  const ul = Math.hypot(ux, uz) || 1
+  const u = { x: ux / ul, z: uz / ul }
+  const n = { x: -u.z, z: u.x }
+  const view = { x: -Math.sin(entity.yaw || 0), z: -Math.cos(entity.yaw || 0) }
+  const box = { lo: { x: p.x - 0.75, y: p.y - 0.15, z: p.z - 0.75 }, hi: { x: p.x + 0.75, y: p.y + 2.0, z: p.z + 0.75 } }
+  let best = null
+  for (const side of [1, -1]) {
+    for (const [s, b] of [[1.4, 0.8], [1.6, 0.5], [1.3, 1.2], [1.8, 0.9]]) {
+      const pt = new Vec3(p.x + n.x * s * side - u.x * b, Math.floor(p.y + 0.01) + 0.02, p.z + n.z * s * side - u.z * b)
+      const hx = pt.x - p.x; const hz = pt.z - p.z
+      if ((hx * view.x + hz * view.z) / Math.hypot(hx, hz) > -0.087) continue
+      const dist = Math.hypot(hx, pt.y - p.y, hz)
+      if (dist >= BLAST_R - 0.5) continue
+      const delta = pt.minus(from); const len = delta.norm()
+      const d = delta.scaled(1 / len)
+      if (pick.rayBox(from, d, box.lo, box.hi, len) != null) continue
+      const hit = pick.blockOnRay(bot, from, d, len + 0.6)
+      if (!hit || hit.t < len - 0.35 || hit.pos.y !== Math.floor(pt.y) - 1) continue
+      const raw = (5 + 2 * stars) * Math.sqrt((BLAST_R - dist) / BLAST_R)
+      if (!best || raw > best.raw) best = { point: pt, dist: Math.round(dist * 100) / 100, raw: Math.round(raw * 10) / 10 }
+    }
+  }
+  return best
 }
 
 function hotbarOf (bot, item) {
@@ -307,12 +347,13 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
   let restoreOff = null
   if (ammo === 'firework') {
     const rockets = rocketsOf(bot)
-    if (!rockets) return { ok: false, why: 'фейерверков нет' }
+    if (!rockets) return { ok: false, why: 'фейерверков со звёздами нет' }
     const off = bot.inventory.slots[OFF]
-    if (!off || off.name !== 'firework_rocket') {
+    // Сервер заряжает ракету из левой руки — там должна быть именно эта (со звёздами).
+    if (!off || off.name !== 'firework_rocket' || rocketStars(off) < rocketStars(rockets)) {
       if (bot.currentWindow || bot.inventory.selectedItem) return { ok: false, why: 'курсор занят' }
       try { await bot.equip(rockets, 'off-hand') } catch (e) { return { ok: false, why: 'ракеты в левую: ' + e.message } }
-      if (off) restoreOff = off.name
+      if (off && off.name !== 'firework_rocket') restoreOff = off.name
     }
   } else {
     if (!arrowCount(bot)) return { ok: false, why: 'стрел нет' }
@@ -326,8 +367,15 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
   try {
     const cur = bot.inventory.items().find(i => i.slot === item.slot && i.name === 'crossbow') || item
     if (!bot.heldItem || bot.heldItem.slot !== cur.slot) {
-      try { await bot.equip(cur, 'hand') } catch (e) { return { ok: false, why: 'арбалет в руку: ' + e.message } }
+      // Именно этот арбалет — слотом хотбара: bot.equip по имени брал ПЕРВЫЙ арбалет, то есть заряженный, и
+      // «использовать» стреляло им в никуда (s7e «арбалет» р.1: «зарядил (0 мс)» ×301 — второй так и не заряжался).
+      let hb = hotbarOf(bot, cur)
+      if (hb < 0) hb = await toHotbar(bot, cur)
+      if (hb >= 0) { if (bot.quickBarSlot !== hb) bot.setQuickBarSlot(hb) } else { try { await bot.equip(cur, 'hand') } catch (e) { return { ok: false, why: 'арбалет в руку: ' + e.message } } }
     }
+    if (!bot.heldItem || bot.heldItem.slot !== cur.slot) return { ok: false, why: 'в руке не тот арбалет' }
+    const heldInfo = read.crossbowInfo(bot, bot.heldItem)
+    if (heldInfo && heldInfo.loaded) return { ok: false, why: 'в руке заряженный — «использовать» выстрелило бы' }
     const ticks = chargeTicks(info.quickCharge)
     bot.activateItem()
     const limit = gameClock.now() + (ticks + 8) * TICK_MS + 250
@@ -470,12 +518,13 @@ function plan (bot, ctx) {
   // --- Выстрел. Мгновенный — поэтому в окна, которых лук не ловит.
   if (loaded.length && sees && d >= 2.5 && d <= 48) {
     const pick = (pred) => loaded.find(x => pred(x.info))
-    const rocket = pick(i => i.ammo === 'firework')
+    // Пустая ракета (0 звёзд) урона не даёт — как не заряжен.
+    const rocket = pick(i => i.ammo === 'firework' && i.stars !== 0)
     const rocketOk = rocket && d >= 7 && d <= 34
     const arrowCb = pick(i => i.ammo !== 'firework')
     const pierce = pick(i => i.piercing > 0)
     const best = rocketOk ? rocket : (arrowCb || null)
-    const dmg = best ? expectedDamage(bot, entity, best.info.ammo === 'firework' ? 'firework' : 'arrow') : 0
+    const dmg = best ? expectedDamage(bot, entity, best.info.ammo === 'firework' ? 'firework' : 'arrow', best.info.stars ?? 3) : 0
     const pair = (ctx.others || []).some(o => o && o.position && o.position.distanceTo(entity.position) < 4)
     // Стрелы и фейерверк его почти не берут (ctx.weak — pvp.js arrowsWeak:
     // «Защита от снарядов» ×0.2): стрелять — только чтобы добить.
@@ -488,6 +537,11 @@ function plan (bot, ctx) {
     // остальное держать заряженным до окна.
     if (ctx.shieldAtUs) {
       if (pierce && d >= 3.2) return { act: 'fire', item: pierce.item, info: pierce.info, why: '«Пронзание» сквозь его щит' }
+      // Ракета в пол сбоку-сзади: взрыв не спереди — щит не держит (shieldBypassPoint).
+      if (rocket && d >= 6 && d <= 30) {
+        const bp = shieldBypassPoint(bot, entity, require('./pick').eyeOf(bot).offset(0, -ROCKET_DROP, 0), rocket.info.stars ?? 3) // pick здесь — локальный выбор арбалета
+        if (bp) return { act: 'fire', item: rocket.item, info: rocket.info, point: bp.point, why: `фейерверк в пол за его щит (${bp.raw} до брони)` }
+      }
     } else {
       // Причины по убыванию ценности: первая, что подошла.
       // Держим дистанцию (ctx.kite, 2026-09-26: «арбалет» 0:4 и ничья против
@@ -528,7 +582,9 @@ function plan (bot, ctx) {
     for (const x of order) {
       const i = x.info
       let ammo = null
-      if (rockets && !i.piercing && (d >= 8 || !arrowsN) && !(ctx.totemOff && ctx.hp <= 14)) ammo = 'firework'
+      // Ракета — с 5 бл. (s7b: при «с 8» за 10 раундов заряжена 1 раз — бой почти весь ближе 8; выстрел ракетой
+      // по-прежнему с 6–7 бл., а против щита — в пол за ним).
+      if (rockets && !i.piercing && (d >= 5 || !arrowsN) && !(ctx.totemOff && ctx.hp <= 14)) ammo = 'firework'
       else if (arrowsN) ammo = 'arrow'
       if (!ammo) continue
       const ms = chargeTicks(i.quickCharge) * TICK_MS + 350 + (ammo === 'firework' ? 300 : 0)
@@ -554,6 +610,7 @@ async function step (bot, ctl, ctx, { used = () => {}, holdWeapon = null, stats 
     const item = bot.inventory.slots[36 + hb]
     const r: any = await fire(bot, ctx.entity, item, {
       velFn: ctx.velFn,
+      point: p.point || null,
       onHit: () => {
         S.hits = (S.hits || 0) + 1
         used(`арбалет попал (${p.info.ammo === 'firework' ? 'фейерверк' : 'стрела'})`)
@@ -636,7 +693,8 @@ function guardCrossbow (bot) {
   }
 }
 
-module.exports = { guardCrossbow,
+module.exports = {
+  shieldBypassPoint, guardCrossbow,
   plan, step, prepBow, load, fire, readyArrow, pickArrow, firstArrow, arrowKind, tippedPotion, crossbows, crossbowFirst,
   chargeTicks, rocketAim, rocketSafe, expectedDamage, harmDrawMs, bowPower, rocketStars, hotbarOf, toHotbar, afterPacket, rocketsOf,
   ARROW_SPEED, ROCKET_SPEED, BLAST_R

@@ -490,14 +490,22 @@ function bedClickPoint (bot, plan) {
   return null
 }
 
-async function clickBedAt (bot, hit, { aimed = false, until = 0, prePlace = null }: any = {}) {
+async function clickBedAt (bot, hit, { aimed = false, until = 0, untilMono = null, prePlace = null }: any = {}) {
   bot.setControlState('sneak', false)
   if (!aimed) {
     await lookAtSafe(bot, hit.point)
     await new Promise<any>(resolve => bot.once('physicsTick', resolve))
   }
   // Точный миг (снижение: тик до посадки): ждём игровой таймер, освобождая цикл событий для следующих тиков.
-  if (until) {
+  // Ускоренные тики (s5 06.10): миг — по ровным монотонным часам (untilMono, мс реального времени), часы клиента на 750
+  // скачут на тики (догоняют рывком, стоят впереди сервера). Игровой until — только грубо, если до него далеко.
+  if (untilMono != null) {
+    const w = gameClock.wall
+    const k = 20 / (gameClock.snapshot()?.tickRate || 20) // мс реального времени на игровую мс
+    while (until && until - gameClock.now() > 200 && untilMono - w.monotonic() > 4 + 50 * k) await sleep(50)
+    while (untilMono - w.monotonic() > 3 + 25 * k) await sleep(25)
+    while (w.monotonic() < untilMono) await new Promise<any>(resolve => w.setImmediate(resolve))
+  } else if (until) {
     while (until - gameClock.now() > 12) await sleep(Math.min(40, until - gameClock.now() - 10))
     while (gameClock.now() < until) await sleep(until - gameClock.now())
     // Опоздание цикла событий (02.10, rs17: CPU ПК 100 % — щелчок уходил на 2–6 тиков позже плана, голова в 4–8 бл. вместо 1–2):
@@ -508,15 +516,19 @@ async function clickBedAt (bot, hit, { aimed = false, until = 0, prePlace = null
   if (hit.runnerGuard) { const g = hit.runnerGuard(); if (g !== true) { hit.guardWhy = typeof g === 'string' ? g : null; return false } }
   // ND_PLACE_CLICK: кровать ставится к грани опоры и тут же взрывается — два пакета подряд, сервер разбирает их в одном
   // окне между тиками (дракон кровать не застаёт)
+  // Свой номер последовательности: сервер подтверждает его block_changed_ack (acknowledge_player_digging) в конце тика,
+  // после damage_event и метаданных хп (handleUseItemOn → ackBlockChangesUpTo, javap 1.21.11) — свидетель без окна времени.
+  const sequence = bot._ndBedSeq = ((bot._ndBedSeq || 0x1000000) % 0x3fffffff) + 1
   if (prePlace) {
     if (runnerOn() && hit.face) runnerAim(bot, prePlace.point)
     const pc = prePlace.point.minus(prePlace.pos)
-    bot._client.write('block_place', { location: prePlace.pos, direction: FACE_IDX(prePlace.face), hand: 0, cursorX: pc.x, cursorY: pc.y, cursorZ: pc.z, insideBlock: false, sequence: 0, worldBorderHit: false })
+    bot._client.write('block_place', { location: prePlace.pos, direction: FACE_IDX(prePlace.face), hand: 0, cursorX: pc.x, cursorY: pc.y, cursorZ: pc.z, insideBlock: false, sequence, worldBorderHit: false })
   }
   if (runnerOn() && hit.face) runnerAim(bot, hit.point)
   const cur = hit.point.minus(hit.block.position)
-  bot._client.write('block_place', { location: hit.block.position, direction: runnerOn() && hit.face ? FACE_IDX(hit.face) : 1, hand: 0, cursorX: cur.x, cursorY: cur.y, cursorZ: cur.z, insideBlock: false, sequence: 0, worldBorderHit: false })
+  bot._client.write('block_place', { location: hit.block.position, direction: runnerOn() && hit.face ? FACE_IDX(hit.face) : 1, hand: 0, cursorX: cur.x, cursorY: cur.y, cursorZ: cur.z, insideBlock: false, sequence, worldBorderHit: false })
   bot.swingArm()
+  return sequence
 }
 
 async function bedsBuild (session, ctl, stats, plan) {

@@ -80,3 +80,49 @@ test('the packet callback keeps the emergency lease when physics events arrive o
   assert.equal(shot.thrown, true)
   assert.equal(used, 1, 'the actual protected activateItem must execute inside its original lease')
 })
+
+test('a clock catch-up that fires the stall timer with the first physics tick still throws (750 TPS, s5)', async () => {
+  const clock = require('../src/game-clock')
+  const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
+  try {
+    const bot: any = new EventEmitter()
+    const item = { name: 'ender_pearl', type: 2, slot: 36 }
+    bot.inventory = { slots: [], items: () => [item] }
+    bot.entity = { position: new Vec3(0, 20, 0), onGround: true }
+    bot.heldItem = item
+    bot.world = { raycast: () => null }
+    bot.look = async () => {}
+    let used = 0
+    bot.activateItem = () => { used++ }
+    c.on('tick', () => bot.emit('physicsTick'))
+    const throwing = throwAt(bot, null, { item, pick: () => ({ yaw: 1, pitch: 0, ticks: 10 }) })
+    await Promise.resolve()
+    c.ticks += 30; c.advanceTicks(1) // reconcile jump: first physics tick and the overdue 400 ms timer in one pulse
+    for (let i = 0; i < 3; i++) { c.advanceTicks(1); await new Promise(resolve => setImmediate(resolve)) }
+    const shot = await throwing
+    assert.equal(shot.thrown, true, shot.why)
+    assert.equal(used, 1)
+  } finally { c.dispose() }
+})
+
+test('use_item уносит взгляд броска, даже если bot.look ещё не применён (750 TPS, s5)', async () => {
+  const clock = require('../src/game-clock')
+  const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
+  try {
+    const bot: any = new EventEmitter()
+    const item = { name: 'ender_pearl', type: 2, slot: 36 }
+    bot.inventory = { slots: [], items: () => [item] }
+    bot.entity = { position: new Vec3(0, 20, 0), onGround: true, yaw: 0, pitch: 0 }
+    bot.heldItem = item
+    bot.world = { raycast: () => null }
+    bot.look = () => new Promise(() => {}) // под замком: поворот так и не применён
+    let seen = null
+    bot.activateItem = () => { seen = [bot.entity.yaw, bot.entity.pitch] }
+    c.on('tick', () => bot.emit('physicsTick'))
+    const throwing = throwAt(bot, null, { item, pick: () => ({ yaw: 1.5, pitch: 0.4, ticks: 10 }) })
+    for (let i = 0; i < 4; i++) { c.advanceTicks(1); await new Promise(resolve => setImmediate(resolve)) }
+    const shot = await throwing
+    assert.equal(shot.thrown, true, shot.why)
+    assert.deepEqual(seen, [1.5, 0.4])
+  } finally { c.dispose() }
+})

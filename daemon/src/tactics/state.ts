@@ -1,5 +1,5 @@
 export type ThreatLevel = 0 | 1 | 2 | 3 | 4
-export type ActionId = 'Fight' | 'LastStand' | 'Flee' | 'Heal' | 'Eat' | 'Shield' | 'Dodge' | 'CreateDistance' | 'BlockOff' | 'PillarUp' | 'DigDown' | 'EnterPortal' | 'UseWater' | 'Hide' | 'FreeEmbedded' | 'FlightEscape' | 'PearlEscape' | 'UseFireResistance' | 'ClimbOut' | 'WebBoatEscape' | 'BoatLavaHop'
+export type ActionId = 'Fight' | 'LastStand' | 'Flee' | 'Heal' | 'Eat' | 'Shield' | 'Dodge' | 'CreateDistance' | 'BlockOff' | 'PillarUp' | 'DigDown' | 'EnterPortal' | 'UseWater' | 'Hide' | 'FreeEmbedded' | 'FlightEscape' | 'PearlEscape' | 'UseFireResistance' | 'ClimbOut' | 'WebBoatEscape' | 'BoatLavaHop' | 'Surface'
 export type ControlOwner = 'Skill' | 'Tactical' | 'Emergency'
 
 export interface TacticalEnemy {
@@ -8,6 +8,8 @@ export interface TacticalEnemy {
   distance: number
   player: boolean
   threatening: boolean
+  /** expected damage of one hit after our armor (combat-safety), when known */
+  hit?: number
 }
 
 export interface TacticalState {
@@ -24,9 +26,15 @@ export interface TacticalState {
   lavaAhead?: boolean
   fireResistance: boolean
   explosion: boolean
+  /** non-mob blast source near (tactics/blast.ts, 2 blocks past the alarm: explosion is the alarm itself) */
+  blast?: 'tnt' | 'falling_block' | 'charged_creeper' | null
   dangerousFall: boolean
   emergencyController: boolean
   inWater: boolean
+  /** submerged with air at or below 8 of 20 bubbles (stress stand: drowning was invisible to the tactics) */
+  drowning?: boolean
+  /** adult piglins in sight: hitting a brute broadcasts its anger to them (PiglinBruteAi.wasHurtBy -> PiglinAi.maybeRetaliate) */
+  piglinWitnesses?: boolean
   cover: boolean
   portal: boolean
   escapeRoute: boolean
@@ -58,10 +66,42 @@ export interface Candidate {
 }
 
 export const hasObservedTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening)
+// A sword reaches a ghast never and a hovering blaze only when it comes down to the body (farm telemetry 06.10 19:46,
+// slot 21: LastStand re-selected ~100 times in 120 s against five blazes, 0 swings, death).
+export const meleeReachable = (enemy: TacticalEnemy): boolean => enemy.kind !== 'ghast' && (!/^(blaze|phantom)$/.test(enemy.kind) || enemy.distance <= 3.5)
+// No flight shakes a phantom, vex or bee: between swoops a phantom circles out of range, smartFlee reported "escaped"
+// after 1-2 blocks and the phantom swooped again (farm 06.10 19:49, slot 17: Flee x3 at hp 6.9 -> death). Defend as in a
+// dead end.
+// A ghast out-ranges any run (FOLLOW_RANGE 100, javap 06.10 round 2; doctrine range 40): a flight "escaped" at 17 blocks and
+// the next fireball started it again, every 2.5 s for the whole tape (stress stand v2, 11 of 14 cycles). Keep working,
+// shield the shots, box up when low.
+const OUTPACING = /^(phantom|vex|bee|ghast|blaze)$/
+export function outpaced(state: TacticalState): boolean {
+  const near = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 16)
+  return state.contact && near.length > 0 && near.every(enemy => OUTPACING.test(enemy.kind))
+}
+// No run from players: smartFlee steers by mob doctrine only, saw nobody and reported "escaped" at once - CreateDistance<->
+// Flee on every sample, 1 block each (farm 06.10 after 22:00 MSK, slot 27: 18 swaps). A wall or a strike still answer one.
+export const playersOnly = (state: TacticalState): boolean => {
+  const near = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 16)
+  return near.length > 0 && near.every(enemy => enemy.player)
+}
+export const deadEnd = (state: TacticalState): boolean => hasObservedTarget(state) && (!!state.escapeExhausted || outpaced(state))
+export const hasMeleeTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy))
 export const canRepelLavaAttacker = (state: TacticalState): boolean => state.health > 0 && state.fireResistance &&
   (state.lava || !!state.lavaEscapePending) && state.weapon && state.canFight && state.contact &&
   !state.embedded && !state.explosion && !state.dangerousFall && !state.emergencyController &&
   state.enemies.some(enemy => enemy.threatening && enemy.distance <= 3)
+
+// A fight the safety verdict abandons after the next exchange is a trade, not a favourable fight: the bot took one brute
+// hit at 20 HP and then could not outrun it (stress stand brute-in-nether, cf. Full40). Cheap fights keep their verdict.
+export function sustainableFight(verdict: { action?: string; cheap?: boolean; hit?: number; threshold?: number }, health: number): boolean {
+  return verdict.action === 'fight' && (!!verdict.cheap || health - (verdict.hit || 0) > (verdict.threshold || 0))
+}
+
+// Cover is no rest from a creeper walking up (stress stand: Heal/Hide/a held box and Dodge in turns until the blast).
+export const creeperWalksUp = (state: TacticalState): boolean =>
+  state.enemies.some(enemy => enemy.threatening && enemy.kind === 'creeper' && enemy.distance <= 12)
 
 export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.health <= 0) return 0
@@ -69,6 +109,7 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   const foes = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 12)
   if (state.contact && (state.health <= 6 || foes.length >= 3 && state.health < 12)) return 3
   if (state.burning && !state.fireResistance && state.health <= 8) return 3
+  if (state.drowning) return 3
   if (state.lava || state.lavaEscapePending) return 2
   if (state.contact || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
   if (foes.length) return 1
@@ -84,7 +125,45 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   const critical = level >= 3
   const contact = state.contact
   const observedTarget = hasObservedTarget(state)
-  const escapeExhausted = observedTarget && !!state.escapeExhausted
+  const escapeExhausted = deadEnd(state)
+  // S1 (s1-full46/49): LastStand against a brute at the barter pit turned the watching piglins on the bot. Never strike a
+  // brute in their sight; wall it off instead, even in an exhausted corner.
+  const provokes = !!state.piglinWitnesses && state.enemies.some(enemy => enemy.threatening && enemy.kind === 'piglin_brute')
+  const melee = hasMeleeTarget(state)
+  // A last stand answers the foe at the body: a reachable one 13 blocks off that never engaged is no reason to walk out
+  // (stress stand: a circling phantom made the cornered body attack a distant brute).
+  const atBody = state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy) && enemy.distance <= 6)
+  // An armed, healthy body answers a circling phantom on its swoop; a box per pass only burns blocks (stress stand: box x4
+  // in 20 s, also when hunger alone made the verdict "recover").
+  // (Shooters that out-range a run - blaze, ghast - are walled off at any health: a wall stops their shots.)
+  const swoops = outpaced(state) && !state.enemies.some(enemy => enemy.threatening && /^(blaze|ghast)$/.test(enemy.kind))
+  const sheltered = (!escapeExhausted || provokes || !atBody) && !(swoops && state.weapon && state.health >= 10)
+  // A wall takes ~1.5 s inside the attacker's reach (contact: a brute closes 4.5 blocks in under a second): two hits that
+  // leave less than the 8 HP fight floor make building in place a trade (stress stand brute-in-nether: box at 20 HP,
+  // abandoned 3 ticks before the seal at 4.8 HP, cf. Full40). Break contact first, as refuge does when the walker outruns
+  // the build.
+  const pressure = state.enemies.reduce((sum, enemy) => sum + (enemy.threatening && enemy.distance <= 4.5 ? enemy.hit ?? 0 : 0), 0)
+  // A creeper closes 4 blocks (2.7 b/s) while a wall goes up (~1.5 s), and at 4 blocks refuge refuses the box: a build
+  // started inside 8 blocks was dropped a sample later (stress stand fuzz-2564: Flee>BlockOff>Flee at hp 3). A score, not a
+  // gate: a box started further out keeps the score it was chosen with (arbiter SHELTERS) as the creeper walks in.
+  const creeperInBuild = state.enemies.some(enemy => enemy.threatening && enemy.kind === 'creeper' && enemy.distance <= 8)
+  const exposedBuild = state.escapeRoute && !state.dangerousFall && (pressure > 0 && state.health - pressure * 2 < 8 || creeperInBuild)
+  const creeperNear = creeperWalksUp(state)
+
+  // A favourable verdict without a weapon is no fight (Fight needs one): score the retreats as for an unfavourable one
+  // (stress stand: fists vs a husk -> Flee every few seconds, the husk follows 35 blocks).
+  const armed = state.canFight && state.weapon
+  // A player reaches up a 3-block pillar and down into a 2-deep hole (eye 1.62 + reach 3): only walls delay one (farm
+  // telemetry 06.10, arena slot 27: DigDown against an attacking player, death).
+  const playerFoe = state.enemies.some(enemy => enemy.threatening && enemy.player)
+  // A primed blast or a charged creeper (radius 6) breaks the walls it would be hidden behind (farm s4-stress-6: BlockOff
+  // at a charged creeper, then death).
+  // Nor does it stop a flyer: a phantom swoops onto a pillar, a blaze shoots down at it (farm s1-LK-8: PillarUp x3 under
+  // blazes 15 -> 5 hp, then death; stand: PillarUp against a phantom and a husk, killed on top).
+  const flyer = state.enemies.some(enemy => enemy.threatening && /^(phantom|vex|bee|blaze|ghast)$/.test(enemy.kind))
+  const shelterHolds = !((playerFoe || flyer) && (state.shelter === 'DigDown' || state.shelter === 'PillarUp')) && !state.blast
+  // Lava without fire resistance: the swim to the shore finds its own exit (lava pools have no dry 3-block run).
+  const route = state.escapeRoute || state.lava && !state.fireResistance
   add('FreeEmbedded', 180, 'solid block after teleport or suffocation', !!state.embedded)
   add('FlightEscape', 172, 'loaded safe landing with elytra and rockets', (state.lava || !!state.lavaAhead) && !!state.flightEscape)
   add('PearlEscape', 166, 'safe pearl landing and enough health', (state.lava || !!state.lavaAhead) && !!state.pearlEscape)
@@ -92,18 +171,29 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('UseFireResistance', 156, 'available fire resistance before climbing', (state.lava || state.burning) && !state.fireResistance && !!state.fireResistancePotion)
   add('BoatLavaHop', 154, 'existing expendable boats and a visible collision-free lava route', state.lava && !!state.boatLavaHop)
   add('ClimbOut', 140, 'fire resistant swimming or visible wall steps', (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
+  add('Surface', 148, 'air running out under water', !!state.drowning && !state.dangerousFall)
   add('UseWater', 145, 'fire', state.water && state.burning && !state.fireResistance && !state.lava)
   add('Dodge', 150, 'explosion', state.explosion)
   add('EnterPortal', 115, 'nearby escape', critical && state.portal && !state.dangerousFall)
-  add('LastStand', 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && contact && escapeExhausted && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
+  // Never a stand inside a blast alarm: LastStand (155) outscored Dodge (150) at a swelling charged creeper (farm s4-stress-3).
+  add('LastStand', 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
   const repel = canRepelLavaAttacker(state)
-  add('Fight', repel ? 157 : critical ? -100 : 90, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && state.canFight && state.weapon && contact && !state.protectedEncounter && !state.lava && !state.lavaEscapePending && !escapeExhausted)
-  add('Flee', critical ? 100 : 65, 'create safe distance', level >= 2 && state.escapeRoute && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && !escapeExhausted)
-  add('CreateDistance', 85, 'unfavorable or unidentified attacker', level >= 2 && (!state.canFight || !observedTarget) && state.escapeRoute && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && !escapeExhausted)
-  if (state.shelter) add(state.shelter, critical ? 120 : state.canFight ? 45 : 95, 'available refuge', level >= 2 && state.blocks > 0 && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && !escapeExhausted)
-  add('Hide', 110, 'existing cover', critical && state.cover && !state.dangerousFall && !state.lava && !escapeExhausted)
+  add('Fight', repel ? 157 : critical ? -100 : 90, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && melee && state.canFight && state.weapon && contact && !state.blast && !state.protectedEncounter && !provokes && !state.lava && !state.lavaEscapePending && !escapeExhausted)
+  // A dead end is about the attackers; the swim out of lava (escapeFire) is no run from them: a ghast overhead made the pool
+  // a "dead end" and the body burned with no action at all (stress stand v2 fuzz2-2182/2376/4393, level 4 unhandled); under
+  // fire resistance too, when no wall step offers a climb. A swim that already failed (observed exhaustion) stays out.
+  // A run needs something to run from: a seen foe, a hit (an unseen attacker), lava or fire. Shots from beyond sight alone
+  // (a blaze fires from 48, a ghast from 64) made smartFlee report "escaped" after 1 block, CreateDistance<->Flee on every
+  // sample (farm s4b-flap-1..3, 750 TPS: 30 no-op runs under four blazes; stand v2 the same with the jar's ranges).
+  const runOpen = (!escapeExhausted || state.lava && !state.escapeExhausted) && !(playersOnly(state) && !state.lava && !state.burning) &&
+    (observedTarget || contact || state.lava || state.burning && !state.fireResistance)
+  add('Flee', critical ? 100 : 65, 'create safe distance', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
+  // Not gated by canFight: a verdict flickering at the health threshold must not invalidate the retreat in progress.
+  add('CreateDistance', !armed || !observedTarget ? 85 : 50, 'unfavorable or unidentified attacker', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
+  if (state.shelter) add(state.shelter, exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95, 'available refuge', level >= 2 && shelterHolds && state.blocks > 0 && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && sheltered)
+  add('Hide', 110, 'existing cover', critical && state.cover && !creeperNear && !state.dangerousFall && !state.lava && sheltered)
   add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (level === 1 || state.incomingProjectiles > 0))
-  add('Heal', 105, 'recover behind cover', state.cover && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending)
+  add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending)
   add('Eat', 45, 'restore food', level <= 1 && state.food < 16 && state.edible && !state.dangerousFall)
   return result.sort((a, b) => b.score - a.score)
 }

@@ -145,11 +145,13 @@ function surfaceAt (world, x, z, yTop, yBot) {
 }
 
 // Наклоны (рад), при которых жемчуг на горизонтали dx пройдёт высоту dy: низкая и высокая дуги.
-function pitchesFor (dx, dy) {
+// extra = { h, vy } — своё движение в пакете броска (вдоль линии на цель; вертикаль — только в воздухе).
+function pitchesFor (dx, dy, extra = null) {
   const out = []
+  const eh = extra ? extra.h || 0 : 0; const ev = extra ? extra.vy || 0 : 0
   const yAt = (p) => {
     const l = throwMod.launch(p, K)
-    const f = throwMod.flight(l.vh, l.vy, dx, K)
+    const f = throwMod.flight(l.vh + eh, l.vy + ev, dx, K)
     return f ? f.y : -Infinity
   }
   let prevP = -40 * DEG; let prevY = yAt(prevP)
@@ -173,22 +175,25 @@ function pitchesFor (dx, dy) {
   return out
 }
 
-// Наибольшая дальность по горизонтали при перепаде dy (кэш по целому dy).
+// Наибольшая дальность по горизонтали при перепаде dy (кэш по целому dy). dy — от точки вылета; jump — бросок на
+// тике отрыва: 'stand' (+0.42 к вертикали) или 'run' (ещё +RUN_H вдоль броска), точку вылета берёт throw.jumpLaunch.
 const REACH = new Map()
-function reach (dy) {
+function reach (dy, jump = null) {
   const k = Math.round(dy)
-  if (REACH.has(k)) return REACH.get(k)
+  const key = jump ? k + jump : k
+  if (REACH.has(key)) return REACH.get(key)
+  const eh = jump === 'run' ? throwMod.RUN_H : 0; const ev = jump ? throwMod.JUMP_VY : 0
   const ok = (dx) => {
     for (let d = -30; d <= 80; d += 1) {
       const l = throwMod.launch(d * DEG, K)
-      const f = throwMod.flight(l.vh, l.vy, dx, K)
+      const f = throwMod.flight(l.vh + eh, l.vy + ev, dx, K)
       if (f && f.y >= k) return true
     }
     return false
   }
   let lo = 0; let hi = 120
   for (let i = 0; i < 20; i++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid }
-  REACH.set(k, lo)
+  REACH.set(key, lo)
   return lo
 }
 
@@ -200,10 +205,10 @@ function velOf (yaw, pitch, extra = null) {
 }
 
 // Скорость с отклонением разброса: dir + e (в долях от единичного), × 1.5 — как getMovementToShoot.
-function spreadVel (yaw, pitch, ex, ey, ez) {
+function spreadVel (yaw, pitch, ex, ey, ez, extra = null) {
   const l = throwMod.launch(pitch, K)
   const d = { x: -Math.sin(yaw) * l.vh / K.speed, y: l.vy / K.speed, z: -Math.cos(yaw) * l.vh / K.speed }
-  return { x: (d.x + ex) * K.speed, y: (d.y + ey) * K.speed, z: (d.z + ez) * K.speed }
+  return { x: (d.x + ex) * K.speed + (extra ? extra.x : 0), y: (d.y + ey) * K.speed + (extra ? extra.y : 0), z: (d.z + ez) * K.speed + (extra ? extra.z : 0) }
 }
 
 function segDist (a, b, q) {
@@ -284,9 +289,17 @@ function worth ({ walkSec, hopSec, restSec = 0, dmg, hp, hpMin = 12, hpSec = 1.5
 
 // Выбор броска к goal из from (точка вылета = ноги + EYE). opts:
 //   maxR, minR — дальность посадки; lateral — поперёк линии; arriveR — уже у цели;
-//   floorOk(block), avoid(feet) — фильтры места; obstacles — сущности [{pos, r}]; spread — доля разброса.
-function planHop (world, feet, goal, { maxR = 70, minR = 6, lateral = [0, -2, 2, -4, 4, -7, 7, -10, 10], floorOk = null, avoid = null, obstacles = [], spread = 0.7, yTop = 30, yBot = 16, maxTries = 80, lookOk = null }: any = {}) {
-  const from = { x: feet.x, y: feet.y + EYE, z: feet.z }
+//   floorOk(block), avoid(feet) — фильтры места; obstacles — сущности [{pos, r}]; spread — доля разброса;
+//   jump — можно бросать в прыжке: 'stand' (на месте) или 'run' (ещё и с разбегом к посадке); с места, если
+//   долетает, иначе прыжок на месте, иначе с разбега (throw.jumpRoom: пол, потолок, не край). plan.jump — как бросать.
+function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 2, -4, 4, -7, 7, -10, 10], floorOk = null, avoid = null, obstacles = [], spread = 0.7, yTop = 30, yBot = 16, maxTries = 80, lookOk = null, jump = null }: any = {}) {
+  maxR = maxR ?? (jump === 'run' ? 95 : 70)
+  const stand = { from: { x: feet.x, y: feet.y + EYE, z: feet.z }, moved: null }
+  const kinds = [null, ...(jump ? ['stand'] : []), ...(jump === 'run' ? ['run'] : [])]
+  let standRoom
+  const roomFor = (kind, dir) => kind === 'stand'
+    ? (standRoom === undefined ? (standRoom = throwMod.jumpRoom(world, feet)) : standRoom)
+    : throwMod.jumpRoom(world, feet, dir)
   const gx = goal.x - feet.x; const gz = goal.z - feet.z
   const gd = Math.hypot(gx, gz)
   if (gd < 1) return { plan: null, why: 'уже у цели' }
@@ -315,16 +328,30 @@ function planHop (world, feet, goal, { maxR = 70, minR = 6, lateral = [0, -2, 2,
     const pre = settle(world, { x: c.x + 0.5, y: c.y + 0.3, z: c.z + 0.5 }, { floorOk, avoid })
     if (!pre.ok) { no(pre.why); continue }
     if (pre.edge1) { no('край пустоты'); continue }
+    // Откуда бросать: первый вариант (с места → прыжок → разбег), который долетает и где есть место для прыжка.
+    const fx = c.x + 0.5 - feet.x; const fz = c.z + 0.5 - feet.z; const fd = Math.hypot(fx, fz) || 1
+    const dir = { x: fx / fd, z: fz / fd }
+    let L = null; let roomWhy = null
+    for (const kind of kinds) {
+      const J = kind ? throwMod.jumpLaunch(feet, kind, dir) : stand
+      if (Math.hypot(c.x + 0.5 - J.from.x, c.z + 0.5 - J.from.z) > reach(c.y + 0.05 - J.from.y, kind) - 0.3) continue
+      const why = kind ? roomFor(kind, dir) : null
+      if (why) { roomWhy = why; continue }
+      L = { kind, from: J.from, moved: J.moved }
+      break
+    }
+    if (!L) { no(roomWhy ? 'прыжок: ' + roomWhy : 'не долетит'); continue }
+    const from = L.from
+    const extra = L.moved ? { h: Math.hypot(L.moved.x, L.moved.z), vy: L.moved.y } : null
     const tx = c.x + 0.5 - from.x; const tz = c.z + 0.5 - from.z
     const dx = Math.hypot(tx, tz)
-    if (dx > reach(c.y + 0.05 - from.y) - 0.3) { no('не долетит'); continue }
     tries++
     const yaw = Math.atan2(-tx, -tz)
-    const ps = pitchesFor(dx, c.y + 0.05 - from.y)
+    const ps = pitchesFor(dx, c.y + 0.05 - from.y, extra)
     if (!ps.length) { no('не долетит'); continue }
     for (const pitch of ps) {
       if (lookOk && !lookOk(yaw, pitch)) { no('взгляд'); continue }
-      const sim = simulate(world, from, velOf(yaw, pitch))
+      const sim = simulate(world, from, velOf(yaw, pitch, L.moved))
       if (!sim.tp) { no(sim.void ? 'в пустоту' : sim.unknown ? 'не прогружено' : 'вода'); continue }
       const st = settle(world, sim.tp, { floorOk, avoid })
       if (!st.ok) { no('посадка: ' + st.why); continue }
@@ -337,7 +364,7 @@ function planHop (world, feet, goal, { maxR = 70, minR = 6, lateral = [0, -2, 2,
       const px = Math.cos(yaw); const pz = -Math.sin(yaw)
       let bad = null
       for (const [ex, ey, ez] of [[a * px, 0, a * pz], [-a * px, 0, -a * pz], [0, a, 0], [0, -a, 0]]) {
-        const s2 = simulate(world, from, spreadVel(yaw, pitch, ex, ey, ez))
+        const s2 = simulate(world, from, spreadVel(yaw, pitch, ex, ey, ez, L.moved))
         if (!s2.tp) { bad = s2.void ? 'разброс: пустота' : 'разброс: ?'; break }
         const t2 = settle(world, s2.tp, { floorOk, avoid })
         if (!t2.ok) { bad = 'разброс: ' + t2.why; break }
@@ -347,7 +374,8 @@ function planHop (world, feet, goal, { maxR = 70, minR = 6, lateral = [0, -2, 2,
       return {
         plan: {
           yaw, pitch, ticks: sim.ticks, cell: { x: c.x, y: c.y, z: c.z }, tp: sim.tp, feet: st.feet, fall: st.fall, edge: st.edge,
-          aim: new Vec3(c.x + 0.5, c.y + 0.05, c.z + 0.5), rem: Math.hypot(goal.x - st.feet.x, goal.z - st.feet.z), arc: pitch === ps[0] ? 'low' : 'high'
+          aim: new Vec3(c.x + 0.5, c.y + 0.05, c.z + 0.5), rem: Math.hypot(goal.x - st.feet.x, goal.z - st.feet.z), arc: pitch === ps[0] ? 'low' : 'high',
+          jump: L.kind, from
         },
         tries,
         why
@@ -448,7 +476,7 @@ function hopWorth (bot, goal, opts: any = {}) {
   if (pearls - reserve <= 0) return { go: false, why: 'жемчуг' }
   const world = worldOf(bot)
   const me = bot.entity.position
-  const ph = planHop(world, me, goal, { floorOk: opts.floorOk, avoid: opts.avoid, lookOk: opts.lookOk, obstacles: opts.obstacles || obstaclesOf(bot), maxTries: opts.maxTries ?? 12 })
+  const ph = planHop(world, me, goal, { floorOk: opts.floorOk, avoid: opts.avoid, lookOk: opts.lookOk, obstacles: opts.obstacles || obstaclesOf(bot), maxTries: opts.maxTries ?? 12, jump: opts.jump })
   if (!ph.plan) return { go: false, why: 'нет броска' }
   const walk = walkEstimate(world, me, goal)
   const rest = walkEstimate(world, ph.plan.feet, goal)
@@ -457,7 +485,7 @@ function hopWorth (bot, goal, opts: any = {}) {
 }
 
 // До maxHops бросков к goal. opts: reserve, hpMin, hpSec, minGain, maxHops, arriveR, floorOk, avoid, obstacles
-// (fn или массив), lookOk, log, abortIf(), onEdge. -> сводка { hops, pearls, hpLost, ms, misses, stops, log }
+// (fn или массив), lookOk, log, abortIf(), onEdge, jump ('stand' | 'run' — бросок в прыжке, см. planHop). -> сводка { hops, pearls, hpLost, ms, misses, stops, log }
 async function hopTo (bot, goal, opts: any = {}) {
   const log = opts.log || ((m) => console.log('[pearl] ' + m))
   const { reserve = 1, hpMin = 12, hpSec = 1.5, minGain = 3, maxHops = 3, arriveR = 4 } = opts
@@ -489,7 +517,7 @@ async function hopTo (bot, goal, opts: any = {}) {
       w = worth({ walkSec: walk.sec, hopSec: hopSeconds(pl.ticks), restSec: rest.sec, dmg, hp, hpMin, hpSec, minGain, pearls, reserve })
     }
     log(`бросок ${k + 1}: до цели ${Math.round(rem)} бл., пешком ~${walk.sec} с (пустоты ${walk.voids}); жемчугом ${r1(hopSeconds(pl.ticks))} с + остаток ${rest.sec} с + хп ${dmg}×${hpSec}; ` +
-      `выигрыш ${w.gain ?? '-'} с; посадка ${xyz(pl.feet)} (${pl.arc}, ${pl.ticks} т, край ${pl.edge}), план ${planMs} мс, проб ${ph.tries}${w.go ? '' : ' — НЕТ: ' + w.why}`)
+      `выигрыш ${w.gain ?? '-'} с; посадка ${xyz(pl.feet)} (${pl.arc}, ${pl.ticks} т, край ${pl.edge}${pl.jump ? ', прыжок ' + pl.jump : ''}), план ${planMs} мс, проб ${ph.tries}${w.go ? '' : ' — НЕТ: ' + w.why}`)
     if (!w.go) { out.stop = w.why; break }
     // Бросок: прицел пересчитывается на тике броска (своё движение) и проверяется по блокам.
     try { for (const c of ['forward', 'back', 'left', 'right', 'sprint', 'jump', 'sneak']) bot.setControlState(c, false) } catch {}
@@ -500,14 +528,17 @@ async function hopTo (bot, goal, opts: any = {}) {
     let picked = null
     const r = await throwMod.throwAt(bot, null, {
       item: pearl,
+      // Прыжок по плану: на месте или с разбегом к посадке; бросок — на тике отрыва (throw.jumpChoice).
+      jump: !!pl.jump, sprint: pl.jump === 'run', runYaw: pl.yaw,
       // Прицел — на тике броска из точной точки вылета, та же дуга, что в плане; своё движение — в скорость.
       pick: (ctx) => {
         const tx = pl.aim.x - ctx.from.x; const tz = pl.aim.z - ctx.from.z
         const yaw = Math.atan2(-tx, -tz)
-        const ps = pitchesFor(Math.hypot(tx, tz), pl.aim.y - ctx.from.y)
+        const extra = { x: ctx.moved.x, y: ctx.airborne ? ctx.moved.y : 0, z: ctx.moved.z }
+        const td = Math.hypot(tx, tz) || 1
+        const ps = pitchesFor(td, pl.aim.y - ctx.from.y, { h: (extra.x * tx + extra.z * tz) / td, vy: extra.y })
         const pitch = pl.arc === 'high' ? ps[1] : ps[0]
         if (pitch == null) return null
-        const extra = { x: ctx.moved.x, y: ctx.airborne ? ctx.moved.y : 0, z: ctx.moved.z }
         const sim = simulate(world, ctx.from, velOf(yaw, pitch, extra))
         const st = sim.tp ? settle(world, sim.tp, { floorOk: opts.floorOk, avoid: opts.avoid }) : null
         if (!st || !st.ok || st.edge1 || Math.hypot(st.feet.x - pl.feet.x, st.feet.z - pl.feet.z) > 2.5) return null

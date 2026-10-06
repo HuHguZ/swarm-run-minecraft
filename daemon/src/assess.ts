@@ -301,4 +301,4 @@ function weaponFor (bot, e) {
   return bestAgainst(bot, armor, g.tough)
 }
 
-module.exports = { plan, sizeUp, bestAgainst, weaponFor, afterArmor, gearOf, inSight, MOBS }
+module.exports = { plan, sizeUp, bestAgainst, weaponFor, afterArmor, gearOf, inSight, MOBS, WEAPON }

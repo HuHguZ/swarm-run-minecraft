@@ -10,6 +10,17 @@ export function deathFreeEnd(result: NetherCompletion): boolean {
   return result.reachedEnd && result.health > 0 && result.deaths === 0
 }
 
+// Nether PASS (раунд 06.10): жемчуг и стержни на очи в рюкзаке, тело живо и без смертей вернулось в верхний мир.
+// Готовые очи считаются и жемчугом, и половиной стержня (око = жемчуг + порошок, стержень = 2 порошка).
+export function netherGoalMet(inventory: Record<string, number>, eyesNeed: number): boolean {
+  const n = (name: string) => Number(inventory[name]) || 0
+  return n('ender_pearl') + n('ender_eye') >= eyesNeed && 2 * n('blaze_rod') + n('blaze_powder') + n('ender_eye') >= eyesNeed
+}
+
+export function netherPass(result: { dimension: string | null; health: number; deaths: number; inventory: Record<string, number>; eyesNeed: number }): boolean {
+  return result.dimension === 'overworld' && result.health > 0 && result.deaths === 0 && netherGoalMet(result.inventory, result.eyesNeed)
+}
+
 export interface BastionMetric { key: string; blocks: number; ingots: number }
 
 export function bastionMetrics(text: string): BastionMetric[] {

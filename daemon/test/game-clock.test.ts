@@ -649,3 +649,54 @@ test('followers replay confirmed snapshots without predicting or keeping an idle
   assert.equal(c.ticks, 2)
   assert.equal(time.pending(), 0)
 })
+
+test('lockstep runs each confirmed grant at once with physics, never by measured pace, and resyncs only past the valve', async t => {
+  const time = driver(t)
+  const c = new GameClock({ epoch: 0, lockstep: true, predictionTicks: 2 })
+  t.after(() => c.dispose())
+  let physics = 0
+  c.on('tick', () => { physics++ })
+  c.setState({ tick_rate: 750 })
+  c.syncAge(0n)
+  c.start()
+  await time.advanceTo(5)
+  assert.equal(c.ticks, 2, 'at most predictionTicks ahead of the confirmed server tick')
+  assert.equal(time.pending(), 0, 'then the clock waits for the server without a pump')
+  // The gated server confirms one tick per update_time: each grant is one physics tick on the next turn.
+  for (let age = 1n; age <= 100n; age++) { c.syncAge(age); await time.turn() }
+  assert.equal(c.ticks, 102)
+  assert.equal(physics, 102, 'no tick is skipped')
+  assert.ok(time.now() < 100 * 1000 / 750, 'no wall pacing at the requested or measured rate')
+  // A lag inside the stall window is replayed tick by tick; past it the server ran on without us: skip, then follow.
+  c.syncAge(110n)
+  while (time.pending()) await time.turn()
+  assert.equal(c.ticks, 112); assert.equal(physics, 112)
+  c.syncAge(140n)
+  while (time.pending()) await time.turn()
+  assert.equal(c.ticks, 142); assert.equal(physics, 115, 'one resync pulse, then the two ticks ahead')
+  assert.equal(c.snapshot().lockstep, true)
+})
+
+test('lockstep keeps its age anchor across respawn; ordinary clocks re-anchor', () => {
+  for (const lockstep of [false, true]) {
+    const bot = new EventEmitter()
+    bot._client = new EventEmitter()
+    const c = new GameClock({ manual: true, lockstep }).attach(bot)
+    bot._client.emit('update_time', { age: 100n })
+    c.advanceTicks(3)
+    bot._client.emit('update_time', { age: 105n })
+    bot.emit('respawn')
+    bot._client.emit('update_time', { age: 106n })
+    assert.equal(c.serverTicks, lockstep ? 6 : 3)
+    c.dispose()
+  }
+})
+
+test('lockstep options come only from the farm env', () => {
+  const { lockstepOptions } = require('../src/game-clock')
+  assert.deepEqual(lockstepOptions({}), {})
+  assert.deepEqual(lockstepOptions({ ND_LOCKSTEP: '0' }), {})
+  assert.deepEqual(lockstepOptions({ ND_LOCKSTEP: '1' }), { lockstep: true, predictionTicks: 2 })
+  assert.deepEqual(lockstepOptions({ ND_LOCKSTEP: '1', ND_LOCKSTEP_AHEAD: '4' }), { lockstep: true, predictionTicks: 4 })
+  assert.throws(() => lockstepOptions({ ND_LOCKSTEP: '1', ND_LOCKSTEP_AHEAD: '0' }), /1\.\.20/)
+})

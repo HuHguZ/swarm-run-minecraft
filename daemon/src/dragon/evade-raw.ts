@@ -444,7 +444,8 @@ function landingForecast (feed, P) {
   const b = L[L.length - 1]; const a = L[L.length - 2]
   if (!a || !b || a.id !== b.id || b.ph !== PHASE.LANDING || a.ph !== PHASE.LANDING) return null
   if (a.vx == null || b.vx == null || P == null) return null
-  const n = Math.round((b.t - a.t) / 50)
+  // тиков между пакетами — по пути (feedTicks), без него — по отметкам
+  const n = b.tick != null && a.tick != null && b.n != null ? b.tick - a.tick : Math.round((b.t - a.t) / 50)
   if (n < 1 || n > 6) return null
   const T = { x: 0.5, y: P, z: 0.5 }
   const from = q => ({ x: a.x, y: a.y, z: a.z, vx: a.vx, vy: a.vy, vz: a.vz, yRot: a.yRot, yRotA: q, hist: new Array(11).fill(a.y), inWall: false })
@@ -458,7 +459,7 @@ function landingForecast (feed, P) {
     const dx = s.x - T.x; const dy = s.y - T.y; const dz = s.z - T.z
     if (dx * dx + dy * dy + dz * dz < 1) {
       const sit = simClone(s)
-      return { t: b.t, wallMs: b.wallMs, n: k - 1 + 1, fitErr: best.e, sit, head: simHead(sit, true), neck: simNeck(sit, true), path, yRotA: s.yRotA }
+      return { t: b.tt ?? b.t, stampT: b.t, monoT: b.ttMono ?? null, wallMs: b.wallMs, n: k - 1 + 1, fitErr: best.e, sit, head: simHead(sit, true), neck: simNeck(sit, true), path, yRotA: s.yRotA }
     }
     simStep(s, T, 1.5, turnLanding)
     path.push({ k, head: simHead(s, false), neck: simNeck(s, false), pos: new Vec3(s.x, s.y, s.z), yRot: s.yRot, st: simClone(s) })

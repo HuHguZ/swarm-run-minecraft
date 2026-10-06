@@ -1,4 +1,4 @@
-import { candidates, threatLevel, hasObservedTarget, canRepelLavaAttacker, type ActionId, type Candidate, type TacticalState } from './state'
+import { candidates, threatLevel, hasObservedTarget, canRepelLavaAttacker, deadEnd, type ActionId, type Candidate, type TacticalState } from './state'
 
 export type TacticalNodeId = ActionId | 'Strategic' | 'EmergencyController'
 export interface TacticalTransition {
@@ -7,7 +7,7 @@ export interface TacticalTransition {
   when(state: TacticalState): boolean
 }
 
-const actions: ActionId[] = ['Fight', 'LastStand', 'Flee', 'Heal', 'Eat', 'Shield', 'Dodge', 'CreateDistance', 'BlockOff', 'PillarUp', 'DigDown', 'EnterPortal', 'UseWater', 'Hide', 'FreeEmbedded', 'FlightEscape', 'PearlEscape', 'UseFireResistance', 'ClimbOut', 'WebBoatEscape', 'BoatLavaHop']
+const actions: ActionId[] = ['Fight', 'LastStand', 'Flee', 'Heal', 'Eat', 'Shield', 'Dodge', 'CreateDistance', 'BlockOff', 'PillarUp', 'DigDown', 'EnterPortal', 'UseWater', 'Hide', 'FreeEmbedded', 'FlightEscape', 'PearlEscape', 'UseFireResistance', 'ClimbOut', 'WebBoatEscape', 'BoatLavaHop', 'Surface']
 const refuge: ActionId[] = ['Flee', 'CreateDistance', 'BlockOff', 'PillarUp', 'DigDown', 'Hide', 'EnterPortal']
 const edges: TacticalTransition[] = []
 const edge = (from: TacticalNodeId, to: TacticalNodeId, when: TacticalTransition['when']) => edges.push({ from, to, when })
@@ -23,8 +23,9 @@ for (const action of actions) {
   edge(action, 'BoatLavaHop', state => state.lava && !!state.boatLavaHop)
   edge(action, 'UseFireResistance', state => (state.lava || state.burning) && !state.fireResistance && !!state.fireResistancePotion)
   edge(action, 'ClimbOut', state => (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
-  edge(action, 'LastStand', state => hasObservedTarget(state) && state.contact && !!state.escapeExhausted && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
+  edge(action, 'LastStand', state => state.contact && deadEnd(state) && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
   for (const immediate of ['Dodge', 'UseWater'] as const) edge(action, immediate, state => immediate === 'Dodge' ? state.explosion : state.burning && state.water)
+  edge(action, 'Surface', state => !!state.drowning)
   for (const shelter of refuge) edge(action, shelter, state => threatLevel(state) >= 2 && (!state.canFight || state.health < 12 || action === 'Fight'))
   edge(action, 'Heal', state => state.cover && state.health < 16 && state.edible)
   edge(action, 'Eat', state => state.food < 16 && state.edible && threatLevel(state) <= 1)

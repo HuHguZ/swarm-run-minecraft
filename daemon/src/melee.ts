@@ -108,6 +108,48 @@ function hotbarIndex (bot, test) {
 
 // ---------------------------------------------------------------- на бота
 
+// Взгляд тела не принимает NaN/бесконечность (s7-arms 06.10: yaw=pitch=NaN у тела → каждый ход с NaN →
+// Paper кикает «Invalid move player packet received»). Остаётся прежний взгляд; откуда пришло — в лог со стеком.
+function guardAngles (bot) {
+  const e = bot.entity
+  if (!e || e._ndAngleGuard) return
+  const val = { yaw: Number.isFinite(e.yaw) ? e.yaw : 0, pitch: Number.isFinite(e.pitch) ? e.pitch : 0 }
+  let at = -Infinity
+  for (const k of ['yaw', 'pitch']) {
+    Object.defineProperty(e, k, {
+      configurable: true, enumerable: true, get: () => val[k],
+      set: (v) => {
+        if (Number.isFinite(v)) { val[k] = v; return }
+        e._ndAngleRejects = (e._ndAngleRejects || 0) + 1
+        if (gameClock.wall.now() - at > 2000) { at = gameClock.wall.now(); console.log(`[nan-guard] ${k}=${v} отвергнут (${e._ndAngleRejects})\n${String(new Error().stack).split('\n').slice(2, 16).join('\n')}`) }
+      }
+    })
+  }
+  e._ndAngleGuard = true
+  // bot.look(NaN) кладёт NaN ещё и в lastSentYaw физики (мимо entity) — тогда NaN во всех следующих ходах.
+  // Отсекаем на входе; кто звал — в лог (взгляд lookAt на точку с NaN).
+  if (!bot._ndLookGuard && typeof bot.look === 'function') {
+    const look0 = bot.look
+    bot.look = function (yaw, pitch, ...rest) {
+      if (Number.isFinite(yaw) && Number.isFinite(pitch)) return look0.call(this, yaw, pitch, ...rest)
+      e._ndAngleRejects = (e._ndAngleRejects || 0) + 1
+      if (gameClock.wall.now() - at > 2000) { at = gameClock.wall.now(); console.log(`[nan-guard] look(${yaw}, ${pitch}) отвергнут\n${String(new Error().stack).split('\n').slice(2, 16).join('\n')}`) }
+      return Promise.resolve()
+    }
+    // lookAt(точка с NaN) — снаружи reflex-lock, чтобы в стеке был настоящий вызывающий (внутри очереди он теряется).
+    const lookAt0 = bot.lookAt
+    if (typeof lookAt0 === 'function') {
+      bot.lookAt = function (point, ...rest) {
+        if (!point || [point.x, point.y, point.z].every(Number.isFinite)) return lookAt0.call(this, point, ...rest)
+        e._ndAngleRejects = (e._ndAngleRejects || 0) + 1
+        if (gameClock.wall.now() - at > 2000) { at = gameClock.wall.now(); console.log(`[nan-guard] lookAt(${JSON.stringify(point)}) отвергнут\n${String(new Error().stack).split('\n').slice(2, 12).join('\n')}`) }
+        return Promise.resolve()
+      }
+    }
+    bot._ndLookGuard = true
+  }
+}
+
 // Один раз на бота: часы заряда, спринт сервера, скорость тиков сервера,
 // звуки ударов. Всё — по пакетам, которые уходят и приходят.
 function install (bot) {
@@ -124,8 +166,23 @@ function install (bot) {
   // Сервер — Paper/Spigot (бренд minecraft:brand) или ванильный (мир по LAN):
   // у них разное со сбросом заряда (взмах в воздух — см. ниже).
   M.paperLike = () => /paper|spigot|bukkit|purpur|folia/i.test(String((bot.game && bot.game.serverBrand) || ''))
+  guardAngles(bot)
+  bot.on('spawn', () => guardAngles(bot))
   const w0 = bot._client.write
+  let nanAt = -Infinity
   bot._client.write = function (name, params) {
+    // Ход с NaN/бесконечностью сервер не прощает: Paper кикает «Invalid move player packet received»
+    // (s7-arms 06.10: 6 киков за 20 минут гонки вооружений). Не слать и сказать, откуда взялся.
+    if ((name === 'position' || name === 'position_look' || name === 'look') && params &&
+        ['x', 'y', 'z', 'yaw', 'pitch'].some(k => k in params && !Number.isFinite(params[k]))) {
+      M.nanDropped = (M.nanDropped || 0) + 1
+      if (gameClock.wall.now() - nanAt > 2000) {
+        nanAt = gameClock.wall.now()
+        const e = bot.entity || {}
+        console.log(`[nan-guard] ${name} ${JSON.stringify(params)} pos=${JSON.stringify(e.position)} vel=${JSON.stringify(e.velocity)} yaw=${e.yaw} pitch=${e.pitch} dropped=${M.nanDropped}\n${String(new Error().stack).split('\n').slice(2, 9).join('\n')}`)
+      }
+      return
+    }
     try {
       if (name === 'use_entity' && params && (params.mouse === 1 || params.type === 1 || params.mouse === 'attack')) {
         const now = gameClock.now()
@@ -523,4 +580,4 @@ function axeSlot (bot) {
   return hotbarIndex(bot, i => /_axe$/.test(i.name))
 }
 
-module.exports = { install, fight, cooldownTicks, ticksFor, axeSlot, hotbarIndex, soundName, EYE, FAST_AXE, SWAP_KEEPS_CHARGE }
+module.exports = { install, guardAngles, fight, cooldownTicks, ticksFor, axeSlot, hotbarIndex, soundName, EYE, FAST_AXE, SWAP_KEEPS_CHARGE }

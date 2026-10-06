@@ -331,7 +331,10 @@ async function equipFor (bot, b) {
   return items.equipBestTool(bot, b)
 }
 
-async function digCell (bot, v, { allowGuard = false, interrupted = () => false, onReceipt }: any = {}) {
+// face (Vec3 нормали) — копать через эту грань: mineflayer смотрит в её центр и шлёт её в block_dig; aim — точка на
+// этой грани, в которую смотреть вместо центра (центр может быть закрыт соседним блоком, pick.faceAim). Без face —
+// прежнее 'auto' (взгляд в центр блока, в пакете грань «верх»), даже если блок виден только сбоку.
+async function digCell (bot, v, { allowGuard = false, interrupted = () => false, onReceipt, face = null, aim = null }: any = {}) {
   const b = bot.blockAt(v)
   if (!b) return 'unloaded'
   const c = classOf(b)
@@ -365,7 +368,12 @@ async function digCell (bot, v, { allowGuard = false, interrupted = () => false,
     ms = Math.min(15000, 1200 + t * 1.6)
   } catch {}
   try {
-    await Promise.race([bot.dig(b, true), sleep(ms).then(() => { throw new Error('долго') })])
+    // aim: единственный взгляд внутри bot.dig (digging.js: lookAt(центр грани) → block_dig с гранью face) — в точку aim.
+    const raw = bot.lookAt
+    if (face && aim) bot.lookAt = (_p, force) => { bot.lookAt = raw; return raw.call(bot, aim, force) }
+    try {
+      await Promise.race([face ? bot.dig(b, true, face) : bot.dig(b, true), sleep(ms).then(() => { throw new Error('долго') })])
+    } finally { bot.lookAt = raw }
   } catch (e) {
     diagnostic.error = e.message
     diagnostic.finishedClock = gameClock.snapshot()

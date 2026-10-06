@@ -825,6 +825,9 @@ function dragonZones (bot, now = gameClock.now()) {
 
 let zonesCache = { t: 0, z: {} }
 
+// Тиков после прохода головы по прогнозу до щелчка: +1 на 20 тиках (an-pilltiming, 81 из 90), 0 на ускоренных (s5 06.10).
+function clickLead (rate = gameClock.snapshot()?.tickRate ?? 20) { return envNum('ND_CLICK_LEAD', rate > 100 ? 0 : 1) }
+
 function dragonStepCost (bot, pos) {
   if (gameClock.now() - zonesCache.t > 250) zonesCache = { t: gameClock.now(), z: dragonZones(bot) }
   const z: any = zonesCache.z
@@ -1403,6 +1406,37 @@ async function perchAttack (session, ctl, rep, stats, track) {
 
 let lastDragonHit = 0
 
+// Серверные тики пакетов дракона (750 TPS, s5 06.10). Отметка t — игровые мс клиента в миг разбора: на 750 тиках/с пакеты
+// приходят пачками (половина промежутков 0, остальные 50…1000 при настоящих 150), и прогноз снижения брал число тиков
+// между пакетами и миг прохода головы из этих отметок — щелчок кровати −4…+2 тика (DragonLab, s5-c1). Тиков между
+// пакетами — по пути (смещение / скорость за тик), миг — по пакету, разобранному без задержки (меньшее t − tick·50
+// за последние 15 пакетов, ~45 тиков: ошибка числа тиков не копится): tt — отметка без задержки разбора.
+function feedTicks (list, r) {
+  const prev = list[list.length - 1]
+  // фактический темп сервера (s5-c3: по заказанным 750 при настоящих ~700 якорь за 45 тиков уезжал на 4–6 тиков раньше)
+  const sn = gameClock.snapshot()
+  const tickMs = 1000 / (sn?.effectiveRate || sn?.tickRate || 20)
+  if (!prev || prev.id !== r.id || prev.tick == null) { r.tick = 0; r.n = null; r.tt = r.t; r.ttMono = r.mono; return }
+  const byStamp = Math.max(1, Math.round((r.t - prev.t) / 50))
+  const vs = [prev, r].filter(q => q.vx != null).map(q => Math.hypot(q.vx, q.vy, q.vz))
+  const sp = vs.length ? vs.reduce((x, y) => x + y, 0) / vs.length : 0
+  const d = Math.hypot(r.x - prev.x, r.y - prev.y, r.z - prev.z)
+  r.n = sp > 0.2 && d > 0.05 ? Math.max(1, Math.min(6, Math.round(d / sp))) : byStamp
+  r.tick = prev.tick + r.n
+  let off = r.t - r.tick * 50
+  let offMono = r.mono != null ? r.mono - r.tick * tickMs : null
+  for (let i = list.length - 1, k = 0; i >= 0 && k < 15 && list[i].id === r.id && list[i].tick != null; i--, k++) {
+    off = Math.min(off, list[i].t - list[i].tick * 50)
+    if (offMono != null && list[i].mono != null && k < 5) offMono = Math.min(offMono, list[i].mono - list[i].tick * tickMs)
+  }
+  // на 20 тиках отметки разбора точны (50 мс на тик), и +1 тик clickLead выверен по ним (an-pilltiming); якорь — только
+  // на ускоренных (s5-e22: якорь на 20 сдвигал щелчок на 1–2 тика раньше, урон p50 45 вместо 52)
+  r.tt = (sn?.effectiveRate || sn?.tickRate || 20) > 100 ? r.tick * 50 + off : r.t
+  // то же в монотонных мс реального времени: часы клиента на 750 скачут (догоняют сервер рывком, стоят впереди него),
+  // щелчок по ним уходит раньше/позже на тики — миг щелчка считать по ровным часам (clickBedAt untilMono)
+  r.ttMono = offMono != null ? r.tick * tickMs + offMono : null
+}
+
 function makeDragonFeed (bot) {
   const onHit = pk => {
     if (!pk || !bot.entity || pk.entityId !== bot.entity.id) return
@@ -1436,8 +1470,9 @@ function makeDragonFeed (bot) {
     const last = list[list.length - 1]
     const p = e.position
     if (last && last.id === e.id && t - last.t < 25 && Math.abs(last.x - p.x) < 1e-6 && Math.abs(last.z - p.z) < 1e-6 && Math.abs(last.y - p.y) < 1e-6) { last.yRot = yRotOf(e.yaw); return }
-    const r = { t, wallMs: gameClock.wall.now(), id: e.id, x: p.x, y: p.y, z: p.z, yRot: yRotOf(e.yaw), ph: phaseOf(bot, e), vx: null, vy: null, vz: null }
+    const r: any = { t, wallMs: gameClock.wall.now(), mono: gameClock.wall.monotonic(), id: e.id, x: p.x, y: p.y, z: p.z, yRot: yRotOf(e.yaw), ph: phaseOf(bot, e), vx: null, vy: null, vz: null }
     if (vel && vel.id === e.id && t - vel.t < 25) { r.vx = vel.x; r.vy = vel.y; r.vz = vel.z }
+    feedTicks(list, r)
     list.push(r)
     if (list.length > 40) list.shift()
     refresh(e.id)
@@ -2361,7 +2396,12 @@ async function bedsBoom (session, ctl, stats, plan, hit, why, opts: any = {}) {
   let tc = gameClock.now()
   let tcWall = gameClock.wall.now()
   const failW = (w) => { unwatch(); if (watch && ctl.trace) { const dc = dragonOf(bot); if (dc) wit.body2 = [r1(dc.position.x), r1(dc.position.y), r1(dc.position.z)]; ctl.trace.ev('bedFail', { why: w, ...wit, ...(opts.note || {}) }) } return { ok: false, why: w } }
-  try { const sent = await clickBedAt(bot, hit, { aimed: !!opts.aimed, until: opts.until || 0, prePlace: opts.prePlace || null }); if (sent === false) { bot._client.removeListener('damage_event', onDmg); return failW('R: поздняя проверка безопасности' + (hit.guardWhy ? ': ' + hit.guardWhy : '')) } tc = gameClock.now(); tcWall = gameClock.wall.now(); wit.sentMs = tc - tw0 } catch (e) { dbg('beds click', e.message) }
+  // Подтверждение щелчка сервером (750 TPS, s5 06.10): окно 700 игровых мс — 19 мс реального времени, damage_event и хп
+  // приходили позже — взорванная кровать считалась «ставка не прошла», урон 0. Ждать ack своего номера (clickBedAt).
+  let seqWant = null; let acked = false
+  const onAck = pk => { if (seqWant != null && pk && pk.sequenceId >= seqWant) acked = true }
+  bot._client.on('acknowledge_player_digging', onAck)
+  try { const sent = await clickBedAt(bot, hit, { aimed: !!opts.aimed, until: opts.until || 0, untilMono: opts.untilMono ?? null, prePlace: opts.prePlace || null }); if (sent === false) { bot._client.removeListener('damage_event', onDmg); bot._client.removeListener('acknowledge_player_digging', onAck); return failW('R: поздняя проверка безопасности' + (hit.guardWhy ? ': ' + hit.guardWhy : '')) } if (typeof sent === 'number') seqWant = sent; tc = gameClock.now(); tcWall = gameClock.wall.now(); wit.sentMs = tc - tw0 } catch (e) { dbg('beds click', e.message) }
   // В тик щелчка (01.10): голова по клиенту — расстояние от центра взрыва (клетка подушки H) и фаза.
   let atClick = null
   try {
@@ -2373,9 +2413,12 @@ async function bedsBoom (session, ctl, stats, plan, hit, why, opts: any = {}) {
     }
   } catch {}
   if (opts.afterClick) { try { await opts.afterClick() } catch (e) { dbg('afterClick', e.message) } }
-  while (!boomAt && gameClock.now() - tc < 700) await sleep(25)
+  const w0 = gameClock.wall.monotonic()
+  while (seqWant != null ? !acked && (gameClock.now() - tc < 700 || gameClock.wall.monotonic() - w0 < 1500) : !boomAt && gameClock.now() - tc < 700) await sleep(25)
   bot._client.removeListener('damage_event', onDmg)
-  await sleep(120)
+  bot._client.removeListener('acknowledge_player_digging', onAck)
+  wit.acked = acked
+  if (!acked) await sleep(120)
   const nameAt = (bot.blockAt(new Vec3(plan.H.x, plan.y, plan.H.z)) || {}).name || ''
   const gone = plan.anchor ? nameAt !== 'respawn_anchor' : !/_bed$/.test(nameAt)
   if (!gone && !boomAt) return failW('щёлкнул — не взорвалась')
@@ -3559,7 +3602,12 @@ async function pillarRun (session, ctl, stats, track, feed) {
       }
       if (!hit) { if (await recenter()) continue; if (!useAn) st.built = false; out.why = useAn ? 'якорь не видно' : 'кровать не видно'; break }
       // +1 тик против L: по записи сервера (an-pilltiming.js, 90 взрывов pil2) лучший тик — на 1 позже в 81 из 90
-      const tClick = fc.t + 50 * (clickI + 1) + envNum('ND_CLICK_OFS', -25)
+      // 750 TPS (s5, 06.10, свидетель DragonLab, 16 взрывов): тот же +1 тик опаздывал — лучший тик раньше на 1 (медиана; −2…+1):
+      // доставка и разбор пакетов — доли мс, но это 1–2 тика. На ускоренных тиках — без +1 (ND_CLICK_LEAD).
+      const tClick = fc.t + 50 * (clickI + clickLead()) + envNum('ND_CLICK_OFS', -25)
+      // тот же миг по ровным часам на ускоренных тиках (ND_CLICK_MONO=0 — по игровым, как раньше)
+      const snNow = gameClock.snapshot(); const rateNow = snNow?.effectiveRate || snNow?.tickRate || 20
+      const tClickMono = rateNow > 100 && fc.monoT != null && envv('ND_CLICK_MONO') !== '0' ? fc.monoT + (clickI + clickLead() + envNum('ND_CLICK_OFS', -25) / 50) * 1000 / rateNow : null
       const dClick = clickI === pass.i ? pass.d : fc.path[clickI].head.distanceTo(ctr)
       // щёлкать — по свежему прогнозу, когда до прохода ≤ 8 тиков (на 30 тиков вперёд прогноз спирали
       // ошибается на 2–3 блока: pil1-8 — ждали 41, вышло 15)
@@ -3595,7 +3643,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
         if (!faceClick(v, eye, new Vec3(F.x, yb, F.z), plan.click.face)) return 'бок кровати не виден'
         if (!(RUN_FACING() ? faceClickFacing(bot, eye, new Vec3(plan.place.K.x, yb, plan.place.K.z), plan.place.face, { x: H.x - F.x, z: H.z - F.z }, { minCos: 0.75 }) : faceClick(bot, eye, new Vec3(plan.place.K.x, yb, plan.place.K.z), plan.place.face))) return 'грань K не видна'
         return true
-      } : null, block: useAn ? bot.blockAt(Apos) : bot.blockAt(new Vec3(plan.click.cell.x, yb, plan.click.cell.z)) }, 'снижение', { aimed: true, until: Math.max(tClick, (stats.lastBoom || 0) + BED_GAP_MS), uncounted: true, ...(pre ? { keepHand: true, prePlace: pre } : {}), phCheck: p => p === PHASE.LANDING, note: { ...(pre ? { pc: 1 } : {}), ...(runnerLevels ? { runnerY: yb, ...seenNote(clickI) } : {}), oc: useAn ? 'PA' : 'P', pass: clickI, headDist: r1(dClick), fcT: fc.t, fcWall: fc.wallMs, tClick, ...(clickI !== pass.i ? { early: pass.i - clickI } : {}) } })
+      } : null, block: useAn ? bot.blockAt(Apos) : bot.blockAt(new Vec3(plan.click.cell.x, yb, plan.click.cell.z)) }, 'снижение', { aimed: true, until: Math.max(tClick, (stats.lastBoom || 0) + BED_GAP_MS), untilMono: tClickMono, uncounted: true, ...(pre ? { keepHand: true, prePlace: pre } : {}), phCheck: p => p === PHASE.LANDING, note: { ...(pre ? { pc: 1 } : {}), ...(runnerLevels ? { runnerY: yb, ...seenNote(clickI) } : {}), oc: useAn ? 'PA' : 'P', pass: clickI, headDist: r1(dClick), fcT: fc.t, fcWall: fc.wallMs, tClick, mono: tClickMono != null, ...(clickI !== pass.i ? { early: pass.i - clickI } : {}) } })
       // кровать пропала без удара по дракону и без урона нам — её снесли коробки дракона (checkWalls), взрыва
       // не было: толчка нет, прогноз — свежий (pil6-15, pil6-21: «съеденная» кровать на последнем заходе)
       const eaten = r.ok && !useAn && r.lagMs == null && !r.dmg && !r.self
@@ -4429,4 +4477,4 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
   rep.dragon.hpNow = won ? 0 : (dd ? Math.round(hpOf(bot, dd) ?? 0) : null)
 }
 
-module.exports = { refillBucket, endMovements, walkTo, guarding, guard, walkOnce, shootCrystal, earlyCrystalStep, crystalWait, openCage, destroyCrystals, heal, clearOfClouds, hideAndHeal, sitRec, sightMe, sightKey, sitState, blindKnown, sitAcc, noteSitDamage, takeoffOnHit, hazardNow, dragonZones, zonesCache, dragonStepCost, fightEnderman, bedBlast, leaveFront, perchFar, perchApproach, keepInScan, perchAttack, lastDragonHit, makeDragonFeed, ocLanding, ocOwnClick, walkAround, tsBuild, tsTrench, meleeFinish, runnerSword, bedsLayout, bedsGo, bedsBoom, bedsDouble, doubleRun, doubleRunAt, tryC, ocTakeoffRun, ocT1, seeStation, standAt, placeFrom, placeHigh, runnerClean, pillarBuild, pillarEnter, pillarRun, bedsPerch, mineEndStone, stationBuild, stationStep, fightDragon }
+module.exports = { clickLead, feedTicks, refillBucket, endMovements, walkTo, guarding, guard, walkOnce, shootCrystal, earlyCrystalStep, crystalWait, openCage, destroyCrystals, heal, clearOfClouds, hideAndHeal, sitRec, sightMe, sightKey, sitState, blindKnown, sitAcc, noteSitDamage, takeoffOnHit, hazardNow, dragonZones, zonesCache, dragonStepCost, fightEnderman, bedBlast, leaveFront, perchFar, perchApproach, keepInScan, perchAttack, lastDragonHit, makeDragonFeed, ocLanding, ocOwnClick, walkAround, tsBuild, tsTrench, meleeFinish, runnerSword, bedsLayout, bedsGo, bedsBoom, bedsDouble, doubleRun, doubleRunAt, tryC, ocTakeoffRun, ocT1, seeStation, standAt, placeFrom, placeHigh, runnerClean, pillarBuild, pillarEnter, pillarRun, bedsPerch, mineEndStone, stationBuild, stationStep, fightDragon }

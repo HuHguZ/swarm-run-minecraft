@@ -103,7 +103,7 @@ async function main () {
     const rec = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: true, stoppedBy: why }
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n'); console.log(JSON.stringify(rec))
   }
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', KEEPINV) // правило пользователя 02.10: боевой режим — false

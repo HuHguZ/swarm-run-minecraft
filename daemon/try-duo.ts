@@ -6,7 +6,7 @@ const gameClock = require('./src/game-clock')
 // сколько NeuroDown прожил, сколько снял с них (сумма их потерь хп — кроме него
 // их никто не бьёт), сколько получил, кого убил. Прогон «до» — демон NeuroDown с
 // ND_DUO=0, «после» — без него; напарники одни и те же.
-//   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 C=ws://127.0.0.1:8793 node try-duo.js <метка> [раундов] [набор]
+//   A=ws://127.0.0.1:88NN B=ws://127.0.0.1:89NN C=<третий демон слота> MC_PORT=256NN node try-duo.js <метка> [раундов] [набор]
 //
 // Сытость (2026-09-26): раньше каждый раунд всем давали эффект насыщения
 // 1 с × 21 — это сытость 20 и НАСЫЩЕНИЕ 20, а с ним FoodData.tick лечит 1 хп за
@@ -48,9 +48,10 @@ function client (url) {
   return { ws, ready, call }
 }
 const sleep = ms => gameClock.sleep(ms)
-const A = client(process.env.A || 'ws://127.0.0.1:8791')
-const B = client(process.env.B || 'ws://127.0.0.1:8792')
-const C = client(process.env.C || 'ws://127.0.0.1:8793')
+require('./arms-guard').farmOnly({ ws: [process.env.A, process.env.B, process.env.C] })
+const A = client(process.env.A)
+const B = client(process.env.B)
+const C = client(process.env.C)
 const NA = 'NeuroDown'; const NB = 'NeuroDown2'; const NC = 'NeuroBuild'
 const LABEL = process.argv[2] || 'run'
 const ROUNDS = Number(process.argv[3] || 6)

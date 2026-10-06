@@ -591,7 +591,17 @@ async function caseE2E () {
   // Обелиски (42 от центра) — тоже: сервер считает кристаллы до и после боя.
   await kit.cmd(end('forceload add -48 -48 47 47'))
   const results = []
+  // 750 TPS (s5, 06.10): подготовка сцены (~25 команд по 20–50 мс реального времени) — это 30–40 игровых с, дракон
+  // успевал сбить тело с платформы до вызова боя (s5-b1-s1/s2: пустота до первого шага). Подготовка — на 20 тиках,
+  // бой — на целевом темпе (TICK_RATE от фермы).
+  const rate = Number(process.env.TICK_RATE || 20)
+  const setRate = async (n) => {
+    if (rate === 20) return
+    await kit.cmd(`/tick rate ${n}`)
+    for (let i = 0; i < 40 && (await header()).clock?.tickRate !== n; i++) await gameClock.wall.sleep(50)
+  }
   for (let a = 1; a <= N; a++) {
+    await setRate(20)
     if (!(await freshDragon())) { note(`попытка ${a}: дракона нет и не воскрес`); results.push({ a, won: false, why: 'нет дракона' }); continue }
     // Кристаллы на обелисках (кольцо 42 держит forceload) — до боя.
     const crystals0 = await serverCount('end_crystal', { settle: 2 })
@@ -629,6 +639,7 @@ async function caseE2E () {
     await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
     await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
     await sleep(1000)
+    await setRate(rate)
     const clock0 = (await header()).clock
     const t0 = gameClock.now()
     const wall0 = gameClock.wall.monotonic()

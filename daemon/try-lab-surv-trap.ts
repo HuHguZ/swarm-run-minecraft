@@ -128,7 +128,7 @@ async function prepare (kit, round, base, VARIANT) {
   // Тело могло выпасть из игры (кампания, выходя сама, отключает его в finally) — вернуть до команд.
   try { await call('connect') } catch {}
   await sleep(500)
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await cmd('/gamemode creative')
   await cmd('/effect clear @s')
   // Место — до трёх попыток (генерация новых чанков бывает дольше 40 с, а «Could not» — на воде/в океане).

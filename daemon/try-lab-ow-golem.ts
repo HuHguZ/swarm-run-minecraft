@@ -21,7 +21,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', 'false')

@@ -18,8 +18,12 @@ const WebSocket = require('ws')
 const fs = require('fs')
 const path = require('path')
 
-const A_URL = process.env.ARENA_A || 'ws://127.0.0.1:8767'
-const B_URL = process.env.ARENA_B || 'ws://127.0.0.1:8768'
+// Только ферма (arms-guard, 2026-10-06): адреса — явно, живая арена (8765/8768,
+// arena-live.js) и server/ 25565 — отказ до подключения.
+const A_URL = process.env.ARENA_A
+const B_URL = process.env.ARENA_B
+const guard = require('./arms-guard')
+guard.farmOnly({ ws: process.env.ARENA_HUMAN ? [A_URL] : [A_URL, B_URL] })
 const ROUNDS = Number(process.argv[2] || 1) // 0 — без конца, пока в чат не напишут «хватит»
 // Без таймера: раунд до смерти бота или всех людей.
 const NOTIMER = !!process.env.ARENA_NOTIMER
@@ -47,7 +51,7 @@ const ONLY = process.argv[3] || null
 // Лог и замок — по порту первого бойца: тестовая арена агентов на своём
 // сервере не должна гасить живую арену в мире пользователя (8765).
 const A_PORT = (A_URL.match(/:(\d+)\/?$/) || [])[1] || 'x'
-const LOG = path.join(__dirname, A_PORT === '8765' ? 'arena.log' : `arena-${A_PORT}.log`)
+const LOG = path.join(__dirname, `arena-${A_PORT}.log`)
 
 const sleep = ms => gameClock.sleep(ms)
 const log = (...a) => {
@@ -58,13 +62,18 @@ const log = (...a) => {
 
 // Both bots share server ticks; keep the first connection as the time source.
 let clockSource = null
+// Отставание часов демона (lagTicks снимка) — максимум за раунд по каждому бойцу.
+const lagMax: Record<string, number> = {}
 function client (url) {
   clockSource ??= url
   const ws = new WebSocket(url)
   let id = 0
   const pending = new Map()
   ws.on('message', raw => {
-    const m = JSON.parse(raw.toString()); if (url === clockSource) gameClock.follow(m.clock || m.result?.state?.clock || m.result?.clock)
+    const m = JSON.parse(raw.toString())
+    const clk = m.clock || m.result?.state?.clock || m.result?.clock
+    if (url === clockSource) gameClock.follow(clk)
+    if (clk && typeof clk.lagTicks === 'number') lagMax[url] = Math.max(lagMax[url] || 0, clk.lagTicks)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id)
@@ -81,8 +90,15 @@ function client (url) {
 
 // Одна арена за раз: вторая копия (незаметно оставшаяся от прерванного
 // запуска) посреди боя начинала свой раунд и перевыдавала всем вещи.
-const LOCK = path.join(__dirname, A_PORT === '8765' ? 'arena.lock' : `arena-${A_PORT}.lock`)
-try { const old = Number(fs.readFileSync(LOCK, 'utf8')); if (old && old !== process.pid) { try { process.kill(old) } catch {} } } catch {}
+// Прежняя копия жива — отказ (раньше её убивали: при A=8765 это гасило живую арену).
+const LOCK = path.join(__dirname, `arena-${A_PORT}.lock`)
+{
+  let old = 0
+  try { old = Number(fs.readFileSync(LOCK, 'utf8')) } catch {}
+  let alive = false
+  if (old && old !== process.pid) { try { process.kill(old, 0); alive = true } catch {} }
+  if (alive) throw new Error(`арена на ${A_PORT} уже идёт (pid ${old}, ${LOCK}) — остановите её или удалите замок`)
+}
 fs.writeFileSync(LOCK, String(process.pid))
 process.on('exit', () => { try { if (fs.readFileSync(LOCK, 'utf8') === String(process.pid)) fs.unlinkSync(LOCK) } catch {} })
 
@@ -221,7 +237,10 @@ async function fillBox (x1, y1, z1, x2, y2, z2, block) {
 const CLEAN_R = Number(process.env.ARENA_R || 15)
 // Рельеф (arena-terrain.js): ямы, лава, вода, высоты, укрытия — каждый раунд новый.
 const TERRAIN = !!process.env.ARENA_TERRAIN
-const terrainMod = require('./arena-terrain')
+const terrainMod = require('./arena-terrain-random')
+// Seed рельефа: ARENA_TERRAIN_SEED + номер раунда (повторяемо), иначе время.
+const TERRAIN_SEED = process.env.ARENA_TERRAIN_SEED ? Number(process.env.ARENA_TERRAIN_SEED) : null
+let terrainRound = 0
 
 // Между раундами: убрать лаву, огонь, паутину, столбы и дроп, всё вернуть к ровному полу.
 // Свет: ночью в коробке ничего не видно. Полосы светокамня в полу каждые 8
@@ -304,10 +323,15 @@ async function resetArena (kit: any = {} as Record<string, any>) {
   const floor = kit.floor ? 'minecraft:' + kit.floor : FLOOR
   if (TERRAIN) {
     await terrainMod.clearTerrain(cmd, fillBox, { X, Y, Z, R: CLEAN_R, top: TOP() })
-    const features = await terrainMod.buildTerrain(cmd, { X, Y, Z, R: CLEAN_R, avoid: [[X - 6, Z], [X + 6, Z]] })
+    const seed = TERRAIN_SEED != null ? TERRAIN_SEED + terrainRound++ : (gameClock.wall.now() >>> 0)
+    const features = await terrainMod.buildTerrain(cmd, { X, Y, Z, R: CLEAN_R, seed, avoid: [[X - 6, Z], [X + 6, Z]] })
     const kinds: Record<string, any> = {} as Record<string, any>
     for (const f of features) kinds[f.kind] = (kinds[f.kind] || 0) + 1
-    log('рельеф: ' + Object.entries<any>(kinds).map(([k, v]: any) => `${k}×${v}`).join(', '))
+    log(`рельеф (seed ${seed}): ` + Object.entries<any>(kinds).map(([k, v]: any) => `${k}×${v}`).join(', '))
+    // Стены — как без рельефа (раньше рельеф их пропускал: стекло, выбитое в
+    // прошлом раунде, не чинилось). Свет полосами в полу залил бы ямы — без
+    // него: на арене день стоит (/time set day, do_daylight_cycle false).
+    if (!process.env.ARENA_NOBUILD) await walls()
   } else {
     await fillBox(X - CLEAN_R, Y, Z - CLEAN_R, X + CLEAN_R, Math.max(Y + 8, TOP()), Z + CLEAN_R, 'minecraft:air')
     await fillBox(X - CLEAN_R, Y - 1, Z - CLEAN_R, X + CLEAN_R, Y - 1, Z + CLEAN_R, floor)
@@ -400,7 +424,9 @@ const KITS = [
   // фейерверки с тремя звёздами (5 + 2·3 = 11 взрывом), «Пронзание IV» под
   // стрелы (щит не держит); стрелы с медлительностью и слабостью; B — лук, меч,
   // щит. Броня и щит — на тело. Рюкзак: A 12, B 8.
-  { name: 'арбалет', onBody: true, a: [...ARMOR.iron, 'shield', XBOW_MULTI, XBOW_PIERCE, `${ROCKET3} 32`, 'arrow 64', tipped('slowness', 16), tipped('weakness', 16), 'diamond_sword', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', pot('splash_potion', 'strong_healing', 2)], b: [...ARMOR.iron, 'shield', 'bow', 'arrow 64', 'diamond_sword', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', pot('splash_potion', 'strong_healing', 2)] },
+  // Пустые ракеты (для элитр, 0 звёзд) — первыми: арбалет должен брать ракеты
+  // со звёздами (D3, s7 06.10).
+  { name: 'арбалет', onBody: true, a: [...ARMOR.iron, 'shield', XBOW_MULTI, XBOW_PIERCE, 'firework_rocket 16', `${ROCKET3} 32`, 'arrow 64', tipped('slowness', 16), tipped('weakness', 16), 'diamond_sword', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', pot('splash_potion', 'strong_healing', 2)], b: [...ARMOR.iron, 'shield', 'bow', 'arrow 64', 'diamond_sword', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', pot('splash_potion', 'strong_healing', 2)] },
   // Стрелы с эффектом (ranged.pickArrow; г.3 «стрелы и зелья»): вред II — добить и
   // коротким натяжением мимо брони, слабость — сильно бьющему, медлительность —
   // убегающему. Обеим сторонам одно. Рюкзак 9.
@@ -409,6 +435,11 @@ const KITS = [
   // меч на случай «обнял»; B — меч, топор, щит: против копья он должен
   // прилипнуть ближе 1.9. Броня — на тело. Рюкзак: A 10, B 8.
   { name: 'копья', onBody: true, a: [...ARMOR.diamond, 'diamond_spear[enchantments={lunge:3}]', 'netherite_spear', 'diamond_sword', 'diamond_axe', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', 'ender_pearl 4', pot('splash_potion', 'strong_healing', 2)], b: [...ARMOR.diamond, 'shield', 'diamond_sword', 'diamond_axe', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', 'ender_pearl 4', pot('splash_potion', 'strong_healing', 2)] },
+  // Элитры и копьё (s7b 06.10, план пользователя п.2): таран копьём на скорости (combat/aerial-lance — разгон
+  // KineticWeapon: 1 + floor(отн. скорость·множитель), на 1.5 б/т железное ≈29 до брони), выход вверх, повтор,
+  // посадка. Щитов нет: щит держит урон копья спереди (BlocksAttacks 90°) — таран против щита не планируется.
+  // Простые ракеты (без звёзд) — для полёта. Потолок — по элитрам (CEIL), выше — ARENA_CEIL_H.
+  { name: 'элитры и копьё', onBody: true, a: [...ARMOR.diamond, 'elytra', 'firework_rocket 48', 'iron_spear', 'diamond_sword', 'golden_apple 4', 'water_bucket', 'cobblestone 32', pot('splash_potion', 'strong_healing', 2)], b: null },
   {
     name: 'арсенал',
     // Броня и щит — на тело (/item replace, onBody): рюкзак 36 слотов весь под
@@ -471,6 +502,9 @@ const KITS = [
   // светокамень — в верхнем мире заряженный якорь от «использовать» не
   // светокамнем взрывается силой 5 с огнём (crystal.js «anchor»). Имя без слова
   // «кристаллы»: фильтр «кристаллы» берёт только основной набор.
+  // Якоря без кристаллов (TODO п.8, s7 06.10): crystal.engaged/plan берут якорь
+  // и без своих кристаллов (D2). Пол и свет — как у кристаллов (сила 5 бьёт камень).
+  { name: 'только якоря', onBody: true, fixedEnch: true, offhand: 'totem_of_undying', floor: 'obsidian', light: 'crying_obsidian', a: [...CRYSTAL_ARMOR, 'diamond_sword[enchantments={sharpness:5}]', 'respawn_anchor 32', 'glowstone 64', 'golden_apple 12', 'totem_of_undying', 'totem_of_undying', 'totem_of_undying', 'bow[enchantments={power:1}]', 'arrow 64', 'cobblestone 64', 'experience_bottle 64'], b: null },
   { name: 'якоря: кристалл и якорь возрождения', onBody: true, fixedEnch: true, offhand: 'totem_of_undying', floor: 'obsidian', light: 'crying_obsidian', a: [...CRYSTAL_ARMOR, 'diamond_sword[enchantments={sharpness:5}]', 'end_crystal 64', 'obsidian 64', 'bow[enchantments={power:1}]', 'golden_apple 12', 'respawn_anchor 16', 'glowstone 32', 'totem_of_undying', 'totem_of_undying', 'arrow 64', 'totem_of_undying', 'totem_of_undying', 'enchanted_golden_apple 1', 'end_crystal 32', 'experience_bottle 64', 'experience_bottle 64'], b: null },
   // Крафт-режим (ARENA_MODE=craft): кристалл — 7 стекла, око Края, слеза гаста
   // (верстак; prep.js крафтит все, на что хватит), обсидиан под них; броня —
@@ -638,10 +672,15 @@ async function onlineHumans () {
 // он внизу или далеко в стороне от коробки: возродился или выпал за стену.
 const diedIn = r => !!(r && ((r.detail && r.detail.died) || (r.status === 'interrupted' && r.by && r.by.type === 'death')))
 const lostLink = r => !!(r && r.status === 'interrupted' && r.by && /kicked|disconnected/.test(r.by.type))
+// Смерть за раунд — по журналу демона (lastDeathAt): на 750 TPS бот с
+// do_immediate_respawn возрождается раньше, чем арена спросит хп, и на точке
+// возрождения у арены выглядел живым — смерть шла в «ничью» (s7 06.10).
+const deathBase = new Map()
 async function where (c, out: any = {} as Record<string, any>) {
   const st = await c.call('status').catch(() => null)
   if (!st || !st.state || st.state.connected === false) return null
   out.hp = st.state.health
+  if (deathBase.has(c) && (st.state.lastDeathAt || null) !== deathBase.get(c)) return 'dead'
   if (!(st.state.health > 0)) return 'dead'
   const p = st.state.pos
   // Колизей: за барьером поля (хорус переносит сквозь стену) или на потолке —
@@ -667,6 +706,9 @@ const MAX_MS = Number(process.env.ARENA_MAX_S ?? 420) * 1000
 const RETURN_MS = Number(process.env.ARENA_RETURN_S || 45) * 1000
 // За стеной Колизея (where → gone) вернуться нельзя — ждать RETURN_S незачем.
 const GONE_MS = Number(process.env.ARENA_GONE_S || 10) * 1000
+// Темп сервера: подготовка раунда и бой (ферма, s7 06.10). Пусто — не трогать.
+const PREP_RATE = Number(process.env.ARENA_PREP_RATE || 0) || null
+const FIGHT_RATE = Number(process.env.ARENA_FIGHT_RATE || 0) || null
 
 function short (r) {
   if (!r) return 'нет ответа'
@@ -735,6 +777,10 @@ async function round (kit, n) {
     if (gone.length) log(`вышли: ${gone.join(', ')} — раунд без них`)
   }
   log(`=== ${kit.name}, раунд ${n} ===`)
+  // Подготовка (сброс, выдача, телепорт) — на 20 TPS: ожидания арены игровые, и
+  // на 750 выдача и проверка рюкзака проскакивали за десятки мс (s7 06.10:
+  // «броня не наделась»). Бой — на FIGHT_RATE.
+  if (PREP_RATE) await cmd(`/tick rate ${PREP_RATE}`)
   // Отвалившегося за прошлый раунд бойца — обратно на сервер.
   await A.call('connect').catch(() => {})
   if (!HUMAN) await B.call('connect').catch(() => {})
@@ -829,8 +875,20 @@ async function round (kit, n) {
   // него, что боец давно внизу, — поздно.
   const outSince: Record<string, any> = {} as Record<string, any>
   const hpWas: Record<string, any> = {} as Record<string, any>
+  // Бой — на темпе фермы (ARENA_FIGHT_RATE, 750): часам демонов — 1.5 с
+  // настоящего времени замерить новый темп до старта.
+  if (FIGHT_RATE) { await cmd(`/tick rate ${FIGHT_RATE}`); await gameClock.wall.sleep(1500) }
   let hurtAt = gameClock.now()
   const roundAt = gameClock.now()
+  const tick0 = gameClock.snapshot()?.ticks ?? null
+  const wall0 = gameClock.wall.now()
+  // Доля физических тиков бойца за раунд (status.physicsTicks / clock.ticks):
+  // при 750 TPS часы демона пропускают тики, когда CPU не успевает.
+  const phys = async (c) => { const st = await c.call('status').catch(() => null); const s = st && st.state; return s && s.clock && typeof s.physicsTicks === 'number' ? { p: s.physicsTicks, t: s.clock.ticks } : null }
+  const phys0 = [await phys(A), HUMAN ? null : await phys(B)]
+  deathBase.clear()
+  for (const c of HUMAN ? [A] : [A, B]) { const st = await c.call('status').catch(() => null); if (st && st.state) deathBase.set(c, st.state.lastDeathAt || null) }
+  for (const k of Object.keys(lagMax)) lagMax[k] = 0
   // Human stop requests still work while ticks are frozen.
   const stopWatch = gameClock.wall.setInterval(() => {
     if (over.done || !stopRequested()) return
@@ -888,8 +946,14 @@ async function round (kit, n) {
   else score.draw++
   log(`итог: ${winner ? 'победил ' + winner : 'ничья'} | счёт ${NA} ${score[NA]} : ${score[NB]} ${NB}, ничьих ${score.draw}`)
   // Машинная строка раунда (сводка — farm/crystal/csum.js, 2026-09-30).
-  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, tricks: d.tricks })
-  log('ROUND ' + JSON.stringify({ kit: kit.name, n, winner, durS: Math.round((gameClock.now() - roundAt) / 1000), a: side(NA, da), b: side(NB, db) }))
+  // Сводка — farm/crystal/tsum.js: частоты и урон приёмов (trickDmg), фактический TPS.
+  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, calc: d.calc, tricks: d.tricks, trickDmg: d.trickDmg })
+  const tick1 = gameClock.snapshot()?.ticks ?? null
+  const phys1 = [await phys(A), HUMAN ? null : await phys(B)]
+  const share = (i) => phys0[i] && phys1[i] && phys1[i].t > phys0[i].t ? Math.round((phys1[i].p - phys0[i].p) / (phys1[i].t - phys0[i].t) * 100) / 100 : null
+  const wallS = (gameClock.wall.now() - wall0) / 1000
+  const tps = tick0 != null && tick1 != null && wallS > 0 ? Math.round((tick1 - tick0) / wallS) : null
+  log('ROUND ' + JSON.stringify({ kit: kit.name, n, winner, durS: Math.round((gameClock.now() - roundAt) / 1000), wallS: Math.round(wallS), tps, lagMax: { a: lagMax[A_URL] ?? null, b: lagMax[B_URL] ?? null }, physShare: { a: share(0), b: share(1) }, sides: process.env.ARENA_SIDES === 'swap' ? 'swap' : 'std', a: side(NA, da), b: side(NB, db) }))
   await sleep(4000)
 }
 
@@ -897,6 +961,7 @@ async function round (kit, n) {
   try {
     await A.ready; await B.ready
     await A.call('connect'); await B.call('connect')
+    for (const c of HUMAN ? [A] : [A, B]) guard.farmServer(((await c.call('status')).detail || {}).server)
     // На арене никто не обижается сам: дерутся только по команде раунда.
     await A.call('temper', { enabled: false }); await B.call('temper', { enabled: false })
     // Чары — только демонам, которые с ними справляются: без gamedata.fixEnchants
@@ -932,7 +997,7 @@ async function round (kit, n) {
     if (CEIL) log(`потолок: ${COLOS ? 'барьер' : 'стекло'} до ${TOP()}, барьер на ${Y + CEIL_H}`)
     // Взрывчатка в наборах — барьерная оболочка за стеклом (blastShell) и уборка
     // вагонеток и кристаллов между раундами.
-    BLAST = chosen.some(k => [...(k.a || []), ...(k.b || [])].some(i => /^(minecraft:)?(tnt_minecart|end_crystal|tnt)\b/.test(i)))
+    BLAST = chosen.some(k => [...(k.a || []), ...(k.b || [])].some(i => /^(minecraft:)?(tnt_minecart|end_crystal|tnt|respawn_anchor)\b/.test(i)))
     if (BLAST) log(`взрывчатка в наборах: ${COLOS ? 'стены Колизея — барьер' : 'за стеклом оболочка из барьера'}`)
     if (COLOS) { CZM = CZ.model({ R: CLEAN_R, ceilH: CEIL_H }); CZFP = CZ.footprint(CZM, { X, Y, Z }) }
     await buildArena()
@@ -965,6 +1030,7 @@ async function round (kit, n) {
     process.exitCode = 1
   } finally {
     // Характер основному бойцу — обратно: в обычной игре он должен отвечать.
+    if (FIGHT_RATE) await cmd(`/tick rate ${FIGHT_RATE}`).catch(() => {})
     await cmd('/gamerule send_command_feedback true').catch(() => {})
     await cmd('/gamerule log_admin_commands true').catch(() => {})
     // Зрителя — обратно в выживание, на пол арены (в воздухе он бы упал).

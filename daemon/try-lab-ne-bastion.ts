@@ -113,7 +113,7 @@ async function main () {
   await call('connect')
   await call('stop')
   const t0 = gameClock.now()
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', KEEPINV) // правило пользователя 02.10: боевой режим — false

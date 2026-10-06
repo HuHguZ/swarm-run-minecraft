@@ -331,7 +331,7 @@ const fortOut = async () => {
         const breach = canHitMe ? 'он достаёт через дыру' : digging ? 'он ломает стену' : hurtNow ? 'по мне попали' : nearHole ? 'дыра, он рядом' : burningNow ? 'горю, воды нет' : null
         if (breach) {
           ctx.tt.stats.breaches++
-          const theirHp0 = ctx.healthOf(ctx.bot, ctx.entity)
+          const theirHp0 = ctx.foeHpDecide(ctx.entity) // оценка, не метаданные (правило 06.10)
           const edge = (theirHp0 != null && hpNow >= theirHp0 + 6) || !!ctx.tt.state(ctx.entity).consuming
           why = `вскрыли (${breach}) — ${edge ? 'перевес, выхожу драться' : 'вырываюсь с тыла'}`
           breakAway = !edge
@@ -385,7 +385,7 @@ const fortOut = async () => {
     }
     if (patchedTotal) ctx.used(`залатал коробку (${patchedTotal} бл.)`)
     if (hitThrough) ctx.used(`бил через дыру ×${hitThrough}`)
-    const theirs = ctx.healthOf(ctx.bot, ctx.entity)
+    const theirs = ctx.foeHpDecide(ctx.entity)
     const bold = !breakAway && (ctx.bot.health ?? 0) >= (theirs ?? 20) - 2
     const out = await ctx.fortify.breakOut(ctx.bot, box.cell, bold ? { toward: ctx.entity.position } : { away: ctx.entity.position }, {
       onHole: async () => {

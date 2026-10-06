@@ -1780,6 +1780,14 @@ async function enter (session, ctl, p: any = {}) {
   const wc = session.worldChange
   const to = worlds.worldOf(bot)
   const departure = { world: from, ...xyz(spot.pos) }
+  // Портал прибытия — в память сразу, только чтением блоков: шаги ниже рвёт тактика (s1-post08 06.10: Shield прервал вход
+  // сразу после смены мира, «портал (ад)» не записался, и LeaveNether с 10 очами стоял «ПЕРЕХОДА НЕТ» в 150 бл. от портала).
+  if (to !== from) {
+    try {
+      const early = findLitPortal(bot, mcData, 4)
+      if (early) rememberPortal(session, { ...xyz(bot.entity.position.floored()), dimension: to, axis: early.axis, inner: xyz(early.origin), lit: true, mine: false, leadsTo: departure })
+    } catch {}
+  }
   if (!arrivalReady()) {
     return {
       ...base,

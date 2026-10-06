@@ -25,7 +25,7 @@ async function main () {
     await kit.ensureWorld('overworld')
     await sleep(3000) // после /tp нужно дождаться чанков; biome:null не доказательство воды
   }
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   const before = read()
   const stamps = new Set((before.deaths || []).map(x => x.at))
   const start = await step('status', {} as Record<string, any>)

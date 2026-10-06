@@ -46,8 +46,8 @@ function rayBox (o, d, lo, hi, tMax) {
 }
 
 // Первый блок на луче до tMax, в чей контур луч входит (DDA по клеткам). Глаза
-// внутри контура — блок на t = 0.
-function blockOnRay (bot, o, d, tMax) {
+// внутри контура — блок на t = 0. skip — имена, сквозь которые луч идёт (для зрения: стекло, барьер).
+function blockOnRay (bot, o, d, tMax, skip = null) {
   let x = Math.floor(o.x); let y = Math.floor(o.y); let z = Math.floor(o.z)
   const sx = d.x > 0 ? 1 : -1; const sy = d.y > 0 ? 1 : -1; const sz = d.z > 0 ? 1 : -1
   const next = (c, s, dc, oc) => Math.abs(dc) < 1e-12 ? Infinity : ((s > 0 ? c + 1 : c) - oc) / dc
@@ -55,10 +55,11 @@ function blockOnRay (bot, o, d, tMax) {
   const dx = Math.abs(d.x) < 1e-12 ? Infinity : Math.abs(1 / d.x)
   const dy = Math.abs(d.y) < 1e-12 ? Infinity : Math.abs(1 / d.y)
   const dz = Math.abs(d.z) < 1e-12 ? Infinity : Math.abs(1 / d.z)
-  for (let i = 0; i < 16; i++) {
+  const steps = Math.max(16, Math.ceil(tMax) * 3 + 3)
+  for (let i = 0; i < steps; i++) {
     let b = null
     try { b = bot.blockAt(new Vec3(x, y, z), false) } catch {}
-    const sh = shapesOf(b)
+    const sh = skip && b && skip.test(b.name) ? null : shapesOf(b)
     if (sh) {
       for (const s of sh) {
         const t = rayBox(o, d, { x: x + s[0], y: y + s[1], z: z + s[2] }, { x: x + s[3], y: y + s[4], z: z + s[5] }, tMax)
@@ -175,6 +176,41 @@ function faceAim (bot, refPos, face, { eye = null, range = 4.5, avoid = null }: 
   return null
 }
 
+// Видно ли блок pos глазами (s7b 06.10, замечание проверки: raySees с допуском 1.2 бл. «видел» сундук за облицовкой).
+// Как прицел клиента: луч из глаз до точки на обращённой к глазам грани контура блока первым входит в контур
+// САМОГО блока. Сквозь стекло и барьер видно; жидкости лучу не мешают (контура нет). Сетка 5 точек на грань.
+const SEE_THROUGH = /glass|_pane$|^barrier$|^iron_bars$/
+const FACE_FRACS = [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]
+function blockSeen (bot, pos, { eye = null, range = 64 }: any = {}) {
+  if (!bot.entity) return false
+  const o = eye || eyeOf(bot)
+  let b = null
+  try { b = bot.blockAt(pos, false) } catch {}
+  for (const s of shapesOf(b) || FULL) {
+    const lo = { x: pos.x + s[0], y: pos.y + s[1], z: pos.z + s[2] }
+    const hi = { x: pos.x + s[3], y: pos.y + s[4], z: pos.z + s[5] }
+    for (const a of ['x', 'y', 'z']) {
+      // Грань, к которой глаза снаружи: со стороны lo или hi по оси a.
+      const plane = o[a] < lo[a] ? lo[a] : o[a] > hi[a] ? hi[a] : null
+      if (plane === null) continue
+      const [u, v] = a === 'x' ? ['y', 'z'] : a === 'y' ? ['x', 'z'] : ['x', 'y']
+      for (const [fu, fv] of FACE_FRACS) {
+        const p = { x: 0, y: 0, z: 0 }
+        p[a] = plane
+        p[u] = lo[u] + (hi[u] - lo[u]) * fu
+        p[v] = lo[v] + (hi[v] - lo[v]) * fv
+        const delta = new Vec3(p.x - o.x, p.y - o.y, p.z - o.z)
+        const len = delta.norm()
+        if (len > range) continue
+        if (len < 1e-6) return true
+        const hit = blockOnRay(bot, o, delta.scaled(1 / len), len + 0.01, SEE_THROUGH)
+        if (hit && hit.pos.equals(pos)) return true
+      }
+    }
+  }
+  return false
+}
+
 // Честно ли бить прямо сейчас (для сторожа attack и сцен).
 function canHit (bot, e, opts: any = {}) {
   const a = aim(bot, e, opts)
@@ -204,4 +240,4 @@ function install (bot) {
   }
 }
 
-module.exports = { aim, canHit, faceAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE }
+module.exports = { aim, canHit, faceAim, blockSeen, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE }

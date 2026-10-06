@@ -566,3 +566,50 @@ test('лестница: спуск по шахте не клатч', () => {
 })
 
 module.exports = { model, state, flight, block, data, Block, Vec3, Physics, PlayerState, EventEmitter, IDLE }
+
+test('with ND_SOFT_LANDING a fall without water is steered onto a nearby hay bale and confirmed on it', () => {
+  const m = model(p => p.y < -1 ? 'stone' : p.y === -1 ? (p.x === 2 && p.z === 0 ? 'hay_block' : 'stone') : 'air')
+  const { bot, guard } = installFake(m, state(new Vec3(.5, 40, .5), new Vec3(0, -.3, 0)), { inventory: [], prepare: false })
+  bot.game.dimension = 'minecraft:overworld'
+  bot.world.raycast = () => null
+  const previous = process.env.ND_SOFT_LANDING; process.env.ND_SOFT_LANDING = '1'
+  try {
+    for (let tick = 0; tick < 150 && !guard.stats.soft_saved && !guard.stats.soft_failed; tick++) {
+      bot.emit('physicsTick')
+      const next = new PlayerState(bot, bot.controlState); m.physics.simulatePlayer(next, m.world); next.apply(bot)
+    }
+    assert.equal(guard.stats.soft_plans, 1)
+    assert.equal(guard.stats.soft_saved, 1, `soft landing confirmed at ${bot.entity.position}`)
+    assert.ok(Math.abs(bot.entity.position.x - 2.5) < .35 && bot.entity.position.y === 0)
+  } finally {
+    if (previous === undefined) delete process.env.ND_SOFT_LANDING; else process.env.ND_SOFT_LANDING = previous
+    guard.stop?.()
+  }
+})
+
+test('лестница на стену: в последние тики падения — на видимую грань стены в клетку у пола, посадка через неё (s6b)', () => {
+  const m = model(p => p.x === -1 || p.y < 0 ? 'stone' : 'air')
+  const ladder = (p, facing) => { const b = Block.fromProperties('ladder', { facing, waterlogged: false }, 0); b.position = p.floored(); return b }
+  for (const h of [12, 25]) {
+    const s = state(new Vec3(0.5, h, 0.5)); let plan = null; let at = null
+    for (let t = 0; t < 80 && !s.onGround; t++) {
+      if (!plan) {
+        plan = m.api.ladderPlan({ state: s, world: m.world, peak: h, ladderBlock: ladder })
+        if (plan) {
+          at = s.pos.clone()
+          assert.ok(pick.faceAim({ entity: { position: s.pos }, entities: {} as Record<string, any>, blockAt: q => m.world.getBlock(q) }, plan.ref, plan.face, { eye: s.pos.offset(0, 1.62, 0) }), 'клик по видимой грани стены')
+          m.world.set(plan.cell, 'ladder')
+        }
+      }
+      m.physics.simulatePlayer(s, m.world)
+    }
+    assert.ok(plan, `падение ${h}: план лестницы найден`)
+    assert.equal(plan.facing, 'east'); assert.deepEqual([plan.ref.x, plan.face.x], [-1, 1])
+    assert.ok(plan.cell.y >= 0 && plan.cell.y <= 2 && plan.fall <= 3, JSON.stringify(plan))
+    assert.ok(at.y >= plan.cell.y + 1, 'тело выше клетки при установке')
+  }
+  // Без стены рядом — лестницы нет.
+  const open = model(p => p.y < 0 ? 'stone' : 'air')
+  const s = state(new Vec3(0.5, 5, 0.5))
+  assert.equal(open.api.ladderPlan({ state: s, world: open.world, peak: 20, ladderBlock: ladder }), null)
+})

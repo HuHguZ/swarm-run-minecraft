@@ -16,6 +16,9 @@
 //   node farm/farm.js up 4 --from 9             слоты 9..12
 //   node farm/farm.js up 4 --tick-rate 100      целевые 100 тиков/с; TICK_RATE=100 — то же (умолчание 20)
 //   node farm/farm.js up 8 --fresh              стереть миры и память слотов (чистый старт)
+//   node farm/farm.js up 1 --lockstep           пошаговый мир (ND_LOCKSTEP=1 — то же): тик идёт, только когда боты
+//                                               обсчитали предыдущие (FarmLockstep.java); демоны и сцены слота — тоже
+//                                               в этом режиме; окно ND_LOCKSTEP_WINDOW (2), клапан ND_LOCKSTEP_STALL_MS (2000)
 //   node farm/farm.js up 8 --world server-twin  миры — копия чужой папки (тот сервер должен
 //                                               стоять или быть в save-off; сид — из level.dat)
 //   node farm/farm.js status
@@ -303,11 +306,13 @@ async function startServer (s) {
   log(`слот ${s.i}: java pid ${p.pid}, жду порт ${s.mc}`)
   return p.pid
 }
+// Пошаговый режим — свойство мира (агент сервера), его записывает up: демоны и сцены слота берут его отсюда.
+const lockstepEnv = i => ({ ND_LOCKSTEP: readState().slots?.[i]?.lockstep ? '1' : '0' })
 async function startDaemon (s, rate = readState().slots?.[s.i]?.tickRate ?? tickRate({} as Record<string, any>, process.env, LIMITS.tickRate)) {
   if (await portOpen(s.ws)) return log(`слот ${s.i}: демон уже слушает ${s.ws}`)
   const out = fs.openSync(path.join(FARM, `daemon-${s.i}.out.log`), 'w')
   const err = fs.openSync(path.join(FARM, `daemon-${s.i}.err.log`), 'w')
-  const env = runEnv(process.env, { ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem }, rate)
+  const env = runEnv(process.env, { ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem, ...lockstepEnv(s.i) }, rate)
   const p = spawn(process.execPath, ['src/index.js'], { cwd: DAEMON, env, detached: true, stdio: ['ignore', out, err], windowsHide: true })
   p.unref()
   return p.pid
@@ -315,12 +320,15 @@ async function startDaemon (s, rate = readState().slots?.[s.i]?.tickRate ?? tick
 
 async function cmdUp (args) {
   const rate = tickRate(args, process.env, LIMITS.tickRate)
+  if (args.lockstep) process.env.ND_LOCKSTEP = '1' // acceleratedDigArgs (агент сервера) читает env
+  const lockstep = process.env.ND_LOCKSTEP === '1'
   const n = Number(args._[0] || 4)
   const from = Number(args.from || 1)
   const ids = []; for (let i = from; i < from + n && i <= MAX_SLOTS; i++) ids.push(i)
   const up = worldsUp(listeners())
   const extra = ids.filter(i => !up.includes(slot(i).mc)).length
   if (up.length + extra > MAX_UP) throw new Error(`лимит ${MAX_UP} миров разом (farm/limits.json — играет ли пользователь): уже подняты порты ${up.join(', ') || '—'}, просишь ещё ${extra}. Сначала down лишних.`)
+  if (lockstep && extra < ids.length) throw new Error('--lockstep: сервер слота уже поднят, а режим задаётся агентом при старте — сначала down')
   // --pool [файл] — хорошие сиды (farm/seeds/good-v1.json по умолчанию): случайные без повтора среди поднятых слотов
   // (решение пользователя 02.10: спидран пока тренируем только на хороших сидах). lava === false — пропустить.
   let seeds = args.seeds ? String(args.seeds).split(',') : null
@@ -344,7 +352,7 @@ async function cmdUp (args) {
     const seed = args.random ? randomSeed() : seeds ? seeds[k % seeds.length] : (args.seed || TWIN_SEED)
     const changed = prepareSlot(s, { seed, fresh: !!args.fresh, world: args.world || null })
     if (changed && up.includes(s.mc)) reloadPackets.set(i, changed)
-    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null, tickRate: rate }
+    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null, tickRate: rate, ...(lockstep ? { lockstep: true } : {}) }
   }
   // Чтение и запись slots.json — подряд, после долгой подготовки миров: параллельные up/down других слотов
   // (два потока серий) иначе затирали свои записи (rt-R6 03.10).
@@ -430,7 +438,7 @@ async function cmdStatus () {
     let online = ''; let ticks = ''
     if (srv) { try { online = (await slotRcon(s, 'list')).replace(/\s+/g, ' ').trim() } catch {} }
     if (srv) { try { ticks = (await slotRcon(s, 'tick query')).replace(/\s+/g, ' ').trim() } catch (e) { ticks = `tick query: ${e.message}` } }
-    console.log(`слот ${i}: сервер ${s.mc} ${srv ? 'up' : 'down'}, демон ${s.ws} ${dmn ? 'up' : 'down'}, сид ${st.slots[i].seed}${st.slots[i].world ? ' (мир ' + st.slots[i].world + ')' : ''}, tick-rate запрос ${st.slots[i].tickRate ?? 'не записан'} ${online}${ticks ? ' | ' + ticks : ''}`)
+    console.log(`слот ${i}: сервер ${s.mc} ${srv ? 'up' : 'down'}, демон ${s.ws} ${dmn ? 'up' : 'down'}, сид ${st.slots[i].seed}${st.slots[i].world ? ' (мир ' + st.slots[i].world + ')' : ''}, tick-rate запрос ${st.slots[i].tickRate ?? 'не записан'}${st.slots[i].lockstep ? ' пошаговый' : ''} ${online}${ticks ? ' | ' + ticks : ''}`)
   }
 }
 
@@ -494,6 +502,7 @@ async function cmdRun (args, sceneArgs) {
       ND_SERVER_LOG: path.join(s.dir, 'logs', 'latest.log'),
       LAB_OUT: path.join(dir, `slot-${i}.jsonl`),
       FARM_SLOT: String(i),
+      ...lockstepEnv(i),
       ...extra
     }, rate)
     const out = fs.openSync(path.join(dir, `slot-${i}.out`), 'a')
@@ -504,7 +513,8 @@ async function cmdRun (args, sceneArgs) {
     log(`слот ${i}: ${scene} ${sceneArgs.join(' ')} → pid ${p.pid}`)
     p.on('exit', code => { log(`слот ${i}: сцена кончилась, код ${code}`); resolve() })
   }))
-  fs.writeFileSync(path.join(dir, 'batch.json'), JSON.stringify({ scene, sceneArgs, env: runEnv({} as Record<string, any>, extra, rate), tickRate: rate, clock: 'game', slots: ids, at: new Date().toISOString() }, null, 2))
+  const lockstepSlots = ids.filter(i => readState().slots?.[i]?.lockstep)
+  fs.writeFileSync(path.join(dir, 'batch.json'), JSON.stringify({ scene, sceneArgs, env: runEnv({} as Record<string, any>, extra, rate), tickRate: rate, clock: 'game', slots: ids, ...(lockstepSlots.length ? { lockstepSlots } : {}), at: new Date().toISOString() }, null, 2))
   await Promise.all(runs)
   report(tag)
 }
@@ -571,7 +581,7 @@ function parseArgs (argv) {
     if (t.startsWith('--')) {
       if (t.startsWith('--tick-rate=')) { a['tick-rate'] = t.slice(12); continue }
       const key = t.slice(2)
-      if (!['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'random', 'fresh', 'all', 'help'].includes(key)) throw new Error(`неизвестный параметр ${t}; значения передаются через пробел`)
+      if (!['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'random', 'fresh', 'all', 'help', 'lockstep'].includes(key)) throw new Error(`неизвестный параметр ${t}; значения передаются через пробел`)
       const next = main[k + 1]
       if (next !== undefined && !next.startsWith('--') && !/^[A-Z_][A-Z0-9_]*=/.test(next) && ['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate'].includes(key)) { a[key] = next; k++ } else a[key] = true
     } else if (/^[A-Z_][A-Z0-9_]*=/.test(t) && a._.length >= 1) a.env.push(t)

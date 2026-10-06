@@ -252,4 +252,4 @@ function chargeWindow (name, r, towardMe) {
   return { at: Math.round(at * 10) / 10, ticks }
 }
 
-module.exports = { SPEARS, isSpear, spearOf, chargeTicks, jabReach, jab, charge, chargeWindow, readyIn, install, rayBox, KB_SPEED, DMG_REL, MIN_R, MAX_R }
+module.exports = { SPEARS, isSpear, spearOf, chargeTicks, jabReach, jab, charge, chargeWindow, readyIn, install, rayBox, afterPacket, KB_SPEED, DMG_REL, MIN_R, MAX_R }

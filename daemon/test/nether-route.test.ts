@@ -75,3 +75,17 @@ test('observed server receipt cost favors a longer dry air corridor over repeate
   assert.equal(confirmed.digs, 0)
   assert.ok(confirmed.steps > local.steps)
 })
+
+test('a ghast in view (expoMul) turns an open-topped trench walk into a sealed tunnel (s1 06.10)', async () => {
+  // Траншея z 5, сверху открыта до y 19: без гаста — прогулка по открытому, с гастом — штрек в толще рядом.
+  const g = new NG.Grid(NG.headerOf([0, 0, 0, 39, 19, 11]))
+  g.data.fill(C.SOFT)
+  for (let x = 2; x <= 30; x++) for (let y = 11; y <= 19; y++) g.setRaw(x, y, 5, C.AIR)
+  const calm = await plan(g, { x: 2, y: 11, z: 5 }, { x: 30, y: 11, z: 5 }, {} as Record<string, any>)
+  const ghast = await plan(g, { x: 2, y: 11, z: 5 }, { x: 30, y: 11, z: 5 }, { expoMul: 3 })
+  assert.equal(calm.ok, true); assert.equal(ghast.ok, true)
+  assert.equal(calm.digs, 0)
+  assert.ok(calm.expo > 20, `calm walk is exposed (${calm.expo})`)
+  assert.ok(ghast.expo < calm.expo / 4, `under a ghast the route hides (${ghast.expo} vs ${calm.expo})`)
+  assert.ok(ghast.digs > 0)
+})

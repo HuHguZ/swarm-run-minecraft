@@ -216,3 +216,26 @@ test('план: якорь возрождения (бонус) — в верхн
   assert.ok(!a2 || a2.kind !== 'anchor')
   c2.close()
 })
+
+test('якоря без кристаллов (TODO п.8): бой взрывом включается и план — якорь; в Аду — нет', () => {
+  const item = (name, count = 1) => ({ name, count, slot: 36 })
+  const inv = [item('respawn_anchor', 8), item('glowstone', 16), item('diamond_sword')]
+  const { bot, foe } = duelBot({ floor: 'smooth_stone', foeAt: new Vec3(3.5, 0, 0.5), inv })
+  bot.game.dimension = 'overworld'
+  const c = cr.create(bot, { enemy: () => foe })
+  assert.equal(c.engaged(), true, 'якорь и светокамень — взрывной бой')
+  const a = c.plan({} as Record<string, any>)
+  assert.ok(a && a.kind === 'anchor', `план ${a && a.kind}`)
+  c.close()
+  bot.game.dimension = 'the_nether'
+  const c2 = cr.create(bot, { enemy: () => foe })
+  assert.equal(c2.engaged(), false, 'в Аду якорь не взрывается')
+  assert.equal(c2.plan({} as Record<string, any>), null)
+  c2.close()
+  // Без светокамня якорь не зарядить.
+  const { bot: b3, foe: f3 } = duelBot({ floor: 'smooth_stone', foeAt: new Vec3(3.5, 0, 0.5), inv: [item('respawn_anchor', 8), item('diamond_sword')] })
+  b3.game.dimension = 'overworld'
+  const c3 = cr.create(b3, { enemy: () => f3 })
+  assert.equal(c3.engaged(), false)
+  c3.close()
+})

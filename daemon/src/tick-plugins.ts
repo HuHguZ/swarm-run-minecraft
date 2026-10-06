@@ -51,6 +51,38 @@ function getPhysics () {
     ? ndClimbableNames.map(name => blocksByName[name]?.id).filter(id => id !== undefined) : [])`)
     .replace('block.type === ladderId || block.type === vineId', 'block.type === ladderId || block.type === vineId || ndClimbableIds.has(block.type)')
   if (taggedSource === source || !taggedSource.includes('ndClimbableIds.has(block.type)')) throw new Error('Cannot apply reviewed climbable tag to native physics')
+  // PowderSnowBlock.entityInside (javap 1.21.11): a living entity whose feet cell
+  // (getInBlockState) is powder snow, without leather boots, is stuck like in a web
+  // with multiplier (0.9f, 1.5, 0.9f); Entity.move then zeroes its velocity.
+  const powderSource = taggedSource
+    .replace('  const webId = blocksByName.cobweb ? blocksByName.cobweb.id : blocksByName.web.id', `  const webId = blocksByName.cobweb ? blocksByName.cobweb.id : blocksByName.web.id
+  const ndPowderSnowId = blocksByName.powder_snow ? blocksByName.powder_snow.id : -1`)
+    .replace(`            if (block.type === webId) {
+              entity.isInWeb = true
+            } else if (block.type === bubblecolumnId) {`, `            if (block.type === webId) {
+              entity.isInWeb = true
+            } else if (block.type === ndPowderSnowId && !entity.ndLeatherBoots && cursor.x === Math.floor(pos.x) && cursor.y === Math.floor(pos.y) && cursor.z === Math.floor(pos.z)) {
+              entity.ndInPowderSnow = true
+            } else if (block.type === bubblecolumnId) {`)
+    .replace(`      entity.isInWeb = false
+    }`, `      entity.isInWeb = false
+    } else if (entity.ndInPowderSnow) {
+      dx *= 0.8999999761581421
+      dy *= 1.5
+      dz *= 0.8999999761581421
+      vel.x = 0
+      vel.y = 0
+      vel.z = 0
+      entity.ndInPowderSnow = false
+    }`)
+    .replace('    this.isInWeb = bot.entity.isInWeb\n', `    this.isInWeb = bot.entity.isInWeb
+    this.ndInPowderSnow = !!bot.entity.ndInPowderSnow
+    this.ndLeatherBoots = bot.inventory?.slots?.[8]?.name === 'leather_boots'
+`)
+    .replace('    bot.entity.isInWeb = this.isInWeb\n', `    bot.entity.isInWeb = this.isInWeb
+    bot.entity.ndInPowderSnow = this.ndInPowderSnow
+`)
+  if ((powderSource.match(/ndInPowderSnow/g) || []).length !== 7 || !powderSource.includes('const ndPowderSnowId')) throw new Error('Cannot apply reviewed powder snow movement to native physics')
   const modules = new Map()
   const data = new Map()
   const scopedRequire = request => {
@@ -71,7 +103,7 @@ function getPhysics () {
   }
   const localModule = { exports: {} }
   new Function('require', 'module', 'exports', '__filename', '__dirname', 'ndClimbableNames',
-    `${taggedSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)))
+    `${powderSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)))
   return (cachedPhysics = localModule.exports)
 }
 

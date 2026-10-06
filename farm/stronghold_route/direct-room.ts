@@ -14,7 +14,7 @@ async function main () {
   await c.call('connect')
   await c.call('stop')
   await sleep(1500)
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   const stamps = new Set((read().deaths || []).map(x => x.at))
   const start = (await c.call('status')).state
   const t0 = Date.now()

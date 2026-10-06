@@ -111,7 +111,7 @@ async function main () {
 // Раунд с чистого листа: арена, рюкзак, хп 6, мобы без ИИ (ИИ — со стартом дела).
 async function prepare (kit, cmd, call, { wall, round }: any) {
   await cmd('/gamemode creative')
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   // Мобы и дроп прошлого раунда — у арены, а не у тела (после смерти оно на спавне).
   await kit.cmd(`/execute in minecraft:${DIM} positioned ${X} ${Y} ${Z} run kill @e[type=!player,distance=..70]`)
   if (NETHER) {

@@ -1975,8 +1975,15 @@ async function craft (session, ctl, { item: name, count = 1, spendReserve = fals
     // question, answered from the bag below.
     let table = null
     let recipes = bot.recipesFor(itemData.id, null, 1, null)
+    const planned = recipe => {
+      const consumed = Object.fromEntries(recipe.delta.filter(d => d.count < 0).map(d => [mcData.items[d.id].name, -d.count]))
+      return Object.keys(consumed).length === Object.keys(conversionInputs).length &&
+        Object.entries(conversionInputs).every(([item, quantity]: [string, number]) => consumed[item] === quantity / conversionTimes)
+    }
 
-    if (!recipes.length) {
+    // В сетке 2×2 есть только свёртка «блок → 9 слитков», а план — самородки на верстаке: искать и с верстаком
+    // (s1-full48 06.10: iron_block из сундука бастиона + самородки → «рецепт не совпал» ×4, кирки не сделаны).
+    if (!recipes.length || conversionInputs && !recipes.some(planned)) {
       table = await ensureTable(session, ctl)
       if (table) {
         placed.push(table)
@@ -1996,11 +2003,7 @@ async function craft (session, ctl, { item: name, count = 1, spendReserve = fals
       throw new Error(`не хватает на ${name}: ${missing}` + (table ? '' : ' (и верстака рядом нет)'))
     }
 
-    if (conversionInputs) recipes = recipes.filter(recipe => {
-      const consumed = Object.fromEntries(recipe.delta.filter(d => d.count < 0).map(d => [mcData.items[d.id].name, -d.count]))
-      return Object.keys(consumed).length === Object.keys(conversionInputs).length &&
-        Object.entries(conversionInputs).every(([item, quantity]: [string, number]) => consumed[item] === quantity / conversionTimes)
-    })
+    if (conversionInputs) recipes = recipes.filter(planned)
     if (!recipes.length) throw new Error(`серверный рецепт для ${name} не совпал с планом преобразования`)
     const recipe = recipes[0]
     const preserve = new Set(recipe.delta.filter(ingredient => ingredient.count < 0).map(ingredient => mcData.items[ingredient.id].name))

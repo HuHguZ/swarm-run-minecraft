@@ -123,6 +123,8 @@ async function operation (s, obj, name, raw, args) {
   let craftRemaining = name === 'craft' ? Math.max(0, parseInt(args[1] ?? 1, 10)) : null
   for (;;) {
     await wait(s, ctl)
+    // A lease taken between wait()'s check and this continuation (same macrotask) still owns the hands (stress stand).
+    if (!allowed(s)) continue
     const epoch = state(s).epoch
     const op = { epoch }
     const c = { session: s, ctl, reflex: parent?.reflex, op }
@@ -242,7 +244,11 @@ function install (s) {
     b._client.write = function (name, data) {
       const c = context.getStore()
       if (name === 'window_click' && c?.session === s && c.op && (!allowed(s) || c.op.epoch !== state(s).epoch)) throw interrupted()
-      if (CONTROL_PACKETS.has(name) && c?.session === s && (!allowed(s) || c.op && c.op.epoch !== state(s).epoch)) return
+      if (CONTROL_PACKETS.has(name) && c?.session === s && (!allowed(s) || c.op && c.op.epoch !== state(s).epoch)) {
+        // s5 06.10: диагностика молча выброшенных пакетов навыка (ND_DROP_LOG=1)
+        if (process.env.ND_DROP_LOG && name !== 'position' && name !== 'position_look' && name !== 'look' && name !== 'flying') console.log(`[reflex-drop] ${name} — руки у ${state(s).active?.source ?? '-'}${c.op && c.op.epoch !== state(s).epoch ? ', старая эпоха' : ''}${c.ctl?.aborted ? ', навык прерван' : ''}`)
+        return
+      }
       const out = raw.call(this, name, data)
       if (name === 'block_place' && c?.reflex && data?.location) mark(s, 'place')
       return out

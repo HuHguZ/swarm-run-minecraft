@@ -188,3 +188,20 @@ test('native scene bots have separate tick plugin scopes and only primary suppli
     gameClock.activate(null)
   }
 })
+
+test('scene RNG reset salts every copy of a seed and confirms the chat-only reply in both worlds', async () => {
+  const asked: string[] = []
+  const reply = (lines: string[]) => async (method: string, params: Record<string, any>) => {
+    if (method === 'ask') asked.push(params.command)
+    return { detail: { lines } }
+  }
+  const kit = createKit({ call: reply(['Reset 4 random sequence(s)']), heard: [] })
+  assert.equal(await kit.randomReset('77'), 77)
+  assert.deepEqual(asked, ['/random reset * 77', '/execute in minecraft:the_nether run random reset * 77'])
+  asked.length = 0
+  const salt = await kit.randomReset('')
+  assert.ok(Number.isInteger(salt) && salt >= 0 && salt < 2 ** 31)
+  assert.equal(asked[0], `/random reset * ${salt}`)
+  await assert.rejects(createKit({ call: reply([]), heard: [], replyMs: 10 }).randomReset(1), /не подтверждён/)
+  await assert.rejects(kit.randomReset('abc'), /не int/)
+})

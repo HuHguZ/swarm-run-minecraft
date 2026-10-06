@@ -21,9 +21,14 @@ const wood = (state: NetherSupplyState): number => planks(state) + quantity(stat
 const pick = (state: NetherSupplyState): boolean => quantity(state, /^(stone|iron|diamond|netherite)_pickaxe$/) > 0
 const stone = (state: NetherSupplyState): number => quantity(state, /^(cobblestone|cobbled_deepslate|blackstone)$/)
 
+// Дерево в Аду — на палки к новым киркам (доска = 2 палки = кирка) и на стол. С верстаком хватает 4 досок, палки — по ½
+// доски: ворота «8 досок» гоняли тело наверх ради двух досок (Full42 ≈35 игр. мин; Full45 06.10 — в 17 бл. от спавнера,
+// 558 взмахов, 6 досок и лук из 2 досок). Без верстака — как раньше: 8 дерева, из них 4 доски на стол.
+const RESERVE = 4
+const woodWithSticks = (state: NetherSupplyState): number => wood(state) + Math.floor(quantity(state, /^stick$/) / 2)
 export function netherToolsReady(state: NetherSupplyState): boolean {
-  return pick(state) && state.pickSwings >= 260 && wood(state) >= 8 &&
-    (quantity(state, /^crafting_table$/) > 0 || planks(state) >= 4)
+  if (!pick(state) || state.pickSwings < 260) return false
+  return quantity(state, /^crafting_table$/) > 0 ? woodWithSticks(state) >= RESERVE : wood(state) >= 8 && planks(state) >= 4
 }
 
 export async function replenishNetherTools(port: NetherSupplyPort): Promise<NetherSupplyResult> {
@@ -43,7 +48,7 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
   const result = (reason?: string): NetherSupplyResult => ({ ready: netherToolsReady(state), interrupted: port.interrupted(), reason })
   if (!safe()) return result('пополнение инструментов сейчас небезопасно')
   if (netherToolsReady(state)) return result()
-  port.log(`инструменты Ада: ${state.pickSwings}/260 взмахов, дерево ${wood(state)}/8 досок; бюджет 240 с`)
+  port.log(`инструменты Ада: ${state.pickSwings}/260 взмахов, дерево ${woodWithSticks(state)}/${quantity(state, /^crafting_table$/) ? 4 : 8} досок; бюджет 240 с`)
   if (!quantity(state, /^crafting_table$/)) {
     await act('mine', { block: 'crafting_table', count: 1, radius: 3, fair: true, dry: true, timeoutSeconds: 15 })
     if (!safe()) return result('возврат верстака прерван')
@@ -62,17 +67,19 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
   }
   const ironAvailable = quantity(state, /^iron_ingot$/) + Math.floor(quantity(state, /^iron_nugget$/) / 9) + 9 * quantity(state, /^iron_block$/)
   const woodenPickNeeded = !quantity(state, /_pickaxe$/) && stone(state) < 3 && ironAvailable < 3
-  const firstWood = 8 + (quantity(state, /^crafting_table$/) ? 0 : 4) + (quantity(state, /^stick$/) >= 2 ? 0 : 2) + (woodenPickNeeded ? 3 : 0)
-  if (!(await ensureWood(firstWood))) return result('нет безопасного дерева на ближайший крафт и резерв 8 досок')
+  const firstWood = RESERVE + (quantity(state, /^crafting_table$/) ? 0 : 4) + (quantity(state, /^stick$/) >= 2 ? 0 : 2) + (woodenPickNeeded ? 3 : 0)
+  if (!(await ensureWood(firstWood))) return result(`нет безопасного дерева на ближайший крафт (${firstWood} досок)`)
   if (!quantity(state, /^crafting_table$/) && !(await craft('crafting_table'))) return result('не удалось восстановить верстак')
   for (let attempt = 0; attempt < 4 && safe() && (!pick(state) || state.pickSwings < 260); attempt++) {
-    if (quantity(state, /^stick$/) < 2 && (!(await ensureWood(10)) || !(await craft('stick', 4)))) break
+    if (quantity(state, /^stick$/) < 2 && (!(await ensureWood(RESERVE + 2)) || !(await craft('stick', 4)))) break
     if (quantity(state, /^iron_ingot$/) < 3 &&
       (!quantity(state, /^(iron|diamond|netherite)_pickaxe$/) || stone(state) < 3)) {
       const missing = 3 - quantity(state, /^iron_ingot$/)
       const nuggetIngots = Math.floor(quantity(state, /^iron_nugget$/) / 9)
       const convert = nuggetIngots >= missing ? missing : quantity(state, /^iron_block$/) > 0 ? 9 : 0
-      if (convert && (!(await craft('iron_ingot', convert)) || quantity(state, /^iron_ingot$/) < 3)) break
+      // Переплавка самородков не вышла (s1-full48 06.10: «серверный рецепт для iron_ingot не совпал» ×4, 0/260 взмахов при
+      // 64 cobbled_deepslate — 20+ мин «пауза») — каменная кирка из того, что есть, а не конец пополнения.
+      if (convert && (!(await craft('iron_ingot', convert)) || quantity(state, /^iron_ingot$/) < 3) && stone(state) < 3) break
     }
     if (!quantity(state, /^(iron|diamond|netherite)_pickaxe$/) && quantity(state, /^iron_ingot$/) >= 3) {
       if (!(await craft('iron_pickaxe'))) break
@@ -81,7 +88,7 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
     } else if (quantity(state, /^iron_ingot$/) >= 3) {
       if (!(await craft('iron_pickaxe'))) break
     } else {
-      if (!quantity(state, /_pickaxe$/) && (!(await ensureWood(11)) || !(await craft('wooden_pickaxe')))) break
+      if (!quantity(state, /_pickaxe$/) && (!(await ensureWood(RESERVE + 3)) || !(await craft('wooden_pickaxe')))) break
       const previous = stone(state)
       await act('mine', { block: 'blackstone', count: 6, radius: 24, dry: true, timeoutSeconds: 35 })
       if (stone(state) <= previous) break

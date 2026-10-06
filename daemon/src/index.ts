@@ -54,7 +54,7 @@ const methods = {
       onGround: session.bot.entity.onGround, pose: session.bot.entity.pose,
       isInWater: !!session.bot.entity.isInWater, isInLava: !!session.bot.entity.isInLava,
       clutch: { waterPlan: !!session.bot._ndClutch?.waterPlan,
-        stats: Object.fromEntries(['water_plans', 'water_saved', 'water_failed'].map(key => [key, session.bot._ndClutch?.stats?.[key] ?? 0])),
+        stats: Object.fromEntries(['water_plans', 'water_saved', 'water_failed', 'ladders', 'saved', 'placed', 'soft_plans', 'soft_saved', 'soft_failed'].map(key => [key, session.bot._ndClutch?.stats?.[key] ?? 0])),
         lastDecision: session.bot._ndClutch?.lastDecision ? { action: session.bot._ndClutch.lastDecision.action, why: session.bot._ndClutch.lastDecision.why } : null },
       controls: Object.fromEntries(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].map(key => [key, session.bot.getControlState(key)])), jumpTicks: session.bot.jumpTicks,
       worldLoaded: [-8, 0, 8].every(x => [-8, 0, 8].every(z => !!session.bot.blockAt(session.bot.entity.position.offset(x, -1, z)))),
@@ -144,6 +144,8 @@ const methods = {
   nether_tunnel: async (p) => session.netherTunnel(p || {}),
   // Поток nether-end: закопаться в толщу (bastion.burrowIntent) — штрек по Аду с открытого места не начинается.
   ne_burrow: async (p) => session.runIntent('ne_burrow', ctl => require('./bastion').burrowIntent(session, ctl, p || {}), { timeoutMs: 60000, params: p || {}, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }),
+  // Поток S2 (06.10): загон пиглинов «люк за окном» из ямы со ртом (bastion/pen-trap.penIntent: mode pen|pit, timeoutSeconds, pearls, want, lanes).
+  pen: async (p) => session.runIntent('pen', ctl => { session.require(); return require('./bastion/pen-trap').penIntent(session, ctl, p || {}) }, { timeoutMs: (Math.min(1200, Number(p && p.timeoutSeconds) || 240) + 40) * 1000, params: p || {}, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }),
   // Поток nether (03.10): ход по Аду по сетке копии мира (nether-route.routeTo: {x,y,z,r,dy,timeoutSeconds}).
   ne_route: async (p) => { p = p || {}; const s = Math.min(1500, Number(p.timeoutSeconds) || 600); return session.runIntent('ne_route', async ctl => { session.updateMovements(); return require('./nether-route').routeTo(session, ctl, { ...p, timeoutSeconds: s }) }, { timeoutMs: (s + 20) * 1000, params: p, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }) },
   // Поток unstuck: лестница выхода из застревания здесь и сейчас (unstuck.freeHere; {x,y,z} — куда надо, необязательно).
@@ -159,6 +161,12 @@ const methods = {
   loot: async (p) => session.loot(p || {}),
   // Постройки игры: scan | list | where | plan | forget | explore | loot (structures.js).
   structure: async (p) => session.structure(p || {}),
+  // Автолут сундуков автопилотом (autopilot.lootIfSeen): {enabled:false} — выключить (арена «гонки вооружений»,
+  // s7: бот брал сундуки сам, мимо графа, и при 750 TPS скан каждые 5 игровых с жёг процессор).
+  auto_loot: async (p) => session.immediate(async () => { session.lootAuto = !(p && p.enabled === false); return { lootAuto: session.lootAuto } }),
+  // Бутылки опыта под ноги — уровни для стола зачарований (pvp/xp-bottles, гонка вооружений s7).
+  xp_bottles: async (p) => session.runIntent('xp_bottles', ctl => { session.require(); return require('./pvp/xp-bottles').drink(session, ctl, p || {}) },
+    { timeoutMs: 30000, interruptOn: ['death', 'kicked', 'disconnected'] }),
   loot_seen: async (p) => session.immediate(async () => {
     session.require()
     return { chests: require('./loot').seen(session, { radius: (p && p.radius) || 24 }) }
@@ -246,7 +254,10 @@ const methods = {
     if (p && p.find) {
       const b = session.mcData.blocksByName[p.find]
       if (!b) throw new Error(`нет блока ${p.find}`)
-      const found = bot.findBlocks({ matching: [b.id], maxDistance: Math.min(256, p.radius || 64), count: p.count || 64 })
+      let found = bot.findBlocks({ matching: [b.id], maxDistance: Math.min(256, p.radius || 64), count: p.count || 64 })
+      // seen — только видимые глазами: луч до грани первым входит в сам блок (pick.blockSeen; «гонка вооружений» не знает
+      // сундуков за облицовкой — s7b 06.10, прежний raySees с допуском 1.2 бл. пропускал их сквозь стену).
+      if (p.seen) { const pk = require('./pick'); found = found.filter(v => pk.blockSeen(bot, v, { range: Math.min(256, p.radius || 64) })) }
       return { at: { x: c.x, y: c.y, z: c.z }, found: found.map(v => ({ x: v.x, y: v.y, z: v.z })) }
     }
     const r = Math.max(1, Math.min(6, (p && p.radius) || 3))

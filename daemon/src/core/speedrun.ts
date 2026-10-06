@@ -1,8 +1,66 @@
-import { amount, knows, unknown, type Effect, type WorldState } from './world-state'
+import { amount, knows, unknown, type Dimension, type Effect, type WorldState } from './world-state'
 import { StrategyRegistry, type Strategy } from './strategy'
 import { applyCosts, type CostModel } from './cost-model'
+import { barterPlan, chanceAll, DEFAULT_TIMING, expectedIngots, meanPerIngot, perIngot, type BarterDecision, type BarterState } from './barter-model'
 
-export interface SpeedrunOptions { eyes?: number; beds?: number; iron?: number; structureBudgetMs?: number; costs?: CostModel[] }
+export interface SpeedrunOptions {
+  eyes?: number; beds?: number; iron?: number; structureBudgetMs?: number; costs?: CostModel[]
+  /** Barter economy: gold as a resource (AcquireGold), next bastion, partial barter effects.
+   *  Off by default, нужна ферма: the campaign enables it with ND_GRAPH_ECONOMY=1 once S1 wires the skills bastionGold/bastionMove.
+   *  Simulator (sim-explore, 1000 worlds, telemetry-calibrated): win from Nether entry 7.4 % → 37.4 % (log 06.10 20:15, research/claude-1006/s3-strategist-log.md). */
+  economy?: boolean
+  /** KillDragon as a fork of fighting styles (placeholder until S5 measures them at 750 TPS); off by default. */
+  dragonVariants?: boolean
+}
+/** Blocks per game second over terrain, the same constant as src/route.ts. */
+const SPEED = 2.5
+/** Ingots in the walls of one housing bastion (17 gold blocks), barter-piglins.md 4.2; used while the copy gives none. */
+export const BASTION_GOLD = 153
+const TARGETS: Record<string, [string, Dimension]> = {
+  VillageIron: ['village', 'overworld'], ShipwreckIron: ['shipwreck', 'overworld'], TreasureIron: ['treasure', 'overworld'],
+  RuinedPortal: ['ruined_portal', 'overworld'], LavaPoolPortal: ['lava', 'overworld'], FindStronghold: ['stronghold', 'overworld'],
+  BastionBarter: ['bastion', 'the_nether'], AcquireGold: ['bastion', 'the_nether'], GetBlazeRods: ['fortress', 'the_nether']
+}
+/** Travel to the strategy's known target in the current dimension, in ticks. */
+export function travelTicks(s: WorldState, id: string): number {
+  const target = TARGETS[id]
+  const at = target && s.facts[`${target[0]}_position`]
+  if (!target || !at || s.dimension !== target[1] || !s.position || at.status !== 'known' || !at.value || typeof at.value !== 'object') return 0
+  return Math.hypot(at.value.x - s.position.x, at.value.z - s.position.z) / SPEED * 20
+}
+/** A target believed with confidence c costs (1 − c) of a fresh search on top (map facts are 1, inferred ones less). */
+function doubtTicks(s: WorldState, id: string, searchSeconds = 120): number {
+  const fact = TARGETS[id] && s.facts[TARGETS[id][0]]
+  return fact?.status === 'known' && fact.value === true ? (1 - fact.confidence) * searchSeconds * 20 : 0
+}
+const numberFact = (s: WorldState, name: string, fallback: number): number => {
+  const value = s.facts[name]
+  return value?.status === 'known' && Number.isFinite(Number(value.value)) ? Number(value.value) : fallback
+}
+/** Barter situation of the graph state: bastion gold from facts (copy of the world) or the housing-bastion default. */
+export function barterSituation(s: WorldState, eyes: number): BarterState {
+  const here = knows(s, 'bastion') && !knows(s, 'bastions_exhausted')
+  const others = numberFact(s, 'bastions_left', 0)
+  return { pearls: amount(s, 'pearls') + amount(s, 'eyes'), required: eyes, gold: amount(s, 'gold'),
+    here: here ? { gold: Math.max(0, numberFact(s, 'bastion_gold_left', BASTION_GOLD)), travelSeconds: 0 } : null,
+    next: others > 0 ? [{ gold: numberFact(s, 'next_bastion_gold', BASTION_GOLD), travelSeconds: numberFact(s, 'next_bastion_distance', 300) / SPEED }] : [],
+    delivery: numberFact(s, 'barter_delivery', 0.85),
+    timing: { mineSecondsPerIngot: numberFact(s, 'barter_mine_seconds', DEFAULT_TIMING.mineSecondsPerIngot),
+      tradeSecondsPerIngot: numberFact(s, 'barter_trade_seconds', DEFAULT_TIMING.tradeSecondsPerIngot), switchSeconds: DEFAULT_TIMING.switchSeconds },
+    endermenSecondsPerPearl: knows(s, 'endermen_allowed') ? numberFact(s, 'endermen_seconds_per_pearl', 240) : undefined }
+}
+const plans = new Map<string, BarterDecision>()
+/** barterPlan memoized on the numbers it reads: the planner asks the same situation thousands of times. */
+export function cachedBarterPlan(situation: BarterState): BarterDecision {
+  const key = JSON.stringify(situation)
+  let decision = plans.get(key)
+  if (!decision) {
+    if (plans.size > 20000) plans.clear()
+    decision = barterPlan(situation)
+    plans.set(key, decision)
+  }
+  return decision
+}
 const woodPlanks = (state: WorldState): number => Math.max(amount(state, 'wood'), Object.entries(state.inventory).reduce((total, [name, count]) =>
   total + (/_planks$/.test(name) ? count : /_(?:log|wood|stem|hyphae)$/.test(name) ? count * 4 : 0), 0))
 function netherSupplyImproved(failed: WorldState, current: WorldState): boolean {
@@ -29,7 +87,10 @@ function bastionSiteChanged(failed: WorldState, current: WorldState): boolean {
     return Number.isFinite(x) && Number.isFinite(z) ? `${x}:${z}` : null
   }
   const before = site(failed), after = site(current)
-  return before !== null && after !== null && before !== after
+  if (before !== null && after !== null) return before !== after
+  // Graph economy without positions: a site counter set by MoveToNextBastion/SearchNextBastion (absent counter = site 0).
+  const counter = (state: WorldState) => state.facts.bastion_site?.status === 'known' ? Number(state.facts.bastion_site.value) : null
+  return current.dimension === 'the_nether' && counter(current) !== null && counter(current) !== (counter(failed) ?? 0)
 }
 export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistry {
   const eyes = Math.max(1, options.eyes ?? 12)
@@ -50,7 +111,7 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   const structureAvailable = (s: WorldState, name: string) => knows(s, name) && !knows(s, `${name}_exhausted`) && s.structureSearchMs < structureBudgetMs
   const add = (id: string, skill: string, preconditions: Strategy['preconditions'], expectedEffects: Strategy['expectedEffects'], seconds: number,
     successCondition: Strategy['successCondition'], risk = 0.01, extra: Partial<Strategy> = {}) => registry.register({ id, skill, version: 1, preconditions,
-      expectedEffects, estimateCost: s => (seconds + Number(s.facts[`${id}_distance`]?.value ?? 0) / 2.5) * 20,
+      expectedEffects, estimateCost: s => seconds * 20 + travelTicks(s, id) + doubtTicks(s, id), travelTicks: s => travelTicks(s, id),
       estimateRisk: s => Math.min(1, risk * (s.health < 10 ? 3 : 1)), timeoutMs: Math.max(120000, seconds * 4000), successCondition, ...extra })
   const has = (key: string, n = 1) => (_before: WorldState, after: WorldState) => amount(after, key) >= n
   const achieved = (key: string) => (_before: WorldState, after: WorldState) => knows(after, key)
@@ -92,17 +153,95 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     90, achieved('nether_ready'), 0.01)
   add('EnterNether', 'enterNether', s => ow(s) && knows(s, 'portal') && knows(s, 'nether_ready') && (pearlsNeeded(s) || amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes),
     { dimension: 'the_nether', facts: { entered_nether: true } }, 30, (_b, a) => a.dimension === 'the_nether', 0.01)
+  const economy = options.economy === true
+  const barter = (s: WorldState) => cachedBarterPlan(barterSituation(s, eyes))
+  const goldLeft = (s: WorldState) => barterSituation(s, eyes).here?.gold ?? 0
+  const othersLeft = (s: WorldState) => numberFact(s, 'bastions_left', 0)
+  const searches = (s: WorldState) => numberFact(s, 'bastion_searches', 0)
+  // Economy: the current bastion is spent when its known gold is gone; all are spent when none is known or findable.
+  const bastionsDone = (s: WorldState) => knows(s, 'bastions_exhausted') || (economy && goldLeft(s) <= 0 && othersLeft(s) <= 0 && searches(s) >= 1)
+  const pearlsHeld = (s: WorldState) => amount(s, 'pearls') + amount(s, 'eyes')
+  const tradeIngots = new Map<string, number>()
+  /** Ingots a trade of the carried gold uses on average: all of it, or E[ingots to the deficit] when that is less. */
+  const tradeUse = (s: WorldState) => {
+    const situation = barterSituation(s, eyes)
+    const deficit = Math.max(0, Math.ceil(eyes - situation.pearls))
+    const key = `${deficit}/${situation.delivery}`
+    if (!tradeIngots.has(key)) tradeIngots.set(key, expectedIngots({ ender_pearl: deficit }, situation.delivery))
+    return Math.min(amount(s, 'gold'), tradeIngots.get(key)!)
+  }
+  const pearlsDone = (_b: WorldState, a: WorldState) => pearlsHeld(a) >= eyes
+  const chances = new Map<string, number>()
+  /** P(the pearls still missing come from these ingots), 1.21.11 table and the delivery fact. */
+  const barterChance = (s: WorldState, ingots: number) => {
+    const deficit = Math.max(0, Math.ceil(eyes - pearlsHeld(s))), delivery = barterSituation(s, eyes).delivery
+    const key = [ingots, deficit, delivery].join('/')
+    if (!chances.has(key)) chances.set(key, chanceAll(ingots, { ender_pearl: deficit }, delivery))
+    return chances.get(key)!
+  }
+  /** No gold is left to mine, move to or search for, and endermen are not allowed: the carried gold is the last chance. */
+  const lastGold = (s: WorldState) => economy && goldLeft(s) <= 0 && othersLeft(s) <= 0 && searches(s) >= 1 && !knows(s, 'endermen_allowed')
+  const shortfall = new Map<string, number>()
+  /** (1 − P(≥ deficit pearls | carried gold)) × one hour (the planner's price of a death): a lost run either way. */
+  const shortfallTicks = (s: WorldState) => {
+    const situation = barterSituation(s, eyes)
+    const key = `${amount(s, 'gold')}/${Math.ceil(eyes - situation.pearls)}/${situation.delivery}`
+    if (!shortfall.has(key)) shortfall.set(key, (1 - chanceAll(amount(s, 'gold'), { ender_pearl: Math.ceil(eyes - situation.pearls) }, situation.delivery)) * 72000)
+    return shortfall.get(key)!
+  }
   add('FindBastions', 'findBastions', s => nether(s) && pearlsNeeded(s) && unknown(s, 'bastion'), { facts: { bastion: true } }, 90, (_b, a) => !unknown(a, 'bastion'), 0.035)
-  add('BastionBarter', 'bastion', s => nether(s) && pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted') &&
+  // Economy decomposes the monolithic bastion skill into AcquireGold + PiglinBarter (+ MoveToNextBastion/SearchNextBastion).
+  if (!economy) add('BastionBarter', 'bastion', s => nether(s) && pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted') &&
     (amount(s, 'gold') >= 8 || !toolsUnavailable(s)),
-    { atLeast: { pearls: eyes }, facts: { bastions_exhausted: true, blaze_allowed: true } }, 180, (_b, a) => amount(a, 'pearls') + amount(a, 'eyes') >= eyes, 0.08,
-    { retryCondition: bastionSiteChanged })
+    { atLeast: { pearls: eyes }, facts: { bastions_exhausted: true, blaze_allowed: true } }, 180, pearlsDone, 0.08,
+    // Simulator prior: one bastion's walls plus the carried gold reach the pearls only with the 1.21.11 table's chance.
+    { retryCondition: bastionSiteChanged, successChance: s => barterChance(s, amount(s, 'gold') + goldLeft(s)) })
   add('PiglinBarter', 'piglinBarter', s => nether(s) && pearlsNeeded(s) && amount(s, 'gold') >= 8 && (knows(s, 'bastion') || knows(s, 'bastions_exhausted')),
-    { resources: { gold: -8 }, atLeast: { pearls: eyes }, facts: { blaze_allowed: true } }, 150, (_b, a) => amount(a, 'pearls') + amount(a, 'eyes') >= eyes, 0.025,
-    { retryCondition: (failed, current) => ['gold', 'pearls', 'eyes'].some(key => amount(failed, key) !== amount(current, key)) })
-  add('HuntEndermen', 'pearls', s => nether(s) && pearlsNeeded(s) && knows(s, 'bastions_exhausted') && knows(s, 'endermen_allowed') &&
+    economy ? (s: WorldState) => {
+      const used = tradeUse(s)
+      // The last gold anywhere is traded for its chance, not its mean: the shortfall risk is priced in estimateCost.
+      const reached = used < amount(s, 'gold') || pearlsHeld(s) + used * meanPerIngot('ender_pearl', barterSituation(s, eyes).delivery) >= eyes || lastGold(s)
+      return { resources: { gold: -used, pearls: used * meanPerIngot('ender_pearl', barterSituation(s, eyes).delivery) },
+        ...(reached ? { atLeast: { pearls: eyes - amount(s, 'eyes') } } : {}), facts: { blaze_allowed: true } }
+    } : { resources: { gold: -8 }, atLeast: { pearls: eyes }, facts: { blaze_allowed: true } }, 150, pearlsDone, 0.025,
+    { retryCondition: (failed, current) => ['gold', 'pearls', 'eyes'].some(key => amount(failed, key) !== amount(current, key)) || bastionSiteChanged(failed, current),
+      ...(economy ? {} : { successChance: (s: WorldState) => barterChance(s, amount(s, 'gold')) }),
+      ...(economy ? { estimateCost: (s: WorldState) => tradeUse(s) * barterSituation(s, eyes).timing.tradeSecondsPerIngot * 20 + (lastGold(s) ? shortfallTicks(s) : 0), modelCost: true, timeRetry: true,
+        sampleEffects: (s: WorldState, random: () => number) => {
+          // Ingot by ingot with the 1.21.11 table until the pearls are held or the gold is gone (the skill's own stop).
+          const chances = perIngot('ender_pearl', barterSituation(s, eyes).delivery)
+          let gold = amount(s, 'gold'), pearls = 0
+          while (gold > 0 && pearlsHeld(s) + pearls < eyes) {
+            gold--
+            let r = random()
+            for (let c = 1; c < chances.length; c++) { r -= chances[c]!; if (r < 0) { pearls += c; break } }
+          }
+          return { resources: { gold: gold - amount(s, 'gold'), pearls }, facts: { blaze_allowed: true } }
+        } } : {}) })
+  add('HuntEndermen', 'pearls', s => nether(s) && pearlsNeeded(s) && (economy ? bastionsDone(s) : knows(s, 'bastions_exhausted')) && knows(s, 'endermen_allowed') &&
     (amount(s, 'gold') < 8 || knows(s, 'barter_exhausted')),
-    { atLeast: { pearls: eyes } }, 600, (_b, a) => amount(a, 'pearls') + amount(a, 'eyes') >= eyes, 0.07)
+    { atLeast: { pearls: eyes } }, 600, pearlsDone, 0.07,
+    economy ? { estimateCost: s => Math.max(0, eyes - pearlsHeld(s)) * numberFact(s, 'endermen_seconds_per_pearl', 240) * 20, modelCost: true } : {})
+  if (economy) {
+    // Gold is a resource: mine the batch the barter model asks for, then trade it (PiglinBarter); stop and move by the same model.
+    const batch = (s: WorldState) => Math.min(goldLeft(s), barter({ ...s, resources: { ...s.resources, gold: 0 } }).options.find(o => o.action === 'mine')?.batch || 27)
+    add('AcquireGold', 'bastionGold', s => nether(s) && pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted') &&
+      !toolsUnavailable(s) && goldLeft(s) > 0 && amount(s, 'gold') < 8,
+      s => ({ resources: { gold: batch(s) }, facts: { bastion_gold_left: goldLeft(s) - batch(s) } }), 0,
+      // Risk: the bastion skill that mines this gold died 0 times in 165 graph attempts (graph-ne-*, 05–06.10); 0.01 until AcquireGold has its own.
+      (b, a) => amount(a, 'gold') > amount(b, 'gold'), 0.01,
+      { estimateCost: s => (batch(s) * barterSituation(s, eyes).timing.mineSecondsPerIngot + DEFAULT_TIMING.switchSeconds) * 20 + travelTicks(s, 'AcquireGold'),
+        modelCost: true, timeoutMs: 900000, command: s => ({ skill: 'bastionGold', strategy: 'AcquireGold', params: { ingots: batch(s) } }) })
+    // Carried gold does not block a move: when trading here keeps failing, the next site's piglins re-admit PiglinBarter.
+    const site = (s: WorldState) => numberFact(s, 'bastion_site', 0) + 1
+    add('MoveToNextBastion', 'bastionMove', s => nether(s) && pearlsNeeded(s) && othersLeft(s) >= 1 && (goldLeft(s) < 27 || amount(s, 'gold') >= 8),
+      s => ({ facts: { bastion: true, bastions_exhausted: false, bastion_gold_left: numberFact(s, 'next_bastion_gold', BASTION_GOLD), bastions_left: othersLeft(s) - 1, bastion_site: site(s) } }),
+      0, bastionSiteChanged, 0.04,
+      { estimateCost: s => (numberFact(s, 'next_bastion_distance', 300) / SPEED + DEFAULT_TIMING.switchSeconds) * 20, modelCost: true, timeoutMs: 900000 })
+    add('SearchNextBastion', 'findBastions', s => nether(s) && pearlsNeeded(s) && goldLeft(s) <= 0 && othersLeft(s) <= 0 && searches(s) < 1,
+      s => ({ facts: { bastion: true, bastions_exhausted: false, bastion_gold_left: BASTION_GOLD, bastion_searches: searches(s) + 1, bastion_site: site(s) } }),
+      300, (b, a) => bastionSiteChanged(b, a) || goldLeft(a) > goldLeft(b), 0.05)
+  }
   add('AcquireNetherTools', 'netherTools', s => nether(s) &&
     (rodsNeeded(s) || pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted')) && toolsUnavailable(s) && s.health >= 12 &&
     !(pearlsNeeded(s) && amount(s, 'gold') >= 8),
@@ -128,7 +267,18 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     { facts: { stronghold: true, end_portal: true } }, 300, achieved('end_portal'), 0.03)
   add('EnterEnd', 'enterEnd', s => ow(s) && knows(s, 'end_portal') && knows(s, 'end_ready'), { dimension: 'the_end', resources: { eyes: -eyes } },
     30, (_b, a) => a.dimension === 'the_end', 0.01)
-  add('KillDragon', 'dragon', s => s.dimension === 'the_end' && !knows(s, 'dragon_dead'), { facts: { dragon_dead: true } }, 180, achieved('dragon_dead'), 0.08)
+  if (!options.dragonVariants) add('KillDragon', 'dragon', s => s.dimension === 'the_end' && !knows(s, 'dragon_dead'), { facts: { dragon_dead: true } }, 180, achieved('dragon_dead'), 0.08)
+  else {
+    // Fork placeholder (prices to come from S5): one-cycle beds vs no beds. Bed numbers: dev-C ca3/xda1 18/21 wins, 0 deaths,
+    // p50 144 s at 20 TPS with ≥4 beds; without crystals 13–14/20 (end-dragon.md). At 750 TPS S5 had 0/11 on 06.10 19:10–19:27
+    // (s5-b2, s5-c1) while fixing tick timing: these chances are 20 TPS priors, not 750 TPS facts.
+    add('KillDragonBeds', 'dragon', s => s.dimension === 'the_end' && !knows(s, 'dragon_dead') && amount(s, 'beds') >= 4,
+      { facts: { dragon_dead: true } }, 144, achieved('dragon_dead'), 0.05,
+      { version: 0, successChance: s => Math.min(0.9, 0.55 + 0.08 * amount(s, 'beds')), command: () => ({ skill: 'dragon', strategy: 'KillDragonBeds', params: { mode: 'beds' } }) })
+    add('KillDragonMelee', 'dragon', s => s.dimension === 'the_end' && !knows(s, 'dragon_dead'),
+      { facts: { dragon_dead: true } }, 420, achieved('dragon_dead'), 0.2,
+      { version: 0, successChance: () => 0.5, command: () => ({ skill: 'dragon', strategy: 'KillDragonMelee', params: { mode: 'melee' } }) })
+  }
   if (options.costs) applyCosts(registry, options.costs)
   return registry
 }

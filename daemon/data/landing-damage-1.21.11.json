@@ -5,13 +5,77 @@
     "PointedDripstoneBlock.class.sha256": "d5c17543f9ff3ba94f201bedf6c3c18a35c7035a07ac1894e12858b132922b73",
     "LivingEntity.class.sha256": "2b5cb60d670adc99c479ba85f86d72b0ce6b70e30154d8ce8b9db7b986eb6679",
     "HayBlock.class.sha256": "985d322c486658279b81fe5beed1bb1a1659cf5b38345928b4cae023b5c9cafc",
-    "methods": "PointedDripstoneBlock.fallOn; LivingEntity.calculateFallDamage/calculateFallPower; SlimeBlock.fallOn/updateEntityMovementAfterFallOn; HayBlock.fallOn (javap verified 2026-10-06)"
+    "methods": "PointedDripstoneBlock.fallOn; LivingEntity.calculateFallDamage/calculateFallPower; SlimeBlock.fallOn/updateEntityMovementAfterFallOn; HayBlock.fallOn (javap verified 2026-10-06); BedBlock.fallOn (distance*0.5, then Block.fallOn multiplier 1)/bounceUp (vy=-vy*0.66, living); HoneyBlock.fallOn (causeFallDamage 0.2f); PowderSnowBlock.fallOn (sound only, no damage; collision FALLING_COLLISION_SHAPE when fallDistance>2.5); SlimeBlock.fallOn (0f, nothing when suppressing bounce); Entity.checkFallDamage (no accumulation in water), Entity.move (clip FALLDAMAGE_RESETTING/WATER resets), Entity.makeStuckInBlock (reset), LivingEntity.handleOnClimbable (reset) (javap verified 2026-10-06 s6)",
+    "BedBlock.class.sha256": "1426c6e2b4fa4ea448ffa59d24d71926f006ceb7d7a958a548a5c64d1d1adb65",
+    "HoneyBlock.class.sha256": "5fcfd5c4e2c2f279d0f52f3682476927fa9bd25d22ab477c6bd434424afa16f2",
+    "PowderSnowBlock.class.sha256": "99aacfcada0f532da34b23f65544a3a5088ffcf42128a488bb35e451503712c4",
+    "SlimeBlock.class.sha256": "85ccddb64c8d3a0d7f16f05f3d0b1eed2e837faf6c1715c78aaa33e046ff0d1a",
+    "Entity.class.sha256": "3049061b196b9700d036c3f5a568c0a21412c581964fb8b805da17436605a158",
+    "Player.class.sha256": "c14ad058134f2ddf0098445debcf620436aefadaa7ea0514c693208aa39b5f54",
+    "ThrownEnderpearl.class.sha256": "1769cdbef7ea54556ac1d47633716622c0fa99406880f5a3a9156062f40d97bc",
+    "AbstractBoat.class.sha256": "a6ab5d34b380d0523715253765d0af7a2459af67d2dea4de8b23624d72166359"
   },
   "safeFallDistance": 3,
-  "epsilon": 0.000001,
+  "epsilon": 1e-06,
   "rules": [
-    { "block": "pointed_dripstone", "properties": { "vertical_direction": "up", "thickness": "tip" }, "distanceOffset": 2.5, "damageMultiplier": 2 },
-    { "block": "slime_block", "properties": {}, "distanceOffset": 0, "damageMultiplier": 0 },
-    { "block": "hay_block", "properties": {}, "distanceOffset": 0, "damageMultiplier": 0.2 }
-  ]
+    {
+      "block": "pointed_dripstone",
+      "properties": {
+        "vertical_direction": "up",
+        "thickness": "tip"
+      },
+      "distanceOffset": 2.5,
+      "damageMultiplier": 2
+    },
+    {
+      "block": "slime_block",
+      "properties": {},
+      "distanceOffset": 0,
+      "damageMultiplier": 0
+    },
+    {
+      "block": "hay_block",
+      "properties": {},
+      "distanceOffset": 0,
+      "damageMultiplier": 0.2
+    },
+    {
+      "block": "honey_block",
+      "properties": {},
+      "distanceOffset": 0,
+      "damageMultiplier": 0.2
+    },
+    {
+      "block": "powder_snow",
+      "properties": {},
+      "distanceOffset": 0,
+      "damageMultiplier": 0
+    }
+  ],
+  "fallDamageResetting": {
+    "tag": "minecraft:fall_damage_resetting (vanilla server jar data)",
+    "values": [
+      "#minecraft:climbable",
+      "minecraft:sweet_berry_bush",
+      "minecraft:cobweb"
+    ],
+    "also": "water (Entity.checkFallDamage, Entity.move clip)"
+  },
+  "bedRule": {
+    "suffix": "_bed",
+    "distanceMultiplier": 0.5,
+    "damageMultiplier": 1,
+    "bounce": 0.66,
+    "note": "native prismarine physics has no bed bounce: planners must not use beds as landings until it is modelled"
+  },
+  "techniques": {
+    "verified": "javap Paper 1.21.11 build 132, s6b 2026-10-06 (research/claude-1006/s6b/jar/*.javap.txt)",
+    "fallDamageResettingClip": "Entity.move: when fallDistance != 0 and the collided move has lengthSqr >= 1, a ray from the feet along the move (min(length, 8)) with ClipContext.Block.FALLDAMAGE_RESETTING (#fall_damage_resetting as a full cube) and Fluid.WATER resets fallDistance; Entity.checkFallDamage then adds only this tick's dy (terminal <= 3.92): landing through a ladder/vine/scaffolding/cobweb/water cell is harmless. Slower moves rely on LivingEntity.handleOnClimbable (reset) or Entity.makeStuckInBlock (cobweb, powder snow).",
+    "ladderOnWall": "implemented: clutch.ladderPlan — a ladder clicked on a visible full side face of a wall into one of the three cells above the landing while the body is still above that cell (BlockItem.canPlace: the thin plate may not intersect the body)",
+    "boat": "riding resets the fall every tick (LivingEntity.rideTick -> resetFallDistance); AbstractBoat.checkFallDamage accumulates/clears only the boat's own distance and deals no damage. Landing ON a boat entity is a normal landing on the block under it (Entity.checkFallDamage -> Block.fallOn, full damage). A boat clutch must place the boat and mount it before contact; not implemented.",
+    "enderPearl": "ThrownEnderpearl.onHit: teleport, ServerPlayer.resetFallDistance, then hurtServer 5.0 (fall damage type). Not a landing technique in the reflex (pearls are reserved).",
+    "windCharge": "Player.causeFallDamage: with currentImpulseImpactPos and ignoreFallDamageFromCurrentImpulse the fall is measured from the impulse impact height (min with fallDistance); landing at or above that height takes none. Not implemented.",
+    "lava": "Entity.baseTick halves fallDistance each tick in lava (not a rescue).",
+    "order": "clutch reflex: natural water -> bucket (not the Nether) -> ladder on a wall (ladder in hotbar) -> block chain on visible faces -> soft floor steer (ND_SOFT_LANDING=1) -> none"
+  }
 }

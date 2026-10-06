@@ -842,6 +842,14 @@ async function prepareBarterCover (session, ctl, st, until) {
     }
   }
   const active = () => !ctl.aborted && session.bot === bot && gameClock.now() < until && (bot.health ?? 0) > 0
+  // Ответ стража (столб, коробка) или прыжок ещё идёт — дождаться опоры, а не отказывать сразу (Full44 06.10: четыре
+  // отказа подряд за 0 с на y 51.4→52.2→53.2, 58 слитков так и не отданы).
+  if (!bot.entity.onGround && active()) {
+    if (ctl.waitReflex) await ctl.waitReflex()
+    if (process.env.ND_GUARD !== '0') await require('.././ne-guard').waitIdle(bot).catch(() => null)
+    for (let i = 0; i < 40 && active() && !bot.entity.onGround; i++) await sleep(100)
+    feet = bot.entity.position.floored()
+  }
   if (worlds.worldOf(bot) !== 'the_nether' || !active() || !bot.entity.onGround || !air(feet) || !air(feet.offset(0, 1, 0))) {
     return reject('тело не на сухом подтверждённом полу')
   }

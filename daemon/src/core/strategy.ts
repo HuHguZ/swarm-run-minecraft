@@ -10,11 +10,21 @@ export interface Strategy {
   /** Expected cost in game ticks (20 ticks per game second). */
   estimateCost(state: WorldState): number
   estimateRisk(state: WorldState): number
+  /** Part of estimateCost spent travelling to a known target; kept out of the telemetry blend. */
+  travelTicks?(state: WorldState): number
+  /** The cost comes from a mechanistic model (barter): telemetry medians must not override it. */
+  modelCost?: boolean
+  /** Prior P(SUCCESS) of one attempt for the simulator; default 1 − risk. */
+  successChance?(state: WorldState): number
+  /** Simulator only: one random draw of the effect of a completed attempt (e.g. pearls from n bartered ingots). */
+  sampleEffects?(state: WorldState, random: () => number): Effect
   timeoutMs: number
   execute?(environment: Environment, state: WorldState, signal: AbortSignal): Promise<ExecutionResult>
   successCondition(before: WorldState, after: WorldState): boolean
   progressCondition?(before: WorldState, after: WorldState): boolean
   retryCondition?(failed: WorldState, current: WorldState): boolean
+  /** With a retryCondition: the generic game-time backoff re-admits it too (piglins wander back; a site stays stalled). */
+  timeRetry?: boolean
   failureCondition?(state: WorldState): string | null
   command?(state: WorldState): SkillCommand
 }
@@ -78,12 +88,27 @@ export interface DecisionRecord {
   after?: WorldState
   outcome?: SkillOutcome
   seconds?: number
+  death?: boolean
 }
-export interface DirectorOptions extends PlanOptions { goal: (state: WorldState) => boolean; maxFailures?: number; watchdogMs?: number; record?: (record: DecisionRecord) => void }
+export interface DirectorOptions extends PlanOptions {
+  goal: (state: WorldState) => boolean
+  maxFailures?: number
+  watchdogMs?: number
+  record?: (record: DecisionRecord) => void
+  /** Game ms before an exhausted strategy without its own retryCondition is offered again; doubles every round. */
+  retryAfterMs?: number
+  /** Consecutive INTERRUPTED outcomes without progress that count as one FAILURE (tactics keep stopping the skill). */
+  maxInterrupts?: number
+}
 export class StrategicDirector {
   private readonly failures = new Map<string, number>()
   private readonly penalties = new Map<string, number>()
   private readonly failedAt = new Map<string, WorldState>()
+  /** Exhaustion bookkeeping for re-admission: game time, progress counter and how many times it was exhausted. */
+  private readonly exhaustedAt = new Map<string, { at: number; progress: number; rounds: number }>()
+  private readonly interrupts = new Map<string, number>()
+  private progressCount = 0
+  private lastReason = ''
   private lastProgressAt: number
   private lastKey = ''
   private active: AbortController | null = null
@@ -92,13 +117,48 @@ export class StrategicDirector {
   }
   interrupt(reason = 'tactical interruption'): void { this.active?.abort(reason) }
   private exhausted(id: string): boolean { return (this.failures.get(id) ?? 0) >= (this.options.maxFailures ?? 2) }
+  /** Generic re-admission: game-time backoff (5, 10, 20… min) or, in the first two rounds, progress by any strategy. */
+  private cooledDown(id: string): boolean {
+    const mark = this.exhaustedAt.get(id)
+    if (!mark || !this.exhausted(id)) return false
+    return this.environment.now() - mark.at >= (this.options.retryAfterMs ?? 300000) * 2 ** (mark.rounds - 1) ||
+      (mark.rounds < 3 && this.progressCount > mark.progress)
+  }
+  /** Earliest game time at which a time-based re-admission can change an unreachable plan (null: none pending). */
+  nextRetryAt(): number | null {
+    let wake: number | null = null
+    for (const [id, mark] of this.exhaustedAt) {
+      const strategy = this.registry.get(id)
+      if (!this.exhausted(id) || (strategy?.retryCondition && !strategy.timeRetry)) continue
+      const at = mark.at + (this.options.retryAfterMs ?? 300000) * 2 ** (mark.rounds - 1)
+      wake = wake === null ? at : Math.min(wake, at)
+    }
+    return wake
+  }
+  private fail(strategy: Strategy, before: WorldState, after: WorldState): void {
+    const failures = (this.failures.get(strategy.id) ?? 0) + 1
+    this.failures.set(strategy.id, failures)
+    this.failedAt.set(strategy.id, cloneWorld(strategy.retryCondition?.(before, after) ? before : after))
+    this.penalties.set(strategy.id, (this.penalties.get(strategy.id) ?? 0) + Math.max(1200, strategy.estimateCost(before)))
+    if (failures === (this.options.maxFailures ?? 2)) this.exhaustedAt.set(strategy.id,
+      { at: this.environment.now(), progress: this.progressCount, rounds: (this.exhaustedAt.get(strategy.id)?.rounds ?? 0) + 1 })
+  }
+  /** Strategies currently excluded after maxFailures (for telemetry and the simulator's dead-end report). */
+  exhaustedStrategies(): string[] { return [...this.failures.keys()].filter(id => this.exhausted(id)) }
   canRun(strategy: Strategy, state: WorldState): boolean {
     return !this.exhausted(strategy.id) && strategy.preconditions(state) && !strategy.failureCondition?.(state)
   }
   decide(state: WorldState, allowed?: ReadonlySet<string>): Plan {
     for (const [id, failed] of this.failedAt) {
-      if (!this.registry.get(id)?.retryCondition?.(failed, state)) continue
-      this.failures.delete(id); this.penalties.delete(id); this.failedAt.delete(id)
+      const strategy = this.registry.get(id)
+      if (!strategy) continue
+      if (strategy.retryCondition?.(failed, state)) {
+        // An explicit retryCondition is domain knowledge (a new bastion site, more gold): a clean slate.
+        this.failures.delete(id); this.penalties.delete(id); this.failedAt.delete(id); this.exhaustedAt.delete(id)
+      } else if ((!strategy.retryCondition || strategy.timeRetry) && this.cooledDown(id)) {
+        // Penalties stay: alternatives remain preferred, but a lone path is no longer lost for the whole run.
+        this.failures.delete(id); this.failedAt.delete(id)
+      }
     }
     const excluded = new Set([...(this.options.excluded ?? []), ...this.registry.all().filter(s => this.exhausted(s.id) || (allowed && !allowed.has(s.id))).map(s => s.id)])
     const retryStates = new Map([...this.failedAt].filter(([id]) => !this.options.excluded?.has(id) && (!allowed || allowed.has(id))))
@@ -144,25 +204,35 @@ export class StrategicDirector {
     finally { if (timer) clearInterval(timer); controller.signal.removeEventListener('abort', onAbort); this.active = null }
     const after = await this.environment.observe()
     const outcome = this.verify(strategy, observed, after, result, (controller.signal.aborted && controller.signal.reason === 'strategy timeout') || this.environment.now() - start >= strategy.timeoutMs)
-    this.options.record?.({ level: 'strategy', strategy: strategy.id, skill: strategy.skill, reason: result.reason ?? outcome, before: observed,
-      after, outcome, seconds: (this.environment.now() - start) / 1000 })
+    this.options.record?.({ level: 'strategy', strategy: strategy.id, skill: strategy.skill, reason: this.lastReason || (result.reason ?? outcome), before: observed,
+      after, outcome, seconds: (this.environment.now() - start) / 1000, death: !after.alive })
     return { after, result, outcome }
   }
   verify(strategy: Strategy, before: WorldState, after: WorldState, result: ExecutionResult, timeout = false): SkillOutcome {
     const changedByTactics = after.revision !== before.revision || result.events.some(e => /tactical|emergency|death/.test(e.type))
-    const outcome: SkillOutcome = !after.alive ? 'FAILURE' : timeout ? 'TIMEOUT' : changedByTactics || result.outcome === 'INTERRUPTED' ? 'INTERRUPTED' :
-      strategy.successCondition(before, after) ? 'SUCCESS' : (strategy.progressCondition ?? usefulProgress)(before, after) ? 'PARTIAL' : result.outcome === 'TIMEOUT' ? 'TIMEOUT' : 'FAILURE'
+    const succeeded = strategy.successCondition(before, after)
+    const progressed = succeeded || (strategy.progressCondition ?? usefulProgress)(before, after)
+    let outcome: SkillOutcome = !after.alive ? 'FAILURE' : timeout ? 'TIMEOUT' : changedByTactics || result.outcome === 'INTERRUPTED' ? 'INTERRUPTED' :
+      succeeded ? 'SUCCESS' : progressed ? 'PARTIAL' : result.outcome === 'TIMEOUT' ? 'TIMEOUT' : 'FAILURE'
+    this.lastReason = ''
     const key = stateKey(after)
     if (outcome === 'SUCCESS' || outcome === 'PARTIAL') {
       this.failures.delete(strategy.id)
       this.penalties.delete(strategy.id)
       this.failedAt.delete(strategy.id)
-      if (key !== this.lastKey) { this.lastProgressAt = this.environment.now(); this.lastKey = key }
-    } else if (outcome !== 'INTERRUPTED') {
-      this.failures.set(strategy.id, (this.failures.get(strategy.id) ?? 0) + 1)
-      this.failedAt.set(strategy.id, cloneWorld(strategy.retryCondition?.(before, after) ? before : after))
-      this.penalties.set(strategy.id, (this.penalties.get(strategy.id) ?? 0) + Math.max(1200, strategy.estimateCost(before)))
-    }
+      this.exhaustedAt.delete(strategy.id)
+      this.interrupts.delete(strategy.id)
+      if (key !== this.lastKey) { this.lastProgressAt = this.environment.now(); this.lastKey = key; this.progressCount++ }
+    } else if (outcome === 'INTERRUPTED') {
+      // Tactics may stop a skill, but one they stop every time without progress must not restart forever.
+      const count = progressed ? 0 : (this.interrupts.get(strategy.id) ?? 0) + 1
+      if (count >= (this.options.maxInterrupts ?? 3)) {
+        this.interrupts.delete(strategy.id)
+        this.lastReason = `interrupted ${count} times without progress`
+        outcome = 'FAILURE'
+        this.fail(strategy, before, after)
+      } else this.interrupts.set(strategy.id, count)
+    } else this.fail(strategy, before, after)
     return outcome
   }
 }

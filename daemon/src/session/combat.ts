@@ -208,10 +208,10 @@ function throwTest (this: any, p: any = {}) {
       bot.on('entitySpawn', onSpawn)
       let r
       try {
-        r = await throwMod.throwAt(bot, to, { item: bot.heldItem, mode: p.mode || 'exact' })
+        r = await throwMod.throwAt(bot, to, { item: bot.heldItem, mode: p.mode || 'exact', jump: p.jump ?? false, sprint: !!p.sprint })
         for (const k of keys) set(k, false)
         const w0 = gameClock.now()
-        while (!landed && gameClock.now() - w0 < 5000 && !ctl.aborted) await sleep(50)
+        while (!landed && gameClock.now() - w0 < 8000 && !ctl.aborted) await sleep(50) // жемчуг на 90 бл. летит ~85 тиков
       } finally {
         for (const k of keys) set(k, false)
         bot.removeListener('forcedMove', onMove)

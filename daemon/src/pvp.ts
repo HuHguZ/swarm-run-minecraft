@@ -306,6 +306,14 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let unseen = false
   let repositionUntil = 0
   let stuckTicks = 0
+  // Копьё на изготовку против тарана с элитр (s7b): встречный разгон — отн. скорость = его скорость к нам.
+  let bracing = 0
+  // Прыжки в бою (s7b 06.10, API S6 navigation/parkour.combatHop): упёрся, он на уступе, или идём к нему (путь), а
+  // 2.5 с дистанция > 5 не сокращается — короткий прыжок на видимую опору ближе к нему, без урона от падения.
+  // Не в ближнем «держу дистанцию» (копьё 3.4–4.5: s7e — 17 попыток за раунд). ND_PVP_HOP=0 — выкл.
+  const HOP = process.env.ND_PVP_HOP !== '0'
+  let hopD = Infinity
+  let hopDAt = gameClock.now()
 
   const st: any = {
     swings: 0,
@@ -320,8 +328,32 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     hpStart: Math.round(bot.health ?? 20)
   }
   const traceT0 = gameClock.now()
+  // Урон приёмов (аудит комбо, 2026-10-06): падение его хп (с поглощением) —
+  // последнему приёму не старше 1.5 с, иначе «прочее». Оценка: лечение между
+  // тиками и тотем её занижают.
+  st.trickDmg = {}
+  // Хп противника-игрока в решениях — только оценкой (правило пользователя 06.10, боевой калькулятор:
+  // pvp/combat-observe.trackFoe → hp-estimate по подтверждённым попаданиям, видимому лечению, тотему, регенерации).
+  // healthOf остаётся для мобов и телеметрии (trickDmg, mace.dealt).
+  const co = require('./pvp/combat-observe')
+  let calc = co.trackFoe(bot, entity, { honest: true })
+  const foeEst = () => calc.hp.snapshot()
+  const foeHpDecide = (e = entity) => co.isPlayer(e) ? (e === calc.entity ? foeEst().mean : 20) : healthOf(bot, e)
+  let lastTrick = null
+  let foeHp = null
+  const onTickDmg = () => {
+    const h = healthOf(bot, entity)
+    if (typeof h !== 'number') return
+    if (foeHp != null && h < foeHp - 0.05) {
+      const k = lastTrick && gameClock.now() - lastTrick.at <= 1500 ? lastTrick.what : 'прочее'
+      st.trickDmg[k] = Math.round(((st.trickDmg[k] || 0) + foeHp - h) * 10) / 10
+    }
+    foeHp = h
+  }
+  bot.on('physicsTick', onTickDmg)
   const used = (what) => {
     st.tricks[what] = (st.tricks[what] || 0) + 1
+    lastTrick = { what, at: gameClock.now() }
     if (process.env.ND_TRACE_PVP) {
       try {
         const m = bot.entity.position; const h = entity && entity.position
@@ -663,7 +695,9 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       }
       if (pathing || edges.falling(bot)) return
       if (aim === 'target') {
-        const p = track.at(2)
+        // Прогноз следящего бывает с NaN по x/z (s7-arms11, [nan-guard] lookAt({x:null,y:106,z:null})) — тогда смотрю на тело.
+        const p0 = track.at(2)
+        const p = [p0.x, p0.y, p0.z].every(Number.isFinite) ? p0 : entity.position
         bot.lookAt(sightOff ? p.plus(sightOff) : p.offset(0, (entity.height || 1.8) * 0.75, 0), true).catch(() => {})
       } else if (aim === 'away') {
         const me = bot.entity.position
@@ -892,6 +926,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     bot.removeListener('entityHurt', onMobHurt)
     bot.removeListener('death', onSelfDeath)
     bot.removeListener('physicsTick', onTickFall)
+    bot.removeListener('physicsTick', onTickDmg)
     edgeGuard.stop()
     bot.removeListener('nd_mlg', onMlg)
     if (edgeGuard.stats.saves || edgeGuard.stats.air) st.tricks['рефлекс края: ' + (Object.entries(edgeGuard.stats.why) as [string, any][]).map(([k, v]) => `${k}×${v}`).join(', ')] = 1
@@ -901,6 +936,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     if (session.tempo === tt) session.tempo = null
     mc.close()
     sky.close()
+    calc.stop()
     pearlResponse.close()
     bm.close()
     cx.close()
@@ -952,6 +988,9 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       crits: st.crits,
       sprintHits: st.sprintHits,
       axeOnShield: st.axeOnShield || undefined,
+      hops: st.hops ? { tries: st.hops, ok: st.hopOk || 0, why: st.hopWhy } : undefined,
+      calc: st.calc ? { plans: st.calc.plans, kinds: st.calc.kinds, last: st.calc.last, err: st.calcErr } : undefined,
+      xbow: st.xbow && Object.keys(st.xbow).length ? st.xbow : undefined,
       mace: mc.report(),
       elytra: sky.report(),
       pearlResponse: pearlResponse.report(),
@@ -965,6 +1004,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       human,
       dodges: st.dodges || undefined,
       tricks,
+      trickDmg: Object.keys(st.trickDmg).length ? st.trickDmg : undefined,
       healed: st.healed.length ? st.healed : undefined,
       weapon: weapon ? weapon.name : 'кулаки',
       hp: `${st.hpStart} -> ${Math.round(bot.health ?? 0)}`,
@@ -979,6 +1019,8 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const retarget = (e) => {
     if (!e || e === bot.entity || (bot.entity && e.id === bot.entity.id)) return
     entity = e
+    foeHp = null
+    calc.stop(); calc = co.trackFoe(bot, entity, { honest: true })
     label = entity.username || entity.name
     track = makeTracker(entity)
     seenAt = gameClock.now()
@@ -1040,6 +1082,7 @@ get hazardOnLine () { return hazardOnLine },
 get headroom () { return headroom },
 get healItem () { return healItem },
 get healthOf () { return healthOf },
+get foeHpDecide () { return foeHpDecide },
 get heldName () { return heldName },
 get HIT_REACH () { return HIT_REACH },
 get holdItem () { return holdItem },
@@ -1368,7 +1411,22 @@ const pvpSkills = {
     const blocking = their === 'shield'
     const theyEat = their && EDIBLE.test(their)
     const theyBow = their === 'bow' || their === 'crossbow'
-    const theirHp = healthOf(bot, entity)
+    const theirHp = foeHpDecide(entity)
+    // Боевой калькулятор (kill-planner): раз в 2 с — лучший план на 3 действия и P(убить) в отчёт приёмов («бот
+    // считает»). Пока советом: исполнители приёмов — прежние ветки (врезка по плану — combat-calculator.md §5).
+    if (prof.player && ready('calcPlan')) {
+      rest('calcPlan', 2000)
+      try {
+        const cp = require('./pvp/kill-planner').planAttack(co.observe(bot, entity, { tracker: calc, since: Math.round((now - lastSwing) / TICK_MS) }), { depth: 3 })
+        st.calc = st.calc || { plans: 0, kinds: {} }
+        st.calc.plans++
+        if (cp && cp.action) {
+          st.calc.kinds[cp.action.kind] = (st.calc.kinds[cp.action.kind] || 0) + 1
+          st.calc.last = { why: cp.why, pKill: cp.pKill != null ? Math.round(cp.pKill * 100) / 100 : null, hp: cp.hp ? [Math.round(cp.hp.lo), Math.round(cp.hp.hi)] : null }
+          if (process.env.ND_TRACE_PVP) used('расчёт: ' + String(cp.why).replace(/\d+(\.\d+)?/g, '#'))
+        }
+      } catch (err) { st.calcErr = String(err && err.message || err).slice(0, 120) }
+    }
     const seesBody = raySees(bot, eye, entity.position.offset(0, (entity.height || 1.8) * 0.55, 0))
     // Честный прицел (pick.js, 2026-09-26: «боты через один блок пробивают»).
     const sight = r <= HIT_REACH + 0.3 ? pick.aim(bot, entity, { eye: pick.eyeOf(bot), range: HIT_REACH }) : null
@@ -1505,6 +1563,32 @@ const pvpSkills = {
       continue
     }
     const skyThreat = prof.player ? sky.threat() : null
+    if (bracing && (!skyThreat || gameClock.now() - bracing > 3000)) { bracing = 0; try { bot.deactivateItem() } catch {} }
+    // Он летит на нас (пике/таран): копьё в руку, взгляд на него и «использовать» — задержка копья должна кончиться
+    // до встречи. Урон разгона ему = 1 + floor(rel·mult), rel = −(наш взгляд · его скорость)·20 (KineticWeapon, javap):
+    // на его 1.5 б/т — ~29 до брони. Наш щит/уклон — если копья нет или поздно.
+    const braceWith = skyThreat && !bracing && !meInWeb ? spear.spearOf(bot) : null
+    if (braceWith && skyThreat.eta >= Math.round(braceWith.spec.delay * 20) + 1 && skyThreat.eta <= 30) {
+      if (pathing) { pathTo(false); pathing = false }
+      for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
+      try {
+        if (bot.heldItem?.name !== braceWith.item.name) await bot.equip(braceWith.item, 'hand')
+        const q = skyThreat.at || entity.position
+        const ey = pick.eyeOf(bot)
+        await bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true)
+        if (bot.heldItem?.name === braceWith.item.name) { bot.activateItem(); bracing = gameClock.now(); used('копьё на изготовку против тарана') }
+      } catch {}
+      await sleep(TICK_MS)
+      continue
+    }
+    if (bracing && skyThreat) {
+      // Держим и ведём взгляд за ним (луч копья 2.0–4.5 по взгляду).
+      const q = sky.fl.at(2) || entity.position
+      const ey = pick.eyeOf(bot)
+      bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true).catch(() => {})
+      await sleep(TICK_MS)
+      continue
+    }
     if (skyThreat) {
       if (pathing) { pathTo(false); pathing = false }
       aim = 'target'
@@ -1635,7 +1719,7 @@ const pvpSkills = {
       if (o) {
         const oR = reachFrom(eye, o.e)
         const targetIdle = now - lastHurtByTarget > 3000
-        const oLow = (healthOf(bot, o.e) ?? 20) + 6 < (theirHp ?? 20)
+        const oLow = (foeHpDecide(o.e) ?? 20) + 6 < (theirHp ?? 20)
         const curInReach = r <= HIT_REACH + 0.3 && !busyFoe
         if (!curInReach && ((oR <= HIT_REACH + 0.3 && (r > HIT_REACH || targetIdle || busyFoe || oLow)) || (busyFoe && o.dist < d + 4) || (targetIdle && r > HIT_REACH + 3))) {
           switchedAt = now
@@ -2256,7 +2340,8 @@ const pvpSkills = {
       rest('xbow', 200)
       let xSide = strafeKey
       let xFlip = now + 300 + Math.random() * 400
-      const fsX = foe.state(entity)
+      // «Добиваю» (ranged.plan) — по верху оценки его хп, не по метаданным.
+      const fsX = co.isPlayer(entity) ? { ...foe.state(entity), ehp: foeEst().hi } : foe.state(entity)
       const hisMain = entity.equipment && entity.equipment[0] ? entity.equipment[0].name : ''
       const vX = track.vel()
       const xCtx = {
@@ -2346,7 +2431,7 @@ const pvpSkills = {
       const closeAt = theyUp ? 0 : prof.player ? 5 : 3.5
       let prepB = { drawMs: null, why: null }
       if (prof.player) {
-        const fsB = foe.state(entity)
+        const fsB = co.isPlayer(entity) ? { ...foe.state(entity), ehp: foeEst().hi } : foe.state(entity)
         const vB = track.vel()
         const hisHand = entity.equipment && entity.equipment[0] ? entity.equipment[0].name : ''
         prepB = await ranged.prepBow(bot, {
@@ -2501,6 +2586,26 @@ const pvpSkills = {
 
     if (bot.entity.isCollidedHorizontally && (bot.getControlState('forward') || bot.getControlState('left') || bot.getControlState('right'))) stuckTicks++
     else stuckTicks = 0
+    if (d < hopD - 0.5 || r <= HIT_REACH) { hopD = d; hopDAt = now }
+    if (HOP && prof.player && !perch && !fort && !meInWeb && bot.entity.onGround && !bot.entity.isInWater && r > HIT_REACH && d < 9 &&
+        ready('hop') && (stuckTicks >= 4 || (dy > 0.6 && dy < 2.6 && d < 5) || (pathing && d > 5 && now - hopDAt > 2500 && Math.abs(dy) < 2.6))) {
+      rest('hop', 1500)
+      const me0 = bot.entity.position.clone()
+      const foeAt = entity.position.clone()
+      const score = (t) => {
+        const dd = Math.hypot(t.x - foeAt.x, t.z - foeAt.z)
+        if (dd > d - 0.4 || t.y < me0.y - 3) return -Infinity
+        return -dd - Math.abs(t.y - foeAt.y) * 0.3 + (t.y > me0.y ? 0.3 : 0)
+      }
+      pathTo(false); pathing = false; clear()
+      let hop = null
+      try { hop = await require('./navigation/parkour').combatHop(bot, ctl, { score, radius: 4 }) } catch (e) { hop = { ok: false, why: e.message } }
+      st.hops = (st.hops || 0) + 1
+      if (hop && hop.ok) { st.hopOk = (st.hopOk || 0) + 1; used(stuckTicks >= 4 ? 'прыжок через препятствие к нему' : dy > 0.6 ? 'прыжок на его уступ' : 'прыжок к нему (путь стоял)') }
+      else { if (hop && hop.why) st.hopWhy = hop.why; rest('hop', 6000) } // s7b: 67 попыток за раунд, 1 удачная — реже после отказа
+      hopD = Infinity; hopDAt = gameClock.now(); stuckTicks = 0
+      continue
+    }
     if (!perch && !fort && r > HIT_REACH && now >= repositionUntil && ready('unstick')) {
       const wall = !seesBody && !raySees(bot, me.offset(0, 0.4, 0), entity.position.offset(0, 0.4, 0))
       if (wall || stuckTicks >= 8) {

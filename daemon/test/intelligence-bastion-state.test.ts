@@ -54,6 +54,8 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17) 
       spent: () => { for (const b of known.bastions) bState(b).spent = true } };
     module.exports.blockSupply = () => { replenishNetherSupply = async () => ({ ready: false, interrupted: false, reason: 'visible wood unavailable' }) };
     module.exports.deferBarter = () => { bState(known.bastions[0]).barterUntil = gameClock.now() + 60000 };
+    module.exports.deferMining = () => { for (const b of known.bastions) deferBastionMining(b) };
+    module.exports.active = () => activeBastion();
   `, withClockFixture(context))
   return { context, state, calls, requests }
 }
@@ -219,4 +221,44 @@ test('one fire-resistance potion cannot send the graph or legacy body to rods be
   state.inventory.ender_pearl = context.module.exports.pearlGoal()
   observation = await context.module.exports.observation()
   assert.equal(observation.facts.blaze_allowed.value, true, 'actual pearl goal and FR permit the fortress stage')
+})
+
+test('a deferred Bastion no longer holds rods and endermen behind the pearl gate', async () => {
+  const { context, state } = campaignFixture()
+  state.potions.fire_resistance = 1
+  let observation = await context.module.exports.observation()
+  assert.equal(observation.facts.bastions_exhausted.value, false)
+  context.module.exports.deferMining()
+  assert.equal(context.module.exports.active(), null)
+  assert.ok(context.module.exports.next(), 'nextBastion still offers a deferred site when nothing else is left')
+  observation = await context.module.exports.observation()
+  assert.equal(observation.facts.bastions_exhausted.value, true)
+  assert.equal(observation.facts.blaze_allowed.value, true)
+})
+
+test('fire resistance with nothing left to trade opens rods before the pearl goal; carried gold still trades first', async () => {
+  const { context, state } = campaignFixture()
+  let observation = await context.module.exports.observation()
+  assert.equal(observation.facts.blaze_allowed.value, false, 'ND_FR_STRICT: no potion, no spawner')
+  state.potions.fire_resistance = 2
+  observation = await context.module.exports.observation()
+  assert.equal(observation.facts.blaze_allowed.value, true, 'active Bastion, 0 gold, FR in the bag')
+  state.inventory.gold_ingot = 8
+  observation = await context.module.exports.observation()
+  assert.equal(observation.facts.blaze_allowed.value, false)
+})
+
+test('two carried barters without a single ingot exhaust barter and defer the Bastion', async () => {
+  const { context, state } = campaignFixture()
+  await context.module.exports.recall()
+  state.pos = { x: 102, y: 62, z: 134 }
+  state.inventory.gold_ingot = 58
+  await context.module.exports.run()
+  let observation = await context.module.exports.observation()
+  assert.equal(observation.facts.barter_exhausted.value, false)
+  await context.module.exports.run()
+  observation = await context.module.exports.observation()
+  assert.equal(observation.facts.barter_exhausted.value, true)
+  assert.equal(context.module.exports.active().key, 'бастион 2 (ад)', 'the barren Bastion waits; the next mapped one is still work')
+  assert.equal(observation.facts.bastions_exhausted.value, false)
 })

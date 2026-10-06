@@ -140,7 +140,10 @@ function nearbyPlayers (bot, radius = SCAN, { fair }: any = {}) {
       holding,
       armed: isWeaponish(holding),
       canSee: useFair ? canSeePoint(bot, ent.position.offset(0, (ent.height || 1.8) * 0.6, 0)) : true,
-      angle: angleTo(bot, ent.position)
+      angle: angleTo(bot, ent.position),
+      // Видимое снаряжение (руки и броня из пакетов equipment) и точка — для оценки противника (s7, гонка вооружений).
+      gear: (ent.equipment || []).filter(Boolean).map(i => i.name),
+      at: { x: Math.round(ent.position.x * 10) / 10, y: Math.round(ent.position.y * 10) / 10, z: Math.round(ent.position.z * 10) / 10 }
     })
   }
   out.sort((a, b) => a.dist - b.dist)

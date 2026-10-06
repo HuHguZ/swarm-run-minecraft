@@ -144,7 +144,7 @@ async function main () {
   await kit.cmd('/gamemode creative')
   await kit.cmd(`/tp @s ${sp.x + 0.5} ${sp.y + 1} ${sp.z + 0.5}`)
   await sleep(3000)
-  await kit.cmd('/random reset *')
+  await kit.randomReset(process.env.RNG_SEED ?? 0)
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', 'false')
   await kit.cmd('/clear @s')

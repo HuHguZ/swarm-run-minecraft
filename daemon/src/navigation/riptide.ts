@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3'
 import { bodyClear, supportAt, verticalLift, type Point } from './geometry'
 import { landingDamage } from './landing'
-import { executePlan, IDLE, planImpulseLanding, planImpulseLandingAsync, simulatePlan, type Cancellation, type JumpPlan, type MovementBot, type State, type Step, type WaterLaunch } from './parkour'
+import { executePlan, forecastOwner, IDLE, planImpulseLanding, planImpulseLandingAsync, simulatePlan, type Cancellation, type JumpPlan, type MovementBot, type State, type Step, type WaterLaunch } from './parkour'
 
 interface RiptideItem { name: string; durabilityUsed?: number; maxDurability?: number }
 export interface RiptideBot extends MovementBot {
@@ -173,8 +173,7 @@ export async function runRiptide(bot: RiptideBot, ctl: Cancellation, item: Ripti
     let forecast = boundary && planRiptide(bot, level, yaw, pitch, target, boundary)
     if (!forecast || !boundary || !wet(boundary)) return { ok: false, why: 'riptide_release_no_longer_safe', ticks: charged }
     const releaseFrom = bot.entity.position.clone()
-    const clock = require('../game-clock') as { now(): number }
-    boundaryOwner = { from: { ...releaseFrom }, next: { ...boundary.pos }, until: clock.now() + 100, hp }
+    boundaryOwner = forecastOwner(releaseFrom, hp, boundary.pos)
     bot._ndParkourForecast = boundaryOwner
     await releaseAtTick(() => {
       // Some callers are already on the sent frame; utility.onTickThen waits

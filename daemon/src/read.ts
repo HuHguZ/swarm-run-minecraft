@@ -109,19 +109,27 @@ function enchLevel (bot, item, name) {
 function crossbowInfo (bot, item) {
   if (!item || item.name !== 'crossbow') return null
   let names = []
+  // Звёзды заряженной ракеты: сеть шлёт только добавленные компоненты, у
+  // пустой ракеты (для элитр) fireworks нет — 0 звёзд, урона 0
+  // (FireworkRocketEntity.dealExplosionDamage: f = 5 + 2·звёзд, только если их > 0).
+  let stars = 0
   try {
     const c = item.componentMap && item.componentMap.get('charged_projectiles')
     const list = (c && c.data && (c.data.projectiles || c.data.items)) || []
     names = list.map(s => {
       if (!s) return null
+      const fw = Array.isArray(s.components) && s.components.find(x => x && /fireworks$/.test(String(x.type)))
+      if (fw) stars = Math.max(stars, (fw.data && fw.data.explosions && fw.data.explosions.length) || 0)
       if (s.name) return s.name
       const id = s.itemId ?? s.id
       return id != null && bot.registry.items[id] ? bot.registry.items[id].name : null
     }).filter(Boolean)
   } catch {}
+  const rocket = names.includes('firework_rocket')
   return {
     loaded: names.length > 0,
-    ammo: names.includes('firework_rocket') ? 'firework' : (names[0] || null),
+    ammo: rocket ? 'firework' : (names[0] || null),
+    stars: rocket ? stars : null,
     count: names.length,
     quickCharge: enchLevel(bot, item, 'quick_charge'),
     multishot: enchLevel(bot, item, 'multishot'),

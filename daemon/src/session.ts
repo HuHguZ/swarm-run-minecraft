@@ -618,7 +618,7 @@ class Session {
     // Удар только по тому, что клиент игры взял бы в прицел (pick.js): сервер
     // прямую видимость не проверяет, и боты били сквозь стенку коробки.
     require('./pick').install(bot)
-    // Бег вприпрыжку на прямых ровных участках пути (sprintjump.js, поток route; ND_SPRINT_JUMP=1, по умолчанию выкл.).
+    // Бег вприпрыжку на прямых ровных участках пути (sprintjump.js; по умолчанию вкл., ND_SPRINT_JUMP=0 — выкл.).
     try { require('./sprintjump').install(bot) } catch {}
     // Свет чанков — со своей перестановкой x (prismarine-chunk 1.41, lightfix.js).
     require('./lightfix').install(bot)
@@ -752,6 +752,9 @@ class Session {
       // после drain() или перезапуска тела. Журнал сохраняется на диске.
       lastDeathAt: this.journal.state.deaths?.at(-1)?.at || null,
       clock: this.bot?.ndClock?.snapshot() || null,
+      // Физических тиков тела (physicsTick): доля от clock.ticks — сколько тиков
+      // клиент не успел (часы пропускают их при нехватке CPU), S7 06.10.
+      physicsTicks: this.ticks,
       busy: this.current ? this.current.name : null,
       tactics: this.tactics?.snapshot() || null
     })
@@ -831,7 +834,11 @@ class Session {
       const pit = goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
       const bx = Math.floor(x)
       const bz = Math.floor(z)
-      const surfaceWalk = surface !== false && this.underSky()
+      // Цель под крышей (небо ≤ 7 в клетке ног цели): поверху к ней не дойти, а штраф крыши раздувает A* у самой цели
+      // (s6b 06.10, арена S7: комнаты под перекрытием; над западом висит кусок рельефа, небо там на 1 темнее — A* запад
+      // 62 узла против 9 зеркально, на 750 TPS «partial» по кругу; try-parkour-path-mirror.js).
+      const goalSky = skyLightAt(bot, new Vec3(bx, Math.floor(y ?? bot.entity.position.y), bz))
+      const surfaceWalk = surface !== false && this.underSky() && !(goalSky !== null && goalSky <= 7)
 
       let goal
       let resolvedTo

@@ -23,22 +23,27 @@ const scenes: Scene[] = [
 ]
 
 export async function runRiptideFixture(): Promise<void> {
-  assert.equal(Number(process.env.FARM_SLOT), 31); assert.equal(process.env.ND_WS, 'ws://127.0.0.1:8831')
-  assert.equal(process.env.MC_USERNAME, 'NeuroFarm31'); assert.ok(process.env.ND_SERVER_LOG)
+  const slot = Number(process.env.FARM_SLOT)
+  assert.ok(Number.isInteger(slot) && slot >= 1 && slot <= 32 && slot !== 29, 'riptide fixture: farm slot other than the author map (29)')
+  assert.equal(process.env.ND_WS, `ws://127.0.0.1:${8800 + slot}`)
+  assert.equal(process.env.MC_USERNAME, `NeuroFarm${slot}`); assert.ok(process.env.ND_SERVER_LOG)
   const connection: Connection = connect(process.env.ND_WS); await connection.ready
   const kit = createKit({ call: connection.call, heard: connection.heard, logFile: process.env.ND_SERVER_LOG, player: process.env.MC_USERNAME })
-  const command = async (text: string) => { const reply = await kit.cmd(text); assert.ok(reply.ok, `riptide preparation failed: ${text}: ${reply.why}`) }
+  // Preparation only: a silent reply under farm load is retried (s6-water-series3: one silent /fill).
+  const command = async (text: string) => { let reply = await kit.cmd(text); for (let i = 0; i < 2 && !reply.ok && reply.why === 'silent'; i++) reply = await kit.cmd(text); assert.ok(reply.ok, `riptide preparation failed: ${text}: ${reply.why}`) }
   const status = () => connection.call('status', { physics: true, enchants: true })
   const failures: string[] = []
   try {
-    await connection.call('connect'); assert.equal((await status()).detail?.server, '127.0.0.1:25631')
+    await connection.call('connect'); assert.equal((await status()).detail?.server, `127.0.0.1:${25600 + slot}`)
     await connection.call('stop'); await connection.call('play_mode', { mode: 'free' }); await command('/gamemode creative')
     await kit.ensureWorld('overworld', { tp: '4050.5 141 3600.5' }); await command('/gamerule keep_inventory false')
     const automatic = process.env.AUTO_ROUTE === '1'
     const supportedScenes = automatic ? scenes.filter(scene => !scene.refuse && !scene.airborne) : scenes
     const selected = process.env.SCENE ? supportedScenes.filter(scene => scene.name === process.env.SCENE) : supportedScenes
     assert.ok(selected.length, 'unknown SCENE')
-    for (const scene of selected) {
+    const repeat = Math.max(1, Number(process.env.REPEAT ?? 1))
+    for (const scene of Array.from({ length: repeat }, () => selected).flat()) {
+     try {
       const sceneStart = scene.airborne ? { ...start, y: 181 } : start
       const preparationMark = connection.heard.length
       await connection.call('stop'); await command('/gamemode creative')
@@ -79,7 +84,7 @@ export async function runRiptideFixture(): Promise<void> {
         if (physics?.worldLoaded && physics.onGround && !!physics.isInWater === !!scene.wet && ready.state.isRaining === !!scene.rain && Math.hypot(physics.pos.x - sceneStart.x, physics.pos.y - sceneStart.y, physics.pos.z - sceneStart.z) < .05) break
         await connection.call('wait', { seconds: 1 }); ready = await status()
       }
-      const preparation = { preparation: true, slot: 31, scene: scene.name, expected: { start: sceneStart, wet: !!scene.wet, rain: !!scene.rain }, ready, events: connection.heard.slice(preparationMark) }
+      const preparation = { preparation: true, slot, scene: scene.name, expected: { start: sceneStart, wet: !!scene.wet, rain: !!scene.rain }, ready, events: connection.heard.slice(preparationMark) }
       console.log(JSON.stringify(preparation))
       if (process.env.LAB_OUT) fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(preparation) + '\n')
       assert.ok(ready.detail?.physics?.worldLoaded && ready.detail.physics.onGround, `actual Riptide footing is not ready: ${JSON.stringify(ready)}`)
@@ -112,9 +117,16 @@ export async function runRiptideFixture(): Promise<void> {
       const wallMs = Date.now() - began
       const clocks = { targetTPS: 750, before: before.state.clock, after: after.state.clock,
         averageServerTPS: before.state.clock?.serverTicks != null && after.state.clock?.serverTicks != null ? (after.state.clock.serverTicks - before.state.clock.serverTicks) * 1000 / Math.max(1, wallMs) : undefined }
-      const row = { physical: true, slot: 31, scene: scene.name, automatic, ok, died, target: scene.target, airborneWitness, serverChargeWitness, wallMs, clocks, maxActualY: Math.max(sceneStart.y, ...[...launchSamples, ...chargeSamples, ...samples].map(sample => sample.pos.y)), before, action, after }
+      const row = { physical: true, slot, scene: scene.name, automatic, ok, died, target: scene.target, airborneWitness, serverChargeWitness, wallMs, clocks, maxActualY: Math.max(sceneStart.y, ...[...launchSamples, ...chargeSamples, ...samples].map(sample => sample.pos.y)), before, action, after }
       const text = JSON.stringify(row); console.log(text); if (process.env.LAB_OUT) fs.appendFileSync(process.env.LAB_OUT, text + '\n')
       if (!ok) failures.push(scene.name)
+     } catch (error) {
+      // A series records a fixture/infrastructure fault (silent command, lost
+      // footing, reconnect) as its own row and continues; a single run still throws.
+      if (repeat === 1) throw error
+      const row = { physical: false, fixtureError: true, scene: scene.name, slot, error: String((error as Error)?.message ?? error).slice(0, 600) }
+      console.log(JSON.stringify(row)); if (process.env.LAB_OUT) fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(row) + '\n')
+     }
     }
     assert.deepEqual(failures, [], `physical Riptide failures: ${failures.join(', ')}`)
   } finally { try { await connection.call('stop'); await command('/weather clear 1000000') } catch {}; connection.close() }

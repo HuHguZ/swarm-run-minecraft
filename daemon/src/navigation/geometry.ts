@@ -7,6 +7,9 @@ export interface CollisionWorld { blockAt(position: Vec3, extraInfos?: boolean):
 export interface Box { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number }
 export interface Support { block: CollisionBlock; box: Box; top: number; overlap: number }
 const EPS = 1e-7
+// A body centred exactly on a riser's edge grazes it by float error (s6-author53/55:
+// the server stood the body on the upper stair half, +0.5). Keep a millimetre gap.
+const TREAD_GAP = 1e-3
 export const HAZARD = /^(lava|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|powder_snow|wither_rose|end_portal|end_gateway)$/
 
 export function dimensions(world: CollisionWorld): { half: number; height: number } {
@@ -26,7 +29,8 @@ export function bodyBox(world: CollisionWorld, pos: Point): Box {
 export function intersects(a: Box, b: Box): boolean {
   return a.minX < b.maxX - EPS && a.maxX > b.minX + EPS && a.minY < b.maxY - EPS && a.maxY > b.minY + EPS && a.minZ < b.maxZ - EPS && a.maxZ > b.minZ + EPS
 }
-export function bodyClear(world: CollisionWorld, pos: Point, { web = false, water = false }: { web?: boolean; water?: boolean } = {}): boolean {
+/** `powder`: a native forecast may pass through powder snow (modelled stuck motion); never a resting body. */
+export function bodyClear(world: CollisionWorld, pos: Point, { web = false, water = false, powder = false }: { web?: boolean; water?: boolean; powder?: boolean } = {}): boolean {
   const body = bodyBox(world, pos)
   for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) {
     for (let z = Math.floor(body.minZ); z <= Math.floor(body.maxZ); z++) {
@@ -34,7 +38,7 @@ export function bodyClear(world: CollisionWorld, pos: Point, { web = false, wate
         const block = world.blockAt(new Vec3(x, y, z), false)
         if (!block) return false
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
-        if (intersects(body, cell) && (HAZARD.test(block.name) || !web && block.name === 'cobweb' || !water && /^(water|bubble_column)$/.test(block.name))) return false
+        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && /^(water|bubble_column)$/.test(block.name))) return false
         if (shapeBoxes(block).some(box => intersects(body, box))) return false
       }
     }
@@ -90,41 +94,73 @@ export function supportAt(world: CollisionWorld, pos: Point, depth = 3): Support
   return best
 }
 
-export function standPositions(world: CollisionWorld, cell: Point, { rise = 2, drop = 4 }: { rise?: number; drop?: number } = {}): Vec3[] {
-  const result: Vec3[] = []
-  const seen = new Set<string>()
-  for (let y = Math.floor(cell.y + rise); y >= Math.floor(cell.y - drop) - 1; y--) {
-    const block = world.blockAt(new Vec3(Math.floor(cell.x), y, Math.floor(cell.z)), false)
-    if (!block || HAZARD.test(block.name)) continue
-    for (const box of shapeBoxes(block)) {
-      if (box.maxY > cell.y + rise + EPS || box.maxY < cell.y - drop - EPS) continue
-      const { half, height } = dimensions(world)
-      const center = new Vec3((box.minX + box.maxX) / 2, box.maxY, (box.minZ + box.maxZ) / 2)
-      const centerKey = `${center.x},${center.y},${center.z}`
-      if (!seen.has(centerKey) && bodyClear(world, center)) { seen.add(centerKey); result.push(center); continue }
-      // An exposed tread or floor edge may sit beside a taller riser or under
-      // a rail from a different block. Derive body centers from every observed
-      // obstruction in its head space, then require real footprint and clearance.
-      const obstructions: Box[] = []
-      for (let bx = Math.floor(box.minX - half * 2); bx <= Math.floor(box.maxX + half * 2); bx++) for (let bz = Math.floor(box.minZ - half * 2); bz <= Math.floor(box.maxZ + half * 2); bz++) {
-        for (let by = Math.floor(box.maxY) - 1; by <= Math.floor(box.maxY + height); by++) {
-          const above = world.blockAt(new Vec3(bx, by, bz), false)
-          if (above) obstructions.push(...shapeBoxes(above).filter(shape => shape.maxY > box.maxY + EPS && shape.minY < box.maxY + height))
-        }
+/**
+ * Body stand positions supported by one block cell, at every top of its shapes.
+ * `complete` is false when a dependency was not loaded; such a result is never cached.
+ */
+function cellStands(observed: CollisionWorld, x: number, y: number, z: number): { positions: Vec3[]; complete: boolean } {
+  let complete = true
+  const world: CollisionWorld = { ...observed, blockAt(p, extra) { const block = observed.blockAt(p, extra); if (!block) complete = false; return block } }
+  const positions: Vec3[] = []; const seen = new Set<string>()
+  const block = world.blockAt(new Vec3(x, y, z), false)
+  if (!block || HAZARD.test(block.name)) return { positions, complete }
+  const { half, height } = dimensions(world)
+  for (const box of shapeBoxes(block)) {
+    const center = new Vec3((box.minX + box.maxX) / 2, box.maxY, (box.minZ + box.maxZ) / 2)
+    const centerKey = `${center.x},${center.y},${center.z}`
+    if (!seen.has(centerKey) && bodyClear(world, center)) { seen.add(centerKey); positions.push(center); continue }
+    // An exposed tread or floor edge may sit beside a taller riser or under
+    // a rail from a different block. Derive body centers from every observed
+    // obstruction in its head space, then require real footprint and clearance.
+    const obstructions: Box[] = []
+    for (let bx = Math.floor(box.minX - half * 2); bx <= Math.floor(box.maxX + half * 2); bx++) for (let bz = Math.floor(box.minZ - half * 2); bz <= Math.floor(box.maxZ + half * 2); bz++) {
+      for (let by = Math.floor(box.maxY) - 1; by <= Math.floor(box.maxY + height); by++) {
+        const above = world.blockAt(new Vec3(bx, by, bz), false)
+        if (above) obstructions.push(...shapeBoxes(above).filter(shape => shape.maxY > box.maxY + EPS && shape.minY < box.maxY + height))
       }
-      const xs = [...new Set([(box.minX + box.maxX) / 2, box.minX + half, box.maxX - half, ...obstructions.flatMap(shape => [shape.minX - half, shape.maxX + half])])]
-        .filter(x => x > box.minX - half + .04 && x < box.maxX + half - .04)
-      const zs = [...new Set([(box.minZ + box.maxZ) / 2, box.minZ + half, box.maxZ - half, ...obstructions.flatMap(shape => [shape.minZ - half, shape.maxZ + half])])]
-        .filter(z => z > box.minZ - half + .04 && z < box.maxZ + half - .04)
-      for (const x of xs) {
-        for (const z of zs) {
-          const p = new Vec3(x, box.maxY, z); const key = `${p.x},${p.y},${p.z}`
-          if (!seen.has(key) && supportAt(world, p, .01) && bodyClear(world, p)) { seen.add(key); result.push(p) }
-        }
+    }
+    const xs = [...new Set([(box.minX + box.maxX) / 2, box.minX + half, box.maxX - half, ...obstructions.flatMap(shape => [shape.minX - half - TREAD_GAP, shape.maxX + half + TREAD_GAP])])]
+      .filter(x => x > box.minX - half + .04 && x < box.maxX + half - .04)
+    const zs = [...new Set([(box.minZ + box.maxZ) / 2, box.minZ + half, box.maxZ - half, ...obstructions.flatMap(shape => [shape.minZ - half - TREAD_GAP, shape.maxZ + half + TREAD_GAP])])]
+      .filter(z => z > box.minZ - half + .04 && z < box.maxZ + half - .04)
+    for (const x of xs) {
+      for (const z of zs) {
+        const p = new Vec3(x, box.maxY, z); const key = `${p.x},${p.y},${p.z}`
+        if (!seen.has(key) && supportAt(world, p, .01) && bodyClear(world, p)) { seen.add(key); positions.push(p) }
       }
     }
   }
+  return { positions, complete }
+}
+
+/**
+ * Stand positions in one column whose support top lies within [y - drop, y + rise].
+ * `cache` (owned by the caller) keeps per-cell results; the owner must delete a
+ * cell's key (`x,y,z`) when a block within one cell sideways, three below or one above changes.
+ */
+export function standPositions(world: CollisionWorld, cell: Point, { rise = 2, drop = 4 }: { rise?: number; drop?: number } = {}, cache?: Map<string, Vec3[]>): Vec3[] {
+  const result: Vec3[] = []
+  const seen = new Set<string>(); const x = Math.floor(cell.x); const z = Math.floor(cell.z)
+  for (let y = Math.floor(cell.y + rise); y >= Math.floor(cell.y - drop) - 1; y--) {
+    const key = `${x},${y},${z}`
+    let positions = cache?.get(key)
+    if (!positions) {
+      const computed = cellStands(world, x, y, z); positions = computed.positions
+      if (cache && computed.complete) cache.set(key, positions)
+    }
+    for (const p of positions) {
+      if (p.y > cell.y + rise + EPS || p.y < cell.y - drop - EPS) continue
+      const id = `${p.x},${p.y},${p.z}`
+      if (!seen.has(id)) { seen.add(id); result.push(p) }
+    }
+  }
   return result.sort((a, b) => Math.abs(a.y - cell.y) - Math.abs(b.y - cell.y))
+}
+
+/** Delete cached stand cells that a block change at `at` can affect (see standPositions). */
+export function invalidateStands(cache: Map<string, Vec3[]>, at: Point): void {
+  const x = Math.floor(at.x); const y = Math.floor(at.y); const z = Math.floor(at.z)
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 3; dy++) cache.delete(`${x + dx},${y - dy},${z + dz}`)
 }
 
 export function containsWater(block: CollisionBlock): boolean {

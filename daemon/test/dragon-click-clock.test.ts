@@ -39,9 +39,12 @@ for (const [wait, steps] of [[5, 1], [85, 2]]) {
         await gameClock.wall.sleep(0)
         assert.equal(packets.length, i === steps ? 1 : 0)
       }
-      await completion
+      const seq = await completion
       assert.equal(packets[0][0], 'block_place')
       assert.equal(packets.length, 1)
+      // Own sequence (s5, 750 TPS): bedsBoom waits for its block_changed_ack instead of a game-time window.
+      assert.ok(seq > 0x1000000, `sequence ${seq}`)
+      assert.equal(packets[0][1].sequence, seq)
     } finally {
       clock.dispose()
       gameClock.activate(null)

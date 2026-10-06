@@ -328,11 +328,13 @@ test('exhausted native spring profiles bound only the impossible height family f
   const { supportRoute, transitionKey, landingKey } = require('../src/navigation/support-route')
   const diagnostics: Record<string, any> = { frames: 0, profiles: 0 }
   assert.equal(planJump(bot, target, { bounce: spring, maxTicks: 90, diagnostics }), null)
-  assert.equal(diagnostics.why, undefined, 'a CPU cutoff may not exclude unexplored launch profiles')
+  assert.equal(diagnostics.why, 'rebound_ceiling', 'the unobstructed native rebound apex refuses the family, never a CPU cutoff')
+  assert.equal(diagnostics.profiles, 0, 'an impossible height family enumerates no launch profiles')
   assert.ok(diagnostics.reboundCeiling < target.y && diagnostics.reboundCeiling > 4.5)
-  const ceilings = new Map([[`${landingKey(bot.entity.position)}~${landingKey(spring)}`, diagnostics.reboundCeiling]])
+  const source = landingKey(bot.entity.position)
+  const ceiling = (from: any, at: any) => landingKey(from) === source && landingKey(at) === landingKey(spring) ? diagnostics.reboundCeiling : Infinity
   const blocked = new Set([target, new Vec3(8.5, 5, .5)].map(to => transitionKey(bot.entity.position, to)))
-  const bounded = await supportRoute(bot, bot.entity.position, target, blocked, 8, undefined, ceilings)
+  const bounded = await supportRoute(bot, bot.entity.position, target, blocked, 8, undefined, ceiling)
   bounded.forEach((option: any, index: number) => {
     const from = index ? bounded[index - 1].target : bot.entity.position
     if (option.bounce && landingKey(from) === landingKey(bot.entity.position) && landingKey(option.bounce) === landingKey(spring)) assert.ok(option.target.y <= diagnostics.reboundCeiling, 'the exhausted family is bounded from its actual source and spring; a changed approach earns a separate forecast')
@@ -1138,4 +1140,304 @@ test('native fall controller reaches observed one-cell water and refuses unreach
   edge.bot.canSeeBlock = () => true; edge.bot.entity.position = new Vec3(1.2, 40, .5)
   edge.bot.entity.velocity = new Vec3(0, -.0784000015258789, 0)
   assert.ok(planWaterEntry(edge.bot, new Vec3(2.5, 0, .5)), 'the same controller can plan an ordinary step off an observed high edge')
+})
+
+function drive(bot: Record<string, any>, world: { getBlock(p: Vec3): unknown }) {
+  const { IDLE } = require('../src/navigation/parkour')
+  let control = { ...IDLE }
+  bot.setControlState = (key: string, value: boolean) => { control[key] = value }
+  bot.clearControlStates = () => { control = { ...IDLE } }
+  bot.look = async (yaw: number) => { bot.entity.yaw = yaw }
+  bot.waitForTicks = async (ticks: number) => {
+    for (let tick = 0; tick < ticks; tick++) {
+      const state = new native.PlayerState(bot, control)
+      bot.physics.simulatePlayer(state, world); state.apply(bot); bot.emit('physicsTick')
+      if (!bot.listenerCount('physicsTick')) break
+    }
+  }
+}
+
+test('a spring edge is refused when a rim between spring and landing stands above the native rebound apex', async () => {
+  const { reboundApex } = require('../src/navigation/parkour')
+  const { supportRoute } = require('../src/navigation/support-route')
+  const base: Array<[number, number, number, string]> = [[0, 4, 0, 'stone'], [1, 4, 0, 'stone'], [4, 0, 0, 'slime_block']]
+  const probe = worldOf(base).bot
+  const spring = new Vec3(4.5, 1, .5)
+  const apex = Math.max(reboundApex(probe, spring, 5, false), reboundApex(probe, spring, 5, true))
+  const floor = Math.floor(apex) - 2 // pit feet at floor + 1, below the apex
+  assert.ok(floor + 1 > 2.25 && floor + 1 < apex)
+  const pit: Array<[number, number, number, string]> = [[8, floor, 0, 'stone'], [9, floor, 0, 'stone']]
+  const rim: Array<[number, number, number, string]> = Array.from({ length: Math.floor(apex) }, (_, y) => [7, y + 1, 0, 'stone'] as [number, number, number, string])
+  const ceiling = (from: Vec3, at: Vec3) => Math.max(reboundApex(probe, at, from.y, false), reboundApex(probe, at, from.y, true))
+  const target = new Vec3(8.5, floor + 1, .5)
+  const open = worldOf([...base, ...pit]).bot; open.entity.position = new Vec3(1.5, 5, .5)
+  const openRoute = await supportRoute(open, open.entity.position, target, new Set(), 10, undefined, ceiling)
+  assert.ok(openRoute.some((o: any) => o.bounce), 'without the rim the spring edge stays a candidate')
+  const walled = worldOf([...base, ...pit, ...rim]).bot; walled.entity.position = new Vec3(1.5, 5, .5)
+  const walledRoute = await supportRoute(walled, walled.entity.position, target, new Set(), 10, undefined, ceiling)
+  assert.ok(!walledRoute.some((o: any) => o.bounce && o.target.x === 8.5), 'a rim above the rebound apex cannot be cleared by that rebound')
+})
+
+test('a route edge refused only by its frame budget is retried once with a larger budget', async () => {
+  const { route } = require('../src/navigation/parkour')
+  const { bot, world } = worldOf([[0, 0, 0, 'stone'], [3, 0, 0, 'stone']])
+  bot.entity.velocity.y = -.0784000015258789
+  drive(bot, world)
+  const result = await route(bot, { aborted: false }, { toward: new Vec3(3.5, 1, .5), maxLandings: 6, frames: 40 })
+  assert.equal(result.ok, true, JSON.stringify(result.rejected?.map((r: any) => r.why)))
+  assert.ok(result.rejected.some((r: any) => r.why === 'planning_budget'), 'the first bounded attempt exhausts its frames')
+  assert.ok(bot.entity.position.distanceTo(new Vec3(3.5, 1, .5)) < .25)
+})
+
+test('a near goal unreachable inside the local graph widens the routing disc instead of wandering below it', async () => {
+  const { route } = require('../src/navigation/parkour')
+  // An enclosed pad one block above the floor (CP18 shape): reachable only by a
+  // staircase at x 16..19 and a bridge back west, outside the 14-block disc.
+  const cells: Array<[number, number, number, string]> = []
+  for (let x = 0; x <= 16; x++) cells.push([x, 0, 0, 'stone'])
+  for (let step = 1; step <= 4; step++) cells.push([15 + step, step, 0, 'stone'])
+  cells.push([19, 4, 1, 'stone'], [19, 4, 2, 'stone'])
+  for (let x = 1; x <= 19; x++) cells.push([x, 4, 3, 'stone'])
+  cells.push([0, 1, 3, 'stone'])
+  for (let y = 1; y <= 3; y++) cells.push([-1, y, 3, 'stone'], [1, y, 3, 'stone'], [0, y + 1, 2, 'stone'], [0, y + 1, 4, 'stone'])
+  const { bot, world } = worldOf(cells)
+  bot.entity.velocity.y = -.0784000015258789
+  drive(bot, world)
+  const result = await route(bot, { aborted: false }, { toward: new Vec3(.5, 2, 3.5), maxLandings: 60, timeoutSeconds: 600 })
+  assert.equal(result.ok, true, `${result.why} at ${JSON.stringify(result.at)}`)
+})
+
+test('a planned jump keeps its forecast ownership however far the server clock runs ahead of the next client frame', async () => {
+  const clockModule = require('../src/game-clock')
+  const clock = new clockModule.GameClock({ manual: true, epoch: 0 }); clockModule.activate(clock)
+  const { executeJump, IDLE } = require('../src/navigation/parkour')
+  const { lavaFallFloor } = require('../src/combat/emergency-escape')
+  const { bot, world } = worldOf([[0, 0, 0, 'stone'], [3, 0, 0, 'stone']])
+  bot.entity.velocity.y = -.0784000015258789
+  let control = { ...IDLE }; let checked: unknown = 'unchecked'
+  bot.setControlState = (key: string, value: boolean) => { control[key] = value }
+  bot.clearControlStates = () => { control = { ...IDLE } }
+  bot.look = async (yaw: number) => { bot.entity.yaw = yaw }
+  bot.waitForTicks = async (ticks: number) => {
+    for (let tick = 0; tick < ticks; tick++) {
+      const state = new native.PlayerState(bot, control)
+      bot.physics.simulatePlayer(state, world); state.apply(bot); clock.advanceTicks(1); bot.emit('physicsTick')
+      if (checked === 'unchecked' && !bot.entity.onGround && bot.entity.velocity.y < -.1) {
+        // Author49 (750 TPS): 11 server ticks passed before the next client frame
+        // and the lava reflex dropped the jump into lava. 100 ticks > FORECAST_TTL_MS.
+        clock.advanceTicks(100)
+        bot._ndClutch = { stats: { water_saved: 0 }, forecast: { from: bot.entity.position.clone(), at: clock.now(), landing: { lava: true, top: -5 }, excluded: false, ground: false } }
+        checked = lavaFallFloor(bot)
+      }
+      if (!bot.listenerCount('physicsTick')) break
+    }
+  }
+  const result = await executeJump(bot, { aborted: false }, new Vec3(3.5, 1, .5), { allowWalk: true, maxTicks: 38 })
+  assert.equal(result.ok, true, result.why)
+  assert.equal(checked, null, 'the lava reflex must not take a verified jump while its owner still drives it')
+})
+
+test('a stalled native tick wait ends the edge with its samples instead of rejecting the route', async () => {
+  const { executeJump } = require('../src/navigation/parkour')
+  const { bot, world } = worldOf([[0, 0, 0, 'stone'], [3, 0, 0, 'stone']])
+  bot.entity.velocity.y = -.0784000015258789
+  drive(bot, world)
+  const step = bot.waitForTicks
+  bot.waitForTicks = async (ticks: number) => { await step(3); throw new Error('Timeout waiting for game ticks') }
+  const result = await executeJump(bot, { aborted: false }, new Vec3(3.5, 1, .5), { allowWalk: true, maxTicks: 38 })
+  assert.equal(result.ok, false)
+  assert.equal(result.why, 'tick_wait_timeout')
+  assert.equal(result.ticks, 3)
+})
+
+test('a combat hop takes the best-scored visible local landing within a small native frame budget', async () => {
+  const { combatHop } = require('../src/navigation/parkour')
+  const { bot, world } = worldOf([[0, 0, 0, 'stone'], [1, 0, 0, 'stone'], [2, 1, 0, 'stone'], [-2, 0, 0, 'stone']])
+  bot.entity.velocity.y = -.0784000015258789
+  drive(bot, world)
+  const result = await combatHop(bot, { aborted: false }, { score: (target: Vec3) => target.y })
+  assert.equal(result.ok, true, result.why)
+  assert.equal(bot.entity.position.y, 2, 'higher ground wins the caller score')
+  const none = await combatHop(bot, { aborted: false }, { score: () => -Infinity })
+  assert.equal(none.why, 'no_short_hop')
+})
+
+test("a web catch requested before the first falling frame waits for the real descent above the web", async () => {
+  const { catchWeb } = require('../src/navigation/parkour')
+  const { bot, world } = worldOf([[0, 0, 0, 'cobweb'], [0, -1, 0, 'stone']])
+  bot.entity.position = new Vec3(.5, 8, .5); bot.entity.velocity = new Vec3(0, 0, 0); bot.entity.onGround = false
+  drive(bot, world)
+  const result = await catchWeb(bot, { aborted: false }, new Vec3(.5, 0, .5))
+  assert.equal(result.ok, true, result.why)
+  assert.ok(bot.entity.position.y < 1 && bot.entity.position.y > 0)
+})
+
+test('native physics slows a body only while its feet cell is powder snow (PowderSnowBlock.entityInside 1.21.11)', () => {
+  const { simulatePlan, IDLE } = require('../src/navigation/parkour')
+  const floor: Array<[number, number, number, string]> = Array.from({ length: 12 }, (_, x) => [x, 0, 0, 'stone'] as [number, number, number, string])
+  const run = (cells: Array<[number, number, number, string]>) => {
+    const { bot } = worldOf([...floor, ...cells]); bot.entity.velocity.y = -.0784000015258789
+    const steps = Array.from({ length: 30 }, () => ({ yaw: -Math.PI / 2, control: { ...IDLE, forward: true, sprint: true } }))
+    return simulatePlan(bot, steps).pos.x
+  }
+  const clear = run([])
+  const feet = run([2, 3, 4, 5, 6].map(x => [x, 1, 0, 'powder_snow'] as [number, number, number, string]))
+  const head = run([2, 3, 4, 5, 6].map(x => [x, 2, 0, 'powder_snow'] as [number, number, number, string]))
+  assert.ok(feet < clear - 1.5, `feet in powder snow must be stuck-slowed: ${feet} vs ${clear}`)
+  assert.equal(head, clear, 'powder snow at head height only does not slow a living entity')
+})
+
+test('a short powder snow crossing is planned without crawling sneak inside the snow (s6-pk-powder6 shape)', () => {
+  const { planJump } = require('../src/navigation/parkour')
+  const cells: Array<[number, number, number, string]> = [0, 1, 2, 3, 4, 5].map(x => [x, 0, 0, 'stone'] as [number, number, number, string])
+  for (const x of [2, 3, 4]) cells.push([x, 1, 0, 'powder_snow'])
+  const { bot } = worldOf(cells); bot.entity.velocity.y = -.0784000015258789
+  const plan = planJump(bot, new Vec3(5.5, 1, .5), { allowWalk: true, maxTicks: 38, beam: 60 })
+  assert.ok(plan && plan.ticks <= 45, `crossing must stay short: ${plan?.ticks}`)
+  const snowSneak = plan.steps.some((step: any, i: number) => step.control.sneak && bot.blockAt(plan.states[i].pos.floored()).name === 'powder_snow')
+  assert.equal(snowSneak, false)
+})
+
+test('a goal whose only approach leaves the 24-block disc is reached through the one-off wide support graph', async () => {
+  const { route } = require('../src/navigation/parkour')
+  // CP21→CP22 shape: an enclosed pad near the start, reachable only by stairs at
+  // x 30..33 (outside the 24-block disc) and a bridge back over its enclosure.
+  const cells: Array<[number, number, number, string]> = []
+  for (let x = 0; x <= 30; x++) cells.push([x, 0, 0, 'stone'])
+  for (let step = 1; step <= 4; step++) cells.push([29 + step, step, 0, 'stone'])
+  cells.push([33, 4, 1, 'stone'], [33, 4, 2, 'stone'])
+  for (let x = 1; x <= 33; x++) cells.push([x, 4, 3, 'stone'])
+  cells.push([0, 1, 3, 'stone'])
+  for (let y = 1; y <= 3; y++) cells.push([-1, y, 3, 'stone'], [1, y, 3, 'stone'], [0, y + 1, 2, 'stone'], [0, y + 1, 4, 'stone'])
+  const { bot, world } = worldOf(cells)
+  bot.entity.velocity.y = -.0784000015258789
+  drive(bot, world)
+  const result = await route(bot, { aborted: false }, { toward: new Vec3(.5, 2, 3.5), maxLandings: 90, timeoutSeconds: 1200 })
+  assert.equal(result.ok, true, `${result.why} at ${JSON.stringify(result.at)}`)
+})
+
+test('a fall is steered onto a nearby hay bale when it hurts less than the floor straight below', () => {
+  const { planNearbySoftLanding, simulatePlan } = require('../src/navigation/parkour')
+  const { landingDamage } = require('../src/navigation/landing')
+  const cells: Array<[number, number, number, string]> = []
+  for (let x = -3; x <= 4; x++) for (let z = -3; z <= 3; z++) if (x !== 2 || z !== 0) cells.push([x, 0, z, 'stone'])
+  cells.push([2, 0, 0, 'hay_block'])
+  const { bot } = worldOf(cells)
+  bot.entity.position = new Vec3(.5, 30, .5); bot.entity.velocity = new Vec3(0, -.3, 0); bot.entity.onGround = false
+  const plan = planNearbySoftLanding(bot, 34)
+  assert.ok(plan, 'the hay bale two blocks aside must be reachable in the air')
+  assert.equal(plan.damage, landingDamage(bot.blockAt(new Vec3(2, 0, 0)), 33))
+  assert.ok(plan.damage < landingDamage(bot.blockAt(new Vec3(0, 0, 0)), 33))
+  const landed = simulatePlan(bot, plan.steps, undefined, plan.states[0] && Object.assign(Object.create(Object.getPrototypeOf(plan.states[0])), plan.states[0], { pos: bot.entity.position.clone(), vel: bot.entity.velocity.clone() }))
+  assert.ok(landed.onGround && Math.abs(landed.pos.x - 2.5) < .3 && landed.pos.y === 1)
+  bot.entity.position = new Vec3(2.5, 30, .5)
+  assert.equal(planNearbySoftLanding(bot, 34), null, 'already above the softest floor: nothing to steer')
+})
+
+test('a spring chain falls from one rebound onto a second slime and reaches a ledge no single spring reaches (CP25 shape)', async () => {
+  const { planJump, reboundApex, simulatePlan } = require('../src/navigation/parkour')
+  const { supportRoute } = require('../src/navigation/support-route')
+  // Tower top 7 → slime A (top 0) → slime B (top -1) → ledge 2: three above B, 8.5 from A.
+  const cells: Array<[number, number, number, string]> = [[0, 6, 0, 'stone']]
+  for (const z of [0, 1]) cells.push([6, -1, z, 'slime_block'], [7, -1, z, 'slime_block'], [11, -2, z, 'slime_block'], [12, -2, z, 'slime_block'])
+  for (let y = -2; y <= 1; y++) for (const z of [0, 1]) cells.push([15, y, z, 'stone'], [16, y, z, 'stone'])
+  const { bot } = worldOf(cells)
+  bot.entity.position = new Vec3(.5, 7, .5); bot.entity.velocity.y = -.0784000015258789
+  const a = new Vec3(7.5, 0, .5); const b = new Vec3(11.5, -1, .5); const ledge = new Vec3(15.5, 2, .5)
+  const plan = planJump(bot, ledge, { bounce: a, chain: [b], maxTicks: 150 })
+  assert.ok(plan, 'the native integrator finds drop, two rebounds and the ledge landing')
+  const contacts = plan.states.filter((s: any, i: number) => s.onGround && s.vel.y > .3 && !(plan.states[i - 1]?.onGround))
+  assert.deepEqual(contacts.map((s: any) => s.pos.y), [0, -1], 'one real contact on each slime, in order')
+  const landed = simulatePlan(bot, plan.steps)
+  assert.equal(landed.onGround, true); assert.equal(landed.pos.y, 2)
+  const ceiling = (from: Vec3, at: Vec3) => Math.max(reboundApex(bot, at, from.y, false), reboundApex(bot, at, from.y, true))
+  const route = await supportRoute(bot, bot.entity.position, ledge, new Set(), 20, undefined, ceiling)
+  const edge = route.find((o: any) => o.target.y === 2 && o.bounce)
+  assert.ok(edge?.chain?.length === 1, `the graph offers the chained edge: ${JSON.stringify(route.map((o: any) => [o.target, o.bounce, o.chain]))}`)
+})
+
+test('an explicit plain-floor fall budget (2..4) takes a 6-block walk-off onto stone; 1 HP still needs a mitigating floor (CP28 shape)', async () => {
+  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { supportRoute } = require('../src/navigation/support-route')
+  // Cliff top 6 (feet 7) and an island one block lower than 1 HP allows: floor 0 (feet 1), 2.5 blocks out.
+  const { bot } = worldOf([[0, 6, 0, 'stone'], [3, 0, 0, 'end_stone'], [4, 0, 0, 'end_stone']])
+  bot.entity.position = new Vec3(.5, 7, .5); bot.entity.velocity.y = -.0784000015258789
+  const target = new Vec3(3.5, 1, .5); const options = { allowWalk: true, maxTicks: 38, planningMs: 180 }
+  assert.equal(await planJumpAsync(bot, { aborted: false }, target, { ...options, maxFallDamage: 1 }), null, 'no mitigator: 1 HP budget refuses a 3 HP landing')
+  const plan = await planJumpAsync(bot, { aborted: false }, target, { ...options, maxFallDamage: 3 })
+  assert.ok(plan, 'an explicit 3 HP budget accepts the plain-floor drop')
+  assert.equal(plan.fall.damage, 3); assert.equal(plan.fall.supportName, 'end_stone')
+  assert.equal(await planJumpAsync(bot, { aborted: false }, target, { ...options, maxFallDamage: 2 }), null, 'the budget is a cap')
+  assert.ok((await supportRoute(bot, bot.entity.position, target, new Set(), 6, undefined, undefined, undefined, 3)).some((o: any) => o.target.equals(target)), 'the graph offers the drop edge under the budget')
+  assert.ok(!(await supportRoute(bot, bot.entity.position, target, new Set(), 6, undefined, undefined, undefined, 1)).some((o: any) => o.target.equals(target)))
+})
+
+test('a hop over a higher slab step walks on and steps down to the lower target (CP28 roof: 165.5 → slab 166.5 → 166)', async () => {
+  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const slab = { type: 'bottom', waterlogged: false }
+  const { bot } = worldOf([[0, 0, 0, 'smooth_stone_slab', slab], [-1, 0, 0, 'smooth_stone_slab', slab], [1, 0, 0, 'stone'], [1, 1, 0, 'smooth_stone_slab', slab], [2, 0, 0, 'stone'], [3, 0, 0, 'stone']])
+  bot.entity.position = new Vec3(.7, .5, .5); bot.entity.velocity.y = -.0784000015258789
+  const target = new Vec3(2.5, 1, .5)
+  const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, planningMs: 180 })
+  assert.ok(plan, 'the slab is only a step on the way: landing there must not end the profile, nor pin the body with sneak')
+  assert.ok(plan.states.some((s: any) => s.onGround && s.pos.y === 1.5), 'the native trajectory really crosses the slab top')
+  const landed = simulatePlan(bot, plan.steps)
+  assert.ok(landed.onGround && landed.pos.distanceTo(target) < .22, JSON.stringify(landed.pos))
+})
+
+test('lab drop walks off the ledge with ordinary keys, releases them in the air and reports the landing', async () => {
+  const { navigate } = require('../src/navigation/parkour')
+  const { bot, world } = worldOf([[0, 4, 0, 'stone'], [1, 0, 0, 'stone'], [2, 0, 0, 'stone'], [3, 0, 0, 'stone']])
+  bot.entity.position = new Vec3(.7, 5, .5); bot.entity.velocity.y = -.0784000015258789
+  drive(bot, world)
+  let forward = false
+  const set = bot.setControlState; bot.setControlState = (key: string, value: boolean) => { if (key === 'forward') forward = value; set(key, value) }
+  bot.getControlState = (key: string) => key === 'forward' ? forward : false
+  const result = await navigate(bot, { aborted: false }, { mode: 'drop', target: new Vec3(3.5, 5, .5), ticks: 80 })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.at.y, 1); assert.ok(result.fall >= 3.9 && result.fall <= 4.1, String(result.fall))
+  assert.equal(forward, false, 'keys are released once airborne')
+})
+
+test('a closed wooden door in the way is a route edge that opens it by hand first; an iron door is a wall (CP28 house)', async () => {
+  const { route } = require('../src/navigation/parkour')
+  const { supportRoute } = require('../src/navigation/support-route')
+  for (const kind of ['oak_door', 'iron_door']) {
+    // Floor x 0..4, wall x = 2 (z -2..2, two high) with a door at (2, 1..2, 0).
+    const cells: Array<[number, number, number, string, Record<string, unknown>?]> = []
+    for (let x = 0; x <= 4; x++) for (let z = -2; z <= 2; z++) cells.push([x, 0, z, 'stone'])
+    for (const z of [-2, -1, 1, 2]) for (const y of [1, 2, 3]) cells.push([2, y, z, 'stone'])
+    cells.push([2, 3, 0, 'stone'])
+    cells.push([2, 1, 0, kind, { facing: 'east', half: 'lower', hinge: 'left', open: false, powered: false }], [2, 2, 0, kind, { facing: 'east', half: 'upper', hinge: 'left', open: false, powered: false }])
+    const { bot, world } = worldOf(cells)
+    const overrides = new Map<string, unknown>()
+    const base = world.getBlock.bind(world)
+    world.getBlock = (p: Vec3) => { const q = p.floored(); return overrides.get(`${q.x},${q.y},${q.z}`) ?? base(p) }
+    bot.blockAt = (p: Vec3) => world.getBlock(p)
+    let uses = 0
+    bot.lookAt = async () => {}
+    bot.activateBlock = async (block: any) => {
+      uses++
+      if (block.name === 'iron_door') return
+      const lower = block.getProperties().half === 'upper' ? block.position.offset(0, -1, 0) : block.position
+      for (const p of [lower, lower.offset(0, 1, 0)]) {
+        const old = world.getBlock(p); const next = Block.fromProperties(old.name, { ...old.getProperties(), open: true }); next.position = p
+        overrides.set(`${p.x},${p.y},${p.z}`, next); bot.emit('blockUpdate', old, next)
+      }
+    }
+    bot.entity.position = new Vec3(.5, 1, .5); bot.entity.velocity.y = -.0784000015258789
+    drive(bot, world)
+    const edges = await supportRoute(bot, bot.entity.position, new Vec3(4.5, 1, .5), new Set(), 8)
+    const result = await route(bot, { aborted: false }, { toward: new Vec3(4.5, 1, .5), maxLandings: 12, timeoutSeconds: 60 })
+    if (kind === 'oak_door') {
+      assert.ok(edges.some((o: any) => o.door && o.door.x === 2 && o.door.y === 1 && o.door.z === 0), JSON.stringify(edges.map((o: any) => [o.target, o.door])))
+      assert.equal(result.ok, true, `${result.why} ${JSON.stringify(result.at)}`)
+      assert.equal(uses, 1, 'one hand use on the visible door')
+      assert.equal(String(world.getBlock(new Vec3(2, 1, 0)).getProperties().open), 'true')
+    } else {
+      assert.ok(!edges.some((o: any) => o.door), 'an iron door needs redstone, not a hand')
+      assert.equal(result.ok, false)
+      assert.equal(uses, 0)
+    }
+  }
 })

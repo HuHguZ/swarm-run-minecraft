@@ -10,7 +10,7 @@ const gameClock = require('./src/game-clock')
 //   сходить с поля, B — вернуться. «без блоков» — B внизу без блоков: добыть и
 //   подняться. «мобы» — A внизу, рядом кадавры (husk), B на поле: A бьёт их,
 //   потом поднимается.
-//   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-arenahold.js [сцена]
+//   A=ws://127.0.0.1:88NN B=ws://127.0.0.1:89NN MC_PORT=256NN node try-arenahold.js [сцена]   (только слот фермы NN, arms-guard)
 const WebSocket = require('ws')
 // Both bots share server ticks; keep the first connection as the time source.
 let clockSource = null
@@ -35,8 +35,9 @@ function client (url) {
   return { ws, ready, call }
 }
 const sleep = ms => gameClock.sleep(ms)
-const A = client(process.env.A || 'ws://127.0.0.1:8791')
-const B = client(process.env.B || 'ws://127.0.0.1:8792')
+require('./arms-guard').farmOnly({ ws: [process.env.A, process.env.B] })
+const A = client(process.env.A)
+const B = client(process.env.B)
 async function cmd (text) { await B.call('say', { text }); await sleep(40) }
 const X = 1000; const Y = 170; const Z = 1700
 const DEPTH = Number(process.env.DEPTH || 20)

@@ -119,7 +119,8 @@ function version () {
 function file () {
   if (process.env.ND_SKILLS_LOG) return process.env.ND_SKILLS_LOG
   const log = process.env.ND_CAMPAIGN_LOG
-  if (!log) return path.join(__dirname, '..', 'skills.jsonl')
+  // Unit tests (node --test sets NODE_TEST_CONTEXT) wrote fake-bot rows with manual clocks into the daemons' shared file.
+  if (!log) return process.env.NODE_TEST_CONTEXT ? path.join(require('os').tmpdir(), 'nd-test-skills.jsonl') : path.join(__dirname, '..', 'skills.jsonl')
   return log.replace(/(\.campaign)?\.log$/, '') + '.skills.jsonl'
 }
 

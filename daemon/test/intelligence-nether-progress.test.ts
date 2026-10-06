@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { deathFreeEnd, bastionMetrics, explicitBarterMetrics, deliveredBarterReceipts, netherStageProgress, netherSupplyProgress } = require('../src/campaign/nether-progress')
+const { deathFreeEnd, netherGoalMet, netherPass, bastionMetrics, explicitBarterMetrics, deliveredBarterReceipts, netherStageProgress, netherSupplyProgress } = require('../src/campaign/nether-progress')
 const { emptyWorld, fact } = require('../src/core/world-state')
 
 test('Nether completion fails when death arrives in the same observation as End entry', () => {
@@ -92,4 +92,17 @@ test('Nether supply progress rejects incidental tunnel blocks and verifies only 
   before.facts.nether_pick_swings = fact(100, 'observed', 0)
   after.facts.nether_pick_swings = fact(250, 'observed', 1)
   assert.equal(netherSupplyProgress(before, after), true)
+})
+
+test('Nether PASS needs pearls and powder for every eye in the bag, alive and back in the Overworld', () => {
+  const bag = { ender_pearl: 8, ender_eye: 2, blaze_rod: 4 }
+  assert.equal(netherGoalMet(bag, 10), true) // 8+2 pearls, 2*4+2 powder
+  assert.equal(netherGoalMet({ ...bag, blaze_rod: 3 }, 10), false) // 6+2 powder < 10
+  assert.equal(netherGoalMet({ ...bag, blaze_rod: 3, blaze_powder: 2 }, 10), true)
+  assert.equal(netherGoalMet({ ...bag, ender_pearl: 7 }, 10), false)
+  const ok = { dimension: 'overworld', health: 12, deaths: 0, inventory: bag, eyesNeed: 10 }
+  assert.equal(netherPass(ok), true)
+  assert.equal(netherPass({ ...ok, dimension: 'the_nether' }), false)
+  assert.equal(netherPass({ ...ok, deaths: 1 }), false)
+  assert.equal(netherPass({ ...ok, health: 0 }), false)
 })

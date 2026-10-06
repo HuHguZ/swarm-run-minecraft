@@ -6,7 +6,38 @@ const { portalBlocks } = require('./pillar-plan')
 const { dragonLab, respawnDragon, takeEgg, goHome, pearlApproach, blindPit, collectXp } = require('./blind-pit')
 const { evade, countOf } = require('./evade-raw')
 const { walkTo, destroyCrystals, makeDragonFeed, fightDragon } = require('./pillar-run')
+// 750 TPS (s5, 06.10): A* pathfinder'а считает бюджет в РЕАЛЬНЫХ мс — 40 мс на срез (tickTimeout) и до 5 с на путь
+// (thinkTimeout). На 750 тиках/с срез — 30 игровых тиков без физики, путь — до 190 игровых с (s5-b2-s2: 78 расчётов
+// «partial», 6.9 с реального времени у моста; s5-b2-s4: до центра не дошёл за 600 с). Бюджет боя — в игровом времени.
+function scalePathBudget (bot, rate = gameClock.snapshot()?.tickRate ?? 20) {
+  const pf = bot.pathfinder
+  if (!pf || !(rate > 20)) return () => {}
+  const tick0 = pf.tickTimeout; const think0 = pf.thinkTimeout
+  pf.tickTimeout = Math.max(1, tick0 * 20 / rate)
+  pf.thinkTimeout = Math.max(500, think0 * 20 / rate)
+  return () => { pf.tickTimeout = tick0; pf.thinkTimeout = think0 }
+}
+
 async function dragon (session, ctl, p: any = {}) {
+  const bot = session.bot
+  const undo = scalePathBudget(bot)
+  // Выходной портал встаёт под станцией у столба (окоп в его кольце): после убийства тело падает в портал, сервер шлёт
+  // win_game и держит игрока в титрах, пока клиент не ответит perform_respawn. goHome отвечает только пока идёт сам; без
+  // ответа нет пакетов времени — игровые часы демона встают, бой не возвращается (s5-c5-s1, 750 TPS, 06.10). Отвечать сразу.
+  const onWin = pk => {
+    if (!pk || !(pk.reason === 4 || pk.reason === 'win_game')) return
+    ctl.creditsSkipped = (ctl.creditsSkipped || 0) + 1
+    try { bot._client.write('client_command', bot.supportFeature('respawnIsPayload') ? { payload: 0 } : { actionId: 0 }) } catch {}
+  }
+  const client = bot._client && typeof bot._client.on === 'function' ? bot._client : null
+  if (client) client.on('game_state_change', onWin)
+  // окно точности на ферме (dragon/precision.ts, ND_PRECISION_TPS): посадка при готовой станции и опасность рядом
+  const prec = require('./precision')
+  const pwTimer = prec.precisionRate() ? gameClock.setInterval(() => { try { prec.precisionTick(bot, ctl) } catch {} }, 100) : null
+  try { return await dragonFight(session, ctl, p) } finally { if (pwTimer) gameClock.clearInterval(pwTimer); if (client) client.removeListener('game_state_change', onWin); undo(); prec.precisionOff(bot, ctl) }
+}
+
+async function dragonFight (session, ctl, p: any = {}) {
   const bot = session.bot
   const mode = p.mode || 'beds'
   const started = gameClock.now()
@@ -45,7 +76,7 @@ async function dragon (session, ctl, p: any = {}) {
     rep.dragon.dmgSeen = Math.round(stats.dmg)
     rep.dragon.phases = stats.phases.slice(-20)
     rep.dodged = stats.dodges
-    rep.endermen = { fought: stats.endermen, killed: stats.endermenKilled || 0, lookGuard: stats.guarded }
+    rep.endermen = { fought: stats.endermen, killed: stats.endermenKilled || 0, lookGuard: stats.guarded, stareCut: stats.stareCut || 0 }
     if (stats.ate.length) rep.ate = stats.ate
     if (stats.hid.length) rep.hid = stats.hid
     if (stats.potions && stats.potions.length) rep.potions = stats.potions
@@ -162,7 +193,15 @@ async function dragon (session, ctl, p: any = {}) {
   const onAbort = () => clearControls(bot)
   ctl.onAbort.push(onAbort)
   try {
-    await armor.equipBestArmor(session, ctl).catch(() => {})
+    // Броня — с повтором (s5-e22-s3, 06.10: в начале боя автопилот ел — «ем — броню надену после», бой без брони, смерть
+    // от эндермена по 7): занят рот/курсор или сервер не подтвердил — ещё раз, до 4 попыток.
+    for (let i = 0; i < 4 && !ctl.aborted; i++) {
+      const ar: any = await armor.equipBestArmor(session, ctl).catch(e => ({ stopped: e.message }))
+      const again = ar && ((ar.stopped && ar.stopped !== 'прервано') || (ar.skipped || []).some(s => /не подтвердил/.test(s)))
+      if (!again) break
+      rep.armorRetry = (rep.armorRetry || 0) + 1
+      await sleep(600)
+    }
     // Вырезанная тыква на голове — эндермены не злятся на взгляд
     const pumpkin = findItem(bot, /^carved_pumpkin$/)
     const headNow = bot.inventory.slots[5]
@@ -361,4 +400,4 @@ async function dragon (session, ctl, p: any = {}) {
   }
 }
 
-module.exports = { dragon }
+module.exports = { dragon, scalePathBudget }

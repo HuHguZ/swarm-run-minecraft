@@ -1,4 +1,4 @@
-const { voidBelow, Vec3, isSolid, isAirish, stepIntoZone, CENTER, runwayAhead, cloudZones, nearPortal, cloudsOf, CLOUD_SLAB, cloudHits, BREATH_AHEAD, BREATH_R, starer, safePitch, gameClock, pvp, EYE, clearControls, dbg, fireballsOf, fbAlarmAt, cloudBorn, FILLER_RE, sleep, items, build, metaOf, findItem, actions, HEAD_AHEAD, stepTo, digDownTo } = require('./dig-down-to')
+const { voidBelow, blockDef, Vec3, isSolid, isAirish, stepIntoZone, CENTER, runwayAhead, cloudZones, nearPortal, cloudsOf, CLOUD_SLAB, cloudHits, BREATH_AHEAD, BREATH_R, starer, safePitch, gameClock, pvp, EYE, clearControls, dbg, fireballsOf, fbAlarmAt, cloudBorn, FILLER_RE, sleep, items, build, metaOf, findItem, actions, HEAD_AHEAD, stepTo, digDownTo } = require('./dig-down-to')
 function nearEdge (bot, pos, r = 3) {
   for (let dx = -r; dx <= r; dx++) {
     for (let dz = -r; dz <= r; dz++) {
@@ -34,7 +34,7 @@ function straightOut (bot, me, away, lens = [10, 7, 5, 3.5]) {
 function surfaceY (bot, x, z, from = 110) {
   const fx = Math.floor(x); const fz = Math.floor(z)
   for (let y = from; y >= 1; y--) {
-    const b = bot.blockAt(new Vec3(fx, y, fz))
+    const b = blockDef(bot, fx, y, fz)
     if (!b) return null
     if (isSolid(b)) return { y: y + 1, name: b.name }
     if (!isAirish(b) && b.name !== 'air') return null
@@ -45,10 +45,10 @@ function surfaceY (bot, x, z, from = 110) {
 function standY (bot, x, z, nearY, up = 8, down = 14) {
   const fx = Math.floor(x); const fz = Math.floor(z)
   for (let y = Math.floor(nearY) + up; y >= Math.floor(nearY) - down; y--) {
-    const under = bot.blockAt(new Vec3(fx, y - 1, fz))
+    const under = blockDef(bot, fx, y - 1, fz)
     if (!under) continue
     if (!isSolid(under)) continue
-    if (isAirish(bot.blockAt(new Vec3(fx, y, fz))) && isAirish(bot.blockAt(new Vec3(fx, y + 1, fz)))) return y
+    if (isAirish(blockDef(bot, fx, y, fz)) && isAirish(blockDef(bot, fx, y + 1, fz))) return y
   }
   return null
 }
@@ -119,7 +119,32 @@ function lookGuard (bot, stats) {
     bot.look(y, np, true).catch(() => {})
   }
   bot.on('physicsTick', onTick)
-  return () => bot.removeListener('physicsTick', onTick)
+  const unfilter = stareFilter(bot, stats)
+  return () => { bot.removeListener('physicsTick', onTick); unfilter() }
+}
+
+// Взгляд на эндермена — в пакете (750 TPS, s5 06.10). Эндермен злится после 5 тиков взгляда сервера (поворот из
+// последнего look/position_look); на 750 тиках это 7 мс, а поправка сторожа (bot.look под замком рефлексов — асинхронно)
+// уходила позже: на 750 эндермены злились «без взгляда» по клиенту и убили 4 из 6 погибших (s5-c3, c4), на 20 — 1 бой из 42.
+// Каждый исходящий поворот, который смотрит в глаза эндермену, опускается до ближайшего безопасного (safePitch).
+const DEG = Math.PI / 180
+function stareFilter (bot, stats: any = {}) {
+  const c = bot._client
+  if (!c || typeof c.write !== 'function') return () => {}
+  const raw = c.write
+  const wrapped = function (name, data) {
+    if ((name === 'look' || name === 'position_look') && data && bot.entity && typeof data.pitch === 'number') {
+      const yaw = Math.PI - data.yaw * DEG; const pitch = -data.pitch * DEG
+      if (starer(bot, yaw, pitch)) {
+        const np = safePitch(bot, yaw, pitch)
+        stats.stareCut = (stats.stareCut || 0) + 1
+        data = { ...data, pitch: -np / DEG }
+      }
+    }
+    return raw.call(this, name, data)
+  }
+  c.write = wrapped
+  return () => { if (c.write === wrapped) c.write = raw }
 }
 
 function fallGuard (bot, stats, ctl = null) {
@@ -533,7 +558,7 @@ async function healRaw (session, ctl, rep, stats, { hard = false }: any = {}) {
 function nearPillar (bot, feet, r = 4) {
   for (let dx = -r; dx <= r; dx++) {
     for (let dz = -r; dz <= r; dz++) {
-      const b = bot.blockAt(new Vec3(Math.floor(feet.x) + dx, Math.floor(feet.y) + 1, Math.floor(feet.z) + dz))
+      const b = blockDef(bot, Math.floor(feet.x) + dx, Math.floor(feet.y) + 1, Math.floor(feet.z) + dz)
       if (b && b.name === 'obsidian') return true
     }
   }
@@ -671,4 +696,4 @@ function awayFromHead (d, parts, feet, dist) {
   return feet.offset(ux * dist, 0, uz * dist)
 }
 
-module.exports = { nearEdge, straightOut, surfaceY, standY, cageBars, crystalsOf, overCloud, inClouds, breathOf, lookGuard, fallGuard, afterPositionPacket, aboveCloudY, FB_ALARM_R, fireballAlarm, cloudReflex, hitBy, r1, doing, hunters, angryEndermen, unembed, embeddedNow, pickSpot, fastTower, hasEffect, potionItem, usePotion, healRaw, nearPillar, wingBoxes, dragonHist, dragonVel, sight, STAY_R, takeoffBoxes, podiumCache, podiumTop, inCharge, cloudAgeMs, straightWalkable, headroom, HOLE_TOP, DIGGABLE_RE, duckPlan, duck, awayFromHead }
+module.exports = { nearEdge, straightOut, surfaceY, standY, cageBars, crystalsOf, overCloud, inClouds, breathOf, lookGuard, stareFilter, fallGuard, afterPositionPacket, aboveCloudY, FB_ALARM_R, fireballAlarm, cloudReflex, hitBy, r1, doing, hunters, angryEndermen, unembed, embeddedNow, pickSpot, fastTower, hasEffect, potionItem, usePotion, healRaw, nearPillar, wingBoxes, dragonHist, dragonVel, sight, STAY_R, takeoffBoxes, podiumCache, podiumTop, inCharge, cloudAgeMs, straightWalkable, headroom, HOLE_TOP, DIGGABLE_RE, duckPlan, duck, awayFromHead }

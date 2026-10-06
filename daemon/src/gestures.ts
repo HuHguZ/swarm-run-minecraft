@@ -290,7 +290,7 @@ function hook (ap, bot) {
       return
     }
     if (!freeForSummon()) {
-      session.bus.emit('summon', { name, come: false, text: `${name} зовёт, но я занят (${session.current.name}) — решай сам` })
+      session.bus.emit('summon', { name, come: false, text: `${name} зовёт, но я занят (${session.current?.name || (session.reflex ? 'рефлекс' : 'угроза')}) — решай сам` })
       return
     }
     const dec = mood.decideCome(name, { dist: d, urgent, byGesture })

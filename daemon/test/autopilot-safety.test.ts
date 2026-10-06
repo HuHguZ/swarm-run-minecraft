@@ -179,3 +179,33 @@ test('EMERGENCY не по пустякам: хп выше порога, враг
   await f.auto.emergency(f.bot)
   assert.equal(f.refuges.length, 2, 'после 16+ хп снова взведён')
 })
+
+test('при включённой тактике фоновый отход держит аренду низкого приоритета, и действие тактики его отменяет, а не ставит на паузу', async () => {
+  const file = path.join(__dirname, '../src/autopilot.js')
+  const req = createRequire(file)
+  const lock = req('./reflex-lock')
+  const enemy = { id: 2, name: 'zombie', isValid: true, position: new Vec3(0, 64, 2) }
+  const calls = []
+  let release; let flightCtl = null
+  const gate = new Promise(resolve => { release = resolve })
+  const bot = { version: '1.21.11', health: 10, food: 20, entity: { position: new Vec3(0, 64, 0) }, entities: { 2: enemy },
+    inventory: { items: () => [{ name: 'stone_sword', count: 1 }, { name: 'melon_slice', count: 9 }], slots: Array(46).fill(null) },
+    nearestEntity: () => enemy, once: () => {}, removeListener: () => {} }
+  const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval,
+    require: name => name === './combat' ? { ...req(name), retreat: async () => { calls.push('cover'); return {} } }
+      : name === './combat-safety' ? { ...req(name), disengage: async (s, ctl) => { flightCtl = ctl; calls.push('run'); await gate; return { clear: false } } } : req(name) }
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  const session: any = { bot, current: null, tactics: { enabled: () => true }, bus: { emit: () => {} } }
+  const auto = new context.module.exports.Autopilot(session, { lowHealth: 8 })
+  try {
+    const flight = auto.fleeIfDying(bot)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(lock.owner(session)?.source, 'fleeIfDying')
+    assert.equal(lock.owner(session)?.priority, 1)
+    const tactical = lock.start(session, async () => ({ acted: true }), { source: 'Flee', owner: 'Tactical', priority: 2, preempt: true })
+    assert.equal(flightCtl.aborted, true, 'the tactical lease cancels the idle flight')
+    release()
+    await flight; await tactical
+    assert.deepEqual(calls, ['run'], 'the cancelled flight does not resume into cover')
+  } finally { lock.cancel(session) }
+})

@@ -35,24 +35,32 @@ export function detour(geometry: CollisionWorld, start: Point, target: Point, ma
     }
     return lo < hi - 1e-6
   })
-  const points: Point[] = [target]
-  const corners = new Set<string>([`${target.x},${target.z}`])
-  for (const b of boxes) for (const x of [b.minX, b.maxX]) for (const z of [b.minZ, b.maxZ]) {
-    const p = { x, y, z }
-    const key = `${x},${z}`
-    if (!corners.has(key) && !boxes.some(b => x > b.minX + 1e-6 && x < b.maxX - 1e-6 && z > b.minZ + 1e-6 && z < b.maxZ - 1e-6)) { corners.add(key); points.push(p) }
-  }
-  const distances = points.map((_, i) => i === 0 ? 0 : Infinity); const done = new Set<number>()
-  for (let count = 0; count < points.length; count++) {
-    let index = -1
-    for (let i = 0; i < points.length; i++) if (!done.has(i) && (index < 0 || distances[i] < distances[index])) index = i
-    if (index < 0 || !Number.isFinite(distances[index])) break
-    done.add(index)
-    for (let i = 0; i < points.length; i++) if (!done.has(i) && visible(points[index], points[i])) distances[i] = Math.min(distances[i], distances[index] + flat(points[index], points[i]))
+  // The visibility graph is built only when some query cannot see the target:
+  // a straight visible segment is already the shortest planar path.
+  let points: Point[] | null = null; let distances: number[] = []
+  const graph = () => {
+    const nodes: Point[] = [target]
+    const corners = new Set<string>([`${target.x},${target.z}`])
+    for (const b of boxes) for (const x of [b.minX, b.maxX]) for (const z of [b.minZ, b.maxZ]) {
+      const p = { x, y, z }
+      const key = `${x},${z}`
+      if (!corners.has(key) && !boxes.some(b => x > b.minX + 1e-6 && x < b.maxX - 1e-6 && z > b.minZ + 1e-6 && z < b.maxZ - 1e-6)) { corners.add(key); nodes.push(p) }
+    }
+    distances = nodes.map((_, i) => i === 0 ? 0 : Infinity); const done = new Set<number>()
+    for (let count = 0; count < nodes.length; count++) {
+      let index = -1
+      for (let i = 0; i < nodes.length; i++) if (!done.has(i) && (index < 0 || distances[i] < distances[index])) index = i
+      if (index < 0 || !Number.isFinite(distances[index])) break
+      done.add(index)
+      for (let i = 0; i < nodes.length; i++) if (!done.has(i) && visible(nodes[index], nodes[i])) distances[i] = Math.min(distances[i], distances[index] + flat(nodes[index], nodes[i]))
+    }
+    return nodes
   }
   return at => {
+    if (visible(at, target)) return { distance: flat(at, target), waypoint: target, reachable: true }
+    points ??= graph()
     let distance = Infinity; let waypoint = target
-    for (let i = 0; i < points.length; i++) if (visible(at, points[i])) {
+    for (let i = 1; i < points.length; i++) if (visible(at, points[i])) {
       const cost = flat(at, points[i]) + distances[i]
       if (cost < distance) { distance = cost; waypoint = points[i] }
     }

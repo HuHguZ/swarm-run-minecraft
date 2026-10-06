@@ -167,6 +167,13 @@ test('farm packet config disables all and recipe limits while preserving other Y
   assert.equal((disablePacketLimiter(prefix).match(/^packet-limiter:/gm) || []).length, 1)
 })
 
+test('farm packet config disables the wall-time use-item spam limiter once', () => {
+  const input = 'packet-limiter:\n  all-packets:\n    interval: 0.0\n    max-packet-rate: 0.0\n  overrides: {}\nspam-limiter:\n  incoming-packet-threshold: 300\n  recipe-spam-increment: 1\nspark:\n  enabled: true\n'
+  const output = disablePacketLimiter(input)
+  assert.match(output, /^spam-limiter:\n  incoming-packet-threshold: disabled\n  recipe-spam-increment: 1\nspark:/m)
+  assert.equal(disablePacketLimiter(output), output)
+})
+
 test('changed live farm config reloads once before tick or scene commands', async () => {
   const { api, events } = farmHarness()
   await api.cmdTick({ _: ['1', 'rate', '250'], env: [] })

@@ -6,7 +6,7 @@ import { plan, StrategyRegistry, StrategicDirector, type Strategy } from '../src
 import type { Environment, ExecutionResult, SkillCommand } from '../src/core/environment'
 import { SimEnvironment, calibrate } from '../src/environments/sim'
 import { worldFromObservation, executionFromRpc, MineflayerEnvironment } from '../src/environments/mineflayer'
-import type { CostModel } from '../src/core/cost-model'
+import { applyCosts, type CostModel } from '../src/core/cost-model'
 
 function milestone(id: string, cost: number): Strategy {
   return { id, skill: id, version: 1, preconditions: s => !knows(s, 'done'), expectedEffects: { facts: { done: true } }, estimateCost: () => cost,
@@ -289,15 +289,21 @@ test('same director completes a full abstract graph and telemetry calibrates sam
   assert.equal(dragonGoal(await environment.observe()), true)
 })
 test('sampled simulation uses measured ticks at vanilla20TPS and retains actual failures and deaths', async () => {
-  const registry = new StrategyRegistry().register(milestone('measured', 1))
+  // S3 06.10: deaths come from the planner's blended risk (applyCosts), success from measured attempts plus 5 prior ones.
+  const registry = new StrategyRegistry().register({ ...milestone('measured', 1), timeoutMs: 3600000 })
   const costs: CostModel[] = [{ key: 'measured', samples: 20, successes: 5, deaths: 5, medianTicks: 15000, p90Ticks: 18000 }]
-  for (const [seed, reason] of [[1, 'simulated death'], [1000, 'sampled skill failure']] as const) {
+  applyCosts(registry, costs)
+  const seen: Record<string, number> = {}
+  for (let seed = 1; seed <= 3000; seed++) {
     const environment = new SimEnvironment(registry, { costs, seed })
     const result = await environment.execute({ skill: 'measured', strategy: 'measured' }, new AbortController().signal)
-    assert.equal(result.outcome, 'FAILURE')
-    assert.equal(result.reason, reason)
-    assert.equal(environment.now(), 750000)
+    seen[result.reason ?? result.outcome] = (seen[result.reason ?? result.outcome] ?? 0) + 1
+    assert.equal(environment.now(), 750000, 'median ticks at 20 TPS without spread')
   }
+  // P(death) = (5 + 5·0)/(20 + 5) = 0.2; P(success | alive) = (5 + 5·0.8)/25 = 0.36 → 0.288; the rest are failures.
+  assert.ok(Math.abs(seen['simulated death']! / 3000 - 0.2) < 0.03, JSON.stringify(seen))
+  assert.ok(Math.abs(seen.SUCCESS! / 3000 - 0.288) < 0.03, JSON.stringify(seen))
+  assert.ok(Math.abs(seen['sampled skill failure']! / 3000 - 0.512) < 0.03, JSON.stringify(seen))
   const explicit = new SimEnvironment(registry, { costs, models: new Map([['measured', { seconds: 12, success: 1, death: 0 }]]) })
   assert.equal((await explicit.execute({ skill: 'measured', strategy: 'measured' }, new AbortController().signal)).outcome, 'SUCCESS')
   assert.equal(explicit.now(), 12000, 'explicit legacy model overrides imported costs')

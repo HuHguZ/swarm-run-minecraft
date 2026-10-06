@@ -31,3 +31,16 @@ test('only explicit farm flag enables cadence and cached agent is never overwrit
   assert.deepEqual(acceleratedDigArgs('must-not-launch', server, { ND_FARM_TIME_EVERY_TICK: '0' }), ordinary)
   assert.deepEqual(acceleratedDigArgs('must-not-launch', server, { ND_FARM_TIME_EVERY_TICK: '1' }), [`${ordinary[0]}=time-every-tick`])
 })
+
+test('lockstep is an explicit farm flag with a bounded window and stall valve', { skip: !fs.existsSync(native) }, t => {
+  const exists = fs.existsSync.bind(fs)
+  t.mock.method(fs, 'existsSync', file => String(file).endsWith('farm-dig-clock.jar') || exists(file))
+  t.mock.method(childProcess, 'execFileSync', () => assert.fail('must not invoke Java for cached agent'))
+  const server = path.resolve(__dirname, 'server-31')
+  const [ordinary] = acceleratedDigArgs('must-not-launch', server, {})
+  assert.deepEqual(acceleratedDigArgs('must-not-launch', server, { ND_LOCKSTEP: '0', ND_FARM_TIME_EVERY_TICK: '1' }), [`${ordinary}=time-every-tick`])
+  assert.deepEqual(acceleratedDigArgs('must-not-launch', server, { ND_LOCKSTEP: '1' }), [`${ordinary}=lockstep:2:2000`])
+  assert.deepEqual(acceleratedDigArgs('must-not-launch', server, { ND_LOCKSTEP: '1', ND_LOCKSTEP_WINDOW: '1', ND_LOCKSTEP_STALL_MS: '500' }), [`${ordinary}=lockstep:1:500`])
+  assert.throws(() => acceleratedDigArgs('must-not-launch', server, { ND_LOCKSTEP: '1', ND_LOCKSTEP_WINDOW: '0' }), /1\.\.20/)
+  assert.throws(() => acceleratedDigArgs('must-not-launch', server, { ND_LOCKSTEP: '1', ND_LOCKSTEP_STALL_MS: '10' }), /50\.\.60000/)
+})

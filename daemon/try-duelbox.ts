@@ -7,7 +7,7 @@ const { createGameBot } = require('./scene-kit')
 // киркой начинает бой с DIST блоков. Оба дерутся. Зритель смотрит: встала ли
 // коробка вокруг A, из чего, когда её вскрыли, и были ли попадания по A, пока
 // коробка целая (сквозь блок — их быть не должно).
-//   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 MC_PORT=25565 node try-duelbox.js
+//   A=ws://127.0.0.1:88NN B=ws://127.0.0.1:89NN MC_PORT=256NN node try-duelbox.js   (только слот фермы NN, arms-guard; 25565/8791 — запрещено)
 const WebSocket = require('ws')
 
 // Both bots share server ticks; keep the first connection as the time source.
@@ -33,15 +33,16 @@ function client (url) {
   return { ws, ready, call }
 }
 const sleep = ms => gameClock.sleep(ms)
-const A = client(process.env.A || 'ws://127.0.0.1:8791')
-const B = client(process.env.B || 'ws://127.0.0.1:8792')
+require('./arms-guard').farmOnly({ ws: [process.env.A, process.env.B], mc: [process.env.MC_PORT] })
+const A = client(process.env.A)
+const B = client(process.env.B)
 async function cmd (text) { await A.call('say', { text }); await sleep(40) }
 const X = 1000; const Y = 150; const Z = 1100
 const SECONDS = Number(process.env.SECONDS || 45)
 const DIST = Number(process.env.DIST || 18)
 
 async function observer () {
-  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT || 25565), username: 'Probe1', version: '1.21.11', auth: 'offline' })
+  const ob = createGameBot({ host: '127.0.0.1', port: Number(process.env.MC_PORT), username: 'Probe1', version: '1.21.11', auth: 'offline' })
   await new Promise<any>((resolve, reject) => { ob.once('spawn', resolve); ob.once('error', reject); ob.once('kicked', reject) })
   await sleep(4000)
   ob.chat('/gamemode spectator'); await sleep(300)

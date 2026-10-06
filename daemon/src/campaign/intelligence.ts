@@ -23,7 +23,9 @@ export interface CampaignPort {
   beds: number
 }
 export function createCampaignIntelligence(port: CampaignPort) {
-  const registry = speedrunRegistry({ eyes: port.eyes, beds: port.beds })
+  // Flags from the S3 simulator search (06.10), off by default — нужна ферма: ND_GRAPH_ECONOMY=1 needs the skills
+  // bastionGold {ingots} and bastionMove in the campaign (S1); ND_GRAPH_RETRY_S — timed re-admission backoff (sim: 60–120 s beat 300 s).
+  const registry = speedrunRegistry({ eyes: port.eyes, beds: port.beds, economy: process.env.ND_GRAPH_ECONOMY === '1' })
   const progressFor = (skill: string): Strategy['progressCondition'] => skill === 'netherTools' ? netherSupplyProgress : ['bastion', 'bastionSupply', 'piglinBarter', 'nether'].includes(skill)
     ? (before, after) => netherStageProgress(skill === 'nether' ? 'nether' : 'bastion', before, after) : undefined
   for (const strategy of registry.all()) {
@@ -41,7 +43,8 @@ export function createCampaignIntelligence(port: CampaignPort) {
   }
   applyCosts(registry, loadCosts())
   const environment = new MineflayerEnvironment({ read: port.observe, call: port.call, executeSkill: port.execute, now: port.now, sleep: port.sleep })
-  const director = new StrategicDirector(registry, environment, { goal: dragonGoal, record: port.record })
+  const director = new StrategicDirector(registry, environment, { goal: dragonGoal, record: port.record,
+    retryAfterMs: Number(process.env.ND_GRAPH_RETRY_S) > 0 ? Number(process.env.ND_GRAPH_RETRY_S) * 1000 : undefined })
   const stageBySkill: Record<string, string> = { enterNether: 'nether', enterEnd: 'dragon', leaveNether: 'eyes', findFortress: 'nether', findBastions: 'bastion',
     piglinBarter: 'bastion', ruinedPortal: 'cast', portalKit: 'iron', scoutStructures: 'iron', scoutLava: 'cast', heal: 'food', structureIron: 'iron' }
   function stageFor(strategy: Strategy): string { return stageBySkill[strategy.skill] ?? strategy.skill }
@@ -87,7 +90,7 @@ export function createCampaignIntelligence(port: CampaignPort) {
       if (strategy) {
         const stage = available.find(stage => stage.name === stageFor(strategy))
         if (stage) return { stage: wrapStrategy(strategy, stage), strategy, before }
-        const special = ['wood', 'iron', 'structureIron', 'scoutStructures', 'scoutLava', 'portalKit', 'ruinedPortal', 'enterNether', 'findFortress', 'findBastions', 'piglinBarter', 'leaveNether', 'enterEnd', 'heal', 'netherTools', 'bastionSupply', 'pearls', 'bastion', 'nether', 'endkit']
+        const special = ['wood', 'iron', 'structureIron', 'scoutStructures', 'scoutLava', 'portalKit', 'ruinedPortal', 'enterNether', 'findFortress', 'findBastions', 'piglinBarter', 'leaveNether', 'enterEnd', 'heal', 'netherTools', 'bastionSupply', 'pearls', 'bastion', 'nether', 'endkit', 'bastionGold', 'bastionMove']
         if (special.includes(strategy.skill)) {
           return { stage: wrapStrategy(strategy), strategy, before }
         }

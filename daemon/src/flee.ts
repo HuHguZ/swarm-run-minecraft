@@ -314,6 +314,8 @@ async function pearlOut (bot, hs) {
     await bot.equip(pearl, 'hand')
     const r = await throwMod.throwAt(bot, null, {
       item: bot.heldItem,
+      // В прыжке на месте, если так перенесёт в более тихое место (06.10: +0.42 к вертикали — на 30 % дальше).
+      jump: 'auto',
       pick: throwMod.escapePick(bot, (tp) => {
         let cost = 0
         for (const h of hs) cost += dangerAt(bot, tp, h)

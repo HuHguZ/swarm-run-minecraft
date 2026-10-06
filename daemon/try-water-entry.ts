@@ -18,22 +18,26 @@ const scenes: Scene[] = [
 ]
 
 export async function runWaterFixture(): Promise<void> {
-  assert.equal(Number(process.env.FARM_SLOT), 31)
-  assert.equal(process.env.ND_WS, 'ws://127.0.0.1:8831'); assert.equal(process.env.MC_USERNAME, 'NeuroFarm31')
+  const slot = Number(process.env.FARM_SLOT)
+  assert.ok(Number.isInteger(slot) && slot >= 1 && slot <= 32 && slot !== 29, 'water fixture: farm slot other than the author map (29)')
+  assert.equal(process.env.ND_WS, `ws://127.0.0.1:${8800 + slot}`); assert.equal(process.env.MC_USERNAME, `NeuroFarm${slot}`)
   assert.ok(process.env.ND_SERVER_LOG)
   const connection: Connection = connect(process.env.ND_WS); await connection.ready
   const kit = createKit({ call: connection.call, heard: connection.heard, logFile: process.env.ND_SERVER_LOG, player: process.env.MC_USERNAME })
-  const command = async (text: string) => { const reply = await kit.cmd(text); assert.ok(reply.ok, `water fixture preparation failed: ${text}: ${reply.why}`) }
+  // Preparation only: a silent reply under farm load is retried (s6-water-series3: one silent /fill).
+  const command = async (text: string) => { let reply = await kit.cmd(text); for (let i = 0; i < 2 && !reply.ok && reply.why === 'silent'; i++) reply = await kit.cmd(text); assert.ok(reply.ok, `water fixture preparation failed: ${text}: ${reply.why}`) }
   const status = async () => connection.call('status', { physics: true })
   const failures: string[] = []
   try {
-    await connection.call('connect'); assert.equal((await status()).detail.server, '127.0.0.1:25631')
+    await connection.call('connect'); assert.equal((await status()).detail.server, `127.0.0.1:${25600 + slot}`)
     await connection.call('stop'); await connection.call('play_mode', { mode: 'free' })
     await command('/gamemode creative'); await kit.ensureWorld('overworld', { tp: '4020.5 145 3600.5' })
     await command('/gamerule keep_inventory false')
     const selected = process.env.SCENE ? scenes.filter(scene => scene.name === process.env.SCENE) : scenes
     assert.ok(selected.length, 'unknown SCENE')
-    for (const scene of selected) {
+    const repeat = Math.max(1, Number(process.env.REPEAT ?? 1))
+    for (const scene of Array.from({ length: repeat }, () => selected).flat()) {
+     try {
       await connection.call('stop'); await command('/gamemode creative')
       await kit.fillExact('overworld', [[4017, 140, 3596], [4032, 242, 3604]], 'air')
       await kit.fillExact('overworld', [[4017, 139, 3596], [4032, 139, 3604]], 'stone')
@@ -55,6 +59,12 @@ export async function runWaterFixture(): Promise<void> {
       let ready = await status()
       for (let tries = 0; tries < 20 && (!ready.detail.physics?.worldLoaded || !ready.detail.physics.onGround || Math.hypot(ready.detail.physics.pos.x - start.x, ready.detail.physics.pos.y - start.y, ready.detail.physics.pos.z - start.z) > .05); tries++) {
         await new Promise<void>(resolve => setTimeout(resolve, 100)); ready = await status()
+        // Preparation only: at 750 TPS residual motion can carry the creative body
+        // off the one-block ledge before survival; place it again (s6-water-auto-series1).
+        if (tries % 5 === 4 && ready.detail.physics?.worldLoaded && Math.hypot(ready.detail.physics.pos.x - start.x, ready.detail.physics.pos.y - start.y, ready.detail.physics.pos.z - start.z) > .05) {
+          await command(`/tp @s 4020.5 ${start.y} 3600.5 -90 0`); await connection.call('wait', { seconds: 1 })
+          await command(`/tp @s ${start.x} ${start.y} ${start.z} -90 0`); ready = await status()
+        }
       }
       const receipt = JSON.stringify({ expected: start, actual: ready.detail.physics })
       assert.equal(ready.detail.physics?.worldLoaded, true, `water arena chunks must be observed before Survival: ${receipt}`)
@@ -69,6 +79,8 @@ export async function runWaterFixture(): Promise<void> {
       const automatic = process.env.AUTO_WATER === '1'
       const action = await connection.call('parkour', { mode: 'waterentry', target: cell, ticks: 160, launch: scene.launch, automatic, timeoutSeconds: 30 })
         .catch(async (error: Error): Promise<Reply> => ({ status: 'error', state: (await status()).state, detail: { ok: false, error: error.message } }))
+      // A failed RPC reply (e.g. a stalled tick wait) carries no detail; record it as a failure.
+      if (!action.detail) action.detail = { ok: false, error: (action as unknown as { error?: string }).error ?? action.status }
       let after = await status()
       const observations: Array<{ isInWater?: boolean; onGround: boolean; velocity: Point; pos: Point; hp: number; ticks?: number }> = []
       const savedBefore = before.detail.physics?.clutch?.stats?.water_saved ?? 0
@@ -97,9 +109,16 @@ export async function runWaterFixture(): Promise<void> {
       const wallMs = Date.now() - began; const clocks = { targetTPS: 750, before: before.state.clock, after: after.state.clock,
         averageServerTPS: before.state.clock?.serverTicks != null && after.state.clock?.serverTicks != null ? (after.state.clock.serverTicks - before.state.clock.serverTicks) * 1000 / Math.max(1, wallMs) : undefined }
       const firstAir = samples.find(sample => !sample.onGround)
-      const row = { physical: true, slot: 31, scene: scene.name, automatic, automaticSaved, observations, preparedDrop: scene.drop, realInitialAirVelocity: firstAir?.velocity, cell, ok, died, clocks, wallMs, before, action, after }
+      const row = { physical: true, slot, scene: scene.name, why: action.detail.why ?? action.detail.error, automatic, automaticSaved, observations, preparedDrop: scene.drop, realInitialAirVelocity: firstAir?.velocity, cell, ok, died, clocks, wallMs, before, action, after }
       const text = JSON.stringify(row); console.log(text); if (process.env.LAB_OUT) fs.appendFileSync(process.env.LAB_OUT, text + '\n')
       if (!ok) failures.push(scene.name)
+     } catch (error) {
+      // A series records a fixture/infrastructure fault (silent command, lost
+      // footing, reconnect) as its own row and continues; a single run still throws.
+      if (repeat === 1) throw error
+      const row = { physical: false, fixtureError: true, scene: scene.name, slot, error: String((error as Error)?.message ?? error).slice(0, 600) }
+      console.log(JSON.stringify(row)); if (process.env.LAB_OUT) fs.appendFileSync(process.env.LAB_OUT, JSON.stringify(row) + '\n')
+     }
     }
     assert.deepEqual(failures, [], `physical water entry failures: ${failures.join(', ')}`)
   } finally { try { await connection.call('stop') } catch {}; connection.close() }

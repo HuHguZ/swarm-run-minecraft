@@ -154,6 +154,70 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
   }
 
 
+  // Лестница на стену (s6b 06.10, javap 1.21.11): Entity.move при шаге >= 1 блока за тик ведёт луч ног по движению
+  // (ClipContext.Block.FALLDAMAGE_RESETTING: #climbable, ягоды, паутина; и вода) и при попадании сбрасывает fallDistance,
+  // затем Entity.checkFallDamage добавляет лишь dy этого тика (не больше 3.92) — посадка через клетку с лестницей
+  // не ранит; медленнее блока за тик тело входит в клетку и LivingEntity.handleOnClimbable тоже сбрасывает падение.
+  // Лестница ставится кликом по видимой боковой грани полной стены в одну из трёх клеток над местом посадки, пока тело
+  // выше клетки (BlockItem.canPlace не пустит тонкую пластину сквозь тело). `ladderBlock(cell, facing)` — блок лестницы.
+  function ladderPlan (options) {
+    const { state: s, world, ladderBlock } = options
+    const sp = options.serverPos || s.pos
+    const probe = copyState(s, IDLE); const path = [probe.pos.clone()]
+    let land = null
+    for (let t = 0; t < (options.maxTicks ?? 40); t++) {
+      simulate(probe, world); path.push(probe.pos.clone())
+      if (probe.isInWater || probe.isInLava) return null
+      if (probe.onGround) { land = probe; break }
+    }
+    if (!land) return null
+    const peak = Math.max(options.peak ?? s.pos.y, s.pos.y)
+    // Клетки у пола достижимы рукой (4.5 от глаз) лишь в последние блоки падения — раньше не считать.
+    if (peak - land.pos.y <= 3 || s.pos.y - land.pos.y > 6) return null
+    const others = othersOf(options.entities, options.selfId)
+    const bot = { entity: { position: s.pos }, entities: {}, blockAt: p => world.getBlock(p) }
+    const eye = sp.offset(0, options.eyeHeight ?? 1.62, 0)
+    const sides = faces.filter(f => f.y === 0)
+    const names = { '1,0': 'east', '-1,0': 'west', '0,1': 'south', '0,-1': 'north' }
+    let best = null
+    for (let k = 0; k <= 2; k++) {
+      const y = Math.floor(land.pos.y + 1e-9) + k
+      // Колонна траектории на высоте клетки (падение почти отвесное; берём точку пути внутри клетки).
+      const at = path.find(q => q.y < y + 1 && q.y >= y - 1e-9) || land.pos
+      const c = new Vec3(Math.floor(at.x), y, Math.floor(at.z))
+      if (!replaceable(world.getBlock(c)) || world.getBlock(c)?.name === 'water' || sp.y < c.y + 1 || s.pos.y < c.y + 1 || occupied(c, others)) continue
+      for (const d of sides) {
+        const ref = c.plus(d); const rb = world.getBlock(ref)
+        if (!full(rb) || options.canReference && !options.canReference(rb)) continue
+        const face = d.scaled(-1)
+        const point = faceAim(bot, ref, face, { eye, range: 4.5, avoid: others })
+        if (!point) continue
+        const facing = names[`${face.x},${face.z}`]
+        const ladder = ladderBlock(c, facing)
+        const virtual = { getBlock: p => key(p) === key(c) ? ladder : world.getBlock(p) }
+        const st = copyState(s, IDLE); let top = peak; let crossed = false
+        for (let t = 1; t <= (options.maxTicks ?? 40); t++) {
+          const from = st.pos.clone(); simulate(st, virtual)
+          if (st.isInWater || st.isInLava) break
+          top = Math.max(top, st.pos.y)
+          // Луч ног этого тика через клетку лестницы: падение заново с точки входа (не выше верха клетки).
+          const lo = Math.min(from.y, st.pos.y); const hi = Math.max(from.y, st.pos.y)
+          const mx = Math.floor((from.x + st.pos.x) / 2); const mz = Math.floor((from.z + st.pos.z) / 2)
+          if (!crossed && mx === c.x && mz === c.z && lo < c.y + 1 && hi >= c.y) { crossed = true; top = Math.min(hi, c.y + 1) }
+          if (st.onGround) {
+            const fall = top - st.pos.y
+            if (crossed && fall <= 3 && (!best || fall < best.fall || fall === best.fall && t < best.landTick)) {
+              const v = point.minus(eye)
+              best = { kind: 'ladder', cell: c, ref, face, point, facing, fall, landTick: t, yaw: Math.atan2(-v.x, -v.z), pitch: Math.atan2(v.y, Math.hypot(v.x, v.z)) }
+            }
+            break
+          }
+        }
+      }
+    }
+    return best
+  }
+
   function landing (s, world, depth = 80) {
     let best = { top: -Infinity }
     for (const dx of [-0.299, 0.299]) for (const dz of [-0.299, 0.299]) {
@@ -173,7 +237,7 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
     }
     return best
   }
-  return { plan, candidates, landing, copyState }
+  return { plan, ladderPlan, candidates, landing, copyState }
 }
 function install (session, opts) {
   const bot = session.bot
@@ -189,7 +253,7 @@ function install (session, opts) {
   const pending = new Map(); const blocked = new Map(); const spent = new Map()
   let reservations = []
   const available = () => selectBlock(bot.inventory.slots, opts.reserve ?? 0, spent)
-  const stats = { placed: 0, confirmed: 0, denied: 0, timeout: 0, landed: 0, saved: 0, no_face: 0, stale: 0, water_plans: 0, water_saved: 0, water_failed: 0 }
+  const stats = { placed: 0, confirmed: 0, denied: 0, timeout: 0, landed: 0, saved: 0, no_face: 0, stale: 0, water_plans: 0, water_saved: 0, water_failed: 0, soft_plans: 0, soft_saved: 0, soft_failed: 0, ladders: 0 }
   const st: any = { stats, pending, api, peak: null, blocks: 0, t: 0, stopped: false, flight: null, path: [], lastDecision: null }
   let scheduled = null; let preparing = false; let lastPrepare = -Infinity; let barAt = -Infinity; let movement = null
   // Клавиши поимённо: у mineflayer bot.controlState — геттеры без enumerable, и
@@ -317,27 +381,39 @@ function install (session, opts) {
       if (plan) {
         own = st.waterPlan = { plan, index: 0, hp: bot.health }
         stats.water_plans++; emit('water_plan', { target: plan.target, ticks: plan.ticks, planningMs: performance.now() - began })
+      } else if (process.env.ND_SOFT_LANDING === '1') {
+        // No water: steer onto a nearby floor that hurts less (hay/honey/slime), when
+        // it beats the floor straight below. Off by default until a native series.
+        const soft = parkour().planNearbySoftLanding(bot, ctx.peak)
+        if (soft) {
+          own = st.waterPlan = { plan: soft, index: 0, hp: bot.health, soft: soft.damage }
+          stats.soft_plans++; emit('soft_plan', { target: soft.target, ticks: soft.ticks, damage: soft.damage, planningMs: performance.now() - began })
+        }
       }
     }
     if (!own) return null
     const excluded = ctx.dead || ctx.lava || ctx.elytra || ctx.riding || ctx.mace || ctx.wind || ctx.dragon || ctx.guardAllow || ctx.mode === 'creative' || ctx.mode === 'spectator'
     const expected = own.index ? own.plan.states[own.index - 1] : null
-    if (excluded || bot.health < own.hp || expected && s.pos.distanceTo(expected.pos) > .65) {
-      stats.water_failed++; emit('water_failed', { target: own.plan.target, at: s.pos, ticks: own.index, why: excluded ? 'owner_changed' : bot.health < own.hp ? 'hurt' : 'physics_diverged' })
+    const allowed = own.soft ?? 0
+    if (excluded || bot.health < own.hp - allowed || expected && s.pos.distanceTo(expected.pos) > .65) {
+      stats[own.soft !== undefined ? 'soft_failed' : 'water_failed']++; emit(own.soft !== undefined ? 'soft_failed' : 'water_failed', { target: own.plan.target, at: s.pos, ticks: own.index, why: excluded ? 'owner_changed' : bot.health < own.hp - allowed ? 'hurt' : 'physics_diverged' })
       st.waterPlan = null; releaseSteering(); return null
     }
     if (own.index >= own.plan.steps.length) {
-      const ok = parkour().inWaterCell(bot, s, own.plan.target) && bot.health >= own.hp && Math.hypot(s.vel.x, s.vel.z) < .04
-      stats[ok ? 'water_saved' : 'water_failed']++; emit(ok ? 'water_saved' : 'water_failed', { target: own.plan.target, at: s.pos, hp: bot.health, ticks: own.index })
+      const soft = own.soft !== undefined
+      const ok = soft ? s.onGround && Math.hypot(s.pos.x - own.plan.target.x, s.pos.z - own.plan.target.z) < .35 && Math.abs(s.pos.y - own.plan.target.y) < .03 && bot.health >= own.hp - allowed
+        : parkour().inWaterCell(bot, s, own.plan.target) && bot.health >= own.hp && Math.hypot(s.vel.x, s.vel.z) < .04
+      const kind = soft ? 'soft' : 'water'
+      stats[`${kind}_${ok ? 'saved' : 'failed'}`]++; emit(`${kind}_${ok ? 'saved' : 'failed'}`, { target: own.plan.target, at: s.pos, hp: bot.health, ticks: own.index })
       st.waterPlan = null; releaseSteering()
-      return ok ? { action: 'none', why: 'existing_water_landed' } : null
+      return ok ? { action: 'none', why: soft ? 'soft_floor_landed' : 'existing_water_landed' } : null
     }
     const step = own.plan.steps[own.index++]
     const previous = st.steering?.previous || controls()
     bot.look(step.yaw, 0, true)?.catch?.(() => {})
     for (const [k, v] of Object.entries(step.control)) bot.setControlState?.(k, v)
     st.steering = { yaw: step.yaw, control: step.control, previous }
-    return { action: 'clutch', why: 'existing_water' }
+    return { action: 'clutch', why: own.soft !== undefined ? 'soft_floor' : 'existing_water' }
   }
   function fire (plan, snapshot, decision) {
     if (st.stopped || !scheduled || st.lastDecision?.action !== 'clutch') return
@@ -391,6 +467,41 @@ function install (session, opts) {
       st.steering = { yaw: plan.yaw, control: plan.control, previous }
     })
   }
+  const ladderState = facing => require('prismarine-block')(bot.registry).fromProperties('ladder', { facing, waterlogged: false }).stateId
+  function fireLadder (plan, snapshot) {
+    if (st.stopped || scheduled !== plan) return
+    cancelScheduled()
+    const pos = bot.entity?.position
+    if (!pos || pos.distanceTo(snapshot) > 1e-7) { stats.stale++; emit('stale'); return }
+    const item = bot.inventory.slots.slice(36, 45).find(i => i?.name === 'ladder')
+    const rb = world.getBlock(plan.ref); const cell = world.getBlock(plan.cell)
+    const others = othersOf(bot.entities, bot.entity.id)
+    const eye = snapshot.offset(0, eyeHeight(), 0)
+    const point = faceAim(bot, plan.ref, plan.face, { eye, range: 4.5, avoid: others })
+    if (!item || !replaceable(cell) || !fullReference(rb) || !point || snapshot.y < plan.cell.y + 1) return
+    const stateId = ladderState(plan.facing)
+    const k = key(plan.cell)
+    const record = { cell: plan.cell, refKey: key(plan.ref), oldStateId: cell.stateId, stateId, sentAt: now(), slot: item.slot, reserved: false, ladder: true }
+    hand.hold(200)
+    hand.as(() => {
+      const d = point.minus(eye)
+      const yaw = Math.atan2(-d.x, -d.z); const pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+      bot.look(yaw, pitch, true)?.catch?.(() => {})
+      bot._client.write('look', { yaw: 180 - yaw * 180 / Math.PI, pitch: -pitch * 180 / Math.PI,
+        onGround: !!bot.entity.onGround, flags: { onGround: !!bot.entity.onGround, hasHorizontalCollision: !!bot.entity.isCollidedHorizontally } })
+      if (bot.quickBarSlot !== item.slot - 36) bot.setQuickBarSlot(item.slot - 36)
+      pending.set(k, record)
+      try {
+        const sent = bot._genericPlace(rb, plan.face, { delta: point.minus(plan.ref), forceLook: 'ignore', swingArm: 'right' })
+        bot.world.setBlockStateId(plan.cell, stateId)
+        Promise.resolve(sent).catch(e => { removePrediction(k, true, 'denied'); emit('send_error', { error: e.message }) })
+      } catch (e) { removePrediction(k, true, 'denied'); emit('send_error', { error: e.message }); return }
+      stats.ladders++; st.ladderPlaced = true
+      if (!st.flight) st.flight = { hp: bot.health, fall: plan.fall, peak: st.peak, started: now(), cells: [] }
+      st.flight.cells.push(record); st.flight.ladder = true
+      emit('ladder_placed', { cell: plan.cell, ref: plan.ref, face: plan.face, facing: plan.facing, fall: plan.fall, landTick: plan.landTick })
+    })
+  }
   st.step = () => {
     if (st.stopped) return { action: 'none', why: 'stopped' }
     st.t++; st.expire(); cancelScheduled()
@@ -405,11 +516,11 @@ function install (session, opts) {
         if (now() - f.landed >= 300) {
           const contact = f.cells.some(r => r.confirmed && world.getBlock(r.cell)?.stateId === r.stateId && Math.abs(e.position.y - r.cell.y - 1) < 1e-6 &&
             e.position.x + 0.3 > r.cell.x && e.position.x - 0.3 < r.cell.x + 1 && e.position.z + 0.3 > r.cell.z && e.position.z - 0.3 < r.cell.z + 1)
-          if (bot.health >= f.hp - 0.01 && !pending.size && contact && !f.denied) { stats.saved++; emit('saved', { hp: bot.health, fall: f.fall }) }
+          if (bot.health >= f.hp - 0.01 && !pending.size && (contact || f.ladder) && !f.denied) { stats.saved++; emit('saved', { hp: bot.health, fall: f.fall, ladder: !!f.ladder }) }
           else emit('damaged_or_unconfirmed', { hp: bot.health, fall: f.fall, pending: pending.size })
-          st.flight = null; st.blocks = 0; st.steering = null
+          st.flight = null; st.blocks = 0; st.steering = null; st.ladderPlaced = false
         }
-      } else st.blocks = 0
+      } else { st.blocks = 0; st.ladderPlaced = false }
       st.peak = e.position.y; prepare()
     } else st.peak = Math.max(st.peak ?? bot._ndFallGuard?.peak ?? e.position.y, e.position.y)
     // Лестница, лоза, леса, паутина сбрасывают падение (LivingEntity.onClimbable →
@@ -425,6 +536,21 @@ function install (session, opts) {
     st._dbg = { top: L.top, water: !!L.water, lava: !!L.lava, bad: !!L.bad, unknown: !!L.unknown, blocks: ctx.blocks, ground: ctx.ground, bucket: ctx.hasBucketBar, mode: ctx.mode, excl: ['dragon', 'wind', 'mace', 'swimming', 'lava', 'intentional', 'guardAllow', 'waterPlaced', 'elytra', 'riding', 'slowFalling', 'levitation', 'climbing'].filter(k => ctx[k]) }
     if (decision.action === 'water' || [ctx.dragon, ctx.wind, ctx.mace, ctx.swimming, ctx.lava, ctx.intentional, ctx.guardAllow, ctx.waterPlaced, ctx.dead].some(Boolean) || ctx.mode === 'creative' || ctx.mode === 'spectator') releaseSteering()
     if (s.isInWater || s.isInLava) { st.peak = null; st.flight = null; st.blocks = 0 }
+    if ((decision.action === 'clutch' || decision.why === 'no_blocks') && !st.ladderPlaced && !preparing && process.env.ND_LADDER_CLUTCH !== '0') {
+      const ladder = bot.inventory.slots.slice(36, 45).find(i => i?.name === 'ladder')
+      const lp = ladder && api.ladderPlan({ state: s, world, peak: st.peak, entities: bot.entities, selfId: e.id, eyeHeight: eyeHeight(),
+        ladderBlock: (cell, facing) => makeBlock(cell, ladderState(facing)), canReference: b => !blocked.has(key(b.position)) })
+      if (lp) {
+        scheduled = lp
+        const snapshot = s.pos.clone()
+        hand.hold(200)
+        bot.look(lp.yaw, lp.pitch, true)?.catch?.(() => {})
+        movement = () => fireLadder(lp, snapshot)
+        bot.once('move', movement)
+        if (opts.afterPacket) opts.afterPacket(bot, () => { if (scheduled === lp) fireLadder(lp, snapshot) })
+        return { action: 'clutch', why: 'ladder' }
+      }
+    }
     if (decision.action !== 'clutch' || st.blocks >= (opts.maxBlocks ?? 3) || preparing || now() - barAt < 300) return decision
     const count = bot.inventory.slots.slice(36, 45).filter(i => i && FILLER.test(i.name)).reduce((n, i) => n + i.count, 0) - (opts.reserve ?? 0) - [...spent.values()].reduce((n, v) => n + v, 0)
     const p = api.plan({ state: s, world, peak: st.peak, blockCount: count, maxBlocks: (opts.maxBlocks ?? 3) - st.blocks, entities: bot.entities, selfId: e.id, eyeHeight: eyeHeight(),

@@ -7,7 +7,7 @@ const gameClock = require('./src/game-clock')
 //   уклон     — то же, но у NeuroDown щита нет: шаг из-под булавы;
 //   сброс     — NeuroDown2 стоит у дыры в полу, NeuroDown толкает зарядом ветра;
 //   столб     — NeuroDown2 на столбе в 5 блоков, NeuroDown сбивает зарядом.
-//   A=ws://127.0.0.1:8791 B=ws://127.0.0.1:8792 node try-mace.js [сцены через запятую]
+//   A=ws://127.0.0.1:88NN B=ws://127.0.0.1:89NN MC_PORT=256NN node try-mace.js [сцены через запятую]
 const WebSocket = require('ws')
 
 // Both bots share server ticks; keep the first connection as the time source.
@@ -33,8 +33,9 @@ function client (url) {
   return { ws, ready, call }
 }
 const sleep = ms => gameClock.sleep(ms)
-const A = client(process.env.A || 'ws://127.0.0.1:8791')
-const B = client(process.env.B || 'ws://127.0.0.1:8792')
+require('./arms-guard').farmOnly({ ws: [process.env.A, process.env.B] })
+const A = client(process.env.A)
+const B = client(process.env.B)
 async function cmd (text) { await A.call('say', { text }); await sleep(60) }
 
 const X = 400; const Y = 150; const Z = 400

@@ -47,7 +47,8 @@ function botFor (version = '1.21.11') {
       isCollidedVertically: false, elytraFlying: false, yaw: 0, pitch: 0, effects: {} as Record<string, any>, attributes: {} as Record<string, any> }
   }
 }
-const plain = state => ({ ...state, pos: { ...state.pos }, vel: { ...state.vel }, control: { ...state.control } })
+// The reviewed powder snow model (tick-plugins) adds its own two fields; everything else stays native.
+const plain = ({ ndInPowderSnow, ndLeatherBoots, ...state }) => ({ ...state, pos: { ...state.pos }, vel: { ...state.vel }, control: { ...state.control } })
 const boots = level => ({ nbt: { type: 'compound', value: { Enchantments: { type: 'list', value: { type: 'compound', value: [{ id: { type: 'string', value: 'minecraft:depth_strider' }, lvl: { type: 'short', value: level } }] } } } } })
 
 test('scoped physics caches native metadata per version without retaining effects or equipment', () => {

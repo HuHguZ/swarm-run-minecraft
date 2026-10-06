@@ -8,6 +8,11 @@ const { performance } = require('node:perf_hooks')
 const wall: any = { now: () => Date.now(), monotonic: () => performance.now(), setTimeout, clearTimeout, setInterval, clearInterval, setImmediate, clearImmediate }
 wall.sleep = ms => new Promise<any>(resolve => wall.setTimeout(resolve, ms))
 const TICK_MS = 50
+// Lockstep farm (ND_LOCKSTEP=1, farm/FarmLockstep.java): the server runs a tick only after this client's tick_end
+// for all but a small window, and sends update_time every tick. A confirmed age is then a grant: pulse each tick at
+// once with physics, at most `predictionTicks` ahead. Only a lag past this means the server's stall valve let the
+// world run on without us: resynchronize by skipping, as an ordinary farm clock does.
+const LOCKSTEP_RESYNC_TICKS = 20
 let nextId = 0
 
 class GameClock extends EventEmitter {
@@ -38,9 +43,10 @@ class GameClock extends EventEmitter {
   declare pumpImmediate: any
   declare nextPulseAt: any
   declare cleanups: any
+  declare lockstep: boolean
   declare emit: any
 
-  constructor ({ manual = false, epoch = wall.now(), predictionTicks = 20 }: any = {}) {
+  constructor ({ manual = false, epoch = wall.now(), predictionTicks = 20, lockstep = false }: any = {}) {
     super()
     this.id = `${process.pid}:${++nextId}`
     this.epoch = epoch
@@ -69,6 +75,7 @@ class GameClock extends EventEmitter {
     this.pumpImmediate = false
     this.nextPulseAt = null
     this.cleanups = []
+    this.lockstep = lockstep
   }
 
   now () { return this.epoch + this.ticks * TICK_MS }
@@ -110,7 +117,7 @@ class GameClock extends EventEmitter {
     return { id: this.id, ticks: this.ticks, gameMs: this.now(), elapsedMs: this.ticks * TICK_MS,
       tickRate: this.tickRate, effectiveRate: this.effectiveRate, frozen: this.frozen, stepping: this.steps,
       serverTicks: this.serverTicks, lagTicks: this.serverTicks === null ? null : Math.max(0, this.serverTicks - this.ticks),
-      wallMs: wall.now(), running: this.running && !this.disposed }
+      wallMs: wall.now(), running: this.running && !this.disposed, ...(this.lockstep ? { lockstep: true } : {}) }
   }
   setState ({ tick_rate = this.tickRate, is_frozen = this.frozen }: any = {}) {
     if (!Number.isFinite(tick_rate) || tick_rate < 1 || tick_rate > 10000) throw new RangeError('tick rate must be 1..10000')
@@ -153,8 +160,10 @@ class GameClock extends EventEmitter {
     if (this.nextPulseAt === null) this.nextPulseAt = wall.monotonic() + 1000 / this.effectiveRate
     // Confirmed backlog grants time, not several physical steps in one wall
     // frame (Air41). Followers and explicit frozen steps still replay grants.
-    const paced = this.predictionTicks > 0 && !this.frozen
-    const catchingUp = !paced && this.serverTicks !== null && this.ticks < this.serverTicks
+    // Lockstep never paces by the measured rate: the world waits for us, so that rate would only ratchet down.
+    const lockstep = this.lockstep && !this.frozen && this.serverTicks !== null
+    const paced = this.predictionTicks > 0 && !this.frozen && !lockstep
+    const catchingUp = lockstep || (!paced && this.serverTicks !== null && this.ticks < this.serverTicks)
     const deadline = this.nextPulseAt
     const remaining = deadline - wall.monotonic()
     // Windows timers can wake only every ~16 ms. Sleep for long waits, then
@@ -194,7 +203,7 @@ class GameClock extends EventEmitter {
     if (this.frozen) this.steps--
     // Confirmed world time may outpace a CPU-blocked producer. Reconcile its
     // elapsed ticks, then run due intervals once without replaying physics.
-    if (!this.manual && !this.frozen && this.predictionTicks > 0 && this.serverTicks > this.ticks + 1) this.ticks = this.serverTicks - 1
+    if (!this.manual && !this.frozen && this.predictionTicks > 0 && this.serverTicks > this.ticks + (this.lockstep ? LOCKSTEP_RESYNC_TICKS : 1)) this.ticks = this.serverTicks - 1
     this.advanceTicks(1)
     return true
   }
@@ -280,6 +289,9 @@ class GameClock extends EventEmitter {
     listen(bot._client, 'step_tick', p => this.step(p.tick_steps))
     listen(bot._client, 'update_time', p => this.syncAge(p.age))
     listen(bot, 'respawn', () => {
+      // Lockstep keeps its anchor: re-anchoring a lagging client at its own tick shifts it toward the server's window
+      // (a lockup until the stall valve). A truly different age still re-anchors in syncAge.
+      if (this.lockstep) return
       this.age = null; this.serverTicks = null; this.serverAt = null; this.sampleAt = null; this.sampleAge = null; this.pacingSampled = false
       this.observationAt = null
       this.effectiveRate = this.tickRate
@@ -316,7 +328,14 @@ function activate (clock) {
 function bind (bot) {
   if (bot.ndClock) return activate(bot.ndClock)
   if (active && !active.disposed) active.dispose()
-  return activate(new GameClock({ epoch: Math.max(wall.now(), active?.now() ?? 0) }).attach(bot))
+  return activate(new GameClock({ epoch: Math.max(wall.now(), active?.now() ?? 0), ...lockstepOptions() }).attach(bot))
+}
+// The farm sets ND_LOCKSTEP=1 for daemons of slots raised with `up --lockstep` (their server runs the tick gate).
+function lockstepOptions (env = process.env) {
+  if (env.ND_LOCKSTEP !== '1') return {}
+  const ahead = env.ND_LOCKSTEP_AHEAD === undefined ? 2 : Number(env.ND_LOCKSTEP_AHEAD)
+  if (!Number.isSafeInteger(ahead) || ahead < 1 || ahead > 20) throw new RangeError('ND_LOCKSTEP_AHEAD must be 1..20 ticks')
+  return { lockstep: true, predictionTicks: ahead }
 }
 function live () { return active && !active.disposed ? active : null }
 const now = () => live()?.now() ?? wall.now()
@@ -349,5 +368,5 @@ function follow (s) {
   if (s.frozen) c.step(Math.max(0, c.serverTicks - c.ticks))
   c.start()
 }
-module.exports = { GameClock, TICK_MS, wall, bind, activate, now, serverNow, observationNow, snapshot, follow, changes, sleep,
+module.exports = { GameClock, TICK_MS, wall, bind, activate, lockstepOptions, now, serverNow, observationNow, snapshot, follow, changes, sleep,
   setTimeout: setGameTimeout, setInterval: setGameInterval, clearTimeout: clearGameTimer, clearInterval: clearGameTimer }

@@ -112,7 +112,7 @@ async function main () {
   await conn.ready
   await call('connect')
   await call('stop')
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await kit.setDifficulty('peaceful')
   await kit.gamerule('keep_inventory', 'true')
   await kit.gamerule('send_command_feedback', 'true')

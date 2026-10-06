@@ -313,3 +313,18 @@ test('ranged guard requires visible draw and actual worn availability, and does 
     assert.equal((await rangedDuelFixture(options)).raises.includes(true), false, JSON.stringify(options))
   }
 })
+
+test('a threat that passes before the server confirms the raised shield ends the Shield, it does not fail it (farm 06.10)', async () => {
+  const a = actor()
+  let result: any, error: any
+  try {
+    const system = new a.tactics.TacticalSystem(a.session)
+    const pending = system.execute({ id: 'Shield', score: 80 }, a.ctl, a.tactics.observeTactics(a.session))
+      .then((r: any) => { result = r }, (e: any) => { error = e })
+    await turn()
+    a.bot.entities = {}
+    for (let tick = 0; tick < 200 && result === undefined && error === undefined; tick++) { a.c.advanceTicks(1); await turn() }
+    assert.equal(error, undefined, error?.message)
+    assert.equal(result?.shielded, false)
+  } finally { a.close() }
+})

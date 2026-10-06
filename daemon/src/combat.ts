@@ -1537,7 +1537,9 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
   // оружие, а его цикл — безопасное окно для конкретного лечебного предмета.
   const potionHeal = bot.inventory.items().some(i => /potion$/.test(i.name) && ['heal', 'regen'].includes(pvp.potionRole(pvp.potionOf(i))))
   const preparation = guard.safety.check({ target: entity, phase: 'start', minHealth: Math.max(8, retreatAtHealth), instantHeal: potionHeal, repelLava })
-  if (!lastStand && preparation.action !== 'fight') {
+  // Арена с игроком (arena задан): бой до конца, как arenaStay в pvp.duel — без оружия и еды тоже (гонка вооружений, s7).
+  const arenaDuel = !!arena && isPlayerEntity(entity) && preparation.action !== 'dead'
+  if (!lastStand && !arenaDuel && preparation.action !== 'fight') {
     await guard.raise(false)
     if (FIGHT_NOAVOID()) bot._ndNoMobAvoid = false
     const escape = await survival.disengage(session, ctl, () => [entity, ...flee.hostilesAround(bot, 16).map(h => h.e)])

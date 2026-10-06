@@ -57,8 +57,9 @@ function model (strength, sprintExtra = 0) {
 }
 
 ;(async () => {
-  const A = client(process.env.ND_WS || 'ws://127.0.0.1:8781')
-  const B = client(process.env.ND_WS2 || 'ws://127.0.0.1:8782')
+  require('./arms-guard').farmOnly({ ws: [process.env.ND_WS, process.env.ND_WS2] })
+  const A = client(process.env.ND_WS)
+  const B = client(process.env.ND_WS2)
   try {
     const m1 = model(0.4)
     const m2 = model(0.4, 0.5)

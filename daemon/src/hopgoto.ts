@@ -1,7 +1,7 @@
 'use strict'
 const gameClock = require('./game-clock')
 // Жемчуг как ход goto (TODO.md «Жемчуг как перемещение», п. 1, общий ход; поток movement, 02.10.2026).
-// Включается параметром goto { pearl: true | {reserve, hpMin, hpSec, minGain, minShare, maxHops} } или ND_PEARL_GOTO=1.
+// Включается параметром goto { pearl: true | {reserve, hpMin, hpSec, minGain, minShare, maxHops, jump} } или ND_PEARL_GOTO=1.
 //
 // Решение — по НАСТОЯЩЕМУ пешему пути: A* pathfinder'а считаем заранее (по кускам, не блокируя физику), время пути
 // — по его узлам (pathSeconds), а не по прямой. Жемчуг — pearl-hop.planHop (посадка у линии на цель, проверка
@@ -65,7 +65,10 @@ function options (p) {
     minGain: o.minGain ?? 4,
     minShare: o.minShare ?? 0.2,
     maxHops: o.maxHops ?? 4,
-    planMs: o.planMs ?? 3000
+    planMs: o.planMs ?? 3000,
+    // Бросок в прыжке (06.10): 'run' — с места, в прыжке или с разбега, что долетает; 'stand' — без разбега;
+    // null — только с места. ND_PEARL_JUMP=0 — выключить.
+    jump: o.jump !== undefined ? o.jump : process.env.ND_PEARL_JUMP === '0' ? null : 'run'
   }
 }
 
@@ -112,7 +115,7 @@ async function maybeHop (session, ctl, goalXYZ, goal, opt: any = {}) {
   log(line + ' — бросаю')
   try { bot.pathfinder.setGoal(null) } catch {}
   const hop = await pearlHop.hopTo(bot, tgt, {
-    reserve: o.reserve, hpMin: o.hpMin, hpSec: o.hpSec, minGain: o.minGain, maxHops: o.maxHops, arriveR: 3,
+    reserve: o.reserve, hpMin: o.hpMin, hpSec: o.hpSec, minGain: o.minGain, maxHops: o.maxHops, arriveR: 3, jump: o.jump,
     walkSec, abortIf: () => !!(ctl && ctl.aborted), log: (m) => log(m)
   })
   return { hopped: hop.hops > 0, why: hop.stop || null, walkSec, gain, hop: { hops: hop.hops, pearls: hop.pearls, hpLost: hop.hpLost, misses: hop.misses, ms: hop.ms } }

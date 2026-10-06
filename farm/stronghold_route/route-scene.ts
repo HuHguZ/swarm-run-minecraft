@@ -36,7 +36,7 @@ async function main () {
   await call('connect')
   await call('stop')
   // Ровно перед независимым прогоном, подтверждение scene-kit в server log.
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', 'true')

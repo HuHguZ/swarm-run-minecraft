@@ -206,6 +206,9 @@ async function plan (g, from, goal, opts: any = {}) {
 // from — клетка ног {x,y,z}; goal — {x, y, z, r (по горизонтали, по умолчанию 0), dy (допуск по высоте, 0)}.
 // opts: maxNodes, weight (эвристика), blocks (сколько можно поставить: мост, столб), fireproof (пол из магмы), partial.
 async function planFull (g, from, goal, opts: any = {}) {
+  // Гаст в виду (opts.expoMul, routeTo) — открытые шаги дороже: штрек в толще вместо прогулки под шарами (s1-LB-3/LB-4 06.10:
+  // «fireballed by Ghast» на 3–4-й мин подхода к крепости; post27/post32 — лава после отбрасывания гастом).
+  const EXPO = W.expo * (opts.expoMul || 1); const OPEN_W = W.open * (opts.expoMul || 1)
   const t0 = gameClock.wall.now()
   const bounded = opts._deadline != null
   const deadline = opts._deadline ?? Infinity
@@ -316,8 +319,8 @@ async function planFull (g, from, goal, opts: any = {}) {
         for (const [dx, dz] of DIRS) if (pass(x + dx, y, z + dz) || pass(x + dx, y + 1, z + dz)) sides++
         const ex = sides >= 2 || pass(x, y + 2, z)
         if (ex) {
-          tax += W.expo
-          if (open(x, y, z)) tax += W.open
+          tax += EXPO
+          if (open(x, y, z)) tax += OPEN_W
           if (edge(x, y, z)) tax += W.edge
           for (const Z of ZS) if (x >= Z[0] && x <= Z[3] && y >= Z[1] && y <= Z[4] && z >= Z[2] && z <= Z[5]) { tax += ZX; break }
           for (const Z of HOT) if (x >= Z[0] && x <= Z[3] && y >= Z[1] && y <= Z[4] && z >= Z[2] && z <= Z[5]) { tax += Z[6]; break }
@@ -381,8 +384,8 @@ async function planFull (g, from, goal, opts: any = {}) {
     }
     if (!expo && !(nx === cx && nz === cz) && pass(nx, ny + 2, nz)) expo = true
     if (expo) {
-      cost += W.expo
-      if (open(nx, ny, nz)) cost += W.open
+      cost += EXPO
+      if (open(nx, ny, nz)) cost += OPEN_W
       if (edge(nx, ny, nz)) cost += W.edge
       // Зоны (бастион: двор с брутами и злыми пиглинами) — открытое там втридорога, идём сквозь стены.
       for (let zi = 0; zi < ZS.length; zi++) { const Z = ZS[zi]; if (nx >= Z[0] && nx <= Z[3] && ny >= Z[1] && ny <= Z[4] && nz >= Z[2] && nz <= Z[5]) { cost += ZX; break } }
@@ -1025,10 +1028,29 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   try {
   let lastFrom = null; let sameFrom = 0
   const planCap = p.maxPlans ?? (12 + Math.ceil(Math.hypot(goal.x - bot.entity.position.x, goal.z - bot.entity.position.z) / 48))
+  // Гаст в 96 бл. с лучом к нам (раз в план): дальнобойный, выше пола — опасен на любом открытом шаге, не по расстоянию.
+  const ghastSeen = () => {
+    try {
+      const P = require('./perception')
+      // …и ифриты с лучом в 24 бл.: выход от спавнера открытым ходом убивал (s1-LI-7 06.10: 6 стержней, 10 очей, ne_route из норы у
+      // спавнера — смерть на первом шаге).
+      return (Object.values(bot.entities || {}) as any[]).some((e: any) => e && e.position && e.isValid !== false && (
+        e.name === 'ghast' && e.position.distanceTo(bot.entity.position) < 96 && P.raySees(bot, P.eyePos(bot), e.position.offset(0, 2, 0)) ||
+        e.name === 'blaze' && e.position.distanceTo(bot.entity.position) < 24 && P.raySees(bot, P.eyePos(bot), e.position.offset(0, 1.2, 0))))
+    } catch { return false }
+  }
+  // У спавнера ифритов (≤ 28 бл. по памяти) — открытое дороже всегда: из норы у спавнера ифриты лучом не видны, план выводил
+  // в открытый зал (s1-LI-7).
+  const nearSpawner = () => {
+    try {
+      const sp = ((session.journal && session.journal.state && session.journal.state.places) || {})['спавнер блейзов']
+      return !!sp && Math.hypot(sp.x - bot.entity.position.x, sp.z - bot.entity.position.z) < 28 && Math.abs(sp.y - bot.entity.position.y) < 20
+    } catch { return false }
+  }
   const planOptions = blocks => ({ solidFloor: !!p.solidFloor, maxNodes: p.maxNodes, maxMs: p.maxPlanMs, blocks: Math.min(24, blocks), fireproof: st.fireproof, partial: true, zone: p.zone, zones: bastionZones(session), zoneExpo: p.zoneExpo,
     digWaitSeconds: receiptCostFor(session).costs.seconds(receiptCostFor(session).context),
     alarm: () => ctl.aborted || !!session.reflex || (process.env.ND_GUARD_REFLEX === '0' && process.env.ND_GUARD !== '0' && !!require('./ne-guard').hot(bot)),
-    dangers: liveDangers(session), hot: [...(p.hot || []), ...spawnerHot(session, goal, st.fireproof)] })
+    dangers: liveDangers(session), hot: [...(p.hot || []), ...spawnerHot(session, goal, st.fireproof)], expoMul: ghastSeen() || nearSpawner() ? 3 : 1 })
   const planLog = (pl, from, speculative) => log('план', { from: xyz(from), goal, leg: pl.leg, more: pl.more, prefetched: speculative, ok: pl.ok, steps: pl.steps, digs: pl.digs, expo: pl.expo, risk: pl.risk || 0, cost: pl.cost, digWaitSeconds: pl.digWaitSeconds, nodes: pl.nodes, ms: pl.ms, why2: pl.why2, why: pl.ok ? undefined : pl.why,
     head: (pl.path || []).slice(0, pl.steps <= 12 ? 12 : 4).map(m => `${m.kind}@${m.to.x},${m.to.y},${m.to.z}`).join(' ') })
   { const f0 = feetCell(bot); own.add(`${f0.x},${f0.y},${f0.z}`); own.add(`${f0.x},${f0.y + 1},${f0.z}`) }

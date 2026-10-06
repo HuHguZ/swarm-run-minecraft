@@ -25,16 +25,24 @@ const string = (value: unknown): string | undefined => typeof value === 'string'
 export function normalizeSkillSample(value: unknown, legacyTps?: number): CostSample | null {
   const row = record(value)
   const before = record(row.before)
+  const after = record(row.after)
+  // Graph strategy records carry the observed WorldState after the attempt: alive=false is a death, alive=true survival.
+  const death = typeof row.death === 'boolean' ? row.death : row.level === 'strategy' && typeof after.alive === 'boolean' ? !after.alive : undefined
   const sample: CostSample = { strategy: string(row.strategy), skill: string(row.skill), stage: string(row.stage), kind: string(row.kind),
     level: string(row.level), ticks: number(row.ticks), sec: number(row.sec), seconds: number(row.seconds),
     clock: string(row.clock), tickRate: number(row.tickRate), outcome: string(row.outcome),
-    ok: row.ok === true, death: typeof row.death === 'boolean' ? row.death : undefined }
-  if (typeof before.dim === 'string' || number(before.hp) !== undefined) sample.before = { dim: string(before.dim), hp: number(before.hp) }
+    ok: row.ok === true, death }
+  const dim = string(before.dim) ?? string(before.dimension), hp = number(before.hp) ?? number(before.health)
+  if (dim !== undefined || hp !== undefined) sample.before = { dim, hp }
   if (!sampleKey(sample)) return null
   const ticks = durationTicks(sample, legacyTps)
   if (ticks === null) return null
+  // Graph strategy records: what the attempt changed in WorldState resources (calibrates PARTIAL progress in the simulator).
+  const had = record(before.resources), has = record(after.resources)
+  const gained = row.level === 'strategy' && Object.keys(has).length ? Object.fromEntries([...new Set([...Object.keys(had), ...Object.keys(has)])]
+    .map(name => [name, (number(has[name]) ?? 0) - (number(had[name]) ?? 0)]).filter(([, delta]) => delta !== 0)) : undefined
   return { strategy: sample.strategy, skill: sample.skill, stage: sample.stage, kind: sample.kind, level: sample.level,
-    ticks, ok: sample.ok, outcome: sample.outcome, death: sample.death, before: sample.before }
+    ticks, ok: sample.ok, outcome: sample.outcome, death: sample.death, before: sample.before, ...(gained ? { gained } : {}) }
 }
 
 function knownLegacyRate(directory: string): number | undefined {
@@ -80,7 +88,7 @@ export function collectCosts(directories: readonly string[], root = resolve(__di
 
 function main(args: string[]): void {
   if (args.includes('--help')) {
-    console.log('node farm/strategy-costs.js [папки с *.skills.jsonl] [--out daemon/strategy-costs.json]\nБез папок: сохранённые day05r. Неизвестные wall-clock секунды и нулевые действия исключаются.')
+    console.log('node farm/strategy-costs.js [папки с *.skills.jsonl] [--out daemon/strategy-costs.json]\nБез папок: сохранённые day05r, граф-прогоны graph-ne-* и полные прогоны Ада s1-full* (раунд 06.10). Неизвестные wall-clock секунды и нулевые действия исключаются.')
     return
   }
   const root = resolve(__dirname, '..')
@@ -94,7 +102,9 @@ function main(args: string[]): void {
   }
   if (!directories.length) {
     const results = resolve(root, 'farm/results')
-    directories.push(...readdirSync(results, { withFileTypes: true }).filter(entry => entry.isDirectory() && /^day05r-rt[1-9][ab]$/.test(entry.name)).map(entry => resolve(results, entry.name)))
+    // Legacy stage telemetry (day05r, 20 TPS) plus graph runs at 750 TPS: graph-ne-* and the natural Nether runs s1-full* (not
+    // s1-post*: their kit is given by commands).
+    directories.push(...readdirSync(results, { withFileTypes: true }).filter(entry => entry.isDirectory() && /^(?:day05r-rt[1-9][ab]|graph-ne-.+|s1-full\d+)$/.test(entry.name)).map(entry => resolve(results, entry.name)))
   }
   if (!directories.length) throw new Error('No retained telemetry directories found')
   const dataset = collectCosts(directories, root)

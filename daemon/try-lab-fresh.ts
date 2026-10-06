@@ -87,7 +87,7 @@ function reached (s, text) {
 
 async function scene () {
   // Сиды мира и копии мира независимы только со сброшенными последовательностями ГСЧ (AGENTS.md: ферма).
-  await kit.cmd('/random reset *')
+  await kit.randomReset()
   await kit.cmd('/gamemode survival')
   await kit.setDifficulty('normal')
   // Правило пользователя 02.10: в боевом режиме спидрана инвентарь при смерти не сохраняется — смерть = провал прогона.

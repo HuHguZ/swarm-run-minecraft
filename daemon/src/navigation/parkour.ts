@@ -1,8 +1,8 @@
 import { Vec3 } from 'vec3'
-import { bodyBox, bodyClear, containsWater, dimensions, groundedHazardClear, shapeBoxes, standPositions, supportAt, waterEntries, type CollisionBlock, type CollisionWorld, type Point } from './geometry'
-import { detour } from './shape-detour'
+import { bodyBox, bodyClear, containsWater, dimensions, groundedHazardClear, invalidateStands, shapeBoxes, standPositions, supportAt, waterEntries, type CollisionBlock, type CollisionWorld, type Point } from './geometry'
+import { clearanceMargin, detour } from './shape-detour'
 import { hasFallMitigation, landingDamage } from './landing'
-import { supportRoute, landingKey, transitionKey, onClimbable, climbColumn, type LandingOption, type RoutingDiagnostics } from './support-route'
+import { supportRoute, forgetCell, landingKey, transitionKey, onClimbable, climbColumn, highRidge, WOOD_DOOR, type LandingOption, type RoutingDiagnostics } from './support-route'
 
 export interface Control { forward: boolean; back: boolean; left: boolean; right: boolean; jump: boolean; sprint: boolean; sneak: boolean }
 export interface State {
@@ -34,7 +34,31 @@ export interface MovementBot extends CollisionWorld {
 }
 export interface Cancellation { aborted: boolean; onAbort?: Array<() => void> }
 export interface PlanningDiagnostics { why?: string; frames: number; profiles: number; closest?: { pos: Point; vel: Point; onGround: boolean; distance: number }; workMs?: number; reboundCeiling?: number; momentum?: { runway: Point; entry: Point; contact: Point; contactTick: number } }
-export interface JumpOptions { beam?: number; maxTicks?: number; tolerance?: number; web?: boolean; sprint?: boolean; allowWalk?: boolean; planningMs?: number; diagnostics?: PlanningDiagnostics; bounce?: Point; climb?: Point; maxFallDamage?: number }
+/** `maxFrames` bounds planning by native forecast ticks: deterministic at any server tick rate and machine load. `planningMs` is a wall-clock cap. */
+export interface JumpOptions { beam?: number; maxTicks?: number; tolerance?: number; web?: boolean; sprint?: boolean; allowWalk?: boolean; planningMs?: number; maxFrames?: number; diagnostics?: PlanningDiagnostics; bounce?: Point; chain?: Point[]; climb?: Point; maxFallDamage?: number }
+/** Forecast-tick budget of one routed landing (≈180 ms of the former wall budget on an idle core). */
+export const ROUTE_FRAMES = 6000
+/** Default forecast-frame cap of one standalone jump (a wall-around needs ~31k): deterministic, never unbounded. */
+export const JUMP_FRAMES = 60000
+/**
+ * Game-time horizon readers see on a live ownership marker. A marker is valid
+ * while its owner holds it: every owner deletes it on exit, and position (0.1
+ * block from the last observed or next forecast frame) and health void it at
+ * once. Its `until` therefore never lapses by game time alone: at 750 TPS the
+ * client can run one physics frame per 11+ server ticks (Author49: a refreshed
+ * 500 ms marker lapsed between two frames of a jump over lava, the reflex took
+ * the body and released its keys — it fell into the lava and died).
+ */
+export const FORECAST_TTL_MS = 2000
+/** Ownership marker of a verified native trajectory, live until its owner removes it. */
+export function forecastOwner(from: Point, hp: number, next: Point = from): NonNullable<MovementBot['_ndParkourForecast']> {
+  const clock = require('../game-clock') as { now(): number }
+  return { from: { ...from }, next: { ...next }, hp, get until() { return clock.now() + FORECAST_TTL_MS } }
+}
+/** A budget-refused route edge is retried once with this many times the frames, after cheaper alternatives. */
+/** Radius of the one-off wide support graph when the 24-block disc cannot reach the goal. */
+const WIDE_RADIUS = 40
+const DEFERRED_SCALE = Number(process.env.ND_ROUTE_DEFERRED_SCALE ?? 4); const DEFERRED_COST = Number(process.env.ND_ROUTE_DEFERRED_COST ?? 8)
 export interface JumpPlan { steps: Step[]; states: State[]; target: Point; ticks: number; fall?: { damage: number; support: Point; supportName: string; tick: number; pos: Point } }
 interface TrajectorySample {
   tick: number; pos: Point; velocity: Point; onGround: boolean; hp?: number;
@@ -68,6 +92,41 @@ export function visibleLanding(bot: MovementBot, target: Point, geometry: Collis
   try { return !bot.world.raycast(from, delta.normalize(), distance, (block, iterator) => !!block && iterator.intersect(block.shapes, block.position)) } catch { return false }
 }
 function simulator(bot: MovementBot) { return (bot._ndSimOrig ?? bot.physics.simulatePlayer).bind(bot.physics) }
+const reboundApexes = new WeakMap<object, Map<string, number>>()
+/**
+ * Highest feet Y after one unobstructed rebound from this spring, for a walk-off
+ * or a jump from `fromY`. Vertical integration does not depend on horizontal
+ * travel; any wall can only lower it. Native integrator over the spring layer only.
+ */
+export function reboundApex(bot: MovementBot, spring: Point, fromY: number, jump: boolean): number {
+  const support = supportAt(bot, spring, .04)
+  if (support?.block.name !== 'slime_block' || fromY < support.top) return -Infinity
+  const cache = reboundApexes.get(bot.physics) ?? new Map<string, number>()
+  reboundApexes.set(bot.physics, cache)
+  const key = `${support.top},${Math.round((fromY - support.top) * 4096)},${jump}`
+  const known = cache.get(key)
+  if (known !== undefined) return known
+  const slime = support.block; const layer = Math.floor(slime.position.y)
+  const world = { getBlock: (p: Vec3) => { const q = p.floored(); return q.y === layer ? Object.assign(Object.create(Object.getPrototypeOf(slime)) as CollisionBlock, slime, { position: q }) : null } }
+  const state = new PlayerState(bot, controls()); const sim = simulator(bot)
+  state.pos = new Vec3(Math.floor(spring.x) + .5, fromY, Math.floor(spring.z) + .5); state.vel = new Vec3(0, 0, 0)
+  state.onGround = jump; state.jumpTicks = 0; state.jumpQueued = false
+  let bounced = false; let apex = -Infinity
+  for (let tick = 0; tick < 400; tick++) {
+    state.control = controls({ jump: jump && tick === 0 }); sim(state, world)
+    if (!bounced) bounced = state.onGround && state.vel.y > 0
+    else if (state.vel.y > 0) apex = Math.max(apex, state.pos.y)
+    else { apex = Math.max(apex, state.pos.y); break }
+  }
+  cache.set(key, apex)
+  return apex
+}
+/** Feet apex after a spring chain: each later spring is entered falling from the previous apex. */
+export function chainApex(bot: MovementBot, springs: readonly Point[], fromY: number, jump: boolean): number {
+  let y = fromY
+  for (const [i, spring] of springs.entries()) y = reboundApex(bot, spring, y, i === 0 && jump)
+  return y
+}
 function safeFallCost(bot: MovementBot, damage: number): boolean {
   try {
     const tactical = bot._ndReflexSession?.tactics?.snapshot()
@@ -76,7 +135,17 @@ function safeFallCost(bot: MovementBot, damage: number): boolean {
     return safety.action === 'fight' && safety.threats.length === 0 && (bot.health ?? 0) - damage > safety.threshold
   } catch { return false }
 }
-function fallBudget(bot: MovementBot, requested?: number): number { return requested === 1 && safeFallCost(bot, 1) ? 1 : 0 }
+/**
+ * Accepted fall damage of one planned landing. 1 HP: only onto a mitigating floor (hay, honey) from a walk-off.
+ * 2..MAX_FALL_DAMAGE (explicit, e.g. a map drop with no mitigator — CP28 house → islands is 6–7 blocks): any
+ * non-hazard floor, still only with full safety (no threats, health above the combat-safety threshold after it)
+ * and the typed fall damage receipt at the forecast landing.
+ */
+export const MAX_FALL_DAMAGE = 4
+function fallBudget(bot: MovementBot, requested?: number): number {
+  const want = Math.min(MAX_FALL_DAMAGE, Math.floor(requested ?? 0))
+  return want >= 1 && safeFallCost(bot, want) ? want : 0
+}
 export function simulatePlan(bot: MovementBot, steps: readonly Step[], observe?: (state: State) => void, initial?: State): State {
   const state = initial ? clone(initial) : new PlayerState(bot, controls()); const world = worldOf(bot); const sim = simulator(bot)
   for (const step of steps) { state.yaw = step.yaw; state.control = { ...step.control }; sim(state, world); observe?.(state) }
@@ -107,23 +176,48 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
   const sim = simulator(bot); const geometry = geometryOf(bot, world)
   const base = new PlayerState(bot, controls()); let slice = performance.now() + .25
   const budget = fallBudget(bot, opts.maxFallDamage)
-  const reboundRises = new Map<number, number>()
+  const reboundRises = new Map<number, number>(); let observedCeiling = -Infinity
   const contact = opts.bounce ?? opts.climb
+  // Springs in contact order: a chain falls from one rebound onto the next slime
+  // (CP25: sponge top → slime 149 → slime 148 → plateau 151).
+  const springs = opts.bounce ? [opts.bounce, ...(opts.chain ?? [])] : []
+  // A launch family whose unobstructed native rebound stays below the landing
+  // cannot reach it with any run-up or steering; refuse it before enumeration.
+  const springLaunch = opts.bounce ? [false, true].filter(jump => chainApex(bot, springs, base.pos.y, jump) + (bot.physics.stepHeight ?? 0) >= target.y) : []
+  if (opts.bounce && !springLaunch.length) {
+    if (opts.diagnostics) { opts.diagnostics.why = 'rebound_ceiling'; opts.diagnostics.reboundCeiling = Math.max(chainApex(bot, springs, base.pos.y, false), chainApex(bot, springs, base.pos.y, true)) + (bot.physics.stepHeight ?? 0) }
+    return null
+  }
   // A ladder's thin native shape leaves less than the ordinary route cushion
   // beside its center. Use the actual body boundary for the catch, and let every
   // native forecast frame verify clearance before any controls are executed.
   const contactRoute = contact ? detour(geometry, bot.entity.position, contact, opts.climb ? 0 : .03) : null
+  const springRoutes = springs.map((spring, i) => i ? detour(geometry, springs[i - 1], spring, .03) : contactRoute!)
   const extended = !!contact || flat(base.pos, target) > 4 && route(base.pos).distance <= flat(base.pos, target) + .5
   // Cheap native control profiles handle ordinary local landings before the
   // beam. Steering toward a predicted stopping position also removes initial
   // lateral speed; the integrator supplies the acceleration and friction.
   const spanSteps = Math.max(2, Math.ceil(flat(base.pos, target) * 4))
+  // Powder snow on the straight approach slows a walk to ~0.11 block/tick; give
+  // such an edge the full 60-tick horizon (still below the 140-tick freeze) and
+  // try jumps and sprinting first: the unmodelled freeze speed malus (LivingEntity.tryAddFrost)
+  // grows with time inside (s6-pk-powder2: slow 64-tick walks fell 0.3 block short).
+  let powderPath = false
+  for (let i = 0; i <= spanSteps && !powderPath; i++) {
+    const t = i / spanSteps
+    powderPath = geometry.blockAt(new Vec3(base.pos.x + (target.x - base.pos.x) * t, base.pos.y + (target.y - base.pos.y) * t, base.pos.z + (target.z - base.pos.z) * t).floored(), false)?.name === 'powder_snow'
+  }
+  const horizon = Math.min(contact ? 180 : 60, Math.max(powderPath ? Number(process.env.ND_POWDER_HORIZON ?? 45) : 0, opts.maxTicks ?? (opts.climb ? 180 : contact ? 90 : 38)))
+  let quickest: JumpPlan | null = null
   let continuous = !!opts.allowWalk && Math.abs(target.y - base.pos.y) < .2
   for (let i = 1; continuous && i <= spanSteps; i++) {
     const t = i / spanSteps; const at = new Vec3(base.pos.x + (target.x - base.pos.x) * t, base.pos.y + (target.y - base.pos.y) * t, base.pos.z + (target.z - base.pos.z) * t)
-    continuous = !!supportAt(geometry, at, .08) && bodyClear(geometry, at)
+    continuous = !!supportAt(geometry, at, .08) && bodyClear(geometry, at, { powder: true })
   }
-  const launches = continuous || target.y < base.pos.y - .2 ? [false, true] : [true]
+  // A rise within the native step height (snow layers, slabs, carpets) is an
+  // ordinary walk as well; the forecast verifies every stepped frame.
+  const stepped = !!opts.allowWalk && target.y - base.pos.y <= (bot.physics.stepHeight ?? 0) + 1e-6
+  const launches = continuous || stepped || target.y < base.pos.y - .2 ? powderPath ? [true, false] : [false, true] : [true]
   let edgeRunup = 0
   if (opts.bounce && (bot.food ?? 20) > 6 && opts.sprint !== false) {
     // Prioritise the existing profile that jumps from the last supported part
@@ -139,39 +233,53 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
       edgeRunup = tick + 1
     }
   }
+  // A slime landing bounces unless sneak is held at the contact tick (native
+  // and vanilla isSuppressingBounce); crouch only on the final descent.
+  const springTarget = supportAt(geometry, target, .04)?.block.name === 'slime_block'
   const runups = extended ? [0, 2, 4, 6, 1, 3, 5, 7, 8, 10] : [0, 2, 4, 6]
   const nearEdge = [Math.max(0, edgeRunup - 1), edgeRunup]
   const orderedRunups = opts.bounce ? [...new Set([...nearEdge, ...runups])] : runups
-  for (const jump of opts.bounce ? [true, false] : launches) for (const runup of jump ? orderedRunups : [0]) for (const sprint of opts.bounce ? [true, false] : [false, true]) for (const airSprint of extended ? opts.bounce ? [true, false] : [false, true] : [false]) for (const coast of extended ? opts.bounce ? [0, 2, 4, 6, 8, 1] : [2, 4, 6, 8, 0, 1] : [2, 4, 6, 8]) {
+  for (const jump of opts.bounce ? [true, false].filter(jump => springLaunch.includes(jump)) : launches) for (const runup of jump ? orderedRunups : [0]) for (const sprint of opts.bounce || powderPath ? [true, false] : [false, true]) for (const airSprint of extended ? opts.bounce ? [true, false] : [false, true] : [false]) for (const coast of extended ? opts.bounce ? [0, 2, 4, 6, 8, 1] : [2, 4, 6, 8, 0, 1] : [2, 4, 6, 8]) {
     if (opts.diagnostics) opts.diagnostics.profiles++
     if (sprint && (opts.sprint === false || (bot.food ?? 20) <= 6)) continue
     const state = clone(base); const steps: Step[] = []; const states: State[] = []
-    let airborne = false; let fallDistance = 0; let contacted = false; let fall: JumpPlan['fall']
-    for (let tick = 0; tick < Math.min(contact ? 180 : 60, opts.maxTicks ?? (opts.climb ? 180 : contact ? 90 : 38)); tick++) {
+    let airborne = false; let fallDistance = 0; let contacted = false; let fall: JumpPlan['fall']; let hit = 0
+    for (let tick = 0; tick < horizon; tick++) {
       if (performance.now() >= slice) { yield; slice = performance.now() + .25 }
-      const destination = contact && !contacted ? contact : target
-      const waypoint = (contactRoute && !contacted ? contactRoute : route)(state.pos).waypoint
+      const spring = hit < springs.length ? springs[hit] : null
+      const destination = spring ?? (contact && !contacted ? contact : target)
+      const waypoint = (spring ? springRoutes[hit] : contactRoute && !contacted ? contactRoute : route)(state.pos).waypoint
       const braking = flat(waypoint, destination) < .01 ? state.onGround && state.vel.y <= 0 ? 1 : coast : 0
       const dx = waypoint.x - state.pos.x - state.vel.x * braking
       const dz = waypoint.z - state.pos.z - state.vel.z * braking
       const yaw = Math.atan2(-dx, -dz)
-      const settled = airborne && state.onGround && state.vel.y <= 0
-      const step = { yaw, control: controls({ forward: Math.hypot(dx, dz) > .025, sprint: sprint && (!airborne || airSprint) && !settled, sneak: settled,
+      // Settle (sneak, stop sprinting) only on the target's level: an intermediate higher step (CP28 roof: jump onto a
+      // slab 166.5, then step down to 166) must stay walkable, sneaking there pins the body to the slab edge.
+      const settled = airborne && state.onGround && state.vel.y <= 0 && Math.abs(state.pos.y - target.y) < .03
+      const damping = springTarget && airborne && (!contact || contacted) && state.vel.y < 0 && state.pos.y < target.y + 1.25
+      // Sneak-centering after a landing would crawl through powder snow at 0.3x
+      // (s6-pk-powder5: 47 ticks of sneaking fell 0.3 block short); walk out instead.
+      const settledOutside = settled && !(powderPath && geometry.blockAt(state.pos.floored(), false)?.name === 'powder_snow')
+      const step = { yaw, control: controls({ forward: Math.hypot(dx, dz) > .025, sprint: sprint && (!airborne || airSprint) && !settled && !damping, sneak: settledOutside || damping,
         jump: jump && tick === runup || !!opts.climb && onClimbable(geometry, state.pos) }) }
       const previous = state.pos.clone(); state.yaw = yaw; state.control = step.control; sim(state, world)
       noteForecast(opts.diagnostics, state, target)
       airborne ||= !state.onGround; fallDistance += Math.max(0, previous.y - state.pos.y)
       if (opts.climb && onClimbable(geometry, state.pos)) { contacted = true; fallDistance = 0 }
-      if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < Math.min(base.pos.y, target.y, opts.bounce?.y ?? Infinity) - .4 || !bodyClear(geometry, state.pos, { web: opts.web }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
+      // LivingEntity.handleOnClimbable and Entity.makeStuckInBlock reset the fall.
+      else if (onClimbable(geometry, state.pos) || state.isInWeb) fallDistance = 0
+      if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < Math.min(base.pos.y, target.y, ...springs.map(p => p.y)) - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
       if (state.onGround) {
         const support = supportAt(geometry, state.pos, .04)
         const damage = support ? landingDamage(support.block, fallDistance, bot.entity.attributes) : 0
         if (damage > 0) {
-          if (!support || damage > budget || fall || jump || contact || target.y >= base.pos.y || !hasFallMitigation(support.block)) break
+          if (!support || damage > budget || fall || contact || target.y >= base.pos.y || budget <= 1 && (jump || !hasFallMitigation(support.block))) break
           fall = { damage, support: { ...support.block.position }, supportName: support.block.name, tick: steps.length, pos: { ...state.pos } }
         }
         if (opts.bounce && support?.block.name === 'slime_block' && state.vel.y > .1) {
-          contacted = true
+          // Only the expected spring advances the chain; any other slime is plain physics.
+          if (hit < springs.length && flat(state.pos, springs[hit]) < 1.8 && Math.abs(support.top - springs[hit].y) < .05) hit++
+          contacted = hit === springs.length
           if (opts.diagnostics) {
             // The observed spring contact supplies its actual native velocity.
             // An obstacle-free coast is an optimistic height bound, never an
@@ -185,7 +293,8 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
               rise = upward.vel.y > 0 ? Infinity : top - state.pos.y
               reboundRises.set(state.vel.y, rise)
             }
-            opts.diagnostics.reboundCeiling = Math.max(opts.diagnostics.reboundCeiling ?? -Infinity, state.pos.y + rise + (bot.physics.stepHeight ?? 0))
+            observedCeiling = Math.max(observedCeiling, state.pos.y + rise + (bot.physics.stepHeight ?? 0))
+            opts.diagnostics.reboundCeiling = observedCeiling
           }
         }
         fallDistance = 0
@@ -193,14 +302,25 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
       steps.push(step); states.push(clone(state))
       if ((!contact || contacted) && (airborne || opts.allowWalk) && state.vel.y <= 0 && onTarget(geometry, state, target, opts.tolerance ?? .22)) {
         const stopping = rest(bot, state, world, opts.tolerance ?? .22, target)
-        if (stopping) return { steps: [...steps, ...stopping.steps], states: [...states, ...stopping.states], target: { ...target }, ticks: steps.length + stopping.steps.length, ...(fall ? { fall } : {}) }
+        if (stopping) {
+          const plan = { steps: [...steps, ...stopping.steps], states: [...states, ...stopping.states], target: { ...target }, ticks: steps.length + stopping.steps.length, ...(fall ? { fall } : {}) }
+          // Through powder snow keep the quickest profile: time inside builds the freeze malus.
+          if (!powderPath) return plan
+          if (!quickest || plan.ticks < quickest.ticks) quickest = plan
+          break
+        }
       }
       // A jump often touches the near edge of a broad destination before its
-      // center. Continue supported centering there, without another jump.
-      if (airborne && state.onGround && state.vel.y <= 0 && (Math.abs(state.pos.y - target.y) > .03 || flat(state.pos, target) > 1.5)) break
+      // center. Continue supported centering there, without another jump; a landing
+      // on a step above the target (up to a jump) may also walk on and step down
+      // (CP28 roof: slab 166.5 between 165.5 and the 166 floor).
+      const above = state.pos.y - target.y
+      // A near-level touch (path block, carpet: < .25) keeps the old rule and forces the jump families.
+      const stepAbove = above >= .25 && above <= 1.25
+      if (airborne && state.onGround && state.vel.y <= 0 && (stepAbove ? flat(state.pos, target) > 3 : Math.abs(above) > .03 || flat(state.pos, target) > 1.5)) break
     }
   }
-  return null
+  return quickest
 }
 
 function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, world: ReturnType<typeof worldOf>): Generator<void, JumpPlan | null> {
@@ -253,7 +373,7 @@ function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, wor
         jumpNext = false; const previous = state.pos.clone(); state.yaw = step.yaw; state.control = step.control; sim(state, world)
         noteForecast(opts.diagnostics, state, target); airborne ||= !state.onGround
         fallDistance += Math.max(0, previous.y - state.pos.y)
-        if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < base.pos.y - .4 || !bodyClear(geometry, state.pos, { web: opts.web }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
+        if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < base.pos.y - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
         if (state.onGround && state.vel.y <= 0) {
           // Native SELF movement clips Y before horizontal travel. Its real
           // contact can carry the body past the edge in that same tick; verify
@@ -282,7 +402,8 @@ function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, wor
 function* jumpSearch(bot: MovementBot, target: Point, opts: JumpOptions = {}, cancelled?: () => boolean): Generator<void, JumpPlan | null> {
   if (![target.x, target.y, target.z].every(Number.isFinite) || !bot.physics || !bot.entity?.onGround || bot.entity.isInLava || bot.entity.isInWater) { if (opts.diagnostics) opts.diagnostics.why = 'invalid_native_start'; return null }
   const column = opts.climb ? climbColumn(bot, opts.climb, cancelled, opts.planningMs) : null
-  if (flat(bot.entity.position, target) > (opts.bounce ? 14 : 6) || !opts.climb && target.y - bot.entity.position.y > 1.25 || !supportAt(bot, target, .04) || !bodyClear(bot, target) || opts.bounce && (supportAt(bot, opts.bounce, .04)?.block.name !== 'slime_block' || !bodyClear(bot, opts.bounce)) || opts.climb && (!column || column.top < Math.floor(target.y) || !bodyClear(bot, opts.climb))) { if (opts.diagnostics) opts.diagnostics.why = 'unsupported_or_obstructed_target'; return null }
+  const springs = opts.bounce ? [opts.bounce, ...(opts.chain ?? [])] : []
+  if (flat(bot.entity.position, target) > (opts.bounce ? 6 + 8 * springs.length : 6) || !opts.climb && target.y - bot.entity.position.y > 1.25 || !supportAt(bot, target, .04) || !bodyClear(bot, target) || springs.some(spring => supportAt(bot, spring, .04)?.block.name !== 'slime_block' || !bodyClear(bot, spring)) || opts.climb && (!column || column.top < Math.floor(target.y) || !bodyClear(bot, opts.climb))) { if (opts.diagnostics) opts.diagnostics.why = 'unsupported_or_obstructed_target'; return null }
   const tolerance = opts.tolerance ?? .22
   const world = worldOf(bot); const sim = simulator(bot)
   const geometry = geometryOf(bot, world); const route = detour(geometry, bot.entity.position, target)
@@ -323,10 +444,10 @@ function* jumpSearch(bot: MovementBot, target: Point, opts: JumpOptions = {}, ca
         noteForecast(opts.diagnostics, state, target)
         const jumped = node.jumped || step.control.jump && state.vel.y > 0
         const airTicks = jumped ? node.airTicks + 1 : 0
-        const fallDistance = (node.state.onGround ? 0 : node.fallDistance) + Math.max(0, node.state.pos.y - state.pos.y)
+        const fallDistance = state.isInWeb || onClimbable(geometry, state.pos) ? 0 : (node.state.onGround ? 0 : node.fallDistance) + Math.max(0, node.state.pos.y - state.pos.y)
         if (!jumped && !state.onGround && !supportAt(geometry, state.pos, .01)) continue
         if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < Math.min(bot.entity.position.y, target.y) - .4) continue
-        if (!bodyClear(geometry, state.pos, { web: opts.web }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) continue
+        if (!bodyClear(geometry, state.pos, { web: opts.web, powder: true }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) continue
         if (state.onGround) {
           const support = supportAt(geometry, state.pos, .04)
           if (support && landingDamage(support.block, fallDistance, bot.entity.attributes) > 0) continue
@@ -380,13 +501,18 @@ export function planJump(bot: MovementBot, target: Point, opts: JumpOptions = {}
   const search = jumpSearch(bot, target, opts)
   for (;;) { const step = search.next(); if (step.done) return step.value }
 }
+/** Optimistic feet ceiling (apex + native step height) for any launch from `from` via this spring. */
+export function reboundCeiling(bot: MovementBot, from: Point, spring: Point): number {
+  return Math.max(reboundApex(bot, spring, from.y, false), reboundApex(bot, spring, from.y, true)) + (bot.physics.stepHeight ?? 0)
+}
 export async function planJumpAsync(bot: MovementBot, ctl: Cancellation, target: Point, opts: JumpOptions = {}): Promise<JumpPlan | null> {
-  const search = jumpSearch(bot, target, opts, () => ctl.aborted)
+  const diagnostics = opts.diagnostics ?? { frames: 0, profiles: 0 }
+  const search = jumpSearch(bot, target, { ...opts, diagnostics }, () => ctl.aborted)
   let workMs = 0
   for (;;) {
-    if (ctl.aborted || workMs > (opts.planningMs ?? Infinity)) { if (opts.diagnostics) opts.diagnostics.why = ctl.aborted ? 'interrupted' : 'planning_budget'; return null }
+    if (ctl.aborted || workMs > (opts.planningMs ?? Infinity) || diagnostics.frames > (opts.maxFrames ?? Infinity)) { diagnostics.why = ctl.aborted ? 'interrupted' : 'planning_budget'; return null }
     const began = performance.now(); const step = search.next(); workMs += performance.now() - began
-    if (opts.diagnostics) opts.diagnostics.workMs = workMs
+    diagnostics.workMs = workMs
     if (step.done) return step.value
     await new Promise<void>(resolve => setImmediate(resolve))
   }
@@ -418,13 +544,15 @@ export function bodyObservation(bot: MovementBot, pos: Point) {
   return { body, clear: bodyClear(bot, pos), cells }
 }
 
-export async function executeJump(bot: MovementBot, ctl: Cancellation, target: Point, opts: JumpOptions = {}): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[]; planningMs: number; forecast?: unknown }> {
+export async function executeJump(bot: MovementBot, ctl: Cancellation, target: Point, opts: JumpOptions = {}): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[]; planningMs: number; planningTicks?: number; forecast?: unknown }> {
   bot.pathfinder?.setGoal(null)
   bot.clearControlStates(); bot.setControlState('sneak', true)
   const start = forecastStart(bot, target); const diagnostics: PlanningDiagnostics = { frames: 0, profiles: 0 }
-  const began = performance.now(); const plan = await planJumpAsync(bot, ctl, target, { ...opts, diagnostics })
-  const planningMs = performance.now() - began
-  if (!plan) return { ok: false, why: diagnostics.why ?? 'no_safe_native_trajectory', ticks: 0, samples: [], planningMs, forecast: { ...start, diagnostics, observation: {
+  const clock = require('../game-clock') as { now(): number }
+  const began = performance.now(); const gameBegan = clock.now(); const plan = await planJumpAsync(bot, ctl, target, { maxFrames: JUMP_FRAMES, ...opts, diagnostics })
+  // Wall time is this machine's CPU; game ticks are what the body stood still.
+  const planningMs = performance.now() - began; const planningTicks = Math.round((clock.now() - gameBegan) / 50)
+  if (!plan) return { ok: false, why: diagnostics.why ?? 'no_safe_native_trajectory', ticks: 0, samples: [], planningMs, planningTicks, forecast: { ...start, diagnostics, observation: {
     start: { at: { ...start.native.pos }, ...bodyObservation(bot, start.native.pos) },
     target: { at: { ...target }, ...bodyObservation(bot, target) },
     ...(opts.climb ? { climb: { at: { ...opts.climb }, ...bodyObservation(bot, opts.climb) } } : {}),
@@ -440,14 +568,14 @@ export async function executeJump(bot: MovementBot, ctl: Cancellation, target: P
   const last = result.samples.slice(-6) as Array<{ pos: Point; velocity: Point; onGround: boolean }>
   const adjusted = !result.ok && result.why === 'landing_not_confirmed' && opts.allowWalk && last.length === 6 && last.every(sample =>
     settledLanding(bot, { pos: new Vec3(sample.pos.x, sample.pos.y, sample.pos.z), vel: new Vec3(sample.velocity.x, sample.velocity.y, sample.velocity.z), onGround: sample.onGround }, target, Math.max(.35, opts.tolerance ?? .25)))
-  return { ...result, ...(adjusted ? { ok: true, why: undefined } : {}), planningMs, forecast: { diagnostics, ...(plan.fall ? { fall: plan.fall } : {}), ...(adjusted ? { adjustedLanding: { ...bot.entity.position } } : {}) } }
+  return { ...result, ...(adjusted ? { ok: true, why: undefined } : {}), planningMs, planningTicks, forecast: { diagnostics, ...(plan.fall ? { fall: plan.fall } : {}), ...(adjusted ? { adjustedLanding: { ...bot.entity.position } } : {}) } }
 }
 export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: JumpPlan, confirmed: (state: State) => boolean, completeWhen?: () => boolean): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[] }> {
   const samples: TrajectorySample[] = []; const hp = bot.health ?? 20
-  if (plan.fall && (plan.fall.damage !== 1 || !bot._client || !safeFallCost(bot, plan.fall.damage))) return { ok: false, why: 'unsafe_fall_cost', ticks: 0, samples }
+  if (plan.fall && (plan.fall.damage < 1 || plan.fall.damage > MAX_FALL_DAMAGE || !bot._client || !safeFallCost(bot, plan.fall.damage))) return { ok: false, why: 'unsafe_fall_cost', ticks: 0, samples }
   const clock = require('../game-clock') as { now(): number }
   const previous = bot._ndParkourForecast
-  const own = { from: { ...bot.entity.position }, next: { ...bot.entity.position }, until: clock.now() + 100, hp }
+  const own = forecastOwner(bot.entity.position, hp)
   bot._ndParkourForecast = own
   bot.clearControlStates()
   let tick = 0; let lastHp = hp; let lost = 0; let fallReceipt = false
@@ -526,7 +654,7 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
         }
         if (plan.fall) { onHealth(); if (done) return }
         else if ((bot.health ?? hp) < hp) { finish(false, 'hurt_during_trajectory'); return }
-        own.from = { ...p }; own.until = clock.now() + 100
+        own.from = { ...p }
         if (completeWhen?.() && (!plan.fall || fallReceipt && lost > 0)) { const ok = confirmed(new PlayerState(bot, controls())); finish(ok, ok ? undefined : 'landing_not_confirmed'); return }
         if (tick < plan.steps.length) applyStep()
         else {
@@ -549,7 +677,9 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
         // one observed frame at a time so no abandoned waiter advances a fake
         // clock or retains the old stage across a native physics burst.
         const wait = completeWhen ? (async () => { while (!done) await bot.waitForTicks(1) })() : bot.waitForTicks(plan.steps.length + (plan.fall ? 6 : 0))
-        void wait.catch(fail)
+        // A stalled client frame under farm load (Author50, 654 TPS) must end this
+        // edge with its samples, not discard the whole route report.
+        void wait.catch((error: Error) => /Timeout waiting for game ticks/.test(String(error?.message)) ? finish(false, 'tick_wait_timeout') : fail(error))
       }
     } catch (error) { fail(error) }
   })
@@ -583,12 +713,13 @@ export function inWaterCell(bot: CollisionWorld, state: State, cell: Point): boo
 }
 
 /** Forecast earned launch momentum with the same air integrator and controller. */
-function* impulseLandingSearch(bot: MovementBot, initial: State, target?: Point, maxTicks = 160): Generator<void, JumpPlan | null> {
+/** `fallFrom`: the real start of an ongoing fall (higher than the initial frame); `maxDamage`: accepted landing damage. */
+function* impulseLandingSearch(bot: MovementBot, initial: State, target?: Point, maxTicks = 160, { fallFrom = -Infinity, maxDamage = 0 }: { fallFrom?: number; maxDamage?: number } = {}): Generator<void, JumpPlan | null> {
   const world = worldOf(bot); const geometry = geometryOf(bot, world); const sim = simulator(bot)
   let slice = performance.now() + .25
   for (const coast of target ? [3, 6, 10, 0] : [0]) {
     const state = clone(initial); const steps: Step[] = []; const states: State[] = []
-    let peak = state.pos.y; let settled = 0; let landing: Point | null = null
+    let peak = Math.max(state.pos.y, fallFrom); let settled = 0; let landing: Point | null = null
     for (let tick = 0; tick < Math.min(180, maxTicks); tick++) {
       if (performance.now() >= slice) { yield; slice = performance.now() + .25 }
       const stop = clone(state); stop.control = controls()
@@ -599,7 +730,7 @@ function* impulseLandingSearch(bot: MovementBot, initial: State, target?: Point,
       if (state.isInLava || state.isInWeb || !bodyClear(geometry, state.pos, { water: true })) break
       const support = supportAt(geometry, state.pos, .04)
       const wet = state.isInWater && (!target || inWaterCell(geometry, state, new Vec3(target.x, target.y, target.z).floored()))
-      const safeFloor = state.onGround && state.vel.y <= 0 && !!support && landingDamage(support.block, peak - state.pos.y, bot.entity.attributes) === 0
+      const safeFloor = state.onGround && state.vel.y <= 0 && !!support && landingDamage(support.block, peak - state.pos.y, bot.entity.attributes) <= maxDamage
       const dry = safeFloor && (!target || onTarget(geometry, state, target, .25))
       // Earned launch speed may touch the near edge before native friction
       // settles at the goal. Center on the same safe plane with this controller.
@@ -611,9 +742,43 @@ function* impulseLandingSearch(bot: MovementBot, initial: State, target?: Point,
   }
   return null
 }
-export function planImpulseLanding(bot: MovementBot, initial: State, target?: Point, maxTicks = 160): JumpPlan | null {
-  const search = impulseLandingSearch(bot, initial, target, maxTicks)
+export function planImpulseLanding(bot: MovementBot, initial: State, target?: Point, maxTicks = 160, limits?: { fallFrom?: number; maxDamage?: number }): JumpPlan | null {
+  const search = impulseLandingSearch(bot, initial, target, maxTicks, limits)
   for (;;) { const step = search.next(); if (step.done) return step.value }
+}
+
+/**
+ * Steer an ongoing fall onto the nearby floor that hurts least (hay, honey,
+ * slime — 1.21.11 fallOn rules in landing.ts), when it beats the floor straight
+ * below. `fallFrom` is the observed top of this fall. Native forecast only.
+ */
+export function planNearbySoftLanding(bot: MovementBot, fallFrom: number): (JumpPlan & { damage: number }) | null {
+  if (!bot.physics || bot.entity.onGround || bot.entity.velocity.y >= -.08 || bot.entity.isInWater || bot.entity.isInLava) return null
+  const world = worldOf(bot); const from = bot.entity.position
+  const floorOf = (x: number, z: number) => {
+    for (let y = Math.floor(from.y) - 1; y >= Math.floor(from.y) - 128; y--) {
+      const block = world.getBlock(new Vec3(x, y, z))
+      if (!block) return null
+      const boxes = shapeBoxes(block)
+      if (boxes.length) return { block, top: Math.max(...boxes.map(box => box.maxY)) }
+    }
+    return null
+  }
+  const below = floorOf(Math.floor(from.x), Math.floor(from.z))
+  const baseline = below ? landingDamage(below.block, fallFrom - below.top, bot.entity.attributes) : Infinity
+  const candidates: Array<{ target: Point; damage: number; reach: number }> = []
+  for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) {
+    const x = Math.floor(from.x) + dx; const z = Math.floor(from.z) + dz; const floor = floorOf(x, z)
+    if (!floor || !hasFallMitigation(floor.block)) continue
+    const damage = landingDamage(floor.block, fallFrom - floor.top, bot.entity.attributes)
+    if (damage < baseline && damage < (bot.health ?? 20)) candidates.push({ target: { x: x + .5, y: floor.top, z: z + .5 }, damage, reach: Math.hypot(x + .5 - from.x, z + .5 - from.z) })
+  }
+  candidates.sort((a, b) => a.damage - b.damage || a.reach - b.reach)
+  for (const candidate of candidates.slice(0, 4)) {
+    const plan = planImpulseLanding(bot, new PlayerState(bot, controls()), candidate.target, 160, { fallFrom, maxDamage: candidate.damage })
+    if (plan) return { ...plan, damage: candidate.damage }
+  }
+  return null
 }
 export async function planImpulseLandingAsync(bot: MovementBot, ctl: Cancellation, initial: State, target: Point, planningMs = 20): Promise<JumpPlan | null> {
   const search = impulseLandingSearch(bot, initial, target); let workMs = 0
@@ -709,10 +874,10 @@ export async function enterWater(bot: MovementBot, ctl: Cancellation, target: Po
   if (!plan) return { ok: false, why: 'no_confirmed_free_water_trajectory', ticks: 0, samples: [], planningMs }
   if (automatic) {
     if (!bot.entity.onGround || !bot._ndClutch) return { ok: false, why: 'automatic_fall_guard_unavailable', ticks: 0, samples: [], planningMs }
-    const clock = require('../game-clock') as { now(): number }; const hp = bot.health ?? 20
+    const hp = bot.health ?? 20
     const saved = bot._ndClutch.stats.water_saved; const samples: Array<{ pos: Point; velocity: Point; onGround: boolean; isInWater: boolean; hp?: number }> = []
     const previous = bot._ndParkourForecast
-    const own = { from: { ...bot.entity.position }, next: { ...bot.entity.position }, until: clock.now() + 100, hp }
+    const own = forecastOwner(bot.entity.position, hp)
     bot._ndParkourForecast = own
     let tick = 0
     try {
@@ -724,7 +889,7 @@ export async function enterWater(bot: MovementBot, ctl: Cancellation, target: Po
         own.next = { ...plan.states[tick].pos }
         for (const key of Object.keys(IDLE) as Array<keyof Control>) bot.setControlState(key, step.control[key])
         await bot.waitForTicks(1); tick++
-        own.from = { ...bot.entity.position }; own.until = clock.now() + 100
+        own.from = { ...bot.entity.position }
       }
     } finally {
       if (bot._ndParkourForecast === own) { if (previous) bot._ndParkourForecast = previous; else delete bot._ndParkourForecast }
@@ -745,8 +910,13 @@ export async function enterWater(bot: MovementBot, ctl: Cancellation, target: Po
   }
   return { ...await executePlan(bot, ctl, plan, state => inWaterCell(bot, state, plan.target)), planningMs }
 }
-export async function catchWeb(bot: MovementBot, ctl: Cancellation, target: Point) {
-  const plan = planWebCatch(bot, target)
+export async function catchWeb(bot: MovementBot, ctl: Cancellation, target: Point, wait = 40) {
+  // A catch requested at a step-off (or before a fall begins) may precede the
+  // first falling frame; wait up to `wait` game ticks for a real descent above the web.
+  let plan = planWebCatch(bot, target)
+  for (let tick = 0; !plan && tick < Math.min(2000, wait) && !ctl.aborted && !bot.entity.isInWeb; tick++) {
+    await bot.waitForTicks(1); plan = planWebCatch(bot, target)
+  }
   if (!plan) return { ok: false, why: 'no_observed_reachable_web', ticks: 0, samples: [] }
   bot.pathfinder?.setGoal(null); bot.clearControlStates()
   return executePlan(bot, ctl, plan, state => state.isInWeb && Math.abs(state.vel.y) < .16)
@@ -800,28 +970,79 @@ export async function climb(bot: MovementBot, ctl: Cancellation, target: Point, 
   } finally { bot.clearControlStates() }
 }
 
-export async function navigate(bot: MovementBot, ctl: Cancellation, options: JumpOptions & { target: Point; mode?: 'jump' | 'climb' | 'edge' | 'webcatch' | 'waterentry' | 'riptide' | 'route' | 'options'; ticks?: number; maxLandings?: number; timeoutSeconds?: number; launch?: WaterLaunch; waypoints?: readonly Point[]; automatic?: boolean; pitch?: number }) {
+export async function navigate(bot: MovementBot, ctl: Cancellation, options: JumpOptions & { target: Point; mode?: 'jump' | 'climb' | 'edge' | 'webcatch' | 'waterentry' | 'riptide' | 'route' | 'options' | 'drop'; ticks?: number; wait?: number; maxLandings?: number; timeoutSeconds?: number; launch?: WaterLaunch; waypoints?: readonly Point[]; automatic?: boolean; pitch?: number }) {
   if (options.mode === 'options') return { ok: true, options: localOptions(bot, { toward: options.target }) }
   if (options.mode === 'route') return route(bot, ctl, { toward: options.target, maxLandings: options.maxLandings, maxTicks: options.maxTicks, beam: options.beam, waypoints: options.waypoints, timeoutSeconds: options.timeoutSeconds, maxFallDamage: options.maxFallDamage })
-  if (options.mode === 'webcatch') return catchWeb(bot, ctl, options.target)
+  if (options.mode === 'webcatch') return catchWeb(bot, ctl, options.target, options.wait)
   if (options.mode === 'waterentry') return enterWater(bot, ctl, options.target, options.ticks, options.launch, options.automatic)
   if (options.mode === 'riptide') {
     const me = bot.entity.position; const target = options.target
     return require('../utility').riptide(bot, Math.atan2(me.x - target.x, me.z - target.z), options.pitch ?? Math.atan2(target.y - me.y, flat(me, target)), { target, ctl, launch: options.launch })
   }
+  if (options.mode === 'drop') return dropOff(bot, ctl, options.target, options.ticks)
   if (options.mode === 'climb') return climb(bot, ctl, options.target, options.ticks)
   if (options.mode === 'edge') return holdEdge(bot, ctl, options.target, options.ticks)
   return executeJump(bot, ctl, options.target, options)
 }
 
-export async function route(bot: MovementBot, ctl: Cancellation, { toward: finalGoal, maxLandings = 40, maxTicks = 38, beam = 24, waypoints = [], timeoutSeconds = 120, maxFallDamage = 0 }: { toward: Point; maxLandings?: number; maxTicks?: number; beam?: number; waypoints?: readonly Point[]; timeoutSeconds?: number; maxFallDamage?: number }): Promise<{ ok: boolean; why?: string; landings: unknown[]; at: Point; visited: string[] }> {
+/**
+ * Lab only: walk off the current ledge toward `target` with ordinary keys, release them in the air
+ * and leave the fall to the reflexes (clutch: water, ladder, blocks). Reports the observed landing.
+ */
+async function dropOff(bot: MovementBot, ctl: Cancellation, target: Point, ticks = 240) {
+  bot.pathfinder?.setGoal(null); bot.clearControlStates()
+  const hp = bot.health ?? 20; const top = bot.entity.position.y; let tick = 0; let low = top
+  await bot.look(Math.atan2(bot.entity.position.x - target.x, bot.entity.position.z - target.z), 0, true)
+  bot.setControlState('forward', true)
+  try { while (tick < 20 && bot.entity.onGround && !ctl.aborted) { await bot.waitForTicks(1); tick++ } } finally { bot.setControlState('forward', false) }
+  if (bot.entity.onGround) return { ok: false, why: 'did_not_leave_ledge', ticks: tick, hp: bot.health }
+  while (tick < ticks && !ctl.aborted && !bot.entity.onGround && !bot.entity.isInWater && (bot.health ?? 0) > 0) { await bot.waitForTicks(1); tick++; low = Math.min(low, bot.entity.position.y) }
+  if (!ctl.aborted && (bot.health ?? 0) > 0) await bot.waitForTicks(10) // the server's damage receipt follows the landing
+  const lost = hp - (bot.health ?? 0)
+  return { ok: !ctl.aborted && lost <= 0 && (bot.entity.onGround || !!bot.entity.isInWater), why: ctl.aborted ? 'interrupted' : lost > 0 ? 'hurt' : undefined, hp: bot.health, lost, fall: top - low, ticks: tick, at: { ...bot.entity.position } }
+}
+
+/**
+ * Open a closed wooden door by hand before a route edge through it: only a half within 4.5 blocks that the
+ * eyes actually see (pick.blockSeen, like the client's crosshair), confirmed by the server's block update.
+ */
+export async function openDoor(bot: MovementBot, ctl: Cancellation, at: Point): Promise<{ ok: boolean; why?: string }> {
+  const body = bot as MovementBot & { lookAt(p: Vec3, force?: boolean): Promise<void>; activateBlock(b: unknown): Promise<void> }
+  const lower = new Vec3(at.x, at.y, at.z)
+  const isOpen = () => String(bot.blockAt(lower, false)?.getProperties?.().open) === 'true'
+  const door = bot.blockAt(lower, false)
+  if (!door || !WOOD_DOOR.test(door.name)) return { ok: false, why: 'no_wooden_door' }
+  if (isOpen()) return { ok: true }
+  const pick = require('../pick') as { eyeOf(bot: unknown): Vec3; blockSeen(bot: unknown, p: Vec3, o?: { range?: number }): boolean }
+  const eye = pick.eyeOf(bot)
+  const half = [lower, lower.offset(0, 1, 0)].find(p => eye.distanceTo(p.offset(.5, .5, .5)) <= 4.5 && pick.blockSeen(bot, p, { range: 4.5 }))
+  if (!half) return { ok: false, why: 'door_not_visible' }
+  await body.lookAt(half.offset(.5, .5, .5), true)
+  await body.activateBlock(bot.blockAt(half, false))
+  for (let tick = 0; tick < 20 && !ctl.aborted; tick++) { if (isOpen()) return { ok: true }; await bot.waitForTicks(1) }
+  return { ok: false, why: ctl.aborted ? 'interrupted' : 'door_not_opened' }
+}
+
+type RouteOptions = { toward: Point; maxLandings?: number; maxTicks?: number; beam?: number; waypoints?: readonly Point[]; timeoutSeconds?: number; maxFallDamage?: number; frames?: number }
+type RouteResult = { ok: boolean; why?: string; landings: unknown[]; at: Point; visited: string[] }
+export async function route(bot: MovementBot, ctl: Cancellation, options: RouteOptions): Promise<RouteResult> {
+  // Loaded collision tops persist across landings; only a nearby block change
+  // can alter which body positions a cell supports.
+  const standCache = new Map<string, Vec3[]>()
+  const onBlock = (_old: unknown, block: { position?: Point } | null) => { if (block?.position) { invalidateStands(standCache, block.position); forgetCell(standCache, block.position) } }
+  const listen = bot.on as unknown as (event: string, listener: typeof onBlock) => unknown
+  const unlisten = bot.removeListener as unknown as (event: string, listener: typeof onBlock) => unknown
+  listen.call(bot, 'blockUpdate', onBlock)
+  try { return await routeLandings(bot, ctl, options, standCache) } finally { unlisten.call(bot, 'blockUpdate', onBlock) }
+}
+async function routeLandings(bot: MovementBot, ctl: Cancellation, { toward: finalGoal, maxLandings = 40, maxTicks = 38, beam = 24, waypoints = [], timeoutSeconds = 120, maxFallDamage = 0, frames = ROUTE_FRAMES }: RouteOptions, standCache: Map<string, Vec3[]>): Promise<RouteResult> {
   const clock = require('../game-clock') as { now(): number }
   const deadline = clock.now() + Math.max(1, Math.min(3600, timeoutSeconds)) * 1000
   const parentCtl = ctl; const expired = () => clock.now() >= deadline
   // Stop within the route's budget so its partial report reaches runIntent
   // before the outer deadline's twenty-second unwind allowance.
   ctl = { get aborted() { return parentCtl.aborted || expired() }, onAbort: parentCtl.onAbort }
-  const visited = new Map<string, number>(); const traversed = new Set<string>(); const landings: unknown[] = []; const rejected: unknown[] = []; const blocked = new Set<string>(); const reboundCeilings = new Map<string, number>()
+  const visited = new Map<string, number>(); const traversed = new Set<string>(); const landings: unknown[] = []; const rejected: unknown[] = []; const blocked = new Set<string>(); const reboundCeilings = new Map<string, number>(); const springFailures = new Map<string, number>(); const deferred = new Set<string>(); const wideTried = new Set<string>(); let wideGoal = -1
   const goals = [...waypoints, finalGoal]; const reachedGoals: unknown[] = []; let goalIndex = 0
   const riptideAttempts = new Set<string>()
   let remaining: LandingOption[] = []; let failedPlans = 0
@@ -856,12 +1077,35 @@ export async function route(bot: MovementBot, ctl: Cancellation, { toward: final
     const routing: RoutingDiagnostics & { cached?: boolean } = { cached: !!remaining.length }
     const unavailable = new Set([...blocked, ...traversed])
     const damageBudget = fallBudget(bot, maxFallDamage)
-    let waypoints = remaining.length ? remaining : await supportRoute(geometry, me, toward, unavailable, flat(me, toward) > 14 ? 24 : 14, routing, reboundCeilings, () => ctl.aborted, damageBudget)
+    // The unobstructed native apex bounds every spring edge; an exhausted
+    // family's observed ceiling (walls on the way) tightens it further.
+    // A refused spring family from one height also bounds every lower start
+    // toward that same landing: vertical rebound energy only falls with height.
+    const ceilingOf = (from: Point, spring: Point, to: Point) => from.y <= (springFailures.get(`${landingKey(spring)}>${landingKey(to)}`) ?? -Infinity) + 1e-6 ? -Infinity
+      : Math.min(Math.max(reboundApex(bot, spring, from.y, false), reboundApex(bot, spring, from.y, true)), reboundCeilings.get(`${landingKey(from)}~${landingKey(spring)}`) ?? Infinity)
+    // Repeated landings on one support mean the graph is circling a dead end;
+    // charge revisits so the next optimistic path explores elsewhere.
+    // An edge refused only by its frame budget is unproven, not impossible:
+    // prefer alternatives, then retry it once with a larger budget.
+    const revisit = (from: Point, to: Point, bounce?: Point, chain?: Point[]) => Number(process.env.ND_ROUTE_REVISIT ?? 3) * (visited.get(landingKey(to)) ?? 0) + (deferred.has(transitionKey(from, to, bounce, chain)) ? DEFERRED_COST : 0)
+    // Once the 24-block disc failed to reach this goal, keep the wide graph for it.
+    const radius = wideGoal === goalIndex ? WIDE_RADIUS : flat(me, toward) > 14 ? 24 : 14
+    let waypoints = remaining.length ? remaining : await supportRoute(geometry, me, toward, unavailable, radius, routing, ceilingOf, () => ctl.aborted, damageBudget, standCache, revisit)
     if (ctl.aborted) return report(false, 'interrupted')
-    if (!remaining.length && flat(me, toward) <= 14 && toward.y > me.y + 1.25 && (!waypoints.length || waypoints[waypoints.length - 1].target.y <= me.y + .2)) {
-      // An inner platform can be a local minimum while the authored route bends
-      // back around the tower. Widen the loaded graph once, before wandering.
-      waypoints = await supportRoute(geometry, me, toward, unavailable, 24, routing, reboundCeilings, () => ctl.aborted, damageBudget)
+    const goalPoint = new Vec3(toward.x, toward.y, toward.z)
+    if (!remaining.length && radius < 24 && (!waypoints.length || waypoints[waypoints.length - 1].target.distanceTo(goalPoint) >= .8)) {
+      // A nearby goal can be a local minimum while the authored route bends
+      // back around the tower (CP18: the loop leaves the 14-block disc).
+      // Widen the loaded graph once whenever the local graph cannot reach it.
+      waypoints = await supportRoute(geometry, me, toward, unavailable, 24, routing, ceilingOf, () => ctl.aborted, damageBudget, standCache, revisit)
+    }
+    const wideKey = `${goalIndex}:${landingKey(me)}`
+    if (!remaining.length && radius < WIDE_RADIUS && flat(me, toward) <= WIDE_RADIUS && !wideTried.has(wideKey) && (!waypoints.length || waypoints[waypoints.length - 1].target.distanceTo(goalPoint) >= .8)) {
+      // The authored path may leave the 24-block disc entirely (CP21→CP22 runs
+      // ~70 blocks around the snow plateau). One wide graph per start and goal.
+      wideTried.add(wideKey)
+      const wide = await supportRoute(geometry, me, toward, unavailable, WIDE_RADIUS, routing, ceilingOf, () => ctl.aborted, damageBudget, standCache, revisit)
+      if (wide.length && wide[wide.length - 1].target.distanceTo(goalPoint) < .8) { waypoints = wide; wideGoal = goalIndex }
     }
     if (ctl.aborted) return report(false, 'interrupted')
     const first = waypoints[0]
@@ -876,13 +1120,17 @@ export async function route(bot: MovementBot, ctl: Cancellation, { toward: final
     const options = [...approaches, first, ...choices].filter((option): option is NonNullable<typeof option> => !!option &&
       // Returning from a trial approach is a different directed edge. Refuse
       // repeated transitions rather than forbidding its previously visited floor.
-      !unavailable.has(transitionKey(me, option.target, option.bounce)) &&
+      !unavailable.has(transitionKey(me, option.target, option.bounce, option.chain)) &&
       (option === first || !(option.target.y < me.y - .25 && option.target.distanceTo(new Vec3(toward.x, toward.y, toward.z)) > me.distanceTo(new Vec3(toward.x, toward.y, toward.z)) + .25)))
       .filter((option, i, all) => all.findIndex(other => other.key === option.key) === i)
     let advanced = false
     for (const option of options.slice(0, 12)) {
       if (ctl.aborted) return report(false, 'interrupted')
-      const result = await executeJump(bot, ctl, option.target, { beam, maxTicks: option.climb ? 180 : option.bounce ? 90 : maxTicks, bounce: option.bounce, climb: option.climb, allowWalk: true, planningMs: 180, maxFallDamage: damageBudget })
+      if (option.door) {
+        const opened = await openDoor(bot, ctl, option.door)
+        if (!opened.ok) { rejected.push({ from: { ...me }, target: option.target, door: option.door, why: opened.why, ok: false, ticks: 0 }); blocked.add(transitionKey(me, option.target)); remaining = []; continue }
+      }
+      const result = await executeJump(bot, ctl, option.target, { beam, maxTicks: option.climb ? 180 : option.bounce ? 90 + 60 * (option.chain?.length ?? 0) : maxTicks, bounce: option.bounce, chain: option.chain, climb: option.climb, allowWalk: true, maxFrames: deferred.has(transitionKey(me, option.target, option.bounce, option.chain)) ? frames * DEFERRED_SCALE : frames, maxFallDamage: damageBudget })
       // A bounded native correction may leave a safe body beside the requested
       // center. Keep that exact attempt unconfirmed; rebuild routing only after
       // six observed supported stopping frames at the actual landing.
@@ -900,21 +1148,27 @@ export async function route(bot: MovementBot, ctl: Cancellation, { toward: final
       const contactTick = forecastDiagnostics?.momentum?.contactTick
       const trajectory = !result.ok ? result.samples.filter((_, index) => index === 0 || index >= result.samples.length - 12)
         : contactTick === undefined ? undefined : result.samples.filter((_, index) => index < 2 || Math.abs(index - contactTick) <= 2 || index >= result.samples.length - 2)
-      const summary = { target: option.target, mode: option.mode ?? 'jump', bounce: option.bounce, climb: option.climb, support: option.support, waypoints: waypoints.slice(0, 10).map(p => ({ ...p.target, mode: p.mode, bounce: p.bounce, climb: p.climb })), routing, planningMs: result.planningMs, forecast: result.forecast, ok: result.ok, why: result.why, ticks: result.ticks, at: { ...actual }, hp: bot.health, actualLanding, trajectory }
+      const summary = { from: { ...me }, target: option.target, mode: option.mode ?? 'jump', bounce: option.bounce, chain: option.chain, door: option.door, climb: option.climb, support: option.support, waypoints: waypoints.slice(0, 10).map(p => ({ ...p.target, mode: p.mode, bounce: p.bounce, chain: p.chain, climb: p.climb })), routing, planningMs: result.planningMs, planningTicks: result.planningTicks, forecast: result.forecast, ok: result.ok, why: result.why, ticks: result.ticks, at: { ...actual }, hp: bot.health, actualLanding, trajectory }
       bot.emit?.('nd_parkour_route', summary)
       if (result.ticks) landings.push(summary)
       else rejected.push(summary)
       // A refused forecast only blocks its particular edge. It never means
       // this support was visited; a different intermediate landing can reach it.
       if (result.ok || actualLanding) {
-        traversed.add(transitionKey(me, option.target, option.bounce))
-        traversed.add(transitionKey(me, bot.entity.position, option.bounce))
+        traversed.add(transitionKey(me, option.target, option.bounce, option.chain))
+        traversed.add(transitionKey(me, bot.entity.position, option.bounce, option.chain))
         for (const key of new Set([option.key, landingKey(bot.entity.position)])) visited.set(key, (visited.get(key) ?? 0) + 1)
         advanced = true; failedPlans = 0; remaining = result.ok && option === first ? waypoints.slice(1) : []; break
       }
-      blocked.add(transitionKey(me, option.target, option.bounce))
+      const edge = transitionKey(me, option.target, option.bounce, option.chain)
+      if (!result.ticks && result.why === 'planning_budget' && !deferred.has(edge)) deferred.add(edge)
+      else blocked.add(edge)
       const diagnostics = result.forecast && typeof result.forecast === 'object' && 'diagnostics' in result.forecast ? result.forecast.diagnostics as PlanningDiagnostics : undefined
-      if (!result.ticks && option.bounce && !diagnostics?.why && Number.isFinite(diagnostics?.reboundCeiling)) reboundCeilings.set(`${landingKey(me)}~${landingKey(option.bounce)}`, diagnostics!.reboundCeiling!)
+      if (!result.ticks && option.bounce && !option.chain && (!diagnostics?.why || diagnostics.why === 'rebound_ceiling') && Number.isFinite(diagnostics?.reboundCeiling)) reboundCeilings.set(`${landingKey(me)}~${landingKey(option.bounce)}`, diagnostics!.reboundCeiling!)
+      if (!result.ticks && option.bounce && !option.chain && result.why !== 'planning_budget') {
+        const family = `${landingKey(option.bounce)}>${landingKey(option.target)}`
+        springFailures.set(family, Math.max(springFailures.get(family) ?? -Infinity, me.y))
+      }
       remaining = []
       if (result.ticks) return report(false, result.why)
     }
@@ -939,6 +1193,9 @@ export function localOptions(bot: MovementBot, { toward, radius = 5, visited = n
       // ray selects visible options for inspection; it cannot prove movement
       // impossible. Routing verifies the complete body with native trajectories.
       if (visibleOnly && !visibleLanding(bot, target, geometry)) continue
+      // The graph's wall rule: a wall above the jump apex with no short way around is no fallback
+      // option either (CP28 house: 12 rooms-behind-the-wall targets × 300 ms planning budget each).
+      if (!visibleOnly && highRidge(geometry, me, target) && (clearanceMargin(geometry, target) > 0 || detour(geometry, me, target)(me).distance > flat(me, target) + .5)) continue
       const key = landingKey(target)
       const gain = toward ? me.distanceTo(new Vec3(toward.x, toward.y, toward.z)) - target.distanceTo(new Vec3(toward.x, toward.y, toward.z)) : target.y - me.y
       options.push({ target, key, support: support.block.name, score: gain * 2 - Math.max(0, me.y - target.y) * 2 - (visited.get(key) ?? 0) * 3 - flat(me, target) * .08 })
@@ -946,6 +1203,24 @@ export function localOptions(bot: MovementBot, { toward, radius = 5, visited = n
   }
   const ascending = toward && toward.y > me.y + 1.25
   return options.sort((a, b) => (ascending ? Number(b.target.y > me.y + .2) - Number(a.target.y > me.y + .2) : 0) || b.score - a.score)
+}
+
+/**
+ * Short combat hop (API for PvP/tactics): the visible local landing within `radius`
+ * with the best caller score (`-Infinity` refuses), verified by the native forecast
+ * under a small frame budget and executed without fall damage. The caller decides
+ * what is better: higher ground, cover, distance from an enemy.
+ */
+export async function combatHop(bot: MovementBot, ctl: Cancellation, { score, radius = 4, maxFrames = 1500, tries = 3 }: { score: (target: Vec3) => number; radius?: number; maxFrames?: number; tries?: number }): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[]; target?: Vec3 }> {
+  if (!bot.physics || !bot.entity?.onGround) return { ok: false, why: 'outside_local_jump_scope', ticks: 0, samples: [] }
+  const ranked = localOptions(bot, { radius }).map(option => ({ option, value: score(option.target) }))
+    .filter(entry => Number.isFinite(entry.value)).sort((a, b) => b.value - a.value).slice(0, tries)
+  for (const { option } of ranked) {
+    if (ctl.aborted) break
+    const result = await executeJump(bot, ctl, option.target, { allowWalk: true, maxTicks: 30, maxFrames })
+    if (result.ok || result.ticks > 0) return { ...result, target: option.target }
+  }
+  return { ok: false, why: ctl.aborted ? 'interrupted' : 'no_short_hop', ticks: 0, samples: [] }
 }
 
 export async function tryLocal(bot: MovementBot, ctl: Cancellation, target: { x: number; y?: number; z: number }): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[] }> {

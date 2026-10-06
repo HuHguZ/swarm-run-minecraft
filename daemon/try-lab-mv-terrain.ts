@@ -94,7 +94,7 @@ async function main () {
     await kit.gamerule('send_command_feedback', 'true')
     await kit.gamerule('spawn_mobs', 'false')
     await kit.gamerule('advance_time', 'false')
-    await kit.cmd('/random reset *')
+    await kit.randomReset()
     await kit.cmd('/time set day')
     await kit.cmd('/weather clear')
     await kit.cmd('/kill @e[type=!player,distance=..200]')

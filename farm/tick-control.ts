@@ -71,8 +71,15 @@ function disablePacketLimiter (yaml) {
   }
   // Paper may save comments, kick-message and a different field order on
   // reload. Those do not require another reload when the limits are already off.
-  if (zero('interval') && zero('max-packet-rate') && /^  overrides:[ \t]*\{\}[ \t]*(?:#[^\r\n]*)?\r?$/m.test(section)) return yaml
-  return yaml.slice(0, start.index) + block + yaml.slice(end)
+  if (zero('interval') && zero('max-packet-rate') && /^  overrides:[ \t]*\{\}[ \t]*(?:#[^\r\n]*)?\r?$/m.test(section)) return disableSpamLimiter(yaml)
+  return disableSpamLimiter(yaml.slice(0, start.index) + block + yaml.slice(end))
+}
+
+// Paper spam-limiter (ServerGamePacketListenerImpl.checkLimit, javap 1.21.11): use_item/use_item_on past the 9th within
+// incoming-packet-threshold WALL ms are dropped without block_changed_ack. 300 ms is 6 ticks at 20 TPS but 225 at 750:
+// bridges, beds, bows and pearls lose packets ("ответа от сервера нет"). Paper writes the key on first start; `run` re-ensures.
+function disableSpamLimiter (yaml) {
+  return yaml.replace(/^(spam-limiter:[^\r\n]*\r?\n(?:  [^\r\n]*\r?\n)*?  incoming-packet-threshold:)[ \t]*(?!disabled\b)[^\r\n#]*/m, '$1 disabled')
 }
 
 module.exports = { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter }

@@ -157,12 +157,21 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   bot.on('health', onHealth)
   bot.on('physicsTick', onTick)
 
+  // Хп игрока — оценкой (правило пользователя 06.10, pvp/combat-observe.trackFoe), мобам — точное. Трекер на
+  // каждого врага-игрока этого боя, снимается в close().
+  const co = require('./pvp/combat-observe')
+  const hpTrackers = new Map()
+  const ehpOf = (e) => {
+    if (!co.isPlayer(e)) { const hp = read.healthRaw(bot, e); return (hp == null ? 20 : hp) + read.absorptionOf(bot, e) }
+    let t = hpTrackers.get(e.id)
+    if (!t || t.entity !== e) { if (t) t.stop(); t = co.trackFoe(bot, e, { honest: true }); hpTrackers.set(e.id, t) }
+    return t.hp.snapshot().mean
+  }
   // Что о нём знаем для выбора цели.
   const info = (e) => {
     const me = bot.entity.position
     const eye = me.offset(0, EYE, 0)
-    const hp = read.healthRaw(bot, e)
-    const ehp = (hp == null ? 20 : hp) + read.absorptionOf(bot, e)
+    const ehp = ehpOf(e)
     const s = tt && tt.state ? tt.state(e) : {}
     const busy = s.consuming ? 'ест или пьёт' : s.drawing ? 'тянет лук' : s.inWeb ? 'в паутине' : null
     const fsx = tt && tt.foes ? tt.foes.get(e.id) : null
@@ -605,6 +614,8 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   const close = () => {
     if (closed) return
     closed = true
+    for (const t of hpTrackers.values()) { try { t.stop() } catch {} }
+    hpTrackers.clear()
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('health', onHealth)
     bot.removeListener('physicsTick', onTick)

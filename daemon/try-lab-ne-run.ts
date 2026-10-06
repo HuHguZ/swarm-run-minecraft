@@ -7,6 +7,8 @@ const gameClock = require('./src/game-clock')
 // campaign.js полным порядком этапов, без команд. /locate (бастион, крепость Ада, крепость Края) — только в итог
 // сцены для разбора, телу и кампании не передаётся.
 //
+// Nether PASS (раунд 06.10) — netherPass в итоге: тело живо, без смертей снова в верхнем мире, в рюкзаке жемчуг и стержни на
+// EYES очей (nether-progress.netherGoalMet). UNTIL=nether — на нём сцена и кончается (ok = netherPass).
 // Успех — тело в Крае (status.dimension = the_end). Провал — кампания вышла, БЛОКЕР, ≥ DEATHS_MAX смертей, MINUTES.
 // Итог — строка JSON в LAB_OUT: ok, минуты от входа в Ад, ВЕХИ, смерти, золото/жемчуг/стержни, бастионы, рюкзак.
 //
@@ -26,7 +28,7 @@ const KEEPINV = process.env.KEEPINV === 'true' ? 'true' : 'false'
 const path = require('path')
 const { spawn, execFileSync } = require('child_process')
 const { connect, createKit, sleep, classify, campaignFacts } = require('./scene-kit')
-const { deathFreeEnd, bastionMetrics, explicitBarterMetrics } = require('./src/campaign/nether-progress')
+const { deathFreeEnd, netherPass, bastionMetrics, explicitBarterMetrics } = require('./src/campaign/nether-progress')
 const { netherToolsReady } = require('./src/campaign/nether-supply')
 const { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats } = require('./scene-nether-entry')
 
@@ -44,13 +46,15 @@ try { CENV = JSON.parse(process.env.CENV || '{}') } catch {}
 
 // Наборы «на входе в Ад». std — то, что требуют ворота кампании (READY.bastion, fightReady), light — как у
 // fresh-A5 слот 9 (вход на 57-й мин): кирки, меч, вёдра, огниво, мало еды, блоки, без брони.
+// s1 06.10: +4 бревна (16 досок) в std/post — потеря верстака (actions.reclaimTable «подобрать не успел») и ворота дерева гоняли тело
+// наверх (s1-full47: 2 поездки за деревом, на равнине у портала брёвен нет, 25+ игр. мин).
 const KITS = {
   std: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
     'stone_pickaxe 2', 'water_bucket', 'bucket', 'flint_and_steel', 'cooked_beef 12', 'cobblestone 64',
-    'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'stick 8', 'white_bed', 'obsidian 10', 'iron_ingot 2'],
+    'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'oak_log 4', 'stick 8', 'white_bed', 'obsidian 10', 'iron_ingot 2'],
   post: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
     'stone_pickaxe 2', 'water_bucket', 'bucket', 'flint_and_steel', 'cooked_beef 12', 'cobblestone 64',
-    'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'stick 8', 'white_bed', 'obsidian 10', 'iron_ingot 2',
+    'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'oak_log 4', 'stick 8', 'white_bed', 'obsidian 10', 'iron_ingot 2',
     'bow', 'spectral_arrow 64', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3', 'ender_pearl 11', 'string 12'],
   light: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'water_bucket', 'bucket', 'flint_and_steel',
     'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
@@ -105,9 +109,10 @@ function locate (what, dim, at) {
   return best
 }
 
+let rngSalt = null
 async function setup () {
-  // Копии мира и сиды независимы только со сброшенными последовательностями ГСЧ (AGENTS.md: ферма).
-  await kit.cmd('/random reset *')
+  // Копии мира независимы только со своей солью ГСЧ (без соли бартер одинаков на каждой копии сида — разбор 06.10).
+  rngSalt = await kit.randomReset()
   await kit.cmd('/gamemode creative')
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', KEEPINV) // правило пользователя 02.10: боевой режим — false, смерть = провал
@@ -402,9 +407,21 @@ async function main () {
   const marks: Record<string, any> = {} as Record<string, any>
   const mark = k => { if (marks[k] == null) marks[k] = Math.round((gameClock.now() - tc) / 6000) / 10 }
   let lastDim = 'the_nether'
+  const UNTIL_NETHER = process.env.UNTIL === 'nether'
+  const eyesNeed = () => Math.max(1, Math.min(12, Number(process.env.EYES) || 12))
+  let netherPassAt = null
   const until = tc + MINUTES * 60000
+  // Стража по РЕАЛЬНОМУ времени: бот выкинут с сервера (s1-full49 06.10: «Invalid move player packet» — часы демона встали,
+  // sleep(5000) по игровым часам не кончался, сцена висела 4+ мин). Ни отклика status, ни хода игровых часов 90 с — стоп.
+  let wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
   while (gameClock.now() < until) {
-    await sleep(5000)
+    await Promise.race([sleep(5000), gameClock.wall.sleep(15000)])
+    if (gameClock.now() > wallSeen.game) wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
+    else if (gameClock.wall.now() - wallSeen.wall > 90000) {
+      const s = await Promise.race([status(), gameClock.wall.sleep(10000).then(() => ({} as Record<string, any>))])
+      stoppedBy = s.connected === false ? 'бот отключён от сервера' : 'игровые часы стоят 90 с реального времени'
+      break
+    }
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
     if (gameClock.now() - lastCheck > 20000 || exited !== null) {
@@ -431,6 +448,11 @@ async function main () {
       if (pl['спавнер блейзов']) mark('spawner')
       if (pl['крепость']) mark('stronghold')
       if (pl['портал в Край']) mark('room')
+      if (netherPassAt === null && netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deathLines(size).length, inventory: inv, eyesNeed: eyesNeed() })) {
+        netherPassAt = Math.round((gameClock.now() - tc) / 6000) / 10
+        mark('netherPass')
+        if (UNTIL_NETHER) { stoppedBy = 'Nether PASS'; break }
+      }
       if (s.dimension === 'the_end') {
         const deaths = deathLines(size)
         ok = deathFreeEnd({ reachedEnd: true, health: s.health ?? 0, deaths: deaths.length })
@@ -454,6 +476,10 @@ async function main () {
   const inv = s.inventory || {} as Record<string, any>
   const deaths = deathLines(size)
   ok = deathFreeEnd({ reachedEnd: ok, health: s.health ?? 0, deaths: deaths.length })
+  // PASS — снимок в цикле (netherPassAt) и ни одной смерти до конца сцены; при UNTIL=nether ещё и итоговый снимок.
+  const passFinal = netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deaths.length, inventory: inv, eyesNeed: eyesNeed() })
+  const passNow = netherPassAt !== null && deaths.length === 0 && (!UNTIL_NETHER || passFinal)
+  if (UNTIL_NETHER) ok = passNow
   if (deaths.length) stoppedBy = `смертей ${deaths.length}`
   const bastions = bastionMetrics(text)
   let explicitBarters = []
@@ -476,6 +502,9 @@ async function main () {
     inventory: inv,
     measuredClock: { start: startClock, final: s.clock || gameClock.snapshot() },
     reachedAt,
+    netherPass: passNow,
+    netherPassAt,
+    rngSalt,
     stoppedBy,
     exitCode: exited,
     deathCount: deaths.length,
@@ -484,7 +513,7 @@ async function main () {
     truth,
     map,
     shMap,
-    eyesNeed: process.env.EYES ? Number(process.env.EYES) : null,
+    eyesNeed: eyesNeed(),
     best,
     marks,
     pearls: cnt(inv, /^ender_pearl$/),

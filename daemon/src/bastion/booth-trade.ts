@@ -102,17 +102,7 @@ async function tunnelTo (session, ctl, target, { maxSteps = 60 }: any = {}) {
     }
     return 'пропасть'
   }
-  const dig = async c => {
-    const b = bot.blockAt(c)
-    if (!b || b.boundingBox === 'empty') return true
-    try {
-      const tools = require('.././items')
-      if (tools.equipBestTool) await tools.equipBestTool(bot, b)
-      await Promise.race([bot.dig(b, true), sleep(5000).then(() => { throw new Error('копал слишком долго') })])
-    } catch { return false }
-    const now = bot.blockAt(c)
-    return !now || now.boundingBox === 'empty'
-  }
+
   let steps = 0
   for (; steps < maxSteps && !ctl.aborted; steps++) {
     if (inLava(bot)) { await lavaEscape(bot); return { ok: false, why: 'лава', steps } }
@@ -146,9 +136,10 @@ async function tunnelTo (session, ctl, target, { maxSteps = 60 }: any = {}) {
       if (land) { why.push(`${o.next.x},${o.next.y},${o.next.z}:${land}`); continue }
       // Цель — золото: не ломать его как проход (ломает takeGoldBlock).
       if (cells.some(c => c.equals(target))) continue
-      let ok = true
-      for (const c of cells) { if (!(await dig(c))) { ok = false; why.push(`не копается ${c.x},${c.y},${c.z}`); break } }
-      if (!ok) continue
+      // Каждая клетка — через грань, которую видит прицел (pen-trap.digSeenAll, S2b 06.10): прежде bot.dig 'auto' смотрел
+      // в центр блока, и вниз по ступени нижняя клетка копалась сквозь пол под ногами.
+      const dr = await require('./pen-trap').digSeenAll(bot, cells)
+      if (dr !== 'ok') { why.push(`не копается ${dr}`); continue }
       if (o.vertical && sy < 0) { await sleep(500); moved = true; break }
       // Шаг сам (вперёд, при подъёме — с прыжком): pathfinder на шаг в
       // свежую клетку отвечал «пустой путь» (пол Ада min(40, y) и не только).
@@ -451,7 +442,9 @@ async function tradeExecute (session, ctl, path, S, local = null) {
   try { return await SL.execute(session, ctl, path, S) } finally { S.openOk = prevOpen; S.breachOk = prevBreach }
 }
 
-async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () => false }: any = {}) {
+// settle:false — не ждать последних бросков в конце (загон S2b сразу после ямы закрывает рот: стоящие у люка
+// разглядывают и не уходят; их броски считает журнал загона).
+async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () => false, settle = true }: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
   let lastToss = 0
@@ -507,6 +500,8 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     if (st.hitBrutes && await hitThroughWindow(bot)) { r.hits++; st.lastBreak = gameClock.now(); idleSince = gameClock.now(); continue }
     const cool = lastGoldBreak(st) + 33000 - gameClock.now()
     if (cool > 0) { r.waitedAnger += Math.min(cool, 1000); await sleep(Math.min(cool, 1000)); continue }
+    // Стопка при перекладке в руку на миг вне inventory.items() — пересчёт через паузу (s2b-alt03 k=5).
+    if (countOf(bot, 'gold_ingot') - keep < 1 && !countOf(bot, 'gold_block')) await sleep(300)
     if (countOf(bot, 'gold_ingot') - keep < 1) {
       // Место под слитки: хлам — в окно (брошенное под ноги подберётся назад через 2 с).
       if (countOf(bot, 'gold_block') && bot.inventory.emptySlotCount() < 2) await junkOut(bot, bo, r.junked)
@@ -630,11 +625,11 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     await sleep(300)
   }
   // Последние сделки: добыча разглядывающих прилетит через ~6 с.
-  for (let i = 0; i < 16 && !ctl.aborted && gameClock.now() < until; i++) {
+  for (let i = 0; settle && i < 16 && !ctl.aborted && gameClock.now() < until; i++) {
     if (!mobs(bot, 'piglin', 12).some(e => admiring(e))) break
     await sleep(500)
   }
-  await sleep(2500) // задержка подбора и полёт последних бросков
+  if (settle) await sleep(2500) // задержка подбора и полёт последних бросков
   } finally { bot._client.removeListener('spawn_entity', onSpawn); bot._client.removeListener('entity_metadata', onMeta); bot.removeListener('playerCollect', onCollect) }
   const thrown = {}
   for (const t of throws.values()) if (t.name) thrown[t.name] = (thrown[t.name] || 0) + t.count

@@ -608,60 +608,8 @@ class Director {
 
   // ------------------------------------------------------ свои короткие дела
 
-  async escapeFire (ctl: any = null) {
-    const bot = this.session.bot
-    ctl ||= require('./reflex-lock').owner(this.session)?.ctl || { aborted: false, onAbort: [] }
-    const rescue = require('./tactics/lava-escape')
-    if (rescue.inLava(bot)) {
-      const air = require('./combat/emergency-escape').createEmergencyEscape(bot)
-      const capabilities = air.snapshot()
-      for (const kind of ['flight', 'pearl']) {
-        if (ctl.aborted) return { status: 'interrupted', detail: { how: 'lava rescue interrupted' } }
-        if (!capabilities[kind === 'flight' ? 'flightReady' : 'pearlReady']) continue
-        const result = await air.run(ctl, kind)
-        if (result.ok && !rescue.inLava(bot)) return { status: 'done', detail: { how: kind, ...result } }
-      }
-      const kit = require('./fightkit')
-      if (!kit.hasEffect(bot, 'fire_resistance') && rescue.lavaCapabilities(this.session).potion) await rescue.drinkFireResistance(this.session, ctl)
-      if (kit.hasEffect(bot, 'fire_resistance')) {
-        const result = await rescue.climbFromLava(this.session, ctl)
-        return { status: result.ok ? 'done' : ctl.aborted ? 'interrupted' : 'failed', detail: result }
-      }
-      const result = await require('./unstuck').RUNGS.swimOutLava({ bot, session: this.session, ctl, sleep })
-      const escaped = !rescue.inLava(bot) && bot.entity.onGround
-      return { status: escaped ? 'done' : ctl.aborted ? 'interrupted' : 'failed', detail: { ...result, escaped } }
-    }
-    const nether = /nether/.test(String((bot.game && bot.game.dimension) || ''))
-    const bucket = nether ? null : bot.inventory.items().find(i => i.name === 'water_bucket')
-    if (bucket) {
-      try { await bot.equip(bucket, 'hand'); await bot.look(bot.entity.yaw, -Math.PI / 2, true); bot.activateItem() } catch {}
-      await sleep(600)
-      return { status: 'done', detail: { how: 'вода из ведра' } }
-    }
-    const me = bot.entity.position.floored()
-    let best = null
-    for (let dx = -3; dx <= 3; dx++) {
-      for (let dz = -3; dz <= 3; dz++) {
-        for (const dy of [0, 1, -1]) {
-          const c = me.offset(dx, dy, dz)
-          const b = bot.blockAt(c)
-          const f = bot.blockAt(c.offset(0, -1, 0))
-          if (!b || !f || b.name === 'lava' || b.boundingBox !== 'empty' || f.boundingBox !== 'block') continue
-          const dd = Math.hypot(dx, dz)
-          if (!best || dd < best.dd) best = { c, dd }
-        }
-      }
-    }
-    if (best) {
-      try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
-      bot.setControlState('forward', true)
-      bot.setControlState('jump', true)
-      bot.setControlState('sprint', true)
-      await sleep(1200)
-      bot.clearControlStates()
-    }
-    return { status: 'done', detail: { how: best ? 'выпрыгнул к полу' : 'некуда', ...(nether ? { nether: true } : {}) } }
-  }
+  // Module function: the tactics call it without a Director (was Director.prototype.escapeFire.call({ session }, ctl)).
+  escapeFire (ctl: any = null) { return escapeFire(this.session, ctl) }
 
   async swimUp () {
     const bot = this.session.bot
@@ -890,4 +838,59 @@ class Director {
   }
 }
 
-module.exports = { Director, situation, GOALS, byDirector }
+async function escapeFire (session, ctl: any = null) {
+  const bot = session.bot
+  ctl ||= require('./reflex-lock').owner(session)?.ctl || { aborted: false, onAbort: [] }
+  const rescue = require('./tactics/lava-escape')
+  if (rescue.inLava(bot)) {
+    const air = require('./combat/emergency-escape').createEmergencyEscape(bot)
+    const capabilities = air.snapshot()
+    for (const kind of ['flight', 'pearl']) {
+      if (ctl.aborted) return { status: 'interrupted', detail: { how: 'lava rescue interrupted' } }
+      if (!capabilities[kind === 'flight' ? 'flightReady' : 'pearlReady']) continue
+      const result = await air.run(ctl, kind)
+      if (result.ok && !rescue.inLava(bot)) return { status: 'done', detail: { how: kind, ...result } }
+    }
+    const kit = require('./fightkit')
+    if (!kit.hasEffect(bot, 'fire_resistance') && rescue.lavaCapabilities(session).potion) await rescue.drinkFireResistance(session, ctl)
+    if (kit.hasEffect(bot, 'fire_resistance')) {
+      const result = await rescue.climbFromLava(session, ctl)
+      return { status: result.ok ? 'done' : ctl.aborted ? 'interrupted' : 'failed', detail: result }
+    }
+    const result = await require('./unstuck').RUNGS.swimOutLava({ bot, session: session, ctl, sleep })
+    const escaped = !rescue.inLava(bot) && bot.entity.onGround
+    return { status: escaped ? 'done' : ctl.aborted ? 'interrupted' : 'failed', detail: { ...result, escaped } }
+  }
+  const nether = /nether/.test(String((bot.game && bot.game.dimension) || ''))
+  const bucket = nether ? null : bot.inventory.items().find(i => i.name === 'water_bucket')
+  if (bucket) {
+    try { await bot.equip(bucket, 'hand'); await bot.look(bot.entity.yaw, -Math.PI / 2, true); bot.activateItem() } catch {}
+    await sleep(600)
+    return { status: 'done', detail: { how: 'вода из ведра' } }
+  }
+  const me = bot.entity.position.floored()
+  let best = null
+  for (let dx = -3; dx <= 3; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      for (const dy of [0, 1, -1]) {
+        const c = me.offset(dx, dy, dz)
+        const b = bot.blockAt(c)
+        const f = bot.blockAt(c.offset(0, -1, 0))
+        if (!b || !f || b.name === 'lava' || b.boundingBox !== 'empty' || f.boundingBox !== 'block') continue
+        const dd = Math.hypot(dx, dz)
+        if (!best || dd < best.dd) best = { c, dd }
+      }
+    }
+  }
+  if (best) {
+    try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    bot.setControlState('sprint', true)
+    await sleep(1200)
+    bot.clearControlStates()
+  }
+  return { status: 'done', detail: { how: best ? 'выпрыгнул к полу' : 'некуда', ...(nether ? { nether: true } : {}) } }
+}
+
+module.exports = { Director, situation, GOALS, byDirector, escapeFire }

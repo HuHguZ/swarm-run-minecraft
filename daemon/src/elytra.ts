@@ -1170,9 +1170,8 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
           const doHit = () => {
             try {
               if (ctl.aborted || e.isValid === false || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
-              const mi = hotbarIndex(bot, 'mace')
-              if (mi >= 0 && bot.quickBarSlot !== mi) bot.setQuickBarSlot(mi)
-              bot.attack(e)
+              // Его щит поднят — «оглушающий»: топор и булава в одном тике (mace.slamHit).
+              require('./mace').slamHit(bot, e, stats)
             } catch {}
           }
           hit = { at: gameClock.now(), fd: r2(S.fd), hp0: healthOf(bot, e), sinceSwap: gameClock.now() - swapped, fly: !!b.elytraFlying }
@@ -1258,8 +1257,10 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
     enemy, worldOf, kit, landingSpot, gliding, predictGlider, takeoff, fly, land,
     swapChest, startGlide, allow, used, stats: st
   })
+  const lanceMod = require('./combat/aerial-lance')
   let nextDive = 0
   let nextEscape = 0
+  let nextLance = 0
   return {
     fl,
     st,
@@ -1277,6 +1278,8 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
           nextEscape = gameClock.now() + 8000
           return { kind: 'escape' }
         }
+        // Таран копьём (s7b): в полёте — тоже, если копьё и ракеты есть, а его щит не в деле.
+        if (gameClock.now() >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = gameClock.now() + 4000; return { kind: 'lance' } }
         const decision = aerial.decide(undefined, ctx)
         return decision.selected ? { kind: 'aerial', decision } : null
       }
@@ -1288,6 +1291,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
         const W = worldOf(bot)
         if (headroom(W, bot.entity.position, 8) >= 6) { nextEscape = now + 8000; return { kind: 'escape' } }
       }
+      if (now >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = now + 6000; return { kind: 'lance' } }
       if (now >= nextDive && divePlan(bot, e, ctx)) { nextDive = now + 9000; return { kind: 'dive' } }
       return null
     },
@@ -1295,6 +1299,12 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
       const e = enemy()
       if (plan.kind === 'aerial') return aerial.run(ctl, ctx)
       if (plan.kind === 'escape') return escape(bot, ctl, e, { heal: ctx.heal, enough: ctx.enough, stats: st, used, allow, arena })
+      if (plan.kind === 'lance') {
+        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena })
+        // Ни одного попадания — не сразу снова (ракеты и время).
+        if (!res.hit) nextLance = gameClock.now() + 15000
+        return res
+      }
       if (plan.kind === 'dive') {
         const res: any = await diveSmash(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow })
         // Удар дошёл, а урона нет (щит поднял, тотем) или мимо — не повторять
@@ -1325,6 +1335,14 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
         airPearls: st.airPearls || undefined,
         airArrows: st.airArrows || undefined,
         airArrowHits: st.airArrowHits || undefined,
+        lances: st.lances || undefined,
+        lancePasses: st.lancePasses || undefined,
+        lanceHits: st.lanceHits || undefined,
+        lanceDealt: st.lanceDealt,
+        lanceSelf: st.lanceSelf || undefined,
+        lanceBadLand: st.lanceBadLand || undefined,
+        lanceDeaths: st.lanceDeaths || undefined,
+        lanceTrace: st.lanceTrace,
         foe: t
       }
       return (Object.values(out) as any[]).some(v => v !== undefined) ? out : undefined

@@ -256,10 +256,22 @@ function isSolid (b) { return !!b && b.boundingBox === 'block' }
 
 function isAirish (b) { return !!b && b.boundingBox === 'empty' && !/lava|water|fire|portal/.test(b.name) }
 
+// Описание блока по номеру состояния (750 TPS, s5 06.10): bot.blockAt строит объект Block на каждую клетку
+// (prismarine-block fromStateId) — в сканах колонок (края, поверхность, кольца pickSpot, цена шага A*) это главное время
+// демона в бою; на 750 тиках/с каждая мс — тик без реакции. Имя и форма — из реестра; null — чанк не загружен (как blockAt).
+const defPos = new Vec3(0, 0, 0)
+function blockDef (bot, x, y, z) {
+  const w = bot.world; const reg = bot.registry && bot.registry.blocksByStateId
+  if (!w || typeof w.getColumnAt !== 'function' || typeof w.getBlockStateId !== 'function' || !reg) return bot.blockAt(new Vec3(x, y, z))
+  defPos.x = x; defPos.y = y; defPos.z = z
+  if (!w.getColumnAt(defPos)) return null
+  return reg[w.getBlockStateId(defPos)] || null
+}
+
 function voidBelow (bot, x, y, z, depth = 64) {
   const fx = Math.floor(x); const fz = Math.floor(z)
   for (let yy = Math.floor(y) - 1; yy >= Math.max(0, Math.floor(y) - depth); yy--) {
-    const b = bot.blockAt(new Vec3(fx, yy, fz))
+    const b = blockDef(bot, fx, yy, fz)
     if (!b) return true
     if (isSolid(b)) return false
   }
@@ -761,4 +773,4 @@ function fillerItem (bot) {
   return findItem(bot, /^end_stone$/) ? 'end_stone' : undefined
 }
 
-module.exports = { gameClock, Vec3, Movements, goals, sleep, bow, build, threats, pvp, items, armor, actions, pick, pearlHop, DEBUG, yieldTick, dbg, PHASE, PHASE_RU, SITTING, PILLOW_DY, TOWER_FAR, RUN_TOWER1, RUN_FACING, RUN_ARROW, RUN_HIGH, RUN_MELEE, RUN_BOX, RUN_SEEN, RUN_GAPARROW, RUN_KEEPCOB, RUN_TICKSEEN, RUN_LATEHEAD, pillarTriesMax, KEEP_ON, KEEP_N, FIRST_MAX, BUILD_MAX_MS, PLACE_LEAD, PILLAR_BAD, HEAD_ROOM, LABENV, envv, runnerOn, envNum, HEAD_AHEAD, HURT_PAD, NECK_AHEAD, SIT_HEAD_DY, PART, SIT_TAKEOFF, CRYSTAL_BLAST, SAFE_FROM_CRYSTAL, BREATH_R, BREATH_AHEAD, FIREBALL_SNAP, CLOUD_SLAB, STARE_TOL, STARE_MARGIN, ENDERMAN_EYE, MELEE_REACH, EYE, CENTER, holdingOdds, dragonWaitBand, dragonWaitStop, KIT, BEDS_KIT, FILLER_RE, metaOf, dragonOf, phaseOf, hpOf, headDir, makeTrack, box, inflate, boxDist, overlap, playerBox, partsOf, isSolid, isAirish, voidBelow, digUpThrough, padOverVoid, supportCell, offIsland, floorAt, runwayAhead, stepKeys, nearPortal, zoneCache, cloudZones, zonesOf, inZone, stepIntoZone, cloudsOf, cloudHits, starer, safePitch, fbAlarmAt, fbAlarm, lookSafe, findItem, runnerBowl, clearControls, stepTo, digDownTo, fbSpawn, FB_PATH, fbTicksTo, fbLineHit, lineDist, fbSeen, fireballsOf, cloudBorn, sitFix, placeItemAt, fillerItem }
+module.exports = { gameClock, Vec3, Movements, goals, sleep, bow, build, threats, pvp, items, armor, actions, pick, pearlHop, DEBUG, yieldTick, dbg, PHASE, PHASE_RU, SITTING, PILLOW_DY, TOWER_FAR, RUN_TOWER1, RUN_FACING, RUN_ARROW, RUN_HIGH, RUN_MELEE, RUN_BOX, RUN_SEEN, RUN_GAPARROW, RUN_KEEPCOB, RUN_TICKSEEN, RUN_LATEHEAD, pillarTriesMax, KEEP_ON, KEEP_N, FIRST_MAX, BUILD_MAX_MS, PLACE_LEAD, PILLAR_BAD, HEAD_ROOM, LABENV, envv, runnerOn, envNum, HEAD_AHEAD, HURT_PAD, NECK_AHEAD, SIT_HEAD_DY, PART, SIT_TAKEOFF, CRYSTAL_BLAST, SAFE_FROM_CRYSTAL, BREATH_R, BREATH_AHEAD, FIREBALL_SNAP, CLOUD_SLAB, STARE_TOL, STARE_MARGIN, ENDERMAN_EYE, MELEE_REACH, EYE, CENTER, holdingOdds, dragonWaitBand, dragonWaitStop, KIT, BEDS_KIT, FILLER_RE, metaOf, dragonOf, phaseOf, hpOf, headDir, makeTrack, box, inflate, boxDist, overlap, playerBox, partsOf, isSolid, isAirish, blockDef, voidBelow, digUpThrough, padOverVoid, supportCell, offIsland, floorAt, runwayAhead, stepKeys, nearPortal, zoneCache, cloudZones, zonesOf, inZone, stepIntoZone, cloudsOf, cloudHits, starer, safePitch, fbAlarmAt, fbAlarm, lookSafe, findItem, runnerBowl, clearControls, stepTo, digDownTo, fbSpawn, FB_PATH, fbTicksTo, fbLineHit, lineDist, fbSeen, fireballsOf, cloudBorn, sitFix, placeItemAt, fillerItem }

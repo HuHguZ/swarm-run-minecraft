@@ -153,17 +153,40 @@ function heldName (e) {
   const eq = e && e.equipment
   return eq && eq[0] ? eq[0].name : ''
 }
-// Его щит поднят и смотрит на нас (передняя полусфера по горизонтали).
-function shieldAtUs (bot, e) {
+// Его щит поднят и смотрит на нас (передняя полусфера по горизонтали). Прямо сверху — тоже держит:
+// LivingEntity.applyItemBlocking берёт горизонталь к источнику, у нуля normalize() = 0, acos(0) = 90° — ещё в угле
+// (BlocksAttacks.DamageReduction: блок, пока угол ≤ 90°, javap 1.21.11; s7b 06.10 — раньше над макушкой считали «мимо»).
+function shieldAtUs (bot, e, at = bot.entity.position) {
   const f = livingFlags(bot, e)
   if (!(f & 0x01)) return false
   const eq = e.equipment || []
   const it = (f & 0x02) ? eq[1] : eq[0]
   if (!it || it.name !== 'shield') return false
-  const me = bot.entity.position
   const fx = -Math.sin(e.yaw || 0); const fz = -Math.cos(e.yaw || 0)
-  const tx = me.x - e.position.x; const tz = me.z - e.position.z
-  return (fx * tx + fz * tz) / (Math.hypot(tx, tz) || 1) > 0
+  const tx = at.x - e.position.x; const tz = at.z - e.position.z
+  const h = Math.hypot(tx, tz)
+  if (h < 0.35) return true
+  return (fx * tx + fz * tz) / h >= -0.02
+}
+
+// Удар булавой с падения по поднятому щиту — 0 урона (s7c: 2 из 5 «снял 0» — щит; булава щит не выбивает:
+// Items.MACE Weapon(1)). «Оглушающий удар» (stun slam): в одном тике топор (Weapon axe: щит на 5 с в откат,
+// BlocksAttacks.disable → stopUsingItem) и сразу булава — она уже не в щит. Бонус падения к заряду не привязан
+// (Player.attack: getAttackDamageBonus прибавляется после множителя заряда, javap 1.21.11), так что сброс заряда
+// топором удар с падения не портит. Возвращает true, если был топор.
+function slamHit (bot, e, stats = null) {
+  const mi = hotbarIndex(bot, 'mace')
+  const cur = bot.quickBarSlot
+  let ai = -1
+  if (shieldAtUs(bot, e)) for (let i = 0; i < 9; i++) { const it = bot.inventory.slots[36 + i]; if (it && /_axe$/.test(it.name)) { ai = i; break } }
+  if (ai >= 0) {
+    bot.setQuickBarSlot(ai)
+    bot.attack(e)
+    if (stats) stats.stunSlams = (stats.stunSlams || 0) + 1
+  }
+  if (mi >= 0 && bot.quickBarSlot !== mi) bot.setQuickBarSlot(mi)
+  bot.attack(e)
+  return { stun: ai >= 0, swapped: mi >= 0 && mi !== cur, cur }
 }
 
 // Сделать fn после пакета позиции этого тика: setImmediate — или в начале
@@ -494,6 +517,7 @@ function track (bot, { enemy }: any) {
         smashes: st.smashes || undefined,
         smashHits: st.smashHits || undefined,
         fallSmash: st.fallSmash || undefined,
+        stunSlams: st.stunSlams || undefined,
         dealt: st.dealt.length ? st.dealt.map(x => Math.round(x * 10) / 10) : undefined,
         selfDmg: st.selfDmg ? Math.round(st.selfDmg * 10) / 10 : undefined,
         pushes: st.pushes || undefined,
@@ -690,12 +714,10 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
           const doHit = () => {
             try {
               if (ctl.aborted || e.isValid === false || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
-              const mi = hotbarIndex(bot, 'mace')
-              const cur = bot.quickBarSlot
-              if (mi >= 0 && mi !== cur) bot.setQuickBarSlot(mi)
-              bot.attack(e)
-              if (swap && mi >= 0 && mi !== cur) bot.setQuickBarSlot(cur)
-              hit.swapped = swap && mi >= 0 && mi !== cur
+              const sh = slamHit(bot, e, stats)
+              if (swap && sh.swapped) bot.setQuickBarSlot(sh.cur)
+              hit.swapped = swap && sh.swapped
+              hit.stun = sh.stun
             } catch {}
           }
           bot._ndSmashNow = doHit
@@ -1013,7 +1035,7 @@ function defend (bot, t, { guard = null, entity: e = null, vel = null, set, keyD
 
 module.exports = {
   SWAP, REACH, smashBonus, smashDamage, install, track, smashPlan, windSmash, descend, fallSmashReady,
-  pushPlan, windPush, knockOff, defend, fireWind, ensureHotbar, hotbarIndex, headroom, windReady, shieldAtUs,
+  pushPlan, windPush, knockOff, defend, fireWind, ensureHotbar, hotbarIndex, headroom, windReady, shieldAtUs, slamHit,
   // utility.js (2026-09-26): удочка, трезубец — тот же «после пакета этого тика».
   afterPacket,
   // Посадка в огонь (прогон физики до земли) — для сцены try-burnland.js.

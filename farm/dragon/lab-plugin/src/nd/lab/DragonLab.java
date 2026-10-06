@@ -10,6 +10,8 @@ package nd.lab;
 //   ph    — смена фазы дракона
 //   pose  — голова/тело дракона каждый тик в LANDING (и APPROACH ближе 40 от центра)
 //   death — смерть игрока
+//   pl/phit/ptp/pgone — жемчуг (s5 06.10): бросок (место, скорость, взгляд игрока), попадание (место, блок/сущность),
+//           перенос игрока (откуда/куда), исчезновение без попадания
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -25,6 +27,10 @@ import org.bukkit.event.entity.EnderDragonChangePhaseEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.entity.ProjectileHitEvent;
+import org.bukkit.event.entity.ProjectileLaunchEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.entity.EnderPearl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.BufferedWriter;
@@ -222,5 +228,33 @@ public final class DragonLab extends JavaPlugin implements Listener {
     @SuppressWarnings("deprecation")
     public void onDeath(PlayerDeathEvent e) {
         w("{\"t\":\"death\",\"tick\":" + Bukkit.getCurrentTick() + ",\"name\":" + q(e.getEntity().getName()) + ",\"msg\":" + q(e.getDeathMessage()) + ",\"at\":" + loc(e.getEntity().getLocation()) + "}");
+    }
+
+    private static String v(org.bukkit.util.Vector x) { return x == null ? "null" : "[" + f(x.getX()) + "," + f(x.getY()) + "," + f(x.getZ()) + "]"; }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onLaunch(ProjectileLaunchEvent e) {
+        if (!(e.getEntity() instanceof EnderPearl pe)) return;
+        Location sl = pe.getShooter() instanceof Player pl ? pl.getLocation() : null;
+        w("{\"t\":\"pl\",\"tick\":" + Bukkit.getCurrentTick() + ",\"ms\":" + System.currentTimeMillis() + ",\"id\":" + pe.getEntityId() + ",\"at\":" + loc(pe.getLocation()) + ",\"vel\":" + v(pe.getVelocity())
+            + ",\"cancelled\":" + e.isCancelled() + ",\"player\":" + loc(sl) + ",\"yaw\":" + (sl == null ? "null" : f(sl.getYaw())) + ",\"pitch\":" + (sl == null ? "null" : f(sl.getPitch())) + "}");
+        final int id = pe.getEntityId();
+        Bukkit.getScheduler().runTaskTimer(this, task -> {
+            if (!pe.isValid()) { w("{\"t\":\"pgone\",\"tick\":" + Bukkit.getCurrentTick() + ",\"id\":" + id + ",\"at\":" + loc(pe.getLocation()) + "}"); task.cancel(); }
+        }, 1L, 1L);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onHit(ProjectileHitEvent e) {
+        if (!(e.getEntity() instanceof EnderPearl pe)) return;
+        String what = e.getHitBlock() != null ? q(e.getHitBlock().getType().name() + "@" + e.getHitBlock().getX() + "," + e.getHitBlock().getY() + "," + e.getHitBlock().getZ())
+            : e.getHitEntity() != null ? q(e.getHitEntity().getType().name()) : "null";
+        w("{\"t\":\"phit\",\"tick\":" + Bukkit.getCurrentTick() + ",\"id\":" + pe.getEntityId() + ",\"at\":" + loc(pe.getLocation()) + ",\"hit\":" + what + ",\"cancelled\":" + e.isCancelled() + "}");
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onTp(PlayerTeleportEvent e) {
+        if (e.getCause() != PlayerTeleportEvent.TeleportCause.ENDER_PEARL) return;
+        w("{\"t\":\"ptp\",\"tick\":" + Bukkit.getCurrentTick() + ",\"from\":" + loc(e.getFrom()) + ",\"to\":" + loc(e.getTo()) + ",\"cancelled\":" + e.isCancelled() + "}");
     }
 }

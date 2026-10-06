@@ -192,7 +192,10 @@ async function tunnelAwayBody () {
 }
 
 async function act (method, params: any = {}, again = 0) {
-  if (strategyExecuting && strategyInterrupted && !REFUGE_PASS.has(method) && !/^(observe|eat|flee|refuge|shelter|escape_fire|surface|wait)$/.test(method) && !fighting && !resting) {
+  // blaze — сам ответ на ифритов у спавнера (бой ведёт навык, тактика его не перебивает ниже уровня 3): прерывание
+  // подхода тактикой не повод уходить из боя (s1-post02 06.10: «спавнер в 24 бл. — бой отсюда», а blaze не звался). ne_burrow —
+  // уход в толщу, когда FR кончилась у спавнера (s1-post33: «закапываюсь» бросал STRATEGY_INTERRUPTED, смерть через секунды).
+  if (strategyExecuting && strategyInterrupted && !REFUGE_PASS.has(method) && !/^(observe|eat|flee|refuge|shelter|escape_fire|surface|wait|blaze|ne_burrow)$/.test(method) && !fighting && !resting) {
     throw Object.assign(new Error('STRATEGY_INTERRUPTED: обстановка изменилась, нужно наблюдение и новый план'), { strategyInterrupted: true })
   }
   if (!REFUGE_PASS.has(method) && refugeRunning() && !died) {
@@ -942,7 +945,7 @@ function netherVia (from, to) {
 const fillersNow = () => have(/^(netherrack|dirt|basalt|blackstone|stone|andesite|diorite|granite|tuff|cobbled_deepslate|cobblestone|deepslate|polished_blackstone_bricks|cracked_polished_blackstone_bricks|polished_blackstone|end_stone|mossy_cobblestone|soul_soil|warped_wart_block|nether_wart_block|soul_sand)$/)
 const nearBastion = (p, r = 100) => !!p && (known.bastions || []).some(b => Math.hypot(b.x - p.x, b.z - p.z) < r)
 
-async function goToward (p, range = 6) {
+async function goToward (p, range = 6, frKeep = 1) {
   const fromWorld = dim()
   const fromRevision = tacticalRevision
   const interrupted = r => tacticalRevision !== fromRevision || r.status === 'interrupted' || r.code === 'TACTICAL' ||
@@ -950,7 +953,7 @@ async function goToward (p, range = 6) {
   if (fromWorld === 'the_nether' && process.env.ND_NE_ROUTE === '1' && state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) > range + 2 && !died) {
     const far = Math.hypot(p.x - state.pos.x, p.z - state.pos.z)
     const yKnown = typeof p.y === 'number'
-    const r = await act('ne_route', { x: p.x, y: yKnown ? p.y : 64, z: p.z, r: Math.max(range, 3), dy: yKnown ? 4 : 50, frKeep: 1, ironOk: !nextBastion() || (process.env.ND_NE_STAY === '1' && pearlsNow() >= eyesWant()), timeoutSeconds: Math.min(1200, Math.round(120 + far * 2.5)) })
+    const r = await act('ne_route', { x: p.x, y: yKnown ? p.y : 64, z: p.z, r: Math.max(range, 3), dy: yKnown ? 4 : 50, frKeep, ironOk: !nextBastion() || (process.env.ND_NE_STAY === '1' && pearlsNow() >= eyesWant()), ...(nearBastion(state.pos, 120) ? { zoneExpo: 14 } : {}), timeoutSeconds: Math.min(1200, Math.round(120 + far * 2.5)) })
     await refresh()
     if (died || dim() !== fromWorld) return false
     if (interrupted(r)) { log('переход прерван — возвращаю управление для нового наблюдения'); return false }
@@ -1016,7 +1019,11 @@ async function goToward (p, range = 6) {
 async function returnFromNether () {
   if (dim() !== 'the_nether') return dim() === 'overworld'
   await unclutter()
-  const reached = known.netherPortal ? await goToward(known.netherPortal, 4) : true
+  // «портал (ад)» не записан (вход прерван тактикой) — портал прибытия рядом с x/8, z/8 портала верхнего мира: туда,
+  // а там portal enter сам найдёт горящий в 16 бл. (s1-post08 06.10: 10 очей, «ПЕРЕХОДА НЕТ» в 150 бл. от портала).
+  const home = known.netherPortal || (known.portal && Number.isFinite(known.portal.x) ? { x: Math.round(known.portal.x / 8), z: Math.round(known.portal.z / 8) } : null)
+  if (!known.netherPortal && home) log(`«портал (ад)» в памяти нет — иду к ${home.x},${home.z} (портал верхнего мира / 8)`)
+  const reached = home ? await goToward(home, 4) : true
   if (dim() !== 'the_nether') return dim() === 'overworld'
   if (!reached) { log('безопасный путь к порталу не пройден — переход пешком не запускаю'); return false }
   await act('portal', { mode: 'enter', timeoutSeconds: 120 })
@@ -2856,6 +2863,15 @@ const nextBastion = () => {
     (!barterFlow.enabled() || (bState(b).barterUntil || 0) <= gameClock.now())) ||
     left.slice().sort((a, b) => (bState(a).miningDeferredUntil || 0) - (bState(b).miningDeferredUntil || 0))[0] || null
 }
+// Бастион «в работе» — не выработан и копка не отложена. nextBastion() отдаёт и отложенные (ход туда, когда больше нечего
+// делать), а ворота графа и этапов («жемчуг прежде ифритов», эндермены после бастионов) смотрят сюда: отложенный бастион
+// ждёт срока, тело тем временем идёт за стержнями или жемчугом (разбор 06.10: ворота без выхода, стержней 0 во всех Full).
+const activeBastion = () => (known.bastions || []).find(b => !bState(b).spent && (bState(b).miningDeferredUntil || 0) <= gameClock.now()) || null
+// Бартер исчерпан: два захода подряд с сохранённым золотом не отдали ни слитка (укрытие не встало, торговцы не подходят).
+let barterZero = 0
+const barterExhausted = () => barterZero >= 2
+// Огнестойкость в рюкзаке и нечего отдать пиглинам — к ифритам, не дожидаясь жемчуга; потом добор (бастион, эндермены).
+const blazeBeforePearls = () => fireResReady() && have('gold_ingot') + 9 * have('gold_block') < 8
 function barterSite () {
   const position = state.pos
   if (!position) return {}
@@ -2869,9 +2885,8 @@ let bastionSearchRuns = 0
 const bastionsFromMap = () => (known.bastions || []).some(b => Array.isArray(b.gold) && b.gold.length > 0)
 const bastionSearchWanted = () => !nextBastion() && bastionSearchRuns < 3 && !bastionsFromMap()
 const BASTION_FIRST = process.env.ND_BASTION_FIRST !== '0'
-const bastionPearlsPending = () => BASTION_FIRST && (!only || only.includes('bastion')) && pearlsNow() < eyesWant() &&
-  (!!nextBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 &&
-    !(graphFacts.barter_exhausted?.status === 'known' && graphFacts.barter_exhausted.value === true)))
+const bastionPearlsPending = () => BASTION_FIRST && (!only || only.includes('bastion')) && pearlsNow() < eyesWant() && !blazeBeforePearls() &&
+  (!!activeBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 && !barterExhausted()))
 const SCOUT_HIGH = process.env.ND_SCOUT_HIGH === '1'
 defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWanted()) && bastionDry < 3 && !known.endPortal &&
   (BASTION_FIRST || rodsNow() >= 7) && (pearlsNow() < eyesWant() || obsShort() || (barterFlow.enabled() && process.env.ND_FR_STRICT === '1' && rodsWanted() && fireResNow() < 2)), async () => {
@@ -2938,6 +2953,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     const d = r.detail || {}
     bastionGoldDug += Number(d.goldBlocksDug) || 0
     bastionIngotsTraded += Number(d.ingotsTraded) || 0
+    if ((Number(d.ingotsTraded) || 0) > 0) barterZero = 0
     if (d.supplyNeeded) await sense()
     if (strategyInterrupted || r.status === 'interrupted' || r.code === 'TACTICAL' || r.by?.type === 'tactical') {
       throw Object.assign(new Error('STRATEGY_INTERRUPTED: бастион прерван, исчерпание не подтверждено'), { strategyInterrupted: true })
@@ -2950,6 +2966,11 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
       .bastionApproachProgress(beforeApproach, state.pos, b)
     if (carriedTrade) {
       bastionDry = 0; bs.dry = 0
+      barterZero = (Number(d.ingotsTraded) || 0) > 0 ? 0 : barterZero + 1
+      if (barterExhausted() && pearlsNow() < eyesWant()) {
+        if ((bs.miningDeferredUntil || 0) <= gameClock.now()) log(`${b.key}: два бартера подряд без единого слитка (${String(d.stopped || r.error || '').slice(0, 100)}) — бартер исчерпан, бастион отложен`)
+        deferBastionMining(b)
+      }
       if (pearlsNow() < eyesWant() && have('gold_ingot') + 9 * have('gold_block') >= 8) {
         barterRetryPending = true
         bs.barterUntil = approached ? 0 : gameClock.now() + 60000
@@ -3028,6 +3049,13 @@ async function netherGold () {
   if (have('gold_ingot') >= 5 && !goldOn()) { await craft('golden_helmet'); await act('armor') }
 }
 
+// Сытость перед боем у спавнера: еда прерывается тактикой/ифритами («не поел»), а уход из боя без защиты навыка у спавнера
+// гибелен (s1-post13 06.10: blaze вернулся на 19 хп, «сытость не восстановилась», ожидание тактики — смерть). Под огнестойкостью
+// (или с зельем в рюкзаке) и с 12+ хп бой не откладываем.
+async function fedForBlazes () {
+  if (await eatTo(18)) return true
+  return fireResReady() && (state.health ?? 0) >= 12
+}
 const rodsShort = () => Math.max(0, Math.ceil((eyesWant() - have('ender_eye') - have('blaze_powder')) / 2) - have('blaze_rod'))
 const rodsWanted = () => rodsShort() > 0 && (have('ender_eye') < Math.min(10, EYES_NEED) || have('ender_pearl') > 2 * have('blaze_rod') + have('blaze_powder'))
 defStage('nether', () => !!known.portal && rodsWanted(), async () => {
@@ -3083,7 +3111,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
       log(`бой у спавнера: не хватает ${fightLack()} — сохраняю добытые стержни`)
       return
     }
-    if (!(await eatTo(18))) { log('сытость не восстановилась — путь к спавнеру не начинаю'); return }
+    if (!(await fedForBlazes())) { log('сытость не восстановилась — путь к спавнеру не начинаю'); return }
     if (!netherSupply.netherToolsReady(netherSupplyState())) {
       const supply = await replenishNetherSupply()
       if (!supply.ready) { log(`путь к спавнеру отложен: ${supply.reason}`); return }
@@ -3091,20 +3119,47 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     await spares(200)
     const spFar = known.fortress && known.fortress.x != null && state.pos ? Math.hypot(known.fortress.x - state.pos.x, known.fortress.z - state.pos.z) : 0
     if (!have('bow') && have('string') >= 3) { await sticks(3); await craft('bow'); await refresh() }
-    const s = await act('fortress', { mode: 'spawner', timeoutSeconds: Math.min(600, 300 + Math.round(spFar / 2)), ...(process.env.ND_SPAWNER_TUNNEL === '1' ? { tunnel: true } : {}) })
-    if (!(s.detail && s.detail.reached)) { log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); if (i >= 1) break; continue }
-    log(`у спавнера ${JSON.stringify(s.detail.spawner)} (${s.detail.dist} бл.)`)
-    if (!(await eatTo(18))) { log('сытость не восстановилась — бой с блейзами не начинаю'); return }
+    // Уже у спавнера (в яме у помоста или в 8 бл. на его уровне) — подход не нужен: fortress уводил из ямы под ифритов.
+    const spHere = memorySnapshot?.places?.['спавнер блейзов']
+    // В 40 бл. от спавнера подход ведёт сам blaze (ход по сетке под защитой навыка, с огнестойкостью и отбоем), а не fortress:
+    // последний отрезок fortress рвала тактика, тело доходило с 6–10 хп (s1-LC-1/LD-1 06.10, крепость в 2–24 бл. от входа).
+    const atSpawner = !!(spHere && state.pos && Math.hypot(spHere.x - state.pos.x, spHere.z - state.pos.z) <= 40 && Math.abs(spHere.y - state.pos.y) <= 24)
+    // Спавнер известен (карта копии), а до него > 40 бл. — сперва ходом по сетке до 36 бл., дальше — blaze (см. выше).
+    if (!atSpawner && spHere && state.pos && process.env.ND_NE_ROUTE === '1' && Math.hypot(spHere.x - state.pos.x, spHere.z - state.pos.z) > 40) {
+      // Огнестойкость — бою у спавнера: ход не пьёт зелья (frKeep 3, как fortress), s1-LE-3 06.10 — 2 зелья ушли на ход, на бой одно.
+      await goToward({ x: spHere.x, y: spHere.y, z: spHere.z }, 36, 3)
+      await refresh()
+      if (died || dim() !== 'the_nether') return
+      if (state.pos && Math.hypot(spHere.x - state.pos.x, spHere.z - state.pos.z) <= 40) { i--; continue }
+    }
+    const s = atSpawner ? { detail: { reached: true, spawner: { x: spHere.x, y: spHere.y, z: spHere.z }, dist: 0 } } as any
+      : await act('fortress', { mode: 'spawner', timeoutSeconds: Math.min(600, 300 + Math.round(spFar / 2)), ...(process.env.ND_SPAWNER_TUNNEL === '1' ? { tunnel: true } : {}) })
+    // Не «дошёл», но спавнер в 24 бл. (ифриты уже бьют: s1-post01b 06.10 — 15 бл. над спавнером, подход рвала тактика,
+    // кампания шла домой и умерла) — бой отсюда: blaze сам ищет точку боя и стреляет из лука.
+    const spAt = (s.detail && s.detail.spawner) || memorySnapshot?.places?.['спавнер блейзов'] || null
+    const spNear = !!(spAt && state.pos && Math.hypot(spAt.x - state.pos.x, spAt.z - state.pos.z) <= 24 && Math.abs(spAt.y - state.pos.y) <= 24)
+    if (!(s.detail && s.detail.reached) && !spNear) { log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); if (i >= 1) break; continue }
+    if (!(s.detail && s.detail.reached)) log(`к спавнеру не дошёл (${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 80)}), но он в 24 бл. — бой отсюда`)
+    else log(`у спавнера ${JSON.stringify(s.detail.spawner)} (${s.detail.dist} бл.)`)
+    if (!(await fedForBlazes())) { log('сытость не восстановилась — бой с блейзами не начинаю'); return }
     if (!have('bow') && have('string') >= 3) { await sticks(3); await craft('bow'); await refresh() }
-    await act('blaze', { rods: Math.max(1, have('blaze_rod') + rodsShort()), timeoutSeconds: 400, box: false, ...(have('bow') ? { allowRanged: true } : {}) })
+    const bz = await act('blaze', { rods: Math.max(1, have('blaze_rod') + rodsShort()), timeoutSeconds: 400, box: false, ...(have('bow') ? { allowRanged: true } : {}) })
+    // blaze закопался на месте (яма 2 вниз с крышкой) — ne_burrow уже не нужен: он уводил тело из ямы под ифритов.
+    if (bz && bz.detail && bz.detail.dugIn) blazeDugInAt = gameClock.now()
     await refresh()
     log(`стержней: ${have('blaze_rod')}`)
+    // Огнестойкость кончилась, стержней мало, а ифриты рядом — закопаться, а не стоять у спавнера (s1-post28h1 06.10: «burned» после
+    // стопа навыка «огнестойкость кончилась»).
+    if (rodsWanted() && !fireResReady() && dim() === 'the_nether' && !died) { log('огнестойкость кончилась у спавнера — закапываюсь'); await act('ne_burrow', { why: 'огнестойкость кончилась у спавнера' }); await refresh(); break }
+    // Набрал — сразу в толщу (ифриты у спавнера остаются; после этапа граф молчит из-за угрозы, а тактика у спавнера гибнет).
+    if (!rodsWanted() && dim() === 'the_nether' && !died && gameClock.now() - blazeDugInAt > 60000) { log('стержни набраны — закапываюсь от ифритов'); await act('ne_burrow', { why: 'стержни набраны — ухожу от ифритов' }); await refresh(); break }
     if ((state.health ?? 20) < 10) break
   }
 })
 
+let blazeDugInAt = -Infinity
 const ENDERMEN_OK = process.env.ND_ENDERMEN === '1'
-defStage('pearls', () => ENDERMEN_OK && !!known.portal && rodsShort() === 0 && have('ender_pearl') + have('ender_eye') < eyesWant() && !nextBastion() && !bastionSearchWanted(), async () => {
+defStage('pearls', () => ENDERMEN_OK && !!known.portal && rodsShort() === 0 && have('ender_pearl') + have('ender_eye') < eyesWant() && !activeBastion() && !bastionSearchWanted(), async () => {
   if (dim() !== 'the_nether') {
     if (known.portal && state.pos && Math.hypot(known.portal.x - state.pos.x, known.portal.z - state.pos.z) > 48) {
       for (let k = 0; k < 4 && !died; k++) { await nightGuard(); if (await goToward(known.portal, 6)) break }
@@ -3705,11 +3760,12 @@ async function intelligenceObservation () {
   graphFact('fire_resistance_active', state.fireResistance === true || state.tactics?.state?.fireResistance === true)
   graphFact('bastion_gold_dug', bastionGoldDug)
   graphFact('bastion_traded', bastionIngotsTraded)
+  graphFact('barter_exhausted', barterExhausted())
   graphFact('blaze_allowed', !(process.env.ND_FR_STRICT === '1' && !fireResReady()) &&
     !bastionPearlsPending())
   graphFact('end_ready', DONE.endkit())
   graphFact('endermen_allowed', ENDERMEN_OK)
-  graphFact('bastions_exhausted', !nextBastion() && !bastionSearchWanted())
+  graphFact('bastions_exhausted', !activeBastion() && !bastionSearchWanted())
   const next = nextBastion()
   if (next) {
     graphFact('bastion', true, 'map')
@@ -3790,6 +3846,7 @@ async function executeStrategy (command, signal) {
       const barter = await act('bastion', { ...barterSite(), mode: 'barter', pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: 1,
         ...(process.env.ND_SH_NETHER === '1' ? { obsidian: 10 } : {}), ...(EXIT_KIT ? { exit: false } : {}), sealed: true, timeoutSeconds: 540 })
       bastionIngotsTraded += Number(barter.detail?.ingotsTraded) || 0
+      barterZero = (Number(barter.detail?.ingotsTraded) || 0) > 0 ? 0 : barterZero + 1
     }
     else if (skill === 'findBastions') {
       const r = await act('structure', { mode: 'scan', radius: 96 })
@@ -3828,6 +3885,7 @@ ws.on('open', async () => {
     log(`старт: ${bag()}${known.portal ? `; портал в памяти ${known.portal.x},${known.portal.y},${known.portal.z}` : ''}`)
     seamSnapshot('start')
     const fails = new Map()
+    let netherThreatWaits = 0
     const failureKey = name => {
       const site = name === 'bastion' ? nextBastion() : null
       return site ? `${name}:${site.dimension || 'the_nether'}:${site.x}:${site.z}` : name
@@ -3914,6 +3972,53 @@ ws.on('open', async () => {
       const urgent = weakAndHungry() ? need.find(x => x.name === 'food' && urgentOk(x) && x.ready() && !x.defer()) : null
       const legacy = urgent || (only && need.find(x => !cooling(x) && x.ready() && !x.defer()))
       const s = legacy ? (only ? legacy : intelligence.wrap(legacy)) : selection?.stage
+      if (!s && dim() === 'the_nether' && (state.tactics?.threatLevel ?? 0) >= 2 && netherThreatWaits < 20 && !died) {
+        // Граф молчит из-за угрозы (intelligence.select: threatLevel ≥ 2) — не повод идти домой: путь к порталу под
+        // ифритами рвёт тактика и тело гибнет на ходу (s1-post01b 06.10). Ифриты, а стержни нужны — бой у спавнера;
+        // иначе короткое ожидание, пока тактика не снимет угрозу.
+        netherThreatWaits++
+        stage = '-'
+        // У спавнера (в 24 бл. по памяти) угроза — это ифриты, даже если sit.fight их не перечислил: бой ведёт blaze, а не тактика
+        // (s1-post21hole 06.10: навык вернулся по времени с 3 стержнями, кампания ждала тактику у спавнера — смерть).
+        const spMem = memorySnapshot?.places?.['спавнер блейзов']
+        const nearSpawner = !!(spMem && state.pos && dim() === 'the_nether' && Math.hypot(spMem.x - state.pos.x, spMem.z - state.pos.z) <= 24 && Math.abs(spMem.y - state.pos.y) <= 24)
+        const blazes = (sit.fight?.order || []).some(o => o && o.name === 'blaze') || nearSpawner && fireResReady()
+        if (blazes && rodsWanted() && !bastionPearlsPending() && known.fortress && fightReady()) {
+          log('ифриты рядом, стержни нужны — бой у спавнера, а не путь домой')
+          stage = 'nether'
+          try { await stageRun('nether')() } catch (e) { if (e.stopCampaign) throw e; log(`бой у спавнера: ${e.message}`) }
+        } else if (dim() === 'the_nether' && known.netherPortal && state.pos && Math.hypot(known.netherPortal.x - state.pos.x, known.netherPortal.z - state.pos.z) <= 6 &&
+          !rodsWanted() && have('ender_eye') + have('ender_pearl') >= eyesWant()) {
+          // У портала домой, всё собрано — угроза не повод ждать: вход в портал и есть уход (s1-LG-10 06.10: 5 стержней, 10 очей,
+          // «прервано у портала», 7 мин ожидания тактики у рамы — смерть).
+          log('у портала домой, всё собрано — ухожу через портал, не жду тактику')
+          await act('portal', { mode: 'enter', timeoutSeconds: 60 })
+        } else if (dim() === 'the_nether' && gameClock.now() - blazeDugInAt < 300000 && !rodsWanted()) {
+          // В яме у спавнера после «набрал» граф молчит из-за угрозы (ифриты видны в открытый верх), а ожидание кончалось шарами
+          // после конца FR (s1-LL-6 06.10: 5 стержней, яма без крышки, «жду её конца» — смерть). Очи — крафт в рюкзаке прямо в
+          // яме; готово — домой ходом (у спавнера план идёт штреком, expoMul).
+          if (have('ender_eye') < eyesWant() && have('ender_pearl') > 0 && have('blaze_rod') + have('blaze_powder') > 0) {
+            log('в яме у спавнера: крафт очей, не жду тактику')
+            const want = Math.min(eyesWant() - have('ender_eye'), have('ender_pearl'))
+            if (have('blaze_powder') < want) await craft('blaze_powder', Math.min(2 * have('blaze_rod'), want - have('blaze_powder') + 1))
+            await craft('ender_eye', Math.min(want, have('blaze_powder')))
+          } else {
+            log('в яме у спавнера, всё собрано — домой, не жду тактику')
+            blazeDugInAt = -Infinity
+            await returnFromNether()
+          }
+        } else if (nearSpawner && !rodsWanted() && netherThreatWaits <= 2 && gameClock.now() - blazeDugInAt > 60000) {
+          // Стержни набраны, а у спавнера ифриты — в толщу, а не ждать тактику (s1-LE-4 06.10: 5 стержней на 5-й мин, затем LastStand/
+          // BlockOff у спавнера — смерть через секунды).
+          log('стержни набраны, у спавнера ифриты — закапываюсь')
+          await act('ne_burrow', { why: 'стержни набраны — ухожу от ифритов' })
+        } else {
+          log(`в Аду угроза (тактика ${state.tactics?.action || '?'}) — домой не иду, жду её конца`)
+          await act('wait', { seconds: 3 })
+        }
+        continue
+      }
+      if (s || (state.tactics?.threatLevel ?? 0) < 2) netherThreatWaits = 0
       if (!s) {
         stage = '-'
         const upNeed = dim() === 'the_nether' ? STAGES.filter(x => !(only && !only.includes(x.name)) && !OTHER_WORLD.has(x.name) && x.needed()) : []

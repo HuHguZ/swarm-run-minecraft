@@ -50,7 +50,8 @@ const gameClock = require('./src/game-clock')
 // случай пришёл [ПЛОХО].
 const WebSocket = require('ws')
 
-const ws = new WebSocket(process.env.ND_WS || 'ws://127.0.0.1:8765')
+require('./arms-guard').farmOnly({ ws: [process.env.ND_WS] })
+const ws = new WebSocket(process.env.ND_WS)
 let id = 0
 const pending = new Map()
 const call = (method, params: any = {} as Record<string, any>) => new Promise<any>((resolve, reject) => {
