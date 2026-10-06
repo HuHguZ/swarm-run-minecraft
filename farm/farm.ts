@@ -318,6 +318,25 @@ async function startDaemon (s, rate = readState().slots?.[s.i]?.tickRate ?? tick
   return p.pid
 }
 
+// Лимит миров считается по слушающим портам, а сервер открывает порт через 10–60 с после старта: up из цикла
+// down→up одного агента и чужой up проходили проверку оба (06.10 21:48 — 5 миров при maxUp 4 почти час).
+// Поэтому up целиком — под общим замком фермы, второй up ждёт. Замок мёртвого процесса снимается.
+const UP_LOCK = path.join(FARM, 'up.lock')
+async function withUpLock (fn) {
+  const until = Date.now() + 15 * 60000
+  for (;;) {
+    try { fs.mkdirSync(UP_LOCK); break } catch {}
+    let pid = 0; try { pid = Number(fs.readFileSync(path.join(UP_LOCK, 'pid'), 'utf8')) } catch {}
+    let alive = false; try { if (pid) { process.kill(pid, 0); alive = true } } catch {}
+    let young = true; try { young = Date.now() - fs.statSync(UP_LOCK).mtimeMs < 60000 } catch {}
+    if (!alive && (pid || !young)) { fs.rmSync(UP_LOCK, { recursive: true, force: true }); continue }
+    if (Date.now() > until) throw new Error(`up: замок ${UP_LOCK} занят 15 мин (pid ${pid}) — другой up завис?`)
+    await sleep(2000)
+  }
+  fs.writeFileSync(path.join(UP_LOCK, 'pid'), String(process.pid))
+  try { return await fn() } finally { fs.rmSync(UP_LOCK, { recursive: true, force: true }) }
+}
+
 async function cmdUp (args) {
   const rate = tickRate(args, process.env, LIMITS.tickRate)
   if (args.lockstep) process.env.ND_LOCKSTEP = '1' // acceleratedDigArgs (агент сервера) читает env
@@ -604,7 +623,7 @@ function parseArgs (argv) {
       log(`ниже обычного, ядра ${AFFINITY}: ${pids.join(', ') || 'некому'}`)
       const pr = applyPrio()
       if (pr.length) log(`обычный приоритет (prio ${readLimits().prio}): ${pr.join(', ')}`)
-    } else if (cmd === 'up') { await cmdUp(a); applyPrio() } else if (cmd === 'daemons') { await cmdDaemons(a); applyPrio() }
+    } else if (cmd === 'up') { await withUpLock(() => cmdUp(a)); applyPrio() } else if (cmd === 'daemons') { await cmdDaemons(a); applyPrio() }
     else if (cmd === 'down') await cmdDown(a)
     else if (cmd === 'status') await cmdStatus()
     else if (cmd === 'rcon') await cmdRcon(a)

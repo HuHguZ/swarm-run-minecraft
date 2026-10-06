@@ -85,7 +85,7 @@ function farmHarness ({ running = [], prepareChanged = false, failReload = 0, li
       throw new Error('missing mocked file')
     },
     writeFileSync: (filename, text) => files.set(String(filename), String(text)),
-    mkdirSync: () => {}, openSync: () => 123,
+    mkdirSync: () => {}, rmSync: () => {}, openSync: () => 123,
     readdirSync: () => []
   }
   const context = vm.createContext({
