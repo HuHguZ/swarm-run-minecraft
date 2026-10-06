@@ -1,0 +1,207 @@
+'use strict'
+// Честный удар (2026-09-26, пользователь: «боты через один блок пробивают…
+// крепость бессмысленна, он всё равно её пробивает»). Сервер удар по сущности
+// на прямую видимость не проверяет: ServerGamePacketListenerImpl.handleInteract
+// смотрит только расстояние от глаз до рамки цели (entityInteractionRange 3.0
+// плюс 3.0 запаса на задержку). Бот слал attack по одной дистанции — и бил
+// сквозь стенку коробки и сквозь крышу, чего клиент игры не может.
+//
+// Клиент бьёт то, что под прицелом (GameRenderer.pick 1.21.11): луч из глаз
+// до первого блока по КОНТУРУ (ClipContext.Block.OUTLINE, жидкости мимо —
+// Fluid.NONE), сущность засчитывается, только если луч входит в её рамку
+// раньше этого блока и не дальше 3.0. Контур паутины — полный куб (коллизии у
+// неё нет, а прицел в неё упирается); глаза внутри контура (голова в паутине)
+// — прицел на ней с первого же шага (VoxelShape.clip: старт внутри формы).
+// Здесь то же самое: ищем точку его рамки, до которой луч свободен.
+const { Vec3 } = require('vec3')
+
+const RANGE = 3.0
+// Нет коллизии, но контур есть и прицел в него упирается.
+const OUTLINE_FULL = new Set(['cobweb'])
+const FULL = [[0, 0, 0, 1, 1, 1]]
+
+function shapesOf (b) {
+  if (!b) return null
+  if (OUTLINE_FULL.has(b.name)) return FULL
+  if (b.boundingBox !== 'block') return null
+  return b.shapes && b.shapes.length ? b.shapes : null
+}
+
+// Вход луча o + t·d в коробку [lo, hi]: t входа (0, если начало внутри) или null.
+function rayBox (o, d, lo, hi, tMax) {
+  let t0 = 0; let t1 = tMax
+  for (const a of ['x', 'y', 'z']) {
+    if (Math.abs(d[a]) < 1e-9) {
+      if (o[a] < lo[a] || o[a] > hi[a]) return null
+      continue
+    }
+    let ta = (lo[a] - o[a]) / d[a]
+    let tb = (hi[a] - o[a]) / d[a]
+    if (ta > tb) { const s = ta; ta = tb; tb = s }
+    if (ta > t0) t0 = ta
+    if (tb < t1) t1 = tb
+    if (t0 > t1) return null
+  }
+  return t0
+}
+
+// Первый блок на луче до tMax, в чей контур луч входит (DDA по клеткам). Глаза
+// внутри контура — блок на t = 0.
+function blockOnRay (bot, o, d, tMax) {
+  let x = Math.floor(o.x); let y = Math.floor(o.y); let z = Math.floor(o.z)
+  const sx = d.x > 0 ? 1 : -1; const sy = d.y > 0 ? 1 : -1; const sz = d.z > 0 ? 1 : -1
+  const next = (c, s, dc, oc) => Math.abs(dc) < 1e-12 ? Infinity : ((s > 0 ? c + 1 : c) - oc) / dc
+  let tx = next(x, sx, d.x, o.x); let ty = next(y, sy, d.y, o.y); let tz = next(z, sz, d.z, o.z)
+  const dx = Math.abs(d.x) < 1e-12 ? Infinity : Math.abs(1 / d.x)
+  const dy = Math.abs(d.y) < 1e-12 ? Infinity : Math.abs(1 / d.y)
+  const dz = Math.abs(d.z) < 1e-12 ? Infinity : Math.abs(1 / d.z)
+  for (let i = 0; i < 16; i++) {
+    let b = null
+    try { b = bot.blockAt(new Vec3(x, y, z), false) } catch {}
+    const sh = shapesOf(b)
+    if (sh) {
+      for (const s of sh) {
+        const t = rayBox(o, d, { x: x + s[0], y: y + s[1], z: z + s[2] }, { x: x + s[3], y: y + s[4], z: z + s[5] }, tMax)
+        if (t != null) return { t, block: b, pos: new Vec3(x, y, z) }
+      }
+    }
+    const tNext = Math.min(tx, ty, tz)
+    if (tNext > tMax) return null
+    if (tx <= ty && tx <= tz) { x += sx; tx += dx } else if (ty <= tz) { y += sy; ty += dy } else { z += sz; tz += dz }
+  }
+  return null
+}
+
+// Рамка сущности с учётом позы: присел — 1.5, плывёт/летит на элитрах — 0.6.
+function poseOf (bot, entity) {
+  const keys = bot.registry?.entitiesByName?.player?.metadataKeys
+  const poseIndex = keys ? keys.indexOf('pose') : 6
+  const flagsIndex = keys ? keys.indexOf('shared_flags') : 0
+  if (entity.elytraFlying || (entity.metadata?.[flagsIndex >= 0 ? flagsIndex : 0] & 0x80)) return 'fall_flying'
+  return entity.metadata?.[poseIndex >= 0 ? poseIndex : 6] ?? null
+}
+
+// Avatar.POSES in Minecraft 1.21.11 supplies pose-specific eye heights.
+function eyeHeight (bot, entity = bot.entity) {
+  const pose = poseOf(bot, entity)
+  if (pose === 1 || pose === 3 || pose === 4 || pose === 'fall_flying' || pose === 'swimming' || pose === 'spin_attack') return 0.4
+  if (pose === 5 || pose === 'crouching' || entity.height === 1.5 || (entity === bot.entity && bot.getControlState?.('sneak'))) return 1.27
+  return 1.62
+}
+
+function hitboxOf (bot, e) {
+  let h = e.height || 1.8
+  const w = e.width || 0.6
+  if (e.type === 'player' || e.name === 'player') {
+    try {
+      const pose = poseOf(bot, e)
+      if (pose === 5 || pose === 'crouching') h = 1.5
+      else if (pose === 1 || pose === 3 || pose === 4 || pose === 'fall_flying' || pose === 'swimming' || pose === 'spin_attack') h = 0.6
+    } catch {}
+  }
+  const p = e.position
+  return { lo: { x: p.x - w / 2, y: p.y, z: p.z - w / 2 }, hi: { x: p.x + w / 2, y: p.y + h, z: p.z + w / 2 }, w, h }
+}
+
+// Точки прицела: грудь, голова, дальше сетка по рамке — первая свободная.
+const FRACS = []
+for (const fy of [0.6, 0.88, 0.35, 0.97, 0.12]) {
+  for (const [fx, fz] of [[0.5, 0.5], [0.12, 0.5], [0.88, 0.5], [0.5, 0.12], [0.5, 0.88], [0.12, 0.12], [0.88, 0.88], [0.12, 0.88], [0.88, 0.12]]) FRACS.push([fx, fy, fz])
+}
+
+function eyeOf (bot) {
+  return bot.entity.position.offset(0, eyeHeight(bot), 0)
+}
+
+// Куда целиться, чтобы удар по нему был честным: { point, dist, off } —
+// точка на его рамке (off — от его позиции), или null — отовсюду блок.
+// blocked — чем закрыт прямой луч к груди (блок и клетка), для «сломать».
+function aim (bot, e, { eye = null, range = RANGE }: any = {}) {
+  if (!bot.entity || !e || !e.position) return null
+  const o = eye || eyeOf(bot)
+  const box = hitboxOf(bot, e)
+  let first = null
+  for (const [fx, fy, fz] of FRACS) {
+    const tp = new Vec3(box.lo.x + box.w * fx, box.lo.y + box.h * fy, box.lo.z + box.w * fz)
+    const delta = tp.minus(o)
+    const len = delta.norm()
+    if (len < 1e-6) return { point: tp, dist: 0, off: tp.minus(e.position) }
+    const d = delta.scaled(1 / len)
+    const tE = rayBox(o, d, box.lo, box.hi, range + 0.001)
+    if (tE == null || tE > range) continue
+    const hit = blockOnRay(bot, o, d, tE)
+    if (!hit) return { point: tp, dist: tE, off: tp.minus(e.position) }
+    if (!first) first = hit
+  }
+  return first ? { blocked: first } : null
+}
+
+// Видна ли грань блока refPos со стороны face (Vec3 нормали) — можно ли в неё
+// «кликнуть», как клиент: луч из глаз до точки грани не упирается ни в другой
+// блок (контур), ни в рамку живой сущности (прицел взял бы её, а не блок —
+// GameRenderer.pick), и грань не дальше blockInteractionRange 4.5. Возвращает
+// точку на грани или null. avoid — сущности, чьи рамки мешают (по умолчанию все
+// живые в 6 блоках, кроме нас).
+const LIVING = /^(player|zombie|husk|drowned|skeleton|stray|creeper|spider|cave_spider|enderman|witch|pillager|vindicator|evoker|ravager|blaze|piglin|piglin_brute|zombified_piglin|hoglin|zoglin|wither_skeleton|slime|magma_cube|iron_golem|villager|cow|pig|sheep|chicken|horse|wolf)$/
+function faceAim (bot, refPos, face, { eye = null, range = 4.5, avoid = null }: any = {}) {
+  if (!bot.entity) return null
+  const o = eye || eyeOf(bot)
+  const others = avoid || (Object.values(bot.entities || {}) as any[]).filter((e : any) => e && e !== bot.entity && e.position && LIVING.test(e.name || e.type || '') && e.position.distanceTo(o) < 6)
+  const axis = face.x ? 'x' : face.y ? 'y' : 'z'
+  const plane = refPos[axis] + (face[axis] > 0 ? 1 : 0)
+  const us = axis === 'x' ? ['y', 'z'] : axis === 'y' ? ['x', 'z'] : ['x', 'y']
+  for (const [a, b] of [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8], [0.5, 0.15], [0.5, 0.85], [0.15, 0.5], [0.85, 0.5]]) {
+    const p = { x: 0, y: 0, z: 0 }
+    p[axis] = plane
+    p[us[0]] = refPos[us[0]] + a
+    p[us[1]] = refPos[us[1]] + b
+    const P = new Vec3(p.x, p.y, p.z)
+    const delta = P.minus(o)
+    const len = delta.norm()
+    if (len > range || len < 1e-4) continue
+    // С лица, а не с изнанки: луч идёт против нормали грани.
+    if (delta.x * face.x + delta.y * face.y + delta.z * face.z >= 0) continue
+    const d = delta.scaled(1 / len)
+    const hit = blockOnRay(bot, o, d, len + 0.01)
+    if (!hit || !hit.pos.equals(refPos) || hit.t < len - 0.02) continue
+    let blocked = false
+    for (const e of others) {
+      const box = hitboxOf(bot, e)
+      const t = rayBox(o, d, box.lo, box.hi, len)
+      if (t != null && t < len - 0.01) { blocked = true; break }
+    }
+    if (!blocked) return P
+  }
+  return null
+}
+
+// Честно ли бить прямо сейчас (для сторожа attack и сцен).
+function canHit (bot, e, opts: any = {}) {
+  const a = aim(bot, e, opts)
+  return !!(a && a.point)
+}
+
+// Сторож: удар по сущности, которую клиент игры не взял бы в прицел, не
+// уходит (как guardCrossbow в ranged.js). Всё, что не сущность с позицией
+// (части дракона, фаерболы без рамки), — как было.
+function install (bot) {
+  if (!bot || bot._ndPickGuard || typeof bot.attack !== 'function') return
+  bot._ndPickGuard = true
+  const raw = bot.attack
+  bot._ndBlockedHits = 0
+  bot.attack = function (target, swing) {
+    try {
+      if (process.env.ND_PICK_GUARD !== '0' && target && target.position && typeof target.id === 'number' && target.width != null && bot.entity) {
+        const a = aim(bot, target)
+        if (!a || !a.point) {
+          bot._ndBlockedHits++
+          if (process.env.ND_DEBUG_PICK) console.log('[pick] удар не отправлен — не в прицеле:', target.username || target.name, a && a.blocked ? `${a.blocked.block && a.blocked.block.name} ${a.blocked.pos}` : 'дальше 3')
+          return
+        }
+      }
+    } catch {}
+    return raw.call(bot, target, swing)
+  }
+}
+
+module.exports = { aim, canHit, faceAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE }

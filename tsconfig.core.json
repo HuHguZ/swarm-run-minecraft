@@ -1,0 +1,31 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true
+  },
+  "include": [
+    "daemon/src/core/**/*.ts",
+    "daemon/src/environments/**/*.ts",
+    "daemon/src/strategy/**/*.ts",
+    "daemon/src/tactics/**/*.ts",
+    "daemon/src/navigation/**/*.ts",
+    "daemon/src/combat/aerial-graph.ts",
+    "daemon/src/combat/pearl-intercept.ts",
+    "daemon/src/combat/throw-hand.ts",
+    "daemon/src/combat/enderman-boat-graph.ts",
+    "daemon/src/combat/flight-route-graph.ts",
+    "daemon/src/pvp/recovery-graph.ts",
+    "daemon/src/pvp/hand-policy.ts",
+    "daemon/src/social-graph.ts",
+    "mcp/src/daemon-client.ts",
+    "farm/strategy-costs.ts",
+    "daemon/src/conversions/registry.ts",
+    "daemon/src/conversions/repair-policy.ts",
+    "daemon/src/conversions/planner.ts",
+    "daemon/src/craft-confirmed.ts"
+  ],
+  "exclude": [
+    "**/node_modules"
+  ]
+}

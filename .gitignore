@@ -11,6 +11,10 @@
 !/PERSONA.md
 !/SPEEDRUN.md
 !/PVP-RESEARCH.md
+!/package.json
+!/package-lock.json
+!/tsconfig*.json
+!/scripts/
 !/daemon/
 !/farm/
 !/mcp/
@@ -23,7 +27,9 @@
 !/daemon/test/
 !/daemon/data/
 !/daemon/*.js
+!/daemon/*.ts
 !/daemon/*.ps1
+!/daemon/strategy-costs.json
 !/daemon/package.json
 !/daemon/package-lock.json
 !/daemon/COMBAT.md
@@ -31,6 +37,8 @@
 # farm — ферма тестовых миров: только код, сиды и наборы сидов
 /farm/*
 !/farm/*.js
+!/farm/*.ts
+!/farm/*.java
 !/farm/*.sh
 !/farm/limits.json
 !/farm/seeds/
@@ -58,6 +66,7 @@
 !/mcp/package.json
 !/mcp/package-lock.json
 !/mcp/smoke.js
+!/mcp/smoke.ts
 
 # run — скрипты основного мира
 /run/backups/
@@ -79,6 +88,21 @@ node_modules/
 *.bak
 *.bak2
 *.orig
+*.js.map
+/daemon/*.js
+/daemon/src/**/*.js
+/daemon/test/**/*.js
+/farm/*.js
+/farm/crystal/**/*.js
+/farm/dragon/**/*.js
+/farm/movement/**/*.js
+/farm/portal-scan/**/*.js
+/farm/route-scan/**/*.js
+/farm/stronghold_route/**/*.js
+/farm/stuck/**/*.js
+/mcp/src/**/*.js
+/mcp/smoke.js
+/run/*.js
 *.cpuprofile
 *.jar
 *.javap

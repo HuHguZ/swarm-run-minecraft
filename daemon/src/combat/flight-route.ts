@@ -1,0 +1,67 @@
+import { FlightRouteGraph, type FlightGate } from './flight-route-graph'
+import type { Position } from '../core/world-state'
+const clock = require('../game-clock')
+const sky = require('../elytra')
+const Vec3 = require('vec3')
+
+export interface FlightRouteRequest { gates: FlightGate[]; landing: Position; timeoutSeconds?: number; gateSeconds?: number; rocketReserve?: number }
+export async function runFlightRoute(session: any, ctl: { aborted: boolean }, params: FlightRouteRequest) {
+  const bot = session.bot
+  const graph = new FlightRouteGraph(params.gates)
+  if (!Object.values(params.landing).every(Number.isFinite)) throw new Error('Flight route needs a finite landing point')
+  const landing = new Vec3(params.landing.x, params.landing.y, params.landing.z)
+  const world = sky.worldOf(bot)
+  const floor = world.floorBelow(landing.x, landing.y, landing.z, 2)
+  if (world.boxHit(landing.x, landing.y, landing.z, 1.8) || !floor || floor.lava || floor.water || Math.abs(floor.top - landing.y) > 1) throw new Error('Flight route landing is not loaded and clear')
+  const first = graph.target()!
+  const started = clock.now()
+  const hpBefore = bot.health
+  const rocketBefore = sky.rocketCount(bot)
+  const statistics: Record<string, number> = {}
+  const trace: Array<Record<string, unknown>> = []
+  let collisionTicks = 0
+  let ticks = 0
+  let stop: string | null = null
+  const observe = () => {
+    ticks++
+    const point = bot.entity.position.offset(0, sky.gliding(bot.entity) ? .3 : .9, 0)
+    const crossed = graph.observe(point)
+    if (crossed) session.bus.emit('flight_gate', { ...crossed, index: graph.index, gameMs: clock.now() - started })
+    if (bot.entity.isCollidedHorizontally || bot.entity.isCollidedVertically && !bot.entity.onGround) collisionTicks++
+    if (ticks % 20 === 0) trace.push({ gameMs: clock.now() - started, index: graph.index, p: { x: point.x, y: point.y, z: point.z },
+      v: { ...bot.entity.velocity }, hp: bot.health, flying: sky.gliding(bot.entity) })
+  }
+  bot.on('physicsTick', observe)
+  try {
+    if (!sky.gliding(bot.entity)) {
+      const rocket = bot.inventory.items().find(sky.plainRocket)
+      if (rocket && !sky.plainRocket(bot.inventory.slots[45])) await bot.equip(rocket, 'off-hand')
+      const launch = await sky.takeoff(bot, ctl, { pitch: 1.0, yaw: Math.atan2(-(first.x - bot.entity.position.x), -(first.z - bot.entity.position.z)), stats: statistics })
+      if (!launch.ok) throw new Error(launch.why)
+    }
+    const timeout = Math.max(10, Math.min(300, params.timeoutSeconds ?? 120)) * 1000
+    while (!graph.complete && !ctl.aborted && clock.now() - started < timeout) {
+      const index = graph.index
+      const gate = graph.gates[index]
+      const flight = await sky.fly(bot, ctl, {
+        maxMs: Math.max(2, Math.min(30, params.gateSeconds ?? 15)) * 1000,
+        goal: () => {
+          const target = graph.target()!
+          return { kind: 'point', at: new Vec3(target.x, target.y, target.z), reach: true,
+            minY: gate.center.y - gate.radius + 1, maxY: gate.center.y + gate.radius - 1 }
+        },
+        until: () => graph.index > index ? 'gate crossed' : bot.health <= 6 ? 'low health' : null,
+        stats: statistics,
+        noRocket: () => sky.rocketCount(bot) <= (params.rocketReserve ?? 2),
+        rocketIf: (state: any) => Math.hypot(state.v.x, state.v.z) < .6 || state.p.y < gate.center.y - 2 && state.v.y < .1
+      })
+      if (graph.index === index) { stop = flight.why; break }
+    }
+    const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: landing, maxMs: 12000, stats: statistics }) : { ok: false, why: 'interrupted' }
+    const position = bot.entity.position
+    return { ok: graph.complete && landed.ok && !ctl.aborted, stopped: stop ?? (!graph.complete ? 'route incomplete' : !landed.ok ? landed.why : null),
+      crossings: graph.crossings, expectedGates: graph.gates.length, collisionTicks, rockets: rocketBefore - sky.rocketCount(bot),
+      gameMs: clock.now() - started, hpBefore, hp: bot.health,
+      landing: { ...position }, landingError: position.distanceTo(landing), statistics, trace }
+  } finally { bot.removeListener('physicsTick', observe) }
+}

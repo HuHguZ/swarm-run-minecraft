@@ -1,0 +1,107 @@
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { basename, resolve, relative } from 'node:path'
+import { createHash } from 'node:crypto'
+import { durationTicks, learnCosts, sampleKey, type CostSample, type CostModel } from '../daemon/src/core/cost-model'
+
+interface SourceDirectory { directory: string; files: number; modifiedAt: string; sha256: string; legacyTps: number | null }
+export interface CostDataset {
+  schemaVersion: 1
+  unit: 'gameTicks'
+  generatedAt: string
+  sourceDirectories: SourceDirectory[]
+  records: number
+  acceptedSamples: number
+  skipped: number
+  malformed: number
+  models: CostModel[]
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+const number = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
+const string = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
+
+export function normalizeSkillSample(value: unknown, legacyTps?: number): CostSample | null {
+  const row = record(value)
+  const before = record(row.before)
+  const sample: CostSample = { strategy: string(row.strategy), skill: string(row.skill), stage: string(row.stage), kind: string(row.kind),
+    level: string(row.level), ticks: number(row.ticks), sec: number(row.sec), seconds: number(row.seconds),
+    clock: string(row.clock), tickRate: number(row.tickRate), outcome: string(row.outcome),
+    ok: row.ok === true, death: typeof row.death === 'boolean' ? row.death : undefined }
+  if (typeof before.dim === 'string' || number(before.hp) !== undefined) sample.before = { dim: string(before.dim), hp: number(before.hp) }
+  if (!sampleKey(sample)) return null
+  const ticks = durationTicks(sample, legacyTps)
+  if (ticks === null) return null
+  return { strategy: sample.strategy, skill: sample.skill, stage: sample.stage, kind: sample.kind, level: sample.level,
+    ticks, ok: sample.ok, outcome: sample.outcome, death: sample.death, before: sample.before }
+}
+
+function knownLegacyRate(directory: string): number | undefined {
+  const filename = resolve(directory, 'batch.json')
+  if (!existsSync(filename)) return undefined
+  const batch = record(JSON.parse(readFileSync(filename, 'utf8')))
+  const env = record(batch.env)
+  const rate = env.TICK_RATE ?? env.ND_TICK_RATE ?? env.ND_TPS
+  // These retained day05r batches ran before accelerated game clocks, at normal 20 TPS.
+  return /^day05r-rt[1-9][ab]$/.test(basename(directory)) && rate === undefined ? 20 : undefined
+}
+
+export function collectCosts(directories: readonly string[], root = resolve(__dirname, '..')): CostDataset {
+  const samples: CostSample[] = []
+  const sourceDirectories: SourceDirectory[] = []
+  let records = 0; let skipped = 0; let malformed = 0
+  for (const directory of [...new Set(directories.map(path => resolve(path)))].sort()) {
+    const legacyTps = knownLegacyRate(directory)
+    const files = readdirSync(directory).filter(name => name.endsWith('.skills.jsonl')).sort()
+    const hash = createHash('sha256')
+    let modified = 0
+    for (const file of files) {
+      const filename = resolve(directory, file)
+      const source = readFileSync(filename, 'utf8')
+      hash.update(file).update('\0').update(source)
+      modified = Math.max(modified, statSync(filename).mtimeMs)
+      for (const line of source.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        records++
+        let value: unknown
+        try { value = JSON.parse(line) } catch { malformed++; continue }
+        const sample = normalizeSkillSample(value, legacyTps)
+        if (sample) samples.push(sample)
+        else skipped++
+      }
+    }
+    sourceDirectories.push({ directory: relative(root, directory).replaceAll('\\', '/'), files: files.length,
+      modifiedAt: new Date(modified).toISOString(), sha256: hash.digest('hex'), legacyTps: legacyTps ?? null })
+  }
+  return { schemaVersion: 1, unit: 'gameTicks', generatedAt: new Date().toISOString(), sourceDirectories,
+    records, acceptedSamples: samples.length, skipped, malformed, models: learnCosts(samples).sort((a, b) => a.key.localeCompare(b.key)) }
+}
+
+function main(args: string[]): void {
+  if (args.includes('--help')) {
+    console.log('node farm/strategy-costs.js [папки с *.skills.jsonl] [--out daemon/strategy-costs.json]\nБез папок: сохранённые day05r. Неизвестные wall-clock секунды и нулевые действия исключаются.')
+    return
+  }
+  const root = resolve(__dirname, '..')
+  let output = resolve(root, 'daemon/strategy-costs.json')
+  const directories: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--out') { if (!args[i + 1]) throw new Error('--out needs a filename'); output = resolve(args[++i]!) }
+    else if (arg.startsWith('--')) throw new Error(`Unknown option ${arg}`)
+    else directories.push(resolve(arg))
+  }
+  if (!directories.length) {
+    const results = resolve(root, 'farm/results')
+    directories.push(...readdirSync(results, { withFileTypes: true }).filter(entry => entry.isDirectory() && /^day05r-rt[1-9][ab]$/.test(entry.name)).map(entry => resolve(results, entry.name)))
+  }
+  if (!directories.length) throw new Error('No retained telemetry directories found')
+  const dataset = collectCosts(directories, root)
+  if (!dataset.acceptedSamples) throw new Error('No samples with a proven game duration')
+  writeFileSync(output, JSON.stringify(dataset) + '\n')
+  console.log(JSON.stringify({ output: relative(root, output), sources: dataset.sourceDirectories.length, records: dataset.records,
+    acceptedSamples: dataset.acceptedSamples, models: dataset.models.length, malformed: dataset.malformed, unit: dataset.unit }))
+}
+
+if (require.main === module) main(process.argv.slice(2))

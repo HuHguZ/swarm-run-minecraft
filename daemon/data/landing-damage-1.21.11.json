@@ -1,0 +1,17 @@
+{
+  "version": "1.21.11",
+  "source": {
+    "jar": "Paper 1.21.11 build 132, versions/1.21.11/paper-1.21.11.jar",
+    "PointedDripstoneBlock.class.sha256": "d5c17543f9ff3ba94f201bedf6c3c18a35c7035a07ac1894e12858b132922b73",
+    "LivingEntity.class.sha256": "2b5cb60d670adc99c479ba85f86d72b0ce6b70e30154d8ce8b9db7b986eb6679",
+    "HayBlock.class.sha256": "985d322c486658279b81fe5beed1bb1a1659cf5b38345928b4cae023b5c9cafc",
+    "methods": "PointedDripstoneBlock.fallOn; LivingEntity.calculateFallDamage/calculateFallPower; SlimeBlock.fallOn/updateEntityMovementAfterFallOn; HayBlock.fallOn (javap verified 2026-10-06)"
+  },
+  "safeFallDistance": 3,
+  "epsilon": 0.000001,
+  "rules": [
+    { "block": "pointed_dripstone", "properties": { "vertical_direction": "up", "thickness": "tip" }, "distanceOffset": 2.5, "damageMultiplier": 2 },
+    { "block": "slime_block", "properties": {}, "distanceOffset": 0, "damageMultiplier": 0 },
+    { "block": "hay_block", "properties": {}, "distanceOffset": 0, "damageMultiplier": 0.2 }
+  ]
+}

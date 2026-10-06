@@ -1,0 +1,30 @@
+{
+  "name": "neurodown",
+  "version": "0.2.0",
+  "private": true,
+  "description": "NeuroDown bot, strategic graph and Minecraft test farm",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.core.json",
+    "test": "npm run build && npm --prefix daemon test && node --test farm/*.test.js scripts/*.test.mjs",
+    "start:daemon": "npm run build && npm --prefix daemon start",
+    "start:mcp": "npm run build && npm --prefix mcp start",
+    "campaign": "npm run build && node daemon/campaign.js",
+    "farm": "npm run build && node farm/farm.js",
+    "rpc": "npm run build && node run/rpc.js"
+  },
+  "imports": {
+    "#core/*": "./daemon/src/core/*.js",
+    "#body/*": "./daemon/src/*.js",
+    "#strategy/*": "./daemon/src/campaign/*.js",
+    "#tactics/*": "./daemon/src/tactics/*.js"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "@types/ws": "8.18.2",
+    "@typescript/typescript6": "6.0.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

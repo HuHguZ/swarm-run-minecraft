@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "#core/*": ["./daemon/src/core/*.ts"],
+      "#body/*": ["./daemon/src/*.ts"],
+      "#strategy/*": ["./daemon/src/campaign/*.ts"],
+      "#tactics/*": ["./daemon/src/tactics/*.ts"]
+    }
+  },
+  "include": [
+    "daemon/src/**/*.ts",
+    "daemon/test/**/*.ts",
+    "daemon/*.ts",
+    "farm/*.ts",
+    "farm/crystal/**/*.ts",
+    "farm/dragon/**/*.ts",
+    "farm/movement/**/*.ts",
+    "farm/portal-scan/**/*.ts",
+    "farm/route-scan/**/*.ts",
+    "farm/stronghold_route/**/*.ts",
+    "farm/stuck/**/*.ts",
+    "mcp/**/*.ts",
+    "run/*.ts"
+  ],
+  "exclude": ["**/node_modules", "farm/dragon/codex-*"]
+}

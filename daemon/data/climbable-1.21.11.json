@@ -1,0 +1,18 @@
+{
+  "version": "1.21.11",
+  "source": "vanilla server jar",
+  "jarSha256": "ec47239a8de246335e1d54f6ac319bd35641778eb4b6a6da06372840d02fcebc",
+  "climbable": {
+    "values": [
+      "minecraft:ladder",
+      "minecraft:vine",
+      "minecraft:scaffolding",
+      "minecraft:weeping_vines",
+      "minecraft:weeping_vines_plant",
+      "minecraft:twisting_vines",
+      "minecraft:twisting_vines_plant",
+      "minecraft:cave_vines",
+      "minecraft:cave_vines_plant"
+    ]
+  }
+}
