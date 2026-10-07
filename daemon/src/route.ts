@@ -167,6 +167,20 @@ function sheepHerds (info) {
   }
   return herds
 }
+// Группы съедобных зверей по скану копии (корова, свинья, овца, курица, кролик; ≥ 2 в 16 бл.).
+function foodHerds (info) {
+  const an = ((info.ores && info.ores.animals) || []).filter(a => /^(cow|pig|sheep|chicken|rabbit|mooshroom)$/.test(a.id))
+  const out = []
+  const used = new Set()
+  for (const a of an) {
+    if (used.has(a)) continue
+    const mates = an.filter(b => !used.has(b) && Math.hypot(b.x - a.x, b.z - a.z) <= 16)
+    if (mates.length < 2) continue
+    for (const b of mates) used.add(b)
+    out.push({ x: Math.round(mates.reduce((n, b) => n + b.x, 0) / mates.length), y: Math.round(mates.reduce((n, b) => n + b.y, 0) / mates.length), z: Math.round(mates.reduce((n, b) => n + b.z, 0) / mates.length), n: mates.length })
+  }
+  return out
+}
 function bedCands (info, from, end) {
   const out = []
   const detour = at => (flat(from, at) + flat(at, end) - flat(from, end)) / SPEED
@@ -227,6 +241,18 @@ function orderPoints (from, pts, last = null) {
 // колодцем вниз к ней и литьё с окнами; ближняя годная из good-v2 (lavaAt). Цена — дорога (2.5 м/с) + спуск
 // (~2 с на уровень) + литьё (поверху ~170 с, в пещере ~230 с). Не вышло — id в avoid, следующий кандидат; никого —
 // вниз вслепую (deep).
+// Доля удачного литья по классу лавы — night05t+day05r (05.10, 20 TPS, код c1c3726; 304 прогона, шаги castSky/castCave):
+// поверху ≥ 40 источников 85/204 ≈ 0.42, < 40 — 8/34 ≈ 0.24; пещера 7–12 под рельефом 18/40 ≈ 0.45, ≤ 6 — 5/15 ≈ 0.33,
+// глубже 12 — 28/180 ≈ 0.16 (и 14 смертей); лава у руин (rp: берег — незерак и магма, «места на берегу нет») — 0/24.
+function castOdds (kind, cls, depth, src) {
+  if (cls === 'rp') return 0.03
+  if (kind === 'sky') return (Number.isFinite(src) ? src : 40) >= 40 ? 0.42 : 0.24
+  if (cls === 'open-cave') return 0.45
+  return (depth || 0) <= 6 ? 0.33 : (depth || 0) <= 12 ? 0.45 : 0.16
+}
+// По умолчанию (ND_ROUTE_LAVAP=0 — прежняя цена по дороге): цена кандидата = (дорога + работа) / доля: ожидаемое время до горящей рамы с учётом повторов у
+// следующей лавы, а не только дорога (рядом глубокая пещера 16 % проигрывала озеру поверху в 300 м с 42 %).
+const LAVAP = () => process.env.ND_ROUTE_LAVAP !== '0'
 function lavaCands (info, from) {
   const out = []
   const add = (kind, at, cls, depth, src, tag) => {
@@ -235,8 +261,10 @@ function lavaCands (info, from) {
     if (out.some(c => c.id === id)) return
     // Пещера дороже: R3–R4 — литьё у пещерной лавы 0 из 6 (нет берега, закрытая полость), у лавы под небом — 3 из 4.
     // Лава в зоне аванпоста — +200 с (пиллагеры у литья; лучше другая, если есть).
-    const cost = flat(from, at) / SPEED + (kind === 'sky' ? WORK.castSky : WORK.castCave + 90 + (depth || 0) * 2) + (outpostNear(info, at) ? 200 : 0)
-    out.push({ id, kind, at, cls, depth: depth || 0, src, cost, tag })
+    const base = flat(from, at) / SPEED + (kind === 'sky' ? WORK.castSky : WORK.castCave + 90 + (depth || 0) * 2)
+    const odds = castOdds(kind, cls, depth, src)
+    const cost = (LAVAP() ? base / odds : base) + (outpostNear(info, at) ? 200 : 0)
+    out.push({ id, kind, at, cls, depth: depth || 0, src, cost, odds, tag })
   }
   if (info.sky) add('sky', { x: info.sky.x, y: info.sky.y, z: info.sky.z }, info.sky.cls, 0, info.sky.src, 'пул')
   for (const b of ((info.ores && info.ores.lava) || [])) {
@@ -280,11 +308,18 @@ function plan (info, opts: any = {}) {
   if (!pick && ok('wood')) {
     // Деревья по скану копии: ближняя роща (≥ 8 брёвен) — к ней, если рядом с телом деревьев нет (равнины: «не вижу
     // any_log в 48» и разведка на 2 мин — rt-S1 03.10, слот 29).
-    const all = (info.ores && Array.isArray(info.ores.trees) ? info.ores.trees : []).filter(t => (!Number.isFinite(opts.fromY) || Math.abs(t.y - (opts.fromY + 3)) <= 8) && !outpostNear(info, t, 8))
+    const treesAll = (info.ores && Array.isArray(info.ores.trees) ? info.ores.trees : []).filter(t => !outpostNear(info, t, 8))
+    let all = treesAll.filter(t => !Number.isFinite(opts.fromY) || Math.abs(t.y - (opts.fromY + 3)) <= 8)
+    // Своей высоты деревьев нет в 160 м, а выше/ниже — есть (−4303…: равнина у спавна, все деревья на горе в 60–90 м, на 40–55
+    // выше; без них — «дома деревни», которых не видно, и 4×120 с разведки вслепую, s8-f1-7/f2-7) — те, что есть.
+    const anyY = process.env.ND_ROUTE_TREEANYY !== '0' && !all.some(t => flat(from, t) <= 160) && treesAll.some(t => flat(from, t) <= 160)
+    if (anyY) all = treesAll.filter(t => flat(from, t) <= 160)
     const trees = all.filter(t => t.n >= 8).sort((a, b) => flat(from, a) - flat(from, b))
     // Аванпост рядом со спавном — роща подальше от него, даже если деревья тут есть (пиллагеры бьют с 15+ бл.).
     const nearAny = all.some(t => t.n >= 4 && flat(from, t) <= 40) && !outpostNear(info, from, 24)
     let grove = !nearAny && trees[0] && flat(from, trees[0]) <= 160 ? trees[0] : null
+    // Только чужой высоты и мелкие (n 4–7) — ближняя по дороге с подъёмом (2 с на блок высоты), не дома деревни.
+    if (!grove && anyY) grove = all.filter(t => t.n >= 4).sort((a, b) => flat(from, a) + 2 * Math.abs(a.y - (opts.fromY + 3)) - flat(from, b) - 2 * Math.abs(b.y - (opts.fromY + 3)))[0] || null
     // Рощи нет ближе 100 м (24 % сканированных сидов пула: пустыня, океан, степь) — дерево из построек (правило
     // пользователя: ресурсы сначала из построек): деревня ближе 260 м — брёвна/доски её домов (rt3-A1 слоты 16, 17: брёвна
     // искались вслепую 8–11 мин, смерти).
@@ -298,7 +333,7 @@ function plan (info, opts: any = {}) {
       const mapped = woodCandidates(info, from, opts.fromY)[0]
       if (mapped && (mapped.in || !grove)) { grove = { ...mapped, ...(mapped.stand || {}) }; src = 'mapwood' }
     }
-    steps.push({ id: 'wood', kind: 'wood', ...(grove ? { at: { x: grove.x, y: grove.y, z: grove.z }, d: Math.round(flat(from, grove)) } : {}), ...(src ? { src } : {}), budget: WORK.wood + (grove ? Math.round(flat(from, grove) / SPEED) : 0), why: `брёвна, верстак, деревянная кирка${src === 'village' ? ' (рощ рядом нет — дома деревни по карте)' : grove ? ` (роща ${grove.n} брёвен по карте)` : ''}` })
+    steps.push({ id: 'wood', kind: 'wood', ...(grove ? { at: { x: grove.x, y: grove.y, z: grove.z }, d: Math.round(flat(from, grove)) } : {}), ...(src ? { src } : {}), ...(grove && grove.in ? { in: grove.in } : {}), budget: WORK.wood + (grove ? Math.round(flat(from, grove) / SPEED) : 0), why: `брёвна, верстак, деревянная кирка${src === 'village' ? ' (рощ рядом нет — дома деревни по карте)' : grove ? ` (роща ${grove.n} брёвен по карте)` : ''}` })
   }
   if (!stonePick && ok('stone')) steps.push({ id: 'stone', kind: 'stone', budget: WORK.stone, why: 'каменная кирка, меч, печь, блоки на литьё' })
   void logs
@@ -459,7 +494,13 @@ function plan (info, opts: any = {}) {
     const alts = grs.slice(1, 4).map(g => ({ x: (g.stand || g).x, y: (g.stand || g).y, z: (g.stand || g).z }))
     if (!gb) steps.push({ id: 'flint', kind: 'flint', ...(gat ? { at: { x: (gat.stand || gat).x, y: (gat.stand || gat).y, z: (gat.stand || gat).z }, alts, d: Math.round(flat(from, gat)) } : {}), budget: 60 + (gat ? Math.round(flat(from, gat) / SPEED) : 120), why: `огниво: кремень из гравия${gat ? ` (гравий ${gat.n} по карте, запасных ${alts.length})` : ''}` })
   }
-  if (ok('food')) steps.push({ id: 'food', kind: 'food', budget: WORK.food, why: 'еды на вход ≥ 6 (сено, звери по пути)' })
+  if (ok('food')) {
+    // Стадо съедобных по скану копии (звери при генерации стоят у места): крюк ≤ 60 с к самому дешёвому. Еды на входе в Ад
+    // было 0 в 7 из 9 удачных (S8 07.10), а без еды ночью тело не лечится — смерти от пауков на 13–16 мин. ND_ROUTE_FOODMAP=0 — выкл.
+    const herd = process.env.ND_ROUTE_FOODMAP === '0' ? null : foodHerds(info).filter(h => !outpostNear(info, h, 16) && (!Number.isFinite(opts.fromY) || Math.abs(h.y - opts.fromY) <= 16))
+      .map(h => ({ h, c: detour(h) })).filter(x => x.c <= 60).sort((a, b) => a.c - b.c)[0]
+    steps.push({ id: 'food', kind: 'food', ...(herd ? { at: { x: herd.h.x, y: herd.h.y, z: herd.h.z }, d: Math.round(flat(from, herd.h)) } : {}), budget: WORK.food + (herd ? Math.round(herd.c) : 0), why: `еды на вход ≥ 6 (${herd ? `стадо ${herd.h.n} по карте` : 'сено, звери по пути'})` })
+  }
   if (ok('water') && !have.water_bucket && !frame) {
     // Вода с открытым верхом из скана: у лавы поверху (≤ 24) — литьё само зачерпнёт (cast.ensureWater), шаг не нужен;
     // иначе — источник с наименьшим крюком по пути к лаве (не подо льдом: у скана вода только с воздухом сверху).
@@ -485,7 +526,9 @@ function plan (info, opts: any = {}) {
   const bedOwned = Object.keys(have).some(k => /_bed$/.test(k)) || (Object.entries(have) as [string, any][]).some(([k, v]: any) => /_wool$/.test(k) && v >= 3)
   const elapsed = Number(opts.elapsed) || 0
   let bedStep = null
-  if (!bedOwned && ok('bed') && process.env.ND_ROUTE_BED !== '0') {
+  // Кровать в маршруте — только ND_ROUTE_BED=1: в спидране сон запрещён (routeSleep при speedrun выходит), кровать — потеря
+  // ~1.3 мин на прогон (night05t/day05r, S8 07.10).
+  if (!bedOwned && ok('bed') && process.env.ND_ROUTE_BED === '1') {
     const total = steps.reduce((n, s) => n + (s.budget || 0), 0)
     let cum = elapsed
     let villageBy = Infinity
@@ -553,4 +596,4 @@ if (require.main === module) {
   } else console.log('node daemon/src/route.js cache | plan <сид> | stats')
 }
 
-module.exports = { structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }
+module.exports = { foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }

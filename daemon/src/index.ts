@@ -56,6 +56,7 @@ const methods = {
       clutch: { waterPlan: !!session.bot._ndClutch?.waterPlan,
         stats: Object.fromEntries(['water_plans', 'water_saved', 'water_failed', 'ladders', 'saved', 'placed', 'soft_plans', 'soft_saved', 'soft_failed'].map(key => [key, session.bot._ndClutch?.stats?.[key] ?? 0])),
         lastDecision: session.bot._ndClutch?.lastDecision ? { action: session.bot._ndClutch.lastDecision.action, why: session.bot._ndClutch.lastDecision.why } : null },
+      sprintJump: session.bot._ndSprintJump ? { jumps: session.bot._ndSprintJump.jumps, skipped: session.bot._ndSprintJump.skipped } : null,
       controls: Object.fromEntries(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].map(key => [key, session.bot.getControlState(key)])), jumpTicks: session.bot.jumpTicks,
       worldLoaded: [-8, 0, 8].every(x => [-8, 0, 8].every(z => !!session.bot.blockAt(session.bot.entity.position.offset(x, -1, z)))),
       height: session.bot.physics?.playerHeight, halfWidth: session.bot.physics?.playerHalfWidth,
@@ -118,6 +119,9 @@ const methods = {
   dig_down: async (p) => session.digDown(p || {}),
   craft: async (p) => session.craft(p || {}),
   place: async (p) => session.place(p || {}),
+  // S8: кремень из гравия рюкзака на месте — поставить у ног и сломать до удачи (src/flint-grind.ts).
+  flint_grind: async (p) => session.runIntent('flint_grind', ctl => { session.require(); return require('./flint-grind').flintGrind(session, ctl, p || {}) },
+    { timeoutMs: (Math.min(300, (p && p.timeoutSeconds) ?? 90) + 15) * 1000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'], params: p || {} }),
   fight: async (p) => session.fight(p || {}),
   temper: async (p) => session.setTemper(p || {}),
   play_mode: async (p) => session.setPlayMode(p || {}),

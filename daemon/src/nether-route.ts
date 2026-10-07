@@ -23,7 +23,7 @@ const { ReceiptCostWindow } = require('./environments/receipt-cost')
 const receiptCosts = new WeakMap<object, import('./environments/receipt-cost').ReceiptCostWindow>()
 interface RouteSupplyNeed {
   pickSwings: number
-  requiredSwings: 260
+  requiredSwings: number
   woodEquivalent: number
   requiredWood: 8
   table: boolean
@@ -535,6 +535,47 @@ async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower
   return true
 }
 
+// Иссушитель вплотную — бой из ямы глубиной 2: рамка удара моба раздута только вширь (Mob.getAttackBoundingBox, 1.20.5+),
+// иссушитель 2.4 в высоту с пола — тело с ногами на −2 он не достаёт, а меч снизу достаёт его ноги (s1c-A-5 06.10: столб не
+// встал, «бой на ходу» 20 → 0 за 3 с: 18 ударами и 14 иссушением). Пол на −3 твёрдый, лавы рядом нет; потом столб 2 наверх.
+async function pitFight (session, ctl, st, foe) {
+  const bot = session.bot
+  const SL = require('./sealed')
+  const pick = require('./pick')
+  for (let i = 0; i < 20 && !bot.entity.onGround && !ctl.aborted; i++) await sleep(50)
+  const f = bot.entity.position.offset(0, 0.2, 0).floored()
+  const firm = c => { const b = bot.blockAt(c); return !!b && b.boundingBox === 'block' && !/lava|water|fire|magma|spawner|bedrock|chest/.test(b.name) }
+  const cells = [f.offset(0, -1, 0), f.offset(0, -2, 0)]
+  if (![...cells, f.offset(0, -3, 0)].every(firm)) return false
+  // Стенки твёрдые со всех сторон: яма с воздухом сбоку открыта удару (s1c-M-2 06.10 — то же у ямы ифритов).
+  if (cells.some(c => DIRS.some(([x, z]) => { const b = bot.blockAt(c.offset(x, 0, z)); return !b || /lava/.test(b.name) || b.boundingBox !== 'block' }))) return false
+  for (const c of cells) {
+    let r = 'err'
+    for (let k = 0; k < 3 && r !== 'ok' && r !== 'air' && !ctl.aborted; k++) r = await SL.digCell(bot, c).catch(e => 'err ' + e.message)
+    if (r !== 'ok' && r !== 'air') { log('яма от иссушителя', { ok: false, why: r }); return false }
+    for (let i = 0; i < 20 && !bot.entity.onGround; i++) await sleep(50)
+  }
+  for (let i = 0; i < 10 && bot.entity.position.y > f.y - 1.5; i++) await sleep(100)
+  const t0 = gameClock.now()
+  let swings = 0
+  while (!ctl.aborted && gameClock.now() - t0 < 30000 && (bot.health ?? 0) > 3) {
+    const e = bot.entities[foe.id]
+    if (!e || e.isValid === false || e.position.distanceTo(bot.entity.position) > 8) break
+    const sw = bot.inventory.items().find(i => /_sword$/.test(i.name))
+    if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
+    if (pick.canHit(bot, e) && gameClock.now() - (st.lastSwing || 0) > require('./pvp').cooldownMs(bot.heldItem)) {
+      try { await bot.lookAt(e.position.offset(0, 0.4, 0), true) } catch {}
+      try { bot.attack(e); st.lastSwing = gameClock.now(); swings++ } catch {}
+    }
+    await sleep(100)
+  }
+  const left = !!(bot.entities[foe.id] && bot.entities[foe.id].isValid !== false)
+  const up = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+  st.pits = (st.pits || 0) + 1
+  log('яма от иссушителя', { ok: true, swings, left, s: Math.round((gameClock.now() - t0) / 1000), hp: Math.round(bot.health ?? 0), up: !!(up && up.ok) })
+  return true
+}
+
 async function threatCheck (session, ctl, st) {
   const bot = session.bot
   if (await rangedClear(session, ctl, st)) return true
@@ -563,7 +604,9 @@ async function threatCheck (session, ctl, st) {
   }
   // ND_BRUTE_HUNKER=1: брут/хоглин вплотную — не бой на земле (брут: 50 хп, 13 урона, D7c-24 03.10: «бой на ходу» ×3, смерть
   // за 2 с), а столб на 2: рамка удара раздута только вширь — ноги на +2 им не достать; сверху — мечом, пока не уйдёт/умрёт.
-  if (process.env.ND_BRUTE_HUNKER === '1' && /^(piglin_brute|hoglin)$/.test(foe.e.name)) {
+  // По умолчанию (s1c 06.10): «бой на ходу» с брутом — смерть за 2–3 удара (s1c-D-3/A-8: у входа в сокровищницу 4120…, 20 → 0 за
+  // 2 с); столб 2 — по той же механике рамки удара (раздута только вширь). ND_BRUTE_HUNKER=0 — выкл.
+  if (process.env.ND_BRUTE_HUNKER !== '0' && /^(piglin_brute|hoglin)$/.test(foe.e.name)) {
     const pick = require('./pick')
     const y0 = bot.entity.position.y
     const tw = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
@@ -586,6 +629,7 @@ async function threatCheck (session, ctl, st) {
     log('столб от ' + foe.e.name, { up, placed: tw && tw.placed, swings, s: Math.round((gameClock.now() - t0) / 1000), left: !!(bot.entities[foe.e.id] && bot.entities[foe.e.id].isValid !== false), hp: Math.round(bot.health ?? 0) })
     if (up) return true
   }
+  if (foe.e.name === 'wither_skeleton' && process.env.ND_WITHER_PIT !== '0' && await pitFight(session, ctl, st, foe.e).catch(() => false)) return true
   st.fights++
   const r = await require('./combat').fight(session, ctl, { target: '#' + foe.e.id, timeoutSeconds: 20, retreatAtHealth: 7, shield: 'always', clearArea: 0 }).catch(err => ({ error: err.message }))
   log('бой на ходу', { foe: foe.e.name, d: Math.round(foe.d * 10) / 10, hp: Math.round(bot.health ?? 0), killed: !!(r && (r.killed || (r.kills && r.kills.length))), error: r && r.error })
@@ -1002,11 +1046,13 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   const own = new Set<string>()
   const solidUnder = () => { if (!p.solidFloor) return true; const b = bot.blockAt(feetCell(bot).offset(0, -1, 0)); return !!b && b.boundingBox === 'block' && !/fence|wall|slab|stairs|chain|bars|pane/.test(b.name) }
   const reached = () => { const f = feetCell(bot); return Math.abs(f.y - goal.y) <= goal.dy && (goal.r ? Math.hypot(f.x - goal.x, f.z - goal.z) <= goal.r : (f.x === goal.x && f.z === goal.z)) && solidUnder() }
-  const keepSupply = async (craft = true): Promise<boolean> => {
+  // Запас взмахов — под оставшиеся копки плана, а не жёсткие 260 (s1c-F-7 06.10: «ресурсный запас 259/260 — пополнение» по кругу
+  // bastion ↔ AcquireNetherTools 10+ мин, и отказ уже ПОСЛЕ прихода к цели).
+  const keepSupply = async (craft = true, need = 260): Promise<boolean> => {
     if (!p.supplyReserve) return true
     const tools = require('./items')
     let swings = tools.toolBudget(bot, 'pickaxe')
-    if (swings >= 260) return true
+    if (swings >= need) return true
     const calm = (bot.health ?? 0) >= 12 && !require('./ne-guard').meleeFoes(bot, 12).length
     if (craft && calm && !ctl.aborted && session.bot === bot && gameClock.now() < deadline) {
       const made = await require('./tunnel').restockPicks(session, ctl, 2, { reservePlanks: 8 }).catch(() => 0)
@@ -1015,9 +1061,9 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
     }
     if (ctl.aborted || session.bot !== bot) return false
     swings = tools.toolBudget(bot, 'pickaxe')
-    if (swings >= 260) return true
+    if (swings >= need) return true
     const inventory = tools.countItems(bot)
-    st.supplyNeeded = { pickSwings: swings, requiredSwings: 260,
+    st.supplyNeeded = { pickSwings: swings, requiredSwings: need,
       woodEquivalent: Object.entries(inventory).reduce((total, [name, count]) => total +
         (/_planks$/.test(name) ? Number(count) : /_(log|stem|wood|hyphae)$/.test(name) ? Number(count) * 4 : 0), 0),
       requiredWood: 8, table: (inventory.crafting_table || 0) > 0 } satisfies RouteSupplyNeed
@@ -1056,7 +1102,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   { const f0 = feetCell(bot); own.add(`${f0.x},${f0.y},${f0.z}`); own.add(`${f0.x},${f0.y + 1},${f0.z}`) }
   while (!ctl.aborted && gameClock.now() < deadline && st.plans < planCap) {
     if (ctl.waitReflex) await ctl.waitReflex()
-    if (!(await keepSupply())) break
+    if (!(await keepSupply(true, 120))) break
     if (reached()) { st.ok = true; break }
     st.fireproof = require('./blaze').hasEffect(bot, 'fire_resistance')
     if (inLava(bot)) {
@@ -1137,15 +1183,21 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
           }
         }
       }
-      if (!(await keepSupply())) { res = 'stop:' + (st.supplyNeeded ? st.why : 'прервано'); break }
+      if (!(await keepSupply(true, Math.min(260, 30 + Math.ceil(1.3 * pl.path.slice(i).reduce((n, m) => n + (m.dig ? m.dig.length : 0), 0)))))) { res = 'stop:' + (st.supplyNeeded ? st.why : 'прервано'); break }
+      // Иссушитель/брут вплотную — ответ на каждом шаге, а не раз в 4 (s1c-D-2 06.10: 5 ударов по 4.8 за один длинный шаг спуска).
+      if (i % 4 !== 0 && process.env.ND_WITHER_PIT !== '0' && (Object.values(bot.entities || {}) as any[]).some((e: any) => e && /^(wither_skeleton|piglin_brute)$/.test(e.name || '') &&
+          e.isValid !== false && e.position && e.position.distanceTo(bot.entity.position) < 3.6)) {
+        if (await threatCheck(session, ctl, st)) { res = 'replan'; break }
+      }
+      // abortNear: враг из списка виден ближе r — ход бросить (золото у двора: брут — D2-31 03.10, три удара за 2 с). На каждом шаге,
+      // а не раз в 4 (s1c-F-3 06.10: ход к помосту среди ифритов — 26 урона ударами до обрыва хода).
+      if (p.abortNear) {
+        const P = require('./perception')
+        const re = p.abortNear.re instanceof RegExp ? p.abortNear.re : new RegExp(p.abortNear.re || '^(piglin_brute|hoglin)$')
+        const near: any = (Object.values(bot.entities || {}) as any[]).find((e : any) => e && e.position && e.isValid !== false && re.test(e.name || '') && e.position.distanceTo(bot.entity.position) < (p.abortNear.r || 10) && (() => { try { return P.raySees(bot, P.eyePos(bot), e.position.offset(0, 1.2, 0)) } catch { return true } })())
+        if (near) { res = 'stop:рядом ' + near.name; break }
+      }
       if (i % 4 === 0) {
-        // abortNear: враг из списка виден ближе r — ход бросить (золото у двора: брут — D2-31 03.10, три удара за 2 с).
-        if (p.abortNear) {
-          const P = require('./perception')
-          const re = p.abortNear.re instanceof RegExp ? p.abortNear.re : new RegExp(p.abortNear.re || '^(piglin_brute|hoglin)$')
-          const near: any = (Object.values(bot.entities || {}) as any[]).find((e : any) => e && e.position && e.isValid !== false && re.test(e.name || '') && e.position.distanceTo(bot.entity.position) < (p.abortNear.r || 10) && (() => { try { return P.raySees(bot, P.eyePos(bot), e.position.offset(0, 1.2, 0)) } catch { return true } })())
-          if (near) { res = 'stop:рядом ' + near.name; break }
-        }
         if (i % 40 === 0) await makeRoom(bot, 5)
         // Кирки: каменных не осталось — сделать из булыжника/чернокамня (железная — золоту бастиона).
         // Не у самой цели (у спавнера — блейзы: крафт 80 с под ударами, neF-B5f31-1): там — любая кирка, и железная.
@@ -1200,7 +1252,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
     if (res === 'ok' && !pl.ok && !pl.limit && !pl.more && !reached()) { st.why = 'по сетке дальше пути нет'; st.planWhy = pl.why; break }
   }
   } finally { if (prefetch) { prefetch.cancelled = true; await prefetch.promise }; bot._ndToolFilter = filter0; session.emergencyOff = emOff0 }
-  if (!ctl.aborted && session.bot === bot) await keepSupply(false)
+  if (!ctl.aborted && session.bot === bot && !reached()) await keepSupply(false, 120)
   st.ok = !st.supplyNeeded && (st.ok || reached())
   if (!st.ok && !st.why) st.why = ctl.aborted ? 'прервано' : gameClock.now() >= deadline ? 'время вышло' : 'планов много'
   st.seconds = Math.round((gameClock.now() - t0) / 1000)
@@ -1211,4 +1263,4 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   return st
 }
 
-module.exports = { gridOf, plan, legGoal, routeTo, enabled, feetCell, makeRoom, rangedClear, bruteSpots, goldPicks }
+module.exports = { gridOf, plan, legGoal, routeTo, enabled, feetCell, makeRoom, rangedClear, pitFight, bruteSpots, goldPicks }

@@ -51,7 +51,8 @@ test('таран: план находит касание на заходе св�
   const W2 = flatWorld(3)
   const st2 = { p: { x: -12, y: 106, z: 0.5 }, v: { x: 1.4, y: -0.1, z: 0 }, boost: 0, fd: 0 }
   const pl2 = L.chooseLance(W2, st2, () => ({ x: 0.5, y: 100, z: 0.5 }), { name: 'iron_spear' })
-  assert.ok(!pl2 || pl2.exit !== 'wall' || pl2.c > 100, 'выход в стену — штраф')
+  // S7c: выход в стену с уроном — план не выбирается вовсе (было: только штраф).
+  assert.ok(!pl2 || pl2.exit !== 'wall', 'выход в стену — не выбирается')
 })
 
 test('таран: план годен с элитрами, ракетами, копьём и нагрудником; щит — нет', () => {
@@ -68,4 +69,13 @@ test('таран: план годен с элитрами, ракетами, к�
   assert.equal(L.lancePlan(bot, e, { d: 10, hp: 6 }), null)
   items[1].count = 2
   assert.equal(L.lancePlan(bot, e, { d: 10, hp: 20 }), null, 'ракет < 3')
+})
+
+test('касание тарана — только damage_event цели с причиной «я» (S7c, замечание проверки S7b в)', () => {
+  const { ownHit } = require('../src/combat/aerial-lance')
+  assert.equal(ownHit({ entityId: 7, sourceCauseId: 4, sourceDirectId: 4 }, 3, 7), true, 'мой удар')
+  assert.equal(ownHit({ entityId: 7, sourceCauseId: 0, sourceDirectId: 0 }, 3, 7), false, 'без источника (падение, кинетическая)')
+  assert.equal(ownHit({ entityId: 7, sourceCauseId: 8, sourceDirectId: 9 }, 3, 7), false, 'его же кристалл/другой игрок')
+  assert.equal(ownHit({ entityId: 5, sourceCauseId: 4 }, 3, 7), false, 'не цель')
+  assert.equal(ownHit(null, 3, 7), false)
 })

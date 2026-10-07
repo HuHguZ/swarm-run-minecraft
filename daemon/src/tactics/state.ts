@@ -80,11 +80,20 @@ export function outpaced(state: TacticalState): boolean {
   const near = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 16)
   return state.contact && near.length > 0 && near.every(enemy => OUTPACING.test(enemy.kind))
 }
-// No run from players: smartFlee steers by mob doctrine only, saw nobody and reported "escaped" at once - CreateDistance<->
-// Flee on every sample, 1 block each (farm 06.10 after 22:00 MSK, slot 27: 18 swaps). A wall or a strike still answer one.
-export const playersOnly = (state: TacticalState): boolean => {
+// What a run buys, 0..1 - a price, not a ban (user 06.10, AGENTS.md "flexibility"; S4c replaces the round-2 bans F19-F21,
+// which closed running from players, from blazes and from unseen shots at any health). A walker slower than a sprint is
+// left behind (1). A flyer that outpaces any run (phantom, vex, bee) or a shooter whose reach outlasts it (blaze 48, ghast
+// 64 - javap BlazeAttackGoal/GhastShootFireballGoal) is only shaken behind a wall: .3. A player sprints as fast as we do:
+// .4. Shots with no foe in sight: the run is to the nearest cover, .5. A run is worth what it buys against the foe it does
+// shake: a creeper or a zombie beside a phantom is still run from at full price (the worst pursuer deciding flipped the
+// price each time a circling phantom crossed the 16-block edge - stand regress-creeper-build, Flee>BlockOff>Flee).
+// (The "escaped at once" loops behind those bans were smartFlee's: doctrine ranges 20/40 and no players - fixed in flee.ts.)
+export function runGain(state: TacticalState): number {
+  // Lava: the swim to the shore. Fire on dry ground is put out by a bucket, not by running (it burns 8 s anyway).
+  if (state.lava || state.burning && !state.fireResistance && state.water) return 1
   const near = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 16)
-  return near.length > 0 && near.every(enemy => enemy.player)
+  if (!near.length) return state.contact ? 1 : .5
+  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) ? .3 : 1))
 }
 export const deadEnd = (state: TacticalState): boolean => hasObservedTarget(state) && (!!state.escapeExhausted || outpaced(state))
 export const hasMeleeTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy))
@@ -116,11 +125,16 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   return 0
 }
 
+export const KEEP_WORKING = 30
 export function candidates(state: TacticalState, level = threatLevel(state)): Candidate[] {
   if (level === 0) return []
   const result: Candidate[] = []
+  // Below level 3 an action is weighed against keeping the skill going (KEEP_WORKING): a run priced down by a pursuer that
+  // keeps up (a lone blaze in sight at full health: Flee 19.5) is not worth the interrupted work (stand fuzz2/fuzz-2601:
+  // Hide>Flee to cover and back every 2 s at 20 hp). At level 3 anything beats standing still.
+  const floor = level >= 3 ? -Infinity : KEEP_WORKING
   const add = (id: ActionId, score: number, reason: string, available: boolean) => {
-    if (available && !state.failedEscapes?.includes(id) && Number.isFinite(score)) result.push({ id, score, reason })
+    if (available && !state.failedEscapes?.includes(id) && Number.isFinite(score) && score >= floor) result.push({ id, score, reason })
   }
   const critical = level >= 3
   const contact = state.contact
@@ -182,14 +196,13 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // A dead end is about the attackers; the swim out of lava (escapeFire) is no run from them: a ghast overhead made the pool
   // a "dead end" and the body burned with no action at all (stress stand v2 fuzz2-2182/2376/4393, level 4 unhandled); under
   // fire resistance too, when no wall step offers a climb. A swim that already failed (observed exhaustion) stays out.
-  // A run needs something to run from: a seen foe, a hit (an unseen attacker), lava or fire. Shots from beyond sight alone
-  // (a blaze fires from 48, a ghast from 64) made smartFlee report "escaped" after 1 block, CreateDistance<->Flee on every
-  // sample (farm s4b-flap-1..3, 750 TPS: 30 no-op runs under four blazes; stand v2 the same with the jar's ranges).
-  const runOpen = (!escapeExhausted || state.lava && !state.escapeExhausted) && !(playersOnly(state) && !state.lava && !state.burning) &&
-    (observedTarget || contact || state.lava || state.burning && !state.fireResistance)
-  add('Flee', critical ? 100 : 65, 'create safe distance', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
+  // Only runs that were tried and failed here (observed exhaustion) are out; a pursuer that keeps up prices the run down
+  // (runGain) instead of closing it, so a body with no wall, shield or strike still runs for cover (S4c).
+  const runOpen = !(observedTarget && state.escapeExhausted)
+  const gain = runGain(state)
+  add('Flee', (critical ? 100 : 65) * gain, 'create safe distance', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
   // Not gated by canFight: a verdict flickering at the health threshold must not invalidate the retreat in progress.
-  add('CreateDistance', !armed || !observedTarget ? 85 : 50, 'unfavorable or unidentified attacker', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
+  add('CreateDistance', (!armed || !observedTarget ? 85 : 50) * gain, 'unfavorable or unidentified attacker', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
   if (state.shelter) add(state.shelter, exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95, 'available refuge', level >= 2 && shelterHolds && state.blocks > 0 && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && sheltered)
   add('Hide', 110, 'existing cover', critical && state.cover && !creeperNear && !state.dangerousFall && !state.lava && sheltered)
   add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (level === 1 || state.incomingProjectiles > 0))

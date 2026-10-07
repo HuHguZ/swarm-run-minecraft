@@ -145,10 +145,12 @@ async function confirmedClick(bot, slot: number, mouseButton = 0, mode = 0, time
   return new Promise<void>((resolve, reject) => {
     let finished = false
     let timer
+    let gameTimer
     const finish = (error?: Error) => {
       if (finished) return
       finished = true
       gameClock.wall.clearTimeout(timer)
+      if (gameTimer !== undefined) gameClock.clearTimeout(gameTimer)
       bot._client.removeListener('window_items', onItems)
       bot.removeListener('end', onEnd)
       bot.removeListener('windowClose', onClose)
@@ -170,6 +172,10 @@ async function confirmedClick(bot, slot: number, mouseButton = 0, mode = 0, time
     bot.once('end', onEnd)
     bot.on('windowClose', onClose)
     timer = gameClock.wall.setTimeout(() => finish(new Error(`server did not confirm click ${slot} in window ${window.id}`)), timeoutMs)
+    // И по игровым тикам: сервер отвечает window_items в тик клика, а 3 с реального на ускоренной ферме — 45–150 игр. с на
+    // каждый пропавший ответ (s8 07.10: крафт палок 110 с, досок 63 с на --lockstep). ND_CLICK_CONFIRM_GAME_MS=0 — только реальное.
+    const gameMs = Number(process.env.ND_CLICK_CONFIRM_GAME_MS ?? 2000)
+    if (gameMs > 0) gameTimer = gameClock.setTimeout(() => finish(new Error(`server did not confirm click ${slot} in window ${window.id} (${gameMs} game ms)`)), Math.min(timeoutMs, gameMs))
     try {
       // The real click is processed before broadcastFullState on a state-id
       // mismatch (ServerGamePacketListenerImpl 1.21.11). Do not predict slots.

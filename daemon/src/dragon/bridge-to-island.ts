@@ -198,7 +198,9 @@ function missing (kit, mode, at = null) {
     if (!kit.beds) need.push({ what: 'red_bed', count: BEDS_KIT, have: 0 })
     const bl = at ? 12 : (kit.pickaxe ? 44 : 64)
     if (kit.blocks < bl) need.push({ what: 'cobblestone', count: bl, have: kit.blocks })
-    if (kit.food < KIT.food && !at) need.push({ what: 'cooked_beef', count: KIT.food, have: kit.food })
+    // Еда — цена, не допуск (гибкость, s5c-g1-1 06.10: в Энде с 3 стейками из 6 навык отказывал «ни шагу», 5 мин паузы,
+    // а еды в Энде не взять). Отказ — только совсем без еды; бой на 3–5 мин стоит 2–3 единиц.
+    if (kit.food < 1 && !at) need.push({ what: 'cooked_beef', count: 1, have: kit.food })
   }
   return need
 }

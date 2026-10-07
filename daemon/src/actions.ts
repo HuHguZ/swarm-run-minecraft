@@ -1488,6 +1488,11 @@ async function explore (session, ctl, {
     }
     legs.push(`${dx},${dz}${r.ok ? '' : ' ✗ ' + r.error}`)
     i++
+    // Отрезок отказал сразу (в воде без пути из неё: escapeWater и travelXZ возвращаются без единого таймера) — цикл крутился
+    // одними микрозадачами: игровые часы не шли, срок не наступал, пакеты и keepalive не обрабатывались, память росла
+    // (s5c-f4-4 06.10: демон 100 % CPU и 2.7 ГБ 12+ мин, профиль — explore → firstVisible; сервер: Disconnected). Пауза
+    // игрового тика после отказа отдаёт цикл событий.
+    if (!r.ok) await sleep(250)
 
     hit = firstVisible(bot, ids, radius, useFair, dry)
     if (hit) {

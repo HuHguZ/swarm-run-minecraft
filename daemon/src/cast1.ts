@@ -43,7 +43,7 @@ const DOWN = new Vec3(0, -1, 0)
 const SIDES4 = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
 const AX = { x: new Vec3(1, 0, 0), z: new Vec3(0, 0, 1) }
 const PLACE1 = 'литьё портала (одно ведро)'
-const FILLER = ['cobblestone', 'cobbled_deepslate', 'dirt', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack', 'blackstone', 'basalt']
+const FILLER = ['cobblestone', 'cobbled_deepslate', 'dirt', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack', 'blackstone', 'basalt', 'sandstone', 'red_sandstone']
 
 function C () { return require('./cast')._in }
 
@@ -305,6 +305,12 @@ function lavaBodyOpen (bot, hint, { cap = 1500, limit = 80 }: any = {}) {
   return out.sort((a, b) => a.distanceTo(me) - b.distanceTo(me)).slice(0, limit)
 }
 
+// Источники у берега (сосед на том же уровне — твёрдый не-лава блок) — вперёд, порядок внутри групп сохраняется.
+function shoreFirst (bot, lava) {
+  const edge = p => SIDES4.some(v => { const n = bot.blockAt(p.plus(v)); return !!n && n.name !== 'lava' && solid(n) })
+  return [...lava.filter(edge), ...lava.filter(q => !edge(q))]
+}
+
 function geomOf1 (plan) { return geom1(new Vec3(plan.origin.x, plan.origin.y, plan.origin.z), plan.axis, plan.side) }
 
 // Лава в досягаемости черпака отсюда: источник с воздухом сверху, луч черпака есть. С земли — сперва дальние (ряды
@@ -395,7 +401,12 @@ async function castOne (session, ctl, p: any = {}) {
     }
     lava = lava.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
     if (!lava.length) return { ...report, built: false, stopped: 'не вижу лавы-источника в 24 блоках — подойди к озеру' }
-    const found = plan1(bot, lava, { maxDig: Math.max(20, Math.min(90, p.maxDig || 40)) })
+    // Сперва источники у берега (ND_CAST1_EDGE=0 — прежний порядок) (сосед на том же уровне — твёрдый не-лава блок): берег рамы H→G только у них, а 60
+    // ближних к телу у большого озера — середина и дальний «плохой» берег (s8-f2-9: «берег не твёрдый (52)» у озера 72,-42, где в
+    // s8-r2-8 литьё вышло за 53 с с другой стороны). И кандидатов вдвое больше.
+    const edgeFirst = process.env.ND_CAST1_EDGE !== '0'
+    if (edgeFirst) lava = shoreFirst(bot, lava)
+    const found = plan1(bot, lava, { maxDig: Math.max(20, Math.min(90, p.maxDig || 40)), ...(edgeFirst ? { maxCand: 120 } : {}) })
     if (!found.ok) return { ...report, built: false, stopped: `места на берегу нет: ${found.reasons.join(', ')}` }
     plan = found.plan
     session.castPlan1 = plan
@@ -770,4 +781,4 @@ async function castOne (session, ctl, p: any = {}) {
   return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((gameClock.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`) }
 }
 
-module.exports = { castOne, plan1, judge1, geom1, cells, lakeReach, useAt, PLACE1 }
+module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, lakeReach, useAt, PLACE1 }

@@ -59,7 +59,9 @@ export function forecastOwner(from: Point, hp: number, next: Point = from): NonN
 /** Radius of the one-off wide support graph when the 24-block disc cannot reach the goal. */
 const WIDE_RADIUS = 40
 const DEFERRED_SCALE = Number(process.env.ND_ROUTE_DEFERRED_SCALE ?? 4); const DEFERRED_COST = Number(process.env.ND_ROUTE_DEFERRED_COST ?? 8)
-export interface JumpPlan { steps: Step[]; states: State[]; target: Point; ticks: number; fall?: { damage: number; support: Point; supportName: string; tick: number; pos: Point } }
+// allowDamage (спуск по уступам, descent.ts): урон падения не больше damage после тика посадки — не отказ; без сверки
+// квитанции с точкой прогноза (тело тормозит на уступе — позиция уходит от прогноза дальше 0.1, и `fall` отвергал посадку).
+export interface JumpPlan { steps: Step[]; states: State[]; target: Point; ticks: number; fall?: { damage: number; support: Point; supportName: string; tick: number; pos: Point }; allowDamage?: { damage: number; tick: number } }
 interface TrajectorySample {
   tick: number; pos: Point; velocity: Point; onGround: boolean; hp?: number;
   expected: { pos: Point; velocity: Point; onGround: boolean; jumpQueued: boolean; jumpTicks: number };
@@ -573,6 +575,7 @@ export async function executeJump(bot: MovementBot, ctl: Cancellation, target: P
 export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: JumpPlan, confirmed: (state: State) => boolean, completeWhen?: () => boolean): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[] }> {
   const samples: TrajectorySample[] = []; const hp = bot.health ?? 20
   if (plan.fall && (plan.fall.damage < 1 || plan.fall.damage > MAX_FALL_DAMAGE || !bot._client || !safeFallCost(bot, plan.fall.damage))) return { ok: false, why: 'unsafe_fall_cost', ticks: 0, samples }
+  if (plan.allowDamage && (plan.allowDamage.damage > MAX_FALL_DAMAGE || !safeFallCost(bot, plan.allowDamage.damage))) return { ok: false, why: 'unsafe_fall_cost', ticks: 0, samples }
   const clock = require('../game-clock') as { now(): number }
   const previous = bot._ndParkourForecast
   const own = forecastOwner(bot.entity.position, hp)
@@ -653,7 +656,8 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
           finish(false, 'physics_diverged'); return
         }
         if (plan.fall) { onHealth(); if (done) return }
-        else if ((bot.health ?? hp) < hp) { finish(false, 'hurt_during_trajectory'); return }
+        // Квитанция сервера может опередить посадку клиента на тик-два (s6c-desc-flex6, первый заход): допуск с тика посадки − 2.
+        else if ((bot.health ?? hp) < hp && !(plan.allowDamage && tick >= plan.allowDamage.tick - 1 && hp - (bot.health ?? 0) <= plan.allowDamage.damage)) { finish(false, 'hurt_during_trajectory'); return }
         own.from = { ...p }
         if (completeWhen?.() && (!plan.fall || fallReceipt && lost > 0)) { const ok = confirmed(new PlayerState(bot, controls())); finish(ok, ok ? undefined : 'landing_not_confirmed'); return }
         if (tick < plan.steps.length) applyStep()

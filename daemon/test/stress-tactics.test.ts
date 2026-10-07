@@ -221,21 +221,24 @@ test('a strike that ends in its first tick sits out 2 s instead of being re-sele
       system.update(true)
       await new Promise(resolve => setImmediate(resolve))
     }
-    assert.equal(picks.filter(pick => pick === 'Fight').length, 1, picks.join(','))
+    // 3 s of samples: the strike comes back once its 2 s are over (S4c: the no-op run sits out too, it no longer fills them).
+    assert.ok(picks.filter(pick => pick === 'Fight').length <= 2, picks.join(','))
     assert.ok(picks.length < 6, `no churn: ${picks.join(',')}`)
   } finally { system.detach(); timer.dispose(); gameClock.activate(null) }
 })
 
-test('a phantom cannot be outrun: no flight, defend when it swoops into reach (farm slot 17: Flee x3 at hp 6.9, death)', () => {
+test('a phantom is not outrun: a run is priced below the strike at its swoop, a walker beside it restores the price (farm slot 17: Flee x3 at hp 6.9, death)', () => {
   const phantom = (distance: number) => ({ id: 6, kind: 'phantom', distance, player: false, threatening: true, hit: 2 })
   const swoop = tactical({ health: 6.9, contact: true, canFight: false, enemies: [phantom(2.3)] })
-  const ids = candidates(swoop).map(candidate => candidate.id)
-  assert.ok(!ids.includes('Flee') && !ids.includes('CreateDistance'), ids.join(','))
-  assert.equal(ids[0], 'LastStand')
+  const offered = candidates(swoop)
+  assert.equal(offered[0].id, 'LastStand')
+  assert.ok(!offered.some(candidate => candidate.id === 'Flee'), `at level 2 a run priced .3 is worth less than the work it stops: ${JSON.stringify(offered)}`)
+  const critical = candidates({ ...swoop, health: 5 })
+  assert.ok(critical.some(candidate => candidate.id === 'Flee' && candidate.score === 100 * .3), `at level 3 it is there, priced: ${JSON.stringify(critical)}`)
   const arbiter = new TacticalArbiter()
   arbiter.decide(tactical({ health: 6.9, contact: true, enemies: [zombie] }))
   assert.equal(arbiter.decide({ ...swoop, at: 400 }).selected?.id, 'LastStand', 'reachable through the graph from a running flight')
-  assert.ok(candidates({ ...swoop, enemies: [phantom(2.3), zombie] }).some(candidate => candidate.id === 'Flee'), 'a walker still makes running worthwhile')
+  assert.ok(candidates({ ...swoop, enemies: [phantom(2.3), zombie] }).some(candidate => candidate.id === 'Flee' && candidate.score === 65), 'a walker still makes running worthwhile')
 })
 
 test('an arena duel to the death keeps its fight at level 3; lava under the duel is still the tactics\' (S7 20:08)', async () => {
@@ -387,9 +390,9 @@ test('a kill ends the contact of the dead attacker, and a refuge run that ends a
   assert.ok(rest.picks.length <= 3, `instant refuge ends are not re-selected on each sample: ${rest.picks.join(',')}`)
 })
 
-test('the blaze skill under fire resistance keeps level 3 at the spawner; without it, or in lava, the tactics take over (S1 21:01)', async () => {
+test('the blaze skill keeps level 3 at the spawner with or without fire resistance; in lava the tactics take over (S1 21:01, S1c 06.10)', async () => {
   const blazes = [0, 1, 2].map(i => ({ id: 10 + i, kind: 'blaze', distance: 3 + i, player: false, threatening: true, hit: 2.7 }))
-  for (const [changes, owned] of [[{ fireResistance: true }, true], [{ fireResistance: false }, false], [{ fireResistance: true, lava: true }, false]] as const) {
+  for (const [changes, owned] of [[{ fireResistance: true }, true], [{ fireResistance: false }, true], [{ fireResistance: true, lava: true }, false]] as const) {
     const stand = flicker((_sample, now) => tactical({ at: now, contact: true, health: 10, enemies: blazes, canFight: false,
       shelter: 'BlockOff', protectedEncounter: true, ...changes }), {}, 'blaze')
     await stand.run(6)
@@ -422,12 +425,12 @@ test('a neutral mob that struck the body stays a threat for 10 s, past the 1.5 s
   } finally { timer.dispose(); gameClock.activate(null) }
 })
 
-test('a ghast is not fled (64-block shots, FOLLOW_RANGE 100): shield the volley; a level-3 flicker within 2 s re-picks nothing', () => {
+test('a ghast is not fled first (64-block shots, FOLLOW_RANGE 100): the shield outranks a run priced at .3; a level-3 flicker within 2 s re-picks nothing', () => {
   const ghast = { id: 9, kind: 'ghast', distance: 9, player: false, threatening: true, hit: 4 }
   const shot = tactical({ contact: true, enemies: [ghast], shield: true, incomingProjectiles: 1, shelter: 'BlockOff' })
-  const offered = candidates(shot).map(candidate => candidate.id)
-  assert.ok(!offered.includes('Flee') && !offered.includes('CreateDistance'), offered.join(','))
-  assert.ok(offered.includes('Shield'), offered.join(','))
+  const offered = candidates(shot)
+  assert.equal(offered[0].id, 'Shield', JSON.stringify(offered))
+  assert.ok(offered.filter(candidate => /^(Flee|CreateDistance)$/.test(candidate.id)).every(candidate => candidate.score < 30), JSON.stringify(offered))
   // Burning at 8 hp: level 3 with each fire tick, level 2 with each regenerated point.
   const husk = { id: 2, kind: 'husk', distance: 4.6, player: false, threatening: true, hit: 3 }
   const arbiter = new TacticalArbiter()
@@ -451,22 +454,27 @@ test('no pillar or hole against a flyer: a phantom swoops onto it, a blaze shoot
   assert.ok(candidates(tactical({ health: 5, contact: true, enemies: [zombie], canFight: false, shelter: 'PillarUp' })).some(c => c.id === 'PillarUp'), 'a walker cannot reach a pillar')
 })
 
-test('no flight from an attacking player alone (smartFlee steers by mob doctrine, "escaped" in a tick: slot 27, 18 swaps); a wall still', () => {
+test('an attacking player alone is run from at .4 of the price (he sprints as fast): a wall first, a run when nothing else is left (slot 27, 18 swaps)', () => {
   const tank = { id: 5, kind: 'Tank', distance: 2.5, player: true, threatening: true, hit: 7 }
-  const offered = candidates(tactical({ health: 9, contact: true, enemies: [tank], canFight: false, shelter: 'BlockOff' })).map(c => c.id)
-  assert.ok(!offered.includes('Flee') && !offered.includes('CreateDistance'), offered.join(','))
-  assert.ok(offered.includes('BlockOff'), offered.join(','))
-  const mixed = candidates(tactical({ health: 9, contact: true, enemies: [tank, zombie], canFight: false })).map(c => c.id)
-  assert.ok(mixed.includes('CreateDistance'), `a mob beside him is still run from: ${mixed.join(',')}`)
+  const offered = candidates(tactical({ health: 9, contact: true, enemies: [tank], canFight: false, shelter: 'BlockOff' }))
+  assert.equal(offered[0].id, 'BlockOff', JSON.stringify(offered))
+  assert.ok(offered.some(candidate => candidate.id === 'CreateDistance' && candidate.score === 85 * .4), JSON.stringify(offered))
+  const bare = candidates(tactical({ health: 9, contact: true, enemies: [tank], canFight: false, blocks: 0 }))
+  assert.equal(bare[0].id, 'CreateDistance', `no wall, shield or strike: run for cover rather than stand (${JSON.stringify(bare)})`)
+  const mixed = candidates(tactical({ health: 9, contact: true, enemies: [tank, zombie], canFight: false })).map(c => c.id + ':' + c.score)
+  assert.ok(mixed.includes('CreateDistance:85'), `a mob beside him is run from at full price: ${mixed.join(',')}`)
 })
 
-test('no run from shots alone or from blazes: smartFlee "escaped" after 1 block under fire from 48 blocks (farm s4b-flap-1..3)', () => {
-  const unseen = candidates(tactical({ incomingProjectiles: 1, contact: false, enemies: [], shield: true })).map(c => c.id)
-  assert.ok(!unseen.includes('Flee') && !unseen.includes('CreateDistance'), `a shot from beyond sight: ${unseen.join(',')}`)
-  assert.ok(unseen.includes('Shield'), unseen.join(','))
-  const hit = candidates(tactical({ contact: true, enemies: [], health: 9 })).map(c => c.id)
-  assert.ok(hit.includes('CreateDistance'), `a hit from an unseen attacker still runs: ${hit.join(',')}`)
+test('shots from beyond sight and blazes price a run down, not out: the shield and the wall go first (farm s4b-flap-1..3)', () => {
+  const unseen = candidates(tactical({ incomingProjectiles: 1, contact: false, enemies: [], shield: true }))
+  assert.equal(unseen[0].id, 'Shield', JSON.stringify(unseen))
+  assert.ok(unseen.some(c => c.id === 'CreateDistance' && c.score === 85 * .5), `a run to the nearest cover is still there: ${JSON.stringify(unseen)}`)
+  const hit = candidates(tactical({ contact: true, enemies: [], health: 9 })).map(c => c.id + ':' + c.score)
+  assert.ok(hit.includes('CreateDistance:85'), `a hit from an unseen attacker runs at full price: ${hit.join(',')}`)
   const blaze = { id: 6, kind: 'blaze', distance: 8, player: false, threatening: true, hit: 4 }
-  const blazes = candidates(tactical({ contact: true, enemies: [blaze], health: 9, canFight: false, shield: true, incomingProjectiles: 1 })).map(c => c.id)
-  assert.ok(!blazes.includes('Flee') && !blazes.includes('CreateDistance'), `blazes fire from their follow range 48: ${blazes.join(',')}`)
+  const blazes = candidates(tactical({ contact: true, enemies: [blaze], health: 9, canFight: false, shield: true, incomingProjectiles: 1 }))
+  assert.equal(blazes[0].id, 'Shield', JSON.stringify(blazes))
+  assert.ok(!blazes.some(c => c.id === 'Flee'), `a run from a blaze (48-block shots) at level 2 is not worth the work: ${JSON.stringify(blazes)}`)
+  const bare = candidates(tactical({ contact: true, enemies: [blaze], health: 5, canFight: false, blocks: 0 }))
+  assert.ok(/^(Flee|CreateDistance)$/.test(bare[0].id), `level 3, no shield, wall or strike: run for cover (${JSON.stringify(bare)})`)
 })

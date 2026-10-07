@@ -69,7 +69,7 @@ test('route wood: existing starter toolkit and 5 logs do not trigger a second lo
 })
 test('wood once rollback preserves the original reserve and second pick', async () => {
   const c: any = load({ oak_log: 5, oak_planks: 10, stick: 4, wooden_pickaxe: 1, crafting_table: 1 },
-    { ND_ROUTE_WOOD_ONCE: '0' }, { mine: (_, s) => { s.inventory.oak_log += 4; return { status: 'done', detail: { dug: 4 } } } })
+    { ND_ROUTE_WOOD_ONCE: '0', ND_ROUTE_WOODN: '8' }, { mine: (_, s) => { s.inventory.oak_log += 4; return { status: 'done', detail: { dug: 4 } } } })
   await c.run('wood')
   assert.ok(c.requests.some(([m]: any) => m === 'mine'))
   assert.ok(c.requests.some(([m, p]: any) => m === 'craft' && p.item === 'wooden_pickaxe'))

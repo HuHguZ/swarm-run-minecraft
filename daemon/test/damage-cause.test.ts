@@ -38,7 +38,8 @@ test('escapeFire: в Аду ведро не льёт (вода испаряет�
   const d = new Director({ bot, cfg: {} as Record<string, any> })
   const r = await d.escapeFire()
   assert.equal(calls.includes('activate'), false, 'ведро воды в Аду пустеет без толку')
-  assert.equal(r.detail.how, 'выпрыгнул к полу')
+  // S4c 07.10: не в клетке огня бег огонь не тушит — без прыжка вслепую (раньше «выпрыгнул к полу» — с мостов в пустоту).
+  assert.equal(r.detail.how, 'не в огне — бег огонь не тушит')
   const over = fireBot('overworld')
   const r2 = await new Director({ bot: over.bot, cfg: {} as Record<string, any> }).escapeFire()
   assert.equal(over.calls.includes('activate'), true)

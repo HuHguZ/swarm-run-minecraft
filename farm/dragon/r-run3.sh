@@ -27,7 +27,10 @@ fight () {
     echo "up не вышел ($u), жду 30 с" >> $L; sleep 30
   done
   for w in $(seq 1 24); do node farm/farm.js rcon $S "random reset *" > farm/logs/$TAG-rr-$K.txt 2>&1; cat farm/logs/$TAG-rr-$K.txt >> $L; grep -q "Reset" farm/logs/$TAG-rr-$K.txt && break; sleep 5; done; sleep 3
-  mkdir -p $TR/s$K; node farm/dragon/rec-dragon.js $S "$PWD/$TR/s$K/rec-1.jsonl" $(( ${MIN:-10} * 60 + 240 )) >> $L 2>&1 &
+  mkdir -p $TR/s$K
+  # HANGWATCH=1 (s5c 06.10) — сторож зависания демона на бой (профиль CPU через инспектор, если в ARM есть NODE_OPTIONS=--inspect)
+  HW=; [ -n "$HANGWATCH" ] && { node farm/dragon/hang-watch.js $S "$PWD/$TR/s$K" $(( ${MIN:-10} * 60 + 600 )) >> $L 2>&1 & HW=$!; }
+  node farm/dragon/rec-dragon.js $S "$PWD/$TR/s$K/rec-1.jsonl" $(( ${MIN:-10} * 60 + 240 )) >> $L 2>&1 &
   RP=$!
   for try in 1 2 3; do
   [ -s farm/logs/$TAG-s$K.jsonl ] && break
@@ -41,6 +44,7 @@ fight () {
   wait $WP 2>/dev/null
   done
   kill $RP 2>/dev/null
+  [ -n "$HW" ] && kill $HW 2>/dev/null
   [ -n "$LABPLUG" ] && cp farm/server-$S/plugins/DragonLab/events.jsonl $TR/s$K/lab-ev.jsonl 2>/dev/null
   # лог демона и сервера боя (s5 06.10: следующий up их затирает)
   cp farm/daemon-$S.out.log $TR/s$K/daemon.out.log 2>/dev/null; cp farm/daemon-$S.err.log $TR/s$K/daemon.err.log 2>/dev/null; cp farm/server-$S/logs/latest.log $TR/s$K/server.log 2>/dev/null

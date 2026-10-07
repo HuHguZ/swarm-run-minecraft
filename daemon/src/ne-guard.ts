@@ -416,7 +416,9 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
         shield(true)
       } else shield(true)
       if (d > 3.2 && sees(bot, foe)) { if (!far) far = gameClock.now() } else far = 0
-      bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10))
+      // Шаг к врагу — только если шаг безопасен (S4c 07.10, замечание проверки г): клавиша «вперёд» к ифриту/иссушителю за краем
+      // моста вела тело в пустоту или лаву; moves.stepSafe — обрыв > 3, лава/огонь/магма под шагом.
+      bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && require('./moves').stepSafe(bot, require('./moves').keyDir(bot, 'forward')))
       await sleep(60)
     }
   } finally { bot.setControlState('forward', false); shield(false) }

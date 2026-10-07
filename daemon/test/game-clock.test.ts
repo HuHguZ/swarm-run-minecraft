@@ -561,7 +561,7 @@ test('freeze, completed steps and disposal cancel the short-wait pump', async t 
 
 test('stalled prediction releases the pump and a fresh age packet resumes it', async t => {
   const time = driver(t)
-  const c = new GameClock({ epoch: 0 })
+  const c = new GameClock({ epoch: 0, stallMs: 0 }) // без клапана застоя (его проверка — ниже)
   t.after(() => c.dispose())
   c.setState({ tick_rate: 200 })
   c.syncAge(0n)
@@ -573,6 +573,34 @@ test('stalled prediction releases the pump and a fresh age packet resumes it', a
   await time.advanceTo(210)
   assert.equal(c.effectiveRate, 100, 'the first confirmed window also measures the stalled server rate')
   assert.equal(c.ticks, 21, 'prediction resumes at the measured native rate')
+})
+
+// s5c 06.10: титры после выходного портала (win_game) — игрок ни в каком мире, update_time нет; часы стояли на +20 навсегда.
+test('stall valve: without time packets the clock runs on at the vanilla 20 ticks/s, a time packet bounds it again', async t => {
+  const time = driver(t)
+  const c = new GameClock({ epoch: 0, stallMs: 3000 })
+  t.after(() => c.dispose())
+  c.setState({ tick_rate: 750 })
+  c.syncAge(0n)
+  c.start()
+  let fired = false
+  c.setTimeout(() => { fired = true }, 5000) // 100 игровых тиков
+  await time.advanceTo(2900)
+  assert.equal(c.ticks, 20, 'capped at +20 before the valve')
+  assert.equal(c.pumpTimer, null, 'no busy pump while capped')
+  await time.advanceTo(4000)
+  assert.equal(c.snapshot().stalled, true)
+  assert.ok(c.ticks >= 37 && c.ticks <= 42, `20 ticks/s after the valve: ${c.ticks}`)
+  await time.advanceTo(8100)
+  assert.equal(fired, true, 'game timers fire instead of waiting forever')
+  const at = c.ticks
+  c.syncAge(30n)
+  assert.equal(c.snapshot().stalled, undefined)
+  await time.advanceTo(9000)
+  assert.equal(c.ticks, at, 'a fresh time packet caps prediction again')
+  c.setState({ is_frozen: true })
+  await time.advanceTo(20000)
+  assert.equal(c.ticks, at, 'a frozen world is not a stall')
 })
 
 test('duplicate frozen follower snapshots do not postpone confirmed step grants', async t => {
@@ -652,7 +680,7 @@ test('followers replay confirmed snapshots without predicting or keeping an idle
 
 test('lockstep runs each confirmed grant at once with physics, never by measured pace, and resyncs only past the valve', async t => {
   const time = driver(t)
-  const c = new GameClock({ epoch: 0, lockstep: true, predictionTicks: 2 })
+  const c = new GameClock({ epoch: 0, lockstep: true, predictionTicks: 2, stallMs: 0 })
   t.after(() => c.dispose())
   let physics = 0
   c.on('tick', () => { physics++ })

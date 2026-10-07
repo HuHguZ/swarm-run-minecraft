@@ -85,6 +85,17 @@ export function createCampaignIntelligence(port: CampaignPort) {
       const available = stages.filter(stage => !blocked(stage) && stage.ready() && !stage.defer())
       mapped.clear()
       for (const stage of available) if (stage.name === 'route' || stage.name === 'routeEnter') mapped.set(stage.name, stage)
+      // S8 (07.10): маршрут по карте копии мира (route.ts — свой план с ценами шагов, бюджетом построек и запасными ходами) сам
+      // ведёт верхний мир целиком; кусочные стратегии верхнего мира (AcquireWood … RuinedPortal) — запас после его исчерпания.
+      // Иначе граф выбирал их по мнимой цене: RuinedPortal «портал за 25 с, 89 %» — это цена шага ruin (только сундук), а
+      // литьё у лавы руин в night05t — 0 из 24 (s8-base-1: дерево 3 мин, камень 9, к 30-й мин портала нет).
+      if (process.env.ND_ROUTE_FIRST !== '0') for (const [name, id] of [['route', 'MappedOverworldRoute'], ['routeEnter', 'MappedRouteEnter']] as const) {
+        const stage = mapped.get(name)
+        const strategy = registry.get(id)
+        if (!stage || !strategy || !director.canRun(strategy, before)) continue
+        port.record({ level: 'decision', reason: 'mapped route first (ND_ROUTE_FIRST)', before, plan: [id] })
+        return { stage: wrapStrategy(strategy, stage), strategy, before }
+      }
       const desired = director.decide(before)
       const strategy = desired.steps[0]
       if (strategy) {

@@ -112,3 +112,30 @@ test('remote carried-gold barter physically approaches the known site before che
     }
   }
 })
+
+test('s1c: no protected cover near the site — carried gold is bartered in the open when the risk is low, never with low hp', async () => {
+  const text = source()
+  const begin = text.slice(text.indexOf('const memoSave =')).search(/if \(mode === ["']barter["'] && st\.sealed\) \{/)
+    + text.indexOf('const memoSave =')
+  const end = text.indexOf('const done =', begin)
+  for (const hp of [20, 10]) {
+    const bot = { health: hp, entity: { position: new Vec3(80.5, 39, 130.5) } }
+    const st: any = { sealed: true, sealedState: null, blocks: 0, bribed: 0, traded: 0, chests: [], gained: {}, gold: new Map(), pred: new Map(), fights: [], tossed: [] }
+    let rounds = 0
+    const out = (stopped = null) => ({ stopped })
+    const run = new Function('mode', 'st', 'rec', 'bot', 'session', 'ctl', 'deadline', 'gameClock', 'Vec3', 'require', 'lavaWatched',
+      'prepareBarterCover', 'memoSave', 'log', 'out', 'countOf', 'keep', 'goldWorn', 'mobs', 'isBaby', 'unpackGold', 'barterRound',
+      `return (async () => { ${text.slice(begin, end)} return { reached: true }; })();`)
+    const result = await run('barter', st, { x: 87, y: 35, z: 139 }, bot, { bot }, { aborted: false }, 540000, { now: () => 0 }, Vec3, localRequire,
+      async (_b, _c, action) => action({ aborted: false }), async () => ({ ok: false, why: 'стены не замкнуты' }), () => {}, () => {}, out,
+      (_b, name) => name === 'gold_ingot' ? 20 : 0, 0, () => true, (_b, name) => name === 'piglin' ? [{ id: 5 }] : [], () => false,
+      async () => {}, async () => { rounds++; return { spent: 20, pearls: 2 } })
+    if (hp === 20) {
+      assert.equal(rounds, 1)
+      assert.deepEqual(result.openBarter, { spent: 20, pearls: 2 })
+    } else {
+      assert.equal(rounds, 0, 'low hp keeps the old refusal')
+      assert.match(String(result.stopped), /укрытие для бартера не подтверждено/)
+    }
+  }
+})

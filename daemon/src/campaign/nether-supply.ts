@@ -26,9 +26,13 @@ const stone = (state: NetherSupplyState): number => quantity(state, /^(cobblesto
 // 558 взмахов, 6 досок и лук из 2 досок). Без верстака — как раньше: 8 дерева, из них 4 доски на стол.
 const RESERVE = 4
 const woodWithSticks = (state: NetherSupplyState): number => wood(state) + Math.floor(quantity(state, /^stick$/) / 2)
+// Дерево — запас на новые кирки, а не допуск: при двойном запасе взмахов (≥ 520) путь к спавнеру и обратно покрыт и без него;
+// без верстака хватает стола (4 доски) + 2 досок-эквивалентов (4 палки = 2 кирки), палки в счёт (s1c-B-4 06.10: 10 жемчуга
+// при нужных 10, 378/260 взмахов, «дерево 7/8» — путь к спавнеру отложен, поход домой за деревом съел 70 мин).
 export function netherToolsReady(state: NetherSupplyState): boolean {
   if (!pick(state) || state.pickSwings < 260) return false
-  return quantity(state, /^crafting_table$/) > 0 ? woodWithSticks(state) >= RESERVE : wood(state) >= 8 && planks(state) >= 4
+  if (state.pickSwings >= 520) return true
+  return quantity(state, /^crafting_table$/) > 0 ? woodWithSticks(state) >= RESERVE : planks(state) >= 4 && woodWithSticks(state) >= 6
 }
 
 export async function replenishNetherTools(port: NetherSupplyPort): Promise<NetherSupplyResult> {

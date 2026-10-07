@@ -1,150 +1,205 @@
 'use strict'
 const gameClock = require('./src/game-clock')
-// Лаборатория этапов, этап 3 — очи → крепость → портал → Энд (server-nether,
-// верхний мир). Сцена командами только ставит тело: набор кампании после
-// этапов стержней и жемчуга (7 стержней, 12 жемчужин), точка на суше в
-// DIST блоках от крепости, которую даёт /locate (правда для сверки). Дальше —
-// ровно те вызовы, что делает кампания (campaign.js, этапы eyes, stronghold,
-// dragon): craft blaze_powder, craft ender_eye, stronghold find, stronghold
-// room (до 4 раз), stronghold fill enter:true. Итог — тело в the_end.
-//
-// Запуск: ND_WS=ws://127.0.0.1:8773 MC_USERNAME=NeuroNether node try-lab-end.js
-//   SH_NEAR="x,z" — крепость, ближайшая к этой точке (у зажжённой fill скажет
-//   «уже горит»; первая кольцевая — 3 крепости через 120°); DIST=300 — отступ.
+// Сцена S5c (06.10) «выход из Ада → Энд (→ дракон)» на ферме: новый мир good-v2 (farm up --pool --fresh). Подготовка
+// командами — только постановка: соль ГСЧ, normal, keep_inventory, утро. Тело само строит портал верхнего мира у спавна
+// (RPC portal: после выхода из Ада тело стоит у своего портала) и получает набор «после PASS Ада» (KIT=post кампании
+// без зелий): очи (пустые рамки + запас), остаток жемчуга, еда, кровати и обсидиан на дракона, 2 ведра воды, лодка,
+// блоки, кирки, лук. Дальше без команд — campaign.js (граф): FindStronghold (броски ока или карта) → путь → комната →
+// fill → вход в Энд [→ KillDragon при UNTIL=dragon]. Часы метрики — от старта кампании.
+//   MAP_SH=1 — крепость Края из копии этого же мира (место у стены комнаты; очей — по пустым рамкам): знание карты,
+//   пишется в главной метрике (AGENTS.md). Без него — вслепую (броски ока), отдельной строкой.
+//   UNTIL=end (умолч.) | dragon; MINUTES (40); EYES — очей (умолч. пустые рамки + 2, вслепую 14); PEARLS (2); BEDS (5);
+//   KEEPINV=false; DEATHS_MAX=1; CAMPAIGN=campaign.js; CENV='{"ND_X":"1"}' — env кампании; EXTRA — добавка к набору.
+// Итог — строка JSON в LAB_OUT: ok, отметки (минуты: крепость в памяти, комната, Энд, дракон), очей потрачено, смерти,
+// средний темп (игровые тики демона / реальные секунды).
 const fs = require('fs')
 const path = require('path')
+const { spawn, execFileSync } = require('child_process')
 const { connect, createKit, sleep } = require('./scene-kit')
 
-const WS = process.env.ND_WS || 'ws://127.0.0.1:8773'
-const PLAYER = process.env.MC_USERNAME || 'NeuroNether'
-const LOG = process.env.ND_SERVER_LOG || path.join(__dirname, '..', 'server-nether', 'logs', 'latest.log')
+const KEEPINV = process.env.KEEPINV === 'true' ? 'true' : 'false'
+const WS = process.env.ND_WS || 'ws://127.0.0.1:8801'
+const PLAYER = process.env.MC_USERNAME || 'NeuroFarm1'
+const LOG = process.env.ND_SERVER_LOG || ''
 const OUT = process.env.LAB_OUT || path.join(__dirname, 'lab-end.jsonl')
-const DIST = Number(process.env.DIST || 300)
-const NEAR = process.env.SH_NEAR ? process.env.SH_NEAR.split(',').map(Number) : [0, 0]
+const UNTIL = process.env.UNTIL === 'dragon' ? 'dragon' : 'end'
+const MINUTES = Number(process.env.MINUTES || (UNTIL === 'dragon' ? 60 : 40))
+const DEATHS_MAX = Number(process.env.DEATHS_MAX || 1)
+const CAMPAIGN = process.env.CAMPAIGN || 'campaign.js'
+const MAP_SH = process.env.MAP_SH === '1'
+let CENV: Record<string, any> = {}
+try { CENV = JSON.parse(process.env.CENV || '{}') } catch {}
+
+const KIT = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
+  'stone_pickaxe 2', 'water_bucket 2', 'flint_and_steel', 'cooked_beef 16', 'cobblestone 64', 'cobbled_deepslate 64',
+  'crafting_table', 'oak_planks 16', 'stick 8', `white_bed ${process.env.BEDS || 5}`, 'obsidian 4', 'oak_boat',
+  'bow', 'spectral_arrow 64', 'torch 16', `ender_pearl ${process.env.PEARLS || 2}`,
+  // EXTRA="obsidian 10,flint_and_steel" — что ещё принёс Ад (обсидиан бартера на раму выхода у крепости: CENV ND_SH_NETHER=1).
+  ...String(process.env.EXTRA || '').split(',').map(x => x.trim()).filter(Boolean)]
 
 const conn = connect(WS)
 const call = conn.call
 const kit = createKit({ call, heard: conn.heard, logFile: LOG, player: PLAYER })
-const header = async () => ((await call('status')) || {} as Record<string, any>).state || {} as Record<string, any>
-const have = async n => ((await header()).inventory || {} as Record<string, any>)[n] || 0
-
-const KIT = ['iron_chestplate', 'iron_leggings', 'iron_boots', 'golden_helmet', 'iron_sword', 'shield', 'bow', 'arrow 16',
-  'cooked_beef 16', 'cobblestone 40', 'iron_pickaxe 2', 'blaze_rod 7', `ender_pearl ${process.env.PEARLS || 12}`, 'torch 16',
-  // EXTRA="oak_log 4,crafting_table" — что ещё несёт кампания (дерево на лодку).
-  ...String(process.env.EXTRA || '').split(',').map(x => x.trim()).filter(Boolean)]
-
-async function locate () {
-  const loc = await call('ask', { command: '/locate structure minecraft:stronghold', match: 'nearest|Could not', ms: 20000 })
-  const line = (((loc && loc.detail) || loc || {} as Record<string, any>).lines || []).find(l => /nearest/.test(l)) || ''
-  const m = /\[(-?\d+), (~|-?\d+), (-?\d+)\]/.exec(line)
-  return m ? { x: Number(m[1]), z: Number(m[3]) } : null
+const logSize = () => { try { return fs.statSync(LOG).size } catch { return 0 } }
+let deathsOf = null
+const deathLines = from => (deathsOf || (deathsOf = require('./try-lab-ne-util').deaths(LOG, PLAYER, from)))()
+const cnt = (inv, re) => Object.entries<any>(inv || {}).filter(([k]) => re.test(k)).reduce((n, [, v]) => n + v, 0)
+const seedOf = () => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'farm', 'slots.json'), 'utf8')).slots[process.env.FARM_SLOT].seed } catch { return null } }
+const rcon = text => {
+  if (!process.env.FARM_SLOT) return ''
+  try { return execFileSync(process.execPath, [path.join(__dirname, '..', 'farm', 'farm.js'), 'rcon', process.env.FARM_SLOT, text], { encoding: 'utf8', timeout: 90000 }) } catch (e) { return String(e.message) }
+}
+async function status () {
+  for (let i = 0; i < 3; i++) {
+    const st = await call('status', {}).catch(() => null)
+    if (st && st.state && st.state.dimension) return st.state
+    await sleep(1500)
+  }
+  return {} as Record<string, any>
+}
+// Дракон мёртв — по серверу: дракона нет и выходной портал горит (его ставят только после смерти дракона).
+function dragonDead () {
+  if (!/failed/i.test(rcon('execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]'))) return false
+  for (let y = 50; y <= 75; y++) if (/passed/i.test(rcon(`execute in minecraft:the_end if block 1 ${y} 0 minecraft:end_portal`))) return true
+  return false
 }
 
-const steps = []
-async function act (method, params) {
-  const t0 = gameClock.now()
-  const r = await call(method, params)
-  const d = r.detail || {} as Record<string, any>
-  const h = await header()
-  const brief = { method, params, s: Math.round((gameClock.now() - t0) / 1000), status: r.status, by: r.by ? r.by.type : undefined, err: r.error, dim: h.dimension, pos: h.pos, hp: h.health, stopped: d.stopped ? String(d.stopped).slice(0, 160) : undefined }
-  for (const k of ['found', 'room', 'at', 'estimate', 'went', 'entered', 'lit', 'placed', 'frames', 'withEye', 'walked', 'legs', 'throws', 'refined']) if (d[k] !== undefined) brief[k] = typeof d[k] === 'object' ? JSON.stringify(d[k]).slice(0, 200) : d[k]
-  steps.push(brief)
-  console.log(`  ${method} ${JSON.stringify(params)}: ${JSON.stringify(brief).slice(0, 600)}`)
-  return r
-}
-
-conn.ready.then(async () => {
+async function main () {
+  await conn.ready
   await call('connect')
   await call('stop')
-  const t0 = gameClock.now()
-  const res: Record<string, any> = { at: new Date().toISOString() }
-  try {
-    await kit.cmd('/gamemode survival')
-    await kit.cmd('/effect give @s minecraft:slow_falling 60 0 true')
-    await kit.cmd(`/execute in minecraft:overworld run tp @s ${NEAR[0]} 200 ${NEAR[1]}`)
-    await sleep(5000)
-    await kit.setDifficulty('normal')
-    await kit.gamerule('spawn_mobs', 'true')
-    await kit.gamerule('send_command_feedback', 'true')
-    await kit.cmd('/time set day')
-    const S = await locate()
-    if (!S) throw new Error('/locate не дал крепость')
-    res.truth = S
-    console.log(`/locate: крепость (угол чанка старта) ${S.x}, ${S.z}`)
-    // Точка на суше в DIST от крепости (spreadplayers не ставит в воду).
-    let onLand = false
-    for (let tryN = 0; tryN < 6 && !onLand; tryN++) {
-    const a = Math.random() * Math.PI * 2
-    // START="x,z" — своя точка старта (суша, с которой крепость видна без моря).
-    const P = process.env.START && tryN === 0 ? { x: Number(process.env.START.split(',')[0]), z: Number(process.env.START.split(',')[1]) } : { x: Math.round(S.x + Math.sin(a) * DIST), z: Math.round(S.z + Math.cos(a) * DIST) }
-    // Разный текст — без разделителя «/say» (он рвёт намерения других ботов).
-    await kit.cmd(`/effect give @s minecraft:slow_falling ${61 + tryN} 0 true`)
-    await kit.cmd(`/execute in minecraft:overworld run tp @s ${P.x} 200 ${P.z}`)
-    await sleep(5000)
-    // Сразу на поверхность по карте высот (execute positioned over, 1.19.4+):
-    // spreadplayers у моря молча не ставил, тело висело на y 200, замедление
-    // кончалось — смерть от падения и старт у точки возрождения (room-A-6:
-    // «start -10,66,-8», шёл пешком 1800 блоков).
-    await kit.cmd(`/execute in minecraft:overworld positioned ${P.x} 0 ${P.z} positioned over motion_blocking_no_leaves run tp @s ~0.5 ~ ~0.5`)
-    await sleep(3000)
-    // spreadplayers в свежих чанках отвечает долго или молча — свидетель
-    // не ответ, а тело: ниже 190 и на твёрдом.
-    for (let i = 0; i < 3; i++) {
-      const h0 = await header()
-      if (h0.pos && h0.pos.y < 190 && h0.dimension === 'overworld') break
-      await kit.cmd(`/spreadplayers ${P.x + i * 64} ${P.z} 0 40 false @s`, { reply: /Spread|Could not/, ms: 45000 })
-      await sleep(3000)
-    }
-    const o = await call('observe', { radius: 4, fair: false })
-    const on = (((o && o.detail) || {} as Record<string, any>).terrain || {} as Record<string, any>).standingOn || ''
-    const hh = await header()
-    onLand = !!on && !/water/.test(on) && hh.pos && hh.pos.y >= 62
-    console.log(`точка ${P.x},${P.z}: стою на ${on} y=${hh.pos && hh.pos.y}${onLand ? '' : ' — не суша, другая'}`)
-    }
-    await kit.cmd('/clear @s')
-    for (const g of KIT) await kit.cmd(`/give @s minecraft:${g}`)
-    await kit.cmd('/effect clear @s')
-    await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
-    await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
-    await sleep(1500)
-    await call('armor', {} as Record<string, any>)
-    res.start = (await header()).pos
-    // Этап eyes (campaign.js): порошок из стержней, око из жемчуга и порошка.
-    const want = Math.min(Number(process.env.PEARLS || 12), await have('ender_pearl'))
-    await act('craft', { item: 'blaze_powder', count: Math.min(2 * (await have('blaze_rod')), want + 1) })
-    await act('craft', { item: 'ender_eye', count: Math.min(want, await have('blaze_powder')) })
-    res.eyes = await have('ender_eye')
-    // Этап stronghold.
-    const f = await act('stronghold', { mode: 'find', timeoutSeconds: 400 })
-    const fd = f.detail || {} as Record<string, any>
-    const st = fd.stronghold || fd.at || fd.estimate
-    if (st) res.findErr = Math.round(Math.hypot(st.x - S.x, st.z - S.z))
-    let room = null
-    for (let i = 0; i < 4 && !room; i++) {
-      const r = await act('stronghold', { mode: 'room', timeoutSeconds: 500 })
-      if (r.by && r.by.type === 'death') break
-      if (r.detail && r.detail.room) room = r.detail.room
-    }
-    res.room = room
-    // Этап dragon: вставить очи и войти.
-    if (room) {
-      await act('stronghold', { mode: 'fill', enter: true, timeoutSeconds: 200 })
-    }
-    let h = await header()
-    for (let i = 0; i < 20 && h.dimension !== 'the_end'; i++) { await sleep(300); h = await header() }
-    res.dimension = h.dimension
-    res.eyesLeft = await have('ender_eye')
-  } catch (e) {
-    res.error = e.message
-    console.log('сцена оборвалась:', e.message)
-  } finally {
-    res.deaths = kit.between(t0, gameClock.now(), 'death').length + (steps.some(s => s.by === 'death') ? 1 : 0)
-    res.seconds = Math.round((gameClock.now() - t0) / 1000)
-    res.steps = steps
-    res.ok = res.dimension === 'the_end' && !res.deaths
-    fs.appendFileSync(OUT, JSON.stringify(res) + '\n')
-    console.log(`\nИТОГ: ${res.ok ? 'OK — в Энде' : 'ПЛОХО'}: ${res.dimension}, смертей ${res.deaths}, ${res.seconds} с, ошибка find ${res.findErr} бл.`)
-    try { await call('stop') } catch {}
-    conn.close()
+  const size = logSize()
+  const rngSalt = await kit.randomReset()
+  await kit.cmd('/gamemode creative')
+  await kit.setDifficulty('normal')
+  for (const d of ['overworld', 'the_nether', 'the_end']) {
+    await kit.cmd(`/execute in minecraft:${d} run gamerule keep_inventory ${KEEPINV}`)
+    await kit.cmd(`/execute in minecraft:${d} run gamerule spawn_mobs ${d === 'overworld' ? 'false' : 'true'}`)
   }
-}).catch(e => { console.error('ws:', e.message); process.exitCode = 1 })
+  await kit.cmd('/execute in minecraft:overworld run gamerule advance_time false')
+  await kit.gamerule('send_command_feedback', 'true')
+  await kit.cmd('/clear @s'); await kit.cmd('/effect clear @s'); await kit.cmd('/time set 1000')
+  await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await kit.cmd('/give @s minecraft:cobblestone 16')
+  await sleep(1500)
+  // Портал верхнего мира — сам (тот же RPC, что этап portal кампании): старт «у своего портала после Ада».
+  // Нет места под раму у спавна (s5c-f2: 5 из 7 «Места под раму нет» — портала нет, граф без «portal» уходил в cast/diamond) —
+  // другое место в 12 бл. на поверхности (spreadplayers — постановка сцены), до 4 мест.
+  let pr = null
+  let portalOk = false
+  const p0 = (await status()).pos || { x: 0, z: 0 }
+  for (let k = 0; k < 4 && !portalOk; k++) {
+    if (k) {
+      await kit.cmd(`/spreadplayers ${Math.round(p0.x + 12 * Math.sin(k * 2.1))} ${Math.round(p0.z + 12 * Math.cos(k * 2.1))} 0 4 false @s`)
+      await sleep(2500)
+      await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await kit.cmd('/give @s minecraft:cobblestone 16')
+      await sleep(800)
+    }
+    pr = await call('portal', { timeoutSeconds: 240 }).catch(e => ({ status: 'failed', error: e.message }))
+    portalOk = /горит/.test(String(pr?.detail?.note || '') + String(pr?.detail?.stopped || ''))
+  }
+  const s0 = await status()
+  if (s0.dimension !== 'overworld') await kit.ensureWorld('overworld', {})
+  await kit.cmd('/spawnpoint @s')
+  const start = s0.pos ? { x: Math.round(s0.pos.x), z: Math.round(s0.pos.z) } : { x: 0, z: 0 }
+  // Крепость Края из копии мира (MAP_SH) или вслепую.
+  let shMap = null
+  let need = 12
+  if (MAP_SH && process.env.FARM_SLOT) {
+    const sm = await require('./try-lab-ne-map').strongholdMap(Number(process.env.FARM_SLOT), start).catch(e => ({ error: e.message }))
+    shMap = { start: sm.start, room: sm.room && sm.room.center, frames: sm.frames, eyes: sm.eyes, need: sm.need, error: sm.error }
+    if (Number.isFinite(sm.need)) need = Math.max(1, sm.need)
+    if (sm.place) {
+      const w = await call('fortress', { mode: 'map', places: { крепость: sm.place }, timeoutSeconds: 30 }).catch(e => ({ error: e.message }))
+      shMap.mapped = (w.detail && w.detail.mapped) || w.error || null
+    }
+    console.log('крепость Края (карта копии)', JSON.stringify(shMap))
+  }
+  const eyes = Number(process.env.EYES || (MAP_SH ? need + 2 : 14))
+  // Портал строился в creative (блоки не тратятся) — остаток обсидиана/огнива убрать: набор ровно «после Ада».
+  await kit.cmd('/clear @s')
+  for (const g of [...KIT, `ender_eye ${eyes}`]) { const [item, n] = g.split(' '); await kit.cmd(`/give @s minecraft:${item}${n ? ' ' + n : ''}`) }
+  await kit.cmd('/gamemode survival')
+  await kit.cmd('/effect give @s minecraft:instant_health 1 5 true'); await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
+  await sleep(1500)
+  await call('armor', {}).catch(() => null)
+  await kit.cmd('/execute in minecraft:overworld run gamerule spawn_mobs true')
+  await kit.cmd('/execute in minecraft:overworld run gamerule advance_time true')
+  await kit.cmd('/time set 1000')
+  const truth = (() => { const m = /\[(-?\d+), [^,]+, (-?\d+)\] \((\d+) blocks/.exec(rcon(`execute in minecraft:overworld positioned ${start.x} 70 ${start.z} run locate structure minecraft:stronghold`)); return m ? { x: +m[1], z: +m[2], dist: +m[3] } : null })()
+  const inv0 = (await status()).inventory || {}
+  const eyes0 = cnt(inv0, /^ender_eye$/)
+
+  const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
+  try { fs.writeFileSync(clog, '') } catch {}
+  const tc = gameClock.now()
+  const wallTc = gameClock.wall.now()
+  const clock0 = (await call('status')).state?.clock || gameClock.snapshot()
+  const child = spawn(process.execPath, [CAMPAIGN], {
+    cwd: __dirname,
+    env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ND_WATCHDOG_MIN: String(MINUTES + 5), ND_EYES_NEED: String(need), ND_WORLD_SEED: String(seedOf() ?? ''), ...CENV },
+    stdio: 'ignore'
+  })
+  let exited = null
+  child.on('exit', code => { exited = code })
+  const marks: Record<string, number> = {}
+  const mark = k => { if (marks[k] == null) marks[k] = Math.round((gameClock.now() - tc) / 6000) / 10 }
+  let stoppedBy = 'время'
+  let eyesAtEnd = null
+  let lastCheck = 0
+  let wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
+  const until = tc + MINUTES * 60000
+  while (gameClock.now() < until) {
+    await Promise.race([sleep(5000), gameClock.wall.sleep(15000)])
+    if (gameClock.now() > wallSeen.game) wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
+    else if (gameClock.wall.now() - wallSeen.wall > 90000) { stoppedBy = 'игровые часы стоят 90 с реального времени'; break }
+    if (gameClock.now() - lastCheck > 10000 || exited !== null) {
+      lastCheck = gameClock.now()
+      const s = await status()
+      const rc = await call('recall', { lines: 1 }).catch(() => null)
+      const pl = rc?.detail?.state?.places || {}
+      if (pl['крепость']) mark('stronghold')
+      if (pl['портал в Край']) mark('room')
+      if (s.dimension === 'the_end') {
+        if (marks.end == null) rcon('execute in minecraft:the_end run forceload add -16 -16 15 15') // центр острова — для проверки дракона и после ухода тела
+        mark('end')
+        if (eyesAtEnd === null) eyesAtEnd = cnt(s.inventory, /^ender_eye$/)
+        if (UNTIL === 'end') { stoppedBy = 'в Энде'; break }
+      }
+      // Убит — по серверу; после убийства тело обычно падает в выходной портал и уже наверху (титры → respawn).
+      if (UNTIL === 'dragon' && marks.end != null && dragonDead()) { mark('dragon'); stoppedBy = 'дракон убит'; break }
+    }
+    if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
+    if (deathLines(size).length >= DEATHS_MAX) { stoppedBy = `смертей ${deathLines(size).length}`; break }
+    let text = ''
+    try { text = fs.readFileSync(clog, 'utf8') } catch {}
+    if (/БЛОКЕР/.test(text)) { stoppedBy = (text.match(/БЛОКЕР[^\n]{0,160}/) || ['БЛОКЕР'])[0]; break }
+  }
+  if (exited === null) { try { child.kill() } catch {} }
+  if (marks.end != null) rcon('execute in minecraft:the_end run forceload remove -16 -16 15 15')
+  try { await call('stop') } catch {}
+  const wallSeconds = (gameClock.wall.now() - wallTc) / 1000
+  const clock1 = (await call('status')).state?.clock || gameClock.snapshot()
+  if (UNTIL === 'dragon' && marks.dragon == null && marks.end != null && dragonDead()) { mark('dragon'); stoppedBy = 'дракон убит' }
+  const s = await status()
+  const deaths = deathLines(size)
+  const ticks = clock0 && clock1 ? clock1.ticks - clock0.ticks : null
+  const ok = deaths.length === 0 && (UNTIL === 'dragon' ? marks.dragon != null : marks.end != null)
+  const rec = {
+    at: new Date().toISOString(), scene: 'try-lab-end', until: UNTIL, seed: seedOf(), mapSh: MAP_SH, blind: !MAP_SH, ok, stoppedBy,
+    minutes: Math.round((gameClock.now() - tc) / 6000) / 10, marks, endMin: marks.end ?? null, dragonMin: marks.dragon ?? null,
+    eyes0, eyesAtEnd, eyesSpent: eyesAtEnd === null ? null : eyes0 - eyesAtEnd, need, shMap, truth, start,
+    deathCount: deaths.length, deaths, health: s.health ?? null, dimension: s.dimension ?? null, pos: s.pos ?? null,
+    wallSeconds, ticks, tempo: ticks && wallSeconds ? Math.round(ticks / wallSeconds) : null, tickRate: clock1?.tickRate ?? null,
+    portal: portalOk, portalWhy: portalOk ? undefined : String(pr && (pr.error || pr.detail?.stopped || pr.detail?.note) || '').slice(0, 200), rngSalt, exitCode: exited, campaignLog: clog
+  }
+  fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
+  console.log(JSON.stringify(rec))
+  try { await Promise.race([call('disconnect', { reason: 'сцена окончена' }), gameClock.wall.sleep(10000)]) } catch {}
+  process.exit(0)
+}
+
+main().catch(e => {
+  console.error('СЦЕНА УПАЛА:', e && e.stack || e)
+  try { fs.appendFileSync(OUT, JSON.stringify({ at: new Date().toISOString(), scene: 'try-lab-end', ok: false, setupFail: true, error: String(e && e.message || e) }) + '\n') } catch {}
+  process.exit(1)
+})

@@ -146,8 +146,12 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
       for (const c of candidates(s, world, { ...options, control })) {
         const p = rollout(s, world, c, { ...options, maxBlocks, control })
         if (!p) continue
-        if (!best || p.fall < best.fall - 1e-6 || Math.abs(p.fall - best.fall) < 1e-6 && (p.chain.length < best.chain.length || p.chain.length === best.chain.length && p.landTick < best.landTick)) best = p
-        if (best.fall <= 3 && best.chain.length === 1) return best
+        // deep (спуск блоками, navigation/descent.ts): из безопасных (≤ 3) одним блоком — самый глубокий, чтобы шаг
+        // спуска был 3 блока, а не 1; иначе — как всегда: наименьшее падение, короче цепочка, раньше посадка.
+        const rank = q => options.deep && q.fall <= 3 && q.chain.length === 1 ? [0, -q.fall, q.landTick] : [1, q.fall, q.chain.length, q.landTick]
+        const a = rank(p); const b = best && rank(best); const i = b ? a.findIndex((v, j) => Math.abs(v - b[j]) > 1e-6) : -1
+        if (!b || i >= 0 && a[i] < b[i]) best = p
+        if (!options.deep && best.fall <= 3 && best.chain.length === 1) return best
       }
     }
     return best
@@ -552,9 +556,13 @@ function install (session, opts) {
       }
     }
     if (decision.action !== 'clutch' || st.blocks >= (opts.maxBlocks ?? 3) || preparing || now() - barAt < 300) return decision
+    // Спуск блоками (descent.ts): первые ~0.4 бл. падения не ставить — грань стены на глубине 3 ещё вне руки (4.5),
+    // а самый верхний блок дал бы шаг в 1 блок.
+    const deep = !st.blocks && (bot._ndClutchDeep || 0) > now()
+    if (deep && (st.peak ?? e.position.y) - e.position.y < 0.4) return decision
     const count = bot.inventory.slots.slice(36, 45).filter(i => i && FILLER.test(i.name)).reduce((n, i) => n + i.count, 0) - (opts.reserve ?? 0) - [...spent.values()].reduce((n, v) => n + v, 0)
     const p = api.plan({ state: s, world, peak: st.peak, blockCount: count, maxBlocks: (opts.maxBlocks ?? 3) - st.blocks, entities: bot.entities, selfId: e.id, eyeHeight: eyeHeight(),
-      canReference: b => !blocked.has(key(b.position)), steer: opts.steer })
+      canReference: b => !blocked.has(key(b.position)), steer: opts.steer, deep })
     if (!p || blocked.has(key(p.cell))) { stats.no_face++; emit('no_face'); return decision }
     scheduled = p
     const snapshot = s.pos.clone()

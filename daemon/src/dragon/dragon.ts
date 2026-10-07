@@ -21,20 +21,13 @@ function scalePathBudget (bot, rate = gameClock.snapshot()?.tickRate ?? 20) {
 async function dragon (session, ctl, p: any = {}) {
   const bot = session.bot
   const undo = scalePathBudget(bot)
-  // Выходной портал встаёт под станцией у столба (окоп в его кольце): после убийства тело падает в портал, сервер шлёт
-  // win_game и держит игрока в титрах, пока клиент не ответит perform_respawn. goHome отвечает только пока идёт сам; без
-  // ответа нет пакетов времени — игровые часы демона встают, бой не возвращается (s5-c5-s1, 750 TPS, 06.10). Отвечать сразу.
-  const onWin = pk => {
-    if (!pk || !(pk.reason === 4 || pk.reason === 'win_game')) return
-    ctl.creditsSkipped = (ctl.creditsSkipped || 0) + 1
-    try { bot._client.write('client_command', bot.supportFeature('respawnIsPayload') ? { payload: 0 } : { actionId: 0 }) } catch {}
-  }
-  const client = bot._client && typeof bot._client.on === 'function' ? bot._client : null
-  if (client) client.on('game_state_change', onWin)
+  // Выходной портал встаёт под станцией у столба (окоп в его кольце): после убийства тело падает в портал — титры.
+  // Ответ perform_respawn теперь у всего демона (credits.ts, s5c 06.10), не только на время навыка (s5-e23-s7).
+  require('../credits').install(bot)
   // окно точности на ферме (dragon/precision.ts, ND_PRECISION_TPS): посадка при готовой станции и опасность рядом
   const prec = require('./precision')
   const pwTimer = prec.precisionRate() ? gameClock.setInterval(() => { try { prec.precisionTick(bot, ctl) } catch {} }, 100) : null
-  try { return await dragonFight(session, ctl, p) } finally { if (pwTimer) gameClock.clearInterval(pwTimer); if (client) client.removeListener('game_state_change', onWin); undo(); prec.precisionOff(bot, ctl) }
+  try { return await dragonFight(session, ctl, p) } finally { if (pwTimer) gameClock.clearInterval(pwTimer); undo(); prec.precisionOff(bot, ctl) }
 }
 
 async function dragonFight (session, ctl, p: any = {}) {

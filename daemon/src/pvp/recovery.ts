@@ -113,6 +113,7 @@ const escapePearl = async () => {
     ctx.aim = 'free'
     const r = (await ctx.holdItem(pearl)) ? await ctx.throwMod.throwAt(ctx.bot, null, {
       item: ctx.bot.heldItem,
+      jump: 'auto', // S6b pearl-jump
       pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4 })
     }).catch(() => null) : null
     ctx.aim = 'target'

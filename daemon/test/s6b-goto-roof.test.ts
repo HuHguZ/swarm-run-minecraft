@@ -25,11 +25,12 @@ function fixture (skyAt: (p: any) => number) {
   bot.world = { getColumnAt: () => ({ minY: -64, skyLightSections: Array(26).fill({}) }) }
   bot.blockAt = (p: any) => ({ position: p, skyLight: skyAt(p), boundingBox: p.y === 99 ? 'block' : 'empty', name: 'air' })
   const seen: boolean[] = []
+  const dig: boolean[] = []
   const session: any = { bot, require: () => bot, updateMovements () {}, underSky: () => true, runIntent: (_name, work) => work({ aborted: false, onAbort: [] }) }
-  bot.pathfinder = { movements: { canDig: false, scafoldingBlocks: [] },
-    setGoal (goal) { if (!goal) return; seen.push(session.surfaceWalk); bot.entity.position = new Vec3(goal.x + .5, 100, goal.z + .5); setImmediate(() => bot.emit('path_update', { status: 'success', path: [] })) },
+  bot.pathfinder = { movements: { canDig: true, scafoldingBlocks: [] },
+    setGoal (goal) { if (!goal) return; seen.push(session.surfaceWalk); dig.push(bot.pathfinder.movements.canDig); bot.entity.position = new Vec3(goal.x + .5, 100, goal.z + .5); setImmediate(() => bot.emit('path_update', { status: 'success', path: [] })) },
     goto: async () => {} }
-  return { goto: p => context.module.exports.Session.prototype.goto.call(session, p), seen }
+  return { goto: p => context.module.exports.Session.prototype.goto.call(session, p), seen, dig }
 }
 
 test('goto into a roofed room drops the roof step cost; an open-sky goal keeps it (arena mirror asymmetry, s6b 06.10)', async () => {
@@ -40,4 +41,17 @@ test('goto into a roofed room drops the roof step cost; an open-sky goal keeps i
   const open = fixture(p => p.x <= 0 ? 4 : 15)
   await open.goto({ x: 20, y: 100, z: 0, range: 1 })
   assert.deepEqual(open.seen, [true], 'an open-sky goal still prefers the surface')
+})
+
+test('goto without y keeps the strict surface walk when the goal column is a mountain (no tunnel through it, S6c 07.10)', async () => {
+  // Mountain at x <= 0: at body height (y 100) its column is solid rock, sky 0. The body will stand on its top.
+  const hill = fixture(p => p.x <= 0 ? 0 : 15)
+  await hill.goto({ x: -2, z: 0, range: 1, surface: 'strict' })
+  assert.deepEqual(hill.seen, [true], 'no y: the roof check must not read the rock at body height')
+  assert.deepEqual(hill.dig, [false], 'strict still forbids digging')
+  // A roofed goal with y drops only the roof step cost: strict still forbids digging.
+  const room = fixture(p => p.x <= 0 ? 4 : 15)
+  await room.goto({ x: -2, y: 100, z: 0, range: 1, surface: 'strict' })
+  assert.deepEqual(room.seen, [false])
+  assert.deepEqual(room.dig, [false], 'a roofed goal is no licence to dig')
 })

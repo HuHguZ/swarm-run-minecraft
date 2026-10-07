@@ -79,14 +79,28 @@ test('щелчок кровати по ровным часам: не раньш�
   assert.ok(seq > 0)
 })
 
-test('окно точности: только с ND_PRECISION_TPS, включается раз и возвращает прежний темп', () => {
+// Мир слота фермы для окна точности (precision.farmWorld): порт 25601..25632 и бот NeuroFarm<i>.
+function asFarm () {
+  const cfg = require('../src/config'); const was = { port: cfg.port, username: cfg.username }
+  cfg.port = 25601; cfg.username = 'NeuroFarm1'
+  return () => Object.assign(cfg, was)
+}
+
+test('окно точности: только на ферме и с ND_PRECISION_TPS, включается раз и возвращает прежний темп', () => {
   const { precisionWindow, precisionOff } = require('../src/dragon/precision')
   const gameClock = require('../src/game-clock')
+  const cfg = require('../src/config')
   const said = []
   const bot: any = { chat: (m) => said.push(m) }
   const was = process.env.ND_PRECISION_TPS
   const c = new gameClock.GameClock({ manual: true }); c.setState({ tick_rate: 750 }); gameClock.activate(c)
+  const unfarm = asFarm()
   try {
+    // основной мир (25569, NeuroDown): переменная задана — команда всё равно не уходит
+    process.env.ND_PRECISION_TPS = '20'
+    cfg.port = 25569; cfg.username = 'NeuroDown'
+    assert.equal(precisionWindow(bot, {}, true), null)
+    cfg.port = 25601; cfg.username = 'NeuroFarm1'
     delete process.env.ND_PRECISION_TPS
     assert.equal(precisionWindow(bot, {}, true), null)
     process.env.ND_PRECISION_TPS = '20'
@@ -97,32 +111,46 @@ test('окно точности: только с ND_PRECISION_TPS, включа�
     assert.equal(precisionOff(bot, ctl), null)
     assert.deepEqual(said, ['/tick rate 20', '/tick rate 750'])
   } finally {
+    unfarm()
     if (was == null) delete process.env.ND_PRECISION_TPS; else process.env.ND_PRECISION_TPS = was
     c.dispose(); gameClock.activate(null)
   }
 })
 
-test('фильтр взгляда: исходящий поворот в глаза эндермену опускается, прочие пакеты — как были', () => {
+test('честный отвод взгляда: голова опускается в теле, пакет совпадает с телом; за блоком эндермен не в счёт', () => {
   const Vec3 = require('vec3')
-  const { stareFilter } = require('../src/dragon/fall-guard')
+  const { EventEmitter } = require('node:events')
+  const { lookGuard } = require('../src/dragon/fall-guard')
   const sent = []
-  const bot: any = { entity: { position: new Vec3(0, 64, 0) }, entities: { 5: { id: 5, name: 'enderman', position: new Vec3(0, 64 + 1.62 - 2.55, -20) } }, _client: { write: (n, d) => sent.push([n, d]) } }
+  let wall = false
+  const bot: any = new EventEmitter()
+  Object.assign(bot, { entity: { position: new Vec3(0, 64, 0), yaw: 0, pitch: 0 }, entities: { 5: { id: 5, name: 'enderman', position: new Vec3(0, 64 + 1.62 - 2.55, -20) } },
+    _client: { write: (n, d) => sent.push([n, d]) },
+    blockAt: p => wall && p.z === -10 && p.y === 65 ? { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : { name: 'air', boundingBox: 'empty' } })
   const stats: any = {}
-  const off = stareFilter(bot, stats)
-  // взгляд на север (yaw 0 у mineflayer = −z), горизонтально: глаза эндермена на уровне глаз — в упор
+  const off = lookGuard(bot, stats)
+  // (1) тело смотрит на север (yaw 0 = −z) в глаза: тик физики опускает голову В ТЕЛЕ до отправки
+  bot.emit('physicsTick')
+  assert.ok(bot.entity.pitch < -0.05, `pitch тела ${bot.entity.pitch}`)
+  assert.equal(stats.guarded, 1)
+  // (2) поздний поворот в глаза, ушедший мимо тика, — опускается и в пакете, и в теле одинаково
   bot._client.write('look', { yaw: 180, pitch: 0, flags: {} })
+  assert.ok(sent[0][1].pitch > 3, `pitch пакета ${sent[0][1].pitch}`)
+  assert.ok(Math.abs(-sent[0][1].pitch * Math.PI / 180 - bot.entity.pitch) < 1e-9, 'тело и сервер видят один поворот')
   bot._client.write('position_look', { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, flags: {} }) // на юг — мимо
-  bot._client.write('use_item', { hand: 0 })
-  off()
-  assert.ok(sent[0][1].pitch > 3, `pitch ${sent[0][1].pitch}`)
   assert.equal(sent[1][1].pitch, 0)
-  assert.equal(sent[2][0], 'use_item')
-  assert.equal(stats.stareCut, 1)
+  bot._client.write('use_item', { hand: 0, rotation: { x: 180, y: 0 } }) // бросок не уводим
+  assert.deepEqual(sent[2][1].rotation, { x: 180, y: 0 })
+  // (3) блок между глазами и глазами эндермена (COLLIDER) — не взгляд, голову не опускать
+  wall = true; bot.entity.pitch = 0
+  bot.emit('physicsTick')
+  assert.equal(bot.entity.pitch, 0)
+  off()
   bot._client.write('look', { yaw: 180, pitch: 0 })
   assert.equal(sent[3][1].pitch, 0)
 })
 
-test('титры после выходного портала: дракон-навык сразу отвечает perform_respawn (часы не встают)', async () => {
+test('титры после выходного портала: ответ perform_respawn и после конца навыка (s5-e23-s7), повтор до respawn', async () => {
   const { EventEmitter } = require('node:events')
   const d = require('../src/dragon/dragon')
   const client: any = new EventEmitter(); const sent = []
@@ -130,13 +158,15 @@ test('титры после выходного портала: дракон-на
   const bot: any = { _client: client, supportFeature: () => false, pathfinder: null }
   const session: any = { bot }
   const ctl: any = {}
-  // бой падает сразу (не в Энде) — обёртка всё равно снимает слушателя
+  // бой падает сразу (не в Энде), ответ на титры остаётся у демона
   bot.game = { dimension: 'overworld' }; bot.entity = null; bot.health = 20; bot.inventory = { items: () => [], slots: [] }
-  const run = d.dragon(session, ctl, {}).catch(() => {})
-  client.emit('game_state_change', { reason: 4, gameMode: 1 })
-  await run
-  client.emit('game_state_change', { reason: 4, gameMode: 1 })
-  assert.deepEqual(sent.filter(([n]) => n === 'client_command').length, 1)
+  await d.dragon(session, ctl, {}).catch(() => {})
+  client.emit('game_state_change', { reason: 'win_game', gameMode: 0 }) // титры уже видел: mineflayer сам не отвечает
+  assert.deepEqual(sent.filter(([n]) => n === 'client_command'), [['client_command', { actionId: 0 }]])
+  client.emit('respawn', {})
+  client.emit('game_state_change', { reason: 'rain_level_change', gameMode: 0 })
+  assert.equal(sent.length, 1)
+  assert.equal(bot._ndCredits.answered, 1)
 })
 
 test('окно точности: облако рядом включает 20 тиков и держит ещё 3 игровых с', () => {
@@ -148,9 +178,10 @@ test('окно точности: облако рядом включает 20 т�
   const said = []
   const cloud = { id: 9, name: 'area_effect_cloud', position: new Vec3(3, 61, 0), metadata: [] }
   const bot: any = { chat: (m) => said.push(m), entity: { position: new Vec3(0, 61, 0), id: 1 }, entities: { 9: cloud }, registry: { entitiesByName: {} } }
+  const unfarm = asFarm()
   try {
     process.env.ND_PRECISION_TPS = '20'
-    const ctl: any = {}
+    const ctl: any = { pillar: { built: true } } // станция готова — окно подхода закрыто, остаётся окно по опасности
     precisionTick(bot, ctl)
     assert.deepEqual(said, ['/tick rate 20'])
     delete bot.entities[9]
@@ -161,7 +192,33 @@ test('окно точности: облако рядом включает 20 т�
     precisionTick(bot, ctl)
     assert.deepEqual(said, ['/tick rate 20', '/tick rate 750'])
   } finally {
+    unfarm()
     if (was == null) delete process.env.ND_PRECISION_TPS; else process.env.ND_PRECISION_TPS = was
+    c.dispose(); gameClock.activate(null)
+  }
+})
+
+test('окно точности: подход с платформы — 20 тиков с начала навыка до станции или 40 игр. с (s5c-d1-s6)', () => {
+  const Vec3 = require('vec3')
+  const gameClock = require('../src/game-clock')
+  const { precisionTick } = require('../src/dragon/precision')
+  const cfg = require('../src/config'); const was = { port: cfg.port, username: cfg.username, env: process.env.ND_PRECISION_TPS }
+  cfg.port = 25601; cfg.username = 'NeuroFarm1'; process.env.ND_PRECISION_TPS = '20'
+  const c = new gameClock.GameClock({ manual: true }); c.setState({ tick_rate: 750 }); gameClock.activate(c)
+  const said = []
+  const bot: any = { chat: (m) => said.push(m), entity: { position: new Vec3(100, 49, 0), id: 1 }, entities: {}, registry: { entitiesByName: {} } }
+  try {
+    const ctl: any = { started: gameClock.now() }
+    precisionTick(bot, ctl)
+    assert.deepEqual(said, ['/tick rate 20'], 'подход — окно сразу')
+    c.advanceTicks(20 * 41)
+    precisionTick(bot, ctl)
+    assert.deepEqual(said, ['/tick rate 20', '/tick rate 750'], 'через 40 с без опасности — прежний темп')
+    const ctl2: any = { started: gameClock.now(), pillar: { built: true } }
+    precisionTick(bot, ctl2)
+    assert.equal(said.length, 2, 'станция готова — подход кончился')
+  } finally {
+    Object.assign(cfg, { port: was.port, username: was.username }); if (was.env == null) delete process.env.ND_PRECISION_TPS; else process.env.ND_PRECISION_TPS = was.env
     c.dispose(); gameClock.activate(null)
   }
 })

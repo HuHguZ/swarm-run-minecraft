@@ -69,12 +69,17 @@ function seedOf () {
 }
 
 // Достигнута ли ступень — по состоянию тела и журналу кампании.
+const ROUTE_IN = /МАРШРУТ маршрут кончился: в Аду, ([0-9]+) с/
+// Минута входа: по журналу маршрута (секунды от старта маршрута ≈ от старта кампании), иначе — время опроса.
+const enteredAt = (text, fallback) => { const m = UNTIL === 'nether' ? ROUTE_IN.exec(text) : null; return m ? Math.round(Number(m[1]) / 6) / 10 : fallback }
 function reached (s, text) {
   const inv = s.inventory || {} as Record<string, any>
   const rods = cnt(inv, /^blaze_rod$/) + Math.floor(cnt(inv, /^blaze_powder$/) / 2) + Math.floor(cnt(inv, /^ender_eye$/) / 2)
   switch (UNTIL) {
     case 'portal': return /ВЕХА (cast|portal)/.test(text) || s.dimension === 'the_nether'
-    case 'nether': return s.dimension === 'the_nether'
+    // Вход по журналу маршрута тоже считается: граф Ада мог сразу увести тело назад (s8-f1-9: «для ифритов не хватает еды —
+    // домой» через 1 с после входа, опрос раз в 30 с его не застал — прогон записан таймаутом).
+    case 'nether': return s.dimension === 'the_nether' || ROUTE_IN.test(text)
     case 'rods': return rods >= 7
     case 'pearls': return cnt(inv, /^(ender_pearl|ender_eye)$/) >= 12
     case 'eyes': return cnt(inv, /^ender_eye$/) >= EYES
@@ -162,8 +167,8 @@ async function main () {
     if (gameClock.now() - lastCheck > 30000 || exited !== null) {
       lastCheck = gameClock.now()
       const s = await status()
-      if (reached(s, text)) { ok = true; reachedAt = Math.round((gameClock.now() - tc) / 6000) / 10; stoppedBy = `ступень ${UNTIL} пройдена`; break }
-    }
+      if (reached(s, text)) { ok = true; reachedAt = enteredAt(text, Math.round((gameClock.now() - tc) / 6000) / 10); stoppedBy = `ступень ${UNTIL} пройдена`; break }
+    } else if (UNTIL === 'nether' && ROUTE_IN.test(text)) { ok = true; reachedAt = enteredAt(text, null); stoppedBy = `ступень ${UNTIL} пройдена`; break }
     if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
     const deaths = deathLines(size)
     if (deaths.length >= DEATHS_MAX) { stoppedBy = `смертей ${deaths.length}`; break }
@@ -179,7 +184,7 @@ async function main () {
   if (!ok && reached(s, text)) {
     ok = true
     const m = /ВЕХА (?:cast|portal): готово в \S+, (\d+) мин/.exec(text)
-    reachedAt = m && UNTIL === 'portal' ? Number(m[1]) : Math.round((gameClock.now() - tc) / 6000) / 10
+    reachedAt = m && UNTIL === 'portal' ? Number(m[1]) : enteredAt(text, Math.round((gameClock.now() - tc) / 6000) / 10)
     stoppedBy = `ступень ${UNTIL} пройдена`
   }
   const facts = campaignFacts(text)

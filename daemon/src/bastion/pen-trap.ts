@@ -531,11 +531,11 @@ function penCheck (bot, bo, own = undefined) {
 // плюс поля boothTrade (handed, tossed, barterReceipts, barterDelivered, delivery, spent, seconds, stopped).
 // Загон у ямы не строится (penPlan, нет блоков заложить рот) — тот же вызов торгует обычной ямой (boothTrade), так что
 // подключение — замена boothTrade на trade для ям: penned говорит, закрылся ли загон.
-async function trade (session, ctl, st, bo, until, { keep = 8, done = () => false, want, refill, penMax, capture }: any = {}) {
+async function trade (session, ctl, st, bo, until, { keep = 8, done = () => false, want, refill, penMax, capture, patience }: any = {}) {
   const own = st && st.sealedState && st.sealedState.own
   const seconds = Math.max(20, (until - gameClock.now()) / 1000)
   const ready = penHere(session.bot)
-  const r = await penTrade(session, ctl, ready || bo, { plan: ready || undefined, seconds, keep, done, want, refill, penMax, capture, st, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
+  const r = await penTrade(session, ctl, ready || bo, { plan: ready || undefined, seconds, keep, done, want, refill, penMax, capture, patience, st, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
   if (own && r.own) for (const key of r.own) own.add(key)
   if (!ready && r.ok === false && !r.spent && /^(загон не строится|нет блоков)/.test(r.stopped || '')) {
     const bt = await require('./booth-trade').boothTrade(session, ctl, st, bo, until, { keep, done })
@@ -616,7 +616,7 @@ async function penIntent (session, ctl, p: any = {}) {
   }
   // own — ключи «x,y,z» своего замкнутого воздуха (сцена: стройка прошлого вызова и штрек ухода), как st.sealedState.own.
   const own = Array.isArray(p.own) ? new Set(p.own) : null
-  return penTrade(session, ctl, bo, { plan: ready || undefined, seconds, keep: p.keep, done, want: p.want, catchSeconds: p.catchSeconds, lanes: p.lanes, refill: p.refill, penMax: p.penMax, capture: p.capture, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
+  return penTrade(session, ctl, bo, { plan: ready || undefined, seconds, keep: p.keep, done, want: p.want, catchSeconds: p.catchSeconds, lanes: p.lanes, refill: p.refill, penMax: p.penMax, capture: p.capture, patience: p.patience, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
 }
 
 module.exports = { trade, penCheck, penHere, penPlan, trenchAim, pitHere, inStrip, lanesUnder, inPen, digSeen, digSeenAll, seenFace, throwJournal, penTrade, penIntent, penAway, ADMIRE_MS }

@@ -41,9 +41,14 @@ test('mapped route is a competing registered graph edge and runs through verifie
   assert.equal(selected!.stage.progressed?.(), true)
   assert.ok(f.observed() >= 3)
   assert.equal(f.decisions.find(row => row.level === 'strategy')?.outcome, 'SUCCESS')
-  const highCost = campaignFixture()
-  highCost.intelligence.registry.get('MappedOverworldRoute')!.estimateCost = () => 1e9
-  assert.notEqual((await highCost.intelligence.select([highCost.stage], () => false))?.strategy?.id, 'MappedOverworldRoute')
+  // Конкуренция по цене — без «маршрут по карте первым» (S8 07.10: ND_ROUTE_FIRST по умолчанию вкл.).
+  const oldFirst = process.env.ND_ROUTE_FIRST
+  process.env.ND_ROUTE_FIRST = '0'
+  try {
+    const highCost = campaignFixture()
+    highCost.intelligence.registry.get('MappedOverworldRoute')!.estimateCost = () => 1e9
+    assert.notEqual((await highCost.intelligence.select([highCost.stage], () => false))?.strategy?.id, 'MappedOverworldRoute')
+  } finally { if (oldFirst === undefined) delete process.env.ND_ROUTE_FIRST; else process.env.ND_ROUTE_FIRST = oldFirst }
 })
 
 test('mapped route RPC success cannot manufacture a completed nether milestone', async () => {
@@ -108,37 +113,20 @@ test('graph still executes a known Bastion after the legacy dry counter removed 
   assert.equal(decisions.at(-1)?.outcome, 'SUCCESS')
 })
 
-test('fire resistance supply executes after pearls are complete and verifies observed protection', async () => {
+test('pearls complete, no fire resistance and no source of it: the graph goes to the spawner (FR is a price, not a gate)', async () => {
   const observation: Observation = { state: { dimension: 'the_nether', health: 20, food: 20,
-    inventory: { stone_pickaxe: 2, cooked_beef: 12, ender_pearl: 12, gold_ingot: 8 }, replanRevision: 0 },
+    inventory: { stone_pickaxe: 2, cooked_beef: 12, ender_pearl: 12, shield: 1 }, replanRevision: 0 },
     known: { fortress: { x: -326, y: 69, z: 101 } }, facts: { bastion: fact(true, 'map', 0),
-      bastions_exhausted: fact(false, 'observed', 0), blaze_allowed: fact(false, 'observed', 0),
+      bastions_exhausted: fact(true, 'observed', 0), blaze_allowed: fact(true, 'observed', 0),
       nether_tools_ready: fact(true, 'observed', 0), fire_resistance_count: fact(0, 'observed', 0),
       fire_resistance_active: fact(false, 'observed', 0), endermen_allowed: fact(true, 'observed', 0) } }
   const calls: string[] = []
-  const decisions: DecisionRecord[] = []
-  let protectedNow = false
-  const intelligence = createCampaignIntelligence({ eyes: 12, beds: 7, now: () => 0, sleep: async () => {}, record: row => decisions.push(row),
-    observe: async () => observation, call: async () => ({}), execute: async command => {
-      calls.push(command.skill)
-      if (protectedNow) {
-        observation.facts!.fire_resistance_active = fact(true, 'observed', 0)
-        observation.facts!.blaze_allowed = fact(true, 'observed', 0)
-      }
-      return { outcome: 'SUCCESS', events: [] }
-    } })
+  const intelligence = createCampaignIntelligence({ eyes: 12, beds: 7, now: () => 0, sleep: async () => {}, record() {},
+    observe: async () => observation, call: async () => ({}), execute: async command => { calls.push(command.skill); return { outcome: 'SUCCESS', events: [] } } })
   const selected = await intelligence.select([], () => false)
-  assert.equal(selected?.strategy?.id, 'AcquireFireResistance')
+  assert.equal(selected?.strategy?.id, 'GetBlazeRods')
   await selected!.stage.run()
-  assert.equal(selected!.stage.done(), false)
-  assert.equal(decisions.at(-1)?.outcome, 'FAILURE')
-  protectedNow = true
-  const retry = await intelligence.select([], () => false)
-  assert.equal(retry?.strategy?.id, 'AcquireFireResistance')
-  await retry!.stage.run()
-  assert.equal(retry!.stage.done(), true)
-  assert.deepEqual(calls, ['bastionSupply', 'bastionSupply'])
-  assert.equal(decisions.at(-1)?.outcome, 'SUCCESS')
+  assert.deepEqual(calls, ['nether'])
 })
 
 test('actual registered NetherTools skill rejects incidental digging and accepts useful wood', async () => {

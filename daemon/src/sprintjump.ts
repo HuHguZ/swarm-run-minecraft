@@ -5,15 +5,16 @@
 // mineflayer-pathfinder сам прыгает с бегом только там, где без прыжка путь не пройти (physics.canSprintJump к path[0]);
 // здесь — поверх него: слушатель physicsTick после исполнителя pathfinder'а (он ставит управление в своём physicsTick
 // раньше нас), на прямых ≥ AHEAD узлах вровень с ногами, с пустым потолком +2 над каждым и без копки/стройки в них.
-// Включён по умолчанию (решение пользователя 06.10 после A/B s6-sprint-on/off: −30 % игрового времени на ровном
-// коридоре); ND_SPRINT_JUMP=0 — выключить.
+// Включён по умолчанию (решение пользователя 06.10); A/B S6c 07.10 в одном сеансе (try-parkour-sprint SJ=ab): --lockstep
+// 750 — коридор −9.6 %, повороты −3.6 %, рельеф −3.0 %; 20 TPS — −9.8 / −4.6 / −2.4 %; урон 0. ND_SPRINT_JUMP=0 — выключить.
 // Края и лава (s6b 06.10): в воздухе руль слабый (0.02 против 0.1 на земле), боковой снос прыжка не поправить —
 // поэтому по бокам каждой клетки прямого отрезка нужен пол или стена (не лава, не огонь, не яма), а тело,
 // которым владеет паркур (_ndParkourForecast) или рефлекс падения (waterPlan), прыжками не трогаем.
 const Vec3 = require('vec3')
 
 const AHEAD = 5
-const on = () => process.env.ND_SPRINT_JUMP !== '0'
+// bot._ndSprintJumpWanted (goto {sprintJump}) — на один goto поверх env (A/B в одном сеансе).
+const on = (bot?) => (bot && typeof bot._ndSprintJumpWanted === 'boolean') ? bot._ndSprintJumpWanted : process.env.ND_SPRINT_JUMP !== '0'
 const HAZARD = /lava|fire|magma|campfire|cactus|sweet_berry|powder_snow|cobweb|pointed_dripstone|wither_rose/
 
 /** Прыжок с бегом на этом тике пути `path` (узлы pathfinder'а) — да/нет. */
@@ -48,40 +49,59 @@ function shouldJump (bot, path) {
     if (nx - px !== dx0 || nz - pz !== dz0) return false
     const c = new Vec3(nx, fy, nz)
     if (!free(c) || !free(c.offset(0, 1, 0)) || !free(c.offset(0, 2, 0)) || !solid(c.offset(0, -1, 0))) return false
-    if (process.env.ND_SPRINT_JUMP_SIDES !== '0' && (!sideSafe(c.offset(-dz0, 0, dx0)) || !sideSafe(c.offset(dz0, 0, -dx0)))) return false
+    if (!sideSafe(c.offset(-dz0, 0, dx0)) || !sideSafe(c.offset(dz0, 0, -dx0))) return false
     px = nx; pz = nz
   }
+  // Прыжок садится на 3–4 клетки вперёд: ступень сразу за прямой (вверх или вниз) — без прыжка, иначе тело влетает
+  // в ступень с разгона и теряет скорость (s6c-sj-trace6, terrain: вкл на 4 % медленнее выкл).
+  for (let i = AHEAD; i < AHEAD + 2; i++) if (path[i] && Math.floor(path[i].y + 0.01) !== fy) return false
   // Над головой сейчас — тоже пусто.
   return free(new Vec3(Math.floor(p.x), fy + 2, Math.floor(p.z)))
 }
 
 function install (bot) {
   if (!bot || bot._ndSprintJump) return
-  bot._ndSprintJump = { path: [], jumps: 0, ticks: 0, logged: 0 }
+  // dir/until — направление нашего последнего прыжка и до какого тика узлы по нему можно снимать (прыжок ~12 тиков).
+  bot._ndSprintJump = { path: [], dir: null, until: 0, tick: 0, jumps: 0, skipped: 0, ticks: 0, logged: 0 }
   const st = bot._ndSprintJump
   // The executor's own node array (mineflayer-pathfinder keeps results.path and reads path[0] every tick).
   bot.on('path_update', r => { st.path = (r && Array.isArray(r.path)) ? r.path : [] })
-  bot.on('path_reset', () => { st.path = [] })
-  bot.on('goal_reached', () => { st.path = []; if (st.jumps !== st.logged) { st.logged = st.jumps; console.log('[sprintjump]', JSON.stringify({ jumps: st.jumps })) } })
-  bot.on('physicsTick', () => {
-    if (!on() || !st.path.length || !bot.entity) return
+  bot.on('path_reset', () => { st.path = []; st.dir = null })
+  bot.on('goal_reached', () => { st.path = []; st.dir = null; if (st.jumps !== st.logged) { st.logged = st.jumps; console.log('[sprintjump]', JSON.stringify({ jumps: st.jumps, skipped: st.skipped })) } })
+  // Снятие пролетевших узлов — ДО исполнителя в том же тике (prependListener): он берёт path[0] и поворачивает тело к нему
+  // в своём physicsTick; после него снятый узел уже стоил тика руля назад (s6c-sj-trace3: −0.025 бл/тик на каждом узле).
+  bot.prependListener('physicsTick', () => {
+    st.tick++
+    if (!on(bot) || !st.path.length || !bot.entity) return
     const p = bot.entity.position
-    // Снять пройденные узлы прямо в массиве исполнителя. Прыжок пролетает узлы, ни разу не оказавшись в 0.35 от
-    // них (так исполнитель отмечает узел), и тот разворачивал тело назад к пропущенному узлу: s6b-sprint6-trace —
-    // после каждой посадки бег назад на 0.5–0.8 бл., 1000 тиков на 73 бл. против 375 без прыжков.
+    // Прыжок пролетает узлы, ни разу не оказавшись в 0.35 от них (так исполнитель отмечает узел; в прыжке ноги ещё и
+    // выше узла на 1+ — его порог dy < 1), и тот разворачивал тело назад к пропущенному узлу: s6b-sprint6-trace — бег
+    // назад 0.5–0.8 бл. после каждой посадки; s6c-sj-trace1 — руль назад в воздухе (−0.026/тик). Снимаем узел в массиве
+    // исполнителя (как его собственный pathFromPlayer при частичном пути), только пока идёт НАШ прыжок, и только узел,
+    // за которым следующий — соседняя клетка на той же высоте ПО НАПРАВЛЕНИЮ прыжка: угол поворота (следующий —
+    // вбок), ступень/лестница (другая высота), узел отрыва паркур-прыжка pathfinder'а (следующий — не соседняя клетка)
+    // остаются исполнителю с его 0.35/1. Тело — не дальше 0.35 до узла по направлению (или за ним), 0.5 сбоку, ниже 1.5.
     const passed = (n, next) => {
-      if ((n.toBreak && n.toBreak.length) || (n.toPlace && n.toPlace.length) || Math.abs(n.y - p.y) >= 1.5) return false
-      if (Math.abs(n.x - p.x) <= 0.5 && Math.abs(n.z - p.z) <= 0.5) return true
-      if (!next || Math.abs(next.y - n.y) > .5) return false
-      const dx = next.x - n.x; const dz = next.z - n.z; const len = Math.hypot(dx, dz) || 1
-      return ((p.x - n.x) * dx + (p.z - n.z) * dz) / len >= 0 && Math.abs((p.x - n.x) * dz - (p.z - n.z) * dx) / len <= .5
+      if (!st.dir || st.tick > st.until || !next) return false
+      if ((n.toBreak && n.toBreak.length) || (n.toPlace && n.toPlace.length) || Math.abs(n.y - p.y) >= 1.5 || Math.abs(next.y - n.y) > .01) return false
+      const dx = Math.round(next.x - n.x); const dz = Math.round(next.z - n.z)
+      if (dx !== st.dir[0] || dz !== st.dir[1]) return false
+      // В 0.35 до узла — порог исполнителя по горизонтали: в воздухе он узел не засчитает (ноги выше на 1+), а за узлом
+      // повернул бы тело назад.
+      return (p.x - n.x) * dx + (p.z - n.z) * dz >= -.35 && Math.abs((p.x - n.x) * dz - (p.z - n.z) * dx) <= .5
     }
-    while (st.path.length > 1 && passed(st.path[0], st.path[1])) st.path.shift()
+    while (st.path.length > 1 && passed(st.path[0], st.path[1])) { st.path.shift(); st.skipped++ }
+  })
+  bot.on('physicsTick', () => {
+    if (!on(bot) || !st.path.length || !bot.entity) return
     if (process.env.ND_SPRINT_TRACE === '1') {
       const e = bot.entity; const c = k => bot.getControlState(k) ? k[0] : '-'
       console.log('[sj]', e.position.x.toFixed(2), e.position.y.toFixed(2), e.position.z.toFixed(2), Math.hypot(e.velocity.x, e.velocity.z).toFixed(3), e.onGround ? 'G' : 'A', c('forward') + c('sprint') + c('jump'), st.path.length)
     }
     if (!shouldJump(bot, st.path)) return
+    st.dir = [Math.round(st.path[1].x - st.path[0].x), Math.round(st.path[1].z - st.path[0].z)]
+    st.until = st.tick + 20
+    if (process.env.ND_SPRINT_TRACE === '1') console.log('[sj] jump', JSON.stringify(st.path.slice(0, 7).map(n => [n.x, n.y, n.z])))
     bot.setControlState('jump', true)
     st.jumps++
   })

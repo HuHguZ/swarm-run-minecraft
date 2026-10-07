@@ -1,10 +1,10 @@
 // Stress stand from the command line (no Minecraft): named distractions or seeded random tapes against the real
 // TacticalSystem, invariant violations by kind, and the minimal tape of each kind.
-//   node daemon/src/tactics/sim-fuzz.js [--from 1] [--count 300] [--gen 1|2] [--observe mirror|minecraft] [--shrink] [--deaths] [--named] [--json out.json]
+//   node daemon/src/tactics/sim-fuzz.js [--from 1] [--count 300] [--gen 1|2|rough] [--observe mirror|minecraft] [--shrink] [--deaths] [--named] [--json out.json]
 //   node daemon/src/tactics/sim-fuzz.js --tape '{"events":[{"at":20,"type":"tnt","distance":2,"fuse":40}]}'   (one tape, log)
 // Deaths count only where one of the simple policies survived the same tape (sim-run.check).
 import { check } from './sim-run'
-import { SCENARIOS, randomScenario, randomScenario2, shrink } from './sim-scenarios'
+import { SCENARIOS, randomScenario, randomScenario2, roughScenario, shrink } from './sim-scenarios'
 import type { Scenario } from './sim-world'
 
 const args = process.argv.slice(2)
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     return
   }
   const from = Number(opt('--from', '1')), count = Number(opt('--count', '300'))
-  const generate = opt('--gen', '1') === '2' ? randomScenario2 : randomScenario
+  const generate = { 1: randomScenario, 2: randomScenario2, rough: roughScenario }[opt('--gen', '1')] ?? randomScenario
   const tapes = args.includes('--named') ? SCENARIOS : Array.from({ length: count }, (_, i) => generate(from + i))
   const byKind = new Map<string, Scenario[]>()
   const details: Array<{ name: string; kind: string; detail: string; died: string | null }> = []

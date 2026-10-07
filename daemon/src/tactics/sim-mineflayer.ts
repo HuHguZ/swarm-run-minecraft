@@ -33,6 +33,8 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
   bot.inventory = { slots: new Array(46).fill(null), items: () => items }
   let items: Array<Record<string, unknown>> = []
   const body = () => bot.entity.position.floored()
+  // Rough ground: every third cell (hashed) is a block higher - natural terrain the flat-only exitsNear read as dead ends.
+  const lift = (x: number, z: number) => world.spec.rough && ((Math.imul(x, 73856093) ^ Math.imul(z, 19349663)) >>> 0) % 3 === 0 ? 1 : 0
   // Fluids stay where the event put them (a pool around the spot), the body moves through them.
   let lavaAt: { x: number; z: number } | null = null, waterAt: { x: number; z: number } | null = null
 
@@ -52,14 +54,14 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
     if (b.inLava && pool(lavaAt, world.spec.lavaExit ? 2 : 6) && p.y === 64) return block('lava')
     if (b.submerged > 0 && pool(waterAt, 3) && p.y >= 64 && p.y <= 66) return block('water')
     if (!world.spec.exits && ring >= 1 && ring <= 3 && p.y === 64) return block('fire')
-    if (p.y < 64) return block(world.spec.nether ? 'netherrack' : world.spec.floorDiggable ? 'stone' : 'bedrock')
+    if (p.y < 64 + lift(p.x, p.z)) return block(world.spec.nether ? 'netherrack' : world.spec.floorDiggable ? 'stone' : 'bedrock')
     return block('air')
   }
 
   // The world moves; mirror it into the bot before every observation.
   const sync = () => {
     const b = world.body
-    const y = b.shelter?.kind === 'pillar' && b.shelter.breach <= 0 ? 67 : b.shelter?.kind === 'hole' && b.shelter.breach <= 0 ? 62 : 64
+    const y = b.shelter?.kind === 'pillar' && b.shelter.breach <= 0 ? 67 : b.shelter?.kind === 'hole' && b.shelter.breach <= 0 ? 62 : 64 + lift(Math.floor(b.x + .5), Math.floor(b.z + .5))
     const jump = jumpHeight(world)
     bot.entity.position = new Vec3(b.x + .5, y + jump, b.z + .5)
     lavaAt = b.inLava ? lavaAt ?? body() : null
@@ -90,7 +92,7 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
       const metadata: unknown[] = []
       if (e.kind === 'creeper') { metadata[swell] = e.swell > 0 ? 1 : -1; metadata[powered] = e.charged }
       entities[e.id] = { id: e.id, name, type: e.player ? 'player' : 'mob', ...(e.player ? { username: `Tank${e.id}` } : {}),
-        position: new Vec3(e.x + .5, 64, e.z + .5), velocity: new Vec3(0, 0, 0), height: HEIGHT[name] ?? 1.95, width: .6, isValid: true,
+        position: new Vec3(e.x + .5, 64 + lift(Math.floor(e.x + .5), Math.floor(e.z + .5)), e.z + .5), velocity: new Vec3(0, 0, 0), height: HEIGHT[name] ?? 1.95, width: .6, isValid: true,
         equipment: HAND[name] ? [item(HAND[name])] : [], metadata }
     }
     world.tnts.forEach((t, i) => { entities[1000 + i] = { id: 1000 + i, name: 'tnt', type: 'other', position: new Vec3(t.x + .5, 64, t.z + .5),

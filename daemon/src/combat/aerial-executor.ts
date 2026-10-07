@@ -167,7 +167,7 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     if (decision.node === 'RangedVolley') return fireRanged(ctl, target, ctx)
     if (!readyStrike(decision, target)) {
       await operations.fly(bot, ctl, {
-        maxMs: 1500, stats,
+        maxMs: 1500, stats, phase: 'воздушный бой',
         goal: () => ({ kind: 'strike', at: (ticks: number) => operations.predictGlider(target, ctx.vel?.() ?? target.velocity ?? { x: 0, y: 0, z: 0 }, ticks), within: 3.5 }),
         until: () => {
           if (!valid(ctl, target.id)) return 'aerial target changed'

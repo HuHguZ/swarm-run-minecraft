@@ -35,12 +35,16 @@ const DOCTRINE = {
   zombie_villager: { radius: 8, weight: 6 },
   husk: { radius: 8, weight: 6 },
   drowned: { radius: 8, weight: 6, range: 14 },
-  skeleton: { radius: 5, weight: 4, range: 16, fight: 'сближаться зигзагом или уйти за угол' },
-  stray: { radius: 5, weight: 4, range: 16 },
-  bogged: { radius: 5, weight: 4, range: 16 },
+  // Дальности стрелков — по jar 1.21.11 (javap, S4c 07.10): лук скелетов RangedBowAttackGoal(…, 15.0F) — стреляет до 15 при
+  // видимости; арбалет разбойника заряжен и стреляет при видимости в пределах FOLLOW_RANGE 32 (RangedCrossbowAttackGoal: 8 —
+  // только дистанция подхода); ифрит — BlazeAttackGoal: dist² < FOLLOW_RANGE² (48) и видимость; гаст — GhastShootFireballGoal
+  // 4096 = 64²; шалкер — ShulkerAttackGoal 400 = 20². Раньше 20/40 у ифрита/гаста: бег «оторвался» под огнём с 48 бл.
+  skeleton: { radius: 5, weight: 4, range: 15, fight: 'сближаться зигзагом или уйти за угол' },
+  stray: { radius: 5, weight: 4, range: 15 },
+  bogged: { radius: 5, weight: 4, range: 15 },
   // Скелет пустыни 1.21.11 (стрелы замедления); trap3 02.10: «arrow parched» — раньше его не видел ни отход, ни бег.
-  parched: { radius: 5, weight: 4, range: 16 },
-  pillager: { radius: 5, weight: 5, range: 16 },
+  parched: { radius: 5, weight: 4, range: 15 },
+  pillager: { radius: 5, weight: 5, range: 32 },
   witch: { radius: 5, weight: 5, range: 8, fight: 'рывком, пока пьёт' },
   creeper: { radius: 7, weight: 9, blast: 7, fight: 'спринт-удар и отход, не стоять рядом' },
   spider: { radius: 9, weight: 5, fast: true, fight: 'не убежать — драться' },
@@ -50,8 +54,8 @@ const DOCTRINE = {
   endermite: { radius: 4, weight: 2 },
   slime: { radius: 5, weight: 3 },
   magma_cube: { radius: 5, weight: 4 },
-  blaze: { radius: 6, weight: 6, range: 20 },
-  ghast: { radius: 0, weight: 5, range: 40 },
+  blaze: { radius: 6, weight: 6, range: 48 },
+  ghast: { radius: 0, weight: 5, range: 64 },
   phantom: { radius: 10, weight: 5, fast: true },
   vindicator: { radius: 9, weight: 9 },
   evoker: { radius: 10, weight: 8, range: 12 },
@@ -66,7 +70,7 @@ const DOCTRINE = {
   warden: { radius: 20, weight: 20, fast: true, fight: 'никогда' },
   breeze: { radius: 6, weight: 5, range: 16 },
   creaking: { radius: 6, weight: 5 },
-  shulker: { radius: 0, weight: 4, range: 16 },
+  shulker: { radius: 0, weight: 4, range: 20 },
   piglin: { radius: 7, weight: 5, range: 12 },
   // Белый медведь (с медвежатами нападает сам): PolarBear.createAttributes 1.21.11 (константы класса) — MAX_HEALTH 30,
   // ATTACK_DAMAGE 6, MOVEMENT_SPEED 0.25 (как у зомби), FOLLOW_RANGE 20. ow-E2 02.10 слот 14: DEATH_LOOP у спавна —
@@ -75,13 +79,21 @@ const DOCTRINE = {
   polar_bear: { radius: 8, weight: 8, fight: 'не драться: 30 хп, бьёт 6 — уйти' }
 }
 
-// Взвешенные враги вокруг: только те, о ком есть доктрина.
-function hostilesAround (bot, radius = 32) {
+// Напавший игрок (id передаёт тактика): бегает как мы, бьёт с 3 бл. и с разгона; с луком/арбалетом/трезубцем — ещё и стрелок.
+// ponytail: дальность 48 — оценка (как ифрит), у человека-лучника нет константы в jar; без неё бег от игрока «отрывался»
+// за тик (smartFlee его не видел: слот 27, 18 качелей CreateDistance↔Flee).
+function playerDoctrine (e) {
+  const held = e.heldItem?.name || ''
+  return { radius: 10, weight: 8, fast: true, ...(/(^|_)bow$|crossbow|trident/.test(held) ? { range: 48 } : {}) }
+}
+
+// Взвешенные враги вокруг: только те, о ком есть доктрина, и напавшие игроки из foes (id сущностей).
+function hostilesAround (bot, radius = 32, foes: number[] = []) {
   const me = bot.entity.position
   const out = []
   for (const e of ((Object.values(bot.entities) as any[]) as any)) {
     if (!e || e === bot.entity || !e.position || !e.name) continue
-    const doc = DOCTRINE[e.name]
+    const doc = e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
     if (!doc) continue
     const d = e.position.distanceTo(me)
     if (d > radius) continue
@@ -167,11 +179,32 @@ function runLength (bot, dir, max = 10) {
   return { len, end: last, wet }
 }
 
+// Обрыв у точки прибытия: клетки в 1–2 бл. от неё без пола на 4 вниз (или с лавой/огнём). Бег кончается там, где его
+// догоняют, а удар отбрасывает на 1–2 бл.: от иссушителя на платформе бег «до 17 бл.» упирался в край, и удар сбрасывал
+// тело (S4c 07.10, нативный A/B s4c-ab: 4 смерти «fell from a high place / doomed to fall» в фазе wither-skeleton из 8).
+const EDGE_RING = [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2], [1, 1], [1, -1], [-1, 1], [-1, -1]]
+function edgeRisk (bot, E) {
+  const x0 = Math.floor(E.x); const y0 = Math.floor(E.y); const z0 = Math.floor(E.z)
+  let risk = 0
+  for (const [dx, dz] of EDGE_RING) {
+    let floor = false
+    for (let dy = 1; dy <= 4 && !floor; dy++) {
+      const b = bot.blockAt(new Vec3(x0 + dx, y0 - dy, z0 + dz))
+      if (!b) { floor = true; break } // незагруженное — не повод бояться
+      if (HURTS.has(b.name)) break
+      floor = b.boundingBox === 'block' || b.name === 'water'
+    }
+    if (!floor) risk += Math.abs(dx) + Math.abs(dz) === 1 ? 2 : 1
+  }
+  return risk
+}
+
 // Лучшее направление бегства сейчас. prevYaw — чтобы не дёргаться между
 // почти равными вариантами.
 function pickDirection (bot, hs, prevYaw = null) {
   const me = bot.entity.position
   let best = null
+  const options = []
   const wetStart = inWater(bot)
   for (let k = 0; k < 24; k++) {
     const yaw = (k / 24) * Math.PI * 2
@@ -197,15 +230,26 @@ function pickDirection (bot, hs, prevYaw = null) {
       if (dy > Math.PI) dy = Math.PI * 2 - dy
       cost += dy * 2
     }
-    if (!best || cost < best.cost) best = { yaw, dir, cost, run: run.len, end: E }
+    options.push({ yaw, dir, cost, run: run.len, end: E })
   }
+  // Край — только у лучших пяти (12 клеток × до 4 blockAt на каждое; на 750 TPS план раз в 300 игровых мс).
+  options.sort((a, b) => a.cost - b.cost)
+  for (const o of options.slice(0, 5)) o.cost += edgeRisk(bot, o.end) * 3
+  for (const o of options.slice(0, 5)) if (!best || o.cost < best.cost) best = o
   return best
+}
+
+// Оторвались: ходячие дальше safeDist, а стрелки дальше дальности своего оружия или не видят глаз.
+function shaken (bot, hs, safeDist) {
+  const eye = bot.entity.position.offset(0, 1.62, 0)
+  return !hs.some(h => h.doc.radius && h.d < safeDist ||
+    h.doc.range && h.d < h.doc.range && raySees(bot, eye, h.e.position.offset(0, (h.e.height || 1.8) * 0.9, 0)))
 }
 
 // Сам побег. Возвращает, когда вокруг безопасно, когда прижали (cornered) или
 // по времени. safeDist — дальше скольких блоков от ближайшего ходячего врага
 // считаем, что оторвались.
-async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null }: any = {}) {
+async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [] }: any = {}) {
   const bot = session.bot
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
@@ -230,14 +274,11 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   try {
     while (!ctl.aborted && gameClock.now() < deadline) {
       if (!bot.entity || (bot.health ?? 20) <= 0) return { mode: 'погиб на бегу', from: [...fromNames] }
-      const hs = hostilesAround(bot, 32)
-      for (const h of hs) if (h.d < 16) fromNames.add(h.e.name)
+      // Стрелки — до дальности их оружия по jar (гаст 64): «оторвался» — когда ни один не видит или все дальше своей дальности.
+      const hs = hostilesAround(bot, 64, foes)
+      for (const h of hs) if (h.d < 16) fromNames.add(h.e.username || h.e.name)
 
-      // Оторвались: ходячие далеко, стрелки не видят.
-      const near = hs.filter(h => h.doc.radius && h.d < safeDist)
-      const shooters = hs.filter(h => h.doc.range && h.d < h.doc.range &&
-        raySees(bot, bot.entity.position.offset(0, 1.62, 0), h.e.position.offset(0, (h.e.height || 1.8) * 0.9, 0)))
-      if (!near.length && !shooters.length) {
+      if (shaken(bot, hs, safeDist)) {
         stop()
         return {
           mode: 'оторвался',
@@ -367,4 +408,4 @@ function mobAvoidance (bot) {
   }
 }
 
-module.exports = { smartFlee, hostilesAround, pickDirection, mobAvoidance, DOCTRINE, creeperSwelling }
+module.exports = { smartFlee, hostilesAround, shaken, pickDirection, edgeRisk, mobAvoidance, DOCTRINE, creeperSwelling }

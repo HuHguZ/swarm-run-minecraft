@@ -6,7 +6,17 @@
 // и посадки идёт на n тиках/с, потом — прежний темп. В основном мире переменной нет: ничего не делает.
 const gameClock = require('../game-clock')
 
-function precisionRate () { const n = Number(process.env.ND_PRECISION_TPS || 0); return n >= 1 && n <= 10000 ? Math.round(n) : 0 }
+// Защита фермой, а не только переменной (замечание проверки, s5c 06.10): окно открывается лишь в мире слота фермы —
+// сервер на порту 25601..25632 (farm.ts: 25600+i) и бот NeuroFarm<i>. В основном мире (25569, NeuroDown, бот не оп)
+// команда не уходит даже при заданной ND_PRECISION_TPS.
+function farmWorld (cfg = require('../config')) {
+  return cfg.port >= 25601 && cfg.port <= 25632 && /^NeuroFarm\d+$/.test(cfg.username || '')
+}
+const APPROACH_MS = 40000
+function precisionRate () {
+  const n = Number(process.env.ND_PRECISION_TPS || 0)
+  return n >= 1 && n <= 10000 && farmWorld() ? Math.round(n) : 0
+}
 
 // want — нужна ли точность сейчас; состояние окна — в ctl.precision. Ответ — что сделано (для трассы), иначе null.
 function precisionWindow (bot, ctl, want) {
@@ -58,10 +68,14 @@ function precisionTick (bot, ctl) {
   const danger = dangerNear(bot)
   const now = gameClock.now()
   if (danger) ctl.dangerUntil = now + 3000
-  const want = landing || (ctl.dangerUntil || 0) > now
+  // Подход с платформы (первые APPROACH_MS навыка, пока нет станции): демон на 750 занят прогрузкой острова и планом
+  // жемчуга, тело почти без физики, а облако дыхания на платформе бьёт раз в 20 тиков (s5c-d1-s6 06.10: 0.6 физ. тика на
+  // игровую с, смерть от облака за ~1 с реального времени, все удары в одну игровую мс; окно по опасности не успело).
+  const approach = !(ctl.pillar && ctl.pillar.built) && now - (ctl.started || now) < APPROACH_MS
+  const want = landing || approach || (ctl.dangerUntil || 0) > now
   const r = precisionWindow(bot, ctl, want)
-  if (r && ctl.trace) ctl.trace.ev('precision', { ...r, ph, why: landing ? 'посадка' : danger || 'после опасности' })
+  if (r && ctl.trace) ctl.trace.ev('precision', { ...r, ph, why: landing ? 'посадка' : approach ? 'подход' : danger || 'после опасности' })
   return r
 }
 
-module.exports = { precisionRate, precisionWindow, precisionOff, precisionTick, dangerNear }
+module.exports = { precisionRate, precisionWindow, precisionOff, precisionTick, dangerNear, farmWorld }

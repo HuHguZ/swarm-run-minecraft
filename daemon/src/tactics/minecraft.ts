@@ -49,13 +49,24 @@ function exitsNear(bot: MinecraftEntity): { route: boolean; signature: string } 
       bot.blockAt(feet.offset(0, -2, 0))?.boundingBox === 'block') feet = feet.offset(0, -1, 0)
   const facts: string[] = []
   let route = false
+  // A run walks terrain: a step up (with head room to jump) or a drop of 1-2 is a route, as for smartFlee's runLength. The
+  // flat-only check saw no exit on natural ground at every other cell, and escapeExhausted swapped LastStand and
+  // CreateDistance on every step (farm slot 18, 06.10 22:57:41-46 MSK: 4 deaths, LastStand<->CreateDistance in 1-2 game s).
+  const clear = (block: MinecraftEntity | null) => block?.boundingBox === 'empty' && !/lava|fire/.test(block.name)
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
     let open = true
-    for (let distance = 1; distance <= 3; distance++) {
+    let y = 0
+    for (let distance = 1; distance <= 3 && open; distance++) {
       const point = feet.offset(dx * distance, 0, dz * distance)
-      const blocks = [-1, 0, 1].map(dy => bot.blockAt(point.offset(0, dy, 0)))
-      facts.push(blocks.map(block => block?.name ?? 'unknown').join('/'))
-      open &&= blocks[0]?.boundingBox === 'block' && blocks.slice(1).every(block => block?.boundingBox === 'empty' && !/lava|fire/.test(block.name))
+      facts.push([-1, 0, 1].map(dy => bot.blockAt(point.offset(0, dy, 0))?.name ?? 'unknown').join('/'))
+      const step = [0, 1, -1, -2].find(dy => {
+        const at = point.offset(0, y + dy, 0)
+        const room = dy === 1 ? clear(bot.blockAt(feet.offset(dx * (distance - 1), y + 2, dz * (distance - 1))))
+          : dy >= 0 || clear(bot.blockAt(point.offset(0, y, 0))) && clear(bot.blockAt(point.offset(0, y + 1, 0)))
+        return room && bot.blockAt(at.offset(0, -1, 0))?.boundingBox === 'block' && clear(bot.blockAt(at)) && clear(bot.blockAt(at.offset(0, 1, 0)))
+      })
+      if (step === undefined) open = false
+      else y += step
     }
     route ||= open
   }
@@ -193,7 +204,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // ифриту давал «взмахов 0, не достать» и рвал навык (s1-post01b/s1-post02: TACTICAL ×20, смерть). Уровень ≥3 — как прежде.
     // portal (s1 06.10): вход в портал — сам уход от угрозы (4 с в раме); Fight тактики рвал его у самого портала, и тело с 5
     // стержнями и 10 очами гибло в 1 бл. от рамы (s1-LG-10: «прервано у портала», смерть через 7 мин). Уровень ≥3 — как прежде.
-    shelter, protectedEncounter: current === 'dragon' || current === 'blaze' || current === 'portal' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
+    // Только mode=enter: cast/build у лавы с мобами — обычная работа, её тактика прерывает (s1c 06.10, замечание проверки).
+    // bastion (s1c 06.10): навык сам ведёт угрозы бастиона — заложиться в своём ходе (hunker), брут (bruteDefense), ne-guard, бой с
+    // напавшим; уровень <3 тактики рвал его 96 раз в 27 std-прогонах (s1-S*, s1c-A/B: 256 мин прерванных вызовов, каждый —
+    // новый подход и укрытие), а Fight/LastStand тактики в яме злил пиглинов (COORD 19:10, 23:06). Уровень ≥3 — как прежде.
+    shelter, protectedEncounter: current === 'dragon' || current === 'blaze' || current === 'bastion' || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
     aerialCombat,
     flightEscape: air.flightReady, pearlEscape: air.pearlReady, fireResistancePotion: rescue.potion, lavaClimb: rescue.climb, lavaEscapePending, webBoatEscape: webBoat, boatLavaHop }
 }
@@ -292,7 +307,10 @@ export class TacticalSystem {
     if (!state) { this.release('unavailable'); return }
     const escape = this.escapes.observe(this.escapeObservation(state))
     const now2 = clock.now()
-    const quick = [...this.failedAt].filter(([, at]) => now2 - at < 2000).map(([id]) => id)
+    // A run that sat out for "escaping" nobody is still the swim out of lava or fire (escapeFire): the cooldown of the
+    // no-op flight left the body in a pool with no action for 2 s (stand fuzz-1312: TNT, then lava, level 4 unhandled).
+    const swim = state.lava || state.burning && !state.fireResistance && state.water
+    const quick = [...this.failedAt].filter(([id, at]) => now2 - at < 2000 && !(swim && (id === 'Flee' || id === 'CreateDistance'))).map(([id]) => id)
     state.failedEscapes = quick.length ? [...new Set([...escape.failed, ...quick])] : escape.failed
     // A corner is a place, not a sample: inside an incident the flag turns only after the new value held EXHAUSTION_HOLD_MS.
     // It gates LastStand against Fight/Flee/refuge, and a flag that flickered with each cell walked (or jump) swapped them
@@ -326,20 +344,30 @@ export class TacticalSystem {
     // The blaze skill under fire resistance keeps level 3 too (S1 21:01): at the spawner a crowd of 3+ blazes makes hp < 12
     // level 3, and the takeover (BlockOff/Flee off the platform) died in at least 35 of 66 such episodes in S1's farm
     // telemetry (06.10, slots 21/22/30); the skill holds the shield, eats and strikes on its own. Level 4 stays tactical.
-    const blazeOwned = state.protectedEncounter && this.session.current?.name === 'blaze' && state.fireResistance && !hazard
+    // Без огнестойкости — тоже (s1c 06.10, решение пользователя «FR — не допуск»): навык сам ведёт бой без неё (радар залпов, щит,
+    // коробка с окном, отдых и возврат); перехват уровня 3 рвал его и кампания звала его снова — два хозяина одного боя.
+    const blazeOwned = state.protectedEncounter && this.session.current?.name === 'blaze' && !hazard
     if (state.protectedEncounter && (decision.level < 3 || arena || blazeOwned)) {
       // Защищённый навык (blaze/дракон/дуэль) забирает руки у начатого раньше эпизода уровня <3: иначе Fight тактики держал
       // аренду, lookAt навыка ждал её, а ифриты били в упор (s1-post05 06.10: blaze «меч» 0 взмахов, 30 урона, смерть).
       if (this.episode && (this.episode.level < 3 || arena || blazeOwned) && locks.owner(this.session)?.owner !== 'Emergency') locks.cancel(this.session)
       return
     }
+    // Падение ведёт рефлекс (клатч/вода, clutch.ts); тактике в нём выбрать нечего (арбитр: dangerousFall не выбирает
+    // действие). Обрыв навыка только снимал клавиши посреди перехода (s5c-f2-3 06.10: 49 эпизодов L4 «dangerousFall» без
+    // действия за 8 игр. мин — goto к крепости рвался, стратегия ушла в паузу 5 мин; S6b 21:52 — то же у прыжка паркура).
+    // Блок клатча ставится под арендой Emergency (reflex-lock fall-controller) — это тот же рефлекс падения (S6c 07.10: спуск
+    // блоками вдоль стены, try-descent wall — goto «прервано» после каждого первого блока).
+    const fallOnly = !decision.selected && (state.dangerousFall || state.emergencyController) && threatLevel({ ...state, dangerousFall: false, emergencyController: false }) < 3
     if (decision.level >= 2) {
-      this.substantive = true
+      // Чистое падение под рефлексом не «существенно»: по его концу release() не рвёт навык (MLG pathfinder'а, спуск блоками:
+      // goto «interrupted» сразу после посадки — s6c-desc-bucket2 4/4 в обоих плечах).
+      if (!fallOnly) this.substantive = true
       this.incident ||= { at: state.at, hp: state.health, threat: decision.level, actions: new Set(), chain: [], state: stateSnapshot(state) }
       this.incident.threat = Math.max(this.incident.threat, decision.level) as ThreatLevel
     }
     if (decision.level === 0 && !this.episode && !this.pending && !this.session.reflex) { this.release('safe'); return }
-    if (decision.level >= 3) this.interruptSkill(decision.level)
+    if (decision.level >= 3 && !fallOnly) this.interruptSkill(decision.level)
     // Losing contact while a wall is placed must not cancel bounded defence for Shield. A flight runs to its own safe
     // distance: released at the 16-block sight edge, a pursuer still inside its FOLLOW_RANGE walked back into contact.
     if (this.pending && (decision.level <= 1 && ['Fight', 'LastStand', 'BlockOff', 'PillarUp', 'DigDown', 'Hide'].includes(this.episode?.action.id || '') ||
@@ -413,9 +441,17 @@ export class TacticalSystem {
       // 0 swings, 447 re-selections); it sits out like a failure.
       // So does a refuge run that ended at once (already healed, nothing to hide from): re-selected on each sample otherwise
       // (stress stand fuzz-730: Hide>Heal>Hide, each "healed" in a tick at level 2 with a skeleton at 10 blocks).
-      const idle = IDLE_COOLED.has(action.id) && clock.now() - episode.at < 100 &&
-        !(result && typeof result === 'object' && 'killed' in result && result.killed)
-      if ((failed || idle) && action.id !== 'FreeEmbedded' && clock.now() - episode.at < 1000) this.failedAt.set(action.id, clock.now())
+      // A run that "escaped" at once had nobody in reach to run from (a shot still flying from a shooter already past its
+      // range): Flee and CreateDistance - one run under two names - sit out together (stand fuzz-68: CD>Flee>CD in 6 ticks).
+      // So does one that "escaped" within a second while the incident goes on (burning at low health, a zombie past 17 blocks:
+      // each run safe in 3 ticks, CD>Flee>CD - stand fuzz-5085).
+      const run = action.id === 'Flee' || action.id === 'CreateDistance'
+      const escaped = !!result && typeof result === 'object' && ((result as { mode?: string }).mode === 'оторвался' || (result as { safe?: boolean }).safe === true)
+      const idle = (IDLE_COOLED.has(action.id) || run) && clock.now() - episode.at < 100 &&
+        !(result && typeof result === 'object' && 'killed' in result && result.killed) || run && escaped && clock.now() - episode.at < 1000
+      if ((failed || idle) && action.id !== 'FreeEmbedded' && clock.now() - episode.at < 1000) {
+        for (const id of run && idle ? ['Flee', 'CreateDistance'] as const : [action.id]) this.failedAt.set(id, clock.now())
+      }
       this.finish(episode, ending, result)
       this.episode = null
       this.arbiter.finished()
@@ -495,7 +531,10 @@ export class TacticalSystem {
       }
       case 'Dodge': return state.blast ? dodgeBlast(session, ctl, { maxMs: state.blast === 'charged_creeper' ? 5000 : 4000 }) : survival.dodgeCreeper(session, ctl, {})
       case 'Flee': case 'CreateDistance':
-        if (state.lava || state.burning && !state.fireResistance) {
+        // Lava: the swim out. Burning on dry ground: a water bucket puts it out (escapeFire pours it); without one a run does
+        // not, and escapeFire's blind 1.2 s sprint-jump toward the nearest floor cell went over platform and bridge edges
+        // (review g, S4c) - the run is smartFlee's from the shooters (edge guard, stepSafe, no fire cells).
+        if (state.lava || state.burning && !state.fireResistance && state.water) {
           return require('../director').escapeFire(session, ctl)
         }
         // Past the default FOLLOW_RANGE 16 (Mob.createMobAttributes): smartFlee's own 14 left the creeper/skeleton/spider
@@ -503,7 +542,9 @@ export class TacticalSystem {
         // smartFlee steers by mobs only: near a primed TNT the first leg is dodgeBlast (TNT and mobs), then the flight.
         if (blastNear(bot, 2)) await dodgeBlast(session, ctl)
         if (ctl.aborted) return { cancelled: true }
-        return flee.smartFlee(session, ctl, { timeoutMs: 12000, reason: 'tactical', safeDist: FLEE_SAFE_DISTANCE })
+        // An attacking player is a pursuer too (smartFlee steers by mob doctrine; without him it "escaped" in a tick).
+        return flee.smartFlee(session, ctl, { timeoutMs: 12000, reason: 'tactical', safeDist: FLEE_SAFE_DISTANCE,
+          foes: state.enemies.filter(foe => foe.player && foe.threatening).map(foe => foe.id) })
       case 'BlockOff': case 'PillarUp': case 'DigDown': case 'Hide': case 'Heal':
         if (/nether/.test(String(bot.game?.dimension || '')) && enemy && action.id !== 'Heal') {
           const entity = bot.entities[enemy.id]
@@ -593,7 +634,7 @@ export class TacticalSystem {
     return { at: state.at, position: { x: position.x, y: position.y, z: position.z },
       threatDistance: state.enemies.filter(enemy => enemy.threatening).reduce<number | null>((distance, enemy) => distance === null ? enemy.distance : Math.min(distance, enemy.distance), null),
       exits: this.session._tacticalExitGeometry || '',
-      available: actions.length > 0, actions }
+      available: actions.length > 0, actions, swim: state.lava || state.burning && !state.fireResistance && state.water, armed: state.weapon }
   }
 
   private release(reason: string): void {

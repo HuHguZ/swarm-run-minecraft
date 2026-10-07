@@ -13,6 +13,16 @@ const TICK_MS = 50
 // once with physics, at most `predictionTicks` ahead. Only a lag past this means the server's stall valve let the
 // world run on without us: resynchronize by skipping, as an ordinary farm clock does.
 const LOCKSTEP_RESYNC_TICKS = 20
+// Stall valve (s5c 06.10): no update_time while running means the world stopped telling us its time — credits after the
+// End exit portal (win_game limbo: the player is in no level), a lost connection, a hung server. The +predictionTicks cap
+// then froze every game timer forever (s5-e23-s7: scene sleep(250) waited 7 min; c5-s1: skill timers never fired).
+// After stallMs of wall time without a time packet the clock runs on at the vanilla client's own 20 ticks/s, as the
+// game client does; the next time packet bounds it again. ND_CLOCK_STALL_MS=0 disables (followers never use it).
+const STALL_RATE = 20
+function stallMsOf (env = process.env) {
+  const v = env.ND_CLOCK_STALL_MS === undefined ? 3000 : Number(env.ND_CLOCK_STALL_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 3000
+}
 let nextId = 0
 
 class GameClock extends EventEmitter {
@@ -44,9 +54,11 @@ class GameClock extends EventEmitter {
   declare nextPulseAt: any
   declare cleanups: any
   declare lockstep: boolean
+  declare stallMs: number
+  declare stallTimer: any
   declare emit: any
 
-  constructor ({ manual = false, epoch = wall.now(), predictionTicks = 20, lockstep = false }: any = {}) {
+  constructor ({ manual = false, epoch = wall.now(), predictionTicks = 20, lockstep = false, stallMs = stallMsOf() }: any = {}) {
     super()
     this.id = `${process.pid}:${++nextId}`
     this.epoch = epoch
@@ -76,6 +88,21 @@ class GameClock extends EventEmitter {
     this.nextPulseAt = null
     this.cleanups = []
     this.lockstep = lockstep
+    this.stallMs = stallMs
+    this.stallTimer = null
+  }
+  // Own prediction (not a follower), running unfrozen, and the last time packet is older than the valve.
+  stalled () {
+    return !this.manual && this.stallMs > 0 && this.predictionTicks > 0 && !this.frozen && this.serverAt !== null &&
+      wall.monotonic() - this.serverAt >= this.stallMs
+  }
+  capped () {
+    return !this.frozen && this.serverTicks !== null && this.ticks >= this.serverTicks + this.predictionTicks && !this.stalled()
+  }
+  armStall () {
+    if (this.stallTimer || this.manual || this.disposed || !(this.stallMs > 0) || this.predictionTicks <= 0 || this.serverAt === null) return
+    this.stallTimer = wall.setTimeout(() => { this.stallTimer = null; this.schedule(true) }, Math.max(1, this.serverAt + this.stallMs - wall.monotonic()))
+    this.stallTimer.unref?.()
   }
 
   now () { return this.epoch + this.ticks * TICK_MS }
@@ -117,7 +144,7 @@ class GameClock extends EventEmitter {
     return { id: this.id, ticks: this.ticks, gameMs: this.now(), elapsedMs: this.ticks * TICK_MS,
       tickRate: this.tickRate, effectiveRate: this.effectiveRate, frozen: this.frozen, stepping: this.steps,
       serverTicks: this.serverTicks, lagTicks: this.serverTicks === null ? null : Math.max(0, this.serverTicks - this.ticks),
-      wallMs: wall.now(), running: this.running && !this.disposed, ...(this.lockstep ? { lockstep: true } : {}) }
+      wallMs: wall.now(), running: this.running && !this.disposed, ...(this.lockstep ? { lockstep: true } : {}), ...(this.stalled() ? { stalled: true } : {}) }
   }
   setState ({ tick_rate = this.tickRate, is_frozen = this.frozen }: any = {}) {
     if (!Number.isFinite(tick_rate) || tick_rate < 1 || tick_rate > 10000) throw new RangeError('tick rate must be 1..10000')
@@ -150,18 +177,20 @@ class GameClock extends EventEmitter {
     this.schedule(true)
   }
   schedule (restart = false) {
+    const stalled = this.stalled()
+    const rate = stalled ? STALL_RATE : this.effectiveRate
     if (restart) {
       this.clearPump()
-      this.nextPulseAt = wall.monotonic() + 1000 / this.effectiveRate
+      this.nextPulseAt = wall.monotonic() + 1000 / rate
     }
     if (this.manual || this.disposed || !this.running || this.pumpTimer) return
     if (this.frozen && this.steps <= 0) return
-    if (!this.frozen && this.serverTicks !== null && this.ticks >= this.serverTicks + this.predictionTicks) return
-    if (this.nextPulseAt === null) this.nextPulseAt = wall.monotonic() + 1000 / this.effectiveRate
+    if (this.capped()) { this.armStall(); return }
+    if (this.nextPulseAt === null) this.nextPulseAt = wall.monotonic() + 1000 / rate
     // Confirmed backlog grants time, not several physical steps in one wall
     // frame (Air41). Followers and explicit frozen steps still replay grants.
     // Lockstep never paces by the measured rate: the world waits for us, so that rate would only ratchet down.
-    const lockstep = this.lockstep && !this.frozen && this.serverTicks !== null
+    const lockstep = this.lockstep && !this.frozen && this.serverTicks !== null && !stalled
     const paced = this.predictionTicks > 0 && !this.frozen && !lockstep
     const catchingUp = lockstep || (!paced && this.serverTicks !== null && this.ticks < this.serverTicks)
     const deadline = this.nextPulseAt
@@ -179,7 +208,7 @@ class GameClock extends EventEmitter {
         if (this.disposed || this.pumpTimer || this.nextPulseAt !== deadline) return
         // Pace physical starts, including callback work in this interval. An
         // overdue step starts a fresh deadline without replaying expired ones.
-        this.nextPulseAt = (paced ? Math.max(pulseStartedAt, deadline) : catchingUp ? wall.monotonic() : deadline) + 1000 / this.effectiveRate
+        this.nextPulseAt = (paced ? Math.max(pulseStartedAt, deadline) : catchingUp ? wall.monotonic() : deadline) + 1000 / rate
       }
       this.schedule()
     }
@@ -199,7 +228,7 @@ class GameClock extends EventEmitter {
     if (this.disposed || (this.frozen && this.steps <= 0)) return false
     // Time packets arrive every 20 world ticks. Don't run arbitrarily far into
     // the future if the server stalls. A step packet is an explicit tick grant.
-    if (!this.frozen && this.serverTicks !== null && this.ticks >= this.serverTicks + this.predictionTicks) return false
+    if (this.capped()) return false
     if (this.frozen) this.steps--
     // Confirmed world time may outpace a CPU-blocked producer. Reconcile its
     // elapsed ticks, then run due intervals once without replaying physics.
@@ -244,6 +273,7 @@ class GameClock extends EventEmitter {
   }
   syncAge (age) {
     age = asBigInt(age)
+    if (this.stallTimer) { wall.clearTimeout(this.stallTimer); this.stallTimer = null }
     this.observationNow()
     const at = wall.monotonic()
     const previousTarget = this.serverTicks
@@ -306,6 +336,7 @@ class GameClock extends EventEmitter {
     this.disposed = true
     this.running = false
     this.clearPump()
+    if (this.stallTimer) { wall.clearTimeout(this.stallTimer); this.stallTimer = null }
     for (const fn of this.cleanups.splice(0)) fn()
     for (const t of [...this.timers]) this.clearTimeout(t)
     this.emit('state', this.snapshot())

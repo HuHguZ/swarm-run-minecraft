@@ -24,7 +24,7 @@ const FACES = [
 // this list refuses is the same dead end one call later.
 const FILLER = [
   'cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'stone', 'deepslate',
-  'andesite', 'diorite', 'granite', 'tuff', 'blackstone', 'basalt', 'sand', 'gravel'
+  'andesite', 'diorite', 'granite', 'tuff', 'blackstone', 'basalt', 'sandstone', 'red_sandstone', 'sand', 'gravel'
 ]
 
 // Blocks that do not stay where they are put when there is air under them.

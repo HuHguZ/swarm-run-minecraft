@@ -740,7 +740,8 @@ test('у известного спавнера кампания начинает
   const c = campaign(state, { pickLeft: 300 }, (method, params) => {
     if (method === 'portal') returns++
     if (method === 'fortress') return { reached: true, spawner: { x: -404, y: 70, z: -200 } }
-    if (method === 'blaze' && params.box === false) state.inventory.blaze_rod = 7
+    // Без огнестойкости коробка с окном разрешена навыку (box не false), бой всё равно начинается сразу.
+    if (method === 'blaze' && params.box !== false) state.inventory.blaze_rod = 7
     return {} as Record<string, any>
   })
   c.known.fortress = { x: -424, y: 42, z: -180 }
@@ -1817,4 +1818,36 @@ test('r4 exit: a stopped mapped-room approach is not retried six times in one st
   c.hooks({ recoverGuard: async () => {} })
   await c.runStage('stronghold')
   assert.equal(rooms, 1)
+})
+
+test('s1c: hit by a wither skeleton in the Nether at 11 hp — into the rock (ne_burrow), not an open fight', async () => {
+  const state: Record<string, any> = { health: 11, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 }, inventory: { iron_sword: 1, cooked_beef: 8 } }
+  const situation = { foes: 1, armed: true, fight: { first: { name: 'wither_skeleton', dist: 2 }, order: [{ name: 'wither_skeleton', dist: 2 }] } }
+  const calls = []
+  const c = campaign(state, situation, method => {
+    calls.push(method)
+    if (method === 'mine') return { rpcResult: { status: 'interrupted', by: { type: 'damage' }, state, events: [] } }
+    return {} as Record<string, any>
+  })
+  c.stage('nether')
+  await c.act('mine').catch(() => {})
+  assert.ok(calls.includes('ne_burrow'), calls.join(','))
+  assert.equal(calls.includes('fight'), false)
+})
+
+test('s1c: огнестойкость кончилась, а её можно купить (золото на руках) — этап отдаёт решение графу после одного вызова blaze', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, inventory: { stone_pickaxe: 2, shield: 1, cooked_beef: 8, ender_pearl: 14,
+    oak_planks: 32, stick: 12, crafting_table: 1, cobblestone: 64, gold_ingot: 20 },
+    armor: { torso: 'iron_chestplate', legs: 'iron_leggings', head: 'golden_helmet' }, dimension: 'the_nether' }
+  const calls = []
+  const c = campaign(state, { pickLeft: 300 }, (method) => {
+    calls.push(method)
+    if (method === 'fortress') return { reached: true, spawner: { x: -404, y: 70, z: -200 } }
+    return {} as Record<string, any>
+  })
+  c.known.fortress = { x: -424, y: 42, z: -180 }
+  c.hooks({ spares: async () => {}, recoverGuard: async () => {} })
+  await c.runStage('nether')
+  assert.equal(calls.filter(m => m === 'blaze').length, 1, calls.join(','))
+  assert.ok(calls.includes('ne_burrow'), 'в толщу до решения графа')
 })

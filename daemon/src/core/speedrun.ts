@@ -19,7 +19,8 @@ export const BASTION_GOLD = 153
 const TARGETS: Record<string, [string, Dimension]> = {
   VillageIron: ['village', 'overworld'], ShipwreckIron: ['shipwreck', 'overworld'], TreasureIron: ['treasure', 'overworld'],
   RuinedPortal: ['ruined_portal', 'overworld'], LavaPoolPortal: ['lava', 'overworld'], FindStronghold: ['stronghold', 'overworld'],
-  BastionBarter: ['bastion', 'the_nether'], AcquireGold: ['bastion', 'the_nether'], GetBlazeRods: ['fortress', 'the_nether']
+  BastionBarter: ['bastion', 'the_nether'], AcquireGold: ['bastion', 'the_nether'], AcquireFireResistance: ['bastion', 'the_nether'],
+  GetBlazeRods: ['fortress', 'the_nether']
 }
 /** Travel to the strategy's known target in the current dimension, in ticks. */
 export function travelTicks(s: WorldState, id: string): number {
@@ -104,8 +105,15 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   const pearlsNeeded = (s: WorldState) => amount(s, 'pearls') + amount(s, 'eyes') < eyes
   const rodsNeeded = (s: WorldState) => amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes
   const toolsUnavailable = (s: WorldState) => s.facts.nether_tools_ready?.status === 'known' && s.facts.nether_tools_ready.value === false
+  // blaze_allowed is the campaign's order «pearls of the active bastion first», not a fire-resistance permit: fire resistance
+  // prices the fight (blazeRisk), it does not gate it (user decision 06.10 22:33, AGENTS.md «Гибкость вместо жёстких правил»).
   const blazeAllowed = (s: WorldState) => !toolsUnavailable(s) && (s.facts.blaze_allowed?.status === 'known'
     ? s.facts.blaze_allowed.value === true : !(pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted')))
+  const fireResHeld = (s: WorldState) => knows(s, 'fire_resistance_active') || Number(s.facts.fire_resistance_count?.value ?? 0) >= 1
+  /** Death risk of the spawner fight from the state. Fireballs and burning are #is_fire: under fire resistance only the touch
+   *  attack hurts. Calibrated on the s1c farm series (06.10, 40 runs that reached the spawner, lockstep/750): death in the blaze
+   *  stage 10/27 with FR at the first call, 9/13 without — 0.35 / 0.7; no shield +0.04; under 10 hp ×2. */
+  const blazeRisk = (s: WorldState) => Math.min(1, ((fireResHeld(s) ? 0.35 : 0.7) + (amount(s, 'shield') >= 1 ? 0 : 0.04)) * (s.health < 10 ? 2 : 1))
   const barsNeeded = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'iron') < iron &&
     (amount(s, 'bucket') < 1 || amount(s, 'lighter') < 1) && amount(s, 'stone_tool') >= 1
   const structureAvailable = (s: WorldState, name: string) => knows(s, name) && !knows(s, `${name}_exhausted`) && s.structureSearchMs < structureBudgetMs
@@ -247,17 +255,19 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     !(pearlsNeeded(s) && amount(s, 'gold') >= 8),
     { facts: { nether_tools_ready: true }, atLeast: { stone_tool: 1 } }, 180, achieved('nether_tools_ready'), 0.03,
     { timeoutMs: 300000, retryCondition: netherSupplyImproved })
-  add('AcquireFireResistance', 'bastionSupply', s => nether(s) && rodsNeeded(s) && !pearlsNeeded(s) && s.health >= 12 &&
-    s.facts.blaze_allowed?.status === 'known' && s.facts.blaze_allowed.value === false &&
-    !knows(s, 'fire_resistance_active') && Number(s.facts.fire_resistance_count?.value ?? 0) < 1 &&
+  // Fire resistance is an option, not a gate: the planner buys it only when its trip (travel + 180 s + risk) costs less than the
+  // risk it removes from GetBlazeRods (blazeRisk with vs without FR).
+  add('AcquireFireResistance', 'bastionSupply', s => nether(s) && rodsNeeded(s) && !pearlsNeeded(s) && s.health >= 12 && !fireResHeld(s) &&
     ((knows(s, 'bastion') && !knows(s, 'bastions_exhausted')) || amount(s, 'gold') >= 8),
-    { facts: { fire_resistance_count: 1, blaze_allowed: true } }, 180,
+    // 600 s: the measured trip (SC-1 06.10: 29 min with interruptions; s1c barter calls 4–10 min) rather than an ideal 180 s.
+    { facts: { fire_resistance_count: 1 } }, 600,
     (_b, a) => knows(a, 'fire_resistance_active') || (a.facts.fire_resistance_count?.status === 'known' && Number(a.facts.fire_resistance_count.value) >= 1),
-    0.08, { timeoutMs: 900000 })
+    0.04, { timeoutMs: 900000 })
   add('FindFortress', 'findFortress', s => nether(s) && blazeAllowed(s) && unknown(s, 'fortress') && rodsNeeded(s),
     { facts: { fortress: true } }, 90, (_b, a) => !unknown(a, 'fortress'), 0.04)
   add('GetBlazeRods', 'nether', s => nether(s) && blazeAllowed(s) && knows(s, 'fortress') && rodsNeeded(s),
-    { atLeast: { rods: Math.ceil(eyes / 2) } }, 240, (_b, a) => amount(a, 'rods') * 2 + amount(a, 'powder') + amount(a, 'eyes') >= eyes, 0.06)
+    { atLeast: { rods: Math.ceil(eyes / 2) } }, 240, (_b, a) => amount(a, 'rods') * 2 + amount(a, 'powder') + amount(a, 'eyes') >= eyes, 0.06,
+    { estimateRisk: blazeRisk })
   add('CraftEyes', 'eyes', s => amount(s, 'eyes') < eyes && amount(s, 'pearls') >= eyes - amount(s, 'eyes') && amount(s, 'rods') * 2 + amount(s, 'powder') >= eyes - amount(s, 'eyes'),
     s => ({ resources: { pearls: -(eyes - amount(s, 'eyes')), rods: -Math.ceil(Math.max(0, eyes - amount(s, 'eyes') - amount(s, 'powder')) / 2) }, atLeast: { eyes } }), 10, has('eyes', eyes), 0)
   add('LeaveNether', 'leaveNether', s => nether(s) && amount(s, 'eyes') >= eyes, { dimension: 'overworld' }, 60, (_b, a) => a.dimension === 'overworld', 0.015)

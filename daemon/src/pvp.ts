@@ -802,7 +802,8 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   ctl.onAbort.push(() => pearlResponse.close())
   const bm = boom.create(bot, { enemy: () => entity, used, crystals: !crystal.ON })
   ctl.onAbort.push(() => bm.close())
-  const cx = crystal.create(bot, { enemy: () => entity, used })
+  // Хп соперника-игрока в решениях кристаллов — оценкой (правило 06.10); урон своих подрывов — в оценку (S7c).
+  const cx = crystal.create(bot, { enemy: () => entity, used, foeHp: (e) => foeHpDecide(e), noteAttack: (r, o) => calc.noteAttack(r, o) })
   ctl.onAbort.push(() => cx.close())
   const maceNow = () => { try { return !!(prof.player && mc.threat()) } catch { return false } }
   const maceAbort = (what) => { st.maceAborts = (st.maceAborts || 0) + 1; used('бросил ' + what + ': булава сверху') }
@@ -918,8 +919,10 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     pathTo(false)
     restoreMoves()
     try { bot.deactivateItem() } catch {}
-    if (guard) await guard.raise(false)
-    for (const cell of pendingLava.splice(0)) await scoop(cell)
+    // Погиб — отчёт сразу: сессия ждёт его 1 с реального времени после смерти (intent-runner), щит и вычерпывание
+    // лавы мёртвому не нужны (S7c: у погибшего в ROUND пустые crystal/elytra — отчёт не успевал).
+    if (guard && !selfDied) await guard.raise(false)
+    if (!selfDied) for (const cell of pendingLava.splice(0)) await scoop(cell)
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('physicsTick', onTickSwat)
     bot.removeListener('physicsTick', onTickArcher)
@@ -991,6 +994,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       hops: st.hops ? { tries: st.hops, ok: st.hopOk || 0, why: st.hopWhy } : undefined,
       calc: st.calc ? { plans: st.calc.plans, kinds: st.calc.kinds, last: st.calc.last, err: st.calcErr } : undefined,
       xbow: st.xbow && Object.keys(st.xbow).length ? st.xbow : undefined,
+      rod: util.stats && (util.stats.rod || util.stats.hookedOnMe || util.stats.pulledMe) ? { casts: util.stats.rod, hooked: util.stats.rodHooked, hookedOnMe: util.stats.hookedOnMe, counter: util.stats.rodCounter, pulledMe: util.stats.pulledMe } : undefined,
       mace: mc.report(),
       elytra: sky.report(),
       pearlResponse: pearlResponse.report(),
@@ -1528,6 +1532,7 @@ const pvpSkills = {
           const pr = (await holdItem(pearlOut))
             ? await throwMod.throwAt(bot, null, {
               item: bot.heldItem,
+              jump: 'auto', // S6b pearl-jump: в прыжке дальше, если с места цель не достать
               pick: throwMod.escapePick(bot, tp => Math.min(24, Math.hypot(tp.x - foeAt.x, tp.z - foeAt.z)), { minDist: 6, maxDrop: 4 })
             }).catch(() => null)
             : null
@@ -1649,7 +1654,7 @@ const pvpSkills = {
     if (prof.player && blockName(bot, me.floored()) !== 'cobweb' && !perch && !fort && ready('crystal') && cx.engaged()) {
       rest('crystal', 60)
       const ca = cx.plan({ vel: track.vel(), press: pressing })
-      const react = !ca || (ca.kind !== 'defuse' && ca.kind !== 'dodge') || after('crystalSeen', true, style.reactMs)
+      const react = !ca || !/^(defuse|dodge|shield|cover|wall|anchorPop)$/.test(ca.kind) || after('crystalSeen', true, style.reactMs)
       if (!ca) delete noticed.crystalSeen
       if (ca && react) {
         if (guard) await guard.raise(false)
@@ -2480,7 +2485,7 @@ const pvpSkills = {
     if (prof.player && !perch && !fort && !meInWeb && ready('utility')) {
       rest('utility', 150)
       aim = 'free'
-      const ua = await util.step({ entity, d, dy, r, hp, sees: seesBody, theyUp, busy: tt.state(entity), vel: () => track.vel(), others: duo.foes().filter(e => e !== entity), ctl })
+      const ua = await util.step({ entity, d, dy, r, hp, foeHp: foeHpDecide(entity), sees: seesBody, theyUp, blocking, busy: tt.state(entity), vel: () => track.vel(), others: duo.foes().filter(e => e !== entity), ctl })
       aim = 'target'
       if (ua) { if (ua.rush) rushUntil = gameClock.now() + 1500; await holdWeapon(); continue }
     }

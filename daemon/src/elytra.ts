@@ -68,6 +68,8 @@ const KEYS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
 const DEBUG = !!process.env.ND_DEBUG_ELYTRA
 // ND_ELYTRA=0 — не летать в бою (прогон «до»); защита от летуна остаётся.
 const ON = process.env.ND_ELYTRA !== '0'
+// Рефлекс столкновения в полёте без руля (install); ND_ELYTRA_GUARD=0 — выкл.
+const GUARD = process.env.ND_ELYTRA_GUARD !== '0'
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
 const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
@@ -257,8 +259,55 @@ function kit (bot) {
 // сторож ведра не льёт воду в полёте.
 function install (bot) {
   if (bot._ndElytra) return bot._ndElytra
-  const S = { rocketIds: new Set(), fd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0 }
+  const S: any = { rocketIds: new Set(), fd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0, phase: null, box: [], crashes: [] }
   bot._ndElytra = S
+  // Чёрный ящик полёта (S7c, замечание проверки S7b а: 18 из 49 раундов «элитры и копьё» — разбился сам):
+  // последние 30 тиков в воздухе; удар о стену (fly_into_wall) или пол (fall) себе в полёте/сразу после — запись
+  // { kind, phase, dmg, hp, ticks[] } в S.crashes и строка [elytra-crash] в лог демона.
+  bot.on('physicsTick', () => {
+    try {
+      const b = bot.entity
+      if (!b) return
+      if (b.onGround && !b.elytraFlying) { if (!S.boxHold) { S.box.length = 0; S.phase = null } return }
+      // Рефлекс столкновения (S7c, а): летит, а рулит никто (между вызовами fly — удар копьём в воздухе, выстрел,
+      // жемчуг, решение боя) — нынешний взгляд за 8 тиков ведёт в стену с уроном или в пол с высотой падения > 3:
+      // этот тик — безопасный взгляд (choose: прямо по ходу на 12 бл., выше пола на 3).
+      if (b.elytraFlying && !S.driving && GUARD) {
+        const W = worldOf(bot)
+        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
+        const r = rollout(W, b.position, b.velocity, b.yaw, b.pitch, st.boost, 8, { fd: S.fd })
+        if ((r.kind === 'wall' && r.dmg >= 1) || (r.kind === 'floor' && r.fd > 3)) {
+          const h = Math.hypot(b.velocity.x, b.velocity.z) > 0.2 ? Math.atan2(-b.velocity.x, -b.velocity.z) : b.yaw
+          const L = lookVec(h, 0)
+          const pl = choose(W, st, { kind: 'point', at: new Vec3(b.position.x + L.x * 12, b.position.y + 2, b.position.z + L.z * 12), gap: 3, speedMin: 0.3 })
+          if (pl) { bot.look(pl.yaw, pl.pitch, true).catch(() => {}); S.guardSaves = (S.guardSaves || 0) + 1; S.phase = S.phase || 'рефлекс' }
+        }
+      }
+      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0 })
+      if (S.box.length > 30) S.box.shift()
+    } catch {}
+  })
+  try {
+    bot._client.on('damage_event', (pk) => {
+      try {
+        if (!bot.entity || pk.entityId !== bot.entity.id) return
+        const type = require('./gamedata').damageTypeName(pk.sourceTypeId)
+        if (type !== 'fly_into_wall' && type !== 'fall') return
+        if (!S.box.length) return
+        const hp0 = bot.health ?? 20
+        const rec: any = { kind: type === 'fly_into_wall' ? 'стена' : 'пол', phase: S.phase || S.box[S.box.length - 1].ph || null, at: gameClock.now(), ticks: S.box.slice(-12) }
+        S.boxHold = true
+        gameClock.setTimeout(() => {
+          S.boxHold = false
+          rec.dmg = r2(Math.max(0, hp0 - (bot.health ?? 0)))
+          rec.died = (bot.health ?? 0) <= 0
+          S.crashes.push(rec)
+          if (S.crashes.length > 20) S.crashes.shift()
+          console.log('[elytra-crash]', JSON.stringify(rec))
+        }, 100)
+      } catch {}
+    })
+  } catch {}
   bot.on('usedFirework', (id) => {
     S.rocketIds.add(id)
     // Тянет до entityGone: сервер убирает ракету на исходе её жизни.
@@ -532,7 +581,7 @@ function cost (W, st, goal, at, r, yaw, pitch) {
 // goal() — цель этого тика; ракета — когда с ней прогноз заметно лучше или
 // скорость/высота ниже нужной (rocketIf). Всё — на тике физики: взгляд этого
 // тика двигает тело на следующем.
-function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, onTick = null, stats = null, noRocket = null }: any = {}) {
+function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, onTick = null, stats = null, noRocket = null, phase = null }: any = {}) {
   const W = worldOf(bot)
   const S = install(bot)
   return new Promise<any>(resolve => {
@@ -540,9 +589,11 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
     let done = false
     let ticks = 0
     let planMs = 0
+    S.driving = (S.driving || 0) + 1
     const finish = (why) => {
       if (done) return
       done = true
+      S.driving = Math.max(0, (S.driving || 1) - 1)
       bot.removeListener('physicsTick', onT)
       resolve({ why, ms: gameClock.now() - t0, ticks, planMs: ticks ? r2(planMs / ticks) : 0 })
     }
@@ -559,6 +610,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
         ticks++
         const g = typeof goal === 'function' ? goal() : goal
         if (!g) return finish('цели нет')
+        S.phase = phase || g.kind
         const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
         const tp = gameClock.wall.now()
         const pl = choose(W, st, g)
@@ -612,6 +664,7 @@ async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liqui
   for (let i = 0; i < 4 && bot.entity.onGround; i++) await nextTick(bot)
   if (bot.entity.onGround) return { ok: false, why: 'не оторвался от земли' }
   if (!startGlide(bot)) return { ok: false, why: 'не раскрыл элитры' }
+  install(bot).phase = 'взлёт'
   await bot.look(yaw ?? bot.entity.yaw, pitch, true).catch(() => {})
   await nextTick(bot)
   let fr = fireRocket(bot)
@@ -708,6 +761,7 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
     return false
   }
   const r: any = await fly(bot, ctl, {
+    phase: 'посадка',
     goal: () => ({ kind: 'land', at: spot, away, edge }),
     maxMs,
     noRocket: () => true,
@@ -718,6 +772,32 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
   const lost = Math.max(0, hp0 - (bot.health ?? 20))
   if (stats) { stats.landings = (stats.landings || 0) + 1; if (lost > 0.5) stats.landDmg = r2((stats.landDmg || 0) + lost) }
   return { ok: !!bot.entity.onGround, why: r.why, lost: r2(lost), at: spot }
+}
+
+// Нагрудник назад — только внизу (S7c, а): свап в воздухе гасит полёт, и тело падает с высоты («fell from a
+// high place»). Летит — посадка (до двух попыток); падает без полёта высоко над полом — снова раскрыть и сесть;
+// на земле или в воде (или пол в 1.2 бл. и v.y > −0.5) — свап.
+async function chestDown (bot, ctl, { stats = null, away = null, at = null }: any = {}) {
+  const W = worldOf(bot)
+  const low = () => {
+    const b = bot.entity
+    if (!b) return true
+    if (b.onGround || b.isInWater) return true
+    const f = W.floorBelow(b.position.x, b.position.y, b.position.z, 6)
+    return !!f && b.position.y - f.top < 1.2 && b.velocity.y > -0.5
+  }
+  const landCtl = { get aborted () { return (bot.health ?? 0) <= 0 } }
+  for (let i = 0; i < 3 && (bot.health ?? 0) > 0 && !low(); i++) {
+    if (bot.entity.elytraFlying) { await land(bot, landCtl, { at: i === 0 ? at : null, away, stats }); continue }
+    const f = W.floorBelow(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z, 40)
+    if (f && bot.entity.position.y - f.top > 3.5 && wearingElytra(bot) && startGlide(bot)) { if (stats) stats.reglide = (stats.reglide || 0) + 1; continue }
+    const t0 = gameClock.now()
+    while (!low() && (bot.health ?? 0) > 0 && gameClock.now() - t0 < 3000) await sleep(TICK_MS)
+  }
+  if ((bot.health ?? 0) <= 0) return { ok: false, why: 'погиб' }
+  if (/_chestplate$/.test(chestName(bot) || '')) return { ok: true, already: true }
+  if (!low()) { if (stats) stats.chestAir = (stats.chestAir || 0) + 1; return { ok: false, why: 'не сел — нагрудник не меняю в воздухе' } }
+  return swapChest(bot, 'chest', { hand: /_chestplate$/.test(offName(bot) || '') ? 'off' : 'main' })
 }
 
 // ---------------------------------------------------------------- слежка
@@ -902,7 +982,7 @@ async function escape (bot, ctl, e, { heal, enough = () => (bot.health ?? 0) >= 
   const onField = (x, z) => !arena || (Math.abs(x - arena.x) <= arena.r - 1 && Math.abs(z - arena.z) <= arena.r - 1)
   if (allow) allow()
   const to = await takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats })
-  if (!to.ok) { out.note = 'уход на элитрах: не взлетел — ' + to.why; await swapChest(bot, 'chest'); return out }
+  if (!to.ok) { out.note = 'уход на элитрах: не взлетел — ' + to.why; await chestDown(bot, ctl, { stats }); return out }
   stats.escapes = (stats.escapes || 0) + 1
   used('элитры: взлёт — ухожу лечиться в воздух')
   let target = farPoint(bot, W, foe(), cruiseAlt(bot, W, foe()))
@@ -915,7 +995,7 @@ async function escape (bot, ctl, e, { heal, enough = () => (bot.health ?? 0) >= 
   bot.on('health', onHp)
   const alt = () => cruiseAlt(bot, W, foe())
   const r: any = await fly(bot, ctl, {
-    maxMs,
+    maxMs, phase: 'уход',
     stats,
     goal: () => {
       if (gameClock.now() - pickAt > 500) { target = farPoint(bot, W, foe(), alt()); pickAt = gameClock.now() }
@@ -948,7 +1028,7 @@ async function escape (bot, ctl, e, { heal, enough = () => (bot.health ?? 0) >= 
     l = await land(bot, ctl, { at: spot, away: foe(), stats })
   }
   bot.removeListener('health', onHp)
-  const sw = await swapChest(bot, 'chest')
+  const sw = await chestDown(bot, ctl, { stats, away: foe() })
   out.ok = !!l.ok
   out.hp1 = r2(bot.health ?? 0)
   out.hurtAir = r2(hurtAir)
@@ -1020,7 +1100,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   if (allow) allow()
   const toward = yawTo(bot.entity.position, foe())
   const to = await takeoff(bot, ctl, { pitch: 1.1, yaw: wrap(toward + Math.PI), stats })
-  if (!to.ok) { await swapChest(bot, 'chest'); out.note = 'пике: не взлетел — ' + to.why; return out }
+  if (!to.ok) { await chestDown(bot, ctl, { stats }); out.note = 'пике: не взлетел — ' + to.why; return out }
   stats.dives = (stats.dives || 0) + 1
   // Набор высоты: точка над ним со сдвигом 6 бл. в нашу сторону, на высоте
   // его ног + 10 (под потолком — ниже).
@@ -1036,7 +1116,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   // Заход — дольше и шире (арена 2026-09-26: он бегает, и за 6 с условие «выше
   // на 8 и ближе 5.5» не выполнялось — «не зашёл сверху (долго)», 5 ракет зря).
   const r: any = await fly(bot, ctl, {
-    maxMs: 8000,
+    maxMs: 8000, phase: 'пике: заход',
     stats,
     goal: () => {
       const f = foe()
@@ -1057,7 +1137,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   })
   if (r.why !== 'над ним') {
     const l: any = bot.entity.elytraFlying ? await land(bot, ctl, { away: null, stats }) : { ok: true }
-    await swapChest(bot, 'chest')
+    await chestDown(bot, ctl, { stats })
     out.note = `пике: не зашёл сверху (${r.why})${l.ok ? '' : ', посадка: ' + l.why}`
     return out
   }
@@ -1087,7 +1167,8 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   const mark = { at: gameClock.now() }
   const res = await new Promise<any>(resolve => {
     let done = false
-    const fin = (why) => { if (done) return; done = true; bot.removeListener('physicsTick', onT); if (bot._ndDescend === mark) bot._ndDescend = null; resolve(why) }
+    S.driving = (S.driving || 0) + 1
+    const fin = (why) => { if (done) return; done = true; S.driving = Math.max(0, (S.driving || 1) - 1); bot.removeListener('physicsTick', onT); if (bot._ndDescend === mark) bot._ndDescend = null; resolve(why) }
     const tD = gameClock.now()
     const W2 = W
     const footAt = (t) => { const f = foe(); const tv = vel() || { x: 0, y: 0, z: 0 }; return new Vec3(f.x + tv.x * t, f.y, f.z + tv.z * t) }
@@ -1200,7 +1281,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   // Мимо на подлёте (не свапнули) — сесть; свапнули и вернули элитры — сесть.
   if (bot.entity.elytraFlying) await land(bot, ctl, { away: null, stats })
   await sleep(250)
-  if (!/_chestplate$/.test(chestName(bot) || '')) await swapChest(bot, 'chest', { hand: /_chestplate$/.test(offName(bot) || '') ? 'off' : 'main' })
+  await chestDown(bot, ctl, { stats })
   out.hit = !!hit
   out.ok = true
   const hisHp1 = healthOf(bot, e)
@@ -1249,6 +1330,8 @@ function afterPacket (bot, fn) {
 // (он рулил бы клавишами, которые элитрам не нужны).
 function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }: any = {}) {
   install(bot)
+  const createdAt = gameClock.now()
+  const guard0 = bot._ndElytra?.guardSaves || 0
   worldOf(bot)
   const fl = track(bot, { enemy })
   const st: any = {}
@@ -1343,6 +1426,14 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
         lanceBadLand: st.lanceBadLand || undefined,
         lanceDeaths: st.lanceDeaths || undefined,
         lanceTrace: st.lanceTrace,
+        lanceEarly: st.lanceEarly || undefined,
+        lanceBail: st.lanceBail || undefined,
+        guardSaves: ((bot._ndElytra?.guardSaves || 0) - guard0) || undefined,
+        chestAir: st.chestAir || undefined,
+        reglide: st.reglide || undefined,
+        // Удары о стену/пол себе за этот бой (чёрный ящик install): вид/фаза/урон, † — насмерть; ticks — первого.
+        crashes: (() => { const c = (bot._ndElytra?.crashes || []).filter(x => x.at >= createdAt); return c.length ? c.map(x => `${x.kind}/${x.phase || '?'}/−${x.dmg}${x.died ? '†' : ''}`) : undefined })(),
+        crashTicks: (() => { const c = (bot._ndElytra?.crashes || []).find(x => x.at >= createdAt); return c ? c.ticks.slice(-6).map(k => `${k.ph || '-'} y${k.y} v${k.vx},${k.vy},${k.vz} fd${k.fd}${k.ef ? '' : ' нет полёта'}${k.fw ? ' ракета' : ''}`) : undefined })(),
         foe: t
       }
       return (Object.values(out) as any[]).some(v => v !== undefined) ? out : undefined
@@ -1355,5 +1446,5 @@ module.exports = {
   ON, EYE_FLY, FLY_H, lookVec, glideStep, fallStep, rollout, worldOf, install, startGlide, fireRocket, swapChest,
   toHotbar, takeoff, fly, land, landingSpot, choose, headroom, arenaAround, kit, hasElytra, wearingElytra,
   rocketCount, plainRocket, bestChest, gliding, predictGlider, track, nextTick, lavaLaunchClear,
-  escape, diveSmash, divePlan, smashBonus, reachFromBox, consumeAir, create
+  escape, diveSmash, divePlan, chestDown, smashBonus, reachFromBox, consumeAir, create
 }

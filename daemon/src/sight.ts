@@ -7,6 +7,9 @@
 // 2026-09-25). Здесь длина — до центра плюс полблока, а засчитан блок, только
 // если луч упёрся именно в него.
 
+// require вне горячих функций: visibleOf зовут на каждом шаге mine/explore (s5c-f4-4: 2109 проб профиля — разбор пути модуля).
+const VEC3 = require('vec3')
+
 function seesBlock (bot, block) {
   if (!block || !bot || !bot.entity) return false
   const eye = bot.entity.position.offset(0, bot.entity.eyeHeight || 1.62, 0)
@@ -43,7 +46,7 @@ function seesBlock (bot, block) {
 //   skip(pos) — клетки, которые не брать (пол под ногами);
 //   fair:false — без зрения, просто ближние (как findBlocks).
 function visibleOf (bot, ids, radius, { max = 12, rays = 800, skip = null, fair = true }: any = {}) {
-  const Vec3 = require('vec3')
+  const Vec3 = VEC3
   const reg = bot.registry
   const want = new Set()
   for (const id of ids) {

@@ -5,6 +5,7 @@
 const gameClock = require('../game-clock')
 const movement = require('../movement')
 const flee = require('../flee')
+const moves = require('../moves')
 
 type Bot = Record<string, any>
 export interface Blast { id: number; kind: 'tnt' | 'falling_block' | 'charged_creeper'; distance: number; fuse: number | null; reach: number; alarm: boolean }
@@ -73,7 +74,9 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
       if (!plan) { stop(); break }
       prevYaw = plan.yaw
       await bot.look(plan.yaw, 0, true)
-      set('forward', true); set('sprint', (bot.food ?? 20) > 6)
+      // A step only where it is safe (review g, S4c): the run's direction was chosen by run length, but sprint momentum at
+      // the end of it slid over edges; moves.stepSafe as in smartFlee (drop > 3, lava, fire, magma under the step).
+      set('forward', moves.stepSafe(bot, moves.keyDir(bot, 'forward'))); set('sprint', (bot.food ?? 20) > 6)
       const ahead = bot.blockAt(me.offset(plan.dir.x * 0.8, 0, plan.dir.z * 0.8).floored())
       set('jump', ahead?.boundingBox === 'block')
       await movement.sleep(50)

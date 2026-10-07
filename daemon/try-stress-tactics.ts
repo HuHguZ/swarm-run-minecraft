@@ -1,17 +1,26 @@
 // Stage D of the tactical stress stand (research/claude-1006/tactics.md): the distractions of the abstract stand,
-// honestly in Minecraft on a farm slot - primed TNT, a falling anvil, a charged creeper, a zombie in diamond gear with a
-// diamond sword - while the bot works a long skill. Commands only prepare the scene; the body acts on its own.
-//   node farm/farm.js run try-stress-tactics.js --slots N --tag s4-stress-<n>
-// Rows (LAB_OUT): one per phase {phase, ok, actions[{action,level}], hp0, hp, died, detail}. Fails on death.
+// honestly in Minecraft on a farm slot - primed TNT, a charged creeper, a zombie in diamond gear, blaze crowds (one over a
+// platform edge), a mixed crowd, a wither skeleton - while the bot works a long skill. Commands only prepare the scene;
+// the body acts on its own.
+//   node farm/farm.js run try-stress-tactics.js --slots N --tag s4c-stress-<n> [PHASES=a,b] [PHASE_TICKS=1200]
+// Rows (LAB_OUT): one per phase {phase, ok, died, deaths, causes, swaps, actions[{action,level,t}], hp0, minHp, hp, ticks,
+// wallMs, physics, fell}; a summary {deaths, between, phases}. Fails on any death.
+// Round 4 (S4c): deaths are counted by the server, not by the bot's events - a deathCount scoreboard (read through the
+// body's chat, `ask`) and the death lines of the server log, read after the body settles. Round 2's s4b-flap-3 lost a fall
+// ("fell from a high place" at the end of blaze-crowd, died:false): the status poll and the daemon's 'death' event both
+// raced the landing. The phases are isolated: day, frozen time, no natural spawns (s4b-flap-1/2: 4 deaths to night mobs
+// between two runs went unreported), and every phase runs a fixed number of game ticks, so lockstep and plain 750 compare.
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
-interface Event { type: string; action?: string; threatLevel?: number; hp?: number; hpBefore?: number }
-interface Selected { action?: string; level?: number }
-interface State { health: number; food: number; pos: { x: number; y: number; z: number }; busy: string | null; tactics?: { threatLevel: number; state?: any }
+interface Event { type: string; action?: string; threatLevel?: number; hp?: number; gameAt?: number }
+interface Selected { action?: string; level?: number; t?: number }
+interface State { health: number; food: number; pos: { x: number; y: number; z: number }; busy: string | null
   physicsTicks?: number; clock?: { ticks?: number; tickRate?: number } }
 const { connect, createKit } = require('./scene-kit')
 const wallSleep = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
+// A death message of 1.21.11 (en_us death.*) starts with the victim's name and one of these words.
+const DEATH = /^(was |fell |died|drowned|burned|went up|went off|blew up|hit the ground|tried to swim|walked into|suffocated|starved|froze|experienced|withered|discovered|didn't want|left the confines|squashed|is |got finished)/
 
 async function main(): Promise<void> {
   const slot = Number(process.env.FARM_SLOT)
@@ -32,11 +41,27 @@ async function main(): Promise<void> {
   }
   const status = async (): Promise<State> => (await call('status')).state
   const X = 3600, Y = 200, Z = 3600
+  const PHASE_TICKS = Number(process.env.PHASE_TICKS || 1200)
   const alive = async () => {
-    for (const until = Date.now() + 20000; Date.now() < until;) { if ((await status()).health > 0) return; await wallSleep(200) }
+    for (const until = Date.now() + 30000; Date.now() < until;) { if ((await status()).health > 0) return; await wallSleep(200) }
     throw new Error('the bot did not respawn')
   }
-  const reset = async () => {
+  // The server's count: deathCount scoreboard; its feedback goes to the body's chat only (not the log), hence ask.
+  const deathCount = async (): Promise<number> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await call('ask', { command: '/scoreboard players get @s nd_deaths', match: 'nd_deaths', ms: 3000 })
+      const line = ((r?.detail?.lines ?? r?.lines ?? []) as string[]).find(l => /has \d+ \[nd_deaths\]/.test(l))
+      if (line) return Number(/has (\d+)/.exec(line)![1])
+      await wallSleep(300)
+    }
+    throw new Error('deathCount scoreboard not readable')
+  }
+  // The second witness and the cause: death lines of the server log since a mark.
+  const deathLines = (from: number): string[] => kit.serverLog.linesFrom(from).lines
+    .map((l: { text: string }) => /^\[\d\d:\d\d:\d\d\] \[[^\]]+\]: (.*)$/.exec(l.text)?.[1] ?? '')
+    .filter((body: string) => body.startsWith(player + ' ') && DEATH.test(body.slice(player.length + 1)))
+    .map((body: string) => body.slice(player.length + 1))
+  const reset = async (at = { x: X + .5, z: Z + .5 }) => {
     await alive()
     await call('stop')
     await command('/gamemode creative', false)
@@ -44,7 +69,7 @@ async function main(): Promise<void> {
     await command(`/tp @s ${X + .5} ${Y + 5} ${Z + .5}`, false)
     for (const until = Date.now() + 10000; Date.now() < until && Math.abs((await status()).pos.x - X) > 20;) await wallSleep(200)
     await wallSleep(300)
-    await command('/kill @e[type=!minecraft:player,distance=..40]', false)
+    await command('/kill @e[type=!minecraft:player,distance=..60]', false)
     await kit.fillExact('overworld', [[X - 16, Y, Z - 16], [X + 16, Y + 8, Z + 16]], 'air')
     await kit.fillExact('overworld', [[X - 16, Y - 1, Z - 16], [X + 16, Y - 1, Z + 16]], 'stone')
     await command('/clear @s', false)
@@ -52,80 +77,125 @@ async function main(): Promise<void> {
     for (const [slot, piece] of [['head', 'helmet'], ['chest', 'chestplate'], ['legs', 'leggings'], ['feet', 'boots']]) {
       await command(`/item replace entity @s armor.${slot} with minecraft:iron_${piece}`)
     }
-    await command(`/tp @s ${X + .5} ${Y} ${Z + .5}`)
+    await command('/effect clear @s', false)
+    await command(`/tp @s ${at.x} ${Y} ${at.z}`)
     await command('/gamemode survival')
     await command('/effect give @s minecraft:instant_health 1 5 true')
     await command('/effect give @s minecraft:saturation 1 5 true')
   }
-  // A long skill to distract: dig down beside the platform is too destructive here, so walk back and forth.
-  const busy = () => { void call('goto', { x: X + 12, y: Y, z: Z + .5, timeoutSeconds: 120 }).catch(() => {}) }
-  const phase = async (name: string, prepare: () => Promise<void>, seconds: number, expect: (actions: Selected[]) => boolean) => {
-    await reset()
+  // A long skill to distract: walk back and forth along the platform.
+  const busy = (to = { x: X + 12, z: Z + .5 }) => { void call('goto', { x: to.x, y: Y, z: to.z, timeoutSeconds: 120 }).catch(() => {}) }
+  let total = 0
+  let betweenFrom = 0
+  let between = 0
+  const phase = async (name: string, prepare: () => Promise<void>, expect: (actions: Selected[]) => boolean,
+    { start, walk }: { start?: { x: number; z: number }; walk?: { x: number; z: number } } = {}) => {
+    await reset(start)
+    // Deaths since the last phase settled (reset, the idle body between runs) belong to no phase - reported, not hidden.
+    const counted = await deathCount()
+    between += counted - total
+    total = counted
     const before = await status()
     const mark = connection.heard.length
-    busy()
+    const logMark = kit.serverLog.mark()
+    const wall0 = Date.now()
+    busy(walk)
     await wallSleep(300)
     await prepare()
-    const until = Date.now() + seconds * 1000
-    let state = before, minHp = before.health
-    while (Date.now() < until) {
+    const t0 = before.clock?.ticks ?? 0
+    let state = before, minHp = before.health, lowest = before.pos.y
+    for (const capped = Date.now() + Math.max(60000, PHASE_TICKS * 10); Date.now() < capped;) {
       state = await status()
       minHp = Math.min(minHp, state.health)
-      if (state.health <= 0) break
+      if (state.health > 0) lowest = Math.min(lowest, state.pos.y)
+      if ((state.clock?.ticks ?? 0) - t0 >= PHASE_TICKS) break
       await wallSleep(50)
     }
-    // At 750 TPS one 50 ms wall poll is ~37 game seconds: deaths and low health come from the daemon's own events.
+    try { await call('stop') } catch {}
+    // Settle: a body in the air lands (or dies) before the count; then both witnesses are read.
+    for (const until = Date.now() + 3000; Date.now() < until;) {
+      const s = await status()
+      if (s.health <= 0 || Math.abs(s.pos.y - Math.round(s.pos.y)) < .01) break
+      await wallSleep(100)
+    }
+    await wallSleep(1500)
+    await alive()
+    const counted2 = await deathCount()
+    const deaths = counted2 - total
+    total = counted2
+    const causes = deathLines(logMark)
+    betweenFrom = kit.serverLog.mark()
     const heard = (connection.heard as Event[]).slice(mark)
-    const died = state.health <= 0 || heard.some(event => event.type === 'death')
     for (const event of heard) if (event.type === 'tactical_finished' && typeof event.hp === 'number') minHp = Math.min(minHp, event.hp)
-    const actions: Selected[] = heard.filter(event => event.type === 'tactical_selected').map(event => ({ action: event.action, level: event.threatLevel }))
-    // Round 2: A>B>A swaps of the selected actions (farm 06.10, slot 30: Fight<->LastStand every sample at four blazes).
-    const swaps = actions.filter((a, i) => i >= 2 && a.action === actions[i - 2].action && a.action !== actions[i - 1].action).length
-    const ok = !died && expect(actions)
-    // Share of server ticks the body's physics saw (S7: status.physicsTicks / clock.ticks); at 750 TPS a creeper fuse of
-    // 30 ticks can fall between two of them.
-    const ticks = (state.clock?.ticks ?? 0) - (before.clock?.ticks ?? 0)
+    const actions: Selected[] = heard.filter(event => event.type === 'tactical_selected').map(event => ({ action: event.action, level: event.threatLevel, t: event.gameAt }))
+    // A>B>A within 2 game seconds at one threat level (round 2: Fight<->LastStand every sample at four blazes).
+    const swaps = actions.filter((a, i) => i >= 2 && a.action === actions[i - 2].action && a.action !== actions[i - 1].action &&
+      a.level === actions[i - 1].level && (a.t === undefined || actions[i - 2].t === undefined || a.t - actions[i - 2].t! < 2000)).length
+    const died = deaths > 0 || causes.length > 0
+    const ok = !died && swaps === 0 && expect(actions)
+    const ticks = (state.clock?.ticks ?? 0) - t0
     const physics = ticks > 0 ? Math.round(((state.physicsTicks ?? 0) - (before.physicsTicks ?? 0)) / ticks * 100) / 100 : null
-    save({ slot, phase: name, ok, hp0: before.health, minHp, hp: state.health, died, swaps, actions, pos: state.pos, ticks, physics, tickRate: state.clock?.tickRate })
+    save({ slot, phase: name, ok, died, deaths, causes, swaps, actions, hp0: before.health, minHp, hp: state.health, pos: state.pos,
+      fell: lowest < Y - 2, ticks, wallMs: Date.now() - wall0, physics, tickRate: state.clock?.tickRate })
     return ok
   }
   const results: boolean[] = []
-  // PHASES=zombie-melee,blaze-crowd runs only those (round 2 flap check); default - all.
-  const wanted = (process.env.PHASES || '').split(',').filter(Boolean)
-  const want = (name: string) => !wanted.length || wanted.includes(name)
+  const wanted = (process.env.PHASES || 'zombie-melee,blaze-crowd,blaze-edge,tnt,charged-creeper,diamond-zombie,crowd,wither-skeleton').split(',').filter(Boolean)
+  const want = (name: string) => wanted.includes(name)
+  const noFlap = () => true
   try {
     assert.equal((await call('connect')).status, 'done')
     await call('play_mode', { mode: 'free' })
     await kit.ensureWorld('overworld', { tp: `${X + .5} ${Y + 5} ${Z + .5}` })
     await kit.randomReset()
-    // Wall seconds at 750 TPS are ~37 game seconds each; the fuse is 80 ticks.
-    // Round 2: a plain melee fight with crit jumps (the stand's regress-crit-jump-zombie) and a crowd of four blazes at
-    // full health (s1 slot 30, 20:36 MSK): no Fight>LastStand>Fight swaps expected.
-    if (want('zombie-melee')) results.push(await phase('zombie-melee', () => command(`/summon minecraft:zombie ${X + 4.5} ${Y} ${Z + .5}`), 3,
-      actions => !actions.some((a, i) => i >= 2 && a.action === actions[i - 2].action && a.action !== actions[i - 1].action)))
+    await kit.gamerule('spawn_mobs', false)
+    await kit.gamerule('advance_time', false)
+    await command('/time set day')
+    await command('/scoreboard objectives add nd_deaths deathCount', false)
+    await command('/scoreboard players set @s nd_deaths 0', false)
+    betweenFrom = kit.serverLog.mark()
+    if (want('zombie-melee')) results.push(await phase('zombie-melee', () => command(`/summon minecraft:zombie ${X + 4.5} ${Y} ${Z + .5}`), noFlap))
     if (want('blaze-crowd')) results.push(await phase('blaze-crowd', async () => {
       await command('/effect give @s minecraft:fire_resistance 600 0 true')
       for (const [dx, dz] of [[3, 0], [-3, 1], [1, 3], [0, -3]]) await command(`/summon minecraft:blaze ${X + .5 + dx} ${Y + 1} ${Z + .5 + dz}`)
-    }, 3, actions => !actions.some((a, i) => i >= 2 && a.action === actions[i - 2].action && a.action !== actions[i - 1].action && a.level === actions[i - 1].level)))
-    if (want('tnt')) results.push(await phase('tnt', () => command(`/summon minecraft:tnt ${X + 2.5} ${Y} ${Z + .5} {fuse:60}`), 2,
+    }, noFlap))
+    // (S4c, review g) blazes hovering past the platform edge, the body working at the edge without fire resistance: the
+    // answer must not walk or run off it (S1c: falls from fortress bridges under Fight/Flee at blazes).
+    if (want('blaze-edge')) results.push(await phase('blaze-edge', async () => {
+      for (const dz of [-2, 1, 4]) await command(`/summon minecraft:blaze ${X + 20.5} ${Y + 2} ${Z + .5 + dz}`)
+    }, noFlap, { start: { x: X + 14.5, z: Z + .5 }, walk: { x: X + 15.5, z: Z + 12.5 } }))
+    if (want('tnt')) results.push(await phase('tnt', () => command(`/summon minecraft:tnt ${X + 2.5} ${Y} ${Z + .5} {fuse:60}`),
       actions => actions.some(a => a.action === 'Dodge' && a.level === 4)))
-    if (want('anvil')) results.push(await phase('anvil', async () => { const at = (await status()).pos; await command(`/setblock ${Math.floor(at.x)} ${Y + 8} ${Math.floor(at.z)} minecraft:anvil`) }, 2,
+    if (want('anvil')) results.push(await phase('anvil', async () => { const at = (await status()).pos; await command(`/setblock ${Math.floor(at.x)} ${Y + 8} ${Math.floor(at.z)} minecraft:anvil`) },
       actions => actions.some(a => a.action === 'Dodge')))
-    if (want('charged-creeper')) results.push(await phase('charged-creeper', () => command(`/summon minecraft:creeper ${X + 5.5} ${Y} ${Z + .5} {powered:1b}`), 3,
+    if (want('charged-creeper')) results.push(await phase('charged-creeper', () => command(`/summon minecraft:creeper ${X + 5.5} ${Y} ${Z + .5} {powered:1b}`),
       actions => actions.length > 0))
-    // 1.21.5+ mob equipment component (check the bot's sighting: hit >= 6 means the sword was seen).
     // 1.21.11 mob equipment by /item (a summon with the equipment component is longer than the 250-char chat limit).
     if (want('diamond-zombie')) results.push(await phase('diamond-zombie', async () => {
       await command(`/summon minecraft:zombie ${X + 6.5} ${Y} ${Z + .5} {Tags:["nd_s4"],PersistenceRequired:1b}`)
       for (const [slot, item] of [['weapon.mainhand', 'diamond_sword'], ['armor.head', 'diamond_helmet'], ['armor.chest', 'diamond_chestplate'],
         ['armor.legs', 'diamond_leggings'], ['armor.feet', 'diamond_boots']]) await command(`/item replace entity @e[tag=nd_s4,limit=1] ${slot} with minecraft:${item}`)
-    }, 4, actions => actions.length > 0))
+    }, actions => actions.length > 0))
+    // The mix of the slot-18 night deaths (06.10 22:57): zombies, a spider and a creeper at once.
+    if (want('crowd')) results.push(await phase('crowd', async () => {
+      for (const [kind, dx, dz] of [['zombie', 5, 0], ['zombie', -4, 3], ['zombie', 1, -6], ['spider', -6, -2], ['creeper', 7, 5]] as const) {
+        await command(`/summon minecraft:${kind} ${X + .5 + dx} ${Y} ${Z + .5 + dz}`)
+      }
+    }, actions => actions.length > 0))
+    // S1c's second killer (07.10: 7 of 25 deaths), here on the overworld platform: a wither skeleton with its stone sword.
+    if (want('wither-skeleton')) results.push(await phase('wither-skeleton', () => command(`/summon minecraft:wither_skeleton ${X + 5.5} ${Y} ${Z + .5}`),
+      actions => actions.length > 0))
   } finally {
     try { await call('stop') } catch {}
-    try { await command('/kill @e[type=!minecraft:player,distance=..40]', false) } catch {}
-    connection.close()
+    try { await command('/kill @e[type=!minecraft:player,distance=..60]', false) } catch {}
   }
-  save({ slot, summary: true, ok: results.every(Boolean), phases: results.length })
+  // Deaths after the last phase settled (none expected: no spawns, day) - still counted.
+  await wallSleep(1500)
+  let after = 0
+  try { after = await deathCount() - total } catch {}
+  const tail = deathLines(betweenFrom)
+  connection.close()
+  save({ slot, summary: true, ok: results.every(Boolean) && between === 0 && after === 0, phases: results.length, between, after, tail })
   assert.ok(results.every(Boolean), 'a stress phase failed (see rows)')
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1 })

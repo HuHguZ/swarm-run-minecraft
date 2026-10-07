@@ -50,5 +50,14 @@ test('a protected blaze skill takes the hands back from a level-2 tactical episo
 })
 
 test('entering a portal is a protected escape: tactics below level 3 does not interrupt it (s1-LG-10)', () => {
-  assert.equal(observeTactics(session('portal')).protectedEncounter, true)
+  const enter: any = session('portal'); enter.current.params = { mode: 'enter' }
+  assert.equal(observeTactics(enter).protectedEncounter, true)
+  // Casting/building a portal at lava with mobs around stays ordinary work the tactics may interrupt.
+  const cast: any = session('portal'); cast.current.params = { mode: 'cast' }
+  assert.equal(observeTactics(cast).protectedEncounter, false)
+  assert.equal(observeTactics(session('portal')).protectedEncounter, false)
+})
+
+test('the bastion skill owns its encounters below level 3 (s1c: 96 tactical interrupts in 27 std runs)', () => {
+  assert.equal(observeTactics(session('bastion')).protectedEncounter, true)
 })

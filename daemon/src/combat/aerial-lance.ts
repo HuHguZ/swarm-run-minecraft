@@ -91,14 +91,21 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
       if (r.kind && r.t <= hit.t) continue
       // Выход: с точки касания тянуть вверх (pitch 0.6) 12 тиков — без стены и без жёсткого пола.
       const out = sky.rollout(W, hit.q, { x: hit.q.vx, y: hit.q.vy, z: hit.q.vz }, yaw, 0.6, 0, 12, { fd: hit.q.fd })
+      // Выход в стену с уроном или в пол с высотой падения > 3 — заход не годится (S7c, замечание проверки а:
+      // 18 из 49 раундов — разбился сам). Раньше такой план только дорожал и шёл, когда другого не было.
+      if (out.kind === 'wall' && out.dmg >= 1) continue
+      if (out.kind === 'floor' && out.fd > 3) continue
       let c = hit.t - Math.min(40, hit.dmg) * 0.15 + Math.abs(pitch) * 0.3
-      if (out.kind === 'wall') c += 200 + out.dmg * 20
-      else if (out.kind === 'floor' && out.fd > 3) c += 100 + out.fd * 10
-      else if (out.kind === 'floor') c += 8
+      if (out.kind === 'floor') c += 8
       if (!best || c < best.c) best = { c, yaw, pitch, hitT: hit.t, dmg: hit.dmg, rel: hit.rel, exit: out.kind || null }
     }
   }
   return best
+}
+
+// Касание тарана — только damage_event цели, причина которого — я (sourceCauseId = id + 1; 0 — без причины).
+export function ownHit (pk: any, myId: number, foeId: number): boolean {
+  return !!pk && pk.entityId === foeId && pk.sourceCauseId === myId + 1
 }
 
 // Годится ли таран сейчас (на земле или уже в полёте): элитры, ≥3 простых ракет, копьё, нагрудник для возврата,
@@ -132,6 +139,13 @@ function facing (e: any, at: any): number {
   const tx = at.x - e.position.x; const tz = at.z - e.position.z
   const h = Math.hypot(tx, tz) || 1
   return (fx * tx + fz * tz) / h
+}
+
+// Телеметрия урона (не решения): здоровье + поглощение по метаданным — яблоко «съедало» таран в 0 (s7f).
+function ehpTele (bot: any, e: any): number | null {
+  const h = healthOf(bot, e)
+  if (h == null) return null
+  try { return h + (require('../read').absorptionOf(bot, e) || 0) } catch { return h }
 }
 
 function healthOf (bot: any, e: any): number | null {
@@ -174,36 +188,39 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
   const foe = () => e.position
   const hisH = () => sky.gliding(e) ? 0.6 : 1.8
   // Его скорость — без NaN (bow.trackTarget изредка отдаёт NaN, s7 р.1): нечисло = 0.
-  const hv = () => { const v = vel() || {}; const n = (x: any) => Number.isFinite(x) ? x : 0; return { x: n(v.x), y: n(v.y), z: n(v.z) } }
+  // И не больше 2 б/т по оси (рывок от удара/телепорт давали «план 230 урона, 237 бл/с» в s7f).
+  const hv = () => { const v = vel() || {}; const n = (x: any) => Number.isFinite(x) ? Math.max(-2, Math.min(2, x)) : 0; return { x: n(v.x), y: n(v.y), z: n(v.z) } }
   const footAt = (t: number) => sky.gliding(e) ? sky.predictGlider(e, hv(), t) : (() => { const f = foe(); const v = hv(); return new Vec3(f.x + v.x * t, f.y, f.z + v.z * t) })()
   const ceilY = () => sky.arenaAround(bot, W, bot.entity.position).ceilY - 1.8 - 1.4
   const cruiseY = () => Math.min(ceilY(), foe().y + 7)
   if (!sky.gliding(bot.entity)) {
     const away = yawTo(foe(), bot.entity.position)
     const to = await sky.takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats })
-    if (!to.ok) { await sky.swapChest(bot, 'chest'); out.note = 'таран: не взлетел — ' + to.why; return out }
+    if (!to.ok) { await sky.chestDown(bot, ctl, { stats }); out.note = 'таран: не взлетел — ' + to.why; return out }
   }
   stats.lances = (stats.lances || 0) + 1
   used('элитры: таран копьём — разбег')
-  // Попадание — его entityHurt от нас, пока копьё «в деле».
+  // Попадание — его damage_event, причина которого — я (sourceCauseId = мой id + 1), пока копьё «в деле».
+  // entityHurt без источника (падение, кинетическая, его кристалл) касанием не считается (замечание проверки S7b в).
   let using = false
+  let useAt = 0
   let hitAt = 0
-  const onHurt = (victim: any, src: any) => {
-    if (victim !== e || !using) return
-    if (src && bot.entity && src.id !== bot.entity.id) return
+  const onHurt = (pk: any) => {
+    if (!using || !bot.entity || !ownHit(pk, bot.entity.id, e.id)) return
     hitAt = clock.now()
   }
-  bot.on('entityHurt', onHurt)
+  try { bot._client.on('damage_event', onHurt) } catch {}
   const stopUse = () => { if (using) { using = false; try { bot.deactivateItem() } catch {} } }
   try {
     while (valid() && out.passes < passes && clock.now() - t0 < maxMs && sky.gliding(bot.entity)) {
       if (sky.rocketCount(bot) < 1 || (bot.health ?? 0) < 6) break
-      // 1) Разбег: точка на его стороне от нас за 16–20 бл., высота cruiseY.
+      // 1) Разбег: точка на его стороне от нас за 17 бл., высота cruiseY. (s7h/s7j: копьё «использовать» уже на
+      // развороте к нему дало касаний 15 % и 8 % против 30 % в s7f — откатил; копьё — в заходе, по времени до касания.)
       const side = yawTo(foe(), bot.entity.position)
       const runUp = () => { const f = foe(); const L = sky.lookVec(side, 0); return new Vec3(f.x + L.x * 17, cruiseY(), f.z + L.z * 17) }
       const inside = (p: any) => !arena || (Math.abs(p.x - arena.x) <= arena.r - 3 && Math.abs(p.z - arena.z) <= arena.r - 3)
       const climb = await sky.fly(bot, ctl, {
-        maxMs: 4000, stats,
+        maxMs: 4000, stats, phase: 'таран: разбег',
         goal: () => { const P = runUp(); if (!inside(P)) { const f = foe(); P.x = f.x + (P.x - f.x) * 0.6; P.z = f.z + (P.z - f.z) * 0.6 } return { kind: 'point', at: P, reach: true, minY: foe().y + 3, maxY: ceilY(), gap: 3, speedMin: 0.5 } },
         rocketIf: (s: any) => (s.p.y < foe().y + 4 || Math.hypot(s.v.x, s.v.z) < 0.5) ? true : null,
         noRocket: () => sky.rocketCount(bot) <= 1,
@@ -220,18 +237,19 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       // 2) Заход: к нему (ракета, если медленно), затем «использовать» копьё; взгляд — chooseLance.
       out.passes++
       stats.lancePasses = (stats.lancePasses || 0) + 1
-      const hp1 = healthOf(bot, e)
+      const hp1 = ehpTele(bot, e)
       hitAt = 0
+      S.phase = 'таран: заход'
       const res: any = await new Promise<any>(resolve => {
         let done = false
-        let rocket = (Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 1.1 && sky.rocketCount(bot) > 1 && !(bot.fireworkRocketDuration > 0)) ? 'нужна' : 'нет'
-        let useAt = 0
+        let rocket = (!using && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 1.1 && sky.rocketCount(bot) > 1 && !(bot.fireworkRocketDuration > 0)) ? 'нужна' : 'нет'
         let minD = Infinity; let growing = 0
         const tR = clock.now()
         let best: any = null
         let close: any = null
         let planned = 0
-        const fin = (why: string) => { if (done) return; done = true; bot.removeListener('physicsTick', onT); resolve({ why, best, close, planned }) }
+        S.driving = (S.driving || 0) + 1
+        const fin = (why: string) => { if (done) return; done = true; S.driving = Math.max(0, (S.driving || 1) - 1); bot.removeListener('physicsTick', onT); resolve({ why, best, close, planned }) }
         const onT = () => {
           if (done) return
           try {
@@ -256,11 +274,19 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
             } else if (++growing >= 4 && minD < 8) return fin('мимо')
             const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
             const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name })
-            if (pl) { best = pl; planned++; bot.look(pl.yaw, pl.pitch, true).catch(() => {}) } else {
+            // Касание раньше конца задержки копья урона не даст — только считаем (s7h: отказ от таких планов уронил
+            // касания 30 % → 15 %: без плана проход шёл «над головой» мимо; задержку решает ранний старт копья).
+            const delayT = Math.round(spec.delay * 20) + 1
+            if (pl && (!using || (clock.now() - useAt) / 50 + pl.hitT < delayT)) stats.lanceEarly = (stats.lanceEarly || 0) + 1
+            let look: any
+            if (pl) { best = pl; planned++; look = pl } else {
               // Не достаём из этих взглядов — к точке над его головой (с упреждением), не ниже пола + 2.
-              const q = sky.choose(W, st, { kind: 'point', at: (t: number) => footAt(t).offset(0, hisH() + 0.8, 0), reach: true, gap: 2, speedMin: 0.8 })
-              bot.look(q.yaw, q.pitch, true).catch(() => {})
+              look = sky.choose(W, st, { kind: 'point', at: (t: number) => footAt(t).offset(0, hisH() + 0.8, 0), reach: true, gap: 2, speedMin: 0.8 })
             }
+            // Страховка: этот взгляд за 6 тиков — в стену с уроном или в пол с высотой падения > 3 — выйти сейчас.
+            const ahead = sky.rollout(W, st.p, st.v, look.yaw, look.pitch, st.boost, 6, { fd: st.fd })
+            if ((ahead.kind === 'wall' && ahead.dmg >= 1) || (ahead.kind === 'floor' && ahead.fd > 3)) { stats.lanceBail = (stats.lanceBail || 0) + 1; return fin('опасно: ' + (ahead.kind === 'wall' ? 'стена' : 'пол')) }
+            bot.look(look.yaw, look.pitch, true).catch(() => {})
             if (rocket === 'нужна') {
               // Ракета уходит с взглядом этого тика (после пакета).
               rocket = 'была'
@@ -286,9 +312,11 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
         out.hits++
         stats.lanceHits = (stats.lanceHits || 0) + 1
         // Сколько снял (телеметрия, метаданные): хп приходит позже события удара — минимум за 0.5 с.
-        let hpMin = healthOf(bot, e)
+        let hpMin = ehpTele(bot, e)
         const tH = clock.now()
-        const onH = () => { const h = healthOf(bot, e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : (e.isValid === false && hp1 != null ? hp1 : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
+        // Убил (сущность снята — с do_immediate_respawn раньше метаданных с хп 0) — снял всё, что было (hp1);
+        // раньше hpMin оставался равен hp1 и убийство писалось «снял 0» (замечание проверки S7b в).
+        const onH = () => { const h = ehpTele(bot, e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = e.isValid === false && hp1 != null ? hp1 : (hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
         bot.on('physicsTick', onH)
         used(`элитры: таран копьём — попал${res.best ? ` (план ${res.best.dmg}, ${res.best.rel} бл/с)` : ''}`)
       } else used(`элитры: таран — ${res.why}`)
@@ -299,8 +327,10 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       if (!valid() || !sky.gliding(bot.entity)) break
       // 3) Выход вверх и прочь от стен: точка впереди по ходу на cruiseY.
       await sky.fly(bot, ctl, {
-        maxMs: 1500, stats,
-        goal: () => { const b = bot.entity; const h = Math.atan2(-b.velocity.x, -b.velocity.z); const L = sky.lookVec(h, 0); return { kind: 'point', at: new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), minY: foe().y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4 } },
+        maxMs: 1500, stats, phase: 'таран: выход',
+        // Отказ от захода (его копьё на изготовке, опасный выход) — прочь от него, а не «по ходу» (по ходу — в его
+        // копьё: s7j р.1 «таран — мимо, себе −20», встречный разгон убил тараном его копья).
+        goal: () => { const b = bot.entity; const f = foe(); const away = /копьё на изготовке|опасно/.test(res.why) ? yawTo(f, b.position) : Math.atan2(-b.velocity.x, -b.velocity.z); const L = sky.lookVec(away, 0); return { kind: 'point', at: new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), minY: f.y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4, away: f, awayR: 6 } },
         noRocket: () => true,
         onTick: () => { if (allow) allow() },
         until: () => bot.entity.position.y >= foe().y + 3 && bot.entity.velocity.y < 0.3 ? 'вышел' : null
@@ -308,7 +338,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
     }
   } finally {
     stopUse()
-    bot.removeListener('entityHurt', onHurt)
+    try { bot._client.removeListener('damage_event', onHurt) } catch {}
   }
   // 4) Посадка подальше от него, нагрудник назад.
   // Сесть — всегда, даже если бой уже кончился (убил в воздухе) или его прервали: элитры без руля — хуже любого
@@ -335,7 +365,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       l = await sky.land(bot, landCtl, { at: spot, away: live ? foe() : null, stats })
     }
     await clock.sleep(150)
-    if ((bot.health ?? 0) > 0 && !/_chestplate$/.test(bot.inventory.slots[6]?.name || '')) await sky.swapChest(bot, 'chest')
+    if ((bot.health ?? 0) > 0 && !/_chestplate$/.test(bot.inventory.slots[6]?.name || '')) await sky.chestDown(bot, ctl, { stats })
     if (!l.ok) stats.lanceBadLand = (stats.lanceBadLand || 0) + 1
     return l
   }

@@ -250,3 +250,11 @@ test('a failed nugget conversion falls back to stone picks when the bag holds st
   assert.equal(f.state.pickSwings, 262)
   assert.equal(f.state.inventory.iron_nugget, 64)
 })
+
+test('s1c: wood is a reserve for new picks, not a gate — 6 planks + 2 sticks without a table, or ample swings, are ready', () => {
+  const base = { dimension: 'the_nether', health: 20, pickSwings: 378 }
+  assert.equal(netherToolsReady({ ...base, inventory: { iron_pickaxe: 2, oak_planks: 6, stick: 2 } }), true, 's1c-B-4: 7/8 used to defer the spawner')
+  assert.equal(netherToolsReady({ ...base, inventory: { iron_pickaxe: 2, oak_planks: 3 } }), false, 'no table and too little wood to make one')
+  assert.equal(netherToolsReady({ ...base, pickSwings: 520, inventory: { iron_pickaxe: 3 } }), true, 'double swing reserve needs no wood')
+  assert.equal(netherToolsReady({ ...base, pickSwings: 200, inventory: { iron_pickaxe: 1, oak_planks: 16, crafting_table: 1 } }), false)
+})

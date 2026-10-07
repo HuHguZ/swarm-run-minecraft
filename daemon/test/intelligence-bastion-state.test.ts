@@ -41,7 +41,7 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17) 
   const local = createRequire(filename)
   const context = { require: (name: string) => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : local(name),
     __dirname: path.dirname(filename), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: { ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: '1', ND_FR_STRICT: '1' } },
+    process: { argv: ['node', 'campaign.js'], env: { ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: '1' } },
     console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, AbortController, fixtureState: state }
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
     state = fixtureState; sit = { surface: false, foes: 0, pickLeft: 512 };
@@ -105,7 +105,7 @@ test('an unreachable graph cannot send the body home for rods while factual Bast
   const returnsHome = (pending: boolean) => {
     const context = { selection: null, dim: () => 'the_nether', bastionPearlsPending: () => pending,
       need: [{ name: 'nether' }, { name: 'bastion' }], READY: { nether: () => false }, fightGearWanted: false,
-      fightReady: () => false, result: false }
+      fightReady: () => false, result: false, gameClock: { now: () => 0 }, homeForGearAfter: -Infinity }
     vm.runInNewContext(guard, context)
     return context.result
   }
@@ -239,7 +239,7 @@ test('a deferred Bastion no longer holds rods and endermen behind the pearl gate
 test('fire resistance with nothing left to trade opens rods before the pearl goal; carried gold still trades first', async () => {
   const { context, state } = campaignFixture()
   let observation = await context.module.exports.observation()
-  assert.equal(observation.facts.blaze_allowed.value, false, 'ND_FR_STRICT: no potion, no spawner')
+  assert.equal(observation.facts.blaze_allowed.value, false, 'active Bastion, nothing to trade, no FR: its gold is the cheaper next step')
   state.potions.fire_resistance = 2
   observation = await context.module.exports.observation()
   assert.equal(observation.facts.blaze_allowed.value, true, 'active Bastion, 0 gold, FR in the bag')

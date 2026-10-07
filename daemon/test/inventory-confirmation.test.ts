@@ -197,3 +197,20 @@ test('parking a crafted pickaxe preserves surplus recipe ingredients in a pickup
   assert.equal(bot.inventory.items().find(item => item.name === 'blackstone')?.count, 12)
   assert.equal(bot.inventory.items().find(item => item.name === 'stone_pickaxe')?.count, 1)
 })
+test('S8: an unconfirmed click also times out by game ticks, not only by the 3 s wall timer (accelerated farm)', async () => {
+  const bot: any = new EventEmitter()
+  bot._client = new EventEmitter()
+  bot.registry = require('minecraft-data')('1.21.11')
+  bot.version = '1.21.11'
+  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  bot.inventory.updateSlot(9, new (require('prismarine-item')(bot.registry))(bot.registry.itemsByName.iron_ingot.id, 1))
+  bot._client.write = () => {}
+  const old = process.env.ND_CLICK_CONFIRM_GAME_MS
+  process.env.ND_CLICK_CONFIRM_GAME_MS = '60'
+  try {
+    const t0 = Date.now()
+    await assert.rejects(confirmedClick(bot, 9, 0, 0, 10000), /game ms/)
+    assert.ok(Date.now() - t0 < 5000)
+    assert.equal(bot._client.listenerCount('window_items'), 1)
+  } finally { if (old === undefined) delete process.env.ND_CLICK_CONFIRM_GAME_MS; else process.env.ND_CLICK_CONFIRM_GAME_MS = old }
+})

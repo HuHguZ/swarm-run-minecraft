@@ -868,7 +868,12 @@ async function escapeFire (session, ctl: any = null) {
     await sleep(600)
     return { status: 'done', detail: { how: 'вода из ведра' } }
   }
+  // Без лавы и ведра бег огонь не тушит (горит 8 с): уйти можно только из клетки огня, и только безопасным шагом. Раньше —
+  // спринт с прыжком 1.2 с вслепую к «ближайшей клетке с полом» (часто своей же) — с моста или платформы в пустоту и лаву
+  // под огнём ифрита (S4c 07.10, замечание проверки г; звали директор «горю», тактика Flee и укрытие).
   const me = bot.entity.position.floored()
+  const fiery = c => [c, c.offset(0, 1, 0)].some(v => /fire|lava/.test(bot.blockAt(v)?.name || ''))
+  if (!fiery(me)) return { status: 'done', detail: { how: 'не в огне — бег огонь не тушит', ...(nether ? { nether: true } : {}) } }
   let best = null
   for (let dx = -3; dx <= 3; dx++) {
     for (let dz = -3; dz <= 3; dz++) {
@@ -876,21 +881,24 @@ async function escapeFire (session, ctl: any = null) {
         const c = me.offset(dx, dy, dz)
         const b = bot.blockAt(c)
         const f = bot.blockAt(c.offset(0, -1, 0))
-        if (!b || !f || b.name === 'lava' || b.boundingBox !== 'empty' || f.boundingBox !== 'block') continue
+        if (!b || !f || (dx === 0 && dz === 0) || fiery(c) || b.boundingBox !== 'empty' || f.boundingBox !== 'block') continue
         const dd = Math.hypot(dx, dz)
         if (!best || dd < best.dd) best = { c, dd }
       }
     }
   }
   if (best) {
+    const { stepSafe, keyDir } = require('./moves')
     try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
-    bot.setControlState('forward', true)
-    bot.setControlState('jump', true)
-    bot.setControlState('sprint', true)
-    await sleep(1200)
+    const until = gameClock.now() + 1200
+    while (gameClock.now() < until && !ctl.aborted && !bot.entity.position.floored().equals(best.c)) {
+      bot.setControlState('forward', stepSafe(bot, keyDir(bot, 'forward')))
+      bot.setControlState('jump', best.c.y > me.y && !!bot.entity.onGround)
+      await sleep(50)
+    }
     bot.clearControlStates()
   }
-  return { status: 'done', detail: { how: best ? 'выпрыгнул к полу' : 'некуда', ...(nether ? { nether: true } : {}) } }
+  return { status: 'done', detail: { how: best ? 'вышел из огня' : 'некуда', ...(nether ? { nether: true } : {}) } }
 }
 
 module.exports = { Director, situation, GOALS, byDirector, escapeFire }

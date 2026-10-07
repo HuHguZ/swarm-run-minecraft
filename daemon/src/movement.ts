@@ -278,7 +278,9 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
     // Never start a walk from inside a river — pathfinder will just thrash.
     if (inWater(bot)) {
       const esc = await escapeWater(bot, ctl)
-      if (!esc.ok) return { ok: false, error: esc.error }
+      // Отказ без единого таймера (нет пути из воды) — тик игрового времени, иначе цикл вызывающего крутится микрозадачами
+      // и вешает демон (s5c-f4-4 06.10: explore, 100 % CPU, часы стоят).
+      if (!esc.ok) { await sleep(50); return { ok: false, error: esc.error } }
     }
 
     const guard = stuckGuard(bot, ctl)

@@ -435,6 +435,9 @@ const KITS = [
   // меч на случай «обнял»; B — меч, топор, щит: против копья он должен
   // прилипнуть ближе 1.9. Броня — на тело. Рюкзак: A 10, B 8.
   { name: 'копья', onBody: true, a: [...ARMOR.diamond, 'diamond_spear[enchantments={lunge:3}]', 'netherite_spear', 'diamond_sword', 'diamond_axe', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', 'ender_pearl 4', pot('splash_potion', 'strong_healing', 2)], b: [...ARMOR.diamond, 'shield', 'diamond_sword', 'diamond_axe', 'golden_apple 4', 'totem_of_undying', 'cobblestone 64', 'ender_pearl 4', pot('splash_potion', 'strong_healing', 2)] },
+  // Удочка в комбо (s7b, просьба пользователя 06.10): подтяг убегающего/стрелка/«под удар» → рывок со спринт-ударом,
+  // контрмеры — обратный подтяг своей удочкой, удар на подлёте; жемчуг и лук — чтобы было от чего подтягивать.
+  { name: 'удочка в комбо', onBody: true, a: [...ARMOR.iron, 'iron_sword', 'fishing_rod', 'bow', 'arrow 24', 'ender_pearl 3', 'golden_apple 3', 'cobblestone 32'], b: null },
   // Элитры и копьё (s7b 06.10, план пользователя п.2): таран копьём на скорости (combat/aerial-lance — разгон
   // KineticWeapon: 1 + floor(отн. скорость·множитель), на 1.5 б/т железное ≈29 до брони), выход вверх, повтор,
   // посадка. Щитов нет: щит держит урон копья спереди (BlocksAttacks 90°) — таран против щита не планируется.
@@ -496,6 +499,21 @@ const KITS = [
     floor: 'obsidian',
     light: 'crying_obsidian',
     a: [...CRYSTAL_ARMOR, 'diamond_sword[enchantments={sharpness:5}]', 'end_crystal 64', 'obsidian 64', 'bow[enchantments={power:1}]', 'golden_apple 12', 'totem_of_undying', 'totem_of_undying', 'totem_of_undying', 'totem_of_undying', 'arrow 64', 'enchanted_golden_apple 1', 'end_crystal 32', 'experience_bottle 64', 'experience_bottle 64'],
+    b: null
+  },
+  // Кристаллы и щит (S7c, 07.10): тот же набор плюс щит — защита «щит лицом к его кристаллу» (взрыв
+  // кристалла щит гасит целиком в передних 90°, толчок — нет), атака — кристалл за его спину, когда щит поднят.
+  // Тотем — в левой руке, щит берётся в правую. Имя без «кристаллы»: фильтр KIT='кристаллы' его не берёт.
+  // Топор (s7c1 р.3: щит против щита — 192 с ничья): удар топором выключает его щит на 5 с (javap Item$Properties.axe:
+  // tool(…, disableBlockingForSeconds 5.0)).
+  {
+    name: 'кристалл со щитом',
+    onBody: true,
+    fixedEnch: true,
+    offhand: 'totem_of_undying',
+    floor: 'obsidian',
+    light: 'crying_obsidian',
+    a: [...CRYSTAL_ARMOR, 'diamond_sword[enchantments={sharpness:5}]', 'end_crystal 64', 'obsidian 64', 'shield', 'diamond_axe', 'bow[enchantments={power:1}]', 'golden_apple 12', 'totem_of_undying', 'totem_of_undying', 'totem_of_undying', 'totem_of_undying', 'arrow 64', 'enchanted_golden_apple 1', 'end_crystal 32', 'experience_bottle 64', 'experience_bottle 64'],
     b: null
   },
   // Якоря (бонус, 2026-09-30): тот же набор кристаллов плюс якоря возрождения и
@@ -947,7 +965,7 @@ async function round (kit, n) {
   log(`итог: ${winner ? 'победил ' + winner : 'ничья'} | счёт ${NA} ${score[NA]} : ${score[NB]} ${NB}, ничьих ${score.draw}`)
   // Машинная строка раунда (сводка — farm/crystal/csum.js, 2026-09-30).
   // Сводка — farm/crystal/tsum.js: частоты и урон приёмов (trickDmg), фактический TPS.
-  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, calc: d.calc, tricks: d.tricks, trickDmg: d.trickDmg })
+  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, rod: d.rod, calc: d.calc, tricks: d.tricks, trickDmg: d.trickDmg })
   const tick1 = gameClock.snapshot()?.ticks ?? null
   const phys1 = [await phys(A), HUMAN ? null : await phys(B)]
   const share = (i) => phys0[i] && phys1[i] && phys1[i].t > phys0[i].t ? Math.round((phys1[i].p - phys0[i].p) / (phys1[i].t - phys0[i].t) * 100) / 100 : null

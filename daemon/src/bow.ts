@@ -720,6 +720,11 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
     if (shouldStop?.()) { stopTick(); cancelDraw(); return { s, stopped: true } }
     if (!charge.ready(short ? 0 : 20)) { stopTick(); cancelDraw(); return { s, chargeError: charge.why() || 'bow_charge_not_confirmed' } }
     if (!point && !hasObservedVelocity(entity)) { stopTick(); cancelDraw(); return { s, unobserved: true } }
+    // release_use_item поворота не несёт: стрела летит по последнему отправленному look, а он — из тела. Голова не там,
+    // где решение (сторож взгляда эндермена опустил её, поворот под замком не успел) — не стрелять мимо (s5c 06.10).
+    if (bot.entity && (Math.abs(bot.entity.pitch - s.pitch) > 0.05 || Math.abs(Math.atan2(Math.sin(bot.entity.yaw - s.yaw), Math.cos(bot.entity.yaw - s.yaw))) > 0.05)) {
+      stopTick(); cancelDraw(); return { s, stopped: true }
+    }
     sol = s; me = position
     bot.on('entitySpawn', onSpawn); bot.on('entityHurt', onHurt)
     if (follow) { try { bot._client.on('packet', onRaw) } catch {} }

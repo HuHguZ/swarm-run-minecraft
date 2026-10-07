@@ -63,6 +63,28 @@ const anchorReady = (bot, k) => k.anchors > 0 && k.glowstone > 0 && ANCHOR_WORLD
 
 const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
 const r1 = (x) => Math.round(x * 10) / 10
+// S7c (07.10): щит в размене и в защите, уход в укрытие и блок между, хп соперника-игрока — оценкой.
+// ND_CX2=0 — поведение до S7c (A/B серий).
+const CX2 = process.env.ND_CX2 !== '0'
+
+// Щит (javap 1.21.11, research/claude-1006/s7c/jar): взрыв кристалла/якоря не в #bypasses_shield,
+// LivingEntity.applyItemBlocking → BlocksAttacks.resolveBlockedDamage по DamageSource.getSourcePosition
+// (кристалл — его позиция, якорь — центр блока): горизонтальный угол взгляда на источник ≤ 90° — урон 0
+// (DamageReduction щита: base 0, factor 1). Толчок взрыва щит не гасит (ServerExplosion.hurtEntities: push
+// после hurtServer). Держит через 5 тиков после подъёма.
+function shieldUpOf (bot, e) {
+  try { const u = require('./pvp/combat-observe').usingOf(bot, e); return !!(u && u.name === 'shield') } catch { return false }
+}
+// Кэш лучей без одной клетки: якорь снимается раньше взрыва (RespawnAnchorBlock.explode: removeBlock, потом
+// explode) — его блок лучам не преграда. Кэш — как в boom.segmentBlocked (get/set по «x,y,z»).
+function without (cache, cell) {
+  const ak = `${cell.x},${cell.y},${cell.z}`
+  return { get: (k) => (k === ak ? null : cache.get(k)), set: (k, v) => { if (k !== ak) cache.set(k, v) }, has: (k) => k === ak || cache.has(k) }
+}
+function shieldCovers (e, at, src) {
+  const dm = require('./pvp/damage-model')
+  return dm.shieldAngle(e.headYaw ?? e.yaw ?? 0, at || e.position, src) <= dm.SHIELD_HALF_ANGLE
+}
 
 // ---------------------------------------------------------------- геометрия
 
@@ -234,8 +256,10 @@ function feetCell (p) { return new Vec3(Math.floor(p.x), Math.floor(p.y + 1e-3),
 // держится на нём, а не на лучах. Финальная партия b4: 15 из 298 подрывов
 // дали мне больше прогноза на 3+ (шаг из-за укрытия за 2–3 тика до взрыва,
 // лучи вскользь по краю окружения), один — хлопнул свой тотем при прогнозе 0.3.
-function trade (bot, center, him, me, dHim, dMe, cache, { himAt = null, meAt = null, power = P }: any = {}) {
-  const h = boom.blast(bot, center, power, himAt || him.position, { def: dHim, cache })
+// himShield — его щит поднят (shieldUpOf): источник в его передних 90° — ему 0 (сырой тоже: окна нет).
+function trade (bot, center, him, me, dHim, dMe, cache, { himAt = null, meAt = null, power = P, himShield = false }: any = {}) {
+  let h = boom.blast(bot, center, power, himAt || him.position, { def: dHim, cache })
+  if (himShield && h.raw > 0 && shieldCovers(him, himAt, center)) h = { ...h, dmg: 0, raw: 0, blocked: true }
   const m = boom.blast(bot, center, power, meAt || me.position, { def: dMe, cache })
   const mx = boom.blast(bot, center, power, meAt || me.position, { def: dMe, seen: 1 })
   return { him: h.dmg, me: m.dmg, meMax: mx.dmg, himRaw: h.raw, meRaw: m.raw, himSeen: h.seen, meSeen: m.seen }
@@ -279,12 +303,23 @@ function worthHit (t, { myEff, hisEff, hisLand, press = false, hisTotem = false 
 
 // ---------------------------------------------------------------- бой
 
-function create (bot, { enemy, used = () => {} }: any = {}) {
+// foeHp(foe) — ЭХП соперника-игрока для решений: оценка (pvp.foeHpDecide, правило 06.10 «хп игрока только
+// оценкой»); без неё и для мобов — метаданные. noteAttack(range, {projectile}) — подтверждённый урон для
+// оценки (combat-observe.trackFoe): damage_event с причиной «я» вычитает этот интервал.
+function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null }: any = {}) {
   const st: any = {
     placed: 0, obby: 0, hits: 0, shots: 0, pre: 0, booms: 0, mine: 0, his: 0,
     dealt: [], self: 0, selfPops: 0, popsDealt: 0, popsTaken: 0, hisPops: 0, myPops: 0,
     surround: 0, surroundBlocks: 0, defuse: 0, free: 0, dodges: 0,
-    wallPlace: 0, wallHit: 0, fails: {}
+    wallPlace: 0, wallHit: 0, fails: {},
+    // Его подрывы у меня: threats — взрыв, который при полной видимости снял бы мне ≥ 4; evaded — из них
+    // пришло ≤ max(1.5, четверть); threatMax/threatTaken — суммы прогноза и пришедшего (телеметрия, точное хп своё).
+    threats: 0, evaded: 0, threatMax: 0, threatTaken: 0
+  }
+  const isPlayerE = (e) => !!e && (e.type === 'player' || !!e.username)
+  const hisHp = (foe) => {
+    if (CX2 && foeHp && isPlayerE(foe)) { const v = foeHp(foe); if (typeof v === 'number' && Number.isFinite(v)) return v }
+    return effHp(bot, foe)
   }
   const mine = new Map() // id → { at, how, hitAt }
   const exploded = [] // { at, center, mine }
@@ -305,6 +340,19 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
   let lastObby = 0
   let lastMend = 0
   let lastAnchor = 0
+  let shieldUntil = 0
+  let bowSeenAt = -1e9
+  // Щит подряд (s7c1 «кристалл со щитом» р.3: оба 75 раз под щитом, 192 с ничья): дольше 2.5 с без подрыва —
+  // щит из вариантов уклонения вон, остаются укрытие/блок/отход (кристалл стоит — уйти от него, а не стоять).
+  let shieldStreakAt = 0
+  let shieldLastEnd = -1e9
+  let coverSince = null
+  // Якоря рядом (S7c, просьба пользователя 01:26 — наравне с кристаллами): блоки respawn_anchor по blockUpdate;
+  // mine — поставил я. anchorClick — мой клик-подрыв (свой или его якорь): чей взрыв силы 5.
+  const anchorsAt = new Map()
+  const myAnchorCells = new Set()
+  let anchorClick = null
+  const cellKey = (p) => `${p.x},${p.y},${p.z}`
   let worstCache = { at: 0, v: 0 }
   const fail = (why) => { st.fails[why] = (st.fails[why] || 0) + 1 }
 
@@ -316,9 +364,14 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       while (gone.length > 30) gone.shift()
     } catch {}
   }
+  // Когда кристалл появился: его подрыв «сразу» (≤ 6 тиков — поставил и ударил) от него не уйти, «потом»
+  // (заранее в моё окно, стрелой издалека) — уклонению время есть. Счёт уклонений — по обоим.
+  const spawnAt = new Map()
   const onSpawn = (e) => {
     try {
       if (!e || e.name !== 'end_crystal') return
+      spawnAt.set(e.id, gameClock.now())
+      if (spawnAt.size > 60) spawnAt.delete(spawnAt.keys().next().value)
       if (!mine.has(e.id)) {
         const foe = enemy()
         if (foe && foe.position && e.position.distanceTo(foe.position) < 6) sawHis = gameClock.now()
@@ -353,6 +406,34 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
         const now5 = gameClock.now()
         if (bot.entity) { const m = boom.blast(bot, at5, 5, bot.entity.position, { def: boom.defenseOf(bot, bot.entity) }); if (m.raw > 1.01) myWin = winUpdate(myWin, now5, m.raw) }
         if (f5 && f5.position) { const h = boom.blast(bot, at5, 5, f5.position, { def: boom.defenseOf(bot, f5) }); if (h.raw > 1.01) hisWin = winUpdate(hisWin, now5, h.raw) }
+        // Счёт якорей (телеметрия, точное хп): мой клик по этой клетке за 600 мс — мой подрыв (свой якорь или
+        // его, сбитый первым); иначе — его подрыв у меня: прогноз при полной видимости и что пришло.
+        const k5 = cellKey(new Vec3(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z)))
+        const own5 = !!(anchorClick && anchorClick.key === k5 && now5 - anchorClick.at < 600)
+        const his0 = f5 && f5.position ? effHp(bot, f5) : null
+        const my0 = bot.entity ? effHp(bot, bot.entity) : 0
+        let thr5 = 0
+        if (!own5 && bot.entity) { try { thr5 = boom.blast(bot, at5, 5, bot.entity.position, { def: boom.defenseOf(bot, bot.entity), seen: 1 }).dmg } catch {} }
+        gameClock.setTimeout(() => {
+          try {
+            const popHim = pops.some(p => p.who === 'him' && p.at >= now5 - 150 && p.at <= now5 + 400)
+            const popMe = pops.some(p => p.who === 'me' && p.at >= now5 - 150 && p.at <= now5 + 400)
+            const f = enemy()
+            const my1 = effHp(bot, bot.entity)
+            if (own5) {
+              const his1 = f && f.isValid !== false ? effHp(bot, f) : 0
+              ;(st.anchorDealt = st.anchorDealt || []).push(r1(popHim ? Math.max(0, his0 ?? 0) : Math.max(0, (his0 ?? 0) - his1)))
+              st.anchorSelf = r1((st.anchorSelf || 0) + (popMe ? my0 : Math.max(0, my0 - my1)))
+              if (popMe) st.anchorSelfPops = (st.anchorSelfPops || 0) + 1
+            } else if (thr5 >= 4) {
+              const took = popMe ? my0 : Math.max(0, my0 - my1)
+              st.anchorThreats = (st.anchorThreats || 0) + 1
+              st.anchorThreatMax = r1((st.anchorThreatMax || 0) + thr5)
+              st.anchorThreatTaken = r1((st.anchorThreatTaken || 0) + took)
+              if (took <= Math.max(1.5, thr5 * 0.25)) st.anchorEvaded = (st.anchorEvaded || 0) + 1
+            }
+          } catch {}
+        }, 400)
         return
       }
       if (!c || !(pkt.radius > 5.5 && pkt.radius < 6.5)) return
@@ -363,6 +444,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       for (const e of ((Object.values(bot.entities) as any[]) as any)) if (e && e.name === 'end_crystal' && e.position && e.position.distanceTo(at) < 0.2) { ent = e; break }
       if (!ent) { const g = gone.find(x => gameClock.now() - x.at < 1000 && x.pos.distanceTo(at) < 0.2); if (g) ent = { id: g.id } }
       const rec = ent && mine.get(ent.id)
+      const age = ent && spawnAt.has(ent.id) ? gameClock.now() - spawnAt.get(ent.id) : null
       const own = !!(rec && rec.hitAt && gameClock.now() - rec.hitAt < 600)
       st.booms++
       if (own) st.mine++; else st.his++
@@ -380,7 +462,10 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
         hisBefore = effHp(bot, foe)
       }
       const myBefore = effHp(bot, bot.entity)
-      const ev = { at: now, center: at, own, hisBefore, myBefore, popHim: false, popMe: false }
+      // Его подрыв рядом со мной: что дал бы при полной видимости (без щита и укрытия).
+      let threat = 0
+      if (!own && bot.entity) { try { threat = boom.blast(bot, at, P, bot.entity.position, { def: boom.defenseOf(bot, bot.entity), seen: 1 }).dmg } catch {} }
+      const ev: any = { at: now, center: at, own, hisBefore, myBefore, popHim: false, popMe: false, threat, slow: age != null && age > 300 }
       exploded.push(ev)
       while (exploded.length > 40) exploded.shift()
       gameClock.setTimeout(() => {
@@ -401,6 +486,18 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
             const self = ev.popMe ? myBefore : Math.max(0, myBefore - myAfter)
             st.self = r1(st.self + self)
             if (DEBUG) console.log('[crystal] мой взрыв:', JSON.stringify({ dealt: r1(dealt), self: r1(self), popHim: ev.popHim, popMe: ev.popMe }))
+          }
+          // Всё, что пришло от его подрывов (и тех, от которых ушёл дальше «угрозы»): урон на его подрыв.
+          if (!own) st.hisTaken = r1((st.hisTaken || 0) + (ev.popMe ? myBefore : Math.max(0, myBefore - myAfter)))
+          if (!own && ev.threat >= 4) {
+            const took = ev.popMe ? myBefore : Math.max(0, myBefore - myAfter)
+            st.threats++
+            st.threatMax = r1(st.threatMax + ev.threat)
+            st.threatTaken = r1(st.threatTaken + took)
+            const ok = took <= Math.max(1.5, ev.threat * 0.25)
+            if (ok) st.evaded++
+            if (ev.slow) { st.threatsSlow = (st.threatsSlow || 0) + 1; if (ok) st.evadedSlow = (st.evadedSlow || 0) + 1; st.threatSlowMax = r1((st.threatSlowMax || 0) + ev.threat); st.threatSlowTaken = r1((st.threatSlowTaken || 0) + took) }
+            if (DEBUG) console.log('[crystal] его взрыв у меня:', JSON.stringify({ threat: r1(ev.threat), took: r1(took), shield: shieldUntil > ev.at }))
           }
         } catch {}
       }, 400)
@@ -430,9 +527,18 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       while (pops.length > 40) pops.shift()
     } catch {}
   }
+  const onBlock = (oldB, newB) => {
+    try {
+      const b = newB || oldB
+      if (!b || !b.position) return
+      const k = cellKey(b.position)
+      if (newB && newB.name === 'respawn_anchor') { if (!anchorsAt.has(k)) anchorsAt.set(k, { pos: newB.position.clone(), mine: myAnchorCells.has(k), at: gameClock.now() }) } else anchorsAt.delete(k)
+    } catch {}
+  }
   bot.on('entitySpawn', onSpawn)
   bot.on('entityGone', onGone)
   bot.on('entityHurt', onHurt)
+  bot.on('blockUpdate', onBlock)
   try { bot._client.on('explosion', onExplosion) } catch {}
   try { bot._client.on('entity_status', onStatus) } catch {}
   try { bot._client.on('damage_event', onDamage) } catch {}
@@ -440,6 +546,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     bot.removeListener('entitySpawn', onSpawn)
     bot.removeListener('entityGone', onGone)
     bot.removeListener('entityHurt', onHurt)
+    bot.removeListener('blockUpdate', onBlock)
     try { bot._client.removeListener('explosion', onExplosion) } catch {}
     try { bot._client.removeListener('entity_status', onStatus) } catch {}
     try { bot._client.removeListener('damage_event', onDamage) } catch {}
@@ -482,6 +589,193 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     return worst
   }
 
+  // ------------------------------------------------------------ уклонение (S7c)
+  // Его кристалл у меня, он его достаёт. Варианты — щит лицом к кристаллу, клетка-укрытие, блок между —
+  // считаются ожидаемым уроном: пока вариант не готов (тики), подрыв может прийти с прежней силой.
+  // Подрыв — равномерно в ближайшие HAZ тиков (он ставит и бьёт за 2–3 тика, ждёт конца моего окна ≤ 10).
+  const HAZ = 10
+  const passable = (b) => !!b && b.boundingBox === 'empty' && !/lava|fire|cobweb|water|powder_snow/.test(b.name)
+  const standable = (cell, cache) => {
+    const below = blockAt(bot, cache, cell.x, cell.y - 1, cell.z)
+    return solidB(below) && below.name !== 'magma_block' && passable(blockAt(bot, cache, cell.x, cell.y, cell.z)) && passable(blockAt(bot, cache, cell.x, cell.y + 1, cell.z))
+  }
+  // Сколько мне от его кристаллов в точке pos: худший целиком, остальные — доля (окно после первого).
+  function hurtAt (threats, pos, dMe, cache) {
+    const d = threats.map(th => boom.blast(bot, th.c.position, th.power || P, pos, { def: dMe, cache: th.cell ? without(cache, th.cell) : cache }).dmg).sort((a, b) => b - a)
+    return d.length ? d[0] + 0.3 * d.slice(1).reduce((s, x) => s + x, 0) : 0
+  }
+  // Прямой ход по ровному: каждая точка линии — клетка на высоте ног проходима, под ней опора.
+  function lineClear (from, to, cache) {
+    const n = Math.max(1, Math.ceil(from.distanceTo(to) / 0.25))
+    for (let i = 1; i <= n; i++) {
+      const p = from.plus(to.minus(from).scaled(i / n))
+      const c = new Vec3(Math.floor(p.x), Math.floor(from.y + 1e-3), Math.floor(p.z))
+      if (!standable(c, cache)) return false
+    }
+    return true
+  }
+  function coverSpot (threats, dMe, cache) {
+    const me = bot.entity.position
+    const fc = feetCell(me)
+    let best = null
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dz = -3; dz <= 3; dz++) {
+        for (const dy of [0, -1, 1]) {
+          if (!dx && !dz) continue
+          const h = Math.hypot(dx, dz)
+          if (h > 3.2 || (dy !== 0 && h > 1.5)) continue
+          const cell = new Vec3(fc.x + dx, fc.y + dy, fc.z + dz)
+          if (!standable(cell, cache)) continue
+          if (dy === 1 && !passable(blockAt(bot, cache, fc.x, fc.y + 2, fc.z))) continue
+          if (dy === 0 && !lineClear(me, new Vec3(cell.x + 0.5, me.y, cell.z + 0.5), cache)) continue
+          const pos = new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5)
+          const dmg = hurtAt(threats, pos, dMe, cache)
+          const ticks = Math.ceil(Math.hypot(pos.x - me.x, pos.z - me.z) / 0.26) + (dy ? 3 : 1)
+          if (!best || dmg + ticks * 0.05 < best.dmg + best.ticks * 0.05) best = { pos, cell, dmg, ticks }
+        }
+      }
+    }
+    return best
+  }
+  // Чем ставить блок между: обсидиан, иначе булыжник, иначе светокамень сверх двух (заряд якоря).
+  const wallItem = () => { const k = kitOf(bot); return k.obsidian > 0 ? 'obsidian' : countOf(bot, 'cobblestone') > 0 ? 'cobblestone' : k.glowstone > 2 ? 'glowstone' : null }
+  const wallBlocks = () => { const k = kitOf(bot); return k.obsidian + countOf(bot, 'cobblestone') + Math.max(0, k.glowstone - 2) }
+  // Блок обсидиана между мной и кристаллом (один или столбик из двух): лучи к телу упираются в него.
+  // Ставится только честно (видимая грань опоры) и не в рамку сущности (кристалл 2×2×2 мешает стройке).
+  function wallSpot (threats, dMe, cache) {
+    if (wallBlocks() < 1) return null
+    const me = bot.entity.position
+    const eye = me.offset(0, EYE, 0)
+    const fc = feetCell(me)
+    const boxes = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.position && e.isValid !== false &&
+      (e.type === 'player' || e.name === 'end_crystal' || /mob|hostile|animal|passive/.test(e.type || ''))).map((e : any) => e.name === 'end_crystal' ? crystalBox(e.position) : boxOf(e))
+    const key = (c) => `${c.x},${c.y},${c.z}`
+    const faceOk = (cell) => {
+      for (const n of [new Vec3(0, -1, 0), ...SIDES]) {
+        const ref = cell.plus(n)
+        if (!solidB(blockAt(bot, cache, ref.x, ref.y, ref.z))) continue
+        if (pick.faceAim(bot, ref, n.scaled(-1), { eye, range: PLACE_R - 0.05 })) return true
+      }
+      return false
+    }
+    const singles = []
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        if (!dx && !dz) continue
+        const cell = new Vec3(fc.x + dx, fc.y, fc.z + dz)
+        if (!isAirB(blockAt(bot, cache, cell.x, cell.y, cell.z))) continue
+        if (!threats.some(th => (cell.x + 0.5 - me.x) * (th.c.position.x - me.x) + (cell.z + 0.5 - me.z) * (th.c.position.z - me.z) > 0)) continue
+        const cb = { minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 }
+        if (boxes.some(b => intersects(cb, b))) continue
+        if (!faceOk(cell)) continue
+        const sim = new Map(cache)
+        sim.set(key(cell), [[0, 0, 0, 1, 1, 1]])
+        singles.push({ cells: [cell], dmg: hurtAt(threats, me, dMe, sim), ticks: 3, sim })
+      }
+    }
+    singles.sort((a, b) => a.dmg - b.dmg)
+    let best = singles[0] || null
+    // Столбик: второй блок на первый (грань — его верх, глаза выше неё).
+    for (const s of singles.slice(0, 4)) {
+      const up = s.cells[0].offset(0, 1, 0)
+      if (!isAirB(blockAt(bot, cache, up.x, up.y, up.z))) continue
+      const ub = { minX: up.x, minY: up.y, minZ: up.z, maxX: up.x + 1, maxY: up.y + 1, maxZ: up.z + 1 }
+      if (boxes.some(b => intersects(ub, b)) || up.offset(0.5, 1, 0.5).distanceTo(eye) > PLACE_R - 0.2 || eye.y <= up.y) continue
+      if (wallBlocks() < 2) break
+      const sim = new Map(s.sim)
+      sim.set(key(up), [[0, 0, 0, 1, 1, 1]])
+      const dmg = hurtAt(threats, me, dMe, sim)
+      if (!best || dmg + 0.15 < best.dmg) best = { cells: [s.cells[0], up], dmg, ticks: 6, sim }
+    }
+    return best
+  }
+  // Блок-заслон для своего якоря: клетка у моих ног (или у головы) в сторону якоря, честно ставится, не прячет
+  // от глаз верх якоря (по нему клик заряда и подрыва). Возвращает лучший { cell, t } по размену.
+  function guardFor (anchorCell, center, cache, living, { himAt, dHim, dMe, foe, himShield }: any) {
+    const me = bot.entity.position
+    const eye = me.offset(0, EYE, 0)
+    const mc = feetCell(me)
+    const top = anchorCell.offset(0.5, 1, 0.5)
+    const toTop = top.minus(eye); const lenTop = toTop.norm(); const dirTop = toTop.scaled(1 / lenTop)
+    let best = null
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (const dy of [0, 1]) {
+          if (!dx && !dz) continue
+          const cell = new Vec3(mc.x + dx, mc.y + dy, mc.z + dz)
+          if (cell.equals(anchorCell)) continue
+          if ((cell.x + 0.5 - me.x) * (center.x - me.x) + (cell.z + 0.5 - me.z) * (center.z - me.z) <= 0) continue
+          if (!isAirB(blockAt(bot, cache, cell.x, cell.y, cell.z))) continue
+          const cb = { minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 }
+          if (living.some(e => intersects(cb, boxOf(e)))) continue
+          if (pick.rayBox(eye, dirTop, { x: cb.minX, y: cb.minY, z: cb.minZ }, { x: cb.maxX, y: cb.maxY, z: cb.maxZ }, lenTop) != null) continue
+          let face = false
+          for (const n of [new Vec3(0, -1, 0), ...SIDES]) {
+            const ref = cell.plus(n)
+            if (ref.equals(anchorCell) || !solidB(blockAt(bot, cache, ref.x, ref.y, ref.z))) continue
+            if (pick.faceAim(bot, ref, n.scaled(-1), { eye, range: PLACE_R - 0.05 })) { face = true; break }
+          }
+          if (!face) continue
+          const sim = new Map(cache)
+          sim.set(cellKey(cell), [[0, 0, 0, 1, 1, 1]])
+          const t = trade(bot, center, foe, bot.entity, dHim, dMe, without(sim, anchorCell), { himAt, power: ANCHOR_P, himShield })
+          if (!best || t.him - 1.3 * t.me > best.t.him - 1.3 * best.t.me) best = { cell, t }
+        }
+      }
+    }
+    return best
+  }
+  function hasShield () { return !!bot.inventory.items().find(i => i.name === 'shield') || (bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield') }
+  // Щит одной стороной: направление на худший кристалл; кого конус (≤ 85°, запас к 90) не берёт — урон идёт.
+  function shieldPlan (threats, dMe, cache) {
+    if (!hasShield()) return null
+    const me = bot.entity.position
+    const worst = threats.slice().sort((a, b) => b.t.me - a.t.me)[0]
+    const yaw = Math.atan2(-(worst.c.position.x - me.x), -(worst.c.position.z - me.z))
+    const dm = require('./pvp/damage-model')
+    const open = threats.filter(th => dm.shieldAngle(yaw, me, th.c.position) > 85)
+    const inHand = (bot.heldItem && bot.heldItem.name === 'shield') || (bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
+    return { yaw, dmg: open.length ? hurtAt(open, me, dMe, cache) : 0, ticks: dm.SHIELD_DELAY_TICKS + (inHand ? 1 : 2) }
+  }
+  // Прикрыт от его кристаллов (лучей к телу почти нет, при полной видимости было бы ≥ 4): его кристалл в прицеле
+  // и мне от него ≤ 1.5 — сбить первым (угроза снята); иначе — держать укрытие (не выходить в ближний бой) до 3 с.
+  function coverHold (threats, { dMe, myEff, cache, eye, now, far = true }: any) {
+    const open = Math.max(...threats.map(th => th.t.meMax ?? th.t.me))
+    const here = hurtAt(threats, bot.entity.position, dMe, cache)
+    if (!(open >= 4 && here <= Math.max(1.5, open * 0.35))) { coverSince = null; return null }
+    for (const th of threats) {
+      if (th.cell) continue
+      const aim = hitAim(bot, th.c.position, eye)
+      if (aim && th.t.me <= 1.5 && Math.max(th.t.me, th.t.meMax ?? th.t.me) < myEff - 3) return { kind: 'defuse', c: th.c, t: th.t, aim, why: 'clear', note: `сбил его кристалл из-за укрытия (мне ${r1(th.t.me)})` }
+    }
+    if (coverSince == null) coverSince = now
+    if (now - coverSince > 3000 || !far) return null
+    st.coverHolds = (st.coverHolds || 0) + 1
+    return { kind: 'hold', note: '' }
+  }
+  function evade (threats, { dMe, myEff, cache, foe }: any) {
+    const me = bot.entity.position
+    const now0 = hurtAt(threats, me, dMe, cache)
+    if (now0 < 2.5) return null
+    const exp = (o) => { const p = Math.min(1, o.ticks / HAZ); return p * now0 + (1 - p) * o.dmg }
+    const opts = []
+    const t0s = gameClock.now()
+    const sh = (t0s - shieldLastEnd < 600 && t0s - shieldStreakAt > 2500) ? null : shieldPlan(threats, dMe, cache)
+    if (sh) opts.push({ kind: 'shield', yaw: sh.yaw, threats, dmg: sh.dmg, ticks: sh.ticks })
+    const cv = coverSpot(threats, dMe, cache)
+    if (cv && cv.dmg < now0) opts.push({ kind: 'cover', to: cv.pos, threats, dmg: cv.dmg, ticks: cv.ticks })
+    const wl = wallSpot(threats, dMe, cache)
+    if (wl && wl.dmg < now0) opts.push({ kind: 'wall', cells: wl.cells, threats, dmg: wl.dmg, ticks: wl.ticks })
+    let best = null
+    for (const o of opts) { o.exp = exp(o); if (!best || o.exp < best.exp) best = o }
+    st.evadePlans = (st.evadePlans || 0) + 1
+    if (!best || best.exp > now0 - 1.5) return null
+    const what = best.kind === 'shield' ? 'щит лицом к его кристаллу' : best.kind === 'cover' ? 'в укрытие от его кристалла' : `блок между мной и его кристаллом (${best.cells.length})`
+    best.note = `${what}: ${r1(now0)} → ${r1(best.dmg)} (ожидаемо ${r1(best.exp)}, из ${r1(myEff)})`
+    best.now = now0
+    return best
+  }
+
   // ------------------------------------------------------------ план
   // ctx: { vel } — его скорость (б/т) для упреждения на 3 тика.
   // Время плана (лучи видимости — десятки на клетку): в отчёт среднее и худшее.
@@ -507,7 +801,8 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     const dMe = boom.defenseOf(bot, bot.entity)
     const dHim = boom.defenseOf(bot, foe)
     const myEff = effHp(bot, bot.entity)
-    const hisEff = effHp(bot, foe)
+    const hisEff = hisHp(foe)
+    const himShield = CX2 && shieldUpOf(bot, foe)
     const v = ctx.vel || { x: 0, y: 0, z: 0 }
     const himAt = foe.position.offset(v.x * 3, 0, v.z * 3)
     const hisW = inWin(hisWin)
@@ -516,6 +811,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     const hisEye = foe.position.offset(0, EYE, 0)
     const hisHand = foe.equipment && foe.equipment[0] ? foe.equipment[0].name : ''
     const hisBow = /^(bow|crossbow)$/.test(hisHand)
+    if (hisBow) bowSeenAt = now
     const crystals = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'end_crystal' && e.position && e.isValid !== false &&
       (e.position.distanceTo(me) < 13 || e.position.distanceTo(foe.position) < 13))
     if (!crystals.length && !k.crystals && !anchorReady(bot, k)) return null
@@ -527,10 +823,43 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     // 1. Его (и любой) кристалл у меня: сбить выгодно или в своё окно; иначе
     //    отойти, если он его достаёт.
     let danger = null
+    const threats = []
     for (const c of (crystals as any)) {
-      const t = trade(bot, c.position, foe, bot.entity, dHim, dMe, cache)
-      if (t.me < 2) continue
-      if (!danger || t.me > danger.t.me) danger = { c, t }
+      const t = trade(bot, c.position, foe, bot.entity, dHim, dMe, cache, { himShield })
+      // Прикрыт (лучей почти нет), а в открытую было бы ≥ 4 — в угрозы для «держать укрытие», не в «опасность».
+      const covered = CX2 && t.me < 2 && (t.meMax ?? 0) >= 4
+      if (t.me < 2 && !covered) continue
+      if (boxDist(hisEye, crystalBox(c.position)) <= HIT_R + 0.4 || hisBow || (CX2 && now - bowSeenAt < 60000 && c.position.distanceTo(hisEye) < 24 && losClear(bot, hisEye, c.position.offset(0, 1, 0)))) threats.push({ c, t })
+      if (!covered && (!danger || t.me > danger.t.me)) danger = { c, t }
+    }
+    // Его якоря у меня (S7c): заряженный он подорвёт одним кликом, пустой — двумя (светокамень, клик). Достаёт,
+    // если центр в 4.5 от его глаз. Свой клик по его заряженному якорю — подрыв, когда размен в мою пользу
+    // (взрыв ни на кого не записан, но бьёт его сильнее); иначе — уклонение ценой, как от кристалла.
+    if (CX2) {
+      for (const a of anchorsAt.values()) {
+        if (a.mine || a.pos.distanceTo(me) > 8) continue
+        const b = blockAt(bot, cache, a.pos.x, a.pos.y, a.pos.z)
+        if (!b || b.name !== 'respawn_anchor') continue
+        let charges = 0
+        try { charges = Number(b.getProperties().charges) || 0 } catch {}
+        const center = a.pos.offset(0.5, 0.5, 0.5)
+        const t = trade(bot, center, foe, bot.entity, dHim, dMe, without(cache, a.pos), { power: ANCHOR_P, himShield })
+        if (t.me < 2 && !((t.meMax ?? 0) >= 4)) continue
+        const th = { c: { position: center, id: 'a' + cellKey(a.pos), isValid: true }, t, power: ANCHOR_P, cell: a.pos, charges }
+        if (center.distanceTo(hisEye) <= PLACE_R + 0.5) threats.push(th)
+        const hisLand = landed(t, hisW, dHim)
+        const worstMe = Math.max(t.me, t.meMax ?? t.me)
+        if (charges > 0 && worstMe < myEff - 3 && hisLand >= t.me * 1.2 + 1 && now - lastAnchor > 600) {
+          const ff = faceFor(bot, a.pos, eye, pickBlockers(bot, eye))
+          if (ff) return { kind: 'anchorPop', cell: a.pos, t, note: `его якорь у нас — подорвал сам, ему больнее (${r1(hisLand)} против ${r1(t.me)})` }
+        }
+      }
+      if (!danger && threats.length && now - lastDodge > 400) {
+        const ev = evade(threats, { dMe, myEff, cache, foe })
+        if (ev) return ev
+        const ch = coverHold(threats, { dMe, myEff, cache, eye, now, far: dist > 3.6 })
+        if (ch) return ch
+      }
     }
     if (danger) {
       const { c, t } = danger
@@ -543,6 +872,14 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       if (aim && worstMe < myEff - 3 && hisLand >= t.me * 1.2 + 1) return { kind: 'defuse', c, t, aim, why: 'trade', note: `сбил кристалл у нас — ему больнее (${r1(hisLand)} против ${r1(t.me)})` }
       const hisReach = boxDist(hisEye, crystalBox(c.position)) <= HIT_R + 0.4 || hisBow
       const lethal = t.me >= myEff - 1
+      // S7c: защита ценой — щит лицом к кристаллу, укрытие (клетка, где лучей к телу нет), блок между —
+      // против «стоять» по ожидаемому урону (evade). Сбить его кристалл сам — выше, когда размен в мою пользу.
+      if (CX2 && threats.length && now - lastDodge > 400) {
+        const ev = evade(threats, { dMe, myEff, cache, foe })
+        if (ev) return ev
+        const ch = coverHold(threats, { dMe, myEff, cache, eye, now, far: dist > 3.6 })
+        if (ch) return ch
+      }
       if (hisReach && (lethal || t.me >= Math.max(5, myEff * 0.45)) && now - lastDodge > 700) {
         return { kind: 'dodge', from: c.position, t, note: `ухожу от его кристалла (прогноз ${r1(t.me)} из ${r1(myEff)})` }
       }
@@ -552,11 +889,20 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     //    на обсидиан у его ног (рукой сразу, заранее в его окно, или «поставил
     //    — отошёл — стрела»).
     let best = null
-    const consider = (o) => { if (!best || o.score > best.score) best = o }
+    // Край, яма, лава рядом с ним (S7c): толчок взрыва (1−d)·вид. по «центр → глаза» сбросит его — к цене +5.
+    const edgy = CX2 && (() => { try { return require('./edges').hazardAround(bot, foe.position, 5, new Map()) } catch { return false } })()
+    const consider = (o) => {
+      if (edgy && o.c && (o.land ?? 0) >= 1.5 && o.kind !== 'obby') {
+        let off = false
+        try { off = boom.judge(bot, foe, o.c.position || o.c, P, { cache, foeAt: himAt }).off } catch {}
+        if (off) { o.score += 5; o.knock = true; o.note = (o.note || '') + ' — толчком за край' }
+      }
+      if (!best || o.score > best.score) best = o
+    }
     const bonus = (land) => (land >= hisEff - 0.5 ? 6 : 0)
     for (const c of (crystals as any)) {
       if (c.position.distanceTo(foe.position) > 7) continue
-      const t = trade(bot, c.position, foe, bot.entity, dHim, dMe, cache, { himAt })
+      const t = trade(bot, c.position, foe, bot.entity, dHim, dMe, cache, { himAt, himShield })
       const land = landed(t, hisW, dHim)
       const aim = hitAim(bot, c.position, eye)
       if (aim && worthHit(t, { myEff, hisEff, hisLand: land, press, hisTotem })) consider({ kind: 'hit', c, t, aim, land, score: land - 1.3 * t.me + bonus(land) + 1 })
@@ -579,7 +925,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
             const c = centerOf(base)
             if (c.distanceTo(eye) > PLACE_R + 0.6) continue
             if (!baseFree(bot, base, { cache, ents })) continue
-            const t = trade(bot, c, foe, bot.entity, dHim, dMe, cache, { himAt })
+            const t = trade(bot, c, foe, bot.entity, dHim, dMe, cache, { himAt, himShield })
             if (t.him < 2.5) continue
             const land = landed(t, hisW, dHim)
             const aim = hitAim(bot, c, eye, HIT_R - 0.25)
@@ -626,7 +972,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
             // Блок встанет — лучам он преграда (его собственная рамка — нет).
             const sim = new Map(cache)
             sim.set(`${cell.x},${cell.y},${cell.z}`, [[0, 0, 0, 1, 1, 1]])
-            const t = trade(bot, c, foe, bot.entity, dHim, dMe, sim, { himAt })
+            const t = trade(bot, c, foe, bot.entity, dHim, dMe, sim, { himAt, himShield })
             if (t.him < 4) continue
             const aim = hitAim(bot, c, eye, HIT_R - 0.25)
             const byHand = !!aim && worthHit(t, { myEff, hisEff, hisLand: t.him, press, hisTotem })
@@ -671,12 +1017,20 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
           const c = cell.offset(0.5, 0.5, 0.5)
           if (c.distanceTo(eye) > PLACE_R - 0.4) continue
           // Блок снимается до взрыва — лучам он не преграда (кэш как есть).
-          const t = trade(bot, c, foe, bot.entity, dHim, dMe, cache, { himAt, power: ANCHOR_P })
-          if (!worthHit(t, { myEff, hisEff, hisLand: t.him, press, hisTotem })) continue
+          let t = trade(bot, c, foe, bot.entity, dHim, dMe, without(cache, cell), { himAt, power: ANCHOR_P, himShield })
+          // Себе дорого — «щит из светокамня» (S7c): блок между мной и якорем (взрыв бьёт сущности раньше, чем
+          // ломает блоки — ServerExplosion.explode: hurtEntities до interactWithBlocks), тогда размен — заново.
+          let guard = null
+          if (!worthHit(t, { myEff, hisEff, hisLand: t.him, press, hisTotem })) {
+            if (!CX2 || k.glowstone < 2) continue
+            const g = guardFor(cell, c, cache, living, { himAt, dHim, dMe, foe, himShield })
+            if (!g || !worthHit(g.t, { myEff, hisEff, hisLand: g.t.him, press, hisTotem })) continue
+            t = g.t; guard = g.cell
+          }
           // Опора под якорем видна (ставить) — грань самого якоря потом та же сторона.
           if (!pick.faceAim(bot, cell.offset(0, -1, 0), new Vec3(0, 1, 0), { eye, range: PLACE_R - 0.05 })) continue
-          const sc = t.him - 1.3 * t.me + bonus(t.him) - 1
-          if (!anchorBest || sc > anchorBest.score) anchorBest = { kind: 'anchor', cell, t, land: t.him, score: sc, note: `якорь у его ног (прогноз ему ${r1(t.him)}, мне ${r1(t.me)})` }
+          const sc = t.him - 1.3 * t.me + bonus(t.him) - 1 - (guard ? 0.5 : 0)
+          if (!anchorBest || sc > anchorBest.score) anchorBest = { kind: 'anchor', cell, guard, t, land: t.him, score: sc, note: `якорь у его ног${guard ? ' за светокамнем' : ''} (прогноз ему ${r1(t.him)}, мне ${r1(t.me)})` }
         }
       }
     }
@@ -782,13 +1136,20 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     if (!losClear(bot, eye, pt)) { st.wallHit++; fail('второй луч: кристалл за блоком'); return false }
     await bot.lookAt(pt, true).catch(() => {})
     const before = bot._ndBlockedHits || 0
+    const fw = CX2 && noteAttack ? freshWorth(c.position) : null
     try { bot.attack(c) } catch { return false }
     if ((bot._ndBlockedHits || 0) > before) { fail('сторож прицела'); return false }
+    noteBlast(fw)
     const rec = mine.get(c.id) || { at: gameClock.now() }
     rec.hitAt = gameClock.now()
     mine.set(c.id, rec)
     st.hits++
     return true
+  }
+  // Оценке его хп — урон моего подрыва интервалом (прогноз лучей ±): damage_event с причиной «я» его вычтет.
+  function noteBlast (fw, projectile = false) {
+    if (!fw || !fw.t || !noteAttack || !(fw.land > 0.3)) return
+    try { noteAttack({ min: fw.land * 0.75, max: fw.land * 1.2 + 0.5, mean: fw.land, raw: fw.t.himRaw }, { projectile }) } catch {}
   }
 
 
@@ -821,6 +1182,29 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     } finally { for (const k of ['forward', 'sprint', 'back', 'left', 'right', 'jump']) set(k, false) }
   }
 
+  // К точке to бегом по прямой (укрытие в 1–3 клетках): ступень — прыжком; у края — stepSafe.
+  async function moveTo (ctl, to, { ms = 900, until = null, stepSafe = null }: any = {}) {
+    const t0 = gameClock.now()
+    const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
+    try {
+      while (gameClock.now() - t0 < ms && !ctl.aborted) {
+        if (until && until()) break
+        const me = bot.entity.position
+        const dx = to.x - me.x; const dz = to.z - me.z
+        const h = Math.hypot(dx, dz)
+        if (h < 0.22 && Math.abs(me.y - to.y) < 0.6) break
+        const yaw = Math.atan2(-dx, -dz)
+        await bot.look(yaw, 0, true).catch(() => {})
+        const fwd = { x: dx / h, z: dz / h }
+        const ok = !stepSafe || stepSafe(fwd) || to.y < me.y - 0.5
+        set('forward', ok); set('sprint', ok && h > 0.8 && (bot.food ?? 20) > 6)
+        set('jump', ok && to.y > me.y + 0.5 && h < 1.6)
+        if (!ok) break
+        await sleep(TICK)
+      }
+    } finally { for (const k of ['forward', 'sprint', 'jump']) set(k, false) }
+  }
+
   // Стрела летит, пока тянем лук, моё здоровье меняется (его кристалл, его
   // удар): перед спуском снова «не хлопнуть свой тотем своим кристаллом» —
   // иначе натяжение бросить (прогон b3: поставил при 18 хп, отходя получил его
@@ -837,11 +1221,11 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     const dHim = boom.defenseOf(bot, foe)
     const cache = new Map()
     if (airCell) cache.set(`${airCell.x},${airCell.y},${airCell.z}`, null)
-    const t = trade(bot, center, foe, bot.entity, dHim, dMe, cache, { power })
+    const t = trade(bot, center, foe, bot.entity, dHim, dMe, cache, { power, himShield: CX2 && shieldUpOf(bot, foe) })
     const eqF = foe.equipment || []
     const hisTotem = !!((eqF[0] && eqF[0].name === 'totem_of_undying') || (eqF[1] && eqF[1].name === 'totem_of_undying'))
     const land = landed(t, inWin(hisWin), dHim)
-    const ok = worthHit(t, { myEff: effHp(bot, bot.entity), hisEff: effHp(bot, foe), hisLand: land, press: lastPress, hisTotem })
+    const ok = worthHit(t, { myEff: effHp(bot, bot.entity), hisEff: hisHp(foe), hisLand: land, press: lastPress, hisTotem })
     return { ok, t, land }
   }
 
@@ -880,6 +1264,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     }
     const r = await boom.shootAt(bot, ctl, c, { anyBow: true, drawMs: c.position.distanceTo(bot.entity.position) > 10 ? 900 : 550, shouldStop: () => (ctx.stop && ctx.stop()) || selfRisk() || lineRisk() }).catch(e => ({ shot: false, why: e.message }))
     if (r && r.shot) {
+      if (CX2 && noteAttack) noteBlast(freshWorth(c.position), true)
       const rec = mine.get(c.id) || { at: gameClock.now() }
       rec.hitAt = gameClock.now() + 400 // стрела летит
       mine.set(c.id, rec)
@@ -914,6 +1299,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
   // ctx: { stepSafe, stop }. ND_DEBUG_CRYSTAL — каждое действие в лог (заметки
   // боя pvp.js прореживает: одна на вид за 1.5 с).
   async function run (ctl, a, ctx: any = {}) {
+    if (a.knock) st.knockTries = (st.knockTries || 0) + 1
     const out = await runBody(ctl, a, ctx)
     if (DEBUG && a.kind !== 'hold') { try { const me = bot.entity.position; console.log(`[crystal] ${a.kind} ${out.ok ? 'ok' : 'нет'} | ${out.note || ''} | хп ${r1(effHp(bot, bot.entity))} я ${r1(me.x)},${r1(me.y)},${r1(me.z)}${a.t ? ` | прогноз ему ${r1(a.t.him)}, мне ${r1(a.t.me)} (макс ${r1(a.t.meMax ?? a.t.me)})` : ''}`) } catch {} }
     return out
@@ -930,12 +1316,13 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
         const eff = effHp(bot, bot.entity)
         let okNow = worstNow < eff - 3 && !!f && a.c.isValid !== false && !!bot.entities[a.c.id]
         if (okNow && a.why === 'free') { const w = inWin(myWin, IFRAME_MS - 60); const t = boom.blast(bot, a.c.position, P, bot.entity.position, { def: dMe }); okNow = !!(w && t.raw <= w.raw - 0.5) }
-        if (okNow && a.why !== 'free') { const fw = freshWorth(a.c.position); okNow = !!(fw.t && fw.land >= fw.t.me * 1.2 + 1) }
+        if (okNow && a.why === 'clear') okNow = boom.blast(bot, a.c.position, P, bot.entity.position, { def: dMe }).dmg <= 1.5
+        else if (okNow && a.why !== 'free') { const fw = freshWorth(a.c.position); okNow = !!(fw.t && fw.land >= fw.t.me * 1.2 + 1) }
         if (!okNow) { out.note = ''; out.wait = 60; return out }
       }
       const ok = await hit(a.c)
       out.ok = ok
-      if (ok) { if (a.why === 'free') st.free++; else st.defuse++ }
+      if (ok) { if (a.why === 'free') st.free++; else if (a.why === 'clear') st.clears = (st.clears || 0) + 1; else st.defuse++ }
       out.note = ok ? a.note : 'кристалл: сбить не вышло'
       out.wait = 120
       return out
@@ -947,6 +1334,68 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       st.dodges++
       out.ok = true
       out.wait = 150
+      return out
+    }
+    // Его кристаллы, что ещё стоят и достают меня.
+    const alive = (a) => a.threats.filter(th => th.cell ? (() => { const b = bot.blockAt(th.cell, false); return !!b && b.name === 'respawn_anchor' })() : (th.c.isValid !== false && bot.entities[th.c.id]))
+    if (a.kind === 'shield') {
+      lastDodge = gameClock.now()
+      const off = bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield'
+      if (!off) {
+        const idx = await toHotbar('shield')
+        if (idx < 0) { fail('щит: не в хотбаре'); out.wait = 100; return out }
+        if (bot.quickBarSlot !== idx) bot.setQuickBarSlot(idx)
+      }
+      const t0 = gameClock.now()
+      if (t0 - shieldLastEnd > 600) shieldStreakAt = t0
+      st.shieldUps = (st.shieldUps || 0) + 1
+      try {
+        await bot.look(a.yaw, 0, true).catch(() => {})
+        bot.activateItem(off)
+        shieldUntil = Infinity
+        // Держать, пока его кристаллы стоят (до 1.5 с): лицом к худшему из живых.
+        while (gameClock.now() - t0 < 1500 && !ctl.aborted) {
+          const live = alive(a)
+          if (!live.length) break
+          const me = bot.entity.position
+          const w = live.sort((x, y) => y.t.me - x.t.me)[0]
+          await bot.look(Math.atan2(-(w.c.position.x - me.x), -(w.c.position.z - me.z)), 0, true).catch(() => {})
+          await sleep(TICK)
+        }
+      } finally {
+        try { bot.deactivateItem() } catch {}
+        shieldUntil = gameClock.now()
+        shieldLastEnd = gameClock.now()
+        st.shieldMs = (st.shieldMs || 0) + (gameClock.now() - t0)
+      }
+      out.ok = true
+      out.wait = 60
+      return out
+    }
+    if (a.kind === 'cover') {
+      lastDodge = gameClock.now()
+      st.covers = (st.covers || 0) + 1
+      const dMe = boom.defenseOf(bot, bot.entity)
+      await moveTo(ctl, a.to, { ms: Math.min(1500, a.ticks * TICK * 2 + 200), stepSafe: ctx.stepSafe, until: () => !alive(a).length })
+      out.ok = true
+      out.note = `${a.note}; на месте ${r1(hurtAt(alive(a), bot.entity.position, dMe, new Map()))}`
+      out.wait = 80
+      return out
+    }
+    if (a.kind === 'wall') {
+      lastDodge = gameClock.now()
+      const { placeBlockAt } = require('./build')
+      let n = 0
+      for (const cell of a.cells) {
+        if (ctl.aborted || !alive(a).length) break
+        let r = null
+        try { r = await placeBlockAt(bot, cell, { item: wallItem() || 'obsidian', honest: true, timeoutMs: 400 }) } catch (e) { r = { ok: false, reason: e.message } }
+        if (r && r.ok && !r.already) n++
+        else { fail('блок между: ' + ((r && r.reason) || '?')); break }
+      }
+      if (n) { st.walls = (st.walls || 0) + 1; st.wallBlocks = (st.wallBlocks || 0) + n }
+      out.ok = n > 0
+      out.wait = 60
       return out
     }
     if (a.kind === 'hit') {
@@ -1017,10 +1466,18 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       lastAnchor = gameClock.now()
       const { placeBlockAt } = require('./build')
       let r = null
+      myAnchorCells.add(cellKey(a.cell))
       try { r = await placeBlockAt(bot, a.cell, { item: 'respawn_anchor', honest: true, timeoutMs: 500 }) } catch (e) { r = { ok: false, reason: e.message } }
       const ab = () => bot.blockAt(a.cell, false)
       if (!r || !r.ok || !ab() || ab().name !== 'respawn_anchor') { fail('якорь: ' + ((r && r.reason) || 'не встал')); out.note = 'якорь у его ног: не встал'; out.wait = 250; return out }
       st.anchors = (st.anchors || 0) + 1
+      // «Щит из светокамня» между мной и якорем — до заряда (S7c).
+      if (a.guard && isAirB(bot.blockAt(a.guard, false))) {
+        let g = null
+        try { g = await placeBlockAt(bot, a.guard, { item: 'glowstone', honest: true, timeoutMs: 400 }) } catch (e) { g = { ok: false, reason: e.message } }
+        if (g && g.ok && !g.already) st.anchorGuards = (st.anchorGuards || 0) + 1
+        else fail('якорь: заслон ' + ((g && g.reason) || '?'))
+      }
       // check — последняя проверка перед самим кликом (после переноса предмета).
       const click = async (item, check = null) => {
         const idx = await toHotbar(item)
@@ -1043,10 +1500,32 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
       // размен на миг клика всё ещё годен (за перенос меча и взгляд хп и место уходят).
       let held = false
       const sword = bot.inventory.items().find(i => /_sword$/.test(i.name))
-      const ok = sword ? await click(sword.name, () => { if (ctl.aborted || !charged()) return false; if (freshWorth(a.cell.offset(0.5, 0.5, 0.5), { power: ANCHOR_P, airCell: a.cell }).ok) return true; held = true; return false }) : false
+      const ok = sword ? await click(sword.name, () => { if (ctl.aborted || !charged()) return false; const fw = freshWorth(a.cell.offset(0.5, 0.5, 0.5), { power: ANCHOR_P, airCell: a.cell }); if (fw.ok) { anchorClick = { key: cellKey(a.cell), at: gameClock.now() }; if (CX2) noteBlast(fw); return true } held = true; return false }) : false
       if (held) { st.anchorHeld = (st.anchorHeld || 0) + 1; out.note = 'якорь заряжен — размен ушёл, не взрываю'; out.wait = 150; return out }
       if (ok) { st.anchorBooms = (st.anchorBooms || 0) + 1; out.ok = true; out.note = a.note } else { fail('якорь: подрыв'); out.note = 'якорь зарядил, подорвать не вышло' }
       out.wait = 350
+      return out
+    }
+    if (a.kind === 'anchorPop') {
+      // Его заряженный якорь у нас — подрыв моим кликом не светокамнем (RespawnAnchorBlock.useWithoutItem: заряд > 0,
+      // не Ад → explode), если размен на миг клика всё ещё в мою пользу.
+      lastAnchor = gameClock.now()
+      const item = (bot.inventory.items().find(i => /_sword$/.test(i.name)) || bot.inventory.items().find(i => !/glowstone/.test(i.name)))
+      const idx = item ? await toHotbar(item.name) : -1
+      if (idx < 0) { fail('его якорь: нечем кликнуть'); out.wait = 100; return out }
+      if (bot.quickBarSlot !== idx) bot.setQuickBarSlot(idx)
+      const b = bot.blockAt(a.cell, false)
+      const eye = bot.entity.position.offset(0, EYE, 0)
+      const ff = b && b.name === 'respawn_anchor' ? faceFor(bot, a.cell, eye, pickBlockers(bot, eye)) : null
+      if (!ff || !losClear(bot, eye, ff.pt, { expectBlock: a.cell })) { fail('его якорь: грань не видно'); out.wait = 80; return out }
+      const fw = freshWorth(a.cell.offset(0.5, 0.5, 0.5), { power: ANCHOR_P, airCell: a.cell })
+      if (!(fw.t && fw.land >= fw.t.me * 1.2 + 1)) { out.note = ''; out.wait = 60; return out }
+      anchorClick = { key: cellKey(a.cell), at: gameClock.now() }
+      try { await bot._genericPlace(b, ff.face, { forceLook: true, delta: ff.pt.minus(a.cell), swingArm: 'right' }) } catch { fail('его якорь: клик'); out.wait = 80; return out }
+      noteBlast(fw)
+      st.anchorPops = (st.anchorPops || 0) + 1
+      out.ok = true
+      out.wait = 200
       return out
     }
     if (a.kind === 'obby') {
@@ -1187,7 +1666,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
 
   function report () {
     const avg = st.dealt.length ? r1(st.dealt.reduce((s, x) => s + x, 0) / st.dealt.length) : undefined
-    const active = st.placed || st.hits || st.shots || st.booms || st.surround || st.defuse || st.dodges
+    const active = st.placed || st.hits || st.shots || st.booms || st.surround || st.defuse || st.dodges || st.threats || st.shieldUps || st.covers || st.walls || st.anchors || st.anchorSeen || st.anchorPops
     if (!active) return undefined
     const out: any = {}
     for (const [k, v] of (Object.entries(st) as [string, any][])) {
@@ -1198,7 +1677,7 @@ function create (bot, { enemy, used = () => {} }: any = {}) {
     return out
   }
 
-  return { st, plan, run, engaged, dominant, report, close, worstVsMe }
+  return { st, plan, run, engaged, dominant, report, close, worstVsMe, evade, coverSpot, wallSpot, hisHp, guardFor, _onBlock: onBlock }
 }
 
-module.exports = { ON, create, baseFree, centerOf, hitAim, faceFor, trade, landed, worthHit, crystalBox, boxDist, surrounded, losClear, P }
+module.exports = { ON, CX2, create, baseFree, centerOf, hitAim, faceFor, trade, landed, worthHit, crystalBox, boxDist, surrounded, losClear, shieldCovers, P }

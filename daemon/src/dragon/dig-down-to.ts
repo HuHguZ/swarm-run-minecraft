@@ -518,6 +518,9 @@ function cloudHits (c, feet, margin = 0.7) {
   return feet.y < c.pos.y + CLOUD_SLAB && feet.y + 1.8 > c.pos.y
 }
 
+// Правило сервера (javap 1.21.11): EnderMan.isBeingStaredBy0 → LivingEntity.isLookingAtMe(player, 0.025, по расстоянию,
+// COLLIDER, глаза эндермена): угол взгляда к глазам И прямая видимость от глаз игрока (блоки по коллизии, жидкости мимо).
+// Эндермен за стеной/за блоком прицела не злится — без проверки видимости голова опускалась зря (s5c 06.10).
 function starer (bot, yaw, pitch, tol = STARE_TOL * STARE_MARGIN) {
   const eye = bot.entity.position.offset(0, EYE, 0)
   const lx = -Math.sin(yaw) * Math.cos(pitch); const ly = Math.sin(pitch); const lz = -Math.cos(yaw) * Math.cos(pitch)
@@ -526,7 +529,7 @@ function starer (bot, yaw, pitch, tol = STARE_TOL * STARE_MARGIN) {
     const tx = e.position.x - eye.x; const ty = e.position.y + ENDERMAN_EYE - eye.y; const tz = e.position.z - eye.z
     const len = Math.hypot(tx, ty, tz)
     if (len > 64 || len < 0.3) continue
-    if ((lx * tx + ly * ty + lz * tz) / len > 1 - tol / len) return e
+    if ((lx * tx + ly * ty + lz * tz) / len > 1 - tol / len && !pick.blockOnRay(bot, eye, new Vec3(tx / len, ty / len, tz / len), len)) return e
   }
   return null
 }

@@ -64,7 +64,8 @@ export interface BodySpec {
 // physics: the share of game ticks the bot's client actually simulates (farm 750 TPS: 0.41-0.69, once 0.08 - s4-stress,
 // S7 status.physicsTicks/clock.ticks). Body movement and block placing go that much slower in game time; the server-timed
 // effects (mobs, eating, fuses, damage) do not.
-export interface WorldSpec { exits: boolean; cover: boolean; nether: boolean; floorDiggable: boolean; lavaExit: boolean; landing: boolean; portal: boolean; physics: number }
+// rough: stage B ground with 1-block steps (natural terrain; the farm's slot-18 deaths of 06.10 22:57 MSK), the mirror ignores it.
+export interface WorldSpec { exits: boolean; cover: boolean; nether: boolean; floorDiggable: boolean; lavaExit: boolean; landing: boolean; portal: boolean; physics: number; rough?: boolean }
 // skill: the long job the distractions interrupt (default mine): dig blocks, walk a path, or craft through window clicks.
 export interface Scenario { name: string; seed?: number; ticks?: number; body?: Partial<BodySpec>; world?: Partial<WorldSpec>; skill?: boolean | 'mine' | 'walk' | 'craft'; events: SimEvent[] }
 
@@ -291,7 +292,8 @@ export function observeWorld(w: SimWorld, session: Record<string, unknown> = {})
   // survival/hold-out.chooseRefuge: a swelling creeper or one within 4 blocks means flee, not a box.
   const boxBreaker = visible.some(e => e.kind === 'creeper' && (e.swell > 0 && dist(w, e.x, e.z) <= 7 || dist(w, e.x, e.z) <= 4))
   const shelter = shelterChoice(w, hostile, boxBreaker)
-  session._tacticalExitGeometry = `${Math.round(b.x)},${Math.round(b.z)}|${w.spec.exits}|${b.shelter?.kind ?? ''}|${shelter}|${b.pearls > 0}|${b.frPotion > 0}`
+  // Lava under the body changes the real signature (exitsNear block names, the rescue exit); so does it here.
+  session._tacticalExitGeometry = `${Math.round(b.x)},${Math.round(b.z)}|${b.inLava}|${w.spec.exits}|${b.shelter?.kind ?? ''}|${shelter}|${b.pearls > 0}|${b.frPotion > 0}`
   const lava = b.inLava
   const falling = !!b.falling && b.falling.height > MECH.safeFall
   return { at, health: b.hp, food: b.food, armor: b.armor, weapon: b.weapon !== 'fist', shield: b.shield && b.shieldOff <= 0,
@@ -357,20 +359,17 @@ export function stepAction(w: SimWorld, run: ActionRun): Record<string, unknown>
     }
     case 'Flee': case 'CreateDistance': {
       if (b.inLava) { if (w.spec.lavaExit && t >= 60) { b.inLava = false; return { swamOut: true } } return t >= 240 ? { failed: true, reason: 'no shore' } : null }
-      if (b.burning > 0 && b.fireRes <= 0) {
-        if (b.waterBucket && !w.spec.nether && t >= 12) { b.burning = 0; return { extinguished: true } }
-        if (!b.waterBucket) away(nearest, MECH.sprint)
-        return t >= 100 ? { failed: true } : null
-      }
+      // minecraft.ts: burning with a bucket - escapeFire pours it; without one the run is smartFlee's (below).
+      if (b.burning > 0 && b.fireRes <= 0 && b.waterBucket && !w.spec.nether) return t >= 12 ? (b.burning = 0, { extinguished: true }) : null
       const tnt = w.tnts.find(t => dist(w, t.x, t.z) <= MECH.tntPower * 2 + 3)
       if (tnt) { const blast = tnt; dodgeAway(w, blast, enemies); return null } // minecraft.ts: dodgeBlast first near TNT
-      // flee.smartFlee steers by mob doctrine only: a player is not run from (it reports "escaped" at once).
-      const mob = engaged.find(e => !e.player)
+      // flee.smartFlee (S4c): an attacking player is run from too (the tactics pass his id); escaped when the walkers are past
+      // safeDist (the tactics pass 17) and every shooter is past its weapon's reach (jar: blaze 48, ghast 64) or behind a wall:
+      // with cover nearby (spec.cover) the run reaches it in ~2 s and breaks the line of fire.
+      const mob = engaged[0]
       away(mob, b.food > 6 ? MECH.sprint : MECH.walk)
-      // flee.smartFlee: walkers beyond safeDist (the tactics pass 17) and shooters out of their DOCTRINE range (blaze 20,
-      // ghast 40 - not their real reach of 48/64: farm s4b-flap-1..3, "escaped" after 1 block under blaze fire).
-      const doctrine = mob ? flee.DOCTRINE[mob.kind]?.range ?? 0 : 0
-      if (!mob || dist(w, mob.x, mob.z) >= Math.max(17, Math.min(mob.range, doctrine || mob.range) + 1)) return { safe: true }
+      const shaken = (e: SimEnemy) => e.range ? dist(w, e.x, e.z) >= e.range + 1 || w.spec.cover && t >= 40 : dist(w, e.x, e.z) >= 17
+      if (engaged.every(shaken)) return { safe: true }
       return t >= 240 ? { timeout: true } : null
     }
     case 'BlockOff': case 'PillarUp': case 'DigDown': case 'Hide': case 'Heal': {

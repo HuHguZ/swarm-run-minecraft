@@ -64,7 +64,8 @@ function routeFixture(swings = 261, moveCount = 3) {
 }
 
 test('Bastion route yields actual 259 swings to the existing supply graph before the next step', async () => {
-  const f = routeFixture()
+  // A long plan (300 digs) still needs the full 260 reserve: the reserve follows the remaining digs (s1c 06.10), capped at 260.
+  const f = routeFixture(261, 150)
   const result = await f.run(true)
   assert.equal(f.executed(), 1, 'one bounded step crosses the actual reserve; the next step must wait for supply')
   assert.equal(items.toolBudget(f.bot, 'pickaxe'), 259)
@@ -85,7 +86,7 @@ test('Bastion route yields actual 259 swings to the existing supply graph before
 })
 
 test('exactly 260 actual swings permits one bounded step before truthful supply handoff', async () => {
-  const f = routeFixture(260)
+  const f = routeFixture(260, 150)
   const result = await f.run(true)
   assert.equal(f.executed(), 1)
   assert.equal(result.supplyNeeded?.pickSwings, 258)
@@ -98,12 +99,17 @@ test('ordinary home routes retain their existing movement contract', async () =>
   assert.equal(result.supplyNeeded, undefined)
 })
 
-test('arrival cannot hide the actual below-reserve wear of its last bounded step', async () => {
+test('s1c: arrival is arrival — no supply stop invented after the target is reached; a short plan needs only its own digs', async () => {
   const f = routeFixture(261, 1)
   const result = await f.run(true, { x: -401, y: 20, z: 388, r: 0, dy: 0 })
   assert.equal(f.executed(), 1)
-  assert.equal(result.ok, false)
-  assert.equal(result.supplyNeeded?.pickSwings, 259)
+  assert.equal(result.ok, true)
+  assert.equal(result.supplyNeeded, undefined)
+  // 3 moves × 2 digs: 259 swings cover them many times over — the route goes on (was: stop at 259 / 260 by a fixed cap).
+  const short = routeFixture(261, 3)
+  const r2 = await short.run(true)
+  assert.equal(short.executed(), 3)
+  assert.equal(r2.supplyNeeded, undefined)
 })
 
 function restockSource(bot: ReturnType<typeof routeFixture>['bot']) {

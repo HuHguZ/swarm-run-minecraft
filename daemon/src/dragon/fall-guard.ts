@@ -109,26 +109,29 @@ function breathOf (bot, d, parts) {
   return { pos: new Vec3(cx, y + 1, cz), r: BREATH_R, predicted: true, column: { x: Math.floor(cx), z: Math.floor(cz) } }
 }
 
+// Честный отвод взгляда от эндерменов (s5c 06.10, вместо stareFilter — тот правил pitch только в пакете, и тело с сервером
+// расходились). Эндермен злится после 5 тиков взгляда СЕРВЕРА (поворот из последнего look/position_look; на 750 TPS это
+// 7 мс), а bot.look под замком рефлексов асинхронный — поправка опаздывала (s5-c3/c4: эндермены убили 4 из 6 погибших).
+// Поэтому голова поворачивается синхронно в самом теле: (1) на physicsTick — до updatePosition того же тика (физика
+// mineflayer шлёт поворот из bot.entity после этого события); (2) последний рубеж — поворот, который всё-таки уходит
+// в look/position_look с взглядом в глаза (его поставил поздний слушатель), опускается и В ТЕЛЕ, и в пакете одинаково.
+// Тело и сервер не расходятся: прицел, удары, щелчки и стрелы (release_use_item без поворота берёт последний look)
+// идут с тем поворотом, что видит сервер. use_item несёт свой поворот из тела (absSnapRotationTo) — не трогаем: бросок
+// жемчуга не уводим, а миг взгляда короче 5 тиков сервера.
 function lookGuard (bot, stats) {
   const onTick = () => {
-    if (!bot.entity) return
-    const y = bot.entity.yaw; const p = bot.entity.pitch
-    if (!starer(bot, y, p)) return
-    const np = safePitch(bot, y, p)
+    const e = bot.entity
+    if (!e || !starer(bot, e.yaw, e.pitch)) return
+    e.pitch = safePitch(bot, e.yaw, e.pitch)
     stats.guarded = (stats.guarded || 0) + 1
-    bot.look(y, np, true).catch(() => {})
   }
   bot.on('physicsTick', onTick)
-  const unfilter = stareFilter(bot, stats)
+  const unfilter = stareGuard(bot, stats)
   return () => { bot.removeListener('physicsTick', onTick); unfilter() }
 }
 
-// Взгляд на эндермена — в пакете (750 TPS, s5 06.10). Эндермен злится после 5 тиков взгляда сервера (поворот из
-// последнего look/position_look); на 750 тиках это 7 мс, а поправка сторожа (bot.look под замком рефлексов — асинхронно)
-// уходила позже: на 750 эндермены злились «без взгляда» по клиенту и убили 4 из 6 погибших (s5-c3, c4), на 20 — 1 бой из 42.
-// Каждый исходящий поворот, который смотрит в глаза эндермену, опускается до ближайшего безопасного (safePitch).
 const DEG = Math.PI / 180
-function stareFilter (bot, stats: any = {}) {
+function stareGuard (bot, stats: any = {}) {
   const c = bot._client
   if (!c || typeof c.write !== 'function') return () => {}
   const raw = c.write
@@ -138,6 +141,7 @@ function stareFilter (bot, stats: any = {}) {
       if (starer(bot, yaw, pitch)) {
         const np = safePitch(bot, yaw, pitch)
         stats.stareCut = (stats.stareCut || 0) + 1
+        bot.entity.pitch = np
         data = { ...data, pitch: -np / DEG }
       }
     }
@@ -696,4 +700,4 @@ function awayFromHead (d, parts, feet, dist) {
   return feet.offset(ux * dist, 0, uz * dist)
 }
 
-module.exports = { nearEdge, straightOut, surfaceY, standY, cageBars, crystalsOf, overCloud, inClouds, breathOf, lookGuard, stareFilter, fallGuard, afterPositionPacket, aboveCloudY, FB_ALARM_R, fireballAlarm, cloudReflex, hitBy, r1, doing, hunters, angryEndermen, unembed, embeddedNow, pickSpot, fastTower, hasEffect, potionItem, usePotion, healRaw, nearPillar, wingBoxes, dragonHist, dragonVel, sight, STAY_R, takeoffBoxes, podiumCache, podiumTop, inCharge, cloudAgeMs, straightWalkable, headroom, HOLE_TOP, DIGGABLE_RE, duckPlan, duck, awayFromHead }
+module.exports = { nearEdge, straightOut, surfaceY, standY, cageBars, crystalsOf, overCloud, inClouds, breathOf, lookGuard, stareGuard, fallGuard, afterPositionPacket, aboveCloudY, FB_ALARM_R, fireballAlarm, cloudReflex, hitBy, r1, doing, hunters, angryEndermen, unembed, embeddedNow, pickSpot, fastTower, hasEffect, potionItem, usePotion, healRaw, nearPillar, wingBoxes, dragonHist, dragonVel, sight, STAY_R, takeoffBoxes, podiumCache, podiumTop, inCharge, cloudAgeMs, straightWalkable, headroom, HOLE_TOP, DIGGABLE_RE, duckPlan, duck, awayFromHead }

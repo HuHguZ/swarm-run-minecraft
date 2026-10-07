@@ -237,7 +237,7 @@ async function scoutBody (session, ctl, p: any = {}) {
   // map — знание карты из копии этого же мира (AGENTS.md разрешает его основному телу; на ферме записи снимает
   // try-lab-ne-map.js с правды мира): крепость, спавнер, бастионы (с золотом и сундуками) — только записи Ада.
   if (p.mode === 'map') {
-    const allow = new Set([PLACE, SPAWNER_PLACE, ...BASTION_KEYS_ALL])
+    const allow = new Set([PLACE, SPAWNER_PLACE, ...BASTION_KEYS_ALL, 'искажённый лес (ад)'])
     // «крепость» (Края) — тоже по карте копии мира (сцены MAP_SH): запись как после броска ока у лестницы (refined).
     const put = (Object.entries(p.places || {}) as [string, any][]).filter(([k, v]: any) => v && [v.x, v.y, v.z].every(Number.isFinite) &&
       ((allow.has(k) && v.dimension === 'the_nether') || (k === 'крепость' && v.dimension === 'overworld')))

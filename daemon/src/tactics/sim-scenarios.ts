@@ -57,8 +57,22 @@ export const SCENARIOS: Scenario[] = [
   { name: 'regress-ghast-volleys', body: { hp: 14, food: 14, armor: 20, shield: true, blocks: 0 }, events: [{ at: 125, type: 'enemy', kind: 'ghast', distance: 5.2, angle: 3.2 }, { at: 198, type: 'suffocate' }] },
   { name: 'regress-spider-on-fire-box', body: { hp: 15, food: 15, armor: 0 }, events: [{ at: 28, type: 'fire', ticks: 155 }, { at: 78, type: 'enemy', kind: 'spider', distance: 3.3, angle: 4 }] },
   { name: 'regress-husk-at-sight-edge', body: { hp: 11, food: 17, armor: 0 }, events: [{ at: 13, type: 'enemy', kind: 'husk', distance: 6.9, angle: 3.1 },
-    { at: 59, type: 'enemy', kind: 'phantom', distance: 6.5, angle: 5.8 }] }
+    { at: 59, type: 'enemy', kind: 'phantom', distance: 6.5, angle: 5.8 }] },
+  // Round 4 (S4c): a respawn among zombies on natural ground (farm slot 18, 06.10 22:57:41-46 MSK, 4 deaths): the flat-only
+  // exit check found a route on some cells and none on others, LastStand<->CreateDistance on every step (roughScenario 7).
+  { ...roughScenario(7), name: 'regress-rough-ground' }
 ]
+
+// Round 4 (S4c): zombies (a spider in every fifth) around a body without blocks on stage B's rough ground (1-block steps),
+// at half and full client physics - the family that reproduced the slot-18 LastStand<->CreateDistance swings.
+export function roughScenario(seed: number): Scenario {
+  const r = Math.sin(seed * 12.9898) * 43758.5453, f = r - Math.floor(r)
+  return { name: `rough-${seed}`, seed, skill: 'walk', ticks: 600,
+    body: { armor: seed % 2 ? 0 : 15, weapon: seed % 3 ? 'fist' : 'iron_sword', blocks: 0, meals: 0, hp: 8 + seed % 13 },
+    world: { rough: true, physics: seed % 4 < 2 ? .5 : 1 }, events: [
+      { at: 10, type: 'enemy', kind: 'zombie', distance: 1.5 + f * 4, angle: f * 6 },
+      { at: 30 + seed % 40, type: 'enemy', kind: seed % 5 ? 'zombie' : 'spider', distance: 3 + (1 - f) * 6, angle: 2 + f }] }
+}
 
 const KINDS = ['zombie', 'skeleton', 'creeper', 'spider', 'husk', 'piglin_brute', 'player', 'phantom', 'blaze']
 export function randomScenario(seed: number): Scenario {

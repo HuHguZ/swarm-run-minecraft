@@ -590,13 +590,19 @@ async function sealedGold (session, ctl, st, until) {
     const win1 = fullCover(bot.blockAt(upC)) && !S.own.has(SL.keyV(upC)) && fullCover(bot.blockAt(dnC)) && !S.own.has(SL.keyV(dnC))
     const strongNear = [...mobs(bot, 'piglin_brute', 12), ...mobs(bot, 'hoglin', 12), ...mobs(bot, 'zoglin', 12)]
     const windowOk = win1 && !strongNear.length && (bot.health ?? 20) >= 16
+    // Пиглин, разглядывающий золото (слиток в левой руке), не «бездельник»: angerNearbyPiglins злит только PiglinAi.isIdle
+    // (Brain.isActive(Activity.IDLE), javap 1.21.11 PiglinAi.angerNearbyPiglins: filter isIdle → filter canSee при ломке
+    // сундука; золотой блок — без луча). Такие пиглины ломке не мешают.
+    const admiring = e => /^(gold_ingot|gold_block|golden_.*)$/.test(e.equipment?.[1]?.name || '')
     const exposedFoes = st.fastSafe && opens && !windowOk ? [
-      ...mobs(bot, 'piglin', 18).filter(e => !isBaby(bot, e)),
+      ...mobs(bot, 'piglin', 18).filter(e => !isBaby(bot, e) && !admiring(e)),
       ...mobs(bot, 'piglin_brute', 18), ...mobs(bot, 'hoglin', 18), ...mobs(bot, 'zoglin', 18)
     ] : []
     if (st.fastSafe && opens && windowOk) log('штрек: золото окном 1×1 — ломаю и сразу заделываю', { at: t.k, piglins: mobs(bot, 'piglin', 18).length })
     if (exposedFoes.length || (st.fastSafe && opens && SL.fillerCount(bot) < 3)) {
-      st.skip.set(t.k, gameClock.now() + 600000)
+      // Пиглины бродят: отложить на 2 мин, а не на 10 (s1c-A-2 06.10: 9 из 22 блоков карты «пропустил» при 2–4 пиглинах рядом,
+      // к концу захода «золото по памяти осталось (16), пути нет»). Блоков на заделку нет — по-прежнему надолго.
+      st.skip.set(t.k, gameClock.now() + (exposedFoes.length && SL.fillerCount(bot) >= 3 ? 120000 : 600000))
       log('штрек: небезопасное вскрытие — пропустил', { at: t.k, foes: exposedFoes.length })
       continue
     }
@@ -1128,6 +1134,7 @@ async function bastion (session, ctl, p: any = {}) {
       pit: st.pit || undefined,
       pitTrade: st.pitTrade || undefined,
       barterRetry: BF.enabled() && st.barterRetry ? st.barterRetry : undefined,
+      barterPlans: st.plans && st.plans.length ? st.plans.slice(-6) : undefined,
       hurts: st.hurts && st.hurts.length ? st.hurts : undefined,
       exit: st.exit || undefined,
       fights: st.fights.length ? st.fights : undefined,
@@ -1289,22 +1296,54 @@ async function bastion (session, ctl, p: any = {}) {
     const restored = near && await prepareBarterCover(session, ctl, st, Math.min(deadline - 85000, gameClock.now() + 60000))
     if (!restored || !restored.ok) {
       const refused = restored && restored.ok === false ? restored : undefined
+      // Гибкость (решение пользователя 06.10): укрытие не встало — бартер на открытом, как у спидраннеров, когда риск мал: золото
+      // на теле, хп ≥ 16, взрослые пиглины рядом; бруты/хоглины — отказ самого pearls.barter (bastionThreats). По std-прогонам
+      // «укрытие не подтверждено» — 62 вызова с нулём сделок при золоте в рюкзаке. ND_OPEN_BARTER=0 — выкл.
+      const carried = countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') - keep
+      if (process.env.ND_OPEN_BARTER !== '0' && near && carried >= 8 && goldWorn(bot) && (bot.health ?? 0) >= 16 &&
+        mobs(bot, 'piglin', 16).some(e => !isBaby(bot, e)) && !ctl.aborted && gameClock.now() < deadline - 60000) {
+        if (countOf(bot, 'gold_ingot') - keep < carried) await unpackGold(session, ctl, carried)
+        const n = countOf(bot, 'gold_ingot') - keep
+        const ob: any = await barterRound(session, ctl, st, n, deadline - 30000).catch(e => ({ error: e.message }))
+        st.lastBarter = 'на открытом'
+        log('бартер на открытом (укрытие не встало)', { ingots: n, spent: ob && ob.spent, pearls: ob && ob.pearls, stopped: ob && (ob.stopped || ob.error), why: refused?.why })
+        if (ob && ob.spent > 0) return { ...out(ob.stopped ? 'бартер на открытом: ' + ob.stopped : null), openBarter: { spent: ob.spent, pearls: ob.pearls || 0 } }
+      }
       return { ...out('защищённое укрытие для бартера не подтверждено; выход к торговцам без укрытия запрещён'),
         barterRetry: refused?.why || 'далеко от известного бастиона', barterCover: refused?.diagnostic }
     }
     memoSave()
   }
 
-  const done = () => countOf(bot, 'ender_pearl') >= wantPearls && fireRes(bot) >= wantFire && countOf(bot, 'obsidian') >= wantObs && exitReserveReady(bot, p)
   const spare = () => countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') - keep
+  // Огнестойкость — плюс, не цель копки (решение пользователя 06.10 22:33): за неё отдаётся уже добытое золото (оно оплачено),
+  // но ни копки, ни ожидания ради неё (барьер-модель: слиток стоит 2.4 с торга + 2.5 с копки, FR даёт 0.034 на слиток).
+  const done = () => countOf(bot, 'ender_pearl') >= wantPearls && (fireRes(bot) >= wantFire || spare() <= 0) && countOf(bot, 'obsidian') >= wantObs && exitReserveReady(bot, p)
   // Сколько слитков нужно на цели (таблица бартера 1.21.11): жемчуг 0.064 на
   const goldTarget = () => p.gold ?? Math.min(BF.enabled() ? 480 : 240, Math.max(
     BF.enabled() ? BF.pearlBudget(wantPearls - countOf(bot, 'ender_pearl')) : Math.ceil(Math.max(0, wantPearls - countOf(bot, 'ender_pearl')) / 0.064),
-    Math.ceil(Math.max(0, wantFire - fireRes(bot)) / 0.034),
     Math.ceil(Math.max(0, wantObs - countOf(bot, 'obsidian')) / (40 / 469)),
     // Нет огня: 34 сделки дают >=95% хотя бы одного fire_charge (40/469).
     !exitReserveReady(bot, p) && !require('.././nether').exitKit(bot).lighter ? 34 : 0))
-  st.stopMining = () => mode !== 'gold' && spare() >= (BF.enabled() ? Math.min(144, goldTarget()) : goldTarget())
+  // Пакет копки — от модели бартера S3 (core/barter-model.barterPlan через barter-flow.plan): при известном золоте бастиона
+  // (st.pred — карта копии или узнанные стены) копать пакет B* = √(2·S·E[копки]/c) и торговать, а не всё «на 85 % жемчуга» сразу.
+  // Модель считается на начало пакета (gold 0: добытое ещё не в рюкзаке), её строка — в лог и в итог (detail.plans).
+  st.round = 0
+  let batchRound = -1
+  const batch = () => {
+    if (batchRound === st.round) return st.batch
+    batchRound = st.round
+    const tr = st.pitTrade || {}
+    const d = BF.plan({ pearls: countOf(bot, 'ender_pearl'), required: wantPearls, gold: 0, siteIngots: st.pred.size * 9,
+      delivered: tr.barterDelivered, thrown: tr.barterReceipts,
+      ...(st.traded ? { traded: { ingots: st.traded, seconds: tr.seconds || 0 } } : {}),
+      fireRes: { have: fireRes(bot), want: wantFire, valueSeconds: 120 } })
+    st.batch = d.action === 'mine' ? Math.max(9, d.batch) : 9
+    ;(st.plans ||= []).push({ round: st.round, action: d.action, batch: d.batch, eSeconds: Math.round(d.eSeconds), pReach: Math.round(d.pReach * 100) / 100, why: d.why })
+    log(d.line, { round: st.round, site: st.pred.size * 9, pearls: countOf(bot, 'ender_pearl'), want: wantPearls, spare: spare(), batch: st.batch })
+    return st.batch
+  }
+  st.stopMining = () => mode !== 'gold' && spare() >= (BF.enabled() && st.pred.size && p.gold == null ? batch() : BF.enabled() ? Math.min(144, goldTarget()) : goldTarget())
   if (BF.enabled()) st.fastSafe = true
   // Золоту — не больше 60% вызова: остальное — бартер (прогон 2 лаборатории
   // ходил по точкам обзора все 500 с, и на обмен не осталось ни секунды).
@@ -1601,12 +1640,17 @@ async function bastion (session, ctl, p: any = {}) {
         if (p.exit !== false && (!BF.enabled() || done()) && (bot.health ?? 20) >= 14 && exitReserveReady(bot, p)) { st.exit = await exitTunnel(session, ctl, st, deadline); log('выход', st.exit) } else if (p.exit !== false && (!BF.enabled() || done())) { st.exit = { ok: false, why: !exitReserveReady(bot, p) ? 'набор на выход не готов (обсидиан/огонь) — остаюсь в штреке' : `лечение не завершилось (хп ${Math.round(bot.health ?? 0)}) — остаюсь в штреке` }; log('выход', st.exit) }
         if (BF.enabled() && mode !== 'gold' && !done() && !ctl.aborted) {
           if (spare() < 18 && st.pred.size && !st.noPick && gameClock.now() < deadline - 60000) {
-            if (!minedSinceRetry || mode === 'barter') {
+            // Ход к сундукам/золоту без единого блока золота — тоже «продвижение» для miningProgress; два пакета подряд без золота —
+            // стоп (s1c-A-8 06.10: 4 пакета по кругу у сундуков, которые видят пиглины, и «небезопасных» блоков; 680 с, 0 золота).
+            st.dryBatches = st.blocks > (st.blocksAtBatch ?? -1) || spare() > 0 ? 0 : (st.dryBatches || 0) + 1
+            st.blocksAtBatch = st.blocks
+            if (!minedSinceRetry || mode === 'barter' || st.dryBatches >= 2) {
               st.barterRetry = 'добыча не продвинулась — нужен новый путь к оставшемуся золоту'
               break
             }
             minedSinceRetry = false
             st.pitDone = false; st.sealedDone = false
+            st.round++
             log('бартер: следующий пакет золота', { left: st.pred.size, pearls: countOf(bot, 'ender_pearl') })
             continue
           }

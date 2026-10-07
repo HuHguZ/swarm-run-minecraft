@@ -550,7 +550,10 @@ class Session {
       if (last !== null && hp < last) {
         const typed = hit && gameClock.now() - hit.at <= 250 ? hit : null
         if (typed) hit = null
-        this.bus.emit('damage', { health: Math.round(hp), lost: Math.round(last - hp), ...(typed ? { cause: typed.cause, ...(typed.source ? { source: typed.source } : {}) } : {}) })
+        // Принятый урон падения спуска (navigation/descent.ts, гибкость): не рвать им goto.
+        const planned = bot._ndExpectFall && gameClock.now() < bot._ndExpectFall.until && last - hp <= bot._ndExpectFall.max && (!typed || typed.cause === 'fall')
+        if (planned) console.log('[descent] принятый урон падения', JSON.stringify({ lost: last - hp, hp }))
+        else this.bus.emit('damage', { health: Math.round(hp), lost: Math.round(last - hp), ...(typed ? { cause: typed.cause, ...(typed.source ? { source: typed.source } : {}) } : {}) })
       }
       if (last !== null && hp > 0 && hp <= this.cfg.lowHealth && last > this.cfg.lowHealth) {
         this.bus.emit('low_health', { health: Math.round(hp) })
@@ -618,6 +621,8 @@ class Session {
     // Удар только по тому, что клиент игры взял бы в прицел (pick.js): сервер
     // прямую видимость не проверяет, и боты били сквозь стенку коробки.
     require('./pick').install(bot)
+    // Титры после выходного портала — всегда ответ perform_respawn (credits.ts): иначе игрок вне мира, часы стоят.
+    require('./credits').install(bot)
     // Бег вприпрыжку на прямых ровных участках пути (sprintjump.js; по умолчанию вкл., ND_SPRINT_JUMP=0 — выкл.).
     try { require('./sprintjump').install(bot) } catch {}
     // Свет чанков — со своей перестановкой x (prismarine-chunk 1.41, lightfix.js).
@@ -807,7 +812,7 @@ class Session {
   }
 
   // runIntent's clock ran out, and on an abort it throws — so the report was
-  goto ({ x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, unstuck: unstuckWanted }: any) {
+  goto ({ x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted }: any) {
     const secs = Math.max(5, Math.min(600, timeoutSeconds))
     return this.runIntent('goto', async (ctl) => {
       const bot = this.require()
@@ -816,6 +821,8 @@ class Session {
       // как в окружении. Держится до следующего goto.
       this.bridgeWanted = typeof bridge === 'boolean' ? bridge : undefined
       this.sprintWanted = typeof sprint === 'boolean' ? sprint : undefined
+      // Бег вприпрыжку на этот переход (A/B в одном сеансе, try-parkour-sprint): поверх ND_SPRINT_JUMP.
+      bot._ndSprintJumpWanted = typeof sprintJump === 'boolean' ? sprintJump : undefined
       // Цель — для выбора бега (болото у цели — шагом), высота — тела, если не задана.
       this.gotoTarget = bot.entity ? new Vec3(Math.floor(x) + 0.5, y == null ? bot.entity.position.y : Number(y), Math.floor(z) + 0.5) : null
       // Пустой частичный результат поиска — ждать продолжения, а не «дошёл» (movement.gotoGoal): ND_GOTO_WAIT=1,
@@ -834,12 +841,6 @@ class Session {
       const pit = goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
       const bx = Math.floor(x)
       const bz = Math.floor(z)
-      // Цель под крышей (небо ≤ 7 в клетке ног цели): поверху к ней не дойти, а штраф крыши раздувает A* у самой цели
-      // (s6b 06.10, арена S7: комнаты под перекрытием; над западом висит кусок рельефа, небо там на 1 темнее — A* запад
-      // 62 узла против 9 зеркально, на 750 TPS «partial» по кругу; try-parkour-path-mirror.js).
-      const goalSky = skyLightAt(bot, new Vec3(bx, Math.floor(y ?? bot.entity.position.y), bz))
-      const surfaceWalk = surface !== false && this.underSky() && !(goalSky !== null && goalSky <= 7)
-
       let goal
       let resolvedTo
       if (y === undefined || y === null) {
@@ -856,6 +857,16 @@ class Session {
         }
       }
 
+      // Цель под крышей (небо ≤ 7 в клетке ног цели): поверху к ней не дойти, а штраф крыши раздувает A* у самой цели
+      // (s6b 06.10, арена S7: комнаты под перекрытием; над западом висит кусок рельефа, небо там на 1 темнее — A* запад
+      // 62 узла против 9 зеркально, на 750 TPS «partial» по кругу; try-parkour-path-mirror.js). Только для цели с высотой:
+      // у цели без y клетка «на высоте тела» в колонне горы — внутри камня (небо 0), и strict снимался — штрек сквозь гору
+      // (замечание проверки S6c 07.10).
+      // Снимается только штраф крыши; запрет копки strict остаётся как до правки.
+      const goalSky = resolvedTo.y == null ? null : skyLightAt(bot, new Vec3(bx, Math.floor(resolvedTo.y), bz))
+      const overSurface = surface !== false && this.underSky()
+      const surfaceWalk = overSurface && !(goalSky !== null && goalSky <= 7)
+
       ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
 
       // Жемчуг как ход (hopgoto.js): пеший путь по A* долгий (обход) — бросок к цели, дальше пешком.
@@ -866,8 +877,25 @@ class Session {
         if (ctl.aborted) throw new Error('прервано')
       }
 
+      // Быстрый спуск со скалы (navigation/descent.ts, S6c): цель ниже на 6+ — прыжок в воду, уступы или блоки вдоль
+      // стены, если быстрее пешего пути pathfinder'а. descent: false | { minGain, maxFallDamage, … }; ND_DESCENT=0 — выкл.
+      // На ходу — сторож (descent.watch): у края с готовым вариантом попытка pathfinder'а обрывается, решает maybeDescend.
+      const descentRuns = []
+      const descentMod = require('./navigation/descent')
+      const descentOpt = typeof descent === 'object' && descent ? descent : {}
+      const descendNow = async () => {
+        let r
+        try { r = await descentMod.maybeDescend(this, ctl, { x: bx, y: resolvedTo.y, z: bz }, goal, descentOpt) } catch (err) { r = { used: null, why: 'ошибка: ' + err.message } }
+        if (ctl.aborted) throw new Error('прервано')
+        if (r && r.used) descentRuns.push(r)
+        return r
+      }
+      const firstDescent = descentMod.on(descent) ? await descendNow() : null
+      let failDescent = null
+      const descentWatch = descentMod.on(descent) && !(firstDescent && firstDescent.efficient) ? descentMod.watch(bot, { x: bx, y: resolvedTo.y, z: bz }, () => { if (!failDescent) return false; failDescent(Object.assign(new Error('край обрыва — спуск'), { descent: true })); return true }) : null
+
       // без копки. С копкой pathfinder шёл сквозь гору штреком — две минуты
-      const strict = surface === 'strict' && surfaceWalk
+      const strict = surface === 'strict' && overSurface
       const attempt = async (g) => {
         // С лестницей выхода сторож — последняя страховка: застревание раньше ловит и лечит unstuck.
         const guard = stuckGuard(bot, ctl, un && !un.exhausted() ? 45000 : 8000)
@@ -880,19 +908,21 @@ class Session {
         this.surfaceStrict = strict
         let failPlace
         const placeGuard = new Promise((resolve, reject) => { failPlace = reject })
+        const descentGuard = new Promise((resolve, reject) => { failDescent = reject })
         let placeErrors = 0
         const onReset = (reason) => {
           if (reason === 'place_error' && ++placeErrors >= 6) failPlace(new Error('блок под ноги не ставится — шесть отказов подряд, этот путь не работает'))
         }
         bot.on('path_reset', onReset)
         try {
-          await Promise.race([waitPartial ? gotoGoal(bot, g, { unstuck: un }) : bot.pathfinder.goto(g), guard.promise, placeGuard])
+          await Promise.race([waitPartial ? gotoGoal(bot, g, { unstuck: un }) : bot.pathfinder.goto(g), guard.promise, placeGuard, descentGuard])
           // goto резолвит и пустой partial-путь. Достигнутая цель определяется
           // координатами тела, включая высоту для 3D-плана.
           if (!g.isEnd(bot.entity.position.floored())) {
             throw Object.assign(new Error('pathfinder закончил путь, но не достиг цели — не дошёл'), { noStep: true })
           }
         } finally {
+          failDescent = null
           bot.removeListener('path_reset', onReset)
           this.surfaceWalk = false
           this.pathGoalY = null
@@ -926,7 +956,10 @@ class Session {
         (lastError ? `: ${lastError.message}` : ''))
 
       let progressRetries = 0
+      let descentChecks = 0
       let stuckOut = false
+      ctl.onAbort.push(() => descentWatch && descentWatch.stop())
+      try {
       for (const step of plan) {
         if (stuckOut) break
         for (let retry = 0; retry < 2; retry++) {
@@ -941,10 +974,22 @@ class Session {
               climbedOut: pit.wasInPit ? pit.climbed : undefined,
               surface: surfaceWalk || undefined,
               pearl: pearlRun || undefined,
+              descent: descentRuns.length ? (descentRuns.length === 1 ? descentRuns[0] : descentRuns) : undefined,
               unstuck: un && (un.stats.detected || un.stats.refusals) ? un.report() : undefined
             }
           } catch (err) {
             if (ctl.aborted) throw err
+            if (err.descent) {
+              // Сторож спуска: решить у края; «пешком» — сюда не возвращаться. Попытка не в счёт.
+              try { bot.pathfinder.setGoal(null) } catch {}
+              const r = await descendNow()
+              if (descentWatch) descentWatch.skip(bot.entity.position)
+              if (descentWatch && r && r.efficient) descentWatch.stop()
+              tried.push(`спуск: ${r && r.used ? r.used + (r.why ? ' (' + r.why + ')' : '') : 'пешком'}`)
+              if (++descentChecks >= 6 && descentWatch) descentWatch.stop()
+              retry--
+              continue
+            }
             lastError = err
             tried.push(`${step.mode}#${retry + 1}: ${err.message}`)
             const gained = away0 - away()
@@ -981,6 +1026,7 @@ class Session {
           }
         }
       }
+      } finally { if (descentWatch) descentWatch.stop() }
       if (un) console.log('[unstuck] goto', JSON.stringify(un.report()))
       throw new Error(
         `не дошёл (${tried.length} попытки)${pit.wasInPit ? `, из ямы вылез на ${pit.climbed}${pit.stopped ? ' — ' + pit.stopped : ''}` : ''}. ` +

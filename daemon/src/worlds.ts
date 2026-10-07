@@ -111,7 +111,9 @@ function tuneMovements (bot, movements) {
       return out.filter(m => m.y >= floor)
     }
   }
-  const avoid = ['nether_portal', 'end_portal', 'end_gateway', 'soul_fire']
+  // Порошковый снег — тоже пусто по форме (minecraft-data: boundingBox 'empty'): pathfinder вёл сквозь него, тело вязло и
+  // замерзало (s8-f1-11: «froze to death» на 8.9 мин по пути к воде в снежных горах).
+  const avoid = ['nether_portal', 'end_portal', 'end_gateway', 'soul_fire', 'powder_snow']
   for (const name of avoid) {
     const b = reg.blocksByName[name]
     if (b && movements.blocksToAvoid) movements.blocksToAvoid.add(b.id)

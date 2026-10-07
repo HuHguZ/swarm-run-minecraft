@@ -131,7 +131,8 @@ test('sim: PARTIAL moves quantities half-way, facts stay unreached; a measured m
 test('sim: sampled worlds win, die and stick with a time distribution; reset policy prices the stuck worlds', async () => {
   const result = await simulate(60, 1, [], { sampled: true, costs: [], registry: { economy: true } })
   assert.equal(result.won + result.died + result.blocked, 60)
-  assert.ok(result.won > 12, `won ${result.won}`)
+  // s1c 06.10: GetBlazeRods risk is calibrated on the farm (0.35 with FR / 0.7 without) — fewer sampled wins than the 0.06 prior.
+  assert.ok(result.won > 5, `won ${result.won}`)
   const wins = result.winSeconds as { p10: number; p50: number; p90: number }
   assert.ok(wins.p10 <= wins.p50 && wins.p50 <= wins.p90 && wins.p10 < wins.p90, JSON.stringify(wins))
   const policy = resetPolicy(result.traces)

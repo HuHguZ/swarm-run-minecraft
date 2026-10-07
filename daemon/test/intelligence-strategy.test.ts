@@ -219,13 +219,24 @@ test('tactical revision discards apparent strategy success and observes before r
   assert.equal((await director.tick()).stopped, 'goal')
 })
 
-test('having enough pearls still allows verified fire resistance supply before blaze farming', () => {
-  const world = emptyWorld(); world.dimension = 'the_nether'; world.resources.pearls = 12; world.resources.food = 6
+test('fire resistance prices the blaze fight instead of gating it; its supply is an option with verified protection', () => {
+  const world = emptyWorld(); world.dimension = 'the_nether'; world.resources.pearls = 12; world.resources.food = 6; world.resources.shield = 1
   world.facts.fortress = fact(true, 'map', 0); world.facts.bastion = fact(true, 'map', 0)
-  world.facts.blaze_allowed = fact(false, 'observed', 0); world.facts.fire_resistance_count = fact(0, 'observed', 0)
+  world.facts.blaze_allowed = fact(true, 'observed', 0); world.facts.fire_resistance_count = fact(0, 'observed', 0)
   const registry = speedrunRegistry()
+  const rods = registry.get('GetBlazeRods')!
+  assert.equal(rods.preconditions(world), true, 'no FR potion does not forbid the spawner')
+  // Calibrated risks (s1c: 0.35 with FR, 0.7 without): a reachable bastion makes the FR trip worth its 600 s; with no FR source the
+  // fight goes on without it — FR is a price, never a gate.
   assert.deepEqual(plan(registry, world, s => amount(s, 'rods') >= 6).steps.map(s => s.id), ['AcquireFireResistance', 'GetBlazeRods'])
+  const noSource = { ...world, facts: { ...world.facts, bastions_exhausted: fact(true, 'observed', 0) } }
+  assert.deepEqual(plan(registry, noSource, s => amount(s, 'rods') >= 6).steps.map(s => s.id), ['GetBlazeRods'], 'no FR source — fight without it')
+  const withFr = { ...world, facts: { ...world.facts, fire_resistance_count: fact(2, 'observed', 0) } }
+  assert.ok(rods.estimateRisk(world) > rods.estimateRisk(withFr), 'FR lowers the priced risk')
+  assert.ok(rods.estimateRisk({ ...world, resources: { ...world.resources, shield: 0 } }) > rods.estimateRisk(world), 'no shield raises it')
   const supply = registry.get('AcquireFireResistance')!
+  assert.equal(supply.preconditions(world), true)
+  assert.equal(supply.preconditions(withFr), false, 'FR already held')
   assert.equal(supply.successCondition(world, { ...world, facts: { ...world.facts, blaze_allowed: fact(true, 'observed', 0) } }), false)
   assert.equal(supply.successCondition(world, { ...world, facts: { ...world.facts, fire_resistance_active: fact(true, 'observed', 0) } }), true)
   world.facts.bastions_exhausted = fact(true, 'observed', 0)

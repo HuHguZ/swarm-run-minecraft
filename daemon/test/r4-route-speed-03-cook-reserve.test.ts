@@ -88,14 +88,20 @@ test('rollback cooks all five and retains the old food target', async () => {
   assert.equal(c.state.inventory.cooked_mutton, 5)
 })
 test('raw chicken is fully cooked even with a sufficient safe reserve', async () => {
-  const c: any = load({ furnace: 1, cooked_mutton: 2, chicken: 4 })
+  const c: any = load({ furnace: 1, oak_log: 6, cooked_mutton: 2, chicken: 4 })
   await c.routeFood()
   assert.equal(c.state.inventory.cooked_chicken, 4)
 })
 test('hunger at 6 preserves full cooking; mixed meals do not duplicate the 12-point reserve', async () => {
-  const hungry: any = load({ furnace: 1, mutton: 5 }); hungry.state.food = 6
+  const hungry: any = load({ furnace: 1, oak_log: 6, mutton: 5 }); hungry.state.food = 6
   await hungry.routeFood(); assert.equal(hungry.state.inventory.cooked_mutton, 5)
-  const mixed: any = load({ furnace: 1, cooked_mutton: 1, salmon: 3 })
+  const mixed: any = load({ furnace: 1, oak_log: 6, cooked_mutton: 1, salmon: 3 })
   await mixed.routeFood(); assert.equal(mixed.state.inventory.cooked_salmon, 1)
   assert.equal(mixed.state.inventory.salmon, 2)
+})
+test('S8: cook without fuel does not dig stone for a new furnace (raw meat is still food)', async () => {
+  const c: any = load({ beef: 4, oak_planks: 1 })
+  await c.cook()
+  assert.ok(!c.requests.some(([m, p]: any) => m === 'mine' && p.block === 'stone'), JSON.stringify(c.requests))
+  assert.ok(!c.requests.some(([m]: any) => m === 'dig_down'))
 })

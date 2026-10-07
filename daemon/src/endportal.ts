@@ -167,7 +167,10 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: 
         break
       }
       const spike = land && /pointed_dripstone/.test(land.name)
-      if (gap > 2 || (gap > 0 && spike) || (Number.isFinite(targetY) && feet.y - gap - 1 < targetY)) {
+      // Спуск в пещеру до 4 блоков на твёрдое — цена (0–1 хп), а не стоп (гибкость, s5c-g2-2 06.10: «под ногами пещера
+      // (3 блоков) — прыгать не стал» ×6 на одном месте, 20 мин до конца срока). Лава, магма, сталагмит, снег — по-прежнему нет.
+      const safeDrop = gap <= 4 && !!land && land.boundingBox === 'block' && !/lava|magma|pointed_dripstone|powder_snow|cactus|campfire/.test(land.name) && (bot.health ?? 20) >= 10
+      if ((gap > 2 && !safeDrop) || (gap > 0 && spike) || (Number.isFinite(targetY) && feet.y - gap - 1 < targetY)) {
         const moved = await sideStepShaft(bot, mcData, feet)
         if (moved) { dug += moved; sidesteps++; if (sidesteps > 12) return { stopped: 'пещеры под шахтой со всех сторон', dug }; continue }
         // Сбоку тоже пещера — вниз лесенкой (actions.digDown stairs: уступы и
@@ -184,7 +187,7 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: 
     // Кирки кончились (ход по Аду и шахта к комнате стёрли все: SH5 03.10 — комната найдена на 7-й мин, кирок 0, этап
     // wood увёл наверх, рамки «в 103 блоках») — каменные из булыжника шахты и палок рюкзака (tunnel.restockPicks), запас ≥ 2.
     if (require('./tunnel').lowPicks(bot) < 2) { try { await require('./tunnel').restockPicks(session, ctl, 2) } catch {} }
-    const problem = missingHarvestTool(bot, below, mcData)
+    const problem = cantDigThrough(bot, below, mcData)
     if (problem) return { stopped: problem, dug }
     let digErr = null
     for (let k = 0; k < 3; k++) {
@@ -227,25 +230,54 @@ async function sideStepShaft (bot, mcData, feet) {
       if (b && /water|lava/.test(b.name)) wet = true
     }
     if (wet) continue
-    let ok = true
+    const s = await digStepInto(bot, mcData, n)
+    dug += s.dug
+    if (s.ok) return Math.max(1, dug)
+  }
+  return 0
+}
+
+// Копать насквозь (шахта, штрек) — дроп не нужен: снег, землю, лёд руками пробить можно (s5c-g2-3 06.10: snow_block в шахте
+// «без лопаты не ломается» — 45 мин на одном месте до конца срока). Стоп — только если удар дольше 10 игр. с (обсидиан и т. п.).
+function cantDigThrough (bot, b, mcData) {
+  const problem = missingHarvestTool(bot, b, mcData)
+  if (!problem) return null
+  let t = Infinity
+  try { t = bot.digTime(b) } catch {}
+  return t <= 10000 ? null : problem
+}
+
+// Шаг в соседнюю клетку на своём уровне: голова, потом ноги (каждый удар — по видимому блоку, обёртка dig у вызывающего),
+// осыпь (гравий/песок) — до трёх раз, потом шаг. { ok, dug, why }. Свой простой шаг вместо mining.tunnel в штреке к комнате:
+// тот на «шаге штрека» молча не двигал тело (s5c-f2-4/f2-5 06.10: «шаг штрека не выполнен» у самой комнаты, 5+ мин на месте).
+async function digStepInto (bot, mcData, n) {
+  let dug = 0
+  for (let pass = 0; pass < 3; pass++) {
+    let solid = false
     for (const c of [n.offset(0, 1, 0), n]) {
       const b = bot.blockAt(c)
       if (!b || b.boundingBox === 'empty') continue
-      if (missingHarvestTool(bot, b, mcData)) { ok = false; break }
-      try { await equipBestTool(bot, b); await bot.dig(b); dug++ } catch { ok = false; break }
+      solid = true
+      const tool = cantDigThrough(bot, b, mcData)
+      if (tool) return { ok: false, dug, why: tool }
+      try { await equipBestTool(bot, b); await bot.dig(b); dug++ } catch (e) { return { ok: false, dug, why: `не сломал ${b.name}: ${e.message}` } }
     }
-    if (!ok) continue
-    const t0 = gameClock.now()
-    try {
-      while (gameClock.now() - t0 < 1500 && !bot.entity.position.floored().equals(n)) {
-        await bot.lookAt(n.offset(0.5, 1.6, 0.5), true)
-        bot.setControlState('forward', true)
-        await sleep(50)
-      }
-    } finally { bot.setControlState('forward', false) }
-    if (bot.entity.position.floored().equals(n)) return Math.max(1, dug)
+    if (!solid) break
+    await sleep(150)
   }
-  return 0
+  const t0 = gameClock.now()
+  try {
+    while (gameClock.now() - t0 < 1500 && !bot.entity.position.floored().equals(n)) {
+      await bot.lookAt(n.offset(0.5, 1.6, 0.5), true)
+      bot.setControlState('forward', true)
+      await sleep(50)
+    }
+  } finally { bot.setControlState('forward', false) }
+  const ok = bot.entity.position.floored().equals(n)
+  if (ok) return { ok, dug }
+  const at = bot.entity.position.floored()
+  const name = q => { const b = bot.blockAt(q); return b ? b.name : '?' }
+  return { ok, dug, why: `не шагнул в ${xyz(n).x},${xyz(n).y},${xyz(n).z}: стою ${at.x},${at.y},${at.z}, в ногах ${name(n)}, в голове ${name(n.offset(0, 1, 0))}` }
 }
 
 // Шахта остановилась у кирпича — но тело ещё в своей шахте 1x1, а не в
@@ -495,6 +527,26 @@ function wetColumn (bot, x, z, topY) {
         const b = bot.blockAt(new Vec3(x + dx, y, z + dz))
         if (b && /water|lava/.test(b.name)) return b.name === 'lava' ? 'лава' : 'вода'
       }
+    }
+  }
+  return null
+}
+
+// Ближайшая к входу комнаты сухая колонка: кольца до DRY_FAR бл., точки через 2 бл. по периметру, только прогруженные
+// чанки (непрогруженная — не суша). { x, z, r } или null.
+// До 96 бл. (s5c-g2-1: комната под морем, суши в 48 нет — 60 мин у воды): дальше 48 — точки через 4 бл. (дешевле), чанки
+// в обзоре (8 = 128 бл.) у тела, подошедшего к комнате, прогружены; штрек под дном до 96+ шагов.
+const DRY_FAR = 96
+function dryEntry (bot, shaft, maxR = DRY_FAR) {
+  const fromY = bot.entity.position.floored().y
+  for (let r = 0; r <= maxR; r += r < 48 ? 2 : 4) {
+    const step = r < 48 ? 2 : 4
+    const pts = r === 0 ? [[0, 0]] : []
+    for (let d = -r; d < r; d += step) pts.push([d, -r], [r, d], [-d, r], [-r, -d])
+    for (const [dx, dz] of pts) {
+      const x = shaft.x + dx; const z = shaft.z + dz
+      const y = surfaceY(bot, x, z, fromY)
+      if (y !== null && !wetColumn(bot, x, z, y)) return { x, z, r }
     }
   }
   return null
@@ -1005,18 +1057,21 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   // На поверхности сначала выбираем сухую колонку вне комнаты. При повторном
   // вызове из шахты продолжаем с текущей высоты и не возвращаемся наверх.
   if (bot.entity.position.y > target.y + 2 && skyAbove(bot) && bot.entity.position.y >= 55) {
-    const w = await walkOrBridge(session, ctl, plan.shaft, deadline)
-    if (!w.ok) return { went: false, mapped: true, stopped: `к сухому входу комнаты не дошёл: ${w.error}` }
-    let dry = null
-    for (const r of [0, 2, 4, 8, 12, 14]) {
-      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r]]) {
-        const x = plan.shaft.x + dx; const z = plan.shaft.z + dz
-        const y = surfaceY(bot, x, z, bot.entity.position.floored().y)
-        if (y !== null && !wetColumn(bot, x, z, y)) { dry = { x, z }; break }
-      }
-      if (dry) break
+    // Сухой вход — ещё с суши, по прогруженным чанкам, до DRY_FAR бл. от входа комнаты (s5c-f1-1, 06.10: комната под
+    // океаном у монумента — лодкой к точке над комнатой, сухого в 14 бл. нет, тело в воде у стражей погибло). Дальний
+    // сухой вход — шахта там и штрек на уровне комнаты под дном (mappedStepRisk обходит воду и лаву).
+    let dry = dryEntry(bot, plan.shaft)
+    if (!dry) {
+      const w = await walkOrBridge(session, ctl, plan.shaft, deadline)
+      if (!w.ok) return { went: false, mapped: true, stopped: `к сухому входу комнаты не дошёл: ${w.error}` }
+      dry = dryEntry(bot, plan.shaft)
     }
-    if (!dry) return { went: false, mapped: true, stopped: 'над комнатой вода/лава: сухой вход в 14 бл. не найден' }
+    if (!dry) return { went: false, mapped: true, stopped: `над комнатой вода/лава: сухой вход в ${DRY_FAR} бл. не найден` }
+    if (Math.hypot(dry.x + 0.5 - bot.entity.position.x, dry.z + 0.5 - bot.entity.position.z) > 8) {
+      const w = await walkOrBridge(session, ctl, dry, deadline)
+      walks.push({ to: { x: dry.x, z: dry.z }, ok: w.ok, fromShaft: dry.r })
+      if (!w.ok) return { went: false, mapped: true, walks, stopped: `к сухому входу (${dry.r} бл. от комнаты) не дошёл: ${w.error}` }
+    }
     const approach = await travelXZ(bot, ctl, dry.x, dry.z, { range: 0, retries: 1, deadline })
     walks.push({ to: dry, ok: approach.ok })
     if (!approach.ok) return { went: false, mapped: true, walks, stopped: `до сухой колонки не дошёл: ${approach.error}` }
@@ -1030,7 +1085,7 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   let stopped = null
   // К комнате прямо на её высоте. Лава/вода — обойти по сухому на этом же
   // уровне; пустота — твёрдая подпорка перед шагом, никакого падения к лаве.
-  for (let i = 0; i < 160 && !ctl.aborted && gameClock.now() < deadline; i++) {
+  for (let i = 0; i < 260 && !ctl.aborted && gameClock.now() < deadline; i++) {
     const feet = bot.entity.position.floored()
     if (feet.y !== target.y) { stopped = 'сбило с уровня комнаты — нужен новый подход'; break }
     if (feet.x === target.x && feet.z === target.z) return { went: true, inside: true, mapped: true, room: room.centre, target: xyz(target), dug, walks }
@@ -1052,11 +1107,11 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
       }
       // Видимость проверяет обёртка каждого dig: голова сначала открывает ноги.
       if (require('./tunnel').lowPicks(bot) < 2) await require('./tunnel').restockPicks(session, ctl, 2).catch(() => 0)
-      const r = await require('./nether').guarded(session, ctl, sub => require('./mining').tunnel(session, sub, { direction, length: 1, torchEvery: 0, timeoutSeconds: Math.max(1, Math.min(20, (deadline - gameClock.now()) / 1000)) }))
+      const r = await require('./nether').guarded(session, ctl, () => digStepInto(bot, session.mcData, cell))
       dug += r.dug || 0
       if (bot.entity.position.floored().equals(cell)) { moved = true; walks.push({ to: xyz(cell) }); break }
-      stopped = r.stopped || r.error || 'шаг штрека не выполнен'
-      if (r.threat || r.need || ctl.aborted) break
+      stopped = r.why || r.stopped || r.error || `шаг штрека ${direction} не выполнен`
+      if (r.fought || ctl.aborted) break
     }
     if (!moved) break
   }
@@ -1747,4 +1802,4 @@ async function enterPortal (session, ctl, portal, deadline) {
   return out
 }
 
-module.exports = { goStronghold, findRoom, fillFrames, enterPortal, shaftToBricks, mappedStepRisk, goMappedRoom, BRICKS, PLACE, ROOM }
+module.exports = { goStronghold, findRoom, fillFrames, enterPortal, shaftToBricks, mappedStepRisk, goMappedRoom, dryEntry, cantDigThrough, BRICKS, PLACE, ROOM }

@@ -176,9 +176,22 @@ function myHook (bot) {
   return { e, hooked: typeof h === 'number' && h > 0 ? h - 1 : null }
 }
 
+// Его поплавок зацепил меня: поплавок рядом (≤ 32 бл. от хозяина), метаданные зацепа = мой id + 1, хозяин — e.
+function hookedBy (bot, e) {
+  const R = bot._ndRodPull
+  if (!R || !bot.entity || !e) return null
+  for (const [hookId, ownerId] of R.owners) {
+    if (ownerId !== e.id) continue
+    const h = bot.entities[hookId]
+    if (!h || h.isValid === false || !h.metadata) continue
+    if (h.metadata[8] === bot.entity.id + 1) return h
+  }
+  return null
+}
+
 // Зачем тянуть (или null): со столба; через яму или в лаву между нами (прогон
 // тела edges.knockRun со скоростью рывка); едока — к мечу.
-function rodPlan (bot, e, { d, dy, sees, busy = {}, theyUp = false }: any = {}) {
+function rodPlan (bot, e, { d, dy, sees, busy = {}, theyUp = false, vel = null, blocking = false }: any = {}) {
   if (!isPlayer(e) || !sees) return null
   if (!findItem(bot, i => i.name === 'fishing_rod')) return null
   if (d < 3.5 || d > ROD_MAX) return null
@@ -200,6 +213,16 @@ function rodPlan (bot, e, { d, dy, sees, busy = {}, theyUp = false }: any = {}) 
   } catch {}
   // Ест или пьёт: медленный (×0.2), рывок подтащит его к мечу — добить в глоток.
   if (busy.consuming && busy.consuming.left > 700 && d > 4.5) return { why: 'удочкой подтащил едока', pull }
+  // Тянет лук/арбалет на дистанции (s7b: удочка за 10 раундов — 4 раза): рывок сбивает его прицел и тащит к мечу.
+  if (busy.drawing && d > 4.5) return { why: 'удочкой сдёрнул стрелка', pull }
+  // Уходит (жемчужник, лучник, лечиться): его скорость от нас > 0.12 б/т — подтянуть и догнать (пользователь 06.10:
+  // «удочкой притягивать и потом в комбо»). FishingHook.pullEntity: Δv = 0.1·(я − поплавок), javap 1.21.11.
+  if (vel && d > 4.5) {
+    const ax = (e.position.x - me.x) / d; const az = (e.position.z - me.z) / d
+    if (vel.x * ax + vel.z * az > 0.12) return { why: 'удочкой подтянул убегающего', pull }
+  }
+  // Подлёт под удар: 4.5–7.5 бл., щит не поднят — подтяг и рывок со спринт-ударом (комбо продлевается рывком).
+  if (!blocking && d >= 4.5 && d <= 7.5) return { why: 'удочкой подтянул под удар', pull }
   return null
 }
 
@@ -658,7 +681,7 @@ async function pourLava (bot, e, plan) {
 // Один раз на бой: планировщик приёмов и счёт. used — в отчёт боя.
 function create (bot, { used = () => {}, tt = null }: any = {}) {
   installRodPull(bot)
-  const st = { rod: 0, rodHooked: 0, trident: 0, tridentHit: 0, riptide: 0, chorus: 0, anvils: 0, anvilDmg: [], boxes: 0, lava: 0, pulledMe: 0 }
+  const st = { rod: 0, rodHooked: 0, hookedOnMe: 0, rodCounter: 0, trident: 0, tridentHit: 0, riptide: 0, chorus: 0, anvils: 0, anvilDmg: [], boxes: 0, lava: 0, pulledMe: 0 }
   const cd = {}
   const ready = (k) => gameClock.now() >= (cd[k] || 0)
   const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
@@ -715,9 +738,23 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
         rest('trap', 2500)
       }
     }
+    // Контрмеры: его поплавок на мне (метаданные поплавка: зацеплен = мой id + 1). Удочка есть — обратный подтяг
+    // (оба поплавка тянут к хозяину: кто дёрнул вторым — тот и тянет), иначе — отметка: бой ударит на подлёте.
+    const hookOnMe = hookedBy(bot, e)
+    if (hookOnMe && ready('rodCounter')) {
+      rest('rodCounter', 2000)
+      st.hookedOnMe++
+      if (ctx.d >= 3.5 && ctx.d <= ROD_MAX && findItem(bot, i => i.name === 'fishing_rod') && ctx.sees) {
+        st.rod++
+        const r = await rodPull(bot, ctx.ctl, e, { velFn: ctx.vel })
+        if (r.hooked) { st.rodHooked++; st.rodCounter++; used('удочка на удочку — обратный подтяг') } else used('его поплавок на мне — обратный подтяг мимо')
+        return { did: 'rod', rush: !!r.hooked }
+      }
+      used('его поплавок на мне — бью на подлёте')
+    }
     // Удочка.
     if (ready('rod') && ctx.d >= 3.5 && ctx.d <= ROD_MAX) {
-      const rp = rodPlan(bot, e, { d: ctx.d, dy: ctx.dy, sees: ctx.sees, busy: ctx.busy || {}, theyUp: ctx.theyUp })
+      const rp = rodPlan(bot, e, { d: ctx.d, dy: ctx.dy, sees: ctx.sees, busy: ctx.busy || {}, theyUp: ctx.theyUp, vel: ctx.vel ? ctx.vel() : null, blocking: !!ctx.blocking })
       if (rp) {
         rest('rod', 2500)
         st.rod++
@@ -728,7 +765,8 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
     }
     // Трезубец в него.
     if (ready('trident')) {
-      const ehp = hpOf(bot, e)
+      // Против игрока — оценка хп (ctx.foeHp из pvp.foeHpDecide), не метаданные: человек их не видит (AGENTS.md).
+      const ehp = ctx.foeHp !== undefined ? ctx.foeHp : hpOf(bot, e)
       const tp = tridentPlan(bot, e, { d: ctx.d, sees: ctx.sees, finishing: ehp != null && ehp <= 5 })
       if (tp && (ctx.d > 7 || (ctx.busy && ctx.busy.consuming))) {
         rest('trident', 1800)
@@ -798,6 +836,7 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
     if (st.pulledMe) used(`удочкой дёрнули меня ×${st.pulledMe} (сдвинулся сам, как клиент)`)
     const bits = []
     if (st.rod) bits.push(`удочка ${st.rodHooked}/${st.rod}`)
+    if (st.hookedOnMe) bits.push(`меня зацепили ${st.hookedOnMe}, обратный подтяг ${st.rodCounter}`)
     if (st.trident) bits.push(`трезубец ${st.tridentHit}/${st.trident}`)
     if (st.riptide) bits.push(`«Тягун» ${st.riptide}`)
     if (st.chorus) bits.push(`хорус ${st.chorus}`)
@@ -811,7 +850,7 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
 }
 
 module.exports = {
-  create, installRodPull, rodFlight, rodPitch, rodPlan, rodPull, myHook,
+  create, installRodPull, rodFlight, rodPitch, rodPlan, rodPull, myHook, hookedBy,
   tridentPlan, throwTrident, riptide, riptideTo, rainAt, chorusOdds, escapeChoice, chorusEscape,
   stuckOf, anvilPlan, dropAnvil, blockInPlan, blockIn, lavaPlan, pourLava, ROD_MAX
 }

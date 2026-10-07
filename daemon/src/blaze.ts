@@ -418,9 +418,12 @@ function restSpots (bot, blazes, { min = 4, max = 24, want = 6, maxSeen = 0 }: a
 }
 
 // Отдышаться: за угол, поесть, ждать хп. Возвращает, что вышло.
+// Ифрит, которого знает игрок: виден лучом или слышен (дыхание/залп ифрита — звук сущности, слышен в 16 бл.: дальность звука по
+// умолчанию, SoundEvent.createVariableRangeEvent 1.21.11). Дальше 16 — только видимые (замечание проверки 06.10: как у игрока).
+const BLAZE_HEAR = 16
 function liveBlazes (bot, dead, radius = 48) {
   return (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
-    !dead.has(e.id) && e.position.distanceTo(bot.entity.position) <= radius)
+    !dead.has(e.id) && e.position.distanceTo(bot.entity.position) <= radius && (e.position.distanceTo(bot.entity.position) <= BLAZE_HEAR || seesMob(bot, e)))
 }
 
 // Сколько блейзов видят нас сейчас (луч от их глаз до наших).
@@ -509,6 +512,9 @@ const VOLLEY_END_MS = 3900 // флаг падает
 const SHIELD_LEAD_MS = 700 // щиту нужно 0.25 с плюс запас на пакеты
 const TAIL_MS = 800 // после падения флага шар ещё летит
 const MELEE = 2.95
+// Откат удара по предмету в руке (attack_speed 1.21.11: меч 1.6/с = 625 мс, кирка 1.2/с = 833 мс — pvp.cooldownMs, +1 тик запаса).
+// Кирка с интервалом меча била на 3/4 силы (замечание проверки 06.10).
+const swingMs = bot => require('./pvp').cooldownMs(bot.heldItem)
 const BOW_MIN = 3.5
 // Лук — только по близким (14): дальний блейз и умирает далеко, стержень за
 // пределами вылазки (замер 26: 5 убийств, стержни за 24-28 блоков).
@@ -1212,7 +1218,7 @@ function sweepRisk (bot, e) {
   const me = bot.entity.position
   return (Object.values(bot.entities) as any[]).some((o: any) => o && o !== e && o.id !== e.id && o.position && /^(zombified_piglin|piglin|piglin_brute|enderman)$/.test(o.name || '') &&
     Math.abs(o.position.x - e.position.x) < 1.7 && Math.abs(o.position.z - e.position.z) < 1.7 && o.position.y < e.position.y + (e.height || 1.8) + 0.3 && o.position.y + (o.height || 1.9) > e.position.y - 0.3 &&
-    o.position.distanceTo(me) < 4)
+    o.position.distanceTo(me) < 4 && seesMob(bot, o))
 }
 
 function bystanderOnLine (bot, e) {
@@ -1249,7 +1255,7 @@ async function meleeGuarded (session, ctl, foe, { guard, bailAt = 7, maxMs = 250
       if (guard.stats.blocked > blocks) { blocks = guard.stats.blocked; blockAt = gameClock.now() }
       const r = reachTo(bot, foe)
       const win = gameClock.now() - blockAt < 700 || gameClock.now() - Math.max(last, t0) > 1200
-      if (r <= MELEE && gameClock.now() - last >= 625 && win) {
+      if (r <= MELEE && gameClock.now() - last >= swingMs(bot) && win) {
         await guard.raise(false)
         try { bot.attack(foe); swings++; last = gameClock.now() } catch {}
         continue
@@ -1287,6 +1293,24 @@ function shieldWear (bot) {
 }
 
 // Сам бой у спавнера. Возвращает, что вышло; убийства считает farmRods.
+// Иссушитель вплотную — бой из ямы глубиной 2 (nether-route.pitFight: его рамка удара раздута только вширь), а не вердикт
+// «не переживу размен» и бег (s1c-A-7 06.10: иссушитель у помоста — 9.6 ударом и 4 иссушением за секунду, отказ, бег — смерть;
+// s1c-L-3: 19 урона за ожидание «спавнер виден?» в начале навыка).
+function witherClose (bot) {
+  if (process.env.ND_WITHER_PIT === '0') return null
+  return (Object.values(bot.entities) as any[]).find((e: any) => e && e.name === 'wither_skeleton' && e.isValid !== false && e.position &&
+    e.position.distanceTo(bot.entity.position) < 3.6 && seesMob(bot, e)) || null
+}
+async function pitFrom (session, ctl, out, w) {
+  const NR = require('./nether-route')
+  let ok = await NR.pitFight(session, ctl, (out.pitSt ||= {}), w).catch(() => false)
+  if (ok) out.witherPits = (out.witherPits || 0) + 1
+  // Яму не выкопать (мост крепости: под ногами воздух) — столб 3 и лук сверху (rangedClear: рамка удара иссушителя 2.4 по высоте не
+  // достаёт ноги на +3; s1c-P-2 06.10: на мосту у помоста 3 удара за секунду, «withered away»).
+  if (!ok) { ok = await NR.rangedClear(session, ctl, out.pitSt, { radius: 6 }).catch(() => false); if (ok) out.witherTowers = (out.witherTowers || 0) + 1 }
+  return ok
+}
+
 async function holdSpawner (session, ctl, ctx) {
   const bot = session.bot
   const combat = require('./combat')
@@ -1320,6 +1344,19 @@ async function holdSpawner (session, ctl, ctx) {
     if (pk && (!bot.heldItem || bot.heldItem.name !== pk.name)) { try { await bot.equip(pk, 'hand') } catch {} }
   }
   let lastSwing = gameClock.now()
+  // Смена предмета в руке обнуляет откат удара (Player.tick → resetAttackStrengthTicker при смене main hand, 1.21.11).
+  let swapAt = 0
+  const onHeld = () => { swapAt = gameClock.now() }
+  bot.on('heldItemChanged', onHeld)
+  // Удар, только когда откат предмета в руке прошёл; оружие под цель (кирка при нейтрале рядом) — до проверки отката.
+  const swingFor = async (e) => {
+    await equipFor(e)
+    if (gameClock.now() - Math.max(lastSwing, swapAt) < swingMs(bot)) return false
+    await setShield(false)
+    try { await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.6, 0), true) } catch {}
+    try { if (lockOwner()) out.swingNoLease++; bot.attack(e); lastSwing = gameClock.now(); out.melee++ } catch {}
+    return true
+  }
   let idleSince = gameClock.now()
   let lastBeat = 0
   let shieldOn = false
@@ -1384,14 +1421,45 @@ async function holdSpawner (session, ctl, ctx) {
     let escape = null
     if (!inBunker()) {
       setPhase('отрыв до лечения')
+      // Без FR под лучами ифритов бег — под залпами (s1c-L-4 06.10: «отрыв до лечения» 14.8 шарами и огнём, смерть): ифрит вплотную
+      // не повод бежать — сперва в толщу на месте (две копки; в яме 1×1 с крышкой его удар и шары не достают), бег — если не вышло.
+      const nofrSeen = !fireproof() && liveBlazes(bot, dead, 24).some(e => seesMe(bot, e))
       // Бег (kite) — только от ифрита вплотную. От стрелков бег — спиной под
       // очереди: на ферме 2026-09-29 «отрыв до лечения» дал 14–18 из 20
       // смертельного урона. Без ближнего врага — сразу стенка (ниже).
-      escape = meleeThreat() ? await survival.disengage(session, ctl, foesNow) : { clear: true, how: 'без бега: вплотную никого' }
+      escape = meleeThreat() && !nofrSeen ? await survival.disengage(session, ctl, foesNow) : { clear: true, how: nofrSeen ? 'без бега: без FR — в толщу' : 'без бега: вплотную никого' }
       if (!escape.clear) {
         const enemy = meleeThreat() || foesNow()[0]
         if (enemy && (bot.health ?? 0) > 0 && !ctl.aborted) escape.cover = await combat.retreat(session, ctl, enemy)
         if (meleeThreat() || (bot.health ?? 0) <= 0 || ctl.aborted) return { rested: false, why: 'не удалось разорвать контакт для лечения', escape }
+      }
+      // Без огнестойкости под лучами ифритов — отлёжка в толще на месте (2 вниз + крышка, digInPlace: две копки и один блок),
+      // а не стройка коробки под залпами со снятым щитом (s1c-N-2 06.10: фаза «коробка» — 4 шара подряд, 17 урона, смерть).
+      // Отлечился — крышку сломать, столб 2 под себя и бой дальше; наверх не вышел — конец захода в толще (dugIn).
+      if (!fireproof() && liveBlazes(bot, dead, 24).some(e => seesMe(bot, e))) {
+        setPhase('в толщу отлечиться')
+        const dug: any = await digInNear(bot, ctl).catch(e => ({ ok: false, why: e.message }))
+        log('в толщу отлечиться', dug)
+        if (dug.ok) {
+          const hp0 = Math.round(bot.health ?? 0)
+          const t0 = gameClock.now()
+          while (!ctl.aborted && gameClock.now() - t0 < Math.min(60000, Math.max(0, deadline - gameClock.now() - 15000)) && (bot.health ?? 0) < 19) {
+            if ((bot.food ?? 20) < 20) { try { await actions.eat(session, {}) } catch {} }
+            if ((bot.food ?? 20) < 18 && !bot.inventory.items().some(i => FOOD_RE.test(i.name))) break
+            await sleep(500)
+          }
+          const hp1 = Math.round(bot.health ?? 0)
+          const top = bot.entity.position.floored().offset(0, 2, 0)
+          if ((bot.health ?? 0) >= 14 && !ctl.aborted) {
+            try { const b = bot.blockAt(top); if (b && b.boundingBox === 'block') await require('./sealed').digCell(bot, top) } catch {}
+            const up = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+            if (up && up.ok) return { rested: hp1 >= 18, where: 'яма на месте', hp: `${hp0} -> ${hp1}`, seconds: Math.round((gameClock.now() - t0) / 1000), escape }
+          }
+          stopped = `отлёжка в толще: хп ${hp0} -> ${hp1}, наверх не вышел — остаюсь в яме`
+          bail = true
+          out.dugIn = { ok: true, sealed: !!dug.sealed, at: xyz(bot.entity.position) }
+          return { rested: false, where: 'яма на месте', why: stopped, escape }
+        }
       }
       if (liveBlazes(bot, dead, 24).some(e => seesMe(bot, e))) {
         setPhase('из линии огня до лечения')
@@ -1470,9 +1538,19 @@ async function holdSpawner (session, ctl, ctx) {
     log("куда дойти", { cells: reach ? reach.size : null, at: xyz(bot.entity.position) })
     if (reach && reach.size < 20) reach = null
   }
+  const witherPit = async () => {
+    const w = witherClose(bot)
+    if (!w) return false
+    await setShield(false)
+    stopWalking()
+    setPhase('яма от иссушителя')
+    const ok = await pitFrom(session, ctl, out, w)
+    return ok
+  }
   try {
     await equipSword()
     await guard.wear()
+    await witherPit()
     home = bot.entity.position.floored()
     refreshReach()
     // Позвали с малым хп (прошлый вызов кончился на 2–3 хп): сначала поесть и
@@ -1482,8 +1560,13 @@ async function holdSpawner (session, ctl, ctx) {
     out.safety = preparation
     // Под огнестойкостью и среди одних ифритов «не переживу размен» — неверно (расчёт берёт удар 6 у каждого и шары): бой
     // начинать (s1-LE-10 06.10: «не переживу ближайший размен» на 20 хп при старте → навык вышел, смерть у спавнера).
-    const frOnlyBlazes = () => fireproof() && foesNow().every((e: any) => e.name === 'blaze') && (bot.health ?? 0) >= 9
-    if ((preparation.action === 'leave' && !frOnlyBlazes()) || preparation.action === 'dead') {
+    const onlyBlazes = () => foesNow().every((e: any) => e.name === 'blaze')
+    const frOnlyBlazes = () => fireproof() && onlyBlazes() && (bot.health ?? 0) >= 9
+    // Без огнестойкости среди одних ифритов вердикт «не переживу размен» (удар 6 каждого и шары) — не отказ: с 14+ хп бой по
+    // механике ифрита, при малом хп — отлёжка в толще (restNow) и возврат (s1c-N-4 06.10: «не переживу» на 16 хп → бег → смерть).
+    // Еды нет — отлёжка не лечит: тогда вердикт safety в силе.
+    const nofrOnlyBlazes = () => !fireproof() && onlyBlazes() && (bot.health ?? 0) > 0 && bot.inventory.items().some(i => FOOD_RE.test(i.name))
+    if ((preparation.action === 'leave' && !frOnlyBlazes() && !(nofrOnlyBlazes() && (bot.health ?? 0) >= 14)) || preparation.action === 'dead') {
       setPhase('отказ от неподготовленного боя')
       out.safety = preparation
       if (preparation.action !== 'dead') out.escape = await survival.disengage(session, ctl, foesNow)
@@ -1560,7 +1643,7 @@ async function holdSpawner (session, ctl, ctx) {
         if (now > out.clearUntil) break
       }
       if (now > deadline) { stopped = 'время вышло'; break }
-      if (startedFireproof && !fireproof()) {
+      if (startedFireproof && !fireproof() && !out.frLostAt) {
         let d = await drinkFireResistance(bot)
         // Эффект приходит отдельным пакетом после глотка — до 4 с (ферма 02.10 neF-blz-4: через 2 с ещё «нет» → зря кончил бой).
         for (let i = 0; i < 40 && d === 'выпил fire_resistance' && !hasEffect(bot, 'fire_resistance'); i++) await sleep(100)
@@ -1572,12 +1655,22 @@ async function holdSpawner (session, ctl, ctx) {
         }
         log('огнестойкость кончилась', { drank: d, now: hasEffect(bot, 'fire_resistance') })
         if (!fireproof()) {
-          setPhase('огнестойкость закончилась')
-          const r = await restNow()
-          out.rests.push(r)
-          stopped = d === 'выпил fire_resistance' ? 'огнестойкость закончилась, новое зелье не подействовало — бой без защиты от огня не продолжаю' : 'огнестойкость закончилась, зелий нет — бой без защиты от огня не продолжаю'
-          bail = true
-          break
+          // Огнестойкость — плюс к безопасности, не допуск (решение пользователя 06.10 22:33): бой дальше по механике ифрита — щит
+          // на залп (радар заряда), меч между залпами, коробка с окном в тишине, отдых в укрытии при малом хп и возврат.
+          out.frLostAt = gameClock.now()
+          setPhase('бой без огнестойкости')
+          if (!bunker && !boxPlan && spawner) {
+            const plan = planKillBox(bot, spawner, blocksHave(bot))
+            if (!plan.none) { boxPlan = plan; boxTries = 0; boxRetryAt = 0 }
+          }
+          log('огнестойкость кончилась — бой дальше без неё', { drank: d, hp: Math.round(bot.health ?? 0), box: boxPlan ? xyz(boxPlan.cell) : null })
+          if ((bot.health ?? 0) < ctx.restAt || (bot.health ?? 0) < 16 && liveBlazes(bot, dead, 16).filter(e => seesMe(bot, e)).length >= 2) {
+            const r = await restNow()
+            out.rests.push(r)
+            if (!r.rested && (bot.health ?? 0) < 10) { stopped = `огнестойкость кончилась, хп ${Math.round(bot.health ?? 0)}, отдых не вышел: ${r.why || 'нет укрытия'}`; bail = true; break }
+            await equipSword()
+          }
+          continue
         }
       }
       // ND_GUARD=1 (ne-guard): иссушитель/магмовый куб/злой пиглин бьёт или иссушитель вплотную — ответ сразу (столб 3,
@@ -1598,8 +1691,27 @@ async function holdSpawner (session, ctl, ctx) {
           }
         }
       }
+      if (await witherPit()) { await equipSword(); continue }
+      // Без FR бой держится на отдыхе с едой; еда кончается — закончить заход в толще, а не дойти до «нечем восстановить здоровье»
+      // и бега под залпами (s1c-F-9 06.10: без FR 110.9 урона за бой, отдыхи в коробке, еда кончилась — бег, смерть).
+      if (!fireproof() && bot.inventory.items().filter(i => FOOD_RE.test(i.name)).reduce((n, i) => n + i.count, 0) <= 2 && (bot.health ?? 20) < 18) {
+        stopped = 'без огнестойкости еда кончается — заход заканчиваю в толще'
+        bail = true
+        break
+      }
       const hp = bot.health ?? 0
       const risk = checkSafety('continue')
+      if (risk.action === 'leave' && nofrOnlyBlazes() && !frOnlyBlazes()) {
+        out.safety = risk
+        const r = await restNow()
+        out.rests.push(r)
+        log('отдых вместо ухода', { why: risk.reason, ...r })
+        if (bail) break
+        if (!r.rested && (bot.health ?? 0) < 14) { stopped = `${risk.reason}; отдых не вышел: ${r.why || 'нет укрытия'}`; bail = true; break }
+        await equipSword()
+        await guard.wear()
+        continue
+      }
       if ((risk.action === 'leave' && !frOnlyBlazes()) || risk.action === 'dead') {
         out.safety = risk; stopped = risk.reason; bail = true
         if (risk.action !== 'dead') {
@@ -1615,7 +1727,10 @@ async function holdSpawner (session, ctl, ctx) {
       // Под огнестойкостью ифрит опасен только вплотную (3.4 за удар в железе): отдых с «бегством» при 16–19 хп гибелен —
       // уход с помоста, падение, ифриты догоняют (s1-post10 06.10: 3 стержня, «бегство на отдых» при 16.6 хп → 1.5 хп → смерть).
       // Бой со щитом дальше до 5 хп, если вокруг одни ифриты.
-      const holdUnderFr = fireproof() && hp >= 5 && foesNow().every((e: any) => e.name === 'blaze')
+      // Запас хп — на удары тех, кто вплотную (3.4 в железе каждый): с толпой у тела порог выше (s1c-B-6 06.10: 4 ифрита рядом,
+      // «держу до 5 хп» — 20 → 0 до первого отдыха).
+      const nearBlazes = liveBlazes(bot, dead, 3).length
+      const holdUnderFr = fireproof() && hp >= Math.max(5, 3.4 * nearBlazes + 2) && foesNow().every((e: any) => e.name === 'blaze')
       // Под FR с малым хп — поесть, когда вплотную никого (отдых с уходом гибелен: s1-LA-3 06.10 — 4 стержня, «хп 7, укрытие
       // не позволило», убежище «CORNERED» → смерть). Порог боя со щитом — 5 хп (был 9).
       if (holdUnderFr && hp < 14 && (bot.food ?? 20) < 20 && !liveBlazes(bot, dead, 4).some(e => reachTo(bot, e) <= 2.6) && gameClock.now() - (out.frEatAt || 0) > 4000) {
@@ -1636,6 +1751,19 @@ async function holdSpawner (session, ctl, ctx) {
         if (!r.rested && (bot.health ?? 0) < 14) { stopped = `хп ${Math.round(bot.health ?? 0)}, не восстановился: ${r.why || r.cover || 'нет безопасного отдыха'}`; bail = true; break }
         await equipSword()
         await guard.wear()
+        continue
+      }
+      // Без огнестойкости под лучами двух и больше ифритов урон за секунды — шары, горение, удары вплотную (s1c-B-3 06.10: FR
+      // кончилась на 17 хп при 5 ифритах, 18 → 3 за 2 с; в толщу — поздно). Порог отлёжки в толще — 16 хп, а не общий 12.
+      if (!fireproof() && hp < 16 && gameClock.now() - (out.nofrRestAt || 0) > 5000 &&
+          liveBlazes(bot, dead, 16).filter(e => seesMe(bot, e)).length >= 2) {
+        out.nofrRestAt = gameClock.now()
+        const r = await restNow()
+        out.rests.push(r)
+        log('отдых без FR под ифритами', { hp: Math.round(hp), ...r })
+        if (bail) break
+        if (!r.rested && (bot.health ?? 0) < 12) { stopped = `хп ${Math.round(bot.health ?? 0)} без огнестойкости, отдых не вышел: ${r.why || 'нет укрытия'}`; bail = true; break }
+        await equipSword()
         continue
       }
       // Огонь под ногами: шар, пролетевший мимо, поджигает клетку у места
@@ -1678,13 +1806,14 @@ async function holdSpawner (session, ctl, ctx) {
         // замер 10: смерть с 11.5 хп за 3 с. Мало хп — сперва коробка.
         // Без огнестойкости бой с иссушителем под шарами блейзов — тир по нам (ферма 02.10 neF-blz-2: «slain by Wither
         // Skeleton», огонь 17 + шары 13.5): закрыться и кончить заход (разбор Codex ne-blaze.md, правка 2).
+        // Отход в укрытие и возврат, а не конец боя: отлечился — бой дальше.
         if (!fireproof() && vis.length && f.name !== 'magma_cube') {
           const r = await restNow()
           out.rests.push(r)
           log('отдых', { from: f.name, crossfire: true, ...r })
-          stopped = 'чужой враг под огнём блейзов без огнестойкости — защищённый бой нужен'
-          bail = true
-          break
+          if (!r.rested && (bot.health ?? 0) < 14) { stopped = 'чужой враг под огнём блейзов без огнестойкости, отдых не вышел'; bail = true; break }
+          await equipSword()
+          continue
         }
         if (hp < 13 && f.name !== 'magma_cube') {
           const r = await restNow()
@@ -1715,14 +1844,10 @@ async function holdSpawner (session, ctl, ctx) {
       const dangers = dangersNow(vis, now)
       // Опасен тот, кого достаёт меч, и шаров к нам не летит: бить его, а не
       // стоять за щитом (замер 23: блейз в 1.3 блока, заряжен, 0 взмахов за 20 с).
-      if (dangers.length && gameClock.now() - lastSwing >= 625 && !radar.incoming(now).length) {
+      if (dangers.length && gameClock.now() - lastSwing >= swingMs(bot) && !radar.incoming(now).length) {
         const close: any = blazes.filter((e : any) => reachTo(bot, e) <= MELEE && (losClear(bot, myEye(bot), e.position.offset(0, 0.9, 0)) || losClear(bot, myEye(bot), blazeEye(e))))
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
-        if (close) {
-          await setShield(false)
-          await equipFor(close)
-          try { await bot.lookAt(close.position.offset(0, (close.height || 1.8) * 0.6, 0), true) } catch {}
-          try { if (lockOwner()) out.swingNoLease++; bot.attack(close); lastSwing = gameClock.now(); out.melee++ } catch {}
+        if (close && await swingFor(close)) {
           setPhase('меч под огнём')
           await sleep(80)
           await setShield(true, faceFor(dangers))
@@ -1763,12 +1888,11 @@ async function holdSpawner (session, ctl, ctx) {
         const close = e.position.distanceTo(bot.entity.position) < 2.4
         // Под огнестойкостью и с 12+ хп — бить на каждом откате (625 мс), не ждать удара в щит: вплотную ифрит наносит лишь 3.4, а
         // убитый перестаёт бить совсем (s1-LF-1/LA-6 06.10: ифриты вплотную, 4–6 попаданий за 15 с, 0 убийств).
-        const window = (fireproof() && hp >= 12) || !close || gameClock.now() - blockAt < 700 || gameClock.now() - lastSwing > 1200
-        if (gameClock.now() - lastSwing >= 625 && window) {
-          await setShield(false)
-          await equipFor(e)
-          try { await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.6, 0), true) } catch {}
-          try { if (lockOwner()) out.swingNoLease++; bot.attack(e); lastSwing = gameClock.now(); out.melee++ } catch {}
+        // …но не когда вплотную двое и больше: удары ифритов вплотную идут чаще, чем мы их убиваем (s1c-B-6 06.10: под FR 4 ифрита в
+        // 4 бл., 6 ударов по 3.4 за пару секунд, 20 → 0) — тогда щит к ближнему и удар после блока, как без FR.
+        const crowd = blazes.filter((b: any) => b.position.distanceTo(bot.entity.position) < 2.6).length
+        const window = (fireproof() && hp >= 12 && crowd <= 1) || !close || gameClock.now() - blockAt < 700 || gameClock.now() - lastSwing > 1200
+        if (window && await swingFor(e)) {
           setPhase('меч')
         } else {
           await setShield(true, blazeEye(e))
@@ -1781,7 +1905,12 @@ async function holdSpawner (session, ctl, ctx) {
       const quiet: any = fireproof() ? Infinity : vis.filter((e : any) => e.position.distanceTo(bot.entity.position) <= NEAR).reduce((m, e) => Math.min(m, radar.untilDanger(e)), Infinity)
       // --- лук: ближайший видимый, если до ближайшей очереди видящих > 1.5 с.
       const bowOk = itemNamed(bot, 'bow') && arrowsHave(bot) > 0 && canUseRanged(session, { name: 'blaze' }, p0(ctx))
-      const shootable = blazes.filter((e : any) => { const d = e.position.distanceTo(bot.entity.position); return d >= BOW_MIN && d <= BOW_MAX && aimFrac(bot, e) !== null && now - (noShot.get(e.id) || 0) > 2500 && floorBelow(bot, e, bot.entity.position, reach) && !bystanderOnLine(bot, e) })
+      // Без убийств 60 с — стрелять и по ифриту без пола под ним: стержень может упасть ниже или пропасть, но убитый уступает место
+      // новому из спавнера, а ждать над пустотой — 0 убийств за 400 с (s1c-P-3/P-7 06.10, 4120…: «время вышло», «за стеной»).
+      const kills0 = (ctx.kills || []).length
+      if (kills0 !== out.killsSeen) { out.killsSeen = kills0; out.killAt = now }
+      const anyFloor = now - (out.killAt || ctx.t0 || now) > 60000
+      const shootable = blazes.filter((e : any) => { const d = e.position.distanceTo(bot.entity.position); return d >= BOW_MIN && d <= BOW_MAX && aimFrac(bot, e) !== null && now - (noShot.get(e.id) || 0) > 2500 && (anyFloor || floorBelow(bot, e, bot.entity.position, reach)) && !bystanderOnLine(bot, e) })
         .sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
       if (now - (out.dropAt || 0) > 10000) {
         out.dropAt = now
@@ -2043,7 +2172,10 @@ async function holdSpawner (session, ctl, ctx) {
     // 26 хп за вызов (замеры 34–35), а стержни пролежат 5 минут — следующий
     // вызов их поднимет.
     const finalStop = () => (bot.health ?? 20) < 10 || radar.incoming(gameClock.now()).length > 0 || liveBlazes(bot, dead, 32).some(b => seesMe(bot, b) && radar.untilDanger(b) < 900)
-    if (!ctl.aborted && !bail && droppedRods(bot, 16) > 0 && (bot.health ?? 20) >= 12) {
+    // Набрал — лежащие стержни не нужны; без FR сбор при ифритах в виду — под удары (s1c-L-1 06.10: без FR 12 убийств, 5 стержней,
+    // затем «сбор» — 5 ударов вплотную и шары, 20 → 2).
+    const calmFloor = fireproof() || !liveBlazes(bot, dead, 10).some(e => seesMe(bot, e))
+    if (!ctl.aborted && !bail && droppedRods(bot, 16) > 0 && (bot.health ?? 20) >= 12 && countOf(bot, 'blaze_rod') < want && calmFloor) {
       await setShield(false)
       setPhase('сбор')
       if (bunker && inBunker()) { try { await require('./tools').breakFast(bot, bunker.cell.plus(bunker.front), { maxMs: 3000 }) } catch {} }
@@ -2052,6 +2184,7 @@ async function holdSpawner (session, ctl, ctx) {
     }
   } finally {
     bot.removeListener('entityHurt', onBlazeHurt)
+    bot.removeListener('heldItemChanged', onHeld)
     try { await setShield(false) } catch {}
     stopWalking()
     radar.stop()
@@ -2553,10 +2686,14 @@ async function digInPlace (bot, ctl) {
   const bad = b => !b || /lava|water|fire|magma|spawner|bedrock|chest/.test(b.name)
   for (const c of cells) { const b = bot.blockAt(c); if (bad(b) || b.boundingBox !== 'block') return { ok: false, why: 'под ногами: ' + (b ? b.name : '?') } }
   if (bad(floor) || floor.boundingBox !== 'block') return { ok: false, why: 'пол на −3: ' + (floor ? floor.name : '?') }
-  for (const c of cells) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const b = bot.blockAt(c.offset(dx, 0, dz)); if (!b || /lava/.test(b.name)) return { ok: false, why: 'лава/пусто у ямы' } }
+  // Стенки ямы — твёрдые со всех сторон: яма у края помоста с воздухом сбоку открыта ифритам (их удар вплотную требует луча —
+  // BlazeAttackGoal: hasLineOfSight; s1c-M-2 06.10: «sealed», а 7 ударов в яме сбоку, смерть).
+  for (const c of cells) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const b = bot.blockAt(c.offset(dx, 0, dz)); if (!b || /lava/.test(b.name) || b.boundingBox !== 'block') return { ok: false, why: 'лава/пусто у ямы' } }
   for (const c of cells) {
     if (ctl.aborted) return { ok: false, why: 'прервано' }
-    const r = await SL.digCell(bot, c).catch(e => 'err ' + e.message)
+    // Копку под ударами сервер обрывает («server interrupted», s1c-B-3 06.10) — повторить до трёх раз.
+    let r = 'err'
+    for (let k = 0; k < 3 && r !== 'ok' && r !== 'air' && !ctl.aborted; k++) r = await SL.digCell(bot, c).catch(e => 'err ' + e.message)
     if (r !== 'ok' && r !== 'air') return { ok: false, why: 'копка ' + r }
     for (let i = 0; i < 20 && !bot.entity.onGround; i++) await sleep(50)
   }
@@ -2567,6 +2704,33 @@ async function digInPlace (bot, ctl) {
   let sealed = false
   for (let k = 0; k < 3 && !sealed && !ctl.aborted; k++) { sealed = !!(await SL.fillCell(bot, top).catch(() => false)); if (!sealed) await sleep(300) }
   return { ok: true, sealed: !!sealed, at: xyz(bot.entity.position) }
+}
+
+// В толщу рядом: на мосту/помосте под ногами воздух (s1c-A-2 06.10: «под ногами: air» у спавнера — навык вернул тело под ифритов,
+// смерть через секунду). Тогда — ближняя клетка (≤ 4 бл., тот же уровень), где 3 вниз твёрдое и нет лавы рядом, 1–3 шага и там.
+async function digInNear (bot, ctl, r = 4) {
+  const first: any = await digInPlace(bot, ctl)
+  if (first.ok || ctl.aborted || !/под ногами|пол на|лава\/пусто/.test(first.why || '')) return first
+  const { standable } = require('./walkable')
+  const f = bot.entity.position.offset(0, 0.2, 0).floored()
+  const firm = c => { const b = bot.blockAt(c); return !!b && b.boundingBox === 'block' && !/lava|water|fire|magma|spawner|bedrock|chest/.test(b.name) }
+  const cands = []
+  for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+    if (!dx && !dz) continue
+    const c = f.offset(dx, 0, dz)
+    if (!standable(bot, c) || ![1, 2, 3].every(d => firm(c.offset(0, -d, 0)))) continue
+    if ([1, 2].some(d => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => { const b = bot.blockAt(c.offset(x, -d, z)); return !b || /lava/.test(b.name) || b.boundingBox !== 'block' }))) continue
+    cands.push(c)
+  }
+  cands.sort((a, b) => a.distanceTo(f) - b.distanceTo(f))
+  for (const c of cands.slice(0, 3)) {
+    if (ctl.aborted) break
+    const w = await walkNear(bot, ctl, c, 0, 4000)
+    if (!w.ok || !bot.entity.position.offset(0, 0.2, 0).floored().equals(c)) continue
+    const r2: any = await digInPlace(bot, ctl)
+    if (r2.ok) return { ...r2, moved: xyz(c) }
+  }
+  return { ...first, near: cands.length }
 }
 
 async function farmRods (session, ctl, p: any = {}) {
@@ -2644,11 +2808,16 @@ async function farmRods (session, ctl, p: any = {}) {
 
   try {
     // --- где спавнер: видно глазами, иначе память этого мира.
+    const pitOut: any = {}
+    if (witherClose(bot)) { phase = 'яма от иссушителя'; await pitFrom(session, ctl, pitOut, witherClose(bot)) }
     let spawner = visibleSpawner(bot, mcData, 32)
     // Сразу после входа/телепорта чанки вокруг ещё грузятся: спавнер в трёх
     // блоках «не виден», и бой шёл к старой записи памяти за 1971 блок
     // (ферма 2026-09-29, blaze-mainkit-1). Подождать до 4 с.
-    for (let k = 0; !spawner && k < 8 && !ctl.aborted; k++) { await sleep(500); spawner = visibleSpawner(bot, mcData, 32) }
+    for (let k = 0; !spawner && k < 8 && !ctl.aborted; k++) {
+      if (witherClose(bot)) { phase = 'яма от иссушителя'; await pitFrom(session, ctl, pitOut, witherClose(bot)) }
+      await sleep(500); spawner = visibleSpawner(bot, mcData, 32)
+    }
     let spawnerFrom = spawner ? 'вижу' : null
     const places = (session.journal.state && session.journal.state.places) || {}
     const rec = places[SPAWNER_PLACE]
@@ -2714,7 +2883,9 @@ async function farmRods (session, ctl, p: any = {}) {
           for (let i = 0; i < 20 && d0 === 'выпил fire_resistance' && !hasEffect(bot, 'fire_resistance'); i++) await sleep(100)
         }
         const rr = await NR.routeTo(session, ctl, { x: spawner.x, y: spawner.y, z: spawner.z, r: 2, dy: 0, solidFloor: true, frKeep: 2,
-          frNear: { x: spawner.x, y: spawner.y, z: spawner.z, r: 22 }, ironOk: true, abortNear: { re: '^blaze$', r: 4 },
+          // Без огнестойкости ход к помосту под шарами — горение и залпы без щита (s1c-L-2 06.10: 15 шарами и 17 огнём за 68 с хода,
+          // смерть до боя): ифрит с лучом в 14 бл. — ход бросить, бой (радар, щит, коробка) с места.
+          frNear: { x: spawner.x, y: spawner.y, z: spawner.z, r: 22 }, ironOk: true, abortNear: { re: '^blaze$', r: hasEffect(bot, 'fire_resistance') ? 4 : 14 },
           timeoutSeconds: Math.max(30, Math.min(180, Math.round((deadline - gameClock.now()) / 1000) - 60)) }).catch(e => ({ ok: false, why: e.message }))
         log('путь к спавнеру по сетке', { ok: rr.ok, why: rr.why, steps: rr.steps, dug: rr.dug, s: rr.seconds, at: xyz(bot.entity.position) })
       }
@@ -2734,13 +2905,11 @@ async function farmRods (session, ctl, p: any = {}) {
       for (let i = 0; i < 20 && !hasEffect(bot, 'fire_resistance'); i++) await sleep(100)
     }
 
-    // ND_FR_STRICT=1 (поток nether 03.10): у спавнера — только под огнестойкостью. Без неё бой шёл «по механике» и кончался
-    // огнём: VR25-1/VR31-1 — «burned to a crisp while fighting Blaze» (fireproof false), D7-32/D7s9-24 — «fireballed by Blaze».
-    const noFr = process.env.ND_FR_STRICT === '1' && here === 'the_nether' && !hasEffect(bot, 'fire_resistance')
-    if (noFr) { stopped = 'огнестойкости нет — бой у спавнера не начинаю (ND_FR_STRICT)'; bail = true; log('без огнестойкости — не бьюсь', { potion }) }
+    // Без огнестойкости бой не запрещён (ND_FR_STRICT убран 06.10, решение пользователя): holdSpawner ведёт его по механике ифрита.
+    if (here === 'the_nether' && !hasEffect(bot, 'fire_resistance')) log('бой без огнестойкости', { potion, hp: Math.round(bot.health ?? 0) })
     // Яма (ND_BLAZE_HOLE=1) сама доходит до клетки у спавнера ходом по сетке, отбиваясь (holeCamp fightClose), — лагерь и с 9 бл.
     // (s1-post13camp 06.10: старт в 6–8 бл. — лагерь не включался, бой по-старому).
-    if (!noFr && process.env.ND_BLAZE_CAMP === '1' && spawner && !p.legacy && bot.entity.position.distanceTo(spawner.offset(0.5, 0.5, 0.5)) <= (process.env.ND_BLAZE_HOLE === '1' ? 9 : 5.6)) {
+    if (process.env.ND_BLAZE_CAMP === '1' && spawner && !p.legacy && bot.entity.position.distanceTo(spawner.offset(0.5, 0.5, 0.5)) <= (process.env.ND_BLAZE_HOLE === '1' ? 9 : 5.6)) {
       const { potionOf } = require('./pvp')
       const frN = bot.inventory.items().filter(i => /potion$/.test(i.name) && /fire_resistance$/.test(potionOf(i) || '')).reduce((n, i) => n + i.count, 0)
       let seen = false
@@ -2752,13 +2921,9 @@ async function farmRods (session, ctl, p: any = {}) {
         if (camp.stopped === 'набрал') stopped = null
       } else log('лагерь не начат', { seen, fr: hasEffect(bot, 'fire_resistance'), frN })
     }
-    // Лагерь кончился, огнестойкости нет и зелий нет — бой по-старому не начинать: «вылазка за стержнями» под шарами — смерть
-    // (s1-post20hole 06.10: 8 убийств в яме, FR кончилась, вылазка — 22 урона огнём за секунды). Без ND_FR_STRICT в демоне
-    // (флаг из CENV до демона не доходит) это единственная защита.
-    const frGone = () => !hasEffect(bot, 'fire_resistance') && !bot.inventory.items().some(i => /potion$/.test(i.name) && /fire_resistance$/.test(require('./pvp').potionOf(i) || ''))
-    if (camp && frGone()) { stopped = stopped || 'огнестойкость кончилась после лагеря — бой не продолжаю'; bail = true }
+    // Лагерь кончился без огнестойкости — дальше holdSpawner без неё (вылазки там под радаром залпов, не «по-старому»).
     if (camp && camp.inHole) { stopped = stopped || camp.stopped; bail = true }
-    if (!bail && !noFr && !p.legacy && !(camp && (camp.stopped === 'набрал' || /^хп/.test(camp.stopped)))) {
+    if (!bail && !p.legacy && !(camp && (camp.stopped === 'набрал' || /^хп/.test(camp.stopped)))) {
       // Бой по механике блейза (holdSpawner): щит под очереди, меч/лук между
       // ними, коробка на отдых. Старый цикл — legacy: true (для сравнения).
       phase = 'бой у спавнера'
@@ -2771,9 +2936,10 @@ async function farmRods (session, ctl, p: any = {}) {
       })
       stopped = held.stopped
       bail = held.bail
+      if (held.dugIn) dugIn = held.dugIn
     }
     let idleSince = gameClock.now()
-    while (p.legacy && !noFr) {
+    while (p.legacy) {
       const have = countOf(bot, 'blaze_rod')
       const hp = Math.round(bot.health ?? 0)
       if (ctl.aborted) { stopped = 'прервано'; break }
@@ -2965,9 +3131,9 @@ async function farmRods (session, ctl, p: any = {}) {
     // тело только ниже своего порога (autopilot fleeIfDying). Бег с оглядкой на
     // всех, кто рядом (flee.js smartFlee), до 12 с.
     // Набрал или бросаю бой, а ифриты с лучом рядом — в толщу на месте, а не бег под шарами.
-    if (!ctl.aborted && here === 'the_nether' && (bot.health ?? 0) > 0 && liveBlazes(bot, dead, 10).some(e => seesMe(bot, e))) {
+    if (!ctl.aborted && !dugIn && here === 'the_nether' && (bot.health ?? 0) > 0 && liveBlazes(bot, dead, 10).some(e => seesMe(bot, e))) {
       phase = 'в толщу на месте'
-      dugIn = await digInPlace(bot, ctl).catch(e => ({ ok: false, why: e.message }))
+      dugIn = await digInNear(bot, ctl).catch(e => ({ ok: false, why: e.message }))
       log('в толщу на месте', dugIn)
     }
     if (bail && !(dugIn && dugIn.ok) && !ctl.aborted && (watchers(bot, dead) > 0 || !survival.safeGround(bot))) {
@@ -3032,4 +3198,4 @@ async function farmRods (session, ctl, p: any = {}) {
   return detail
 }
 
-module.exports = { farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }
+module.exports = { liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }

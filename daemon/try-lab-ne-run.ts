@@ -55,7 +55,13 @@ const KITS = {
   post: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
     'stone_pickaxe 2', 'water_bucket', 'bucket', 'flint_and_steel', 'cooked_beef 12', 'cobblestone 64',
     'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'oak_log 4', 'stick 8', 'white_bed', 'obsidian 10', 'iron_ingot 2',
-    'bow', 'spectral_arrow 64', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3', 'ender_pearl 11', 'string 12'],
+    'bow', 'spectral_arrow 64', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3', 'ender_pearl 13', 'string 12'],
+  // postnofr — post без огнестойкости: бой у спавнера без зелий (s1c 06.10: огнестойкость — цена, не допуск). Жемчуг 13 — на 12
+  // пустых рамок (MAP_SH need 12 у 7 из 8 сидов) с запасом 1.
+  postnofr: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
+    'stone_pickaxe 2', 'water_bucket', 'bucket', 'flint_and_steel', 'cooked_beef 12', 'cobblestone 64',
+    'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'oak_log 4', 'stick 8', 'white_bed', 'obsidian 10', 'iron_ingot 2',
+    'bow', 'spectral_arrow 64', 'ender_pearl 13', 'string 12'],
   light: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'water_bucket', 'bucket', 'flint_and_steel',
     'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
     'white_bed', 'obsidian 10', 'iron_ingot 2']
@@ -75,11 +81,14 @@ function seedOf () {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'farm', 'slots.json'), 'utf8')).slots[process.env.FARM_SLOT].seed } catch { return null }
 }
 
+// Ожидания здесь — с потолком по стене: бот вне игры (смерть с «brain detached»), игровые часы стоят, и sleep(1500) по игровым
+// часам не кончался — сцена висела 9+ мин и не видела смерти (s1c-B-5 06.10).
+const wallCap = <T,>(p: Promise<T>, ms: number): Promise<T | null> => Promise.race([p, gameClock.wall.sleep(ms).then(() => null)])
 async function status () {
   for (let i = 0; i < 3; i++) {
-    const st = await call('status', {} as Record<string, any>).catch(() => null)
+    const st: any = await wallCap(call('status', {} as Record<string, any>).catch(() => null), 10000)
     if (st && st.state && st.state.dimension) return st.state
-    await sleep(1500)
+    await Promise.race([sleep(1500), gameClock.wall.sleep(1500)])
   }
   return {} as Record<string, any>
 }
@@ -189,7 +198,20 @@ async function main () {
     map = { seconds: Math.round((gameClock.now() - tm) / 1000), est, error: m.error,
       bastions: (m.bastions || []).map(b => ({ x: b.x, z: b.z, dist: b.dist, type: b.type, gold: (b.gold || []).length, bb: b.bbAll || undefined })), fortressBB: (m.fortress && m.fortress.bbAll) || undefined,
       fortress: m.fortress ? { x: m.fortress.x, z: m.fortress.z, dist: m.fortress.dist, spawner: m.fortress.spawner } : null, route: m.route || null }
+    // Искажённый лес — где в Аду эндермены (добор жемчуга после всех бастионов, правило пользователя): ближайший по копии мира
+    // (/locate biome — знание карты из копии, как постройки; в главной метрике). WARPED=0 — не давать.
+    if (process.env.WARPED !== '0') {
+      const out = rcon(`execute in minecraft:the_nether positioned ${est.x} 70 ${est.z} run locate biome minecraft:warped_forest`)
+      const w = /\[(-?\d+), (-?\d+), (-?\d+)\] \((\d+) blocks/.exec(out)
+      if (w) {
+        mapPlaces = { ...(mapPlaces || {}), 'искажённый лес (ад)': { x: Number(w[1]), y: Number(w[2]), z: Number(w[3]), dimension: 'the_nether', note: 'по карте копии мира' } }
+        map.warped = { x: Number(w[1]), y: Number(w[2]), z: Number(w[3]), dist: Number(w[4]) }
+      }
+    }
     console.log('карта', JSON.stringify(map))
+    // Карта не прочиталась (s1c-D-1 06.10: крепость null, у всех бастионов золото 0, 2375 игр. с под нагрузкой фермы) — прогон без
+    // карты не сравним с остальными: стоп подготовки (MAP_STRICT=0 — идти вслепую).
+    if (process.env.MAP_STRICT !== '0' && (!map.fortress || !(map.bastions || []).some(b => b.gold > 0))) throw new Error('SETUP_FAIL: карта копии не прочиталась (крепость или золото бастионов)')
   }
   // MAP_SH=1 — и крепость Края из той же копии мира (комната портала, сколько рамок пусто): запись «крепость» у стены
   // комнаты (refined, без бросков find), очей нужно — по пустым рамкам (ND_EYES_NEED, если EYES не задан).
@@ -441,7 +463,7 @@ async function main () {
       if (best.eyes >= 10) mark('eyes10')
       if (best.fireResistancePotions > 0 || best.fireResistanceObserved) mark('fireResistance')
       if (s.dimension && s.dimension !== lastDim) { mark(lastDim + '->' + s.dimension); lastDim = s.dimension }
-      const rc = await call('recall', { lines: 1 }).catch(() => null)
+      const rc: any = await wallCap(call('recall', { lines: 1 }).catch(() => null), 10000)
       const pl = (rc && rc.detail && rc.detail.state && rc.detail.state.places) || {} as Record<string, any>
       if (pl['крепость (ад)']) mark('fortressSeen')
       if (pl['бастион (ад)']) mark('bastionSeen')
@@ -467,8 +489,9 @@ async function main () {
     if (/БЛОКЕР/.test(text)) { stoppedBy = (text.match(/БЛОКЕР[^\n]{0,160}/) || ['БЛОКЕР'])[0]; break }
   }
   if (exited === null) { try { child.kill() } catch {} }
-  try { await call('stop') } catch {}
-  await sleep(1500)
+  // Бот вне игры — stop и пауза по игровым часам не кончаются (s1c-F-17 06.10: сцена висела 27 мин после выхода кампании).
+  try { await wallCap(call('stop'), 10000) } catch {}
+  await Promise.race([sleep(1500), gameClock.wall.sleep(1500)])
   const s = await status()
   let text = ''
   try { text = fs.readFileSync(clog, 'utf8') } catch {}

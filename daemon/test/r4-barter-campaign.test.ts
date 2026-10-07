@@ -64,16 +64,15 @@ function fixture (env: any = {} as Record<string, any>) {
     if (method === 'recall') return { state: { places } }
     if (method === 'bastion') return { ingotsTraded: 0, goldBlocksDug: 0, knownGoldLeft: 1, barterRetry: 'нет места', stopped: 'бартер встал' }
     return {} as Record<string, any>
-  }, { env: { ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_FR_STRICT: '1', ND_NE_ROUTE: '1', ND_EYES_NEED: '10', ...env }, logs })
+  }, { env: { ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_EYES_NEED: '10', ...env }, logs })
   c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
   return { c, state, logs, calls }
 }
-test('FR strict keeps bastion actionable when pearls and obsidian are already enough', async () => {
-  const { c, state } = fixture()
+test('pearls and obsidian enough: the bastion is done without fire resistance (FR is priced, not required)', async () => {
+  const { c } = fixture()
   await c.readMemory()
-  assert.equal(c.needs('bastion'), true)
-  state.potions = { fire_resistance: 2 }
   assert.equal(c.needs('bastion'), false)
+  assert.equal(c.done('bastion'), true)
 })
 test('zero trades with carried gold preserves the nearby Bastion without asserting exhaustion', async () => {
   const { c, state, calls } = fixture()
@@ -121,6 +120,7 @@ test('ND_BARTER_FLOW=0 keeps previous bastion eligibility', async () => {
 test('barter retry preserves exit-kit RPC and all completion gates together', async () => {
   const { c, state, calls } = fixture({ ND_SH_NETHER: '1', ND_EXIT_KIT: '1', ND_END_ENTRY: '1' })
   state.inventory.flint_and_steel = 1
+  state.inventory.ender_pearl = 9
   await c.readMemory()
   assert.equal(c.needs('bastion'), true)
   assert.equal(c.done('bastion'), false)
@@ -128,8 +128,7 @@ test('barter retry preserves exit-kit RPC and all completion gates together', as
   const rpc = calls.find(([method]: any) => method === 'bastion')[1]
   assert.equal(rpc.exit, false)
   assert.equal(rpc.obsidian, 10)
-  assert.equal(c.nextBastion().key, 'бастион 2 (ад)', 'only fire resistance remains; the bounded dry trade site can rotate')
-  state.potions = { fire_resistance: 2 }
+  state.inventory.ender_pearl = 10
   await c.refresh()
   assert.equal(c.needs('bastion'), false)
   assert.equal(c.done('bastion'), true)
@@ -224,4 +223,60 @@ test('a completed Nether no-path failure still allows an observed alternative ro
   }, { env: { ND_NE_ROUTE: '1' } })
   assert.equal(await c.goToward(target, 4), true)
   assert.deepEqual(movement, ['ne_route', 'nether_tunnel', 'goto'])
+})
+
+test('s1c: two dry calls defer the only mapped bastion (no endless re-calls when its gold has no path)', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 100, y: 50, z: 80 },
+    inventory: { iron_pickaxe: 1, cooked_beef: 12, oak_planks: 16, crafting_table: 1, stick: 2 }, armor: { feet: 'golden_boots' } }
+  const places = { 'портал': { x: 0, y: 65, z: 0, dimension: 'overworld' },
+    'бастион (ад)': { x: 100, y: 50, z: 80, dimension: 'the_nether', gold: [[101, 50, 80], [102, 50, 80]] } }
+  const logs = []
+  const c = campaign(state, { pickLeft: 300 }, (method) => {
+    if (method === 'recall') return { state: { places } }
+    if (method === 'bastion') return { goldBlocksDug: 0, ingotsTraded: 0, knownGoldLeft: 2, stopped: 'золото по памяти осталось (2), пути к нему нет' }
+    return {} as Record<string, any>
+  }, { env: { ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_GOLD_FAST_SAFE: '1', ND_EYES_NEED: '12' }, logs })
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.readMemory()
+  await c.runStage('bastion')
+  assert.equal(logs.some(l => /отложен/.test(l)), false, 'one dry call is not enough')
+  await c.runStage('bastion')
+  assert.ok(logs.some(l => /два законченных захода без добычи — отложен/.test(l)), 'the second dry call defers it')
+})
+
+test('s1c: enderman hunt goes to the warped forest known from the world copy, not around the portal', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 70, z: 0 },
+    inventory: { iron_sword: 1, cooked_beef: 12, cobblestone: 64, blaze_rod: 6 }, armor: { feet: 'golden_boots' } }
+  const places = { 'портал': { x: 0, y: 65, z: 0, dimension: 'overworld' },
+    'искажённый лес (ад)': { x: 200, y: 60, z: -40, dimension: 'the_nether' } }
+  const calls = []
+  const c = campaign(state, { pickLeft: 300 }, (method, params) => {
+    calls.push([method, params])
+    if (method === 'recall') return { state: { places } }
+    if (method === 'ne_route') { state.pos = { x: params.x, y: params.y, z: params.z }; return { ok: true } }
+    return {} as Record<string, any>
+  }, { env: { ND_ENDERMEN: '1', ND_NE_ROUTE: '1', ND_EYES_NEED: '12' } })
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.readMemory()
+  await c.runStage('pearls').catch(() => {})
+  const route = calls.find(([m]: any) => m === 'ne_route')
+  assert.ok(route, 'a route to the forest')
+  assert.deepEqual([route[1].x, route[1].z], [200, -40])
+  assert.ok(calls.findIndex(([m]: any) => m === 'pearls') > calls.indexOf(route), 'the hunt starts after the route')
+})
+
+test('s1c: low hp far from the Nether portal heals dug in on the spot, not by a long walk home', async () => {
+  const state: Record<string, any> = { health: 8, food: 20, dimension: 'the_nether', pos: { x: 300, y: 70, z: 0 },
+    inventory: { cooked_beef: 12, iron_sword: 1 }, armor: {} }
+  const calls = []
+  const c = campaign(state, { pickLeft: 300 }, (method) => {
+    calls.push(method)
+    if (method === 'ne_burrow') return { ok: true }
+    if (method === 'wait') { state.health = 20; return {} }
+    return {} as Record<string, any>
+  }, { env: { ND_NE_ROUTE: '1', ND_NE_STAY: '0' } })
+  c.known.netherPortal = { x: 0, y: 70, z: 0 }
+  await c.rest()
+  assert.ok(calls.includes('ne_burrow'))
+  assert.equal(calls.includes('ne_route'), false)
 })
