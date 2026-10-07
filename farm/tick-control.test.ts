@@ -93,7 +93,7 @@ function farmHarness ({ running = [], prepareChanged = false, failReload = 0, li
       execFileSync: () => { throw new Error('unexpected shell operation') },
       spawn: (exe, args, options) => {
         const child = { pid: 1234 + events.length, unref () {}, on (event, listener) { if (event === 'exit') queueMicrotask(() => listener(0)) } }
-        events.push({ kind: 'spawn', args, env: options.env }); return child
+        events.push({ kind: 'spawn', args, env: options.env, cwd: options.cwd }); return child
       }
     } : load(name),
     __dirname, __filename: cli, process: { env: {} as Record<string, any>, execPath: process.execPath },
@@ -124,6 +124,18 @@ test('up configures each ready server before spawning its daemon and records sel
   const state = JSON.parse(files.get(path.join(__dirname, 'slots.json')))
   assert.equal(state.slots[1].tickRate, 80)
   assert.equal(state.slots[2].tickRate, 80)
+})
+
+test('up --code runs the slot daemon and later scenes from the frozen snapshot, not the live tree', async () => {
+  const { api, events, files } = farmHarness()
+  const snap = path.join(__dirname, '..', '.daemon-t1')
+  files.set(path.join(snap, 'src', 'index.js'), '')
+  await api.cmdUp({ _: ['1'], code: 't1' })
+  assert.equal(JSON.parse(files.get(path.join(__dirname, 'slots.json'))).slots[1].code, 't1')
+  assert.equal(events.find(event => event.kind === 'spawn').cwd, snap)
+  await api.cmdRun({ _: ['probe.js'], slots: '1', tag: 'snap', env: [] }, [])
+  assert.equal(events.filter(event => event.kind === 'spawn').pop().cwd, snap)
+  await assert.rejects(api.cmdUp({ _: ['1'], from: '2', code: 'missing' }), /снимка нет/)
 })
 
 test('run resets every selected world before parallel scenes and records game-clock metadata', async () => {

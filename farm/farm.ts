@@ -35,6 +35,11 @@
 //   node farm/farm.js kill-runs <tag>           оборвать сцены партии
 //   node farm/farm.js down [слоты]              штатно: RCON stop (мир сохраняется), демоны — стоп
 //   node farm/farm.js nice                      приоритет/ядра фермы — поднятым серверам и демонам
+//   node farm/farm.js snapshot s1d-a            заморозить собранный код демона и сцен для серии: копия *.js/*.json и
+//                                               data/ в .daemon-<имя> (рядом с daemon/), node_modules — ссылкой
+//   node farm/farm.js up 1 --from 21 --code s1d-a   демон слота — из снимка (запомнится: daemons и run слота — тоже);
+//                                               daemons 21 --code <имя> — сменить снимок; --code live — живое дерево;
+//                                               snapshot <имя> --drop — удалить снимок (ссылку node_modules — первой)
 // Лимит миров разом (вместе с server-run 25569) и ядра — farm/limits.json: играет пользователь или нет.
 // Долгие дела (up, run) запускать в фоне с выводом в файл — не через | tail.
 const fs = require('fs')
@@ -49,6 +54,39 @@ const { acceleratedDigArgs } = require('./accelerated-dig')
 const ROOT = path.resolve(__dirname, '..')
 const FARM = __dirname
 const DAEMON = path.join(ROOT, 'daemon')
+// Снимок кода для серии (07.10: «контрольная» серия шла на 7–11 разных версиях кода — другие агенты правили общее дерево,
+// сравнения «до/после» недоказательны). Снимок лежит рядом с daemon/ (та же глубина: пути __dirname/.. ведут в корень).
+const codeDir = name => !name || name === 'live' ? DAEMON : path.join(ROOT, '.daemon-' + name)
+const slotCode = i => readState().slots?.[i]?.code || null
+function cmdSnapshot (args) {
+  const name = args._[0]
+  if (!name || !/^[\w.-]+$/.test(name) || name === 'live') throw new Error('snapshot: имя снимка — буквы, цифры, «.-_» (не live)')
+  const dest = codeDir(name)
+  if (args.drop) {
+    // node_modules снимка — ссылка на daemon/node_modules: сначала снять ссылку, иначе рекурсивное удаление уйдёт по ней.
+    const link = path.join(dest, 'node_modules')
+    try { if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link) } catch {}
+    if (fs.existsSync(link)) throw new Error(`${link} — не ссылка, не удаляю`)
+    fs.rmSync(dest, { recursive: true, force: true })
+    return log(`снимок ${name} удалён`)
+  }
+  if (fs.existsSync(dest)) throw new Error(`снимок ${name} уже есть (${dest}) — новое имя или snapshot ${name} --drop`)
+  let files = 0
+  const copy = (from, to, all) => {
+    for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+      const a = path.join(from, e.name), b = path.join(to, e.name)
+      if (e.isDirectory()) {
+        if (from === DAEMON && /^(node_modules|test|castle-shots|colosseum-shots)$/.test(e.name)) continue
+        copy(a, b, all || e.name === 'data')
+      } else if (all || /\.(js|cjs|mjs|json)$/.test(e.name)) { fs.mkdirSync(to, { recursive: true }); fs.copyFileSync(a, b); files++ }
+    }
+  }
+  copy(DAEMON, dest, false)
+  fs.symlinkSync(path.join(DAEMON, 'node_modules'), path.join(dest, 'node_modules'), 'junction')
+  let head = ''; try { head = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim() } catch {}
+  fs.writeFileSync(path.join(dest, 'SNAPSHOT.json'), JSON.stringify({ name, at: new Date().toISOString(), head, files }, null, 2))
+  log(`снимок ${name}: ${files} файлов → ${dest} (git ${head} + незакоммиченное дерево на момент снимка)`)
+}
 const TEMPLATE = path.join(ROOT, 'server-twin')
 const JAVA = 'C:\\Users\\user\\AppData\\Roaming\\.minecraft\\runtime\\java-runtime-delta\\windows\\java-runtime-delta\\bin\\java.exe'
 const JAR = 'paper-1.21.11-132.jar'
@@ -313,7 +351,12 @@ async function startDaemon (s, rate = readState().slots?.[s.i]?.tickRate ?? tick
   const out = fs.openSync(path.join(FARM, `daemon-${s.i}.out.log`), 'w')
   const err = fs.openSync(path.join(FARM, `daemon-${s.i}.err.log`), 'w')
   const env = runEnv(process.env, { ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem, ...lockstepEnv(s.i) }, rate)
-  const p = spawn(process.execPath, ['src/index.js'], { cwd: DAEMON, env, detached: true, stdio: ['ignore', out, err], windowsHide: true })
+  const cwd = codeDir(slotCode(s.i))
+  if (cwd !== DAEMON) {
+    if (!fs.existsSync(path.join(cwd, 'src', 'index.js'))) throw new Error(`слот ${s.i}: снимка кода ${cwd} нет`)
+    log(`слот ${s.i}: демон из снимка ${path.basename(cwd)}`)
+  }
+  const p = spawn(process.execPath, ['src/index.js'], { cwd, env, detached: true, stdio: ['ignore', out, err], windowsHide: true })
   p.unref()
   return p.pid
 }
@@ -348,6 +391,7 @@ async function cmdUp (args) {
   const extra = ids.filter(i => !up.includes(slot(i).mc)).length
   if (up.length + extra > MAX_UP) throw new Error(`лимит ${MAX_UP} миров разом (farm/limits.json — играет ли пользователь): уже подняты порты ${up.join(', ') || '—'}, просишь ещё ${extra}. Сначала down лишних.`)
   if (lockstep && extra < ids.length) throw new Error('--lockstep: сервер слота уже поднят, а режим задаётся агентом при старте — сначала down')
+  if (args.code && !fs.existsSync(path.join(codeDir(args.code), 'src', 'index.js'))) throw new Error(`--code ${args.code}: снимка нет — сначала node farm/farm.js snapshot ${args.code}`)
   // --pool [файл] — хорошие сиды (farm/seeds/good-v1.json по умолчанию): случайные без повтора среди поднятых слотов
   // (решение пользователя 02.10: спидран пока тренируем только на хороших сидах). lava === false — пропустить.
   let seeds = args.seeds ? String(args.seeds).split(',') : null
@@ -371,7 +415,7 @@ async function cmdUp (args) {
     const seed = args.random ? randomSeed() : seeds ? seeds[k % seeds.length] : (args.seed || TWIN_SEED)
     const changed = prepareSlot(s, { seed, fresh: !!args.fresh, world: args.world || null })
     if (changed && up.includes(s.mc)) reloadPackets.set(i, changed)
-    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null, tickRate: rate, ...(lockstep ? { lockstep: true } : {}) }
+    mine[i] = { seed, since: new Date().toISOString(), world: args.world || null, tickRate: rate, ...(lockstep ? { lockstep: true } : {}), ...(args.code && args.code !== 'live' ? { code: args.code } : {}) }
   }
   // Чтение и запись slots.json — подряд, после долгой подготовки миров: параллельные up/down других слотов
   // (два потока серий) иначе затирали свои записи (rt-R6 03.10).
@@ -400,6 +444,12 @@ async function cmdDaemons (args) {
   const spec = args._[0] || (typeof args.slots === 'string' ? args.slots : null)
   if (!spec && !args.all) throw new Error('daemons: укажи слоты (daemons 3-5 или --slots 3-5); все разом — daemons --all')
   const ids = parseSlots(spec || undefined, upSlots())
+  if (args.code) {
+    if (!fs.existsSync(path.join(codeDir(args.code), 'src', 'index.js'))) throw new Error(`--code ${args.code}: снимка нет — сначала node farm/farm.js snapshot ${args.code}`)
+    const st = readState()
+    for (const i of ids) if (st.slots?.[i]) { if (args.code === 'live') delete st.slots[i].code; else st.slots[i].code = args.code }
+    writeState(st)
+  }
   const owners = listeners()
   for (const i of ids) {
     const pid = owners.get(slot(i).ws)
@@ -526,7 +576,7 @@ async function cmdRun (args, sceneArgs) {
     }, rate)
     const out = fs.openSync(path.join(dir, `slot-${i}.out`), 'a')
     const err = fs.openSync(path.join(dir, `slot-${i}.err`), 'a')
-    const p = spawn(process.execPath, [scene, ...sceneArgs], { cwd: DAEMON, env, stdio: ['ignore', out, err], windowsHide: true })
+    const p = spawn(process.execPath, [scene, ...sceneArgs], { cwd: codeDir(slotCode(i)), env, stdio: ['ignore', out, err], windowsHide: true })
     pids[i] = p.pid
     fs.writeFileSync(path.join(dir, 'pids.json'), JSON.stringify(pids))
     log(`слот ${i}: ${scene} ${sceneArgs.join(' ')} → pid ${p.pid}`)
@@ -600,9 +650,9 @@ function parseArgs (argv) {
     if (t.startsWith('--')) {
       if (t.startsWith('--tick-rate=')) { a['tick-rate'] = t.slice(12); continue }
       const key = t.slice(2)
-      if (!['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'random', 'fresh', 'all', 'help', 'lockstep'].includes(key)) throw new Error(`неизвестный параметр ${t}; значения передаются через пробел`)
+      if (!['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'random', 'fresh', 'all', 'help', 'lockstep', 'code', 'drop'].includes(key)) throw new Error(`неизвестный параметр ${t}; значения передаются через пробел`)
       const next = main[k + 1]
-      if (next !== undefined && !next.startsWith('--') && !/^[A-Z_][A-Z0-9_]*=/.test(next) && ['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate'].includes(key)) { a[key] = next; k++ } else a[key] = true
+      if (next !== undefined && !next.startsWith('--') && !/^[A-Z_][A-Z0-9_]*=/.test(next) && ['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'code'].includes(key)) { a[key] = next; k++ } else a[key] = true
     } else if (/^[A-Z_][A-Z0-9_]*=/.test(t) && a._.length >= 1) a.env.push(t)
     else a._.push(t)
   }
@@ -632,6 +682,7 @@ function parseArgs (argv) {
     else if (cmd === 'report') report(a._[0], a.by || null)
     else if (cmd === 'kill-runs') cmdKillRuns(a)
     else if (cmd === 'uuid') console.log(offlineUuid(a._[0]))
+    else if (cmd === 'snapshot') cmdSnapshot(a)
     else console.log(fs.readFileSync(__filename.replace(/\.js$/, '.ts'), 'utf8').split(/\r?\nconst fs/)[0].split(/\r?\n/).slice(1).map(l => l.replace(/^\/\/ ?/, '')).join('\n'))
   } catch (e) {
     console.error('ОШИБКА', e.stack || e.message)
