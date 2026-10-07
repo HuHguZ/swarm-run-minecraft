@@ -237,7 +237,9 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   add('HuntEndermen', 'pearls', s => nether(s) && pearlsNeeded(s) && (economy ? bastionsDone(s) : knows(s, 'bastions_exhausted')) && knows(s, 'endermen_allowed') &&
     (amount(s, 'gold') < 8 || knows(s, 'barter_exhausted')),
     { atLeast: { pearls: eyes } }, 600, pearlsDone, 0.07,
-    economy ? { estimateCost: s => Math.max(0, eyes - pearlsHeld(s)) * numberFact(s, 'endermen_seconds_per_pearl', 240) * 20, modelCost: true } : {})
+    // S1f: цена охоты — и в графе по умолчанию — недостача × факт кампании endermen_seconds_per_pearl (лес увиден 240 с, не видел 900,
+    // два пустых захода 3600, дальше — по своим заходам), а не постоянные 600 с. ND_EM_PRICE=0 — прежние 600 с вне экономики.
+    economy || process.env.ND_EM_PRICE !== '0' ? { estimateCost: s => Math.max(0, eyes - pearlsHeld(s)) * numberFact(s, 'endermen_seconds_per_pearl', 240) * 20, modelCost: true } : {})
   if (economy) {
     // Gold is a resource: mine the batch the barter model asks for, then trade it (PiglinBarter); stop and move by the same model.
     const batch = (s: WorldState) => Math.min(goldLeft(s), barter({ ...s, resources: { ...s.resources, gold: 0 } }).options.find(o => o.action === 'mine')?.batch || 27)

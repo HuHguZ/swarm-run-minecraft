@@ -189,7 +189,7 @@ async function main () {
     cwd: __dirname,
     // SEARCH=1 — бастион кампания находит сама (этап bastion: fortress mode=bastion, запись — ближний ВИДИМЫЙ кирпич, как в
     // настоящем прохождении); иначе — «как записала бы разведка» по /locate (старт постройки бывает внутри двора).
-    env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ...(process.env.SEARCH === '1' || process.env.MAP === '1' ? {} as Record<string, any> : { ND_EXTRA_PLACES: JSON.stringify(places) }), ...CENV },
+    env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ...(process.env.SEARCH === '1' || process.env.MAP === '1' || !require('./src/perception/knowledge').allows('structures', 'try-lab-ne-bastion EXTRA_PLACES') ? {} as Record<string, any> : { ND_EXTRA_PLACES: JSON.stringify(places) }), ...CENV },
     stdio: 'ignore'
   })
   let exited = null

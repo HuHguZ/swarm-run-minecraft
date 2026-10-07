@@ -78,6 +78,8 @@ let cached = null
 function gridOf (session) {
   const dir = session && session.cfg && session.cfg.memoryDir
   if (!dir) return null
+  // S1f (аудит S10): сетка Ада — скан копии мира, читать только на уровне знания scan (rsg/ssg — вслепую, без сетки).
+  if (!require('./perception/knowledge').allows('grid', 'nether-route')) return null
   let st
   try { st = fs.statSync(path.join(dir, 'nether-grid.json')) } catch { return null }
   if (cached && cached.dir === dir && cached.mtime === st.mtimeMs) return cached.grid

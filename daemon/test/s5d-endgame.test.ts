@@ -16,6 +16,10 @@ function tunnelWorld (extra: (p: any) => string | null = () => null) {
   return { read, air }
 }
 
+// S5e (07.10): шахта и штрек по прогруженным чанкам (рентген толщи) — только «полный скан»; в rsg/ssg — честный спуск
+// (endportal-descent, test/s5e-endgame). Эти тесты — про ход scan.
+function scanFor (t: any) { const s = process.env.ND_KNOWLEDGE; process.env.ND_KNOWLEDGE = 'scan'; t.after(() => { if (s === undefined) delete process.env.ND_KNOWLEDGE; else process.env.ND_KNOWLEDGE = s }) }
+
 test('камера под раму выхода: в толще со штреком стройка без камеры не находит места или копает невидимое, с камерой — рама в камере', () => {
   const { chamberPlan } = require('../src/travel')
   const nether = require('../src/nether')
@@ -64,7 +68,8 @@ test('камера: у края лавового озера здесь не ст
   assert.ok(chamberPlan(read, s.at).ok)
 })
 
-test('шахта к комнате по карте: колонка с пещерой до уровня комнаты — не вход, берётся целая в 24 бл. (s5d-p4-1)', () => {
+test('шахта к комнате по карте: колонка с пещерой до уровня комнаты — не вход, берётся целая в 24 бл. (s5d-p4-1)', (t) => {
+  scanFor(t)
   const { dryEntry } = require('../src/endportal')
   // Суша: камень до y 70, воздух выше. Пещера x ∈ [96, 104], y 50..60 (под шахтой x 100); комната на y 40.
   const blockAt = (p: any) => {
@@ -107,7 +112,8 @@ test('тактика: чешуйницы у портальной комнаты 
   assert.equal(observeTactics(session('silverfish', true, 12)).protectedEncounter, false, 'хп < 16 — рой, бой тактики (s5d-p7-2)')
 })
 
-test('шахта к комнате: колонка, от которой штрек на уровне комнаты идёт мимо воды (s5d-p7-1)', () => {
+test('шахта к комнате: колонка, от которой штрек на уровне комнаты идёт мимо воды (s5d-p7-1)', (t) => {
+  scanFor(t)
   const { dryEntry } = require('../src/endportal')
   // Камень до y 70; на уровне комнаты (y 39–42) вода x ∈ [102, 105], z ∈ [−8, −2] — прямо между колонкой (100, −5) и целью
   // (108, 40, −5); годна колонка, от которой прямая до цели идёт мимо воды.
@@ -133,7 +139,8 @@ test('камера: под гравием не ставится — сторон
   assert.equal(ch.dir.x, -1, `камера прочь от гравия: ${JSON.stringify(ch.dir)}`)
 })
 
-test('шахта: целой колонки нет нигде — колонка с пещерой ≤ 4 бл. без капельника, а не первая сухая (s5d-R-1)', () => {
+test('шахта: целой колонки нет нигде — колонка с пещерой ≤ 4 бл. без капельника, а не первая сухая (s5d-R-1)', (t) => {
+  scanFor(t)
   const { dryEntry } = require('../src/endportal')
   // Везде пещера y 50..52 (3 бл.); у колонки шахты (|x−100| ≤ 3) в пещере капельник.
   const blockAt = (p: any) => {

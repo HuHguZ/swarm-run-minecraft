@@ -1882,3 +1882,74 @@ test('s5d: stronghold far away with a frame kit goes through the Nether by defau
     assert.equal(first >= 0 && (walk < 0 || first < walk), viaNether, JSON.stringify(calls.slice(0, 6).map(x => x.method)))
   }
 })
+
+test('s1f: вслепую закрытый штрек у бастиона ничего не дал — следующий заход открытым обзором, а не «выработан» (ND_BASTION_OPEN=0 — прежнее)', async () => {
+  for (const off of [false, true]) {
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 100, y: 50, z: 90 },
+      armor: { head: 'golden_helmet' }, inventory: { iron_pickaxe: 1, stone_pickaxe: 1, blaze_rod: 7, cooked_beef: 10, oak_planks: 16, crafting_table: 1 } }
+    const calls: any[] = []
+    const c = campaign(state, { foes: 0, pickLeft: 381 }, (method, params) => {
+      if (method !== 'bastion') return {} as Record<string, any>
+      calls.push(params.sealed)
+      return { goldBlocksDug: 0, ingotsTraded: 0, stopped: 'золото кончилось: видимых блоков больше нет', bag: {} as Record<string, any> }
+    }, { env: off ? { ND_BASTION_OPEN: '0' } : {} })
+    c.known.portal = { x: -19, y: 65, z: -24 }
+    c.known.bastions = [{ key: 'бастион (ад)', x: 105, y: 43, z: 87 }]
+    c.known.stronghold = { x: -400, y: 30, z: 1776 }
+    c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+    await c.runStage('bastion')
+    assert.deepEqual(calls, off ? [true] : [true, false], off ? 'выключено — один закрытый заход' : 'закрытый, затем открытый')
+  }
+})
+
+test('s1f: спавнер вслепую не увиден, но обход видел ифритов в 24 бл. — бой с ними отсюда (ND_BLAZE_SEEN=0 — нет)', async () => {
+  for (const off of [false, true]) {
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: -87, y: 50, z: 55 },
+      armor: { torso: 'iron_chestplate', legs: 'iron_leggings', head: 'iron_helmet' }, offHand: { item: 'shield' },
+      inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_beef: 10, blaze_rod: 3, crafting_table: 1, oak_planks: 8, netherrack: 64 } }
+    const calls = []
+    const c = campaign(state, { foes: 0, surface: false, pickLeft: 260 }, method => {
+      calls.push(method)
+      if (method === 'fortress') return { found: false, stopped: 'у крепости спавнера в прогруженных чанках не видно (обход 6 остановок)', blazes: { seen: 2, nearest: 14 } }
+      if (method === 'blaze') state.inventory.blaze_rod = 7
+      return {} as Record<string, any>
+    }, { env: off ? { ND_BLAZE_SEEN: '0' } : {} })
+    c.known.portal = { x: -19, y: 65, z: -24 }
+    c.known.fortress = true
+    c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+    await c.runStage('nether')
+    assert.equal(calls.includes('blaze'), !off, off ? 'выключено — без боя' : 'ифриты видны — бой')
+  }
+})
+
+test('s1f: в Аду ход отрезками по 32 (длинная цель в рельефе Ада — «Took to long to decide path»); ND_NE_LEG=64 — прежнее', async () => {
+  for (const leg of [undefined, '64']) {
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 }, inventory: { iron_pickaxe: 1 } }
+    const gotos: any[] = []
+    const c = campaign(state, { foes: 0 }, (method, params) => {
+      if (method === 'goto') { gotos.push(params.x); state.pos.x = params.x; state.pos.z = params.z }
+      return {} as Record<string, any>
+    }, { env: leg ? { ND_NE_LEG: leg } : {} })
+    c.hooks({ ensurePick: async () => true })
+    await c.goToward({ x: 59, z: 0 }, 20)
+    assert.deepEqual(gotos, leg ? [59] : [32, 59], leg ? 'прежнее: сразу к цели' : 'отрезок 32, затем цель')
+  }
+})
+
+test('s1f: у бастиона штрек «пути нет» — прочь от бастиона пешком можно, к нему — нет (ND_NE_BASTION_AWAY=0 — никогда)', async () => {
+  for (const [target, off, walks] of [[{ x: -100, z: 0 }, false, true], [{ x: 100, z: 60 }, false, false], [{ x: -100, z: 0 }, true, false]] as any[]) {
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 }, inventory: { iron_pickaxe: 1 } }
+    const gotos: any[] = []
+    const c = campaign(state, { foes: 0 }, (method, params) => {
+      if (method === 'nether_tunnel') return { ok: false, why: 'пути нет', segs: 0, dug: 0 }
+      if (method === 'ne_burrow') return { ok: false }
+      if (method === 'perceive') return { seen: [], entities: [] }
+      if (method === 'goto') { gotos.push(params.x); state.pos.x = params.x; state.pos.z = params.z }
+      return {} as Record<string, any>
+    }, { env: off ? { ND_NE_BASTION_AWAY: '0' } : {} })
+    c.known.bastions = [{ key: 'бастион (ад)', x: 40, y: 50, z: 0 }]
+    c.hooks({ ensurePick: async () => true })
+    await c.goToward(target, 6)
+    assert.equal(gotos.length > 0, walks, JSON.stringify({ target, off, gotos }))
+  }
+})

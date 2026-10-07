@@ -130,6 +130,10 @@ function bridgeMove (mv, node, dir, opts: any = {}) {
   // mv-gap-6: на лавовом озере A* обходил лаву мостом над пустотой за стендом, своя постановка pathfinder'а там
   // сорвалась — падение 120 блоков).
   if (u.void) cost += opts.voidCost ?? 2.5
+  // S1f: над смертельной высотой (lethalDepth: падение ≥ хп) отказ сервера или срыв = смерть (s1f-A2-1: мост в Аду на y 80 над
+  // провалом 26, «отказ сервера», падение — смерть на 12-й с). Цена риска (P(срыв) ~0.01 × час) больше любого обхода — такой мост
+  // не строим; копка и обход дешевле. Над водой — можно.
+  if (opts.lethalDepth && !u.water && u.depth >= opts.lethalDepth) return null
   cost += mv.exclusionStep(C)
   if (cost >= 100) return null
   const Move = opts.Move || MoveOf()
@@ -305,9 +309,11 @@ function install (session, deps: any = {}) {
   function filler () {
     const mv = bot.pathfinder && bot.pathfinder.movements
     const ids = new Set((mv && mv.scafoldingBlocks) || [])
-    const bar = bot.inventory.slots.slice(36, 45).filter(i => i && FILLER.test(i.name))
+    // S1f: в Аду доски на мост не идут (дерево Ада — палки и кирки; s1f-FB-1 «нет безопасного дерева на 4 доски»). ND_BRIDGE_PLANKS=1 — как было.
+    const okFill = i => i && FILLER.test(i.name) && !(/_planks$/.test(i.name) && /nether/.test(String(bot.game && bot.game.dimension)) && process.env.ND_BRIDGE_PLANKS !== '1')
+    const bar = bot.inventory.slots.slice(36, 45).filter(okFill)
     const sel = bot.inventory.slots[36 + bot.quickBarSlot]
-    if (sel && FILLER.test(sel.name) && (!ids.size || ids.has(sel.type))) return sel
+    if (okFill(sel) && (!ids.size || ids.has(sel.type))) return sel
     return bar.find(i => !ids.size || ids.has(i.type)) || bar[0] || null
   }
   let preparing = false
@@ -315,7 +321,7 @@ function install (session, deps: any = {}) {
     if (preparing || filler() || bot.currentWindow || hand.on()) return
     const mv = bot.pathfinder && bot.pathfinder.movements
     const ids = new Set((mv && mv.scafoldingBlocks) || [])
-    const it = bot.inventory.items().find(i => i.slot < 36 && FILLER.test(i.name) && (!ids.size || ids.has(i.type)))
+    const it = bot.inventory.items().find(i => i.slot < 36 && FILLER.test(i.name) && !(/_planks$/.test(i.name) && /nether/.test(String(bot.game && bot.game.dimension)) && process.env.ND_BRIDGE_PLANKS !== '1') && (!ids.size || ids.has(i.type)))
     if (!it) return
     let dest = -1
     for (let i = 36; i <= 44; i++) if (!bot.inventory.slots[i] && i !== 36 + bot.quickBarSlot) { dest = i; break }

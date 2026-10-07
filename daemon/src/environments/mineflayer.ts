@@ -42,7 +42,9 @@ export function worldFromObservation(observation: Observation, now: number): Wor
     food: count(/^(cooked_.+|bread|baked_potato|golden_carrot|apple|beef|porkchop|mutton|rabbit|cod|salmon|carrot|mushroom_stew|rabbit_stew|beetroot_soup)$/),
     bucket: count(/^(bucket|water_bucket|lava_bucket)$/), water: count(/^water_bucket$/), lighter: count(/^(flint_and_steel|fire_charge)$/),
     obsidian: count(/^obsidian$/), beds: count(/_bed$/), pearls: count(/^ender_pearl$/), rods: count(/^blaze_rod$/),
-    powder: count(/^blaze_powder$/), eyes: count(/^ender_eye$/), gold: count(/^gold_ingot$/) + count(/^gold_block$/) * 9,
+    // Очи, уже вставленные в рамки найденной комнаты, — тоже очи (S5e 07.10: после частичной вставки граф по «у тела 7 из 12» уводил
+    // в Ад за очами из крепости, s5e-G-1).
+    powder: count(/^blaze_powder$/), eyes: count(/^ender_eye$/) + (known.endPortal && Number.isFinite(Number(known.portalEyes)) ? Number(known.portalEyes) : 0), gold: count(/^gold_ingot$/) + count(/^gold_block$/) * 9,
     blocks: count(/^(cobblestone|cobbled_deepslate|stone|deepslate|netherrack|blackstone|dirt|end_stone|[a-z_]+_planks)$/),
     shield: count(/^shield$/) + (/shield/.test(JSON.stringify(raw.offHand)) ? 1 : 0)
   }

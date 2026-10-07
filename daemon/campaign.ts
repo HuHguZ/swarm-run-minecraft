@@ -1002,6 +1002,7 @@ function netherVia (from, to) {
 const fillersNow = () => have(/^(netherrack|dirt|basalt|blackstone|stone|andesite|diorite|granite|tuff|cobbled_deepslate|cobblestone|deepslate|polished_blackstone_bricks|cracked_polished_blackstone_bricks|polished_blackstone|end_stone|mossy_cobblestone|soul_soil|warped_wart_block|nether_wart_block|soul_sand)$/)
 const nearBastion = (p, r = 100) => !!p && (known.bastions || []).some(b => Math.hypot(b.x - p.x, b.z - p.z) < r)
 
+let bastionWalkRefusals = 0
 async function goToward (p, range = 6, frKeep = 1) {
   const fromWorld = dim()
   const fromRevision = tacticalRevision
@@ -1041,12 +1042,34 @@ async function goToward (p, range = 6, frKeep = 1) {
         if (state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) <= range + 2) return true
       }
     }
-    if (nearBastion(state.pos)) { log(`штрек по Аду не довёл: ${(t.detail && t.detail.why) || t.error || '?'} — у бастиона пешком не иду`); return false }
+    // S1f: от бастиона — пешком можно (путь уводит от ближнего бастиона), и третий отказ подряд — тоже: стоять у бастиона
+    // с «пути нет» дороже риска хода (s1f-FA-5/FB-4: 7 отказов подряд за 5 игр. мин, тело стояло у бастиона, найденного глазами).
+    // ND_NE_BASTION_AWAY=0 — прежнее (у бастиона никогда).
+    // Прочь — путь тело → цель не подходит к ближнему бастиону ближе, чем тело сейчас (угол с направлением «от бастиона» ≤ 90°).
+    const nearB = nearBastion(state.pos)
+    const bNear = nearB && state.pos ? (known.bastions || []).reduce((m, b) => !m || Math.hypot(b.x - state.pos.x, b.z - state.pos.z) < Math.hypot(m.x - state.pos.x, m.z - state.pos.z) ? b : m, null) : null
+    const awayDir = !!bNear && (p.x - state.pos.x) * (state.pos.x - bNear.x) + (p.z - state.pos.z) * (state.pos.z - bNear.z) >= 0
+    const awayOk = process.env.ND_NE_BASTION_AWAY !== '0' && nearB && !!state.pos && (awayDir || ++bastionWalkRefusals >= 3)
+    if (awayOk) { bastionWalkRefusals = 0; log(`штрек по Аду не довёл у бастиона — пешком (${awayDir ? 'прочь от бастиона' : 'третий отказ подряд'})`) }
+    else if (nearB) { log(`штрек по Аду не довёл: ${(t.detail && t.detail.why) || t.error || '?'} — у бастиона пешком не иду`); return false }
+    // Бастион глазами (S5e 07.10, честно: видимые блоки бастиона из памяти глаз, бруты — видимые/слышимые): пешком мимо него не идти
+    // (s5e-M-3: штрек «пути нет» в 70 бл. от точки выхода → goto сквозь бастион → «slain by Piglin Brute» за 16 игр. с).
+    // ND_NE_BASTION_EYES=0 — прежнее.
+    if (!awayOk && process.env.ND_NE_BASTION_EYES !== '0') {
+      const sb = await act('perceive', { mode: 'seen', re: '^(gilded_blackstone|polished_blackstone_bricks|cracked_polished_blackstone_bricks|chiseled_polished_blackstone)$', max: 1, maxDist: 40 })
+      const en = await act('perceive', { mode: 'entities', radius: 32 })
+      const brute = ((en.detail && en.detail.entities) || []).some(e => e && /piglin_brute/.test(e.name || e.kind || ''))
+      const seenB = ((sb.detail && sb.detail.seen) || []).length > 0
+      if (brute || seenB) { log(`штрек по Аду не довёл: ${(td0.why) || t.error || '?'} — рядом бастион (${brute ? 'брут' : 'блоки бастиона'}), пешком не иду`); return false }
+    }
     log(`штрек по Аду не довёл: ${(t.detail && t.detail.why) || t.error || '?'} — дальше пешком`)
   }
   const detour = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]
   let turn = 0
-  for (let k = 0; k < 12 && !died; k++) {
+  // S1f (вслепую, без сетки): в Аду отрезки по 32, а не 64 — длинная цель в изрезанном рельефе Ада «Took to long to decide path»
+  // (s1f-E1-1: к бастиону в 59 бл. 6 goto по 120 с — «не дошёл», 15 мин у бастиона). ND_NE_LEG=64 — прежнее.
+  const LEG = fromWorld === 'the_nether' ? Math.max(16, Number(process.env.ND_NE_LEG) || 32) : 64
+  for (let k = 0; k < Math.round(12 * 64 / LEG) && !died; k++) {
     await refresh()
     if (died || dim() !== fromWorld || tacticalRevision !== fromRevision) return false
     if (!have(/_pickaxe$/)) await ensurePick()
@@ -1060,12 +1083,12 @@ async function goToward (p, range = 6, frKeep = 1) {
       if (died) return false
     }
     let leg
-    if (far > 72 || turn) {
+    if (far > LEG + 8 || turn) {
       const a = Math.atan2(dz, dx) + detour[turn % detour.length]
-      const step = Math.min(64, far)
+      const step = Math.min(LEG, far)
       leg = { x: Math.round(state.pos.x + Math.cos(a) * step), z: Math.round(state.pos.z + Math.sin(a) * step) }
     } else leg = { x: p.x, z: p.z }
-    const direct = far <= 72 && !turn
+    const direct = far <= LEG + 8 && !turn
     // В Аду — без быстрого спуска со скалы (S1d s1d-G21-2: descent «ledges → no_ledge, down 25» — в лавовое море, смерть).
     const r = await act('goto', { x: leg.x, ...(direct && typeof p.y === 'number' ? { y: p.y } : {}), z: leg.z, range: direct ? range : Math.min(range, 8), timeoutSeconds: 120, ...(dim() === 'the_nether' ? { descent: false } : {}) })
     if (interrupted(r)) { log('ход прерван — возвращаю управление для нового наблюдения'); return false }
@@ -1247,6 +1270,21 @@ async function spares (wantSwings = 200) {
       if (have(/_planks$/) < 3 || !(await craft('wooden_pickaxe'))) break
     }
   }
+}
+
+// S1f: запас блоков в Аду (незерак под ногами — везде): без него не встаёт ни коробка отхода, ни столб обзора (s1f-B0b-1: мост и
+// штрек разведки съели 127 булыжника за 3 мин, через 4 мин «на коробку блоков нет (0)» под шаром гаста — падение в лаву). Перед
+// разведкой и ходом к спавнеру/бастиону — добрать до want, если меньше min. ND_NE_FILLERS=0 — выкл.
+let fillersRetryAt = 0
+async function netherFillers (min = 24, want = 48) {
+  if (process.env.ND_NE_FILLERS === '0' || dim() !== 'the_nether' || died) return
+  if (fillersNow() >= min || (state.pos && nearBastion(state.pos, 90)) || gameClock.now() < fillersRetryAt) return
+  const before = fillersNow()
+  const r = await act('mine', { block: 'netherrack', count: want - before, radius: 16, timeoutSeconds: 60 })
+  await refresh()
+  // Не добыл (незерака на виду нет: мост над лавой, крепость) — не повторять до следующих 2 игр. мин (s1f-C1-1: 6 пустых попыток подряд).
+  if (fillersNow() <= before) fillersRetryAt = gameClock.now() + 120000
+  log(`запас блоков в Аду: ${before} → ${fillersNow()}${r.error ? ' — ' + String(r.error).slice(0, 80) : ''}`)
 }
 
 async function lumber (want = 10) {
@@ -2964,7 +3002,11 @@ const pendingExitFrame = () => !!exitFrameTarget && dim() === 'the_nether' && li
 // выхода у крепости рама съела 10, граф увёл обратно в Ад за обсидианом — 11 игр. мин впустую).
 const obsShort = () => !known.endPortal && dim() === 'the_nether' && (EXIT_KIT ? !pendingExitFrame() && !exitKitNow().ready : process.env.ND_OBS_EXIT === '1' && process.env.ND_SH_NETHER === '1' && !have(PICK_DIAMOND) && have('obsidian') < 10)
 const EYES_NEED = Math.max(1, Math.min(12, Number(process.env.ND_EYES_NEED) || 12))
-const eyesWant = () => EYES_NEED + (known.stronghold ? 0 : 2)
+// Очей нужно — пустых рамок: после комнаты/частичной вставки — 12 минус уже вставленные (S5e 07.10, s5e-G-1: вставил 7 из 12, fill
+// оборвала лава, у тела 7 очей на 5 пустых рамок, а граф по «12 очей» увёл в legacy-этап nether из крепости). ND_EYES_FRAMES=0 — прежнее.
+const eyesWant = () => known.endPortal && Number.isFinite(known.portalEyes) && process.env.ND_EYES_FRAMES !== '0'
+  ? Math.max(0, EYES_NEED - known.portalEyes) : EYES_NEED + (known.stronghold ? 0 : 2)
+const notePortalEyes = r => { const d = r && r.detail; const w = d && (Number.isFinite(d.withEye) ? d.withEye : d.room && d.room.withEye); if (Number.isFinite(w)) known.portalEyes = w }
 const barterFlow = require(path.join(__dirname, 'src', 'barter-flow'))
 let barterRetryPending = false
 let bastionDry = 0
@@ -3070,6 +3112,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
   if (!nextBastion() && bastionSearchWanted() && dim() === 'the_nether' && !died) {
     bastionSearchRuns++
     await spares(260)
+    await netherFillers()
     const f = await act('fortress', { mode: 'bastion', timeoutSeconds: 420, ...(SCOUT_HIGH ? { high: true } : {}) })
     await readMemory()
     const fd = f.detail || {}
@@ -3125,7 +3168,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     const far = state.pos ? Math.hypot(b.x - state.pos.x, b.z - state.pos.z) : 0
     const beforeApproach = state.pos ? { ...state.pos } : null
     const r = await act('bastion', { x: b.x, y: b.y, z: b.z, vantage: b.vantage, knownGold: b.gold, knownChests: b.chests, starts: b.starts,
-      ...(carriedTrade ? { mode: 'barter' } : {}), timeoutSeconds: carriedTrade ? 540 : process.env.ND_GOLD_FAST_SAFE === '1' ? 720 : 1200 + Math.min(600, Math.round(far)), tripSeconds: far > 200 ? Math.min(480, Math.round(far / 1.3)) : 0, pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: 3, ...(process.env.ND_SH_NETHER === '1' ? { obsidian: 10 } : {}), ...(EXIT_KIT ? { exit: false } : {}), sealed: true, ...(process.env.ND_SEALED_BREACH === '1' ? { breach: true } : {}), ...(process.env.ND_GOLD_FAST_SAFE === '1' ? { fastSafe: true } : {}) })
+      ...(carriedTrade ? { mode: 'barter' } : {}), timeoutSeconds: carriedTrade ? 540 : process.env.ND_GOLD_FAST_SAFE === '1' ? 720 : 1200 + Math.min(600, Math.round(far)), tripSeconds: far > 200 ? Math.min(480, Math.round(far / 1.3)) : 0, pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: 3, ...(process.env.ND_SH_NETHER === '1' ? { obsidian: 10 } : {}), ...(EXIT_KIT ? { exit: false } : {}), sealed: !bs.openNext, ...(process.env.ND_SEALED_BREACH === '1' ? { breach: true } : {}), ...(process.env.ND_GOLD_FAST_SAFE === '1' ? { fastSafe: true } : {}) })
     const d = r.detail || {}
     lastBastionGoldLeft = Math.max(0, Number(d.knownGoldLeft ?? d.predLeft) || 0)
     bastionGoldDug += Number(d.goldBlocksDug) || 0
@@ -3189,6 +3232,17 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
       bs.dry = 0
       break
     }
+    // S1f: вслепую (золото бастиона не известно) закрытый штрек по шаблону ничего не дал (шаблон не попал: s1f-B0-2 сокровищница,
+    // s1f-A2-3 мост — «не золото» по всем целям, 0 блоков ×2 → «выработан» на 5-й мин; S1e M4/M5 — то же в 9 из 21) — прежде чем
+    // бросить бастион, один заход открытым обзором, как игрок в золотой броне: видимое золото и сундуки с точек обзора. Риск обзора
+    // меньше потери единственного источника жемчуга. ND_BASTION_OPEN=0 — прежнее.
+    if (!got && far <= 48 && !/не дош/.test(String(d.stopped || '')) && !(b.gold && b.gold.length) && !bs.openTried && !bs.openNext && process.env.ND_BASTION_OPEN !== '0' && dim() === 'the_nether' && !died) {
+      bs.openNext = true
+      log(`${b.key}: закрытый штрек по шаблону ничего не дал — следующий заход открытым обзором (видимое золото, сундуки)`)
+      bs.dry = 0
+      continue
+    }
+    if (bs.openNext) { bs.openNext = false; bs.openTried = true }
     if ((got && /золото кончилось/.test(d.stopped || '')) || bs.dry >= 2) {
       bs.spent = true
       log(`${b.key} выработан`)
@@ -3282,6 +3336,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     await recoverGuard()
     if (died || dim() !== 'the_nether') return
     await spares(260)
+    await netherFillers()
     const f = await act('fortress', { timeoutSeconds: 300, ...(SCOUT_HIGH ? { high: true } : {}) })
     if (f.detail && f.detail.found) known.fortress = f.detail.fortress || true
   }
@@ -3303,6 +3358,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
       if (!supply.ready) { log(`путь к спавнеру отложен: ${supply.reason}`); return }
     }
     await spares(200)
+    await netherFillers()
     const spFar = known.fortress && known.fortress.x != null && state.pos ? Math.hypot(known.fortress.x - state.pos.x, known.fortress.z - state.pos.z) : 0
     if (!have('bow') && have('string') >= 3) { await sticks(3); await craft('bow'); await refresh() }
     // Уже у спавнера (в яме у помоста или в 8 бл. на его уровне) — подход не нужен: fortress уводил из ямы под ифритов.
@@ -3324,8 +3380,12 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     // кампания шла домой и умерла) — бой отсюда: blaze сам ищет точку боя и стреляет из лука.
     const spAt = (s.detail && s.detail.spawner) || memorySnapshot?.places?.['спавнер блейзов'] || null
     const spNear = !!(spAt && state.pos && Math.hypot(spAt.x - state.pos.x, spAt.z - state.pos.z) <= 24 && Math.abs(spAt.y - state.pos.y) <= 24)
-    if (!(s.detail && s.detail.reached) && !spNear) { log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); if (i >= 1) break; continue }
-    if (!(s.detail && s.detail.reached)) log(`к спавнеру не дошёл (${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 80)}), но он в 24 бл. — бой отсюда`)
+    // S1f (вслепую): спавнер не увиден, но обход крепости видел ифритов рядом (≤ 24 бл.) — бой с ними отсюда: ифриты держатся у спавнера,
+    // навык blaze бьёт видимых и сам ищет спавнер (s1f-A2-3: тело под тронным залом, ифриты били — смерть без боя на 19-й мин).
+    // ND_BLAZE_SEEN=0 — прежнее (только у спавнера).
+    const blazesNear = process.env.ND_BLAZE_SEEN !== '0' && !!(s.detail && s.detail.blazes && s.detail.blazes.seen > 0 && s.detail.blazes.nearest <= 24)
+    if (!(s.detail && s.detail.reached) && !spNear && !blazesNear) { log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); if (i >= 1) break; continue }
+    if (!(s.detail && s.detail.reached)) log(`к спавнеру не дошёл (${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 80)}), но ${spNear ? 'он в 24 бл.' : `ифриты видны (${s.detail.blazes.seen}, ближний в ${s.detail.blazes.nearest} бл.)`} — бой отсюда`)
     else log(`у спавнера ${JSON.stringify(s.detail.spawner)} (${s.detail.dist} бл.)`)
     if (!(await fedForBlazes())) { log('сытость не восстановилась — бой с блейзами не начинаю'); return }
     if (!have('bow') && have('string') >= 3) { await sticks(3); await craft('bow'); await refresh() }
@@ -3545,11 +3605,22 @@ async function checkEndEntry () {
   // при любой нехватке перечитать один раз, прежде чем стоп.
   if (lack.length) { await act('wait', { seconds: 1 }); await refresh(); lack = lackNow() }
   // Хп, сытость и запас еды — цена входа, а не допуск (гибкость, AGENTS.md 06.10): хп ≥ 10 и хоть 2 еды — вхожу с отметкой риска.
-  // Стоп — только без снаряжения на бой (кровати/обсидиан/вода/блоки/меч/кирка) или совсем без сил.
   const soft = lack.filter(x => /^(hp|hunger|food):/.test(x))
   if (soft.length && soft.length === lack.length && (state.health ?? 0) >= 10 && have(FOOD) >= 2) {
     log(`РИСК END_SEAM: ${soft.join(', ')} — вхожу (цена, не допуск)`)
     lack.length = 0
+  }
+  // Нехватка снаряжения (блоки, кровати, обсидиан станции, вода, меч, кирка) — тоже цена (S5e 07.10, правило гибкости): сборы
+  // endkit уже исчерпаны (3 захода) или их нет, а стоп у портала — такой же провал прогона, как неудачный бой (s5d-O-2/O-3: «blocks
+  // 101/108», «47/108» → БЛОКЕР). Стоп — только физически без средства боя: ни кровати, ни лука со стрелами, ни меча/топора.
+  // ND_END_GEAR_PRICE=0 — прежний стоп.
+  if (lack.length && process.env.ND_END_GEAR_PRICE !== '0') {
+    const canHurt = have(/_bed$/) > 0 || (have('bow') && arrowsNow() > 0) || have(/_(sword|axe)$/) > 0
+    if (canHurt) {
+      if ((state.health ?? 0) < 10) { await rest(); await refresh() }
+      log(`РИСК END_SEAM: ${lack.join(', ')} — вхожу (снаряжение — цена: сборов ${endkitRuns}/3, кроватей ${have(/_bed$/)}, стрел ${arrowsNow()}, меч ${have(/_sword$/) ? 'есть' : 'нет'})`)
+      lack.length = 0
+    }
   }
   if (lack.length) {
     const msg = `END_SEAM_NOT_READY: ${lack.join(', ')}; сборов ${endkitRuns}/3 — в Энд не вхожу`
@@ -3775,8 +3846,16 @@ async function viaNetherTo (T, why) {
     if (known.portal && state.pos && Math.hypot(known.portal.x - state.pos.x, known.portal.z - state.pos.z) > 48) {
       for (let k = 0; k < 4 && !died; k++) { await nightGuard(); if (await goToward(known.portal, 6)) break }
     }
-    const e = await enterNether()
+    let e = await enterNether()
     await refresh()
+    // Не дошёл до своего портала в 48 бл. (джунгли: лоза и листва — «stuck» на месте, s5e-A-3 07.10: 1456 бл. поверху и море у
+    // крепости вместо 180 бл. Ада) — ещё раз через goto к раме (копает листву), прежде чем отказаться от пути через Ад.
+    if (dim() === 'overworld' && known.portal && state.pos && Math.hypot(known.portal.x - state.pos.x, known.portal.z - state.pos.z) <= 48 && !died) {
+      log(`${why}: в портал не вошёл (${(e.detail && e.detail.stopped) || e.error || 'нет'}) — ещё раз к раме`)
+      await act('goto', { x: known.portal.x, y: known.portal.y, z: known.portal.z, range: 2, timeoutSeconds: 60 })
+      e = await enterNether()
+      await refresh()
+    }
     if (!(e.detail && e.detail.went) || dim() !== 'the_nether') { log(`${why}: в Ад не вошёл`); return false }
   }
   if (dim() !== 'the_nether') return false
@@ -3796,23 +3875,48 @@ async function viaNetherTo (T, why) {
       if (died || dim() !== 'the_nether') return false
     }
   }
+  // Точка выхода у бастиона (S5e 07.10, честно — по видимому: блоки бастиона в памяти глаз в 32 бл., брут видим/слышим): рама там —
+  // бруты (s5d-R-3/T-3, s5e-M-3/G-3 на сиде −7145914149339214824: «slain by Piglin Brute»). Отойти от центра увиденного бастиона на
+  // 40 бл. (в Аду; наверху это ~320 бл. дальше от крепости — дешевле смерти) и раму ставить там. ND_EXIT_BASTION=0 — прежнее.
+  let TT = T
+  if (dim() === 'the_nether' && process.env.ND_EXIT_BASTION !== '0' && state.pos && !died) {
+    const sb = await act('perceive', { mode: 'seen', re: '^(gilded_blackstone|polished_blackstone_bricks|cracked_polished_blackstone_bricks|chiseled_polished_blackstone|polished_blackstone_brick_(slab|stairs|wall))$', max: 40, maxDist: 32 })
+    const en = await act('perceive', { mode: 'entities', radius: 24 })
+    const seen = (sb.detail && sb.detail.seen) || []
+    const brutes = ((en.detail && en.detail.entities) || []).filter(e => e && /piglin_brute/.test(e.name || ''))
+    if (seen.length >= 3 || brutes.length) {
+      const pts = seen.length ? seen : brutes.map(e => e.pos || e.lastPos).filter(Boolean)
+      const C = pts.length ? { x: pts.reduce((s, q) => s + q.x, 0) / pts.length, z: pts.reduce((s, q) => s + q.z, 0) / pts.length } : state.pos
+      const N0 = { x: Math.floor(T.x / 8), z: Math.floor(T.z / 8) }
+      let dx = N0.x - C.x; let dz = N0.z - C.z
+      const L = Math.hypot(dx, dz)
+      if (L < 1) { dx = -(T.z / 8 - state.pos.z); dz = T.x / 8 - state.pos.x }
+      const n = Math.hypot(dx, dz) || 1
+      const N2 = { x: Math.round(C.x + dx / n * 40), z: Math.round(C.z + dz / n * 40) }
+      log(`${why}: у точки выхода бастион (блоков ${seen.length}, брутов ${brutes.length}) — рама в 40 бл. от него: точка Ада ${N2.x},${N2.z}`)
+      await goToward({ x: N2.x, z: N2.z }, 3)
+      await refresh()
+      if (died || dim() !== 'the_nether') return false
+      TT = { x: N2.x * 8 + 4, z: N2.z * 8 + 4 }
+    }
+  }
   for (let k = 0; k < 2 && dim() === 'the_nether' && !died; k++) {
     const obsBefore = have('obsidian')
-    const t = await act('stronghold', { mode: 'travel', x: T.x, z: T.z, go: false, timeoutSeconds: 420 })
+    const t = await act('stronghold', { mode: 'travel', x: TT.x, z: TT.z, go: false, timeoutSeconds: 420 })
     await refresh()
     const td = t.detail || {}
-    if (dim() === 'the_nether' && have('obsidian') < obsBefore && (td.build || td.link)) exitFrameTarget = { ...T }
+    if (dim() === 'the_nether' && have('obsidian') < obsBefore && (td.build || td.link)) exitFrameTarget = { ...TT }
     if (dim() === 'overworld') exitFrameTarget = null
     log(`${why}: travel — ${dim() === 'overworld' ? 'вышел наверх' : 'ещё в Аду'}${td.stopped ? ': ' + td.stopped : ''}`)
   }
   await readMemory()
-  return dim() === 'overworld' && !!state.pos && Math.hypot(T.x - state.pos.x, T.z - state.pos.z) <= 160
+  return dim() === 'overworld' && !!state.pos && Math.hypot(T.x - state.pos.x, T.z - state.pos.z) <= (TT === T ? 160 : 480)
 }
 defStage('stronghold', () => dim() !== 'the_end' && (have('ender_eye') >= Math.min(10, EYES_NEED) || !!known.endPortal) && (!known.endPortal || process.env.ND_END_ENTRY !== '0') && !endkitPending(), async () => {
   if (known.endPortal && process.env.ND_END_ENTRY !== '0') {
     if (dim() !== 'overworld') return
-    await act('stronghold', { mode: 'room', timeoutSeconds: 120 })
-    await act('stronghold', { mode: 'fill', enter: true, timeoutSeconds: 90 })
+    notePortalEyes(await act('stronghold', { mode: 'room', timeoutSeconds: 120 }))
+    notePortalEyes(await act('stronghold', { mode: 'fill', enter: true, timeoutSeconds: 90 }))
     await refresh()
     return
   }
@@ -3873,6 +3977,7 @@ defStage('stronghold', () => dim() !== 'the_end' && (have('ender_eye') >= Math.m
     if (died) return
     if (dim() === 'overworld') { await sense(); if (sit.surface) await nightGuard() }
     const r = await act('stronghold', { mode: 'room', timeoutSeconds: 500 })
+    notePortalEyes(r)
     if (r.detail && r.detail.room) { known.endPortal = r.detail.room.centre || r.detail.room; break }
     if (process.env.ND_ROOM_MAP !== '0' && require(path.join(__dirname, 'src/stronghold')).mappedRoom(known.stronghold)) {
       log(`подход к комнате по карте остановлен: ${(r.detail || {}).stopped || r.error || 'нет прогресса'} — одинаковый вызов в этом ходе не повторяю`)
@@ -3912,6 +4017,7 @@ defStage('stronghold', () => dim() !== 'the_end' && (have('ender_eye') >= Math.m
   }
   if (known.endPortal && process.env.ND_END_ENTRY !== '0' && !died && dim() === 'overworld') {
     const r = await act('stronghold', { mode: 'fill', enter: true, timeoutSeconds: 90 })
+    notePortalEyes(r)
     await refresh()
     log(`вход в Энд после комнаты: ${(r.detail || {}).entered && dim() === 'the_end' ? 'подтверждён' : 'не завершён'}`)
   }
@@ -3942,16 +4048,35 @@ defStage('dragon', () => !known.dragonWon && (dim() === 'the_end' || !!known.end
     await checkEndEntry()
     if (died) return
     const f = await act('stronghold', { mode: 'fill', enter: true, timeoutSeconds: 200 })
+    notePortalEyes(f)
     if (!(f.detail && f.detail.entered)) throw new Error('в Энд не вошёл')
   }
+  let dragonHp = null
   for (let i = 0; i < 6 && !known.dragonWon; i++) {
     if (died || dim() !== 'the_end') return
     // Кровати кончились — бой не бросать: лук по кристаллам и меч по сидящему (режим full; S5d s5d-N-2 07.10: 5 кроватей мимо
     // головы, навык «ни шагу» без кроватей ×6, граф ушёл в legacy-этап nether прямо в Энде). ND_DRAGON_FALLBACK=0 — прежнее.
     const noBeds = !have(/_bed$/) && process.env.ND_DRAGON_FALLBACK !== '0'
-    if (noBeds) log(`кроватей нет — бой с драконом луком и мечом (full): стрел ${arrowsNow()}, меч ${have(/_sword$/) ? 'есть' : 'нет'}`)
-    const r = await act('dragon', { timeoutSeconds: 600, ...(noBeds ? { mode: 'full' } : {}) })
-    if (r.detail && r.detail.dragon && r.detail.dragon.won) { known.dragonWon = true; log('ДРАКОН УБИТ') }
+    // S5e (07.10): без кроватей — оценка, а не безусловный бой (s5d-T-5: full с 20 хп дракона — «killed by Ender Dragon using magic»;
+    // T-6: кровати сняли ~190, full с 11 стрелами 20 мин по кристаллам — время). Хп дракона (моба — можно точно): ≤ 40 — добить его
+    // самого сразу (режим dragon: меч по сидящему, лук), пока кристаллы не вылечили; иначе — кристаллы и бой (full). Своё хп < 14 —
+    // сперва поесть и отлежаться (ждать), потом бить. ND_DRAGON_FINISH=0 — всегда full.
+    let mode = noBeds ? 'full' : null
+    if (noBeds && process.env.ND_DRAGON_FINISH !== '0') {
+      if ((state.health ?? 20) < 14) {
+        log(`без кроватей, хп ${Math.round(state.health ?? 0)} — сперва ем и отлёживаюсь, потом бой`)
+        if (have(FOOD) && (state.food ?? 20) < 20) await act('eat')
+        await act('wait', { seconds: 15 })
+        await refresh()
+        if (died || dim() !== 'the_end') return
+      }
+      if (dragonHp !== null && dragonHp <= 40) mode = 'dragon'
+    }
+    if (noBeds) log(`кроватей нет — бой с драконом (${mode}): хп дракона ${dragonHp ?? '?'}, стрел ${arrowsNow()}, меч ${have(/_sword$/) ? 'есть' : 'нет'}`)
+    const r = await act('dragon', { timeoutSeconds: 600, ...(mode ? { mode } : {}) })
+    const dd = r.detail && r.detail.dragon
+    if (dd && Number.isFinite(dd.hpNow)) dragonHp = dd.hpNow
+    if (dd && dd.won) { known.dragonWon = true; log('ДРАКОН УБИТ') }
   }
 })
 

@@ -547,6 +547,22 @@ function entities (bot, { radius = 64, rememberMs = 5000, hearMs = 4000 }: any =
   return out
 }
 
+// S1f: объекты сущностей, которые бот знает (видимые лучом, увиденные за rememberMs, слышимые) — замена Object.values(bot.entities)
+// в решениях «кого бить / сколько злых / куда идти» (аудит S10 №20). Без глаз (тесты, ND_EYES=0), на scan или ND_HONEST_ENT=0 —
+// все, как было. Кеш на 5 игровых тиков: в циклах навыка фильтр зовётся каждый тик.
+function knownEntities (bot, { radius = 64 }: any = {}): any[] {
+  const all = Object.values(bot.entities || {}) as any[]
+  const e = bot && bot._ndEyes
+  if (!e || process.env.ND_HONEST_ENT === '0' || require('./knowledge').level() === 'scan') return all
+  const now = gameClock.now()
+  let c = e._known
+  if (!c || c.r !== radius || now - c.t >= 250 || now < c.t) {
+    c = { t: now, r: radius, ids: new Set(entities(bot, { radius }).map(x => x.id)) }
+    e._known = c
+  }
+  return all.filter(x => x && c.ids.has(x.id))
+}
+
 // Найти блоки names так, как нашёл бы игрок: память увиденного + оглядеться сейчас (sight.visibleOf — луч к кандидатам).
 // Замена bot.findBlocks в решениях спидрана (аудит S10). На уровне scan (полный скан копии) — bot.findBlocks, как было:
 // это знание карты. Vec3[] ближние первыми; запись памяти, чья клетка сменилась (столбец перегружен без blockUpdate), — мимо.
@@ -583,4 +599,4 @@ function stats (bot) {
     cached: e.cache.size, remembered: byName, opts: e.opts, cpu: e.cpu() }
 }
 
-module.exports = { install, nearest, locate, seesNow, surface, entities, stats, Eyes, reader, shapeCache, ray, seesCell, WATCH, PIE, dimOf }
+module.exports = { install, nearest, locate, seesNow, surface, entities, knownEntities, stats, Eyes, reader, shapeCache, ray, seesCell, WATCH, PIE, dimOf }

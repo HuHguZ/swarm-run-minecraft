@@ -157,11 +157,13 @@ function reachTo (bot, e) {
 }
 
 const seesMob = (bot, e) => canSeePoint(bot, e.position.offset(0, (e.height || 1.8) * 0.55, 0))
+// S1f (аудит S10 №20): ифриты, стержни и стрелы — только известные телу (видимые/слышимые: eyes.knownEntities), не все сущности слежения.
+const ents = (bot): any[] => require('./perception/eyes').knownEntities(bot)
 
 // Живой блейз в радиусе: сначала видимые, потом ближайшие.
 function nearestBlaze (bot, radius, dead) {
   const me = bot.entity.position
-  const list = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
+  const list = ents(bot).filter((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
     !dead.has(e.id) && e.position.distanceTo(me) <= radius)
   if (!list.length) return null
   list.sort((a: any, b: any) => (seesMob(bot, b) - seesMob(bot, a)) || (a.position.distanceTo(me) - b.position.distanceTo(me)))
@@ -188,7 +190,7 @@ function visibleSpawner (bot, mcData, radius = 32) {
 function droppedRods (bot, radius = 12, { reachable = false }: any = {}) {
   const me = bot.entity.position
   let n = 0
-  for (const e of ((Object.values(bot.entities) as any[]) as any)) {
+  for (const e of ents(bot)) {
     if (!e || e.name !== 'item' || !e.position || e.position.distanceTo(me) > radius) continue
     if (reachable && (e.position.y < me.y - 3 || lavaNear(bot, e.position))) continue
     try {
@@ -220,7 +222,7 @@ function lavaNear (bot, p, r = 3) {
 // Стрела в земле неподвижна; брать те, что не выше 1.6 над полом и не у лавы.
 function arrowsOnFloor (bot, radius = 14) {
   const me = bot.entity.position
-  return (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'arrow' && e.position && e.isValid !== false &&
+  return ents(bot).filter((e : any) => e && e.name === 'arrow' && e.position && e.isValid !== false &&
     e.position.distanceTo(me) <= radius && e.position.y >= me.y - 3 && e.position.y <= me.y + 2.5 &&
     (!e.velocity || Math.hypot(e.velocity.x, e.velocity.y, e.velocity.z) < 0.01) && !lavaNear(bot, e.position, 2))
 }
@@ -244,7 +246,7 @@ async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, 
     // Где стержень ляжет (drops.js): убитый блейз висит в воздухе, и mineflayer до
     // секунды показывает дроп там, а не на полу.
     const at = e => { try { return drops.restOf(bot, e) } catch { return e.position } }
-    let rod: any = (Object.values(bot.entities) as any[])
+    let rod: any = ents(bot)
       .filter((e : any) => e && e.name === 'item' && e.position && at(e).distanceTo(me) <= radius && isRod(e) && !skip.has(e.id))
       .filter((e : any) => { const p = at(e); if (p.y < me.y - 3 || lavaNear(bot, p)) { skip.add(e.id); return false } return true })
       .sort((a, b) => at(a).distanceTo(me) - at(b).distanceTo(me))[0]
@@ -422,6 +424,7 @@ function restSpots (bot, blazes, { min = 4, max = 24, want = 6, maxSeen = 0 }: a
 // умолчанию, SoundEvent.createVariableRangeEvent 1.21.11). Дальше 16 — только видимые (замечание проверки 06.10: как у игрока).
 const BLAZE_HEAR = 16
 function liveBlazes (bot, dead, radius = 48) {
+  // Своё честное правило (слух 16 / видимые) — без eyes.knownEntities.
   return (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
     !dead.has(e.id) && e.position.distanceTo(bot.entity.position) <= radius && (e.position.distanceTo(bot.entity.position) <= BLAZE_HEAR || seesMob(bot, e)))
 }
@@ -449,7 +452,7 @@ async function takeCover (bot, ctl, dead) {
 async function rest (session, ctl, dead, { until = 18, maxMs = 45000 }: any = {}) {
   const bot = session.bot
   const actions = require('./actions')
-  const blazes = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
+  const blazes = ents(bot).filter((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
     !dead.has(e.id) && e.position.distanceTo(bot.entity.position) <= 48)
   const hp0 = Math.round(bot.health ?? 0)
   const spots = restSpots(bot, blazes)
@@ -475,7 +478,7 @@ async function rest (session, ctl, dead, { until = 18, maxMs = 45000 }: any = {}
       try { const r = await actions.eat(session, {}); if (r && r.ate) ate = r.ate } catch {}
     }
     // Пришёл блейз — отдых кончился, дерёмся.
-    const near = (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
+    const near = ents(bot).some((e : any) => e && e.name === 'blaze' && e.position && e.isValid !== false &&
       !dead.has(e.id) && e.position.distanceTo(bot.entity.position) <= 12 && seesMob(bot, e))
     if (near) break
     await sleep(1000)
@@ -1928,7 +1931,7 @@ async function holdSpawner (session, ctl, ctx) {
         .sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
       if (now - (out.dropAt || 0) > 10000) {
         out.dropAt = now
-        const drops = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'item' && e.position && e.position.distanceTo(bot.entity.position) < 32)
+        const drops = ents(bot).filter((e : any) => e && e.name === 'item' && e.position && e.position.distanceTo(bot.entity.position) < 32)
           .map((e : any) => { let n = '?'; try { const it = e.getDroppedItem && e.getDroppedItem(); n = it ? it.name : '?' } catch {} return [n, xyz(e.position)] })
         log('лут', { kills: (ctx.kills || []).map(k => k.at), drops })
       }
@@ -1984,7 +1987,7 @@ async function holdSpawner (session, ctl, ctx) {
       // висит всегда (замер 31: 14 убийств, 4 стержня на полу, 0 подобрано).
       // Годится и так: заряженных нет, тишина 2.5 с, у стержня в 6 блоках блейзов
       // нет; вылазка всё равно обрывается по опасности (stopIf).
-      const rodsNear = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'item' && e.position && isRod(e) && e.position.distanceTo(bot.entity.position) <= 16)
+      const rodsNear = ents(bot).filter((e : any) => e && e.name === 'item' && e.position && isRod(e) && e.position.distanceTo(bot.entity.position) <= 16)
       const calmRod = rodsNear.some((r : any) => !liveBlazes(bot, dead, 32).some((b : any) => b.position.distanceTo(r.position) < 6))
       const clear = !liveBlazes(bot, dead, 20).length || (calmRod && quietAll > 2500)
       // Вылазка — только с 14+ хп; обрыв на < 12 (замеры 34–35: весь урон
@@ -2055,8 +2058,13 @@ async function holdSpawner (session, ctl, ctx) {
         if ((Math.floor(bot.entity.position.y) < spawner.y - 1 || Math.floor(bot.entity.position.y) > spawner.y + 2) && !liveBlazes(bot, dead, 5).some(e => seesMe(bot, e)) && process.env.ND_NE_ROUTE !== '0' && (out.levelRoutes || 0) < 3) {
           out.levelRoutes = (out.levelRoutes || 0) + 1
           setPhase('на помост')
-          const rr = await require('./nether-route').routeTo(session, ctl, { x: spawner.x, y: spawner.y, z: spawner.z, r: 2, dy: 0, solidFloor: true, frKeep: 1, ironOk: true, abortNear: { re: '^blaze$', r: 4 }, timeoutSeconds: 40 }).catch(e => ({ ok: false, why: e.message }))
-          log('на помост по сетке', { ok: rr.ok, why: rr.why, steps: rr.steps, at: xyz(bot.entity.position) })
+          // S1f (вслепую — сетки копии нет, routeTo отказывал сразу): ход к полу зала pathfinder'ом со ступенями/столбом (fortress.climbTo),
+          // как игрок поднимается к помосту (s1f-D1-1: спавнер увиден с 11 бл. ниже — «за стеной, точки обзора нет», 0 стержней).
+          const NRg = require('./nether-route').gridOf(session)
+          const rr = NRg || process.env.ND_BLAZE_CLIMB === '0'
+            ? await require('./nether-route').routeTo(session, ctl, { x: spawner.x, y: spawner.y, z: spawner.z, r: 2, dy: 0, solidFloor: true, frKeep: 1, ironOk: true, abortNear: { re: '^blaze$', r: 4 }, timeoutSeconds: 40 }).catch(e => ({ ok: false, why: e.message }))
+            : await require('./fortress').climbTo(session, ctl, spawner.offset(Math.sign(bot.entity.position.x - spawner.x) * 3 || 3, -1, Math.sign(bot.entity.position.z - spawner.z) * 3), gameClock.now() + 40000).then(w => ({ ok: w.ok, why: w.error, steps: null })).catch(e => ({ ok: false, why: e.message }))
+          log(NRg ? 'на помост по сетке' : 'на помост ступенями', { ok: rr.ok, why: rr.why, steps: rr.steps, at: xyz(bot.entity.position) })
           await equipSword()
           continue
         }
@@ -2068,7 +2076,13 @@ async function holdSpawner (session, ctl, ctx) {
             .sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
           // Под огнестойкостью подход к скрытому ифриту безопасен (шары не жгут) — заходов больше: лук+зелье neF-blz-5 02.10
           // кончил бой на 6 из 7 тремя «за стеной» подряд.
-          if (hidden && approaches < (fireproof() ? 14 : 6) && (bot.health ?? 0) >= 12) {
+          // S1f: без огнестойкости подход к скрытому ифриту — цена: у цели ещё ифриты (в 6 бл.) — это клетка спавна, вплотную каждый бьёт
+          // 3.4 (удар 6 по железу) раз в ~1 с и шарами по 2.7: s1f-FA-3 — «к ифриту за стеной» к помосту (4 ифрита), хп 20 → 0 за 3 с.
+          // Подход — только к одиночке и с хп ≥ 16 (ожидаемый урон ~2 ударов). ND_BLAZE_APPROACH_PRICE=0 — прежнее (хп ≥ 12).
+          const crowdAt = hidden ? blazes.filter((e: any) => e !== hidden && e.position.distanceTo(hidden.position) < 6).length : 0
+          const approachOk = fireproof() || process.env.ND_BLAZE_APPROACH_PRICE === '0' ? (bot.health ?? 0) >= 12 : crowdAt === 0 && (bot.health ?? 0) >= 16
+          if (hidden && !approachOk) log('к ифриту за стеной — не иду', { crowd: crowdAt, hp: Math.round(bot.health ?? 0), fr: fireproof() })
+          if (hidden && approaches < (fireproof() ? 14 : 6) && approachOk) {
             approaches++
             out.approaches = approaches
             setPhase('к ифриту за стеной')
@@ -2632,7 +2646,7 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
     }
     // Стержни рядом на помосте — подобрать сразу (под зельем шары не страшны).
     if (!up && now - (noShot.get('rods') || 0) > 10000) {
-      const rodsNear = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'item' && e.position && isRod(e) && e.position.distanceTo(me) <= 7 && e.position.y >= floorY - 2.5 && !lavaNear(bot, e.position, 1))
+      const rodsNear = ents(bot).filter((e : any) => e && e.name === 'item' && e.position && isRod(e) && e.position.distanceTo(me) <= 7 && e.position.y >= floorY - 2.5 && !lavaNear(bot, e.position, 1))
       if (rodsNear.length) {
         setPhase('лагерь: стержни')
         const r0 = countOf(bot, 'blaze_rod')

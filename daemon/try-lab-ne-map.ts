@@ -244,7 +244,19 @@ async function fortressOf (rcon, read, F, at) {
 // Знание карты для точки входа at: { bastions: [...], fortress, places } — places готовы для fortress mode=map.
 async function netherMap (slot, at, { bastions = 2, log = () => {} }: any = {} as Record<string, any>) {
   // S10: карта Ада копии с золотом бастиона — «полный скан» (MAP=1 без ND_KNOWLEDGE и есть scan).
-  if (!require('./src/perception/knowledge').allows('gold', 'try-lab-ne-map.netherMap')) return { error: `знание ${require('./src/perception/knowledge').level()}: карта Ада копии не читается`, bastions: [], fortress: null, places: {} as Record<string, any> }
+  if (!require('./src/perception/knowledge').allows('gold', 'try-lab-ne-map.netherMap')) {
+    // S1f: «известный сид» (ssg) — только места построек по /locate (как seedtool у игрока): бастионы и крепость, без золота, сундуков и
+    // спавнера (это уже скан копии). Записи — на высоте 64 (у /locate высоты нет), с пометкой by:'locate'.
+    if (!require('./src/perception/knowledge').allows('structures', 'try-lab-ne-map.netherMap ssg')) return { error: `знание ${require('./src/perception/knowledge').level()}: карта Ада копии не читается`, bastions: [], fortress: null, places: {} as Record<string, any> }
+    const rcon0 = rconOf(slot)
+    const Bs0 = (await locateAll(rcon0, 'bastion_remnant', at)).slice(0, bastions)
+    const Fs0 = (await locateAll(rcon0, 'fortress', at)).slice(0, 1)
+    const places0: Record<string, any> = {}
+    Bs0.forEach((b, i) => { places0[['бастион (ад)', 'бастион 2 (ад)', 'бастион 3 (ад)'][i]] = { x: b.x, y: 64, z: b.z, dimension: 'the_nether', by: 'locate', note: 'известный сид (/locate): бастион, золото не известно' } })
+    if (Fs0[0]) places0['крепость (ад)'] = { x: Fs0[0].x, y: 64, z: Fs0[0].z, dimension: 'the_nether', by: 'locate', note: 'известный сид (/locate): крепость Ада, спавнер не известен' }
+    log('ssg: места построек', { bastions: Bs0.length, fortress: !!Fs0[0] })
+    return { ssg: true, bastions: Bs0.map(b => ({ x: b.x, z: b.z, dist: b.dist, gold: 0 })), fortress: Fs0[0] ? { x: Fs0[0].x, z: Fs0[0].z } : null, places: places0 }
+  }
   const rcon = rconOf(slot)
   const read = chunkReader(slot)
   const out: Record<string, any> = { bastions: [], fortress: null, places: {} as Record<string, any> }

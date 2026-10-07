@@ -179,8 +179,12 @@ async function legTo (session, ctl, tx, tz, deadline) {
 
 async function walkLeg (bot, ctl, tx, tz, deadline) {
   const y = bot.entity.position.floored().y
-  if (y > 80) {
-    const ty = Math.max(64, y - 12)
+  // S1f (вслепую — ход без сетки уводил к лавовому морю y 31: s1f-A2-2 разведка и поиск бастиона на y 31–39, смерть в лаве на 6-й мин;
+  // S1e M4 — 4 смерти в лаве у y 24–38): ниже 44 отрезок целится вверх (до 56, +12 за отрезок) — ступенями/штреком по незераку,
+  // как игрок уходит от берега лавы; не вышло — тот же отрезок по горизонтали. ND_NE_RISE=0 — прежнее.
+  const low = y < 44 && process.env.ND_NE_RISE !== '0'
+  if (y > 80 || low) {
+    const ty = low ? Math.min(56, y + 12) : Math.max(64, y - 12)
     const { goals } = require('mineflayer-pathfinder')
     const { stuckGuard } = require('./movement')
     const guard = stuckGuard(bot, ctl, 8000)
@@ -192,7 +196,7 @@ async function walkLeg (bot, ctl, tx, tz, deadline) {
         new Promise<any>((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(15000, deadline - gameClock.now()))) })
       ])
       const p = bot.entity.position
-      if (Math.hypot(p.x - tx, p.z - tz) <= 6 && p.y < y) return { ok: true, down: Math.round(y - p.y) }
+      if (Math.hypot(p.x - tx, p.z - tz) <= 6 && (low ? p.y > y : p.y < y)) return { ok: true, ...(low ? { up: Math.round(p.y - y) } : { down: Math.round(y - p.y) }) }
     } catch {
       try { bot.pathfinder.setGoal(null) } catch {}
     } finally {
@@ -204,6 +208,22 @@ async function walkLeg (bot, ctl, tx, tz, deadline) {
   // перерасчётом на каждый сломанный блок («reset: block_updated», прогон 7:
   // минута на 8 блоков); штрек (bore) то же пройдёт за 15 с.
   return travelXZ(bot, ctl, tx, tz, { range: 3, retries: 0, deadline: Math.min(deadline, gameClock.now() + 20000) })
+}
+
+// S1f: блоки в Аду кончаются посреди разведки (мост, подмости, клатч на каждом прыжке через щель: s1f-C1-2 — «клатч молчит:
+// блоков 0» над лавой, падение с y 49 в лаву; B0b-1 — «на коробку блоков нет»). Меньше 12 строительных — добыть незерак рядом (видимый,
+// actions.mine, радиус 8), не чаще раза в игровую минуту. ND_NE_KEEP_BLOCKS=0 — выкл.
+async function keepBlocks (session, ctl, { min = 12, want = 40 }: any = {}) {
+  const bot = session.bot
+  if (process.env.ND_NE_KEEP_BLOCKS === '0' || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted) return null
+  const have = require('./pack').buildCount(bot, 'the_nether')
+  if (have >= min || gameClock.now() < (bot._ndKeepBlocksAt || 0)) return null
+  bot._ndKeepBlocksAt = gameClock.now() + 60000
+  let r = null
+  try { r = await require('./actions').mine(session, ctl, { block: 'netherrack', count: want - have, radius: 8 }) } catch (e) { r = { error: e.message } }
+  const now = require('./pack').buildCount(bot, 'the_nether')
+  log('блоки: добрал незерак', { was: have, now, error: r && r.error })
+  return now - have
 }
 
 // mode=look — только глаза, тело не двигается. mode=explore — ноги по прямой
@@ -448,6 +468,7 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
     // Цель — впереди по направлению, со сдвигом вбок, если прямо не пройти.
     const tx = Math.round(start.x + dx * (along + step) + (dz !== 0 ? side : 0))
     const tz = Math.round(start.z + dz * (along + step) + (dx !== 0 ? side : 0))
+    await keepBlocks(session, ctl)
     const w = await legTo(session, ctl, tx, tz, deadline)
     legs.push({ to: { x: tx, z: tz }, ok: w.ok, down: w.down, bored: w.bored, fought: w.fought, error: w.ok ? undefined : w.error, from: xyz(me) })
     if (w.fought) {
@@ -487,6 +508,17 @@ const REGION = 432
 const ZONE = 23 * 16
 const STRIPES = [48, 176, 304]
 function regionOf (x, z) { return [Math.floor(x / REGION), Math.floor(z / REGION)] }
+/** S1f: регионы nether_complexes с увиденным бастионом (места памяти Ада) — без повторов; там крепости нет. */
+function bastionRegions (places) {
+  const out = []
+  for (const k of BASTION_KEYS_ALL) {
+    const r = places[k]
+    if (!r || !Number.isFinite(r.x) || worlds.worldOfRecord(r) !== 'the_nether') continue
+    const g = regionOf(r.x, r.z)
+    if (!out.some(q => q[0] === g[0] && q[1] === g[1])) out.push(g)
+  }
+  return out
+}
 function stripesOf (rx, rz, me) {
   const x0 = rx * REGION - 16
   const x1 = rx * REGION + ZONE + 16
@@ -582,6 +614,15 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
     const o = portal && worlds.worldOfRecord(portal) === 'the_nether' ? portal : xyz(bot.entity.position)
     const region = regionOf(o.x, o.z)
     plan = { world: 'the_nether', origin: { x: o.x, z: o.z }, region, done: [], wps: stripesOf(region[0], region[1], o), i: 0 }
+    // S1f (механика генерации, jar 1.21.11 structure_set/nether_complexes: random_spread spacing 27, separation 4, fortress 2 /
+    // bastion_remnant 3 — одна постройка на регион): регион увиденного бастиона крепости не содержит — обход крепости его пропускает.
+    if (!forBastion && process.env.ND_REGION_SKIP !== '0') {
+      plan.done = bastionRegions((session.journal.state && session.journal.state.places) || {})
+      if (plan.done.some(r => r[0] === region[0] && r[1] === region[1])) {
+        const next = nextRegion(plan)
+        if (next) { plan.region = next; plan.wps = stripesOf(next[0], next[1], bot.entity.position) }
+      }
+    }
     if (forBastion) {
       const skip = []
       const fort = placeOf(session, PLACE)
@@ -712,13 +753,31 @@ async function climbWalk (session, ctl, top, deadline) {
   })
 }
 
-async function tour (session, ctl, { deadline, hops = 8 }: any = {}) {
+// S1f: куда звать «пирог» и слух на обходе (вслепую): дуга спавнера в прорисовке (64 бл., F3) — пеленг; ифрит слышен (16 бл.,
+// сторона по субтитру) — туда. Точка — leg бл. по направлению на высоте тела. null — подсказки нет.
+function spawnerHint (bot, { leg = 20, skipYaws = [] }: any = {}) {
+  const S = require('./perception/senses')
+  const me = bot.entity.position
+  const arc = S.pieArcs(bot, 'spawner', { fov: 30 }).find(a => a.center !== null && !skipYaws.some(y => Math.abs(((a.center - y + 540) % 360) - 180) < 20))
+  if (arc) { const v = S.vecOf(arc.center); return { x: Math.round(me.x + v.x * leg), z: Math.round(me.z + v.z * leg), by: 'пирог', yaw: arc.center, width: arc.width } }
+  const h = S.heard(bot, { sinceMs: 6000, match: /blaze/ })[0]
+  if (h) { const p = S.hearPoint(bot, h); if (p) return { x: Math.round(p.x), z: Math.round(p.z), by: 'слух', dir: h.dir8, band: h.band } }
+  return null
+}
+
+/** S1f: два пеленга F3-yaw развёрнуты больше чем на 110° — цель между точками взгляда (почти над/под телом). */
+const hintFlipped = (a, b) => Math.abs(((b - a + 540) % 360) - 180) > 110
+
+async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const here = worlds.worldOf(bot)
   const visited = []
   const path = []
   let pillars = 0
+  let hinted = 0
+  let lastHint = null
+  let verticals = 0
   const lookNow = () => {
     const v: any = look(bot, mcData, { radius: 64 })
     for (const sp of v.spawners || []) rememberSpawner(session, sp)
@@ -726,9 +785,44 @@ async function tour (session, ctl, { deadline, hops = 8 }: any = {}) {
     return v
   }
   let v: any = lookNow()
+  let still = 0
+  let lastAt = null
   for (let i = 0; i < hops && !v.spawners && !ctl.aborted && gameClock.now() < deadline; i++) {
     const me = bot.entity.position
+    // S1f: три остановки подряд без сдвига (s1f-C1-1: 14 «остановок» на одном месте моста, блоков 0) — обход кончен.
+    still = lastAt && me.distanceTo(lastAt) < 2 ? still + 1 : 0
+    lastAt = me.clone()
+    if (still >= 3) { path.push({ stuck: true, at: xyz(me) }); break }
+    await keepBlocks(session, ctl)
     visited.push(me.clone())
+    // S1f (вслепую): «пирог» F3 показывает спавнер в прорисовке или ифрит слышен — сперва туда, отрезком по пеленгу (до 6 раз).
+    const hint = pie && hinted < 6 && process.env.ND_TOUR_PIE !== '0' ? spawnerHint(bot) : null
+    // Пеленг «пирога» развернулся (> 110°) после короткого отрезка — спавнер почти над/под нами (s1f-A2-3, сид 7777…: тело на y 50–52
+    // ходило туда-сюда под тронным залом, спавнер −85,77,60 — в 3–5 бл. по горизонтали и 25 выше). Тронный зал — наверху крепости
+    // (палубы 48–90): столбом вверх к палубе и взгляд, а не новый отрезок по пеленгу.
+    if (hint && hint.by === 'пирог' && lastHint && hintFlipped(lastHint.yaw, hint.yaw) &&
+      me.distanceTo(lastHint.at) < 30 && verticals < 2) {
+      verticals++
+      const fy = Math.floor(me.y)
+      const up = Math.max(4, Math.min(28, (fy < 64 ? Math.max(fy + 16, 68) : fy + 12) - fy))
+      const t = await require('./build').towerUp(bot, ctl, up, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+      path.push({ vertical: true, up, from: fy, y: Math.floor(bot.entity.position.y), ok: t && t.ok, error: t && t.ok ? undefined : t && t.reason })
+      log('обход: спавнер над/под нами — вверх', { from: fy, up, y: Math.floor(bot.entity.position.y), yaws: [lastHint.yaw, hint.yaw] })
+      lastHint = null
+      v = lookNow()
+      continue
+    }
+    if (hint) {
+      hinted++
+      if (hint.by === 'пирог') lastHint = { yaw: hint.yaw, at: me.clone() }
+      const deck = Math.max(Math.floor(me.y), 52)
+      let w = await climbTo(session, ctl, new Vec3(hint.x, deck, hint.z), deadline)
+      if (!w.ok && !w.fought) w = await legTo(session, ctl, hint.x, hint.z, deadline)
+      path.push({ to: { x: hint.x, z: hint.z }, hint: hint.by, yaw: hint.yaw, ok: w.ok, y: Math.floor(bot.entity.position.y), error: w.ok ? undefined : w.error })
+      log('обход: подсказка', { ...hint, ok: w.ok, at: xyz(bot.entity.position) })
+      v = lookNow()
+      continue
+    }
     // Видны блейзы — к ним: они висят у спавнера (±4 от него), а спавнер
     // виден глазами только ближе 48 (прогон 12: блейзы в 36, спавнера нет).
     const far = (v.blazeList || []).filter(b => b.distanceTo(me) > 12)
@@ -995,7 +1089,17 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
     legs.push({ ok: !!w.ok, at: xyz(bot.entity.position), pie: arc.center, error: w.ok ? undefined : w.error })
     sp = spawnerNear()
   }
-  if (!sp) return { found: false, stopped: fort ? 'у крепости спавнера в прогруженных чанках не видно' : 'крепости в памяти нет — сперва найти (fortress без mode)', legs }
+  // S1f (вслепую — главное открытое S1e: 0 стержней во всех M4, «крепость видна, спавнера в прогруженных нет»): у крепости
+  // спавнер не виден и «пирог» отсюда молчит — обход крепости по видимому кирпичу (палубы мостов 48–75) с «пирогом» и слухом
+  // ифритов на каждой остановке (tour pie), как игрок с F3. ND_TOUR_PIE=0 — без обхода (прежнее «не видно»).
+  let toured = null
+  if (!sp && fort && worlds.worldOfRecord(fort) === 'the_nether' && process.env.ND_TOUR_PIE !== '0' && !ctl.aborted && gameClock.now() < deadline - 20000) {
+    toured = await tour(session, ctl, { deadline: Math.min(deadline - 10000, gameClock.now() + 300000), hops: 14, pie: true })
+    if (toured.spawners && toured.spawners.length) sp = new Vec3(toured.spawners[0].x, toured.spawners[0].y, toured.spawners[0].z)
+    if (!sp) sp = spawnerNear()
+    legs.push({ ok: !!sp, tour: (toured.hops || []).length, at: xyz(bot.entity.position) })
+  }
+  if (!sp) return { found: false, stopped: fort ? `у крепости спавнера в прогруженных чанках не видно${toured ? ` (обход ${(toured.hops || []).length} остановок)` : ''}` : 'крепости в памяти нет — сперва найти (fortress без mode)', legs, ...(toured && toured.blazes ? { blazes: toured.blazes } : {}) }
   rememberSpawner(session, { x: sp.x, y: sp.y, z: sp.z })
   // «Дошёл» — на уровне спавнера (±2) и в 6 блоках по горизонтали: блейзы
   // спавнятся в коробке 9×3×9 вокруг него, и из-под пола (8 блоков, но на 7
@@ -1242,4 +1346,4 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
   return { found: true, reached: lvl, spawner: xyz(sp), dist: Math.round(d), legs, stopped: lvl ? undefined : `до спавнера ${Math.round(d)} блоков, по высоте ${Math.floor(bot.entity.position.y) - sp.y} — не на его уровне` }
 }
 
-module.exports = { scout, look, tour, toSpawner, placeOf, FORTRESS_BLOCKS, BASTION_BLOCKS, PLACE, SPAWNER_PLACE, BASTION_PLACE }
+module.exports = { scout, look, tour, climbTo, spawnerHint, hintFlipped, keepBlocks, bastionRegions, regionOf, walkLeg, toSpawner, placeOf, FORTRESS_BLOCKS, BASTION_BLOCKS, PLACE, SPAWNER_PLACE, BASTION_PLACE }

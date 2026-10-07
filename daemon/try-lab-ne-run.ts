@@ -200,7 +200,8 @@ async function main () {
       fortress: m.fortress ? { x: m.fortress.x, z: m.fortress.z, dist: m.fortress.dist, spawner: m.fortress.spawner } : null, route: m.route || null }
     // Искажённый лес — где в Аду эндермены (добор жемчуга после всех бастионов, правило пользователя): ближайший по копии мира
     // (/locate biome — знание карты из копии, как постройки; в главной метрике). WARPED=0 — не давать.
-    if (process.env.WARPED !== '0') {
+    // S1f: биомы (/locate biome) — знание уровня scan, в ssg не даём.
+    if (process.env.WARPED !== '0' && require('./src/perception/knowledge').allows('biomes', 'try-lab-ne-run WARPED')) {
       const out = rcon(`execute in minecraft:the_nether positioned ${est.x} 70 ${est.z} run locate biome minecraft:warped_forest`)
       const w = /\[(-?\d+), (-?\d+), (-?\d+)\] \((\d+) blocks/.exec(out)
       if (w) {
@@ -211,7 +212,7 @@ async function main () {
     console.log('карта', JSON.stringify(map))
     // Карта не прочиталась (s1c-D-1 06.10: крепость null, у всех бастионов золото 0, 2375 игр. с под нагрузкой фермы) — прогон без
     // карты не сравним с остальными: стоп подготовки (MAP_STRICT=0 — идти вслепую).
-    if (process.env.MAP_STRICT !== '0' && (!map.fortress || !(map.bastions || []).some(b => b.gold > 0))) throw new Error('SETUP_FAIL: карта копии не прочиталась (крепость или золото бастионов)')
+    if (process.env.MAP_STRICT !== '0' && !(map.ssg = !!m.ssg) && (!map.fortress || !(map.bastions || []).some(b => b.gold > 0))) throw new Error('SETUP_FAIL: карта копии не прочиталась (крепость или золото бастионов)')
   }
   // MAP_SH=1 — и крепость Края из той же копии мира (комната портала, сколько рамок пусто): запись «крепость» у стены
   // комнаты (refined, без бросков find), очей нужно — по пустым рамкам (ND_EYES_NEED, если EYES не задан).

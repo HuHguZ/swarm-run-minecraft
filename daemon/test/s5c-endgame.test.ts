@@ -4,7 +4,12 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const Vec3 = require('vec3')
 
-test('сухой вход к комнате под океаном: ближайшая суша до 48 бл., вода и непрогруженное — не вход', () => {
+// S5e (07.10): шахта и штрек по прогруженным чанкам (рентген толщи) — только «полный скан»; в rsg/ssg — честный спуск
+// (endportal-descent, test/s5e-endgame). Эти тесты — про ход scan.
+function scanFor (t: any) { const s = process.env.ND_KNOWLEDGE; process.env.ND_KNOWLEDGE = 'scan'; t.after(() => { if (s === undefined) delete process.env.ND_KNOWLEDGE; else process.env.ND_KNOWLEDGE = s }) }
+
+test('сухой вход к комнате под океаном: ближайшая суша до 48 бл., вода и непрогруженное — не вход', (t) => {
+  scanFor(t)
   const { dryEntry } = require('../src/endportal')
   // Море |x−100| < 30 (вода y 50..62, дно y 49), суша дальше (камень до y 64); x > 140 — чанк не прогружен.
   const blockAt = p => {

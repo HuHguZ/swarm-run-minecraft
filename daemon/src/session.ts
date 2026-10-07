@@ -407,7 +407,7 @@ class Session {
     worlds.tuneMovements(bot, movements)
     // Прыжок глубже обычного — дороже шага на время воды (edges.priceDrops).
     edges.priceDrops(movements)
-    if (bridge) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY }); blockmoves.install(this) }
+    if (bridge) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(worlds.worldOf(bot) === 'the_nether' && process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
     bot.pathfinder.setMovements(movements)
     this.movements = { canDig, towers, mlg: mlg.ok, bridge }
   }

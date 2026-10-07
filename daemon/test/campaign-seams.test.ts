@@ -40,23 +40,24 @@ test('End portal checkpoint preserves five combat beds', async () => {
   assert.equal(state.inventory.red_bed, 5)
 })
 
-test('three failed collection passes never authorize an under-equipped End entry', async () => {
+// S5e (07.10, правило гибкости): нехватка снаряжения — цена; прежний жёсткий допуск — ND_END_GEAR_PRICE=0 (два теста ниже).
+test('three failed collection passes never authorize an under-equipped End entry (ND_END_GEAR_PRICE=0)', async () => {
   const state = ready({ red_bed: 2 })
   const c = load(state, (method, p) => {
     if (method === 'stronghold' && p.mode === 'fill') { state.dimension = 'the_end'; return { entered: true } }
     return method === 'dragon' ? { dragon: { won: true } } : {} as Record<string, any>
-  })
+  }, { ND_END_GEAR_PRICE: '0' })
   c.known.endPortal = { x: 0, y: 60, z: 0 }; c.runs(3)
   await assert.rejects(c.run('dragon'), e => e.stopCampaign && /END_SEAM_NOT_READY.*beds/.test(e.message))
   assert.equal(c.calls.some(x => x.method === 'stronghold' && x.params.mode === 'fill'), false)
 })
 
-test('station obsidian and blocks are checked after kit RPC, before fill', async () => {
+test('station obsidian and blocks are checked after kit RPC, before fill (ND_END_GEAR_PRICE=0)', async () => {
   const state = ready()
   const c = load(state, method => {
     if (method === 'kit') { state.inventory.obsidian = 2; state.inventory.cobblestone = 62 }
     return method === 'dragon' ? { dragon: { won: true } } : {} as Record<string, any>
-  })
+  }, { ND_END_GEAR_PRICE: '0' })
   c.known.endPortal = { x: 0, y: 60, z: 0 }
   await assert.rejects(c.run('dragon'), /END_SEAM_NOT_READY.*obsidian.*blocks/)
   assert.equal(c.calls.some(x => x.method === 'stronghold' && x.params.mode === 'fill'), false)
@@ -104,4 +105,23 @@ test('hunger one point short with food in the pack is a priced risk, not an End 
   await c.run('dragon')
   assert.equal(c.calls.filter(x => x.method === 'eat').length >= 2, true, 'еда — несколько заходов')
   assert.equal(c.calls.some(x => x.method === 'stronghold' && x.params.mode === 'fill'), true)
+})
+
+// S5e (07.10): кроватей 2 из 5 и блоков 62 из 108 после исчерпанных сборов — вход с отметкой РИСК (стоп у портала — тот же провал);
+// совсем без средства боя (ни кровати, ни лука со стрелами, ни меча/топора) — по-прежнему стоп.
+test('under-equipped End entry after exhausted collection is a priced risk; no damage source at all still blocks', async () => {
+  const state = ready({ red_bed: 2 })
+  const c = load(state, (method, p) => {
+    if (method === 'kit') state.inventory.cobblestone = 62
+    if (method === 'stronghold' && p.mode === 'fill') { state.dimension = 'the_end'; return { entered: true } }
+    return method === 'dragon' ? { dragon: { won: true } } : {} as Record<string, any>
+  })
+  c.known.endPortal = { x: 0, y: 60, z: 0 }; c.runs(3)
+  await c.run('dragon')
+  assert.equal(c.calls.some(x => x.method === 'stronghold' && x.params.mode === 'fill'), true, 'вход в Энд')
+  const bare = ready({ red_bed: 0 })
+  for (const k of Object.keys(bare.inventory)) if (/_sword$|_axe$|^bow$|arrow/.test(k)) delete bare.inventory[k]
+  const d = load(bare, () => ({}))
+  d.known.endPortal = { x: 0, y: 60, z: 0 }; d.runs(3)
+  await assert.rejects(d.run('dragon'), e => e.stopCampaign && /END_SEAM_NOT_READY.*beds/.test(e.message))
 })

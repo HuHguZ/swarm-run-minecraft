@@ -150,6 +150,9 @@ function viaDigs (me, via, target) {
 async function tunnelTo (session, ctl, target, opts: any = {}) {
   const bot = session.bot
   const SL = require('./sealed')
+  // S1f: клетка ног с поправкой на песок душ (высота 0.875: floored() — клетка самого песка): «не шагнул down/flat/vdown … (я …,N.88,…)»
+  // — 36 остановок штрека по Аду во вслепую сериях S1e/S1f. ND_SOUL_FEET=0 — прежнее.
+  const feetNow = () => process.env.ND_SOUL_FEET === '0' ? bot.entity.position.floored() : SL.bodyCells(bot)[0]
   const log = opts.log || (() => {})
   const band0 = clamp(Math.round(opts.band ?? 40), 34, 110)
   const via = normVia(opts.via)
@@ -157,7 +160,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
   // Вход в маршрут — в точке, где путь «тело → точка → хвост маршрута → цель» короче всего (тело у конца
   // маршрута не идёт к его началу; тело в стороне — входит ближе к цели).
   if (via.length) {
-    const me0 = bot.entity.position.floored()
+    const me0 = feetNow()
     const tgt = { x: target.x, y: Number.isFinite(target.y) ? target.y : via[via.length - 1].y, z: target.z }
     const m1 = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z)
     const tail = new Array(via.length).fill(0)
@@ -182,7 +185,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
   const segLen = opts.seg ?? 18
   const nb = opts.noBreachNear || null
   const S: any = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0, noBonus: true, deadline }
-  const body = () => { const f = bot.entity.position.floored(); return [f, f.offset(0, 1, 0)] }
+  const body = () => { const f = feetNow(); return [f, f.offset(0, 1, 0)] }
   // Прежние штреки — свои, если клетка и сейчас воздух (проверка по живому миру).
   const V3 = require('vec3').Vec3
   // Только рядом (в 56 блоках): план куска смотрит не дальше, а своих клеток на диске — до 40 тыс.
@@ -217,7 +220,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
   // оценки (2 копки на блок пути): недостача копается рукой (незерак — 2 с на блок, +10–20 мин), это дешевле
   // эндерменов на всю недостачу.
   if (via.length && opts.budgetCheck === true) {
-    const me = bot.entity.position.floored()
+    const me = feetNow()
     legOf(me)
     const need = viaDigs(me, via.slice(wi), target)
     const pb = pickBudget(bot)
@@ -233,7 +236,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
     let side = 1
     while (!ctl.aborted) {
       if (gameClock.now() > deadline) return out(false, 'время')
-      const me = bot.entity.position.floored()
+      const me = feetNow()
       const dist = Math.hypot(target.x - me.x, target.z - me.z)
       const yOk = !Number.isFinite(target.y) || Math.abs(me.y - target.y) <= 4
       if (dist <= radius && yOk) return out(true)
@@ -278,7 +281,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
         if (rF.ok && rF.path.length) {
           const need = digsOf(SL, view, S.own, rF.path)
           if (lowUses(bot) < need + 8) { st.crafted += await restockPicks(session, ctl, Math.min(6, Math.ceil((need + 8 - lowUses(bot)) / 120))); for (const v of body()) S.own.add(SL.keyV(v)) }
-          if ((lowUses(bot) >= need + 8 || opts.hand !== false) && bot.entity.position.floored().equals(me)) {
+          if ((lowUses(bot) >= need + 8 || opts.hand !== false) && feetNow().equals(me)) {
             S.breachOk = breachF ? breachFn : null
             let exF
             try { exF = await SL.execute(session, ctl, rF.path, S) } finally { S.breachOk = null }
@@ -380,7 +383,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
           ])
         } catch {} finally { if (timer) gameClock.clearTimeout(timer); if (watch) gameClock.clearInterval(watch); try { bot.pathfinder.setGoal(null) } catch {} }
         for (const v of body()) S.own.add(SL.keyV(v))
-        log('штрек по Аду: со старта не войти — отошёл ногами', { from: me, at: bot.entity.position.floored() })
+        log('штрек по Аду: со старта не войти — отошёл ногами', { from: me, at: feetNow() })
         continue
       }
       if (!r.ok) {
@@ -415,7 +418,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
       if (need > 0 && lowUses(bot) < need + 8) {
         st.crafted += await restockPicks(session, ctl, 3)
         for (const v of body()) S.own.add(SL.keyV(v))
-        if (!bot.entity.position.floored().equals(me)) continue // верстак сдвинул тело — план заново
+        if (!feetNow().equals(me)) continue // верстак сдвинул тело — план заново
         if (lowUses(bot) < need + 8) {
           // Хватает на часть — пройти префикс.
           let cut = 0; let digs = 0; const seen = new Set()

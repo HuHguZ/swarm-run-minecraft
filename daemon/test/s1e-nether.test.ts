@@ -34,8 +34,10 @@ test('s1e: targets at a copy brute home go last (taken at hp ≥ 16 when nothing
   const at = (x: number) => ({ pos: { x, y: 40, z: 10 } })
   const pos = (t: any) => t.pos
   assert.deepEqual(targetsByBruteHome([at(12), at(40)], pos, brutes, 20).map((t: any) => t.pos.x), [40], 'other targets first')
-  assert.deepEqual(targetsByBruteHome([at(12)], pos, brutes, 20).map((t: any) => t.pos.x), [12], 'only the brute-home target left, full hp — taken (old rule: never)')
-  assert.deepEqual(targetsByBruteHome([at(12)], pos, brutes, 12), [], 'low hp — kept for later')
+  // S1f: решение — цена от брони (bruteHomeTake); железо + золотые ботинки, как в наборе std.
+  const iron = require('../src/assess').gearOf(['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots'].map(name => ({ name })))
+  assert.deepEqual(targetsByBruteHome([at(12)], pos, brutes, 20, iron).map((t: any) => t.pos.x), [12], 'only the brute-home target left, full hp — taken (old rule: never)')
+  assert.deepEqual(targetsByBruteHome([at(12)], pos, brutes, 12, iron), [], 'low hp — kept for later')
 })
 
 test('s1e: the walk to traders is priced by the brutes that can reach us or stand by the trader, not by any brute in 16', () => {

@@ -91,14 +91,11 @@ function noteEndermen (session) {
   return true
 }
 
-let lastWall = 0
+// S1f (проверка S1e (д)): частота глаз леса — только игровым временем (таймер 10 игр. с в install, ND_FOREST_EVERY_MS), без дросселя по реальному:
+// на ферме 750 TPS он делал взгляд раз в ~19 игр. с, на 20 TPS — раз в 4 с (поведение зависело от темпа мира).
 function tick (session) {
   const bot = session.bot
   if (!bot || !bot.entity || !bot.game || !/nether/.test(String(bot.game.dimension || ''))) return
-  // ponytail: дросселирование по реальному времени (750 TPS = 37 вызовов в реальную секунду); чаще раза в 1.5 с лучи не нужны.
-  const now = Date.now()
-  if (now - lastWall < 1500) return
-  lastWall = now
   const v = look(bot)
   const s = spot(v.seen)
   if (s) remember(session, s, v.feet)
@@ -114,7 +111,7 @@ function tick (session) {
 function install (session) {
   if (process.env.ND_FOREST_SIGHT === '0') return
   if (session._forestTimer && !session._forestTimer.clock?.disposed) return
-  session._forestTimer = gameClock.setInterval(() => { try { tick(session) } catch {} }, 4000)
+  session._forestTimer = gameClock.setInterval(() => { try { tick(session) } catch {} }, Number(process.env.ND_FOREST_EVERY_MS) || 10000)
   if (session._forestTimer.unref) session._forestTimer.unref()
 }
 

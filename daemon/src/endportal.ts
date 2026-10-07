@@ -47,6 +47,14 @@ const REACH = 4.2
 const DIRS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
 
 function clamp (v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
+// Честный спуск (S5e 07.10, AGENTS.md «как на случайном сиде»): решения шахты, штрека и выбора колонки — только по видимому
+// (луч глаз) и слышимому; толща не читается. scan («полный скан») и ND_HONEST_SHAFT=0 — прежний ход по прогруженным чанкам.
+function honestDescent () { return process.env.ND_HONEST_SHAFT !== '0' && require('./perception/knowledge').level() !== 'scan' }
+// Клетка, как её знает игрок: в честном режиме — только видимая сейчас (иначе null — «не знаю»).
+function look (bot, p) {
+  if (!honestDescent()) return bot.blockAt(p)
+  try { return require('./perception/eyes').seesNow(bot, p) ? bot.blockAt(p) : null } catch { return null }
+}
 const log = (what, o) => console.log('[stronghold]', what, JSON.stringify(o))
 
 function placeOf (session, name) {
@@ -88,6 +96,7 @@ async function walkTo (bot, ctl, target, range, ms) {
 // Шахта вниз 1x1 до первого кирпича крепости. Своя, а не actions.digDown: той
 // нечем сказать «стоп, под ногами кирпич» — а здесь это и есть цель.
 async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: any) {
+  if (honestDescent()) return require('./endportal-descent').honestShaft(session, ctl, { minY, deadline, targetY, bricks: BRICKS, log })
   const bot = session.bot
   const mcData = session.mcData
   let dug = 0
@@ -374,10 +383,13 @@ async function enterByBricks (session, ctl, { deadline }: any) {
   const bot = session.bot
   const f0 = bot.entity.position.floored()
   if (insideHold(bot, f0)) return { inside: true, already: true }
+  const honest = honestDescent()
   let cands = []
   for (let dx = -8; dx <= 8; dx++) for (let dy = -6; dy <= 6; dy++) for (let dz = -8; dz <= 8; dz++) {
     if (!dx && !dz) continue
     const c = f0.offset(dx, dy, dz)
+    // Честно — только клетки коридора, которые видно (за стеной шахты коридор не знаем).
+    if (honest && !require('./perception/eyes').seesNow(bot, c)) continue
     const n = interiorCell(bot, c)
     if (n) cands.push({ c, n, d: Math.abs(dx) + Math.abs(dy) * 1.5 + Math.abs(dz) })
   }
@@ -426,6 +438,16 @@ async function breakIn (session, ctl, { deadline, tries = 8, toward = null }: an
   const mcData = session.mcData
   const steps = []
   const roomy = () => walkable(bot, bot.entity.position, { radius: 8, maxNodes: 60, doors: true }).length >= 12
+  // Честно: за стеной коридор не видно — пробить видимый кирпич и смотреть (endportal-descent.honestEnter).
+  if (honestDescent()) {
+    // «Внутри» — клетки с полом крепости (кирпич, доски, рамки), а не просторно вообще: винтовая лестница 2×2 сама даёт 10+
+    // клеток стояния в 8 бл. (ложное «внутри» — разведка ходила бы по своей лестнице).
+    const inHold = () => walkable(bot, bot.entity.position, { radius: 8, maxNodes: 80, doors: true })
+      .filter(n => { const fl = bot.blockAt(n.pos.offset(0, -1, 0)); return fl && FLOOR.test(fl.name) }).length >= 6
+    const r = await require('./endportal-descent').honestEnter(session, ctl, { deadline, toward, bricks: BRICKS, roomy: inHold, tries: tries + 2 })
+    log('внутрь (честно)', { inside: r.inside, at: xyz(bot.entity.position.floored()), toward, steps: r.steps.slice(-6) })
+    return r
+  }
   const at = p => bot.blockAt(p)
   const isAir = b => !!b && b.boundingBox === 'empty' && !/lava|water|fire|portal/.test(b.name)
   const isBrick = b => !!b && BRICKS.test(b.name)
@@ -540,8 +562,8 @@ async function breakIn (session, ctl, { deadline, tries = 8, toward = null }: an
 // вода — её тоже надо увидеть), в окне ±20 от высоты тела.
 function surfaceY (bot, x, z, fromY) {
   for (let y = fromY + 20; y >= fromY - 20; y--) {
-    const g = bot.blockAt(new Vec3(x, y - 1, z))
-    const f = bot.blockAt(new Vec3(x, y, z))
+    const g = look(bot, new Vec3(x, y - 1, z))
+    const f = look(bot, new Vec3(x, y, z))
     if (!g || !f) continue
     // Листва и стволы — не земля: крона дерева у озера давала «сушу» на y 86 над
     // водой на y 62 (room-A-7), и шахту копали у самой воды.
@@ -553,10 +575,12 @@ function surfaceY (bot, x, z, fromY) {
 
 // Жидкость в колонке или рядом в верхних 8 блоках — копать здесь нельзя.
 function wetColumn (bot, x, z, topY) {
-  for (let y = topY + 1; y >= topY - 8; y--) {
+  // Честно — видимая вода/лава у поверхности (озеро сверху видно, подземная — нет: её покажет копка, заложим).
+  const low = honestDescent() ? topY - 1 : topY - 8
+  for (let y = topY + 1; y >= low; y--) {
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
-        const b = bot.blockAt(new Vec3(x + dx, y, z + dz))
+        const b = look(bot, new Vec3(x + dx, y, z + dz))
         if (b && /water|lava/.test(b.name)) return b.name === 'lava' ? 'лава' : 'вода'
       }
     }
@@ -613,7 +637,7 @@ function dryEntry (bot, shaft, maxR = DRY_FAR, toY = null, to = null) {
   // Сначала — сухая И целая до комнаты колонка в SOUND_FAR (лишний штрек на уровне комнаты дешевле пещеры в шахте).
   // Второй круг — пещеры до 4 бл. (спуск в них — цена, shaftToBricks), но без жидкости и капельника (s5d-R-1: целой в 48 нет —
   // сухая колонка в пещеру с капельником, «impaled on a stalagmite»).
-  for (const maxGap of Number.isFinite(toY) && process.env.ND_SOUND_SHAFT !== '0' ? [1, 4] : []) {
+  for (const maxGap of Number.isFinite(toY) && process.env.ND_SOUND_SHAFT !== '0' && !honestDescent() ? [1, 4] : []) {
     for (let r = 0; r <= Math.min(SOUND_FAR, maxR); r += r < 24 ? 2 : 4) {
       const step = r < 24 ? 2 : 4
       const pts = r === 0 ? [[0, 0]] : []
@@ -644,7 +668,7 @@ function lowestLiquid (bot, x, z, fromY) {
   for (let dx = -2; dx <= 2; dx++) {
     for (let dz = -2; dz <= 2; dz++) {
       for (let y = fromY + 2; y >= fromY - 40; y--) {
-        const b = bot.blockAt(new Vec3(x + dx, y, z + dz))
+        const b = look(bot, new Vec3(x + dx, y, z + dz))
         if (!b) break
         if (/water|lava/.test(b.name)) low = low === null ? y : Math.min(low, y)
       }
@@ -658,7 +682,7 @@ function lowestLiquid (bot, x, z, fromY) {
 // (вода в озере над потолком не течёт сквозь блок).
 function wetNear (bot, x, y, z, r) {
   for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) for (let dy = -3; dy <= 0; dy++) {
-    const b = bot.blockAt(new Vec3(x + dx, y + dy, z + dz))
+    const b = look(bot, new Vec3(x + dx, y + dy, z + dz))
     if (b && /water/.test(b.name)) return true
   }
   return false
@@ -667,17 +691,18 @@ function wetNear (bot, x, y, z, r) {
 // Вода в радиусе r от колонки x,z на глубину depth ниже y (озеро под берегом).
 function wetNearDeep (bot, x, y, z, r, depth) {
   for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) for (let dy = 1; dy >= -depth; dy--) {
-    const b = bot.blockAt(new Vec3(x + dx, y + dy, z + dz))
+    const b = look(bot, new Vec3(x + dx, y + dy, z + dz))
     if (b && /water/.test(b.name)) return true
   }
   return false
 }
 
-async function goAround (session, ctl, target, { deadline }: any) {
+async function goAround (session, ctl, target, { deadline, far = 20, fromHere = false, fromY = null }: any) {
   const bot = session.bot
   const mcData = session.mcData
   const me = bot.entity.position.floored()
-  let from = null
+  // fromHere — продолжение начатого обхода (тело уже в своей шахте/штреке от сухой клетки): без поиска и перехода.
+  let from = fromHere ? me.clone() : null
   // Шахта пойдёт ниже дна озера: берег проверять на воду на всю эту глубину, а
   // не на 3 блока. Крепость A (-400,1776): озеро 6+ блоков, под берегом вода на
   // y 57–61 — шахта у кромки упиралась «вода у шахты — заложил 0 из 1» (ферма
@@ -692,40 +717,58 @@ async function goAround (session, ctl, target, { deadline }: any) {
     const dH = q => Math.hypot(q.x - target.x, q.z - target.z)
     const nodes = walkable(bot, bot.entity.position, { radius: 40, maxNodes: 8000 })
       .map(n => n.pos).filter(q => dH(q) >= 2 && dH(q) <= 20).sort((a, c) => dH(a) - dH(c))
+    const avoid = session._wetAvoid || []
+    const mr = honestDescent() ? 4 : 2
     for (const q of nodes) {
-      if (!wetColumn(bot, q.x, q.z, q.y) && !wetNear(bot, q.x, q.y, q.z, 2) && !wetNearDeep(bot, q.x, q.y, q.z, 2, depth)) { from = q.clone(); break }
+      if (avoid.some(v => Math.hypot(v.x - q.x, v.z - q.z) < 8)) continue
+      if (!wetColumn(bot, q.x, q.z, q.y) && !wetNear(bot, q.x, q.y, q.z, mr) && !wetNearDeep(bot, q.x, q.y, q.z, mr, depth)) { from = q.clone(); break }
     }
   } catch {}
-  for (let r = 2; r <= 20 && !from; r++) {
-    for (let dx = -r; dx <= r && !from; dx++) {
+  // far > 20 (крепость под морем, S5e 07.10): суша дальше — кольца через 4 бл.; штрек под дном туда длиннее, но это 1–2 мин
+  // против «другой крепости кольца» в 2000+ бл.
+  if (!from) for (let r = 2; r <= far && !from; r += r < 20 ? 1 : 4) {
+    for (let dx = -r; dx <= r && !from; dx += r < 20 ? 1 : 2) {
       for (const dz of [-r, r]) {
         for (const [x, z] of [[target.x + dx, target.z + dz], [target.x + dz, target.z + dx]]) {
           const y = surfaceY(bot, x, z, me.y)
           // Сухо и в 2 блоках вокруг нет воды: с кромки озера вода течёт в шахту,
           // и копка рвётся («не сломал dirt: Digging aborted» — ферма, крепость
-          // A, 2 из 5 подходов).
-          if (y !== null && !wetColumn(bot, x, z, y) && !wetNear(bot, x, y, z, 2) && !wetNearDeep(bot, x, y, z, 2, depth)) { from = new Vec3(x, y, z); break }
+          // A, 2 из 5 подходов). Честно — 4 бл. (лестница 2×2 шире шахты 1×1) и не у залитых мест.
+          const mr = honestDescent() ? 4 : 2
+          if ((session._wetAvoid || []).some(v => Math.hypot(v.x - x, v.z - z) < 8)) continue
+          if (y !== null && !wetColumn(bot, x, z, y) && !wetNear(bot, x, y, z, mr) && !wetNearDeep(bot, x, y, z, mr, depth)) { from = new Vec3(x, y, z); break }
         }
         if (from) break
       }
     }
   }
-  if (!from) return { ok: false, why: 'сухой земли (без воды в 2 блоках) в 20 блоках нет' }
-  const w = await travelXZ(bot, ctl, from.x, from.z, { range: 0, retries: 2, deadline })
-  if (!w.ok) return { ok: false, from: xyz(from), why: `до сухой клетки не дошёл: ${w.error}` }
+  if (!from) return { ok: false, why: `сухой земли (без воды в 2 блоках) в ${far} блоках нет` }
+  const avoidHere = (why): any => { (session._wetAvoid || (session._wetAvoid = [])).push({ x: from.x, z: from.z }); return { ok: false, from: xyz(from), why, wet: true, dug: 0 } }
+  if (!fromHere) {
+    session._seaDig = { key: `${target.x},${target.z}`, from: xyz(from) }
+    const w = await travelXZ(bot, ctl, from.x, from.z, { range: 0, retries: 2, deadline })
+    if (!w.ok) return { ok: false, from: xyz(from), why: `до сухой клетки не дошёл: ${w.error}` }
+    // Издали вода у клетки могла быть не видна (честно: суждение по видимому) — пришёл, посмотрел: вода в 4 бл. — другое место.
+    if (honestDescent()) {
+      const f = bot.entity.position.floored()
+      if (wetNear(bot, f.x, f.y, f.z, 4) || wetColumn(bot, f.x, f.z, f.y)) return avoidHere('у сухой клетки вблизи вода — другое место')
+    }
+  }
   // Вниз — ниже дна: дно видно сквозь воду, его и берём (у -3760,-3408
   // озеро было 10 блоков глубиной, и штрек на «суша минус 10» шёл по дну и
   // затопился). Кирпич раньше — тем лучше.
   const start = bot.entity.position.floored()
-  const bottom = lowestLiquid(bot, target.x, target.z, start.y)
-  const down = await shaftToBricks(session, ctl, { minY: Math.min(start.y - 10, bottom !== null ? bottom - 4 : Infinity), deadline })
+  const top = Number.isFinite(fromY) ? fromY : start.y
+  const bottom = lowestLiquid(bot, target.x, target.z, top)
+  const down = await shaftToBricks(session, ctl, { minY: Math.min(top - 10, bottom !== null ? bottom - 4 : Infinity), deadline })
+  if ((down as any).wet) return { ...avoidHere(`спуск у сухой клетки залило: ${down.stopped}`), dug: down.dug || 0 }
   let dug = down.dug || 0
   if (down.found) return { ok: true, from: xyz(from), dug, bricks: down }
   if (down.stopped && !/кирпича так и не встретил/.test(down.stopped)) return { ok: false, from: xyz(from), dug, why: down.stopped }
   // Штрек под целью; упёрся в воду над головой — ещё на 6 глубже и снова
   // (прогон у -3760,-3408: штрек на 10 ниже суши шёл под самым дном озера).
   for (let tries = 0; tries < 5; tries++) {
-    const r = await tunnelUnder(session, ctl, target, deadline)
+    const r = await tunnelUnder(session, ctl, target, deadline, Math.max(40, Math.ceil(Math.abs(target.x - bot.entity.position.x) + Math.abs(target.z - bot.entity.position.z)) + 20))
     dug += r.dug || 0
     if (r.ok || r.bricks) return { ok: true, from: xyz(from), dug, bricks: r.bricks }
     if (!r.wet || ctl.aborted || gameClock.now() > deadline) return { ok: false, from: xyz(from), dug, why: r.why }
@@ -738,12 +781,12 @@ async function goAround (session, ctl, target, { deadline }: any) {
   return { ok: false, from: xyz(from), dug, why: 'под водой пройти не вышло и на 30 блоков ниже' }
 }
 
-async function tunnelUnder (session, ctl, target, deadline) {
+async function tunnelUnder (session, ctl, target, deadline, maxSteps = 40) {
   const bot = session.bot
   const mcData = session.mcData
   let dug = 0
   let wet = false
-  for (let steps = 0; steps < 40 && !ctl.aborted && gameClock.now() < deadline; steps++) {
+  for (let steps = 0; steps < maxSteps && !ctl.aborted && gameClock.now() < deadline; steps++) {
     const f = bot.entity.position.floored()
     const ddx = target.x - f.x
     const ddz = target.z - f.z
@@ -756,6 +799,15 @@ async function tunnelUnder (session, ctl, target, deadline) {
       if (!sx && !sz) continue
       const feet = f.offset(sx, 0, sz)
       const head = feet.offset(0, 1, 0)
+      if (honestDescent()) {
+        // Честно: копать и смотреть; увиденную воду/лаву — заложить; кирпич в забое — пришли.
+        const r = await require('./endportal-descent').honestTunnelStep(session, ctl, feet, { bricks: BRICKS, throughBricks: false })
+        dug += r.dug || 0
+        if (r.brick) return { ok: true, dug, bricks: { found: r.brick, at: xyz(feet), dug } }
+        if (r.ok) { moved = true; break }
+        if (r.wet || /заложил|вода|water|lava/.test(r.why || '')) wet = true
+        continue
+      }
       if (wetColumn(bot, feet.x, feet.z, feet.y + 2) === 'лава') continue
       let bad = null
       for (const c of [head, feet]) {
@@ -787,7 +839,7 @@ async function tunnelUnder (session, ctl, target, deadline) {
     }
     if (!moved) return { ok: false, dug, wet, why: wet ? 'над штреком вода' : 'штрек не пошёл: не шагнуть' }
   }
-  return { ok: false, dug, why: 'штрек не дошёл за 40 шагов' }
+  return { ok: false, dug, why: `штрек не дошёл за ${maxSteps} шагов` }
 }
 
 // Открытая вода без берега в 24 блоках (лаборатория 2026-09-27: тело в
@@ -985,10 +1037,16 @@ async function walkOrBridge (session, ctl, corner, deadline) {
   const legs = []
   let bridged = 0
   let boats = 0
+  // Сторож хода: витки без сдвига на 1 бл. — не крутить 40 пустых витков за миг (s5e-A-4 07.10: у воды над лестницей «время
+  // вышло» в каждом вызове за 0 с, 25 мин пауз этапа).
+  let idle = 0
+  let lastAt = null
   for (let k = 0; k < 40 && !ctl.aborted && gameClock.now() < deadline; k++) {
     const me = bot.entity.position
     const dist = Math.hypot(corner.x - me.x, corner.z - me.z)
     if (dist <= 8) return { ok: true, legs, bridged }
+    if (lastAt && me.distanceTo(lastAt) < 1) { if (++idle >= 4) return { ok: false, legs, bridged, error: `хода нет: ${idle} витков на месте у ${Math.round(me.x)},${Math.round(me.y)},${Math.round(me.z)} (${Math.round(dist)} бл. до цели)` } } else idle = 0
+    lastAt = me.clone()
     const wl = waterOnLine(bot, corner, 96)
     if (wl.firstWet !== null && wl.firstWet <= 6) {
       // Мост — через реку и озеро. Море (берега не видно, 24+ блоков) или воды
@@ -1192,6 +1250,15 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
       .sort((a, b) => a.cell.distanceTo(target) - b.cell.distanceTo(target))
     let moved = false
     for (const { cell, direction } of candidates) {
+      if (honestDescent()) {
+        // Честно: без заглядывания в толщу — копать видимое, увиденную жидкость заложить, пустоту под ногами — мостом.
+        const r = await require('./nether').guarded(session, ctl, sub => require('./endportal-descent').honestTunnelStep(session, sub, cell, { bricks: BRICKS, throughBricks: true }))
+        dug += r.dug || 0
+        if (bot.entity.position.floored().equals(cell)) { moved = true; walks.push({ to: xyz(cell) }); break }
+        stopped = r.why || r.stopped || r.error || `шаг штрека ${direction} не выполнен`
+        if (r.fought || ctl.aborted) break
+        continue
+      }
       stopped = mappedStepRisk(bot, cell)
       if (stopped) continue
       const floor = cell.offset(0, -1, 0)
@@ -1215,6 +1282,23 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   return { went: false, mapped: true, dug, walks, room: room.centre, stopped: ctl.aborted ? 'прервано' : gameClock.now() >= deadline ? 'время вышло' : stopped || 'прямой штрек к комнате не закончен' }
 }
 
+// Сухая по видимому колонка для шахты: кольца rMin..rMax от center (16 точек на кольцо), ближе к prefer; поверхность видна, воды
+// у неё нет и в 4 бл. вокруг; дальше 8 бл. от мест, где спуск уже залило (avoid). null — нет.
+function pickDryShaft (bot, center, prefer, avoid = [], rMin = 5, rMax = 24) {
+  const me = bot.entity.position
+  for (let r = rMin; r <= rMax; r += 2) {
+    const ring = []
+    for (let a = 0; a < 16; a++) ring.push({ x: Math.round(center.x + r * Math.sin(a * Math.PI / 8)), z: Math.round(center.z + r * Math.cos(a * Math.PI / 8)) })
+    ring.sort((p1, p2) => Math.hypot(p1.x - prefer.x, p1.z - prefer.z) - Math.hypot(p2.x - prefer.x, p2.z - prefer.z))
+    for (const c of ring) {
+      if (avoid.some(v => Math.hypot(v.x - c.x, v.z - c.z) < 8)) continue
+      const y = surfaceY(bot, c.x, c.z, Math.floor(me.y))
+      if (y !== null && !wetColumn(bot, c.x, c.z, y) && !wetNear(bot, c.x, y, c.z, 4)) return c
+    }
+  }
+  return null
+}
+
 async function goStronghold (session, ctl, p: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
@@ -1226,18 +1310,53 @@ async function goStronghold (session, ctl, p: any = {}) {
   if (!rec) return { went: false, stopped: 'крепости в памяти нет — сначала mc_stronghold mode=find (два ока и пересечение лучей)' }
   const mapped = process.env.ND_ROOM_MAP !== '0' && require('./stronghold').mappedRoom(rec)
   if (mapped) return goMappedRoom(session, ctl, mapped, deadline)
+  // Уже дошёл до кирпича этой крепости и под землёй рядом (findRoom зовёт go, когда кирпича не видно — из своего штрека к
+  // приманке): новый спуск не начинать (s5e-F-1 07.10: «обход воды: продолжаю из своей шахты» из штрека у комнаты — ещё 6 бл. вниз).
+  const ent = rec.entered
+  if (honestDescent() && ent && Number.isFinite(ent.y) && Math.hypot(bot.entity.position.x - ent.x, bot.entity.position.z - ent.z) <= 96 && bot.entity.position.y < ent.y + 12 && !skyAbove(bot)) {
+    return { went: true, already: true, inside: true, corner: { x: rec.x, z: rec.z }, at: xyz(bot.entity.position.floored()), bricks: { name: 'entered', at: ent }, dug: 0, seconds: 0 }
+  }
 
   // --- 1. дойти до точки из памяти
   let corner = { x: rec.x, z: rec.z }
   const walks = []
-  const far = Math.hypot(bot.entity.position.x - corner.x, bot.entity.position.z - corner.z)
-  if (far > 10) {
+  let seaAround = null
+  // Начатый обход воды над лестницей (шахта у сухой клетки, штрек под дном) — продолжить отсюда, а не идти поверху к лестнице
+  // (s5e-P-2 07.10: после обрыва тактикой каждый вызов — walkOrBridge из своей шахты, «хода нет» ×N).
+  const sd = session._seaDig
+  if (sd && sd.key === `${corner.x + 4},${corner.z + 4}` && Math.hypot(bot.entity.position.x - sd.from.x - 0.5, bot.entity.position.z - sd.from.z - 0.5) <= 10 &&
+    bot.entity.position.y < sd.from.y - 1 && !ctl.aborted) {
+    const st = await goAround(session, ctl, { x: corner.x + 4, z: corner.z + 4 }, { deadline, far: 96, fromHere: true, fromY: sd.from.y })
+    walks.push({ seaResume: sd.from, ok: st.ok, why: st.why, dug: st.dug })
+    log('обход воды: продолжаю из своей шахты', { ok: st.ok, why: st.why, dug: st.dug })
+    if (st.ok) seaAround = st
+  }
+  // Место шахты по «пирогу» уже выбрано (сухое, у портальной комнаты) — идти туда, а не к лестнице старта (s5e-B-2 07.10: после
+  // обрыва спуска тактикой вызов шёл к лестнице под озером — «крепость под морем» ×N).
+  const pd0 = session._pieDig && session._pieDig.key === `${corner.x},${corner.z}` && (session._pieDig.est || session._pieDig.dry) ? session._pieDig : null
+  const walkTarget = pd0 ? { x: pd0.shaft.x - 4, z: pd0.shaft.z - 4 } : corner
+  const far = seaAround ? 0 : Math.hypot(bot.entity.position.x - walkTarget.x - 4, bot.entity.position.z - walkTarget.z - 4)
+  // Ближе 16 — уже у лестницы (дальше — бросок ока и шахта): walkOrBridge у воды над лестницей крутился на месте (s5e-A-4).
+  if (far > 16 && pd0) {
+    const w = await walkOrBridge(session, ctl, pd0.shaft, deadline)
+    walks.push({ toPieShaft: pd0.shaft, ok: w.ok, error: w.error })
+    if (!w.ok) return { went: false, walks, stopped: `до места шахты у портальной комнаты не дошёл: ${w.error}` }
+  } else if (far > 16) {
     const sw = await swimToward(bot, ctl, corner, Math.min(120000, Math.max(0, deadline - gameClock.now() - 30000)))
     if (sw.swam) walks.push({ swam: sw })
     const w = await walkOrBridge(session, ctl, corner, deadline)
     walks.push({ to: corner, ok: w.ok, error: w.error, bridged: w.bridged || undefined, legs: w.legs.length })
-    const sea = oceanAt(bot, corner)
-    if (!sea && w.sea && w.sea.open) {
+    let sea = oceanAt(bot, corner)
+    // Крепость под морем (S5e 07.10, замечание (в) к S5d: сид −7145914149339214824 — «впереди вода 46 бл.» ×N, 35 мин вышли):
+    // как человек — с ближней суши (до 96 бл.) шахтой вниз и штреком под дном к лестнице старта (честно: увиденную воду — заложить).
+    // ND_SEA_TUNNEL=0 — прежний отказ («другая крепость кольца»).
+    if ((sea || (w.sea && w.sea.open)) && process.env.ND_SEA_TUNNEL !== '0' && !ctl.aborted && gameClock.now() < deadline - 60000) {
+      const st = await goAround(session, ctl, { x: corner.x + 4, z: corner.z + 4 }, { deadline, far: 96 })
+      walks.push({ seaTunnel: st.from, ok: st.ok, why: st.why, dug: st.dug })
+      log('крепость под водой — с суши штреком', { ok: st.ok, from: st.from, why: st.why, dug: st.dug })
+      if (st.ok) { sea = null; seaAround = st }
+    }
+    if (!sea && w.sea && w.sea.open && !walks.some(x => x.seaTunnel && x.ok)) {
       const alt = altStrongholds(corner)
       return {
         went: false,
@@ -1255,7 +1374,7 @@ async function goStronghold (session, ctl, p: any = {}) {
         stopped: `крепость под морем: над лестницей старта вода, сухой земли в 14 блоках нет — копать не с чего. Другие крепости кольца 0 — на ${sea.alternatives.map(a => a.bearingDeg + '°').join(' и ')} от 0,0 (радиус 1408..2688): туда и бросать око`
       }
     }
-    if (!w.ok) {
+    if (!w.ok && !seaAround) {
       return {
         went: false,
         walks,
@@ -1268,7 +1387,7 @@ async function goStronghold (session, ctl, p: any = {}) {
   // --- 2. уточнить оком: ближе 12 блоков оно летит в точный угол чанка старта.
   const throws = []
   let refined = !!rec.refined
-  if (!refined && p.refine !== false && itemNamed(bot, 'ender_eye')) {
+  if (!refined && !seaAround && !pd0 && p.refine !== false && itemNamed(bot, 'ender_eye')) {
     const stronghold = require('./stronghold')
     for (let i = 0; i < 4 && !ctl.aborted && gameClock.now() < deadline; i++) {
       const t = await stronghold.throwEye(session, ctl)
@@ -1293,8 +1412,45 @@ async function goStronghold (session, ctl, p: any = {}) {
     }
   }
 
-  // --- 3. вниз у лестничной башни старта
-  const shaft = { x: corner.x + 4, z: corner.z + 4 }
+  // --- 3. вниз у лестничной башни старта — или сразу у портальной комнаты, если её спавнер виден «пирогом» F3 с поверхности
+  // (как спидраннеры: pie-ray). Два пеленга (здесь и в 10 бл. вбок) → пересечение; в 80 бл. от лестницы — шахта в 5 бл. от оценки
+  // в сторону лестницы (не в лаву под рамками). Дальний спавнер (заброшенная шахта, данж) — мимо. ND_PIE_DIG=0 — у лестницы.
+  let shaft = { x: corner.x + 4, z: corner.z + 4 }
+  const sky0 = skyAbove(bot)
+  // Решение «где копать» — одно на крепость (повторный вызов после обрыва тактикой не ходит снова за пеленгами: s5e-P-1 07.10 —
+  // 20 вызовов, каждый с отходом на 10 бл.).
+  const pieKey = `${corner.x},${corner.z}`
+  if (session._pieDig && session._pieDig.key === pieKey) shaft = session._pieDig.shaft
+  else if (honestDescent() && process.env.ND_PIE_DIG !== '0' && sky0 && !seaAround && !ctl.aborted && gameClock.now() < deadline - 60000) {
+    session._pieDig = { key: pieKey, shaft }
+    try {
+      const S = require('./perception/senses')
+      const sample = () => { const a = S.pieArcs(bot, 'spawner', { fov: 20, step: 2 }); return a.length && !a[0].all && a[0].center !== null ? { x: bot.entity.position.x, z: bot.entity.position.z, yaw: a[0].center } : null }
+      const s1 = sample()
+      if (s1) {
+        const v = S.vecOf(s1.yaw)
+        const w = await travelXZ(bot, ctl, Math.round(s1.x - v.z * 10), Math.round(s1.z + v.x * 10), { range: 2, retries: 1, deadline: Math.min(deadline, gameClock.now() + 30000) })
+        const s2 = w.ok ? sample() : null
+        const est = s2 ? S.triangulate([s1, s2]) : null
+        const off = est ? Math.hypot(est.x - shaft.x, est.z - shaft.z) : null
+        log('«пирог» с поверхности: спавнер', { s1: s1.yaw, s2: s2 && s2.yaw, est, fromStairs: off && Math.round(off) })
+        if (est && est.spread <= 4 && off <= 80) {
+          // Высота спавнера — «пирогом» по вертикали; колонка шахты — сухая по видимому (нет воды в 4 бл. на поверхности), в 5–24 бл.
+          // от оценки, ближе к лестнице (вода у лестницы: s5e-Q-1/R-1 — лестница у озера затопилась). Спуск — до этой высоты, потом
+          // штрек к оценке (без поиска по коридорам).
+          const me = bot.entity.position
+          const el = require('./endportal-descent').pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z))
+          const stairs = { x: corner.x + 4, z: corner.z + 4 }
+          const pick = pickDryShaft(bot, est, stairs, session._wetAvoid || [])
+          const k = off > 6 ? 5 / off : 0
+          shaft = pick || { x: Math.round(est.x + (shaft.x - est.x) * k), z: Math.round(est.z + (shaft.z - est.z) * k) }
+          session._pieDig = { key: pieKey, shaft, est, y: el ? el.y : null }
+          walks.push({ pie: { est: { x: est.x, z: est.z }, y: el && el.y, shaft, dry: !!pick } })
+          log('«пирог» с поверхности: копаю у оценки', { est: { x: est.x, z: est.z }, y: el && el.y, shaft, dry: !!pick })
+        }
+      }
+    } catch (e) { log('«пирог» с поверхности: ошибка', { error: e.message }) }
+  }
   const minY = (bot.game && Number.isFinite(bot.game.minY) ? bot.game.minY : -64) + 6
   let around = null
   // Уже в своей шахте под землёй (второй вызов после «пещера под ногами»):
@@ -1305,23 +1461,58 @@ async function goStronghold (session, ctl, p: any = {}) {
   // В воде (у кромки озера над лестницей) — не «своя шахта»: иначе второй и
   // следующие вызовы копали прямо у воды без обхода (room-A-7: «вода у шахты —
   // заложил 0 из 1» четыре вызова подряд).
-  const wetMe = [0, 1].some(dy => { const b = bot.blockAt(me3.offset(0, dy, 0)); return !!b && /water/.test(b.name) }) || wetNear(bot, me3.x, me3.y + 1, me3.z, 1)
-  const underground = !wetMe && Math.hypot(me3.x - shaft.x - 0.5, me3.z - shaft.z - 0.5) <= 3 && (me3.y < 55 || !skyAbove(bot))
-  const topY = underground ? me3.floored().y : surfaceY(bot, shaft.x, shaft.z, bot.entity.position.floored().y)
-  const wet = underground ? null : (topY === null ? 'нет суши' : wetColumn(bot, shaft.x, shaft.z, topY))
-  if (wet) {
+  const wetMe = !seaAround && ([0, 1].some(dy => { const b = bot.blockAt(me3.offset(0, dy, 0)); return !!b && /water/.test(b.name) }) || wetNear(bot, me3.x, me3.y + 1, me3.z, 1))
+  // Своя винтовая лестница (честный спуск начат здесь же, тело ниже её начала) — «под землёй», даже если в неё натекла вода.
+  const own = session._ownShaft
+  const inOwn = !!own && own.key === `${corner.x},${corner.z}` && Math.hypot(me3.x - own.x, me3.z - own.z) <= 4 && me3.y < own.y - 2
+  const underground = inOwn || (!wetMe && Math.hypot(me3.x - shaft.x - 0.5, me3.z - shaft.z - 0.5) <= 3 && (me3.y < 55 || !skyAbove(bot)))
+  const topY = underground || seaAround ? me3.floored().y : surfaceY(bot, shaft.x, shaft.z, bot.entity.position.floored().y)
+  const wet = underground || seaAround ? null : session._wetStairs === pieKey && !(session._pieDig && session._pieDig.key === pieKey && session._pieDig.est) ? 'вода (спуск залило)'
+    : (topY === null ? 'нет суши' : wetColumn(bot, shaft.x, shaft.z, topY) || (honestDescent() && wetNear(bot, shaft.x, topY, shaft.z, 4) ? 'вода в 4 бл.' : null))
+  if (seaAround) {
+    around = seaAround
+  } else if (wet) {
     // Над лестницей вода (озеро, река): шахта сюда зальётся. Спуститься с
     // ближайшей сухой клетки и подойти под водой штреком ниже её дна
     // (прогон у -3760,-3408: «под ногами вода — дальше вниз не копаю»).
-    around = await goAround(session, ctl, shaft, { deadline, why: wet })
+    around = await goAround(session, ctl, shaft, { deadline, why: wet, far: process.env.ND_SEA_TUNNEL !== '0' ? 48 : 20 })
     walks.push({ around: around.from, ok: around.ok, why: around.why })
   } else if (!underground) {
     const w2 = await travelXZ(bot, ctl, shaft.x, shaft.z, { range: 1, retries: 2, deadline })
     walks.push({ to: shaft, ok: w2.ok, error: w2.error })
   }
-  const dig = around && !around.ok
+  const tDescent = gameClock.now()
+  if (!around && !inOwn) session._ownShaft = { key: `${corner.x},${corner.z}`, x: bot.entity.position.x, z: bot.entity.position.z, y: bot.entity.position.y }
+  const pd = session._pieDig && session._pieDig.key === pieKey && session._pieDig.est && Number.isFinite(session._pieDig.y) && honestDescent() ? session._pieDig : null
+  let dig = around && !around.ok
     ? { stopped: `над лестницей старта ${wet}, обойти не вышло: ${around.why}`, dug: around.dug || 0 }
-    : (around && around.bricks ? around.bricks : await shaftToBricks(session, ctl, { minY, deadline }))
+    : (around && around.bricks ? around.bricks : await shaftToBricks(session, ctl, pd && !around ? { minY, deadline, targetY: pd.y + 1 } : { minY, deadline }))
+  // Спуск залило (вода со всех сторон ступени, s5e-M-2: лестница под озером, «утонул») — это место бросить: следующий вызов копает в
+  // сухой колонке дальше 8 бл. отсюда (у оценки «пирога» или у лестницы старта, до 32 бл.).
+  if ((dig as any).wet && !around) {
+    const av = session._wetAvoid || (session._wetAvoid = [])
+    av.push({ x: Math.round(bot.entity.position.x), z: Math.round(bot.entity.position.z) })
+    session._ownShaft = null
+    // Голова в воде — сперва наверх (всплыть/столбом), потом новое место.
+    if ((dig as any).drowning || require('./movement').inWater(bot)) {
+      try { await require('./survival/surface-body').surface(session, ctl, { timeoutSeconds: 40, preferPillar: true }) } catch {}
+    }
+    if (pd) {
+      const next = pickDryShaft(bot, pd.est, { x: corner.x + 4, z: corner.z + 4 }, av, 5, 32)
+      session._pieDig = { ...pd, shaft: next || shaft, dry: true }
+      log('спуск залило — новое место шахты у оценки «пирога»', { avoid: av, next })
+    } else {
+      // У лестницы старта — обход воды: сухая клетка дальше 8 бл. от залитого места, шахта ниже дна, штрек под водой (goAround).
+      session._wetStairs = pieKey
+      log('спуск залило — к лестнице обходом воды', { avoid: av })
+    }
+  }
+  // Спуск к высоте спавнера («пирог») — дальше штрек к оценке на этой высоте; дошёл — «у крепости» (вход и разведка — как от кирпича).
+  if (pd && !around && (dig as any).reached && !ctl.aborted) {
+    const b = await require('./endportal-descent').honestBore(session, ctl, { x: Math.round(pd.est.x), z: Math.round(pd.est.z) }, { deadline: Math.min(deadline, gameClock.now() + 60000), maxSteps: 40, bricks: BRICKS })
+    log('«пирог»: штрек к оценке на её высоте', { moved: b.moved, dug: b.dug, ok: b.ok, why: b.why })
+    dig = { found: 'pie', at: xyz(bot.entity.position.floored()), dug: ((dig as any).dug || 0) + (b.dug || 0) } as any
+  }
   if (around && around.ok && around.dug) dig.dug = (dig.dug || 0) + around.dug
   let broke = null
   if (dig.found && !dig.stopped) {
@@ -1346,7 +1537,9 @@ async function goStronghold (session, ctl, p: any = {}) {
     inside: broke ? broke.inside : false,
     brokeIn: broke && broke.steps.length ? broke.steps : undefined,
     eyesLeft: countOf(bot, 'ender_eye'),
-    seconds: Math.round((gameClock.now() - t0) / 1000)
+    seconds: Math.round((gameClock.now() - t0) / 1000),
+    descentSeconds: Math.round((gameClock.now() - tDescent) / 1000),
+    honest: (dig as any).honest || undefined
   }
   if (dig.found) {
     savePlace(session, PLACE, { x: corner.x, z: corner.z, y: here.y, dimension: 'overworld', entered: xyz(here) },
@@ -1429,6 +1622,8 @@ async function findRoom (session, ctl, p: any = {}) {
   let lure = null
   let lureBest = null
   let lureStale = 0
+  let lurePie = false
+  let vertTries = 0
   let lureBores = 0
   const usedLures = []
   const picks = new Map()
@@ -1514,7 +1709,33 @@ async function findRoom (session, ctl, p: any = {}) {
       // им ползают рядом (сервер шлёт их позиции в радиусе слежения, как и звук у
       // человека). Видели чешуйниц — идём к ним, а не «слоями от старта».
       // Дошли до приманки, а рамок не видно — она пустая (лава в пещере): забыть.
-      if (lure && lure.distanceTo(me) < 5) { usedLures.push(lure.clone ? lure.clone() : lure); lure = null }
+      if (lure && lure.distanceTo(me) < 5 && !(lurePie && Math.abs(lure.y - me.y) >= 3 && vertTries < 3)) { usedLures.push(lure.clone ? lure.clone() : lure); lure = null }
+      // «Пирог» F3 (S10): спавнер чешуйниц — только в портальной комнате крепости; пеленг его дуги из разных мест обхода →
+      // пересечение (senses.triangulate) — место без клетки и без высоты (берём свою). Как спидраннеры: pie-ray к комнате.
+      // ND_ROOM_PIE=0 — без «пирога».
+      let pieLure = null
+      if (process.env.ND_ROOM_PIE !== '0') {
+        try {
+          const S = require('./perception/senses')
+          const arcs = S.pieArcs(bot, 'spawner', { fov: 20, step: 2 })
+          const ps = session._roomExplore.pie || (session._roomExplore.pie = [])
+          if (arcs.length && !arcs[0].all && arcs[0].center !== null) {
+            const last = ps[ps.length - 1]
+            if (!last || Math.hypot(last.x - me.x, last.z - me.z) >= 4) ps.push({ x: me.x, z: me.z, yaw: arcs[0].center })
+            if (ps.length > 8) ps.splice(0, ps.length - 8)
+            const est = ps.length >= 2 ? S.triangulate(ps) : null
+            // Высота — «пирогом» по вертикали (наклон камеры) при известной горизонтальной дальности (s5e-Q-2: комната на 3 бл. выше
+            // штрека — 4 штрека «за 24 шагов не дошёл»).
+            let ly = me.y
+            if (est && est.spread <= 6) { const el = require('./endportal-descent').pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z)); if (el) ly = el.y }
+            if (est && est.spread <= 6) pieLure = new Vec3(est.x, ly, est.z)
+            else { const v = S.vecOf(arcs[0].center); pieLure = new Vec3(me.x + v.x * 24, me.y, me.z + v.z * 24) }
+            // Дошёл до оценки, а рамок не видно — спавнер выше/ниже: эту точку не повторять (дальше звук лавы и обход).
+            if (usedLures.some(u => Math.hypot(u.x - pieLure.x, u.z - pieLure.z) < 6)) pieLure = null
+            if (pieLure && (!lure || pieLure.distanceTo(lure) > 6)) log('«пирог»: спавнер', { yaw: arcs[0].center, samples: ps.length, est: est ? { x: est.x, z: est.z, spread: est.spread } : null, lure: xyz(pieLure.floored()) })
+          }
+        } catch (e) { log('«пирог»: ошибка', { error: e.message }) }
+      }
       // S10 (честное восприятие): чешуйницы — видимые лучом (место) или слышимые (сторона и полоса → точка-оценка), не все
       // в радиусе слежения; на уровне знания scan или ND_HONEST_LURE=0 — как было.
       const honestLure = process.env.ND_HONEST_LURE !== '0' && require('./perception/knowledge').level() !== 'scan'
@@ -1525,13 +1746,16 @@ async function findRoom (session, ctl, p: any = {}) {
       if (fish.length) {
         const c = (fish.reduce((a: any, e: any) => a.plus(e.position), new Vec3(0, 0, 0)) as any).scaled(1 / fish.length)
         if (!lure || c.distanceTo(lure) > 4) log('чешуйницы', { n: fish.length, at: xyz(c.floored()) })
-        lure = c
+        lure = c; lurePie = false
+      } else if (pieLure) {
+        if (!lure || pieLure.distanceTo(lure) > 6) { lure = pieLure; lureBest = null; lureStale = 0 }
+        lurePie = true
       }
       // Лава — «слышно» тоже: клиент игры сам играет звуки лавы для лавы в 32
       // блоках (ClientLevel.animateTick → LavaFluid.animateTick), сквозь стены;
       // спидраннеры идут на этот звук — под рамками комнаты бассейн лавы. Берём
       // ближайшую лаву в 32 блоках на высоте крепости (±12 от ног).
-      if (!fish.length) {
+      if (!fish.length && !pieLure) {
         const lavaId = bot.registry.blocksByName.lava.id
         let heard = null
         try {
@@ -1546,23 +1770,37 @@ async function findRoom (session, ctl, p: any = {}) {
           }
         } catch {}
         // Оценка по звуку дрожит на шаг румба/дальности — приманку меняем, только если звук ушёл дальше 12 бл. (честный слух).
-        if (heard && (!lure || heard.distanceTo(lure) > (honestLure ? 12 : 6))) { log('слышу лаву', { at: xyz(heard), d: Math.round(heard.distanceTo(me)) }); lure = heard; lureBest = null; lureStale = 0 }
+        if (heard && (!lure || heard.distanceTo(lure) > (honestLure ? 12 : 6))) { log('слышу лаву', { at: xyz(heard), d: Math.round(heard.distanceTo(me)) }); lure = heard; lurePie = false; lureBest = null; lureStale = 0 }
       }
       // К приманке коридорами не выходит (4 перехода без сближения на 2 блока) —
       // копать к ней штреком: спидраннеры так и делают — на звук сквозь стену
       // (кирпич крепости ~0.4 с железной киркой). Двойник 2: лава комнаты в 12–
       // 20 блоках за стенами, коридоры увели на другой этаж, 150 переходов.
+      // У оценки «пирога» по горизонтали, а по высоте далеко — ступенями к её высоте (вверх/вниз), рамки откроются оттуда.
+      if (lure && lurePie && honestDescent() && vertTries < 3 && Math.hypot(lure.x - me.x, lure.z - me.z) <= 8 && Math.abs(lure.y - me.y) >= 3 && !ctl.aborted && gameClock.now() < deadline - 20000) {
+        vertTries++
+        const v = await require('./endportal-descent').toLevel(session, ctl, Math.round(lure.y), { deadline: Math.min(deadline, gameClock.now() + 40000), bricks: BRICKS })
+        legs.push({ why: 'к высоте спавнера', to: Math.round(lure.y), moved: v.moved, ok: v.ok, stop: v.why })
+        log('к высоте спавнера («пирог»)', { from: Math.round(me.y), to: Math.round(lure.y), ok: v.ok, moved: v.moved, why: v.why })
+        continue
+      }
       if (lure) {
         const dl = me.distanceTo(lure)
         if (lureBest === null || dl < lureBest - 2) { lureBest = dl; lureStale = 0 } else lureStale++
-        if (lureStale >= 4 && lureBores < 4 && !ctl.aborted && gameClock.now() < deadline - 20000) {
+        // «Пирог» с пересечением пеленгов (≥ 2 точки) — место известно до ~4 бл.: штрек сразу, без обхода коридоров (s5e-M-1:
+        // 4.6 игр. мин коридорами и тупиками при оценке с разбросом 0.4).
+        const piePrecise = lurePie && (session._roomExplore.pie || []).length >= 2
+        const xzNear = Math.hypot(lure.x - me.x, lure.z - me.z) <= 2
+        if (!xzNear && lureStale >= (piePrecise ? 0 : lurePie ? 2 : 4) && lureBores < (lurePie ? 6 : 4) && !ctl.aborted && gameClock.now() < deadline - 20000) {
           lureBores++
           lureStale = 0
           const yLvl = Math.floor(lure.y) + 1
           try {
-            const b = await require('./nether').bore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, {
-              deadline: Math.min(deadline, gameClock.now() + 45000), maxSteps: 24, minY: yLvl, maxY: yLvl, throughBricks: true
-            })
+            const b = honestDescent()
+              ? await require('./endportal-descent').honestBore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, { deadline: Math.min(deadline, gameClock.now() + (lurePie ? 90000 : 45000)), maxSteps: lurePie ? 48 : 24, bricks: BRICKS })
+              : await require('./nether').bore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, {
+                deadline: Math.min(deadline, gameClock.now() + 45000), maxSteps: 24, minY: yLvl, maxY: yLvl, throughBricks: true
+              })
             legs.push({ why: 'к приманке штреком', to: xyz(lure.floored ? lure.floored() : lure), moved: b.moved, dug: b.dug, stop: b.why })
             log('штрек к приманке', { to: xyz(lure.floored ? lure.floored() : lure), moved: b.moved, dug: b.dug, why: b.why })
           } catch (e) { log('штрек к приманке', { error: e.message }) }
@@ -1570,7 +1808,11 @@ async function findRoom (session, ctl, p: any = {}) {
         }
       }
       const goal = lure || origin
-      const score = v => v.distanceTo(goal) + 0.35 * v.distanceTo(me)
+      // Честный спуск — винтовая лестница: её клетки (пол — камень, не кирпич) связаны с коридором и видны; обход шёл бы по ней
+      // назад к поверхности. Клетки без пола крепости — дороже на 20 (не запрет: проходы бывают и по камню пещер).
+      const hold = honestDescent()
+      const offHold = v => { if (!hold) return 0; const fl = bot.blockAt(v.offset(0, -1, 0)); return fl && FLOOR.test(fl.name) ? 0 : 20 }
+      const score = v => v.distanceTo(goal) + 0.35 * v.distanceTo(me) + offHold(v)
       const live = fresh.filter(n => frontier.has(key(n.pos))).sort((a, b) => score(a.pos) - score(b.pos))
       const next = live.length
         ? live[0].pos
@@ -1598,6 +1840,15 @@ async function findRoom (session, ctl, p: any = {}) {
           // прямой штрек их пересекает. Раньше тупик кончал вызов сразу:
           // «куда идти дальше, не вижу» за 0 с (двойник 2, лестница после
           // прошлых обходов — 9 клеток).
+          // Тупик, а приманка есть («пирог»/слух/чешуйницы) — штрек к ней на своём уровне, а не вниз сквозь пол (s5e-Q-2 07.10: тупик →
+          // пробиться → честный вход ступенями вниз 46 → 30, а спавнер в 40 бл. по пеленгу).
+          if (lure && lureBores < 6 && honestDescent() && !ctl.aborted && gameClock.now() < deadline - 20000) {
+            lureBores++
+            const b = await require('./endportal-descent').honestBore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, { deadline: Math.min(deadline, gameClock.now() + 45000), maxSteps: 24, bricks: BRICKS })
+            legs.push({ why: 'тупик — штрек к приманке', to: xyz(lure.floored ? lure.floored() : lure), moved: b.moved, dug: b.dug, stop: b.why })
+            log('тупик — штрек к приманке', { to: xyz(lure.floored ? lure.floored() : lure), moved: b.moved, dug: b.dug, why: b.why })
+            if (b.moved) continue
+          }
           if (digOuts < 3 && !ctl.aborted && gameClock.now() < deadline - 20000) {
             digOuts++
             const bi = await breakIn(session, ctl, { deadline: Math.min(deadline, gameClock.now() + 40000), tries: 6 })
@@ -1608,7 +1859,9 @@ async function findRoom (session, ctl, p: any = {}) {
               const dir = digOuts % 2 ? 1 : -1
               const tgt = ax ? { x: Math.round(me2.x + dir * 12), z: Math.round(me2.z) } : { x: Math.round(me2.x), z: Math.round(me2.z + dir * 12) }
               try {
-                const b = await require('./nether').bore(session, ctl, tgt, { deadline: Math.min(deadline, gameClock.now() + 40000), maxSteps: 12, minY: Math.floor(me2.y), maxY: Math.floor(me2.y), throughBricks: true })
+                const b = honestDescent()
+                  ? await require('./endportal-descent').honestBore(session, ctl, tgt, { deadline: Math.min(deadline, gameClock.now() + 40000), maxSteps: 12, bricks: BRICKS })
+                  : await require('./nether').bore(session, ctl, tgt, { deadline: Math.min(deadline, gameClock.now() + 40000), maxSteps: 12, minY: Math.floor(me2.y), maxY: Math.floor(me2.y), throughBricks: true })
                 legs.push({ why: 'тупик — штрек', to: tgt, moved: b.moved, dug: b.dug })
               } catch {}
             }
@@ -1665,7 +1918,7 @@ async function findRoom (session, ctl, p: any = {}) {
     visited: visited.length,
     frontierLeft: frontier.size,
     bricksSeen,
-    went: went ? { dug: went.dug, refined: went.refined, bricks: went.bricks, inside: went.inside, seconds: went.seconds } : undefined,
+    went: went ? { dug: went.dug, refined: went.refined, bricks: went.bricks, inside: went.inside, seconds: went.seconds, descentSeconds: went.descentSeconds, honest: went.honest } : undefined,
     at: xyz(bot.entity.position),
     seconds: Math.round((gameClock.now() - t0) / 1000)
   }
@@ -1677,11 +1930,11 @@ async function findRoom (session, ctl, p: any = {}) {
     detail.room = { centre, frames: all.length, withEye, empty: all.length - withEye }
     savePlace(session, ROOM, { ...centre, dimension: 'overworld', frames: all.length, withEye, note: `портальная комната: рамок ${all.length}, с оком ${withEye}` },
       `нашёл портальную комнату: центр ${centre.x},${centre.y},${centre.z}, рамок ${all.length}, с оком ${withEye}`)
-    detail.note = `Вижу портальную комнату: ${all.length} рамок, с оком уже ${withEye}, пустых ${all.length - withEye}. ` +
+    detail.note = `${went && Number.isFinite(went.descentSeconds) ? `(спуск ${went.descentSeconds} с) ` : ''}Вижу портальную комнату: ${all.length} рамок, с оком уже ${withEye}, пустых ${all.length - withEye}. ` +
       `Вставить: mc_stronghold mode=fill (глаз в рюкзаке ${countOf(bot, 'ender_eye')}).`
   } else {
     detail.stopped = ctl.aborted ? 'прервано' : (gameClock.now() >= deadline ? 'время вышло' : 'куда идти дальше, не вижу')
-    detail.note = `Рамок не увидел: прошёл ${detail.walked} блоков, ${legs.length} переходов, кирпича видно ${bricksSeen}. ` +
+    detail.note = `${went && Number.isFinite(went.descentSeconds) ? `(спуск ${went.descentSeconds} с) ` : ''}Рамок не увидел: прошёл ${detail.walked} блоков, ${legs.length} переходов, кирпича видно ${bricksSeen}. ` +
       'Позови ещё раз — граница разведки строится заново от того места, где стою.'
   }
   return detail

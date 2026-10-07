@@ -61,6 +61,8 @@ function meta (bot, e, key) {
 }
 
 const seesMob = (bot, e, frac = 0.55) => canSeePoint(bot, e.position.offset(0, (e.height || 1.8) * frac, 0))
+// S1f (аудит S10 №20): эндермены, зомби-пиглины и прочие в решениях охоты — только известные телу (видимые/слышимые: eyes.knownEntities).
+const ents = (bot): any[] => require('./perception/eyes').knownEntities(bot)
 
 // xz — цель по горизонтали (GoalNearXZ): жемчуг на крыше окопа (на 2 выше пола) GoalNear(…, 0) не достигался никогда.
 async function walkTo (bot, ctl, target, range, ms, stopIf = null, xz = false) {
@@ -302,7 +304,7 @@ function nearestEnderman (bot, radius, dead) {
   // Ближние (6..20) приходят к шахте за секунды; с 30 блоков злой шёл дольше
   // 30 с ожидания (лаборатория, прогон 6).
   const rank = e => { const d = e.position.distanceTo(me); const eyes = eyesSeen(bot, e); return (eyes && d >= 6 && d <= 20 ? 4 : eyes && d > 5 ? 2 : 0) + (seesMob(bot, e) ? 1 : 0) }
-  return (Object.values(bot.entities) as any[])
+  return ents(bot)
     .filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && e.position.distanceTo(me) <= radius)
     .map((e : any) => ({ e, r: rank(e), d: e.position.distanceTo(me) }))
     .sort((a, b) => (b.r - a.r) || (a.d - b.d))
@@ -387,17 +389,17 @@ async function openFight (session, ctl, em, { retreatAt = 8, dead, maxMs = 25000
     await guard.wear()
     let lastNear = gameClock.now()
     while (!ctl.aborted && gameClock.now() - t0 < maxMs && em.isValid !== false && !dead.has(em.id)) {
-      const risk = safety.check({ target: em, entities: (Object.values(bot.entities) as any[]).filter((e : any) =>
+      const risk = safety.check({ target: em, entities: ents(bot).filter((e : any) =>
         e?.name === 'enderman' && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy')),
       minHealth: Math.max(8, retreatAt) })
       if (risk.action !== 'fight') break
       // Двое злых в 6 блоках — на земле не выстоять (двойник мира прохождения,
       // 2026-09-28: 20 → 1.8 хп за 15 с от двоих); выйти — дальше столб.
-      if ((Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < 6).length >= 2) { crowd = true; break }
+      if (ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < 6).length >= 2) { crowd = true; break }
       // Злой, что 8 с не подходит ближе 8 блоков (застрял), — не ждать 40 с
       // (прогон 48: три боя по 40 с без единого взмаха).
       {
-        const closer = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e !== em && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) <= 3.2)
+        const closer = ents(bot).filter((e : any) => e && e.name === 'enderman' && e !== em && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) <= 3.2)
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
         if (closer && reachTo(bot, closer) + 0.5 < reachTo(bot, em)) { em = closer; retargets++ }
       }
@@ -485,7 +487,7 @@ async function pillarUp (bot, ctl, opts: any = {}) {
     // их закрывают ножки грибов и край обрыва: лаборатория, прогон 10 — 20
     // эндерменов в 48 блоках, ни одного с видимыми глазами со столба.
     const nodes = walkable(bot, bot.entity.position, { radius: 24, maxNodes: 6000 })
-    const ems = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !(opts.skip && opts.skip.has(e.id)) && !trappedEm(bot, e))
+    const ems = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !(opts.skip && opts.skip.has(e.id)) && !trappedEm(bot, e))
     let best = null
     let checked = 0
     const why = { nodes: nodes.length }
@@ -652,7 +654,7 @@ async function huntPillar (session, ctl, p: any = {}) {
   let searches = 0
   const weapon = bestWeapon(bot)
   const onTop = () => pillar && bot.entity.position.floored().y >= pillar.base.y + (pillar.h || 3)
-  const angryClose = r => (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < r)
+  const angryClose = r => ents(bot).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < r)
   // Уже стою на своём столбе (прошлый вызов оборвали): столб — это он.
   {
     const f = bot.entity.position.floored()
@@ -685,7 +687,7 @@ async function huntPillar (session, ctl, p: any = {}) {
             up = await emergencyPillar(bot, ctl)
             if (up.ok) break
             // Столб не встал (свод низко) — бой на земле: в тело, щит.
-            const em0 = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy'))
+            const em0 = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy'))
               .sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
             if (em0) {
               const f: any = await openFight(session, ctl, em0, { retreatAt: 5, dead, maxMs: 30000 }).catch(e => ({ error: e.message }))
@@ -709,7 +711,7 @@ async function huntPillar (session, ctl, p: any = {}) {
       }
       // 2. Кого злить: глаза видно строго, 6..24 блока.
       const me = bot.entity.position
-      const cands = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false &&
+      const cands = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false &&
         !dead.has(e.id) && !skip.has(e.id) && e.position.distanceTo(me) <= radius)
       const angry = cands.filter(e => meta(bot, e, 'creepy'))
       let em: any = angry.sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
@@ -798,7 +800,7 @@ async function huntPillar (session, ctl, p: any = {}) {
         // Жемчуг у подножия: вниз, подобрать, столб заново — если других
         // злых рядом нет (иначе бить с вершины дальше, подобрать потом).
         await sleep(800)
-        const angryNear = (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < 16)
+        const angryNear = ents(bot).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < 16)
         if (angryNear) round.stayed = true
         else {
           await pillarDown(bot, ctl, mcData, pillar.base)
@@ -876,7 +878,7 @@ async function digTunnel (bot, ctl, mcData, { radius = 28, exclude = [] }: any =
   // закрывает обзор: штрек 1 в лесу за 3 минуты не увидел ни одного).
   let spot = null
   {
-    const ems = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false)
+    const ems = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false)
     let best = null
     let checked = 0
     for (const x of walkable(bot, bot.entity.position, { radius, maxNodes: 8000 })) {
@@ -968,7 +970,7 @@ function boothSite (bot, P, d) {
 }
 function boothPlan (bot, { radius = 32, exclude = [] }: any = {}) {
   const { walkable } = require('./walkable')
-  const ems = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !trappedEm(bot, e))
+  const ems = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !trappedEm(bot, e))
   const nodes = walkable(bot, bot.entity.position, { radius, maxNodes: 6000 })
   let best = null
   let checked = 0
@@ -1050,7 +1052,7 @@ async function huntTunnel (session, ctl, p: any = {}) {
   const ignore = new Map() // злой, но не идёт — до
   const weapon = bestWeapon(bot)
   const isPearl = e => { try { const it = e.getDroppedItem && e.getDroppedItem(); return !!it && it.name === 'ender_pearl' } catch { return false } }
-  const endermen = () => (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id))
+  const endermen = () => ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id))
   const skipped = e => (skip.get(e.id) || 0) > gameClock.now()
   const ignored = e => (ignore.get(e.id) || 0) > gameClock.now()
   // Злые, что ещё идут к нам. В штреке их можно ждать сколько угодно: у входа
@@ -1407,7 +1409,7 @@ async function foxBuild (bot, ctl, mcData, site, danger = null) {
   // Эндермен в клетке засыпки, опоры или крыши — не строить здесь: блок не встанет,
   // а возня у самых его ног кончалась боем в открытую (foxhole-11, слот 8: смерть
   // после «ямку не засыпал: в клетке стоит enderman»).
-  const busyCell = c => (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'enderman' && e.position &&
+  const busyCell = c => ents(bot).some((e : any) => e && e.name === 'enderman' && e.position &&
     Math.abs(e.position.x - (c.x + 0.5)) < 0.9 && Math.abs(e.position.z - (c.z + 0.5)) < 0.9 && e.position.y < c.y + 1 && e.position.y + 2.9 > c.y)
   for (const c of [...(site.fills || []), site.A, site.A2, site.R].filter(Boolean)) if (!solidAt(bot, c) && busyCell(c)) return { ok: false, why: 'в клетке эндермен' }
   for (const c of site.fills || []) {
@@ -1536,7 +1538,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
   const ignore = new Map()
   const weapon = bestWeapon(bot)
   const isPearl = e => { try { const it = e.getDroppedItem && e.getDroppedItem(); return !!it && it.name === 'ender_pearl' } catch { return false } }
-  const endermen = () => (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id))
+  const endermen = () => ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !dead.has(e.id))
   const skipped = e => (skip.get(e.id) || 0) > gameClock.now()
   const ignored = e => (ignore.get(e.id) || 0) > gameClock.now()
   const angry = e => !!meta(bot, e, 'creepy')
@@ -1716,7 +1718,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
       // 1. В досягаемости — бить в тело (в глаза не смотреть).
       // Запас 0.2 до 3.0: сервер меряет досягаемость от своей позиции тела, и на краю
       // взмахи не засчитывались (foxhole-11, слот 19: 31 взмах, эндермен жив).
-      const zpNear = (Object.values(bot.entities) as any[]).filter((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(bot.entity.position) < 8)
+      const zpNear = ents(bot).filter((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(bot.entity.position) < 8)
       const near: any = all.filter((e : any) => reachTo(bot, e) <= 2.8 && safeAim(bot, e) && !zpNear.some((o : any) => o.position.distanceTo(e.position) < 3)).sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
       if (near) {
         lastReach = gameClock.now()
@@ -1929,7 +1931,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
         const me = bot.entity.position
         // Зомби-пиглины рядом с целью — нет: взмах задевает соседей, и злится вся стая
         // (foxhole-14r: «slain by Zombified Piglin»; то же правило у дуэли).
-        const zp = (Object.values(bot.entities) as any[]).filter((o : any) => o && o.name === 'zombified_piglin' && o.position)
+        const zp = ents(bot).filter((o : any) => o && o.name === 'zombified_piglin' && o.position)
         // Только тех, к кому есть клетка «куда дойду» в 1.2–2.6 блока по горизонтали и
         // ±1 по высоте: выбор «ближайшего по прямой» слал к эндерменам на уступах —
         // «мест нет, nodes 0» и «время вышло» по кругу (основной бот 29.09, 18:02–18:09).
@@ -1950,7 +1952,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
         const t: any = pick && pick.e
         // Брут, хоглин, гаст рядом — из окопа не выходить ни сдвинуться, ни подкрасться (chain6-14 30.09: окоп у
         // бастиона, «минуту некого злить — сдвинуться», вышел — брут; разбор Codex).
-        const foesNear = (Object.values(bot.entities) as any[]).some((e : any) => e && e.position && ((/^(piglin_brute|hoglin|zoglin|wither_skeleton)$/.test(e.name || '') && e.position.distanceTo(bot.entity.position) < 24) || (e.name === 'ghast' && e.position.distanceTo(bot.entity.position) < 48)))
+        const foesNear = ents(bot).some((e : any) => e && e.position && ((/^(piglin_brute|hoglin|zoglin|wither_skeleton)$/.test(e.name || '') && e.position.distanceTo(bot.entity.position) < 24) || (e.name === 'ghast' && e.position.distanceTo(bot.entity.position) < 48)))
         if (foesNear) { lastChance = gameClock.now(); await sleep(700); continue }
         if (!t) {
           // Спокойных, к кому дойти, в 40 нет — старое правило: минуту некого злить — сдвинуться.
@@ -2102,14 +2104,14 @@ async function huntDuel (session, ctl, p: any = {}) {
     for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) for (let dy = -3; dy <= 1; dy++) { const b = bot.blockAt(f.offset(dx, dy, dz)); if (b && /lava/.test(b.name)) return false }
     return true
   }
-  const angryClose = r => (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < r)
+  const angryClose = r => ents(bot).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < r)
   // Кого злить (глаза видно строгим лучом отсюда): 6..28 блоков, рядом с ним
   // никого в 3 и злых в 16 (кроме застрявших), пиглинов в 10 нет, не в яме,
   // не дальше 64 от места старта.
   const pickTarget = (all, me) => all.filter(e => !skip.has(e.id) && eyesSeen(bot, e))
     .filter(e => { const d = e.position.distanceTo(me); return d >= 6 && d <= 28 })
     .filter(e => !all.some(o => o !== e && (o.position.distanceTo(e.position) < 3 || (meta(bot, o, 'creepy') && !((ignoreAngry.get(o.id) || 0) > gameClock.now()) && !trappedEm(bot, o) && o.position.distanceTo(e.position) < 16))))
-    .filter(e => !(Object.values(bot.entities) as any[]).some((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10))
+    .filter(e => !ents(bot).some((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10))
     .filter(e => e.position.distanceTo(home0) < 64 && !trappedEm(bot, e))
     .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
   // Откуда видно больше глаз: заливка «куда дойду» (24), каждая третья клетка
@@ -2151,7 +2153,7 @@ async function huntDuel (session, ctl, p: any = {}) {
     if (top.y - feet.y >= 2) {
       let target = null
       for (let k = 0; k < 4 && !target && !ctl.aborted && !angryClose(6); k++) {
-        const all2 = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false)
+        const all2 = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false)
         target = pickTarget(all2, bot.entity.position)
         if (k === 0) { const me3 = bot.entity.position; const inR = all2.filter((e : any) => { const d = e.position.distanceTo(me3); return d >= 6 && d <= 28 }); res.inRange = inR.length; clearRay.stats = {}; res.eyesTop = inR.filter(e => eyesSeen(bot, e)).length; res.blockedBy = clearRay.stats; res.y = Math.round(me3.y) }
         if (!target) { try { await bot.look(bot.entity.yaw + Math.PI / 2, -0.5, true) } catch {} ; await sleep(600) }
@@ -2196,7 +2198,7 @@ async function huntDuel (session, ctl, p: any = {}) {
     // Злой уже рядом — бой (от эндермена не уйти: телепорт), коробка при нём
     // не закрывается («в клетке стоит enderman», дуэль 2: смерть).
     const me0 = bot.entity.position
-    const angryNow = (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && meta(bot, e, 'creepy') && e.position.distanceTo(me0) < 16)
+    const angryNow = ents(bot).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && meta(bot, e, 'creepy') && e.position.distanceTo(me0) < 16)
     if ((bot.health ?? 20) < 16 && !angryNow) {
       const r = await require('./blaze').boxRest(session, ctl, { toward: null, until: 19, maxMs: 60000 }).catch(e => ({ rested: false, why: e.message }))
       rests.push({ hp: r.hp, s: r.seconds, ok: r.rested, why: r.why })
@@ -2206,7 +2208,7 @@ async function huntDuel (session, ctl, p: any = {}) {
     }
     if ((bot.food ?? 20) <= 17) { try { await require('./actions').eat(session, {}) } catch {} }
     const me = bot.entity.position
-    const all = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false)
+    const all = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false)
     const angry = all.filter((e : any) => meta(bot, e, 'creepy') && e.position.distanceTo(me) < 16 && (e.position.distanceTo(me) < 4 || (!skip.has(e.id) && seesMob(bot, e))))
     // Злить нового — только если злых в 24 блоках нет вовсе.
     // Злой, который 15 с не подходит (застрял за обрывом), — не в счёт на минуту
@@ -2233,7 +2235,7 @@ async function huntDuel (session, ctl, p: any = {}) {
       // от снаряда или без живого обидчика; цель — обидчик, HurtByTargetGoal).
       const calm: any = all.filter((e : any) => !skip.has(e.id) && !meta(bot, e, 'creepy') && e.position.distanceTo(me) <= 16 && !trappedEm(bot, e) &&
         !all.some((o : any) => o !== e && o.position.distanceTo(e.position) < 4) &&
-        !(Object.values(bot.entities) as any[]).some((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10) &&
+        !ents(bot).some((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10) &&
         e.position.distanceTo(home0) < 64 && safeSpot(e.position.floored()))
         .sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
       if (calm) {
@@ -2295,7 +2297,7 @@ async function huntDuel (session, ctl, p: any = {}) {
         .filter((e : any) => !all.some((o : any) => o !== e && (o.position.distanceTo(e.position) < 3 || (meta(bot, o, 'creepy') && !((ignoreAngry.get(o.id) || 0) > gameClock.now()) && !trappedEm(bot, o) && o.position.distanceTo(e.position) < 16))))
         // Зомби-пиглины рядом — нет: удар с размаха задевает соседей, и стая злится
         // (дуэль 5: «slain by Zombified Piglin»).
-        .filter((e : any) => !(Object.values(bot.entities) as any[]).some((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10))
+        .filter((e : any) => !ents(bot).some((o : any) => o && o.name === 'zombified_piglin' && o.position && o.position.distanceTo(e.position) < 10))
         // Далеко от места старта не уходить (искажённый лес кончается).
         .filter((e : any) => e.position.distanceTo(home0) < 64 && !trappedEm(bot, e))
         .sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
@@ -2337,7 +2339,7 @@ async function huntDuel (session, ctl, p: any = {}) {
     pitchCap = -0.35
     // Двое злых уже в 8 блоках — сразу столб, без боя на земле (двойник мира
     // прохождения: трое злых сняли 20 хп за 12 с).
-    const crowdNow = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < 8).length >= 2
+    const crowdNow = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && e.position.distanceTo(bot.entity.position) < 8).length >= 2
     let f: any = crowdNow ? { crowd: true, swings: 0 } : await openFight(session, ctl, em, { retreatAt: 13, dead: deadIds, maxMs: 40000 }).catch(e => ({ error: e.message }))
     pitchCap = -0.5
     // Хп 10 и он жив — столб в 3 блока прямо здесь: его коробка удара раздута
@@ -2355,10 +2357,10 @@ async function huntDuel (session, ctl, p: any = {}) {
       while (!ctl.aborted && gameClock.now() - tP < 30000 && em.isValid !== false && bot.entities[em.id]) {
         // Злые к столбу не идут 10 с (стоят в 6+ блоках) — слезть и дальше: на
         // двойнике три столба подряд по 35 с без единого взмаха.
-        if ((Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) < 6)) nearAt = gameClock.now()
+        if (ents(bot).some((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) < 6)) nearAt = gameClock.now()
         if (gameClock.now() - nearAt > 10000) break
         // Со столба бьём любого злого, кто под нами в досягаемости (их бывает двое).
-        const near: any = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) <= 3.0)
+        const near: any = ents(bot).filter((e : any) => e && e.name === 'enderman' && e.position && e.isValid !== false && !deadIds.has(e.id) && meta(bot, e, 'creepy') && reachTo(bot, e) <= 3.0)
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0] || em
         const r = reachTo(bot, near)
         try { await bot.lookAt(near.position.offset(0, 2.2, 0), true) } catch {}

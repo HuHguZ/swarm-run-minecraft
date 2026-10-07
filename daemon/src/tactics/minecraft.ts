@@ -233,11 +233,19 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const repel = fireResistance && (lava || lavaEscapePending) && weapon && hostile.some(enemy =>
     enemy.distance <= 3 && !!pick.aim(bot, bot.entities[enemy.id], { range: 3.2 })?.point)
   session._tacticalExitGeometry = ground.signature + '|' + rescue.exit + '|' + [portal, rescue.potion, rescue.climb, air.flightReady, air.pearlReady, webBoat, boatLavaHop].join(',')
+  // S5e (07.10): спуск к крепости и штрек к комнате (навык stronghold под землёй, без неба) — бег из шахты/лестницы в соседнюю
+  // пещеру уводил тело вниз (s5d-T-1: падение 24 бл. на капельник; T-7: бег до y −11, хп 20 → 9; R-8: бег до хп 2, скелет).
+  // Здесь бег — не выход: бой у тела, заслон/коробка, щит (кандидаты без escapeRoute). Лава, падение, утопление — как прежде.
+  // ND_SHAFT_STAND=0 — прежнее.
+  let shaftStand = false
+  if (current === 'stronghold' && process.env.ND_SHAFT_STAND !== '0' && /overworld/.test(dimension) && !lava && !burning) {
+    try { const here = bot.blockAt(bot.entity.position.floored()); shaftStand = !!here && here.skyLight === 0 } catch {}
+  }
   return { at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0,
     weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0),
     enemies, incomingProjectiles, burning, lava, lavaAhead, fireResistance,
     explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
-    inWater: !!bot.entity.isInWater, drowning: (bot.oxygenLevel ?? 20) <= 8 && movement.inWater(bot), piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route,
+    inWater: !!bot.entity.isInWater, drowning: (bot.oxygenLevel ?? 20) <= 8 && movement.inWater(bot), piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand,
     blocks: refuge?.blocks ?? (pack ??= require('../pack')).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
     water: !/nether/.test(dimension) && items.some(item => item.name === 'water_bucket'),
     edible: !!foodActions.bestFood(bot, session.mcData ?? bot.registry), canFight: hostile.length > 0 && (sustainableFight(inspected, bot.health ?? 0) || repel), contact,

@@ -37,7 +37,8 @@ function intersects (cell, pos, width = 0.6, height = 1.8) {
     pos.z + width / 2 > cell.z && pos.z - width / 2 < cell.z + 1 && pos.y < cell.y + 1 && pos.y + height > cell.y
 }
 function selectBlock (slots: any, reserve: any = 0, pending: any = 0) {
-  const items = slots.filter(i => i && FILLER.test(i.name))
+  // S1f: доски — последними (в Аду дерево — палки и кирки: s1f-FB-1 «нет безопасного дерева на 4 доски», доски ушли в клатч и мост).
+  const items = slots.filter(i => i && FILLER.test(i.name)).sort((p, q) => (/_planks$/.test(p.name) ? 1 : 0) - (/_planks$/.test(q.name) ? 1 : 0))
   const total = pending instanceof Map ? [...pending.values()].reduce((n, v) => n + v, 0) : pending
   if (items.reduce((s, i) => s + i.count, 0) - total <= reserve) return null
   let left = total

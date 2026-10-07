@@ -15,14 +15,20 @@ function rig (overrides: any = {} as Record<string, any>) {
   return { bot, session: { bot, mcData: { blocks: { 1: {} as Record<string, any> }, items: {} as Record<string, any> } }, ctl: { aborted: false, onAbort: [] } }
 }
 
-test('mapped descent crosses unrelated bricks, reaches exact height and never goes to bedrock', async () => {
+// S5e (07.10): шахта и штрек по прогруженным чанкам (рентген толщи) — только «полный скан»; в rsg/ssg — честный спуск
+// (endportal-descent, test/s5e-endgame). Эти тесты — про ход scan.
+function scanFor (t: any) { const s = process.env.ND_KNOWLEDGE; process.env.ND_KNOWLEDGE = 'scan'; t.after(() => { if (s === undefined) delete process.env.ND_KNOWLEDGE; else process.env.ND_KNOWLEDGE = s }) }
+
+test('mapped descent crosses unrelated bricks, reaches exact height and never goes to bedrock', async (t) => {
+  scanFor(t)
   const { session, ctl, bot } = rig({ '1,7,0': 'stone_bricks' })
   const r = await shaftToBricks(session, ctl, { minY: -58, targetY: 5, deadline: Date.now() + 4000 })
   assert.equal(r.reached, true)
   assert.equal(bot.entity.position.y, 5)
   assert.equal(r.dug, 2)
 })
-test('already at mapped height: no additional dig even with no visible bricks', async () => {
+test('already at mapped height: no additional dig even with no visible bricks', async (t) => {
+  scanFor(t)
   const { session, ctl } = rig()
   const r = await shaftToBricks(session, ctl, { minY: -58, targetY: 7, deadline: Date.now() + 1000 })
   assert.equal(r.reached, true)

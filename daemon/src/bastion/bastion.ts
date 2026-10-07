@@ -111,11 +111,31 @@ function approachGold (gold, brutes) {
   const safe = gold.filter(g => !nearBruteHome(g, brutes))
   return safe.length ? safe : gold
 }
-/** S1e (проверка S1d (в)): цели у дома брута — не «никогда», а последними: пока есть другие, их не берём; когда остались только они —
- *  берём при хп ≥ 16 (удар брута 13 = 7 + топор, javap S4d; 2 удара до отхода). */
-function targetsByBruteHome (list, posOf, brutes, hp) {
+/** S1f (проверка S1e (е)): цель у дома брута — цена, а не порог хп. Удар брута 13 (7 + золотой топор, assess.MOBS) после нашей
+ *  брони (CombatRules: assess.afterArmor); до отхода — 1 удар наверняка, второй — с вероятностью 0.25. Риск смерти × час против
+ *  ценности последних целей (по умолчанию 240 с: 9 слитков × 0.054 жемчуга × ~500 с жемчуга альтернативой). ND_BRUTE_HOME_PRICE=0 —
+ *  прежний порог хп ≥ 16. */
+function bruteHomeTake (hp, { armor = 0, tough = 0, valueS = 240, deathS = 3600 }: any = {}) {
+  const hit = require('../assess').afterArmor(13, armor, tough)
+  const pDeath = hp <= hit ? 0.9 : hp <= 2 * hit ? 0.25 : 0.01
+  return { take: pDeath * deathS < valueS, pDeath, hit: Math.round(hit * 10) / 10 }
+}
+/** S1f (проверка S1e (е)): переждать злость от золота перед ямой — цена. Злых (angerSet — кого злит ломка) нет — не ждать. Есть —
+ *  каждый ~2 удара мечом пиглина (5 + золотой меч, после нашей брони) по пути к яме; риск смерти × час против оставшихся секунд злости. */
+function pitAngerWait ({ angry, hp, leftS, gear = {} as any, deathS = 3600 }) {
+  if (!angry) return { wait: false, why: 'злить некого' }
+  const dmg = angry * 2 * require('../assess').afterArmor(8, gear.armor || 0, gear.tough || 0)
+  const pDeath = dmg >= hp ? 0.5 : dmg >= hp / 2 ? 0.1 : 0.02
+  const wait = pDeath * deathS > leftS
+  return { wait, why: `злых ${angry}, урон ~${Math.round(dmg)} при хп ${Math.round(hp)} → риск ${pDeath} × ${deathS} с ${wait ? '>' : '≤'} ${Math.round(leftS)} с злости` }
+}
+/** S1e (проверка S1d (в)): цели у дома брута — не «никогда», а последними: пока есть другие, их не берём; когда остались только
+ *  они — по цене (bruteHomeTake). gear — { armor, tough } тела (assess.gearOf); без него — голое тело. */
+function targetsByBruteHome (list, posOf, brutes, hp, gear: any = {}) {
   const far = list.filter(t => !nearBruteHome(posOf(t), brutes, 6))
-  return far.length || hp < 16 ? far : list
+  if (far.length) return far
+  const ok = process.env.ND_BRUTE_HOME_PRICE === '0' ? hp >= 16 : bruteHomeTake(hp, gear).take
+  return ok ? list : far
 }
 /** S1e (проверка S1d (в)): ход к торговцам при бруте рядом — цена: ожидаемый урон от брутов, которые видят нас или дойдут (заливка
  *  тела), или стоят в 10 бл. от торговца, ~2 удара каждый (13 после нашей брони), против хп с запасом 8. Брут за стеной — не повод. */
@@ -486,15 +506,20 @@ async function sealedGold (session, ctl, st, until) {
     // Без железной кирки (st.chestsOnly) — только сундуки: золото ей не взять, а железо в сундуках есть.
     // Цели в 6 бл. от дома брута копии — не трогать (S1d s1d-N-2: сундук у брута, 2 удара за секунду, смерть на 7-й мин).
     const BH6 = require('.././nether-route').bruteSpots(session)
-    const preds = st.chestsOnly ? [] : targetsByBruteHome([...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now()), ([, v]) => v.pos, BH6, bot.health ?? 20)
+    const gear6 = require('.././assess').gearOf((bot.inventory.slots || []).slice(5, 9))
+    const preds = st.chestsOnly ? [] : targetsByBruteHome([...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now()), ([, v]) => v.pos, BH6, bot.health ?? 20, gear6)
     const chestsT = st.lootChests ? [...st.chestSeen.entries()].filter(([k]) => !st.looted.has(k) && (st.skip.get(k) || 0) < gameClock.now()).map(([k, v]) => ({ k, pos: v.pos, chest: true })) : []
     if (!preds.length && !chestsT.length) break
-    const chestsOk = targetsByBruteHome(chestsT, c => c.pos, BH6, bot.health ?? 20)
+    const chestsOk = targetsByBruteHome(chestsT, c => c.pos, BH6, bot.health ?? 20, gear6)
     if (!preds.length && !chestsOk.length) break
     const minRank = preds.length ? Math.min(...preds.map(([, v]) => v.rank || 0)) : 0
     const tg = [...preds.filter(([, v]) => (v.rank || 0) === minRank).map(([k, v]) => ({ k, pos: v.pos })), ...(minRank === 0 ? chestsOk : [])]
     const view = SL.worldView(bot)
-    const me = bot.entity.position.floored()
+    // S1f: клетка ног — с поправкой на песок душ (высота 0.875: на нём floored() — клетка самого песка). План от floored() начинался
+    // внутри пола: «не шагнул vdown/up … (я …,N.88,…) пол soul_sand» — 50 из 61 остановок штрека во вслепую сериях S1e/S1f, заход с 0
+    // золота при верном шаблоне. ND_SOUL_FEET=0 — прежнее.
+    const feet = () => process.env.ND_SOUL_FEET === '0' ? bot.entity.position.floored() : SL.bodyCells(bot)[0]
+    const me = feet()
     let starts
     const inTunnel = S.own.has(SL.keyV(me)) && !S.exposed
     if (inTunnel) starts = [{ x: me.x, y: me.y, z: me.z, g: 0 }]
@@ -502,7 +527,7 @@ async function sealedGold (session, ctl, st, until) {
       // Из открытого: клетки заливки; у брута и хоглина (10 блоков) — дороже.
       const danger = [...mobs(bot, 'piglin_brute', 40), ...mobs(bot, 'hoglin', 40)].map((e : any) => e.position)
       starts = []
-      for (const n of SL.reachCells(view, bot.entity.position, { radius: 28, maxNodes: 5000 })) {
+      for (const n of SL.reachCells(view, process.env.ND_SOUL_FEET === '0' ? bot.entity.position : me, { radius: 28, maxNodes: 5000 })) {
         if (S.badStarts && S.badStarts.has(SL.key(n.x, n.y, n.z))) continue
         let g = n.d * 4
         for (const d of danger) { const dd = d.distanceTo(new Vec3(n.x, n.y, n.z)); if (dd < 10) g += (10 - dd) * 4 }
@@ -569,7 +594,7 @@ async function sealedGold (session, ctl, st, until) {
       bot._ndNetherFloor = Math.min(floor0 ?? 40, r.start.y - 2)
       let w
       try { w = await walkUnlessBrute(session, ctl, new goals.GoalBlock(r.start.x, r.start.y, r.start.z), 30000, { dig: false }) } finally { bot._ndNetherFloor = floor0 }
-      const f = bot.entity.position.floored()
+      const f = feet()
       if (!(f.x === r.start.x && f.y === r.start.y && f.z === r.start.z)) {
         // Этот вход ногами не взять — в следующих планах его нет (sealed booth-1: 15 раз «пустой путь» к одной клетке).
         (S.badStarts || (S.badStarts = new Set())).add(SL.key(r.start.x, r.start.y, r.start.z))
@@ -592,7 +617,7 @@ async function sealedGold (session, ctl, st, until) {
       if (S.fails.length > 14) break
       continue
     }
-    const f = bot.entity.position.floored()
+    const f = feet()
     const hit = tgGoals.find(q => q.g(f.x, f.y, f.z))
     if (!hit) continue
     const t: any = hit.t
@@ -989,7 +1014,16 @@ async function digPit (session, ctl, st, until) {
   }
   // S1d 07.10: злость от последнего золота (600 тиков) — переждать в своём штреке, потом к яме (s1d-G22-6: золото «окном», сразу
   // «яма: путь» 20 ходов — злые пиглины, 5 ударов, смерть на 24-й мин). Ломок «окном» стало много — ожидание по умолчанию.
-  if (gameClock.now() - lastGoldBreak(st) < 33000 && inOwnTunnel(bot, S)) {
+  // S1f (проверка S1e (е)): ждать — цена: пиглинов, которых злит ломка (angerSet: в 16 бл.), нет — ждать нечего; есть — остаток
+  // злости против риска (pitAngerWait). ND_PIT_ANGER_PRICE=0 — прежнее «всегда ждать».
+  const leftAnger = lastGoldBreak(st) + 33000 - gameClock.now()
+  let angerWait = leftAnger > 0 && inOwnTunnel(bot, S)
+  if (angerWait && process.env.ND_PIT_ANGER_PRICE !== '0') {
+    const w = pitAngerWait({ angry: angerSet(bot, null, false).length, hp: bot.health ?? 20, leftS: leftAnger / 1000, gear: require('.././assess').gearOf((bot.inventory.slots || []).slice(5, 9)) })
+    if (!w.wait) log('яма: злость от золота — не жду', { why: w.why })
+    angerWait = w.wait
+  }
+  if (angerWait) {
     log('яма: злость от золота — жду в штреке', { s: Math.round((lastGoldBreak(st) + 33000 - gameClock.now()) / 1000) })
     const why = await waitWatched(session, ctl, Math.min(33000, lastGoldBreak(st) + 33000 - gameClock.now()))
     if (why || ctl.aborted) return null
@@ -1724,6 +1758,9 @@ async function bastion (session, ctl, p: any = {}) {
             }
             minedSinceRetry = false
             st.pitDone = false; st.sealedDone = false
+            // S1f: новый пакет — новая фаза золота. Прежний goldPhaseEnd (конец первого пакета, «сейчас») делал goldOver истинным на
+            // первом же обороте: пакет 2+ не копался ни разу, заход кончался «золото кончилось» при 54 целях шаблона (s1f-B0-1).
+            if (process.env.ND_BATCH_PHASE !== '0') goldPhaseEnd = gameClock.now() + (deadline - gameClock.now()) * 0.6
             st.round++
             log('бартер: следующий пакет золота', { left: st.pred.size, pearls: countOf(bot, 'ender_pearl') })
             continue
@@ -1735,7 +1772,9 @@ async function bastion (session, ctl, p: any = {}) {
       // Бартер между делом: слитков много и пиглины рядом — сделки идут, пока
       // копаем (и разглядывающие золото не злятся от следующего блока).
       if (!st.sealed || !st.sealedState) { if (await tryBarter()) continue }
-      const goldOver = mode === 'barter' || spare() >= goldTarget() || gameClock.now() > goldPhaseEnd
+      // S1f: >= — «фаза кончилась сейчас» (goldPhaseEnd = now) под пошаговой фермой не ждёт сдвига часов: с > цикл без единого await
+      // на таймере крутился вечно (мир ждёт тело) — s1f-D1-1: «игровые часы стоят 90 с» после 16 точек обзора.
+      const goldOver = mode === 'barter' || spare() >= goldTarget() || gameClock.now() >= goldPhaseEnd
       if (goldOver) {
         if (mode === 'gold') break
         // Злость пиглинов от сломанного золота — 600 тиков (30 с): торговать,
@@ -1874,6 +1913,9 @@ async function bastion (session, ctl, p: any = {}) {
       // ломает, лава под шагом — прыжок к полу).
       const w = await walkGoal(session, ctl, new goals.GoalNear(next.x, next.y + 1, next.z, 3), 20000, { dig: true })
       log('обзор', { to: xyz(next), ok: w && w.ok, at: xyz(bot.entity.position.floored()), gold: st.gold.size, chests: st.chestSeen.size, bricks: st.bricks.size })
+      // S1f: не дошёл — соседние кирпичи той же стены (8 бл.) тоже недоступны отсюда: не тратить на них точки обзора (s1f-D1-1:
+      // 13 точек подряд у x 82–86 «ok:false» с одного места, бюджет обзора ушёл). ND_VANTAGE_SKIP=0 — прежнее.
+      if (!(w && w.ok) && process.env.ND_VANTAGE_SKIP !== '0') for (const b of st.bricks.values()) if (b.distanceTo(next) <= 8) st.visited.add(keyOf(b))
     }
     // Добыча бартера, что легла дальше руки (за уступом, в яме) — собрать с копкой.
     if (!st.sealedState) await pickUp(bot, ctl, 10, 20000)
@@ -1894,15 +1936,19 @@ async function bastion (session, ctl, p: any = {}) {
   // Золото по памяти (карта копии мира), до которого не нашлось пути, — не «кончилось»: neF-Pa25-1 02.10 — 4 блока,
   // «штрек: пути нет» к 26 целям, и кампания пометила бастион выработанным при 24 известных.
   const memLeft = [...st.pred.values()].filter(v => v.piece === 'память').length
+  const tplLeft = [...st.pred.entries()].filter(([k, v]) => v.piece !== 'память' && v.piece !== 'видно' && !(st.sealedState && st.sealedState.own && st.sealedState.own.has(k))).length
   let stopped = null
   if (ctl.aborted) stopped = 'прервано'
   else if (st.notRecognized) stopped = 'бастион не узнан с вышек (стены с золотом по шаблону не видны) — в закрытом режиме по двору не хожу'
   else if (done()) stopped = null
   else if (spare() <= 0 && leftGold === 0 && memLeft > 0) stopped = `золото по памяти осталось (${memLeft}), пути к нему нет${st.lastBarter ? `; бартер: ${st.lastBarter}` : ''}`
+  // S1f: цели шаблона (predictGold: тип и поворот бастиона узнаны) остались — не «кончилось» (вслепую кампания по этой фразе
+  // помечала бастион выработанным после первого пакета: s1f-B0-1, 18 слитков при 54 целях шаблона).
+  else if (spare() <= 0 && leftGold === 0 && tplLeft > 0 && process.env.ND_BATCH_PHASE !== '0') stopped = `золото по шаблону осталось (${tplLeft}), заход кончился${st.lastBarter ? `; бартер: ${st.lastBarter}` : ''}`
   else if (spare() <= 0 && leftGold === 0) stopped = `золото кончилось: видимых блоков больше нет${st.lastBarter ? `; бартер: ${st.lastBarter}` : ''}`
   else if (gameClock.now() >= deadline - 20000) stopped = 'время вышло — позови ещё раз, продолжу'
   else if (st.lastBarter) stopped = `бартер встал: ${st.lastBarter}`
   return out(stopped)
 }
 
-module.exports = { approachGold, targetsByBruteHome, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }
+module.exports = { approachGold, targetsByBruteHome, bruteHomeTake, pitAngerWait, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }
