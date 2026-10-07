@@ -203,7 +203,7 @@ test('fortress.hintFlipped: пеленг развернулся > 110° — це
   assert.equal(F.hintFlipped(10, 90), false)
 })
 
-test('fortress.keepBlocks: в Аду меньше 12 строительных — добыть незерак (не чаще раза в минуту); хватает — нет', async () => {
+test('fortress.keepBlocks: в Аду меньше 24 строительных — добыть незерак (не чаще раза в минуту); хватает — нет', async () => {
   const F = require('../src/fortress')
   const A = require('../src/actions')
   const mine0 = A.mine
@@ -213,7 +213,7 @@ test('fortress.keepBlocks: в Аду меньше 12 строительных �
   A.mine = async (_s: any, _c: any, p: any) => { calls++; assert.equal(p.block, 'netherrack'); items[0].count += p.count; return { dug: p.count } }
   try {
     withEnv({ ND_NE_KEEP_BLOCKS: undefined }, () => {})
-    assert.equal(await F.keepBlocks({ bot }, { aborted: false }), 37)
+    assert.equal(await F.keepBlocks({ bot }, { aborted: false }), 53)
     items[0].count = 3
     assert.equal(await F.keepBlocks({ bot }, { aborted: false }), null, 'раз в игровую минуту')
     bot._ndKeepBlocksAt = 0; items[0].count = 30
@@ -240,4 +240,30 @@ test('штрек бастиона: тело на песке душ (y N.88) — 
   const src = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'bastion', 'bastion.ts'), 'utf8')
   assert.match(src, /const me = feet\(\)/, 'старт плана — feet()')
   assert.match(src, /SL\.bodyCells\(bot\)\[0\]/)
+})
+
+test('тактика: тело в своём окопе охоты — стрелок вдали (скелет в 12 бл.) охоту не рвёт; вне окопа или вплотную — рвёт (ND_FOXHOLE_HOLD=0 — прежнее)', () => {
+  const { EventEmitter } = require('node:events')
+  const { observeTactics } = require('../src/tactics/minecraft')
+  const gameClock = require('../src/game-clock')
+  const session = (foe: string, dist: number, inFox: boolean) => {
+    const bot: any = new EventEmitter()
+    bot.version = '1.21.11'; bot.health = 20; bot.food = 20
+    bot.inventory = { slots: [], items: () => [{ name: 'iron_sword', count: 1 }] }
+    bot.registry = { foodsByName: {}, entitiesByName: {}, effectsByName: {}, blocksByName: {} }
+    bot.entity = { id: 1, position: new Vec3(.5, 64, .5), height: 1.8, eyeHeight: 1.62, onGround: true, effects: {}, metadata: [], yaw: 0, pitch: 0 }
+    bot.entities = { 5: { id: 5, name: foe, type: 'hostile', position: new Vec3(dist + .5, 64, .5), height: 1.99, width: 0.6, metadata: [], isValid: true, equipment: [] } }
+    bot.game = { dimension: 'the_nether', gameMode: 'survival' }
+    bot.blockAt = (p: any) => ({ name: p.y < 64 ? 'netherrack' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty', position: p.floored(), shapes: p.y < 64 ? [[0, 0, 0, 1, 1, 1]] : [] })
+    bot._ndInFoxhole = () => inFox
+    return { bot, current: { name: 'pearls', params: { style: 'foxhole' } }, reflex: null, bus: { emit: () => {} }, tempo: null,
+      autopilot: { lastHurt: { at: gameClock.now(), sourceId: 5, byMob: true, type: 'arrow', dimension: 'the_nether' } } }
+  }
+  withEnv({ ND_FOXHOLE_HOLD: undefined }, () => {
+    assert.equal(observeTactics(session('skeleton', 12, true)).protectedEncounter, true, 'в окопе, скелет в 12 — охота держит')
+    assert.equal(observeTactics(session('skeleton', 12, false)).protectedEncounter, false, 'вне окопа — тактика')
+    assert.equal(observeTactics(session('skeleton', 3, true)).protectedEncounter, false, 'вплотную — тактика')
+    assert.equal(observeTactics(session('zombified_piglin', 12, true)).protectedEncounter, false, 'не стрелок — тактика')
+  })
+  withEnv({ ND_FOXHOLE_HOLD: '0' }, () => assert.equal(observeTactics(session('skeleton', 12, true)).protectedEncounter, false))
 })

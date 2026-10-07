@@ -36,13 +36,32 @@ async function flintGrind (session, ctl, { max = 40, timeoutSeconds = 90 }: any 
   const deadline = gameClock.now() + Math.max(5, Math.min(300, timeoutSeconds)) * 1000
   const count = name => bot.inventory.items().filter(i => i.name === name).reduce((n, i) => n + i.count, 0)
   const flint0 = count('flint')
-  const spot = grindSpot(bot)
-  if (!spot) return { ok: false, tries: 0, flint: flint0, stopped: 'некуда поставить гравий рядом (нужен твёрдый пол и воздух у ног)' }
+  let spot = grindSpot(bot)
   const digVisible = require('./cast')._in.digVisible
+  // Места нет (колодец 1×1, тупик штрека — S8d, s8d-b-v1-3: «некуда поставить» ×6 подряд): вырыть нишу сбоку — клетку у ног и над ней
+  // (видимые грани стенки), пол под ней остаётся. ND_GRIND_NICHE=0 — прежнее.
+  if (!spot && process.env.ND_GRIND_NICHE !== '0') {
+    const feet = bot.entity.position.floored()
+    for (const [dx, dz] of SIDES) {
+      const c = feet.offset(dx, 0, dz)
+      const cells = [c, c.offset(0, 1, 0)].map(p => bot.blockAt(p))
+      const under = bot.blockAt(c.offset(0, -1, 0))
+      if (!under || under.boundingBox !== 'block' || FLUID.test(under.name) || cells.some(b => !b || FLUID.test(b.name) || /bedrock|obsidian/.test(b.name))) continue
+      if (SIDES.some(([ex, ez]) => [0, 1].some(dy => FLUID.test((bot.blockAt(c.offset(ex, dy, ez)) || {}).name || '')))) continue
+      try {
+        for (const b of cells) if (b && !isAir(b)) { await equipBestTool(bot, b); await digVisible(bot, b, 4000) }
+      } catch { continue }
+      spot = grindSpot(bot)
+      if (spot) break
+    }
+  }
+  if (!spot) return { ok: false, tries: 0, flint: flint0, stopped: 'некуда поставить гравий рядом (нужен твёрдый пол и воздух у ног)' }
   let tries = 0
   let why = null
   while (tries < max && count('flint') === flint0 && count('gravel') > 0 && gameClock.now() < deadline && !ctl.aborted) {
     tries++
+    // После подбора ходом тело ушло от клетки — новая клетка у ног.
+    if (bot.entity.position.distanceTo(spot.offset(0.5, 0.5, 0.5)) > 3.5) { const s2 = grindSpot(bot); if (s2) spot = s2 }
     const before = count('gravel')
     const r = await placeBlockAt(bot, spot, { item: 'gravel', honest: true })
     const g = bot.blockAt(spot)
@@ -51,6 +70,12 @@ async function flintGrind (session, ctl, { max = 40, timeoutSeconds = 90 }: any 
     // Подбор: дроп падает в соседнюю клетку — подтянется за несколько тиков.
     const t0 = gameClock.now()
     while (gameClock.now() - t0 < 1500 && count('flint') === flint0 && count('gravel') < before && !ctl.aborted) await gameClock.sleep(50)
+    // Дроп отлетел дальше досягаемости подбора (S8d, s8d-a-v1-3: 22 попытки — 10 гравия ушли на землю, «гравий кончился» без
+    // кремня) — подобрать ходом, пока лежит рядом. ND_GRIND_PICKUP=0 — прежнее.
+    if (count('flint') === flint0 && count('gravel') < before && process.env.ND_GRIND_PICKUP !== '0' && !ctl.aborted) {
+      try { await require('./actions').collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 3000, appearMs: 300 }) } catch {}
+      try { bot.pathfinder.setGoal(null) } catch {}
+    }
   }
   const flint = count('flint')
   return { ok: flint > flint0, tries, flint, gravel: count('gravel'), ...(flint > flint0 ? {} : { stopped: why || (count('gravel') ? 'кремень не выпал' : 'гравий кончился') }) }

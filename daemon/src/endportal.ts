@@ -743,7 +743,12 @@ async function goAround (session, ctl, target, { deadline, far = 20, fromHere = 
     }
   }
   if (!from) return { ok: false, why: `сухой земли (без воды в 2 блоках) в ${far} блоках нет` }
-  const avoidHere = (why): any => { (session._wetAvoid || (session._wetAvoid = [])).push({ x: from.x, z: from.z }); return { ok: false, from: xyz(from), why, wet: true, dug: 0 } }
+  const avoidHere = (why): any => {
+    (session._wetAvoid || (session._wetAvoid = [])).push({ x: from.x, z: from.z })
+    // Залитое место не продолжать из своей шахты (s5e-I-8 07.10: «вода со всех сторон» ×N в той же шахте → утонул).
+    if (session._seaDig && session._seaDig.key === `${target.x},${target.z}`) session._seaDig.failed = true
+    return { ok: false, from: xyz(from), why, wet: true, dug: 0 }
+  }
   if (!fromHere) {
     session._seaDig = { key: `${target.x},${target.z}`, from: xyz(from) }
     const w = await travelXZ(bot, ctl, from.x, from.z, { range: 0, retries: 2, deadline })
@@ -761,7 +766,10 @@ async function goAround (session, ctl, target, { deadline, far = 20, fromHere = 
   const top = Number.isFinite(fromY) ? fromY : start.y
   const bottom = lowestLiquid(bot, target.x, target.z, top)
   const down = await shaftToBricks(session, ctl, { minY: Math.min(top - 10, bottom !== null ? bottom - 4 : Infinity), deadline })
-  if ((down as any).wet) return { ...avoidHere(`спуск у сухой клетки залило: ${down.stopped}`), dug: down.dug || 0 }
+  if ((down as any).wet) {
+    if ((down as any).drowning || require('./movement').inWater(bot)) { try { await require('./survival/surface-body').surface(session, ctl, { timeoutSeconds: 40, preferPillar: true }) } catch {} }
+    return { ...avoidHere(`спуск у сухой клетки залило: ${down.stopped}`), dug: down.dug || 0 }
+  }
   let dug = down.dug || 0
   if (down.found) return { ok: true, from: xyz(from), dug, bricks: down }
   if (down.stopped && !/кирпича так и не встретил/.test(down.stopped)) return { ok: false, from: xyz(from), dug, why: down.stopped }
@@ -1324,7 +1332,7 @@ async function goStronghold (session, ctl, p: any = {}) {
   // Начатый обход воды над лестницей (шахта у сухой клетки, штрек под дном) — продолжить отсюда, а не идти поверху к лестнице
   // (s5e-P-2 07.10: после обрыва тактикой каждый вызов — walkOrBridge из своей шахты, «хода нет» ×N).
   const sd = session._seaDig
-  if (sd && sd.key === `${corner.x + 4},${corner.z + 4}` && Math.hypot(bot.entity.position.x - sd.from.x - 0.5, bot.entity.position.z - sd.from.z - 0.5) <= 10 &&
+  if (sd && !sd.failed && sd.key === `${corner.x + 4},${corner.z + 4}` && Math.hypot(bot.entity.position.x - sd.from.x - 0.5, bot.entity.position.z - sd.from.z - 0.5) <= 10 &&
     bot.entity.position.y < sd.from.y - 1 && !ctl.aborted) {
     const st = await goAround(session, ctl, { x: corner.x + 4, z: corner.z + 4 }, { deadline, far: 96, fromHere: true, fromY: sd.from.y })
     walks.push({ seaResume: sd.from, ok: st.ok, why: st.why, dug: st.dug })

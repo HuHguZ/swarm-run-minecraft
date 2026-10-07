@@ -2040,6 +2040,22 @@ async function holdSpawner (session, ctl, ctx) {
       // стеной): другая точка боя с видом на куб спавна. Замер 8: у края
       // помоста трое в 3–7 блоках, не видно ни одного, 2 стержня за 3 минуты.
       if (vis.length || !blazes.length) lastVisAt = now
+      // S1f (вслепую — спавнер не увиден, бой отдан по видимым ифритам): ни одного не видно 6 с — подойти к ближнему одиночке за стеной
+      // (ценой, как ниже: без FR — только к одиночке и при хп ≥ 16), а не стоять 400 с («выбор vis 0» — s1f-I1-2, 0 убийств).
+      // ND_BLAZE_NOSP_APPROACH=0 — прежнее.
+      if (!bunker && !spawner && blazes.length && now - lastVisAt > 6000 && quiet > 1500 && approaches < 6 && process.env.ND_BLAZE_NOSP_APPROACH !== '0') {
+        const hidden: any = blazes.slice().sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
+        const crowd = blazes.filter((e: any) => e !== hidden && e.position.distanceTo(hidden.position) < 6).length
+        if (fireproof() ? (bot.health ?? 0) >= 12 : crowd === 0 && (bot.health ?? 0) >= 16) {
+          approaches++
+          out.approaches = approaches
+          setPhase('к ифриту за стеной (спавнер не виден)')
+          log('к ифриту за стеной без спавнера', { n: approaches, to: xyz(hidden.position), crowd })
+          await walkNear(bot, ctl, floorUnder(bot, hidden.position) || hidden.position.floored(), 2, 6000)
+          lastVisAt = gameClock.now()
+          continue
+        }
+      }
       if (!bunker && spawner && blazes.some((e : any) => e.position.distanceTo(bot.entity.position) < 16) && now - lastVisAt > 6000 && quiet > 1500 && reposts < 12) {
         await setShield(false)
         const np = choosePost(bot, spawner, home)

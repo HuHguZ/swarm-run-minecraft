@@ -42,6 +42,16 @@ const LOOT = {
 }
 // Работа на месте, с (без дороги).
 const WORK = { wood: 90, stone: 90, ruin: 45, village: 80, golem: 60, ship: 150, treasure: 120, ore: 40, smelt: 15, water: 40, food: 60, castSky: 90, castCave: 200, enter: 30 }
+// Цена смерти в секундах — как у графа (72000 тиков = 1 ч игры).
+const DEATH_S = 3600
+// Риск голема деревни (S8d, замечание проверки S8c «д»): по всем сериям S8–S8c (farm/results/s8*, 706 прогонов) деревню с
+// големом навещали в 49 прогонах, убит голем 35 раз из 85 вызовов, смертей «slain by Iron Golem» — 5 (удар голема на normal
+// 7.5–21.5, два удара — смерть). Лаплас: (5 + 0.5) / (49 + 1) ≈ 0.11 на заход. К цене деревни — риск × цена смерти, а не запрет.
+// ND_ROUTE_GOLEM_RISK=0 — без риска (прежняя цена).
+const GOLEM_DEATH_P = 0.11
+// Риск копки железа (то, с чем голем сравнивается): s8c вслепую (78 прогонов s8c-a…g-v) — 8 смертей на шагах железа (ironStage 5,
+// MineIron 2, iron 1): (8 + 0.5) / (78 + 1) ≈ 0.11.
+const MINE_DEATH_P = 0.11
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z)
 const asXZ = p => (Array.isArray(p) ? { x: p[0], z: p[1] } : p)
@@ -424,7 +434,8 @@ function plan (info, opts: any = {}) {
     const iron = (golem || outside ? LOOT.golem.iron : 0) + smith.reduce((n, c) => n + (/weaponsmith/.test(c.table) ? 1.4 : /toolsmith/.test(c.table) ? 1.0 : 1.2), 0)
     // Место — у голема (по скану), иначе у кузницы, иначе точка seedtool.
     const at = golem ? { x: golem.x, z: golem.z } : smith[0] ? { x: smith[0].x, z: smith[0].z } : { x: info.village.x, z: info.village.z }
-    if (there && iron > 0) cand.push({ id: 'village', kind: 'village', at, ...(golem ? { y: golem.y } : {}), work: WORK.village + WORK.golem, gives: { iron, ironMin: golem || outside ? LOOT.golem.ironMin : 0, food: 6, beds: true, smith: smith.map(c => c.table) } })
+    const golemRisk = (golem || outside) && process.env.ND_ROUTE_GOLEM_RISK !== '0' ? Math.round(GOLEM_DEATH_P * DEATH_S) : 0
+    if (there && iron > 0) cand.push({ id: 'village', kind: 'village', at, ...(golem ? { y: golem.y } : {}), work: WORK.village + WORK.golem, risk: golemRisk, gives: { iron, ironMin: golem || outside ? LOOT.golem.ironMin : 0, food: 6, beds: true, smith: smith.map(c => c.table) } })
   }
   if (info.treasure && ok('treasure')) {
     const ch = chestOf(/^buried_treasure$/, info.treasure, 24)
@@ -493,13 +504,14 @@ function plan (info, opts: any = {}) {
   const structuresFirst = process.env.ND_ROUTE_STRUCTURES_FIRST !== '0'
   const ironCand = cand.filter(c => c.kind !== 'ruin' && c.d <= (c.kind === 'ore' ? 160 : 360))
     .sort((a, b) => (structuresFirst ? Number(a.kind === 'ore') - Number(b.kind === 'ore') : 0) ||
-      a.cost / Math.max(0.5, a.gives.iron) - b.cost / Math.max(0.5, b.gives.iron))
+      (a.cost + (a.risk || 0)) / Math.max(0.5, a.gives.iron) - (b.cost + (b.risk || 0)) / Math.max(0.5, b.gives.iron))
   let expect = 0
   let sure = 0
   const need = Math.max(0, iron)
   for (const c of ironCand) {
     if (expect >= need && sure >= Math.min(need - 1, 2)) break
-    if (c.cost > costCap || (c.kind !== 'ore' && c.cost > structureLeft)) continue
+    // Цена с риском (голем) — против копки с её риском (MINE_DEATH_P); бюджет поиска построек — только время.
+    if (c.cost + (c.risk || 0) > costCap + (c.risk ? Math.round(MINE_DEATH_P * DEATH_S) : 0) || (c.kind !== 'ore' && c.cost > structureLeft)) continue
     chosen.push(c)
     if (c.kind !== 'ore') structureLeft -= c.cost
     expect += c.gives.iron
@@ -523,6 +535,10 @@ function plan (info, opts: any = {}) {
     // (ND_ROUTE_SCOUTIRON=1 — вкл.): s8c-d/e — 0 построек из 3 разведок по 150 с, осмотр со столба (lookout, 128 бл.) их уже видит.
     if (ok('mine')) steps.push({ id: 'mine', kind: 'mine', budget: 300, why: `железа ${needNow} не хватает — видимая руда в 48` })
     else if (info.map === 'blind' && ok('scoutIron') && process.env.ND_ROUTE_SCOUTIRON === '1') steps.push({ id: 'scoutIron', kind: 'scoutIron', budget: 150, why: 'построек не видно — разведка (до 150 с) до копки' })
+    // Вслепую (S8d): как игрок — колодцем вниз до пещеры, войти в неё и брать руду в её стенах по виду (eyes), идя по пещере;
+    // штреки 1×2 на y 16 (этап железа) — запасной путь. s8c-g (32 прогона вслепую): штреки 169 с/прогон, колодец выходил в
+    // пещеру 31 раз из 32 и пещеру пропускал (из колодца 1×1 её не видно). ND_ROUTE_CAVE=0 — без шага.
+    else if (info.map === 'blind' && ok('cave') && process.env.ND_ROUTE_CAVE !== '0') steps.push({ id: 'cave', kind: 'cave', budget: 240, why: `железа ${needNow} не хватает — пещера: руда в стенах по виду` })
     else if (ok('ironStage')) steps.push({ id: 'ironStage', kind: 'ironStage', budget: 600, why: `железа ${needNow} не хватает — этап железа (y 16)` })
     else steps.push({ id: 'giveup', kind: 'giveup', budget: 0, why: 'железа нет и не нашлось — дальше обычные этапы' })
   } else if (short && ok('mine') && !ordered.length) steps.push({ id: 'mine', kind: 'mine', budget: 300, why: `железа ожидается ${Math.round(expect * 10) / 10} из ${need} — руда по пути` })
@@ -607,7 +623,7 @@ function plan (info, opts: any = {}) {
 
 function whyOf (c) {
   if (c.kind === 'ruin') return `сундук руин: огонь ${Math.round(LOOT.ruin.lighter * 100)} %, обсидиан ~${LOOT.ruin.obsidian}, ${c.d} м`
-  if (c.kind === 'village') return `деревня ${c.d} м: голем 3–5 железа, сено, кровати, сундуки`
+  if (c.kind === 'village') return `деревня ${c.d} м: голем 3–5 железа, сено, кровати, сундуки${c.risk ? ` (риск голема ${c.risk} с против копки ${Math.round(MINE_DEATH_P * DEATH_S)} с)` : ''}`
   if (c.kind === 'treasure') return `клад ${c.d} м: железо ~9, рыба`
   if (c.kind === 'ship') return `корабль ${c.d} м: сундук сокровищ ~8 железа (если есть), еда`
   if (c.kind === 'ore' && c.buried) return 'жила железа в ' + c.depth + ' бл. под землёй, ' + c.d + ' м: колодец сверху, ~' + Math.round(c.gives.iron * 10) / 10 + ' железа'
@@ -665,8 +681,14 @@ function bookStep (id: string, ok: unknown, book: { done: Set<string>, fails: Ma
   const n = (book.fails.get(id) || 0) + 1
   book.fails.set(id, n)
   if (id === 'smelt') return n >= 3 ? 'break' : null
-  if (n >= 2 || /^(ruin|village|treasure|ship|ore:|dig:|mine|ironStage|lava:|scoutLava|lookout|scoutIron)/.test(id)) book.avoid.add(id)
+  if (n >= 2 || /^(ruin|village|treasure|ship|ore:|dig:|mine|ironStage|lava:|scoutLava|lookout|scoutIron|cave)/.test(id)) book.avoid.add(id)
   return null
+}
+
+// Шаг, N раз сорванный тактикой (S8d): постройка/разведка/вода — угроза у места постоянная, считать провалом; железо, кремень,
+// литьё, вход — нет (их прерывают обычные мобы штрека/ночи, а без них маршрута нет).
+function interruptCap (kind: string, n: number, max = 3): boolean {
+  return max > 0 && n >= max && /^(ruin|village|treasure|ship|water|cave|lookout|scoutLava|scoutIron)$/.test(kind)
 }
 
 // Копка/спуск маршрута при низком хп — цена против лечения, а не порог (S8b 07.10, замечание проверки д). Хвост потерь хп за
@@ -697,14 +719,76 @@ function digRefuse (hp: number, canEat: boolean): { refuse: boolean, riskT: numb
 // остатка (digRefuse); одиночный зомби при 20 хп копке не мешает, шипящий крипер или толпа — сперва ответ угрозе. Вода: копка
 // с глазами в воде в 5 раз медленнее, не на земле — ещё /5 (Player.getDestroySpeed, jar 1.21.11) — ~10 с копки станут 50+,
 // выйти на берег ~8 с: дешевле выйти; спуск goto — не копка, в воде идёт как есть. Завалило — физически: сначала откопаться.
-const WATER_LEAVE_S = 8, DIG_S = 10
-function routeActRisk ({ hp, canEat, foeDamage = 0, inWater = false, digging = false, buried = false }: { hp: number, canEat: boolean, foeDamage?: number, inWater?: boolean, digging?: boolean, buried?: boolean }) {
+// S8d (замечание проверки S8c «г»): в воде — цена, а не константы (было 40 > 8 — копка в воде отклонялась всегда). Лишнее время
+// копки = блоков × 0.75 с (каменная кирка: камень 0.6 с + шаг) × 4 (×5 в воде); выход = 2 с + до берега / 2.2 м/с (плавание
+// ~2.2 м/с, jar: в воде 0.02/тик ускорения при сопротивлении 0.8). Берег не измерен — 10 бл., объём не назван — 10 блоков.
+const DIG_BLOCK_S = 0.75, SWIM_MS = 2.2
+function waterDigPrice (digBlocks?: number, shoreDist?: number) {
+  const blocks = Number.isFinite(digBlocks) && digBlocks > 0 ? digBlocks : 10
+  const shore = Number.isFinite(shoreDist) && shoreDist >= 0 ? shoreDist : 10
+  return { extraS: Math.round(blocks * DIG_BLOCK_S * 4 * 10) / 10, leaveS: Math.round((2 + shore / SWIM_MS) * 10) / 10 }
+}
+function routeActRisk ({ hp, canEat, foeDamage = 0, inWater = false, digging = false, buried = false, digBlocks, shoreDist }: { hp: number, canEat: boolean, foeDamage?: number, inWater?: boolean, digging?: boolean, buried?: boolean, digBlocks?: number, shoreDist?: number }) {
   if (buried) return { refuse: true, why: 'завалило — сперва откопаться' }
   const hpEff = Math.max(0, hp - (foeDamage || 0))
   const r = digRefuse(hpEff, canEat)
   if (r.refuse) return { ...r, refuse: true, why: `хп ${Math.round(hp)}${foeDamage ? ` − урон врагов ${Math.round(foeDamage)}` : ''}: риск ${r.riskT} т > лечение ${r.healT} т` }
-  if (inWater && digging && DIG_S * 4 > WATER_LEAVE_S) return { ...r, refuse: true, why: `в воде: копка ×5 (+${DIG_S * 4} с) дороже выхода (~${WATER_LEAVE_S} с)` }
+  if (inWater && digging) {
+    // ND_ROUTE_WATERPRICE=0 — прежнее: копка в воде — всегда отказ (константы 40 > 8).
+    const w = process.env.ND_ROUTE_WATERPRICE === '0' ? { extraS: 40, leaveS: 8 } : waterDigPrice(digBlocks, shoreDist)
+    if (w.extraS > w.leaveS) return { ...r, refuse: true, why: `в воде: копка ×5 (+${w.extraS} с) дороже выхода (~${w.leaveS} с)` }
+  }
   return { ...r, refuse: false, why: '' }
 }
+// Объём копки действия (блоков) — для цены копки в воде: mine count, dig_down depth (лесенка — 3 блока на ступень), tunnel
+// length × 2, mine_seen — жила ~4.
+function digBlocksOf (method: string, params: any = {}): number {
+  if (method === 'mine') return Math.max(1, Number(params.count) || 1)
+  if (method === 'dig_down') return Math.max(1, Number(params.depth) || 5) * (params.mode === 'stairs' ? 3 : 1)
+  if (method === 'tunnel') return Math.max(1, Number(params.length) || 8) * (params.direction === 'down' || params.direction === 'up' ? 1 : 2)
+  if (method === 'mine_seen') return 4
+  return 10
+}
 
-module.exports = { seenInfo, routeActRisk, mapLevel, structOnly, digRefuse, digRiskTicks, healTicks, bookStep, foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }
+// Ночной отрезок разведки поверху (S8d, замечание «г»: scoutLava/scoutIron ночью — жёсткий отказ → цена). Цена = время отрезка +
+// риск × цена смерти. Риск ночного отрезка поверху — априор 0.05 при 20 хп без щита (S8c: смерти вслепую 25 %, из них половина —
+// ночью поверху за 3–4 мин ходьбы ≈ 6 отрезков), ×20/хп, щит ×0.6; днём — 0.005. Подземная альтернатива (лестница и штреки со
+// слухом) — 150 с и риск 0.02 (пещеры). Возвращает { surface: цена поверху, under: цена под землёй, pick }.
+function scoutLegPrice ({ night, hp = 20, shield = false, legS = 60 }: { night: boolean, hp?: number, shield?: boolean, legS?: number }) {
+  const risk = night ? Math.min(0.5, 0.05 * 20 / Math.max(1, hp) * (shield ? 0.6 : 1)) : 0.005
+  const surface = Math.round(legS + risk * DEATH_S)
+  const under = Math.round(150 + 0.02 * DEATH_S)
+  return { surface, under, risk: Math.round(risk * 1000) / 1000, pick: surface <= under ? 'surface' : 'under' }
+}
+
+// Лава в памяти глаз → озёра (S8d). Клетки связаны, если ближе 2 бл. (Чебышёв); у кластера «зеркало» — число клеток на самом
+// людном уровне y: у озера их много, у лавопада из одного источника — по одной-две на уровень. Литьё одним ведром берёт по
+// источнику на блок рамы (cast1: до 10), у одиночной лавы «лавы в досягаемости всего 1» — castSky вслепую 0/5 в s8c-g.
+// Вход: [{x,y,z}]; выход: [{x,y,z — клетка зеркала ближе к его центру, n — клеток, level — клеток на уровне, sky — y ≥ 58}],
+// людные первыми.
+function lavaLakes (cells: { x: number, y: number, z: number }[]) {
+  const pts = (cells || []).filter(c => c && Number.isFinite(c.x) && Number.isFinite(c.y) && Number.isFinite(c.z)).slice(0, 800)
+  const parent = pts.map((_, i) => i)
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i] } return i }
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i], b = pts[j]
+      if (Math.abs(a.x - b.x) <= 2 && Math.abs(a.y - b.y) <= 2 && Math.abs(a.z - b.z) <= 2) parent[find(i)] = find(j)
+    }
+  }
+  const groups = new Map()
+  pts.forEach((p, i) => { const k = find(i); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p) })
+  const out = []
+  for (const g of groups.values()) {
+    const byY = new Map()
+    for (const p of g) byY.set(p.y, (byY.get(p.y) || 0) + 1)
+    const [ly, level] = [...byY.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]
+    const mirror = g.filter(p => p.y === ly)
+    const cx = mirror.reduce((n, p) => n + p.x, 0) / mirror.length, cz = mirror.reduce((n, p) => n + p.z, 0) / mirror.length
+    const c = mirror.sort((a, b) => Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz))[0]
+    out.push({ x: c.x, y: c.y, z: c.z, n: g.length, level, sky: c.y >= 58 })
+  }
+  return out.sort((a, b) => b.level - a.level || b.n - a.n)
+}
+
+module.exports = { seenInfo, interruptCap, routeActRisk, waterDigPrice, digBlocksOf, scoutLegPrice, lavaLakes, GOLEM_DEATH_P, MINE_DEATH_P, DEATH_S, mapLevel, structOnly, digRefuse, digRiskTicks, healTicks, bookStep, foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }

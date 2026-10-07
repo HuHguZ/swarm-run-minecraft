@@ -215,7 +215,10 @@ async function act (method, params: any = {}, again = 0) {
     (method === 'fight' && !/^(food|resource)$/.test(params.purpose || '')) ||
     // Злой голем (ударен, не убит) — уже защита, не добыча: бюджет шага его не обрывает (S8c, s8c-a-v1-1: голем жив после 2 ударов
     // по бюджету построек 73 с, тело ушло копать — убито им через 2 с).
-    (method === 'golem' && params.angry === true)
+    // S8d (замечание «д»): злой голем вне бюджета — 3 смерти в s8c-g-s (бой шёл, пока не убьёт тело); теперь маршрут уходит от
+    // злого голема (goto retreat вне бюджета), а бой с ним — в бюджете шага. ND_ROUTE_GOLEM_FREE=1 — прежнее.
+    (method === 'golem' && params.angry === true && process.env.ND_ROUTE_GOLEM_FREE === '1') ||
+    (method === 'goto' && params.retreat === true)
   if (stage === 'route' && routeDeadline && process.env.ND_ROUTE_DEADLINE !== '0' && !routeSafety) {
     const left = Math.floor((routeDeadline - gameClock.now()) / 1000)
     if (left < 1) throw Object.assign(new Error(`ROUTE_BUDGET: шаг вышел за бюджет (${method})`), { routeBudget: true })
@@ -236,7 +239,10 @@ async function act (method, params: any = {}, again = 0) {
       const hpBad = process.env.ND_ROUTE_HPFLEX === '0' ? hp < 13 : refuse
       // Враги и вода — цена и риск (S8c, route.routeActRisk; ND_ROUTE_RISK=0 — прежние запреты «врагов N», «в воде»).
       const foeDamage = sit.foes ? Number(sit.fight && sit.fight.expectedDamage) || 0 : 0
-      const rr = process.env.ND_ROUTE_RISK === '0' ? null : routeMod.routeActRisk({ hp, canEat, foeDamage, inWater: !!sit.inWater, digging: mining, buried: !!sit.buried })
+      // В воде — цена копки от её объёма и расстояния до берега (S8d, замечание «г»): берег — лучи глаз вниз-вбок.
+      const wet = !!sit.inWater && mining && process.env.ND_ROUTE_RISK !== '0'
+      const rr = process.env.ND_ROUTE_RISK === '0' ? null : routeMod.routeActRisk({ hp, canEat, foeDamage, inWater: !!sit.inWater, digging: mining, buried: !!sit.buried,
+        ...(wet ? { digBlocks: routeMod.digBlocksOf(method, params), shoreDist: await shoreDistance() } : {}) })
       const why = rr ? (process.env.ND_ROUTE_HPFLEX === '0' && hpBad ? `хп ${Math.round(hp)}` : rr.why)
         : hpBad ? `хп ${Math.round(hp)}${process.env.ND_ROUTE_HPFLEX === '0' ? '' : `: риск ${riskT} т > лечение ${healT} т`}` : sit.foes ? `врагов ${sit.foes}` : sit.inWater ? 'в воде' : sit.buried ? 'завалило' : ''
       if (!why && (hp < 13 || sit.foes)) log(`МАРШРУТ хп ${Math.round(hp)}${sit.foes ? `, врагов ${sit.foes} (урон ~${foeDamage})` : ''}: ${method} — риск ${rr ? rr.riskT : riskT} т ≤ лечение ${rr ? rr.healT : healT} т`)
@@ -322,10 +328,11 @@ async function act (method, params: any = {}, again = 0) {
     return r
   }
   if (dim() === 'overworld' && r.detail) {
-    const dugInto = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String(r.detail.stopped || ''))
+    // Лава из строки стопа копки — только видимая/слышимая (stopLava, S8d: чутьё штрека может лишь отказать копать).
+    const dugInto = !(Array.isArray(r.detail.blocks) && r.detail.blocks.some(b => b && b.name === 'lava')) && !(r.detail.found === 'lava') ? await stopLava(r) : null
     const seenLava = (Array.isArray(r.detail.blocks) ? r.detail.blocks : []).find(b => b && b.name === 'lava') ||
       (r.detail.found === 'lava' && r.detail.at ? { nearest: r.detail.at } : null) ||
-      (dugInto ? { nearest: { x: +dugInto[1], y: +dugInto[2], z: +dugInto[3] } } : null)
+      (dugInto ? { nearest: dugInto } : null)
     const closer = q => OW_DEEP && !!known.lava && !!state.pos && Math.hypot(q.x - state.pos.x, (q.y ?? y()) - state.pos.y, q.z - state.pos.z) + 8 <
       Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? y()) - state.pos.y, known.lava.z - state.pos.z)
     if (seenLava && seenLava.nearest && (!known.lava || closer(seenLava.nearest))) {
@@ -1361,12 +1368,12 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
   // short — короткий спуск маршрута к лаве (≤ 24 бл.): запас дерева на кирки под землёй не нужен (s8-r2-9: reserve → lumber 6
   // брёвен за 109 с перед спуском на 13).
   if (!(short && y() - toY <= 24 && have(PICK_STONE))) await reserve()
-  const lavaStop = r => {
+  const lavaStop = async r => {
     if (!stopAtLava) return false
-    const m = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String((r && r.detail && r.detail.stopped) || ''))
-    if (!m) return false
-    descendLava = { x: +m[1], y: +m[2], z: +m[3] }
-    log(`спуск: лава у ${m[1]},${m[2]},${m[3]} — её и надо, спуск кончаю на y ${Math.round(y())}`)
+    const q = await stopLava(r)
+    if (!q) return false
+    descendLava = q
+    log(`спуск: лава у ${q.x},${q.y},${q.z} — её и надо, спуск кончаю на y ${Math.round(y())}`)
     return true
   }
   let surfaceWet = 0
@@ -1387,7 +1394,7 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
       if (OW_DEEP && shTop && shSurface && sh.detail && (sh.detail.descended || 0) >= 10 && sh.detail.depth && sh.detail.depth.x === shTop.x && sh.detail.depth.z === shTop.z) {
         surfaceShaft = { x: shTop.x, z: shTop.z, top: shTop.y, bottom: sh.detail.depth.y }
       }
-      if (lavaStop(sh)) return
+      if (await lavaStop(sh)) return
       if (OW_DEEP && /пустота|пещер/.test(String((sh.detail && sh.detail.stopped) || ''))) {
         const o = await act('observe', { radius: 48 })
         if (!cavesFoes(o)) {
@@ -1444,7 +1451,7 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
       stairsDepth = 6
     }
     const d = await act('dig_down', { mode: 'stairs', depth: Math.min(stairsDepth, y() - toY), torchEvery: have('torch') ? 8 : 0, direction: dirs[i % 4], timeoutSeconds: 300 })
-    if (lavaStop(d)) return
+    if (await lavaStop(d)) return
     if (await mobInTheWay(d)) continue
     if (died) return
     if (d.detail && ((d.detail.dug ?? 0) >= 3 || (d.detail.steps ?? 0) >= 2) && !d.detail.stopped) continue
@@ -2027,7 +2034,10 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < 2) ||
       await act('sleep', { mode: 'spawn', why: 'у шахты за железом' })
     }
   }
-  if (ironNow() < want && y() > 24 && !(OW_DEEP && woodNow() >= 6)) { await sense(); if (sit.surface && !sit.night) await lumber(8) }
+  // Дерева на глубину: маршруту хватает 4 (плавка ~5 слитков — 4 доски, палки на кирку/факелы — одно бревно); s8c-g: лесоповал перед
+  // спуском при 4–5 брёвнах — 43 с/прогон. ND_ROUTE_IRONWOOD=0 — прежние 6.
+  const woodFloor = process.env.ND_ROUTE === '1' && stage === 'route' && process.env.ND_ROUTE_IRONWOOD !== '0' ? 4 : 6
+  if (ironNow() < want && y() > 24 && !(OW_DEEP && woodNow() >= woodFloor)) { await sense(); if (sit.surface && !sit.night) await lumber(8) }
   if (OW_DEEP && !known.portal && ironNow() < want && y() > 24 && foodUnits() < FOOD_STOCK + 2) await quickHunt()
   if (OW_DEEP && !known.portal && ironNow() < want && y() > 24 && !skyLavaSeen) await surfaceLavaSurvey()
   if (OW_DEEP && !known.portal && ironNow() < want && y() > 24 && !have('water_bucket')) {
@@ -2134,7 +2144,10 @@ async function mineSeenAll (block, maxDist = 24) {
 const ironToSmelt = () => {
   if (!(OW_DEEP && !known.portal)) return Infinity
   const noShield = !have('shield') && !(state.offHand && /shield/.test(JSON.stringify(state.offHand)))
-  const need = 3 * Math.max(0, 2 - have(/bucket$/)) + (lighter() ? 0 : 1) + (noShield ? 1 : 0)
+  // Маршрут с литьём одним ведром (route.BUCKETS 1) — слитков на одно ведро, а не на два (S8d: s8c-g плавка 8 слитков, 52 с/прогон
+  // в этапе железа при нужде 5). ND_ROUTE_SMELTB=0 — прежние 2 ведра.
+  const wantB = process.env.ND_ROUTE === '1' && routeMod && process.env.ND_ROUTE_SMELTB !== '0' ? routeMod.BUCKETS() : 2
+  const need = 3 * Math.max(0, wantB - have(/bucket$/)) + (lighter() ? 0 : 1) + (noShield ? 1 : 0)
   return Math.max(0, need - have('iron_ingot'))
 }
 async function smeltAll (from, into, { fetchCoal = false, max = Infinity } = {}) {
@@ -2335,6 +2348,45 @@ async function naturalCast () {
 }
 
 let heardLava = null
+// S8d: до берега по горизонтали — лучи глаз (perceive surface) вниз-вбок по 8 сторонам: первая непрозрачная клетка, к которой
+// луч шёл не сквозь воду, — суша. Нет такой в 24 бл. — 20.
+async function shoreDistance () {
+  let best = 20
+  for (let yaw = 0; yaw < 360; yaw += 45) {
+    try {
+      const r: any = await call('perceive', { mode: 'surface', yaw, pitch: 35, maxDist: 24 })
+      acceptResult(r)
+      const s = r && r.detail && r.detail.surface
+      // Берег — пол не выше ног (на него выйти), а не стенка ямы на уровне головы (s8d-a-v1-1: в своей лесенке с водой стенки в
+      // 1 бл. считались берегом — «выйти 2 с», копка запрещалась, тело утонуло).
+      const feetY = state.pos ? Math.floor(state.pos.y) : 0
+      if (s && !s.water && s.pos && s.pos.y <= feetY && !/water|ice|kelp|seagrass/.test(String(s.name))) best = Math.min(best, Math.round(s.dist * Math.cos(35 * Math.PI / 180)))
+    } catch {}
+  }
+  return best
+}
+// S8d (замечание проверки S8c «а», аудит S10 №13): «лава у/на x,y,z» в строке стопа колодца/лесенки/штрека — чутьё безопасности
+// (hazardAt смотрит сквозь камень и может только ОТКАЗАТЬ копать). Целью литья и known.lava такая клетка становится, только если
+// лаву видно (память глаз: увиденная клетка лавы в 3 бл.) или слышно (heardLava: место слуха не дальше услышанной дальности + 6).
+// На уровне знания scan и при ND_HONEST_LAVA=0 — как было (клетка из строки).
+async function stopLava (r) {
+  const m = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String((r && r.detail && r.detail.stopped) || ''))
+  if (!m) return null
+  const q = { x: +m[1], y: +m[2], z: +m[3] }
+  let level = 'rsg'
+  try { level = require('./src/perception/knowledge').level() } catch {}
+  if (process.env.ND_HONEST_LAVA === '0' || level === 'scan') return q
+  try {
+    const s: any = await call('perceive', { mode: 'seen', block: 'lava', max: 1, maxDist: 3, from: q })
+    acceptResult(s)
+    const c = s && s.detail && Array.isArray(s.detail.seen) && s.detail.seen[0]
+    if (c) return { x: c.x, y: c.y, z: c.z }
+  } catch {}
+  const H = heardLava
+  if (H && H.from && gameClock.now() - H.t < 5 * 60000 && Math.hypot(H.from.x - q.x, H.from.y - q.y, H.from.z - q.z) <= (H.dist || 8) + 6) return q
+  log(`чутьё: лава за блоком у ${q.x},${q.y},${q.z} — не видна и не слышна, целью не беру`)
+  return null
+}
 async function listenForLava (where) {
   if (heardLava && gameClock.now() - heardLava.t < 20 * 60000 && near3(heardLava.from, 32)) return
   const h = await act('portal', { mode: 'cast', listen: 16, timeoutSeconds: 30 })
@@ -2384,8 +2436,8 @@ async function deepCast () {
   if (!deepLava && known.lava && near3(known.lava, 10) && !deepBad.some(q => Math.hypot(q.x - known.lava.x, q.y - known.lava.y, q.z - known.lava.z) < 6)) deepLava = known.lava
   if (!deepLava && y() > DEEP_Y && y() <= DEEP_Y + 12) {
     const d = await act('dig_down', { mode: 'stairs', depth: Math.round(y() - DEEP_Y), torchEvery: 0, timeoutSeconds: 120 })
-    const lv = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String((d.detail && d.detail.stopped) || ''))
-    if (lv) deepLava = { x: +lv[1], y: +lv[2], z: +lv[3] }
+    const lv = await stopLava(d)
+    if (lv) deepLava = lv
   }
   if (died) return
   if (!deepLava && y() > DEEP_Y + 12) { log(`литьё глубоко: спуск встал на y ${Math.round(y())}`); return }
@@ -2485,14 +2537,14 @@ async function deepCast () {
         log(`литьё глубоко: слышу лаву — ${heard.dir}, ~${heard.dist} бл.${heard.below ? ', ниже' : heard.above ? ', выше' : ''}`)
         if (heard.below && (heard.flat || 0) <= 2 && y() > DEEP_Y + 0.5) {
           const sh = await act('tunnel', { direction: 'down', length: Math.max(1, Math.min(8, heard.dist + 1, Math.floor(y() - DEEP_Y))), timeoutSeconds: 60 })
-          const lv = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String((sh.detail && sh.detail.stopped) || ''))
-          if (lv) { deepLava = { x: +lv[1], y: +lv[2], z: +lv[3] }; log(`литьё глубоко: колодец встал у лавы ${lv[1]},${lv[2]},${lv[3]}`); continue }
+          const lv = await stopLava(sh)
+          if (lv) { deepLava = lv; log(`литьё глубоко: колодец встал у лавы ${lv.x},${lv.y},${lv.z}`); continue }
         }
         if (heard.below && (heard.flat || 0) > 2 && y() > DEEP_Y + 1.5) {
           const dy = Number.isFinite(heard.height) ? Math.abs(heard.height) : Math.round(Math.sqrt(Math.max(0, (heard.dist || 0) ** 2 - (heard.flat || 0) ** 2)))
           const st = await act('dig_down', { mode: 'stairs', depth: Math.max(1, Math.min(8, dy + 1, Math.floor(y() - DEEP_Y))), direction: heard.dir, torchEvery: 0, timeoutSeconds: 120 })
-          const lv = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String((st.detail && st.detail.stopped) || ''))
-          if (lv) { deepLava = { x: +lv[1], y: +lv[2], z: +lv[3] }; log(`литьё глубоко: лесенка встала у лавы ${lv[1]},${lv[2]},${lv[3]}`); continue }
+          const lv = await stopLava(st)
+          if (lv) { deepLava = lv; log(`литьё глубоко: лесенка встала у лавы ${lv.x},${lv.y},${lv.z}`); continue }
         }
       }
     }
@@ -2501,9 +2553,8 @@ async function deepCast () {
     if (await mobInTheWay(t)) continue
     const why = String((t.detail && t.detail.stopped) || t.error || '')
     if (t.status === 'failed' && !((t.detail && t.detail.walked) > 0)) { log(`литьё глубоко: штрек на ${dirs[dir]} не идёт (${why.slice(0, 80)}) — поворачиваю`); dir = (dir + 1) % 4; hearOff = Math.max(hearOff, 1); lastHeard = null; continue }
-    const lava = /лава на (-?\d+),(-?\d+),(-?\d+)/.exec(why)
-    if (lava) {
-      const p = { x: +lava[1], y: +lava[2], z: +lava[3] }
+    const p = /лава на (-?\d+),(-?\d+),(-?\d+)/.test(why) ? await stopLava(t) : null
+    if (p) {
       if (!deepBad.some(b => Math.hypot(b.x - p.x, b.y - p.y, b.z - p.z) < 6)) { deepLava = p; log(`литьё глубоко: штрек встал у лавы ${p.x},${p.y},${p.z}`); continue }
     }
     const wetHere = /вода на (-?\d+),(-?\d+),(-?\d+)/.exec(why)
@@ -2599,8 +2650,8 @@ async function deepWater ({ legs = 5 } = {}) {
       if (have('water_bucket')) { log(`вода глубоко: окно у ${wet[1]},${wet[2]},${wet[3]} — ведро полное`); break }
       log(`вода глубоко: у ${wet[1]},${wet[2]},${wet[3]} не набралась (${String((w.detail && w.detail.stopped) || w.error || '').slice(0, 160)})`)
     }
-    const lava = /лава на (-?\d+),(-?\d+),(-?\d+)/.exec(why)
-    if (lava && !deepLava) deepLava = { x: +lava[1], y: +lava[2], z: +lava[3] }
+    const lava = !deepLava && /лава на (-?\d+),(-?\d+),(-?\d+)/.test(why) ? await stopLava(t) : null
+    if (lava) deepLava = lava
     if (why) dir = (dir + 1) % 4
   }
   return have('water_bucket') > 0
@@ -2829,6 +2880,17 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     try { ok = await routeStep(s) } catch (e) {
       routeDeadline = 0
       telErr = String(e.message).slice(0, 240)
+      // S8d: срыв тактикой бывает и исключением (граф: «навык прерван») — тот же счёт срывов шага (s8d-d-v1-1: «пещера» ×10 за 10 мин,
+      // каждый раз заново колодец — счёт ниже по циклу его не видел).
+      if (e.strategyInterrupted && !died && !manualControl) {
+        const nInt = (routeFails.get(`int:${s.id}`) || 0) + 1
+        routeFails.set(`int:${s.id}`, nInt)
+        if (routeMod.interruptCap(s.kind, nInt, Number(process.env.ND_ROUTE_INTERRUPT_MAX ?? 3))) {
+          rlog(`шаг ${s.id} сорван тактикой ${nInt}-й раз — считаю провалом`)
+          routeMod.bookStep(s.id, false, { done: routeDoneIds, fails: routeFails, avoid: routeAvoid })
+          routeMod.bookStep(s.id, false, { done: routeDoneIds, fails: routeFails, avoid: routeAvoid })
+        }
+      }
       if (e.stopCampaign || manualControl || e.strategyInterrupted) throw e
       rlog(`шаг ${s.id} упал: ${e.message}`)
       if (e.routeUnsafe && !died) {
@@ -2854,7 +2916,15 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     const sec = Math.round((gameClock.now() - t0) / 1000)
     // Шаг сорвала тактика (враги, рефлекс) — это не провал шага: без счёта в avoid, граф перезапустит маршрут после неё
     // (s8-r2-0: два «wood НЕ ВЫШЕЛ» от прерываний зомби на 1-й мин → дерево в avoid → камень с пустым рюкзаком).
-    if (!ok && strategyInterrupted && !died) { rlog(`шаг ${s.id} прерван тактикой за ${sec} с — не провал, жду конца угрозы`); return }
+    if (!ok && strategyInterrupted && !died) {
+      // S8d: тот же шаг сорван тактикой N раз — угроза у места шага постоянная (s8d-a-v1-5: корабль ×9 по 33 с, 5 мин без железа) —
+      // шаг в провал (постройка — в avoid), а не бесконечное «жду конца угрозы». ND_ROUTE_INTERRUPT_MAX=0 — прежнее.
+      const maxInt = Number(process.env.ND_ROUTE_INTERRUPT_MAX ?? 3)
+      const nInt = (routeFails.get(`int:${s.id}`) || 0) + 1
+      routeFails.set(`int:${s.id}`, nInt)
+      if (!routeMod.interruptCap(s.kind, nInt, maxInt)) { rlog(`шаг ${s.id} прерван тактикой за ${sec} с — не провал, жду конца угрозы`); return }
+      rlog(`шаг ${s.id} сорван тактикой ${nInt}-й раз — считаю провалом`)
+    }
     if (ok === 'delegate') { rlog(`шаг ${s.id}: дальше обычные этапы (глубокое литьё) — с начала ${Math.round((gameClock.now() - routeT0) / 1000)} с`); break }
     if (ok === 'water') {
       const n = (routeFails.get('water!') || 0) + 1
@@ -3091,6 +3161,7 @@ const bastionPearlsPending = () => BASTION_FIRST && (!only || only.includes('bas
   pauseWaitPays() && READY.bastion() && !bastionSupplyBlocked() &&
   (!!activeBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 && !barterExhausted()))
 const SCOUT_HIGH = process.env.ND_SCOUT_HIGH === '1'
+let rodsFirstSkips = 0 // не больше 3 отказов бастиона ради стержней: путь к спавнеру тоже может не открыться
 defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWanted()) && bastionDry < 3 && !known.endPortal &&
   (BASTION_FIRST || rodsNow() >= 7) && (pearlsNow() < eyesWant() || obsShort()), async () => {
   if (dim() !== 'the_nether') {
@@ -3108,6 +3179,16 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     if (have(/_bed$/) && !spawnAtPortal()) await act('sleep', { mode: 'spawn', why: 'у портала в Ад' })
     const e = await enterNether()
     if (!(e.detail && e.detail.went)) throw new Error('в Ад не прошёл')
+  }
+  // S1f: огнестойкость в рюкзаке (≥ 2 зелий — ~6 мин боя), жемчуга уже ≥ 6, крепость известна, стержней не хватает, золота на бартер
+  // нет — сперва стержни: бой у спавнера под FR — риск 0.35 против 0.7 без неё (калибровка s1c), а дальнейшие заходы в бастион
+  // уносили и FR, и жемчуг (s1f-G3-1: 10 жемч./6 FR — брут на 40 мин; S1-2: 11/9 — брут на 51; I1-3: 8/2 — куб магмы на 46; план всё
+  // время «BastionBarter → GetBlazeRods»). Неудача этапа — директор берёт стержни. ND_RODS_FIRST_FR=0 — прежнее.
+  if (dim() === 'the_nether' && process.env.ND_RODS_FIRST_FR !== '0' && fireResNow() >= 2 && rodsShort() > 0 && pearlsNow() >= 6 && known.fortress &&
+    have('gold_ingot') + 9 * have('gold_block') < 8 && rodsFirstSkips < 3 && !died) {
+    rodsFirstSkips++
+    log(`бастион подождёт: огнестойкость ×${fireResNow()}, жемчуг ${pearlsNow()}/${eyesWant()}, стержней не хватает ${rodsShort()} — сперва ифриты под FR`)
+    throw new Error('сперва стержни под огнестойкостью')
   }
   if (!nextBastion() && bastionSearchWanted() && dim() === 'the_nether' && !died) {
     bastionSearchRuns++
@@ -3235,8 +3316,9 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     // S1f: вслепую (золото бастиона не известно) закрытый штрек по шаблону ничего не дал (шаблон не попал: s1f-B0-2 сокровищница,
     // s1f-A2-3 мост — «не золото» по всем целям, 0 блоков ×2 → «выработан» на 5-й мин; S1e M4/M5 — то же в 9 из 21) — прежде чем
     // бросить бастион, один заход открытым обзором, как игрок в золотой броне: видимое золото и сундуки с точек обзора. Риск обзора
-    // меньше потери единственного источника жемчуга. ND_BASTION_OPEN=0 — прежнее.
-    if (!got && far <= 48 && !/не дош/.test(String(d.stopped || '')) && !(b.gold && b.gold.length) && !bs.openTried && !bs.openNext && process.env.ND_BASTION_OPEN !== '0' && dim() === 'the_nether' && !died) {
+    // меньше потери единственного источника жемчуга. По умолчанию ВЫКЛ. (ND_BASTION_OPEN=1 — вкл.): нативно 3 открытых захода (s1f-FA-1,
+    // G1-2, D1-1) — 2 смерти (брут; лава у y 25), 0 золота в рюкзак — цена риска выше выгоды.
+    if (!got && far <= 48 && !/не дош/.test(String(d.stopped || '')) && !(b.gold && b.gold.length) && !bs.openTried && !bs.openNext && process.env.ND_BASTION_OPEN === '1' && dim() === 'the_nether' && !died) {
       bs.openNext = true
       log(`${b.key}: закрытый штрек по шаблону ничего не дал — следующий заход открытым обзором (видимое золото, сундуки)`)
       bs.dry = 0
@@ -3451,7 +3533,9 @@ defStage('pearls', () => ENDERMEN_OK && !!known.portal && rodsShort() === 0 && h
     warped = forestToHunt()
     const at = ex && ex.detail && ex.detail.found && ex.detail.at
     if (!warped && at && !forestEmpty(at)) warped = { x: at.x, y: at.y + 1, z: at.z, note: 'увидел нилий разведкой' }
-    if (!warped) { pearlTrips.zero = 2; log('эндермены: леса не нашёл — охоту не начинаю'); return }
+    // S1f: не нашёл — неудача стратегии (директор отступает по времени и берёт другие: стержни), а не «успех без прогресса»: s1f-H1-1 —
+    // HuntEndermen выбран 17 раз подряд, 45 игр. мин разведки нилия без леса, крепость известна, к спавнеру не вернулся. ND_EM_FAIL=0 — прежнее.
+    if (!warped) { pearlTrips.zero = 2; log('эндермены: леса не нашёл — охоту не начинаю'); if (process.env.ND_EM_FAIL !== '0') throw new Error('эндермены: искажённого леса не нашёл'); return }
   }
   if (warped && dim() === 'the_nether' && state.pos && Math.hypot(warped.x - state.pos.x, warped.z - state.pos.z) > 4) {
     log(`эндермены: к искажённому лесу ${warped.x},${warped.y},${warped.z} (${Math.round(Math.hypot(warped.x - state.pos.x, warped.z - state.pos.z))} бл., ${warped.note || ''})`)
@@ -4091,6 +4175,8 @@ get ROUTE () { return ROUTE },
 get ROUTE_COOKED_HUNGER () { return ROUTE_COOKED_HUNGER },
 get ROUTE_SLEEP () { return ROUTE_SLEEP },
 get act () { return act },
+get call () { return call },
+get acceptResult () { return acceptResult },
 get answerThreat () { return answerThreat },
 get castOneAt () { return castOneAt },
 get climbOwnShaft () { return climbOwnShaft },

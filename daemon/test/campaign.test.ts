@@ -1479,6 +1479,8 @@ test('литьё глубоко без видимой лавы: штрек вс�
       return { built: true, lit: true }
     }
     if (method === 'tunnel') return { stopped: 'лава у 380,-56,-177 — дальше не копаю' }
+    // S8d: лава из стопа штрека — цель, только если её видно (вскрыта): глаза её помнят.
+    if (method === 'perceive' && params.mode === 'seen') return { seen: [{ name: 'lava', x: 380, y: -56, z: -177, dist: 0, ago: 0 }] }
     if (method === 'goto') { state.pos = { x: 376, y: -55, z: -177 }; return {} as Record<string, any> }
     return {} as Record<string, any>
   })
@@ -1720,7 +1722,8 @@ test('ND_OW_DEEP: лавы поверху нет — колодец к −54, ш
       return { built: true, lit: true }
     }
     return {} as Record<string, any>
-  }, { env: { ND_OW_DEEP: '1', ND_OW_HEAR: '0' } })
+  // S8d: лава за блоком (чутьё штрека) — цель только при ND_HONEST_LAVA=0/scan (прежний договор); честно — test/s8d-overworld.
+  }, { env: { ND_OW_DEEP: '1', ND_OW_HEAR: '0', ND_HONEST_LAVA: '0' } })
   c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
   await c.runStage('cast')
   assert.ok(c.known.portal, 'портал отлит глубоко')
@@ -1883,7 +1886,7 @@ test('s5d: stronghold far away with a frame kit goes through the Nether by defau
   }
 })
 
-test('s1f: вслепую закрытый штрек у бастиона ничего не дал — следующий заход открытым обзором, а не «выработан» (ND_BASTION_OPEN=0 — прежнее)', async () => {
+test('s1f: вслепую закрытый штрек у бастиона ничего не дал — следующий заход открытым обзором только при ND_BASTION_OPEN=1 (по умолчанию выкл.)', async () => {
   for (const off of [false, true]) {
     const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 100, y: 50, z: 90 },
       armor: { head: 'golden_helmet' }, inventory: { iron_pickaxe: 1, stone_pickaxe: 1, blaze_rod: 7, cooked_beef: 10, oak_planks: 16, crafting_table: 1 } }
@@ -1892,7 +1895,7 @@ test('s1f: вслепую закрытый штрек у бастиона нич
       if (method !== 'bastion') return {} as Record<string, any>
       calls.push(params.sealed)
       return { goldBlocksDug: 0, ingotsTraded: 0, stopped: 'золото кончилось: видимых блоков больше нет', bag: {} as Record<string, any> }
-    }, { env: off ? { ND_BASTION_OPEN: '0' } : {} })
+    }, { env: off ? {} : { ND_BASTION_OPEN: '1' } })
     c.known.portal = { x: -19, y: 65, z: -24 }
     c.known.bastions = [{ key: 'бастион (ад)', x: 105, y: 43, z: 87 }]
     c.known.stronghold = { x: -400, y: 30, z: 1776 }
@@ -1951,5 +1954,38 @@ test('s1f: у бастиона штрек «пути нет» — прочь о�
     c.hooks({ ensurePick: async () => true })
     await c.goToward(target, 6)
     assert.equal(gotos.length > 0, walks, JSON.stringify({ target, off, gotos }))
+  }
+})
+
+test('s1f: эндермены — леса не нашёл: этап кончается неудачей (директор отступит и возьмёт другое), ND_EM_FAIL=0 — тихий выход', async () => {
+  for (const off of [false, true]) {
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
+      inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_beef: 10, blaze_rod: 7, netherrack: 64 } }
+    const c = campaign(state, { foes: 0 }, (method) => {
+      if (method === 'explore') return { found: false }
+      return {} as Record<string, any>
+    }, { env: { ND_ENDERMEN: '1', ...(off ? { ND_EM_FAIL: '0' } : {}) } })
+    c.known.portal = { x: -19, y: 65, z: -24 }
+    c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+    let err = null
+    try { await c.runStage('pearls') } catch (e) { err = e }
+    assert.equal(!!err, !off, off ? 'выключено — без ошибки' : 'неудача этапа')
+  }
+})
+
+test('s1f: огнестойкость в рюкзаке, жемчуга ≥ 6, крепость известна — бастион ждёт (неудача этапа: сперва стержни), ND_RODS_FIRST_FR=0 — как было', async () => {
+  for (const off of [false, true]) {
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 100, y: 50, z: 90 }, armor: { head: 'golden_helmet' },
+      potions: { fire_resistance: 2 }, inventory: { iron_pickaxe: 1, stone_pickaxe: 1, cooked_beef: 10, oak_planks: 16, crafting_table: 1, ender_pearl: 8 } }
+    const calls: any[] = []
+    const c = campaign(state, { foes: 0, pickLeft: 381 }, (method) => { calls.push(method); return {} as Record<string, any> }, { env: off ? { ND_RODS_FIRST_FR: '0' } : {} })
+    c.known.portal = { x: -19, y: 65, z: -24 }
+    c.known.fortress = { x: 40, y: 64, z: 40 }
+    c.known.bastions = [{ key: 'бастион (ад)', x: 105, y: 43, z: 87 }]
+    c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+    let err = null
+    try { await c.runStage('bastion') } catch (e) { err = e }
+    assert.equal(!!err && /стержни/.test(err.message), !off, off ? 'выключено — бастион как прежде' : 'сперва стержни')
+    assert.equal(calls.includes('bastion'), off)
   }
 })

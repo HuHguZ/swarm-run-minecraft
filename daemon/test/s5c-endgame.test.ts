@@ -77,7 +77,9 @@ test('explore: отрезок отказал сразу — цикл отдаё�
     const r = await explore(session, { aborted: false, onAbort: [] }, { block: 'iron_ore', timeoutSeconds: 3 })
     assert.equal(r.found, null)
     assert.ok(r.legs.length >= 1 && r.legs.length < 200, `отрезков ${r.legs.length}`)
-    assert.ok(c.now() >= 3000, `игровые часы дошли до срока: ${c.now()}`)
+    // S8d: 8 сторон подряд без пути и тело на месте — explore отказывает раньше срока (stuck); часы при этом шли (пауза после отказа).
+    if (r.stuck) assert.ok(r.legs.length === 8 && c.now() >= 8 * 250, `отказ после 8 сторон: ${r.legs.length}, часы ${c.now()}`)
+    else assert.ok(c.now() >= 3000, `игровые часы дошли до срока: ${c.now()}`)
   } finally { c.dispose(); gameClock.activate(null) }
 })
 

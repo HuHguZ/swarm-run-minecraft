@@ -109,6 +109,16 @@ export interface TacticalSnapshot {
   error?: string
 }
 
+// S1f (проверка S1e (г), лаборатория s1f-L1: 3 из 3 вызовов охоты второй попытки прерваны рефлексом Shield — снаряд стрелка вдали):
+// тело в своём окопе (pearls: bot._ndInFoxhole) — стрелков (гаст, скелет, ифрит) в 8+ бл. держит окоп с крышей, охоту не рвать.
+// Ближние и прочие — как прежде. ND_FOXHOLE_HOLD=0 — выкл.
+function foxholeHolds (bot: any, hostile: any[]): boolean {
+  if (process.env.ND_FOXHOLE_HOLD === '0' || typeof bot._ndInFoxhole !== 'function') return false
+  let inside = false
+  try { inside = !!bot._ndInFoxhole() } catch {}
+  return inside && hostile.every((enemy: any) => enemy.kind === 'enderman' || (/^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind) && enemy.distance >= 8))
+}
+
 export function observeTactics(session: MinecraftSession): TacticalState | null {
   const bot = session.bot
   if (!bot?.entity) return null
@@ -268,7 +278,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // S1e (07.10): охота на эндерменов (pearls hunt) сама ведёт бой с ними — окоп под крышей, штрек, дуэль со щитом, лодка; Fight
     // тактики по эндермену рвал её («reflex: действие прервано» в каждом вызове лаборатории s1e-L0: крыша окопа не вставала, дуэль
     // без хозяина — 3 эндермена, смерть). Только пока в угрозе одни эндермены; уровень ≥3 — как прежде. ND_PEARLS_OWN=0 — выкл.
-    shelter, protectedEncounter: current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && hostile.every(enemy => enemy.kind === 'enderman') || current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
+    shelter, protectedEncounter: current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
     aerialCombat,
     flightEscape: air.flightReady, pearlEscape: air.pearlReady, fireResistancePotion: rescue.potion, lavaClimb: rescue.climb, lavaEscapePending, webBoatEscape: webBoat, boatLavaHop }
 }

@@ -613,3 +613,22 @@ test('лестница на стену: в последние тики паде�
   const s = state(new Vec3(0.5, 5, 0.5))
   assert.equal(open.api.ladderPlan({ state: s, world: open.world, peak: 20, ladderBlock: ladder }), null)
 })
+
+test('s1f: хотбар полон (без блоков) — блоки для клатча меняются местами с ненужным (золото), инструмент/еда не трогаются; ND_CLUTCH_SWAP=0 — нет', async () => {
+  for (const off of [false, true]) {
+    const old = process.env.ND_CLUTCH_SWAP
+    if (off) process.env.ND_CLUTCH_SWAP = '0'; else delete process.env.ND_CLUTCH_SWAP
+    try {
+      const m = model(p => p.y < 64 ? 'stone' : 'air')
+      const s = state(new Vec3(0.5, 64, 0.5)); s.onGround = true
+      const inventory: any[] = [{ name: 'cobblestone', count: 32, slot: 10 }]
+      for (let i = 36; i <= 44; i++) inventory.push({ name: i === 40 ? 'gold_ingot' : i === 36 ? 'iron_sword' : 'cooked_beef', count: 1, slot: i })
+      const { bot, guard } = installFake(m, s, { inventory })
+      const moves: any[] = []
+      bot.moveSlotItem = async (a: number, b: number) => { moves.push([a, b]) }
+      try { bot.emit('physicsTick') } finally { guard.stop && guard.stop() }
+      await new Promise(r => setImmediate(r))
+      assert.deepEqual(moves, off ? [] : [[10, 40]], off ? 'выключено — как было (no_bar_slot)' : 'кобблстоун — на место золота')
+    } finally { if (old === undefined) delete process.env.ND_CLUTCH_SWAP; else process.env.ND_CLUTCH_SWAP = old }
+  }
+})

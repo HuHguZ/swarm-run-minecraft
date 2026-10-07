@@ -15,7 +15,138 @@ let seenSky = null
 // Лава, замеченная шагами маршрута (explore/observe/штрек): known.lava меняется только на БЛИЖНЮЮ, а после неудачи у первой
 // нужна любая другая (S8c, s8c-f-v1-13).
 const seenLavas = []
-const lavaAvoided = q => !!q && !!(ctx.routeAvoid && (ctx.routeAvoid.has(`lava:sky:${q.x},${q.z}`) || ctx.routeAvoid.has(`lava:cave:${q.x},${q.z}`)))
+// Литьё у лавы не вышло (шаг lava:… в avoid) — эта лава и её озеро (в 8 бл.: клетка-представитель озера меняется, когда глаза
+// видят больше его зеркала) больше не цель.
+const lavaAvoided = q => {
+  if (!q || !ctx.routeAvoid) return false
+  for (const id of ctx.routeAvoid) {
+    const m = /^lava:(?:sky|cave):(-?\d+),(-?\d+)$/.exec(String(id))
+    if (m && Math.hypot(+m[1] - q.x, +m[2] - q.z) <= 8) return true
+  }
+  return false
+}
+// S8d: озёра лавы из памяти глаз (route.lavaLakes) — цель литья одним ведром, а не одиночная ближняя клетка лавы.
+// ND_ROUTE_LAKES=0 — прежний выбор (ближняя увиденная лава); ND_ROUTE_LAKE_MIN — клеток зеркала (умолчание 5).
+const LAKES = () => ctx.process.env.ND_ROUTE_LAKES !== '0'
+const LAKE_MIN = () => { const n = Number(ctx.process.env.ND_ROUTE_LAKE_MIN); return Number.isFinite(n) && n > 0 ? n : 5 }
+async function seenLakes () {
+  let cells = []
+  try {
+    const r = await ctx.call('perceive', { mode: 'seen', block: 'lava', max: 800, maxDist: 220 })
+    ctx.acceptResult(r)
+    cells = (r && r.detail && Array.isArray(r.detail.seen)) ? r.detail.seen : []
+  } catch {}
+  return ctx.routeMod.lavaLakes(cells).filter(l => l.level >= LAKE_MIN() && !lavaAvoided(l))
+}
+const hasShield = () => ctx.have('shield') > 0 || !!(ctx.state.offHand && /shield/.test(JSON.stringify(ctx.state.offHand)))
+// S8d: просветы вокруг — лучи глаз (perceive surface: первая непрозрачная клетка) по 12 сторонам на уровне взгляда и вниз на 25°.
+async function lookAround (pitches = [0, 25], maxDist = 32) {
+  const out = []
+  for (const pitch of pitches) {
+    for (let yaw = 0; yaw < 360; yaw += 30) {
+      let sf = null
+      try { const r = await ctx.call('perceive', { mode: 'surface', yaw, pitch, maxDist }); ctx.acceptResult(r); sf = r && r.detail ? r.detail.surface : null } catch {}
+      out.push({ yaw, pitch, dist: sf ? sf.dist : maxDist, hit: sf ? sf.name : null })
+    }
+  }
+  return out
+}
+// S8d: вход в пещеру/овраг, видимый сверху (со столба осмотра): луч глаз вниз-вбок уходит глубоко ниже рельефа (первая
+// непрозрачная клетка на 8+ ниже ног стоящего на земле), не сквозь воду и дальше 6 бл. — дыра в земле. Ближняя — цель шага «пещера».
+let caveMouth = null
+async function findCaveMouth (groundY) {
+  const hits = []
+  for (const pitch of [12, 20, 30, 45, 60]) {
+    for (let yaw = 0; yaw < 360; yaw += 15) {
+      let sf = null
+      try { const r = await ctx.call('perceive', { mode: 'surface', yaw, pitch, maxDist: 96 }); ctx.acceptResult(r); sf = r && r.detail ? r.detail.surface : null } catch {}
+      if (!sf || sf.water || !sf.pos || /water|lava|leaves|_log$/.test(String(sf.name))) continue
+      const flat = sf.dist * Math.cos(pitch * Math.PI / 180)
+      if (flat > 6 && sf.pos.y <= groundY - 8) hits.push({ x: sf.pos.x, y: sf.pos.y, z: sf.pos.z, flat: Math.round(flat), depth: Math.round(groundY - sf.pos.y) })
+    }
+  }
+  hits.sort((a, b) => a.flat - b.flat)
+  return hits[0] || null
+}
+// S8d: руда, которую глаза уже видели (стенка колодца, щель в мелкую пещеру по пути, конец штрека), а сейчас отсюда не видно, —
+// к ней по памяти и копать (честно: место из увиденного). Не дальше maxDist и не глубже/выше 12 от тела.
+async function mineRemembered (need, maxDist = 32, names = ['iron_ore', 'deepslate_iron_ore']) {
+  let got = 0
+  if (ctx.process.env.ND_ROUTE_ORE_MEMORY === '0' || need() <= 0) return 0
+  let seen = []
+  try { const r = await ctx.call('perceive', { mode: 'seen', block: names, max: 6, maxDist }); ctx.acceptResult(r); seen = (r && r.detail && r.detail.seen) || [] } catch {}
+  const me = ctx.state.pos
+  for (const o of seen.filter(q => me && Math.abs(q.y - me.y) <= 12).slice(0, 3)) {
+    if (need() <= 0 || ctx.died) break
+    const before = need()
+    await ctx.act('goto', { x: o.x, y: o.y, z: o.z, range: 2, timeoutSeconds: 30 })
+    await ctx.act('mine', { block: names.join(','), count: need(), radius: 6, timeoutSeconds: 45 })
+    await ctx.refresh()
+    got += Math.max(0, before - need())
+  }
+  if (got) ctx.rlog(`${names[0]} по памяти глаз: +${got}`)
+  return got
+}
+// В пещере: на уровне взгляда хотя бы 2 стороны открыты на 8+ бл. (колодец 1×1 и штрек — 0–1).
+// Под землёй: потолок над головой в 24 бл. (луч вверх) или тело на 8+ ниже места, откуда шаг начался (овраг под открытым небом);
+// поверху на равнине стороны тоже открыты (s8d-b-v1-1: «вошёл на y 66» — 224 с «пещеры» по снежной равнине).
+let caveTopY = null
+async function inCave () {
+  const open = (await lookAround([0], 16)).filter(r => r.dist >= 8).length >= 2
+  if (!open) return false
+  if (caveTopY !== null && ctx.y() <= caveTopY - 8) return true
+  let up = null
+  try { const r = await ctx.call('perceive', { mode: 'surface', yaw: 0, pitch: -90, maxDist: 24 }); ctx.acceptResult(r); up = r && r.detail ? r.detail.surface : null } catch {}
+  return !!up
+}
+// S8d: вниз до пещеры. Колодец (tunnel down) встаёт над пустотой «глубже 3» — потолок пещеры: пробить его и спрыгнуть с оплатой
+// хп (≤ 5, при хп ≥ 14: прыжок 4–8 бл. — 1–5 урона), не вышло — лесенкой вбок-вниз (вскрывает пещеру сбоку); вода/лава под
+// колодцем — штрек вбок и снова колодец. Дошёл до y ≤ 10 без пещеры — нет.
+async function caveEnter (left) {
+  const dirs = ['north', 'east', 'south', 'west']
+  caveTopY = ctx.y()
+  // Вход, видный со столба, — сперва туда: к краю и вниз к дну дыры (pathfinder копает/ставит ступени сам).
+  const M = caveMouth
+  caveMouth = null
+  if (M && !ctx.died) {
+    ctx.rlog(`пещера: к входу ${M.x},${M.y},${M.z} (видел со столба)`)
+    if (await ctx.routeGo({ x: M.x, z: M.z }, 6)) {
+      await ctx.act('goto', { x: M.x, y: M.y + 1, z: M.z, range: 2, timeoutSeconds: 60 })
+      await ctx.refresh()
+      if (ctx.died) return false
+      if (ctx.y() <= M.y + 4 && await inCave()) return true
+      ctx.rlog(`пещера: у входа ${M.x},${M.y},${M.z} просвета нет (y ${Math.round(ctx.y())}) — колодцем отсюда`)
+    }
+  }
+  for (let k = 0; k < 5 && left() > 60000 && !ctx.died; k++) {
+    await ctx.refresh()
+    if (k > 0 && await inCave()) return true
+    if (ctx.y() <= 10) return false
+    const from = ctx.state.pos && { ...ctx.state.pos }
+    const sh = await ctx.act('tunnel', { direction: 'down', length: Math.max(3, Math.min(64, Math.round(ctx.y() - 10))), timeoutSeconds: 150 })
+    if (ctx.died) return false
+    if (from && k === 0) ctx.routeRememberShaft(from)
+    await ctx.refresh()
+    const why = String((sh.detail && sh.detail.stopped) || sh.error || '')
+    if (/пещера/.test(why)) {
+      const pay = Math.max(0, Math.min(5, Math.floor((ctx.state.health ?? 20) - 14)))
+      const y0 = ctx.y()
+      await ctx.act('dig_down', { mode: 'shaft', depth: 2, maxFallHp: pay, timeoutSeconds: 30 })
+      await ctx.refresh()
+      if (ctx.died) return false
+      if (ctx.y() < y0 - 1.5 && await inCave()) return true
+      await ctx.act('dig_down', { mode: 'stairs', depth: 8, torchEvery: 0, direction: dirs[k % 4], maxFallHp: pay, timeoutSeconds: 60 })
+      await ctx.refresh()
+      if (ctx.died) return false
+      if (await inCave()) return true
+      continue
+    }
+    if (/вода|лава|не идёт|не копается/.test(why)) { await ctx.act('tunnel', { direction: dirs[k % 4], length: 6, torchEvery: 0, timeoutSeconds: 40 }); continue }
+    if (await inCave()) return true
+    if (!why) return false
+  }
+  return false
+}
 function noteLava (q) {
   if (!q || !Number.isFinite(q.x) || !Number.isFinite(q.y) || lavaAvoided(q)) return false
   if (seenLavas.some(l => Math.hypot(l.x - q.x, l.z - q.z) < 8)) return false
@@ -27,8 +158,8 @@ function lavaOf (r) {
   if (d.found === 'lava' && d.at) return d.at
   const lv = (Array.isArray(d.blocks) ? d.blocks : []).find(b => b && b.name === 'lava' && b.nearest)
   if (lv) return lv.nearest
-  const m = /лава (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String(d.stopped || ''))
-  return m ? { x: +m[1], y: +m[2], z: +m[3] } : null
+  // Строка стопа штрека («лава у/на x,y,z») — чутьё безопасности, оно только отказывает копать (S8d, замечание «а»): не цель.
+  return null
 }
 async function routeSeenRefresh () {
   const info = ctx.routeInfoGet()
@@ -56,8 +187,15 @@ async function routeSeenRefresh () {
   if (!seenSky) { const q = seenLavas.find(l => l.y >= 58 && !avoided(l)); if (q) seenSky = { ...q } }
   const S = ctx.skyLavaSeen || seenSky
   const C = (K && Number.isFinite(K.y) && K.y < 58 && !avoided(K) ? K : null) || seenLavas.find(l => l.y < 58 && !avoided(l)) || heard
-  const lava = S && Number.isFinite(S.x) ? { x: S.x, y: S.y, z: S.z, sky: true } : null
-  const cave = C && Number.isFinite(C.x) ? { x: C.x, y: C.y, z: C.z, sky: false } : null
+  let lava = S && Number.isFinite(S.x) ? { x: S.x, y: S.y, z: S.z, sky: true } : null
+  let cave = C && Number.isFinite(C.x) ? { x: C.x, y: C.y, z: C.z, sky: false } : null
+  if (LAKES()) {
+    // Озёра из памяти глаз: поверху (y ≥ 58) и в пещере; услышанная лава (места нет — сторона и дальность) — пещерная, если озера нет.
+    const lk = await seenLakes()
+    const sk = lk.find(l => l.sky); const cv = lk.find(l => !l.sky)
+    lava = sk ? { x: sk.x, y: sk.y, z: sk.z, sky: true, src: sk.level } as any : null
+    cave = cv ? { x: cv.x, y: cv.y, z: cv.z, sky: false, src: cv.level } as any : (heard && !lavaAvoided(heard) ? { ...heard, sky: false } : null)
+  }
   const next = ctx.routeMod.seenInfo({ spawn: info.spawn, structures: list.filter(q => !q.dim || q.dim === 'overworld'), lava: lava || cave, cave: lava ? cave : null })
   next.outposts = list.filter(q => q.kind === 'outpost' && q.at).map(q => ({ x: q.at.x, z: q.at.z, r: 72, src: 'видел' }))
   const was = [info.rp, info.village, info.ship, info.sky, info.lava].map(q => q ? `${q.x},${q.z}` : '-').join('|')
@@ -70,6 +208,14 @@ async function routeGo (at, range = 12) {
   if (!at || !ctx.state.pos) return false
   await ctx.sense()
   if (ctx.sit.inWater) { await ctx.leaveWater(); await ctx.sense(); if (ctx.sit.inWater && ctx.process.env.ND_ROUTE_SHORE !== '0') return false }
+  // S8d: под землёй, цель с высотой рядом (пещерная лава/вода в 48 бл., не выше на 10+) — к ней здесь, без подъёма наверх и
+  // спуска обратно. ND_ROUTE_UNDERGO=0 — прежнее (сперва наверх).
+  if (!ctx.sit.surface && Number.isFinite(at.y) && ctx.state.pos && Math.hypot(at.x - ctx.state.pos.x, at.y - ctx.state.pos.y, at.z - ctx.state.pos.z) <= 48 &&
+      at.y < ctx.state.pos.y + 10 && ctx.process.env.ND_ROUTE_UNDERGO !== '0') {
+    const g = await ctx.act('goto', { x: at.x, y: at.y + 1, z: at.z, range, timeoutSeconds: 60 })
+    await ctx.refresh()
+    if (g.status === 'done' || (ctx.state.pos && Math.hypot(at.x - ctx.state.pos.x, at.z - ctx.state.pos.z) <= range + 4)) return true
+  }
   if (!ctx.sit.surface && !(await ctx.toSurface())) return false
   await ctx.sense()
   if (ctx.sit.night || ctx.sit.dusk) { await ctx.routeSleep('перед переходом'); await ctx.sense() }
@@ -254,8 +400,10 @@ async function farSight (names, radius = 96) {
   if (ctx.process.env.ND_ROUTE_FARSIGHT === '0') return null
   const o = await ctx.act('observe', { radius })
   const me = ctx.state.pos
+  // Запомненное глубоко под телом (видел из штрека/колодца) поверху не достать — ход к x,z над ним впустую (S8d, s8d-a-v1-2:
+  // гравий y 46 из штрека, тело на y 68 — 4 захода «вижу gravel — к нему» → «не вижу gravel»).
   const bl = (Array.isArray(o.detail && o.detail.blocks) ? o.detail.blocks : []).filter(b => b && names.test(b.name) && b.nearest &&
-    !(me && Math.hypot(b.nearest.x - me.x, b.nearest.z - me.z) < 3)).sort((a, b) => a.dist - b.dist)[0]
+    !(me && Math.hypot(b.nearest.x - me.x, b.nearest.z - me.z) < 3) && !(b.remembered && me && b.nearest.y < me.y - 6)).sort((a, b) => a.dist - b.dist)[0]
   if (bl) ctx.rlog(`вижу ${bl.name} в ${Math.round(bl.dist)} бл. (${bl.nearest.x},${bl.nearest.y},${bl.nearest.z}) — к нему`)
   return bl ? bl.nearest : null
 }
@@ -510,6 +658,15 @@ async function nearTrunk (t, timeoutSeconds) {
 async function routeStep (s) {
   await ctx.refresh()
   const ironNow = () => ctx.have('iron_ingot') + ctx.have('raw_iron') + Math.floor(ctx.have('iron_nugget') / 9)
+  // S8d: гравий в рюкзаке (колодец, штрек, пещера) — кремень сразу, ~15 с, а не на шаге flint через 5–8 мин (s8d-a-v1-3: гравий ×5
+  // с 3-й мин, кремень искали с 11-й — ночью). ND_ROUTE_EARLYFLINT=0 — выкл.
+  // S8d: ранен и есть нечего — перед спуском (пещера, этап железа) охота поверху: под землёй без еды хп не растёт (s8d-c-v1-1: хп 8
+  // с 3-й по 15-ю мин в штреках, «лечение 2200 т»). ND_ROUTE_HUNTFIRST=0 — выкл.
+  if (/^(cave|ironStage)$/.test(s.kind) && (ctx.state.health ?? 20) < 14 && typeof ctx.foodUnits === 'function' && ctx.foodUnits() < 2 && ctx.process.env.ND_ROUTE_HUNTFIRST !== '0' && !ctx.died) {
+    await ctx.sense()
+    if (ctx.sit.surface) { ctx.rlog(`хп ${Math.round(ctx.state.health ?? 0)}, еды нет — сперва охота поверху`); await ctx.routeHunt(48, 60) }
+  }
+  if (!/^(wood|stone|flint|enter)$/.test(s.kind) && ctx.have('gravel') > 0 && typeof ctx.lighter === 'function' && needFlint() &&ctx.process.env.ND_ROUTE_EARLYFLINT !== '0' && !ctx.died) await ctx.routeFlintFromBag()
   switch (s.kind) {
     case 'wood': {
       if (ctx.process.env.ND_ROUTE_STARTER_CHECKPOINT !== '0' && ctx.have(/_pickaxe$/) && ctx.have('crafting_table')) return true
@@ -642,6 +799,20 @@ async function routeStep (s) {
         angry = angry || ((d.hits || 0) > 0 && !d.killed)
         ctx.rlog(`голем: ${d.killed ? 'убит' : 'жив'}, ударов ${d.hits ?? 0}${d.blocked ? ` (мимо прицела ${d.blocked})` : ''}, железа +${d.iron ?? 0}${d.hpLost ? `, урон ${d.hpLost}` : ''}${d.stopped ? `; ${d.stopped}` : ''}${Array.isArray(d.steps) ? ` [${d.steps.slice(-5).join(' / ')}]` : ''}`)
         if (d.killed || ctx.died) break
+        // S8d (замечание «д»): голем злой и достаёт тело (урон за заход или хп < 16 — столб не держит: s8c-g-s1-1, s2-5, s2-8 — 3
+        // смерти, у всех удары по голему с уроном 8–19 до гибели) — уход от деревни, а не следующий бой. Удар голема на normal 7.5–21.5:
+        // ещё один заход с таким столбом — ставка жизнью (риск × 3600 с) против копки (~460 с). ND_ROUTE_GOLEM_FREE=1 — прежнее.
+        if ((d.hits || 0) > 0 && ((d.hpLost || 0) > 0 || (ctx.state.health ?? 20) < 16) && ctx.process.env.ND_ROUTE_GOLEM_FREE !== '1') {
+          await ctx.refresh()
+          const me = ctx.state.pos
+          if (me) {
+            const ax = me.x - s.at.x, az = me.z - s.at.z, n = Math.hypot(ax, az) || 1
+            const to = { x: Math.round(me.x + ax / n * 40), z: Math.round(me.z + az / n * 40) }
+            ctx.rlog(`голем злой и достаёт (хп ${Math.round(ctx.state.health ?? 0)}) — ухожу от деревни к ${to.x},${to.z}`)
+            await ctx.act('goto', { x: to.x, z: to.z, range: 6, timeoutSeconds: 40, retreat: true })
+          }
+          return false
+        }
         if (/не вижу/.test(String(d.stopped || ''))) {
           const info = ctx.routeInfoGet()
           const gm = info && info.ores && (info.ores.golems || []).filter(q => Math.hypot(q.x - s.at.x, q.z - s.at.z) <= 96)[0]
@@ -763,7 +934,13 @@ async function routeStep (s) {
         const o = await farSight(/^(deepslate_)?iron_ore$/)
         if (!o) break
         await ctx.routeGo(o, 4)
-        await ctx.act('mine', { block: 'iron_ore,deepslate_iron_ore', count: need - (ironNow() - iron0), radius: 16, timeoutSeconds: 90 })
+        const m = await ctx.act('mine', { block: 'iron_ore,deepslate_iron_ore', count: need - (ironNow() - iron0), radius: 16, timeoutSeconds: 90 })
+        // Увиденная со столба руда отсюда не видна (грань к склону): к самой клетке — память, где она (S8d, s8d-a-v1-4: «вижу
+        // iron_ore в 5 бл.» → «не вижу в 16» ×2).
+        if (!(m.detail && m.detail.dug) && Number.isFinite(o.y) && !ctx.died) {
+          await ctx.act('goto', { x: o.x, y: o.y, z: o.z, range: 2, timeoutSeconds: 40 })
+          await ctx.act('mine', { block: 'iron_ore,deepslate_iron_ore', count: need - (ironNow() - iron0), radius: 8, timeoutSeconds: 60 })
+        }
         await ctx.refresh()
       }
       await ctx.refresh()
@@ -868,6 +1045,38 @@ async function routeStep (s) {
         await ctx.refresh()
         if (needFlint() && ctx.have('gravel')) await ctx.routeFlintFromBag()
       }
+      // Сухого гравия нет — один блок со дна реки/озера (S8d): гравию воды копка ×5 — ~4 с за блок, а одного гравия хватает:
+      // ставить и ломать его, пока не выпадет кремень (flint_grind, 10 % за раз). ND_ROUTE_WETGRAVEL=0 — выкл.
+      if (needFlint() && !ctx.have('gravel') && !ctx.died && ctx.process.env.ND_ROUTE_WETGRAVEL !== '0') {
+        await ctx.sense()
+        if (ctx.sit.surface) {
+          const g = await ctx.act('mine', { block: 'gravel', count: 1, radius: 32, timeoutSeconds: 60 })
+          await ctx.refresh()
+          if (ctx.have('gravel')) { ctx.rlog(`кремень: гравий со дна (${g.status})`); await ctx.leaveWater(); await ctx.routeFlintFromBag() }
+        }
+      }
+      // S8d: под землёй — сперва гравий, который глаза видели (стенка колодца/штрека), потом наверх: поверху гравий чаще (берега, дно
+      // рек — шаг выше), а штреки за ним у y 10 — 0 из 4 (s8d-b-v1-2: 2 мин штреков без гравия). ND_ROUTE_FLINTUP=0 — прежнее.
+      if (needFlint() && !ctx.have('gravel') && !ctx.died && ctx.process.env.ND_ROUTE_FLINTUP !== '0') {
+        await ctx.sense()
+        if (!ctx.sit.surface) {
+          await mineRemembered(() => (needFlint() && !ctx.have('gravel') ? 1 : 0), 48, ['gravel'])
+          if (needFlint() && ctx.have('gravel')) await ctx.routeFlintFromBag()
+          await ctx.sense()
+          if (needFlint() && !ctx.have('gravel') && !ctx.sit.surface && !ctx.died) {
+            await ctx.toSurface()
+            await ctx.sense()
+            for (let k = 0; k < 2 && needFlint() && !ctx.have('gravel') && ctx.sit.surface && !ctx.died; k++) {
+              const g = await farSight(/^gravel$/)
+              if (!g) { const w = await ctx.act('mine', { block: 'gravel', count: 1, radius: 32, timeoutSeconds: 60 }); await ctx.refresh(); if (ctx.have('gravel')) await ctx.leaveWater(); void w; break }
+              await ctx.routeGo(g, 4)
+              await ctx.act('mine', { block: 'gravel', count: 2, radius: 16, timeoutSeconds: 60 })
+              await ctx.refresh()
+            }
+            if (needFlint() && ctx.have('gravel')) await ctx.routeFlintFromBag()
+          }
+        }
+      }
       if (needFlint() && !ctx.have('gravel') && ctx.have(/_pickaxe$/) && !ctx.died && ctx.process.env.ND_ROUTE_FLINTDIG !== '0') {
         await ctx.sense()
         // Уже под землёй (после этапа железа) — штреками отсюда, а не explore по пещерам (s8c-b-v1-4: explore гравия с y 16 увёл в
@@ -969,7 +1178,13 @@ async function routeStep (s) {
     case 'scoutIron': {
       // Вслепую: разведка построек (structure-search, как ScoutStructures графа: scan 96, ноги к колоколу/сундукам), ≤ 150 с; днём.
       await ctx.sense()
-      if (ctx.sit.night || ctx.died) return false
+      if (ctx.died) return false
+      // Ночью — цена отрезка поверху против подземной альтернативы (S8d, замечание «г»), а не отказ.
+      if (ctx.sit.night) {
+        const p = ctx.routeMod.scoutLegPrice({ night: true, hp: ctx.state.health ?? 20, shield: hasShield(), legS: 150 })
+        ctx.rlog(`разведка построек ночью: ${p.surface} с (риск ${p.risk}) против копки ${p.under} с — ${p.pick === 'surface' ? 'иду' : 'не иду'}`)
+        if (p.pick !== 'surface' || ctx.process.env.ND_ROUTE_NIGHTPRICE === '0') return false
+      }
       if (!ctx.sit.surface && !(await ctx.toSurface())) return false
       const search = await require('./structure-search').scoutStructures({
         now: () => ctx.gameClock.now(), position: () => ctx.state.pos,
@@ -993,9 +1208,19 @@ async function routeStep (s) {
       const up = Math.round(ctx.y() - y0)
       await ctx.act('structure', { mode: 'scan', radius: 128 })
       await ctx.act('observe', { radius: 128 })
+      if (ctx.process.env.ND_ROUTE_CAVEMOUTH !== '0' && ctx.process.env.ND_ROUTE_CAVE !== '0' && !ctx.died) {
+        caveMouth = await findCaveMouth(y0)
+        if (caveMouth) ctx.rlog(`со столба: вход в пещеру/овраг у ${caveMouth.x},${caveMouth.y},${caveMouth.z} (${caveMouth.flat} бл., глубина ${caveMouth.depth})`)
+      }
       if (up > 0) await ctx.act('tunnel', { direction: 'down', length: up, timeoutSeconds: 30 })
       await ctx.refresh()
       ctx.rlog(`осмотр со столба +${up}: ${ctx.known.lava ? `лава ${ctx.known.lava.x},${ctx.known.lava.y},${ctx.known.lava.z}` : 'лавы не видно'}`)
+      // S8d: кремень — гравий на виду рядом (≤ 48 бл.) берётся сейчас, до спуска за железом (потом он за горой/под землёй: шаг flint
+      // вслепую 3 из 10 в s8c-g). ND_ROUTE_EARLYGRAVEL=0 — выкл.
+      if (needFlint() && !ctx.have('gravel') && ctx.process.env.ND_ROUTE_EARLYGRAVEL !== '0' && !ctx.died) {
+        const g = await farSight(/^gravel$/, 48)
+        if (g) { await ctx.routeGo(g, 4); await ctx.act('mine', { block: 'gravel', dry: true, count: 4, radius: 12, timeoutSeconds: 40 }); await ctx.refresh() }
+      }
       return up > 0
     }
     case 'scoutLava': {
@@ -1006,14 +1231,21 @@ async function routeStep (s) {
       // Успех — НОВАЯ лава (увиденная/услышанная после начала шага), а не та, что уже не вышла (s8c-f-v1-13: «ok за 0 с» по старой).
       const heard0 = ctx.heardLava
       let found = false
-      const note = r => { if (noteLava(lavaOf(r))) found = true }
+      // S8d: с озёрами успех — годное озеро в памяти глаз (не одиночная лава, литьё у неё не выходит); без них — новая лава.
+      const note = async r => { if (LAKES()) { if ((await seenLakes()).length) found = true } else if (noteLava(lavaOf(r))) found = true }
       const seen = () => found || ctx.heardLava !== heard0
+      // Ночью поверху — цена, а не запрет (S8d, замечание «г»): отрезок поверху против подземного поиска со слухом (route.scoutLegPrice).
+      const surfaceLeg = () => {
+        const p = ctx.routeMod.scoutLegPrice({ night: !!ctx.sit.night, hp: ctx.state.health ?? 20, shield: hasShield() })
+        if (ctx.sit.night) ctx.rlog(`лава ночью: отрезок поверху ${p.surface} с (риск ${p.risk}) против подземного ${p.under} с — ${p.pick === 'surface' ? 'поверху' : 'под землю'}`)
+        return ctx.process.env.ND_ROUTE_NIGHTPRICE === '0' ? !ctx.sit.night : p.pick === 'surface'
+      }
       await ctx.sense()
-      for (let k = 0; k < 4 && !seen() && !ctx.died && !ctx.sit.night; k++) {
+      for (let k = 0; k < 4 && !seen() && !ctx.died && surfaceLeg(); k++) {
         if (!ctx.sit.surface && !(await ctx.toSurface())) break
-        note(await ctx.act('explore', { block: 'lava', radius: 64, stepDistance: 80, timeoutSeconds: 60 }))
+        await note(await ctx.act('explore', { block: 'lava', radius: 64, stepDistance: 80, timeoutSeconds: 60 }))
         await ctx.refresh()
-        if (!seen()) note(await ctx.act('observe', { radius: 96 }))
+        if (!seen()) await note(await ctx.act('observe', { radius: 96 }))
         await ctx.sense()
       }
       if (!seen() && !ctx.died && ctx.have(/_pickaxe$/) && ctx.process.env.ND_ROUTE_LAVADIG !== '0') {
@@ -1022,12 +1254,67 @@ async function routeStep (s) {
         if (ctx.process.env.ND_OW_HEAR !== '0') await ctx.listenForLava('лестница за лавой')
         for (const dir of ['north', 'east', 'south']) {
           if (seen() || ctx.died) break
-          note(await ctx.act('tunnel', { direction: dir, length: 24, torchEvery: 0, timeoutSeconds: 120 }))
-          note(await ctx.act('observe', { radius: 32 }))
+          await note(await ctx.act('tunnel', { direction: dir, length: 24, torchEvery: 0, timeoutSeconds: 120 }))
+          await note(await ctx.act('observe', { radius: 32 }))
           if (ctx.process.env.ND_OW_HEAR !== '0') await ctx.listenForLava('штрек за лавой')
         }
       }
       return seen()
+    }
+    case 'cave': {
+      // S8d: железо вслепую, как игрок, — колодцем вниз до пещеры, войти в неё и брать руду в её стенах по виду (observe —
+      // луч глаз, память), идя по пещере по самым длинным просветам (лучи глаз); попутно гравий (кремень), лава и вода в памяти.
+      const iron0 = ironNow()
+      const need = () => ctx.routeMod.ironNeed(ctx.state.inventory || {})
+      const t0 = ctx.gameClock.now()
+      const left = () => (s.budget || 240) * 1000 - (ctx.gameClock.now() - t0)
+      if (!ctx.have(ctx.PICK_STONE)) return false
+      const entered = await caveEnter(left)
+      if (ctx.died) return false
+      if (!entered) {
+        await mineRemembered(need)
+        ctx.rlog(`пещера: не нашлась (y ${Math.round(ctx.y())})${need() > 0 ? ' — дальше этап железа' : ', железо — по памяти глаз'}`)
+        return need() === 0
+      }
+      ctx.rlog(`пещера: вошёл на y ${Math.round(ctx.y())}`)
+      const visited = []
+      let legs = 0
+      let lookedFor = 0
+      for (; legs < 12 && left() > 15000 && !ctx.died; legs++) {
+        await ctx.refresh()
+        const o = await ctx.act('observe', { radius: 32 })
+        const bl = Array.isArray(o.detail && o.detail.blocks) ? o.detail.blocks : []
+        const sees = re => bl.some(b => b && re.test(b.name) && !b.remembered)
+        if (need() > 0 && sees(/^(deepslate_)?iron_ore$/)) {
+          const before = ironNow()
+          await ctx.act('mine', { block: 'iron_ore,deepslate_iron_ore', count: need(), radius: 32, timeoutSeconds: 90 })
+          await ctx.refresh()
+          if (ironNow() > before) { legs--; if (need() > 0) continue }
+        }
+        if (needFlint() && !ctx.have('gravel') && sees(/^gravel$/)) { await ctx.act('mine', { block: 'gravel', count: 3, radius: 24, dry: true, timeoutSeconds: 45 }); await ctx.refresh() }
+        if (need() === 0 || ctx.died) break
+        // Дальше по пещере: лучи глаз по 12 сторонам на уровне взгляда и вниз на 25°, самый длинный просвет, не туда, где был.
+        const me = ctx.state.pos
+        if (!me) break
+        visited.push({ x: me.x, y: me.y, z: me.z })
+        const rays = await lookAround()
+        lookedFor++
+        const eye = { x: me.x, y: me.y + 1.62, z: me.z }
+        const scored = rays.map(r => {
+          const d = Math.min(20, r.dist - 1.5)
+          const v = { x: -Math.sin(r.yaw * Math.PI / 180) * Math.cos(r.pitch * Math.PI / 180), y: -Math.sin(r.pitch * Math.PI / 180), z: Math.cos(r.yaw * Math.PI / 180) * Math.cos(r.pitch * Math.PI / 180) }
+          const end = { x: eye.x + v.x * d, y: eye.y + v.y * d, z: eye.z + v.z * d }
+          const been = visited.some(p => Math.hypot(p.x - end.x, p.z - end.z) < 8)
+          return { ...r, d, end, score: d - (been ? 30 : 0) }
+        }).filter(r => r.d >= 6).sort((a, b) => b.score - a.score)
+        const go = scored[0]
+        if (!go || go.score < 0) { ctx.rlog(`пещера: дальше просвета нет (отрезков ${legs})`); break }
+        await ctx.act('goto', { x: Math.round(go.end.x), y: Math.round(go.end.y - 1.62), z: Math.round(go.end.z), range: 3, timeoutSeconds: 30 })
+      }
+      if (need() > 0 && !ctx.died) await mineRemembered(need, 24)
+      await ctx.refresh()
+      ctx.rlog(`пещера: железа +${ironNow() - iron0} (нужно ещё ${need()}), отрезков ${legs}, осмотров ${lookedFor}, ${Math.round((ctx.gameClock.now() - t0) / 1000)} с`)
+      return need() === 0
     }
     case 'castDeep':
     case 'giveup':
@@ -1052,6 +1339,7 @@ async function routeStep (s) {
       for (let k = 0; k < 3 && ctx.have(/bucket$/) < ctx.routeMod.BUCKETS() && ctx.routeMod.ironNeed(ctx.state.inventory || {}) > 0 && ctx.gameClock.now() - t0 < 600000 && !ctx.died; k++) {
         try { await ctx.stageRun('iron')() } catch (e) { if (e.stopCampaign || ctx.manualControl || e.routeBudget || /умер/.test(e.message)) throw e; ctx.rlog(`этап железа: ${e.message}`) }
         await ctx.refresh()
+        if (ctx.routeMod.ironNeed(ctx.state.inventory || {}) > 0 && ctx.have(/bucket$/) < ctx.routeMod.BUCKETS() && !ctx.died) await mineRemembered(() => ctx.routeMod.ironNeed(ctx.state.inventory || {}))
       }
       return ctx.have(/bucket$/) >= ctx.routeMod.BUCKETS() || ctx.routeMod.ironNeed(ctx.state.inventory || {}) === 0
     }

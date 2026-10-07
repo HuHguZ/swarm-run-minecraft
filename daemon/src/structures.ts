@@ -1138,12 +1138,19 @@ async function takeCart (session, ctl, cart) {
   return { at: xyz(cart.position), kind: 'chest_minecart', took, why, left }
 }
 
+// S8d (аудит S10 №11/№12): блоки постройки — как нашёл бы игрок: память глаз + оглядеться (eyes.locate), а не findBlocks
+// сквозь стены. На уровне знания scan eyes.locate сам берёт findBlocks (знание карты). ND_STRUCT_EYES=0 — прежнее (findBlocks).
+function seenNear (bot, names, center, R, max = 32) {
+  const c = v3(center)
+  if (process.env.ND_STRUCT_EYES === '0') {
+    const ids = names.map(n => bot.registry.blocksByName[n]).filter(Boolean).map(b => b.id)
+    try { return bot.findBlocks({ matching: ids, point: c, maxDistance: R, count: max }) } catch { return [] }
+  }
+  const radius = Math.min(160, bot.entity.position.distanceTo(c) + R)
+  try { return require('./perception/eyes').locate(bot, names, { radius, max: max * 2, rays: 600, filter: q => q.distanceTo(c) <= R }).slice(0, max) } catch { return [] }
+}
 function containersNear (session, center, R, yR = 16) {
-  const bot = session.bot
-  const ids = CONTAINER_NAMES.map(n => bot.registry.blocksByName[n]).filter(Boolean).map(b => b.id)
-  let found = []
-  try { found = bot.findBlocks({ matching: ids, point: v3(center), maxDistance: R, count: 32 }) } catch {}
-  return found.filter(p => Math.abs(p.y - center.y) <= yR)
+  return seenNear(session.bot, CONTAINER_NAMES, center, R, 32).filter(p => Math.abs(p.y - center.y) <= yR)
 }
 
 function merge (out, r) {
@@ -1159,8 +1166,21 @@ async function lootAll (session, ctl, rec, out, p) {
   if (!R) return
   const done = lootedSet(session)
   const center = { x: rec.x, y: rec.y, z: rec.z }
-  const list = containersNear(session, center, R, rec.yR || K.yR || 16)
-    .filter(q => !done.has(keyOf(q)))
+  let list0 = containersNear(session, center, R, rec.yR || K.yR || 16).filter(q => !done.has(keyOf(q)))
+  // Сундуков не видно, а «пирог» F3 считает их в прорисовке (сундук без клетки) — обход: 4 точки вокруг центра постройки,
+  // глаза смотрят по ходу (S8d, аудит S10 №11). Бочку «пирог» не видит. ND_STRUCT_EYES=0 — без обхода.
+  if (!list0.length && process.env.ND_STRUCT_EYES !== '0') {
+    let pieN = 0
+    try { const pp = require('./perception/senses').pie(bot, { range: Math.min(96, bot.entity.position.distanceTo(v3(center)) + R) }); pieN = (pp && pp.byType && (pp.byType.chest || 0)) || 0 } catch {}
+    const ring = Math.max(6, Math.min(R, 14))
+    for (const [dx, dz] of pieN ? [[1, 0], [0, 1], [-1, 0], [0, -1]] : []) {
+      if (ctl.aborted || list0.length) break
+      try { await walk(session, ctl, new goals.GoalNear(center.x + dx * ring, Number.isFinite(center.y) ? center.y : bot.entity.position.y, center.z + dz * ring, 3), 9000) } catch {}
+      try { require('./perception/eyes').nearest(bot, CONTAINER_NAMES, { fresh: true, max: 1 }) } catch {}
+      list0 = containersNear(session, center, R, rec.yR || K.yR || 16).filter(q => !done.has(keyOf(q)))
+    }
+  }
+  const list = list0
     .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
   const places = (session.journal.state && session.journal.state.places) || {}
   const here = dimOf(bot)
@@ -1368,15 +1388,15 @@ async function extras (session, ctl, rec, out, p) {
   }
   // Руины портала: золотые блоки (1 блок = 9 слитков на бартер) и счёт обсидиана.
   if (rec.kind === 'ruined_portal' || rec.kind === 'ruined_portal_nether') {
-    const gold = bot.findBlocks({ matching: [R.gold_block.id], point: v3(rec), maxDistance: 12, count: 6 })
+    const gold = seenNear(bot, ['gold_block'], rec, 12, 6)
     if (gold.length && count(bot, /^(iron|diamond|netherite)_pickaxe$/) > 0 && p.gold !== false && !(rec.kind === 'ruined_portal_nether' && piglinsNear(bot).length)) {
       let n = 0
       for (const g of gold) { if (ctl.aborted) break; const r = await digAt(session, ctl, g, { maxMs: 8000 }); if (r.ok) n++ }
       await pickUp(bot, ctl, 6, 5000)
       if (n) out.disarmed.push(`золотых блоков: ${n} (×9 слитков — бартер с пиглинами за жемчуг)`)
     }
-    const obs = bot.findBlocks({ matching: [R.obsidian.id], point: v3(rec), maxDistance: 12, count: 64 }).length
-    const cry = bot.findBlocks({ matching: [R.crying_obsidian.id], point: v3(rec), maxDistance: 12, count: 64 }).length
+    const obs = seenNear(bot, ['obsidian'], rec, 12, 64).length
+    const cry = seenNear(bot, ['crying_obsidian'], rec, 12, 64).length
     const have = count(bot, 'obsidian')
     const dpick = count(bot, /^(diamond|netherite)_pickaxe$/) > 0
     const lighter = count(bot, /^(flint_and_steel|fire_charge)$/) > 0
@@ -1393,8 +1413,7 @@ async function extras (session, ctl, rec, out, p) {
     const beds = count(bot, /_bed$/)
     const want = Math.max(0, (p.beds ?? 3) - beds)
     if (want > 0) {
-      const ids = BEDS.map(n => R[n]).filter(Boolean).map(b => b.id)
-      const found = bot.findBlocks({ matching: ids, point: v3(rec), maxDistance: KINDS.village.lootR, count: 16 })
+      const found = seenNear(bot, BEDS.filter(n => R[n]), rec, KINDS.village.lootR, 16)
       const heads = []
       for (const q of found) {
         const b = bot.blockAt(q)
@@ -1414,13 +1433,13 @@ async function extras (session, ctl, rec, out, p) {
     }
     const edible = count(bot, /^(bread|cooked_[a-z_]+|baked_potato|golden_carrot|apple|carrot)$/)
     if (edible < 16 && p.food !== false) {
-      const hay = bot.findBlocks({ matching: [R.hay_block.id], point: v3(rec), maxDistance: KINDS.village.lootR, count: 3 })
+      const hay = seenNear(bot, ['hay_block'], rec, KINDS.village.lootR, 3)
       let n = 0
       for (const h of hay.slice(0, 2)) { if (ctl.aborted) break; const r = await digAt(session, ctl, h, { maxMs: 3000 }); if (r.ok) n++ }
       const crops = []
       for (const [name, ripe] of [['wheat', 7], ['carrots', 7], ['potatoes', 7], ['beetroots', 3]]) {
         if (!R[name]) continue
-        for (const q of bot.findBlocks({ matching: [R[name].id], point: v3(rec), maxDistance: 48, count: 24 })) {
+        for (const q of seenNear(bot, [name], rec, 48, 24)) {
           const b = bot.blockAt(q)
           let age: any = -1
           try { age = b.getProperties().age } catch {}
@@ -1625,5 +1644,5 @@ module.exports = {
   KINDS, SETS, TRAP_BLOCKS, STRUCTURE_PLACES,
   scan, look, sees, gather, evaluate, whereNext, opportunities, known, compact, recordedAt, forget,
   decide, playerMarks, piglinsWatching, piglinsNear, takeWorth, takeCart, armTraps,
-  explore, install
+  explore, install, seenNear
 }

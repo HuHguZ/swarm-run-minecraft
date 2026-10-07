@@ -211,16 +211,16 @@ async function walkLeg (bot, ctl, tx, tz, deadline) {
 }
 
 // S1f: блоки в Аду кончаются посреди разведки (мост, подмости, клатч на каждом прыжке через щель: s1f-C1-2 — «клатч молчит:
-// блоков 0» над лавой, падение с y 49 в лаву; B0b-1 — «на коробку блоков нет»). Меньше 12 строительных — добыть незерак рядом (видимый,
-// actions.mine, радиус 8), не чаще раза в игровую минуту. ND_NE_KEEP_BLOCKS=0 — выкл.
-async function keepBlocks (session, ctl, { min = 12, want = 40 }: any = {}) {
+// блоков 0» над лавой, падение с y 49 в лаву; B0b-1 — «на коробку блоков нет»; G1-3 — то же с 12). Меньше 24 строительных — незерак рядом (видимый,
+// actions.mine, радиус 12, до 56), не чаще раза в игровую минуту. ND_NE_KEEP_BLOCKS=0 — выкл.
+async function keepBlocks (session, ctl, { min = 24, want = 56 }: any = {}) {
   const bot = session.bot
   if (process.env.ND_NE_KEEP_BLOCKS === '0' || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted) return null
   const have = require('./pack').buildCount(bot, 'the_nether')
   if (have >= min || gameClock.now() < (bot._ndKeepBlocksAt || 0)) return null
   bot._ndKeepBlocksAt = gameClock.now() + 60000
   let r = null
-  try { r = await require('./actions').mine(session, ctl, { block: 'netherrack', count: want - have, radius: 8 }) } catch (e) { r = { error: e.message } }
+  try { r = await require('./actions').mine(session, ctl, { block: 'netherrack', count: want - have, radius: 12 }) } catch (e) { r = { error: e.message } }
   const now = require('./pack').buildCount(bot, 'the_nether')
   log('блоки: добрал незерак', { was: have, now, error: r && r.error })
   return now - have
@@ -793,6 +793,9 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
     still = lastAt && me.distanceTo(lastAt) < 2 ? still + 1 : 0
     lastAt = me.clone()
     if (still >= 3) { path.push({ stuck: true, at: xyz(me) }); break }
+    // S1f: ифриты видны рядом (≤ 16) или хп < 14 — обход с «пирогом» кончен: дальше бой ведёт blaze (коробка с окном, щит, отдых),
+    // а не шаг по пеленгу под шары (s1f-H1-2: подсказки довели к спавнеру на 4 бл., огонь ифритов — смерть на 3.7 мин). ND_TOUR_STOP=0 — прежнее.
+    if (pie && process.env.ND_TOUR_STOP !== '0' && ((v.blazes && v.blazes.nearest <= 16) || (bot.health ?? 20) < 14)) { path.push({ handover: true, blazes: v.blazes, hp: Math.round(bot.health ?? 0) }); break }
     await keepBlocks(session, ctl)
     visited.push(me.clone())
     // S1f (вслепую): «пирог» F3 показывает спавнер в прорисовке или ифрит слышен — сперва туда, отрезком по пеленгу (до 6 раз).
@@ -816,8 +819,10 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       hinted++
       if (hint.by === 'пирог') lastHint = { yaw: hint.yaw, at: me.clone() }
       const deck = Math.max(Math.floor(me.y), 52)
+      const at0 = me.clone()
       let w = await climbTo(session, ctl, new Vec3(hint.x, deck, hint.z), deadline)
-      if (!w.ok && !w.fought) w = await legTo(session, ctl, hint.x, hint.z, deadline)
+      // «Дошёл», не сдвинувшись (s1f-S1-1: три подсказки подряд ok:true на месте 16,62,60) — тот же отрезок прямым ходом/штреком.
+      if ((!w.ok || bot.entity.position.distanceTo(at0) < 3) && !w.fought) w = await legTo(session, ctl, hint.x, hint.z, deadline)
       path.push({ to: { x: hint.x, z: hint.z }, hint: hint.by, yaw: hint.yaw, ok: w.ok, y: Math.floor(bot.entity.position.y), error: w.ok ? undefined : w.error })
       log('обход: подсказка', { ...hint, ok: w.ok, at: xyz(bot.entity.position) })
       v = lookNow()

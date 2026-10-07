@@ -1487,6 +1487,8 @@ async function explore (session, ctl, {
   // Разведка из-под неба верхнего мира — поверху (session.underSky,
   // underRoofCost): отрезок «по прямой» иначе уходил в пещеры.
   const walkTop = typeof session.underSky === 'function' && session.underSky()
+  let failStreak = 0
+  let failFrom = null
   while (gameClock.now() < deadline && !ctl.aborted) {
     const mem = remembered()
     if (mem) {
@@ -1519,6 +1521,14 @@ async function explore (session, ctl, {
     }
     legs.push(`${dx},${dz}${r.ok ? '' : ' ✗ ' + r.error}`)
     i++
+    // S8d (S9: explore на льду — 551 noPath за прогон, каждый отрезок отказывал сразу, цикл крутил стороны до срока): все 8 сторон
+    // подряд без пути и тело на месте (< 3 бл.) — отказ отсюда, разведку решает вызвавший (другая цель/место). ND_EXPLORE_STUCK=0 — прежнее.
+    if (!r.ok) {
+      if (!failFrom) failFrom = bot.entity.position.clone()
+      if (++failStreak >= SWEEP.length && bot.entity.position.distanceTo(failFrom) < 3 && process.env.ND_EXPLORE_STUCK !== '0') {
+        return { found: null, from, now: xyz(bot.entity.position), legs, stuck: true, note: `пути нет ни в одну из ${SWEEP.length} сторон отсюда — смени место или цель` }
+      }
+    } else { failStreak = 0; failFrom = null }
     // Отрезок отказал сразу (в воде без пути из неё: escapeWater и travelXZ возвращаются без единого таймера) — цикл крутился
     // одними микрозадачами: игровые часы не шли, срок не наступал, пакеты и keepalive не обрабатывались, память росла
     // (s5c-f4-4 06.10: демон 100 % CPU и 2.7 ГБ 12+ мин, профиль — explore → firstVisible; сервер: Disconnected). Пауза

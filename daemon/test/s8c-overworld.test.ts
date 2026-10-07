@@ -157,7 +157,7 @@ test('вслепую: лава у первой не вышла — развед�
   const avoid = new Set<string>()
   const calls: string[] = []
   const ctx: Record<string, any> = {
-    ROUTE: true, process: { env: { ND_ROUTE: '1', ND_ROUTE_LAVADIG: '0' } }, routeMod: route, routeAvoid: avoid, died: false,
+    ROUTE: true, process: { env: { ND_ROUTE: '1', ND_ROUTE_LAVADIG: '0', ND_ROUTE_LAKES: '0' } }, routeMod: route, routeAvoid: avoid, died: false,
     state: { pos: { x: 0, y: 70, z: 0 } }, sit: { surface: true, night: false }, known: { lava: { x: 30, y: 70, z: 0 } }, skyLavaSeen: null, heardLava: null,
     routeInfoV: undefined, rlog: () => {}, sense: async () => {}, refresh: async () => {}, have: () => 0,
     act: async (m: string, p: any) => {

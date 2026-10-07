@@ -317,6 +317,13 @@ function install (session, opts) {
     if (!it || typeof bot.moveSlotItem !== 'function') return
     let dest = -1
     for (let i = 36; i <= 44; i++) if (!bot.inventory.slots[i] && i !== bot.quickBarSlot + 36) { dest = i; break }
+    // S1f: хотбар полон — блоки для клатча обменять со слотом наименее нужного (не оружие/инструмент/ведро/щит/еда/жемчуг/зелья…).
+    // «no_bar_slot» в 10 из 30 прогонов Ада вслепую, а «клатч молчит: no_blocks» при полном рюкзаке блоков — смерти в лаве (s1f-H2-2:
+    // за прогон блоков почти не потрачено, в хотбаре их не было). ND_CLUTCH_SWAP=0 — прежнее.
+    if (dest < 0 && process.env.ND_CLUTCH_SWAP !== '0') {
+      const KEEP = /_(sword|axe|pickaxe|shovel|hoe|helmet|chestplate|leggings|boots)$|bucket|shield|bow$|crossbow|arrow|ender_pearl|ender_eye|flint_and_steel|fire_charge|potion|^cooked_|bread|golden_(apple|carrot)|_bed$|blaze_rod|blaze_powder|totem|crafting_table|^stick$/
+      for (let i = 36; i <= 44; i++) { const s = bot.inventory.slots[i]; if (s && i !== bot.quickBarSlot + 36 && !KEEP.test(s.name) && !FILLER.test(s.name)) { dest = i; break } }
+    }
     if (dest < 0) { emit('no_bar_slot'); return }
     preparing = true
     Promise.resolve(bot.moveSlotItem(it.slot, dest)).catch(e => emit('to_bar_failed', { error: e.message })).finally(() => { preparing = false; barAt = now() })

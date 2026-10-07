@@ -1678,6 +1678,8 @@ async function huntFoxhole (session, ctl, p: any = {}) {
     log('окоп: бой снаружи', r)
     return true
   }
+  // S1f (проверка S1e (г)): «тело в своём окопе» — для тактики: стрелков вдали (гаст, скелет) окоп держит сам (крыша), охоту не рвать.
+  bot._ndInFoxhole = () => !!fox && !!inHole()
   try {
     fox = foxHere(bot, mcData)
     if (fox) { try { reach = endermanReach(bot, fox.out, { radius: 28 }) } catch {} ; log('окоп: уже в нём', { at: xyz(fox.P) }) }
@@ -1989,6 +1991,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
       await sleep(700)
     }
   } finally {
+    bot._ndInFoxhole = null
     bot._ndMobAvoidOnly = avoid0
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('entityDead', onDead)
