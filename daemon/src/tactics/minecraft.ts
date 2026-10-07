@@ -1,12 +1,12 @@
 import { TacticalArbiter } from './arbiter'
-import { threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
+import { S4D, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
 import { EscapeProgress, type EscapeObservation } from './escape-progress'
 import { lavaCapabilities, inLava, drinkFireResistance, climbFromLava } from './lava-escape'
 import { createEmergencyEscape, lavaFallFloor } from '../combat/emergency-escape'
 import { webBoatPlan, webBoatEscape } from './web-boat'
 import { boatHopAvailable, runBoatHop } from '../combat/boat-hop'
 import { mountedBoatDry } from '../combat/boat-placement'
-import { blastNear, dodgeBlast } from './blast'
+import { blastNear, dodgeBlast, shieldBlast, shieldableBlast } from './blast'
 
 // Mineflayer plugins extend the bot/session at runtime; this is the protocol boundary.
 type MinecraftSession = Record<string, any>
@@ -73,6 +73,27 @@ function exitsNear(bot: MinecraftEntity): { route: boolean; signature: string } 
   return { route, signature: facts.join('|') }
 }
 
+// S4d: a blast throws the body away from its source by 1-4 blocks (creeper power 3 at the swell distances); a cell on that
+// line with no floor in 4 below, or lava/fire, is a fall the shield does not stop. Unloaded cells count as floor.
+export function dropBehind(bot: MinecraftEntity, from: { x: number; z: number }): boolean {
+  const me = bot.entity.position
+  const base = me.floored()
+  const length = Math.hypot(me.x - from.x, me.z - from.z) || 1
+  for (let step = 1; step <= 4; step++) {
+    const ox = Math.floor(me.x + (me.x - from.x) / length * step) - base.x
+    const oz = Math.floor(me.z + (me.z - from.z) / length * step) - base.z
+    let floor = false
+    for (let dy = 1; dy <= 4 && !floor; dy++) {
+      const block = bot.blockAt(base.offset(ox, -dy, oz))
+      if (!block) { floor = true; break }
+      if (/lava|fire/.test(block.name)) return true
+      floor = block.boundingBox === 'block' || block.name === 'water'
+    }
+    if (!floor) return true
+  }
+  return false
+}
+
 export const FLEE_SAFE_DISTANCE = 17
 export const EXHAUSTION_HOLD_MS = 400
 export const FIGHT_RECOVERY_HP = 4
@@ -114,18 +135,42 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const hot = guard.hot(bot)
   const seen = new Set<number>()
   const enemies: TacticalEnemy[] = []
+  // S4d: the mob that struck in melee within 1.5 s is known without the eye ray - the client gets its id in damage_event
+  // (the hurt tilt points at it) and hears it. A zombie the ray missed (at the body, past a block corner) left contact
+  // with no foe: "unidentified attacker", CreateDistance 85 and 12 s of run with it hitting the back (s5c-g3-3: 19.5 ->
+  // 8.2 -> death; live telemetry 06-07.10: 176 such runs, 8 deaths). Strikes still go only where pick.js sees it.
+  const struckMelee = S4D() && sameWorld && incident.sourceId != null && at - incident.at < 1500 && incident.byMob && /mob_attack/.test(String(incident.type || '')) ? incident.sourceId : null
   for (const threat of [...(inspected.threats || []), ...(hot ? [{ id: hot.e.id, distance: hot.e.position.distanceTo(bot.entity.position) }] : [])]) {
     const entity: MinecraftEntity | undefined = bot.entities[threat.id]
-    if (!entity?.position || entity.isValid === false || seen.has(entity.id) || !pick.aim(bot, entity, { range: 16 })?.point) continue
+    if (!entity?.position || entity.isValid === false || seen.has(entity.id)) continue
+    const unseen = !pick.aim(bot, entity, { range: 16 })?.point
+    if (unseen && !(entity.id === struckMelee && threat.distance <= 4.5)) continue
     seen.add(entity.id)
     enemies.push({ id: entity.id, kind: entity.name || entity.username, distance: threat.distance,
-      player: !!entity.username, threatening: true, ...(typeof threat.hit === 'number' ? { hit: threat.hit } : {}) })
+      player: !!entity.username, threatening: true, ...(typeof threat.hit === 'number' ? { hit: threat.hit } : {}), ...(unseen ? { unseen: true } : {}) })
   }
   // Nearby players are observable facts; they become threats only after an attack or an explicit fight.
   for (const entity of Object.values(bot.entities || {}) as MinecraftEntity[]) {
     if (!entity?.username || entity === bot.entity || seen.has(entity.id) || !entity.position) continue
     const distance = entity.position.distanceTo(bot.entity.position)
     if (distance <= 16) enemies.push({ id: entity.id, kind: entity.username, distance, player: true, threatening: false })
+  }
+  let incomingProjectiles = 0
+  try { incomingProjectiles = (threats ??= require('../threats')).incoming(bot).filter((projectile: MinecraftEntity) => projectile.ticks <= 10).length } catch {}
+  // S4d: a shooter past the 16-block horizon that is shooting at the body (a shot in flight, or a hit by a shot in 3 s) is in
+  // plain sight up to its reach (flee.DOCTRINE, jar: blaze 48, ghast 64). Blind to blazes at 17-48 on a fortress bridge, the
+  // tactics read the fireballs as "an unidentified attacker" and ran (CreateDistance 85) instead of shielding them: natives
+  // s4d-smoke bridge, both arms, burned to death / 5 hp.
+  // The shot is remembered past the fire it lit: each burning tick (on_fire, no source) replaces autopilot.lastHurt, and
+  // the blazes left the list between volleys (natives s4d-ab bridge: CreateDistance "from nobody" while burning).
+  if (sameWorld && incident.byMob && !/mob_attack/.test(String(incident.type || ''))) session._tacticalShotAt = Math.max(session._tacticalShotAt ?? -Infinity, incident.at)
+  const shot = at - (session._tacticalShotAt ?? -Infinity) < 3000
+  if (S4D() && (incomingProjectiles > 0 || shot)) {
+    for (const h of flee.hostilesAround(bot, 64) as Array<{ e: MinecraftEntity; doc: { range?: number }; d: number }>) {
+      if (seen.has(h.e.id) || !h.doc.range || h.d <= 16 || h.d > h.doc.range || h.e.isValid === false || !pick.aim(bot, h.e, { range: h.d + 1 })?.point) continue
+      seen.add(h.e.id)
+      enemies.push({ id: h.e.id, kind: h.e.name, distance: h.d, player: false, threatening: true })
+    }
   }
   const dryMountedBoat = mountedBoatDry(bot)
   const lava = !dryMountedBoat && inLava(bot)
@@ -177,8 +222,6 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if (portalId !== undefined && !fall && bot.health >= 10 && bot.health < 12) {
     try { portal = !!bot.findBlock({ matching: portalId, maxDistance: 4 }) } catch {}
   }
-  let incomingProjectiles = 0
-  try { incomingProjectiles = (threats ??= require('../threats')).incoming(bot).filter((projectile: MinecraftEntity) => projectile.ticks <= 10).length } catch {}
   const choice = refuge ? survival.chooseRefuge(refuge) : null
   const shelter = choice?.how === 'box' || choice?.how === 'niche' ? 'BlockOff' : choice?.how === 'pillar' ? 'PillarUp' : choice?.how === 'hole' ? 'DigDown' : choice?.how === 'pocket' ? 'Hide' : null
   const ground = exitsNear(bot)
@@ -208,7 +251,9 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // bastion (s1c 06.10): навык сам ведёт угрозы бастиона — заложиться в своём ходе (hunker), брут (bruteDefense), ne-guard, бой с
     // напавшим; уровень <3 тактики рвал его 96 раз в 27 std-прогонах (s1-S*, s1c-A/B: 256 мин прерванных вызовов, каждый —
     // новый подход и укрытие), а Fight/LastStand тактики в яме злил пиглинов (COORD 19:10, 23:06). Уровень ≥3 — как прежде.
-    shelter, protectedEncounter: current === 'dragon' || current === 'blaze' || current === 'bastion' || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
+    // S4d (граница с навыком blaze, COORD 07.10): навык ведёт бой с ифритами, а ходячий не-ифрит вплотную (иссушитель, куб
+    // магмы, брут) — не его бой: s1c-A-5 — «slain by Wither Skeleton» у спавнера, 40 с без единой строки тактики.
+    shelter, protectedEncounter: current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
     aerialCombat,
     flightEscape: air.flightReady, pearlEscape: air.pearlReady, fireResistancePotion: rescue.potion, lavaClimb: rescue.climb, lavaEscapePending, webBoatEscape: webBoat, boatLavaHop }
 }
@@ -433,7 +478,10 @@ export class TacticalSystem {
           ((result as { mode?: string }).mode === 'оторвался' || (result as { safe?: boolean }).safe === true)) this.session._tacticalRetreatSafeAt = clock.now()
       // So does a kill: the dead attacker's hit kept "contact" for 1.5 s and started a flight from nobody (stress stand
       // fuzz-513: Fight killed the spider, CreateDistance with no enemy in sight, then a new skeleton read as a flap).
-      if ((action.id === 'Fight' || action.id === 'LastStand') && result && typeof result === 'object' && (result as { killed?: boolean }).killed) this.session._tacticalRetreatSafeAt = clock.now()
+      if ((action.id === 'Fight' || action.id === 'LastStand') && result && typeof result === 'object' && (result as { killed?: boolean }).killed) {
+        this.session._tacticalRetreatSafeAt = clock.now()
+        if (S4D()) this.arbiter.forgive('Fight')
+      }
       if (this.episode !== episode) return
       if (result && typeof result === 'object' && 'cancelled' in result && result.cancelled) ending = 'interrupted'
       const failed = ending === 'failed' || !!(result && typeof result === 'object' && 'unavailable' in result && result.unavailable)
@@ -472,7 +520,7 @@ export class TacticalSystem {
     const enemy = state.enemies.filter(candidate => candidate.threatening)
       .sort((a, b) => Number(meleeReachable(b)) - Number(meleeReachable(a)) || a.distance - b.distance)
       .find(candidate => bot.entities[candidate.id]?.position &&
-      bot.entities[candidate.id].isValid !== false && pick.aim(bot, bot.entities[candidate.id], { range: 16 })?.point)
+      bot.entities[candidate.id].isValid !== false && (candidate.unseen || pick.aim(bot, bot.entities[candidate.id], { range: 16 })?.point))
     if ((action.id === 'Fight' || action.id === 'LastStand') && !enemy) {
       return { unavailable: true, reason: 'observed target disappeared or lost line of sight before act' }
     }
@@ -527,9 +575,17 @@ export class TacticalSystem {
           const entity = bot.entities[enemy.id]
           return guard.react(session, ctl, { force: { e: entity, why: 'tactical fight' }, _owned: true, duelMs: 15000, sitMs: 8000 })
         }
-        return require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined, allowPlayer: enemy?.player, timeoutSeconds: 15 })
+        return require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined, allowPlayer: enemy?.player, timeoutSeconds: 15, engaged: true })
       }
-      case 'Dodge': return state.blast ? dodgeBlast(session, ctl, { maxMs: state.blast === 'charged_creeper' ? 5000 : 4000 }) : survival.dodgeCreeper(session, ctl, {})
+      case 'Dodge':
+        // S4d: with a shield the blast is taken on it, facing the source (tactics/blast.ts shieldBlast) - unless a fall waits
+        // behind the body: the explosion knockback still applies to a blocking player (ServerExplosion.hurtEntities pushes
+        // every entity whose damage was not cancelled).
+        if (S4D() && state.shield && state.blast !== 'falling_block') {
+          const source = shieldableBlast(bot)
+          if (source && !dropBehind(bot, source.entity.position)) return shieldBlast(session, ctl, { maxMs: 4000 })
+        }
+        return state.blast ? dodgeBlast(session, ctl, { maxMs: state.blast === 'charged_creeper' ? 5000 : 4000 }) : survival.dodgeCreeper(session, ctl, {})
       case 'Flee': case 'CreateDistance':
         // Lava: the swim out. Burning on dry ground: a water bucket puts it out (escapeFire pours it); without one a run does
         // not, and escapeFire's blind 1.2 s sprint-jump toward the nearest floor cell went over platform and bridge edges
@@ -544,7 +600,7 @@ export class TacticalSystem {
         if (blastNear(bot, 2)) await dodgeBlast(session, ctl)
         if (ctl.aborted) return { cancelled: true }
         // An attacking player is a pursuer too (smartFlee steers by mob doctrine; without him it "escaped" in a tick).
-        return flee.smartFlee(session, ctl, { timeoutMs: 12000, reason: 'tactical', safeDist: FLEE_SAFE_DISTANCE,
+        return flee.smartFlee(session, ctl, { timeoutMs: 12000, reason: 'tactical', safeDist: FLEE_SAFE_DISTANCE, chaseExit: true,
           foes: state.enemies.filter(foe => foe.player && foe.threatening).map(foe => foe.id) })
       case 'BlockOff': case 'PillarUp': case 'DigDown': case 'Hide': case 'Heal':
         if (/nether/.test(String(bot.game?.dimension || '')) && enemy && action.id !== 'Heal') {

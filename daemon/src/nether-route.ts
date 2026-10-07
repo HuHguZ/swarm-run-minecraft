@@ -41,12 +41,32 @@ interface NetherRouteResult {
   placed?: number
   supplyNeeded?: RouteSupplyNeed
 }
+/** Ресурс кирок: удары кирок в рюкзаке + каменные кирки, которые можно сделать из дерева и камня (по 131). */
+function swingsLeft (bot) {
+  const items = bot.inventory ? bot.inventory.items() : []
+  const n = re => items.reduce((k, i) => k + (re.test(i.name) ? i.count : 0), 0)
+  let swings = 0
+  for (const i of items) {
+    if (!/_pickaxe$/.test(i.name)) continue
+    const max = i.maxDurability || bot.registry?.itemsByName?.[i.name]?.maxDurability || 0
+    swings += Math.max(0, max - (i.durabilityUsed || 0))
+  }
+  const wood = n(/_planks$/) + 4 * n(/_(log|stem)$/) + n(/^stick$/) / 2
+  return swings + Math.min(Math.floor(wood), Math.floor(n(/^(cobblestone|blackstone|cobbled_deepslate)$/) / 3)) * 131
+}
+/** Цена удара кирки в плане хода (с за копку): S1d 07.10 — штрек копал 1300–3800 блоков за прогон (≈2 на шаг), доски кончались к
+ *  40–47-й мин → «для ифритов не хватает кирки — домой» (s1d-AB-3 A: 38 мин наверху). Запаса много — ~0; к 500 ударам ~0.4, к 300 —
+ *  ~0.7 (дороже открытого шага 0.8): ход идёт открытым там, где это дёшево, а не штреком. ND_SWING_PRICE=0 — выкл. */
+function swingPrice (bot) {
+  if (process.env.ND_SWING_PRICE === '0') return 0
+  return Math.max(0, 250 / Math.max(swingsLeft(bot), 100) - 0.1)
+}
 function receiptCostFor (session) {
   const bot = session.bot
   let costs = receiptCosts.get(bot)
   if (!costs) { costs = new ReceiptCostWindow(); receiptCosts.set(bot, costs) }
   const tickRate = bot.ndClock?.snapshot?.().tickRate ?? gameClock.snapshot?.().tickRate ?? 20
-  return { costs, context: `${bot.game?.dimension || 'unknown'}|${bot.version || 'unknown'}|${tickRate}` }
+  return { costs, swing: swingPrice(bot), context: `${bot.game?.dimension || 'unknown'}|${bot.version || 'unknown'}|${tickRate}` }
 }
 const budgetOn = () => process.env.ND_NE_PLAN !== '0'
 
@@ -1094,7 +1114,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
     } catch { return false }
   }
   const planOptions = blocks => ({ solidFloor: !!p.solidFloor, maxNodes: p.maxNodes, maxMs: p.maxPlanMs, blocks: Math.min(24, blocks), fireproof: st.fireproof, partial: true, zone: p.zone, zones: bastionZones(session), zoneExpo: p.zoneExpo,
-    digWaitSeconds: receiptCostFor(session).costs.seconds(receiptCostFor(session).context),
+    digWaitSeconds: receiptCostFor(session).costs.seconds(receiptCostFor(session).context) + (receiptCostFor(session).swing || 0),
     alarm: () => ctl.aborted || !!session.reflex || (process.env.ND_GUARD_REFLEX === '0' && process.env.ND_GUARD !== '0' && !!require('./ne-guard').hot(bot)),
     dangers: liveDangers(session), hot: [...(p.hot || []), ...spawnerHot(session, goal, st.fireproof)], expoMul: ghastSeen() || nearSpawner() ? 3 : 1 })
   const planLog = (pl, from, speculative) => log('план', { from: xyz(from), goal, leg: pl.leg, more: pl.more, prefetched: speculative, ok: pl.ok, steps: pl.steps, digs: pl.digs, expo: pl.expo, risk: pl.risk || 0, cost: pl.cost, digWaitSeconds: pl.digWaitSeconds, nodes: pl.nodes, ms: pl.ms, why2: pl.why2, why: pl.ok ? undefined : pl.why,
@@ -1263,4 +1283,4 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   return st
 }
 
-module.exports = { gridOf, plan, legGoal, routeTo, enabled, feetCell, makeRoom, rangedClear, pitFight, bruteSpots, goldPicks }
+module.exports = { swingsLeft, swingPrice, gridOf, plan, legGoal, routeTo, enabled, feetCell, makeRoom, rangedClear, pitFight, bruteSpots, goldPicks }

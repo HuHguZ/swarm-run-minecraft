@@ -27,7 +27,7 @@ test('the campaign clears its dry gate when the saved 55 ingots can fund another
   const b = src.indexOf('    if (d.need && d.need.what', a)
   const c: Record<string, any> = { barterFlow: { enabled: () => true, retry: flow.retry },
     d: { ingotsTraded: 0, stopped: 'бартер встал: пиглинов рядом нет' },
-    state: { inventory: stock }, b: { key: 'бастион (ад)' }, bs: { dry: 2 },
+    state: { inventory: stock }, b: { key: 'бастион (ад)' }, bs: { dry: 2 }, approached: false,
     bastionDry: 2, barterRetryPending: false, Date, log () {} }
   c.gameClock = clockFixture(c)
   await vm.runInNewContext('(async () => { for (let i = 0; i < 1; i++) {\n' + src.slice(a, b) + '\n} })()', c)

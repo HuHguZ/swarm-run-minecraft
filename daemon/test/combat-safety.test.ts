@@ -157,7 +157,8 @@ test('огнестойкость разрешает короткую видим�
 })
 
 test('ND_FIGHT_COST: дешёвый по расчёту бой (один зомби, 20 хп, меч) — и без еды; дорогой и без флага — уход', () => {
-  const zombie = { ...ready, food: 15, foodPoints: 0, threats: [{ name: 'zombie', hit: 3, distance: 3 }], phase: 'start' }
+  // 5 бл.: ещё не у тела — правило «дёшево» (у тела, ≤ 4.5 бл., — размен S4d, test/s4d-tactics.test.ts).
+  const zombie = { ...ready, food: 15, foodPoints: 0, threats: [{ name: 'zombie', hit: 3, distance: 5 }], phase: 'start' }
   const was = process.env.ND_FIGHT_COST
   try {
     process.env.ND_FIGHT_COST = '0'

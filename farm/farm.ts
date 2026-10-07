@@ -35,6 +35,7 @@
 //   node farm/farm.js kill-runs <tag>           оборвать сцены партии
 //   node farm/farm.js down [слоты]              штатно: RCON stop (мир сохраняется), демоны — стоп
 //   node farm/farm.js nice                      приоритет/ядра фермы — поднятым серверам и демонам
+//   node farm/farm.js up 1 --from 8 --reup …    то же, но слоты диапазона сперва down под замком up (серии сид за сидом)
 //   node farm/farm.js snapshot s1d-a            заморозить собранный код демона и сцен для серии: копия *.js/*.json и
 //                                               data/ в .daemon-<имя> (рядом с daemon/), node_modules — ссылкой
 //   node farm/farm.js up 1 --from 21 --code s1d-a   демон слота — из снимка (запомнится: daemons и run слота — тоже);
@@ -650,7 +651,7 @@ function parseArgs (argv) {
     if (t.startsWith('--')) {
       if (t.startsWith('--tick-rate=')) { a['tick-rate'] = t.slice(12); continue }
       const key = t.slice(2)
-      if (!['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'random', 'fresh', 'all', 'help', 'lockstep', 'code', 'drop'].includes(key)) throw new Error(`неизвестный параметр ${t}; значения передаются через пробел`)
+      if (!['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'random', 'fresh', 'all', 'help', 'lockstep', 'code', 'drop', 'reup'].includes(key)) throw new Error(`неизвестный параметр ${t}; значения передаются через пробел`)
       const next = main[k + 1]
       if (next !== undefined && !next.startsWith('--') && !/^[A-Z_][A-Z0-9_]*=/.test(next) && ['seed', 'seeds', 'from', 'world', 'slots', 'tag', 'by', 'pool', 'tick-rate', 'code'].includes(key)) { a[key] = next; k++ } else a[key] = true
     } else if (/^[A-Z_][A-Z0-9_]*=/.test(t) && a._.length >= 1) a.env.push(t)
@@ -673,7 +674,11 @@ function parseArgs (argv) {
       log(`ниже обычного, ядра ${AFFINITY}: ${pids.join(', ') || 'некому'}`)
       const pr = applyPrio()
       if (pr.length) log(`обычный приоритет (prio ${readLimits().prio}): ${pr.join(', ')}`)
-    } else if (cmd === 'up') { await withUpLock(() => cmdUp(a)); applyPrio() } else if (cmd === 'daemons') { await cmdDaemons(a); applyPrio() }
+    } else if (cmd === 'up') {
+      // --reup (S8b 07.10): свои слоты диапазона сперва down — под тем же замком up, чтобы между сидами серии место не ушло
+      // чужому up (down→up в скрипте серии терял слот).
+      await withUpLock(async () => { if (a.reup) { const f = Number(a.from || 1), n = Number(a._[0] || 4); await cmdDown({ _: [n > 1 ? `${f}-${f + n - 1}` : String(f)] }) } return cmdUp(a) }); applyPrio()
+    } else if (cmd === 'daemons') { await cmdDaemons(a); applyPrio() }
     else if (cmd === 'down') await cmdDown(a)
     else if (cmd === 'status') await cmdStatus()
     else if (cmd === 'rcon') await cmdRcon(a)

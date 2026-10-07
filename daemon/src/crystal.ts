@@ -592,8 +592,8 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
   // ------------------------------------------------------------ уклонение (S7c)
   // Его кристалл у меня, он его достаёт. Варианты — щит лицом к кристаллу, клетка-укрытие, блок между —
   // считаются ожидаемым уроном: пока вариант не готов (тики), подрыв может прийти с прежней силой.
-  // Подрыв — равномерно в ближайшие HAZ тиков (он ставит и бьёт за 2–3 тика, ждёт конца моего окна ≤ 10).
-  const HAZ = 10
+  // Подрыв — равномерно в ближайшие haz тиков (evade: 6, если он достаёт кристалл рукой или лук в руке, иначе 25).
+
   const passable = (b) => !!b && b.boundingBox === 'empty' && !/lava|fire|cobweb|water|powder_snow/.test(b.name)
   const standable = (cell, cache) => {
     const below = blockAt(bot, cache, cell.x, cell.y - 1, cell.z)
@@ -614,16 +614,18 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     }
     return true
   }
-  function coverSpot (threats, dMe, cache) {
+  // haz — когда подрыв: равномерно в [lo, hi] тиков; клетка — по ожидаемому урону (не успел — пришло как стоя).
+  function coverSpot (threats, dMe, cache, R = 3, haz = { lo: 0, hi: 6 }) {
     const me = bot.entity.position
+    const here = hurtAt(threats, me, dMe, cache)
     const fc = feetCell(me)
     let best = null
-    for (let dx = -3; dx <= 3; dx++) {
-      for (let dz = -3; dz <= 3; dz++) {
+    for (let dx = -R; dx <= R; dx++) {
+      for (let dz = -R; dz <= R; dz++) {
         for (const dy of [0, -1, 1]) {
           if (!dx && !dz) continue
           const h = Math.hypot(dx, dz)
-          if (h > 3.2 || (dy !== 0 && h > 1.5)) continue
+          if (h > R + 0.2 || (dy !== 0 && h > 1.5)) continue
           const cell = new Vec3(fc.x + dx, fc.y + dy, fc.z + dz)
           if (!standable(cell, cache)) continue
           if (dy === 1 && !passable(blockAt(bot, cache, fc.x, fc.y + 2, fc.z))) continue
@@ -631,7 +633,9 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
           const pos = new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5)
           const dmg = hurtAt(threats, pos, dMe, cache)
           const ticks = Math.ceil(Math.hypot(pos.x - me.x, pos.z - me.z) / 0.26) + (dy ? 3 : 1)
-          if (!best || dmg + ticks * 0.05 < best.dmg + best.ticks * 0.05) best = { pos, cell, dmg, ticks }
+          const pr = Math.max(0, Math.min(1, (ticks - haz.lo) / Math.max(1, haz.hi - haz.lo)))
+          const e = pr * here + (1 - pr) * dmg + ticks * 0.01
+          if (!best || e < best.e) best = { pos, cell, dmg, ticks, e }
         }
       }
     }
@@ -757,12 +761,18 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     const me = bot.entity.position
     const now0 = hurtAt(threats, me, dMe, cache)
     if (now0 < 2.5) return null
-    const exp = (o) => { const p = Math.min(1, o.ticks / HAZ); return p * now0 + (1 - p) * o.dmg }
+    // Когда подрыв: он достаёт кристалл рукой или лук в руке — в любой из ближайших 6 тиков; ни того, ни другого —
+    // ему отойти и натянуть лук (crystal.place-shoot: отход до 1.3 с + натяжение 0.55–0.9 с) — между 20 и 45 тиками,
+    // тогда и укрытие ищется дальше (6 бл.: бегом 0.26 б/т за 20 т — 5 бл.).
+    const reachNow = !!foe && threats.some(th => boxDist(foe.position.offset(0, EYE, 0), th.cell ? { minX: th.cell.x, minY: th.cell.y, minZ: th.cell.z, maxX: th.cell.x + 1, maxY: th.cell.y + 1, maxZ: th.cell.z + 1 } : crystalBox(th.c.position)) <= (th.cell ? PLACE_R : HIT_R + 0.4))
+    const hisBowNow = !!foe && foe.equipment && foe.equipment[0] && /^(bow|crossbow)$/.test(foe.equipment[0].name)
+    const haz = reachNow || hisBowNow ? { lo: 0, hi: 6 } : { lo: 20, hi: 45 }
+    const exp = (o) => { const p = Math.max(0, Math.min(1, (o.ticks - haz.lo) / (haz.hi - haz.lo))); return p * now0 + (1 - p) * o.dmg }
     const opts = []
     const t0s = gameClock.now()
     const sh = (t0s - shieldLastEnd < 600 && t0s - shieldStreakAt > 2500) ? null : shieldPlan(threats, dMe, cache)
     if (sh) opts.push({ kind: 'shield', yaw: sh.yaw, threats, dmg: sh.dmg, ticks: sh.ticks })
-    const cv = coverSpot(threats, dMe, cache)
+    const cv = coverSpot(threats, dMe, cache, haz.lo >= 20 ? 6 : 3, haz)
     if (cv && cv.dmg < now0) opts.push({ kind: 'cover', to: cv.pos, threats, dmg: cv.dmg, ticks: cv.ticks })
     const wl = wallSpot(threats, dMe, cache)
     if (wl && wl.dmg < now0) opts.push({ kind: 'wall', cells: wl.cells, threats, dmg: wl.dmg, ticks: wl.ticks })

@@ -381,7 +381,9 @@ async function stepTo (bot, ctl, cell, ms = 1500) {
   try { bot.pathfinder.setGoal(null) } catch {}
   const until = gameClock.now() + ms
   try {
-    while (gameClock.now() < until && !ctl.aborted && !fortify.feetCell(bot).equals(cell)) {
+    // s1c-A-1: six ghast fireballs killed the body at 0.0 s of "to the wall cell", the step reported "not reached" at 37.8 s
+    // (after the respawn). A dead body does not walk (S4d 07.10).
+    while (gameClock.now() < until && !ctl.aborted && (bot.health ?? 0) > 0 && !fortify.feetCell(bot).equals(cell)) {
       const p = bot.entity.position
       const dx = cell.x + 0.5 - p.x
       const dz = cell.z + 0.5 - p.z

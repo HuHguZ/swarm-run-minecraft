@@ -1452,7 +1452,7 @@ async function holdSpawner (session, ctl, ctx) {
           const top = bot.entity.position.floored().offset(0, 2, 0)
           if ((bot.health ?? 0) >= 14 && !ctl.aborted) {
             try { const b = bot.blockAt(top); if (b && b.boundingBox === 'block') await require('./sealed').digCell(bot, top) } catch {}
-            const up = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+            const up = await require('./build').towerUp(bot, ctl, dug.depth || 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
             if (up && up.ok) return { rested: hp1 >= 18, where: 'яма на месте', hp: `${hp0} -> ${hp1}`, seconds: Math.round((gameClock.now() - t0) / 1000), escape }
           }
           stopped = `отлёжка в толще: хп ${hp0} -> ${hp1}, наверх не вышел — остаюсь в яме`
@@ -2681,11 +2681,15 @@ async function digInPlace (bot, ctl) {
   // В прыжке/отбросе под ногами воздух (s1-LH-9/LH-10 06.10: «под ногами: air») — сперва стоять на земле.
   for (let i = 0; i < 30 && !bot.entity.onGround && !ctl.aborted; i++) await sleep(50)
   const f = bot.entity.position.offset(0, 0.2, 0).floored()
-  const cells = [f.offset(0, -1, 0), f.offset(0, -2, 0)]
-  const floor = bot.blockAt(f.offset(0, -3, 0))
+  // Глубина 3: крышка — над головой в клетке f−1, у неё 4 стенки ямы — грань для установки есть всегда. При глубине 2 крышка
+  // шла в клетку пола f, а у неё на ровном месте ни одной опорной грани (сбоку воздух, снизу голова): «крышка не встала»,
+  // шары в открытый верх (S1d s1d-N-3: 19 жемчуга, в яме без крышки 50 урона «в толщу отлечиться», смерть на 41-й мин).
+  const DEPTH = process.env.ND_PIT_DEPTH === '2' ? 2 : 3
+  const cells = [1, 2, 3].slice(0, DEPTH).map(d => f.offset(0, -d, 0))
+  const floor = bot.blockAt(f.offset(0, -DEPTH - 1, 0))
   const bad = b => !b || /lava|water|fire|magma|spawner|bedrock|chest/.test(b.name)
   for (const c of cells) { const b = bot.blockAt(c); if (bad(b) || b.boundingBox !== 'block') return { ok: false, why: 'под ногами: ' + (b ? b.name : '?') } }
-  if (bad(floor) || floor.boundingBox !== 'block') return { ok: false, why: 'пол на −3: ' + (floor ? floor.name : '?') }
+  if (bad(floor) || floor.boundingBox !== 'block') return { ok: false, why: `пол на −${DEPTH + 1}: ` + (floor ? floor.name : '?') }
   // Стенки ямы — твёрдые со всех сторон: яма у края помоста с воздухом сбоку открыта ифритам (их удар вплотную требует луча —
   // BlazeAttackGoal: hasLineOfSight; s1c-M-2 06.10: «sealed», а 7 ударов в яме сбоку, смерть).
   for (const c of cells) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const b = bot.blockAt(c.offset(dx, 0, dz)); if (!b || /lava/.test(b.name) || b.boundingBox !== 'block') return { ok: false, why: 'лава/пусто у ямы' } }
@@ -2697,13 +2701,13 @@ async function digInPlace (bot, ctl) {
     if (r !== 'ok' && r !== 'air') return { ok: false, why: 'копка ' + r }
     for (let i = 0; i < 20 && !bot.entity.onGround; i++) await sleep(50)
   }
-  for (let i = 0; i < 10 && bot.entity.position.y > f.y - 1.5; i++) await sleep(100)
-  if (bot.entity.position.y > f.y - 1.5) return { ok: false, why: 'не опустился' }
+  for (let i = 0; i < 10 && bot.entity.position.y > f.y - DEPTH + 0.5; i++) await sleep(100)
+  if (bot.entity.position.y > f.y - DEPTH + 0.5) return { ok: false, why: 'не опустился' }
   const top = bot.entity.position.floored().offset(0, 2, 0)
   // Крышка — до трёх попыток (ифрит в клетке над ямой мешает поставить: s1-LL-6 06.10 «sealed: false» → видели в открытый верх).
   let sealed = false
   for (let k = 0; k < 3 && !sealed && !ctl.aborted; k++) { sealed = !!(await SL.fillCell(bot, top).catch(() => false)); if (!sealed) await sleep(300) }
-  return { ok: true, sealed: !!sealed, at: xyz(bot.entity.position) }
+  return { ok: true, sealed: !!sealed, depth: DEPTH, at: xyz(bot.entity.position) }
 }
 
 // В толщу рядом: на мосту/помосте под ногами воздух (s1c-A-2 06.10: «под ногами: air» у спавнера — навык вернул тело под ифритов,
@@ -2718,8 +2722,8 @@ async function digInNear (bot, ctl, r = 4) {
   for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
     if (!dx && !dz) continue
     const c = f.offset(dx, 0, dz)
-    if (!standable(bot, c) || ![1, 2, 3].every(d => firm(c.offset(0, -d, 0)))) continue
-    if ([1, 2].some(d => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => { const b = bot.blockAt(c.offset(x, -d, z)); return !b || /lava/.test(b.name) || b.boundingBox !== 'block' }))) continue
+    if (!standable(bot, c) || ![1, 2, 3, 4].every(d => firm(c.offset(0, -d, 0)))) continue
+    if ([1, 2, 3].some(d => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => { const b = bot.blockAt(c.offset(x, -d, z)); return !b || /lava/.test(b.name) || b.boundingBox !== 'block' }))) continue
     cands.push(c)
   }
   cands.sort((a, b) => a.distanceTo(f) - b.distanceTo(f))
@@ -3198,4 +3202,4 @@ async function farmRods (session, ctl, p: any = {}) {
   return detail
 }
 
-module.exports = { liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }
+module.exports = { digInPlace, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }

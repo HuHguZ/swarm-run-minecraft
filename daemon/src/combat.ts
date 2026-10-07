@@ -1498,7 +1498,7 @@ async function fight (session, ctl, opts: any = {}) {
   }
 }
 
-async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false }: any = {}, guard) {
+async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false }: any = {}, guard) {
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
   const entity = findTarget(bot, target, session, { allowPlayer, radius: Math.max(24, clearArea || 0) })
@@ -1536,7 +1536,10 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
   // Модуль PvP распознаёт также лечебные зелья; общий вход проверяет еду и
   // оружие, а его цикл — безопасное окно для конкретного лечебного предмета.
   const potionHeal = bot.inventory.items().some(i => /potion$/.test(i.name) && ['heal', 'regen'].includes(pvp.potionRole(pvp.potionOf(i))))
-  const preparation = guard.safety.check({ target: entity, phase: 'start', minHealth: Math.max(8, retreatAtHealth), instantHeal: potionHeal, repelLava })
+  // engaged (S4d, tactics/minecraft.ts Fight; ND_S4D=0 — прежнее): тактика уже взвесила бой у тела (размен/«дёшево»), и проверка
+  // начала боя («нет запаса еды после восстановления сытости») не отменяет его — 60 из 3135 тактических Fight живой телеметрии
+  // кончились «skipped» без единого взмаха, тактика выбирала их снова. Остаётся проверка продолжения боя (phase continue).
+  const preparation = guard.safety.check({ target: entity, phase: engaged && process.env.ND_S4D !== '0' ? 'continue' : 'start', minHealth: Math.max(8, retreatAtHealth), instantHeal: potionHeal, repelLava })
   // Арена с игроком (arena задан): бой до конца, как arenaStay в pvp.duel — без оружия и еды тоже (гонка вооружений, s7).
   const arenaDuel = !!arena && isPlayerEntity(entity) && preparation.action !== 'dead'
   if (!lastStand && !arenaDuel && preparation.action !== 'fight') {

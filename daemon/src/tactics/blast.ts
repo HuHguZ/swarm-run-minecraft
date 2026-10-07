@@ -51,6 +51,53 @@ export function blastNear(bot: Bot, margin = 0): Blast | null {
   return best
 }
 
+// The source to face: a primed TNT or charged creeper in alarm, else a creeper hissing within its 7-block swell reach
+// (Creeper.SwellGoal) or standing at the body (3.3, autopilot.CREEPER.closeDist).
+export function shieldableBlast(bot: Bot): { entity: Bot; kind: string; distance: number } | null {
+  const me = bot.entity?.position
+  if (!me) return null
+  const alarm = blastNear(bot)
+  if (alarm?.alarm && alarm.kind !== 'falling_block' && bot.entities[alarm.id]) return { entity: bot.entities[alarm.id], kind: alarm.kind, distance: alarm.distance }
+  let best: { entity: Bot; kind: string; distance: number } | null = null
+  for (const entity of Object.values(bot.entities || {}) as Bot[]) {
+    if (entity?.name !== 'creeper' || !entity.position || entity.isValid === false) continue
+    const distance = entity.position.distanceTo(me)
+    if (distance <= 7 && (flee.creeperSwelling(bot, entity) || distance <= 3.3) && (!best || distance < best.distance)) best = { entity, kind: 'creeper', distance }
+  }
+  return best
+}
+
+// S4d (07.10): a raised shield facing the blast takes all of it. 1.21.11 jar: damage_type tag bypasses_shield has no
+// explosion (only #bypasses_armor, cactus, fire, lava, falling anvil/stalactite...), LivingEntity.applyItemBlocking compares
+// the look vector with DamageSource.getSourcePosition (the creeper/TNT itself), shield block delay 0.25 s. The run
+// (dodgeCreeper) left zombies and skeletons hitting the back for 3 s per dodge and a creeper that kept up: Dodge x4-5 to
+// death in live telemetry (s5c-b1-1/2, s8-f1-6, f2-11 and f3-11 "blown up" while dodging). Standing still, the creeper
+// walks in and spends itself on the shield.
+export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }, { maxMs = 4000 } = {}) {
+  const bot = session.bot
+  const start = gameClock.now()
+  const shield = require('../combat').makeShield(session, ctl, { shield: 'always' })
+  try { bot.pathfinder?.setGoal(null) } catch {}
+  try { bot.clearControlStates() } catch {}
+  let kind: string | null = null
+  let blocked = false
+  try {
+    if (!await shield.wear()) return { how: 'shield-blast', unavailable: true, reason: 'shield not worn' }
+    while (!ctl.aborted && gameClock.now() - start < maxMs && (bot.health ?? 0) > 0) {
+      const source = shieldableBlast(bot)
+      if (!source) break
+      kind = source.kind
+      await bot.lookAt(source.entity.position.offset(0, (source.entity.height || 1) * .5, 0), true)
+      if (!shield.blocking()) await shield.raise(true)
+      const failure = shield.failure()
+      if (failure) return { how: 'shield-blast', kind, failed: true, reason: failure }
+      blocked ||= shield.blocking()
+      await movement.sleep(50)
+    }
+  } finally { shield.close() }
+  return { how: 'shield-blast', kind, blocked, clear: !shieldableBlast(bot), seconds: Math.round((gameClock.now() - start) / 100) / 10 }
+}
+
 // Run out of reach along flee.pickDirection (terrain run length, mobs on the way): the blast is one more danger source,
 // so dodging TNT does not run into a creeper (stress stand: TNT + creeper, dodged into the creeper's blast).
 export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }, { maxMs = 4000 } = {}) {

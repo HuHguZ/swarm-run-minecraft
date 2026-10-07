@@ -84,7 +84,9 @@ const keyOf = p => `${p.x},${p.y},${p.z}`
 // не дальше r от глаз. Глаза тела в G(0): с земли h=0, со столба h=2.
 const SCOOP_PTS = [[0.5, 0.8, 0.5], [0.2, 0.8, 0.2], [0.8, 0.8, 0.2], [0.2, 0.8, 0.8], [0.8, 0.8, 0.8]]
 const reachOf = (eye, p, r = 4.35) => SCOOP_PTS.some(([a, b, c]) => eye.distanceTo(p.offset(a, b, c)) <= r)
-const eyesAt = (g, h) => g.G(0, 0).offset(0.5, h + 1.62, 0.5)
+const eyesAt = (g, h, col = 0) => g.G(col, 0).offset(0.5, h + 1.62, 0.5)
+// Колонки столба: G(0); со сдвигом (ND_CAST1_SHIFT, S8b 07.10) верх рамы льётся и со столба в G(±1).
+const shiftOn = () => process.env.ND_CAST1_SHIFT !== '0'
 // Источники озера (ряды H…K, уровень берега −1 и −2, воздух сверху): досягаемые с земли и со столба.
 // Луч черпака от глаз до точки P клетки target: нет твёрдого (кроме клеток dig — их выкопают) и чужого источника.
 function rayFree (read, eye, P, target, dig = null) {
@@ -106,9 +108,9 @@ function rayFree (read, eye, P, target, dig = null) {
 }
 // rays — с проверкой луча (пещера: порода над озером закрывает лаву со столба — rt-L2 слот 10: «со столба 5» по
 // расстоянию, ни одного по лучу).
-function lakeReach (read, g, { rays = false, dig = null }: any = {}) {
+function lakeReach (read, g, { rays = false, dig = null, cols = [0] }: any = {}) {
   const e0 = eyesAt(g, 0)
-  const e2 = eyesAt(g, 2)
+  const tops = cols.map(c => eyesAt(g, 2, c))
   const ground = new Set()
   const top = new Set()
   const ok = (eye, p) => SCOOP_PTS.some(([a, b, c]) => { const P = p.offset(a, b, c); return eye.distanceTo(P) <= 4.35 && (!rays || rayFree(read, eye, P, p, dig)) })
@@ -119,7 +121,7 @@ function lakeReach (read, g, { rays = false, dig = null }: any = {}) {
         const b = read(p)
         if (!b || b.name !== 'lava' || C().levelOf(b) !== 0 || !isAirB(read(p.plus(UP)))) continue
         if (ok(e0, p)) ground.add(keyOf(p))
-        if (ok(e2, p)) top.add(keyOf(p))
+        if (tops.some(e => ok(e, p))) top.add(keyOf(p))
       }
     }
   }
@@ -166,7 +168,8 @@ function judge1 (read, g, { me = null, maxDig = 40 }: any = {}) {
   // Озеро за берегом: источники с воздухом сверху В ДОСЯГАЕМОСТИ черпака — с земли на 6 нижних клеток, со столба на 4
   // верхние, всего 10 + 1 запас (rt-L1: «лавы у берега 18», а достать с G(0) — 6–7, дальние ряды J/K не в счёт;
   // со столба лавы нет — вниз с водой в жёлобе нельзя, она растекается).
-  const R = lakeReach(read, g)
+  const cols = shiftOn() ? [0, 1, -1] : [0]
+  const R = lakeReach(read, g, { cols })
   const union = new Set([...R.ground, ...R.top])
   const lava = union.size
   const high = R.top.size
@@ -175,7 +178,11 @@ function judge1 (read, g, { me = null, maxDig = 40 }: any = {}) {
   for (let i = -1; i <= 2; i++) {
     const fl = blockAt(g.G(i, -1))
     if (!fl) return bad('чанк не прогружен')
-    if (!solid(fl) || (FALL.test(fl.name) && !solid(blockAt(g.G(i, -2))))) return bad('берег не твёрдый')
+    // Пол берега не под телом — воздух/трава над твёрдым: поставить блок (S8b 07.10: «берег не твёрдый» — частая причина
+    // «места на берегу нет» в s8-f2..f4). ND_CAST1_SHORE=0 — выкл.
+    const under = blockAt(g.G(i, -2))
+    if (i !== 0 && !solid(fl) && !/water/.test(fl.name) && (isAirB(fl) || fl.boundingBox === 'empty') && under && solid(under) && process.env.ND_CAST1_SHORE !== '0') place.push(g.G(i, -1))
+    else if (!solid(fl) || (FALL.test(fl.name) && !solid(blockAt(g.G(i, -2))))) return bad('берег не твёрдый')
     // Над берегом: столб G(0) — 5 воздуха; G(±1) — 4: со столба луч воды к стенкам жёлоба F(−2,2)/F(3,2) и опорам
     // F(−1,3)/F(2,3) идёт через G(−1,3)/G(1,3) (rt-L1, пещеры 11/27/28: «луч к грани … упирается в G(−1,3)»).
     const hmax = i === 0 ? 4 : (i === 2 ? 1 : 3)
@@ -232,21 +239,24 @@ function judge1 (read, g, { me = null, maxDig = 40 }: any = {}) {
   }
   if (dig.length > maxDig) return bad(`копать ${dig.length}`)
   // Лава по лучу — с учётом того, что будет выкопано.
-  const R2 = lakeReach(read, g, { rays: true, dig: new Set(dig.map(keyOf)) })
+  const R2 = lakeReach(read, g, { rays: true, dig: new Set(dig.map(keyOf)), cols })
   const union2 = new Set([...R2.ground, ...R2.top])
   if (R2.ground.size < 6 || R2.top.size < 4 || union2.size < 11) return bad(`лава за породой: по лучу с земли ${R2.ground.size}, со столба ${R2.top.size}, всего ${union2.size}`)
+  // Без сдвига столба — дешевле: верх из G(0).
+  const top0 = cols.length > 1 ? lakeReach(read, g, { rays: true, dig: new Set(dig.map(keyOf)) }).top.size : R2.top.size
   // Копка рядом с жидкостью и под сыпучим — нельзя (то же чутьё, что у cast.js).
+  const placed = new Set(place.map(keyOf))
   for (const p of dig) {
     const r = C().digRisk(read, p)
     if (r && !/жидкость сбоку/.test(r)) return bad(r)
     // Сбоку жидкость — только если это не наша будущая вода/лава озера: у клетки жёлоба сосед — пол берега, не лава.
     for (const v of [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), UP]) {
       const n = blockAt(p.plus(v))
-      if (n && /lava/.test(n.name)) return bad('лава у клетки копки')
+      if (n && /lava/.test(n.name) && !placed.has(keyOf(p.plus(v)))) return bad('лава у клетки копки')
     }
   }
-  const score = dig.length * 2 + place.length * 3 - union2.size - Math.min(R2.top.size, 6) * 3 + (me ? Math.round(g.G(0, 0).distanceTo(me)) : 0)
-  return { plan: { axis: g.axis, side: g.side, origin: xyz(g.origin), dig: dig.map(xyz), place: place.map(xyz), lava: union2.size, high: R2.top.size, score } }
+  const score = dig.length * 2 + place.length * 3 - union2.size - Math.min(top0, 6) * 3 - Math.min(R2.top.size - top0, 3) + (me ? Math.round(g.G(0, 0).distanceTo(me)) : 0)
+  return { plan: { axis: g.axis, side: g.side, origin: xyz(g.origin), dig: dig.map(xyz), place: place.map(xyz), lava: union2.size, high: R2.top.size, high0: top0, score } }
 }
 
 // Места у берега: для каждого открытого источника лавы L и направления p — рамы, у которых L в H/I-ряду.
@@ -422,7 +432,13 @@ async function castOne (session, ctl, p: any = {}) {
     const f = bot.entity.position.floored()
     if (f.x === S.x && f.z === S.z && f.y >= S.y && f.y <= S.y + 3) return true
     const ok = await C().walk(bot, ctl, new goals.GoalBlock(S.x, S.y, S.z), 20000, { clearance: true })
-    return ok && bot.entity.position.floored().equals(S)
+    if (ok && bot.entity.position.floored().equals(S)) return true
+    // Соседняя клетка на том же уровне, проход свободен, а путь pathfinder'а не нашёлся (у лавы — s8-f3: «не встал на берег
+    // -1,67,234» из -2,67,234) — шаг руками к центру клетки.
+    const p0 = bot.entity.position.floored()
+    const clear = [0, 1].every(j => { const b = bot.blockAt(S.offset(0, j, 0)); return !!b && b.boundingBox === 'empty' && !fluid(b) }) && solid(bot.blockAt(S.offset(0, -1, 0)))
+    if (clear && p0.y === S.y && Math.abs(p0.x - S.x) + Math.abs(p0.z - S.z) === 1) { await C().centreOn(bot, ctl, S); return bot.entity.position.floored().equals(S) }
+    return false
   }
   // 2. Расчистка снизу вверх (видимые грани; трава и снег — контуром).
   const digOne = async q => {
@@ -455,6 +471,14 @@ async function castOne (session, ctl, p: any = {}) {
   }
   await C().centreOn(bot, ctl, g.G(0, 0))
   tr('на берегу')
+  // Пол берега, где его нет (план: place G(±1|2,−1); воздух или лава у кромки) — до расчистки: он держит воду жёлоба от
+  // озера и лаву от клеток жёлоба.
+  for (const q of [-1, 1, 2].map(i => g.G(i, -1)).filter(q => !solid(bot.blockAt(q)))) {
+    const r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    if (!r.ok) return dropPlan({ ...report, built: false, stopped: `пол берега ${q.x},${q.y},${q.z} не встал: ${r.reason}` })
+    report.placed++
+    tr(`пол берега ${q.x},${q.y},${q.z}`)
+  }
   // С земли — всё, до чего достать (до O.y+1) и столб тела G(0,·) целиком (иначе «потолок» у столба); выше — со столба.
   const allDigs = plan.dig.map(q => new Vec3(q.x, q.y, q.z))
   const g0 = g.G(0, 0)
@@ -467,10 +491,22 @@ async function castOne (session, ctl, p: any = {}) {
     if (!left) break
   }
   // 3. Перемычки и стенки жёлоба внизу (с земли: j ≤ 1).
-  const placeOne = async q => {
+  // Опора для блока без твёрдой грани рядом (S8b 07.10: «не к чему прислонить» ×25 в s8-f2..f4 — стенка жёлоба F(−2,1) или
+  // подпорка F(−1,3) без нижнего блока стенки, который раньше не встал без ошибки): стенка — блок под ней, подпорка — стенка.
+  // Блоки кончились посреди рамы (s8-f2..f4: «подпорка не встала: must be holding an item») — в ответе need: маршрут добирает
+  // блоки (castOneAt) и зовёт ещё раз, план рамы в памяти сессии.
+  let noBlocks = false
+  const support = new Map()
+  for (const i of [-2, 3]) for (let j = 0; j <= 3; j++) support.set(keyOf(g.F(i, j)), g.F(i, j - 1))
+  support.set(keyOf(g.F(-1, 3)), g.F(-2, 3)); support.set(keyOf(g.F(2, 3)), g.F(3, 3))
+  const placeOne = async (q, depth = 0) => {
     if (solid(bot.blockAt(q))) return true
-    const r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    let r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    if (!r.ok && depth < 4 && /не к чему прислонить/.test(String(r.reason)) && support.has(keyOf(q)) && await placeOne(support.get(keyOf(q)), depth + 1)) {
+      r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    }
     if (r.ok) { report.placed++; return true }
+    if (/нечем строить|must be holding/.test(String(r.reason))) noBlocks = true
     tr(`не поставил ${q.x},${q.y},${q.z}: ${r.reason}`)
     return false
   }
@@ -485,7 +521,10 @@ async function castOne (session, ctl, p: any = {}) {
   for (let i = -2; i <= 3; i++) { own.add(keyOf(g.F(i, -2))); own.add(keyOf(g.G(i, -1))); own.add(keyOf(g.at(i, -2))) }
   for (const q of [g.F(-1, 3), g.F(2, 3), g.B(0, -1), g.B(1, -1)]) own.add(keyOf(q))
   let h = 0
-  const isOwn = q => own.has(keyOf(q)) || (q.x === g0.x && q.z === g0.z && q.y < g0.y + h)
+  // Колонка столба: G(0), после сдвига (лавы со столба нет) — G(±1).
+  let col = 0
+  let pc = g0
+  const isOwn = q => own.has(keyOf(q)) || (q.x === pc.x && q.z === pc.z && q.y < pc.y + h)
   // Прицел в грань refs (жидкость ляжет в expect); луч упёрся в постороннее ближе грани — выкопать и ещё раз (rt-L1:
   // невыкопанная клетка жёлоба, порода над берегом в пещере).
   const aimClear = async (refs, expect) => {
@@ -624,7 +663,7 @@ async function castOne (session, ctl, p: any = {}) {
   // 4. Клетки.
   const used = new Set()
   const digKeys = new Set(plan.dig.map(q => `${q.x},${q.y},${q.z}`))
-  const syncH = () => { const f = bot.entity.position.floored(); h = (f.x === g0.x && f.z === g0.z) ? Math.max(0, f.y - g0.y) : 0 }
+  const syncH = () => { const f = bot.entity.position.floored(); h = (f.x === pc.x && f.z === pc.z) ? Math.max(0, f.y - pc.y) : 0 }
   const climb = async want => {
     let fails = 0
     while (h < want && !late()) {
@@ -680,7 +719,7 @@ async function castOne (session, ctl, p: any = {}) {
     if (process.env.ND_CAST1_DEBUG === '2') tr(`прицел воды готов: вода ${dbgWater()}`)
     const ca = await aimClear(t.lava, t.c)
     if (!ca.aim) return { ok: false, why: `лава: ${ca.why}` }
-    let Ls = lavaInReach(bot, g, used, { high: h > 0, keep: h > 0 ? 0 : topLeft(), dig: digKeys })
+    let Ls = lavaInReach(bot, g, used, { high: h > 0, keep: h > 0 || col !== 0 ? 0 : topLeft(), dig: digKeys })
     if (!Ls.length && h > 0 && await clearLavaRay()) Ls = lavaInReach(bot, g, used, { high: true })
     if (!Ls.length) { const R = lakeReach(p => bot.blockAt(p), g); return { ok: false, fatal: true, why: `${h > 0 ? 'лавы со столба не достать' : 'лавы в досягаемости нет'} (h ${h}; источников по геометрии: с земли ${R.ground.size}, со столба ${R.top.size})` } }
     const L = Ls[0]
@@ -732,6 +771,32 @@ async function castOne (session, ctl, p: any = {}) {
     if (cnt('lava_bucket')) return { ok: false, fatal: true, why: 'лава не застыла, в ведре лава' }
     return { ok: false, why: 'лава не застыла (вода не рядом?)' }
   }
+  const shifted = new Set([0])
+  // want — высота тела для клетки: 2 — столб (верх рамы), 0 — с земли (низ рамы: лава у G(0) кончилась — s8b-b2-4: рама 5/10,
+  // «лавы в досягаемости нет (h 0)»; с G(±1) с земли достаются и низ, и стойки).
+  const shiftPillar = async (want = 2) => {
+    if (process.env.ND_CAST1_SHIFT === '0') return false
+    for (const k of [1, -1]) {
+      if (shifted.has(k) || late()) continue
+      shifted.add(k)
+      const S = g.G(k, 0)
+      const free = [0, 1, 2, 3].every(j => { const b = bot.blockAt(g.G(k, j)); return !!b && !fluid(b) && (isAirB(b) || b.boundingBox === 'empty') })
+      if (!solid(bot.blockAt(g.G(k, -1))) || !free) { tr(`столб в ${S.x},${S.z}: место занято`); continue }
+      if (h > 0) await C().descend(bot, ctl, pc.y, report)
+      syncH()
+      if (h > 0) return false
+      const back = { col, pc }
+      col = k; pc = S
+      if (!(await goG(k))) { ({ col, pc } = back); tr(`столб в ${S.x},${S.z}: не дошёл`); continue }
+      await C().centreOn(bot, ctl, S)
+      const w = want > 0 ? await climb(want) : null
+      if (w) { tr(`столб в ${S.x},${S.z}: ${w}`); syncH(); if (h > 0) await C().descend(bot, ctl, pc.y, report); syncH(); continue }
+      const n = lavaInReach(bot, g, used, { high: true }).length
+      tr(`${want > 0 ? 'столб сдвинут' : 'место сдвинуто'} в ${S.x},${S.z}: лавы ${want > 0 ? 'со столба' : 'с земли'} ${n}`)
+      if (n) { report.shifted = (report.shifted || 0) + 1; return true }
+    }
+    return false
+  }
   let stopped = null
   let wet = false
   for (const t of cells(g)) {
@@ -743,7 +808,7 @@ async function castOne (session, ctl, p: any = {}) {
     if (t.h === 0 && h > 0) { await C().descend(bot, ctl, g0.y, report); syncH() }
     if (t.h > h) {
       // Наверх: столб 2 в G(0), стенки жёлоба j=2,3, после стоек — подпорки в проёме и уголки жёлоба.
-      if (h === 0) { await goG(0); await C().centreOn(bot, ctl, g.G(0, 0)) }
+      if (h === 0) { await goG(col); await C().centreOn(bot, ctl, g.G(col, 0)) }
       const w = await climb(t.h)
       if (w) { stopped = w; break }
       // Со столба — расчистка верха (чаша озера ниже рельефа: жёлоб и рама выше земли — в породе; lab ow-c1c bowl).
@@ -763,6 +828,9 @@ async function castOne (session, ctl, p: any = {}) {
     }
     let r = await castCell(t)
     for (let k = 0; k < 2 && !r.ok && !r.fatal && !late(); k++) { tr(`${t.c.x},${t.c.y},${t.c.z}: ${r.why} — ещё раз${bot._ndCast1Drop ? ` [${bot._ndCast1Drop}]` : ''}`); bot._ndCast1Drop = null; r = await castCell(t) }
+    // Лавы со столба нет — столб на соседнюю клетку берега (S8b 07.10: рамы 8/10–9/10 «лавы со столба не достать» — треть
+    // таймаутов литья; верх рамы достаётся и из G(±1), а лава под ним — новые клетки озера). ND_CAST1_SHIFT=0 — выкл.
+    while (!r.ok && r.fatal && /со столба|в досягаемости нет/.test(r.why) && !late() && await shiftPillar(t.h)) r = await castCell(t)
     tr(`${t.c.x},${t.c.y},${t.c.z}: ${r.ok ? `obsidian${r.dbg ? ` (${r.dbg})` : ''}` : r.why}`)
     if (!wet) { const sw = strayWater(); if (sw.length) { wet = true; tr(`вода вне жёлоба: ${sw.slice(0, 6).join(' ')}${sw.length > 6 ? ` …всего ${sw.length}` : ''}`) } }
     if (!r.ok) { stopped = `клетка ${t.c.x},${t.c.y},${t.c.z}: ${r.why}`; break }
@@ -778,7 +846,8 @@ async function castOne (session, ctl, p: any = {}) {
   const frame = [g.at(0, -1), g.at(1, -1), g.at(-1, 0), g.at(-1, 1), g.at(-1, 2), g.at(2, 0), g.at(2, 1), g.at(2, 2), g.at(0, 3), g.at(1, 3)]
   const done = frame.filter(q => (bot.blockAt(q) || {}).name === 'obsidian').length
   const built = done === 10
-  return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((gameClock.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`) }
+  return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((gameClock.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`),
+    ...(!built && noBlocks ? { need: { what: 'cobblestone', count: 8, have: fill() } } : {}) }
 }
 
 module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, lakeReach, useAt, PLACE1 }

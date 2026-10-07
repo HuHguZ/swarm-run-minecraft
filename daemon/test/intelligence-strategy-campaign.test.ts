@@ -41,14 +41,9 @@ test('mapped route is a competing registered graph edge and runs through verifie
   assert.equal(selected!.stage.progressed?.(), true)
   assert.ok(f.observed() >= 3)
   assert.equal(f.decisions.find(row => row.level === 'strategy')?.outcome, 'SUCCESS')
-  // Конкуренция по цене — без «маршрут по карте первым» (S8 07.10: ND_ROUTE_FIRST по умолчанию вкл.).
-  const oldFirst = process.env.ND_ROUTE_FIRST
-  process.env.ND_ROUTE_FIRST = '0'
-  try {
-    const highCost = campaignFixture()
-    highCost.intelligence.registry.get('MappedOverworldRoute')!.estimateCost = () => 1e9
-    assert.notEqual((await highCost.intelligence.select([highCost.stage], () => false))?.strategy?.id, 'MappedOverworldRoute')
-  } finally { if (oldFirst === undefined) delete process.env.ND_ROUTE_FIRST; else process.env.ND_ROUTE_FIRST = oldFirst }
+  const highCost = campaignFixture()
+  highCost.intelligence.registry.get('MappedOverworldRoute')!.estimateCost = () => 1e9
+  assert.notEqual((await highCost.intelligence.select([highCost.stage], () => false))?.strategy?.id, 'MappedOverworldRoute')
 })
 
 test('mapped route RPC success cannot manufacture a completed nether milestone', async () => {

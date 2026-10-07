@@ -496,8 +496,10 @@ function plan (info, opts: any = {}) {
   }
   if (ok('food')) {
     // Стадо съедобных по скану копии (звери при генерации стоят у места): крюк ≤ 60 с к самому дешёвому. Еды на входе в Ад
-    // было 0 в 7 из 9 удачных (S8 07.10), а без еды ночью тело не лечится — смерти от пауков на 13–16 мин. ND_ROUTE_FOODMAP=0 — выкл.
-    const herd = process.env.ND_ROUTE_FOODMAP === '0' ? null : foodHerds(info).filter(h => !outpostNear(info, h, 16) && (!Number.isFinite(opts.fromY) || Math.abs(h.y - opts.fromY) <= 16))
+    // было 0 в 7 из 9 удачных (S8 07.10), а без еды ночью тело не лечится — смерти от пауков на 13–16 мин. Звери — знание
+    // сущностей копии, не карты (правило: постройки и лава): только ND_ROUTE_FOODMAP=1 и отдельной строкой «со знанием стад»
+    // (S8b 07.10); по умолчанию — звери по пути (видимость).
+    const herd = process.env.ND_ROUTE_FOODMAP !== '1' ? null : foodHerds(info).filter(h => !outpostNear(info, h, 16) && (!Number.isFinite(opts.fromY) || Math.abs(h.y - opts.fromY) <= 16))
       .map(h => ({ h, c: detour(h) })).filter(x => x.c <= 60).sort((a, b) => a.c - b.c)[0]
     steps.push({ id: 'food', kind: 'food', ...(herd ? { at: { x: herd.h.x, y: herd.h.y, z: herd.h.z }, d: Math.round(flat(from, herd.h)) } : {}), budget: WORK.food + (herd ? Math.round(herd.c) : 0), why: `еды на вход ≥ 6 (${herd ? `стадо ${herd.h.n} по карте` : 'сено, звери по пути'})` })
   }
@@ -540,6 +542,11 @@ function plan (info, opts: any = {}) {
     }
   }
   if (bedStep) steps.splice(bedAt, 0, bedStep)
+  // Брёвна под плавку: в плане жила (сырое железо) — печи нужно топливо, а верстак/палки/кирки съедают 6 брёвен почти целиком
+  // (s8-f4-5: «плавить raw_iron нечем: угля нет, а дерево — запас» ×3 → маршрут кончился; s8-f4-2: досок 3, нового верстака не
+  // сделать). Без жилы (железо из сундуков/голема) — 6.
+  const woodStep = steps.find(x => x.kind === 'wood')
+  if (woodStep && !process.env.ND_ROUTE_WOODN && steps.some(x => x.kind === 'ore' || x.kind === 'mine' || x.kind === 'ironStage')) woodStep.logs = 8
   const budget = steps.reduce((n, s) => n + (s.budget || 0), 0)
   return { seed: info.seed, lava, ironNeed: need, ironExpect: Math.round(expect * 10) / 10, short, steps, budget, structureBudgetSeconds, route: routeName(steps) }
 }
@@ -596,4 +603,39 @@ if (require.main === module) {
   } else console.log('node daemon/src/route.js cache | plan <сид> | stats')
 }
 
-module.exports = { foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }
+/** Учёт исхода шага маршрута (S8b 07.10). Удачный шаг — в done; мягкие food/water — тоже done (еда ещё перед входом, вода — у
+ *  литья); плавка — до трёх провалов, третий кончает маршрут ('break'); прочие провалы считаются, постройки/жилы/лава — сразу в
+ *  avoid. Раньше цепочка была в campaign.ts и вставки «вода/еда по пути» её разорвали: удачный шаг попадал в ветки провала. */
+function bookStep (id: string, ok: unknown, book: { done: Set<string>, fails: Map<string, number>, avoid: Set<string> }): 'break' | null {
+  if (ok || /^(food|water)$/.test(id)) { book.done.add(id); return null }
+  const n = (book.fails.get(id) || 0) + 1
+  book.fails.set(id, n)
+  if (id === 'smelt') return n >= 3 ? 'break' : null
+  if (n >= 2 || /^(ruin|village|treasure|ship|ore:|dig:|mine|ironStage|lava:)/.test(id)) book.avoid.add(id)
+  return null
+}
+
+// Копка/спуск маршрута при низком хп — цена против лечения, а не порог (S8b 07.10, замечание проверки д). Хвост потерь хп за
+// одно действие (dig_down, mine камня/руды, mine_seen, tunnel, goto вниз на 3+; этап route, серии day05r/night05t/s8 —
+// 6791 действие, 1 смерть): потерять ≥ h хп. Риск смерти = P(потеря ≥ хп) (Лаплас) × цена смерти графа (72000 т = 1 ч).
+const DIG_LOSS = { n: 6791, tail: [[1, 72], [2, 56], [3, 35], [4, 22], [5, 4], [6, 4], [8, 2], [10, 2]] }
+function digRiskTicks (hp: number): number {
+  // Осторожно: хвост для ближайшего h ≤ хп (P(потеря ≥ h) ≥ P(потеря ≥ хп)).
+  const row = [...DIG_LOSS.tail].reverse().find(([h]) => h <= hp)
+  const k = row ? row[1] : DIG_LOSS.n
+  return Math.round((k + 0.5) / (DIG_LOSS.n + 1) * 72000)
+}
+// Лечение до 13: есть еда (или сытость ≥ 18) — съесть и регенерация ~1 хп/4 с (80 т); лечиться нечем — охота ~90 с и то же.
+function healTicks (hp: number, canEat: boolean): number {
+  const need = Math.max(0, 13 - hp)
+  return need === 0 ? 0 : (canEat ? 40 : 1800) + need * 80
+}
+
+// Отказ от копки сейчас: риск при нынешнем хп дороже, чем лечение до 13 плюс риск уже после него (при хп ≥ 13 лечить нечего —
+// не отказ; S8b 07.10: без второго слагаемого хп 20 давал «риск 27 > лечение 0» — копка запрещалась всегда).
+function digRefuse (hp: number, canEat: boolean): { refuse: boolean, riskT: number, healT: number } {
+  const riskT = digRiskTicks(hp), healT = healTicks(hp, canEat)
+  return { refuse: riskT > healT + digRiskTicks(Math.max(hp, 13)), riskT, healT }
+}
+
+module.exports = { digRefuse, digRiskTicks, healTicks, bookStep, foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }

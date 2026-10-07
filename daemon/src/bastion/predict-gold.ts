@@ -245,7 +245,11 @@ function pitJunk (bot) {
   const SL = require('.././sealed')
   const out = []
   let fill = 0
-  const items = bot.inventory.items().slice().sort((a, b) => (Number(END_FILLER.test(b.name)) - Number(END_FILLER.test(a.name))) || (b.count - a.count))
+  // Камень на каменные кирки (stone_tool_materials: булыжник, чернокамень, глубинный булыжник) — первым в запас заливки: незерак на
+  // кирку не годится (S1d s1d-AB-2: в яму ушли cobbled_deepslate 64 и cobblestone 46, оставлен незерак 128 — к 46-й мин кирок нет).
+  const TOOL_STONE = /^(cobblestone|blackstone|cobbled_deepslate)$/
+  const items = bot.inventory.items().slice().sort((a, b) => (Number(TOOL_STONE.test(b.name)) - Number(TOOL_STONE.test(a.name))) ||
+    (Number(END_FILLER.test(b.name)) - Number(END_FILLER.test(a.name))) || (b.count - a.count))
   const goldArmor = /^golden_(helmet|chestplate|leggings|boots)$/
   let spareGold = 0
   for (const it of items) {

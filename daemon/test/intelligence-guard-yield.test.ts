@@ -72,10 +72,11 @@ function sealedFixture(results: GuardResult[]) {
   const context = {
     process, gameClock: { now: () => 1000 }, GOLD_PICK: /iron_pickaxe/,
     inLava: () => false, answerAttack: async () => false, inOwnTunnel: () => false,
-    eatIfHungry: async () => {}, log: (message: string) => logs.push(message),
+    eatIfHungry: async () => {}, log: (message: string) => logs.push(message), nearBruteHome: () => false,
     require: (name: string) => {
       if (name === '.././sealed') return { exposure: () => [], keyV: (v: Vec3) => v.toString() }
       if (name === '.././tunnel') return { lowPicks: () => 1 }
+      if (name === '.././nether-route') return { bruteSpots: () => [] }
       if (name === '.././ne-guard') return { hot: () => requests < results.length ? { why: 'hoglin в 2.5 бл.' } : null,
         react: async () => {
           if (++requests > 10) throw new Error('resolved guard spin')

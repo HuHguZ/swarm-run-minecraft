@@ -66,12 +66,13 @@ test('an attacking player is a pursuer of smartFlee (a bystander is not); with a
 
 test('run price: full against walkers and fire, .3 against a pursuer that outpaces it, .4 against a player, .5 for unseen shots', () => {
   const foe = (kind: string, player = false) => ({ id: 2, kind, distance: 5, player, threatening: true, hit: 2 })
-  assert.equal(runGain(tactical({ contact: true, enemies: [foe('zombie')] })), 1)
+  // canFight false: a walker the body would fight on arrival prices the run down since S4d (test/s4d-tactics.test.ts).
+  assert.equal(runGain(tactical({ contact: true, canFight: false, enemies: [foe('zombie')] })), 1)
   assert.equal(runGain(tactical({ contact: true, enemies: [foe('blaze')] })), .3)
   assert.equal(runGain(tactical({ contact: true, enemies: [foe('Tank', true)] })), .4)
   assert.equal(runGain(tactical({ incomingProjectiles: 1 })), .5)
   assert.equal(runGain(tactical({ contact: true })), 1, 'a hit from an unseen attacker')
-  assert.equal(runGain(tactical({ contact: true, enemies: [foe('blaze'), { ...foe('zombie'), id: 3 }] })), 1, 'the run still shakes the zombie')
+  assert.equal(runGain(tactical({ contact: true, canFight: false, enemies: [foe('blaze'), { ...foe('zombie'), id: 3 }] })), 1, 'the run still shakes the zombie')
   assert.equal(runGain(tactical({ burning: true, water: true, enemies: [foe('blaze')] })), 1, 'the bucket puts the fire out (escapeFire)')
   assert.equal(runGain(tactical({ burning: true, enemies: [foe('blaze')] })), .3, 'no bucket: running does not put fire out, the blaze still outranges it')
   assert.equal(runGain(tactical({ lava: true, enemies: [foe('blaze')] })), 1, 'the swim out of lava')

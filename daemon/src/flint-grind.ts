@@ -9,18 +9,22 @@ const { placeBlockAt } = require('./build')
 const { equipBestTool } = require('./items')
 
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+// Клетки у ног: 4 стороны, затем 4 диагонали (после копки гравия тело часто стоит в яме из гравия — сторон мало).
+const AROUND = [...SIDES, [1, 1], [1, -1], [-1, 1], [-1, -1]]
 const isAir = b => !!b && (b.name === 'air' || b.name === 'cave_air')
 const FLUID = /water|lava|bubble_column/
 
-// Клетка у ног: воздух, сверху воздух, снизу — полный твёрдый блок (гравий не упадёт), рядом нет жидкости.
+// Клетка у ног: воздух, сверху воздух, снизу — полный твёрдый блок (сыпучий — только на твёрдом: гравий не упадёт), рядом нет
+// жидкости (s8-f4-9: «некуда поставить» ×3 в яме из гравия — дальше place+mine по 4 с, 79 раз).
 function grindSpot (bot) {
   const feet = bot.entity.position.floored()
-  for (const [dx, dz] of SIDES) {
+  for (const [dx, dz] of AROUND) {
     const c = feet.offset(dx, 0, dz)
     const b = bot.blockAt(c)
     const under = bot.blockAt(c.offset(0, -1, 0))
     const over = bot.blockAt(c.offset(0, 1, 0))
-    if (!isAir(b) || !isAir(over) || !under || under.boundingBox !== 'block' || FLUID.test(under.name) || /gravel|sand/.test(under.name)) continue
+    if (!isAir(b) || !isAir(over) || !under || under.boundingBox !== 'block' || FLUID.test(under.name)) continue
+    if (/gravel|sand/.test(under.name) && (bot.blockAt(c.offset(0, -2, 0)) || {}).boundingBox !== 'block') continue
     if (SIDES.some(([ex, ez]) => FLUID.test((bot.blockAt(c.offset(ex, 0, ez)) || {}).name || ''))) continue
     return c
   }

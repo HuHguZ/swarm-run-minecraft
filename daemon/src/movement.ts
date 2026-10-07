@@ -435,7 +435,18 @@ function gotoGoal (bot, goal, opts: any = {}) {
       if (un && bot.entity && !(empty && goal.isEnd(bot.entity.position.floored())) && un.refused(r, answer)) return
       answer()
     }
-    const onGoal = (g) => { if (un && un.busy()) return; if (g !== goal) cleanup(error('GoalChanged', 'The goal was changed before it could be completed!')) }
+    // Цель сбросил рефлекс падения (reflex-lock take, Emergency) — пауза: после рефлекса та же цель снова (ND_GOTO_RESUME=0 — выкл.).
+    let paused = false
+    const onGoal = (g) => {
+      if (un && un.busy()) return
+      const lease = g === null && bot._ndReflexTake
+      if (lease && process.env.ND_GOTO_RESUME !== '0') {
+        paused = true
+        lease.after(() => gameClock.setTimeout(() => { if (!done && paused) { paused = false; bot.pathfinder.setGoal(goal) } }, 0))
+        return
+      }
+      if (g !== goal) cleanup(error('GoalChanged', 'The goal was changed before it could be completed!'))
+    }
     const onStop = () => { if (un && un.busy()) return; cleanup(error('PathStopped', 'Path was stopped before it could be completed! Thus, the desired goal was not reached.')) }
     const onEnd = () => cleanup(error('Disconnected', 'соединение закрыто посреди пути'))
     bot.on('end', onEnd)

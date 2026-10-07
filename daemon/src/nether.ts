@@ -1195,6 +1195,10 @@ function describePortal (bot, start) {
 
 // Ближайший горящий портал в scan. Портал — свой, его видно, поэтому
 // bot.findBlocks, а не честное зрение: вопрос тут «где дверь», а не «что вижу».
+/** A lit portal is ours when one of its cells is within 8 bl. of the remembered standing spot of this world. */
+function notForeign (door, recV) { return door.cells.some(c => c.distanceTo(recV) <= 8) }
+const xyzOf = v => ({ x: v.x, y: v.y, z: v.z })
+
 function findLitPortal (bot, mcData, scan, near = null) {
   const ids = [mcData.blocksByName.nether_portal.id]
   const at = near || bot.entity.position
@@ -1665,7 +1669,12 @@ async function enter (session, ctl, p: any = {}) {
   const places = (session.journal.state && session.journal.state.places) || {}
   const key = worlds.portalKey(from)
   const rec = places[key] && worlds.worldOfRecord(places[key]) === from ? places[key] : null
+  // Горящий портал не наш (S1d: 7777… s1c-H-2/F-3/I-2 — чужой портал у маршрута к бастиону увёл тело в верхний мир к
+  // −579,68,43, петля EnterNether): при записи своего портала в этом мире — сперва он, ближайший — только без записи.
+  const recV = rec ? new Vec3(rec.x, rec.y, rec.z) : null
+  const ours = d => !d || !recV || p.anyPortal || notForeign(d, recV)
   let door = findLitPortal(bot, mcData, scan)
+  if (!ours(door)) { base.foreignPortal = xyzOf(door.origin); door = null }
   let walked = null
   if (!door && rec) {
     const target = new Vec3(rec.x, rec.y, rec.z)
@@ -1683,7 +1692,8 @@ async function enter (session, ctl, p: any = {}) {
         }
       }
     }
-    door = findLitPortal(bot, mcData, scan)
+    door = findLitPortal(bot, mcData, scan, recV)
+    if (!ours(door)) { base.foreignPortal = xyzOf(door.origin); door = null }
   }
   let lit = null
   if (!door) {
@@ -1912,6 +1922,7 @@ module.exports = {
   walkToward,
   guarded,
   findLitPortal,
+  notForeign,
   describePortal,
   doorways,
   clearStand,

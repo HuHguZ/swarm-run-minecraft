@@ -37,27 +37,32 @@ test('ND_ROUTE_LAVAP (умолчание): дальнее озеро повер�
   })
 })
 
-test('ND_ROUTE_FIRST=1: в верхнем мире с картой граф берёт маршрут по карте, после двух провалов — кусочные стратегии', async () => {
+test('цена, не флаг: в верхнем мире с картой граф сам берёт маршрут по карте (RuinedPortal — по цене этапа cast), после двух провалов — кусочные стратегии', async () => {
   const { createCampaignIntelligence } = require('../src/campaign/intelligence')
-  const old = process.env.ND_ROUTE_FIRST
-  process.env.ND_ROUTE_FIRST = '1'
-  try {
-    const intelligence = createCampaignIntelligence({
-      eyes: 10, beds: 1, now: () => 0,
-      observe: async () => ({ state: { dimension: 'overworld', health: 20, food: 20, inventory: {} } }),
-      call: async () => ({}), sleep: async () => {}, record() {},
-      execute: async () => ({ outcome: 'FAILURE', events: [] })
-    })
-    const stage = name => ({ name, needed: () => true, ready: () => true, defer: () => false, done: () => false, run: async () => {} })
-    const stages = [stage('wood'), stage('route')]
-    for (let i = 0; i < 2; i++) {
-      const s = await intelligence.select(stages, () => false)
-      assert.strictEqual(s.strategy.id, 'MappedOverworldRoute')
-      await s.stage.run()
-    }
-    const next = await intelligence.select(stages, () => false)
-    assert.notStrictEqual(next?.strategy?.id, 'MappedOverworldRoute')
-  } finally { if (old === undefined) delete process.env.ND_ROUTE_FIRST; else process.env.ND_ROUTE_FIRST = old }
+  const { modelFor } = require('../src/core/cost-model')
+  const known = { status: 'known', value: true, source: 'observed', at: 0, confidence: 1 }
+  const records: any[] = []
+  const intelligence = createCampaignIntelligence({
+    eyes: 10, beds: 0, now: () => 0,
+    observe: async () => ({ state: { dimension: 'overworld', health: 20, food: 20, inventory: {} }, facts: { ruined_portal: known, village: known } }),
+    call: async () => ({}), sleep: async () => {}, record: (r: any) => records.push(r),
+    execute: async () => ({ outcome: 'FAILURE', events: [] })
+  })
+  // Цена RuinedPortal — из этапа, который он исполняет (cast), а не из шага маршрута ruin (только сундук, 512 тиков).
+  const models = new Map(require('../src/environments/cost-data').loadCosts().map((m: any) => [m.key, m]))
+  const ruined = intelligence.registry.get('RuinedPortal')
+  const state = { dimension: 'overworld', health: 20 }
+  assert.ok(['RuinedPortal', 'cast'].includes(String(modelFor(ruined, state, models)?.key).split('@')[0]), String(modelFor(ruined, state, models)?.key))
+  const stage = (name: string) => ({ name, needed: () => true, ready: () => true, defer: () => false, done: () => false, run: async () => {} })
+  const stages = [stage('wood'), stage('stone'), stage('route')]
+  for (let i = 0; i < 2; i++) {
+    const s = await intelligence.select(stages, () => false)
+    assert.strictEqual(s.strategy.id, 'MappedOverworldRoute', JSON.stringify(records.filter(r => r.level === 'decision').pop()?.alternatives))
+    await s.stage.run()
+  }
+  assert.ok(!records.some(r => /ND_ROUTE_FIRST/.test(String(r.reason))), 'выбор — решением графа, не флагом')
+  const next = await intelligence.select(stages, () => false)
+  assert.notStrictEqual(next?.strategy?.id, 'MappedOverworldRoute')
 })
 
 test('ND_ROUTE_CAVEDOWN=1: пещерная лава на 12 ниже тела — сперва колодец вниз, литьё сверху не пробуется', async () => {
@@ -136,7 +141,8 @@ test('дерево по карте: тело на кронах выше ство
   }
   const route = createOverworldRoute(ctx)
   await route.routeStep({ kind: 'wood', src: 'mapwood', at: { x: 5, y: 83, z: 5 } })
-  assert.deepStrictEqual(work.slice(0, 4), ['goto@91', 'mine@91', 'dig_down 8', 'mine@83'])
+  // S8b: к стволу — клетки рядом с ним (до 3), тело всё ещё на кронах — дальше прежний ход: брёвна, вниз, брёвна.
+  assert.deepStrictEqual(work.slice(0, 6), ['goto@91', 'goto@91', 'goto@91', 'mine@91', 'dig_down 8', 'mine@83'])
 })
 
 test('литьё: вода кончилась посреди рамы — набрать воду и продолжить ту же раму', async () => {
@@ -200,7 +206,7 @@ test('pathfinder: порошковый снег в blocksToAvoid (пустой �
   assert.ok(movements.blocksToAvoid.has(reg.blocksByName.nether_portal.id))
 })
 
-test('шаг еды: стадо съедобных по скану с крюком ≤ 60 с и по высоте рядом — точка шага; без стада — как раньше', () => {
+test('шаг еды (ND_ROUTE_FOODMAP=1, «со знанием стад»): стадо съедобных по скану с крюком ≤ 60 с и по высоте рядом — точка шага; без стада и по умолчанию — без точки', () => withEnv({ ND_ROUTE_FOODMAP: '1' }, () => {
   const base = { seed: '1', spawn: { x: 0, z: 0 }, rp: null, village: null, ship: null, treasure: null,
     sky: { x: 200, y: 64, z: 0, cls: 'surface', src: 90, d: 200 }, lava: null,
     ores: { v: 6, spawn: { x: 0, z: 0 }, half: 160, animals: [{ id: 'cow', x: 100, y: 65, z: 10 }, { id: 'cow', x: 104, y: 65, z: 12 }, { id: 'pig', x: 30, y: 140, z: 0 }, { id: 'pig', x: 33, y: 140, z: 2 }] } }
@@ -209,7 +215,10 @@ test('шаг еды: стадо съедобных по скану с крюко
   assert.ok(food && food.at && food.at.x > 90, JSON.stringify(food))
   const none = route.plan({ ...base, ores: { ...base.ores, animals: [] } }, { have: { stone_pickaxe: 1, bucket: 1, flint_and_steel: 1, water_bucket: 1 }, fromY: 64 })
   assert.ok(!none.steps.find(x => x.id === 'food').at)
-})
+  withEnv({ ND_ROUTE_FOODMAP: undefined }, () => {
+    assert.ok(!route.plan(base, { have: { stone_pickaxe: 1, bucket: 1, flint_and_steel: 1, water_bucket: 1 }, fromY: 64 }).steps.find(x => x.id === 'food').at)
+  })
+}))
 
 test('литьё: источники у берега — вперёд (ND_CAST1_EDGE), середина озера — после', () => {
   const Vec3 = require('vec3')
@@ -265,4 +274,31 @@ test('кремень: огниво скрафчено из первого кре
   ctx.routeFlintFromBag = route.routeFlintFromBag
   assert.strictEqual(await route.routeStep({ kind: 'flint', at: { x: 5, y: 64, z: 5 } }), true)
   assert.strictEqual(work.filter(w => w === 'mine').length, 1, work.join(','))
+})
+
+test('flint_grind: стороны у ног заняты — гравий ставится по диагонали; сыпучий пол — только на твёрдом', () => {
+  const Vec3 = require('vec3')
+  const { grindSpot } = require('../src/flint-grind')
+  const world = new Map<string, string>()
+  const key = (p: any) => `${p.x},${p.y},${p.z}`
+  for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) world.set(key({ x, y: 63, z }), 'gravel')
+  for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) world.set(key({ x, y: 64, z }), 'gravel')
+  const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5) },
+    blockAt: (p: any) => { const n = world.get(key(p)) || 'air'; return { name: n, position: p, boundingBox: n === 'air' ? 'empty' : 'block' } } }
+  assert.strictEqual(grindSpot(bot), null, 'гравий на воздухе — нельзя')
+  for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) world.set(key({ x, y: 62, z }), 'stone')
+  const c = grindSpot(bot)
+  assert.ok(c && Math.abs(c.x) === 1 && Math.abs(c.z) === 1, JSON.stringify(c))
+})
+
+test('дерево под плавку: в плане жила — 8 брёвен, железо из построек — по умолчанию (6)', () => {
+  const base = { seed: '1', spawn: { x: 0, z: 0 }, rp: null, village: null, ship: null, treasure: null,
+    sky: { x: 200, y: 64, z: 0, cls: 'surface', src: 90, d: 200 }, lava: null,
+    ores: { v: 6, spawn: { x: 0, z: 0 }, half: 160, trees: [{ x: 20, y: 66, z: 0, n: 9 }], iron: [{ x: 60, y: 60, z: 0, n: 5, depth: 3, open: 3, wet: 0 }] } }
+  const p = route.plan(base, { fromY: 64 })
+  assert.ok(p.steps.some(x => x.kind === 'ore'), p.steps.map(x => x.id).join(','))
+  assert.strictEqual(p.steps.find(x => x.kind === 'wood').logs, 8)
+  const q = route.plan({ ...base, ores: { ...base.ores, iron: [] }, village: null }, { fromY: 64, have: { iron_ingot: 3, flint_and_steel: 1 } })
+  const w = q.steps.find(x => x.kind === 'wood')
+  assert.ok(!w || !w.logs, JSON.stringify(w))
 })

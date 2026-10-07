@@ -10,7 +10,12 @@ export interface TacticalEnemy {
   threatening: boolean
   /** expected damage of one hit after our armor (combat-safety), when known */
   hit?: number
+  /** struck us in melee within 1.5 s but the eye ray misses it (S4d): known from damage_event, not seen */
+  unseen?: boolean
 }
+
+/** S4d round-4 tactics (07.10): ND_S4D=0 restores the S4c behaviour for the native A/B on one code. */
+export const S4D = (): boolean => process.env.ND_S4D !== '0'
 
 export interface TacticalState {
   at: number
@@ -76,6 +81,7 @@ export const meleeReachable = (enemy: TacticalEnemy): boolean => enemy.kind !== 
 // the next fireball started it again, every 2.5 s for the whole tape (stress stand v2, 11 of 14 cycles). Keep working,
 // shield the shots, box up when low.
 const OUTPACING = /^(phantom|vex|bee|ghast|blaze)$/
+const SHOOTERS = /^(creeper|skeleton|stray|bogged|parched|pillager|witch|drowned|evoker|breeze|guardian|elder_guardian|shulker|piglin)$/
 export function outpaced(state: TacticalState): boolean {
   const near = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 16)
   return state.contact && near.length > 0 && near.every(enemy => OUTPACING.test(enemy.kind))
@@ -92,8 +98,18 @@ export function runGain(state: TacticalState): number {
   // Lava: the swim to the shore. Fire on dry ground is put out by a bucket, not by running (it burns 8 s anyway).
   if (state.lava || state.burning && !state.fireResistance && state.water) return 1
   const near = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 16)
-  if (!near.length) return state.contact ? 1 : .5
-  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) ? .3 : 1))
+  // S4d: a shooter firing from past the 16-block horizon (observeTactics lists it only while it shoots) out-ranges the run
+  // like one inside it.
+  const far = S4D() ? state.enemies.filter(enemy => enemy.threatening && !enemy.player && enemy.distance > 16) : []
+  if (!near.length && !far.length) return state.contact ? 1 : .5
+  // S4d: a walker this armed body would fight on arrival is no reason to run before it arrives (natives s4d-ab bridge:
+  // Flee from a wither skeleton 7 blocks off while burning, 3 s under the blazes, 18.7 -> 9.6 hp, then death). Not a creeper:
+  // without a shield the run from one is the answer.
+  // Nor a shooter: it does not come, it shoots (the retreat from a skeleton ends at its safe distance - stress-tactics).
+  // Burning with no shooter around, the run is the way out of the fire cell (stand fuzz2-713: stood in fire for the spider).
+  const underFire = state.enemies.some(enemy => enemy.threatening && (OUTPACING.test(enemy.kind) || SHOOTERS.test(enemy.kind) && enemy.kind !== 'creeper'))
+  const awaited = (enemy: TacticalEnemy) => S4D() && state.canFight && state.weapon && !enemy.player && !SHOOTERS.test(enemy.kind) && enemy.distance > 4.5 && (!state.burning || underFire)
+  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) ? .3 : awaited(enemy) ? .2 : 1), ...far.map(enemy => OUTPACING.test(enemy.kind) ? .3 : .5))
 }
 export const deadEnd = (state: TacticalState): boolean => hasObservedTarget(state) && (!!state.escapeExhausted || outpaced(state))
 export const hasMeleeTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy))
@@ -104,8 +120,9 @@ export const canRepelLavaAttacker = (state: TacticalState): boolean => state.hea
 
 // A fight the safety verdict abandons after the next exchange is a trade, not a favourable fight: the bot took one brute
 // hit at 20 HP and then could not outrun it (stress stand brute-in-nether, cf. Full40). Cheap fights keep their verdict.
-export function sustainableFight(verdict: { action?: string; cheap?: boolean; hit?: number; threshold?: number }, health: number): boolean {
-  return verdict.action === 'fight' && (!!verdict.cheap || health - (verdict.hit || 0) > (verdict.threshold || 0))
+// A trade at the body (combat-safety, S4d: the walker already hits whatever we do) is sustainable by its own measure.
+export function sustainableFight(verdict: { action?: string; cheap?: boolean; trade?: boolean; hit?: number; threshold?: number }, health: number): boolean {
+  return verdict.action === 'fight' && (!!verdict.cheap || !!verdict.trade || health - (verdict.hit || 0) > (verdict.threshold || 0))
 }
 
 // Cover is no rest from a creeper walking up (stress stand: Heal/Hide/a held box and Dodge in turns until the blast).

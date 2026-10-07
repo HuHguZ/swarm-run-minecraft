@@ -60,7 +60,9 @@ export function learnCosts(samples: Iterable<CostSample>, legacyRate?: number): 
 const aliases: Record<string, string[]> = {
   AcquireWood: ['wood'], AcquireStoneTools: ['stone'], FindFood: ['food'], GetWater: ['water'],
   MineIron: ['iron'], VillageIron: ['village'], ShipwreckIron: ['ship'], TreasureIron: ['treasure'],
-  LavaPoolPortal: ['castSky'], RuinedPortal: ['ruin'], EnterNether: ['enter', 'routeEnter'], PrepareNether: ['prep'],
+  // A strategy is priced by the work it actually runs: both portal casts run the campaign stage 'cast'. The route steps 'ruin'
+  // (only the chest: 512 ticks, 47/53) and 'castSky' are parts of the mapped route, not of these strategies (S8b 07.10).
+  LavaPoolPortal: ['cast'], RuinedPortal: ['cast'], EnterNether: ['enter', 'routeEnter'], PrepareNether: ['prep'],
   // No GetBlazeRods → 'nether': that legacy stage mixed empty Nether visits with rod farming (0 of 6 successes).
   BastionBarter: ['bastion'], HuntEndermen: ['pearls'], CraftEyes: ['eyes'],
   PrepareEnd: ['endkit'], FindStronghold: ['stronghold'], KillDragon: ['dragon'],

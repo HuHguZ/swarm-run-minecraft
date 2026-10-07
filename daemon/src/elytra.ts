@@ -297,12 +297,14 @@ function install (bot) {
         const hp0 = bot.health ?? 20
         const rec: any = { kind: type === 'fly_into_wall' ? 'стена' : 'пол', phase: S.phase || S.box[S.box.length - 1].ph || null, at: gameClock.now(), ticks: S.box.slice(-12) }
         S.boxHold = true
+        // В список — сразу (отчёт погибшего собирается раньше 100 мс), урон и смерть — когда придёт хп.
+        rec.dmg = null
+        S.crashes.push(rec)
+        if (S.crashes.length > 20) S.crashes.shift()
         gameClock.setTimeout(() => {
           S.boxHold = false
           rec.dmg = r2(Math.max(0, hp0 - (bot.health ?? 0)))
           rec.died = (bot.health ?? 0) <= 0
-          S.crashes.push(rec)
-          if (S.crashes.length > 20) S.crashes.shift()
           console.log('[elytra-crash]', JSON.stringify(rec))
         }, 100)
       } catch {}
@@ -577,6 +579,18 @@ function cost (W, st, goal, at, r, yaw, pitch) {
 
 // ---------------------------------------------------------------- полёт
 
+// Ракета на этот тик: want — rocketIf (true «надо», false «нет», иначе — по выгоде). С ракетой — взгляд, посчитанный
+// С ракетой, и только если лучший такой полёт не кончается стеной с уроном ≥ 1 (s7c3: 3 удара «таран: разбег» под
+// ракетой, −9…−12: «надо» шла со взглядом, посчитанным без ракеты). { fire, yaw, pitch, c, veto }.
+function rocketChoice (W, st, g, pl, want) {
+  if (want === false) return { fire: false }
+  const withR = choose(W, st, g, { rocketNow: true })
+  if (!withR) return { fire: false }
+  const crash = withR.r.kind === 'wall' && withR.r.dmg >= 1
+  if (want === true) return crash ? { fire: false, veto: true } : { fire: true, yaw: withR.yaw, pitch: withR.pitch, c: withR.c }
+  return withR.c < pl.c - 4 && !crash ? { fire: true, yaw: withR.yaw, pitch: withR.pitch, c: withR.c } : { fire: false }
+}
+
 // Лететь, пока until() не скажет «хватит» (или сели, кончился полёт, время).
 // goal() — цель этого тика; ракета — когда с ней прогноз заметно лучше или
 // скорость/высота ниже нужной (rocketIf). Всё — на тике физики: взгляд этого
@@ -617,11 +631,8 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
         let fire = false
         if (!(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > 0) {
           const want = rocketIf ? rocketIf(st, pl, g) : false
-          if (want === true) fire = true
-          else if (want !== false) {
-            const withR = choose(W, st, g, { rocketNow: true })
-            if (withR && withR.c < pl.c - 4) { fire = true; pl.yaw = withR.yaw; pl.pitch = withR.pitch; pl.c = withR.c }
-          }
+          const rc = rocketChoice(W, st, g, pl, want)
+          if (rc.fire) { fire = true; pl.yaw = rc.yaw; pl.pitch = rc.pitch; pl.c = rc.c } else if (rc.veto && stats) stats.rocketVeto = (stats.rocketVeto || 0) + 1
         }
         planMs += gameClock.wall.now() - tp
         bot.look(pl.yaw, pl.pitch, true).catch(() => {})
@@ -1357,7 +1368,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
       const e = enemy()
       if (!e || !e.position) return null
       if (gliding(bot.entity) || gliding(e)) {
-        if (ctx.hp <= ctx.healAt && ctx.heal?.() && kit(bot).rockets >= 2 && gameClock.now() >= nextEscape) {
+        if (ctx.hp <= ctx.healAt && ctx.heal && kit(bot).rockets >= 2 && gameClock.now() >= nextEscape) {
           nextEscape = gameClock.now() + 8000
           return { kind: 'escape' }
         }
@@ -1432,8 +1443,8 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
         chestAir: st.chestAir || undefined,
         reglide: st.reglide || undefined,
         // Удары о стену/пол себе за этот бой (чёрный ящик install): вид/фаза/урон, † — насмерть; ticks — первого.
-        crashes: (() => { const c = (bot._ndElytra?.crashes || []).filter(x => x.at >= createdAt); return c.length ? c.map(x => `${x.kind}/${x.phase || '?'}/−${x.dmg}${x.died ? '†' : ''}`) : undefined })(),
-        crashTicks: (() => { const c = (bot._ndElytra?.crashes || []).find(x => x.at >= createdAt); return c ? c.ticks.slice(-6).map(k => `${k.ph || '-'} y${k.y} v${k.vx},${k.vy},${k.vz} fd${k.fd}${k.ef ? '' : ' нет полёта'}${k.fw ? ' ракета' : ''}`) : undefined })(),
+        crashes: (() => { const c = (bot._ndElytra?.crashes || []).filter(x => x.at >= createdAt); return c.length ? c.map(x => `${x.kind}/${x.phase || '?'}/−${x.dmg ?? '?'}${x.died ? '†' : ''}`) : undefined })(),
+        crashTicks: (() => { const c = (bot._ndElytra?.crashes || []).find(x => x.at >= createdAt); return c ? c.ticks.slice(-6).map(k => `${k.ph || '-'} ${k.x},${k.y},${k.z} v${k.vx},${k.vy},${k.vz} fd${k.fd}${k.ef ? '' : ' нет полёта'}${k.fw ? ' ракета' : ''}`) : undefined })(),
         foe: t
       }
       return (Object.values(out) as any[]).some(v => v !== undefined) ? out : undefined
@@ -1446,5 +1457,5 @@ module.exports = {
   ON, EYE_FLY, FLY_H, lookVec, glideStep, fallStep, rollout, worldOf, install, startGlide, fireRocket, swapChest,
   toHotbar, takeoff, fly, land, landingSpot, choose, headroom, arenaAround, kit, hasElytra, wearingElytra,
   rocketCount, plainRocket, bestChest, gliding, predictGlider, track, nextTick, lavaLaunchClear,
-  escape, diveSmash, divePlan, chestDown, smashBonus, reachFromBox, consumeAir, create
+  escape, diveSmash, divePlan, chestDown, rocketChoice, smashBonus, reachFromBox, consumeAir, create
 }

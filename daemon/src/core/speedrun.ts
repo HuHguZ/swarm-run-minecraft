@@ -104,6 +104,9 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   const readyToBuild = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'bucket') >= 1 && amount(s, 'lighter') >= 1
   const pearlsNeeded = (s: WorldState) => amount(s, 'pearls') + amount(s, 'eyes') < eyes
   const rodsNeeded = (s: WorldState) => amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes
+  /** A new portal is worth building only while the Nether still owes eyes (COORD 00:55 S5c: after the Nether the paused
+   *  FindStronghold let the planner pick LavaPoolPortal/AcquireDiamondPick — 15–20 min of logs and diamonds for nothing). */
+  const eyesOwed = (s: WorldState) => amount(s, 'eyes') < eyes
   const toolsUnavailable = (s: WorldState) => s.facts.nether_tools_ready?.status === 'known' && s.facts.nether_tools_ready.value === false
   // blaze_allowed is the campaign's order «pearls of the active bastion first», not a fire-resistance permit: fire resistance
   // prices the fight (blazeRisk), it does not gate it (user decision 06.10 22:33, AGENTS.md «Гибкость вместо жёстких правил»).
@@ -147,11 +150,11 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   add('CraftPortalKit', 'portalKit', s => ow(s) && !knows(s, 'portal') && amount(s, 'iron') >= iron && (!amount(s, 'bucket') || !amount(s, 'lighter')),
     { resources: { iron: -4 }, atLeast: { bucket: 1, lighter: 1 } }, 20, (_b, a) => amount(a, 'bucket') >= 1 && amount(a, 'lighter') >= 1, 0)
   add('GetWater', 'water', s => readyToBuild(s) && !amount(s, 'water') && amount(s, 'obsidian') < 10, { atLeast: { water: 1 } }, 40, has('water'), 0.015)
-  add('ScoutLava', 'scoutLava', s => readyToBuild(s) && amount(s, 'water') >= 1 && unknown(s, 'lava'), { facts: { lava: true } }, 60, achieved('lava'), 0.02)
-  add('LavaPoolPortal', 'cast', s => readyToBuild(s) && amount(s, 'water') >= 1 && knows(s, 'lava'), { facts: { portal: true } }, 120, achieved('portal'), 0.04)
+  add('ScoutLava', 'scoutLava', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && unknown(s, 'lava'), { facts: { lava: true } }, 60, achieved('lava'), 0.02)
+  add('LavaPoolPortal', 'cast', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && knows(s, 'lava'), { facts: { portal: true } }, 120, achieved('portal'), 0.04)
   add('RuinedPortal', 'ruinedPortal', s => ow(s) && !knows(s, 'portal') && structureAvailable(s, 'ruined_portal') && amount(s, 'stone_tool') >= 1,
     { facts: { portal: true, ruined_portal_exhausted: true } }, 100, achieved('portal'), 0.025)
-  add('AcquireDiamondPick', 'diamond', s => ow(s) && !knows(s, 'portal') && amount(s, 'iron') >= 3 && !amount(s, 'diamond_pick'),
+  add('AcquireDiamondPick', 'diamond', s => ow(s) && !knows(s, 'portal') && eyesOwed(s) && amount(s, 'iron') >= 3 && !amount(s, 'diamond_pick'),
     { resources: { iron: -3 }, atLeast: { diamond_pick: 1 } }, 600, has('diamond_pick'), 0.05)
   add('MineObsidian', 'obsidian', s => ow(s) && !knows(s, 'portal') && amount(s, 'diamond_pick') >= 1 && amount(s, 'water') >= 1 && amount(s, 'obsidian') < 10,
     { atLeast: { obsidian: 10 } }, 200, has('obsidian', 10), 0.035)
@@ -277,7 +280,10 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     { facts: { stronghold: true, end_portal: true } }, 300, achieved('end_portal'), 0.03)
   add('EnterEnd', 'enterEnd', s => ow(s) && knows(s, 'end_portal') && knows(s, 'end_ready'), { dimension: 'the_end', resources: { eyes: -eyes } },
     30, (_b, a) => a.dimension === 'the_end', 0.01)
-  if (!options.dragonVariants) add('KillDragon', 'dragon', s => s.dimension === 'the_end' && !knows(s, 'dragon_dead'), { facts: { dragon_dead: true } }, 180, achieved('dragon_dead'), 0.08)
+  // S5c (COORD 01:20): 31 fights at 750 + precision window, keep_inventory=false — kills 25/31 = 0.81, deaths 2/31 (95 % bound 0.19),
+  // platform→kill p50 ~200 s. Risk 0.12 between the point estimate and the bound.
+  if (!options.dragonVariants) add('KillDragon', 'dragon', s => s.dimension === 'the_end' && !knows(s, 'dragon_dead'), { facts: { dragon_dead: true } }, 200, achieved('dragon_dead'), 0.12,
+    { successChance: () => 0.8 })
   else {
     // Fork placeholder (prices to come from S5): one-cycle beds vs no beds. Bed numbers: dev-C ca3/xda1 18/21 wins, 0 deaths,
     // p50 144 s at 20 TPS with ≥4 beds; without crystals 13–14/20 (end-dragon.md). At 750 TPS S5 had 0/11 on 06.10 19:10–19:27

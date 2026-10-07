@@ -49,7 +49,13 @@ function mark (s, how) {
 }
 function take (s) {
   const b = s.bot
-  try { b.pathfinder?.setGoal(null) } catch {}
+  // Рефлекс падения (Emergency) снимает цель на долю секунды: goto (movement.gotoGoal) видит, чей это сброс, и после
+  // рефлекса продолжает ту же цель, а не падает «goal was changed» (S8b 07.10: 41 переход за 4 серии S8).
+  // after(fn) — fn после конца аренды и ВНЕ её контекста (обёртка pathfinder.setGoal в контексте снятой аренды молчит).
+  const a = state(s).active
+  const lease = a && a.owner === 'Emergency' ? s.reflex : null
+  b._ndReflexTake = lease ? { after: fn => lease.then(() => context.exit(fn)) } : null
+  try { b.pathfinder?.setGoal(null) } catch {} finally { b._ndReflexTake = null }
   try { b.stopDigging?.() } catch {}
   try { if (b.currentWindow) b.closeWindow(b.currentWindow) } catch {}
   try { b.clearControlStates?.() } catch {}

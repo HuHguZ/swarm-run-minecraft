@@ -10,6 +10,10 @@
 // ("fell from a high place" at the end of blaze-crowd, died:false): the status poll and the daemon's 'death' event both
 // raced the landing. The phases are isolated: day, frozen time, no natural spawns (s4b-flap-1/2: 4 deaths to night mobs
 // between two runs went unreported), and every phase runs a fixed number of game ticks, so lockstep and plain 750 compare.
+// Round 4 (S4d): night (zombies and skeletons do not burn; time frozen at midnight), a 3-layer floor (a creeper crater is
+// no hole into the void), KIT=iron (iron armour, iron sword, shield) or KIT=bare (stone sword only), the night mobs one by
+// one (zombie, skeleton, spider, creeper, husk with an iron spear) and a crowd of four, and a Nether fortress bridge
+// (3 wide over a 30-block drop: a wither skeleton walking up it, two blazes beside) - S1c's falls and boxes at the body.
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
@@ -41,9 +45,19 @@ async function main(): Promise<void> {
   }
   const status = async (): Promise<State> => (await call('status')).state
   const X = 3600, Y = 200, Z = 3600
+  // The Nether bridge: along z, 3 wide, nether bricks over a 30-block drop, under the bedrock roof.
+  const NX = 3600, NY = 100, NZ = 3600
+  const KIT = process.env.KIT || 'iron'
+  assert.ok(/^(iron|bare)$/.test(KIT), 'KIT=iron|bare')
   const PHASE_TICKS = Number(process.env.PHASE_TICKS || 1200)
+  // status rounds health: a body at 0.24 hp reads 0 (s4d-ab B-iron-1: "did not respawn" while alive). Dead = 0 AND a death
+  // line of the server log since the last check.
+  let lifeMark = 0
   const alive = async () => {
-    for (const until = Date.now() + 30000; Date.now() < until;) { if ((await status()).health > 0) return; await wallSleep(200) }
+    for (const started = Date.now(); Date.now() < started + 30000;) {
+      if ((await status()).health > 0 || Date.now() - started > 2000 && !deathLines(lifeMark).length) { lifeMark = kit.serverLog.mark(); return }
+      await wallSleep(200)
+    }
     throw new Error('the bot did not respawn')
   }
   // The server's count: deathCount scoreboard; its feedback goes to the body's chat only (not the log), hence ask.
@@ -61,24 +75,57 @@ async function main(): Promise<void> {
     .map((l: { text: string }) => /^\[\d\d:\d\d:\d\d\] \[[^\]]+\]: (.*)$/.exec(l.text)?.[1] ?? '')
     .filter((body: string) => body.startsWith(player + ' ') && DEATH.test(body.slice(player.length + 1)))
     .map((body: string) => body.slice(player.length + 1))
+  // The client's inventory must show the kit before the phase: a /clear landing in the middle of eating left the body with
+  // the server's 16 bread and none on its own side (s4d-ab2: no 'edible', combat.fight "нет запаса еды" in every Fight).
+  const equip = async (retry = true): Promise<void> => {
+    await command('/clear @s', false)
+    const items = KIT === 'iron' ? ['iron_sword', 'iron_pickaxe', 'bread 16', 'cobblestone 64'] : ['stone_sword', 'stone_pickaxe', 'bread 16', 'cobblestone 16']
+    for (const item of items) await command(`/give @s minecraft:${item}`)
+    if (KIT === 'iron') {
+      for (const [slot, piece] of [['head', 'helmet'], ['chest', 'chestplate'], ['legs', 'leggings'], ['feet', 'boots']]) {
+        await command(`/item replace entity @s armor.${slot} with minecraft:iron_${piece}`)
+      }
+      await command('/item replace entity @s weapon.offhand with minecraft:shield')
+    }
+    await command('/effect clear @s', false)
+    for (const until = Date.now() + 3000; Date.now() < until; await wallSleep(100)) {
+      if (((await call('status')).state?.inventory?.bread ?? 0) > 0) return
+    }
+    if (retry) await equip(false)
+  }
+  // The bridge is rebuilt for each bridge phase; the body stands at its south end.
+  const resetBridge = async () => {
+    await alive()
+    await call('stop')
+    await command('/gamemode creative', false)
+    await command(`/execute in minecraft:the_nether run tp @s ${NX + .5} ${NY + 3} ${NZ - 18.5}`, false)
+    await wallSleep(1500)
+    await command('/kill @e[type=!minecraft:player,distance=..80]', false)
+    await kit.fillExact('the_nether', [[NX - 8, NY - 30, NZ - 26], [NX + 8, NY + 8, NZ + 26]], 'air')
+    await kit.fillExact('the_nether', [[NX - 1, NY - 1, NZ - 24], [NX + 1, NY - 1, NZ + 24]], 'nether_bricks')
+    await equip()
+    await command(`/execute in minecraft:the_nether run tp @s ${NX + .5} ${NY} ${NZ - 18.5}`)
+    await command('/effect give @s minecraft:slow_falling 1 0 true')
+    await wallSleep(300)
+    await command('/gamemode survival')
+    await command('/effect give @s minecraft:instant_health 1 5 true')
+    await command('/effect give @s minecraft:saturation 1 5 true')
+  }
   const reset = async (at = { x: X + .5, z: Z + .5 }) => {
     await alive()
     await call('stop')
     await command('/gamemode creative', false)
     // After a death the body respawns at the world spawn: come back first, the arena chunks must be loaded for the fill.
-    await command(`/tp @s ${X + .5} ${Y + 5} ${Z + .5}`, false)
+    await command(`/execute in minecraft:overworld run tp @s ${X + .5} ${Y + 5} ${Z + .5}`, false)
     for (const until = Date.now() + 10000; Date.now() < until && Math.abs((await status()).pos.x - X) > 20;) await wallSleep(200)
     await wallSleep(300)
     await command('/kill @e[type=!minecraft:player,distance=..60]', false)
     await kit.fillExact('overworld', [[X - 16, Y, Z - 16], [X + 16, Y + 8, Z + 16]], 'air')
-    await kit.fillExact('overworld', [[X - 16, Y - 1, Z - 16], [X + 16, Y - 1, Z + 16]], 'stone')
-    await command('/clear @s', false)
-    for (const item of ['iron_sword', 'iron_pickaxe', 'bread 16', 'cobblestone 64']) await command(`/give @s minecraft:${item}`)
-    for (const [slot, piece] of [['head', 'helmet'], ['chest', 'chestplate'], ['legs', 'leggings'], ['feet', 'boots']]) {
-      await command(`/item replace entity @s armor.${slot} with minecraft:iron_${piece}`)
-    }
-    await command('/effect clear @s', false)
+    await kit.fillExact('overworld', [[X - 16, Y - 3, Z - 16], [X + 16, Y - 1, Z + 16]], 'stone')
+    await equip()
     await command(`/tp @s ${at.x} ${Y} ${at.z}`)
+    await command('/effect give @s minecraft:slow_falling 1 0 true')
+    await wallSleep(300)
     await command('/gamemode survival')
     await command('/effect give @s minecraft:instant_health 1 5 true')
     await command('/effect give @s minecraft:saturation 1 5 true')
@@ -89,8 +136,8 @@ async function main(): Promise<void> {
   let betweenFrom = 0
   let between = 0
   const phase = async (name: string, prepare: () => Promise<void>, expect: (actions: Selected[]) => boolean,
-    { start, walk }: { start?: { x: number; z: number }; walk?: { x: number; z: number } } = {}) => {
-    await reset(start)
+    { start, walk, nether = false }: { start?: { x: number; z: number }; walk?: { x: number; z: number }; nether?: boolean } = {}) => {
+    if (nether) await resetBridge(); else await reset(start)
     // Deaths since the last phase settled (reset, the idle body between runs) belong to no phase - reported, not hidden.
     const counted = await deathCount()
     between += counted - total
@@ -99,15 +146,17 @@ async function main(): Promise<void> {
     const mark = connection.heard.length
     const logMark = kit.serverLog.mark()
     const wall0 = Date.now()
-    busy(walk)
+    if (nether) void call('goto', { x: NX + .5, y: NY, z: NZ + 20.5, timeoutSeconds: 120 }).catch(() => {}); else busy(walk)
     await wallSleep(300)
     await prepare()
     const t0 = before.clock?.ticks ?? 0
-    let state = before, minHp = before.health, lowest = before.pos.y
+    let state = before, minHp = before.health, lowest = before.pos.y, dead = false
     for (const capped = Date.now() + Math.max(60000, PHASE_TICKS * 10); Date.now() < capped;) {
       state = await status()
       minHp = Math.min(minHp, state.health)
-      if (state.health > 0) lowest = Math.min(lowest, state.pos.y)
+      // Only the first life: a respawn at the world spawn (overworld, y ~70) is no fall from the platform or the bridge.
+      dead ||= state.health <= 0
+      if (!dead) lowest = Math.min(lowest, state.pos.y)
       if ((state.clock?.ticks ?? 0) - t0 >= PHASE_TICKS) break
       await wallSleep(50)
     }
@@ -136,7 +185,7 @@ async function main(): Promise<void> {
     const ticks = (state.clock?.ticks ?? 0) - t0
     const physics = ticks > 0 ? Math.round(((state.physicsTicks ?? 0) - (before.physicsTicks ?? 0)) / ticks * 100) / 100 : null
     save({ slot, phase: name, ok, died, deaths, causes, swaps, actions, hp0: before.health, minHp, hp: state.health, pos: state.pos,
-      fell: lowest < Y - 2, ticks, wallMs: Date.now() - wall0, physics, tickRate: state.clock?.tickRate })
+      fell: lowest < (nether ? NY : Y) - 2, kit: KIT, ticks, wallMs: Date.now() - wall0, physics, tickRate: state.clock?.tickRate })
     return ok
   }
   const results: boolean[] = []
@@ -150,7 +199,8 @@ async function main(): Promise<void> {
     await kit.randomReset()
     await kit.gamerule('spawn_mobs', false)
     await kit.gamerule('advance_time', false)
-    await command('/time set day')
+    // Night: the night mobs do not burn (S4c's day-time zombie burned in the sun); spawns stay off, time frozen.
+    await command('/time set midnight')
     await command('/scoreboard objectives add nd_deaths deathCount', false)
     await command('/scoreboard players set @s nd_deaths 0', false)
     betweenFrom = kit.serverLog.mark()
@@ -182,9 +232,41 @@ async function main(): Promise<void> {
         await command(`/summon minecraft:${kind} ${X + .5 + dx} ${Y} ${Z + .5 + dz}`)
       }
     }, actions => actions.length > 0))
+    // S4d: the night mobs of the S5c/S8 deaths, one by one, and a crowd of four (COORD 03:25: an iron, shielded body with a
+    // sword ran from a lone zombie and died). The answer to a lone one is a fight; actions are kept for the report.
+    if (want('skeleton')) results.push(await phase('skeleton', () => command(`/summon minecraft:skeleton ${X + 10.5} ${Y} ${Z + .5}`), noFlap))
+    if (want('spider')) results.push(await phase('spider', () => command(`/summon minecraft:spider ${X + 6.5} ${Y} ${Z + .5}`), noFlap))
+    if (want('creeper')) results.push(await phase('creeper', () => command(`/summon minecraft:creeper ${X + 6.5} ${Y} ${Z + .5}`), noFlap))
+    if (want('husk-spear')) results.push(await phase('husk-spear', async () => {
+      await command(`/summon minecraft:husk ${X + 6.5} ${Y} ${Z + .5} {Tags:["nd_s4d"],PersistenceRequired:1b}`)
+      await command('/item replace entity @e[tag=nd_s4d,limit=1] weapon.mainhand with minecraft:iron_spear')
+    }, noFlap))
+    // The live conditions of the S5c/S8 deaths with a lone zombie at the body: a creeper in sight far behind it (its 19.4 set
+    // the fight threshold to 20+), and hunger with a second zombie far off (food 12: "recover", a box at 3 blocks).
+    if (want('zombie-creeper')) results.push(await phase('zombie-creeper', async () => {
+      await command(`/summon minecraft:zombie ${X + 5.5} ${Y} ${Z + .5}`)
+      await command(`/summon minecraft:creeper ${X - 12.5} ${Y} ${Z + .5}`)
+    }, noFlap))
+    if (want('hungry-zombies')) results.push(await phase('hungry-zombies', async () => {
+      await command('/effect give @s minecraft:hunger 30 60 true')
+      for (const until = Date.now() + 15000; Date.now() < until && (await status()).food > 12;) await wallSleep(100)
+      await command('/effect clear @s minecraft:hunger', false)
+      await command(`/summon minecraft:zombie ${X + 4.5} ${Y} ${Z + .5}`)
+      await command(`/summon minecraft:zombie ${X - 14.5} ${Y} ${Z + 4.5}`)
+    }, noFlap))
+    if (want('crowd4')) results.push(await phase('crowd4', async () => {
+      for (const [kind, dx, dz] of [['zombie', 5, 0], ['zombie', -4, 3], ['zombie', 1, -6], ['skeleton', -9, -2]] as const) {
+        await command(`/summon minecraft:${kind} ${X + .5 + dx} ${Y} ${Z + .5 + dz}`)
+      }
+    }, noFlap))
     // S1c's second killer (07.10: 7 of 25 deaths), here on the overworld platform: a wither skeleton with its stone sword.
     if (want('wither-skeleton')) results.push(await phase('wither-skeleton', () => command(`/summon minecraft:wither_skeleton ${X + 5.5} ${Y} ${Z + .5}`),
       actions => actions.length > 0))
+    // S1c in the fortress: a wither skeleton walking up a 3-wide bridge, two blazes hovering beside it, a 30-block drop.
+    if (want('bridge')) results.push(await phase('bridge', async () => {
+      await command(`/execute in minecraft:the_nether run summon minecraft:wither_skeleton ${NX + .5} ${NY} ${NZ - 8.5}`)
+      for (const dx of [-5, 5]) await command(`/execute in minecraft:the_nether run summon minecraft:blaze ${NX + .5 + dx} ${NY + 2} ${NZ - 4.5}`)
+    }, noFlap, { nether: true }))
   } finally {
     try { await call('stop') } catch {}
     try { await command('/kill @e[type=!minecraft:player,distance=..60]', false) } catch {}
@@ -198,4 +280,4 @@ async function main(): Promise<void> {
   save({ slot, summary: true, ok: results.every(Boolean) && between === 0 && after === 0, phases: results.length, between, after, tail })
   assert.ok(results.every(Boolean), 'a stress phase failed (see rows)')
 }
-if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1 })
+if (require.main === module) main().catch(error => { console.error(error); process.exit(1) })

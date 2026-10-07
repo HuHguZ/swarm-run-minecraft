@@ -249,7 +249,7 @@ function shaken (bot, hs, safeDist) {
 // Сам побег. Возвращает, когда вокруг безопасно, когда прижали (cornered) или
 // по времени. safeDist — дальше скольких блоков от ближайшего ходячего врага
 // считаем, что оторвались.
-async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [] }: any = {}) {
+async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [], chaseExit = false }: any = {}) {
   const bot = session.bot
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
@@ -270,6 +270,13 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   let dodgeUntil = 0
   let dodgeKey = null
   let cornered = 0
+  // S4d (07.10; ND_S4D=0 — прежний бег до срока): бег, за которым ходячий держится в 5 бл., не отрывает — так и сказать
+  // через 3 игр. с, а не бежать 12 с к краю. Спринт 5.6 бл/с против зомби ~2.3, иссушителя ~2.75 (скорость моба ~ квадрат
+  // атрибута .23/.25, javap) и паука ~4: на открытом месте за 3 с отрыв 5–10 бл.; держится рядом — значит площадка
+  // ограничена или бег кружит (S4c, натив s4c-ab/ab2: иссушитель снова в 4 бл. в начале каждого 12-секундного бега,
+  // 7 падений с края из 16 фаз). Счёт погонь тактики (escape-progress RUN_FAILURES) после двух таких — бой на месте.
+  // Только по просьбе (chaseExit — тактика): у отхода навыков свой расчёт.
+  const chase = chaseExit && process.env.ND_S4D !== '0' ? { t0: gameClock.now(), d0: null as number | null } : null
 
   try {
     while (!ctl.aborted && gameClock.now() < deadline) {
@@ -277,6 +284,16 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       // Стрелки — до дальности их оружия по jar (гаст 64): «оторвался» — когда ни один не видит или все дальше своей дальности.
       const hs = hostilesAround(bot, 64, foes)
       for (const h of hs) if (h.d < 16) fromNames.add(h.e.username || h.e.name)
+      const walker = hs.find(h => h.doc.radius > 0)
+      if (chase && walker) {
+        chase.d0 ??= walker.d
+        if (gameClock.now() - chase.t0 >= 3000 && walker.d <= 5 && walker.d <= chase.d0 + 0.5) {
+          stop()
+          return { mode: 'не отрывается', chased: true, from: [...fromNames], pursuer: walker.e.username || walker.e.name,
+            distance: Math.round(walker.d * 10) / 10, at: xyz(bot.entity.position),
+            ran: Math.round(bot.entity.position.distanceTo(new Vec3(start.x, start.y, start.z))) }
+        }
+      }
 
       if (shaken(bot, hs, safeDist)) {
         stop()

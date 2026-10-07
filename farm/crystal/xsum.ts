@@ -118,7 +118,7 @@ for (const [kit, rs] of byKit) {
   // Элитры: удары о стену/пол себе (чёрный ящик elytra.install) по виду и фазе.
   const crash = {}
   let crashN = 0
-  for (const r of rs) for (const s of [r.a, r.b]) for (const c of ((s && s.elytra && s.elytra.crashes) || [])) { crashN++; const k = String(c).replace(/\/−[\d.]+/, ''); crash[k] = (crash[k] || 0) + 1 }
+  for (const r of rs) for (const s of [r.a, r.b]) for (const c of ((s && s.elytra && s.elytra.crashes) || [])) { crashN++; const k = String(c).replace(/\/−[\d.?]+/, ''); crash[k] = (crash[k] || 0) + 1 }
   const lance = rs.flatMap(r => [r.a, r.b]).map(s => (s && s.elytra) || {})
   if (crashN || lance.some(e => e.lancePasses)) console.log(`   элитры: ударов о стену/пол себе ${crashN}${crashN ? ' — ' + Object.entries(crash).map(([k, v]) => `${k} ${v}`).join(', ') : ''}; таранов ${sum(lance.map(e => e.lances))}, заходов ${sum(lance.map(e => e.lancePasses))}, касаний ${sum(lance.map(e => e.lanceHits))}, урон касаний [${lance.flatMap(e => e.lanceDealt || []).join(' ')}], плохих посадок ${sum(lance.map(e => e.lanceBadLand))}`)
   // Кристаллы.

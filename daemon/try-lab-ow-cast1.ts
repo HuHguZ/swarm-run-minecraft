@@ -45,9 +45,21 @@ async function arena (X, Z, pool) {
     await kit.fillExact('overworld', [[X + 2, 96, Z - 5], [X + 9, 96, Z + 5]], 'lava')
     return { box, hint: { x: X + 3, y: 96, z: Z }, start: { x: X - 1, y: 100, z: Z } }
   }
+  // S8b (07.10): shift — рваное озеро, где со столба G(0) достаётся 2 источника (верх — со столба G(±1));
+  // shore — у кромки берега дыра в полу и лава в ряду берега (пол берега ставится блоком).
+  if (pool === 'shift') {
+    for (const [x, z] of [[3, -3], [3, 3], [3, 4], [4, -2], [4, 2], [4, 3], [5, -1], [5, 0], [5, 1], [3, 1], [4, 1], [6, 0], [3, -4], [5, 2], [5, 3]]) {
+      await kit.fillExact('overworld', [[X + x - 1, 99, Z + z], [X + x - 1, 99, Z + z]], 'lava')
+    }
+    return { box, hint: { x: X + 3, y: 99, z: Z } }
+  }
   const ly = pool === 'low' ? 98 : 99
   if (pool === 'low') await kit.fillExact('overworld', [[X + 2, 99, Z - 5], [X + 9, 99, Z + 5]], 'air')
   await kit.fillExact('overworld', [[X + 2, ly, Z - 5], [X + 9, ly, Z + 5]], 'lava')
+  if (pool === 'shore') {
+    for (let z = Z - 4; z <= Z + 4; z += 3) await kit.fillExact('overworld', [[X + 1, 99, z], [X + 1, 99, z]], 'air')
+    for (let z = Z - 3; z <= Z + 4; z += 3) await kit.fillExact('overworld', [[X + 1, 99, z], [X + 1, 99, z]], 'lava')
+  }
   return { box, hint: { x: X + 3, y: ly, z: Z } }
 }
 
@@ -72,7 +84,7 @@ async function trial (k, pool) {
   for (let i = 0; i < 3 && !ok; i++) {
     const r = await call('portal', { mode: 'cast', one: true, hint, maxDig: pool === 'cave' ? 80 : 60, timeoutSeconds: 300 }).catch(e => ({ status: 'failed', error: e.message }))
     const d = r.detail || {} as Record<string, any>
-    calls.push({ status: r.status, code: r.code, stopped: d.stopped || r.error || null, frame: d.frame, cast: (d.cast || []).length, refills: d.refills, dug: d.dug, placed: d.placed, site: d.site, lit: d.lit, seconds: d.seconds, trace: d.trace, sec: Math.round((gameClock.now() - t0) / 1000) })
+    calls.push({ status: r.status, code: r.code, stopped: d.stopped || r.error || null, frame: d.frame, cast: (d.cast || []).length, refills: d.refills, dug: d.dug, placed: d.placed, site: d.site, lit: d.lit, seconds: d.seconds, shifted: d.shifted, site1: d.site, trace: d.trace, sec: Math.round((gameClock.now() - t0) / 1000) })
     ok = !!d.lit
   }
   const st = await call('status', {} as Record<string, any>).catch(() => ({} as Record<string, any>))

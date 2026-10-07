@@ -223,13 +223,16 @@ async function act (method, params: any = {}, again = 0) {
     const descent = method === 'goto' && Number.isFinite(params.y) && state.pos && params.y < state.pos.y - 3
     if (mining || descent) {
       await sense()
-      // Порог хп — цена, а не запрет (правило 06.10): лечиться нечем (еды нет, сытость < 18 — регенерации нет), врагов нет, хп ≥ 6 —
-      // отказ от копки здоровья не прибавит, а маршрут встанет (s8-f2-5: хп 6 на 5-й мин → «ROUTE_UNSAFE хп 6» ×12, таймаут).
+      // Хп — цена, а не порог (правило 06.10, S8b): риск смерти действия (хвост потерь хп по телеметрии × цена смерти) против
+      // времени лечения (есть еда — съесть и регенерация; нечем — охота). ND_ROUTE_HPFLEX=0 — прежний порог 13.
+      // Есть готовая еда, а сытость < 18 (регенерации нет) — съесть сперва: 1.6 с, и хп растёт и во время копки.
+      if ((state.health ?? 20) < 13 && (state.food ?? 20) < 18 && have(FOOD) && process.env.ND_ROUTE_HPFLEX !== '0') { await act('eat', {}); await refresh() }
       const hp = state.health ?? 20
-      const cannotHeal = !have(FOOD) && !have(RAW) && (state.food ?? 20) < 18
-      const hpFlex = process.env.ND_ROUTE_HPFLEX !== '0' && hp >= 6 && cannotHeal && !sit.foes && !sit.inWater
-      const why = hp < 13 && !hpFlex ? `хп ${Math.round(hp)}` : sit.foes ? `врагов ${sit.foes}` : sit.inWater ? 'в воде' : sit.buried ? 'завалило' : ''
-      if (hpFlex && hp < 13) log(`МАРШРУТ хп ${Math.round(hp)}, лечиться нечем — ${method} всё равно (ожидание здоровья не прибавит)`)
+      const canEat = !!(have(FOOD) || have(RAW)) || (state.food ?? 20) >= 18
+      const { refuse, riskT, healT } = routeMod.digRefuse(hp, canEat)
+      const hpBad = process.env.ND_ROUTE_HPFLEX === '0' ? hp < 13 : refuse
+      const why = hpBad ? `хп ${Math.round(hp)}${process.env.ND_ROUTE_HPFLEX === '0' ? '' : `: риск ${riskT} т > лечение ${healT} т`}` : sit.foes ? `врагов ${sit.foes}` : sit.inWater ? 'в воде' : sit.buried ? 'завалило' : ''
+      if (!hpBad && hp < 13) log(`МАРШРУТ хп ${Math.round(hp)}: ${method} — риск ${riskT} т ≤ лечение ${healT} т`)
       if (why) throw Object.assign(new Error(`ROUTE_UNSAFE: ${method} при «${why}» — сперва лечение/уход`), { routeUnsafe: true })
     }
   }
@@ -554,6 +557,16 @@ async function rest () {
       }
     }
     log(`мало хп (${Math.round(state.health)}) — прячусь и отлёживаюсь`)
+    // Навык blaze оставил тело в своей яме под ифритами — укрытие уже есть: refuge выводил из ямы под шары (S1d s1d-N-3: хп 8 → 3 → 0
+    // за секунду, «CORNERED»). Лечиться в яме: еда и ожидание.
+    const inBlazePit = dim() === 'the_nether' && gameClock.now() - blazeDugInAt < 180000 && !!blazeDugInPos && !!state.pos &&
+      Math.hypot(blazeDugInPos.x - state.pos.x, blazeDugInPos.z - state.pos.z) < 1.5 && Math.abs(blazeDugInPos.y - state.pos.y) < 1.5
+    if (inBlazePit) {
+      log('в яме навыка blaze — лечусь в ней, не выхожу')
+      if ((have(FOOD) || have(RAW)) && (state.food ?? 20) < 20) await act('eat')
+      await act('wait', { seconds: 20 })
+      return
+    }
     if (sit.foes > 0) await refugeRun(`мало хп (${Math.round(state.health ?? 0)}), врагов ${sit.foes}`)
     if (died || (state.health ?? 0) >= 16) return
     await sense()
@@ -1603,6 +1616,7 @@ function stageProgress (name) {
   return result
 }
 
+let woodRoofed = 0
 defStage('wood', () => !have(/_pickaxe$/) ||
   (!!known.portal && rodsNow() < 7 && woodNow() < 4 && ((!shieldOn() && have('iron_ingot') > 0) || have(/_pickaxe$/) <= 2)), async () => {
   const recovering = !!known.portal
@@ -1616,7 +1630,17 @@ defStage('wood', () => !have(/_pickaxe$/) ||
     await nightGuard()
     await recoverGuard()
     await sense()
-    if (!sit.surface && (!sit.night || canWorkAtNight()) && dim() === 'overworld' && !(await toSurface())) break
+    // Наверх не вышло (кирки нет, свод скалы/навес над головой — s8b-a1-7: роща карты под навесом, «лезу рукой» отказ → дерево
+    // брошено, камень с пустым рюкзаком, пещера на y −23, зомби): брёвна по видимости и в сторону по поверхности, до 3 раз.
+    if (!sit.surface && (!sit.night || canWorkAtNight()) && dim() === 'overworld' && !(await toSurface())) {
+      if (process.env.ND_ROUTE === '1' && process.env.ND_WOOD_ROOFED !== '0' && !have(/_pickaxe$/) && ++woodRoofed <= 3 && !died) {
+        log(`дерево: наверх не выйти — брёвна на виду, потом в сторону (${woodRoofed}/3)`)
+        const m0 = await act('mine', { block: 'any_log', count: want - stock(), radius: 32, timeoutSeconds: 90 })
+        if (stock() < want && !(m0.detail && m0.detail.dug)) await walkAway(24, Math.PI / 2)
+        continue
+      }
+      break
+    }
     const m = await act('mine', { block: 'any_log', count: want - stock(), radius: 48, timeoutSeconds: 240 })
     if (stock() >= want) break
     if (m.status !== 'done' || !(m.detail && m.detail.dug)) {
@@ -2697,6 +2721,12 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     const telStepWall = gameClock.wall.now()
     const telStep = telemetry.on() ? telemetry.snapshot(state, sit) : null
     let telErr = null
+    // Долгий переход почти без блоков: путь pathfinder'а с мостом/столбом, а ставить нечем — «блок под ноги не ставится» ×6 и
+    // минуты в горах (s8b-a1-11: кремень 250 + 264 с, dirt×1). По умолчанию ВЫКЛ. (ND_ROUTE_WALKBLOCKS=1 — вкл.): в s8b-b2 добор
+    // стоил 18 с на прогон (15 вызовов по ~19 с) при пользе ~9 с на прогон — дороже, чем помогает.
+    if (s.at && state.pos && Math.hypot(s.at.x - state.pos.x, s.at.z - state.pos.z) > 48 && fillerCount() < 6 && have(/_pickaxe$/) && !died && process.env.ND_ROUTE_WALKBLOCKS === '1') {
+      try { await routeBlocks(8) } catch (e) { if (e.stopCampaign || manualControl || e.strategyInterrupted) throw e }
+    }
     routeStepNow = s.id
     rlog(`шаг ${s.id}: ${s.why || ''} (бюджет ${s.budget} с)`)
     routeDeadline = gameClock.now() + (/^(wood|stone)$/.test(s.kind) ?
@@ -2746,7 +2776,7 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
       continue
     }
     rlog(`шаг ${s.id} ${ok ? 'ok' : 'НЕ ВЫШЕЛ'} за ${sec} с (бюджет ${s.budget} с), с начала ${Math.round((gameClock.now() - routeT0) / 1000)} с; рюкзак: ${bag()}`)
-    if (ok) routeDoneIds.add(s.id)
+    if (routeMod.bookStep(s.id, ok, { done: routeDoneIds, fails: routeFails, avoid: routeAvoid }) === 'break') { rlog('плавка не вышла трижды — дальше обычные этапы'); break }
     // Пустое ведро, а вода на виду рядом — набрать сейчас, как раннер по пути (s8-r2-2: вода карты у спавна, лава в 230 м в
     // другую сторону — крюк и смерть от утопленника ночью). Воды не видно — ответ сразу. ND_ROUTE_WATERNEAR=0 — выкл.
     if (ok && !died && have(/^bucket$/) && !have('water_bucket') && !have('lava_bucket') && !known.portal && process.env.ND_ROUTE_WATERNEAR !== '0') {
@@ -2757,14 +2787,6 @@ defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.
     // тело не лечится (s8-f1-2: паук, хп 1 «еды нет» до конца прогона). ND_ROUTE_FOODNEAR=0 — выкл.
     if (ok && !died && foodUnits() < 3 && !known.portal && process.env.ND_ROUTE_FOODNEAR !== '0') {
       try { await routeHunt(16, 20) } catch (e) { if (e.stopCampaign || manualControl || e.strategyInterrupted) throw e }
-    }
-    else if (/^(food|water)$/.test(s.id)) routeDoneIds.add(s.id) // мягкие: еда — ещё перед входом, вода — у литья (ensureWater)
-    else if (s.id === 'smelt' && (routeFails.get('smelt') || 0) < 2) { routeFails.set('smelt', (routeFails.get('smelt') || 0) + 1) /* железа не хватило — следующий план позовёт копку */ }
-    else if (s.id === 'smelt') { rlog('плавка не вышла трижды — дальше обычные этапы'); break }
-    else {
-      const n = (routeFails.get(s.id) || 0) + 1
-      routeFails.set(s.id, n)
-      if (n >= 2 || /^(ruin|village|treasure|ship|ore:|dig:|mine|ironStage|lava:)/.test(s.id)) routeAvoid.add(s.id)
     }
     if (s.kind === 'giveup') break
     if (s.kind === 'enter' && ok) break
@@ -2939,7 +2961,12 @@ let bastionSearchRuns = 0
 const bastionsFromMap = () => (known.bastions || []).some(b => Array.isArray(b.gold) && b.gold.length > 0)
 const bastionSearchWanted = () => !nextBastion() && bastionSearchRuns < 3 && !bastionsFromMap()
 const BASTION_FIRST = process.env.ND_BASTION_FIRST !== '0'
+// Бастион на паузе (пустые заходы) — паузу занять ифритами, а не ждать её у портала или дома (S1d s1d-M-2: 4/12 жемчуга на 14-й мин,
+// «к крепости пока не иду» при паузе бастиона → граф unreachable → домой и обратно).
+let bastionPausedUntil = 0
+// Бастион и «нечем» (нет железной кирки на золото, мало еды) — то же: ждать нечего (s1d-M-4: 45 мин «нет доступного шага» на 4120…).
 const bastionPearlsPending = () => BASTION_FIRST && (!only || only.includes('bastion')) && pearlsNow() < eyesWant() && !blazeBeforePearls() &&
+  gameClock.now() >= bastionPausedUntil && READY.bastion() &&
   (!!activeBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 && !barterExhausted()))
 const SCOUT_HIGH = process.env.ND_SCOUT_HIGH === '1'
 defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWanted()) && bastionDry < 3 && !known.endPortal &&
@@ -2979,7 +3006,11 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     if ((state.health ?? 20) < 12) { if (have(FOOD)) await act('eat'); if ((state.health ?? 20) < 10) break }
     const b = nextBastion()
     if (!b) { log('все известные бастионы выработаны'); break }
-    const carriedTrade = barterFlow.enabled() && pearlsNow() < eyesWant() && have('gold_ingot') + 9 * have('gold_block') >= 8
+    // Нести слитки к ДАЛЁКОМУ бастиону в режиме бартера — потерять его золото (S1d s1d-AB-1 слот 22: 9 слитков, бастион 2 в 170 бл.,
+    // barter 540 с «подход к защищённому бартеру не завершён» → «два бартера без слитка» → бастион отложен, к ифритам с 0 жемчуга).
+    // Далёкий бастион — обычным заходом: копка и торг всего, включая принесённое.
+    const carriedTrade = barterFlow.enabled() && pearlsNow() < eyesWant() && have('gold_ingot') + 9 * have('gold_block') >= 8 &&
+      (!state.pos || Math.hypot(b.x - state.pos.x, b.z - state.pos.z) <= 64)
     if (!carriedTrade && !netherSupply.netherToolsReady(netherSupplyState())) {
       const supply = await replenishNetherSupply()
       if (!supply.ready) { log(`копку и путь к бастиону откладываю до пополнения инструментов: ${supply.reason}`); return }
@@ -3034,7 +3065,8 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     }
     if (barterFlow.enabled() && barterFlow.retry(d, state.inventory || {})) {
       barterRetryPending = true; bastionDry = 0; bs.dry = 0
-      bs.barterUntil = gameClock.now() + 60000
+      // Подход продвинулся — то же место без минутной паузы (как у бартера с принесённым золотом выше).
+      bs.barterUntil = approached ? 0 : gameClock.now() + 60000
       log(`${b.key}: золото сохранено, нужен другой этаж/торговцы — повтор без многоминутной паузы`)
       break
     }
@@ -3042,6 +3074,10 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     log(`${b.key}: золотых блоков ${d.goldBlocksDug ?? '?'}, слитков пиглинам ${d.ingotsTraded ?? '?'}, в рюкзаке ${JSON.stringify(d.bag || {})}${d.stopped ? ' — ' + d.stopped : ''}`)
     const got = d.goldBlocksDug > 0 || d.ingotsTraded > 0 || (Array.isArray(d.chests) && d.chests.some(c => c && Object.values(c.took || {}).some((n : any) => n > 0)))
     if (!got && !approached) { bastionDry++; bs.dry++ } else { bastionDry = 0; bs.dry = 0; bs.miningDeferredUntil = 0 }
+    // Заходы без золота и сделок, где «подход» — лишь шаги внутри бастиона: 3 подряд — отложить (S1d s1d-M-1: 8340… с 31-й по
+    // 56-ю мин ~10 вызовов «золото кончилось: видимых блоков больше нет», каждый засчитан подходом — бастион не откладывался).
+    bs.noGain = got ? 0 : (bs.noGain || 0) + 1
+    if (bs.noGain >= 3 && (bs.miningDeferredUntil || 0) <= gameClock.now()) { log(`${b.key}: ${bs.noGain} захода подряд без золота и сделок`); deferBastionMining(b); bs.noGain = 0; break }
     if (approached && !got) log(`${b.key}: приблизился к известному золоту/сундуку — сухой заход не засчитываю`)
     const mappedLeft = process.env.ND_GOLD_FAST_SAFE === '1' &&
       ((d.knownGoldLeft ?? d.predLeft ?? b.gold?.length ?? 0) > 0 || /золото по памяти осталось|пути.*нет|не дошёл|время вышло|заплатка/.test(d.stopped || ''))
@@ -3198,7 +3234,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     // Коробка с окном — укрытие боя без огнестойкости (ифрит стреляет только по лучу); под огнестойкостью — открытый бой.
     const bz = await act('blaze', { rods: Math.max(1, have('blaze_rod') + rodsShort()), timeoutSeconds: 400, ...(fireResReady() ? { box: false } : {}), ...(have('bow') ? { allowRanged: true } : {}) })
     // blaze закопался на месте (яма 2 вниз с крышкой) — ne_burrow уже не нужен: он уводил тело из ямы под ифритов.
-    if (bz && bz.detail && bz.detail.dugIn) blazeDugInAt = gameClock.now()
+    if (bz && bz.detail && bz.detail.dugIn) { blazeDugInAt = gameClock.now(); blazeDugInPos = bz.detail.dugIn.at || null }
     await refresh()
     log(`стержней: ${have('blaze_rod')}`)
     // Без огнестойкости бой продолжается (навык blaze сам держит щит на залп, коробку с окном, отход и возврат) — решение
@@ -3220,6 +3256,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
 })
 
 let blazeDugInAt = -Infinity
+let blazeDugInPos = null
 let homeForGearAfter = -Infinity
 const ENDERMEN_OK = process.env.ND_ENDERMEN === '1'
 defStage('pearls', () => ENDERMEN_OK && !!known.portal && rodsShort() === 0 && have('ender_pearl') + have('ender_eye') < eyesWant() && !activeBastion() && !bastionSearchWanted(), async () => {
@@ -3827,7 +3864,8 @@ async function replenishNetherSupply () {
 const graphFact = (name: string, value: import('./src/core/world-state').FactValue | null, source: import('./src/core/world-state').FactSource = 'observed') => { graphFacts[name] = { status: value === null ? 'unknown' : 'known', value, source, at: gameClock.now(), confidence: value === null ? 0 : 1 } }
 let strategyMap
 function campaignMap () {
-  if (strategyMap === undefined) strategyMap = routeMod && process.env.ND_WORLD_SEED ? routeMod.routeInfo(process.env.ND_WORLD_SEED) : null
+  // ND_MAP=0 — вслепую (S8b 07.10): сид идёт в телеметрию, но постройки копии графу не даются.
+  if (strategyMap === undefined) strategyMap = routeMod && process.env.ND_WORLD_SEED && process.env.ND_MAP !== '0' ? routeMod.routeInfo(process.env.ND_WORLD_SEED) : null
   return strategyMap
 }
 async function intelligenceObservation () {
@@ -3918,7 +3956,12 @@ async function executeStrategy (command, signal) {
       else if (!known.portal) await stageRun('cast')()
       graphFact('ruined_portal_exhausted', true)
     } else if (skill === 'enterNether') await enterNether()
-    else if (skill === 'leaveNether') await returnFromNether()
+    // LeaveNether к точке выхода у крепости Края, а не домой (COORD 00:55 S5c: s5c-f3-1 — граф уводил к порталу дома, 12 мин
+    // впустую, дальше пешком): при ND_SH_NETHER и известной крепости выход ведёт этап stronghold (viaNetherTo; не вышло — он сам домой).
+    else if (skill === 'leaveNether') {
+      if (SH_NETHER && known.stronghold && !known.endPortal && canLink() && !obsShort()) { await stageRun('stronghold')(); await refresh() }
+      if (dim() === 'the_nether' && !died && !pendingExitFrame()) await returnFromNether()
+    }
     else if (skill === 'enterEnd') { await checkEndEntry(); await act('stronghold', { mode: 'fill', enter: true, timeoutSeconds: 120 }) }
     else if (skill === 'heal') await rest()
     else if (skill === 'piglinBarter') {
@@ -3983,6 +4026,7 @@ ws.on('open', async () => {
         f.level++
         f.n = 0
         log(`этап ${name}: ${f.level > 1 ? 'снова пустой заход' : 'два пустых захода подряд'} — пауза ${min} мин`)
+        if (/^(bastion|BastionBarter|PiglinBarter)$/.test(name)) bastionPausedUntil = Math.max(bastionPausedUntil, f.until)
         if (name === 'bastion' && dim() === 'the_nether' && have('gold_ingot') + 9 * have('gold_block') < 8) {
           const attempted = (known.bastions || []).find(b => key === `${name}:${b.dimension || 'the_nether'}:${b.x}:${b.z}`)
           if (attempted?.gold?.length && (known.bastions || []).some(other => other !== attempted &&

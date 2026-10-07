@@ -353,6 +353,12 @@ function install (session, deps: any = {}) {
   }
   function replan (why, info?: any) {
     if (now() - st.replanAt < 1000) return
+    // Тот же отказ с того же места — новый поиск даёт тот же путь (s8b-a1-3: «путь не отсюда» узел 87.5,67 при теле 87.7,65 —
+    // 62 перестройки подряд, 2.5 мин на месте): после трёх — не перестраивать, решают stuck и goto (ND_BRIDGE_REPLAN3=0 — выкл.).
+    const sig = `${why}|${info && info.node ? info.node.join(',') : ''}`
+    st.replanSame = sig === st.replanSig ? (st.replanSame || 0) + 1 : 1
+    st.replanSig = sig
+    if (st.replanSame > 3 && process.env.ND_BRIDGE_REPLAN3 !== '0') return
     st.replanAt = now()
     log('перестроить путь', { why, ...info })
     try { bot.pathfinder.setMovements(bot.pathfinder.movements) } catch {}

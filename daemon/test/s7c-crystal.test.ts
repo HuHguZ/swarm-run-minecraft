@@ -151,3 +151,16 @@ test('прикрыт стенкой от его кристалла (он с лу
   if (cr.CX2) assert.ok(a && (a.kind === 'hold' || (a.kind === 'defuse' && a.why === 'clear')), JSON.stringify(a && { kind: a.kind, why: a.why, note: a.note }))
   c.close()
 })
+
+test('его кристалл у меня, а он отошёл без лука в руке — времени много: укрытие дальше (до 6 бл.), урона меньше', () => {
+  const { bot, foe } = duelBot({ foeAt: new Vec3(9.5, 0, 0.5), inv: ['end_crystal', 'diamond_sword'] })
+  const c = cr.create(bot, { enemy: () => foe })
+  const cry = crystalAt(bot, 9, 2.5, 0.5)
+  const dMe = boom.defenseOf(bot, bot.entity)
+  const t = cr.trade(bot, cry.position, foe, bot.entity, boom.defenseOf(bot, foe), dMe, new Map())
+  const a = c.evade([{ c: cry, t }], { dMe, myEff: 20, cache: new Map(), foe })
+  assert.ok(a && a.kind === 'cover', JSON.stringify(a && { kind: a.kind, note: a.note }))
+  assert.ok(a.to.distanceTo(cry.position) >= 5, `ушёл на ${a.to.distanceTo(cry.position).toFixed(1)} бл.`)
+  assert.ok(a.dmg < t.me * 0.6, `${a.dmg} против ${t.me}`)
+  c.close()
+})

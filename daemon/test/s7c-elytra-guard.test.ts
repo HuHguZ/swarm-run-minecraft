@@ -37,3 +37,19 @@ test('рефлекс столкновения: без руля в стену —
   b.tick()
   assert.equal(b.looks.length, 0, 'при руле не вмешивается')
 })
+
+test('ракета «надо»: идёт только со взглядом, при котором полёт с ней не кончается стеной с уроном (тормоз ракетой — тоже выход)', () => {
+  const sky = require('../src/elytra')
+  const W = (wallX) => ({ at: (x, y) => (y < 100 || x >= wallX) ? 1 : 0, solid (x, y, z) { return this.at(x, y, z) === 1 }, boxHit (x, y, z, h = 1.8) { for (const X of [Math.floor(x - 0.3), Math.floor(x + 0.3)]) for (let Y = Math.floor(y); Y <= Math.floor(y + h); Y++) if (Y < 100 || X >= wallX) return true; return false }, floorBelow () { return { top: 100 } } })
+  const st = { p: { x: 0.5, y: 110, z: 0.5 }, v: { x: 1.6, y: 0, z: 0 }, boost: 0, fd: 0 }
+  const goal = { kind: 'point', at: { x: 40, y: 110, z: 0.5 } }
+  for (const wallX of [2, 3, 5, 1e9]) {
+    const Wx = W(wallX)
+    const rc = sky.rocketChoice(Wx, st, goal, sky.choose(Wx, st, goal), true)
+    if (!rc.fire) { assert.equal(rc.veto, true); continue }
+    const r = sky.rollout(Wx, st.p, st.v, rc.yaw, rc.pitch, 26, 18)
+    assert.ok(!(r.kind === 'wall' && r.dmg >= 1), `стена в ${wallX}: полёт с ракетой — ${r.kind} ${r.dmg}`)
+  }
+  const Wf = W(1e9)
+  assert.equal(sky.rocketChoice(Wf, st, goal, sky.choose(Wf, st, goal), true).fire, true, 'в чистом небе ракета идёт')
+})

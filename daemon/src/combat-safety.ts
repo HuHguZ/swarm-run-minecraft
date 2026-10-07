@@ -25,9 +25,19 @@ function safeGround (bot, { fireResistantLava = false }: any = {}) {
 // (порог ≥ 20) — по-прежнему уход. Без оружия — не бой.
 const FIGHT_COST = () => process.env.ND_FIGHT_COST !== '0'
 const COST_K = 2.5
+// S4d (07.10; ND_S4D=0 — прежний счёт для A/B): в размен входит тот, кто бьёт в ближайший обмен. Ходячий дальше 6 бл. —
+// ещё не (зомби идёт ~2.3 бл/с: javap Zombie MOVEMENT_SPEED .23, скорость моба ~ квадрат атрибута), стрелок — да на любой
+// дальности до 16, крипер — только шипящий или в 4 бл. (его 43 — тревога Dodge, а не удар). Живая телеметрия S5c/S8:
+// крипер в 11–15 бл. с «ударом» 19.4 давал порог ≥ 20 → «уходить» и при одном зомби вплотную — бег/коробка вместо боя
+// (s5c-b1-1, f2-2, g3-3: смерть), второй зомби в 15.7 бл. поднимал порог и «дёшево» — коробка при еде 12 (s8-f1-12, смерть).
+const S4D = () => process.env.ND_S4D !== '0'
+const RANGED = new Set(Object.keys(assess.MOBS).filter(name => assess.MOBS[name].ranged))
+const inExchange = t => t.name === 'creeper' ? !!t.swelling || t.distance <= 4 : RANGED.has(t.name) || t.distance <= 6
 function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null }: any = {}) {
-  const hits = threats.filter(t => t.distance <= 16).map(t => t.hit).sort((a, b) => b - a)
+  const live = S4D() ? threats.filter(t => t.distance <= 16 && (t.name !== 'creeper' || inExchange(t))) : threats
+  const near = live.filter(inExchange)
+  const hits = (S4D() ? (near.length ? near : live) : threats.filter(t => t.distance <= 16)).map(t => t.hit).sort((a, b) => b - a)
   const hit = Math.max(observedHit, hits[0] || 0)
   // Два удара ближайшего + один второго: успеть выйти из контакта, а не
   // начинать бегство на том здоровье, которое съест следующий удар.
@@ -42,11 +52,21 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   // не годится (ревью Codex 02.10).
   // Только обычные мобы верхнего мира начала игры (белый список): бои Ада и Края (ифриты у спавнера — blaze.js) остаются
   // со своим запасом еды.
-  const odd = threats.length > 2 || threats.some(t => !/^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|parched|bogged|slime|silverfish)$/.test(String(t.name || '')))
+  const pool = S4D() ? live : threats
+  const odd = (S4D() ? near : threats).length > 2 || pool.some(t => !/^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|parched|bogged|slime|silverfish)$/.test(String(t.name || '')))
   const cheap = FIGHT_COST() && typeof expected === 'number' && weapon && !odd && threshold < 20 && health >= threshold + COST_K * expected
   if (cheap && dangerous && (!healable || food < 18 || (phase === 'start' && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4))) {
     return { ...result, cost: expected, cheap: true }
   }
+  // S4d: a walker of the white list already at the body (≤ 4.5 бл.) hits whatever we do - a wall goes up and a run starts
+  // inside its reach, and without food (< 18) the wall buys no regeneration. The trade is the fight while the body outlasts
+  // the next exchange and one more blow (burst + hit) with margin. Natives s4d-smoke2 hungry-zombies, both arms, stone sword: "recover"
+  // at 16 hp -> BlockOff with the zombie at 3.4 blocks for 40 s, 16 -> 6 hp; live s8-f1-12 the same, death.
+  // An archer within 8 blocks shoots the back of a run as long as it sees it (bow range 15): the rush is the cheaper half.
+  // A walker in the tactics' contact radius (4.5) closes it in under a second, before a wall (~1.5 s) is up.
+  const atBody = near.some(t => t.name !== 'creeper' && t.distance <= (RANGED.has(t.name) ? 8 : 4.5))
+  // Margin: half the fight floor left after three blows (a sword zombie's 6 at 20 hp is no trade: 20 - 18 < 4).
+  if (S4D() && FIGHT_COST() && dangerous && weapon && !odd && atBody && threshold < 20 && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true }
   if (phase === 'start' && dangerous && !weapon) return { ...result, action: 'leave', reason: 'нет пригодного оружия' }
   if (dangerous && !healable) return { ...result, action: 'leave', reason: 'нечем восстановить здоровье' }
   if (phase === 'start' && dangerous && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4) {
@@ -96,7 +116,7 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     if (FIGHT_COST() && !player && hand && !(e.name === 'blaze' && distance < 3)) {
       try { const z = assess.sizeUp(bot, e, gear); if (z && typeof z.hit === 'number' && z.hit > hit) hit = z.hit } catch {}
     }
-    threats.push({ id: e.id, name: e.username || e.name, distance, hit })
+    threats.push({ id: e.id, name: e.username || e.name, distance, hit, ...(e.name === 'creeper' && require('./flee').creeperSwelling(bot, e) ? { swelling: true } : {}) })
   }
   if (!threats.length && expectedEnemy && assess.MOBS[expectedEnemy]) {
     const damage = expectedEnemy === 'blaze' ? 6 : assess.MOBS[expectedEnemy].dmg

@@ -235,7 +235,15 @@ async function routeGold (session, ctl, st, until) {
         const q = G.offset(dx, dy, dz); const bq = bot.blockAt(q)
         return bq && bq.boundingBox === 'empty' && !ownS.has(`${q.x},${q.y},${q.z}`) && !body.some(v => v.equals(q))
       })
-      if (openNext && angerSet(bot, null, !!bot.getControlState('sneak')).length) { out.skippedPig = (out.skippedPig || 0) + 1; continue }
+      // S1d 07.10: злость страшна только тем, кто нас видит или дойдёт (как takeGoldBlock: threatens по заливке тела) — из своего хода
+      // клетку золота сломать и сразу заделать (ниже: foreign → fillCell). Было: любой пиглин в 16 — пропуск (s1d-AB-2: 14 из 16).
+      if (openNext) {
+        const TG = require('./take-gold-block')
+        const reach = TG.reachSet(bot)
+        const near = angerSet(bot, null, !!bot.getControlState('sneak'))
+        if (near.some(e => TG.threatens(bot, e, reach))) { out.skippedPig = (out.skippedPig || 0) + 1; continue }
+        if (near.length) out.angerBlind = (out.angerBlind || 0) + 1
+      }
     }
     const r = await SL.digCell(bot, G, { allowGuard: true }).catch(e => 'err ' + e.message)
     if (r !== 'ok' && r !== 'air') { log('золото по сетке: не сломал', { at: xyz(G), r }); continue }

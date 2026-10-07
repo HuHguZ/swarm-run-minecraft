@@ -71,10 +71,10 @@ test('buried iron stops at the remaining 4 ingots and does not ask for a second 
   const mines = c.requests.filter(([m, p]: any) => m === 'mine' && p.block.includes('iron_ore'))
   assert.equal(mines.length, 1); assert.equal(mines[0][1].count, 4)
 })
-test('cast1 carry target is 12; two-bucket casting keeps 24', async () => {
+test('cast1 carry target is 16 (S8b: was 12); two-bucket casting keeps 24', async () => {
   const previous = process.env.ND_ROUTE_ONE
   try {
-  for (const [env, want] of [[{}, 12], [{ ND_ROUTE_ONE: '0' }, 24], [{ ND_ROUTE_QUOTAS: '0' }, 24]] as [NodeJS.ProcessEnv, number][]) {
+  for (const [env, want] of [[{}, 16], [{ ND_ROUTE_ONE: '0' }, 24], [{ ND_ROUTE_QUOTAS: '0' }, 24]] as [NodeJS.ProcessEnv, number][]) {
     // route.js executes in Node while campaign.js executes in the VM.
     // Give BUCKETS() the same environment as the VM for this integration case.
     if (env.ND_ROUTE_ONE === undefined) delete process.env.ND_ROUTE_ONE

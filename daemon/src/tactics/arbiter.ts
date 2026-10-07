@@ -103,6 +103,9 @@ export class TacticalArbiter {
   }
 
   finished(): void { this.current = null }
+  // S4d: a fight that ended in a kill is no flicker - the next attacker is met with a sword, not with a 12 s run because the
+  // dead one's candidate "dropped" Fight a moment ago (natives s4d-smoke2 hungry-zombies: kill, then Flee from zombie 2).
+  forgive(id: ActionId): void { this.dropped.delete(id) }
   // The system keeps a bounded action running through a calm sample (a sealed box, a flight past the sight edge); the
   // arbiter must not forget it, or the next stray arrow starts a new action that drags the body out (stress stand, blaze).
   hold(action: Candidate): void { this.current = action }

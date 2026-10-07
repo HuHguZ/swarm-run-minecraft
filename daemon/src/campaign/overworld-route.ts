@@ -96,7 +96,9 @@ async function routeGoPush (at, range = 10) {
 }
 
 function routeBlockTarget (legacy = 24) {
-  return ctx.process.env.ND_ROUTE === '1' && ctx.process.env.ND_ROUTE_QUOTAS !== '0' && ctx.routeMod.BUCKETS() === 1 ? 12 : legacy
+  // Одно ведро: 16 (S8b 07.10; было 12 — s8b-b2-5: рама 8/10, «подпорка не встала: нечем строить», добор и новая попытка
+  // потеряли раму — на стенки жёлоба, перемычки, подпорки и столб уходит до 20, расчистка даёт не всегда).
+  return ctx.process.env.ND_ROUTE === '1' && ctx.process.env.ND_ROUTE_QUOTAS !== '0' && ctx.routeMod.BUCKETS() === 1 ? 16 : legacy
 }
 
 async function routeBlocks (want = 24) {
@@ -173,12 +175,23 @@ async function routeHunt (r = 40, limitS = 60) {
   if (ctx.process.env.ND_ROUTE_BED === '1') await ctx.makeBed()
 }
 
+// Источники воды рядом есть, а на виду ни одного (холодный биом: озеро за минуты покрылось льдом — s8b-a1-6: у воды карты
+// «источников 400, видно 0» ×19, 8 мин до ночи): сломать лёд (под ним — вода) и черпнуть. ND_ROUTE_ICE=0 — выкл.
+async function waterUnderIce (r) {
+  const why = String((r && r.detail && r.detail.stopped) || '')
+  if (ctx.have('water_bucket') || !ctx.have('bucket') || !/источников [1-9]\d*, видно 0/.test(why) || ctx.process.env.ND_ROUTE_ICE === '0') return false
+  const m = await ctx.act('mine', { block: 'ice', count: 1, radius: 6, collect: false, timeoutSeconds: 15 })
+  if (!(m.detail && m.detail.dug)) return false
+  await ctx.act('bucket', { fluid: 'water', radius: 8 })
+  if (ctx.have('water_bucket')) { ctx.rlog('вода подо льдом — лёд сломан, ведро полное'); return true }
+  return false
+}
+
 async function routeWater (near) {
   if (ctx.have('water_bucket') || ctx.have('lava_bucket')) return true
   if (!ctx.have('bucket')) return false
   const r0 = await ctx.act('bucket', { fluid: 'water', radius: 48 })
-  if (ctx.have('water_bucket')) return true
-  void r0
+  if (ctx.have('water_bucket') || await waterUnderIce(r0)) return true
   const info = ctx.routeInfoGet()
   const ws = (info && info.ores && info.ores.water) || []
   const me = ctx.state.pos
@@ -190,8 +203,8 @@ async function routeWater (near) {
     const st = w.stand || w
     await ctx.routeGo(st, 3)
     await ctx.act('goto', { x: st.x, y: st.y, z: st.z, range: 1, timeoutSeconds: 30 })
-    await ctx.act('bucket', { fluid: 'water', radius: 16 })
-    if (ctx.have('water_bucket')) { ctx.rlog(`вода по карте у ${w.x},${w.y},${w.z}`); return true }
+    const rw = await ctx.act('bucket', { fluid: 'water', radius: 16 })
+    if (ctx.have('water_bucket') || await waterUnderIce(rw)) { ctx.rlog(`вода по карте у ${w.x},${w.y},${w.z}`); return true }
   }
   const e = await ctx.act('explore', { block: 'water', radius: 48, stepDistance: 60, timeoutSeconds: 90 })
   if (e.detail && e.detail.found) await ctx.act('bucket', { fluid: 'water', radius: 48 })
@@ -391,6 +404,20 @@ async function routeHealToEnter () {
   } finally { ctx.routeHealing = false }
 }
 
+// К стволу из скана — клетка рядом с ним на его высоте: цель в самой клетке ствола goto поднимает до первого места, где
+// можно стоять, — на крону (s8b-a1-1/b2-1: «goto 172,70,86» 32 с и тело на листве на 4 выше, «не вижу any_log»).
+async function nearTrunk (t, timeoutSeconds) {
+  if (ctx.process.env.ND_ROUTE_TRUNK === '0') return /^done$/.test((await ctx.act('goto', { x: t.x, y: t.y, z: t.z, range: 2, surface: 'strict', timeoutSeconds })).status)
+  let ok = false
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]].slice(0, 3)) {
+    const r = await ctx.act('goto', { x: t.x + dx, y: t.y, z: t.z + dz, range: 1, surface: 'strict', timeoutSeconds: Math.max(10, Math.round(timeoutSeconds / 3)) })
+    ok = ok || /^done$/.test(r.status)
+    await ctx.refresh()
+    if (ctx.died || (ok && ctx.y() <= t.y + 2)) break
+  }
+  return ok
+}
+
 async function routeStep (s) {
   await ctx.refresh()
   const ironNow = () => ctx.have('iron_ingot') + ctx.have('raw_iron') + Math.floor(ctx.have('iron_nugget') / 9)
@@ -399,7 +426,10 @@ async function routeStep (s) {
       if (ctx.process.env.ND_ROUTE_STARTER_CHECKPOINT !== '0' && ctx.have(/_pickaxe$/) && ctx.have('crafting_table')) return true
       await ctx.routeLeaveOutpost(s.at || null)
       if (s.at && !(await ctx.routeGo(s.at, 6))) return false
-      if (s.src === 'mapwood' && Number.isFinite(s.at?.y) && !(await ctx.act('goto', { x: s.at.x, y: s.at.y, z: s.at.z, range: 2, surface: 'strict', timeoutSeconds: 60 })).status.match(/^done$/)) return false
+      if (s.src === 'mapwood' && Number.isFinite(s.at?.y) && !(await nearTrunk(s.at, 60))) return false
+      // Роща на чужой высоте (TREEANYY: деревья только на горе) — 2D-ход приводит под гору (s8b-a1-7/b2-7, −4303…: роща на
+      // y 106, тело на 68 под навесом, «не вижу any_log», 8 мин разведки вслепую) — к стволу с высотой.
+      if (s.src !== 'mapwood' && Number.isFinite(s.at?.y) && ctx.y() < s.at.y - 4 && ctx.process.env.ND_ROUTE_TRUNK !== '0') await nearTrunk(s.at, 90)
       if (s.src === 'village' && !ctx.died) {
         await ctx.act('mine', { block: 'any_log', count: 4, radius: 32, timeoutSeconds: 90 })
         await ctx.refresh()
@@ -409,14 +439,17 @@ async function routeStep (s) {
       }
       if (s.src === 'mapwood') {
         // ND_ROUTE_WOODN=N — брёвен с рощи N (спидраннер берёт 5–6; было 12: s8-r1-1 — 9 брёвен за 75 с до таймаута); доски дома — 12.
-        await ctx.act('mine', { block: 'any_log,any_planks', count: s.in ? 12 : woodN(), radius: 12, timeoutSeconds: 75 })
+        await ctx.act('mine', { block: 'any_log,any_planks', count: s.in ? 12 : (s.logs || woodN()), radius: 12, timeoutSeconds: 75 })
         await ctx.refresh()
         // Тело над рощей (на кронах: goto «done» на y 91 при стволах на 83, s8-r2-7) — брёвен сквозь листву не видно: вниз к
         // уровню стволов лесенкой и ещё раз, а не к следующей роще в 60 м.
         if (ctx.woodNow() < 3 && Number.isFinite(s.at?.y) && ctx.y() > s.at.y + 3 && !ctx.died && ctx.process.env.ND_ROUTE_WOODDOWN !== '0') {
           ctx.rlog(`над рощей: тело y ${Math.round(ctx.y())}, стволы ${s.at.y} — вниз к ним`)
-          await ctx.act('dig_down', { mode: 'stairs', depth: Math.min(8, Math.round(ctx.y() - s.at.y)), torchEvery: 0, timeoutSeconds: 40 })
-          await ctx.act('mine', { block: 'any_log', count: woodN(), radius: 12, timeoutSeconds: 75 })
+          // Кирки ещё нет (дерево — первый шаг): лесенка отказывает «Кирки нет вовсе» (s8b-a1-8: тело на кронах тёмного леса y 91,
+          // стволы 83 — 2 мин по кронам, ведьма). Листва и земля ломаются рукой — шахтой, падение до 4 хп в начале дёшево.
+          const pick = ctx.have(/_pickaxe$/) > 0
+          await ctx.act('dig_down', { mode: pick ? 'stairs' : 'shaft', depth: Math.min(8, Math.round(ctx.y() - s.at.y)), torchEvery: 0, ...(pick ? {} : { maxFallHp: 4 }), timeoutSeconds: 40 })
+          await ctx.act('mine', { block: 'any_log', count: s.logs || woodN(), radius: 12, timeoutSeconds: 75 })
           await ctx.refresh()
         }
       }
@@ -430,21 +463,28 @@ async function routeStep (s) {
       }
       const info = ctx.routeInfoGet()
       const trees = ((info && info.ores && info.ores.trees) || []).filter(q => !(ctx.routeMod.outpostNear && ctx.routeMod.outpostNear(info, q, 8)))
-      const want = woodN()
+      const want = s.logs || woodN()
       const seen = new Set()
-      for (let k = 0; k < 8 && ctx.woodNow() < want && trees.length && !ctx.died; k++) {
+      // Кирка уже есть (крафт прошёл, а рюкзак отстал — «server did not confirm click»; s8b-c-2: 3.5 мин разведки за 5 брёвнами
+      // при кирке в руках) и дерева на топливо хватает — дальше не искать.
+      const enough = () => ctx.have(/_pickaxe$/) > 0 && ctx.woodNow() >= 3 && ctx.process.env.ND_ROUTE_WOODENOUGH !== '0'
+      for (let k = 0; k < 8 && ctx.woodNow() < want && trees.length && !ctx.died && !enough(); k++) {
         await ctx.act('mine', { block: 'any_log', count: want - ctx.woodNow(), radius: 32, timeoutSeconds: 120 })
         await ctx.refresh()
-        if (ctx.woodNow() >= want) break
+        if (ctx.woodNow() >= want || enough()) break
         const me = ctx.state.pos
         const pick = band => trees.filter(q => !seen.has(`${q.x},${q.z}`) && me && Math.hypot(q.x - me.x, q.z - me.z) > 6 && Math.hypot(q.x - me.x, q.z - me.z) <= (band > 8 ? 120 : 200) && Math.abs(q.y - (me.y + 3)) <= band)
           .sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - b.n * 2 - Math.hypot(b.x - me.x, b.z - me.z) + a.n * 2)[0]
-        const t = pick(8) || pick(25)
+        const t = pick(8) || pick(25) || (ctx.process.env.ND_ROUTE_TRUNK !== '0' ? pick(64) : null)
         if (!t) break
         seen.add(`${t.x},${t.z}`)
         await ctx.routeGo(t, 4)
+        // Ствол из скана — вплотную: с 4 бл. его закрывает листва, «не вижу any_log» (s8b-a1-1: 3 попытки и обход до ствола,
+        // ~30 с). ND_ROUTE_TRUNK=0 — выкл.
+        if (Number.isFinite(t.y) && ctx.process.env.ND_ROUTE_TRUNK !== '0') await nearTrunk(t, 20)
       }
-      await ctx.stageRun('wood')()
+      await ctx.refresh()
+      if (!enough()) await ctx.stageRun('wood')()
       return ctx.have(/_pickaxe$/) > 0
     }
     case 'bed': {
@@ -656,9 +696,14 @@ async function routeStep (s) {
             await ctx.refresh()
             ctx.routeRememberShaft(from)
             for (let lv = 0; lv < 6 && needFlint() && !ctx.died; lv++) {
-              await ctx.act('mine', { block: 'gravel', count: ctx.process.env.ND_ROUTE_FLINTBAG !== '0' ? 2 : 12, radius: 5, timeoutSeconds: 45 })
+              // В залежи каждый блок стенки — честный бросок 10 % без ходьбы (~1 с): копать её по 6, а рюкзак крутить, только
+              // когда стенки кончились (s8b-b2-9: в колодце 1×1 flint_grind «некуда поставить», цикл place/mine — 216+177 с без
+              // кремня, настоящих бросков ~10). ND_ROUTE_DEPOSIT=0 — прежний ход (по 2 и рюкзак).
+              const deposit = ctx.process.env.ND_ROUTE_DEPOSIT !== '0'
+              const m = await ctx.act('mine', { block: 'gravel', count: ctx.process.env.ND_ROUTE_FLINTBAG !== '0' ? (deposit ? 6 : 2) : 12, radius: 5, timeoutSeconds: 45 })
               await ctx.refresh()
-              if (ctx.process.env.ND_ROUTE_FLINTBAG !== '0' && needFlint() && ctx.have('gravel')) await ctx.routeFlintFromBag()
+              const dug = (m && m.detail && m.detail.dug) || 0
+              if (ctx.process.env.ND_ROUTE_FLINTBAG !== '0' && needFlint() && ctx.have('gravel') && (!deposit || dug < 6)) await ctx.routeFlintFromBag()
               if (ctx.have('flint')) break
               const from = ctx.state.pos && { ...ctx.state.pos }
               await ctx.act('tunnel', { direction: 'down', length: 1, timeoutSeconds: 30 })
@@ -719,7 +764,7 @@ async function routeStep (s) {
       if (s.at) { await ctx.routeGo(s.at, 3); if (Number.isFinite(s.at.y)) await ctx.act('goto', { x: s.at.x, y: s.at.y, z: s.at.z, range: 1, timeoutSeconds: 30 }) }
       for (let i = 0; i < 2 && !ctx.have('water_bucket') && !ctx.died; i++) {
         const r = await ctx.act('bucket', { fluid: 'water', radius: 48 })
-        if (ctx.have('water_bucket') || (r.detail && r.detail.need)) break
+        if (ctx.have('water_bucket') || (r.detail && r.detail.need) || await waterUnderIce(r)) break
         const w = ctx.routeInfoGet() && ctx.routeInfoGet().ores && (ctx.routeInfoGet().ores.water || []).filter(q => ctx.state.pos && Math.hypot(q.x - ctx.state.pos.x, q.z - ctx.state.pos.z) <= 120 && Math.hypot(q.x - ctx.state.pos.x, q.z - ctx.state.pos.z) > 6 && !(ctx.routeMod.outpostNear && ctx.routeMod.outpostNear(ctx.routeInfoGet(), q, 8)))
           .sort((a, b) => Math.hypot(a.x - ctx.state.pos.x, a.z - ctx.state.pos.z) - Math.hypot(b.x - ctx.state.pos.x, b.z - ctx.state.pos.z))[0]
         if (w) { await ctx.routeGo(w.stand || w, 4); continue }

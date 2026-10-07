@@ -539,6 +539,8 @@ function log (...args: any[]) {
 }
 
 log(`NeuroDown daemon on ws://${cfg.wsHost}:${cfg.wsPort} -> ${cfg.host}:${cfg.port} as ${cfg.username} (fairPlay=${cfg.fairPlay})`)
+// Флаги демона (S1d 07.10: ND_GOLD_ROUTE/ND_ANGER_SAFE стояли в CENV сцены и до демона не доходили) — видны в daemon-*.out.log.
+log(`flags: ${Object.keys(process.env).filter(k => /^ND_/.test(k) && !/KEY|TOKEN|SECRET|PASS/.test(k)).sort().map(k => `${k}=${process.env[k]}`).join(' ') || '—'}`)
 
 process.on('SIGINT', async () => {
   autopilot.stop()

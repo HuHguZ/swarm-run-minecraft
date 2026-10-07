@@ -99,6 +99,28 @@ async function bruteDefense (session, ctl, st, forced = null) {
 
 let FAST_SAFE = process.env.ND_GOLD_FAST_SAFE === '1'
 
+/** In a copy brute home zone: 12 bl. across (the route danger zone), 6 up/down. */
+const nearBruteHome = (p, brutes, r = 12) => brutes.some(b => Math.hypot(b[0] - p.x, b[2] - p.z) < r && Math.abs(b[1] - p.y) < 6)
+/** Pit sites away from brute homes (12), else at least 8 away: a stable full of brutes keeps some site. */
+function pitsAwayFromBrutes (list, brutes) {
+  const far = list.filter(b => !nearBruteHome(b.P, brutes))
+  return far.length ? far : list.filter(b => !nearBruteHome(b.P, brutes, 8))
+}
+/** Known gold the approach may aim at: away from the copy brute homes, when any is. */
+function approachGold (gold, brutes) {
+  const safe = gold.filter(g => !nearBruteHome(g, brutes))
+  return safe.length ? safe : gold
+}
+
+/** Gold that opens the sealed tunnel may be broken and patched at once: 1×1 window (no brute/hoglin in 12 of the body), or
+ *  (S1d) any face as long as the drop cannot fall out (own/collision block below), no brute/hoglin in 8 of the gold and no mob
+ *  standing on it (it would drop into the hole next to us); never under 16 hp. ND_GOLD_OPEN=0 — the 1×1 rule only. */
+function goldWindowOk ({ win1, dropSafe, strong, strongG = strong, onTop = false, hp }, env = process.env) {
+  if (hp < 16) return false
+  if (win1 && !strong) return true
+  return env.ND_GOLD_OPEN !== '0' && dropSafe && !strongG && !onTop
+}
+
 function goldExposes (bot, S, pos) {
   const SL = require('.././sealed')
   for (const [dx, dy, dz] of SL.FACES) {
@@ -449,11 +471,15 @@ async function sealedGold (session, ctl, st, until) {
     for (const [k, v] of [...st.pred.entries()]) { const b = bot.blockAt(v.pos); if (b && b.boundingBox === 'empty' && S.own.has(k)) st.pred.delete(k) }
     for (const [k, g] of st.gold) if (!st.pred.has(k) && !S.own.has(k)) st.pred.set(k, { pos: g.pos, piece: 'видно', rank: 0 })
     // Без железной кирки (st.chestsOnly) — только сундуки: золото ей не взять, а железо в сундуках есть.
-    const preds = st.chestsOnly ? [] : [...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now())
+    // Цели в 6 бл. от дома брута копии — не трогать (S1d s1d-N-2: сундук у брута, 2 удара за секунду, смерть на 7-й мин).
+    const BH6 = require('.././nether-route').bruteSpots(session)
+    const preds = st.chestsOnly ? [] : [...st.pred.entries()].filter(([k, v]) => (st.skip.get(k) || 0) < gameClock.now() && !nearBruteHome(v.pos, BH6, 6))
     const chestsT = st.lootChests ? [...st.chestSeen.entries()].filter(([k]) => !st.looted.has(k) && (st.skip.get(k) || 0) < gameClock.now()).map(([k, v]) => ({ k, pos: v.pos, chest: true })) : []
     if (!preds.length && !chestsT.length) break
+    const chestsOk = chestsT.filter(c => !nearBruteHome(c.pos, BH6, 6))
+    if (!preds.length && !chestsOk.length) break
     const minRank = preds.length ? Math.min(...preds.map(([, v]) => v.rank || 0)) : 0
-    const tg = [...preds.filter(([, v]) => (v.rank || 0) === minRank).map(([k, v]) => ({ k, pos: v.pos })), ...(minRank === 0 ? chestsT : [])]
+    const tg = [...preds.filter(([, v]) => (v.rank || 0) === minRank).map(([k, v]) => ({ k, pos: v.pos })), ...(minRank === 0 ? chestsOk : [])]
     const view = SL.worldView(bot)
     const me = bot.entity.position.floored()
     let starts
@@ -589,7 +615,27 @@ async function sealedGold (session, ctl, st, until) {
     const upC = t.pos.offset(0, 1, 0); const dnC = t.pos.offset(0, -1, 0)
     const win1 = fullCover(bot.blockAt(upC)) && !S.own.has(SL.keyV(upC)) && fullCover(bot.blockAt(dnC)) && !S.own.has(SL.keyV(dnC))
     const strongNear = [...mobs(bot, 'piglin_brute', 12), ...mobs(bot, 'hoglin', 12), ...mobs(bot, 'zoglin', 12)]
-    const windowOk = win1 && !strongNear.length && (bot.health ?? 20) >= 16
+    // S1d 07.10: дыра от ломки — всегда одна клетка золота, её заделка закрывает штрек снова. Удар пиглина/брута/хоглина через
+    // клетку не достаёт (Mob.getAttackBoundingBox: вширь +0.83 — от центра 1.13…1.53, а между телами 2 бл.), злость от ломки
+    // (PiglinAi.angerNearbyPiglins, без луча) копке в закрытом ходе не мешает — заделать сразу. Окно 1×1 (верх и низ закрыты)
+    // больше не обязательно; нужно, чтобы слиток не выпал наружу: под золотом — своё или твёрдое (ND_GOLD_OPEN=0 — прежнее
+    // правило). Данные: s1c std — 98 «небезопасное вскрытие» за прогон 7777…, ~50 % золота карты оставалось в стенах.
+    const dnB = bot.blockAt(dnC)
+    // Под золотом ступени/плиты тоже держат слиток (pair 2: 20 из 80 пропусков — ступени кирпича), воздух — нет.
+    const dropSafe = S.own.has(SL.keyV(dnC)) || dnB?.boundingBox === 'block'
+    const gC = t.pos.offset(0.5, 0, 0.5)
+    const strongG = [...mobs(bot, 'piglin_brute', 8, gC), ...mobs(bot, 'hoglin', 8, gC), ...mobs(bot, 'zoglin', 8, gC)].length
+    const onTop = (Object.values(bot.entities) as any[]).some((e : any) => e && e !== bot.entity && e.position && /^(hostile|animal|mob|passive|water_creature|ambient)$/.test(e.type || '') &&
+      Math.hypot(e.position.x - gC.x, e.position.z - gC.z) < 1.3 && e.position.y >= t.pos.y + 0.5 && e.position.y <= t.pos.y + 2.5)
+    let windowOk = goldWindowOk({ win1, dropSafe, strong: strongNear.length, strongG, onTop, hp: bot.health ?? 20 })
+    // Дыра от ломки безопасна, только если она — ЕДИНСТВЕННЫЙ выход хода во двор (S1d s1d-AB-4 A: заплатка прошлого золота не
+    // встала, ход открыт; следующее золото «окном» — злые пиглины вошли в пролом, 5 ударов, смерть на 12-й мин). Ход открыт —
+    // сперва заложиться (sealBody); не вышло — как прежде, пропуск.
+    if (windowOk && opens && SL.exposure(bot, S.own).length) {
+      await sealBody(bot, S).catch(() => null)
+      S.exposed = SL.exposure(bot, S.own).length > 0
+      if (S.exposed) { windowOk = false; log('штрек: ход открыт — окно не ломаю', { at: t.k }) }
+    }
     // Пиглин, разглядывающий золото (слиток в левой руке), не «бездельник»: angerNearbyPiglins злит только PiglinAi.isIdle
     // (Brain.isActive(Activity.IDLE), javap 1.21.11 PiglinAi.angerNearbyPiglins: filter isIdle → filter canSee при ломке
     // сундука; золотой блок — без луча). Такие пиглины ломке не мешают.
@@ -603,11 +649,12 @@ async function sealedGold (session, ctl, st, until) {
       // Пиглины бродят: отложить на 2 мин, а не на 10 (s1c-A-2 06.10: 9 из 22 блоков карты «пропустил» при 2–4 пиглинах рядом,
       // к концу захода «золото по памяти осталось (16), пути нет»). Блоков на заделку нет — по-прежнему надолго.
       st.skip.set(t.k, gameClock.now() + (exposedFoes.length && SL.fillerCount(bot) >= 3 ? 120000 : 600000))
-      log('штрек: небезопасное вскрытие — пропустил', { at: t.k, foes: exposedFoes.length })
+      log('штрек: небезопасное вскрытие — пропустил', { at: t.k, foes: exposedFoes.length, win1, dropSafe, strongG, onTop, up: bot.blockAt(upC)?.name, dn: bot.blockAt(dnC)?.name, strong: strongNear.length, hp: Math.round(bot.health ?? 0), filler: SL.fillerCount(bot) })
       continue
     }
-    // ND_ANGER_SAFE=1: свой ход сам открыт во двор (вход «из открытого со вскрытием»), а ломка злит всех пиглинов в 16
-    if (process.env.ND_ANGER_SAFE === '1' && SL.exposure(bot, S.own).length && angerSet(bot, null, true).length) {
+    // Свой ход сам открыт во двор (вход «из открытого со вскрытием», заплатка не встала), а ломка злит всех пиглинов в 16 — сперва
+    // заложиться, иначе отложить. S1d 07.10: по умолчанию (ломок «окном» стало больше; s1d-AB-4 A — смерть ровно так), ND_ANGER_SAFE=0 — выкл.
+    if (process.env.ND_ANGER_SAFE !== '0' && SL.exposure(bot, S.own).length && angerSet(bot, null, true).length) {
       await sealBody(bot, S).catch(() => null)
       S.exposed = SL.exposure(bot, S.own).length > 0
       if (S.exposed) {
@@ -935,7 +982,9 @@ async function digPit (session, ctl, st, until) {
     } }
   for (let tries = 0; tries < 3 && !ctl.aborted && gameClock.now() < until - 20000; tries++) {
     const view = SL.worldView(bot)
-    const cands = pitCandidates(bot, view, S.own, BF.enabled() ? 64 : 40).filter(b => !(S.badPits && S.badPits.has(SL.key(b.M.x, b.M.y, b.M.z)))).slice(0, 16)
+    // Яма — не у дома брута из копии (S1d s1d-AB-4 B: план ямы в 39 ходах к 92,59,−87, в 7 бл. от брута 85,58,−88 — два удара на пути, смерть).
+    const BH = require('.././nether-route').bruteSpots(session)
+    const cands = pitsAwayFromBrutes(pitCandidates(bot, view, S.own, BF.enabled() ? 64 : 40).filter(b => !(S.badPits && S.badPits.has(SL.key(b.M.x, b.M.y, b.M.z)))), BH).slice(0, 16)
     if (!cands.length) { log('яма: места у пиглинов нет', { pigs: mobs(bot, 'piglin', 40).length }); return null }
     const me = bot.entity.position.floored()
     const goalMap = new Map(cands.map(b => [SL.key(b.P.x, b.P.y, b.P.z), b]))
@@ -1056,7 +1105,7 @@ async function moveBarterSite (session, ctl, st, p, until) {
   }
   const view = SL.worldView(bot); const me = bot.entity.position
   const seen = st.flowVisited || (st.flowVisited = new Set())
-  const pits = pitCandidates(bot, view, st.sealedState.own, 64)
+  const pits = pitsAwayFromBrutes(pitCandidates(bot, view, st.sealedState.own, 64), require('.././nether-route').bruteSpots(session))
     .filter(b => !b.brutes && !(st.sealedState.badPits && st.sealedState.badPits.has(SL.key(b.M.x, b.M.y, b.M.z))))
   const targets = pits.map(b => ({ ...b.P, r: 0, dy: 0, source: 'яма', pigs: b.pigs }))
   // Only the current bastion's known chest floors; no blind random walk and no outside-grid fallback.
@@ -1392,7 +1441,11 @@ async function bastion (session, ctl, p: any = {}) {
     const KG0 = (p.knownGold || []).map(([x, y, z]) => ({ x, y, z }))
     const me00 = bot.entity.position
     const dens0 = g => KG0.filter(q => Math.abs(q.x - g.x) + Math.abs(q.y - g.y) + Math.abs(q.z - g.z) <= 6).length
-    const nearG0 = KG0.length ? KG0.reduce((a, b) => (dens0(b) > dens0(a) || (dens0(b) === dens0(a) && Math.hypot(b.x - me00.x, b.z - me00.z) < Math.hypot(a.x - me00.x, a.z - me00.z))) ? b : a) : null
+    // Гуща золота сокровищницы — дом брутов (копия мира): цель подхода — гуща вне их зоны, если такая есть (S1d 07.10:
+    // 4120… — 6 смертей от брута у входа 18,41,−115, цель подхода 18,37,−124 — в 9 бл. от его места). Остальное золото
+    // берёт закрытый штрек (sealedGold — бруты его не видят) или пропускает routeGold.
+    const KGa = approachGold(KG0, require('.././nether-route').bruteSpots(session))
+    const nearG0 = KGa.length ? KGa.reduce((a, b) => (dens0(b) > dens0(a) || (dens0(b) === dens0(a) && Math.hypot(b.x - me00.x, b.z - me00.z) < Math.hypot(a.x - me00.x, a.z - me00.z))) ? b : a) : null
     const needApproach = () => nearG0
       ? Math.hypot(nearG0.x - bot.entity.position.x, nearG0.z - bot.entity.position.z) > 12 || Math.abs(nearG0.y - bot.entity.position.y) > 8
       : bot.entity.position.distanceTo(new Vec3(rec.x, rec.y, rec.z)) > 40
@@ -1820,4 +1873,4 @@ async function bastion (session, ctl, p: any = {}) {
   return out(stopped)
 }
 
-module.exports = { bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }
+module.exports = { approachGold, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }

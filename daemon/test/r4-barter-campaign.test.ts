@@ -31,6 +31,8 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
   vm.runInNewContext(fs.readFileSync(process.env.CAMPAIGN_TEST_SOURCE || path.join(__dirname, '../campaign.js'), 'utf8') + `
     module.exports = { act, refresh, readMemory, nextBastion, died: () => died, stage: name => { stage = name }, craft, nightGuard, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, lightUp, known, makeBed,
       fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
+      pearlsPending: () => bastionPearlsPending(), pauseBastion: ms => { bastionPausedUntil = gameClock.now() + ms },
+      dugIn: pos => { blazeDugInAt = gameClock.now(); blazeDugInPos = pos },
       runStage: name => STAGES.find(s => s.name === name).run(),
       needs: name => STAGES.find(s => s.name === name).needed(),
       done: name => DONE[name](),
@@ -279,4 +281,64 @@ test('s1c: low hp far from the Nether portal heals dug in on the spot, not by a 
   await c.rest()
   assert.ok(calls.includes('ne_burrow'))
   assert.equal(calls.includes('ne_route'), false)
+})
+
+test('s1d: carried gold far from the bastion goes in a normal mining visit, not a 540 s barter-only approach', async () => {
+  const { c, state, calls } = fixture()
+  state.inventory.ender_pearl = 0
+  state.pos = { x: 100, y: 50, z: 300 }
+  await c.readMemory(); await c.runStage('bastion')
+  const first = calls.find(([method]: any) => method === 'bastion') as any
+  assert.ok(first, 'bastion called')
+  assert.notEqual(first[1].mode, 'barter')
+  const f2 = fixture()
+  f2.state.inventory.ender_pearl = 0
+  await f2.c.readMemory(); await f2.c.runStage('bastion')
+  const near = f2.calls.find(([method]: any) => method === 'bastion') as any
+  assert.equal(near && near[1].mode, 'barter', 'next to the bastion the carried gold is traded first')
+})
+
+test('s1d: three bastion calls without gold or trades are deferred even when the body moved inside the bastion', async () => {
+  const state = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 100, y: 50, z: 80 },
+    inventory: { iron_pickaxe: 1, cooked_beef: 12, oak_planks: 16, crafting_table: 1, stick: 2 }, armor: { feet: 'golden_boots' } }
+  const places = { 'портал': { x: 0, y: 65, z: 0, dimension: 'overworld' },
+    'бастион (ад)': { x: 100, y: 50, z: 80, dimension: 'the_nether', gold: [[101, 50, 80], [101, 50, 120]] },
+    'бастион 2 (ад)': { x: 300, y: 50, z: 80, dimension: 'the_nether', gold: [[301, 50, 80]] } }
+  let k = 0
+  const c = campaign(state, { pickLeft: 300 }, (method) => {
+    if (method === 'recall') return { state: { places } }
+    // Каждый заход — к другой гуще бастиона (≥ 8 бл. ближе к золоту = «подход» засчитан).
+    if (method === 'bastion') { k++; state.pos = { x: 100, y: 50, z: k % 2 ? 120 : 80 }; return { goldBlocksDug: 0, ingotsTraded: 0, knownGoldLeft: 2, stopped: 'золото кончилось: видимых блоков больше нет' } }
+    return {}
+  }, { env: { ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_GOLD_FAST_SAFE: '1', ND_EYES_NEED: '10' } })
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.readMemory()
+  for (let i = 0; i < 3; i++) await c.runStage('bastion')
+  assert.equal(c.nextBastion().key, 'бастион 2 (ад)')
+})
+
+test('s1d: a paused bastion stage does not hold the blaze stage closed ("pearls first" is a price, not a wall)', async () => {
+  const { c, state } = fixture()
+  state.inventory.ender_pearl = 4; state.inventory.gold_ingot = 0
+  await c.readMemory()
+  assert.equal(c.pearlsPending(), true)
+  c.pauseBastion(300000)
+  assert.equal(c.pearlsPending(), false)
+})
+
+test('s1d: a bastion that cannot be worked (no iron pickaxe for gold) does not hold the blaze stage closed', async () => {
+  const { c, state } = fixture()
+  state.inventory.ender_pearl = 4; state.inventory.gold_ingot = 0; delete state.inventory.iron_pickaxe
+  await c.readMemory()
+  assert.equal(c.pearlsPending(), false)
+})
+
+test('s1d: low hp inside the blaze pit — heal in it, no refuge out under the blazes', async () => {
+  const calls = []
+  const state = { health: 8, food: 14, dimension: 'the_nether', pos: { x: -86, y: 72, z: 61 }, inventory: { cooked_beef: 4 } }
+  const c = campaign(state, { foes: 3 }, (method, params) => { calls.push(method); return {} })
+  c.dugIn({ x: -86, y: 72, z: 61 })
+  await c.rest()
+  assert.equal(calls.includes('refuge'), false, calls.join(','))
+  assert.ok(calls.includes('wait'))
 })

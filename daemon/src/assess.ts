@@ -24,19 +24,21 @@ const MOBS = {
   parched: { hp: 16, dmg: 3.5, every: 3.5, ranged: true },
   stray: { hp: 20, dmg: 3.5, every: 2, ranged: true },
   bogged: { hp: 16, dmg: 3.5, every: 3.5, ranged: true },
-  wither_skeleton: { hp: 20, dmg: 8, every: 1 },
+  // armed: dmg уже с оружием, которым он рождается (javap 1.21.11: WitherSkeleton ATTACK_DAMAGE 4 + каменный меч 4 = 8;
+  // PiglinBrute 7 + золотой топор 6 = 13; Vindicator 5 + железный топор 8 = 13) — sizeUp не прибавляет его второй раз.
+  wither_skeleton: { hp: 20, dmg: 8, every: 1, armed: 'stone_sword' },
   creeper: { hp: 20, dmg: 22, every: 99, blast: true },
   spider: { hp: 16, dmg: 2, every: 1 },
   cave_spider: { hp: 12, dmg: 3, every: 1 },
   witch: { hp: 26, dmg: 6, every: 3, ranged: true },
   enderman: { hp: 40, dmg: 7, every: 1 },
-  vindicator: { hp: 24, dmg: 13, every: 1 },
+  vindicator: { hp: 24, dmg: 13, every: 1, armed: 'iron_axe' },
   pillager: { hp: 24, dmg: 4, every: 2, ranged: true },
   evoker: { hp: 24, dmg: 6, every: 2, ranged: true },
   vex: { hp: 14, dmg: 9, every: 1 },
   ravager: { hp: 100, dmg: 12, every: 2 },
   piglin: { hp: 16, dmg: 5, every: 1 },
-  piglin_brute: { hp: 50, dmg: 13, every: 1 },
+  piglin_brute: { hp: 50, dmg: 13, every: 1, armed: 'golden_axe' },
   hoglin: { hp: 40, dmg: 6, every: 1, armor: 0 },
   zoglin: { hp: 40, dmg: 6, every: 1 },
   blaze: { hp: 20, dmg: 5, every: 3, ranged: true, armor: 0 },
@@ -70,6 +72,7 @@ const ARMOR = {
   turtle_helmet: 2
 }
 const TOUGH = { diamond: 2, netherite: 3 }
+const SPEAR = { wooden_spear: 1, stone_spear: 2, copper_spear: 2, iron_spear: 3, golden_spear: 1, diamond_spear: 4, netherite_spear: 5 }
 
 function gearOf (items) {
   let armor = 0; let tough = 0; const worn = []
@@ -197,8 +200,15 @@ function sizeUp (bot, e, mine) {
   let ranged = !!base.ranged
   let every = base.every
   // Скелет с мечом — уже не лучник: подходит и бьёт.
-  if (hand && WEAPON[hand]) {
-    dmg = base.dmg + (WEAPON[hand] - 1)
+  // S4d: a mob's spear adds its material bonus to ATTACK_DAMAGE (javap 1.21.11 Item$Properties.spear: modifier 0 +
+  // ToolMaterial.attackDamageBonus; wood 0, stone/copper 1, iron 2, gold 0, diamond 3, netherite 4) - as a player's 1 + bonus.
+  // A husk with an iron spear hits 5, not 3 (natives s4d-ab bare husk-spear: 20 -> 10 hp in 2.6 s at "hit 3").
+  const held = hand && (WEAPON[hand] || process.env.ND_S4D !== '0' && SPEAR[hand])
+  if (held) {
+    // S4d (ND_S4D=0 — прежний двойной счёт): для armed — база без родного оружия плюс то, что в руке. Иссушитель с каменным
+    // мечом бил «12» (7.7 по железу), и бой с ним в железе при 20 хп считался проигрышным (натив s4d-smoke: бег ×8 за фазу).
+    const bare = process.env.ND_S4D !== '0' && base.armed && WEAPON[base.armed] ? base.dmg - (WEAPON[base.armed] - 1) : base.dmg
+    dmg = bare + (held - 1)
     if (/skeleton|stray|bogged|parched/.test(e.name)) { ranged = false; every = 1 }
   }
   const d = e.position.distanceTo(bot.entity.position)

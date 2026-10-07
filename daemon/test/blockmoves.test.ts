@@ -382,3 +382,12 @@ test('исполнитель: первый узел пути выше тела �
   const r2 = run(w2, [step], { ticks: 30 })
   assert.ok(!r2.stats.notHere, 'шаг на блок — свой путь')
 })
+
+// S8b (07.10): тот же «путь не отсюда» с того же места — не больше трёх перестроек (s8b-a1-3: 62 подряд, 2.5 мин на месте).
+test('исполнитель: одинаковый отказ «путь не отсюда» — не больше трёх перестроек подряд', () => {
+  const w = world(p => (p.y === 63 ? 'stone' : 'air'))
+  const up = () => [Object.assign(new Move(3, 70, 0, 16, 1), { x: 3.5, z: 0.5 }), Object.assign(new Move(4, 70, 0, 16, 1), { x: 4.5, z: 0.5 })]
+  const clock: Record<string, any> = { t: 0 }
+  const r = run(w, up(), { ticks: 400, clock, deps: { now: () => clock.t } })
+  assert.ok((r.bot.replans || 0) >= 1 && r.bot.replans <= 3, 'перестроек: ' + r.bot.replans)
+})
