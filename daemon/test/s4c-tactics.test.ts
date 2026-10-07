@@ -164,7 +164,7 @@ test('ne-guard duel does not walk toward a foe over the edge of a bridge (review
   assert.ok(!(await run(true)).includes(true), 'over the edge it does not')
 })
 
-test('burning on dry ground without a bucket runs with smartFlee, not escapeFire\'s blind 1.2 s sprint (review g: edges)', async () => {
+test('burning on dry ground without a bucket: smartFlee from a foe in sight, escapeFire out of the fire with nobody to run from (s8-f3-15)', async () => {
   const director = require('../src/director')
   const calls: string[] = []
   const saved = { fire: director.escapeFire, flee: flee.smartFlee }
@@ -178,24 +178,26 @@ test('burning on dry ground without a bucket runs with smartFlee, not escapeFire
     const system = new TacticalSystem({ bot, bus: { emit: () => {} } })
     const ctl = { aborted: false, onAbort: [] }
     const action = { id: 'Flee', score: 65, reason: '' }
+    const blaze = { id: 2, kind: 'blaze', distance: 12, player: false, threatening: true, hit: 2 }
+    await (system as any).execute(action, ctl, tactical({ burning: true, enemies: [blaze] }))
     await (system as any).execute(action, ctl, tactical({ burning: true }))
     await (system as any).execute(action, ctl, tactical({ burning: true, water: true }))
     await (system as any).execute(action, ctl, tactical({ lava: true }))
-    assert.deepEqual(calls, ['smartFlee', 'escapeFire', 'escapeFire'])
+    assert.deepEqual(calls, ['smartFlee', 'escapeFire', 'escapeFire', 'escapeFire'])
   } finally { director.escapeFire = saved.fire; flee.smartFlee = saved.flee }
 })
 
 test('escapeFire on dry ground without a bucket leaves only a fire cell, by safe steps - no blind 1.2 s sprint-jump (review g)', async () => {
   const { escapeFire } = require('../src/director')
-  const run = async (inFire: boolean) => {
+  const run = async (inFire: boolean, z = .5, fireZ = 0) => {
     const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
     const bot: any = new EventEmitter()
-    bot.entity = { id: 1, position: new Vec3(.5, 64, .5), yaw: 0, pitch: 0, onGround: true, isInLava: false }
+    bot.entity = { id: 1, position: new Vec3(.5, 64, z), yaw: 0, pitch: 0, onGround: true, isInLava: false }
     bot.game = { dimension: 'overworld' }
     bot.inventory = { items: () => [] }
     bot.lookAt = async () => {}
     // A 1-wide bridge along z over the void; fire in the body's cell when inFire.
-    bot.blockAt = (p: any) => { const q = p.floored(); const floor = q.y === 63 && q.x === 0; const fire = inFire && q.x === 0 && q.z === 0 && q.y === 64
+    bot.blockAt = (p: any) => { const q = p.floored(); const floor = q.y === 63 && q.x === 0; const fire = inFire && q.x === 0 && q.z === fireZ && q.y === 64
       return { name: floor ? 'stone' : fire ? 'fire' : 'air', position: q, boundingBox: floor ? 'block' : 'empty' } }
     const keys: Record<string, boolean[]> = { forward: [], sprint: [] }
     bot.setControlState = (key: string, on: boolean) => { (keys[key] ??= []).push(on) }
@@ -210,6 +212,9 @@ test('escapeFire on dry ground without a bucket leaves only a fire cell, by safe
   const fire = await run(true)
   assert.equal(fire.result.detail.how, 'вышел из огня')
   assert.ok(!fire.keys.sprint.includes(true), 'steps, never a blind sprint')
+  // The hitbox (±0.3) at z 0.75 reaches the burning cell z 1: that is in the fire too (s8-f3-15: burning grass beside).
+  const edge = await run(true, .75, 1)
+  assert.equal(edge.result.detail.how, 'вышел из огня')
 })
 
 test('a flight does not end at a drop: pickDirection prices the edge at its end (native A/B s4c-ab: knocked off the platform by a wither skeleton)', () => {

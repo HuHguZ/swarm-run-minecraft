@@ -872,8 +872,12 @@ async function escapeFire (session, ctl: any = null) {
   // спринт с прыжком 1.2 с вслепую к «ближайшей клетке с полом» (часто своей же) — с моста или платформы в пустоту и лаву
   // под огнём ифрита (S4c 07.10, замечание проверки г; звали директор «горю», тактика Flee и укрытие).
   const me = bot.entity.position.floored()
-  const fiery = c => [c, c.offset(0, 1, 0)].some(v => /fire|lava/.test(bot.blockAt(v)?.name || ''))
-  if (!fiery(me)) return { status: 'done', detail: { how: 'не в огне — бег огонь не тушит', ...(nether ? { nether: true } : {}) } }
+  const hot = v => /fire|lava/.test(bot.blockAt(v)?.name || '')
+  const fiery = c => [c, c.offset(0, 1, 0)].some(hot)
+  // Огонь жжёт, когда его клетку задевает хитбокс 0.6×1.8, а не только клетка под ногами: у горящей травы бот 9 раз ответил
+  // «не в огне» с одной клетки и сгорел, хп 17 → 0 за 18 игр. с (s8-f3-15, проверка S4c 07.10).
+  const touching = () => { const p = bot.entity.position; return [-0.3, 0.3].some(dx => [-0.3, 0.3].some(dz => [0.05, 1.7].some(dy => hot(p.offset(dx, dy, dz).floored())))) }
+  if (!touching()) return { status: 'done', detail: { how: 'не в огне — бег огонь не тушит', ...(nether ? { nether: true } : {}) } }
   let best = null
   for (let dx = -3; dx <= 3; dx++) {
     for (let dz = -3; dz <= 3; dz++) {
@@ -882,7 +886,8 @@ async function escapeFire (session, ctl: any = null) {
         const b = bot.blockAt(c)
         const f = bot.blockAt(c.offset(0, -1, 0))
         if (!b || !f || (dx === 0 && dz === 0) || fiery(c) || b.boundingBox !== 'empty' || f.boundingBox !== 'block') continue
-        const dd = Math.hypot(dx, dz)
+        // Трава горит и огонь ползёт: клетка рядом с огнём хуже на 1.5 блока пути.
+        const dd = Math.hypot(dx, dz) + 1.5 * [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([x, z]) => fiery(c.offset(x, 0, z))).length
         if (!best || dd < best.dd) best = { c, dd }
       }
     }
@@ -891,7 +896,7 @@ async function escapeFire (session, ctl: any = null) {
     const { stepSafe, keyDir } = require('./moves')
     try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
     const until = gameClock.now() + 1200
-    while (gameClock.now() < until && !ctl.aborted && !bot.entity.position.floored().equals(best.c)) {
+    while (gameClock.now() < until && !ctl.aborted && !(bot.entity.position.floored().equals(best.c) && !touching())) {
       bot.setControlState('forward', stepSafe(bot, keyDir(bot, 'forward')))
       bot.setControlState('jump', best.c.y > me.y && !!bot.entity.onGround)
       await sleep(50)

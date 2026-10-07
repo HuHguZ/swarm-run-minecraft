@@ -1,5 +1,5 @@
 import { TacticalArbiter } from './arbiter'
-import { threatLevel, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
+import { threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
 import { EscapeProgress, type EscapeObservation } from './escape-progress'
 import { lavaCapabilities, inLava, drinkFireResistance, climbFromLava } from './lava-escape'
 import { createEmergencyEscape, lavaFallFloor } from '../combat/emergency-escape'
@@ -534,7 +534,8 @@ export class TacticalSystem {
         // Lava: the swim out. Burning on dry ground: a water bucket puts it out (escapeFire pours it); without one a run does
         // not, and escapeFire's blind 1.2 s sprint-jump toward the nearest floor cell went over platform and bridge edges
         // (review g, S4c) - the run is smartFlee's from the shooters (edge guard, stepSafe, no fire cells).
-        if (state.lava || state.burning && !state.fireResistance && state.water) {
+        // No foe in sight while burning: smartFlee "escaped" nobody in a tick and the body stood in burning grass (s8-f3-15).
+        if (state.lava || state.burning && !state.fireResistance && (state.water || !hasObservedTarget(state))) {
           return require('../director').escapeFire(session, ctl)
         }
         // Past the default FOLLOW_RANGE 16 (Mob.createMobAttributes): smartFlee's own 14 left the creeper/skeleton/spider
