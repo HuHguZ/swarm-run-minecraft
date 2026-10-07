@@ -8,6 +8,7 @@ const gameClock = require('./src/game-clock')
 // fill → вход в Энд [→ KillDragon при UNTIL=dragon]. Часы метрики — от старта кампании.
 //   MAP_SH=1 — крепость Края из копии этого же мира (место у стены комнаты; очей — по пустым рамкам): знание карты,
 //   пишется в главной метрике (AGENTS.md). Без него — вслепую (броски ока), отдельной строкой.
+//   GRID=1 (при MAP_SH) — сетка Ада копии по коридору спавн → крепость /8 (ход ne_route; CENV ND_NE_ROUTE=1).
 //   UNTIL=end (умолч.) | dragon; MINUTES (40); EYES — очей (умолч. пустые рамки + 2, вслепую 14); PEARLS (2); BEDS (5);
 //   KEEPINV=false; DEATHS_MAX=1; CAMPAIGN=campaign.js; CENV='{"ND_X":"1"}' — env кампании; EXTRA — добавка к набору.
 // Итог — строка JSON в LAB_OUT: ok, отметки (минуты: крепость в памяти, комната, Энд, дракон), очей потрачено, смерти,
@@ -96,6 +97,20 @@ async function main () {
     }
     pr = await call('portal', { timeoutSeconds: 240 }).catch(e => ({ status: 'failed', error: e.message }))
     portalOk = /горит/.test(String(pr?.detail?.note || '') + String(pr?.detail?.stopped || ''))
+    // Тело «вышло из Ада» этим порталом — значит, в него можно войти: туда и обратно (s5d-p5-3: рама горит, «К порталу не
+    // подойти» — кампания пошла пешком). Заодно сервер ставит портал прибытия в Аду, как после настоящего Ада. PORTAL_CHECK=0 — выкл.
+    if (portalOk && process.env.PORTAL_CHECK !== '0') {
+      // В выживании, как кампания: в творческом вход мгновенный и проходит там, где ход тела к порогу не пройдёт (s5d-p6-2).
+      await kit.cmd('/gamemode survival')
+      await call('portal', { mode: 'enter', timeoutSeconds: 60 }).catch(() => null)
+      const inNether = (await status()).dimension === 'the_nether'
+      if (inNether) await call('portal', { mode: 'enter', timeoutSeconds: 60 }).catch(() => null)
+      const back = (await status()).dimension === 'overworld'
+      if (!back) await kit.ensureWorld('overworld', { tp: `${Math.round(p0.x)} ${Math.round(p0.y ?? 90)} ${Math.round(p0.z)}`, seconds: 30 })
+      await kit.cmd('/gamemode creative')
+      portalOk = inNether && back
+      if (!portalOk) pr = { detail: { stopped: `рама горит, но ${inNether ? 'обратно не вышел' : 'войти не вышло'}` } }
+    }
   }
   const s0 = await status()
   if (s0.dimension !== 'overworld') await kit.ensureWorld('overworld', {})
@@ -113,6 +128,21 @@ async function main () {
       shMap.mapped = (w.detail && w.detail.mapped) || w.error || null
     }
     console.log('крепость Края (карта копии)', JSON.stringify(shMap))
+  }
+  // GRID=1 (при MAP_SH) — сетка Ада из копии мира по коридору «портал спавна /8 → комната /8» (как у try-lab-ne-run:
+  // ход по Аду без лавы и обрывов, nether-route; кампании — CENV ND_NE_ROUTE=1). Знание карты — в главной метрике.
+  let gridInfo = null
+  if (MAP_SH && process.env.GRID === '1' && process.env.FARM_SLOT && shMap && (shMap.room || shMap.start)) {
+    const tg = gameClock.wall.now()
+    const ex = shMap.room || shMap.start
+    const pts = [{ x: Math.floor(start.x / 8), z: Math.floor(start.z / 8) }, { x: Math.floor(ex.x / 8), z: Math.floor(ex.z / 8) }]
+    try {
+      const M = require('./try-lab-ne-map')
+      const r = await M.netherGrid(Number(process.env.FARM_SLOT), M.corridorRects(pts, 40), {})
+      require('./src/nether-grid').save(path.join(__dirname, '..', 'farm', `memory-${process.env.FARM_SLOT}`), r.grid, { pts })
+      gridInfo = { seconds: Math.round((gameClock.wall.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, cells: r.grid.data.length, pts }
+    } catch (e) { gridInfo = { error: e.message } }
+    console.log('сетка Ада (копия)', JSON.stringify(gridInfo))
   }
   const eyes = Number(process.env.EYES || (MAP_SH ? need + 2 : 14))
   // Портал строился в creative (блоки не тратятся) — остаток обсидиана/огнива убрать: набор ровно «после Ада».
@@ -187,7 +217,7 @@ async function main () {
   const rec = {
     at: new Date().toISOString(), scene: 'try-lab-end', until: UNTIL, seed: seedOf(), mapSh: MAP_SH, blind: !MAP_SH, ok, stoppedBy,
     minutes: Math.round((gameClock.now() - tc) / 6000) / 10, marks, endMin: marks.end ?? null, dragonMin: marks.dragon ?? null,
-    eyes0, eyesAtEnd, eyesSpent: eyesAtEnd === null ? null : eyes0 - eyesAtEnd, need, shMap, truth, start,
+    eyes0, eyesAtEnd, eyesSpent: eyesAtEnd === null ? null : eyes0 - eyesAtEnd, need, shMap, grid: gridInfo, truth, start,
     deathCount: deaths.length, deaths, health: s.health ?? null, dimension: s.dimension ?? null, pos: s.pos ?? null,
     wallSeconds, ticks, tempo: ticks && wallSeconds ? Math.round(ticks / wallSeconds) : null, tickRate: clock1?.tickRate ?? null,
     portal: portalOk, portalWhy: portalOk ? undefined : String(pr && (pr.error || pr.detail?.stopped || pr.detail?.note) || '').slice(0, 200), rngSalt, exitCode: exited, campaignLog: clog

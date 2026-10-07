@@ -14,9 +14,10 @@ const PH = ['дерево', 'камень', 'железо/еда', 'лава/л�
 const med = a => { const v = a.filter(Number.isFinite).sort((x, y) => x - y); if (!v.length) return null; const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2 }
 const r1 = x => x == null ? '—' : Math.round(x * 10) / 10
 
-for (const prefix of args.filter(a => !a.startsWith('--'))) {
-  const dirs = fs.readdirSync(RES).filter(d => d.startsWith(prefix + '-') && /-\d+$/.test(d) && fs.statSync(path.join(RES, d)).isDirectory())
-    .sort((a, b) => Number(a.split('-').pop()) - Number(b.split('-').pop()))
+// Префиксы через запятую — одной сводкой (плечо из нескольких серий: s8b-a1,s8b-a2).
+for (const prefix of args.filter(a => !a.startsWith('--') && !/^\d+$/.test(a))) {
+  const dirs = prefix.split(',').flatMap(pre => fs.readdirSync(RES).filter(d => d.startsWith(pre + '-') && /-[0-9]+$/.test(d.slice(pre.length)) && fs.statSync(path.join(RES, d)).isDirectory())
+    .sort((a, b) => Number(a.split('-').pop()) - Number(b.split('-').pop())))
   const runs = []
   for (const d of dirs) {
     const f = fs.readdirSync(path.join(RES, d)).find(x => /^slot-\d+\.jsonl$/.test(x))

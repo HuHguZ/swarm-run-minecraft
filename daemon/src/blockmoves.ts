@@ -27,6 +27,9 @@ const gameClock = require('./game-clock')
 // Сорвалось (отказ, нет грани) — тело падает, а там уже сторож падения: блочный клатч (clutch.js) и ведро.
 
 const { Vec3 } = require('vec3')
+// Ход pathfinder'а — один раз, не require() на каждый ход моста/спуска внутри A* (S9).
+let MoveCls
+const MoveOf = () => MoveCls || (MoveCls = require('mineflayer-pathfinder/lib/move'))
 
 // Мост по частичному пути над пустотой: ждать конца поиска не дольше (pathfinder сбрасывает путь «stuck» через 3.5 с).
 const HOLD_MS = Number(process.env.ND_BRIDGE_HOLD_MS || 2500)
@@ -74,6 +77,22 @@ function cellOf (node) {
   return { x: Math.floor(node.x), y: Math.floor(node.y), z: Math.floor(node.z) }
 }
 
+// Предел перестроек с одного места (S8b; S8c 07.10, замечание проверки в): подпись — причина и клетка (узел, клетка моста/ступени
+// или опора; у причин без узла раньше была одна подпись на все клетки), счёт снимают сдвиг тела на 2+ бл. (продвинулись),
+// новая цель и достигнутая цель (onGoal/onReached в install).
+function replanSig (why, info?: any) {
+  const c = info && (info.node || info.cell || info.ref)
+  return `${why}|${Array.isArray(c) ? c.join(',') : ''}`
+}
+function replanCount (st, sig, pos) {
+  const moved = !!(st.replanPos && pos && Math.hypot(pos.x - st.replanPos.x, pos.y - st.replanPos.y, pos.z - st.replanPos.z) >= 2)
+  st.replanSame = sig === st.replanSig && !moved ? (st.replanSame || 0) + 1 : 1
+  st.replanSig = sig
+  if (st.replanSame === 1 && pos) st.replanPos = { x: pos.x, y: pos.y, z: pos.z }
+  return st.replanSame
+}
+const goalKey = g => g ? JSON.stringify([g.constructor && g.constructor.name, g.x, g.y, g.z, g.rangeSq, g.goals && g.goals.length]) : ''
+
 function bridgeMove (mv, node, dir, opts: any = {}) {
   if (!(node.remainingBlocks > (opts.reserve ?? 0))) return null
   const o = cellOf(node)
@@ -113,7 +132,7 @@ function bridgeMove (mv, node, dir, opts: any = {}) {
   if (u.void) cost += opts.voidCost ?? 2.5
   cost += mv.exclusionStep(C)
   if (cost >= 100) return null
-  const Move = opts.Move || require('mineflayer-pathfinder/lib/move')
+  const Move = opts.Move || MoveOf()
   const m = new Move(C.position.x, C.position.y, C.position.z, node.remainingBlocks - 1, cost, [], [], false)
   m.ndBridge = { ref: { x: o.x, y: o.y - 1, z: o.z }, dir: { x: dir.x, z: dir.z }, y: C.position.y, depth: u.depth, water: !!u.water, n: chain }
   return m
@@ -163,7 +182,7 @@ function descendMove (mv, node, dir, opts: any = {}) {
   const T = mv.getBlock(o, dir.x, -2, dir.z)
   cost += mv.exclusionStep(T)
   if (cost >= 100) return null
-  const Move = opts.Move || require('mineflayer-pathfinder/lib/move')
+  const Move = opts.Move || MoveOf()
   const m = new Move(T.position.x, T.position.y, T.position.z, node.remainingBlocks - 1, cost, [], [], false)
   m.ndDescend = { cell: { x: C.position.x, y: C.position.y, z: C.position.z }, ref: { x: ref.pos.x, y: ref.pos.y, z: ref.pos.z }, face: ref.face, dir: { x: dir.x, z: dir.z }, from: o, y: T.position.y }
   return m
@@ -310,6 +329,8 @@ function install (session, deps: any = {}) {
       const col = bot.world.getColumnAt(p)
       if (!col) return false
       col.setBlockStateId(new Vec3(p.x & 15, p.y, p.z & 15), id)
+      // Мимо событий мира — кеш блоков pathfinder'а (fastblocks.ts, S9) сбросить самим.
+      if (bot._ndFastBlocks) bot._ndFastBlocks.invalidate(p.x, p.y, p.z)
       return true
     } catch { return false }
   }
@@ -355,10 +376,8 @@ function install (session, deps: any = {}) {
     if (now() - st.replanAt < 1000) return
     // Тот же отказ с того же места — новый поиск даёт тот же путь (s8b-a1-3: «путь не отсюда» узел 87.5,67 при теле 87.7,65 —
     // 62 перестройки подряд, 2.5 мин на месте): после трёх — не перестраивать, решают stuck и goto (ND_BRIDGE_REPLAN3=0 — выкл.).
-    const sig = `${why}|${info && info.node ? info.node.join(',') : ''}`
-    st.replanSame = sig === st.replanSig ? (st.replanSame || 0) + 1 : 1
-    st.replanSig = sig
-    if (st.replanSame > 3 && process.env.ND_BRIDGE_REPLAN3 !== '0') return
+    const e = bot.entity
+    if (replanCount(st, replanSig(why, info), e && e.position) > 3 && process.env.ND_BRIDGE_REPLAN3 !== '0') return
     st.replanAt = now()
     log('перестроить путь', { why, ...info })
     try { bot.pathfinder.setMovements(bot.pathfinder.movements) } catch {}
@@ -686,10 +705,15 @@ function install (session, deps: any = {}) {
     finish()
     try { for (const k of ['forward', 'back', 'left', 'right', 'sneak']) bot.setControlState(k, false); bot.jumpQueued = false } catch {}
   }
+  // Счёт одинаковых перестроек снимают новая цель (другая, не та же после рефлекса) и достигнутая цель.
+  const onGoal = (g) => { const k = goalKey(g); if (k !== st.replanGoal) { st.replanGoal = k; st.replanSame = 0; st.replanSig = null } }
+  const onReached = () => { st.replanSame = 0; st.replanSig = null }
   st.stop = () => {
     st.stopped = true
     cancelScheduled()
     finish()
+    bot.removeListener('goal_updated', onGoal)
+    bot.removeListener('goal_reached', onReached)
     bot.removeListener('physicsTick', st.step)
     bot.removeListener('path_update', onPath)
     bot.removeListener('path_reset', onReset)
@@ -701,6 +725,8 @@ function install (session, deps: any = {}) {
   }
   // path_update — раньше исполнителя (prepend): узлы надо поправить до первого тика по новому пути.
   bot.prependListener('path_update', onPath)
+  bot.on('goal_updated', onGoal)
+  bot.on('goal_reached', onReached)
   bot.on('physicsTick', st.step)
   bot.on('path_reset', onReset)
   bot.on('forcedMove', onTeleport)
@@ -711,4 +737,4 @@ function install (session, deps: any = {}) {
   return st
 }
 
-module.exports = { on, addBridge, bridgeMove, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }
+module.exports = { replanSig, replanCount, goalKey, on, addBridge, bridgeMove, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }

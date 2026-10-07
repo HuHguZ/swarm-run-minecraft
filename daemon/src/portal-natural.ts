@@ -395,6 +395,7 @@ function skyOfScan (r) {
 function poolInfo (seed, { file = null, dir = null }: any = {}) {
   const none = { scanned: false, hint: null }
   if (seed === undefined || seed === null || seed === '') return none
+  if (!require('./perception/knowledge').allows('lava', 'portal-natural.poolInfo')) return none // S10: в rsg скан не читается
   const path = require('path'); const fs = require('fs')
   const toHint = sky => sky && Array.isArray(sky.at) ? { x: sky.at[0], y: sky.at[1], z: sky.at[2], kind: sky.cls, src: sky.src, dist: sky.d } : null
   try {

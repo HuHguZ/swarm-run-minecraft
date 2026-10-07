@@ -131,6 +131,12 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
     stopped: stopped || undefined
   })
 
+  // Подбор одним заходом (S8c 07.10, скорость: брёвна ~7 с на штуку с подбором после каждого — s8b-c 72 с/прогон, земля на литьё
+  // и камень — ещё ~90 с/прогон): дроп копится, пока следующий блок в 5 бл. от первого несобранного; дальше — подобрать и идти.
+  // Руду (пещеры, лава рядом) — как прежде, после каждого блока. ND_MINE_BATCH=0 — после каждого всегда.
+  const batch = collect && count > 1 && !/_ore|ore$|debris/.test(String(name)) && process.env.ND_MINE_BATCH !== '0'
+  let pendingAt = null
+  const flush = async () => { if (pendingAt) { const at = pendingAt; pendingAt = null; await collectNearbyDrops(bot, ctl, { from: at, radius: 7, timeoutMs: 9000 }) } }
   while (dug < count && !ctl.aborted) {
     // Never a block the body is standing on. findBlocks sorts by distance from
     // the feet cell and, within a section, walks x, then y, then z — so of the
@@ -166,6 +172,7 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
     }
 
     const target = visible[0]
+    if (pendingAt && target.position.distanceTo(pendingAt) > 5) await flush()
     const problem = missingHarvestTool(bot, target, mcData)
     if (problem) {
       // Refusing up front is the whole point of this check and the tool
@@ -175,6 +182,7 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
       // `failed` with no numbers in it at all. The next block needing a better
       // pickaxe is a reason to stop, not a reason to forget the previous eight.
       if (dug === 0) throw new Error(problem)
+      await flush()
       return report(problem)
     }
 
@@ -185,7 +193,7 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
       await bot.dig(target, true)
       dug++
       streak = 0
-      if (collect) await collectNearbyDrops(bot, ctl)
+      if (batch) { if (!pendingAt) pendingAt = target.position.clone() } else if (collect) await collectNearbyDrops(bot, ctl)
     } catch (err) {
       misses.push(err.message)
       streak++
@@ -198,11 +206,13 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
         // this call either way, but only an empty tally deserves to be an error.
         const why = `не смог добыть ${name}: ${misses[misses.length - 1]}`
         if (dug === 0) throw new Error(why)
+        await flush()
         return report(why)
       }
     }
   }
 
+  if (!ctl.aborted) await flush()
   return report(ctl.aborted ? 'прервано' : null)
 }
 
@@ -1464,10 +1474,31 @@ async function explore (session, ctl, {
 
   const legs = []
   let i = 0
+  // Память увиденного (perception/eyes, S10): блок, который тело видело раньше (с прошлого отрезка, за спиной, другим
+  // навыком), — сперва к нему, потом снова взгляд. Ближе 6 бл. и уже пробованные в этом вызове — мимо. ND_EXPLORE_MEM=0 — без.
+  const memTried = new Set()
+  const remembered = () => {
+    if (!useFair || !bot._ndEyes || process.env.ND_EXPLORE_MEM === '0') return null
+    const names = ids.map(id => session.mcData.blocks[id] && session.mcData.blocks[id].name).filter(Boolean)
+    const me = bot.entity.position
+    return require('./perception/eyes').nearest(bot, names, { max: 8, maxDist: Math.max(radius * 2, 96) })
+      .find(m => !memTried.has(`${m.x},${m.y},${m.z}`) && Math.hypot(m.x - me.x, m.z - me.z) > 6 && !(dry && underWater(bot, new Vec3(m.x, m.y, m.z)))) || null
+  }
   // Разведка из-под неба верхнего мира — поверху (session.underSky,
   // underRoofCost): отрезок «по прямой» иначе уходил в пещеры.
   const walkTop = typeof session.underSky === 'function' && session.underSky()
   while (gameClock.now() < deadline && !ctl.aborted) {
+    const mem = remembered()
+    if (mem) {
+      memTried.add(`${mem.x},${mem.y},${mem.z}`)
+      const r = await travelXZ(bot, ctl, mem.x, mem.z, { range: 4, retries: 1, deadline })
+      legs.push(`память ${mem.name} ${mem.x},${mem.y},${mem.z}${r.ok ? '' : ' ✗ ' + r.error}`)
+      console.log('[eyes] explore: к увиденному раньше', JSON.stringify({ name: mem.name, at: [mem.x, mem.y, mem.z], dist: mem.dist, ago: mem.ago, ok: !!r.ok }))
+      if (!r.ok) await sleep(250)
+      hit = firstVisible(bot, ids, radius, useFair, dry)
+      if (hit) return { found: hit.name, at: xyz(hit.position), from, now: xyz(bot.entity.position), legs, note: 'видел раньше — подошёл' }
+      continue
+    }
     const [dx, dz] = direction && COMPASS[direction] ? COMPASS[direction] : SWEEP[i % SWEEP.length]
     const spread = direction ? i + 1 : 1 + Math.floor(i / SWEEP.length)
     const here = bot.entity.position

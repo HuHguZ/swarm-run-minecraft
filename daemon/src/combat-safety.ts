@@ -31,6 +31,7 @@ const COST_K = 2.5
 // крипер в 11–15 бл. с «ударом» 19.4 давал порог ≥ 20 → «уходить» и при одном зомби вплотную — бег/коробка вместо боя
 // (s5c-b1-1, f2-2, g3-3: смерть), второй зомби в 15.7 бл. поднимал порог и «дёшево» — коробка при еде 12 (s8-f1-12, смерть).
 const S4D = () => process.env.ND_S4D !== '0'
+const WHITE = /^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|parched|bogged|slime|silverfish)$/
 const RANGED = new Set(Object.keys(assess.MOBS).filter(name => assess.MOBS[name].ranged))
 const inExchange = t => t.name === 'creeper' ? !!t.swelling || t.distance <= 4 : RANGED.has(t.name) || t.distance <= 6
 function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
@@ -53,7 +54,7 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   // Только обычные мобы верхнего мира начала игры (белый список): бои Ада и Края (ифриты у спавнера — blaze.js) остаются
   // со своим запасом еды.
   const pool = S4D() ? live : threats
-  const odd = (S4D() ? near : threats).length > 2 || pool.some(t => !/^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|parched|bogged|slime|silverfish)$/.test(String(t.name || '')))
+  const odd = (S4D() ? near : threats).length > 2 || pool.some(t => !WHITE.test(String(t.name || '')))
   const cheap = FIGHT_COST() && typeof expected === 'number' && weapon && !odd && threshold < 20 && health >= threshold + COST_K * expected
   if (cheap && dangerous && (!healable || food < 18 || (phase === 'start' && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4))) {
     return { ...result, cost: expected, cheap: true }
@@ -66,7 +67,12 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   // A walker in the tactics' contact radius (4.5) closes it in under a second, before a wall (~1.5 s) is up.
   const atBody = near.some(t => t.name !== 'creeper' && t.distance <= (RANGED.has(t.name) ? 8 : 4.5))
   // Margin: half the fight floor left after three blows (a sword zombie's 6 at 20 hp is no trade: 20 - 18 < 4).
-  if (S4D() && FIGHT_COST() && dangerous && weapon && !odd && atBody && threshold < 20 && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true }
+  // Not only the white list: any melee walker (a wither skeleton at 20 hp and food 16 was run from x13, then death - natives
+  // s4d-ab3); the margin keeps out the heavy hitters (a brute's 8.6 through iron: 20 - 25.8 < 4). Shooters - only the archers of
+  // the list (a blaze is blaze.ts's fight), never a creeper, at most two in the exchange.
+  const tradeable = near.length <= 2 && near.every(t => t.name !== 'creeper' && (!RANGED.has(t.name) || WHITE.test(String(t.name || ''))))
+  // A fight in progress or one the tactics engaged at the body - not a voluntary start (phase start keeps its food rule).
+  if (S4D() && FIGHT_COST() && phase !== 'start' && dangerous && weapon && tradeable && atBody && threshold < 20 && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true }
   if (phase === 'start' && dangerous && !weapon) return { ...result, action: 'leave', reason: 'нет пригодного оружия' }
   if (dangerous && !healable) return { ...result, action: 'leave', reason: 'нечем восстановить здоровье' }
   if (phase === 'start' && dangerous && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4) {

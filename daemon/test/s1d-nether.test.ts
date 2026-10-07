@@ -100,3 +100,22 @@ test('s1d: a pick swing is priced by the pick stock in the Nether route plan', (
   const low = bag([{ name: 'stone_pickaxe', count: 1, durabilityUsed: 31 }, { name: 'stick', count: 1 }])
   assert.ok(NR.swingPrice(low) > 0.8, 'last pick — a dug cell costs more than an exposed step')
 })
+
+test('s1d: a 1–2 block thick platform (no room for depth 3) still gets the old depth-2 pit', async () => {
+  const Vec3 = require('vec3')
+  const sealed = require('../src/sealed')
+  const { digInPlace } = require('../src/blaze')
+  const air = new Set<string>()
+  const k = (v: any) => `${v.x},${v.y},${v.z}`
+  // Solid only at y 61..63 (platform 3 thick under feet at 64): depth 3 needs a floor at 60 — air there.
+  const block = (v: any) => (v.y >= 64 || v.y < 61 || air.has(k(v))) ? { name: 'air', boundingBox: 'empty' } : { name: 'nether_bricks', boundingBox: 'block' }
+  const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), onGround: true }, blockAt: (v: any) => block(v.floored ? v.floored() : v) }
+  const dig0 = sealed.digCell; const fill0 = sealed.fillCell
+  sealed.digCell = async (_b: any, c: any) => { air.add(k(c)); bot.entity.position = new Vec3(0.5, c.y, 0.5); return 'ok' }
+  sealed.fillCell = async () => true
+  try {
+    const r = await digInPlace(bot, { aborted: false })
+    assert.equal(r.ok, true, r.why)
+    assert.equal(r.depth, 2)
+  } finally { sealed.digCell = dig0; sealed.fillCell = fill0 }
+})

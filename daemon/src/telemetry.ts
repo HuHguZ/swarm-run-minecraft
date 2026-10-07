@@ -125,12 +125,14 @@ function file () {
 }
 
 const RUN = `${process.pid}-${Date.now().toString(36)}`
+// Уровень знания карты (S10, perception/knowledge): rsg — главная метрика, ssg/scan — отдельные строки.
+function knowledgeLevel () { try { return require('./perception/knowledge').level() } catch { return null } }
 let seq = 0
 function record (rec) {
   if (!on()) return
   try {
     const clock = gameClock.snapshot()
-    const line = { v: 1, run: RUN, seq: ++seq, at: new Date().toISOString(), seed: process.env.ND_WORLD_SEED || null, ver: version(),
+    const line = { v: 1, run: RUN, seq: ++seq, at: new Date().toISOString(), seed: process.env.ND_WORLD_SEED || null, knowledge: knowledgeLevel(), ver: version(),
       clock: clock ? 'game' : 'wall', tickRate: clock?.tickRate ?? 20, ticks: typeof rec.sec === 'number' ? Math.round(rec.sec * 20) : null, ...rec }
     fs.appendFileSync(file(), JSON.stringify(line) + '\n')
   } catch {}

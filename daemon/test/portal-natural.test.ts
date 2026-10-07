@@ -88,12 +88,16 @@ test('подсказка из пула: поле sky по сиду, нет си�
   const fs = require('fs'); const os = require('os'); const path = require('path')
   const f = path.join(os.tmpdir(), `nd-pool-${process.pid}.json`)
   fs.writeFileSync(f, JSON.stringify({ seeds: [{ seed: '-5', sky: { d: 91, cls: 'surface', at: [-8, 63, -91], src: 86 } }, { seed: '7', sky: null }] }))
+  const k0 = process.env.ND_KNOWLEDGE
+  process.env.ND_KNOWLEDGE = 'ssg' // S10: скан копии — только «известный сид»; в rsg (по умолчанию) — null
   try {
     assert.deepEqual(hintFor('-5', f), { x: -8, y: 63, z: -91, kind: 'surface', src: 86, dist: 91 })
     assert.equal(hintFor('7', f), null)
     assert.equal(hintFor('8', f), null)
     assert.equal(hintFor(null, f), null)
-  } finally { fs.unlinkSync(f) }
+    process.env.ND_KNOWLEDGE = 'rsg'
+    assert.equal(hintFor('-5', f), null, 'rsg — скан не читается')
+  } finally { fs.unlinkSync(f); if (k0 === undefined) delete process.env.ND_KNOWLEDGE; else process.env.ND_KNOWLEDGE = k0 }
 })
 
 test('берег у лавы: клетка места вычерпана — тело от соседнего источника, встать на край чаши', () => {
@@ -142,9 +146,11 @@ test('скан копии мира: видимая сверху лава — о�
   const pool = path.join(dir, 'pool.json')
   fs.writeFileSync(pool, JSON.stringify({ seeds: [{ seed: '1', lava: 50, sky: null }, { seed: '2', lava: null }] }))
   fs.writeFileSync(path.join(dir, '3.json'), JSON.stringify(r))
+  const k0 = process.env.ND_KNOWLEDGE
+  process.env.ND_KNOWLEDGE = 'ssg' // S10: скан копии — только «известный сид»
   try {
     assert.deepEqual(poolInfo('1', { file: pool, dir }), { scanned: true, hint: null })
     assert.deepEqual(poolInfo('2', { file: pool, dir }), { scanned: false, hint: null })
     assert.deepEqual(poolInfo('3', { file: pool, dir }), { scanned: true, hint: { x: 3, y: 64, z: 4, kind: 'surface', src: 80, dist: 120 } })
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); if (k0 === undefined) delete process.env.ND_KNOWLEDGE; else process.env.ND_KNOWLEDGE = k0 }
 })

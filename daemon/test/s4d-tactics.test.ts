@@ -279,3 +279,43 @@ test('a tactical Fight is "engaged": combat.fight does not drop it at the start-
   assert.equal(start.action, 'leave', 'the start check alone refuses with no food reserve')
   assert.equal(evaluate({ health: 20, food: 20, foodPoints: 0, weapon: true, phase: 'continue', threats: [{ name: 'zombie', hit: 3, distance: 6 }] }).action, 'fight')
 })
+
+
+test('a melee walker off the white list is a trade too when the margin holds (wither skeleton at food 16), a brute is not', () => {
+  const body = { health: 20, food: 16, foodPoints: 40, weapon: true, phase: 'continue' }
+  assert.equal(withFlag(undefined, () => evaluate({ ...body, threats: [{ name: 'wither_skeleton', hit: 4.5, distance: 3 }] }).trade), true)
+  assert.notEqual(withFlag(undefined, () => evaluate({ ...body, threats: [{ name: 'piglin_brute', hit: 8.6, distance: 3 }] }).action), 'fight')
+  assert.notEqual(withFlag(undefined, () => evaluate({ ...body, threats: [{ name: 'blaze', hit: 2.5, distance: 3 }] }).trade), true, 'a blaze is the blaze skill\'s fight')
+  assert.notEqual(withFlag('0', () => evaluate({ ...body, threats: [{ name: 'wither_skeleton', hit: 4.5, distance: 3 }] }).action), 'fight')
+})
+
+test('a fight dropped at full health (hunger) comes back at full health: the recovery mark is capped at max health', async () => {
+  const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
+  const bot: any = new EventEmitter()
+  bot.entity = { id: 1, position: new Vec3(0, 64, 0), onGround: true }
+  bot.health = 20; bot.food = 20
+  const picks: string[] = []
+  let canFight = false
+  const ws = { id: 2, kind: 'wither_skeleton', distance: 3, player: false, threatening: true, hit: 4.5 }
+  const session: any = { bot, current: null, reflex: null, bus: { emit: (name: string, payload: any) => { if (name === 'tactical_selected') picks.push(payload.action) } } }
+  const system = new TacticalSystem(session, { observe: () => tactical({ at: gameClock.now(), contact: true, canFight, enemies: [ws] }), record: () => {},
+    execute: async () => { await gameClock.sleep(100); return {} } })
+  try {
+    system.attach(bot)
+    for (let i = 0; i < 6; i++) { timer.advanceTicks(3); system.update(true); await new Promise(resolve => setImmediate(resolve)) }
+    canFight = true
+    for (let i = 0; i < 40; i++) { timer.advanceTicks(3); system.update(true); await new Promise(resolve => setImmediate(resolve)) }
+    assert.ok(picks.includes('Fight'), picks.join(','))
+  } finally { system.detach(); timer.dispose(); gameClock.activate(null) }
+})
+
+test('time to kill reads a mob\'s synced health: a zombie at 4 hp is a short fight (mobs only)', () => {
+  const assess = require('../src/assess')
+  const bot: any = { entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => [{ name: 'stone_sword', count: 1 }] },
+    registry: { entitiesByName: { zombie: { metadataKeys: [...Array(9).fill('x'), 'health'] } } } }
+  const zombie = (hp: number) => { const metadata: any[] = []; metadata[9] = hp; return { name: 'zombie', position: new Vec3(2, 64, 0), equipment: [], metadata } }
+  const full = withFlag(undefined, () => assess.sizeUp(bot, zombie(20), { armor: 0, tough: 0 }).toKill)
+  const low = withFlag(undefined, () => assess.sizeUp(bot, zombie(4), { armor: 0, tough: 0 }).toKill)
+  assert.ok(low < full / 3, `${low} vs ${full}`)
+  assert.equal(withFlag('0', () => assess.sizeUp(bot, zombie(4), { armor: 0, tough: 0 }).toKill), full)
+})

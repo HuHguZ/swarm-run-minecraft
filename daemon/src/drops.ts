@@ -24,6 +24,9 @@ const gameClock = require('./game-clock')
 //     подобранным считается только то, что сервер отдал нам (пакет collect).
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
+// Кеш блоков тела (S9) — лениво и мягко: сцены и тесты грузят этот файл в песочнице без него.
+let fastblocksMod
+const fastblocks = () => { if (fastblocksMod === undefined) { try { fastblocksMod = require('./fastblocks') } catch { fastblocksMod = null } } return fastblocksMod }
 
 const TICK_MS = 50
 const GRAVITY = 0.04
@@ -255,13 +258,16 @@ function recordOf (bot, e) {
 
 // ------------------------------------------------------------------ физика ItemEntity
 
+// Снимок блоков на время одного расчёта (кеш живёт, пока жив getter). Сами Block — из кеша тела (fastblocks.ts, S9):
+// физика предметов звала bot.blockAt на каждую клетку коробок каждый тик — 8.4 % CPU демона в бою (lockstep.md).
 function blockGetter (bot) {
   const cache = new Map()
+  const fb = fastblocks() ? fastblocks().install(bot) : null
   return (x, y, z) => {
     const k = `${x},${y},${z}`
     if (cache.has(k)) return cache.get(k)
     let b = null
-    try { b = bot.blockAt(new Vec3(x, y, z)) } catch {}
+    try { b = fb ? fb.block(x, y, z) : bot.blockAt(new Vec3(x, y, z)) } catch {}
     cache.set(k, b)
     return b
   }

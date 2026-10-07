@@ -154,12 +154,17 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   add('LavaPoolPortal', 'cast', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && knows(s, 'lava'), { facts: { portal: true } }, 120, achieved('portal'), 0.04)
   add('RuinedPortal', 'ruinedPortal', s => ow(s) && !knows(s, 'portal') && structureAvailable(s, 'ruined_portal') && amount(s, 'stone_tool') >= 1,
     { facts: { portal: true, ruined_portal_exhausted: true } }, 100, achieved('portal'), 0.025)
+  // Priors of the diamond fallback from the legacy campaign stages (S8c 07.10, farm/results/*/campaign.log: first stage turn →
+  // its ВЕХА; fresh-A*, ow-*, rt*, s5c-f*): diamond entered 46, done 9 (median 15 min), died 16; obsidian 8 / 3 (median 12 min),
+  // 0 deaths. Seconds = median / Laplace success share, risk = Laplace death share. Was 600 / 200 s at 0.05 / 0.035 — unmeasured
+  // and optimistic, so the blind graph planned diamonds over scouting lava. Frame of carried obsidian: 2 legacy samples of 4 min
+  // include the walk; 10 placements and a light with clearing ~90 s (was 45).
   add('AcquireDiamondPick', 'diamond', s => ow(s) && !knows(s, 'portal') && eyesOwed(s) && amount(s, 'iron') >= 3 && !amount(s, 'diamond_pick'),
-    { resources: { iron: -3 }, atLeast: { diamond_pick: 1 } }, 600, has('diamond_pick'), 0.05)
+    { resources: { iron: -3 }, atLeast: { diamond_pick: 1 } }, Math.round(900 / ((9 + 1) / (46 + 2))), has('diamond_pick'), (16 + 1) / (46 + 2))
   add('MineObsidian', 'obsidian', s => ow(s) && !knows(s, 'portal') && amount(s, 'diamond_pick') >= 1 && amount(s, 'water') >= 1 && amount(s, 'obsidian') < 10,
-    { atLeast: { obsidian: 10 } }, 200, has('obsidian', 10), 0.035)
+    { atLeast: { obsidian: 10 } }, Math.round(720 / ((3 + 1) / (8 + 2))), has('obsidian', 10), (0 + 1) / (8 + 2))
   add('ObsidianPortal', 'portal', s => ow(s) && !knows(s, 'portal') && amount(s, 'obsidian') >= 10 && amount(s, 'lighter') >= 1,
-    { resources: { obsidian: -10 }, facts: { portal: true } }, 45, achieved('portal'), 0.01)
+    { resources: { obsidian: -10 }, facts: { portal: true } }, 90, achieved('portal'), 0.01)
   add('PrepareNether', 'prep', s => ow(s) && knows(s, 'portal') && !knows(s, 'nether_ready'), { facts: { nether_ready: true }, atLeast: { food: 6, iron_pick: 1 } },
     90, achieved('nether_ready'), 0.01)
   add('EnterNether', 'enterNether', s => ow(s) && knows(s, 'portal') && knows(s, 'nether_ready') && (pearlsNeeded(s) || amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes),

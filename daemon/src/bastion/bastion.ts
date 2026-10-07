@@ -111,6 +111,19 @@ function approachGold (gold, brutes) {
   const safe = gold.filter(g => !nearBruteHome(g, brutes))
   return safe.length ? safe : gold
 }
+/** S1e (проверка S1d (в)): цели у дома брута — не «никогда», а последними: пока есть другие, их не берём; когда остались только они —
+ *  берём при хп ≥ 16 (удар брута 13 = 7 + топор, javap S4d; 2 удара до отхода). */
+function targetsByBruteHome (list, posOf, brutes, hp) {
+  const far = list.filter(t => !nearBruteHome(posOf(t), brutes, 6))
+  return far.length || hp < 16 ? far : list
+}
+/** S1e (проверка S1d (в)): ход к торговцам при бруте рядом — цена: ожидаемый урон от брутов, которые видят нас или дойдут (заливка
+ *  тела), или стоят в 10 бл. от торговца, ~2 удара каждый (13 после нашей брони), против хп с запасом 8. Брут за стеной — не повод. */
+function bruteWalkRisk (brutes, { threatens, nearTrader, hit, hp }) {
+  const n = brutes.filter(b => threatens(b) || nearTrader(b)).length
+  const dmg = n * 2 * hit
+  return { n, dmg, go: hp - dmg >= 8 }
+}
 
 /** Gold that opens the sealed tunnel may be broken and patched at once: 1×1 window (no brute/hoglin in 12 of the body), or
  *  (S1d) any face as long as the drop cannot fall out (own/collision block below), no brute/hoglin in 8 of the gold and no mob
@@ -473,10 +486,10 @@ async function sealedGold (session, ctl, st, until) {
     // Без железной кирки (st.chestsOnly) — только сундуки: золото ей не взять, а железо в сундуках есть.
     // Цели в 6 бл. от дома брута копии — не трогать (S1d s1d-N-2: сундук у брута, 2 удара за секунду, смерть на 7-й мин).
     const BH6 = require('.././nether-route').bruteSpots(session)
-    const preds = st.chestsOnly ? [] : [...st.pred.entries()].filter(([k, v]) => (st.skip.get(k) || 0) < gameClock.now() && !nearBruteHome(v.pos, BH6, 6))
+    const preds = st.chestsOnly ? [] : targetsByBruteHome([...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now()), ([, v]) => v.pos, BH6, bot.health ?? 20)
     const chestsT = st.lootChests ? [...st.chestSeen.entries()].filter(([k]) => !st.looted.has(k) && (st.skip.get(k) || 0) < gameClock.now()).map(([k, v]) => ({ k, pos: v.pos, chest: true })) : []
     if (!preds.length && !chestsT.length) break
-    const chestsOk = chestsT.filter(c => !nearBruteHome(c.pos, BH6, 6))
+    const chestsOk = targetsByBruteHome(chestsT, c => c.pos, BH6, bot.health ?? 20)
     if (!preds.length && !chestsOk.length) break
     const minRank = preds.length ? Math.min(...preds.map(([, v]) => v.rank || 0)) : 0
     const tg = [...preds.filter(([, v]) => (v.rank || 0) === minRank).map(([k, v]) => ({ k, pos: v.pos })), ...(minRank === 0 ? chestsOk : [])]
@@ -653,8 +666,9 @@ async function sealedGold (session, ctl, st, until) {
       continue
     }
     // Свой ход сам открыт во двор (вход «из открытого со вскрытием», заплатка не встала), а ломка злит всех пиглинов в 16 — сперва
-    // заложиться, иначе отложить. S1d 07.10: по умолчанию (ломок «окном» стало больше; s1d-AB-4 A — смерть ровно так), ND_ANGER_SAFE=0 — выкл.
-    if (process.env.ND_ANGER_SAFE !== '0' && SL.exposure(bot, S.own).length && angerSet(bot, null, true).length) {
+    // заложиться, иначе отложить. S1d включил по умолчанию по одной смерти (s1d-AB-4 A) без парного A/B — S1e (проверка S1d (д)) вернул
+    // как было: только ND_ANGER_SAFE=1, до A/B на снимках.
+    if (process.env.ND_ANGER_SAFE === '1' && SL.exposure(bot, S.own).length && angerSet(bot, null, true).length) {
       await sealBody(bot, S).catch(() => null)
       S.exposed = SL.exposure(bot, S.own).length > 0
       if (S.exposed) {
@@ -972,6 +986,13 @@ async function digPit (session, ctl, st, until) {
     S.exposed = true
     log('яма: использую готовую', { feet: readyPit.P, mouth: readyPit.M, pigs: readyPit.pigs })
     return readyPit
+  }
+  // S1d 07.10: злость от последнего золота (600 тиков) — переждать в своём штреке, потом к яме (s1d-G22-6: золото «окном», сразу
+  // «яма: путь» 20 ходов — злые пиглины, 5 ударов, смерть на 24-й мин). Ломок «окном» стало много — ожидание по умолчанию.
+  if (gameClock.now() - lastGoldBreak(st) < 33000 && inOwnTunnel(bot, S)) {
+    log('яма: злость от золота — жду в штреке', { s: Math.round((lastGoldBreak(st) + 33000 - gameClock.now()) / 1000) })
+    const why = await waitWatched(session, ctl, Math.min(33000, lastGoldBreak(st) + 33000 - gameClock.now()))
+    if (why || ctl.aborted) return null
   }
   // Снаружи (второй вызов кампании: тело вышло штреком к входу) — сперва ко входу своего штрека:
   { const me0 = bot.entity.position.floored()
@@ -1722,8 +1743,19 @@ async function bastion (session, ctl, p: any = {}) {
         if (gameClock.now() - (st.lastBreak || 0) < 33000) { await sleep(2000); continue }
         if (spare() <= 0) break
         if (await tryBarter(true)) continue
+        // Брут в 16 — к торговцам не идти: выход из ямы под его удары (S1d s1d-F21-1: «бартер: рядом брут в 10 — отойти», ход к пиглинам
+        // через двор — 2 удара, смерть). Заложиться на месте и кончить заход.
         // Пиглинов в 16 не видно — к ближайшему известному (до 48 блоков).
         const tr = nearestTrader(bot, 48)
+        const brutesNear = mobs(bot, 'piglin_brute', 24)
+        if (brutesNear.length) {
+          const reach = reachSet(bot)
+          const A = require('.././assess')
+          const g = A.gearOf([5, 6, 7, 8].map(i => bot.inventory.slots[i]))
+          const wr = bruteWalkRisk(brutesNear, { threatens: b => threatens(bot, b, reach), nearTrader: b => !!tr && b.position.distanceTo(tr.e.position) < 10,
+            hit: A.afterArmor(13, g.armor, g.tough), hp: bot.health ?? 20 })
+          if (!wr.go) { log('бартер: к торговцам — брут', { ...wr, brutes: brutesNear.length }); await hunker(session, ctl, st, 'брут рядом — к торговцам не иду').catch(() => null); st.lastBarter = 'брут рядом'; break }
+        }
         if (!tr || barterWalks >= 8) { st.lastBarter = st.lastBarter || 'пиглинов рядом нет'; break }
         barterWalks++
         const pg: any = tr.e
@@ -1873,4 +1905,4 @@ async function bastion (session, ctl, p: any = {}) {
   return out(stopped)
 }
 
-module.exports = { approachGold, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }
+module.exports = { approachGold, targetsByBruteHome, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }

@@ -15,7 +15,8 @@ module.exports = {
 
   // Fog of war. When true the bot only reports what a human player could
   // actually see: line of sight from its eyes, no ore through stone.
-  fairPlay: process.env.ND_FAIR_PLAY !== 'false',
+  // Выключить можно только на уровне знания scan (S10, perception/knowledge): в rsg/ssg рентгена нет.
+  fairPlay: process.env.ND_FAIR_PLAY !== 'false' || require('./perception/knowledge').level() !== 'scan',
 
   // Autopilot thresholds
   eatBelowFood: 16,

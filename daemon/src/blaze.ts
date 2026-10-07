@@ -797,8 +797,11 @@ function choosePost (bot, spawner, avoid = null) {
     const back = pos.offset(Math.round(bx), 0, Math.round(bz))
     let cover = 0
     for (const y of [0, 1]) if (solidB(bot.blockAt(back.offset(0, y, 0)))) cover++
-    const score = view - edge * 4 + cover * 1.5 - Math.abs(h - 2.5) * 1.5 - Math.abs(pos.y - spawner.y) - d * 0.1
-    if (!best || score > best.score) best = { pos, score, h: Math.round(h * 10) / 10, view, cover, edge }
+    // S1e: на посту должна копаться яма отлёжки (3, иначе 2): отлечиться на помосте крепости «в толщу» не выходило — «лава/пусто у
+    // ямы», ход к соседним клеткам под ударами ифритов вплотную (s1e-K4-7: 19.9 урона в фазе «в толщу отлечиться», смерть; K4-4, K4-1).
+    const pit = process.env.ND_POST_PIT === '0' ? 0 : !pitWhyAt(bot, pos, 3) ? 2 : !pitWhyAt(bot, pos, 2) ? 1 : 0
+    const score = view - edge * 4 + cover * 1.5 - Math.abs(h - 2.5) * 1.5 - Math.abs(pos.y - spawner.y) - d * 0.1 + pit * 3
+    if (!best || score > best.score) best = { pos, score, h: Math.round(h * 10) / 10, view, cover, edge, pit }
   }
   return best
 }
@@ -1358,6 +1361,9 @@ async function holdSpawner (session, ctl, ctx) {
     return true
   }
   let idleSince = gameClock.now()
+  // S1e: спавнер работает, только когда игрок в 16 бл. от его центра (BaseSpawner.isNearPlayer, requiredPlayerRange 16) — молчит
+  // издали (s1e-B0-3: «спавнер молчит 50с — стою в 18 бл.» ×3, этап ифритов брошен) — подойти на 8 и ждать снова, а не уходить.
+  let silentApproach = 0
   let lastBeat = 0
   let shieldOn = false
   let shieldAt = 0
@@ -1427,7 +1433,10 @@ async function holdSpawner (session, ctl, ctx) {
       // Бег (kite) — только от ифрита вплотную. От стрелков бег — спиной под
       // очереди: на ферме 2026-09-29 «отрыв до лечения» дал 14–18 из 20
       // смертельного урона. Без ближнего врага — сразу стенка (ниже).
-      escape = meleeThreat() && !nofrSeen ? await survival.disengage(session, ctl, foesNow) : { clear: true, how: nofrSeen ? 'без бега: без FR — в толщу' : 'без бега: вплотную никого' }
+      // S1d 07.10: ифрит вплотную — и под FR сперва яма 3 с крышкой (удар ифрита требует луча и d² < 4 — в закрытой яме его нет), а не
+      // отрыв: «не удалось разорвать контакт для лечения» — 3 из 5 смертей у спавнера в серии s1d-F (F22-1, F21b-1, F21b-4). ND_PIT_MELEE=0 — прежнее.
+      const usePit = nofrSeen || (process.env.ND_PIT_MELEE !== '0' && !!meleeThreat())
+      escape = meleeThreat() && !usePit ? await survival.disengage(session, ctl, foesNow) : { clear: true, how: nofrSeen ? 'без бега: без FR — в толщу' : usePit ? 'без бега: ифрит вплотную — в толщу' : 'без бега: вплотную никого' }
       if (!escape.clear) {
         const enemy = meleeThreat() || foesNow()[0]
         if (enemy && (bot.health ?? 0) > 0 && !ctl.aborted) escape.cover = await combat.retreat(session, ctl, enemy)
@@ -1436,7 +1445,7 @@ async function holdSpawner (session, ctl, ctx) {
       // Без огнестойкости под лучами ифритов — отлёжка в толще на месте (2 вниз + крышка, digInPlace: две копки и один блок),
       // а не стройка коробки под залпами со снятым щитом (s1c-N-2 06.10: фаза «коробка» — 4 шара подряд, 17 урона, смерть).
       // Отлечился — крышку сломать, столб 2 под себя и бой дальше; наверх не вышел — конец захода в толще (dugIn).
-      if (!fireproof() && liveBlazes(bot, dead, 24).some(e => seesMe(bot, e))) {
+      if (usePit || (!fireproof() && liveBlazes(bot, dead, 24).some(e => seesMe(bot, e)))) {
         setPhase('в толщу отлечиться')
         const dug: any = await digInNear(bot, ctl).catch(e => ({ ok: false, why: e.message }))
         log('в толщу отлечиться', dug)
@@ -1730,7 +1739,12 @@ async function holdSpawner (session, ctl, ctx) {
       // Запас хп — на удары тех, кто вплотную (3.4 в железе каждый): с толпой у тела порог выше (s1c-B-6 06.10: 4 ифрита рядом,
       // «держу до 5 хп» — 20 → 0 до первого отдыха).
       const nearBlazes = liveBlazes(bot, dead, 3).length
-      const holdUnderFr = fireproof() && hp >= Math.max(5, 3.4 * nearBlazes + 2) && foesNow().every((e: any) => e.name === 'blaze')
+      // S1e: запас — ожидаемый урон, пока убиваем тех, кто вплотную, по одному: удар ифрита вплотную 6 раз в 20 тиков (Blaze ATTACK_DAMAGE 6,
+      // BlazeAttackGoal attackTime 20) — 3.4 по железу в секунду с каждого; ифрит 20 хп — 4 удара мечом на откате 0.625 с ≈ 2.5 с. С n
+      // вплотную — 3.4·2.5·n(n+1)/2 (+4 на отход в яму): 1 — 12.5 хп, 2 — 29.5 (держать нельзя). Было 3.4·n + 2 (5.4 / 8.8): тело
+      // доходило до 2–6 хп, и отход уже не успевал (s1e-K4-4, K4-7). ND_FR_HOLD=0 — прежнее.
+      const holdNeed = process.env.ND_FR_HOLD === '0' ? Math.max(5, 3.4 * nearBlazes + 2) : 3.4 * 2.5 * nearBlazes * (nearBlazes + 1) / 2 + 4
+      const holdUnderFr = fireproof() && hp >= holdNeed && foesNow().every((e: any) => e.name === 'blaze')
       // Под FR с малым хп — поесть, когда вплотную никого (отдых с уходом гибелен: s1-LA-3 06.10 — 4 стержня, «хп 7, укрытие
       // не позволило», убежище «CORNERED» → смерть). Порог боя со щитом — 5 хп (был 9).
       if (holdUnderFr && hp < 14 && (bot.food ?? 20) < 20 && !liveBlazes(bot, dead, 4).some(e => reachTo(bot, e) <= 2.6) && gameClock.now() - (out.frEatAt || 0) > 4000) {
@@ -2006,6 +2020,13 @@ async function holdSpawner (session, ctl, ctx) {
       }
       if (!blazes.length) {
         if (now - idleSince > (spawner ? 50000 : 8000)) {
+          if (spawner && silentApproach < 2 && bot.entity.position.distanceTo(spawner.offset(0.5, 0.5, 0.5)) > 15) {
+            silentApproach++
+            log('спавнер молчит издали — подхожу', { d: Math.round(bot.entity.position.distanceTo(spawner)), n: silentApproach })
+            await walkNear(bot, ctl, spawner, 8, 15000)
+            idleSince = gameClock.now()
+            continue
+          }
           stopped = spawner
             ? `спавнер молчит ${Math.round((now - idleSince) / 1000)}с (блейзов нет) — стою в ${Math.round(bot.entity.position.distanceTo(spawner))} бл. от него`
             : 'блейзов в 32 блоках больше не вижу'
@@ -2676,6 +2697,19 @@ async function campSpawner (session, ctl, { spawner, want, deadline, dead, setPh
 // Закопаться на месте: 2 клетки вниз и крышка над головой. Яма 1×1 глубиной 2 — ифрит не достаёт ударом (BlazeAttackGoal: d² < 4),
 // шару нужен луч (s1-post24/25hole 06.10: в такой яме хп 20 всё время). Выход из навыка под ифритами иначе убивал: «к колонне
 // не дошёл», 17 → 2 хп (s1-LG-3, LH-3: 5 стержней и смерть через секунды).
+// Почему яма глубины depth под клеткой ног f не годится (null — годится): клетки ямы и пол под ней твёрдые, без лавы/воды/огня;
+// стенки ямы твёрдые со всех сторон: яма у края помоста с воздухом сбоку открыта ифритам (их удар вплотную требует луча —
+// BlazeAttackGoal: hasLineOfSight; s1c-M-2 06.10: «sealed», а 7 ударов в яме сбоку, смерть). Общая для digInPlace и digInNear.
+const PIT_BAD = b => !b || /lava|water|fire|magma|spawner|bedrock|chest/.test(b.name)
+function pitWhyAt (bot, f, depth) {
+  const cs = [1, 2, 3].slice(0, depth).map(d => f.offset(0, -d, 0))
+  for (const c of cs) { const b = bot.blockAt(c); if (PIT_BAD(b) || b.boundingBox !== 'block') return 'под ногами: ' + (b ? b.name : '?') }
+  const fl = bot.blockAt(f.offset(0, -depth - 1, 0))
+  if (PIT_BAD(fl) || fl.boundingBox !== 'block') return `пол на −${depth + 1}: ` + (fl ? fl.name : '?')
+  for (const c of cs) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const b = bot.blockAt(c.offset(dx, 0, dz)); if (!b || /lava/.test(b.name) || b.boundingBox !== 'block') return 'лава/пусто у ямы' }
+  return null
+}
+
 async function digInPlace (bot, ctl) {
   const SL = require('./sealed')
   // В прыжке/отбросе под ногами воздух (s1-LH-9/LH-10 06.10: «под ногами: air») — сперва стоять на земле.
@@ -2684,15 +2718,14 @@ async function digInPlace (bot, ctl) {
   // Глубина 3: крышка — над головой в клетке f−1, у неё 4 стенки ямы — грань для установки есть всегда. При глубине 2 крышка
   // шла в клетку пола f, а у неё на ровном месте ни одной опорной грани (сбоку воздух, снизу голова): «крышка не встала»,
   // шары в открытый верх (S1d s1d-N-3: 19 жемчуга, в яме без крышки 50 урона «в толщу отлечиться», смерть на 41-й мин).
-  const DEPTH = process.env.ND_PIT_DEPTH === '2' ? 2 : 3
+  // Глубина 3 не помещается (помост крепости в 1–2 блока толщиной над пустотой: «лава/пусто у ямы» — s1d-G21-5, смерть) — яма 2
+  // по-старому, без гарантии крышки, но с твёрдыми стенками. ND_PIT_DEPTH=2 — сразу 2.
+  const pitWhy = depth => pitWhyAt(bot, f, depth)
+  const why3 = process.env.ND_PIT_DEPTH === '2' ? 'ND_PIT_DEPTH=2' : pitWhy(3)
+  const why2 = why3 ? pitWhy(2) : null
+  if (why3 && why2) return { ok: false, why: why2 }
+  const DEPTH = why3 ? 2 : 3
   const cells = [1, 2, 3].slice(0, DEPTH).map(d => f.offset(0, -d, 0))
-  const floor = bot.blockAt(f.offset(0, -DEPTH - 1, 0))
-  const bad = b => !b || /lava|water|fire|magma|spawner|bedrock|chest/.test(b.name)
-  for (const c of cells) { const b = bot.blockAt(c); if (bad(b) || b.boundingBox !== 'block') return { ok: false, why: 'под ногами: ' + (b ? b.name : '?') } }
-  if (bad(floor) || floor.boundingBox !== 'block') return { ok: false, why: `пол на −${DEPTH + 1}: ` + (floor ? floor.name : '?') }
-  // Стенки ямы — твёрдые со всех сторон: яма у края помоста с воздухом сбоку открыта ифритам (их удар вплотную требует луча —
-  // BlazeAttackGoal: hasLineOfSight; s1c-M-2 06.10: «sealed», а 7 ударов в яме сбоку, смерть).
-  for (const c of cells) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const b = bot.blockAt(c.offset(dx, 0, dz)); if (!b || /lava/.test(b.name) || b.boundingBox !== 'block') return { ok: false, why: 'лава/пусто у ямы' } }
   for (const c of cells) {
     if (ctl.aborted) return { ok: false, why: 'прервано' }
     // Копку под ударами сервер обрывает («server interrupted», s1c-B-3 06.10) — повторить до трёх раз.
@@ -2717,17 +2750,18 @@ async function digInNear (bot, ctl, r = 4) {
   if (first.ok || ctl.aborted || !/под ногами|пол на|лава\/пусто/.test(first.why || '')) return first
   const { standable } = require('./walkable')
   const f = bot.entity.position.offset(0, 0.2, 0).floored()
-  const firm = c => { const b = bot.blockAt(c); return !!b && b.boundingBox === 'block' && !/lava|water|fire|magma|spawner|bedrock|chest/.test(b.name) }
   const cands = []
   for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
     if (!dx && !dz) continue
     const c = f.offset(dx, 0, dz)
-    if (!standable(bot, c) || ![1, 2, 3, 4].every(d => firm(c.offset(0, -d, 0)))) continue
-    if ([1, 2, 3].some(d => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => { const b = bot.blockAt(c.offset(x, -d, z)); return !b || /lava/.test(b.name) || b.boundingBox !== 'block' }))) continue
-    cands.push(c)
+    if (!standable(bot, c)) continue
+    // Соседняя клетка — под ту же яму, что примет digInPlace: 3, иначе 2 (проверка S1d (г): брали только клетки под яму 3 —
+    // на помосте крепости в 2–3 блока соседней не находилось, хотя яма 2 там встаёт). Яма 2 — чуть дороже (крышка без гарантии).
+    const depth = process.env.ND_PIT_DEPTH !== '2' && !pitWhyAt(bot, c, 3) ? 3 : !pitWhyAt(bot, c, 2) ? 2 : 0
+    if (depth) cands.push({ c, depth, cost: c.distanceTo(f) + (depth === 3 ? 0 : 1.5) })
   }
-  cands.sort((a, b) => a.distanceTo(f) - b.distanceTo(f))
-  for (const c of cands.slice(0, 3)) {
+  cands.sort((a, b) => a.cost - b.cost)
+  for (const { c } of cands.slice(0, 3)) {
     if (ctl.aborted) break
     const w = await walkNear(bot, ctl, c, 0, 4000)
     if (!w.ok || !bot.entity.position.offset(0, 0.2, 0).floored().equals(c)) continue
@@ -3202,4 +3236,4 @@ async function farmRods (session, ctl, p: any = {}) {
   return detail
 }
 
-module.exports = { digInPlace, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }
+module.exports = { digInPlace, digInNear, pitWhyAt, choosePost, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }

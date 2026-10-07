@@ -52,6 +52,11 @@ const CREEPER = { swellDist: 7, closeDist: 3.3, cooldownMs: 2500, everyTicks: 2 
 const HOLD_INTENTS = new Set(['smelt', 'craft', 'chest_put', 'chest_take', 'pack', 'sort', 'stash', 'enchant', 'brew', 'cook'])
 // Эти сами отвечают за крипера (бой pvp.js — удар и отход) или уже уходят.
 const CREEPER_GUARDED = new Set(['fight', 'retaliate', 'defend', 'flee', 'refuge', 'escape_fire', 'dragon'])
+// flee — один раз, не require() на каждый тик у крипера (S9).
+let fleeMod
+const fleeLazy = () => fleeMod || (fleeMod = require('./flee'))
+let fightkitMod
+const fightkitLazy = () => fightkitMod || (fightkitMod = require('./fightkit'))
 function creeperNeed (bot) {
   if (!bot.entity || (bot.health ?? 0) <= 0) return null
   const gm = bot.game && bot.game.gameMode
@@ -63,7 +68,7 @@ function creeperNeed (bot) {
     const d = e.position.distanceTo(me)
     if (d > CREEPER.swellDist) continue
     let swelling = false
-    try { swelling = require('./flee').creeperSwelling(bot, e) } catch {}
+    try { swelling = fleeLazy().creeperSwelling(bot, e) } catch {}
     if (!swelling && d > CREEPER.closeDist) continue
     // Шипящий в зоне урона (≤ 5 бл.: normal 43/16.75/5.1 на 0/3/5 бл., MOBS.md) — раньше ближнего нешипящего (ревью Codex
     // surv-camp-deaths 02.10); дальше 5 шипящий бьёт ~1 хп — тогда ближний (он вот-вот зашипит вплотную).
@@ -349,7 +354,7 @@ class Autopilot {
       await this.emergency(bot).catch(e => console.error('[emergency]', (e && e.message) || e))
       // Горю — огнестойкость; хп мало и враг рядом — золотое яблоко раньше бегства
       // (fightkit.js). Своё хранит от повторов, ошибки не наши — молча.
-      await require('./fightkit').autoUse(this, bot).catch(() => {})
+      await fightkitLazy().autoUse(this, bot).catch(() => {})
       await this.extinguish(bot).catch(() => {})
       await this.fleeIfDying(bot)
       await this.eatIfHungry(bot)

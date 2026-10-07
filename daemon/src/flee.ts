@@ -287,6 +287,8 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       const walker = hs.find(h => h.doc.radius > 0)
       if (chase && walker) {
         chase.d0 ??= walker.d
+        // (S4d опыт «прижат к краю»: преследователь в 3 бл. у обрыва — конец бега как погоня. Натив s4d-ab3: без брони падений B 3 против
+        // A 1 — стойка у края под ударами хаска с копьём сбрасывает так же, как бег; откатил.)
         if (gameClock.now() - chase.t0 >= 3000 && walker.d <= 5 && walker.d <= chase.d0 + 0.5) {
           stop()
           return { mode: 'не отрывается', chased: true, from: [...fromNames], pursuer: walker.e.username || walker.e.name,

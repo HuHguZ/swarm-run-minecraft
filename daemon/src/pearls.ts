@@ -62,13 +62,14 @@ function meta (bot, e, key) {
 
 const seesMob = (bot, e, frac = 0.55) => canSeePoint(bot, e.position.offset(0, (e.height || 1.8) * frac, 0))
 
-async function walkTo (bot, ctl, target, range, ms, stopIf = null) {
+// xz — цель по горизонтали (GoalNearXZ): жемчуг на крыше окопа (на 2 выше пола) GoalNear(…, 0) не достигался никогда.
+async function walkTo (bot, ctl, target, range, ms, stopIf = null, xz = false) {
   const guard = stuckGuard(bot, ctl, 8000)
   let timer = null
   let poll = null
   try {
     await Promise.race([
-      bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, range)),
+      bot.pathfinder.goto(xz ? new goals.GoalNearXZ(target.x, target.z, range) : new goals.GoalNear(target.x, target.y, target.z, range)),
       guard.promise,
       new Promise<any>((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(500, ms)) }),
       new Promise<any>((_resolve, reject) => { if (stopIf) poll = gameClock.setInterval(() => { try { if (stopIf()) reject(new Error('опасность рядом')) } catch {} }, 250) })
@@ -1772,7 +1773,10 @@ async function huntFoxhole (session, ctl, p: any = {}) {
             if (await foxExit(bot, ctl, mcData, fox)) {
               for (const it of (lying as any)) {
                 if (!bot.entities[it.id] || ctl.aborted) continue
-                await walkTo(bot, ctl, it.position.floored(), 0, 5000, () => endermen().some((e : any) => angry(e) && e.position.distanceTo(bot.entity.position) < 6))
+                // S1e: до 1 бл. по горизонтали, а не «в клетку предмета» (лаборатория s1e-L3: 18 убийств → подобрано 2, «собрал лежащий
+                // жемчуг got 0» ×122 — жемчуг на крыше окопа и на наростах, клетка недостижима); коробка подбора (+1 вширь, +0.5 вверх)
+                // достаёт его с соседней клетки.
+                await walkTo(bot, ctl, it.position, 1, 5000, () => endermen().some((e : any) => angry(e) && e.position.distanceTo(bot.entity.position) < 6), true)
                 await sleep(300)
               }
               await foxEnter(bot, ctl, fox)
@@ -1913,7 +1917,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
           if (await foxExit(bot, ctl, mcData, fox)) {
             for (const it of (lying as any)) {
               if (!bot.entities[it.id] || ctl.aborted) continue
-              await walkTo(bot, ctl, it.position.floored(), 0, 6000, () => endermen().some((e : any) => angry(e) && e.position.distanceTo(bot.entity.position) < 6))
+              await walkTo(bot, ctl, it.position, 1, 6000, () => endermen().some((e : any) => angry(e) && e.position.distanceTo(bot.entity.position) < 6), true)
               await sleep(300)
             }
           }
@@ -2441,7 +2445,22 @@ async function huntDuel (session, ctl, p: any = {}) {
   return detail
 }
 
+// S1e 07.10: сколько разных эндерменов было в виду (луч к телу, 64 бл.) за вызов охоты — кампания прекращает заходы, где их нет
+// (S1d: 23–40 мин охоты «без единого в виду»), и считает по этому цену жемчуга эндерменами.
 async function hunt (session, ctl, p: any = {}) {
+  const bot = session.bot
+  const ids = new Set()
+  const peek = () => { try { for (const e of Object.values(bot.entities) as any[]) if (e && e.name === 'enderman' && e.position && e.position.distanceTo(bot.entity.position) <= 64 && seesMob(bot, e)) ids.add(e.id) } catch {} }
+  peek()
+  const timer = gameClock.setInterval(peek, 1000)
+  try {
+    const r: any = await huntStyled(session, ctl, p)
+    peek()
+    return { ...r, seenEndermen: ids.size }
+  } finally { gameClock.clearInterval(timer) }
+}
+
+async function huntStyled (session, ctl, p: any = {}) {
   const boatSkill = require('./combat/enderman-boat')
   const target = p.boatTrap === false ? null : boatSkill.boatTarget(session)
   if (!target) return huntLegacy(session, ctl, p.style === 'boat' ? { ...p, style: 'foxhole' } : p)
@@ -2928,4 +2947,4 @@ async function pearls (session, ctl, p: any = {}) {
   return { ...r, auto: true }
 }
 
-module.exports = { pearls, hunt, barter, digHideout, reachTo, emergencyPillar, pillarDown }
+module.exports = { pearls, hunt, barter, digHideout, reachTo, emergencyPillar, pillarDown, walkTo }

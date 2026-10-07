@@ -215,3 +215,24 @@ test('дерево: кирка уже в рюкзаке и брёвен на т�
   assert.strictEqual(ok, true)
   assert.ok(!calls.includes('mine') && !calls.includes('stage'), calls.join(' '))
 })
+
+test('pathfinder: в верхнем мире вода дороже (liquidCost ≥ 3), в Аду — как было; ND_OW_LIQUID=0 — как было', () => {
+  const worlds = require('../src/worlds')
+  const reg = require('minecraft-data')('1.21.11')
+  const mk = (dimension: string) => ({ movements: { liquidCost: 1, blocksToAvoid: new Set(), blocksCantBreak: new Set(), getNeighbors: () => [] } as any, bot: { registry: reg, entity: { position: { y: 64 } }, game: { dimension } } as any })
+  const ow = mk('overworld'); worlds.tuneMovements(ow.bot, ow.movements)
+  assert.strictEqual(ow.movements.liquidCost, 3)
+  const ne = mk('the_nether'); worlds.tuneMovements(ne.bot, ne.movements)
+  assert.strictEqual(ne.movements.liquidCost, 1)
+  withEnv8b({ ND_OW_LIQUID: '0' }, () => { const off = mk('overworld'); worlds.tuneMovements(off.bot, off.movements); assert.strictEqual(off.movements.liquidCost, 1) })
+})
+
+test('запас блоков одного ведра: у лавы 16, на этапе камня 12 (добор под землёй дорог)', () => {
+  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const ctx: any = { process: { env: { ND_ROUTE: '1' } }, routeMod: { BUCKETS: () => 1 } }
+  const r = createOverworldRoute(ctx)
+  assert.strictEqual(r.routeBlockTarget(), 16)
+  assert.strictEqual(r.routeBlockTarget(22, false), 12)
+  ctx.routeMod.BUCKETS = () => 2
+  assert.strictEqual(r.routeBlockTarget(22, false), 22)
+})

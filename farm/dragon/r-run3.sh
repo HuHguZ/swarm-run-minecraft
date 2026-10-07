@@ -5,6 +5,7 @@
 # ARM — env демона и сцены (по умолчанию ND_RUNNER=1). Бой k = (раунд−1)·nслотов + номер слота в диапазоне (1..):
 #   итог farm/logs/<тег>-s<k>.jsonl, трасса farm/logs/trace-<тег>/s<k>/, сиды — <тег>-seeds.txt.
 # Набор: campaign2 + BEDS (4) кроватей, без якорей, обсидиан 4, PEARLS (5) жемчуга, MIN (10) минут на бой.
+# LOCKSTEP=1 — пошаговый слот (up --lockstep --reup), CODE=<снимок> — код из снимка (S5d 07.10).
 # Сводка: node farm/dragon/an-r.js <тег>; LABPLUG=1 — плагин-свидетель DragonLab, события — trace-<тег>/s<k>/lab-ev.jsonl
 TAG=$1; A=$2; B=$3; R=$4; shift 4
 cd /c/Users/user/Desktop/work/minecraft-claude
@@ -16,13 +17,13 @@ fight () {
   S=$1; K=$2; SEED=$3; shift 3
   L=farm/logs/$TAG-$K.log
   echo "бой $K слот $S сид $SEED $(date +%H:%M:%S)" >> $L
-  node farm/farm.js down $S >> $L 2>&1
-  P=$((25600 + S)); for w in $(seq 1 30); do netstat -ano | grep -q ":$P .*LISTENING" || break; sleep 2; done; sleep 3
+  [ -n "$LOCKSTEP" ] || node farm/farm.js down $S >> $L 2>&1
+  P=$((25600 + S)); [ -n "$LOCKSTEP" ] || { for w in $(seq 1 30); do netstat -ano | grep -q ":$P .*LISTENING" || break; sleep 2; done; sleep 3; }
   # LABPLUG=1 — свидетель сервера DragonLab (только наблюдает): взрывы, seen родителя, позы головы; события боя — в трассу
   [ -n "$LABPLUG" ] && { cp farm/dragon/lab-plugin/DragonLab.jar farm/server-$S/plugins/ 2>/dev/null; rm -f farm/server-$S/plugins/DragonLab/events.jsonl; }
   # лимит миров общий на все потоки (s5 06.10): пока слот занят чужим миром — ждать и повторять, не идти дальше без сервера
   for u in $(seq 1 60); do
-    env $ARM ND_DRAGON_TRACE="$PWD/$TR/s$K" node farm/farm.js up 1 --from $S --fresh --seeds $SEED >> $L 2>&1
+    env $ARM ND_DRAGON_TRACE="$PWD/$TR/s$K" node farm/farm.js up 1 --from $S --fresh --seeds $SEED ${LOCKSTEP:+--lockstep --reup} ${CODE:+--code $CODE} >> $L 2>&1
     netstat -ano | grep -q ":$P .*LISTENING" && break
     echo "up не вышел ($u), жду 30 с" >> $L; sleep 30
   done

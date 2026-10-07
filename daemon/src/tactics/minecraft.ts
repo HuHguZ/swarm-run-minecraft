@@ -253,7 +253,14 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // новый подход и укрытие), а Fight/LastStand тактики в яме злил пиглинов (COORD 19:10, 23:06). Уровень ≥3 — как прежде.
     // S4d (граница с навыком blaze, COORD 07.10): навык ведёт бой с ифритами, а ходячий не-ифрит вплотную (иссушитель, куб
     // магмы, брут) — не его бой: s1c-A-5 — «slain by Wither Skeleton» у спавнера, 40 с без единой строки тактики.
-    shelter, protectedEncounter: current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
+    // S5d (07.10): одни чешуйницы/эндермиты при броне ≥ 10 (спавнер портальной комнаты, заражённый кирпич; удар 1) — работа навыка
+    // идёт: Fight тактики по ним сквозь решётку «acted:false, cancelled» ×100+ 25 игр. мин (s5d-p6-1), обрыв fill и еды у комнаты —
+    // БЛОКЕР «hunger 6/18» при 16 стейках (s5d-p6-2). Только пока хп ≥ 16: рой (6 чешуйниц ≈ 2.8 хп/с по железу) — бой тактики
+    // (s5d-p7-2: fill под роем, 20 → 0 за 8 с, «slain by Silverfish»). Уровень ≥3 — как прежде.
+    // S1e (07.10): охота на эндерменов (pearls hunt) сама ведёт бой с ними — окоп под крышей, штрек, дуэль со щитом, лодка; Fight
+    // тактики по эндермену рвал её («reflex: действие прервано» в каждом вызове лаборатории s1e-L0: крыша окопа не вставала, дуэль
+    // без хозяина — 3 эндермена, смерть). Только пока в угрозе одни эндермены; уровень ≥3 — как прежде. ND_PEARLS_OWN=0 — выкл.
+    shelter, protectedEncounter: current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && hostile.every(enemy => enemy.kind === 'enderman') || current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
     aerialCombat,
     flightEscape: air.flightReady, pearlEscape: air.pearlReady, fireResistancePotion: rescue.potion, lavaClimb: rescue.climb, lavaEscapePending, webBoatEscape: webBoat, boatLavaHop }
 }
@@ -375,7 +382,10 @@ export class TacticalSystem {
       else if (state.canFight && this.unfitLow !== null) {
         // One more exchange of margin: a single hit must not cross the threshold again (fuzz-513: skeleton 3.5 per arrow).
         const hit = Math.max(0, ...state.enemies.filter(enemy => enemy.threatening).map(enemy => enemy.hit ?? 0))
-        if (state.health < this.unfitLow + Math.max(FIGHT_RECOVERY_HP, 2 * hit)) state.canFight = false
+        // S4d: capped at full health - a fight dropped at 20 hp (hunger, not wounds: «сытость не позволяет лечиться») asked for
+        // 24 and never came back in the incident (natives s4d-ab3: a wither skeleton run from ×13 at 20 hp, then death).
+        const recovered = this.unfitLow + Math.max(FIGHT_RECOVERY_HP, 2 * hit)
+        if (state.health < (S4D() ? Math.min(recovered, (this.bot?.maxHealth ?? 20) - 0.5) : recovered)) state.canFight = false
         else this.unfitLow = null
       }
     }

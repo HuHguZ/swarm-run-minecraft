@@ -20,6 +20,7 @@ const gameClock = require('./game-clock')
 // Каждый вызов смотрит, в каком мире тело и где, и продолжает с того шага.
 
 const { goals } = require('mineflayer-pathfinder')
+const Vec3 = require('vec3')
 const { sleep, xyz } = require('./movement')
 const { itemNamed, countOf, equipBestTool, missingHarvestTool } = require('./items')
 const { collectNearbyDrops } = require('./actions')
@@ -184,6 +185,213 @@ async function ensureDoorway (session, ctl) {
   return { ok: ways.some(d => nether.clearStand(read, d.pos)), placed }
 }
 
+// Камера под раму выхода (S5d 07.10). У точки Ада тело обычно в штреке 1×2 в толще: s5d-p1-1 — «Не расчистил место под
+// раму: netherrack не виден в прицеле» ×2 (клетки рамы за стенкой штрека, а копать вне списка рамы стройка не берётся),
+// s1d-M-5 — «лава в 2 бл.». Камера 2 вглубь × 4 вширь × 3 ввысь перед телом — по одной из 4 сторон с твёрдым полом и без
+// лавы/воды в 2 бл. от будущей рамы (и ряд, где стоит тело: потолок штрека не заслоняет верх рамы); копка фронтом (только
+// видимые клетки, шаги по камере), клетки рамы — тоже здесь; потом обычная стройка.
+const CH_DEPTH = 2
+const CH_B0 = -1
+const CH_B1 = 2
+const CH_HIGH = 3
+const CH_KEEP = /^(bedrock|obsidian|crying_obsidian|spawner|ancient_debris|chest|trapped_chest|barrel|gold_block|gilded_blackstone|nether_portal|respawn_anchor)$/
+const FLUID = /^(lava|water|flowing_lava|flowing_water|bubble_column)$/
+const FALLING = /^(gravel|sand|red_sand|suspicious_gravel|suspicious_sand|[a-z_]*concrete_powder)$/
+function chamberPlan (read, feet) {
+  const opts = []
+  const why = []
+  for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+    const at = (a, b, h) => feet.offset(dx * a - dz * b, h, dz * a + dx * b)
+    const cells = []
+    let bad = null
+    for (let a = 0; a <= CH_DEPTH && !bad; a++) {
+      for (let b = CH_B0; b <= CH_B1 && !bad; b++) {
+        const fl = read(at(a, b, -1))
+        if (!fl) { bad = 'не прогружено'; break }
+        if (fl.boundingBox !== 'block' || /magma/.test(fl.name)) { bad = 'нет пола'; break }
+        for (let h = 0; h < CH_HIGH; h++) {
+          const c = at(a, b, h)
+          const k = read(c)
+          if (!k) { bad = 'не прогружено'; break }
+          if (FLUID.test(k.name)) { bad = k.name; break }
+          if (k.boundingBox !== 'block') continue
+          if (CH_KEEP.test(k.name)) { bad = k.name; break }
+          cells.push(c)
+        }
+      }
+    }
+    // Гравий/песок в камере и над ней — сыплется в раму и на голову (s5d-H-2 07.10: точка Ада на y 24, «gravel не виден»,
+    // тело завалило, клетка рамы под ногами «blockUpdate did not fire» ×8).
+    for (let a = 0; a <= CH_DEPTH && !bad; a++) for (let b = CH_B0; b <= CH_B1 && !bad; b++) for (let h = 0; h <= CH_HIGH + 2; h++) {
+      const k = read(at(a, b, h))
+      if (k && FALLING.test(k.name)) { bad = k.name; break }
+    }
+    // Рама займёт ряды h −1 и 3 и стороны b −1/2: лава и вода — не ближе 2 от любой её клетки (nether.judge LAVA_KEEP 2).
+    for (let a = -1; a <= CH_DEPTH + 2 && !bad; a++) {
+      for (let b = CH_B0 - 2; b <= CH_B1 + 2 && !bad; b++) {
+        for (let h = -3; h <= CH_HIGH + 2; h++) {
+          const k = read(at(a, b, h))
+          if (k && FLUID.test(k.name)) { bad = `${k.name} рядом`; break }
+        }
+      }
+    }
+    if (bad) { why.push(bad); continue }
+    opts.push({ dir: { x: dx, z: dz }, cells, dig: cells.length })
+  }
+  opts.sort((p, q) => p.dig - q.dig)
+  return opts.length ? { ok: true, feet, ...opts[0] } : { ok: false, why: [...new Set(why)].join(', ') }
+}
+
+// Копка фронтом: только видимые клетки списка в досягаемости; не видно ничего — шаг на клетку стояния (stands), ближе к остатку.
+async function digVisible (session, ctl, cells, stands, until) {
+  const bot = session.bot
+  const { seesBlock } = require('./sight')
+  const solid = () => cells.filter(c => { const b = bot.blockAt(c); return b && b.boundingBox === 'block' })
+  let dug = 0
+  let moves = 0
+  while (!ctl.aborted && gameClock.now() < until) {
+    const left = solid()
+    if (!left.length) return { ok: true, dug }
+    if (left.some(c => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => FLUID.test(bot.blockAt(c.offset(x, y, z))?.name || '')))) {
+      return { ok: false, dug, why: 'за стенкой жидкость' }
+    }
+    const eye = bot.entity.position.offset(0, 1.62, 0)
+    const vis = left.map(c => ({ c, b: bot.blockAt(c), d: eye.distanceTo(c.offset(0.5, 0.5, 0.5)) }))
+      .filter(x => x.d <= 4.4 && seesBlock(bot, x.b)).sort((p, q) => p.d - q.d)
+    if (!vis.length) {
+      if (++moves > 8) return { ok: false, dug, why: 'клетки не видны' }
+      const here = bot.entity.position.floored()
+      const read = nether.reader(bot)
+      const spots = stands.filter(c => !c.equals(here) && nether.clearStand(read, c))
+        .sort((p, q) => p.distanceTo(left[0]) - q.distanceTo(left[0]))
+      if (!spots.length) return { ok: false, dug, why: 'клетки не видны, встать некуда' }
+      const s = spots[(moves - 1) % spots.length]
+      try { await withTimeout(bot.pathfinder.goto(new goals.GoalBlock(s.x, s.y, s.z)), 8000, 'не шагнул') } catch { try { bot.pathfinder.setGoal(null) } catch {} }
+      continue
+    }
+    const { b } = vis[0]
+    try {
+      await equipBestTool(bot, b)
+      await withTimeout(bot.dig(b), 8000, `${b.name} не ломается`)
+      dug++
+    } catch (e) { return { ok: false, dug, why: `${b.name}: ${e.message}` } }
+    await sleep(100)
+  }
+  return { ok: !solid().length, dug, why: 'время' }
+}
+
+// Клетки стояния у рамы: свободные (пол, ноги и голова) в 3 бл. от её клеток — откуда копать то, что из одной точки не видно.
+function standsNear (read, cells, feet) {
+  const out = [feet]
+  const seen = new Set([feet.toString()])
+  for (const c of cells) {
+    for (let dx = -3; dx <= 3; dx++) for (let dy = -2; dy <= 1; dy++) for (let dz = -3; dz <= 3; dz++) {
+      const p = c.offset(dx, dy, dz)
+      const k = p.toString()
+      if (seen.has(k)) continue
+      seen.add(k)
+      if (nether.clearStand(read, p)) out.push(p)
+    }
+  }
+  return out.slice(0, 80)
+}
+
+// Клетки, которые стройка будет копать сама (ряды рамы, отверстие), — здесь, фронтом и с шагами вокруг: у clearCells стояние
+// одно, и потолок штрека/стенка заслоняют часть рамы (s5d-p2/p3: «netherrack не виден в прицеле»). Повтор плана после копки.
+async function preDig (session, ctl, feet, until, extraStands = []) {
+  const bot = session.bot
+  let dug = 0
+  let site = null
+  for (let k = 0; k < 3 && !ctl.aborted; k++) {
+    site = nether.planPortal(nether.reader(bot), feet)
+    if (!site.ok) return { ok: false, dug, why: `места нет: ${site.reasons}` }
+    // Гравий над рамой — не здесь (сыплется в отверстие и на голову, s5d-H-2): к камере в другом месте.
+    if ([...site.plan.inner, ...site.plan.frame].some(c => [1, 2, 3].some(dy => FALLING.test(bot.blockAt(c.offset(0, dy, 0))?.name || '')))) return { ok: false, dug, why: 'гравий/песок над рамой' }
+    const todo = [...site.plan.dig, ...site.plan.inner]
+    if (!todo.some(c => bot.blockAt(c)?.boundingBox === 'block')) break
+    const stands = [...standsNear(nether.reader(bot), [...site.plan.frame, site.plan.stand], feet), ...extraStands]
+    const d = await digVisible(session, ctl, todo, stands, until)
+    dug += d.dug
+    if (!d.ok) return { ok: false, dug, why: `клетки рамы: ${d.why}` }
+  }
+  // Встать ровно на клетку стояния плана: стройка ходит к ней с допуском 1, а после докопки клетки рамы проходимы — тело
+  // вставало в раму («Не встали: …: это моя же клетка», s5d-N-1). С неё же стройка выберет ту же площадку.
+  const st = site && site.ok ? site.plan.stand : feet
+  if (!bot.entity.position.floored().equals(st)) {
+    try { await withTimeout(bot.pathfinder.goto(new goals.GoalBlock(st.x, st.y, st.z)), 8000, 'не встал') } catch { try { bot.pathfinder.setGoal(null) } catch {} }
+  }
+  return { ok: !!(site && site.ok), dug }
+}
+
+// Ближняя клетка, где камера ставится (s5d-p3-1: у точки выхода «нет пола, lava рядом» — тело на краю лавового озера).
+function chamberSpot (read, from, N, { radius = 6, max = 48 }: any = {}) {
+  const cand = []
+  for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) for (let dy = -3; dy <= 3; dy++) {
+    const p = from.offset(dx, dy, dz)
+    if (Math.hypot(p.x - N.x, p.z - N.z) > 11) continue
+    if (nether.clearStand(read, p)) cand.push(p)
+  }
+  cand.sort((a, b) => a.distanceTo(from) - b.distanceTo(from))
+  let best = null
+  for (const p of cand.slice(0, max)) {
+    const pl = chamberPlan(read, p)
+    if (!pl.ok) continue
+    const score = pl.dig + 2 * p.distanceTo(from)
+    if (!best || score < best.score) best = { ...pl, at: p, score }
+  }
+  return best
+}
+
+// Подготовка места под раму выхода, по нарастающей: (1) докопать клетки рамы с шагами вокруг; (2) камера здесь;
+// (3) камера на ближней годной клетке (в 11 бл. от точки Ада). После — обычная стройка (ND_EXIT_CHAMBER=0 — выкл.).
+async function exitChamber (session, ctl, { deadline, N }: any) {
+  const bot = session.bot
+  const until = Math.min(deadline, gameClock.now() + 90000)
+  let feet = bot.entity.position.floored()
+  const first = await preDig(session, ctl, feet, until)
+  if (first.ok) return { ok: true, how: 'клетки рамы', dug: first.dug }
+  let plan = chamberPlan(nether.reader(bot), feet)
+  let how = 'камера здесь'
+  if (!plan.ok && N) {
+    const spot = chamberSpot(nether.reader(bot), feet, N)
+    if (!spot) return { ok: false, dug: first.dug, why: `${first.why}; камеру не поставить ни здесь (${plan.why}), ни рядом` }
+    try { await withTimeout(bot.pathfinder.goto(new goals.GoalBlock(spot.at.x, spot.at.y, spot.at.z)), 15000, 'не дошёл') } catch { try { bot.pathfinder.setGoal(null) } catch {} }
+    if (!bot.entity.position.floored().equals(spot.at)) return { ok: false, dug: first.dug, why: `до места камеры ${spot.at} не дошёл` }
+    how = `камера в ${Math.round(spot.at.distanceTo(feet))} бл.`
+    feet = spot.at
+    plan = spot
+  }
+  if (!plan.ok) return { ok: false, dug: first.dug, why: `${first.why}; камеру не поставить: ${plan.why}` }
+  const stands = [feet, ...plan.cells.filter(c => c.y === feet.y)]
+  const ch = await digVisible(session, ctl, plan.cells, stands, until)
+  if (!ch.ok) return { ok: false, dug: first.dug + ch.dug, dir: plan.dir, why: `камера: ${ch.why}` }
+  const pd = await preDig(session, ctl, feet, until, stands)
+  return { ok: pd.ok, how, dug: first.dug + ch.dug + pd.dug, dir: plan.dir, at: xyz(feet), why: pd.ok ? undefined : pd.why }
+}
+// Порог у новой рамы выхода — ноги и голова свободны хотя бы с одной стороны: рама в толще стоит вплотную к стенке камеры,
+// а prepareDoorway в enter копает из одной точки («К порталу не подойти … netherrack не виден в прицеле», s5d-G-1 07.10).
+// Копка фронтом с шагами вокруг (digVisible), только клетки порога из doorwayPlan (жидкость рядом, сундук, рама — нет).
+async function openDoorway (session, ctl, deadline) {
+  const bot = session.bot
+  const read = nether.reader(bot)
+  const door = nether.findLitPortal(bot, session.mcData, 8)
+  if (!door) return { ok: false, why: 'горящего портала рядом нет' }
+  const ways = nether.doorways(door)
+  if (ways.some(d => nether.clearStand(read, d.pos))) return { ok: true, already: true }
+  const plans = ways.map(d => ({ d, plan: nether.doorwayPlan(read, d.pos) })).filter(x => x.plan && !x.plan.floor)
+    .sort((x, y) => x.plan.dig.length - y.plan.dig.length || x.d.pos.distanceTo(bot.entity.position) - y.d.pos.distanceTo(bot.entity.position))
+  const until = Math.min(deadline, gameClock.now() + 30000)
+  let dug = 0
+  for (const { d, plan } of plans) {
+    if (ctl.aborted || gameClock.now() > until) break
+    const r = await digVisible(session, ctl, plan.dig, standsNear(read, [d.pos], bot.entity.position.floored()), until)
+    dug += r.dug
+    if (nether.clearStand(nether.reader(bot), d.pos)) return { ok: true, dug, at: xyz(d.pos) }
+  }
+  return { ok: false, dug, why: plans.length ? 'порог не открылся' : 'годного порога нет' }
+}
+const siteProblem = r => /Места под раму нет|Не расчистил место под раму/.test(String((r && (r.stopped || r.reason)) || ''))
+
 async function travel (session, ctl, p: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
@@ -224,7 +432,7 @@ async function travel (session, ctl, p: any = {}) {
     noFrames()
     try { r = await fn() } catch (e) { r = { stopped: e.message } }
     const rec = { what, s: Math.round((gameClock.now() - s0) / 1000) }
-    for (const k of ['went', 'built', 'lit', 'took', 'tried', 'errors', 'obsidian', 'stopped', 'why', 'offBlocks', 'p', 'dist']) if (r && r[k] !== undefined) rec[k] = r[k]
+    for (const k of ['went', 'built', 'lit', 'took', 'tried', 'errors', 'obsidian', 'stopped', 'why', 'offBlocks', 'p', 'dist', 'how', 'dug', 'at']) if (r && r[k] !== undefined) rec[k] = r[k]
     legs.push(rec)
     log(what, rec)
     return r || {}
@@ -307,8 +515,31 @@ async function travel (session, ctl, p: any = {}) {
       // обычная стройка: она достраивает свою площадку и берёт из рюкзака
       // только недостающие блоки (link требует все 10 в рюкзаке).
       const nearN = flat(bot.entity.position, N) <= 12
+      // Нет места под раму (толща, штрек, лава в 2 бл.) — камера перед телом и та же стройка ещё раз (ND_EXIT_CHAMBER=0 — выкл.).
+      const buildHere = async () => {
+        let B = await step('build', () => nether.portal(session, ctl, { mode: 'build', timeoutSeconds: Math.min(180, left()) }))
+        if (!B.lit && !B.portalBlocks && siteProblem(B) && process.env.ND_EXIT_CHAMBER !== '0') {
+          const ch = await step('chamber', () => exitChamber(session, ctl, { deadline, N }))
+          if (ch.ok) B = await step('build', () => nether.portal(session, ctl, { mode: 'build', timeoutSeconds: Math.min(180, left()) }))
+        }
+        // Рама неполная (блок не встал: тело в клетке рамы, нет опоры с этой стороны) — встать на свободную клетку стояния этой
+        // же рамы и достроить; иначе повтор выбирал новую площадку под 10 при 5 в рюкзаке (s5d-H-7 07.10: «9 из 10» → «обсидиана 5/10»).
+        for (let k = 0; k < 2 && !B.lit && !B.portalBlocks && /рама неполная/.test(String(B.stopped || '')) && B.site && process.env.ND_EXIT_CHAMBER !== '0'; k++) {
+          const o = new Vec3(B.site.x, B.site.y, B.site.z)
+          const ax = B.site.axis
+          const env = [...nether.innerCells(o, ax), ...nether.frameCells(o, ax), ...nether.cornerCells(o, ax)]
+          const read = nether.reader(bot)
+          const here = bot.entity.position.floored()
+          const spot = nether.standSpots(o, ax, env).map(s => s.pos).filter(p => !p.equals(here) && nether.clearStand(read, p))
+            .sort((a, b) => a.distanceTo(here) - b.distanceTo(here))[k]
+          if (!spot) break
+          try { await withTimeout(bot.pathfinder.goto(new goals.GoalBlock(spot.x, spot.y, spot.z)), 8000, 'не встал') } catch { try { bot.pathfinder.setGoal(null) } catch {} }
+          B = await step('build', () => nether.portal(session, ctl, { mode: 'build', timeoutSeconds: Math.min(180, left()) }))
+        }
+        return B
+      }
       if (!atN && nearN && igniter(bot)) {
-        const B = await step('build', () => nether.portal(session, ctl, { mode: 'build', timeoutSeconds: Math.min(180, left()) }))
+        const B = await buildHere()
         if (!B.lit && !B.portalBlocks) return done({ stopped: `рама у точки Ада ${N.x},${N.z} не готова: ${B.stopped || B.reason || 'не зажглась'}`, build: B })
       } else if (!atN) {
         if (countOf(bot, 'obsidian') < FRAME_NEED) {
@@ -317,9 +548,11 @@ async function travel (session, ctl, p: any = {}) {
           if (countOf(bot, 'obsidian') < FRAME_NEED) return done({ stopped: `раму разобрал не всю: обсидиана ${countOf(bot, 'obsidian')}/10${tf.why ? ` (${tf.why})` : ''}`, takeFrame: tf })
         }
         if (!igniter(bot)) return done({ stopped: 'поджечь новую раму нечем: огниво (железо + кремень) или огненный заряд', need: { what: 'flint_and_steel', count: 1, have: 0 } })
-        const L = await step('link', () => nether.portal(session, ctl, { mode: 'link', x: target.x, z: target.z, timeoutSeconds: left() }))
+        let L = await step('link', () => nether.portal(session, ctl, { mode: 'link', x: target.x, z: target.z, timeoutSeconds: left() }))
+        if (!L.lit && !L.portalBlocks && siteProblem(L) && flat(bot.entity.position, N) <= 12) L = await buildHere()
         if (!L.lit && !L.portalBlocks) return done({ stopped: `рамы у точки Ада ${N.x},${N.z} нет: ${L.stopped || L.reason || 'не зажглась'}`, link: L })
       }
+      if (process.env.ND_EXIT_CHAMBER !== '0') { const od = await openDoorway(session, ctl, deadline); if (!od.already) legs.push({ what: 'doorwayDig', ok: od.ok, dug: od.dug, why: od.why }) }
       const dw = await ensureDoorway(session, ctl)
       if (!dw.already) legs.push({ what: 'doorway', ok: dw.ok, placed: dw.placed, why: dw.why })
       const e = await step('enter', () => nether.enter(session, ctl, { timeoutSeconds: Math.min(120, left()) }))
@@ -333,4 +566,4 @@ async function travel (session, ctl, p: any = {}) {
   }
 }
 
-module.exports = { travel, takeFrame, routeCost, ensureDoorway }
+module.exports = { travel, takeFrame, routeCost, ensureDoorway, chamberPlan, chamberSpot, exitChamber, openDoorway }

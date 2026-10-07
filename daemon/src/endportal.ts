@@ -94,11 +94,29 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: 
   let sidesteps = 0
   let stairsTries = 0
   const startY = bot.entity.position.floored().y
+  // Сторож хода: 12 витков без смены клетки — стоп (s5d-p5-2 07.10: тело на краю соседнего блока, клетка под ногами пустая,
+  // «копать» нечего, тело не падает — 5 вызовов по 500 игр. с на одном месте).
+  let lastCell = null
+  let still = 0
   for (;;) {
     if (ctl.aborted) return { stopped: 'прервано', dug }
     if (gameClock.now() > deadline) return { stopped: 'время вышло', dug }
     const feet = bot.entity.position.floored()
-    if (Number.isFinite(targetY) && feet.y <= targetY) return feet.y === targetY
+    if (lastCell && lastCell.equals(feet)) { if (++still >= 12) return { stopped: `шахта не идёт: ${still} витков на ${feet.x},${feet.y},${feet.z}`, dug } } else { still = 0; lastCell = feet }
+    if (still >= 3) {
+      // Пусто под клеткой, а тело стоит (держит край соседнего блока) — шаг в центр клетки.
+      const below0 = bot.blockAt(feet.offset(0, -1, 0))
+      if (below0 && below0.boundingBox === 'empty') {
+        try {
+          await bot.lookAt(new Vec3(feet.x + 0.5, bot.entity.position.y + 1.6, feet.z + 0.5), true).catch(() => {})
+          bot.setControlState('forward', true)
+          await sleep(200)
+        } finally { bot.setControlState('forward', false) }
+      }
+    }
+    // Уровень комнаты — любой в 3 бл. ниже цели (внутри комнаты высота 6; s5d-p4-1: «ниже уровня комнаты (43 < 44)» после
+    // пещеры — подход бросался на месте).
+    if (Number.isFinite(targetY) && feet.y <= targetY) return feet.y >= targetY - 3
       ? { reached: true, at: xyz(feet), dug, fromY: startY }
       : { stopped: `ниже уровня комнаты (${feet.y} < ${targetY}) — дальше вниз не копаю`, dug }
     // Кирпич рядом (стена коридора сбоку) или под ногами — пришли.
@@ -139,7 +157,12 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: 
       if (sidesteps < 10) { const moved = await sideStepShaft(bot, mcData, feet); if (moved) { dug += moved; sidesteps++; continue } }
       return { stopped: `под ногами ${/lava/.test(below.name + (under ? under.name : '')) ? 'лава' : 'вода'} — дальше вниз не копаю`, dug }
     }
-    if (INFESTED.test(below.name)) return Number.isFinite(targetY) ? { stopped: 'заражённый кирпич под шахтой — нужен обход', dug } : { found: below.name, at: xyz(below.position), infested: true, dug }
+    // Заражённый кирпич коридора над комнатой (подход по карте): шаг вбок, а нет — копать и его, если хп ≥ 12 (цена — чешуйница,
+    // 1 урона в железе; S5d s5d-N-6 07.10: «заражённый кирпич под шахтой — нужен обход» ×6 на y 4, пауза, 35 мин вышли).
+    if (INFESTED.test(below.name) && Number.isFinite(targetY)) {
+      if (sidesteps < 12) { const moved = await sideStepShaft(bot, mcData, feet); if (moved) { dug += moved; sidesteps++; continue } }
+      if ((bot.health ?? 20) < 12) return { stopped: 'заражённый кирпич под шахтой — нужен обход', dug }
+    } else if (INFESTED.test(below.name)) return { found: below.name, at: xyz(below.position), infested: true, dug }
     if (BRICKS.test(below.name) && !Number.isFinite(targetY)) {
       // Потолок крепости под ногами. Сломать и спрыгнуть — только если под ним
       // невысоко: лестничная башня старта высокая, а пол у неё есть на каждом витке.
@@ -166,7 +189,14 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: 
         land = c
         break
       }
-      const spike = land && /pointed_dripstone/.test(land.name)
+      // Капельник в пещере под шахтой (на дне, на потолке, рядом) — не прыгать туда: s5d-N-1/H-1 07.10 «skewered by a falling
+      // stalactite» после спуска в пещеру из шахты. Колонки 3×3 вокруг, до дна пещеры.
+      let drip = false
+      for (let d = 1; d <= gap + 2 && !drip; d++) for (const [dx, dz] of DIRS8.concat([[0, 0]])) {
+        const c = bot.blockAt(feet.offset(dx, -d, dz))
+        if (c && /pointed_dripstone/.test(c.name)) { drip = true; break }
+      }
+      const spike = (land && /pointed_dripstone/.test(land.name)) || drip
       // Спуск в пещеру до 4 блоков на твёрдое — цена (0–1 хп), а не стоп (гибкость, s5c-g2-2 06.10: «под ногами пещера
       // (3 блоков) — прыгать не стал» ×6 на одном месте, 20 мин до конца срока). Лава, магма, сталагмит, снег — по-прежнему нет.
       const safeDrop = gap <= 4 && !!land && land.boundingBox === 'block' && !/lava|magma|pointed_dripstone|powder_snow|cactus|campfire/.test(land.name) && (bot.health ?? 20) >= 10
@@ -188,6 +218,8 @@ async function shaftToBricks (session, ctl, { minY, deadline, targetY = null }: 
     // wood увёл наверх, рамки «в 103 блоках») — каменные из булыжника шахты и палок рюкзака (tunnel.restockPicks), запас ≥ 2.
     if (require('./tunnel').lowPicks(bot) < 2) { try { await require('./tunnel').restockPicks(session, ctl, 2) } catch {} }
     const problem = cantDigThrough(bot, below, mcData)
+    // Не копается (обсидиан рамы выхода из Ада под шахтой, s5d-R-5 07.10: «для obsidian нужна кирка получше» ×8 на месте) — шаг вбок.
+    if (problem && sidesteps < 12) { const moved = await sideStepShaft(bot, mcData, feet); if (moved) { dug += moved; sidesteps++; continue } }
     if (problem) return { stopped: problem, dug }
     let digErr = null
     for (let k = 0; k < 3; k++) {
@@ -537,8 +569,62 @@ function wetColumn (bot, x, z, topY) {
 // До 96 бл. (s5c-g2-1: комната под морем, суши в 48 нет — 60 мин у воды): дальше 48 — точки через 4 бл. (дешевле), чанки
 // в обзоре (8 = 128 бл.) у тела, подошедшего к комнате, прогружены; штрек под дном до 96+ шагов.
 const DRY_FAR = 96
-function dryEntry (bot, shaft, maxR = DRY_FAR) {
+// Целая колонка шахты: от поверхности до уровня комнаты всё твёрдое (пещера ≤ 1 клетки — цена), жидкости рядом нет — по
+// прогруженным чанкам, как и сухой вход (знание карты: режим MAP_SH). S5d s5d-p4-1 (07.10): шахта у входа вскрыла пещеру
+// (11 бл.) — тактика рвала подход ×8, refuge 191 с, тело ниже уровня комнаты; капельник рядом — тоже не колонка (s5d-N-1:
+// «skewered by a falling stalactite» на 5-й мин). null — колонка годна, иначе причина.
+function shaftFlaw (bot, x, z, topY, toY, maxGap = 1) {
+  let gap = 0
+  for (let y = topY - 1; y >= toY - 1; y--) {
+    const b = bot.blockAt(new Vec3(x, y, z))
+    if (!b) return 'не прогружено'
+    if (/water|lava|bubble_column|pointed_dripstone/.test(b.name)) return b.name
+    if (b.boundingBox === 'block') gap = 0
+    else if (++gap > maxGap) return `пещера на y ${y}`
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const s = bot.blockAt(new Vec3(x + dx, y, z + dz))
+      if (s && /water|lava|bubble_column|pointed_dripstone/.test(s.name)) return `${s.name} рядом на y ${y}`
+      // Первый круг — шахта в сплошной породе: ниже 3 бл. от поверхности стенки целые (s5d-T-1 07.10: шахта шла по краю пещеры,
+      // тактика на y 45 увела тело вбок — падение на 24 бл., капельник). Пещера рядом — второй круг.
+      if (maxGap <= 1 && y < topY - 3 && s && s.boundingBox !== 'block') return `пустота рядом на y ${y}`
+    }
+  }
+  return null
+}
+// Штрек от колонки к цели на уровне комнаты — без жидкости рядом (s5d-p7-1: целая колонка, а на уровне комнаты «water у забоя —
+// обход» со всех сторон). Прямая с шагом 0.5 бл.; клетки ног и головы, под и над ними и по бокам.
+function tunnelFlaw (bot, from, to) {
+  const n = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.z - from.z) * 2))
+  for (let i = 0; i <= n; i++) {
+    const x = Math.floor(from.x + (to.x - from.x) * i / n); const z = Math.floor(from.z + (to.z - from.z) * i / n)
+    for (let dy = -1; dy <= 2; dy++) {
+      for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const b = bot.blockAt(new Vec3(x + dx, to.y + dy, z + dz))
+        if (!b) return 'не прогружено'
+        if (/water|lava|bubble_column/.test(b.name)) return `${b.name} на штреке у ${x + dx},${to.y + dy},${z + dz}`
+      }
+    }
+  }
+  return null
+}
+const SOUND_FAR = 48
+function dryEntry (bot, shaft, maxR = DRY_FAR, toY = null, to = null) {
   const fromY = bot.entity.position.floored().y
+  // Сначала — сухая И целая до комнаты колонка в SOUND_FAR (лишний штрек на уровне комнаты дешевле пещеры в шахте).
+  // Второй круг — пещеры до 4 бл. (спуск в них — цена, shaftToBricks), но без жидкости и капельника (s5d-R-1: целой в 48 нет —
+  // сухая колонка в пещеру с капельником, «impaled on a stalagmite»).
+  for (const maxGap of Number.isFinite(toY) && process.env.ND_SOUND_SHAFT !== '0' ? [1, 4] : []) {
+    for (let r = 0; r <= Math.min(SOUND_FAR, maxR); r += r < 24 ? 2 : 4) {
+      const step = r < 24 ? 2 : 4
+      const pts = r === 0 ? [[0, 0]] : []
+      for (let d = -r; d < r; d += step) pts.push([d, -r], [r, d], [-d, r], [-r, -d])
+      for (const [dx, dz] of pts) {
+        const x = shaft.x + dx; const z = shaft.z + dz
+        const y = surfaceY(bot, x, z, fromY)
+        if (y !== null && !wetColumn(bot, x, z, y) && !shaftFlaw(bot, x, z, y, toY, maxGap) && !(to && tunnelFlaw(bot, { x: x + 0.5, z: z + 0.5 }, to))) return { x, z, r, sound: maxGap <= 1 ? true : 'caves' }
+      }
+    }
+  }
   for (let r = 0; r <= maxR; r += r < 48 ? 2 : 4) {
     const step = r < 48 ? 2 : 4
     const pts = r === 0 ? [[0, 0]] : []
@@ -1042,7 +1128,8 @@ async function goMappedRoom (session, ctl, room, deadline) {
   const bot = session.bot
   const original = bot.dig
   const visibleDig = function (block, ...args: any[]) {
-    if (!block || /infested|end_portal|spawner/.test(block.name) || !seesBlock(bot, block)) return Promise.reject(new Error('забой не виден в прицеле или блок комнаты защищён'))
+    // Заражённый — только при хп ≥ 12 (цена — чешуйница, см. shaftToBricks); рамки и спавнер комнаты — никогда.
+    if (!block || /end_portal|spawner/.test(block.name) || (/infested/.test(block.name) && (bot.health ?? 20) < 12) || !seesBlock(bot, block)) return Promise.reject(new Error('забой не виден в прицеле или блок комнаты защищён'))
     return original.call(bot, block, ...args)
   }
   bot.dig = visibleDig
@@ -1054,17 +1141,26 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   const plan = require('./stronghold').roomApproach(room, bot.entity.position)
   const target = new Vec3(plan.target.x, plan.target.y, plan.target.z)
   const walks = []
+  // Под землёй дальше 56 бл. от колонки шахты (целая колонка — в 48; выход из Ада в пещеру: s5d-p5-1 07.10 — шахта прямо из пещеры в 80 бл. от комнаты,
+  // вода на y 20 и зомби, смерть на 6-й мин) — сперва наверх, потом сухая и целая колонка как обычно.
+  if (!skyAbove(bot) && bot.entity.position.y > target.y + 2 && Math.hypot(plan.shaft.x + 0.5 - bot.entity.position.x, plan.shaft.z + 0.5 - bot.entity.position.z) > 56 &&
+    process.env.ND_SHAFT_SURFACE !== '0') {
+    const up = await require('./survival/surface-body').surface(session, ctl, { timeoutSeconds: Math.max(20, Math.min(90, Math.round((deadline - gameClock.now()) / 1000) - 30)), preferPillar: true }).catch(e => ({ ok: false, error: e.message }))
+    walks.push({ surface: !!(up && (up.ok || up.surfaced)), y: Math.round(bot.entity.position.y) })
+  }
   // На поверхности сначала выбираем сухую колонку вне комнаты. При повторном
   // вызове из шахты продолжаем с текущей высоты и не возвращаемся наверх.
-  if (bot.entity.position.y > target.y + 2 && skyAbove(bot) && bot.entity.position.y >= 55) {
+  // Неба не видно (крона над выходом из Ада, s5d-p7-1), но до колонки шахты дальше 56 бл. — тоже «наверху»: выбор колонки.
+  const farShaft = Math.hypot(plan.shaft.x + 0.5 - bot.entity.position.x, plan.shaft.z + 0.5 - bot.entity.position.z) > 56
+  if (bot.entity.position.y > target.y + 2 && (skyAbove(bot) || farShaft) && bot.entity.position.y >= 55) {
     // Сухой вход — ещё с суши, по прогруженным чанкам, до DRY_FAR бл. от входа комнаты (s5c-f1-1, 06.10: комната под
     // океаном у монумента — лодкой к точке над комнатой, сухого в 14 бл. нет, тело в воде у стражей погибло). Дальний
     // сухой вход — шахта там и штрек на уровне комнаты под дном (mappedStepRisk обходит воду и лаву).
-    let dry = dryEntry(bot, plan.shaft)
+    let dry = dryEntry(bot, plan.shaft, DRY_FAR, target.y, target)
     if (!dry) {
       const w = await walkOrBridge(session, ctl, plan.shaft, deadline)
       if (!w.ok) return { went: false, mapped: true, stopped: `к сухому входу комнаты не дошёл: ${w.error}` }
-      dry = dryEntry(bot, plan.shaft)
+      dry = dryEntry(bot, plan.shaft, DRY_FAR, target.y, target)
     }
     if (!dry) return { went: false, mapped: true, stopped: `над комнатой вода/лава: сухой вход в ${DRY_FAR} бл. не найден` }
     if (Math.hypot(dry.x + 0.5 - bot.entity.position.x, dry.z + 0.5 - bot.entity.position.z) > 8) {
@@ -1078,6 +1174,7 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   }
   const descent = await shaftToBricks(session, ctl, { minY: target.y, targetY: target.y, deadline })
   if (!descent.reached) return { went: false, mapped: true, descent, stopped: descent.stopped }
+  const level = bot.entity.position.floored().y
   const seen = new Set()
   let dug = descent.dug
   const dirs = [[1, 0, 'east'], [-1, 0, 'west'], [0, 1, 'south'], [0, -1, 'north']]
@@ -1087,7 +1184,7 @@ async function goMappedRoomBody (session, ctl, room, deadline) {
   // уровне; пустота — твёрдая подпорка перед шагом, никакого падения к лаве.
   for (let i = 0; i < 260 && !ctl.aborted && gameClock.now() < deadline; i++) {
     const feet = bot.entity.position.floored()
-    if (feet.y !== target.y) { stopped = 'сбило с уровня комнаты — нужен новый подход'; break }
+    if (feet.y !== level) { stopped = 'сбило с уровня комнаты — нужен новый подход'; break }
     if (feet.x === target.x && feet.z === target.z) return { went: true, inside: true, mapped: true, room: room.centre, target: xyz(target), dug, walks }
     seen.add(key(feet))
     const candidates = dirs.map(([dx, dz, direction]) => ({ cell: feet.offset(dx, 0, dz), direction }))
@@ -1418,7 +1515,13 @@ async function findRoom (session, ctl, p: any = {}) {
       // человека). Видели чешуйниц — идём к ним, а не «слоями от старта».
       // Дошли до приманки, а рамок не видно — она пустая (лава в пещере): забыть.
       if (lure && lure.distanceTo(me) < 5) { usedLures.push(lure.clone ? lure.clone() : lure); lure = null }
-      const fish = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'silverfish' && e.position && e.isValid !== false && e.position.distanceTo(me) < 48)
+      // S10 (честное восприятие): чешуйницы — видимые лучом (место) или слышимые (сторона и полоса → точка-оценка), не все
+      // в радиусе слежения; на уровне знания scan или ND_HONEST_LURE=0 — как было.
+      const honestLure = process.env.ND_HONEST_LURE !== '0' && require('./perception/knowledge').level() !== 'scan'
+      const fish = !honestLure
+        ? (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'silverfish' && e.position && e.isValid !== false && e.position.distanceTo(me) < 48)
+        : require('./perception/eyes').entities(bot, { radius: 48 }).filter((k: any) => k.name === 'silverfish')
+          .map((k: any) => { const q = k.pos || k.lastPos || (k.heard && require('./perception/senses').hearPoint(bot, k.heard)); return q ? { position: new Vec3(q.x, q.y, q.z) } : null }).filter(Boolean)
       if (fish.length) {
         const c = (fish.reduce((a: any, e: any) => a.plus(e.position), new Vec3(0, 0, 0)) as any).scaled(1 / fish.length)
         if (!lure || c.distanceTo(lure) > 4) log('чешуйницы', { n: fish.length, at: xyz(c.floored()) })
@@ -1432,11 +1535,18 @@ async function findRoom (session, ctl, p: any = {}) {
         const lavaId = bot.registry.blocksByName.lava.id
         let heard = null
         try {
-          heard = bot.findBlocks({ matching: [lavaId], maxDistance: 32, count: 60 })
-            .filter(q => Math.abs(q.y - me.y) <= 12 && !usedLures.some(u => u.distanceTo(q) < 10))
-            .sort((a, b) => a.distanceTo(me) - b.distanceTo(me))[0] || null
+          if (honestLure) {
+            // S10: звук лавы клиента — только у лавы с воздухом сверху; наружу — румб 22.5° и дальность до 4 бл. (точка-оценка).
+            const h = require('./perception/senses').hearLavaPoint(bot, { radius: 32, maxDy: 12, skip: q => usedLures.some(u => u.distanceTo(new Vec3(q.x, q.y, q.z)) < 12) })
+            heard = h ? new Vec3(h.at.x, h.at.y, h.at.z) : null
+          } else {
+            heard = bot.findBlocks({ matching: [lavaId], maxDistance: 32, count: 60 })
+              .filter(q => Math.abs(q.y - me.y) <= 12 && !usedLures.some(u => u.distanceTo(q) < 10))
+              .sort((a, b) => a.distanceTo(me) - b.distanceTo(me))[0] || null
+          }
         } catch {}
-        if (heard && (!lure || heard.distanceTo(lure) > 6)) { log('слышу лаву', { at: xyz(heard), d: Math.round(heard.distanceTo(me)) }); lure = heard; lureBest = null; lureStale = 0 }
+        // Оценка по звуку дрожит на шаг румба/дальности — приманку меняем, только если звук ушёл дальше 12 бл. (честный слух).
+        if (heard && (!lure || heard.distanceTo(lure) > (honestLure ? 12 : 6))) { log('слышу лаву', { at: xyz(heard), d: Math.round(heard.distanceTo(me)) }); lure = heard; lureBest = null; lureStale = 0 }
       }
       // К приманке коридорами не выходит (4 перехода без сближения на 2 блока) —
       // копать к ней штреком: спидраннеры так и делают — на звук сквозь стену

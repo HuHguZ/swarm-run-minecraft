@@ -146,8 +146,10 @@ async function main () {
   const tc = gameClock.now()
   // MAP_LAVA=1 — место лавы под небом из скана копии мира (good-v2 / portal-scan, portal-natural.poolInfo) кампании
   // (ND_OW_LAVA_HINT); правило AGENTS.md: знание карты из копии этого же мира разрешено. Отдельная метрика.
+  // Уровень знания карты (S8c, route.mapLevel): ND_MAP=0 — вслепую, подсказки лавы тоже нет.
+  const mapLevel = require('./src/route').mapLevel()
   let lavaHint = null
-  if (process.env.MAP_LAVA === '1') { try { lavaHint = require('./src/portal-natural').poolInfo(seedOf()).hint } catch {} }
+  if (process.env.MAP_LAVA === '1' && mapLevel !== 'blind') { try { lavaHint = require('./src/portal-natural').poolInfo(seedOf()).hint } catch {} }
   const child = spawn(process.execPath, [CAMPAIGN, ...(STAGES ? [STAGES] : [])], {
     cwd: __dirname,
     env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ...(seedOf() ? { ND_WORLD_SEED: String(seedOf()) } : {} as Record<string, any>), ...(lavaHint ? { ND_OW_LAVA_HINT: JSON.stringify(lavaHint) } : {} as Record<string, any>) },
@@ -198,6 +200,7 @@ async function main () {
     ...(STAGES ? { stages: STAGES } : {} as Record<string, any>),
     ...(START_Y !== null ? { startY: START_Y } : {} as Record<string, any>),
     keepInv: KEEP_INV,
+    map: mapLevel,
     ...(process.env.MAP_LAVA === '1' ? { lavaHint } : {} as Record<string, any>),
     ok,
     minutes: Math.round((gameClock.now() - tc) / 6000) / 10,

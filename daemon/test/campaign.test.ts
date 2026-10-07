@@ -554,7 +554,9 @@ test('неудачное укрытие в воде не запускает ле
   await c.rest()
   assert.equal(calls.some(x => x.method === 'wait'), false, 'ожидание в воде тратит воздух вместо лечения')
   assert.equal(calls.some(x => x.method === 'surface'), true, 'перед лечением нужно выйти из воды')
-  assert.equal(calls.filter(x => x.method === 'goto').length, 2, 'не всплыл — к берегу, два отрезка')
+  // S8c 07.10: walkAway при «No path» поверху повторяет тот же отрезок обычным goto (ND_WALK_LOOSE) — два отрезка по две попытки.
+  assert.equal(calls.filter(x => x.method === 'goto').length, 4, 'не всплыл — к берегу, два отрезка')
+  assert.equal(calls.filter(x => x.method === 'goto' && !x.params.surface).length, 2, 'вторая попытка каждого отрезка — без surface strict')
   assert.equal(calls.some(x => x.method === 'shelter'), false, 'в воде копать нору нельзя')
   assert.equal(calls.some(x => x.method === 'disconnect'), false, 'не отключается')
   assert.match(logs.join(''), /РИСК укрытие:WATER/)
@@ -1835,6 +1837,21 @@ test('s1c: hit by a wither skeleton in the Nether at 11 hp — into the rock (ne
   assert.equal(calls.includes('fight'), false)
 })
 
+test('s1d: a piglin brute in the Nether at full hp — still into the rock, never an open fight (13 per hit)', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 }, inventory: { iron_sword: 1, cooked_beef: 8 } }
+  const situation = { foes: 1, armed: true, fight: { first: { name: 'piglin_brute', dist: 2 }, order: [{ name: 'piglin_brute', dist: 2 }] } }
+  const calls = []
+  const c = campaign(state, situation, method => {
+    calls.push(method)
+    if (method === 'mine') return { rpcResult: { status: 'interrupted', by: { type: 'damage' }, state, events: [] } }
+    return {} as Record<string, any>
+  })
+  c.stage('nether')
+  await c.act('mine').catch(() => {})
+  assert.ok(calls.includes('ne_burrow'), calls.join(','))
+  assert.equal(calls.includes('fight'), false)
+})
+
 test('s1c: огнестойкость кончилась, а её можно купить (золото на руках) — этап отдаёт решение графу после одного вызова blaze', async () => {
   const state: Record<string, any> = { health: 20, food: 20, inventory: { stone_pickaxe: 2, shield: 1, cooked_beef: 8, ender_pearl: 14,
     oak_planks: 32, stick: 12, crafting_table: 1, cobblestone: 64, gold_ingot: 20 },
@@ -1850,4 +1867,18 @@ test('s1c: огнестойкость кончилась, а её можно к�
   await c.runStage('nether')
   assert.equal(calls.filter(m => m === 'blaze').length, 1, calls.join(','))
   assert.ok(calls.includes('ne_burrow'), 'в толщу до решения графа')
+})
+
+// S5d (07.10): к крепости Края через Ад — по умолчанию; рама (10 обсидиана) и огниво есть, крепость дальше 500 — сперва в Ад.
+test('s5d: stronghold far away with a frame kit goes through the Nether by default, ND_SH_NETHER=0 walks', async () => {
+  for (const [env, viaNether] of [[{}, true], [{ ND_SH_NETHER: '0' }, false]] as const) {
+    const calls = []
+    const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 70, z: 0 }, inventory: { ender_eye: 12, obsidian: 10, flint_and_steel: 1, cooked_beef: 8 } }
+    const c = campaign(state, { surface: true, foes: 0 }, (method, params) => { calls.push({ method, params }); return {} as Record<string, any> }, { env: { ND_ENDKIT: '0', ...env } })
+    c.known.portal = { x: 1, y: 70, z: 1 }; c.known.stronghold = { x: 1500, z: 0 }
+    await c.runStage('stronghold').catch(() => {})
+    const first = calls.findIndex(x => x.method === 'portal' && x.params && x.params.mode === 'enter')
+    const walk = calls.findIndex(x => x.method === 'goto')
+    assert.equal(first >= 0 && (walk < 0 || first < walk), viaNether, JSON.stringify(calls.slice(0, 6).map(x => x.method)))
+  }
 })

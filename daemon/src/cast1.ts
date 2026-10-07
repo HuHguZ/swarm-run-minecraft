@@ -474,7 +474,15 @@ async function castOne (session, ctl, p: any = {}) {
   // Пол берега, где его нет (план: place G(±1|2,−1); воздух или лава у кромки) — до расчистки: он держит воду жёлоба от
   // озера и лаву от клеток жёлоба.
   for (const q of [-1, 1, 2].map(i => g.G(i, -1)).filter(q => !solid(bot.blockAt(q)))) {
-    const r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    let r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    // Не к чему прислонить (вокруг воздух/лава): сперва блоки под ним, до 3 вниз, потом он сам (S8c 07.10, s8c-a-s1-4: тот же
+    // отказ трижды подряд — рама брошена). ND_CAST1_SHORE_PROP=0 — выкл.
+    if (!r.ok && /прислонить/.test(String(r.reason)) && process.env.ND_CAST1_SHORE_PROP !== '0') {
+      const under = []
+      for (let d = 1; d <= 3; d++) { const u = q.offset(0, -d, 0); under.push(u); if (solid(bot.blockAt(u.offset(0, -1, 0)))) break }
+      for (const u of under.reverse()) { if (!solid(bot.blockAt(u)) && (await placeBlockAt(bot, u, { steady: true, honest: true })).ok) report.placed++ }
+      r = await placeBlockAt(bot, q, { steady: true, honest: true })
+    }
     if (!r.ok) return dropPlan({ ...report, built: false, stopped: `пол берега ${q.x},${q.y},${q.z} не встал: ${r.reason}` })
     report.placed++
     tr(`пол берега ${q.x},${q.y},${q.z}`)

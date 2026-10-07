@@ -72,7 +72,7 @@ function sealedFixture(results: GuardResult[]) {
   const context = {
     process, gameClock: { now: () => 1000 }, GOLD_PICK: /iron_pickaxe/,
     inLava: () => false, answerAttack: async () => false, inOwnTunnel: () => false,
-    eatIfHungry: async () => {}, log: (message: string) => logs.push(message), nearBruteHome: () => false,
+    eatIfHungry: async () => {}, log: (message: string) => logs.push(message), nearBruteHome: () => false, targetsByBruteHome: (list: any[]) => list,
     require: (name: string) => {
       if (name === '.././sealed') return { exposure: () => [], keyV: (v: Vec3) => v.toString() }
       if (name === '.././tunnel') return { lowPicks: () => 1 }

@@ -96,6 +96,12 @@ const methods = {
   wait: async (p) => session.wait(p || {}),
   look_at: async (p) => session.lookAt(p),
   observe: async (p) => session.observe(p || {}),
+  // Честное восприятие (S10, perception/): mode f3 | pie | pie_arcs | heard | seen | surface | entities | stats | knowledge
+  // | sweep | pie_seek (ходом: пеленги «пирога» → оценка места) | без mode — сводка.
+  perceive: async (p: any = {}) => p && p.mode === 'pie_seek'
+    ? session.runIntent('pie_seek', ctl => { session.require(); session.updateMovements(); return require('./perception/senses').pieSeek(session, ctl, p) },
+      { timeoutMs: (Math.min(600, p.timeoutSeconds ?? 120) + 20) * 1000, params: p })
+    : session.immediate(async () => { session.require(); return require('./perception/senses').perceive(session, p || {}) }),
   players: async (p) => session.players(p || {}),
 
   // Actual eyesight. Returns the PNG alongside the usual envelope so the brain

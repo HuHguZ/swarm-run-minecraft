@@ -27,6 +27,7 @@ const CACHE = path.join(ROOT, 'farm', 'seeds', 'route-info.json')
 const ORES = path.join(ROOT, 'farm', 'route-scan')
 
 const SPEED = 2.5 // м/с по рельефу
+const MINE_IRON_S = 700 // железо копкой без руды по карте, с (см. plan)
 // Общий бюджет поиска ресурсов в постройках, включая переходы. Это политика
 // маршрута, не коэффициент механики; ND_ROUTE_STRUCTURE_BUDGET=0 — прежний выбор.
 function structureSearchLeft (seconds = 0) {
@@ -47,8 +48,10 @@ const asXZ = p => (Array.isArray(p) ? { x: p[0], z: p[1] } : p)
 
 // ------------------------------------------------------------------ данные по сиду
 
+const knowledge = require('./perception/knowledge')
 let poolCache = null
 function poolRow (seed) {
+  if (!knowledge.allows('lava', 'route.poolRow')) return null // S10: в rsg скан копии (good-v2) не читается
   if (!poolCache) { try { poolCache = JSON.parse(fs.readFileSync(POOL, 'utf8')).seeds || [] } catch { poolCache = [] } }
   return poolCache.find(x => String(x.seed) === String(seed)) || null
 }
@@ -60,6 +63,7 @@ function readCache () {
 }
 // seedtool info <сид> — постройки от спавна (одна строка JSON). Кэш — farm/seeds/route-info.json.
 function seedInfo (seed, { run = true }: any = {}) {
+  if (!knowledge.allows('seedtool', 'route.seedInfo')) return null // S10: в rsg ни seedtool, ни его кэш
   const c = readCache()
   if (!/^-?\d+$/.test(String(seed))) return null
   if (c[String(seed)]) return c[String(seed)]
@@ -74,12 +78,46 @@ function seedInfo (seed, { run = true }: any = {}) {
 }
 // Руда на виду из скана копии мира (если сканирован): [{x,y,z,n,open}] — n руды в жиле, open — сколько у воздуха.
 function oresOf (seed) {
+  if (!knowledge.allows('structures', 'route.oresOf')) return null // S10: скан копии — от ssg (блоки — mapLevel blocks)
   try { const j = JSON.parse(fs.readFileSync(path.join(ORES, `${seed}.json`), 'utf8')); return { v: j.v || 1, spawn: j.spawn, half: j.half, iron: j.iron || [], water: j.water || [], gravel: j.gravel || [], coal: j.coal || [], trees: j.trees || [], wood: j.wood || [], lava: j.lava || [], chests: j.chests || [], structures: j.structures || [], golems: j.golems || [], animals: j.animals || [], beds: j.beds || [], ironBuried: j.ironBuried || [], gravelBuried: j.gravelBuried || [] } } catch { return null }
 }
 
-// Всё, что известно о мире по сиду: { seed, spawn, biome, rp, village, ship, treasure, lava, sky, ores }.
+// Уровень знания карты копии (S8c 07.10; AGENTS.md 03.10, замечание проверки а). Каждый уровень включается явно:
+//   ND_MAP=0      — вслепую (по умолчанию, главная метрика с 09:24): из копии ничего (сид — только в телеметрию);
+//   ND_MAP=struct — «известный сид»: постройки (seedtool; из скана — коробки построек, их сундуки и кровати,
+//                   дерево построек, голем деревни) и лава (good-v2 и тела лавы скана);
+//   ND_MAP=blocks — плюс блоки скана: руда, гравий, вода, деревья, уголь (с пользователем не согласовано — отдельная строка).
+// Стада (сущности скана) — только ND_ROUTE_FOODMAP=1 и только на blocks.
+// Решение пользователя 07.10 09:24 (AGENTS.md): ГЛАВНАЯ метрика — как игрок на случайном сиде (вслепую), поэтому по умолчанию
+// blind; «известный сид» (struct) и «полный скан» (blocks) — отдельными строками. ND_KNOWLEDGE=rsg|ssg|scan (общий
+// переключатель S10) — то же: rsg → blind, ssg → struct, scan → blocks; ND_MAP главнее.
+// S10: уровень — perception/knowledge (ND_KNOWLEDGE — потолок, если задан; ND_MAP ниже потолка — ND_MAP; без
+// ND_KNOWLEDGE — по ND_MAP, по умолчанию blind).
+function mapLevel (): 'blind' | 'struct' | 'blocks' { return knowledge.mapLevel() }
+// Вслепую — то, что тело само увидело/услышало (S8c): постройки по взгляду (structure scan/list демона), лава на виду или по
+// слуху. Форма — как у routeInfo, без скана копии (ores null).
+function seenInfo ({ spawn, structures = [], lava = null, cave: cave0 = null }: { spawn: { x: number, z: number }, structures?: any[], lava?: any, cave?: any }) {
+  const st = (kind: string) => {
+    const s = structures.filter(q => q && q.kind === kind && !q.done && q.at && Number.isFinite(q.at.x)).sort((a, b) => (a.dist ?? 0) - (b.dist ?? 0))[0]
+    return s ? { x: s.at.x, z: s.at.z, ...(Number.isFinite(s.at.y) ? { y: s.at.y } : {}), d: Math.round(flat(spawn, s.at)) } : null
+  }
+  const sky = lava && lava.sky ? { x: lava.x, y: lava.y, z: lava.z, cls: 'surface', src: lava.src ?? 40, d: Math.round(flat(spawn, lava)) } : null
+  // Пещерная — из lava без sky или отдельным cave (поверху и в пещере видели обе: обе в кандидатах литья).
+  const cv = lava && !lava.sky ? lava : cave0
+  const cave = cv ? { x: cv.x, y: cv.y, z: cv.z, cls: 'open-cave', depth: cv.depth ?? 8, src: cv.src ?? 20, d: Math.round(flat(spawn, cv)) } : null
+  return { seed: 'seen', map: 'blind', spawn, biome: null, rp: st('ruined_portal'), village: st('village'), ship: st('shipwreck'), treasure: st('buried_treasure'),
+    rpLavaOk: false, sky, lava: cave, outposts: [], ores: null }
+}
+function structOnly (sc) {
+  if (!sc) return sc
+  return { ...sc, iron: [], ironBuried: [], gravel: [], gravelBuried: [], water: [], trees: [], coal: [], animals: [], wood: (sc.wood || []).filter(w => w.in) }
+}
+
+// Всё, что известно о мире по сиду: { seed, spawn, biome, rp, village, ship, treasure, lava, sky, ores, map }.
 function routeInfo (seed, { ores = true }: any = {}) {
   if (seed === undefined || seed === null || seed === '') return null
+  const level = mapLevel()
+  if (level === 'blind') return null
   const s = seedInfo(seed)
   const p = poolRow(seed)
   if (!s && !p) return null
@@ -87,7 +125,8 @@ function routeInfo (seed, { ores = true }: any = {}) {
   const spawn = s && Array.isArray(s.spawn) ? { x: s.spawn[0], z: s.spawn[1] } : (p && Array.isArray(p.spawn) ? { x: p.spawn[0], z: p.spawn[1] } : { x: 0, z: 0 })
   const sky = p && p.sky && Array.isArray(p.sky.at) ? { x: p.sky.at[0], y: p.sky.at[1], z: p.sky.at[2], cls: p.sky.cls, src: p.sky.src, d: p.sky.d } : null
   const lava = p && Array.isArray(p.lavaAt) ? { x: p.lavaAt[0], y: p.lavaAt[1], z: p.lavaAt[2], cls: p.lavaClass, depth: p.lavaDepth, src: p.lavaSrc, d: p.lava } : null
-  const sc = ores ? oresOf(seed) : null
+  const sc0 = ores ? oresOf(seed) : null
+  const sc = level === 'blocks' ? sc0 : structOnly(sc0)
   // Аванпосты разбойников: точка seedtool и коробки из скана копии (где встал). Пиллагеры появляются в коробке
   // постоянно и стреляют с 15+ бл. (rtV-A слот 10: аванпост в 50 м от спавна — смерть на 1-й мин за брёвнами).
   const outposts = []
@@ -100,6 +139,7 @@ function routeInfo (seed, { ores = true }: any = {}) {
   }
   return {
     seed: String(seed),
+    map: level,
     spawn,
     biome: (s && s.biome) || (p && p.biome) || null,
     rp: st('rp'),
@@ -336,6 +376,9 @@ function plan (info, opts: any = {}) {
     steps.push({ id: 'wood', kind: 'wood', ...(grove ? { at: { x: grove.x, y: grove.y, z: grove.z }, d: Math.round(flat(from, grove)) } : {}), ...(src ? { src } : {}), ...(grove && grove.in ? { in: grove.in } : {}), budget: WORK.wood + (grove ? Math.round(flat(from, grove) / SPEED) : 0), why: `брёвна, верстак, деревянная кирка${src === 'village' ? ' (рощ рядом нет — дома деревни по карте)' : grove ? ` (роща ${grove.n} брёвен по карте)` : ''}` })
   }
   if (!stonePick && ok('stone')) steps.push({ id: 'stone', kind: 'stone', budget: WORK.stone, why: 'каменная кирка, меч, печь, блоки на литьё' })
+  // Вслепую — осмотр со столба (+10) после камня: над лесом и холмом видно постройки, лаву и воду в 128 бл. (как раннер лезет
+  // на дерево/холм), один раз. ND_ROUTE_LOOKOUT=0 — выкл.
+  if (info.map === 'blind' && ok('lookout') && process.env.ND_ROUTE_LOOKOUT !== '0') steps.push({ id: 'lookout', kind: 'lookout', budget: 30, why: 'осмотр со столба: постройки, лава, вода в 128 бл.' })
   void logs
   // Шаг кровати встаёт сразу после камня (меч есть) — место в списке шагов запоминаем здесь.
   const bedAt = steps.length
@@ -433,7 +476,12 @@ function plan (info, opts: any = {}) {
   // Выбор: руины — если крюк ≤ 100 с (огонь, обсидиан — дешевле, чем кремень и литьё лишней клетки); железо — по цене
   // слитка (с), пока ожидаемого не хватит с запасом (×1.25), а гарантированного — хотя бы на ведро.
   const chosen = []
-  const structureBudgetSeconds = structureSearchLeft(opts.structureSeconds)
+  // Руды по карте нет (уровень struct, вслепую) — железо иначе копкой: этап железа (strategy-costs 'iron': медиана 384 с при успехе
+  // 34/63, ≈ 700 с на нужду; в базе s8c-a ironStage 330–540+ с). Бюджет построек 180 с — не запрет, а цена: постройка дешевле
+  // копки — берём (S8c 07.10, правило гибкости; s8c-a: деревни в 150–350 м выпадали из плана при «осталось 180 с»).
+  const oreKnown = cand.some(c => c.kind === 'ore')
+  const structureBudgetSeconds = oreKnown ? structureSearchLeft(opts.structureSeconds) : Math.max(structureSearchLeft(opts.structureSeconds), MINE_IRON_S - Math.max(0, Number(opts.structureSeconds) || 0))
+  const costCap = oreKnown ? 420 : MINE_IRON_S
   let structureLeft = structureBudgetSeconds
   const ruin = cand.find(c => c.kind === 'ruin')
   // Без огня — руины и подальше: кремень из гравия в rt-R3/R4 — 1 из 7 и 2 из 8 (гравий у рек под водой, «не вижу»),
@@ -451,7 +499,7 @@ function plan (info, opts: any = {}) {
   const need = Math.max(0, iron)
   for (const c of ironCand) {
     if (expect >= need && sure >= Math.min(need - 1, 2)) break
-    if (c.cost > 420 || (c.kind !== 'ore' && c.cost > structureLeft)) continue
+    if (c.cost > costCap || (c.kind !== 'ore' && c.cost > structureLeft)) continue
     chosen.push(c)
     if (c.kind !== 'ore') structureLeft -= c.cost
     expect += c.gives.iron
@@ -470,7 +518,11 @@ function plan (info, opts: any = {}) {
   // железа кампании; не вышло и он — маршрут кончается, дальше обычные этапы (giveup).
   const sourcesLeft = ordered.some(c => c.kind !== 'ruin')
   if (needNow > 0 && !sourcesLeft) {
+    // Вслепую построек не видно — сперва разведка построек по пути (колокол, сундуки, structures scan; ≤ 150 с): деревня/корабль
+    // дают железо за 1.5–3 мин, копка штреками вслепую — 3–17 мин (s8c-b/c: ironStage 163–1044 с). По умолчанию ВЫКЛ.
+    // (ND_ROUTE_SCOUTIRON=1 — вкл.): s8c-d/e — 0 построек из 3 разведок по 150 с, осмотр со столба (lookout, 128 бл.) их уже видит.
     if (ok('mine')) steps.push({ id: 'mine', kind: 'mine', budget: 300, why: `железа ${needNow} не хватает — видимая руда в 48` })
+    else if (info.map === 'blind' && ok('scoutIron') && process.env.ND_ROUTE_SCOUTIRON === '1') steps.push({ id: 'scoutIron', kind: 'scoutIron', budget: 150, why: 'построек не видно — разведка (до 150 с) до копки' })
     else if (ok('ironStage')) steps.push({ id: 'ironStage', kind: 'ironStage', budget: 600, why: `железа ${needNow} не хватает — этап железа (y 16)` })
     else steps.push({ id: 'giveup', kind: 'giveup', budget: 0, why: 'железа нет и не нашлось — дальше обычные этапы' })
   } else if (short && ok('mine') && !ordered.length) steps.push({ id: 'mine', kind: 'mine', budget: 300, why: `железа ожидается ${Math.round(expect * 10) / 10} из ${need} — руда по пути` })
@@ -521,6 +573,8 @@ function plan (info, opts: any = {}) {
   if (lava.kind === 'frame') steps.push({ id: 'light', kind: 'light', at: lava.at, budget: travel + 30, d: Math.round(flat(from, lava.at)), why: "готовая рама без огня — поджиг" })
   else if (lava.kind === 'sky') steps.push({ id: lava.id, kind: 'castSky', at: lava.at, budget: travel + WORK.castSky, d: Math.round(flat(from, lava.at)), why: `лава под небом (${lava.cls}, ${lava.tag}, источников ${lava.src ?? '?'}) — литьё поверху` })
   else if (lava.kind === 'cave') steps.push({ id: lava.id, kind: 'castCave', at: lava.at, budget: travel + WORK.castCave + Math.round((lava.depth || 0) * 2), d: Math.round(flat(from, lava.at)), why: `лава в пещере (${lava.cls}, ${lava.tag}, глубина ${lava.depth ?? '?'}, источников ${lava.src ?? '?'}) — вниз к ней и литьё с окнами` })
+  // Вслепую лава не видна — разведка по виду (поверху, 96 бл.) и слуху, а не сразу глубокое литьё (castDeep: 0 из 34, 17 смертей, S8).
+  else if (info.map === 'blind' && ok('scoutLava') && process.env.ND_ROUTE_SCOUTLAVA !== '0') steps.push({ id: 'scoutLava', kind: 'scoutLava', budget: 240, why: 'лава не видна — разведка поверху (взгляд 96 бл.) и слух' })
   else steps.push({ id: 'lava:deep', kind: 'castDeep', budget: 600, why: 'видимой лавы по карте нет — вниз к −54 (глубокое литьё)' })
   steps.push({ id: 'enter', kind: 'enter', budget: WORK.enter, why: 'в Ад' })
   // Кровать к ночи: нет кровати и 3 шерсти одного цвета, план до Ада не успевает до ~9-й мин — шаг bed после камня
@@ -548,7 +602,7 @@ function plan (info, opts: any = {}) {
   const woodStep = steps.find(x => x.kind === 'wood')
   if (woodStep && !process.env.ND_ROUTE_WOODN && steps.some(x => x.kind === 'ore' || x.kind === 'mine' || x.kind === 'ironStage')) woodStep.logs = 8
   const budget = steps.reduce((n, s) => n + (s.budget || 0), 0)
-  return { seed: info.seed, lava, ironNeed: need, ironExpect: Math.round(expect * 10) / 10, short, steps, budget, structureBudgetSeconds, route: routeName(steps) }
+  return { seed: info.seed, map: info.map, lava, ironNeed: need, ironExpect: Math.round(expect * 10) / 10, short, steps, budget, structureBudgetSeconds, route: routeName(steps) }
 }
 
 function whyOf (c) {
@@ -570,7 +624,7 @@ function routeName (steps) {
 
 // Строка для журнала: шаги с бюджетом.
 function describe (p) {
-  return `маршрут [${p.route}], бюджет ${Math.round(p.budget / 60 * 10) / 10} мин` +
+  return `маршрут [${p.route}]${p.map ? `, карта ${p.map}` : ""}, бюджет ${Math.round(p.budget / 60 * 10) / 10} мин` +
     (Number.isFinite(p.structureBudgetSeconds) ? `; поиск построек осталось ${Math.floor(p.structureBudgetSeconds)} с, затем руда` : '') + ': ' +
     p.steps.map(s => `${s.id}${s.d !== undefined ? `(${s.d} м)` : ''} ${s.budget} с`).join(' → ')
 }
@@ -611,7 +665,7 @@ function bookStep (id: string, ok: unknown, book: { done: Set<string>, fails: Ma
   const n = (book.fails.get(id) || 0) + 1
   book.fails.set(id, n)
   if (id === 'smelt') return n >= 3 ? 'break' : null
-  if (n >= 2 || /^(ruin|village|treasure|ship|ore:|dig:|mine|ironStage|lava:)/.test(id)) book.avoid.add(id)
+  if (n >= 2 || /^(ruin|village|treasure|ship|ore:|dig:|mine|ironStage|lava:|scoutLava|lookout|scoutIron)/.test(id)) book.avoid.add(id)
   return null
 }
 
@@ -638,4 +692,19 @@ function digRefuse (hp: number, canEat: boolean): { refuse: boolean, riskT: numb
   return { refuse: riskT > healT + digRiskTicks(Math.max(hp, 13)), riskT, healT }
 }
 
-module.exports = { digRefuse, digRiskTicks, healTicks, bookStep, foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }
+// Копка/спуск маршрута рядом с врагами, в воде — цена и риск вместо запретов (S8c 07.10, замечание проверки г; правило гибкости
+// 06.10). Враги: их ожидаемый урон (assess.plan expectedDamage — если придётся снять всех) вычитается из хп, риск копки — от
+// остатка (digRefuse); одиночный зомби при 20 хп копке не мешает, шипящий крипер или толпа — сперва ответ угрозе. Вода: копка
+// с глазами в воде в 5 раз медленнее, не на земле — ещё /5 (Player.getDestroySpeed, jar 1.21.11) — ~10 с копки станут 50+,
+// выйти на берег ~8 с: дешевле выйти; спуск goto — не копка, в воде идёт как есть. Завалило — физически: сначала откопаться.
+const WATER_LEAVE_S = 8, DIG_S = 10
+function routeActRisk ({ hp, canEat, foeDamage = 0, inWater = false, digging = false, buried = false }: { hp: number, canEat: boolean, foeDamage?: number, inWater?: boolean, digging?: boolean, buried?: boolean }) {
+  if (buried) return { refuse: true, why: 'завалило — сперва откопаться' }
+  const hpEff = Math.max(0, hp - (foeDamage || 0))
+  const r = digRefuse(hpEff, canEat)
+  if (r.refuse) return { ...r, refuse: true, why: `хп ${Math.round(hp)}${foeDamage ? ` − урон врагов ${Math.round(foeDamage)}` : ''}: риск ${r.riskT} т > лечение ${r.healT} т` }
+  if (inWater && digging && DIG_S * 4 > WATER_LEAVE_S) return { ...r, refuse: true, why: `в воде: копка ×5 (+${DIG_S * 4} с) дороже выхода (~${WATER_LEAVE_S} с)` }
+  return { ...r, refuse: false, why: '' }
+}
+
+module.exports = { seenInfo, routeActRisk, mapLevel, structOnly, digRefuse, digRiskTicks, healTicks, bookStep, foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }

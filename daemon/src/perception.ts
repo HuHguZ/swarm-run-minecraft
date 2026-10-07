@@ -16,7 +16,9 @@ const INTERESTING = [
   /_bed$/, /^water$/, /^lava$/, /^obsidian$/, /^crying_obsidian$/,
   /^spawner$/, /^nether_portal$/, /^end_portal/, /^end_stone$/,
   /^torch$/, /^campfire$/, /^bookshelf$/, /^glowstone$/, /^sea_lantern$/,
-  /^melon$/
+  /^melon$/,
+  // S8c 07.10: гравий на виду (кремень вслепую — берег, склон, пещера; осмотр маршрута на 96 бл.)
+  /^gravel$/
 ]
 
 function interestingIds (mcData) {
@@ -232,6 +234,17 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
       } else {
         g.count++
         if (dist < g.dist) { g.dist = Math.round(dist * 10) / 10; g.nearest = round(pos) }
+      }
+    }
+    // Память увиденного (perception/eyes, S10): что тело видело раньше и сейчас отсюда не видно — тоже «знаю», с пометкой
+    // remembered и возрастом (ago, игр. с). Только при зрении (fair) и в 2·radius; ND_OBSERVE_MEM=0 — без памяти.
+    if (fair && bot._ndEyes && process.env.ND_OBSERVE_MEM !== '0') {
+      const re = new RegExp(INTERESTING.map(r => r.source).join('|'))
+      for (const m of require('./perception/eyes').nearest(bot, re, { max: 200, maxDist: radius * 2 })) {
+        if (groups.has(m.name)) { const g = groups.get(m.name); if (!g.remembered) continue }
+        const g = groups.get(m.name)
+        if (!g) groups.set(m.name, { name: m.name, count: 1, nearest: { x: m.x, y: m.y, z: m.z }, dist: m.dist, remembered: true, ago: m.ago })
+        else { g.count++; if (m.dist < g.dist) { g.dist = m.dist; g.nearest = { x: m.x, y: m.y, z: m.z }; g.ago = m.ago } }
       }
     }
     out.blocks = Array.from(groups.values()).sort((a, b) => a.dist - b.dist)

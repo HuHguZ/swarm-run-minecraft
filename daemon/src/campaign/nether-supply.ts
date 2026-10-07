@@ -3,6 +3,8 @@ export interface NetherSupplyState {
   health: number
   inventory: Record<string, number>
   pickSwings: number
+  /** Увиденные глазами стебли (nether-forest.js «стебли (ад)») в пределах хода — куда идти за деревом, если рядом не видно. */
+  woodAt?: { x: number; y: number; z: number } | null
 }
 export interface NetherSupplyPort {
   observe(): Promise<NetherSupplyState>
@@ -62,7 +64,9 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
     for (let attempt = 0; attempt < 2 && safe() && wood(state) < required; attempt++) {
       await act('mine', { block: 'crimson_stem,warped_stem', count: Math.ceil((required - wood(state)) / 4), radius: 32, dry: true, timeoutSeconds: 45 })
       if (wood(state) >= required || !safe()) break
-      if (attempt === 0) await act('explore', { block: 'crimson_stem,warped_stem', radius: 32, stepDistance: 40, timeoutSeconds: 45, dry: true })
+      // S1e: стебли, увиденные по пути, — к ним (раньше — только обзор 45 с вокруг: s1e-B0-3 «нет безопасного дерева» и 70 мин стоянки).
+      if (attempt === 0 && state.woodAt) await act('goto', { x: state.woodAt.x, y: state.woodAt.y, z: state.woodAt.z, range: 3, timeoutSeconds: 120 })
+      else if (attempt === 0) await act('explore', { block: 'crimson_stem,warped_stem', radius: 32, stepDistance: 40, timeoutSeconds: 45, dry: true })
     }
     for (const [item, count] of Object.entries(state.inventory)) {
       if (/_(log|stem)$/.test(item) && count > 0 && !(await craft(item.replace(/_(log|stem)$/, '_planks'), count * 4))) break

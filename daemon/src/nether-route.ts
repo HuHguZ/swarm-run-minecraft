@@ -1009,7 +1009,8 @@ function spawnerHot (session, goal, fireproof) {
 // Места брутов из копии мира + (ND_GUARD=1) живые бруты/хоглины рядом: открытое в 12 бл. от живого +40 за шаг (ревью Codex
 // ne-deaths.md №1: штраф +10 A* брал, если обход дороже; 12 смертей от брутов на открытом ходе).
 function liveDangers (session) {
-  const out = bruteSpots(session)
+  // Дом брута из копии — +30 за открытый шаг в 12 бл. (было 10: s1d-F22b-3 — подход к гуще золота −7739… прошёл мимо брута, смерть на 2.4 мин).
+  const out = bruteSpots(session).map(b => [b[0], b[1], b[2], 30])
   if (process.env.ND_GUARD === '0') return out
   const bot = session.bot
   try {

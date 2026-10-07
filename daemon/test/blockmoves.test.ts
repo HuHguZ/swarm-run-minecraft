@@ -391,3 +391,28 @@ test('исполнитель: одинаковый отказ «путь не о
   const r = run(w, up(), { ticks: 400, clock, deps: { now: () => clock.t } })
   assert.ok((r.bot.replans || 0) >= 1 && r.bot.replans <= 3, 'перестроек: ' + r.bot.replans)
 })
+
+// S8c (07.10, замечание проверки в): подпись с клеткой у причин без узла; счёт снимают сдвиг тела, новая и достигнутая цель.
+test('перестройки: подпись причина|клетка, счёт по месту; сдвиг на 2+ бл., новая цель и цель достигнута — сначала', () => {
+  assert.equal(bm.replanSig('нет опоры', { ref: [1, 63, 0], cell: [2, 63, 0] }), 'нет опоры|2,63,0')
+  assert.notEqual(bm.replanSig('нет опоры', { cell: [2, 63, 0] }), bm.replanSig('нет опоры', { cell: [3, 63, 0] }))
+  assert.equal(bm.replanSig('спуск: нет блоков в хотбаре'), 'спуск: нет блоков в хотбаре|')
+  const st: Record<string, any> = {}
+  const p = { x: 0.5, y: 64, z: 0.5 }
+  for (let k = 1; k <= 5; k++) assert.equal(bm.replanCount(st, 'a|1,2,3', p), k)
+  assert.equal(bm.replanCount(st, 'a|1,2,3', { x: 3.5, y: 64, z: 0.5 }), 1, 'тело ушло на 3 бл. — сначала')
+  assert.equal(bm.replanCount(st, 'b|1,2,3', { x: 3.5, y: 64, z: 0.5 }), 1, 'другая подпись — сначала')
+  // install: новая цель снимает счёт, та же цель (рефлекс поставил её снова) — нет; цель достигнута — снимает.
+  const w = world(() => 'air')
+  const bot = fakeBot(w, Physics(data, w), new Vec3(0.5, 64, 0.5))
+  const ex = bm.install({ bot, pathNodes: [] }, { faceAim: pick.faceAim, nodes: () => [], log: () => {} })
+  const g1 = { x: 1, y: 2, z: 3 }
+  bot.emit('goal_updated', g1); ex.replanSame = 4; ex.replanSig = 's'
+  bot.emit('goal_updated', { x: 1, y: 2, z: 3 })
+  assert.equal(ex.replanSame, 4, 'та же цель — счёт остаётся')
+  bot.emit('goal_updated', { x: 9, y: 2, z: 3 })
+  assert.equal(ex.replanSame, 0, 'новая цель — сначала')
+  ex.replanSame = 4; bot.emit('goal_reached', g1)
+  assert.equal(ex.replanSame, 0, 'цель достигнута — сначала')
+  ex.stop()
+})

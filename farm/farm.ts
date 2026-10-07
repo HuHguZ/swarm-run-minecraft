@@ -553,6 +553,9 @@ async function cmdRun (args, sceneArgs) {
   fs.mkdirSync(dir, { recursive: true })
   const extra: Record<string, any> = {} as Record<string, any>
   for (const kv of args.env) { const k = kv.slice(0, kv.indexOf('=')); extra[k] = kv.slice(kv.indexOf('=') + 1) }
+  // Уровень знания карты (S10, daemon/src/perception/knowledge): явно в окружение сцены и в batch.json — сцена, кампания и
+  // строки итогов (report) видят один и тот же уровень; без ND_KNOWLEDGE — из старых флагов, по умолчанию rsg.
+  try { extra.ND_KNOWLEDGE = require('../daemon/src/perception/knowledge').level({ ...process.env, ...extra }) } catch {}
   // Применить всем выбранным серверам до старта любой сцены; сервер может быть
   // восстановленной копией с сохранённой другой скоростью или заморозкой.
   for (const i of ids) {
@@ -603,11 +606,14 @@ function cmdKillRuns (args) {
 function report (tag, by = null) {
   const dir = path.join(FARM, 'results', tag)
   const rows = []
+  // Уровень знания карты партии (S10): в каждую строку итогов, если сцена его не написала сама.
+  let knowledge = null
+  try { knowledge = JSON.parse(fs.readFileSync(path.join(dir, 'batch.json'), 'utf8')).env.ND_KNOWLEDGE || null } catch {}
   for (const f of fs.readdirSync(dir).filter(f => /^slot-\d+\.jsonl$/.test(f))) {
     const i = Number(/\d+/.exec(f)[0])
     for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/)) {
       if (!line.trim()) continue
-      try { rows.push({ slot: i, ...JSON.parse(line) }) } catch {}
+      try { rows.push({ slot: i, ...(knowledge ? { knowledge } : {}), ...JSON.parse(line) }) } catch {}
     }
   }
   fs.writeFileSync(path.join(dir, 'all.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''))
@@ -660,7 +666,22 @@ function parseArgs (argv) {
   return { a, sceneArgs }
 }
 
+// --reup: какие слоты диапазона гасить (свои: снимок того же потока — префикс имени до «-»), какие чужие (отказ).
+function reupPlan (ids: number[], slots: Record<string, any>, code: string | undefined, isUp: (i: number) => boolean) {
+  const owner = (name: any) => typeof name === 'string' && name && name !== 'live' ? name.split('-')[0] : null
+  const me = owner(code)
+  const down: number[] = [], refuse: number[] = []
+  for (const i of ids) {
+    if (!isUp(i)) { if (slots[i]) down.push(i); continue }
+    if (me && owner(slots[i] && slots[i].code) === me) down.push(i); else refuse.push(i)
+  }
+  return { down, refuse }
+}
+if (typeof module !== 'undefined') module.exports = { reupPlan } // фикстура tick-control грузит исходник без module
+
 ;(async () => {
+  // Тест (farm-reup.test) берёт reupPlan через require — без запуска CLI; фикстура tick-control режет исходник по этой строке.
+  if (require.main !== module) return
   const [cmd, ...rest] = process.argv.slice(2)
   const { a, sceneArgs } = parseArgs(rest)
   try {
@@ -677,7 +698,19 @@ function parseArgs (argv) {
     } else if (cmd === 'up') {
       // --reup (S8b 07.10): свои слоты диапазона сперва down — под тем же замком up, чтобы между сидами серии место не ушло
       // чужому up (down→up в скрипте серии терял слот).
-      await withUpLock(async () => { if (a.reup) { const f = Number(a.from || 1), n = Number(a._[0] || 4); await cmdDown({ _: [n > 1 ? `${f}-${f + n - 1}` : String(f)] }) } return cmdUp(a) }); applyPrio()
+      // Только СВОИ (S8c 07.10, замечание проверки д): слот поднят и в slots.json снимок того же потока (префикс имени снимка до
+      // «-»), иначе отказ — чужой мир не гасим; не поднятый слот — только чистка записи.
+      await withUpLock(async () => {
+        if (a.reup) {
+          const f = Number(a.from || 1), n = Number(a._[0] || 4)
+          const ids = []; for (let i = f; i < f + n && i <= MAX_SLOTS; i++) ids.push(i)
+          const up = worldsUp(listeners())
+          const r = reupPlan(ids, readState().slots || {}, a.code, i => up.includes(slot(i).mc))
+          if (r.refuse.length) throw new Error(`--reup: слоты ${r.refuse.join(', ')} подняты не твоим снимком (--code ${a.code || '—'}, в slots.json ${r.refuse.map(i => readState().slots?.[i]?.code || 'без снимка').join(', ')}) — чужой мир не гашу`)
+          if (r.down.length) await cmdDown({ _: [r.down.join(',')] })
+        }
+        return cmdUp(a)
+      }); applyPrio()
     } else if (cmd === 'daemons') { await cmdDaemons(a); applyPrio() }
     else if (cmd === 'down') await cmdDown(a)
     else if (cmd === 'status') await cmdStatus()

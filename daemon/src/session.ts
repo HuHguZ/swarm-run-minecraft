@@ -32,6 +32,7 @@ const throwMod = require('./throw')
 const prepMod = require('./prep')
 const lootMod = require('./loot')
 const worlds = require('./worlds')
+const fastblocks = require('./fastblocks')
 const edges = require('./edges')
 const blockmoves = require('./blockmoves')
 const hopgoto = require('./hopgoto')
@@ -89,9 +90,14 @@ function skyLightAt (bot, p) {
   if (!col) return null
   const sky = col.skyLightSections
   if (!sky || !sky[Math.floor((p.y - (col.minY ?? -64)) / 16) + 1]) return 15
+  // Свет из столбца, как его читает Block (prismarine-chunk getBlock: skyLight = getSkyLight), без постройки Block (S9).
+  if (bot._ndFastBlocks && typeof col.getSkyLight === 'function') return col.getSkyLight({ x: Math.floor(p.x) & 15, y: Math.floor(p.y), z: Math.floor(p.z) & 15 })
   const b = bot.blockAt(p)
   return b && typeof b.skyLight === 'number' ? b.skyLight : 15
 }
+
+// Клетки «лава рядом» для цены шага: под ногами и четыре стороны.
+const LAVA_AROUND = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
 
 // Штраф шага перехода поверху: клетка тела без неба (skyLight ≤ 7 — в
 // пещере 0, под листвой 12-14, в устье пещеры убывает на блок за блок).
@@ -272,6 +278,10 @@ class Session {
           try { require('./bedtime').install(this) } catch {}
           // Постройки игры глазами раз в 8 с → память и structure_seen (structures.js).
           try { require('./structures').install(this) } catch {}
+          // Глаза + память увиденного и слух (perception/, S10; ND_EYES=0 — без обхода глаз).
+          try { require('./perception/eyes').install(this); require('./perception/senses').installHearing(bot) } catch {}
+          // Искажённый лес Ада глазами (нилий в прорисовке + луч) → память «искажённый лес (ад)» (S1e, nether-forest.js).
+          try { require('./nether-forest').install(this) } catch {}
           // Слез / сброшен / телепортирован из седла — mineflayer этого не видит
           // (ride.js patchVehicle): без правки bot.vehicle висит вечно.
           try { rideMod.patchVehicle(bot) } catch {}
@@ -327,6 +337,9 @@ class Session {
     this.movementsSignature = signature
 
     const movements = new Movements(bot)
+    // Блоки pathfinder'а — из кеша тела, ответы те же (fastblocks.ts, S9; ND_S9=0 — bot.blockAt на каждую клетку).
+    fastblocks.wrapMovements(bot, movements)
+    const defAt = fastblocks.defReader(bot)
     if (process.env.ND_ROUTE === '1' && process.env.ND_WORLD_SEED && process.env.ND_ROUTE_OUTPOSTPATH !== '0' && worlds.worldOf(bot) === 'overworld' && Array.isArray(movements.exclusionAreasStep)) {
       const route = require('./route')
       if (!this.routeOutpostInfo) this.routeOutpostInfo = route.routeInfo(process.env.ND_WORLD_SEED)
@@ -344,35 +357,46 @@ class Session {
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(flee.mobAvoidance(bot))
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk ? underRoofCost(bot, block, this.surfaceStrict) : 0)
     if (Array.isArray(movements.exclusionAreasStep)) {
+      const fbm = bot._ndFastBlocks
       movements.exclusionAreasStep.push(block => {
         const p = block && block.position
         if (!p) return 0
-        for (const [dx, dy, dz] of [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
-          const b = bot.blockAt(p.offset(dx, dy, dz))
-          // _ndLavaStrict (бастион над лавовым морем: две смерти «tried to swim
-          // in lava» на подходе к стене, ферма 29.09) — обходить почти любой ценой.
-          if (b && b.name === 'lava') return bot._ndLavaStrict ? 200 : 8
-        }
-        if (bot._ndLavaStrict) {
-          for (let d = 1; d <= 14; d++) {
-            const b = bot.blockAt(p.offset(0, -d, 0))
-            if (!b) break
-            if (b.name === 'lava') return 1000
-            if (b.boundingBox === 'block') break
-          }
-        }
-        return 0
+        // Цена зависит только от блоков вокруг и флага строгости — по памяти на Block из кеша, пока мир не менялся
+        // (fastblocks: версия растёт на любом сбросе кеша). Описание блока — по номеру состояния, а не Block
+        // (fastblocks.defReader): 5 клеток на кандидата — 21 % CPU маршрута.
+        const strict = !!bot._ndLavaStrict
+        if (fbm && fbm.live && block._ndLavaVer === fbm.ver && block._ndLavaK === strict) return block._ndLavaV
+        const v = lavaStepCost(p, strict)
+        if (fbm && fbm.live) { block._ndLavaVer = fbm.ver; block._ndLavaK = strict; block._ndLavaV = v }
+        return v
       })
+    }
+    function lavaStepCost (p, strict) {
+      for (const [dx, dy, dz] of LAVA_AROUND) {
+        const b = defAt(p.x + dx, p.y + dy, p.z + dz)
+        // _ndLavaStrict (бастион над лавовым морем: две смерти «tried to swim
+        // in lava» на подходе к стене, ферма 29.09) — обходить почти любой ценой.
+        if (b && b.name === 'lava') return strict ? 200 : 8
+      }
+      if (strict) {
+        for (let d = 1; d <= 14; d++) {
+          const b = defAt(p.x, p.y - d, p.z)
+          if (!b) break
+          if (b.name === 'lava') return 1000
+          if (b.boundingBox === 'block') break
+        }
+      }
+      return 0
     }
     if (Array.isArray(movements.exclusionAreasPlace)) {
       movements.exclusionAreasPlace.push(block => {
         const p = block && block.position
         if (!p) return 0
         if (/lava/.test(block.name || '')) return 1000
-        const under = bot.blockAt(p.offset(0, -1, 0))
+        const under = defAt(p.x, p.y - 1, p.z)
         if (under && /lava/.test(under.name)) return 1000
         for (let d = 1; d <= 5; d++) {
-          const b = bot.blockAt(p.offset(0, -d, 0))
+          const b = defAt(p.x, p.y - d, p.z)
           if (!b || b.boundingBox !== 'empty') return 0
         }
         return 100

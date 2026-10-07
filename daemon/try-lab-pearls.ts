@@ -167,6 +167,7 @@ async function run (k) {
         stopped: d.stopped ? String(d.stopped).slice(0, 180) : undefined,
         rounds: (d.rounds || []).length,
         hpPerKill: d.hpPerKill,
+        seen: d.seenEndermen,
         killsPerHour: d.killsPerHour,
         err: r.error
       }

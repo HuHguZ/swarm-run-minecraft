@@ -122,7 +122,9 @@ function bastionSpentNear (session, p) {
 // → гипотезы старта (тип, поворот, сдвиг) — в запись бастиона; bastion() по ним сразу знает золото (p.starts).
 function recognizeFar (session) {
   try {
-    const pg = require('./bastion').predictGold(session.bot, 112)
+    // S1e: predictGold — в bastion/predict-gold (прослойка ./bastion его не отдаёт: «predictGold is not a function» в каждом прогоне
+    // s1e-B0/M2 — бастион издалека не узнавался, гипотезы старта шаблона не доходили до bastion()).
+    const pg = require('./bastion/predict-gold').predictGold(session.bot, 112)
     const all = pg && pg.start && pg.start.all
     if (all && all.length) { log('бастион узнан издалека', { starts: all, basalt: pg.basalt, chests: pg.chests }); return all }
   } catch (e) { log('бастион издалека', { error: e.message }) }
@@ -233,7 +235,7 @@ async function scoutBody (session, ctl, p: any = {}) {
   const high = !!p.high || process.env.ND_SCOUT_HIGH === '1'
   const radius = clamp(p.radius ?? (['look', 'explore', 'forget'].includes(p.mode) ? 64 : high ? 128 : 96), 16, high ? 128 : 96)
   const here = worlds.worldOf(bot)
-  if (p.mode === 'spawner') return toSpawner(session, ctl, { deadline, tunnel: p.tunnel === true || process.env.ND_SPAWNER_TUNNEL === '1' })
+  if (p.mode === 'spawner') return toSpawner(session, ctl, { deadline, tunnel: p.tunnel === true || process.env.ND_SPAWNER_TUNNEL === '1', breach: p.breach === true })
   // map — знание карты из копии этого же мира (AGENTS.md разрешает его основному телу; на ферме записи снимает
   // try-lab-ne-map.js с правды мира): крепость, спавнер, бастионы (с золотом и сундуками) — только записи Ада.
   if (p.mode === 'map') {
@@ -906,10 +908,11 @@ async function toSpawner (session, ctl, opts) {
   try { return await toSpawnerBody(session, ctl, opts) } finally { session.emergencyOff = em0 }
 }
 
-async function toSpawnerBody (session, ctl, { deadline, tunnel = false }: any) {
+async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach = false }: any) {
   const bot = session.bot
   const id = session.mcData.blocksByName.spawner.id
-  const found = bot.findBlocks({ matching: id, maxDistance: 160, count: 6 })
+  // S10: спавнер — увиденный (память глаз + взгляд сейчас), не из памяти клиента сквозь толщу (на scan — как было).
+  const found = require('./perception/eyes').locate(bot, ['spawner'], { radius: 160, max: 6 })
   const rec = placeOf(session, SPAWNER_PLACE)
   let sp = null
   if (found.length) {
@@ -965,7 +968,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }: any) {
   const fort = placeOf(session, PLACE)
   const spawnerNear = () => {
     const me = bot.entity.position
-    const got = bot.findBlocks({ matching: id, maxDistance: 160, count: 6 }).filter(p => p.y >= 40)
+    const got = require('./perception/eyes').locate(bot, ['spawner'], { radius: 160, max: 6, filter: p => p.y >= 40 })
     got.sort((a, b) => a.distanceTo(me) - b.distanceTo(me))
     return got[0] || null
   }
@@ -980,6 +983,18 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }: any) {
     sp = spawnerNear()
   }
   if (!sp) sp = spawnerNear()
+  // S10: не видно, но «пирог» F3 показывает спавнер в прорисовке — ходом по пеленгу (как люди: повернуть камеру, идти,
+  // смотреть снова), до 4 отрезков по 20 бл.; ND_PIE_SPAWNER=0 — без этого.
+  for (let k = 0; !sp && k < 4 && process.env.ND_PIE_SPAWNER !== '0' && worlds.worldOf(bot) === 'the_nether' && !ctl.aborted && gameClock.now() < deadline; k++) {
+    const S = require('./perception/senses')
+    const arc = S.pieArcs(bot, 'spawner', { fov: 30 })[0]
+    if (!arc || arc.center === null) break
+    const v = S.vecOf(arc.center)
+    const me = bot.entity.position
+    const w = await legTo(session, ctl, Math.round(me.x + v.x * 20), Math.round(me.z + v.z * 20), deadline)
+    legs.push({ ok: !!w.ok, at: xyz(bot.entity.position), pie: arc.center, error: w.ok ? undefined : w.error })
+    sp = spawnerNear()
+  }
   if (!sp) return { found: false, stopped: fort ? 'у крепости спавнера в прогруженных чанках не видно' : 'крепости в памяти нет — сперва найти (fortress без mode)', legs }
   rememberSpawner(session, { x: sp.x, y: sp.y, z: sp.z })
   // «Дошёл» — на уровне спавнера (±2) и в 6 блоках по горизонтали: блейзы
@@ -1048,7 +1063,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false }: any) {
     // штреке, 6 блейзов в 7–15 бл. — vis 0, 4 мин «ифриты за стеной», 0 стержней). В tunnel-режиме «дошёл» — когда
     // спавнер виден; иначе к полу зала (pathfinder с копкой, ветка floorCells ниже), до 3 раз.
     // Спавнер рядом (≤ 9 бл.), на уровне, но не виден — ход сквозь стену зала к помосту (до 2 раз), а не «дошёл» за стеной.
-    if (atLevel() && !seesSp() && breachTries < 2 && process.env.ND_SPAWNER_BREACH === '1') {
+    if (atLevel() && !seesSp() && breachTries < 2 && (breach || process.env.ND_SPAWNER_BREACH === '1')) {
       breachTries++
       const br = await breachToSpawner(session, ctl, sp, Math.min(deadline, gameClock.now() + 60000))
       if (br.ok) return { found: true, reached: true, spawner: xyz(sp), dist: Math.round(bot.entity.position.distanceTo(sp.offset(0.5, 0.5, 0.5))), legs, seen: true, breach: br }

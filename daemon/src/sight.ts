@@ -140,6 +140,8 @@ function visibleOf (bot, ids, radius, { max = 12, rays = 800, skip = null, fair 
     if (fair) {
       if (cast++ >= rays) break
       if (!seesBlock(bot, b)) continue
+      // Память увиденного (perception/eyes, S10): что навык увидел лучом — помнит и слой.
+      if (bot._ndEyes) { try { bot._ndEyes.saw(b.name, h.x, h.y, h.z) } catch {} }
     }
     out.push(b)
     if (out.length >= max) break

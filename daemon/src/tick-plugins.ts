@@ -209,6 +209,12 @@ function createScope (bot, clock) {
 
 function compilePlugin ({ filename, source }: any, scope, name, sources) {
   if (name === 'physics') {
+    // Блоки для физики тела — из кеша тела (fastblocks.ts, S9), когда он поднят: тот же Block, что bot.blockAt(pos, false)
+    // (координаты — floor), без постройки Block на каждую клетку рамки каждый тик. Физика блоки не правит.
+    const worldSource = '  const world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }'
+    if (source.includes(worldSource)) {
+      source = source.replace(worldSource, '  const world = { getBlock: (pos) => { const fb = bot._ndFastBlocks; return fb && fb.live ? fb.block(pos.x, pos.y, pos.z) : bot.blockAt(pos, false) } }')
+    }
     // The game clock already schedules one turn per tick. Reusing the upstream
     // wall-time accumulator would permit burst catchup and skip microtask turns.
     source = source.replace(/  function doPhysics \(\) \{[\s\S]*?\n  function tickPhysics \(now\)/,
@@ -273,6 +279,12 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
     }
   }`)
   }
+  if (name === 'pathfinderPhysics') {
+    // Симуляция бега pathfinder'а (canStraightLine/canSprintJump каждый тик хода) — блоки из кеша тела (fastblocks.ts, S9), как у
+    // физики тела выше; без кеша — прежний bot.blockAt(pos, false).
+    const worldSource = '    this.world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }'
+    if (source.includes(worldSource)) source = source.replace(worldSource, '    this.world = { getBlock: (pos) => { const fb = bot._ndFastBlocks; return fb && fb.live ? fb.block(pos.x, pos.y, pos.z) : bot.blockAt(pos, false) } }')
+  }
   source = source.replaceAll('bot._client.write(', 'writePacket(')
   const nativeRequire = createRequire(filename)
   const scopedRequire = request => {
@@ -306,10 +318,14 @@ function installTickWait (bot, scope) {
 
 function observeEntityGround (bot, scope) {
   let bornVelocity = null
+  // Модули — один раз, не require() на каждый пакет движения (S9: 2 % CPU демона в профиле lockstep).
+  let dropsMod, elytraMod
+  const drops = () => dropsMod || (dropsMod = require('./drops'))
+  const elytra = () => elytraMod || (elytraMod = require('./elytra'))
   const nativeVelocity = (packet, meta, bytes) => {
     if (bot.version !== '1.21.11' || !packet || packet.entityId === bot.entity?.id ||
       (meta?.name !== 'spawn_entity' && meta?.name !== 'entity_velocity')) return
-    const velocity = require('./drops').velocityFromRaw(bytes, meta.name === 'spawn_entity' ? 'spawn' : 'velocity')
+    const velocity = drops().velocityFromRaw(bytes, meta.name === 'spawn_entity' ? 'spawn' : 'velocity')
     // Raw events precede the installed entities plugin. Its legacy conversion
     // divides by 8000; supply the exact native LPVec3 in those expected units.
     if (!velocity) return
@@ -324,7 +340,7 @@ function observeEntityGround (bot, scope) {
   const rockets = new Map()
   const glideState = entity => {
     if (!entity || entity === bot.entity || !(entity.name === 'player' || entity.type === 'player' ||
-      require('./elytra').gliding(entity) || entity._ndGlideObservedState)) return
+      elytra().gliding(entity) || entity._ndGlideObservedState)) return
     const state = { yaw: entity.yaw, pitch: entity.pitch, flag: (entity.metadata?.[0] ?? 0) & 128,
       pose: entity.metadata?.[6], boosted: !!entity._ndGlideBoosted }
     const previous = entity._ndGlideObservedState
@@ -379,7 +395,7 @@ function observeEntityGround (bot, scope) {
     const previous = entity._ndPositionReceipts?.[1] ?? null
     entity._ndPositionReceipts = [previous, { x: entity.position.x, y: entity.position.y, z: entity.position.z,
       t: scope.observationNow(), grounded: entity.onGround === true, kind,
-      yaw: entity.yaw, pitch: entity.pitch, flying: require('./elytra').gliding(entity), boosted: !!entity._ndGlideBoosted,
+      yaw: entity.yaw, pitch: entity.pitch, flying: elytra().gliding(entity), boosted: !!entity._ndGlideBoosted,
       revision: entity._ndGlideRevision || 0 }]
     entity._ndObservationNow = scope.observationNow
     entity.emit?.('ndPositionObserved')

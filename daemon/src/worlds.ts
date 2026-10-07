@@ -1,5 +1,6 @@
 'use strict'
 const gameClock = require('./game-clock')
+const fastblocks = require('./fastblocks')
 // В каком мире тело и какому миру принадлежит запись памяти. Одно определение
 // на весь демон (NETHER.md срез 1 и 2).
 //
@@ -92,6 +93,7 @@ function refuseOtherWorld (bot, rec, what) {
 // Магма — пол, но жжёт стоящего (hot_floor): не запрещена, просто дороже.
 function tuneMovements (bot, movements) {
   const reg = bot.registry
+  const defAt = fastblocks.defReader(bot)
   // Жёсткий пол для разведки в Аду (bot._ndNetherFloor ставит fortress.scout):
   // ни один ход не кончается ниже него. Штраф 12 за клетку ниже y=40 (ниже)
   // разведку не держал: GoalNearXZ высоты не спрашивает, и дважды за день
@@ -111,6 +113,9 @@ function tuneMovements (bot, movements) {
       return out.filter(m => m.y >= floor)
     }
   }
+  // Верхний мир: вода дороже (S8b 07.10: в s8b-c 3 смерти из 9 — в воде: утопленник с трезубцем на 3.5 мин на пути через
+  // реку, утопленник и страж ночью; плыть ещё и медленнее идти). Переплыть, где обхода нет, можно. ND_OW_LIQUID=0 — как было.
+  if (worldOf(bot) === 'overworld' && process.env.ND_OW_LIQUID !== '0') movements.liquidCost = Math.max(movements.liquidCost ?? 1, 3)
   // Порошковый снег — тоже пусто по форме (minecraft-data: boundingBox 'empty'): pathfinder вёл сквозь него, тело вязло и
   // замерзало (s8-f1-11: «froze to death» на 8.9 мин по пути к воде в снежных горах).
   const avoid = ['nether_portal', 'end_portal', 'end_gateway', 'soul_fire', 'powder_snow']
@@ -132,8 +137,10 @@ function tuneMovements (bot, movements) {
   if (magma && Array.isArray(movements.exclusionAreasStep)) {
     movements.exclusionAreasStep.push(block => {
       try {
-        const under = bot.blockAt(block.position.offset(0, -1, 0))
-        return under && under.type === magma.id ? 20 : 0
+        // Номер состояния, не Block (fastblocks.defReader, S9): у описания реестра id — то же, что Block.type.
+        const p = block.position
+        const under = defAt(p.x, p.y - 1, p.z)
+        return under && (under.type ?? under.id) === magma.id ? 20 : 0
       } catch { return 0 }
     })
   }
@@ -208,8 +215,9 @@ function tuneMovements (bot, movements) {
     movements.exclusionAreasPlace.push(block => {
       try {
         if (worldOf(bot) !== 'the_nether') return 0
+        const p = block.position
         for (let d = 1; d <= 3; d++) {
-          const b = bot.blockAt(block.position.offset(0, -d, 0))
+          const b = defAt(p.x, p.y - d, p.z)
           if (!b || b.boundingBox === 'block') return 0
         }
         return 1000

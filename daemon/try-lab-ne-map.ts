@@ -105,6 +105,7 @@ function entityReader (slot) {
 
 // Все постройки вида what в 3×3 регионах вокруг at (locate из центра каждого — ответ его кольца 0), ближние первыми.
 async function locateAll (rcon, what, at) {
+  if (!require('./src/perception/knowledge').allows('structures', 'try-lab-ne-map.locateAll')) return [] // S10: /locate — от ssg
   const out = []
   for (let i = -1; i <= 1; i++) {
     for (let j = -1; j <= 1; j++) {
@@ -242,6 +243,8 @@ async function fortressOf (rcon, read, F, at) {
 
 // Знание карты для точки входа at: { bastions: [...], fortress, places } — places готовы для fortress mode=map.
 async function netherMap (slot, at, { bastions = 2, log = () => {} }: any = {} as Record<string, any>) {
+  // S10: карта Ада копии с золотом бастиона — «полный скан» (MAP=1 без ND_KNOWLEDGE и есть scan).
+  if (!require('./src/perception/knowledge').allows('gold', 'try-lab-ne-map.netherMap')) return { error: `знание ${require('./src/perception/knowledge').level()}: карта Ада копии не читается`, bastions: [], fortress: null, places: {} as Record<string, any> }
   const rcon = rconOf(slot)
   const read = chunkReader(slot)
   const out: Record<string, any> = { bastions: [], fortress: null, places: {} as Record<string, any> }
@@ -299,6 +302,7 @@ async function netherMap (slot, at, { bastions = 2, log = () => {} }: any = {} a
 // «лестница» — у боковой стены комнаты (отн. x 2, середина длины): шахта сверху попадает в комнату мимо лавы под
 // порталом (отн. x 4..6, z 9..11, y 1 — StrongholdPieces.PortalRoom).
 async function strongholdMap (slot, at) {
+  if (!require('./src/perception/knowledge').allows('structures', 'try-lab-ne-map.strongholdMap')) return { error: `знание ${require('./src/perception/knowledge').level()}: крепость по /locate не читается` }
   const rcon = rconOf(slot)
   const r = await rcon(`execute in minecraft:overworld positioned ${at.x} 70 ${at.z} run locate structure minecraft:stronghold`)
   const m = /\[(-?\d+), [^,]+, (-?\d+)\]/.exec(r)
@@ -343,6 +347,7 @@ async function strongholdMap (slot, at) {
 // регионов копии мира, y y1..y2. Чанки — forceload (генерация до FULL), save-all flush, пока каждый не станет full
 // (до waitS с); не догрузившиеся — UNKNOWN. Итог — Grid и сводка; save — в memoryDir тела (nether-grid.bin/json).
 async function netherGrid (slot, rects, { y1 = 8, y2 = 122, waitS = 150, log = () => {} }: any = {} as Record<string, any>) {
+  if (!require('./src/perception/knowledge').allows('grid', 'try-lab-ne-map.netherGrid')) throw new Error(`знание ${require('./src/perception/knowledge').level()}: сетка Ада копии не читается`)
   const NG = require('./src/nether-grid')
   const rcon = rconOf(slot)
   const read = chunkReader(slot)

@@ -92,3 +92,16 @@ test('ND_END_SEAM=0 preserves legacy collection selection', () => {
   assert.equal(c.needed('endkit'), false)
 })
 
+
+// S5d (07.10): сытость 17/18, еда есть, а укус оборвала тактика — вход в Энд с отметкой риска, а не БЛОКЕР (s5d-N-5).
+test('hunger one point short with food in the pack is a priced risk, not an End blocker', async () => {
+  const state = ready(); state.food = 17
+  const c = load(state, (method, p) => {
+    if (method === 'stronghold' && p.mode === 'fill') { state.dimension = 'the_end'; return { entered: true } }
+    return method === 'dragon' ? { dragon: { won: true } } : {} as Record<string, any>
+  })
+  c.known.endPortal = { x: 0, y: 60, z: 0 }
+  await c.run('dragon')
+  assert.equal(c.calls.filter(x => x.method === 'eat').length >= 2, true, 'еда — несколько заходов')
+  assert.equal(c.calls.some(x => x.method === 'stronghold' && x.params.mode === 'fill'), true)
+})

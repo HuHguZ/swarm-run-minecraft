@@ -170,6 +170,17 @@ function inSight (bot, e) {
   return looks(bot, eye, e.position.offset(0, h * 0.5, 0)) || looks(bot, eye, e.position.offset(0, h * 0.9, 0))
 }
 
+// Здоровье моба из метаданных (не игрока): null, если не прислано.
+function healthOf (bot, e) {
+  if (!e || e.username || e.type === 'player') return null
+  try {
+    const keys = bot.registry.entitiesByName[e.name].metadataKeys
+    const i = keys ? keys.indexOf('health') : -1
+    const h = e.metadata?.[i >= 0 ? i : 9]
+    return typeof h === 'number' ? h : null
+  } catch { return null }
+}
+
 // Умирает: здоровье в метаданных 0 (анимация смерти длится около секунды).
 function dying (bot, e) {
   try {
@@ -213,7 +224,10 @@ function sizeUp (bot, e, mine) {
   }
   const d = e.position.distanceTo(bot.entity.position)
   const weapon = bestAgainst(bot, armor, g.tough)
-  const toKill = base.hp / Math.max(0.1, weapon.dps)
+  // S4d: a mob's health is in its synced metadata (allowed for mobs, never for a player - AGENTS.md); half a zombie left is
+  // half a fight (natives s4d-ab3: the trade ended at 12 hp against a zombie two blows from death, and the run fell off).
+  const now = process.env.ND_S4D !== '0' ? healthOf(bot, e) : null
+  const toKill = (now !== null && now > 0 && now < base.hp ? now : base.hp) / Math.max(0.1, weapon.dps)
   // Подход: 4.3 бл/с шагом, минус дальность удара.
   const approach = Math.max(0, d - 3) / 4.3
   const theirHit = afterArmor(dmg, mine.armor, mine.tough)

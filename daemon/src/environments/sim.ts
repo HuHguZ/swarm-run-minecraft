@@ -99,7 +99,8 @@ export class SimEnvironment implements Environment {
     if (signal.aborted) return { outcome: 'INTERRUPTED', reason: String(signal.reason), events: [] }
     const strategy = command.strategy ? this.registry.get(command.strategy) : this.registry.all().find(s => s.skill === command.skill && s.preconditions(this.state))
     if (!strategy || !strategy.preconditions(this.state)) return { outcome: 'FAILURE', reason: 'preconditions', events: [] }
-    const aliases: Record<string, string> = { VillageIron: 'village', ShipwreckIron: 'ship', TreasureIron: 'treasure', LavaPoolPortal: 'castSky', RuinedPortal: 'ruin',
+    // Обе стратегии портала исполняют этап cast (как core/cost-model.ts, S8b/S8c 07.10): «ruin» — лишь сундук шага маршрута.
+    const aliases: Record<string, string> = { VillageIron: 'village', ShipwreckIron: 'ship', TreasureIron: 'treasure', LavaPoolPortal: 'cast', RuinedPortal: 'cast',
       AcquireWood: 'wood', AcquireStoneTools: 'stone', MineIron: 'iron', BastionBarter: 'bastion' }
     const legacy = this.models.get(strategy.id) ?? this.models.get(strategy.skill) ?? this.models.get(aliases[strategy.id] ?? '')
     const model = attemptModel(strategy, this.state, this.costs, legacy)
