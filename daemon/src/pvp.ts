@@ -18,7 +18,7 @@ const tools = require('./tools')
 const pick = require('./pick')
 const hazards = require('./hazards')
 const edges = require('./edges')
-const { raySees } = require('./perception')
+const { raySees, thundering } = require('./perception')
 const assess = require('./assess')
 const arrows = require('./arrows')
 const tempo = require('./tempo')
@@ -299,6 +299,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let prof = profileOf(entity)
   const kills = []
   let backOffUntil = 0
+  let splashAt = -1e9
   let fleeingSwell = false
   let swellPlan = null
   let swellPlanAt = 0
@@ -339,14 +340,106 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let calc = co.trackFoe(bot, entity, { honest: true })
   const foeEst = () => calc.hp.snapshot()
   const foeHpDecide = (e = entity) => co.isPlayer(e) ? (e === calc.entity ? foeEst().mean : 20) : healthOf(bot, e)
+  // Граф боя (S7d, pvp/fight-graph): каждые 5 тиков — план калькулятора + длинные приёмы → решение и разрешения веткам.
+  // ND_FIGHT_GRAPH=0 — прежний порядок веток (сравнение на снимках). Комбо — цепочки приёмов перед его потерей хп.
+  const fg = require('./pvp/fight-graph')
+  const GRAPH = process.env.ND_FIGHT_GRAPH !== '0'
+  const combo = fg.comboLog(() => gameClock.now())
+  const blk = require('./pvp/block-log').install(bot)
+  let gp = null
+  const noteGate = (kind) => {
+    st.calc = st.calc || { plans: 0, kinds: {} }
+    st.calc.gated = st.calc.gated || {}
+    st.calc.gated[kind] = (st.calc.gated[kind] || 0) + 1
+  }
+  const gate = (kind) => {
+    if (!GRAPH || !gp) return true
+    if (gp.allow(kind)) return true
+    noteGate(kind)
+    return false
+  }
+  // Небо над ним для молнии «Громовержца» (channeling.json: can_see_sky у жертвы) — честно: крыша над ним известна,
+  // только если я её вижу (pick.blockSeen); невидимый сверху блок — неизвестность, человек считал бы небо открытым.
+  // Стекло и барьер свет неба пропускают (над ареной фермы барьер) — не крыша.
+  const skyOver = (e) => {
+    try {
+      const top = e.position.floored().offset(0, 2, 0)
+      for (let k = 0; k < 40; k++) {
+        const c = top.offset(0, k, 0)
+        const b = bot.blockAt(c, false)
+        if (!b) return true
+        if (b.boundingBox !== 'block' || /glass|barrier|ice/.test(b.name)) continue
+        return !pick.blockSeen(bot, c)
+      }
+    } catch {}
+    return true
+  }
+  // Навес рядом: клетка, где стоять (опора, 2 воздуха), а над головой в 1–5 бл. — непрозрачный блок, который я вижу.
+  const shelterNear = (R = 6) => {
+    const me0 = bot.entity.position.floored()
+    let best = null
+    for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) for (const dy of [0, -1, 1]) {
+      const c = me0.offset(dx, dy, dz)
+      const dd = Math.hypot(dx, dz)
+      if (dd > R || (best && dd >= best.d)) continue
+      const fl = bot.blockAt(c.offset(0, -1, 0), false); const a0 = bot.blockAt(c, false); const a1 = bot.blockAt(c.offset(0, 1, 0), false)
+      if (!fl || fl.boundingBox !== 'block' || !a0 || a0.boundingBox !== 'empty' || !a1 || a1.boundingBox !== 'empty' || /lava|fire|cobweb|water/.test(a0.name + a1.name)) continue
+      let roof = null
+      for (let k = 2; k <= 6 && !roof; k++) { const b = bot.blockAt(c.offset(0, k, 0), false); if (b && b.boundingBox === 'block' && !/glass|barrier|ice/.test(b.name)) roof = c.offset(0, k, 0) }
+      if (!roof || !pick.blockSeen(bot, roof)) continue
+      best = { x: c.x, y: c.y, z: c.z, d: dd }
+    }
+    return best
+  }
+  // Трасса боя для разбора (ND_TRACE_PVP): время, кто, что — в лог демона.
+  const TRACE = !!process.env.ND_TRACE_PVP
+  let myHpT = null
+  const trace = (what) => { try { console.log(`[trace] ${new Date().toISOString().slice(11, 19)} ${bot.username} +${((gameClock.now() - traceT0) / 1000).toFixed(1)}s ${what}`) } catch {} }
+  // Точка прострела: клетка в 3–6 бл. по горизонтали от его колонны, где стоять (опора, 2 воздуха) и откуда луч
+  // от глаз до его груди свободен — ближайшая ко мне.
+  let losGoal = null
+  let foeSeenPos = null
+  const losSpot = () => {
+    try {
+      const me0 = bot.entity.position
+      const ep = foeSeenPos
+      if (!ep) return null
+      const chest = ep.offset(0, (entity.height || 1.8) * 0.6, 0)
+      let best = null
+      for (let dx = -6; dx <= 6; dx++) for (let dz = -6; dz <= 6; dz++) {
+        const hd = Math.hypot(dx, dz)
+        if (hd < 3 || hd > 6.2) continue
+        for (const dy0 of [0, 1, -1]) {
+          const c = new Vec3(Math.floor(ep.x) + dx, Math.floor(me0.y) + dy0, Math.floor(ep.z) + dz)
+          const fl = bot.blockAt(c.offset(0, -1, 0), false); const a0 = bot.blockAt(c, false); const a1 = bot.blockAt(c.offset(0, 1, 0), false)
+          if (!fl || fl.boundingBox !== 'block' || !a0 || a0.boundingBox !== 'empty' || !a1 || a1.boundingBox !== 'empty' || /lava|fire|cobweb/.test(a0.name + a1.name)) continue
+          if (AR && !onField(c.offset(0.5, 0, 0.5))) continue
+          if (!raySees(bot, c.offset(0.5, EYE, 0.5), chest)) continue
+          const md = Math.hypot(c.x + 0.5 - me0.x, c.z + 0.5 - me0.z)
+          if (!best || md < best.md) best = { x: c.x, y: c.y, z: c.z, md }
+          break
+        }
+      }
+      return best
+    } catch { return null }
+  }
   let lastTrick = null
+  let shieldHitAt = -1e9
   let foeHp = null
   const onTickDmg = () => {
     const h = healthOf(bot, entity)
     if (typeof h !== 'number') return
     if (foeHp != null && h < foeHp - 0.05) {
+      if (st.shield && gameClock.now() - shieldHitAt < 600) st.shield.through = Math.round((st.shield.through + foeHp - h) * 10) / 10
       const k = lastTrick && gameClock.now() - lastTrick.at <= 1500 ? lastTrick.what : 'прочее'
       st.trickDmg[k] = Math.round(((st.trickDmg[k] || 0) + foeHp - h) * 10) / 10
+      combo.dealt(foeHp - h)
+      if (TRACE) trace(`ему −${Math.round((foeHp - h) * 10) / 10} (у него ${Math.round(h)}; телеметрия)`)
+    }
+    if (TRACE) {
+      const mh = (bot.health ?? 0)
+      if (myHpT != null && mh < myHpT - 0.05) trace(`мне −${Math.round((myHpT - mh) * 10) / 10} (у меня ${Math.round(mh)})`)
+      myHpT = mh
     }
     foeHp = h
   }
@@ -354,10 +447,14 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const used = (what) => {
     st.tricks[what] = (st.tricks[what] || 0) + 1
     lastTrick = { what, at: gameClock.now() }
+    combo.note(what)
     if (process.env.ND_TRACE_PVP) {
       try {
         const m = bot.entity.position; const h = entity && entity.position
-        console.log(`[trace] ${bot.username} +${((gameClock.now() - traceT0) / 1000).toFixed(1)}s ${what} | я ${m.x.toFixed(1)},${m.y.toFixed(1)},${m.z.toFixed(1)} хп ${Math.round(bot.health ?? 0)}${h ? ` | он ${h.x.toFixed(1)},${h.y.toFixed(1)},${h.z.toFixed(1)} d=${m.distanceTo(h).toFixed(1)}` : ''}`)
+        // Оценка его хп (решения) и точное (только телеметрия — для разбора боя, не для решений).
+        let est = ''
+        try { const e = foeEst(); est = ` оценка ${Math.round(e.lo)}–${Math.round(e.hi)} (точно ${Math.round(healthOf(bot, entity) ?? -1)})` } catch {}
+        console.log(`[trace] ${new Date().toISOString().slice(11, 19)} ${bot.username} +${((gameClock.now() - traceT0) / 1000).toFixed(1)}s ${what} | я ${m.x.toFixed(1)},${m.y.toFixed(1)},${m.z.toFixed(1)} хп ${Math.round(bot.health ?? 0)}${h ? ` | он ${h.x.toFixed(1)},${h.y.toFixed(1)},${h.z.toFixed(1)} d=${m.distanceTo(h).toFixed(1)}${est}` : ''}`)
       } catch {}
     }
   }
@@ -749,8 +846,14 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     mv.allowParkour = mvWas.parkour; mv.maxDropDown = mvWas.drop
     if (digWas != null) mv.digCost = digWas
     if (nbWas) mv.getNeighbors = nbWas
+    if (floorGuard) { const i = mv.exclusionAreasBreak.indexOf(floorGuard); if (i >= 0) mv.exclusionAreasBreak.splice(i, 1) }
   }
   const AR = arena && Number.isFinite(arena.y) && Number.isFinite(arena.r) ? arena : null
+  // Путь к нему не копает пол поля (S7d, блоки в бою: s7d-b «булава против щита» — 27 попыток копать блок под своими
+  // ногами, 0 удачных): дыра в полу арены в небе — падение в пустоту; pathfinder копает, когда цель ниже. Пол и ниже —
+  // цена 100 (= нельзя для pathfinder), выше пола (стенки рельефа, его коробка) — как было.
+  const floorGuard = AR && mv && Array.isArray(mv.exclusionAreasBreak) ? (b) => (b && b.position && b.position.y <= AR.y - 1 ? 100 : 0) : null
+  if (floorGuard) mv.exclusionAreasBreak.push(floorGuard)
   const onField = (p) => !!AR && !!p && p.y >= AR.y - 1.5 && Math.abs(p.x - AR.x) <= AR.r + 0.5 && Math.abs(p.z - AR.z) <= AR.r + 0.5
   const nbWas = mv && AR && typeof mv.getNeighbors === 'function' ? mv.getNeighbors : null
   if (nbWas) {
@@ -940,6 +1043,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     mc.close()
     sky.close()
     calc.stop()
+    blk.close()
     pearlResponse.close()
     bm.close()
     cx.close()
@@ -952,6 +1056,13 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     const tricks = Object.keys(st.tricks).length ? st.tricks : undefined
     const ts = tt.stats
     { const gapEnd = gameClock.now() - quiet.at; if (gapEnd >= 10000) { quiet.gaps10++; quiet.total10 += gapEnd } if (gapEnd > quiet.longest) quiet.longest = gapEnd }
+    // Отчёт — и в память демона (S7d): арена забирает его status { lastDuel }, если ответ fight опоздал или пуст
+    // (s7d-base: у 2 из 5 раундов «элитр» пустые ROUND обеих сторон — стоп арены обгонял отчёт).
+    const rep = buildReport(out, tricks, human, ts)
+    try { bot._ndLastDuel = { at: gameClock.wall.now(), foe: label, detail: rep } } catch {}
+    return rep
+  }
+  function buildReport (out, tricks, human, ts) {
     return {
       pvp: prof.player || undefined,
       lastStand: lastStand || undefined,
@@ -991,8 +1102,14 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       crits: st.crits,
       sprintHits: st.sprintHits,
       axeOnShield: st.axeOnShield || undefined,
-      hops: st.hops ? { tries: st.hops, ok: st.hopOk || 0, why: st.hopWhy } : undefined,
-      calc: st.calc ? { plans: st.calc.plans, kinds: st.calc.kinds, last: st.calc.last, err: st.calcErr } : undefined,
+      hops: st.hops ? { tries: st.hops, ok: st.hopOk || 0, eff: st.hopEff || 0, why: st.hopWhy } : undefined,
+      calc: st.calc ? { plans: st.calc.plans, kinds: st.calc.kinds, picks: st.calc.picks, gated: st.calc.gated, weapons: st.calc.weapons, last: st.calc.last, err: st.calcErr } : undefined,
+      combos: combo.report(),
+      vsShield: st.shield,
+      storm: st.storm,
+      breakUnder: st.breakUnder,
+      blockLog: blk.report(),
+      util: util.stats && (util.stats.trident || util.stats.riptide || util.stats.anvils || util.stats.boxes || util.stats.lava) ? { trident: util.stats.trident, tridentHit: util.stats.tridentHit, bolts: util.stats.bolts, riptide: util.stats.riptide, anvils: util.stats.anvils, boxes: util.stats.boxes, lava: util.stats.lava } : undefined,
       xbow: st.xbow && Object.keys(st.xbow).length ? st.xbow : undefined,
       rod: util.stats && (util.stats.rod || util.stats.hookedOnMe || util.stats.pulledMe) ? { casts: util.stats.rod, hooked: util.stats.rodHooked, hookedOnMe: util.stats.hookedOnMe, counter: util.stats.rodCounter, pulledMe: util.stats.pulledMe } : undefined,
       mace: mc.report(),
@@ -1023,6 +1140,8 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const retarget = (e) => {
     if (!e || e === bot.entity || (bot.entity && e.id === bot.entity.id)) return
     entity = e
+    foeSeenPos = null
+    st.bowProg = []
     foeHp = null
     calc.stop(); calc = co.trackFoe(bot, entity, { honest: true })
     label = entity.username || entity.name
@@ -1380,9 +1499,12 @@ const pvpSkills = {
       const eatSafe = tempo.ON ? tt.safe(tempo.consumeMs('golden_apple')).ok : theirR > 6
       const eqS = entity.equipment || []
       const hisShield = (!!(eqS[1] && eqS[1].name === 'shield') || !!(eqS[0] && eqS[0].name === 'shield')) && !(foe.shieldOff(entity) > 1500)
-      const sp = sky.decide({ hp, healAt, heal: !!airHeal(), eatSafe, d, dy, foeGrounded: foeGrounded(), hisShield })
+      const sp0 = sky.decide({ hp, healAt, heal: !!airHeal(), eatSafe, d, dy, foeGrounded: foeGrounded(), hisShield })
+      // Взлёт ради тарана/пике — только если граф боя не нашёл на земле приёма заметно лучше (в воздухе — не мешаем).
+      const sp = sp0 && /^(lance|dive)$/.test(sp0.kind) && !bot.entity.elytraFlying && !gate(sp0.kind) ? null : sp0
       if (sp) {
         rest('sky', 2000)
+        const crash0 = (bot._ndElytra?.crashes || []).length
         pathTo(false); pathing = false
         clear()
         if (guard) await guard.raise(false)
@@ -1394,6 +1516,8 @@ const pvpSkills = {
         if (res && res.note) used(res.note)
         if (res && res.hit) { st.swings++; lastSwing = gameClock.now() }
         if (res && res.ate) for (const a of res.ate) st.healed.push(a + ' (в воздухе)')
+        // Опыт длинного приёма — в цену графа (касание/удар, удар о стену за этот полёт).
+        if (/^(lance|dive)$/.test(sp.kind)) fg.noteExperience(bot._ndFightXp || (bot._ndFightXp = {}), sp.kind, { hit: !!(res && res.hit), crash: (bot._ndElytra?.crashes || []).length > crash0 })
         nextReady = Math.max(nextReady, gameClock.now() + cooldownMs(bot.heldItem))
         await holdWeapon()
         if (guard) await guard.wear()
@@ -1414,24 +1538,60 @@ const pvpSkills = {
     const their = usingItem(bot, entity)
     const blocking = their === 'shield'
     const theyEat = their && EDIBLE.test(their)
-    const theyBow = their === 'bow' || their === 'crossbow'
+    // Натянутый трезубец — тот же стрелок (бросок через ≥ 10 тиков натяжения): щит, рывок на занятого (S7d, пункт I).
+    const theyBow = their === 'bow' || their === 'crossbow' || their === 'trident'
     const theirHp = foeHpDecide(entity)
-    // Боевой калькулятор (kill-planner): раз в 2 с — лучший план на 3 действия и P(убить) в отчёт приёмов («бот
-    // считает»). Пока советом: исполнители приёмов — прежние ветки (врезка по плану — combat-calculator.md §5).
+    // Граф боя (S7d): раз в 5 тиков — план калькулятора (kill-planner: удар/крит/топор/копьё/булава/арбалет/лук/удочка/
+    // трезубец/кристалл/якорь) и длинные приёмы (таран, пике) → лучший по чистому урону в секунду; ветки ниже
+    // исполняют приём, только если граф его не отверг (gate). Ближнее оружие — по урону в секунду против его брони.
     if (prof.player && ready('calcPlan')) {
-      rest('calcPlan', 2000)
+      rest('calcPlan', 5 * TICK_MS)
       try {
-        const cp = require('./pvp/kill-planner').planAttack(co.observe(bot, entity, { tracker: calc, since: Math.round((now - lastSwing) / TICK_MS) }), { depth: 3 })
+        const obs = co.observe(bot, entity, { tracker: calc, since: Math.round((now - lastSwing) / TICK_MS), shieldOffTicks: Math.round((foe.shieldOff(entity) || 0) / TICK_MS) })
+        obs.storm = thundering(bot)
+        obs.foeSky = obs.storm ? skyOver(entity) : false
+        // Булава с падения: взлёт зарядом ветра — подъём и спуск ~28 тиков, высота по потолку (mace.smashPlan).
+        try { const smp = findItem(bot, i => i.name === 'mace') ? mace.smashPlan(bot, entity) : null; if (smp) obs.smash = { h: smp.h, ticks: 28 } } catch {}
+        const cp = require('./pvp/kill-planner').planAttack(obs, { depth: 3 })
+        const opts = []
+        if (GRAPH && sky.ON !== false) {
+          const sp0 = spear.spearOf(bot)
+          if (sp0 && require('./combat/aerial-lance').lancePlan(bot, entity, { d, hp, hisShield: obs.foe.blocking })) opts.push(fg.lanceOption(obs, sp0.item.name, bot._ndFightXp || (bot._ndFightXp = {})))
+          const dv = findItem(bot, i => i.name === 'mace') && findItem(bot, i => i.name === 'elytra') ? 12 : 0
+          if (dv) opts.push(fg.diveOption(obs, dv, bot._ndFightXp || (bot._ndFightXp = {})))
+        }
+        gp = fg.decide(obs, cp, opts)
         st.calc = st.calc || { plans: 0, kinds: {} }
         st.calc.plans++
         if (cp && cp.action) {
           st.calc.kinds[cp.action.kind] = (st.calc.kinds[cp.action.kind] || 0) + 1
-          st.calc.last = { why: cp.why, pKill: cp.pKill != null ? Math.round(cp.pKill * 100) / 100 : null, hp: cp.hp ? [Math.round(cp.hp.lo), Math.round(cp.hp.hi)] : null }
-          if (process.env.ND_TRACE_PVP) used('расчёт: ' + String(cp.why).replace(/\d+(\.\d+)?/g, '#'))
+          st.calc.last = { why: cp.why, pKill: cp.pKill != null ? Math.round(cp.pKill * 100) / 100 : null, hp: cp.hp ? [Math.round(cp.hp.lo), Math.round(cp.hp.hi)] : null, graph: gp.why }
+        }
+        if (gp.pick) { st.calc.picks = st.calc.picks || {}; st.calc.picks[gp.pick] = (st.calc.picks[gp.pick] || 0) + 1 }
+        if (GRAPH) {
+          const mc0 = fg.meleeChoice(obs)
+          // Щит: топор — ударом-свапом в тик удара (melee.FAST_AXE, заряд меча не теряется), не сменой в руке.
+          const want = mc0 && !mc0.shield ? mc0.item : null
+          if (want && want !== chosenWeapon) {
+            chosenWeapon = want
+            st.calc.weapons = st.calc.weapons || {}
+            st.calc.weapons[want] = (st.calc.weapons[want] || 0) + 1
+            // Сменить в руке, только если сейчас в руке меч/топор/пусто (копьё, булава, удочка — у своих веток).
+            const hn = bot.heldItem ? bot.heldItem.name : null
+            if (!hn || /_(sword|axe)$/.test(hn)) await holdWeapon()
+          }
+        }
+        // След решения — в трассу боя (не в used: метка не должна перехватывать урон приёма в trickDmg).
+        if (process.env.ND_TRACE_PVP && gp.pick && gp.pick !== st.lastPick) {
+          st.lastPick = gp.pick
+          try { console.log(`[trace] ${new Date().toISOString().slice(11, 19)} ${bot.username} +${((gameClock.now() - traceT0) / 1000).toFixed(1)}s граф: ${gp.why} | ${gp.scores.slice(0, 3).map(x => x.kind + ' ' + x.value).join(', ')}`) } catch {}
         }
       } catch (err) { st.calcErr = String(err && err.message || err).slice(0, 120) }
     }
     const seesBody = raySees(bot, eye, entity.position.offset(0, (entity.height || 1.8) * 0.55, 0))
+    // Где я его видел в последний раз (S7d, ревью Codex: честность — позиция из пакетов сущности идёт и сквозь стену):
+    // точка прострела и «столб к его столбу» считают от увиденного, а не от свежего пакета.
+    if (seesBody) foeSeenPos = entity.position.clone()
     // Честный прицел (pick.js, 2026-09-26: «боты через один блок пробивают»).
     const sight = r <= HIT_REACH + 0.3 ? pick.aim(bot, entity, { eye: pick.eyeOf(bot), range: HIT_REACH }) : null
     const inSight = !!(sight && sight.point)
@@ -1653,7 +1813,11 @@ const pvpSkills = {
     }
     if (prof.player && blockName(bot, me.floored()) !== 'cobweb' && !perch && !fort && ready('crystal') && cx.engaged()) {
       rest('crystal', 60)
-      const ca = cx.plan({ vel: track.vel(), press: pressing })
+      const ca0 = cx.plan({ vel: track.vel(), press: pressing })
+      // Кристалл/якорь — расходник: калькулятор нашёл дешёвое добивание (удар/выстрел, худший исход попадания > верха
+      // оценки его хп) — взрывчатку не тратим (kill-planner: «кулак добивает — кристалл не тратим»).
+      const cheapKill = GRAPH && gp && gp.plan && /^добиваю/.test(gp.plan.why || '') && !/^(crystal|anchor)$/.test(gp.plan.action.kind)
+      const ca = ca0 && /^(place|place-hit|place-shoot|anchor|obby)$/.test(ca0.kind) && cheapKill ? (noteGate('кристалл: добиваю дешевле'), null) : ca0
       const react = !ca || !/^(defuse|dodge|shield|cover|wall|anchorPop)$/.test(ca.kind) || after('crystalSeen', true, style.reactMs)
       if (!ca) delete noticed.crystalSeen
       if (ca && react) {
@@ -1663,7 +1827,10 @@ const pvpSkills = {
         aim = 'free'
         const beforeC = heldName()
         let rc = null
-        try { rc = await cx.run(ctl, ca, { stepSafe: dir => stepSafe(bot, dir), stop: () => FIX && maceNow() }) } catch (e) { rc = { note: 'кристаллы: ' + e.message } }
+        // Учёт блоков (block-log): что ставит/ломает ветка кристаллов — по виду плана.
+        const CXT = { obby: 'обсидиан под кристалл', surround: 'обсидиан вокруг ног', wall: 'заслон от взрыва (блок между)', cover: 'укрытие от взрыва', anchor: 'якорь у его ног', place: 'кристалл', 'place-hit': 'кристалл', 'place-shoot': 'кристалл' }
+        bot._ndBlockTag = CXT[ca.kind] ? { what: CXT[ca.kind], at: gameClock.wall.now() } : null
+        try { rc = await cx.run(ctl, ca, { stepSafe: dir => stepSafe(bot, dir), stop: () => FIX && maceNow() }) } catch (e) { rc = { note: 'кристаллы: ' + e.message } } finally { bot._ndBlockTag = null }
         aim = 'target'
         clear()
         switched(beforeC)
@@ -1677,7 +1844,10 @@ const pvpSkills = {
     if (ready('dressMid') && theirR > HIT_REACH + 1 && bot.inventory.items().some(i => /_(helmet|chestplate|leggings|boots)$/.test(i.name))) {
       rest('dressMid', 4000)
       const worn = [5, 6, 7, 8].filter(s => bot.inventory.slots[s]).length
-      if (worn < 4) {
+      // Элитры на груди, а я на земле (сел после полёта, нагрудник не вернулся) — тоже переодеться (S7d, ревью Codex
+      // №2); в воздухе armor.planSwaps элитры не трогает.
+      const wingsOnGround = bot.entity.onGround && !bot.entity.elytraFlying && bot.inventory.slots[6]?.name === 'elytra'
+      if (worn < 4 || wingsOnGround) {
         try { const r = await require('./armor').equipBestArmor(session, ctl, { confirmMs: 300 }); if (r && r.equipped && r.equipped.length) used('надел броню в бою') } catch {}
       }
     }
@@ -2212,9 +2382,12 @@ const pvpSkills = {
         }
         if (pun.kind === 'harm' && harm && ready('punHarm')) {
           rest('punHarm', 1500)
-          if (await throwAt(harm, 'зелье вреда в занятого')) { await holdWeapon(); continue }
+          if (await throwAt(harm, 'зелье вреда в занятого')) { splashAt = gameClock.now(); backOffUntil = splashAt + 700; await holdWeapon(); continue }
         }
-        punRush = pun.kind === 'rush' || pun.kind === 'harm'
+        // «Вред» брошен — рывок к нему только когда бутылка разбилась (S7d: репетиция «арсенал» — бросок и сразу рывок
+        // «на занятого» в зону всплеска своего «вреда II»: «killed by … using magic»; ревью Codex по jar — всплеск
+        // задевает и бросившего, щит зелье не отражает).
+        punRush = pun.kind === 'rush' || (pun.kind === 'harm' && gameClock.now() - splashAt > 700)
         punBow = pun.kind === 'bow'
         punStep = pun.kind === 'step' && cooldownLeft < pun.left
       }
@@ -2423,7 +2596,24 @@ const pvpSkills = {
       st.dbgAt = now
       console.log('[pvp]', JSON.stringify({ t: label, d: Math.round(d * 10) / 10, dBow: Math.round(dBow * 10) / 10, dy: Math.round(dy), hp: Math.round(hp), r: Math.round(r * 10) / 10, theirR: Math.round(theirR * 10) / 10, cd: cooldownLeft, iframes: Math.max(0, targetHurtAt + 500 - now), blocking, meInWeb, pathing, held: heldName(), swings: st.swings, bow: !!bowItem, arrows: !!arrowItem, sees, range: bowRange, ready: ready('bow'), flying: !!prof.flying }))
     }
-    const bowPointless = (arrowsWeak || cx.dominant()) && !theyUp && !perch && !theirPit
+    // Стрелы не обгоняют его лечение (S7d, s7d-e-29p «только якоря»: 5 ничьих из 5 — 7 мин перестрелки на 20–47 бл.,
+    // попадание 1.6–2.5 раз в 3–5 с, а у него регенерация и 12 яблок): за последние 20 с стрельбы (≥ 4 выстрела) моя
+    // оценка его хп (середина: попадания вниз, его видимое лечение и регенерация в границах насыщения вверх) не
+    // опустилась хоть на 1 — лук не двигает бой, сближаюсь (якорь, кристалл, ближний). На исходе (верх ≤ 8) — стреляю.
+    let arrowsStall = false
+    if (prof.player && dBow > 8 && !!findItem(bot, i => /_(sword|axe)$/.test(i.name) || i.name === 'mace')) {
+      try {
+        const eB = foeEst()
+        const pr = st.bowProg || (st.bowProg = [])
+        if (!pr.length || now - pr[pr.length - 1].at > 1000) pr.push({ at: now, mean: eB.mean, shots: st.arrows || 0, apples: calc.seenApples || 0 })
+        while (pr.length > 2 && now - pr[1].at >= 20000) pr.shift()
+        const old = pr[0]
+        // Увиденные съеденные им яблоки — тоже прогресс лука (ревью Codex): стрелы заставили тратить запас.
+        if (now - old.at >= 20000 && (st.arrows || 0) - old.shots >= 4) arrowsStall = eB.hi > 8 && eB.mean > old.mean - 1 && (calc.seenApples || 0) === old.apples
+      } catch {}
+      if (arrowsStall && ready('arrowsStallNote')) { rest('arrowsStallNote', 8000); st.arrowsStall = (st.arrowsStall || 0) + 1; used('стрелы не обгоняют его лечение — сближаюсь') }
+    }
+    const bowPointless = (arrowsWeak || arrowsStall || cx.dominant()) && !theyUp && !perch && !theirPit
     if (bowItem && arrowItem && !bowPointless && dBow >= (punBow ? 5 : bowRange) && dBow < (prof.flying ? 64 : 48) && ready('bow') && sees && !punRush && now >= rushUntil && !(prof.player && ranged.crossbowFirst(bot))) {
       rest('bow', 250)
       if (guard) await guard.raise(false)
@@ -2485,7 +2675,7 @@ const pvpSkills = {
     if (prof.player && !perch && !fort && !meInWeb && ready('utility')) {
       rest('utility', 150)
       aim = 'free'
-      const ua = await util.step({ entity, d, dy, r, hp, foeHp: foeHpDecide(entity), sees: seesBody, theyUp, blocking, busy: tt.state(entity), vel: () => track.vel(), others: duo.foes().filter(e => e !== entity), ctl })
+      const ua = await util.step({ entity, d, dy, r, hp, foeHp: foeHpDecide(entity), sees: seesBody, theyUp, blocking, busy: tt.state(entity), vel: () => track.vel(), others: duo.foes().filter(e => e !== entity), ctl, allow: (k) => gate(k) })
       aim = 'target'
       if (ua) { if (ua.rush) rushUntil = gameClock.now() + 1500; await holdWeapon(); continue }
     }
@@ -2564,15 +2754,68 @@ const pvpSkills = {
 
     if (theyUp) { if (!theyUpSince) theyUpSince = now } else theyUpSince = 0
     const upLong = theyUpSince && now - theyUpSince > 6000
+    // Сломать опору под ним (S7d, пункт G): он стоит выше (столб, уступ), блок под его ногами виден, в досягаемости,
+    // ломается быстро (время копки 1.21.11 — bot.digTime лучшим инструментом) и сам я не под его ударом —
+    // сломать: он падает (с высоты > 3 — урон), теряет высоту. Иначе — дороже, чем ждать/стрелять/строить свой столб.
+    if (prof.player && dy >= 1.4 && foeGrounded() && theirR > 3.3 && !perch && !fort && !meInWeb && ready('breakUnder')) {
+      rest('breakUnder', 700)
+      try {
+        const cell = entity.position.offset(0, -0.5, 0).floored()
+        const blk = bot.blockAt(cell)
+        const eyeP = bot.entity.position.offset(0, EYE, 0)
+        const myCell = bot.entity.position.offset(0, -0.5, 0).floored()
+        const hw = (entity.width || 0.6) / 2
+        // Он на этой клетке целиком (иначе стоит ещё на соседней — ломать бесполезно).
+        const onlyThis = Math.floor(entity.position.x - hw + 0.01) === cell.x && Math.floor(entity.position.x + hw - 0.01) === cell.x &&
+          Math.floor(entity.position.z - hw + 0.01) === cell.z && Math.floor(entity.position.z + hw - 0.01) === cell.z
+        if (blk && blk.boundingBox === 'block' && blk.diggable !== false && onlyThis && !cell.equals(myCell) &&
+            eyeP.distanceTo(cell.offset(0.5, 0.5, 0.5)) <= 4.4 && pick.blockSeen(bot, cell) && !/obsidian|bedrock|barrier|crying/.test(blk.name)) {
+          const tool = (() => { try { return bot.pathfinder.bestHarvestTool(blk) } catch { return null } })()
+          if (tool && bot.heldItem?.name !== tool.name) await holdItem(tool)
+          let ms = Infinity
+          try { ms = bot.digTime(blk) } catch {}
+          if (ms <= 1500) {
+            if (pathing) { pathTo(false); pathing = false }
+            clear()
+            aim = 'free'
+            const h0 = entity.position.y
+            let ok = false
+            bot._ndBlockTag = { what: 'сломать опору под ним', at: gameClock.wall.now() }
+            try { await withTimeout(bot.dig(blk, true), ms + 600); ok = !bot.blockAt(cell) || bot.blockAt(cell).boundingBox === 'empty' } catch {}
+            bot._ndBlockTag = null
+            aim = 'target'
+            st.breakUnder = st.breakUnder || { tries: 0, ok: 0, fell: 0 }
+            st.breakUnder.tries++
+            if (ok) st.breakUnder.ok++
+            await sleep(300)
+            if (ok && entity.position.y < h0 - 0.8) st.breakUnder.fell++
+            used(ok ? `сломал опору под ним (${blk.name}, ${Math.round(ms)} мс)${entity.position.y < h0 - 0.8 ? ' — упал' : ''}` : `опору под ним не сломал (${blk.name})`)
+            await holdWeapon()
+            continue
+          } else if (tool) await holdWeapon()
+        }
+      } catch {}
+    }
     if (theyUp && prof.player && !perch && (!findItem(bot, i => i.name === 'bow') || !findItem(bot, i => /arrow$/.test(i.name)) || upLong) && ready('counterPillar')) {
       const filler = pickFiller(bot)
-      const need = Math.floor(entity.position.y - me.y) - 1
+      const fp = foeSeenPos || me
+      const need = foeSeenPos ? Math.floor(fp.y - me.y) - 1 : 0
       if (filler && need >= 2 && need <= 12 && countOf(bot, filler.name) >= need && headroom(need + 1)) {
-        if (d > 1.6) {
-          if (!pathing) { pathTo(true, new goals.GoalNear(entity.position.x, me.y, entity.position.z, 1)); pathing = true; clear() }
+        // Подойти под него — по горизонтали (S7d, s7d-p-27: d — расстояние в 3D, при нём на 8 бл. выше «d > 1.6»
+        // не кончалось никогда — путь дошёл, и бот стоял молча 95–110 с до ничьей по застою). Не подходится 3 с — иначе.
+        const hdP = Math.hypot(fp.x - me.x, fp.z - me.z)
+        if (hdP > 1.6) {
+          // Своя цель пути — всегда (путь мог идти к чужой цели — точке прострела, и стоять на ней).
+          if (!st.cpFrom || now - st.cpFrom.seen > 500) { pathTo(true, new goals.GoalNear(fp.x, me.y, fp.z, 1)); pathing = true; clear(); st.cpFrom = { at: now, hd: hdP, seen: now } }
+          st.cpFrom.seen = now
+          if (now - st.cpFrom.at > 3000) {
+            if (hdP > st.cpFrom.hd - 0.5) { rest('counterPillar', 8000); pathTo(false); pathing = false; st.cpFrom = null; used('столб к его столбу: не подойти под него'); continue }
+            st.cpFrom = { at: now, hd: hdP, seen: now }
+          }
           await sleep(TICK_MS)
           continue
         }
+        st.cpFrom = null
         rest('counterPillar', 8000)
         pathTo(false); pathing = false
         clear()
@@ -2606,22 +2849,45 @@ const pvpSkills = {
       let hop = null
       try { hop = await require('./navigation/parkour').combatHop(bot, ctl, { score, radius: 4 }) } catch (e) { hop = { ok: false, why: e.message } }
       st.hops = (st.hops || 0) + 1
-      if (hop && hop.ok) { st.hopOk = (st.hopOk || 0) + 1; used(stuckTicks >= 4 ? 'прыжок через препятствие к нему' : dy > 0.6 ? 'прыжок на его уступ' : 'прыжок к нему (путь стоял)') }
-      else { if (hop && hop.why) st.hopWhy = hop.why; rest('hop', 6000) } // s7b: 67 попыток за раунд, 1 удачная — реже после отказа
+      // Итог по делу (S7d): исполнитель S6 строг (сбитая траектория от его удара — «physics_diverged»), а в бою важно,
+      // долетел ли я до точки или стал к нему ближе на 1.5+ без падения: это «удался по делу».
+      await sleep(TICK_MS * 4)
+      const meH = bot.entity.position
+      const landed = !!(hop && hop.target && bot.entity.onGround && meH.distanceTo(hop.target) <= 1.3)
+      const closer = Math.hypot(meH.x - entity.position.x, meH.z - entity.position.z) <= d - 1.5 && meH.y >= me0.y - 1
+      if (hop && (hop.ok || landed || closer)) {
+        st.hopOk = (st.hopOk || 0) + (hop.ok ? 1 : 0)
+        st.hopEff = (st.hopEff || 0) + 1
+        used(stuckTicks >= 4 ? 'прыжок через препятствие к нему' : dy > 0.6 ? 'прыжок на его уступ' : 'прыжок к нему (путь стоял)')
+      } else { if (hop && hop.why) st.hopWhy = hop.why; rest('hop', 6000) } // s7b: 67 попыток за раунд, 1 удачная — реже после отказа
       hopD = Infinity; hopDAt = gameClock.now(); stuckTicks = 0
       continue
     }
+    // Окно перестановки кончилось, а цель — точка прострела (статичная): путь стоит на ней с pathing = true, и ветки
+    // «if (!pathing) pathTo(true)» к нему больше не идут (S7d, s7d-p-27: 95–110 с молча до ничьей). Снять — до новой
+    // перестановки (ревью Codex: иначе окно продлевается раньше очистки), и новую цель пути — с чистого листа.
+    if (losGoal && now >= repositionUntil) { losGoal = null; pathTo(false); pathing = false }
     if (!perch && !fort && r > HIT_REACH && now >= repositionUntil && ready('unstick')) {
       const wall = !seesBody && !raySees(bot, me.offset(0, 0.4, 0), entity.position.offset(0, 0.4, 0))
       if (wall || stuckTicks >= 8) {
+        pathTo(false); pathing = false
         rest('unstick', 1500)
         repositionUntil = now + 3000
         stuckTicks = 0
-        used(wall ? 'стена между нами — путь в обход или насквозь' : 'упёрся — обхожу')
+        // Он высоко над стеной/столбом (S7d: s7d-g-27 р.3 — 60 с «стена между нами» под его столбом в 7 бл., ничья
+        // по застою): путь «к нему» ведёт под столб, где луча нет. Точка в 3–6 бл. от его колонны, откуда его видно
+        // (лук, заряд ветра «со столба», удочка, свой столб рядом) — туда.
+        losGoal = null
+        if (dy > 2.2) {
+          const spot = losSpot()
+          if (spot) { losGoal = new goals.GoalBlock(spot.x, spot.y, spot.z); st.losSpots = (st.losSpots || 0) + 1 }
+        }
+        used(losGoal ? 'он высоко за стеной — отхожу туда, откуда его видно' : wall ? 'стена между нами — путь в обход или насквозь' : 'упёрся — обхожу')
       }
     }
     if (now < repositionUntil && r > HIT_REACH && !perch) {
-      if (!pathing) { pathTo(true); pathing = true; clear() }
+      if (!pathing) { pathTo(true, losGoal); pathing = true; clear() }
+      if (losGoal && seesBody) { repositionUntil = 0; losGoal = null; pathTo(false); pathing = false }
       await sleep(TICK_MS)
       continue
     }
@@ -2673,7 +2939,39 @@ const pvpSkills = {
     const bowShield = theyBow && !hisCb && (prof.player || prof.ranged) && guard?.stats?.worn && sees && r > HIT_REACH
     if (bowShield) {
       guard.raise(true)
-      if (ready('bowShieldNote')) { rest('bowShieldNote', 4000); used('щит от стрелы') }
+      if (ready('bowShieldNote')) { rest('bowShieldNote', 4000); used(their === 'trident' ? 'щит от трезубца' : 'щит от стрелы') }
+    }
+    // Гроза и у него «Громовержец» (видно в руке): молния бьёт только под открытым небом (channeling.json can_see_sky) —
+    // под навес, если он рядом (≤ 6 бл., крышу вижу), и держаться там, пока он мечет издали; сблизился — бой как всегда.
+    // Цена: под навесом бросок даёт ему 8 вместо 8 + 5 + поджог; долго без размена — нажим (pressing) выводит в бой.
+    if (prof.player && seesBody && d > 4.5 && !pressing && !meInWeb && !perch && !fort && thundering(bot)) {
+      const hisTri = [entity.equipment && entity.equipment[0], entity.equipment && entity.equipment[1]].find(it => it && it.name === 'trident' && read.enchLevel(bot, it, 'channeling') > 0)
+      if (hisTri) {
+        st.storm = st.storm || { seen: 0, shelters: 0, under: 0, noShelter: 0 }
+        if (!skyOver(bot.entity)) {
+          if (ready('stormUnder')) { rest('stormUnder', 3000); st.storm.under++; used('гроза: под навесом — молния не достанет') }
+          if (pathing) { pathTo(false); pathing = false }
+          for (const k of ['forward', 'back', 'left', 'right', 'sprint', 'jump']) set(k, false)
+          if (bowShield) guard.raise(true)
+          await sleep(TICK_MS)
+          continue
+        }
+        if (ready('stormCover')) {
+          rest('stormCover', 2500)
+          st.storm.seen++
+          const c = shelterNear(6)
+          if (c) {
+            st.storm.shelters++
+            used('гроза: у него «Громовержец» — под навес')
+            if (guard) await guard.raise(false)
+            try { bot.pathfinder.setGoal(new goals.GoalBlock(c.x, c.y, c.z)) } catch {}
+            const tS = gameClock.now()
+            while (gameClock.now() - tS < 3000 && !ctl.aborted && !selfDied && skyOver(bot.entity) && entity.position.distanceTo(bot.entity.position) > 3.5) await sleep(TICK_MS)
+            try { bot.pathfinder.setGoal(null) } catch {}
+            continue
+          } else st.storm.noShelter++
+        }
+      }
     }
     if (cbShield) {
       guard.raise(true)
@@ -2771,7 +3069,9 @@ const pvpSkills = {
       const handM = entity.equipment && entity.equipment[0] ? entity.equipment[0].name : ''
       const readyM = fsM && fsM.swungAt ? Math.max(0, fsM.swungAt + tempo.swingCooldownMs(handM) - now) : 0
       const hitSoon = (theirR <= tempo.PLAYER_REACH && readyM < 2 * TICK_MS) || theyBow || !!aimedCb || (duo.active() && duo.secondThreat())
-      const sp = hitSoon ? null : mace.smashPlan(bot, entity)
+      const sp0 = hitSoon ? null : mace.smashPlan(bot, entity)
+      // Взлёт с булавой — если граф (калькулятор: булава с падения против удара/топора/копья) его не отверг.
+      const sp = sp0 && gate('smash') ? sp0 : null
       if (hitSoon && ready('smashWaitNote') && mace.smashPlan(bot, entity)) { rest('smashWaitNote', 4000); used('булава: не взлетаю — его удар или выстрел собьёт взлёт') }
       if (sp) {
         rest('smash', 5000)
@@ -2810,6 +3110,7 @@ const pvpSkills = {
       if (bad) {
         rest('debuff', pref ? 400 : 1500)
         if (await throwAt(bad, 'зелье в него: ' + (potionOf(bad) || '?'))) {
+          splashAt = gameClock.now(); backOffUntil = splashAt + 700
           await holdWeapon()
           continue
         }
@@ -2882,6 +3183,14 @@ const pvpSkills = {
           await holdItem(spearIt.item)
         } else spearTurn = false
       }
+    }
+    // Щит поднят, а топор есть: укол и разгон копья щит гасит целиком (копьё щит не выбивает — Weapon без
+    // disable_blocking), s7d-c-30p «копья»: 389 погашенных ударов, 3 ничьих — копьё в сторону, ближе и топором (свап в
+    // тик удара в основной ветке), потом снова копьё.
+    if (spearIt && spearTurn && blocking && findItem(bot, i => /_axe$/.test(i.name)) && !(foe.shieldOff(entity) > 300)) {
+      spearTurn = false
+      if (bot.heldItem && spear.isSpear(bot.heldItem.name)) await holdWeapon()
+      if (ready('spearShieldNote')) { rest('spearShieldNote', 4000); used('щит поднят — копьё в сторону, топором') }
     }
     if (spearIt && spearTurn) {
       const sName = spearIt.item.name
@@ -3041,7 +3350,10 @@ const pvpSkills = {
         if (r > HIT_REACH - 0.15 || (push.now === 'sprint' && cooldownLeft <= 150)) forward = true
         if (push.now === 'sprint' && cooldownLeft <= 150) sprint = true
         if (ready('pushNote')) { rest('pushNote', 3000); used(push.now === 'hit' ? 'он у края — бью сразу' : 'толкаю его в яму спринт-ударом') }
-      } else if (push.stand) {
+      } else if (push.stand && !(FIX && pressing)) {
+        // Обход «встать так, чтобы яма была за ним» — пока размены идут; долго без размена (нажим) — бить, а не кружить
+        // (S7d, s7d-z-27 «булава против щита»: 4+ мин на 3.0 бл. — я «захожу, чтобы столкнуть», он «не стою спиной к
+        // яме», ничья по пределу раунда).
         pushing = true
         const px = push.stand.x - me.x
         const pz = push.stand.z - me.z
@@ -3067,7 +3379,7 @@ const pvpSkills = {
         pushing = true
         if (cooldownLeft <= 150) { forward = true; sprint = true; back = false }
         if (ready('pushNote')) { rest('pushNote', 4000); used(`толкаю его в ${hz.kind === 'лава' ? 'лаву' : hz.kind === 'паутина' ? 'паутину' : 'яму'}`) }
-      } else {
+      } else if (!(FIX && pressing)) {
         const px = entity.position.x - hx / hn * 2.4 - me.x
         const pz = entity.position.z - hzz / hn * 2.4 - me.z
         const yaw = bot.entity.yaw
@@ -3228,7 +3540,10 @@ const pvpSkills = {
 
     const edgeSpam = edgeHit === 'hit' && iframes === 0 && r <= HIT_REACH && !intoShield && inSight && cooldownLeft > 0
     if (edgeSpam && ready('edgeSpamNote')) { rest('edgeSpamNote', 3000); used('бью у края, не дожидаясь заряда') }
-    const selectWait = prof.player && race && closing > 0.1 && !pushing && theirR < 3.0 && mf.skill.counter > 0.7
+    // Хит-селект = (1) ответный удар в тик его отброса (melee.counterFn: свой спринт-удар ×0.6 гасит часть его толчка —
+    // Player.causeExtraKnockback) и (2) ожидание его удара до 3 тиков. ND_HS_WAIT=0 — без (2): по jar выигрыш даёт только
+    // отброс (1), а ожидание отдаёт ему первый удар (A/B s7d-e-28-hsb: выключенный хит-селект 7 : 3).
+    const selectWait = prof.player && race && closing > 0.1 && !pushing && theirR < 3.0 && mf.skill.counter > 0.7 && process.env.ND_HIT_SELECT !== '0' && process.env.ND_HS_WAIT !== '0'
     if (selectWait) { if (!selectSince) selectSince = now } else selectSince = 0
     const holdForSelect = selectWait && now - selectSince < 3 * mf.clock.msPerTick
     if (holdForSelect && ready('selectNote')) { rest('selectNote', 4000); used('жду его удара, чтобы ответить (hit-select)') }
@@ -3256,6 +3571,20 @@ const pvpSkills = {
           swingCrit = falling && !mf.clock.srvSprint
           const after = sprintHit ? (closing > 0.1 && theirR < 3.2 && !pushing ? 'stap' : 'wtap') : null
           mf.hit(entity, { swapTo, after, kind: hitKind, diag: { jumped: jumpedForCrit, race: race && theirR <= 2.6 } })
+          // Щит (пункт H): удар по поднятому щиту — топором (выключит) или сбоку/сзади вне его 90° (BlocksAttacks);
+          // урон, прошедший при поднятом щите, считает onTickDmg (окно 600 мс). Звено комбо — вид удара.
+          if (blocking) {
+            const sh = st.shield || (st.shield = { hits: 0, axe: 0, outside: 0, through: 0 })
+            sh.hits++
+            const axeHit = swapTo >= 0 || (swungWith && /_axe$/.test(swungWith.name))
+            if (axeHit) sh.axe++
+            const ang = require('./pvp/damage-model').shieldAngle(typeof entity.headYaw === 'number' ? entity.headYaw : (entity.yaw || 0), entity.position, bot.entity.position)
+            if (ang > 90) { sh.outside++; if (ready('flankNote')) { rest('flankNote', 3000); used('удар мимо щита: сбоку/сзади') } }
+            shieldHitAt = gameClock.now()
+            if (axeHit) used('топор по щиту')
+          }
+          combo.note(swapTo >= 0 ? 'топор' : hitKind === 'crit' ? 'крит' : hitKind === 'sprint' ? 'спринт-удар' : 'удар')
+          if (TRACE) trace(`удар: ${swapTo >= 0 ? 'топором (свап)' : hitKind === 'crit' ? 'в прыжке за критом' : hitKind === 'sprint' ? 'спринт-удар' : 'обычный'}${after ? ' + ' + after : ''}${blocking ? ' — по щиту' : ''} (d=${r.toFixed(1)})`)
           st.swings++
           punches = 0
           rushUntil = 0

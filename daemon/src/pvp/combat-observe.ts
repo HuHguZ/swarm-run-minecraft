@@ -97,12 +97,16 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
   const T: any = {
     entity, hp, honestHp: player && honest, tick: 0,
     iframe: null, pending: [], using: null, prev: null, vel: { x: 0, y: 0, z: 0 },
-    foeAir: null, foeFall: 0, lastLanding: null, myAir: null, myFall: 0, pops: 0, splashes: new Map()
+    foeAir: null, foeFall: 0, lastLanding: null, myAir: null, myFall: 0, pops: 0, splashes: new Map(), seenApples: 0
   }
   const near = (p, d) => entity.position && p && Math.hypot(p.x - entity.position.x, p.y - entity.position.y, p.z - entity.position.z) <= d
 
+  // Только еда и зелья (ревью Codex: опущенный щит/лук после ≥ 30 тиков тоже «кончил использовать» — шёл в «съел»).
   const consumed = (u) => {
-    if (/potion$/.test(u.name)) { const n = pvp().potionOf(u.item); if (n) hp.drink(n) } else hp.eat(u.name)
+    if (/potion$/.test(u.name)) { const n = pvp().potionOf(u.item); if (n) hp.drink(n) } else if (bot.registry?.foodsByName?.[u.name]) {
+      hp.eat(u.name)
+      if (/^(enchanted_)?golden_apple$/.test(u.name)) T.seenApples++
+    }
   }
   const onTick = () => {
     T.tick++
@@ -128,19 +132,61 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
       return false
     })
     // Еда и питьё: использование еды/зелья ≥ 30 тиков (Consumable 1.6 с = 32 т) и отпустил — съел.
+    // Честно (S7d, ревью Codex): пакеты «использует предмет» приходят и сквозь стену — еда/питьё засчитываются, только
+    // если я видел и начало, и конец (пропал из виду посреди — не подтверждено; человек видит еду, только видя его).
+    if (T.honestHp && T.using) {
+      let vis = false
+      try { vis = assess().inSight(bot, entity) } catch {}
+      if (!vis) T.using = null
+    }
     const u = usingOf(bot, entity)
-    if (u && (!T.using || T.using.name !== u.name)) T.using = { ...u, since: T.tick }
+    if (u && (!T.using || T.using.name !== u.name)) {
+      let vis = !T.honestHp
+      try { vis = vis || assess().inSight(bot, entity) } catch {}
+      T.using = vis ? { ...u, since: T.tick } : null
+    }
     if (!u && T.using) {
-      if (T.tick - T.using.since >= 30 && T.honestHp) consumed(T.using)
+      if (T.tick - T.using.since >= 30) consumed(T.using)
       T.using = null
     }
+  }
+  // Разброс урона моего попадания: ближний — заряд 0.9…1 без крита и с критом; лук/арбалет — стрела.
+  const guessRange = (type = 'player_attack') => {
+    try {
+      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, (entity.equipment || [])[i])))
+      // Не обычный удар рукой: таран/разгон копья (spear, до ~30 до брони), булава с падения (mace_smash, до ~45),
+      // ракета/взрыв, трезубец — широкий разброс по своему типу (броня и чары — его, видимые).
+      const wide = (rawMax, kind) => { const hi = dm.afterDefense(rawMax, kind, def); return { min: Math.min(1, hi), max: hi, mean: hi / 2, raw: rawMax } }
+      if (type === 'spear') return wide(33, 'melee')
+      if (type === 'mace_smash') return wide(45, 'melee')
+      if (type === 'trident') return wide(8, 'projectile')
+      if (type === 'arrow') return wide(11, 'projectile')
+      if (/firework|explosion/.test(type)) return wide(20, 'explosion')
+      const held = bot.heldItem ? itemObs(bot, bot.heldItem) : null
+      const name = held && held.name
+      if (name === 'bow' || name === 'crossbow') {
+        const outs = dm.arrowOutcomes({ speed: name === 'bow' ? 3 : dm.CROSSBOW_ARROW_SPEED, power: (held.ench && held.ench.power) || 0, crit: true })
+        const ds = outs.map(o => dm.afterDefense(o.raw, 'projectile', def))
+        return { min: Math.min(...ds) * 0.5, max: Math.max(...ds), mean: ds.reduce((a, b) => a + b, 0) / ds.length, raw: Math.max(...outs.map(o => o.raw)) }
+      }
+      const sharp = (held && held.ench && held.ench.sharpness) || 0
+      const w = name && dm.isMeleeWeapon(name) ? name : null
+      // Низ — удар не на полном заряде (ответный в тик его отброса, спешный): заряд 0.6.
+      const lo = dm.afterDefense(dm.meleeRaw({ weapon: w, sharpness: sharp, charge: 0.6 }), 'melee', def)
+      const hiRaw = dm.meleeRaw({ weapon: w, sharpness: sharp, charge: 1, crit: true })
+      const hi = dm.afterDefense(hiRaw, 'melee', def)
+      return { min: Math.max(0.5, lo), max: Math.max(hi, lo + 0.5), mean: (lo + hi) / 2, raw: hiRaw }
+    } catch { return { min: 0.5, max: 12, mean: 4, raw: 12 } }
   }
   const onDamage = (pk) => {
     if (!pk || pk.entityId !== entity.id) return
     const cause = pk.sourceCauseId > 0 ? pk.sourceCauseId - 1 : null
     if (bot.entity && cause === bot.entity.id) {
       const p = T.pending.shift()
-      const r = p ? p.range : { min: 0.5, max: 12, mean: 4, raw: 12 }
+      // Без заявки (удар боя мимо noteAttack) — разброс по модели урона моего предмета в руке и его видимой броне
+      // (S7d: прежний запасной 0.5–12 на каждое попадание за 3–4 удара раздувал оценку до «0–20» — решения по хп
+      // противника слепли: «оценка 0–20, точно 15» в трассах).
+      const r = p ? p.range : guessRange(gamedata().damageTypeName(pk.sourceTypeId) || '')
       T.iframe = { raw: r.raw ?? r.max, at: T.tick }
       if (T.honestHp) hp.hit(r)
       return
@@ -226,17 +272,24 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   const dh = Math.hypot(dx, dz) || 1
   const myItems = bot.inventory.items().map(it => itemObs(bot, it))
   const myAbs = read.absorptionOf(bot, me)
+  // Его снаряжение — то, что видно (S7d, честное восприятие): пакеты снаряжения приходят и сквозь стену; пока его не
+  // видно — последнее увиденное (человек помнит, с чем тот был), а не свежее из пакета.
+  const los = (() => { try { return assess().inSight(bot, entity) } catch { return true } })()
+  const gearNow = () => ({ armor: [2, 3, 4, 5].map(i => itemObs(bot, eq[i])), main: itemObs(bot, eq[0]), off: itemObs(bot, eq[1]), totem: read.hasTotemInHand(entity) })
+  let gear
+  if (!honest || !player || !tracker) gear = gearNow()
+  else if (los || !tracker.gearSeen) { gear = gearNow(); tracker.gearSeen = gear } else gear = tracker.gearSeen
   return {
     difficulty: (bot.game && bot.game.difficulty) || 'normal',
     dist: reachTo(bot, entity),
-    los: (() => { try { return assess().inSight(bot, entity) } catch { return true } })(),
+    los,
     foe: {
       player,
       hp,
-      totem: read.hasTotemInHand(entity),
-      armor: [2, 3, 4, 5].map(i => itemObs(bot, eq[i])),
-      main: itemObs(bot, eq[0]),
-      off: itemObs(bot, eq[1]),
+      totem: gear.totem,
+      armor: gear.armor,
+      main: gear.main,
+      off: gear.off,
       using: using ? using.name : null,
       blocking,
       shieldAngle: dm.shieldAngle(typeof entity.headYaw === 'number' ? entity.headYaw : (entity.yaw || 0), entity.position, me.position),
@@ -245,6 +298,8 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
       // Сопротивление по частицам: уровень не виден — I.
       resistance: effects['resistance'] ? 0 : -1,
       approach: (vel.x * dx + vel.z * dz) / dh,
+      // Поперечная к лучу скорость (б/т): от неё промах броска/выстрела по видимому ходу (упреждение не точное).
+      lateral: Math.abs(vel.x * dz - vel.z * dx) / dh,
       fallDistance: tracker ? tracker.foeFall : 0,
       iframe: tracker && tracker.iframe ? { raw: tracker.iframe.raw, ago: tracker.tick - tracker.iframe.at } : null
     },

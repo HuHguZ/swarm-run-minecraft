@@ -180,6 +180,10 @@ function planSwaps (bot) {
   const plan = []
   for (const [dest, slot] of SLOTS) {
     const worn = bot.inventory.slots[slot]
+    // Элитры на теле и тело в воздухе — нагрудник не надевать (S7d: s7d-u-30 [elytra-drop] — на посадке тарана
+    // «нагрудник на груди» на высоте 14–21 бл.: бой (combat.fight → одеться) и автопилот меняли элитры на нагрудник,
+    // полёт гас, «fell from a high place»). Сменит chestDown на земле.
+    if (dest === 'torso' && worn && worn.name === 'elytra' && bot.entity && (bot.entity.elytraFlying || !bot.entity.onGround)) continue
     const wornScore = worn ? score(worn) : null
 
     const candidates = []

@@ -339,3 +339,14 @@ test('слух лавы: только лава с воздухом сверху 
   const p = senses.hearPoint(bot, { dir8: 'south', band: 'средне' })
   assert.deepEqual([p.x, p.z], [0.5, 12.5])
 })
+
+test('stateSummary: живой с 0.24 хп — health 1, а не 0 (арена читала 0 как смерть, S7d)', () => {
+  const { stateSummary } = require('../src/perception')
+  const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), effects: {} }, inventory: { slots: new Array(46).fill(null), items: () => [] }, players: {}, game: { dimension: 'overworld' }, blockAt: () => null, food: 20 }
+  bot.health = 0.24
+  assert.equal(stateSummary(bot).health, 1)
+  bot.health = 0
+  assert.equal(stateSummary(bot).health, 0)
+  bot.health = 13.6
+  assert.equal(stateSummary(bot).health, 14)
+})

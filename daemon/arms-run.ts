@@ -133,7 +133,7 @@ function makeSide (name, ws) {
 }
 
 function freshStats () {
-  return { firstWeapon: null, firstArmor: null, chests: 0, caches: 0, crafted: [], lab: null, ambushes: 0, ambushSeen: 0, fights: 0, fightWhy: {}, decisions: [], inv0: null, plan: [], hpLost: 0, near: 0, retreats: 0, engages: 0, killed: false, died: false, powerAtEngage: null }
+  return { firstWeapon: null, firstArmor: null, chests: 0, caches: 0, crafted: [], lab: null, ambushes: 0, ambushSeen: 0, fights: 0, fightWhy: {}, decisions: [], inv0: null, plan: [], hpLost: 0, near: 0, retreats: 0, engages: 0, killed: false, died: false, powerAtEngage: null, firstEngage: null, fightEvents: [] }
 }
 
 class ArmsEnv {
@@ -164,7 +164,7 @@ class ArmsEnv {
     const p = ((r && r.detail && r.detail.players) || []).find(q => q.name === this.side.foe)
     const k = this.side.know
     if (p && p.canSee) {
-      k.foe = { at: gameClock.now(), pos: p.at, dist: p.dist, power: AG.visiblePower(p.gear || []) }
+      k.foe = { at: gameClock.now(), pos: p.at, dist: p.dist, power: AG.visiblePower(p.gear || []), myPowerAt: k.power || 1 }
       if (p.dist < 12) k.nearUntil = gameClock.now() + 4000
       if (p.dist < 4.5) k.contactUntil = gameClock.now() + 2000
     }
@@ -178,7 +178,7 @@ class ArmsEnv {
     const s = (st && st.state) || {}
     await this.foe()
     const items = [...Object.entries(s.inventory || {}).map(([name, count]) => ({ name, count: Number(count) })),
-      ...Object.values(s.armor || {}).filter(Boolean).map(name => ({ name: String(name) })), ...(s.offHand ? [{ name: String(s.offHand.name || s.offHand) }] : [])]
+      ...Object.values(s.armor || {}).filter(Boolean).map(name => ({ name: String(name) })), ...(s.offHand ? [{ name: String(typeof s.offHand === 'string' ? s.offHand : (s.offHand.item || s.offHand.name)) }] : [])]
     const pw = AG.powerOf(items)
     const t = (gameClock.now() - side.t0) / 1000
     if (pw.weapon > 1 && side.stats.firstWeapon === null) side.stats.firstWeapon = Math.round(t)
@@ -189,7 +189,8 @@ class ArmsEnv {
     w.health = s.health ?? 20
     w.hunger = s.food ?? 20
     w.inventory = s.inventory || {}
-    w.alive = (s.health ?? 20) > 0 && !this.round.over
+    // Конец раунда — не смерть (ревью Codex: живой победитель писался Engage/FAILURE).
+    w.alive = !this.side.stats.died && (s.health ?? 20) > 0
     w.elapsedMs = gameClock.now() - side.t0
     w.revision = k.revision
     const unscouted = k.areas.filter(a => !k.scouted.has(a.id)).length
@@ -197,20 +198,23 @@ class ArmsEnv {
     const caches = [...k.caches.values()].filter(c => !c.opened).length
     const craft = AG.bestCraft(items)
     k.craft = craft
-    w.resources = { power: Math.round(pw.total), unscouted, chests, caches, craft_gain: craft ? Math.max(1, Math.round(craft.gain)) : 0, lab_gain: !k.labDone && AG.labReady(items) ? 2 : 0 }
+    const healItems = items.filter(i => /golden_apple$|^cooked_|^(bread|baked_potato|golden_carrot|apple|carrot)$|^(splash_)?potion$/.test(i.name)).reduce((n, i: any) => n + (i.count ?? 1), 0)
+    w.resources = { power: Math.round(pw.total), unscouted, chests, caches, craft_gain: craft ? Math.max(1, Math.round(craft.gain)) : 0, lab_gain: !k.labDone && AG.labReady(items) ? 2 : 0, heal_items: healItems }
     const now = gameClock.now()
     const recent = k.foe && now - k.foe.at < 30000
-    // Враг не виден — паритет на момент наблюдения (столько же успел набрать), виден — его видимое + мой рюкзак сверх видимого.
-    const hidden = Math.max(0, pw.total - AG.visiblePower(items.filter(i => /_(helmet|chestplate|leggings|boots)$|_(sword|axe|spear)$|^(mace|trident|bow|crossbow|shield)$/.test(i.name)).map(i => i.name)))
-    const enemyPower = recent ? k.foe.power + hidden : pw.total
-    w.facts.enemy_power = fact(Math.round(enemyPower), recent ? 'observed' : 'inferred', now)
+    // Его сила — по последнему увиденному (с возрастом наблюдения), а не «его видимое + мой рюкзак» и не «паритет через
+    // 30 с» (S7d, ревью Codex: свой тотем в рюкзаке «усиливал» врага 10 → 18). Не видел ни разу — паритет (prior).
+    // С момента наблюдения он лутал, как и я: к увиденному — мой прирост с того момента (s7d-armsB: увиденный голым на
+    // старте «сила 1» держался весь раунд, и бой начинался на 9-й секунде против уже вооружённого).
+    const enemyPower = k.foe ? k.foe.power + Math.max(0, pw.total - (k.foe.myPowerAt ?? pw.total)) : pw.total
+    w.facts.enemy_power = fact(Math.round(enemyPower), k.foe ? 'observed' : 'inferred', k.foe ? k.foe.at : now)
     w.facts.enemy_known = fact(!!recent, 'observed', now)
     w.facts.enemy_near = fact(now < (k.nearUntil || 0), 'observed', now)
     // Бьют (хп падает) или он вплотную — уходить поздно, только драться.
     w.facts.enemy_contact = fact(now < (k.contactUntil || 0) || (k.hp != null && w.health < k.hp && now < (k.nearUntil || 0)), 'observed', now)
     k.hp = w.health
     w.facts.deadline = fact(w.elapsedMs >= LOOT_MS, 'observed', now)
-    w.facts.opponent_defeated = fact(!!side.stats.killed, 'observed', now)
+    w.facts.opponent_defeated = fact(!!side.stats.killed || this.round.winner === side.name, 'observed', now)
     w.facts.ambushed = fact(!!k.ambushed, 'observed', now)
     return w
   }
@@ -246,7 +250,8 @@ class ArmsEnv {
         const p = W(area)
         const r = await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 1, timeoutSeconds: 60 })
         if (signal.aborted) return { outcome: 'INTERRUPTED', reason: 'enemy near', events: ev }
-        k.scouted.add(area.id)
+        // Разведано — только если дошёл (ревью Codex: неудачный путь записывался «комната изучена»); две неудачи — бросить.
+        if (r.status === 'done' || (area.tries = (area.tries || 0) + 1) >= 2) k.scouted.add(area.id)
         await this.look(area.r)
         return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev, detail: { area: area.id } }
       }
@@ -256,7 +261,8 @@ class ArmsEnv {
         const r = await rpc('chest_take', { item: 'all', x: chest.x, y: chest.y, z: chest.z })
         if (r.status === 'done' || /пуст|empty|нет такого/.test(String(r.error))) { chest.looted = true; side.stats.chests++ }
         else if (!signal.aborted) chest.tries = (chest.tries || 0) + 1
-        if ((chest.tries || 0) >= 2) chest.looted = true
+        // Две неудачи — не «взял», а «бросил» (ревью Codex): в разборе видно, сколько сундуков не открылось.
+        if ((chest.tries || 0) >= 2 && !chest.looted) { chest.looted = true; chest.gaveUp = true; side.stats.chestFails = (side.stats.chestFails || 0) + 1 }
         await rpc('armor', {})
         await this.look(12)
         return { outcome: chest.looted ? 'SUCCESS' : signal.aborted ? 'INTERRUPTED' : 'FAILURE', reason: r.error, events: ev, detail: { took: r.detail && r.detail.took } }
@@ -267,9 +273,11 @@ class ArmsEnv {
         // Вернуться туда, откуда её видел (оттуда грань точно видна), и подойти: mine смотрит честно.
         if (cv.from) await rpc('goto', { x: cv.from.x, y: cv.from.y, z: cv.from.z, range: 1, timeoutSeconds: 30 })
         const r = await rpc('mine', { block: cv.block, at: { x: cv.x, y: cv.y, z: cv.z }, collect: false, timeoutSeconds: 40 })
-        cv.opened = r.status === 'done' || (cv.tries = (cv.tries || 0) + 1) >= 2
+        // Вскрыт — только по подтверждённой копке; две неудачи — бросил (ревью Codex: отказ шёл «вскрыт»).
+        if (r.status === 'done') cv.opened = true
+        else if ((cv.tries = (cv.tries || 0) + 1) >= 2) { cv.opened = true; cv.gaveUp = true; side.stats.cacheFails = (side.stats.cacheFails || 0) + 1 }
         // Облицовка двери — в два блока: нижний и верхний вместе, чтобы пройти.
-        for (const dy of [1, -1]) { const o = k.caches.get(key({ x: cv.x, y: cv.y + dy, z: cv.z })); if (o && !o.opened) { await rpc('mine', { block: o.block, at: { x: o.x, y: o.y, z: o.z }, collect: false, timeoutSeconds: 40 }); o.opened = true } }
+        for (const dy of [1, -1]) { const o = k.caches.get(key({ x: cv.x, y: cv.y + dy, z: cv.z })); if (o && !o.opened) { const r2 = await rpc('mine', { block: o.block, at: { x: o.x, y: o.y, z: o.z }, collect: false, timeoutSeconds: 40 }); if (r2.status === 'done' || (o.tries = (o.tries || 0) + 1) >= 2) o.opened = true } }
         if (r.status === 'done') side.stats.caches++
         await this.look(10)
         return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev }
@@ -284,9 +292,10 @@ class ArmsEnv {
       }
       if (command.skill === 'arms.lab') {
         // Лаборатория N2: стол (0,0,−22), подойти на 2 бл. к югу; бутылки под ноги, затем стол (enchant сам подойдёт).
-        k.labDone = true
+        // Лаборатория «использована» — только после улучшения; не дошёл — не тратить попытку (ревью Codex).
         const t = W({ x: L.lab.table.x, y: 0, z: L.lab.table.z + 2 })
-        await rpc('goto', { x: t.x, y: t.y, z: t.z, range: 1, timeoutSeconds: 40 })
+        const arrived = await rpc('goto', { x: t.x, y: t.y, z: t.z, range: 1, timeoutSeconds: 40 })
+        if (arrived.status !== 'done') return { outcome: arrived.status === 'interrupted' ? 'INTERRUPTED' : 'FAILURE', reason: arrived.error, events: ev }
         const xp = await rpc('xp_bottles', {})
         // Сперва наковальня (книга — дешевле), остаток уровней — на стол.
         const anvil = await rpc('enchant', { mode: 'anvil' })
@@ -296,7 +305,27 @@ class ArmsEnv {
           ...((table.detail && table.detail.enchanted) || []).filter(e => e.got).map(e => e.item)]
         const why = [anvil.error || (anvil.detail && anvil.detail.skipped), table.error || (table.detail && table.detail.stopped)].filter(Boolean).join('; ')
         side.stats.lab = { level: xp.detail && xp.detail.level, got, why: why || undefined }
+        k.labDone = got.length > 0 || (k.labTries = (k.labTries || 0) + 1) >= 2
         return { outcome: got.length ? 'SUCCESS' : 'FAILURE', reason: why, events: ev }
+      }
+      if (command.skill === 'arms.heal') {
+        // Подальше от последнего места врага — к ближнему углу комплекса со своей стороны; съесть (eat выберет лучшее),
+        // затем ждать регенерацию до 18 хп или 15 с; сторож прерывает, если враг показался.
+        const f = k.foe && k.foe.pos ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : null
+        if (f && Math.hypot(me.x - X - f.x, me.z - Z - f.z) < 10) {
+          const away = k.areas.slice().sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z) + 0.5 * (Math.hypot(a.x - (me.x - X), a.z - (me.z - Z)) - Math.hypot(b.x - (me.x - X), b.z - (me.z - Z))))[0]
+          if (away) { const p = W(away); await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 10 }) }
+        }
+        await rpc('eat', {})
+        const until = gameClock.now() + 15000
+        let hp = 0
+        while (!signal.aborted && gameClock.now() < until) {
+          hp = ((((await side.call('status').catch(() => null)) || {}).state) || {}).health ?? 0
+          if (hp >= 18) break
+          await pace(500)
+        }
+        side.stats.heals = (side.stats.heals || 0) + 1
+        return { outcome: signal.aborted ? 'INTERRUPTED' : hp >= 14 ? 'SUCCESS' : 'PARTIAL', events: ev, detail: { hp } }
       }
       if (command.skill === 'arms.ambush') {
         // Точка — середина поля со своей стороны (x = ±5): чужой обход идёт через центр; ждать до 25 с, пока не покажется.
@@ -318,11 +347,13 @@ class ArmsEnv {
         const far = k.areas.filter(a => !k.scouted.has(a.id)).concat(k.areas).sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z))[0]
         const p = W(far)
         const r = await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 12 })
-        k.nearUntil = 0
-        return { outcome: 'SUCCESS', reason: r.error, events: ev }
+        // Ушёл — по факту пути и нового взгляда на врага (ревью Codex: угроза стиралась и успех писался всегда).
+        await this.foe()
+        return { outcome: signal.aborted || r.status === 'interrupted' ? 'INTERRUPTED' : r.status === 'done' ? 'SUCCESS' : 'FAILURE', reason: r.error, events: ev }
       }
       if (command.skill === 'arms.engage') {
         side.stats.engages++
+        if (side.stats.firstEngage == null) side.stats.firstEngage = Math.round((gameClock.now() - side.t0) / 1000)
         if (side.stats.powerAtEngage === null) side.stats.powerAtEngage = k.power
         await rpc('armor', {})
         const fresh = (f) => f && gameClock.now() - f.at < 1500
@@ -345,6 +376,7 @@ class ArmsEnv {
         // arena — весь комплекс (|x|,|z| ≤ 25 от центра, пол y=0): дуэль не уходит по сытости/оружию (arenaStay), стены держат поле.
         const r = await rpc('fight', { target: side.foe, allowPlayer: true, timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } })
         const d = (r && r.detail) || {}
+        if (side.stats.fightEvents.length < 40) side.stats.fightEvents.push({ t: Math.round((t1 - side.t0) / 1000), s: Math.round((gameClock.now() - t1) / 1000), status: r.status, by: r.by && r.by.type, stopped: d.stopped, sw: d.swings, hit: d.landed })
         if (d.killed && String(d.killed).split(', ').includes(side.foe)) side.stats.killed = true
         side.stats.fights++
         const why = `fight ${r.status}${r.error ? ': ' + r.error : ''}${d.skipped ? ' skip ' + (d.stopped || d.purpose || '') : ''}${d.stopped && !d.skipped ? ' stop ' + d.stopped : ''} sw ${d.swings ?? '-'}`.slice(0, 90)
@@ -368,7 +400,7 @@ async function brain (side, round) {
     goal: AG.opponentDefeated, riskPenalty: AG.ARMS_RISK_PENALTY, maxFailures: 3, retryAfterMs: 30000,
     record: (r) => {
       // Первые решения раунда — с ресурсами и фактами (отладка выбора).
-      if (r.level === 'decision' && side.stats.decisions.length < 6) side.stats.decisions.push({ t: Math.round((gameClock.now() - side.t0) / 1000), plan: (r.plan || []).slice(0, 4).join('>'), res: r.before && r.before.resources, facts: r.before && Object.fromEntries(Object.entries(r.before.facts).map(([k, v]: any) => [k, v.value])), why: r.reason })
+      if (r.level === 'decision' && side.stats.decisions.length < 40) side.stats.decisions.push({ t: Math.round((gameClock.now() - side.t0) / 1000), plan: (r.plan || []).slice(0, 4).join('>'), res: r.before && r.before.resources, facts: r.before && Object.fromEntries(Object.entries(r.before.facts).map(([k, v]: any) => [k, v.value])), why: r.reason })
       if (r.level === 'strategy') side.stats.plan.push({ t: Math.round((gameClock.now() - side.t0) / 1000), s: r.strategy, o: r.outcome, why: r.reason ? String(r.reason).slice(0, 60) : undefined }) }
   })
   while (!round.over) {
@@ -452,13 +484,15 @@ async function runRound (n, A, B) {
     if (!round.over && gameClock.now() - t0 > MAX_MS) { round.over = true; round.why = 'время' }
     if (!round.over && gameClock.wall.now() - w0 > 600000) { round.over = true; round.why = 'зависание (10 мин настоящего времени)' }
   }
-  for (const s of [A, B]) { s.director?.interrupt('round over'); await s.call('stop').catch(() => {}) }
-  await Promise.race([Promise.all(brains), gameClock.wall.sleep(5000)])
+  // Конец — до остановки бойцов и ожидания мозгов (ревью Codex: уборка входила в длительность раунда).
+  const tEnd = gameClock.now()
   const wallS = (gameClock.wall.now() - w0) / 1000
   const tick1 = gameClock.snapshot()?.ticks ?? null
+  for (const s of [A, B]) { s.director?.interrupt('round over'); await s.call('stop').catch(() => {}) }
+  await Promise.race([Promise.all(brains), gameClock.wall.sleep(5000)])
   for (const s of [A, B]) { const a = phys0.get(s); const b = await phys(s); s.stats.physShare = a && b && b.t > a.t ? Math.round((b.p - a.p) / (b.t - a.t) * 100) / 100 : null }
   const row = {
-    n, seed: SEED, built, winner: round.winner, why: round.why, durS: Math.round((gameClock.now() - t0) / 1000), wallS: Math.round(wallS),
+    n, seed: SEED, built, winner: round.winner, why: round.why, durS: Math.round((tEnd - t0) / 1000), wallS: Math.round(wallS),
     tps: tick0 != null && tick1 != null && wallS > 0 ? Math.round((tick1 - tick0) / wallS) : null,
     sides: Object.fromEntries([A, B].map(s => [s.name, { start: s.spawn.x < 0 ? 'W' : 'E', power: s.know.power, ...s.stats, plan: s.stats.plan.slice(-40) }]))
   }

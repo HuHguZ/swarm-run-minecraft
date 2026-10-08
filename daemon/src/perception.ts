@@ -144,7 +144,8 @@ function stateSummary (bot, extra: any = {}) {
     pos: round(p),
     dimension: bot.game ? bot.game.dimension : null,
     biome,
-    health: Math.round(bot.health ?? 0),
+    // Живой с 0.24 хп — не «0»: арена (where) читала 0 как смерть и обрывала раунд (S7d, s7d-p-27 р.3 swap).
+    health: (bot.health ?? 0) > 0 ? Math.max(1, Math.round(bot.health)) : 0,
     food: Math.round(bot.food ?? 0),
     fireResistance: require('./blaze').hasEffect(bot, 'fire_resistance'),
     time: timeLabel(bot),

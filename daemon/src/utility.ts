@@ -681,7 +681,7 @@ async function pourLava (bot, e, plan) {
 // Один раз на бой: планировщик приёмов и счёт. used — в отчёт боя.
 function create (bot, { used = () => {}, tt = null }: any = {}) {
   installRodPull(bot)
-  const st = { rod: 0, rodHooked: 0, hookedOnMe: 0, rodCounter: 0, trident: 0, tridentHit: 0, riptide: 0, chorus: 0, anvils: 0, anvilDmg: [], boxes: 0, lava: 0, pulledMe: 0 }
+  const st: any = { rod: 0, rodHooked: 0, hookedOnMe: 0, rodCounter: 0, trident: 0, tridentHit: 0, bolts: 0, riptide: 0, chorus: 0, anvils: 0, anvilDmg: [], boxes: 0, lava: 0, pulledMe: 0 }
   const cd = {}
   const ready = (k) => gameClock.now() >= (cd[k] || 0)
   const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
@@ -753,8 +753,13 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
       used('его поплавок на мне — бью на подлёте')
     }
     // Удочка.
+    // Граф боя (S7d): удочка/трезубец — только если калькулятор не нашёл заметно лучшего (ctx.allow).
+    const allow = (k) => !ctx.allow || ctx.allow(k)
     if (ready('rod') && ctx.d >= 3.5 && ctx.d <= ROD_MAX) {
-      const rp = rodPlan(bot, e, { d: ctx.d, dy: ctx.dy, sees: ctx.sees, busy: ctx.busy || {}, theyUp: ctx.theyUp, vel: ctx.vel ? ctx.vel() : null, blocking: !!ctx.blocking })
+      const rp0 = rodPlan(bot, e, { d: ctx.d, dy: ctx.dy, sees: ctx.sees, busy: ctx.busy || {}, theyUp: ctx.theyUp, vel: ctx.vel ? ctx.vel() : null, blocking: !!ctx.blocking })
+      // Граф гасит только «просто подтянуть под удар» (по модели урона сближение бегом обычно не хуже); со столба,
+      // в лаву/яму, едока, стрелка, убегающего — польза вне модели урона, решает сам план удочки.
+      const rp = rp0 && (rp0.why !== 'удочкой подтянул под удар' || allow('rod')) ? rp0 : null
       if (rp) {
         rest('rod', 2500)
         st.rod++
@@ -768,15 +773,33 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
       // Против игрока — оценка хп (ctx.foeHp из pvp.foeHpDecide), не метаданные: человек их не видит (AGENTS.md).
       const ehp = ctx.foeHp !== undefined ? ctx.foeHp : hpOf(bot, e)
       const tp = tridentPlan(bot, e, { d: ctx.d, sees: ctx.sees, finishing: ehp != null && ehp <= 5 })
-      if (tp && (ctx.d > 7 || (ctx.busy && ctx.busy.consuming))) {
+      if (tp && (ctx.d > 7 || (ctx.busy && ctx.busy.consuming)) && allow('trident')) {
         rest('trident', 1800)
         st.trident++
         const r = await throwTrident(bot, e, tp.t, { velFn: ctx.vel, onDraw: ctx.onDraw })
         if (r.ok) {
           used(tp.why)
-          // Попал ли: его хп в полёте (≤ 1 с).
+          // Молния «Громовержца» у него (сущность lightning_bolt в 4 бл. от него за 2 с после броска) — счёт.
+          const tB = gameClock.now()
+          const onBolt = (en) => {
+            if (gameClock.now() - tB > 2000) { bot.removeListener('entitySpawn', onBolt); return }
+            if (en && en.name === 'lightning_bolt' && e.position && en.position && en.position.distanceTo(e.position) <= 4) { st.bolts = (st.bolts || 0) + 1; used('трезубец: молния в него'); bot.removeListener('entitySpawn', onBolt) }
+          }
+          bot.on('entitySpawn', onBolt)
+          gameClock.setTimeout(() => bot.removeListener('entitySpawn', onBolt), 2100)
+          // Попал ли: его damage_event с причиной «я» (или он погиб) за время полёта; хп по метаданным — запасной
+          // признак (S7d: убийство броском «was impaled» не засчитывалось — сущность снята раньше метаданных).
           const t0 = gameClock.now()
-          while (gameClock.now() - t0 < Math.min(1200, (r.ticks || 10) * 50 + 300)) { const h = hpOf(bot, e); if (h != null && r.hp0 != null && h < r.hp0 - 0.4) { st.tridentHit++; used('трезубец попал'); break } await sleep(TICK_MS) }
+          let byMe = false
+          const onDmg = (pk) => { try { if (pk && pk.entityId === e.id && bot.entity && pk.sourceCauseId === bot.entity.id + 1) byMe = true } catch {} }
+          try { bot._client.on('damage_event', onDmg) } catch {}
+          try {
+            while (gameClock.now() - t0 < Math.min(1500, (r.ticks || 10) * 50 + 400)) {
+              const h = hpOf(bot, e)
+              if (byMe || e.isValid === false || (h != null && r.hp0 != null && h < r.hp0 - 0.4)) { st.tridentHit++; used('трезубец попал'); break }
+              await sleep(TICK_MS)
+            }
+          } finally { try { bot._client.removeListener('damage_event', onDmg) } catch {} }
           return { did: 'trident' }
         }
       }

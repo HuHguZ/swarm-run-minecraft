@@ -31,7 +31,24 @@ const holdWeapon = async () => {
 
 const holdItem = async (item) => {
     const before = ctx.heldName()
-    try { await ctx.bot.equip(item, 'hand'); return true } catch { return false } finally { ctx.switched(before) }
+    try {
+      // Зелье — свежим поиском по содержимому (слот предмета из прошлого тика мог уже занять другое зелье).
+      if (/potion$/.test(item.name)) {
+        const potionOf = require('../pvp').potionOf
+        const want = potionOf(item)
+        item = ctx.bot.inventory.items().find(i => i.name === item.name && potionOf(i) === want) || item
+      }
+      await ctx.bot.equip(item, 'hand')
+      // Зелья одного имени различаются только содержимым (splash_potion «лечение II» и «вред II»): equip по устаревшему
+      // слоту брал соседнее — «лечение под ноги» вредом себе, −12 и смерть «using magic» (S7d, репетиция показа z2,
+      // «арсенал»). В руке не то зелье — не бросать.
+      if (/potion$/.test(item.name)) {
+        const potionOf = require('../pvp').potionOf
+        const held = ctx.bot.heldItem
+        if (!held || held.name !== item.name || potionOf(held) !== potionOf(item)) return false
+      }
+      return true
+    } catch { return false } finally { ctx.switched(before) }
   }
 
 const useAt = async (yaw, pitch, { holdMs = 0 }: any = {}) => {
@@ -73,8 +90,17 @@ const throwAt = async (item, what, { minLand = 4.5 }: any = {}) => {
         item: ctx.bot.heldItem,
         onAim: (res) => {
           const at = res.land && res.land.at
-          if (!at) return true
           const me0 = ctx.bot.entity.position
+          // Брошенное В НЕГО разбивается о его тело раньше земли (прогноз landing видит только блоки). jar 1.21.11
+          // (ThrownSplashPotion.onHitAsPotion, сверка Codex): задевает всех, чья рамка в 4 бл. от рамки зелья (0.25),
+          // бросившего тоже; сила 1 − d/4. S7d: колизей слота 28, «арсенал» — дважды «killed by … using magic» своим
+          // «вредом II» с 2.5–4.3 бл. Разрыв у его рамки (с запасом попадания 0.3) или в точке падения ближе 4 бл. к
+          // моей рамке — не бросаю.
+          const mine = ctx.pick.hitboxOf(ctx.bot, ctx.bot.entity)
+          const gap = (box, pad) => Math.hypot(...['x', 'y', 'z'].map(a => Math.max(0, mine.lo[a] - box.hi[a] - pad, box.lo[a] - mine.hi[a] - pad)))
+          if (/potion/.test(item.name) && ctx.entity && ctx.entity.position && gap(ctx.pick.hitboxOf(ctx.bot, ctx.entity), 0.3 + 0.125) < 4) return false
+          if (/potion/.test(item.name) && at && gap({ lo: at, hi: at }, 0.125) < 4) return false
+          if (!at) return true
           if (at.y < me0.y - 2.3) return true
           return Math.hypot(at.x - me0.x, at.z - me0.z) >= minLand
         }

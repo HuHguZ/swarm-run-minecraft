@@ -51,8 +51,11 @@ test('таран: план находит касание на заходе св�
   const W2 = flatWorld(3)
   const st2 = { p: { x: -12, y: 106, z: 0.5 }, v: { x: 1.4, y: -0.1, z: 0 }, boost: 0, fd: 0 }
   const pl2 = L.chooseLance(W2, st2, () => ({ x: 0.5, y: 100, z: 0.5 }), { name: 'iron_spear' })
-  // S7c: выход в стену с уроном — план не выбирается вовсе (было: только штраф).
-  assert.ok(!pl2 || pl2.exit !== 'wall', 'выход в стену — не выбирается')
+  // S7d («гибкость вместо правил»): выход в стену — не запрет, а цена (урон себе ×2): такой план дороже того же
+  // захода в открытом поле; в заходе страховка «опасно» (прогон 6 тиков) всё равно выводит до удара.
+  const free = L.chooseLance(flatWorld(), st2, () => ({ x: 0.5, y: 100, z: 0.5 }), { name: 'iron_spear' })
+  assert.ok(free, 'в открытом поле заход есть')
+  if (pl2 && pl2.exit === 'wall') assert.ok(pl2.c > free.c, `выход в стену дороже: ${pl2.c} > ${free.c}`)
 })
 
 test('таран: план годен с элитрами, ракетами, копьём и нагрудником; щит — нет', () => {
@@ -78,4 +81,16 @@ test('касание тарана — только damage_event цели с пр
   assert.equal(ownHit({ entityId: 7, sourceCauseId: 8, sourceDirectId: 9 }, 3, 7), false, 'его же кристалл/другой игрок')
   assert.equal(ownHit({ entityId: 5, sourceCauseId: 4 }, 3, 7), false, 'не цель')
   assert.equal(ownHit(null, 3, 7), false)
+})
+
+test('S7d: копьё ещё не готово (задержка) — план касания с дугой подлиннее дороже не становится, ранний — дороже', () => {
+  const W = flatWorld()
+  const st = { p: { x: 0.5, y: 106, z: 14.5 }, v: { x: 0, y: -0.1, z: -1.4 }, boost: 0, fd: 0 }
+  const foot = () => ({ x: 0.5, y: 100, z: 0.5 })
+  const now = L.chooseLance(W, st, foot, { name: 'iron_spear', readyIn: 0 })
+  const late = L.chooseLance(W, st, foot, { name: 'iron_spear', readyIn: 13 })
+  assert.ok(now && late)
+  // Готовность через 13 тиков: выбранное касание не раньше прежнего (раннее касание — урона нет, оно и дороже).
+  assert.ok(late.hitT >= now.hitT, `${late.hitT} >= ${now.hitT}`)
+  assert.ok(late.c >= now.c)
 })

@@ -268,11 +268,16 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     slow06: 0, wtaps: 0, staps: 0, rearms: 0, sprintCrit: 0,
     swaps: 0, shieldBreaks: 0, freshShieldHits: 0,
     jumpResets: 0, knocks: 0, counterHits: 0, kbPlain: [], kbReset: [],
-    combos: [], combo: 0, shieldBlocks: 0, choice: { sprint: 0, crit: 0 }
+    combos: [], combo: 0, shieldBlocks: 0, choice: { sprint: 0, crit: 0 },
+    // S7d (хит-селект, пункт H): размены — серия ударов с паузой ≤ 1.5 с; кто попал первым, попадания сторон;
+    // отлёт после своего ответного удара; взмахи без попадания и в его кадры неуязвимости (≤ 10 тиков после нашего).
+    ex: { n: 0, first: 0, mine: 0, his: 0 }, kbCounter: [], empty: 0, iframeSwings: 0
   }
+  // ND_HIT_SELECT=0 — без ответного удара по приходу его отброса и без ожидания его удара (сравнение на снимках).
+  const HIT_SELECT = process.env.ND_HIT_SELECT !== '0'
   const skill = {
     jumpReset: style.jumpReset ?? (0.65 + Math.random() * 0.3),
-    counter: style.counter ?? (0.6 + Math.random() * 0.35),
+    counter: process.env.ND_HIT_SELECT === '0' ? 0 : style.counter ?? (0.6 + Math.random() * 0.35),
     sprintBias: style.sprintBias ?? (0.25 + Math.random() * 0.2)
   }
   // Тиковый план клавиш: шаг 0 — сейчас, шаг i — на i-м тике физики после;
@@ -302,7 +307,7 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
       kbMeasures.splice(i, 1)
       const p = bot.entity.position
       const d = (p.x - m.p.x) * m.dx + (p.z - m.p.z) * m.dz
-      ;(m.reset ? st.kbReset : st.kbPlain).push(Math.round(d * 100) / 100)
+      ;(m.counter ? st.kbCounter : m.reset ? st.kbReset : st.kbPlain).push(Math.round(d * 100) / 100)
     }
   }
   bot.on('physicsTick', onTick)
@@ -332,10 +337,21 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
 
   // Попадание и серия: наши удары подряд без его ответа.
   const ent = () => { try { return typeof target === 'function' ? target() : target } catch { return null } }
+  let lastHurtAt = -1e9
+  let myHitAt = -1e9
+  let swingAt = 0
   const onHurt = (victim, source) => {
     const e = ent()
     if (!e || !victim) return
-    if (victim === e && source && bot.entity && source.id === bot.entity.id) st.combo++
+    const mine = victim === e && source && bot.entity && source.id === bot.entity.id
+    const his = victim === bot.entity && source && source.id === e.id
+    if (mine || his) {
+      const now = gameClock.now()
+      if (now - lastHurtAt > 1500) { st.ex.n++; if (mine) st.ex.first++ }
+      lastHurtAt = now
+      if (mine) { st.ex.mine++; myHitAt = now; swingAt = 0 } else st.ex.his++
+    }
+    if (mine) st.combo++
     if (victim === bot.entity && source && source.id === e.id) {
       if (st.combo) st.combos.push(st.combo)
       st.combo = 0
@@ -385,6 +401,12 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
       swapped = true
     }
     try { bot.attack(e) } catch {}
+    {
+      const now = gameClock.now()
+      if (swingAt && now - swingAt > 300) st.empty++ // прошлый взмах так и не попал
+      swingAt = now
+      if (now - myHitAt < 500) st.iframeSwings++
+    }
     if (kind === 'crit') {
       if (pend) convResolve(null)
       conv.tries++
@@ -463,13 +485,20 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
   // Поднять за ≥ 5 тиков (blockDelayTicks) до того, как его удар может
   // прийти: он в досягаемости (или войдёт в неё за это время) и его заряд
   // будет готов; опустить, когда бьём сами или его удара не будет.
+  // Топор у него в руке (S7d, пункт H): по jar удар топором по поднятому щиту гасится ЦЕЛИКОМ (blocks_attacks), а щит
+  // выключается на 5 с (weapon.disable_blocking_for_seconds). Прежде — запрет «под топором щит не поднимать»: в «топор
+  // против щита» щит не поднимался ни разу, сторона с топором — 20 из 20 (s7d-b-27, s7d-p-27). Теперь — цена: щит не
+  // держится заранее (подъём ровно на задержку блока, 5 т, и сразу вниз после его взмаха), взмах топора гасится, его
+  // ход — 5 с без щита, мой — без его урона топором. ND_SHIELD_AXE=0 — прежний запрет.
   const shield = ({ theirR, closing = 0, hisReadyMs = 0, hisHand = '', myLeftMs = 999, inMyReach = false }: any) => {
-    if (/_axe$/.test(hisHand)) return 'lower'
+    const axe = /_axe$/.test(hisHand)
+    if (axe && process.env.ND_SHIELD_AXE === '0') return 'lower'
+    // Запас 6 тиков и против топора (ревью Codex: 5 т задержки блока + доставка пакета и шаг цикла).
     const leadMs = 6 * M.msPerTick
     const soon = theirR <= 3.3 + Math.max(0, closing) * (leadMs / TICK_MS)
     if (inMyReach && myLeftMs <= M.msPerTick) return 'lower'
     if (soon && hisReadyMs <= leadMs) return 'raise'
-    if (theirR > 4.8 || hisReadyMs > leadMs + 4 * M.msPerTick) return 'lower'
+    if (theirR > 4.8 || hisReadyMs > leadMs + (axe ? 1 : 4) * M.msPerTick) return 'lower'
     return null
   }
 
@@ -502,11 +531,12 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
         st.jumpResets++
         startPlan([{ jump: true, forward: true, sprint: true, back: false }, { jump: false }], 'jump-reset')
       }
-      kbMeasures.push({ p: me.position.clone(), dx: ax / an, dz: az / an, left: 12, reset })
+      const kb = { p: me.position.clone(), dx: ax / an, dz: az / an, left: 12, reset, counter: false }
+      kbMeasures.push(kb)
       // Ответный удар (hit-select): наш спринт-удар в этот же тик — ×0.6
       // гасит 40% его толчка, а он получает полный.
-      if (counterFn && Math.random() < skill.counter) {
-        if (counterFn(e)) st.counterHits++
+      if (HIT_SELECT && counterFn && Math.random() < skill.counter) {
+        if (counterFn(e)) { st.counterHits++; kb.counter = true }
       }
     } catch {}
   }
@@ -556,6 +586,12 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     counterHits: st.counterHits || undefined,
     kbPlain: avg(st.kbPlain),
     kbReset: avg(st.kbReset),
+    kbCounter: avg(st.kbCounter),
+    ex: st.ex.n ? st.ex : undefined,
+    empty: st.empty || undefined,
+    iframeSwings: st.iframeSwings || undefined,
+    hitSelect: HIT_SELECT,
+    hsWait: HIT_SELECT && process.env.ND_HS_WAIT !== '0',
     his: st.his,
     skill: { jumpReset: Math.round(skill.jumpReset * 100) / 100, counter: Math.round(skill.counter * 100) / 100, sprintBias: Math.round(skill.sprintBias * 100) / 100 }
   })

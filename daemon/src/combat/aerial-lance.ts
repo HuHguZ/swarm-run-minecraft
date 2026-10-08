@@ -65,7 +65,7 @@ const PITCHES = [-1.0, -0.8, -0.62, -0.48, -0.36, -0.26, -0.17, -0.09, 0, 0.09, 
 // Взгляд на этот тик, при котором полёт (своя физика elytra.rollout) за H тиков проводит его рамку через отрезок
 // копья, и после касания есть выход вверх без пола/стены. foot(t) — его ноги через t тиков, h — его рамка.
 // { yaw, pitch, hitT, dmg, rel } или null (из этих взглядов не достать).
-export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16 }: any = {}) {
+export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16, readyIn = 0 }: any = {}) {
   const f0 = foot(0)
   const bearing = yawTo(st.p, f0)
   const hs = Math.hypot(st.v.x, st.v.z)
@@ -91,11 +91,14 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
       if (r.kind && r.t <= hit.t) continue
       // Выход: с точки касания тянуть вверх (pitch 0.6) 12 тиков — без стены и без жёсткого пола.
       const out = sky.rollout(W, hit.q, { x: hit.q.vx, y: hit.q.vy, z: hit.q.vz }, yaw, 0.6, 0, 12, { fd: hit.q.fd })
-      // Выход в стену с уроном или в пол с высотой падения > 3 — заход не годится (S7c, замечание проверки а:
-      // 18 из 49 раундов — разбился сам). Раньше такой план только дорожал и шёл, когда другого не было.
-      if (out.kind === 'wall' && out.dmg >= 1) continue
-      if (out.kind === 'floor' && out.fd > 3) continue
-      let c = hit.t - Math.min(40, hit.dmg) * 0.15 + Math.abs(pitch) * 0.3
+      // Выход в стену или в пол — цена, а не запрет (S7d, «гибкость вместо правил»): урон себе на выходе
+      // (о стену 10·Δv − 3, падение fd − 3) весит вдвое больше урона ему; такой заход берётся, только если иначе
+      // нечем (страховка «опасно» по 6 тикам вперёд в заходе остаётся).
+      const exitSelf = out.kind === 'wall' ? Math.max(0, out.dmg) : out.kind === 'floor' ? Math.max(0, out.fd - 3) : 0
+      // Касание раньше конца задержки копья (useTicks < delay) урона не даёт (KineticWeapon) — цена, а не запрет
+      // (S7d: s7d-base — «мимо: ближе 0.2, копьё 10 т» при задержке 12; s7h отказ от ранних планов уронил касания —
+      // без плана проход шёл над головой): каждый недостающий тик — +3, дуга подлиннее выигрывает у прямой.
+      let c = hit.t - Math.min(40, hit.dmg) * 0.15 + Math.abs(pitch) * 0.3 + exitSelf * 2 + Math.max(0, readyIn - hit.t) * 3
       if (out.kind === 'floor') c += 8
       if (!best || c < best.c) best = { c, yaw, pitch, hitT: hit.t, dmg: hit.dmg, rel: hit.rel, exit: out.kind || null }
     }
@@ -273,7 +276,8 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
               close = { d: r2(dist), dy: r2(b.position.y - f.y), sp: r2(Math.hypot(v.x, v.y, v.z)), use: using ? Math.round((clock.now() - useAt) / 50) : -1, plan: best ? best.hitT : null }
             } else if (++growing >= 4 && minD < 8) return fin('мимо')
             const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
-            const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name })
+            const readyIn = using ? Math.max(0, Math.round(spec.delay * 20) + 1 - Math.round((clock.now() - useAt) / 50)) : Math.round(spec.delay * 20) + 1
+            const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn })
             // Касание раньше конца задержки копья урона не даст — только считаем (s7h: отказ от таких планов уронил
             // касания 30 % → 15 %: без плана проход шёл «над головой» мимо; задержку решает ранний старт копья).
             const delayT = Math.round(spec.delay * 20) + 1
@@ -286,7 +290,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
             // Страховка: этот взгляд за 6 тиков — в стену с уроном или в пол с высотой падения > 3 — выйти сейчас.
             const ahead = sky.rollout(W, st.p, st.v, look.yaw, look.pitch, st.boost, 6, { fd: st.fd })
             if ((ahead.kind === 'wall' && ahead.dmg >= 1) || (ahead.kind === 'floor' && ahead.fd > 3)) { stats.lanceBail = (stats.lanceBail || 0) + 1; return fin('опасно: ' + (ahead.kind === 'wall' ? 'стена' : 'пол')) }
-            bot.look(look.yaw, look.pitch, true).catch(() => {})
+            sky.steer(bot, look.yaw, look.pitch)
             if (rocket === 'нужна') {
               // Ракета уходит с взглядом этого тика (после пакета).
               rocket = 'была'
@@ -330,8 +334,22 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
         maxMs: 1500, stats, phase: 'таран: выход',
         // Отказ от захода (его копьё на изготовке, опасный выход) — прочь от него, а не «по ходу» (по ходу — в его
         // копьё: s7j р.1 «таран — мимо, себе −20», встречный разгон убил тараном его копья).
-        goal: () => { const b = bot.entity; const f = foe(); const away = /копьё на изготовке|опасно/.test(res.why) ? yawTo(f, b.position) : Math.atan2(-b.velocity.x, -b.velocity.z); const L = sky.lookVec(away, 0); return { kind: 'point', at: new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), minY: f.y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4, away: f, awayR: 6 } },
-        noRocket: () => true,
+        // Его копьё на изготовке (S7d, ревью Codex №5: один встречный таран на 33–49 бл/с решает бой, а отказ уходил
+        // «прочь» по его же линии, без ракеты): уход дугой вбок от линии его захода (в сторону, противоположную его
+        // боковому ходу), ракета — по цене (rocketChoice), если скорость мала.
+        goal: () => {
+          const b = bot.entity; const f = foe()
+          let away = /копьё на изготовке|опасно/.test(res.why) ? yawTo(f, b.position) : Math.atan2(-b.velocity.x, -b.velocity.z)
+          if (/копьё на изготовке/.test(res.why)) {
+            const v = hv(); const rx = b.position.x - f.x; const rz = b.position.z - f.z
+            const side = (v.x * rz - v.z * rx) >= 0 ? -1 : 1
+            away += side * 1.0
+          }
+          const L = sky.lookVec(away, 0)
+          return { kind: 'point', at: new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), minY: f.y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4, away: f, awayR: 6 }
+        },
+        noRocket: () => !/копьё на изготовке/.test(res.why),
+        rocketIf: (st: any) => Math.hypot(st.v.x, st.v.z) < 1.0 ? true : null,
         onTick: () => { if (allow) allow() },
         until: () => bot.entity.position.y >= foe().y + 3 && bot.entity.velocity.y < 0.3 ? 'вышел' : null
       })

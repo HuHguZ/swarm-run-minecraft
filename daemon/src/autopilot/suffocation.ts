@@ -90,7 +90,11 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
         }
         const cell = now.block
         if (!this.visibleBurialBlock(bot, cell)) { why = 'блок вне видимого прицела'; break }
-        if (cell.name === 'bedrock') { why = 'над головой бедрок'; break }
+        // Не ломается (бедрок, барьер колизея — digTime Infinity): копать бесполезно — шаг в соседнюю свободную клетку
+        // (S7d, ревью Codex №4: 28b в барьере поля копал его 12 с до «suffocated in a wall»).
+        let infinite = cell.name === 'bedrock' || cell.name === 'barrier'
+        try { if (!infinite && !Number.isFinite(bot.digTime(cell))) infinite = true } catch {}
+        if (infinite) { const nm = cell.name === 'bedrock' ? 'бедрок' : cell.name === 'barrier' ? 'барьер' : cell.name; why = (await this.stepOutOfWall(bot)) ? null : `над головой ${nm} — не ломается, выйти некуда`; break }
         const problem = this.session.mcData
           ? missingHarvestTool(bot, cell, this.session.mcData)
           : null
@@ -102,7 +106,11 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
         }
         try {
           await equipBestTool(bot, cell)
-          await withTimeout(bot.dig(cell), Math.max(8000, (handMs || 0) + 1500), `${cell.name} не ломается`)
+          // Время копки — после экипировки (обсидиан алмазной киркой ~9.4 с не успевал в 8 с — копал заново и
+          // утонул, S7d, ревью Codex №4).
+          let toolMs = 0
+          try { toolMs = bot.digTime(cell) } catch {}
+          await withTimeout(bot.dig(cell), Math.max(8000, (handMs || 0) + 1500, Number.isFinite(toolMs) ? toolMs + 1500 : 0), `${cell.name} не ломается`)
           this.dugTotal++
           why = null
         } catch (e) {
@@ -175,6 +183,33 @@ function visibleBurialBlock (this: any, bot, block) {
     } catch { return false }
   }
 
+// Голова в неломаемом блоке (барьер колизея, бедрок): шагнуть в соседнюю клетку, где ноги и голова свободны, —
+// движением, как игрок; до 10 тиков на клетку. true — вышел.
+async function stepOutOfWall (this: any, bot) {
+  const Vec3 = require('vec3')
+  const free = (p) => { const b = bot.blockAt(p, false); return !!b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name) }
+  const at = bot.entity.position
+  const base = at.floored()
+  const cells = []
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const c = base.offset(dx, 0, dz)
+    if (free(c) && free(c.offset(0, 1, 0))) cells.push(c)
+  }
+  cells.sort((a, b) => a.offset(0.5, 0, 0.5).distanceTo(at) - b.offset(0.5, 0, 0.5).distanceTo(at))
+  for (const c of cells) {
+    const goal = new Vec3(c.x + 0.5, at.y, c.z + 0.5)
+    try { await bot.lookAt(goal.offset(0, 1.6, 0), true) } catch {}
+    try { bot.setControlState('forward', true) } catch {}
+    for (let i = 0; i < 10; i++) {
+      await sleep(50)
+      const h = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
+      if (!h || h.boundingBox === 'empty') { try { bot.setControlState('forward', false) } catch {}; return true }
+    }
+    try { bot.setControlState('forward', false) } catch {}
+  }
+  return false
+}
+
 function freed (this: any, bot, during) {
     this.buriedSaidAt = 0
     const dug = this.dugTotal || 0
@@ -189,4 +224,4 @@ function freed (this: any, bot, during) {
     })
   }
 
-module.exports = { buriedBy, fallingOverhead, freeIfBuried, visibleBurialBlock, freed }
+module.exports = { buriedBy, fallingOverhead, freeIfBuried, visibleBurialBlock, freed, stepOutOfWall }

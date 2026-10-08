@@ -46,13 +46,29 @@ test('крафт: из слитков и палки — железный меч;
   assert.equal(bestCraft([{ name: 'iron_ingot', count: 3 }]), null)
   assert.equal(bestCraft([{ name: 'diamond_sword' }, { name: 'iron_ingot', count: 2 }, { name: 'oak_planks', count: 4 }]), null, 'меч хуже имеющегося — не нужен')
   assert.equal(bestCraft([{ name: 'iron_sword' }, { name: 'iron_ingot', count: 8 }, { name: 'stick' }])?.item, 'iron_chestplate', 'меч уже есть — нагрудник')
-  assert.equal(first(state({ power: 3, unscouted: 4, craft_gain: 5 }, { enemy_power: 3 }))[0], 'CraftUpgrade')
+  assert.ok(first(state({ power: 3, unscouted: 4, craft_gain: 5 }, { enemy_power: 3 })).includes('CraftUpgrade'), 'крафт в плане')
 })
 
-test('засада: после срока лута, врага не видно и я не слабее — сперва засада, затем атака; после засады — сразу атака', () => {
-  assert.deepEqual(first(state({ power: 10 }, { deadline: true, enemy_power: 10 })), ['Ambush', 'Engage'])
-  assert.deepEqual(first(state({ power: 10 }, { deadline: true, enemy_power: 10, ambushed: true })), ['Engage'], 'одна засада за раунд')
-  assert.deepEqual(first(state({ power: 4 }, { deadline: true, enemy_power: 10 })), ['Engage'], 'слабее — засада не по мне')
+test('засада без позиции не даёт бонуса: неудачное ожидание не меняет риск боя (S7d, ревью Codex)', () => {
+  const { armsRegistry } = require('../src/pvp/arms-graph')
+  const eng = armsRegistry().all().find((x: any) => x.id === 'Engage')
+  const a = state({ power: 10 }, { deadline: true, enemy_power: 10, enemy_known: true })
+  const b = state({ power: 10 }, { deadline: true, enemy_power: 10, enemy_known: true, ambushed: true })
+  assert.equal(eng.estimateRisk(a), eng.estimateRisk(b))
+  assert.deepEqual(first(state({ power: 10 }, { deadline: true, enemy_power: 10, ambushed: true })), ['Engage'])
+})
+
+test('гонка, S7d (ревью Codex): польза сундука тает к полному набору; при 3 хп от сильного — сперва восстановиться', () => {
+  const { chestMargin, powerOf } = require('../src/pvp/arms-graph')
+  const full = powerOf(['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots', 'diamond_sword', 'shield'].map(name => ({ name }))).total
+  assert.ok(chestMargin(1) > 0.9 && chestMargin(full) < 0.3)
+  const fullPlan = first(state({ power: Math.round(full), chests: 3 }, { enemy_power: Math.round(full), enemy_known: true }))
+  assert.ok(fullPlan.filter((x: string) => x === 'LootChest').length <= 1, fullPlan.join('>'))
+  const low = state({ power: 14, chests: 2, heal_items: 2 }, { enemy_near: true, enemy_known: true, enemy_power: 10 }); low.health = 3
+  const lp = first(low)
+  assert.ok(['Retreat', 'Recover'].includes(lp[0]) && lp.indexOf('Recover') >= 0 && lp.indexOf('Recover') < lp.indexOf('Engage'), 'на 3 хп — отойти и вылечиться до боя: ' + lp.join('>'))
+  const ok = state({ power: 14, chests: 2, heal_items: 2 }, { enemy_near: true, enemy_known: true, enemy_power: 10 })
+  assert.equal(first(ok)[0], 'Engage', 'на 20 хп и сильнее — бить')
 })
 
 test('лаборатория: книга + ≥6 бутылок или лазурит + ≥20; цель — меч/броня не хуже камня', () => {
@@ -62,4 +78,19 @@ test('лаборатория: книга + ≥6 бутылок или лазур
   assert.equal(labReady([{ name: 'enchanted_book' }, { name: 'experience_bottle', count: 8 }, { name: 'iron_sword' }]), true, 'книга на наковальне дешевле')
   assert.equal(labReady([{ name: 'lapis_lazuli', count: 3 }, { name: 'experience_bottle', count: 30 }, { name: 'wooden_sword' }]), false)
   assert.deepEqual(first(state({ power: 6, lab_gain: 2 }, { enemy_power: 6, enemy_known: true })), ['EnchantAtLab', 'Engage'])
+})
+
+test('сторож боя (S7d): выстрел (отпустил «использовать») и урон по другому — прогресс; без них и под ударами — бросить', async () => {
+  const { watchFight } = require('../src/combat')
+  const gameClock = require('../src/game-clock')
+  const { EventEmitter } = require('node:events')
+  const mk = () => { const b: any = new EventEmitter(); b.health = 20; b.entity = { position: { distanceTo: () => 5 } }; b.attack = () => {}; b.deactivateItem = () => {}; return b }
+  const a = mk(); const wa = watchFight(a, { aborted: false, onAbort: [] })
+  const b = mk(); const wb = watchFight(b, { aborted: false, onAbort: [] })
+  b.deactivateItem() // выстрел из лука
+  a.health = 14; b.health = 14
+  await new Promise(r => gameClock.setTimeout(r, 4300))
+  assert.equal(wa.ctl.aborted, true, 'ни удара, ни выстрела, −6 хп — бросил')
+  assert.equal(wb.ctl.aborted, false, 'стрелял — бой идёт')
+  wa.close(); wb.close()
 })

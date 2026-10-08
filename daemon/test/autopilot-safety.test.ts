@@ -209,3 +209,17 @@ test('при включённой тактике фоновый отход де�
     assert.deepEqual(calls, ['run'], 'the cancelled flight does not resume into cover')
   } finally { lock.cancel(session) }
 })
+
+test('S7d: голова в барьере (не ломается) — не копать, шагнуть в соседнюю свободную клетку', async () => {
+  const { stepOutOfWall } = require('../src/autopilot/suffocation')
+  const Vec3 = require('vec3')
+  const barrier = (p) => p.x === 0 && p.z === 0 && p.y >= 64 && p.y <= 65
+  const bot: any = {
+    entity: { position: new Vec3(0.5, 64, 0.5) },
+    blockAt: (p) => { const q = p.floored ? p.floored() : p; const b = barrier(q) || (q.x === 1 && q.z === 0) || q.y < 64; return { name: barrier(q) ? 'barrier' : b ? 'stone' : 'air', boundingBox: b ? 'block' : 'empty', position: q } },
+    lookAt: async () => {},
+    setControlState: (k, v) => { if (k === 'forward' && v) bot.entity.position = new Vec3(-0.5, 64, 0.5) }
+  }
+  assert.equal(await stepOutOfWall.call({}, bot), true)
+  assert.equal(bot.entity.position.x, -0.5)
+})

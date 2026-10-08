@@ -15,7 +15,7 @@ for (const r of rows) {
 }
 // --agg: свод по всем раундам — победы по бойцам и по старту, медианы времени до оружия/брони, сундуки, сила в сшибке.
 if (process.argv.includes('--agg')) {
-  const med = (a: any[]) => { a = a.filter(x => x != null).sort((x, y) => x - y); return a.length ? a[a.length >> 1] : null }
+  const med = (a: any[]) => { a = a.filter(x => x != null).sort((x, y) => x - y); return a.length ? (a[(a.length - 1) >> 1] + a[a.length >> 1]) / 2 : null }
   const by: Record<string, number> = {}; const bySide: Record<string, number> = { W: 0, E: 0 }
   const fw: any[] = []; const fa: any[] = []; const ch: any[] = []; const dur: any[] = []; const tps: any[] = []; const pw: any[] = []; const pl: any[] = []
   let draws = 0; let tact = 0; let richer = 0; const eng: any[] = []; const strat: Record<string, number> = {}
@@ -23,7 +23,8 @@ if (process.argv.includes('--agg')) {
     dur.push(r.durS); tps.push(r.tps)
     for (const x of Object.values<any>(r.sides)) {
       fw.push(x.firstWeapon); fa.push(x.firstArmor); ch.push(x.chests)
-      eng.push((x.plan.find((p: any) => p.s === 'Engage') || {}).t)
+      // Первый ВХОД в Engage (S7d, ревью Codex); в старых файлах его нет — конец первого Engage из плана.
+      eng.push(x.firstEngage ?? (x.plan.find((p: any) => p.s === 'Engage') || {}).t)
       for (const p of x.plan) strat[p.s] = (strat[p.s] || 0) + 1
     }
     if (!r.winner) { draws++; continue }
@@ -39,5 +40,5 @@ if (process.argv.includes('--agg')) {
   console.log(`СВОД: раундов ${rows.length}, ничьих ${draws}; победы ${JSON.stringify(by)}; по старту запад ${bySide.W} : восток ${bySide.E}`)
   console.log(`  медианы: первое оружие ${med(fw)} с (без оружия ${fw.filter(x => x == null).length} из ${fw.length}), броня ${med(fa)} с (без ${fa.filter(x => x == null).length}), сундуков ${med(ch)}, раунд ${med(dur)} с, TPS ${med(tps)} (мин ${Math.min(...tps)})`)
   console.log(`  сила в сшибке: победитель ${med(pw)}, проигравший ${med(pl)}; бой проигравшего оборван тактикой: ${tact} из ${rows.length - draws}; у победителя больше сундуков: ${richer}`)
-  console.log(`  первая атака (конец первого Engage) медиана ${med(eng)} с; стратегий: ${JSON.stringify(strat)}`)
+  console.log(`  первый вход в Engage (в старых сериях — конец первого) медиана ${med(eng)} с; стратегий: ${JSON.stringify(strat)}`)
 }

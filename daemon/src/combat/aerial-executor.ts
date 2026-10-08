@@ -168,7 +168,21 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     if (!readyStrike(decision, target)) {
       await operations.fly(bot, ctl, {
         maxMs: 1500, stats, phase: 'воздушный бой',
-        goal: () => ({ kind: 'strike', at: (ticks: number) => operations.predictGlider(target, ctx.vel?.() ?? target.velocity ?? { x: 0, y: 0, z: 0 }, ticks), within: 3.5 }),
+        // Цель «strike» — модель пике с булавой (свап на нагрудник и свободное падение: пол после точки удара не в цене,
+        // высота падения — в плюс). Для копья это пике в пол: офлайн (research/claude-1006/s7d/strikesim.js) — касание
+        // с высотой падения 5–20 (урон 3–18), в колизее s7d-n-30 — 5 из 10 «fell from a high place» (S7d). Копьё —
+        // пролёт мимо его груди (point + reach) над полом (gap), пол и высота падения в цене как у всех полётов.
+        goal: () => {
+          const at = (ticks: number) => operations.predictGlider(target, ctx.vel?.() ?? target.velocity ?? { x: 0, y: 0, z: 0 }, ticks)
+          // Пролёт не вплотную, а в 3 бл. от его груди с моей стороны: копьё бьёт на 2–4.5 бл. (ближе 2 — «мёртвая зона»;
+          // s7d-z-27p р.5 — 2 мин «midair-spear» на 1.5–2.3 бл. без попадания, ничья по застою).
+          const stand = (ticks: number) => {
+            const c = at(ticks).offset(0, 1.2, 0); const m = bot.entity.position
+            const dx = m.x - c.x; const dy = m.y + 0.4 - c.y; const dz = m.z - c.z; const n = Math.hypot(dx, dy, dz) || 1
+            return c.offset(dx / n * 3, dy / n * 3, dz / n * 3)
+          }
+          return decision.node === 'DiveStrike' ? { kind: 'strike', at, within: 3.5 } : { kind: 'point', at: stand, reach: true, gap: 1.0 }
+        },
         until: () => {
           if (!valid(ctl, target.id)) return 'aerial target changed'
           decision = decide(ctl, ctx)

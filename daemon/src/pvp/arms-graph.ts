@@ -78,6 +78,13 @@ export function bestCraft(items: Item[]): { item: string; gain: number } | null 
 // ---------------------------------------------------------------- граф
 // P(проиграть сшибку) по разнице сил: логистика с масштабом 4 (одна броня-тир ≈ 4 очка).
 export const loseChance = (mine: number, his: number): number => Math.min(0.98, Math.max(0.02, 1 / (1 + Math.exp((mine - his) / 4))))
+// Предельная польза сундука (S7d, ревью Codex: «сундук = +4» без предела — полный алмаз планировал ещё три сундука
+// против равного): ожидаемая прибавка тает по мере того, как снаряжение подходит к полному боевому набору.
+const FULL_KIT = powerOf(['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots', 'diamond_sword', 'shield', 'totem_of_undying'].map(name => ({ name }))).total
+export const chestMargin = (power: number): number => Math.min(1, Math.max(0.1, 1 - power / FULL_KIT))
+// Своя сила в сшибке — с поправкой на здоровье (S7d, ревью Codex: план одинаков при 1 и 20 хп): на 1 хп от снаряжения
+// остаётся ~0.4 — один-два удара до смерти.
+export const effPower = (s: WorldState): number => amount(s, 'power') * (0.4 + 0.6 * Math.min(1, Math.max(0, (s.health ?? 20) / 20)))
 export interface ArmsOptions { chestValue?: number; fightSeconds?: number }
 export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
   const chestValue = options.chestValue ?? 4
@@ -94,7 +101,7 @@ export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
     { resources: { unscouted: -1, chests: 1 } }, () => 15, () => 0.01,
     (b, a) => amount(a, 'unscouted') < amount(b, 'unscouted') || amount(a, 'chests') > amount(b, 'chests'))
   add('LootChest', 'arms.loot', s => free(s) && amount(s, 'chests') > 0,
-    { resources: { chests: -1, power: chestValue } }, () => 10, () => 0.01,
+    s => ({ resources: { chests: -1, power: Math.round(chestValue * chestMargin(amount(s, 'power')) * 10) / 10 } }), () => 10, () => 0.01,
     (b, a) => amount(a, 'chests') < amount(b, 'chests') || amount(a, 'power') > amount(b, 'power'))
   add('OpenCache', 'arms.cache', s => free(s) && amount(s, 'caches') > 0,
     { resources: { caches: -1, chests: 1 } }, () => 12, () => 0.02,
@@ -109,18 +116,25 @@ export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
     (b, a) => amount(a, 'power') > amount(b, 'power'), { progressCondition: (b, a) => amount(a, 'lab_gain') < amount(b, 'lab_gain') })
   // Уйти от сильного или равного, пока есть что брать: лут дешевле сшибки наугад (равные с пустыми руками — не драться).
   add('Retreat', 'arms.retreat', s => knows(s, 'enemy_near') && !knows(s, 'enemy_contact') && !knows(s, 'deadline') &&
-    amount(s, 'chests') + amount(s, 'caches') + amount(s, 'unscouted') > 0 && enemy(s) >= amount(s, 'power') - 1,
+    amount(s, 'chests') + amount(s, 'caches') + amount(s, 'unscouted') > 0 && enemy(s) >= effPower(s) - 1,
     { facts: { enemy_near: false } }, () => 10, () => 0.05, (_b, a) => !knows(a, 'enemy_near'))
+  // Восстановиться (S7d, ревью Codex: при 1 и 20 хп план был одинаков, а отход ничего не давал — в модели хп не
+  // росло). Не в контакте: съесть/выпить лечение или переждать регенерацию в стороне; цена — время, риск — его близость.
+  add('Recover', 'arms.heal', s => (s.health ?? 20) < 14 && !knows(s, 'enemy_contact'),
+    { health: 20, facts: { enemy_near: false } },
+    s => amount(s, 'heal_items') > 0 ? 5 : Math.max(4, (20 - (s.health ?? 20)) * 1.5),
+    s => knows(s, 'enemy_near') ? 0.3 : 0.05, (b, a) => (a.health ?? 20) > (b.health ?? 20) + 3)
   // Засада (TODO п.9): срок лута вышел, врага не видно, я не слабее — ждать у середины поля со своей стороны
   // (через неё идёт его обход), а не искать вслепую; первый удар — мой (+3 к силе в оценке сшибки). Один раз.
   add('Ambush', 'arms.ambush', s => knows(s, 'deadline') && !knows(s, 'enemy_known') && !knows(s, 'enemy_near') &&
-    !knows(s, 'ambushed') && amount(s, 'power') >= enemy(s), { facts: { enemy_known: true, ambushed: true } }, () => 25, () => 0.02,
+    !knows(s, 'ambushed') && effPower(s) >= enemy(s), { facts: { enemy_known: true, ambushed: true } }, () => 25, () => 0.02,
     (_b, a) => knows(a, 'enemy_known'), { progressCondition: (_b, a) => knows(a, 'ambushed') })
   // Атака: найти (последнее наблюдение) и драться до конца — pvp.duel.
-  const first = (s: WorldState) => knows(s, 'ambushed') && knows(s, 'enemy_known') ? 3 : 0
+  // Бонуса «засада = +3 к силе» нет (ревью Codex: ожидание само по себе преимущества не даёт, а флаг оставался и после
+  // неудачной засады); своя сила — с поправкой на здоровье.
   add('Engage', 'arms.engage', () => true, { facts: { opponent_defeated: true } },
     s => fightSeconds + (knows(s, 'enemy_near') ? 0 : knows(s, 'enemy_known') ? 10 : 30),
-    s => loseChance(amount(s, 'power') + first(s), enemy(s)), (_b, a) => knows(a, 'opponent_defeated'),
+    s => loseChance(effPower(s), enemy(s)), (_b, a) => knows(a, 'opponent_defeated'),
     // Обход и неоконченная сшибка — тоже ход к цели: после срока лута другого пути нет, и «исчерпать» атаку нельзя.
     { progressCondition: () => true, timeoutMs: 180000 })
   return registry

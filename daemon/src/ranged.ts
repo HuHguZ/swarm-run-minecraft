@@ -536,12 +536,15 @@ function plan (bot, ctx) {
     // целиком (замер try-xbow xplain: 9 выстрелов, 0 урона) — только «Пронзание»,
     // остальное держать заряженным до окна.
     if (ctx.shieldAtUs) {
-      if (pierce && d >= 3.2) return { act: 'fire', item: pierce.item, info: pierce.info, why: '«Пронзание» сквозь его щит' }
-      // Ракета в пол сбоку-сзади: взрыв не спереди — щит не держит (shieldBypassPoint).
-      if (rocket && d >= 6 && d <= 30) {
-        const bp = shieldBypassPoint(bot, entity, require('./pick').eyeOf(bot).offset(0, -ROCKET_DROP, 0), rocket.info.stars ?? 3) // pick здесь — локальный выбор арбалета
-        if (bp) return { act: 'fire', item: rocket.item, info: rocket.info, point: bp.point, why: `фейерверк в пол за его щит (${bp.raw} до брони)` }
-      }
+      // Оба обхода щита — по ожидаемому урону, а не порядком (S7d): «Пронзание» — стрела арбалета всегда крит 7–11
+      // (ср. 9) × попадание 0.6 (kill-planner pHit.arrow); ракета в пол сбоку-сзади — взрыв не спереди, щит не держит
+      // (shieldBypassPoint: сырой урон по точке) × 0.7 (pHit.firework).
+      const pierceE = pierce && d >= 3.2 ? 9 * 0.6 : 0
+      let bp = null
+      if (rocket && d >= 6 && d <= 30) bp = shieldBypassPoint(bot, entity, require('./pick').eyeOf(bot).offset(0, -ROCKET_DROP, 0), rocket.info.stars ?? 3) // pick здесь — локальный выбор арбалета
+      const rocketE = bp ? bp.raw * 0.7 : 0
+      if (rocketE > pierceE && bp) return { act: 'fire', item: rocket.item, info: rocket.info, point: bp.point, why: `фейерверк в пол за его щит (${bp.raw} до брони)` }
+      if (pierceE > 0) return { act: 'fire', item: pierce.item, info: pierce.info, why: '«Пронзание» сквозь его щит' }
     } else {
       // Причины по убыванию ценности: первая, что подошла.
       // Держим дистанцию (ctx.kite, 2026-09-26: «арбалет» 0:4 и ничья против

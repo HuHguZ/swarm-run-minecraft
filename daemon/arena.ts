@@ -324,7 +324,7 @@ async function resetArena (kit: any = {} as Record<string, any>) {
   if (TERRAIN) {
     await terrainMod.clearTerrain(cmd, fillBox, { X, Y, Z, R: CLEAN_R, top: TOP() })
     const seed = TERRAIN_SEED != null ? TERRAIN_SEED + terrainRound++ : (gameClock.wall.now() >>> 0)
-    const features = await terrainMod.buildTerrain(cmd, { X, Y, Z, R: CLEAN_R, seed, avoid: [[X - 6, Z], [X + 6, Z]] })
+    const features = await terrainMod.buildTerrain(cmd, { X, Y, Z, R: CLEAN_R, seed, avoid: [[X - 6, Z], [X + 6, Z]], canopies: Number(process.env.ARENA_CANOPY || 0) })
     const kinds: Record<string, any> = {} as Record<string, any>
     for (const f of features) kinds[f.kind] = (kinds[f.kind] || 0) + 1
     log(`рельеф (seed ${seed}): ` + Object.entries<any>(kinds).map(([k, v]: any) => `${k}×${v}`).join(', '))
@@ -418,6 +418,10 @@ const KITS = [
   // Трезубцы под дождём (weather: «Тягун» работает только в воде или под дождём,
   // TridentItem.use; в мире пользователя погоду не трогаем — ARENA_GENTLE):
   // «Верность» — бросок и возврат, «Тягун» — рывок, «Громовержец» — в грозу.
+  // S7d (пункт I): «Громовержец» в грозу — молния по попаданию броском, если над целью небо (channeling.json). У обоих
+  // по два трезубца с «Верностью III» (вернётся сам, TridentItem/ThrownTrident: ускорение возврата 0.05·уровень),
+  // щит (трезубец — снаряд, щит держит спереди; молния — lightning_bolt мимо щита), вода — потушить поджог.
+  { name: 'громовержец: трезубцы в грозу', onBody: true, weather: 'thunder', a: [...ARMOR.iron, 'trident[enchantments={channeling:1,loyalty:3}]', 'trident[enchantments={channeling:1,loyalty:3}]', 'iron_sword', 'shield', 'water_bucket', 'golden_apple 3', 'cobblestone 32'], b: null },
   { name: 'трезубцы', onBody: true, weather: 'rain', a: [...ARMOR.iron, 'trident[enchantments={loyalty:3}]', 'trident[enchantments={riptide:3}]', 'trident[enchantments={channeling:1,loyalty:1}]', 'iron_sword', 'water_bucket', 'golden_apple 3', 'cobblestone 64', 'chorus_fruit 4'], b: null },
   // Дальний бой (ranged.js, read.js, 2026-09-26; PVP-RESEARCH г.3 «арбалеты»):
   // A — два арбалета с «Быстрой перезарядкой III»: «Тройной выстрел» под
@@ -694,6 +698,43 @@ const lostLink = r => !!(r && r.status === 'interrupted' && r.by && /kicked|disc
 // do_immediate_respawn возрождается раньше, чем арена спросит хп, и на точке
 // возрождения у арены выглядел живым — смерть шла в «ничью» (s7 06.10).
 const deathBase = new Map()
+// Смерти раунда — по логу сервера слота (ND_SERVER_LOG), строго от байта начала раунда до его конца (S7d 08.10:
+// xsum сопоставлял смерти окном 15 с реального времени и на 750 TPS путал раунды). Причина: foe — сообщение
+// называет соперника; self — своё имя (свой кристалл/стрела); crash — элитры о стену («kinetic energy») или падение
+// без соперника в сообщении; blast — взрыв ни на кого (якорь: «Intentional Game Design»); other.
+const SERVER_LOG = process.env.ND_SERVER_LOG || null
+const logSize = () => { try { return SERVER_LOG ? fs.statSync(SERVER_LOG).size : null } catch { return null } }
+const DEATH_RE = /^(was |died|blew|hit the ground|fell |experienced|went |burned|tried to swim|drowned|walked into|withered|froze|starved|suffocated|discovered|didn't)/
+// Имя — целым словом: «NeuroFarm30» входит в «NeuroFarm30b» (первая версия считала самоподрыв 30b ударом 30).
+const named = (msg, n) => (' ' + msg + ' ').includes(' ' + n + ' ')
+function deathKind (msg, who, foes) {
+  if (/kinetic energy/.test(msg)) return 'crash'
+  const by = foes.find(f => named(msg, f))
+  if (/Intentional Game Design/.test(msg)) return 'blast'
+  if (by && !/while trying to escape|whilst trying to escape/.test(msg)) return 'foe'
+  if (named(msg, who)) return 'self'
+  if (/fell|hit the ground|doomed to fall/.test(msg)) return by ? 'fall-escape' : 'crash'
+  if (by) return 'foe'
+  return 'other'
+}
+function roundDeaths (from, names) {
+  if (from == null || !SERVER_LOG) return null
+  try {
+    const size = fs.statSync(SERVER_LOG).size
+    const start = size < from ? 0 : from // лог перевернулся — с начала нового
+    const fd = fs.openSync(SERVER_LOG, 'r')
+    const buf = Buffer.alloc(size - start)
+    fs.readSync(fd, buf, 0, buf.length, start)
+    fs.closeSync(fd)
+    const out = []
+    for (const line of buf.toString('utf8').split(/\r?\n/)) {
+      const m = /^\[(\d\d:\d\d:\d\d)\] \[Server thread\/INFO\]: (\S+) (.+)$/.exec(line)
+      if (!m || !names.includes(m[2]) || !DEATH_RE.test(m[3])) continue
+      out.push({ t: m[1], who: m[2], msg: m[3], kind: deathKind(m[3], m[2], names.filter(n => n !== m[2])) })
+    }
+    return out
+  } catch { return null }
+}
 async function where (c, out: any = {} as Record<string, any>) {
   const st = await c.call('status').catch(() => null)
   if (!st || !st.state || st.state.connected === false) return null
@@ -806,6 +847,9 @@ async function round (kit, n) {
   // Погода набора (трезубцы: «Тягун» — только под дождём); в чужом мире не трогаем.
   if (!GENTLE) await cmd(`/weather ${kit.weather || 'clear'}`)
   await alive(A); await alive(B)
+  // Бойцы — в выживании (S7d: мир слота 29 — копия карты-паркура, режим по умолчанию «приключение»: новый боец
+  // NeuroFarm29b не ставил и не ломал блоки весь базовый прогон). Ботам режим ставим и в чужом мире (это их тела).
+  for (const nm of HUMAN ? [NA] : [NA, NB]) await cmd(`/gamemode survival ${nm}`)
   // Наборы раунда — с чарами (kitSides) или как в KITS.
   const sides = kitSides(kit, n)
   const t0 = gameClock.now()
@@ -944,6 +988,7 @@ async function round (kit, n) {
       B.call('stop').catch(() => {})
     }
   }, 3000)
+  const log0 = logSize()
   const vs = HUMAN ? `${NA} ${score[NA]} : ${score[NB]} вы` : `${NA} ${score[NA]} : ${score[NB]} ${NB}`
   await cmd(`/say Раунд ${n}: ${kit.name}. Счёт ${vs}. 3... 2... 1... БОЙ!`); await sleep(3000)
   const [ra, rb] = await Promise.all([
@@ -954,24 +999,47 @@ async function round (kit, n) {
   gameClock.clearInterval(gameWatch)
   log(`${NA}: ${short(ra)}`)
   log(`${NB}: ${short(rb)}`)
-  const da = ra.detail || {} as Record<string, any>
-  const db = rb.detail || {} as Record<string, any>
+  let da = ra.detail || {} as Record<string, any>
+  let db = rb.detail || {} as Record<string, any>
+  // Пустой отчёт (fight вернулся раньше, чем дуэль собрала отчёт: стоп, смерть) — последний отчёт дуэли из демона.
+  const fill = async (c, d) => {
+    if (d && (d.tricks || d.swings != null)) return d
+    await gameClock.wall.sleep(1500)
+    const s = await c.call('status', { lastDuel: true }).catch(() => null)
+    const ld = s && (s.lastDuel || (s.detail && s.detail.lastDuel))
+    if (!ld || !ld.detail || gameClock.wall.now() - ld.at > 60000) return d
+    return { ...ld.detail, ...d, filled: true }
+  }
+  da = await fill(A, da)
+  if (!HUMAN) db = await fill(B, db)
   // Проиграл тот, кто умер (или выпал за стену); оба — ничья.
   if (over.ringout === NA) { da.died = true; da.ringout = true }
   if (over.ringout === NB) { db.died = true; db.ringout = true }
+  // Смерть — по логу сервера, когда он есть (S7d: s7d-base-28 «якоря» р.3–4 — арена записала смерть NeuroFarm28
+  // без строки смерти на сервере: тотем/рывок статуса принимались за смерть, победа уходила не тому). Вылет за стену —
+  // не смерть, его оставляем. Арена говорит «умер», а сервер нет — смерть не засчитана (deathUnconfirmed).
+  const dl = await (async () => { await gameClock.wall.sleep(1000); return roundDeaths(log0, [NA, NB]) })()
+  if (dl) {
+    const died = new Set(dl.map(x => x.who))
+    for (const [d, nm] of [[da, NA], [db, NB]] as Array<any>) {
+      if (d.died && !d.ringout && !died.has(nm)) { d.died = false; d.deathUnconfirmed = true; log(`${nm}: арена считала смерть, в логе сервера смерти нет — не засчитана`) }
+      if (!d.died && died.has(nm)) { d.died = true; d.deathFromLog = true }
+    }
+  }
   const winner = da.died && !db.died ? NB : db.died && !da.died ? NA : !da.died && !db.died && da.killed ? NA : null
   if (winner) score[winner]++
   else score.draw++
   log(`итог: ${winner ? 'победил ' + winner : 'ничья'} | счёт ${NA} ${score[NA]} : ${score[NB]} ${NB}, ничьих ${score.draw}`)
   // Машинная строка раунда (сводка — farm/crystal/csum.js, 2026-09-30).
   // Сводка — farm/crystal/tsum.js: частоты и урон приёмов (trickDmg), фактический TPS.
-  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, rod: d.rod, calc: d.calc, tricks: d.tricks, trickDmg: d.trickDmg })
+  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, deathUnconfirmed: d.deathUnconfirmed || undefined, deathFromLog: d.deathFromLog || undefined, filled: d.filled || undefined, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, rod: d.rod, util: d.util, calc: d.calc, combos: d.combos, melee: d.melee, blocks: d.blocks, blockLog: d.blockLog, shield: d.shield, vsShield: d.vsShield, storm: d.storm, breakUnder: d.breakUnder, axeOnShield: d.axeOnShield, tricks: d.tricks, trickDmg: d.trickDmg })
   const tick1 = gameClock.snapshot()?.ticks ?? null
   const phys1 = [await phys(A), HUMAN ? null : await phys(B)]
   const share = (i) => phys0[i] && phys1[i] && phys1[i].t > phys0[i].t ? Math.round((phys1[i].p - phys0[i].p) / (phys1[i].t - phys0[i].t) * 100) / 100 : null
   const wallS = (gameClock.wall.now() - wall0) / 1000
   const tps = tick0 != null && tick1 != null && wallS > 0 ? Math.round((tick1 - tick0) / wallS) : null
-  log('ROUND ' + JSON.stringify({ kit: kit.name, n, winner, durS: Math.round((gameClock.now() - roundAt) / 1000), wallS: Math.round(wallS), tps, lagMax: { a: lagMax[A_URL] ?? null, b: lagMax[B_URL] ?? null }, physShare: { a: share(0), b: share(1) }, sides: process.env.ARENA_SIDES === 'swap' ? 'swap' : 'std', a: side(NA, da), b: side(NB, db) }))
+  const deaths = dl
+  log('ROUND ' + JSON.stringify({ kit: kit.name, n, winner, deaths, durS: Math.round((gameClock.now() - roundAt) / 1000), wallS: Math.round(wallS), tps, lagMax: { a: lagMax[A_URL] ?? null, b: lagMax[B_URL] ?? null }, physShare: { a: share(0), b: share(1) }, sides: process.env.ARENA_SIDES === 'swap' ? 'swap' : 'std', a: side(NA, da), b: side(NB, db) }))
   await sleep(4000)
 }
 

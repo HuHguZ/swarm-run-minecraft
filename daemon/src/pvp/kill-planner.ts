@@ -15,7 +15,7 @@ const DEFAULTS = {
   horizon: 60, // T, тиков
   depth: 3, // действий в плане, 2–4
   beam: 16, // частичных планов на шаг
-  pHit: { melee: 0.9, jab: 0.8, charge: 0.6, smash: 0.7, arrow: 0.6, firework: 0.7, crystal: 0.85, anchor: 0.8 },
+  pHit: { melee: 0.9, jab: 0.8, charge: 0.6, smash: 0.7, arrow: 0.6, firework: 0.7, crystal: 0.85, anchor: 0.8, rod: 0.4, trident: 0.55 },
   pCrit: 0.8, // доля ударов, которые бот доводит до крита, когда крит возможен
   reach: 3.0, // ENTITY_INTERACTION_RANGE игрока (Player.createAttributes 3.0)
   sprint: 0.28, // бл/тик сближения спринтом (5.6 бл/с)
@@ -26,7 +26,12 @@ const DEFAULTS = {
   crystalTicks: 4, // поставить и ударить
   anchorTicks: 8, // поставить, зарядить, нажать
   arrowRange: 15, // дальше попадание стрелой падает ∝ 1/d
-  minPKill: 0.05
+  minPKill: 0.05,
+  // Удочка (S7d): зацеп — 40 % забросов (натива s7i: 38/96); рывок FishingHook.pullEntity Δv = 0.1·(я − поплавок) —
+  // на 6 бл. 0.6 б/т к нам, на земле гасится трением за ~4 тика: его к нам ≈ 0.45 дистанции, и 10 тиков он идёт к нам
+  // (это и есть комбо «подтяг → спринт-удар / крит / разгон копья»: rel разгона = моя + его скорость к нам).
+  rodMax: 20, rodPullShare: 0.45, rodPullTicks: 10,
+  tridentRange: 24
 }
 const SPEAR_JAB_MIN = 2.0 // AttackRange(2.0, 4.5, …) у копья: Item$Properties.spear
 const SPEAR_JAB_MAX = 4.5
@@ -35,7 +40,8 @@ const REGEN_MEAN = (REGEN_FAST + REGEN_SLOW) / 2
 const r1 = (x) => Math.round(x * 10) / 10
 const NAMES = {
   melee: 'удар', jab: 'укол копьём', charge: 'разгон копьём', smash: 'булава с падения', 'axe-shield': 'топором по щиту',
-  xbow: 'арбалет', 'xbow-load': 'зарядить арбалет и выстрелить', bow: 'лук', crystal: 'кристалл', anchor: 'якорь'
+  xbow: 'арбалет', 'xbow-load': 'зарядить арбалет и выстрелить', bow: 'лук', crystal: 'кристалл', anchor: 'якорь',
+  rod: 'подтяг удочкой', trident: 'бросок трезубца'
 }
 const label = (t) => `${NAMES[t.kind] || t.kind}${t.item && t.kind !== 'axe-shield' ? ` (${t.item}${t.variant ? ', ' + t.variant : ''})` : t.variant ? ` (${t.variant})` : ''}`
 
@@ -81,6 +87,14 @@ function catalog (obs) {
   if (empty && (arrows || rockets)) out.push({ kind: 'xbow-load', item: 'crossbow', it: empty, rocketStars: rockets ? (rockets.stars ?? 0) : 0, arrows })
   const bow = items.find(i => i.name === 'bow')
   if (bow && arrows) out.push({ kind: 'bow', item: 'bow', it: bow })
+  // Удочка — подтяг (урона нет, меняет дистанцию и даёт ему скорость к нам: см. DEFAULTS.rodPullShare).
+  const rod = items.find(i => i.name === 'fishing_rod')
+  if (rod && obs.foe.player !== false) out.push({ kind: 'rod', item: 'fishing_rod', it: rod })
+  // Трезубец броском (не «Тягун» — TridentItem.releaseUsing его не бросает): 8 (ThrownTrident.baseDamage, тип trident —
+  // снаряд, щит держит), «Громовержец» в грозу по цели под небом — молния 5 (lightning_bolt: мимо щита, броня держит)
+  // + поджог 8 с (on_fire, мимо брони). Без «Верности» — трезубец остаётся на земле: дорогой.
+  const tri = items.filter(i => i.name === 'trident' && !lvl(i, 'riptide')).sort((a, b) => (lvl(b, 'channeling') - lvl(a, 'channeling')) || (lvl(b, 'loyalty') - lvl(a, 'loyalty')))[0]
+  if (tri) out.push({ kind: 'trident', item: 'trident', it: tri, expensive: !lvl(tri, 'loyalty') })
   // Сильные расходники — только если вызывающий знает точку и видимость (crystal.ts / boom.ts).
   if (obs.boom && obs.boom.crystal && countOf(items, 'end_crystal') > 0) out.push({ kind: 'crystal', item: 'end_crystal', expensive: true, at: obs.boom.crystal })
   if (obs.boom && obs.boom.anchor && countOf(items, 'respawn_anchor') > 0 && countOf(items, 'glowstone') > 0) out.push({ kind: 'anchor', item: 'respawn_anchor', expensive: true, at: obs.boom.anchor })
@@ -89,9 +103,10 @@ function catalog (obs) {
 
 // ---------------------------------------------------------------- одно действие
 
-function approachTicks (dist, target, obs, P) {
+function approachTicks (dist, target, obs, P, st: any = null) {
   if (dist <= target) return 0
-  const closing = P.sprint + Math.max(-P.sprint, obs.foe.approach || 0)
+  const pull = st && st.pullUntil > st.t ? st.pullV : 0
+  const closing = P.sprint + Math.max(-P.sprint, (obs.foe.approach || 0) + pull)
   return closing > 0.02 ? Math.ceil((dist - target) / closing) : Infinity
 }
 // Свёртка равновероятных исходов в ≤ 3 корзины (среднее внутри) — чтобы дерево планов не взрывалось.
@@ -122,7 +137,7 @@ function run (tpl, st, obs, P) {
   const sharpness = lvl(tpl.it, 'sharpness')
   switch (tpl.kind) {
     case 'melee': {
-      const app = approachTicks(st.dist, P.reach - 0.1, obs, P)
+      const app = approachTicks(st.dist, P.reach - 0.1, obs, P, st)
       if (!isFinite(app)) return null
       if (tpl.variant === 'now') {
         if (switched) return null
@@ -168,7 +183,8 @@ function run (tpl, st, obs, P) {
       return { dt, outs: [{ p: P.pHit.jab, raw, kind: 'melee' }], attack: true, dist: Math.min(st.dist, SPEAR_JAB_MAX - 0.1) + P.knockback * 0.5 }
     }
     case 'charge': {
-      const rel = P.runway + Math.max(0, (foe.approach || 0) * 20)
+      const pull = st.pullUntil > st.t ? st.pullV : 0
+      const rel = P.runway + Math.max(0, ((foe.approach || 0) + pull) * 20)
       const raw = dm.spearChargeRaw({ weapon: tpl.item, sharpness, rel })
       if (!(raw > 0) || st.dist < 3) return null
       const s = require('../spear').SPEARS[tpl.item]
@@ -205,6 +221,27 @@ function run (tpl, st, obs, P) {
       const outs = dm.arrowOutcomes({ speed: dm.arrowSpeedAt(shot.speed, st.dist), power: lvl(tpl.it, 'power'), crit: shot.crit }).map(o => ({ ...o, kind: 'projectile' }))
       return { dt: sw + dm.BOW_FULL_TICKS + 1, outs: scale(bucket(outs), q) }
     }
+    case 'rod': {
+      if (st.rodUsed || !obs.los || st.dist < 3.5 || st.dist > P.rodMax || foe.blocking) return null
+      // Поплавок ~1.2–1.5 б/т: долетает за dist/1.3 тика + заброс; на зацепе — подсечка (тот же тик).
+      const dt = sw + 2 + Math.ceil(st.dist / 1.3)
+      const pulled = Math.max(2.2, st.dist * (1 - P.rodPullShare))
+      return { dt, outs: [{ p: P.pHit.rod, raw: 0, kind: 'none', dist: pulled, pull: { v: 0.1 * st.dist * 0.5, ticks: P.rodPullTicks } }], attack: false, rod: true }
+    }
+    case 'trident': {
+      if (st.tridentUsed || !obs.los || st.dist < 3 || st.dist > P.tridentRange) return null
+      const it = tpl.it
+      // Натяжение ≥ 10 тиков (TridentItem.releaseUsing), полёт 2.5 б/т с сопротивлением 0.99 — ~dist/2.4 тика.
+      const dt = sw + 10 + Math.ceil(st.dist / 2.4)
+      // Попадание падает с дальностью и его боковой скоростью (упреждение по видимому ходу, решатель bow.aim):
+      // поперечный ход за время полёта сверх ~0.6 бл. (полрамки + ошибка упреждения) — вдвое меньше шанс за блок.
+      const fly = Math.ceil(st.dist / 2.4)
+      const drift = Math.max(0, (foe.lateral || 0) * fly - 0.6)
+      const q = P.pHit.trident * Math.min(1, 10 / Math.max(10, st.dist)) / (1 + drift)
+      const outs: any[] = [{ p: q, raw: 8, kind: 'projectile' }]
+      if (lvl(it, 'channeling') && obs.storm && obs.foeSky) outs[0].bolt = 5
+      return { dt, outs, tridentUsed: true }
+    }
     case 'crystal':
     case 'anchor': {
       if (st.boomUsed) return null
@@ -219,6 +256,7 @@ function run (tpl, st, obs, P) {
 
 // Удар по нему в момент t: щит → неуязвимость → защита. Возвращает прошедший урон и новое состояние щита/окна.
 function land (st, o, t, def) {
+  if (!(o.raw > 0)) return { d: 0, iframe: st.iframe, shieldOffUntil: st.shieldOffUntil }
   const ago = st.iframe ? t - st.iframe.at : Infinity
   const last = st.iframe ? { raw: st.iframe.raw, ago } : null
   const raised = st.shieldUp && t >= st.shieldOffUntil
@@ -229,7 +267,12 @@ function land (st, o, t, def) {
   }
   const it = dm.throughIframes(o.raw, last)
   const iframe = it.fresh ? { raw: o.raw, at: t } : (it.raw > 0 ? { raw: o.raw, at: st.iframe.at } : st.iframe)
-  return { d: dm.afterDefense(it.raw, o.kind, def, { breach: o.breach || 0 }), iframe, shieldOffUntil: st.shieldOffUntil }
+  let d = dm.afterDefense(it.raw, o.kind, def, { breach: o.breach || 0 })
+  // Молния «Громовержца» после попадания трезубцем (post_attack): своим источником, в том же тике — сверх окна
+  // неуязвимости только превышение 5 над уроном трезубца (обычно 0); поджог 8 с — on_fire мимо брони, ~1 за 20 т:
+  // в горизонт плана идёт как +2 (тушение водой/огнестойкость не видны заранее).
+  if (o.bolt) d += 2
+  return { d, iframe, shieldOffUntil: st.shieldOffUntil }
 }
 
 // ---------------------------------------------------------------- P(убить)
@@ -285,7 +328,11 @@ function initState (obs) {
     used: {},
     smashUsed: false,
     boomUsed: false,
-    loadedOnce: false
+    loadedOnce: false,
+    rodUsed: false,
+    tridentUsed: false,
+    pullUntil: 0,
+    pullV: 0
   }
 }
 
@@ -308,12 +355,16 @@ function extend (node, tpl, obs, def, P) {
     if (r.smash) base.smashUsed = true
     if (r.boom) base.boomUsed = true
     if (r.loaded) base.loadedOnce = true
+    if (r.rod) base.rodUsed = true
+    if (r.tridentUsed) base.tridentUsed = true
     let pLeft = 1
     for (const o of r.outs) {
       if (!(o.p > 0)) continue
       pLeft -= o.p
       const L = land(b.st, o, t, def)
-      const st = { ...base, iframe: L.iframe, shieldOffUntil: L.shieldOffUntil }
+      const st: any = { ...base, iframe: L.iframe, shieldOffUntil: L.shieldOffUntil }
+      if (o.dist != null) st.dist = o.dist
+      if (o.pull) { st.pullUntil = t + o.pull.ticks; st.pullV = o.pull.v }
       branches.push({ p: b.p * o.p, st, hits: L.d > 0 ? b.hits.concat({ t, d: L.d }) : b.hits })
       stepE += b.p * o.p * L.d
       if (L.d > 0) {
@@ -427,6 +478,16 @@ function planAttack (obs, opts: any = {}) {
   if (!done.length) return { action: null, why: 'нечем бить', expected: 0, pKill: 0, plan: [], dps: 0, danger, hp: est }
 
   const all = done.slice().sort((a, b) => (better(a, b) ? -1 : 1))
+  // Лучший план по каждому первому действию — граф боя (fight-graph) сравнивает приёмы между собой.
+  const alts = []
+  const seenKind = new Set()
+  for (const n of all) {
+    const k = n.seq[0].kind
+    if (seenKind.has(k)) continue
+    seenKind.add(k)
+    const endDist = n.branches.reduce((s, br) => s + br.p * br.st.dist, 0)
+    alts.push({ kind: k, item: n.seq[0].item, pKill: n.m.pKill, dps: n.m.dps, E: n.m.E, tEnd: n.m.tEnd, endDist, expensive: n.m.expensive, seq: n.seq.map(t => t.kind) })
+  }
   let best = all[0]
   // Сильный расходник — только если без него шанс заметно хуже (кулак добивает — кристалл не тратим).
   const cheap = all.find(n => !n.m.expensive)
@@ -466,7 +527,8 @@ function planAttack (obs, opts: any = {}) {
     plan,
     dps: pick.m.dps,
     danger,
-    hp: est
+    hp: est,
+    alts
   }
 }
 

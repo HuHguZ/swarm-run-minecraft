@@ -351,6 +351,31 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
   // mine — поставил я. anchorClick — мой клик-подрыв (свой или его якорь): чей взрыв силы 5.
   const anchorsAt = new Map()
   const myAnchorCells = new Set()
+  // Честное восприятие (S7d, открытое №3 S7c): его кристаллы — только увиденные (луч от моих глаз до кристалла без
+  // блоков, или этот кристалл я уже видел), якоря — мои или увиденные (pick.blockSeen: верх/грань в прицеле глаз),
+  // его снаряжение (лук, кристалл в руке) запоминается, только пока он сам мне виден. blockUpdate/entity_spawn
+  // приходят на всё в прогруженных чанках — это знание мира, не взгляд. ND_HONEST_CX=0 — прежнее (для сравнения).
+  const HONEST = process.env.ND_HONEST_CX !== '0'
+  const seenCrystals = new Set()
+  const myEye = () => bot.entity.position.offset(0, EYE, 0)
+  const crystalSeen = (e) => {
+    if (!HONEST) return true
+    if (seenCrystals.has(e.id)) return true
+    const eye = myEye()
+    if (e.position.distanceTo(eye) < 2 || losClear(bot, eye, e.position.offset(0, 1, 0))) { seenCrystals.add(e.id); st.seenCrystals = (st.seenCrystals || 0) + 1; return true }
+    st.hiddenCrystals = (st.hiddenCrystals || 0) + 1
+    return false
+  }
+  const foeVisible = (foe) => !HONEST || (foe && foe.position && losClear(bot, myEye(), foe.position.offset(0, 1.2, 0)))
+  const anchorSeen = (a) => {
+    if (!HONEST || a.mine) return true
+    if (a.seen) return true
+    const now = gameClock.now()
+    if (now - (a.checkAt || 0) < 250) return false
+    a.checkAt = now
+    try { if (pick.blockSeen(bot, a.pos)) { a.seen = true; return true } } catch {}
+    return false
+  }
   let anchorClick = null
   const cellKey = (p) => `${p.x},${p.y},${p.z}`
   let worstCache = { at: 0, v: 0 }
@@ -374,7 +399,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
       if (spawnAt.size > 60) spawnAt.delete(spawnAt.keys().next().value)
       if (!mine.has(e.id)) {
         const foe = enemy()
-        if (foe && foe.position && e.position.distanceTo(foe.position) < 6) sawHis = gameClock.now()
+        if (foe && foe.position && e.position.distanceTo(foe.position) < 6 && crystalSeen(e)) sawHis = gameClock.now()
       }
     } catch {}
   }
@@ -558,7 +583,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
   // запретом коробки и перестрелки тогда включался бы зря.
   const heShows = (foe) => {
     const eq = (foe && foe.equipment) || []
-    if ((eq[0] && eq[0].name === 'end_crystal') || (eq[1] && eq[1].name === 'end_crystal')) sawHis = gameClock.now()
+    if (((eq[0] && eq[0].name === 'end_crystal') || (eq[1] && eq[1].name === 'end_crystal')) && foeVisible(foe)) sawHis = gameClock.now()
     return gameClock.now() - sawHis < 60000
   }
 
@@ -767,11 +792,15 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     const reachNow = !!foe && threats.some(th => boxDist(foe.position.offset(0, EYE, 0), th.cell ? { minX: th.cell.x, minY: th.cell.y, minZ: th.cell.z, maxX: th.cell.x + 1, maxY: th.cell.y + 1, maxZ: th.cell.z + 1 } : crystalBox(th.c.position)) <= (th.cell ? PLACE_R : HIT_R + 0.4))
     const hisBowNow = !!foe && foe.equipment && foe.equipment[0] && /^(bow|crossbow)$/.test(foe.equipment[0].name)
     const haz = reachNow || hisBowNow ? { lo: 0, hi: 6 } : { lo: 20, hi: 45 }
-    const exp = (o) => { const p = Math.max(0, Math.min(1, (o.ticks - haz.lo) / (haz.hi - haz.lo))); return p * now0 + (1 - p) * o.dmg }
+    const exp = (o) => { const p = Math.max(0, Math.min(1, (o.ticks - haz.lo) / (haz.hi - haz.lo))); return p * now0 + (1 - p) * o.dmg + (o.stall || 0) }
     const opts = []
     const t0s = gameClock.now()
-    const sh = (t0s - shieldLastEnd < 600 && t0s - shieldStreakAt > 2500) ? null : shieldPlan(threats, dMe, cache)
-    if (sh) opts.push({ kind: 'shield', yaw: sh.yaw, threats, dmg: sh.dmg, ticks: sh.ticks })
+    // Щит подряд — не запрет, а цена (S7d, «гибкость вместо правил»): после 1.5 с подряд каждая секунда под щитом
+    // стоит ~1.5 хп ожидаемого (пока стою — не бью, он заходит за спину или берёт топор: s7c1 р.3 — 75 щитов, ничья).
+    // Укрытие или блок дешевле — уйдёт к ним; другого нет — щит остаётся.
+    const sh = shieldPlan(threats, dMe, cache)
+    const streakS = t0s - shieldLastEnd < 600 ? (t0s - shieldStreakAt) / 1000 : 0
+    if (sh) opts.push({ kind: 'shield', yaw: sh.yaw, threats, dmg: sh.dmg, ticks: sh.ticks, stall: Math.max(0, streakS - 1.5) * 1.5 })
     const cv = coverSpot(threats, dMe, cache, haz.lo >= 20 ? 6 : 3, haz)
     if (cv && cv.dmg < now0) opts.push({ kind: 'cover', to: cv.pos, threats, dmg: cv.dmg, ticks: cv.ticks })
     const wl = wallSpot(threats, dMe, cache)
@@ -819,11 +848,12 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     const myW = inWin(myWin, IFRAME_MS - 60)
     const dist = me.distanceTo(foe.position)
     const hisEye = foe.position.offset(0, EYE, 0)
-    const hisHand = foe.equipment && foe.equipment[0] ? foe.equipment[0].name : ''
+    const foeSeenNow = foeVisible(foe)
+    const hisHand = foeSeenNow && foe.equipment && foe.equipment[0] ? foe.equipment[0].name : ''
     const hisBow = /^(bow|crossbow)$/.test(hisHand)
     if (hisBow) bowSeenAt = now
     const crystals = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'end_crystal' && e.position && e.isValid !== false &&
-      (e.position.distanceTo(me) < 13 || e.position.distanceTo(foe.position) < 13))
+      (e.position.distanceTo(me) < 13 || e.position.distanceTo(foe.position) < 13) && crystalSeen(e))
     if (!crystals.length && !k.crystals && !anchorReady(bot, k)) return null
     const shows = heShows(foe)
     const press = !!ctx.press
@@ -847,6 +877,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     // (взрыв ни на кого не записан, но бьёт его сильнее); иначе — уклонение ценой, как от кристалла.
     if (CX2) {
       for (const a of anchorsAt.values()) {
+        if (!anchorSeen(a)) continue
         if (a.mine || a.pos.distanceTo(me) > 8) continue
         const b = blockAt(bot, cache, a.pos.x, a.pos.y, a.pos.z)
         if (!b || b.name !== 'respawn_anchor') continue
@@ -910,15 +941,18 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
       if (!best || o.score > best.score) best = o
     }
     const bonus = (land) => (land >= hisEff - 0.5 ? 6 : 0)
+    // Цена своего урона — от состояния (S7d): 1.3 при запасе, дороже по мере того, как мой запас хп тает (у края
+    // смерти каждый свой хп дороже его хп): 12 эфф. хп и ниже — +1/6 за каждый недостающий (s7c4: себе 730 на 2387 ему).
+    const wMe = CX2 ? 1.3 + Math.max(0, 12 - myEff) / 6 : 1.3
     for (const c of (crystals as any)) {
       if (c.position.distanceTo(foe.position) > 7) continue
       const t = trade(bot, c.position, foe, bot.entity, dHim, dMe, cache, { himAt, himShield })
       const land = landed(t, hisW, dHim)
       const aim = hitAim(bot, c.position, eye)
-      if (aim && worthHit(t, { myEff, hisEff, hisLand: land, press, hisTotem })) consider({ kind: 'hit', c, t, aim, land, score: land - 1.3 * t.me + bonus(land) + 1 })
+      if (aim && worthHit(t, { myEff, hisEff, hisLand: land, press, hisTotem })) consider({ kind: 'hit', c, t, aim, land, score: land - wMe * t.me + bonus(land) + 1 })
       // Стрелой — рукой не достать, а размен с места выгодный.
       if (k.bow && k.arrows && !aim && worthHit(t, { myEff, hisEff, hisLand: land, press, hisTotem }) && c.position.distanceTo(eye) < 24 && losClear(bot, eye, c.position.offset(0, 1, 0))) {
-        consider({ kind: 'shoot', c, t, land, score: land - 1.3 * t.me + bonus(land) - 0.5 })
+        consider({ kind: 'shoot', c, t, land, score: land - wMe * t.me + bonus(land) - 0.5 })
       }
     }
     // Готовый свой кристалл у него в руке досягаемости ждёт конца его окна —
@@ -942,10 +976,10 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
             const faceP = () => faceFor(bot, base, eye, avoid)
             if (aim && worthHit(t, { myEff, hisEff, hisLand: land, press, hisTotem })) {
               const f = faceP(); if (!f) continue
-              consider({ kind: 'place-hit', base, c, f, t, land, score: land - 1.3 * t.me + bonus(land) })
+              consider({ kind: 'place-hit', base, c, f, t, land, score: land - wMe * t.me + bonus(land) })
             } else if (aim && hisW && worthHit(t, { myEff, hisEff, hisLand: t.him, press, hisTotem })) {
               const f = faceP(); if (!f) continue
-              consider({ kind: 'place', base, c, f, t, land: t.him, score: t.him - 1.3 * t.me - 1.5 })
+              consider({ kind: 'place', base, c, f, t, land: t.him, score: t.him - wMe * t.me - 1.5 })
             } else if (k.bow && k.arrows && t.him >= 4 && myEff > 8 && now - lastPlaceShoot > 2500 && (!aim || (t.me > myEff * 0.45 && dist >= 3.5))) {
               // Рукой не достать или себе дорого: поставить, при нужде отойти, стрелой.
               // Вплотную (он в 3.5) — не кристалл, а меч: кристалл у него будет и
@@ -989,7 +1023,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
             const byBow = k.bow && k.arrows && t.me < myEff * 0.45
             if (!byHand && !byBow) continue
             // Цена — как у следующего хода (удар или стрела) минус лишний блок.
-            const next = byHand ? t.him - 1.3 * t.me + bonus(t.him) : t.him * 0.6 - 2
+            const next = byHand ? t.him - wMe * t.me + bonus(t.him) : t.him * 0.6 - 2
             // Грань, к которой прислонить обсидиан, — видна (build.placeBlockAt honest).
             let face = false
             for (const n of [new Vec3(0, -1, 0), ...SIDES]) {
@@ -1039,7 +1073,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
           }
           // Опора под якорем видна (ставить) — грань самого якоря потом та же сторона.
           if (!pick.faceAim(bot, cell.offset(0, -1, 0), new Vec3(0, 1, 0), { eye, range: PLACE_R - 0.05 })) continue
-          const sc = t.him - 1.3 * t.me + bonus(t.him) - 1 - (guard ? 0.5 : 0)
+          const sc = t.him - wMe * t.me + bonus(t.him) - 1 - (guard ? 0.5 : 0)
           if (!anchorBest || sc > anchorBest.score) anchorBest = { kind: 'anchor', cell, guard, t, land: t.him, score: sc, note: `якорь у его ног${guard ? ' за светокамнем' : ''} (прогноз ему ${r1(t.him)}, мне ${r1(t.me)})` }
         }
       }

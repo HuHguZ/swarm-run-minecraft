@@ -29,7 +29,7 @@ async function clearTerrain (cmd, fillBox, { X, Y, Z, R, top = Y + 8 }: any) {
 
 // Построить рельеф. avoid — точки [x, z], вокруг которых (радиус 4) и между
 // которыми (полоса шириной 3) ничего не ставим: бойцы появляются там.
-async function buildTerrain (cmd, { X, Y, Z, R, seed = gameClock.wall.now(), avoid = [] }: any) {
+async function buildTerrain (cmd, { X, Y, Z, R, seed = gameClock.wall.now(), avoid = [], canopies = 0 }: any) {
   const rand = rng(seed)
   const ri = (a, b) => a + Math.floor(rand() * (b - a + 1))
   const taken = []
@@ -118,6 +118,15 @@ async function buildTerrain (cmd, { X, Y, Z, R, seed = gameClock.wall.now(), avo
     if (!a) continue
     await cmd(`/fill ${a[0]} ${Y} ${a[1]} ${a[0]} ${Y + 2} ${a[1]} minecraft:cobblestone`)
     features.push({ kind: 'столб', at: a })
+  }
+  // Навесы (S7d, трезубцы с «Громовержцем»): крыша 3×3 из досок на высоте 4 на четырёх столбах — под ней молния не
+  // бьёт (channeling.json: can_see_sky у жертвы), с боков открыто. ARENA_CANOPY=n.
+  for (let i = 0; i < canopies; i++) {
+    const a = place(3, 3)
+    if (!a) continue
+    for (const [cx, cz] of [[a[0], a[1]], [a[2], a[1]], [a[0], a[3]], [a[2], a[3]]]) await cmd(`/fill ${cx} ${Y} ${cz} ${cx} ${Y + 2} ${cz} minecraft:oak_fence`)
+    await cmd(`/fill ${a[0]} ${Y + 3} ${a[1]} ${a[2]} ${Y + 3} ${a[3]} minecraft:oak_planks`)
+    features.push({ kind: 'навес', at: a })
   }
   return features
 }

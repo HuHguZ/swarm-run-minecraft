@@ -985,6 +985,7 @@ function findShaft (bot, target, { radius = 40, archer: shooter = false, floorY:
     return c
   }
   let best = null
+  const slowCands = []
   const consider = (x, z, digMs) => {
     const u = standUnder(x, z)
     if (!u) return
@@ -1015,8 +1016,12 @@ function findShaft (bot, target, { radius = 40, archer: shooter = false, floorY:
       // Прямо над нами (или рядом) — ломать и дольше (digNear): застряли под
       // полом на своём столбе, а до дыр не дойти (живая арена 2026-09-27).
       if (ms <= 3000 || (ms <= digNear && Math.hypot(x + 0.5 - me.x, z + 0.5 - me.z) <= 1.6)) consider(x, z, ms)
+      else if (Number.isFinite(ms) && ms <= 30000) slowCands.push([x, z, ms])
     }
   }
+  // Быстрого выхода нет — долгая копка (обсидиан киркой ~9.4 с) по той же цене, а не «сидеть в яме» (S7d: колизей,
+  // «кристаллы» — 120 с «над головой только обсидиан» под его «не выпускаю», ничья по застою).
+  if (!best) for (const [x, z, ms] of slowCands) consider(x, z, ms)
   return best
 }
 

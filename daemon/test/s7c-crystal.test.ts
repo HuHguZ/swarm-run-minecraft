@@ -164,3 +164,27 @@ test('его кристалл у меня, а он отошёл без лука 
   assert.ok(a.dmg < t.me * 0.6, `${a.dmg} против ${t.me}`)
   c.close()
 })
+
+test('S7d честно: его якорь за стеной (не виден) — не угроза и не цель; его кристалл за стеной — не в угрозах', () => {
+  // Стена из обсидиана x=1..2, y=0..3, z=-2..2 — между мной (x 0.5) и якорем/кристаллом (x 3–4).
+  const extra = { '3,0,0': 'respawn_anchor' }
+  for (let x = 1; x <= 2; x++) for (let y = 0; y <= 3; y++) for (let z = -2; z <= 2; z++) extra[`${x},${y},${z}`] = 'obsidian'
+  const { bot, foe } = duelBot({ foeAt: new Vec3(5.5, 0, 0.5), inv: ['respawn_anchor', 'glowstone', 'obsidian', 'diamond_sword'], extra })
+  // Луч мира: первый твёрдый блок по пути (как bot.world.raycast) — стена.
+  bot.world.raycast = (from, dir, len) => {
+    for (let t = 0; t <= len; t += 0.05) {
+      const p = from.plus(dir.scaled(t))
+      const b = bot.blockAt(p)
+      if (b && b.boundingBox === 'block') return { position: b.position, intersect: p }
+    }
+    return null
+  }
+  const c = cr.create(bot, { enemy: () => foe, foeHp: () => 20 })
+  c._onBlock(null, anchorBlock(3, 0))
+  crystalAt(bot, 9, 3.5, 2.5)
+  const a = c.plan({})
+  assert.ok(!a || !/^(anchorPop|wall|cover|shield|dodge|defuse)$/.test(a.kind), JSON.stringify(a && { kind: a.kind, note: a.note }))
+  // Кристалл за стеной отфильтрован восприятием (не «увиден»), а не случайно: счётчик скрытых.
+  if (process.env.ND_HONEST_CX !== '0') assert.ok((c.st.hiddenCrystals || 0) > 0, JSON.stringify(c.st))
+  c.close()
+})

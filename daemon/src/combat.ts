@@ -1452,6 +1452,13 @@ function watchFight (bot, parent) {
   let swings = 0
   const attack = bot.attack
   bot.attack = function (...args: any[]) { swings++; return attack.apply(this, args) }
+  // Прогресс боя — не только взмах (S7d, ревью Codex по гонке вооружений: лучник/арбалетчик стрелял и попадал, а сторож
+  // «ни одного удара за 4 с» бросал бой — 9 из 12 боёв проигравшего оборваны): выстрел/бросок (отпустил «использовать»)
+  // и урон по другой сущности рядом — тоже ход.
+  const deact = bot.deactivateItem
+  if (typeof deact === 'function') bot.deactivateItem = function (...args: any[]) { swings++; return deact.apply(this, args) }
+  const onHurt = (e) => { try { if (e && e !== bot.entity && bot.entity && e.position && e.position.distanceTo(bot.entity.position) < 48) swings++ } catch {} }
+  try { bot.on('entityHurt', onHurt) } catch {}
   const timer = gameClock.setInterval(() => {
     const lost = hp0 - (bot.health ?? 0)
     const dt = gameClock.now() - t0
@@ -1460,7 +1467,7 @@ function watchFight (bot, parent) {
       sub.abort()
     }
   }, 250)
-  return { ctl: sub, close: () => { gameClock.clearInterval(timer); if (bot.attack !== attack) bot.attack = attack } }
+  return { ctl: sub, close: () => { gameClock.clearInterval(timer); if (bot.attack !== attack) bot.attack = attack; if (typeof deact === 'function' && bot.deactivateItem !== deact) bot.deactivateItem = deact; try { bot.removeListener('entityHurt', onHurt) } catch {} } }
 }
 
 async function fight (session, ctl, opts: any = {}) {
@@ -1768,6 +1775,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
 
 module.exports = {
   fight,
+  watchFight,
   retreat,
   coverSpots,
   findTarget,

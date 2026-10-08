@@ -14,6 +14,12 @@ const MAX_HP = 20
 // верх растёт по быстрой, низ — по медленной (договорённость пользователя 06.10). Вне видимости — так же.
 const REGEN_FAST = 1 / 10
 const REGEN_SLOW = 1 / 80
+// Быстрая регенерация тратит насыщение: FoodData.tick — лечение f = min(насыщение, 6)/6 хп и истощение 6·f, 4
+// истощения = 1 насыщения → 1.5 насыщения за 1 хп. Насыщение ≤ 20 → не больше ~13.3 хп быстрой регенерации, дальше —
+// медленная (S7d: без бюджета верх оценки за бой стоял 17–19 при его 2–5 — «за 10 с без попаданий уходит к 20» — и
+// добивание «наверняка» не срабатывало). Видимая еда пополняет бюджет её насыщением (Foods).
+const SAT_PER_HP = 1.5
+const SAT_OF = { golden_apple: 9.6, enchanted_golden_apple: 9.6, cooked_beef: 12.8, cooked_porkchop: 12.8, cooked_mutton: 9.6, cooked_chicken: 7.2, bread: 6, baked_potato: 6, cooked_salmon: 9.6, cooked_cod: 6, carrot: 3.6, apple: 2.4, golden_carrot: 14.4 }
 
 // Еда и зелья, которые лечат сразу или эффектом. Consumables.<clinit>: GOLDEN_APPLE — Поглощение I 2400 т,
 // Регенерация II 100 т; ENCHANTED_GOLDEN_APPLE — Поглощение IV 2400 т, Регенерация II 400 т (+ Сопротивление,
@@ -38,7 +44,8 @@ function createHpEstimate ({ hp = MAX_HP, absorption = 0, maxHp = MAX_HP }: any 
   const s = {
     lo: hp, hi: hp, mean: hp,
     aLo: absorption, aHi: absorption, aMean: absorption, aTicks: absorption > 0 ? Infinity : 0,
-    regen: [] as any[], totems: 0, exact: false
+    regen: [] as any[], totems: 0, exact: false,
+    satHp: 20 / SAT_PER_HP // сколько хп ещё может дать быстрая регенерация (насыщение неизвестно — берём полное)
   }
 
   function fix () {
@@ -88,6 +95,7 @@ function createHpEstimate ({ hp = MAX_HP, absorption = 0, maxHp = MAX_HP }: any 
       s.totems++
     },
     eat (name) {
+      s.satHp = Math.min(20 / SAT_PER_HP, s.satHp + (SAT_OF[name] ?? 8) / SAT_PER_HP)
       const f = FOOD[name]
       if (!f) return false
       api.absorb(f.absorbAmp, f.absorbTicks)
@@ -118,9 +126,14 @@ function createHpEstimate ({ hp = MAX_HP, absorption = 0, maxHp = MAX_HP }: any 
     },
     tick (dt = 1) {
       if (!(dt > 0) || s.exact) return
-      s.hi += dt * REGEN_FAST
+      // Насыщение тратится только на лечение: верх у потолка — лечить нечего, бюджет цел (FoodData.tick лечит при
+      // isHurt). Раньше бюджет таял за 6.7 с от начала боя и при полном хп.
+      const fast = Math.min(dt * REGEN_FAST, s.satHp, Math.max(0, maxHp - s.hi))
+      s.satHp -= fast
+      const up = fast + (dt - fast / REGEN_FAST) * REGEN_SLOW
+      s.hi += up
       s.lo += dt * REGEN_SLOW
-      s.mean += dt * (REGEN_FAST + REGEN_SLOW) / 2
+      s.mean += (up + dt * REGEN_SLOW) / 2
       for (const r of s.regen) {
         const n = Math.min(dt, r.ticks) / dm.regenInterval(r.amp)
         s.lo += n; s.hi += n; s.mean += n
@@ -140,6 +153,7 @@ function createHpEstimate ({ hp = MAX_HP, absorption = 0, maxHp = MAX_HP }: any 
         health: { lo: s.lo, hi: s.hi, mean: s.mean },
         absorption: { lo: s.aLo, hi: s.aHi, mean: s.aMean },
         regen: s.regen.length > 0,
+        satHp: s.satHp,
         totems: s.totems,
         exact: s.exact
       }

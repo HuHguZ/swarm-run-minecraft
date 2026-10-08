@@ -62,6 +62,7 @@ const BODY_H = 1.8
 const FLY_H = 0.6
 const REACH = 3.0
 const SAFE_FALL = 3
+const LAND_FD = Number(process.env.ND_LAND_FD ?? 2)
 const ROCKET_BOOST = 1.5
 const ROCKET_MAX_TICKS = 40
 const KEYS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
@@ -196,7 +197,14 @@ function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false }:
     if (v.y > -0.5 && fd > 1) fd = 1
     glideStep(p, v, yaw, pitch, boost > t)
     if (p.y < py) fd += py - p.y
-    if (W.boxHit(p.x, p.y, p.z)) {
+    // Ход тика — отрезком, а не концом (S7d, корень ударов о стену): под ракетой 1.6 б/т рамка 0.6 «перепрыгивает»
+    // стену в 1 блок между концами соседних тиков (путь 176.3 → 174.7 мимо клетки 175) — прогноз не видел стекло
+    // арены, и рулевой вёл прямо в него. Сервер и prismarine-physics двигают с упором (по осям) — тело упиралось.
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(p.x - px), Math.abs(p.y - py), Math.abs(p.z - pz)) / 0.45))
+    let hitAt = 0
+    for (let k = 1; k <= steps && !hitAt; k++) if (W.boxHit(px + (p.x - px) * k / steps, py + (p.y - py) * k / steps, pz + (p.z - pz) * k / steps)) hitAt = k
+    if (hitAt) {
+      if (hitAt < steps) { p.x = px + (p.x - px) * hitAt / steps; p.y = py + (p.y - py) * hitAt / steps; p.z = pz + (p.z - pz) * hitAt / steps }
       const vert = W.boxHit(px, p.y, pz)
       const hs = Math.hypot(v.x, v.z)
       if (vert && p.y < py) return { t, kind: 'floor', p, v, fd, vyHit: v.y, path, minFloorGap: 0 }
@@ -259,8 +267,46 @@ function kit (bot) {
 // сторож ведра не льёт воду в полёте.
 function install (bot) {
   if (bot._ndElytra) return bot._ndElytra
-  const S: any = { rocketIds: new Set(), fd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0, phase: null, box: [], crashes: [] }
+  const S: any = { rocketIds: new Set(), fd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0, phase: null, box: [], crashes: [], groundT: 0 }
   bot._ndElytra = S
+  // Кто повернул взгляд в полёте (S7d: в чёрном ящике s7c5 скорость под ракетой разворачивалась на 180° за тик —
+  // похоже на двух рулевых): в полёте каждый bot.look/lookAt помечается первым кадром стека вне mineflayer/elytra.
+  // В запись тика — фактический взгляд и метка последнего рулевого. ND_ELYTRA_WHO=0 — выкл.
+  if (process.env.ND_ELYTRA_WHO !== '0') {
+    const tag = () => {
+      const fr = String(new Error().stack || '').split('\n').slice(2)
+      for (const f of fr) {
+        if (/node_modules[\\/]mineflayer|elytra\.js|tick-plugins|game-clock|new Promise|<anonymous>/.test(f)) continue
+        const m = /([\w.-]+\.js):(\d+)/.exec(f)
+        const fn = /at (?:async )?([\w.$<>]+) /.exec(f)
+        return (fn ? fn[1] + '@' : '') + (m ? m[1] + ':' + m[2] : '?')
+      }
+      return 'elytra'
+    }
+    // Руль один (S7d): пока полёт ведёт fly/таран (S.driving), чужой поворот взгляда (прицел боя, рефлексы) не
+    // проходит — в s7d-base 36 ударов о стену за 9 раундов, все — под ракетой прямо в стену с ровной скоростью, а
+    // офлайн тот же choose() из этих состояний разворачивается (elysim.js). ND_ELYTRA_LOCK=0 — только метка.
+    const LOCK = process.env.ND_ELYTRA_LOCK !== '0'
+    S.blockedBy = {}
+    for (const k of ['look', 'lookAt']) {
+      const orig = bot[k]
+      if (typeof orig !== 'function') continue
+      bot[k] = function (...a) {
+        try {
+          if (bot.entity && bot.entity.elytraFlying) {
+            const who = tag()
+            if (S.driving > 0 && !S.steering) {
+              S.blockedLooks = (S.blockedLooks || 0) + 1
+              S.blockedBy[who] = (S.blockedBy[who] || 0) + 1
+              if (LOCK) return Promise.resolve()
+            }
+            S.lookBy = who
+          }
+        } catch {}
+        return orig.apply(this, a)
+      }
+    }
+  }
   // Чёрный ящик полёта (S7c, замечание проверки S7b а: 18 из 49 раундов «элитры и копьё» — разбился сам):
   // последние 30 тиков в воздухе; удар о стену (fly_into_wall) или пол (fall) себе в полёте/сразу после — запись
   // { kind, phase, dmg, hp, ticks[] } в S.crashes и строка [elytra-crash] в лог демона.
@@ -268,7 +314,27 @@ function install (bot) {
     try {
       const b = bot.entity
       if (!b) return
-      if (b.onGround && !b.elytraFlying) { if (!S.boxHold) { S.box.length = 0; S.phase = null } return }
+      // Земля: ящик чистится не сразу — урон падения (damage_event) приходит от сервера после касания, а без ящика
+      // смерть «fell from a high place» не попадала в crashes (s7d-n-30: 2 такие смерти без записи).
+      if (b.onGround && !b.elytraFlying) { S.wasFlying = false; if (++S.groundT > 10 && !S.boxHold) { S.box.length = 0; S.phase = null } return }
+      S.groundT = 0
+      // Полёт кончился в воздухе (S7d, s7d-n-30: обе смерти «fell from a high place» — после такого обрыва): кто и
+      // при чём — в лог, раз в 2 с.
+      if (S.wasFlying && !b.elytraFlying && !b.isInWater && gameClock.now() - (S.dropLogAt || 0) > 2000) {
+        S.dropLogAt = gameClock.now()
+        S.drops = (S.drops || 0) + 1
+        let gap = null
+        try { const f = worldOf(bot).floorBelow(b.position.x, b.position.y, b.position.z, 40); gap = f ? r2(b.position.y - f.top) : null } catch {}
+        console.log('[elytra-drop]', JSON.stringify({ at: gameClock.wall.now(), chest: bot.inventory.slots[6]?.name || null, held: bot.heldItem?.name || null, off: bot.inventory.slots[45]?.name || null, gap, vy: r2(b.velocity.y), fd: r2(S.fd), ph: S.phase, dr: S.driving || 0, last: S.box.slice(-3) }))
+      }
+      S.wasFlying = !!b.elytraFlying
+      // Рефлекс «снова раскрыть» (S7d: s7d-f-27p — 2 из 10 смертей «fell from a high place»: полёт кончился на
+      // высоте 22, таран после третьего захода ждал земли): элитры на теле, не летим, падаем (v.y < −0.5), до пола
+      // > 4 бл. — раскрыть снова (пике с булавой меняет элитры на нагрудник заранее — его это не трогает).
+      if (GUARD && !b.elytraFlying && !b.isInWater && b.velocity.y < -0.5 && wearingElytra(bot) && bot.heldItem?.name !== 'mace' && gameClock.now() - (S.reglideAt || 0) > 500) {
+        const f = worldOf(bot).floorBelow(b.position.x, b.position.y, b.position.z, 40)
+        if (!f || b.position.y - f.top > 4) { S.reglideAt = gameClock.now(); if (startGlide(bot)) S.reglideReflex = (S.reglideReflex || 0) + 1 }
+      }
       // Рефлекс столкновения (S7c, а): летит, а рулит никто (между вызовами fly — удар копьём в воздухе, выстрел,
       // жемчуг, решение боя) — нынешний взгляд за 8 тиков ведёт в стену с уроном или в пол с высотой падения > 3:
       // этот тик — безопасный взгляд (choose: прямо по ходу на 12 бл., выше пола на 3).
@@ -280,10 +346,30 @@ function install (bot) {
           const h = Math.hypot(b.velocity.x, b.velocity.z) > 0.2 ? Math.atan2(-b.velocity.x, -b.velocity.z) : b.yaw
           const L = lookVec(h, 0)
           const pl = choose(W, st, { kind: 'point', at: new Vec3(b.position.x + L.x * 12, b.position.y + 2, b.position.z + L.z * 12), gap: 3, speedMin: 0.3 })
-          if (pl) { bot.look(pl.yaw, pl.pitch, true).catch(() => {}); S.guardSaves = (S.guardSaves || 0) + 1; S.phase = S.phase || 'рефлекс' }
+          if (pl) { steer(bot, pl.yaw, pl.pitch); S.guardSaves = (S.guardSaves || 0) + 1; S.phase = S.phase || 'рефлекс' }
         }
       }
-      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0 })
+      // Диагностика S7d: план рулевого этого тика (цена, событие прогона, тик события) и стена по ходу — по кэшу
+      // мира полёта (W) и по свежему blockAt: расходятся — кэш врёт.
+      let wallW = null; let wallF = null
+      try {
+        const hs = Math.hypot(b.velocity.x, b.velocity.z)
+        if (b.elytraFlying && hs > 0.5) {
+          const W = worldOf(bot)
+          const ux = b.velocity.x / hs; const uz = b.velocity.z / hs
+          for (let d = 1; d <= 12 && (wallW == null || wallF == null); d++) {
+            const x = Math.floor(b.position.x + ux * d); const y = Math.floor(b.position.y + 0.3); const z = Math.floor(b.position.z + uz * d)
+            if (wallW == null && W.at(x, y, z) === 1) wallW = d
+            let fb = null
+            try { fb = bot.blockAt(new Vec3(x, y, z), false) } catch {}
+            if (wallF == null && (!fb || fb.boundingBox === 'block')) wallF = d
+          }
+        }
+      } catch {}
+      const pl = S.lastPlan && S.lastPlan.tick === S.box.length ? S.lastPlan : S.lastPlan
+      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0, bst: bot.fireworkRocketDuration || 0, yaw: r2(b.yaw), pitch: r2(b.pitch), by: S.lookBy || null, dr: S.driving || 0, pc: pl ? pl.c : null, pk: pl ? pl.k : null, pt: pl ? pl.t : null, wallW, wallF })
+      S.lastPlan = null
+      S.lookBy = null
       if (S.box.length > 30) S.box.shift()
     } catch {}
   })
@@ -295,7 +381,7 @@ function install (bot) {
         if (type !== 'fly_into_wall' && type !== 'fall') return
         if (!S.box.length) return
         const hp0 = bot.health ?? 20
-        const rec: any = { kind: type === 'fly_into_wall' ? 'стена' : 'пол', phase: S.phase || S.box[S.box.length - 1].ph || null, at: gameClock.now(), ticks: S.box.slice(-12) }
+        const rec: any = { kind: type === 'fly_into_wall' ? 'стена' : 'пол', phase: S.phase || S.box[S.box.length - 1].ph || null, at: gameClock.now(), ticks: S.box.slice(type === 'fall' ? -30 : -12) }
         S.boxHold = true
         // В список — сразу (отчёт погибшего собирается раньше 100 мс), урон и смерть — когда придёт хп.
         rec.dmg = null
@@ -357,6 +443,13 @@ function install (bot) {
 // «Раскрыть» элитры: пакет START_FALL_FLYING и, как клиент игры
 // (LocalPlayer.aiStep → tryToStartFallFlying), флаг у себя сразу — без
 // ожидания метаданных сервера (тик). Сервер откажет — пришлёт флаг назад.
+// Поворот взгляда рулевым полёта (fly, таран, пике, рефлекс): мимо замка «руль один» в install.
+function steer (bot, yaw, pitch) {
+  const S = bot._ndElytra
+  if (S) S.steering = true
+  try { return bot.look(yaw, pitch, true).catch(() => {}) } finally { if (S) S.steering = false }
+}
+
 function startGlide (bot) {
   const b = bot.entity
   if (!b || b.onGround || b.isInWater || !wearingElytra(bot)) return false
@@ -516,6 +609,9 @@ function cost (W, st, goal, at, r, yaw, pitch) {
     } else {
       // Не сели за горизонт: ближе к точке и ниже, но не в пустоту.
       c += Math.hypot(end.x - goal.at.x, end.z - goal.at.z) * 1.5 + Math.max(0, end.y - goal.at.y) * 2 + 20
+      // Высота падения в конце прогона (S7d): спуск пике копит её (офлайн landsim — до 17–29 бл. к выходу у пола), и
+      // любой обрыв полёта на спуске — смерть. LAND_FD (ND_LAND_FD, по умолчанию 2) за блок сверх безопасных 3.
+      c += Math.max(0, r.fd - SAFE_FALL) * LAND_FD
       const f = W.floorBelow(end.x, end.y, end.z, 30)
       if (!f) c += 80
     }
@@ -558,7 +654,9 @@ function cost (W, st, goal, at, r, yaw, pitch) {
     let bestD = Infinity; let bestT = 0
     for (let t = 0; t < r.path.length; t++) {
       const q = r.path[t]
-      const d = Math.hypot(q.x - tgt.x, q.y - tgt.y, q.z - tgt.z)
+      // Цель на ТОМ ЖЕ тике, что и точка пути (ревью Codex: раньше — его место в конце прогона для всех точек).
+      const tt = at(t + 1)
+      const d = Math.hypot(q.x - tt.x, q.y - tt.y, q.z - tt.z)
       if (d < bestD) { bestD = d; bestT = t }
     }
     c += bestD + bestT * 0.15
@@ -582,13 +680,17 @@ function cost (W, st, goal, at, r, yaw, pitch) {
 // Ракета на этот тик: want — rocketIf (true «надо», false «нет», иначе — по выгоде). С ракетой — взгляд, посчитанный
 // С ракетой, и только если лучший такой полёт не кончается стеной с уроном ≥ 1 (s7c3: 3 удара «таран: разбег» под
 // ракетой, −9…−12: «надо» шла со взглядом, посчитанным без ракеты). { fire, yaw, pitch, c, veto }.
-function rocketChoice (W, st, g, pl, want) {
+// S7d: без запрета — сравнение цен. «Надо» (низко/медленно) — ракета, если лучший полёт с ней не дороже лучшего без
+// неё больше чем на 40 (удар о стену в цене полёта стоит 400 + 40·урон, так что ракета в стену проигрывает сама);
+// необязательная — только если с ней заметно дешевле.
+function rocketChoice (W, st, g, pl, want): any {
   if (want === false) return { fire: false }
   const withR = choose(W, st, g, { rocketNow: true })
   if (!withR) return { fire: false }
   const crash = withR.r.kind === 'wall' && withR.r.dmg >= 1
-  if (want === true) return crash ? { fire: false, veto: true } : { fire: true, yaw: withR.yaw, pitch: withR.pitch, c: withR.c }
-  return withR.c < pl.c - 4 && !crash ? { fire: true, yaw: withR.yaw, pitch: withR.pitch, c: withR.c } : { fire: false }
+  const fire = { fire: true, yaw: withR.yaw, pitch: withR.pitch, c: withR.c }
+  if (want === true) return withR.c <= pl.c + 40 ? fire : { fire: false, veto: crash }
+  return withR.c < pl.c - 4 ? fire : { fire: false }
 }
 
 // Лететь, пока until() не скажет «хватит» (или сели, кончился полёт, время).
@@ -635,7 +737,22 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
           if (rc.fire) { fire = true; pl.yaw = rc.yaw; pl.pitch = rc.pitch; pl.c = rc.c } else if (rc.veto && stats) stats.rocketVeto = (stats.rocketVeto || 0) + 1
         }
         planMs += gameClock.wall.now() - tp
-        bot.look(pl.yaw, pl.pitch, true).catch(() => {})
+        S.lastPlan = { c: r2(pl.c), k: pl.r.kind, t: pl.r.t, gx: r2(typeof g.at === 'function' ? g.at(0).x : g.at.x), gz: r2(typeof g.at === 'function' ? g.at(0).z : g.at.z) }
+        // Диагностика S7d: план без события, а стена по ходу в ≤ 4 бл. — входы плана целиком в лог (повтор офлайн).
+        if (!pl.r.kind && (S.planMiss || 0) < 6) {
+          const hs = Math.hypot(b.velocity.x, b.velocity.z)
+          if (hs > 0.8) {
+            const ux = b.velocity.x / hs; const uz = b.velocity.z / hs
+            let wd = null
+            for (let d = 1; d <= 4 && wd == null; d++) if (W.at(Math.floor(b.position.x + ux * d), Math.floor(b.position.y + 0.3), Math.floor(b.position.z + uz * d)) === 1) wd = d
+            if (wd != null) {
+              S.planMiss = (S.planMiss || 0) + 1
+              const rr = rollout(W, st.p, st.v, pl.yaw, pl.pitch, st.boost, 18, { fd: st.fd, keepPath: true })
+              console.log('[elytra-plan-miss]', JSON.stringify({ wd, p: [st.p.x, st.p.y, st.p.z], v: [st.v.x, st.v.y, st.v.z], yaw: pl.yaw, pitch: pl.pitch, boost: st.boost, fd: st.fd, c: pl.c, kind: pl.r.kind, again: rr.kind, againT: rr.t, path: (rr.path || []).slice(0, 6).map(q => [r2(q.x), r2(q.y), r2(q.z)]), g: { kind: g.kind, at: typeof g.at === 'function' ? g.at(0) : g.at, minY: g.minY, maxY: g.maxY } }))
+            }
+          }
+        }
+        steer(bot, pl.yaw, pl.pitch)
         if (fire) {
           const fr = fireRocket(bot)
           if (fr.ok && stats) stats.rockets = (stats.rockets || 0) + 1
@@ -646,6 +763,28 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
     }
     bot.on('physicsTick', onT)
   })
+}
+
+// Взгляд взлёта (S7d, колизей с рельефом s7d-n-30: 5 ударов о стену на взлёте, −0.6…−6.8): от «раскрыть» до
+// первого руля fly — до 12 тиков под ракетой без руля, а взлёт шёл по заказанному взгляду (бой — 0.45 рад., к нему)
+// прямо в уступ в 2 бл. Прогон 14 тиков с ракетой по кандидатам: заказанный, круче, в сторону — первый чистый по цене
+// отклонения; чистого нет — тот, где удар позже.
+function launchLook (W, p, yaw0, pitch0, v = null) {
+  // С земли — прыжок (раскрыть на подъёме, ~0.3 выше, v.y 0.3); в воздухе — как есть (ревью Codex).
+  const p1 = v ? { x: p.x, y: p.y, z: p.z } : { x: p.x, y: p.y + 0.3, z: p.z }
+  const v1 = v ? { x: v.x, y: v.y, z: v.z } : { x: 0, y: 0.3, z: 0 }
+  let best = null
+  for (const dp of [0, 0.35, 0.6, 0.85]) {
+    const pitch = Math.min(1.45, pitch0 + dp)
+    for (const o of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.35, -1.35, 2, -2, Math.PI]) {
+      const yaw = wrap(yaw0 + o)
+      const r = rollout(W, p1, v1, yaw, pitch, ROCKET_MAX_TICKS, 14)
+      const bad = (r.kind === 'wall' && r.dmg >= 0.5) || r.kind === 'floor' || (r.kind === 'ceil' && r.t < 8)
+      const c = (bad ? 1000 - r.t * 20 : 0) + Math.abs(o) * 2 + dp * 3
+      if (!best || c < best.c) best = { c, yaw, pitch, bad, kind: r.kind, t: r.t }
+    }
+  }
+  return best
 }
 
 // Взлёт: элитры на теле, прыжок, в воздухе — «раскрыть», взгляд вверх и
@@ -663,6 +802,13 @@ async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liqui
     const s = await swapChest(bot, 'elytra', { hand: offName(bot) === 'elytra' ? 'off' : 'main' })
     if (!s.ok) return { ok: false, why: 'элитры не надел: ' + s.why }
   }
+  // Взгляд взлёта — по прогону (launchLook): заказанный, если он чист.
+  let lYaw = wrap(yaw ?? b.yaw)
+  let lPitch = pitch
+  if (!fromLava) {
+    const ll = launchLook(W, b.position, lYaw, pitch, b.onGround ? null : b.velocity)
+    if (ll && (Math.abs(ll.yaw - lYaw) > 1e-6 || ll.pitch !== pitch)) { lYaw = ll.yaw; lPitch = ll.pitch; if (stats) stats.launchTurns = (stats.launchTurns || 0) + 1 }
+  }
   for (const k of KEYS) { try { bot.setControlState(k, false) } catch {} }
   const y0 = b.position.y
   if (b.onGround) {
@@ -676,7 +822,7 @@ async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liqui
   if (bot.entity.onGround) return { ok: false, why: 'не оторвался от земли' }
   if (!startGlide(bot)) return { ok: false, why: 'не раскрыл элитры' }
   install(bot).phase = 'взлёт'
-  await bot.look(yaw ?? bot.entity.yaw, pitch, true).catch(() => {})
+  await bot.look(lYaw, lPitch, true).catch(() => {})
   await nextTick(bot)
   let fr = fireRocket(bot)
   if (!fr.ok && /хотбаре/.test(fr.why || '')) {
@@ -1202,7 +1348,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
           // вниз: скорость вниз копит высоту падения (> −0.5), горизонталь для
           // его щита — почти ноль.
           const pl = choose(W2, { p, v, boost: bot.fireworkRocketDuration || 0, fd: S.fd }, { kind: 'strike', at: strikeAt, foot: footAt, pitches: DIVE_PITCHES }, { rocketNow: diveRocket === 'нужна' })
-          bot.look(pl.yaw, pl.pitch, true).catch(() => {})
+          steer(bot, pl.yaw, pl.pitch)
           if (diveRocket === 'нужна') {
             // Взгляд этого тика уйдёт пакетом с ним же — ракета после пакета.
             afterPacket(bot, () => { const fr = fireRocket(bot); if (fr.ok && stats) stats.rockets = (stats.rockets || 0) + 1 })
@@ -1245,7 +1391,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
         const eye = pick.eyeOf(bot)
         const targetBox = pick.hitboxOf(bot, e)
         const target = new Vec3(f.x, f.y + targetBox.h / 2, f.z)
-        bot.look(yawTo(p, target), Math.atan2(target.y - eye.y, Math.max(0.2, Math.hypot(target.x - p.x, target.z - p.z))), true).catch(() => {})
+        steer(bot, yawTo(p, target), Math.atan2(target.y - eye.y, Math.max(0.2, Math.hypot(target.x - p.x, target.z - p.z))))
         // Клавиши — к нему (0.02 б/т² в воздухе), без спринта (крит).
         const yawNow = bot.entity.yaw
         const ex = f.x - p.x; const ez = f.z - p.z
@@ -1347,8 +1493,15 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
   const fl = track(bot, { enemy })
   const st: any = {}
   const allow = () => { try { if (edgeGuard) edgeGuard.allow(400, 400) } catch {} }
+  // Посадка воздушного боя — с нагрудником назад (S7d, ревью Codex №2: ветки SafeLanding звали только land(), и
+  // боец дрался на земле в элитрах — броня 12 вместо 20, урон по нему ×2.2: s7d-y-30 р.3, 10 : 0 по именам).
+  const landDressed = async (b, c, o: any = {}) => {
+    const r = await land(b, c, o)
+    try { if ((b.health ?? 0) > 0 && !b.entity.elytraFlying) await chestDown(b, c, { stats: o.stats }) } catch {}
+    return r
+  }
   const aerial = require('./combat/aerial-executor').createAerialCombat(bot, {
-    enemy, worldOf, kit, landingSpot, gliding, predictGlider, takeoff, fly, land,
+    enemy, worldOf, kit, landingSpot, gliding, predictGlider, takeoff, fly, land: landDressed,
     swapChest, startGlide, allow, used, stats: st
   })
   const lanceMod = require('./combat/aerial-lance')
@@ -1411,7 +1564,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
     report () {
       const t = fl.report()
       const out = {
-        takeoffs: st.takeoffs || undefined,
+        takeoffs: st.takeoffs || undefined, launchTurns: st.launchTurns || undefined,
         rockets: st.rockets || undefined,
         escapes: st.escapes || undefined,
         escapeS: st.escapeMs ? Math.round(st.escapeMs / 100) / 10 : undefined,
@@ -1440,6 +1593,10 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
         lanceEarly: st.lanceEarly || undefined,
         lanceBail: st.lanceBail || undefined,
         guardSaves: ((bot._ndElytra?.guardSaves || 0) - guard0) || undefined,
+        reglideReflex: bot._ndElytra?.reglideReflex || undefined, airDrops: bot._ndElytra?.drops || undefined,
+        // Чужие повороты взгляда, отбитые замком руля (кто — по кадру стека), за всё время демона.
+        blockedLooks: bot._ndElytra?.blockedLooks || undefined,
+        blockedBy: bot._ndElytra?.blockedLooks ? Object.entries(bot._ndElytra.blockedBy || {}).sort((a: any, b: any) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k}×${v}`) : undefined,
         chestAir: st.chestAir || undefined,
         reglide: st.reglide || undefined,
         // Удары о стену/пол себе за этот бой (чёрный ящик install): вид/фаза/урон, † — насмерть; ticks — первого.
@@ -1454,8 +1611,8 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
 }
 
 module.exports = {
-  ON, EYE_FLY, FLY_H, lookVec, glideStep, fallStep, rollout, worldOf, install, startGlide, fireRocket, swapChest,
+  ON, EYE_FLY, FLY_H, lookVec, steer, glideStep, fallStep, rollout, worldOf, install, startGlide, fireRocket, swapChest,
   toHotbar, takeoff, fly, land, landingSpot, choose, headroom, arenaAround, kit, hasElytra, wearingElytra,
   rocketCount, plainRocket, bestChest, gliding, predictGlider, track, nextTick, lavaLaunchClear,
-  escape, diveSmash, divePlan, chestDown, rocketChoice, smashBonus, reachFromBox, consumeAir, create
+  escape, diveSmash, divePlan, chestDown, rocketChoice, smashBonus, reachFromBox, consumeAir, create, launchLook
 }
