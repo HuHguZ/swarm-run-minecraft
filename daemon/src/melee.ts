@@ -343,7 +343,7 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
   const onHurt = (victim, source) => {
     const e = ent()
     if (!e || !victim) return
-    const mine = victim === e && source && bot.entity && source.id === bot.entity.id
+    const mine = victim.id === e.id && source && bot.entity && source.id === bot.entity.id
     const his = victim === bot.entity && source && source.id === e.id
     if (mine || his) {
       const now = gameClock.now()

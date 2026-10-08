@@ -182,7 +182,7 @@ const dropFromPerch = async () => {
     while (ctx.gameClock.now() - t0 < 900 && ctx.bot.entity.position.y > ctx.perch.top - 0.6 && !ctx.ctl.aborted) await ctx.sleep(ctx.TICK_MS)
     ctx.set('forward', false)
     if (smashDrop) {
-      const fr = await ctx.mace.descend(ctx.bot, ctx.ctl, ctx.entity, { vel: () => ctx.track.vel(), stats: ctx.mc.st })
+      const fr = await ctx.mace.descend(ctx.bot, ctx.ctl, ctx.entity, { vel: () => ctx.track.vel(), stats: ctx.mc.st, telemetryHp: ctx.telemetryHp })
       ctx.mc.st.fallSmash++
       if (fr.hit) { ctx.st.swings++; ctx.lastSwing = ctx.gameClock.now(); ctx.mc.st.smashHits++ }
       ctx.used(fr.hit ? 'булава: удар со столба' : 'булава: со столба не достал')

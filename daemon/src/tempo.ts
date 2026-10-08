@@ -160,7 +160,9 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
 
   const onUpdate = (e) => {
     if (!isFoe(e)) return
+    e = foeList().find(t => t.id === e.id)
     const s = S(e)
+    if (e._ndVisible === false) { s.use = null; return }
     const now = gameClock.now()
     const f = flagsOf(e)
     const using = (f & 1) !== 0
@@ -180,13 +182,14 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
       }
     }
   }
-  const onSwing = (e) => { if (isFoe(e)) S(e).swungAt = gameClock.now() }
+  const onSwing = (e) => { const seen = foeList().find(t => t.id === e?.id); if (seen && seen._ndVisible !== false) S(seen).swungAt = gameClock.now() }
   // Поставил блок рядом с собой сразу после взмаха — строит; под себя — столб.
   const onBlock = (oldB, newB) => {
     try {
       if (!newB || newB.boundingBox !== 'block' || (oldB && oldB.boundingBox === 'block')) return
       const now = gameClock.now()
       for (const e of foeList()) {
+        if (e._ndVisible === false) continue
         const s = S(e)
         if (now - s.swungAt > 400) continue
         const c = newB.position.offset(0.5, 0.5, 0.5)
@@ -202,6 +205,8 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
   // 09-26) не повод выскакивать в первую же секунду его копания.
   const onDig = (block, stage, breaker) => {
     if (!breaker || !isFoe(breaker) || !block || !block.position) return
+    if (!require('./pick').blockSeen(bot, block.position)) return
+    breaker = foeList().find(t => t.id === breaker.id)
     const s = S(breaker)
     const now = gameClock.now()
     const key = `${block.position.x},${block.position.y},${block.position.z}`
@@ -238,6 +243,7 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
     const now = gameClock.now()
     for (const e of foeList()) {
       const s = S(e)
+      if (e._ndVisible === false) { s.use = null; s.hist.length = 0; s.peak = 0; continue }
       const p = e.position
       const last = s.hist[s.hist.length - 1]
       if (last && now - last.t < 40) continue
@@ -272,6 +278,7 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
   // Чем он занят сейчас. left — сколько ещё мс он будет занят (оценка).
   T.state = (e) => {
     if (!e || !e.position) return {}
+    e = foeList().find(t => t.id === e.id) || e
     const s = S(e)
     const now = gameClock.now()
     const out: any = {}

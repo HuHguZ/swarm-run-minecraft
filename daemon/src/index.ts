@@ -48,6 +48,7 @@ const methods = {
   status: async (p) => session.immediate(async () => ({
     fairPlay: cfg.fairPlay,
     server: `${cfg.host}:${cfg.port}`,
+    ...(p && p.items ? { items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('./pvp/combat-observe').itemObs(session.bot, it)) || [] } : {}),
     ...(p && p.enchants ? { enchants: enchantedGear(session.bot) } : {}),
     // Последний отчёт дуэли (pvp.duel кладёт при конце боя): арена берёт его, если ответ fight пришёл пустым (S7d).
     ...(p && p.lastDuel ? { lastDuel: session.bot?._ndLastDuel || null } : {}),

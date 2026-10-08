@@ -91,8 +91,9 @@ const OUR_WINDOW_PROJECTILE = 60
 
 // Трекер противника: подписки на пакеты + оценка хп + окно неуязвимости по нашим попаданиям.
 // noteAttack(range) зовёт бой сразу после удара/выстрела (range — planAttack(...).action.range).
-function trackFoe (bot, entity, { honest = true }: any = {}) {
+function trackFoe (bot, entity, { honest = true, visible: isVisible = null }: any = {}) {
   const player = isPlayer(entity)
+  const visible = () => { try { return isVisible ? isVisible(entity) : (entity._ndVisible ?? assess().inSight(bot, entity)) } catch { return false } }
   const hp = createHpEstimate()
   const T: any = {
     entity, hp, honestHp: player && honest, tick: 0,
@@ -111,12 +112,12 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
   const onTick = () => {
     T.tick++
     const pos = entity.position
-    if (pos) {
+    if (pos && (!T.honestHp || visible())) {
       if (T.prev) T.vel = { x: pos.x - T.prev.x, y: pos.y - T.prev.y, z: pos.z - T.prev.z }
       T.prev = { x: pos.x, y: pos.y, z: pos.z }
       // Его высота падения: от вершины в воздухе (mineflayer onGround по пакетам движения).
       if (entity.onGround === false) { T.foeAir = Math.max(T.foeAir ?? pos.y, pos.y); T.foeFall = Math.max(0, T.foeAir - pos.y) } else if (T.foeAir != null) { T.lastLanding = { h: T.foeAir - pos.y, tick: T.tick }; T.foeAir = null; T.foeFall = 0 }
-    }
+    } else { T.prev = null; T.vel = { x: 0, y: 0, z: 0 }; T.foeAir = null; T.foeFall = 0; T.lastLanding = null }
     const me = bot.entity
     if (me && me.position) {
       if (!me.onGround) { T.myAir = Math.max(T.myAir ?? me.position.y, me.position.y); T.myFall = Math.max(0, T.myAir - me.position.y) } else { T.myAir = null; T.myFall = 0 }
@@ -136,13 +137,13 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
     // если я видел и начало, и конец (пропал из виду посреди — не подтверждено; человек видит еду, только видя его).
     if (T.honestHp && T.using) {
       let vis = false
-      try { vis = assess().inSight(bot, entity) } catch {}
+      vis = visible()
       if (!vis) T.using = null
     }
     const u = usingOf(bot, entity)
     if (u && (!T.using || T.using.name !== u.name)) {
       let vis = !T.honestHp
-      try { vis = vis || assess().inSight(bot, entity) } catch {}
+      vis = vis || visible()
       T.using = vis ? { ...u, since: T.tick } : null
     }
     if (!u && T.using) {
@@ -191,7 +192,7 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
       if (T.honestHp) hp.hit(r)
       return
     }
-    if (!T.honestHp) return
+    if (!T.honestHp || !visible()) return
     const type = gamedata().damageTypeName(pk.sourceTypeId) || ''
     if (type === 'fall' && T.lastLanding && T.tick - T.lastLanding.tick <= 2) {
       const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, (entity.equipment || [])[i])))
@@ -205,6 +206,7 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
   }
   const onStatus = (p) => {
     if (!p || p.entityId !== entity.id || p.entityStatus !== dm.TOTEM.status) return
+    if (T.honestHp && !visible()) return
     T.pops++
     if (T.honestHp) hp.totem()
   }
@@ -213,7 +215,7 @@ function trackFoe (bot, entity, { honest = true }: any = {}) {
   const onGone = (e) => {
     if (!e || !T.splashes.has(e.id)) return
     T.splashes.delete(e.id)
-    if (!T.honestHp || !near(e.position, 4.25)) return
+    if (!T.honestHp || !visible() || !near(e.position, 4.25)) return
     try {
       const raw = (e.metadata || []).find(x => x && (x.itemId != null || x.components))
       const Item = require('prismarine-item')(bot.version)
@@ -274,7 +276,7 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   const myAbs = read.absorptionOf(bot, me)
   // Его снаряжение — то, что видно (S7d, честное восприятие): пакеты снаряжения приходят и сквозь стену; пока его не
   // видно — последнее увиденное (человек помнит, с чем тот был), а не свежее из пакета.
-  const los = (() => { try { return assess().inSight(bot, entity) } catch { return true } })()
+  const los = (() => { try { return entity._ndVisible ?? assess().inSight(bot, entity) } catch { return true } })()
   const gearNow = () => ({ armor: [2, 3, 4, 5].map(i => itemObs(bot, eq[i])), main: itemObs(bot, eq[0]), off: itemObs(bot, eq[1]), totem: read.hasTotemInHand(entity) })
   let gear
   if (!honest || !player || !tracker) gear = gearNow()

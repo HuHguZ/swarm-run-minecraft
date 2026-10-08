@@ -162,13 +162,13 @@ function healthOf (bot: any, e: any): number | null {
 
 // Таран: взлёт → набор высоты и отход на разбег → заход (ракета, затем копьё «использовать») → касание → выход
 // вверх → повтор (до passes) → посадка без кругов и нагрудник назад. stats — общая статистика элитр (report()).
-export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 30000, passes = 3, arena = null as any }: any = {}) {
+export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 30000, passes = 3, arena = null as any, telemetryHp = e => ehpTele(bot, e) }: any = {}) {
   const W = sky.worldOf(bot)
   const S = sky.install(bot)
   const t0 = clock.now()
   const out: any = { ok: false, hit: false, passes: 0, hits: 0, dealt: 0, note: '' }
   const hp0 = bot.health ?? 20
-  const hisHp0 = healthOf(bot, e)
+  const hisHp0 = telemetryHp(e)
   const valid = () => !ctl.aborted && (bot.health ?? 0) > 0 && e && e.isValid !== false && e.position
   const sp = spear.spearOf(bot)
   if (!sp) { out.note = 'таран: копья нет'; return out }
@@ -240,7 +240,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       // 2) Заход: к нему (ракета, если медленно), затем «использовать» копьё; взгляд — chooseLance.
       out.passes++
       stats.lancePasses = (stats.lancePasses || 0) + 1
-      const hp1 = ehpTele(bot, e)
+      const hp1 = telemetryHp(e)
       hitAt = 0
       S.phase = 'таран: заход'
       const res: any = await new Promise<any>(resolve => {
@@ -316,11 +316,11 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
         out.hits++
         stats.lanceHits = (stats.lanceHits || 0) + 1
         // Сколько снял (телеметрия, метаданные): хп приходит позже события удара — минимум за 0.5 с.
-        let hpMin = ehpTele(bot, e)
+        let hpMin = telemetryHp(e)
         const tH = clock.now()
         // Убил (сущность снята — с do_immediate_respawn раньше метаданных с хп 0) — снял всё, что было (hp1);
         // раньше hpMin оставался равен hp1 и убийство писалось «снял 0» (замечание проверки S7b в).
-        const onH = () => { const h = ehpTele(bot, e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = e.isValid === false && hp1 != null ? hp1 : (hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
+        const onH = () => { const h = telemetryHp(e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = e.isValid === false && hp1 != null ? hp1 : (hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
         bot.on('physicsTick', onH)
         used(`элитры: таран копьём — попал${res.best ? ` (план ${res.best.dmg}, ${res.best.rel} бл/с)` : ''}`)
       } else used(`элитры: таран — ${res.why}`)
@@ -388,7 +388,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
     return l
   }
   const account = (l: any) => {
-    const hisHp1 = e ? healthOf(bot, e) : null
+    const hisHp1 = e ? telemetryHp(e) : null
     out.self = r2(Math.max(0, hp0 - (bot.health ?? 20)))
     out.total = hisHp0 != null && hisHp1 != null ? r2(Math.max(0, hisHp0 - hisHp1)) : null
     out.landed = !!l.ok

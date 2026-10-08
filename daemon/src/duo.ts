@@ -60,7 +60,7 @@ function unit (x, z) { const n = Math.hypot(x, z) || 1; return { x: x / n, z: z 
 function angleOf (a, b) { return Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.z * b.z))) }
 const BAD = /lava|fire|magma|cactus|campfire|sweet_berry|powder_snow|cobweb/
 
-function create (bot, { target, attackers = new Map(), dead = new Set(), used = () => {}, tt = null, clock = null, holdWeapon = async () => {}, setAim = () => {}, potionOf = () => null }: any = {}) {
+function create (bot, { target, attackers = new Map(), dead = new Set(), used = () => {}, tt = null, clock = null, observe = e => e, holdWeapon = async () => {}, setAim = () => {}, potionOf = () => null }: any = {}) {
   if (!bot._ndDuo) bot._ndDuo = { seen: new Map() }
   const mem = bot._ndDuo
   const st: any = {
@@ -106,7 +106,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
       if (e && e.position && !dead.has(e.id)) out.set(e.id, e)
     }
     const me = bot.entity.position
-    return [...out.values()].filter(e => e.isValid !== false && isPlayer(e) && e.id !== bot.entity.id &&
+    return [...out.values()].map(e => observe(e)).filter(e => e && e.isValid !== false && isPlayer(e) && e.id !== bot.entity.id &&
       e.username !== bot.username && !lookDead(e) && e.position.distanceTo(me) < RADIUS)
   }
 
@@ -164,7 +164,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   const ehpOf = (e) => {
     if (!co.isPlayer(e)) { const hp = read.healthRaw(bot, e); return (hp == null ? 20 : hp) + read.absorptionOf(bot, e) }
     let t = hpTrackers.get(e.id)
-    if (!t || t.entity !== e) { if (t) t.stop(); t = co.trackFoe(bot, e, { honest: true }); hpTrackers.set(e.id, t) }
+    if (!t || t.entity !== e) { if (t) t.stop(); t = co.trackFoe(bot, e, { honest: true, visible: e => observe(e)?._ndVisible ?? true }); hpTrackers.set(e.id, t) }
     return t.hp.snapshot().mean
   }
   // Что о нём знаем для выбора цели.

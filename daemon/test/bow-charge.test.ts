@@ -61,6 +61,56 @@ function installedActor(weapon) {
   return { ...a, item, frame: async () => { a.c.advanceTicks(1); await new Promise(resolve => setImmediate(resolve)) } }
 }
 
+for (const weapon of ['bow', 'crossbow', 'iron_spear']) test(`${weapon} confirms raw hurt events for an observed target by entity id`, async t => {
+  const a = actor()
+  const raw = Object.assign(a.target, { type: 'player', username: 'Foe' })
+  a.bot.blockAt = p => ({ name: 'air', position: p, boundingBox: 'empty', shapes: [] })
+  a.bot.look = (yaw, pitch) => { Object.assign(a.bot.entity, { yaw, pitch }); return Promise.resolve() }
+  const vision = require('../src/pvp/last-seen').createLastSeen(a.bot)
+  const target = vision.observe(raw)
+  assert.notStrictEqual(target, raw)
+  const item = { name: weapon, slot: 36 }; a.bot.heldItem = item
+  a.bot.inventory.slots = []; a.bot.inventory.slots[36] = item
+  const oldDebug = process.env.ND_DEBUG_XBOW
+  if (weapon === 'crossbow') process.env.ND_DEBUG_XBOW = '1'
+  const logs: any[] = []
+  t.mock.method(console, 'log', (...args) => { if (args[0] === '[xshot]') logs.push(JSON.parse(args[1])) })
+  t.mock.method(require('../src/read'), 'crossbowInfo', () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }))
+  let hits = 0
+  const onHit = () => { hits++ }
+  const ctl = { aborted: false }
+  try {
+    const point = () => target.position.offset(0, .9, 0)
+    const shooting = weapon === 'bow' ? bow.shoot(a.bot, target, { point, follow: false, onHit })
+      : weapon === 'crossbow' ? ranged.fire(a.bot, target, item, { point, onHit })
+        : require('../src/spear').charge(a.bot, ctl, target, { onHit })
+    await new Promise(resolve => setImmediate(resolve))
+    if (weapon === 'bow') {
+      a.age(1001); a.age(1021)
+      for (let i = 0; i < 24; i++) await a.frame()
+    } else if (weapon === 'crossbow') await a.frame()
+    if (weapon !== 'iron_spear') { const result = await shooting; assert.equal(result.shot ?? result.fired, true) }
+    a.bot.emit('entityHurt', { ...raw, id: 3 }, a.bot.entity)
+    if (weapon === 'iron_spear') a.bot.emit('entityHurt', raw, { id: 3 })
+    assert.equal(hits, 0, 'another victim or another spear attacker does not confirm our hit')
+    a.bot.emit('entityHurt', raw, a.bot.entity)
+    assert.equal(hits, 1, 'the packet entity and its observed view name the same target')
+    if (weapon === 'iron_spear') {
+      ctl.aborted = true; await a.frame()
+      assert.equal((await shooting).hit, true)
+      assert.equal(a.bot.listenerCount('entityHurt'), 0)
+    } else {
+      a.bot.emit('entityHurt', raw, a.bot.entity)
+      assert.equal(hits, 1, 'a projectile hit is counted once')
+      if (weapon === 'crossbow') { assert.equal(logs.length, 1); assert.equal(typeof logs[0].hit, 'number') }
+    }
+  } finally {
+    ctl.aborted = true; vision.close(); a.close()
+    if (oldDebug == null) delete process.env.ND_DEBUG_XBOW
+    else process.env.ND_DEBUG_XBOW = oldDebug
+  }
+})
+
 for (const weapon of ['bow', 'crossbow']) test(`installed ${weapon} final aim observes Air44 age after slow planning, before movement and use`, async t => {
   const a = installedActor(weapon)
   const read = require('../src/read')

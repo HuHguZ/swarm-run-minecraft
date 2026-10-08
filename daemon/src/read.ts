@@ -184,7 +184,7 @@ function installLoaded (bot) {
   bot.on('spawn', () => gameClock.wall.setTimeout(() => { try { bot._client.write('player_loaded', {}) } catch {} }, 150))
 }
 
-function watch (bot, { threats = () => [] }: any = {}) {
+function watch (bot, { threats = () => [], visible = () => true }: any = {}) {
   installLoaded(bot)
   const S = new Map()
   const stats: any = { pops: 0, allIn: 0, shieldBreaks: 0, aimedAtMe: 0, absorb: 0, effects: {} }
@@ -198,6 +198,7 @@ function watch (bot, { threats = () => [] }: any = {}) {
     try {
       if (!p || p.entityStatus !== 35) return
       if (bot.entity && p.entityId === bot.entity.id) return
+      if (!visible(bot.entities?.[p.entityId])) return
       const s = st(p.entityId)
       s.popAt = gameClock.now()
       s.pops++

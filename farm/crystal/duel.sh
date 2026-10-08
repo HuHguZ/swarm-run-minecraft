@@ -17,7 +17,17 @@ if [ -n "$SWAP" ]; then
 else
   PA=88; PB=89; NA_=$N1; NB_=$N2
 fi
-cd "$(dirname "$0")/../../daemon" || exit 1
+cd "$(dirname "$0")/../.." || exit 1
+# Бойцы и harness — из одного снимка, чтобы живая правка арены не меняла контрольную серию.
+CODE_DIR=$(node -e '
+  const fs = require("node:fs")
+  const code = JSON.parse(fs.readFileSync("farm/slots.json", "utf8")).slots?.[process.argv[1]]?.code
+  if (code && !/^[\w.-]+$/.test(code)) throw new Error("invalid slot snapshot")
+  const dir = code && code !== "live" ? ".daemon-" + code : "daemon"
+  if (!fs.existsSync(dir + "/arena.js")) throw new Error("arena harness missing: " + dir)
+  process.stdout.write(dir)
+' "$SLOT") || exit 1
+cd "$CODE_DIR" || exit 1
 env ARENA_A=ws://127.0.0.1:$PA$PS ARENA_B=ws://127.0.0.1:$PB$PS \
   ARENA_NAME_A=$NA_ ARENA_NAME_B=$NB_ ND_SERVER_LOG="${ND_SERVER_LOG:-../farm/server-$SLOT/logs/latest.log}" \
   ARENA_ENCH=0 ARENA_NOTIMER=1 ARENA_STALL_S=120 ARENA_RETURN_S=120 ARENA_R=${ARENA_R:-24} \

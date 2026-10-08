@@ -179,7 +179,7 @@ function prioSlots () {
   }
   return out
 }
-const slotOfPort = p => (p > 25600 && p <= 25600 + MAX_SLOTS) ? p - 25600 : (p > 8800 && p <= 8800 + MAX_SLOTS) ? p - 8800 : 0
+const slotOfPort = p => (p > 25600 && p <= 25600 + MAX_SLOTS) ? p - 25600 : (p > 8800 && p <= 8800 + MAX_SLOTS) ? p - 8800 : (p > 8900 && p <= 8900 + MAX_SLOTS) ? p - 8900 : 0
 function applyPrio () {
   const prio = prioSlots()
   if (!prio.size) return []
@@ -190,7 +190,7 @@ function applyPrio () {
   }
   return done
 }
-const farmPort = p => (p > 25600 && p <= 25600 + MAX_SLOTS) || (p > 8800 && p <= 8800 + MAX_SLOTS) || MAIN_PORTS.includes(p)
+const farmPort = p => slotOfPort(p) !== 0 || MAIN_PORTS.includes(p)
 function worldsUp (lis) { return [...lis.keys()].filter(p => (p > 25600 && p <= 25600 + MAX_SLOTS) || p === 25569) }
 function killPid (pid) { if (pid) { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch {} } }
 function cmdLine (pid) {

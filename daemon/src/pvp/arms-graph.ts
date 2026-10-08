@@ -5,13 +5,18 @@
 import { StrategyRegistry, type Strategy } from '../core/strategy'
 import { amount, knows, type WorldState } from '../core/world-state'
 const { gearOf, WEAPON } = require('../assess')
+const { foodsByName } = require('minecraft-data')('1.21.11')
+const { fireworkRaw } = require('./damage-model')
 
 // ---------------------------------------------------------------- сила снаряжения
 // Грубая шкала «насколько опасен в бою»: ближнее оружие ≈ урон за секунду (меч ×1.6 удара/с,
 // топор ×0.9 — по скорости атаки 1.21.11), броня — очки брони + прочность, плюс щит, стрельба,
 // лечение, тотем. Единица — порядка «один удар железного меча».
 const SPEAR = { wooden_spear: 4, stone_spear: 5, copper_spear: 5, golden_spear: 4, iron_spear: 6, diamond_spear: 7, netherite_spear: 8 } as Record<string, number>
-export interface Item { name: string; count?: number; enchants?: number }
+export interface Item {
+  name: string; count?: number; enchants?: number; stars?: number
+  crossbow?: { loaded: boolean; ammo?: string | null; stars?: number | null }
+}
 export function weaponScore(name: string, enchanted = false): number {
   const bonus = enchanted ? 1.5 : 0
   if (/_sword$/.test(name)) return (WEAPON[name] ?? 4) * 1.6 + bonus
@@ -23,6 +28,7 @@ export function weaponScore(name: string, enchanted = false): number {
 }
 export interface Power { total: number; weapon: number; armor: number }
 export function powerOf(items: Item[]): Power {
+  items = items.filter(i => (i.count ?? 1) > 0)
   const names = items.map(i => i.name)
   const count = (re: RegExp) => items.filter(i => re.test(i.name)).reduce((n, i) => n + (i.count ?? 1), 0)
   const weapon = Math.max(1, ...items.map(i => weaponScore(i.name, !!i.enchants)))
@@ -36,7 +42,11 @@ export function powerOf(items: Item[]): Power {
   }
   const g = gearOf(Object.values(best))
   const armor = g.armor + g.tough + Object.values(best).filter(i => i.enchants).length
-  const ranged = names.some(n => /^(bow|crossbow)$/.test(n)) && count(/^(arrow|spectral_arrow|tipped_arrow)$/) + count(/^firework_rocket$/) > 0 ? 4 : 0
+  const arrow = /^(arrow|spectral_arrow|tipped_arrow)$/
+  const arrows = count(arrow) > 0
+  const rockets = items.some(i => i.name === 'firework_rocket' && fireworkRaw(i.stars) > 0)
+  const ranged = items.some(i => (i.name === 'bow' && arrows) || (i.name === 'crossbow' && (arrows || rockets ||
+    (i.crossbow?.loaded && (arrow.test(i.crossbow.ammo || '') || (i.crossbow.ammo === 'firework' && fireworkRaw(i.crossbow.stars) > 0)))))) ? 4 : 0
   const extra = (names.includes('shield') ? 3 : 0) + ranged + Math.min(3, count(/^golden_apple$/)) * 2 + count(/^enchanted_golden_apple$/) * 5 +
     Math.min(3, count(/^(splash_potion|potion)$/)) * 1.5 + Math.min(1, count(/^totem_of_undying$/)) * 8 + Math.min(2, count(/^ender_pearl$/)) * 0.5
   return { total: Math.round((weapon + armor * 0.8 + extra) * 10) / 10, weapon, armor }
@@ -85,6 +95,34 @@ export const chestMargin = (power: number): number => Math.min(1, Math.max(0.1, 
 // Своя сила в сшибке — с поправкой на здоровье (S7d, ревью Codex: план одинаков при 1 и 20 хп): на 1 хп от снаряжения
 // остаётся ~0.4 — один-два удара до смерти.
 export const effPower = (s: WorldState): number => amount(s, 'power') * (0.4 + 0.6 * Math.min(1, Math.max(0, (s.health ?? 20) / 20)))
+// Consumables 1.21.11: regeneration II 100/400 тиков; RegenerationMobEffect: +1 HP каждые 50 >> 1 тиков.
+export const recoveryRegenMs = (name?: string | null): number => name === 'golden_apple' ? 5000 : name === 'enchanted_golden_apple' ? 20000 : 0
+export function recoveryFood(inventory: Record<string, number>, remaining = Infinity): { count: number; nutrition: number; regenMs: number } {
+  const foods = Object.entries(inventory).filter(([name, count]) => count > 0 && !/_bucket$/.test(name) && foodsByName[name]?.foodPoints > 0)
+    .map(([name, count]) => ({ name, count }))
+  const total = foods.reduce((n, i) => n + i.count, 0)
+  const count = Math.max(0, Math.min(total, remaining))
+  // В цепочке прогнозов heal_items уже уменьшен, а наблюдавшийся inventory неизменен: пропускаем съеденные порции.
+  let spent = total - count
+  let selected = null
+  const { bestFood } = require('../actions')
+  while ((selected = bestFood({ inventory: { items: () => foods } }, { foodsByName }))) {
+    if (spent < selected.count) break
+    spent -= selected.count
+    foods.splice(foods.indexOf(selected), 1)
+  }
+  return { count, nutrition: selected ? foodsByName[selected.name].foodPoints : 0, regenMs: recoveryRegenMs(selected?.name) }
+}
+function recoveryEffect(s: WorldState) {
+  const food = recoveryFood(s.inventory, amount(s, 'heal_items'))
+  const eat = s.hunger < 20 && food.count > 0 && amount(s, 'heal_items') > 0
+  const hunger = Math.min(20, s.hunger + (eat ? food.nutrition : 0))
+  // shortcut: насыщение не наблюдается; считаем slow regen 80 т/HP и до ceil(6/4)=2 еды/HP, уточнять при его добавлении.
+  const missing = Math.max(0, 18 - s.health)
+  const natural = Math.min(missing, Math.max(0, Math.ceil((hunger - 17) / 2)))
+  const regen = eat ? Math.min(15000, food.regenMs) / 1250 : 0
+  return { health: s.health + Math.min(missing, natural + regen), hunger: Math.max(0, hunger - natural * 2), resources: { heal_items: eat ? -1 : 0 } }
+}
 export interface ArmsOptions { chestValue?: number; fightSeconds?: number }
 export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
   const chestValue = options.chestValue ?? 4
@@ -118,12 +156,15 @@ export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
   add('Retreat', 'arms.retreat', s => knows(s, 'enemy_near') && !knows(s, 'enemy_contact') && !knows(s, 'deadline') &&
     amount(s, 'chests') + amount(s, 'caches') + amount(s, 'unscouted') > 0 && enemy(s) >= effPower(s) - 1,
     { facts: { enemy_near: false } }, () => 10, () => 0.05, (_b, a) => !knows(a, 'enemy_near'))
-  // Восстановиться (S7d, ревью Codex: при 1 и 20 хп план был одинаков, а отход ничего не давал — в модели хп не
-  // росло). Не в контакте: съесть/выпить лечение или переждать регенерацию в стороне; цена — время, риск — его близость.
-  add('Recover', 'arms.heal', s => (s.health ?? 20) < 14 && !knows(s, 'enemy_contact'),
-    { health: 20, facts: { enemy_near: false } },
-    s => amount(s, 'heal_items') > 0 ? 5 : Math.max(4, (20 - (s.health ?? 20)) * 1.5),
-    s => knows(s, 'enemy_near') ? 0.3 : 0.05, (b, a) => (a.health ?? 20) > (b.health ?? 20) + 3)
+  // eat исполняет еду, не зелья; ожидание лечит только при сытости >=18. Уход от врага подтверждается отдельно.
+  add('Recover', 'arms.heal', s => (s.health ?? 20) < 14 && !knows(s, 'enemy_contact') &&
+    (s.hunger >= 18 || (amount(s, 'heal_items') > 0 && recoveryFood(s.inventory).count > 0)),
+    recoveryEffect,
+    s => (recoveryEffect(s).health > s.health ? 15 : 0) + (recoveryEffect(s).resources.heal_items < 0 ? 1.6 : 0),
+    s => knows(s, 'enemy_near') ? 0.3 : 0.05, (b, a) => a.health > b.health,
+    { progressCondition: (b, a) => a.health > b.health || a.hunger > b.hunger,
+      retryCondition: (b, a) => a.hunger > b.hunger || Object.keys(a.inventory).some(name =>
+        foodsByName[name]?.foodPoints > 0 && !/_bucket$/.test(name) && a.inventory[name] > (b.inventory[name] ?? 0)) })
   // Засада (TODO п.9): срок лута вышел, врага не видно, я не слабее — ждать у середины поля со своей стороны
   // (через неё идёт его обход), а не искать вслепую; первый удар — мой (+3 к силе в оценке сшибки). Один раз.
   add('Ambush', 'arms.ambush', s => knows(s, 'deadline') && !knows(s, 'enemy_known') && !knows(s, 'enemy_near') &&

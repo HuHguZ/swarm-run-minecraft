@@ -39,6 +39,7 @@ const boom = require('./boom')
 const crystal = require('./crystal')
 const { counterattackAfterFailedEscape } = require('./pvp/last-stand')
 const { foodAnimals, foodIgnitionAllowed } = require('./pvp/food-fire')
+const { createLastSeen } = require('./pvp/last-seen')
 
 const TICK_MS = 50
 const HIT_REACH = 2.9
@@ -266,7 +267,9 @@ const ANGRY_IF_HIT = /^(enderman|zombified_piglin|piglin|polar_bear|wolf|bee)$/
 
 async function duel (session, ctl, entity, opts: any = {}) {
   const safety = opts.guard?.safety || require('./combat-safety').watch(session.bot)
-  try { return await duelBody(session, ctl, entity, { ...opts, safety }) } finally {
+  const vision = createLastSeen(session.bot)
+  try { return await duelBody(session, ctl, entity, { ...opts, safety, vision }) } finally {
+    vision.close()
     if (!opts.guard?.safety) safety.close()
   }
 }
@@ -274,6 +277,11 @@ async function duel (session, ctl, entity, opts: any = {}) {
 async function duelBody (session, ctl, entity, opts: any = {}) {
   const rangedAllowed = () => canUseRanged(session, entity, opts)
   const bot = session.bot
+  const vision = opts.vision
+  const observed = vision.observe(entity)
+  if (!observed) { vision.close(); return { lost: `${entity.username || entity.name} не видно` } }
+  entity = observed
+  ctl.onAbort.push(() => vision.close())
   let lastStand = opts.lastStand === true || opts.repelLava === true
   const foodFire = { attempts: 0, ignited: 0, burningObserved: 0 }
   const burningFood = new Set<number>()
@@ -293,6 +301,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     clearArea = 0,
     arena = null
   } = opts
+  if (guard?.watch) guard.watch(entity, 3.2)
   let label = entity.username || entity.name
   const deadline = gameClock.now() + Math.min(300, timeoutSeconds) * 1000
   let track = makeTracker(entity)
@@ -337,7 +346,8 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   // pvp/combat-observe.trackFoe → hp-estimate по подтверждённым попаданиям, видимому лечению, тотему, регенерации).
   // healthOf остаётся для мобов и телеметрии (trickDmg, mace.dealt).
   const co = require('./pvp/combat-observe')
-  let calc = co.trackFoe(bot, entity, { honest: true })
+  const telemetryHp = e => co.exactHpTelemetryOnly(bot, vision.source(e))
+  let calc = co.trackFoe(bot, entity, { honest: true, visible: vision.visible })
   const foeEst = () => calc.hp.snapshot()
   const foeHpDecide = (e = entity) => co.isPlayer(e) ? (e === calc.entity ? foeEst().mean : 20) : healthOf(bot, e)
   // Граф боя (S7d, pvp/fight-graph): каждые 5 тиков — план калькулятора + длинные приёмы → решение и разрешения веткам.
@@ -427,7 +437,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let shieldHitAt = -1e9
   let foeHp = null
   const onTickDmg = () => {
-    const h = healthOf(bot, entity)
+    const h = healthOf(bot, vision.source(entity))
     if (typeof h !== 'number') return
     if (foeHp != null && h < foeHp - 0.05) {
       if (st.shield && gameClock.now() - shieldHitAt < 600) st.shield.through = Math.round((st.shield.through + foeHp - h) * 10) / 10
@@ -453,7 +463,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
         const m = bot.entity.position; const h = entity && entity.position
         // Оценка его хп (решения) и точное (только телеметрия — для разбора боя, не для решений).
         let est = ''
-        try { const e = foeEst(); est = ` оценка ${Math.round(e.lo)}–${Math.round(e.hi)} (точно ${Math.round(healthOf(bot, entity) ?? -1)})` } catch {}
+        try { const e = foeEst(); est = ` оценка ${Math.round(e.lo)}–${Math.round(e.hi)} (точно ${Math.round(healthOf(bot, vision.source(entity)) ?? -1)})` } catch {}
         console.log(`[trace] ${new Date().toISOString().slice(11, 19)} ${bot.username} +${((gameClock.now() - traceT0) / 1000).toFixed(1)}s ${what} | я ${m.x.toFixed(1)},${m.y.toFixed(1)},${m.z.toFixed(1)} хп ${Math.round(bot.health ?? 0)}${h ? ` | он ${h.x.toFixed(1)},${h.y.toFixed(1)},${h.z.toFixed(1)} d=${m.distanceTo(h).toFixed(1)}${est}` : ''}`)
       } catch {}
     }
@@ -482,11 +492,11 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   st.style = { агрессия: Math.round(style.aggression * 100) / 100, реакцияМс: Math.round(style.reactMs), коробкаНа: style.fortAt }
   style.openDelayMs = Math.round(Math.random() * (FIX ? 1200 : 700))
   const tt = tempo.track(bot, {
-    threats: () => [entity, ...[...attackers.values()].filter(a => gameClock.now() - a.at < 8000).map(a => a.e)],
+    threats: () => [entity, ...[...attackers.values()].filter(a => gameClock.now() - a.at < 8000).map(a => a.e)].map(vision.observe).filter(Boolean),
     reactMs: style.reactMs
   })
   session.tempo = tt
-  const foe = read.watch(bot, { threats: tt.threats })
+  const foe = read.watch(bot, { threats: tt.threats, visible: vision.visible })
   tt.read = foe
   let spearOffUntil = 0
   {
@@ -553,7 +563,8 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let maceTotem = false
   let selectSince = 0
   mf.setCounter((e) => {
-    if (!prof.player || e !== entity || !bot.entity) return false
+    if (!prof.player || e?.id !== entity.id || !bot.entity || !vision.visible(entity)) return false
+    e = entity
     if (reachFrom(bot.entity.position.offset(0, EYE, 0), e) > HIT_REACH) return false
     if (mf.clock.charge(0) <= 0.9 || usingItem(bot, e) === 'shield') return false
     const use = bot._ndUse
@@ -575,12 +586,12 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let shieldUpAt = 0
   let shieldDownAt = 0
   const onHurt = (victim, source) => {
-    if (victim === entity) targetHurtAt = gameClock.now()
-    if (source && bot.entity && ((victim === entity && source.id === bot.entity.id) || (victim === bot.entity && source.id === entity.id))) noteExchange()
-    if (victim === entity && source === bot.entity) {
+    if (victim?.id === entity.id) targetHurtAt = gameClock.now()
+    if (source && bot.entity && ((victim?.id === entity.id && source.id === bot.entity.id) || (victim === bot.entity && source.id === entity.id))) noteExchange()
+    if (victim?.id === entity.id && source === bot.entity) {
       st.landed++
       if (lastStand) session.bus?.emit('last_stand_hit', { target: entity.id, swings: st.swings, landed: st.landed,
-        targetHealth: healthOf(bot, entity), health: bot.health })
+        targetHealth: healthOf(bot, vision.source(entity)), health: bot.health })
       if (gameClock.now() - lastSwing < 400 && swingCrit) st.crits++
     }
     if (victim === bot.entity && source && source.id === entity.id) lastHurtByTarget = gameClock.now()
@@ -596,7 +607,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     const now = gameClock.now()
     let best = null
     for (const [id, a] of attackers) {
-      const e = a.e
+      const e = vision.observe(a.e)
       if (now - a.at > 4000 || !e || e.isValid === false || dead.has(id) || lookDead(bot, e) || e.id === entity.id) continue
       const dist = e.position.distanceTo(bot.entity.position)
       if (dist > 14) continue
@@ -608,7 +619,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const dead = new Set()
   const onDead = (e) => {
     if (e) dead.add(e.id)
-    if (e === entity) {
+    if (e?.id === entity.id) {
       killed = true
       if (lastStand) session.bus?.emit('last_stand_kill', { target: entity.id, swings: st.swings, landed: st.landed, health: bot.health })
     }
@@ -652,7 +663,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const mobCtl = { get aborted () { return ctl.aborted || !!mobThreat() }, onAbort: ctl.onAbort, abort: () => ctl.abort() }
   bot.on('entityHurt', onHurt)
   bot.on('entityDead', onDead)
-  const duo = duoMod.create(bot, { target: () => entity, attackers, dead, used, tt, holdWeapon: () => holdWeapon(), setAim: (m) => { aim = m }, potionOf })
+  const duo = duoMod.create(bot, { target: () => entity, attackers, dead, used, tt, observe: vision.observe, holdWeapon: () => holdWeapon(), setAim: (m) => { aim = m }, potionOf })
   ctl.onAbort.push(() => duo.close())
   const util = utilityMod.create(bot, { used, tt })
   ctl.onAbort.push(() => util.close())
@@ -686,7 +697,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const arrowLog = arrows.track(bot)
   const onTickArcher = () => {
     try {
-      if (!entity.isValid || !prof.player) return
+      if (!entity.isValid || !prof.player || !vision.visible(entity)) return
       const now = gameClock.now()
       const sh = arrowLog.shots.get(entity.id)
       const n = sh ? sh.n : 0
@@ -770,6 +781,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let aimPoint = null
   let sightOff = null
   const aimTimer = gameClock.setInterval(() => {
+    vision.observe(entity)
     if (!bot.entity || !entity.isValid) return
     try {
       const nowO = gameClock.now()
@@ -810,7 +822,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const clear = () => { for (const k of keys) { try { bot.setControlState(k, false) } catch {} } }
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
   const hm = showman.create({
-    bot, session, target: () => entity, style, used, set, tt, styleOut: st.style,
+    bot, session, target: () => entity, observe: vision.observe, style, used, set, tt, styleOut: st.style,
     aimTo: (mode, point = null) => { aim = mode; aimPoint = point },
     stopPath: () => { if (pathing) { pathTo(false); pathing = false } },
     stepOk: (k) => stepSafe(bot, keyDir(bot, k)),
@@ -891,9 +903,9 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const edgeGuard = edges.guard(bot, {
     margin: () => (entity && entity.isValid && entity.position && bot.entity && entity.position.distanceTo(bot.entity.position) < 6 ? 0.35 : 0)
   })
-  const mc = mace.track(bot, { enemy: () => entity })
+  const mc = mace.track(bot, { enemy: () => entity, telemetryHp })
   ctl.onAbort.push(() => mc.close())
-  const sky = elytra.create(bot, { enemy: () => entity, used, edgeGuard, arena: AR })
+  const sky = elytra.create(bot, { enemy: () => entity, used, edgeGuard, arena: AR, telemetryHp })
   ctl.onAbort.push(() => sky.close())
   const pearlResponse = require('./combat/pearl-response').createPearlResponse(bot, {
     enemy: () => entity, used,
@@ -903,10 +915,10 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     }
   })
   ctl.onAbort.push(() => pearlResponse.close())
-  const bm = boom.create(bot, { enemy: () => entity, used, crystals: !crystal.ON })
+  const bm = boom.create(bot, { enemy: () => entity, used, crystals: !crystal.ON, telemetryHp })
   ctl.onAbort.push(() => bm.close())
   // Хп соперника-игрока в решениях кристаллов — оценкой (правило 06.10); урон своих подрывов — в оценку (S7c).
-  const cx = crystal.create(bot, { enemy: () => entity, used, foeHp: (e) => foeHpDecide(e), noteAttack: (r, o) => calc.noteAttack(r, o) })
+  const cx = crystal.create(bot, { enemy: () => entity, used, telemetryHp, foeHp: (e) => foeHpDecide(e), noteAttack: (r, o) => calc.noteAttack(r, o) })
   ctl.onAbort.push(() => cx.close())
   const maceNow = () => { try { return !!(prof.player && mc.threat()) } catch { return false } }
   const maceAbort = (what) => { st.maceAborts = (st.maceAborts || 0) + 1; used('бросил ' + what + ': булава сверху') }
@@ -1050,6 +1062,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     mf.close()
     duo.close()
     util.close()
+    vision.close()
     const human = hm && prof.player ? hm.report() : undefined
     if (hm) hm.close()
     if (st.spearCharges || st.spearSwaps) st.tricks[`копьё: разгонов ${st.spearCharges || 0}, попал ${st.spearChargeHits || 0}; смен копьё↔меч ${st.spearSwaps || 0}`] = 1
@@ -1139,11 +1152,14 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let replanAt = 0
   const retarget = (e) => {
     if (!e || e === bot.entity || (bot.entity && e.id === bot.entity.id)) return
-    entity = e
+    const observed = vision.observe(e)
+    if (!observed) return
+    if (pathing) { pathTo(false); pathing = false }
+    entity = observed
     foeSeenPos = null
     st.bowProg = []
     foeHp = null
-    calc.stop(); calc = co.trackFoe(bot, entity, { honest: true })
+    calc.stop(); calc = co.trackFoe(bot, entity, { honest: true, visible: vision.visible })
     label = entity.username || entity.name
     track = makeTracker(entity)
     seenAt = gameClock.now()
@@ -1185,7 +1201,7 @@ get drink () { return drink },
 get eatHeld () { return eatHeld },
 get edgeGuard () { return edgeGuard },
 get edges () { return edges },
-get entity () { return entity }, set entity (value) { entity = value },
+get entity () { return entity }, set entity (value) { retarget(value) },
 get EYE () { return EYE },
 get falls () { return falls },
 get findItem () { return findItem },
@@ -1205,6 +1221,7 @@ get hazardOnLine () { return hazardOnLine },
 get headroom () { return headroom },
 get healItem () { return healItem },
 get healthOf () { return healthOf },
+get telemetryHp () { return telemetryHp },
 get foeHpDecide () { return foeHpDecide },
 get heldName () { return heldName },
 get HIT_REACH () { return HIT_REACH },
@@ -1347,7 +1364,7 @@ const pvpSkills = {
   } else if (!lastStand) await buffUp()
 
   const spearChargeFar = (...args: any[]) => pvpSkills.spearChargeFar(...args)
-  const seesNow = () => { try { return raySees(bot, bot.entity.position.offset(0, EYE, 0), entity.position.offset(0, (entity.height || 1.8) * 0.55, 0)) } catch { return false } }
+  const seesNow = () => { try { return (!prof.player || vision.visible(entity)) && raySees(bot, bot.entity.position.offset(0, EYE, 0), entity.position.offset(0, (entity.height || 1.8) * 0.55, 0)) } catch { return false } }
 
   let loopYielded = true
   let loopSpins = 0
@@ -1359,6 +1376,7 @@ const pvpSkills = {
     setImmediate(markLoopYield)
     const now = gameClock.now()
     if (!bot.entity || (bot.health ?? 20) <= 0 || selfDied) return finish({ died: true })
+    vision.observe(entity)
     if (opts.purpose === 'food' && foodAnimals.has(entity.name) && (entity.metadata?.[0] & 1) && !burningFood.has(entity.id)) {
       burningFood.add(entity.id); foodFire.burningObserved++
     }
@@ -1474,6 +1492,74 @@ const pvpSkills = {
       return finish({ lowHealth: safety.action !== 'dead', safety, escape, health: bot.health })
     }
     const meInWeb = blockName(bot, me.floored()) === 'cobweb' || blockName(bot, me.floored().offset(0, 1, 0)) === 'cobweb'
+    const skyThreat = prof.player && !bot.entity.elytraFlying && vision.visible(entity) ? sky.threat() : null
+    if (bracing && (!skyThreat || gameClock.now() - bracing > 3000)) { bracing = 0; try { bot.deactivateItem() } catch {} }
+    // Он летит на нас (пике/таран): копьё в руку, взгляд на него и «использовать» — задержка копья должна кончиться
+    // до встречи. Урон разгона ему = 1 + floor(rel·mult), rel = −(наш взгляд · его скорость)·20 (KineticWeapon, javap):
+    // на его 1.5 б/т — ~29 до брони. Наш щит/уклон — если копья нет или поздно.
+    const braceWith = skyThreat && !bracing && !meInWeb ? spear.spearOf(bot) : null
+    if (braceWith && skyThreat.eta >= Math.round(braceWith.spec.delay * 20) + 1 && skyThreat.eta <= 30) {
+      if (pathing) { pathTo(false); pathing = false }
+      for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
+      try {
+        if (bot.heldItem?.name !== braceWith.item.name) await bot.equip(braceWith.item, 'hand')
+        const q = skyThreat.at || entity.position
+        const ey = pick.eyeOf(bot)
+        await bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true)
+        if (bot.heldItem?.name === braceWith.item.name) { bot.activateItem(); bracing = gameClock.now(); used('копьё на изготовку против тарана') }
+      } catch {}
+      await sleep(TICK_MS)
+      continue
+    }
+    if (bracing && skyThreat) {
+      // Держим и ведём взгляд за ним (луч копья 2.0–4.5 по взгляду).
+      const q = sky.fl.at(2) || entity.position
+      const ey = pick.eyeOf(bot)
+      bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true).catch(() => {})
+      await sleep(TICK_MS)
+      continue
+    }
+    if (skyThreat) {
+      if (pathing) { pathTo(false); pathing = false }
+      aim = 'target'
+      let how = null
+      if (guard && guard.stats && guard.stats.worn && (skyThreat.eta >= 6 || skyThreat.shielded)) {
+        guard.raise(true)
+        if (!skyThreat.shielded) { skyThreat.shielded = true; sky.fl.st.shieldUps++ }
+        for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
+        how = 'щит к пике с элитр'
+      } else {
+        const hv = sky.fl.vel()
+        const hn = Math.hypot(hv.x, hv.z) || 1
+        let best = null
+        for (const k of ['left', 'right', 'back', 'forward']) {
+          const dir = keyDir(bot, k)
+          if (!stepSafe(bot, dir)) continue
+          const across = Math.abs((dir.x * hv.z - dir.z * hv.x) / hn)
+          const q = me.offset(dir.x * 2, 0, dir.z * 2)
+          const away = Math.hypot(q.x - skyThreat.at.x, q.z - skyThreat.at.z)
+          const sc = across * 2 + away
+          if (!best || sc > best.sc) best = { k, sc }
+        }
+        if (best) {
+          for (const x of ['forward', 'back', 'left', 'right']) set(x, x === best.k)
+          set('sprint', best.k === 'forward' && (bot.food ?? 20) > 6); set('jump', false)
+          if (!skyThreat.dodged) { skyThreat.dodged = true; sky.fl.st.dodges++ }
+          how = 'ушёл поперёк его пике'
+        }
+      }
+      if (how && ready('skyDef:' + how)) { rest('skyDef:' + how, 2500); used(how) }
+      if (how !== 'щит к пике с элитр' && now >= nextReady && r <= HIT_REACH && pick.canHit(bot, entity, { range: HIT_REACH })) {
+        try { bot.attack(entity) } catch {}
+        st.swings++
+        sky.fl.st.counterHits++
+        lastSwing = gameClock.now()
+        nextReady = lastSwing + cooldownMs(bot.heldItem)
+        used('ударил летуна в пролёте')
+      }
+      await sleep(TICK_MS)
+      continue
+    }
     if (prof.player && !meInWeb && !fort && !perch && ready('pearlResponse')) {
       const plan = pearlResponse.decide({ hp, interrupted: maceNow() || ctl.aborted || (session.tactics?.snapshot().threatLevel ?? 0) >= 3 })
       if (plan) {
@@ -1588,7 +1674,7 @@ const pvpSkills = {
         }
       } catch (err) { st.calcErr = String(err && err.message || err).slice(0, 120) }
     }
-    const seesBody = raySees(bot, eye, entity.position.offset(0, (entity.height || 1.8) * 0.55, 0))
+    const seesBody = (!prof.player || vision.visible(entity)) && raySees(bot, eye, entity.position.offset(0, (entity.height || 1.8) * 0.55, 0))
     // Где я его видел в последний раз (S7d, ревью Codex: честность — позиция из пакетов сущности идёт и сквозь стену):
     // точка прострела и «столб к его столбу» считают от увиденного, а не от свежего пакета.
     if (seesBody) foeSeenPos = entity.position.clone()
@@ -1727,74 +1813,6 @@ const pvpSkills = {
       await sleep(TICK_MS)
       continue
     }
-    const skyThreat = prof.player ? sky.threat() : null
-    if (bracing && (!skyThreat || gameClock.now() - bracing > 3000)) { bracing = 0; try { bot.deactivateItem() } catch {} }
-    // Он летит на нас (пике/таран): копьё в руку, взгляд на него и «использовать» — задержка копья должна кончиться
-    // до встречи. Урон разгона ему = 1 + floor(rel·mult), rel = −(наш взгляд · его скорость)·20 (KineticWeapon, javap):
-    // на его 1.5 б/т — ~29 до брони. Наш щит/уклон — если копья нет или поздно.
-    const braceWith = skyThreat && !bracing && !meInWeb ? spear.spearOf(bot) : null
-    if (braceWith && skyThreat.eta >= Math.round(braceWith.spec.delay * 20) + 1 && skyThreat.eta <= 30) {
-      if (pathing) { pathTo(false); pathing = false }
-      for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
-      try {
-        if (bot.heldItem?.name !== braceWith.item.name) await bot.equip(braceWith.item, 'hand')
-        const q = skyThreat.at || entity.position
-        const ey = pick.eyeOf(bot)
-        await bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true)
-        if (bot.heldItem?.name === braceWith.item.name) { bot.activateItem(); bracing = gameClock.now(); used('копьё на изготовку против тарана') }
-      } catch {}
-      await sleep(TICK_MS)
-      continue
-    }
-    if (bracing && skyThreat) {
-      // Держим и ведём взгляд за ним (луч копья 2.0–4.5 по взгляду).
-      const q = sky.fl.at(2) || entity.position
-      const ey = pick.eyeOf(bot)
-      bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true).catch(() => {})
-      await sleep(TICK_MS)
-      continue
-    }
-    if (skyThreat) {
-      if (pathing) { pathTo(false); pathing = false }
-      aim = 'target'
-      let how = null
-      if (guard && guard.stats && guard.stats.worn && (skyThreat.eta >= 6 || skyThreat.shielded)) {
-        guard.raise(true)
-        if (!skyThreat.shielded) { skyThreat.shielded = true; sky.fl.st.shieldUps++ }
-        for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
-        how = 'щит к пике с элитр'
-      } else {
-        const hv = sky.fl.vel()
-        const hn = Math.hypot(hv.x, hv.z) || 1
-        let best = null
-        for (const k of ['left', 'right', 'back', 'forward']) {
-          const dir = keyDir(bot, k)
-          if (!stepSafe(bot, dir)) continue
-          const across = Math.abs((dir.x * hv.z - dir.z * hv.x) / hn)
-          const q = me.offset(dir.x * 2, 0, dir.z * 2)
-          const away = Math.hypot(q.x - skyThreat.at.x, q.z - skyThreat.at.z)
-          const sc = across * 2 + away
-          if (!best || sc > best.sc) best = { k, sc }
-        }
-        if (best) {
-          for (const x of ['forward', 'back', 'left', 'right']) set(x, x === best.k)
-          set('sprint', best.k === 'forward' && (bot.food ?? 20) > 6); set('jump', false)
-          if (!skyThreat.dodged) { skyThreat.dodged = true; sky.fl.st.dodges++ }
-          how = 'ушёл поперёк его пике'
-        }
-      }
-      if (how && ready('skyDef:' + how)) { rest('skyDef:' + how, 2500); used(how) }
-      if (how !== 'щит к пике с элитр' && now >= nextReady && r <= HIT_REACH && pick.canHit(bot, entity, { range: HIT_REACH })) {
-        try { bot.attack(entity) } catch {}
-        st.swings++
-        sky.fl.st.counterHits++
-        lastSwing = gameClock.now()
-        nextReady = lastSwing + cooldownMs(bot.heldItem)
-        used('ударил летуна в пролёте')
-      }
-      await sleep(TICK_MS)
-      continue
-    }
     const boomSeen = prof.player ? bm.threat() : null
     const boomThreat = after('boomSeen', !!boomSeen, style.reactMs) && ready('boomDef') ? boomSeen : null
     if (boomThreat) {
@@ -1878,6 +1896,7 @@ const pvpSkills = {
           const res = await mace.windSmash(bot, ctl, entity, {
             vel: () => track.vel(),
             stats: mc.st,
+            telemetryHp,
             stillOk: () => entity.isValid && Math.hypot(entity.position.x - bot.entity.position.x, entity.position.z - bot.entity.position.z) < 4.6 && !mace.shieldAtUs(bot, entity) && !duo.secondThreat()
           })
           aim = 'target'
@@ -2832,6 +2851,37 @@ const pvpSkills = {
       }
     }
 
+    // Спуск считаем до повторного обхода стены: путь с maxDropDown=3 не сойдёт с борта в 4 блока.
+    if (prof.player && !fort && !meInWeb && bot.entity.onGround && r > HIT_REACH && d < 8 && dy <= 1.6 &&
+        now - Math.max(lastHurtByTarget, targetHurtAt, lastSwing) > 4000 && ready('standoff')) {
+      const el = bridge.elevatedToward(bot, entity.position)
+      if (el.drop > edges.SAFE_FALL || el.lava) {
+        rest('standoff', 3000)
+        pathTo(false); pathing = false
+        clear()
+        aim = 'free'
+        let how = null
+        try {
+          let br = { ok: false, why: dy < -1.6 ? 'он ниже — спуск' : 'нечем мостить', placed: 0 }
+          if (dy >= -1.6 && pickFiller(bot)) {
+            const gM = buildGuard()
+            br = await bridge.build(bot, guardCtl(gM), entity)
+            if (buildDone(gM, 'мост')) br.ok = false
+          }
+          how = br.ok ? `мост к нему (${br.placed} бл.)` : null
+          if (!br.ok) {
+            const dr = await bridge.dropDown(bot, ctl, entity, { edgeGuard })
+            how = dr.ok ? `спрыгнул к нему (−${dr.dmg} хп)` : `застряли на столбах: ${br.why}; ${dr.why || 'спуска нет'}`
+            if (dr.ok) perch = null
+          }
+        } catch (e) { how = 'стояние на столбах: ' + e.message }
+        aim = 'target'
+        await holdWeapon()
+        used(how)
+        continue
+      }
+    }
+
     if (bot.entity.isCollidedHorizontally && (bot.getControlState('forward') || bot.getControlState('left') || bot.getControlState('right'))) stuckTicks++
     else stuckTicks = 0
     if (d < hopD - 0.5 || r <= HIT_REACH) { hopD = d; hopDAt = now }
@@ -2907,33 +2957,6 @@ const pvpSkills = {
       set('jump', false)
       await sleep(TICK_MS)
       continue
-    }
-
-    if (prof.player && !fort && !meInWeb && r > HIT_REACH && d < 8 && Math.abs(dy) <= 1.6 &&
-        now - Math.max(lastHurtByTarget, targetHurtAt, lastSwing) > 4000 && ready('standoff')) {
-      const el = bridge.elevatedToward(bot, entity.position)
-      if (el.drop > edges.SAFE_FALL || el.lava) {
-        rest('standoff', 3000)
-        pathTo(false); pathing = false
-        clear()
-        aim = 'free'
-        let how = null
-        try {
-          const gM = buildGuard()
-          const br = pickFiller(bot) ? await bridge.build(bot, guardCtl(gM), entity) : { ok: false, why: 'нечем мостить' }
-          if (buildDone(gM, 'мост')) br.ok = false
-          how = br.ok ? `мост к нему (${br.placed} бл.)` : null
-          if (!br.ok) {
-            const dr = await bridge.dropDown(bot, ctl, entity, { edgeGuard })
-            how = dr.ok ? `спрыгнул к нему (−${dr.dmg} хп)` : `застряли на столбах: ${br.why}; ${dr.why || 'спуска нет'}`
-            if (dr.ok) perch = null
-          }
-        } catch (e) { how = 'стояние на столбах: ' + e.message }
-        aim = 'target'
-        await holdWeapon()
-        used(how)
-        continue
-      }
     }
 
     const bowShield = theyBow && !hisCb && (prof.player || prof.ranged) && guard?.stats?.worn && sees && r > HIT_REACH
@@ -3081,6 +3104,7 @@ const pvpSkills = {
         const res = await mace.windSmash(bot, ctl, entity, {
           vel: () => track.vel(),
           stats: mc.st,
+          telemetryHp,
           stillOk: () => entity.isValid && Math.hypot(entity.position.x - bot.entity.position.x, entity.position.z - bot.entity.position.z) < 4.6 && !mace.shieldAtUs(bot, entity)
         })
         aim = 'target'
@@ -3204,12 +3228,12 @@ const pvpSkills = {
         rest('spearCharge', 3000)
         if (guard) await guard.raise(false)
         aim = 'free'
-        const hpS = healthOf(bot, entity)
+        const hpS = healthOf(bot, vision.source(entity))
         const ch = await spear.charge(bot, ctl, entity, { maxMs: 1800, safe: k => stepSafe(bot, keyDir(bot, k)), vel: () => track.vel(), onHit: () => { st.landed++ } })
         aim = 'target'
         st.spearCharges = (st.spearCharges || 0) + 1
         if (ch.hit) st.spearChargeHits = (st.spearChargeHits || 0) + 1
-        used(ch.hit ? `разгон копьём — попал (${hpS != null && healthOf(bot, entity) != null ? Math.round((hpS - healthOf(bot, entity)) * 10) / 10 : '?'} хп)` : `разгон копьём — мимо (${ch.why || 'время'})`)
+        used(ch.hit ? `разгон копьём — попал (${hpS != null && healthOf(bot, vision.source(entity)) != null ? Math.round((hpS - healthOf(bot, vision.source(entity))) * 10) / 10 : '?'} хп)` : `разгон копьём — мимо (${ch.why || 'время'})`)
         continue
       }
       if (now - lastSwing < 250 && r <= HIT_REACH && bestWeapon(bot)) {

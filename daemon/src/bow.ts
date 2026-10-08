@@ -708,7 +708,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   // Урон цели в ближайшие ~2 с после спуска — наша стрела (ближний бой в это
   // время не идёт: стреляем с дистанции).
   const onHurt = (victim) => {
-    if (victim !== entity || hit) return
+    if (victim?.id !== entity.id || hit) return
     hit = true
     if (onHit) { try { onHit() } catch {} }
   }

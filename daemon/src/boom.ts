@@ -447,7 +447,7 @@ async function backOff (bot, ctl, from, { ms = 900, until = null, stepSafe = nul
 // На бой: что взорвать сейчас и от чего уйти. pvp.js зовёт plan() в цикле
 // (null — нечего), run() держит тело до выстрела; threat() — его взрывчатка
 // рядом со мной, defend() — ответ на неё.
-function create (bot: any, { enemy, used = () => {}, crystals = true }: any = {}) {
+function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryHp = e => healthOf(bot, e) }: any = {}) {
   // crystals: false — кристаллы ведёт crystal.js (2026-09-30), здесь только вагонетки.
   const st: any = { placed: {}, shots: 0, booms: 0, dealt: [], self: 0, kills: 0, defuse: 0, dodges: 0, counter: 0, broken: 0, holes: 0 }
   const mine = new Set<number>() // id своей взрывчатки
@@ -473,20 +473,20 @@ function create (bot: any, { enemy, used = () => {}, crystals = true }: any = {}
 
   // Урон ему после нашего взрыва: минимум его здоровья за 1 с.
   const watchHp = (e, why) => {
-    const h0 = (healthOf(bot, e) ?? 20)
+    const h0 = telemetryHp(e)
     const my0 = bot.health ?? 20
     let low = h0
     const t0 = gameClock.now()
     const iv = gameClock.setInterval(() => {
-      const hh = healthOf(bot, e)
-      if (hh != null && hh < low) low = hh
+      const hh = telemetryHp(e)
+      if (hh != null && (low == null || hh < low)) low = hh
       if (gameClock.now() - t0 > 1000 || e.isValid === false) {
         gameClock.clearInterval(iv)
-        const dealt = e.isValid === false && h0 > 0 ? h0 : Math.max(0, h0 - low)
-        st.dealt.push(r2(dealt))
+        const dealt = h0 == null ? null : e.isValid === false ? h0 : low == null ? null : Math.max(0, h0 - low)
+        if (dealt != null) st.dealt.push(r2(dealt))
         st.self = r2(st.self + Math.max(0, my0 - (bot.health ?? 20)))
-        if (e.isValid === false || low <= 0) st.kills++
-        if (DEBUG) console.log('[boom] итог взрыва', why, JSON.stringify({ dealt: r2(dealt), self: r2(Math.max(0, my0 - (bot.health ?? 20))) }))
+        if (e.isValid === false || (low != null && low <= 0)) st.kills++
+        if (DEBUG) console.log('[boom] итог взрыва', why, JSON.stringify({ dealt: dealt == null ? null : r2(dealt), self: r2(Math.max(0, my0 - (bot.health ?? 20))) }))
       }
     }, 50)
     hpWatch = iv
@@ -561,12 +561,10 @@ function create (bot: any, { enemy, used = () => {}, crystals = true }: any = {}
       const e = enemy()
       const out = { ok: false, note: '' }
       if (p.kind === 'shoot') {
-        const hp0 = healthOf(bot, e)
         const r = await shootAt(bot, ctl, p.ex, { shouldStop: () => ctx.stop && ctx.stop() })
         out.ok = !!r.shot
         if (r.shot) { st.shots++; watchHp(e, p.ex.name) }
         out.note = r.shot ? `взрывчатка: стрела в ${p.ex.name === 'end_crystal' ? 'кристалл' : 'вагонетку с TNT'} у него (прогноз ему ${p.j.him.dmg}, себе ${p.j.mine.dmg}${p.j.off ? ', толчок в яму' : ''})` : `взрывчатка: не выстрелил (${r.why || '?'})`
-        void hp0
         return out
       }
       if (p.kind === 'crystal-hit') {

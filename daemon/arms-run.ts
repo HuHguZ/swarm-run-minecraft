@@ -174,10 +174,10 @@ class ArmsEnv {
   async observe () {
     const side = this.side
     const k = side.know
-    const st = await side.call('status').catch(() => null)
+    const st = await side.call('status', { items: true }).catch(() => null)
     const s = (st && st.state) || {}
     await this.foe()
-    const items = [...Object.entries(s.inventory || {}).map(([name, count]) => ({ name, count: Number(count) })),
+    const items = Array.isArray(st?.detail?.items) ? st.detail.items : [...Object.entries(s.inventory || {}).map(([name, count]) => ({ name, count: Number(count) })),
       ...Object.values(s.armor || {}).filter(Boolean).map(name => ({ name: String(name) })), ...(s.offHand ? [{ name: String(typeof s.offHand === 'string' ? s.offHand : (s.offHand.item || s.offHand.name)) }] : [])]
     const pw = AG.powerOf(items)
     const t = (gameClock.now() - side.t0) / 1000
@@ -198,7 +198,7 @@ class ArmsEnv {
     const caches = [...k.caches.values()].filter(c => !c.opened).length
     const craft = AG.bestCraft(items)
     k.craft = craft
-    const healItems = items.filter(i => /golden_apple$|^cooked_|^(bread|baked_potato|golden_carrot|apple|carrot)$|^(splash_)?potion$/.test(i.name)).reduce((n, i: any) => n + (i.count ?? 1), 0)
+    const healItems = AG.recoveryFood(w.inventory).count
     w.resources = { power: Math.round(pw.total), unscouted, chests, caches, craft_gain: craft ? Math.max(1, Math.round(craft.gain)) : 0, lab_gain: !k.labDone && AG.labReady(items) ? 2 : 0, heal_items: healItems }
     const now = gameClock.now()
     const recent = k.foe && now - k.foe.at < 30000
@@ -309,6 +309,9 @@ class ArmsEnv {
         return { outcome: got.length ? 'SUCCESS' : 'FAILURE', reason: why, events: ev }
       }
       if (command.skill === 'arms.heal') {
+        const before = (((await side.call('status').catch(() => null)) || {}).state) || {}
+        if (!Number.isFinite(before.health) || !Number.isFinite(before.food)) return { outcome: 'FAILURE', reason: 'нет наблюдения здоровья/сытости', events: ev }
+        if (before.food < 18 && !AG.recoveryFood(before.inventory || {}).count) return { outcome: 'FAILURE', reason: 'нет еды и сытости для регенерации', events: ev }
         // Подальше от последнего места врага — к ближнему углу комплекса со своей стороны; съесть (eat выберет лучшее),
         // затем ждать регенерацию до 18 хп или 15 с; сторож прерывает, если враг показался.
         const f = k.foe && k.foe.pos ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : null
@@ -316,16 +319,23 @@ class ArmsEnv {
           const away = k.areas.slice().sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z) + 0.5 * (Math.hypot(a.x - (me.x - X), a.z - (me.z - Z)) - Math.hypot(b.x - (me.x - X), b.z - (me.z - Z))))[0]
           if (away) { const p = W(away); await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 10 }) }
         }
-        await rpc('eat', {})
+        const ate = await rpc('eat', {})
+        if (signal.aborted || ate.status === 'interrupted') return { outcome: 'INTERRUPTED', reason: ate.error || 'поедание прервано', events: ev }
         const until = gameClock.now() + 15000
-        let hp = 0
-        while (!signal.aborted && gameClock.now() < until) {
-          hp = ((((await side.call('status').catch(() => null)) || {}).state) || {}).health ?? 0
-          if (hp >= 18) break
+        const eaten = ate.detail?.spent > 0 ? ate.detail.ate : null
+        const regenUntil = gameClock.now() + AG.recoveryRegenMs(eaten)
+        let after = before
+        while (!signal.aborted && !this.round.over) {
+          after = (((await side.call('status').catch(() => null)) || {}).state) || {}
+          if (!Number.isFinite(after.health) || !Number.isFinite(after.food)) return { outcome: 'FAILURE', reason: 'нет подтверждения здоровья/сытости', events: ev }
+          if (after.health >= 18 || after.health < before.health || (after.food < 18 && gameClock.now() >= regenUntil) || gameClock.now() >= until) break
           await pace(500)
         }
-        side.stats.heals = (side.stats.heals || 0) + 1
-        return { outcome: signal.aborted ? 'INTERRUPTED' : hp >= 14 ? 'SUCCESS' : 'PARTIAL', events: ev, detail: { hp } }
+        const hpGain = after.health - before.health, foodGain = after.food - before.food
+        if (hpGain > 0) side.stats.heals = (side.stats.heals || 0) + 1
+        return { outcome: signal.aborted || this.round.over ? 'INTERRUPTED' : hpGain > 0 ? 'SUCCESS' : foodGain > 0 ? 'PARTIAL' : 'FAILURE',
+          reason: hpGain > 0 || foodGain > 0 ? undefined : 'нет подтверждённого восстановления', events: ev,
+          detail: { hpBefore: before.health, hp: after.health, foodBefore: before.food, food: after.food, hpGain, foodGain, ate: eaten || null } }
       }
       if (command.skill === 'arms.ambush') {
         // Точка — середина поля со своей стороны (x = ±5): чужой обход идёт через центр; ждать до 25 с, пока не покажется.

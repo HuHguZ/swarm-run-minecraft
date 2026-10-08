@@ -476,7 +476,7 @@ async function fire (bot, entity, item, { velFn = null, frac = null, onHit = nul
           // Где он был в расчётный миг попадания (упреждение против его хода).
           gameClock.setTimeout(() => { try { shotLog.himAtImpact = [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] } catch {} }, Math.max(0, (sol.ticks || 0) * TICK_MS))
           let hitLogged = false
-          const onH = (victim) => { if (victim === entity && !hitLogged) { hitLogged = true; console.log('[xshot]', JSON.stringify({ ...shotLog, hit: gameClock.now() - shotLog.t })) } }
+          const onH = (victim) => { if (victim?.id === entity.id && !hitLogged) { hitLogged = true; console.log('[xshot]', JSON.stringify({ ...shotLog, hit: gameClock.now() - shotLog.t })) } }
           bot.on('entityHurt', onH)
           gameClock.setTimeout(() => { bot.removeListener('entityHurt', onH); if (!hitLogged) console.log('[xshot]', JSON.stringify({ ...shotLog, hit: null, himAfter: [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] })) }, Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
         }
@@ -485,7 +485,7 @@ async function fire (bot, entity, item, { velFn = null, frac = null, onHit = nul
         let hit = false
         const hp0 = read.healthRaw(bot, entity)
         const onHurt = (victim) => {
-          if (victim !== entity || hit) return
+          if (victim?.id !== entity.id || hit) return
           hit = true
           if (onHit) { try { onHit() } catch {} }
         }

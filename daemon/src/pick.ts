@@ -126,12 +126,12 @@ function aim (bot, e, { eye = null, range = RANGE }: any = {}) {
     const tp = new Vec3(box.lo.x + box.w * fx, box.lo.y + box.h * fy, box.lo.z + box.w * fz)
     const delta = tp.minus(o)
     const len = delta.norm()
-    if (len < 1e-6) return { point: tp, dist: 0, off: tp.minus(e.position) }
+    if (len < 1e-6) { if (e._ndVisible !== false) return { point: tp, dist: 0, off: tp.minus(e.position) }; continue }
     const d = delta.scaled(1 / len)
     const tE = rayBox(o, d, box.lo, box.hi, range + 0.001)
     if (tE == null || tE > range) continue
     const hit = blockOnRay(bot, o, d, tE)
-    if (!hit) return { point: tp, dist: tE, off: tp.minus(e.position) }
+    if (!hit && e._ndVisible !== false) return { point: tp, dist: tE, off: tp.minus(e.position) }
     if (!first) first = hit
   }
   return first ? { blocked: first } : null

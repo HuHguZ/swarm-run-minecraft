@@ -988,14 +988,31 @@ function predictGlider (e, vel, t) {
 // сближения по его скорости и точке ближе всего).
 function track (bot, { enemy }: any) {
   const st = { seen: 0, dives: 0, shots: 0, hits: 0, shieldUps: 0, dodges: 0, counterHits: 0, airMs: 0 }
-  const his = { id: null, hist: [], vel: { x: 0, y: 0, z: 0 }, flying: false, since: 0 }
+  const his = { id: null, hist: [], vel: { x: 0, y: 0, z: 0 }, flying: false, since: 0, receipt: null, using: undefined, readyAt: 0 }
   let active = null
   const onTick = () => {
     try {
       const e = enemy()
       if (!e || !e.position || e.isValid === false) return
-      if (his.id !== e.id) { his.id = e.id; his.hist = []; his.flying = false }
       const now = gameClock.now()
+      const receipt = e._ndPositionReceipts?.[1]
+      if (his.id !== e.id || e._ndVisible === false || (receipt !== his.receipt && receipt?.kind === 'reacquired')) {
+        his.id = e.id; his.hist = []; his.vel = { x: 0, y: 0, z: 0 }; his.using = undefined
+        if (his.flying) st.airMs += now - his.since
+        his.flying = false
+      }
+      his.receipt = receipt
+      if (e._ndVisible === false) return
+      const flagIndex = bot.registry?.entitiesByName?.player?.metadataKeys?.indexOf('living_entity_flags') ?? -1
+      const flags = e.metadata?.[flagIndex >= 0 ? flagIndex : 8] || 0
+      const held = e.equipment?.[(flags & 2) ? 1 : 0]?.name
+      const spec = require('./spear').SPEARS[held]
+      const using = (flags & 1) && spec ? held : null
+      if (using !== his.using) {
+        // Already raised on first sight may be charged; a visible start has the native delay.
+        his.readyAt = using && his.using !== undefined ? now + spec.delay * 1000 : now
+        his.using = using
+      }
       his.hist.push({ x: e.position.x, y: e.position.y, z: e.position.z, t: now })
       while (his.hist.length > 2 && now - his.hist[0].t > 160) his.hist.shift()
       const a = his.hist[0]; const bb = his.hist[his.hist.length - 1]
@@ -1008,21 +1025,32 @@ function track (bot, { enemy }: any) {
     } catch {}
   }
   bot.on('physicsTick', onTick)
-  // Пике на нас: он летит, до точки ближе всего ≤ 20 тиков, пройдёт ближе 3.5
-  // от нашей середины. eta — тиков до неё.
+  // Копьё достаёт раньше тела: тот же луч KineticWeapon, что у собственного тарана.
   const threat = () => {
     const e = enemy()
-    if (!e || !e.position || !his.flying || !bot.entity) return (active = null)
+    if (!e || !e.position || e._ndVisible === false || !his.flying || !bot.entity) return (active = null)
     const me = bot.entity.position.offset(0, 0.9, 0)
+    const held = his.using || e.equipment?.[0]?.name
+    const lance = his.using ? require('./combat/aerial-lance') : null
+    const look = lookVec(e.yaw || 0, e.pitch || 0)
+    const p = { x: e.position.x, y: e.position.y, z: e.position.z }
+    const v = { ...his.vel }
+    const myV = bot.entity.velocity || { x: 0, y: 0, z: 0 }
+    const now = gameClock.now()
     let best = null
-    for (let t = 1; t <= 24; t++) {
-      const q = predictGlider(e, his.vel, t)
+    let contact = null
+    for (let t = 0; t <= 24; t++) {
+      if (t) glideStep(p, v, e.yaw || 0, e.pitch || 0, false)
+      const q = new Vec3(p.x, p.y, p.z)
+      if (lance && !contact && t <= 20 && now + t * TICK_MS >= his.readyAt && lance.lanceDamage(held, look, v, myV).dmg > 0 &&
+        lance.lanceHits(q.offset(0, EYE_FLY, 0), look, v, bot.entity.position.offset(myV.x * t, myV.y * t, myV.z * t), bot.entity.height || 1.8, bot.entity.width || 0.6)) contact = { t, q }
+      if (!t) continue
       const d = Math.hypot(q.x - me.x, q.y + 0.3 - me.y, q.z - me.z)
       if (!best || d < best.d) best = { d, t, q }
     }
     const sp = Math.hypot(his.vel.x, his.vel.y, his.vel.z)
-    if (best && best.d < 3.5 && best.t <= 20 && sp > 0.5) {
-      const out = { kind: 'dive', eta: best.t, miss: r2(best.d), at: best.q, speed: r2(sp), mace: !!(e.equipment && e.equipment[0] && e.equipment[0].name === 'mace') }
+    if (contact || (best && best.d < 3.5 && best.t <= 20 && sp > 0.5)) {
+      const out = { kind: contact ? 'lance' : 'dive', eta: (contact || best).t, miss: r2(best.d), at: (contact || best).q, speed: r2(sp), mace: held === 'mace' }
       if (!active) st.dives++
       active = active ? Object.assign(active, out) : out
       return active
@@ -1231,14 +1259,14 @@ function divePlan (bot, e, { d, dy, hp, foeGrounded, hisShield = false, W = worl
   return { kind: 'dive' }
 }
 
-async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {}, used = () => {}, allow = null, maxMs = 12000 }: any = {}) {
+async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {}, used = () => {}, allow = null, maxMs = 12000, telemetryHp = e => healthOf(bot, e) }: any = {}) {
   const W = worldOf(bot)
   const S = install(bot)
   const out: any = { ok: false, hit: false, note: '' }
   const t0 = gameClock.now()
   const foe = () => e.position
   const hp0 = bot.health ?? 20
-  const hisHp0 = healthOf(bot, e)
+  const hisHp0 = telemetryHp(e)
   // Подготовка на земле: элитры на тело (правой), булава — в правую (заряд
   // пошёл), фейерверки — в левую.
   const sw = await swapChest(bot, 'elytra', { hand: 'main' })
@@ -1322,6 +1350,10 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   // (mace.descend): метка спуска — вода только в последний тик, и наш удар
   // этого тика (bot._ndSmashNow) сторож делает первым.
   const mark = { at: gameClock.now() }
+  let confirmed = false
+  const onDamage = pk => { if (hit && require('./combat/aerial-lance').ownHit(pk, bot.entity.id, e.id)) confirmed = true }
+  bot._client.on('damage_event', onDamage)
+  try {
   const res = await new Promise<any>(resolve => {
     let done = false
     S.driving = (S.driving || 0) + 1
@@ -1412,7 +1444,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
               require('./mace').slamHit(bot, e, stats)
             } catch {}
           }
-          hit = { at: gameClock.now(), fd: r2(S.fd), hp0: healthOf(bot, e), sinceSwap: gameClock.now() - swapped, fly: !!b.elytraFlying }
+          hit = { at: gameClock.now(), fd: r2(S.fd), sinceSwap: gameClock.now() - swapped, fly: !!b.elytraFlying }
           if (DEBUG) console.log('[dive] удар, руки:', hands())
           bot._ndSmashNow = doHit
           afterPacket(bot, () => { if (bot._ndSmashNow === doHit) { bot._ndSmashNow = null; doHit() } })
@@ -1439,18 +1471,19 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   if (bot.entity.elytraFlying) await land(bot, ctl, { away: null, stats })
   await sleep(250)
   await chestDown(bot, ctl, { stats })
-  out.hit = !!hit
+  out.hit = confirmed
   out.ok = true
-  const hisHp1 = healthOf(bot, e)
+  const hisHp1 = telemetryHp(e)
   out.dealt = hit && hisHp0 != null && hisHp1 != null ? r2(Math.max(0, hisHp0 - hisHp1)) : null
   out.self = r2(Math.max(0, hp0 - (bot.health ?? 20)))
   out.fd = hit ? hit.fd : r2(S.fd)
   out.ms = gameClock.now() - t0
-  if (hit) { stats.diveHits = (stats.diveHits || 0) + 1; if (out.dealt != null) (stats.diveDealt = stats.diveDealt || []).push(out.dealt) }
+  if (confirmed) { stats.diveHits = (stats.diveHits || 0) + 1; if (out.dealt != null) (stats.diveDealt = stats.diveDealt || []).push(out.dealt) }
   stats.diveSelf = r2((stats.diveSelf || 0) + out.self)
-  out.note = `элитры: пике с булавой — ${hit ? `удар с падения ${hit.fd} бл.${out.dealt != null ? `, снял ${out.dealt}` : ''}` : res}${out.self ? `, себе −${out.self}` : ''}`
+  out.note = `элитры: пике с булавой — ${confirmed ? `удар с падения ${hit.fd} бл.${out.dealt != null ? `, снял ${out.dealt}` : ''}` : hit ? 'взмах без подтверждения попадания' : res}${out.self ? `, себе −${out.self}` : ''}`
   void phase
   return out
+  } finally { bot._client.removeListener('damage_event', onDamage) }
 }
 
 // Расстояние от глаз до рамки (ширина w, высота h) с ногами в pos.
@@ -1485,7 +1518,7 @@ function afterPacket (bot, fn) {
 // На бой: слежка за ним и решения. pvp.js зовёт decide() в цикле; run()
 // держит тело до посадки. allow() — отпустить рефлекс края на время полёта
 // (он рулил бы клавишами, которые элитрам не нужны).
-function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }: any = {}) {
+function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, telemetryHp = e => healthOf(bot, e) }: any = {}) {
   install(bot)
   const createdAt = gameClock.now()
   const guard0 = bot._ndElytra?.guardSaves || 0
@@ -1547,16 +1580,15 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null }
       if (plan.kind === 'aerial') return aerial.run(ctl, ctx)
       if (plan.kind === 'escape') return escape(bot, ctl, e, { heal: ctx.heal, enough: ctx.enough, stats: st, used, allow, arena })
       if (plan.kind === 'lance') {
-        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena })
+        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp })
         // Ни одного попадания — не сразу снова (ракеты и время).
         if (!res.hit) nextLance = gameClock.now() + 15000
         return res
       }
       if (plan.kind === 'dive') {
-        const res: any = await diveSmash(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow })
-        // Удар дошёл, а урона нет (щит поднял, тотем) или мимо — не повторять
-        // сразу: высота падения из пике без удара — вся в урон себе.
-        if (!res.hit || !(res.dealt > 1)) nextDive = gameClock.now() + 30000
+        const res: any = await diveSmash(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, telemetryHp })
+        // Без подтверждённого попадания пике расходует ракеты и грозит падением.
+        if (!res.hit) nextDive = gameClock.now() + 30000
         return res
       }
       return { ok: false, note: 'нечего' }

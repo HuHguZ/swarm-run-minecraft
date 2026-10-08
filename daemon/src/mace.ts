@@ -415,7 +415,7 @@ function headroom (bot, pos, n = 14) {
 // сущностей из пакетов mineflayer на 1.21.11 делит на 8000 — edges.
 // fixSelfKnockback), взлёт (быстрее прыжка: прыжок 0.42 б/т), вершина полёта,
 // что в руке. Отсюда threat() — «булава сверху».
-function track (bot, { enemy }: any) {
+function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any) {
   install(bot)
   const st: any = {
     launches: 0, launched: 0, peaks: [], smashes: 0, smashHits: 0, dealt: [], selfDmg: 0, fallSmash: 0,
@@ -456,7 +456,7 @@ function track (bot, { enemy }: any) {
       // Итог толчка: упал ниже, чем стоял, на 3+ — сбили.
       if (pushWatch && pushWatch.id === e.id) {
         if (y < pushWatch.y0 - 3 && !pushWatch.fell) { pushWatch.fell = true; st.knockoffs++ }
-        const hp = healthOf(bot, e)
+        const hp = telemetryHp(e)
         if (hp != null && pushWatch.hp0 != null && hp < pushWatch.hp0 - 0.4 && !pushWatch.hurt) { pushWatch.hurt = true; st.pushHits++ }
         if (gameClock.now() > pushWatch.until) pushWatch = null
       }
@@ -506,7 +506,7 @@ function track (bot, { enemy }: any) {
     notePush (e, why) {
       st.pushes++
       st.pushWhy[why] = (st.pushWhy[why] || 0) + 1
-      pushWatch = { id: e.id, y0: e.position.y, hp0: healthOf(bot, e), at: gameClock.now(), until: gameClock.now() + 3000 }
+      pushWatch = { id: e.id, y0: e.position.y, hp0: telemetryHp(e), at: gameClock.now(), until: gameClock.now() + 3000 }
     },
     report () {
       const avg = a => a.length ? Math.round(a.reduce((s, x) => s + x, 0) / a.length * 10) / 10 : undefined
@@ -595,7 +595,7 @@ function smashPlan (bot, e, { minRoom = 5 }: any = {}) {
 // бонус растёт с высотой. Своей скоростью по вертикали и сносом по
 // горизонтали считаем, где окажемся; клавиши — относительно взгляда на него.
 // Без спринта: спринт снимает крит.
-function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null }: any = {}) {
+function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e) }: any = {}) {
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
     let peak = bot.entity.position.y
@@ -662,7 +662,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         if (hit) {
           if (burn && burn.keys) applyBurn()
           else for (const k of KEYS) set(k, false)
-          const hp = healthOf(bot, e)
+          const hp = telemetryHp(e)
           if (hp != null && (hit.hpMin == null || hp < hit.hpMin)) hit.hpMin = hp
           return
         }
@@ -709,7 +709,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         // Удар — только если он под прицелом, как у клиента: сквозь крышу его
         // коробки или стенку сервер удар бы принял, а игрок так не может.
         if (v.y < 0 && fall > SMASH_MIN + 0.1 && rNow <= REACH - 0.05 && (landNext || rNext > REACH - 0.1 || fall > 14) && pick.canHit(bot, e, { eye, range: REACH })) {
-          const hp0 = healthOf(bot, e)
+          const hp0 = telemetryHp(e)
           hit = { fall: Math.round(fall * 100) / 100, r: Math.round(rNow * 100) / 100, hp0, at: gameClock.now(), charged: !!(bot._ndMaceHeldAt && gameClock.now() - bot._ndMaceHeldAt >= 1550), selfHp: bot.health ?? 20 }
           const doHit = () => {
             try {
@@ -749,7 +749,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
 // ушёл) — заряд под ноги, чуть за спину: всплеск в 0.25 над полом, толчок «от
 // центра к глазам» — вверх и немного к нему.
 // stillOk() — пока копится заряд булавы, он не ушёл и не поднял щит.
-async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null }: any = {}) {
+async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e) }: any = {}) {
   const out: any = { launched: false, hit: false, swung: false, note: '' }
   install(bot)
   const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
@@ -793,7 +793,7 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
   const webNow = webOnBody(bot)
   if (webNow || headroom(bot, bot.entity.position, 4) < 3) { await restoreOff(); out.note = `булава: передумал взлетать (${webNow ? 'паутина' : 'над головой блок'})`; out.cancelled = true; return out }
   const hpSelf0 = bot.health ?? 20
-  const theirHp0 = healthOf(bot, e)
+  const theirHp0 = telemetryHp(e)
   const y0 = bot.entity.position.y
   const toward = yawTo(bot.entity.position, e.position)
   for (const k of KEYS) { try { bot.setControlState(k, false) } catch {} }
@@ -873,7 +873,7 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
   if (!launched) { bot._ndWind = null; await restoreOff(); out.note = 'булава: всплеск не поднял (' + diagText(dg) + ')'; out.why = diagText(dg); return out }
   out.launched = true
   if (stats) stats.launched++
-  const r: any = await descend(bot, ctl, e, { vel, swap, stats })
+  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp })
   const peak = r.peak - y0
   out.peak = Math.round(peak * 100) / 100
   if (stats) stats.peaks.push(out.peak)
@@ -886,7 +886,7 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
     out.expect = Math.round(smashDamage(r.hit.fall, { base: MACE_BASE, charge: r.hit.charged ? 1 : 0.8, density: densityOf(bot) }))
     // Сколько снял: минимум его здоровья после удара (регенерация при
     // сытости возвращает по 1 хп в 10 тиков — берём самое низкое).
-    const hpMin = r.hit.hpMin != null ? r.hit.hpMin : healthOf(bot, e)
+    const hpMin = r.hit.hpMin != null ? r.hit.hpMin : telemetryHp(e)
     out.dealt = theirHp0 != null && hpMin != null ? Math.max(0, theirHp0 - hpMin) : null
     if (stats) { stats.smashHits++; if (out.dealt != null) stats.dealt.push(out.dealt) }
   }

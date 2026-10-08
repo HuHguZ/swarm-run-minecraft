@@ -145,7 +145,7 @@ const ACT_LABEL = {
 
 function create (opts) {
   if (!ON) return null
-  const { bot, session, target, style = {}, used = () => {}, set, aimTo, stopPath, tt, stepOk, cover, fillerCount, styleOut, weaponMs, onAirSwing, nearDrop = null } = opts
+  const { bot, session, target, observe = e => e, style = {}, used = () => {}, set, aimTo, stopPath, tt, stepOk, cover, fillerCount, styleOut, weaponMs, onAirSwing, nearDrop = null } = opts
   const me0 = target()
   const human = !isBotName(me0 && me0.username)
   const persona = personaOf(bot.username)
@@ -164,7 +164,8 @@ function create (opts) {
   const hits = { took: [], gave: [] }
   let lastExchange = 0
   let deathSpot = null
-  const tgt = () => { try { return target() } catch { return null } }
+  const tgt = () => { try { return observe(target()) } catch { return null } }
+  const seenTarget = e => { const t = tgt(); return t && e?.id === t.id && t._ndVisible !== false ? t : null }
   const theirReachNow = () => {
     const e = tgt()
     if (!e || !e.position || !bot.entity) return 99
@@ -175,12 +176,11 @@ function create (opts) {
     const cz = clamp(eye.z, p.z - 0.3, p.z + 0.3)
     return Math.hypot(eye.x - cx, eye.y - cy, eye.z - cz)
   }
-  const onCrouch = (e) => { const t = tgt(); if (t && e && e.id === t.id) seen.crouches.push(gameClock.now()) }
+  const onCrouch = (e) => { if (seenTarget(e)) seen.crouches.push(gameClock.now()) }
   // Взмах: вне его руки — промах (или дразнит), это и ловит финт.
   let whiff = null
   const onSwing = (e) => {
-    const t = tgt()
-    if (!t || !e || e.id !== t.id) return
+    if (!seenTarget(e)) return
     const now = gameClock.now()
     const tr = theirReachNow()
     seen.swings.push({ at: now, tr })
@@ -198,10 +198,17 @@ function create (opts) {
     if (victim === bot.entity && source && source.id === t.id) { hits.took.push(now); lastExchange = now }
     if (victim.id === t.id && source && source.id === bot.entity.id) { hits.gave.push(now); lastExchange = now }
   }
-  const onDead = (e) => { const t = tgt(); if (t && e && e.id === t.id && e.position) deathSpot = e.position.clone() }
+  const onDead = (e) => { const t = seenTarget(e); if (t?.position) deathSpot = t.position.clone() }
   const onTick = () => {
+    // Cleanup also runs while sight is lost and the combat loop uses another skill.
+    if (driving && gameClock.now() > lease) release()
     const e = tgt()
     if (!e || !e.position) return
+    if (e._ndVisible === false) {
+      seen.pitch.length = 0; seen.yaw.length = 0
+      seen.ground = null; seen.peak = null; seen.lastY = null
+      return
+    }
     const now = gameClock.now()
     // Своя высота: прыгаем за критом — его голова ходит за нами вверх-вниз, и
     // это не кивок.
@@ -222,9 +229,6 @@ function create (opts) {
     if (seen.ground !== null && !seen.peak && y - seen.ground > 0.8) seen.peak = { at: now, x: e.position.x, z: e.position.z }
     else if (seen.peak && seen.ground !== null && y - seen.ground < 0.1) { seen.jumps.push(seen.peak); seen.peak = null }
     if (seen.peak && now - seen.peak.at > 1500) seen.peak = null
-    // Поводок: тело держим, только пока pre зовут каждый тик. Цикл ушёл в
-    // другую ветку (лечение, лук) — отпустить присед и взгляд.
-    if (driving && now > lease) release()
   }
   bot.on('entityCrouch', onCrouch)
   bot.on('entitySwingArm', onSwing)

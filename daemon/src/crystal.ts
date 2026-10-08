@@ -304,9 +304,10 @@ function worthHit (t, { myEff, hisEff, hisLand, press = false, hisTotem = false 
 // ---------------------------------------------------------------- бой
 
 // foeHp(foe) — ЭХП соперника-игрока для решений: оценка (pvp.foeHpDecide, правило 06.10 «хп игрока только
-// оценкой»); без неё и для мобов — метаданные. noteAttack(range, {projectile}) — подтверждённый урон для
+// оценкой»); без неё — prior 20, для мобов — метаданные. telemetryHp — только замеры отчёта.
+// noteAttack(range, {projectile}) — подтверждённый урон для
 // оценки (combat-observe.trackFoe): damage_event с причиной «я» вычитает этот интервал.
-function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null }: any = {}) {
+function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null, telemetryHp = e => effHp(bot, e) }: any = {}) {
   const st: any = {
     placed: 0, obby: 0, hits: 0, shots: 0, pre: 0, booms: 0, mine: 0, his: 0,
     dealt: [], self: 0, selfPops: 0, popsDealt: 0, popsTaken: 0, hisPops: 0, myPops: 0,
@@ -318,7 +319,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
   }
   const isPlayerE = (e) => !!e && (e.type === 'player' || !!e.username)
   const hisHp = (foe) => {
-    if (CX2 && foeHp && isPlayerE(foe)) { const v = foeHp(foe); if (typeof v === 'number' && Number.isFinite(v)) return v }
+    if (isPlayerE(foe)) { const v = foeHp?.(foe); return typeof v === 'number' && Number.isFinite(v) ? v : 20 }
     return effHp(bot, foe)
   }
   const mine = new Map() // id → { at, how, hitAt }
@@ -435,7 +436,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
         // его, сбитый первым); иначе — его подрыв у меня: прогноз при полной видимости и что пришло.
         const k5 = cellKey(new Vec3(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z)))
         const own5 = !!(anchorClick && anchorClick.key === k5 && now5 - anchorClick.at < 600)
-        const his0 = f5 && f5.position ? effHp(bot, f5) : null
+        const his0 = f5 && f5.position ? telemetryHp(f5) : null
         const my0 = bot.entity ? effHp(bot, bot.entity) : 0
         let thr5 = 0
         if (!own5 && bot.entity) { try { thr5 = boom.blast(bot, at5, 5, bot.entity.position, { def: boom.defenseOf(bot, bot.entity), seen: 1 }).dmg } catch {} }
@@ -446,8 +447,8 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
             const f = enemy()
             const my1 = effHp(bot, bot.entity)
             if (own5) {
-              const his1 = f && f.isValid !== false ? effHp(bot, f) : 0
-              ;(st.anchorDealt = st.anchorDealt || []).push(r1(popHim ? Math.max(0, his0 ?? 0) : Math.max(0, (his0 ?? 0) - his1)))
+              const his1 = f && f.isValid !== false ? telemetryHp(f) : 0
+              if (his0 != null && (popHim || his1 != null)) (st.anchorDealt = st.anchorDealt || []).push(r1(popHim ? Math.max(0, his0) : Math.max(0, his0 - his1)))
               st.anchorSelf = r1((st.anchorSelf || 0) + (popMe ? my0 : Math.max(0, my0 - my1)))
               if (popMe) st.anchorSelfPops = (st.anchorSelfPops || 0) + 1
             } else if (thr5 >= 4) {
@@ -484,7 +485,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
       if (foe && foe.position) {
         const h = boom.blast(bot, at, P, foe.position, { def: boom.defenseOf(bot, foe), cache })
         if (h.raw > 1.01) hisWin = winUpdate(hisWin, now, h.raw)
-        hisBefore = effHp(bot, foe)
+        hisBefore = telemetryHp(foe)
       }
       const myBefore = effHp(bot, bot.entity)
       // Его подрыв рядом со мной: что дал бы при полной видимости (без щита и укрытия).
@@ -503,14 +504,14 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
           if (ev.popHim && own) st.popsDealt++
           if (ev.popMe && !own) st.popsTaken++
           const f = enemy()
-          const hisAfter = f && f.isValid !== false ? effHp(bot, f) : 0
+          const hisAfter = f && f.isValid !== false ? telemetryHp(f) : 0
           const myAfter = effHp(bot, bot.entity)
           if (own) {
-            const dealt = ev.popHim ? Math.max(0, hisBefore ?? 0) : Math.max(0, (hisBefore ?? 0) - hisAfter)
-            st.dealt.push(r1(dealt))
+            const dealt = hisBefore == null || (!ev.popHim && hisAfter == null) ? null : ev.popHim ? Math.max(0, hisBefore) : Math.max(0, hisBefore - hisAfter)
+            if (dealt != null) st.dealt.push(r1(dealt))
             const self = ev.popMe ? myBefore : Math.max(0, myBefore - myAfter)
             st.self = r1(st.self + self)
-            if (DEBUG) console.log('[crystal] мой взрыв:', JSON.stringify({ dealt: r1(dealt), self: r1(self), popHim: ev.popHim, popMe: ev.popMe }))
+            if (DEBUG) console.log('[crystal] мой взрыв:', JSON.stringify({ dealt: dealt == null ? null : r1(dealt), self: r1(self), popHim: ev.popHim, popMe: ev.popMe }))
           }
           // Всё, что пришло от его подрывов (и тех, от которых ушёл дальше «угрозы»): урон на его подрыв.
           if (!own) st.hisTaken = r1((st.hisTaken || 0) + (ev.popMe ? myBefore : Math.max(0, myBefore - myAfter)))
@@ -583,7 +584,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
   // запретом коробки и перестрелки тогда включался бы зря.
   const heShows = (foe) => {
     const eq = (foe && foe.equipment) || []
-    if (((eq[0] && eq[0].name === 'end_crystal') || (eq[1] && eq[1].name === 'end_crystal')) && foeVisible(foe)) sawHis = gameClock.now()
+    if (eq.slice(0, 2).some(it => it && /^(end_crystal|respawn_anchor)$/.test(it.name)) && foeVisible(foe)) sawHis = gameClock.now()
     return gameClock.now() - sawHis < 60000
   }
 
@@ -854,7 +855,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     if (hisBow) bowSeenAt = now
     const crystals = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'end_crystal' && e.position && e.isValid !== false &&
       (e.position.distanceTo(me) < 13 || e.position.distanceTo(foe.position) < 13) && crystalSeen(e))
-    if (!crystals.length && !k.crystals && !anchorReady(bot, k)) return null
+    if (!crystals.length && !k.crystals && !anchorReady(bot, k) && !anchorsAt.size) return null
     const shows = heShows(foe)
     const press = !!ctx.press
     const eqF = foe.equipment || []
@@ -1698,7 +1699,8 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null 
     if (!ON || !foe) return false
     const k = kitOf(bot)
     // Набор только с якорями (без кристаллов) — тоже взрывной бой (TODO п.8).
-    return k.crystals > 0 || heShows(foe) || anchorReady(bot, k)
+    return k.crystals > 0 || heShows(foe) || anchorReady(bot, k) ||
+      [...anchorsAt.values()].some(a => a.pos.distanceTo(bot.entity.position) <= 8 && anchorSeen(a))
   }
   // Кристаллы — главное оружие (набор «кристаллы»: 96 штук): без коробки и без
   // перестрелки из лука. В «небе и порохе» (16 кристаллов среди элитр, булавы,

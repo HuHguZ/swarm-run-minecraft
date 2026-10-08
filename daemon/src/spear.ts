@@ -200,7 +200,7 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
   let hit = false
   let why = null
   let slow = 0
-  const onHurt = (victim, src) => { if (victim === e && src && bot.entity && src.id === bot.entity.id) { hit = true; if (onHit) { try { onHit() } catch {} } } }
+  const onHurt = (victim, src) => { if (victim?.id === e.id && src && bot.entity && src.id === bot.entity.id) { hit = true; if (onHit) { try { onHit() } catch {} } } }
   bot.on('entityHurt', onHurt)
   const t0 = gameClock.now()
   const delayMs = spec.delay * 1000

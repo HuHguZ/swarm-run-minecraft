@@ -126,6 +126,17 @@ test('его якорь между нами (мне столько же, ско�
   c.close()
 })
 
+test('защита от видимого вражеского якоря работает без собственной взрывчатки', () => {
+  const { bot, foe } = duelBot({ inv: ['obsidian', 'diamond_sword'], extra: { '2,0,0': 'respawn_anchor' } })
+  const c = cr.create(bot, { enemy: () => foe, foeHp: () => 20 })
+  c._onBlock(null, anchorBlock(2, 0))
+  try {
+    assert.equal(c.engaged(), true, 'чужой видимый якорь включает защиту')
+    const a = c.plan({})
+    assert.ok(a && /^(wall|cover|shield)$/.test(a.kind), JSON.stringify(a && { kind: a.kind, note: a.note }))
+  } finally { c.close() }
+})
+
 test('свой якорь: себе дорого — заслон из светокамня между мной и якорем снижает мне урон', () => {
   const { bot, foe } = duelBot({ foeAt: new Vec3(3.5, 0, 0.5), inv: ['respawn_anchor', 'glowstone', 'diamond_sword'] })
   const c = cr.create(bot, { enemy: () => foe })
