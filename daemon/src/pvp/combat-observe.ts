@@ -19,6 +19,7 @@
 const read = require('../read')
 const dm = require('./damage-model')
 const { createHpEstimate } = require('./hp-estimate')
+const gameClock = require('../game-clock')
 
 const lazy = (path) => { let m = null; return () => m || (m = require(path)) }
 const pick = lazy('../pick')
@@ -35,8 +36,6 @@ function exactHpTelemetryOnly (bot, e) {
   return h == null ? null : h + read.absorptionOf(bot, e)
 }
 
-const ENCH = ['sharpness', 'protection', 'blast_protection', 'projectile_protection', 'feather_falling', 'fire_protection',
-  'power', 'piercing', 'quick_charge', 'multishot', 'density', 'breach']
 function rocketStars (it) {
   try {
     const c = it.componentMap && it.componentMap.get('fireworks')
@@ -47,7 +46,8 @@ function rocketStars (it) {
 function itemObs (bot, it) {
   if (!it || !it.name) return null
   const ench = {}
-  for (const k of ENCH) { const L = read.enchLevel(bot, it, k); if (L) ench[k] = L }
+  // Полный map нужен и подготовке: Unbreaking не усиливает удар, но стол не зачарует такую вещь заново.
+  try { for (const e of require('../enchant').enchantsOf(bot, it)) if (e.level > 0) ench[e.name] = e.level } catch {}
   const o: any = { name: it.name, count: it.count ?? 1, ench }
   if (it.name === 'crossbow') o.crossbow = read.crossbowInfo(bot, it)
   if (it.name === 'firework_rocket') o.stars = rocketStars(it)
@@ -89,12 +89,65 @@ const ENV = {
 const OUR_WINDOW_MELEE = 6
 const OUR_WINDOW_PROJECTILE = 60
 
+// Память знания своего бота. Scope задаёт раунд; entity id различает жизни одного UUID.
+// Сохраняем estimator целиком: snapshot не содержит оставшееся время эффектов.
+const hpMemories = new WeakMap<object, any>()
+const foeKey = e => e?.uuid ? `uuid:${e.uuid}` : e?.username ? `name:${e.username.toLowerCase()}` : null
+function memoryFor (bot, roundScope) {
+  if (typeof roundScope !== 'string' || !roundScope) return null
+  let memory = hpMemories.get(bot)
+  if (memory?.scope === roundScope) return memory
+  memory?.close()
+  memory = { scope: roundScope, targets: new Map(), close: null }
+  const clear = () => { for (const entry of memory.targets.values()) entry.stop?.(); memory.targets.clear() }
+  const onDead = e => {
+    if (e?.id === bot.entity?.id) { clear(); return }
+    for (const [key, entry] of memory.targets) {
+      if (key === foeKey(e) || e?.id === entry.entityId) { entry.stop?.(); memory.targets.delete(key) }
+    }
+  }
+  const close = () => {
+    clear()
+    bot.removeListener('death', clear); bot.removeListener('spawn', clear)
+    bot.removeListener('entityDead', onDead); bot.removeListener('end', close)
+    if (hpMemories.get(bot) === memory) hpMemories.delete(bot)
+  }
+  memory.close = close
+  bot.on('death', clear); bot.on('spawn', clear)
+  bot.on('entityDead', onDead); bot.on('end', close)
+  hpMemories.set(bot, memory)
+  return memory
+}
+
+function ageMemory (entry) {
+  if (!entry || entry.at == null) return // активный tracker уже стареет на physicsTick
+  const at = Math.max(entry.at, entry.now())
+  entry.hp.tick((at - entry.at) / 50, { visible: false })
+  entry.at = at // общий cursor для status и следующего Engage
+}
+// Только чтение существующего знания: не создаёт/переключает scope и не подписывается на события.
+function readFoeEstimate (bot, { roundScope, target }: any = {}) {
+  const memory = hpMemories.get(bot)
+  if (!memory || memory.scope !== roundScope || typeof target !== 'string' || !target) return null
+  const entry = memory.targets.get(`uuid:${target}`) || [...memory.targets.values()].find(e => e.username === target.toLowerCase())
+  if (!entry) return null
+  ageMemory(entry)
+  return entry.hp.snapshot()
+}
+
 // Трекер противника: подписки на пакеты + оценка хп + окно неуязвимости по нашим попаданиям.
 // noteAttack(range) зовёт бой сразу после удара/выстрела (range — planAttack(...).action.range).
-function trackFoe (bot, entity, { honest = true, visible: isVisible = null }: any = {}) {
+function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roundScope = null, now = () => gameClock.now() }: any = {}) {
   const player = isPlayer(entity)
   const visible = () => { try { return isVisible ? isVisible(entity) : (entity._ndVisible ?? assess().inSight(bot, entity)) } catch { return false } }
-  const hp = createHpEstimate()
+  const memory = player && honest ? memoryFor(bot, roundScope) : null
+  const key = foeKey(entity)
+  let entry = key && memory?.targets.get(key)
+  entry?.stop?.()
+  if (entry?.entityId !== entity.id) entry = null
+  ageMemory(entry)
+  const hp = entry?.hp || createHpEstimate()
+  if (memory && key) { entry = { hp, entityId: entity.id, username: entity.username?.toLowerCase(), at: null, now, stop: null }; memory.targets.set(key, entry) }
   const T: any = {
     entity, hp, honestHp: player && honest, tick: 0,
     iframe: null, pending: [], using: null, prev: null, vel: { x: 0, y: 0, z: 0 },
@@ -112,7 +165,8 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null }: an
   const onTick = () => {
     T.tick++
     const pos = entity.position
-    if (pos && (!T.honestHp || visible())) {
+    const seen = !T.honestHp || visible()
+    if (pos && seen) {
       if (T.prev) T.vel = { x: pos.x - T.prev.x, y: pos.y - T.prev.y, z: pos.z - T.prev.z }
       T.prev = { x: pos.x, y: pos.y, z: pos.z }
       // Его высота падения: от вершины в воздухе (mineflayer onGround по пакетам движения).
@@ -125,7 +179,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null }: an
     if (!T.honestHp) {
       const h = read.healthRaw(bot, entity)
       if (h != null) hp.exact(h, read.absorptionOf(bot, entity))
-    } else hp.tick(1)
+    } else hp.tick(1, { visible: seen })
     // Наш удар без damage_event: в его окне неуязвимости пакета нет — может, прошло превышение.
     T.pending = T.pending.filter(p => {
       if (T.tick <= p.until) return true
@@ -234,13 +288,18 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null }: an
     const inIframe = !!(T.iframe && T.tick - T.iframe.at < dm.IFRAME_TICKS)
     T.pending.push({ range, until: T.tick + (projectile ? OUR_WINDOW_PROJECTILE : OUR_WINDOW_MELEE), inIframe })
   }
+  let stopped = false
   T.stop = () => {
+    if (stopped) return
+    stopped = true
+    if (entry) entry.at = now()
     bot.removeListener('physicsTick', onTick)
     bot.removeListener('entitySpawn', onSpawn)
     bot.removeListener('entityGone', onGone)
     try { bot._client.removeListener('damage_event', onDamage) } catch {}
     try { bot._client.removeListener('entity_status', onStatus) } catch {}
   }
+  if (entry) entry.stop = T.stop
   return T
 }
 
@@ -324,4 +383,4 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   }
 }
 
-module.exports = { observe, trackFoe, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }
+module.exports = { observe, trackFoe, readFoeEstimate, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }

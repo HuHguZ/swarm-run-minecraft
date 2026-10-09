@@ -16,6 +16,25 @@ function status(bot: any) {
   return methods.status
 }
 
+test('P7 ench status: реальные чары доходят до силы и физической готовности лаборатории', async () => {
+  const { powerOf, labReady } = require('../src/pvp/arms-graph')
+  const observe = async (ench: Record<string, number>) => {
+    const slots = Array(46).fill(null)
+    slots[9] = { name: 'iron_sword', count: 1, componentMap: new Map([['enchantments', { data: {
+      enchantments: Object.entries(ench).map(([id, level]) => ({ id: 'minecraft:' + id, level }))
+    } }]]) }
+    slots[10] = { name: 'lapis_lazuli', count: 3 }; slots[11] = { name: 'experience_bottle', count: 20 }
+    return (await status({ inventory: { slots } })({ items: true })).items
+  }
+  const sharp = await observe({ sharpness: 5 }); const durable = await observe({ unbreaking: 3 }); const plain = await observe({})
+  assert.equal(powerOf(sharp).total, 14.4)
+  assert.equal(durable[0].ench.unbreaking, 3, 'небоевые чары тоже запрещают обычное повторное зачарование на столе')
+  assert.equal(powerOf(durable).total, powerOf(plain).total)
+  assert.equal(labReady(sharp), false)
+  assert.equal(labReady(durable), false)
+  assert.equal(labReady(plain), true)
+})
+
 test('Arms status: по запросу возвращает собственные заряды, звёзды и все слоты снаряжения', async () => {
   const slots = Array(46).fill(null)
   slots[0] = { name: 'diamond', count: 1 } // Результат крафта ещё не принадлежит инвентарю.

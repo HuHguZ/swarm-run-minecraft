@@ -1,13 +1,13 @@
 'use strict'
 
-const COUNTERS = 'swings landed crits sprintHits arrows arrowHits blocks axeOnShield crystal totem mace elytra boom hops xbow rod util calc combos melee blockLog shield vsShield storm breakUnder tricks trickDmg'.split(' ')
+const COUNTERS = 'swings landed crits sprintHits arrows arrowHits blocks axeOnShield crystal totem mace elytra boom hops xbow rod util calc combos melee blockLog shield vsShield storm breakUnder tricks trickDmg quality search'.split(' ')
 const LAST = new Set(['calc.last', 'melee.skill', 'elytra.reglideReflex', 'elytra.airDrops', 'elytra.blockedLooks', 'elytra.blockedBy', 'shield.confirmedTicks'])
 
 function merge (values, key, parents = []) {
   const present = values.filter(v => v != null)
   if (!present.length) return values.at(-1)
   if (LAST.has(key)) return structuredClone(present.at(-1))
-  if (['melee.combo.max', 'crystal.planMsMax', 'shield.confirmMs'].includes(key)) return Math.max(...present)
+  if (['melee.combo.max', 'crystal.planMsMax', 'shield.confirmMs', 'quality.longestS'].includes(key)) return Math.max(...present)
   if (key === 'shield.worn') return present.some(Boolean)
   if (key === 'melee.combo.avg' || key === 'mace.peak' || key === 'crystal.avg' || key === 'boom.avg' || key === 'crystal.planMsAvg' || /^blockLog\.(place|dig)\..+\.ms$/.test(key)) {
     const weight = p => key === 'melee.combo.avg' ? p.n : key === 'mace.peak' ? p.launched

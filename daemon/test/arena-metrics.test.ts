@@ -4,25 +4,39 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const Module = require('node:module')
+const { transformSync } = require('esbuild')
+function current (relative) {
+  const file = path.join(__dirname, relative); const mod = new Module(file, module)
+  mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file))
+  mod._compile(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, file)
+  return mod.exports
+}
+const metrics = current('../arena-metrics.ts')
+const totem = current('../src/totem.ts')
 
 // Run the real round loop without Minecraft, sockets, timers or user files.
-async function arenaRound ({ missingFinal = false, staleFallback = false } = {}) {
+async function arenaRound ({ missingFinal = false, staleFallback = false, totemBoundary = 'ok' } = {}) {
   let now = 0; let deathAt = 0; let fightAt = 0; let calls = 0; let releaseB
   const waitingB = new Promise(resolve => { releaseB = resolve })
   const lines = []; const samples = []
-  const first = { swings: 4, landed: 3, tricks: { hit: 2 }, crystal: { dealt: [3, 5], self: 2 } }
-  const last = { swings: 2, landed: 1, tricks: { hit: 1 }, crystal: { dealt: [7], self: 1 }, died: true }
+  const pops = { A: 9, B: 4 }
+  const first = { swings: 4, landed: 3, tricks: { hit: 2 }, crystal: { dealt: [3, 5], self: 2 }, totem: { pops: 10 },
+    quality: { longestS: 8, quiet10S: 10, bothEatS: 2, gaps10: 1 }, search: { legs: 3, seconds: 2 } }
+  const last = { swings: 2, landed: 1, tricks: { hit: 1 }, crystal: { dealt: [7], self: 1 }, died: true, totem: { pops: 12 },
+    quality: { longestS: 5, quiet10S: 20, bothEatS: 4, gaps10: 2 }, search: { legs: 4, seconds: 3 } }
   const client = who => ({ call: async (method, params) => {
     if (method === 'fight') {
       if (who === 'B') { await waitingB; return { status: 'done', detail: { swings: 5, killed: 'A' } } }
-      if (++calls === 1) { fightAt = now; now += 1000; return { status: 'done', detail: first } }
-      now += 2000; deathAt = now; releaseB()
+      if (++calls === 1) { pops.A++; fightAt = now; now += 1000; return { status: 'done', detail: first } }
+      pops.A++; now += 2000; deathAt = now; releaseB()
       return missingFinal ? { status: 'interrupted', by: { type: 'death' } } : { status: 'done', detail: last }
     }
     if (method === 'status') {
       const p = who === 'A' && deathAt ? deathAt : now
       samples.push({ who, at: now })
       return { state: { health: who === 'A' && deathAt ? 0 : 20, physicsTicks: p / 50, clock: { ticks: now / 50 } },
+        ...(params?.totem && totemBoundary !== 'missing' ? { detail: { totem: { id: who + (totemBoundary === 'replaced' && deathAt ? '-new' : ''), pops: pops[who], reequips: 0, fails: 0, fast: 0, slow: 0, why: {} } } } : {}),
         ...(params?.lastDuel ? { lastDuel: { at: staleFallback ? fightAt : deathAt, detail: staleFallback ? first : last } } : {}) }
     }
     return { status: 'done', detail: {} }
@@ -30,20 +44,19 @@ async function arenaRound ({ missingFinal = false, staleFallback = false } = {})
   const A = client('A'); const B = client('B')
   const clock = { now: () => now, snapshot: () => ({ ticks: now / 50 }),
     setInterval: () => 1, clearInterval () {}, wall: { now: () => now, sleep: async ms => { now += ms }, setInterval: () => 1, clearInterval () {} } }
-  const source = fs.readFileSync(path.join(__dirname, '../arena.js'), 'utf8')
+  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
   const body = source.slice(source.indexOf('async function round(')).split(/\n;?\s*\(async \(\) => \{/)[0]
   assert.ok(body.startsWith('async function round(') && !body.includes('await A.ready'))
-  const helper = path.join(__dirname, '../arena-metrics.js')
   const context = vm.createContext({
     A, B, NA: 'A', NB: 'B', A_URL: 'a', B_URL: 'b', HUMANS: [], HUMAN: null, PREP_RATE: 0, FIGHT_RATE: 0,
     GENTLE: false, X: 0, Y: 100, Z: 0, CLEAN_R: 24, TP: '/tp', NOTIMER: true, MAX_MS: 100000, STALL_MS: 100000,
     RETURN_MS: 45000, GONE_MS: 10000, deathBase: new Map(), lagMax: { a: 0, b: 0 }, score: { A: 0, B: 0, draw: 0 },
-    gameClock: clock, sleep: async ms => { now += ms }, process: { env: {} }, log: line => lines.push(line),
+    gameClock: clock, sleep: async ms => { if (calls === 1 && !deathAt) pops.A++; now += ms }, process: { env: {} }, log: line => lines.push(line),
     stopRequested: () => false, resetArena: async () => {}, alive: async () => {}, kitSides: kit => ({ a: kit.a, b: kit.a }),
     equipChecked: async () => {}, heal: async () => {}, cmd: async () => {}, short: () => '',
     where: async c => c === A && deathAt ? 'dead' : 'in', diedIn: r => !!r.detail?.died || r.by?.type === 'death',
     lostLink: () => false, logSize: () => 0, roundDeaths: () => [{ who: 'A', kind: 'foe' }],
-    ...(fs.existsSync(helper) ? require(helper) : {})
+    ...metrics, totemDelta: totem.delta
   })
   vm.runInContext(body + '\nthis.run = round', context)
   await context.run({ name: 'test', a: [] }, 1)
@@ -59,6 +72,22 @@ test('ROUND totals include every fight call, including the terminal call', async
   assert.equal(row.a.crystal.self, 3)
   assert.equal(row.a.segments.length, 2)
   assert.equal(row.winner, 'B')
+})
+
+test('ROUND totem delta includes the inter-segment pop and excludes previous rounds', async () => {
+  const { row } = await arenaRound()
+  assert.equal(row.a.totem.pops, 3, 'one in each fight and one in the gap; not the cumulative 10+12')
+  assert.equal(row.b.totem.pops, 0)
+  assert.deepEqual(row.a.quality, { longestS: 8, quiet10S: 30, bothEatS: 6, gaps10: 3 })
+  assert.deepEqual(row.a.search, { legs: 7, seconds: 5 })
+})
+
+test('ROUND totem is unknown when a counter boundary is absent or belongs to a replacement bot', async () => {
+  for (const totemBoundary of ['missing', 'replaced']) {
+    const { row } = await arenaRound({ totemBoundary })
+    assert.equal(row.a.totem, null)
+    assert.equal(row.a.segments[0].totem.pops, 10, 'raw segment telemetry remains available without claiming a complete total')
+  }
 })
 
 test('round clocks exclude countdown and post-death respawn/report waits', async () => {
@@ -78,7 +107,7 @@ test('a missing terminal report is filled before aggregation and a previous duel
 })
 
 test('round totals weight measured averages, keep maxima and never add cumulative daemon state', () => {
-  const { roundDetail } = require('../arena-metrics')
+  const { roundDetail } = metrics
   const reports = [
     { hp: '20 -> 14', melee: { combo: { max: 4, avg: 3, n: 2 }, kbPlain: 1.5, skill: { counter: 0.3 } },
       blockLog: { place: { wall: { n: 3, ok: 2, ms: 100 } } }, crystal: { dealt: [2, 4], avg: 3, planN: 4, planMsAvg: 2 },

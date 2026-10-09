@@ -307,7 +307,7 @@ function worthHit (t, { myEff, hisEff, hisLand, press = false, hisTotem = false 
 // оценкой»); без неё — prior 20, для мобов — метаданные. telemetryHp — только замеры отчёта.
 // noteAttack(range, {projectile}) — подтверждённый урон для
 // оценки (combat-observe.trackFoe): damage_event с причиной «я» вычитает этот интервал.
-function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null, telemetryHp = e => effHp(bot, e) }: any = {}) {
+function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null, telemetryHp = e => effHp(bot, e), guard = null }: any = {}) {
   const st: any = {
     placed: 0, obby: 0, hits: 0, shots: 0, pre: 0, booms: 0, mine: 0, his: 0,
     dealt: [], self: 0, selfPops: 0, popsDealt: 0, popsTaken: 0, hisPops: 0, myPops: 0,
@@ -363,19 +363,32 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     if (!HONEST) return true
     if (seenCrystals.has(e.id)) return true
     const eye = myEye()
-    if (e.position.distanceTo(eye) < 2 || losClear(bot, eye, e.position.offset(0, 1, 0))) { seenCrystals.add(e.id); st.seenCrystals = (st.seenCrystals || 0) + 1; return true }
+    if (losClear(bot, eye, e.position.offset(0, 1, 0))) { seenCrystals.add(e.id); st.seenCrystals = (st.seenCrystals || 0) + 1; return true }
     st.hiddenCrystals = (st.hiddenCrystals || 0) + 1
     return false
   }
   const foeVisible = (foe) => !HONEST || (foe && foe.position && losClear(bot, myEye(), foe.position.offset(0, 1.2, 0)))
   const anchorSeen = (a) => {
-    if (!HONEST || a.mine) return true
-    if (a.seen) return true
     const now = gameClock.now()
-    if (now - (a.checkAt || 0) < 250) return false
+    if (now - (a.checkAt ?? -Infinity) < 250) return !!(a.seen || a.mine)
     a.checkAt = now
-    try { if (pick.blockSeen(bot, a.pos)) { a.seen = true; return true } } catch {}
-    return false
+    try {
+      const b = bot.blockAt(a.pos, false)
+      if (b?.name === 'respawn_anchor') {
+        if (!HONEST || pick.blockSeen(bot, a.pos)) {
+          a.seen = true
+          a.charges = Number(b.getProperties?.().charges) || 0
+        }
+      } else if (b) {
+        // Пропажу тоже нужно увидеть: packet за стеной не стирает память якоря.
+        const eye = myEye(); const d = a.pos.offset(.5, .5, .5).minus(eye); const len = d.norm()
+        if (!HONEST || len <= 64) {
+          const hit = len > 0 ? pick.blockOnRay(bot, eye, d.scaled(1 / len), len) : null
+          if (!HONEST || !hit || hit.pos.equals(a.pos)) { anchorsAt.delete(cellKey(a.pos)); return false }
+        }
+      }
+    } catch {}
+    return !!(a.seen || a.mine)
   }
   let anchorClick = null
   const cellKey = (p) => `${p.x},${p.y},${p.z}`
@@ -558,7 +571,9 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
       const b = newB || oldB
       if (!b || !b.position) return
       const k = cellKey(b.position)
-      if (newB && newB.name === 'respawn_anchor') { if (!anchorsAt.has(k)) anchorsAt.set(k, { pos: newB.position.clone(), mine: myAnchorCells.has(k), at: gameClock.now() }) } else anchorsAt.delete(k)
+      if (newB && newB.name === 'respawn_anchor' && !anchorsAt.has(k)) anchorsAt.set(k, { pos: newB.position.clone(), mine: myAnchorCells.has(k), at: gameClock.now() })
+      const a = anchorsAt.get(k)
+      if (a) { a.checkAt = -Infinity; anchorSeen(a) }
     } catch {}
   }
   bot.on('entitySpawn', onSpawn)
@@ -765,7 +780,14 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     const dm = require('./pvp/damage-model')
     const open = threats.filter(th => dm.shieldAngle(yaw, me, th.c.position) > 85)
     const inHand = (bot.heldItem && bot.heldItem.name === 'shield') || (bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
-    return { yaw, dmg: open.length ? hurtAt(open, me, dMe, cache) : 0, ticks: dm.SHIELD_DELAY_TICKS + (inHand ? 1 : 2) }
+    const use = guard && !guard.failure() ? guard.nativeUse() : null
+    const usedTicks = use?.useConfirmed ? Math.max(0, use.confirmedTicks ?? 0) : 0
+    // LivingEntity.getItemBlockingWith: пять тиков текущего use, не каждого плана.
+    // Готовность — native ACK/age из общего щита; клиентские тики её не ускоряют.
+    const ready = !!guard?.blocking()
+    const turn = threats.some(th => dm.shieldAngle(bot.entity.yaw ?? 0, me, th.c.position) > 85 && !open.includes(th)) ? 1 : 0
+    const ticks = ready ? turn : Math.max(0, dm.SHIELD_DELAY_TICKS - usedTicks) + (inHand ? 1 : 2)
+    return { yaw, dmg: open.length ? hurtAt(open, me, dMe, cache) : 0, ticks }
   }
   // Прикрыт от его кристаллов (лучей к телу почти нет, при полной видимости было бы ≥ 4): его кристалл в прицеле
   // и мне от него ≤ 1.5 — сбить первым (угроза снята); иначе — держать укрытие (не выходить в ближний бой) до 3 с.
@@ -880,10 +902,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
       for (const a of anchorsAt.values()) {
         if (!anchorSeen(a)) continue
         if (a.mine || a.pos.distanceTo(me) > 8) continue
-        const b = blockAt(bot, cache, a.pos.x, a.pos.y, a.pos.z)
-        if (!b || b.name !== 'respawn_anchor') continue
-        let charges = 0
-        try { charges = Number(b.getProperties().charges) || 0 } catch {}
+        const charges = a.charges || 0
         const center = a.pos.offset(0.5, 0.5, 0.5)
         const t = trade(bot, center, foe, bot.entity, dHim, dMe, without(cache, a.pos), { power: ANCHOR_P, himShield })
         if (t.me < 2 && !((t.meMax ?? 0) >= 4)) continue
@@ -1382,7 +1401,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
       return out
     }
     // Его кристаллы, что ещё стоят и достают меня.
-    const alive = (a) => a.threats.filter(th => th.cell ? (() => { const b = bot.blockAt(th.cell, false); return !!b && b.name === 'respawn_anchor' })() : (th.c.isValid !== false && bot.entities[th.c.id]))
+    const alive = (a) => a.threats.filter(th => th.cell ? (() => { const known = anchorsAt.get(cellKey(th.cell)); return !!known && anchorSeen(known) })() : (th.c.isValid !== false && bot.entities[th.c.id]))
     if (a.kind === 'shield') {
       lastDodge = gameClock.now()
       const off = bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield'
@@ -1394,9 +1413,11 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
       const t0 = gameClock.now()
       if (t0 - shieldLastEnd > 600) shieldStreakAt = t0
       st.shieldUps = (st.shieldUps || 0) + 1
+      const managed = off && guard
       try {
         await bot.look(a.yaw, 0, true).catch(() => {})
-        bot.activateItem(off)
+        if (managed) await guard.raise(true)
+        else bot.activateItem(off)
         shieldUntil = Infinity
         // Держать, пока его кристаллы стоят (до 1.5 с): лицом к худшему из живых.
         while (gameClock.now() - t0 < 1500 && !ctl.aborted) {
@@ -1408,7 +1429,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
           await sleep(TICK)
         }
       } finally {
-        try { bot.deactivateItem() } catch {}
+        try { if (managed) await guard.raise(false); else bot.deactivateItem() } catch {}
         shieldUntil = gameClock.now()
         shieldLastEnd = gameClock.now()
         st.shieldMs = (st.shieldMs || 0) + (gameClock.now() - t0)

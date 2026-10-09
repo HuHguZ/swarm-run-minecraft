@@ -268,7 +268,8 @@ const ANGRY_IF_HIT = /^(enderman|zombified_piglin|piglin|polar_bear|wolf|bee)$/
 async function duel (session, ctl, entity, opts: any = {}) {
   const safety = opts.guard?.safety || require('./combat-safety').watch(session.bot)
   const vision = createLastSeen(session.bot)
-  try { return await duelBody(session, ctl, entity, { ...opts, safety, vision }) } finally {
+  const totem0 = totemMod.snapshot(session.bot)
+  try { return await duelBody(session, ctl, entity, { ...opts, safety, vision, totem0 }) } finally {
     vision.close()
     if (!opts.guard?.safety) safety.close()
   }
@@ -278,9 +279,10 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const rangedAllowed = () => canUseRanged(session, entity, opts)
   const bot = session.bot
   const vision = opts.vision
-  const observed = vision.observe(entity)
-  if (!observed) { vision.close(); return { lost: `${entity.username || entity.name} не видно` } }
-  entity = observed
+  const deadline = gameClock.now() + Math.min(300, opts.timeoutSeconds ?? 60) * 1000
+  const acquired = await require('./pvp/search').acquireTarget(bot, ctl, vision, entity, { deadline, arena: opts.arena })
+  if (!acquired.entity) return { lost: `${entity.username || entity.name} не найден`, search: acquired.search, totem: totemMod.delta(opts.totem0, totemMod.snapshot(bot)) }
+  entity = acquired.entity
   ctl.onAbort.push(() => vision.close())
   let lastStand = opts.lastStand === true || opts.repelLava === true
   const foodFire = { attempts: 0, ignited: 0, burningObserved: 0 }
@@ -303,7 +305,6 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   } = opts
   if (guard?.watch) guard.watch(entity, 3.2)
   let label = entity.username || entity.name
-  const deadline = gameClock.now() + Math.min(300, timeoutSeconds) * 1000
   let track = makeTracker(entity)
   let prof = profileOf(entity)
   const kills = []
@@ -337,6 +338,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     healed: [],
     hpStart: Math.round(bot.health ?? 20)
   }
+  if (acquired.search.legs) st.search = acquired.search
   const traceT0 = gameClock.now()
   // Урон приёмов (аудит комбо, 2026-10-06): падение его хп (с поглощением) —
   // последнему приёму не старше 1.5 с, иначе «прочее». Оценка: лечение между
@@ -347,7 +349,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   // healthOf остаётся для мобов и телеметрии (trickDmg, mace.dealt).
   const co = require('./pvp/combat-observe')
   const telemetryHp = e => co.exactHpTelemetryOnly(bot, vision.source(e))
-  let calc = co.trackFoe(bot, entity, { honest: true, visible: vision.visible })
+  let calc = co.trackFoe(bot, entity, { honest: true, visible: vision.visible, roundScope: opts.roundScope })
   const foeEst = () => calc.hp.snapshot()
   const foeHpDecide = (e = entity) => co.isPlayer(e) ? (e === calc.entity ? foeEst().mean : 20) : healthOf(bot, e)
   // Граф боя (S7d, pvp/fight-graph): каждые 5 тиков — план калькулятора + длинные приёмы → решение и разрешения веткам.
@@ -847,34 +849,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   let pathing = false
 
   const mv = bot.pathfinder && bot.pathfinder.movements
-  const mvWas = mv ? { canDig: mv.canDig, towers: mv.allow1by1towers, scaffold: mv.scafoldingBlocks, parkour: mv.allowParkour, drop: mv.maxDropDown } : null
-  if (mv) { mv.allow1by1towers = false; mv.scafoldingBlocks = [] }
-  if (mv) { mv.allowParkour = false; mv.maxDropDown = edges.SAFE_FALL }
-  const digWas = mv ? mv.digCost : null
-  if (mv) mv.digCost = tempo.SPRINT_BPT * 20 / 3
-  const restoreMoves = () => {
-    if (!mv || !mvWas) return
-    mv.canDig = mvWas.canDig; mv.allow1by1towers = mvWas.towers; mv.scafoldingBlocks = mvWas.scaffold
-    mv.allowParkour = mvWas.parkour; mv.maxDropDown = mvWas.drop
-    if (digWas != null) mv.digCost = digWas
-    if (nbWas) mv.getNeighbors = nbWas
-    if (floorGuard) { const i = mv.exclusionAreasBreak.indexOf(floorGuard); if (i >= 0) mv.exclusionAreasBreak.splice(i, 1) }
-  }
-  const AR = arena && Number.isFinite(arena.y) && Number.isFinite(arena.r) ? arena : null
-  // Путь к нему не копает пол поля (S7d, блоки в бою: s7d-b «булава против щита» — 27 попыток копать блок под своими
-  // ногами, 0 удачных): дыра в полу арены в небе — падение в пустоту; pathfinder копает, когда цель ниже. Пол и ниже —
-  // цена 100 (= нельзя для pathfinder), выше пола (стенки рельефа, его коробка) — как было.
-  const floorGuard = AR && mv && Array.isArray(mv.exclusionAreasBreak) ? (b) => (b && b.position && b.position.y <= AR.y - 1 ? 100 : 0) : null
-  if (floorGuard) mv.exclusionAreasBreak.push(floorGuard)
-  const onField = (p) => !!AR && !!p && p.y >= AR.y - 1.5 && Math.abs(p.x - AR.x) <= AR.r + 0.5 && Math.abs(p.z - AR.z) <= AR.r + 0.5
-  const nbWas = mv && AR && typeof mv.getNeighbors === 'function' ? mv.getNeighbors : null
-  if (nbWas) {
-    mv.getNeighbors = function (node) {
-      const out = nbWas.call(this, node)
-      if (!bot.entity || !onField(bot.entity.position)) return out
-      return out.filter(m => m.y >= AR.y && Math.abs(m.x + 0.5 - AR.x) <= AR.r && Math.abs(m.z + 0.5 - AR.z) <= AR.r)
-    }
-  }
+  const { arena: AR, onField, restore: restoreMoves } = require('./pvp/movement').combatMovement(bot, arena)
   let holdGoal = null
   let holdGoalAt = 0
   const guardSpot = (p) => {
@@ -918,7 +893,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const bm = boom.create(bot, { enemy: () => entity, used, crystals: !crystal.ON, telemetryHp })
   ctl.onAbort.push(() => bm.close())
   // Хп соперника-игрока в решениях кристаллов — оценкой (правило 06.10); урон своих подрывов — в оценку (S7c).
-  const cx = crystal.create(bot, { enemy: () => entity, used, telemetryHp, foeHp: (e) => foeHpDecide(e), noteAttack: (r, o) => calc.noteAttack(r, o) })
+  const cx = crystal.create(bot, { enemy: () => entity, used, guard, telemetryHp, foeHp: (e) => foeHpDecide(e), noteAttack: (r, o) => calc.noteAttack(r, o) })
   ctl.onAbort.push(() => cx.close())
   const maceNow = () => { try { return !!(prof.player && mc.threat()) } catch { return false } }
   const maceAbort = (what) => { st.maceAborts = (st.maceAborts || 0) + 1; used('бросил ' + what + ': булава сверху') }
@@ -1099,6 +1074,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       } : undefined,
       tempo: prof.player ? { on: tempo.ON, open: tt.opening || undefined, ate: ts.consumes, pressured: ts.pressured, aborted: ts.aborted, desperate: ts.desperate || undefined, refused: ts.refused || undefined, foeAte: ts.foeConsumes, busyHits: ts.busyLanded, busyBy: Object.keys(ts.busyByKind).length ? ts.busyByKind : undefined, punish: Object.keys(ts.punish).length ? ts.punish : undefined, breaches: ts.breaches || undefined, escapes: ts.breachEscapes || undefined, kites: ts.kites || undefined } : undefined,
       target: label,
+      search: st.search,
       kills: kills.length ? kills : undefined,
       assessment: planText || undefined,
       arrows: st.arrows || undefined,
@@ -1133,7 +1109,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       boom: bm.report(),
       crystal: cx.report(),
       melee: mf.report(),
-      totem: tot.pops || tot.fast || tot.slow ? { pops: tot.pops, reequips: tot.reequips, fails: tot.reequipFails || undefined, fast: tot.fast, slow: tot.slow, why: tot.why } : undefined,
+      totem: totemMod.delta(opts.totem0, totemMod.snapshot(bot)),
       itemUse: bot._ndUse ? (() => { const s = bot._ndUse.stats; const b = use0 || {}; const df = k => (s[k] || 0) - (b[k] || 0); return { slowTicks: df('slowTicks'), sprintBlocked: df('sprintBlocked'), sprintNoFwd: df('sprintNoFwd'), sprintStops: df('sprintStops'), sprintStarts: df('sprintStarts'), wallStops: df('wallStops'), wallTicks: df('wallTicks') } })() : undefined,
       human,
       dodges: st.dodges || undefined,
@@ -1159,7 +1135,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     foeSeenPos = null
     st.bowProg = []
     foeHp = null
-    calc.stop(); calc = co.trackFoe(bot, entity, { honest: true, visible: vision.visible })
+    calc.stop(); calc = co.trackFoe(bot, entity, { honest: true, visible: vision.visible, roundScope: opts.roundScope })
     label = entity.username || entity.name
     track = makeTracker(entity)
     seenAt = gameClock.now()
@@ -1614,7 +1590,7 @@ const pvpSkills = {
       pathTo(false); pathing = false; clear()
       if (guard) await guard.raise(false)
       if (medical.name === 'splash_potion') {
-        if (await holdItem(medical)) { await useAt(bot.entity.yaw, -Math.PI / 2); st.healed.push('взрывное лечения') }
+        if (await holdItem(medical) && await useAt(bot.entity.yaw, -Math.PI / 2, { item: medical })) st.healed.push('взрывное лечения')
       } else if (medical.name === 'potion') await drink(medical, 'лечение до нового размена')
       else if (await pvpSkills.consumeItem(medical)) st.healed.push(medical.name)
       await holdWeapon()
@@ -1839,7 +1815,7 @@ const pvpSkills = {
       const react = !ca || !/^(defuse|dodge|shield|cover|wall|anchorPop)$/.test(ca.kind) || after('crystalSeen', true, style.reactMs)
       if (!ca) delete noticed.crystalSeen
       if (ca && react) {
-        if (guard) await guard.raise(false)
+        if (guard && ca.kind !== 'shield') await guard.raise(false)
         if (pathing) { pathTo(false); pathing = false }
         clear()
         aim = 'free'
@@ -2145,9 +2121,8 @@ const pvpSkills = {
     if ((hp <= healAt + (archer ? 3 : 0) || calmHeal) && ready('heal')) {
       if (calmHeal && hp > healAt + (archer ? 3 : 0) && ready('calmNote')) { rest('calmNote', 5000); used('лечусь, пока он занят') }
       const splash = findPotion(bot, 'splash_potion', 'heal')
-      if (splash && (await holdItem(splash))) {
+      if (splash && await holdItem(splash) && await useAt(bot.entity.yaw, -Math.PI / 2, { item: splash })) {
         rest('heal', 800)
-        await useAt(bot.entity.yaw, -Math.PI / 2)
         used('лечение под ноги'); st.healed.push('взрывное лечения')
         await holdWeapon()
         continue
@@ -2254,18 +2229,19 @@ const pvpSkills = {
     }
     if (perch) {
       const noArrows = !findItem(bot, i => /arrow$/.test(i.name)) || !findItem(bot, i => i.name === 'bow' || i.name === 'crossbow')
-      if (noArrows && bot.entity.position.y >= perch.top - 1.2 && hp - Math.max(0, perch.h - 3) >= 14 && ready('perchNoArrows')) {
-        rest('perchNoArrows', 5000)
-        used('стрелы кончились — спрыгиваю со столба')
-        await dropFromPerch()
-        continue
-      }
       if (bot.entity.position.y < perch.top - 1.2) {
         perch = null
         used('сбили со столба')
-      } else if (hp - Math.max(0, perch.h - 3) >= 14 || (now - perch.since > 45000 && hp - Math.max(0, perch.h - 3) >= 6)) {
-        await dropFromPerch()
-        continue
+      } else if (ready('perchDescend')) {
+        const maxHp = bot.entity.attributes?.['minecraft:max_health']?.value ?? 20
+        const healingHere = hp < maxHp && (canHeal || (bot.food ?? 0) >= 18 || hasEffect(bot, 'regeneration'))
+        const rangedHere = !noArrows && rangedAllowed() && vision.visible(entity)
+        if (noArrows || (!healingHere && !rangedHere) || now - perch.since > 45000) {
+          const r = await dropFromPerch()
+          if (!r.ok) rest('perchDescend', 5000)
+          if (r.ok && !perch) rest('pillar', 6000)
+          if (r.ok || r.acted) continue
+        }
       }
     }
 

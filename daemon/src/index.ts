@@ -49,9 +49,11 @@ const methods = {
     fairPlay: cfg.fairPlay,
     server: `${cfg.host}:${cfg.port}`,
     ...(p && p.items ? { items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('./pvp/combat-observe').itemObs(session.bot, it)) || [] } : {}),
+    ...(p && p.foeEstimate ? { foeEstimate: require('./pvp/combat-observe').readFoeEstimate(session.bot, p.foeEstimate) } : {}),
     ...(p && p.enchants ? { enchants: enchantedGear(session.bot) } : {}),
     // Последний отчёт дуэли (pvp.duel кладёт при конце боя): арена берёт его, если ответ fight пришёл пустым (S7d).
     ...(p && p.lastDuel ? { lastDuel: session.bot?._ndLastDuel || null } : {}),
+    ...(p && p.totem ? { totem: require('./totem').snapshot(session.bot) } : {}),
     ...(p && p.physics && session.bot?.entity ? { physics: {
       pos: session.bot.entity.position, velocity: session.bot.entity.velocity,
       onGround: session.bot.entity.onGround, pose: session.bot.entity.pose,

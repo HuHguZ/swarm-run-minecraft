@@ -1505,7 +1505,7 @@ async function fight (session, ctl, opts: any = {}) {
   }
 }
 
-async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false }: any = {}, guard) {
+async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null }: any = {}, guard) {
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
   const entity = findTarget(bot, target, session, { allowPlayer, radius: Math.max(24, clearArea || 0) })
@@ -1570,6 +1570,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       lastStand,
       repelLava,
       purpose: decision.purpose,
+      roundScope,
       // Поле арены (arena.js): не уходить с него за соперником, вернуться, если выпал.
       arena
     })

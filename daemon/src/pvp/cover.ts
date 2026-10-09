@@ -1,6 +1,12 @@
+import { bodyClear, supportAt } from '../navigation/geometry'
+import { ledgeOptions, planLedgeDrop } from '../navigation/descent'
+
+const damageModel = require('./damage-model')
+const read = require('../read')
 type CombatContext = Record<string, any>
 
 export function createCover(ctx: CombatContext) {
+const rememberBlock = b => b && ({ ...b, position: b.position.clone(), shapes: b.shapes?.map(shape => [...shape]) })
 const buildGuard = () => {
     let n = 0
     let last = ctx.tt.myHurtAt
@@ -133,64 +139,159 @@ const pillarOut = async () => {
     ctx.noteBuild('pillar', h * ctx.PILLAR_MS)
     const gP = ctx.buildGuard()
     const before = ctx.heldName()
-    const y0 = ctx.bot.entity.position.y
+    const start = ctx.bot.entity.position.clone()
+    const y0 = start.y
+    const base = rememberBlock(ctx.bot.blockAt(start.floored().offset(0, -1, 0)))
+    const placed = new Map<string, any>()
+    let placing = null
+    const sawPlaced = () => {
+      if (!placing) return
+      const b = ctx.bot.blockAt(placing)
+      if (b?.name === filler.name && ctx.pick.faceAim(ctx.bot, placing, new ctx.Vec3(0, 1, 0))) {
+        placed.set(placing.toString(), { pos: placing.clone(), stateId: b.stateId, block: rememberBlock(b) })
+      }
+    }
     ctx.pathTo(false); ctx.pathing = false
     ctx.clear()
     ctx.aim = 'free'
-    try { await ctx.towerUp(ctx.bot, ctx.guardCtl(gP), h, { sneak: false, fast: true, beforeStep: ctx.towerShield }) } catch {}
+    let built = null
+    try { built = await ctx.towerUp(ctx.bot, ctx.guardCtl(gP), h, { sneak: false, fast: true, beforeStep: async () => {
+      sawPlaced()
+      const result = await ctx.towerShield()
+      placing = ctx.bot.entity.position.floored()
+      return result
+    } }) } catch {}
+    sawPlaced()
     ctx.aim = 'target'
     ctx.switched(before)
     await ctx.holdWeapon()
     if (ctx.buildDone(gP, 'столб')) return false
     const top = ctx.bot.entity.position.y
     if (top - y0 < 3) return false
-    ctx.perch = { since: ctx.gameClock.now(), y0, top, h: Math.round(top - y0) }
+    // Only a confirmed straight column belongs to this climb. A knockback or
+    // failed placement must not turn pre-existing blocks into our supports.
+    let own = []
+    const height = Math.round(top - y0)
+    if (built?.placed === height && ctx.bot.entity.position.floored().offset(0, -height, 0).equals(start.floored())) {
+      own = Array.from({ length: height }, (_, i) => placed.get(start.floored().offset(0, i, 0).toString()))
+      if (own.some(b => !b)) own = []
+    }
+    ctx.perch = { since: ctx.gameClock.now(), y0, top, h: height, own,
+      base: base && { pos: base.position.clone(), stateId: base.stateId, block: rememberBlock(base) } }
     ctx.used(`ушёл на столб ${ctx.perch.h} бл. (спуск −${Math.max(0, ctx.perch.h - 3)} хп)`)
     ctx.st.blocks = (ctx.st.blocks || 0) + ctx.perch.h
     return true
   }
 
 const dropFromPerch = async () => {
-    const me0 = ctx.bot.entity.position
-    const toward = ctx.yawTo(me0, ctx.entity.position)
-    let yaw = toward
-    for (const off of [0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, Math.PI]) {
-      const y = toward + off
-      const cell = me0.offset(-Math.sin(y) * 1.2, 0, -Math.cos(y) * 1.2).floored()
-      let bad = true
-      for (let k = 0; k <= ctx.PERCH_MAX + 2; k++) {
-        const n = ctx.blockName(ctx.bot, cell.offset(0, -k, 0))
-        if (!n || n === 'air' || n === 'cave_air') continue
-        bad = /lava|fire|magma|cactus|campfire|sweet_berry/.test(n)
-        break
+    const bot = ctx.bot; const perch = ctx.perch
+    if (!perch || ctx.ctl.aborted || !bot.entity.onGround) return { ok: false, acted: false }
+    const me0 = bot.entity.position.clone()
+    const hp = (bot.health ?? 0) + (read.absorptionOf(bot, bot.entity) || 0)
+    const effect = bot.registry.effectsByName.resistance
+    const def = damageModel.defenseOf([5, 6, 7, 8].map(slot => bot.inventory.slots[slot]).filter(Boolean).map(item => ({ name: item.name,
+      ench: { protection: read.enchLevel(bot, item, 'protection'), feather_falling: read.enchLevel(bot, item, 'feather_falling') } })),
+    { resistance: (effect && bot.entity.effects?.[effect.id]?.amplifier) ?? -1 })
+    const eta = ctx.tt?.eta(ctx.entity) ?? Infinity
+    // Explicit price: fraction of remaining HP lost plus exposure relative to
+    // the observed time to his next hit. No minimum-HP gate for leaving a perch.
+    const price = (damage, ms) => damage / (hp - damage) + ms / Math.max(ctx.TICK_MS, eta)
+    const options: any[] = []
+    const pos = me0.floored().offset(0, -1, 0)
+    const own = perch.own?.find(b => b.pos.equals(pos))
+    const below = [...(perch.own || []), perch.base].find(b => b?.pos.equals(pos.offset(0, -1, 0)))
+    const block = bot.blockAt(pos)
+    // Beneath our feet we know what we built, not its hidden packet updates.
+    // A newly exposed support can refresh that memory; an unseen change cannot
+    // tell us that somebody secretly removed the bottom of the column.
+    if (below && ctx.pick.blockSeen(bot, below.pos)) below.block = rememberBlock(bot.blockAt(below.pos))
+    const point = ctx.pick.faceAim(bot, pos, new ctx.Vec3(0, 1, 0))
+    if (point && own) own.block = rememberBlock(block)
+    const remembered = [...(perch.own || []), perch.base].filter(Boolean)
+    const observed = Object.create(bot)
+    observed.blockAt = p => remembered.find(b => b.pos.equals(p.floored()))?.block || bot.blockAt(p)
+    const without = { blockAt: p => p.floored().equals(pos) ? { name: 'air', boundingBox: 'empty', shapes: [], position: pos }
+      : observed.blockAt(p), physics: bot.physics, game: bot.game }
+    const down = me0.offset(0, -1, 0)
+    if (hp > 0 && point && own && below && block?.stateId === own.stateId &&
+      bodyClear(without, down) && supportAt(without, down, .04) && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < .02) {
+      const tool = ctx.tools.bestFor(bot, block)
+      if (Number.isFinite(tool.ms)) options.push({ kind: 'dig', block, point, tool: tool.item, ms: tool.ms, damage: 0, cost: price(0, tool.ms * perch.h) })
+    }
+    for (const target of ledgeOptions(observed, { ...ctx.entity.position, y: perch.y0 }, { radius: 4, maxFallDamage: ctx.PERCH_MAX }).slice(0, 8)) {
+      const floor = supportAt(observed, target, .04)
+      if (!floor || !ctx.pick.blockSeen(bot, floor.block.position)) continue
+      const plan = planLedgeDrop(observed, target, { sprint: false, jump: false, coast: 6 }, Infinity)
+      if (!plan) continue
+      const damage = damageModel.afterDefense(plan.damage, 'fall', def)
+      if (!(damage < hp)) continue // physically lethal, including a failed mace hit
+      const ms = plan.ticks * ctx.TICK_MS
+      options.push({ kind: 'drop', plan, damage, ms, cost: price(damage, ms) })
+    }
+    options.sort((a, b) => a.cost - b.cost || a.ms - b.ms)
+    const choice = options[0]
+    if (!choice) return { ok: false, acted: false }
+    ctx.pathTo(false); ctx.pathing = false; ctx.clear(); ctx.aim = 'free'
+    if (choice.kind === 'dig') {
+      const stop = () => { try { bot.stopDigging() } catch {} }
+      ctx.ctl.onAbort.push(stop)
+      let acted = false
+      try {
+        if (choice.tool && bot.heldItem !== choice.tool) await bot.equip(choice.tool, 'hand')
+        await bot.lookAt(choice.point, true)
+        if (ctx.ctl.aborted || !ctx.pick.faceAim(bot, pos, new ctx.Vec3(0, 1, 0))) return { ok: false, acted }
+        acted = true
+        await ctx.withTimeout(bot.dig(choice.block, true), choice.ms + 1500)
+        const t0 = ctx.gameClock.now()
+        while (!ctx.ctl.aborted && ctx.gameClock.now() - t0 < 1000 && !(bot.entity.onGround && bot.entity.position.y < me0.y - .6)) await ctx.sleep(ctx.TICK_MS)
+        if (!bot.entity.onGround || Math.abs(bot.entity.position.y - down.y) > .05 || ctx.ctl.aborted) return { ok: false, acted }
+        perch.own = perch.own.filter(b => !b.pos.equals(pos))
+        perch.top = bot.entity.position.y; perch.h = Math.round(perch.top - perch.y0)
+        if (perch.top <= perch.y0 + .05) ctx.perch = null
+        ctx.used(`спуск: разобрал свою опору, ${Math.round(choice.ms)} мс, без урона`)
+        return { ok: true, acted, kind: 'dig', damage: 0, ms: choice.ms }
+      } catch { return { ok: false, acted } }
+      finally {
+        stop()
+        const index = ctx.ctl.onAbort.indexOf(stop)
+        if (index >= 0) ctx.ctl.onAbort.splice(index, 1)
+        ctx.clear(); ctx.aim = 'target'; await ctx.holdWeapon()
       }
-      if (!bad) { yaw = y; break }
     }
     const smashDrop = ctx.prof.player && ctx.mace.fallSmashReady(ctx.bot, ctx.entity)
+    try {
     if (smashDrop) {
       const m = ctx.findItem(ctx.bot, i => i.name === 'mace')
       if (m && (!ctx.bot.heldItem || ctx.bot.heldItem.name !== 'mace')) await ctx.holdItem(m)
       const t1 = ctx.gameClock.now()
       while (ctx.gameClock.now() - t1 < 1100 && !ctx.ctl.aborted && ctx.mace.fallSmashReady(ctx.bot, ctx.entity)) await ctx.sleep(ctx.TICK_MS)
     }
-    ctx.aim = 'free'
-    await ctx.bot.look(yaw, 0, true).catch(() => {})
+    if (ctx.ctl.aborted || !bot.entity.onGround || bot.entity.position.distanceTo(me0) > .05 ||
+      (bot.health ?? 0) + (read.absorptionOf(bot, bot.entity) || 0) <= choice.damage) return { ok: false, acted: !!smashDrop }
+    ctx.edgeGuard.allow(Math.ceil(me0.y - choice.plan.target.y) + 1, choice.ms + 500)
+    for (let i = 0; i < choice.plan.steps.length && !ctx.ctl.aborted; i++) {
+      if (i && bot.entity.position.distanceTo(choice.plan.states[i - 1].pos) > .65) break
+      const step = choice.plan.steps[i]
+      await bot.look(step.yaw, 0, true)
+      for (const [key, value] of Object.entries(step.control)) ctx.set(key, value)
+      await ctx.sleep(ctx.TICK_MS)
+      if (smashDrop && bot.entity.position.y < me0.y - .6) break
+    }
     ctx.clear()
-    ctx.edgeGuard.allow(ctx.PERCH_MAX + 2, 1500)
-    ctx.set('forward', true)
-    const t0 = ctx.gameClock.now()
-    while (ctx.gameClock.now() - t0 < 900 && ctx.bot.entity.position.y > ctx.perch.top - 0.6 && !ctx.ctl.aborted) await ctx.sleep(ctx.TICK_MS)
-    ctx.set('forward', false)
-    if (smashDrop) {
+    if (smashDrop && !ctx.ctl.aborted && !bot.entity.onGround && bot.entity.position.y < me0.y - .6) {
       const fr = await ctx.mace.descend(ctx.bot, ctx.ctl, ctx.entity, { vel: () => ctx.track.vel(), stats: ctx.mc.st, telemetryHp: ctx.telemetryHp })
       ctx.mc.st.fallSmash++
       if (fr.hit) { ctx.st.swings++; ctx.lastSwing = ctx.gameClock.now(); ctx.mc.st.smashHits++ }
       ctx.used(fr.hit ? 'булава: удар со столба' : 'булава: со столба не достал')
       await ctx.holdWeapon()
     }
-    ctx.aim = 'target'
-    ctx.perch = null
-    ctx.used('спрыгнул со столба')
+    const ok = bot.entity.onGround && bot.entity.position.y < me0.y - .6
+    if (ok) {
+      ctx.perch = null
+      ctx.used(`спрыгнул со столба: ${choice.damage.toFixed(1)} хп, ${choice.ms} мс`)
+    }
+    return { ok, acted: true, kind: 'drop', damage: choice.damage, ms: choice.ms }
+    } finally { ctx.clear(); ctx.aim = 'target' }
   }
 
 const healItem = () => ctx.findPotion(ctx.bot, 'splash_potion', 'heal') || ctx.findPotion(ctx.bot, 'potion', 'heal') ||
@@ -361,7 +462,7 @@ const fortOut = async () => {
       if (item) {
         ctx.rest('fortEat', 1800)
         if (/splash_potion/.test(item.name)) {
-          if (await ctx.holdItem(item)) { await ctx.useAt(ctx.bot.entity.yaw, -Math.PI / 2); ctx.used('лечение под ноги'); ctx.st.healed.push('взрывное лечения') }
+          if (await ctx.holdItem(item) && await ctx.useAt(ctx.bot.entity.yaw, -Math.PI / 2, { item })) { ctx.used('лечение под ноги'); ctx.st.healed.push('взрывное лечения') }
           ctx.aim = 'free'
         } else if (await ctx.consumeItem(item)) { ctx.used('съел в коробке ' + item.name); ctx.st.healed.push(item.name) }
       }

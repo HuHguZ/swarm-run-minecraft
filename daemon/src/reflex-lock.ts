@@ -126,6 +126,8 @@ async function operation (s, obj, name, raw, args) {
   }
   const ctl = parent?.session === s ? parent.ctl : null
   const b = s.bot
+  // Слот может переехать после защиты; тип не различает лечение/вред и зачарования.
+  const selectedItem = name === 'equip' && args[0]?.type != null ? structuredClone(args[0]) : null
   let craftRemaining = name === 'craft' ? Math.max(0, parseInt(args[1] ?? 1, 10)) : null
   for (;;) {
     await wait(s, ctl)
@@ -151,7 +153,14 @@ async function operation (s, obj, name, raw, args) {
       attempt[0] = b.blockAt(attempt[0].position)
       if (attempt[0] && /^(air|cave_air|void_air)$/.test(attempt[0].name)) return
     }
-    if (name === 'equip' && attempt[0]?.type != null) attempt[0] = b.inventory.items().find(i => i.type === attempt[0].type) || attempt[0]
+    if (selectedItem) {
+      const items = b.inventory.items()
+      const same = i => require('./invsync').sameStack(b, i, selectedItem)
+      // items() исключает броню и вторую руку; их актуальные клиентские слоты тоже законны.
+      const atSlot = Number.isInteger(selectedItem.slot) && selectedItem.slot >= 0 ? b.inventory.slots?.[selectedItem.slot] : null
+      attempt[0] = atSlot && same(atSlot) ? atSlot : items.find(same)
+      if (!attempt[0]) throw Object.assign(new Error('reflex: выбранного предмета больше нет'), { code: 'REFLEX_ITEM_GONE' })
+    }
     try { value = await context.run(c, () => raw.apply(obj, attempt)) } catch (e) { error = e }
     const changed = epoch !== state(s).epoch
     if (ctl?.aborted || (parent?.reflex && !allowed(s))) throw cancelled()

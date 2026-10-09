@@ -4,6 +4,14 @@ const { sleep } = require('../movement')
 const { equipBestTool, missingHarvestTool } = require('../items')
 const { withTimeout } = require('../build')
 let unstuck: any
+const WALL_STEP_MS = 10 * 50
+// in_wall deals one HP per damage-immunity window (10 ticks). Leave one HP for the next pulse.
+const exitBudget = (bot, digMs = Infinity) => {
+  if (!Number.isFinite(digMs)) digMs = Infinity
+  const lifeMs = Math.max(0, (bot.health ?? 20) - 1) * 500
+  // If mining still fits, leave its time available after unsuccessful probes.
+  return Math.max(50, Math.min(digMs, digMs < lifeMs ? lifeMs - digMs : lifeMs))
+}
 const FALLS = new Set([
   'gravel', 'suspicious_gravel', 'sand', 'red_sand', 'suspicious_sand',
   'anvil', 'chipped_anvil', 'damaged_anvil', 'dragon_egg',
@@ -94,7 +102,7 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
         // (S7d, ревью Codex №4: 28b в барьере поля копал его 12 с до «suffocated in a wall»).
         let infinite = cell.name === 'bedrock' || cell.name === 'barrier'
         try { if (!infinite && !Number.isFinite(bot.digTime(cell))) infinite = true } catch {}
-        if (infinite) { const nm = cell.name === 'bedrock' ? 'бедрок' : cell.name === 'barrier' ? 'барьер' : cell.name; why = (await this.stepOutOfWall(bot)) ? null : `над головой ${nm} — не ломается, выйти некуда`; break }
+        if (infinite) { const nm = cell.name === 'bedrock' ? 'бедрок' : cell.name === 'barrier' ? 'барьер' : cell.name; why = (await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot) })) ? null : `над головой ${nm} — не ломается, выйти некуда`; break }
         const problem = this.session.mcData
           ? missingHarvestTool(bot, cell, this.session.mcData)
           : null
@@ -102,7 +110,10 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
         if (problem) {
           try { handMs = cell.digTime(null, false, false, false, [], bot.entity.effects) } catch {}
           const hpMs = ((bot.health ?? 20) - 1) * 500
-          if (!(Number.isFinite(handMs) && handMs < hpMs)) { why = problem; break }
+          if (!(Number.isFinite(handMs) && handMs < hpMs)) {
+            why = await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, handMs) }) ? null : problem
+            break
+          }
         }
         try {
           await equipBestTool(bot, cell)
@@ -110,6 +121,11 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
           // утонул, S7d, ревью Codex №4).
           let toolMs = 0
           try { toolMs = bot.digTime(cell) } catch {}
+          // Lava can turn the water at our head into obsidian. A clear side exit costs at most
+          // ten ticks per attempt; compare that with the equipped dig time before spending HP.
+          // Moving out does not grant permission to mine a hidden block behind the embedded one.
+          if ((!Number.isFinite(toolMs) || toolMs > WALL_STEP_MS) && await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, toolMs) })) break
+          if (ctl?.aborted) break
           await withTimeout(bot.dig(cell), Math.max(8000, (handMs || 0) + 1500, Number.isFinite(toolMs) ? toolMs + 1500 : 0), `${cell.name} не ломается`)
           this.dugTotal++
           why = null
@@ -126,7 +142,9 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
       if (!ctl?.aborted && feet && feet.boundingBox === 'block' && feet.name !== 'bedrock' && !footProblem && this.visibleBurialBlock(bot, feet)) {
         try {
           await equipBestTool(bot, feet)
-          await withTimeout(bot.dig(feet), 8000, `${feet.name} не ломается`)
+          let toolMs = 0
+          try { toolMs = bot.digTime(feet) } catch {}
+          await withTimeout(bot.dig(feet), Math.max(8000, Number.isFinite(toolMs) ? toolMs + 1500 : 0), `${feet.name} не ломается`)
           this.dugTotal++
         } catch (e) {
           why = String((e && e.message) || e)
@@ -183,31 +201,53 @@ function visibleBurialBlock (this: any, bot, block) {
     } catch { return false }
   }
 
-// Голова в неломаемом блоке (барьер колизея, бедрок): шагнуть в соседнюю клетку, где ноги и голова свободны, —
-// движением, как игрок; до 10 тиков на клетку. true — вышел.
-async function stepOutOfWall (this: any, bot) {
+// Inside an opaque block neighbouring packet cells are not observations. Try short
+// directions by distance alone, sneaking against unseen edges; unknown contact risk
+// remains, compared with continuing in_wall damage. Never excavate a hidden neighbour.
+async function stepOutOfWall (this: any, bot, { ctl = null, maxMs = Infinity }: any = {}) {
   const Vec3 = require('vec3')
-  const free = (p) => { const b = bot.blockAt(p, false); return !!b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name) }
-  const at = bot.entity.position
+  const pick = require('../pick')
+  const { HAZARD } = require('../navigation/geometry')
+  const at = bot.entity.position.clone()
   const base = at.floored()
-  const cells = []
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-    const c = base.offset(dx, 0, dz)
-    if (free(c) && free(c.offset(0, 1, 0))) cells.push(c)
-  }
+  const cells = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([dx, dz]) => base.offset(dx, 0, dz))
   cells.sort((a, b) => a.offset(0.5, 0, 0.5).distanceTo(at) - b.offset(0.5, 0, 0.5).distanceTo(at))
-  for (const c of cells) {
-    const goal = new Vec3(c.x + 0.5, at.y, c.z + 0.5)
-    try { await bot.lookAt(goal.offset(0, 1.6, 0), true) } catch {}
-    try { bot.setControlState('forward', true) } catch {}
-    for (let i = 0; i < 10; i++) {
-      await sleep(50)
-      const h = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
-      if (!h || h.boundingBox === 'empty') { try { bot.setControlState('forward', false) } catch {}; return true }
+  const until = gameClock.now() + maxMs
+  // Native physics multiplies movement input by sneakSpeed (normally 0.3).
+  const probeMs = WALL_STEP_MS / Math.max(.01, bot.physics?.sneakSpeed ?? .3)
+  const wasSneaking = !!bot.getControlState?.('sneak')
+  const stop = () => { try { bot.setControlState('forward', false); bot.setControlState('sneak', wasSneaking) } catch {} }
+  let wake = null
+  const cancel = () => { stop(); wake?.() }
+  ctl?.onAbort?.push(cancel)
+  try {
+    for (const c of cells) {
+      if (ctl?.aborted || gameClock.now() >= until) break
+      const below = c.offset(0, -1, 0)
+      // Reject an actually visible hazard, never use a hidden support to rank directions.
+      if (pick.blockSeen(bot, below, { range: 4.5 }) && HAZARD.test(bot.blockAt(below, false)?.name || '')) continue
+      const goal = new Vec3(c.x + 0.5, at.y, c.z + 0.5)
+      try { await bot.lookAt(goal.offset(0, 1.6, 0), true) } catch {}
+      if (ctl?.aborted) break
+      try { bot.setControlState('sneak', true); bot.setControlState('forward', true) } catch {}
+      const end = Math.min(until, gameClock.now() + probeMs)
+      while (!ctl?.aborted && gameClock.now() < end) {
+        await new Promise<void>(resolve => {
+          const timer = gameClock.setTimeout(done, 50)
+          function done () { gameClock.clearTimeout(timer); wake = null; resolve() }
+          wake = done
+        })
+        if (ctl?.aborted) break
+        const h = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
+        if (!h || h.boundingBox === 'empty') return true
+      }
+      try { bot.setControlState('forward', false) } catch {}
     }
-    try { bot.setControlState('forward', false) } catch {}
+    return false
+  } finally {
+    cancel()
+    if (ctl?.onAbort) { const i = ctl.onAbort.indexOf(cancel); if (i >= 0) ctl.onAbort.splice(i, 1) }
   }
-  return false
 }
 
 function freed (this: any, bot, during) {

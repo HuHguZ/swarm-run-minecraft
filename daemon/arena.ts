@@ -1,6 +1,7 @@
 'use strict'
 const gameClock = require('./src/game-clock')
 const { roundDetail } = require('./arena-metrics')
+const { delta: totemDelta } = require('./src/totem')
 // Арена: два NeuroDown дерутся друг с другом через свои демоны, чтобы PvP
 // оттачивался на равном противнике, а человек смотрел со стороны.
 //
@@ -895,7 +896,7 @@ async function round (kit, n) {
   // противников; over общий — умер один, второго останавливаем, чтобы он не
   // гнался за возродившимся у спавна.
   const over: Record<string, any> = { done: false }
-  const phys = async (c) => { const st = await c.call('status').catch(() => null); const s = st && st.state; return s && s.clock && typeof s.physicsTicks === 'number' ? { p: s.physicsTicks, t: s.clock.ticks } : null }
+  const phys = async (c) => { const st = await c.call('status', { totem: true }).catch(() => null); const s = st && st.state; return s && s.clock && typeof s.physicsTicks === 'number' ? { p: s.physicsTicks, t: s.clock.ticks, totem: st.totem ?? st.detail?.totem ?? null } : null }
   const finishRound = () => {
     if (over.done) return false
     over.done = true
@@ -1023,10 +1024,14 @@ async function round (kit, n) {
   const phys1 = await over.phys
   gameClock.wall.clearInterval(stopWatch)
   gameClock.clearInterval(gameWatch)
-  log(`${NA}: ${short(ra)}`)
-  log(`${NB}: ${short(rb)}`)
   let da = ra.detail || {} as Record<string, any>
   let db = rb.detail || {} as Record<string, any>
+  // Segment deltas omit reflexes between fight calls. Only round-boundary status
+  // snapshots cover that interval; a missing/reconnected boundary stays unknown.
+  da.totem = totemDelta(phys0[0]?.totem, phys1[0]?.totem)
+  db.totem = totemDelta(phys0[1]?.totem, phys1[1]?.totem)
+  log(`${NA}: ${short(ra)}`)
+  log(`${NB}: ${short(rb)}`)
   // Проиграл тот, кто умер (или выпал за стену); оба — ничья.
   if (over.ringout === NA) { da.died = true; da.ringout = true }
   if (over.ringout === NB) { db.died = true; db.ringout = true }
@@ -1047,7 +1052,7 @@ async function round (kit, n) {
   log(`итог: ${winner ? 'победил ' + winner : 'ничья'} | счёт ${NA} ${score[NA]} : ${score[NB]} ${NB}, ничьих ${score.draw}`)
   // Машинная строка раунда (сводка — farm/crystal/csum.js, 2026-09-30).
   // Сводка — farm/crystal/tsum.js: частоты и урон приёмов (trickDmg), фактический TPS.
-  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, deathUnconfirmed: d.deathUnconfirmed || undefined, deathFromLog: d.deathFromLog || undefined, filled: d.filled || undefined, hp: d.hp, crystal: d.crystal, totem: d.totem, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, rod: d.rod, util: d.util, calc: d.calc, combos: d.combos, melee: d.melee, blocks: d.blocks, blockLog: d.blockLog, shield: d.shield, vsShield: d.vsShield, storm: d.storm, breakUnder: d.breakUnder, axeOnShield: d.axeOnShield, tricks: d.tricks, trickDmg: d.trickDmg })
+  const side = (name, d) => ({ name, died: !!d.died, ringout: !!d.ringout, deathUnconfirmed: d.deathUnconfirmed || undefined, deathFromLog: d.deathFromLog || undefined, filled: d.filled || undefined, hp: d.hp, crystal: d.crystal, totem: d.totem, quality: d.quality, search: d.search, swings: d.swings, landed: d.landed, crits: d.crits, sprintHits: d.sprintHits, arrows: d.arrows, arrowHits: d.arrowHits, mace: d.mace, elytra: d.elytra, boom: d.boom, hops: d.hops, xbow: d.xbow, rod: d.rod, util: d.util, calc: d.calc, combos: d.combos, melee: d.melee, blocks: d.blocks, blockLog: d.blockLog, shield: d.shield, vsShield: d.vsShield, storm: d.storm, breakUnder: d.breakUnder, axeOnShield: d.axeOnShield, tricks: d.tricks, trickDmg: d.trickDmg })
   const tick1 = over.end.ticks
   const share = (i) => phys0[i] && phys1[i] && phys1[i].t > phys0[i].t ? Math.round((phys1[i].p - phys0[i].p) / (phys1[i].t - phys0[i].t) * 100) / 100 : null
   const wallS = (over.end.wall - wall0) / 1000

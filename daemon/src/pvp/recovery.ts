@@ -130,7 +130,7 @@ const buffUp = async (minD = 6, extra: any = []) => {
       if (ctx.hasEffect(ctx.bot, eff)) continue
       const splash = ctx.findItem(ctx.bot, i => i.name === 'splash_potion' && (ctx.potionOf(i) || '').replace(/^(long|strong)_/, '') === kind)
       if (splash) {
-        if (await ctx.holdItem(splash)) { await ctx.useAt(ctx.bot.entity.yaw, -Math.PI / 2); ctx.used('зелье на себя: ' + kind) }
+        if (await ctx.holdItem(splash) && await ctx.useAt(ctx.bot.entity.yaw, -Math.PI / 2, { item: splash })) ctx.used('зелье на себя: ' + kind)
         continue
       }
       const pot = ctx.findItem(ctx.bot, i => i.name === 'potion' && (ctx.potionOf(i) || '').replace(/^(long|strong)_/, '') === kind)

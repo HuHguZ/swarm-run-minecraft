@@ -4,9 +4,9 @@
 // Знание — только своё: сундук попадает в WorldState, когда его увидели глазами (arms-run, blocks_around seen).
 import { StrategyRegistry, type Strategy } from '../core/strategy'
 import { amount, knows, type WorldState } from '../core/world-state'
-const { gearOf, WEAPON } = require('../assess')
+const { WEAPON } = require('../assess')
 const { foodsByName } = require('minecraft-data')('1.21.11')
-const { fireworkRaw } = require('./damage-model')
+const dm = require('./damage-model')
 
 // ---------------------------------------------------------------- сила снаряжения
 // Грубая шкала «насколько опасен в бою»: ближнее оружие ≈ урон за секунду (меч ×1.6 удара/с,
@@ -14,11 +14,11 @@ const { fireworkRaw } = require('./damage-model')
 // лечение, тотем. Единица — порядка «один удар железного меча».
 const SPEAR = { wooden_spear: 4, stone_spear: 5, copper_spear: 5, golden_spear: 4, iron_spear: 6, diamond_spear: 7, netherite_spear: 8 } as Record<string, number>
 export interface Item {
-  name: string; count?: number; enchants?: number; stars?: number
+  name: string; count?: number; ench?: Record<string, number>; stars?: number
   crossbow?: { loaded: boolean; ammo?: string | null; stars?: number | null }
 }
-export function weaponScore(name: string, enchanted = false): number {
-  const bonus = enchanted ? 1.5 : 0
+export function weaponScore(name: string, ench: Record<string, number> = {}): number {
+  const bonus = dm.sharpBonus(ench.sharpness || 0) * dm.attackSpeed(name)
   if (/_sword$/.test(name)) return (WEAPON[name] ?? 4) * 1.6 + bonus
   if (/_axe$/.test(name)) return (WEAPON[name] ?? 7) * 0.9 + bonus
   if (name === 'mace') return 9 + bonus
@@ -27,26 +27,36 @@ export function weaponScore(name: string, enchanted = false): number {
   return 0
 }
 export interface Power { total: number; weapon: number; armor: number }
+function armorPower(items: Item[]): number {
+  const d = dm.defenseOf(items)
+  // Protection уменьшает получаемый урон множителем (1 - EPF/25); прочие типы требуют своей угрозы.
+  return (d.armor + d.tough) / (1 - dm.epfFor(d, 'melee') / 25)
+}
+const bowDamage = (power: number): number => dm.arrowOutcomes({ ...dm.bowShot(dm.BOW_FULL_TICKS), power })
+  .reduce((mean, outcome) => mean + outcome.raw * outcome.p, 0)
 export function powerOf(items: Item[]): Power {
   items = items.filter(i => (i.count ?? 1) > 0)
   const names = items.map(i => i.name)
   const count = (re: RegExp) => items.filter(i => re.test(i.name)).reduce((n, i) => n + (i.count ?? 1), 0)
-  const weapon = Math.max(1, ...items.map(i => weaponScore(i.name, !!i.enchants)))
+  const weapon = Math.max(1, ...items.map(i => weaponScore(i.name, i.ench)))
   // Лучшее на каждый слот (в рюкзаке может быть два шлема).
   const best: Record<string, Item> = {}
   for (const it of items) {
     const slot = /_(helmet|chestplate|leggings|boots)$/.exec(it.name)?.[1]
     if (!slot) continue
-    const g = gearOf([it])
-    if (!best[slot] || g.armor + g.tough > gearOf([best[slot]]).armor + gearOf([best[slot]]).tough) best[slot] = it
+    if (!best[slot] || armorPower([it]) > armorPower([best[slot]])) best[slot] = it
   }
-  const g = gearOf(Object.values(best))
-  const armor = g.armor + g.tough + Object.values(best).filter(i => i.enchants).length
+  const armor = armorPower(Object.values(best))
   const arrow = /^(arrow|spectral_arrow|tipped_arrow)$/
   const arrows = count(arrow) > 0
-  const rockets = items.some(i => i.name === 'firework_rocket' && fireworkRaw(i.stars) > 0)
-  const ranged = items.some(i => (i.name === 'bow' && arrows) || (i.name === 'crossbow' && (arrows || rockets ||
-    (i.crossbow?.loaded && (arrow.test(i.crossbow.ammo || '') || (i.crossbow.ammo === 'firework' && fireworkRaw(i.crossbow.stars) > 0)))))) ? 4 : 0
+  const rockets = items.some(i => i.name === 'firework_rocket' && dm.fireworkRaw(i.stars) > 0)
+  const ranged = Math.max(0, ...items.map(i => {
+    if (i.name === 'bow' && arrows) return 4 * bowDamage(i.ench?.power || 0) / bowDamage(0)
+    if (i.name !== 'crossbow') return 0
+    const loaded = i.crossbow?.loaded && (arrow.test(i.crossbow.ammo || '') || (i.crossbow.ammo === 'firework' && dm.fireworkRaw(i.crossbow.stars) > 0))
+    if (!arrows && !rockets) return loaded ? 4 : 0
+    return 4 * dm.crossbowChargeTicks() / dm.crossbowChargeTicks(i.ench?.quick_charge || 0)
+  }))
   const extra = (names.includes('shield') ? 3 : 0) + ranged + Math.min(3, count(/^golden_apple$/)) * 2 + count(/^enchanted_golden_apple$/) * 5 +
     Math.min(3, count(/^(splash_potion|potion)$/)) * 1.5 + Math.min(1, count(/^totem_of_undying$/)) * 8 + Math.min(2, count(/^ender_pearl$/)) * 0.5
   return { total: Math.round((weapon + armor * 0.8 + extra) * 10) / 10, weapon, armor }
@@ -68,7 +78,7 @@ const RECIPES: Array<[string, Record<string, number>]> = [
 // 16 бутылок = 7 ур., строка 8 ур. — не хватило).
 export function labReady(items: Item[]): boolean {
   const have = (n: string) => items.filter(i => i.name === n).reduce((k, i) => k + (i.count ?? 1), 0)
-  const target = items.some(i => !i.enchants && /^(stone|copper|iron|golden|diamond|netherite)_(sword|axe)$|^(chainmail|copper|iron|golden|diamond|netherite)_(helmet|chestplate|leggings|boots)$/.test(i.name))
+  const target = items.some(i => !Object.values(i.ench || {}).some(level => level > 0) && /^(stone|copper|iron|golden|diamond|netherite)_(sword|axe)$|^(chainmail|copper|iron|golden|diamond|netherite)_(helmet|chestplate|leggings|boots)$/.test(i.name))
   return target && ((have('enchanted_book') >= 1 && have('experience_bottle') >= 6) || (have('lapis_lazuli') >= 1 && have('experience_bottle') >= 20))
 }
 export function bestCraft(items: Item[]): { item: string; gain: number } | null {
@@ -94,7 +104,8 @@ const FULL_KIT = powerOf(['diamond_helmet', 'diamond_chestplate', 'diamond_leggi
 export const chestMargin = (power: number): number => Math.min(1, Math.max(0.1, 1 - power / FULL_KIT))
 // Своя сила в сшибке — с поправкой на здоровье (S7d, ревью Codex: план одинаков при 1 и 20 хп): на 1 хп от снаряжения
 // остаётся ~0.4 — один-два удара до смерти.
-export const effPower = (s: WorldState): number => amount(s, 'power') * (0.4 + 0.6 * Math.min(1, Math.max(0, (s.health ?? 20) / 20)))
+const healthPower = (power: number, hp: number): number => power * (0.4 + 0.6 * Math.min(1, Math.max(0, hp / 20)))
+export const effPower = (s: WorldState): number => healthPower(amount(s, 'power'), s.health ?? 20)
 // Consumables 1.21.11: regeneration II 100/400 тиков; RegenerationMobEffect: +1 HP каждые 50 >> 1 тиков.
 export const recoveryRegenMs = (name?: string | null): number => name === 'golden_apple' ? 5000 : name === 'enchanted_golden_apple' ? 20000 : 0
 export function recoveryFood(inventory: Record<string, number>, remaining = Infinity): { count: number; nutrition: number; regenMs: number } {
@@ -130,6 +141,7 @@ export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
   const registry = new StrategyRegistry()
   const free = (s: WorldState) => !knows(s, 'enemy_near') && !knows(s, 'deadline')
   const enemy = (s: WorldState) => Number(s.facts.enemy_power?.value ?? amount(s, 'power'))
+  const enemyHp = (s: WorldState, bound: 'mean' | 'hi') => Math.max(0, Number(s.facts['enemy_hp_' + bound]?.value ?? 20))
   const add = (id: string, skill: string, pre: Strategy['preconditions'], eff: Strategy['expectedEffects'], seconds: (s: WorldState) => number,
     risk: (s: WorldState) => number, success: Strategy['successCondition'], extra: Partial<Strategy> = {}) => registry.register({
     id, skill, version: 1, preconditions: pre, expectedEffects: eff, estimateCost: s => seconds(s) * 20, estimateRisk: risk,
@@ -174,8 +186,9 @@ export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
   // Бонуса «засада = +3 к силе» нет (ревью Codex: ожидание само по себе преимущества не даёт, а флаг оставался и после
   // неудачной засады); своя сила — с поправкой на здоровье.
   add('Engage', 'arms.engage', () => true, { facts: { opponent_defeated: true } },
-    s => fightSeconds + (knows(s, 'enemy_near') ? 0 : knows(s, 'enemy_known') ? 10 : 30),
-    s => loseChance(effPower(s), enemy(s)), (_b, a) => knows(a, 'opponent_defeated'),
+    // Время — по среднему оставшемуся HP; риск — по верхней границе, чтобы старое ранение не обещало лёгкий бой.
+    s => fightSeconds * enemyHp(s, 'mean') / 20 + (knows(s, 'enemy_near') ? 0 : knows(s, 'enemy_known') ? 10 : 30),
+    s => loseChance(effPower(s), healthPower(enemy(s), enemyHp(s, 'hi'))), (_b, a) => knows(a, 'opponent_defeated'),
     // Обход и неоконченная сшибка — тоже ход к цели: после срока лута другого пути нет, и «исчерпать» атаку нельзя.
     { progressCondition: () => true, timeoutMs: 180000 })
   return registry

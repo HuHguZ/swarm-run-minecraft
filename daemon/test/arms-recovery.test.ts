@@ -2,18 +2,31 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
 import { runInNewContext } from 'node:vm'
 
 // Исполняем настоящий ArmsEnv, не сетевой bootstrap сцены внизу arms-run.
 const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
 const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
-function fixture({ food = 10, inventory = {}, items = null, eat = null, at = null, interrupted = false }: any = {}) {
+const indexPath = join(__dirname, '../src/index.js')
+const indexSource = readFileSync(indexPath, 'utf8')
+const statusBody = indexSource.slice(indexSource.indexOf('const methods = {'), indexSource.indexOf('const wss ='))
+function fixture({ food = 10, inventory = {}, items = null, eat = null, at = null, interrupted = false, foe = null, bot = null, fight = null }: any = {}) {
   let now = 0
   let health = 3
-  const side: any = { t0: 0, know: { foe: null, areas: [], scouted: new Set(), chests: new Map(), caches: new Map() }, stats: {},
+  const calls: any[] = []
+  const status = bot && runInNewContext(statusBody + '\nmethods.status', {
+    session: { bot, immediate: (fn: any) => fn() }, cfg: {}, require: createRequire(indexPath)
+  })
+  const side: any = { t0: 0, foe: foe?.name, know: { foe: null, areas: [], scouted: new Set(), chests: new Map(), caches: new Map() },
+    stats: { engages: 0, firstEngage: null, powerAtEngage: null, fightEvents: [], fightWhy: {}, fights: 0 },
     async call(method: string, params: any) {
-      if (method === 'status') return { state: { pos: { x: 0, y: 0, z: 0 }, health, food, inventory }, detail: params?.items ? { items } : {} }
-      if (method === 'players') return { detail: { players: [] } }
+      calls.push({ method, params })
+      if (method === 'status') return { state: { pos: { x: 0, y: 0, z: 0 }, health, food, inventory }, detail: status ? await status(params) : params?.items ? { items } : {} }
+      if (method === 'players') return { detail: { players: foe ? [foe] : [] } }
+      if (method === 'armor') return { status: 'done' }
+      if (method === 'fight') return fight ? fight(params) : { status: 'done', detail: { killed: foe.name } }
       if (method === 'eat') {
         if (eat) { food = eat.food; inventory = {}; return { status: 'done', detail: eat } }
         return { status: interrupted ? 'interrupted' : 'done', detail: { ate: null, food } }
@@ -27,9 +40,54 @@ function fixture({ food = 10, inventory = {}, items = null, eat = null, at = nul
     pace: async (ms: number) => { now += ms; if (at) ({ health, food } = at(now, { health, food })) }
   }
   const ArmsEnv = runInNewContext(body + '\nArmsEnv', context)
-  const env = new ArmsEnv(side, { over: false })
-  return { side, now: () => now, observe: () => env.observe(), run: () => env.execute({ skill: 'arms.heal' }, new AbortController().signal) }
+  const env = new ArmsEnv(side, { over: false, roundScope: 'test-round' })
+  return { side, calls, now: () => now, observe: () => env.observe(), run: () => env.execute({ skill: 'arms.heal' }, new AbortController().signal),
+    engage: () => env.execute({ skill: 'arms.engage' }, new AbortController().signal) }
 }
+
+test('P8 status → Recover → Engage: observer и бой читают одну честную оценку без двойного aging', async () => {
+  const co = require('../src/pvp/combat-observe')
+  const { Vec3 } = require('vec3')
+  const bot: any = new EventEmitter()
+  bot._client = new EventEmitter(); bot.inventory = { slots: [] }
+  bot.entity = { id: 1, position: new Vec3(0, 0, 0), onGround: true }
+  const metadata = []
+  Object.defineProperty(metadata, 9, { get() { throw new Error('raw HP соперника запрещено') } })
+  const entity = { id: 7, uuid: 'foe-uuid', username: 'Foe', type: 'player', position: new Vec3(20, 0, 0), equipment: [], metadata }
+  let resumed: any
+  const f = fixture({ bot, food: 18, foe: { name: 'Foe', canSee: true, gear: [], at: entity.position, dist: 20 },
+    at: (now: number) => now >= 4000 ? { health: 4, food: 17 } : { health: 3, food: 18 },
+    fight: (params: any) => {
+      resumed = co.trackFoe(bot, entity, { roundScope: params.roundScope, now: f.now, visible: () => true })
+      return { status: 'done', detail: { killed: 'Foe' } }
+    } })
+  const first = co.trackFoe(bot, entity, { roundScope: 'test-round', now: f.now, visible: () => true })
+  try {
+    first.noteAttack({ min: 14, max: 16, mean: 15, raw: 16 })
+    bot._client.emit('damage_event', { entityId: 7, sourceTypeId: 0, sourceCauseId: 2, sourceDirectId: 2 })
+    first.stop()
+    const before = await f.observe()
+    assert.equal(before.facts.enemy_hp_lo.value, 4)
+    assert.equal(before.facts.enemy_hp_hi.value, 6)
+    assert.equal(before.facts.enemy_hp_lo.source, 'inferred')
+    assert.equal((await f.run()).outcome, 'SUCCESS')
+    const after = await f.observe()
+    assert.equal(after.facts.enemy_hp_lo.value, 4)
+    assert.equal(after.facts.enemy_hp_hi.value, 14)
+    assert.ok(after.facts.enemy_hp_conf.value < before.facts.enemy_hp_conf.value)
+    await f.engage()
+    assert.deepEqual([resumed.hp.snapshot().lo, resumed.hp.snapshot().hi], [4, 14])
+    assert.equal(bot.listenerCount('physicsTick'), 1)
+  } finally { first.stop(); resumed?.stop(); bot.emit('end') }
+})
+
+test('P8 Arms: Engage передаёт scope раунда, сохраняя прежний бюджет боя', async () => {
+  const f = fixture({ foe: { name: 'Foe', canSee: true, gear: [], at: { x: 2, y: 0, z: 0 }, dist: 2 } })
+  await f.engage()
+  const fight = f.calls.find(c => c.method === 'fight')
+  assert.equal(fight.params.roundScope, 'test-round')
+  assert.equal(fight.params.timeoutSeconds, 120)
+})
 
 test('Arms observation: заряженный арбалет из собственного status сохраняет боеприпас', async () => {
   const f = fixture({ inventory: { crossbow: 1 }, items: [{ name: 'crossbow', count: 1, crossbow: { loaded: true, ammo: 'arrow' } }] })

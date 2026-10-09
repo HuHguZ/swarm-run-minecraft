@@ -174,7 +174,7 @@ class ArmsEnv {
   async observe () {
     const side = this.side
     const k = side.know
-    const st = await side.call('status', { items: true }).catch(() => null)
+    const st = await side.call('status', { items: true, foeEstimate: { roundScope: this.round.roundScope, target: side.foe } }).catch(() => null)
     const s = (st && st.state) || {}
     await this.foe()
     const items = Array.isArray(st?.detail?.items) ? st.detail.items : [...Object.entries(s.inventory || {}).map(([name, count]) => ({ name, count: Number(count) })),
@@ -201,6 +201,8 @@ class ArmsEnv {
     const healItems = AG.recoveryFood(w.inventory).count
     w.resources = { power: Math.round(pw.total), unscouted, chests, caches, craft_gain: craft ? Math.max(1, Math.round(craft.gain)) : 0, lab_gain: !k.labDone && AG.labReady(items) ? 2 : 0, heal_items: healItems }
     const now = gameClock.now()
+    const hp = st?.detail?.foeEstimate
+    if (hp) for (const key of ['lo', 'hi', 'mean', 'conf']) w.facts['enemy_hp_' + key] = fact(hp[key], 'inferred', now, hp.conf)
     const recent = k.foe && now - k.foe.at < 30000
     // Его сила — по последнему увиденному (с возрастом наблюдения), а не «его видимое + мой рюкзак» и не «паритет через
     // 30 с» (S7d, ревью Codex: свой тотем в рюкзаке «усиливал» врага 10 → 18). Не видел ни разу — паритет (prior).
@@ -384,7 +386,7 @@ class ArmsEnv {
         }
         const t1 = gameClock.now()
         // arena — весь комплекс (|x|,|z| ≤ 25 от центра, пол y=0): дуэль не уходит по сытости/оружию (arenaStay), стены держат поле.
-        const r = await rpc('fight', { target: side.foe, allowPlayer: true, timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } })
+        const r = await rpc('fight', { target: side.foe, allowPlayer: true, timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', roundScope: this.round.roundScope, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } })
         const d = (r && r.detail) || {}
         if (side.stats.fightEvents.length < 40) side.stats.fightEvents.push({ t: Math.round((t1 - side.t0) / 1000), s: Math.round((gameClock.now() - t1) / 1000), status: r.status, by: r.by && r.by.type, stopped: d.stopped, sw: d.swings, hit: d.landed })
         if (d.killed && String(d.killed).split(', ').includes(side.foe)) side.stats.killed = true
@@ -462,7 +464,7 @@ async function runRound (n, A, B) {
   for (const s of [A, B]) { const st = await s.call('status').catch(() => null); deaths.set(s, st && st.state ? st.state.lastDeathAt || null : null) }
   await cmd(`tick rate ${FIGHT_RATE}`)
   await gameClock.wall.sleep(1500)
-  const round = { over: false, winner: null, why: null }
+  const round = { over: false, winner: null, why: null, roundScope: `arms:${SEED}:${n}:${gameClock.wall.now()}` }
   const t0 = gameClock.now()
   const w0 = gameClock.wall.now()
   const tick0 = gameClock.snapshot()?.ticks ?? null

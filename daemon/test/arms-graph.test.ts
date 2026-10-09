@@ -12,6 +12,57 @@ function state(resources: Record<string, number>, facts: Record<string, any> = {
 }
 const first = (s: any) => plan(armsRegistry(), s, opponentDefeated, { riskPenalty: ARMS_RISK_PENALTY }).steps.map((x: any) => x.id)
 
+test('P7 ench: Sharpness учитывается по уровню; Unbreaking не добавляет урон и не провоцирует худший крафт', () => {
+  const { bestCraft } = require('../src/pvp/arms-graph')
+  const plain = powerOf([{ name: 'iron_sword' }]).total
+  assert.equal(powerOf([{ name: 'iron_sword', ench: { sharpness: 1 } }]).total, 11.2)
+  assert.equal(powerOf([{ name: 'iron_sword', ench: { sharpness: 5 } }]).total, 14.4)
+  assert.equal(powerOf([{ name: 'iron_sword', ench: { unbreaking: 3 } }]).total, plain)
+  assert.equal(bestCraft([{ name: 'iron_sword', ench: { sharpness: 5 } }, { name: 'diamond', count: 2 }, { name: 'stick' }]), null,
+    'обычный алмазный меч не лучше железного Sharpness V')
+})
+
+test('P7 ench: Protection усиливает один лучший предмет слота по EPF; запасные шлемы не складываются', () => {
+  const plain = { name: 'iron_helmet' }
+  const one = { name: 'iron_helmet', ench: { protection: 1 } }
+  const four = { name: 'iron_helmet', ench: { protection: 4 } }
+  assert.ok(powerOf([four]).armor > powerOf([one]).armor)
+  assert.equal(powerOf([four]).armor, 2 / (1 - 4 / 25))
+  assert.equal(powerOf([plain, four]).armor, powerOf([four, plain]).armor)
+  assert.equal(powerOf([plain, one, four]).armor, powerOf([four]).armor)
+  assert.equal(powerOf([{ ...plain, ench: { unbreaking: 3, feather_falling: 4 } }]).armor, powerOf([plain]).armor,
+    'чары без защиты от обычного удара не становятся Protection')
+})
+
+test('P7 ench: Power и Quick Charge усиливают доступную стрельбу, без совместимого снаряда бонуса нет', () => {
+  assert.equal(powerOf([{ name: 'bow', ench: { power: 1 } }, { name: 'arrow' }]).total, 6.8)
+  assert.equal(powerOf([{ name: 'bow', ench: { power: 5 } }, { name: 'arrow' }]).total, 10.5)
+  assert.equal(powerOf([{ name: 'bow', ench: { power: 5 } }, { name: 'firework_rocket', stars: 3 }]).total, 1)
+  assert.equal(powerOf([{ name: 'crossbow', ench: { quick_charge: 1 } }, { name: 'arrow' }]).total, 6)
+  assert.equal(powerOf([{ name: 'crossbow', ench: { quick_charge: 3 } }, { name: 'arrow' }]).total, 11)
+  assert.equal(powerOf([{ name: 'crossbow', ench: { quick_charge: 3 } }]).total, 1)
+  assert.equal(powerOf([{ name: 'crossbow', ench: { quick_charge: 3 }, crossbow: { loaded: true, ammo: 'arrow' } }]).total, 5,
+    'единственный уже заряженный выстрел не использует ускоренную перезарядку')
+})
+
+test('P8: подтверждённо раненый враг меняет цену Recover/Engage, широкая оценка сохраняет риск', () => {
+  const make = (hp?: { lo: number; hi: number; mean: number }) => {
+    const s = state({ power: 35, heal_items: 1 }, { enemy_power: 20, enemy_known: true })
+    s.health = 3; s.hunger = 10; s.inventory = { golden_apple: 1 }
+    if (hp) for (const [key, value] of Object.entries(hp)) s.facts['enemy_hp_' + key] = fact(value, 'inferred', 0)
+    return s
+  }
+  const unknown = make(); const wounded = make({ lo: 2, hi: 4, mean: 3 }); const uncertain = make({ lo: 2, hi: 20, mean: 11 })
+  const engage = armsRegistry().get('Engage')
+  assert.equal(first(unknown)[0], 'Recover')
+  assert.equal(first(wounded)[0], 'Engage', 'преследование слабого соперника выгоднее паузы на лечение')
+  assert.equal(first(uncertain)[0], 'Recover', 'давняя низкая граница не доказывает, что враг до сих пор слаб')
+  assert.ok(engage.estimateCost(wounded) < engage.estimateCost(uncertain))
+  assert.ok(engage.estimateRisk(wounded) < engage.estimateRisk(uncertain))
+  assert.equal(engage.estimateRisk(uncertain), engage.estimateRisk(unknown))
+  assert.equal(engage.preconditions(unknown), true, 'оценка влияет на сравнение, не запрещает бой')
+})
+
 test('гонка: пустой старт — разведка, затем известный сундук; без лута и после срока — атака', () => {
   assert.equal(first(state({ power: 1, unscouted: 6 }, { enemy_power: 1 }))[0], 'ScoutArea', 'враг не виден — паритет на момент наблюдения')
   assert.equal(first(state({ power: 1, unscouted: 6, chests: 1 }, { enemy_power: 1 }))[0], 'LootChest')

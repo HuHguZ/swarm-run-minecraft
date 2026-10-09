@@ -89,4 +89,4 @@ function createLastSeen (bot) {
   }
 }
 
-module.exports = { createLastSeen }
+module.exports = { createLastSeen, seesPlayer }

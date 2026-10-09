@@ -23,6 +23,7 @@ const gameClock = require('./game-clock')
 
 const assess = require('./assess')
 const read = require('./read')
+const { seesPlayer } = require('./pvp/last-seen')
 
 const OFF = 45
 // Урон оружия (атрибут руки, с базовой 1 игрока) — PVP-RESEARCH б.1.
@@ -122,6 +123,32 @@ function install (bot) {
   return T
 }
 
+const counterIds = new WeakMap<object, string>()
+const COUNTERS = ['pops', 'reequips', 'fails', 'fast', 'slow']
+// Read-only telemetry: no new reflex/listener, no reset of the lifetime counters.
+function snapshot (bot) {
+  if (!bot) return null
+  if (!counterIds.has(bot)) counterIds.set(bot, require('node:crypto').randomUUID())
+  const t = bot._ndTotem
+  return { id: counterIds.get(bot), pops: t?.pops ?? 0, reequips: t?.reequips ?? 0,
+    fails: t?.reequipFails ?? 0, fast: t?.fast ?? 0, slow: t?.slow ?? 0, why: { ...t?.why } }
+}
+
+function delta (before, after) {
+  if (!before?.id || before.id !== after?.id) return null
+  const out: any = { why: {} }
+  for (const key of COUNTERS) {
+    if (!Number.isFinite(before[key]) || !Number.isFinite(after[key]) || after[key] < before[key]) return null
+    out[key] = after[key] - before[key]
+  }
+  for (const key of new Set([...Object.keys(before.why || {}), ...Object.keys(after.why || {})])) {
+    const a = before.why?.[key] ?? 0; const b = after.why?.[key] ?? 0
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null
+    if (b > a) out.why[key] = b - a
+  }
+  return out
+}
+
 // Угроза прямо сейчас — нужен ли тотем в левой руке вместо щита.
 // ctx: { entity, maceThreat, hisReadyMs, theirR }
 function wantTotem (bot, ctx: any = {}) {
@@ -132,10 +159,10 @@ function wantTotem (bot, ctx: any = {}) {
   let boom = null
   try {
     const me = bot.entity.position
-    boom = bot.nearestEntity(x => x && x.position && (x.name === 'end_crystal' || x.name === 'tnt' || x.name === 'tnt_minecart') && x.position.distanceTo(me) < 8)
+    boom = bot.nearestEntity(x => x && x.position && (x.name === 'end_crystal' || x.name === 'tnt' || x.name === 'tnt_minecart') && x.position.distanceTo(me) < 8 && seesPlayer(bot, x))
     if (!boom) {
       const id = bot.registry.blocksByName.respawn_anchor.id
-      const anchor = require('./sight').visibleOf(bot, [id], 6, { max: 1, fair: false })[0]
+      const anchor = require('./sight').visibleOf(bot, [id], 6, { max: 1, fair: true })[0]
       if (anchor) boom = anchor
     }
   } catch {}
@@ -149,4 +176,4 @@ function wantTotem (bot, ctx: any = {}) {
   return { yes: false, burst, hp }
 }
 
-module.exports = { install, wantTotem, burstOf, absorption, hotbarTotem, offName, WEAPON }
+module.exports = { install, snapshot, delta, wantTotem, burstOf, absorption, hotbarTotem, offName, WEAPON }

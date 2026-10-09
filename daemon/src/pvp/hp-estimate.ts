@@ -11,7 +11,7 @@ const dm = require('./damage-model')
 const MAX_HP = 20
 // FoodData (javap): saturatedRegenRate 10 — при сытости 20 и насыщении > 0 лечит min(насыщение, 6)/6 хп
 // за 10 тиков; unsaturatedRegenRate 80 — при сытости ≥ 18 1 хп за 80 тиков. Его сытость не видна:
-// верх растёт по быстрой, низ — по медленной (договорённость пользователя 06.10). Вне видимости — так же.
+// верх растёт по быстрой, низ — по медленной. Вне наблюдений низ не растёт: лечение только возможно.
 const REGEN_FAST = 1 / 10
 const REGEN_SLOW = 1 / 80
 // Быстрая регенерация тратит насыщение: FoodData.tick — лечение f = min(насыщение, 6)/6 хп и истощение 6·f, 4
@@ -124,7 +124,7 @@ function createHpEstimate ({ hp = MAX_HP, absorption = 0, maxHp = MAX_HP }: any 
       s.aLo = s.aHi = s.aMean = abs
       s.exact = true
     },
-    tick (dt = 1) {
+    tick (dt = 1, { visible = true }: any = {}) {
       if (!(dt > 0) || s.exact) return
       // Насыщение тратится только на лечение: верх у потолка — лечить нечего, бюджет цел (FoodData.tick лечит при
       // isHurt). Раньше бюджет таял за 6.7 с от начала боя и при полном хп.
@@ -132,11 +132,13 @@ function createHpEstimate ({ hp = MAX_HP, absorption = 0, maxHp = MAX_HP }: any 
       s.satHp -= fast
       const up = fast + (dt - fast / REGEN_FAST) * REGEN_SLOW
       s.hi += up
-      s.lo += dt * REGEN_SLOW
-      s.mean += (up + dt * REGEN_SLOW) / 2
+      const low = visible ? dt * REGEN_SLOW : 0
+      s.lo += low
+      s.mean += (up + low) / 2
       for (const r of s.regen) {
         const n = Math.min(dt, r.ticks) / dm.regenInterval(r.amp)
-        s.lo += n; s.hi += n; s.mean += n
+        if (visible) s.lo += n
+        s.hi += n; s.mean += visible ? n : n / 2
         r.ticks -= dt
       }
       s.regen = s.regen.filter(r => r.ticks > 0)

@@ -6,6 +6,9 @@ const assert = require('node:assert/strict')
 const Vec3 = require('vec3')
 const cr = require('../src/crystal')
 const boom = require('../src/boom')
+const { EventEmitter } = require('node:events')
+const clock = require('../src/game-clock')
+const combat = require('../src/combat')
 
 function duelBot ({ foeAt = new Vec3(4.5, 0, 0.5), inv = null, extra = {} as Record<string, any> }: any = {}) {
   const registry = require('minecraft-data')('1.21.11')
@@ -198,4 +201,169 @@ test('S7d честно: его якорь за стеной (не виден) �
   // Кристалл за стеной отфильтрован восприятием (не «увиден»), а не случайно: счётчик скрытых.
   if (process.env.ND_HONEST_CX !== '0') assert.ok((c.st.hiddenCrystals || 0) > 0, JSON.stringify(c.st))
   c.close()
+})
+
+test('S7d close crystal needs first LOS even inside two blocks; opening the wall reveals it', () => {
+  const fs = require('node:fs'); const path = require('node:path'); const Module = require('node:module')
+  const file = path.join(__dirname, '../src/crystal.ts'); const mod = new Module(file, module)
+  mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file))
+  mod._compile(require('esbuild').transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, file)
+  const { bot, foe } = duelBot({ inv: ['diamond_sword'] })
+  const open = bot.blockAt; let wall = true
+  bot.blockAt = p => wall && Math.floor(p.x) === 1
+    ? { name: 'obsidian', boundingBox: 'block', position: p.floored(), shapes: [[0, 0, 0, 1, 1, 1]] }
+    : open(p)
+  bot.world.raycast = (eye, dir, len) => {
+    const hit = require('../src/pick').blockOnRay(bot, eye, dir, len)
+    return hit && { position: hit.pos, intersect: eye.plus(dir.scaled(hit.t)) }
+  }
+  const cry = crystalAt(bot, 9, 2.2, .5); cry.position.y = 1
+  assert.ok(cry.position.distanceTo(bot.entity.position.offset(0, 1.62, 0)) < 2)
+  const c = mod.exports.create(bot, { enemy: () => foe, foeHp: () => 20 })
+  try {
+    assert.equal(c.plan({}), null, 'a never-seen crystal cannot become a threat through the wall')
+    assert.equal(c.st.seenCrystals || 0, 0)
+    assert.ok(c.st.hiddenCrystals > 0)
+    wall = false
+    c.plan({})
+    assert.equal(c.st.seenCrystals, 1, 'visible nearby crystal still enters perception')
+  } finally { c.close() }
+})
+
+const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+async function raisedShield (confirmedTicks = 5) {
+  const game = clock.activate(new clock.GameClock({ manual: true, epoch: 1000 }))
+  const { bot, foe } = duelBot({ inv: ['diamond_sword'], extra: { '2,0,0': 'respawn_anchor' } })
+  const emitter = new EventEmitter()
+  bot.on = emitter.on.bind(emitter); bot.removeListener = emitter.removeListener.bind(emitter)
+  bot._client = new EventEmitter()
+  bot.inventory.slots[45] = { name: 'shield', count: 1 }
+  bot.heldItem = { name: 'diamond_sword', count: 1 }; bot.quickBarSlot = 0
+  bot.entity.yaw = -Math.PI / 2
+  let raises = 0; let lowers = 0
+  const key = bot.registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')
+  const metadata = flags => {
+    bot.entity.metadata[key] = flags
+    bot._client.emit('entity_metadata', { entityId: 1, metadata: [{ key, value: flags }] })
+  }
+  bot.activateItem = () => { raises++ }
+  bot.deactivateItem = () => { lowers++; metadata(0) }
+  bot.look = async (yaw, pitch) => { bot.entity.yaw = yaw; bot.entity.pitch = pitch }
+  game.attach(bot)
+  const age = n => bot._client.emit('update_time', { age: BigInt(n) })
+  age(1000)
+  const ctl = { aborted: false, onAbort: [] }
+  const guard = combat.makeShield({ bot }, ctl, { shield: 'always' })
+  assert.equal(await guard.wear(), true)
+  const pending = guard.raise(true)
+  metadata(3); age(1001); game.advanceTicks(1); await turn(); await pending
+  age(1001 + confirmedTicks)
+  const c = cr.create(bot, { enemy: () => foe, guard })
+  c._onBlock(null, anchorBlock(2, 0))
+  return { bot, foe, c, ctl, guard, game, age, raises: () => raises, lowers: () => lowers,
+    close () { c.close(); guard.close(); game.dispose() } }
+}
+
+test('готовый native щит выбирается против близкого якоря без повторной задержки подъёма', async () => {
+  const a = await raisedShield()
+  try {
+    assert.equal(a.guard.blocking(), true)
+    const plan = a.c.plan()
+    assert.equal(plan?.kind, 'shield', JSON.stringify(plan))
+    assert.equal(plan.ticks, 0, 'источник уже перед готовым щитом')
+    assert.equal(plan.exp, 0)
+  } finally { a.close() }
+})
+
+test('готовый щит спиной к якорю учитывает разворот, а незавершённый подъём — оставшиеся native тики', async () => {
+  const a = await raisedShield(3)
+  try {
+    const rising = a.c.plan()
+    assert.equal(rising?.kind, 'shield')
+    assert.equal(rising.ticks, 3, 'два native тика до блока и один на команду')
+    a.age(1006); a.bot.entity.yaw = Math.PI / 2
+    const turning = a.c.plan()
+    assert.equal(turning?.kind, 'shield')
+    assert.equal(turning.ticks, 1, 'готовность не устраняет время разворота')
+  } finally { a.close() }
+})
+
+test('подтверждённый подъём без пяти native тиков ещё не считается готовой защитой якоря', async () => {
+  const a = await raisedShield(0)
+  try {
+    a.game.advanceTicks(30)
+    assert.equal(a.guard.blocking(), false, 'wall time не подтверждает тики сервера')
+    assert.notEqual(a.c.plan()?.kind, 'shield')
+    a.age(1006)
+    assert.equal(a.c.plan()?.kind, 'shield')
+    a.bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:shield', cooldownTicks: 100 })
+    assert.notEqual(a.c.plan()?.kind, 'shield', 'выбитый щит не наследует готовность прошлого use')
+  } finally { a.close() }
+})
+
+test('исполнение защиты сохраняет уже поднятый щит и освобождает его при отмене', async () => {
+  const a = await raisedShield()
+  try {
+    const plan = { kind: 'shield', yaw: -Math.PI / 2, threats: [{ cell: new Vec3(2, 0, 0), c: { position: new Vec3(2.5, .5, .5) }, t: { me: 10 } }] }
+    const pending = a.c.run(a.ctl, plan)
+    await turn()
+    assert.equal(a.raises(), 1, 'повторный activateItem не перезапускает готовый use')
+    assert.equal(a.lowers(), 0)
+    a.ctl.aborted = true; a.game.advanceTicks(1)
+    await pending
+    assert.equal(a.lowers(), 1)
+    assert.equal(a.guard.blocking(), false)
+  } finally { a.ctl.aborted = true; a.game.advanceTicks(40); a.close() }
+})
+
+test('скрытое изменение уже увиденного якоря не выдаёт заряд; повторный взгляд обновляет его', () => {
+  const extra = { '3,0,0': 'respawn_anchor', charges: 0 }
+  const { bot, foe } = duelBot({ inv: ['diamond_sword'], extra })
+  const original = bot.blockAt
+  let visible = true
+  bot.blockAt = p => !visible && Math.floor(p.x) === 1 && p.y >= 0 && p.y < 4
+    ? { name: 'obsidian', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]], getProperties: () => ({}) }
+    : original(p)
+  const c = cr.create(bot, { enemy: () => foe })
+  try {
+    c._onBlock(null, anchorBlock(3, 0))
+    assert.equal(c.engaged(), true)
+    assert.notEqual(c.plan()?.kind, 'anchorPop', 'увидели пустой якорь')
+    visible = false; extra.charges = 1
+    c._onBlock(anchorBlock(3, 0), anchorBlock(3, 0))
+    // Убираем заслон только из расчёта урона/прицела: память состояния должна сама
+    // запрещать новый charge, даже если запоздалый blockUpdate уже попал в мир.
+    const pick = require('../src/pick')
+    const seen = pick.blockSeen
+    try {
+      pick.blockSeen = () => false
+      visible = true
+      assert.notEqual(c.plan()?.kind, 'anchorPop', 'скрытый packet не превращается в известный заряд')
+    } finally { pick.blockSeen = seen }
+    c._onBlock(anchorBlock(3, 0), anchorBlock(3, 0))
+    assert.equal(c.plan()?.kind, 'anchorPop', 'новый заряд виден при повторном взгляде')
+  } finally { c.close() }
+})
+
+test('скрытый blockUpdate не сообщает исчезновение якоря; пустое место нужно увидеть', () => {
+  const game = clock.activate(new clock.GameClock({ manual: true, epoch: 100000 }))
+  const { bot, foe } = duelBot({ inv: ['diamond_sword'], extra: { '3,0,0': 'respawn_anchor' } })
+  const original = bot.blockAt
+  let wall = false; let removed = false
+  bot.blockAt = p => {
+    const cell = p.floored()
+    if (wall && cell.x === 1 && cell.y >= 0 && cell.y < 4) return { name: 'obsidian', position: cell, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+    if (removed && cell.equals(new Vec3(3, 0, 0))) return { name: 'air', position: cell, boundingBox: 'empty', shapes: [] }
+    return original(p)
+  }
+  const c = cr.create(bot, { enemy: () => foe })
+  try {
+    c._onBlock(null, anchorBlock(3, 0))
+    assert.equal(c.engaged(), true)
+    wall = true; removed = true
+    c._onBlock(anchorBlock(3, 0), bot.blockAt(new Vec3(3, 0, 0)))
+    assert.equal(c.engaged(), true, 'якорь помним, хотя скрытый packet удалил его из мира')
+    wall = false; game.advanceTicks(5)
+    assert.equal(c.engaged(), false, 'увиденное пустое место удаляет старую угрозу')
+  } finally { c.close(); game.dispose() }
 })

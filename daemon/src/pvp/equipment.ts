@@ -51,18 +51,24 @@ const holdItem = async (item) => {
     } catch { return false } finally { ctx.switched(before) }
   }
 
-const useAt = async (yaw, pitch, { holdMs = 0 }: any = {}) => {
+const useAt = async (yaw, pitch, { holdMs = 0, item = ctx.bot.heldItem }: any = {}) => {
+    if (!item) return false
+    const selected = structuredClone(item)
     ctx.aim = 'point'
     ctx.aimPoint = { yaw, pitch }
-    await ctx.bot.look(yaw, pitch, true).catch(() => {})
-    await ctx.sleep(60)
-    ctx.bot.activateItem()
-    if (holdMs) {
-      await ctx.sleep(holdMs)
-      ctx.bot.deactivateItem()
-    }
-    await ctx.sleep(60)
-    ctx.aim = 'target'
+    try {
+      await ctx.bot.look(yaw, pitch, true).catch(() => {})
+      await ctx.sleep(60)
+      // Пока ждали прицел, рефлекс/обновление рюкзака могли сменить руку.
+      if (!require('../invsync').sameStack(ctx.bot, ctx.bot.heldItem, selected)) return false
+      ctx.bot.activateItem()
+      if (holdMs) {
+        await ctx.sleep(holdMs)
+        ctx.bot.deactivateItem()
+      }
+      await ctx.sleep(60)
+      return true
+    } finally { ctx.aim = 'target' }
   }
 
 const foeGrounded = () => { try { return ctx.edges.support(ctx.bot, ctx.entity.position, new Map()).drop <= 0.05 } catch { return true } }
