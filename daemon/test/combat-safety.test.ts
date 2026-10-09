@@ -188,3 +188,9 @@ test('ND_FIGHT_COST: крипер, ведьма, утопленник или т�
     assert.equal(evaluate({ ...base, expected: 3, threats: [{ name: 'zombie', hit: 6, distance: 3 }] }).action, 'leave')
   } finally { if (was === undefined) delete process.env.ND_FIGHT_COST; else process.env.ND_FIGHT_COST = was }
 })
+test('полное хп при сытости 17 — отдых окончен, а не «сытость не восстановилась»', async () => {
+  const b = body(); b.health = 20; b.food = 17
+  const r = await recover({ bot: b }, { aborted: false }, { safe: () => true, eat: async () => ({ note: 'не поел' }) })
+  assert.equal(r.rested, true)
+  assert.equal(r.why, undefined)
+})

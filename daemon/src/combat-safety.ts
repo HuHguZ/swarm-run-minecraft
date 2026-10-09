@@ -187,7 +187,9 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat }: 
   let ate = 0
   let why = null
   let hazard = false
-  const healthy = () => (bot.health ?? 0) >= until && (bot.food ?? 0) >= 18
+  // Полное хп — здоров и при сытости 17 (sr-i-2 10.10: хп 20, еда 17 — «сытость для лечения не восстановилась» 6 заходов
+  // подряд, бой с ифритами без единого выстрела).
+  const healthy = () => (bot.health ?? 0) >= until && ((bot.food ?? 0) >= 18 || (bot.health ?? 0) >= 20)
   while (!ctl.aborted && (bot.health ?? 0) > 0) {
     if (!safeGround(bot)) { hazard = true; why = 'опасность под ногами: прерываю лечение'; break }
     if (!safe || !safe()) { why = 'небезопасно лечиться: контакт или линия огня'; break }
@@ -195,9 +197,10 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat }: 
     if (gameClock.now() - start >= maxMs) { why = 'время восстановления закончилось'; break }
     if ((bot.food ?? 0) < 20) {
       const before = bot.food
-      try { await consume() } catch {}
+      let r = null
+      try { r = await consume() } catch {}
       if (bot.food > before) ate++
-      else if (bot.food < 18) { why = 'сытость для лечения не восстановилась'; break }
+      else if (bot.food < 18) { why = `сытость для лечения не восстановилась${r && (r.error || r.note) ? ': ' + (r.error || r.note) : ''}`; break }
     }
     await require('./movement').sleep(250)
   }
