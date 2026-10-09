@@ -1,4 +1,4 @@
-import { candidates, threatLevel, hasObservedTarget, canRepelLavaAttacker, deadEnd, type ActionId, type Candidate, type TacticalState } from './state'
+import { candidates, frWorth, threatLevel, hasObservedTarget, canRepelLavaAttacker, deadEnd, type ActionId, type Candidate, type TacticalState } from './state'
 
 export type TacticalNodeId = ActionId | 'Strategic' | 'EmergencyController'
 export interface TacticalTransition {
@@ -21,7 +21,7 @@ for (const action of actions) {
   edge(action, 'PearlEscape', state => (state.lava || !!state.lavaAhead) && !!state.pearlEscape)
   edge(action, 'WebBoatEscape', state => state.lava && !!state.webBoatEscape)
   edge(action, 'BoatLavaHop', state => state.lava && !!state.boatLavaHop)
-  edge(action, 'UseFireResistance', state => (state.lava || state.burning) && !state.fireResistance && !!state.fireResistancePotion)
+  edge(action, 'UseFireResistance', state => frWorth(state) && !state.fireResistance && !!state.fireResistancePotion)
   edge(action, 'ClimbOut', state => (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
   edge(action, 'LastStand', state => state.contact && deadEnd(state) && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
   for (const immediate of ['Dodge', 'UseWater'] as const) edge(action, immediate, state => immediate === 'Dodge' ? state.explosion : state.burning && state.water)

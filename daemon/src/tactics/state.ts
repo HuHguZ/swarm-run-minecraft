@@ -129,6 +129,8 @@ export function sustainableFight(verdict: { action?: string; cheap?: boolean; tr
 export const creeperWalksUp = (state: TacticalState): boolean =>
   state.enemies.some(enemy => enemy.threatening && enemy.kind === 'creeper' && enemy.distance <= 12)
 
+export const frWorth = (state: TacticalState): boolean => state.lava || state.burning && state.health <= 10
+
 export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.health <= 0) return 0
   if (state.embedded || state.emergencyController || state.dangerousFall || state.lavaAhead || state.lava && !state.fireResistance || state.explosion) return 4
@@ -199,7 +201,8 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('FlightEscape', 172, 'loaded safe landing with elytra and rockets', (state.lava || !!state.lavaAhead) && !!state.flightEscape)
   add('PearlEscape', 166, 'safe pearl landing and enough health', (state.lava || !!state.lavaAhead) && !!state.pearlEscape)
   add('WebBoatEscape', 160, 'cobweb, two wall supports and a boat', state.lava && !!state.webBoatEscape)
-  add('UseFireResistance', 156, 'available fire resistance before climbing', (state.lava || state.burning) && !state.fireResistance && !!state.fireResistancePotion)
+  // Горение без лавы при 11+ хп — секунды по 1 хп, а зелье — на бой у спавнера (sr-i-3 10.10: все 3 выпиты до боя, смерть в огне).
+  add('UseFireResistance', 156, 'available fire resistance before climbing', frWorth(state) && !state.fireResistance && !!state.fireResistancePotion)
   add('BoatLavaHop', 154, 'existing expendable boats and a visible collision-free lava route', state.lava && !!state.boatLavaHop)
   add('ClimbOut', 140, 'fire resistant swimming or visible wall steps', (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
   add('Surface', 148, 'air running out under water', !!state.drowning && !state.dangerousFall)
