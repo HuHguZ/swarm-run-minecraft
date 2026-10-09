@@ -35,7 +35,7 @@ function fixture({ food = 10, inventory = {}, items = null, eat = null, at = nul
     }
   }
   const { emptyWorld, fact } = require('../src/core/world-state')
-  const context = { AG: require('../src/pvp/arms-graph'), emptyWorld, fact, LOOT_MS: 60000, X: 0, Y: 0, Z: 0, L: { spawns: [{}] }, W: (p: any) => p,
+  const context = { AG: require('../src/pvp/arms-graph'), Loot: require('../src/pvp/arms-loot'), LOOT_PRIOR: [], emptyWorld, fact, LOOT_MS: 60000, X: 0, Y: 0, Z: 0, L: { spawns: [{}] }, W: (p: any) => p,
     every: () => null, gameClock: { now: () => now, clearInterval() {} },
     pace: async (ms: number) => { now += ms; if (at) ({ health, food } = at(now, { health, food })) }
   }

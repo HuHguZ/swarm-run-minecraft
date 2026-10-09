@@ -151,3 +151,13 @@ test('farm stop requests read only ND_SERVER_LOG and never the user client log',
     assert.deepEqual(reads, serverLog ? [serverLog] : [])
   }
 })
+
+test('ROUND keeps support-dig intent and outcomes, weighting time by confirmed blocks', () => {
+  const rows = [
+    { n: 2, ok: 1, failed: 1, pending: 0, unconfirmed: 0, ms: 100 },
+    { n: 4, ok: 3, failed: 0, pending: 1, unconfirmed: 0, ms: 300 }
+  ]
+  const report = metrics.roundDetail(rows.map(row => ({ blockLog: { supportDig: { 'perch-descent': row } } })))
+  assert.deepEqual(report.blockLog.supportDig['perch-descent'], { n: 6, ok: 4, failed: 1, pending: 1, unconfirmed: 0, ms: 250 })
+  assert.deepEqual(report.segments.map(row => row.blockLog.supportDig['perch-descent']), rows)
+})

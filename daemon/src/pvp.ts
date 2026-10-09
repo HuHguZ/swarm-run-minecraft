@@ -1824,7 +1824,17 @@ const pvpSkills = {
         // Учёт блоков (block-log): что ставит/ломает ветка кристаллов — по виду плана.
         const CXT = { obby: 'обсидиан под кристалл', surround: 'обсидиан вокруг ног', wall: 'заслон от взрыва (блок между)', cover: 'укрытие от взрыва', anchor: 'якорь у его ног', place: 'кристалл', 'place-hit': 'кристалл', 'place-shoot': 'кристалл' }
         bot._ndBlockTag = CXT[ca.kind] ? { what: CXT[ca.kind], at: gameClock.wall.now() } : null
-        try { rc = await cx.run(ctl, ca, { stepSafe: dir => stepSafe(bot, dir), stop: () => FIX && maceNow() }) } catch (e) { rc = { note: 'кристаллы: ' + e.message } } finally { bot._ndBlockTag = null }
+        const cxCtx = { stepSafe: dir => stepSafe(bot, dir), stop: () => FIX && maceNow(), reactMs: style.reactMs }
+        try {
+          rc = await cx.run(ctl, ca, cxCtx)
+          if (rc?.defense && !ctl.aborted && !cxCtx.stop()) {
+            const defense = rc.defense
+            const eatNote = rc.note
+            bot._ndBlockTag = CXT[defense.kind] ? { what: CXT[defense.kind], at: gameClock.wall.now() } : null
+            rc = await cx.run(ctl, defense, cxCtx)
+            rc.note = [eatNote, rc.note].filter(Boolean).join('; ')
+          }
+        } catch (e) { rc = { note: 'кристаллы: ' + e.message } } finally { bot._ndBlockTag = null }
         aim = 'target'
         clear()
         switched(beforeC)

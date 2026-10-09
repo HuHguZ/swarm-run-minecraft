@@ -93,3 +93,59 @@ test('копка самого pathfinder (кадры только из node_modu
   const bl = require('../src/pvp/block-log')
   assert.equal(bl.tagOf('Error\n at x\n at Pathfinder.monitor (C:/p/node_modules/mineflayer-pathfinder/index.js:1:1)', null), 'путь (копает pathfinder)')
 })
+
+test('подкоп опоры: намерение, незавершённая попытка и подтверждённый слом раздельны', async () => {
+  const { bot, world } = fakeBot()
+  const pos = new Vec3(0, 63, 0)
+  world.set('0,63,0', 'stone')
+  let finish
+  bot.dig = async () => { await new Promise(resolve => { finish = resolve }); world.delete('0,63,0') }
+  const log = require('../src/pvp/block-log').install(bot)
+  bot._ndBlockTag = { what: 'спуск по своей опоре', intent: 'perch-descent', cell: pos, at: gameClock.wall.now() }
+  const work = bot.dig(bot.blockAt(pos))
+  const during = log.report()
+  assert.ok(during, 'pending dig must be reported before completion')
+  assert.deepEqual(during.supportDig['perch-descent'], { n: 1, ok: 0, failed: 0, pending: 1, unconfirmed: 0, ms: null })
+  assert.equal(during.dig['спуск по своей опоре'].pending, 1)
+  finish(); await work
+  const { ms, ...counts } = log.report().supportDig['perch-descent']
+  assert.deepEqual(counts, { n: 1, ok: 1, failed: 0, pending: 0, unconfirmed: 0 })
+  assert.ok(Number.isFinite(ms) && ms >= 0)
+  assert.equal(during.supportDig['perch-descent'].pending, 1, 'report must be a snapshot')
+  assert.equal(log.report().errors.ownSupport, 1, 'legacy field remains an attempt count')
+  log.close()
+})
+
+test('отмена и неизвестная клетка после копки не считаются подтверждённым разбором опоры', async () => {
+  for (const mode of ['abort', 'unloaded']) {
+    const { bot, world } = fakeBot()
+    world.set('0,63,0', 'stone')
+    const block = bot.blockAt(new Vec3(0, 63, 0))
+    bot.dig = async () => {
+      if (mode === 'abort') throw new Error('Digging aborted')
+      bot.blockAt = () => null
+    }
+    const log = require('../src/pvp/block-log').install(bot)
+    if (mode === 'abort') await assert.rejects(bot.dig(block), /aborted/)
+    else await bot.dig(block)
+    const report = log.report()
+    assert.deepEqual(report.supportDig.unclassified, { n: 1, ok: 0, failed: mode === 'abort' ? 1 : 0, pending: 0, unconfirmed: mode === 'unloaded' ? 1 : 0, ms: null })
+    assert.equal(Object.values<any>(report.dig)[0].ok, 0)
+    log.close()
+  }
+})
+
+test('метка намеренного спуска ограничена клеткой; копка в стороне не подкоп своей опоры', async () => {
+  const { bot, world } = fakeBot()
+  const log = require('../src/pvp/block-log').install(bot)
+  bot._ndBlockTag = { what: 'спуск по своей опоре', intent: 'perch-descent', cell: new Vec3(9, 63, 0), at: gameClock.wall.now() }
+  world.set('0,63,0', 'stone'); world.set('1,63,0', 'stone')
+  await bot.dig(bot.blockAt(new Vec3(0, 63, 0)))
+  await bot.dig(bot.blockAt(new Vec3(1, 63, 0)))
+  const report = log.report()
+  assert.equal(report.supportDig.unclassified.n, 1)
+  assert.equal(report.supportDig['perch-descent'], undefined)
+  assert.equal(report.dig['спуск по своей опоре'], undefined)
+  assert.equal(Object.values<any>(report.dig).reduce((n, row) => n + row.ok, 0), 2)
+  log.close()
+})

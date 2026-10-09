@@ -98,6 +98,10 @@ export function bestCraft(items: Item[]): { item: string; gain: number } | null 
 // ---------------------------------------------------------------- граф
 // P(проиграть сшибку) по разнице сил: логистика с масштабом 4 (одна броня-тир ≈ 4 очка).
 export const loseChance = (mine: number, his: number): number => Math.min(0.98, Math.max(0.02, 1 / (1 + Math.exp((mine - his) / 4))))
+// Встреча до лута и бой после лута — условные ветви. Planner уже оплачивает второй Engage:
+// добавляем только разницу риска, а не ещё одну гарантированную сшибку. Не калиброванная вероятность.
+export const lootRiskIncrement = (before: number, after: number, exposure: number): number =>
+  Math.max(0, 0.01 + 0.99 * (exposure * before + (1 - exposure) * after) - after)
 // Предельная польза сундука (S7d, ревью Codex: «сундук = +4» без предела — полный алмаз планировал ещё три сундука
 // против равного): ожидаемая прибавка тает по мере того, как снаряжение подходит к полному боевому набору.
 const FULL_KIT = powerOf(['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots', 'diamond_sword', 'shield', 'totem_of_undying'].map(name => ({ name }))).total
@@ -134,27 +138,41 @@ function recoveryEffect(s: WorldState) {
   const regen = eat ? Math.min(15000, food.regenMs) / 1250 : 0
   return { health: s.health + Math.min(missing, natural + regen), hunger: Math.max(0, hunger - natural * 2), resources: { heal_items: eat ? -1 : 0 } }
 }
-export interface ArmsOptions { chestValue?: number; fightSeconds?: number }
+export interface ArmsOptions { fightSeconds?: number }
 export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
-  const chestValue = options.chestValue ?? 4
   const fightSeconds = options.fightSeconds ?? 40
   const registry = new StrategyRegistry()
   const free = (s: WorldState) => !knows(s, 'enemy_near') && !knows(s, 'deadline')
   const enemy = (s: WorldState) => Number(s.facts.enemy_power?.value ?? amount(s, 'power'))
   const enemyHp = (s: WorldState, bound: 'mean' | 'hi') => Math.max(0, Number(s.facts['enemy_hp_' + bound]?.value ?? 20))
+  const fightRisk = (s: WorldState, power = amount(s, 'power')) => loseChance(healthPower(power, s.health ?? 20), healthPower(enemy(s), enemyHp(s, 'hi')))
+  const number = (s: WorldState, key: string, fallback = 0) => Number(s.facts[key]?.value ?? fallback)
+  const lootRisk = (s: WorldState) => s.facts.loot_exposure ? lootRiskIncrement(fightRisk(s),
+    fightRisk(s, amount(s, 'power') + number(s, 'loot_gain')), number(s, 'loot_exposure')) : number(s, 'loot_risk')
+  const forecast = (s: WorldState) => ({ loot_forecast: true, loot_gain: number(s, 'loot_prior_gain'),
+    loot_cost_ticks: 200, loot_exposure: 0.5 })
   const add = (id: string, skill: string, pre: Strategy['preconditions'], eff: Strategy['expectedEffects'], seconds: (s: WorldState) => number,
     risk: (s: WorldState) => number, success: Strategy['successCondition'], extra: Partial<Strategy> = {}) => registry.register({
     id, skill, version: 1, preconditions: pre, expectedEffects: eff, estimateCost: s => seconds(s) * 20, estimateRisk: risk,
     timeoutMs: 90000, successCondition: success, command: () => ({ skill, strategy: id }), ...extra
   })
   add('ScoutArea', 'arms.scout', s => free(s) && amount(s, 'unscouted') > 0 && !amount(s, 'chests') && !amount(s, 'caches'),
-    { resources: { unscouted: -1, chests: 1 } }, () => 15, () => 0.01,
+    s => ({ resources: { unscouted: -1, chests: 1 }, facts: forecast(s) }), () => 15, () => 0.01,
     (b, a) => amount(a, 'unscouted') < amount(b, 'unscouted') || amount(a, 'chests') > amount(b, 'chests'))
-  add('LootChest', 'arms.loot', s => free(s) && amount(s, 'chests') > 0,
-    s => ({ resources: { chests: -1, power: Math.round(chestValue * chestMargin(amount(s, 'power')) * 10) / 10 } }), () => 10, () => 0.01,
-    (b, a) => amount(a, 'chests') < amount(b, 'chests') || amount(a, 'power') > amount(b, 'power'))
+  add('LootChest', 'arms.loot', s => !knows(s, 'loot_projection_used') &&
+    (!!s.facts.loot_target_id?.value || knows(s, 'loot_forecast')),
+    s => ({ resources: { chests: -1, power: number(s, 'loot_gain') }, facts: { loot_projection_used: true } }),
+    s => number(s, 'loot_cost_ticks') / 20, lootRisk,
+    (b, a) => amount(a, 'loot_completed') > amount(b, 'loot_completed'), {
+      travelTicks: s => number(s, 'loot_travel_ticks'), modelCost: true,
+      progressCondition: (b, a) => amount(a, 'loot_progress') > amount(b, 'loot_progress'),
+      retryCondition: (b, a) => b.facts.loot_target_id?.value !== a.facts.loot_target_id?.value ||
+        b.facts.loot_evidence?.value !== a.facts.loot_evidence?.value,
+      command: s => ({ skill: 'arms.loot', strategy: 'LootChest', params: { chestId: s.facts.loot_target_id?.value,
+        roundScope: s.facts.loot_round_scope?.value, quoteAt: s.facts.loot_quote_at?.value } })
+    })
   add('OpenCache', 'arms.cache', s => free(s) && amount(s, 'caches') > 0,
-    { resources: { caches: -1, chests: 1 } }, () => 12, () => 0.02,
+    s => ({ resources: { caches: -1, chests: 1 }, facts: forecast(s) }), () => 12, () => 0.02,
     (b, a) => amount(a, 'caches') < amount(b, 'caches') || amount(a, 'chests') > amount(b, 'chests'))
   add('CraftUpgrade', 'arms.craft', s => free(s) && amount(s, 'craft_gain') > 0,
     s => ({ resources: { craft_gain: -amount(s, 'craft_gain'), power: amount(s, 'craft_gain') } }), () => 8, () => 0.01,
@@ -188,7 +206,7 @@ export function armsRegistry(options: ArmsOptions = {}): StrategyRegistry {
   add('Engage', 'arms.engage', () => true, { facts: { opponent_defeated: true } },
     // Время — по среднему оставшемуся HP; риск — по верхней границе, чтобы старое ранение не обещало лёгкий бой.
     s => fightSeconds * enemyHp(s, 'mean') / 20 + (knows(s, 'enemy_near') ? 0 : knows(s, 'enemy_known') ? 10 : 30),
-    s => loseChance(effPower(s), healthPower(enemy(s), enemyHp(s, 'hi'))), (_b, a) => knows(a, 'opponent_defeated'),
+    s => fightRisk(s), (_b, a) => knows(a, 'opponent_defeated'),
     // Обход и неоконченная сшибка — тоже ход к цели: после срока лута другого пути нет, и «исчерпать» атаку нельзя.
     { progressCondition: () => true, timeoutMs: 180000 })
   return registry

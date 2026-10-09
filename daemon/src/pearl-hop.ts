@@ -253,7 +253,8 @@ function pearlDamage (bot) {
   }
   epf = Math.min(20, epf)
   let dmg = PEARL_DMG * (1 - epf / 25)
-  const res: any = bot.entity && bot.entity.effects && (Object.values(bot.entity.effects) as any[]).find((e : any) => e && (e.id === 11 || e.name === 'resistance'))
+  const effect = bot.registry?.effectsByName?.resistance || bot.registry?.effectsByName?.Resistance
+  const res = effect && bot.entity?.effects?.[effect.id]
   if (res) dmg *= Math.max(0, 1 - 0.2 * ((res.amplifier || 0) + 1))
   return Math.round(dmg * 100) / 100
 }

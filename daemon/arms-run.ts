@@ -20,6 +20,8 @@ const AL = require('./arms-layout')
 const { StrategicDirector } = require('./src/core/strategy')
 const { emptyWorld, fact } = require('./src/core/world-state')
 const AG = require('./src/pvp/arms-graph')
+const Loot = require('./src/pvp/arms-loot')
+const LOOT_PRIOR = Loot.sampleItems(AL.publicLootSamples(), AL.ROCKET3)
 
 const WS_A = process.env.ND_WS || process.env.ARMS_A
 const SLOT = Number(String(WS_A || '').split(':').pop()) - 8800
@@ -152,7 +154,16 @@ class ArmsEnv {
       for (const p of (res && res.detail && res.detail.found) || []) {
         const rel = { x: p.x - X, y: p.y - Y, z: p.z - Z }
         if (Math.max(Math.abs(rel.x), Math.abs(rel.z)) > L.half) continue
-        if (block === 'chest') { if (!k.chests.has(key(p))) k.chests.set(key(p), { ...p, looted: false }) }
+        if (block === 'chest') {
+          const id = key(p)
+          if (!k.chests.has(id)) k.chests.set(id, { ...p, id, opened: false, looted: false, taken: 0, contents: null, attempt: null })
+          const chest = k.chests.get(id)
+          if (from && chest.seenFrom && Loot.cellKey(from) !== Loot.cellKey(chest.seenFrom)) {
+            chest.evidenceRevision = (chest.evidenceRevision || 0) + 1
+            chest.attempt = null
+          }
+          Object.assign(chest, { seenAt: gameClock.now(), seenFrom: from && { ...from } })
+        }
         else if (!k.caches.has(key(p))) k.caches.set(key(p), { ...p, block, opened: false, from })
       }
     }
@@ -163,12 +174,22 @@ class ArmsEnv {
     const r = await this.side.call('players', { radius: 48 }).catch(() => null)
     const p = ((r && r.detail && r.detail.players) || []).find(q => q.name === this.side.foe)
     const k = this.side.know
-    if (p && p.canSee) {
-      k.foe = { at: gameClock.now(), pos: p.at, dist: p.dist, power: AG.visiblePower(p.gear || []), myPowerAt: k.power || 1 }
+    if (p && p.canSee && p.at) {
+      const previous = k.foe?.pos && gameClock.now() > k.foe.at ? { at: k.foe.at, pos: { ...k.foe.pos } } : k.foe?.previous
+      k.foe = { at: gameClock.now(), pos: { ...p.at }, previous, dist: p.dist, power: AG.visiblePower(p.gear || []), myPowerAt: k.power || 1 }
       if (p.dist < 12) k.nearUntil = gameClock.now() + 4000
       if (p.dist < 4.5) k.contactUntil = gameClock.now() + 2000
     }
     return k.foe
+  }
+
+  lootQuote (state, chest) {
+    const k = this.side.know
+    const times = [...(k.interactionTicks || [])].sort((a, b) => a - b)
+    return Loot.quoteLoot({ state, owned: k.items || [], storage: k.storage || null, chest, prior: LOOT_PRIOR,
+      priorGain: k.lootPrior, traversals: k.traversals || [], foe: k.foe, roundScope: this.round.roundScope,
+      now: gameClock.now(), interactionTicks: times.length ? times[Math.floor(times.length / 2)] : 200,
+      engage: AG.armsRegistry().get('Engage') })
   }
 
   async observe () {
@@ -180,6 +201,9 @@ class ArmsEnv {
     const items = Array.isArray(st?.detail?.items) ? st.detail.items : [...Object.entries(s.inventory || {}).map(([name, count]) => ({ name, count: Number(count) })),
       ...Object.values(s.armor || {}).filter(Boolean).map(name => ({ name: String(name) })), ...(s.offHand ? [{ name: String(typeof s.offHand === 'string' ? s.offHand : (s.offHand.item || s.offHand.name)) }] : [])]
     const pw = AG.powerOf(items)
+    k.items = items
+    k.storage = Array.isArray(st?.detail?.storage) && st.detail.storage.length === 36 ? st.detail.storage : null
+    k.lootPrior = Loot.gainRange(items, LOOT_PRIOR, k.storage)
     const t = (gameClock.now() - side.t0) / 1000
     if (pw.weapon > 1 && side.stats.firstWeapon === null) side.stats.firstWeapon = Math.round(t)
     if (pw.armor > 0 && side.stats.firstArmor === null) side.stats.firstArmor = Math.round(t)
@@ -194,12 +218,14 @@ class ArmsEnv {
     w.elapsedMs = gameClock.now() - side.t0
     w.revision = k.revision
     const unscouted = k.areas.filter(a => !k.scouted.has(a.id)).length
-    const chests = [...k.chests.values()].filter(c => !c.looted).length
+    const chests = [...k.chests.values()].filter(c => !c.looted && !c.attempt?.abandoned).length
     const caches = [...k.caches.values()].filter(c => !c.opened).length
     const craft = AG.bestCraft(items)
     k.craft = craft
     const healItems = AG.recoveryFood(w.inventory).count
-    w.resources = { power: Math.round(pw.total), unscouted, chests, caches, craft_gain: craft ? Math.max(1, Math.round(craft.gain)) : 0, lab_gain: !k.labDone && AG.labReady(items) ? 2 : 0, heal_items: healItems }
+    w.resources = { power: pw.total, unscouted, chests, caches, loot_completed: side.stats.chests || 0,
+      loot_progress: k.lootProgress || 0, craft_gain: craft ? Math.max(1, Math.round(craft.gain)) : 0,
+      lab_gain: !k.labDone && AG.labReady(items) ? 2 : 0, heal_items: healItems }
     const now = gameClock.now()
     const hp = st?.detail?.foeEstimate
     if (hp) for (const key of ['lo', 'hi', 'mean', 'conf']) w.facts['enemy_hp_' + key] = fact(hp[key], 'inferred', now, hp.conf)
@@ -218,6 +244,19 @@ class ArmsEnv {
     w.facts.deadline = fact(w.elapsedMs >= LOOT_MS, 'observed', now)
     w.facts.opponent_defeated = fact(!!side.stats.killed || this.round.winner === side.name, 'observed', now)
     w.facts.ambushed = fact(!!k.ambushed, 'observed', now)
+    w.facts.loot_prior_gain = fact(k.lootPrior.gain, 'inferred', now)
+    k.lootQuote = Loot.chooseLoot([...k.chests.values()].filter(c => !c.looted && !c.attempt?.abandoned).map(c => this.lootQuote(w, c)))
+    const q = k.lootQuote
+    if (q) {
+      const chest = k.chests.get(q.chestId)
+      w.facts.loot_target_id = fact(q.chestId, 'observed', chest.seenAt)
+      w.facts.loot_target_pos = fact(q.at, 'observed', chest.seenAt)
+      for (const [name, value] of Object.entries({ round_scope: q.roundScope, quote_at: q.quoteAt,
+        evidence: `${q.chestId}:${chest.evidenceRevision || 0}`, cost_ticks: q.costTicks, travel_ticks: q.travelTicks,
+        travel_source: q.travelSource, risk: q.risk, risk_lo: q.riskLo, risk_hi: q.riskHi,
+        gain: q.gain, gain_lo: q.gainLo, gain_hi: q.gainHi, exposure: q.exposure, exposure_lo: q.exposureLo,
+        exposure_hi: q.exposureHi, risk_prior: q.riskPrior })) w.facts['loot_' + name] = fact(value, 'inferred', now)
+    }
     return w
   }
 
@@ -227,17 +266,57 @@ class ArmsEnv {
     const ev = []
     const rpc = async (m, p) => {
       if (signal.aborted) return { status: 'interrupted' }
-      const r = await side.call(m, p).catch(e => ({ status: 'failed', error: e.message }))
+      const from = m === 'goto' || m === 'chest_take' ? await here() : null
+      if (signal.aborted) return { status: 'interrupted' }
+      const started = gameClock.now(), points = from ? [{ ...from }] : []
+      let sampling = false, closed = false
+      const sample = from && every(500, async () => {
+        if (sampling || closed) return
+        sampling = true
+        try { const at = await here(); if (at && !closed) points.push({ ...at }) } finally { sampling = false }
+      })
+      let r
+      try { r = await side.call(m, p).catch(e => ({ status: 'failed', error: e.message })) }
+      finally { closed = true; if (sample) gameClock.clearInterval(sample) }
+      if (from) {
+        const to = await here()
+        if (to) {
+          points.push({ ...to })
+          const opened = m === 'chest_take' && Loot.lootReceipt(p, r).opened
+          const ticks = Math.max(0, (gameClock.now() - started) / 50)
+          ;(k.traversals ||= []).push({ from: { ...from }, to: { ...to }, points, ticks,
+            completed: m === 'goto' ? r.status === 'done' : opened, at: gameClock.now() })
+          if (opened && Loot.cellKey(from) === Loot.cellKey(to) && Math.hypot(from.x - p.x, from.y - p.y, from.z - p.z) <= 3.5 && ticks > 0)
+            (k.interactionTicks ||= []).push(ticks)
+        }
+      }
       if (r && r.status === 'interrupted') ev.push({ type: r.by && r.by.type === 'tactical' ? 'tactical' : 'interrupted', reason: r.error })
       return r
     }
     const here = async () => { const st = await side.call('status').catch(() => null); return (st && st.state && st.state.pos) || null }
     const near = (p, list) => list.sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))
-    // Сторож: враг показался ближе 12 — прервать лут/разведку (решит граф).
+    // Для конкретного сундука пересчитываем оставшийся подход и открытие; близость сама по себе не запрет.
+    let watching = false, finished = false
     const watch = command.skill === 'arms.engage' || command.skill === 'arms.retreat' || command.skill === 'arms.ambush' ? null : every(500, async () => {
-      if (signal.aborted || this.round.over) return
-      const f = await this.foe()
-      if (f && gameClock.now() - f.at < 600 && f.dist < 12) { side.stats.near++; side.director.interrupt('enemy near') }
+      if (signal.aborted || this.round.over || watching || finished) return
+      watching = true
+      try {
+        if (command.skill === 'arms.loot') {
+          const state = await this.observe(), f = k.foe
+          if (finished || signal.aborted || this.round.over) return
+          const chest = k.chests.get(command.params?.chestId)
+          if (!chest || !f || gameClock.now() - f.at >= 600) return
+          const quote = this.lootQuote(state, chest), engage = AG.armsRegistry().get('Engage')
+          const engageTicks = engage.estimateCost(state) + engage.estimateRisk(state) * AG.ARMS_RISK_PENALTY
+          const interrupted = quote.totalWithFight > engageTicks
+          k.lootWatch = { chestId: chest.id, continueTicks: quote.totalWithFight, engageTicks, travelTicks: quote.travelTicks, interrupted }
+          if (interrupted) side.director.interrupt(`loot ${chest.id}: continue ${Math.round(quote.totalWithFight)} > engage ${Math.round(engageTicks)}`)
+        } else {
+          const f = await this.foe()
+          if (finished || signal.aborted || this.round.over) return
+          if (f && gameClock.now() - f.at < 600 && f.dist < 12) { side.stats.near++; side.director.interrupt('enemy near') }
+        }
+      } catch {} finally { watching = false }
     })
     try {
       const me = (await here()) || W(L.spawns[0])
@@ -258,16 +337,38 @@ class ArmsEnv {
         return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev, detail: { area: area.id } }
       }
       if (command.skill === 'arms.loot') {
-        const chest = near({ x: me.x, z: me.z }, [...k.chests.values()].filter(c => !c.looted))[0]
-        if (!chest) return { outcome: 'FAILURE', reason: 'нет известных сундуков', events: ev }
+        const chest = command.params?.roundScope === this.round.roundScope && k.chests.get(command.params?.chestId)
+        if (!chest || chest.looted || chest.attempt?.abandoned) return { outcome: 'FAILURE', reason: 'stale loot target', events: ev }
+        const quote = k.lootQuote?.chestId === chest.id ? k.lootQuote : null
+        k.lootWatch = null
+        const started = gameClock.now()
         const r = await rpc('chest_take', { item: 'all', x: chest.x, y: chest.y, z: chest.z })
-        if (r.status === 'done' || /пуст|empty|нет такого/.test(String(r.error))) { chest.looted = true; side.stats.chests++ }
-        else if (!signal.aborted) chest.tries = (chest.tries || 0) + 1
-        // Две неудачи — не «взял», а «бросил» (ревью Codex): в разборе видно, сколько сундуков не открылось.
-        if ((chest.tries || 0) >= 2 && !chest.looted) { chest.looted = true; chest.gaveUp = true; side.stats.chestFails = (side.stats.chestFails || 0) + 1 }
+        const receipt: import('./src/pvp/arms-loot').LootReceipt = Loot.lootReceipt(chest, r)
+        const moved = Object.values(receipt.moved).reduce((sum: number, n: number) => sum + n, 0)
+        const learned = receipt.opened && (!chest.opened || JSON.stringify(chest.contents) !== JSON.stringify(receipt.contents))
+        if (receipt.opened) { chest.opened = true; chest.contents = receipt.contents }
+        if (learned) chest.evidenceRevision = (chest.evidenceRevision || 0) + 1
+        chest.taken = (chest.taken || 0) + moved
+        if (moved > 0 || learned) k.lootProgress = (k.lootProgress || 0) + 1
+        if (receipt.emptied) {
+          chest.looted = true
+          if (chest.taken > 0) side.stats.chests++
+        }
+        const interrupted = signal.aborted || receipt.interrupted
+        const outcome = interrupted ? 'INTERRUPTED' : receipt.emptied && chest.taken > 0 ? 'SUCCESS' : moved > 0 || learned ? 'PARTIAL' : 'FAILURE'
+        if (outcome === 'FAILURE') {
+          const from = Loot.cellKey(me), reason = receipt.reason || 'no confirmed transfer'
+          const revision = chest.evidenceRevision || 0
+          const same = chest.attempt?.from === from && chest.attempt.reason === reason && chest.attempt.evidenceRevision === revision
+          const failures = (same ? chest.attempt.failures : 0) + 1
+          chest.attempt = { from, reason, failures, spentTicks: (same ? chest.attempt.spentTicks : 0) + (gameClock.now() - started) / 50, abandoned: failures >= 2, evidenceRevision: revision }
+          if (chest.attempt.abandoned) side.stats.chestFails = (side.stats.chestFails || 0) + 1
+        } else if (moved > 0 || learned) chest.attempt = null
+        k.lastLoot = { chestId: chest.id, quote, receipt, outcome, abandoned: !!chest.attempt?.abandoned, comparison: k.lootWatch || null }
         await rpc('armor', {})
         await this.look(12)
-        return { outcome: chest.looted ? 'SUCCESS' : signal.aborted ? 'INTERRUPTED' : 'FAILURE', reason: r.error, events: ev, detail: { took: r.detail && r.detail.took } }
+        return { outcome, reason: receipt.emptied && !chest.taken ? 'observed empty' : receipt.reason, events: ev,
+          detail: { chestId: command.params.chestId, receipt, abandoned: !!chest.attempt?.abandoned } }
       }
       if (command.skill === 'arms.cache') {
         const cv = near({ x: me.x, z: me.z }, [...k.caches.values()].filter(c => !c.opened))[0]
@@ -400,6 +501,7 @@ class ArmsEnv {
       }
       return { outcome: 'FAILURE', reason: `нет навыка ${command.skill}`, events: ev }
     } finally {
+      finished = true
       if (watch) gameClock.clearInterval(watch)
     }
   }
@@ -413,7 +515,8 @@ async function brain (side, round) {
     record: (r) => {
       // Первые решения раунда — с ресурсами и фактами (отладка выбора).
       if (r.level === 'decision' && side.stats.decisions.length < 40) side.stats.decisions.push({ t: Math.round((gameClock.now() - side.t0) / 1000), plan: (r.plan || []).slice(0, 4).join('>'), res: r.before && r.before.resources, facts: r.before && Object.fromEntries(Object.entries(r.before.facts).map(([k, v]: any) => [k, v.value])), why: r.reason })
-      if (r.level === 'strategy') side.stats.plan.push({ t: Math.round((gameClock.now() - side.t0) / 1000), s: r.strategy, o: r.outcome, why: r.reason ? String(r.reason).slice(0, 60) : undefined }) }
+      if (r.level === 'strategy') side.stats.plan.push({ t: Math.round((gameClock.now() - side.t0) / 1000), s: r.strategy, o: r.outcome, why: r.reason ? String(r.reason).slice(0, 60) : undefined,
+        ...(r.strategy === 'LootChest' ? { loot: side.know.lastLoot } : {}) }) }
   })
   while (!round.over) {
     let r

@@ -39,7 +39,7 @@ function scene({ hp = 8, floor = 'stone', own = true, height = 6, digMs = 150, m
   const ctx: any = {
     bot, Vec3, pick, ctl: { aborted: false, onAbort: [] }, TICK_MS: 50, PERCH_MAX: 8,
     entity: { id: 2, name: 'player', position: new Vec3(10.5, 120, .5), isValid: true },
-    gameClock: { now: () => now }, prof: { player: true }, st: { blocks: 0, build: {} },
+    gameClock: { now: () => now, wall: { now: () => Date.now() } }, prof: { player: true }, st: { blocks: 0, build: {} },
     tools: { bestFor: () => ({ ms: digMs, item: null }) },
     clear: bot.clearControlStates, set: bot.setControlState, pathTo: () => {},
     edgeGuard: { allow: () => {} }, aim: 'target', pathing: false,
@@ -76,6 +76,27 @@ function scene({ hp = 8, floor = 'stone', own = true, height = 6, digMs = 150, m
   return { bot, ctx, cover, ready, blocks, inputs, digs, notes, control }
 }
 
+test('the own-support tag is present only at dig entry and restores the previous tag', async () => {
+  for (const fail of [false, true]) {
+    const s = scene(); await s.ready()
+    const prior = { what: 'previous operation' }
+    s.bot._ndBlockTag = prior
+    const raw = s.bot.dig
+    let seen
+    s.bot.dig = async block => {
+      seen = s.bot._ndBlockTag
+      await Promise.resolve()
+      assert.equal(s.bot._ndBlockTag, prior, 'another action must not inherit the descent tag')
+      if (fail) throw new Error('Digging aborted')
+      return raw(block)
+    }
+    await s.cover.dropFromPerch()
+    assert.equal(seen.intent, 'perch-descent')
+    assert.ok(seen.cell.equals(new Vec3(0, 125, 0)))
+    assert.equal(s.bot._ndBlockTag, prior)
+  }
+})
+
 test('low HP and no arrows: dismantle our six-block perch one visible support at a time', async () => {
   const s = scene(); await s.ready()
   assert.equal(pick.faceAim(s.bot, new Vec3(0, 125, 0), new Vec3(0, 1, 0))?.y, 126)
@@ -86,6 +107,99 @@ test('low HP and no arrows: dismantle our six-block perch one visible support at
   assert.ok(s.ctx.perch, 'return to the combat loop between individual blocks')
   assert.equal(result.kind, 'dig')
   assert.ok(!s.inputs.some(([key, on]) => key === 'forward' && on))
+})
+
+test('a ready water clutch competes with digging the whole perch', async () => {
+  const s = scene({ digMs: 400, move: false }); await s.ready()
+  const bucket = { name: 'water_bucket', slot: 39, count: 1 }
+  s.bot.inventory.slots[39] = bucket
+  s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
+  s.ctx.tempo = require('../src/tempo')
+  s.ctx.entity.position.x = 24.5
+  s.ctx.tt = { eta: () => Math.max(0, s.ctx.tempo.reachFrom(s.ctx.entity.position.offset(0, 1.62, 0), s.bot.entity) - s.ctx.tempo.PLAYER_REACH) / s.ctx.tempo.SPRINT_BPT * 50 }
+  let claimed = 0, released = 0
+  s.bot._ndFallGuard = { fired: 0, picked: 0, waterReady: () => ({ ok: true }),
+    planWater: () => { claimed++; return () => released++ } }
+  const result = await s.cover.dropFromPerch()
+  assert.equal(result.kind, 'water', 'known reachable water clutch should beat six digs in this scene')
+  assert.equal(s.digs.length, 0)
+  assert.equal(result.ok, false, 'the stationary fixture cannot claim a successful landing')
+  assert.equal(claimed, 1)
+  assert.equal(released, 1)
+  assert.ok(Object.values(s.control).every(v => !v))
+})
+
+test('a bucket does not authorize jumping onto lava or with an unavailable water guard', async () => {
+  for (const floor of ['lava', 'stone']) {
+    const s = scene({ floor, own: floor !== 'lava', hp: 1 }); await s.ready()
+    const bucket = { name: 'water_bucket', slot: 39, count: 1 }
+    s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
+    s.bot._ndFallGuard = { waterReady: () => ({ ok: false, why: 'dimension' }), planWater: () => assert.fail('not water-ready') }
+    const result = await s.cover.dropFromPerch()
+    assert.notEqual(result.kind, 'water')
+    assert.equal(result.kind, floor === 'stone' ? 'dig' : undefined)
+    assert.ok(!s.inputs.some(([key, on]) => key === 'forward' && on))
+  }
+})
+
+test('an opponent waiting below raises the water-drop price', async () => {
+  const s = scene({ digMs: 400 }); await s.ready()
+  const bucket = { name: 'water_bucket', slot: 39, count: 1 }
+  s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
+  s.ctx.tempo = require('../src/tempo')
+  s.ctx.entity.position = new Vec3(2.5, 120, .5)
+  s.ctx.tt = { eta: () => 1000 }
+  s.bot._ndFallGuard = { waterReady: () => ({ ok: true }), planWater: () => assert.fail('exposed landing must not win this comparison') }
+  assert.notEqual((await s.cover.dropFromPerch()).kind, 'water')
+})
+
+test('bucket preparation reprices changed HP instead of keeping an old jump or banning descent', async () => {
+  const s = scene({ digMs: 600 }); await s.ready()
+  await s.ctx.sleep(100)
+  const bucket = { name: 'water_bucket', slot: 39, count: 1 }
+  s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
+  s.ctx.tempo = require('../src/tempo')
+  s.ctx.entity.position.x = 24.5
+  s.ctx.tt = { eta: () => 3500 }
+  let settled = false
+  const sleep = s.ctx.sleep
+  s.ctx.sleep = async ms => { settled = true; s.bot.health = 1; await sleep(ms) }
+  s.bot._ndFallGuard = { waterReady: () => settled ? { ok: true } : { ok: false, retryMs: 50 },
+    planWater: () => assert.fail('water is too expensive after the injury') }
+  const result = await s.cover.dropFromPerch()
+  assert.equal(result.kind, 'dig')
+  assert.equal(result.ok, true)
+  assert.equal(s.digs.length, 1)
+})
+
+test('preparation cleanup waits for the repriced descent to release its hand', async () => {
+  const s = scene({ digMs: 600 }); await s.ready()
+  await s.ctx.sleep(100)
+  const bucket = { name: 'water_bucket', slot: 39, count: 1 }
+  s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
+  s.ctx.tempo = require('../src/tempo'); s.ctx.entity.position.x = 24.5
+  s.ctx.tt = { eta: () => 3500 }
+  let settled = false, restored = 0, enter, resume
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = new Promise<void>(resolve => { resume = resolve })
+  const sleep = s.ctx.sleep
+  s.ctx.sleep = async ms => { settled = true; s.bot.health = 1; await sleep(ms) }
+  s.bot._ndFallGuard = { waterReady: () => settled ? { ok: true } : { ok: false, retryMs: 50 } }
+  s.bot._ndFallGuard.planWater = () => assert.fail('reprice selects the support')
+  s.ctx.holdWeapon = async () => { restored++ }
+  s.bot.look = async () => { enter(); await held }
+  const running = s.cover.dropFromPerch()
+  await Promise.race([entered, running.then(() => assert.fail('child must reach its deferred look'))]); await Promise.resolve()
+  try { assert.equal(restored, 0, 'outer cleanup must not change the active child hand') }
+  finally { resume(); await running }
+})
+
+test('cancellation during the look cannot enable movement off the perch', async () => {
+  const s = scene({ own: false, hp: 20 }); await s.ready()
+  s.bot.look = async () => { s.ctx.ctl.aborted = true }
+  await s.cover.dropFromPerch()
+  assert.ok(!s.inputs.some(([key, on]) => key === 'forward' && on))
+  assert.equal(s.bot.entity.position.y, 126)
 })
 
 test('all surroundings lethal: keep the perch and never walk into the fallback direction', async () => {
@@ -174,6 +288,15 @@ test('own Feather Falling participates in the physical fall budget', async () =>
   const result = await s.cover.dropFromPerch()
   assert.equal(result.ok, true)
   assert.ok(Math.abs(result.damage - 1.56) < 1e-6)
+})
+
+test('the native Resistance id participates in our physical fall budget', async () => {
+  const s = scene({ hp: 2, own: false }); await s.ready()
+  const effect = registry.effectsByName.Resistance
+  s.bot.entity.effects[effect.id] = { id: effect.id, amplifier: 1, duration: 100 }
+  const result = await s.cover.dropFromPerch()
+  assert.equal(result.ok, true)
+  assert.ok(Math.abs(result.damage - 1.8) < 1e-6)
 })
 
 test('an unseen landing cannot authorize a new drop', async () => {

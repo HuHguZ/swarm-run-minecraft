@@ -3,7 +3,7 @@
 // исполнителей — bot._genericPlace (через него ставят build.placeBlockAt, fortify, crystal, clutch, мосты, столбы) и
 // bot.dig; приём — по кадру стека (файл и функция вызвавшего), успех — подтверждение сервера (blockUpdate в клетке
 // за 400 мс; копка — без исключения и блок исчез), время — от вызова до подтверждения. Ошибки: «поставил не туда»
-// (сервер не подтвердил), «сломал свою опору» (копал блок под своими ногами, стоя на нём).
+// (сервер не подтвердил). errors.ownSupport — старый счётчик попыток подкопа; новый supportDig отделяет намерение и итог.
 const gameClock = require('../game-clock')
 
 const r1 = (x) => Math.round(x * 10) / 10
@@ -11,6 +11,7 @@ const r1 = (x) => Math.round(x * 10) / 10
 // Приём по кадрам стека: [файл, функция] → метка.
 const RULES: [RegExp, string][] = [
   [/wallToward/, 'стенка от стрелка'], [/coverFrom/, 'укрытие (колонна)'], [/pillarOut|towerUp/, 'столб вверх'],
+  [/dropFromPerch/, 'спуск по своей опоре'],
   [/fortOut|boxIn|patch/, 'коробка'], [/breakOut|siege/, 'вскрыть коробку'], [/bridge/, 'мост'],
   [/towerShield/, 'заслон на подъёме'], [/climbOut|climbBack/, 'подъём/ступени'], [/punchThrough|unblockPath/, 'пробить проход'],
   [/digWatch/, 'прорубить стену/укрытие к нему'], [/useOnGroundAt/, 'вода/лава ведром'],
@@ -34,7 +35,7 @@ function tagOf (stack, item) {
 }
 
 function install (bot) {
-  const out = { place: {}, dig: {}, items: {}, errors: { notConfirmed: 0, ownSupport: 0 } }
+  const out = { place: {}, dig: {}, supportDig: {}, items: {}, errors: { notConfirmed: 0, ownSupport: 0 } }
   const add = (map, k, ok, ms) => {
     const e = map[k] || (map[k] = { n: 0, ok: 0, ms: 0 })
     e.n++
@@ -112,30 +113,48 @@ function install (bot) {
     bot.dig = myDig = async function (block, ...rest) {
       const t0 = gameClock.now()
       const hint = bot._ndBlockTag
-      const tag = hint && gameClock.wall.now() - hint.at < 3000 ? hint.what : tagOf(new Error().stack, null)
+      const tagged = hint && gameClock.wall.now() - hint.at < 3000 && (!hint.cell || block?.position?.equals(hint.cell))
+      const tag = tagged ? hint.what : tagOf(new Error().stack, null)
+      const begin = (map, key) => {
+        const row = map[key] || (map[key] = { n: 0, ok: 0, ms: 0, failed: 0, pending: 0, unconfirmed: 0 })
+        row.n++; row.pending++
+        return row
+      }
+      const entries = [begin(out.dig, tag)]
       try {
         const me = bot.entity
         if (me && me.onGround && block && block.position) {
           const f = me.position.floored()
-          if (block.position.x === f.x && block.position.z === f.z && block.position.y === f.y - 1) out.errors.ownSupport++
+          if (block.position.x === f.x && block.position.z === f.z && block.position.y === f.y - 1) {
+            out.errors.ownSupport++
+            entries.push(begin(out.supportDig, tagged && hint.intent === 'perch-descent' ? 'perch-descent' : 'unclassified'))
+          }
         }
       } catch {}
-      let ok = false
+      let ok = false, returned = false
       try {
         const r = await origDig.call(this, block, ...rest)
+        returned = true
         let b = null
         try { b = bot.blockAt(block.position, false) } catch {}
-        ok = !b || b.boundingBox === 'empty'
+        ok = !!b && b.boundingBox === 'empty'
         return r
-      } finally { add(out.dig, tag, ok, gameClock.now() - t0) }
+      } finally {
+        for (const row of entries) {
+          row.pending--
+          if (ok) { row.ok++; row.ms = r1(row.ms + gameClock.now() - t0) }
+          else if (returned) row.unconfirmed++
+          else row.failed++
+        }
+      }
     }
   }
   return {
     report () {
       const any = Object.keys(out.place).length || Object.keys(out.dig).length
       if (!any) return undefined
-      const avg = (m) => { const o = {}; for (const [k, e] of Object.entries<any>(m)) o[k] = { n: e.n, ok: e.ok, ms: e.ok ? Math.round(e.ms / e.ok) : null }; return o }
-      return { place: avg(out.place), dig: avg(out.dig), items: out.items, errors: out.errors }
+      const avg = (m) => { const o = {}; for (const [k, e] of Object.entries<any>(m)) o[k] = { ...e, ms: e.ok ? Math.round(e.ms / e.ok) : null }; return o }
+      return { place: avg(out.place), dig: avg(out.dig), supportDig: avg(out.supportDig), items: { ...out.items }, errors: { ...out.errors } }
     },
     close () {
       // Сверху мог встать чужой перехватчик — тогда не снимаем (он держит ссылку на наш).

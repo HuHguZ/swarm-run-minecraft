@@ -1,5 +1,6 @@
 import { recoveryDecision } from './recovery-graph'
 import { consumeHand } from './hand-policy'
+const { canSurvivePearl } = require('../throw')
 
 type CombatContext = Record<string, any>
 
@@ -107,12 +108,12 @@ const drink = async (item, what, abortIf = null, opt: any = {}) => {
 
 const escapePearl = async () => {
     const pearl = ctx.findItem(ctx.bot, i => i.name === 'ender_pearl')
-    if (!pearl || !ctx.ready('pearl') || (ctx.bot.health ?? 0) <= 6) return null
+    if (!pearl || !ctx.ready('pearl') || !canSurvivePearl(ctx.bot)) return null
     ctx.rest('pearl', 3000)
     const from = ctx.entity.position.clone()
     ctx.aim = 'free'
     const r = (await ctx.holdItem(pearl)) ? await ctx.throwMod.throwAt(ctx.bot, null, {
-      item: ctx.bot.heldItem,
+      item: pearl,
       jump: 'auto', // S6b pearl-jump
       pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4 })
     }).catch(() => null) : null

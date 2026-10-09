@@ -14,6 +14,7 @@ test('offhand throws preserve melee weapons and respect an active use action', (
 })
 test('flight pearl uses offhand, correct launch eye and restores shield after use', async () => {
   const bot: any = new EventEmitter()
+  bot.health = 20
   const weapon = { name: 'mace', type: 1, slot: 36 }
   const item = { name: 'ender_pearl', type: 2, slot: 10 }
   const shield = { name: 'shield', type: 3, slot: 45 }
@@ -42,6 +43,7 @@ test('flight pearl uses offhand, correct launch eye and restores shield after us
 
 test('a catch-up burst releases the projectile before later ticks can change its shot', async () => {
   const bot: any = new EventEmitter()
+  bot.health = 20
   const item = { name: 'ender_pearl', type: 2, slot: 36 }
   bot.inventory = { slots: [], items: () => [item] }
   bot.entity = { position: new Vec3(0, 20, 0), onGround: false }
@@ -63,6 +65,7 @@ test('a catch-up burst releases the projectile before later ticks can change its
 test('the packet callback keeps the emergency lease when physics events arrive outside it', async () => {
   const locks = require('../src/reflex-lock')
   const bot: any = new EventEmitter()
+  bot.health = 20
   const item = { name: 'ender_pearl', type: 2, slot: 36 }
   bot.inventory = { slots: [], items: () => [item] }
   bot.entity = { position: new Vec3(0, 20, 0), onGround: false }
@@ -86,6 +89,7 @@ test('a clock catch-up that fires the stall timer with the first physics tick st
   const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
   try {
     const bot: any = new EventEmitter()
+    bot.health = 20
     const item = { name: 'ender_pearl', type: 2, slot: 36 }
     bot.inventory = { slots: [], items: () => [item] }
     bot.entity = { position: new Vec3(0, 20, 0), onGround: true }
@@ -110,6 +114,7 @@ test('use_item уносит взгляд броска, даже если bot.loo
   const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
   try {
     const bot: any = new EventEmitter()
+    bot.health = 20
     const item = { name: 'ender_pearl', type: 2, slot: 36 }
     bot.inventory = { slots: [], items: () => [item] }
     bot.entity = { position: new Vec3(0, 20, 0), onGround: true, yaw: 0, pitch: 0 }

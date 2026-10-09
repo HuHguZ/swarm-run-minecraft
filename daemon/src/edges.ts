@@ -637,8 +637,42 @@ function installFallGuard (session, { minFall = 6 }: any = {}) {
     for (const dy of [0, 0.5]) { const b = bot.blockAt(p.offset(0, dy, 0), false); if (b && b.name === 'water') return true }
     return !!bot.entity.isInWater
   }
+  // Readiness for an explicitly priced fall is physical; mlgDrop's HP/height
+  // budget remains the ordinary pathfinder policy. Planning does not take the hand.
+  st.waterReady = () => {
+    if (!bot.entity || (bot.health ?? 20) <= 0) return { ok: false, why: 'нет живого тела' }
+    if (process.env.ND_MLG === '0' || session.mlgOff) return { ok: false, why: 'выключено' }
+    if (/nether/.test(String(bot.game?.dimension || ''))) return { ok: false, why: 'Ад: вода испаряется' }
+    if (session.current?.name === 'dragon' || !survivalMode(bot)) return { ok: false, why: 'другой режим' }
+    if (st.placed) return { ok: false, why: 'предыдущее ведро ещё не подобрано' }
+    if (hotbar('water_bucket') < 0) return { ok: false, why: 'ведро не в хотбаре', toBar: !!bot.inventory.items().some(i => i.name === 'water_bucket') }
+    const left = MLG_SETTLE - (gameClock.now() - (st.barAt ?? -Infinity))
+    if (left > 0) return { ok: false, why: 'ведро только что в хотбаре', retryMs: left }
+    return { ok: true }
+  }
+  let waterPlan = null
+  st.planWater = ({ owner, until }) => {
+    if (owner == null || !Number.isFinite(until) || until <= gameClock.now() || !st.waterReady().ok) return null
+    const token = { owner, until, airborne: false }
+    waterPlan = token
+    return () => {
+      if (waterPlan !== token) return
+      // Cancelling the caller on the ground retracts the plan immediately.
+      // Once airborne, finish this safety action through landing or its deadline.
+      if (!bot.entity || bot.entity.onGround || inWaterNow()) waterPlan = null
+      else token.airborne = true
+    }
+  }
+  const activeWaterPlan = () => {
+    if (!waterPlan) return null
+    const landed = bot.entity && (bot.entity.onGround || inWaterNow())
+    if (!bot.entity || (bot.health ?? 20) <= 0 || gameClock.now() >= waterPlan.until || (waterPlan.airborne && landed)) waterPlan = null
+    else if (!landed) waterPlan.airborne = true
+    return waterPlan
+  }
   const onTick = () => {
     try {
+      const plannedWater = activeWaterPlan()
       let clutchChoice: any = { action: 'none' }
       if (blockClutch) {
         try {
@@ -685,6 +719,8 @@ function installFallGuard (session, { minFall = 6 }: any = {}) {
           const w = waterAt(bot, pl.pos)
           if (w && !w.position.equals(pl.pos)) pl.pos = w.position
           if (!w) {
+            // A fast pickup must not erase the pending 300 ms health receipt.
+            if (pl.tries && hotbar('water_bucket') >= 0 && !pl.said) return
             if (pl.tries && hotbar('water_bucket') >= 0) { st.picked++; emit('picked'); st.placed = null } else if (since > 1200) { emit(pl.tries ? 'pickup_failed' : 'no_water_block'); st.placed = null }
             return
           }
@@ -744,7 +780,7 @@ function installFallGuard (session, { minFall = 6 }: any = {}) {
       const fall = st.peak - top
       const hp = bot.health ?? 20
       // Урон = floor(высота − 3); ведро — когда это 3+ хп или смерть.
-      if (fall - SAFE_FALL < Math.min(minFall - SAFE_FALL, hp - 1)) return
+      if (fall - SAFE_FALL < Math.min((plannedWater ? SAFE_FALL : minFall) - SAFE_FALL, hp - 1)) return
       st.busy = true
       if (hotbar('water_bucket') < 0) { toHotbar(); return }
       // Взведён: рука — сторожу до броска (чужой equip ждёт, слот не меняется).

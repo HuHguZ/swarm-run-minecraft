@@ -522,7 +522,14 @@ function summary (L) {
   return { seed: L.seed, chests: L.chests.length, kinds, budget: L.budget, secret: L.secret, trees: L.trees.length * 2, ores: L.ores.length, hills: L.hills.length * 2, stairs: L.stairs.length / 5 }
 }
 
-module.exports = { generate, validate, commands, summary, checkItem, reach, standable, solidAt, rng, POOL, ROCKET3, FACADE, UNDER, HALF }
+let publicSamples: string[][] | null = null
+// Публичное распределение специального режима arms v1. Ни текущего seed, ни координат наружу.
+function publicLootSamples(): string[][] {
+  if (!publicSamples) publicSamples = Array.from({ length: 16 }, (_, n) =>
+    generate(`public-arms-prior:v1:${n}`).chests.map(c => [...c.items])).flat()
+  return publicSamples.map(items => [...items])
+}
+module.exports = { generate, validate, commands, summary, checkItem, reach, standable, solidAt, rng, POOL, ROCKET3, FACADE, UNDER, HALF, publicLootSamples }
 
 if (require.main === module) {
   const seed = process.argv[2] || 'demo'

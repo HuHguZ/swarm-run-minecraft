@@ -110,10 +110,11 @@ function blockAt (bot, cache, x, y, z) {
   const k = `${x},${y},${z}`
   if (cache && cache.has('b' + k)) return cache.get('b' + k)
   let b = null
-  try { b = bot.blockAt(new Vec3(x, y, z), false) } catch {}
+  try { b = (cache?.world || bot).blockAt(new Vec3(x, y, z), false) } catch {}
   if (cache) cache.set('b' + k, b)
   return b
 }
+const copyCache = cache => Object.assign(new Map(cache), cache?.world ? { world: cache.world } : {})
 const isAirB = (b) => !!b && AIRS.has(b.name)
 const isBaseB = (b) => !!b && (b.name === 'obsidian' || b.name === 'bedrock')
 const solidB = (b) => !!b && b.boundingBox === 'block'
@@ -642,7 +643,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
   }
   // Сколько мне от его кристаллов в точке pos: худший целиком, остальные — доля (окно после первого).
   function hurtAt (threats, pos, dMe, cache) {
-    const d = threats.map(th => boom.blast(bot, th.c.position, th.power || P, pos, { def: dMe, cache: th.cell ? without(cache, th.cell) : cache }).dmg).sort((a, b) => b - a)
+    const d = threats.map(th => boom.blast(cache?.world || bot, th.c.position, th.power || P, pos, { def: dMe, cache: th.cell ? without(cache, th.cell) : cache }).dmg).sort((a, b) => b - a)
     return d.length ? d[0] + 0.3 * d.slice(1).reduce((s, x) => s + x, 0) : 0
   }
   // Прямой ход по ровному: каждая точка линии — клетка на высоте ног проходима, под ней опора.
@@ -692,14 +693,15 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     const me = bot.entity.position
     const eye = me.offset(0, EYE, 0)
     const fc = feetCell(me)
-    const boxes = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.position && e.isValid !== false &&
+    const view = cache?.world || bot
+    const boxes = (Object.values(view.entities) as any[]).filter((e : any) => e && e.position && e.isValid !== false &&
       (e.type === 'player' || e.name === 'end_crystal' || /mob|hostile|animal|passive/.test(e.type || ''))).map((e : any) => e.name === 'end_crystal' ? crystalBox(e.position) : boxOf(e))
     const key = (c) => `${c.x},${c.y},${c.z}`
     const faceOk = (cell) => {
       for (const n of [new Vec3(0, -1, 0), ...SIDES]) {
         const ref = cell.plus(n)
         if (!solidB(blockAt(bot, cache, ref.x, ref.y, ref.z))) continue
-        if (pick.faceAim(bot, ref, n.scaled(-1), { eye, range: PLACE_R - 0.05 })) return true
+        if (pick.faceAim(view, ref, n.scaled(-1), { eye, range: PLACE_R - 0.05 })) return true
       }
       return false
     }
@@ -713,7 +715,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
         const cb = { minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1 }
         if (boxes.some(b => intersects(cb, b))) continue
         if (!faceOk(cell)) continue
-        const sim = new Map(cache)
+        const sim = copyCache(cache)
         sim.set(key(cell), [[0, 0, 0, 1, 1, 1]])
         singles.push({ cells: [cell], dmg: hurtAt(threats, me, dMe, sim), ticks: 3, sim })
       }
@@ -727,7 +729,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
       const ub = { minX: up.x, minY: up.y, minZ: up.z, maxX: up.x + 1, maxY: up.y + 1, maxZ: up.z + 1 }
       if (boxes.some(b => intersects(ub, b)) || up.offset(0.5, 1, 0.5).distanceTo(eye) > PLACE_R - 0.2 || eye.y <= up.y) continue
       if (wallBlocks() < 2) break
-      const sim = new Map(s.sim)
+      const sim = copyCache(s.sim)
       sim.set(key(up), [[0, 0, 0, 1, 1, 1]])
       const dmg = hurtAt(threats, me, dMe, sim)
       if (!best || dmg + 0.15 < best.dmg) best = { cells: [s.cells[0], up], dmg, ticks: 6, sim }
@@ -805,7 +807,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     st.coverHolds = (st.coverHolds || 0) + 1
     return { kind: 'hold', note: '' }
   }
-  function evade (threats, { dMe, myEff, cache, foe }: any) {
+  function evade (threats, { dMe, myEff, cache, foe, delayTicks = 0, finishTicks = null, finishGain = 0, count = true }: any) {
     const me = bot.entity.position
     const now0 = hurtAt(threats, me, dMe, cache)
     if (now0 < 2.5) return null
@@ -815,7 +817,9 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     const reachNow = !!foe && threats.some(th => boxDist(foe.position.offset(0, EYE, 0), th.cell ? { minX: th.cell.x, minY: th.cell.y, minZ: th.cell.z, maxX: th.cell.x + 1, maxY: th.cell.y + 1, maxZ: th.cell.z + 1 } : crystalBox(th.c.position)) <= (th.cell ? PLACE_R : HIT_R + 0.4))
     const hisBowNow = !!foe && foe.equipment && foe.equipment[0] && /^(bow|crossbow)$/.test(foe.equipment[0].name)
     const haz = reachNow || hisBowNow ? { lo: 0, hi: 6 } : { lo: 20, hi: 45 }
-    const exp = (o) => { const p = Math.max(0, Math.min(1, (o.ticks - haz.lo) / (haz.hi - haz.lo))); return p * now0 + (1 - p) * o.dmg + (o.stall || 0) }
+    const expected = (ticks, dmg) => { const p = Math.max(0, Math.min(1, (ticks - haz.lo) / (haz.hi - haz.lo))); return p * now0 + (1 - p) * dmg }
+    const stay = finishTicks == null ? now0 : expected(finishTicks, Math.max(0, now0 - finishGain))
+    const exp = o => expected(o.ticks + delayTicks, o.dmg) + (o.stall || 0)
     const opts = []
     const t0s = gameClock.now()
     // Щит подряд — не запрет, а цена (S7d, «гибкость вместо правил»): после 1.5 с подряд каждая секунда под щитом
@@ -830,12 +834,63 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     if (wl && wl.dmg < now0) opts.push({ kind: 'wall', cells: wl.cells, threats, dmg: wl.dmg, ticks: wl.ticks })
     let best = null
     for (const o of opts) { o.exp = exp(o); if (!best || o.exp < best.exp) best = o }
-    st.evadePlans = (st.evadePlans || 0) + 1
-    if (!best || best.exp > now0 - 1.5) return null
+    if (count) st.evadePlans = (st.evadePlans || 0) + 1
+    if (!best || best.exp > stay - 1.5) return null
     const what = best.kind === 'shield' ? 'щит лицом к его кристаллу' : best.kind === 'cover' ? 'в укрытие от его кристалла' : `блок между мной и его кристаллом (${best.cells.length})`
     best.note = `${what}: ${r1(now0)} → ${r1(best.dmg)} (ожидаемо ${r1(best.exp)}, из ${r1(myEff)})`
     best.now = now0
     return best
+  }
+
+  // A local observation for the eat poll. Unknown collision cells are not free paths;
+  // for blast rays they contribute no cover, so unknown exposure is an upper bound.
+  // Fixed voxel samples must precede blockAt: a hidden block's shape cannot pick its own observation rays.
+  function eatDefenseCache () {
+    const cells = new Map()
+    const view = Object.create(bot)
+    view.entities = { [bot.entity.id]: bot.entity }
+    for (const e of (Object.values(bot.entities) as any[])) {
+      if (e?.position && e.isValid !== false && foeVisible(e)) view.entities[e.id] = e
+    }
+    view.blockAt = pos => {
+      const cell = pos.floored(); const key = cellKey(cell)
+      if (cells.has(key)) return cells.get(key)
+      const eye = myEye()
+      const points = [[.5, .5, .5]]
+      for (const x of [.05, .95]) for (const y of [.05, .95]) for (const z of [.05, .95]) points.push([x, y, z])
+      const seen = points.some(([x, y, z]) => {
+        const d = cell.offset(x, y, z).minus(eye); const len = d.norm()
+        const hit = len > 0 ? pick.blockOnRay(bot, eye, d.scaled(1 / len), len, /glass|_pane$|^barrier$|^iron_bars$/) : null
+        return !hit || hit.pos.equals(cell)
+      })
+      const b = seen ? bot.blockAt(cell, false) : null
+      cells.set(key, b); return b
+    }
+    return Object.assign(new Map(), { world: view })
+  }
+
+  function eatAnchorDefense (item, leftMs, noticed, reactMs) {
+    const foe = enemy()
+    if (!CX2 || !foe?.position || foe.isValid === false) return null
+    const me = bot.entity.position; const dMe = boom.defenseOf(bot, bot.entity)
+    const threats = []
+    for (const a of anchorsAt.values()) {
+      if (a.mine || a.pos.distanceTo(me) > 8 || !anchorSeen(a) || !(a.charges > 0)) continue
+      const center = a.pos.offset(.5, .5, .5)
+      const dmg = boom.blast(bot, center, ANCHOR_P, me, { def: dMe, seen: 1 }).dmg
+      threats.push({ c: { position: center, id: 'a' + cellKey(a.pos), isValid: true }, t: { me: dmg }, power: ANCHOR_P, cell: a.pos, charges: a.charges })
+    }
+    if (!threats.length) { noticed.at = null; return null }
+    const now = gameClock.now()
+    if (noticed.at == null) noticed.at = now
+    const delay = Math.max(0, (reactMs || 0) - (now - noticed.at))
+    // Consumables + AbsorptionMobEffect (1.21.11, combat-calc-javap): absorption I / IV.
+    // Count the absorption granted on completion; do not credit future regeneration ticks.
+    const absorption = Math.max(0, effHp(bot, bot.entity) - (bot.health ?? 20))
+    const gain = Math.max(0, (item === 'enchanted_golden_apple' ? 16 : item === 'golden_apple' ? 4 : 0) - absorption)
+    const defense = evade(threats, { dMe, myEff: effHp(bot, bot.entity), cache: eatDefenseCache(), foe,
+      delayTicks: Math.ceil(delay / TICK), finishTicks: Math.ceil(leftMs / TICK), finishGain: gain, count: false })
+    return delay > 0 ? null : defense
   }
 
   // ------------------------------------------------------------ план
@@ -1678,12 +1733,17 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
       const had = countOf(bot, a.item)
       const dMe = boom.defenseOf(bot, bot.entity)
       let why = null
+      const noticed = { at: null }
       try {
+        if (ctl.aborted || ctx.stop?.()) { out.note = 'яблоко: прервано'; return out }
         bot.activateItem()
         const t0 = gameClock.now()
         while (gameClock.now() - t0 < 1900 && !ctl.aborted) {
           await sleep(TICK)
           if (countOf(bot, a.item) < had) break
+          if (ctl.aborted || ctx.stop?.()) { why = 'другая угроза'; break }
+          const defense = eatAnchorDefense(a.item, Math.max(0, require('./tempo').consumeMs(a.item) - (gameClock.now() - t0)), noticed, ctx.reactMs)
+          if (defense) { out.defense = defense; why = 'защита от видимого якоря дешевле остатка еды'; break }
           // Его кристалл у меня и мне от него смертельно — бросить есть.
           const f = enemy()
           const me = bot.entity.position

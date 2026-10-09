@@ -36,7 +36,7 @@ function physBot (world = grid()) {
   const control = { ...IDLE }
   const bot: any = new EventEmitter()
   Object.assign(bot, {
-    version: '1.21.11', registry: mcData, food: 20, jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0,
+    version: '1.21.11', registry: mcData, health: 20, food: 20, jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0,
     inventory: { slots: [], items: () => [item] }, heldItem: item,
     entity: { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, -0.0784, 0), onGround: true, height: 1.8,
       isInWater: false, isInLava: false, isInWeb: false, isCollidedHorizontally: false, isCollidedVertically: true,

@@ -48,7 +48,14 @@ const methods = {
   status: async (p) => session.immediate(async () => ({
     fairPlay: cfg.fairPlay,
     server: `${cfg.host}:${cfg.port}`,
-    ...(p && p.items ? { items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('./pvp/combat-observe').itemObs(session.bot, it)) || [] } : {}),
+    ...(p && p.items ? {
+      items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('./pvp/combat-observe').itemObs(session.bot, it)) || [],
+      storage: session.bot?.inventory?.slots ? Array.from({ length: 36 }, (_, index) => {
+        const it = session.bot.inventory.slots[index + 9]
+        return it ? { ...require('./pvp/combat-observe').itemObs(session.bot, it),
+          plain: !it.nbt && !(it.components?.length) && !(it.removedComponents?.length) && !(it.componentMap?.size) && !(it.metadata) } : null
+      }) : null
+    } : {}),
     ...(p && p.foeEstimate ? { foeEstimate: require('./pvp/combat-observe').readFoeEstimate(session.bot, p.foeEstimate) } : {}),
     ...(p && p.enchants ? { enchants: enchantedGear(session.bot) } : {}),
     // Последний отчёт дуэли (pvp.duel кладёт при конце боя): арена берёт его, если ответ fight пришёл пустым (S7d).

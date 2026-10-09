@@ -60,3 +60,19 @@ test('Arms status: нет подключения — нет выдуманног
   const result = await status(null)({ items: true })
   assert.equal(result.items.length, 0)
 })
+
+test('Arms storage contains exactly own slots 9..44 and marks component-bearing stacks as nonplain', async () => {
+  const slots = Array(46).fill(null)
+  slots[5] = { name: 'iron_helmet', count: 1 }
+  slots[45] = { name: 'totem_of_undying', count: 1 }
+  slots[9] = { name: 'arrow', count: 60, components: [], removedComponents: [], componentMap: new Map() }
+  slots[10] = { name: 'arrow', count: 2, components: [{ type: 'custom_name', data: 'marked' }] }
+  const run = status({ inventory: { slots } })
+  assert.equal((await run({})).storage, undefined)
+  const result = await run({ items: true })
+  assert.equal(result.storage.length, 36)
+  assert.equal(result.storage[0].name, 'arrow'); assert.equal(result.storage[0].plain, true)
+  assert.equal(result.storage[1].plain, false)
+  assert(result.storage.slice(2).every(i => i === null))
+  assert.equal((await status(null)({ items: true })).storage, null, 'absent inventory is unknown capacity, not 36 free slots')
+})

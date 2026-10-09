@@ -12,6 +12,62 @@ function state(resources: Record<string, number>, facts: Record<string, any> = {
 }
 const first = (s: any) => plan(armsRegistry(), s, opponentDefeated, { riskPenalty: ARMS_RISK_PENALTY }).steps.map((x: any) => x.id)
 
+test('LootChest quote remains an option after deadline; price and risk decide against Engage', () => {
+  const s = state({ power: 1, chests: 1 }, { deadline: true, enemy_known: true, enemy_power: 20,
+    loot_target_id: '8,0,0', loot_round_scope: 'r1', loot_quote_at: 4, loot_gain: 20, loot_cost_ticks: 40, loot_risk: 0.01 })
+  const loot = armsRegistry().get('LootChest')
+  assert.equal(loot.preconditions(s), true)
+  assert.equal(first(s)[0], 'LootChest')
+  assert.deepEqual(loot.command(s).params, { chestId: '8,0,0', roundScope: 'r1', quoteAt: 4 })
+  s.facts.loot_cost_ticks = fact(10000, 'inferred', 0); s.facts.loot_risk = fact(1, 'inferred', 0)
+  assert.equal(first(s)[0], 'Engage')
+})
+
+test('one concrete loot quote yields only one projected gain until a new observation', () => {
+  const { applyEffect } = require('../src/core/world-state')
+  const loot = armsRegistry().get('LootChest')
+  const s = state({ power: 1, chests: 20 }, { loot_target_id: 'a', loot_round_scope: 'r1', loot_gain: 8.6, loot_cost_ticks: 200, loot_risk: 0.01 })
+  const after = applyEffect(s, loot.expectedEffects(s))
+  assert.equal(after.resources.power, 9.6)
+  assert.equal(loot.preconditions(after), false)
+})
+
+test('loot verification needs matching receipts, not changed power or abandoned candidates', () => {
+  const { cloneWorld } = require('../src/core/world-state')
+  const { StrategicDirector } = require('../src/core/strategy')
+  const registry = armsRegistry(), loot = registry.get('LootChest')
+  const before = state({ power: 1, chests: 2, loot_completed: 0, loot_progress: 0 })
+  const abandoned = cloneWorld(before); abandoned.resources.chests--
+  assert.equal(loot.successCondition(before, abandoned), false)
+  assert.equal(loot.progressCondition(before, abandoned), false)
+  const partial = cloneWorld(before); partial.resources.power = 12; partial.resources.loot_progress++
+  const director = new StrategicDirector(registry, { now: () => 0 }, { goal: opponentDefeated })
+  assert.equal(director.verify(loot, before, partial, { outcome: 'PARTIAL', events: [] }), 'PARTIAL')
+})
+
+test('Scout/OpenCache forecast uses observed inventory prior and cannot command an unknown chest', () => {
+  for (const resource of ['unscouted', 'caches']) {
+    const s = state({ power: 1, [resource]: 1 }, { enemy_power: 1, loot_prior_gain: 8.6 })
+    assert.equal(first(s)[0], resource === 'unscouted' ? 'ScoutArea' : 'OpenCache')
+    const { applyEffect } = require('../src/core/world-state')
+    const registry = armsRegistry(), prep = registry.get(first(s)[0]), loot = registry.get('LootChest')
+    const after = applyEffect(s, typeof prep.expectedEffects === 'function' ? prep.expectedEffects(s) : prep.expectedEffects)
+    assert.equal(loot.preconditions(after), true)
+    assert.equal(loot.command(after).params.chestId, undefined)
+    assert.equal(after.facts.loot_gain.value, 8.6)
+  }
+})
+
+test('loot retry follows a changed target or access evidence, never quote timestamp alone', () => {
+  const { cloneWorld } = require('../src/core/world-state')
+  const loot = armsRegistry().get('LootChest')
+  const before = state({}, { loot_target_id: 'a', loot_evidence: 'a:0', loot_quote_at: 0 })
+  const later = cloneWorld(before); later.facts.loot_quote_at = fact(40000, 'inferred', 40000)
+  assert.equal(loot.retryCondition(before, later), false)
+  later.facts.loot_target_id = fact('b', 'observed', 40000)
+  assert.equal(loot.retryCondition(before, later), true)
+})
+
 test('P7 ench: Sharpness учитывается по уровню; Unbreaking не добавляет урон и не провоцирует худший крафт', () => {
   const { bestCraft } = require('../src/pvp/arms-graph')
   const plain = powerOf([{ name: 'iron_sword' }]).total
@@ -64,18 +120,21 @@ test('P8: подтверждённо раненый враг меняет цен
 })
 
 test('гонка: пустой старт — разведка, затем известный сундук; без лута и после срока — атака', () => {
-  assert.equal(first(state({ power: 1, unscouted: 6 }, { enemy_power: 1 }))[0], 'ScoutArea', 'враг не виден — паритет на момент наблюдения')
-  assert.equal(first(state({ power: 1, unscouted: 6, chests: 1 }, { enemy_power: 1 }))[0], 'LootChest')
-  assert.equal(first(state({ power: 1, caches: 1 }, { enemy_power: 1 }))[0], 'OpenCache')
+  const prior = { enemy_power: 1, loot_prior_gain: 8.6 }
+  assert.equal(first(state({ power: 1, unscouted: 6 }, prior))[0], 'ScoutArea', 'враг не виден — паритет на момент наблюдения')
+  assert.equal(first(state({ power: 1, unscouted: 6, chests: 1 }, { ...prior, loot_target_id: 'a', loot_gain: 8.6, loot_cost_ticks: 200, loot_exposure: 0.5 }))[0], 'LootChest')
+  assert.equal(first(state({ power: 1, caches: 1 }, prior))[0], 'OpenCache')
   assert.deepEqual(first(state({ power: 12 })), ['Engage'], 'брать нечего — в бой')
-  assert.deepEqual(first(state({ power: 3, unscouted: 6, chests: 2 }, { deadline: true, enemy_known: true })), ['Engage'], 'срок лута вышел, враг на виду')
+  assert.deepEqual(first(state({ power: 3, unscouted: 6, chests: 2 }, { deadline: true, enemy_known: true })), ['Engage'], 'разведка закончилась; конкретного quote нет')
 })
 
-test('гонка: враг рядом — сильнее меня и лут есть: уйти; слабее — атаковать', () => {
-  assert.equal(first(state({ power: 6, chests: 2, unscouted: 4 }, { enemy_near: true, enemy_known: true, enemy_power: 14 }))[0], 'Retreat')
+test('гонка: враг рядом — выгодна разведка после ухода; слабее — атаковать', () => {
+  const facts = { enemy_near: true, enemy_known: true, enemy_power: 14 }
+  assert.equal(first(state({ power: 6, unscouted: 4 }, { ...facts, loot_prior_gain: 8.6 }))[0], 'Engage', 'прежний небольшой прирост не окупает риск подготовки')
+  assert.equal(first(state({ power: 6, unscouted: 4 }, { ...facts, loot_prior_gain: 12 }))[0], 'Retreat', 'более полезный лут окупает путь через уход и разведку')
   assert.equal(first(state({ power: 18, chests: 2 }, { enemy_near: true, enemy_known: true, enemy_power: 6 }))[0], 'Engage')
   assert.deepEqual(first(state({ power: 6, chests: 2, unscouted: 4 }, { enemy_near: true, enemy_contact: true, enemy_known: true, enemy_power: 14 })), ['Engage'], 'бьёт вплотную — уходить поздно')
-  assert.equal(first(state({ power: 1, unscouted: 20 }, { enemy_near: true, enemy_known: true, enemy_power: 1 }))[0], 'Retreat', 'равные с пустыми руками — не драться, а лутать')
+  assert.equal(first(state({ power: 1, unscouted: 20 }, { enemy_near: true, enemy_known: true, enemy_power: 1, loot_prior_gain: 8.6 }))[0], 'Engage', 'уход и неизвестный маршрут к луту тоже имеют цену и не обещают безопасную подготовку')
 })
 
 test('сила снаряжения: алмаз > железо > ничего, броня и тотем считаются; видимое — только руки и броня', () => {

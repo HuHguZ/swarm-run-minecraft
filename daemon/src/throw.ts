@@ -275,6 +275,14 @@ function jumpChoice (bot, target, k, { jump, sprint = false, runYaw = null, pick
   return best && best.kind !== 'none' ? { kind: best.kind, yaw } : null
 }
 
+// ThrownEnderpearl: 5 HP, bypasses armor but respects fall enchantments,
+// Resistance and absorption. Re-read our own state at release, after waits.
+function canSurvivePearl (bot) {
+  if (bot.game?.gameMode === 'creative' || bot.game?.gameMode === 'spectator') return true
+  const hp = bot.health ?? 0
+  return hp > 0 && hp + require('./read').absorptionOf(bot, bot.entity) > require('./pearl-hop').pearlDamage(bot)
+}
+
 // Бросок: держим предмет в руке, прицел по последнему тику физики. Сервер
 // ставит снаряд в позицию и прибавляет смещение из последнего пакета движения,
 // а наклон берёт из пакета use_item (1.21: поворот едет в нём же). Поэтому:
@@ -362,6 +370,7 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
       require('./edges').afterPacket(bot, () => {
         if (!sol) { resolve(shot); return }
         if (onAim && onAim(shot) === false) { resolve({ ...shot, cancelled: true }); return }
+        if (it.name === 'ender_pearl' && !canSurvivePearl(bot)) { resolve({ ...shot, cancelled: true }); return }
         bot.look(sol.yaw, sol.pitch, true).catch(() => {})
         // 750 TPS (s5, 06.10, свидетель DragonLab): bot.look под замком рефлексов асинхронный — поворот доезжал после броска,
         // а use_item несёт поворот из bot.entity: жемчуг улетал со старым взглядом (yaw 0/pitch 0 после tp — в пустоту;
@@ -475,4 +484,4 @@ function escapePick (bot, score, { minDist = 8, maxDrop = Infinity }: any = {}) 
   }
 }
 
-module.exports = { KINDS, kindOf, launch, flight, solve, aim, landing, throwAt, safeLanding, escapePick, jumpLaunch, jumpRoom, jumpChoice, JUMP_VY, RUN_TICKS, RUN_H, RUN_AHEAD, RUNWAY }
+module.exports = { KINDS, kindOf, launch, flight, solve, aim, landing, throwAt, canSurvivePearl, safeLanding, escapePick, jumpLaunch, jumpRoom, jumpChoice, JUMP_VY, RUN_TICKS, RUN_H, RUN_AHEAD, RUNWAY }

@@ -188,14 +188,18 @@ const dropFromPerch = async () => {
     if (!perch || ctx.ctl.aborted || !bot.entity.onGround) return { ok: false, acted: false }
     const me0 = bot.entity.position.clone()
     const hp = (bot.health ?? 0) + (read.absorptionOf(bot, bot.entity) || 0)
-    const effect = bot.registry.effectsByName.resistance
+    const effect = bot.registry?.effectsByName?.resistance || bot.registry?.effectsByName?.Resistance
     const def = damageModel.defenseOf([5, 6, 7, 8].map(slot => bot.inventory.slots[slot]).filter(Boolean).map(item => ({ name: item.name,
       ench: { protection: read.enchLevel(bot, item, 'protection'), feather_falling: read.enchLevel(bot, item, 'feather_falling') } })),
     { resistance: (effect && bot.entity.effects?.[effect.id]?.amplifier) ?? -1 })
     const eta = ctx.tt?.eta(ctx.entity) ?? Infinity
     // Explicit price: fraction of remaining HP lost plus exposure relative to
     // the observed time to his next hit. No minimum-HP gate for leaving a perch.
-    const price = (damage, ms) => damage / (hp - damage) + ms / Math.max(ctx.TICK_MS, eta)
+    const price = (damage, ms, exposedEta = eta) => damage / (hp - damage) + ms / Math.max(ctx.TICK_MS, exposedEta)
+    const waterGuard = bot._ndFallGuard
+    const bucket = ctx.findItem(bot, item => item.name === 'water_bucket')
+    const waterReady = bucket && waterGuard?.waterReady?.()
+    const canWater = hp > 0 && waterGuard?.planWater && (waterReady?.ok || waterReady?.toBar || waterReady?.retryMs > 0)
     const options: any[] = []
     const pos = me0.floored().offset(0, -1, 0)
     const own = perch.own?.find(b => b.pos.equals(pos))
@@ -224,9 +228,18 @@ const dropFromPerch = async () => {
       const plan = planLedgeDrop(observed, target, { sprint: false, jump: false, coast: 6 }, Infinity)
       if (!plan) continue
       const damage = damageModel.afterDefense(plan.damage, 'fall', def)
-      if (!(damage < hp)) continue // physically lethal, including a failed mace hit
       const ms = plan.ticks * ctx.TICK_MS
-      options.push({ kind: 'drop', plan, damage, ms, cost: price(damage, ms) })
+      if (damage < hp) options.push({ kind: 'drop', plan, damage, ms, cost: price(damage, ms) })
+      if (canWater && damage > 0) {
+        const gap = Math.max(0, Math.hypot(target.x - ctx.entity.position.x, target.z - ctx.entity.position.z) - ctx.tempo.PLAYER_REACH)
+        const landingEta = Math.min(eta, gap / ctx.tempo.SPRINT_BPT * ctx.TICK_MS)
+        const waterMs = ms + 300 + (waterReady.retryMs || (waterReady.toBar ? 300 : 0))
+        // A hit can spoil the clutch: price the dry fallback by exposure, rather
+        // than treating a bucket as immunity or banning every risky landing.
+        // shortcut: exposure is a cost, not a failure probability; fit it from timed hit receipts when available.
+        const risk = damage / hp * ms / Math.max(ctx.TICK_MS, landingEta)
+        options.push({ kind: 'water', plan, damage: 0, failureDamage: damage, ms: waterMs, cost: price(0, waterMs, landingEta) + risk })
+      }
     }
     options.sort((a, b) => a.cost - b.cost || a.ms - b.ms)
     const choice = options[0]
@@ -241,7 +254,13 @@ const dropFromPerch = async () => {
         await bot.lookAt(choice.point, true)
         if (ctx.ctl.aborted || !ctx.pick.faceAim(bot, pos, new ctx.Vec3(0, 1, 0))) return { ok: false, acted }
         acted = true
-        await ctx.withTimeout(bot.dig(choice.block, true), choice.ms + 1500)
+        const previousTag = bot._ndBlockTag
+        let digging
+        try {
+          bot._ndBlockTag = { what: 'спуск по своей опоре', intent: 'perch-descent', cell: pos, at: ctx.gameClock.wall.now() }
+          digging = bot.dig(choice.block, true)
+        } finally { bot._ndBlockTag = previousTag }
+        await ctx.withTimeout(digging, choice.ms + 1500)
         const t0 = ctx.gameClock.now()
         while (!ctx.ctl.aborted && ctx.gameClock.now() - t0 < 1000 && !(bot.entity.onGround && bot.entity.position.y < me0.y - .6)) await ctx.sleep(ctx.TICK_MS)
         if (!bot.entity.onGround || Math.abs(bot.entity.position.y - down.y) > .05 || ctx.ctl.aborted) return { ok: false, acted }
@@ -258,8 +277,25 @@ const dropFromPerch = async () => {
         ctx.clear(); ctx.aim = 'target'; await ctx.holdWeapon()
       }
     }
-    const smashDrop = ctx.prof.player && ctx.mace.fallSmashReady(ctx.bot, ctx.entity)
+    const smashDrop = choice.kind !== 'water' && ctx.prof.player && ctx.mace.fallSmashReady(ctx.bot, ctx.entity)
+    let releaseWater = null
+    const pickedBefore = waterGuard?.picked || 0
+    const firedBefore = waterGuard?.fired || 0
     try {
+    if (choice.kind === 'water') {
+      let ready = waterGuard.waterReady()
+      if (!ready.ok) {
+        if (ready.toBar) {
+          try { await bot.equip(bucket, 'hand') } catch { return { ok: false, acted: false } }
+          ready = waterGuard.waterReady()
+        }
+        if (ready.retryMs > 0) { await ctx.sleep(ready.retryMs); ready = waterGuard.waterReady() }
+        if (!ready.ok || ctx.ctl.aborted) return { ok: false, acted: false }
+        return await dropFromPerch() // Reprice before cleanup can reclaim the child's hand.
+      }
+      releaseWater = waterGuard.planWater({ owner: {}, until: ctx.gameClock.now() + choice.ms + 3000 })
+      if (!releaseWater) return { ok: false, acted: false }
+    }
     if (smashDrop) {
       const m = ctx.findItem(ctx.bot, i => i.name === 'mace')
       if (m && (!ctx.bot.heldItem || ctx.bot.heldItem.name !== 'mace')) await ctx.holdItem(m)
@@ -270,14 +306,32 @@ const dropFromPerch = async () => {
       (bot.health ?? 0) + (read.absorptionOf(bot, bot.entity) || 0) <= choice.damage) return { ok: false, acted: !!smashDrop }
     ctx.edgeGuard.allow(Math.ceil(me0.y - choice.plan.target.y) + 1, choice.ms + 500)
     for (let i = 0; i < choice.plan.steps.length && !ctx.ctl.aborted; i++) {
+      if (choice.kind === 'water' && (waterGuard.placed || bot.entity.isInWater)) break
       if (i && bot.entity.position.distanceTo(choice.plan.states[i - 1].pos) > .65) break
       const step = choice.plan.steps[i]
-      await bot.look(step.yaw, 0, true)
+      if (choice.kind !== 'water' || !waterGuard.busy) await bot.look(step.yaw, 0, true)
+      if (ctx.ctl.aborted) break
       for (const [key, value] of Object.entries(step.control)) ctx.set(key, value)
       await ctx.sleep(ctx.TICK_MS)
       if (smashDrop && bot.entity.position.y < me0.y - .6) break
     }
     ctx.clear()
+    if (choice.kind === 'water') {
+      const until = ctx.gameClock.now() + 3000
+      while ((bot.health ?? 0) > 0 && ctx.gameClock.now() < until &&
+        (!bot.entity.onGround || waterGuard.placed || waterGuard.picked <= pickedBefore && !ctx.ctl.aborted)) {
+        await ctx.sleep(ctx.TICK_MS)
+      }
+      const landed = bot.entity.onGround && bot.entity.position.y < me0.y - .6
+      const picked = waterGuard.picked > pickedBefore && !!ctx.findItem(bot, item => item.name === 'water_bucket')
+      if (landed) {
+        ctx.perch = null
+        ctx.used(picked ? 'спрыгнул со столба с водой и забрал ведро' : waterGuard.fired > firedBefore
+          ? 'спрыгнул со столба: вода и подбор не подтверждены' : 'спрыгнул со столба: водяной клатч не сработал')
+      }
+      return { ok: landed && picked, acted: true, kind: 'water', damage: picked ? 0 : choice.failureDamage,
+        failureDamage: choice.failureDamage, ms: choice.ms, picked, fired: waterGuard.fired > firedBefore }
+    }
     if (smashDrop && !ctx.ctl.aborted && !bot.entity.onGround && bot.entity.position.y < me0.y - .6) {
       const fr = await ctx.mace.descend(ctx.bot, ctx.ctl, ctx.entity, { vel: () => ctx.track.vel(), stats: ctx.mc.st, telemetryHp: ctx.telemetryHp })
       ctx.mc.st.fallSmash++
@@ -291,7 +345,11 @@ const dropFromPerch = async () => {
       ctx.used(`спрыгнул со столба: ${choice.damage.toFixed(1)} хп, ${choice.ms} мс`)
     }
     return { ok, acted: true, kind: 'drop', damage: choice.damage, ms: choice.ms }
-    } finally { ctx.clear(); ctx.aim = 'target' }
+    } finally {
+      releaseWater?.()
+      ctx.clear(); ctx.aim = 'target'
+      if (choice.kind === 'water' && bot.entity.onGround && !waterGuard.placed) await ctx.holdWeapon()
+    }
   }
 
 const healItem = () => ctx.findPotion(ctx.bot, 'splash_potion', 'heal') || ctx.findPotion(ctx.bot, 'potion', 'heal') ||

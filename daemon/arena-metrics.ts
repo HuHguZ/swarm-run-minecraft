@@ -9,7 +9,7 @@ function merge (values, key, parents = []) {
   if (LAST.has(key)) return structuredClone(present.at(-1))
   if (['melee.combo.max', 'crystal.planMsMax', 'shield.confirmMs', 'quality.longestS'].includes(key)) return Math.max(...present)
   if (key === 'shield.worn') return present.some(Boolean)
-  if (key === 'melee.combo.avg' || key === 'mace.peak' || key === 'crystal.avg' || key === 'boom.avg' || key === 'crystal.planMsAvg' || /^blockLog\.(place|dig)\..+\.ms$/.test(key)) {
+  if (key === 'melee.combo.avg' || key === 'mace.peak' || key === 'crystal.avg' || key === 'boom.avg' || key === 'crystal.planMsAvg' || /^blockLog\.(place|dig|supportDig)\..+\.ms$/.test(key)) {
     const weight = p => key === 'melee.combo.avg' ? p.n : key === 'mace.peak' ? p.launched
       : key === 'crystal.avg' || key === 'boom.avg' ? p.dealt?.length : key === 'crystal.planMsAvg' ? p.planN : p.ok
     let total = 0; let n = 0
