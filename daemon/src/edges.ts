@@ -1072,6 +1072,17 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
   const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
   const t0 = gameClock.now()
   const Ty = floorY != null ? Math.floor(floorY + 1e-6) : Math.floor(target.position.y + 1e-6)
+  const movement = require('./movement')
+  const swimRoute = movement.inWater(bot) ? movement.findSwimRoute(bot, { visibleOnly: true }) : null
+  if (swimRoute && (swimRoute.kind === 'land' || swimRoute.path.length)) {
+    const swim = await movement.escapeWater(bot, ctl, { timeoutMs: maxMs, visibleOnly: true })
+    if (ctl.aborted) return { ok: false, placed: 0, why: 'подъём прерван', seconds: Math.round((gameClock.now() - t0) / 1000) }
+    if (swim.ok && Math.floor(bot.entity.position.y + 1e-6) >= Ty) {
+      return { ok: true, how: 'выплыл из ямы на берег', placed: 0, seconds: Math.round((gameClock.now() - t0) / 1000) }
+    }
+    if (!swim.breathing) return { ok: false, placed: 0, why: swim.error, seconds: Math.round((gameClock.now() - t0) / 1000) }
+  }
+  if (gameClock.now() - t0 >= maxMs) return { ok: false, placed: 0, why: 'время подъёма вышло', seconds: Math.round((gameClock.now() - t0) / 1000) }
   const fillers = () => fillerCount(bot)
   // Обсидиан — последним: он нужен на коробки, но лучше подняться им, чем стоять внизу.
   const towerItem = () => pickFiller(bot) ? null : (bot.inventory.items().find(i => i.name === 'obsidian' || i.name === 'crying_obsidian') || {}).name || null
@@ -1085,7 +1096,7 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
     how = shaft.digMs ? `под быстрый пол у ${shaft.x},${shaft.z} (${shaft.n} бл., ломать ${(shaft.digMs / 1000).toFixed(1)} с)` : `через дыру в полу у ${shaft.x},${shaft.z} (${shaft.n} бл.${shaft.bridge ? ', мостом' : ''})`
     try {
       bot.pathfinder.setGoal(new goals.GoalBlock(shaft.x, shaft.gy, shaft.z))
-      const until = gameClock.now() + (shaft.bridge ? 30000 : 20000)
+      const until = Math.min(t0 + maxMs, gameClock.now() + (shaft.bridge ? 30000 : 20000))
       // Пути нет (стоим на своём столбе под полом) — не ждать 20 с впустую.
       let noPath = 0
       const onPath = (r) => { if (r && r.status === 'noPath') noPath++ }

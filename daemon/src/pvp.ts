@@ -416,6 +416,9 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
       const me0 = bot.entity.position
       const ep = foeSeenPos
       if (!ep) return null
+      const ownCell = me0.floored()
+      const observed = require('./pvp/search').observedCollision(bot)
+      const sightWorld = { blockAt: p => observed.blockAt(p) || { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } }
       const chest = ep.offset(0, (entity.height || 1.8) * 0.6, 0)
       let best = null
       for (let dx = -6; dx <= 6; dx++) for (let dz = -6; dz <= 6; dz++) {
@@ -423,10 +426,12 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
         if (hd < 3 || hd > 6.2) continue
         for (const dy0 of [0, 1, -1]) {
           const c = new Vec3(Math.floor(ep.x) + dx, Math.floor(me0.y) + dy0, Math.floor(ep.z) + dz)
-          const fl = bot.blockAt(c.offset(0, -1, 0), false); const a0 = bot.blockAt(c, false); const a1 = bot.blockAt(c.offset(0, 1, 0), false)
+          if (c.equals(ownCell)) continue // GoalBlock is already reached: no change of viewpoint.
+          const fl = observed.blockAt(c.offset(0, -1, 0)); const a0 = observed.blockAt(c); const a1 = observed.blockAt(c.offset(0, 1, 0))
           if (!fl || fl.boundingBox !== 'block' || !a0 || a0.boundingBox !== 'empty' || !a1 || a1.boundingBox !== 'empty' || /lava|fire|cobweb/.test(a0.name + a1.name)) continue
           if (AR && !onField(c.offset(0.5, 0, 0.5))) continue
-          if (!raySees(bot, c.offset(0.5, EYE, 0.5), chest)) continue
+          const eye = c.offset(0.5, EYE, 0.5); const delta = chest.minus(eye); const len = delta.norm()
+          if (pick.blockOnRay(sightWorld, eye, delta.scaled(1 / len), len)) continue
           const md = Math.hypot(c.x + 0.5 - me0.x, c.z + 0.5 - me0.z)
           if (!best || md < best.md) best = { x: c.x, y: c.y, z: c.z, md }
           break
@@ -1654,9 +1659,9 @@ const pvpSkills = {
       } catch (err) { st.calcErr = String(err && err.message || err).slice(0, 120) }
     }
     const seesBody = (!prof.player || vision.visible(entity)) && raySees(bot, eye, entity.position.offset(0, (entity.height || 1.8) * 0.55, 0))
-    // Где я его видел в последний раз (S7d, ревью Codex: честность — позиция из пакетов сущности идёт и сквозь стену):
-    // точка прострела и «столб к его столбу» считают от увиденного, а не от свежего пакета.
-    if (seesBody) foeSeenPos = entity.position.clone()
+    // Player entity is the observer's last-seen view, including sightings made
+    // while awaiting a skill. A fresh chest ray must not discard that receipt.
+    if (prof.player || seesBody) foeSeenPos = entity.position.clone()
     // Честный прицел (pick.js, 2026-09-26: «боты через один блок пробивают»).
     const sight = r <= HIT_REACH + 0.3 ? pick.aim(bot, entity, { eye: pick.eyeOf(bot), range: HIT_REACH }) : null
     const inSight = !!(sight && sight.point)

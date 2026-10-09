@@ -6,6 +6,29 @@ const { goals, Movements } = require('mineflayer-pathfinder')
 const clock = require('../game-clock')
 const pick = require('../pick')
 
+// Shared by acquisition and LOS repositioning: packet-only cells stay unknown,
+// including apparently empty head space above a visible support.
+export function observedCollision (bot) {
+  const cells = new Map(); let observedAt = -Infinity
+  const sightWorld = { blockAt: pos => bot.blockAt(pos, false) ||
+    { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } }
+  return { physics: bot.physics, game: bot.game, blockAt (pos) {
+    if (observedAt !== clock.now()) { observedAt = clock.now(); cells.clear() }
+    const cell = pos.floored(); const key = cell.toString()
+    if (cells.has(key)) return cells.get(key)
+    const eye = pick.eyeOf(bot)
+    const points = [[.5, .5, .5]]
+    for (const x of [.05, .95]) for (const y of [.05, .95]) for (const z of [.05, .95]) points.push([x, y, z])
+    const seen = points.some(([x, y, z]) => {
+      const delta = cell.offset(x, y, z).minus(eye); const len = delta.norm()
+      const hit = len > 0 ? pick.blockOnRay(sightWorld, eye, delta.scaled(1 / len), len, /glass|_pane$|^barrier$|^iron_bars$/) : null
+      return !hit || hit.pos.equals(cell)
+    })
+    const block = seen ? bot.blockAt(cell, false) : null
+    cells.set(key, block); return block
+  } }
+}
+
 // Search viewpoints from our own pose and visible supports, never the hidden target's packets.
 export async function acquireTarget (bot, ctl, vision, raw, { deadline, arena = null }: any) {
   const start = clock.now()
@@ -15,23 +38,7 @@ export async function acquireTarget (bot, ctl, vision, raw, { deadline, arena = 
   if (entity) return { entity, search }
   const movement = combatMovement(bot, arena)
   arena = movement.arena
-  // Unknown cells stay unknown for clearance and for pathfinder, including apparently empty head space.
-  const cells = new Map(); let observedAt = -Infinity
-  const observed = { physics: bot.physics, game: bot.game, blockAt (pos) {
-    if (observedAt !== clock.now()) { observedAt = clock.now(); cells.clear() }
-    const cell = pos.floored(); const key = cell.toString()
-    if (cells.has(key)) return cells.get(key)
-    const eye = pick.eyeOf(bot)
-    const points = [[.5, .5, .5]]
-    for (const x of [.05, .95]) for (const y of [.05, .95]) for (const z of [.05, .95]) points.push([x, y, z])
-    const seen = points.some(([x, y, z]) => {
-      const delta = cell.offset(x, y, z).minus(eye); const len = delta.norm()
-      const hit = len > 0 ? pick.blockOnRay(bot, eye, delta.scaled(1 / len), len, /glass|_pane$|^barrier$|^iron_bars$/) : null
-      return !hit || hit.pos.equals(cell)
-    })
-    const block = seen ? bot.blockAt(cell, false) : null
-    cells.set(key, block); return block
-  } }
+  const observed = observedCollision(bot)
   const mv = bot.pathfinder.movements
   const getBlock = mv?.getBlock; const entityDetection = mv?.allowEntityDetection
   if (getBlock) {

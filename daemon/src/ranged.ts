@@ -351,7 +351,15 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
     const off = bot.inventory.slots[OFF]
     // Сервер заряжает ракету из левой руки — там должна быть именно эта (со звёздами).
     if (!off || off.name !== 'firework_rocket' || rocketStars(off) < rocketStars(rockets)) {
-      if (bot.currentWindow || bot.inventory.selectedItem) return { ok: false, why: 'курсор занят' }
+      if (bot.currentWindow || bot.inventory.selectedItem) {
+        // Snapshot before the caller restores its weapon; keep menu/cursor
+        // evidence separate without dumping item components or inventory.
+        const cursor = it => it ? { name: it.name, count: it.count, slot: it.slot } : null
+        return { ok: false, why: 'курсор занят', inventoryBusy: {
+          window: bot.currentWindow ? { id: bot.currentWindow.id, type: bot.currentWindow.type } : null,
+          inventoryCursor: cursor(bot.inventory.selectedItem), windowCursor: cursor(bot.currentWindow?.selectedItem)
+        } }
+      }
       try { await bot.equip(rockets, 'off-hand') } catch (e) { return { ok: false, why: 'ракеты в левую: ' + e.message } }
       if (off && off.name !== 'firework_rocket') restoreOff = off.name
     }
@@ -637,7 +645,7 @@ async function step (bot, ctl, ctx, { used = () => {}, holdWeapon = null, stats 
     const r = await load(bot, ctl, p.item, { ammo: p.ammo, abortIf: ctx.abortIf, arrow, onTick: ctx.onLoadTick })
     if (holdWeapon) await holdWeapon()
     if (r.ok) { S.loads = (S.loads || 0) + 1; used(`зарядил арбалет (${p.ammo === 'firework' ? 'фейерверк' : 'стрела'}, ${Math.round(r.ms)} мс)`) } else S.loadFails = (S.loadFails || 0) + 1
-    dbg('load', { ok: r.ok, why: r.why, ms: r.ms })
+    dbg('load', { ok: r.ok, why: r.why, ms: r.ms, inventoryBusy: r.inventoryBusy })
     return { did: 'load', ok: r.ok, why: r.why, ms: r.ms }
   }
   return null

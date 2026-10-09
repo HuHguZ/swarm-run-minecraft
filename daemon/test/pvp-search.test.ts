@@ -206,3 +206,30 @@ test('PvP acquisition hides cached packet geometry from fastblocks route candida
   assert.ok(observations[0].goal, 'visible alternative remains available')
   assert.equal(observations[0].ceiling, null)
 })
+
+test('PvP LOS and acquisition cannot see packet cells beyond an unknown plane', async t => {
+  const { observedCollision } = require('../src/pvp/search')
+  const results = []
+  for (const stone of [false, true]) {
+    const f = scene(t)
+    const open = f.bot.blockAt
+    const hidden = new Vec3(3, 1, 0)
+    f.bot.blockAt = p => {
+      const c = p.floored()
+      if (c.x === 1) return null // Missing world/chunk data is not visible air.
+      if (stone && c.equals(hidden)) return { name: 'stone', position: c, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+      return open(p)
+    }
+    const view = observedCollision(f.bot)
+    assert.equal(view.blockAt(new Vec3(0, 1, 0))?.name, 'air', 'known cell before the gap stays visible')
+    const mv = { bot: f.bot, getBlock(pos, dx, dy, dz) { return this.bot.blockAt(pos.offset(dx, dy, dz)) },
+      allowEntityDetection: true, exclusionAreasBreak: [] }
+    const getBlock = mv.getBlock
+    ;(f.bot.pathfinder as any).movements = mv
+    const running = acquireTarget(f.bot, f.ctl, f.vision, f.raw, { deadline: 1200 })
+    results.push({ los: view.blockAt(hidden)?.name ?? null, route: mv.getBlock(hidden, 0, 0, 0)?.name ?? null })
+    f.ctl.aborted = true; f.ctl.onAbort.forEach(cancel => cancel()); await running
+    assert.equal(mv.getBlock, getBlock)
+  }
+  assert.deepEqual(results, [{ los: null, route: null }, { los: null, route: null }])
+})

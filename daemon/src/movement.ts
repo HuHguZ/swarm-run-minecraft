@@ -183,19 +183,33 @@ function findNearestLand (bot, maxRadius = 24) {
 
 const waterCell = b => !!b && /^(water|bubble_column)$/.test(b.name)
 const swimPassable = b => !!b && b.boundingBox === 'empty' && !/lava/.test(b.name)
-const headWet = bot => waterCell(bot.blockAt(bot.entity.position.offset(0, 1.62, 0)))
-const dryFooting = bot => !inWater(bot) && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block'
+const headWet = bot => waterCell(bot.blockAt(require('./pick').eyeOf(bot)))
+const dryFooting = bot => !!bot.entity.onGround && !inWater(bot) && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block'
 
 // Search connected body-sized cells, rather than declaring a whole pool closed
 // because one column has a roof. Unknown cells and lava cannot be crossed.
 // The first breath wins when air is scarce; otherwise try to reach dry ground.
-function findSwimRoute (bot, { radius = 8, rise = 12 }: any = {}) {
+function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any = {}) {
+  // The PvP escape observes water/air as well as solid faces. Do not plan through
+  // an opaque block containing our head; that remains the embedded-body rescue.
+  if (visibleOnly && !geometry.bodyClear(bot, bot.entity.position, { water: true, web: true })) return null
+  const known = new Map()
+  const read = p => {
+    if (!visibleOnly) return bot.blockAt(p)
+    const key = p.toString()
+    if (!known.has(key)) {
+      let block = null
+      try { if (require('./perception/eyes').seesNow(bot, p)) block = bot.blockAt(p) } catch {}
+      known.set(key, block)
+    }
+    return known.get(key)
+  }
   const start = bot.entity.position.floored()
   const key = p => `${p.x},${p.y},${p.z}`
   const queue = [{ p: start, parent: -1 }]
   const seen = new Set([key(start)])
   let air = null
-  const urgent = (bot.oxygenLevel ?? 20) <= 8
+  const urgent = (bot.oxygenLevel ?? 20) <= 8 && headWet(bot)
   const route = (i, kind) => {
     const path = []
     const target = queue[i].p
@@ -205,23 +219,23 @@ function findSwimRoute (bot, { radius = 8, rise = 12 }: any = {}) {
   const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
   for (let i = 0; i < queue.length; i++) {
     const p = queue[i].p
-    const feet = bot.blockAt(p)
-    const head = bot.blockAt(p.offset(0, 1, 0))
-    const floor = bot.blockAt(p.offset(0, -1, 0))
+    const feet = read(p)
+    const head = read(p.offset(0, 1, 0))
+    const floor = read(p.offset(0, -1, 0))
     const land = swimPassable(feet) && swimPassable(head) && !waterCell(feet) && !waterCell(head) && floor?.boundingBox === 'block'
     if (land) return route(i, 'land')
     if (swimPassable(head) && !waterCell(head)) {
       if (!air) air = route(i, 'air')
       if (urgent) return air
     }
-    const over = bot.blockAt(p.offset(0, 2, 0))
+    const over = read(p.offset(0, 2, 0))
     const next = [...sides.map(d => p.plus(d)), p.offset(0, 1, 0)]
     // A swim jump can leave water onto the ledge one block above it.
     if (swimPassable(over)) next.push(...sides.map(d => p.plus(d).offset(0, 1, 0)))
     for (const q of next) {
       if (Math.max(Math.abs(q.x - start.x), Math.abs(q.z - start.z)) > radius || q.y - start.y > rise) continue
       if (seen.has(key(q))) continue
-      const f = bot.blockAt(q); const h = bot.blockAt(q.offset(0, 1, 0)); const g = bot.blockAt(q.offset(0, -1, 0))
+      const f = read(q); const h = read(q.offset(0, 1, 0)); const g = read(q.offset(0, -1, 0))
       if (!swimPassable(f) || !swimPassable(h)) continue
       if (!waterCell(f) && !waterCell(h) && g?.boundingBox !== 'block') continue
       seen.add(key(q))
@@ -233,7 +247,7 @@ function findSwimRoute (bot, { radius = 8, rise = 12 }: any = {}) {
 
 // Follow the connected swim route with manual controls: the old direct line to
 // the bank could point through a wall while jump stayed stuck under a roof.
-async function escapeWater (bot, ctl, { timeoutMs = 25000 }: any = {}) {
+async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false }: any = {}) {
   if (!inWater(bot)) return { ok: true, wasInWater: false }
 
   try { bot.pathfinder.setGoal(null) } catch {}
@@ -242,16 +256,18 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000 }: any = {}) {
 
   try {
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
-      const route = findSwimRoute(bot)
+      const route = findSwimRoute(bot, { visibleOnly })
       target = route?.target || null
       if (!route) break
+      if (route.kind === 'air' && !headWet(bot)) break
       const next = route.path[0] || route.target
       const horizontal = Math.hypot(next.x + 0.5 - bot.entity.position.x, next.z + 0.5 - bot.entity.position.z)
       await bot.lookAt(next.offset(0.5, 1.62, 0.5), true)
+      if (ctl.aborted || gameClock.now() >= deadline) break
       bot.setControlState('forward', horizontal > 0.25)
       bot.setControlState('sprint', horizontal > 0.25 && (bot.food ?? 20) > 6)
       // Jump doubles as "swim up" in water and keeps the head above surface.
-      bot.setControlState('jump', true)
+      bot.setControlState('jump', inWater(bot))
       await sleep(160)
     }
   } finally {
@@ -259,12 +275,14 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000 }: any = {}) {
   }
 
   const out = dryFooting(bot)
+  const head = bot.blockAt(require('./pick').eyeOf(bot))
+  const breathing = swimPassable(head) && !waterCell(head)
   return {
     ok: out,
-    breathing: !headWet(bot),
+    breathing,
     wasInWater: true,
     target: target ? xyz(target) : null,
-    error: out ? undefined : !headWet(bot) ? 'голова в воздухе, но на сухой берег не вышел' : 'не нашёл доступного пути из воды'
+    error: out ? undefined : breathing ? 'голова в воздухе, но на сухой берег не вышел' : 'не нашёл доступного пути из воды'
   }
 }
 
