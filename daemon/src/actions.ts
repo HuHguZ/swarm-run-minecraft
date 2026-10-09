@@ -2363,6 +2363,11 @@ async function eat (session, { item: name }: any = {}) {
 
   const owned = n => bot.inventory.items().reduce((s, i) => s + (i.name === n ? i.count : 0), 0)
   const hadCount = owned(food.name)
+  // Еда — immediate: session.current — чужое намерение, часто уже прерванное тактикой (sr-1010 10.10: «не поел» за 2 тика при
+  // 12 стейках, хп 13 → 6 → смерть). Сдаваться — только если его прервали во время еды.
+  const ctl0 = session.current?.ctl
+  const aborted0 = !!ctl0?.aborted
+  const stopped = () => !aborted0 && !!ctl0?.aborted
   const previous = bot.heldItem
   const { consumeInOffhand, restoreOffhand } = require('./consumable-hands')
   const offHand = consumeInOffhand(bot)
@@ -2384,7 +2389,7 @@ async function eat (session, { item: name }: any = {}) {
     // other rejection — the cancelled bite above especially — still leaves a
     // meal in flight, and bailing on it would throw away a successful one.
     const fed = await untilFoodRises(bot, foodBefore, EAT_WATCH_MS,
-      () => owned(food.name) < hadCount || session.current?.ctl?.aborted || !!thrown && /food is full/i.test(String((thrown && thrown.message) || thrown)))
+      () => owned(food.name) < hadCount || stopped() || !!thrown && /food is full/i.test(String((thrown && thrown.message) || thrown)))
     if (!fed && owned(food.name) >= hadCount) {
       await consuming
       failure = describeFailure(thrown, 'съесть') ||

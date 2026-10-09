@@ -22,3 +22,20 @@ test('ordinary food uses the free second hand and restores its shield without mo
   assert.equal(bot.heldItem, sword)
   assert.equal(slots[45], shield)
 })
+
+test('a bite is watched to the end even when the previous intent was already aborted (eat is immediate)', async () => {
+  const sword = { name: 'iron_sword', type: 1, count: 1 }
+  const shield = { name: 'shield', type: 2, count: 1 }
+  const food = { name: 'bread', type: 3, count: 2 }
+  const slots: any[] = []; slots[45] = shield
+  let bite: any = null
+  const bot: any = { health: 13, food: 16, heldItem: sword, entity: { onGround: true },
+    inventory: { slots, items: () => [sword, shield, food].filter(item => item.count > 0) },
+    equip: async (item: any, destination: string) => { if (destination === 'off-hand') slots[45] = item; else bot.heldItem = item },
+    // The off-hand bite lands 1.6 s later; releasing the use key before that cancels it, as in the game.
+    activateItem: () => { bite = setTimeout(() => { food.count--; bot.food += 5 }, 300) },
+    deactivateItem: () => { clearTimeout(bite) } }
+  const session = { bot, mcData: { foodsByName: { bread: { foodPoints: 5, saturation: 6 } } }, current: { ctl: { aborted: true } } }
+  const result = await eat(session)
+  assert.equal(result.ate, 'bread')
+})
