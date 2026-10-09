@@ -822,7 +822,9 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
     // Ход по подсказке не сдвинул тело (sr-e-1 10.10: y 46 под крепостью, 12 подсказок подряд «ok:false» с одного места) —
     // тоже сперва к палубе (столб, копка вверх), а не тот же отрезок.
     const hintStuck = !!hint && !!stuckAt && me.distanceTo(stuckAt) < 3
-    if (hint && ((hint.by === 'пирог' && lastHint && hintFlipped(lastHint.yaw, hint.yaw) && me.distanceTo(lastHint.at) < 30) || hintStuck) && verticals < 2) {
+    // Застрявшая подсказка — к палубе только с высоты мостов (sr-h-2 10.10: подъём с y 62 кончился падением на 28 и спуском
+    // вызов за вызовом до 21, под лавовое море).
+    if (hint && ((hint.by === 'пирог' && lastHint && hintFlipped(lastHint.yaw, hint.yaw) && me.distanceTo(lastHint.at) < 30) || (hintStuck && me.y >= 45 && me.y < 64)) && verticals < 2) {
       stuckAt = null
       verticals++
       const fy = Math.floor(me.y)
@@ -831,7 +833,7 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       // Столб упёрся в потолок коридора (sr-d-1 10.10: «вверх 16» дал +2..3 — пеленг метался −137↔−155, спавнер не найден за
       // 30 мин): как игрок — копать потолок над головой и ставить блок под ноги до палубы.
       const left = fy + up - Math.floor(bot.entity.position.y)
-      if (left > 2 && !ctl.aborted) {
+      if (left > 2 && Math.floor(bot.entity.position.y) >= fy && !ctl.aborted) {
         const d = await require('./build').digUp(bot, ctl, { blocks: left, mcData }).catch(e => ({ dug: 0, stopped: e.message }))
         path.push({ digUp: d.dug, stopped: d.stopped, y: Math.floor(bot.entity.position.y) })
       }

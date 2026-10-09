@@ -1927,7 +1927,9 @@ async function holdSpawner (session, ctl, ctx) {
       const kills0 = (ctx.kills || []).length
       if (kills0 !== out.killsSeen) { out.killsSeen = kills0; out.killAt = now }
       const anyFloor = now - (out.killAt || ctx.t0 || now) > 60000
-      const shootable = blazes.filter((e : any) => { const d = e.position.distanceTo(bot.entity.position); return d >= BOW_MIN && d <= BOW_MAX && aimFrac(bot, e) !== null && now - (noShot.get(e.id) || 0) > 2500 && (anyFloor || floorBelow(bot, e, bot.entity.position, reach)) && !bystanderOnLine(bot, e) })
+      // …и дальше BOW_MAX (sr-g-3 10.10: ифриты висят в 15.2–15.6 бл., «shoot 0» 400 с, лук и 64 стрелы целы, 0 убийств).
+      const bowMax = anyFloor ? 24 : BOW_MAX
+      const shootable = blazes.filter((e : any) => { const d = e.position.distanceTo(bot.entity.position); return d >= BOW_MIN && d <= bowMax && aimFrac(bot, e) !== null && now - (noShot.get(e.id) || 0) > 2500 && (anyFloor || floorBelow(bot, e, bot.entity.position, reach)) && !bystanderOnLine(bot, e) })
         .sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
       if (now - (out.dropAt || 0) > 10000) {
         out.dropAt = now
