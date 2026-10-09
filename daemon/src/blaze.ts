@@ -1379,6 +1379,7 @@ async function holdSpawner (session, ctl, ctx) {
   let lastVisAt = gameClock.now()
   let reposts = 0
   let approaches = 0
+  let farApproaches = 0
   let seenBlocks = 0
   let blockAt = 0
   // Коробку не достроили (блейз в клетке стены, сервер не ответил) — достроить
@@ -2057,6 +2058,19 @@ async function holdSpawner (session, ctl, ctx) {
           lastVisAt = gameClock.now()
           continue
         }
+      }
+      // Видны, но все дальше дальности лука (sr-k-3 10.10: «vis 3, shoot 0» 127 раз, ифриты в 25–30 бл., 0 убийств за 400 с) — подойти
+      // к ближнему на 12 бл. по той же цене, что к ифриту за стеной.
+      const bowReach = now - (out.killAt || ctx.t0 || now) > 60000 ? 24 : BOW_MAX
+      if (!bunker && bowOk && vis.length && !shootable.length && quiet > 1500 && farApproaches < 8 &&
+        vis.every((e: any) => e.position.distanceTo(bot.entity.position) > bowReach) && (bot.health ?? 0) >= (fireproof() ? 12 : 16)) {
+        const near: any = vis.slice().sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
+        farApproaches++
+        out.farApproaches = farApproaches
+        setPhase('к дальнему ифриту на выстрел')
+        log('к дальнему ифриту', { n: farApproaches, d: Math.round(near.position.distanceTo(bot.entity.position)), to: xyz(near.position) })
+        await walkNear(bot, ctl, floorUnder(bot, near.position) || near.position.floored(), 12, 8000)
+        continue
       }
       if (!bunker && spawner && blazes.some((e : any) => e.position.distanceTo(bot.entity.position) < 16) && now - lastVisAt > 6000 && quiet > 1500 && reposts < 12) {
         await setShield(false)
