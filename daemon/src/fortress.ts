@@ -765,6 +765,18 @@ function spawnerHint (bot, { leg = 20, skipYaws = [] }: any = {}) {
   return null
 }
 
+/** Ход вдоль моста: ось — больший разброс видимого кирпича в 16 бл. от ног, конец отрезка (24 бл.) — дальше от остановок (≥ 12). */
+function axisLeg (pool, feet, visited, len = 24) {
+  const near = pool.filter(p => Math.hypot(p.x - feet.x, p.z - feet.z) <= 16)
+  if (near.length < 3) return null
+  const spread = k => Math.max(...near.map(p => p[k])) - Math.min(...near.map(p => p[k]))
+  const axis = spread('x') >= spread('z') ? 'x' : 'z'
+  const far = p => visited.length ? Math.min(...visited.map(q => Math.hypot(p.x - q.x, p.z - q.z))) : Infinity
+  const ends = [len, -len].map(d => axis === 'x' ? { x: feet.x + d, z: feet.z, axis } : { x: feet.x, z: feet.z + d, axis })
+  const best = ends.reduce((a, b) => (far(b) > far(a) ? b : a))
+  return far(best) >= 12 ? best : null
+}
+
 /** S1f: два пеленга F3-yaw развёрнуты больше чем на 110° — цель между точками взгляда (почти над/под телом). */
 const hintFlipped = (a, b) => Math.abs(((b - a + 540) % 360) - 180) > 110
 
@@ -772,12 +784,16 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
   const bot = session.bot
   const mcData = session.mcData
   const here = worlds.worldOf(bot)
-  const visited = []
+  // Остановки обхода — между вызовами (тот же мир): следующий заход идёт дальше по мосту, а не туда же.
+  if (!session._ndTourVisited || session._ndTourVisited.world !== here) session._ndTourVisited = { world: here, points: [] }
+  const visited = session._ndTourVisited.points
   const path = []
   let pillars = 0
+  let axes = 0
   let hinted = 0
   let lastHint = null
   let verticals = 0
+  let stuckAt = null
   const lookNow = () => {
     const v: any = look(bot, mcData, { radius: 64 })
     for (const sp of v.spawners || []) rememberSpawner(session, sp)
@@ -803,14 +819,24 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
     // Пеленг «пирога» развернулся (> 110°) после короткого отрезка — спавнер почти над/под нами (s1f-A2-3, сид 7777…: тело на y 50–52
     // ходило туда-сюда под тронным залом, спавнер −85,77,60 — в 3–5 бл. по горизонтали и 25 выше). Тронный зал — наверху крепости
     // (палубы 48–90): столбом вверх к палубе и взгляд, а не новый отрезок по пеленгу.
-    if (hint && hint.by === 'пирог' && lastHint && hintFlipped(lastHint.yaw, hint.yaw) &&
-      me.distanceTo(lastHint.at) < 30 && verticals < 2) {
+    // Ход по подсказке не сдвинул тело (sr-e-1 10.10: y 46 под крепостью, 12 подсказок подряд «ok:false» с одного места) —
+    // тоже сперва к палубе (столб, копка вверх), а не тот же отрезок.
+    const hintStuck = !!hint && !!stuckAt && me.distanceTo(stuckAt) < 3
+    if (hint && ((hint.by === 'пирог' && lastHint && hintFlipped(lastHint.yaw, hint.yaw) && me.distanceTo(lastHint.at) < 30) || hintStuck) && verticals < 2) {
+      stuckAt = null
       verticals++
       const fy = Math.floor(me.y)
       const up = Math.max(4, Math.min(28, (fy < 64 ? Math.max(fy + 16, 68) : fy + 12) - fy))
       const t = await require('./build').towerUp(bot, ctl, up, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+      // Столб упёрся в потолок коридора (sr-d-1 10.10: «вверх 16» дал +2..3 — пеленг метался −137↔−155, спавнер не найден за
+      // 30 мин): как игрок — копать потолок над головой и ставить блок под ноги до палубы.
+      const left = fy + up - Math.floor(bot.entity.position.y)
+      if (left > 2 && !ctl.aborted) {
+        const d = await require('./build').digUp(bot, ctl, { blocks: left, mcData }).catch(e => ({ dug: 0, stopped: e.message }))
+        path.push({ digUp: d.dug, stopped: d.stopped, y: Math.floor(bot.entity.position.y) })
+      }
       path.push({ vertical: true, up, from: fy, y: Math.floor(bot.entity.position.y), ok: t && t.ok, error: t && t.ok ? undefined : t && t.reason })
-      log('обход: спавнер над/под нами — вверх', { from: fy, up, y: Math.floor(bot.entity.position.y), yaws: [lastHint.yaw, hint.yaw] })
+      log('обход: спавнер над/под нами — вверх', { from: fy, up, y: Math.floor(bot.entity.position.y), yaws: [lastHint && lastHint.yaw, hint.yaw], stuck: hintStuck })
       lastHint = null
       v = lookNow()
       continue
@@ -824,7 +850,8 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       // «Дошёл», не сдвинувшись (s1f-S1-1: три подсказки подряд ok:true на месте 16,62,60) — тот же отрезок прямым ходом/штреком.
       if ((!w.ok || bot.entity.position.distanceTo(at0) < 3) && !w.fought) w = await legTo(session, ctl, hint.x, hint.z, deadline)
       path.push({ to: { x: hint.x, z: hint.z }, hint: hint.by, yaw: hint.yaw, ok: w.ok, y: Math.floor(bot.entity.position.y), error: w.ok ? undefined : w.error })
-      log('обход: подсказка', { ...hint, ok: w.ok, at: xyz(bot.entity.position) })
+      stuckAt = bot.entity.position.distanceTo(at0) < 3 ? bot.entity.position.clone() : null
+      log('обход: подсказка', { ...hint, ok: w.ok, error: w.ok ? undefined : w.error, at: xyz(bot.entity.position) })
       v = lookNow()
       continue
     }
@@ -842,7 +869,7 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
     if (!pool.length) {
       // Кирпича не видно — к крепости из памяти.
       const rec = placeOf(session, PLACE)
-      if (!rec || worlds.worldOfRecord(rec) !== here) break
+      if (!rec || worlds.worldOfRecord(rec) !== here) { console.log('[fortress] обход: конец — кирпича не видно, в памяти нет'); break }
       pool = [new Vec3(rec.x, rec.y, rec.z)]
     }
     const score = p => Math.min(...visited.map(q => Math.hypot(p.x - q.x, p.z - q.z)))
@@ -860,7 +887,18 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       // (прогон 00:00: y=45, «видно 3», столба не было).
       const above0 = pool.filter(p => Math.hypot(p.x - feet.x, p.z - feet.z) <= 16 && p.y >= feet.y + 3)
       const above = above0.length ? above0 : (feet.y < 60 ? pool : [])
-      if (!above.length || pillars >= 2) break
+      if (!above.length || pillars >= 2) {
+        // На палубе видно только ближний кирпич (sr-1010 10.10: тело на мосту y 74, «обход 0 остановок» — 0 стержней): как
+        // игрок — вдоль моста. Ось — по разбросу видимого кирпича рядом (мосты крепости идут по x или z), сторона — дальше
+        // от прежних остановок.
+        const leg = axisLeg(pool, feet, visited)
+        if (!leg || axes >= 4) { console.log('[fortress] обход: конец', JSON.stringify({ above: above.length, pillars, axes, pool: pool.length, near: pool.filter(p => Math.hypot(p.x - feet.x, p.z - feet.z) <= 16).length, visited: visited.length })); break }
+        axes++
+        const w = await legTo(session, ctl, leg.x, leg.z, deadline)
+        path.push({ axis: leg.axis, to: { x: leg.x, z: leg.z }, ok: w.ok, y: Math.floor(bot.entity.position.y), error: w.ok ? undefined : w.error })
+        v = lookNow()
+        continue
+      }
       const base = above.reduce((a, b) => (Math.hypot(b.x - feet.x, b.z - feet.z) < Math.hypot(a.x - feet.x, a.z - feet.z) ? b : a))
       await climbWalk(session, ctl, new Vec3(base.x, Math.max(feet.y - 1, bot.entity.position.y - 1), base.z), deadline)
       // Снизу видно только низ опор — до него мало (прогон 23:04: +4 блока, и
@@ -1351,4 +1389,4 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
   return { found: true, reached: lvl, spawner: xyz(sp), dist: Math.round(d), legs, stopped: lvl ? undefined : `до спавнера ${Math.round(d)} блоков, по высоте ${Math.floor(bot.entity.position.y) - sp.y} — не на его уровне` }
 }
 
-module.exports = { scout, look, tour, climbTo, spawnerHint, hintFlipped, keepBlocks, bastionRegions, regionOf, walkLeg, toSpawner, placeOf, FORTRESS_BLOCKS, BASTION_BLOCKS, PLACE, SPAWNER_PLACE, BASTION_PLACE }
+module.exports = { scout, look, tour, climbTo, spawnerHint, hintFlipped, axisLeg, keepBlocks, bastionRegions, regionOf, walkLeg, toSpawner, placeOf, FORTRESS_BLOCKS, BASTION_BLOCKS, PLACE, SPAWNER_PLACE, BASTION_PLACE }
