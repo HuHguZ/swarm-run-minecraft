@@ -227,3 +227,77 @@ test('cancellation during the route-start observation prevents a late chest_take
   assert.equal(result.outcome, 'INTERRUPTED')
   assert.equal(f.calls.filter(c => c.method === 'chest_take').length, 0)
 })
+
+test('confirmed loot stays SUCCESS when the watcher polls during post-receipt armor', async () => {
+  const { StrategicDirector } = require('../src/core/strategy')
+  const items = []
+  let f: any
+  f = fixture({ items, chests: [pos(8)], reply: async () => {
+    await f.watches[0]()
+    items.push({ name: 'iron_sword', count: 1 })
+    f.setInventory({ iron_sword: 1 })
+    return { status: 'done', detail: { at: pos(8), took: { iron_sword: 1 }, contents: {} } }
+  } })
+  f.setPosition(pos(7)); f.setTime(1000)
+  f.setPlayers([{ name: 'Foe', canSee: true, at: pos(18), dist: 11, gear: ['iron_sword'] }])
+  const call = f.side.call.bind(f.side)
+  f.side.call = async (method, params) => {
+    if (method === 'armor') await f.watches[0]()
+    return call(method, params)
+  }
+  const registry = AG.armsRegistry()
+  f.side.director = new StrategicDirector(registry, f.env, { goal: AG.opponentDefeated })
+  const result = await f.side.director.run(registry.get('LootChest'), await f.env.observe())
+  assert.equal(f.side.know.lastLoot.outcome, 'SUCCESS', 'actual receipt emptied the chosen chest')
+  assert.equal(result.outcome, 'SUCCESS', 'post-transfer observation must not interrupt completed loot')
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 0)
+})
+
+test('a worse threat before the receipt still interrupts actual LootChest director execution', async () => {
+  const { StrategicDirector } = require('../src/core/strategy')
+  let f: any
+  f = fixture({ chests: [pos(8)], reply: async () => {
+    await f.watches[0]()
+    return { status: 'interrupted', detail: { at: pos(8), took: { arrow: 4 }, contents: { arrow: 8 } } }
+  } })
+  f.setPosition(pos(7)); f.setTime(1000)
+  f.setPlayers([{ name: 'Foe', canSee: true, at: pos(7), dist: 0, gear: ['iron_sword'] }])
+  const registry = AG.armsRegistry()
+  f.side.director = new StrategicDirector(registry, f.env, { goal: AG.opponentDefeated })
+  const result = await f.side.director.run(registry.get('LootChest'), await f.env.observe())
+  assert.equal(result.outcome, 'INTERRUPTED')
+  assert.ok(f.calls.some(c => c.method === 'stop'))
+  assert.equal(f.side.know.lastLoot.receipt.interrupted, true)
+  assert.equal(f.side.know.lastLoot.receipt.emptied, false)
+  assert.equal(f.seen.get('8,0,0').taken, 4)
+})
+
+test('an in-flight loot observation cannot interrupt after its chest receipt settles', async () => {
+  const { StrategicDirector } = require('../src/core/strategy')
+  let f: any, pending: Promise<void>, release: (reply: any) => void, started: () => void
+  let delayPlayers = false
+  const queried = new Promise<void>(resolve => { started = resolve })
+  f = fixture({ chests: [pos(8)], reply: async () => {
+    delayPlayers = true
+    pending = f.watches[0]()
+    await queried
+    return { status: 'done', detail: { at: pos(8), took: { iron_sword: 1 }, contents: {} } }
+  } })
+  f.setPosition(pos(7)); f.setTime(1000)
+  const call = f.side.call.bind(f.side)
+  f.side.call = async (method, params) => {
+    if (method === 'players' && delayPlayers) return new Promise(resolve => { release = resolve; started() })
+    if (method === 'armor') {
+      delayPlayers = false
+      release({ detail: { players: [{ name: 'Foe', canSee: true, at: pos(7), dist: 0, gear: ['iron_sword'] }] } })
+      await pending
+    }
+    return call(method, params)
+  }
+  const registry = AG.armsRegistry()
+  f.side.director = new StrategicDirector(registry, f.env, { goal: AG.opponentDefeated })
+  const result = await f.side.director.run(registry.get('LootChest'), await f.env.observe())
+  assert.equal(f.side.know.lastLoot.outcome, 'SUCCESS')
+  assert.equal(result.outcome, 'SUCCESS')
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 0)
+})

@@ -442,6 +442,11 @@ function oldAim (from, to, k) {
 const HURT = /lava|fire|magma|cactus|campfire|sweet_berry|powder_snow/
 function safeLanding (bot, tp) {
   if (!tp) return null
+  // Player.updatePlayerPose falls back to the 0.6-high SWIMMING pose in dry
+  // passages too. Reject intersections that even that native pose cannot fit.
+  const body = { blockAt: (p, extra) => bot.blockAt(p, extra),
+    physics: { playerHalfWidth: bot.physics?.playerHalfWidth, playerHeight: Math.fround(.6) } }
+  if (!require('./navigation/geometry').bodyClear(body, tp, { water: true, web: true })) return null
   const cell = tp.floored()
   const here = bot.blockAt(cell)
   if (!here || HURT.test(here.name)) return null

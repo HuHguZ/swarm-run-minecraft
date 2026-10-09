@@ -277,7 +277,13 @@ class ArmsEnv {
       })
       let r
       try { r = await side.call(m, p).catch(e => ({ status: 'failed', error: e.message })) }
-      finally { closed = true; if (sample) gameClock.clearInterval(sample) }
+      finally {
+        closed = true
+        if (sample) gameClock.clearInterval(sample)
+        // The transfer is settled. Its watcher must not re-price the now empty
+        // chest during route receipts, armor or the following look.
+        if (m === 'chest_take') finished = true
+      }
       if (from) {
         const to = await here()
         if (to) {
@@ -563,10 +569,30 @@ async function runRound (n, A, B) {
   for (const s of [A, B]) { await s.call('stop').catch(() => {}); await s.call('temper', { enabled: false }).catch(() => {}) }
   await gameClock.wall.sleep(500)
   for (const s of [A, B]) await s.call('stop').catch(() => {})
-  const deaths = new Map()
-  for (const s of [A, B]) { const st = await s.call('status').catch(() => null); deaths.set(s, st && st.state ? st.state.lastDeathAt || null : null) }
   await cmd(`tick rate ${FIGHT_RATE}`)
   await gameClock.wall.sleep(1500)
+  // Damage or stale movement can arrive after reset/tp. Admit both sides from
+  // their final observed state, and repair an unequal start before either brain.
+  const starts = new Map()
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const invalid = []
+    for (const s of [A, B]) {
+      const S = ((await s.call('status').catch(() => null)) || {}).state || {}
+      starts.set(s, S)
+      const p = W(s.spawn)
+      // status rounds HP; farm setup must also reject e.g. 19.75 reported as 20.
+      const full = /passed/i.test(await cmd(`execute if entity @a[name=${s.name},nbt={Health:20.0f,foodLevel:20}]`))
+      const ready = S.connected && S.health === 20 && S.food === 20 && S.inventory &&
+        !Object.values(S.inventory).some(n => Number(n) > 0) && !Object.values(S.armor || {}).some(Boolean) && !S.offHand &&
+        S.pos && Math.abs(S.pos.x - p.x - 0.5) <= 1 && Math.abs(S.pos.y - p.y) <= 0.5 && Math.abs(S.pos.z - p.z - 0.5) <= 1 && full
+      if (!ready) invalid.push(s)
+    }
+    if (!invalid.length) break
+    if (attempt === 2) throw new Error(`не готов к старту: ${invalid.map(s => `${s.name} ${JSON.stringify(starts.get(s))}`).join('; ')}`)
+    for (const s of invalid) { await s.call('stop').catch(() => {}); await resetPlayer(s.name, s.spawn) }
+    await gameClock.wall.sleep(500)
+  }
+  const deaths = new Map([A, B].map(s => [s, starts.get(s).lastDeathAt || null]))
   const round = { over: false, winner: null, why: null, roundScope: `arms:${SEED}:${n}:${gameClock.wall.now()}` }
   const t0 = gameClock.now()
   const w0 = gameClock.wall.now()
@@ -576,8 +602,8 @@ async function runRound (n, A, B) {
     s.stats = freshStats()
     s.know = { areas: knownAreas(), scouted: new Set(), chests: new Map(), caches: new Map(), foe: null, nearUntil: 0, power: 0, revision: 0 }
     // Опись старта: пустой рюкзак и голое тело — иначе раунд не равный.
-    const st0 = ((await s.call('status').catch(() => null)) || {}).state || {}
-    s.stats.inv0 = { inv: st0.inventory, armor: Object.values(st0.armor || {}).filter(Boolean), hp: st0.health, food: st0.food, pos: st0.pos }
+    const st0 = starts.get(s)
+    s.stats.inv0 = { inv: st0.inventory, armor: Object.values(st0.armor || {}).filter(Boolean), offHand: st0.offHand || null, hp: st0.health, food: st0.food, pos: st0.pos }
   }
   // Доля физических тиков тел за раунд (status.physicsTicks / clock.ticks), как в arena.ts.
   const phys = async (c) => { const S = (((await c.call('status').catch(() => null)) || {}).state) || {}; return S.clock && typeof S.physicsTicks === 'number' ? { p: S.physicsTicks, t: S.clock.ticks } : null }

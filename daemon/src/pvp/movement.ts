@@ -28,7 +28,9 @@ export function combatMovement (bot, arena = null) {
   if (!mv) return { arena: arenaOk, onField, restore: () => {} }
   const before = { canDig: mv.canDig, allow1by1towers: mv.allow1by1towers, scafoldingBlocks: mv.scafoldingBlocks,
     allowParkour: mv.allowParkour, maxDropDown: mv.maxDropDown, digCost: mv.digCost, getNeighbors: mv.getNeighbors }
-  mv.allow1by1towers = false; mv.scafoldingBlocks = []; mv.allowParkour = false; mv.maxDropDown = edges.SAFE_FALL
+  mv.allow1by1towers = false; mv.scafoldingBlocks = []; mv.allowParkour = false
+  // Pathfinder compares feet Y to the solid support's block Y, one below landing feet.
+  mv.maxDropDown = edges.SAFE_FALL + 1
   mv.digCost = tempo.SPRINT_BPT * 20 / 3
   // A hole through a suspended arena's floor is not a route toward an opponent below it.
   const floorGuard = arenaOk && Array.isArray(mv.exclusionAreasBreak) ? b => b?.position?.y <= arenaOk.y - 1 ? 100 : 0 : null

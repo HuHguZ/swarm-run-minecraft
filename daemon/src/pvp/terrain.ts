@@ -44,6 +44,8 @@ const edgeTally = (now) => {
 const climbOut = async (pit) => {
     const filler = ctx.pickFiller(ctx.bot)
     const foe = ctx.entity.position
+    const rimY = pit.rimY ?? Math.floor(ctx.bot.entity.position.y) + pit.depth
+    const arrived = () => ctx.bot.entity.position.y >= rimY
     ctx.pathTo(false); ctx.pathing = false
     ctx.clear()
     ctx.aim = 'free'
@@ -51,26 +53,35 @@ const climbOut = async (pit) => {
       if (filler && ctx.countOf(ctx.bot, filler.name) >= pit.depth && ctx.headroom(pit.depth + 1)) {
         ctx.noteBuild('pit', pit.depth * ctx.PILLAR_MS)
         const gT = ctx.buildGuard()
-        try { await ctx.towerUp(ctx.bot, ctx.guardCtl(gT), pit.depth, { sneak: false, fast: true, beforeStep: ctx.towerShield }) } catch {}
+        let tower: { ok: boolean; placed: number; supportPlaced?: number } | null = null
+        try { tower = await ctx.towerUp(ctx.bot, ctx.guardCtl(gT), pit.depth, { sneak: false, fast: true, beforeStep: ctx.towerShield }) } catch {}
+        const placed = (tower?.placed || 0) + (tower?.supportPlaced || 0)
+        ctx.st.blocks = (ctx.st.blocks || 0) + placed
         if (ctx.buildDone(gT, 'столб из ямы')) return true
-        const f = ctx.bot.entity.position.floored()
-        let best = null
-        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          const c = f.offset(dx, 0, dz)
-          if (!ctx.solid(ctx.bot, c.offset(0, -1, 0)) || ctx.solid(ctx.bot, c) || ctx.solid(ctx.bot, c.offset(0, 1, 0))) continue
-          const away = Math.hypot(c.x + 0.5 - foe.x, c.z + 0.5 - foe.z)
-          if (!best || away > best.away) best = { c, away }
+        if (ctx.ctl.aborted) return false
+        if (tower?.ok && arrived()) {
+          const f = ctx.bot.entity.position.floored()
+          let best = null
+          for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const c = f.offset(dx, 0, dz)
+            if (!ctx.solid(ctx.bot, c.offset(0, -1, 0)) || ctx.solid(ctx.bot, c) || ctx.solid(ctx.bot, c.offset(0, 1, 0))) continue
+            const away = Math.hypot(c.x + 0.5 - foe.x, c.z + 0.5 - foe.z)
+            if (!best || away > best.away) best = { c, away }
+          }
+          if (best) {
+            await ctx.bot.lookAt(best.c.offset(0.5, 1.2, 0.5), true).catch(() => {})
+            if (ctx.ctl.aborted) return false
+            ctx.set('forward', true)
+            await ctx.sleep(450)
+            ctx.set('forward', false)
+          }
+          if (!ctx.ctl.aborted && arrived()) {
+            ctx.used(`выбрался из ямы столбом (${placed} бл.)`)
+            return true
+          }
         }
-        if (best) {
-          await ctx.bot.lookAt(best.c.offset(0.5, 1.2, 0.5), true).catch(() => {})
-          ctx.set('forward', true)
-          await ctx.sleep(450)
-          ctx.set('forward', false)
-        }
-        ctx.used(`выбрался из ямы столбом (${pit.depth} бл.)`)
-        ctx.st.blocks = (ctx.st.blocks || 0) + pit.depth
-        return true
       }
+      if (ctx.ctl.aborted) return false
       const f0 = ctx.bot.entity.position.floored()
       let dir = null
       let far = -1
@@ -80,7 +91,7 @@ const climbOut = async (pit) => {
         if (away > far) { far = away; dir = [dx, dz] }
       }
       if (!dir) return false
-      for (let k = 0; k < pit.depth + 1 && !ctx.ctl.aborted; k++) {
+      for (let k = 0; k < pit.depth + 1 && !ctx.ctl.aborted && !arrived(); k++) {
         const f = ctx.bot.entity.position.floored()
         const step = f.offset(dir[0], 0, dir[1])
         for (const c of [step.offset(0, 1, 0), step.offset(0, 2, 0), f.offset(0, 2, 0)]) {
@@ -88,14 +99,16 @@ const climbOut = async (pit) => {
         }
         if (!ctx.solid(ctx.bot, step)) break
         await ctx.bot.lookAt(step.offset(0.5, 1.5, 0.5), true).catch(() => {})
+        if (ctx.ctl.aborted) break
         ctx.set('forward', true); ctx.set('jump', true)
         const y0 = ctx.bot.entity.position.y
         const t0 = ctx.gameClock.now()
-        while (ctx.gameClock.now() - t0 < 700 && ctx.bot.entity.position.y < y0 + 0.9) await ctx.sleep(ctx.TICK_MS)
+        while (!ctx.ctl.aborted && ctx.gameClock.now() - t0 < 700 && ctx.bot.entity.position.y < y0 + 0.9) await ctx.sleep(ctx.TICK_MS)
         ctx.set('jump', false)
         await ctx.sleep(150)
         ctx.set('forward', false)
       }
+      if (ctx.ctl.aborted || !arrived()) return false
       ctx.used('вырубил ступени из ямы')
       return true
     } finally {

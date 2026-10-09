@@ -31,6 +31,10 @@ function install (bot) {
   const Item = require('prismarine-item')(bot.registry)
   const states = new Map<number, number>()
   menuStates.set(bot, states)
+  let activeWindow = bot.currentWindow
+  bot.on('windowOpen', window => {
+    if (window === bot.currentWindow) activeWindow = window
+  })
   bot._client.on('open_window', packet => states.delete(packet.windowId))
 
   // Modern full-state packets include the carried stack. Mineflayer updates
@@ -66,8 +70,18 @@ function install (bot) {
     } catch {}
   })
 
-  // После любого закрытия окна — попросить у сервера полный рюкзак.
-  bot.on('windowClose', () => gameClock.wall.setTimeout(() => resync(bot), 150))
+  // Mineflayer's ordinary clicks update only the open window's cursor. Its
+  // close copies inventory slots, but not that cursor: an earlier carriedItem
+  // packet can otherwise leave a phantom stack that also blocks resync forever.
+  bot.on('windowClose', window => {
+    if (window && window === activeWindow) {
+      activeWindow = null
+      if (!bot.currentWindow) bot.inventory.selectedItem = window.selectedItem
+    }
+    // Keep a genuinely occupied cursor guarded; an old close must not clear a
+    // newer menu or a stack picked up after returning to the player inventory.
+    gameClock.wall.setTimeout(() => resync(bot), 150)
+  })
 }
 
 function resync (bot, afterCraft = false, closedInventory = false) {
