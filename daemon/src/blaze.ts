@@ -1633,8 +1633,17 @@ async function holdSpawner (session, ctl, ctx) {
         setPhase('к точке боя')
         // Под охраной (nether.guarded): ударили по дороге — ответ обидчику, потом снова к точке. neF-fB25-1 02.10: магмовые
         // кубы 9 ударов (12.5 хп) за 12 с ходьбы без ответа, затем блейзы — смерть до первого выстрела.
-        for (let k = 0; k < 3 && !ctl.aborted; k++) {
-          const w = await require('./nether').guarded(session, ctl, sub => walkNear(bot, sub, post.pos, 0, 12000)).catch(() => ({}))
+        // Ифрит догнал вплотную или −4 хп по дороге — ход бросить, бой с места (основной цикл: щит и меч по тем, кто в
+        // досягаемости). sr-l-3 10.10: 8 ударов вплотную по 3.4 «к точке боя», смерть до первого взмаха.
+        const hp0 = bot.health ?? 20
+        const pressedNow = () => liveBlazes(bot, dead, 3.5).length > 0 || (bot.health ?? 20) < hp0 - 4
+        for (let k = 0; k < 3 && !ctl.aborted && !pressedNow(); k++) {
+          let done = false
+          const w = await require('./nether').guarded(session, ctl, sub => Promise.race([
+            walkNear(bot, sub, post.pos, 0, 12000).finally(() => { done = true }),
+            (async () => { while (!done && !sub.aborted) { if (pressedNow()) { try { bot.pathfinder.setGoal(null) } catch {} return { pressed: true } } await sleep(100) } return {} })()
+          ])).catch(() => ({}))
+          if (w && w.pressed) { log('к точке боя: догнали — бьюсь с места', { hp: Math.round(bot.health ?? 0), near: liveBlazes(bot, dead, 3.5).length }); break }
           if (!w || !w.fought) break
         }
         home = post.pos
