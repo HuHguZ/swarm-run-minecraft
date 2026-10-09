@@ -1,6 +1,25 @@
 const edges = require('../edges')
 const tempo = require('../tempo')
 
+// A stationary pathfinder can be doing useful work. Only the heuristic route
+// timers use this; explicit cancellation and combat safety still stop the dig.
+export function createPathMiningProgress (bot, now) {
+  let target = null
+  let until = 0
+  return () => {
+    const block = bot.pathfinder?.isMining?.() && bot.targetDigBlock
+    if (!block) { target = null; return false }
+    if (block !== target) {
+      target = block
+      let ms = NaN
+      try { ms = bot.digTime(block) } catch {}
+      // Two packet ticks for the completed dig and its block receipt.
+      until = now() + (Number.isFinite(ms) && ms > 0 ? ms + 2 * 50 : 0)
+    }
+    return now() < until
+  }
+}
+
 // Acquisition and the duel must use the same route constraints, including intermediate nodes.
 export function combatMovement (bot, arena = null) {
   const mv = bot.pathfinder?.movements

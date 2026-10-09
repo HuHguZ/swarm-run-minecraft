@@ -1,6 +1,7 @@
 import { recoveryDecision } from './recovery-graph'
 import { consumeHand } from './hand-policy'
 const { canSurvivePearl } = require('../throw')
+const bow = require('../bow')
 
 type CombatContext = Record<string, any>
 
@@ -9,23 +10,65 @@ const punishable = () => {
     try {
       if (!ctx.prof.player || !ctx.tempo.ON || !ctx.entity || !ctx.entity.isValid || !ctx.bot.entity) return null
       const c = ctx.tt.state(ctx.entity).consuming
-      if (!c || c.left < 300) return null
+      if (!c || !Number.isFinite(c.left) || c.left <= 0) return null
       const me0 = ctx.bot.entity.position
-      const r0 = ctx.reachFrom(me0.offset(0, ctx.EYE, 0), ctx.entity)
+      const eye = me0.offset(0, ctx.EYE, 0)
+      const target = ctx.entity.position.offset(0, (ctx.entity.height || 1.8) * 0.55, 0)
+      if (ctx.seesNow?.() === false || !ctx.raySees(ctx.bot, eye, target)) return null
+      const r0 = ctx.reachFrom(eye, ctx.entity)
       const d0 = Math.hypot(ctx.entity.position.x - me0.x, ctx.entity.position.z - me0.z)
-      if (Math.abs(ctx.entity.position.y - me0.y) < 2.5 && (Math.max(0, r0 - ctx.HIT_REACH) / ctx.tempo.SPRINT_BPT) * ctx.TICK_MS + 150 < c.left) return { kind: 'rush', left: c.left }
-      if (!ctx.raySees(ctx.bot, me0.offset(0, ctx.EYE, 0), ctx.entity.position.offset(0, (ctx.entity.height || 1.8) * 0.55, 0))) return null
-      if (d0 > 3 && d0 < 7 && ctx.findItem(ctx.bot, i => i.name === 'splash_potion' && /harming$/.test(ctx.potionOf(i) || ''))) return { kind: 'harm', left: c.left }
-      const arrowsNow = ctx.rangedAllowed() && !!ctx.findItem(ctx.bot, i => /arrow$/.test(i.name))
-      const xbs = arrowsNow ? ctx.ranged.crossbows(ctx.bot) : []
-      if (d0 >= 2.5 && d0 <= 40 && xbs.some(x => x.info.loaded)) return { kind: 'crossbow', left: c.left }
-      if (d0 >= 4 && d0 <= 30 && xbs.length && c.left > 1000) return { kind: 'crossbow', left: c.left }
-      if (d0 >= 5 && d0 <= 30 && arrowsNow && ctx.findItem(ctx.bot, i => i.name === 'bow') && c.left > 900) return { kind: 'bow', left: c.left }
+      const now = ctx.gameClock.now()
+      const reaction = c.since == null ? 0 : Math.max(0, (ctx.tt.reactMs || 0) - (now - c.since))
+      const quote = (kind, ms) => {
+        const hitMs = reaction + ms
+        return hitMs < c.left ? { kind, left: c.left, hitMs } : null
+      }
+      const speed = (ctx.bot.food ?? 20) > 6 ? ctx.tempo.SPRINT_BPT : ctx.tempo.WALK_BPT
+      const walkMs = Math.max(0, r0 - ctx.HIT_REACH) / speed * ctx.TICK_MS
+      const swapMs = ctx.weapon && ctx.bot.heldItem?.name !== ctx.weapon.name ? ctx.cooldownMs(ctx.weapon) : 0
+      const meleeMs = Math.max(walkMs, Math.max(0, (ctx.nextReady || 0) - now), swapMs) + ctx.TICK_MS
+      if (Math.abs(ctx.entity.position.y - me0.y) < 2.5 && (r0 <= ctx.HIT_REACH || ctx.stepSafe(ctx.bot, ctx.keyDir(ctx.bot, 'forward')))) {
+        const rush = quote('rush', meleeMs)
+        if (rush) return rush
+      }
+      if (d0 > 3 && d0 < 7 && ctx.findItem(ctx.bot, i => i.name === 'splash_potion' && /harming$/.test(ctx.potionOf(i) || ''))) {
+        const mine = ctx.pick.hitboxOf(ctx.bot, ctx.bot.entity)
+        const box = ctx.pick.hitboxOf(ctx.bot, ctx.entity)
+        const gap = Math.hypot(...['x', 'y', 'z'].map(a => Math.max(0, mine.lo[a] - box.hi[a] - .425, box.lo[a] - mine.hi[a] - .425)))
+        if (gap >= 4) { // same splash self-hit clearance as equipment.throwAt
+          const sol = ctx.throwMod.aim(eye.offset(0, -.1, 0), target, ctx.throwMod.kindOf('splash_potion'))
+          const harm = sol && quote('harm', (2 + sol.ticks) * ctx.TICK_MS)
+          if (harm) return harm
+        }
+      }
+      // A shot must arrive during the observed use. Draw/load and flight are game time,
+      // using the same ballistics/charge mechanics as the executors, not a distance-only promise.
+      const flightMs = (speed) => {
+        const sol = bow.aim(eye.offset(0, -.1, 0), () => target, speed)
+        return sol ? sol.ticks * ctx.TICK_MS : Infinity
+      }
+      const rangedOK = ctx.rangedAllowed()
+      const arrowsNow = rangedOK && !!ctx.findItem(ctx.bot, i => /arrow$/.test(i.name))
+      const xbs = rangedOK ? ctx.ranged.crossbows(ctx.bot) : []
+      if (d0 >= 2.5 && d0 <= 40) for (const x of xbs) {
+        if (!x.info.loaded && (!arrowsNow || d0 < 4 || d0 > 30)) continue
+        const rocket = x.info.ammo === 'firework'
+        // Match the executor's own blast clearance; empty rockets cannot punish.
+        if (rocket && (!(x.info.stars > 0) || target.distanceTo(me0) < ctx.ranged.BLAST_R + .4)) continue
+        const loadMs = x.info.loaded ? 0 : ctx.ranged.chargeTicks(x.info.quickCharge) * ctx.TICK_MS
+        const flyMs = rocket ? ctx.ranged.rocketAim(eye.offset(0, -.1, 0), () => target).ticks * ctx.TICK_MS : flightMs(ctx.ranged.ARROW_SPEED)
+        const shot = quote('crossbow', loadMs + ctx.TICK_MS + flyMs)
+        if (shot) return shot
+      }
+      if (d0 >= 5 && d0 <= 30 && arrowsNow && ctx.findItem(ctx.bot, i => i.name === 'bow')) {
+        const shot = quote('bow', bow.DRAW_MS + ctx.TICK_MS + flightMs(bow.SPEED))
+        if (shot) return shot
+      }
       return null
     } catch { return null }
   }
 
-const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, offhand = false, flightStable = false }: any = {}) => {
+const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, offhand = false, flightStable = false, onPunish = null }: any = {}) => {
     const had = ctx.countOf(ctx.bot, name)
     await ctx.sleep(120)
     const inHand = offhand ? ctx.bot.inventory.slots[45] : ctx.bot.heldItem
@@ -34,14 +77,25 @@ const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, 
     if (unsafe && unsafe()) { ctx.tt.stats.refused++; ctx.used('не стал есть: ' + (ctx.tt.lastAbort || 'опасно')); return false }
     if (ctx.FIX && ctx.maceNow()) { ctx.maceAbort('глоток'); return false }
     const movement = ['back', 'left', 'right'].find(key => ctx.stepSafe(ctx.bot, ctx.keyDir(ctx.bot, key)))
-    const evaluate = (consuming: boolean) => recoveryDecision({
+    let startedAt = null
+    const evaluate = (consuming: boolean) => {
+      const opportunity = ctx.punishable()
+      const remaining = Math.max(0, ctx.tempo.consumeMs(name) - (startedAt == null ? 0 : ctx.gameClock.now() - startedAt))
+      // If finishing our current use still leaves time for the same hit, cancellation
+      // buys nothing and loses all consume progress. A fresh real window can still win.
+      const interrupt = opportunity && (!consuming || remaining + opportunity.hitMs >= opportunity.left)
+      return recoveryDecision({
       hp: ctx.bot.health ?? 20, buff, desperate, consuming, drink: /potion/.test(name),
       safe: !(unsafe && unsafe()), covered: ctx.fortSealed(), grounded: !!ctx.bot.entity.onGround,
       flightStable: flightStable && !!ctx.bot.entity.elytraFlying, clutchActive: ctx.edges.falling(ctx.bot), moveSafe: !!movement,
-      opponentUsing: !!(ctx.prof.player && ctx.tt.state(ctx.entity).consuming), opponentPunishable: !!ctx.punishable()
+      opponentUsing: !!(ctx.prof.player && ctx.tt.state(ctx.entity).consuming), opponentPunishable: !!interrupt
     })
+    }
     const first = evaluate(false)
-    if (first.node === 'WaitForWindow' || first.node === 'PunishOpponentUsing') return false
+    if (first.node === 'WaitForWindow' || first.node === 'PunishOpponentUsing') {
+      if (first.node === 'PunishOpponentUsing' && !ctx.ctl.aborted) onPunish?.()
+      return false
+    }
     const controls = movement && first.path.includes('RecoverWhileMoving')
       ? { key: movement, was: !!ctx.bot.controlState?.[movement], sprint: !!ctx.bot.controlState?.sprint }
       : null
@@ -54,6 +108,7 @@ const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, 
       if (controls) { ctx.set(controls.key, true); ctx.set('sprint', false) }
       ctx.bot.activateItem(offhand)
       const t0 = ctx.gameClock.now()
+      startedAt = t0
       while (ctx.gameClock.now() - t0 < 2400 && ctx.countOf(ctx.bot, name) >= had && !ctx.ctl.aborted && !(abortIf && abortIf())) {
         if (ctx.FIX && ctx.maceNow()) { dropped = 'mace'; break }
         const decision = evaluate(true)
@@ -69,7 +124,7 @@ const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, 
     }
     const ok = ctx.countOf(ctx.bot, name) < had
     if (!ok && dropped === 'mace') ctx.maceAbort('глоток')
-    else if (!ok && dropped === 'punish') { ctx.st.eatPunish.swaps++; ctx.used('бросил свой глоток — он сам пьёт, наказываю') } else if (!ok && dropped) { ctx.tt.stats.aborted++; ctx.used('бросил глоток: ' + (ctx.tt.lastAbort || 'опасно')) }
+    else if (!ok && dropped === 'punish') { ctx.st.eatPunish.swaps++; ctx.used('бросил свой глоток — он сам пьёт, наказываю'); if (!ctx.ctl.aborted) onPunish?.() } else if (!ok && dropped) { ctx.tt.stats.aborted++; ctx.used('бросил глоток: ' + (ctx.tt.lastAbort || 'опасно')) }
     return ok
   }
 
@@ -140,7 +195,7 @@ const buffUp = async (minD = 6, extra: any = []) => {
         const sf = ctx.tt.safe(ctx.tempo.consumeMs('potion'), { fortSealed: ctx.fortSealed() })
         if (!sf.ok) { ctx.tt.stats.refused++; break }
       }
-      if (pot && ctx.FIX && ctx.prof.player && !ctx.fortSealed() && (ctx.punishable() || !!ctx.tt.state(ctx.entity).consuming)) {
+      if (pot && ctx.FIX && ctx.prof.player && !ctx.fortSealed() && ctx.punishable()) {
         ctx.st.eatPunish.skips = (ctx.st.eatPunish.skips || 0) + 1
         if (ctx.ready('punFirstNote')) { ctx.rest('punFirstNote', 3000); ctx.used('не пью — он сам пьёт, наказываю') }
         break

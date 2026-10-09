@@ -985,6 +985,10 @@ function priceDrops (movements) {
 // высоте (мы на уступе или старом столбе — к нему мост, pathfinder ставит
 // блоки); нет дыр — клетка пола, которая ломается быстро (светокамень рукой
 // ~0.5 с), под ней столб, её — ломать. Цена — путь по земле, мост, ломка.
+// Water has no collision and can be replaced by the tower's support block.
+// Keep the same clearance/hazard checks for every non-water cell.
+const shaftPassable = b => !!b && b.boundingBox === 'empty' && !/lava|fire|cobweb/.test(b.name)
+
 function findShaft (bot, target, { radius = 40, archer: shooter = false, floorY: floorAt = null, exclude = null, digNear = 3000 }: any = {}) {
   // floorAt — уровень ног на поле арены (он сам может стоять на столбе выше).
   const Ty = floorAt != null ? Math.floor(floorAt + 1e-6) : Math.floor(target.position.y + 1e-6)
@@ -992,7 +996,7 @@ function findShaft (bot, target, { radius = 40, archer: shooter = false, floorY:
   const me = bot.entity.position
   const myY = Math.floor(me.y + 1e-3)
   const tools = require('./tools')
-  const pass = (p) => { const b = bot.blockAt(p, false); return !!b && b.boundingBox === 'empty' && !/lava|water|fire|cobweb/.test(b.name) }
+  const pass = p => shaftPassable(bot.blockAt(p, false))
   const solidAt = (p) => { const b = bot.blockAt(p, false); return !!b && b.boundingBox === 'block' }
   const cx = Math.floor(me.x); const cz = Math.floor(me.z)
   // Столб от уровня y вверх до пола свободен?
@@ -1076,7 +1080,7 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
   const shaft = findShaft(bot, target, { archer, floorY: Ty, exclude, digNear })
   if (process.env.ND_DEBUG_CLIMB) console.log('[climbBack] shaft', JSON.stringify({ me: bot.entity.position.floored(), him: target.position.floored(), hand: target.equipment && target.equipment[0] && target.equipment[0].name, archer, shaft }))
   let how = 'столб на месте, потолок — ломать'
-  if (!shaft) return { ok: false, how: 'нет дыры в полу и нет пола, что ломается быстро', placed: 0, why: 'над головой только обсидиан', seconds: 0 }
+  if (!shaft) return { ok: false, how: 'нет подходящей шахты для подъёма', placed: 0, why: 'не нашёл проходимый выход наверх', seconds: 0 }
   if (shaft) {
     how = shaft.digMs ? `под быстрый пол у ${shaft.x},${shaft.z} (${shaft.n} бл., ломать ${(shaft.digMs / 1000).toFixed(1)} с)` : `через дыру в полу у ${shaft.x},${shaft.z} (${shaft.n} бл.${shaft.bridge ? ', мостом' : ''})`
     try {
@@ -1103,7 +1107,7 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
       // своём уровне, потом вверх сквозь неё.
       const myY2 = Math.floor(p.y + 1e-3)
       const dist = Math.abs(shaft.x - Math.floor(p.x)) + Math.abs(shaft.z - Math.floor(p.z))
-      const passAt = (x, y, z) => { const b = bot.blockAt(new Vec3(x, y, z), false); return !!b && b.boundingBox === 'empty' && !/lava|water|fire|cobweb/.test(b.name) }
+      const passAt = (x, y, z) => shaftPassable(bot.blockAt(new Vec3(x, y, z), false))
       let open = true
       for (let yy = myY2; yy <= Ty + 1 && open; yy++) if (!passAt(shaft.x, yy, shaft.z)) open = false
       if ((shaft.bridge || myY2 > shaft.gy + 1) && dist <= 24 && open && fillers() >= dist + (Ty - myY2) + 2) {
@@ -1133,14 +1137,14 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
     }
     const left = Ty - Math.floor(bot.entity.position.y + 1e-6)
     const r = await towerUp(bot, ctl, Math.min(8, left), { sneak: true, fast: true, beforeStep, item: towerItem() })
-    placed += (r && r.placed) || 0
+    placed += ((r && r.placed) || 0) + ((r && r.supportPlaced) || 0)
     if (!r || !r.placed) {
       const again = await towerUp(bot, ctl, 1, { sneak: true, fast: true, beforeStep, item: towerItem() })
+      placed += ((again && again.placed) || 0) + ((again && again.supportPlaced) || 0)
       if (!again || !again.placed) {
         const why = [].concat((again && (again.why || again.reason)) || [], (r && (r.why || r.reason)) || []).join('; ')
         return { ok: false, how, placed, why: why || 'столб не растёт', shaft, seconds: Math.round((gameClock.now() - t0) / 1000) }
       }
-      placed++
     }
   }
   try { bot.setControlState('sneak', false) } catch {}

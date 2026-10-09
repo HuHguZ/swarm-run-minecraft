@@ -36,7 +36,7 @@ export function recoveryDecision(window: RecoveryWindow): RecoveryDecision {
   const stop = (reason: string): RecoveryDecision => ({ node: window.consuming ? 'CancelOnApproach' : 'WaitForWindow', path: ['Observe', window.consuming ? 'CancelOnApproach' : 'WaitForWindow'], reason })
   if (window.clutchActive) return stop('рука нужна для спасения от падения')
   if (!window.grounded && !window.flightStable) return stop('падение или неустойчивый полёт')
-  if (!window.desperate && !window.covered && (window.buff || window.hp >= 12) && window.opponentUsing && (window.buff || window.opponentPunishable)) {
+  if (!window.desperate && !window.covered && (window.buff || window.hp >= 12) && window.opponentUsing && window.opponentPunishable) {
     return { node: 'PunishOpponentUsing', path: ['Observe', 'PunishOpponentUsing'], reason: 'успеваем ударить до конца чужого глотка' }
   }
   if (!window.safe && !window.desperate) return stop('противник успеет сблизиться или попасть')

@@ -122,11 +122,11 @@ async function unstick (bot) {
 // Jumping against a shaft wall can repeatedly be rejected by the server.
 // Walk to the middle of the same supported cell before jumping; no position
 // packets or local onGround overrides, just ordinary movement controls.
-async function centerOnFloor (bot, ctl, timeoutMs = 1000) {
+async function centerOnFloor (bot, ctl, timeoutMs = 1000, { water = false } = {}) {
   const support = geometry.supportAt(bot, bot.entity.position, .04)
   if (!support) return false
   const target = new Vec3((support.box.minX + support.box.maxX) / 2, support.top, (support.box.minZ + support.box.maxZ) / 2)
-  if (!geometry.bodyClear(bot, target)) return false
+  if (!geometry.bodyClear(bot, target, { water })) return false
   const away = () => Math.hypot(bot.entity.position.x - target.x, bot.entity.position.z - target.z)
   if (away() <= 0.08) return true
   const end = gameClock.now() + timeoutMs
@@ -134,6 +134,7 @@ async function centerOnFloor (bot, ctl, timeoutMs = 1000) {
     bot.clearControlStates()
     while (!(ctl && ctl.aborted) && gameClock.now() < end && away() > 0.08) {
       await bot.lookAt(target.offset(0, 1.62, 0), true)
+      if (ctl?.aborted) break
       bot.setControlState('forward', true)
       await sleep(50)
     }

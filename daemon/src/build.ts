@@ -146,7 +146,8 @@ const isNeighbour = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.a
 //
 // `steady` keeps sand and gravel out of the hand: a block meant to hang over
 // air must not be one that falls.
-async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady = false, prop = null, honest = false }: any = {}) {
+async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady = false, prop = null, honest = false, ctl = null }: any = {}) {
+  if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   const target = bot.blockAt(pos)
   if (!target) return { ok: false, reason: 'блок вне прогруженного мира' }
   if (item && target.name === item) return { ok: true, already: target.name }
@@ -158,8 +159,9 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
 
   const cannot = await holdFiller(bot, item, steady)
   if (cannot) return { ok: false, reason: cannot }
+  if (ctl?.aborted) return { ok: false, reason: 'прервано' }
 
-  const first = await againstFaces(bot, pos, timeoutMs, { honest })
+  const first = await againstFaces(bot, pos, timeoutMs, { honest, ctl })
   if (first.ok) return first
   if (first.refs) return { ok: false, refused: first.refused, reason: first.reason }
   // Open air on all six sides. Nothing about the bag, the tool or the server:
@@ -169,7 +171,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   if (!prop || !isNeighbour(pos, prop)) return { ok: false, noFooting: true, reason: NO_FACE }
 
   const at = xyz(prop)
-  const under = await placeBlockAt(bot, prop, { item, timeoutMs, steady, honest })
+  const under = await placeBlockAt(bot, prop, { item, timeoutMs, steady, honest, ctl })
   if (!under.ok) {
     return {
       ok: false,
@@ -181,7 +183,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   const propped = { at, placed: under.placed || under.already, face: under.face }
   const again = await holdFiller(bot, item, steady)
   if (again) return { ok: false, prop: propped, reason: `подпорку поставил, а на сам блок: ${again}` }
-  const second = await againstFaces(bot, pos, timeoutMs, { honest })
+  const second = await againstFaces(bot, pos, timeoutMs, { honest, ctl })
   if (second.ok) return { ...second, prop: propped }
   return { ok: false, prop: propped, refused: second.refused, reason: second.reason }
 }
@@ -195,7 +197,7 @@ const faceKind = f => (f.y < 0 ? 'bottom' : f.y > 0 ? 'top' : 'side')
 // honest — только грани, которые видно из глаз (pick.faceAim): блок у
 // противника (ловушка, опора наковальни) не ставится сквозь стенку, за которой
 // грани не видно, — клиент игры так не может (2026-09-26, «чит WH»).
-async function againstFaces (bot, pos, timeoutMs, { honest = false }: any = {}) {
+async function againstFaces (bot, pos, timeoutMs, { honest = false, ctl = null }: any = {}) {
   const torch = bot.heldItem?.name === 'torch'
   const expected = bot.heldItem?.name
   const appeared = b => b && (b.boundingBox !== 'empty' || b.name === expected || (torch && /^(wall_)?torch$/.test(b.name)))
@@ -211,6 +213,7 @@ async function againstFaces (bot, pos, timeoutMs, { honest = false }: any = {}) 
   // face» and «that face never came up» read the same.
   const refused = []
   for (const face of FACES) {
+    if (ctl?.aborted) return { ok: false, refs, reason: 'прервано' }
     if (torch && face.y < 0) continue // обычный факел не крепится снизу к потолку
     const ref = bot.blockAt(pos.minus(face))
     if (!ref || ref.boundingBox !== 'block' && ref.name !== 'cobweb') continue
@@ -230,7 +233,12 @@ async function againstFaces (bot, pos, timeoutMs, { honest = false }: any = {}) 
       // ранний return.
       const aim = ref.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5)
       await bot.lookAt(aim, true)
-      await withTimeout(bot.placeBlock(ref, face), timeoutMs)
+      if (ctl?.aborted) return { ok: false, refs, reason: 'прервано' }
+      // A cancellable call has already aimed; avoid another async look inside
+      // generic_place between the cancellation check and the actual packet.
+      await withTimeout(ctl && bot._placeBlockWithOptions
+        ? bot._placeBlockWithOptions(ref, face, { forceLook: 'ignore', swingArm: 'right' })
+        : bot.placeBlock(ref, face), timeoutMs)
       const now = bot.blockAt(pos)
       if (appeared(now)) return { ok: true, placed: now.name, face: faceKind(face) }
       last = new Error('блок не появился')
@@ -268,12 +276,14 @@ async function placeMany (bot, ctl, positions, opts: any = {}) {
 // спрашивается перед каждым блоком.
 // beforeStep — перед каждым блоком (await): пауза на защиту (щит к стрелку,
 // pvp.js), 'abort' — бросить столб.
-async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDigMs = 2000, abortIf = null, beforeStep = null, fast = false }: any = {}) {
+async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDigMs = 2000, abortIf = null, beforeStep = null, fast = false }: any = {}): Promise<{ ok: boolean; placed: number; supportPlaced?: number; reason?: string; why?: string[] }> {
   const stack = item ? itemNamed(bot, item) : pickFiller(bot)
   if (!stack) return { ok: false, placed: 0, reason: item ? `нет ${item} на столб` : 'нечем строить столб' }
   try { await bot.equip(stack, 'hand') } catch (e) { return { ok: false, placed: 0, reason: e.message } }
 
   let placed = 0
+  let supportPlaced = 0
+  const baseY = Math.floor(bot.entity.position.y)
   const why = []
   for (let i = 0; i < blocks && !(ctl && ctl.aborted); i++) {
     const stop = abortIf ? abortIf() : null
@@ -331,19 +341,52 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
       try { await bot.equip(again, 'hand') } catch (e) { why.push(e.message); break }
     }
 
-    if (!fast) await centerOnFloor(bot, ctl)
+    let waterSide = null
+    if (/^(water|bubble_column)$/.test(feetB?.name || '')) {
+      // Liquid jump adds 0.04/tick (LivingEntity.jumpInLiquid), so one source
+      // layer only lifts the feet ~0.82: it never clears a full block below us.
+      // A low side face gives the native jumpOutOfFluid impulse. Keep the
+      // original column: callers remember its coordinates, not a shifted one.
+      bot.clearControlStates()
+      for (let t = 0; t < 24 && !bot.entity.onGround && !ctl?.aborted; t++) await sleep(25)
+      await centerOnFloor(bot, ctl, 1000, { water: true })
+      if (ctl?.aborted) break
+      const pick = require('./pick')
+      const dry = b => !!b && b.boundingBox === 'empty' && !/water|bubble_column|lava|fire|cobweb/.test(b.name)
+      const full = b => b?.boundingBox === 'block' && b.shapes?.some(s => s.length === 6 && s.every((v, i) => v === (i < 3 ? 0 : 1)))
+      const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+      // A visible existing step has zero block cost; use it before adding one.
+      sides.sort((a, b) => Number(full(bot.blockAt(feet.plus(b)))) - Number(full(bot.blockAt(feet.plus(a)))))
+      for (const d of sides) {
+        const side = feet.plus(d)
+        if (!dry(bot.blockAt(side.offset(0, 1, 0))) || !dry(bot.blockAt(side.offset(0, 2, 0)))) continue
+        const b = bot.blockAt(side)
+        if (!full(b)) {
+          if (!b || b.boundingBox !== 'empty' || /lava|fire|cobweb/.test(b.name)) continue
+          const r = await placeBlockAt(bot, side, { item: stack.name, honest: true, timeoutMs: 900, ctl })
+          if (!r.ok) continue
+          if (!r.already) supportPlaced++
+        }
+        if (ctl?.aborted) break
+        if (pick.faceAim(bot, side, d.scaled(-1))) { waterSide = d; break }
+      }
+      if (ctl?.aborted) break
+      if (!waterSide) { why.push('нет низкой грани для выхода из воды'); break }
+    } else if (!fast) await centerOnFloor(bot, ctl)
     const startY = bot.entity.position.y
     try {
       // Строго вниз, под ноги — туда, куда ставим. В mineflayer наклон вверх
       // положительный: здесь стояло +π/2, и бот строил столб, глядя в небо
       // (блок всё равно вставал — пакет установки идёт с forceLook: 'ignore', —
       // но со стороны это выглядело нелепо).
-      await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+      await bot.look(waterSide ? Math.atan2(-waterSide.x, -waterSide.z) : bot.entity.yaw, -Math.PI / 2, true)
+      if (ctl?.aborted) break
       // Sneak keeps the body from walking off the one-block pillar it is
       // standing on between placements. It does not stop knockback, but it
       // stops the bot from strolling off its own tower. Inside a shaft there
       // is nothing to fall off, and it only costs jump clearance there.
-      if (sneak) bot.setControlState('sneak', true)
+      bot.setControlState('sneak', waterSide ? false : sneak)
+      if (waterSide) bot.setControlState('forward', true)
       bot.setControlState('jump', true)
 
       // Wait for the body to actually clear the square being filled. The
@@ -356,13 +399,22 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
       // believes. Firing the moment the client crosses 1.0 was consistently
       // refused.
       let clear = false
-      for (let t = 0; t < 24 && !clear; t++) {
+      for (let t = 0; t < 24 && !clear && !ctl?.aborted; t++) {
         await sleep(25)
-        clear = bot.entity.position.y - startY >= 1.1
+        const p = bot.entity.position
+        // Release while still against the face (horizontal velocity is zero),
+        // as soon as native water escape supplied the lift. Waiting until the
+        // apex carries the body onto the adjacent block and shifts the tower.
+        if (waterSide && bot.entity.velocity.y >= bot.physics?.outOfLiquidImpulse) bot.setControlState('forward', false)
+        if (Math.floor(p.x) !== feet.x || Math.floor(p.z) !== feet.z) break
+        clear = p.y - feet.y >= 1.1
       }
       bot.setControlState('jump', false)
+      if (waterSide) bot.setControlState('forward', false)
       if (clear) await sleep(60)
+      if (ctl?.aborted) break
       if (!clear) { why.push(`не подпрыгнул (+${(bot.entity.position.y - startY).toFixed(2)})`); continue }
+      if (bot.entity.position.y < feet.y + 1) { why.push('опустился до установки'); continue }
 
       // Fire the packet the instant the body clears the square, skipping
       // mineflayer's own smooth lookAt and its wait for a block update: those
@@ -379,6 +431,7 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
       why.push(e.message.slice(0, 60))
     } finally {
       try { bot.setControlState('jump', false) } catch {}
+      if (waterSide) { try { bot.setControlState('forward', false) } catch {} }
     }
     // В бою (fast) — не 250 мс, а до приземления на новый блок: шаг столба
     // ~0.5 с вместо ~0.7, и между выстрелами лучника встаёт лишний блок.
@@ -388,7 +441,8 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
     } else await sleep(250)
   }
   try { bot.setControlState('sneak', false) } catch {}
-  return { ok: placed >= blocks, placed, why: why.length ? why : undefined }
+  return { ok: placed >= blocks && bot.entity.position.y >= baseY + blocks, placed,
+    ...(supportPlaced ? { supportPlaced } : {}), why: why.length ? why : undefined }
 }
 
 

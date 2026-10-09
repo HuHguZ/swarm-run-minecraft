@@ -847,6 +847,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     } catch {}
   }
   let pathing = false
+  const miningProgress = require('./pvp/movement').createPathMiningProgress(bot, () => gameClock.now())
 
   const mv = bot.pathfinder && bot.pathfinder.movements
   const { arena: AR, onField, restore: restoreMoves } = require('./pvp/movement').combatMovement(bot, arena)
@@ -1346,6 +1347,7 @@ const pvpSkills = {
   let loopSpins = 0
   const markLoopYield = () => { loopYielded = true }
   while (!ctl.aborted) {
+    miningProgress()
     if (loopYielded) loopSpins = 0
     else if (++loopSpins >= 50) { loopSpins = 0; await new Promise<any>(resolve => setImmediate(resolve)) }
     loopYielded = false
@@ -1586,16 +1588,17 @@ const pvpSkills = {
         continue
       }
     }
+    let punishAfterRecovery = false
     if (safety.action === 'recover' && safeMedical) {
+      const recoveryOptions = { onPunish: () => { punishAfterRecovery = true } }
       pathTo(false); pathing = false; clear()
       if (guard) await guard.raise(false)
       if (medical.name === 'splash_potion') {
         if (await holdItem(medical) && await useAt(bot.entity.yaw, -Math.PI / 2, { item: medical })) st.healed.push('взрывное лечения')
-      } else if (medical.name === 'potion') await drink(medical, 'лечение до нового размена')
-      else if (await pvpSkills.consumeItem(medical)) st.healed.push(medical.name)
+      } else if (medical.name === 'potion') await drink(medical, 'лечение до нового размена', null, recoveryOptions)
+      else if (await pvpSkills.consumeItem(medical, null, recoveryOptions)) st.healed.push(medical.name)
       await holdWeapon()
-      await sleep(TICK_MS)
-      continue
+      if (!punishAfterRecovery || ctl.aborted || (bot.health ?? 0) <= 0) { await sleep(TICK_MS); continue }
     }
     const their = usingItem(bot, entity)
     const blocking = their === 'shield'
@@ -1814,7 +1817,7 @@ const pvpSkills = {
       const ca = ca0 && /^(place|place-hit|place-shoot|anchor|obby)$/.test(ca0.kind) && cheapKill ? (noteGate('кристалл: добиваю дешевле'), null) : ca0
       const react = !ca || !/^(defuse|dodge|shield|cover|wall|anchorPop)$/.test(ca.kind) || after('crystalSeen', true, style.reactMs)
       if (!ca) delete noticed.crystalSeen
-      if (ca && react) {
+      if (ca && react && (!punishAfterRecovery || ca.kind !== 'eat')) {
         if (guard && ca.kind !== 'shield') await guard.raise(false)
         if (pathing) { pathTo(false); pathing = false }
         clear()
@@ -1855,7 +1858,7 @@ const pvpSkills = {
         try { const r = await require('./armor').equipBestArmor(session, ctl, { confirmMs: 300 }); if (r && r.equipped && r.equipped.length) used('надел броню в бою') } catch {}
       }
     }
-    if (prof.player && ready('rebuff') && !(FIX && (pressing || punishable() || (!fortSealed() && !!tt.state(entity).consuming))) && (tempo.ON ? tt.safe(tempo.consumeMs('potion'), { fortSealed: fortSealed() }).ok : (theirR > 5 || busyFoe || fort || perch))) {
+    if (!punishAfterRecovery && prof.player && ready('rebuff') && !(FIX && (pressing || punishable())) && (tempo.ON ? tt.safe(tempo.consumeMs('potion'), { fortSealed: fortSealed() }).ok : (theirR > 5 || busyFoe || fort || perch))) {
       rest('rebuff', FIX ? 2500 + Math.random() * 2500 : 3000)
       const KIND = { strength: 'strength', speed: 'swiftness', regeneration: 'regeneration' }
       const lack = (Object.entries(KIND) as [string, any][]).some(([e, k]) => !hasEffect(bot, e) &&
@@ -2128,7 +2131,7 @@ const pvpSkills = {
       rest('fort', 15000)
       if (await fortOut()) continue
     }
-    if ((hp <= healAt + (archer ? 3 : 0) || calmHeal) && ready('heal')) {
+    if (!punishAfterRecovery && (hp <= healAt + (archer ? 3 : 0) || calmHeal) && ready('heal')) {
       if (calmHeal && hp > healAt + (archer ? 3 : 0) && ready('calmNote')) { rest('calmNote', 5000); used('лечусь, пока он занят') }
       const splash = findPotion(bot, 'splash_potion', 'heal')
       if (splash && await holdItem(splash) && await useAt(bot.entity.yaw, -Math.PI / 2, { item: splash })) {
@@ -2194,11 +2197,12 @@ const pvpSkills = {
           set('back', stepSafe(bot, keyDir(bot, 'back')))
           set(strafeKey, stepSafe(bot, keyDir(bot, strafeKey)))
         }
-        if (pick.name === 'potion') await drink(pick, 'выпил ' + (potionOf(pick) || 'зелье'), null, { desperate })
-        else if (await pvpSkills.consumeItem(pick, null, { desperate })) { used('съел ' + pick.name); st.healed.push(pick.name) }
+        const recoveryOptions = { desperate, onPunish: () => { punishAfterRecovery = true } }
+        if (pick.name === 'potion') await drink(pick, 'выпил ' + (potionOf(pick) || 'зелье'), null, recoveryOptions)
+        else if (await pvpSkills.consumeItem(pick, null, recoveryOptions)) { used('съел ' + pick.name); st.healed.push(pick.name) }
         clear()
         await holdWeapon()
-        continue
+        if (!punishAfterRecovery || ctl.aborted || (bot.health ?? 0) <= 0) continue
       }
     }
 
@@ -2744,7 +2748,7 @@ const pvpSkills = {
       } else if (r > HIT_REACH && !theyUp && !(st.flankStuckUntil && now < st.flankStuckUntil)) {
         if (!pathing) { pathTo(true); pathing = true; clear(); st.flankFrom = { at: now, d } }
         if (st.flankFrom && now - st.flankFrom.at > 3000) {
-          if (d > st.flankFrom.d - 1) {
+          if (d > st.flankFrom.d - 1 && !miningProgress()) {
             st.flankStuckUntil = now + 6000
             pathTo(false); pathing = false
             used('обход не выходит — иначе')
@@ -2814,7 +2818,7 @@ const pvpSkills = {
           if (!st.cpFrom || now - st.cpFrom.seen > 500) { pathTo(true, new goals.GoalNear(fp.x, me.y, fp.z, 1)); pathing = true; clear(); st.cpFrom = { at: now, hd: hdP, seen: now } }
           st.cpFrom.seen = now
           if (now - st.cpFrom.at > 3000) {
-            if (hdP > st.cpFrom.hd - 0.5) { rest('counterPillar', 8000); pathTo(false); pathing = false; st.cpFrom = null; used('столб к его столбу: не подойти под него'); continue }
+            if (hdP > st.cpFrom.hd - 0.5 && !miningProgress()) { rest('counterPillar', 8000); pathTo(false); pathing = false; st.cpFrom = null; used('столб к его столбу: не подойти под него'); continue }
             st.cpFrom = { at: now, hd: hdP, seen: now }
           }
           await sleep(TICK_MS)
@@ -2872,7 +2876,7 @@ const pvpSkills = {
     else stuckTicks = 0
     if (d < hopD - 0.5 || r <= HIT_REACH) { hopD = d; hopDAt = now }
     if (HOP && prof.player && !perch && !fort && !meInWeb && bot.entity.onGround && !bot.entity.isInWater && r > HIT_REACH && d < 9 &&
-        ready('hop') && (stuckTicks >= 4 || (dy > 0.6 && dy < 2.6 && d < 5) || (pathing && d > 5 && now - hopDAt > 2500 && Math.abs(dy) < 2.6))) {
+        ready('hop') && (stuckTicks >= 4 || (dy > 0.6 && dy < 2.6 && d < 5) || (pathing && d > 5 && now - hopDAt > 2500 && Math.abs(dy) < 2.6 && !miningProgress()))) {
       rest('hop', 1500)
       const me0 = bot.entity.position.clone()
       const foeAt = entity.position.clone()
@@ -2902,8 +2906,8 @@ const pvpSkills = {
     // Окно перестановки кончилось, а цель — точка прострела (статичная): путь стоит на ней с pathing = true, и ветки
     // «if (!pathing) pathTo(true)» к нему больше не идут (S7d, s7d-p-27: 95–110 с молча до ничьей). Снять — до новой
     // перестановки (ревью Codex: иначе окно продлевается раньше очистки), и новую цель пути — с чистого листа.
-    if (losGoal && now >= repositionUntil) { losGoal = null; pathTo(false); pathing = false }
-    if (!perch && !fort && r > HIT_REACH && now >= repositionUntil && ready('unstick')) {
+    if (losGoal && now >= repositionUntil && !miningProgress()) { losGoal = null; pathTo(false); pathing = false }
+    if (!perch && !fort && r > HIT_REACH && now >= repositionUntil && ready('unstick') && !miningProgress()) {
       const wall = !seesBody && !raySees(bot, me.offset(0, 0.4, 0), entity.position.offset(0, 0.4, 0))
       if (wall || stuckTicks >= 8) {
         pathTo(false); pathing = false
@@ -2921,7 +2925,7 @@ const pvpSkills = {
         used(losGoal ? 'он высоко за стеной — отхожу туда, откуда его видно' : wall ? 'стена между нами — путь в обход или насквозь' : 'упёрся — обхожу')
       }
     }
-    if (now < repositionUntil && r > HIT_REACH && !perch) {
+    if ((now < repositionUntil || miningProgress()) && r > HIT_REACH && !perch) {
       if (!pathing) { pathTo(true, losGoal); pathing = true; clear() }
       if (losGoal && seesBody) { repositionUntil = 0; losGoal = null; pathTo(false); pathing = false }
       await sleep(TICK_MS)

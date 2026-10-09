@@ -13,6 +13,7 @@ test('recovery graph moves while eating, cancels approach and punishes an oppone
   assert.deepEqual(recoveryDecision(window).path, ['Observe', 'RecoverWhileMoving', 'Eat'])
   assert.equal(recoveryDecision({ ...window, consuming: true, safe: false }).node, 'CancelOnApproach')
   assert.equal(recoveryDecision({ ...window, opponentUsing: true, opponentPunishable: true }).node, 'PunishOpponentUsing')
+  assert.equal(recoveryDecision({ ...window, buff: true, opponentUsing: true, opponentPunishable: false }).node, 'Eat')
   assert.equal(recoveryDecision({ ...window, clutchActive: true }).node, 'WaitForWindow')
   assert.equal(recoveryDecision({ ...window, grounded: false }).node, 'WaitForWindow')
 })
