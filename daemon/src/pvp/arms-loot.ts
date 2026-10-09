@@ -48,6 +48,19 @@ export function gainRange(owned: Item[], outcomes: Item[][], storage: Array<Stor
 }
 export const expectedGain = (owned: Item[], outcomes: Item[][], storage: Array<StorageItem | null> | null): number => gainRange(owned, outcomes, storage).gain
 
+export interface LootInteraction { ticks: number; movedNames: number; interrupted: boolean }
+export function interactionCost(receipts: LootInteraction[], outcomes: Item[][], storage: Array<StorageItem | null> | null): number {
+  if (!receipts.length) return 200 // Existing uninformed interaction prior.
+  // containers.withdrawPass pays 250 game ms for each attempted, nonempty name.
+  // Subtract only confirmed transfers: failed waits and opening/closing remain paid
+  // residual, including interrupted receipts. This is a conservative estimate, not
+  // a calibrated separation of latency from work.
+  const perName = 250 / 50
+  const residual = receipts.map(r => Math.max(0, r.ticks - perName * r.movedNames)).sort((a, b) => a - b)
+  const groups = outcomes.map(items => new Set(fittingLoot(items, storage).map(i => i.name)).size)
+  return residual[Math.floor(residual.length / 2)] + perName * (groups.length ? groups.reduce((a, b) => a + b, 0) / groups.length : 0)
+}
+
 export interface OwnTraversal {
   from: Position; to: Position; points: Position[]; ticks: number; completed: boolean; at: number
 }

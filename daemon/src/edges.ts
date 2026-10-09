@@ -1102,7 +1102,7 @@ async function climbBack (bot, ctl, target, { maxMs = 60000, beforeStep = null, 
       const onPath = (r) => { if (r && r.status === 'noPath') noPath++ }
       bot.on('path_update', onPath)
       try {
-        while (gameClock.now() < until && !ctl.aborted && noPath < 2) {
+        while (gameClock.now() < until && !ctl.aborted && noPath === 0) {
           const p = bot.entity.position
           if (Math.floor(p.x) === shaft.x && Math.floor(p.z) === shaft.z && Math.abs(p.y - shaft.gy) < 1.1) break
           await sleep(100)

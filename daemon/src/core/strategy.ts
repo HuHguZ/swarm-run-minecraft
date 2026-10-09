@@ -148,7 +148,7 @@ export class StrategicDirector {
   canRun(strategy: Strategy, state: WorldState): boolean {
     return !this.exhausted(strategy.id) && strategy.preconditions(state) && !strategy.failureCondition?.(state)
   }
-  decide(state: WorldState, allowed?: ReadonlySet<string>): Plan {
+  decide(state: WorldState, allowed?: ReadonlySet<string>, overview: { maxDepth?: number; record?: boolean } = {}): Plan {
     for (const [id, failed] of this.failedAt) {
       const strategy = this.registry.get(id)
       if (!strategy) continue
@@ -162,8 +162,9 @@ export class StrategicDirector {
     }
     const excluded = new Set([...(this.options.excluded ?? []), ...this.registry.all().filter(s => this.exhausted(s.id) || (allowed && !allowed.has(s.id))).map(s => s.id)])
     const retryStates = new Map([...this.failedAt].filter(([id]) => !this.options.excluded?.has(id) && (!allowed || allowed.has(id))))
-    const selected = plan(this.registry, state, this.options.goal, { ...this.options, excluded, retryStates, penalties: this.penalties })
-    this.options.record?.({ level: 'decision', reason: selected.reason, before: state, plan: selected.steps.map(s => s.id),
+    const selected = plan(this.registry, state, this.options.goal, { ...this.options, maxDepth: overview.maxDepth ?? this.options.maxDepth,
+      excluded, retryStates, penalties: this.penalties })
+    if (overview.record !== false) this.options.record?.({ level: 'decision', reason: selected.reason, before: state, plan: selected.steps.map(s => s.id),
       alternatives: this.registry.all().filter(s => s.preconditions(state) && !excluded.has(s.id)).map(s => ({ id: s.id, cost: s.estimateCost(state), risk: s.estimateRisk(state) })) })
     return selected
   }

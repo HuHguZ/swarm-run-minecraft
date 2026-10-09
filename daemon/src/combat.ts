@@ -1470,9 +1470,44 @@ function watchFight (bot, parent) {
   return { ctl: sub, close: () => { gameClock.clearInterval(timer); if (bot.attack !== attack) bot.attack = attack; if (typeof deact === 'function' && bot.deactivateItem !== deact) bot.deactivateItem = deact; try { bot.removeListener('entityHurt', onHurt) } catch {} } }
 }
 
+// The producer owns the price comparison. This mailbox belongs to one intent,
+// not watchFight's child controller, and never aborts a physical action.
+function strategicYieldState (ctl) {
+  if (!ctl._ndStrategicYield) {
+    const state = ctl._ndStrategicYield = { pending: null, closed: false }
+    ctl.onAbort.push(() => { state.pending = null; state.closed = true })
+  }
+  return ctl._ndStrategicYield
+}
+
+function requestStrategicYield (session, p: any = {}) {
+  const current = session.current
+  if (current?.name !== 'fight' || !current.ctl || current.ctl.aborted || current.ctl._ndStrategicYield?.closed) return { accepted: false, reason: 'no active fight' }
+  if (current.params?.allowStrategicYield !== true) return { accepted: false, reason: 'fight did not opt in' }
+  for (const key of ['roundScope', 'fightId', 'target']) {
+    if (typeof p?.[key] !== 'string' || !p[key] || p[key] !== current.params[key]) return { accepted: false, reason: `${key} mismatch` }
+  }
+  const r = p.request
+  if (r !== null && (!r || typeof r.requestId !== 'string' || !r.requestId ||
+    !['LootChest', 'Recover'].includes(r.preparation) || typeof r.quoteEvidence !== 'string' ||
+    !Number.isFinite(r.before) || !Number.isFinite(r.after))) return { accepted: false, reason: 'invalid preparation request' }
+  const state = strategicYieldState(current.ctl)
+  const receivedAt = gameClock.now()
+  state.pending = r === null ? null : { requestId: r.requestId, preparation: r.preparation,
+    quoteEvidence: r.quoteEvidence, before: r.before, after: r.after, receivedAt }
+  return { accepted: true, receivedAt }
+}
+
 async function fight (session, ctl, opts: any = {}) {
   const w = watchFight(session.bot, ctl)
   const pctl = ctl
+  const yieldState = opts.allowStrategicYield === true ? strategicYieldState(pctl) : null
+  const strategicYield = () => {
+    if (!yieldState || yieldState.closed || pctl.aborted || session.current?.ctl !== pctl) return null
+    const pending = yieldState.pending
+    // Two 500-game-ms watcher periods: stale prices must be quoted again.
+    return pending && gameClock.now() - pending.receivedAt < 1000 ? { ...pending } : null
+  }
   ctl = w.ctl
   const guard: any = makeShield(session, ctl, opts)
   guard.safety = survival.watch(session.bot)
@@ -1486,7 +1521,7 @@ async function fight (session, ctl, opts: any = {}) {
   try {
     let r
     try {
-      r = await fightBody(session, ctl, opts, guard)
+      r = await fightBody(session, ctl, { ...opts, strategicYield }, guard)
     } catch (e) {
       if (!ctl.why || pctl.aborted) throw e
       r = {}
@@ -1498,6 +1533,7 @@ async function fight (session, ctl, opts: any = {}) {
     }
     return { ...r, shield: guard.report(), armor: guard.pre || undefined, mobs: guard.mobs || undefined }
   } finally {
+    if (yieldState) { yieldState.pending = null; yieldState.closed = true }
     w.close()
     bot._ndNoMobAvoid = avoidWas
     guard.safety.close()
@@ -1505,7 +1541,7 @@ async function fight (session, ctl, opts: any = {}) {
   }
 }
 
-async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null }: any = {}, guard) {
+async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null }: any = {}, guard) {
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
   const entity = findTarget(bot, target, session, { allowPlayer, radius: Math.max(24, clearArea || 0) })
@@ -1571,6 +1607,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       repelLava,
       purpose: decision.purpose,
       roundScope,
+      strategicYield,
       // Поле арены (arena.js): не уходить с него за соперником, вернуться, если выпал.
       arena
     })
@@ -1776,6 +1813,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
 
 module.exports = {
   fight,
+  requestStrategicYield,
   watchFight,
   retreat,
   coverSpots,

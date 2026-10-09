@@ -170,10 +170,11 @@ class ArmsEnv {
   }
 
   // Враг: виден ли и что на нём (players: canSee, gear, at).
-  async foe () {
-    const r = await this.side.call('players', { radius: 48 }).catch(() => null)
-    const p = ((r && r.detail && r.detail.players) || []).find(q => q.name === this.side.foe)
+  async foe (current = () => true) {
     const k = this.side.know
+    const r = await this.side.call('players', { radius: 48 }).catch(() => null)
+    if (!current() || this.side.know !== k) return null
+    const p = ((r && r.detail && r.detail.players) || []).find(q => q.name === this.side.foe)
     if (p && p.canSee && p.at) {
       const previous = k.foe?.pos && gameClock.now() > k.foe.at ? { at: k.foe.at, pos: { ...k.foe.pos } } : k.foe?.previous
       k.foe = { at: gameClock.now(), pos: { ...p.at }, previous, dist: p.dist, power: AG.visiblePower(p.gear || []), myPowerAt: k.power || 1 }
@@ -185,19 +186,21 @@ class ArmsEnv {
 
   lootQuote (state, chest) {
     const k = this.side.know
-    const times = [...(k.interactionTicks || [])].sort((a, b) => a - b)
+    const interactionTicks = Loot.interactionCost(k.lootInteractions || [], Array.isArray(chest.contents) ? [chest.contents] : LOOT_PRIOR, k.storage || null)
     return Loot.quoteLoot({ state, owned: k.items || [], storage: k.storage || null, chest, prior: LOOT_PRIOR,
       priorGain: k.lootPrior, traversals: k.traversals || [], foe: k.foe, roundScope: this.round.roundScope,
-      now: gameClock.now(), interactionTicks: times.length ? times[Math.floor(times.length / 2)] : 200,
+      now: gameClock.now(), interactionTicks,
       engage: AG.armsRegistry().get('Engage') })
   }
 
-  async observe () {
+  async observe (current = () => true) {
     const side = this.side
     const k = side.know
     const st = await side.call('status', { items: true, foeEstimate: { roundScope: this.round.roundScope, target: side.foe } }).catch(() => null)
+    if (!current() || side.know !== k) return null
     const s = (st && st.state) || {}
-    await this.foe()
+    await this.foe(current)
+    if (!current() || side.know !== k) return null
     const items = Array.isArray(st?.detail?.items) ? st.detail.items : [...Object.entries(s.inventory || {}).map(([name, count]) => ({ name, count: Number(count) })),
       ...Object.values(s.armor || {}).filter(Boolean).map(name => ({ name: String(name) })), ...(s.offHand ? [{ name: String(typeof s.offHand === 'string' ? s.offHand : (s.offHand.item || s.offHand.name)) }] : [])]
     const pw = AG.powerOf(items)
@@ -260,9 +263,32 @@ class ArmsEnv {
     return w
   }
 
+  preparation (state) {
+    const side = this.side, k = side.know, q = k.lootQuote
+    const allowed = new Set(['Recover', 'Engage'])
+    const chest = q && k.chests.get(q.chestId)
+    if (chest && !chest.looted && !chest.attempt?.abandoned && q.roundScope === this.round.roundScope &&
+      state.facts.loot_target_id?.value === q.chestId && state.facts.loot_round_scope?.value === q.roundScope) allowed.add('LootChest')
+    const direct = side.director.decide(state, new Set(['Engage']), { maxDepth: 1, record: false })
+    const better = side.director.decide(state, allowed, { maxDepth: 2, record: false })
+    const preparation = better.steps[0]?.id
+    if (better.reason !== 'goal' || better.steps.length !== 2 || better.steps[1].id !== 'Engage' ||
+      !['LootChest', 'Recover'].includes(preparation) || !Number.isFinite(direct.cost) || !(better.cost < direct.cost)) return null
+    // Only changed observations reopen an ignored handoff, never quote_at or time.
+    const quoteEvidence = JSON.stringify({ preparation, chest: preparation === 'LootChest' ? state.facts.loot_evidence?.value : null,
+      position: state.position && Loot.cellKey(state.position), health: state.health, hunger: state.hunger,
+      items: (k.items || []).map(i => JSON.stringify(i)).sort(), enemyPower: state.facts.enemy_power?.value,
+      enemyPosition: k.foe?.pos && Loot.cellKey(k.foe.pos) })
+    return { preparation, quoteEvidence, before: direct.cost, after: better.cost }
+  }
+
   async execute (command, signal) {
     const side = this.side
     const k = side.know
+    if (k.strategicReturn) {
+      if (command.skill === 'arms.engage') k.yieldBlocked = k.strategicReturn.quoteEvidence
+      k.strategicReturn = null
+    }
     const ev = []
     const rpc = async (m, p) => {
       if (signal.aborted) return { status: 'interrupted' }
@@ -282,18 +308,19 @@ class ArmsEnv {
         if (sample) gameClock.clearInterval(sample)
         // The transfer is settled. Its watcher must not re-price the now empty
         // chest during route receipts, armor or the following look.
-        if (m === 'chest_take') finished = true
+        if (m === 'chest_take' || m === 'fight') finished = true
       }
       if (from) {
         const to = await here()
         if (to) {
           points.push({ ...to })
-          const opened = m === 'chest_take' && Loot.lootReceipt(p, r).opened
+          const receipt = m === 'chest_take' ? Loot.lootReceipt(p, r) : null
+          const opened = receipt?.opened
           const ticks = Math.max(0, (gameClock.now() - started) / 50)
           ;(k.traversals ||= []).push({ from: { ...from }, to: { ...to }, points, ticks,
             completed: m === 'goto' ? r.status === 'done' : opened, at: gameClock.now() })
           if (opened && Loot.cellKey(from) === Loot.cellKey(to) && Math.hypot(from.x - p.x, from.y - p.y, from.z - p.z) <= 3.5 && ticks > 0)
-            (k.interactionTicks ||= []).push(ticks)
+            (k.lootInteractions ||= []).push({ ticks, movedNames: Object.keys(receipt.moved).length, interrupted: receipt.interrupted })
         }
       }
       if (r && r.status === 'interrupted') ev.push({ type: r.by && r.by.type === 'tactical' ? 'tactical' : 'interrupted', reason: r.error })
@@ -471,6 +498,7 @@ class ArmsEnv {
         return { outcome: signal.aborted || r.status === 'interrupted' ? 'INTERRUPTED' : r.status === 'done' ? 'SUCCESS' : 'FAILURE', reason: r.error, events: ev }
       }
       if (command.skill === 'arms.engage') {
+        k.lastYield = null
         side.stats.engages++
         if (side.stats.firstEngage == null) side.stats.firstEngage = Math.round((gameClock.now() - side.t0) / 1000)
         if (side.stats.powerAtEngage === null) side.stats.powerAtEngage = k.power
@@ -492,18 +520,50 @@ class ArmsEnv {
           if (!seen && !fresh(await this.foe())) return { outcome: 'PARTIAL', reason: 'не нашёл', events: ev }
         }
         const t1 = gameClock.now()
+        const roundScope = this.round.roundScope, fightId = `${roundScope}:${k.fightSeq = (k.fightSeq || 0) + 1}`
+        k.activeFightId = fightId
+        let polling = false, pending = null, requestSeq = 0
+        const issued = new Map()
+        const current = () => !finished && !signal.aborted && !this.round.over && side.know === k && k.activeFightId === fightId
+        const watchYield = every(500, async () => {
+          if (!current() || polling) return
+          polling = true
+          try {
+            const state = await this.observe(current)
+            if (!current() || !state) return
+            const choice = this.preparation(state)
+            if (choice && choice.quoteEvidence !== k.yieldBlocked) {
+              const request = { ...choice, requestId: pending?.quoteEvidence === choice.quoteEvidence ? pending.requestId : `${fightId}:${++requestSeq}` }
+              pending = request
+              k.yieldWatch = { ...request, enemyHp: Object.fromEntries(['lo', 'hi', 'mean', 'conf'].map(b => [b, state.facts['enemy_hp_' + b]?.value])) }
+              issued.set(request.requestId, k.yieldWatch)
+              await side.call('fight_yield', { roundScope, fightId, target: side.foe, request })
+            } else if (pending) {
+              pending = null
+              await side.call('fight_yield', { roundScope, fightId, target: side.foe, request: null })
+            }
+          } catch {} finally { polling = false }
+        })
         // arena — весь комплекс (|x|,|z| ≤ 25 от центра, пол y=0): дуэль не уходит по сытости/оружию (arenaStay), стены держат поле.
-        const r = await rpc('fight', { target: side.foe, allowPlayer: true, timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', roundScope: this.round.roundScope, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } })
+        let r
+        try { r = await rpc('fight', { target: side.foe, allowPlayer: true, allowStrategicYield: true, fightId,
+          timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', roundScope, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } }) }
+        finally { gameClock.clearInterval(watchYield); if (k.activeFightId === fightId) k.activeFightId = null }
         const d = (r && r.detail) || {}
-        if (side.stats.fightEvents.length < 40) side.stats.fightEvents.push({ t: Math.round((t1 - side.t0) / 1000), s: Math.round((gameClock.now() - t1) / 1000), status: r.status, by: r.by && r.by.type, stopped: d.stopped, sw: d.swings, hit: d.landed })
+        const sent = issued.get(d.strategicYield?.requestId)
+        const strategicYield = sent && sent.quoteEvidence === d.strategicYield.quoteEvidence && sent.preparation === d.strategicYield.preparation ? d.strategicYield : null
+        if (strategicYield) k.strategicReturn = k.lastYield = { ...strategicYield, fightId, roundScope, enemyHp: sent.enemyHp }
+        if (side.stats.fightEvents.length < 40) side.stats.fightEvents.push({ t: Math.round((t1 - side.t0) / 1000), s: Math.round((gameClock.now() - t1) / 1000), status: r.status, by: r.by && r.by.type, stopped: d.stopped, sw: d.swings, hit: d.landed,
+          ...(strategicYield ? { strategicYield: k.lastYield } : {}) })
         if (d.killed && String(d.killed).split(', ').includes(side.foe)) side.stats.killed = true
         side.stats.fights++
         const why = `fight ${r.status}${r.error ? ': ' + r.error : ''}${d.skipped ? ' skip ' + (d.stopped || d.purpose || '') : ''}${d.stopped && !d.skipped ? ' stop ' + d.stopped : ''} sw ${d.swings ?? '-'}`.slice(0, 90)
         const kind = why.replace(/sw \d+$/, 'sw #')
         side.stats.fightWhy[kind] = (side.stats.fightWhy[kind] || 0) + 1
         // Мгновенный возврат без боя — не крутить: пауза, иначе тысячи вызовов за раунд (s7-arms02: 3996).
-        if (gameClock.now() - t1 < 1000 && !side.stats.killed) await sleep(1000)
-        return { outcome: side.stats.killed ? 'SUCCESS' : 'PARTIAL', reason: why, events: ev, detail: { swings: d.swings, landed: d.landed } }
+        if (gameClock.now() - t1 < 1000 && !side.stats.killed && !strategicYield) await sleep(1000)
+        return { outcome: side.stats.killed ? 'SUCCESS' : 'PARTIAL', reason: why, events: ev,
+          detail: { swings: d.swings, landed: d.landed, ...(strategicYield ? { strategicYield: k.lastYield } : {}) } }
       }
       return { outcome: 'FAILURE', reason: `нет навыка ${command.skill}`, events: ev }
     } finally {

@@ -141,6 +141,8 @@ const methods = {
   flint_grind: async (p) => session.runIntent('flint_grind', ctl => { session.require(); return require('./flint-grind').flintGrind(session, ctl, p || {}) },
     { timeoutMs: (Math.min(300, (p && p.timeoutSeconds) ?? 90) + 15) * 1000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'], params: p || {} }),
   fight: async (p) => session.fight(p || {}),
+  // Immediate mailbox update; leave combat events for the owner of the fight.
+  fight_yield: async (p) => ({ status: 'done', detail: require('./combat').requestStrategicYield(session, p || {}), events: [], state: session.state() }),
   temper: async (p) => session.setTemper(p || {}),
   play_mode: async (p) => session.setPlayMode(p || {}),
   flee: async (p) => session.flee(p || {}),

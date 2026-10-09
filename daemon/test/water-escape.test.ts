@@ -172,6 +172,25 @@ test('shaft fallback after surfacing only receives the remaining climb budget', 
   } finally { s.close() }
 })
 
+test('one final noPath receipt ends an unreachable shaft approach without waiting twenty seconds', async () => {
+  const s = scene({ change: (_q, name) => name === 'water' ? 'air' : name })
+  s.bot.entity.isInWater = false
+  let noPaths = 0
+  s.bot.pathfinder.setGoal = goal => {
+    if (goal) clockMod.setTimeout(() => { noPaths++; s.bot.emit('path_update', { status: 'noPath', path: [] }) }, 50)
+  }
+  const target = { position: new Vec3(10, 3, .5), equipment: [] }
+  try {
+    const r = await s.run(() => edges.climbBack(s.bot, s.ctl, target, { floorY: 3, maxMs: 25000, exclude: new Set(['0,0']) }))
+    assert.equal(noPaths, 1, 'pathfinder emits one final result; it does not promise a second failure')
+    assert.equal(r.ok, false)
+    assert.match(r.why, /не дошёл/)
+    assert.ok(s.clock.now() <= 200, `unreachable approach took ${s.clock.now()} ms`)
+    assert.deepEqual(s.placements, [])
+    assert.deepEqual(s.controls(), IDLE)
+  } finally { s.close() }
+})
+
 test('low own breath takes the nearer air before continuing to a visible shore', async () => {
   const s = scene({ oxygen: 2 })
   try {

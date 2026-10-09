@@ -283,6 +283,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   const acquired = await require('./pvp/search').acquireTarget(bot, ctl, vision, entity, { deadline, arena: opts.arena })
   if (!acquired.entity) return { lost: `${entity.username || entity.name} не найден`, search: acquired.search, totem: totemMod.delta(opts.totem0, totemMod.snapshot(bot)) }
   entity = acquired.entity
+  const strategicTargetId = entity.id
   ctl.onAbort.push(() => vision.close())
   let lastStand = opts.lastStand === true || opts.repelLava === true
   const foodFire = { attempts: 0, ignited: 0, burningObserved: 0 }
@@ -1009,7 +1010,15 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
 
   const escapePearl = (...args: any[]) => pvpSkills.escapePearl(...args)
 
-  const finish = async (out) => {
+  const releaseFightItems = async () => {
+    if (guard && !selfDied) await guard.raise(false)
+    if (!selfDied) for (const cell of pendingLava.splice(0)) await scoop(cell)
+  }
+  const strategicRequest = () => !ctl.aborted && !selfDied && (bot.health ?? 20) > 0 && prof.player &&
+    entity.id === strategicTargetId && bot.entity?.onGround && !bot.entity.elytraFlying && !edges.falling(bot) &&
+    !bot._ndClutch?.waterPlan && !bot._ndAerialRecovering?.() ? opts.strategicYield?.() : null
+
+  const finish = async (out, itemsReleased = false) => {
     gameClock.clearInterval(aimTimer)
     clear()
     pathTo(false)
@@ -1017,8 +1026,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     try { bot.deactivateItem() } catch {}
     // Погиб — отчёт сразу: сессия ждёт его 1 с реального времени после смерти (intent-runner), щит и вычерпывание
     // лавы мёртвому не нужны (S7c: у погибшего в ROUND пустые crystal/elytra — отчёт не успевал).
-    if (guard && !selfDied) await guard.raise(false)
-    if (!selfDied) for (const cell of pendingLava.splice(0)) await scoop(cell)
+    if (!itemsReleased) await releaseFightItems()
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('physicsTick', onTickSwat)
     bot.removeListener('physicsTick', onTickArcher)
@@ -1052,6 +1060,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     { const gapEnd = gameClock.now() - quiet.at; if (gapEnd >= 10000) { quiet.gaps10++; quiet.total10 += gapEnd } if (gapEnd > quiet.longest) quiet.longest = gapEnd }
     // Отчёт — и в память демона (S7d): арена забирает его status { lastDuel }, если ответ fight опоздал или пуст
     // (s7d-base: у 2 из 5 раундов «элитр» пустые ROUND обеих сторон — стоп арены обгонял отчёт).
+    if (out.strategicYield) out.strategicYield.returnedAt = gameClock.now()
     const rep = buildReport(out, tricks, human, ts)
     try { bot._ndLastDuel = { at: gameClock.wall.now(), foe: label, detail: rep } } catch {}
     return rep
@@ -1473,6 +1482,18 @@ const pvpSkills = {
       }
       used('общая безопасность: ' + safety.reason)
       return finish({ lowHealth: safety.action !== 'dead', safety, escape, health: bot.health })
+    }
+    // A request is data, not cancellation. Awaited skills have returned here;
+    // airborne recovery and water pickup retain the body until they finish.
+    if (strategicRequest()) {
+      const oldAim = aim
+      aim = 'free'
+      try { await releaseFightItems() } finally { aim = oldAim }
+      // Item cleanup can await the server. Keep the duel's watchers alive until
+      // the body and the current quote have both been checked after that await.
+      const request = strategicRequest()
+      if (request) return finish({ stopped: 'strategic preparation', strategicYield: request }, true)
+      continue
     }
     const meInWeb = blockName(bot, me.floored()) === 'cobweb' || blockName(bot, me.floored().offset(0, 1, 0)) === 'cobweb'
     const skyThreat = prof.player && !bot.entity.elytraFlying && vision.visible(entity) ? sky.threat() : null

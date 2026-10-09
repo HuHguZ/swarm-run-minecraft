@@ -31,6 +31,17 @@ function install (bot) {
   const Item = require('prismarine-item')(bot.registry)
   const states = new Map<number, number>()
   menuStates.set(bot, states)
+  if (bot.version === '1.21.11') {
+    // Ordinary Mineflayer clicks predict Slot components, but this protocol
+    // expects component hashes. A late carried correction can outlive the
+    // next, correctly predicted empty cursor (which gets no separate echo).
+    // As with confirmedClick, request a full receipt after EACH real click.
+    const write = bot._client.write
+    bot._client.write = function (...args) {
+      if (args[0] === 'window_click') args[1] = { ...args[1], stateId: -2 }
+      return write.apply(this, args)
+    }
+  }
   let activeWindow = bot.currentWindow
   bot.on('windowOpen', window => {
     if (window === bot.currentWindow) activeWindow = window

@@ -187,10 +187,10 @@ test('only own completed movement receipts become directed route history; matche
   const route = f.side.know.traversals[0]
   assert.equal(route.completed, true); assert.equal(route.from.x, 0); assert.equal(route.to.x, 7)
   assert.equal(route.ticks, 10)
-  assert.equal(f.side.know.interactionTicks?.length || 0, 0, 'moving plus opening is not a pure interaction receipt')
+  assert.equal(f.side.know.lootInteractions?.length || 0, 0, 'moving plus opening is not a pure interaction receipt')
   const close = fixture({ chests: [pos(1)], reply: { status: 'done', detail: { at: pos(1), took: { iron_sword: 1 }, contents: {} } } })
   await close.run('1,0,0')
-  assert.equal(close.side.know.interactionTicks[0], 10)
+  assert.equal(close.side.know.lootInteractions[0].ticks, 10)
   const failed = fixture()
   await failed.run()
   assert.equal(failed.side.know.traversals[0].completed, false)
