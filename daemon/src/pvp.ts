@@ -10,7 +10,7 @@ const { withTimeout, placeBlockAt, pickFiller, towerUp } = require('./build')
 const threats = require('./threats')
 const { blockName, solid, stepSafe: stepSafeRaw, wantsJump, keyDir } = require('./moves')
 const flee = require('./flee')
-const { shoot: bowShoot } = require('./bow')
+const { shoot: bowShoot, DRAW_MS: BOW_DRAW_MS } = require('./bow')
 const throwMod = require('./throw')
 const fortify = require('./fortify')
 const tools = require('./tools')
@@ -2627,6 +2627,27 @@ const pvpSkills = {
     const arrowItem = findItem(bot, i => /arrow$/.test(i.name))
     const dBow = prof.flying || theyUp ? me.distanceTo(entity.position) : d
     const sees = seesBody
+    // Неудачный подход не делает видимую цель в 4–7 блоках недоступной луку.
+    // Сравниваем выстрел с доступным сейчас ударом и ценой занятой руки: только
+    // видимое сближение, наша недавняя боль и видимое оружие, без точного его HP.
+    const closeBowWorth = (ms) => {
+      const o = co.observe(bot, entity, { tracker: calc })
+      const gap = Math.max(0, reachFrom(entity.position.offset(0, EYE, 0), bot.entity) - tempo.PLAYER_REACH)
+      const recent = gameClock.now() - tt.myHurtAt < tempo.HURT_WINDOW_MS
+      const arrive = recent || gap === 0 ? 0 : o.foe.approach > 0 ? gap / o.foe.approach * TICK_MS : Infinity
+      const exposed = Math.max(0, ms - arrive)
+      const hand = o.foe.main
+      const dm = require('./pvp/damage-model')
+      const hit = dm.afterDefense(dm.meleeRaw({ weapon: hand?.name, sharpness: hand?.ench?.sharpness || 0,
+        strength: o.foe.effects.strength ? 0 : -1, crit: true }), 'melee', dm.defenseOf(o.me.armor, { resistance: o.me.resistance }))
+      const self = exposed > 0 ? hit * (1 + Math.floor(exposed / tempo.swingCooldownMs(hand?.name))) : 0
+      const availableMelee = o.dist <= HIT_REACH ? meleeDmg : 0
+      const defense = dm.defenseOf(o.foe.armor, { resistance: o.foe.resistance })
+      const gain = dm.arrowOutcomes({ speed: dm.arrowSpeedAt(3, dBow), power: read.enchLevel(bot, bowItem, 'power'), crit: true })
+        .reduce((sum, a) => sum + a.p * dm.afterDefense(a.raw, 'projectile', defense), 0)
+      return self < o.me.ehp && gain > self + availableMelee
+    }
+    const closeBow = !!bowItem && !!arrowItem && sees && prof.player && dBow < (punBow ? 5 : bowRange) && blockedLong && r > HIT_REACH && !miningProgress() && closeBowWorth(BOW_DRAW_MS)
     if (process.env.ND_DEBUG_PVP && now - (st.dbgAt || 0) > 1000) {
       st.dbgAt = now
       console.log('[pvp]', JSON.stringify({ t: label, d: Math.round(d * 10) / 10, dBow: Math.round(dBow * 10) / 10, dy: Math.round(dy), hp: Math.round(hp), r: Math.round(r * 10) / 10, theirR: Math.round(theirR * 10) / 10, cd: cooldownLeft, iframes: Math.max(0, targetHurtAt + 500 - now), blocking, meInWeb, pathing, held: heldName(), swings: st.swings, bow: !!bowItem, arrows: !!arrowItem, sees, range: bowRange, ready: ready('bow'), flying: !!prof.flying }))
@@ -2649,7 +2670,7 @@ const pvpSkills = {
       if (arrowsStall && ready('arrowsStallNote')) { rest('arrowsStallNote', 8000); st.arrowsStall = (st.arrowsStall || 0) + 1; used('стрелы не обгоняют его лечение — сближаюсь') }
     }
     const bowPointless = (arrowsWeak || arrowsStall || cx.dominant()) && !theyUp && !perch && !theirPit
-    if (bowItem && arrowItem && !bowPointless && dBow >= (punBow ? 5 : bowRange) && dBow < (prof.flying ? 64 : 48) && ready('bow') && sees && !punRush && now >= rushUntil && !(prof.player && ranged.crossbowFirst(bot))) {
+    if (bowItem && arrowItem && !bowPointless && (dBow >= (punBow ? 5 : bowRange) || closeBow) && dBow < (prof.flying ? 64 : 48) && ready('bow') && sees && !punRush && now >= rushUntil && !(prof.player && ranged.crossbowFirst(bot))) {
       rest('bow', 250)
       if (guard) await guard.raise(false)
       pathTo(false); pathing = false
@@ -2672,15 +2693,17 @@ const pvpSkills = {
         }).catch(() => ({ drawMs: null, why: null }))
         if (prepB.why) used('стрела: ' + prepB.why)
       }
+      let drawnMs = 0
       const shot = await bowShoot(bot, entity, {
         velFn: () => track.vel(),
         follow: false,
         drawMs: prepB.drawMs || undefined,
         holdWhile: prof.player ? () => mace.shieldAtUs(bot, entity) : null,
         onHit: () => { st.arrowHits = (st.arrowHits || 0) + 1 },
-        shouldStop: () => ctl.aborted || entity.position.distanceTo(bot.entity.position) < closeAt ||
+        shouldStop: () => ctl.aborted || (closeBow ? !closeBowWorth(Math.max(TICK_MS, (prepB.drawMs || BOW_DRAW_MS) - drawnMs)) : entity.position.distanceTo(bot.entity.position) < closeAt) ||
           (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'fireball' && e.position && e.position.distanceTo(bot.entity.position) < 7) || (theyUp && reachFrom(bot.entity.position.offset(0, EYE, 0), entity) <= HIT_REACH) || (FIX && maceNow()),
-        onDraw: () => {
+        onDraw: (ms) => {
+          drawnMs = ms
           track.update()
           if (sawRelease()) { side = side === 'left' ? 'right' : 'left'; flipAt = gameClock.now() + 400 + Math.random() * 400; st.dodges++; used('ушёл с линии выстрела') }
           if (gameClock.now() > flipAt) { side = side === 'left' ? 'right' : 'left'; flipAt = gameClock.now() + 300 + Math.random() * 500 }
@@ -3217,12 +3240,21 @@ const pvpSkills = {
       } else {
         const beyond = r > HIT_REACH + 0.4 && !sjNow.close
         const cheap = justHit || mf.clock.charge(0) < 0.4 || r > 4.2
-        if (!swordS || (beyond && cheap)) {
+        // Граф отверг и укол, и разгон — меч в руке остаётся (иначе свап меч↔копьё каждый тик с проверкой ниже).
+        const graphNo = !!gp && !gate('jab') && !gate('charge')
+        if (!swordS || (beyond && cheap && !graphNo)) {
           st.spearSwaps = (st.spearSwaps || 0) + 1
           if (swordS) used('меч → копьё: он дальше руки, заряд меча пуст')
           await holdItem(spearIt.item)
         } else spearTurn = false
       }
+    }
+    // Копьё — по расчёту, не правилом (показ 09.10: «держу его на 3.4–4.5» колол, хотя граф выбирал меч): укол и
+    // разгон оба отвергнуты графом, а меч есть — ближе и мечом.
+    if (spearIt && spearTurn && gp && bestWeapon(bot) && !gate('jab') && !gate('charge')) {
+      spearTurn = false
+      if (bot.heldItem && spear.isSpear(bot.heldItem.name)) await holdWeapon()
+      if (ready('spearGraphNote')) { rest('spearGraphNote', 4000); used('копьё в сторону: мечом выгоднее по расчёту') }
     }
     // Щит поднят, а топор есть: укол и разгон копья щит гасит целиком (копьё щит не выбивает — Weapon без
     // disable_blocking), s7d-c-30p «копья»: 389 погашенных ударов, 3 ничьих — копьё в сторону, ближе и топором (свап в

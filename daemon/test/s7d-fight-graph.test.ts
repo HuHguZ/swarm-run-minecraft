@@ -55,12 +55,17 @@ test('оружие ближнего боя — по урону в секунду
   assert.equal(fg.meleeChoice(obs({ items, foe: { blocking: true, shieldOffTicks: 40 } })).item, 'diamond_sword')
 })
 
-test('граф: таран копьём не берётся вблизи, когда меч рядом бьёт; опыт меняет цену тарана', () => {
+test('граф: таран вблизи — только когда в воздухе его меч не достаёт; опыт меняет цену тарана', () => {
+  // Показ 09.10: у него меч — на земле он рубит в ответ, в воздухе нет: таран выгоднее размена.
   const o = obs({ dist: 3, items: [{ name: 'diamond_sword' }, { name: 'iron_spear' }], foe: { main: { name: 'diamond_sword' } } })
   const plan = kp.planAttack(o)
   const store = {}
   const g = fg.decide(o, plan, [fg.lanceOption(o, 'iron_spear', store)])
-  assert.notEqual(g.pick, 'lance', JSON.stringify(g.scores))
+  assert.equal(g.pick, 'lance', JSON.stringify(g.scores))
+  // У него лук — избегнутого ближнего урона нет: вблизи меч, не таран.
+  const ob = obs({ dist: 3, items: [{ name: 'diamond_sword' }, { name: 'iron_spear' }], foe: { main: { name: 'bow' } } })
+  const gb = fg.decide(ob, kp.planAttack(ob), [fg.lanceOption(ob, 'iron_spear', {})])
+  assert.notEqual(gb.pick, 'lance', JSON.stringify(gb.scores))
   const v0 = fg.lanceOption(o, 'iron_spear', store).dmg
   for (let i = 0; i < 10; i++) fg.noteExperience(store, 'lance', { hit: true })
   const v1 = fg.lanceOption(o, 'iron_spear', store).dmg

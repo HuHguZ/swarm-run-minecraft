@@ -313,6 +313,7 @@ async function holes () {
 // Дроп и стрелы — только внутри коробки: мир чужой, и /kill @e[type=item]
 // без границ стирал бы вещи по всему миру.
 const INSIDE = () => `x=${X - CLEAN_R - 1},y=${Y - 2},z=${Z - CLEAN_R - 1},dx=${2 * CLEAN_R + 2},dy=${CEIL ? CEIL_H + 2 : 16},dz=${2 * CLEAN_R + 2}`
+const JUNK = ['item', 'arrow', 'spectral_arrow', 'trident', 'experience_orb', 'firework_rocket', 'wind_charge', 'ender_pearl', 'fishing_bobber', 'snowball', 'falling_block', 'tnt', 'tnt_minecart', 'end_crystal']
 // Диких мобов — в Колизее по его габариту (фундамент — мачты): шар ..40 от
 // центра не доставал до трибун, а вниз доставал до земли под ареной.
 const MOBS_AT = () => COLOS && CZFP
@@ -350,12 +351,9 @@ async function resetArena (kit: any = {} as Record<string, any>) {
     await lightArena(kit.light)
     await holes()
   }
-  await cmd(`/kill @e[type=item,${INSIDE()}]`)
-  await cmd(`/kill @e[type=arrow,${INSIDE()}]`)
-  await cmd(`/kill @e[type=experience_orb,${INSIDE()}]`)
-  // Взрывчатка прошлого раунда (boom.js): вагонетки, кристаллы, ракеты — не
-  // оставлять новому раунду (рельсы снял пол-заливкой выше).
-  if (BLAST) for (const t of ['tnt_minecart', 'end_crystal', 'tnt', 'firework_rocket']) await cmd(`/kill @e[type=${t},${INSIDE()}]`)
+  // Дроп, снаряды и взрывчатка прошлого раунда — все, по всему Колизею (трибуны тоже): пользователь 09.10 —
+  // вещи копились раунд за раундом и тормозили игру; ракеты, трезубцы, жемчуг раньше оставались.
+  for (const t of JUNK) await cmd(`/kill @e[type=${t},${COLOS && CZFP ? MOBS_AT() : INSIDE()}]`)
   // Под крышей темно — ночью внутри спавнятся дикие мобы и мешают дуэли.
   for (const t of ['zombie', 'husk', 'skeleton', 'stray', 'creeper', 'spider', 'cave_spider', 'witch', 'enderman', 'zombie_villager', 'drowned', 'slime', 'phantom']) {
     await cmd(`/kill @e[type=${t},${MOBS_AT()}]`)
@@ -739,12 +737,13 @@ function roundDeaths (from, names) {
   } catch { return null }
 }
 async function where (c, out: any = {} as Record<string, any>) {
-  const st = await c.call('status').catch(() => null)
+  const st = await c.call('status', { physics: true }).catch(() => null)
   if (!st || !st.state || st.state.connected === false) return null
   out.hp = st.state.health
   if (deathBase.has(c) && (st.state.lastDeathAt || null) !== deathBase.get(c)) return 'dead'
   if (!(st.state.health > 0)) return 'dead'
-  const p = st.state.pos
+  // The floored header hides the exterior strip (626.6 becomes 626 at R24).
+  const p = st.detail?.physics?.pos || st.state.pos
   // Колизей: за барьером поля (хорус переносит сквозь стену) или на потолке —
   // обратно не попасть, это не «выпал и лезет назад»: gone, вылет через GONE_MS.
   if (COLOS && p && p.y >= Y - 2 && (Math.abs(p.x - (X + 0.5)) > CLEAN_R + 1.5 || Math.abs(p.z - (Z + 0.5)) > CLEAN_R + 1.5 || (CEIL && p.y > Y + CEIL_H + 0.5))) return 'gone'

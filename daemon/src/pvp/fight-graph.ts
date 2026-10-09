@@ -46,7 +46,8 @@ function meleeChoice (obs, { pCrit = 0.8, pHit = 0.9 }: any = {}) {
 
 const PRIOR = {
   // [попыток, удач] — Бета-сглаживание: (удач + a)/(попыток + a + b).
-  lance: { hit: [7, 23], crash: [8, 23], ticks: 90, crashDmg: 11 },
+  // crash: s7c5 8/23 — до floorBelow/rollout; показ 09.10 — 1 удар о пол на ~35 заходов (−6): априори 3/23.
+  lance: { hit: [7, 23], crash: [3, 23], ticks: 90, crashDmg: 11 },
   dive: { hit: [20, 21], crash: [2, 21], ticks: 70, crashDmg: 6 }
 }
 function experience (store, kind) {
@@ -73,7 +74,11 @@ function lanceOption (obs, spearName, store) {
   const x = experience(store, 'lance')
   // Щит поднят — копьё он держит (BlocksAttacks 90°): касание без урона.
   const dmg = obs.foe.blocking ? 0 : x.pHit * dm.afterDefense(raw, 'melee', def)
-  return { kind: 'lance', dmg, self: x.pCrash * x.crashDmg, cost: 1.5, ticks: x.ticks, why: `таран: касание ${Math.round(x.pHit * 100)} %, удар о стену ${Math.round(x.pCrash * 100)} %` }
+  // В воздухе его ближнее оружие меня не достаёт (показ 09.10: таран проигрывал мечу, хотя на земле он рубит в ответ) —
+  // избегнутый урон его видимого оружия ближнего боя за время захода; лук/трезубец/арбалет — не ближнее, 0.
+  const his = obs.foe.main ? meleeChoice({ me: { items: [obs.foe.main] }, foe: { armor: (obs.me && obs.me.armor) || [] } }) : null
+  const avoided = his ? his.dps * x.ticks / 20 : 0
+  return { kind: 'lance', dmg: dmg + avoided, self: x.pCrash * x.crashDmg, cost: 1.5, ticks: x.ticks, why: `таран: касание ${Math.round(x.pHit * 100)} %, удар о стену ${Math.round(x.pCrash * 100)} %, его меч не достаёт ${r1(avoided)}` }
 }
 // Пике с булавой с элитр: высота h — бонус булавы (MaceItem: 4h до 3, …), щит держит, топор+булава — «оглушающий».
 function diveOption (obs, h, store) {

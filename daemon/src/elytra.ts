@@ -1559,7 +1559,9 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
           return { kind: 'escape' }
         }
         // Таран копьём (s7b): в полёте — тоже, если копьё и ракеты есть, а его щит не в деле.
-        if (gameClock.now() >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = gameClock.now() + 4000; return { kind: 'lance' } }
+        // Показ 09.10: 4 с паузы в воздухе отдавали полёт перехвату (AerialIntercept) — оба бота кружили друг вокруг друга;
+        // таран сам разводит (разбег прочь) и бросает в пике.
+        if (gameClock.now() >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = gameClock.now() + 500; return { kind: 'lance' } }
         const decision = aerial.decide(undefined, ctx)
         return decision.selected ? { kind: 'aerial', decision } : null
       }
@@ -1571,7 +1573,8 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
         const W = worldOf(bot)
         if (headroom(W, bot.entity.position, 8) >= 6) { nextEscape = now + 8000; return { kind: 'escape' } }
       }
-      if (now >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = now + 6000; return { kind: 'lance' } }
+      // Показ 09.10: 6 с / 15 с паузы — бот подолгу бился пешком, хотя таран выгоднее (ракеты стережёт lancePlan ≥ 3).
+      if (now >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = now + 2000; return { kind: 'lance' } }
       if (now >= nextDive && divePlan(bot, e, ctx)) { nextDive = now + 9000; return { kind: 'dive' } }
       return null
     },
@@ -1582,7 +1585,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
       if (plan.kind === 'lance') {
         const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp })
         // Ни одного попадания — не сразу снова (ракеты и время).
-        if (!res.hit) nextLance = gameClock.now() + 15000
+        if (!res.hit) nextLance = gameClock.now() + 1000
         return res
       }
       if (plan.kind === 'dive') {

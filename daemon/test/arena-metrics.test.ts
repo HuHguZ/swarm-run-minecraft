@@ -15,6 +15,26 @@ function current (relative) {
 const metrics = current('../arena-metrics.ts')
 const totem = current('../src/totem.ts')
 
+test('arena return checks use physical position, not the floored exterior strip', async () => {
+  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const start = source.indexOf('async function where(')
+  const end = source.indexOf('\n}', start) + 2
+  assert.ok(start >= 0 && end > start)
+  const context = vm.createContext({ X: 600, Y: 120, Z: 600, CLEAN_R: 24, COLOS: true, CEIL: true, CEIL_H: 16, deathBase: new Map() })
+  vm.runInContext(source.slice(start, end) + '\nthis.where = where', context)
+  for (const [x, z, expected] of <[number, number, string][]>[[602.5, 626.6, 'gone'], [626.6, 602.5, 'gone'],
+    [574.4, 602.5, 'gone'], [602.5, 574.4, 'gone'], [602.5, 624.7, 'in'], [576.3, 602.5, 'in']]) {
+    let requested
+    const client = { call: async (method, params) => {
+      assert.equal(method, 'status'); requested = params
+      return { state: { connected: true, health: 20, pos: { x: Math.floor(x), y: 120, z: Math.floor(z) } },
+        detail: { physics: { pos: { x, y: 120, z } } } }
+    } }
+    assert.equal(await context.where(client), expected, `physical ${x},${z}; same-height exterior is not a return`)
+    assert.equal(requested.physics, true)
+  }
+})
+
 // Run the real round loop without Minecraft, sockets, timers or user files.
 async function arenaRound ({ missingFinal = false, staleFallback = false, totemBoundary = 'ok' } = {}) {
   let now = 0; let deathAt = 0; let fightAt = 0; let calls = 0; let releaseB

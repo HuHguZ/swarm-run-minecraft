@@ -142,6 +142,9 @@ const methods = {
     { timeoutMs: (Math.min(300, (p && p.timeoutSeconds) ?? 90) + 15) * 1000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'], params: p || {} }),
   fight: async (p) => session.fight(p || {}),
   // Immediate mailbox update; leave combat events for the owner of the fight.
+  // Помощь союзнику (командный бой): зелье лечения ему под ноги / стенка из двух блоков между ним и врагом.
+  assist: async (p) => session.runIntent('assist', () => require('./pvp/team-assist').assist(session, p || {}), { timeoutMs: 5000, params: p || {}, interruptOn: ['death', 'kicked', 'disconnected'] }),
+  team_hint: async (p) => session.immediate(async () => require('./pvp/team-assist').hint(session, p || {})),
   fight_yield: async (p) => ({ status: 'done', detail: require('./combat').requestStrategicYield(session, p || {}), events: [], state: session.state() }),
   temper: async (p) => session.setTemper(p || {}),
   play_mode: async (p) => session.setPlayMode(p || {}),

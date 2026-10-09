@@ -322,7 +322,7 @@ function prepareSlot (s, { seed, fresh, world }: any) {
     'broadcast-rcon-to-ops': 'false',
     'level-seed': seed,
     motd: `NeuroDown farm ${s.i}`,
-    'max-players': 6,
+    'max-players': Number(process.env.FARM_MAX_PLAYERS) || 6,
     'view-distance': 8,
     'simulation-distance': 8,
     'spawn-protection': 0,
