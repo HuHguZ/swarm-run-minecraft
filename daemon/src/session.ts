@@ -50,6 +50,11 @@ const mechanismMod = require('./mechanism')
 const playPolicy = require('./play-policy')
 
 // Abortable sleep. The shared helper in movement.js has no cancellation, and
+// Прыжок вниз без ведра (пользователь 10.10: «убирай лимит глобально для всех режимов — пусть прыгают и подхиливаются»):
+// глубина — по хп, урон падения (высота − 3) не больше четверти хп; на 20 хп — до 8 блоков вниз (5 урона), на 8 хп — до
+// 4 (1). Было: 3 блока всегда — бойцы застревали на колоннах и крышах 5–6 бл. ND_FREE_DROP=0 — старый предел.
+function freeDrop (bot) { return process.env.ND_FREE_DROP === '0' ? 4 : Math.max(4, Math.floor((bot.health ?? 20) / 4) + 4) }
+
 function sleep (ms, ctl?: any) {
   if (ctl?.aborted) return Promise.resolve()
   return new Promise<void>(resolve => {
@@ -320,7 +325,8 @@ class Session {
     const towers = scaffold >= 8
 
     const mlg = edges.mlgDrop(this)
-    const dropDown = mlg.ok ? mlg.drop : (bot.health ?? 20) <= 6 ? 3 : 4
+    const free = freeDrop(bot)
+    const dropDown = mlg.ok ? Math.max(mlg.drop, free) : (bot.health ?? 20) <= 6 ? 3 : free
     if (mlg.toBar && !bot.currentWindow && bot._ndFallGuard && bot._ndFallGuard.toHotbar) bot._ndFallGuard.toHotbar().catch(() => {})
     if (bot.pathfinder.movements) bot.pathfinder.movements.maxDropDown = dropDown
     if (this.dropSet !== dropDown || mlg.why !== this.dropWhy) console.log('[mlg] cap', JSON.stringify({ at: 'update', drop: dropDown, was: this.dropSet, why: mlg.why || null }))
@@ -408,8 +414,19 @@ class Session {
     // Прыжок глубже обычного — дороже шага на время воды (edges.priceDrops).
     edges.priceDrops(movements)
     if (bridge) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(worlds.worldOf(bot) === 'the_nether' && process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
+    movements.exclusionAreasStep.push(blk => this.stuckPenalty(blk))
     bot.pathfinder.setMovements(movements)
     this.movements = { canDig, towers, mlg: mlg.ok, bridge }
+  }
+
+  stuckCells = new Map<string, number>()
+  stuckPenalty (blk) {
+    if (!this.stuckCells?.size || !blk || !blk.position) return 0
+    const k = `${blk.position.x},${blk.position.y},${blk.position.z}`
+    const until = this.stuckCells.get(k)
+    if (!until) return 0
+    if (until < gameClock.now()) { this.stuckCells.delete(k); return 0 }
+    return 30
   }
 
   refreshDrop () {
@@ -427,7 +444,8 @@ class Session {
     // Ведро выпало из хотбара посреди дела (сервер откатил клик, рюкзак
     // разобрали) — вернуть, а готовность проверит следующее событие слота.
     if (mlg.toBar && !bot.currentWindow && bot._ndFallGuard && bot._ndFallGuard.toHotbar) bot._ndFallGuard.toHotbar().catch(() => {})
-    const drop = mlg.ok ? mlg.drop : (bot.health ?? 20) <= 6 ? 3 : 4
+    const free = freeDrop(bot)
+    const drop = mlg.ok ? Math.max(mlg.drop, free) : (bot.health ?? 20) <= 6 ? 3 : free
     const was = mv.maxDropDown
     if (drop === was && !this.dropRecheck) return
     const moving = bot.pathfinder.isMoving && bot.pathfinder.isMoving()
@@ -748,6 +766,9 @@ class Session {
       // «stuck» — 3.5 с без нового узла: где тело и на каком узле встало (рельеф, mv-spr: несколько на ногу). Путь ещё
       // живой (resetPath шлёт событие до path = []).
       if (reason === 'stuck') {
+        // Застрял на узле — его клетки на 30 с дороже для поиска: новый путь идёт в обход, а не той же ступенью под навесом
+        // (колизей 10.10: «прыгают на месте, ставя блоки» — 18 перестроек к узлу 2 бл. выше тела, потолок над прыжком).
+        try { for (const q of (Array.isArray(this.pathNodes) ? this.pathNodes.slice(0, 2) : [])) (this.stuckCells ||= new Map()).set(`${Math.floor(q.x)},${Math.floor(q.y)},${Math.floor(q.z)}`, gameClock.now() + 30000); this.updateMovements(true) } catch {}
         try {
           const e = bot.entity
           const n = Array.isArray(this.pathNodes) ? this.pathNodes.slice(0, 2) : []

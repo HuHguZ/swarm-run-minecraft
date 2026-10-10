@@ -381,10 +381,11 @@ function sprintOn (dim) {
 // (рельеф пула, mv-spr-dbg4: 41 → 33 по x за 1.5 с и «stuck» на 3.5 с поиска; поиск дальней ноги не доходил до конца).
 // Лечим снаружи: в path_update (событие уходит до path = results.path) — если тело сдвинулось на 0.8+ блока с прошлой
 // метки, кладём в начало пути узел-метку в точке тела: исполнитель в этом же тике засчитывает его (lastNodeTime = now)
-// и идёт к настоящему path[0]. Стоит на месте — метки нет, честный «stuck» остаётся. ND_PATH_KEEPALIVE=1 — вкл. (до замера выкл.).
-function pathKeepAliveOn () { return process.env.ND_PATH_KEEPALIVE === '1' }
-// Таймаут A* с лучшим путём — идти по нему до конца, а не отказывать (gotoGoal). ND_GOTO_TIMEOUT_WALK=1 — вкл. (до замера выкл.).
-function timeoutWalkOn () { return process.env.ND_GOTO_TIMEOUT_WALK === '1' }
+// и идёт к настоящему path[0]. Стоит на месте — метки нет, честный «stuck» остаётся. По умолчанию вкл. (пользователь 10.10: «бот
+// начинает бежать по пути и достраивает маршрут по ходу» — арена: поиск в Колизее 1.5–2.3 с, бот стоял); ND_PATH_KEEPALIVE=0 — выкл.
+function pathKeepAliveOn () { return process.env.ND_PATH_KEEPALIVE !== '0' }
+// Таймаут A* с лучшим путём — идти по нему до конца, а не отказывать (gotoGoal). По умолчанию вкл. (10.10, как выше); ND_GOTO_TIMEOUT_WALK=0 — выкл.
+function timeoutWalkOn () { return process.env.ND_GOTO_TIMEOUT_WALK !== '0' }
 function pathKeepAlive (bot, { minMove = 0.8 }: any = {}) {
   let mark = null
   const stats = { marks: 0 }

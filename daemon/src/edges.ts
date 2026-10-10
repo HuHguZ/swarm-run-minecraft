@@ -959,7 +959,13 @@ function priceDrops (movements) {
           if (d >= MLG_MIN) {
             if (this.bot && mlgLandingBad(this.bot, m.x, m.y, m.z)) { neighbors.splice(i, 1); continue }
             m.cost += MLG_COST
-          } else if (d > SAFE_FALL) neighbors.splice(i, 1)
+          } else if (d > SAFE_FALL) {
+            // Без воды — прыжок с уроном, если урон (высота − 3) ≤ четверти хп (пользователь 10.10: «убирай лимит
+            // глобально — пусть прыгают и подхиливаются»); цена — урон в шагах. ND_FREE_DROP=0 — по-старому (не планировать).
+            const hp = this.bot ? (this.bot.health ?? 20) : 0
+            if (process.env.ND_FREE_DROP === '0' || d - SAFE_FALL > hp / 4) neighbors.splice(i, 1)
+            else m.cost += d - SAFE_FALL
+          }
         }
       }
       return out

@@ -91,9 +91,37 @@ function refuseOtherWorld (bot, rec, what) {
 // Ада — смена мира, шаг в end_portal — Край. Входит в портал только mc_portal
 // mode=enter, и последний шаг он делает клавишами, а не pathfinder'ом.
 // Магма — пол, но жжёт стоящего (hot_floor): не запрещена, просто дороже.
+// Постановка блока для pathfinder (столб «прыжок + блок под себя», мост). Пользователь 10.10: «прыгают на месте, блоки
+// не ставятся». Две причины в mineflayer: (1) pathfinder шлёт постановку, едва ноги поднялись над полом клетки, а тело
+// ещё в ней — сервер отказывает (своя рамка в клетке), блок не встаёт; (2) placeBlock ждёт события blockUpdate до 5 с,
+// а 1.21.11 его шлёт не всегда — 5 с прыжков на месте и place_error. Здесь: дождаться, пока своя рамка выйдет из
+// клетки (≤ 12 тиков прыжка), поставить и проверить блок опросом мира (≤ 10 тиков), без ожидания события.
+function wrapPlaceBlock (bot) {
+  if (bot._ndPlaceWrapped || typeof bot._genericPlace !== 'function') return
+  bot._ndPlaceWrapped = true
+  const inMe = (dest) => {
+    const p = bot.entity.position
+    return p.x + 0.3 > dest.x && p.x - 0.3 < dest.x + 1 && p.z + 0.3 > dest.z && p.z - 0.3 < dest.z + 1 && p.y < dest.y + 1 && p.y + 1.8 > dest.y
+  }
+  bot.placeBlock = async (ref, face) => {
+    const dest = ref.position.plus(face)
+    for (let t = 0; t < 12 && inMe(dest); t++) await bot.waitForTicks(1)
+    if (inMe(dest)) throw new Error('своя рамка в клетке постановки')
+    const old = bot.blockAt(dest)
+    await bot._genericPlace(ref, face, { swingArm: 'right' })
+    for (let t = 0; t < 10; t++) {
+      const now = bot.blockAt(dest)
+      if (now && old && now.type !== old.type) { bot.emit('blockPlaced', old, now); return }
+      await bot.waitForTicks(1)
+    }
+    throw new Error(`No block has been placed : the block is still ${old?.name}`)
+  }
+}
+
 function tuneMovements (bot, movements) {
   const reg = bot.registry
   const defAt = fastblocks.defReader(bot)
+  wrapPlaceBlock(bot)
   // Жёсткий пол для разведки в Аду (bot._ndNetherFloor ставит fortress.scout):
   // ни один ход не кончается ниже него. Штраф 12 за клетку ниже y=40 (ниже)
   // разведку не держал: GoalNearXZ высоты не спрашивает, и дважды за день

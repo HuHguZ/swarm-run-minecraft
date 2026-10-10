@@ -3,6 +3,8 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const edges = require('../src/edges')
 const { Session } = require('../src/session')
+// Тесты ниже — про воду и прежний предел (3 блока без ведра): ND_FREE_DROP=0. Свободный прыжок по хп — в конце файла.
+process.env.ND_FREE_DROP = '0'
 
 // Тело для edges.mlgDrop: сторож падения стоит, ведро — в рюкзаке или нет.
 function body ({ hp = 20, dim = 'minecraft:overworld', bucket = true, guard = true, slot = 40, barAt = 0 }: any = {} as Record<string, any>) {
@@ -173,4 +175,21 @@ test('прыжок с ведром на листву, полублок, забо
   const low = []
   mv.getMoveDropDown({ x: 0, y: 63, z: 0 }, { x: 1, z: 0 }, low)
   assert.deepEqual(low.map(m => m.x), [1, 2, 3, 4, 5])
+})
+
+test('без ведра — прыжок по хп: урон (высота − 3) ≤ четверти хп, цена — урон (пользователь 10.10)', () => {
+  process.env.ND_FREE_DROP = ''
+  try {
+    const mv: any = { bot: body({ hp: 20 }), getMoveDropDown (node, dir, neighbors) { for (const y of [77, 76, 75]) neighbors.push({ x: 1, y, z: 0, cost: 1 }) } }
+    edges.priceDrops(mv)
+    const n = []
+    mv.getMoveDropDown({ x: 0, y: 80, z: 0 }, { x: 1, z: 0 }, n)
+    // 3 — даром; 4 и 5 — урон 1 и 2 ≤ 5 — можно, цена — урон.
+    assert.deepEqual(n.map(m => [80 - m.y, m.cost]), [[3, 1], [4, 2], [5, 3]])
+    mv.bot.health = 6
+    const low = []
+    mv.getMoveDropDown({ x: 0, y: 80, z: 0 }, { x: 1, z: 0 }, low)
+    // На 6 хп — урон не больше 1.5: только 4.
+    assert.deepEqual(low.map(m => 80 - m.y), [3, 4])
+  } finally { process.env.ND_FREE_DROP = '0' }
 })
