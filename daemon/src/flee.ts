@@ -201,7 +201,7 @@ function edgeRisk (bot, E) {
 
 // Лучшее направление бегства сейчас. prevYaw — чтобы не дёргаться между
 // почти равными вариантами.
-function pickDirection (bot, hs, prevYaw = null) {
+function pickDirection (bot, hs, prevYaw = null, goals: any[] = []) {
   const me = bot.entity.position
   let best = null
   const options = []
@@ -220,6 +220,7 @@ function pickDirection (bot, hs, prevYaw = null) {
       if (h.doc.radius && pass < 3) cost += h.doc.weight * (3 - pass) * 6
       if (h.doc.blast && pass < h.doc.blast) cost += (h.swelling ? 40 : 8) * (h.doc.blast - pass) / h.doc.blast
     }
+    cost += goalPull(E, goals)
     // Короткий пробег — это тупик впереди.
     cost += (10 - run.len) * 1.5
     // Бег в воду — с суши: в воде тело ~2 бл/с (втрое медленнее спринта), там утопленники, нора и коробка не
@@ -239,6 +240,73 @@ function pickDirection (bot, hs, prevYaw = null) {
   return best
 }
 
+// Выход по клеткам (10.10, колизей: «в комнате зажали — не может вычислить траекторию, чтобы выбежать»): лучи
+// pickDirection прямые на 10 бл., в комнате все упираются в стены, и дверь сбоку не видна. Обход в ширину по проходимым
+// клеткам (как runLength: ноги и голова свободны, под ногами опора, шаг ±1, спуск до 3) на ~20 бл.; клетка годится,
+// только если я там раньше любого ходячего (его путь — по прямой, скорость — доля моего спринта). Цель — клетка с
+// наименьшей опасностью от всех разом и дальше всех от ближайшего; идти — на клетку пути в 3–4 шагах. null — выхода нет.
+function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = []) {
+  const me = bot.entity.position
+  const walkers = hs.filter(h => h.doc.radius > 0 && h.d < 32)
+  const start = { x: Math.floor(me.x), y: Math.floor(me.y + 0.01), z: Math.floor(me.z) }
+  const key = (c) => `${c.x},${c.y},${c.z}`
+  const prev = new Map([[key(start), null]])
+  const steps = new Map([[key(start), 0]])
+  const open = b => b && b.boundingBox === 'empty' && b.name !== 'cobweb' && !HURTS.has(b.name)
+  const stand = (x, y, z) => {
+    const g = bot.blockAt(new Vec3(x, y - 1, z))
+    return open(bot.blockAt(new Vec3(x, y, z))) && open(bot.blockAt(new Vec3(x, y + 1, z))) && g && !HURTS.has(g.name) && (g.boundingBox === 'block' || g.name === 'water')
+  }
+  const q = [start]
+  let best = null
+  for (let i = 0; i < q.length && q.length < maxNodes; i++) {
+    const c = q[i]; const s = steps.get(key(c))
+    if (s >= 2) {
+      const P = new Vec3(c.x + 0.5, c.y, c.z + 0.5)
+      let cost = 0; let near = Infinity
+      for (const h of hs) cost += dangerAt(bot, P, h)
+      for (const h of walkers) near = Math.min(near, P.distanceTo(h.e.position))
+      const score = cost - Math.min(near, 16) * 2 + edgeRisk(bot, P) * 2 + goalPull(P, goals)
+      if (!best || score < best.score) best = { c, score, s }
+    }
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = c.x + dx; const z = c.z + dz
+      if (Math.hypot(x - start.x, z - start.z) > radius) continue
+      for (const dy of [0, 1, -1, -2, -3]) {
+        const y = c.y + dy
+        if (!stand(x, y, z)) continue
+        if (dy === 1 && !open(bot.blockAt(new Vec3(c.x, c.y + 2, c.z)))) break
+        if (dy < 0 && [c.y + 1, c.y, c.y - 1].some(yy => yy > y + 1 && !open(bot.blockAt(new Vec3(x, yy, z))))) break
+        const n = { x, y, z }; const k = key(n)
+        if (!steps.has(k)) {
+          // Добегу ли раньше него: мой путь шагами, его — по прямой, запас на удар 1.5 бл. (один удар на выходе лучше угла).
+          const P = new Vec3(x + 0.5, y, z + 0.5)
+          const mine = (s + 1) / SPRINT_BPS
+          if (!walkers.some(h => (P.distanceTo(h.e.position) - 1.5) / (h.doc.fast ? SPRINT_BPS : SPRINT_BPS * 0.65) < mine)) {
+            steps.set(k, s + 1); prev.set(k, c); q.push(n)
+          }
+        }
+        break
+      }
+    }
+  }
+  if (!best) return null
+  // Стою в лучшем месте, чем любое достижимое — выхода нет.
+  const here = hs.reduce((a, h) => a + dangerAt(bot, me, h), 0) - Math.min(16, Math.min(Infinity, ...walkers.map(h => me.distanceTo(h.e.position)))) * 2
+  if (best.score >= here - 1) return null
+  const path = []
+  for (let c = best.c; c; c = prev.get(key(c))) path.unshift(c)
+  const wp = path[Math.min(path.length - 1, 3)]
+  return { yaw: Math.atan2(-(wp.x + 0.5 - me.x), -(wp.z + 0.5 - me.z)), to: best.c, steps: best.s, nodes: q.length }
+}
+const SPRINT_BPS = 5.6
+// Куда бежать выгоднее (10.10: «просчитывал, куда убегать — где сундук, где союзники»): точки от тактики (свои, неоткрытые
+// сундуки) — бег к ближней из них дешевле. 0.4 за блок до ближайшей, не больше 8: опасность от врагов весит больше.
+function goalPull (P, goals) {
+  if (!goals?.length) return 0
+  return Math.min(8, 0.4 * Math.min(...goals.map(g => Math.hypot(g.x - P.x, g.z - P.z))))
+}
+
 // Оторвались: ходячие дальше safeDist, а стрелки дальше дальности своего оружия или не видят глаз.
 function shaken (bot, hs, safeDist) {
   const eye = bot.entity.position.offset(0, 1.62, 0)
@@ -249,7 +317,7 @@ function shaken (bot, hs, safeDist) {
 // Сам побег. Возвращает, когда вокруг безопасно, когда прижали (cornered) или
 // по времени. safeDist — дальше скольких блоков от ближайшего ходячего врага
 // считаем, что оторвались.
-async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [], chaseExit = false }: any = {}) {
+async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [], chaseExit = false, goals = [] }: any = {}) {
   const bot = session.bot
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
@@ -270,6 +338,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   let dodgeUntil = 0
   let dodgeKey = null
   let cornered = 0
+  let jukeNext = 0; let jukeUntil = 0; let jukeYaw = 0; let jukes = 0
   // S4d (07.10; ND_S4D=0 — прежний бег до срока): бег, за которым ходячий держится в 5 бл., не отрывает — так и сказать
   // через 3 игр. с, а не бежать 12 с к краю. Спринт 5.6 бл/с против зомби ~2.3, иссушителя ~2.75 (скорость моба ~ квадрат
   // атрибута .23/.25, javap) и паука ~4: на открытом месте за 3 с отрыв 5–10 бл.; держится рядом — значит площадка
@@ -304,14 +373,19 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
           from: [...fromNames],
           at: xyz(bot.entity.position),
           ran: Math.round(bot.entity.position.distanceTo(new Vec3(start.x, start.y, start.z))),
-          dodges: dodges || undefined
+          dodges: dodges || undefined, jukes: jukes || undefined
         }
       }
 
       const now = gameClock.now()
       const swell = hs.find(h => h.swelling && h.d < 6)
       if (!plan || now >= replanAt || swell) {
-        plan = pickDirection(bot, hs, prevYaw)
+        plan = pickDirection(bot, hs, prevYaw, goals)
+        // Прямой бег короткий (стены, комната) или прижали — путь по клеткам к выходу (ND_FLEE_ROUTE=0 — только лучи).
+        if (process.env.ND_FLEE_ROUTE !== '0' && hs.some(h => h.doc.radius > 0 && h.d < 16) && (!plan || plan.run < 8)) {
+          const r = escapeRoute(bot, hs, 1500, 20, goals)
+          if (r) plan = { yaw: r.yaw, run: r.steps, route: true }
+        }
         replanAt = now + 300
         if (!plan) {
           cornered++
@@ -333,7 +407,19 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       if (plan) {
         // Эндермену в глаза не смотрим: взгляд чуть вниз.
         const pitch = hs.some(h => h.e.name === 'enderman' && h.d < 24) ? -0.35 : 0
-        bot.look(plan.yaw, pitch, true).catch(() => {})
+        // Рывок в сторону (10.10: «догоняю и бью одним ударом — пусть стрейфит резко»): быстрый преследователь (игрок, паук)
+        // в 6 бл. — раз в 0.4–0.9 с (случайно, чтобы не читался ритм) уход на 50–80° туда, где свободно и тише, на 0.25–0.4 с.
+        const fastNear = hs.find(h => h.doc.radius && h.doc.fast && h.d < 6)
+        if (fastNear && now >= jukeNext) {
+          const turn = (50 + Math.random() * 30) * Math.PI / 180
+          const side = [1, -1].map(sg => { const y = plan.yaw + sg * turn; const run = runLength(bot, { x: -Math.sin(y), z: -Math.cos(y) }, 4)
+            return { y, ok: run.len >= 3, cost: hs.reduce((a, h) => a + dangerAt(bot, run.end, h), 0) + Math.random() * 4 } })
+            .filter(o => o.ok).sort((a, b) => a.cost - b.cost)[0]
+          if (side) { jukeYaw = side.y; jukeUntil = now + 250 + Math.random() * 150; jukes++ }
+          jukeNext = now + 400 + Math.random() * 500
+        }
+        if (!fastNear) jukeNext = 0
+        bot.look(now < jukeUntil ? jukeYaw : plan.yaw, pitch, true).catch(() => {})
         const f = keyDir(bot, 'forward')
         const wet = inWater(bot)
         set('forward', stepSafe(bot, f) || wet)
@@ -359,7 +445,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
     stop()
     edgeGuard.stop()
   }
-  return { mode: 'бежал до конца срока', from: [...fromNames], at: xyz(bot.entity.position), dodges: dodges || undefined, reason: reason || undefined }
+  return { mode: 'бежал до конца срока', from: [...fromNames], at: xyz(bot.entity.position), dodges: dodges || undefined, jukes: jukes || undefined, reason: reason || undefined }
 }
 
 // Жемчуг туда, где безопаснее всего. Точка переноса считается честно
@@ -427,4 +513,4 @@ function mobAvoidance (bot) {
   }
 }
 
-module.exports = { smartFlee, hostilesAround, shaken, pickDirection, edgeRisk, mobAvoidance, DOCTRINE, creeperSwelling }
+module.exports = { smartFlee, hostilesAround, shaken, pickDirection, escapeRoute, edgeRisk, mobAvoidance, DOCTRINE, creeperSwelling }

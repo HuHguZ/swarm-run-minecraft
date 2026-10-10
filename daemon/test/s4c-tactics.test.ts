@@ -251,3 +251,18 @@ test('two runs that left an armed body\'s pursuer as close make the escape exhau
   p.begin('CreateDistance', at(30, 4)); p.finish('CreateDistance', at(36, 4), 'completed')
   assert.equal(p.observe(at(36, 4, { swim: true })).exhausted, false, 'lava: the swim out is not a run from the pursuer')
 })
+
+test('cornered in a room, the escape route walks out through the side door, not into a wall (colosseum 10.10: bots died to mobs in rooms)', () => {
+  const bot: any = new EventEmitter()
+  bot.entity = { id: 1, position: new Vec3(.5, 64, -2.5), yaw: 0, isInWater: false }
+  // Room |x|, |z| <= 3 walled at 4 (two high), one door east at z = 0; open floor outside to 20.
+  bot.blockAt = (p: any) => { const q = p.floored()
+    const wall = (Math.abs(q.x) === 4 && Math.abs(q.z) <= 4 || Math.abs(q.z) === 4 && Math.abs(q.x) <= 4) && (q.y === 64 || q.y === 65) && !(q.x === 4 && q.z === 0)
+    const solid = wall || q.y === 63 && Math.abs(q.x) <= 20 && Math.abs(q.z) <= 20
+    return { name: solid ? 'stone' : 'air', position: q, boundingBox: solid ? 'block' : 'empty' } }
+  const mob = { id: 2, name: 'vindicator', position: new Vec3(-2.5, 64, -2.5), height: 1.95 }
+  bot.entities = { 2: mob }
+  const hs = flee.hostilesAround(bot, 32)
+  const r = flee.escapeRoute(bot, hs)
+  assert.ok(r && r.to.x > 4, `route leaves the room: ${JSON.stringify(r?.to)}`)
+})

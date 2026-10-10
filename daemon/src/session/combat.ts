@@ -32,9 +32,14 @@ function fight (this: any, p: any = {}) {
 function fleeIntent (this: any, p: any = {}) {
     return this.runIntent('flee', ctl => {
       this.require()
+      // from — игроки, от кого бежать (арена: бот слабее гонящегося — бег по ходу, без долгого поиска пути).
+      const foes = (Array.isArray(p.from) ? p.from : []).map(n => this.bot.players?.[n]?.entity?.id).filter(id => id != null)
       return flee.smartFlee(this, ctl, {
         timeoutMs: Math.min(60, p.timeoutSeconds ?? 15) * 1000,
-        safeDist: p.safeDist ?? 14
+        safeDist: p.safeDist ?? 14,
+        foes,
+        // toward — куда бежать выгоднее (свои, неоткрытые сундуки): {x,y,z}[].
+        goals: Array.isArray(p.toward) ? p.toward.filter(g => Number.isFinite(g?.x) && Number.isFinite(g?.z)) : []
       })
     }, {
       timeoutMs: (Math.min(60, p.timeoutSeconds ?? 15) + 5) * 1000,
