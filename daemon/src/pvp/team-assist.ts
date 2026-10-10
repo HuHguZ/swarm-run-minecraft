@@ -130,7 +130,51 @@ export async function pickup (bot: any, name: string | null, maxD = 6) {
   return { ok: after > before, why: after > before ? `подобрал ${name || 'вещь'}` : 'не подобрал' }
 }
 
-// RPC assist: { mode: 'heal' (ally | at) | 'wall' | 'pincer', ally, foe, at }.
+// Уничтожить чужой лут на земле (гонка 10.10: «вещи врага, что нам не нужны, — в лаву или сжечь, чтобы не достались им»):
+// лава из ведра на кучу и забрать ведром обратно, иначе огонь огнивом/огненным зарядом. Сам — не ближе 2 бл. к клетке
+// (огонь и лава растекаются), опора — видимая грань (pick, как всё остальное). Незерит не горит — его не трогаем.
+export async function denyLoot (bot: any, at: any, maxD = 4) {
+  const items = Object.values(bot.entities || {}).filter((e: any) => e && e.name === 'item' && e.position &&
+    (!at || e.position.distanceTo(new Vec3(at.x, at.y, at.z)) <= maxD)) as any[]
+  if (!items.length) return { ok: false, why: 'на земле нет вещей' }
+  const tool = ['lava_bucket', 'flint_and_steel', 'fire_charge'].map(n => bot.inventory.items().find((i: any) => i.name === n)).find(Boolean)
+  if (!tool) return { ok: false, why: 'нечем уничтожить' }
+  const c = items.reduce((a: any, e: any) => a.plus(e.position), new Vec3(0, 0, 0)).scaled(1 / items.length)
+  let floor = bot.blockAt(c.floored().offset(0, -1, 0))
+  if (floor && floor.boundingBox !== 'block') floor = bot.blockAt(c.floored().offset(0, -2, 0))
+  if (!floor || floor.boundingBox !== 'block') return { ok: false, why: 'под вещами нет опоры' }
+  const cell = floor.position.offset(0, 1, 0)
+  const centre = cell.offset(0.5, 0.5, 0.5)
+  const { goals } = require('mineflayer-pathfinder')
+  const me = () => bot.entity.position
+  if (me().distanceTo(centre) < 2 || me().distanceTo(centre) > 4) {
+    const away = me().minus(centre); away.y = 0
+    const dir = away.norm() > 0.1 ? away.scaled(1 / away.norm()) : new Vec3(1, 0, 0)
+    const spot = centre.plus(dir.scaled(3))
+    try { await Promise.race([bot.pathfinder.goto(new goals.GoalNear(spot.x, cell.y, spot.z, 1)), bot.waitForTicks(60)]) } catch {}
+    try { bot.pathfinder.setGoal(null) } catch {}
+  }
+  if (me().distanceTo(centre) > 4.5) return { ok: false, why: 'не подошёл к вещам' }
+  const before = items.filter((e: any) => bot.entities[e.id]).length
+  await hold(bot, tool)
+  let how = ''
+  if (tool.name === 'lava_bucket') {
+    await bot.lookAt(cell.offset(0.5, 0.05, 0.5), true)
+    bot.activateItem()
+    await bot.waitForTicks(30)
+    how = 'лава'
+    const empty = bot.inventory.items().find((i: any) => i.name === 'bucket')
+    if (empty) { await hold(bot, empty); await bot.lookAt(cell.offset(0.5, 0.5, 0.5), true); bot.activateItem(); await bot.waitForTicks(5) }
+  } else {
+    try { await bot._genericPlace(floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: 'right' }) } catch (e: any) { return { ok: false, why: 'не поджёг: ' + e.message } }
+    how = 'огонь'
+    await bot.waitForTicks(30)
+  }
+  const after = items.filter((e: any) => bot.entities[e.id]).length
+  return { ok: after < before, how, burned: before - after, left: after }
+}
+
+// RPC assist: { mode: 'heal' (ally | at) | 'wall' | 'pincer' | 'pickup' | 'deny', ally, foe, at }.
 export async function assist (session: any, p: any = {}) {
   const bot = session.require()
   const ent = (name: string) => name && bot.players[name]?.entity
@@ -139,6 +183,7 @@ export async function assist (session: any, p: any = {}) {
   if (p.mode === 'wall') return wallFor(bot, ally, ent(p.foe))
   if (p.mode === 'toss') return tossTo(bot, ally, p.item, p.count || 1)
   if (p.mode === 'pickup') return pickup(bot, p.item || null, p.maxD || 6)
+  if (p.mode === 'deny') return denyLoot(bot, p.at || null, p.maxD || 4)
   return { ok: false, why: 'режим?' }
 }
 

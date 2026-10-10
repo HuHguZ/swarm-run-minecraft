@@ -2815,7 +2815,23 @@ const pvpSkills = {
     // Сломать опору под ним (S7d, пункт G): он стоит выше (столб, уступ), блок под его ногами виден, в досягаемости,
     // ломается быстро (время копки 1.21.11 — bot.digTime лучшим инструментом) и сам я не под его ударом —
     // сломать: он падает (с высоты > 3 — урон), теряет высоту. Иначе — дороже, чем ждать/стрелять/строить свой столб.
-    if (prof.player && dy >= 1.4 && foeGrounded() && theirR > 3.3 && !perch && !fort && !meInWeb && ready('breakUnder')) {
+    // И на равной высоте — если под его опорой беда (пользователь 10.10: «ломать блоки под противником — забурить, скинуть
+    // в лаву или в пропасть»): лава в 3 клетках ниже опоры или пустота глубже 3 (падение с уроном, яма без выхода).
+    const dangerBelow = () => {
+      try {
+        const c = entity.position.offset(0, -0.5, 0).floored()
+        let air = 0
+        for (let k = 1; k <= 8; k++) {
+          const b = bot.blockAt(c.offset(0, -k, 0))
+          if (!b) return false
+          if (/lava/.test(b.name)) return k <= 3 + air
+          if (b.boundingBox !== 'empty') break
+          air++
+        }
+        return air >= 3
+      } catch { return false }
+    }
+    if (prof.player && (dy >= 1.4 || dangerBelow()) && foeGrounded() && theirR > 3.3 && !perch && !fort && !meInWeb && ready('breakUnder')) {
       rest('breakUnder', 700)
       try {
         const cell = entity.position.offset(0, -0.5, 0).floored()

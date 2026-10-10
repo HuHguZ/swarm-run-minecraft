@@ -437,6 +437,8 @@ const fortOut = async () => {
     ctx.fort = box
     ctx.st.blocks = (ctx.st.blocks || 0) + box.placed
     ctx.used(`закрылся в коробке (${box.placed} бл.)`)
+    // Сидеть на шифте (пользователь 10.10: «прячутся — пусть шифт жмут, ника тогда не видно сквозь стены»).
+    try { ctx.bot.setControlState('sneak', true) } catch {}
     if (box.hardN) ctx.used(`коробка: лицо, бока и крыша — ${box.hard}`)
     const t0 = ctx.gameClock.now()
     let patchedTotal = 0
@@ -488,6 +490,18 @@ const fortOut = async () => {
         const nearHole = !encB.sealed && ctx.entity.isValid && ctx.entity.position.distanceTo(ctx.bot.entity.position) < 5
         const hurtNow = ctx.gameClock.now() - ctx.tt.myHurtAt < 1000
         const breach = canHitMe ? 'он достаёт через дыру' : digging ? 'он ломает стену' : hurtNow ? 'по мне попали' : nearHole ? 'дыра, он рядом' : burningNow ? 'горю, воды нет' : null
+        // Латать, а не выбегать (пользователь 10.10: «ломаю сверху укрытие — блоки не ставят, чтобы закрыться»): дыра есть
+        // и есть чем — заделать сразу; стену ещё ломают — ждать дыру и заделать. Выход — когда по мне уже попали, латать
+        // нечем, бюджет кончился или ломает быстрее, чем латаю (3 вскрытия за 12 с).
+        const canPatch = breach && !hurtNow && !burningNow && budget > 0 && ctx.pickFiller(ctx.bot) && !(breaches >= 3 && ctx.gameClock.now() - t0 < 12000)
+        if (canPatch && !encB.sealed) {
+          const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats })
+          if (n) {
+            patchedTotal += n; budget -= n; breaches++; holeSince = 0; ctx.st.blocks = (ctx.st.blocks || 0) + n
+            if (ctx.ready('patchNote')) { ctx.rest('patchNote', 2000); ctx.used(`заделал дыру (${breach})`) }
+            continue
+          }
+        } else if (canPatch && digging) { await ctx.sleep(50); continue }
         if (breach) {
           ctx.tt.stats.breaches++
           const theirHp0 = ctx.foeHpDecide(ctx.entity) // оценка, не метаданные (правило 06.10)
@@ -533,6 +547,7 @@ const fortOut = async () => {
       if (waited > 60000) break
       await ctx.sleep(100)
     }
+    try { ctx.bot.setControlState('sneak', false) } catch {}
     if (why) ctx.used(`из коробки: ${why}`)
     const stillIn = ctx.bot.entity && (ctx.bot.health ?? 0) > 0 && ctx.bot.entity.position.floored().equals(box.cell)
     if (!stillIn) {
