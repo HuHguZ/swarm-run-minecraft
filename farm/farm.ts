@@ -323,7 +323,8 @@ function prepareSlot (s, { seed, fresh, world }: any) {
     'level-seed': seed,
     motd: `NeuroDown farm ${s.i}`,
     'max-players': Number(process.env.FARM_MAX_PLAYERS) || 6,
-    'view-distance': 8,
+    // FARM_VIEW_DISTANCE (12.10, арена: Колизей 160×160 — с края до края дальше 8 чанков, боты не видели игрока).
+    'view-distance': Number(process.env.FARM_VIEW_DISTANCE) || 8,
     'simulation-distance': 8,
     'spawn-protection': 0,
     'online-mode': 'false',
@@ -560,6 +561,8 @@ async function cmdRun (args, sceneArgs) {
   // восстановленной копией с сохранённой другой скоростью или заморозкой.
   for (const i of ids) {
     await ensurePacketLimiter(slot(i))
+    // В 750 TPS ожидание подключения успевало сменить сутки; ночь не входит в подготовку свежего старта.
+    if (path.basename(scene) === 'try-lab-fresh.js') checkedReply('time set 1000', await slotRcon(slot(i), 'time set 1000'))
     const ticks = await configureTick(command => slotRcon(slot(i), command), rate)
     const st = readState()
     if (st.slots?.[i]) { st.slots[i].tickRate = rate; writeState(st) }

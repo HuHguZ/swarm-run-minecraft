@@ -1061,7 +1061,7 @@ async function takeWorth (session, ctl, pos, opts: any = {}) {
   throw lastErr || new Error('прервано')
 }
 
-async function takeOnce (session, ctl, pos, { kind = null }: any = {}) {
+async function takeOnce (session, ctl, pos, { kind = null, visibleOnly = false, deadline: callerDeadline = Infinity }: any = {}) {
   const bot = session.bot
   const containers = require('./containers')
   const at = xyz(v3(pos))
@@ -1073,16 +1073,18 @@ async function takeOnce (session, ctl, pos, { kind = null }: any = {}) {
   if (bot.inventory.emptySlotCount() < 3) {
     try { await pack.makeRoom(bot, { slots: 3, forItem: 'iron_ingot' }) } catch {}
   }
-  const deadline = gameClock.now() + 25000
+  const deadline = Math.min(gameClock.now() + 25000, callerDeadline)
+  if (ctl.aborted || gameClock.now() >= deadline) return { at, took: {}, stopped: 'время добычи вышло или прервано' }
   armTraps(session)
-  if (underwater(bot, at) || swimming(bot)) await swimTo(session, ctl, at, { reach: 3.4 })
+  if (underwater(bot, at) || swimming(bot)) await swimTo(session, ctl, at, { reach: 3.4, ms: Math.max(0, deadline - gameClock.now()) })
   // Сундук под твёрдым блоком не открывается (ChestBlock.isChestBlockedAt):
   // в трюме корабля над ним палуба — сломать её, как сделал бы человек.
   const lid = bot.blockAt(v3(at).offset(0, 1, 0))
   if (lid && lid.boundingBox === 'block' && !/chest|barrel/.test(lid.name) && (bot.blockAt(v3(at)) || {}).name !== 'barrel') {
+    if (visibleOnly && !require('./pick').blockSeen(bot, lid.position)) return { at, took: {}, stopped: 'крышка сундука закрыта невидимым блоком' }
     await digAt(session, ctl, lid.position, { maxMs: 6000, walkMs: 20000 })
   }
-  const { block, win } = await containers.findAndOpen(session, ctl, at, deadline)
+  const { block, win } = await containers.findAndOpen(session, ctl, { ...at, visibleOnly }, deadline)
   const shut = containers.guardWindow(ctl, win)
   let pass = null
   const plan = []
@@ -1215,8 +1217,9 @@ async function lootAll (session, ctl, rec, out, p) {
   }
 }
 
-// Места, которые пишут модули-разведчики (не наша база).
-const STRUCTURE_PLACES = new Set(['крепость', 'крепость (ад)', 'бастион (ад)', 'спавнер блейзов', 'портал', 'портал (ад)'])
+// Места, которые пишут модули-разведчики (не наша база). Отметка увиденной
+// лавы рядом с руинами тоже не превращает их сундук в наш склад.
+const STRUCTURE_PLACES = new Set(['крепость', 'крепость (ад)', 'бастион (ад)', 'спавнер блейзов', 'портал', 'портал (ад)', 'лава'])
 
 // ------------------------------------------------------------------ обработчики
 

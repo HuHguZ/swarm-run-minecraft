@@ -17,10 +17,11 @@ function fixture ({ distance = 1.5, visible = true }: any = {} as Record<string,
   b.inventory = { slots: { 45: { name: 'shield' } }, items: () => [{ name: 'iron_sword', count: 1 }] }
   b.lookAt = async () => {}; b.activateItem = () => calls.push('shield'); b.deactivateItem = () => {}
   b.equip = async () => {}; b.stopDigging = () => calls.push('stop'); b.clearControlStates = () => {}
+  b.setControlState = () => {}
   b.pathfinder = { setGoal () {} }; b.attack = () => { calls.push('attack'); foe.isValid = false; delete b.entities[2] }
   const s = { bot: b, current: { name: 'ne_route', ctl: { aborted: false, onAbort: [] } } }
   const context = { module: { exports: {} as Record<string, any> }, console: { log () {} }, process, setTimeout, clearTimeout,
-    require: n => n === 'vec3' ? { Vec3 } : n === './movement' ? { sleep: ms => new Promise<any>(r => setTimeout(r, Math.min(ms,1))) } : n === './worlds' ? { worldOf: () => 'the_nether' } : n === './reflex-lock' ? R : n === './perception' ? { eyePos: () => b.entity.position, raySees: () => visible } : n === './pick' ? { canHit: () => visible && distance < 3 } : n === './sealed' ? { fillerCount: () => 0 } : {} as Record<string, any> }
+    require: n => n === 'vec3' ? { Vec3 } : n === './movement' ? { sleep: ms => new Promise<any>(r => setTimeout(r, Math.min(ms,1))) } : n === './worlds' ? { worldOf: () => 'the_nether' } : n === './reflex-lock' ? R : n === './perception' ? { eyePos: () => b.entity.position, raySees: () => visible } : n === './pick' ? { canHit: () => visible && distance < 3 } : n === './sealed' ? { fillerCount: () => 0 } : n === './threats' ? { incoming: () => [] } : n === './combat' ? { makeShield: () => ({ wear: async () => true, raise: async on => { if (on) b.activateItem(true); else b.deactivateItem() }, close: () => b.deactivateItem() }) } : {} as Record<string, any> }
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/ne-guard.js'),'utf8'),withClockFixture(context))
   const G = context.module.exports; G.attach(s)
   return { b,s,G,calls,hit: () => b._client.emit('damage_event',{ entityId: 1, sourceCauseId: 3, sourceDirectId: 3 }) }

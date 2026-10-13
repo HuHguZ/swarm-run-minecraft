@@ -10,6 +10,7 @@
 // ND_S9=0 — прежний код (bot.blockAt на каждый вызов).
 const Vec3 = require('vec3')
 const nbt = require('prismarine-nbt')
+const gameClock = require('./game-clock')
 
 const LIMIT = 120000 // блоков в кеше (~0.5 КБ на Block — до ~70 МБ); больше — сброс целиком (ponytail: без LRU — поиск A* трогает ~6 тыс. клеток)
 const on = () => process.env.ND_S9 !== '0'
@@ -470,6 +471,9 @@ function patchAStar () {
     if (over()) return this.makeResult('timeout', this.bestNode)
     const goal = this.goal
     const tick0 = this.tickTimeout
+    // At 750 TPS a physical turn has 1.33 ms; a 40 ms search slice stalls movement and reactions.
+    const tickRate = gameClock.snapshot()?.tickRate ?? 20
+    if (tickRate > 20) this.tickTimeout = Math.min(tick0, 40 * 20 / tickRate)
     let pops = 0
     this.goal = {
       heuristic: n => goal.heuristic(n),
@@ -479,10 +483,22 @@ function patchAStar () {
         return goal.isEnd(n)
       }
     }
-    try { return compute.call(this) } catch (err) {
+    let result
+    try { result = compute.call(this) } catch (err) {
       if (err !== OVER) throw err
       return this.makeResult('timeout', this.bestNode)
     } finally { this.goal = goal; this.tickTimeout = tick0 }
+    // The closest node may be the start or an already reached prefix while a legal detour goes sideways.
+    // Walk the cheapest queued native chain; keep bestNode and the continuing search intact.
+    const frontier = this.openHeap.heap[1]
+    const end = result.path[result.path.length - 1]
+    const at = this.movements.bot?.entity?.position
+    const reached = at && end && Math.abs(at.x - end.x) <= 0.35 && Math.abs(at.z - end.z) <= 0.35 && Math.abs(at.y - end.y) < 1 &&
+      result.path.every(n => !n.toBreak.length && !n.toPlace.length)
+    if (result.status === 'partial' && (!result.path.length || reached) && frontier?.parent) {
+      return Object.assign(this.makeResult('partial', frontier), { ndPartialNode: frontier })
+    }
+    return result
   }
   return true
 }

@@ -7,16 +7,59 @@ async function eatIfHungry (session, ctl) {
 }
 
 function predictGold (bot, radius = 56) {
+  const steps = predictGoldSteps(bot, radius)
+  let next = steps.next()
+  while (!next.done) next = steps.next()
+  return next.value
+}
+
+async function predictGoldAsync (bot, radius = 56, ctl: any = {}) {
+  const steps = predictGoldSteps(bot, radius)
+  let ended = false
+  let wakeReflex: (() => void) | null = null
+  const onEnd = () => { ended = true; wakeReflex?.() }
+  const onAbort = () => wakeReflex?.()
+  const check = () => { if (ended || ctl.aborted || !bot.entity || (bot.health ?? 20) <= 0) throw new Error('обзор бастиона прерван') }
+  bot.once?.('end', onEnd)
+  bot.once?.('death', onEnd)
+  ctl.onAbort?.push(onAbort)
+  try {
+    for (;;) {
+      // Voting per visible block must let damage, death and reflex packets run.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      check()
+      if (ctl.waitReflex) {
+        const stopped = new Promise<void>(resolve => { wakeReflex = resolve })
+        await Promise.race([ctl.waitReflex(), stopped])
+        wakeReflex = null
+      }
+      check()
+      const next = steps.next()
+      if (next.done) return next.value
+    }
+  } finally {
+    wakeReflex = null
+    steps.return(null)
+    bot.removeListener?.('end', onEnd); bot.removeListener?.('death', onEnd)
+    const at = ctl.onAbort?.indexOf(onAbort) ?? -1
+    if (at >= 0) ctl.onAbort.splice(at, 1)
+  }
+}
+
+function * predictGoldSteps (bot, radius = 56) {
   const bp = require('.././bastion-pieces')
   const R = bot.registry.blocksByName
   const cids = [R.chest && R.chest.id, R.trapped_chest && R.trapped_chest.id, R.barrel && R.barrel.id].filter(Boolean)
   const chests = visibleOf(bot, cids, radius, { max: 40, rays: 3000 }).map(b => ({ pos: b.position, block: b }))
+  yield
   const bids = ['basalt', 'polished_basalt'].map(n => R[n] && R[n].id).filter(Boolean)
   const basalt = visibleOf(bot, bids, radius, { max: 300, rays: 4000 })
+  yield
   const byChest = bp.locate(bot, chests).found
+  yield
   let byBasalt = []
   const debug = []
-  try { byBasalt = bp.voteByBasalt(bot, basalt, undefined, { debug }) } catch (e) { log('голоса', { error: e.message }) }
+  try { byBasalt = yield * bp.voteByBasaltSteps(bot, basalt, undefined, { debug }) } catch (e) { log('голоса', { error: e.message }) }
   // Один и тот же вал узнаётся тремя шаблонами одной формы (units/ramparts_0,
   const seenR = new Set()
   const ramparts = [...byChest.filter(c => bp.RAMPART_SHAPES.has(c.piece)), ...byBasalt].filter(c => {
@@ -68,8 +111,8 @@ function predictGold (bot, radius = 56) {
     const goldSeen = visibleOf(bot, gids, radius, { max: 60, rays: 3000 })
     const byAnchors = [
       ...bp.locate(bot, chests, { radius, debug: dbgA }).found,
-      ...bp.voteBy(bot, basalt, bp.BASALT_ANCHORS, 'b', { debug: dbgA, radius }),
-      ...(goldSeen.length >= 4 ? bp.voteBy(bot, goldSeen, bp.GOLD_ANCHORS, 'G', { minVotes: 4, minMatch: 10, debug: dbgA, radius }) : []),
+      ...(yield * bp.voteBySteps(bot, basalt, bp.BASALT_ANCHORS, 'b', { debug: dbgA, radius })),
+      ...(goldSeen.length >= 4 ? (yield * bp.voteBySteps(bot, goldSeen, bp.GOLD_ANCHORS, 'G', { minVotes: 4, minMatch: 10, debug: dbgA, radius })) : []),
       ...ramparts
     ]
     const hyp = new Map()
@@ -444,6 +487,15 @@ function tossLands (bot, aim, getBlock = null, dvy = 0) {
 
 function scanPieces (bot, radius = 48) {
   const pg = predictGold(bot, Math.max(radius, 56))
+  return piecesReport(bot, radius, pg)
+}
+
+async function scanPiecesAsync (bot, radius = 48, ctl: any = {}) {
+  const pg = await predictGoldAsync(bot, Math.max(radius, 56), ctl)
+  return piecesReport(bot, radius, pg)
+}
+
+function piecesReport (bot, radius, pg) {
   const walls = pg.walls.map(w => ({ wall: w.wall.t, r: w.wall.r, score: Math.round(w.score * 10) / 10, match: w.match, miss: w.miss, from: w.from }))
   const R = bot.registry.blocksByName
   const cids = [R.chest && R.chest.id, R.trapped_chest && R.trapped_chest.id, R.barrel && R.barrel.id].filter(Boolean)
@@ -464,4 +516,4 @@ function scanPieces (bot, radius = 48) {
   }
 }
 
-module.exports = { eatIfHungry, predictGold, lastGoldBreak, rayClear, baitAim, distToBox, handNoWalk, pitLike, aimOut, tossOut, WEAPON_RANK, hitThroughWindow, JUNK_OUT, dumpAim, PIT_KEEP, PIT_FILL_KEEP, END_FILLER, pitJunk, junkOut, makeSill, PIGLIN_EYE, throwLands, floorRegion, pitLures, unholdGold, tossLands, scanPieces }
+module.exports = { eatIfHungry, predictGold, predictGoldAsync, lastGoldBreak, rayClear, baitAim, distToBox, handNoWalk, pitLike, aimOut, tossOut, WEAPON_RANK, hitThroughWindow, JUNK_OUT, dumpAim, PIT_KEEP, PIT_FILL_KEEP, END_FILLER, pitJunk, junkOut, makeSill, PIGLIN_EYE, throwLands, floorRegion, pitLures, unholdGold, tossLands, scanPieces, scanPiecesAsync }

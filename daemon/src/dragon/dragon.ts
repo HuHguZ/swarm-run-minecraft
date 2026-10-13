@@ -112,6 +112,23 @@ async function dragonFight (session, ctl, p: any = {}) {
     return rep
   }
 
+  // respawn names the End before its column arrives; null support skipped the bridge.
+  const arrivalLoaded = () => {
+    const f = bot.entity.position.floored()
+    return [-1, 0, 1].every(dy => bot.blockAt(f.offset(0, dy, 0)))
+  }
+  let loading = false
+  while (!arrivalLoaded()) {
+    if (ctl.aborted) return report('прервано при входе в Край')
+    if (session.bot !== bot || bot.isAlive === false || !(bot.health > 0) || !/end/.test(bot.game.dimension)) return report('тело сменилось при входе в Край')
+    if (gameClock.now() >= deadline) return report('мир под ногами ещё не прогружен')
+    try { bot.pathfinder.setGoal(null) } catch {}
+    clearControls(bot)
+    loading = true
+    await gameClock.wall.sleep(50)
+  }
+  if (loading && ctl.aborted) return report('прервано при входе в Край')
+  if (loading && (session.bot !== bot || bot.isAlive === false || !(bot.health > 0) || !/end/.test(bot.game.dimension))) return report('тело сменилось при входе в Край')
   const me0 = bot.entity.position
   let at = null
   if (Math.hypot(me0.x - CENTER.x, me0.z - CENTER.z) < 40) {

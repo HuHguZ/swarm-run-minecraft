@@ -124,8 +124,23 @@ test('raw iron and incomplete nuggets cannot satisfy crafting preconditions', ()
   assert.equal(amount(world, 'raw_iron'), 7)
   assert.equal(speedrunRegistry().get('CraftPortalKit')!.preconditions(world), false)
 })
-test('iron forks obey building-first search budget and replan to mining after exhaustion', () => {
+
+test('carried iron prices the missing portal parts without demanding an unrelated spare pick', () => {
   const registry = speedrunRegistry()
+  for (const [bucket, lighter, bars] of [[0, 0, 4], [1, 0, 1], [0, 1, 3]]) {
+    const world = emptyWorld(); world.resources = { stone_tool: 1, food: 6, bucket, lighter, iron: bars }
+    const kit = registry.get('CraftPortalKit')!
+    assert.equal(kit.preconditions(world), true)
+    const route = plan(registry, world, s => amount(s, 'bucket') >= 1 && amount(s, 'lighter') >= 1)
+    assert.deepEqual(route.steps.map(step => step.id), ['CraftPortalKit'])
+    const effect = typeof kit.expectedEffects === 'function' ? kit.expectedEffects(world) : kit.expectedEffects
+    assert.equal(amount(applyEffect(world, effect), 'iron'), 0)
+    world.resources.iron = bars - 1
+    assert.equal(kit.preconditions(world), false)
+  }
+})
+test('iron forks obey building-first search budget and replan to mining after exhaustion', () => {
+  const registry = speedrunRegistry({ iron: 7 })
   const world = emptyWorld(); world.resources = { stone_tool: 1, food: 6 }
   for (const [key, value] of Object.entries({ village: true, shipwreck: false, treasure: false })) world.facts[key] = fact(value, 'map', 0)
   const goal = (s: WorldState) => amount(s, 'iron') >= 7

@@ -9,14 +9,93 @@ const clock = require('../src/game-clock')
 
 const k = (x, y, z) => `${x},${y},${z}`
 
-for (const capture of ['freeze', 'lure', 'gather', 'gather-none', 'gather-patience', 'gather-stuck']) test(`pen trade flow (${capture}): capture, trade with the pen, refill by a trench lure`, async () => {
+// State may change while handing the first ingot. Extra mobs behind the wall
+// must not influence the same visible scene.
+async function readyPenRun (kind, extra = 'none') {
+  const PT = require('../src/bastion/pen-trap')
+  const PG = require('../src/bastion/predict-gold')
+  const SL = require('../src/sealed')
+  const pick = require('../src/pick')
+  const c = new clock.GameClock({ epoch: 0 }); clock.activate(c); c.setState({ tick_rate: 2000 }); c.start()
+  const old = { hand: PG.handNoWalk, toss: PG.tossOut, unhold: PG.unholdGold, lands: PG.throwLands, filler: SL.fillerName, count: SL.fillerCount, dig: SL.digCell, face: pick.seenFace }
+  const ctl = { aborted: false }
+  let gold = kind === 'reserve' ? 2 : 20; let handed = 0; let lures = 0
+  const bot: any = new EventEmitter()
+  bot._client = new EventEmitter(); bot.health = 20
+  bot.entity = { position: new Vec3(-0.5, 98, 0.5), onGround: true }
+  bot.registry = { entitiesByName: { piglin: { metadataKeys: ['mob_flags', 'baby'] } } }
+  bot.inventory = { items: () => [{ name: 'gold_ingot', count: gold }, { name: 'cobblestone', count: 64 }] }
+  bot.setControlState = () => {}; bot.lookAt = async () => {}
+  const readyAir = new Set(['-1,98,0', '-1,99,0', '0,99,0', '0,99,-1', '0,99,1'])
+  for (const z of [-1, 0, 1]) for (const y of [98, 99, 100, 101, 102]) readyAir.add(k(1, y, z))
+  bot.blockAt = p => {
+    const f = p.floored(); const solid = kind === 'deadline' ? !readyAir.has(k(f.x, f.y, f.z)) : f.x === 2 || f.y <= 97
+    return { name: solid ? 'blackstone' : 'air', boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [], position: f }
+  }
+  const piglin = (id, x, y, z, baby = false) => ({ id, name: 'piglin', position: new Vec3(x, y, z), metadata: [0, baby], equipment: [] })
+  bot.entities = { 1: piglin(1, 1.5, kind === 'brute' ? 100 : 98, 0.5), 2: piglin(2, 1.5, 98, 1.5) }
+  if (kind === 'baby') {
+    bot.entities[1].equipment[1] = { name: 'gold_ingot' }; delete bot.entities[2]
+    bot.entities[3] = piglin(3, 1.5, 100, 2.5)
+    if (extra !== 'none') bot.entities[4] = piglin(4, extra === 'hidden' ? 3.5 : 1.5, 98, extra === 'hidden' ? 0.5 : 2.5, true)
+  }
+  if (kind === 'brute') {
+    delete bot.entities[2]
+    if (extra !== 'none') bot.entities[4] = { id: 4, name: 'piglin_brute', position: new Vec3(extra === 'hidden' ? 3.5 : 1.5, 100, 2.5) }
+  }
+  const plan = { ready: kind !== 'brute', F: 100, Bf: { x: -1, y: 98, z: 0 }, Bh: { x: -1, y: 99, z: 0 }, M: { x: 0, y: 100, z: 0 }, P: { x: 0, y: 98, z: 0 }, lanes: [-1, 0, 1].map(k => ({ k, T: { x: 1, y: 100, z: k }, Y: { x: 1, y: 99, z: k }, Z: { x: 1, y: 98, z: k }, W: { x: 0, y: 99, z: k } })) }
+  PG.handNoWalk = async (_b, pg) => { gold--; handed++; pg.equipment[1] = { name: 'gold_ingot' }; if (kind === 'abort') ctl.aborted = true; if (kind === 'drift') bot.entity.position.x += 8; return true }
+  PG.tossOut = async () => { gold--; lures++; return true }
+  PG.unholdGold = async () => false; PG.throwLands = () => ({ ok: true })
+  SL.fillerName = () => 'cobblestone'; SL.fillerCount = () => 64; SL.digCell = async () => 'ok'
+  pick.seenFace = (_b, p) => ({ face: 1, aim: p.offset(0.5, 0.5, 0.5) })
+  try {
+    const opts = { plan, seconds: 30, catchSeconds: 5, capture: 'freeze', keep: kind === 'reserve' ? 1 : 0, refill: kind === 'baby', done: () => kind === 'baby' ? lures > 0 : kind === 'brute' ? handed > 0 : false }
+    const r = kind === 'deadline'
+      ? await PT.trade({ bot }, ctl, {}, plan, c.now() + 1000, { keep: 0, refill: false })
+      : await PT.penTrade({ bot }, ctl, plan, opts)
+    return { r, gold, handed, lures }
+  } finally {
+    PG.handNoWalk = old.hand; PG.tossOut = old.toss; PG.unholdGold = old.unhold; PG.throwLands = old.lands
+    SL.fillerName = old.filler; SL.fillerCount = old.count; SL.digCell = old.dig; pick.seenFace = old.face
+    c.dispose()
+  }
+}
+
+for (const kind of ['abort', 'drift', 'reserve']) test(`pen rechecks ${kind} before the next trader`, async () => {
+  const r = await readyPenRun(kind)
+  assert.equal(r.handed, 1)
+  if (kind === 'reserve') assert.equal(r.gold, 1)
+})
+
+test('pen refill ignores unseen babies, still avoids a visible baby', async () => {
+  assert.equal((await readyPenRun('baby', 'none')).lures, 1)
+  assert.equal((await readyPenRun('baby', 'hidden')).lures, 1)
+  assert.equal((await readyPenRun('baby', 'visible')).lures, 0)
+})
+
+test('pen capture ignores unseen brutes, still avoids a visible brute', async () => {
+  assert.equal((await readyPenRun('brute', 'none')).handed, 1)
+  assert.equal((await readyPenRun('brute', 'hidden')).handed, 1)
+  assert.equal((await readyPenRun('brute', 'visible')).handed, 0)
+})
+
+test('pen adapter respects a one-second remaining budget', async () => {
+  const r = await readyPenRun('deadline')
+  assert.equal(r.handed, 0)
+  assert.ok(r.r.seconds <= 1, JSON.stringify(r))
+})
+
+for (const capture of ['default', 'freeze', 'lure', 'gather', 'gather-delayed', 'gather-guard', 'gather-drift', 'gather-none', 'gather-patience', 'gather-stuck']) test(`pen trade flow (${capture}): capture, trade with the pen, refill by a trench lure`, async () => {
   const c = new clock.GameClock({})
   clock.activate(c)
   c.setState({ tick_rate: 2000 })
   c.start()
   const SL = require('../src/sealed'); const PG = require('../src/bastion/predict-gold'); const pick = require('../src/pick'); const BT = require('../src/bastion/booth-trade')
   const PT = require('../src/bastion/pen-trap')
+  const G = require('../src/ne-guard')
   const saved = { dig: SL.digCell, fill: SL.fillCell, face: pick.faceAim, hand: PG.handNoWalk, unhold: PG.unholdGold, toss: PG.tossOut, step: BT.stepCell, booth: BT.boothTrade }
+  const savedGuard = { busy: G.busy, hot: G.hot, react: G.react }
   const air = new Set([k(0, 98, 0), k(0, 99, 0), k(0, 100, 0)])
   for (let x = 1; x <= 5; x++) for (let z = -3; z <= 3; z++) for (let y = 100; y <= 102; y++) air.add(k(x, y, z))
   const block = v => air.has(k(Math.floor(v.x), Math.floor(v.y), Math.floor(v.z)))
@@ -31,11 +110,14 @@ for (const capture of ['freeze', 'lure', 'gather', 'gather-none', 'gather-patien
   })
   const admireUntil = new Map()
   const piglin = (id, x, y, z) => ({ id, name: 'piglin', width: 0.6, height: 1.95, isValid: true, position: new Vec3(x, y, z), metadata: [0, false],
-    get equipment () { return [null, clock.now() < (admireUntil.get(id) || 0) ? { name: 'gold_ingot' } : null] } })
+    get equipment () { return [null, !(capture === 'gather-delayed' && id === 1) && clock.now() < (admireUntil.get(id) || 0) ? { name: 'gold_ingot' } : null] } })
   const inside = piglin(1, 1.3, 100, 0.5) // прижат к стене рта, над средней полосой
   const outside = piglin(2, 3.5, 100, 2.5) // в 9 бл. от траншеи, не над полосой
   bot.entities = { 1: inside, 2: outside }
-  const log: any = { dug: [], filled: [], handed: 0, lures: 0 }
+  const log: any = { dug: [], filled: [], handed: 0, lures: 0, duplicates: 0, guards: 0 }
+  G.busy = () => false
+  G.hot = () => capture === 'gather-guard' && log.handed >= 3
+  G.react = async () => { log.guards++; bot.entity.position = bot.entity.position.offset(8, 0, 0) }
   SL.digCell = async (_b, v) => {
     air.add(k(v.x, v.y, v.z)); log.dug.push(k(v.x, v.y, v.z))
     for (const e of Object.values<any>(bot.entities)) if (Math.floor(e.position.x) === v.x && Math.floor(e.position.z) === v.z && Math.abs(e.position.y - (v.y + 1)) < 0.01) e.position = new Vec3(e.position.x, v.y - 1, e.position.z)
@@ -44,14 +126,17 @@ for (const capture of ['freeze', 'lure', 'gather', 'gather-none', 'gather-patien
   SL.fillCell = async (_b, v) => { air.delete(k(v.x, v.y, v.z)); log.filled.push(k(v.x, v.y, v.z)); return true }
   pick.faceAim = (_b, v, f) => v.offset(0.5 + f.x * 0.5, 0.5 + f.y * 0.5, 0.5 + f.z * 0.5) // центр грани виден
   PG.handNoWalk = async (_b, pg) => {
-    if (clock.now() < (admireUntil.get(pg.id) || 0) || inv.gold_ingot < 1) return false
-    inv.gold_ingot--; log.handed++; admireUntil.set(pg.id, clock.now() + 119 * 50); return true
+    if (clock.now() < (admireUntil.get(pg.id) || 0)) { log.duplicates++; return false }
+    if (inv.gold_ingot < 1) return false
+    inv.gold_ingot--; log.handed++; admireUntil.set(pg.id, clock.now() + 119 * 50)
+    if (capture === 'gather-drift' && log.handed === 3) bot.entity.position = bot.entity.position.offset(8, 0, 0)
+    return true
   }
   PG.unholdGold = async () => false
   PG.tossOut = async () => {
     // Слиток в траншею: снаружи взрослый идёт за ним, падает в загон и поднимает (стоит 119 тиков).
     inv.gold_ingot--; log.lures++
-    outside.position = new Vec3(1.5, 98, 1.5); admireUntil.set(2, clock.now() + 119 * 50); return true
+    outside.position = new Vec3(1.5, 98, air.has(k(1, 99, 1)) ? 1.5 : 0.5); admireUntil.set(2, clock.now() + 119 * 50); return true
   }
   BT.stepCell = async (_b, v) => { if (capture === 'gather-stuck') return false; bot.entity.position = new Vec3(v.x + 0.5, v.y, v.z + 0.5); return true }
   // Фаза ямы в gather — настоящий boothTrade (здесь макет): торгует, пока done() не скажет «у люка собрались».
@@ -65,9 +150,16 @@ for (const capture of ['freeze', 'lure', 'gather', 'gather-none', 'gather-patien
   try {
     const bo = PT.pitHere(bot)
     assert.ok(bo, 'бот в яме со ртом')
-    if (capture === 'lure') delete bot.entities[1]
+    if (capture === 'lure' || capture === 'default') delete bot.entities[1]
     if (capture === 'gather-none') { delete bot.entities[1]; delete bot.entities[2] }
-    const r = await PT.penTrade({ bot }, { aborted: false }, bo, { seconds: 70, catchSeconds: 30, capture: /^gather/.test(capture) ? 'gather' : capture })
+    const r = await PT.penTrade({ bot }, { aborted: false }, bo, { seconds: 70, catchSeconds: 30, capture: capture === 'default' ? undefined : /^gather/.test(capture) ? 'gather' : capture,
+      st: /guard|drift/.test(capture) ? { traded: 0 } : undefined })
+    if (/guard|drift/.test(capture)) {
+      assert.equal(log.handed, 3, 'never keep using the old pen after the body moves')
+      assert.equal(log.guards, capture === 'gather-guard' ? 1 : 0)
+      assert.equal(r.stopped, capture === 'gather-guard' ? 'страж изменил место' : 'ушёл из места бартера')
+      return
+    }
     if (capture === 'gather-stuck') {
       // В B не шагнуть (рот уже заложен) — яма возвращается: рот снова открыт, бот в P.
       assert.deepEqual([r.ok, r.stopped, r.reopened], [false, 'в B не шагнул', 'ok'])
@@ -89,7 +181,16 @@ for (const capture of ['freeze', 'lure', 'gather', 'gather-none', 'gather-patien
       assert.ok(!log.filled.length, 'рот не закладывали')
       return
     }
-    if (capture === 'lure') {
+    if (capture === 'gather-delayed') {
+      assert.equal(r.penned, true)
+      assert.ok(r.handed3 >= 4)
+      assert.equal(log.duplicates, 0, 'confirmed clicks reserve traders until vanilla admire duration, even before equipment arrives')
+      return
+    }
+    if (capture === 'lure' || capture === 'default') {
+      assert.equal(log.booth, 0, 'no handing outside the trap before opening its floor')
+      assert.equal(r.handed1, 0)
+      assert.equal(r.capture, 'lure')
       assert.equal(r.ok, true, r.stopped)
       assert.deepEqual(r.opened.sort(), [-1, 0, 1], 'люки всех полос открыты сразу')
       assert.equal(r.captured, 0)
@@ -129,6 +230,7 @@ for (const capture of ['freeze', 'lure', 'gather', 'gather-none', 'gather-patien
   } finally {
     Object.assign(SL, { digCell: saved.dig, fillCell: saved.fill }); pick.faceAim = saved.face
     Object.assign(PG, { handNoWalk: saved.hand, unholdGold: saved.unhold, tossOut: saved.toss }); BT.stepCell = saved.step; BT.boothTrade = saved.booth
+    Object.assign(G, savedGuard)
     c.dispose()
   }
 })

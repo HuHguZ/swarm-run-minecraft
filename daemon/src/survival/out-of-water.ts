@@ -115,11 +115,11 @@ async function stepUpInto (bot, ctl, cell) {
 
 const ASIDE_LIMIT = 4
 
-const isWater = b => !!b && (b.name === 'water' || b.name === 'bubble_column')
+const isWater = require('.././movement').waterCell
 
 function waterLevel (b) {
   if (!isWater(b)) return null
-  if (b.name === 'bubble_column') return 0 // a column is fed by a source at its foot
+  if (b.name !== 'water') return 0 // bubble columns and aquatic plants contain source water
   try {
     const p = typeof b.getProperties === 'function' ? b.getProperties() : null
     if (p && Number.isFinite(Number(p.level))) return Number(p.level)
@@ -199,9 +199,11 @@ async function outOfWater (bot, ctl, deadline) {
 
   // An open swim costs no tool or block and must precede sealing the pool.
   // The roof directly overhead says nothing about the adjacent water column.
-  const route = findSwimRoute(bot)
+  // Match the existing unstuck swim radius: an eight-cell breathing pocket can
+  // have a connected bank farther away. Replanning must use the same radius.
+  const route = findSwimRoute(bot, { radius: 16 })
   if (route) {
-    const swim = await escapeWater(bot, ctl, { timeoutMs: Math.min(12000, Math.max(0, deadline - gameClock.now())) })
+    const swim = await escapeWater(bot, ctl, { radius: 16, timeoutMs: Math.min(12000, Math.max(0, deadline - gameClock.now())) })
     if (swim.ok) return { ok: true, how: 'выплыл на берег', plugged, swam: Math.max(0, Math.round(bot.entity.position.y - feet.y)), to: swim.target }
     tried.push(swim.error)
     if (ctl.aborted || gameClock.now() >= deadline) return { ok: false, plugged, tried }

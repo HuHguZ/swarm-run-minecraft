@@ -1,5 +1,6 @@
 import type { Environment, EnvironmentEvent, ExecutionResult, SkillCommand } from '../core/environment'
 import { emptyWorld, fact, type Dimension, type Fact, type Position, type WorldState } from '../core/world-state'
+const { foodUnits, foodPoints } = require('../play-policy')
 
 export interface Observation {
   state: Record<string, unknown>
@@ -39,7 +40,7 @@ export function worldFromObservation(observation: Observation, now: number): Wor
     iron: count(/^iron_ingot$/) + count(/^iron_block$/) * 9 + Math.floor(count(/^iron_nugget$/) / 9),
     raw_iron: count(/^raw_iron$/),
     iron_pick: count(/^(iron|diamond|netherite)_pickaxe$/), diamond_pick: count(/^(diamond|netherite)_pickaxe$/),
-    food: count(/^(cooked_.+|bread|baked_potato|golden_carrot|apple|beef|porkchop|mutton|rabbit|cod|salmon|carrot|mushroom_stew|rabbit_stew|beetroot_soup)$/),
+    food: foodUnits(result.inventory), food_points: foodPoints(result.inventory),
     bucket: count(/^(bucket|water_bucket|lava_bucket)$/), water: count(/^water_bucket$/), lighter: count(/^(flint_and_steel|fire_charge)$/),
     obsidian: count(/^obsidian$/), beds: count(/_bed$/), pearls: count(/^ender_pearl$/), rods: count(/^blaze_rod$/),
     // Очи, уже вставленные в рамки найденной комнаты, — тоже очи (S5e 07.10: после частичной вставки граф по «у тела 7 из 12» уводил
@@ -64,8 +65,8 @@ export function worldFromObservation(observation: Observation, now: number): Wor
       result.facts[`${name}_position`] = fact(at, 'map', now)
     } else if (Object.prototype.hasOwnProperty.call(map, key)) result.facts[name] = fact(false, 'map', now)
   }
-  const bastion = known.bastion ?? known.bastions
-  if (bastion) result.facts.bastion = fact(true, 'map', now)
+  const bastion = known.bastion || (Array.isArray(known.bastions) ? known.bastions[0] : null)
+  if (bastion) result.facts.bastion = fact(true, 'observed', now)
   if (known.bastionsExhausted !== undefined) result.facts.bastions_exhausted = fact(Boolean(known.bastionsExhausted), 'observed', now)
   if (situation.night !== undefined) result.facts.night = fact(Boolean(situation.night), 'observed', now)
   return result

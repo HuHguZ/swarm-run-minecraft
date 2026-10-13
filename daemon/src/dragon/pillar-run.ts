@@ -1416,7 +1416,7 @@ function feedTicks (list, r) {
   // фактический темп сервера (s5-c3: по заказанным 750 при настоящих ~700 якорь за 45 тиков уезжал на 4–6 тиков раньше)
   const sn = gameClock.snapshot()
   const tickMs = 1000 / (sn?.effectiveRate || sn?.tickRate || 20)
-  if (!prev || prev.id !== r.id || prev.tick == null) { r.tick = 0; r.n = null; r.tt = r.t; r.ttMono = r.mono; return }
+  if (!prev || prev.id !== r.id || prev.tick == null) { r.tick = 0; r.n = null; r.tt = r.t; r.ttMono = sn?.lockstep ? null : r.mono; return }
   const byStamp = Math.max(1, Math.round((r.t - prev.t) / 50))
   const vs = [prev, r].filter(q => q.vx != null).map(q => Math.hypot(q.vx, q.vy, q.vz))
   const sp = vs.length ? vs.reduce((x, y) => x + y, 0) / vs.length : 0
@@ -1431,10 +1431,10 @@ function feedTicks (list, r) {
   }
   // на 20 тиках отметки разбора точны (50 мс на тик), и +1 тик clickLead выверен по ним (an-pilltiming); якорь — только
   // на ускоренных (s5-e22: якорь на 20 сдвигал щелчок на 1–2 тика раньше, урон p50 45 вместо 52)
-  r.tt = (sn?.effectiveRate || sn?.tickRate || 20) > 100 ? r.tick * 50 + off : r.t
+  r.tt = !sn?.lockstep && (sn?.effectiveRate || sn?.tickRate || 20) > 100 ? r.tick * 50 + off : r.t
   // то же в монотонных мс реального времени: часы клиента на 750 скачут (догоняют сервер рывком, стоят впереди него),
   // щелчок по ним уходит раньше/позже на тики — миг щелчка считать по ровным часам (clickBedAt untilMono)
-  r.ttMono = offMono != null ? r.tick * tickMs + offMono : null
+  r.ttMono = !sn?.lockstep && offMono != null ? r.tick * tickMs + offMono : null
 }
 
 function makeDragonFeed (bot) {
@@ -3607,7 +3607,7 @@ async function pillarRun (session, ctl, stats, track, feed) {
       const tClick = fc.t + 50 * (clickI + clickLead()) + envNum('ND_CLICK_OFS', -25)
       // тот же миг по ровным часам на ускоренных тиках (ND_CLICK_MONO=0 — по игровым, как раньше)
       const snNow = gameClock.snapshot(); const rateNow = snNow?.effectiveRate || snNow?.tickRate || 20
-      const tClickMono = rateNow > 100 && fc.monoT != null && envv('ND_CLICK_MONO') !== '0' ? fc.monoT + (clickI + clickLead() + envNum('ND_CLICK_OFS', -25) / 50) * 1000 / rateNow : null
+      const tClickMono = !snNow?.lockstep && rateNow > 100 && fc.monoT != null && envv('ND_CLICK_MONO') !== '0' ? fc.monoT + (clickI + clickLead() + envNum('ND_CLICK_OFS', -25) / 50) * 1000 / rateNow : null
       const dClick = clickI === pass.i ? pass.d : fc.path[clickI].head.distanceTo(ctr)
       // щёлкать — по свежему прогнозу, когда до прохода ≤ 8 тиков (на 30 тиков вперёд прогноз спирали
       // ошибается на 2–3 блока: pil1-8 — ждали 41, вышло 15)
@@ -3623,6 +3623,8 @@ async function pillarRun (session, ctl, stats, track, feed) {
       await lookAtSafe(bot, aimAt)
       if (pre) { const bi = findItem(bot, /_bed$/); if (!bi) { out.why = 'кровати кончились'; break } if (!bot.heldItem || !/_bed$/.test(bot.heldItem.name)) await bot.equip(bi, 'hand').catch(() => {}) }
       await new Promise<any>(resolve => bot.once('physicsTick', resolve))
+      if (ctl.trace && runnerLevels) ev('clickSchedule', { rate: rateNow, game: gameClock.now(), mono: gameClock.wall.monotonic(), tClick, targetMono: tClickMono, fcT: fc.t, fcMono: fc.monoT,
+        samples: feed.list.slice(-6).map(q => ({ t: q.t, mono: q.mono, tick: q.tick, n: q.n, tt: q.tt, ttMono: q.ttMono, p: [q.x, q.y, q.z], v: [q.vx, q.vy, q.vz] })) })
       const r = await bedsBoom(session, ctl, stats, { ...plan, ...(useAn ? { H: { x: F.x, z: F.z }, centre: Acentre } : {}), anchor: useAn, dist: r1(dClick), expect: bedDamage(dClick, plan.seen || 1), D: plan.a, y: yb, reuse: true }, { point: hit.point, face: runnerLevels ? plan.click.face : null, runnerGuard: runnerLevels ? () => {
         const q = bot.entity.position, f = landingForecast(feed, P) || fc
         const k = Math.max(0, Math.round((gameClock.now() - f.t) / 50))
@@ -4051,6 +4053,14 @@ async function stationStep (session, ctl, rep, stats, track, st, d, ph) {
 
 async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }: any) {
   const bot = session.bot
+  const active = () => !ctl.aborted && session.bot === bot && bot.isAlive !== false && bot.health > 0 && /end/.test(bot.game.dimension)
+  const pause = ms => new Promise<void>(resolve => {
+    let timer; let poll
+    const done = () => { gameClock.clearTimeout(timer); gameClock.wall.clearInterval(poll); resolve() }
+    timer = gameClock.setTimeout(done, ms)
+    // Game time can stop after disconnect; lifecycle cancellation must still finish.
+    poll = gameClock.wall.setInterval(() => { if (!active() || gameClock.now() >= deadline) done() }, 50)
+  })
   const track = makeTrack(bot)
   const feed = ctl.feed || (ctl.feed = makeDragonFeed(bot))
   feed.onSit = o => { if (ctl.trace) ctl.trace.ev('ocSit', o) }
@@ -4061,19 +4071,25 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
   const lookFor = async (ms) => {
     const t0 = gameClock.now()
     let dd = track.tick()
-    while (!dd && !ctl.aborted && gameClock.now() - t0 < ms && gameClock.now() < deadline) {
+    while (!dd && active() && gameClock.now() - t0 < ms && gameClock.now() < deadline) {
+      // A missing island must still let disconnect, death and clock packets run.
+      await yieldTick()
+      if (!active() || gameClock.now() >= deadline || gameClock.now() - t0 >= ms) break
       if (portalBlocks(bot).length) return null
       doing(ctl, 'fight:search')
       const m = bot.entity.position
       if (Math.hypot(m.x - CENTER.x, m.z - CENTER.z) > 18) {
         const spot = pickSpot(bot, CENTER, { rMin: 8, rMax: 16 })
         if (spot) await walkTo(session, ctl, spot.feet, { range: 1.5, timeoutMs: 20000 })
-      } else await sleep(500)
+        else await pause(500)
+      } else await pause(500)
+      if (!active()) return null
       dd = track.tick()
     }
     return dd
   }
   let d = track.tick() || await lookFor(60000)
+  if (!active()) { rep.dragon.lost = 'бой прерван: тело сменилось, погибло или вышло из Края'; return }
   if (!d) {
     rep.dragon.seen = false
     if (portalBlocks(bot).length) { rep.dragon.won = true; rep.dragon.lost = 'дракона нет, выходной портал горит — убит' } else rep.dragon.lost = 'дракона не видно минуту, выходной портал не горит — жив, но не найден'
@@ -4099,16 +4115,19 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
   let refillAt = 0
   let crystalRetry = gameClock.now() + 20000
   stats.perchCount = stats.perchCount || 0
-  while (!ctl.aborted && gameClock.now() < deadline) {
+  while (active() && gameClock.now() < deadline) {
     await yieldTick()
+    if (!active() || gameClock.now() >= deadline) break
     doing(ctl, 'fight')
     d = track.tick()
     if (!d) {
       // Исчез после «умирает» — победа. Иначе улетел из прорисовки.
       if (lastPhase === PHASE.DYING) { won = true; break }
-      await sleep(250)
+      await pause(250)
+      if (!active()) break
       if (!dragonOf(bot) && lastPhase === PHASE.DYING) { won = true; break }
       if (!dragonOf(bot) && !(await lookFor(30000))) {
+        if (!active()) break
         if (portalBlocks(bot).length) { won = true; break }
         rep.dragon.lost = 'дракона не видно 30 с, выходной портал не горит'
         break
@@ -4260,7 +4279,7 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
         continue
       }
     }
-    if (ctl.bedsOnly && SITTING.has(ph) && !keepBeds) {
+    if (ctl.bedsOnly && bedsN > 0 && SITTING.has(ph) && !keepBeds) {
       await bedsPerch(session, ctl, rep, stats, track)
       await sleep(60)
       continue
@@ -4315,21 +4334,21 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
       if (got < 4) mineRetry = gameClock.now() + 30000
       continue
     }
-    // Добить из лука в полёте: после посадки у дракона ≤ 20 хп (лечится 2 хп/с — только сейчас).
-    if (ctl.bedsOnly && hp != null && hp <= 20 && !SITTING.has(ph) && ph !== PHASE.LANDING && !perched && gameClock.now() - lastShot > 900) {
+    const bedsSpent = countOf(bot, /_bed$/) < 1 && !stationBedPlaced(bot, ctl)
+    const finishBow = !!findItem(bot, /^bow$/) && countOf(bot, /arrow$/) > 0
+    // После кроватей использовать оставшиеся стрелы, даже если кристалл уже успел вылечить дракона.
+    if (ctl.bedsOnly && finishBow && (bedsSpent || (hp != null && hp <= 20)) && !SITTING.has(ph) && ph !== PHASE.LANDING && !perched && gameClock.now() - lastShot > 900) {
       lastShot = gameClock.now()
       // (02.10 вечер, rs12-s8/s15/s18: сюда передавали false — bow.shoot звал hazardSoon() и вызов «сорвался» при драконе 0.2–12 хп
       // сразу после взлёта с меча; добивания из лука в полёте не было ни разу)
       if (await rangedShot(session, ctl, stats, track, d, () => !!hazardNow(bot))) { stats.finishArrows = (stats.finishArrows || 0) + 1; continue }
     }
     if (ctl.bedsOnly) {
-      // Кровати кончились — бой «только кроватями» нечем продолжать: вернуть
-      const swordMore = countOf(bot, /_bed$/) < 1 && !stationBedPlaced(bot, ctl) && crysOn() && envv('ND_SWORD_MORE') !== '0' && RUN_SWORD() &&
-        !!(ctl.pillar && ctl.pillar.built && ctl.pillar.plan && ctl.pillar.plan.runner) && !!items.bestWeapon(bot) && crysAlive(ctl) != null && crysAlive(ctl) <= 3 &&
-        hp != null && hp <= envNum('ND_SWORD_MORE_HP', 80) && bot.health >= 12 && deadline - gameClock.now() > 45000
+      // Кровати — основной урон; их расход не обрывает бой, пока есть меч или стрелы.
+      const swordMore = bedsSpent && !!items.bestWeapon(bot)
       if (swordMore && !ctl.swordMoreT) { ctl.swordMoreT = gameClock.now(); if (ctl.trace) ctl.trace.ev('swordMore', { hp: r1(hp), alive: crysAlive(ctl) }) }
-      if (countOf(bot, /_bed$/) < 1 && !stationBedPlaced(bot, ctl) && !swordMore) {
-        rep.dragon.lost = 'кровати кончились — бой только кроватями нечем продолжать'; rep.need = { what: 'red_bed', count: BEDS_KIT, have: 0 }
+      if (bedsSpent && !swordMore && !finishBow) {
+        rep.dragon.lost = 'кровати и стрелы кончились, оружия нет'; rep.need = { what: 'red_bed', count: BEDS_KIT, have: 0 }
         // 02.10 (rs2-s9): кровати кончились в окопе/чаше у фонтана — бот стоял под сидящим драконом после конца вызова и
         // погиб (11 хп после своих взрывов, удар дракона). Уйти на кольцо 23–27 (вне обзора сидящего), потом вернуть управление.
         if (dragonOf(bot) && Math.hypot(me.x - CENTER.x, me.z - CENTER.z) < 21 && !ctl.bedsOut) {
@@ -4342,7 +4361,10 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
         }
         break
       }
-      // Только кровати: ни станции, ни кристаллов, ни стрел. Ждать посадку на
+      if (swordMore && SITTING.has(ph) && !(ctl.pillar && ctl.pillar.built && ctl.pillar.plan && ctl.pillar.plan.runner)) {
+        await perchAttack(session, ctl, rep, stats, track); await sleep(50); continue
+      }
+      // Ждать следующую посадку у станции, попутно сбивая доступные кристаллы.
       const fromC0 = Math.hypot(me.x - CENTER.x, me.z - CENTER.z)
       const P0 = podiumTop(bot)
       const high = P0 != null && me.y > P0 - 2.5
@@ -4464,6 +4486,7 @@ async function fightDragon (session, ctl, rep, stats, { deadline, perches = 0 }:
   }
   rep.dragon.hpLog = hpLog.slice(-40)
   rep.dragon.won = won
+  if (!won && !active() && !rep.dragon.lost) rep.dragon.lost = 'бой прерван: тело сменилось, погибло или вышло из Края'
   if (won && ctl.started) rep.timing.killed = Math.round((gameClock.now() - ctl.started) / 1000)
   if (stats.perchCount) rep.dragon.perchCount = stats.perchCount
   if (stats.bedPerches && stats.bedPerches.length) rep.dragon.bedPerches = stats.bedPerches.slice(-12).map(({ key, ...p }: any) => p)

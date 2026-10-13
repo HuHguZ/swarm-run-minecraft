@@ -176,7 +176,7 @@ test('a nearby visible table returns before the interrupted native kit requests 
 })
 
 test('real missing stick or table costs cannot spend the four-plank reserve while wood is inaccessible', async () => {
-  for (const stock of [{ oak_planks: 5, crafting_table: 1, stick: 1 }, { oak_planks: 7, crafting_table: 0, stick: 3 }]) {
+  for (const stock of [{ oak_planks: 5, crafting_table: 1, stick: 1 }, { oak_planks: 3, crafting_table: 0, stick: 3 }]) {
     const f = carriedIronFixture({ oak_log: 0, blackstone: 4, ...stock })
     f.state.pickSwings = 176
     assert.equal((await replenishNetherTools(f.port)).ready, false)
@@ -214,7 +214,7 @@ test('a second stick batch replenishes only its actual shortfall and preserves t
     }
     f.port.act = async (method, params) => {
       f.actions.push(method)
-      if (method === 'mine' && params.block === 'blackstone') {
+      if (method === 'mine' && String(params.block).split(',').includes('blackstone')) {
         assert.equal(f.state.pickSwings, 59)
         f.state.inventory.blackstone = 6
         f.state.pickSwings -= 6
@@ -254,7 +254,7 @@ test('a failed nugget conversion falls back to stone picks when the bag holds st
 test('s1c: wood is a reserve for new picks, not a gate — 6 planks + 2 sticks without a table, or ample swings, are ready', () => {
   const base = { dimension: 'the_nether', health: 20, pickSwings: 378 }
   assert.equal(netherToolsReady({ ...base, inventory: { iron_pickaxe: 2, oak_planks: 6, stick: 2 } }), true, 's1c-B-4: 7/8 used to defer the spawner')
-  assert.equal(netherToolsReady({ ...base, inventory: { iron_pickaxe: 2, oak_planks: 3 } }), false, 'no table and too little wood to make one')
+  assert.equal(netherToolsReady({ ...base, inventory: { iron_pickaxe: 2, oak_planks: 3 } }), true, 'carried usable picks do not require making a table')
   assert.equal(netherToolsReady({ ...base, pickSwings: 520, inventory: { iron_pickaxe: 3 } }), true, 'double swing reserve needs no wood')
   assert.equal(netherToolsReady({ ...base, pickSwings: 200, inventory: { iron_pickaxe: 1, oak_planks: 16, crafting_table: 1 } }), false)
 })

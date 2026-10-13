@@ -21,7 +21,7 @@ function fixture () {
   const bots = []
   const events = []
   const fallback = new Proxy({} as Record<string, any>, { get: () => () => {} })
-  const context = { console: { log () {}, error () {} }, setTimeout, clearTimeout, setInterval, clearInterval,
+  const context = { console: { log () {}, error () {} }, process: { env: {} }, setTimeout, clearTimeout, setInterval, clearInterval,
     module: { exports: {} as Record<string, any> }, require (name) {
       if (name === 'vec3') return Vec3
       if (name === 'mineflayer') return { createBot: () => bots.shift() }
@@ -56,6 +56,91 @@ function fixture () {
   }
   return { s, bots, bot, events }
 }
+
+function setupAutopilot(s) {
+  const fallback = new Proxy({}, { get: () => () => {} })
+  const context: any = { module: { exports: {} }, console, process: { env: {} }, require(name) {
+    if (name === './loot') return { seen: () => [{ lootable: true, kind: 'chest', guess: 'руины портала', at: { x: 3, y: 64, z: 0 } }] }
+    if (name === './combat') return { nearestHostile: () => null }
+    if (name === './gestures') return { hook() {} }
+    if (name === './social') return { noticePlayers: async () => {} }
+    if (name === './fightkit') return { autoUse: async () => {} }
+    if (name === './gamedata') return require('../src/gamedata')
+    return fallback
+  }, setInterval: () => 1, clearInterval() {} }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/autopilot.js'), 'utf8'), withClockFixture(context))
+  const auto = new context.module.exports.Autopilot(s, {})
+  for (const method of ['hookTemper', 'hookDamage', 'syncDamageContext', 'hookCreeper', 'escapeWaterIfIdle', 'freeIfBuried', 'emergency', 'extinguish', 'fleeIfDying', 'eatIfHungry', 'wearArmor', 'noteDayPhase', 'heartbeat']) auto[method] = async () => {}
+  let tools = 0, loot = 0, chest = 33, inventory = 0
+  auto.keepTools = async () => { tools++ }
+  s.autoLoot = async () => { loot++; inventory += chest; chest = 0; return { took: { iron_nugget: 24 } } }
+  s.autopilot = auto
+  return { auto, counts: () => ({ tools, loot, chest, inventory }), clear: () => { inventory = 0 } }
+}
+
+test('paused fresh bootstrap prevents autonomous chest loss throughout the pending connection and setup', async () => {
+  const { s, bots, bot } = fixture()
+  const b = bot(); bots.push(b)
+  let loaded
+  b.waitForChunksToLoad = () => new Promise(resolve => { loaded = resolve })
+  const f = setupAutopilot(s)
+  const connecting = s.connect({ bootstrapPaused: true })
+  await f.auto.tick()
+  assert.deepEqual(f.counts(), { tools: 0, loot: 0, chest: 33, inventory: 0 })
+  b.emit('spawn'); await Promise.resolve()
+  await f.auto.tick()
+  assert.equal(f.counts().loot, 0)
+  loaded(); await connecting
+  // The actual scene clears only its setup inventory; no natural loot was consumed.
+  f.clear(); await f.auto.tick()
+  assert.equal(f.counts().chest, 33)
+  await s.connect() // Status/retry callers do not silently release the setup pause.
+  await f.auto.tick()
+  assert.equal(f.counts().loot, 0)
+  await s.connect({ bootstrapPaused: false })
+  await f.auto.tick()
+  assert.deepEqual(f.counts(), { tools: 1, loot: 1, chest: 0, inventory: 33 })
+})
+
+test('ordinary connect keeps autonomous tools and chest loot enabled', async () => {
+  const { s, bots, bot } = fixture()
+  const b = bot(); bots.push(b)
+  const f = setupAutopilot(s)
+  const connecting = s.connect(); b.emit('spawn'); await connecting
+  await f.auto.tick()
+  assert.deepEqual(f.counts(), { tools: 1, loot: 1, chest: 0, inventory: 33 })
+})
+
+test('bootstrap pause validates its explicit boolean before creating a bot', () => {
+  const { s } = fixture()
+  assert.throws(() => s.connect({ bootstrapPaused: 'true' }), /must be boolean/)
+  assert.equal(s.bot, null)
+})
+
+test('failed handshake retries preserve an explicit bootstrap pause', async () => {
+  const { s, bots, bot } = fixture()
+  const old = bot(); bots.push(old)
+  const first = s.connect({ bootstrapPaused: true })
+  old.emit('error', new Error('chunks failed'))
+  await assert.rejects(first, /chunks failed/)
+  const next = bot(); bots.push(next)
+  const connecting = s.connect(); next.emit('spawn'); await connecting
+  const f = setupAutopilot(s)
+  await f.auto.tick()
+  assert.equal(f.counts().loot, 0)
+})
+
+test('explicit teardown after an unfinished setup restores ordinary connection autonomy', async () => {
+  const { s, bots, bot } = fixture()
+  const first = bot(); bots.push(first)
+  const connecting = s.connect({ bootstrapPaused: true }); first.emit('spawn'); await connecting
+  s.disconnect('fixture setup failed')
+  const next = bot(); bots.push(next)
+  const normal = s.connect(); next.emit('spawn'); await normal
+  const f = setupAutopilot(s)
+  await f.auto.tick()
+  assert.equal(f.counts().loot, 1)
+})
 
 test('position-holding wait reserves the body while ordinary wait leaves autonomous movement available', () => {
   const { Session } = require('../src/session')

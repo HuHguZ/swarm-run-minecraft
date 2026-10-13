@@ -59,9 +59,9 @@ function fixture ({ head = 'obsidian', feet = 'air', side = true, sideFloor = 's
   vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context, { filename: file })
   const auto: any = { ...context.module.exports, cfg: { lowHealth: 8 }, lastHp: hp + 1, bodyBusy: () => true,
     session: { mcData: data, current: { name: 'fight' }, bus: { emit: (type, detail) => events.push({ type, ...detail }) }, journal: { append () {} } } }
-  async function run () {
+  async function run (work = () => auto.freeIfBuried(bot, { ctl, force: true })) {
     let done = false; let result; let error
-    auto.freeIfBuried(bot, { ctl, force: true }).then(r => { result = r; done = true }, e => { error = e; done = true })
+    work().then(r => { result = r; done = true }, e => { error = e; done = true })
     for (let tick = 0; tick < 1000 && !done; tick++) {
       for (let i = 0; i < 12; i++) await Promise.resolve()
       if (done) break
@@ -69,10 +69,22 @@ function fixture ({ head = 'obsidian', feet = 'air', side = true, sideFloor = 's
       if (controls['forward'] && !ctl.aborted) {
         const speed = .2 * (controls['sneak'] ? bot.physics.sneakSpeed : 1)
         const next = bot.entity.position.offset(-Math.sin(bot.entity.yaw) * speed, 0, -Math.cos(bot.entity.yaw) * speed)
-        const nextCell = next.floored()
-        // Starting overlap permits leaving its block; a different solid cell still blocks movement.
+        // The full body cannot enter a neighbouring wall, even while its centre cell is air.
+        // Its initial embedded cells still permit leaving, like the native collision escape.
+        let blocked = false
+        const height = controls['sneak'] ? 1.5 : 1.8
+        for (let x = Math.floor(next.x - .3); x <= Math.floor(next.x + .3); x++) {
+          for (let y = Math.floor(next.y); y < next.y + height; y++) {
+            for (let z = Math.floor(next.z - .3); z <= Math.floor(next.z + .3); z++) {
+              if (x === 0 && z === 0 && (y === 64 || y === 65)) continue
+              const b = blockAt(new Vec3(x, y, z))
+              if (b.boundingBox === 'block' && b.shapes.some(s => x + s[0] < next.x + .3 && x + s[3] > next.x - .3 &&
+                y + s[1] < next.y + height && y + s[4] > next.y && z + s[2] < next.z + .3 && z + s[5] > next.z - .3)) blocked = true
+            }
+          }
+        }
         const floor = blockAt(next.offset(0, -1, 0))
-        if ((!controls['sneak'] || floor.boundingBox === 'block') && (key(nextCell) === key(position) || blockAt(nextCell).boundingBox === 'empty' && blockAt(nextCell.offset(0, 1, 0)).boundingBox === 'empty')) bot.entity.position = next
+        if ((!controls['sneak'] || floor.boundingBox === 'block') && !blocked) bot.entity.position = next
         steps.push({ sneak: !!controls['sneak'], at: bot.entity.position.clone() })
       }
       if ((time - 100000) % 500 === 0 && blockAt(bot.entity.position.offset(0, 1.62, 0)).boundingBox === 'block') bot.health = Math.max(0, bot.health - 1)
@@ -103,6 +115,14 @@ test('a fast head block is mined rather than spending a longer side-step budget'
   assert.equal(f.digs[0].name, 'stone')
   assert.equal(f.digs[0].complete, true)
   assert.equal(f.bot.entity.position.x, .5)
+})
+
+test('a side escape clears the whole eye footprint before reporting arrival', async () => {
+  const f = fixture()
+  const escaped = await f.run(() => f.auto.stepOutOfWall(f.bot, { ctl: f.ctl, maxMs: 2000 }))
+  assert.equal(escaped, true)
+  assert.equal(f.auto.buriedBy(f.bot), null, 'an air centre cell still touching the embedded wall is not an escape')
+  assert.ok(f.bot.entity.position.x >= 1.24, 'the near edge of the eye footprint must clear the original block')
 })
 
 test('missing harvest tool does not prevent a free side escape', async () => {

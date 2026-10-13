@@ -1,7 +1,8 @@
 const { approachWallSide, approachWallTop, foesNear, FOES_RE, digBooth, mergeTrades, exitTunnel, towerScan, routeGold, pocketOpen } = require('./tower-scan')
 const { log, sleep, xyz, mobs, seesMob, goals, walkGoal, gameClock, visibleOf, seesBlock, reachSet, angerSet, threatens, takeGoldBlock, inLava, lavaEscape, lavaEscapeDeep, inOwnTunnel, GOLD_PICK, makeIronPick, countOf, Vec3, fullCover, isBaby, raySees, eyePos, pickUp, BF, centerIn, waitWatched, clamp, fireRes, worlds, wearGold, PLACE, unpackGold, drinkFireRes, effectOn, keyOf, centerGuess, vantagePoints, goldWorn, nearestTrader, survey, nextTarget, lootChest, dropJunk, SIDES4, aggressive } = require('./take-gold-block')
 const { walkUnlessBrute, bruteComing, tunnelTo, pitCandidates, tradeBreach, tradeExecute, trapCandidates, boothTrade, MEMO, exitReserveReady, barterRound, DAMAGE_TYPES, lavaWatched, ownTunnelAt } = require('./booth-trade')
-const { eatIfHungry, lastGoldBreak, baitAim, scanPieces } = require('./predict-gold')
+const { trade: penTrade } = require('./pen-trap')
+const { eatIfHungry, lastGoldBreak, baitAim, scanPiecesAsync } = require('./predict-gold')
 const miningCycle = require('./mining-cycle')
 async function bruteDefense (session, ctl, st, forced = null) {
   const bot = session.bot
@@ -1006,6 +1007,11 @@ async function digPit (session, ctl, st, until) {
   if (!S) return null
   S.deadline = until
   S.noBonus = true
+  const readyPen = require('./pen-trap').penHere(bot)
+  if (readyPen) {
+    S.exposed = SL.exposure(bot, S.own).length > 0
+    return { ...readyPen, kind: 'pit', F: readyPen.Bf, W: readyPen.H, O: readyPen.lanes.find(l => l.k === 0).T }
+  }
   const readyPit = require('./booth-trade').currentPit(bot, S)
   if (readyPit) {
     S.exposed = true
@@ -1256,7 +1262,7 @@ async function bastion (session, ctl, p: any = {}) {
 
   if (worlds.worldOf(bot) !== 'the_nether') return out('бастионы — в Аду; сначала mc_portal mode=enter')
   // scan — только посмотреть: видимые сундуки и узнанные по ним куски (сцены).
-  if (mode === 'scan') return { ...out(), scan: scanPieces(bot, p.radius || 48) }
+  if (mode === 'scan') return { ...out(), scan: await scanPiecesAsync(bot, p.radius || 48, ctl) }
   // goto — отладка подхода pathfinder'ом (noMob — без обхода мобов, floor — пол Ада).
   if (mode === 'goto') {
     const f0 = bot._ndNetherFloor
@@ -1676,7 +1682,7 @@ async function bastion (session, ctl, p: any = {}) {
           }
           if (bo) {
             st.pit = { kind: bo.kind || 'booth', at: bo.F, window: bo.W, dump: !!bo.dump, catch: bo.catch, pigs: bo.pigs, brutes: bo.brutes, sealed: bo.sealed, baited: bo.baited }
-            st.pitTrade = await boothTrade(session, ctl, st, bo, deadline - 5000, { keep, done })
+            st.pitTrade = await (bo.kind === 'pit' ? penTrade : boothTrade)(session, ctl, st, bo, deadline - 5000, { keep, done })
             log(bo.kind === 'trap' ? 'ловушка: бартер' : bo.kind === 'pit' ? 'яма: бартер' : 'окно: бартер', st.pitTrade)
             // Яма не работает (приманки не берут, нет бросков) — другая яма, до двух раз.
             const notWorking = t => t && (t.stopped === 'яма не работает' || t.stopped === 'яма не доносит' || /не подходят|страж изменил место|ушёл из места/.test(t.stopped || ''))
@@ -1689,7 +1695,7 @@ async function bastion (session, ctl, p: any = {}) {
               if (!bo2) break
               bo = bo2
               st.pits = [...(st.pits || [st.pit]), { kind: bo.kind, at: bo.F, catch: bo.catch, pigs: bo.pigs, sealed: bo.sealed }]
-              const r2 = await boothTrade(session, ctl, st, bo, deadline - 5000, { keep, done })
+              const r2 = await penTrade(session, ctl, st, bo, deadline - 5000, { keep, done })
               log('яма: бартер', r2)
               st.pitTrade = mergeTrades(st.pitTrade, r2)
             }

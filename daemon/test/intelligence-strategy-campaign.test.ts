@@ -77,6 +77,55 @@ test('tactical control blocks both selection and a strategic action selected bef
   assert.deepEqual(f.calls, [])
 })
 
+test('eating carried food remains executable while the separate food hunt is paused or deferred', async () => {
+  for (const deferred of [false, true]) {
+    const observation: Observation = { state: { dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, health: 19, food: 6,
+      inventory: { sweet_berries: 18, water_bucket: 1, fire_charge: 1, stone_pickaxe: 1 } }, known: { lava: { x: 1000, y: 64, z: 0 } } }
+    const calls: string[] = []
+    const intelligence = createCampaignIntelligence({ eyes: 12, beds: 7, now: () => 0, sleep: async () => {}, record() {},
+      observe: async () => observation, call: async () => ({}), execute: async command => {
+        calls.push(command.skill)
+        observation.state.food = 20
+        observation.state.inventory = { ...observation.state.inventory as Record<string, number>, sweet_berries: 11 }
+        return { outcome: 'SUCCESS', events: [] }
+      } })
+    intelligence.director.options.goal = state => state.facts.portal?.value === true
+    const hunt: CampaignStage = { name: 'food', needed: () => true, ready: () => true, defer: () => deferred,
+      done: () => false, run: async () => assert.fail('eating must not execute the unavailable hunt') }
+    const selected = await intelligence.select([hunt], () => !deferred)
+    assert.equal(selected?.strategy?.id, 'EatFood')
+    await selected!.stage.run()
+    assert.deepEqual(calls, ['eatFood'])
+    assert.equal(selected!.stage.done(), true)
+    assert.notEqual((await intelligence.select([hunt], () => !deferred))?.strategy?.skill, 'food', 'the paused hunt stays unavailable after hunger is restored')
+  }
+})
+
+test('an unreachable dragon route still acquires food through the graph and respects its failure bound', async () => {
+  const observation: Observation = { state: { dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, health: 6, food: 12,
+    inventory: { water_bucket: 1, fire_charge: 1, stone_pickaxe: 1 } } }
+  const calls: string[] = []
+  const decisions: DecisionRecord[] = []
+  const intelligence = createCampaignIntelligence({ eyes: 12, beds: 7, now: () => 0, sleep: async () => {}, record: row => decisions.push(row),
+    observe: async () => observation, call: async () => ({}), execute: async command => {
+      calls.push(command.skill)
+      return { outcome: 'FAILURE', events: [] }
+    } })
+  const scout = intelligence.registry.get('ScoutLava')!
+  for (let i = 0; i < 2; i++) await intelligence.director.run(scout)
+  assert.equal(intelligence.director.decide(await intelligence.environment.observe()).reason, 'unreachable')
+  const hunt: CampaignStage = { name: 'food', needed: () => true, ready: () => true, defer: () => false,
+    done: () => false, run: async () => {} }
+  for (let i = 0; i < 2; i++) {
+    const selected = await intelligence.select([hunt], () => true)
+    assert.equal(selected?.strategy?.id, 'FindFood')
+    await selected!.stage.run()
+  }
+  assert.equal(await intelligence.select([hunt], () => true), null, 'exhausted hunting is not restarted from unchanged state')
+  assert.deepEqual(calls, ['scoutLava', 'scoutLava', 'food', 'food'])
+  assert.ok(decisions.some(row => row.reason === 'survival recovery: unreachable'))
+})
+
 test('graph still executes a known Bastion after the legacy dry counter removed it from needed stages', async () => {
   const observation: Observation = { state: { dimension: 'the_nether', health: 20, food: 20,
     pos: { x: 0, y: 64, z: 0 }, inventory: { stone_pickaxe: 2, iron_pickaxe: 1, cooked_beef: 12 }, replanRevision: 0 },
@@ -144,12 +193,13 @@ test('actual registered NetherTools skill rejects incidental digging and accepts
 
 function searchFixture(foundAt: number, blocked = false) {
   let now = 0
+  const position = { x: 0, z: 0 }
   const facts: Record<string, unknown> = {}
   const legs: number[] = []
-  const port: StructureSearchPort = { now: () => now, position: () => ({ x: 0, z: 0 }), interrupted: () => false,
+  const port: StructureSearchPort = { now: () => now, position: () => position, interrupted: () => false,
     scan: async () => {}, list: async () => now >= foundAt ? [{ kind: 'village', at: { x: 90, z: 15 } }] : [],
-    async explore(_direction, seconds) { legs.push(seconds); if (!blocked) now += seconds * 1000 },
-    async move(_at, seconds) { if (!blocked) now += seconds * 1000 }, fact: (name, value) => { facts[name] = value }, log() {} }
+    async explore(_direction, seconds) { legs.push(seconds); if (!blocked) { now += seconds * 1000; position.x += 60 } },
+    async move(at, seconds) { if (!blocked) { now += seconds * 1000; Object.assign(position, at) } }, fact: (name, value) => { facts[name] = value }, log() {} }
   return { port, facts, legs }
 }
 test('building search actually spends remaining game time and preserves unknown global absence', async () => {

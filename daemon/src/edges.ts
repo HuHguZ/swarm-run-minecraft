@@ -539,7 +539,7 @@ function lockHand (bot) {
   bot._ndHandLock = L
   L.on = () => !L.own && gameClock.now() < L.until
   L.hold = (ms) => { L.until = Math.max(L.until, gameClock.now() + ms) }
-  L.as = (fn) => { const was = L.own; L.own = true; try { return require("./reflex-lock").emergency(bot._ndReflexSession, fn) } finally { L.own = was } }
+  L.as = (fn) => { const was = L.own; L.own = true; try { return require("./reflex-lock").emergency(bot._ndReflexSession, fn, Math.max(200, L.until - gameClock.now())) } finally { L.own = was } }
   // Слот, который ставит сервер (held_item_slot), — всегда: иначе рассинхрон.
   let srv = false
   try { bot._client.prependListener('held_item_slot', () => { srv = true; setImmediate(() => { srv = false }) }) } catch {}
@@ -941,7 +941,7 @@ function mlgLandingBad (bot, x, y, z) {
 // столба). Такие спуски не планировать вовсе — как до ведра (maxDropDown 4
 // пускал ноги лишь на 3).
 const MLG_COST = 4
-function priceDrops (movements) {
+function priceDrops (movements, surface = () => false) {
   if (!movements || movements._ndMlgPriced) return movements
   movements._ndMlgPriced = true
   for (const name of ['getMoveDropDown', 'getMoveDown']) {
@@ -956,6 +956,10 @@ function priceDrops (movements) {
           const m = neighbors[i]
           if (!m) continue
           const d = node.y - m.y
+          // XZ overland travel still needs to get out after a cave shortcut. Price that
+          // ascent with the pathfinder's own jump/place cost; it remains a finite option.
+          const landing = surface() && d > 0 && this.getBlock && this.getBlock(m, 0, 0, 0)
+          if (landing && typeof landing.skyLight === 'number' && landing.skyLight <= 7) m.cost += d * (1 + (this.placeCost ?? 1))
           if (d >= MLG_MIN) {
             if (this.bot && mlgLandingBad(this.bot, m.x, m.y, m.z)) { neighbors.splice(i, 1); continue }
             m.cost += MLG_COST
@@ -1429,5 +1433,6 @@ function falling (bot) {
 module.exports = {
   SAFE_FALL, KB_HIT, KB_SPRINT, column, support, lethalAt, clearance, hazardAround,
   run, stateOf, guard, knockback, hitVelocity, knockRun, backToDrop, pushPlan, resistOf, dropAlong,
-  installFallGuard, afterPacket, mlgDrop, priceDrops, mlgLandingBad, waterloggable, falling, findShaft, climbBack, fixSelfKnockback, fillerCount, gatherBlocks
+  installFallGuard, afterPacket, mlgDrop, priceDrops, mlgLandingBad, waterloggable, falling, findShaft, climbBack, fixSelfKnockback, fillerCount, gatherBlocks,
+  worldOf, simOf, cloneState, IDLE
 }

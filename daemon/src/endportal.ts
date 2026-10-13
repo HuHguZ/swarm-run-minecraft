@@ -433,7 +433,7 @@ async function torchIfDark (bot, torches) {
   }
   return false
 }
-async function breakIn (session, ctl, { deadline, tries = 8, toward = null }: any = {}) {
+async function breakIn (session, ctl, { deadline, tries = 8, toward = null, allowDescent = true }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const steps = []
@@ -444,7 +444,7 @@ async function breakIn (session, ctl, { deadline, tries = 8, toward = null }: an
     // клеток стояния в 8 бл. (ложное «внутри» — разведка ходила бы по своей лестнице).
     const inHold = () => walkable(bot, bot.entity.position, { radius: 8, maxNodes: 80, doors: true })
       .filter(n => { const fl = bot.blockAt(n.pos.offset(0, -1, 0)); return fl && FLOOR.test(fl.name) }).length >= 6
-    const r = await require('./endportal-descent').honestEnter(session, ctl, { deadline, toward, bricks: BRICKS, roomy: inHold, tries: tries + 2 })
+    const r = await require('./endportal-descent').honestEnter(session, ctl, { deadline, toward, bricks: BRICKS, roomy: inHold, tries: tries + 2, allowDescent })
     log('внутрь (честно)', { inside: r.inside, at: xyz(bot.entity.position.floored()), toward, steps: r.steps.slice(-6) })
     return r
   }
@@ -1631,6 +1631,7 @@ async function findRoom (session, ctl, p: any = {}) {
   let lureBest = null
   let lureStale = 0
   let lurePie = false
+  let lurePrecise = false
   let vertTries = 0
   let lureBores = 0
   const usedLures = []
@@ -1650,7 +1651,16 @@ async function findRoom (session, ctl, p: any = {}) {
   let pre: any = { steps: [] }
   const eb = await enterByBricks(session, ctl, { deadline })
   log('вход по кирпичу', eb)
-  if (!eb.inside) pre = await breakIn(session, ctl, { deadline, tries: 8, toward: recS && recS.refined ? { x: recS.x + 4, z: recS.z + 4 } : null })
+  if (eb.inside) session._roomExplore.entered = bot.entity.position.clone()
+  else if (session._roomExplore.entered) {
+    // Уже посещённый коридор — вернуться из штрека; повторный спуск уводил ниже крепости при каждом room.
+    const back = session._roomExplore.entered
+    const w = await walkTo(bot, ctl, back, 1, Math.min(30000, Math.max(0, deadline - gameClock.now())))
+    legs.push({ why: 'назад в коридор', to: xyz(back), ok: w.ok })
+  } else {
+    pre = await breakIn(session, ctl, { deadline, tries: 8, toward: recS && recS.refined ? { x: recS.x + 4, z: recS.z + 4 } : null })
+    if (pre.inside) session._roomExplore.entered = bot.entity.position.clone()
+  }
   if (pre.steps.length) legs.push({ why: 'пробился внутрь', steps: pre.steps, inside: pre.inside })
   try {
     while (!ctl.aborted && gameClock.now() < deadline) {
@@ -1722,6 +1732,7 @@ async function findRoom (session, ctl, p: any = {}) {
       // пересечение (senses.triangulate) — место без клетки и без высоты (берём свою). Как спидраннеры: pie-ray к комнате.
       // ND_ROOM_PIE=0 — без «пирога».
       let pieLure = null
+      let pieLurePrecise = false
       if (process.env.ND_ROOM_PIE !== '0') {
         try {
           const S = require('./perception/senses')
@@ -1732,15 +1743,16 @@ async function findRoom (session, ctl, p: any = {}) {
             if (!last || Math.hypot(last.x - me.x, last.z - me.z) >= 4) ps.push({ x: me.x, z: me.z, yaw: arcs[0].center })
             if (ps.length > 8) ps.splice(0, ps.length - 8)
             const est = ps.length >= 2 ? S.triangulate(ps) : null
+            pieLurePrecise = !!est && [est.x, est.z, est.spread, est.uncertainty].every(Number.isFinite) && est.spread <= 6 && est.uncertainty <= 6
             // Высота — «пирогом» по вертикали (наклон камеры) при известной горизонтальной дальности (s5e-Q-2: комната на 3 бл. выше
             // штрека — 4 штрека «за 24 шагов не дошёл»).
             let ly = me.y
-            if (est && est.spread <= 6) { const el = require('./endportal-descent').pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z)); if (el) ly = el.y }
-            if (est && est.spread <= 6) pieLure = new Vec3(est.x, ly, est.z)
+            if (pieLurePrecise) { const el = require('./endportal-descent').pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z)); if (el) ly = el.y }
+            if (pieLurePrecise) pieLure = new Vec3(est.x, ly, est.z)
             else { const v = S.vecOf(arcs[0].center); pieLure = new Vec3(me.x + v.x * 24, me.y, me.z + v.z * 24) }
             // Дошёл до оценки, а рамок не видно — спавнер выше/ниже: эту точку не повторять (дальше звук лавы и обход).
             if (usedLures.some(u => Math.hypot(u.x - pieLure.x, u.z - pieLure.z) < 6)) pieLure = null
-            if (pieLure && (!lure || pieLure.distanceTo(lure) > 6)) log('«пирог»: спавнер', { yaw: arcs[0].center, samples: ps.length, est: est ? { x: est.x, z: est.z, spread: est.spread } : null, lure: xyz(pieLure.floored()) })
+            if (pieLure && (!lure || pieLure.distanceTo(lure) > 6)) log('«пирог»: спавнер', { yaw: arcs[0].center, samples: ps.length, est: est ? { x: est.x, z: est.z, spread: est.spread, uncertainty: est.uncertainty } : null, precise: pieLurePrecise, lure: xyz(pieLure.floored()) })
           }
         } catch (e) { log('«пирог»: ошибка', { error: e.message }) }
       }
@@ -1754,10 +1766,11 @@ async function findRoom (session, ctl, p: any = {}) {
       if (fish.length) {
         const c = (fish.reduce((a: any, e: any) => a.plus(e.position), new Vec3(0, 0, 0)) as any).scaled(1 / fish.length)
         if (!lure || c.distanceTo(lure) > 4) log('чешуйницы', { n: fish.length, at: xyz(c.floored()) })
-        lure = c; lurePie = false
+        lure = c; lurePie = false; lurePrecise = false
       } else if (pieLure) {
         if (!lure || pieLure.distanceTo(lure) > 6) { lure = pieLure; lureBest = null; lureStale = 0 }
         lurePie = true
+        lurePrecise = pieLurePrecise
       }
       // Лава — «слышно» тоже: клиент игры сам играет звуки лавы для лавы в 32
       // блоках (ClientLevel.animateTick → LavaFluid.animateTick), сквозь стены;
@@ -1795,9 +1808,9 @@ async function findRoom (session, ctl, p: any = {}) {
       if (lure) {
         const dl = me.distanceTo(lure)
         if (lureBest === null || dl < lureBest - 2) { lureBest = dl; lureStale = 0 } else lureStale++
-        // «Пирог» с пересечением пеленгов (≥ 2 точки) — место известно до ~4 бл.: штрек сразу, без обхода коридоров (s5e-M-1:
+        // «Пирог» с надёжным пересечением пеленгов — штрек сразу, без обхода коридоров (s5e-M-1:
         // 4.6 игр. мин коридорами и тупиками при оценке с разбросом 0.4).
-        const piePrecise = lurePie && (session._roomExplore.pie || []).length >= 2
+        const piePrecise = lurePie && lurePrecise
         const xzNear = Math.hypot(lure.x - me.x, lure.z - me.z) <= 2
         if (!xzNear && lureStale >= (piePrecise ? 0 : lurePie ? 2 : 4) && lureBores < (lurePie ? 6 : 4) && !ctl.aborted && gameClock.now() < deadline - 20000) {
           lureBores++
@@ -1805,7 +1818,7 @@ async function findRoom (session, ctl, p: any = {}) {
           const yLvl = Math.floor(lure.y) + 1
           try {
             const b = honestDescent()
-              ? await require('./endportal-descent').honestBore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, { deadline: Math.min(deadline, gameClock.now() + (lurePie ? 90000 : 45000)), maxSteps: lurePie ? 48 : 24, bricks: BRICKS })
+              ? await require('./endportal-descent').honestBore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, { deadline: Math.min(deadline, gameClock.now() + (piePrecise ? 90000 : 45000)), maxSteps: piePrecise ? 48 : 24, bricks: BRICKS })
               : await require('./nether').bore(session, ctl, { x: Math.floor(lure.x), z: Math.floor(lure.z) }, {
                 deadline: Math.min(deadline, gameClock.now() + 45000), maxSteps: 24, minY: yLvl, maxY: yLvl, throughBricks: true
               })
@@ -1859,7 +1872,7 @@ async function findRoom (session, ctl, p: any = {}) {
           }
           if (digOuts < 3 && !ctl.aborted && gameClock.now() < deadline - 20000) {
             digOuts++
-            const bi = await breakIn(session, ctl, { deadline: Math.min(deadline, gameClock.now() + 40000), tries: 6 })
+            const bi = await breakIn(session, ctl, { deadline: Math.min(deadline, gameClock.now() + 40000), tries: 6, allowDescent: !session._roomExplore.entered })
             legs.push({ why: 'тупик — пробиваюсь', steps: bi.steps.slice(-4), inside: bi.inside })
             if (!bi.inside || walkable(bot, bot.entity.position, { radius: 8, maxNodes: 60, doors: true }).length < 20) {
               const me2 = bot.entity.position

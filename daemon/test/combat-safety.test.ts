@@ -36,6 +36,24 @@ test('одна долька при сытости 15 не позволяет в�
 test('мирная охота за едой разрешена с пустым запасом еды', () => {
   assert.equal(evaluate({ ...ready, food: 8, foodPoints: 0, weapon: false, threats: [], phase: 'start' }).action, 'fight')
 })
+test('low health alone cannot price a passive rabbit as an attacking mob', () => {
+  const b = body([{ name: 'stone_sword', count: 1, maxDurability: 131, durabilityUsed: 0 }])
+  b.health = 3; b.food = 8
+  const target = { id: 2, name: 'rabbit', isValid: true, position: new Vec3(0, 64, 2) }
+  assert.equal(inspect(b, { target, phase: 'start' }).action, 'fight')
+  b.health = 0
+  assert.equal(inspect(b, { target, phase: 'start' }).action, 'dead')
+})
+test('visible danger and dangerous ground still prevent passive hunting at low health', () => {
+  const b = body([{ name: 'stone_sword', count: 1, maxDurability: 131, durabilityUsed: 0 }])
+  b.health = 3; b.food = 8
+  const target = { id: 2, name: 'rabbit', isValid: true, position: new Vec3(0, 64, 2) }
+  b.entities[3] = { id: 3, name: 'zombie', isValid: true, position: new Vec3(0, 64, 1) }
+  assert.notEqual(inspect(b, { target, phase: 'start' }).action, 'fight')
+  b.entities = {}
+  b.blockAt = () => ({ name: 'lava', boundingBox: 'empty' })
+  assert.equal(inspect(b, { target, phase: 'start' }).hazard, true)
+})
 test('мёртвое тело не начинает отход или лечение', () => {
   assert.equal(evaluate({ ...ready, health: 0 }).action, 'dead')
 })

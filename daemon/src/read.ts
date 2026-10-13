@@ -179,9 +179,7 @@ function spearIn (e) {
 // Ванильный клиент шлёт ServerboundPlayerLoadedPacket, как только мир вокруг
 // загружен, — делаем так же.
 function installLoaded (bot) {
-  if (bot._ndLoadedHook) return
-  bot._ndLoadedHook = true
-  bot.on('spawn', () => gameClock.wall.setTimeout(() => { try { bot._client.write('player_loaded', {}) } catch {} }, 150))
+  require('./client-loaded').install(bot)
 }
 
 function watch (bot, { threats = () => [], visible = () => true }: any = {}) {

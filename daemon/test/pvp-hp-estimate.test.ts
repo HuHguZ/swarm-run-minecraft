@@ -91,6 +91,7 @@ function fakeBot (foe) {
     health: 20,
     heldItem: { name: 'diamond_sword' },
     game: { difficulty: 'normal' },
+    blockAt: p => ({ name: 'air', position: p, boundingBox: 'empty', shapes: [] }),
     inventory: { items: () => [{ name: 'diamond_sword', count: 1 }], slots: [] },
     entities: { 1: me, [foe.id]: foe },
     on () {}, removeListener () {},
@@ -168,10 +169,10 @@ test('S7d: насыщение тратится только на лечение 
 })
 
 test('S7d (честность): его еда — только увиденная от начала до конца; щит/лук «опустил» — не еда', () => {
-  const assessMod = require('../src/assess')
-  const was = assessMod.inSight
+  const visionMod = require('../src/pvp/last-seen')
+  const was = visionMod.seesPlayer
   let visible = true
-  assessMod.inSight = () => visible
+  visionMod.seesPlayer = () => visible
   try {
     const foe: any = foePlayer()
     const bot: any = fakeBot(foe)
@@ -193,5 +194,5 @@ test('S7d (честность): его еда — только увиденна�
     assert.equal(T.seenApples, 1)
     assert.ok(T.hp.snapshot().absorption.hi > 0, 'поглощение от увиденного яблока')
     T.stop()
-  } finally { assessMod.inSight = was }
+  } finally { visionMod.seesPlayer = was }
 })

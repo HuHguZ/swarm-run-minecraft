@@ -275,7 +275,7 @@ test('explore: увиденное раньше (за стеной теперь) 
   assert.ok(eyes.nearest(bot, 'oak_log').length === 1, 'увидел бревно с севера')
   bot.entity.position = new Vec3(0.5, 64, 0.5)
   assert.equal(eyes.seesNow(bot, { x: -40, y: 64, z: 0 }), false, 'отсюда не видно')
-  bot.pathfinder = { goto: async g => { bot.entity.position = new Vec3(g.x + (g.x < bot.entity.position.x ? 3 : -3) + 0.5, 64, g.z + 0.5) }, setGoal () {}, movements: null }
+  bot.pathfinder = { goto: async g => { bot.entity.position = new Vec3(g.x + (g.x < bot.entity.position.x ? 3 : -3) + 0.5, 64, g.z + 0.5) }, setGoal (g) { if (g) this.goto(g).then(() => bot.emit('goal_reached', g)) }, movements: null }
   const actions = require('../src/actions')
   const r = await actions.explore({ bot, mcData: registry, cfg: { fairPlay: true } }, { aborted: false, onAbort: [] }, { block: 'oak_log', radius: 32, timeoutSeconds: 5 })
   assert.equal(r.found, 'oak_log', JSON.stringify(r))
@@ -313,7 +313,7 @@ test('pieSeek: закопанный сундук — пеленг, шаг поп
   const { bot, set } = W
   for (let x = 38; x <= 42; x++) for (let y = 55; y <= 61; y++) for (let z = 28; z <= 32; z++) set(x, y, z, 'stone')
   set(40, 58, 30, 'chest')
-  bot.pathfinder = { goto: async g => { bot.entity.position = new Vec3(g.x + 0.5, 64, g.z + 0.5) }, setGoal () {}, movements: null }
+  bot.pathfinder = { goto: async g => { bot.entity.position = new Vec3(g.x + 0.5, 64, g.z + 0.5) }, setGoal (g) { if (g) this.goto(g).then(() => bot.emit('goal_reached', g)) }, movements: null }
   const r = await senses.pieSeek({ bot }, { aborted: false, onAbort: [] }, { type: 'chest', base: 24, timeoutSeconds: 60 })
   assert.ok(r.found, JSON.stringify(r))
   const err = Math.hypot(r.estimate.x - 40.5, r.estimate.z - 30.5)

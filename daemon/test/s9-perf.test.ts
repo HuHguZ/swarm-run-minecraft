@@ -182,6 +182,49 @@ test('S9: срез A* в узлах (ND_ASTAR_SLICE_NODES) — та же раз�
   }
 })
 
+test('S9: accelerated A* yields within the server tick and keeps the same search', t => {
+  const gameClock = require('../src/game-clock')
+  let rate = 20
+  t.mock.method(gameClock, 'snapshot', () => ({ tickRate: rate }))
+  const prev = { s9: process.env.ND_S9, r: process.env.ND_ASTAR_NODES_PER_MS, n: process.env.ND_ASTAR_SLICE_NODES }
+  process.env.ND_S9 = '1'; process.env.ND_ASTAR_NODES_PER_MS = '0'; process.env.ND_ASTAR_SLICE_NODES = '120'
+  t.after(() => {
+    for (const [k, v] of [['ND_S9', prev.s9], ['ND_ASTAR_NODES_PER_MS', prev.r], ['ND_ASTAR_SLICE_NODES', prev.n]] as [string, string | undefined][]) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+  })
+  const run = (tickTimeout = 40, fail = false) => {
+    let a
+    const budgets = []
+    const mv = { getNeighbors(n) {
+      budgets.push(a.tickTimeout)
+      if (fail) throw new Error('neighbor failed')
+      return [new Move(n.x + 1, 0, 0, 0, 1)]
+    } }
+    a = new AStar(new Move(0, 0, 0, 0, 0), mv, new goals.GoalBlock(300, 0, 0), 1e6, tickTimeout)
+    const goal = a.goal
+    if (fail) {
+      assert.throws(() => a.compute(), /neighbor failed/)
+      assert.equal(a.tickTimeout, tickTimeout)
+      assert.equal(a.goal, goal)
+      return
+    }
+    let result
+    do { result = a.compute() } while (result.status === 'partial')
+    assert.equal(result.status, 'success')
+    assert.equal(a.tickTimeout, tickTimeout, 'caller budget restored')
+    assert.equal(a.goal, goal)
+    return { path: result.path.map(n => n.hash), visited: result.visitedNodes, budgets }
+  }
+  const normal = run()
+  assert.ok(normal.budgets.every(ms => ms === 40 || ms === -Infinity))
+  rate = 750
+  const accelerated = run()
+  assert.deepEqual(accelerated.path, normal.path)
+  assert.equal(accelerated.visited, normal.visited)
+  assert.ok(accelerated.budgets.every(ms => ms <= 40 * 20 / 750), 'compute must leave time for the next physical step')
+  assert.ok(run(.25).budgets.every(ms => ms <= .25), 'smaller caller budget wins')
+  run(40, true)
+})
+
 test('S9: память инструмента — сброс по updateSlot рюкзака, эффекты в ключе', () => {
   const w = world()
   const prev = process.env.ND_S9; process.env.ND_S9 = '1'

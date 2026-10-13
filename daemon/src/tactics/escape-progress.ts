@@ -43,7 +43,7 @@ export class EscapeProgress {
     this.previous = escapeActions.has(action) ? observation : null
   }
 
-  finish(action: ActionId, observation: EscapeObservation, result: string): void {
+  finish(action: ActionId, observation: EscapeObservation, result: string, chasedReceipt = false): void {
     if (!escapeActions.has(action) || !this.previous || result === 'preempted' || result === 'interrupted') return
     const before = this.previous
     this.previous = null
@@ -51,7 +51,7 @@ export class EscapeProgress {
     const farther = before.threatDistance !== null && observation.threatDistance !== null && observation.threatDistance >= before.threatDistance + 1.5
     const climbed = observation.position.y >= before.position.y + 1
     // A run that moved but left the pursuer as close (both distances seen) did not escape; an unseen one is judged by the move.
-    const chased = RUNS.has(action) && !before.swim && !!before.armed && before.threatDistance !== null && observation.threatDistance !== null && !farther && !climbed
+    const chased = RUNS.has(action) && (chasedReceipt || !before.swim && !!before.armed && before.threatDistance !== null && observation.threatDistance !== null && !farther && !climbed)
     if (chased) this.runFailures++
     else if (RUNS.has(action)) this.runFailures = 0
     if (result === 'failed' || action !== 'UseFireResistance' && !farther && !climbed && moved < 1.5) {

@@ -129,8 +129,8 @@ function pieArcs (bot, type = 'chest', { range = 64, fov = 30, step = 2 }: any =
 }
 
 // Место по пеленгам { x, z, yaw } из разных точек — пересечение прямых методом наименьших квадратов.
-// { x, z, spread (СКО невязки, бл.), n } или null (пеленги почти параллельны).
-function triangulate (samples) {
+// { x, z, spread (СКО невязки, бл.), uncertainty (ошибка места, бл.), n } или null.
+function triangulate (samples, { yawError = 1 }: any = {}) {
   let a11 = 0; let a12 = 0; let a22 = 0; let b1 = 0; let b2 = 0
   for (const s of samples) {
     const d = vecOf(s.yaw)
@@ -143,15 +143,22 @@ function triangulate (samples) {
   if (samples.length < 2 || Math.abs(det) < 1e-3) return null
   const x = (a22 * b1 - a12 * b2) / det
   const z = (a11 * b2 - a12 * b1) / det
-  let r2 = 0
+  let r2 = 0; let range = 0
   for (const s of samples) {
     const d = vecOf(s.yaw)
     const px = x - s.x; const pz = z - s.z
     const along = px * d.x + pz * d.z
     if (along < 0) return null // точка позади одного из пеленгов — не то пересечение
-    r2 += (px * px + pz * pz) - along * along
+    const across = px * d.z - pz * d.x
+    r2 += across * across // без вычитания почти равных квадратов (оно давало отрицательное → NaN)
+    range = Math.max(range, Math.hypot(px, pz))
   }
-  return { x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10, spread: Math.round(Math.sqrt(r2 / samples.length) * 10) / 10, n: samples.length }
+  const spread = Math.sqrt(r2 / samples.length)
+  // Два луча всегда имеют нулевую невязку. Ошибка угла (половина шага пирога 2°) при слабом параллаксе даёт большую ошибку места.
+  const weak = (a11 + a22 - Math.hypot(a11 - a22, 2 * a12)) / 2
+  const uncertainty = Math.hypot(spread, range * Math.sin(yawError * Math.PI / 180) * Math.sqrt(samples.length / weak))
+  if (![x, z, spread, uncertainty].every(Number.isFinite)) return null
+  return { x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10, spread: Math.round(spread * 10) / 10, uncertainty: Math.round(uncertainty * 10) / 10, n: samples.length }
 }
 
 // ---------------------------------------------------------------- слух

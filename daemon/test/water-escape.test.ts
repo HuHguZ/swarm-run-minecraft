@@ -87,6 +87,29 @@ test('existing swim controller can leave the two-layer native-physics pit withou
   } finally { s.close() }
 })
 
+test('surface swims to a connected bank beyond the first breathing pocket', async () => {
+  // A long flooded cave has breathable air below its roof, but the supported
+  // bank is twelve cells away. Breathing alone must not end surface progress.
+  const s = scene({ change: q => {
+    if (q.y <= 0) return 'stone'
+    if (q.z < 0 || q.z > 2 || q.x < 0 || q.x > 12) return 'stone'
+    if (q.x === 12) return q.y < 3 ? 'stone' : 'air'
+    if (q.x === 11 && q.y >= 3) return 'air'
+    return q.y < 3 ? 'water' : q.y === 3 ? 'air' : 'stone'
+  } })
+  try {
+    assert.equal(movement.findSwimRoute(s.bot).kind, 'air', 'the old eight-cell search sees only a breathing pocket')
+    assert.equal(movement.findSwimRoute(s.bot, { radius: 16 }).kind, 'land')
+    const r = await s.run(() => require('../src/survival/out-of-water').outOfWater(s.bot, s.ctl, 16000))
+    assert.equal(r.ok, true, JSON.stringify(r))
+    assert.equal(movement.inWater(s.bot), false)
+    assert.equal(s.bot.entity.onGround, true, 'actual physics confirms a supported landing')
+    assert.ok(s.bot.entity.position.x >= 12)
+    assert.deepEqual(s.placements, [], 'a connected swim costs no blocks or excavation')
+    assert.deepEqual(s.controls(), IDLE)
+  } finally { s.close() }
+})
+
 for (const blocks of [32, 0]) test(`climbBack reuses swimming to reach the rim with ${blocks} filler blocks`, async () => {
   const s = scene({ blocks })
   const target = { id: 2, type: 'player', _ndVisible: true, position: new Vec3(10, 3, .5), equipment: [] }

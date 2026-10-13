@@ -16,6 +16,7 @@
 const Vec3 = require('vec3')
 const { xyz } = require('./movement')
 const { raySees } = require('./perception')
+const pick = require('./pick')
 const structures = require('./structures')
 
 const CONTAINERS = ['chest', 'trapped_chest', 'barrel']
@@ -47,19 +48,33 @@ function lootedSet (session) {
 }
 
 // Что за место вокруг: ищем подсказки в радиусе. both — нужны все имена.
-function guessStructure (bot, pos) {
+function guessStructure (bot, pos, { visibleOnly = false }: any = {}) {
+  const nearby = (id, radius) => visibleOnly
+    ? bot.findBlocks({ matching: id, maxDistance: radius, point: pos, count: 24 }).some(p => pick.blockSeen(bot, p, { range: 64 }))
+    : !!bot.findBlock({ matching: id, maxDistance: radius, point: pos, count: 1 })
+  // A ruined frame need not contain crying obsidian. Use the same two observed
+  // groups as structures.scan, while leaving the legacy nearby-clue policy alone.
+  const ruinClue = name => nearby(bot.registry.blocksByName[name]?.id, 10)
+  // Portal blocks have no collision outline, so look for an unobstructed ray to
+  // their rendered plane rather than asking the click-outline visibility helper.
+  const visiblePortal = () => bot.findBlocks({ matching: bot.registry.blocksByName.nether_portal.id, maxDistance: 10, point: pos, count: 24 }).some(p => {
+    const eye = pick.eyeOf(bot); const delta = p.offset(0.5, 0.5, 0.5).minus(eye); const distance = delta.norm()
+    return distance < 1e-6 || (distance <= 64 && !pick.blockOnRay(bot, eye, delta.scaled(1 / distance), distance))
+  })
+  if (visibleOnly && String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') === 'overworld' &&
+      ruinClue('obsidian') && (ruinClue('netherrack') || ruinClue('magma_block')) && !visiblePortal()) return 'руины портала'
   for (const h of HINTS) {
     const found = new Set()
     for (const name of h.near) {
       const b = bot.registry.blocksByName[name]
       if (!b) continue
-      const hit = bot.findBlock({ matching: b.id, maxDistance: h.r, point: pos, count: 1 })
+      const hit = nearby(b.id, h.r)
       if (hit) found.add(name)
     }
     if (h.both ? found.size >= Math.min(2, h.near.length) : found.size > 0) {
       if (h.wet) {
         const w = bot.registry.blocksByName.water
-        if (!w || !bot.findBlock({ matching: w.id, maxDistance: 4, point: pos })) continue
+        if (!w || !nearby(w.id, 4)) continue
       }
       return h.guess
     }
@@ -146,7 +161,7 @@ function markLooted (session, key) {
 
 // Забрать всё из сундука или вагонетки. force — разрешить «чей-то» сундук
 // (только по решению мозга).
-async function loot (session, ctl, { x, y, z, entityId, force = false }: any = {}) {
+async function loot (session, ctl, { x, y, z, entityId, force = false, visibleOnly = false, timeoutSeconds }: any = {}) {
   const bot = session.bot
   let target = null
   if (entityId !== undefined || (x === undefined && z === undefined)) {
@@ -155,8 +170,9 @@ async function loot (session, ctl, { x, y, z, entityId, force = false }: any = {
     if (!target) return { stopped: 'лутать нечего: сундуков с постройками игры рядом не вижу', seen: all.slice(0, 5) }
   } else {
     const p = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z))
+    if (visibleOnly && !pick.blockSeen(bot, p, { range: 64 })) return { stopped: 'сундук сейчас не виден', at: xyz(p) }
     const rec = structures.recordedAt(session, p)
-    const guess = (rec && structures.KINDS[rec.kind].ru) || guessStructure(bot, p)
+    const guess = (rec && structures.KINDS[rec.kind].ru) || guessStructure(bot, p, { visibleOnly })
     const marks = structures.playerMarks(bot, p, rec ? rec.kind : null)
     target = { at: xyz(p), kind: (bot.blockAt(p) || {}).name, guess, structure: rec ? rec.kind : undefined, lootable: !!guess && !nearKnownPlace(session, p) && !marks.length, why: marks.length ? `поставил игрок? ${marks.join(', ')}` : undefined }
   }
@@ -176,7 +192,8 @@ async function loot (session, ctl, { x, y, z, entityId, force = false }: any = {
     return { looted: 'вагонетка с сундуком', guess: target.guess, took: r.took, why: r.why, junkLeft: r.left, stopped: r.stopped }
   }
 
-  const r = await structures.takeWorth(session, ctl, target.at, { kind: target.structure })
+  const deadline = timeoutSeconds === undefined ? undefined : require('./game-clock').now() + timeoutSeconds * 1000
+  const r = await structures.takeWorth(session, ctl, target.at, { kind: target.structure, visibleOnly, deadline })
   if (!r.stopped || Object.keys(r.took || {}).length) markLooted(session, keyOf(target.at))
   return { looted: target.kind, guess: target.guess, at: target.at, took: r.took || {}, why: r.why, junkLeft: r.left, left: r.notTaken, stopped: r.stopped }
 }

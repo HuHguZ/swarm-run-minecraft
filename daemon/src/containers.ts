@@ -720,7 +720,7 @@ async function reachContainer (bot, ctl, block, deadline) {
   }
 }
 
-async function openContainerAt (bot, ctl, block, deadline) {
+async function openContainerAt (bot, ctl, block, deadline, visibleOnly = false) {
   const aim = block.position.offset(0.5, 0.5, 0.5)
   let last = null
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -731,6 +731,13 @@ async function openContainerAt (bot, ctl, block, deadline) {
     if (attempt && gameClock.now() >= deadline) break
     await closeStray(bot)
     await bot.lookAt(aim, true) // force: see openFurnaceAt
+    if (visibleOnly) {
+      if (ctl.aborted || gameClock.now() >= deadline) throw new Error('время добычи вышло или прервано')
+      const eye = require('./pick').eyeOf(bot)
+      const delta = aim.minus(eye)
+      const hit = require('./pick').blockOnRay(bot, eye, delta.scaled(1 / delta.norm()), Math.min(4.5, delta.norm()))
+      if (!hit || !hit.pos.equals(block.position)) throw new Error('сундук не в прицеле — не открываю сквозь стену')
+    }
     try {
       return await raceOpen(bot, bot.openContainer(block), 6000, `${block.name} не открылся`)
     } catch (err) {
@@ -747,7 +754,7 @@ async function openContainerAt (bot, ctl, block, deadline) {
   throw new Error(`${block.name} не открылся: ${last.message}`)
 }
 
-async function findAndOpen (session, ctl, { x, y, z }: any, deadline) {
+async function findAndOpen (session, ctl, { x, y, z, visibleOnly = false }: any, deadline) {
   const bot = session.bot
   // The one place all three chest actions walk from, so the teardown for the
   // walk lives here too.
@@ -758,7 +765,7 @@ async function findAndOpen (session, ctl, { x, y, z }: any, deadline) {
     : bot.findBlock({ matching: b => !!b && CONTAINER.test(b.name), maxDistance: 16 })
   if (!block) throw new Error('рядом нет ни сундука, ни бочки — в 16 блоках пусто')
   await reachContainer(bot, ctl, block, deadline)
-  const win = await openContainerAt(bot, ctl, block, deadline)
+  const win = await openContainerAt(bot, ctl, block, deadline, visibleOnly)
   return { block, win }
 }
 

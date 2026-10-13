@@ -41,20 +41,40 @@ function grounded (bot) {
   return g
 }
 
+// Neutral species can still be the pursuer: use the observed anger flag or
+// the existing damage-event attacker memory, never missing gold as proof.
+function refugeFoe (bot, e, session = bot._ndGuard?.session) {
+  if (!e || e.isValid === false) return false
+  if (!REFUGE_NEUTRAL.test(e.name)) return true
+  if (require('../combat').liveAttacker(session)?.id === e.id) return true
+  if (require('../ne-guard').aggressive(bot, e)) return true
+  if (e.name === 'enderman') {
+    const i = bot.registry?.entitiesByName.enderman?.metadataKeys?.indexOf('creepy') ?? -1
+    return i >= 0 && !!e.metadata?.[i]
+  }
+  return false
+}
+
+function refugeThreats (bot, session, radius = 16) {
+  const flee = require('.././flee')
+  // Гаст стреляет с 64 блоков: дальнего стрелка учитываем только в его дальности и на виду.
+  return flee.hostilesAround(bot, Math.max(radius, flee.DOCTRINE.ghast.range))
+    .filter(h => refugeFoe(bot, h.e, session) && (h.d <= radius ||
+      (h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))))
+}
+
 function refugeLook (session, { radius = 16 }: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
   const fortify = require('.././fortify')
-  const flee = require('.././flee')
   const assess = require('.././assess')
   const dim = worlds.worldOf(bot)
   const nether = dim === 'the_nether'
   const feet = fortify.feetCell(bot)
   const me = bot.entity.position
-  const foes = flee.hostilesAround(bot, radius)
-    .filter(h => !REFUGE_NEUTRAL.test(h.e.name) && h.e.isValid !== false)
+  const foes = refugeThreats(bot, session, radius)
   // Ходячий — угроза, если он на нашем уровне (±4): со скалы в 10 блоках не спустится за стройку.
-  const walkers = foes.filter(h => h.doc.radius > 0 && Math.abs(h.e.position.y - me.y) <= 4)
+  const walkers = foes.filter(h => h.d <= radius && h.doc.radius > 0 && Math.abs(h.e.position.y - me.y) <= 4)
   const shooters = foes.filter(h => h.doc.range && h.d <= h.doc.range && assess.inSight(bot, h.e))
   const near = walkers[0] || null
   const creeper = foes.find(h => h.e.name === 'creeper' && (h.d <= 9 || h.swelling))
@@ -180,7 +200,8 @@ const REFUGE_FOOD_BAD = /^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|c
 function hasFood (session) {
   const bot = session.bot
   const foods = (session.mcData && session.mcData.foodsByName) || (bot.registry && bot.registry.foodsByName) || {}
-  return bot.inventory.items().some(i => foods[i.name] && !REFUGE_FOOD_BAD.test(i.name) && !/_bucket$/.test(i.name))
+  const meal = require('.././actions').bestFood(bot, { foodsByName: foods })
+  return !!meal && !REFUGE_FOOD_BAD.test(meal.name)
 }
 
 async function healStep (session, ctl, minHp) {
@@ -250,7 +271,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
     }
     // Бьют внутри закрытого укрытия — кто-то внутри или рядом с дырой, которую
     // не заложить: сидеть дальше значит умереть на месте.
-    const closeFoe = flee.hostilesAround(bot, 3).find(h => !REFUGE_NEUTRAL.test(h.e.name) && h.d < 2.2)
+    const closeFoe = flee.hostilesAround(bot, 3).find(h => refugeFoe(bot, h.e, session) && h.d < 2.2)
     if (gameClock.now() - hurtAt < 700 && closeFoe && kind !== 'open') {
       const sealedNow = kind === 'box' && box ? fortify.enclosure(bot, box.cell).sealed : true
       // Один удар в закрытой коробке — это чаще стрела, пущенная до крыши (E:
@@ -261,7 +282,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
     // На столбе: достают — стрелок видит или бьют — слезать и бежать.
     if (kind === 'pillar') {
       if (topY !== null && bot.entity.position.y < topY - 0.6 && !st.fell) { st.fell = true; note(`со столба упал: ноги y${bot.entity.position.y.toFixed(1)} при верхе ${topY}`) }
-      const shot = flee.hostilesAround(bot, 16).some(h => !REFUGE_NEUTRAL.test(h.e.name) && h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))
+      const shot = refugeThreats(bot, session).some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))
       if (shot) { st.why = 'breached'; break }
       if (gameClock.now() - hurtAt < 700) {
         // Достают снизу — выше, пока есть блоки (до +2), и только потом слезать.
@@ -277,7 +298,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
     if (kind === 'open') {
       // Ходячий ближе 7 бл. — до удара ~2.4 с (зомби): кусок уже не доесть.
       // Стрелок видит — тоже бежать (из-под прицела), а не есть под стрелами.
-      const hs = flee.hostilesAround(bot, 16).filter(h => !REFUGE_NEUTRAL.test(h.e.name))
+      const hs = refugeThreats(bot, session)
       const near = hs.filter(h => h.doc.radius > 0 && h.d < 7)
       const aimed = hs.some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))
       if (near.length || aimed) { st.why = 'contact'; break }
@@ -331,11 +352,11 @@ async function takeNiche (session, ctl, a, step) {
   return b
 }
 
-async function takeBox (session, ctl, a, step) {
+async function takeBox (session, ctl, a, step, report = (_box: any) => {}) {
   const bot = session.bot
   const fortify = require('.././fortify')
   const target = a.cell
-  if (!target) return null
+  if (!target || ctl.aborted || (bot.health ?? 0) <= 0) return null
   const toward = a.nearest ? require('.././flee').hostilesAround(bot, 16).find(h => h.e.name === a.nearest.name)?.e.position : null
   // Клетка в том же столбце (на блок ниже/выше ног) — тело ещё в прыжке после выхода из воды или рывка: дождаться пола,
   // а не «идти» к ней (trap2 02.10, вода: «к клетке (0 бл.) — до клетки не дошёл», откат на столб под трезубцем).
@@ -354,9 +375,28 @@ async function takeBox (session, ctl, a, step) {
       target.cell = fortify.feetCell(bot)
     }
   }
+  // Walls/roof cannot shelter a body from an attacker already inside. Recheck
+  // the actual fallback cell before digging its floor or claiming sealed cover.
+  const occupied = (box: any = { cell: fortify.feetCell(bot), placed: 0 }) => {
+    const cell = fortify.feetCell(bot)
+    if (ctl.aborted || (bot.health ?? 0) <= 0 || !fortify.refugeNeed(bot, cell)) return null
+    const intruder = require('.././flee').hostilesAround(bot, 3).find(h => refugeFoe(bot, h.e, session) &&
+      (require('.././pick').aim(bot, h.e)?.point || require('../combat').liveAttacker(session)?.id === h.e.id) &&
+      [cell, cell.offset(0, 1, 0)].some(p => occupiedByEntity({ entity: bot.entity, entities: { [h.e.id]: h.e } }, p)))
+    if (!intruder) return null
+    const breached = { ...box, cell, intruder: intruder.e.name }
+    step(`${intruder.e.name} внутри коробки — крышу не ставлю, выхожу`)
+    report({ ...breached, ...fortify.enclosure(bot, cell) })
+    return breached
+  }
+  const before = occupied()
+  if (before) return before
   const b = await fortify.refugeBox(bot, target.cell, { toward, ctl })
   // Не закрылась — ещё до двух заходов латания (зомби отходит из клетки стены).
-  for (let k = 0; k < 2 && !ctl.aborted && !fortify.enclosure(bot, b.cell).sealed; k++) {
+  for (let k = 0; k <= 2; k++) {
+    const breach = occupied(b)
+    if (breach) return breach
+    if (k === 2 || ctl.aborted || fortify.enclosure(bot, b.cell).sealed) break
     b.placed += await fortify.refugePatch(bot, b, { ctl })
     if (!fortify.enclosure(bot, b.cell).sealed) await sleep(300)
   }
@@ -370,6 +410,7 @@ async function takeBox (session, ctl, a, step) {
   }
   const enc = fortify.enclosure(bot, b.cell)
   step(`коробка: поставил ${b.placed}, стен ${enc.walls}/4, крыша ${enc.roof ? 'есть' : 'нет'}${b.failed ? ` — ${b.failed.slice(0, 2).join('; ')}` : ''}`)
+  report({ ...b, ...enc })
   // С открытой стороной это не укрытие, а угол: через неё бьют, пока ешь
   if (!enc.sealed) return null
   session.shelterBox = b.cell
@@ -399,9 +440,8 @@ async function stepTo (bot, ctl, cell, ms = 1500) {
 
 const SIT_CAP_MS = 9.5 * 60000
 
-function outsideDanger (bot, at, { untilDawn = false }: any = {}) {
-  const flee = require('.././flee')
-  const hs = flee.hostilesAround(bot, 16).filter(h => !REFUGE_NEUTRAL.test(h.e.name))
+function outsideDanger (bot, at, { untilDawn = false, session = bot._ndGuard?.session }: any = {}) {
+  const hs = refugeThreats(bot, session)
   const hp = bot.health ?? 0
   // Ходячие у самых стен (≤ 6 бл. по горизонтали от клетки) — выйти значит в их руки. Бродящие дальше — не повод
   const horiz = h => Math.hypot(h.e.position.x - (at.x + 0.5), h.e.position.z - (at.z + 0.5))
@@ -413,6 +453,7 @@ function outsideDanger (bot, at, { untilDawn = false }: any = {}) {
   if (hs.some(h => h.e.name === 'creeper' && h.d <= 8)) return 'крипер у стен'
   // Стрелок в своей дальности: на выходе первая же стрела (на открытом месте без щита — 3–5 хп раз в ~3 с).
   if (hs.some(h => /^(skeleton|stray|bogged|parched|pillager)$/.test(h.e.name) && h.d <= 16)) return 'стрелок рядом'
+  if (hs.some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))) return 'стрелок на виду'
   const t = bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : 6000
   const night = t >= 12542 && t <= 23459
   // До рассвета (кампания уже решила: ночь наверху) — без проверки неба: листва над коробкой — не крыша от мобов
@@ -441,7 +482,7 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
   const bot = session.bot
   const fortify = require('.././fortify')
   const s0 = gameClock.now()
-  let why = outsideDanger(bot, at, { untilDawn })
+  let why = outsideDanger(bot, at, { untilDawn, session })
   if (!why) return { sat: 0 }
   step(`снаружи опасно (${why}) — сижу`)
   let clearSince = 0
@@ -462,7 +503,7 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
       if (!n && !fortify.enclosure(bot, box.cell).sealed && ++failedPatches >= 5) { step('коробку не залатать — не сижу'); break }
     }
     await healStep(session, ctl, 20).catch(() => null)
-    const w = outsideDanger(bot, at, { untilDawn })
+    const w = outsideDanger(bot, at, { untilDawn, session })
     if (w) { why = w; clearSince = 0 } else if (!clearSince) clearSince = gameClock.now()
     // Стихло 8 с подряд — выходить.
     if (clearSince && gameClock.now() - clearSince >= 8000) break
@@ -477,7 +518,7 @@ async function waitClear (session, ctl, at, { deadline, reach = 3, step }: any) 
   const bot = session.bot
   const flee = require('.././flee')
   const t0 = gameClock.now()
-  const near = () => flee.hostilesAround(bot, 12).some(h => !REFUGE_NEUTRAL.test(h.e.name) && h.doc.radius > 0 &&
+  const near = () => flee.hostilesAround(bot, 12).some(h => refugeFoe(bot, h.e, session) && h.doc.radius > 0 &&
     Math.hypot(h.e.position.x - (at.x + 0.5), h.e.position.z - (at.z + 0.5)) <= reach &&
     h.e.position.y - at.y >= -1 && h.e.position.y - at.y <= 4)
   if (!near()) return true
@@ -495,34 +536,45 @@ async function waitClear (session, ctl, at, { deadline, reach = 3, step }: any) 
 async function leaveBox (session, ctl, b, hold, step) {
   const bot = session.bot
   const fortify = require('.././fortify')
+  const live = () => !ctl.aborted && (bot.health ?? 0) > 0
   session.shelterBox = null
   if (hold.why === 'died' || (bot.health ?? 0) <= 0) return null
   // Отход оборвали (новое намерение, чат, смерть) — стены не ломать и не выходить: решает тот, кто оборвал.
-  if (ctl.aborted) return null
+  if (!live()) return null
   if (!bot.entity.position.floored().equals(b.cell) && !fortify.feetCell(bot).equals(b.cell)) return { ok: true, note: 'уже снаружи' }
-  const foes = require('.././flee').hostilesAround(bot, 12).filter(h => !REFUGE_NEUTRAL.test(h.e.name))
+  const foes = require('.././flee').hostilesAround(bot, 12).filter(h => refugeFoe(bot, h.e, session))
   const away = foes.length ? foes[0].e.position : null
   let r = null
   // Ниша: выйти тем же проёмом — выломать свои 2 блока и шагнуть.
   if (b.front) {
     let ok = true
     for (const y of [1, 0]) {
-      if (ctl.aborted) return null
+      if (!live()) return null
       if (fortify.solidAt(bot, b.front.offset(0, y, 0))) ok = (await fortify.breakBlock(bot, b.front.offset(0, y, 0), { maxMs: 4000 })) && ok
     }
+    if (!live()) return null
     if (ok) {
       try {
         await bot.lookAt(b.front.offset(0.5, 1.2, 0.5), true)
+        if (!live()) return null
         bot.setControlState('forward', true)
         await sleep(400)
       } catch {} finally { try { bot.setControlState('forward', false) } catch {} }
-      return { ok: true, front: true }
+      return live() ? { ok: true, front: true } : null
     }
   }
-  try { r = await fortify.breakOut(bot, b.cell, { away }) } catch (e) { r = { ok: false, steps: [e.message] } }
+  try {
+    r = await fortify.breakOut(bot, b.cell, { away }, { onHole: () => {
+      // The current head dig may finish after cancellation; do not start the feet dig.
+      if (!live()) throw new Error('выход отменён')
+      return false
+    } })
+  } catch (e) { r = { ok: false, steps: [e.message] } }
+  if (!live()) return null
   if (r.ok) {
     try {
       await bot.lookAt(r.exit.offset(0.5, 1.2, 0.5), true)
+      if (!live()) return null
       bot.setControlState('forward', true)
       await sleep(350)
     } catch {} finally { try { bot.setControlState('forward', false) } catch {} }
@@ -536,13 +588,13 @@ async function leaveBox (session, ctl, b, hold, step) {
       r = { ok: !!up.out, up: true }
     } catch (e) { step(`выход вверх: ${e.message}`) }
   }
-  return r
+  return live() ? r : null
 }
 
 function shoreRoute (bot, { radius = 16, rise = 6, drop = 4, foes = [] }: any = {}) {
   const start = bot.entity.position.floored()
   const key = p => `${p.x},${p.y},${p.z}`
-  const water = b => !!b && /^(water|bubble_column)$/.test(b.name)
+  const water = require('.././movement').waterCell
   const passable = b => !!b && b.boundingBox === 'empty' && !/lava/.test(b.name)
   const queue = [{ p: start, parent: -1, n: 0 }]
   const seen = new Set([key(start)])
@@ -575,7 +627,7 @@ function shoreRoute (bot, { radius = 16, rise = 6, drop = 4, foes = [] }: any = 
     }
     if (best && queue[i].n > best.cost) break
     const over = bot.blockAt(p.offset(0, 2, 0))
-    const next = [...sides.map(d => p.plus(d)), p.offset(0, 1, 0)]
+    const next = [...sides.map(d => p.plus(d)), p.offset(0, 1, 0), p.offset(0, -1, 0)]
     if (passable(over)) next.push(...sides.map(d => p.plus(d).offset(0, 1, 0)))
     for (const q of next) {
       if (Math.max(Math.abs(q.x - start.x), Math.abs(q.z - start.z)) > radius || q.y - start.y > rise || start.y - q.y > drop) continue
@@ -608,7 +660,7 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
   try {
     while (!ctl.aborted && gameClock.now() - t0 < timeoutMs && (bot.health ?? 0) > 0 && !dry()) {
       if (!route || gameClock.now() - planAt > 600) {
-        const foes = flee.hostilesAround(bot, 20).filter(h => !REFUGE_NEUTRAL.test(h.e.name)).map(h => h.e.position)
+        const foes = flee.hostilesAround(bot, 20).filter(h => refugeFoe(bot, h.e, session)).map(h => h.e.position)
         // Ближнего берега нет — шире и выше (затопленная лесенка: сухие ступени выше 6 бл.; pool1 02.10 слот 16 — «берега в
         // 16 бл. не вижу» за 0.1 с, утопленник добил).
         route = shoreRoute(bot, { foes }) || shoreRoute(bot, { foes, radius: 24, rise: 14, drop: 8 })
@@ -661,4 +713,4 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
   return { ok, seconds: Math.round((gameClock.now() - t0) / 100) / 10, target: target ? xyz(target) : null }
 }
 
-module.exports = { pillarPlan, standTop, grounded, refugeLook, nicheOn, chooseRefuge, buildMsOf, outrun, lookLine, REFUGE_FOOD_BAD, hasFood, healStep, holdMouth, holdOut, planksFromLogs, takeNiche, takeBox, stepTo, SIT_CAP_MS, outsideDanger, openSkyOver, sitTight, waitClear, leaveBox, shoreRoute, toShore }
+module.exports = { pillarPlan, standTop, grounded, refugeFoe, refugeLook, nicheOn, chooseRefuge, buildMsOf, outrun, lookLine, REFUGE_FOOD_BAD, hasFood, healStep, holdMouth, holdOut, planksFromLogs, takeNiche, takeBox, stepTo, SIT_CAP_MS, outsideDanger, openSkyOver, sitTight, waitClear, leaveBox, shoreRoute, toShore }

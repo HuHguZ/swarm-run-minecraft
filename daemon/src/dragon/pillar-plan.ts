@@ -499,7 +499,8 @@ async function clickBedAt (bot, hit, { aimed = false, until = 0, untilMono = nul
   // Точный миг (снижение: тик до посадки): ждём игровой таймер, освобождая цикл событий для следующих тиков.
   // Ускоренные тики (s5 06.10): миг — по ровным монотонным часам (untilMono, мс реального времени), часы клиента на 750
   // скачут на тики (догоняют рывком, стоят впереди сервера). Игровой until — только грубо, если до него далеко.
-  if (untilMono != null) {
+  // В lockstep CPU-пауза останавливает и сервер: настенные часы не заменяют подтверждённые игровые тики.
+  if (untilMono != null && !(until && gameClock.snapshot()?.lockstep)) {
     const w = gameClock.wall
     const k = 20 / (gameClock.snapshot()?.tickRate || 20) // мс реального времени на игровую мс
     while (until && until - gameClock.now() > 200 && untilMono - w.monotonic() > 4 + 50 * k) await sleep(50)

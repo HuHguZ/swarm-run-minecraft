@@ -28,9 +28,10 @@ const KEEPINV = process.env.KEEPINV === 'true' ? 'true' : 'false'
 const path = require('path')
 const { spawn, execFileSync } = require('child_process')
 const { connect, createKit, sleep, classify, campaignFacts } = require('./scene-kit')
+const { farmBootstrap } = require('./farm-bootstrap')
 const { deathFreeEnd, netherPass, bastionMetrics, explicitBarterMetrics } = require('./src/campaign/nether-progress')
 const { netherToolsReady } = require('./src/campaign/nether-supply')
-const { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats } = require('./scene-nether-entry')
+const { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats, entryDied } = require('./scene-nether-entry')
 
 const WS = process.env.ND_WS || 'ws://127.0.0.1:8821'
 const PLAYER = process.env.MC_USERNAME || 'NeuroFarm21'
@@ -148,7 +149,7 @@ async function setup () {
 
 async function main () {
   await conn.ready
-  await call('connect')
+  await farmBootstrap(call, WS, PLAYER)
   await call('stop')
   const t0 = gameClock.now()
   await kit.cmd('/gamemode spectator')
@@ -326,6 +327,7 @@ async function main () {
   console.log('подготовленный запас', JSON.stringify(preparedSupply))
   // Смерти считаются с этой точки (вход в Ад и всё после него).
   const size = logSize()
+  await call('connect', { bootstrapPaused: false })
   let en = null
   const entryAttempts: Record<string, any>[] = []
   let s0: Record<string, any> = {} as Record<string, any>
@@ -335,20 +337,23 @@ async function main () {
     if (k > 0) await call('portal', { timeoutSeconds: 120 }).catch(() => null)
     const before = await status()
     en = await call('portal', { mode: 'enter', timeoutSeconds: 180 }).catch(e => ({ status: 'failed', error: e.message }))
-    for (let w = 0; w < 10; w++) { s0 = await status(); if (s0.dimension === 'the_nether') break; await sleep(1000) }
+    for (let w = 0; w < 10; w++) { s0 = await status(); if (s0.dimension === 'the_nether' || entryDied(s0, en, deathLines(size).length)) break; await sleep(1000) }
     const attempt = { attempt: k + 1, before, receipt: en, after: s0 }
     entryAttempts.push(attempt)
     console.log('фактический вход через портал', JSON.stringify(attempt))
+    if (entryDied(s0, en, deathLines(size).length)) break
   }
   // Портал горит, а войти тело не смогло (рама на круче, у нижнего ряда негде встать: neF-A0f22-1 03.10) — подготовка
   // ещё не мерится: тело в клетку портала командой (ферма).
   let viaTp = false
-  if (s0.dimension !== 'the_nether' && pr && pr.detail && pr.detail.inner) {
+  if (!entryDied(s0, en, deathLines(size).length) && s0.dimension !== 'the_nether' && pr && pr.detail && pr.detail.inner) {
     viaTp = await require('./try-lab-ne-util').portalTp(kit, status, pr.detail.inner, call)
     if (viaTp) s0 = await status()
   }
-  if (s0.dimension !== 'the_nether') {
-    const rec: Record<string, any> = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: true, stoppedBy: 'в Ад не вошёл на подготовке', portal: String(pr && (pr.error || (pr.detail && pr.detail.note)) || '').slice(0, 200), enter: String(en && (en.error || (en.detail && (en.detail.note || en.detail.stopped))) || '').slice(0, 200), releasedHold, entryAttempts }
+  const entryDeaths = deathLines(size)
+  const diedEntering = entryDied(s0, en, entryDeaths.length)
+  if (diedEntering || s0.dimension !== 'the_nether' || !(s0.health > 0)) {
+    const rec: Record<string, any> = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: !diedEntering, stoppedBy: diedEntering ? 'смерть при входе в Ад' : 'в Ад не вошёл живым на подготовке', deathCount: Math.max(entryDeaths.length, diedEntering ? 1 : 0), deaths: entryDeaths, hp: s0.health, dimension: s0.dimension, portal: String(pr && (pr.error || (pr.detail && pr.detail.note)) || '').slice(0, 200), enter: String(en && (en.error || (en.detail && (en.detail.note || en.detail.stopped))) || '').slice(0, 200), releasedHold, entryAttempts }
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
     console.log(JSON.stringify(rec))
     try { await Promise.race([call('disconnect', { reason: 'сцена окончена' }), gameClock.wall.sleep(10000)]) } catch {}

@@ -323,6 +323,40 @@ function shoreFirst (bot, lava) {
 
 function geomOf1 (plan) { return geom1(new Vec3(plan.origin.x, plan.origin.y, plan.origin.z), plan.axis, plan.side) }
 
+function materialNeed1 (read, plan) {
+  const g = geomOf1(plan)
+  const required = new Map([g.F(-2, -1), g.F(3, -1), g.B(0, -1), g.B(1, -1), g.at(-1, -1), g.at(2, -1),
+    g.F(-2, 0), g.F(3, 0), g.F(-2, 1), g.F(3, 1), g.G(-1, -1), g.G(1, -1), g.G(2, -1)].map(q => [keyOf(q), q]))
+  const cleared = new Set(plan.dig.map(keyOf))
+  if (cells(g).some(t => t.h > 0 && (read(t.c) || {}).name !== 'obsidian')) {
+    for (const q of [g.F(-2, 2), g.F(3, 2), g.F(-2, 3), g.F(3, 3), g.at(0, 2), g.at(1, 2), g.F(-1, 3), g.F(2, 3), g.G(0, 0), g.G(0, 1)]) required.set(keyOf(q), q)
+  }
+  // Clearing can supply drops; only carried material and standing supports are confirmed.
+  return [...required.values()].filter(q => cleared.has(keyOf(q)) || !solid(read(q))).length
+}
+
+// Resource gathering must not recycle a frame that casting will resume. This
+// footprint is our own plan, not a terrain scan; cells() supplies the casting
+// faces, with the same shore props and climbing columns used below.
+function siteCells1 (plan) {
+  const own = new Set<string>()
+  if (!plan?.origin || !['x', 'z'].includes(plan.axis) || ![-1, 1].includes(plan.side) ||
+      !['x', 'y', 'z'].every(k => Number.isInteger(plan.origin[k]))) return own
+  const g = geomOf1(plan)
+  const keep = q => own.add(keyOf(q))
+  for (const t of cells(g)) {
+    keep(t.c); keep(t.w)
+    for (const [ref] of [...t.water, ...t.lava]) keep(ref)
+  }
+  for (const i of [-2, 3]) for (let j = -1; j <= 3; j++) keep(g.F(i, j))
+  for (let i = -2; i <= 3; i++) { keep(g.F(i, -2)); keep(g.at(i, -2)); keep(g.G(i, -1)) }
+  for (const i of [0, 1]) keep(g.B(i, -1))
+  for (const i of [-1, 0, 1]) for (const j of [0, 1]) keep(g.G(i, j))
+  for (const i of [-1, 1, 2]) for (let j = -2; j >= -4; j--) keep(g.G(i, j))
+  for (const q of plan.place || []) keep(q)
+  return own
+}
+
 // Лава в досягаемости черпака отсюда: источник с воздухом сверху, луч черпака есть. С земли — сперва дальние (ряды
 // I…K и края H): ближние к столбу H(−2..2), I(0) — запас на верхние клетки, со столба 2 до других не достать
 // (lab ow-c1a: 8/10 — «лавы в досягаемости нет» на верхней клетке, ближнюю лаву вычерпали с земли).
@@ -384,9 +418,6 @@ async function castOne (session, ctl, p: any = {}) {
   const buckets = cnt('bucket') + cnt('water_bucket') + cnt('lava_bucket')
   if (buckets < 1) return { ...report, built: false, stopped: 'нужно ведро', need: { what: 'bucket', count: 1, have: 0 } }
   const fill = () => FILLER.reduce((n, x) => n + cnt(x), 0)
-  // Блоки: стенки жёлоба 8, перемычки до 6, подпорки и уголки 4, столб 2 — ~20, но расчистка места сама даёт землю и
-  // камень (rt-R2: «нужно блоков 16» при 8–15 и озере за спиной — литьё не начиналось). До расчистки — хотя бы 6.
-  if (fill() < 3) return { ...report, built: false, stopped: 'на стенки жёлоба, подпорки и столб нужно блоков 3+ (остальное даст расчистка)', need: { what: 'cobblestone', count: 3, have: fill() } }
   // Вода в ведре — с собой (одно ведро: её не из чего набрать у рамы, кроме своей же). С лавой в ведре (прошлый заход
   // оборвался) — разобраться у рамы, ниже.
   if (!cnt('water_bucket') && !cnt('lava_bucket')) {
@@ -419,13 +450,15 @@ async function castOne (session, ctl, p: any = {}) {
     const found = plan1(bot, lava, { maxDig: Math.max(20, Math.min(90, p.maxDig || 40)), ...(edgeFirst ? { maxCand: 120 } : {}) })
     if (!found.ok) return { ...report, built: false, stopped: `места на берегу нет: ${found.reasons.join(', ')}` }
     plan = found.plan
-    session.castPlan1 = plan
     try { session.journal.patch(s => { if (!s.places) s.places = {}; s.places[PLACE1] = { ...plan.origin, dimension: bot.game ? bot.game.dimension : null, axis: plan.axis, side: plan.side, dig: plan.dig, place: plan.place, note: 'литьё одним ведром' } }) } catch {}
   }
+  session.castPlan1 = plan
   const g = geomOf1(plan)
   const siteThreat = hazard(g.G(0, 0))
   if (siteThreat) return { ...report, code: 'CAST_UNSAFE', hazard: siteThreat, built: false, stopped: `CAST_UNSAFE: ${siteThreat.name}` }
   report.site = { origin: plan.origin, axis: plan.axis, side: plan.side, lava: plan.lava }
+  const materialNeed = materialNeed1(q => bot.blockAt(q), plan)
+  if (fill() < materialNeed) return { ...report, built: false, stopped: `на выбранную раму нужно блоков ${materialNeed}`, need: { what: 'cobblestone', count: materialNeed, have: fill() } }
   const dropPlan = r => { session.castPlan1 = null; try { session.journal.patch(st => { if (st.places) delete st.places[PLACE1] }) } catch {}; return r }
   const goG = async (i = 0) => {
     const S = g.G(i, 0)
@@ -650,7 +683,7 @@ async function castOne (session, ctl, p: any = {}) {
   if (cnt('lava_bucket') && !cnt('water_bucket')) {
     let fixed = false
     for (const t of cells(g)) {
-      if (t.h > 0 || (bot.blockAt(t.c) || {}).name === 'obsidian') continue
+      if ((bot.blockAt(t.c) || {}).name === 'obsidian') continue
       const wb = bot.blockAt(t.w)
       if (!wb || !/water/.test(wb.name)) continue
       const lr = await pourInto(bot, 'lava_bucket', t.lava)
@@ -855,7 +888,7 @@ async function castOne (session, ctl, p: any = {}) {
   const done = frame.filter(q => (bot.blockAt(q) || {}).name === 'obsidian').length
   const built = done === 10
   return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((gameClock.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`),
-    ...(!built && noBlocks ? { need: { what: 'cobblestone', count: 8, have: fill() } } : {}) }
+    ...(!built && noBlocks ? { need: { what: 'cobblestone', count: Math.max(1, materialNeed1(q => bot.blockAt(q), plan)), have: fill() } } : {}) }
 }
 
-module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, lakeReach, useAt, PLACE1 }
+module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, siteCells1, materialNeed1, lakeReach, useAt, PLACE1 }

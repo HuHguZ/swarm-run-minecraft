@@ -571,7 +571,7 @@ const SETTLE_MS = 250
 // point(ticks) -> Vec3 — своя точка прицела вместо середины туловища (у
 // дракона бьётся не сущность, а её части: голова, тело, крылья — dragon.js);
 // steep — разрешить крутой выстрел вверх (см. peakPitch).
-async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = null, onRelease = null, onHit = null, shouldStop = null, follow = true, mode = 'compensate', point = null, steep = false, drawMs = DRAW_MS, holdWhile = null, holdMaxMs = 2500, traceAim = false }: any = {}) {
+async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = null, onRelease = null, onHit = null, shouldStop = null, follow = true, mode = 'compensate', point = null, steep = false, drawMs = DRAW_MS, holdWhile = null, holdMaxMs = 2500, traceAim = false, peek = false }: any = {}) {
   const bow = bot.inventory.items().find(i => i.name === 'bow')
   const arrows = bot.inventory.items().find(i => /arrow$/.test(i.name))
   if (!bow || !arrows) return { shot: false, why: !bow ? 'лука нет' : 'стрел нет' }
@@ -603,7 +603,9 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   // сменить позицию (или идти в ближний бой).
   const pre = aim(eye(), targetNow(), speed, GRAVITY, steep)
   if (!pre) return { shot: false, why: 'не долетит' }
-  const wall = blockedAt(bot, eye(), pre, undefined, speed)
+  // peek — выстрел из-за укрытия в прыжке (peek_shot): сейчас стенка закрывает, откроется на вершине прыжка; закрыто ли
+  // в миг спуска — проверка при выстреле (release) та же.
+  const wall = peek ? null : blockedAt(bot, eye(), pre, undefined, speed)
   if (wall) return { shot: false, blocked: true, why: `на линии стрельбы блок ${wall.x},${wall.y},${wall.z}` }
   if (!bot.heldItem || bot.heldItem.name !== 'bow') await bot.equip(bow, 'hand')
   const charge = observeCharge(bot)

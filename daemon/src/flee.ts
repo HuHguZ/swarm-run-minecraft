@@ -25,6 +25,7 @@ const { raySees } = require('./perception')
 const threats = require('./threats')
 const throwMod = require('./throw')
 const { stepSafe, keyDir } = require('./moves')
+const { bodyClear } = require('./navigation/geometry')
 
 // Доктрина по мобам. radius — докуда моб опасен в ближнем бою (с запасом на
 // его скорость), weight — насколько. range — дальность стрельбы (опасен, только
@@ -95,6 +96,7 @@ function hostilesAround (bot, radius = 32, foes: number[] = []) {
     if (!e || e === bot.entity || !e.position || !e.name) continue
     const doc = e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
     if (!doc) continue
+    if (e.username && !require('./pvp/last-seen').seesPlayer(bot, e)) continue
     const d = e.position.distanceTo(me)
     if (d > radius) continue
     out.push({ e, doc, d, swelling: e.name === 'creeper' && creeperSwelling(bot, e) })
@@ -140,7 +142,9 @@ const HURTS = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'cactus', 'sw
 
 // Сколько блоков можно пробежать по направлению без обрыва (>3), лавы и
 // стены выше прыжка. Возвращает длину и точку прибытия.
-function runLength (bot, dir, max = 10) {
+// maxDrop — спуск за шаг (по умолчанию 3: без заметного урона; уворот от зелья/булавы — до 6, падение дешевле удара).
+function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
+  const DYS = [0, 1]; for (let k = 1; k <= maxDrop; k++) DYS.push(-k)
   const me = bot.entity.position
   let y = Math.floor(me.y)
   let last = me.clone()
@@ -150,8 +154,9 @@ function runLength (bot, dir, max = 10) {
     const x = Math.floor(me.x + dir.x * s)
     const z = Math.floor(me.z + dir.z * s)
     let found = null
-    for (const dy of [0, 1, -1, -2, -3]) {
+    for (const dy of DYS) {
       const yy = y + dy
+      if (!insideArena(new Vec3(me.x + dir.x * s, yy, me.z + dir.z * s), arena) || !insideArena(new Vec3(x + .5, yy, z + .5), arena)) continue
       const feet = bot.blockAt(new Vec3(x, yy, z))
       const head = bot.blockAt(new Vec3(x, yy + 1, z))
       const ground = bot.blockAt(new Vec3(x, yy - 1, z))
@@ -169,6 +174,11 @@ function runLength (bot, dir, max = 10) {
       }
     }
     if (found === null || found === 'bad') break
+    // Free endpoint cells can still squeeze the body's width through touching wall corners.
+    if ([.25, .5, .75, 1].some(t => {
+      const p = new Vec3(me.x + dir.x * (s - 1 + t), Math.max(y, found), me.z + dir.z * (s - 1 + t))
+      return !insideArena(p, arena) || !bodyClear(bot, p, { water: true })
+    })) break
     y = found
     last = new Vec3(x + 0.5, y, z + 0.5)
     len = s
@@ -177,6 +187,27 @@ function runLength (bot, dir, max = 10) {
     if ((wf && wf.name === 'water') || (wg && wg.name === 'water')) wet++
   }
   return { len, end: last, wet }
+}
+
+// Замкнутость точки (12.10, арена: «убегают в замкнутое пространство — там их легко забить»): заливка по клеткам, где
+// можно стоять, на 5 шагов от точки (до 90 клеток) и сколько из них дальше 4 бл. по прямой (выходы наружу). Комната с одним
+// проходом, ниша, тупик коридора — мало клеток и выходов; поле — много. Цена: 0 на открытом, растёт к тупику.
+function enclosure (bot, E) {
+  const open = b => b && b.boundingBox === 'empty' && b.name !== 'cobweb' && !HURTS.has(b.name)
+  const stand = (x, y, z) => { const g = bot.blockAt(new Vec3(x, y - 1, z)); return open(bot.blockAt(new Vec3(x, y, z))) && open(bot.blockAt(new Vec3(x, y + 1, z))) && !!g && !HURTS.has(g.name) && (g.boundingBox === 'block' || g.name === 'water') }
+  const s0 = { x: Math.floor(E.x), y: Math.floor(E.y), z: Math.floor(E.z), d: 0 }
+  const seen = new Set([`${s0.x},${s0.y},${s0.z}`]); const q = [s0]; let far = 0
+  for (let i = 0; i < q.length && q.length < 90; i++) {
+    const c = q[i]
+    if (Math.hypot(c.x - s0.x, c.z - s0.z) >= 4) far++
+    if (c.d >= 5) continue
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1]) {
+      const x = c.x + dx; const y = c.y + dy; const z = c.z + dz; const k = `${x},${y},${z}`
+      if (seen.has(k) || !stand(x, y, z)) continue
+      seen.add(k); q.push({ x, y, z, d: c.d + 1 }); break
+    }
+  }
+  return Math.max(0, 40 - q.length) * 0.5 + Math.max(0, 8 - far) * 1.5
 }
 
 // Обрыв у точки прибытия: клетки в 1–2 бл. от неё без пола на 4 вниз (или с лавой/огнём). Бег кончается там, где его
@@ -201,7 +232,10 @@ function edgeRisk (bot, E) {
 
 // Лучшее направление бегства сейчас. prevYaw — чтобы не дёргаться между
 // почти равными вариантами.
-function pickDirection (bot, hs, prevYaw = null, goals: any[] = []) {
+function insideArena(p, arena) {
+  return !arena || Math.abs(p.x - arena.x) + .3 <= arena.r && Math.abs(p.z - arena.z) + .3 <= arena.r && p.y > (arena.killY ?? -64)
+}
+function pickDirection (bot, hs, prevYaw = null, goals: any[] = [], arena = null) {
   const me = bot.entity.position
   let best = null
   const options = []
@@ -209,9 +243,10 @@ function pickDirection (bot, hs, prevYaw = null, goals: any[] = []) {
   for (let k = 0; k < 24; k++) {
     const yaw = (k / 24) * Math.PI * 2
     const dir = { x: -Math.sin(yaw), z: -Math.cos(yaw) }
-    const run = runLength(bot, dir, 10)
+    const run = runLength(bot, dir, 10, 3, arena)
     if (run.len < 2) continue
     const E = run.end
+    if (!insideArena(E, arena)) continue
     let cost = 0
     for (const h of hs) {
       cost += dangerAt(bot, E, h)
@@ -235,7 +270,7 @@ function pickDirection (bot, hs, prevYaw = null, goals: any[] = []) {
   }
   // Край — только у лучших пяти (12 клеток × до 4 blockAt на каждое; на 750 TPS план раз в 300 игровых мс).
   options.sort((a, b) => a.cost - b.cost)
-  for (const o of options.slice(0, 5)) o.cost += edgeRisk(bot, o.end) * 3
+  for (const o of options.slice(0, 5)) o.cost += edgeRisk(bot, o.end) * 3 + enclosure(bot, o.end) * 2
   for (const o of options.slice(0, 5)) if (!best || o.cost < best.cost) best = o
   return best
 }
@@ -245,7 +280,7 @@ function pickDirection (bot, hs, prevYaw = null, goals: any[] = []) {
 // клеткам (как runLength: ноги и голова свободны, под ногами опора, шаг ±1, спуск до 3) на ~20 бл.; клетка годится,
 // только если я там раньше любого ходячего (его путь — по прямой, скорость — доля моего спринта). Цель — клетка с
 // наименьшей опасностью от всех разом и дальше всех от ближайшего; идти — на клетку пути в 3–4 шагах. null — выхода нет.
-function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = []) {
+function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = [], arena = null) {
   const me = bot.entity.position
   const walkers = hs.filter(h => h.doc.radius > 0 && h.d < 32)
   const start = { x: Math.floor(me.x), y: Math.floor(me.y + 0.01), z: Math.floor(me.z) }
@@ -254,11 +289,13 @@ function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = []) 
   const steps = new Map([[key(start), 0]])
   const open = b => b && b.boundingBox === 'empty' && b.name !== 'cobweb' && !HURTS.has(b.name)
   const stand = (x, y, z) => {
+    if (!insideArena({ x: x + .5, y, z: z + .5 }, arena)) return false
     const g = bot.blockAt(new Vec3(x, y - 1, z))
     return open(bot.blockAt(new Vec3(x, y, z))) && open(bot.blockAt(new Vec3(x, y + 1, z))) && g && !HURTS.has(g.name) && (g.boundingBox === 'block' || g.name === 'water')
   }
   const q = [start]
   let best = null
+  const cands = []
   for (let i = 0; i < q.length && q.length < maxNodes; i++) {
     const c = q[i]; const s = steps.get(key(c))
     if (s >= 2) {
@@ -267,7 +304,7 @@ function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = []) 
       for (const h of hs) cost += dangerAt(bot, P, h)
       for (const h of walkers) near = Math.min(near, P.distanceTo(h.e.position))
       const score = cost - Math.min(near, 16) * 2 + edgeRisk(bot, P) * 2 + goalPull(P, goals)
-      if (!best || score < best.score) best = { c, score, s }
+      cands.push({ c, score, s })
     }
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const x = c.x + dx; const z = c.z + dz
@@ -290,13 +327,15 @@ function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = []) 
       }
     }
   }
+  cands.sort((a, b) => a.score - b.score)
+  for (const o of cands.slice(0, 5)) { o.score += enclosure(bot, new Vec3(o.c.x + 0.5, o.c.y, o.c.z + 0.5)) * 2; if (!best || o.score < best.score) best = o }
   if (!best) return null
   // Стою в лучшем месте, чем любое достижимое — выхода нет.
-  const here = hs.reduce((a, h) => a + dangerAt(bot, me, h), 0) - Math.min(16, Math.min(Infinity, ...walkers.map(h => me.distanceTo(h.e.position)))) * 2
+  const here = hs.reduce((a, h) => a + dangerAt(bot, me, h), 0) - Math.min(16, Math.min(Infinity, ...walkers.map(h => me.distanceTo(h.e.position)))) * 2 + enclosure(bot, me) * 2
   if (best.score >= here - 1) return null
   const path = []
   for (let c = best.c; c; c = prev.get(key(c))) path.unshift(c)
-  const wp = path[Math.min(path.length - 1, 3)]
+  const wp = path[1]
   return { yaw: Math.atan2(-(wp.x + 0.5 - me.x), -(wp.z + 0.5 - me.z)), to: best.c, steps: best.s, nodes: q.length }
 }
 const SPRINT_BPS = 5.6
@@ -317,7 +356,7 @@ function shaken (bot, hs, safeDist) {
 // Сам побег. Возвращает, когда вокруг безопасно, когда прижали (cornered) или
 // по времени. safeDist — дальше скольких блоков от ближайшего ходячего врага
 // считаем, что оторвались.
-async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [], chaseExit = false, goals = [] }: any = {}) {
+async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [], chaseExit = false, goals = [], arena = null }: any = {}) {
   const bot = session.bot
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
@@ -380,10 +419,10 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       const now = gameClock.now()
       const swell = hs.find(h => h.swelling && h.d < 6)
       if (!plan || now >= replanAt || swell) {
-        plan = pickDirection(bot, hs, prevYaw, goals)
+        plan = pickDirection(bot, hs, prevYaw, goals, arena)
         // Прямой бег короткий (стены, комната) или прижали — путь по клеткам к выходу (ND_FLEE_ROUTE=0 — только лучи).
         if (process.env.ND_FLEE_ROUTE !== '0' && hs.some(h => h.doc.radius > 0 && h.d < 16) && (!plan || plan.run < 8)) {
-          const r = escapeRoute(bot, hs, 1500, 20, goals)
+          const r = escapeRoute(bot, hs, 1500, 20, goals, arena)
           if (r) plan = { yaw: r.yaw, run: r.steps, route: true }
         }
         replanAt = now + 300
@@ -392,7 +431,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
           // Прижали, а в рюкзаке жемчуг — вылететь через головы (5 хп за
           // жизнь, если их больше шести).
           if (cornered >= 2 && (bot.health ?? 20) > 6) {
-            const out = await pearlOut(bot, hs)
+            const out = await pearlOut(bot, hs, arena)
             if (out) return { mode: 'прижали — ушёл жемчугом', pearl: out, from: [...fromNames], at: xyz(bot.entity.position) }
           }
           if (cornered >= 3) {
@@ -412,8 +451,8 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
         const fastNear = hs.find(h => h.doc.radius && h.doc.fast && h.d < 6)
         if (fastNear && now >= jukeNext) {
           const turn = (50 + Math.random() * 30) * Math.PI / 180
-          const side = [1, -1].map(sg => { const y = plan.yaw + sg * turn; const run = runLength(bot, { x: -Math.sin(y), z: -Math.cos(y) }, 4)
-            return { y, ok: run.len >= 3, cost: hs.reduce((a, h) => a + dangerAt(bot, run.end, h), 0) + Math.random() * 4 } })
+          const side = [1, -1].map(sg => { const y = plan.yaw + sg * turn; const run = runLength(bot, { x: -Math.sin(y), z: -Math.cos(y) }, 4, 3, arena)
+            return { y, ok: run.len >= 3 && insideArena(run.end, arena), cost: hs.reduce((a, h) => a + dangerAt(bot, run.end, h), 0) + Math.random() * 4 } })
             .filter(o => o.ok).sort((a, b) => a.cost - b.cost)[0]
           if (side) { jukeYaw = side.y; jukeUntil = now + 250 + Math.random() * 150; jukes++ }
           jukeNext = now + 400 + Math.random() * 500
@@ -422,7 +461,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
         bot.look(now < jukeUntil ? jukeYaw : plan.yaw, pitch, true).catch(() => {})
         const f = keyDir(bot, 'forward')
         const wet = inWater(bot)
-        set('forward', stepSafe(bot, f) || wet)
+        set('forward', (stepSafe(bot, f) || wet) && insideArena(bot.entity.position.offset(f.x, 0, f.z), arena))
         set('sprint', (bot.food ?? 20) > 6 && !wet)
         // Прыжок: стена по ходу или вода (всплыть).
         const ahead = bot.blockAt(bot.entity.position.offset(f.x * 0.8, 0, f.z * 0.8).floored())
@@ -432,10 +471,10 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       // Стрелы и шары — шаг в сторону поверх бега.
       const inc = threats.incoming(bot).filter(p => p.ticks <= 10)
       if (inc.length && now > dodgeUntil) {
-        dodgeKey = threats.dodgeKey(bot, inc[0], k => stepSafe(bot, keyDir(bot, k)))
+        dodgeKey = threats.dodgeKey(bot, inc[0], k => stepSafe(bot, keyDir(bot, k)) && insideArena(bot.entity.position.offset(keyDir(bot, k).x, 0, keyDir(bot, k).z), arena))
         if (dodgeKey) { dodgeUntil = now + 300; dodges++ }
       }
-      const dodging = dodgeKey && now < dodgeUntil
+      const dodging = dodgeKey && now < dodgeUntil && insideArena(bot.entity.position.offset(keyDir(bot, dodgeKey).x, 0, keyDir(bot, dodgeKey).z), arena)
       set('left', dodging && dodgeKey === 'left')
       set('right', dodging && dodgeKey === 'right')
 
@@ -453,7 +492,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
 // тик раньше удара), и отбрасываются лава, пустота и обрывы. Раньше бросок
 // шёл «под 20° в самую тихую сторону» — куда он ляжет на самом деле, никто не
 // считал.
-async function pearlOut (bot, hs) {
+async function pearlOut (bot, hs, arena = null) {
   const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl')
   if (!pearl) return null
   try {
@@ -463,6 +502,7 @@ async function pearlOut (bot, hs) {
       // В прыжке на месте, если так перенесёт в более тихое место (06.10: +0.42 к вертикали — на 30 % дальше).
       jump: 'auto',
       pick: throwMod.escapePick(bot, (tp) => {
+        if (!insideArena(tp, arena)) return -Infinity
         let cost = 0
         for (const h of hs) cost += dangerAt(bot, tp, h)
         return -cost
@@ -513,4 +553,4 @@ function mobAvoidance (bot) {
   }
 }
 
-module.exports = { smartFlee, hostilesAround, shaken, pickDirection, escapeRoute, edgeRisk, mobAvoidance, DOCTRINE, creeperSwelling }
+module.exports = { smartFlee, hostilesAround, shaken, pickDirection, escapeRoute, edgeRisk, enclosure, runLength, insideArena, mobAvoidance, DOCTRINE, creeperSwelling }

@@ -47,7 +47,7 @@ function botFor (version = '1.21.11') {
       isCollidedVertically: false, elytraFlying: false, yaw: 0, pitch: 0, effects: {} as Record<string, any>, attributes: {} as Record<string, any> }
   }
 }
-// The reviewed powder snow model (tick-plugins) adds its own two fields; everything else stays native.
+// Powder snow fields are independent of this native comparison; the scoped pose height is asserted explicitly.
 const plain = ({ ndInPowderSnow, ndLeatherBoots, ...state }) => ({ ...state, pos: { ...state.pos }, vel: { ...state.vel }, control: { ...state.control } })
 const boots = level => ({ nbt: { type: 'compound', value: { Enchantments: { type: 'list', value: { type: 'compound', value: [{ id: { type: 'string', value: 'minecraft:depth_strider' }, lvl: { type: 'short', value: level } }] } } } } })
 
@@ -62,7 +62,8 @@ test('scoped physics caches native metadata per version without retaining effect
       bot.inventory.slots[8] = level ? boots(level) : null
       bot.inventory.slots[6] = level ? { name: 'elytra' } : null
       const state = new scoped.PlayerState(bot, { ...IDLE })
-      assert.deepEqual(plain(state), plain(new native.PlayerState(bot, { ...IDLE })))
+      assert.equal(state.ndPoseHeight, 1.8, 'each standing state owns the real height independently of cached metadata')
+      assert.deepEqual(plain(state), { ...plain(new native.PlayerState(bot, { ...IDLE })), ndPoseHeight: 1.8 })
       assert.equal(state.speed, level)
       assert.equal(state.depthStrider, level)
       assert.equal(state.elytraEquipped, level !== 0)
@@ -94,7 +95,9 @@ test('scoped installed physics retains exact trajectories for full blocks, slabs
     for (let tick = 0; tick < 28; tick++) {
       nativePhysics.simulatePlayer(expected, world)
       scopedPhysics.simulatePlayer(actual, world)
-      assert.deepEqual(plain(actual), plain(expected), `${name}: tick ${tick + 1}`)
+      assert.equal(actual.ndPoseHeight, 1.8, `${name}: standing height remains on this state at tick ${tick + 1}`)
+      assert.equal(scopedPhysics.playerHeight, 1.8, 'per-state stance never changes the shared Physics height')
+      assert.deepEqual(plain(actual), { ...plain(expected), ndPoseHeight: 1.8 }, `${name}: tick ${tick + 1}`)
     }
   }
 })

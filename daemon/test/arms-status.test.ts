@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm'
 // Настоящий RPC handler без bootstrap демона, сокетов и подключения к миру.
 const indexPath = join(__dirname, '../src/index.js')
 const source = readFileSync(indexPath, 'utf8')
-const body = source.slice(source.indexOf('const methods = {'), source.indexOf('const wss ='))
+const body = source.slice(source.indexOf('function enchantedGear'), source.indexOf('const wss ='))
 function status(bot: any) {
   const methods = runInNewContext(body + '\nmethods', {
     session: { bot, immediate: (fn: any) => fn() }, cfg: {}, require: createRequire(indexPath)

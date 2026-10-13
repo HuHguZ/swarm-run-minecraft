@@ -4,13 +4,15 @@ const clock = require('../game-clock')
 const sky = require('../elytra')
 const Vec3 = require('vec3')
 
-export interface FlightRouteRequest { gates: FlightGate[]; landing: Position; timeoutSeconds?: number; gateSeconds?: number; rocketReserve?: number }
+export interface FlightRouteRequest { gates: FlightGate[]; landing: Position; timeoutSeconds?: number; gateSeconds?: number; rocketReserve?: number; arena?: import('./team-wind').WindArena }
 export async function runFlightRoute(session: any, ctl: { aborted: boolean }, params: FlightRouteRequest) {
   const bot = session.bot
   const graph = new FlightRouteGraph(params.gates)
   if (!Object.values(params.landing).every(Number.isFinite)) throw new Error('Flight route needs a finite landing point')
   const landing = new Vec3(params.landing.x, params.landing.y, params.landing.z)
-  const world = sky.worldOf(bot)
+  const inside = p => require('./team-wind').windInside(p, params.arena)
+  if (!inside(bot.entity.position) || !inside(landing) || params.gates.some(g => !inside(g.center))) throw new Error('Flight route outside arena')
+  const world = sky.worldOf(bot, { observed: !!params.arena })
   const floor = world.floorBelow(landing.x, landing.y, landing.z, 2)
   if (world.boxHit(landing.x, landing.y, landing.z, 1.8) || !floor || floor.lava || floor.water || Math.abs(floor.top - landing.y) > 1) throw new Error('Flight route landing is not loaded and clear')
   const first = graph.target()!
@@ -36,7 +38,7 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
     if (!sky.gliding(bot.entity)) {
       const rocket = bot.inventory.items().find(sky.plainRocket)
       if (rocket && !sky.plainRocket(bot.inventory.slots[45])) await bot.equip(rocket, 'off-hand')
-      const launch = await sky.takeoff(bot, ctl, { pitch: 1.0, yaw: Math.atan2(-(first.x - bot.entity.position.x), -(first.z - bot.entity.position.z)), stats: statistics })
+      const launch = await sky.takeoff(bot, ctl, { pitch: 1.0, yaw: Math.atan2(-(first.x - bot.entity.position.x), -(first.z - bot.entity.position.z)), stats: statistics, arena: params.arena })
       if (!launch.ok) throw new Error(launch.why)
     }
     const timeout = Math.max(10, Math.min(300, params.timeoutSeconds ?? 120)) * 1000
@@ -44,6 +46,7 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
       const index = graph.index
       const gate = graph.gates[index]
       const flight = await sky.fly(bot, ctl, {
+        arena: params.arena,
         maxMs: Math.max(2, Math.min(30, params.gateSeconds ?? 15)) * 1000,
         goal: () => {
           const target = graph.target()!
@@ -57,7 +60,7 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
       })
       if (graph.index === index) { stop = flight.why; break }
     }
-    const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: landing, maxMs: 12000, stats: statistics }) : { ok: false, why: 'interrupted' }
+    const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: landing, maxMs: 12000, stats: statistics, arena: params.arena }) : { ok: false, why: 'interrupted' }
     const position = bot.entity.position
     return { ok: graph.complete && landed.ok && !ctl.aborted, stopped: stop ?? (!graph.complete ? 'route incomplete' : !landed.ok ? landed.why : null),
       crossings: graph.crossings, expectedGates: graph.gates.length, collisionTicks, rockets: rocketBefore - sky.rocketCount(bot),

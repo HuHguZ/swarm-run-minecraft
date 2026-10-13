@@ -18,6 +18,7 @@
 // 27/27 к ногам в B (тест pen-trap.test).
 const { gameClock, countOf, Vec3, mobs, isBaby, aggressive, admiring, sleep, xyz, log, centerIn, unpackGold } = require('./take-gold-block')
 const PG = require('./predict-gold')
+const BF = require('../barter-flow')
 
 const ADMIRE_MS = 119 * 50 // PiglinAi.admireGoldItem: ADMIRING_ITEM на 119 тиков
 const FACES6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
@@ -243,7 +244,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
   const bot = session.bot
   const SL = require('../sealed')
   const t0 = gameClock.now()
-  const until = t0 + (opts.seconds ?? 240) * 1000
+  const until = opts.until ?? t0 + (opts.seconds ?? 240) * 1000
   const keep = opts.keep ?? 0
   const done = opts.done || (() => false)
   const r: any = { mode: 'pen', handed1: 0, handed3: 0, captured: 0, pearls0: countOf(bot, 'ender_pearl'), ingots0: countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block'), hpMin: bot.health ?? 20, phases: {} }
@@ -257,8 +258,29 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
   if (!SL.fillerName(bot) || SL.fillerCount(bot) < 2) { bot.removeListener('health', onHealth); return Object.assign(r, { ok: false, stopped: 'нет блоков заложить рот и клетку' }) }
   const J = throwJournal(bot)
   const handedAt = new Map()
+  const busyUntil = new Map()
   const eye = () => bot.entity.position.offset(0, 1.62, 0)
-  const adults = (rad = 16) => mobs(bot, 'piglin', rad).filter(e => !isBaby(bot, e))
+  const seenAdults = new Map()
+  const seenBabies = new Map()
+  const visible = e => PG.rayClear(require('../drops').blockGetter(bot), eye(), e.position.offset(0, PG.PIGLIN_EYE * (isBaby(bot, e) ? 0.5 : 1), 0))
+  const adults = (rad = 16) => mobs(bot, 'piglin', rad).filter(e => {
+    if (!visible(e)) return false
+    if (isBaby(bot, e)) { seenBabies.set(e.id, { id: e.id, position: e.position.clone(), width: e.width }); seenAdults.delete(e.id); return false }
+    seenBabies.delete(e.id)
+    seenAdults.set(e.id, { id: e.id, position: e.position.clone(), free: !aggressive(bot, e) && !admiring(e) })
+    return true
+  })
+  let standingAt = bot.entity.position.clone()
+  const canContinue = async () => {
+    if (ctl.aborted || session.bot !== bot || (bot.health ?? 20) <= 0) return false
+    if (gameClock.now() >= until) { r.stopped = 'время вышло'; return false }
+    if (opts.st && BF.enabled()) {
+      const G = require('../ne-guard')
+      if (G.busy(bot) || G.hot(bot)) { await G.react(session, ctl); r.stopped = 'страж изменил место'; return false }
+    }
+    if (bot.entity.position.distanceTo(standingAt) > 0.9) { r.stopped = 'ушёл из места бартера'; return false }
+    return true
+  }
   // Пересчёт через паузу: стопка при перекладке в руку на миг вне inventory.items() (s2b-alt03 k=5: «слитки кончились»
   // при 27 слитках сверх запаса — второй пакет потом расторговал ещё 86).
   const goldLeft = async () => {
@@ -271,11 +293,11 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     return false
   }
   try {
-    // capture: 'gather' (умолчание) — сперва торг из ямы с приманками на пол, пока у люка не соберутся взрослые (или
-    // вручённый не встанет над полосой), затем люки всех полос и приманки в траншею; 'lure' — люки сразу (арена
-    // s2-lure02 5/5, но в бастионе s2-bast01 никто не упал: слиток на дне траншеи виден только вблизи); 'freeze' —
-    // ловить вручённого над люком (s2-pen02 3/5: пол боковой полосы не виден из B, пиглин сходит с полосы).
-    const mode = opts.capture === 'lure' || opts.capture === 'freeze' ? opts.capture : 'gather'
+    adults()
+    // capture: 'lure' (умолчание) — открыть люки и приманить в траншею: вручённый вне полосы разглядывает золото
+    // 119 тиков и остаётся снаружи. Явный 'gather' сохраняет торг из ямы до сбора у люка (когда дно издалека не видно),
+    // 'freeze' — поимку вручённого над полосой. Готовый загон во всех вариантах сразу продолжает параллельный торг.
+    const mode = opts.capture === 'gather' || opts.capture === 'freeze' ? opts.capture : 'lure'
     const lureFirst = mode === 'lure'
     const openAll = mode !== 'freeze'
     r.capture = mode
@@ -304,11 +326,13 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     // вызов у этой же ямы (загон не закрылся) построил загон на готовых клетках.
     r.own = []
     for (const q of steps) {
+      if (!(await canContinue())) return r
       const s = await digSeen(bot, q)
       if (s !== 'ok' && s !== 'air') return Object.assign(r, { ok: false, stopped: `стройка: ${q.x},${q.y},${q.z} ${s}` })
       r.own.push(`${q.x},${q.y},${q.z}`)
     }
     for (const l of plan.lanes.filter(l => l.k)) {
+      if (!(await canContinue())) return r
       const s = await digSeen(bot, l.Z)
       if (s !== 'ok' && s !== 'air') { plan.lanes = plan.lanes.filter(x => x !== l); r.laneDropped = (r.laneDropped || []).concat(`${l.k}:${s}`) } else r.own.push(`${l.Z.x},${l.Z.y},${l.Z.z}`)
     }
@@ -349,6 +373,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     const since = new Map()
     let lastAct = catchFrom; let lures1 = r.lures1 || 0; const lures1Max = lures1 + 6; let lureAims = null
     while (ownLoop && !ctl.aborted && gameClock.now() < catchUntil) {
+      if (!(await canContinue())) return r
       if (done()) { r.stopped = 'цель'; break }
       if (!(await goldLeft())) { r.stopped = 'слитки кончились'; break }
       if ((bot.health ?? 20) < 8) { r.stopped = `хп ${Math.round(bot.health)}`; break }
@@ -363,12 +388,12 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
         nearN = adults(12).filter(e => !aggressive(bot, e) && e.position.distanceTo(T0) <= (opts.gatherRadius ?? 4)).length
         if (nearN >= (opts.gatherNear ?? 2)) { r.stopped = undefined; break }
       }
-      if (mobs(bot, 'piglin_brute', 8, V(plan.lanes[0].T)).length) { await sleep(500); continue }
+      if (mobs(bot, 'piglin_brute', 8, V(plan.lanes[0].T)).some(visible)) { await sleep(500); continue }
       const e0 = eye()
-      const ready = adults(8).filter(e => !aggressive(bot, e) && !admiring(e) && PG.rayClear(gb, e0, e.position.offset(0, 1.6, 0)) && PG.throwLands(bot, e.position, bot.entity.position, gb).ok)
+      const ready = adults(8).filter(e => BF.ready(bot, e, busyUntil) && PG.rayClear(gb, e0, e.position.offset(0, 1.6, 0)) && PG.throwLands(bot, e.position, bot.entity.position, gb).ok)
         .sort((a, b) => Number(inStrip(plan, b)) - Number(inStrip(plan, a)) || PG.distToBox(e0, a) - PG.distToBox(e0, b))
       const pg = await handOne(bot, ready, e0)
-      if (pg) { handedAt.set(pg.id, gameClock.now()); r.handed1++; lastAct = gameClock.now() } else if (gameClock.now() - lastAct > 15000 && lures1 < lures1Max) {
+      if (pg) { handedAt.set(pg.id, gameClock.now()); busyUntil.set(pg.id, gameClock.now() + ADMIRE_MS); r.handed1++; lastAct = gameClock.now() } else if (gameClock.now() - lastAct > 15000 && lures1 < lures1Max) {
         // 15 с никого в руке — приманка на пол у рта (прицелы ямы pitLures: бросок подобравшего долетит к нам).
         lureAims = lureAims || PG.pitLures(bot, bo)
         const L = lureAims.find(x => x.score >= 5)
@@ -384,6 +409,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     if (mode === 'gather' && nearN < (opts.gatherNear ?? 2)) { r.ok = true; r.penned = false; r.stopped = r.stopped || (r.patience ? r.patience.after + '; к люку не собрались' : 'к люку не собрались'); return r }
     // 3. Поимка: рот закрыть, шаг в B, закрыть P, сломать пол под замершими.
     const tc = gameClock.now()
+    if (!(await canContinue())) return r
     if (!(await SL.fillCell(bot, V(plan.M)))) { r.ok = false; r.stopped = 'рот не закрылся'; return r }
     const { stepCell } = require('./booth-trade')
     // Ноги на песке душ — на 0.125 ниже клетки (как sealed.feetCell).
@@ -401,6 +427,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
       await centerIn(bot, V(plan.Bf), 1500)
     }
     if (!inCell(plan.Bf)) return undo('в B не шагнул')
+    standingAt = V(plan.Bf).offset(0.5, 0, 0.5)
     // Рамка тела ещё на краю P (центровка не успела) — сервер не ставит блок в тело: центровать и повторить
     // (s2b-alt03 k=13: «клетка P не закрылась» при закрытом рте).
     let pFilled = false
@@ -411,6 +438,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     if (!pFilled) return undo('клетка P не закрылась')
     if (openAll) {
       for (const l of plan.lanes) {
+        if (!(await canContinue())) return r
         const s = await digSeen(bot, l.Y)
         if (s === 'ok' || s === 'air') broke.add(l.k); else r.trapdoor = (r.trapdoor || []).concat(`${l.k}:${s}`)
       }
@@ -420,7 +448,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
       if (!bot.entities[e.id] || !inStrip(plan, e)) continue
       for (const l of lanesUnder(plan, e)) {
         if (broke.has(l.k)) continue
-        if (mobs(bot, 'piglin', 6).some(b => isBaby(bot, b) && lanesUnder(plan, b).includes(l))) continue
+        if ([...seenBabies.values()].some(b => lanesUnder(plan, b).includes(l))) continue
         const s = await digSeen(bot, l.Y)
         if (s === 'ok' || s === 'air') broke.add(l.k); else r.trapdoor = (r.trapdoor || []).concat(`${l.k}:${s}`)
       }
@@ -437,10 +465,12 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     const tt = gameClock.now()
     let lastPen = tt + (lureFirst ? Math.max(0, (opts.catchSeconds ?? 90) * 1000 - 20000) : openAll ? 40000 : 0)
     let lastLure = 0
+    let penAtLure = r.captured
     r.lures = 0; r.penMax = r.captured
     const open = [...broke]
     const isIngot = e => { try { const d = e.getDroppedItem && e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } }
     while (!ctl.aborted && gameClock.now() < until - 3000) {
+      if (!(await canContinue())) return r
       if (done()) { r.stopped = 'цель'; break }
       if (!(await goldLeft())) { r.stopped = 'слитки кончились'; break }
       if ((bot.health ?? 20) < 8) { r.stopped = `хп ${Math.round(bot.health)}`; break }
@@ -455,25 +485,33 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
         const ta = trenchAim(bot, plan, open, require('../drops').blockGetter(bot))
         if (ta) for (const it of PG.pitJunk(bot)) { try { await bot.lookAt(ta.aim, true); await sleep(80); await bot.tossStack(it); r.junked = (r.junked || 0) + it.count } catch {} }
       }
-      const free = pen.filter(e => !aggressive(bot, e) && !admiring(e))
+      const free = pen.filter(e => BF.ready(bot, e, busyUntil))
       let n = 0
-      for (const pg of free) if (await handOne(bot, [pg], eye())) { n++; r.handed3++ }
+      for (const pg of free) {
+        if (!(await canContinue())) return r
+        if (done()) { r.stopped = 'цель'; break }
+        if (!(await goldLeft())) { r.stopped = 'слитки кончились'; break }
+        if (!(await canContinue())) return r
+        if (await handOne(bot, [pg], eye())) { busyUntil.set(pg.id, gameClock.now() + ADMIRE_MS); n++; r.handed3++ }
+      }
       // Пополнение (приём спидраннеров «скинуть в яму»): все в загоне разглядывают — второй слиток они не поднимут
       // (PiglinAi.wantsToPickup: золото в левой руке), малышей в загоне нет, снаружи взрослый в 9 бл. (GoToWantedItem 9)
       // — слиток в траншею: он пойдёт за ним и упадёт в загон.
-      if (opts.refill !== false && !n && !free.length && pen.length < (opts.penMax ?? 6) && gameClock.now() - lastLure > 8000) {
+      // Новый взрослый уже упал за прошлой приманкой: можно собирать следующего, пока пойманные заняты золотом.
+      if (opts.refill !== false && !n && !free.length && pen.length < (opts.penMax ?? 6) && (gameClock.now() - lastLure > 8000 || pen.length > penAtLure)) {
         const Zc = V(plan.lanes.find(l => l.k === 0).Z).offset(0.5, 0, 0.5)
-        const babyIn = mobs(bot, 'piglin', 8).some(e => isBaby(bot, e) && inPen(plan, e))
+        const babyIn = [...seenBabies.values()].some(e => inPen(plan, e))
         const lying = (Object.values(bot.entities) as any[]).some(e => e.name === 'item' && e.position && inPen(plan, e) && isIngot(e))
-        const outside = adults(14).filter(e => !inPen(plan, e) && !aggressive(bot, e) && !admiring(e) && e.position.distanceTo(Zc) <= 9)
+        // За закрытым ртом — только последние увиденные позиции, без живого рентгена.
+        const outside = [...seenAdults.values()].filter(e => !inPen(plan, e) && e.free && e.position.distanceTo(Zc) <= 9)
         // Малыш ближе к траншее, чем ближайший взрослый, и в 5 бл. — успеет первым, слиток пропадёт; ждём (s2-lure06:
         // прежнее «малыш в 5 бл.» держало загон на 5–8 при 369–582 ожиданиях).
         const nearestAdult = Math.min(...outside.map(e => e.position.distanceTo(Zc)))
-        const babyNear = mobs(bot, 'piglin', 14).some(e => isBaby(bot, e) && !inPen(plan, e) && e.position.distanceTo(Zc) <= Math.min(5, nearestAdult + 0.5))
+        const babyNear = [...seenBabies.values()].some(e => !inPen(plan, e) && e.position.distanceTo(Zc) <= Math.min(5, nearestAdult + 0.5))
         if (babyNear && !babyIn && !lying && outside.length) r.lureBabyWait = (r.lureBabyWait || 0) + 1
         if (!babyIn && !babyNear && !lying && outside.length) {
           const ta = trenchAim(bot, plan, open, require('../drops').blockGetter(bot))
-          if (ta && await PG.tossOut(bot, plan, 'gold_ingot', 1, ta.aim)) { r.lures++; lastLure = gameClock.now() }
+          if (ta && await canContinue() && await PG.tossOut(bot, plan, 'gold_ingot', 1, ta.aim)) { r.lures++; lastLure = gameClock.now(); penAtLure = pen.length }
           else if (!ta) r.lureNoAim = (r.lureNoAim || 0) + 1
         }
       }
@@ -486,8 +524,8 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     return r
   } finally {
     // Последние сделки: добыча разглядывающих прилетит через ≤6 с, плюс задержка подбора.
-    for (let i = 0; i < 14 && !ctl.aborted && mobs(bot, 'piglin', 8).some(e => admiring(e)); i++) await sleep(500)
-    await sleep(1500)
+    for (let i = 0; i < 14 && !ctl.aborted && gameClock.now() < until && adults(8).some(e => admiring(e)); i++) await sleep(Math.min(500, until - gameClock.now()))
+    if (!ctl.aborted && gameClock.now() < until) await sleep(Math.min(1500, until - gameClock.now()))
     J.stop()
     bot.removeListener('health', onHealth)
     r.seconds = +((gameClock.now() - t0) / 1000).toFixed(1)
@@ -533,9 +571,9 @@ function penCheck (bot, bo, own = undefined) {
 // подключение — замена boothTrade на trade для ям: penned говорит, закрылся ли загон.
 async function trade (session, ctl, st, bo, until, { keep = 8, done = () => false, want, refill, penMax, capture, patience }: any = {}) {
   const own = st && st.sealedState && st.sealedState.own
-  const seconds = Math.max(20, (until - gameClock.now()) / 1000)
+  const seconds = Math.max(0, (until - gameClock.now()) / 1000)
   const ready = penHere(session.bot)
-  const r = await penTrade(session, ctl, ready || bo, { plan: ready || undefined, seconds, keep, done, want, refill, penMax, capture, patience, st, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
+  const r = await penTrade(session, ctl, ready || bo, { plan: ready || undefined, until, seconds, keep, done, want, refill, penMax, capture, patience, st, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
   if (own && r.own) for (const key of r.own) own.add(key)
   if (!ready && r.ok === false && !r.spent && /^(загон не строится|нет блоков)/.test(r.stopped || '')) {
     const bt = await require('./booth-trade').boothTrade(session, ctl, st, bo, until, { keep, done })

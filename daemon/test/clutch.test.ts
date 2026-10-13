@@ -53,6 +53,20 @@ for (const h of [8, 20, 30]) test(`стена, падение ${h}: ранняя
   assert.equal(r.plans[0].face.x, 1)
   assert.ok(r.fall <= 3, JSON.stringify(r))
 })
+test('soul sand wall exposes a legal side face for a full rescue block', () => {
+  const m = model(p => p.x === -1 || p.y < 0 ? 'soul_sand' : 'air')
+  const s = state(new Vec3(0.5, 20, 0.5))
+  const r = flight(m, s)
+  assert.ok(r.plans.length > 0, 'the partial wall is a clickable placement reference')
+  assert.equal(m.world.getBlock(r.plans[0].ref).name, 'soul_sand')
+  assert.equal(r.plans[0].face.x, 1)
+  assert.ok(r.fall <= 3, JSON.stringify(r))
+})
+test('soul sand behind a full glass wall cannot supply a rescue face', () => {
+  const m = model(p => p.x === -1 ? 'soul_sand' : p.x === 0 ? 'glass' : 'air')
+  const s = state(new Vec3(1.5, 20, 0.5))
+  assert.equal(m.api.plan({ state: s, world: m.world, peak: 20, canReference: b => b.name === 'soul_sand' }), null)
+})
 test('край, скорость (0.4,0.4,0): видимая цепочка <=3 блоков держит высоту', () => {
   const m = model(p => p.x <= 0 && p.y === 19 || p.y < 0 ? 'stone' : 'air')
   const s = state(new Vec3(0.85, 20, 0.5), new Vec3(0.4, 0.4, 0))
@@ -156,6 +170,49 @@ function installFake (m, s, extra: any = {} as Record<string, any>) {
   const guard = clutch.install({ bot }, { Vec3, PlayerState, faceAim: pick.faceAim, makeBlock: p => block('cobblestone', p), hand, ...extra })
   return { bot, guard }
 }
+
+test('the shared Emergency lease preserves knockback clutch steering until the forecast landing', async () => {
+  const clock = require('../src/game-clock')
+  const locks = require('../src/reflex-lock')
+  const c = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
+  const m = model(p => p.x <= 0 && p.y === 19 || p.y < -7 ? 'stone' : 'air')
+  const bot = fakeBot(m, state(new Vec3(.804745268, 20.682234606, .962509927), new Vec3(.280162804, .523314686, .009144443)), [
+    { name: 'cobblestone', count: 64, slot: 36 }
+  ])
+  bot.equip = async () => {}; bot.activateItem = () => {}; bot.deactivateItem = () => {}
+  bot.clearControlStates = () => { for (const key of Object.keys(IDLE)) bot.setControlState(key, false) }
+  bot.pathfinder = { setGoal: () => {}, isMoving: () => false }
+  const session: any = { bot, current: null }
+  locks.install(session)
+  const guard = require('../src/edges').installFallGuard(session).clutch
+  const actions: any[] = []
+  let landingTick = 0
+  bot.on('nd_clutch', action => {
+    actions.push(action)
+    if (action.what === 'placed') landingTick = c.ticks + action.landTick
+  })
+  let peak = 20; let landed = false
+  try {
+    for (let tick = 0; tick < 80; tick++) {
+      const next = new PlayerState(bot, bot.controlState)
+      m.physics.simulatePlayer(next, m.world); next.apply(bot)
+      peak = Math.max(peak, next.pos.y)
+      bot.emit('physicsTick'); bot.emit('move')
+      for (const pending of [...guard.pending.values()]) bot._client.emit('block_change', { location: pending.cell, type: pending.stateId })
+      c.advanceTicks(1)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      if (!next.onGround && c.ticks < landingTick) {
+        assert.equal(locks.owner(session)?.owner, 'Emergency', 'a click acknowledgement is not the forecast airborne landing')
+      }
+      if (next.onGround) { landed = true; break }
+    }
+    assert.ok(actions.some(action => action.what === 'placed'), 'the shared controller actually places a legal block')
+    assert.equal(landed, true)
+    assert.ok(peak - bot.entity.position.y <= 3, JSON.stringify({ at: bot.entity.position, actions }))
+  } finally {
+    guard.stop(); locks.cancel(session); await session.reflex; bot.emit('end'); c.dispose()
+  }
+})
 
 test('shared fall steering rescues into observed existing water without a bucket or block', () => {
   const m = model(p => p.y < 0 ? 'stone' : p.x === 0 && p.y === 0 && p.z === 0 ? 'water' : 'air')
@@ -631,4 +688,41 @@ test('s1f: хотбар полон (без блоков) — блоки для �
       assert.deepEqual(moves, off ? [] : [[10, 40]], off ? 'выключено — как было (no_bar_slot)' : 'кобблстоун — на место золота')
     } finally { if (old === undefined) delete process.env.ND_CLUTCH_SWAP; else process.env.ND_CLUTCH_SWAP = old }
   }
+})
+
+
+test('a predicted brief floor touch cannot suppress the second block needed to stop coasting over a cliff', () => {
+  const cells = new Map(require('./fixtures/clutch-coasting-z21-1.21.11.json').map(a => [a.slice(0, 3).join(','), a[3]]))
+  // Captured after the fatal run: undo only its own first rescue block in this
+  // isolated model, then replay the actual recorded pose and native velocity.
+  cells.delete('-108,95,46')
+  const m = model(() => 'air')
+  const read = m.world.getBlock
+  m.world.getBlock = p => {
+    const id = cells.get(key(p))
+    if (id == null) return read(p)
+    const b = Block.fromStateId(id, 0); b.position = p.floored(); return b
+  }
+  let time = 0
+  const s = state(new Vec3(-107.30000001192093, 96.6281999805212, 46.01764633725686), new Vec3(0, .24813599859094576, .19974010512811655))
+  const { bot, guard } = installFake(m, s, { now: () => time, listen: false, prepare: false })
+  const placements = []
+  bot.on('nd_clutch', e => { if (e.what === 'placed') placements.push(e.cell) })
+  const step = () => {
+    guard.step(); bot.emit('move')
+    for (const p of guard.pending.values()) bot._client.emit('block_change', { location: p.cell, type: p.stateId })
+  }
+  try {
+    step()
+    for (let tick = 0; tick < 30; tick++) {
+      const next = new PlayerState(bot, bot.controlState)
+      m.physics.simulatePlayer(next, m.world); next.apply(bot)
+      time += 50; step()
+    }
+    assert.equal(bot.entity.onGround, true, 'the two-frame contact in the original run ended in another 27-block fall')
+    assert.ok(bot.entity.position.y >= 96, 'the rescue must retain the cliff height after neutral braking')
+    assert.deepEqual(placements[0], new Vec3(-108, 95, 46))
+    assert.ok(placements.length > 1 && placements.length <= 3, 'revalidate and place the necessary visible extension before feet enter it')
+    assert.equal(guard.stats.saved, 1, 'completion requires the confirmed physical landing')
+  } finally { guard.stop() }
 })

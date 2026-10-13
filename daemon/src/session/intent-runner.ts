@@ -2,9 +2,51 @@
 const gameClock = require('../game-clock')
 const gear = require('../preflight')
 const { resultCode } = require('./results')
+const { INTERRUPTING } = require('../events')
+// ND_CHAT_INTERRUPT=0 — чат не рвёт работу (совместная игра 10.10: человек пишет, кампания идёт, а не «стоишь и тупишь»);
+// строки чата приезжают в событиях результата, wait по-прежнему будится чатом.
+const chatOff = process.env.ND_CHAT_INTERRUPT === '0'
+// Уворот не перебивается обычным приказом (12.10, арена: бой, баф, лут драйвера рвали рывок от зелья и стрел — бот
+// стоял под брызгами): новый ждёт конца уворота (он короткий: рывок ≤ 1.5 с, джук ≤ 4 с), stop — рвёт как раньше.
+// Тот же набор, что reflex-lock COMMANDED_ESCAPE: ветер/жемчуг/элитры тоже рвались боем драйвера до старта (roof-free-1).
+const DODGES = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
 
 async function runIntent (this: any, name, worker, { exclusive = true, interruptible = true, timeoutMs = 120000, interruptOn = null, params = null }: any = {}) {
-    if (exclusive && this.tactics?.enabled()) await this.tactics.waitForRelease()
+    // Уворот не ждёт тактики (12.10: «ест/пьёт зелье — булавой ваншотаю, ноль реакции»; mace-6: рывок стоял в очереди за
+    // щитом/едой тактики и начинался за 6 тиков до удара): неаварийный рефлекс снимается сразу, аварийный (падение, лава) —
+    // дождаться; остальные приказы — как раньше, после тактики.
+    // stop must also cancel a queued RPC before it owns a worker controller.
+    const cancelled = Symbol('cancelled before start')
+    let stopped = false, cancelPrestart
+    const abort = new Promise(resolve => { cancelPrestart = () => { stopped = true; resolve(cancelled) } })
+    const waiting = this._prestartIntents ||= new Set()
+    waiting.add(cancelPrestart)
+    const beforeStart = async promise => {
+      const value = await Promise.race([promise, abort])
+      if (stopped) throw cancelled
+      return value
+    }
+    try {
+    if (DODGES.test(name)) {
+      const rl = require('../reflex-lock'); const o = rl.owner(this); if (o && o.owner !== 'Emergency') rl.cancel(this)
+      while (rl.owner(this)?.owner === 'Emergency' && this.reflex) await beforeStart(this.reflex)
+    } else if (exclusive && this.tactics?.enabled()) await beforeStart(this.tactics.waitForRelease())
+    const cur = this.current
+    // Спасаюсь из пропасти на элитрах (rescue) — его не рвёт ничто, кроме stop (13.10: подстрелил — рывок от следующей
+    // стрелы отменил полёт, и бот упал).
+    if (cur && cur.name === 'fly_to' && cur.params?.rescue && cur.ctl && !cur.ctl.aborted) return { status: 'failed', error: 'спасаюсь на элитрах', code: 'RESCUE_BUSY' }
+    if (exclusive && !DODGES.test(name) && cur && DODGES.test(cur.name) && cur.ctl && !cur.ctl.aborted && cur.done) await beforeStart(cur.done.catch(() => {}))
+    if (stopped) throw cancelled
+    } catch (err) {
+      if (err !== cancelled) throw err
+      const result: any = { status: 'interrupted', by: { type: 'cancelled' }, notStarted: true,
+        events: this.bus.drain(), state: this.state() }
+      result.code = resultCode(result)
+      return result
+    } finally {
+      // The exclusive commit below cancels other intents, never this one.
+      waiting.delete(cancelPrestart)
+    }
     // Директор (director.js) не рвёт mc_wait мозга: мозг ждёт и слушает, пока
     // директор работает, и прерывания будят его как обычно.
     const fromDirector = require('../director').byDirector()
@@ -17,6 +59,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
       if (ctl.aborted) return
       ctl.aborted = true
       for (const fn of ctl.onAbort) { try { fn() } catch {} }
+      if (exclusive) reflexLock.releaseIntent(this, ctl)
     }
     const beside = !exclusive && this.current && this.current.name !== 'wait' && this.current.ctl && !this.current.ctl.aborted
     if (!beside) this.current = { name, ctl, byDirector: fromDirector, params }
@@ -43,6 +86,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
         async detail => { if (!ctl.aborted) await ctl.waitReflex(); return { status: 'done', detail: detail ?? null } },
         err => ({ status: 'failed', error: String((err && err.message) || err), ...(err && typeof err.code === 'string' && /^[A-Z][A-Z_]+$/.test(err.code) ? { code: err.code } : {}) })
       ).catch(err => ({ status: 'failed', error: String(err?.message || err), ...(err?.code ? { code: err.code } : {}) }))
+    if (!beside) this.current.done = work
 
     // stop/disconnect must answer even when gameplay timers are frozen.
     const racers = [work, new Promise(resolve => {
@@ -52,7 +96,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     if (interruptible) {
       let waiter
       const next = async () => {
-        waiter = this.bus.nextInterrupt(interruptOn)
+        waiter = this.bus.nextInterrupt(chatOff && name !== 'wait' ? [...(interruptOn || INTERRUPTING)].filter(t => t !== 'chat') : interruptOn)
         const ev = await waiter
         // A melee reflex is a pause, not a worker cancellation. Other events
         // (chat/death/end and environmental damage) keep their normal semantics.

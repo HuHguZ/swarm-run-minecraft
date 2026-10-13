@@ -12,6 +12,23 @@ function routeInfoGet () {
   return ctx.routeInfoV ?? null
 }
 let seenSky = null
+// Keep an actual unfinished fight across strategy interruptions. A failed retreat
+// is not a completed escape (S23: the next filler mine dismantled the perch).
+let golemEncounter: { to: { x: number, z: number } } | null = null
+async function retreatFromGolem () {
+  const to = golemEncounter?.to
+  if (!to) return true
+  const r = await ctx.act('goto', { ...to, range: 6, timeoutSeconds: 40, retreat: true, sprint: true })
+  await ctx.refresh()
+  if (r.status !== 'done' || !ctx.state.pos || Math.hypot(ctx.state.pos.x - to.x, ctx.state.pos.z - to.z) > 6) return false
+  const o = await ctx.act('observe', { radius: 32 })
+  const entities = o.detail?.entities
+  // Mob1.21.11's default follow range is 16; IronGolem does not override it.
+  // Check the actual visible pursuer after arrival, not just displacement from home.
+  if (!Array.isArray(entities) || entities.some(e => /iron[ _]?golem/i.test(String(e.name || '')) && e.dist <= 16)) return false
+  golemEncounter = null
+  return true
+}
 // Лава, замеченная шагами маршрута (explore/observe/штрек): known.lava меняется только на БЛИЖНЮЮ, а после неудачи у первой
 // нужна любая другая (S8c, s8c-f-v1-13).
 const seenLavas = []
@@ -657,6 +674,11 @@ async function nearTrunk (t, timeoutSeconds) {
 
 async function routeStep (s) {
   await ctx.refresh()
+  if (golemEncounter && ctx.state.pos) {
+    const g = await ctx.act('golem', { mode: 'kill', radius: 64, timeoutSeconds: 30, angry: true })
+    if (g.detail?.killed) golemEncounter = null
+    else if (!(await retreatFromGolem())) return false
+  }
   const ironNow = () => ctx.have('iron_ingot') + ctx.have('raw_iron') + Math.floor(ctx.have('iron_nugget') / 9)
   // S8d: гравий в рюкзаке (колодец, штрек, пещера) — кремень сразу, ~15 с, а не на шаге flint через 5–8 мин (s8d-a-v1-3: гравий ×5
   // с 3-й мин, кремень искали с 11-й — ночью). ND_ROUTE_EARLYFLINT=0 — выкл.
@@ -797,19 +819,25 @@ async function routeStep (s) {
         const g = await ctx.act('golem', { mode: 'kill', radius: 64, timeoutSeconds: 85, ...(angry ? { angry: true } : {}) })
         const d = g.detail || {}
         angry = angry || ((d.hits || 0) > 0 && !d.killed)
+        if (d.killed) golemEncounter = null
+        else if ((d.hits || 0) > 0 && ctx.state.pos && !golemEncounter) {
+          const me = ctx.state.pos, az = me.z - s.at.z, ax = me.x - s.at.x || (az ? 0 : 1), n = Math.hypot(ax, az)
+          golemEncounter = { to: { x: Math.round(me.x + ax / n * 40), z: Math.round(me.z + az / n * 40) } }
+        }
         ctx.rlog(`голем: ${d.killed ? 'убит' : 'жив'}, ударов ${d.hits ?? 0}${d.blocked ? ` (мимо прицела ${d.blocked})` : ''}, железа +${d.iron ?? 0}${d.hpLost ? `, урон ${d.hpLost}` : ''}${d.stopped ? `; ${d.stopped}` : ''}${Array.isArray(d.steps) ? ` [${d.steps.slice(-5).join(' / ')}]` : ''}`)
         if (d.killed || ctx.died) break
+        // The unchanged canopy/fence geometry cannot improve between identical calls.
+        // Try the village's other resources; a later view may offer a new supported perch.
+        if (d.noSpot && !angry) break
         // S8d (замечание «д»): голем злой и достаёт тело (урон за заход или хп < 16 — столб не держит: s8c-g-s1-1, s2-5, s2-8 — 3
         // смерти, у всех удары по голему с уроном 8–19 до гибели) — уход от деревни, а не следующий бой. Удар голема на normal 7.5–21.5:
         // ещё один заход с таким столбом — ставка жизнью (риск × 3600 с) против копки (~460 с). ND_ROUTE_GOLEM_FREE=1 — прежнее.
         if ((d.hits || 0) > 0 && ((d.hpLost || 0) > 0 || (ctx.state.health ?? 20) < 16) && ctx.process.env.ND_ROUTE_GOLEM_FREE !== '1') {
           await ctx.refresh()
-          const me = ctx.state.pos
-          if (me) {
-            const ax = me.x - s.at.x, az = me.z - s.at.z, n = Math.hypot(ax, az) || 1
-            const to = { x: Math.round(me.x + ax / n * 40), z: Math.round(me.z + az / n * 40) }
+          const to = golemEncounter?.to
+          if (to) {
             ctx.rlog(`голем злой и достаёт (хп ${Math.round(ctx.state.health ?? 0)}) — ухожу от деревни к ${to.x},${to.z}`)
-            await ctx.act('goto', { x: to.x, z: to.z, range: 6, timeoutSeconds: 40, retreat: true })
+            await retreatFromGolem()
           }
           return false
         }
@@ -821,6 +849,7 @@ async function routeStep (s) {
           await ctx.act('observe', { radius: 48 })
         }
       }
+      if (golemEncounter && !(await retreatFromGolem())) return false
       await ctx.act('structure', { mode: 'explore', kind: 'village', x: s.at.x, z: s.at.z, ...(Number.isFinite(s.at.y) ? { y: s.at.y } : {}), fromMap: true, maxDistance: 120, beds: 1, timeoutSeconds: 100 })
       if (ctx.died) return false
       await ctx.sense()
@@ -1190,7 +1219,8 @@ async function routeStep (s) {
         now: () => ctx.gameClock.now(), position: () => ctx.state.pos,
         scan: async () => { await ctx.act('structure', { mode: 'scan', radius: 96 }) },
         list: async () => (await ctx.act('structure', { mode: 'list' })).detail?.known || [],
-        explore: async (direction, timeoutSeconds) => { await ctx.act('explore', { block: 'bell,chest,barrel', radius: 48, stepDistance: 60, direction, timeoutSeconds, dry: true }) },
+        explore: async (direction, timeoutSeconds) => (await ctx.act('explore', { block: 'bell,chest,barrel', radius: 48, stepDistance: 60, direction, timeoutSeconds, dry: true, surface: true, unlootedContainers: true })).detail,
+        loot: async (at, timeoutSeconds) => Object.values((await ctx.act('loot', { ...at, visibleOnly: true, timeoutSeconds })).detail?.took || {}).some(n => Number(n) > 0),
         move: async (at, timeoutSeconds) => { await ctx.act('goto', { ...at, range: 6, surface: 'strict', timeoutSeconds }) },
         interrupted: () => ctx.died, fact: () => {}, log: m => ctx.rlog(m)
       }, 0, 150000)
@@ -1322,7 +1352,6 @@ async function routeStep (s) {
     case 'light': {
       if (!ctx.routeFrame) return false
       if (!ctx.lighter() && !ctx.have('iron_ingot') && ctx.have('raw_iron')) { await ctx.smeltAll('raw_iron', 'iron_ingot', { fetchCoal: false, max: 1 }); await ctx.refresh() }
-      if (!ctx.lighter() && !ctx.have('flint')) ctx.flintTries = Math.min(ctx.flintTries, 1)
       if (!ctx.lighter() && !ctx.have('flint') && ctx.have('gravel')) await ctx.routeFlintFromBag()
       if (!ctx.lighter()) { await ctx.ensureFlint(); await ctx.refresh(); if (!ctx.lighter() && ctx.have('flint') && ctx.have('iron_ingot')) await ctx.craft('flint_and_steel'); await ctx.refresh() }
       if (!ctx.lighter()) return false

@@ -61,3 +61,44 @@ test('entering a portal is a protected escape: tactics below level 3 does not in
 test('the bastion skill owns its encounters below level 3 (s1c: 96 tactical interrupts in 27 std runs)', () => {
   assert.equal(observeTactics(session('bastion')).protectedEncounter, true)
 })
+
+function bastionUnderGhastShot() {
+  const s: any = session('bastion')
+  const clock = require('../src/game-clock')
+  s.bot.entities[2] = { id: 2, name: 'ghast', position: new Vec3(45.5, 64, .5), height: 4, width: 4, isValid: true, metadata: [] }
+  s.autopilot = { lastHurt: { at: clock.now(), type: 'fireball', byMob: true, sourceId: 2, dimension: 'the_nether' } }
+  return s
+}
+
+test('a visible ghast shooting at a bastion survey is handled by tactics before health becomes critical', () => {
+  const s = bastionUnderGhastShot()
+  const state = observeTactics(s)
+  assert.equal(state.health, 20)
+  assert.ok(state.enemies.some((e: any) => e.kind === 'ghast'))
+  assert.equal(state.protectedEncounter, false)
+  const read = s.bot.blockAt
+  s.bot.blockAt = (p: any) => p.x >= 1 && p.x < 2 && p.y >= 64
+    ? { name: 'stone', boundingBox: 'block', position: p.floored(), shapes: [[0, 0, 0, 1, 1, 1]] } : read(p)
+  assert.equal(observeTactics(s).protectedEncounter, true, 'a ghast hidden by the completed cover does not interrupt the skill')
+})
+
+test('a bastion survey yields its hands to a level-2 incoming ghast shot', async () => {
+  const { TacticalSystem } = require('../src/tactics/minecraft')
+  const s = bastionUnderGhastShot()
+  const state = { ...observeTactics(s), incomingProjectiles: 1, shield: true }
+  s.bot.pathfinder = { setGoal: () => {}, setMovements: () => {}, stop: () => {} }
+  s.bot.clearControlStates = () => {}
+  let aborted = false
+  s.current.ctl = { aborted: false, onAbort: [], abort() { this.aborted = true; aborted = true } }
+  const chosen: string[] = []
+  const tactics = s.tactics = new TacticalSystem(s, { observe: () => state, record: () => {} })
+  tactics.execute = (action: any) => { chosen.push(action.id); return Promise.resolve({ blocked: true }) }
+  try {
+    tactics.attach(s.bot)
+    tactics.update(true)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(tactics.snapshot().threatLevel, 2)
+    assert.equal(aborted, true)
+    assert.deepEqual(chosen, ['Shield'])
+  } finally { tactics.detach() }
+})

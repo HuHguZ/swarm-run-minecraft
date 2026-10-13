@@ -12,18 +12,24 @@ async function hunt ({ name = 'cow', distance = 14, dead = true, clearArea }: an
   const realRequire = createRequire(file)
   const entity = { name, position: new Vec3(distance, 65, 0), isValid: true }
   const items = []
-  const calls: Record<string, any> = { loot: 0 }
-  const bot = { entity: { position: new Vec3(0, 65, 0) }, inventory: { items: () => items } }
+  const calls: Record<string, any> = { loot: 0, pickupClosed: 0 }
+  const bot = { health: 20, entity: { position: new Vec3(0, 65, 0) }, inventory: { items: () => items } }
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, Date,
     require: n => {
       const actual = realRequire(n)
       if (n === './movement') return { ...actual, inWater: () => false }
       if (n === './items') return { ...actual, bestWeapon: () => null }
+      if (n === './combat-safety') return { ...actual, safeGround: () => true }
+      if (n === './tempo') return { ...actual, track: (_b, options) => {
+        assert.deepEqual(Array.from(options.threats()), [])
+        return { safe: () => ({ ok: true }), close: () => { calls.pickupClosed++ } }
+      } }
       if (n === './pvp') return { ...actual, duel: async (_s, _c, _e, p) => {
         calls.clearArea = p.clearArea
         return { kills: dead ? [name] : [] }
       } }
       if (n === './actions') return { ...actual, collectNearbyDrops: async (_b, _c, p) => {
+        assert.equal(p.canContinue(), true, 'isolated safe pickup must honour the continuation contract')
         calls.loot++; calls.radius = p.radius
         if (p.radius >= distance) items.push({ name: 'beef', count: 1 })
       } }
@@ -37,7 +43,8 @@ async function hunt ({ name = 'cow', distance = 14, dead = true, clearArea }: an
   `, context)
   const result = await context.module.exports.testFight({ bot }, { aborted: false }, { target: name, clearArea },
     // Эти тесты изолируют подбор; решение о риске проверяется отдельно.
-    { watch () {}, sawMobs () {}, wear: async () => {}, safety: { check: () => ({ action: 'fight' }) } })
+    { watch () {}, sawMobs () {}, wear: async () => {}, safety: { check: () => ({ action: 'fight', threats: [] }) } })
+  assert.equal(calls.pickupClosed, calls.loot, 'pickup observer closes for each collection')
   return { result, calls }
 }
 

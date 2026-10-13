@@ -195,8 +195,8 @@ function missing (kit, mode, at = null) {
   // Только кровати: кровати, блоки (мост с платформы; у центра — заслоны и
   // досыпка пола), еда на вход. Лук и стрелы не нужны.
   if (mode === 'beds') {
-    if (!kit.beds) need.push({ what: 'red_bed', count: BEDS_KIT, have: 0 })
-    const bl = at ? 12 : (kit.pickaxe ? 44 : 64)
+    if (!kit.beds && !kit.weapon && !(kit.bow && kit.arrows > 0)) need.push({ what: 'red_bed', count: BEDS_KIT, have: 0 })
+    const bl = at ? (kit.beds ? 12 : 0) : (kit.pickaxe ? 44 : 64)
     if (kit.blocks < bl) need.push({ what: 'cobblestone', count: bl, have: kit.blocks })
     // Еда — цена, не допуск (гибкость, s5c-g1-1 06.10: в Энде с 3 стейками из 6 навык отказывал «ни шагу», 5 мин паузы,
     // а еды в Энде не взять). Отказ — только совсем без еды; бой на 3–5 мин стоит 2–3 единиц.

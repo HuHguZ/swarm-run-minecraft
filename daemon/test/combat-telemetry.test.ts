@@ -90,6 +90,41 @@ test('mace descent keeps exact damage samples out of the observed target', async
   assert.equal(f.foe.metadata[9], undefined)
 })
 
+test('a mace combo waits for an actual Wind Burst rebound and can smash a second visible target', async () => {
+  const f = fixture(), attacks = []
+  const second = { ...f.foe, id: 3, username: 'Second', metadata: [] }
+  const mace = load('mace', { './game-clock': f.clock, './read': { enchLevel: (_b, _i, n) => n === 'wind_burst' ? 2 : 0 }, './edges': { support: (_b, p) => ({ drop: p.y }) } })
+  f.bot.inventory.items = () => [{ name: 'mace' }]
+  f.bot.inventory.slots[36] = { name: 'mace' }
+  f.bot.quickBarSlot = 0
+  f.bot.attack = e => attacks.push(e.id)
+  f.bot.entity.position.y = 17; f.bot.entity.onGround = false
+  let choices = 0
+  const ctl = { aborted: false }
+  const pending = mace.descend(f.bot, ctl, f.foe, { windMlg: false, telemetryHp: () => null, chain: { choose: () => { choices++; return { entity: second } } } })
+  f.bot.entity.position.y = .8; f.bot.entity.velocity.y = -1
+  await f.step()
+  assert.deepEqual(attacks, [2])
+  f.bot.entity.onGround = true
+  await f.step()
+  assert.equal(choices, 0, 'sending a swing does not invent a rebound')
+  await f.step()
+  await f.step()
+  f.bot.entity.onGround = false
+  f.bot.entity.velocity.y = 1.2; f.bot.entity.position.y = 2
+  await f.step()
+  assert.equal(choices, 1)
+  f.bot.entity.position.y = 21; f.bot.entity.velocity.y = -.1
+  await f.step()
+  f.bot.entity.position.y = .8; f.bot.entity.velocity.y = -1
+  await f.step()
+  assert.deepEqual(attacks, [2, 3])
+  f.bot.entity.onGround = true
+  const result: any = await f.finish(pending)
+  assert.deepEqual(result.hits.map(h => h.target), ['Foe', 'Second'])
+  assert.equal(f.bot.listenerCount('physicsTick'), 0)
+})
+
 test('boom reports nonzero damage through an observed target and does not invent unknown HP', async () => {
   for (const known of [true, false]) {
     const f = fixture()

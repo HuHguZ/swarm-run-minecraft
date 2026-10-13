@@ -389,12 +389,13 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
   const sw = bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => rank(b) - rank(a))[0]
   if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
   const hasShield = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
-  let up = false
-  const shield = on => { if (!hasShield || on === up) return; try { if (on) bot.activateItem(true); else bot.deactivateItem() } catch {} up = on }
+  const shield = hasShield ? require('./combat').makeShield(session, ctl, { shield: 'always' }) : null
+  const imminent = () => hasShield && require('./threats').incoming(bot).find(p => p.ticks <= 10 && sees(bot, p.entity))
   const t0 = gameClock.now()
   let last = 0; let swings = 0; let far = 0; let foe = target
   const out: any = { swings: 0 }
   try {
+    await shield?.wear()
     while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
       if (!foe || foe.isValid === false || !bot.entities[foe.id]) {
         foe = meleeFoes(bot, 6)[0]
@@ -405,23 +406,34 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
       if (((bot.health ?? 20) < 7 && canBox && !lastStand) || (!crowdOk && meleeFoes(bot, 6).length >= 3)) { out.stopped = (bot.health ?? 20) < 7 ? 'хп' : 'толпа'; break }
       // Не достать 4 с (за стеной, в щели, не подходит) — не стоять: бой не задался.
       if (gameClock.now() - Math.max(last, t0) > 4000 && !swings) { out.stopped = 'не достать'; break }
+      const shot = imminent()
+      if (shot) {
+        // Fight держит руки: ближайший снаряд встречаем щитом, затем продолжаем того же врага.
+        bot.setControlState('forward', false); far = 0
+        try { await bot.lookAt(shot.entity.position, true) } catch {}
+        await shield.raise(true)
+        await sleep(60)
+        continue
+      }
       const d = foe.position.distanceTo(bot.entity.position)
       if (foe.name === 'blaze' && d >= 3.5) { out.stopped = 'блейз вне ближнего боя'; break }
       try { await bot.lookAt(foe.position.offset(0, (foe.height || 1.9) * 0.75, 0), true) } catch {}
       if (gameClock.now() - last >= 640 && pick.canHit(bot, foe)) {
-        shield(false)
+        await shield?.raise(false)
         await sleep(50)
+        if (ctl.aborted) break
+        if (imminent()) continue
         try { bot.attack(foe); swings++; last = gameClock.now() } catch {}
         await sleep(50)
-        shield(true)
-      } else shield(true)
+        await shield?.raise(true)
+      } else await shield?.raise(true)
       if (d > 3.2 && sees(bot, foe)) { if (!far) far = gameClock.now() } else far = 0
       // Шаг к врагу — только если шаг безопасен (S4c 07.10, замечание проверки г): клавиша «вперёд» к ифриту/иссушителю за краем
       // моста вела тело в пустоту или лаву; moves.stepSafe — обрыв > 3, лава/огонь/магма под шагом.
       bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && require('./moves').stepSafe(bot, require('./moves').keyDir(bot, 'forward')))
       await sleep(60)
     }
-  } finally { bot.setControlState('forward', false); shield(false) }
+  } finally { bot.setControlState('forward', false); shield?.close() }
   out.swings = swings
   out.s = Math.round((gameClock.now() - t0) / 1000)
   return out

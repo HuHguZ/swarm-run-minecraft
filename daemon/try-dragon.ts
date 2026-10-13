@@ -488,6 +488,10 @@ function e2eKit () {
     'bow', 'arrow 64', 'cobblestone 64', 'cobblestone 64', 'cobblestone 64', 'cooked_beef 20', 'water_bucket', 'torch 8']
   const gapples = Number(process.env.E2E_GAPPLES ?? 4)
   if (gapples) out.push(`golden_apple ${gapples}`)
+  const obs = Number(process.env.E2E_OBSIDIAN || 0)
+  if (obs) out.push(`obsidian ${obs}`)
+  const cry = Number(process.env.E2E_CRYING || 0)
+  if (cry) out.push(`crying_obsidian ${cry}`)
   for (const s of String(process.env.E2E_POTIONS || '').split(',').map(x => x.trim()).filter(Boolean)) {
     const [name, n] = s.split(':')
     out.push(`potion[potion_contents={potion:"minecraft:${name}"}] ${Number(n || 1)}`)

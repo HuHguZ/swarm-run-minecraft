@@ -49,6 +49,7 @@ function itemObs (bot, it) {
   // Полный map нужен и подготовке: Unbreaking не усиливает удар, но стол не зачарует такую вещь заново.
   try { for (const e of require('../enchant').enchantsOf(bot, it)) if (e.level > 0) ench[e.name] = e.level } catch {}
   const o: any = { name: it.name, count: it.count ?? 1, ench }
+  if (it._ndVisual) o.enchanted = !!it.enchanted
   if (it.name === 'crossbow') o.crossbow = read.crossbowInfo(bot, it)
   if (it.name === 'firework_rocket') o.stars = rocketStars(it)
   return o
@@ -139,7 +140,7 @@ function readFoeEstimate (bot, { roundScope, target }: any = {}) {
 // noteAttack(range) зовёт бой сразу после удара/выстрела (range — planAttack(...).action.range).
 function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roundScope = null, now = () => gameClock.now() }: any = {}) {
   const player = isPlayer(entity)
-  const visible = () => { try { return isVisible ? isVisible(entity) : (entity._ndVisible ?? assess().inSight(bot, entity)) } catch { return false } }
+  const visible = () => { try { return isVisible ? isVisible(entity) : (entity._ndVisible ?? (player ? require('./last-seen').seesPlayer(bot, entity) : assess().inSight(bot, entity))) } catch { return false } }
   const memory = player && honest ? memoryFor(bot, roundScope) : null
   const key = foeKey(entity)
   let entry = key && memory?.targets.get(key)
@@ -157,7 +158,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
 
   // Только еда и зелья (ревью Codex: опущенный щит/лук после ≥ 30 тиков тоже «кончил использовать» — шёл в «съел»).
   const consumed = (u) => {
-    if (/potion$/.test(u.name)) { const n = pvp().potionOf(u.item); if (n) hp.drink(n) } else if (bot.registry?.foodsByName?.[u.name]) {
+    if (/potion$/.test(u.name)) { const n = pvp().potionOf(u.item); if (n) hp.drink(n); else if (T.honestHp) hp.heal(0, 20) } else if (bot.registry?.foodsByName?.[u.name]) {
       hp.eat(u.name)
       if (/^(enchanted_)?golden_apple$/.test(u.name)) T.seenApples++
     }
@@ -194,7 +195,8 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
       vis = visible()
       if (!vis) T.using = null
     }
-    const u = usingOf(bot, entity)
+    const rawUse = usingOf(bot, entity)
+    const u = rawUse && T.honestHp ? { name: rawUse.name, item: require('./last-seen').visiblePlayerItem(rawUse.item) } : rawUse
     if (u && (!T.using || T.using.name !== u.name)) {
       let vis = !T.honestHp
       vis = vis || visible()
@@ -208,7 +210,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
   // Разброс урона моего попадания: ближний — заряд 0.9…1 без крита и с критом; лук/арбалет — стрела.
   const guessRange = (type = 'player_attack') => {
     try {
-      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, (entity.equipment || [])[i])))
+      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? require('./last-seen').visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
       // Не обычный удар рукой: таран/разгон копья (spear, до ~30 до брони), булава с падения (mace_smash, до ~45),
       // ракета/взрыв, трезубец — широкий разброс по своему типу (броня и чары — его, видимые).
       const wide = (rawMax, kind) => { const hi = dm.afterDefense(rawMax, kind, def); return { min: Math.min(1, hi), max: hi, mean: hi / 2, raw: rawMax } }
@@ -249,7 +251,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     if (!T.honestHp || !visible()) return
     const type = gamedata().damageTypeName(pk.sourceTypeId) || ''
     if (type === 'fall' && T.lastLanding && T.tick - T.lastLanding.tick <= 2) {
-      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, (entity.equipment || [])[i])))
+      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? require('./last-seen').visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
       const d = dm.afterDefense(dm.fallRaw(T.lastLanding.h), 'fall', def)
       hp.env(d * 0.8, d * 1.1)
     } else {
@@ -273,8 +275,10 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     try {
       const raw = (e.metadata || []).find(x => x && (x.itemId != null || x.components))
       const Item = require('prismarine-item')(bot.version)
-      const n = raw ? pvp().potionOf(Item.fromNotch(raw)) : null
+      const item = raw ? Item.fromNotch(raw) : null
+      const n = pvp().potionOf(T.honestHp ? require('./last-seen').visiblePlayerItem(item) : item)
       if (n) hp.splash(n)
+      else if (T.honestHp) hp.heal(0, 20)
     } catch {}
   }
   bot.on('physicsTick', onTick)
@@ -318,31 +322,31 @@ function reachTo (bot, e) {
 // boom — { crystal: { dist, seen, angle }, anchor: … } от crystal.ts, shieldOffTicks — read.watch.shieldOff/50.
 function observe (bot, entity, { tracker = null, since = 99, smash = null, boom = null, shieldOffTicks = 0, honest = true }: any = {}) {
   const me = bot.entity
-  const eq = entity.equipment || []
   const player = isPlayer(entity)
+  const eq = (entity.equipment || []).map(it => player && honest ? require('./last-seen').visiblePlayerItem(it) : it)
   let hp
   if (player && honest) hp = tracker ? tracker.hp.snapshot() : { lo: 0, hi: 20, mean: 10, conf: 0, exact: false }
   else { const h = exactHpTelemetryOnly(bot, entity) ?? 20; hp = { lo: h, hi: h, mean: h, conf: 1, exact: true } }
+  const los = (() => { try { return entity._ndVisible ?? (player ? require('./last-seen').seesPlayer(bot, entity) : assess().inSight(bot, entity)) } catch { return false } })()
   const effects = {}
-  for (const n of read.effectsOf(bot, entity)) effects[n] = true
-  const using = usingOf(bot, entity)
+  if (!honest || !player || los) for (const n of read.effectsOf(bot, entity)) effects[n] = true
+  const using = !honest || !player || los ? usingOf(bot, entity) : null
   // Щит держит через 5 тиков после подъёма (blockDelayTicks): трекер видит начало использования.
   const blocking = !!(using && using.name === 'shield' && (!tracker || !tracker.using || tracker.tick - tracker.using.since >= dm.SHIELD_DELAY_TICKS))
-  const vel = tracker ? tracker.vel : (entity.velocity || { x: 0, y: 0, z: 0 })
+  const vel = tracker ? tracker.vel : (!honest || !player || los && entity._ndVisible === true ? entity.velocity || { x: 0, y: 0, z: 0 } : { x: 0, y: 0, z: 0 })
   const dx = me.position.x - entity.position.x; const dz = me.position.z - entity.position.z
   const dh = Math.hypot(dx, dz) || 1
   const myItems = bot.inventory.items().map(it => itemObs(bot, it))
   const myAbs = read.absorptionOf(bot, me)
   // Его снаряжение — то, что видно (S7d, честное восприятие): пакеты снаряжения приходят и сквозь стену; пока его не
   // видно — последнее увиденное (человек помнит, с чем тот был), а не свежее из пакета.
-  const los = (() => { try { return entity._ndVisible ?? assess().inSight(bot, entity) } catch { return true } })()
   const gearNow = () => ({ armor: [2, 3, 4, 5].map(i => itemObs(bot, eq[i])), main: itemObs(bot, eq[0]), off: itemObs(bot, eq[1]), totem: read.hasTotemInHand(entity) })
   let gear
-  if (!honest || !player || !tracker) gear = gearNow()
-  else if (los || !tracker.gearSeen) { gear = gearNow(); tracker.gearSeen = gear } else gear = tracker.gearSeen
+  if (!honest || !player || los) { gear = gearNow(); if (tracker) tracker.gearSeen = gear }
+  else gear = tracker?.gearSeen || { armor: [null, null, null, null], main: null, off: null, totem: false }
   return {
     difficulty: (bot.game && bot.game.difficulty) || 'normal',
-    dist: reachTo(bot, entity),
+    dist: !honest || !player || los || entity._ndSeenAt != null ? reachTo(bot, entity) : Infinity,
     los,
     foe: {
       player,
@@ -353,7 +357,7 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
       off: gear.off,
       using: using ? using.name : null,
       blocking,
-      shieldAngle: dm.shieldAngle(typeof entity.headYaw === 'number' ? entity.headYaw : (entity.yaw || 0), entity.position, me.position),
+      shieldAngle: !honest || !player || los || entity._ndSeenAt != null ? dm.shieldAngle(typeof entity.headYaw === 'number' ? entity.headYaw : (entity.yaw || 0), entity.position, me.position) : null,
       shieldOffTicks,
       effects,
       // Сопротивление по частицам: уровень не виден — I.

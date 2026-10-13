@@ -3,7 +3,7 @@ import { Vec3 } from 'vec3'
 export interface Point { x: number; y: number; z: number }
 export type Shape = readonly [number, number, number, number, number, number]
 export interface CollisionBlock { name: string; position: Point; shapes?: readonly Shape[]; boundingBox?: string; type?: number; isWaterlogged?: boolean; getProperties?(): Record<string, string | number | boolean> }
-export interface CollisionWorld { blockAt(position: Vec3, extraInfos?: boolean): CollisionBlock | null | undefined; physics?: { playerHalfWidth?: number; playerHeight?: number }; game?: { minY: number; height: number } }
+export interface CollisionWorld { blockAt(position: Vec3, extraInfos?: boolean): CollisionBlock | null | undefined; physics?: { playerHalfWidth?: number; playerHeight?: number }; entity?: { _ndPoseHeight?: number }; game?: { minY: number; height: number } }
 export interface Box { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number }
 export interface Support { block: CollisionBlock; box: Box; top: number; overlap: number }
 const EPS = 1e-7
@@ -13,7 +13,7 @@ const TREAD_GAP = 1e-3
 export const HAZARD = /^(lava|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|powder_snow|wither_rose|end_portal|end_gateway)$/
 
 export function dimensions(world: CollisionWorld): { half: number; height: number } {
-  return { half: world.physics?.playerHalfWidth ?? Math.fround(.6) / 2, height: world.physics?.playerHeight ?? 1.8 }
+  return { half: world.physics?.playerHalfWidth ?? Math.fround(.6) / 2, height: world.entity?._ndPoseHeight ?? world.physics?.playerHeight ?? 1.8 }
 }
 export function shapeBoxes(block: CollisionBlock): Box[] {
   // Real Blocks always supply state-specific shapes. Shape-less legacy fixtures
@@ -38,7 +38,7 @@ export function bodyClear(world: CollisionWorld, pos: Point, { web = false, wate
         const block = world.blockAt(new Vec3(x, y, z), false)
         if (!block) return false
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
-        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && /^(water|bubble_column)$/.test(block.name))) return false
+        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && require('../movement').waterCell(block))) return false
         if (shapeBoxes(block).some(box => intersects(body, box))) return false
       }
     }
@@ -139,6 +139,8 @@ function cellStands(observed: CollisionWorld, x: number, y: number, z: number): 
  * cell's key (`x,y,z`) when a block within one cell sideways, three below or one above changes.
  */
 export function standPositions(world: CollisionWorld, cell: Point, { rise = 2, drop = 4 }: { rise?: number; drop?: number } = {}, cache?: Map<string, Vec3[]>): Vec3[] {
+  // Cached cells describe standing clearance; a live temporary pose gets its own observation.
+  if (dimensions(world).height !== (world.physics?.playerHeight ?? 1.8)) cache = undefined
   const result: Vec3[] = []
   const seen = new Set<string>(); const x = Math.floor(cell.x); const z = Math.floor(cell.z)
   for (let y = Math.floor(cell.y + rise); y >= Math.floor(cell.y - drop) - 1; y--) {
@@ -164,7 +166,7 @@ export function invalidateStands(cache: Map<string, Vec3[]>, at: Point): void {
 }
 
 export function containsWater(block: CollisionBlock): boolean {
-  return /^(water|flowing_water|bubble_column)$/.test(block.name) || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
+  return require('../movement').waterCell(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
 }
 
 /** Body centers that fit inside one observed fluid cell and its real shapes. */

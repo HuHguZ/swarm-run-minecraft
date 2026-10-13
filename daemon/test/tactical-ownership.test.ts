@@ -166,6 +166,29 @@ test('a selected lava repel invokes bounded combat before the Nether guard', asy
   } finally { combat.fight = originalFight; guard.react = originalReact }
 })
 
+test('a Nether refuge choice reaches the refuge executor instead of the guard melee/tower policy (sr-m-3)', async () => {
+  const { session, bot } = observingFixture()
+  bot.game.dimension = 'the_nether'; bot.health = 10
+  bot.entities[2] = { id: 2, name: 'blaze', position: new Vec3(10.5, 64, .5), height: 1.8, width: .6, equipment: [], metadata: [] }
+  const survival = require('../src/survival')
+  const guard = require('../src/ne-guard')
+  const originalRefuge = survival.refuge; const originalReact = guard.react
+  const calls: Array<Record<string, unknown>> = []
+  survival.refuge = async (_session: unknown, _ctl: unknown, options: Record<string, unknown>) => { calls.push(options); return { healed: true } }
+  guard.react = async () => { throw new Error('a distant blaze is no melee refuge') }
+  try {
+    const system = new TacticalSystem(session)
+    const ctl = { aborted: false, onAbort: [], abort() { this.aborted = true } }
+    const state = observeTactics(session)
+    // Heal already used refuge; keep that contract while removing the four Nether overrides.
+    for (const id of ['BlockOff', 'PillarUp', 'DigDown', 'Hide', 'Heal']) {
+      assert.equal((await system.execute({ id, score: 120, reason: 'available refuge' }, ctl, state)).healed, true)
+    }
+    assert.equal(calls.length, 5)
+    assert.deepEqual(calls.map(options => options.why), ['tactical BlockOff', 'tactical PillarUp', 'tactical DigDown', 'tactical Hide', 'tactical Heal'])
+  } finally { survival.refuge = originalRefuge; guard.react = originalReact }
+})
+
 test('a visible attacker preempts an active fire-resistant climb without losing its shore goal', async () => {
   const clock = require('../src/game-clock')
   const c = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))

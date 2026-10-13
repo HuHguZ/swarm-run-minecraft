@@ -46,6 +46,30 @@ function foodUnits (inv) {
   for (const [k, v] of ((Object.entries(inv || {}) as [string, any][]) as any)) if (FOOD.test(k)) n += v * Math.min(1, (HUNGER[k] ?? 6) / 6)
   return Math.round(n * 100) / 100
 }
+// Nutrition is what can be eaten now; raw meat's stock credit above assumes cooking.
+// Only nutrition is read from minecraft-data: its saturation field is not a vanilla value.
+let foods
+function foodPoints (inv) {
+  foods ||= require('minecraft-data')('1.21.11').foodsByName
+  return Object.entries(inv || {}).reduce((n, [name, count]: any) => n + (FOOD.test(name) ? (foods[name]?.foodPoints || 0) * count : 0), 0)
+}
+function foodMeal (inv, hunger) {
+  foodPoints(inv)
+  const inventory = {}
+  let points = 0; let ticks = 0
+  const edible = Object.entries(inv || {}).filter(([name, count]: any) => count > 0 && FOOD.test(name) && foods[name])
+    .sort(([a], [b]) => foods[b].foodPoints + foods[b].saturation - (b === 'chicken' ? 100 : 0) -
+      foods[a].foodPoints - foods[a].saturation + (a === 'chicken' ? 100 : 0))
+  for (const [name, count] of edible as [string, number][]) {
+    const used = Math.min(count, Math.ceil((20 - hunger) / foods[name].foodPoints))
+    if (used <= 0) break
+    inventory[name] = -used
+    points += used * foods[name].foodPoints
+    ticks += used * (name === 'dried_kelp' ? 16 : 32) // 1.21.11 Consumables: kelp 0.8s, normal food 1.6s
+    hunger = Math.min(20, hunger + used * foods[name].foodPoints)
+  }
+  return { inventory, hunger, points, ticks, units: foodUnits(Object.fromEntries(Object.entries(inventory).map(([name, n]: any) => [name, -n]))) }
+}
 function amount (inv, name) {
   if (name === 'food') return foodUnits(inv)
   if (name === 'wool') return (Object.entries(inv) as [string, any][]).reduce((n: any, [k, v]: any) => n + (/_wool$/.test(k) ? v : /_bed$/.test(k) ? 3 * v : 0), 0)
@@ -82,4 +106,4 @@ function decideFight (session, entity, opts: any = {}) {
   } else throw new Error('purpose: food, resource, defense или command')
   return decision
 }
-module.exports = { configure, canUseRanged, decideFight, foodUnits }
+module.exports = { configure, canUseRanged, decideFight, foodUnits, foodPoints, foodMeal }

@@ -107,6 +107,7 @@ export function bastionApproachProgress(before: Position | null, after: Position
 export function netherStageProgress(stage: 'bastion' | 'nether', before: WorldState, after: WorldState): boolean {
   const resources = stage === 'bastion' ? ['gold', 'pearls', 'eyes', 'obsidian'] : ['rods', 'powder', 'eyes']
   if (resources.some(name => amount(after, name) > amount(before, name))) return true
+  if (stage === 'nether' && before.dimension === 'the_nether' && after.dimension === 'the_nether' && quantity(after, 'fortress_explored') > quantity(before, 'fortress_explored')) return true
   if (stage === 'bastion' && ['fire_resistance_count', 'bastion_gold_dug', 'bastion_traded'].some(name => quantity(after, name) > quantity(before, name))) return true
   const name = stage === 'bastion' ? 'bastion_position' : 'fortress_position'
   const target = targetPosition(before, name)

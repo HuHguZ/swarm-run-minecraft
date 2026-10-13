@@ -27,6 +27,7 @@ export interface TacticalState {
   enemies: TacticalEnemy[]
   incomingProjectiles: number
   burning: boolean
+  hotFloor?: boolean
   lava: boolean
   lavaAhead?: boolean
   fireResistance: boolean
@@ -49,6 +50,8 @@ export interface TacticalState {
   canFight: boolean
   contact: boolean
   shelter: 'BlockOff' | 'PillarUp' | 'DigDown' | 'Hide' | null
+  /** Damage expected during the physically planned descent, before the shelter closes. */
+  digDownCostHp?: number
   protectedEncounter: boolean
   embedded?: boolean
   airborne?: boolean
@@ -109,7 +112,9 @@ export function runGain(state: TacticalState): number {
   // Burning with no shooter around, the run is the way out of the fire cell (stand fuzz2-713: stood in fire for the spider).
   const underFire = state.enemies.some(enemy => enemy.threatening && (OUTPACING.test(enemy.kind) || SHOOTERS.test(enemy.kind) && enemy.kind !== 'creeper'))
   const awaited = (enemy: TacticalEnemy) => S4D() && state.canFight && state.weapon && !enemy.player && !SHOOTERS.test(enemy.kind) && enemy.distance > 4.5 && (!state.burning || underFire)
-  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) ? .3 : awaited(enemy) ? .2 : 1), ...far.map(enemy => OUTPACING.test(enemy.kind) ? .3 : .5))
+  // The angry enderman teleports after a retreat (flee.DOCTRINE.fast): a run buys cover, not separation. It remains a
+  // walker for shelter geometry; adding it to OUTPACING would also inherit the flyer dead-end rules.
+  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) || enemy.kind === 'enderman' ? .3 : awaited(enemy) ? .2 : 1), ...far.map(enemy => OUTPACING.test(enemy.kind) || enemy.kind === 'enderman' ? .3 : .5))
 }
 export const deadEnd = (state: TacticalState): boolean => hasObservedTarget(state) && (!!state.escapeExhausted || outpaced(state))
 export const hasMeleeTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy))
@@ -129,11 +134,18 @@ export function sustainableFight(verdict: { action?: string; cheap?: boolean; tr
 export const creeperWalksUp = (state: TacticalState): boolean =>
   state.enemies.some(enemy => enemy.threatening && enemy.kind === 'creeper' && enemy.distance <= 12)
 
-export const frWorth = (state: TacticalState): boolean => state.lava || state.burning && state.health <= 10
+export const frWorth = (state: TacticalState): boolean => state.lava || !!state.hotFloor && !state.explosion || state.burning && state.health <= 10
+// H2: after the lava exit at food 17, running cannot extinguish the residual burn.
+// A 32-tick bite restores food 20 and saturation for fast regeneration. Use the
+// existing healing price: a dry run cannot extinguish this fire or restore health.
+export const burnRecovery = (state: TacticalState): boolean => state.burning && !state.fireResistance &&
+  state.food < 20 && !state.lava && !state.lavaAhead && !state.lavaEscapePending && !state.water && !state.dangerousFall &&
+  !state.emergencyController && !state.explosion && !state.contact && !state.incomingProjectiles && !hasObservedTarget(state)
 
 export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.health <= 0) return 0
   if (state.embedded || state.emergencyController || state.dangerousFall || state.lavaAhead || state.lava && !state.fireResistance || state.explosion) return 4
+  if (state.hotFloor) return 3
   const foes = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 12)
   if (state.contact && (state.health <= 6 || foes.length >= 3 && state.health < 12)) return 3
   if (state.burning && !state.fireResistance && state.health <= 8) return 3
@@ -151,7 +163,9 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // Below level 3 an action is weighed against keeping the skill going (KEEP_WORKING): a run priced down by a pursuer that
   // keeps up (a lone blaze in sight at full health: Flee 19.5) is not worth the interrupted work (stand fuzz2/fuzz-2601:
   // Hide>Flee to cover and back every 2 s at 20 hp). At level 3 anything beats standing still.
-  const floor = level >= 3 ? -Infinity : KEEP_WORKING
+  // A contacting enderman still needs a fallback when neither a safe strike nor a local shelter is available. Its
+  // discounted run must compete with the risky hole, not disappear below the "keep working" price.
+  const floor = level >= 3 || state.contact && state.enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman') ? -Infinity : KEEP_WORKING
   const add = (id: ActionId, score: number, reason: string, available: boolean) => {
     if (available && !state.failedEscapes?.includes(id) && Number.isFinite(score) && score >= floor) result.push({ id, score, reason })
   }
@@ -206,6 +220,7 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('BoatLavaHop', 154, 'existing expendable boats and a visible collision-free lava route', state.lava && !!state.boatLavaHop)
   add('ClimbOut', 140, 'fire resistant swimming or visible wall steps', (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
   add('Surface', 148, 'air running out under water', !!state.drowning && !state.dangerousFall)
+  add('Flee', 142, 'leave damaging magma', !!state.hotFloor && !state.dangerousFall && !state.emergencyController)
   add('UseWater', 145, 'fire', state.water && state.burning && !state.fireResistance && !state.lava)
   add('Dodge', 150, 'explosion', state.explosion)
   add('EnterPortal', 115, 'nearby escape', critical && state.portal && !state.dangerousFall)
@@ -223,10 +238,15 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('Flee', (critical ? 100 : 65) * gain, 'create safe distance', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
   // Not gated by canFight: a verdict flickering at the health threshold must not invalidate the retreat in progress.
   add('CreateDistance', (!armed || !observedTarget ? 85 : 50) * gain, 'unfavorable or unidentified attacker', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
-  if (state.shelter) add(state.shelter, exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95, 'available refuge', level >= 2 && shelterHolds && state.blocks > 0 && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && sheltered)
+  const shelterScore = (exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95) *
+    (state.shelter === 'DigDown' && state.digDownCostHp !== undefined ? Math.max(0, 1 - state.digDownCostHp / state.health) : 1)
+  // A validated shaft supplies its own closing block as it is dug; an existing pocket needs no construction.
+  if (state.shelter) add(state.shelter, shelterScore, 'available refuge', level >= 2 && shelterHolds && (state.blocks > 0 || state.shelter === 'DigDown' || state.shelter === 'Hide') && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && sheltered)
   add('Hide', 110, 'existing cover', critical && state.cover && !creeperNear && !state.dangerousFall && !state.lava && sheltered)
   add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (level === 1 || state.incomingProjectiles > 0))
   add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending)
-  add('Eat', 45, 'restore food', level <= 1 && state.food < 16 && state.edible && !state.dangerousFall)
+  const recoverBurn = burnRecovery(state)
+  add('Eat', recoverBurn ? 105 : 45, recoverBurn ? 'restore regeneration after burning' : 'restore food',
+    (recoverBurn || level <= 1 && state.food < 16) && state.edible && !state.dangerousFall)
   return result.sort((a, b) => b.score - a.score)
 }

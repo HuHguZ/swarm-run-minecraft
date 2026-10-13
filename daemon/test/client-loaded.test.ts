@@ -3,6 +3,8 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { install } = require('../src/client-loaded')
+const read = require('../src/read')
+const gameClock = require('../src/game-clock')
 function bot (supported = true) {
   const b = new EventEmitter()
   b.registry = { protocol: { play: { toServer: { types: supported ? { packet_player_loaded: ['container', []] } : {} as Record<string, any> } } } }
@@ -12,6 +14,27 @@ function bot (supported = true) {
   return b
 }
 const settled = () => new Promise<any>(resolve => setImmediate(resolve))
+
+test('combat observation cannot acknowledge an unloaded world ahead of the shared chunk handshake', async () => {
+  const b = bot()
+  let loaded
+  b.waitForChunksToLoad = () => new Promise(resolve => { loaded = resolve })
+  const timers = []
+  const oldTimeout = gameClock.wall.setTimeout
+  gameClock.wall.setTimeout = callback => { timers.push(callback); return 0 }
+  try {
+    install(b)
+    read.installLoaded(b)
+    b.emit('spawn')
+    for (const callback of timers) callback()
+    await settled()
+    assert.equal(b.sent.length, 0, 'the terrain-loading screen must last until chunks are actually available')
+    loaded()
+    await settled()
+    assert.deepEqual(b.sent, [{ name: 'player_loaded', data: {} }])
+  } finally { gameClock.wall.setTimeout = oldTimeout }
+})
+
 test('после загрузки чанков при входе и возрождении сервер получает player_loaded', async () => {
   const b = bot()
   install(b); install(b)

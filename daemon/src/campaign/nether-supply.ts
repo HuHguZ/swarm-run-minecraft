@@ -28,13 +28,10 @@ const stone = (state: NetherSupplyState): number => quantity(state, /^(cobblesto
 // 558 взмахов, 6 досок и лук из 2 досок). Без верстака — как раньше: 8 дерева, из них 4 доски на стол.
 const RESERVE = 4
 const woodWithSticks = (state: NetherSupplyState): number => wood(state) + Math.floor(quantity(state, /^stick$/) / 2)
-// Дерево — запас на новые кирки, а не допуск: при двойном запасе взмахов (≥ 520) путь к спавнеру и обратно покрыт и без него;
-// без верстака хватает стола (4 доски) + 2 досок-эквивалентов (4 палки = 2 кирки), палки в счёт (s1c-B-4 06.10: 10 жемчуга
-// при нужных 10, 378/260 взмахов, «дерево 7/8» — путь к спавнеру отложен, поход домой за деревом съел 70 мин).
+// Доски и верстак нужны для пополнения, а не для использования уже готовых кирок.
+// Когда фактический запас взмахов покрывает задачу, будущий крафт не задерживает путь.
 export function netherToolsReady(state: NetherSupplyState): boolean {
-  if (!pick(state) || state.pickSwings < 260) return false
-  if (state.pickSwings >= 520) return true
-  return quantity(state, /^crafting_table$/) > 0 ? woodWithSticks(state) >= RESERVE : planks(state) >= 4 && woodWithSticks(state) >= 6
+  return pick(state) && state.pickSwings >= 260
 }
 
 export async function replenishNetherTools(port: NetherSupplyPort): Promise<NetherSupplyResult> {
@@ -43,7 +40,11 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
   const safe = (): boolean => !port.interrupted() && port.now() < deadline && state.dimension === 'the_nether' && state.health >= 12
   const refresh = async (): Promise<void> => { state = await port.observe() }
   const act = async (method: string, params: Record<string, unknown>): Promise<void> => {
-    if (safe()) { await port.act(method, params); await refresh() }
+    if (safe()) {
+      const left = (deadline - port.now()) / 1000
+      await port.act(method, { ...params, timeoutSeconds: Math.min(Number(params.timeoutSeconds ?? left), left) })
+      await refresh()
+    }
   }
   const craft = async (item: string, count = 1): Promise<boolean> => {
     if (!safe()) return false
@@ -75,9 +76,12 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
   }
   const ironAvailable = quantity(state, /^iron_ingot$/) + Math.floor(quantity(state, /^iron_nugget$/) / 9) + 9 * quantity(state, /^iron_block$/)
   const woodenPickNeeded = !quantity(state, /_pickaxe$/) && stone(state) < 3 && ironAvailable < 3
-  const firstWood = RESERVE + (quantity(state, /^crafting_table$/) ? 0 : 4) + (quantity(state, /^stick$/) >= 2 ? 0 : 2) + (woodenPickNeeded ? 3 : 0)
+  const carriedRecipe = quantity(state, /^stick$/) >= 2 && (stone(state) >= 3 || quantity(state, /^iron_ingot$/) >= 3) &&
+    planks(state) >= (quantity(state, /^crafting_table$/) ? 0 : 4)
+  // Готовый рецепт пополняет кирку сейчас; дерево для следующей замены не задерживает этот крафт.
+  const firstWood = (carriedRecipe ? 0 : RESERVE) + (quantity(state, /^crafting_table$/) ? 0 : 4) + (quantity(state, /^stick$/) >= 2 ? 0 : 2) + (woodenPickNeeded ? 3 : 0)
   if (!(await ensureWood(firstWood))) return result(`нет безопасного дерева на ближайший крафт (${firstWood} досок)`)
-  if (!quantity(state, /^crafting_table$/) && !(await craft('crafting_table'))) return result('не удалось восстановить верстак')
+  if (!quantity(state, /^crafting_table$/) && (!(await craft('crafting_table')) || !quantity(state, /^crafting_table$/))) return result('не удалось восстановить верстак')
   for (let attempt = 0; attempt < 4 && safe() && (!pick(state) || state.pickSwings < 260); attempt++) {
     if (quantity(state, /^stick$/) < 2 && (!(await ensureWood(RESERVE + 2)) || !(await craft('stick', 4)))) break
     if (quantity(state, /^iron_ingot$/) < 3 &&
@@ -98,7 +102,13 @@ export async function replenishNetherTools(port: NetherSupplyPort): Promise<Neth
     } else {
       if (!quantity(state, /_pickaxe$/) && (!(await ensureWood(RESERVE + 3)) || !(await craft('wooden_pickaxe')))) break
       const previous = stone(state)
-      await act('mine', { block: 'blackstone', count: 6, radius: 24, dry: true, timeoutSeconds: 35 })
+      const material = 'blackstone,cobblestone,cobbled_deepslate,stone,deepslate'
+      await act('mine', { block: material, count: 6, radius: 24, fair: true, dry: true, timeoutSeconds: 35 })
+      if (stone(state) <= previous && safe()) {
+        port.log('материал кирки не виден или недоступен отсюда — поиск новым взглядом, до 45 с внутри бюджета 240 с')
+        await act('explore', { block: material, radius: 24, stepDistance: 40, fair: true, dry: true, newView: true, timeoutSeconds: 45 })
+        await act('mine', { block: material, count: 6, radius: 24, fair: true, dry: true, timeoutSeconds: 35 })
+      }
       if (stone(state) <= previous) break
     }
   }

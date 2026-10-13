@@ -319,6 +319,9 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
     const fastPillar = preferPillar && !noGo && pickFiller(bot, { steady: true }) &&
       !wet(bot, column.offset(0, 2, 0)) && !wet(bot, column.offset(0, 3, 0)) &&
       !looseOver(bot, column.offset(0, 2, 0)) && !looseOver(bot, column.offset(0, 3, 0)) &&
+      // digUp also removes feet+3 for the jump. Even one falling block on that
+      // support drops into our own head; stairs clear the future square instead.
+      !FALLS.has(bot.blockAt(column.offset(0, 4, 0))?.name) &&
       [2, 3].every(h => {
         const b = bot.blockAt(column.offset(0, h, 0))
         return b && b.name !== 'bedrock' && !FALLS.has(b.name)
@@ -580,7 +583,8 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
       ? { moves: wetMoves, plugged: plugs.length ? plugs : undefined, swam: swum || undefined, dry: !inWater(bot) }
       : undefined,
     pickaxe,
-    out: here.out,
+    // A default climb also exits through open sky and two sides; report its actual arrival proof.
+    out: here.out || wantY === null && out,
     sky: here.sky,
     // «я больше не в яме» and «я на поверхности» are separate decisions: the
     pit: !here.free,
@@ -639,7 +643,7 @@ function holePlan (bot, mcData, feet) {
 function pocketOf (bot, foes) {
   let air = null
   try { air = require('.././sealed').localAir(bot) } catch { return null }
-  if (!air || air.size < 2) return null
+  if (!air || air.size < 2 || require('.././sealed').exposure(bot, new Set(air)).length) return null
   for (const h of foes) {
     // Клетка, занятая мобом, для localAir — не воздух (liveCls), и карман «замыкался» у самого зомби: trap0 02.10,
     // лесенка в пещере — «карман без врагов» при зомби в 0.7 бл., смерть. Моб в кармане или у его края — не карман.

@@ -155,6 +155,16 @@ test('run resets every selected world before parallel scenes and records game-cl
   assert.equal(batch.env.FLAG, '1')
 })
 
+test('fresh speedrun starts morning before its first player connects at accelerated TPS', async () => {
+  const { api, events } = farmHarness()
+  await api.cmdRun({ _: ['try-lab-fresh.js'], slots: '23', tag: 'morning', env: [], 'tick-rate': '750' }, [])
+  const morning = events.findIndex(event => event.kind === 'rcon' && event.command === 'time set 1000')
+  const spawn = events.findIndex(event => event.kind === 'spawn')
+  assert.ok(morning >= 0 && morning < spawn, 'night mobs must not spawn while connection/setup runs')
+  assert.ok(events.filter(event => event.kind === 'rcon').every(event => event.slot === 23))
+  assert.equal(events[spawn].env.ND_TICK_RATE, '750')
+})
+
 test('tick CLI never selects all worlds without an explicit slot choice', () => {
   const { api } = farmHarness()
   assert.equal(tickRate(api.parseArgs(['4', '--tick-rate=80']).a, {} as Record<string, any>), 80)

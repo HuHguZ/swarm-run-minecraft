@@ -44,10 +44,11 @@ function enchantedGear (bot) {
   return out
 }
 
-const methods = {
-  status: async (p) => session.immediate(async () => ({
+function statusDetail (p) {
+  return {
     fairPlay: cfg.fairPlay,
     server: `${cfg.host}:${cfg.port}`,
+    ...(p?.swarm ? { sightings: require('./swarm-senses').swarmSightings(session.bot, p.swarmAllies), ownEnchants: enchantedGear(session.bot) } : {}),
     ...(p && p.items ? {
       items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('./pvp/combat-observe').itemObs(session.bot, it)) || [],
       storage: session.bot?.inventory?.slots ? Array.from({ length: 36 }, (_, index) => {
@@ -61,6 +62,8 @@ const methods = {
     // Последний отчёт дуэли (pvp.duel кладёт при конце боя): арена берёт его, если ответ fight пришёл пустым (S7d).
     ...(p && p.lastDuel ? { lastDuel: session.bot?._ndLastDuel || null } : {}),
     ...(p && p.totem ? { totem: require('./totem').snapshot(session.bot) } : {}),
+    // Летящие вредные зелья и игроки со взрывным зельем в руке (threats.dangers) — арене для уворота.
+    ...(p && p.dangers && session.bot?.entity ? { dangers: require('./threats').dangers(session.bot, { foes: p.foes ?? dangerWatch?.foes }) } : {}),
     ...(p && p.physics && session.bot?.entity ? { physics: {
       pos: session.bot.entity.position, velocity: session.bot.entity.velocity,
       onGround: session.bot.entity.onGround, pose: session.bot.entity.pose,
@@ -79,17 +82,522 @@ const methods = {
       targetDig: session.bot.targetDigBlock ? session.bot.targetDigBlock.position : null,
       simWrapped: !!(session.bot.physics && session.bot._ndSimOrig && session.bot.physics.simulatePlayer !== session.bot._ndSimOrig)
     } } : {})
-  })),
+  }
+}
+
+// Слежка за угрозами для арены (12.10, уворот от булавы и зелий): опрос драйвера раз в 250 мс опаздывал на падение
+// и бросок; включённая — шлёт { type: 'danger' } подключённому мозгу сразу, как тело увидело угрозу (раз в 50 мс).
+const methods = {
+  status: async (p) => session.immediate(async () => statusDetail(p)),
   // Наблюдатель сцены рядом с работающей кампанией: состояние и враги рядом БЕЗ выемки шины событий
   // (status/situation через immediate() забирают события у мозга — emergency/refuge/damage пропадали бы).
-  peek: async () => {
+  peek: async (p) => {
     const bot = session.bot
     let foes = []
     try { if (bot && bot.entity) foes = require('./flee').hostilesAround(bot, 24).slice(0, 8).map(h => ({ name: h.e.name, d: Math.round(h.d * 10) / 10, dy: Math.round((h.e.position.y - bot.entity.position.y) * 10) / 10 })) } catch {}
-    return { status: 'done', detail: { foes, busy: session.current ? session.current.name : null, refuging: !!(session.autopilot && session.autopilot.refuging) }, events: [], state: session.state() }
+    return { status: 'done', detail: { ...statusDetail(p), foes, busy: session.current ? session.current.name : null, refuging: !!(session.autopilot && session.autopilot.refuging) }, events: [], state: session.state() }
   },
-  connect: async () => {
-    const r = await session.connect()
+  // Залить лаву водой и забрать воду (12.10, арена: «лаву водой — заранее»): вода в клетку лавы (ведро целится в верх
+  // блока под ней — obsidian.pourOnto), источник рядом с водой застывает; через 0.5 с ведро назад.
+  douse_lava: async (p: any = {}) => session.runIntent('douse_lava', async () => {
+    const bot = session.require()
+    const o = require('./obsidian')
+    const Vec3 = require('vec3')
+    if (!p.at) throw new Error('нужна точка at')
+    const at = new Vec3(p.at.x, p.at.y, p.at.z).floored()
+    if (bot.entity.position.offset(0, 1.62, 0).distanceTo(at.offset(0.5, 0.5, 0.5)) > 4.5) return { ok: false, why: 'далеко' }
+    if (!bot.inventory.items().some(i => i.name === 'water_bucket')) return { ok: false, why: 'нет ведра воды' }
+    const ok = await o.pourOnto(bot, at.offset(0, -1, 0))
+    if (ok) { await gameClock.sleep(500); await o.scoopWater(bot, at) }
+    return { ok, why: ok ? 'залил' : 'не вылилась' }
+  }, { timeoutMs: 4000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Рывок уворота (12.10: «уворачиваясь — бегать и прыгать, а не шагать»): развернуться в сторону ухода, спринт и прыжки
+  // ticks тиков, без поиска пути. Перед рывком — 3 клетки по ходу: без лавы/огня и с полом не глубже 4 бл.; опасно —
+  // назад или вбок.
+  evade: async (p: any = {}) => session.runIntent('evade', async (ctl) => {
+    const bot = session.require()
+    const n = Math.hypot(p.dir?.x || 0, p.dir?.z || 0)
+    if (!n) return { ok: false, why: 'нет направления' }
+    // Куда бежать — с учётом стен (12.10: «уворачиваясь, бежит в стенку и упирается — геометрию не считает»): 8 направлений
+    // от желаемого, по каждому — чистый пробег тела до 4 бл. (flee.runLength: стены и ширина тела, подъём на блок с местом
+    // над головой, обрыв не глубже 3, лава/огонь); короче 2 — нельзя. Цена: уклон от желаемого, недобег, замкнутость конца.
+    const fl = require('./flee')
+    // В воде рывка нет (13.10: «застрял в воде — я его просто расстреливал»): сначала к берегу.
+    const mv = require('./movement')
+    if (mv.inWater(bot)) { const w = await mv.escapeWater(bot, ctl, { timeoutMs: 5000 }).catch(() => null); return { ok: !!w?.ok, why: w?.ok ? 'выплыл' : 'в воде, к берегу не вышло' } }
+    const base = Math.atan2(p.dir.z / n, p.dir.x / n)
+    const all = [0, 1, -1, 2, -2, 3, -3, 4].map(k => {
+      const a = base + k * Math.PI / 4
+      const dir = { x: Math.cos(a), z: Math.sin(a) }
+      // До 6 бл.: из брызг зелья (радиус 4) за один рывок.
+      const run = fl.runLength(bot, dir, 6, 3, p.arena)
+      return { dir, run, c: Math.abs(k) * 2 + (6 - run.len) * 2 + (run.len >= 2 ? fl.enclosure(bot, run.end) * 0.5 : 0) }
+    })
+    // Тесно (галерея, лестница, гребень Колизея; 13.10: «зелья кидаю — стоят»: 19 раз «некуда» за 3 мин): годится и шаг
+    // в 1 бл.; совсем некуда, а dropOk (зелье, булава) — спрыгнуть до 6 бл.: падение дешевле вреда II.
+    let pickFrom = all.filter(o => o.run.len >= 2)
+    if (!pickFrom.length) pickFrom = all.filter(o => o.run.len >= 1)
+    if (!pickFrom.length && p.dropOk) pickFrom = all.map(o => ({ ...o, run: fl.runLength(bot, o.dir, 6, 6, p.arena) })).filter(o => o.run.len >= 1)
+    const cands = pickFrom.sort((a, b) => a.c - b.c)
+    if (!cands.length) {
+      // Яма (13.10: «проваливаются в яму с сундуком — лечу на них, вылезти не успевают»): над головой свободно — вверх:
+      // заряд ветра под ноги в прыжке (подброс ~7 бл.), нет — прыжок и свой блок под ноги.
+      const head = bot.blockAt(bot.entity.position.offset(0, 2, 0))
+      if (head && head.boundingBox === 'empty') {
+        const wc = bot.inventory.items().find(i => i.name === 'wind_charge')
+        try { if (bot.usingHeldItem) bot.deactivateItem() } catch {}
+        if (wc) {
+          await bot.equip(wc, 'hand')
+          bot.setControlState('jump', true); await bot.waitForTicks(2); bot.setControlState('jump', false)
+          await bot.look(bot.entity.yaw, -Math.PI / 2, true); bot.activateItem(); await bot.waitForTicks(6)
+          return { ok: true, how: 'ветром из ямы' }
+        }
+        const c0 = bot.entity.position.floored()
+        bot.setControlState('jump', true); await bot.waitForTicks(5); bot.setControlState('jump', false)
+        const r = await require('./build').placeBlockAt(bot, c0, { honest: true, timeoutMs: 1000, ctl }).catch(() => null)
+        if (r?.ok) return { ok: true, how: 'блок под себя' }
+      }
+      return { ok: false, why: 'некуда: стены, обрыв или лава со всех сторон' }
+    }
+    let dx = cands[0].dir.x; let dz = cands[0].dir.z
+    bot.pathfinder?.setGoal(null)
+    // Ел/пил — бросить: с едой у рта бег вдвое медленнее.
+    try { if (bot.usingHeldItem) bot.deactivateItem() } catch {}
+    // Смотреть — на угрозу (look: стрелок, падающий, зелье; 12.10: «уворачиваются, глядя в стенку — смотреть на объект,
+    // в сторону — только когда бегут туда»): клавиши — относительно взгляда, спринт — только при беге вперёд. Без look —
+    // взгляд по ходу (уход из облака, от лавы).
+    const look = p.look && Number.isFinite(p.look.x) ? new (require('vec3'))(p.look.x, p.look.y, p.look.z) : null
+    const keys = () => {
+      const yaw = bot.entity.yaw
+      const fwd = -Math.sin(yaw) * dx - Math.cos(yaw) * dz
+      const side = Math.cos(yaw) * dx - Math.sin(yaw) * dz
+      bot.setControlState('forward', fwd > 0.38); bot.setControlState('back', fwd < -0.38)
+      bot.setControlState('right', side > 0.38); bot.setControlState('left', side < -0.38)
+      bot.setControlState('sprint', fwd > 0.38)
+    }
+    if (look) await bot.lookAt(look, true); else await bot.look(Math.atan2(-dx, -dz), 0, true)
+    // Не дольше чистого пробега (≈0.3 бл/тик спринтом): дальше runLength не смотрел — там может быть стена.
+    const ticks = Math.max(3, Math.min(30, Math.round(p.ticks ?? 10), Math.ceil(cands[0].run.len / 0.3)))
+    try {
+      for (let t = 0; t < ticks && !ctl.aborted; t++) {
+        if (look) bot.lookAt(look, true).catch(() => {})
+        if (!fl.insideArena(bot.entity.position.offset(dx, 0, dz), p.arena)) break
+        keys()
+        bot.setControlState('jump', !!p.jump && !!bot.entity.onGround)
+        await gameClock.sleep(50)
+      }
+    } finally { bot.clearControlStates() }
+    return { ok: true, dir: { x: Math.round(dx * 100) / 100, z: Math.round(dz * 100) / 100 } }
+  }, { timeoutMs: 3000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Джук под прицелом (12.10, арена: «целюсь из лука — стоят; стрейфить, прыгать, заранее, как только нацеливаюсь»;
+  // замер farm/arena-archer-test: рывки по 0.3 с с паузами — 80 % попаданий с 8 бл.). Пока стрелок (from) целится в меня
+  // или летит его стрела — без пауз зигзаг поперёк линии на него: отрезки случайной длины (3–9 тиков), сторона меняется
+  // случайно (не строго через раз — упреждение человека не угадает), по стенам — flee.runLength (упёрся — в другую
+  // сторону или назад от него). Взгляд — на стрелка; прыжки — с долей jumpy. Летит стрела — сразу поперёк её хода.
+  // retreat — уходить от него (зигзагом назад): ответить нечем. Конец — прицела нет 6 тиков подряд или maxTicks.
+  juke: async (p: any = {}) => session.runIntent('juke', async (ctl) => {
+    const bot = session.require()
+    const V = require('vec3'); const fl = require('./flee'); const th = require('./threats')
+    const name = String(p.from || '')
+    const maxTicks = Math.max(10, Math.min(200, Math.round(p.maxTicks ?? 80)))
+    try { if (bot.usingHeldItem) bot.deactivateItem() } catch {}
+    const jumpy = Number.isFinite(p.jumpy) ? p.jumpy : 0.6
+    bot.pathfinder?.setGoal(null)
+    const mvw = require('./movement')
+    if (mvw.inWater(bot)) await mvw.escapeWater(bot, ctl, { timeoutMs: 5000 }).catch(() => null)
+    let side = Math.random() < 0.5 ? 1 : -1; let segLeft = 0; let dx = 0; let dz = 0; let quiet = 0; let t = 0; let segs = 0
+    const sight = require('./pvp/last-seen').createLastSeen(bot)
+    let shooter = sight.observe(bot.players[name]?.entity)
+    const keys = () => {
+      const yaw = bot.entity.yaw
+      const fwd = -Math.sin(yaw) * dx - Math.cos(yaw) * dz
+      const sd = Math.cos(yaw) * dx - Math.sin(yaw) * dz
+      bot.setControlState('forward', fwd > 0.38); bot.setControlState('back', fwd < -0.38)
+      bot.setControlState('right', sd > 0.38); bot.setControlState('left', sd < -0.38)
+      bot.setControlState('sprint', fwd > 0.38)
+    }
+    try {
+      for (; t < maxTicks && !ctl.aborted; t++) {
+        shooter = sight.observe(bot.players[name]?.entity) || shooter
+        if (!shooter || !sight.visible(shooter)) break
+        const me = bot.entity.position
+        const d = th.dangers(bot, { foes: [name], radius: 64 })
+        const aimed = d.aims.some(a => a.name === name); const arrow = d.arrows[0]
+        quiet = aimed || arrow ? 0 : quiet + 1
+        if (quiet >= 6) break
+        let ax = shooter.position.x - me.x; let az = shooter.position.z - me.z; const L = Math.hypot(ax, az) || 1; ax /= L; az /= L
+        if (arrow && arrow.side) { dx = arrow.side.x; dz = arrow.side.z; segLeft = 4 }
+        else if (segLeft <= 0) {
+          if (Math.random() < 0.65) side = -side
+          let px = -az * side; let pz = ax * side
+          if (p.retreat) { px = px * 0.6 - ax * 0.8; pz = pz * 0.6 - az * 0.8 }
+          const n = Math.hypot(px, pz) || 1; px /= n; pz /= n
+          // Упёрся бы в стену/обрыв — другая сторона, потом назад от стрелка.
+          const opts = [[px, pz], [-px, -pz], [-ax, -az]]
+          const ok = opts.find(([x, z]) => fl.runLength(bot, { x, z }, 2, 3, p.arena).len >= 1.2)
+          if (!ok) break
+          ;[dx, dz] = ok; segLeft = 3 + Math.floor(Math.random() * 7); segs++
+          if (bot.entity.onGround && Math.random() < jumpy) bot.setControlState('jump', true)
+        }
+        if (!fl.insideArena(me.offset(dx, 0, dz), p.arena)) break
+        bot.lookAt(shooter.position.offset(0, 1.6, 0), true).catch(() => {})
+        keys()
+        if (!bot.entity.onGround) bot.setControlState('jump', false)
+        segLeft--
+        await gameClock.sleep(50)
+      }
+    } finally { sight.close(); bot.clearControlStates() }
+    return { ok: true, ticks: t, segments: segs }
+  }, { timeoutMs: 15000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Укрыться от стрелка (12.10, арена: «когда целюсь сверху — забегать под меня»; «блоками заставиться, чтобы стрелы не
+  // убивали»): клетка в maxRun бл., откуда его глаз не видно (луч perception.raySees: под стену, на которой он стоит, за
+  // выступ), спуск не больше 4, — бегом (movement.travelXZ); нет такой или не дошёл — стена из своих блоков на линии
+  // огня в клетке к нему, снизу вверх (опора — пол), до 3 в высоту, если он выше; ставит честно, пока луч не закрыт.
+  take_cover: async (p: any = {}) => session.runIntent('take_cover', async (ctl) => {
+    const bot = session.require()
+    const V = require('vec3'); const { raySees, eyePos } = require('./perception')
+    const { standableY, travelXZ } = require('./movement'); const { placeBlockAt, pickFiller } = require('./build')
+    const foe = bot.players[String(p.from || '')]?.entity
+    if (!foe || !require('./pvp/last-seen').seesPlayer(bot, foe)) return { ok: false, why: 'не вижу его' }
+    if (p.arena) return require('./flee').smartFlee(session, ctl, { foes: [foe.id], arena: p.arena, timeoutMs: 3000, reason: 'ищу укрытие от видимой угрозы' })
+    const eye = () => foe.position.offset(0, 1.62, 0)
+    const seen = () => raySees(bot, eyePos(bot), eye())
+    if (!seen()) return { ok: true, how: 'уже не видно' }
+    bot.pathfinder?.setGoal(null)
+    const me = bot.entity.position; const f0 = me.floored()
+    const maxRun = Math.max(2, Math.min(12, p.maxRun ?? 7))
+    const spots = []
+    for (let r = 1; r <= maxRun; r++) {
+      const n = Math.max(8, Math.round(r * 6))
+      for (let k = 0; k < n; k++) {
+        const a = k / n * 2 * Math.PI
+        const x = Math.floor(me.x + Math.cos(a) * r); const z = Math.floor(me.z + Math.sin(a) * r)
+        if (spots.some(o => o.x === x && o.z === z)) continue
+        const y = standableY(bot, x, f0.y, z)
+        if (y == null || y < f0.y - 4 || y > f0.y + 1) continue
+        if (raySees(bot, new V(x + 0.5, y + 1.62, z + 0.5), eye()) || raySees(bot, new V(x + 0.5, y + 0.9, z + 0.5), eye())) continue
+        spots.push({ x, y, z, r })
+      }
+      if (spots.length >= 4) break
+    }
+    const tried = []
+    for (const sp of spots.slice(0, 3)) {
+      if (ctl.aborted) break
+      const run = await travelXZ(bot, ctl, sp.x + 0.5, sp.z + 0.5, { range: 0.5, retries: 0, y: sp.y, deadline: gameClock.now() + 1200 + sp.r * 350 }).catch(e => ({ ok: false, error: e.message }))
+      tried.push(`${sp.x},${sp.y},${sp.z}${run.ok ? '' : ' ✗'}`)
+      if (!seen()) return { ok: true, how: 'укрытие', at: sp, tried }
+    }
+    if (p.blocks === false || !pickFiller(bot)) return { ok: false, why: spots.length ? 'не добежал до укрытия' : 'укрытия нет, блоков нет', tried }
+    // Стена: клетка к нему (по большей оси), снизу вверх; он выше на 35°+ — третий блок.
+    const here = bot.entity.position; const ff = here.floored()
+    const dx = foe.position.x - here.x; const dz = foe.position.z - here.z
+    const step = Math.abs(dx) >= Math.abs(dz) ? new V(Math.sign(dx), 0, 0) : new V(0, 0, Math.sign(dz))
+    const steep = (foe.position.y - here.y) / (Math.hypot(dx, dz) || 1) > 0.7
+    let placed = 0
+    for (const h of steep ? [0, 1, 2] : [0, 1]) {
+      if (ctl.aborted) break
+      const c = ff.plus(step).offset(0, h, 0)
+      const b = bot.blockAt(c)
+      if (b && b.boundingBox === 'block') continue
+      const r = await placeBlockAt(bot, c, { honest: true, timeoutMs: 1000, ctl }).catch(() => null)
+      if (r?.ok && !r.already) placed++
+      if (!seen()) return { ok: true, how: `стена ${placed}`, tried }
+    }
+    return { ok: false, why: `стена ${placed}, луч открыт`, tried }
+  }, { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Долететь на элитрах и сесть рядом с целью (12.10, арена: «на элитрах не могут залететь ко мне — садиться в любую
+  // точку, к игроку, и бить»): клетка посадки — свободная, с полом без лавы/воды в 1.5–3.5 бл. от цели; элитры — на
+  // тело (нагрудник после посадки назад); маршрут — ворота над серединой пути и посадка (combat/flight-route).
+  fly_to: async (p: any = {}) => session.runIntent('fly_to', async (ctl) => {
+    const bot = session.require()
+    const sky = require('./elytra')
+    const Vec3 = require('vec3')
+    if (!p.at) throw new Error('нужна точка at')
+    const k = sky.kit(bot)
+    if (!k.elytra || k.rockets < 2) return { ok: false, why: 'нет элитр или ракет' }
+    const W = sky.worldOf(bot, { observed: !!p.arena })
+    const t = new Vec3(p.at.x, p.at.y, p.at.z)
+    const inside = at => require('./combat/team-wind').windInside(at, p.arena)
+    if (!inside(t) || !inside(bot.entity.position)) return { ok: false, why: 'outside_arena' }
+    // Гребень на линии полёта (13.10: «летят ко мне сквозь стену Колизея, бьются, получают урон и уходят — облёт надо
+    // считать»): верх твёрдого в колонках вдоль прямой (шаг 1 бл., без 2 бл. у старта и у цели; непрогруженное — твёрдое).
+    // Высота полёта — над гребнем +4 (не ниже +8 над концами); посадка — только с открытым небом до этой высоты (в нишу
+    // под навесом на элитрах не сесть — тогда отказ, пусть идёт пешком/копает).
+    const me0 = bot.entity.position
+    const yHi = Math.floor(Math.max(me0.y, t.y)) + 48; const yLo = Math.floor(Math.min(me0.y, t.y)) - 2
+    const topAt = (x, z) => { for (let y = yHi; y >= yLo; y--) if (W.solid(Math.floor(x), y, Math.floor(z))) return y + 1; return yLo }
+    const H0 = Math.hypot(t.x - me0.x, t.z - me0.z)
+    let ridge = { y: -Infinity, x: (me0.x + t.x) / 2, z: (me0.z + t.z) / 2, d: H0 / 2 }
+    for (let d = 2; d <= H0 - 2; d += 1) {
+      const x = me0.x + (t.x - me0.x) * d / H0; const z = me0.z + (t.z - me0.z) * d / H0
+      const y = topAt(x, z); if (y > ridge.y) ridge = { y, x, z, d }
+    }
+    const cruise = Math.max(ridge.y + 4, Math.max(me0.y, t.y) + 8)
+    if (cruise > yHi) return { ok: false, why: 'гребень выше 48 бл. — не перелететь' }
+    const skyOpen = (x, y0, z) => { for (let y = Math.floor(y0) + 2; y <= cruise; y++) if (W.solid(Math.floor(x), y, Math.floor(z))) return false; return true }
+    let landing = null
+    for (const r of [1.5, 2.5, 3.5]) for (let a = 0; a < 8 && !landing; a++) {
+      const x = Math.floor(t.x + Math.cos(a * Math.PI / 4) * r) + 0.5; const z = Math.floor(t.z + Math.sin(a * Math.PI / 4) * r) + 0.5
+      for (const dy of [0, 1, -1]) {
+        const fl = W.floorBelow(x, Math.floor(t.y) + dy, z, 2)
+        if (fl && !fl.lava && !fl.water && inside({ x, y: fl.top, z }) && Math.abs(fl.top - t.y) <= 1.5 && !W.boxHit(x, fl.top, z, 1.8) && skyOpen(x, fl.top, z)) { landing = { x, y: fl.top, z }; break }
+      }
+      if (landing) break
+    }
+    // У цели навес (галерея, ниша) — сесть на ближайшую открытую площадку до 8 бл. (на 3 ниже — на 10 выше цели) и дойти
+    // пешком (13.10: «сижу в нычке под навесом — ни один не прилетел»).
+    let walkIn = false
+    if (!landing) {
+      let best = null
+      for (let r = 2; r <= 8; r++) for (let a = 0; a < 16; a++) {
+        const x = Math.floor(t.x + Math.cos(a * Math.PI / 8) * r) + 0.5; const z = Math.floor(t.z + Math.sin(a * Math.PI / 8) * r) + 0.5
+        const fl = W.floorBelow(x, Math.floor(t.y) + 10, z, 14)
+        if (!fl || fl.lava || fl.water || !inside({ x, y: fl.top, z }) || fl.top < t.y - 3 || fl.top > t.y + 10 || W.boxHit(x, fl.top, z, 1.8) || !skyOpen(x, fl.top, z)) continue
+        const c = r + Math.abs(fl.top - t.y) * 0.7
+        if (!best || c < best.c) best = { c, x, y: fl.top, z }
+      }
+      if (best) { landing = { x: best.x, y: best.y, z: best.z }; walkIn = true }
+    }
+    if (!landing) return { ok: false, why: 'негде сесть у цели (под навесом или занято)' }
+    if (!sky.wearingElytra(bot)) {
+      // В падении клик инвентаря сервер иногда не принимает — ещё раз через тик.
+      let sw = await sky.swapChest(bot, 'elytra', { hand: 'main' })
+      if (!sw.ok && !bot.entity.onGround) { await bot.waitForTicks(1); sw = await sky.swapChest(bot, 'elytra', { hand: 'main' }) }
+      if (!sw.ok) return { ok: false, why: 'элитры: ' + sw.why }
+    }
+    // В падении (спасение из пропасти) — раскрыть сразу; маршрут дальше без взлёта с земли (runFlightRoute: уже летим).
+    if (!bot.entity.onGround && !sky.gliding(bot.entity)) sky.startGlide(bot)
+    const me = bot.entity.position
+    const h = Math.hypot(landing.x - me.x, landing.z - me.z)
+    const along = h > 2 ? { x: landing.x - me.x, y: 0, z: landing.z - me.z } : { x: 0, y: 1, z: 0 }
+    // Ворота: гребень близко к старту (взлёт круче 1:1) — сначала подъём над собой; потом — над гребнем на высоте полёта.
+    const gates: any[] = []
+    if (ridge.d < cruise - me.y) gates.push({ id: 'подъём', center: { x: me.x, y: cruise, z: me.z }, normal: { x: 0, y: 1, z: 0 }, radius: 5 })
+    gates.push({ id: 'над гребнем', center: { x: ridge.x, y: cruise, z: ridge.z }, normal: along, radius: 4 })
+    let r: any = null
+    try { r = await require('./combat/flight-route').runFlightRoute(session, ctl, { gates, landing, timeoutSeconds: p.timeoutSeconds ?? 20, arena: p.arena }) } catch (e: any) { r = { ok: false, stopped: e.message } }
+    try { if (!sky.gliding(bot.entity) && sky.wearingElytra(bot)) await sky.swapChest(bot, 'chest') } catch {}
+    // Дальше пешком — боем драйвера (fight сам идёт к цели); goto отсюда ждал бы конца этого же полёта.
+    return { ok: !!r?.ok, walkIn, why: r?.stopped || null, landing, ridge: Math.round(ridge.y), cruise: Math.round(cruise), hp: r?.hpBefore != null ? Math.round(r.hpBefore - r.hp) : null }
+  }, { timeoutMs: ((p.timeoutSeconds ?? 20) + 10) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Подкоп к цели по прямой (13.10, арена: «если путь не находится — пусть тупо в прямую копают ко мне тоннель»): шаг по
+  // большей из осей к цели (по очереди — почти прямая линия); цель выше — ступенька вверх (над головой и впереди на две
+  // клетки), ниже — вниз; под ногами впереди пусто — свой блок (build.placeBlockAt, честно). Копает только клетки перед
+  // собой (видно прицелом), лучшим инструментом (tools.install: bot.dig). Лава или вода у вскрытой клетки — стоп.
+  // Итог: { ok, steps, dug, placed, why, at }; ok — дошёл до 2.5 бл. от цели.
+  swarm_work: async (p: any = {}) => session.runIntent('swarm_work', ctl => require('./actions').swarmWork(session, ctl, p), { interruptOn: ['death', 'kicked', 'disconnected'] }),
+  swarm_hold: async (p: any = {}) => session.runIntent('swarm_hold', ctl => require('./swarm-position-work').swarmHold(session, ctl, p), { timeoutMs: 5000, interruptOn: ['death', 'kicked', 'disconnected'] }),
+  swarm_pillar: async (p: any = {}) => session.runIntent('swarm_pillar', ctl => require('./swarm-position-work').swarmPillar(session, ctl, p), { timeoutMs: 30000, interruptOn: ['death', 'kicked', 'disconnected'] }),
+  swarm_keep: async (p: any = {}) => session.immediate(async () => {
+    if (p.cells !== undefined && (!Array.isArray(p.cells) || p.cells.length > 4096)) return { ok: false, why: 'invalid_cells' }
+    return { ok: true, kept: require('./swarm-work').keepBlocks(session.require(), p.cells || [], { clear: p.clear === true }) }
+  }),
+  swarm_pose: async (p: any = {}) => session.immediate(async () => {
+    const bot = session.require(), V = require('vec3')
+    if (!p.at || ![p.at.x, p.at.y, p.at.z].every(Number.isSafeInteger)) return { poses: [] }
+    const at = new V(p.at.x, p.at.y, p.at.z), seen = require('./pick').blockSeen(bot, at, { range: 64 })
+    const block = seen && bot.blockAt(at), solid = block && !require('./navigation/geometry').HAZARD.test(block.name) && block.shapes?.some(s => s.every((n, i) => n === (i < 3 ? 0 : 1)))
+    return { poses: p.inspectOnly ? [] : require('./swarm-senses').placementPoses(bot, p.at), ...(block ? { existing: { name: block.name, solid: !!solid } } : {}) }
+  }),
+  swarm_position: async (p: any = {}) => session.immediate(async () => {
+    const bot = session.require()
+    return require('./swarm-position').swarmPositions(bot, p)
+  }),
+  ledge_to: async (p: any = {}) => session.runIntent('ledge_to', ctl => require('./navigation/parkour').ledgeTo(session, ctl, p), { timeoutMs: Math.max(1, Math.min(20, p.timeoutSeconds ?? 8)) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  wind_receive: async (p: any = {}) => session.runIntent('wind_receive', ctl => require('./combat/team-wind').windReceive(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  wind_boost: async (p: any = {}) => session.runIntent('wind_boost', ctl => require('./combat/team-wind').windBoost(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  dig_to: async (p: any = {}) => session.runIntent('dig_to', async (ctl) => {
+    const bot = session.require()
+    const V = require('vec3'); const { placeBlockAt } = require('./build')
+    if (!p.at) throw new Error('нужна точка at')
+    const T = new V(p.at.x, p.at.y, p.at.z)
+    const maxSteps = Math.max(1, Math.min(80, p.maxSteps ?? 40))
+    bot.pathfinder?.setGoal(null)
+    const isAir = (v) => { const b = bot.blockAt(v); return !!b && b.boundingBox === 'empty' && !/^(water|lava)$/.test(b.name) }
+    const wet = (v) => { for (const d of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]) { const b = bot.blockAt(v.offset(d[0], d[1], d[2])); if (b && /^(water|lava)$/.test(b.name)) return b.name } return null }
+    let steps = 0; let dug = 0; let placed = 0; let stuck = 0; let flip = false; let why = null
+    const open = async (v) => {
+      if (isAir(v)) return true
+      const b = bot.blockAt(v)
+      if (!b || b.name === 'bedrock' || b.diggable === false) return false
+      const w = wet(v); if (w) { why = `${w} за стенкой`; return false }
+      try { await bot.lookAt(v.offset(0.5, 0.5, 0.5), true); await bot.dig(b, true); dug++ } catch { return false }
+      return isAir(v)
+    }
+    while (steps < maxSteps && !ctl.aborted) {
+      const me = bot.entity.position; const c = me.floored()
+      if (me.distanceTo(T) <= 2.5) return { ok: true, steps, dug, placed, at: c }
+      const dx = T.x - me.x; const dz = T.z - me.z; const dy = Math.floor(T.y) - c.y
+      // Ось шага: большая по остатку; при почти равных — по очереди.
+      const useX = Math.abs(Math.abs(dx) - Math.abs(dz)) < 1 ? (flip = !flip) : Math.abs(dx) > Math.abs(dz)
+      const st = Math.hypot(dx, dz) < 0.8 ? new V(0, 0, 0) : useX ? new V(Math.sign(dx), 0, 0) : new V(0, 0, Math.sign(dz))
+      const up = dy >= 1; const down = dy <= -1 && !(st.x === 0 && st.z === 0)
+      const nx = c.plus(st)
+      let need: any[]; let feet
+      if (st.x === 0 && st.z === 0) {
+        // Цель прямо надо мной/подо мной: столб вверх (блок под ноги в прыжке) или копать вниз.
+        if (dy >= 1) {
+          if (!(await open(c.offset(0, 2, 0)))) { why = why || 'над головой не пробить'; break }
+          bot.setControlState('jump', true); await bot.waitForTicks(6); bot.setControlState('jump', false)
+          const r = await placeBlockAt(bot, c, { honest: true, timeoutMs: 1500, ctl }).catch(() => null)
+          if (r?.ok) placed++; steps++; await bot.waitForTicks(4); continue
+        }
+        if (!(await open(c.offset(0, -1, 0)))) { why = why || 'под ногами не пробить'; break }
+        await bot.waitForTicks(8); steps++; continue
+      }
+      if (up) { need = [c.offset(0, 2, 0), nx.offset(0, 1, 0), nx.offset(0, 2, 0)]; feet = nx.offset(0, 1, 0) }
+      else if (down) { need = [nx, nx.offset(0, 1, 0), nx.offset(0, -1, 0)]; feet = nx.offset(0, -1, 0) }
+      else { need = [nx, nx.offset(0, 1, 0)]; feet = nx }
+      let ok = true
+      for (const v of need) if (!(await open(v))) { ok = false; break }
+      if (!ok) { if (++stuck >= 3) { why = why || 'не пробить'; break } flip = !flip; continue }
+      // Пол под новой клеткой: пусто — свой блок (не в пропасть).
+      const floor = feet.offset(0, -1, 0)
+      if (isAir(floor)) {
+        const r = await placeBlockAt(bot, floor, { honest: true, timeoutMs: 1500, ctl }).catch(() => null)
+        if (r?.ok) placed++; else { why = 'под ногами пусто, блоков нет'; break }
+      }
+      // Шаг в клетку: лицом к ней, вперёд (вверх — с прыжком), до 20 тиков.
+      const goal = feet.offset(0.5, 0, 0.5)
+      for (let t = 0; t < 20 && !ctl.aborted; t++) {
+        const pos = bot.entity.position
+        if (pos.floored().x === feet.x && pos.floored().z === feet.z && Math.abs(pos.y - feet.y) < 0.6) break
+        await bot.lookAt(goal.offset(0, 1.6, 0), true)
+        bot.setControlState('forward', true); bot.setControlState('jump', up && bot.entity.onGround)
+        await bot.waitForTicks(1)
+      }
+      bot.clearControlStates()
+      const moved = !bot.entity.position.floored().equals(c)
+      stuck = moved ? 0 : stuck + 1
+      if (stuck >= 3) { why = 'не шагнуть'; break }
+      steps++
+    }
+    bot.clearControlStates()
+    const at = bot.entity.position.floored()
+    return { ok: bot.entity.position.distanceTo(T) <= 2.5, steps, dug, placed, why, at: { x: at.x, y: at.y, z: at.z } }
+  }, { timeoutMs: Math.max(10, Math.min(120, p.timeoutSeconds ?? 60)) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Прыжок на заряде ветра в точку (wind-leap.ts): to — клетка, куда встать (ноги); dryRun — только план.
+  wind_leap: async (p: any = {}) => session.runIntent('wind_leap', async (ctl) => {
+    session.require()
+    if (p.toward) return require('./wind-leap').leapToward(session, ctl, p.toward, { dryRun: !!p.dryRun, arena: p.arena })
+    if (!p.to) throw new Error('нужна точка to или toward')
+    return require('./wind-leap').leap(session, ctl, p.to, { dryRun: !!p.dryRun, arena: p.arena })
+  }, { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Выбить опору из-под него (13.10, арена: «стою прямо над ними — не ломают блоки, чтобы меня скинуть»): блоки под его
+  // рамкой (ноги −0.5, по углам рамки ±0.3), видимые мне и в досягаемости 4.5 от глаз (pick.blockSeen — честно, не сквозь
+  // стену), копаются лучшим инструментом (tools.install: bot.dig). Итог: { ok, dug, why }.
+  undercut: async (p: any = {}) => session.runIntent('undercut', async (ctl) => {
+    const bot = session.require()
+    const V = require('vec3'); const pk = require('./pick')
+    const foe = bot.players[String(p.target || '')]?.entity
+    if (!foe) return { ok: false, why: 'не вижу его' }
+    let dug = 0
+    for (let pass = 0; pass < 3 && !ctl.aborted; pass++) {
+      const f = foe.position
+      const cells = new Map()
+      for (const [ox, oz] of [[0, 0], [0.3, 0.3], [-0.3, 0.3], [0.3, -0.3], [-0.3, -0.3]]) { const c = new V(f.x + ox, f.y - 0.5, f.z + oz).floored(); cells.set(c.toString(), c) }
+      const solid = [...cells.values()].filter(c => { const b = bot.blockAt(c); return b && b.boundingBox === 'block' && b.name !== 'bedrock' && b.diggable !== false })
+      if (!solid.length) return { ok: dug > 0, dug, why: dug ? 'опоры нет' : 'под ним пусто' }
+      const seen = solid.filter(c => pk.blockSeen(bot, c, { range: 4.5 }))
+      if (!seen.length) return { ok: dug > 0, dug, why: 'опору не видно или не достать' }
+      for (const c of seen) {
+        if (ctl.aborted) break
+        const b = bot.blockAt(c); if (!b || b.boundingBox !== 'block') continue
+        try { await bot.lookAt(c.offset(0.5, 0.5, 0.5), true); await bot.dig(b, true); dug++ } catch {}
+      }
+    }
+    return { ok: dug > 0, dug }
+  }, { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Выстрел из-за стенки в прыжке (13.10, арена: «ставит блоки, прыгает и выстреливает из лука — очень крутой приём»):
+  // стенка в 2 бл. в клетке к нему (честно, build.placeBlockAt; блоков нет — без неё), лук натянут за ней до полной силы
+  // (bow.shoot holdWhile), прыжок, на вершине (глаза над стенкой, vy ≤ 0.08) — спуск с упреждением и поправкой на своё
+  // движение (bow.shoot compensate); закрыто в миг спуска — не стреляет. Повтор shots раз, пока он в 6–40 бл.
+  peek_shot: async (p: any = {}) => session.runIntent('peek_shot', async (ctl) => {
+    const bot = session.require()
+    const V = require('vec3'); const bow = require('./bow'); const { placeBlockAt, pickFiller } = require('./build')
+    const foe = bot.players[String(p.target || '')]?.entity
+    if (!foe) return { ok: false, why: 'не вижу его' }
+    if (!bot.inventory.items().some(i => i.name === 'bow') || !bot.inventory.items().some(i => /arrow$/.test(i.name))) return { ok: false, why: 'нет лука или стрел' }
+    bot.pathfinder?.setGoal(null)
+    const me = bot.entity.position; const ff = me.floored()
+    const dx = foe.position.x - me.x; const dz = foe.position.z - me.z
+    const step = Math.abs(dx) >= Math.abs(dz) ? new V(Math.sign(dx), 0, 0) : new V(0, 0, Math.sign(dz))
+    let wall = 0
+    if (pickFiller(bot)) for (const h of [0, 1]) {
+      if (ctl.aborted) break
+      const c = ff.plus(step).offset(0, h, 0); const b = bot.blockAt(c)
+      if (b && b.boundingBox === 'block') { wall++; continue }
+      const r = await placeBlockAt(bot, c, { honest: true, timeoutMs: 1000, ctl }).catch(() => null)
+      if (r?.ok) wall++
+    }
+    const shots = Math.max(1, Math.min(6, p.shots ?? 3))
+    let fired = 0; let hits = 0; let why = null
+    for (let k = 0; k < shots && !ctl.aborted; k++) {
+      const d = bot.entity.position.distanceTo(foe.position)
+      if (d < 6 || d > 40 || !bot.players[String(p.target)]?.entity) { why = d < 6 ? 'он близко' : 'ушёл'; break }
+      let jumpAt = -1
+      const r = await bow.shoot(bot, foe, {
+        peek: true, follow: false, holdMaxMs: 1500,
+        // Тетива натянута — прыжок; держать до вершины (глаза над стенкой) или 14 тиков.
+        holdWhile: () => {
+          const t = gameClock.now()
+          if (jumpAt < 0) { jumpAt = t; bot.setControlState('jump', true); return true }
+          if (t - jumpAt > 100) bot.setControlState('jump', false)
+          if (t - jumpAt > 700) return false
+          return bot.entity.onGround || bot.entity.velocity.y > 0.08
+        },
+        onHit: () => { hits++ }
+      }).catch(e => ({ shot: false, why: e.message }))
+      bot.setControlState('jump', false)
+      if (r?.shot) fired++; else if (!why) why = r?.why || null
+      for (let t = 0; t < 20 && !bot.entity.onGround && !ctl.aborted; t++) await bot.waitForTicks(1)
+    }
+    return { ok: fired > 0, fired, hits, wall, why }
+  }, { timeoutMs: 20000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  // Спасение при падении в пропасть (13.10, арена: «ботов сбивают в обрыв — ничего не успевают сделать»): падаю
+  // (v.y < −0.5), а пола выше смертельной высоты killY подо мной в 80 бл. нет — элитры (из рюкзака на тело в воздухе) и
+  // ракеты есть: раскрыть и лететь к safe (fly_to: над гребнем, посадка с открытым небом). Конфиг — от драйвера арены.
+  rescue_config: async (p: any = {}) => {
+    session._rescue = p.off ? null : { safe: p.safe, killY: Number(p.killY) }
+    const bot = session.bot
+    if (bot && !bot._ndRescue) {
+      bot._ndRescue = true
+      let busyRescue = false
+      bot.on('physicsTick', () => {
+        const cfg = session._rescue; const b = bot.entity
+        if (!cfg || busyRescue || !b || b.onGround || b.isInWater || b.elytraFlying || b.velocity.y > -0.5 || (bot.health ?? 0) <= 0) return
+        const sky = require('./elytra')
+        const f = sky.worldOf(bot).floorBelow(b.position.x, b.position.y, b.position.z, 80)
+        // Внизу смертельная высота, лава — или само падение больше хп (+3): раскрыть. Раньше — только «внизу пусто»: бот
+        // летел вдоль гребня, под ним мелькали уступы, и спасение включалось уже в зоне смерти (y 112 при killY 113).
+        const fall = f ? b.position.y - f.top : Infinity
+        if (f && f.top >= cfg.killY + 1 && !f.lava && fall <= (bot.health ?? 20) + 3) return
+        const k = sky.kit(bot)
+        if (!k.elytra || k.rockets < 1) return
+        busyRescue = true
+        console.log('[rescue] падаю в пропасть — элитры', JSON.stringify({ y: Math.round(b.position.y), floor: f ? f.top : null, killY: cfg.killY }))
+        methods.fly_to({ at: cfg.safe, timeoutSeconds: 15, rescue: true }).then(r => console.log('[rescue]', JSON.stringify(r?.detail || r).slice(0, 200))).catch(() => {}).finally(() => { busyRescue = false })
+      })
+    }
+    return { status: 'done', detail: { on: !!session._rescue } }
+  },
+  // Сдуть с края (13.10, арена: человек так сбрасывает ботов с Колизея — «ветром не могут в меня попасть»): он у обрыва
+  // (за ним по линии от меня падение 5+ бл. или пусто в 1–2 бл.) — заряд ветра в пол у его ног с моей стороны с
+  // упреждением (заряд 1.5 б/т без гравитации): всплеск толкает «центр → глаза» — от меня, за край. Честно: точка видна.
+  wind_push: async (p: any = {}) => session.runIntent('wind_push', async ctl => {
+    const bot = session.require(), sight = require('./pvp/last-seen').createLastSeen(bot)
+    try {
+      const e = sight.observe(bot.players?.[p.target]?.entity)
+      if (!e || !sight.visible(e)) return { ok: false, fired: false, why: 'цель не видна' }
+      const mace = require('./mace')
+      if (!p.force && !mace.pushPlan(bot, e, { sees: true, theyUp: e.position.y > bot.entity.position.y + 2 })) return { ok: false, fired: false, why: 'толкать сейчас невыгодно' }
+      const result = await mace.windPush(bot, e, { vel: () => sight.observe(e)?.velocity || { x: 0, y: 0, z: 0 } })
+      return { ...result, ok: !!result.fired }
+    } finally { sight.close() }
+  }, { timeoutMs: 3000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+  watch_dangers: async (p: any = {}) => { dangerWatch = p.on === false ? null : { foes: Array.isArray(p.foes) ? p.foes.map(String) : [] }; return { status: 'done', detail: { on: !!dangerWatch } } },
+  connect: async (p) => {
+    const r = await session.connect(p || {})
     // Same envelope as every other method so the brain reads one shape.
     return { status: 'done', detail: r.already ? { already: true } : { joined: true }, events: bus.drain(), state: session.state() }
   },
@@ -104,7 +612,8 @@ const methods = {
   escort: async (p) => session.escort(p || {}),
   give: async (p) => session.giveItem(p || {}),
   take: async (p) => session.takeItem(p || {}),
-  stop: async () => session.stop(),
+  // Спасение на элитрах (rescue) стоп драйвера не рвёт: тревога «человек рядом» глушила полёт из пропасти.
+  stop: async () => (session.current?.name === 'fly_to' && session.current?.params?.rescue && !session.current.ctl?.aborted) ? { status: 'done', detail: { ignored: 'спасаюсь на элитрах' } } : session.stop(),
   wait: async (p) => session.wait(p || {}),
   look_at: async (p) => session.lookAt(p),
   // Жест (гонка в Колизее, 10.10: «эмоции чаще — кивать, махать, присаживаться»): nod | shake | wave | crouch, at — на кого смотреть.
@@ -541,7 +1050,21 @@ const methods = {
       // Вниз (вверх — строго под ноги; вперёд — под ноги, чуть за спину).
       // up — строго под ноги (подъём на ярус: вверх ~7 бл., в полёте — вперёд к цели); иначе — под ноги чуть за спину.
       const flat = p?.toward && !p?.up
-      await bot.look(flat ? yaw + Math.PI : yaw, flat ? -1.25 : -Math.PI / 2, true)
+      // Заряд — только в опору (13.10: «себе под ноги — только когда есть опора, а так пулял в никуда»): луч взгляда до
+      // первого твёрдого блока в 3.5 бл., точка удара не дальше 2.3 от ног (всплеск достаёт до 2.4); за спиной пусто —
+      // строго вниз; и там нет — не бросать.
+      const burstAt = (yw, pt) => {
+        const e = bot.entity.position.offset(0, 1.62, 0); const d = { x: -Math.sin(yw) * Math.cos(pt), y: Math.sin(pt), z: -Math.cos(yw) * Math.cos(pt) }
+        for (let s = 0.2; s <= 3.5; s += 0.1) {
+          const q = e.offset(d.x * s, d.y * s, d.z * s); const b = bot.blockAt(q.floored())
+          if (b && b.boundingBox === 'block') return q.distanceTo(bot.entity.position) <= 2.3 ? q : null
+        }
+        return null
+      }
+      let ly = flat ? yaw + Math.PI : yaw; let lp = flat ? -1.25 : -Math.PI / 2
+      if (!burstAt(ly, lp)) { ly = yaw; lp = -Math.PI / 2 }
+      if (!burstAt(ly, lp)) { bot.setControlState('sprint', false); bot.setControlState('forward', false); return { used, rise: 0, why: 'нет опоры для заряда' } }
+      await bot.look(ly, lp, true)
       bot.activateItem(); used++
       if (p?.toward) { await bot.waitForTicks(2); await bot.look(yaw, 0, true); bot.setControlState('forward', true); bot.setControlState('sprint', true) }
       await bot.waitForTicks(10)
@@ -555,13 +1078,14 @@ const methods = {
   pearl_to: async (p) => session.runIntent('pearl_to', async (ctl) => {
     const bot = session.require()
     if (!p?.to) throw new Error('нужна точка to')
+    if (p.observed === true) return require('./swarm-position').pearlToPosition(session, ctl, { to: p.to, arena: p.arena })
     const ph = require('./pearl-hop')
     const from = bot.entity.position.clone()
-    const r = await ph.hopTo(bot, p.to, { reserve: 0, minGain: -999, hpMin: 3, maxHops: p.maxHops ?? 1, arriveR: 3, walkSec: 999, abortIf: () => ctl.aborted })
+    const r = await ph.hopTo(bot, p.to, { reserve: 0, minGain: -999, hpMin: 3, maxHops: p.maxHops ?? 1, arriveR: 3, walkSec: 999, edgeOk: !!p.edgeOk, yTop: p.yTop ?? 30, abortIf: () => ctl.aborted })
     const me = bot.entity.position
     // loose — «куда-нибудь прочь»: удача, если перенёсся на 6+ бл.
     const ok = Math.hypot(me.x - p.to.x, me.y - p.to.y, me.z - p.to.z) <= 4 || (!!p.loose && me.distanceTo(from) >= 6)
-    return { ok, hops: r.hops, stop: r.stop, at: { x: Math.round(me.x), y: Math.round(me.y), z: Math.round(me.z) } }
+    return { ok, hops: r.hops, stop: r.stop, why: r.why, at: { x: Math.round(me.x), y: Math.round(me.y), z: Math.round(me.z) } }
   }, { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p || {} }),
   // Закрыть проход за собой (10.10: «стенку застраивать в узких местах, воду, лаву, паутину — система блокирования прохода
   // врагу»): клетка между мной и тем, кто гонится (по ходу к нему), — паутина (держит), иначе 2 блока стены; в проходе
@@ -705,6 +1229,8 @@ const methods = {
   })
 }
 
+// Наблюдение опасностей для драйвера арены (watch_dangers): враги-люди — их прицел, падение с булавой.
+let dangerWatch: { foes: string[] } | null = null
 const wss = new WebSocketServer({ host: cfg.wsHost, port: cfg.wsPort })
 
 let clients = 0
@@ -714,11 +1240,20 @@ wss.on('connection', (ws) => {
   const sendClock = (clock = gameClock.snapshot()) => {
     if (clock && ws.readyState === 1 && (ws.bufferedAmount || 0) < 65536) ws.send(JSON.stringify({ type: 'clock', clock }))
   }
+  // Опасности — каждый игровой тик (на ускоренном сервере стенные 50 мс — несколько тиков опоздания уворота).
+  const pushDanger = () => {
+    if (!dangerWatch || ws.readyState !== 1 || !session.bot?.entity) return
+    try {
+      const d = require('./threats').dangers(session.bot, { foes: dangerWatch.foes })
+      if (d.potions.length || d.clouds.length || d.smashes.length || d.arrows.length || d.aims.length || d.lava.length) ws.send(JSON.stringify({ type: 'danger', dangers: { potions: d.potions, clouds: d.clouds, smashes: d.smashes, arrows: d.arrows, aims: d.aims, lava: d.lava }, pos: session.bot.entity.position }))
+    } catch {}
+  }
   let sourceClock
   let lastPublished = 0
   // Followers have no independent prediction loop. Publish every five game
   // ticks so short game sleeps don't wait 250 wall ms at an accelerated rate.
   const onTick = ticks => {
+    try { pushDanger() } catch {}
     if (sourceClock.frozen || ticks - lastPublished >= 5) { lastPublished = ticks; sendClock() }
   }
   const bindClock = clock => {

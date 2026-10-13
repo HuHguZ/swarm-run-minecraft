@@ -31,8 +31,8 @@ const drops = require('./drops')
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz, stuckGuard } = require('./movement')
-const { walkable } = require('./walkable')
+const { sleep, xyz, stuckGuard, gotoPath } = require('./movement')
+const { walkable, standable } = require('./walkable')
 const { seesBlock } = require('./sight')
 const { countOf, itemNamed } = require('./items')
 const { canUseRanged } = require('./play-policy')
@@ -363,9 +363,10 @@ function makeTrack (e) {
 async function walkNear (bot, ctl, target, range, ms) {
   const guard = stuckGuard(bot, ctl)
   let timer = null
+  const path = gotoPath(bot, new goals.GoalNear(target.x, target.y, target.z, range))
   try {
     await Promise.race([
-      bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, range)),
+      path,
       guard.promise,
       new Promise<any>((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), ms) })
     ])
@@ -377,6 +378,7 @@ async function walkNear (bot, ctl, target, range, ms) {
     try { bot.pathfinder.setGoal(null) } catch {}
     return { ok: false, error: e.message }
   } finally {
+    path.cancel?.()
     guard.stop()
     if (timer) gameClock.clearTimeout(timer)
   }
@@ -776,6 +778,7 @@ function choosePost (bot, spawner, avoid = null) {
   const nodes = walkable(bot, bot.entity.position, { radius: 16, maxNodes: 2500 })
   let best = null
   for (const { pos, d } of nodes) {
+    if (!standable(bot, pos)) continue
     const h = Math.hypot(pos.x + 0.5 - c.x, pos.z + 0.5 - c.z)
     // Вплотную к спавнеру (1.5..4): новые блейзы появляются в ±4 от него на
     // его высоте ±1 (BaseSpawner) — в досягаемости меча, и бьются до первой
@@ -783,7 +786,9 @@ function choosePost (bot, spawner, avoid = null) {
     // одно за полминуты и 21 стрела на 6 убийств.
     if (h < 1.4 || h > 9) continue
     if (Math.abs(pos.y - spawner.y) > 2) continue
-    if (avoid && pos.distanceTo(avoid) < 2.5) continue
+    // A nearby step can expose the hall from behind its floor. Avoiding the
+    // previous post costs preference; it must not discard the only real exit.
+    const repeatCost = avoid ? Math.max(0, 2.5 - pos.distanceTo(avoid)) : 0
     const eye = pos.offset(0.5, 1.62, 0.5)
     if (eye.distanceTo(c.offset(0, 0.5, 0)) > 13) continue
     if (lavaNear(bot, pos, 3)) continue
@@ -803,8 +808,48 @@ function choosePost (bot, spawner, avoid = null) {
     // S1e: на посту должна копаться яма отлёжки (3, иначе 2): отлечиться на помосте крепости «в толщу» не выходило — «лава/пусто у
     // ямы», ход к соседним клеткам под ударами ифритов вплотную (s1e-K4-7: 19.9 урона в фазе «в толщу отлечиться», смерть; K4-4, K4-1).
     const pit = process.env.ND_POST_PIT === '0' ? 0 : !pitWhyAt(bot, pos, 3) ? 2 : !pitWhyAt(bot, pos, 2) ? 1 : 0
-    const score = view - edge * 4 + cover * 1.5 - Math.abs(h - 2.5) * 1.5 - Math.abs(pos.y - spawner.y) - d * 0.1 + pit * 3
+    const score = view - edge * 4 + cover * 1.5 - Math.abs(h - 2.5) * 1.5 - Math.abs(pos.y - spawner.y) - d * 0.1 + pit * 3 - repeatCost
     if (!best || score > best.score) best = { pos, score, h: Math.round(h * 10) / 10, view, cover, edge, pit }
+  }
+  return best
+}
+
+// A remembered spawner tells us where its hall is, not where a hidden blaze is.
+// Open one visible obstruction towards that known volume, like a bunker window.
+function windowForPost (bot, spawner) {
+  if (!spawner || !standable(bot, bot.entity.position.floored())) return null
+  const pick = require('./pick'); const tools = require('./tools')
+  const eye = pick.eyeOf(bot), c = spawner.offset(0.5, 0, 0.5)
+  const targets = []
+  for (const x of [-3, -1, 1, 3]) for (const z of [-3, -1, 1, 3]) for (const y of [0.5, 2]) targets.push(c.offset(x, y, z))
+  const candidates = new Map()
+  for (const q of targets) {
+    const delta = q.minus(eye), len = delta.norm()
+    if (len < 0.05) continue
+    const hit = pick.blockOnRay(bot, eye, delta.scaled(1 / len), len - 0.05)
+    if (hit) candidates.set(hit.pos.toString(), hit.block)
+  }
+  let best = null
+  for (const block of candidates.values()) {
+    const pos = block.position
+    if (/spawner|chest|barrel|shulker/.test(block.name) || !tools.breakable(block)) continue
+    if (!bot.canDigBlock(block) || !pick.blockSeen(bot, pos, { range: 4.5 })) continue
+    const dig = tools.bestFor(bot, block)
+    if (!Number.isFinite(dig.ms)) continue
+    let gain = 0
+    for (const q of targets) {
+      const delta = q.minus(eye), len = delta.norm()
+      if (len < 0.05) continue
+      const hit = pick.blockOnRay(bot, eye, delta.scaled(1 / len), len - 0.05)
+      if (!hit || !hit.pos.equals(pos)) continue
+      // Only this block is ignored. A second wall still closes the view.
+      const after = bot.world.raycast(eye, delta.scaled(1 / len), len - 0.05,
+        b => b && b.boundingBox !== 'empty' && !b.position.equals(pos))
+      if (!after) gain++
+    }
+    const score = gain / Math.max(50, dig.ms)
+    // Equal-cost views: open the upper window, not a notch in the hall floor.
+    if (gain > 0 && (!best || score > best.score || (score === best.score && pos.y > best.pos.y))) best = { pos, gain, ms: dig.ms, score }
   }
   return best
 }
@@ -2051,22 +2096,35 @@ async function holdSpawner (session, ctl, ctx) {
       // --- блейзы рядом, но ни одного не видно 6 с (висят над помостом, за
       // стеной): другая точка боя с видом на куб спавна. Замер 8: у края
       // помоста трое в 3–7 блоках, не видно ни одного, 2 стержня за 3 минуты.
-      if (vis.length || !blazes.length) lastVisAt = now
-      // S1f (вслепую — спавнер не увиден, бой отдан по видимым ифритам): ни одного не видно 6 с — подойти к ближнему одиночке за стеной
-      // (ценой, как ниже: без FR — только к одиночке и при хп ≥ 16), а не стоять 400 с («выбор vis 0» — s1f-I1-2, 0 убийств).
-      // ND_BLAZE_NOSP_APPROACH=0 — прежнее.
-      if (!bunker && !spawner && blazes.length && now - lastVisAt > 6000 && quiet > 1500 && approaches < 6 && process.env.ND_BLAZE_NOSP_APPROACH !== '0') {
-        const hidden: any = blazes.slice().sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
-        const crowd = blazes.filter((e: any) => e !== hidden && e.position.distanceTo(hidden.position) < 6).length
-        if (fireproof() ? (bot.health ?? 0) >= 12 : crowd === 0 && (bot.health ?? 0) >= 16) {
-          approaches++
-          out.approaches = approaches
-          setPhase('к ифриту за стеной (спавнер не виден)')
-          log('к ифриту за стеной без спавнера', { n: approaches, to: xyz(hidden.position), crowd })
-          await walkNear(bot, ctl, floorUnder(bot, hidden.position) || hidden.position.floored(), 2, 6000)
-          lastVisAt = gameClock.now()
-          continue
+      if (vis.length) lastVisAt = now
+      // Без увиденного спавнера скрытая сущность не задаёт точную цель хода.
+      // Уже увиденная крепость и её видимый пол дают следующий законный обзор.
+      if (!bunker && !spawner && !vis.length && now - lastVisAt > 6000 && quiet > 1500 && process.env.ND_BLAZE_NOSP_APPROACH !== '0') {
+        const fortress = require('./fortress')
+        const known = fortress.placeOf(session, fortress.PLACE)
+        if (!known || require('./worlds').worldOfRecord(known) !== 'the_nether') {
+          stopped = 'ифритов и спавнера не видно, увиденная крепость неизвестна — нужен поиск'
+          break
         }
+        const from = bot.entity.position.clone()
+        setPhase('новый обзор увиденной крепости')
+        const view = await fortress.tour(session, ctl, { hops: 1, deadline: Math.min(deadline, now + 6000) })
+        const spawners = view.spawners || []
+        const seenBlazes = view.blazes?.seen || 0
+        out.views = (out.views || 0) + 1
+        log('новый обзор без спавнера', { n: out.views, from: xyz(from), at: xyz(bot.entity.position), seen: view.seen, spawners: spawners.length, blazes: seenBlazes })
+        if (spawners.length) {
+          out.spawners = spawners.map(xyz)
+          stopped = 'увидел спавнер — следующий бой у него'
+          break
+        }
+        if (bot.entity.position.distanceTo(from) < 0.8 && !seenBlazes) {
+          stopped = 'нового обзора крепости не достиг — нужен другой подход'
+          break
+        }
+        home = bot.entity.position.floored()
+        idleSince = lastVisAt = gameClock.now()
+        continue
       }
       // Видны, но все дальше дальности лука (sr-k-3 10.10: «vis 3, shoot 0» 127 раз, ифриты в 25–30 бл., 0 убийств за 400 с) — подойти
       // к ближнему на 12 бл. по той же цене, что к ифриту за стеной.
@@ -2086,13 +2144,27 @@ async function holdSpawner (session, ctl, ctx) {
         const np = choosePost(bot, spawner, home)
         lastVisAt = now
         reposts++
-        if (np) {
+        if (np && !np.pos.equals(bot.entity.position.floored())) {
           setPhase('другая точка боя')
           home = np.pos
           out.reposts = (out.reposts || 0) + 1
           log('другая точка', { ...xyz(np.pos), view: np.view, h: np.h })
           await walkNear(bot, ctl, np.pos, 0, 8000)
           continue
+        }
+        const window = windowForPost(bot, spawner)
+        if (window && !ctl.aborted) {
+          stopWalking()
+          setPhase('окно к залу спавнера')
+          const dug = await require('./tools').breakFast(bot, window.pos, { maxMs: 8000 })
+          log('окно к залу спавнера', { at: xyz(window.pos), gain: window.gain, ...dug })
+          await equipSword()
+          if (dug.ok) {
+            out.windows = (out.windows || 0) + 1
+            refreshReach()
+            lastVisAt = gameClock.now()
+            continue
+          }
         }
         // Точки обзора нет, а тело ниже/выше помоста и вплотную пусто — ходом по сетке на пол зала (s1-post14/15 06.10: с y66
         // при спавнере y69 ни одного убийства за 6 мин).
@@ -3291,4 +3363,4 @@ async function farmRods (session, ctl, p: any = {}) {
   return detail
 }
 
-module.exports = { digInPlace, digInNear, pitWhyAt, choosePost, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }
+module.exports = { walkNear, digInPlace, digInNear, pitWhyAt, choosePost, windowForPost, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }

@@ -1,4 +1,4 @@
-import { threatLevel, canRepelLavaAttacker, creeperWalksUp, outpaced, hasObservedTarget, type ActionId, type Candidate, type TacticalState, type ThreatLevel } from './state'
+import { threatLevel, canRepelLavaAttacker, creeperWalksUp, outpaced, hasObservedTarget, burnRecovery, type ActionId, type Candidate, type TacticalState, type ThreatLevel } from './state'
 import { TacticalGraph, type TacticalNodeId } from './graph'
 
 export interface TacticalDecision {
@@ -94,7 +94,8 @@ export class TacticalArbiter {
     const falling = !state.embedded && (state.dangerousFall || state.emergencyController)
     if (falling) selected = null
     this.node = falling ? 'EmergencyController' : 'Strategic'
-    const change = selected?.id !== this.current?.id || escalated && !!selected
+    // A residual fire tick crossing level 3 must not cancel and restart the same 32-tick bite.
+    const change = selected?.id !== this.current?.id || escalated && !!selected && !(selected.id === 'Eat' && burnRecovery(state))
     if (change) this.changedAt = state.at
     if (this.current && selected?.id !== this.current.id) this.left.set(this.current.id, state.at)
     this.current = selected

@@ -11,11 +11,11 @@ const Vec3 = require('vec3')
 function fixture (move?: any) {
   const file = path.join(__dirname, '../src/session.js')
   const realRequire = createRequire(file)
-  const counts = { walks: 0, shakes: 0 }
+  const counts = { walks: 0, shakes: 0, pits: 0 }
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, Date,
     require: name => {
       const actual = realRequire(name)
-      if (name === './build') return { ...actual, escapePit: async () => ({ wasInPit: false }) }
+      if (name === './build') return { ...actual, escapePit: async () => { counts.pits++; return { wasInPit: false } } }
       if (name === './movement') return { ...actual, inWater: () => false,
         stuckGuard: () => ({ promise: new Promise<void>(() => {}), stop () {} }),
         unstick: async () => { counts.shakes++ } }
@@ -33,7 +33,7 @@ function fixture (move?: any) {
   const session = { bot, require: () => bot, updateMovements () {}, underSky: () => true,
     runIntent: (_name, work) => work({ aborted: false, onAbort: [] }) }
   return { goto: p => context.module.exports.Session.prototype.goto.call(session, p),
-    roofCost: context.module.exports.roofCost, bot, counts }
+    roofCost: context.module.exports.roofCost, bot, counts, session }
 }
 
 test('пустой путь goto не считается прибытием и не повторяется с рывками', async () => {
@@ -61,6 +61,34 @@ test('goto не принимает подход по горизонтали за
   assert.equal(result.target.mode, 'xz')
   assert.equal(f.counts.walks, 2)
   assert.equal(f.counts.shakes, 0)
+})
+
+test('strict keeps the requested height after an unsuccessful 3D route', async () => {
+  const f = fixture(bot => { bot.entity.position = new Vec3(95.5, 20, -11.5) })
+  f.bot.blockAt = p => ({ position: p, boundingBox: p.y === 64 ? 'block' : 'empty' })
+  await assert.rejects(f.goto({ x: 95, y: 65, z: -12, range: 2, surface: 'strict' }), /не дошёл|не достиг/)
+  assert.equal(f.counts.walks, 1)
+})
+
+test('strict keeps an explicit height when the exact target column has no floor', async () => {
+  const f = fixture(bot => { bot.entity.position = new Vec3(95.5, -53, -11.5) })
+  f.bot.blockAt = p => ({ position: p, boundingBox: 'empty' })
+  await assert.rejects(f.goto({ x: 95, y: -10, z: -12, range: 4, surface: 'strict' }), /не дошёл|не достиг/)
+  assert.equal(f.counts.walks, 1)
+})
+
+test('strict disables excavation inside a cave and restores movement settings afterwards', async () => {
+  let during
+  const f = fixture(bot => {
+    during = { canDig: bot.pathfinder.movements.canDig, scaffold: [...bot.pathfinder.movements.scafoldingBlocks] }
+    bot.entity.position = new Vec3(94.5, 63, -14.5)
+  })
+  f.session.underSky = () => false
+  await f.goto({ x: 95, z: -12, range: 4, surface: 'strict' })
+  assert.deepEqual(during, { canDig: false, scaffold: [] })
+  assert.equal(f.counts.pits, 0, 'strict approach must not excavate a roof in its pre-route escapePit helper')
+  assert.equal(f.bot.pathfinder.movements.canDig, true)
+  assert.deepEqual(f.bot.pathfinder.movements.scafoldingBlocks, [1])
 })
 
 test('strict запрещает шаг в тёмную пещеру, сохраняя обычный штраф и путь под листвой', () => {

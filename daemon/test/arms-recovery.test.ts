@@ -11,7 +11,7 @@ const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
 const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
 const indexPath = join(__dirname, '../src/index.js')
 const indexSource = readFileSync(indexPath, 'utf8')
-const statusBody = indexSource.slice(indexSource.indexOf('const methods = {'), indexSource.indexOf('const wss ='))
+const statusBody = indexSource.slice(indexSource.indexOf('function enchantedGear'), indexSource.indexOf('const wss ='))
 function fixture({ food = 10, inventory = {}, items = null, eat = null, at = null, interrupted = false, foe = null, bot = null, fight = null }: any = {}) {
   let now = 0
   let health = 3

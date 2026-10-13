@@ -1,6 +1,6 @@
 import type { ExecutionResult, SkillCommand, SkillOutcome } from '../core/environment'
-import { fact, type WorldState } from '../core/world-state'
-import { StrategicDirector, type DecisionRecord, type Strategy } from '../core/strategy'
+import { amount, fact, type WorldState } from '../core/world-state'
+import { plan, StrategicDirector, type DecisionRecord, type Strategy } from '../core/strategy'
 import { dragonGoal, speedrunRegistry } from '../core/speedrun'
 import { applyCosts } from '../core/cost-model'
 import { MineflayerEnvironment, type Observation } from '../environments/mineflayer'
@@ -25,8 +25,11 @@ export interface CampaignPort {
 export function createCampaignIntelligence(port: CampaignPort) {
   // Flags from the S3 simulator search (06.10), off by default — нужна ферма: ND_GRAPH_ECONOMY=1 needs the skills
   // bastionGold {ingots} and bastionMove in the campaign (S1); ND_GRAPH_RETRY_S — timed re-admission backoff (sim: 60–120 s beat 300 s).
-  const registry = speedrunRegistry({ eyes: port.eyes, beds: port.beds, economy: process.env.ND_GRAPH_ECONOMY === '1' })
-  const progressFor = (skill: string): Strategy['progressCondition'] => skill === 'netherTools' ? netherSupplyProgress : ['bastion', 'bastionSupply', 'piglinBarter', 'nether'].includes(skill)
+  const registry = speedrunRegistry({ eyes: port.eyes, beds: port.beds, economy: process.env.ND_GRAPH_ECONOMY === '1',
+    portalBuckets: process.env.ND_ROUTE_ONE === '0' ? 2 : 1 })
+  const progressFor = (skill: string): Strategy['progressCondition'] => skill === 'scoutLava'
+    ? (before, after) => Number(after.facts.lava_scout_views?.value ?? 0) > Number(before.facts.lava_scout_views?.value ?? 0)
+    : skill === 'netherTools' ? netherSupplyProgress : ['bastion', 'bastionSupply', 'piglinBarter', 'nether'].includes(skill)
     ? (before, after) => netherStageProgress(skill === 'nether' ? 'nether' : 'bastion', before, after) : undefined
   for (const strategy of registry.all()) {
     const progress = progressFor(strategy.skill)
@@ -46,7 +49,7 @@ export function createCampaignIntelligence(port: CampaignPort) {
   const director = new StrategicDirector(registry, environment, { goal: dragonGoal, record: port.record,
     retryAfterMs: Number(process.env.ND_GRAPH_RETRY_S) > 0 ? Number(process.env.ND_GRAPH_RETRY_S) * 1000 : undefined })
   const stageBySkill: Record<string, string> = { enterNether: 'nether', enterEnd: 'dragon', leaveNether: 'eyes', findFortress: 'nether', findBastions: 'bastion',
-    piglinBarter: 'bastion', ruinedPortal: 'cast', portalKit: 'iron', scoutStructures: 'iron', scoutLava: 'cast', heal: 'food', structureIron: 'iron' }
+    piglinBarter: 'bastion', ruinedPortal: 'cast', portalKit: 'iron', scoutStructures: 'iron', scoutLava: 'cast', heal: 'food', eatFood: 'food', prepareBread: 'food', structureIron: 'iron' }
   function stageFor(strategy: Strategy): string { return stageBySkill[strategy.skill] ?? strategy.skill }
   function wrapStrategy(strategy: Strategy, stage?: CampaignStage): CampaignStage {
     let outcome: SkillOutcome | undefined
@@ -88,11 +91,19 @@ export function createCampaignIntelligence(port: CampaignPort) {
       // Маршрут по карте и кусочные стратегии конкурируют по цене (S8b 07.10: флаг-приоритет ND_ROUTE_FIRST снят; корень —
       // цена RuinedPortal/LavaPoolPortal в cost-model.ts по их фактическому этапу cast, а не по шагу ruin «только сундук»).
       const desired = director.decide(before)
-      const strategy = desired.steps[0]
+      let strategy = desired.steps[0]
+      if (!strategy && desired.reason !== 'goal' && ['overworld', 'the_nether'].includes(before.dimension)) {
+        const excluded = new Set(registry.all().filter(candidate => !['food', 'eatFood', 'heal', 'prepareBread'].includes(candidate.skill) ||
+          !director.canRun(candidate, before)).map(candidate => candidate.id))
+        const recovery = plan(registry, before, state => state.health > before.health || state.hunger > before.hunger ||
+          amount(state, 'food') > amount(before, 'food'), { excluded, maxDepth: 1 })
+        strategy = recovery.steps[0]
+        if (strategy) port.record({ level: 'decision', reason: `survival recovery: ${desired.reason}`, before, plan: [strategy.id] })
+      }
       if (strategy) {
         const stage = available.find(stage => stage.name === stageFor(strategy))
         if (stage) return { stage: wrapStrategy(strategy, stage), strategy, before }
-        const special = ['wood', 'iron', 'structureIron', 'scoutStructures', 'scoutLava', 'portalKit', 'ruinedPortal', 'enterNether', 'findFortress', 'findBastions', 'piglinBarter', 'leaveNether', 'enterEnd', 'heal', 'netherTools', 'bastionSupply', 'pearls', 'bastion', 'nether', 'endkit', 'bastionGold', 'bastionMove']
+        const special = ['wood', 'food', 'iron', 'structureIron', 'scoutStructures', 'scoutLava', 'portalKit', 'ruinedPortal', 'enterNether', 'findFortress', 'findBastions', 'piglinBarter', 'leaveNether', 'enterEnd', 'heal', 'eatFood', 'prepareBread', 'netherTools', 'bastionSupply', 'pearls', 'bastion', 'nether', 'endkit', 'bastionGold', 'bastionMove']
         if (special.includes(strategy.skill)) {
           return { stage: wrapStrategy(strategy), strategy, before }
         }

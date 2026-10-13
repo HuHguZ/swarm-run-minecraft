@@ -62,13 +62,16 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
       needs: name => STAGES.find(s => s.name === name).needed(),
       ready: name => STAGES.find(s => s.name === name).ready(),
       defers: name => STAGES.find(s => s.name === name).defer(),
-      boot: () => ws.listeners.get('open')(),
+      boot: () => ws.listeners.get('open')(), intelligenceObservation, executeStrategy,
       keepStages: names => { const keep = STAGES.filter(s => names.includes(s.name)); STAGES.splice(0, STAGES.length, ...keep) },
       ironOnly: run => { STAGES.splice(0, STAGES.length, { name: 'iron', needed: () => !have(PICK_IRON),
         ready: () => true, defer: () => false, done: () => have(PICK_IRON) > 0, run }); },
       bastionOnly: run => { STAGES.splice(0, STAGES.length, { name: 'bastion', needed: () => true,
         ready: () => true, defer: () => false, done: () => false, run }); },
+      netherOnly: run => { STAGES.splice(0, STAGES.length, { name: 'nether', needed: () => have('blaze_rod') < 7,
+        ready: () => true, defer: () => false, done: () => have('blaze_rod') >= 7, run }); },
       deferBastion: (site, until) => { bState(site).miningDeferredUntil = until },
+      castFailed: () => { castSurfaceFailed = true },
       hooks: h => { if (h.spares) spares = h.spares; if (h.ensurePick) ensurePick = h.ensurePick;
         if (h.recoverGuard) recoverGuard = h.recoverGuard; if (h.toSurface) toSurface = h.toSurface; },
       init: () => { state = testState; sit = testSituation; }
@@ -77,6 +80,166 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
   context.module.exports.init()
   return context.module.exports
 }
+
+test('structure scout loots a freshly observed chest before walking another search leg', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory: { stone_pickaxe: 1 } }
+  const clock = { t: 100000 }; const calls = []
+  const at = { x: 3, y: 64, z: 0 }
+  const c = campaign(state, {}, (method, params) => {
+    calls.push({ method, params })
+    if (method === 'structure') return { known: [] }
+    if (method === 'explore') { clock.t += 400; return { found: 'chest', at, note: 'уже видно отсюда' } }
+    if (method === 'goto') clock.t += 30000
+    if (method === 'loot') {
+      assert.equal(params.visibleOnly, true, 'the new scout path must require client visibility rather than force loot')
+      assert.ok(params.timeoutSeconds <= 179.6)
+      clock.t += 500; state.inventory.iron_ingot = 4
+      return { took: { iron_ingot: 4 } }
+    }
+    return {}
+  }, { clock })
+  await c.executeStrategy({ skill: 'scoutStructures' }, new AbortController().signal)
+  assert.equal(calls.filter(call => call.method === 'loot').length, 1, 'the actual campaign adapter must preserve the observed chest receipt')
+  assert.equal(calls.filter(call => call.method === 'goto').length, 0, 'take the resource before leaving the chest for another direction')
+  assert.equal(state.inventory.iron_ingot, 4)
+})
+
+test('portal-room retries eat carried food and replace an exhausted pick before resuming the search', async () => {
+  const state: any = { health: 20, food: 6, dimension: 'overworld', pos: { x: 1118, y: -27, z: 890 },
+    inventory: { cooked_beef: 8, crafting_table: 1, stick: 2, cobblestone: 30 } }
+  const calls: string[] = []
+  const c = campaign(state, { free: 30 }, (method, params) => {
+    if (method === 'eat') { calls.push('eat'); state.food = 20; state.inventory.cooked_beef-- }
+    if (method === 'craft') {
+      calls.push(params.item)
+      if (params.item === 'stone_pickaxe') { state.inventory.stick -= 2; state.inventory.cobblestone -= 3; state.inventory.stone_pickaxe = 1 }
+    }
+    if (method === 'stronghold') {
+      calls.push(params.mode)
+      assert.ok(state.food >= 18, 'food already carried must enable regeneration while searching')
+      assert.equal(state.inventory.stone_pickaxe, 1, 'spent pick must be replaced from carried materials')
+    }
+    return {}
+  })
+  await c.act('stronghold', { mode: 'room', timeoutSeconds: 120 })
+  await c.act('stronghold', { mode: 'room', timeoutSeconds: 120 })
+  assert.deepEqual(calls, ['eat', 'stone_pickaxe', 'room', 'room'])
+})
+
+test('overland travel tries a bounded surface exit before the distant XZ leg, and still travels if the exit is unavailable', async () => {
+  for (const out of [true, false]) {
+    const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 530, y: 1, z: 468 }, inventory: { iron_pickaxe: 1 } }
+    const calls: any[] = []
+    const sit: any = { surface: false, foes: 0, free: 30 }
+    const c = campaign(state, sit, (method, params) => {
+      if (method === 'surface') { calls.push({ method, params }); if (out) { state.pos.y = 70; sit.surface = true }; return { out } }
+      if (method === 'goto') { calls.push({ method, params }); state.pos = { x: 1136, y: out ? 70 : 1, z: 896 } }
+      return {}
+    })
+    await c.goToward({ x: 1136, z: 896 })
+    assert.equal(calls[0]?.method, 'surface')
+    assert.ok(calls[0].params.timeoutSeconds <= 120, 'recovery has a travel-sized budget')
+    assert.equal(calls[1]?.method, 'goto', 'a failed climb does not prohibit the cheaper cave alternative')
+    assert.equal(calls[1].params.surface, true)
+  }
+})
+
+test('overland recovery leaves a nearby explicit underground destination and Nether travel alone', async () => {
+  for (const dimension of ['overworld', 'the_nether']) {
+    const state: any = { health: 20, food: 20, dimension, pos: { x: 530, y: 1, z: 468 }, inventory: { iron_pickaxe: 1 } }
+    const calls: string[] = []
+    const c = campaign(state, { surface: false, foes: 0, free: 30 }, (method, params) => {
+      calls.push(method)
+      if (method === 'goto') state.pos = { x: params.x, y: params.y ?? 1, z: params.z }
+      return {}
+    })
+    await c.goToward({ x: 655, y: 1, z: 480 })
+    assert.equal(calls.includes('surface'), false)
+    assert.equal(calls.includes('goto'), true)
+  }
+})
+
+test('overland recovery returns an interruption or changed dimension to its caller before another leg', async () => {
+  for (const kind of ['tactical', 'dimension']) {
+    const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 530, y: 1, z: 468 }, inventory: { iron_pickaxe: 1 } }
+    const calls: string[] = []
+    const c = campaign(state, { surface: false, foes: 0, free: 30 }, method => {
+      calls.push(method)
+      if (method === 'surface') {
+        if (kind === 'dimension') { state.dimension = 'the_end'; return { out: false } }
+        return { rpcResult: { status: 'interrupted', code: 'TACTICAL', state, events: [] } }
+      }
+      return {}
+    })
+    assert.equal(await c.goToward({ x: 1136, z: 896 }), false)
+    assert.equal(calls.includes('goto'), false)
+  }
+})
+
+test('portal-room search still walks known corridors without food or materials to craft a pick', async () => {
+  const state: any = { health: 20, food: 17, dimension: 'overworld', pos: { x: 0, y: -20, z: 0 }, inventory: {} }
+  const calls: string[] = []
+  const c = campaign(state, {}, method => { calls.push(method); return {} })
+  await c.act('stronghold', { mode: 'room', timeoutSeconds: 120 })
+  assert.deepEqual(calls, ['stronghold'])
+})
+
+test('an interrupted iron descent smelts its carried ore before repeating the water-blocked descent', async () => {
+  const state: any = { health: 20, food: 19, dimension: 'overworld', pos: { x: 17, y: 33, z: -54 },
+    inventory: { stone_pickaxe: 2, raw_iron: 4, furnace: 1, crafting_table: 1, coal: 7, cobblestone: 164, oak_log: 10, stick: 5 } }
+  const calls: string[] = []
+  const c = campaign(state, { free: 20, pickLeft: 200, surface: false, night: false }, (method, params) => {
+    calls.push(method === 'craft' ? params.item : method)
+    if (method === 'smelt') { state.inventory.raw_iron = 0; state.inventory.iron_ingot = 4 }
+    if (method === 'craft' && params.item === 'bucket') { state.inventory.iron_ingot -= 3; state.inventory.bucket = 1 }
+    assert.notEqual(method, 'dig_down', 'use carried ore before repeating the blocked descent')
+    return {}
+  })
+  await c.runStage('iron')
+  assert.equal(state.inventory.bucket, 1)
+  assert.equal(state.inventory.iron_ingot, 1, 'retain iron for the lighter')
+  assert.ok(calls.indexOf('smelt') < calls.indexOf('bucket'))
+  assert.equal(calls.includes('dig_down'), false)
+})
+
+test('iron recovery after failed casting smelts the three bars needed for a pick even with a complete bucket kit', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 33, z: 0 },
+    inventory: { stone_pickaxe: 1, raw_iron: 3, furnace: 1, crafting_table: 1, coal: 7, water_bucket: 1, lava_bucket: 1,
+      flint_and_steel: 1, shield: 1, oak_planks: 12, stick: 5 } }
+  const calls: string[] = []
+  const c = campaign(state, { free: 30, surface: false, pickLeft: 100 }, (method, params) => {
+    calls.push(method === 'craft' ? params.item : method)
+    if (method === 'smelt') { state.inventory.raw_iron -= params.count; state.inventory.iron_ingot = params.count }
+    if (method === 'craft' && params.item === 'iron_pickaxe') { state.inventory.iron_ingot -= 3; state.inventory.iron_pickaxe = 1 }
+    assert.notEqual(method, 'dig_down', 'the remaining pick is crafted from carried ore')
+    return {}
+  }, { env: { ND_OW_DEEP: '1' } })
+  c.stage('iron'); c.castFailed()
+  assert.equal(c.needs('iron'), true)
+  await c.runStage('iron')
+  assert.equal(state.inventory.iron_pickaxe, 1)
+  assert.equal(state.inventory.raw_iron, 0)
+  assert.equal(c.needs('iron'), false)
+  assert.deepEqual(calls, ['smelt', 'iron_pickaxe', 'armor'])
+})
+
+test('a complete bucket kit does not finish iron recovery before the missing pick materials are acquired', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 16, z: 0 },
+    inventory: { stone_pickaxe: 1, raw_iron: 1, furnace: 1, crafting_table: 1, coal: 20, water_bucket: 1, lava_bucket: 1,
+      flint_and_steel: 1, shield: 1, oak_planks: 12, stick: 5, torch: 16 } }
+  let mined = 0
+  const c = campaign(state, { free: 30, surface: false, pickLeft: 200 }, (method, params) => {
+    if (method === 'smelt') { state.inventory.raw_iron -= params.count; state.inventory.iron_ingot = (state.inventory.iron_ingot || 0) + params.count }
+    if (method === 'mine' && /iron_ore/.test(params.block)) { mined += params.count; state.inventory.raw_iron += params.count }
+    if (method === 'craft' && params.item === 'iron_pickaxe') { state.inventory.iron_ingot -= 3; state.inventory.iron_pickaxe = 1 }
+    return {}
+  }, { env: { ND_OW_DEEP: '1' } })
+  c.stage('iron'); c.castFailed()
+  await c.runStage('iron')
+  assert.equal(mined, 2)
+  assert.equal(state.inventory.iron_pickaxe, 1)
+  assert.equal(c.needs('iron'), false)
+})
 
 test('a refused Bastion preserves its exact cover reason and bounded execution failures in the real act telemetry', async () => {
   const records: Array<Record<string, any>> = []
@@ -896,6 +1059,34 @@ test('already deferred mapped sites cannot reset a failed bastion by alternating
   assert.match(logs.join(''), /два пустых захода подряд — пауза 5 мин/)
 })
 
+test('two tactical interruptions of the real bastion stage do not exhaust its admission budget', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 172, y: 59, z: -238 },
+    armor: { feet: 'golden_boots' }, inventory: { stone_pickaxe: 3, oak_planks: 4, stick: 2,
+      cobblestone: 8, iron_ingot: 2, cooked_beef: 7, water_bucket: 1, flint_and_steel: 1 } }
+  const clock = { t: Date.parse('2026-10-11T18:54:03Z') }
+  const start = clock.t; const attempts = []; const logs = []; const methods = []
+  const places = { 'портал': { x: 32, y: 65, z: -73, dimension: 'overworld' },
+    'бастион (ад)': { x: 154, y: 47, z: -250, dimension: 'the_nether' } }
+  const c = campaign(state, { foes: 0, pickLeft: 330 }, (method, params) => {
+    methods.push(method)
+    if (method === 'recall') return { state: { places } }
+    if (method === 'wait') clock.t += (params.seconds || 30) * 1000
+    if (method === 'bastion') {
+      attempts.push({ x: params.x, z: params.z, elapsed: clock.t - start })
+      if (attempts.length < 3) return { rpcResult: { status: 'interrupted', code: 'TACTICAL',
+        by: { type: 'tactical' }, state, detail: {}, events: [] } }
+      state.playPolicy = { mode: 'free' }
+    }
+    return {}
+  }, { clock, logs, argv: ['bastion'] })
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.boot()
+  assert.deepEqual(attempts.slice(0, 3), [0, 0, 0].map(elapsed => ({ x: 154, z: -250, elapsed })),
+    'preempted reconnaissance must remain eligible after observing the released Tactical owner')
+  assert.doesNotMatch(logs.join(''), /пауза 5 мин/)
+  assert.equal(methods.includes('nether_tunnel'), false, 'an interruption must not send the body home as though the bastion were exhausted')
+})
+
 test('speedrun bastion re-entry preserves prepared wood and iron instead of creating an optional base cache', async () => {
   const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 5, y: 67, z: -12 },
     playPolicy: { mode: 'speedrun' }, armor: { feet: 'golden_boots' }, inventory: { oak_planks: 14,
@@ -938,6 +1129,35 @@ test('частичная добыча железа позволяет продо
   await c.boot()
   assert.equal(state.inventory.iron_pickaxe, 1, 'добыча по частям должна довести до кирки')
   assert.equal(waits, 0, 'частичный полезный результат не является повторным провалом')
+})
+
+test('new observed fortress stops continue the search before rods instead of triggering a five-minute home trip', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 162, y: 75, z: -49 },
+    inventory: { iron_pickaxe: 1, stone_pickaxe: 2, iron_sword: 1, cooked_beef: 12 } }
+  const clock = { t: Date.parse('2026-10-11T10:27:57Z') }
+  let attempts = 0
+  let waits = 0
+  const logs: string[] = []
+  const c = campaign(state, { foes: 0, pickLeft: 400 }, (method, params) => {
+    if (method === 'wait') { waits++; clock.t += params.seconds * 1000 }
+    if (method === 'fortress') return { found: false, explored: attempts }
+    if (method === 'portal') { assert.equal(state.inventory.blaze_rod, 7, 'return home after resources, not during useful exploration'); state.dimension = 'overworld'; return { went: true } }
+    return {}
+  }, { argv: ['nether'], clock, logs })
+  c.hooks({ recoverGuard: async () => {} })
+  c.netherOnly(async () => {
+    attempts++
+    clock.t += 60000
+    await c.act('fortress', { mode: 'spawner' })
+    const observation = await c.intelligenceObservation()
+    assert.equal(observation.facts.fortress_explored.value, attempts)
+    assert.equal(observation.facts.fortress_explored.source, 'observed')
+    if (attempts === 3) state.inventory.blaze_rod = 7
+  })
+  await c.boot()
+  assert.equal(attempts, 3)
+  assert.equal(waits, 0)
+  assert.doesNotMatch(logs.join(''), /пауза 5 мин/)
 })
 
 test('каменная кирка и имеющаяся броня позволяют идти за стержнями без нового железного захода', () => {
@@ -1564,9 +1784,9 @@ test('глубоко с алмазной киркой литьё отложен�
   assert.equal(c.defers('cast'), false, 'поверху литьё — как раньше')
 })
 
-test('литью не хватает блоков на столбы — булыжник добирается тут же, и литьё идёт снова', async () => {
+test('литью не хватает одного блока — добирает недостающий наполнитель и пробует снова', async () => {
   const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: -651, y: 86, z: -232 },
-    inventory: { stone_pickaxe: 1, bucket: 1, water_bucket: 1, flint_and_steel: 1, cooked_beef: 8, dirt: 13 } }
+    inventory: { stone_pickaxe: 1, bucket: 1, water_bucket: 1, flint_and_steel: 1, cooked_beef: 8, dirt: 2 } }
   const places = { 'лава': { x: -640, y: 80, z: -230, dimension: 'overworld' } }
   const calls = []
   let casts = 0
@@ -1575,16 +1795,18 @@ test('литью не хватает блоков на столбы — булы
     if (method === 'recall') return { state: { places } }
     if (method === 'portal') {
       casts++
-      if ((state.inventory.cobblestone || 0) < 10) return { stopped: 'на углы, столбы и подпорки нужно блоков 10', need: { what: 'cobblestone', count: 10 } }
+      if (state.inventory.dirt < 3) return { stopped: 'нужно блоков 3', need: { what: 'cobblestone', count: 3, have: state.inventory.dirt } }
       places['портал'] = { x: -645, y: 80, z: -230, dimension: 'overworld' }
       return { built: true }
     }
-    if (method === 'mine' && params.block === 'stone') state.inventory.cobblestone = params.count
+    if (method === 'mine' && params.block.split(',').includes('grass_block')) state.inventory.dirt += params.count
     return {} as Record<string, any>
   })
   c.hooks({ recoverGuard: async () => {} })
   await c.runStage('cast')
-  assert.ok(calls.some(x => x.method === 'mine' && x.params.block === 'stone' && x.params.count >= 14))
+  assert.ok(calls.some(x => x.method === 'mine' && x.params.block.split(',').includes('grass_block') && x.params.count === 1 && x.params.timeoutSeconds === 35))
+  assert.equal(calls.some(x => x.method === 'dig_down'), false)
+  assert.equal(state.inventory.dirt, 3)
   assert.equal(casts, 2)
   assert.ok(c.known.portal)
 })
@@ -1703,7 +1925,7 @@ test('горы без зверей: две пустые охоты — желе�
   assert.ok(new Set(dirs.map(d => d.toFixed(2))).size > 1, 'курс меняется')
 })
 
-test('ND_OW_DEEP: лавы поверху нет — колодец к −54, штрек встал у лавы за блоком, литьё с окном у неё', async () => {
+test('ND_OW_DEEP: legacy-компаратор два ведра — колодец к −54 и окно у известной по раскладке лавы', async () => {
   const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 70, z: 0 },
     inventory: { stone_pickaxe: 2, bucket: 1, water_bucket: 1, flint_and_steel: 1, cooked_beef: 8, cobblestone: 64, oak_log: 8, crafting_table: 1 } }
   const places: Record<string, any> = {} as Record<string, any>
@@ -1717,13 +1939,14 @@ test('ND_OW_DEEP: лавы поверху нет — колодец к −54, ш
     if (method === 'tunnel') return { stopped: 'лава на 11,-55,0 (в 1 впереди, ниже) — не копаю, обходи другим направлением или на 3 блока в сторону' }
     if (method === 'portal') {
       assert.equal(params.windows, true)
+      assert.equal(params.one, undefined)
       assert.deepEqual(params.hint, { x: 11, y: -55, z: 0 })
       places['портал'] = { x: 3, y: -54, z: 0, dimension: 'overworld' }
       return { built: true, lit: true }
     }
     return {} as Record<string, any>
-  // S8d: лава за блоком (чутьё штрека) — цель только при ND_HONEST_LAVA=0/scan (прежний договор); честно — test/s8d-overworld.
-  }, { env: { ND_OW_DEEP: '1', ND_OW_HEAR: '0', ND_HONEST_LAVA: '0' } })
+  // Отдельный прежний профиль со знанием раскладки; не метрика RSG.
+  }, { env: { ND_OW_DEEP: '1', ND_OW_HEAR: '0', ND_HONEST_LAVA: '0', ND_ROUTE_ONE: '0' } })
   c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
   await c.runStage('cast')
   assert.ok(c.known.portal, 'портал отлит глубоко')
@@ -1731,6 +1954,27 @@ test('ND_OW_DEEP: лавы поверху нет — колодец к −54, ш
   assert.ok(ms.includes('shaft') && ms.indexOf('tunnel') > ms.indexOf('shaft') && ms.indexOf('portal') > ms.indexOf('tunnel'))
   assert.equal(ms.includes('dig_down'), false, 'колодец дошёл — лесенка не нужна')
   assert.equal(ms.includes('explore'), false, 'без разведки поверху')
+})
+
+for (const buckets of [1, 2]) test(`ND_OW_DEEP: скрытый источник не превращается в портал, даже с ${buckets} вёдрами`, async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 10, y: -54, z: 0 },
+    inventory: { stone_pickaxe: 2, bucket: buckets - 1, water_bucket: 1, flint_and_steel: 1, cooked_beef: 8, cobblestone: 64 } }
+  const lava = { x: 11, y: -55, z: 0, dimension: 'overworld' }
+  const calls: Array<{ method: string, params: any }> = []
+  const c = campaign(state, { surface: false, foes: 0, night: false, pickLeft: 400, free: 20 }, (method, params) => {
+    calls.push({ method, params })
+    if (method === 'recall') return { state: { places: { 'лава': lava } } }
+    if (method === 'perceive') return { seen: [] }
+    if (method === 'portal') return { built: false, stopped: 'не вижу лавы-источника в 24 блоках' }
+    if (method === 'tunnel') return { stopped: 'лава на 11,-55,0 (в 1 впереди, ниже) — не копаю' }
+    return {}
+  }, { env: { ND_OW_DEEP: '1', ND_OW_HEAR: '0', ND_ROUTE_ONE: '1', ND_MAP: '0', ND_HONEST_LAVA: '1' } })
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.runStage('cast')
+  const casts = calls.filter(x => x.method === 'portal')
+  assert.ok(casts.length > 0, 'раньше увиденную лаву пробует снова найти глазами')
+  assert.ok(casts.every(x => x.params.one === true && x.params.hint === undefined))
+  assert.equal(c.known.portal, null, 'стена перед известной лавой не означает физически доступный источник')
 })
 
 test('ND_OW_DEEP: вода под землёй — штрек встал у воды, окно и черпак тем же литьём, без подъёма', async () => {

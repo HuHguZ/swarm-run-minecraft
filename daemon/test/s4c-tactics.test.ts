@@ -25,6 +25,8 @@ function field({ wallAt = null as number | null } = {}) {
   const bot: any = new EventEmitter()
   bot.entity = { id: 1, position: new Vec3(.5, 64, .5), height: 1.8 }
   bot.entities = {}
+  bot.blockAt = p => ({ name: wallAt !== null && Math.floor(p.x) === wallAt ? 'stone' : 'air', position: p.floored(),
+    boundingBox: wallAt !== null && Math.floor(p.x) === wallAt ? 'block' : 'empty', shapes: wallAt !== null && Math.floor(p.x) === wallAt ? [[0, 0, 0, 1, 1, 1]] : [] })
   // A wall across x = wallAt stops every ray that crosses it.
   bot.world = { raycast: (from: any, dir: any, range: number) => {
     if (wallAt === null || dir.x <= 0) return null
@@ -54,7 +56,7 @@ test('smartFlee is not "escaped" while a blaze 30 blocks off sees it: shaken pas
 test('an attacking player is a pursuer of smartFlee (a bystander is not); with a bow he is a shooter (slot 27: "escaped" in a tick)', () => {
   const { bot, add } = field()
   add(5, 'player', 12, { username: 'Tank' })
-  add(6, 'player', 40, { username: 'Archer', heldItem: { name: 'bow' } })
+  add(6, 'player', 40, { username: 'Archer', heldItem: { name: 'bow' }, equipment: [{ name: 'bow' }] })
   assert.equal(flee.hostilesAround(bot, 64).length, 0, 'players are not mobs of the doctrine')
   const foes = flee.hostilesAround(bot, 64, [5, 6])
   assert.deepEqual(foes.map((h: any) => [h.e.username, h.doc.radius, h.doc.range ?? null]), [['Tank', 10, null], ['Archer', 10, 48]])
@@ -196,12 +198,15 @@ test('escapeFire on dry ground without a bucket leaves only a fire cell, by safe
     bot.entity = { id: 1, position: new Vec3(.5, 64, z), yaw: 0, pitch: 0, onGround: true, isInLava: false }
     bot.game = { dimension: 'overworld' }
     bot.inventory = { items: () => [] }
-    bot.lookAt = async () => {}
+    bot.lookAt = async (p: any) => { bot.entity.yaw = Math.atan2(-(p.x - bot.entity.position.x), -(p.z - bot.entity.position.z)) }
     // A 1-wide bridge along z over the void; fire in the body's cell when inFire.
     bot.blockAt = (p: any) => { const q = p.floored(); const floor = q.y === 63 && q.x === 0; const fire = inFire && q.x === 0 && q.z === fireZ && q.y === 64
       return { name: floor ? 'stone' : fire ? 'fire' : 'air', position: q, boundingBox: floor ? 'block' : 'empty' } }
     const keys: Record<string, boolean[]> = { forward: [], sprint: [] }
-    bot.setControlState = (key: string, on: boolean) => { (keys[key] ??= []).push(on) }
+    bot.setControlState = (key: string, on: boolean) => {
+      (keys[key] ??= []).push(on)
+      if (key === 'forward' && on) bot.entity.position = bot.entity.position.offset(-Math.sin(bot.entity.yaw) * .216, 0, -Math.cos(bot.entity.yaw) * .216)
+    }
     bot.clearControlStates = () => {}
     const done = escapeFire({ bot }, { aborted: false, onAbort: [] })
     try { for (let i = 0; i < 40; i++) { timer.advanceTicks(1); await new Promise(resolve => setImmediate(resolve)) } return { result: await done, keys } }
@@ -212,6 +217,7 @@ test('escapeFire on dry ground without a bucket leaves only a fire cell, by safe
   assert.ok(!dry.keys.forward.includes(true) && !dry.keys.sprint.includes(true), 'no sprint while merely burning')
   const fire = await run(true)
   assert.equal(fire.result.detail.how, 'вышел из огня')
+  assert.equal(fire.result.detail.escaped, true)
   assert.ok(!fire.keys.sprint.includes(true), 'steps, never a blind sprint')
   // The hitbox (±0.3) at z 0.75 reaches the burning cell z 1: that is in the fire too (s8-f3-15: burning grass beside).
   const edge = await run(true, .75, 1)

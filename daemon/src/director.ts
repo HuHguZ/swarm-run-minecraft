@@ -53,6 +53,7 @@ function situation (d) {
     if (!b) break
     if (b.boundingBox === 'block' && !/leaves|log/.test(b.name)) { roofed = true; break }
   }
+  if (bot.game?.dimension === 'overworld' && typeof head?.skyLight === 'number' && head.skyLight <= 7) roofed = true
   const flags = e.metadata && typeof e.metadata[0] === 'number' ? e.metadata[0] : 0
   let fight = null
   try { fight = assess.plan(bot, { radius: 16 }) } catch {}
@@ -872,11 +873,12 @@ async function escapeFire (session, ctl: any = null) {
   // спринт с прыжком 1.2 с вслепую к «ближайшей клетке с полом» (часто своей же) — с моста или платформы в пустоту и лаву
   // под огнём ифрита (S4c 07.10, замечание проверки г; звали директор «горю», тактика Flee и укрытие).
   const me = bot.entity.position.floored()
-  const hot = v => /fire|lava/.test(bot.blockAt(v)?.name || '')
-  const fiery = c => [c, c.offset(0, 1, 0)].some(hot)
+  const { HURTS, stepSafe, keyDir } = require('./moves')
+  const hot = v => HURTS.has(bot.blockAt(v)?.name || '')
+  const fiery = c => [c.offset(0, -1, 0), c, c.offset(0, 1, 0)].some(hot)
   // Огонь жжёт, когда его клетку задевает хитбокс 0.6×1.8, а не только клетка под ногами: у горящей травы бот 9 раз ответил
   // «не в огне» с одной клетки и сгорел, хп 17 → 0 за 18 игр. с (s8-f3-15, проверка S4c 07.10).
-  const touching = () => { const p = bot.entity.position; return [-0.3, 0.3].some(dx => [-0.3, 0.3].some(dz => [0.05, 1.7].some(dy => hot(p.offset(dx, dy, dz).floored())))) }
+  const touching = () => { const p = bot.entity.position; return [-0.3, 0.3].some(dx => [-0.3, 0.3].some(dz => [-0.01, 0.05, 1.7].some(dy => hot(p.offset(dx, dy, dz).floored())))) }
   if (!touching()) return { status: 'done', detail: { how: 'не в огне — бег огонь не тушит', ...(nether ? { nether: true } : {}) } }
   let best = null
   for (let dx = -3; dx <= 3; dx++) {
@@ -888,12 +890,14 @@ async function escapeFire (session, ctl: any = null) {
         if (!b || !f || (dx === 0 && dz === 0) || fiery(c) || b.boundingBox !== 'empty' || f.boundingBox !== 'block') continue
         // Трава горит и огонь ползёт: клетка рядом с огнём хуже на 1.5 блока пути.
         const dd = Math.hypot(dx, dz) + 1.5 * [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([x, z]) => fiery(c.offset(x, 0, z))).length
-        if (!best || dd < best.dd) best = { c, dd }
+        if (best && dd >= best.dd) continue
+        const toward = c.offset(.5, 0, .5).minus(bot.entity.position), distance = Math.hypot(toward.x, toward.z)
+        // A diagonal can leave the first guarded step inside the same magma cell.
+        if (distance && stepSafe(bot, { x: toward.x / distance, z: toward.z / distance })) best = { c, dd }
       }
     }
   }
   if (best) {
-    const { stepSafe, keyDir } = require('./moves')
     try { await bot.lookAt(best.c.offset(0.5, 1, 0.5), true) } catch {}
     const until = gameClock.now() + 1200
     while (gameClock.now() < until && !ctl.aborted && !(bot.entity.position.floored().equals(best.c) && !touching())) {
@@ -903,7 +907,8 @@ async function escapeFire (session, ctl: any = null) {
     }
     bot.clearControlStates()
   }
-  return { status: 'done', detail: { how: best ? 'вышел из огня' : 'некуда', ...(nether ? { nether: true } : {}) } }
+  const escaped = !touching()
+  return { status: ctl.aborted ? 'interrupted' : escaped ? 'done' : 'failed', detail: { how: escaped ? 'вышел из огня' : 'некуда', escaped, ...(nether ? { nether: true } : {}) } }
 }
 
 module.exports = { Director, situation, GOALS, byDirector, escapeFire }

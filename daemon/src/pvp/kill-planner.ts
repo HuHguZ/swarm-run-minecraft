@@ -96,7 +96,9 @@ function catalog (obs) {
   const tri = items.filter(i => i.name === 'trident' && !lvl(i, 'riptide')).sort((a, b) => (lvl(b, 'channeling') - lvl(a, 'channeling')) || (lvl(b, 'loyalty') - lvl(a, 'loyalty')))[0]
   if (tri) out.push({ kind: 'trident', item: 'trident', it: tri, expensive: !lvl(tri, 'loyalty') })
   // Сильные расходники — только если вызывающий знает точку и видимость (crystal.ts / boom.ts).
-  if (obs.boom && obs.boom.crystal && countOf(items, 'end_crystal') > 0) out.push({ kind: 'crystal', item: 'end_crystal', expensive: true, at: obs.boom.crystal })
+  // Кристалл дорог, пока их мало; с запасом от 16 — обычный удар (10.10, раунд кристаллов: 128 в рюкзаке, а планировщик брал меч
+  // при равном шансе — 0 взрывов на 13 смертей).
+  if (obs.boom && obs.boom.crystal && countOf(items, 'end_crystal') > 0) out.push({ kind: 'crystal', item: 'end_crystal', expensive: countOf(items, 'end_crystal') < 16, at: obs.boom.crystal })
   if (obs.boom && obs.boom.anchor && countOf(items, 'respawn_anchor') > 0 && countOf(items, 'glowstone') > 0) out.push({ kind: 'anchor', item: 'respawn_anchor', expensive: true, at: obs.boom.anchor })
   return out
 }

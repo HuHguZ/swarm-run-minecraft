@@ -38,6 +38,7 @@ export function cloneWorld(state: WorldState): WorldState {
     facts: Object.fromEntries(Object.entries(state.facts).map(([name, value]) => [name, { ...value }])) }
 }
 export interface Effect {
+  inventory?: Record<string, number>
   resources?: Record<string, number>
   atLeast?: Record<string, number>
   facts?: Record<string, FactValue>
@@ -48,6 +49,7 @@ export interface Effect {
 }
 export function applyEffect(state: WorldState, effect: Effect, source: FactSource = 'inferred'): WorldState {
   const next = cloneWorld(state)
+  for (const [key, delta] of Object.entries(effect.inventory ?? {})) next.inventory[key] = Math.max(0, (next.inventory[key] ?? 0) + delta)
   for (const [key, delta] of Object.entries(effect.resources ?? {})) next.resources[key] = Math.max(0, amount(next, key) + delta)
   for (const [key, minimum] of Object.entries(effect.atLeast ?? {})) next.resources[key] = Math.max(amount(next, key), minimum)
   for (const [key, value] of Object.entries(effect.facts ?? {})) next.facts[key] = fact(value, source, next.elapsedMs)
@@ -61,7 +63,7 @@ export function stateKey(state: WorldState): string {
   const resources = Object.entries(state.resources).filter(([, value]) => value > 0).sort(([a], [b]) => a.localeCompare(b))
   const facts = Object.entries(state.facts).filter(([, value]) => value.status === 'known').sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => [key, value.value])
-  return JSON.stringify([state.dimension, resources, facts, Math.min(180000, state.structureSearchMs), state.alive, Math.min(16, state.health), Math.min(18, state.hunger)])
+  return JSON.stringify([state.dimension, resources, facts, Math.min(180000, state.structureSearchMs), state.alive, Math.min(20, state.health), Math.min(18, state.hunger)])
 }
 export function usefulProgress(before: WorldState, after: WorldState): boolean {
   return stateKey(before) !== stateKey(after) && (Object.entries(after.resources).some(([key, value]) => value > amount(before, key)) ||

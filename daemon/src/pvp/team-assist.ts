@@ -5,7 +5,15 @@
 const Vec3 = require('vec3')
 const pick = require('../pick')
 
-const HEAL = /^splash_potion$/
+// Только лечение и регенерация по содержимому (13.10, соло-арена: «зельки неправильно кидают и сами себе урон наносят» —
+// бралось любое взрывное зелье, а в сундуках соло лежат и вред, и яд: «лечение под ноги» вредом себе и своим).
+const HEAL_KIND = /^(strong_)?healing$|^(long_|strong_)?regeneration$/
+const healPot = (bot: any) => {
+  const potionOf = require('../pvp').potionOf
+  return bot.inventory.items().find((i: any) => i.name === 'splash_potion' && HEAL_KIND.test(potionOf(i) || ''))
+}
+// В руке — то самое зелье (у одноимённых зелий equip мог взять соседний слот, pvp/equipment.holdItem).
+const heldIsHeal = (bot: any) => bot.heldItem?.name === 'splash_potion' && HEAL_KIND.test(require('../pvp').potionOf(bot.heldItem) || '')
 const BLOCK = /^(cobblestone|oak_planks|stone|dirt|obsidian|netherrack)$/
 
 async function hold (bot: any, item: any) {
@@ -18,10 +26,11 @@ export async function healAlly (bot: any, ally: any) {
   if (!ally?.position) return { ok: false, why: 'союзника не видно' }
   const d = bot.entity.position.distanceTo(ally.position)
   if (d > 5) return { ok: false, why: `далеко ${d.toFixed(1)} бл.` }
-  const pot = bot.inventory.items().find((i: any) => HEAL.test(i.name))
-  if (!pot) return { ok: false, why: 'зелий нет' }
+  const pot = healPot(bot)
+  if (!pot) return { ok: false, why: 'зелий лечения нет' }
   const was = bot.heldItem
   await hold(bot, pot)
+  if (!heldIsHeal(bot)) return { ok: false, why: 'в руке не лечение' }
   await bot.lookAt(ally.position.offset(0, 0.1, 0), true)
   bot.activateItem()
   await bot.waitForTicks(2)
@@ -83,10 +92,11 @@ export async function healAt (bot: any, at: any) {
   let d = bot.entity.position.distanceTo(new Vec3(at.x, at.y, at.z))
   // Точку отнесло (взрыв отбросил лекаря на 12–22 бл., показ 10.10) — себе под ноги: на сбор бегут ко мне.
   if (d > 5.5) { at = bot.entity.position; d = 0 }
-  const pot = bot.inventory.items().find((i: any) => HEAL.test(i.name))
-  if (!pot) return { ok: false, why: 'зелий нет' }
+  const pot = healPot(bot)
+  if (!pot) return { ok: false, why: 'зелий лечения нет' }
   const was = bot.heldItem
   await hold(bot, pot)
+  if (!heldIsHeal(bot)) return { ok: false, why: 'в руке не лечение' }
   await bot.lookAt(new Vec3(at.x, at.y + 0.1, at.z), true)
   bot.activateItem()
   await bot.waitForTicks(2)

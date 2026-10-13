@@ -31,6 +31,9 @@ function othersOf (entities, selfId) {
 }
 const occupied = (cell, others) => others.some(e => intersects(cell, e.position, e.width || 0.6, e.height || 1.8))
 const fullReference = b => !!(b && b.boundingBox === 'block' && !INTERACTIVE.test(b.name) && b.shapes && b.shapes.some(s => s.every((v, i) => v === (i < 3 ? 0 : 1))))
+// BlockItem placement needs a clickable reference, not a full cube. faceAim
+// still proves the actual face; ladders retain their full support requirement.
+const blockReference = b => !!(b && b.boundingBox === 'block' && !INTERACTIVE.test(b.name) && b.shapes?.length)
 function intersects (cell, pos, width = 0.6, height = 1.8) {
   // Strict intersection: feet exactly at the cube top are allowed.
   return pos.x + width / 2 > cell.x && pos.x - width / 2 < cell.x + 1 &&
@@ -96,7 +99,7 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
       if (!replaceable(b) || intersects(c, sp) || intersects(c, s.pos) || occupied(c, others)) continue
       for (const face of faces) {
         const ref = c.minus(face); const rb = world.getBlock(ref)
-        if (!full(rb) || options.canReference && !options.canReference(rb)) continue
+        if (!blockReference(rb) || options.canReference && !options.canReference(rb)) continue
         const point = faceAim(bot, ref, face, { eye, range: 4.5, avoid: others })
         if (!point) continue
         const d = point.minus(eye)
@@ -352,7 +355,14 @@ function install (session, opts) {
     let ticksToWater = Infinity; let settled = false
     for (let t = 0; predict && t < 24; t++) {
       simulate(forecast, world)
-      if (forecast.onGround || forecast.isInWater || forecast.isInLava) { settled = true; break }
+      if (forecast.isInWater || forecast.isInLava) { settled = true; break }
+      if (forecast.onGround) {
+        // A brief edge contact still carries horizontal momentum. Forecast the
+        // neutral braking after contact before calling this a safe landing;
+        // otherwise the guard omits its own necessary second support block.
+        forecast.control = { ...IDLE }
+        if (forecast.vel.x === 0 && forecast.vel.z === 0) { settled = true; break }
+      }
     }
     const l: any = predict ? api.landing(forecast, world) : { top: s.onGround ? s.pos.y : -Infinity, unknown: !s.onGround, water: !!s.isInWater, lava: !!s.isInLava }
     // column's depth limit is relative to this tick's feet, not the forecast
@@ -442,7 +452,7 @@ function install (session, opts) {
     const eye = snapshot.offset(0, eyeHeight(), 0)
     const point = faceAim(bot, plan.ref, plan.face, { eye, range: 4.5, avoid: others })
     const item = available()
-    if (!item || !replaceable(cell) || !fullReference(rb) || !point || intersects(plan.cell, snapshot) || occupied(plan.cell, others)) return
+    if (!item || !replaceable(cell) || !blockReference(rb) || !point || intersects(plan.cell, snapshot) || occupied(plan.cell, others)) return
     const def = bot.registry.blocksByName[item.name]
     if (!def) return
     const virtualBlock = makeBlock(plan.cell, def.defaultState)
@@ -451,7 +461,9 @@ function install (session, opts) {
     const record = { cell: plan.cell, refKey: key(plan.ref), oldStateId: cell.stateId, stateId: def.defaultState, sentAt: now(), slot: item.slot, reserved: true }
     // move is emitted after position/position_look; this look goes before place.
     // Explicit look also covers concurrent look changes and forceLook:'ignore'.
-    hand.hold(200)
+    // The same steering that proved this placement must own the body until
+    // its forecast landing; a four-tick click pulse can end mid knockback arc.
+    hand.hold(Math.max(200, plan.landTick * 50))
     hand.as(() => {
       const d = point.minus(eye)
       const yaw = Math.atan2(-d.x, -d.z); const pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))

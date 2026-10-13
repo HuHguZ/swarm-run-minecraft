@@ -47,6 +47,25 @@ const noteBuild = (kind, ms) => {
     return hot
   }
 
+const shelterRisk = (ms) => {
+    const foes = (ctx.tt.threats?.() || [ctx.entity]).filter(e => e && e.isValid !== false && e._ndVisible !== false &&
+      require('./last-seen').seesPlayer(ctx.bot, e))
+    if (!foes.length) return null
+    const state = require('../combat-safety').inspect(ctx.bot, { entities: foes, target: foes[0] })
+    let expected = 0
+    for (const foe of foes) {
+      const eta = ctx.tt.eta(foe), exposed = ms + ctx.style.reactMs - eta
+      if (exposed < 0) continue
+      const hand = { name: foe.equipment?.[0]?.name || '' }
+      const cooldown = ctx.cooldownMs(hand)
+      const hit = state.threats?.find(t => t.id === foe.id)?.hit || state.hit
+      if (!hit) return 'нет безопасного времени на коробку'
+      expected += hit * (1 + Math.floor(exposed / Math.max(50, cooldown)))
+    }
+    const hp = (ctx.bot.health ?? 0) + (read.absorptionOf(ctx.bot, ctx.bot.entity) || 0)
+    return expected >= hp ? 'риск смерти за время стройки' : null
+  }
+
 const wallToward = async (pos, what) => {
     if (!ctx.pickFiller(ctx.bot)) return 0
     const me0 = ctx.bot.entity.position
@@ -402,19 +421,23 @@ const fortSpot = () => {
   }
 
 const fortOut = async () => {
-    if (ctx.FIX && ctx.buildHot(ctx.BOX_FRONT_MS)) { ctx.st.build.refused++; ctx.rest('fort', 1200); if (ctx.ready('boxNoNote')) { ctx.rest('boxNoNote', 3000); ctx.used('коробка: не строю — он достанет за стройку') } return false }
-    ctx.noteBuild('box', ctx.BOX_MS)
+    const spot = ctx.fortSpot()
+    const check = spot && ctx.fortify.boxCheck(ctx.bot, { cell: spot, toward: ctx.entity.position, roof: true })
+    const moveMs = spot ? spot.offset(.5, 0, .5).distanceTo(ctx.bot.entity.position) / 4.3 * 1000 : 0
+    const risk = check?.ok ? shelterRisk(check.ms + moveMs) : null
+    if (!check?.ok || risk) {
+      ctx.st.build.refused++; ctx.rest('fort', 15000); ctx.used('коробка: ' + (risk || check?.why || 'негде закрыться')); return false
+    }
+    ctx.noteBuild('box', check.ms)
     ctx.aim = 'free'
     ctx.pathTo(false); ctx.pathing = false
     ctx.clear()
-    const spot = ctx.fortSpot()
-    if (!spot) { ctx.aim = 'target'; ctx.used('негде строить коробку'); return false }
     if (!spot.equals(ctx.fortify.feetCell(ctx.bot))) {
       ctx.used('отбегаю на чистое место под коробку')
       try {
         ctx.bot.pathfinder.setGoal(new ctx.goals.GoalBlock(spot.x, spot.y, spot.z))
         const t0 = ctx.gameClock.now()
-        while (ctx.gameClock.now() - t0 < 3000 && !ctx.ctl.aborted && !ctx.fortify.feetCell(ctx.bot).equals(spot)) await ctx.sleep(50)
+        while (ctx.gameClock.now() - t0 < 3000 && !ctx.ctl.aborted && !ctx.fortify.feetCell(ctx.bot).equals(spot) && !shelterRisk(check.ms)) await ctx.sleep(50)
       } catch {}
       ctx.bot.pathfinder.setGoal(null)
       ctx.clear()
@@ -425,10 +448,10 @@ const fortOut = async () => {
     }
     const gB: any = ctx.buildGuard()
     const boxT0 = ctx.gameClock.now()
-    const box = await ctx.fortify.boxIn(ctx.bot, { toward: ctx.entity.position, roof: true, ctl: ctx.guardCtl(gB) })
+    const box = await ctx.fortify.boxIn(ctx.bot, { toward: ctx.entity.position, roof: true, ctl: ctx.guardCtl(gB), abortIf: shelterRisk })
     if (ctx.st.build.boxMs.length < 12) ctx.st.build.boxMs.push(ctx.gameClock.now() - boxT0)
     if (ctx.process.env.ND_DEBUG_PVP) console.log('[fort]', JSON.stringify({ placed: box.placed, walls: box.walls, roof: box.roof, failed: box.failed, cell: box.cell, pos: ctx.bot.entity.position }))
-    if (box.walls < 3 || (gB.why && !box.sealed)) {
+    if (!box.sealed || box.aborted || ctx.ctl.aborted) {
       ctx.aim = 'target'
       await ctx.holdWeapon()
       if (!ctx.buildDone(gB, 'коробку') && box.placed) ctx.used('коробка не вышла')
@@ -495,7 +518,7 @@ const fortOut = async () => {
         // нечем, бюджет кончился или ломает быстрее, чем латаю (3 вскрытия за 12 с).
         const canPatch = breach && !hurtNow && !burningNow && budget > 0 && ctx.pickFiller(ctx.bot) && !(breaches >= 3 && ctx.gameClock.now() - t0 < 12000)
         if (canPatch && !encB.sealed) {
-          const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats })
+          const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats, ctl: ctx.guardCtl(ctx.buildGuard()) })
           if (n) {
             patchedTotal += n; budget -= n; breaches++; holeSince = 0; ctx.st.blocks = (ctx.st.blocks || 0) + n
             if (ctx.ready('patchNote')) { ctx.rest('patchNote', 2000); ctx.used(`заделал дыру (${breach})`) }
@@ -518,8 +541,9 @@ const fortOut = async () => {
         if (!filler || budget <= 0) { why = 'латать нечем или хватит'; break }
         if (breaches >= 3 && ctx.gameClock.now() - t0 < 12000) { why = 'ломает быстрее, чем латаю'; break }
         if (ctx.gameClock.now() - holeSince >= ctx.style.reactMs) {
-          const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats })
+          const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats, ctl: ctx.guardCtl(ctx.buildGuard()) })
           if (n) { patchedTotal += n; budget -= n; ctx.st.blocks = (ctx.st.blocks || 0) + n; holeSince = 0 }
+          else { why = 'дырка не закрывается — выхожу'; break }
         }
       } else holeSince = 0
       if (ctx.tempo.ON && ctx.prof.player && ctx.ready('fortBuff') && ctx.tt.safe(ctx.tempo.consumeMs('potion'), { fortSealed: ctx.fortSealed() }).ok) {

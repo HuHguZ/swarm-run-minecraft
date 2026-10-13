@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats, type SurvivalSample } from '../scene-nether-entry'
+import { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats, entryDied, type SurvivalSample } from '../scene-nether-entry'
 
 function fixture() {
   const portal = { x: -2, y: 71, z: 8, dimension: 'overworld', axis: 'x', inner: { x: -1, y: 70, z: 10 }, lit: true }
@@ -29,6 +29,18 @@ function fixture() {
   }
   return { port, state, events, setLoaded(value: boolean) { loaded = value }, setFloor(value: string | null) { floor = value }, setAdopted(value: typeof portal) { adopted = value } }
 }
+
+test('a Nether dimension acknowledgement cannot hide a fatal portal entry or its later respawn', () => {
+  assert.equal(entryDied({ dimension: 'the_nether', health: 0 }, { code: 'DIED' }, 0), true)
+  assert.equal(entryDied({ dimension: 'overworld', health: 20 }, { code: 'DIED' }, 0), true)
+  assert.equal(entryDied({ dimension: 'the_nether', health: 20 }, { by: { type: 'death' } }, 0), true)
+  assert.equal(entryDied({ dimension: 'the_nether', health: 20 }, {}, 1), true)
+})
+
+test('a living portal transfer can survive an unrelated tactical interruption', () => {
+  assert.equal(entryDied({ dimension: 'the_nether', health: 11 }, { code: 'TACTICAL' }, 0), false)
+  assert.equal(entryDied({}, {}, 0), false)
+})
 
 test('an accidental preparation portal transfer returns to the observed safe overworld stand before measuring entry', async () => {
   const f = fixture()

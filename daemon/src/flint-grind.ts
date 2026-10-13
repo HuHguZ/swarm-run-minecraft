@@ -13,18 +13,27 @@ const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 const AROUND = [...SIDES, [1, 1], [1, -1], [-1, 1], [-1, -1]]
 const isAir = b => !!b && (b.name === 'air' || b.name === 'cave_air')
 const FLUID = /water|lava|bubble_column/
+const FALLING = /^(gravel|sand|red_sand)$/
 
-// Клетка у ног: воздух, сверху воздух, снизу — полный твёрдый блок (сыпучий — только на твёрдом: гравий не упадёт), рядом нет
+// Клетка у ног или на блок выше: воздух, сверху воздух, снизу — полный твёрдый блок (сыпучий — только на твёрдом: гравий не упадёт), рядом нет
 // жидкости (s8-f4-9: «некуда поставить» ×3 в яме из гравия — дальше place+mine по 4 с, 79 раз).
+// На мелком берегу опора может занять воду над твёрдым дном; обе установки всё равно требуют видимой грани.
 function grindSpot (bot) {
   const feet = bot.entity.position.floored()
-  for (const [dx, dz] of AROUND) {
-    const c = feet.offset(dx, 0, dz)
+  for (const dy of [0, 1]) for (const [dx, dz] of AROUND) {
+    const c = feet.offset(dx, dy, dz)
     const b = bot.blockAt(c)
     const under = bot.blockAt(c.offset(0, -1, 0))
     const over = bot.blockAt(c.offset(0, 1, 0))
-    if (!isAir(b) || !isAir(over) || !under || under.boundingBox !== 'block' || FLUID.test(under.name)) continue
-    if (/gravel|sand/.test(under.name) && (bot.blockAt(c.offset(0, -2, 0)) || {}).boundingBox !== 'block') continue
+    if (!isAir(b) || !isAir(over) || !under || (under.boundingBox !== 'block' &&
+      !(under.name === 'water' && bot.blockAt(c.offset(0, -2, 0))?.boundingBox === 'block')) || /lava/.test(under.name)) continue
+    if (FALLING.test(under.name)) {
+      let p = c.offset(0, -2, 0); let floor = bot.blockAt(p)
+      while (floor?.boundingBox === 'block' && FALLING.test(floor.name) && p.y > (bot.game?.minY ?? -64)) {
+        p = p.offset(0, -1, 0); floor = bot.blockAt(p)
+      }
+      if (floor?.boundingBox !== 'block' || FALLING.test(floor.name)) continue
+    }
     if (SIDES.some(([ex, ez]) => FLUID.test((bot.blockAt(c.offset(ex, 0, ez)) || {}).name || ''))) continue
     return c
   }
@@ -61,9 +70,10 @@ async function flintGrind (session, ctl, { max = 40, timeoutSeconds = 90 }: any 
   while (tries < max && count('flint') === flint0 && count('gravel') > 0 && gameClock.now() < deadline && !ctl.aborted) {
     tries++
     // После подбора ходом тело ушло от клетки — новая клетка у ног.
-    if (bot.entity.position.distanceTo(spot.offset(0.5, 0.5, 0.5)) > 3.5) { const s2 = grindSpot(bot); if (s2) spot = s2 }
+    const s2 = grindSpot(bot)
+    if (s2) spot = s2
     const before = count('gravel')
-    const r = await placeBlockAt(bot, spot, { item: 'gravel', honest: true })
+    const r = await placeBlockAt(bot, spot, { item: 'gravel', honest: true, prop: spot.offset(0, -1, 0), ctl })
     const g = bot.blockAt(spot)
     if (!g || g.name !== 'gravel') { why = `гравий не встал: ${r.reason || (g ? g.name : '?')}`; break }
     try { await equipBestTool(bot, g); await digVisible(bot, g, 4000) } catch (e) { why = `не копается: ${e.message}`; break }

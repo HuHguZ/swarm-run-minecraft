@@ -26,6 +26,7 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const { connect, createKit, sleep, classify, campaignFacts } = require('./scene-kit')
+const { farmBootstrap } = require('./farm-bootstrap')
 
 const WS = process.env.ND_WS || 'ws://127.0.0.1:8801'
 const PLAYER = process.env.MC_USERNAME || 'NeuroFarm1'
@@ -117,7 +118,7 @@ async function status () {
   for (let i = 0; i < 3; i++) {
     const st = await call('status', {} as Record<string, any>).catch(() => null)
     if (st && st.state && st.state.dimension) return st.state
-    await sleep(1500)
+    await gameClock.wall.sleep(50)
   }
   return {} as Record<string, any>
 }
@@ -127,7 +128,7 @@ async function main () {
   // Свежий мир под нагрузкой (8 серверов стартуют разом): «Timeout waiting for 4 chunks to load» у connect/первой
   // команды — повторить, а не терять слот партии (ow-P2/P4/P5 02.10: по 1–2 слота на партию).
   for (let k = 0; ; k++) {
-    try { await call('connect'); await call('stop'); break } catch (e) {
+    try { await farmBootstrap(call, WS, PLAYER); await call('stop'); break } catch (e) {
       if (k >= 3 || !/Timeout waiting for|chunks/.test(String(e.message))) throw e
       await sleep(8000)
     }
@@ -144,6 +145,8 @@ async function main () {
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
   try { fs.writeFileSync(clog, '') } catch {}
   const tc = gameClock.now()
+  // Preparation may clear/give items; autonomous work starts only after it is complete.
+  await call('connect', { bootstrapPaused: false })
   // MAP_LAVA=1 — место лавы под небом из скана копии мира (good-v2 / portal-scan, portal-natural.poolInfo) кампании
   // (ND_OW_LAVA_HINT); правило AGENTS.md: знание карты из копии этого же мира разрешено. Отдельная метрика.
   // Уровень знания карты (S8c, route.mapLevel): ND_MAP=0 — вслепую, подсказки лавы тоже нет.
@@ -163,7 +166,7 @@ async function main () {
   let lastCheck = 0
   const until = tc + MINUTES * 60000
   while (gameClock.now() < until) {
-    await sleep(5000)
+    await gameClock.wall.sleep(50)
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
     if (gameClock.now() - lastCheck > 30000 || exited !== null) {
@@ -178,7 +181,7 @@ async function main () {
   }
   if (exited === null) { try { child.kill() } catch {} }
   try { await call('stop') } catch {}
-  await sleep(1500)
+  await gameClock.wall.sleep(50)
   const s = await status()
   let text = ''
   try { text = fs.readFileSync(clog, 'utf8') } catch {}

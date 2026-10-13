@@ -9,13 +9,13 @@ const { createRequire } = require('node:module')
 const { EventEmitter } = require('node:events')
 const Vec3 = require('vec3')
 
-function fixture (rememberAnger, canAim = false) {
+function fixture (rememberAnger, canAim = false, fill = 64) {
   const clock: Record<string, any> = { t: 1000 }; const digs = []
   const bot = new EventEmitter()
   const golem = { id: 2, name: 'iron_golem', position: new Vec3(2.5, 64, .5) }
   bot.entity = { position: new Vec3(.5, 67, .5) }
   bot.entities = { 2: golem }; bot.health = 20
-  bot.inventory = { items: () => [{ name: 'cobblestone', count: 64 }, { name: 'stone_axe', count: 1 }] }
+  bot.inventory = { items: () => [{ name: 'cobblestone', count: fill }, { name: 'stone_axe', count: 1 }] }
   bot.pathfinder = { setGoal () {} }
   bot.equip = async i => { bot.heldItem = i }
   bot.lookAt = async () => {}; bot.attack = () => {}
@@ -63,4 +63,11 @@ test('actual attack remembers anger for a later RPC on the same entity', async (
 test('an untouched neutral golem still permits a normal pillar exit', async () => {
   const f = fixture(false); await f.run()
   assert.ok(f.digs.length > 0)
+})
+
+test('an existing supported perch permits defensive hits without new filler blocks', async () => {
+  const f = fixture(true, true, 0); const r = await f.run()
+  assert.ok(r.hits > 0, 'no building material is needed for the existing perch')
+  assert.equal(f.digs.length, 0)
+  assert.equal(f.session.bot.entity.position.y, 67)
 })

@@ -130,8 +130,10 @@ function fallStep (p, v) {
 // а bot.blockAt создаёт объект на каждый вызов. Кэш чистится по blockUpdate
 // (взрыв, поставленный блок) и целиком раз в 20 с. 1 — твёрдое (и не
 // прогруженное), 2 — лава, 3 — вода, 0 — воздух.
-function worldOf (bot) {
-  if (bot._ndSkyWorld) return bot._ndSkyWorld
+function worldOf (bot, { observed = false }: any = {}) {
+  const cacheProperty = observed ? '_ndObservedSkyWorld' : '_ndSkyWorld'
+  if (bot[cacheProperty]) return bot[cacheProperty]
+  const source = observed ? require('./pvp/search').observedCollision(bot) : bot
   const cells = new Map()
   const key = (x, y, z) => ((x + 30000) * 60001 + (z + 30000)) * 1024 + (y + 512)
   let clearedAt = gameClock.now()
@@ -141,13 +143,14 @@ function worldOf (bot) {
     let v = cells.get(k)
     if (v === undefined) {
       let b = null
-      try { b = bot.blockAt(new Vec3(x, y, z), false) } catch {}
+      try { b = source.blockAt(new Vec3(x, y, z), false) } catch {}
       if (!b) v = 1
       else if (b.boundingBox === 'block') v = 1
       else if (b.name === 'lava') v = 2
       else if (b.name === 'water' || b.name === 'bubble_column') v = 3
       else v = 0
-      cells.set(k, v)
+      // Unknown cells are rechecked as the observer moves; they are never remembered as observed walls.
+      if (b || !observed) cells.set(k, v)
     }
     return v
   }
@@ -179,18 +182,20 @@ function worldOf (bot) {
     },
     clear: () => cells.clear()
   }
-  bot._ndSkyWorld = W
+  bot[cacheProperty] = W
   return W
 }
 
 // Прогон полёта: взгляд держим n тиков. boost — сколько тиков ещё тянет
 // фейерверк. Событие — первое касание: 'floor' (сели), 'ceil', 'wall' с уроном
 // о стену; fd — высота падения по правилам сервера на конце.
-function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false }: any = {}) {
+function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false, arena = null }: any = {}) {
   const p = { x: p0.x, y: p0.y, z: p0.z }
   const v = { x: v0.x, y: v0.y, z: v0.z }
   const path = keepPath ? [] : null
   let minFloorGap = Infinity
+  const inside = q => !arena || require('./combat/team-wind').windInside(q, arena, HALF)
+  if (!inside(p)) return { t: 0, kind: 'outside', p, v, fd, path, minFloorGap }
   for (let t = 0; t < n; t++) {
     const px = p.x; const py = p.y; const pz = p.z
     // Высота падения: сервер держит ≤ 1, пока v.y > −0.5 (до хода этого тика).
@@ -201,6 +206,7 @@ function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false }:
     // стену в 1 блок между концами соседних тиков (путь 176.3 → 174.7 мимо клетки 175) — прогноз не видел стекло
     // арены, и рулевой вёл прямо в него. Сервер и prismarine-physics двигают с упором (по осям) — тело упиралось.
     const steps = Math.max(1, Math.ceil(Math.max(Math.abs(p.x - px), Math.abs(p.y - py), Math.abs(p.z - pz)) / 0.45))
+    for (let k = 1; k <= steps; k++) if (!inside({ x: px + (p.x - px) * k / steps, y: py + (p.y - py) * k / steps, z: pz + (p.z - pz) * k / steps })) return { t, kind: 'outside', p, v, fd, path, minFloorGap }
     let hitAt = 0
     for (let k = 1; k <= steps && !hitAt; k++) if (W.boxHit(px + (p.x - px) * k / steps, py + (p.y - py) * k / steps, pz + (p.z - pz) * k / steps)) hitAt = k
     if (hitAt) {
@@ -580,7 +586,8 @@ function choose (W, st, goal, { H = 18, rocketNow = false }: any = {}) {
   let best = null
   for (const yaw of yaws) {
     for (const pitch of goal.pitches || PITCHES) {
-      const r = rollout(W, st.p, st.v, yaw, pitch, boost, H, { fd: st.fd, keepPath: goal.kind === 'strike' || !!goal.reach })
+      const r = rollout(W, st.p, st.v, yaw, pitch, boost, H, { fd: st.fd, keepPath: goal.kind === 'strike' || !!goal.reach, arena: goal.arena })
+      if (r.kind === 'outside') continue
       const c = cost(W, st, goal, at, r, yaw, pitch)
       if (!best || c < best.c) best = { c, yaw, pitch, r }
     }
@@ -697,8 +704,8 @@ function rocketChoice (W, st, g, pl, want): any {
 // goal() — цель этого тика; ракета — когда с ней прогноз заметно лучше или
 // скорость/высота ниже нужной (rocketIf). Всё — на тике физики: взгляд этого
 // тика двигает тело на следующем.
-function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, onTick = null, stats = null, noRocket = null, phase = null }: any = {}) {
-  const W = worldOf(bot)
+function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, onTick = null, stats = null, noRocket = null, phase = null, arena = null }: any = {}) {
+  const W = worldOf(bot, { observed: !!arena })
   const S = install(bot)
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
@@ -718,18 +725,21 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
       try {
         const b = bot.entity
         if (ctl.aborted || !b || (bot.health ?? 0) <= 0) return finish('прервали')
+        if (arena && !require('./combat/team-wind').windInside(b.position, arena, HALF)) return finish('outside_arena')
         if (b.onGround) return finish('сел')
         if (b.isInWater) return finish('в воде')
         if (!b.elytraFlying && gameClock.now() - S.startedAt > 400) return finish('полёт кончился')
         if (gameClock.now() - t0 > maxMs) return finish('долго')
         if (until) { const u = until(); if (u) return finish(u) }
         ticks++
-        const g = typeof goal === 'function' ? goal() : goal
+        let g = typeof goal === 'function' ? goal() : goal
         if (!g) return finish('цели нет')
+        if (arena) g = { ...g, arena }
         S.phase = phase || g.kind
         const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
         const tp = gameClock.wall.now()
         const pl = choose(W, st, g)
+        if (!pl) return finish('no_safe_arena_trajectory')
         let fire = false
         if (!(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > 0) {
           const want = rocketIf ? rocketIf(st, pl, g) : false
@@ -769,7 +779,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
 // первого руля fly — до 12 тиков под ракетой без руля, а взлёт шёл по заказанному взгляду (бой — 0.45 рад., к нему)
 // прямо в уступ в 2 бл. Прогон 14 тиков с ракетой по кандидатам: заказанный, круче, в сторону — первый чистый по цене
 // отклонения; чистого нет — тот, где удар позже.
-function launchLook (W, p, yaw0, pitch0, v = null) {
+function launchLook (W, p, yaw0, pitch0, v = null, arena = null) {
   // С земли — прыжок (раскрыть на подъёме, ~0.3 выше, v.y 0.3); в воздухе — как есть (ревью Codex).
   const p1 = v ? { x: p.x, y: p.y, z: p.z } : { x: p.x, y: p.y + 0.3, z: p.z }
   const v1 = v ? { x: v.x, y: v.y, z: v.z } : { x: 0, y: 0.3, z: 0 }
@@ -778,7 +788,8 @@ function launchLook (W, p, yaw0, pitch0, v = null) {
     const pitch = Math.min(1.45, pitch0 + dp)
     for (const o of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.35, -1.35, 2, -2, Math.PI]) {
       const yaw = wrap(yaw0 + o)
-      const r = rollout(W, p1, v1, yaw, pitch, ROCKET_MAX_TICKS, 14)
+      const r = rollout(W, p1, v1, yaw, pitch, ROCKET_MAX_TICKS, 14, { arena })
+      if (r.kind === 'outside') continue
       const bad = (r.kind === 'wall' && r.dmg >= 0.5) || r.kind === 'floor' || (r.kind === 'ceil' && r.t < 8)
       const c = (bad ? 1000 - r.t * 20 : 0) + Math.abs(o) * 2 + dp * 3
       if (!best || c < best.c) best = { c, yaw, pitch, bad, kind: r.kind, t: r.t }
@@ -789,11 +800,12 @@ function launchLook (W, p, yaw0, pitch0, v = null) {
 
 // Взлёт: элитры на теле, прыжок, в воздухе — «раскрыть», взгляд вверх и
 // фейерверк. Отказ — с причиной (потолок, воды, нет ракет).
-async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liquidStart = false }: any = {}) {
-  const W = worldOf(bot)
+async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liquidStart = false, arena = null }: any = {}) {
+  const W = worldOf(bot, { observed: !!arena })
   install(bot)
   const b = bot.entity
   if (!b) return { ok: false, why: 'нет тела' }
+  if (arena && !require('./combat/team-wind').windInside(b.position, arena, HALF)) return { ok: false, why: 'outside_arena' }
   if (b.isInWater) return { ok: false, why: 'в воде' }
   const fromLava = liquidStart && !!b.isInLava
   if (fromLava ? !lavaLaunchClear(bot) : headroom(W, b.position, 6) < 4) return { ok: false, why: 'над головой блок' }
@@ -806,7 +818,8 @@ async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liqui
   let lYaw = wrap(yaw ?? b.yaw)
   let lPitch = pitch
   if (!fromLava) {
-    const ll = launchLook(W, b.position, lYaw, pitch, b.onGround ? null : b.velocity)
+    const ll = launchLook(W, b.position, lYaw, pitch, b.onGround ? null : b.velocity, arena)
+    if (arena && !ll) return { ok: false, why: 'no_safe_arena_launch' }
     if (ll && (Math.abs(ll.yaw - lYaw) > 1e-6 || ll.pitch !== pitch)) { lYaw = ll.yaw; lPitch = ll.pitch; if (stats) stats.launchTurns = (stats.launchTurns || 0) + 1 }
   }
   for (const k of KEYS) { try { bot.setControlState(k, false) } catch {} }
@@ -824,6 +837,7 @@ async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liqui
   install(bot).phase = 'взлёт'
   await bot.look(lYaw, lPitch, true).catch(() => {})
   await nextTick(bot)
+  if (arena && rollout(W, bot.entity.position, bot.entity.velocity, lYaw, lPitch, ROCKET_MAX_TICKS, 14, { arena }).kind === 'outside') return { ok: false, why: 'no_safe_arena_launch' }
   let fr = fireRocket(bot)
   if (!fr.ok && /хотбаре/.test(fr.why || '')) {
     // Ракеты в рюкзаке — в хотбар (клики) и ещё раз.
@@ -899,16 +913,18 @@ function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, m
 
 // Посадка: планирование к точке пола, касание с v.y > −0.5 (высота падения ≤ 1
 // — без урона), не в пустоту и не у самого края. Ракеты — нет.
-async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = null }: any = {}) {
-  const W = worldOf(bot)
+async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = null, arena = null }: any = {}) {
+  const W = worldOf(bot, { observed: !!arena })
   const b = bot.entity
+  if (b && arena && !require('./combat/team-wind').windInside(b.position, arena, HALF)) return { ok: false, why: 'outside_arena' }
   if (!b || !b.elytraFlying) return { ok: !!(b && b.onGround), why: 'не лечу' }
-  let spot = at || landingSpot(bot, W, { near: b.position, away, floorY: null })
+  let spot = at || landingSpot(bot, W, { near: b.position, away, floorY: null, inside: arena ? (x, z) => Math.abs(x - arena.x) + HALF <= arena.r && Math.abs(z - arena.z) + HALF <= arena.r : null })
   if (!spot) {
     const f = W.floorBelow(b.position.x, b.position.y, b.position.z, 60)
     spot = f ? new Vec3(b.position.x, f.top, b.position.z) : null
   }
   if (!spot) return { ok: false, why: 'сесть некуда' }
+  if (arena && !require('./combat/team-wind').windInside(spot, arena, HALF)) return { ok: false, why: 'outside_arena' }
   const hp0 = bot.health ?? 20
   const edge = (p) => {
     for (const [dx, dz] of [[1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
@@ -922,13 +938,14 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
     goal: () => ({ kind: 'land', at: spot, away, edge }),
     maxMs,
     noRocket: () => true,
+    arena,
     stats
   })
   // Скольжение после касания (трение) — рефлекс края держит от ям.
   await sleep(150)
   const lost = Math.max(0, hp0 - (bot.health ?? 20))
   if (stats) { stats.landings = (stats.landings || 0) + 1; if (lost > 0.5) stats.landDmg = r2((stats.landDmg || 0) + lost) }
-  return { ok: !!bot.entity.onGround, why: r.why, lost: r2(lost), at: spot }
+  return { ok: !!bot.entity.onGround && (!arena || require('./combat/team-wind').windInside(bot.entity.position, arena, HALF)), why: r.why, lost: r2(lost), at: spot }
 }
 
 // Нагрудник назад — только внизу (S7c, а): свап в воздухе гасит полёт, и тело падает с высоты («fell from a

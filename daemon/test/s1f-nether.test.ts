@@ -185,8 +185,9 @@ test('мост в Аду: над смертельной высотой (lethalDe
 test('fortress.walkLeg: ниже 44 в Аду отрезок целится вверх (до 56), а не вдоль берега лавы', async () => {
   const F = require('../src/fortress')
   const goalsSeen: any[] = []
-  const bot: any = { entity: { position: new Vec3(0.5, 35, 0.5) }, health: 20,
-    pathfinder: { goto: async (g: any) => { goalsSeen.push(g); bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5) }, setGoal () {} } }
+  const bot: any = new EventEmitter()
+  Object.assign(bot, { entity: { position: new Vec3(0.5, 35, 0.5) }, health: 20,
+    pathfinder: { goto: async (g: any) => { goalsSeen.push(g); bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5) }, setGoal (g) { if (g) this.goto(g).then(() => bot.emit('goal_reached', g)) } } })
   const ctl = { aborted: false, onAbort: [] }
   withEnv({ ND_NE_RISE: undefined }, () => {})
   const r = await F.walkLeg(bot, ctl, 16, 0, require('../src/game-clock').now() + 60000)

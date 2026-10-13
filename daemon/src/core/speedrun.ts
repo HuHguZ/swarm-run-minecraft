@@ -2,9 +2,12 @@ import { amount, knows, unknown, type Dimension, type Effect, type WorldState } 
 import { StrategyRegistry, type Strategy } from './strategy'
 import { applyCosts, type CostModel } from './cost-model'
 import { barterPlan, chanceAll, DEFAULT_TIMING, expectedIngots, meanPerIngot, perIngot, type BarterDecision, type BarterState } from './barter-model'
+import { carriedBread } from '../campaign/bread'
+const { foodMeal, foodUnits, foodPoints } = require('../play-policy')
 
 export interface SpeedrunOptions {
   eyes?: number; beds?: number; iron?: number; structureBudgetMs?: number; costs?: CostModel[]
+  portalBuckets?: 1 | 2
   /** Barter economy: gold as a resource (AcquireGold), next bastion, partial barter effects.
    *  Off by default, нужна ферма: the campaign enables it with ND_GRAPH_ECONOMY=1 once S1 wires the skills bastionGold/bastionMove.
    *  Simulator (sim-explore, 1000 worlds, telemetry-calibrated): win from Nether entry 7.4 % → 37.4 % (log 06.10 20:15, research/claude-1006/s3-strategist-log.md). */
@@ -27,7 +30,8 @@ export function travelTicks(s: WorldState, id: string): number {
   const target = TARGETS[id]
   const at = target && s.facts[`${target[0]}_position`]
   if (!target || !at || s.dimension !== target[1] || !s.position || at.status !== 'known' || !at.value || typeof at.value !== 'object') return 0
-  return Math.hypot(at.value.x - s.position.x, at.value.z - s.position.z) / SPEED * 20
+  // Player's sprint modifier is +30%; at hunger <=6 the vanilla client cannot sprint.
+  return Math.hypot(at.value.x - s.position.x, at.value.z - s.position.z) / SPEED * 20 * (s.hunger <= 6 ? 1.3 : 1)
 }
 /** A target believed with confidence c costs (1 − c) of a fresh search on top (map facts are 1, inferred ones less). */
 function doubtTicks(s: WorldState, id: string, searchSeconds = 120): number {
@@ -96,12 +100,14 @@ function bastionSiteChanged(failed: WorldState, current: WorldState): boolean {
 export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistry {
   const eyes = Math.max(1, options.eyes ?? 12)
   const beds = Math.max(1, options.beds ?? 7)
-  const iron = Math.max(1, options.iron ?? 7)
+  const buckets = options.portalBuckets ?? 1
   const structureBudgetMs = options.structureBudgetMs ?? 180000
   const registry = new StrategyRegistry()
   const ow = (s: WorldState) => s.dimension === 'overworld'
   const nether = (s: WorldState) => s.dimension === 'the_nether'
-  const readyToBuild = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'bucket') >= 1 && amount(s, 'lighter') >= 1
+  const readyToBuild = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'bucket') >= buckets && amount(s, 'lighter') >= 1
+  const portalIron = (s: WorldState) => 3 * Math.max(0, buckets - amount(s, 'bucket')) + (amount(s, 'lighter') >= 1 ? 0 : 1)
+  const ironTarget = (s: WorldState) => Math.max(options.iron ?? 0, portalIron(s))
   const pearlsNeeded = (s: WorldState) => amount(s, 'pearls') + amount(s, 'eyes') < eyes
   const rodsNeeded = (s: WorldState) => amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes
   /** A new portal is worth building only while the Nether still owes eyes (COORD 00:55 S5c: after the Nether the paused
@@ -115,17 +121,33 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   const fireResHeld = (s: WorldState) => knows(s, 'fire_resistance_active') || Number(s.facts.fire_resistance_count?.value ?? 0) >= 1
   /** Death risk of the spawner fight from the state. Fireballs and burning are #is_fire: under fire resistance only the touch
    *  attack hurts. Calibrated on the s1c farm series (06.10, 40 runs that reached the spawner, lockstep/750): death in the blaze
-   *  stage 10/27 with FR at the first call, 9/13 without — 0.35 / 0.7; no shield +0.04; under 10 hp ×2. */
-  const blazeRisk = (s: WorldState) => Math.min(1, ((fireResHeld(s) ? 0.35 : 0.7) + (amount(s, 'shield') >= 1 ? 0 : 0.04)) * (s.health < 10 ? 2 : 1))
-  const barsNeeded = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'iron') < iron &&
-    (amount(s, 'bucket') < 1 || amount(s, 'lighter') < 1) && amount(s, 'stone_tool') >= 1
+   *  stage 10/27 with FR at the first call, 9/13 without — 0.35 / 0.7; no shield +0.04. */
+  // shortcut: scale exposure by remaining health until mortality samples distinguish more than two HP groups.
+  const healthExposure = (s: WorldState) => 20 / Math.max(1, Math.min(20, s.health))
+  const blazeRisk = (s: WorldState) => Math.min(1, ((fireResHeld(s) ? 0.35 : 0.7) + (amount(s, 'shield') >= 1 ? 0 : 0.04)) * healthExposure(s))
+  const barsNeeded = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'iron') < ironTarget(s) &&
+    (amount(s, 'bucket') < buckets || amount(s, 'lighter') < 1) && amount(s, 'stone_tool') >= 1
   const structureAvailable = (s: WorldState, name: string) => knows(s, name) && !knows(s, `${name}_exhausted`) && s.structureSearchMs < structureBudgetMs
   const add = (id: string, skill: string, preconditions: Strategy['preconditions'], expectedEffects: Strategy['expectedEffects'], seconds: number,
     successCondition: Strategy['successCondition'], risk = 0.01, extra: Partial<Strategy> = {}) => registry.register({ id, skill, version: 1, preconditions,
       expectedEffects, estimateCost: s => seconds * 20 + travelTicks(s, id) + doubtTicks(s, id), travelTicks: s => travelTicks(s, id),
-      estimateRisk: s => Math.min(1, risk * (s.health < 10 ? 3 : 1)), timeoutMs: Math.max(120000, seconds * 4000), successCondition, ...extra })
+      estimateRisk: s => Math.min(1, risk * healthExposure(s)), timeoutMs: Math.max(120000, seconds * 4000), successCondition, ...extra })
   const has = (key: string, n = 1) => (_before: WorldState, after: WorldState) => amount(after, key) >= n
   const achieved = (key: string) => (_before: WorldState, after: WorldState) => knows(after, key)
+  const meal = (s: WorldState) => {
+    const result = foodMeal(s.inventory, s.hunger)
+    const available = Math.max(0, amount(s, 'food_points') - result.points)
+    // Predicted food from a hunt has no invented item name. Price its worst case
+    // (one nutrition per bite); raw chicken guarantees at least two per stock unit.
+    const gained = Math.min(20 - result.hunger, available)
+    if (gained > 0) {
+      result.hunger += gained
+      result.points += available
+      result.units += Math.max(0, amount(s, 'food') - result.units)
+      result.ticks += Math.ceil(gained) * 32
+    }
+    return result
+  }
   add('AcquireWood', 'wood', s => ow(s) && !amount(s, 'stone_tool') && !amount(s, 'wood'), { atLeast: { wood: 5 } }, 90, has('wood', 5))
   add('RecoverNetherWood', 'wood', s => ow(s) && knows(s, 'portal') && toolsUnavailable(s) && woodPlanks(s) < 8 &&
     (s.inventory.crafting_table ?? 0) >= 1 && s.facts.nether_pick_swings?.status === 'known' &&
@@ -134,8 +156,23 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     (before, after) => woodPlanks(after) >= 8 &&
       (Number(before.facts.nether_pick_swings?.value) < 260 || knows(after, 'nether_tools_ready')), 0.01)
   add('AcquireStoneTools', 'stone', s => ow(s) && amount(s, 'wood') >= 1 && !amount(s, 'stone_tool'), { atLeast: { stone_tool: 1, blocks: 24 } }, 90, has('stone_tool'))
-  add('FindFood', 'food', s => s.dimension !== 'the_end' && amount(s, 'food') < 3 && !knows(s, 'end_ready'), { atLeast: { food: 6 } }, 90, has('food', 3), 0.025)
-  add('Heal', 'heal', s => s.health < 12 && amount(s, 'food') >= 1, { health: 18, hunger: 20 }, 40, (_b, a) => a.health >= 12, 0)
+  add('PrepareBread', 'prepareBread', s => !!carriedBread(s.inventory), s => {
+    const inventory = carriedBread(s.inventory)!.plan.inventory
+    const count = (items: Record<string, number>, pattern: RegExp) => Object.entries(items).reduce((n, [name, quantity]) => n + (pattern.test(name) ? quantity : 0), 0)
+    return { inventory: Object.fromEntries(Object.entries(inventory).map(([name, quantity]) => [name, quantity - (s.inventory[name] ?? 0)])),
+      resources: { food: foodUnits(inventory) - foodUnits(s.inventory), food_points: foodPoints(inventory) - foodPoints(s.inventory),
+        wood: count(inventory, /_(log|stem|planks)$/) - count(s.inventory, /_(log|stem|planks)$/),
+        blocks: count(inventory, /_planks$/) - count(s.inventory, /_planks$/) } }
+  }, 20, (before, after) => (after.inventory.bread ?? 0) > (before.inventory.bread ?? 0), 0,
+  // shortcut: use the existing local-craft prior until bread receipts supply a measured duration.
+  { progressCondition: (before, after) => (after.inventory.wheat ?? 0) > (before.inventory.wheat ?? 0) })
+  add('FindFood', 'food', s => s.dimension !== 'the_end' && amount(s, 'food') < 3 && !knows(s, 'end_ready'), { atLeast: { food: 8, food_points: 16 } }, 90, has('food', 3), 0.025)
+  add('EatFood', 'eatFood', s => s.hunger < 20 && amount(s, 'food_points') > 0,
+    s => { const eaten = meal(s); return { hunger: eaten.hunger, inventory: eaten.inventory,
+      resources: { food: -eaten.units, food_points: -eaten.points } } }, 1.6,
+    (before, after) => after.hunger > before.hunger, 0,
+    { estimateCost: s => meal(s).ticks, modelCost: true })
+  add('Heal', 'heal', s => s.health < 18 && amount(s, 'food') >= 1, { health: 18, hunger: 20 }, 40, (_b, a) => a.health >= 18, 0)
   add('ScoutStructures', 'scoutStructures', s => barsNeeded(s) && s.structureSearchMs < structureBudgetMs &&
     !['village', 'shipwreck', 'treasure'].some(name => structureAvailable(s, name)) &&
     ['village', 'shipwreck', 'treasure'].some(name => unknown(s, name)),
@@ -144,11 +181,28 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   const loot: Array<[string, string, number, number]> = [['VillageIron', 'village', 4, 80], ['ShipwreckIron', 'shipwreck', 5, 150], ['TreasureIron', 'treasure', 9, 120]]
   for (const [id, place, bars, seconds] of loot) add(id, 'structureIron', s => barsNeeded(s) && structureAvailable(s, place),
     s => ({ resources: { iron: bars }, facts: { [`${place}_exhausted`]: true }, structureSearchMs: Math.min(structureBudgetMs - s.structureSearchMs, seconds * 1000) }), seconds,
-    (b, a) => amount(a, 'iron') > amount(b, 'iron'), 0.02, { command: () => ({ skill: 'structureIron', strategy: id, params: { kind: place, budgetSeconds: structureBudgetMs / 1000 } }) })
+    (b, a) => amount(a, 'iron') > amount(b, 'iron'), 0.02, {
+      command: () => ({ skill: 'structureIron', strategy: id, params: { kind: place, budgetSeconds: structureBudgetMs / 1000 } }),
+      progressCondition: (before, after) => {
+        const at = before.facts[`${place}_position`]?.value
+        return !!at && typeof at === 'object' && !!before.position && !!after.position && before.dimension === after.dimension &&
+          Math.hypot(after.position.x - at.x, after.position.z - at.z) < Math.hypot(before.position.x - at.x, before.position.z - at.z)
+      }
+    })
   add('MineIron', 'iron', s => barsNeeded(s) && (s.structureSearchMs >= structureBudgetMs ||
-    ['village', 'shipwreck', 'treasure'].every(name => !structureAvailable(s, name) && !unknown(s, name))), { atLeast: { iron } }, 180, has('iron', iron), 0.04)
-  add('CraftPortalKit', 'portalKit', s => ow(s) && !knows(s, 'portal') && amount(s, 'iron') >= iron && (!amount(s, 'bucket') || !amount(s, 'lighter')),
-    { resources: { iron: -4 }, atLeast: { bucket: 1, lighter: 1 } }, 20, (_b, a) => amount(a, 'bucket') >= 1 && amount(a, 'lighter') >= 1, 0)
+    ['village', 'shipwreck', 'treasure'].every(name => !structureAvailable(s, name) && !unknown(s, name))), s => ({ atLeast: { iron: ironTarget(s) } }), 180,
+    (before, after) => amount(after, 'iron') >= ironTarget(before) || (!(options.iron! > 0) && readyToBuild(after)), 0.04)
+  add('CraftPortalKit', 'portalKit', s => ow(s) && !knows(s, 'portal') && amount(s, 'iron') >= portalIron(s) && (amount(s, 'bucket') < buckets || !amount(s, 'lighter')),
+    s => ({ resources: { iron: -portalIron(s) }, atLeast: { bucket: buckets, lighter: 1 } }), 20, (_b, a) => amount(a, 'bucket') >= buckets && amount(a, 'lighter') >= 1, 0,
+    // shortcut: reuse exploration prices until flint searches have their own calibrated samples.
+    { estimateCost: s => 400 + (!amount(s, 'lighter') && !s.inventory.flint && !s.inventory.gravel ? registry.get('ScoutLava')!.estimateCost(s) : 0),
+      estimateRisk: s => !amount(s, 'lighter') && !s.inventory.flint && !s.inventory.gravel ? registry.get('ScoutLava')!.estimateRisk(s) : 0, modelCost: true,
+      progressCondition: (before, after) => numberFact(after, 'flint_search_views', 0) > numberFact(before, 'flint_search_views', 0) ||
+      Math.min(buckets, amount(after, 'bucket')) > Math.min(buckets, amount(before, 'bucket')) ||
+      ['flint', 'gravel', 'iron_ingot'].some(item => {
+        const needed = item === 'iron_ingot' ? portalIron(before) : 1
+        return Math.min(needed, after.inventory[item] ?? 0) > Math.min(needed, before.inventory[item] ?? 0)
+      }) })
   add('GetWater', 'water', s => readyToBuild(s) && !amount(s, 'water') && amount(s, 'obsidian') < 10, { atLeast: { water: 1 } }, 40, has('water'), 0.015)
   add('ScoutLava', 'scoutLava', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && unknown(s, 'lava'), { facts: { lava: true } }, 60, achieved('lava'), 0.02)
   add('LavaPoolPortal', 'cast', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && knows(s, 'lava'), { facts: { portal: true } }, 120, achieved('portal'), 0.04)
@@ -165,8 +219,9 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     { atLeast: { obsidian: 10 } }, Math.round(720 / ((3 + 1) / (8 + 2))), has('obsidian', 10), (0 + 1) / (8 + 2))
   add('ObsidianPortal', 'portal', s => ow(s) && !knows(s, 'portal') && amount(s, 'obsidian') >= 10 && amount(s, 'lighter') >= 1,
     { resources: { obsidian: -10 }, facts: { portal: true } }, 90, achieved('portal'), 0.01)
-  add('PrepareNether', 'prep', s => ow(s) && knows(s, 'portal') && !knows(s, 'nether_ready'), { facts: { nether_ready: true }, atLeast: { food: 6, iron_pick: 1 } },
-    90, achieved('nether_ready'), 0.01)
+  add('PrepareNether', 'prep', s => ow(s) && knows(s, 'portal') && !knows(s, 'nether_ready'), { facts: { nether_ready: true }, atLeast: { food: 6, food_points: 12 } },
+    90, achieved('nether_ready'), 0.01,
+    { estimateCost: s => 90 * 20 + (amount(s, 'food') < 8 ? registry.get('FindFood')!.estimateCost(s) : 0), modelCost: true })
   add('EnterNether', 'enterNether', s => ow(s) && knows(s, 'portal') && knows(s, 'nether_ready') && (pearlsNeeded(s) || amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes),
     { dimension: 'the_nether', facts: { entered_nether: true } }, 30, (_b, a) => a.dimension === 'the_nether', 0.01)
   const economy = options.economy === true

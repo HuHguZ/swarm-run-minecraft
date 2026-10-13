@@ -37,6 +37,8 @@ function fleeIntent (this: any, p: any = {}) {
       return flee.smartFlee(this, ctl, {
         timeoutMs: Math.min(60, p.timeoutSeconds ?? 15) * 1000,
         safeDist: p.safeDist ?? 14,
+        arena: p.arena || null,
+        reason: p.reason || null,
         foes,
         // toward — куда бежать выгоднее (свои, неоткрытые сундуки): {x,y,z}[].
         goals: Array.isArray(p.toward) ? p.toward.filter(g => Number.isFinite(g?.x) && Number.isFinite(g?.z)) : []
@@ -52,7 +54,7 @@ function loot (this: any, p: any = {}) {
       this.require()
       this.updateMovements()
       return lootMod.loot(this, ctl, p)
-    }, { timeoutMs: 90000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'] })
+    }, { timeoutMs: Math.max(1, Math.min(90000, (p.timeoutSeconds ?? 90) * 1000)), interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'] })
   }
 
 function structure (this: any, p: any = {}) {

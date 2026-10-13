@@ -1,6 +1,6 @@
 const { gameClock, log, mobs, sleep, xyz, Vec3, walkGoal, goals, keyOf, survey, aggressive, angerSet, pickUp, countOf } = require('./take-gold-block')
 const { boothCandidates, tradeBreach, tradeExecute, walkUnlessBrute } = require('./booth-trade')
-const { lastGoldBreak, predictGold, eatIfHungry } = require('./predict-gold')
+const { lastGoldBreak, predictGoldAsync, eatIfHungry } = require('./predict-gold')
 const FOES_RE = /^(piglin_brute|hoglin|zoglin)$/
 
 function foesNear (bot, r = 10) {
@@ -41,7 +41,7 @@ async function towerScan (session, ctl, st) {
     try { const g = await require('.././edges').gatherBlocks(bot, ctl, { want: 40 - SLf.fillerCount(bot), maxMs: 40000, radius: 10 }); log('вышка: блоки', { got: g && g.got, have: SLf.fillerCount(bot) }) } catch {}
   }
   const base = bot.entity.position.floored()
-  let pg = predictGold(bot)
+  let pg = await predictGoldAsync(bot, 56, ctl)
   let steps = 0
   // Выше, пока гипотеза стен слабая: один вал (score 3, голос одного вала) давал стену не там —
   const sure = q => q.direct.length > 0 || (q.walls.length > 0 && q.walls[0].from.length >= 2) || (q.start && q.start.score >= 1)
@@ -54,7 +54,7 @@ async function towerScan (session, ctl, st) {
       try { await digUp(bot, ctl, { blocks: 6, mcData: bot.registry, tower: true }) } catch {}
     }
     steps++
-    pg = predictGold(bot)
+    pg = await predictGoldAsync(bot, 56, ctl)
     if (bot.entity.position.y < y0 + 0.9) break
   }
   const top = bot.entity.position.floored()

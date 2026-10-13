@@ -1,4 +1,4 @@
-import { candidates, frWorth, threatLevel, hasObservedTarget, canRepelLavaAttacker, deadEnd, type ActionId, type Candidate, type TacticalState } from './state'
+import { candidates, frWorth, burnRecovery, threatLevel, hasObservedTarget, canRepelLavaAttacker, deadEnd, type ActionId, type Candidate, type TacticalState } from './state'
 
 export type TacticalNodeId = ActionId | 'Strategic' | 'EmergencyController'
 export interface TacticalTransition {
@@ -26,9 +26,10 @@ for (const action of actions) {
   edge(action, 'LastStand', state => state.contact && deadEnd(state) && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
   for (const immediate of ['Dodge', 'UseWater'] as const) edge(action, immediate, state => immediate === 'Dodge' ? state.explosion : state.burning && state.water)
   edge(action, 'Surface', state => !!state.drowning)
+  edge(action, 'Flee', state => !!state.hotFloor && !state.dangerousFall && !state.emergencyController)
   for (const shelter of refuge) edge(action, shelter, state => threatLevel(state) >= 2 && (!state.canFight || state.health < 12 || action === 'Fight'))
   edge(action, 'Heal', state => state.cover && state.health < 16 && state.edible)
-  edge(action, 'Eat', state => state.food < 16 && state.edible && threatLevel(state) <= 1)
+  edge(action, 'Eat', state => state.edible && (burnRecovery(state) || state.food < 16 && threatLevel(state) <= 1))
   edge(action, 'Shield', state => state.shield && (state.incomingProjectiles > 0 || threatLevel(state) === 1))
   edge(action, 'Fight', state => canRepelLavaAttacker(state) || hasObservedTarget(state) && state.contact && state.canFight && state.health > 6 && !state.explosion)
 }

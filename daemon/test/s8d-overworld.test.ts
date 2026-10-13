@@ -203,11 +203,11 @@ test('explore: 8 сторон подряд без пути, тело на мес
   const { explore } = require('../src/actions')
   const mcData = require('minecraft-data')('1.21.11')
   const c = new gameClock.GameClock({ epoch: 0, stallMs: 0 }); c.setState({ tick_rate: 200 }); gameClock.activate(c); c.start()
-  const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), isInWater: false, onGround: true, yaw: 0, pitch: 0, eyeHeight: 1.62 },
+  const bot: any = Object.assign(new (require('node:events').EventEmitter)(), { entity: { position: new Vec3(0.5, 64, 0.5), isInWater: false, onGround: true, yaw: 0, pitch: 0, eyeHeight: 1.62 },
     blockAt: p => p.y < 64 ? { name: 'ice', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]], position: p } : { name: 'air', boundingBox: 'empty', shapes: [], position: p },
     registry: mcData, game: { minY: -64, height: 384 }, world: { getColumn: () => null },
-    pathfinder: { setGoal: () => {}, movements: null, goto: () => Promise.reject(new Error('noPath')) },
-    clearControlStates: () => {}, setControlState: () => {}, lookAt: async () => {}, oxygenLevel: 20, food: 20 }
+    pathfinder: { setGoal: goal => { if (goal) queueMicrotask(() => bot.emit('path_update', { status: 'noPath', path: [] })) }, movements: null, goto: () => Promise.reject(new Error('noPath')) },
+    clearControlStates: () => {}, setControlState: () => {}, lookAt: async () => {}, oxygenLevel: 20, food: 20 })
   const session: any = { bot, mcData, cfg: { fairPlay: true } }
   try {
     const r = await explore(session, { aborted: false, onAbort: [] }, { block: 'iron_ore', timeoutSeconds: 60 })

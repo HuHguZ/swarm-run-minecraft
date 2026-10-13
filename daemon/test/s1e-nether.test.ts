@@ -12,11 +12,18 @@ test('s1e: digInNear finds a neighbour cell for the depth-2 pit on a thin platfo
   // Мост над пустотой: под ногами (0,63,0) воздух; рядом помост x 1..4, z −2..2, толщиной 3 (y 61..63) — яма 3 не помещается.
   const solid = (v: any) => !air.has(k(v)) && v.y < 64 && v.y >= 61 && v.x >= 1 && v.x <= 4 && v.z >= -2 && v.z <= 2
   const block = (v: any) => solid(v) ? { name: 'nether_bricks', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' }
-  const bot: any = {
+  const bot: any = Object.assign(new (require('node:events').EventEmitter)(), {
     entity: { position: new Vec3(0.5, 64, 0.5), onGround: true },
     blockAt: (v: any) => block(v.floored ? v.floored() : v),
-    pathfinder: { goto: async (g: any) => { bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5) }, setGoal () {} }
-  }
+    pathfinder: {
+      goto: async (g: any) => { bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5) },
+      setGoal (g: any) {
+        if (!g) return
+        bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5)
+        setImmediate(() => bot.emit('goal_reached'))
+      }
+    }
+  })
   const dig0 = sealed.digCell; const fill0 = sealed.fillCell
   sealed.digCell = async (_b: any, c: any) => { air.add(k(c)); bot.entity.position = new Vec3(c.x + 0.5, c.y, c.z + 0.5); return 'ok' }
   sealed.fillCell = async () => true

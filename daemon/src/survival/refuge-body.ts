@@ -1,5 +1,5 @@
-const { standTop, grounded, refugeLook, lookLine, toShore, chooseRefuge, planksFromLogs, outrun, buildMsOf, takeNiche, takeBox, holdOut, sitTight, waitClear, leaveBox, SIT_CAP_MS } = require('./hold-out')
-const { PILLAR, REFUGE_NEUTRAL, holePlan, HOLE_DEPTH, surface, REFUGE_FLEE_MS } = require('./surface-body')
+const { standTop, grounded, refugeFoe, refugeLook, lookLine, toShore, chooseRefuge, planksFromLogs, outrun, buildMsOf, takeNiche, takeBox, holdOut, sitTight, waitClear, leaveBox, SIT_CAP_MS } = require('./hold-out')
+const { PILLAR, holePlan, HOLE_DEPTH, surface, REFUGE_FLEE_MS } = require('./surface-body')
 const { worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, enterShelter, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, exitShelter, sitOn, gameClock, Vec3 } = require('./enter-shelter')
 async function refuge (session, ctl, p: any = {}) {
   const bot = session.bot
@@ -102,7 +102,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
   // Паук вплотную, а с ним не больше одного ходячего — сперва бой (ND_REFUGE_SPIDER=1): от паука не оторваться в
   const spiderFirst = async () => {
     if (process.env.ND_REFUGE_SPIDER === '0' || ctl.aborted || (bot.health ?? 0) < 8 || !require('.././items').bestWeapon(bot)) return false
-    const hs = flee.hostilesAround(bot, 10).filter(h => !REFUGE_NEUTRAL.test(h.e.name))
+    const hs = flee.hostilesAround(bot, 10).filter(h => refugeFoe(bot, h.e, session))
     // Паук в 6 бл. — дойдёт за 1.5 с (3.9 бл/с, прыжок с 2–4): от него не оторваться и коробку при нём не закрыть.
     const sp = hs.find(h => /^(spider|cave_spider)$/.test(h.e.name) && h.d <= 6 && Math.abs(h.e.position.y - bot.entity.position.y) <= 3)
     // Только один на один: с зомби рядом бой с пауком тянется 7–8 с под его ударами (trap3/4: 12 → 0).
@@ -177,13 +177,36 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
     }
     first = false
     if (how === 'box' || how === 'niche') {
-      const b = how === 'niche' ? await takeNiche(session, ctl, a, step) : await takeBox(session, ctl, a, step)
+      // U2: Fight took the hands at the last roof block and jumped into the unfinished box. Only this bounded build owns
+      // ordinary defence; healing/exit and urgent hazards retain normal arbitration. A replaced intent cannot keep it.
+      let b
+      session._refugeBuild = ctl
+      try { b = how === 'niche' ? await takeNiche(session, ctl, a, step) : await takeBox(session, ctl, a, step, box => { out.box = box }) }
+      finally { if (session._refugeBuild === ctl) delete session._refugeBuild }
       if (!b) { a = refugeLook(session); continue }
       out.how = how
       out.cell = xyz(b.cell)
       out.placed = b.placed
+      if (b.intruder) {
+        // This box encloses its attacker too. Release construction first, then
+        // use the existing physical wall exit and flight, without eating here.
+        out.how = 'flee'
+        out.breached = b.intruder
+        out.code = 'CORNERED'
+        exitRes = await leaveBox(session, ctl, b, { why: 'breached' }, step)
+        if (exitRes?.ok && !ctl.aborted && (bot.health ?? 0) > 0 && gameClock.now() < deadline) {
+          const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(6000, deadline - gameClock.now()), safeDist: 12 })
+          out.ran = (out.ran || 0) + (f.ran || 0)
+          step(`из занятой коробки: ${f.mode}`)
+          if (!ctl.aborted && f.mode === 'оторвался') out.code = 'OK'
+        }
+        break
+      }
       hold = await holdOut(session, ctl, { kind: 'box', box: b, minHp, deadline, note: step })
-      if (out.stayIn && hold.why !== 'breached' && hold.why !== 'died' && !ctl.aborted && (bot.health ?? 0) > 0 &&
+      // No food means no healing. Return behind the confirmed walls so the
+      // speedrun caller can choose work or food without reopening to the shooter.
+      const noFoodWork = session.playPolicy?.mode === 'speedrun' && !out.untilDawn && hold.why === 'no_food'
+      if ((out.stayIn || noFoodWork) && hold.why !== 'breached' && hold.why !== 'died' && !ctl.aborted && (bot.health ?? 0) > 0 &&
         require('.././fortify').enclosure(bot, b.cell).sealed) {
         step('остаюсь в коробке — дальше вниз из неё')
         out.stayed = true
@@ -244,6 +267,12 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       out.how = 'pocket'
       step(`сижу в замкнутом кармане (${a.pocket} кл.)`)
       hold = await holdOut(session, ctl, { kind: 'pocket', minHp, deadline, note: step })
+      if (session.playPolicy?.mode === 'speedrun' && !out.untilDawn && hold.why === 'no_food' &&
+        !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
+        step('остаюсь в кармане — дальше работа или еда')
+        out.stayed = true
+        break
+      }
       if ((sitOn() || out.untilDawn) && hold.why !== 'breached' && hold.why !== 'died') {
         const st = await sitTight(session, ctl, { at: bot.entity.position.floored(), t0, step, untilDawn: out.untilDawn })
         if (st.sat) out.sat = Math.round(st.sat / 1000)
@@ -267,7 +296,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
 
   // Вышел, а ходячие ждут у стен (ночью зомби не расходятся: H — 4 из 6 смертей
   if (exitRes && out.how !== 'flee' && !ctl.aborted && (bot.health ?? 0) > 0) {
-    const near = flee.hostilesAround(bot, 8).filter(h => !REFUGE_NEUTRAL.test(h.e.name) && h.doc.radius > 0)
+    const near = flee.hostilesAround(bot, 8).filter(h => refugeFoe(bot, h.e, session) && h.doc.radius > 0)
     if (near.length) {
       const f = await flee.smartFlee(session, ctl, { timeoutMs: 6000, safeDist: 12 })
       out.ran = (out.ran || 0) + (f.ran || 0)
@@ -324,7 +353,7 @@ async function takeHole (session, ctl, step) {
     if (r.sealed) return { depth: r.depth }
     // Открытая нора при ходячих рядом — не укрытие: зомби сваливается в ствол
     // сверху и бьёт в голову (J: 3 смерти). Сидеть — только если их нет.
-    const walkers = require('.././flee').hostilesAround(session.bot, 8).filter(h => !REFUGE_NEUTRAL.test(h.e.name) && h.doc.radius > 0)
+    const walkers = require('.././flee').hostilesAround(session.bot, 8).filter(h => refugeFoe(session.bot, h.e, session) && h.doc.radius > 0)
     if (r.depth >= 2 && !walkers.length) { step('нора открыта, но на 2+ вниз и ходячих нет — сижу'); return { depth: r.depth, open: true } }
     if (r.depth) await exitShelter(session, ctl, { depth: r.depth })
   } catch (e) { step(`нора: ${e.message}`) }
@@ -353,7 +382,7 @@ async function takePillar (session, ctl, step) {
 async function leavePillar (session, ctl, step) {
   const bot = session.bot
   if ((bot.health ?? 0) <= 0) return null
-  const foes = require('.././flee').hostilesAround(bot, 16).filter(h => !REFUGE_NEUTRAL.test(h.e.name))
+  const foes = require('.././flee').hostilesAround(bot, 16).filter(h => refugeFoe(bot, h.e, session))
   let yaw = bot.entity.yaw
   if (foes.length) {
     const f = foes[0].e.position

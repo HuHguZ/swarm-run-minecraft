@@ -32,6 +32,10 @@ const FILLER = [
 // the block drops into the cave the tick it lands, and the body walks onto the
 // air where it was — an unplanned fall of however deep the cave is.
 const FALLING = new Set(['sand', 'red_sand', 'gravel'])
+// Арена (ND_SCAFFOLD_ANY=1, 12.10: «кирку нашли — ломать Колизей и строиться его блоками»): стройка — и блоки постройки
+// (песчаник, кварц, кирпич, бетон, терракота), не только простые.
+const ARENA_FILLER = /^(smooth_sandstone|cut_sandstone|chiseled_sandstone|smooth_red_sandstone|smooth_quartz|quartz_block|chiseled_quartz_block|quartz_pillar|quartz_bricks|stone_bricks|smooth_stone|obsidian|.*_terracotta|.*_concrete)$/
+const scaffoldAny = () => process.env.ND_SCAFFOLD_ANY === '1'
 
 // В Аду — незерак первым: булыжник там — запасные кирки (см. worlds.tuneMovements).
 // Кирпич бастиона и соул-сэнд — тоже стройка (после бастиона незерака в рюкзаке бывало 0, а кирпича 20+:
@@ -45,7 +49,7 @@ function pickFiller (bot, { steady = false }: any = {}) {
     const found = itemNamed(bot, name)
     if (found) return found
   }
-  return itemMatching(bot, /_planks$/)
+  return itemMatching(bot, /_planks$/) || (scaffoldAny() ? itemMatching(bot, ARENA_FILLER) : null)
 }
 
 // A promise that cannot hang the intent. bot.placeBlock waits for a block
@@ -552,6 +556,6 @@ async function escapePit (bot, ctl, { maxClimb = 24, mcData = null }: any = {}) 
 }
 
 module.exports = {
-  FACES, FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
+  FACES, FILLER, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
   isFree, occupiedByEntity, inPit, escapePit
 }

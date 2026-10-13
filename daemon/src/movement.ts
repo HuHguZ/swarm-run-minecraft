@@ -152,7 +152,7 @@ function inWater (bot) {
   const p = bot.entity.position
   for (const dy of [0, 0.9, -0.2]) {
     const b = bot.blockAt(p.offset(0, dy, 0))
-    if (b && (b.name === 'water' || b.name === 'bubble_column')) return true
+    if (waterCell(b)) return true
   }
   return false
 }
@@ -170,9 +170,9 @@ function findNearestLand (bot, maxRadius = 24) {
           const head = bot.blockAt(p.offset(0, 1, 0))
           const ground = bot.blockAt(p.offset(0, -1, 0))
           if (!feet || !head || !ground) continue
-          if (ground.name === 'water' || ground.boundingBox !== 'block') continue
-          if (feet.name === 'water' || feet.boundingBox !== 'empty') continue
-          if (head.name === 'water' || head.boundingBox !== 'empty') continue
+          if (waterCell(ground) || ground.boundingBox !== 'block') continue
+          if (waterCell(feet) || feet.boundingBox !== 'empty') continue
+          if (waterCell(head) || head.boundingBox !== 'empty') continue
           return p
         }
       }
@@ -181,7 +181,8 @@ function findNearestLand (bot, maxRadius = 24) {
   return null
 }
 
-const waterCell = b => !!b && /^(water|bubble_column)$/.test(b.name)
+// These plants contain source water even though their collision box is empty.
+const waterCell = b => !!b && /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/.test(b.name)
 const swimPassable = b => !!b && b.boundingBox === 'empty' && !/lava/.test(b.name)
 const headWet = bot => waterCell(bot.blockAt(require('./pick').eyeOf(bot)))
 const dryFooting = bot => !!bot.entity.onGround && !inWater(bot) && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block'
@@ -229,11 +230,11 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
       if (urgent) return air
     }
     const over = read(p.offset(0, 2, 0))
-    const next = [...sides.map(d => p.plus(d)), p.offset(0, 1, 0)]
+    const next = [...sides.map(d => p.plus(d)), p.offset(0, 1, 0), p.offset(0, -1, 0)]
     // A swim jump can leave water onto the ledge one block above it.
     if (swimPassable(over)) next.push(...sides.map(d => p.plus(d).offset(0, 1, 0)))
     for (const q of next) {
-      if (Math.max(Math.abs(q.x - start.x), Math.abs(q.z - start.z)) > radius || q.y - start.y > rise) continue
+      if (Math.max(Math.abs(q.x - start.x), Math.abs(q.z - start.z)) > radius || Math.abs(q.y - start.y) > rise) continue
       if (seen.has(key(q))) continue
       const f = read(q); const h = read(q.offset(0, 1, 0)); const g = read(q.offset(0, -1, 0))
       if (!swimPassable(f) || !swimPassable(h)) continue
@@ -247,7 +248,7 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
 
 // Follow the connected swim route with manual controls: the old direct line to
 // the bank could point through a wall while jump stayed stuck under a roof.
-async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false }: any = {}) {
+async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, radius = 8 }: any = {}) {
   if (!inWater(bot)) return { ok: true, wasInWater: false }
 
   try { bot.pathfinder.setGoal(null) } catch {}
@@ -256,7 +257,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false }
 
   try {
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
-      const route = findSwimRoute(bot, { visibleOnly })
+      const route = findSwimRoute(bot, { visibleOnly, radius })
       target = route?.target || null
       if (!route) break
       if (route.kind === 'air' && !headWet(bot)) break
@@ -288,7 +289,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false }
 
 // Walk toward a column, guarded. Used by exploration, where a failed leg just
 // means "try another direction" rather than "the intent failed".
-async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = null }: any = {}) {
+async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = null, y = null }: any = {}) {
   let lastError = null
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (ctl.aborted) return { ok: false, error: 'прервано' }
@@ -296,49 +297,93 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
 
     // Never start a walk from inside a river — pathfinder will just thrash.
     if (inWater(bot)) {
-      const esc = await escapeWater(bot, ctl)
+      const esc = await escapeWater(bot, ctl, { timeoutMs: deadline ? Math.max(1, deadline - gameClock.now()) : 25000 })
       // Отказ без единого таймера (нет пути из воды) — тик игрового времени, иначе цикл вызывающего крутится микрозадачами
       // и вешает демон (s5c-f4-4 06.10: explore, 100 % CPU, часы стоят).
       if (!esc.ok) { await sleep(50); return { ok: false, error: esc.error } }
     }
 
     const guard = stuckGuard(bot, ctl)
+    const goal = Number.isFinite(y)
+      ? new goals.GoalNear(Math.floor(x), Math.floor(y), Math.floor(z), range)
+      : new goals.GoalNearXZ(Math.floor(x), Math.floor(z), range)
+    const path = gotoPath(bot, goal)
+    const activeOther = () => {
+      const active = bot._ndReflexSession?._reflexState?.active
+      return active && active.ctl !== ctl && (active.owner === 'Tactical' || active.owner === 'Emergency')
+    }
+    const canSwim = () => !ctl.aborted && !activeOther() && !bot._ndParkourForecast && bot.pathfinder.goal === goal &&
+      inWater(bot) && !goal.isEnd(bot.entity.position.floored()) && !bot.pathfinder.isMoving?.() &&
+      !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() && !bot.targetDigBlock && !bot.usingHeldItem && !bot.currentWindow
+    const water = {}, onWet = () => { if (canSwim()) handoff(water) }
+    let handoff
+    const wet = new Promise(resolve => { handoff = resolve })
+    bot.on('physicsTick', onWet)
     const racers = [
-      bot.pathfinder.goto(new goals.GoalNearXZ(Math.floor(x), Math.floor(z), range)),
-      guard.promise
+      path,
+      guard.promise,
+      wet
     ]
     // A single leg must not outlive the caller's budget: the guard only fires
     // when the bot stops moving, and a bot walking the wrong way forever is
     // still "moving".
     let timer = null
     if (deadline) {
-      const left = Math.max(1000, deadline - gameClock.now())
+      const left = Math.max(1, deadline - gameClock.now())
       racers.push(new Promise<any>((_resolve, reject) => {
         timer = gameClock.setTimeout(() => reject(Object.assign(new Error('время вышло'), { outOfTime: true })), left)
       }))
     }
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      const cancelled = path.cancel?.(); cancelled?.catch?.(() => {})
+      guard.stop(); bot.removeListener('physicsTick', onWet)
+      if (timer) gameClock.clearTimeout(timer)
+    }
 
     try {
-      await Promise.race(racers)
+      const outcome = await Promise.race(racers)
+      if (outcome === water) {
+        // A synchronous goal/lease change may arrive after detection but before
+        // this continuation. Release only our waiters and leave the new owner alone.
+        if (!canSwim()) return { ok: false, error: 'путь передан другому действию или прерван' }
+        release()
+        bot.pathfinder.setGoal(null)
+        if (ctl.aborted || activeOther()) return { ok: false, error: 'прервано' }
+        const esc = await escapeWater(bot, ctl, { timeoutMs: deadline ? Math.max(1, deadline - gameClock.now()) : 25000 })
+        if (!esc.ok) return { ok: false, error: esc.error }
+        if (ctl.aborted || activeOther() || bot.pathfinder.goal !== null) return { ok: false, error: 'путь передан другому действию или прерван' }
+        if (goal.isEnd(bot.entity.position.floored())) return { ok: true }
+        // A successful change of transport resumes this same leg, even when
+        // retries=0. A physical swim refusal is returned above without an unstuck jump.
+        attempt--; continue
+      }
       // mineflayer-pathfinder 2.4.5 lib/goto.js: путь длиной 0 («partial», ни
       // одного шага) goto считает ДОСТИГНУТОЙ целью и резолвит без ошибки.
       // В Аду (искажённый лес, обрывы) это «ok» у тела, не сдвинувшегося ни на
       // блок: разведка крепости насчитала 208 пройденных блоков при 47
       // настоящих (try-nether-trip, 2026-09-25). Свидетель — где тело.
       const at = bot.entity.position
-      if (Math.hypot(at.x - (Math.floor(x) + 0.5), at.z - (Math.floor(z) + 0.5)) > range + 1.5) {
+      if (Math.hypot(at.x - (Math.floor(x) + 0.5), Number.isFinite(y) ? at.y - Math.floor(y) : 0, at.z - (Math.floor(z) + 0.5)) > range + 1.5) {
         throw Object.assign(new Error('pathfinder не нашёл к цели ни шага (путь длиной 0) — не дошёл'), { noStep: true })
       }
       return { ok: true }
     } catch (err) {
       lastError = err
+      release()
+      if (err.outOfTime) {
+        if (bot.pathfinder.goal === goal && !activeOther()) { try { bot.pathfinder.setGoal(null) } catch {} }
+        return { ok: false, error: 'время вышло', outOfTime: true }
+      }
+      if (bot.pathfinder.goal !== goal || activeOther()) return { ok: false, error: err.message }
       try { bot.pathfinder.setGoal(null) } catch {}
       if (ctl.aborted) return { ok: false, error: err.message }
-      if (err.outOfTime) return { ok: false, error: 'время вышло', outOfTime: true }
       // Пути нет вовсе — тело и не застревало: рывок назад тут не лечит, а у
       // обрыва в Аду убивает (падение насмерть, try-nether-trip 2026-09-25).
       if (err.noStep) {
-        if (bot.physics && bot.entity.onGround && Math.hypot(bot.entity.position.x - (Math.floor(x) + .5), bot.entity.position.z - (Math.floor(z) + .5)) <= 6) {
+        if (!Number.isFinite(y) && bot.physics && bot.entity.onGround && Math.hypot(bot.entity.position.x - (Math.floor(x) + .5), bot.entity.position.z - (Math.floor(z) + .5)) <= 6) {
           const jump = await require('./navigation/parkour').tryLocal(bot, ctl, { x, z })
           if (jump.ok) return { ok: true, parkour: jump }
         }
@@ -346,8 +391,7 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
       }
       await unstick(bot)
     } finally {
-      guard.stop()
-      if (timer) gameClock.clearTimeout(timer)
+      release()
     }
   }
   return { ok: false, error: lastError ? lastError.message : 'не дошёл' }
@@ -415,32 +459,129 @@ function pathKeepAlive (bot, { minMove = 0.8 }: any = {}) {
 // opts.unstuck — наблюдатель лестницы выхода (unstuck.watch, ND_UNSTUCK): пока идёт ступень, свои setGoal(null)/goal
 // не рвут переход; отказ поиска не у цели он может взять себе (ступень, потом та же цель ещё раз).
 function gotoGoal (bot, goal, opts: any = {}) {
-  return new Promise<any>((resolve, reject) => {
+  // Native postProcessPath mutates partial A* nodes to block centres. Search and
+  // execution must both check block coordinates, including fractional-radius goals.
+  const ownEnd = Object.hasOwn(goal, 'isEnd')
+  const isEnd = goal.isEnd
+  const blockEnd = node => isEnd.call(goal, node.floored())
+  goal.isEnd = blockEnd
+  let cancel
+  const promise = new Promise<any>((resolve, reject) => {
     const error = (name, message) => Object.assign(new Error(message), { name })
     let done = false
     let un = null
+    let resumeTimer = null
     const cleanup = (err?: any) => {
       if (done) return
       done = true
+      if (goal.isEnd === blockEnd) {
+        if (ownEnd) goal.isEnd = isEnd
+        else delete goal.isEnd
+      }
       if (un) un.stop()
+      if (resumeTimer) gameClock.clearTimeout(resumeTimer)
       bot.removeListener('end', onEnd)
+      bot.removeListener('death', onDeath)
       bot.removeListener('goal_reached', onReached)
       bot.removeListener('path_update', onPath)
       bot.removeListener('goal_updated', onGoal)
       bot.removeListener('path_stop', onStop)
       bot.removeListener('physicsTick', onTick)
       bot.removeListener('path_reset', onReset)
-      gameClock.setTimeout(() => (err ? reject(err) : resolve(undefined)), 0)
+      setImmediate(() => (err ? reject(err) : resolve(undefined)))
     }
+    cancel = () => cleanup(error('PathStopped', 'Path caller finished before the goal!'))
     const onReached = () => { if (un && un.busy()) return; cleanup() }
     // A* не уложился в 5 с ('timeout'), но лучший путь есть — pathfinder идёт по нему (index.js: path = лучший), а в
     // конце встаёт: нового поиска сам не начнёт (pathUpdated). goto.js тут отказывал «Took to long», и попытка пропадала.
     // Идём до конца этого пути и отдаём «дошёл, но не до цели» — session.goto повторит из нового места (ближе — не в счёт).
-    let walkingTimeout = false
-    const onTick = () => { if (walkingTimeout && !bot.pathfinder.isMoving()) cleanup() }
-    const onReset = () => { walkingTimeout = false }
+  let walkingTimeout = false
+  let pathContext = null, prefix = null, prefixEnd = null, prefixStarted = false, continuePrefix = false, terminalPrefix = false
+    const onTick = () => {
+      if (done) return
+      // Custom bridge consumption need not emit another terminal path update.
+      const exhausted = terminalPrefix && prefixStarted && !prefix.length && bot.entity?.onGround &&
+        bot.pathfinder.goal === goal && !goal.isEnd(bot.entity.position) &&
+        !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.()
+      if ((continuePrefix || exhausted) && !bot.pathfinder.isMoving() && !(un && un.busy())) {
+        continuePrefix = false; terminalPrefix = false
+        bot.pathfinder.setGoal(goal)
+      } else if (walkingTimeout && !bot.pathfinder.isMoving()) cleanup()
+    }
+    const onReset = () => {
+      walkingTimeout = false
+      pathContext = null; prefix = null; prefixEnd = null; prefixStarted = false; continuePrefix = false; terminalPrefix = false
+    }
     const onPath = (r) => {
-      if (!r || (un && un.busy())) return
+      if (done || !r || (un && un.busy())) return
+      if (r.context) {
+        if (pathContext !== r.context) {
+          pathContext = r.context; prefix = null; prefixEnd = null; prefixStarted = false; continuePrefix = false; terminalPrefix = false
+        }
+        if (prefixStarted && !prefix.length && (r.status === 'partial' || r.status === 'success')) {
+          // Keep the continuing search. Its next child is ready only when the
+          // parent chain still contains the exact Move consumed under our feet.
+          if (r.status === 'partial') {
+            const ready = []
+            let n = r.ndPartialNode || r.context.bestNode
+            for (; n && n.data !== prefixEnd; n = n.parent) ready.push(n.data)
+            ready.reverse()
+            // A different native branch is already trimmed from the body. Keep
+            // that publication only when Physics proves its actual next edge.
+            if (!n) ready.splice(0, ready.length, ...r.path)
+            const p = bot.entity?.position
+            const reached = q => p && q && Math.abs(p.x - q.x) <= .35 && Math.abs(p.z - q.z) <= .35 && Math.abs(p.y - q.y) < 1
+            const marker = ready[0]?.ndKeep ? ready[0] : null
+            const step = marker ? ready.slice(1) : ready, first = step[0]
+            if (!reached(prefixEnd) || !bot.entity.onGround || bot.pathfinder.isMining?.() || bot.pathfinder.isBuilding?.() ||
+                (marker && (!reached(marker) || marker.toBreak?.length || marker.toPlace?.length || marker.ndBridge || marker.ndDescend)) ||
+                !first || reached(first) || first.toBreak?.length || first.toPlace?.length || first.ndBridge || first.ndDescend ||
+                // canMove bypasses its simulator in water; it cannot prove a different branch there.
+                (!n && bot.entity.isInWater) || bot.pathfinder.canMove?.(step) !== true) { r.path.length = 0; return }
+            r.path.splice(0, r.path.length, ...ready)
+          } else {
+            const first = r.path[0]
+            if (!bot.entity?.onGround || bot.pathfinder.isMining?.() || bot.pathfinder.isBuilding?.() ||
+                !first || first.toBreak?.length || first.toPlace?.length || first.ndBridge || first.ndDescend ||
+                bot.pathfinder.canMove?.(r.path) !== true) {
+              continuePrefix = true; r.path.length = 0
+              return
+            }
+          }
+        }
+        if (prefix && prefix.length) {
+          const tail = r.path.indexOf(prefix[prefix.length - 1])
+          if (tail >= 0) prefix.push(...r.path.slice(tail + 1))
+          else if (r.status === 'success') {
+            const first = prefix[0]
+            const ready = []
+            if (bot.entity?.onGround && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
+                !first.toBreak?.length && !first.toPlace?.length && !first.ndBridge && !first.ndDescend &&
+                bot.pathfinder.canMove?.(prefix) === false) {
+              // The success node remains in native AStar's open map. bestNode
+              // may be a different branch; keep every parent, including jumps
+              // discarded by native nearest-node trimming.
+              const last = r.path.at(-1), terminal = r.context.openDataMap?.get(last?.hash)
+              if (terminal?.data === last) for (let n = terminal; n?.parent; n = n.parent) ready.push(n.data)
+            }
+            if (ready.length) { prefix = ready.reverse(); continuePrefix = false }
+            else continuePrefix = true
+          }
+          // Session/custom executors already hold this publication's array.
+          // Change its contents, so every consumer walks the selected prefix.
+          if (r.path !== prefix) r.path.splice(0, r.path.length, ...prefix)
+        } else if (!prefixStarted && r.status === 'partial' && r.path.length) {
+          // Native nearest-node trimming can cut the detour before a wall.
+          // Its already postprocessed A* chain still contains that ready prefix.
+          const ready = []
+          for (let n = r.ndPartialNode || r.context.bestNode; n && n.parent; n = n.parent) ready.push(n.data)
+          r.path.splice(0, r.path.length, ...ready.reverse())
+        }
+        prefix = r.path
+        if (prefix.length) prefixEnd = prefix.at(-1)
+        prefixStarted ||= prefix.length > 0
+        terminalPrefix = r.status === 'success'
+      }
       walkingTimeout = false
       const empty = !r.path || r.path.length === 0
       if (empty && r.status === 'partial') return
@@ -462,14 +603,16 @@ function gotoGoal (bot, goal, opts: any = {}) {
       const lease = g === null && bot._ndReflexTake
       if (lease && process.env.ND_GOTO_RESUME !== '0') {
         paused = true
-        lease.after(() => gameClock.setTimeout(() => { if (!done && paused) { paused = false; bot.pathfinder.setGoal(goal) } }, 0))
+        lease.after(() => { if (!done) resumeTimer = gameClock.setTimeout(() => { resumeTimer = null; if (!done && paused) { paused = false; bot.pathfinder.setGoal(goal) } }, 0) })
         return
       }
       if (g !== goal) cleanup(error('GoalChanged', 'The goal was changed before it could be completed!'))
     }
     const onStop = () => { if (un && un.busy()) return; cleanup(error('PathStopped', 'Path was stopped before it could be completed! Thus, the desired goal was not reached.')) }
     const onEnd = () => cleanup(error('Disconnected', 'соединение закрыто посреди пути'))
+    const onDeath = () => cleanup(error('Died', 'бот умер посреди пути'))
     bot.on('end', onEnd)
+    bot.on('death', onDeath)
     bot.on('path_stop', onStop)
     bot.on('goal_reached', onReached)
     bot.on('path_update', onPath)
@@ -479,9 +622,14 @@ function gotoGoal (bot, goal, opts: any = {}) {
     if (opts.unstuck) un = opts.unstuck.attach(bot, goal, { resume: () => { if (!done) bot.pathfinder.setGoal(goal) }, fail: err => cleanup(err) })
     bot.pathfinder.setGoal(goal)
   })
+  return Object.assign(promise, { cancel: () => cancel?.() })
+}
+
+function gotoPath (bot, goal) {
+  return gotoWaitOn() ? gotoGoal(bot, goal) : bot.pathfinder.goto(goal)
 }
 
 module.exports = {
   sleep, xyz, shaftFromDescent, standableY, describeStall, stuckGuard, unstick, centerOnFloor, travelXZ,
-  findNearestLand, findSwimRoute, escapeWater, inWater, gotoGoal, gotoWaitOn, sprintOn, pathKeepAlive, pathKeepAliveOn, timeoutWalkOn
+  findNearestLand, findSwimRoute, escapeWater, inWater, waterCell, gotoGoal, gotoPath, gotoWaitOn, sprintOn, pathKeepAlive, pathKeepAliveOn, timeoutWalkOn
 }

@@ -124,12 +124,13 @@ test('missing boundary or a replaced bot makes the full-round totem count unknow
 test('status totem telemetry is opt-in and uses the same live counters without installing listeners', async () => {
   const file = path.join(__dirname, '../src/index.ts')
   const source = fs.readFileSync(file, 'utf8')
+  const helpers = source.slice(source.indexOf('function enchantedGear'), source.indexOf('const methods ='))
   const method = source.slice(source.indexOf('  status: async (p) =>'), source.indexOf('  // Наблюдатель сцены'))
   const f = popFixture(); f.pop()
   const context = { cfg: {}, session: { bot: f.bot, immediate: async fn => fn() }, require: name => {
     assert.equal(name, './totem'); return totem
   }, status: null }
-  vm.runInNewContext(`this.status = ({${method}}).status`, context)
+  vm.runInNewContext(`${helpers}\nthis.status = ({${method}}).status`, context)
   assert.equal((await context.status({})).totem, undefined)
   const before = (await context.status({ totem: true })).totem
   f.pop()

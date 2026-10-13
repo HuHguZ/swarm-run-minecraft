@@ -416,3 +416,85 @@ test('перестройки: подпись причина|клетка, счё
   assert.equal(ex.replanSame, 0, 'цель достигнута — сначала')
   ex.stop()
 })
+
+// W21: подтверждённый мост закончился после падения с y85 на собственный пол y80,
+// а готовый путь всё ещё начинался на y74.875. Нативная физика отпускала все клавиши
+// до wall-clock stuck; пересчёт нужен при передаче пути обратно pathfinder.
+function fallenBridge () {
+  const w = world(p => p.y === 79 ? 'cobbled_deepslate' : 'air')
+  const bot = fakeBot(w, Physics(data, w), new Vec3(-145.856, 80, 40.506))
+  const path = [Object.assign(new Move(-147, 75, 40, 60, 1), { x: -146.5, y: 74.875, z: 40.5 })]
+  bot.pathfinder.goal = { x: -150, z: 40 }
+  const ex = bm.install({ bot, pathNodes: path }, { nodes: () => path, now: () => 5000, log: () => {} })
+  ex.seg = { y0: 85, t0: 2900, cells: 4, placed: 4, confirmed: 4, denied: 0 }
+  bot.setControlState('back', true)
+  return { bot, ex }
+}
+
+function rescuedDescent (obstruction: string | null, head = false) {
+  const C = new Vec3(-110, 96, 45)
+  const w = world(p => p.y === 96 ? 'cobblestone' : 'air')
+  if (obstruction) w.set(C.offset(0, head ? 2 : 1, 0), data.blocksByName[obstruction].defaultState)
+  const bot = fakeBot(w, Physics(data, w), new Vec3(-110.30000001192093, 97, 45.50080531500222))
+  const path = [new Move(-111, 97, 46, 60, 1)]
+  const ex = bm.install({ bot, pathNodes: path }, { nodes: () => path, now: () => 5000, log: () => {} })
+  // AA21: the Emergency guard placed a higher support while the earlier
+  // descent still owned the old, now obstructed landing at (-109.5,97,45.5).
+  ex.desc = { tag: { cell: C, from: { x: -109, y: 99, z: 45 }, dir: { x: -1, z: 0 } },
+    cell: C, ref: C.offset(1, 0, 0), face: { x: -1, y: 0, z: 0 }, t0: 4900 }
+  return { bot, ex, w }
+}
+
+for (const head of [false, true]) test(`исполнитель: спасательная опора ${head ? 'у головы' : 'в ногах'} отменяет уже непроходимую клетку спуска`, () => {
+  const { bot, ex } = rescuedDescent('netherrack', head)
+  ex.step()
+  assert.equal(ex.desc, null, 'не продолжать вести тело в занятую клетку прежней ступени')
+  assert.equal(bot.replans, 1, 'перестроить существующий маршрут из фактического положения')
+  assert.equal(bot.getControlState('forward'), false)
+  assert.equal(bot.places.length, 0)
+  ex.stop()
+})
+
+test('исполнитель: открытая уже поставленная ступень сохраняет обычный ход к посадке', () => {
+  const { bot, ex } = rescuedDescent(null)
+  assert.deepEqual(ex.step(), { phase: 'step' })
+  assert.ok(ex.desc)
+  assert.equal(bot.getControlState('forward'), true)
+  assert.equal(bot.replans || 0, 0)
+  ex.stop()
+})
+
+test('исполнитель: после реально провалившегося моста пересчитывает активный путь с фактического пола', () => {
+  const { bot, ex } = fallenBridge()
+  bot.emit('physicsTick')
+  assert.equal(ex.stats.fell, 1)
+  assert.equal(ex.seg, null)
+  assert.equal(bot.controlState.back, false)
+  assert.equal(bot.replans, 1, 'нижний старый путь не остаётся ждать stuck')
+  bot.emit('physicsTick')
+  assert.equal(bot.replans, 1, 'завершённый отрезок не пересчитывается каждый тик')
+  ex.stop()
+})
+
+test('исполнитель: завершённый мост без падения сохраняет текущий путь', () => {
+  const { bot, ex } = fallenBridge()
+  ex.seg.y0 = 80
+  bot.emit('physicsTick')
+  assert.equal(ex.stats.fell, 0)
+  assert.equal(bot.replans || 0, 0)
+  ex.stop()
+})
+
+test('исполнитель: телепорт, смерть, отменённая цель и stop не возобновляют путь после моста', () => {
+  for (const why of ['forcedMove', 'spawn', 'dead', 'cancelled', 'stop']) {
+    const { bot, ex } = fallenBridge()
+    if (why === 'dead') bot.health = 0
+    if (why === 'cancelled') bot.pathfinder.goal = null
+    if (why === 'stop') ex.stop()
+    else if (why === 'forcedMove' || why === 'spawn') bot.emit(why)
+    else bot.emit('physicsTick')
+    assert.equal(bot.replans || 0, 0, why)
+    assert.equal(bot.controlState.back, false, why)
+    ex.stop()
+  }
+})

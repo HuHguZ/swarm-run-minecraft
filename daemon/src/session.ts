@@ -93,12 +93,10 @@ function skyLightAt (bot, p) {
   let col
   try { col = bot.world.getColumnAt(p) } catch { return null }
   if (!col) return null
-  const sky = col.skyLightSections
-  if (!sky || !sky[Math.floor((p.y - (col.minY ?? -64)) / 16) + 1]) return 15
-  // Свет из столбца, как его читает Block (prismarine-chunk getBlock: skyLight = getSkyLight), без постройки Block (S9).
-  if (bot._ndFastBlocks && typeof col.getSkyLight === 'function') return col.getSkyLight({ x: Math.floor(p.x) & 15, y: Math.floor(p.y), z: Math.floor(p.z) & 15 })
+  // Absent light data reads zero in prismarine-chunk, as on the client F3 screen.
+  if (typeof col.getSkyLight === 'function') return col.getSkyLight({ x: Math.floor(p.x) & 15, y: Math.floor(p.y), z: Math.floor(p.z) & 15 })
   const b = bot.blockAt(p)
-  return b && typeof b.skyLight === 'number' ? b.skyLight : 15
+  return b && typeof b.skyLight === 'number' ? b.skyLight : null
 }
 
 // Клетки «лава рядом» для цены шага: под ногами и четыре стороны.
@@ -130,11 +128,13 @@ class Session {
   declare temper: any
   declare director: any
   declare autopilot: any
+  declare bootstrapPaused: boolean
   declare dropSet: any
   declare dropWhy: any
   declare bridgeWanted: any
   declare sprintWanted: any
   declare gotoTarget: any
+  declare gotoArena: import('./navigation/parkour').MovementArena | undefined
   declare movementsSignature: any
   declare routeOutpostInfo: any
   declare surfaceWalk: any
@@ -168,6 +168,7 @@ class Session {
     this.current = null
     this.lastHealth = 20
     this.connecting = null
+    this.bootstrapPaused = false
     this.replanRevision = 0
     this.tactics = new (require('./tactics/minecraft').TacticalSystem)(this)
     this.playPolicy = playPolicy.configure(journal.state?.playPolicy)
@@ -224,7 +225,11 @@ class Session {
 
   // ---------------------------------------------------------------- lifecycle
 
-  connect () {
+  connect ({ bootstrapPaused }: any = {}) {
+    if (bootstrapPaused !== undefined) {
+      if (typeof bootstrapPaused !== 'boolean') throw new TypeError('bootstrapPaused must be boolean')
+      this.bootstrapPaused = bootstrapPaused
+    }
     if (this.connecting) return this.connecting
     if (this.bot && this.bot.entity) return Promise.resolve({ already: true, state: this.state() })
 
@@ -236,7 +241,10 @@ class Session {
         version: this.cfg.version,
         auth: this.cfg.auth,
         plugins: tickPlugins.plugins,
-        hideErrors: false
+        hideErrors: false,
+        // ND_RESPAWN_MS (арена 10.10: «не вижу, как боты умирают — сразу в зрители»): не возрождаться сразу — тело лежит
+        // ND_RESPAWN_MS (анимация смерти видна всем), потом запрос возрождения (respawnNudge с этим периодом).
+        respawn: !(Number(process.env.ND_RESPAWN_MS) > 0)
       })
       this.bot = bot
       gameClock.bind(bot)
@@ -319,8 +327,10 @@ class Session {
     if (!bot || !bot.pathfinder) return
     const items = bot.inventory ? bot.inventory.items() : []
     const canDig = items.some(i => /_(pickaxe|shovel|axe)$/.test(i.name))
+    // Арена (ND_SCAFFOLD_ANY=1): столбы и мосты pathfinder ставит и блоками постройки (build.ARENA_FILLER).
+    const arenaScaffold = process.env.ND_SCAFFOLD_ANY === '1'
     const scaffold = items
-      .filter(i => /^(dirt|cobblestone|cobbled_deepslate|netherrack|stone|oak_planks|spruce_planks|birch_planks)$/.test(i.name))
+      .filter(i => /^(dirt|cobblestone|cobbled_deepslate|netherrack|stone|oak_planks|spruce_planks|birch_planks)$/.test(i.name) || (arenaScaffold && require('./build').ARENA_FILLER.test(i.name)))
       .reduce((n, i) => n + i.count, 0)
     const towers = scaffold >= 8
 
@@ -337,8 +347,8 @@ class Session {
     const fed = (bot.food ?? 20) >= 14 || items.some(i => foods[i.name] && !/^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|suspicious_stew|chorus_fruit)$/.test(i.name))
     const swampy = (p) => { if (!p) return false; try { return /swamp|mangrove/.test(biomeName(bot, p) || '') } catch { return false } }
     const marsh = this.sprintWanted === undefined && (swampy(bot.entity && bot.entity.position) || swampy(this.gotoTarget))
-    const sprint = !!(this.sprintWanted ?? sprintOn(worlds.worldOf(bot))) && fed && !marsh
-    const signature = `${canDig}:${towers}:${worlds.worldOf(bot)}:${mlg.ok}:${bridge ? 1 : 0}:${sprint ? 1 : 0}`
+    const sprint = !!(this.sprintWanted ?? sprintOn(worlds.worldOf(bot))) && (bot.food ?? 20) > 6 && fed && !marsh
+    const signature = `${canDig}:${towers}:${worlds.worldOf(bot)}:${mlg.ok}:${bridge ? 1 : 0}:${sprint ? 1 : 0}:${this.surfaceStrict ? 1 : 0}:${JSON.stringify(this.gotoArena ?? null)}:${arenaScaffold ? [...new Set(items.filter(i => require('./build').ARENA_FILLER.test(i.name)).map(i => i.name))].sort().join() : ''}`
     if (!force && signature === this.movementsSignature) return
     this.movementsSignature = signature
 
@@ -355,8 +365,9 @@ class Session {
         return at && from ? route.outpostStepCost(this.routeOutpostInfo, from, at) : 0
       })
     }
-    movements.canDig = canDig
-    movements.allow1by1towers = towers
+    movements.canDig = canDig && !this.surfaceStrict
+    movements.allow1by1towers = towers && !this.surfaceStrict
+    if (arenaScaffold) movements.scafoldingBlocks = [...new Set([...(movements.scafoldingBlocks || []), ...items.filter(i => require('./build').ARENA_FILLER.test(i.name)).map(i => i.type)])]
     movements.maxDropDown = dropDown
     movements.allowSprinting = sprint
     // чем моб опаснее (flee.js DOCTRINE). Раньше маршрут шёл сквозь толпу, и
@@ -412,11 +423,21 @@ class Session {
     // (worlds.js tuneMovements): в портал тело входит только mc_portal enter.
     worlds.tuneMovements(bot, movements)
     // Прыжок глубже обычного — дороже шага на время воды (edges.priceDrops).
-    edges.priceDrops(movements)
-    if (bridge) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(worlds.worldOf(bot) === 'the_nether' && process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
+    edges.priceDrops(movements, () => this.surfaceWalk && this.pathGoalY == null)
+    if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(worlds.worldOf(bot) === 'the_nether' && process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
+    if (this.surfaceStrict) { movements.canDig = false; movements.allow1by1towers = false; movements.scafoldingBlocks = [] }
+    if (this.gotoArena) {
+      const arena = this.gotoArena, within = require('./navigation/parkour').withinArena
+      const cost = block => { const p = block?.position; return p && within(bot, { x: p.x + .5, y: p.y, z: p.z + .5 }, arena) ? 0 : Infinity }
+      movements.exclusionAreasStep.push(cost)
+      movements.exclusionAreasPlace.push(cost)
+      movements.exclusionAreasBreak.push(cost)
+      const neighbors = movements.getNeighbors.bind(movements)
+      movements.getNeighbors = node => neighbors(node).filter(n => within(bot, { x: n.x + .5, y: n.y, z: n.z + .5 }, arena))
+    }
     movements.exclusionAreasStep.push(blk => this.stuckPenalty(blk))
     bot.pathfinder.setMovements(movements)
-    this.movements = { canDig, towers, mlg: mlg.ok, bridge }
+    this.movements = this.gotoArena ? { canDig: movements.canDig, towers: movements.allow1by1towers, mlg: mlg.ok, bridge: false } : { canDig, towers, mlg: mlg.ok, bridge }
   }
 
   stuckCells = new Map<string, number>()
@@ -564,6 +585,7 @@ class Session {
 
   disconnect (reason = 'по команде') {
     this.cancel()
+    this.bootstrapPaused = false
     if (this.bot) {
       this.journal.append('выход', reason, this.bot.entity && this.bot.entity.position)
       try { this.bot.quit(reason) } catch {}
@@ -608,7 +630,7 @@ class Session {
         this.respawnNudge = gameClock.wall.setInterval(() => {
           if (this.bot !== bot || (bot.health ?? 20) > 0) { gameClock.wall.clearInterval(this.respawnNudge); this.respawnNudge = null; return }
           try { bot._client.write('client_command', bot.supportFeature('respawnIsPayload') ? { payload: 0 } : { actionId: 0 }) } catch {}
-        }, 3000)
+        }, Number(process.env.ND_RESPAWN_MS) > 0 ? Number(process.env.ND_RESPAWN_MS) : 3000)
       }
     })
   }
@@ -813,6 +835,7 @@ class Session {
   // ------------------------------------------------------------ intent runner
 
   cancel () {
+    for (const cancel of (this as any)._prestartIntents || []) cancel()
     require('./reflex-lock').cancel(this)
     this.followGoal = null
     if (this.current) {
@@ -857,11 +880,53 @@ class Session {
   }
 
   // runIntent's clock ran out, and on an abort it throws — so the report was
-  goto ({ x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted }: any) {
+  goto ({ x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena }: any) {
+    // Validate before runIntent can cancel another action or change its movement settings.
+    let boundedArena
+    if (arena !== undefined) {
+      const bot = this.require(), target = { x: Number(x), y: y == null ? bot.entity.position.y : Number(y), z: Number(z) }
+      if (!arena || typeof arena !== 'object' || ![target.x, target.y, target.z].every(Number.isFinite)) throw Object.assign(new Error('invalid arena goto'), { code: 'ARENA_BOUNDARY' })
+      boundedArena = Object.freeze({ ...arena })
+      const within = require('./navigation/parkour').withinArena
+      if (!within(bot, target, boundedArena) || !within(bot, { ...target, x: Math.floor(target.x) + .5, z: Math.floor(target.z) + .5 }, boundedArena)) throw Object.assign(new Error('goto target is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
+    }
     const secs = Math.max(5, Math.min(600, timeoutSeconds))
     return this.runIntent('goto', async (ctl) => {
       const bot = this.require()
+      const previousArena = this.gotoArena, previousStrict = this.surfaceStrict
+      const previousSurface = this.surfaceWalk, previousY = this.pathGoalY
+      let boundaryError, rejectBounds, restored = false
+      const boundsFailure = new Promise((resolve, reject) => { rejectBounds = reject })
+      boundsFailure.catch(() => {})
+      const restoreBounds = () => {
+        if (!boundedArena || restored) return
+        restored = true; bot.removeListener('physicsTick', checkBounds)
+        if (this.gotoArena !== boundedArena) return
+        this.gotoArena = previousArena; this.surfaceStrict = previousStrict
+        this.surfaceWalk = previousSurface; this.pathGoalY = previousY
+        this.updateMovements(true)
+      }
+      const checkBounds = () => {
+        if (!boundedArena || ctl.aborted || boundaryError || this.gotoArena !== boundedArena) return
+        const parkour = require('./navigation/parkour')
+        let next = bot.entity.position
+        try {
+          if (bot.physics?.simulatePlayer && bot.entity.velocity) next = parkour.simulatePlan(bot, [{ yaw: bot.entity.yaw ?? 0, control: { ...parkour.IDLE, ...bot.controlState } }]).pos
+          if (parkour.withinArena(bot, bot.entity.position, boundedArena) && parkour.withinArena(bot, next, boundedArena)) return
+          boundaryError = Object.assign(new Error('next physical step leaves arena bounds'), { code: 'ARENA_BOUNDARY' })
+        } catch (err) { boundaryError = Object.assign(new Error('cannot verify next arena step: ' + err.message), { code: 'ARENA_BOUNDARY' }) }
+        rejectBounds(boundaryError)
+        try { bot.pathfinder.setGoal(null); bot.clearControlStates() } catch {}
+      }
+      if (boundedArena) {
+        this.gotoArena = boundedArena; this.surfaceStrict = true
+        ctl.onAbort.push(restoreBounds); bot.on('physicsTick', checkBounds)
+      }
+      try {
+      checkBounds()
+      if (boundaryError) throw boundaryError
       const deadline = gameClock.now() + secs * 1000
+      const strict = surface === 'strict' || !!boundedArena
       // Мост на ходу на этот переход (сцены A/B на одном демоне): bridge true/false поверх ND_BRIDGE; не задан —
       // как в окружении. Держится до следующего goto.
       this.bridgeWanted = typeof bridge === 'boolean' ? bridge : undefined
@@ -876,14 +941,14 @@ class Session {
       if (this.bridgeWanted) blockmoves.install(this)
       this.updateMovements()
       // Лестница выхода из застреваний (unstuck.js): ND_UNSTUCK или goto { unstuck }; только в новом goto (gotoGoal).
-      const un = waitPartial && require('./unstuck').on(unstuckWanted) ? require('./unstuck').watch(this, ctl, { deadline }) : null
+      const un = !strict && waitPartial && require('./unstuck').on(unstuckWanted) ? require('./unstuck').watch(this, ctl, { deadline }) : null
       console.log('[goto]', JSON.stringify({ to: [x, y ?? null, z], from: bot.entity ? [Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)] : null,
         bridge: !!(this.movements && this.movements.bridge), wait: waitPartial, unstuck: !!un, sprint: !!(bot.pathfinder.movements && bot.pathfinder.movements.allowSprinting), pearl: hopgoto.on(pearl) }))
       // С лестницей выхода к берегу плыть, только если он вплавь есть: пруд в яме (берег выше воды на 2+) escapeWater
       // обходил по 25 с впустую (try-lab-stuck pond, us-pilot1) — оттуда выводит ступенька/лесенка лестницы.
-      if (inWater(bot) && !(un && !require('./unstuck').landBySwim(bot))) await escapeWater(bot, ctl)
+      if (!strict && inWater(bot) && !(un && !require('./unstuck').landBySwim(bot))) await escapeWater(bot, ctl)
       const goalBelow = () => waitPartial && y != null && Number.isFinite(Number(y)) && Number(y) < bot.entity.position.y - 2
-      const pit = goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
+      const pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
       const bx = Math.floor(x)
       const bz = Math.floor(z)
       let goal
@@ -892,7 +957,7 @@ class Session {
         goal = new goals.GoalNearXZ(bx, bz, Math.max(1, range))
         resolvedTo = { x: bx, y: null, z: bz, mode: 'xz' }
       } else {
-        const yy = standableY(bot, bx, Math.floor(y), bz)
+        const yy = standableY(bot, bx, Math.floor(y), bz) ?? (strict ? Math.floor(y) : null)
         if (yy === null) {
           goal = new goals.GoalNearXZ(bx, bz, Math.max(2, range))
           resolvedTo = { x: bx, y: null, z: bz, mode: 'xz (нет места встать на заданной высоте)' }
@@ -902,6 +967,7 @@ class Session {
         }
       }
 
+      if (boundedArena && resolvedTo.y != null && !require('./navigation/parkour').withinArena(bot, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, boundedArena)) throw Object.assign(new Error('resolved goto support is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
       // Цель под крышей (небо ≤ 7 в клетке ног цели): поверху к ней не дойти, а штраф крыши раздувает A* у самой цели
       // (s6b 06.10, арена S7: комнаты под перекрытием; над западом висит кусок рельефа, небо там на 1 темнее — A* запад
       // 62 узла против 9 зеркально, на 750 TPS «partial» по кругу; try-parkour-path-mirror.js). Только для цели с высотой:
@@ -909,7 +975,7 @@ class Session {
       // (замечание проверки S6c 07.10).
       // Снимается только штраф крыши; запрет копки strict остаётся как до правки.
       const goalSky = resolvedTo.y == null ? null : skyLightAt(bot, new Vec3(bx, Math.floor(resolvedTo.y), bz))
-      const overSurface = surface !== false && this.underSky()
+      const overSurface = surface !== false && (surface === true || this.underSky())
       const surfaceWalk = overSurface && !(goalSky !== null && goalSky <= 7)
 
       ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
@@ -917,7 +983,7 @@ class Session {
       // Жемчуг как ход (hopgoto.js): пеший путь по A* долгий (обход) — бросок к цели, дальше пешком.
       // pearl: true | { reserve, … } или ND_PEARL_GOTO=1; резерв по умолчанию 12 (очи Края).
       let pearlRun = null
-      if (hopgoto.on(pearl)) {
+      if (!boundedArena && hopgoto.on(pearl)) {
         try { pearlRun = await hopgoto.maybeHop(this, ctl, { x: bx, y: resolvedTo.y, z: bz }, goal, pearl) } catch (err) { pearlRun = { hopped: false, why: 'ошибка: ' + err.message } }
         if (ctl.aborted) throw new Error('прервано')
       }
@@ -935,12 +1001,10 @@ class Session {
         if (r && r.used) descentRuns.push(r)
         return r
       }
-      const firstDescent = descentMod.on(descent) ? await descendNow() : null
+      const firstDescent = !boundedArena && descentMod.on(descent) ? await descendNow() : null
       let failDescent = null
-      const descentWatch = descentMod.on(descent) && !(firstDescent && firstDescent.efficient) ? descentMod.watch(bot, { x: bx, y: resolvedTo.y, z: bz }, () => { if (!failDescent) return false; failDescent(Object.assign(new Error('край обрыва — спуск'), { descent: true })); return true }) : null
+      const descentWatch = !boundedArena && descentMod.on(descent) && !(firstDescent && firstDescent.efficient) ? descentMod.watch(bot, { x: bx, y: resolvedTo.y, z: bz }, () => { if (!failDescent) return false; failDescent(Object.assign(new Error('край обрыва — спуск'), { descent: true })); return true }) : null
 
-      // без копки. С копкой pathfinder шёл сквозь гору штреком — две минуты
-      const strict = surface === 'strict' && overSurface
       const attempt = async (g) => {
         // С лестницей выхода сторож — последняя страховка: застревание раньше ловит и лечит unstuck.
         const guard = stuckGuard(bot, ctl, un && !un.exhausted() ? 45000 : 8000)
@@ -959,26 +1023,36 @@ class Session {
           if (reason === 'place_error' && ++placeErrors >= 6) failPlace(new Error('блок под ноги не ставится — шесть отказов подряд, этот путь не работает'))
         }
         bot.on('path_reset', onReset)
+        let pathRequest
+        const cancelPath = () => pathRequest?.cancel?.()
+        ctl.onAbort.push(cancelPath)
         try {
-          await Promise.race([waitPartial ? gotoGoal(bot, g, { unstuck: un }) : bot.pathfinder.goto(g), guard.promise, placeGuard, descentGuard])
+          pathRequest = waitPartial ? gotoGoal(bot, g, { unstuck: un }) : bot.pathfinder.goto(g)
+          if (ctl.aborted) cancelPath()
+          await Promise.race([pathRequest, guard.promise, placeGuard, descentGuard, ...(boundedArena ? [boundsFailure] : [])])
+          if (boundaryError) throw boundaryError
           // goto резолвит и пустой partial-путь. Достигнутая цель определяется
           // координатами тела, включая высоту для 3D-плана.
           if (!g.isEnd(bot.entity.position.floored())) {
             throw Object.assign(new Error('pathfinder закончил путь, но не достиг цели — не дошёл'), { noStep: true })
           }
         } finally {
+          // An Emergency can fence setGoal(null); closing our waiter also cancels its queued lease resume.
+          cancelPath()
+          const index = ctl.onAbort.indexOf(cancelPath)
+          if (index >= 0) ctl.onAbort.splice(index, 1)
           failDescent = null
           bot.removeListener('path_reset', onReset)
           this.surfaceWalk = false
           this.pathGoalY = null
-          this.surfaceStrict = false
+          this.surfaceStrict = !!boundedArena
           if (strict && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
           guard.stop()
         }
       }
 
       const plan = [{ goal, mode: resolvedTo.mode }]
-      if (resolvedTo.mode === 'near') {
+      if (resolvedTo.mode === 'near' && !strict) {
         plan.push({ goal: new goals.GoalNearXZ(bx, bz, Math.max(2, range)), mode: 'xz' })
       }
 
@@ -1023,6 +1097,7 @@ class Session {
               unstuck: un && (un.stats.detected || un.stats.refusals) ? un.report() : undefined
             }
           } catch (err) {
+            if (boundaryError) throw boundaryError
             if (ctl.aborted) throw err
             if (err.descent) {
               // Сторож спуска: решить у края; «пешком» — сюда не возвращаться. Попытка не в счёт.
@@ -1050,7 +1125,8 @@ class Session {
             if (err.noStep) {
               try { bot.pathfinder.setGoal(null) } catch {}
               if (y != null && resolvedTo.y != null && !outOfTime()) {
-                const local = await require('./navigation/parkour').tryLocal(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 })
+                const parkour = require('./navigation/parkour')
+                const local = boundedArena ? await parkour.executeJump(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, { arena: boundedArena }) : await parkour.tryLocal(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 })
                 if (ctl.aborted) throw new Error('прервано')
                 if (local.ok) return { arrived: xyz(bot.entity.position), target: { x: bx, y: resolvedTo.y, z: bz, mode: 'parkour' }, attempts: tried.length + 1, parkour: { ticks: local.ticks } }
               }
@@ -1065,9 +1141,9 @@ class Session {
             }
             // exactly how the answer used to turn into a bare clock: the abort
             if (outOfTime()) return ranOut()
-            const out = goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
+            const out = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
             if (out.wasInPit) tried.push(`вылез из ямы на ${out.climbed}${out.stopped ? ' (' + out.stopped + ')' : ''}`)
-            await unstick(bot)
+            if (!strict) await unstick(bot)
           }
         }
       }
@@ -1076,6 +1152,7 @@ class Session {
       throw new Error(
         `не дошёл (${tried.length} попытки)${pit.wasInPit ? `, из ямы вылез на ${pit.climbed}${pit.stopped ? ' — ' + pit.stopped : ''}` : ''}. ` +
         `Последняя: ${lastError.message}`)
+      } finally { restoreBounds() }
     }, { timeoutMs: (secs + 15) * 1000 })
   }
 

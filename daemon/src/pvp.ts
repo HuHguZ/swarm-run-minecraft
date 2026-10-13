@@ -1161,6 +1161,22 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     if (guard) guard.watch(entity, 3.2)
     pickWeaponFor(entity)
   }
+  const maceChain = {
+    deadline, arena, home: opts.relocateTo,
+    choose: (peak, launch = false) => {
+      const allowed = new Set([entity.username, ...(opts.targets || []), ...[...attackers.values()].filter(a => gameClock.now() - a.at < 8000).map(a => a.e.username)])
+      const candidates = (Object.values(bot.entities) as any[]).filter(e => allowed.has(e.username) && !dead.has(e.id)).map(vision.observe).filter(e => e && vision.visible(e))
+      const choice = require('./combat/mace-chain').chainChoice(bot, candidates, { peak, arena, launch, hp: e => e.id === entity.id ? foeEst() : { lo: 0, hi: 20 }, velocity: e => (e.id === entity.id ? track.vel() : e.velocity) || { x: 0, y: 0, z: 0 } })
+      // Preserve the native-backed observation; a scoring snapshot must not replace its packet source.
+      return choice && { ...choice, entity: candidates.find((e: any) => e.id === choice.entity.id), vel: () => track.vel() }
+    },
+    onTarget: choice => {
+      if (choice.entity.id === entity.id) return
+      if (killed && !kills.includes(label)) kills.push(label)
+      used(`булава: ${Math.round(choice.fall)} бл., урон ${Math.round(choice.damage.min)}–${Math.round(choice.damage.max)} → ${choice.entity.username}`)
+      retarget(choice.entity)
+    }
+  }
   const combatContext = {
 get consumeItem () { return consumeItem },
 get aim () { return aim }, set aim (value) { aim = value },
@@ -1909,6 +1925,7 @@ const pvpSkills = {
           clear()
           aim = 'free'
           const res = await mace.windSmash(bot, ctl, entity, {
+            chain: maceChain,
             vel: () => track.vel(),
             stats: mc.st,
             telemetryHp,
@@ -3152,11 +3169,14 @@ const pvpSkills = {
       const sp = sp0 && gate('smash') ? sp0 : null
       if (hitSoon && ready('smashWaitNote') && mace.smashPlan(bot, entity)) { rest('smashWaitNote', 4000); used('булава: не взлетаю — его удар или выстрел собьёт взлёт') }
       if (sp) {
+        const first = maceChain.choose(bot.entity.position.y, true)
+        if (first) maceChain.onTarget(first)
         rest('smash', 5000)
         if (guard) await guard.raise(false)
         clear()
         aim = 'free'
         const res = await mace.windSmash(bot, ctl, entity, {
+          chain: maceChain,
           vel: () => track.vel(),
           stats: mc.st,
           telemetryHp,

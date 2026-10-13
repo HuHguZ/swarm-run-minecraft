@@ -18,7 +18,17 @@ async function reachBlock (bot, block, ctl) {
   if (bot.canDigBlock(block)) return
   const p = block.position
   const attempts = [
-    () => new goals.GoalLookAtBlock(p, bot.world, { reach: 4 }),
+    () => {
+      const pick = require('./pick')
+      const goal = new goals.GoalLookAtBlock(p, bot.world, { reach: 4, entityHeight: pick.eyeHeight(bot) })
+      // Native LookAt measures feet to ABOVE the target, rejecting reachable upper logs.
+      goal.isEnd = node => {
+        const eye = node.floored().offset(.5, goal.entityHeight, .5)
+        const distance = Math.hypot(...['x', 'y', 'z'].map(k => Math.max(p[k] - eye[k], 0, eye[k] - p[k] - 1)))
+        return distance <= goal.reach && FACES.some(face => pick.faceAim(bot, p, face, { eye, range: goal.reach }))
+      }
+      return goal
+    },
     () => new goals.GoalNear(p.x, p.y, p.z, 2)
   ]
   let last = null
@@ -49,7 +59,7 @@ async function reachBlock (bot, block, ctl) {
 // у летящего (бросок пиглина, дроп над головой) это точка появления в воздухе, у
 // лежащего на плите — клетка плиты; «пути нет» обрывал весь подбор. Замер фермы
 // (pickprobe): брошенное к телу — 0 из 16, после — 14–16 из 16.
-async function collectNearbyDrops (bot, ctl, { radius = 6, timeoutMs = 8000, from = null, appearMs = 600 }: any = {}) {
+async function collectNearbyDrops (bot, ctl, { radius = 6, timeoutMs = 8000, from = null, appearMs = 600, canContinue }: any = {}) {
   const pack = require('./pack')
   const drops = require('./drops')
   const tossedNames = new Set()
@@ -72,7 +82,7 @@ async function collectNearbyDrops (bot, ctl, { radius = 6, timeoutMs = 8000, fro
     try { bot.emit('nd_tossed', { tossed: room.tossed, forItem: stack.name }) } catch {}
     return 'go'
   }
-  return drops.collect(bot, ctl, { radius, timeoutMs, from, appearMs, match, onStack })
+  return drops.collect(bot, ctl, { radius, timeoutMs, from, appearMs, match, onStack, canContinue })
 }
 
 // ---------------------------------------------------------------- mine
@@ -99,7 +109,7 @@ function underWater (bot, p) {
   return !!up && UNDERWATER.test(up.name)
 }
 
-async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, at = null, collect = true, dry = false }: any = {}) {
+async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, at = null, collect = true, dry = false, avoidPiglinAggro = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const wantedIds = resolveBlockIds(name, mcData)
@@ -108,6 +118,9 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
   const targetPos = at ? new Vec3(at.x, at.y, at.z) : null
   // Явная клетка — ровно один блок: её отсутствие не разрешает ломать соседей.
   if (targetPos) count = 1
+  const plan = session.castPlan1
+  const castSite = !targetPos && plan && (plan.dimension || 'overworld') === (bot.game?.dimension || 'overworld')
+    ? require('./cast1').siteCells1(plan) : null
 
   const before = countItems(bot)
   let dug = 0
@@ -161,6 +174,7 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
       max: 12,
       fair: useFair,
       skip: p => (targetPos && !targetPos.equals(p)) || floor.some(f => f.equals(p)) ||
+        castSite?.has(`${p.x},${p.y},${p.z}`) ||
         unreachable.has(`${p.x},${p.y},${p.z}`) || lavaBeside(p) || (dry && underWater(bot, p))
     })
 
@@ -187,9 +201,29 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
     }
 
     try {
+      // The campaign's cautious ore variant pays for another look after walking
+      // and hand swaps. Block.playerWillDestroy angers adults in the player's
+      // AABB inflated by 16, with requireLineOfSight=false (native 1.21.11).
+      // Only visible adults affect this choice; ordinary mine keeps its variant.
+      const piglinRisk = () => {
+        if (!avoidPiglinAggro || target.name !== 'nether_gold_ore') return false
+        const me = bot.entity.position
+        const baby = bot.registry.entitiesByName.piglin.metadataKeys.indexOf('baby')
+        return (Object.values(bot.entities || {}) as any[]).some(e => {
+          if (!e || e.name !== 'piglin' || !e.position || e.isValid === false || e.metadata?.[baby]) return false
+          const half = ((bot.entity.width || 0.6) + (e.width || 0.6)) / 2
+          if (Math.abs(e.position.x - me.x) >= 16 + half || Math.abs(e.position.z - me.z) >= 16 + half ||
+              e.position.y + (e.height || 1.95) <= me.y - 16 || e.position.y >= me.y + (bot.entity.height || 1.8) + 16) return false
+          return require('./bastion/predict-gold').rayClear(require('./drops').blockGetter(bot),
+            me.offset(0, bot.entity.eyeHeight || 1.62, 0), e.position.offset(0, (e.height || 1.95) * 0.6, 0))
+        })
+      }
       await reachBlock(bot, target, ctl)
       if (ctl.aborted) break
+      if (piglinRisk()) return report('виден взрослый пиглин в зоне злости — осторожную копку золота остановил')
       await equipBestTool(bot, target)
+      if (ctl.aborted) break
+      if (piglinRisk()) return report('виден взрослый пиглин в зоне злости — осторожную копку золота остановил')
       await bot.dig(target, true)
       dug++
       streak = 0
@@ -1453,24 +1487,48 @@ const SWEEP = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, 
 // Ближайший видимый. Отсечка count 12 стояла ДО зрения, и explore stone с луга
 // не находил склон никогда: двенадцать ближних клеток камня — под дёрном.
 // dry — без блоков под водой (см. underWater).
-function firstVisible (bot, ids, radius, useFair, dry = false) {
-  return visibleOf(bot, ids, radius, { max: 1, fair: useFair, ...(dry ? { skip: p => underWater(bot, p) } : {}) })[0] || null
+function firstVisible (bot, ids, radius, useFair, dry = false, skip = null) {
+  return visibleOf(bot, ids, radius, { max: 1, fair: useFair, ...((dry || skip) ? { skip: p => (dry && underWater(bot, p)) || !!skip?.(p) } : {}) })[0] || null
 }
 
 // Walk around until the thing we want comes into view. Returns partial
 // progress when it runs out of time instead of failing, so the brain can just
 // call it again — one call is one leg of a search, not an all-or-nothing trip.
 async function explore (session, ctl, {
-  block = 'any_log', radius = 48, stepDistance = 40, direction = null, timeoutSeconds = 45, fair, dry = false
+  block = 'any_log', radius = 48, stepDistance = 40, direction = null, timeoutSeconds = 45, fair, dry = false, surface = false, lavaSource = false, unlootedContainers = false, newView = false
 }: any = {}) {
   const bot = session.bot
   const ids = resolveBlockIds(block, session.mcData)
   const useFair = fair === undefined ? session.cfg.fairPlay : !!fair
   const from = xyz(bot.entity.position)
   const deadline = gameClock.now() + Math.min(280, timeoutSeconds) * 1000
+  // Resource scouting has already inspected these containers through real loot;
+  // ordinary explicit exploration may still revisit them.
+  const looted = new Set(unlootedContainers ? session.journal?.state?.looted || [] : [])
+  const skipLooted = (p, name = bot.blockAt(p)?.name) => looted.has(`${p.x},${p.y},${p.z}`) && ['chest', 'trapped_chest', 'barrel'].includes(name)
+  // After failed mining, the same remote visible material is not another view.
+  // Keep only what this bounded sight call actually observed, never hidden cells.
+  const viewFrom = newView ? bot.entity.position.clone() : null
+  const seenHere = new Set(newView ? visibleOf(bot, ids, radius, { max: Infinity, fair: useFair,
+    skip: p => (dry && underWater(bot, p)) || (unlootedContainers && skipLooted(p)) }).map(b => posKey(b.position)) : [])
+  const skipSeen = p => newView && seenHere.has(posKey(p)) &&
+    !(bot.canDigBlock(bot.blockAt(p)) && require('./pick').blockSeen(bot, p))
+  const findHit = () => {
+    if (newView && (ctl.aborted || bot.entity.position.equals(viewFrom))) return null
+    return lavaSource ? (require('./cast').lavaSources(bot)[0] || null)
+      : firstVisible(bot, ids, radius, useFair, dry,
+        (unlootedContainers || newView) ? p => (unlootedContainers && skipLooted(p)) || skipSeen(p) : null)
+  }
 
-  let hit = firstVisible(bot, ids, radius, useFair, dry)
+  let hit = findHit()
   if (hit) return { found: hit.name, at: xyz(hit.position), walked: 0, note: 'уже видно отсюда' }
+  // A newly placed roof can be confirmed before the client skylight update arrives.
+  if (surface && require('./worlds').worldOf(bot) === 'overworld' && !ctl.aborted && deadline - gameClock.now() >= 10000 &&
+    (!session.underSky?.() || require('./fortify').enclosure(bot, bot.entity.position.floored()).sealed)) {
+    await require('./survival').surface(session, ctl, { timeoutSeconds: Math.min(30, (deadline - gameClock.now()) / 1000), hand: false, preferPillar: true })
+    hit = findHit()
+    if (hit) return { found: hit.name, at: xyz(hit.position), from, now: xyz(bot.entity.position), note: 'увидел после выхода наверх' }
+  }
 
   const legs = []
   let i = 0
@@ -1482,22 +1540,34 @@ async function explore (session, ctl, {
     const names = ids.map(id => session.mcData.blocks[id] && session.mcData.blocks[id].name).filter(Boolean)
     const me = bot.entity.position
     return require('./perception/eyes').nearest(bot, names, { max: 8, maxDist: Math.max(radius * 2, 96) })
-      .find(m => !memTried.has(`${m.x},${m.y},${m.z}`) && Math.hypot(m.x - me.x, m.z - me.z) > 6 && !(dry && underWater(bot, new Vec3(m.x, m.y, m.z)))) || null
+      .find(m => !memTried.has(`${m.x},${m.y},${m.z}`) && (!newView || !seenHere.has(posKey(m))) && !skipLooted(m, m.name) && Math.hypot(m.x - me.x, m.z - me.z) > 6 && !(dry && underWater(bot, new Vec3(m.x, m.y, m.z)))) || null
   }
   // Разведка из-под неба верхнего мира — поверху (session.underSky,
   // underRoofCost): отрезок «по прямой» иначе уходил в пещеры.
-  const walkTop = typeof session.underSky === 'function' && session.underSky()
+  const walkTop = (surface && require('./worlds').worldOf(bot) === 'overworld') || (typeof session.underSky === 'function' && session.underSky())
+  const walk = async (x, z, options) => {
+    session.surfaceWalk = walkTop
+    const mv = bot.pathfinder.movements
+    const dug = mv ? mv.canDig : undefined
+    const scaffold = mv ? mv.scafoldingBlocks : undefined
+    if (walkTop && mv) { mv.canDig = false; mv.scafoldingBlocks = [] }
+    try { return await travelXZ(bot, ctl, x, z, { ...options, retries: 1, deadline }) }
+    finally {
+      session.surfaceWalk = false
+      if (walkTop && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
+    }
+  }
   let failStreak = 0
   let failFrom = null
   while (gameClock.now() < deadline && !ctl.aborted) {
     const mem = remembered()
     if (mem) {
       memTried.add(`${mem.x},${mem.y},${mem.z}`)
-      const r = await travelXZ(bot, ctl, mem.x, mem.z, { range: 4, retries: 1, deadline })
+      const r = await walk(mem.x, mem.z, { y: mem.y, range: 4 })
       legs.push(`память ${mem.name} ${mem.x},${mem.y},${mem.z}${r.ok ? '' : ' ✗ ' + r.error}`)
       console.log('[eyes] explore: к увиденному раньше', JSON.stringify({ name: mem.name, at: [mem.x, mem.y, mem.z], dist: mem.dist, ago: mem.ago, ok: !!r.ok }))
       if (!r.ok) await sleep(250)
-      hit = firstVisible(bot, ids, radius, useFair, dry)
+      hit = findHit()
       if (hit) return { found: hit.name, at: xyz(hit.position), from, now: xyz(bot.entity.position), legs, note: 'видел раньше — подошёл' }
       continue
     }
@@ -1506,19 +1576,7 @@ async function explore (session, ctl, {
     const here = bot.entity.position
     // И без копки: разведка — это взгляд с поверхности, а не штрек сквозь
     // гору (session.goto surface:'strict'). Нет пути поверху — следующий луч.
-    session.surfaceWalk = walkTop
-    const mv = bot.pathfinder.movements
-    const dug = mv ? mv.canDig : undefined
-    const scaffold = mv ? mv.scafoldingBlocks : undefined
-    if (walkTop && mv) { mv.canDig = false; mv.scafoldingBlocks = [] }
-    let r
-    try {
-      r = await travelXZ(bot, ctl, here.x + dx * stepDistance * spread, here.z + dz * stepDistance * spread,
-        { range: 6, retries: 1, deadline })
-    } finally {
-      session.surfaceWalk = false
-      if (walkTop && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
-    }
+    const r = await walk(here.x + dx * stepDistance * spread, here.z + dz * stepDistance * spread, { range: 6 })
     legs.push(`${dx},${dz}${r.ok ? '' : ' ✗ ' + r.error}`)
     i++
     // S8d (S9: explore на льду — 551 noPath за прогон, каждый отрезок отказывал сразу, цикл крутил стороны до срока): все 8 сторон
@@ -1535,7 +1593,7 @@ async function explore (session, ctl, {
     // игрового тика после отказа отдаёт цикл событий.
     if (!r.ok) await sleep(250)
 
-    hit = firstVisible(bot, ids, radius, useFair, dry)
+    hit = findHit()
     if (hit) {
       return { found: hit.name, at: xyz(hit.position), from, now: xyz(bot.entity.position), legs }
     }
@@ -2269,8 +2327,16 @@ const ALWAYS_EDIBLE = /^(potion|milk_bucket|golden_apple|enchanted_golden_apple)
 // the instant the food bar actually moves, so the normal case still costs ~1.6s.
 const EAT_WATCH_MS = 4000
 
+// Equipping a meal moves its whole stack out of inventory.items() (slots 9..44).
+// Slot 45 is still carried food; moving it is not a witnessed bite.
+function mealItems (bot) {
+  const bag = bot.inventory.items()
+  const off = bot.inventory.slots?.[45]
+  return off && !bag.some(i => i === off || i.slot === 45) ? [...bag, off] : bag
+}
+
 function bestFood (bot, mcData) {
-  const edible = bot.inventory.items()
+  const edible = mealItems(bot)
     .filter(i => !NOT_ACTUALLY_FOOD.test(i.name))
     .map(i => ({ item: i, data: mcData.foodsByName[i.name] }))
     .filter(e => e.data)
@@ -2319,7 +2385,7 @@ function describeFailure (err, during) {
 async function restoreHand (bot, previous, food) {
   if (!previous || previous.type === food.type) return null
   try {
-    const again = bot.inventory.items().find(i => i.type === previous.type)
+    const again = mealItems(bot).find(i => i.type === previous.type)
     if (!again) return { error: `прежний предмет (${previous.name}) в руку не вернулся: его больше нет в инвентаре` }
     await bot.equip(again, 'hand')
     return null
@@ -2345,13 +2411,14 @@ async function eat (session, { item: name }: any = {}) {
     return { note: 'сыт, есть не стал — здоровье и так восстанавливается', food: Math.round(foodBefore) }
   }
 
-  const food = name ? itemNamed(bot, name) : bestFood(bot, mcData)
+  const food = name ? mealItems(bot).find(i => i.name === name) : bestFood(bot, mcData)
   if (!food) {
     return {
       ate: null,
       note: name ? `нет ${name} в инвентаре` : 'еды в инвентаре нет',
       food: Math.round(foodBefore),
-      slotsUsed: bot.inventory.items().length
+      slotsUsed: bot.inventory.items().length,
+      offHand: bot.inventory.slots?.[45] ? { item: bot.inventory.slots[45].name, count: bot.inventory.slots[45].count } : null
     }
   }
 
@@ -2361,7 +2428,7 @@ async function eat (session, { item: name }: any = {}) {
     return { note: 'сыт, есть не стал', food: Math.round(foodBefore), tried: food.name }
   }
 
-  const owned = n => bot.inventory.items().reduce((s, i) => s + (i.name === n ? i.count : 0), 0)
+  const owned = n => mealItems(bot).reduce((s, i) => s + (i.name === n ? i.count : 0), 0)
   const hadCount = owned(food.name)
   // Еда — immediate: session.current — чужое намерение, часто уже прерванное тактикой (sr-1010 10.10: «не поел» за 2 тика при
   // 12 стейках, хп 13 → 6 → смерть). Сдаваться — только если его прервали во время еды.
@@ -2401,6 +2468,13 @@ async function eat (session, { item: name }: any = {}) {
   if (offHand) {
     try { bot.deactivateItem(); await restoreOffhand(bot, previousOff, food) } catch (err) { handBack = describeFailure(err, 'вернуть предмет во вторую руку') }
   } else handBack = await restoreHand(bot, previous, food)
+  // Keep the remaining meal in the spendable bag, including a resumed stack
+  // left in the second hand by an earlier interrupted meal. Preserve new gear.
+  const remaining = bot.inventory.slots?.[45]
+  if (remaining && (remaining.name === food.name || remaining.name === previousOff?.name) &&
+      mcData.foodsByName[remaining.name] && !NOT_ACTUALLY_FOOD.test(remaining.name) && bot.inventory.emptySlotCount() > 0) {
+    try { await bot.unequip('off-hand') } catch (err) { handBack = describeFailure(err, 'вернуть остаток еды в рюкзак') }
+  }
   const foodAfter = bot.food ?? 0
   // Two independent witnesses, because either one alone can lie: the bar does
   // not move if exhaustion spends the point in the same second (digging and
@@ -2433,7 +2507,8 @@ async function eat (session, { item: name }: any = {}) {
     food: Math.round(foodAfter),
     held: bot.heldItem ? bot.heldItem.name : null,
     windowOpen: bot.currentWindow ? (bot.currentWindow.type || bot.currentWindow.id) : null,
-    busy: session.current ? session.current.name : null
+    busy: session.current ? session.current.name : null,
+    offHand: bot.inventory.slots?.[45] ? { item: bot.inventory.slots[45].name, count: bot.inventory.slots[45].count } : null
   }
   Object.assign(out, failure)
   if (handBack) out.handBack = handBack.error
@@ -2669,6 +2744,7 @@ async function wakeUp (session) {
 
 module.exports = {
   mine, digDown, explore, place, craft, equip, eat, drop, sleepInBed, wakeUp,
+  swarmWork: (...args) => require('./swarm-work').swarmWork(...args),
   collectNearbyDrops, reachBlock, ensureTable, placeBed, bedHalves, describeBed,
   digStairs, GROUPS,
   // preflight.js counts «еда в дорогу» by the same two rules bestFood picks by,

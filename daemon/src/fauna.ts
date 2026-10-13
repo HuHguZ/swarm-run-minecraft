@@ -327,12 +327,15 @@ function pillarSpotOk (bot, feet) {
 }
 // Самые высокие ноги голема у столба: клетки в 3 бл. вокруг (кроме самого столба), где под ногами твёрдое, а выше 3
 // клетки свободны (голем 2.7 в высоту), на высоте пола столба −2…+4.
-// Радиус 2: коробка атаки голема — его половина ширины 0.7 + 0.83 = 1.53 от центра, хитбокс игрока — 0.3; центр голема
-// дальше 1.83 по горизонтали не достаёт, а стоя на блоке в 2 клетках, он может нависать центром до ~0.8 от края.
-function golemTopNear (bot, base) {
+// Коробка атаки: половина ширины голема 0.7 + расширение 0.828 + половина игрока 0.3.
+// На краю третьей клетки голем ещё может опираться ногами и доставать по обеим осям.
+function golemTopNear (bot, base, golem?: any) {
   let top = base.y
-  for (let dx = -2; dx <= 2; dx++) {
-    for (let dz = -2; dz <= 2; dz++) {
+  // The golem can still stand on the edge of the third cell: half-width .7
+  // plus native melee inflation .828 plus player half-width .3 reaches 1.828
+  // from our center; its feet then overlap that cell by up to .028 blocks.
+  for (let dx = -3; dx <= 3; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
       if (!dx && !dz) continue
       for (let y = base.y + 4; y >= base.y - 2; y--) {
         const p = base.offset(dx, y - base.y, dz)
@@ -343,6 +346,30 @@ function golemTopNear (bot, base) {
         if (free) { top = Math.max(top, y); break }
       }
     }
+  }
+  if (!golem || top <= base.y + 1) return top
+  // A roof over a four-block wall is not a walking threat. Reuse the mob's
+  // bounded step search with our future supported column; retain real stairs.
+  const { reachOf } = require('./reach')
+  const future = Object.create(bot)
+  future.entity = { ...bot.entity }
+  const walking = { ...golem, name: 'iron_golem', width: golem.width || 1.4, height: golem.height || 2.7 }
+  const fringe = (golem.width || 1.4) / 2 + .5
+  for (let h = GOLEM_PILLAR; h <= 6 && h <= top - base.y + GOLEM_PILLAR; h++) {
+    const center = base.offset(.5, h, .5), cache = new Map()
+    future.blockAt = p => p.x === base.x && p.z === base.z && p.y >= base.y && p.y < base.y + h
+      ? { name: 'cobblestone', boundingBox: 'block' } : bot.blockAt(p)
+    let reaches = false
+    // The search uses cell centers. A wide golem's feet can rest on the
+    // neighbouring cell's edge: half its width plus half a cell of slack.
+    for (const dx of [-fringe, 0, fringe]) {
+      for (const dz of [-fringe, 0, fringe]) {
+        future.entity.position = center.offset(dx, 0, dz)
+        if (reachOf(future, walking, { cache }).reaches) { reaches = true; break }
+      }
+      if (reaches) break
+    }
+    if (!reaches) return base.y + h - GOLEM_PILLAR
   }
   return top
 }
@@ -368,9 +395,12 @@ function golemSpotNear (bot, g) {
         for (let k = 0; k <= 4; k++) { const b = bot.blockAt(c.offset(0, k, 0)); if (!b || b.boundingBox === 'block' || /water|lava/.test(b.name)) { free = false; break } }
         if (!free || c.y < gy) continue
         // Выше пола на 1 вокруг — столб 4 (голем тогда достаётся, только прижавшись к столбу); выше — мимо.
-        const extra = golemTopNear(bot, c) - c.y
+        const extra = golemTopNear(bot, c, g) - c.y
         if (extra > 1) continue
-        const score = Math.hypot(c.x + 0.5 - me.x, c.z + 0.5 - me.z) + Math.abs(c.y - me.y) * 2 + extra * 6
+        const strike = golemReach({ entity: { position: c.offset(.5, GOLEM_PILLAR + extra, .5) } }, g)
+        // A neutral mob outside legal strike range costs the existing six-second
+        // no-hit wait; prefer a perch from which the first safe hit is possible.
+        const score = Math.hypot(c.x + 0.5 - me.x, c.z + 0.5 - me.z) + Math.abs(c.y - me.y) * 2 + extra * 6 + (strike > 2.95 ? 6 : 0)
         if (!best || score < best.score) best = { c, score }
       }
     }
@@ -395,7 +425,6 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
   const FILL = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'blackstone', 'basalt']
   const filler = () => FILL.reduce((n, x) => n + countOf(bot, x), 0)
   void pickFiller
-  if (filler() < GOLEM_PILLAR + 1) return { ...out, stopped: `на столб нужно ${GOLEM_PILLAR + 1} блока` }
   const weapon = () => bot.inventory.items().filter(i => /_(axe|sword)$/.test(i.name))
     .sort((a, b) => (/_axe$/.test(b.name) ? 1 : 0) - (/_axe$/.test(a.name) ? 1 : 0) || tier(b.name) - tier(a.name))[0] || null
   const id = g.id
@@ -409,9 +438,16 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
   // Безопасно, пока ноги выше коробки атаки голема (его ноги + 2.7) с запасом: голем шагнёт на бугор — коробка выше.
   const hd = e => Math.hypot(e.position.x - bot.entity.position.x, e.position.z - bot.entity.position.z)
-  // Опасен только голем рядом по горизонтали (его коробка атаки — 1.53 от центра + наши 0.3): дальний на бугре — нет
-  // (rt-R5 слот 10: «опасно» от голема на холме в 4 бл., столб рос, удара не было, а после ухода со столба — смерть).
-  const safe = () => { const e = bot.entities[id]; return !e || hd(e) > 2.3 || bot.entity.position.y >= e.position.y + 2.7 + 0.3 }
+  // Mob1.21.11 expands its attack box horizontally, so diagonal contact must
+  // use both axes, not a circular distance (S23: 1.825 on each axis still hits).
+  const safe = () => {
+    const e = bot.entities[id]
+    if (!e) return true
+    const reach = Math.sqrt(Math.fround(2.04)) - Math.fround(.6)
+    const half = Math.fround(e.width || 1.4) / 2 + reach + Math.fround(bot.entity.width || .6) / 2
+    const p = bot.entity.position
+    return Math.abs(e.position.x - p.x) >= half || Math.abs(e.position.z - p.z) >= half || p.y >= e.position.y + (e.height || 2.7) + .3
+  }
   let base = null // клетка ног у основания своего столба
   // Уже стою на своём столбе (прошлый заход оборвался со злым големом внизу) — не слезать к нему: основание — первая
   // клетка под ногами, у которой по бокам есть пол (земля), а не воздух столба.
@@ -428,6 +464,8 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
   }
   const hp0 = bot.health
   try {
+    // An existing supported perch needs no new building material to keep fighting.
+    if (!base && filler() < GOLEM_PILLAR) return { ...out, stopped: `на столб нужно ${GOLEM_PILLAR} блока` }
     for (let attempt = 0; attempt < 6 && !gone && !late(); attempt++) {
       // 1. Подойти на 2.2–3 бл. к голему (вплотную сервер не ставит блок под ноги — коробка голема в клетке).
       if (!base) {
@@ -441,9 +479,9 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
         g = bot.entities[id] || g
         const spot = golemSpotNear(bot, g)
         if (!spot) {
-          mark('у голема нет ровного места — жду, пока отойдёт')
-          await sleep(4000, ctl)
-          continue
+          out.noSpot = true
+          mark('у голема нет безопасного места для столба')
+          break
         }
         const f0 = bot.entity.position.floored()
         if (!f0.equals(spot)) {
@@ -457,7 +495,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
       }
       // 2. Столб: ноги выше самого высокого места, куда голем может встать в 3 бл. от столба (+2.75), и не ниже 3 над
       // своим полом; не выше 6 (lab ow-golem2: голем шагнул на бугор у столба 3 — 20 → 7 хп одним ударом).
-      const needY = Math.max(base.y + GOLEM_PILLAR, golemTopNear(bot, base) + 3.0)
+      let needY = Math.max(base.y + GOLEM_PILLAR, golemTopNear(bot, base, bot.entities[id] || g) + 3.0)
       for (let k = 0; k < 7 && !late(); k++) {
         const h = bot.entity.position.floored().y - base.y
         if (h >= GOLEM_PILLAR && bot.entity.position.y >= needY - 0.01 && safe()) break
@@ -482,11 +520,14 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
       let lastHit = 0
       let farSince = gameClock.now()
       let lastHp = bot.health
+      let threatCell = (bot.entities[id] || g).position.floored().toString()
       while (!gone && !late()) {
         g = bot.entities[id]
         if (!g || g.isValid === false) { gone = true; break }
+        const cell = g.position.floored().toString()
+        if (cell !== threatCell) { needY = Math.max(base.y + GOLEM_PILLAR, golemTopNear(bot, base, g) + 3.0); threatCell = cell }
         if (bot.entity.position.y < base.y + GOLEM_PILLAR - 0.5) { mark('сошёл со столба'); break }
-        if (bot.health < lastHp - 0.5 || !safe()) {
+        if (bot.health < lastHp - 0.5 || !safe() || bot.entity.position.y < needY - .01) {
           mark(`опасно (хп ${Math.round(bot.health)}) — блок вверх`)
           const t = await towerUp(bot, ctl, 1, { sneak: true })
           out.pillar += t.placed || 0

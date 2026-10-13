@@ -297,6 +297,7 @@ function install (session, deps: any = {}) {
   const faceAim = deps.faceAim || require('./pick').faceAim
   const now = deps.now || gameClock.now
   const hand = deps.hand || bot._ndHandLock || { hold () {}, on: () => false, as: fn => fn() }
+  const bodyClear = require('./navigation/geometry').bodyClear
   const log = deps.log || ((m, o) => console.log('[bridge] ' + m, o ? JSON.stringify(o) : ''))
   const stats: any = { placed: 0, confirmed: 0, denied: 0, timeout: 0, noFace: 0, stale: 0, noItem: 0, segments: 0, fell: 0 }
   const pending = new Map()
@@ -367,7 +368,7 @@ function install (session, deps: any = {}) {
   function cancelScheduled () {
     if (st.scheduled) { bot.removeListener('move', st.scheduled); st.scheduled = null }
   }
-  function finish () {
+  function finish (recover = true) {
     const s = st.seg
     if (!s) return
     st.seg = null
@@ -377,6 +378,9 @@ function install (session, deps: any = {}) {
     log('мост', { cells: s.cells, placed: s.placed, confirmed: s.confirmed, denied: s.denied, ms: now() - s.t0, fell: !!fell, y: bot.entity && Math.round(bot.entity.position.y * 100) / 100, stats })
     // Свои клавиши — отпустить: pathfinder «назад» не трогает никогда, и тело пятилось бы дальше (mv-gap-dbg6).
     try { for (const k of ['back', 'left', 'right']) bot.setControlState(k, false) } catch {}
+    // После падения оставшиеся узлы рассчитаны с прежнего пола (W21: y80 → узел y74.875).
+    // Отдать pathfinder фактическое положение, сохранив его цель и обычные ограничения перестроек.
+    if (fell && recover && !st.stopped && (bot.health ?? 20) > 0 && bot.pathfinder?.goal) replan('мост: сорвался')
   }
   function replan (why, info?: any) {
     if (now() - st.replanAt < 1000) return
@@ -473,6 +477,9 @@ function install (session, deps: any = {}) {
       bot.jumpQueued = false
       bot.setControlState('sneak', !!sneak)
     }
+    // An Emergency support can fill the old landing while this descent is
+    // paused. Replan from the rescued position instead of walking into it.
+    if (!bodyClear(bot, T)) { d.done = 'blocked'; replan('спуск: посадка занята', { cell: [C.x, C.y, C.z] }); return null }
     // Встал на свой блок — ступень пройдена.
     if (e.onGround && Math.abs(p.y - T.y) < 0.01 && Math.abs(p.x - T.x) < 0.8 && Math.abs(p.z - T.z) < 0.8) { d.done = 'landed'; return null }
     if (p.y < C.y - 0.5) { d.done = 'fell'; stats.descFell = (stats.descFell || 0) + 1; return null }
@@ -708,7 +715,7 @@ function install (session, deps: any = {}) {
     if (!st.desc && !st.queue.length && !st.seg) return
     cancelScheduled()
     st.desc = null; st.queue = []
-    finish()
+    finish(false)
     try { for (const k of ['forward', 'back', 'left', 'right', 'sneak']) bot.setControlState(k, false); bot.jumpQueued = false } catch {}
   }
   // Счёт одинаковых перестроек снимают новая цель (другая, не та же после рефлекса) и достигнутая цель.

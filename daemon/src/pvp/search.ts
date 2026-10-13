@@ -10,8 +10,8 @@ const pick = require('../pick')
 // including apparently empty head space above a visible support.
 export function observedCollision (bot) {
   const cells = new Map(); let observedAt = -Infinity
-  const sightWorld = { blockAt: pos => bot.blockAt(pos, false) ||
-    { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } }
+  const unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+  const sightWorld = { blockAt: pos => { try { return bot.blockAt(pos, false) || unknown } catch { return unknown } } }
   return { physics: bot.physics, game: bot.game, blockAt (pos) {
     if (observedAt !== clock.now()) { observedAt = clock.now(); cells.clear() }
     const cell = pos.floored(); const key = cell.toString()

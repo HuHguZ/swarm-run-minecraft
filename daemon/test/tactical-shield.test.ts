@@ -61,6 +61,12 @@ function actor() {
 }
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+function observeProjectile(a, id = 3) {
+  const e = a.bot.entities[id], current = e.position.clone()
+  e.position = current.offset(1, 0, 0)
+  require('../src/threats').incoming(a.bot)
+  a.c.advanceTicks(1); e.position = current
+}
 
 test('Full40 Shield cannot complete after its old three-tick pulse', async () => {
   const a = actor()
@@ -140,6 +146,39 @@ test('Shield keeps protection after native five ticks while still admissible, an
   } finally { a.close() }
 })
 
+for (const name of ['ghast', 'blaze']) test(`Shield faces an observed ${name} beyond melee search range and loses it behind a wall`, async () => {
+  const a = actor()
+  const looks: any[] = []
+  a.bot.game.dimension = 'the_nether'
+  a.bot.entities[2].name = name
+  a.bot.entities[2].position = new Vec3(24.5, 64, .5)
+  a.bot.entities[3] = { id: 3, name: 'small_fireball', position: new Vec3(6.5, 64.9, .5) }
+  observeProjectile(a)
+  a.session.autopilot = { lastHurt: { at: clock.now(), sourceId: 2, byMob: true, type: 'fireball', dimension: 'the_nether' } }
+  a.bot.lookAt = async (at: any) => { looks.push(at.clone()); a.bot.entity.yaw = Math.atan2(.5 - at.x, .5 - at.z) }
+  let pending: Promise<any>
+  try {
+    const observed = a.tactics.observeTactics(a.session)
+    assert.ok(observed.enemies.some((enemy: any) => enemy.id === 2 && enemy.distance > 16), 'the ranged attacker was actually observed')
+    assert.equal(observed.incomingProjectiles, 1, 'a measured incoming fireball keeps the guard admissible')
+    const system = new a.tactics.TacticalSystem(a.session)
+    pending = system.execute({ id: 'Shield', score: 80 }, a.ctl, observed)
+    await turn(); a.metadata(3); a.age(1001); a.c.advanceTicks(1); await turn()
+    assert.equal(looks[0]?.x, 24.5, 'the shield must turn toward the visible distant attacker before use')
+    assert.equal(a.bot.entity.yaw, -Math.PI / 2)
+    a.bot.entities[2].position = new Vec3(-23.5, 64, .5)
+    a.age(1006); a.c.advanceTicks(1); await turn()
+    assert.equal(looks.at(-1)?.x, -23.5, 'held protection follows the currently observed direction at range')
+    const count = looks.length
+    const flat = a.bot.blockAt
+    a.bot.blockAt = (p: any) => p.x <= -10 && p.x >= -11 ? { position: p.floored(), name: 'blackstone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : flat(p)
+    a.bot.entities[2].position = new Vec3(-25.5, 64, .5)
+    a.c.advanceTicks(1); await turn()
+    assert.equal(looks.length, count, 'a tracked entity behind a wall does not supply a new direction')
+    a.ctl.abort(); await pending
+  } finally { a.ctl.abort(); await pending; a.close() }
+})
+
 for (const cause of ['slot', 'cooldown', 'death', 'abort', 'authority']) test(`native Shield ${cause} cannot turn missing protection into completed success`, async () => {
   const a = actor()
   try {
@@ -160,13 +199,83 @@ for (const cause of ['slot', 'cooldown', 'death', 'abort', 'authority']) test(`n
   } finally { a.close() }
 })
 
-test('Full40 pressured BlockOff preserves the failed actual box and does not report a completed refuge', async () => {
+test('a started Shield survives projectile removal while the observed shooter still threatens, through native confirmation', async () => {
+  const a = actor()
+  const events: any[] = []
+  a.session.bus.emit = (type: string, detail: any) => events.push({ type, ...detail })
+  a.bot.game.dimension = 'the_nether'
+  a.bot.entities[2].name = 'ghast'
+  a.bot.entities[2].position = new Vec3(24.5, 64, .5)
+  a.bot.entities[3] = { id: 3, name: 'fireball', position: new Vec3(7, 64.9, .5) }
+  observeProjectile(a)
+  const system = new a.tactics.TacticalSystem(a.session, { record: () => {} })
+  try {
+    system.attach(a.bot); system.update(true); await turn()
+    assert.equal(events.find(event => event.type === 'tactical_selected')?.action, 'Shield')
+    assert.equal(a.writes.length, 1, 'the actual shield executor has requested offhand use')
+    const releasedBefore = a.releases() // Taking the control lease clears any earlier item use.
+    // The hit removes its projectile before the later packet/sample records the damage source.
+    delete a.bot.entities[3]
+    a.bot.health = 17
+    a.session.autopilot = { lastHurt: { at: clock.now(), sourceId: 2, byMob: true, type: 'fireball', dimension: 'the_nether' } }
+    system.update(true); await turn()
+    assert.equal(events.some(event => event.type === 'tactical_finished'), false, 'the observed shooter is still a threat; removal must not abort the native shield ACK')
+    assert.equal(a.releases(), releasedBefore, 'the active offhand use must stay raised')
+    a.metadata(3); a.age(1001); a.c.advanceTicks(1); await turn()
+    a.age(1006); a.c.advanceTicks(1); await turn()
+    assert.equal(a.releases(), releasedBefore, 'a confirmed guard remains bounded by its existing executor deadline')
+    delete a.bot.entities[2]
+    for (let tick = 0; tick < 100 && !events.some(event => event.type === 'tactical_finished'); tick++) { a.c.advanceTicks(1); await turn() }
+    const finished = events.find(event => event.type === 'tactical_finished')
+    assert.equal(finished?.result, 'completed')
+    assert.equal(finished?.detail?.shielded, true)
+    assert.ok(finished?.detail?.shield?.confirmedTicks >= 5)
+    assert.ok(a.releases() > releasedBefore, 'the bounded guard releases when the shooter really disappears')
+    assert.equal(a.bot.entity.metadata[a.key] & 3, 0, 'offhand use is actually cleared after completion')
+  } finally { system.detach(); a.close() }
+})
+
+for (const next of ['occluded', 'fall', 'melee']) test(`a started ranged Shield yields to ${next} instead of retaining its control lease`, async () => {
+  const a = actor()
+  const events: any[] = []
+  a.session.bus.emit = (type: string, detail: any) => events.push({ type, ...detail })
+  a.bot.game.dimension = 'the_nether'
+  a.bot.entities[2].name = 'ghast'
+  a.bot.entities[2].position = new Vec3(24.5, 64, .5)
+  a.bot.entities[3] = { id: 3, name: 'fireball', position: new Vec3(7, 64.9, .5) }
+  observeProjectile(a)
+  const system = new a.tactics.TacticalSystem(a.session, { record: () => {},
+    execute: (action: any, ctl: any, state: any) => action.id === 'Shield' ? system.execute(action, ctl, state) : Promise.resolve({}) })
+  try {
+    system.attach(a.bot); system.update(true); await turn()
+    assert.equal(events.find(event => event.type === 'tactical_selected')?.action, 'Shield')
+    const releasedBefore = a.releases()
+    delete a.bot.entities[3]
+    a.session.autopilot = { lastHurt: { at: clock.now(), sourceId: 2, byMob: true, type: 'fireball', dimension: 'the_nether' } }
+    if (next === 'occluded') {
+      const flat = a.bot.blockAt
+      a.bot.blockAt = (p: any) => p.x >= 10 && p.x < 11 ? { position: p.floored(), name: 'blackstone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : flat(p)
+    } else if (next === 'fall') {
+      a.bot.entity.onGround = false; a.bot.entity.velocity = new Vec3(0, -.3, 0)
+      a.bot._ndClutch = { lastDecision: { action: 'clutch' } }
+    } else {
+      a.bot.entities[4] = { id: 4, name: 'zombie', position: new Vec3(2.5, 64, .5), height: 1.95, width: .6, metadata: [], equipment: [], isValid: true }
+    }
+    system.update(true); await turn()
+    assert.ok(events.some(event => event.type === 'tactical_finished' && event.action === 'Shield'), 'the actual pending guard must settle after losing its lease')
+    assert.ok(a.releases() > releasedBefore, 'the former guard must really lower its offhand use')
+    assert.notEqual(system.snapshot().action, 'Shield')
+    if (next === 'melee') assert.ok(events.some(event => event.type === 'tactical_selected' && event.action === 'Fight'), 'a higher-scored melee defence can take over')
+  } finally { system.detach(); a.close() }
+})
+
+test('BlockOff preserves a CORNERED receipt and its pressure diagnostics without reporting a completed refuge', async () => {
   const a = actor()
   a.bot.game.dimension = 'the_nether'
-  const nativeGuard = require('../src/ne-guard')
-  const receipt = { acted: true, box: { ok: false, placed: 0, left: ['91,52,142'], pressure: true }, duel: { swings: 0, stopped: 'не достать' }, killed: false }
-  const react = nativeGuard.react
-  nativeGuard.react = async () => receipt
+  const survival = require('../src/survival')
+  const receipt = { code: 'CORNERED', how: 'none', healed: false, box: { ok: false, placed: 0, left: ['91,52,142'], pressure: true } }
+  const refuge = survival.refuge
+  survival.refuge = async () => receipt
   const events: any[] = []
   a.session.bus.emit = (type: string, detail: any) => events.push({ type, ...detail })
   try {
@@ -177,7 +286,9 @@ test('Full40 pressured BlockOff preserves the failed actual box and does not rep
     assert.equal(finished.result, 'failed')
     assert.equal(finished.detail.box.pressure, true)
     assert.equal(finished.detail.box.placed, 0)
-  } finally { nativeGuard.react = react; a.close() }
+    assert.equal(finished.detail.code, 'CORNERED')
+    assert.equal(finished.detail.healed, false)
+  } finally { survival.refuge = refuge; a.close() }
 })
 
 test('Full40 saved Brute inside the two-block refuge volume prevents box success; outside and neutral actors do not', async () => {
@@ -305,7 +416,7 @@ test('player bow uses the same far shield while crossbow keeps its existing load
   assert.ok((await rangedDuelFixture({ player: true })).raises.includes(true))
   assert.equal((await rangedDuelFixture({ player: true, hand: 'crossbow' })).raises.includes(true), false)
   assert.ok((await rangedDuelFixture({ player: true, hand: 'crossbow', loaded: true, distance: 6 })).raises.includes(true))
-  assert.equal((await rangedDuelFixture({ player: true, hand: 'crossbow', loaded: true, piercing: true, distance: 6 })).raises.includes(true), false)
+  assert.ok((await rangedDuelFixture({ player: true, hand: 'crossbow', loaded: true, piercing: true, distance: 6 })).raises.includes(true), 'hidden piercing level cannot change the ordinary player view of a loaded crossbow')
 })
 
 test('ranged guard requires visible draw and actual worn availability, and does not start after cancellation', async () => {

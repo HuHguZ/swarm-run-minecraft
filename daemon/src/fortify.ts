@@ -15,7 +15,7 @@ const gameClock = require('./game-clock')
 // себя; землю (0.5) руками — ~0.75 с.
 
 const Vec3 = require('vec3')
-const { placeBlockAt, pickFiller, withTimeout } = require('./build')
+const { placeBlockAt, pickFiller, withTimeout, FACES, occupiedByEntity } = require('./build')
 const { sleep } = require('./movement')
 const tools = require('./tools')
 
@@ -110,26 +110,26 @@ function enclosure (bot, cell) {
 
 // Встать в центр своей клетки: хитбокс 0.6 шириной, и если стоять у края,
 // он залезает в соседнюю клетку — туда блок не поставить.
-async function centerInCell (bot, ms = 700, at = null) {
+async function centerInCell (bot, ms = 700, at = null, ctl = null) {
   const cell = at || feetCell(bot)
   const c = { x: cell.x + 0.5, z: cell.z + 0.5 }
   const t0 = gameClock.now()
   try {
-    while (gameClock.now() - t0 < ms) {
+    while (gameClock.now() - t0 < ms && !ctl?.aborted) {
       const p = bot.entity.position
       const dx = c.x - p.x
       const dz = c.z - p.z
       if (Math.hypot(dx, dz) < 0.1) break
       await bot.look(Math.atan2(-dx, -dz), 0, true).catch(() => {})
+      if (ctl?.aborted) break
       bot.setControlState('sneak', true)
       bot.setControlState('forward', Math.hypot(dx, dz) > 0.06)
       await sleep(50)
     }
   } finally {
-    bot.setControlState('forward', false)
-    bot.setControlState('sneak', false)
+    if (!ctl?.aborted) { bot.setControlState('forward', false); bot.setControlState('sneak', false) }
   }
-  await sleep(100)
+  if (!ctl?.aborted) await sleep(100)
   const p = bot.entity.position
   return Math.hypot(c.x - p.x, c.z - p.z) < 0.2
 }
@@ -148,41 +148,94 @@ function boxPlan (cell, toward, roof) {
   return plan
 }
 
-// Закрыться. Возвращает, сколько поставлено и что вышло.
-async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs = 700, hard = true }: any = {}) {
-  await centerInCell(bot)
-  const cell = feetCell(bot)
-  const plan = boxPlan(cell, toward, roof)
+function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true }: any = {}) {
+  const need = refugeNeed(bot, cell), plan = boxPlan(cell, toward, roof)
+  if (!need) return { ok: false, why: 'клетка не закрывается целыми стенами', plan, blocks: Infinity, ms: Infinity }
+  const pick = require('./pick'), predicted = new Map(), center = cell.offset(.5, 0, .5)
+  const entities = Object.fromEntries((Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity && require('./pvp/last-seen').seesPlayer(bot, e)).map(e => [e.id, e]))
+  const view = { ...bot, entity: { ...bot.entity, position: center }, entities, blockAt: p => predicted.get(p.toString()) || bot.blockAt(p) }
+  let blocks = 0
+  for (let i = 0; i < plan.length; i++) {
+    const p = plan[i]
+    if (fullCube(view.blockAt(p)) || roof && i === plan.length - 2 && need.roofSolid) continue
+    const occupied = occupiedByEntity(view, p)
+    if (occupied) return { ok: false, why: `в клетке стоит ${occupied}`, plan, blocks, ms: Infinity }
+    if (!openCell(view.blockAt(p))) return { ok: false, why: 'клетка стены занята', plan, blocks, ms: Infinity }
+    let eye = pick.eyeOf(view)
+    if (roof && i === plan.length - 2) {
+      const lift = require('./navigation/geometry').verticalLift(view, center, 1)
+      eye = eye.offset(0, lift || 0, 0)
+    }
+    if (!FACES.some(face => pick.faceAim(view, p.minus(face), face, { eye }))) return { ok: false, why: 'нет видимой опоры стены или крыши', plan, blocks, ms: Infinity }
+    predicted.set(p.toString(), { name: 'dirt', boundingBox: 'block', position: p, shapes: [[0, 0, 0, 1, 1, 1]] }); blocks++
+  }
+  const filler = pickFiller(bot, { steady: true })
+  const have = bot.inventory.items().filter(i => i.name === filler?.name || HARD.includes(i.name)).reduce((n, i) => n + i.count, 0)
+  if (have < blocks) return { ok: false, why: 'не хватит блоков закрыть все стены и крышу', plan, blocks, ms: Infinity }
+  return { ok: true, plan, blocks, ms: refugeBuildMs({ ...need, blocks }) }
+}
+
+// Every cell must have an honest construction route before the body puts its weapon away.
+async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs = 700, hard = true, abortIf = null }: any = {}) {
+  const cell = feetCell(bot), check = boxCheck(bot, { cell, toward, roof }), plan = check.plan
   const mats = hard ? boxMaterials(bot, plan) : plan.map(() => null)
   let placed = 0
   const failed = []
-  for (let i = 0; i < plan.length; i++) {
-    const p = plan[i]
-    if (ctl && ctl.aborted) break
+  let why = check.ok ? null : check.why, wake
+  const interrupted = new Promise(resolve => { wake = resolve })
+  const local = { get aborted () { return !!why || !!ctl?.aborted } }
+  const stop = reason => { if (why) return; why = reason; try { bot.clearControlStates() } catch {}; wake() }
+  const guard = () => { if (ctl?.aborted) stop('прервано'); else { const reason = abortIf?.(Math.max(0, check.ms - placed * 180)); if (reason) stop(reason) } }
+  let hp = bot.health
+  const health = () => { if (bot.health < hp) stop('по мне попали во время стройки'); hp = bot.health }
+  const cancel = () => stop('прервано')
+  if (check.ok) {
+    bot.on('physicsTick', guard); bot.on('health', health); ctl?.onAbort?.push(cancel)
     try {
-      const item = mats[i] && countItem(bot, mats[i]) > 0 ? mats[i] : null
-      const r = await placeBlockAt(bot, p, { timeoutMs, item })
-      if (r.ok && !r.already) placed++
-      else if (!r.ok) failed.push(r.reason)
-    } catch (e) { failed.push(e.message) }
+      guard()
+      await Promise.race([(async () => {
+        if (local.aborted) return
+        await centerInCell(bot, 700, cell, local)
+        for (let i = 0; i < plan.length && !local.aborted; i++) {
+          const p = plan[i]
+          if (roof && i === plan.length - 2 && solidAt(bot, cell.offset(0, 2, 0))) continue
+          try {
+            guard(); if (local.aborted) break
+            const item = mats[i] && countItem(bot, mats[i]) > 0 ? mats[i] : null
+            const r = roof && i === plan.length - 2 && !solidAt(bot, p)
+              ? await jumpPlace(bot, p, { ctl: local, timeoutMs })
+              : await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, ctl: local })
+            if (local.aborted) break
+            if (r.ok && !r.already) placed++
+            else if (!r.ok) { failed.push(r.reason); why = r.reason; break }
+          } catch (e) { failed.push(e.message); why = e.message; break }
+        }
+      })(), interrupted])
+    } finally {
+      bot.removeListener('physicsTick', guard); bot.removeListener('health', health)
+      const index = ctl?.onAbort?.indexOf(cancel); if (index >= 0) ctl.onAbort.splice(index, 1)
+      try { bot.clearControlStates() } catch {}
+    }
   }
   const hardN = mats.filter(Boolean).length
-  return { placed, cell, plan, mats, hard: hardN ? mats.find(Boolean) : null, hardN, failed: failed.length ? failed : undefined, ...enclosure(bot, cell) }
+  return { placed, cell, plan, mats, hard: hardN ? mats.find(Boolean) : null, hardN, aborted: !!why || !!ctl?.aborted, why, failed: failed.length ? failed : undefined, ...enclosure(bot, cell) }
 }
 
 // Залатать то, что выломали: пройти по плану коробки и поставить недостающее.
 // В клетке стоит он — туда не ставим (сервер откажет), это дыра для удара.
-async function patch (bot, plan, { timeoutMs = 600, mats = null }: any = {}) {
+async function patch (bot, plan, { timeoutMs = 600, mats = null, ctl = null }: any = {}) {
   let placed = 0
   for (let i = 0; i < plan.length; i++) {
+    if (ctl?.aborted) break
     const p = plan[i]
     if (solidAt(bot, p)) continue
     try {
       const want = mats && mats[i]
       const item = want && countItem(bot, want) > 0 ? want : null
-      const r = await placeBlockAt(bot, p, { timeoutMs, item })
+      const r = await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, ctl })
       if (r.ok && !r.already) placed++
-    } catch {}
+      else if (!r.ok) break
+    } catch { break }
   }
   return placed
 }
@@ -343,13 +396,16 @@ function refugePlan (bot, cell, toward = null) {
 async function jumpPlace (bot, pos, { ctl = null, timeoutMs = 900 }: any = {}) {
   const { waitForBlock } = require('./build')
   const { faceAim } = require('./pick')
+  if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   if (solidAt(bot, pos)) return { ok: true, already: bot.blockAt(pos).name }
   const ref = bot.blockAt(pos.offset(0, -1, 0))
   if (!ref || ref.boundingBox !== 'block') return { ok: false, reason: 'под подпоркой нет блока' }
   const stack = pickFiller(bot, { steady: true })
   if (!stack) return { ok: false, reason: 'нечем строить' }
   try { if (!bot.heldItem || bot.heldItem.type !== stack.type) await withTimeout(bot.equip(stack, 'hand'), 2000) } catch (e) { return { ok: false, reason: e.message } }
-  if (!bot.entity.onGround) { for (let i = 0; i < 10 && !bot.entity.onGround; i++) await sleep(50) }
+  if (ctl?.aborted) return { ok: false, reason: 'прервано' }
+  if (!bot.entity.onGround) { for (let i = 0; i < 10 && !bot.entity.onGround && !ctl?.aborted; i++) await sleep(50) }
+  if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   let point = null
   try {
     bot.setControlState('jump', true)
@@ -358,10 +414,12 @@ async function jumpPlace (bot, pos, { ctl = null, timeoutMs = 900 }: any = {}) {
       if (t > 3) bot.setControlState('jump', false)
       point = faceAim(bot, ref.position, UP)
     }
-  } finally { try { bot.setControlState('jump', false) } catch {} }
+  } finally { if (!ctl?.aborted) { try { bot.setControlState('jump', false) } catch {} } }
+  if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   if (!point) { await landed(bot); return { ok: false, reason: 'в прыжке верх стены так и не попал в прицел' } }
   try {
     await bot.lookAt(point, true)
+    if (ctl?.aborted) return { ok: false, reason: 'прервано' }
     await bot._genericPlace(ref, UP, { forceLook: 'ignore', swingArm: 'right', delta: point.minus(ref.position) })
   } catch (e) { await landed(bot); return { ok: false, reason: e.message } }
   const ok = await waitForBlock(bot, pos, timeoutMs)
@@ -448,12 +506,12 @@ async function refugeBox (bot, cell, { toward = null, ctl = null, timeoutMs = 80
         await centerInCell(bot, 800, cell)
         r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady })
       }
-      // Моб вплотную у стены: стоит в её клетке или его рамка перекрыла прицел
+      // Моб вплотную у стены или крыши: стоит в её клетке или его рамка перекрыла прицел
       // (клиент в таком случае бьёт моба, а не ставит блок — «не к чему
       // прислонить», D: 5 столбов из 5 после такой коробки). Как игрок: ударить —
       // отбросит — и сразу блок в освободившуюся клетку.
-      if (!r.ok && step.kind === 'wall' && !(ctl && ctl.aborted) && /в клетке стоит|не к чему прислонить|ответа от сервера нет/.test(r.reason || '')) {
-        if (await shove(bot, step.pos)) r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady })
+      if (!r.ok && (step.kind === 'wall' || step.kind === 'roof' && refugeNeed(bot, cell)?.leans) && !(ctl && ctl.aborted) && /в клетке стоит|не к чему прислонить|ответа от сервера нет/.test(r.reason || '')) {
+        if (await shove(bot, step.pos)) r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady, ctl })
       }
       // Подпорка не встала в прыжке — ещё раз: первый прыжок бывает из
       // неотцентрованного тела или с зомби, толкнувшим в бок.
@@ -696,7 +754,7 @@ async function takeNicheBody (bot, c, plan, { ctl = null, toward = null }: any =
 }
 
 module.exports = {
-  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, enclosure, centerInCell, boxPlan, boxIn, patch, breakBlock, breakOut, siegePlan, pickFiller,
+  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, enclosure, centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, siegePlan, pickFiller,
   fullCube, openCell, refugeNeed, refugeBuildMs, refugeCell, refugePlan, jumpPlace, refugeBox, refugePatch, landed, shove, shoveNear, sinkRoof,
   nichePlan, takeNicheBody
 }

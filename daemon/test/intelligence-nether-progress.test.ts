@@ -74,6 +74,21 @@ test('Nether stage progress verifies its resources, barter receipts, or distance
   assert.equal(netherStageProgress('nether', before, after), true)
 })
 
+test('fortress exploration advances the strategy graph only with new Nether observation stops', () => {
+  const before = emptyWorld()
+  before.dimension = 'the_nether'
+  before.facts.fortress_explored = fact(4, 'observed', 0)
+  const after = structuredClone(before)
+  after.facts.fortress_explored = fact(5, 'observed', 1)
+  assert.equal(netherStageProgress('nether', before, after), true)
+  assert.equal(netherStageProgress('bastion', before, after), false)
+  after.facts.fortress_explored.value = 4
+  assert.equal(netherStageProgress('nether', before, after), false, 'the same visited stops do not postpone failure handling')
+  after.facts.fortress_explored.value = 5
+  after.dimension = 'overworld'
+  assert.equal(netherStageProgress('nether', before, after), false)
+})
+
 test('Nether supply progress rejects incidental tunnel blocks and verifies only missing usable supplies', () => {
   const before = emptyWorld()
   before.inventory = { oak_planks: 6, crafting_table: 1, stick: 3, blackstone: 64 }

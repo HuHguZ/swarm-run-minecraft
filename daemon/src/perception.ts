@@ -131,7 +131,11 @@ function stateSummary (bot, extra: any = {}) {
   const biome = biomeName(bot, p)
   const held = bot.heldItem ? bot.heldItem.name : null
   const items: any = {}
-  for (const it of bot.inventory.items()) items[it.name] = (items[it.name] || 0) + it.count
+  const bag = bot.inventory.items()
+  for (const it of bag) items[it.name] = (items[it.name] || 0) + it.count
+  const off = bot.inventory.slots?.[45]
+  if (off && bot.registry?.foodsByName?.[off.name] && !/_bucket$/.test(off.name) &&
+      !bag.some(it => it === off || it.slot === 45)) items[off.name] = (items[off.name] || 0) + off.count
   const wornNow = readWorn(bot)
   const worn = {
     head: wornNow.head ? wornNow.head.item : null,
@@ -151,8 +155,8 @@ function stateSummary (bot, extra: any = {}) {
     time: timeLabel(bot),
     isRaining: raining(bot),
     held,
-    // The header's `inventory` is slots 9..44 and reads as «что я могу
-    // потратить» — surplusPlan, craftPlan and plankReserve all count the same
+    // Spendable inventory is the bag plus edible food in the second hand.
+    // Worn gear stays separate: surplusPlan, craftPlan and plankReserve work this
     // way, so worn gear must NOT be folded into it. But leaving it out
     // entirely meant the brain never knew whether the bot was dressed, while
     // the autopilot re-dressed it every fifteen seconds and said nothing.

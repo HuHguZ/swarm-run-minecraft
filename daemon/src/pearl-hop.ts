@@ -293,7 +293,7 @@ function worth ({ walkSec, hopSec, restSec = 0, dmg, hp, hpMin = 12, hpSec = 1.5
 //   floorOk(block), avoid(feet) — фильтры места; obstacles — сущности [{pos, r}]; spread — доля разброса;
 //   jump — можно бросать в прыжке: 'stand' (на месте) или 'run' (ещё и с разбегом к посадке); с места, если
 //   долетает, иначе прыжок на месте, иначе с разбега (throw.jumpRoom: пол, потолок, не край). plan.jump — как бросать.
-function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 2, -4, 4, -7, 7, -10, 10], floorOk = null, avoid = null, obstacles = [], spread = 0.7, yTop = 30, yBot = 16, maxTries = 80, lookOk = null, jump = null }: any = {}) {
+function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 2, -4, 4, -7, 7, -10, 10], floorOk = null, avoid = null, obstacles = [], spread = 0.7, yTop = 30, yBot = 16, maxTries = 80, lookOk = null, jump = null, edgeOk = false }: any = {}) {
   maxR = maxR ?? (jump === 'run' ? 95 : 70)
   const stand = { from: { x: feet.x, y: feet.y + EYE, z: feet.z }, moved: null }
   const kinds = [null, ...(jump ? ['stand'] : []), ...(jump === 'run' ? ['run'] : [])]
@@ -328,7 +328,8 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
     if (tries >= maxTries) break
     const pre = settle(world, { x: c.x + 0.5, y: c.y + 0.3, z: c.z + 0.5 }, { floorOk, avoid })
     if (!pre.ok) { no(pre.why); continue }
-    if (pre.edge1) { no('край пустоты'); continue }
+    // edgeOk — узкое место у цели годится (арена 12.10: стрелок на гребне стены Колизея — посадка рядом всегда у края).
+    if (pre.edge1 && !edgeOk) { no('край пустоты'); continue }
     // Откуда бросать: первый вариант (с места → прыжок → разбег), который долетает и где есть место для прыжка.
     const fx = c.x + 0.5 - feet.x; const fz = c.z + 0.5 - feet.z; const fd = Math.hypot(fx, fz) || 1
     const dir = { x: fx / fd, z: fz / fd }
@@ -357,7 +358,7 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
       const st = settle(world, sim.tp, { floorOk, avoid })
       if (!st.ok) { no('посадка: ' + st.why); continue }
       if (Math.hypot(st.feet.x - (c.x + 0.5), st.feet.z - (c.z + 0.5)) > 2.5 || Math.abs(st.feet.y - c.y) > 2) { no('врезается раньше'); continue }
-      if (st.edge1) { no('край пустоты'); continue }
+      if (st.edge1 && !edgeOk) { no('край пустоты'); continue }
       const hit = pathClear(sim.path, obstacles)
       if (hit) { no('на пути ' + hit.name); continue }
       // Разброс: ±spread от предельного отклонения по поперечной и вертикальной оси.
@@ -369,7 +370,7 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
         if (!s2.tp) { bad = s2.void ? 'разброс: пустота' : 'разброс: ?'; break }
         const t2 = settle(world, s2.tp, { floorOk, avoid })
         if (!t2.ok) { bad = 'разброс: ' + t2.why; break }
-        if (t2.edge1) { bad = 'разброс: край'; break }
+        if (t2.edge1 && !edgeOk) { bad = 'разброс: край'; break }
       }
       if (bad) { no(bad); continue }
       return {
@@ -506,7 +507,13 @@ async function hopTo (bot, goal, opts: any = {}) {
     const route = planRoute(world, me, goal, { ...opts, obstacles, pearls, reserve, hp: bot.health, hpMin, dmg, hpSec, maxHops: maxHops - k })
     const ph = { plan: route.plans[0], why: 'no safe worthwhile chain', tries: route.plans.length }
     const planMs = gameClock.wall.now() - tPlan
-    if (!ph.plan) { out.stop = 'нет броска'; log(`нет броска к ${xyz(goal)} (${Math.round(rem)} бл.): ${JSON.stringify(ph.why)} за ${planMs} мс`); break }
+    if (!ph.plan) {
+      // Почему нет: разбор одного броска (причины отказа по кандидатам) — цепочка своих причин не хранит.
+      const one = planHop(world, me, goal, { ...opts, obstacles })
+      out.stop = 'нет броска'; out.why = one.why
+      log(`нет броска к ${xyz(goal)} (${Math.round(rem)} бл.): ${JSON.stringify(one.why)}, кандидатов ${one.cands ?? '?'} за ${planMs} мс`)
+      break
+    }
     const pl = ph.plan
     // opts.walkSec — время пешком, посчитанное зовущим по настоящему пути (hopgoto: A* pathfinder'а), только для
     // первого броска; без него — оценка по прямой (как было).
@@ -542,7 +549,7 @@ async function hopTo (bot, goal, opts: any = {}) {
         if (pitch == null) return null
         const sim = simulate(world, ctx.from, velOf(yaw, pitch, extra))
         const st = sim.tp ? settle(world, sim.tp, { floorOk: opts.floorOk, avoid: opts.avoid }) : null
-        if (!st || !st.ok || st.edge1 || Math.hypot(st.feet.x - pl.feet.x, st.feet.z - pl.feet.z) > 2.5) return null
+        if (!st || !st.ok || (st.edge1 && !opts.edgeOk) || Math.hypot(st.feet.x - pl.feet.x, st.feet.z - pl.feet.z) > 2.5) return null
         if (opts.lookOk && !opts.lookOk(yaw, pitch)) return null
         picked = { tp: sim.tp, feet: st.feet, ticks: sim.ticks }
         return { yaw, pitch, ticks: sim.ticks, at: pl.aim }

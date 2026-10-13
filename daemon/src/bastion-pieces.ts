@@ -211,7 +211,34 @@ function surfaceCells (name, sym) {
   surfaceCache.set(k, out)
   return out
 }
-function voteByBasalt (bot, seen, pieces = [...RAMPART_SHAPES], { top = 10, minMatch = 15, maxMissRatio = 0.25, debug = null }: any = {}) {
+function complete (steps) {
+  let next = steps.next()
+  while (!next.done) next = steps.next()
+  return next.value
+}
+function * topVotesSteps (votes, top) {
+  const best = []
+  const end = Math.trunc(Number(top) || 0)
+  top = Math.min(votes.size, Math.max(0, end < 0 ? votes.size + end : end))
+  if (top === 0) return best
+  let checked = 0
+  for (const entry of votes) {
+    // Keep the same stable descending top as sort, without allocating/sorting
+    // every rejected hypothesis in one uninterruptible CPU slice.
+    if (best.length < top || entry[1] > best[best.length - 1][1]) {
+      let at = best.length
+      while (at > 0 && best[at - 1][1] < entry[1]) at--
+      best.splice(at, 0, entry)
+      if (best.length > top) best.pop()
+    }
+    if ((++checked & 1023) === 0) yield
+  }
+  return best
+}
+function voteByBasalt (bot, seen, pieces = [...RAMPART_SHAPES], opts: any = {}) {
+  return complete(voteByBasaltSteps(bot, seen, pieces, opts))
+}
+function * voteByBasaltSteps (bot, seen, pieces = [...RAMPART_SHAPES], { top = 10, minMatch = 15, maxMissRatio = 0.25, debug = null }: any = {}) {
   const votes = new Map()
   for (const name of pieces) {
     if (!lib()[name]) continue
@@ -225,9 +252,10 @@ function voteByBasalt (bot, seen, pieces = [...RAMPART_SHAPES], { top = 10, minM
           votes.set(k, (votes.get(k) || 0) + 1)
         }
       }
+      yield
     }
   }
-  const best = [...votes.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
+  const best = yield * topVotesSteps(votes, top)
   const out = []
   for (const [k, n] of best) {
     if (n < 6) continue
@@ -238,6 +266,7 @@ function voteByBasalt (bot, seen, pieces = [...RAMPART_SHAPES], { top = 10, minM
     c.miss = v.miss
     if (debug) debug.push({ piece: c.piece.split('/').pop(), r: c.r, t: c.t, votes: n, match: v.match, miss: v.miss })
     if (v.match >= minMatch && v.miss <= maxMissRatio * v.match) out.push(c)
+    yield
   }
   return out
 }
@@ -340,7 +369,10 @@ function goldPiecesFromStart (S) {
   return out
 }
 // Голосование по видимым блокам символа sym (b — базальт, G — золото) за сдвиг кусков pieces, верх — проверка глазами.
-function voteBy (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMissRatio = 0.25, minVotes = 6, radius = 56, debug = null }: any = {}) {
+function voteBy (bot, seen, pieces, sym, opts: any = {}) {
+  return complete(voteBySteps(bot, seen, pieces, sym, opts))
+}
+function * voteBySteps (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMissRatio = 0.25, minVotes = 6, radius = 56, debug = null }: any = {}) {
   const votes = new Map()
   for (const name of pieces) {
     if (!lib()[name]) continue
@@ -355,9 +387,10 @@ function voteBy (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMissRatio
           votes.set(k, (votes.get(k) || 0) + 1)
         }
       }
+      yield
     }
   }
-  const best = [...votes.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
+  const best = yield * topVotesSteps(votes, top)
   const out = []
   for (const [k, n] of best) {
     if (n < minVotes) continue
@@ -368,6 +401,7 @@ function voteBy (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMissRatio
     c.miss = v.miss
     if (debug) debug.push({ piece: piece.split("/").slice(-2).join("/"), r: c.r, t: c.t, votes: n, match: v.match, miss: v.miss })
     if (v.match >= minMatch && v.miss <= maxMissRatio * v.match) out.push(c)
+    yield
   }
   return out
 }
@@ -375,4 +409,4 @@ function voteBy (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMissRatio
 const BASALT_ANCHORS = ['bridge/bridge_pieces/bridge', 'bridge/starting_pieces/entrance', 'hoglin_stable/ramparts/ramparts_1', 'hoglin_stable/ramparts/ramparts_2', 'hoglin_stable/ramparts/ramparts_3', 'treasure/ramparts/mid_wall_main', 'treasure/ramparts/mid_wall_side', 'treasure/ramparts/top_wall']
 const GOLD_ANCHORS = ['bridge/bridge_pieces/bridge', 'treasure/bases/centers/center_0', 'treasure/bases/centers/center_1', 'treasure/bases/centers/center_2', 'treasure/bases/centers/center_3']
 
-module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, surfaceCells, START_REL, startsFrom, goldPiecesFromStart, voteBy, BASALT_ANCHORS, GOLD_ANCHORS }
+module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL, startsFrom, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS, GOLD_ANCHORS }

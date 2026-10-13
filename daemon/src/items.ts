@@ -499,7 +499,7 @@ function bestWeapon (bot) {
     const axe = items.find(i => i.name === `${tier}_axe`)
     if (axe) return axe
   }
-  return null
+  return items.find(i => /^(mace|trident)$|_spear$/.test(i.name)) || null
 }
 
 // ---------------------------------------------------------------- inventory

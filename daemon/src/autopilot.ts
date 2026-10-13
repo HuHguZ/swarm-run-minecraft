@@ -336,7 +336,7 @@ class Autopilot {
 
   async tick () {
     const bot = this.session.bot
-    if (!bot || !bot.entity || this.busy) return
+    if (!bot || !bot.entity || this.busy || this.session.bootstrapPaused) return
     this.session.tactics?.attach(bot)
     this.hookTemper(bot)
     this.hookDamage(bot)
@@ -587,7 +587,9 @@ class Autopilot {
   // Being beaten to death while the brain is between thoughts is not a
   // decision worth waking anyone up for. Run first, explain later.
   async fleeIfDying (bot) {
-    if (this.bodyBusy() || this.fleeing) return
+    // An immediate bite owns the mouth; the tactical arbiter can still preempt it for danger.
+    // This idle, priority-1 flight otherwise cancels every 32-tick bite with take().
+    if (this.bodyBusy() || this.fleeing || this.session.eating && this.session.tactics?.enabled?.()) return
     const hp = bot.health ?? 20
 
     const me = bot.entity.position

@@ -41,6 +41,15 @@ async function wait (s, ctl) {
 }
 function run (s, ctl, fn) { return context.run({ session: s, ctl }, fn) }
 function cancel (s) { state(s).active?.ctl.abort() }
+// The aborted worker's finally is fenced. Its intent must release the physical
+// keys outside that context, but never touch a replacement skill or defence.
+function releaseIntent (s, ctl) {
+  if (s.current?.ctl !== ctl || state(s).active) return
+  context.exit(() => {
+    try { s.bot?.pathfinder?.setGoal(null) } catch {}
+    try { s.bot?.clearControlStates?.() } catch {}
+  })
+}
 function mark (s, how) {
   const a = state(s).active
   if (!a || a.firstAction != null || context.getStore()?.reflex !== a) return
@@ -63,9 +72,14 @@ function take (s) {
 }
 // Set the promise BEFORE calling any bot API: a nested damage/physics callback
 // sees the same lock. Neither current nor its ctl is replaced/aborted.
+// Приказной уворот/побег (арена 12.10: рывок от булавы и зелья, джук от лука, ветер, жемчуг, элитры, укрытие) — уже ответ
+// на угрозу. Неаварийный рефлекс (щит и бой тактики, жест, сторож) посреди него отбирал руки и ноги: рывок вставал
+// (mace-7: «reflex: действие прервано», бот под булавой не сдвинулся). Аварийный (падение, лава) — как раньше.
+const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
 function start (s, fn, { triggerAt = gameClock.now(), source = 'melee', owner = 'Tactical', priority = 2, preempt = false, immediate = false }: any = {}) {
   install(s)
   const st = state(s)
+  if (owner !== 'Emergency' && s.current && !s.current.ctl?.aborted && COMMANDED_ESCAPE.test(s.current.name || '')) return Promise.resolve({ acted: false, cancelled: true, why: 'идёт уворот по приказу' })
   if (st.active) {
     if (!preempt || st.active.priority > priority) return s.reflex
     st.active.ctl.abort()
@@ -77,7 +91,7 @@ function start (s, fn, { triggerAt = gameClock.now(), source = 'melee', owner = 
   s.reflex = done
   const cleanup = result => {
     if (st.active !== a) return
-    context.run({ session: s, reflex: a }, () => take(s))
+    if (s.bot === b) context.run({ session: s, reflex: a }, () => take(s))
     st.pausedMs += gameClock.now() - a.startedAt
     st.active = null; s.reflex = null
     release(result)
@@ -270,4 +284,4 @@ function install (s) {
     }
   }
 }
-module.exports = { on, run, wait, start, install, cancel, mark, clock, owner, emergency }
+module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency }

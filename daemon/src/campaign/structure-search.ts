@@ -1,11 +1,13 @@
 export interface SearchPosition { x: number; y?: number; z: number }
 export interface SearchStructure { kind: string; done?: boolean; at?: SearchPosition }
+export interface SearchDiscovery { found?: string; at?: SearchPosition }
 export interface StructureSearchPort {
   now(): number
   position(): SearchPosition | undefined
   scan(): Promise<void>
   list(): Promise<SearchStructure[]>
-  explore(direction: string, seconds: number): Promise<void>
+  explore(direction: string, seconds: number): Promise<SearchDiscovery | void>
+  loot?(point: SearchPosition, seconds: number): Promise<boolean>
   move(point: SearchPosition, seconds: number): Promise<void>
   interrupted(): boolean
   fact(name: string, value: boolean | SearchPosition): void
@@ -22,6 +24,7 @@ export async function scoutStructures(port: StructureSearchPort, spentMs: number
   const remaining = () => budgetMs - spentMs - (port.now() - started)
   let stalled = 0
   let found = false
+  const attempted = new Set<string>()
   for (let segment = 0; segment < 12 && remaining() > 0 && !port.interrupted(); segment++) {
     await port.scan()
     const entries = await port.list()
@@ -33,12 +36,27 @@ export async function scoutStructures(port: StructureSearchPort, spentMs: number
     if (found || remaining() <= 0 || port.interrupted()) break
     const direction = directions[segment % directions.length]!
     const before = port.now()
-    const origin = port.position()
-    await port.explore(direction.name, Math.min(30, remaining() / 1000))
-    if (remaining() > 0 && !port.interrupted() && port.now() - before < 1000 && origin) {
+    const position = port.position()
+    const origin = position && { ...position }
+    const progressed = () => {
+      const current = port.position()
+      return origin && current
+        ? current.x !== origin.x || current.z !== origin.z || origin.y !== undefined && current.y !== undefined && current.y !== origin.y
+        : port.now() - before >= 1000
+    }
+    const discovery = await port.explore(direction.name, Math.min(30, remaining() / 1000))
+    if (discovery && /^(chest|trapped_chest|barrel)$/.test(discovery.found || '') && discovery.at && port.loot && remaining() > 0 && !port.interrupted()) {
+      const at = discovery.at
+      const key = `${at.x},${at.y},${at.z}`
+      if ([at.x, at.y, at.z].every(Number.isFinite) && !attempted.has(key)) {
+        attempted.add(key)
+        if (await port.loot(at, Math.min(90, remaining() / 1000))) { found = true; break }
+      }
+    }
+    if (remaining() > 0 && !port.interrupted() && !progressed() && origin) {
       await port.move({ x: origin.x + direction.x * 60, z: origin.z + direction.z * 60 }, Math.min(30, remaining() / 1000))
     }
-    if (port.now() - before < 1000) stalled++
+    if (!progressed()) stalled++
     else stalled = 0
     if (stalled >= 3) break
   }

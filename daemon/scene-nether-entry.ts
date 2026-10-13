@@ -1,4 +1,9 @@
 interface Position { x: number; y: number; z: number }
+
+export function entryDied(state: { dimension?: string; health?: number }, receipt: { code?: string; by?: { type?: string } } | null, deaths: number): boolean {
+  return state.health !== undefined && state.health <= 0 || receipt?.code === 'DIED' || receipt?.by?.type === 'death' || deaths > 0
+}
+
 interface PreparationPort {
   call(method: string, params?: Record<string, unknown>): Promise<unknown>
   creative(): Promise<void>

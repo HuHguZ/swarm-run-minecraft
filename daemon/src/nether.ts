@@ -2,7 +2,7 @@
 const gameClock = require('./game-clock')
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
-const { xyz, stuckGuard, unstick } = require('./movement')
+const { xyz, stuckGuard, unstick, gotoPath } = require('./movement')
 const { placeBlockAt, pickFiller, withTimeout, waitForBlock } = require('./build')
 const { itemNamed, countOf, equipBestTool, missingHarvestTool } = require('./items')
 const worlds = require('./worlds')
@@ -549,17 +549,21 @@ async function walkNear (session, ctl, target, range = 1) {
   const bot = session.bot
   if (bot.entity.position.distanceTo(target.offset(0.5, 0, 0.5)) <= range + 0.5) return { ok: true, walked: false }
   const guard = stuckGuard(bot, ctl)
+  const path = gotoPath(bot, new goals.GoalNear(target.x, target.y, target.z, range))
   try {
     await Promise.race([
-      bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, range)),
+      path,
       guard.promise
     ])
+    if (bot.entity.position.distanceTo(target.offset(0.5, 0, 0.5)) > range + 0.5) return { ok: false, walked: true, error: 'pathfinder не дошёл к цели' }
     return { ok: true, walked: true }
   } catch (e) {
+    path.cancel?.()
     try { bot.pathfinder.setGoal(null) } catch {}
     await unstick(bot)
     return { ok: false, walked: true, error: e.message }
   } finally {
+    path.cancel?.()
     guard.stop()
   }
 }
@@ -1355,11 +1359,28 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
     return null
   }
   const out = (ok, extra: any = {}) => ({ ok, dug, moved, placed, lava: lava || undefined, at: xyz(bot.entity.position), ...extra })
+  const settle = async c => {
+    // dig() рисует local air раньше сервера. Видимый падающий блок ещё может
+    // заполнить клетку; дождаться оседания и перечитать, не шагать в прогноз.
+    while (true) {
+      if (ctl.aborted) return 'прервано'
+      if (gameClock.now() >= deadline) return 'время вышло'
+      const heat = hot(c)
+      if (heat) { if (/lava/.test(heat)) lava++; return `у забоя ${heat}` }
+      if (bot.blockAt(c)?.boundingBox !== 'empty' || !require('./perception/eyes').entities(bot, { radius: REACH + 1 }).some(e =>
+        e.seen && e.name === 'falling_block' && e.pos && Math.floor(e.pos.x) === c.x && Math.floor(e.pos.z) === c.z && e.pos.y >= c.y)) return null
+      await sleep(50, ctl)
+    }
+  }
   try { bot.pathfinder.setGoal(null) } catch {}
   for (let s = 0; s < maxSteps; s++) {
     if (ctl.aborted) return out(false, { why: 'прервано' })
     if (gameClock.now() > deadline) return out(false, { why: 'время вышло' })
     const f = bot.entity.position.floored()
+    // On a low collision floor (soul sand), floored feet name the support
+    // itself. Start the tunnel above its actual top instead of digging it out.
+    const support = require('./navigation/geometry').supportAt(bot, bot.entity.position, .04)
+    if (support) f.y = Math.ceil(support.top)
     const ddx = target.x - f.x
     const ddz = target.z - f.z
     if (Math.abs(ddx) <= 1 && Math.abs(ddz) <= 1) return out(true)
@@ -1393,6 +1414,12 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
         for (const c of cells) {
           // Гравий сыплется сверху — до четырёх раз в ту же клетку.
           for (let k = 0; k < 4 && !err; k++) {
+            if (ctl.aborted) return out(false, { why: 'прервано' })
+            if (gameClock.now() >= deadline) return out(false, { why: 'время вышло' })
+            const heat = hot(c)
+            if (heat) { if (/lava/.test(heat)) lava++; err = `у забоя ${heat}`; break }
+            err = await settle(c)
+            if (err) break
             const b = bot.blockAt(c)
             if (!b || (b.boundingBox === 'empty' && !/fire/.test(b.name))) break
             // Спавнер не ломать: штрек к залу блейзов (fortress climbTo) и к комнате крепости шёл прямо на него.
@@ -1400,14 +1427,23 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
             // Кирпич с чешуйницей не ломать: выпущенная зовёт соседних (ферма,
             // штрек к комнате крепости A — «slain by Silverfish»).
             if (/^infested_/.test(b.name)) { err = `${b.name} — там чешуйница`; break }
-            const problem = missingHarvestTool(bot, b, mcData)
-            if (problem) { err = problem; break }
-            try { await equipBestTool(bot, b); await bot.dig(b, true); dug++ } catch (e) { err = e.message }
-            await sleep(60)
+            const cut = await clearCells(session, ctl, [c])
+            dug += cut.dug
+            await sleep(60, ctl)
+            err = await settle(c)
+            if (err) break
+            const remaining = bot.blockAt(c)
+            if (!cut.stopped && remaining && /^(gravel|sand|red_sand)$/.test(remaining.name)) cut.stopped = `${b.name} остался на ${c.x},${c.y},${c.z} после копки`
+            if (cut.stopped) {
+              const refilled = cut.dug > 0 && cut.stopped === `${b.name} остался на ${c.x},${c.y},${c.z} после копки` &&
+                remaining && /^(gravel|sand|red_sand)$/.test(remaining.name)
+              if (!refilled || k === 3) err = cut.stopped
+            }
           }
           if (err) break
         }
         if (err) { why = err; continue }
+        if (ctl.aborted) return out(false, { why: 'прервано' })
         // Вскрыли лаву копкой — назад не лезем.
         const after = cells.map(hot).find(h => h && /lava/.test(h))
         if (after) { lava++; why = `вскрыл ${after}`; continue }
@@ -1570,9 +1606,10 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
   const last = async () => {
     const guard = stuckGuard(bot, ctl)
     let timer = null
+    const path = gotoPath(bot, xz ? new goals.GoalNearXZ(target.x, target.z, range) : new goals.GoalNear(target.x, target.y, target.z, range))
     try {
       await Promise.race([
-        bot.pathfinder.goto(xz ? new goals.GoalNearXZ(target.x, target.z, range) : new goals.GoalNear(target.x, target.y, target.z, range)),
+        path,
         guard.promise,
         new Promise<any>((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), Math.max(1000, Math.min(60000, deadline - gameClock.now()))) })
       ])
@@ -1583,6 +1620,7 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
       try { bot.pathfinder.setGoal(null) } catch {}
       return { ok: false, error: e.message }
     } finally {
+      path.cancel?.()
       guard.stop()
       if (timer) gameClock.clearTimeout(timer)
     }
@@ -1734,9 +1772,14 @@ async function enter (session, ctl, p: any = {}) {
     }
   }
   let spot = null
+  let climbTried = false
   for (const s of spots.slice(0, 4)) {
     if (ctl.aborted || gameClock.now() > deadline) break
-    await walkNear(session, ctl, s.pos, 0)
+    const approach = await walkNear(session, ctl, s.pos, 0)
+    if (!approach.ok && !climbTried && s.pos.y - bot.entity.position.y > 3 && !ctl.aborted) {
+      climbTried = true
+      base.approach = await walkToward(session, ctl, s.pos, deadline, { range: 0 })
+    }
     if (sameCell(bot.entity.position, s.pos)) { spot = s; break }
   }
   if (!spot) {

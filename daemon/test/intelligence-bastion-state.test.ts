@@ -52,7 +52,7 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17) 
       execute: skill => executeStrategy({ skill, params: {} }, new AbortController().signal), recall: readMemory,
       observation: intelligenceObservation, nether: () => stageRun('nether')(), fact: graphFact, pearlGoal: eyesWant,
       spent: () => { for (const b of known.bastions) bState(b).spent = true } };
-    module.exports.blockSupply = () => { replenishNetherSupply = async () => ({ ready: false, interrupted: false, reason: 'visible wood unavailable' }) };
+    module.exports.blockSupply = () => { sit.pickLeft = 0; replenishNetherSupply = async () => ({ ready: false, interrupted: false, reason: 'visible wood unavailable' }) };
     module.exports.deferBarter = () => { bState(known.bastions[0]).barterUntil = gameClock.now() + 60000 };
     module.exports.deferMining = () => { for (const b of known.bastions) deferBastionMining(b) };
     module.exports.active = () => activeBastion();
@@ -73,6 +73,8 @@ test('an unsuccessful tool refill cannot launch real bastion excavation or exhau
   const { context, state, requests } = campaignFixture()
   delete state.inventory.oak_planks
   delete state.inventory.crafting_table
+  delete state.inventory.iron_pickaxe
+  delete state.inventory.stone_pickaxe
   context.module.exports.blockSupply()
   await context.module.exports.run()
   assert.equal(requests.filter(request => request.method === 'bastion').length, 0)

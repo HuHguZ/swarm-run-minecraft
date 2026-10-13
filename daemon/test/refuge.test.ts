@@ -10,6 +10,7 @@ const Block = require('prismarine-block')(registry)
 const mcData = require('minecraft-data')('1.21.11')
 const survival = require('../src/survival')
 const fortify = require('../src/fortify')
+const hold = require('../src/survival/hold-out')
 
 const blockOf = (name, pos) => {
   const b = Block.fromStateId(registry.blocksByName[name].defaultState, 0)
@@ -54,6 +55,44 @@ const look = s => survival.refugeLook(s)
 const choose = s => survival.chooseRefuge(look(s))
 const ZOMBIES = [['zombie', 6.5, 0.5], ['zombie', -5.5, 0.5], ['zombie', 0.5, 6.5], ['zombie', 0.5, -5.5]]
 const KIT = [['stone_pickaxe', 1], ['cobblestone', 10], ['cooked_mutton', 4]]
+
+test('видимые гаст, ифрит и арбалетчик за 16 блоками запрещают открытый столб в своей дальности', () => {
+  for (const [name, distance] of [['ghast', 45], ['blaze', 30], ['pillager', 24]] as const) {
+    const s = scene({ dim: 'the_nether', floor: 'netherrack', mobs: [[name, distance + 0.5, 0.5]], items: KIT })
+    const a = look(s)
+    assert.equal(a.shooters, 1, `${name} виден и может стрелять`)
+    assert.equal(a.walkers, 0, 'дальний стрелок не становится ближним преследователем')
+    assert.equal(a.pillar, null)
+    assert.notEqual(survival.chooseRefuge(a).how, 'pillar')
+  }
+})
+
+test('дальний враг за стеной, вне своей дальности и дальний ходячий не меняют выбор укрытия', () => {
+  const hidden = scene({ mobs: [['ghast', 45.5, 0.5]], items: KIT })
+  hidden.bot.world.raycast = () => blockOf('stone', new Vec3(5, 64, 0))
+  assert.equal(look(hidden).foes, 0)
+  for (const [name, distance] of [['ghast', 65], ['blaze', 49], ['pillager', 33], ['zombie', 30]] as const) {
+    const a = look(scene({ mobs: [[name, distance + 0.5, 0.5]], items: KIT }))
+    assert.equal(a.foes, 0, `${name} в ${distance} блоках сейчас не достаёт`)
+  }
+})
+
+test('holdOut покидает открытое место и столб при видимом гасте в 45 блоках до еды', async () => {
+  for (const [kind, why] of [['pillar', 'breached'], ['open', 'contact']]) {
+    const s = scene({ dim: 'the_nether', mobs: [['ghast', 45.5, 0.5]], items: [], food: 10 })
+    const r = await hold.holdOut(s, { aborted: false }, { kind, minHp: 18, deadline: require('../src/game-clock').now() + 1000, note () {} })
+    assert.equal(r.why, why)
+    assert.deepEqual(r.ate, [])
+  }
+})
+
+test('при выходе из укрытия видимый дальний гаст опасен; гаст за стеной не читается сквозь неё', () => {
+  const s = scene({ hp: 20, mobs: [['ghast', 45.5, 0.5]] })
+  const at = s.bot.entity.position.floored()
+  assert.match(survival.outsideDanger(s.bot, at) || '', /стрелок/)
+  s.bot.world.raycast = () => blockOf('stone', new Vec3(5, 64, 0))
+  assert.equal(survival.outsideDanger(s.bot, at), null)
+})
 
 test('зомби рядом, 10 блоков на открытом месте — коробка, и оценка укладывается в 50 мс', () => {
   const s = scene({ mobs: ZOMBIES, items: KIT })
@@ -223,4 +262,51 @@ test('снаружи опасно: двое ходячих в 10 бл., стре
   night.bot.time = { timeOfDay: 15000 }
   assert.equal(survival.outsideDanger(night.bot, at), null)
   assert.match(survival.outsideDanger(night.bot, at, { untilDawn: true }) || '', /рассвета/)
+})
+
+function neutralScene (name = 'piglin', { angry = false, hit = false, expired = false }: any = {}) {
+  const s: any = scene({ dim: 'the_nether', hp: 10, items: KIT, mobs: [[name, 0.5, 1.7, 65]] })
+  const e = s.bot.entities[10]
+  const keys = registry.entitiesByName[name].metadataKeys
+  e.metadata[keys.indexOf(name === 'enderman' ? 'creepy' : 'mob_flags')] = angry ? (name === 'enderman' ? true : 4) : 0
+  if (hit) s.lastAttacker = { id: e.id, at: require('../src/game-clock').now() - (expired ? 21000 : 0), how: 'damage_event' }
+  return s
+}
+
+test('напавший пиглин участвует в расчёте коробки: близость, ETA и отход до стен', () => {
+  const s = neutralScene('piglin', { angry: true })
+  const a = look(s)
+  assert.equal(a.nearest?.name, 'piglin')
+  assert.equal(a.foeClose, true)
+  assert.equal(survival.outrun(a, 'box'), true)
+})
+
+test('спокойный пиглин без золота не становится преследователем в расчёте укрытия', async () => {
+  const s = neutralScene()
+  const a = look(s)
+  assert.equal(a.nearest, null)
+  assert.equal(a.foeClose, false)
+  assert.equal(survival.outrun(a, 'box'), false)
+  assert.equal(survival.outsideDanger(s.bot, new Vec3(0, 64, 0)), null)
+  assert.equal(await hold.waitClear(s, { aborted: false }, new Vec3(0, 64, 0), { deadline: 0 }), true)
+})
+
+test('подтверждённый нападающий учитывается без флага агрессии, другой и давний пиглин — нет', () => {
+  const s = neutralScene('piglin', { hit: true })
+  assert.equal(look(s).nearest?.name, 'piglin')
+  s.lastAttacker.id = 11
+  assert.equal(look(s).nearest, null)
+  assert.equal(look(neutralScene('piglin', { hit: true, expired: true })).nearest, null)
+})
+
+test('агрессивный пиглин остаётся опасным у выхода и после исчерпания ожидания', async () => {
+  const s = neutralScene('piglin', { angry: true })
+  const at = new Vec3(0, 64, 0)
+  assert.match(survival.outsideDanger(s.bot, at) || '', /ходячих 1/)
+  assert.equal(await hold.waitClear(s, { aborted: false }, at, { deadline: 0 }), false)
+})
+
+test('злой эндермен учитывается в укрытии по видимому creepy, спокойный — нет', () => {
+  assert.equal(look(neutralScene('enderman', { angry: true })).nearest?.name, 'enderman')
+  assert.equal(look(neutralScene('enderman')).nearest, null)
 })

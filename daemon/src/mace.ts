@@ -367,21 +367,32 @@ function burnAt (bot, pos) {
   }
   return false
 }
-function landing (bot, control) {
+function landing (bot, control, { maxTicks = 60, observed = false, arena = null }: any = {}) {
   try {
     const sim = (bot._ndSimOrig || bot.physics.simulatePlayer).bind(bot.physics)
-    const world = { getBlock: (p) => bot.blockAt(p, false) }
+    const view = observed ? require('./pvp/search').observedCollision(bot) : bot
+    const world = { getBlock: (p) => view.blockAt(p, false) }
     const st = edges.stateOf(bot, control)
-    for (let t = 0; t < 60; t++) {
+    for (let t = 0; t < maxTicks; t++) {
       sim(st, world)
+      if (arena && (Math.abs(st.pos.x - arena.x) + .3 > arena.r || Math.abs(st.pos.z - arena.z) + .3 > arena.r || st.pos.y <= (arena.killY ?? -64))) return null
       if (st.isInLava) return { at: st.pos, burn: true, t }
-      if (st.onGround) return { at: st.pos, burn: burnAt(bot, st.pos), t }
+      if (st.onGround) return { at: st.pos, burn: burnAt(bot, st.pos), t, landed: true }
     }
-    return { at: st.pos, burn: false, t: 60 }
+    return { at: st.pos, burn: false, t: maxTicks, landed: false }
   } catch { return null }
 }
 const NO_KEYS = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 const AIR_KEYS = [{}, { forward: true }, { back: true }, { left: true }, { right: true }, { forward: true, left: true }, { forward: true, right: true }, { back: true, left: true }, { back: true, right: true }].map(k => ({ ...NO_KEYS, ...k }))
+function fallCost(bot, at, peak) {
+  const floor = bot.blockAt(at.offset(0, -.01, 0).floored())
+  if (!floor) return Infinity
+  const dm = require('./pvp/damage-model'), read = require('./read')
+  const worn = [5, 6, 7, 8].map(s => bot.inventory.slots[s]).filter(Boolean).map(it => ({ name: it.name, ench: { protection: read.enchLevel(bot, it, 'protection'), feather_falling: read.enchLevel(bot, it, 'feather_falling') } }))
+  const resistance = bot.registry?.effectsByName?.resistance
+  const raw = require('./navigation/landing').landingDamage(floor, Math.max(0, peak - at.y), bot.entity.attributes)
+  return dm.afterDefense(raw, 'fall', dm.defenseOf(worn, { resistance: bot.entity.effects?.[resistance?.id]?.amplifier ?? -1 }))
+}
 
 // Паутина в рамке тела (ноги и голова, четыре угла) — prismarine ставит
 // isInWeb по тем же клеткам.
@@ -533,6 +544,7 @@ function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any) {
         // 2026-09-26: второй заряд стоя после неудачного взлёта; увёл посадку
         // из огня/лавы или не смог.
         retries: st.retries || undefined,
+        rebounds: st.rebounds || undefined,
         burnDodge: st.burnDodge || undefined,
         burnNoWay: st.burnNoWay || undefined
       }
@@ -595,10 +607,13 @@ function smashPlan (bot, e, { minRoom = 5 }: any = {}) {
 // бонус растёт с высотой. Своей скоростью по вертикали и сносом по
 // горизонтали считаем, где окажемся; клавиши — относительно взгляда на него.
 // Без спринта: спринт снимает крит.
-function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e) }: any = {}) {
+function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null }: any = {}) {
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
     let peak = bot.entity.position.y
+    let fallPeak = peak, endAt = t0 + maxMs, rebounding = false, choiceAt = 0, relocation = null
+    const hits = []
+    const burst = chain && require('./read').enchLevel(bot, findItem(bot, 'mace'), 'wind_burst') > 0
     let hit = null
     let done = false
     let lastYaw = bot.entity.yaw
@@ -637,7 +652,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
       if (bot._ndDescend === mark) bot._ndDescend = null
       bot.removeListener('physicsTick', onT)
       for (const k of KEYS) set(k, false)
-      resolve({ peak, hit, why, ms: gameClock.now() - t0 })
+      resolve({ peak, hit: hits[0] || hit, hits, why, relocated: !!relocation, ms: gameClock.now() - t0 })
     }
     const onT = () => {
       try {
@@ -646,9 +661,11 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         const b = bot.entity
         const p = b.position
         if (p.y > peak) peak = p.y
-        if (b.onGround && gameClock.now() - t0 > 120) return finish(hit ? 'сел после удара' : 'сел')
+        fallPeak = Math.max(fallPeak, p.y)
+        // The landing packet may precede Wind Burst by several server ticks.
+        if (b.onGround && gameClock.now() - t0 > 120 && !(hit && burst && gameClock.now() - hit.at < 500)) return finish(hit ? 'сел после удара' : 'сел')
         if (b.isInWater) return finish('в воде')
-        if (gameClock.now() - t0 > maxMs) return finish('долго')
+        if (gameClock.now() > endAt || chain?.deadline && gameClock.now() >= chain.deadline) return finish('долго')
         const v = b.velocity
         const top = floorTop(bot, p)
         // Посадка в лаву или огонь (2026-09-26): он вылил лаву или поджёг
@@ -664,6 +681,32 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
           else for (const k of KEYS) set(k, false)
           const hp = telemetryHp(e)
           if (hp != null && (hit.hpMin == null || hp < hit.hpMin)) hit.hpMin = hp
+          if (!burst || v.y <= .15 || gameClock.now() - hit.at > 700) return
+          rebounding = true; fallPeak = p.y; hit = null; choiceAt = 0
+          endAt = Math.min(chain.deadline ?? Infinity, gameClock.now() + maxMs)
+          if (stats) stats.rebounds = (stats.rebounds || 0) + 1
+        }
+        if (rebounding && gameClock.now() >= choiceAt) {
+          choiceAt = gameClock.now() + 200
+          const next = chain.choose(fallPeak)
+          if (next) {
+            e = next.entity; vel = next.vel || (() => ({ x: 0, y: 0, z: 0 })); relocation = null
+            chain.onTarget?.(next)
+          } else {
+            e = null
+            let best = null
+            for (const keys of AIR_KEYS) {
+              const l = landing(bot, keys, { maxTicks: 120, observed: true, arena: chain.arena })
+              if (!l?.landed || l.burn) continue
+              const damage = fallCost(bot, l.at, fallPeak)
+              const score = l.at.y * 2 - damage * 8 - (chain.home ? l.at.distanceTo(new Vec3(chain.home.x, chain.home.y, chain.home.z)) : 0)
+              if (damage < (bot.health ?? 20) - 4 && (!best || score > best.score)) best = { keys, score, at: l.at }
+            }
+            relocation = best
+          }
+        }
+        if (!e) {
+          for (const k of KEYS) set(k, !!relocation?.keys[k])
           return
         }
         if (!e.isValid) {
@@ -699,7 +742,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
         if (burn && burn.keys) applyBurn()
         // Удар: падаем, высота падения > 1.5, достаём — и дальше не будет
         // лучше: на следующем тике земля или он вне руки.
-        const fall = peak - p.y
+        const fall = fallPeak - p.y
         const eye = pick.eyeOf(bot)
         const rNow = reachFrom(eye, e, bot)
         const pNext = p.plus(v)
@@ -718,6 +761,8 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
               if (swap && sh.swapped) bot.setQuickBarSlot(sh.cur)
               hit.swapped = swap && sh.swapped
               hit.stun = sh.stun
+              hit.target = e.username || e.name; hits.push(hit)
+              if (burst) endAt = Math.max(endAt, Math.min(chain.deadline ?? Infinity, hit.at + 700))
             } catch {}
           }
           bot._ndSmashNow = doHit
@@ -749,7 +794,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
 // ушёл) — заряд под ноги, чуть за спину: всплеск в 0.25 над полом, толчок «от
 // центра к глазам» — вверх и немного к нему.
 // stillOk() — пока копится заряд булавы, он не ушёл и не поднял щит.
-async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e) }: any = {}) {
+async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e), chain = null }: any = {}) {
   const out: any = { launched: false, hit: false, swung: false, note: '' }
   install(bot)
   const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
@@ -873,12 +918,13 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
   if (!launched) { bot._ndWind = null; await restoreOff(); out.note = 'булава: всплеск не поднял (' + diagText(dg) + ')'; out.why = diagText(dg); return out }
   out.launched = true
   if (stats) stats.launched++
-  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp })
+  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp, chain })
   const peak = r.peak - y0
   out.peak = Math.round(peak * 100) / 100
   if (stats) stats.peaks.push(out.peak)
   out.hit = !!r.hit
   out.swung = !!r.hit
+  out.hits = r.hits; out.relocated = r.relocated
   if (r.hit) {
     await sleep(200)
     out.fall = r.hit.fall
@@ -888,7 +934,7 @@ async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = 
     // сытости возвращает по 1 хп в 10 тиков — берём самое низкое).
     const hpMin = r.hit.hpMin != null ? r.hit.hpMin : telemetryHp(e)
     out.dealt = theirHp0 != null && hpMin != null ? Math.max(0, theirHp0 - hpMin) : null
-    if (stats) { stats.smashHits++; if (out.dealt != null) stats.dealt.push(out.dealt) }
+    if (stats) { stats.smashHits += r.hits?.length || 1; if (out.dealt != null) stats.dealt.push(out.dealt) }
   }
   await sleep(150)
   out.self = Math.max(0, hpSelf0 - (bot.health ?? 20))
@@ -1039,5 +1085,5 @@ module.exports = {
   // utility.js (2026-09-26): удочка, трезубец — тот же «после пакета этого тика».
   afterPacket,
   // Посадка в огонь (прогон физики до земли) — для сцены try-burnland.js.
-  landing, burnAt, AIR_KEYS, NO_KEYS
+  landing, burnAt, fallCost, AIR_KEYS, NO_KEYS
 }

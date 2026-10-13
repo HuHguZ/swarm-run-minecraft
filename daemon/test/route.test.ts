@@ -136,13 +136,13 @@ test('скан копии v2: руины по сундуку, руины под 
   assert.ok(!p2.steps.some(s => s.id === 'ruin'), 'руины под водой — мимо')
 })
 
-test('голем: место для столба — ровно в 2 бл. вокруг; бугор рядом — столб 4 или мимо', () => {
+test('голем: столб учитывает бугор и настоящий путь, а недоступная стена не делает место опасным', () => {
   const { golemTopNear, golemSpotNear } = require('../src/fauna')
   const blocks = new Map()
   const put = (x, y, z, name) => blocks.set(`${x},${y},${z}`, { name, boundingBox: name === 'air' ? 'empty' : 'block' })
   for (let x = -8; x <= 8; x++) for (let z = -8; z <= 8; z++) { put(x, 63, z, 'grass_block'); for (let y = 64; y <= 72; y++) put(x, y, z, 'air') }
   const bot: Record<string, any> = { entity: { position: new Vec3(0.5, 64, 0.5) }, blockAt: p => blocks.get(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`) || null }
-  const golem = { position: new Vec3(3.5, 64, 0.5) }
+  const golem = { name: 'iron_golem', width: 1.4, height: 2.7, position: new Vec3(3.5, 64, 0.5) }
   assert.strictEqual(golemTopNear(bot, new Vec3(1, 64, 0)), 64)
   const spot = golemSpotNear(bot, golem)
   assert.ok(spot, 'на ровном есть место')
@@ -151,10 +151,14 @@ test('голем: место для столба — ровно в 2 бл. во�
   // Бугор в 2 клетках от клетки столба — голем на нём на блок выше.
   put(3, 64, 2, 'stone')
   assert.strictEqual(golemTopNear(bot, new Vec3(1, 64, 2)), 65)
-  // Стена вокруг (2 высоты) — места нет.
+  // Через отдельные стены высотой 2 голем не шагает; свободная клетка остаётся
+  // безопасным местом для столба 3, пока к верху стены нет настоящих ступеней.
   put(3, 64, 2, 'air')
   for (let x = -8; x <= 8; x++) for (let z = -8; z <= 8; z++) if ((x + z) % 2 === 0) { put(x, 64, z, 'stone'); put(x, 65, z, 'stone') }
-  assert.strictEqual(golemSpotNear(bot, golem), null)
+  const betweenWalls = golemSpotNear(bot, golem)
+  assert.ok(betweenWalls, 'непроходимая стена не требует ждать неизменного голема')
+  assert.strictEqual(golemTopNear(bot, betweenWalls), 66, 'геометрический скан всё ещё видит стены')
+  assert.strictEqual(golemTopNear(bot, betweenWalls, golem), 64, 'они не дают этому голему путь к столбу')
 })
 
 test('литьё одним ведром: место на ровном берегу у озера, вровень с лавой; клетки и грани раскладки', () => {

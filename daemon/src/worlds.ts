@@ -122,6 +122,10 @@ function tuneMovements (bot, movements) {
   const reg = bot.registry
   const defAt = fastblocks.defReader(bot)
   wrapPlaceBlock(bot)
+  // Aquatic plants contain the same source water as an ordinary water block.
+  if (movements.liquids) for (const block of Object.values(reg.blocksByName)) {
+    if (require('./movement').waterCell(block)) movements.liquids.add((block as any).id)
+  }
   // Жёсткий пол для разведки в Аду (bot._ndNetherFloor ставит fortress.scout):
   // ни один ход не кончается ниже него. Штраф 12 за клетку ниже y=40 (ниже)
   // разведку не держал: GoalNearXZ высоты не спрашивает, и дважды за день
@@ -132,6 +136,8 @@ function tuneMovements (bot, movements) {
   const neighbors = movements.getNeighbors
   if (typeof neighbors === 'function') {
     movements.getNeighbors = function (node) {
+      // Native partial paths share A* Moves: executor centering must not change the search cell.
+      if (!Number.isInteger(node.x) || !Number.isInteger(node.y) || !Number.isInteger(node.z)) node = Object.assign(Object.create(node), require('./blockmoves').cellOf(node))
       const out = neighbors.call(this, node)
       if (worldOf(bot) !== 'the_nether') return out
       // Не только разведка: дорога к порталу тоже спускалась к морю — y=27,
@@ -162,13 +168,24 @@ function tuneMovements (bot, movements) {
     }
   }
   const magma = reg.blocksByName.magma_block
-  if (magma && Array.isArray(movements.exclusionAreasStep)) {
+  const hurts = require('./moves').HURTS
+  if (Array.isArray(movements.exclusionAreasStep)) {
     movements.exclusionAreasStep.push(block => {
       try {
-        // Номер состояния, не Block (fastblocks.defReader, S9): у описания реестра id — то же, что Block.type.
         const p = block.position
-        const under = defAt(p.x, p.y - 1, p.z)
-        return under && (under.type ?? under.id) === magma.id ? 20 : 0
+        // Опасный контакт у ног/головы имеет ту же цену, что магма под ногами; маршрут остаётся доступным.
+        for (const dy of [0, 1, -1]) {
+          const b = defAt(p.x, p.y + dy, p.z)
+          if (b && (hurts.has(b.name) || magma && (b.type ?? b.id) === magma.id)) return 20
+        }
+        // При срезании угла край тела задевает соседнюю клетку даже при безопасном узле пути.
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          for (const dy of [0, 1]) {
+            const b = defAt(p.x + dx, p.y + dy, p.z + dz)
+            if (b && hurts.has(b.name)) return 20
+          }
+        }
+        return 0
       } catch { return 0 }
     })
   }

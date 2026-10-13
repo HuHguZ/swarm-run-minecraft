@@ -1541,13 +1541,23 @@ async function fight (session, ctl, opts: any = {}) {
   }
 }
 
-async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null }: any = {}, guard) {
+async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null, targets = [], relocateTo = null }: any = {}, guard) {
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
   const entity = findTarget(bot, target, session, { allowPlayer, radius: Math.max(24, clearArea || 0) })
   if (!entity) throw new Error(`не вижу цель${target ? ' ' + target : ''}${attackerHint(session)}`)
   const decision = decideFight(session, entity, { target, clearArea, purpose, resourceGoal })
   if (decision.skip) return { skipped: true, stopped: decision.stopped, purpose: decision.purpose }
+
+  async function collectSafeDrops (radius) {
+    // CF22: a second walker hit during post-kill settling. Recheck its attack window each poll.
+    const pickup = require('./tempo').track(bot, { threats: () => guard.safety.check({ target: liveAttacker(session) }).threats
+      .map(threat => bot.entities[threat.id]).filter(foe => foe && foe !== entity) })
+    try {
+      return await collectNearbyDrops(bot, ctl, { radius, timeoutMs: 5000, canContinue: () =>
+        !ctl.aborted && (bot.health ?? 0) > 0 && survival.safeGround(bot) && pickup.safe(2 * gameClock.TICK_MS).ok })
+    } finally { pickup.close() }
+  }
 
   const label = entity.username || entity.name
   const ranged = !!(entity.name && RANGED.has(entity.name))
@@ -1608,6 +1618,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       purpose: decision.purpose,
       roundScope,
       strategicYield,
+      targets, relocateTo,
       // Поле арены (arena.js): не уходить с него за соперником, вернуться, если выпал.
       arena
     })
@@ -1651,7 +1662,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       // Животное могло умереть от стрелы вне прежних восьми блоков. Подбор
       // должен видеть место смерти, иначе охота тратит стрелы и приносит ноль.
       const radius = hunting ? Math.max(8, Math.min(24, Math.ceil(entity.position.distanceTo(bot.entity.position)) + 2)) : 8
-      try { await collectNearbyDrops(bot, ctl, { radius, timeoutMs: 5000 }) } catch {}
+      try { await collectSafeDrops(radius) } catch {}
       r.gained = diffItems(before, countItems(bot))
       r.picked = (Object.values(r.gained) as any[]).reduce((n: any, count) => n + count, 0)
     }
@@ -1725,7 +1736,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
     if (!entity.isValid) {
       await guard.raise(false)
       try { bot.pathfinder.setGoal(null) } catch {}
-      await collectNearbyDrops(bot, ctl, { radius: 8, timeoutMs: 5000 })
+      await collectSafeDrops(8)
       return {
         killed: label,
         swings,

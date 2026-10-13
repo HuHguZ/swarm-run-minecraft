@@ -71,6 +71,23 @@ test('прыжок с ведром дороже шага, обычный спу�
   assert.deepEqual(n.map(m => [80 - m.y, m.cost]), [[3, 1], [10, 5], [20, 5], [8, 6]])
 })
 
+test('overland route prices the return climb from a dark landing, without forbidding it or pricing a surface valley', () => {
+  let overland = true
+  let sky = 0
+  const mv: any = { placeCost: 1,
+    getBlock: () => ({ skyLight: sky }),
+    getMoveDropDown (node, dir, neighbors) { neighbors.push({ x: 1, y: 16, z: 0, cost: 1 }) }
+  }
+  edges.priceDrops(mv, () => overland)
+  const costs = () => { const n: any[] = []; mv.getMoveDropDown({ x: 0, y: 54, z: 0 }, { x: 1, z: 0 }, n); return n.map(p => p.cost) }
+  assert.ok(costs()[0] > 50, 'a 38-block cave shortcut must lose to a 50-step surface detour')
+  assert.ok(Number.isFinite(costs()[0]), 'a sufficiently long detour can still lose to the cave')
+  sky = 15
+  assert.deepEqual(costs(), [5], 'a lower open valley needs no return ascent')
+  sky = 0; overland = false
+  assert.deepEqual(costs(), [5], 'explicit cave/Nether/End travel retains its existing fall price')
+})
+
 // Сессия с живым pathfinder'ом: ведро вылито посреди пути с прыжком.
 function session ({ path, hp = 20, drop = 19, moving = true }: any = {} as Record<string, any>) {
   const bot: any = body({ hp })

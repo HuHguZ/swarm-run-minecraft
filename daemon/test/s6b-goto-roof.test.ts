@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events')
 const Vec3 = require('vec3')
 
 // session.goto with a stubbed pathfinder (as goto.test.ts): which surface walk did the attempt use?
-function fixture (skyAt: (p: any) => number) {
+function fixture (skyAt: (p: any) => number, open = true) {
   const file = path.join(__dirname, '../src/session.js')
   const realRequire = createRequire(file)
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, Date,
@@ -26,7 +26,7 @@ function fixture (skyAt: (p: any) => number) {
   bot.blockAt = (p: any) => ({ position: p, skyLight: skyAt(p), boundingBox: p.y === 99 ? 'block' : 'empty', name: 'air' })
   const seen: boolean[] = []
   const dig: boolean[] = []
-  const session: any = { bot, require: () => bot, updateMovements () {}, underSky: () => true, runIntent: (_name, work) => work({ aborted: false, onAbort: [] }) }
+  const session: any = { bot, require: () => bot, updateMovements () {}, underSky: () => open, runIntent: (_name, work) => work({ aborted: false, onAbort: [] }) }
   bot.pathfinder = { movements: { canDig: true, scafoldingBlocks: [] },
     setGoal (goal) { if (!goal) return; seen.push(session.surfaceWalk); dig.push(bot.pathfinder.movements.canDig); bot.entity.position = new Vec3(goal.x + .5, 100, goal.z + .5); setImmediate(() => bot.emit('path_update', { status: 'success', path: [] })) },
     goto: async () => {} }
@@ -54,4 +54,17 @@ test('goto without y keeps the strict surface walk when the goal column is a mou
   await room.goto({ x: -2, y: 100, z: 0, range: 1, surface: 'strict' })
   assert.deepEqual(room.seen, [false])
   assert.deepEqual(room.dig, [false], 'a roofed goal is no licence to dig')
+})
+
+test('explicit overland XZ travel keeps its surface price after entering a cave; cave targets remain reachable', async () => {
+  const overland = fixture(() => 0, false)
+  await overland.goto({ x: 50, z: 0, surface: true })
+  assert.deepEqual(overland.seen, [true], 'entering a cave must not erase the overland intent')
+  assert.deepEqual(overland.dig, [true], 'surface preference must not forbid digging')
+  const cave = fixture(() => 0, false)
+  await cave.goto({ x: 50, y: 100, z: 0, surface: true })
+  assert.deepEqual(cave.seen, [false], 'an explicit roofed destination still asks to enter the cave')
+  const optOut = fixture(() => 0, false)
+  await optOut.goto({ x: 50, z: 0, surface: false })
+  assert.deepEqual(optOut.seen, [false])
 })

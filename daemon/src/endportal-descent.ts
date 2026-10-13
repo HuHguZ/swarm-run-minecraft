@@ -269,7 +269,7 @@ async function honestShaft (session, ctl, { minY = -58, deadline, targetY = null
 // Внутрь крепости от кирпича — по видимому: кирпич сбоку — пробить голову и ноги и шагнуть (за ним коридор станет виден);
 // иначе ступень вниз сквозь кирпич (потолок коридора: дно видно в проём — спуск по цене или мост). toward — середина лестницы
 // старта (уточнено оком): туда раньше. roomy() — «внутри» (просторно). { inside, steps[] }.
-async function honestEnter (session, ctl, { deadline, toward = null, bricks, roomy, tries = 10 }: any) {
+async function honestEnter (session, ctl, { deadline, toward = null, bricks, roomy, tries = 10, allowDescent = true }: any) {
   const bot = session.bot
   const steps = []
   let k = 0
@@ -287,6 +287,7 @@ async function honestEnter (session, ctl, { deadline, toward = null, bricks, roo
       if (r.ok) { moved = true; k = n; break }
     }
     if (moved) continue
+    if (!allowDescent) break
     if (toward && Math.abs(toward.x - F.x) + Math.abs(toward.z - F.z) >= 1 && Math.abs(toward.x - F.x) <= 4 && Math.abs(toward.z - F.z) <= 4) {
       k = order[0].n
     }

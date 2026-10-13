@@ -26,6 +26,29 @@ const FALLS = new Set([
 
 // Embedded blocks must be visible to the client ray before an honest escape dig.
 function buriedBy (this: any, bot) {
+    // Entity.isInWall (1.21.11) tests a thin box at the eyes, width * .8.
+    // A jumping body or a head across a cell edge can suffocate while feet+1.2 is air.
+    // Contact only identifies the obstruction; visibleBurialBlock still gates every dig.
+    const eye = require('../pick').eyeOf(bot)
+    const r = (bot.entity.width || .6) * .4
+    const centre = eye.floored()
+    const cells = [centre]
+    for (let x = Math.floor(eye.x - r); x <= Math.floor(eye.x + r); x++) {
+      for (let y = Math.floor(eye.y - .0000005); y <= Math.floor(eye.y + .0000005); y++) {
+        for (let z = Math.floor(eye.z - r); z <= Math.floor(eye.z + r); z++) {
+          const at = centre.clone(); at.x = x; at.y = y; at.z = z
+          if (!at.equals(centre)) cells.push(at)
+        }
+      }
+    }
+    for (const at of cells) {
+      const b = bot.blockAt(at)
+      if (!b || b.boundingBox !== 'block') continue
+      const shapes = b.shapes ?? [[0, 0, 0, 1, 1, 1]]
+      if (shapes.some(s => at.x + s[0] < eye.x + r && at.x + s[3] > eye.x - r &&
+        at.y + s[1] < eye.y + .0000005 && at.y + s[4] > eye.y - .0000005 &&
+        at.z + s[2] < eye.z + r && at.z + s[5] > eye.z - r)) return { name: b.name, block: b }
+    }
     const head = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
     if (head && (unstuck ??= require('../unstuck')).overlapsBody(bot, head)) return { name: head.name, block: head }
     if (!this.announced) return null
@@ -238,8 +261,7 @@ async function stepOutOfWall (this: any, bot, { ctl = null, maxMs = Infinity }: 
           wake = done
         })
         if (ctl?.aborted) break
-        const h = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
-        if (!h || h.boundingBox === 'empty') return true
+        if (!buriedBy.call(this, bot)?.block) return true
       }
       try { bot.setControlState('forward', false) } catch {}
     }

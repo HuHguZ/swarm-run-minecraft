@@ -294,6 +294,8 @@ function landed (t, win, def = null) {
 // большой ценой себе (до смертельного) не платить — только обычным пределом.
 function worthHit (t, { myEff, hisEff, hisLand, press = false, hisTotem = false }: any) {
   const worst = Math.max(t.me, t.meMax ?? t.me)
+  // ND_CRYSTAL_RECKLESS=1 (арена 10.10: «пусть все взрывают друг друга»): рвать, если ему ≥ 2.5, а сам переживу с запасом 2.
+  if (process.env.ND_CRYSTAL_RECKLESS === '1') return hisLand >= 2.5 && worst < myEff - 2
   if (worst >= myEff - 3) return false
   if (hisLand < 2.5) return false
   const kill = hisLand >= hisEff - 0.5
@@ -1007,7 +1009,23 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     let best = null
     // Край, яма, лава рядом с ним (S7c): толчок взрыва (1−d)·вид. по «центр → глаза» сбросит его — к цене +5.
     const edgy = CX2 && (() => { try { return require('./edges').hazardAround(bot, foe.position, 5, new Map()) } catch { return false } })()
+    // Толпа (ND_CRYSTAL_RECKLESS=1, арена 10.10: «взорвал — следующий сразу, пока не убьёшь кучу врагов»): за каждого
+    // чужого игрока в 6 бл. от кристалла, кроме цели, — к цене (6 − d)·1.2; свои по команде (teamMap) не в счёт.
+    const crowd = (pos) => {
+      if (!pos || process.env.ND_CRYSTAL_RECKLESS !== '1') return 0
+      const mine = bot.teamMap?.[bot.username]?.team
+      let s = 0
+      for (const e of Object.values(bot.entities || {}) as any[]) {
+        if (!e || e.type !== 'player' || e === foe || e === bot.entity || !e.position) continue
+        if (mine && bot.teamMap?.[e.username]?.team === mine) continue
+        const d = e.position.distanceTo(pos)
+        if (d < 6) s += (6 - d) * 1.2
+      }
+      return s
+    }
     const consider = (o) => {
+      const at0 = o.c?.position || (o.c && Number.isFinite(o.c.x) ? o.c : null)
+      if (at0 && /^(hit|shoot|place|place-hit|place-shoot)$/.test(o.kind)) o.score += crowd(at0)
       if (edgy && o.c && (o.land ?? 0) >= 1.5 && o.kind !== 'obby') {
         let off = false
         try { off = boom.judge(bot, foe, o.c.position || o.c, P, { cache, foeAt: himAt }).off } catch {}

@@ -78,8 +78,8 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   if (phase === 'start' && dangerous && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4) {
     return { ...result, action: 'leave', reason: 'нет запаса еды после восстановления сытости' }
   }
-  if (threshold >= 20) return { ...result, action: 'leave', reason: 'не переживу ближайший размен даже после лечения' }
-  if (health <= threshold || (dangerous && food < 18)) {
+  if (dangerous && threshold >= 20) return { ...result, action: 'leave', reason: 'не переживу ближайший размен даже после лечения' }
+  if (dangerous && (health <= threshold || food < 18)) {
     return { ...result, action: healable ? 'recover' : 'leave', reason: health <= threshold ? 'запас здоровья меньше ближайшего размена' : 'сытость не позволяет лечиться' }
   }
   return result

@@ -83,6 +83,32 @@ function getPhysics () {
     bot.entity.ndInPowderSnow = this.ndInPowderSnow
 `)
   if ((powderSource.match(/ndInPowderSnow/g) || []).length !== 7 || !powderSource.includes('const ndPowderSnowId')) throw new Error('Cannot apply reviewed powder snow movement to native physics')
+  // Avatar 1.21.11: crouching is 1.5 high; Player.updatePlayerPose retains it
+  // while the standing body cannot fit. Keep the dimension on each state, never
+  // mutate a Physics instance shared by live integration and independent forecasts.
+  const poseSource = powderSource
+    .replace('function getPlayerBB (pos) {', 'function getPlayerBB (pos, entity) {')
+    .replace('w, physics.playerHeight, w)', 'w, entity?.ndPoseHeight ?? physics.playerHeight, w)')
+    .replaceAll('getPlayerBB(pos).', 'getPlayerBB(pos, entity).')
+    .replace('let playerBB = getPlayerBB(pos)', 'let playerBB = getPlayerBB(pos, entity)')
+    .replace('function doesNotCollide (world, pos) {', 'function doesNotCollide (world, pos, entity) {')
+    .replace('const pBB = getPlayerBB(pos)', 'const pBB = getPlayerBB(pos, entity)')
+    .replace('doesNotCollide(world, pos.offset(vel.x, vel.y + 0.6 - pos.y + lastY, vel.z))', 'doesNotCollide(world, pos.offset(vel.x, vel.y + 0.6 - pos.y + lastY, vel.z), entity)')
+    .replace('physics.simulatePlayer = (entity, world) => {', `physics.simulatePlayer = (entity, world) => {
+    if (mcData.version.minecraftVersion === '1.21.11' && !entity.elytraFlying) {
+      const fits = height => {
+        const box = getPlayerBB(entity.pos, { ndPoseHeight: height }).contract(1e-7, 1e-7, 1e-7)
+        return !getSurroundingBBs(world, box).some(block => box.intersects(block))
+      }
+      entity.ndPoseHeight = fits(1.5) && (entity.control.sneak || !fits(physics.playerHeight)) ? 1.5 : physics.playerHeight
+    } else entity.ndPoseHeight = physics.playerHeight`)
+    .replace('    this.isInWeb = bot.entity.isInWeb\n', `    this.isInWeb = bot.entity.isInWeb
+    this.ndPoseHeight = bot.entity._ndPoseHeight ?? (bot.entity.metadata?.[6] === 5 ? 1.5 : bot.physics?.playerHeight ?? 1.8)
+`)
+    .replace('    bot.entity.isInWeb = this.isInWeb\n', `    bot.entity.isInWeb = this.isInWeb
+    bot.entity._ndPoseHeight = this.ndPoseHeight
+`)
+  if (!poseSource.includes('entity?.ndPoseHeight ?? physics.playerHeight') || (poseSource.match(/ndPoseHeight/g) || []).length !== 8) throw new Error('Cannot apply reviewed native crouching dimensions')
   const modules = new Map()
   const data = new Map()
   const scopedRequire = request => {
@@ -103,7 +129,7 @@ function getPhysics () {
   }
   const localModule = { exports: {} }
   new Function('require', 'module', 'exports', '__filename', '__dirname', 'ndClimbableNames',
-    `${powderSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)))
+    `${poseSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)))
   return (cachedPhysics = localModule.exports)
 }
 
@@ -284,12 +310,56 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
     // физики тела выше; без кеша — прежний bot.blockAt(pos, false).
     const worldSource = '    this.world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }'
     if (source.includes(worldSource)) source = source.replace(worldSource, '    this.world = { getBlock: (pos) => { const fb = bot._ndFastBlocks; return fb && fb.live ? fb.block(pos.x, pos.y, pos.z) : bot.blockAt(pos, false) } }')
+    // Slow water/partial-block landings can still be airborne after the native dry jump horizon.
+    source = source.replaceAll(/    const state = this.simulateUntil\(reached, this.getController\(path\[0\], true, (true|false), jumpAfter\), 20\)/g,
+      '    let state = this.simulateUntil(reached, this.getController(path[0], true, $1, jumpAfter), 20)\n    if (!reached(state) && !state.isInLava && (state.isInWater || !state.onGround)) state = this.simulateUntil(reached, this.getController(path[0], true, $1), 180, state)')
+  }
+  // Native steering ignores this promise; cancellation at disconnect must not crash the daemon.
+  // moveToEdge can leave back pressed when blockUpdate resets placement. Only
+  // the ordinary walking branch owns the next steering command.
+  if (name === 'pathfinder') source = source.replace('bot.look(Math.atan2(-dx, -dz), 0)',
+    "bot.setControlState('back', false)\n    bot.look(Math.atan2(-dx, -dz), 0).catch(error => { if (error.code !== 'DISCONNECTED' && error.code !== 'REFLEX_CANCELLED') throw error })")
+  // Reuse the executor's scoped Physics instance when a terminal A* result
+  // replaces a held prefix. No second simulator or different jump horizon.
+  if (name === 'pathfinder') source = source.replace('bot.pathfinder.isMoving = () => path.length > 0',
+    `bot.pathfinder.isMoving = () => path.length > 0
+  bot.pathfinder.canMove = path => path.length > 0 && (bot.entity.isInWater ||
+    (stateMovements.allowSprinting && (physics.canStraightLine(path, true) || physics.canSprintJump(path))) ||
+    physics.canStraightLine(path) || physics.canWalkJump(path))`)
+  if (name === 'pathfinder') {
+    // Native consumes toPlace before its server receipt. Preserve that Move's
+    // planned support until completion; only its exact successful placement
+    // belongs to the current path. Other world changes still invalidate A*.
+    source = source.replace('  let placingBlock = null', '  let placingBlock = null\n  let ndPlacement = null')
+      .replace('    placing = false\n    pathUpdated = false', '    placing = false\n    ndPlacement = null\n    pathUpdated = false')
+      .replace('      const curPoint = path[i]', '      const curPoint = path[i]\n      if (ndPlacement?.node === curPoint) break')
+      .replace('        placingBlock = nextPoint.toPlace.shift()\n        fullStop()',
+        '        placingBlock = nextPoint.toPlace.shift()\n        ndPlacement = placingBlock?.useOne ? null : { node: nextPoint, receipt: null }\n        fullStop()')
+      .replace('            bot.placeBlock(refBlock, new Vec3(placingBlock.dx, placingBlock.dy, placingBlock.dz))',
+        `            const ndThisPlacement = ndPlacement
+            if (ndThisPlacement?.node === nextPoint) ndThisPlacement.receipt = {
+              pos: refBlock.position.offset(placingBlock.dx, placingBlock.dy, placingBlock.dz), type: bot.registry.blocksByName[block.name]?.id
+            }
+            bot.placeBlock(refBlock, new Vec3(placingBlock.dx, placingBlock.dy, placingBlock.dz))`)
+      .replace('                placing = false\n                lastNodeTime', '                placing = false\n                if (ndPlacement === ndThisPlacement) ndPlacement = null\n                lastNodeTime')
+      .replace("      resetPath('block_updated', false)", `      if (ndPlacement?.node === path[0] && ndPlacement?.receipt && oldBlock.position.equals(ndPlacement.receipt.pos) && newBlock.type === ndPlacement.receipt.type) {
+        ndPlacement.receipt = null
+        return
+      }
+      resetPath('block_updated', false)`)
   }
   source = source.replaceAll('bot._client.write(', 'writePacket(')
   const nativeRequire = createRequire(filename)
   const scopedRequire = request => {
     if (request === 'prismarine-physics') return getPhysics()
     if (name === 'pathfinder' && request === './lib/physics') return compilePlugin(sources.pathfinderPhysics, scope, 'pathfinderPhysics', sources)
+    if (name === 'pathfinder' && request === './lib/goto') {
+      const nativeGoto = nativeRequire(request)
+      return (bot, goal) => {
+        const movement = require('./movement')
+        return movement.gotoWaitOn() ? movement.gotoGoal(bot, goal) : nativeGoto(bot, goal)
+      }
+    }
     if (request === 'perf_hooks' || request === 'node:perf_hooks') return { performance: { now: scope.now } }
     if (request === '../promise_utils') return scope.promiseUtils
     // AStar's native performance.now measures CPU work, not gameplay duration.
