@@ -8,13 +8,14 @@ const { createRequire } = require('node:module')
 const { EventEmitter } = require('node:events')
 const Vec3 = require('vec3')
 
-function fixture (move?: any) {
+function fixture (move?: any, overrides: Record<string, any> = {}) {
   const file = path.join(__dirname, '../src/session.js')
   const realRequire = createRequire(file)
   const counts = { walks: 0, shakes: 0, pits: 0 }
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, Date,
     require: name => {
       const actual = realRequire(name)
+      if (overrides[name]) return { ...actual, ...overrides[name] }
       if (name === './build') return { ...actual, escapePit: async () => { counts.pits++; return { wasInPit: false } } }
       if (name === './movement') return { ...actual, inWater: () => false,
         stuckGuard: () => ({ promise: new Promise<void>(() => {}), stop () {} }),
@@ -111,4 +112,17 @@ test('goto: попытка, приблизившая тело к цели на 8
   assert.equal(result.arrived.x, 50)
   assert.equal(f.counts.walks, 5)
   assert.equal(f.counts.shakes, 0, 'продвижение — не застревание')
+})
+
+test('strict goto first leaves a sealed own box toward the target (cl-a 14.10: 43 min boxed in)', async () => {
+  const broke: any[] = []
+  const f = fixture(bot => { bot.entity.position = new Vec3(94.5, 63, -12.5) }, {
+    './fortify': { leaveSealedCell: async (_session, _ctl, toward) => { broke.push({ toward }); return true } }
+  })
+  const feet = new Vec3(70, 63, -71)
+  const solid = p => (p.y === 63 || p.y === 64) && Math.abs(p.x - feet.x) + Math.abs(p.z - feet.z) === 1 || (p.y === 65 && p.x === feet.x && p.z === feet.z)
+  f.bot.blockAt = p => ({ position: p, name: solid(p) ? 'cobblestone' : 'air', boundingBox: solid(p) ? 'block' : 'empty' })
+  const result = await f.goto({ x: 95, z: -12, range: 4, surface: 'strict' })
+  assert.deepEqual(JSON.parse(JSON.stringify(broke)), [{ toward: { x: 95.5, z: -11.5 } }])
+  assert.equal(result.arrived.x, 94)
 })

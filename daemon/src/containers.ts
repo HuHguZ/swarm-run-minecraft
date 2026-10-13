@@ -641,6 +641,9 @@ async function smelt (session, ctl, { item, count = 1, fuel = null, timeoutSecon
         session.journal.append('печка', `осталось внутри: ${what}${stopped ? ` (${stopped})` : ''}`, block.position)
       } catch {}
     }
+    // Своё добро в печке — за ним вернуться (takeFurnace): прерванная плавка оставляла сырьё, и тело копало его заново.
+    if (inside) session.furnaceLeft = { at: xyz(block.position), dimension: worlds.worldOf(bot), items: inside }
+    else if (session.furnaceLeft && block.position.equals(new Vec3(session.furnaceLeft.at.x, session.furnaceLeft.at.y, session.furnaceLeft.at.z))) session.furnaceLeft = null
     await sleep(150)
   }
 
@@ -662,6 +665,44 @@ async function smelt (session, ctl, { item, count = 1, fuel = null, timeoutSecon
     note: note || undefined,
     stopped: stopped || undefined
   }
+}
+
+// Плавку оборвали (тактика, таймаут шага графа) — сырьё и выплавленное остались в своей печке (smelt запомнил её в
+// session.furnaceLeft). cl-a 14.10: 13 сырого железа ушли в печку, тело копало железо заново ещё 10 минут. Как игрок:
+// вернуться, открыть, вынуть выход, вход и несгоревшее топливо.
+async function takeFurnace (session, ctl, { maxDistance = 48 }: any = {}) {
+  const bot = session.bot
+  const left = session.furnaceLeft
+  if (!left) return { took: {}, note: 'в печках ничего не оставлял' }
+  if (left.dimension !== worlds.worldOf(bot)) return { took: {}, note: `печка в другом мире (${left.dimension})` }
+  const pos = new Vec3(left.at.x, left.at.y, left.at.z)
+  if (bot.entity.position.distanceTo(pos) > maxDistance) return { took: {}, note: `печка дальше ${maxDistance} бл.` }
+  const block = bot.blockAt(pos)
+  if (!block || !KINDS[block.name]) { session.furnaceLeft = null; return { took: {}, note: 'печки на месте нет' } }
+  // Не дошёл/не открыл трижды — не ходить по кругу: добро списано.
+  if ((left.tries = (left.tries || 0) + 1) > 3) { session.furnaceLeft = null; return { took: {}, note: 'к печке не пробился трижды — оставляю' } }
+  stopWalkingOnAbort(bot, ctl)
+  if (bot.entity.position.offset(0, 1.62, 0).distanceTo(pos.offset(0.5, 0.5, 0.5)) > 4) {
+    await walkTo(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 2), 30000)
+  }
+  if (ctl.aborted) return { took: {}, stopped: 'прервано' }
+  const before = countItems(bot)
+  const furnace = await openFurnaceAt(bot, bot.blockAt(pos))
+  const shut = guardWindow(ctl, furnace)
+  try {
+    const slots: Array<[() => any, () => Promise<any>]> = [[() => furnace.outputItem(), () => furnace.takeOutput()],
+      [() => furnace.inputItem(), () => furnace.takeInput()], [() => furnace.fuelItem(), () => furnace.takeFuel()]]
+    for (const [item, take] of slots) {
+      if (ctl.aborted || !live(bot, furnace)) break
+      await clearSlot(bot, session.mcData, furnace, item(), null, take)
+    }
+    if (live(bot, furnace) && !furnace.outputItem() && !furnace.inputItem()) session.furnaceLeft = null
+  } finally {
+    await unloadCursor(bot, furnace, furnace.inventoryStart, furnace.inventoryEnd)
+    shut()
+    await sleep(150)
+  }
+  return { took: diffItems(before, countItems(bot)), at: left.at, left: session.furnaceLeft ? session.furnaceLeft.items : undefined }
 }
 
 // ---------------------------------------------------------------- chests
@@ -2106,6 +2147,7 @@ async function stash (session, ctl, p: any = {}) {
 
 module.exports = {
   smelt,
+  takeFurnace,
   conversionFuels: bot => FUELS.filter(f => !f.onlyIfAsked).map(f => fuelOption(bot, f)).filter(Boolean).map(f => ({ item: f.name, items: f.items, spare: f.spare })),
   chestPut,
   chestTake,

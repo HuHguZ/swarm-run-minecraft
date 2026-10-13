@@ -108,6 +108,13 @@ function smelt (this: any, p: any = {}) {
     }, { timeoutMs: (Math.min(600, p.timeoutSeconds ?? 120) + 30) * 1000, interruptOn: HOLDING })
   }
 
+function furnaceTake (this: any, p: any = {}) {
+    return this.runIntent('furnace_take', ctl => {
+      this.require()
+      return containers.takeFurnace(this, ctl, p)
+    }, { timeoutMs: 60000, interruptOn: HOLDING })
+  }
+
 function tunnel (this: any, p: any = {}) {
     return this.runIntent('tunnel', ctl => {
       this.require()
@@ -215,4 +222,4 @@ function portal (this: any, p: any = {}) {
     })
   }
 
-module.exports = { mine, mineSeen, digDown, explore, craft, place, smelt, tunnel, shelter, surface, recoverLoot, sleepInBed, wakeUp, portal, obsidian, flightRoute, boatHop, parkour }
+module.exports = { mine, mineSeen, digDown, explore, craft, place, smelt, furnaceTake, tunnel, shelter, surface, recoverLoot, sleepInBed, wakeUp, portal, obsidian, flightRoute, boatHop, parkour }

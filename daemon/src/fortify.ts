@@ -657,6 +657,23 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
   return { ok: headOk && feetOk, side, exit: feet, outside: near ? feet : cell.plus(side.scaled(2)), steps }
 }
 
+// Запертая клетка (своя коробка тактики BlockOff, refuge stayIn, нора с крышей): путь без копки (goto strict, explore
+// поверху) из неё не находится — goto отказывали 43 мин (cl-a 14.10), explore «пути нет ни в одну из 8 сторон» 22 мин
+// (cl-j 14.10). Как игрок: выломать стену в сторону цели; не вышло (нора в породе) — наверх, как shelter exit.
+async function leaveSealedCell (session, ctl, toward) {
+  const bot = session.bot
+  if (!bot || typeof bot.blockAt !== 'function' || !bot.entity) return false
+  const cell = feetCell(bot)
+  if (!enclosure(bot, cell).sealed) return false
+  const out = await breakOut(bot, cell, { toward })
+  if (ctl.aborted) throw new Error('прервано')
+  const up = out.ok ? null : await require('./survival/enter-shelter').exitShelter(session, ctl, { depth: 3 })
+  if (out.ok) session.shelterBox = null
+  console.log('[goto] заперт в клетке', JSON.stringify({ cell: { x: cell.x, y: cell.y, z: cell.z }, side: out.ok, steps: out.steps, up: up ? { out: up.out, stopped: up.stopped } : undefined }))
+  if (ctl.aborted) throw new Error('прервано')
+  return true
+}
+
 // Осада: клетка противника закрыта — какой блок ломать и где для этого стоять.
 // Блок — на уровне его головы, со стороны, что ближе к нам: через дыру в
 // голове он виден и достаётся рукой, а сам он через неё выйти не может.
@@ -754,7 +771,7 @@ async function takeNicheBody (bot, c, plan, { ctl = null, toward = null }: any =
 }
 
 module.exports = {
-  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, enclosure, centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, siegePlan, pickFiller,
+  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, enclosure, centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, leaveSealedCell, siegePlan, pickFiller,
   fullCube, openCell, refugeNeed, refugeBuildMs, refugeCell, refugePlan, jumpPlace, refugeBox, refugePatch, landed, shove, shoveNear, sinkRoof,
   nichePlan, takeNicheBody
 }

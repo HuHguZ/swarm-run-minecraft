@@ -197,7 +197,9 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
     if (!ent || ent === bot.entity || !ent.position) continue
     const dist = ent.position.distanceTo(me)
     if (dist > radius) continue
-    if (fair && !canSeePoint(bot, ent.position.offset(0, (ent.height || 1) * 0.6, 0))) continue
+    // Видна любая часть — голова, середина или ноги (как perception/eyes.entities): один луч в 60 % роста терял зверей за
+    // травой и склоном — охота «пусто» при овце в 33 бл. на виду у глаз (cl-h 14.10, поиск еды ничего не нашёл).
+    if (fair && ![0.85, 0.5, 0.15].some(f => canSeePoint(bot, ent.position.offset(0, (ent.height || 1) * f, 0)))) continue
     out.entities.push({
       name: ent.username || ent.displayName || ent.name,
       kind: ent.type,

@@ -21,6 +21,7 @@ function fixture({ dimension = 'overworld', visible = false } = {}) {
     travelXZ: async () => { calls.push({ method: 'travel' }); now += 31000; return { ok: true } },
     require(name) {
       if (name === './worlds') return { worldOf: () => dimension }
+      if (name === './fortify') return { leaveSealedCell: async () => null }
       if (name === './survival') return { surface: async (_session, _ctl, params) => {
         calls.push({ method: 'surface', params }); now += 8000; outside = true; bot.entity.position.y = 66; return { note: 'вылез под открытое небо' }
       } }

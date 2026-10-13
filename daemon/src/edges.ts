@@ -941,6 +941,14 @@ function mlgLandingBad (bot, x, y, z) {
 // столба). Такие спуски не планировать вовсе — как до ведра (maxDropDown 4
 // пускал ноги лишь на 3).
 const MLG_COST = 4
+// Урон отрастёт: сытость ≥ 18 (регенерация) или съедобное в рюкзаке.
+const NOT_A_MEAL = /^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|suspicious_stew)$/
+function canHeal (bot) {
+  if ((bot.food ?? 20) >= 18) return true
+  const foods = (bot.registry && bot.registry.foodsByName) || {}
+  return !!bot.inventory?.items?.().some(i => foods[i.name] && !NOT_A_MEAL.test(i.name))
+}
+
 function priceDrops (movements, surface = () => false) {
   if (!movements || movements._ndMlgPriced) return movements
   movements._ndMlgPriced = true
@@ -967,7 +975,9 @@ function priceDrops (movements, surface = () => false) {
             // Без воды — прыжок с уроном, если урон (высота − 3) ≤ четверти хп (пользователь 10.10: «убирай лимит
             // глобально — пусть прыгают и подхиливаются»); цена — урон в шагах. ND_FREE_DROP=0 — по-старому (не планировать).
             const hp = this.bot ? (this.bot.health ?? 20) : 0
-            if (process.env.ND_FREE_DROP === '0' || d - SAFE_FALL > hp / 4) neighbors.splice(i, 1)
+            // «Подхиливаются» — когда есть чем: без еды и при сытости < 18 урон не восстанавливается, а спуск по горам
+            // прыжками снял 12 хп за 20 с (cl-g 14.10, хп 20 → 8 на тайге без еды). Тогда — без урона, по-старому.
+            if (process.env.ND_FREE_DROP === '0' || d - SAFE_FALL > hp / 4 || (this.bot && !canHeal(this.bot))) neighbors.splice(i, 1)
             else m.cost += d - SAFE_FALL
           }
         }

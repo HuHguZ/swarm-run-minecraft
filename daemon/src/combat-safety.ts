@@ -71,8 +71,12 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   // s4d-ab3); the margin keeps out the heavy hitters (a brute's 8.6 through iron: 20 - 25.8 < 4). Shooters - only the archers of
   // the list (a blaze is blaze.ts's fight), never a creeper, at most two in the exchange.
   const tradeable = near.length <= 2 && near.every(t => t.name !== 'creeper' && (!RANGED.has(t.name) || WHITE.test(String(t.name || ''))))
-  // A fight in progress or one the tactics engaged at the body - not a voluntary start (phase start keeps its food rule).
-  if (S4D() && FIGHT_COST() && phase !== 'start' && dangerous && weapon && tradeable && atBody && threshold < 20 && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true }
+  // A walker at the body hits whatever we do - also when the fight is just starting: the food rule of a voluntary start refused
+  // a lone zombie at 3.5 blocks with 20 hp, hunger 20 and a stone sword ("нет запаса еды после восстановления сытости", native
+  // slot 1 14.10), and the run that followed was the one the skeletons finished (cl-a…cl-i). A start at range, or against a mob
+  // off the early-game white list (drowned with a trident, witch, anything unknown), keeps the food rule.
+  const startTrade = phase !== 'start' || near.every(t => WHITE.test(String(t.name || '')))
+  if (S4D() && FIGHT_COST() && dangerous && weapon && tradeable && startTrade && atBody && threshold < 20 && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true }
   if (phase === 'start' && dangerous && !weapon) return { ...result, action: 'leave', reason: 'нет пригодного оружия' }
   if (dangerous && !healable) return { ...result, action: 'leave', reason: 'нечем восстановить здоровье' }
   if (phase === 'start' && dangerous && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4) {

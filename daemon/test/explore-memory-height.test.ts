@@ -31,7 +31,7 @@ function exploreFixture({ outside = true, rise = true, abort = false } = {}) {
     },
     require(name) {
       if (name === './worlds') return { worldOf: () => 'overworld' }
-      if (name === './fortify') return { enclosure: () => ({ walls: 0, roof: false, sealed: false }) }
+      if (name === './fortify') return { enclosure: () => ({ walls: 0, roof: false, sealed: false }), leaveSealedCell: async () => null }
       if (name === './perception/eyes') return { nearest: () => [{ name: 'gravel', x: 20, y: 17, z: 0 }] }
       if (name === './survival') return { surface: async (_session, _ctl, params) => {
         calls.push({ method: 'surface', params }); now += 1000

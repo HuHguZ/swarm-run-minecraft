@@ -28,6 +28,7 @@ function fixture({ remembered = false, looted = true, name = 'chest' } = {}) {
     require(name) {
       if (name === './worlds') return { worldOf: () => 'overworld' }
       if (name === './perception/eyes') return { nearest: () => [{ name: old.name, x: old.position.x, y: 64, z: 0 }] }
+      if (name === './fortify') return { leaveSealedCell: async () => null }
       throw new Error(name)
     }
   }

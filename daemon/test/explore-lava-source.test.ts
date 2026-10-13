@@ -43,7 +43,7 @@ function fixture(options: any = {}) {
       .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)).slice(0, max) },
     './worlds': { worldOf: () => 'overworld' },
     './survival': { surface: async () => { calls.push('surface'); now += 1000; outside = true; sealed = false } },
-    './fortify': { enclosure: () => ({ sealed }) },
+    './fortify': { enclosure: () => ({ sealed }), leaveSealedCell: async () => null },
     './perception/eyes': { nearest: () => [{ name: 'lava', x: 12, y: 64, z: 0 }] },
     'vec3': Vec3, 'mineflayer-pathfinder': { goals: {} }
   }

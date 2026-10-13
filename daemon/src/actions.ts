@@ -1495,7 +1495,7 @@ function firstVisible (bot, ids, radius, useFair, dry = false, skip = null) {
 // progress when it runs out of time instead of failing, so the brain can just
 // call it again — one call is one leg of a search, not an all-or-nothing trip.
 async function explore (session, ctl, {
-  block = 'any_log', radius = 48, stepDistance = 40, direction = null, timeoutSeconds = 45, fair, dry = false, surface = false, lavaSource = false, unlootedContainers = false, newView = false
+  block = 'any_log', radius = 48, stepDistance = 40, direction = null, timeoutSeconds = 45, fair, dry = false, surface = false, lavaSource = false, waterSource = false, unlootedContainers = false, newView = false
 }: any = {}) {
   const bot = session.bot
   const ids = resolveBlockIds(block, session.mcData)
@@ -1513,11 +1513,13 @@ async function explore (session, ctl, {
     skip: p => (dry && underWater(bot, p)) || (unlootedContainers && skipLooted(p)) }).map(b => posKey(b.position)) : [])
   const skipSeen = p => newView && seenHere.has(posKey(p)) &&
     !(bot.canDigBlock(bot.blockAt(p)) && require('./pick').blockSeen(bot, p))
+  // Ведру нужен источник: текущая вода «уже видно отсюда» при «источника не вижу» у bucket гоняла этап воды по кругу (cl-c 14.10).
+  const notSource = p => waterSource && !require('./obsidian').isSource(bot.blockAt(p), 'water')
   const findHit = () => {
     if (newView && (ctl.aborted || bot.entity.position.equals(viewFrom))) return null
     return lavaSource ? (require('./cast').lavaSources(bot)[0] || null)
       : firstVisible(bot, ids, radius, useFair, dry,
-        (unlootedContainers || newView) ? p => (unlootedContainers && skipLooted(p)) || skipSeen(p) : null)
+        (unlootedContainers || newView || waterSource) ? p => (unlootedContainers && skipLooted(p)) || skipSeen(p) || notSource(p) : null)
   }
 
   let hit = findHit()
@@ -1559,6 +1561,8 @@ async function explore (session, ctl, {
   }
   let failStreak = 0
   let failFrom = null
+  // Своя запертая клетка (коробка тактики): поверху без копки из неё пути нет ни в одну сторону (cl-j 14.10: 22 мин «пути нет»).
+  if (walkTop) await require('./fortify').leaveSealedCell(session, ctl, null)
   while (gameClock.now() < deadline && !ctl.aborted) {
     const mem = remembered()
     if (mem) {

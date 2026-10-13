@@ -134,6 +134,8 @@ class Session {
   declare bridgeWanted: any
   declare sprintWanted: any
   declare gotoTarget: any
+  declare furnaceLeft: any
+  declare shelterBox: any
   declare gotoArena: import('./navigation/parkour').MovementArena | undefined
   declare movementsSignature: any
   declare routeOutpostInfo: any
@@ -373,6 +375,14 @@ class Session {
     // чем моб опаснее (flee.js DOCTRINE). Раньше маршрут шёл сквозь толпу, и
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(flee.mobAvoidance(bot))
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk ? underRoofCost(bot, block, this.surfaceStrict) : 0)
+    // Путь по дну водоёма: воздух кончается за ~9 с, тактика всплывает и рвёт goto, кампания зовёт тот же путь снова
+    // (cl-e 14.10: 20 кругов «к деревне по дну озера» → Surface → берег за 3 мин). Клетка воды под водой — ещё цена воды
+    // сверху (liquidCost), чтобы путь плыл поверху или шёл в обход.
+    if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => {
+      if (!block || block.name !== 'water' || !block.position) return 0
+      const above = bot.blockAt(block.position.offset(0, 1, 0), false)
+      return above && above.name === 'water' ? (movements.liquidCost ?? 1) : 0
+    })
     if (Array.isArray(movements.exclusionAreasStep)) {
       const fbm = bot._ndFastBlocks
       movements.exclusionAreasStep.push(block => {
@@ -424,7 +434,9 @@ class Session {
     worlds.tuneMovements(bot, movements)
     // Прыжок глубже обычного — дороже шага на время воды (edges.priceDrops).
     edges.priceDrops(movements, () => this.surfaceWalk && this.pathGoalY == null)
-    if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(worlds.worldOf(bot) === 'the_nether' && process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
+    // Мост над смертельной высотой не строим ни в одном мире: срыв или отказ сервера = смерть (Ад S1f; верхний мир cl-f 14.10:
+    // мост над оврагом 58 бл. на y 16 за железом, no_face — падение 58, смерть). Над водой — можно.
+    if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
     if (this.surfaceStrict) { movements.canDig = false; movements.allow1by1towers = false; movements.scafoldingBlocks = [] }
     if (this.gotoArena) {
       const arena = this.gotoArena, within = require('./navigation/parkour').withinArena
@@ -828,7 +840,9 @@ class Session {
       // клиент не успел (часы пропускают их при нехватке CPU), S7 06.10.
       physicsTicks: this.ticks,
       busy: this.current ? this.current.name : null,
-      tactics: this.tactics?.snapshot() || null
+      tactics: this.tactics?.snapshot() || null,
+      // Своё добро, оставленное в печке прерванной плавкой (containers.takeFurnace).
+      ...(this.furnaceLeft ? { furnaceLeft: this.furnaceLeft } : {})
     })
   }
 
@@ -951,6 +965,7 @@ class Session {
       const pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
       const bx = Math.floor(x)
       const bz = Math.floor(z)
+      if (strict && !boundedArena) await require('./fortify').leaveSealedCell(this, ctl, { x: bx + 0.5, z: bz + 0.5 })
       let goal
       let resolvedTo
       if (y === undefined || y === null) {

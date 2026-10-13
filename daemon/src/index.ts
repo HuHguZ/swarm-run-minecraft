@@ -881,6 +881,7 @@ const methods = {
   tunnel: async (p) => session.tunnel(p || {}),
   mine_seen: async (p) => session.mineSeen(p || {}),
   smelt: async (p) => session.smelt(p || {}),
+  furnace_take: async (p) => session.furnaceTake(p || {}),
   chest_put: async (p) => session.chestPut(p || {}),
   chest_take: async (p) => session.chestTake(p || {}),
   chest_list: async (p) => session.chestList(p || {}),

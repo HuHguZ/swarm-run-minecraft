@@ -26,6 +26,12 @@ test('нет еды для регена или оружия — добровол
   assert.equal(evaluate({ ...ready, phase: 'start', food: 13, foodPoints: 0 }).action, 'leave')
   assert.equal(evaluate({ ...ready, phase: 'start', weapon: false }).action, 'leave')
 })
+test('зомби вплотную при 20 хп и мече — бой и без запаса еды: он бьёт и при бегстве (слот 1, 14.10)', () => {
+  const zombie = { name: 'zombie', hit: 3, distance: 3.5 }
+  assert.equal(evaluate({ health: 20, food: 20, foodPoints: 0, weapon: true, threats: [zombie], phase: 'start' }).action, 'fight')
+  // Издали добровольный бой без еды — по-прежнему нет.
+  assert.equal(evaluate({ health: 20, food: 13, foodPoints: 0, weapon: true, threats: [{ ...zombie, distance: 9 }], phase: 'start' }).action, 'leave')
+})
 test('когда запас еды кончился в проигрываемом бою, нужно уходить полностью', () => {
   assert.equal(evaluate({ ...ready, health: 11, food: 15, foodPoints: 0 }).action, 'leave')
 })

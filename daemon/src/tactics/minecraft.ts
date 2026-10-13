@@ -496,6 +496,11 @@ export class TacticalSystem {
     }
     if (!decision.selected || !decision.change && this.episode) return
     if (decision.selected.id === 'Fight' && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) return
+    // The fight skill is already the favourable fight: a run the arbiter picked only because Fight sat out its re-entry
+    // (dropped a moment ago) must not take the hands from it — native slot 1 14.10: a lone zombie, Fight 90 > Flee 65, the
+    // fight RPC interrupted by Flee four rounds out of four, the zombie left alive to follow.
+    const fightBest = decision.candidates.find(candidate => candidate.id === 'Fight')
+    if (fightBest && fightBest.score >= decision.selected.score && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) return
     const active = locks.owner(this.session)
     const repelDuringClimb = active?.source === 'ClimbOut' && decision.selected.id === 'Fight' && canRepelLavaAttacker(state)
     if (active?.owner === 'Emergency' && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb) return
