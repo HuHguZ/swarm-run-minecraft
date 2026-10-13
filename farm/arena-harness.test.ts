@@ -10,6 +10,8 @@ test('duel runs the slot snapshot harness with the requested arena and swaps bot
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neurodown-arena-'))
   const slash = value => value.replaceAll('\\', '/')
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'"
+  const git = process.platform === 'win32' ? spawnSync('where.exe', ['git.exe'], { encoding: 'utf8' }).stdout.trim().split(/\r?\n/)[0] : null
+  const shell = git ? path.resolve(path.dirname(git), '../bin/sh.exe') : 'sh'
   try {
     for (const child of ['bin', 'farm/crystal', '.daemon-fixed', 'daemon']) fs.mkdirSync(path.join(dir, child), { recursive: true })
     fs.copyFileSync(path.join(__dirname, 'crystal/duel.sh'), path.join(dir, 'farm/crystal/duel.sh'))
@@ -20,7 +22,7 @@ test('duel runs the slot snapshot harness with the requested arena and swaps bot
     fs.writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = "-e" ]; then exec ${quote(slash(process.execPath))} "$@"; fi\nprintf '%s\\n' "$PWD" "$@" "$ARENA_A" "$ARENA_B" "$ARENA_NAME_A" "$ARENA_NAME_B" "$ARENA_POS"\n`)
     fs.chmodSync(wrapper, 0o755)
     for (const swap of ['', '1']) {
-      const result = spawnSync('sh', ['farm/crystal/duel.sh', '30', '5', 'test'], { cwd: dir, encoding: 'utf8', timeout: 10000,
+      const result = spawnSync(shell, ['farm/crystal/duel.sh', '30', '5', 'test'], { cwd: dir, encoding: 'utf8', timeout: 10000,
         env: { ...process.env, PATH: path.join(dir, 'bin') + path.delimiter + process.env.PATH, SWAP: swap, PAIR: '',
           ARENA_POS: '600 120 600', OUT: '', KIT: 'булава против щита', EXTRA: '' } })
       assert.equal(result.status, 0, result.stderr || result.error?.message)

@@ -23,6 +23,7 @@
     "daemon/test/**/*.ts",
     "daemon/*.ts",
     "farm/*.ts",
+    "farm/arena/**/*.ts",
     "farm/crystal/**/*.ts",
     "farm/dragon/**/*.ts",
     "farm/movement/**/*.ts",

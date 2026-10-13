@@ -42,6 +42,7 @@
 !/farm/*.sh
 !/farm/limits.json
 !/farm/seeds/
+!/farm/arena/
 !/farm/crystal/
 !/farm/dragon/
 !/farm/movement/
@@ -93,6 +94,7 @@ node_modules/
 /daemon/src/**/*.js
 /daemon/test/**/*.js
 /farm/*.js
+/farm/arena/**/*.js
 /farm/crystal/**/*.js
 /farm/dragon/**/*.js
 /farm/movement/**/*.js
