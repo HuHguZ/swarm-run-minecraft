@@ -15,7 +15,7 @@ async function receipt (detail, method = 'eat') {
   const ctx: any = {
     process: { env: {} }, state, sit: {}, stage: 'food', strategyExecuting: false, strategyInterrupted: false,
     died: false, resting: true, fighting: false, hunting: true, routeEntered: false, routeStepNow: null,
-    REFUGE_PASS: new Set(), SELF_GUARDED: new Set(), refugeRunning: () => false,
+    REFUGE_PASS: new Set(), SELF_GUARDED: new Set(), mobInTheWay: async () => false, refugeRunning: () => false,
     dim: () => state.dimension, gameClock: { now: () => 1, wall: { now: () => 1 } },
     telemetry: { on: () => true, snapshot: () => ({}), delta: () => ({}), outcome: () => ({ status: result.status }), record: row => rows.push(row) },
     call: async () => result, acceptResult: () => {}, seamSnapshot: () => {}, telParams: JSON.stringify, log: line => logs.push(line)

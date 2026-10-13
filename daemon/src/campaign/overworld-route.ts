@@ -452,7 +452,7 @@ async function routeWater (near) {
     const rw = await ctx.act('bucket', { fluid: 'water', radius: 16 })
     if (ctx.have('water_bucket') || await waterUnderIce(rw)) { ctx.rlog(`вода по карте у ${w.x},${w.y},${w.z}`); return true }
   }
-  const e = await ctx.act('explore', { block: 'water', radius: 48, stepDistance: 60, timeoutSeconds: 90 })
+  const e = await ctx.act('explore', { block: 'water', waterSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90 })
   if (e.detail && e.detail.found) await ctx.act('bucket', { fluid: 'water', radius: 48 })
   return ctx.have('water_bucket') > 0
 }
@@ -1165,7 +1165,7 @@ async function routeStep (s) {
           .sort((a, b) => Math.hypot(a.x - ctx.state.pos.x, a.z - ctx.state.pos.z) - Math.hypot(b.x - ctx.state.pos.x, b.z - ctx.state.pos.z))[0]
         if (w) { await ctx.routeGo(w.stand || w, 4); continue }
         if (await farWater()) break
-        const e = await ctx.act('explore', { block: 'water', radius: 48, stepDistance: 60, timeoutSeconds: 90 })
+        const e = await ctx.act('explore', { block: 'water', waterSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90 })
         if (!(e.detail && e.detail.found)) break
       }
       return ctx.have('water_bucket') > 0

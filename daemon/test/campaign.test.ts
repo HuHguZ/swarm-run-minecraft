@@ -233,7 +233,7 @@ test('a complete bucket kit does not finish iron recovery before the missing pic
     if (method === 'mine' && /iron_ore/.test(params.block)) { mined += params.count; state.inventory.raw_iron += params.count }
     if (method === 'craft' && params.item === 'iron_pickaxe') { state.inventory.iron_ingot -= 3; state.inventory.iron_pickaxe = 1 }
     return {}
-  }, { env: { ND_OW_DEEP: '1' } })
+  }, { env: { ND_OW_DEEP: '1', ND_DEATH_COST_MIN: '6' } })
   c.stage('iron'); c.castFailed()
   await c.runStage('iron')
   assert.equal(mined, 2)
@@ -1180,9 +1180,9 @@ test('каменная кирка и имеющаяся броня позвол�
   assert.equal(c.needs('iron'), true, 'без шлема бой у спавнера смертелен (ферма 2026-09-29)')
 })
 
-test('броня по расчёту «время против риска»: из рюкзака — берёт, отдельный поход — нет; цифры в строке', () => {
+test('броня по расчёту «время против риска»: при цене смерти 6 мин из рюкзака — берёт, отдельный поход — нет; цифры в строке', () => {
   const state: Record<string, any> = { health: 20, food: 20, armor: {} as Record<string, any>, inventory: { iron_ingot: 8 } }
-  const c = campaign(state, {} as Record<string, any>)
+  const c = campaign(state, {} as Record<string, any>, undefined, { env: { ND_DEATH_COST_MIN: '6' } })
   const bag = c.gearWorth('iron_chestplate', { inBag: true })
   assert.equal(bag.take, true)
   assert.match(bag.line, /из рюкзака ≈ 0\.3 мин против пользы [0-9.]+ мин .* беру$/)
@@ -1191,6 +1191,14 @@ test('броня по расчёту «время против риска»: и�
   assert.equal(trip.missing, 8)
   assert.equal(trip.take, false, 'поход за 8 слитками дороже ожидаемой пользы')
   assert.match(trip.line, /поход за 8 слитк\. ≈ 12\.8 мин .* не беру$/)
+})
+
+test('цена смерти по умолчанию — как у графа (60 мин, keep_inventory=false): поход за нагрудником окупается', () => {
+  const state: Record<string, any> = { health: 20, food: 20, armor: {} as Record<string, any>, inventory: {} }
+  const trip = campaign(state, {} as Record<string, any>).gearWorth('iron_chestplate')
+  assert.equal(trip.missing, 8)
+  assert.equal(trip.take, true)
+  assert.match(trip.line, /смерть 60 мин\) — беру$/)
 })
 
 test('кровать делается из смешанной шерсти и костей без новой охоты', async () => {
@@ -1612,7 +1620,8 @@ test('вода над головой: подъём уходит штреком �
   })
   c.hooks({ spares: async () => {}, ensurePick: async () => true })
   assert.equal(await c.toSurface(), false)
-  assert.deepEqual(dirs, ['east', 'south', 'west', 'north'])
+  // Under a lake the 10-block tunnel stays put: each side then goes 3 lower and 16 aside (cl-b 14.10).
+  assert.deepEqual(dirs, ['east', 'east', 'south', 'south', 'west', 'west', 'north', 'north'])
 })
 
 test('снег над головой без лопаты: подъём делает лопату из рюкзака и лезет снова', async () => {
@@ -1631,6 +1640,69 @@ test('снег над головой без лопаты: подъём дела�
   c.hooks({ spares: async () => {}, ensurePick: async () => true })
   assert.equal(await c.toSurface(), true)
   assert.ok(crafted.includes('stone_shovel'))
+})
+
+test('подъём без блоков: порода вокруг киркой, потом снова наверх (cl-c 14.10: «строить нечем» — простой до сторожа)', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 166, y: 65, z: 276 }, inventory: { stone_pickaxe: 1 } }
+  const situation: Record<string, any> = { surface: false, pickLeft: 120 }
+  const calls = []
+  const c = campaign(state, situation, (method, params) => {
+    calls.push(method)
+    if (method === 'mine') { state.inventory.cobblestone = 12; return { dug: 12 } }
+    if (method === 'surface') {
+      if (state.inventory.cobblestone) { situation.surface = true; return { out: true } }
+      return { out: false, stopped: 'столб строить нечем, а лестницу не вырубить: ступеньку не на что положить, и строить нечем' }
+    }
+    return {} as Record<string, any>
+  })
+  c.hooks({ spares: async () => {}, ensurePick: async () => true })
+  assert.equal(await c.toSurface(), true)
+  assert.deepEqual(calls.filter(m => m !== 'situation' && m !== 'status'), ['surface', 'mine', 'surface'])
+})
+
+test('руда над головой не по кирке: шаг вбок штреком и снова наверх (cl-f 14.10: медь над деревянной киркой)', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: -31, y: 25, z: -70 }, inventory: { wooden_pickaxe: 1, cobblestone: 40 } }
+  const situation: Record<string, any> = { surface: false, pickLeft: 98 }
+  const tunnels = []
+  const c = campaign(state, situation, (method, params) => {
+    if (method === 'tunnel') { tunnels.push(params.direction); state.pos = { ...state.pos, x: state.pos.x + 4 }; return {} }
+    if (method === 'surface') {
+      if (tunnels.length) { situation.surface = true; return { out: true } }
+      return { out: false, stopped: 'для copper_ore нужна кирка получше (copper_pickaxe / stone_pickaxe / iron_pickaxe / diamond_pickaxe)' }
+    }
+    return {} as Record<string, any>
+  })
+  c.hooks({ spares: async () => {}, ensurePick: async () => true })
+  assert.equal(await c.toSurface(), true)
+  assert.deepEqual(tunnels, ['east'])
+})
+
+test('сырое железо без угля плавится досками сверх запаса, а не «дерево — запас на глубину» (cl-b 14.10)', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 16, z: 0 },
+    inventory: { raw_iron: 6, oak_planks: 6, furnace: 1, crafting_table: 1, stone_pickaxe: 1 } }
+  const fuels = []
+  const c = campaign(state, { free: 30 }, (method, params) => {
+    if (method === 'smelt') { fuels.push(params.fuel); state.inventory.iron_ingot = state.inventory.raw_iron; state.inventory.raw_iron = 0 }
+    return {} as Record<string, any>
+  })
+  await c.smeltAll('raw_iron', 'iron_ingot')
+  assert.deepEqual(fuels, ['oak_planks'])
+  assert.equal(state.inventory.iron_ingot, 6)
+})
+
+test('навык отказал из-за моба (CAST_UNSAFE) — ответ на моба боем, а не тот же вызов снова (cl-b 14.10)', async () => {
+  const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld', pos: { x: 71, y: 50, z: 224 },
+    inventory: { stone_sword: 1, bucket: 1, flint_and_steel: 1 } }
+  const situation: Record<string, any> = { foes: 1, armed: true, surface: true, verdict: 'драться', fight: { first: { name: 'zombie', dist: 2 }, order: [{ name: 'zombie', dist: 2 }] } }
+  const calls = []
+  const c = campaign(state, situation, (method) => {
+    calls.push(method)
+    if (method === 'portal') return { stopped: 'CAST_UNSAFE: zombie', code: 'CAST_UNSAFE' }
+    if (method === 'fight') { situation.foes = 0; situation.fight = { order: [] }; return { kills: ['zombie'] } }
+    return {} as Record<string, any>
+  })
+  await c.act('portal', { mode: 'cast', timeoutSeconds: 540 })
+  assert.ok(calls.includes('fight'), JSON.stringify(calls))
 })
 
 test('возрождение ночью наверху: сразу нора до рассвета, а не работа среди тех же мобов', async () => {

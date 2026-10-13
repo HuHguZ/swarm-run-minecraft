@@ -22,7 +22,7 @@ function fixture({ night = true, mode = 'speedrun', hp = 1, food = 10, raw = 0 }
     REFUGE_PASS: new Set(), refugeRunning: () => false, strategyExecuting: false, strategyInterrupted: false,
     died: false, fighting: false, resting: false, hunting: false, restIdleUntil: Infinity,
     telemetry: { on: () => false }, gameClock: { now: () => 1000 }, acceptResult: () => {},
-    E2E: false, routeEntered: false, OW_DEEP: false, SELF_GUARDED: new Set(),
+    E2E: false, routeEntered: false, OW_DEEP: false, SELF_GUARDED: new Set(), mobInTheWay: async () => false,
     log: () => {}, rest: async () => {}, stopLava: async () => null, call: async (method: string) => {
       calls.push(method)
       return { status: 'done', detail: { stopped: 'здоровья 1 — дальше не копаю', dug: 0, steps: 0 }, events: [] }
