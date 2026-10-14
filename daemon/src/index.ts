@@ -607,6 +607,7 @@ const methods = {
   goto: async (p) => session.goto(p),
   flight_route: async (p) => session.flightRoute(p || {}),
   boat_hop: async (p) => session.boatHop(p || {}),
+  boat_climb: async (p) => session.boatClimb(p || {}),
   parkour: async (p) => session.parkour(p || {}),
   follow: async (p) => session.follow(p),
   escort: async (p) => session.escort(p || {}),

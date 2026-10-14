@@ -30,6 +30,13 @@ function boatHop(this: any, p: BoatHopRequest = {}) {
   })
 }
 
+// Подъём на лодке (navigation/boat-moves): уступы по 2 бл. — лодка на грань в прыжке, посадка, высадка, лодку назад.
+function boatClimb(this: any, p: any = {}) {
+  return this.runIntent('boat_climb', (ctl: any) => { this.require(); return require('../navigation/boat-moves').boatClimb(this, ctl, p) }, {
+    timeoutMs: ((p.timeoutSeconds ?? 30) + 5) * 1000, interruptOn: ['chat', 'death', 'kicked', 'disconnected'], params: p
+  })
+}
+
 function mine (this: any, p: any = {}) {
     return this.runIntent('mine', ctl => {
       this.require()
@@ -222,4 +229,4 @@ function portal (this: any, p: any = {}) {
     })
   }
 
-module.exports = { mine, mineSeen, digDown, explore, craft, place, smelt, furnaceTake, tunnel, shelter, surface, recoverLoot, sleepInBed, wakeUp, portal, obsidian, flightRoute, boatHop, parkour }
+module.exports = { mine, mineSeen, digDown, explore, craft, place, smelt, furnaceTake, tunnel, shelter, surface, recoverLoot, sleepInBed, wakeUp, portal, obsidian, flightRoute, boatHop, boatClimb, parkour }

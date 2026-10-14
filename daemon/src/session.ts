@@ -1038,6 +1038,11 @@ class Session {
         return r
       }
       const firstDescent = !boundedArena && descentMod.on(descent) ? await descendNow() : null
+      // Подъём на лодке по уступам (navigation/boat-moves.ts): цель выше на 4+ — сравнить с пешим путём. ND_ASCENT_BOAT=0 — выкл.
+      if (!boundedArena && descentMod.on(descent) && !(firstDescent && firstDescent.used)) {
+        try { await require('./navigation/boat-moves').maybeAscend(this, ctl, { x: bx, y: resolvedTo.y, z: bz }, goal, descentOpt) } catch (err) { console.log('[ascent] ошибка: ' + err.message) }
+        if (ctl.aborted) throw new Error('прервано')
+      }
       let failDescent = null
       const descentWatch = !boundedArena && descentMod.on(descent) && !(firstDescent && firstDescent.efficient) ? descentMod.watch(bot, { x: bx, y: resolvedTo.y, z: bz }, () => { if (!failDescent) return false; failDescent(Object.assign(new Error('край обрыва — спуск'), { descent: true })); return true }) : null
 
@@ -1424,6 +1429,7 @@ class Session {
   declare ride: any
   declare flightRoute: (p: import('./combat/flight-route').FlightRouteRequest) => Promise<unknown>
   declare boatHop: (p?: import('./combat/boat-hop').BoatHopRequest) => Promise<unknown>
+  declare boatClimb: (p?: Record<string, any>) => Promise<unknown>
   declare parkour: (p: Parameters<typeof import('./navigation/parkour').navigate>[2] & { timeoutSeconds?: number }) => Promise<unknown>
 
   declare mechanism: any

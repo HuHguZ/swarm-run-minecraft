@@ -6,7 +6,8 @@ const pick = require('../pick')
 const ride = require('../ride')
 const Vec3 = require('vec3')
 const count = (bot: Body): number => bot.inventory.items().filter((item: Body) => /_(boat|raft)$/.test(item.name) && !/chest/.test(item.name)).reduce((sum: number, item: Body) => sum + item.count, 0)
-export interface BoatHopRequest { mode?: 'lava' | 'fall'; target?: HopPosition; maxHops?: number; timeoutSeconds?: number }
+// anyFloor — посадка на любую твёрдую опору (спуск с обрыва: точка приземления заранее не известна с точностью 1.5 бл.).
+export interface BoatHopRequest { mode?: 'lava' | 'fall'; target?: HopPosition; anyFloor?: boolean; maxHops?: number; timeoutSeconds?: number }
 const shoreOffsets: Array<{ x: number; y: number; z: number; distance: number }> = []
 for (let x = -10; x <= 10; x++) for (let z = -10; z <= 10; z++) for (let y = -1; y <= 3; y++) {
   shoreOffsets.push({ x, y, z, distance: Math.hypot(x, z) + Math.abs(y) * .7 })
@@ -33,6 +34,9 @@ export function boatHopPlan(bot: Body, { mode = 'lava', target }: BoatHopRequest
   for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (let dy = -4; dy <= 0; dy++) {
     const at = origin.offset(dx, dy, dz)
     const point = bot.entity.position
+    // В падении — только земля под собой, ниже ног на 1.5+: край обрыва рядом (откуда шагнули) — не посадка
+    // (try-descent boat 14.10: лодка встала на край, тело — в блок края, спуска нет).
+    if (mode === 'fall' && at.y + 1 > point.y - 1.5) continue
     if (Math.hypot(Math.max(at.x - point.x, 0, point.x - at.x - 1), Math.max(at.y - point.y, 0, point.y - at.y - 1), Math.max(at.z - point.z, 0, point.z - at.z - 1)) > 2.7) continue
     const distance = Math.hypot(at.x + .5 - bot.entity.position.x, at.z + .5 - bot.entity.position.z)
     const score = goal ? Math.hypot(goal.x - at.x - .5, goal.z - at.z - .5) : -distance
@@ -48,11 +52,31 @@ export function boatHopPlan(bot: Body, { mode = 'lava', target }: BoatHopRequest
   return null
 }
 
+// Разбить лодку по прицелу (высадиться, если в ней): удары, пока сущность не исчезнет.
+export async function breakBoatEntity(session: Body, ctl: BoatController, id: number, maxMs: number): Promise<boolean> {
+  const bot = session.bot
+  const boat = bot.entities[id]
+  if (!boat) return true
+  if (bot.vehicle?.id === id && !await ride.dismount(bot, Math.min(500, maxMs))) return false
+  const weapon = bot.inventory.items().find((item: Body) => /_(sword|axe)$/.test(item.name))
+  if (weapon && !ctl.aborted) await bot.equip(weapon, 'hand')
+  const until = clock.now() + maxMs
+  while (!ctl.aborted && bot.health > 0 && bot.entities[id] && clock.now() < until) {
+    const aim = pick.aim(bot, boat, { range: 3 })
+    if (!aim?.point) return false
+    await bot.lookAt(aim.point, true)
+    if (ctl.aborted) return false
+    bot.attack(boat)
+    await clock.sleep(100)
+  }
+  return !ctl.aborted && !bot.entities[id]
+}
+
 export function boatHopAvailable(bot: Body): boolean { return bot.health > 4 && count(bot) >= 2 && !!boatHopPlan(bot) }
 
 export async function runBoatHop(session: Body, ctl: BoatController, request: BoatHopRequest = {}): Promise<BoatHopResult> {
   const bot = session.bot
-  const target = request.target || goalNear(bot)
+  const target = request.anyFloor ? null : (request.target || goalNear(bot))
   const position = (): HopPosition => {
     const point = bot.vehicle?.position || bot.entity.position
     return { x: point.x, y: point.y, z: point.z, source: bot.vehicle ? 'vehicle' : 'player' }
@@ -81,23 +105,7 @@ export async function runBoatHop(session: Body, ctl: BoatController, request: Bo
           passengers: boat.passengers?.map((passenger: Body | number) => typeof passenger === 'object' ? passenger.id : passenger) } })
       return result.ok
     },
-    breakBoat: async (id, maxMs) => {
-      const boat = bot.entities[id]
-      if (!boat) return true
-      if (bot.vehicle?.id === id && !await ride.dismount(bot, Math.min(500, maxMs))) return false
-      const weapon = bot.inventory.items().find((item: Body) => /_(sword|axe)$/.test(item.name))
-      if (weapon && !ctl.aborted) await bot.equip(weapon, 'hand')
-      const until = clock.now() + maxMs
-      while (!ctl.aborted && bot.health > 0 && bot.entities[id] && clock.now() < until) {
-        const aim = pick.aim(bot, boat, { range: 3 })
-        if (!aim?.point) return false
-        await bot.lookAt(aim.point, true)
-        if (ctl.aborted) return false
-        bot.attack(boat)
-        await clock.sleep(100)
-      }
-      return !ctl.aborted && !bot.entities[id]
-    }
+    breakBoat: (id, maxMs) => breakBoatEntity(session, ctl, id, maxMs)
   }, { maxHops: Math.min(12, Math.max(1, request.maxHops ?? 8)), budgetMs: Math.min(15, Math.max(1, request.timeoutSeconds ?? 10)) * 1000, fallClutch: request.mode === 'fall' })
   session.bus.emit('boat_hop_result', result)
   return result

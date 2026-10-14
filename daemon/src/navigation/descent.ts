@@ -453,6 +453,84 @@ export async function blockSteps(session: Session, ctl: Cancellation, goal: Poin
 }
 
 /**
+ * Лодкой с обрыва (пользователь 14.10: «на лодке можно с больших высот спрыгивать… это сильно экономит время»): шаг с края
+ * к цели, в падении лодка на видимую верхнюю грань земли под собой и посадка в неё (boat-hop fall), высадка, лодку
+ * разбить и подобрать — не расходуется. Жемчуг на спуск не тратится.
+ */
+export async function boatDrop(session: Session, ctl: Cancellation, goal: Point): Promise<{ ok: boolean; why?: string; fall: number; hpLost: number; boatBack: boolean; sec: number }> {
+  const bot = session.bot; const clock = require('../game-clock'); const hop = require('../combat/boat-hop')
+  const t0 = clock.now(); const y0 = bot.entity.position.y; const hp0 = bot.health ?? 20; const boats0 = boatCount(bot)
+  const report = (ok: boolean, why?: string) => ({ ok, why, fall: Math.round((y0 - bot.entity.position.y) * 10) / 10, hpLost: Math.max(0, hp0 - (bot.health ?? 0)),
+    boatBack: boatCount(bot) >= boats0, sec: Math.round((clock.now() - t0) / 100) / 10 })
+  if (!boats0) return report(false, 'no_boat')
+  const air = (p: Vec3) => { const b = bot.blockAt(p, false); return !!b && !shapeBoxes(b).length && !/lava|water|fire/.test(b.name) }
+  const f = bot.entity.position.floored(); let dir: Vec3 | null = null; let best = Infinity
+  for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const c = f.offset(ax, 0, az)
+    if (![1, 0, -1, -2, -3].every(dy => air(c.offset(0, dy, 0)))) continue
+    const d = flat(c, goal); if (d < best) { best = d; dir = new Vec3(ax, 0, az) }
+  }
+  if (!dir) return report(false, 'no_drop_side')
+  bot.clearControlStates()
+  // К середине опоры крадучись (не сорваться), потом шаг с края без приседа: присед на земле не пускает с края.
+  const centre = new Vec3(f.x + .5, bot.entity.position.y, f.z + .5)
+  for (let t = 0; t < 20 && !ctl.aborted && flat(bot.entity.position, centre) > .15; t++) {
+    await bot.look(Math.atan2(bot.entity.position.x - centre.x, bot.entity.position.z - centre.z), 0, true)
+    bot.setControlState('sneak', true); bot.setControlState('forward', true); await bot.waitForTicks(1)
+  }
+  bot.clearControlStates()
+  // Лодка в руке заранее: в падении окно посадки — 1–2 тика (на 20 бл. ~2 бл./тик), смена предмета их съедает.
+  try { const item = require('../combat/boat-placement').boatItem(bot); if (item && bot.heldItem?.name !== item.name) await bot.equip(item, 'hand') } catch {}
+  await bot.look(Math.atan2(-dir.x, -dir.z), 0, true)
+  // Невысоко (≤ 24) — с разбега и прыжком: посадка в 3+ бл. от стены, лодке (1.375 в ширину) нужен простор вокруг клетки (у
+  // стены на 16 бл. «no visible collision-free boat surface» 6 из 6). Выше — шагом: дольше летит, относит и так, а разбег
+  // сдвигает окно посадки (30 бл.: шагом 5 из 6, с разбега 0 из 3; try-descent boat 14.10).
+  const run = y0 - goal.y <= 24
+  bot.setControlState('forward', true); bot.setControlState('sprint', run)
+  let t = 0
+  try {
+    while (t < 20 && bot.entity.onGround && !ctl.aborted) {
+      const ahead = bot.entity.position.offset(dir.x * .6, -.5, dir.z * .6)
+      if (run && (!bot.blockAt(ahead) || !shapeBoxes(bot.blockAt(ahead)!).length)) bot.setControlState('jump', true)
+      await bot.waitForTicks(1); t++
+    }
+  } finally { bot.setControlState('forward', false); bot.setControlState('sprint', false); bot.setControlState('jump', false) }
+  if (bot.entity.onGround) return report(false, 'did_not_leave_edge')
+  log(`boat: с края ${f} к ${dir}, падаю с y ${bot.entity.position.y.toFixed(1)}`)
+  const r = await hop.runBoatHop(session, ctl, { mode: 'fall', anyFloor: true, timeoutSeconds: 12 })
+  log(`boat: ${JSON.stringify({ ok: r.ok, why: r.why, path: r.path, hops: r.hops, y: bot.entity.position.y.toFixed(1), vehicle: !!bot.vehicle, hp: bot.health })}`)
+  // В лодке физика тела не тикает (mineflayer: пассажир без physicsTick) — ждать игровыми часами, не тиками.
+  for (let k = 0; k < 200 && !ctl.aborted && !bot.vehicle && !bot.entity.onGround && !bot.entity.isInWater && (bot.health ?? 0) > 0; k++) await clock.sleep(50)
+  await clock.sleep(200) // квитанция урона идёт за посадкой
+  if ((bot.health ?? 0) <= 0) return report(false, 'died')
+  // Высадиться, лодку разбить и подобрать (лежит у тела).
+  const id = bot.vehicle?.id
+  if (id !== undefined) {
+    const ride = require('../ride')
+    for (let k = 0; k < 3 && bot.vehicle && !ctl.aborted; k++) await ride.dismount(bot, 1500)
+    const broke = await hop.breakBoatEntity(session, ctl, id, 2500)
+    log(`boat: высадка ${bot.vehicle ? 'НЕ вышла' : 'да'}, лодка ${broke ? 'разбита' : 'цела'}`)
+  }
+  try { await require('../actions').collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 2500 }) } catch (e) { log('boat: подбор ' + (e as Error).message) }
+  return report(!!r.ok && !bot.vehicle, r.ok ? (bot.vehicle ? 'still_mounted' : undefined) : r.why)
+}
+function boatCount(bot: any): number { return (bot.inventory?.items() || []).filter((i: any) => /_(boat|raft)$/.test(i.name) && !/chest/.test(i.name)).reduce((n: number, i: any) => n + i.count, 0) }
+// Цена лодки: время плюс риск промаха — удар во всю высоту (drop − 3); смертельный — доля промаха × цена прогона.
+// Доля промаха — замер try-descent LAYOUT=boat 14.10 (по 6 заходов): 14 бл. — 0 из 6, 20–22 — 2 из 6, 30 — 1 из 6, 35–40 —
+// почти всегда; с ведром воды страхует MLG-клатч (edges.mlgDrop). ND_BOAT_MISS — своя доля для всех высот.
+export function boatMiss(drop: number): number {
+  if (process.env.ND_BOAT_MISS) return Number(process.env.ND_BOAT_MISS)
+  return drop <= 16 ? .05 : drop <= 26 ? .3 : drop <= 32 ? .2 : .9
+}
+const DEATH_SECONDS = 1200
+const HP_SECONDS = 4
+export function boatSeconds(drop: number, hp: number, water: boolean): number {
+  const hit = Math.max(0, drop - 3)
+  const miss = boatMiss(drop) * (water ? .3 : 1)
+  return .5 + drop / 16 + 3 + miss * (hit >= hp - 1 ? DEATH_SECONDS : hit * HP_SECONDS)
+}
+
+/**
  * Решение в goto: цель ниже на `minDrop`+ — сравнить пеший путь pathfinder'а с прыжком в воду, уступами и блоками,
  * исполнить лучший, если выигрыш ≥ minGain с (или пешего пути нет). Дальше goto идёт сам от места посадки.
  */
@@ -482,6 +560,12 @@ export async function maybeDescend(session: Session, ctl: Cancellation, goalXYZ:
   const hops = Math.ceil(drop / 2.5)
   if (ledges.length) options.push({ kind: 'ledges', seconds: toEdge + hops * .8 + Math.max(0, flat(edge!, target) - hops * 2) / RUN })
   if (wall) options.push({ kind: 'blocks', seconds: toEdge + drop / 3 * 1.1 + flat(edge!, target) / RUN })
+  // Лодкой с края (падение, лодка под собой, посадка): вода внизу не нужна, годится и в Аду. ND_DESCENT_BOAT=0 — без неё.
+  if (edge && boatCount(bot) && process.env.ND_DESCENT_BOAT !== '0') {
+    options.push({ kind: 'boat', seconds: toEdge + boatSeconds(drop, hp, (bot.inventory?.items() || []).some((i: any) => i.name === 'water_bucket')) + flat(edge, target) / RUN })
+  }
+  // Лаборатория: ND_DESCENT_FORCE=boat — только этот вариант (замер приёма без выбора).
+  if (process.env.ND_DESCENT_FORCE) options.splice(0, options.length, ...options.filter(o => o.kind === process.env.ND_DESCENT_FORCE))
   if (!options.length) return { used: null, why: 'нет спуска', planMs: Math.round(performance.now() - t0) }
   const hopgoto = require('../hopgoto')
   // 0.4 с реального на A*: с блоками в рюкзаке поиск раздувается стройкой (try-descent wall: таймаут 1 с = ~235 игровых
@@ -512,6 +596,7 @@ export async function maybeDescend(session: Session, ctl: Cancellation, goalXYZ:
     if (!walked.ok) result = { why: 'edge: ' + walked.why }
     else if (ctl.aborted) result = { why: 'interrupted' }
     else if (best.kind === 'ledges') result = await ledgeHops(session, ctl, target, { maxFallDamage: flex })
+    else if (best.kind === 'boat') result = await boatDrop(session, ctl, target)
     else result = await blockSteps(session, ctl, target)
   }
   // Игровые секунды: решение (A* пешего пути и прогнозы) и само исполнение спуска.
@@ -545,7 +630,8 @@ export function watch(bot: any, goal: { x: number; y: number | null; z: number }
     const hp = bot.health ?? 20; const flex = hp >= 16 ? 2 : 0
     const edge = edgeNear(bot, target, { radius: 3 })
     const atEdge = edge && standingAt(bot, edge)
-    const ready = !!(atEdge && (ledgeOptions(atEdge, target, { maxFallDamage: flex }).some(p => edge!.y - p.y >= 2) || (blockCount(bot) >= Math.ceil((e.position.y - gy) / 3) && wallStep(atEdge, target)))) ||
+    // Лодка в рюкзаке — край обрыва рядом уже вариант (цену и риск решает maybeDescend).
+    const ready = !!(atEdge && (boatCount(bot) && process.env.ND_DESCENT_BOAT !== '0' || ledgeOptions(atEdge, target, { maxFallDamage: flex }).some(p => edge!.y - p.y >= 2) || (blockCount(bot) >= Math.ceil((e.position.y - gy) / 3) && wallStep(atEdge, target)))) ||
       !!findWaterDrop(bot, target, { budgetMs: 60, maxDamage: flex, waterRadius: 10 })
     if (ready) fired = fire() !== false // false — некому принять (между попытками): проверить снова
   }

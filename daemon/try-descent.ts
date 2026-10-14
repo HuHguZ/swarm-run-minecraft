@@ -9,6 +9,8 @@
 //   LAYOUT=nether      — то же, что ledges, но в Аду (незерак, лава на полу в стороне; NO_BLOCKS=1 — без незерака в рюкзаке);
 //   LAYOUT=flex        — уступы, первый на 5 ниже (2 хп при полном хп — по правилу гибкости);
 //   LAYOUT=ridge       — спуск НА ХОДУ: старт в 28 бл. от пруда, pathfinder идёт вдоль края к лестнице, сторож descent.watch.
+//   LAYOUT=boat        — гладкая стена, лодка и каменный топор (14.10: лодка под себя в падении, разбить, подобрать);
+//                        HEIGHT=20|30|40 — высота скалы (по умолчанию 24).
 // MIN_GAIN=-60 — спуск без сравнения с пешим путём (замер самого приёма; в строке forced).
 // Строка на заход: ticks (игровые), wallMs, hp, урон, смерть, дошёл ли, какой спуск выбран, сколько блоков поставлено.
 import assert from 'node:assert/strict'
@@ -29,7 +31,8 @@ export async function runDescent(): Promise<void> {
   const layout = process.env.LAYOUT || 'water'
   const nether = layout === 'nether'
   const dim = nether ? 'the_nether' : 'overworld'
-  const X0 = 4300; const Z0 = 3800; const TOP = 164; const FLOOR = 140
+  const X0 = 4300; const Z0 = 3800; const FLOOR = 140; const TOP = FLOOR + Number(process.env.HEIGHT || 24)
+  const W = Math.max(30, TOP - FLOOR + 6) // лестница медленного пути на запад — длиной в высоту
   const rock = nether ? 'netherrack' : 'stone'
   // LAYOUT=ridge (сторож на ходу): длинное плато вдоль z, старт на севере у восточного края, лестница — на юге; пруд на
   // востоке посередине; goto к цели к востоку от пруда — pathfinder идёт на юг вдоль края, мимо пруда.
@@ -38,8 +41,8 @@ export async function runDescent(): Promise<void> {
   const goal = ridge ? [X0 + 38, FLOOR, Z0 - 10] : [X0 + 38, FLOOR, Z0]
   const box = (a: number[], b: number[], block: string) => kit.fillExact(dim, [a, b], block)
   async function build(): Promise<void> {
-    await box([X0 - 30, FLOOR - 6, Z0 - 32], [X0 + 50, TOP + 12, Z0 + 32], 'air')
-    await box([X0 - 30, FLOOR - 6, Z0 - 32], [X0 + 50, FLOOR - 1, Z0 + 32], rock)
+    await box([X0 - W, FLOOR - 6, Z0 - 32], [X0 + 50, TOP + 12, Z0 + 32], 'air')
+    await box([X0 - W, FLOOR - 6, Z0 - 32], [X0 + 50, FLOOR - 1, Z0 + 32], rock)
     if (ridge) {
       await box([X0, FLOOR, Z0 - 30], [X0 + 10, TOP - 1, Z0 + 5], rock)
       for (let i = 1; i <= TOP - FLOOR; i++) await box([X0 + 7, FLOOR, Z0 + 5 + i], [X0 + 9, TOP - 1 - i, Z0 + 5 + i], rock)
@@ -51,7 +54,7 @@ export async function runDescent(): Promise<void> {
   }
   // Перед каждым заходом: восток от скалы заново (поставленные клатчем блоки, вода из ведра), плюс раскладка.
   async function reset(): Promise<void> {
-    await box([X0 - 30, TOP, Z0 - 32], [X0 + 10, TOP + 12, Z0 + 12], 'air')
+    await box([X0 - W, TOP, Z0 - 32], [X0 + 10, TOP + 12, Z0 + 12], 'air')
     await box([X0 + 11, FLOOR, Z0 - 32], [X0 + 50, TOP + 12, Z0 + 12], 'air')
     await box([X0 + 11, FLOOR - 3, Z0 - 32], [X0 + 50, FLOOR - 1, Z0 + 12], rock)
     if (layout === 'water') await box([X0 + 14, FLOOR - 2, Z0 - 1], [X0 + 16, FLOOR - 1, Z0 + 1], 'water')
@@ -86,6 +89,7 @@ export async function runDescent(): Promise<void> {
       await kit.cmd(`/execute in minecraft:${dim} run tp @s ${start.join(' ')} 90 0`)
       await kit.cmd('/clear @s')
       if (layout === 'wall') await kit.cmd('/give @s cobblestone 64')
+      if (layout === 'boat') { await kit.cmd('/give @s oak_boat 1'); await kit.cmd('/give @s stone_axe 1') }
       if (layout === 'bucket') await kit.cmd('/give @s water_bucket 1')
       if (nether && process.env.NO_BLOCKS !== '1') await kit.cmd('/give @s netherrack 64')
       await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
@@ -102,7 +106,8 @@ export async function runDescent(): Promise<void> {
       const away = end ? Math.hypot(end.x - (goal[0] + .5), end.z - (goal[2] + .5)) : null
       const detail = reply.detail || {}
       const clutch0 = before.detail.physics?.clutch?.stats ?? {}; const clutch1 = after.detail.physics?.clutch?.stats ?? {}
-      const row = { physical: true, slot, trial, layout, arm, status: reply.status, ticks, seconds: ticks / 20, wallMs, ticksPerWallSecond: ticks / (wallMs / 1000),
+      const inv = after.state.inventory || {}
+      const row = { physical: true, slot, trial, layout, arm, height: TOP - FLOOR, boats: Object.entries(inv).filter(([k]) => /_boat$/.test(k)).reduce((n, [, v]: any) => n + v, 0), status: reply.status, ticks, seconds: ticks / 20, wallMs, ticksPerWallSecond: ticks / (wallMs / 1000),
         hp: after.state.health, hpLost: 20 - after.state.health, died, away, ok: reply.status === 'done' && away !== null && away < 2.5 && !died,
         descent: detail.descent ?? null, error: reply.error ?? null, by: reply.by ?? null, placed: (clutch1.placed ?? 0) - (clutch0.placed ?? 0), saved: (clutch1.saved ?? 0) - (clutch0.saved ?? 0),
         lockstep: process.env.ND_LOCKSTEP === '1', forced: process.env.MIN_GAIN ? Number(process.env.MIN_GAIN) : null, clocks: { before: before.state.clock, after: after.state.clock } }
