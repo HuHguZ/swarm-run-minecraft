@@ -6,7 +6,7 @@ import vm from 'node:vm'
 import { transformSync } from 'esbuild'
 
 // Лут построек ценой (пользователь 14.10): campaign.lootSeenStructures на заглушках тела.
-function fixture ({ known = [], bag = {} as Record<string, number>, portal = null as any }: any = {}) {
+function fixture ({ known = [], bag = {} as Record<string, number>, portal = null as any, explore = { status: 'done', detail: { done: true } } }: any = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
   const fn = source.slice(source.indexOf('// Постройки на виду — лут ценой'), source.indexOf('async function surfaceLavaSurvey'))
   const calls: any[] = []
@@ -20,7 +20,8 @@ function fixture ({ known = [], bag = {} as Record<string, number>, portal = nul
     act: async (method, params) => {
       calls.push({ method, params })
       if (method === 'structure' && params.mode === 'list') return { detail: { known } }
-      if (method === 'structure' && params.mode === 'explore') { context.state.inventory.flint_and_steel = 1; return { detail: {} } }
+      // Заход взял постройку целиком (explore done) — только такой закрывает ресурс в графе.
+      if (method === 'structure' && params.mode === 'explore') { context.state.inventory.flint_and_steel = 1; return explore }
       return { detail: {} }
     } }
   vm.runInNewContext(transformSync(`${fn}\nmodule.exports = lootSeenStructures`, { loader: 'ts', format: 'cjs' }).code, context)
@@ -52,4 +53,12 @@ test('a looted village is reported to the graph as exhausted', async () => {
   const f = fixture({ known: [{ kind: 'village', name: 'деревня', at: { x: 15, y: 64, z: 0 }, done: false }] })
   await f.run()
   assert.equal(f.facts.village_exhausted, true)
+})
+
+test('an interrupted or partial visit does not close the resource in the graph', async () => {
+  for (const explore of [{ status: 'interrupted', detail: {} }, { status: 'done', detail: { done: false } }]) {
+    const f = fixture({ known: [{ kind: 'village', name: 'деревня', at: { x: 15, y: 64, z: 0 }, done: false }], explore })
+    await f.run()
+    assert.equal(f.facts.village_exhausted, undefined, JSON.stringify(explore))
+  }
 })

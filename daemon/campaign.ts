@@ -2554,11 +2554,14 @@ async function lavaAtSeenRuins () {
   return lavaSourceKnown
 }
 // Постройки на виду — лут ценой (пользователь 14.10: «клады разные искать по структурам основного мира — это время экономит, если
-// они рядом»): руины портала (огниво, обсидиан, золото), деревни (еда, железо, кровати), храмы, иглу, корабли. Идти или нет —
-// выгода предметов при текущих нуждах против пути (src/campaign/structure-value.ts, таблицы лута 1.21.11), числа — в журнал.
-// Находит глаз (structure scan): постройки, которые бот видел сам. Взятая (done) или уже испробованная — мимо.
+// они рядом»): руины портала (огниво, обсидиан, золото), деревни (еда, железо, кровати), храмы, иглу, корабли, клад по карте
+// сокровищ. Идти или нет — выгода предметов при текущих нуждах против пути и работы до сундуков (src/campaign/structure-value.ts,
+// таблицы лута 1.21.11), числа — в журнал. Находит глаз (structure scan): постройки, которые бот видел сам; видно отсюда —
+// шаблон (structure fit, «как спидраннер знает устройство»): цена по всем сундукам шаблона, видимым и нет; карта корабля —
+// цепочкой до клада. Взятая (done) или уже испробованная — мимо.
 const structureValue = require(path.join(__dirname, 'src', 'campaign', 'structure-value'))
 const structLootTried = new Set()
+const structLootRetried = new Set()
 let structLootNext = 0
 function structureNeeds () {
   const kitIron = (have(/bucket$/) ? 0 : 3) + (lighter() ? 0 : 1) + (shieldOn() ? 0 : 1) + (have(PICK_IRON) ? 0 : 3)
@@ -2572,25 +2575,46 @@ async function lootSeenStructures (radius = 160) {
   const far = x => Math.hypot(x.at.x - state.pos.x, x.at.z - state.pos.z)
   const keyOf = x => `${x.kind}:${x.at.x},${x.at.z}`
   const list = ((await act('structure', { mode: 'list' })).detail?.known || [])
-    .filter(x => x && x.at && Number.isFinite(x.at.x) && !x.done && structureValue.LOOT[x.kind] && !structLootTried.has(keyOf(x)) && far(x) <= radius)
+    .filter(x => x && x.at && Number.isFinite(x.at.x) && !x.done && structureValue.PRIOR[x.kind] && !structLootTried.has(keyOf(x)) && far(x) <= (x.kind === 'buried_treasure' && radius >= 160 ? 480 : radius))
   if (!list.length || died) return false
+  // Видно отсюда — узнать шаблон (structure-fit): цена по всем сундукам шаблона, а не по среднему вариантов.
+  for (const x of list.filter(q => !q.fit && far(q) <= 64 && process.env.ND_STRUCT_TEMPLATES !== '0').slice(0, 2)) {
+    const f = await act('structure', { mode: 'fit', kind: x.kind, x: x.at.x, z: x.at.z })
+    if (f.detail?.fit) x.fit = f.detail.fit
+  }
   const needs = structureNeeds()
-  const scored = list.map(x => ({ x, w: structureValue.structureWorth(x.kind, far(x), needs) })).sort((a, b) => b.w.net - a.w.net)
+  // Сундуки глубже 16 бл. под водой (уровень моря 62) без кармана воздуха тело не берёт (structures.lootAll) — в цене их нет.
+  // Под водой глубже 16 бл. (с дверями на карман — 26) не ныряю: те же пределы, что у lootAll (море на 62).
+  const reachable = c => !c.wet || !Number.isFinite(c.y) || c.y >= (process.env.ND_AIR_POCKET === '1' ? 36 : 46)
+  const scored = list.map(x => ({ x, w: structureValue.structureWorth(x.kind, far(x), needs, x.fit ? x.fit.chests.filter(reachable) : null) })).sort((a, b) => b.w.net - a.w.net)
   for (const s of scored.slice(0, 3)) log(`постройка ${s.x.name || s.x.kind} в ${Math.round(s.w.distance)} бл.: ${structureValue.describeWorth(s.w)} — ${s.w.net > 0 ? 'иду' : 'мимо'}`)
   const best = scored[0]
   if (!(best.w.net > 0)) return false
   structLootTried.add(keyOf(best.x))
+  // Глубоко под водой (сундуки ниже y 52 — больше 10 бл. воды) — двери на карманы воздуха, пока на суше: 6 досок → 3 двери.
+  const deepest = Math.min(...((best.x.fit && best.x.fit.chests) || []).map(c => Number.isFinite(c.y) ? c.y : 99), Number.isFinite(best.x.at.y) ? best.x.at.y : 99)
+  if (process.env.ND_AIR_POCKET === '1' && /^(shipwreck|ocean_ruin)$/.test(best.x.kind) && deepest < 52 && !have(/_door$/) && !sit.inWater) {
+    const wood = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry'].find(w => have(`${w}_planks`) >= 6 || have(new RegExp(`^${w}_log$`)) >= 2)
+    if (wood) await craft(`${wood}_door`, 3)
+  }
   const bag0 = { ...(state.inventory || {}) }
   const t0 = gameClock.now()
   const e = await act('structure', { mode: 'explore', kind: best.x.kind, x: best.x.at.x, z: best.x.at.z, ...(Number.isFinite(best.x.at.y) ? { y: best.x.at.y } : {}),
-    ...(best.x.kind === 'village' && needs.beds > 0 ? { beds: 1 } : {}), timeoutSeconds: Math.round(Math.min(300, best.w.cost * 2 + 60)) })
+    ...(best.x.kind === 'village' && needs.beds > 0 ? { beds: 1 } : {}), maxDistance: Math.ceil(far(best.x)) + 24, timeoutSeconds: Math.round(Math.min(420, best.w.cost * 2 + 60)) })
   await refresh()
   if (have('gold_block')) await craft('gold_ingot', 9 * have('gold_block'))
   if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
   if (!goldOn() && have(/^golden_(helmet|chestplate|leggings|boots)$/)) await act('armor')
   const got = Object.entries(state.inventory || {}).filter(([k, n]) => (Number(n) || 0) > (Number(bag0[k]) || 0)).map(([k, n]) => `${k}+${Number(n) - (Number(bag0[k]) || 0)}`)
   log(`постройка ${best.x.name || best.x.kind}: ${Math.round((gameClock.now() - t0) / 1000)} с (оценка ${Math.round(best.w.cost)} с), взял ${got.join(', ') || 'ничего'}${e.detail?.stopped ? ' — ' + String(e.detail.stopped).slice(0, 80) : ''}`)
-  if (/^(village|shipwreck)$/.test(best.x.kind)) graphFact(`${best.x.kind}_exhausted`, true)
+  // Шаблон и сундуки по нему (structures.explore): что узнал, сколько открыл, что не вскрыл — для замера.
+  const tLines = (e.detail?.lines || []).filter(l => /шаблон|сундук шаблона|колодец|подвал|карта сокровищ|не ныряю|плита/.test(l)).slice(0, 6)
+  const planned = (e.detail?.chests || []).filter(c => c.planned)
+  if (tLines.length || planned.length) log(`постройка ${best.x.name || best.x.kind}: ${tLines.map(l => l.replace(/^[▸⚠] /, '')).join('; ')}${planned.length ? `; сундуков по шаблону открыто ${planned.filter(c => c.took).length} из ${planned.length}` : ''}`)
+  // Заход оборван тактикой (воздух, моб) — постройка не взята: ещё один заход потом, не больше.
+  if (e.status === 'interrupted' && !structLootRetried.has(keyOf(best.x))) { structLootRetried.add(keyOf(best.x)); structLootTried.delete(keyOf(best.x)); return true }
+  // Исчерпана — только взятая целиком (explore done); оборванный или неполный заход ресурс не закрывает (ревью Codex q2).
+  if (e.status === 'done' && e.detail?.done && /^(village|shipwreck|buried_treasure)$/.test(best.x.kind)) graphFact(best.x.kind === 'buried_treasure' ? 'treasure_exhausted' : `${best.x.kind}_exhausted`, true)
   return true
 }
 async function surfaceLavaSurvey () {

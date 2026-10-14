@@ -1,14 +1,16 @@
 // Лут построек ценой (пользователь 14.10: «клады разные искать по структурам основного мира — это время экономит, если они
-// рядом»). Идти или нет — выгода против пути, в секундах, с числами для журнала.
+// рядом»; «спидраннеры просто знают устройство всех структур и откапывают все сундуки»). Идти или нет — выгода против цены,
+// в секундах, с числами для журнала.
 //
-// Добыча — среднее из таблиц лута сервера 1.21.11 (data/minecraft/loot_table/chests/*.json в paper-1.21.11.jar: броски пула ×
-// вес / сумма весов × set_count), на постройку — × сундуков в ней. Цена предмета — сколько секунд он экономит при текущих нуждах,
-// по априорам графа (core/speedrun.ts): MineIron 180 с на 8 слитков, FindFood 90 с на 8 единиц еды, LavaPoolPortal 120 с на раму.
-// Золото — попутно, не повод для крюка (пользователь 14.10: золото на броню и бартер — в Аду).
-// Деревня и корабль — по факту фермы, а не по таблицам (sv-1-1..3 14.10): деревня дала сено ×2 и кровать (сундуков домов explore
-// не находит), корабль — 0 сундуков из 3 заходов (под водой не видны). Таблицы: деревня ~4 сундука хлеба/еды и железо кузнецов,
-// корабль — железо 9 в сундуке сокровищ; вернуть, когда explore начнёт их находить. Обход деревни — 25–129 с (в среднем 74 с при
-// оценке 43–64 с): накладные 50 с, деревня окупается только рядом (≤ ~35 бл.) и когда нужны и еда, и кровати, и железо.
+// Выгода — все сундуки шаблона (structure-fit: узнанный шаблон даёт клетки и таблицы сундуков; не узнан — среднее по
+// вариантам постройки), ожидание на сундук — по таблицам лута сервера 1.21.11 (loot_table/chests/*.json в
+// paper-1.21.11.jar: броски пула × вес / сумму весов × среднее set_count; железо — слитки + самородки/9 + железная кирка
+// за 3; еда — в единицах campaign.foodUnits, min(1, голод/6), пшеница → хлеб /3). Цена предмета — сколько секунд он
+// экономит при текущих нуждах, по априорам графа (core/speedrun.ts): MineIron 180 с на 8 слитков, FindFood 90 с на 8
+// единиц еды, LavaPoolPortal 120 с на раму. Золото — попутно, не повод для крюка (пользователь 14.10: золото — в Аду).
+// Цена — путь (по расстоянию, по воде в полтора раза дольше), сундук (открыть 8 с) и работа до него: копать к сундуку
+// под песком или в доме, нырять под воду, колодец храма, лестница иглу (CHEST_WORK). Карта сокровищ — цепочка
+// «корабль → карта → клад» целиком: доля карты × (выгода клада − путь к нему и копка).
 
 export interface Needs {
   iron: number // слитков не хватает на набор (ведро, огниво, щит, кирка)
@@ -19,52 +21,126 @@ export interface Needs {
   beds: number // кроватей не хватает на дракона
 }
 
-export interface Loot { chests: number; overhead: number; water?: boolean; items: Record<string, number> }
-
-// lighter — вероятность хоть одного огнива или заряда (portal-natural: «огниво или заряд в 73 %»); golden_armor — хоть одной части.
-export const LOOT: Record<string, Loot> = {
-  ruined_portal: { chests: 1, overhead: 0, items: { lighter: 0.73, obsidian: 0.9, iron: 0.9, golden_armor: 0.6, gold: 0.75, golden_apple: 0.25 } },
-  village: { chests: 2, overhead: 50, items: { food: 6, bed: 1, iron: 0.3 } },
-  desert_pyramid: { chests: 4, overhead: 30, items: { iron: 2.2, gold: 3.3, diamond: 0.5, golden_apple: 1 } },
-  jungle_pyramid: { chests: 2, overhead: 40, items: { iron: 2.7, gold: 6.1, diamond: 0.54 } },
-  igloo: { chests: 0.5, overhead: 20, items: { golden_apple: 0.5, food: 3 } },
-  shipwreck: { chests: 2, overhead: 20, water: true, items: { iron: 1, food: 1.2 } }
+// Ожидание на сундук (таблицы jar 1.21.11, расчёт 14.10). lighter, golden_armor — вероятность хоть одного.
+export const TABLE: Record<string, Record<string, number>> = {
+  shipwreck_supply: { food: 4.94 },
+  shipwreck_treasure: { iron: 9.44, gold: 1.17, diamond: 0.15 },
+  shipwreck_map: { treasure_map: 1 },
+  buried_treasure: { iron: 9.29, gold: 4.64, diamond: 1, food: 5.5 },
+  desert_pyramid: { iron: 0.55, gold: 0.82, diamond: 0.12, food: 0.18, golden_apple: 0.27 },
+  jungle_temple: { iron: 1.35, gold: 3.03, diamond: 0.27 },
+  igloo_chest: { gold: 0.18, food: 2.81, golden_apple: 1 },
+  ruined_portal: { iron: 0.9, gold: 0.93, food: 0.76, golden_apple: 0.24, obsidian: 0.9, lighter: 0.74, golden_armor: 0.62 },
+  underwater_ruin_big: { gold: 0.34, food: 1.08, golden_apple: 0.04, treasure_map: 0.43 },
+  underwater_ruin_small: { food: 1.16, treasure_map: 0.42 },
+  pillager_outpost: { iron: 0.68, food: 3.04 },
+  'village/village_weaponsmith': { iron: 2.31, gold: 0.51, diamond: 0.31, food: 2.31, obsidian: 1.29 },
+  'village/village_toolsmith': { iron: 3.63, gold: 0.21, diamond: 0.21, food: 2.59 },
+  'village/village_armorer': { iron: 1.5, food: 3.13 },
+  'village/village_plains_house': { food: 6.08 },
+  'village/village_desert_house': { food: 4.88 },
+  'village/village_savanna_house': { iron: 0.36, food: 2.49 },
+  'village/village_snowy_house': { food: 2.96 },
+  'village/village_taiga_house': { food: 3.58 },
+  'village/village_temple': { gold: 0.72, food: 4.22 },
+  'village/village_cartographer': { food: 1.88 },
+  'village/village_fisher': { iron: 1.64, food: 0.55 },
+  'village/village_tannery': { food: 1.95 },
+  'village/village_butcher': { food: 2.07 },
+  'village/village_mason': { food: 1.92 },
+  'village/village_shepherd': { food: 0.76, bed: 1.96 },
+  'village/village_fletcher': {}
 }
 
+// Постройка, пока шаблон не узнан: средние сундуки по вариантам (веса списков кусков и пулов деревень jar 1.21.11) и
+// добыча вне сундуков. Корабль: 20 шаблонов океана — карта 0.8, снабжение 0.7, сокровища 0.7 на корабль; на пляже (11)
+// по 8/11. Деревня равнин: дома с сундуками — 13 из 87 весов пула домов, ~10 домов на деревню; сено (2 блока ≈ 5 ед.) и
+// кровать — вне сундуков (ферма sv-1-* 14.10). Руины портала: 1 сундук. Храм пустыни 4, джунглей 2, иглу — подвал в половине.
+export interface Prior { chests: Array<[string, number]>; outside?: Record<string, number>; water?: boolean; overhead: number }
+export const PRIOR: Record<string, Prior> = {
+  ruined_portal: { chests: [['ruined_portal', 1]], overhead: 0 },
+  village: { chests: [['village/village_plains_house', 0.7], ['village/village_weaponsmith', 0.23], ['village/village_tannery', 0.23], ['village/village_fisher', 0.23], ['village/village_cartographer', 0.11]], outside: { food: 5, bed: 1 }, overhead: 40 },
+  desert_pyramid: { chests: [['desert_pyramid', 4]], overhead: 15 },
+  jungle_pyramid: { chests: [['jungle_temple', 2]], overhead: 20 },
+  igloo: { chests: [['igloo_chest', 0.5]], overhead: 15 },
+  shipwreck: { chests: [['shipwreck_map', 0.8], ['shipwreck_supply', 0.7], ['shipwreck_treasure', 0.7]], water: true, overhead: 10 },
+  ocean_ruin: { chests: [['underwater_ruin_small', 1]], water: true, overhead: 10 },
+  buried_treasure: { chests: [['buried_treasure', 1]], overhead: 0 }
+}
+// Работа до сундука сверх ходьбы и открытия, с: копать под песком/в стене, нырять, колодец храма, лестница иглу.
+export const CHEST_WORK: Record<string, number> = { shipwreck: 12, shipwreckWet: 22, ocean_ruin: 22, desert_pyramid: 8, jungle_pyramid: 15, igloo: 30, village: 8, ruined_portal: 3, buried_treasure: 15 }
 export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldenApple: 20, diamond: 20, bed: 15 }
 export const WALK_BPS = 2.5 // ход с обходами и прыжками; крюк — туда и половина обратно
 export const DETOUR = 1.5
 export const CHEST_SECONDS = 8
+// Путь к кладу по карте, пока карты нет: априор, не замер (поиск в 50 чанках — предел, не среднее; ревью Codex q2). Карта
+// прочитана — у записи клада своё расстояние (explore пишет «клад на x,z (N бл.)»).
+export const TREASURE_WALK = 160
 
 export function itemSeconds (item: string, n: number, needs: Needs): number {
   switch (item) {
-    case 'iron': return Math.min(n, needs.iron) * SECONDS.iron + Math.max(0, n - needs.iron) * SECONDS.ironSpare
-    case 'lighter': return needs.lighter ? n * SECONDS.lighter : 0
+    case 'iron': return Math.min(n, Math.max(0, needs.iron)) * SECONDS.iron + Math.max(0, n - Math.max(0, needs.iron)) * SECONDS.ironSpare
+    case 'lighter': return needs.lighter ? Math.min(1, n) * SECONDS.lighter : 0
     case 'obsidian': return needs.portal ? 0 : n * SECONDS.obsidian
-    case 'food': return Math.min(n, needs.food) * SECONDS.food
+    case 'food': return Math.min(n, Math.max(0, needs.food)) * SECONDS.food
     case 'gold': case 'golden_armor': return n * SECONDS.gold
     case 'golden_apple': return n * SECONDS.goldenApple
     case 'diamond': return needs.diamondPick ? n * SECONDS.diamond : 0
-    case 'bed': return Math.min(n, needs.beds) * SECONDS.bed
+    case 'bed': return Math.min(n, Math.max(0, needs.beds)) * SECONDS.bed
     default: return 0
   }
 }
-
-export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]> }
-
-export function structureWorth (kind: string, distance: number, needs: Needs): Worth | null {
-  const loot = LOOT[kind]
-  if (!loot) return null
-  const items = Object.entries(loot.items).map(([item, n]) => [item, n, itemSeconds(item, n, needs)] as [string, number, number])
-  const value = items.reduce((sum, [, , s]) => sum + s, 0)
-  const walk = distance / WALK_BPS * DETOUR * (loot.water ? 1.5 : 1)
-  const cost = walk + loot.chests * CHEST_SECONDS + loot.overhead
-  return { kind, distance, value, walk, cost, net: value - cost, items }
+// Нужды после добычи items (для цепочки: клад после корабля).
+function after (needs: Needs, items: Record<string, number>): Needs {
+  return { ...needs, iron: Math.max(0, needs.iron - (items.iron || 0)), food: Math.max(0, needs.food - (items.food || 0)), lighter: needs.lighter && (items.lighter || 0) < 0.5, beds: Math.max(0, needs.beds - (items.bed || 0)) }
 }
 
-// «путь ≈ 60 с + лут 8 с, выгода ≈ 120 с (огниво 0.73×90, железо 0.9×22) → +52 с».
+export interface Chest { table: string; p: number; wet?: boolean }
+export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]>; chests: number; chain?: number; known?: boolean }
+
+// kind, расстояние, нужды; chests — сундуки узнанного шаблона (иначе — среднее по вариантам).
+export function structureWorth (kind: string, distance: number, needs: Needs, chests: Chest[] | null = null): Worth | null {
+  const P = PRIOR[kind]
+  if (!P) return null
+  const list: Chest[] = chests !== null ? chests : P.chests.map(([table, p]) => ({ table, p, wet: P.water }))
+  const items: Record<string, number> = { ...(P.outside || {}) }
+  let maps = 0
+  let work = 0
+  let nChests = 0
+  for (const c of list) {
+    if (!(c.p > 0)) continue // округлённая до 0 гипотеза — не цель (ревью Codex q2)
+    const t = TABLE[c.table] || {}
+    for (const [k, v] of Object.entries(t)) {
+      if (k === 'treasure_map') maps += c.p * v
+      else items[k] = (items[k] || 0) + c.p * v
+    }
+    nChests += c.p
+    // Под водой — нырок у любой постройки (руины портала в океане, подводные руины): не меньше, чем у корабля.
+    const W = Math.max(c.wet ? CHEST_WORK.shipwreckWet : 0, kind === 'shipwreck' ? CHEST_WORK.shipwreck : (CHEST_WORK[kind] || 5))
+    // К клетке шаблона копать или нырять придётся целиком (пусто там или нет — видно, только дойдя; ревью Codex q2), с
+    // вероятностью — лишь открытие и добыча. Без шаблона p — ожидаемое число сундуков, работа — тоже ожиданием.
+    work += (chests !== null ? 1 : c.p) * W + c.p * CHEST_SECONDS
+  }
+  const priced = Object.entries(items).map(([item, n]) => [item, Math.round(n * 100) / 100, itemSeconds(item, n, needs)] as [string, number, number])
+  let value = priced.reduce((s, [, , v]) => s + v, 0)
+  // Цепочка карты: клад после добычи этой постройки — доля карты × (выгода клада − путь и копка).
+  let chain = 0
+  if (maps > 0 && kind !== 'buried_treasure') {
+    const t = structureWorth('buried_treasure', TREASURE_WALK, after(needs, items))
+    if (t && t.net > 0) chain = Math.min(1, maps) * t.net
+    value += chain
+    if (chain >= 1) priced.push(['treasure_map', Math.round(Math.min(1, maps) * 100) / 100, chain])
+  }
+  // По воде — в полтора раза дольше; у узнанной постройки — по её сундукам (корабль на пляже — посуху).
+  const wet = chests === null ? !!P.water : list.some(c => c.p > 0 && c.wet)
+  const walk = distance / WALK_BPS * DETOUR * (wet ? 1.5 : 1)
+  const cost = walk + work + P.overhead
+  return { kind, distance, value, walk, cost, net: value - cost, items: priced, chests: Math.round(nChests * 10) / 10, chain, known: chests !== null }
+}
+
+// «путь ≈ 60 с + сундуки 3 ≈ 52 с, выгода ≈ 120 с (iron 9.4: 207 с, …) → +52 с».
 export function describeWorth (w: Worth): string {
   const parts = w.items.filter(([, , s]) => s >= 1).sort((a, b) => b[2] - a[2]).map(([item, n, s]) => `${item} ${n}: ${Math.round(s)} с`)
-  return `путь ≈ ${Math.round(w.walk)} с + лут ≈ ${Math.round(w.cost - w.walk)} с, выгода ≈ ${Math.round(w.value)} с` +
+  return `путь ≈ ${Math.round(w.walk)} с + сундуки ${w.chests}${w.known ? ' по шаблону' : ''} ≈ ${Math.round(w.cost - w.walk)} с, выгода ≈ ${Math.round(w.value)} с` +
     `${parts.length ? ` (${parts.join(', ')})` : ''} → ${w.net >= 0 ? '+' : ''}${Math.round(w.net)} с`
 }
