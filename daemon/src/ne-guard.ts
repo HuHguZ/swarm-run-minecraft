@@ -573,45 +573,157 @@ async function reactBody (session, ctl, opts, h) {
   return out
 }
 
+// Шар гаста — отбить ударом: Player.deflectProjectile (1.21.11) уводит снаряд с тегом redirectable_projectile по взгляду
+// ударившего (ProjectileDeflection.AIM_DEFLECT: скорость = getLookAngle), отражённый шар гаст не переживает (Ghast.hurtServer).
+// Шар летит сам (AbstractHurtingProjectile.tick: v = (v + норм(v)·0.1)·0.95, затем pos += v), а сервер шлёт его позицию раз
+// в 10 тиков (EntityType.FIREBALL updateInterval 10): mineflayer видит шар там, где тот был до 10 тиков назад (до 13 бл.), и
+// удар «по памяти» прицел (pick.ts) не пропускал. Клиент игры ведёт шар сам — и здесь: скорость из пакета появления (lpVec3,
+// drops.velocityFromRaw), шаг на каждый тик тела, поправка по пакетам позиции и скорости; e.position — где шар сейчас.
+// Взгляд — в тик, когда шар на следующем шаге в досягаемости прицела (3 бл., pick.RANGE) и ещё не коснётся тела, удар — тиком
+// позже (взгляд уходит пакетом движения в конце тика, удар — сразу). Щит перед ударом опускается: клиент игры, держа предмет,
+// клики атаки съедает (Minecraft.handleKeybinds). По умолчанию включено (ND_GHAST_SWAT=0 — выкл.): сброс шаром гаста в лаву —
+// первая по частоте смерть лаборатории Ада (агент Ада 14.10: b6 — 3 из 9).
+const FB_ACCEL = 0.1
+const FB_INERTIA = 0.95
+function fbStep (s) {
+  const n = Math.hypot(s.vx, s.vy, s.vz) || 1
+  s.vx = (s.vx + s.vx / n * FB_ACCEL) * FB_INERTIA
+  s.vy = (s.vy + s.vy / n * FB_ACCEL) * FB_INERTIA
+  s.vz = (s.vz + s.vz / n * FB_ACCEL) * FB_INERTIA
+  s.x += s.vx; s.y += s.vy; s.z += s.vz
+  return s
+}
+// От глаз до рамки шара 1×1 (позиция сущности — низ середины).
+function fbReach (eye, s) {
+  return Math.hypot(Math.max(s.x - 0.5 - eye.x, 0, eye.x - s.x - 0.5), Math.max(s.y - eye.y, 0, eye.y - s.y - 1),
+    Math.max(s.z - 0.5 - eye.z, 0, eye.z - s.z - 0.5))
+}
+// Летит ли шар в тело: ближайший подход его линии к середине тела — в 2 бл.
+function fbIncoming (s, me) {
+  const sp = Math.hypot(s.vx, s.vy, s.vz)
+  if (sp < 1e-3) return false
+  const rx = me.x - s.x, ry = me.y + 0.9 - s.y, rz = me.z - s.z
+  const t = (rx * s.vx + ry * s.vy + rz * s.vz) / sp
+  return t > 0 && Math.hypot(rx - s.vx / sp * t, ry - s.vy / sp * t, rz - s.vz / sp * t) <= 2
+}
 function swatInstall (bot) {
   if (!bot || bot._ndSwat || typeof bot.on !== 'function') return bot && bot._ndSwat
-  const st = { pend: null, last: new Map(), n: 0 }
+  const st = { pend: null, n: 0, back: 0, fb: new Map(), rawVel: new Map(), type: null }
   bot._ndSwat = st
+  try { st.type = bot.registry.entitiesByName.fireball.id } catch {}
+  const show = s => { const e = bot.entities && bot.entities[s.id]; if (e && e.position && typeof e.position.set === 'function') e.position.set(s.x, s.y, s.z) }
+  const cl = bot._client
+  if (cl && typeof cl.on === 'function' && st.type != null) {
+    const raw = require('./drops').velocityFromRaw
+    // Сырые байты есть только в 'packet', и он приходит раньше события по имени (drops.ts).
+    cl.on('packet', (data, meta, buf) => {
+      if (!meta || !data) return
+      if (meta.name === 'spawn_entity' && data.type === st.type) st.rawVel.set(data.entityId, raw(buf, 'spawn'))
+      else if (meta.name === 'entity_velocity' && st.fb.has(data.entityId)) st.rawVel.set(data.entityId, raw(buf, 'velocity'))
+    })
+    cl.on('spawn_entity', data => {
+      if (data.type !== st.type) return
+      const v = st.rawVel.get(data.entityId) || { x: 0, y: 0, z: 0 }
+      st.rawVel.delete(data.entityId)
+      st.fb.set(data.entityId, { id: data.entityId, bx: data.x, by: data.y, bz: data.z, x: data.x, y: data.y, z: data.z, vx: v.x, vy: v.y, vz: v.z, hitAt: 0 })
+    })
+    cl.on('entity_velocity', data => {
+      const s = st.fb.get(data.entityId)
+      const v = st.rawVel.get(data.entityId)
+      st.rawVel.delete(data.entityId)
+      if (!s || !v) return
+      const me = bot.entity && bot.entity.position
+      if (s.hitAt > 0 && me && gameClock.now() - s.hitAt < 1000 && v.x * (s.x - me.x) + v.y * (s.y - me.y - 0.9) + v.z * (s.z - me.z) > 0) {
+        st.back++
+        log('шар гаста: отбит', { back: st.back, of: st.n })
+        s.hitAt = -1
+      }
+      Object.assign(s, { vx: v.x, vy: v.y, vz: v.z })
+    })
+    cl.on('sync_entity_position', data => {
+      const s = st.fb.get(data.entityId)
+      if (!s) return
+      Object.assign(s, { bx: data.x, by: data.y, bz: data.z, x: data.x, y: data.y, z: data.z })
+      if ([data.dx, data.dy, data.dz].every(Number.isFinite)) Object.assign(s, { vx: data.dx, vy: data.dy, vz: data.dz })
+      show(s)
+    })
+    // Сдвиг — от прошлой позиции сервера: mineflayer прибавил его к e.position, то есть к нашей.
+    const rel = data => {
+      const s = st.fb.get(data.entityId)
+      if (!s) return
+      s.bx += (data.dX || 0) / 4096; s.by += (data.dY || 0) / 4096; s.bz += (data.dZ || 0) / 4096
+      Object.assign(s, { x: s.bx, y: s.by, z: s.bz })
+      show(s)
+    }
+    cl.on('rel_entity_move', rel)
+    cl.on('entity_move_look', rel)
+    cl.on('entity_destroy', data => { for (const id of data.entityIds || []) { st.fb.delete(id); st.rawVel.delete(id) } })
+  }
+  bot.on('respawn', () => { st.fb.clear(); st.rawVel.clear(); st.pend = null })
   const onTick = () => {
     try {
-      if (process.env.ND_GHAST_SWAT !== '1' || !bot.entity) return
+      if (!st.fb.size) { st.pend = null; return }
+      for (const s of st.fb.values()) {
+        if (!bot.entities[s.id]) { st.fb.delete(s.id); continue }
+        fbStep(s)
+        show(s)
+      }
+      if (process.env.ND_GHAST_SWAT === '0' || !bot.entity) return
+      const pick = require('./pick')
+      const eye = pick.eyeOf(bot)
+      const me = bot.entity.position
       if (st.pend) {
-        const fb = bot.entities[st.pend.id]
-        const at = st.pend
+        const s = st.fb.get(st.pend.id)
+        const e = bot.entities[st.pend.id]
+        if (!s || !e || fbReach(eye, s) > pick.RANGE) { st.pend = null; return }
+        // Взгляд ещё не ушёл пакетом или щит снова поднят (тактика Shield) — ударить следующим тиком, пока шар в досягаемости.
+        if (!st.pend.looked || bot.usingHeldItem) { st.pend.looked = false; return }
+        const ghast = st.pend.ghast
         st.pend = null
-        if (fb && fb.isValid !== false && fb.position) {
-          bot.attack(fb)
-          st.n++
-          log('шар гаста: удар', { n: st.n, d: +fb.position.distanceTo(bot.entity.position.offset(0, 1.62, 0)).toFixed(1), ghast: at.ghast })
-        }
+        bot.attack(e)
+        s.hitAt = gameClock.now()
+        st.n++
+        log('шар гаста: удар', { n: st.n, d: +fbReach(eye, s).toFixed(2), ghast, blocked: bot._ndBlockedHits || 0 })
         return
       }
-      const eye = bot.entity.position.offset(0, 1.62, 0)
       let best = null
-      for (const fb of (Object.values(bot.entities) as any)) {
-        if (!fb || fb.name !== 'fireball' || !fb.position || fb.isValid === false) continue
-        const d = fb.position.offset(0, 0.5, 0).distanceTo(eye)
-        if (d > 3.4) continue
-        if (gameClock.now() - (st.last.get(fb.id) || 0) < 250) continue
-        if (!best || d < best.d) best = { fb, d }
+      for (const s of st.fb.values()) {
+        if (s.hitAt || !fbIncoming(s, me)) continue
+        const n = fbStep({ ...s })
+        const d = fbReach(eye, n)
+        if (d > pick.RANGE - 0.1) continue
+        // Шагом позже уже в рамке тела, раздутой на 0.3 (ProjectileUtil.getEntityHitResult) — поздно.
+        if (Math.abs(n.x - me.x) < 0.6 && Math.abs(n.z - me.z) < 0.6 && n.y > me.y - 0.3 && n.y < me.y + 2.1) continue
+        if (!best || d < best.d) best = { s, n, d }
       }
       if (!best) return
-      st.last.set(best.fb.id, gameClock.now())
-      if (st.last.size > 64) st.last.clear()
-      const g = bot.nearestEntity(e => e && e.name === 'ghast' && e.position && e.position.distanceTo(bot.entity.position) < 96)
-      const aimAt = g
-        ? g.position.offset(0, 2, 0).plus(g.velocity && g.velocity.scaled ? g.velocity.scaled(10) : new Vec3(0, 0, 0))
-        : best.fb.position.plus(best.fb.position.minus(eye))
-      bot.lookAt(aimAt, true).catch(() => {})
-      st.pend = { id: best.fb.id, ghast: !!g }
+      // Прицел на гаста (шар уйдёт в него), если луч к гасту проходит через рамку прицела шара: 1×1, раздута на
+      // getPickRadius 1.0 (Projectile.isPickable — redirectable_projectile), ближе 3 бл.; иначе — на сам шар.
+      const c = new Vec3(best.n.x, best.n.y + 0.5, best.n.z)
+      const g = bot.nearestEntity(e => e && e.name === 'ghast' && e.position && e.position.distanceTo(me) < 96)
+      let aimAt = c
+      if (g) {
+        const gc = g.position.offset(0, 2, 0)
+        const t = pick.rayBox(eye, gc.minus(eye).normalize(), { x: c.x - 1.5, y: c.y - 1.5, z: c.z - 1.5 }, { x: c.x + 1.5, y: c.y + 1.5, z: c.z + 1.5 }, pick.RANGE)
+        if (t != null) aimAt = gc
+      }
+      st.pend = { id: best.s.id, ghast: aimAt !== c, aim: aimAt, looked: false }
     } catch {}
   }
+  // Взгляд — на поздней границе тика (physicTick, прямо перед пакетом движения): навык и pathfinder ставят свой взгляд в
+  // physicsTick, и удар уходил по их взгляду — шар отлетал не к гасту, а под ноги (b8-7-1 14.10: 10 ударов, 0 отбитых, хп 20 → 9).
+  const late = () => {
+    try {
+      if (!st.pend || st.pend.looked || !bot.entity) return
+      if (bot.usingHeldItem) { try { bot.deactivateItem() } catch {} }
+      const d = st.pend.aim.minus(require('./pick').eyeOf(bot))
+      bot.look(Math.atan2(-d.x, -d.z), Math.atan2(d.y, Math.hypot(d.x, d.z)), true).catch(() => {})
+      st.pend.looked = true
+    } catch {}
+  }
+  Object.defineProperty(late, '_ndLatePacketAim', { value: true })
   bot.on('physicsTick', onTick)
+  bot.on('physicTick', late)
   return st
 }
 

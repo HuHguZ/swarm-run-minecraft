@@ -101,6 +101,7 @@ function skyLightAt (bot, p) {
 
 // Клетки «лава рядом» для цены шага: под ногами и четыре стороны.
 const LAVA_AROUND = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+const CLIFF_SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
 // Штраф шага перехода поверху: клетка тела без неба (skyLight ≤ 7 — в
 // пещере 0, под листвой 12-14, в устье пещеры убывает на блок за блок).
@@ -296,6 +297,9 @@ class Session {
           try { require('./structures').install(this) } catch {}
           // Глаза + память увиденного и слух (perception/, S10; ND_EYES=0 — без обхода глаз).
           try { require('./perception/eyes').install(this); require('./perception/senses').installHearing(bot) } catch {}
+          // Шар гаста отбивается из любого дела, а не только в четырёх навыках Ада (ne-guard.swatInstall; b6 14.10: сброс
+          // шаром — 3 смерти из 9, в том числе на ожидании и ходьбе к бастиону).
+          try { require('./ne-guard').swatInstall(bot) } catch {}
           // Искажённый лес Ада глазами (нилий в прорисовке + луч) → память «искажённый лес (ад)» (S1e, nether-forest.js).
           try { require('./nether-forest').install(this) } catch {}
           // Слез / сброшен / телепортирован из седла — mineflayer этого не видит
@@ -415,6 +419,15 @@ class Session {
           if (!b) break
           if (b.name === 'lava') return 1000
           if (b.boundingBox === 'block') break
+        }
+        // Край обрыва (рядом клетка без пола на 3 вниз): шар гаста отбрасывает на 2–3 бл. — с края тело падало в лавовое
+        // море с y 70–87 (b4g-6-2, b6-7-1 14.10: лава в 40–60 бл. ниже — проверка колонны выше её не видит). Дороже, не запрет.
+        for (const [dx, dz] of CLIFF_SIDES) {
+          const n = defAt(p.x + dx, p.y, p.z + dz)
+          if (!n || n.boundingBox !== 'empty') continue
+          let floor = false
+          for (let d = 1; d <= 3 && !floor; d++) { const b = defAt(p.x + dx, p.y - d, p.z + dz); floor = !b || b.boundingBox === 'block' }
+          if (!floor) return 30
         }
       }
       return 0
