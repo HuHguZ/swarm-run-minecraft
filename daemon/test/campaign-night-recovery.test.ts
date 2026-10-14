@@ -13,12 +13,12 @@ const declaration = (name: string) => {
 const weakStart = source.indexOf('const weakAndHungry =')
 const weak = source.slice(weakStart, source.indexOf('\nlet ironRuns', weakStart))
 
-function fixture({ night = true, mode = 'speedrun', hp = 1, food = 10, raw = 0 } = {}) {
+function fixture({ night = true, mode = 'speedrun', hp = 1, food = 10, raw = 0, hold = false } = {}) {
   const calls: string[] = []
   const context: any = {
     state: { health: hp, food, playPolicy: { mode }, dimension: 'overworld', pos: { x: -352, y: 36, z: -636 } },
     sit: { night, foes: 0 }, process: { env: {} }, stage: 'MineIron', known: {}, FOOD: /cooked_/, RAW: /mutton/,
-    have: (re: RegExp) => re.test('mutton') ? raw : 0, dim: () => 'overworld',
+    have: (re: RegExp) => re.test('mutton') ? raw : 0, dim: () => 'overworld', nightHold: () => hold,
     REFUGE_PASS: new Set(), refugeRunning: () => false, strategyExecuting: false, strategyInterrupted: false,
     died: false, fighting: false, resting: false, hunting: false, restIdleUntil: Infinity,
     telemetry: { on: () => false }, gameClock: { now: () => 1000 }, acceptResult: () => {},
@@ -49,4 +49,10 @@ test('daytime recovery keeps the same handoff, while ordinary night policy remai
 
 for (const options of [{ hp: 20 }, { food: 18 }, { raw: 1 }]) test(`night food recovery uses the existing condition: ${JSON.stringify(options)}`, () => {
   assert.equal(fixture(options).context.urgent(), false)
+})
+
+test('a night held underground keeps working at hp 6-11 without food, below 6 it still yields (cl-h/cl-j 14.10: night hunts)', () => {
+  assert.equal(fixture({ hp: 8, hold: true }).context.urgent(), false)
+  assert.equal(fixture({ hp: 8 }).context.urgent(), true)
+  assert.equal(fixture({ hp: 5, hold: true }).context.urgent(), true)
 })

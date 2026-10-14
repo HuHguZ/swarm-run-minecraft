@@ -198,6 +198,17 @@ async function act (method, params: any = {}, again = 0) {
   if (strategyExecuting && strategyInterrupted && !REFUGE_PASS.has(method) && !/^(observe|eat|flee|refuge|shelter|escape_fire|surface|wait|blaze|ne_burrow)$/.test(method) && !fighting && !resting) {
     throw Object.assign(new Error('STRATEGY_INTERRUPTED: обстановка изменилась, нужно наблюдение и новый план'), { strategyInterrupted: true })
   }
+  // Ночь наступила посреди наземного этапа (поиск, охота, вода, разведка, литьё без лавы рядом): новый переход поверху не
+  // начинаю — назад в главный цикл, там ночь идёт под землёй (nightHold). cl-m 14.10: MineIron/вода в болоте ещё 2 мин после
+  // темноты, хп 20 → 1 и смерть утром.
+  if (sit.surface && (/^(goto|explore|loot|mine|structure)$/.test(method) || (method === 'fight' && /^(food|resource)$/.test(params.purpose || ''))) &&
+      stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && nightHold()) {
+    throw Object.assign(new Error(`ночь, брони нет — наверху ${method} не начинаю, работа под землёй`), { strategyInterrupted: true })
+  }
+  if (method === 'explore' && !params.direction && dim() === 'overworld') {
+    const away = awayFromDanger()
+    if (away) { log(`разведка — прочь от места нападения (${dangerZone.why}): ${away}`); params = { ...params, direction: away } }
+  }
   if (!REFUGE_PASS.has(method) && refugeRunning() && !died) {
     await awaitRefuge()
     if (strategyExecuting && strategyInterrupted) throw Object.assign(new Error('STRATEGY_INTERRUPTED: отход завершён, нужно наблюдение и новый план'), { strategyInterrupted: true })
@@ -426,6 +437,19 @@ async function nearWalkers (r = 10) {
       !/^(skeleton|stray|bogged|parched|pillager|witch|blaze|ghast|creeper|enderman|zombified_piglin|piglin)$/.test(f.name)).length
   } catch { return 0 }
 }
+// Место нападения из воды (утопленник с трезубцем): разведка туда не ходит 5 игр. мин. cl-o 14.10: тактика отбегала на 1–7 бл.,
+// этап литья звал ту же разведку вдоль берега — пять попаданий, смерть днём на 26-й мин (утопленники: 6 смертей из 30 прогонов).
+let dangerZone = null
+function markDanger (why) {
+  if (state.pos) dangerZone = { x: state.pos.x, z: state.pos.z, until: gameClock.now() + 300000, why }
+}
+function awayFromDanger () {
+  if (!dangerZone || gameClock.now() >= dangerZone.until || !state.pos) return null
+  const dx = state.pos.x - dangerZone.x, dz = state.pos.z - dangerZone.z
+  if (Math.hypot(dx, dz) > 64) return null
+  if (Math.abs(dx) < 1 && Math.abs(dz) < 1) return null
+  return Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 'east' : 'west') : (dz > 0 ? 'south' : 'north')
+}
 async function answerThreat (cause = 'unknown', source = null) {
   await sense()
   if (sit.buried) { await waitDugOut(); return }
@@ -447,6 +471,7 @@ async function answerThreat (cause = 'unknown', source = null) {
   }
   const first = (sit.fight && sit.fight.first) || sit.first || {}
   const drowned = source === 'drowned' || first.name === 'drowned'
+  if (drowned) markDanger('утопленник')
   if (drowned && sit.inWater) {
     log('бьёт утопленник, я в воде — в воде не дерусь, на сушу')
     if (!(await leaveWater()) && !died) await refugeRun('утопленник, я в воде')
@@ -1700,8 +1725,19 @@ function worn (slot) {
 const STAGES = []
 const OTHER_WORLD = new Set(['bastion', 'nether', 'pearls', 'eyes', 'stronghold', 'dragon'])
 const fed = (items, level) => have(FOOD) + ((have('furnace') || have(COBBLE) >= 8) ? have(RAW) : 0) >= items || (state.food ?? 20) >= level
+// Набор литья готов и лава видена рядом — портал важнее ночной копки (cl-h 14.10: в 24.5 бл. от лавы ушёл копать, погиб внизу).
+const castNear = () => !!known.lava && !!state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96 &&
+  have('water_bucket') > 0 && READY.cast()
+// Ночь спидрана до портала без брони: поверху — смерть (cl-a…cl-k 14.10: 15 смертей из 22 прогонов, почти все ночью — охота,
+// поиск воды, берег). Есть кирка и дерево на кирки — ночь идёт работой под землёй (главный цикл), наземные этапы — с рассветом.
+// Дерево на кирки: спуск без запаса кончался «палок нет — наверх за деревом» на y 25 (cl-f 14.10, 18 мин простоя).
+const nightHold = () => dim() === 'overworld' && !known.portal && !!sit.night && state.playPolicy?.mode === 'speedrun' &&
+  armorPointsNow() < 6 && !castNear() && have(PICK_STONE) > 0 && (woodNow() >= 2 || have('stick') >= 4) && process.env.ND_NIGHT_DIG !== '0'
+// Этапы, которые ночь ведут сами (iron: вниз и штреки) или не ходят поверху (крафт, еда, лечение).
+const NIGHT_STAGES = new Set(['iron', 'MineIron', 'stone', 'AcquireStoneTools', 'CraftPortalKit', 'EatFood', 'Heal', 'PrepareBread'])
+// Ночью без еды наверх за охотой не иду, пока хп хватает на работу внизу (≥ 6): охота ночью — главная из смертей серии.
 const weakAndHungry = () => (state.health ?? 20) < (process.env.ND_OW_DEEP === '1' && !known.portal && (state.dimension || 'overworld') === 'overworld' ? 6 : 12) &&
-  !have(FOOD) && !have(RAW) && (state.food ?? 20) < 18 && (!sit.night || state.playPolicy?.mode === 'speedrun')
+  !have(FOOD) && !have(RAW) && (state.food ?? 20) < 18 && (!sit.night || state.playPolicy?.mode === 'speedrun') && !((state.health ?? 20) >= 6 && nightHold())
 let ironRuns = 0
 let ironLeg = 0 // сквозной номер штрека этапа iron (змейка между заходами)
 const ironBlocked = new Set() // «x,z:сторона» — штрек отсюда туда не пошёл (глубокий путь)
@@ -1858,7 +1894,7 @@ defStage('stone', () => !have(PICK_STONE) || !have(/_sword$/), async () => {
         if (have(COBBLE) >= want) break
       }
     }
-    const m = hurt ? { detail: {} } : await act('mine', { block: 'stone', count: batch, radius: safeStone ? 14 : 32, timeoutSeconds: 180 })
+    const m = hurt ? { detail: {} } : await act('mine', { block: 'stone', count: batch, radius: safeStone ? 14 : 32, dry: true, timeoutSeconds: 180 })
     if (have(COBBLE) >= want) break
     if (safeStone && (m.code === 'DAMAGE' || m.status === 'interrupted')) { hurt = true; log(`камень: ${m.code || m.status} в забое — дальше своей лесенкой`); await act('surface', { timeoutSeconds: 40, hand: false, preferPillar: true }) }
     else if (m.detail && m.detail.dug) continue
@@ -2047,7 +2083,7 @@ async function cook ({ reserveHunger = Infinity } = {}) {
   // Без настоящего топлива новая печь не поможет: камень на неё не копать.
   // (s8-r2-8: quickHunt у портала → cook → mine stone 8 за 34 с, жарить всё равно нечем).
   if (!have(/^(coal|charcoal)$/) && !have('lava_bucket') && !have(/^(?!crimson_|warped_).*_(log|planks)$/)) { log('жарить нечем: топлива нет — печь не копаю'); return }
-  await act('mine', { block: 'stone', count: 8, radius: 32, timeoutSeconds: 120 })
+  await act('mine', { block: 'stone', count: 8, radius: 32, dry: true, timeoutSeconds: 120 })
   if (have(COBBLE) < 8) await act('dig_down', { mode: 'stairs', depth: 6, torchEvery: 0, timeoutSeconds: 120 })
   await batch()
   await refresh()
@@ -2389,6 +2425,31 @@ let skyLavaSeen = (() => { try { const h = process.env.ND_OW_LAVA_HINT ? JSON.pa
 const NATURAL = process.env.ND_PORTAL_NATURAL === '1'
 let naturalTried = 0
 let surveyDone = false
+// Взгляд вдаль на лаву под небом (portal_natural survey: верх столбцов в 128 бл., луч видимости из глаз — как игрок, который
+// осмотрелся): озеро лавы светится и видно издалека, а observe 64 и explore 48 его не видели (cl-k 14.10: озеро в 50 бл. от
+// спавна, разведка ушла на север; ни один из 22 прогонов cl-a…cl-k не дошёл до литья). Годное озеро — в known.lava.
+let skyLookAt = null
+async function skyLavaLook () {
+  if (dim() !== 'overworld' || known.portal || process.env.ND_SKY_LAVA === '0') return null
+  await sense()
+  if (!sit.surface || !state.pos) return null
+  // Тот же вид с того же места второй раз ничего не даст.
+  if (skyLookAt && Math.hypot(skyLookAt.x - state.pos.x, skyLookAt.z - state.pos.z) < 24) return null
+  skyLookAt = { x: state.pos.x, z: state.pos.z }
+  const sv = await act('portal_natural', { mode: 'survey', radius: 128 })
+  const best = sv.detail && sv.detail.best
+  if (!best || !best.at || !state.pos) { log('обзор вдаль: лавы под небом в 128 бл. не видно'); return null }
+  const far = q => Math.hypot(q.x - state.pos.x, q.z - state.pos.z)
+  if (!known.lava || far(best.at) + 8 < far(known.lava) || !lavaSourceKnown) {
+    known.lava = { x: best.at.x, y: best.at.y, z: best.at.z }
+    lavaSourceKnown = true
+    const at = `${best.at.x},${best.at.y},${best.at.z}`
+    log(`обзор вдаль: лава под небом ${best.kind} ${at} (${best.dist} бл., открытых ${best.open}) — запомнил`)
+    try { await call('remember', { kind: 'лава', text: `лава на ${at}`, place: 'лава' }) } catch {}
+  }
+  return best
+}
+let lavaSourceKnown = false
 async function surfaceLavaSurvey () {
   if (process.env.ND_OW_SURVEY === '0' || !NATURAL || surveyDone) return
   surveyDone = true
@@ -2783,6 +2844,7 @@ defStage('cast', () => !known.portal, async () => {
   }
   if (!sit.surface && dim() === 'overworld' && !sit.night) await act('shelter', { mode: 'exit' })
   await readMemory()
+  await skyLavaLook()
   if (!known.lava) await act('observe', { radius: 48 })
   if (known.lava && state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) > 16) await goToward(known.lava, 8)
   await ensureFlint()
@@ -2830,6 +2892,7 @@ defStage('cast', () => !known.portal, async () => {
         if (!known.lava) await act('observe', { radius: 32 })
         continue
       }
+      if (await skyLavaLook()) continue
       const e = await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 150, surface: true })
       if (e.detail && e.detail.found) continue
       if (++surfaceLooks >= 2 && !known.lava) {
@@ -4506,6 +4569,7 @@ async function executeStrategy (command, signal) {
     } else if (skill === 'scoutLava') {
       const cell = () => state.pos && [dim(), ...['x', 'y', 'z'].map(axis => Math.floor(state.pos[axis] / 16))].join(':')
       if (cell()) lavaScoutCells.add(cell())
+      await skyLavaLook()
       await act('observe', { radius: 64 })
       if (!known.lava) await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90, surface: true })
       const viewed = cell()
@@ -4659,25 +4723,37 @@ ws.on('open', async () => {
           if (!died && foodUnits() < 2 && (state.food ?? 20) <= 15 && gameClock.now() >= foodSearchAt && !cooling(STAGES.find(x => x.name === 'food'))) {
             foodSearchAt = gameClock.now() + 300000
             log(`еды ${foodUnits()}, сытость ${state.food} — днём ищу зверей, пока светло`)
+            const before = stageProgress('food')
             try { await stageRun('food')() } catch (e) { if (e.stopCampaign) throw e; log(`поиск еды днём: ${e.message}`) }
+            await refresh()
+            if (Object.entries(stageProgress('food')).some(([key, value]) => Number(value) > (before[key] || 0))) lastProgressAt = gameClock.now()
           }
         }
       }
-      // Ночь наверху до портала без брони: обе смерти cl-e 14.10 — ночью поверху (гравий для огнива, охота), скелет и утопленник.
-      // Пережидать нельзя (правило пользователя), поверху без брони — смерть: ночь — работа под землёй той же цепочкой этапа
-      // iron (лесенкой к y 16, штреки: железо на броню и щит, уголь, гравий). Литьё у самой лавы не прерываю.
-      // Набор литья готов и лава видена — портал важнее ночной копки (cl-h 14.10: в 24.5 бл. от лавы ушёл копать, погиб внизу).
-      const castHere = !!known.lava && !!state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96 &&
-        have('water_bucket') > 0 && READY.cast()
-      // Дерево на кирки внизу: спуск ночью без запаса (reserve() ночью не рубит) кончался «палок нет — наверх за деревом» на y 25
-      // под медной рудой, которую деревянная кирка не берёт (cl-f 14.10, 18 мин простоя).
-      const woodForPicks = woodNow() >= 2 || have('stick') >= 4
-      if (dim() === 'overworld' && !known.portal && !died && sit.night && sit.surface && armorPointsNow() < 6 && !castHere &&
-          have(PICK_STONE) > 0 && woodForPicks && gameClock.now() >= nightDigAt && state.playPolicy?.mode === 'speedrun' && process.env.ND_NIGHT_DIG !== '0') {
-        nightDigAt = gameClock.now() + 120000
-        stage = 'iron'
-        log('ночь наверху, брони нет — работаю под землёй (железо на броню, уголь, гравий), поверху — с рассветом')
-        try { await stageRun('iron')() } catch (e) { if (e.stopCampaign) throw e; log(`ночная работа внизу: ${e.message}`) }
+      // Ночь до портала без брони (nightHold): работа под землёй той же цепочкой этапа iron (лесенкой к y 16, штреки: железо на
+      // броню и щит, уголь, гравий); пережидать нельзя (правило пользователя), поверху — смерть (обе смерти cl-e 14.10 — ночью
+      // поверху). Литьё у видимой лавы с готовым набором не прерываю (castNear).
+      if (!died && nightHold()) {
+        if (gameClock.now() >= nightDigAt) {
+          nightDigAt = gameClock.now() + 120000
+          stage = 'iron'
+          log('ночь, брони нет — работаю под землёй (железо на броню, уголь, гравий), поверху — с рассветом')
+          const before = stageProgress('iron')
+          try { await stageRun('iron')() } catch (e) { if (e.stopCampaign) throw e; log(`ночная работа внизу: ${e.message}`) }
+          // Железо, ведро, щит ночной работы — прогресс для сторожа (cl-k 14.10: 9 слитков и ведро за ночь, а сторож через 48 мин
+          // «без прогресса» остановил кампанию: этапы вне хода не обновляли его отметку).
+          await refresh()
+          if (Object.entries(stageProgress('iron')).some(([key, value]) => Number(value) > (before[key] || 0))) lastProgressAt = gameClock.now()
+          continue
+        }
+        // Работа внизу сделана или отказала — наземные этапы графа (вода, охота, разведка) ночью не зову (cl-k 14.10: вода ночью
+        // вывела наверх, cl-h/cl-j: охота и берег ночью — смерть). Внизу — короткое ожидание в выработке, поверху — нора.
+        stage = '-'
+        if (sit.surface) {
+          await act('shelter', { mode: 'enter', depth: 3 })
+          await sense()
+          if (sit.surface) await act('wait', { seconds: 5 })
+        } else await act('wait', { seconds: 20 })
         continue
       }
       if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { stage = '-'; await ensurePick() }

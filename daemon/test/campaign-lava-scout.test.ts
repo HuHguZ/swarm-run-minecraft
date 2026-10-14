@@ -15,7 +15,7 @@ function fixture() {
   const calls: Array<{ method: string, params: any }> = []
   let destination = { x: 0, y: 64, z: 0 }
   const context: any = { module: { exports: {} }, state: { pos: { ...destination } }, known: {},
-    lavaScoutCells: new Set(), lavaScoutViews: 0, dim: () => 'overworld',
+    lavaScoutCells: new Set(), lavaScoutViews: 0, dim: () => 'overworld', skyLavaLook: async () => null,
     graphFact: (name, value) => { facts[name] = value },
     act: async (method, params) => { calls.push({ method, params }); if (method === 'explore') context.state.pos = { ...destination } }
   }

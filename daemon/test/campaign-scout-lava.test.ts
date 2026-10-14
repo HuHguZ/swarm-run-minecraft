@@ -15,7 +15,7 @@ async function scout(knownLava = false, interrupted = false) {
   const context: any = {
     strategyExecuting: false, strategyInterrupted: false,
     state: { pos: { x: 204, y: 64, z: 41 } }, known: { lava: knownLava && { x: 210, y: 63, z: 42 } },
-    lavaScoutCells: new Set(), lavaScoutViews: 0, dim: () => 'overworld', graphFact() {},
+    lavaScoutCells: new Set(), lavaScoutViews: 0, dim: () => 'overworld', graphFact() {}, skyLavaLook: async () => null,
     act: async (method, params) => { calls.push({ method, params }); if (interrupted) context.strategyInterrupted = true; return { status: 'done' } }
   }
   vm.runInNewContext(code, context)

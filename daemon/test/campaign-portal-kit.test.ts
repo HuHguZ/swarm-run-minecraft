@@ -33,7 +33,7 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
   const casting = source.slice(source.indexOf("defStage('cast',"), source.indexOf("defStage('diamond',"))
   context.defStage = (_name, _needed, run) => { context.cast = run }
   Object.assign(context, { castRuns: 0, died: false, sit: { surface: true, night: false }, PICK_STONE: /_pickaxe$/,
-    sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {},
+    sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null,
     recoverGuard: async () => {}, unclutter: async () => {}, dim: () => 'overworld', y: () => 64,
     walkAway: async () => { calls.push({ method: 'walkAway', params: {} }) } })
   vm.createContext(context)
