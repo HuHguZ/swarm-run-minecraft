@@ -1,4 +1,4 @@
-import { SwarmBoard, planPvp, planTransfers, addBlueprint, nextBuild, assessSwarmFight, holdsGround, ownedCount } from '../daemon/src/swarm'
+import { SwarmBoard, planPvp, planTransfers, addBlueprint, nextBuild, assessSwarmFight, mustFlee, ownedCount } from '../daemon/src/swarm'
 const { swarmBlueprint } = require('../daemon/src/swarm-work')
 const WEAPON = /(_sword|_axe|_spear)$|^(mace|trident|bow|crossbow)$/
 const BLOCK = /^(cobblestone|stone|dirt|smooth_sandstone|sandstone|netherrack|.*_planks)$/
@@ -87,7 +87,7 @@ export function createSwarmDriver({ bots, pos, alive, arena, home, hostile, log,
     if (b.swarmSaid === identity) return
     b.swarmSaid = identity
     if (task.data?.doctrine) b.swarmDoctrine = task.data.doctrine
-    log(`🐜 ${b.name} [${task.data?.role || ''}/${task.data?.doctrine || ''}]: ${task.kind}${task.data?.target ? ' → ' + task.data.target : ''}${task.data?.ally ? ' для ' + task.data.ally : ''}${task.data?.panic && task.data.reason ? ` (${task.data.risk?.unsafe ? '' : 'держу, '}${task.data.reason})` : ''}`)
+    log(`🐜 ${b.name} [${task.data?.role || ''}/${task.data?.doctrine || ''}]: ${task.kind}${task.data?.target ? ' → ' + task.data.target : ''}${task.data?.ally ? ' для ' + task.data.ally : ''}${task.data?.panic && task.data.reason ? ` (${task.data.reason})` : ''}`)
   }
   // Демон пускает цель похода, только если и сама точка, и центр её клетки с полушириной тела (0.3) лежат в r − 1:
   // прижим к r − 1 давал «outside arena bounds» и повтор каждые 200 мс у края (разбор 13.10) — прижимаем к r − 2.
@@ -539,6 +539,8 @@ export function createSwarmDriver({ bots, pos, alive, arena, home, hostile, log,
     }
     const foe = enemies.find(e => e.id === task.data?.target)
     if (task.kind === 'goto' || task.data?.search) {
+      // Охота: дошёл до места, где врага видели последним, — прочёсывать арену, а не стоять.
+      if (task.data?.hunt && distance(m.p, task.data.enemyPosition) < 4) { await search(b, context); return }
       await go(b, task.data?.search ? task.data.enemyPosition : task.position, task.data?.range ?? 2)
       if (task.data?.bait && !contact) await b.c.call('eat', { timeoutSeconds: 2 }).catch(() => {})
       return
@@ -563,6 +565,8 @@ export function createSwarmDriver({ bots, pos, alive, arena, home, hostile, log,
       }
       const result = detail(await b.c.call('fight', { target: foe.id, targets: enemies.map(e => e.id), relocateTo: home(b), allowPlayer: true, allowRanged: true, timeoutSeconds: task.data.fountain === 'close' ? 4 : 12, retreatAtHealth: 3, roundScope: `${teamOf(b)}:${generation}`, arena }))
       if (result.killed || result.kills?.length) board.noteTacticOutcome(b.name, task.data.doctrine, true)
+      // Итог боя в журнал (арена 14.10: убийств почти нет — видно, чем кончается схватка: попадания, хп, причина конца).
+      log(`⚔ ${b.name} → ${foe.id}: попаданий ${result.landed ?? '?'}/${result.swings ?? '?'}, хп ${result.hp ?? '?'}${result.killed || result.kills?.length ? ', убил' : ''}${result.stopped || result.why ? ' — ' + String(result.stopped || result.why).slice(0, 70) : ''}`)
       return
     }
     await search(b, context)
@@ -580,12 +584,13 @@ export function createSwarmDriver({ bots, pos, alive, arena, home, hostile, log,
   const unsafe = b => {
     const c = unsafeCache.get(b.name)
     if (c && now() - c.at >= 0 && now() - c.at < 250) return c.v
-    // Свежая опасность — сразу, не дожидаясь плана; но бой, который держит команда, личная оценка не рвёт (holdsGround —
-    // то же правило, что в planPvp), а липкое бегство плана — тоже паника. Раньше опрос арены рвал бой, который команда
-    // держала (арена 14.10).
+    // Свежая опасность — сразу, не дожидаясь плана, но по тому же правилу, что в planPvp (mustFlee: смертельный залп,
+    // тяжёлая рана, безнадёжный размен), а липкое бегство плана — тоже паника. Раньше здесь была своя личная оценка, и
+    // опрос арены рвал бой, который команда держала (арена 14.10).
     const board = boardOf(b), members = membersOf(b), member = members.find(m => m.id === b.name)
     const risk = member && assessSwarmFight(member, board.enemies(), members)
-    const v = !rangedAdvantage(b) && !!member && (!!risk?.unsafe && !holdsGround(board, member, members, risk) || planned.get(teamOf(b))?.get(b.name)?.kind === 'flee')
+    const contact = !!member && board.enemies().some(e => distance(e.position, member.position) <= 4)
+    const v = !rangedAdvantage(b) && !!member && (!!risk && mustFlee(board, member, risk, contact) || planned.get(teamOf(b))?.get(b.name)?.kind === 'flee')
     unsafeCache.set(b.name, { at: now(), v }); return v
   }
   const panic = b => unsafe(b) && !(b.swarmPreparingUntil > now() && boardOf(b).enemies().every(e => distance(e.position, pos[b.name].p) >= 14 && e.threat === 'melee'))

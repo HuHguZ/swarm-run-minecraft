@@ -24,7 +24,8 @@ export function swarmSightings(bot: any, allies: string[] = []) {
     const gear = projection.equipment
     const equipment = { weapon: gear[0]?.name || null, armor: gear.slice(2, 6).map(it => it?.name).filter(Boolean), ...(projection.unknownArmorSlots ? { unknownArmorSlots: projection.unknownArmorSlots } : {}), ...(gear.some(it => it?.enchanted) ? { enchanted: true } : {}) }
     const threat = /bow|crossbow/.test(equipment.weapon || '') ? 'bow' : /end_crystal|tnt/.test(equipment.weapon || '') ? 'blast' : e.elytraFlying || equipment.weapon === 'mace' && velocity.y < -.2 ? 'aerial' : 'melee'
-    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now })
+    const hp = require('./pvp/combat-observe').foeHpUpper(bot, e)
+    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, ...(Number.isFinite(hp) && hp < 20 ? { hpEstimate: hp } : {}) })
     current.set(e.id, { position, now })
   }
   previous.set(bot, current)

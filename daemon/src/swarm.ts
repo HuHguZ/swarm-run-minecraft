@@ -32,6 +32,9 @@ export interface EnemyObservation {
   velocity?: SwarmPosition
   equipment?: { weapon?: string; armor?: string[]; enchanted?: boolean; unknownArmorSlots?: number }
   threat?: ThreatKind
+  // Верх оценки его хп (с поглощением) по нашим подтверждённым попаданиям и видимому лечению — не метаданные (AGENTS.md):
+  // своё имя, а не hp/health, — сырое хп доска не читает никогда (тесты честности).
+  hpEstimate?: number
 }
 export interface SharedEnemy extends Omit<EnemyObservation, 'visible'> {
   seenAt: number
@@ -98,6 +101,10 @@ export class SwarmBoard {
   private current: { doctrine: Doctrine; since: number } | null = null
   // Последний командный счёт боя (planPvp): драйвер пишет в журнал, когда решение «держим бой» меняется.
   teamFight: SwarmTeamFight | null = null
+  // Свои в безнадёжном бою по последнему плану (planPvp), им бегство разрешено и при полном хп (mustFlee): futile — пустой
+  // размен (бежать и из рукопашной), outnumbered — поле за ними (отход к своим, но не из рукопашной).
+  futile = new Set<string>()
+  outnumbered = new Set<string>()
   private token = 0
   constructor(readonly team: string, readonly now: () => number = Date.now, readonly enemyTtlMs = 3000) {
     if (!team || !Number.isFinite(enemyTtlMs) || enemyTtlMs <= 0) throw new Error('Invalid swarm team/TTL')
@@ -193,6 +200,7 @@ export class SwarmBoard {
       if (Number.isInteger(input.equipment.unknownArmorSlots) && input.equipment.unknownArmorSlots! >= 0 && input.equipment.unknownArmorSlots! <= 4) seen.equipment.unknownArmorSlots = input.equipment.unknownArmorSlots
     }
     if (input.threat && threats.includes(input.threat)) seen.threat = input.threat
+    if (Number.isFinite(input.hpEstimate) && input.hpEstimate! > 0 && input.hpEstimate! <= 40) seen.hpEstimate = input.hpEstimate
     const sources = this.sightings.get(input.id) ?? new Map()
     if ((sources.get(source)?.seenAt ?? -Infinity) > seenAt) return false
     sources.set(source, seen); this.sightings.set(input.id, sources)
@@ -200,7 +208,13 @@ export class SwarmBoard {
   }
   enemies(): SharedEnemy[] {
     this.prune()
-    return [...this.sightings.values()].map(sources => ({ ...copy([...sources.values()].sort((a, b) => b.seenAt - a.seenAt)[0]), sources: [...sources.keys()].sort() })).sort((a, b) => a.id.localeCompare(b.id))
+    // Хп — наименьший верх среди источников: каждый знает только свои попадания, и любой верх — честная граница.
+    return [...this.sightings.values()].map(sources => {
+      const list = [...sources.values()], hps = list.map(o => o.hpEstimate).filter((n): n is number => Number.isFinite(n))
+      const fresh = copy(list.sort((a, b) => b.seenAt - a.seenAt)[0])
+      if (hps.length) fresh.hpEstimate = Math.min(...hps); else delete fresh.hpEstimate
+      return { ...fresh, sources: [...sources.keys()].sort() }
+    }).sort((a, b) => a.id.localeCompare(b.id))
   }
   recordFact(source: string, seenAt: number, fact: Pick<SwarmFact, 'id' | 'kind' | 'position' | 'threat'>, ttlMs = 3000): boolean {
     if (!this.alive(source) || !fact.id || !['mark', 'support', 'threat'].includes(fact.kind) || !validPosition(fact.position) || !Number.isFinite(seenAt) || seenAt > this.now() || !Number.isFinite(ttlMs) || ttlMs <= 0 || seenAt + ttlMs <= this.now()) return false
@@ -219,7 +233,7 @@ export class SwarmBoard {
   tacticStats(): Partial<Record<Doctrine, { successes: number; failures: number }>> { return copy(this.learned) }
   doctrineState(): { doctrine: Doctrine; since: number } | null { return this.current ? { ...this.current } : null }
   setDoctrine(doctrine: Doctrine): void { if (this.current?.doctrine !== doctrine) this.current = { doctrine, since: this.now() } }
-  resetRound(): void { this.work.clear(); this.sightings.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null }
+  resetRound(): void { this.work.clear(); this.sightings.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.futile = new Set(); this.outnumbered = new Set() }
 }
 
 function liveMembers(board: SwarmBoard, members: SwarmMember[]) { return members.filter(m => m.team === board.team && m.health > 0) }
@@ -336,7 +350,7 @@ export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], me
   const attackers = [...melee, ...[mine, ...helpers].filter(a => a.ranged).slice(0, 2)]
   const actors = attackers.map((a, i) => ({ ...a, hp: a.member.health, next: a.arrival + i * damage.IFRAME_TICKS, last: null as any }))
   const foeDefense = enemyDefense(foe)
-  let enemyHp = 20; let foeLast: any = null; let survival = Infinity; let kill = Infinity
+  let enemyHp = foe.hpEstimate ?? 20; let foeLast: any = null; let survival = Infinity; let kill = Infinity
   const nextIncoming = incoming.map(a => a.arrival)
   const ticks = 600
   for (let tick = 0; tick <= ticks && enemyHp > 0 && actors.some(a => a.hp > 0); tick++) {
@@ -367,7 +381,7 @@ export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], me
   }
   const period = Math.max(...incoming.map(e => e.interval)) / 20
   const nominalDps = Math.max(0.01, ...actors.map(a => a.hit * 20 / a.interval))
-  const baseKill = Number.isFinite(kill) ? kill : Math.min(...actors.map(a => a.arrival)) / 20 + 20 / nominalDps
+  const baseKill = Number.isFinite(kill) ? kill : Math.min(...actors.map(a => a.arrival)) / 20 + (foe.hpEstimate ?? 20) / nominalDps
   const survivalSeconds = Number.isFinite(survival) ? survival : firstArrival + member.health / Math.max(0.01, incomingDps)
   const localEnemies = incoming.filter(e => e.arrival / 20 <= Math.min(baseKill, survivalSeconds)).length
   const killSeconds = baseKill * Math.max(1, localEnemies / Math.max(1, profiles.length))
@@ -392,14 +406,20 @@ export interface SwarmTeamFight { engage: boolean; ourLoss: number; theirLoss: n
 // игровых с — потери сторон в долях бота (погибший — 1, раненый — доля потерянного).
 export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Omit<SwarmTeamFight, 'engage'> {
   type Strike = { raw: number; kind: string; interval: number; ranged: boolean; breach: number }
-  type Unit = { side: 0 | 1; position: SwarmPosition; hp: number; start: number; defense: any; last: any; target: number; next: number; strike: Strike | null; member?: SwarmMember; enemy?: SharedEnemy }
+  type Unit = { side: 0 | 1; position: SwarmPosition; hp: number; start: number; defense: any; last: any; target: number; next: number; strike: Strike | null; seen: SharedEnemy }
+  // Обе стороны — по одному правилу видимого (enemyDefense/enemyAttack): материал брони, оружие в руке, блеск → чары по
+  // максимуму. Свои точные чары против «блеск = максимум» у врага давали обеим командам «проигрываем» (арена 14.10:
+  // синие 4.0 : 3.1, красные 3.8 : 2.5 в одном и том же бою). Хп: свои — известные, чужие — верх оценки по нашим
+  // попаданиям (e.hpEstimate), без оценки — 20: раненые свои против «свежих» чужих снова давали обеим сторонам «проигрываем».
+  const seenOf = (m: SwarmMember): SharedEnemy => ({ id: m.id, position: m.position, velocity: { x: 0, y: 0, z: 0 }, sources: [], seenAt: 0,
+    threat: /^(bow|crossbow)$/.test(m.weapon || '') ? 'bow' : 'melee',
+    equipment: { weapon: m.weapon ?? null, armor: (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).filter(Boolean) as string[], ...(Object.values(m.ench || {}).some(v => Number(v) > 0) ? { enchanted: true } : {}) } } as any)
   const units: Unit[] = [
-    ...team.filter(m => m.health > 0).map(m => ({ side: 0 as const, position: m.position, hp: m.health, start: m.health, defense: ownDefense(m), last: null, target: -1, next: 0, strike: null, member: m })),
-    ...enemies.map(e => ({ side: 1 as const, position: e.position, hp: 20, start: 20, defense: enemyDefense(e), last: null, target: -1, next: 0, strike: null, enemy: e }))
+    ...team.filter(m => m.health > 0).map(m => { const seen = seenOf(m); return { side: 0 as const, position: m.position, hp: m.health, start: m.health, defense: enemyDefense(seen), last: null, target: -1, next: 0, strike: null, seen } }),
+    ...enemies.map(e => ({ side: 1 as const, position: e.position, hp: e.hpEstimate ?? 20, start: e.hpEstimate ?? 20, defense: enemyDefense(e), last: null, target: -1, next: 0, strike: null, seen: e }))
   ]
   const strike = (u: Unit, v: Unit): Strike => {
-    if (u.side === 0) { const p = combatProfile(u.member!, v.enemy!); return { raw: p.raw, kind: p.kind, interval: p.interval, ranged: p.ranged, breach: 0 } }
-    const a = enemyAttack(u.enemy!, v.member!)
+    const a = enemyAttack(u.seen, { position: v.position } as SwarmMember)
     return { raw: a.raw, kind: a.kind, interval: a.interval, ranged: a.kind !== 'melee', breach: a.breach }
   }
   const load = (i: number) => units.filter(w => w.hp > 0 && w.target === i).length
@@ -425,7 +445,7 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
     for (const [u, v] of hits) {
       const victims = u.strike!.kind === 'explosion' ? units.filter(w => w.side !== u.side && w.hp > 0 && distance(w.position, v.position) <= 5) : [v]
       for (const w of victims) {
-        const hit = damage.throughIframes(u.strike!.kind === 'explosion' ? enemyAttack(u.enemy!, w.member!).raw : u.strike!.raw, w.last)
+        const hit = damage.throughIframes(u.strike!.kind === 'explosion' ? enemyAttack(u.seen, { position: w.position } as SwarmMember).raw : u.strike!.raw, w.last)
         w.last = hit.last
         w.hp -= damage.afterDefense(hit.raw, u.strike!.kind, w.defense, { breach: u.strike!.breach })
       }
@@ -434,10 +454,17 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
   const loss = (side: 0 | 1) => units.filter(u => u.side === side).reduce((sum, u) => sum + (u.hp <= 0 ? 1 : (u.start - u.hp) / 20), 0)
   return { ourLoss: loss(0), theirLoss: loss(1), wipedUs: !alive(0), wipedThem: !alive(1), seconds: tick / 20, ours: units.filter(u => u.side === 0).length, theirs: enemies.length }
 }
-// Свой в строю не бежит от личной оценки «бьют все меня», пока команда держит бой (последний командный счёт на доске).
-// Одиночка (своих ближе 10 бл. нет) и смертельный первый залп — по личной оценке. Одно правило для планировщика и драйвера.
-export function holdsGround(board: SwarmBoard, m: SwarmMember, team: SwarmMember[], risk: Pick<SwarmFightRisk, 'lethal'>): boolean {
-  return !!board.teamFight?.engage && !risk.lethal && team.some(a => a.id !== m.id && a.health > 0 && distance(a.position, m.position) <= 10)
+// Политика боя (пользователь 14.10: «рои вырезают друг друга, бой должен кончаться; отступать — тактически и быстро на
+// хилку»). Бежит только тот, кого первый залп убьёт; тяжело раненый (меньше 35 % хп — сбегать полечиться и назад);
+// или тот, чья группа в безнадёжном размене (board.futile и board.outnumbered: голые против незерита — подготовка, а не прятки). Одно
+// правило для планировщика и драйвера.
+export function mustFlee(board: SwarmBoard, m: SwarmMember, risk: Pick<SwarmFightRisk, 'unsafe' | 'lethal' | 'killSeconds' | 'survivalSeconds' | 'ready'>, contact = false): boolean {
+  // Своя безнадёжность — сразу, ещё до плана, но только у одиночки (никто из своих не успеет, ready ≤ 1): убить его втрое
+  // дольше, чем я проживу (голый против незерита рядом). В общем бою личная оценка — не повод: на арене 14.10 так
+  // бежали при полном хп (447 из 910 бегств) из боя шесть на шесть. Отход к своим (безнадёжная группа) — только не из
+  // рукопашной (contact: враг ближе 4 бл.): начатая схватка — «любой ценой», её смена на бег рвала удары (арена 14.10).
+  // Пустой размен (futile) — бежать и из рукопашной: там «любой ценой» значит только потери.
+  return !!risk.lethal || !!risk.unsafe && (ratio(m) < .35 || board.futile.has(m.id) || !contact && board.outnumbered.has(m.id) || risk.ready <= 1 && risk.killSeconds > 3 * Math.max(1, risk.survivalSeconds))
 }
 // Очки приёмов по обстановке. Взрывы и раненые — не жёсткие ворота, а цена (правило гибкости; ревью 13.10: в бою 20 на 20
 // кто-то ранен всегда, и «стадо» выбиралось навсегда): фонтан против взрывов почти всегда первый, стадо — по доле раненых.
@@ -548,20 +575,42 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
     const task: SwarmTask = { id: `pvp:${m.id}`, kind, assignedTo: m.id, position: at, priority: kind === 'flee' ? 120 : kind === 'recover' ? 100 : kind === 'heal' ? 90 : data.cover ? 80 : 50, data: { ...data, doctrine, role: m.role, committed, alarm } }
     plan.set(m.id, task)
   }
-  // Бой держат всей командой, если размен сторон не хуже чем поровну и нас не выносят подчистую (assessTeamFight).
-  // Гистерезис: начатый бой держится, пока размен не хуже на полбота, — иначе у ничьей снова монетка.
-  const engaged = board.facts().some(f => f.id === 'team-engage')
+  // Бой держат всей командой (assessTeamFight), если поле остаётся за нами (наших в конце не меньше, чем их) и размен
+  // не хуже ровного (наши потери не больше их). Одно поле — мало: девять голых за одного незеритового «выигрывают» поле
+  // (тест Codex); один размен — мало: трое против шестерых меняются 3 на 3 и проигрывают поле. Начатый бой держится с
+  // запасом в десятую часть всех тел боя (6 на 6 — 1.2 бота): оценка между пересчётами гуляет на бота, и бой мигал
+  // «держим / не держим» каждые полсекунды (арена 14.10; в равной мясорубке «у них остался один» — монетка).
+  // Безнадёжный бой считает каждая группа своих (связные в 10 бл.) против врагов в 12 бл. от неё: больше трёх своих за
+  // одного врага (десять голых против незерита — тест Codex); нас выносят, а мы не снимаем с них и четверти (голый
+  // одиночка против брони); или нас выносят, а у них остаётся не меньше тел, чем было нас (один против трёх, трое против
+  // шести — это не бой роя, а отход к своим и сбор). Остальное — бой: «врага нужно уничтожить любой ценой» (14.10).
+  const groups: SwarmMember[][] = []
+  for (const m of team) {
+    const near = groups.filter(g => g.some(a => distance(a.position, m.position) <= 10))
+    for (const g of near) groups.splice(groups.indexOf(g), 1)
+    groups.push([m, ...near.flat()])
+  }
+  const futile = new Set<string>(), outnumbered = new Set<string>()
+  for (const group of groups) {
+    const foes = enemies.filter(e => group.some(a => distance(a.position, e.position) <= 12))
+    if (!foes.length) continue
+    const score = assessTeamFight(group, foes)
+    const empty = score.ourLoss > 3 * Math.max(score.theirLoss, .5) || score.wipedUs && score.theirLoss < score.theirs / 4
+    for (const a of group) if (empty) futile.add(a.id); else if (score.wipedUs && score.theirs - score.theirLoss >= Math.max(1, score.ours)) outnumbered.add(a.id)
+  }
+  board.futile = futile; board.outnumbered = outnumbered
+  const hopeless = new Set([...futile, ...outnumbered])
+  // Переиграли — 30 с готовиться (лут), а не охотиться обратно на того же (тест Codex: голые после бегства — к сундукам).
+  if (hopeless.size) board.recordFact(team[0].id, board.now(), { id: 'outmatched', kind: 'mark', position: { ...center } }, 30000)
+  // Для журнала — счёт всей команды и держит ли бой большинство.
   const score = enemies.length ? assessTeamFight(team, enemies) : null
-  const engage = !!score && !(score.wipedUs && !score.wipedThem) && score.ourLoss <= score.theirLoss + (engaged ? .5 : 0)
-  board.teamFight = score && { ...score, engage }
-  if (engage) board.recordFact(team[0].id, board.now(), { id: 'team-engage', kind: 'mark', position: { ...center } }, 5000)
+  board.teamFight = score && { ...score, engage: hopeless.size * 2 < team.length }
   for (const [i, m] of team.entries()) {
     const risk = assessSwarmFight(m, enemies, team)
-    const hold = holdsGround(board, m, team, risk)
     // Паника держится 3 игровых с: оценка у порога мигала «бегу / дерусь» каждые полсекунды, и каждое мигание рвало
     // начатое дело (арена 14.10: 108 переключений goto ↔ flee и 82 fight ↔ flee за минуту на 12 тел).
-    if (risk.unsafe && !hold) board.recordFact(m.id, board.now(), { id: 'panic:' + m.id, kind: 'mark', position: { ...m.position } }, 3000)
-    else if (hold || !board.facts().some(f => f.id === 'panic:' + m.id)) continue
+    if (mustFlee(board, m, risk, enemies.some(e => distance(e.position, m.position) <= 4))) board.recordFact(m.id, board.now(), { id: 'panic:' + m.id, kind: 'mark', position: { ...m.position } }, 3000)
+    else if (!board.facts().some(f => f.id === 'panic:' + m.id)) continue
     const threat = enemies.find(e => e.id === risk.target) || [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
     if (!threat) continue
     let dx = m.position.x - threat.position.x; let dz = m.position.z - threat.position.z
@@ -570,15 +619,27 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
     const turn = (i - (team.length - 1) / 2) / Math.max(1, team.length) * Math.PI * 0.75
     const x = (dx * Math.cos(turn) - dz * Math.sin(turn)) / length
     const z = (dx * Math.sin(turn) + dz * Math.cos(turn)) / length
-    put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: risk.reason }, { x: m.position.x + x * 12, y: m.position.y, z: m.position.z + z * 12 })
+    // Перегруппировка: целый, но в безнадёжной местной схватке — бежать к своим, к середине самой большой группы, что не
+    // в безнадёжной схватке, а не куда глаза глядят: так группа растёт и бой продолжается (арена 14.10: отход «прочь от
+    // угрозы» рассыпал строй, и вместо сбора было 300 бегств при полном хп). Раненый и смертельный залп — прочь, как прежде.
+    const home = !risk.lethal && ratio(m) >= .35 ? groups.filter(g => !g.includes(m) && !g.some(a => hopeless.has(a.id))).sort((p, q) => q.length - p.length)[0] : undefined
+    const away = { x: m.position.x + x * 12, y: m.position.y, z: m.position.z + z * 12 }
+    // Причина бегства — в журнал драйвера (какое условие mustFlee сработало; «держу» — липкая паника без свежего повода).
+    const contact = enemies.some(e => distance(e.position, m.position) <= 4)
+    const cause = risk.lethal ? 'залп' : !risk.unsafe ? 'держу' : ratio(m) < .35 ? 'рана' : futile.has(m.id) ? 'пустой размен' : !contact && outnumbered.has(m.id) ? 'нас меньше' : risk.ready <= 1 && risk.killSeconds > 3 * Math.max(1, risk.survivalSeconds) ? 'один' : 'держу'
+    put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: cause + ', ' + risk.reason, ...(home ? { regroup: true } : {}) },
+      home ? { x: home.reduce((sum, a) => sum + a.position.x, 0) / home.length, y: m.position.y, z: home.reduce((sum, a) => sum + a.position.z, 0) / home.length } : away)
   }
   const hurt = team.filter(m => {
     if (plan.has(m.id)) return false
     // Врагов не видно — отход только от настоящей раны (< 70 %): царапина от падения не срывает лут (ревью 13.10).
     if (!enemies.length) return ratio(m) < .7
     const nearby = enemies.filter(e => distance(m.position, e.position) < 12).length
-    const recovery = (1 - ratio(m)) * (8 + nearby * 2) - (enemies.length ? ratio(m) * 2 : 0)
-    return recovery > (enemies.length ? ratio(m) * 4 : 0)
+    // Кольцо и «стадо» для того и строятся, чтобы раненый ушёл в середину, — там прежний счёт (с 62–70 %).
+    if (doctrine === 'ring' || doctrine === 'weak-center') return (1 - ratio(m)) * (8 + nearby * 2) - ratio(m) * 2 > ratio(m) * 4
+    // В остальном бою — на хилку с половины хп (больше врагов рядом — чуть раньше, до 60 %), и сразу назад: с 62–70 % бой
+    // распадался на отходы (пользователь 14.10: «отступать тактически на хилку быстро»).
+    return ratio(m) < .45 + .05 * Math.min(3, nearby)
   }).sort((a, b) => ratio(a) - ratio(b))
   for (const [i, m] of hurt.entries()) {
     const side = (i - (hurt.length - 1) / 2) * 1.5
@@ -609,16 +670,24 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
   if (primary && committed && ['cocoon', 'hunt'].includes(doctrine) && now - primary.seenAt <= 500) {
     const builders = available.filter(m => !plan.has(m.id) && m.role === 'miner-builder' && buildBlock(m))
     if (builders.length) {
-      const offset = doctrine === 'hunt' ? 3 : 0
-      const fresh = { x: Math.floor(primary.position.x + forward.x * offset), y: Math.floor(primary.position.y), z: Math.floor(primary.position.z + forward.z * offset) }
+      // Загон впереди бегущей цели (14.10): стенка в 3 бл. от неё не успевала — на спринте (5.6 бл/с) цель пробегала место
+      // раньше, чем строители клали клетки (лаборатория, run9 и run12). Бежит — упреждение на 1.5 с пути (3–9 бл.) и стенка
+      // поперёк бега; стоит — 3 бл. от неё по направлению строя, как раньше.
+      const v = primary.velocity || { x: 0, y: 0, z: 0 }, speed = Math.hypot(v.x, v.z) * 20
+      const running = doctrine === 'hunt' && speed > 2.5
+      const axis = running ? { x: v.x * 20 / speed, z: v.z * 20 / speed } : { x: forward.x, z: forward.z }
+      const offset = doctrine === 'hunt' ? (running ? Math.min(9, Math.max(3, speed * 1.5)) : 3) : 0
+      const fresh = { x: Math.floor(primary.position.x + axis.x * offset), y: Math.floor(primary.position.y), z: Math.floor(primary.position.z + axis.z * offset) }
       // Одна стройка на команду: все строители кладут один чертёж (раньше у каждого был свой центр от живой позиции
       // цели, и второй строитель натыкался на чужие клетки — лаборатория 13.10, загон: стену клал один). Новое место —
       // только когда цель ушла: из клетки кокона или дальше 10 бл. от стены загона (и та стена готова или не начата).
-      const id = 'build-site:' + doctrine
-      let site = board.facts().find(f => f.id === id)
+      const id = 'build-site:' + doctrine, axisId = 'build-axis:' + doctrine
+      let site = board.facts().find(f => f.id === id), siteAxis = board.facts().find(f => f.id === axisId)
+      // Цель уже за стенкой загона (по оси стенки дальше 1.5 бл.) — стенка бесполезна и переносится, даже начатая.
+      const passed = doctrine === 'hunt' && !!site && !!siteAxis && (primary.position.x - site.position.x - .5) * (siteAxis.position.x - site.position.x) + (primary.position.z - site.position.z - .5) * (siteAxis.position.z - site.position.z) > 1.5
       const gone = !site || (doctrine === 'cocoon'
         ? Math.floor(primary.position.x) !== site.position.x || Math.floor(primary.position.z) !== site.position.z || Math.abs(primary.position.y - site.position.y) > 1
-        : distance(primary.position, site.position) > 10 && (() => {
+        : passed || distance(primary.position, site.position) > 10 && (() => {
           // Начатую стенку загона достраивают: перенос бросал готовую на 60 % стену ради новой за убегающей целью
           // (лаборатория 14.10: вторую стену клал один строитель). Переносится только готовая или не начатая.
           const cells = board.tasks().filter(t => t.kind === 'build' && t.data?.blueprint === `cutoff:${cellKey(site!.position)}`)
@@ -626,9 +695,14 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
         })())
       // Кокон закладывается только вокруг стоящей цели: в прыжке клетка ног на блок выше, и кокон висел в воздухе (разбор 13.10).
       const standing = doctrine !== 'cocoon' || Math.abs(primary.position.y - Math.round(primary.position.y)) < .05
-      if (gone && standing) { board.recordFact(builders[0].id, now, { id, kind: 'mark', position: fresh }, 30000); site = board.facts().find(f => f.id === id) }
-      else if (gone) site = undefined
-      const direction = Math.abs(forward.x) > Math.abs(forward.z) ? forward.x > 0 ? 'east' : 'west' : forward.z > 0 ? 'south' : 'north'
+      if (gone && standing) {
+        board.recordFact(builders[0].id, now, { id, kind: 'mark', position: fresh }, 30000)
+        board.recordFact(builders[0].id, now, { id: axisId, kind: 'mark', position: { x: fresh.x + axis.x, y: fresh.y, z: fresh.z + axis.z } }, 30000)
+        site = board.facts().find(f => f.id === id); siteAxis = board.facts().find(f => f.id === axisId)
+      } else if (gone) site = undefined
+      // Стенка — поперёк оси, заложенной вместе с местом (не от живого направления строя: оно прыгает за целью).
+      const along = site && siteAxis ? { x: siteAxis.position.x - site.position.x, z: siteAxis.position.z - site.position.z } : forward
+      const direction = Math.abs(along.x) > Math.abs(along.z) ? along.x > 0 ? 'east' : 'west' : along.z > 0 ? 'south' : 'north'
       if (site) for (const m of builders) put(m, 'scout', { buildKind: doctrine === 'hunt' ? 'cutoff' : 'cocoon', block: buildBlock(m), target: primary.id, enemyPosition: primary.position, origin: site.position, direction })
       // Оцепление кокона: пока стройка не замкнута, остальные не бьют цель (удар — повод вырваться: лаборатория 13.10,
       // цель ушла через щель, пока свои её били) и стоят у выходов — у обеих щелей и по бокам. Замкнут — бьют сквозь щели.
@@ -710,10 +784,16 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
       const progress = (primary.position.x - a.x) * ax.x + (primary.position.z - a.z) * ax.z
       const school = available.filter(m => !plan.has(m.id))
       if (progress < 1.5) {
+        // Пробка (14.10): один встаёт в коридоре в 7 бл. за серединой — рывок упирается в него, и строй смыкается вокруг,
+        // а не догоняет со спины (лаборатория run11: прорвавшийся бежал дальше, все сомкнулись только сзади). Со щитом —
+        // щит к нему; без щита — самый крепкий. Нужны хотя бы двое на коридор по бокам.
+        const cork = school.length >= 3 ? school.slice().sort((p, q) => Number(hasShield(q)) - Number(hasShield(p)) || q.health * q.strength - p.health * p.strength)[0] : undefined
+        if (cork) put(cork, 'goto', { fountain: 'cork', ...(hasShield(cork) ? { hold: 'shield', face: { x: primary.position.x, y: primary.position.y + 1.6, z: primary.position.z } } : {}), range: .6, target: primary.id, enemyPosition: primary.position },
+          { x: a.x + ax.x * 7, y: cork.position.y, z: a.z + ax.z * 7 })
         // Каждый уходит на свою сторону коридора и на шаг дальше, чем стоит: коридор — не уже 5 бл. от оси.
         const s = (m: SwarmMember) => (m.position.x - a.x) * lateral.x + (m.position.z - a.z) * lateral.z
         const ranks = new Map<number, number>()
-        for (const [i, m] of school.sort((p, q) => Math.abs(s(p)) - Math.abs(s(q))).entries()) {
+        for (const [i, m] of school.filter(m => m !== cork).sort((p, q) => Math.abs(s(p)) - Math.abs(s(q))).entries()) {
           const sign = s(m) > .3 ? 1 : s(m) < -.3 ? -1 : i % 2 ? 1 : -1
           const rank = ranks.get(sign) || 0; ranks.set(sign, rank + 1)
           const out = sign * Math.max(Math.abs(s(m)) + 1.5, 5 + rank * 1.5)
@@ -736,6 +816,10 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
     }
   }
   const meanStrength = team.reduce((s, m) => s + m.strength, 0) / team.length || 1
+  // Охота (пользователь 14.10: бой должен кончаться): врагов не видно — к месту, где их видели последним (60 с), а там
+  // прочёсывать; лут — только тому, кому нечем драться.
+  if (enemies.length) board.recordFact(team[0].id, board.now(), { id: 'last-enemy', kind: 'mark', position: { x: foeCenter.x, y: center.y, z: foeCenter.z } }, 60000)
+  const lastEnemy = enemies.length ? undefined : board.facts().find(f => f.id === 'last-enemy')
   for (const ally of hurt) {
     const foe = enemies.filter(e => !untouchable.has(e.id) && (aimingAt({ name: e.id, p: e.position, v: e.velocity }, { name: ally.id, p: ally.position }) || distance(e.position, ally.position) < 12)).sort((a, b) => distance(a.position, ally.position) - distance(b.position, ally.position))[0]
     const guard = foe && team.filter(m => !plan.has(m.id)).sort((a, b) => (b.strength / meanStrength) * 6 - distance(b.position, ally.position) - ((a.strength / meanStrength) * 6 - distance(a.position, ally.position)))[0]
@@ -752,7 +836,9 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
     if (!foe) {
       const weapon = Math.max(1, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0 && damage.isMeleeWeapon(n)).map(n => damage.attackDamage(n)))
       const improvement = m.inventory ? Math.max(0, 8 - weapon) + Math.max(0, 20 - ownDefense(m).armor) / 5 : 0
-      put(m, improvement > 0 ? 'loot' : 'scout', { improvement, sentry: team.length >= 4 && m.id === team.find(a => a.role === 'ranged')?.id }); continue
+      if (improvement > 4 || improvement > 0 && board.facts().some(f => f.id === 'outmatched')) { put(m, 'loot', { improvement }); continue }
+      const at = lastEnemy?.position ?? m.position
+      put(m, 'goto', { search: true, hunt: true, enemyPosition: at, improvement }, at); continue
     }
     const nearby = distance(m.position, foe.position) <= 4.5
     // Смена линий: ранг не на смене уходит в тыл и из контакта — иначе старый фронт так и стоит в бою (лаборатория 13.10).

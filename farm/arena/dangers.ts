@@ -30,6 +30,9 @@ export function installDangers (ctx: ArenaContext) {
     const jit = (k) => k * (0.7 + Math.random() * 0.6)
     const kind = src === sm ? 'sm' : src === pt ? 'pt' : src === ar ? 'ar' : src === am ? 'am' : src === lv ? 'lv' : 'cl'
     cd[kind] = Date.now() + (src === cl ? 600 : src === am ? jit(st.cd) : src === lv ? 1500 : src === ar ? 250 : 600)
+    // В рукопашной (бой и враг ближе 4.5 бл.) от прицела и стрел не стрейфить: уворот рвёт бой (арена 14.10: один лучник
+    // прицелился — трое бросили свои схватки, ни одного удара; пользователь: «рои вырезают друг друга до конца»).
+    if ((src === am || src === ar) && b.last?.m === 'fight' && ctx.enemiesOf(b, m.pos).some(e => e.d <= 4.5 && !e.mob)) return
     // Прицел: увернуться было некуда (столб, уступ) — 3 с драться, а не дёргаться; вплотную (≤ 4 бл.) — бить, а не стрейфить.
     if (src === am && (Math.random() < st.skip * 0.5 || (b.noEvadeUntil || 0) > Date.now() || Math.hypot(am.at.x - m.pos.x, am.at.y - m.pos.y, am.at.z - m.pos.z) <= 3)) return
     log(sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — рывок` : pt ? `🧪↯ ${b.name}: летит ${pt.name}${pt.role ? ' (' + pt.role + ')' : ''}, ляжет через ${pt.ticks} т — рывок` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : am ? `🎯↔ ${b.name}: ${am.name} целится в меня (${am.weapon}) — стрейф` : ar ? `🏹↯ ${b.name}: летит ${ar.name}, через ${ar.ticks} т — шаг поперёк` : `🧪☁ ${b.name}: облако зелья — выхожу`)

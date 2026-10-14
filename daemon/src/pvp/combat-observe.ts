@@ -127,6 +127,16 @@ function ageMemory (entry) {
   entry.at = at // общий cursor для status и следующего Engage
 }
 // Только чтение существующего знания: не создаёт/переключает scope и не подписывается на события.
+// Верх оценки хп противника (с поглощением) по своим подтверждённым попаданиям — для общего журнала роя (swarmSightings).
+// Память — текущего раунда этого тела; ни одного своего попадания — null (тогда рой считает 20).
+function foeHpUpper (bot, entity) {
+  const memory = hpMemories.get(bot), key = foeKey(entity)
+  const entry = memory && key && (memory.targets.get(key) || [...memory.targets.values()].find(e => e.username === entity?.username?.toLowerCase()))
+  if (!entry) return null
+  ageMemory(entry)
+  return entry.hp.snapshot().hi
+}
+
 function readFoeEstimate (bot, { roundScope, target }: any = {}) {
   const memory = hpMemories.get(bot)
   if (!memory || memory.scope !== roundScope || typeof target !== 'string' || !target) return null
@@ -387,4 +397,4 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   }
 }
 
-module.exports = { observe, trackFoe, readFoeEstimate, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }
+module.exports = { observe, trackFoe, readFoeEstimate, foeHpUpper, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }
