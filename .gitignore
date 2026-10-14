@@ -73,7 +73,6 @@
 /run/backups/
 /run/*.txt
 /run/*.pid
-/run/.codex-limit.json
 
 # tools/seedtool — исходник; exe и объектники собираются build.cmd
 /tools/seedtool/*.exe

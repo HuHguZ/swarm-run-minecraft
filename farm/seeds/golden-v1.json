@@ -1,0 +1,72 @@
+{
+  "note": "Золотой набор из good-v2 (14.10.2026, по просьбе пользователя: скорость разработки, полные прохождения). Отбор: лава ≤ 60 от спавна, бастион ≤ 90 и крепость ≤ 155 от спавна/8 (seedtool). Бот играет вслепую — постройки просто близко.",
+  "fields": "lava, rp, village, shipwreck — блоки от спавна; bastion, fortress — блоки в Аду от спавна/8; sh — до стронгхолда в верхнем мире",
+  "seeds": [
+    {
+      "seed": "5955226839201573818",
+      "biome": "desert",
+      "lava": 28,
+      "rp": 147,
+      "village": 273,
+      "shipwreck": 576,
+      "bastion": 32,
+      "fortress": 150,
+      "sh": 1662
+    },
+    {
+      "seed": "-9170169599233635408",
+      "biome": "snowy_plains",
+      "lava": 48,
+      "rp": 101,
+      "village": 222,
+      "shipwreck": 101,
+      "bastion": 33,
+      "fortress": 153,
+      "sh": 1310
+    },
+    {
+      "seed": "-2642876175319085974",
+      "biome": "forest",
+      "lava": 25,
+      "rp": 121,
+      "village": 321,
+      "shipwreck": 901,
+      "bastion": 71,
+      "fortress": 136,
+      "sh": 1404
+    },
+    {
+      "seed": "3292227454314326185",
+      "biome": "taiga",
+      "lava": 33,
+      "rp": 32,
+      "village": 193,
+      "shipwreck": 336,
+      "bastion": 74,
+      "fortress": 144,
+      "sh": 1302
+    },
+    {
+      "seed": "5730218751502857564",
+      "biome": "plains",
+      "lava": 43,
+      "rp": 147,
+      "village": 305,
+      "shipwreck": 128,
+      "bastion": 67,
+      "fortress": 148,
+      "sh": 1357
+    },
+    {
+      "seed": "7646447341542460528",
+      "biome": "forest",
+      "lava": 57,
+      "rp": 16,
+      "village": 310,
+      "shipwreck": 595,
+      "bastion": 86,
+      "fortress": 154,
+      "sh": 1660
+    }
+  ]
+}
