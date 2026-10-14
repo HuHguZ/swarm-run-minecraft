@@ -79,6 +79,7 @@ export interface Candidate {
 }
 
 export const hasObservedTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening)
+const FAST_WALKERS = /^(piglin|piglin_brute|zombified_piglin|hoglin|zoglin)$/
 // A nearby sealed niche breaks piglin sight without an exposed run - before melee: a piglin within reach strikes every
 // second through the build, and the shield duel answers it there (try-lab-ne-piglin 14.10: niche at 1.6 blocks, 12 -> 0 hp).
 export const piglinNiche = (s: TacticalState): boolean => !!s.niche && s.shield && s.shelter === 'BlockOff' &&
@@ -164,7 +165,8 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.drowning) return 3
   if (state.lava || state.lavaEscapePending) return 2
   // A brute, a hoglin or three walkers coming (netherHide, 8 blocks): the hole goes down before they arrive, not under them.
-  if (state.contact || state.netherHide || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
+  // So does a ghast in sight over a lethal drop behind the body (ghastEdge): the box goes up before its first fireball.
+  if (state.contact || state.netherHide || state.ghastEdge || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
   if (foes.length) return 1
   return 0
 }
@@ -203,7 +205,10 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // leave less than the 8 HP fight floor make building in place a trade (stress stand brute-in-nether: box at 20 HP,
   // abandoned 3 ticks before the seal at 4.8 HP, cf. Full40). Break contact first, as refuge does when the walker outruns
   // the build.
-  const pressure = state.enemies.reduce((sum, enemy) => sum + (enemy.threatening && enemy.distance <= 4.5 ? enemy.hit ?? 0 : 0), 0)
+  // Fast Nether walkers close 6.5 blocks before a box stands (piglin 3.5 b/s, box ~2.4 s): c14-7-2 14.10 - BlockOff with three
+  // piglins at 5 blocks, 13 -> 0 hp. Their blow defaults to 6 when the verdict did not price this one.
+  const pressure = state.enemies.reduce((sum, enemy) => sum + (enemy.threatening && (enemy.distance <= 4.5 || FAST_WALKERS.test(enemy.kind) && enemy.distance <= 6.5)
+    ? enemy.hit ?? (FAST_WALKERS.test(enemy.kind) ? 6 : 0) : 0), 0)
   // A creeper closes 4 blocks (2.7 b/s) while a wall goes up (~1.5 s), and at 4 blocks refuge refuses the box: a build
   // started inside 8 blocks was dropped a sample later (stress stand fuzz-2564: Flee>BlockOff>Flee at hp 3). A score, not a
   // gate: a box started further out keeps the score it was chosen with (arbiter SHELTERS) as the creeper walks in.
@@ -213,7 +218,10 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
 
   // A favourable verdict without a weapon is no fight (Fight needs one): score the retreats as for an unfavourable one
   // (stress stand: fists vs a husk -> Flee every few seconds, the husk follows 35 blocks).
-  const armed = state.canFight && state.weapon
+  // Nor against blazes no sword reaches (30-40 blocks off): armed made the box 45 against the shield's 80, and the body shielded in
+  // the open under three-shot volleys until it burned (c16-7-2 14.10). A ghast keeps the shield and the swat (its fireball is
+  // knocked back), unless a drop waits behind (ghastEdge).
+  const armed = state.canFight && state.weapon && (melee || !state.enemies.some(enemy => enemy.threatening && enemy.kind === 'blaze' && !meleeReachable(enemy)))
   // A player reaches up a 3-block pillar and down into a 2-deep hole (eye 1.62 + reach 3): only walls delay one (farm
   // telemetry 06.10, arena slot 27: DigDown against an attacking player, death).
   const playerFoe = state.enemies.some(enemy => enemy.threatening && enemy.player)

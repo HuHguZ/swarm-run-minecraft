@@ -125,13 +125,22 @@ function install (bot) {
 }
 
 // Ближние враги в r: брут/хоглин/зоглин/иссушитель — всегда; пиглин и зомби-пиглин — только злые (не малыши).
+// Только видимые лучом прицела или ударившие нас за 1.5 с (ревью Codex q7 14.10: скрытый за стеной брут менял ожидание, толпу и
+// разрешение слезть со столба — рентген, AGENTS.md). ND_GUARD_SEEN=0 — прежний счёт всех сущностей рядом.
 function meleeFoes (bot, r = 6) {
   const me = bot.entity.position
+  const g = bot._ndGuard
+  const struck = new Set((g?.hits || []).filter(h => gameClock.now() - h.t < 1500).map(h => h.id))
   return Object.values(bot.entities || {}).filter((e : any) => {
     if (!e || !e.position || e === bot.entity || e.isValid === false) return false
     const n = e.name || ''
     if (!meleeName(n)) return false
     if (e.position.distanceTo(me) > r) return false
+    if (process.env.ND_GUARD_SEEN !== '0' && !struck.has(e.id)) {
+      let seen = true
+      try { const aim = require('./pick').aim; if (typeof aim === 'function') seen = !!aim(bot, e, { range: r + 2 })?.point } catch {}
+      if (!seen) return false
+    }
     if (n === 'piglin') return aggressive(bot, e) && !isBaby(bot, e) && angryAtUs(bot)
     if (n === 'zombified_piglin') return aggressive(bot, e) && !isBaby(bot, e)
     return true
@@ -264,7 +273,8 @@ async function hideDown (session, ctl) {
     const v = f.offset(0, -i, 0)
     const r = await SL.digCell(bot, v)
     ms.push(gameClock.now() - t0)
-    if (r !== 'ok' && r !== 'air') return { ok: i > 1, depth: i - 1, why: 'копка: ' + r, cells, ms }
+    // Глубина 1 — не нора: тело торчит на 0.8 в рамку удара (ревью Codex q7).
+    if (r !== 'ok' && r !== 'air') return { ok: false, depth: i - 1, why: 'копка: ' + r, cells, ms }
     cells.push(SL.keyV(v))
     const ok = await SL.stepMove(bot, ctl, { kind: 'vdown', to: { x: v.x, y: v.y, z: v.z } })
     ms.push(gameClock.now() - t0)
@@ -314,9 +324,13 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = 
           try {
             const sw = bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => rank(b) - rank(a))[0]
             if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) await bot.equip(sw, 'hand')
-            await shield?.raise(false)
-            await bot.lookAt(e.position.offset(0, (e.height || 1.9) * 0.7, 0), true)
-            bot.attack(e); lastSitSwing = gameClock.now(); swings++
+            // В видимую точку его рамки (pick.aim), а не в грудь: из норы грудь за краем (ревью Codex q7).
+            const aim = pick.aim(bot, e)
+            if (aim?.point && !ctl.aborted) {
+              await shield?.raise(false)
+              await bot.lookAt(aim.point, true)
+              bot.attack(e); lastSitSwing = gameClock.now(); swings++
+            }
           } catch {}
         }
       }
@@ -331,13 +345,13 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = 
   } finally { shield?.close() }
   return { s: Math.round((gameClock.now() - t0) / 1000), swings, left: meleeFoes(bot, 6).length }
 }
-// Ближайший видимый стрелок в 24 бл.: пиглин с арбалетом, ифрит, гаст, скелет.
+// Ближайший видимый стрелок в 24 бл.: пиглин с арбалетом, ифрит, гаст, скелет (иссушитель с мечом — не стрелок).
 function shooterNear (bot) {
   const me = bot.entity.position
   let best = null; let bd = 25
   for (const e of Object.values(bot.entities || {}) as any[]) {
     if (!e || !e.position || e === bot.entity || e.isValid === false) continue
-    const shooter = /^(blaze|ghast|skeleton|wither_skeleton)$/.test(e.name || '') || (/^piglin$/.test(e.name || '') && e.equipment?.[0]?.name === 'crossbow')
+    const shooter = /^(blaze|ghast|skeleton)$/.test(e.name || '') || (/^piglin$/.test(e.name || '') && e.equipment?.[0]?.name === 'crossbow')
     if (!shooter) continue
     const d = e.position.distanceTo(me)
     if (d < bd && sees(bot, e)) { best = e; bd = d }
@@ -473,7 +487,9 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
     const half = (f.width || 0.6) / 2 + 0.83 + 0.3
     return Math.abs(f.position.x - me.x) < half && Math.abs(f.position.z - me.z) < half && f.position.y < me.y + 1.8 && f.position.y + (f.height || 1.95) > me.y
   }
-  const tempoOk = f => !hasShield || process.env.ND_DUEL_TEMPO === '0' || !reachesUs(f) ||
+  // Щит выбит топором (cooldown) — такт не ждать: блока нет (ревью Codex q7).
+  const shieldOff = () => gameClock.now() < (bot._ndShieldDisabledUntil || 0) || bot.inventory.slots[45]?.name !== 'shield'
+  const tempoOk = f => !hasShield || shieldOff() || process.env.ND_DUEL_TEMPO === '0' || !reachesUs(f) ||
     gameClock.now() - (swungAt.get(f.id) ?? -Infinity) < 400 || gameClock.now() - Math.max(t0, swungAt.get(f.id) ?? -Infinity) > 2000
   try {
     await shield?.wear()
@@ -504,6 +520,10 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
         await sleep(50)
         if (ctl.aborted) break
         if (imminent()) continue
+        // Удар — туда, куда видно (pick.aim), взгляд перед ним заново: после ожидания враг сдвинулся (ревью Codex q7).
+        const aim = pick.aim(bot, foe)
+        if (!aim?.point) { await shield?.raise(true); continue }
+        try { await bot.lookAt(aim.point, true) } catch {}
         try { bot.attack(foe); swings++; last = gameClock.now() } catch {}
         await sleep(50)
         await shield?.raise(true)

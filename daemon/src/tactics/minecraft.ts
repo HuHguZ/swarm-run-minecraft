@@ -97,6 +97,7 @@ export function dropBehind(bot: MinecraftEntity, from: { x: number; z: number })
 export const FLEE_SAFE_DISTANCE = 17
 export const EXHAUSTION_HOLD_MS = 400
 export const FIGHT_RECOVERY_HP = 4
+export const UNREACHABLE_MS = 20000
 const IDLE_COOLED = new Set<ActionId>(['Fight', 'LastStand', 'Hide', 'Heal', 'BlockOff', 'PillarUp', 'DigDown'])
 
 export interface TacticalSnapshot {
@@ -144,9 +145,12 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const attacker = struck && struck !== bot.entity && struck.isValid !== false && (struck.username || /^(enderman|piglin|zombified_piglin)$/.test(struck.name)) ? struck : null
   // A piglin with an attack target (mob_flags, no gold on us) is a threat on sight, not on its first strike: the shield needs
   // 5 ticks, and a fight that began at 2 blocks took the first 8 hp before it every time (try-lab-ne-piglin 14.10).
+  // One the duel could not reach is no sight threat for a while, unless it comes to the body (UNREACHABLE_MS above).
+  const unreachable = (entity: MinecraftEntity) => ((session._ndUnreachable as Map<number, number> | undefined)?.get(entity.id) ?? -Infinity) > at &&
+    entity.position.distanceTo(bot.entity.position) > 4
   const angry: MinecraftEntity[] = /nether/.test(dimension) && process.env.ND_PIGLIN_SIGHT !== '0'
-    ? (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => /^(piglin|zombified_piglin)$/.test(entity.name || '') && !!pick.aim(bot, entity, { range: 16 })?.point) : []
-  const inspected = safety.inspect(bot, { target: target ?? attacker ?? angry[0] ?? null })
+    ? (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => /^(piglin|zombified_piglin)$/.test(entity.name || '') && !unreachable(entity) && !!pick.aim(bot, entity, { range: 16 })?.point) : []
+  const inspected = safety.inspect(bot, { target: target ?? (attacker && !unreachable(attacker) ? attacker : null) ?? angry[0] ?? null })
   const hot = guard.hot(bot)
   const seen = new Set<number>()
   const enemies: TacticalEnemy[] = []
@@ -196,9 +200,12 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   // A ghast in sight with a drop behind the body (no floor 4 down or lava within 4 blocks away from it): its blast throws the body
   // 2-3 blocks, and from a ledge over the lava sea that is the death (c2-6-1 14.10: 20 fireballs swatted at y 82, the 20th threw
   // the body into the lava at y 28; b16-5-2: the same through a floor the blast broke). A sealed box stops the shot and its throw.
-  const ghastEdge = /nether/.test(dimension) && process.env.ND_GHAST_EDGE !== '0' && enemies.some(enemy => enemy.threatening && enemy.kind === 'ghast' &&
-    !!bot.entities[enemy.id]?.position && dropBehind(bot, bot.entities[enemy.id].position))
-  if (!lava && !lavaEscapePending && enemies.some(enemy => enemy.threatening) && (bot.health < 16 || ghastEdge || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman'))) {
+  // Any ghast in sight within 64 counts, not only one already shooting (c15-7-1 14.10: the first fireball at y 71 over the lava
+  // sea - the swat missed, the blast threw the body 44 blocks down into the lava).
+  const ghastEdge = /nether/.test(dimension) && process.env.ND_GHAST_EDGE !== '0' && (Object.values(bot.entities || {}) as MinecraftEntity[]).some(entity =>
+    entity?.name === 'ghast' && entity.position && entity.isValid !== false && entity.position.distanceTo(bot.entity.position) <= 64 &&
+    dropBehind(bot, entity.position) && !!pick.aim(bot, entity, { range: 66 })?.point)
+  if (!lava && !lavaEscapePending && (ghastEdge || enemies.some(enemy => enemy.threatening) && (bot.health < 16 || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')))) {
     try { refuge = survival.refugeLook(session, { radius: 16 }) } catch {}
   }
   let fireResistance = false
@@ -231,15 +238,19 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if (/nether/.test(dimension) && process.env.ND_NETHER_HIDE !== '0') {
     try {
       // Only the ones in sight (pick ray): an entity behind a wall is not known to a player (AGENTS.md, no x-ray).
-      const near = (guard.meleeFoes(bot, 8) as MinecraftEntity[]).filter(entity => !/^(blaze|magma_cube)$/.test(entity.name || '') && !!pick.aim(bot, entity, { range: 16 })?.point)
+      const near = (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => !/^(blaze|magma_cube)$/.test(entity.name || '') && !unreachable(entity) &&
+        !!pick.aim(bot, entity, { range: 16 })?.point)
       const gold = [5, 6, 7, 8].some(slot => /^golden_/.test(bot.inventory.slots[slot]?.name || ''))
       // The hole goes down before they arrive: dug with a walker at the body it lets them into the shaft before the plug (c10:
       // three piglins at 3 blocks, the plug failed in 6 of 8 holes, 8 deaths). At the body the shield duel and the run stay.
       // A brute, a hoglin or a zoglin from 3.5 blocks; a crowd of three only from 6 (piglins run faster than the hole goes down:
       // c12, 2 swords and a crossbow from 7 blocks - 12 deaths of 12 in the hole, 4 of 8 with the duel and the run in c2).
-      const nearest = Math.min(...near.map(entity => entity.position.distanceTo(bot.entity.position)))
+      // A brute or a hoglin is met from 12 blocks (c15-7-2 14.10: a box against a hoglin at 11, 12 -> 0); a crowd counts in 8.
+      const distance = (entity: MinecraftEntity) => entity.position.distanceTo(bot.entity.position)
+      const nearest = Math.min(...near.map(distance))
       const heavy = near.some(entity => guard.HIDE_FROM.test(entity.name || ''))
-      netherHide = near.length > 0 && guard.bigMelee(bot, near, null, { lowHp: false, walkers: true }) && !(gold && piglinWitnesses) &&
+      const crowd = near.filter(entity => distance(entity) <= 8)
+      netherHide = near.length > 0 && (heavy || crowd.length > 0 && guard.bigMelee(bot, crowd, null, { lowHp: false, walkers: true })) && !(gold && piglinWitnesses) &&
         (guard.above(bot, near) || nearest > (heavy ? 3.5 : 6) && guard.holeFits(bot)) ||
         !!session._ndHideCtl && !session._ndHideCtl.aborted
     } catch {}
@@ -669,8 +680,15 @@ export class TacticalSystem {
         }
         return result ?? { freed: true, dug: 0 }
       }
-      case 'LastStand': return require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined,
-        allowPlayer: enemy?.player, timeoutSeconds: 15, lastStand: true, retreatAtHealth: 0, purpose: 'defense' })
+      case 'LastStand': {
+        const result = await require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined,
+          allowPlayer: enemy?.player, timeoutSeconds: 15, lastStand: true, retreatAtHealth: 0, purpose: 'defense' })
+        // A whole stand without a swing (a crossbow piglin across a gap): it is no melee target for a while (c15-5-1 14.10: five
+        // stands of 15 s at a shooter 5 blocks off, 9 -> 0 hp).
+        if (enemy && !enemy.player && /nether/.test(String(bot.game?.dimension || '')) && result && typeof result === 'object' && !ctl.aborted &&
+            !(result as { swings?: number }).swings && !((result as { kills?: unknown[] }).kills || []).length) (session._ndUnreachable ||= new Map()).set(enemy.id, clock.now() + UNREACHABLE_MS)
+        return result
+      }
       case 'Fight': {
         const attacker = state.enemies.find(candidate => candidate.threatening && candidate.distance <= 3 &&
           bot.entities[candidate.id]?.isValid !== false && bot.entities[candidate.id]?.position &&
@@ -681,7 +699,11 @@ export class TacticalSystem {
         }
         if (/nether/.test(String(bot.game?.dimension || '')) && enemy) {
           const entity = bot.entities[enemy.id]
-          return guard.react(session, ctl, { force: { e: entity, why: 'tactical fight' }, _owned: true, duelMs: 15000, sitMs: 8000 })
+          const result = await guard.react(session, ctl, { force: { e: entity, why: 'tactical fight' }, _owned: true, duelMs: 15000, sitMs: 8000 })
+          // Not reached in the whole duel (across a gap, a crossbow out of a sword's reach): 20 s it is no target of a fight -
+          // c13-5-3 14.10: a piglin at 8 blocks behind a drop, Fight "out of reach" 179 times a minute, 90 minutes of the run gone.
+          if (result?.duel?.stopped === 'не достать' && !result.duel.swings) (session._ndUnreachable ||= new Map()).set(enemy.id, clock.now() + UNREACHABLE_MS)
+          return result
         }
         return require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined, allowPlayer: enemy?.player, timeoutSeconds: 15, engaged: true })
       }
@@ -739,7 +761,8 @@ export class TacticalSystem {
           // holds its own flag while it digs, climbs and sits: airborne steps and the shrinking head room flipped the flag off
           // mid-climb, and CreateDistance took the hands 0.3 s in (try-lab-ne-piglin c3, brute: 7 of 8 died).
           if (action.id === 'PillarUp' && state.netherHide && /nether/.test(String(bot.game?.dimension || ''))) {
-            const near = enemy ? bot.entities[enemy.id] : (guard.meleeFoes(bot, 8) as MinecraftEntity[])[0]
+            const near = enemy && bot.entities[enemy.id] && !/^(blaze|ghast|magma_cube)$/.test(bot.entities[enemy.id].name || '') ? bot.entities[enemy.id]
+              : (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => !/^(blaze|magma_cube)$/.test(entity.name || ''))[0]
             if (near) {
               session._ndHideCtl = ctl
               try { return await guard.react(session, ctl, { force: { e: near, why: 'tactical hide' }, _owned: true, hide: true, sitMs: 8000 }) }

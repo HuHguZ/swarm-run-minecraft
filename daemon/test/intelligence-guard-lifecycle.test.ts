@@ -39,6 +39,8 @@ function fixture() {
       if (name === './worlds') return { worldOf: () => bot.game.dimension }
       if (name === './sealed') return { fillerCount: () => 8, fillerName: () => 'netherrack' }
       if (name === './build') return { towerUp: () => { calls.push('tower'); started(); return tower } }
+      // meleeFoes sees through the pick ray (no x-ray): the hoglin stands in plain sight here.
+      if (name === './pick') return { aim: (_bot: unknown, e: { position: Vec3 }) => ({ point: e.position }), canHit: () => true }
       throw new Error('unexpected dependency: ' + name)
     }
   })

@@ -63,7 +63,7 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
       if (id === './pvp/last-seen') return require('../src/pvp/last-seen')
       if (id === './threats' || id === './combat') return load(id.slice(2))
       if (id === './sealed') return { fillerCount: () => 0 }
-      if (id === './pick') return { canHit: () => true }
+      if (id === './pick') return { canHit: () => true, aim: (_bot, e) => ({ point: e.position }) }
       if (id === './moves') return { stepSafe: () => true, keyDir: () => ({ x: 0,z: 1 }) }
       if (id === './items') return { itemNamed: () => null }
       if (id === './bow') return { observeCharge: () => {

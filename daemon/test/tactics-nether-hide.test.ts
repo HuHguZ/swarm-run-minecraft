@@ -43,3 +43,16 @@ test('гаст над обрывом и шар в полёте — коробк�
   assert.equal(candidates(state)[0].id, 'BlockOff')
   assert.notEqual(candidates({ ...state, ghastEdge: false })[0].id, 'BlockOff')
 })
+test('гаст на виду над обрывом — уровень 2 и коробка ещё до первого шара', () => {
+  const { threatLevel } = require('../src/tactics/state')
+  const calm = make({ enemies: [], ghastEdge: true })
+  assert.equal(threatLevel(calm), 2)
+  assert.equal(candidates(calm)[0].id, 'BlockOff')
+})
+test('трое пиглинов в 5 бл. — коробка не строится под ними (давление быстрых ходячих)', () => {
+  const piglins = [0, 1, 2].map(i => ({ id: i + 1, kind: 'piglin', distance: 5, threatening: true, player: false }))
+  const top = candidates(make({ enemies: piglins, contact: true, health: 13 }))
+  const box = top.find(c => c.id === 'BlockOff')
+  const run = top.find(c => c.id === 'CreateDistance')
+  assert.ok(box && run && run.score > box.score, JSON.stringify(top.slice(0, 4)))
+})
