@@ -1553,6 +1553,7 @@ async function explore (session, ctl, {
   const walkTop = (surface && require('./worlds').worldOf(bot) === 'overworld') || (typeof session.underSky === 'function' && session.underSky())
   const walk = async (x, z, options) => {
     session.surfaceWalk = walkTop
+    session.scoutFromY = walkTop && bot.entity ? bot.entity.position.y : null
     const mv = bot.pathfinder.movements
     const dug = mv ? mv.canDig : undefined
     const scaffold = mv ? mv.scafoldingBlocks : undefined
@@ -1560,6 +1561,7 @@ async function explore (session, ctl, {
     try { return await travelXZ(bot, ctl, x, z, { ...options, retries: 1, deadline }) }
     finally {
       session.surfaceWalk = false
+      session.scoutFromY = null
       if (walkTop && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
     }
   }

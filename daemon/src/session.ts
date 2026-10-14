@@ -140,6 +140,7 @@ class Session {
   declare movementsSignature: any
   declare routeOutpostInfo: any
   declare surfaceWalk: any
+  declare scoutFromY: number | null
   declare surfaceStrict: any
   declare pathGoalY: any
   declare movements: any
@@ -375,6 +376,9 @@ class Session {
     // чем моб опаснее (flee.js DOCTRINE). Раньше маршрут шёл сквозь толпу, и
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(flee.mobAvoidance(bot))
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk ? underRoofCost(bot, block, this.surfaceStrict) : 0)
+    // Разведка поверху не спускается в овраг: клетка на 10+ ниже начала отрезка — дороже (не запрет: спуск с горы остаётся);
+    // cl-ae 14.10: отрезок разведки построек ушёл с y 74 на 50 в пещеру со скелетом, зомби и крипером — смерть на 5-й мин, днём.
+    if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk && typeof this.scoutFromY === 'number' && block?.position && block.position.y < this.scoutFromY - 10 ? 10 : 0)
     // Путь по дну водоёма: воздух кончается за ~9 с, тактика всплывает и рвёт goto, кампания зовёт тот же путь снова
     // (cl-e 14.10: 20 кругов «к деревне по дну озера» → Surface → берег за 3 мин). Клетка воды под водой — ещё цена воды
     // сверху (liquidCost), чтобы путь плыл поверху или шёл в обход.
