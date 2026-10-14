@@ -38,6 +38,9 @@ const WATCHDOG_MIN = Math.max(1, Number(process.env.ND_WATCHDOG_MIN) || 45)
 let manualControl = false
 let strategyExecuting = false
 let strategyInterrupted = false
+// Исполнитель стратегии, которого директор снял по тайм-ауту или прерыванию: директор возвращает ход сразу
+// (strategy.ts run: Promise.race), а исполнитель ещё разматывается с поднятыми флагами — главный цикл ждёт его.
+let strategyTail: Promise<unknown> = Promise.resolve()
 let tacticalRevision = 0
 let state: any = {}
 let sit: any = {}
@@ -694,7 +697,10 @@ async function rest (minHp = 16) {
     }
     // Домой с малым хп — только если портал рядом: путь по Аду в 100+ бл. с 4–8 хп кончался смертью (s1c-A-7 06.10: хп 8 у спавнера,
     // «домой через портал» 170 бл., иссушитель на первых шагах). Далеко — в толщу на месте и лечиться (цена пути против риска).
-    const portalFar = !known.netherPortal || !state.pos || Math.hypot(known.netherPortal.x - state.pos.x, known.netherPortal.z - state.pos.z) > 64
+    // И портал близко, но враги рядом или до него больше 8 бл. — тоже в толщу: путь к порталу в 29–60 бл. под ифритами и пиглинами
+    // с 7–9 хп кончался смертью у самой рамы (b0-6-1, b1-6-2 14.10), а стояние 4 с в портале — под их ударами.
+    const portalDist = !known.netherPortal || !state.pos ? Infinity : Math.hypot(known.netherPortal.x - state.pos.x, known.netherPortal.z - state.pos.z)
+    const portalFar = portalDist > 8 || (sit.foes ?? 0) > 0
     if ((process.env.ND_NE_STAY === '1' || portalFar) && dim() === 'the_nether' && (have(FOOD) || (state.food ?? 0) >= 18)) {
       const bw = await act('ne_burrow', { why: 'лечиться в Аду' })
       await refresh()
@@ -1200,6 +1206,15 @@ async function returnFromNether () {
   }
   const reached = home ? await goToward(home, 4) : true
   if (dim() !== 'the_nether') return dim() === 'overworld'
+  // Портал близко (≤ 64 бл.), а ход не довёл — у portal enter свой подход: отрезками и ступенями штрека вверх к раме
+  // (nether.walkToward: «подъём к цели»). goto не поднимается в Аду без столба (b6-6-1 14.10: портал на 37 бл. выше в 24 бл. —
+  // «pathfinder закончил путь» ×7 и «домой не вышло» по кругу).
+  const homeNear = !!home && !!state.pos && Math.hypot(home.x - state.pos.x, home.z - state.pos.z) <= 64
+  if (!reached && homeNear && !died && (state.tactics?.threatLevel ?? 0) < 2) {
+    log('ход к порталу не довёл — подход самого портала (ступенями к раме)')
+    await act('portal', { mode: 'enter', timeoutSeconds: 180 })
+    return dim() === 'overworld'
+  }
   if (!reached) { log('безопасный путь к порталу не пройден — переход пешком не запускаю'); return false }
   await act('portal', { mode: 'enter', timeoutSeconds: 120 })
   return dim() === 'overworld'
@@ -1815,12 +1830,14 @@ const netherLack = () => [
   have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 ? '' : 'кирки',
   foodUnits() >= netherFoodNeed() ? '' : `еды (${foodUnits()} из ${netherFoodNeed()})`
 ].filter(Boolean).join(', ') || 'ничего'
-const fightReady = () => READY.nether() && worn('torso') && shieldOn() && ((worn('legs') && worn('head')) || ironRuns >= 8)
+// Огнестойкость (зелье с бартера) снимает огонь ифритов — главный урон без брони (шар 5 + горение): с ней и щитом бой у спавнера
+// не ждёт железной брони из верхнего мира (b0-7-2 14.10: 30 мин за железом, на обратном пути — смерть). Цена боя — в графе (blazeRisk).
+const fightReady = () => READY.nether() && shieldOn() && (fireResReady() || (worn('torso') && ((worn('legs') && worn('head')) || ironRuns >= 8)))
 const fightLack = () => [
   netherLack() === 'ничего' ? '' : netherLack(),
-  worn('torso') ? '' : 'нагрудника',
+  worn('torso') || fireResReady() ? '' : 'нагрудника',
   shieldOn() ? '' : 'щита',
-  (worn('legs') && worn('head')) || ironRuns >= 8 ? '' : 'поножей или шлема'
+  (worn('legs') && worn('head')) || ironRuns >= 8 || fireResReady() ? '' : 'поножей или шлема'
 ].filter(Boolean).join(', ') || 'ничего'
 let fightGearWanted = false
 const DEFER = {
@@ -3480,8 +3497,10 @@ function pauseWaitPays () {
   if (key !== lastPauseWhy) { lastPauseWhy = key; log(`пауза бастиона: ${c.why}`) }
   return c.wait
 }
+// bastionDry ≥ 3 снимает этап bastion (needed) — тогда и ифриты его не ждут: иначе тупик «бастион не нужен / к крепости не иду,
+// сперва жемчуг» и «в Аду нечем — домой» (b0-6-2 14.10).
 const bastionPearlsPending = () => BASTION_FIRST && (!only || only.includes('bastion')) && pearlsNow() < eyesWant() && !blazeBeforePearls() &&
-  pauseWaitPays() && READY.bastion() && !bastionSupplyBlocked() &&
+  pauseWaitPays() && READY.bastion() && !bastionSupplyBlocked() && bastionDry < 3 &&
   (!!activeBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 && !barterExhausted()))
 const SCOUT_HIGH = process.env.ND_SCOUT_HIGH === '1'
 let rodsFirstSkips = 0 // не больше 3 отказов бастиона ради стержней: путь к спавнеру тоже может не открыться
@@ -3528,7 +3547,9 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
   if (searchOnly) return
   if (!goldOn() && have(/^golden_(helmet|chestplate|leggings|boots)$/)) await act('armor')
   if (!goldOn()) await netherGold()
-  if (!goldOn()) { log('золотой брони нет и не из чего — в бастион не иду'); bastionDry++; return }
+  // Золотой брони нет — не отказ (правило гибкости; b0 14.10: бастион в 28 и 55 бл., «в бастион не иду» → домой, 90 мин без
+  // добычи): навык bastion идёт только закрытым штреком до первого золота (сундук, блок), из него — броня, торг — после неё.
+  if (!goldOn()) log('РИСК: золотой брони нет — в бастион закрытым штреком: первое золото (сундук, блок) — на броню, торг — после неё')
   for (let i = 0; i < 4 && !died && dim() === 'the_nether'; i++) {
     await recoverGuard()
     if (died || dim() !== 'the_nether') return
@@ -3563,7 +3584,8 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     // S1e (вслепую): бастион узнан глазами издалека, золото не известно — сперва подойти к нему (на 20 бл.), а не начинать закрытый
     // штрек с уступа за лавовым морем (s1e-M2-1: с 31 бл. «штрек: пути нет», заливка старта 29 клеток, 2 сухих захода за секунду —
     // «выработан» при 142 блоках золота шаблона стен). До 3 подходов на бастион.
-    if (!(b.gold && b.gold.length) && state.pos && Math.hypot(b.x - state.pos.x, b.z - state.pos.z) > 28 && (bs.blindApproach || 0) < 3 && dim() === 'the_nether') {
+    // Без золотой брони пешком не подходить: подход ведёт навык закрытым штреком (ревью Codex 14.10).
+    if (!(b.gold && b.gold.length) && goldOn() && state.pos && Math.hypot(b.x - state.pos.x, b.z - state.pos.z) > 28 && (bs.blindApproach || 0) < 3 && dim() === 'the_nether') {
       bs.blindApproach = (bs.blindApproach || 0) + 1
       log(`${b.key}: золото не известно, до него ${Math.round(Math.hypot(b.x - state.pos.x, b.z - state.pos.z))} бл. — сперва подхожу (${bs.blindApproach}/3)`)
       await goToward({ x: b.x, y: b.y ?? 64, z: b.z }, 20)
@@ -3689,39 +3711,93 @@ async function wearGold () {
 // Native 1.21.11 Block.playerWillDestroy: guarded ore angers adults in the
 // player AABB +16 blocks without line of sight. This is the cautious ore
 // variant; the body repeats its visible-piglin check at each actual swing.
+// Опасное прибытие: у портала прибытия враги (пиглины без нашего золота, хоглины, бруты, кубы магмы, иссушители, ифриты в 16 бл.,
+// гаст в 40) — смерть за 2–6 мин на открытом (b0-6-1, b2-5-2, b3-6-1 14.10). Назад в портал не лечит: чанки Ада без игрока стоят,
+// у рамы те же мобы (ревью Codex 14.10). Поэтому — из-под удара в толщу (закрытый карман), затем закрытым штреком на 32 бл. прочь
+// от их середины; дальше дело начинается не у их стаи.
+async function netherArrival () {
+  if (dim() !== 'the_nether' || died) return
+  await refresh()
+  const o = await act('observe', { radius: 40 })
+  const ents = ((o.detail && o.detail.entities) || []).filter(e => e && e.pos)
+  const nm = e => String(e.name || '').toLowerCase().replace(/ /g, '_')
+  const foes = ents.filter(e => {
+    const n = nm(e), d = e.dist ?? 99
+    if (/^(hoglin|piglin_brute|magma_cube|wither_skeleton|blaze)$/.test(n)) return d <= 16
+    if (n === 'piglin') return !goldOn() && d <= 16
+    if (n === 'ghast') return d <= 40
+    return false
+  })
+  if (!foes.length || !state.pos) return
+  log(`опасное прибытие: ${foes.map(e => `${nm(e)} ${Math.round(e.dist)}`).join(', ')} — в толщу и штреком прочь`)
+  await act('ne_burrow', { why: 'опасное прибытие' })
+  await refresh()
+  if (died || dim() !== 'the_nether' || !state.pos) return
+  const cx = foes.reduce((n, e) => n + e.pos.x, 0) / foes.length, cz = foes.reduce((n, e) => n + e.pos.z, 0) / foes.length
+  const dx = state.pos.x - cx, dz = state.pos.z - cz, len = Math.hypot(dx, dz) || 1
+  const to = { x: Math.round(state.pos.x + dx / len * 32), z: Math.round(state.pos.z + dz / len * 32) }
+  const t = await act('nether_tunnel', { x: to.x, z: to.z, radius: 4, timeoutSeconds: 120 })
+  await refresh()
+  log(`прибытие: штрек прочь к ${to.x},${to.z} — ${(t.detail && t.detail.note) || t.error || t.status}`)
+}
+
+// Руда — где взрослых пиглинов, брутов и хоглинов не видно в 20 бл.; видны — уйти от них ногами на 32 бл. (не «разведкой»: она
+// стоит на месте, когда руда уже видна — b0-6-2 14.10: «уже видно отсюда» ×3, золото брошено при 9 самородках), до 3 раз;
+// бюджет — 300 игр. с (b0-6-2: mine по 120 с без копки ×3).
+// Пустой заход руды — пауза 5 игр. мин (каждый вход этапа bastion звал её снова: b5-6-1 14.10 — 8 врагов у бастиона, руда на виду
+// у них ×6 за 10 мин, коробка-лечение-руда по кругу); толпа злых (≥ 3 видимых в 24) — сразу к закрытому штреку бастиона.
+let netherGoldNext = -Infinity
 async function netherGold () {
-  let goldAway = 0
   await refresh()
   if (!goldOn() && have('gold_block') && have('gold_ingot') < 5) {
     await craft('gold_ingot', 9 * have('gold_block'))
     await refresh()
   }
-  for (let i = 0; i < 6 && !goldOn() && dim() === 'the_nether' && !died; i++) {
+  if (goldOn() || gameClock.now() < netherGoldNext) return
+  const nuggets0 = have('gold_nugget') + 9 * have('gold_ingot')
+  netherGoldNext = gameClock.now() + 300000
+  const crowd = (((await act('observe', { radius: 24 })).detail || {}).entities || [])
+    .filter(e => /^(piglin|piglin[ _]brute|hoglin)$/i.test(String(e.name || ''))).length
+  if (crowd >= 3) { log(`пиглинов у руды ${crowd} — руду не ищу, золото — закрытым штреком`); return }
+  const t0 = gameClock.now()
+  let retreats = 0
+  let pigStops = 0
+  let standStill = 0
+  for (let i = 0; i < 10 && !goldOn() && dim() === 'the_nether' && !died && gameClock.now() - t0 < 300000; i++) {
     const nuggets = have('gold_nugget') + 9 * have('gold_ingot')
     if (nuggets >= 36) break
-    const o = await act('observe', { radius: 24 })
-    const ents = (o.detail && o.detail.entities) || []
-    const piglin = ents.find(e => /^piglin( brute)?$/i.test(String(e.name || '')))
-    // Пиглины у руды — уйти от них за другой рудой (её в незераке много), а не бросать золото: без брони в бастион не иду, и
-    // поход домой за железом съедал прогон (cl-ab 14.10: бастион найден на 27-й мин, «пиглины рядом — руду не трогаю», домой).
-    if (piglin) {
-      if (++goldAway > 2 || !state.pos || !piglin.pos) { log('пиглины рядом — золотую руду не трогаю'); break }
-      const dx = state.pos.x - piglin.pos.x, dz = state.pos.z - piglin.pos.z
-      const direction = Math.abs(dx) >= Math.abs(dz) ? (dx >= 0 ? 'east' : 'west') : (dz >= 0 ? 'south' : 'north')
-      log(`пиглины рядом — ухожу от них (${direction}) за другой золотой рудой`)
-      await act('explore', { block: 'nether_gold_ore', radius: 32, stepDistance: 40, direction, timeoutSeconds: 60 })
+    const o = await act('observe', { radius: 32 })
+    // 24 — угол коробки злости ±16 (16·√2 ≈ 22.6).
+    const foes = ((o.detail && o.detail.entities) || []).filter(e => /^(piglin|piglin[ _]brute|hoglin)$/i.test(String(e.name || '')) && (e.dist ?? 0) <= 24)
+    // Пиглины у руды — уйти от них за другой рудой (её в незераке много), а не бросать золото (cl-ab 14.10: бастион найден на 27-й
+    // мин, «пиглины рядом — руду не трогаю», домой).
+    if (foes.length) {
+      if (retreats >= 3 || !state.pos || !foes.every(e => e.pos)) { log(`пиглины рядом (${foes.length}) — золотую руду здесь не трогаю`); break }
+      retreats++
+      const cx = foes.reduce((n, e) => n + e.pos.x, 0) / foes.length, cz = foes.reduce((n, e) => n + e.pos.z, 0) / foes.length
+      const dx = state.pos.x - cx, dz = state.pos.z - cz, len = Math.hypot(dx, dz) || 1
+      const to = { x: Math.round(state.pos.x + dx / len * 32), z: Math.round(state.pos.z + dz / len * 32) }
+      log(`пиглины рядом (${foes.length}, ближний в ${Math.round(Math.min(...foes.map(e => e.dist ?? 99)))} бл.) — ухожу от них на 32 бл. к ${to.x},${to.z} за другой золотой рудой (${retreats}/3)`)
+      await act('goto', { x: to.x, z: to.z, range: 6, timeoutSeconds: 45 })
+      await refresh()
+      pigStops = 0
       continue
     }
-    const m = await act('mine', { block: 'nether_gold_ore', count: Math.max(2, Math.ceil((36 - nuggets) / 4)), radius: 40, timeoutSeconds: 120, avoidPiglinAggro: true })
-    if (!(m.detail && m.detail.dug)) {
-      if (/не вижу/.test(String(m.error || '')) && i > 0) break
-      const e = await act('explore', { block: 'nether_gold_ore', radius: 32, stepDistance: 40, timeoutSeconds: 90 })
-      if (!(e.detail && e.detail.found)) break
-    }
+    const m = await act('mine', { block: 'nether_gold_ore', count: Math.max(2, Math.ceil((36 - nuggets) / 4)), radius: 40, timeoutSeconds: 60, avoidPiglinAggro: true })
+    await refresh()
+    if (m.detail && m.detail.dug) continue
+    // Остановился из-за пиглина в зоне злости — следующий круг уводит от него (обзор его видит); не видит дважды — разведка.
+    if (/пиглин/.test(String((m.detail && m.detail.stopped) || '')) && ++pigStops <= 2) continue
+    const e = await act('explore', { block: 'nether_gold_ore', radius: 40, stepDistance: 40, timeoutSeconds: 60 })
+    if (!(e.detail && e.detail.found)) break
+    // «Уже видно отсюда», а копка «не вижу» (руда у лавы, недоступна) — разведка стоит на месте: круг без толку (b1-5-2 14.10: ×10).
+    if (/уже видно/.test(String(e.detail.note || '')) && /не вижу/.test(String(m.error || '')) && ++standStill >= 2) break
   }
   await refresh()
   if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
   if (have('gold_ingot') >= 4 && !goldOn()) await wearGold()
+  // Самородки прибавились — следующий заход без долгой паузы.
+  if (have('gold_nugget') + 9 * have('gold_ingot') > nuggets0) netherGoldNext = gameClock.now() + 30000
 }
 
 // Сытость перед боем у спавнера: еда прерывается тактикой/ифритами («не поел»), а уход из боя без защиты навыка у спавнера
@@ -3855,6 +3931,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
 })
 
 let blazeDugInAt = -Infinity
+let netherShieldAt = -Infinity
 let blazeNoView = 0
 let blazeDugInPos = null
 let homeForGearAfter = -Infinity
@@ -4767,7 +4844,8 @@ async function executeStrategy (command, signal) {
   } finally { signal.removeEventListener('abort', onAbort); strategyExecuting = false; strategyInterrupted = false }
 }
 const intelligence = require(path.join(__dirname, 'src', 'campaign', 'intelligence')).createCampaignIntelligence({
-  observe: intelligenceObservation, call, execute: executeStrategy, now: () => gameClock.now(), sleep,
+  observe: intelligenceObservation, call, now: () => gameClock.now(), sleep,
+  execute: (command, signal) => { const run = executeStrategy(command, signal); strategyTail = run.catch(() => undefined); return run },
   eyes: EYES_NEED, beds: BEDS_END,
   record: decision => {
     telemetry.record({ ...decision, sec: decision.seconds, stage, sinceStart: Math.round((gameClock.now() - T0) / 1000) })
@@ -4787,6 +4865,8 @@ ws.on('open', async () => {
     seamSnapshot('start')
     const fails = new Map()
     let netherThreatWaits = 0
+    let threatHp0 = 20
+    let threatBurrowAt = -Infinity
     const failureKey = name => {
       const site = name === 'bastion' ? nextBastion() : null
       return site ? `${name}:${site.dimension || 'the_nether'}:${site.x}:${site.z}` : name
@@ -4817,6 +4897,7 @@ ws.on('open', async () => {
     const resetPauses = why => { if (fails.size) { log(`паузы этапов сняты: ${why}`); fails.clear() } }
     let lastProgressAt = gameClock.now()
     let lastDim = dim()
+    let arrivalPending = dim() === 'the_nether'
     let wasNight = !!sit.night
     for (let turn = 1; turn <= 5000; turn++) {
       await refresh()
@@ -4830,7 +4911,8 @@ ws.on('open', async () => {
         if (state.connected === false) await gameClock.wall.sleep(30000)
         continue
       }
-      if (dim() !== lastDim) { resetPauses(`смена измерения ${lastDim} → ${dim()}`); await readMemory(); seamSnapshot(`observed:${lastDim}->${dim()}`); lastDim = dim() }
+      if (dim() !== lastDim) { resetPauses(`смена измерения ${lastDim} → ${dim()}`); await readMemory(); seamSnapshot(`observed:${lastDim}->${dim()}`); lastDim = dim(); arrivalPending = dim() === 'the_nether' }
+      if (arrivalPending && dim() === 'the_nether' && !died) { arrivalPending = false; stage = '-'; try { await netherArrival() } catch (e) { if (e.stopCampaign) throw e; log(`прибытие: ${e.message}`) } }
       if (wasNight && !sit.night && dim() === 'overworld') resetPauses('рассвет')
       wasNight = !!sit.night
       if (died) {
@@ -4845,6 +4927,16 @@ ws.on('open', async () => {
         break
       }
       const turnStart = gameClock.now()
+      // Щит в Аду (слиток + 6 досок), если вошёл без него (после смерти, сломан): удар пиглина, залп гаста и ифрита он снимает.
+      // Доски в Аду — это палки на кирки и верстак: щит — только из запаса сверх них (≥ 10 досок или стебли/брёвна), иначе кирки
+      // кончались, а потерянный верстак не из чего сделать (b3-6-1 14.10: 2 доски после щита, верстак потерян — ни палок, ни кирок).
+      if (dim() === 'the_nether' && !died && !shieldOn() && have('iron_ingot') >= 1 && (have(/_planks$/) >= 10 || have(LOGS) >= 2) &&
+          gameClock.now() >= netherShieldAt && (state.tactics?.threatLevel ?? 0) < 2) {
+        netherShieldAt = gameClock.now() + 120000
+        stage = '-'
+        if (have(/_planks$/) < 6) { const p = planksFor(); if (p) await craft(p, 8) }
+        if (await craft('shield')) { await act('armor'); log('щит в Аду сделан из запаса') }
+      }
       // Прерванная плавка оставила сырьё/слитки в своей печке — забрать, пока рядом (containers.takeFurnace; cl-a 14.10:
       // таймаут MineIron отменил плавку 13 железа, тело копало его заново).
       const furnaceLeft = state.furnaceLeft
@@ -5041,7 +5133,15 @@ ws.on('open', async () => {
           // BlockOff у спавнера — смерть через секунды).
           log('стержни набраны, у спавнера ифриты — закапываюсь')
           await act('ne_burrow', { why: 'стержни набраны — ухожу от ифритов' })
+        } else if (netherThreatWaits >= 2 && gameClock.now() >= threatBurrowAt &&
+          ((state.health ?? 20) <= threatHp0 - 3 || (sit.fight?.order || []).some(o => o && /^(blaze|ghast)$/.test(o.name)))) {
+          // Угроза не снимается, а тело на открытом теряет хп или по нему стреляют издалека (ифриты/гасты у портала прибытия, b1-6-2
+          // 14.10: 12 ожиданий по 3 с под огнём ифритов, хп 20 → 2, смерть) — из-под огня в толщу (закрытый карман), а не ждать.
+          threatBurrowAt = gameClock.now() + 60000
+          log(`в Аду угроза держится (${netherThreatWaits} ожиданий, хп ${Math.round(threatHp0)} → ${Math.round(state.health ?? 0)}) — в толщу, из-под огня`)
+          await act('ne_burrow', { why: 'угроза держится — из-под огня' })
         } else {
+          if (netherThreatWaits === 1) threatHp0 = state.health ?? 20
           log(`в Аду угроза (тактика ${state.tactics?.action || '?'}) — домой не иду, жду её конца`)
           await act('wait', { seconds: 3 })
         }
@@ -5104,6 +5204,9 @@ ws.on('open', async () => {
         attemptInterrupted = !!e.strategyInterrupted
         log(`этап упал: ${e.message}`)
       }
+      // Снятый директором исполнитель ещё идёт — без ожидания act цикла падал на его флагах (b6-5-1 14.10: FindBastions по
+      // тайм-ауту 360 с, «домой за недостающим» → «прогон упал: STRATEGY_INTERRUPTED»).
+      if (strategyExecuting) { log('снятая стратегия ещё сворачивается — жду её'); await strategyTail }
       if (manualControl) break
       await refresh()
       await sense()

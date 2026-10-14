@@ -65,7 +65,17 @@ const KITS = {
     'bow', 'spectral_arrow 64', 'ender_pearl 13', 'string 12'],
   light: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'water_bucket', 'bucket', 'flint_and_steel',
     'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
-    'white_bed', 'obsidian 10', 'iron_ingot 2']
+    'white_bed', 'obsidian 10', 'iron_ingot 2'],
+  // lightshield — light после enterNether кампании (campaign.ts: щит из слитка и досок верхнего мира перед входом, f4c89aa):
+  // щит вместо одного слитка, доски Ада целы (агент Ада 14.10).
+  lightshield: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'shield', 'water_bucket', 'bucket', 'flint_and_steel',
+    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
+    'white_bed', 'obsidian 10', 'iron_ingot 1'],
+  // lsgold — lightshield + золотые ботинки (сундук руин портала верхнего мира: золотая броня в ~60 % сундуков, loot_table
+  // chests/ruined_portal 4–8 бросков, 60/398 на бросок) — мерка цены золота на входе.
+  lsgold: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'shield', 'golden_boots', 'water_bucket', 'bucket', 'flint_and_steel',
+    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
+    'white_bed', 'obsidian 10', 'iron_ingot 1']
 }
 const KIT = KITS[KIT_NAME]
 if (!KIT) { console.error(`KIT=${KIT_NAME}: жду ${Object.keys(KITS).join(', ')}`); process.exit(1) }
