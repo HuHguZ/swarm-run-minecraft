@@ -4819,7 +4819,7 @@ ws.on('open', async () => {
           await skyLavaLook()
           // С земли озеро часто закрыто рельефом и деревьями (замер слота 1 14.10: 5 открытых клеток озера в 54 бл., ни одна не видна
           // с земли): раз-два за прогон — столб на 10 вверх своими блоками, осмотр, спуск (как игрок с вышки). Блоки — после камня.
-          if (!lavaSourceKnown && lookoutsDone < 2 && have(COBBLE) + have('dirt') >= 12 && !died) {
+          if (!lavaSourceKnown && lookoutsDone < 2 && have(COBBLE) + have('dirt') >= 12 && !died && !sit.inWater && y() >= 60) {
             lookoutsDone++
             const y0 = y()
             await act('tunnel', { direction: 'up', length: 10, timeoutSeconds: 25 })
