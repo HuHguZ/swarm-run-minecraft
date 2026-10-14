@@ -49,7 +49,7 @@ test('a structure not worth its walk is passed by, and an opened one is not reco
 })
 
 test('a looted village is reported to the graph as exhausted', async () => {
-  const f = fixture({ known: [{ kind: 'village', name: 'деревня', at: { x: 40, y: 64, z: 0 }, done: false }] })
+  const f = fixture({ known: [{ kind: 'village', name: 'деревня', at: { x: 15, y: 64, z: 0 }, done: false }] })
   await f.run()
   assert.equal(f.facts.village_exhausted, true)
 })

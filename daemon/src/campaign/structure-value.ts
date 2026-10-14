@@ -7,7 +7,8 @@
 // Золото — попутно, не повод для крюка (пользователь 14.10: золото на броню и бартер — в Аду).
 // Деревня и корабль — по факту фермы, а не по таблицам (sv-1-1..3 14.10): деревня дала сено ×2 и кровать (сундуков домов explore
 // не находит), корабль — 0 сундуков из 3 заходов (под водой не видны). Таблицы: деревня ~4 сундука хлеба/еды и железо кузнецов,
-// корабль — железо 9 в сундуке сокровищ; вернуть, когда explore начнёт их находить.
+// корабль — железо 9 в сундуке сокровищ; вернуть, когда explore начнёт их находить. Обход деревни — 25–129 с (в среднем 74 с при
+// оценке 43–64 с): накладные 50 с, деревня окупается только рядом (≤ ~35 бл.) и когда нужны и еда, и кровати, и железо.
 
 export interface Needs {
   iron: number // слитков не хватает на набор (ведро, огниво, щит, кирка)
@@ -23,7 +24,7 @@ export interface Loot { chests: number; overhead: number; water?: boolean; items
 // lighter — вероятность хоть одного огнива или заряда (portal-natural: «огниво или заряд в 73 %»); golden_armor — хоть одной части.
 export const LOOT: Record<string, Loot> = {
   ruined_portal: { chests: 1, overhead: 0, items: { lighter: 0.73, obsidian: 0.9, iron: 0.9, golden_armor: 0.6, gold: 0.75, golden_apple: 0.25 } },
-  village: { chests: 2, overhead: 20, items: { food: 6, bed: 1, iron: 0.3 } },
+  village: { chests: 2, overhead: 50, items: { food: 6, bed: 1, iron: 0.3 } },
   desert_pyramid: { chests: 4, overhead: 30, items: { iron: 2.2, gold: 3.3, diamond: 0.5, golden_apple: 1 } },
   jungle_pyramid: { chests: 2, overhead: 40, items: { iron: 2.7, gold: 6.1, diamond: 0.54 } },
   igloo: { chests: 0.5, overhead: 20, items: { golden_apple: 0.5, food: 3 } },

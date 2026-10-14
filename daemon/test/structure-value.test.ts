@@ -13,7 +13,7 @@ test('ruins in sight pay off while the lighter is missing, not when it is alread
 })
 
 test('a far village is not worth the walk, a near one is', () => {
-  assert.ok(structureWorth('village', 80, needs()).net > 0)
+  assert.ok(structureWorth('village', 20, needs()).net > 0)
   assert.ok(structureWorth('village', 400, needs()).net < 0)
 })
 

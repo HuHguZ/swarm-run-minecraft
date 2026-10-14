@@ -49,6 +49,7 @@ const BEDS = COLORS.map(c => `${c}_bed`)
 const JOBS = ['composter', 'lectern', 'smithing_table', 'fletching_table', 'cartography_table', 'grindstone', 'stonecutter', 'loom', 'blast_furnace', 'smoker', 'brewing_stand']
 const COPPER_BULBS = ['', 'exposed_', 'weathered_', 'oxidized_'].flatMap(s => [`${s}copper_bulb`, `waxed_${s}copper_bulb`])
 const CONTAINER_NAMES = ['chest', 'trapped_chest', 'barrel']
+const DOOR_NAMES = ['oak_door', 'spruce_door', 'birch_door', 'jungle_door', 'acacia_door', 'dark_oak_door', 'mangrove_door', 'cherry_door', 'bamboo_door']
 
 // structure_set/*.json (paper-1.21.11): регион spacing×spacing чанков, в нём
 // одна попытка; старт — в первых (spacing - separation) чанках региона от
@@ -1209,6 +1210,8 @@ async function lootAll (session, ctl, rec, out, p) {
     if (ctl.aborted) break
     if (!e || e.name !== 'chest_minecart' || !e.position) continue
     if (flat(e.position, center) > R || done.has(`cart:${e.id}`)) continue
+    // Вагонетка шахты под постройкой (деревня над шахтой: 4 × «не дошёл до вагонетки» по 30 с, ферма 14.10) — только на её уровне и на виду.
+    if (Math.abs(e.position.y - (Number.isFinite(center.y) ? center.y : bot.entity.position.y)) > (rec.yR || K.yR || 16) || !require('./perception/eyes').seesNow(bot, e.position.offset(0, 0.5, 0))) continue
     try {
       const r = await takeCart(session, ctl, e)
       out.chests.push({ at: r.at, cart: true, took: r.took, stopped: r.stopped })
@@ -1312,7 +1315,27 @@ const HANDLERS = {
 
   // Руины портала: сундук, потом золотые блоки (бартер) и счёт обсидиана.
   async portal () {},
-  async village () {},
+  // Сундуки деревни — в домах, снаружи их не видно (ферма 14.10, сид 6520139407132075259: три сундука в 20–38 бл. от центра, глаза —
+  // ни одного, «пирог» видит). Как игрок: к видимым дверям домов, открыть, заглянуть — сундук внутри попадает в глаза, дальше
+  // общий лут. До 6 дверей, ближние первыми; хватит, как только виден неоткрытый сундук.
+  async village (session, ctl, rec, out, p) {
+    const bot = session.bot
+    const R = rec.lootR || KINDS.village.lootR
+    const fresh = () => containersNear(session, rec, R, rec.yR || 16).filter(q => !lootedSet(session).has(keyOf(q)))
+    if (fresh().length) return
+    const doors = seenNear(bot, DOOR_NAMES, rec, R, 24).filter(d => (bot.blockAt(d)?.getProperties?.().half ?? 'lower') === 'lower')
+      .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)).slice(0, 6)
+    let peeked = 0
+    for (const d of doors) {
+      if (ctl.aborted || fresh().length) break
+      try { await walk(session, ctl, new goals.GoalNear(d.x, d.y, d.z, 1), 20000) } catch { continue }
+      const door = bot.blockAt(d)
+      try { if (door && String(door.getProperties?.().open) === 'false') { await bot.activateBlock(door); await sleep(300) } } catch {}
+      try { require('./perception/eyes').nearest(bot, CONTAINER_NAMES, { fresh: true, max: 1 }) } catch {}
+      peeked++
+    }
+    if (peeked) out.lines.push(`▸ деревня: заглянул в ${peeked} двер. — сундуков на виду ${fresh().length}`)
+  },
 
   // Бастион: брутья — отказ без force; открытие сундуков проверяет глаза пиглинов.
   async bastion (session, ctl, rec, out, p) {
