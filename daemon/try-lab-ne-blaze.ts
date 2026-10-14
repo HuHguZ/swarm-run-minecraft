@@ -165,7 +165,7 @@ async function main () {
     if ((s0.food ?? 20) < 18) await call('eat', {} as Record<string, any>).catch(() => null)
     const t = gameClock.now()
     // Как кампания: без огнестойкости навык сам строит коробку с окном; BOX=0 — открытый бой (прежняя сцена).
-    const r = await call('blaze', { rods: 7, timeoutSeconds: 400, ...(process.env.BOX === '0' ? { box: false } : {}) }).catch(e => ({ error: e.message }))
+    const r = await call('blaze', { rods: 7, timeoutSeconds: 400, ...(process.env.LOW === '1' ? { lowWindow: true } : {}), ...(process.env.BOX === '0' ? { box: false } : {}) }).catch(e => ({ error: e.message }))
     const d = r.detail || {} as Record<string, any>
     steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType })
     const s1 = await status()

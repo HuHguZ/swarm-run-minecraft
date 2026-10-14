@@ -580,7 +580,7 @@ function losClearBut (bot, a, b, skip) {
   return false
 }
 
-const myEye = bot => bot.entity.position.offset(0, 1.62, 0)
+const myEye = bot => require('./pick').eyeOf(bot)
 // Какая высота на его коробке видна из наших глаз (доля роста): середина,
 // выше, макушка, низ. Замер 9: блейз видит нас глазами (1.53), а середина его
 // тела (0.99) за краем ступени помоста — лук упирался в блок 285,59,328.
@@ -1115,10 +1115,9 @@ async function jumpPlaceTop (bot, below, timeoutMs = 900) {
 // головы — окно в сторону, откуда видно больше всего куба спавна. Всё, что
 // летит в нас, летит в окно: щит к окну держит каждый шар (±90° по
 // горизонтали), блейз (1.8) и иссушитель (2.4) в окно 1x1 не пролезают, а
-// меч из окна достаёт того, кто подлетел (3 блока от глаз). Стержни с
-// убитых у окна падают в 1 блоке — подбор идёт сквозь стену (коробка
-// подбора игрока +1 блок, Player.aiStep).
-function planKillBox (bot, spawner, have, { hMin = 3, hMax = 7.5, hBest = 5 }: any = {}) {
+// меч из окна достаёт того, кто подлетел (3 блока от глаз). Подбор снаружи
+// через стену не гарантирован: Player.aiStep расширяет нашу рамку лишь на 1 блок.
+function planKillBox (bot, spawner, have, { hMin = 3, hMax = 7.5, hBest = 5, lowWindow = false }: any = {}) {
   const c = spawner.offset(0.5, 0.5, 0.5)
   const nodes = walkable(bot, bot.entity.position, { radius: 16, maxNodes: 3000 })
   let best = null
@@ -1157,7 +1156,9 @@ function planKillBox (bot, spawner, have, { hMin = 3, hMax = 7.5, hBest = 5 }: a
     if (!(solidB(rb) || airB(rb))) { tried.walls++; continue }
     const eye = pos.offset(0.5, 1.62, 0.5)
     for (const sd of DOOR_SIDES) {
-      const win = pos.plus(sd).offset(0, 1, 0)
+      const win = pos.plus(sd).offset(0, lowWindow ? 0 : 1, 0)
+      const pad = pos.plus(sd.scaled(2))
+      if (lowWindow && (!solidB(bot.blockAt(pad.offset(0, -1, 0))) || !airB(bot.blockAt(pad)) || !airB(bot.blockAt(pad.offset(0, 1, 0))))) continue
       const wb = bot.blockAt(win)
       if (!wb || wb.name === 'spawner') continue
       const digWin = solidB(wb)
@@ -1168,12 +1169,12 @@ function planKillBox (bot, spawner, have, { hMin = 3, hMax = 7.5, hBest = 5 }: a
         roof = solidB(bot.blockAt(back)) ? [roofAt] : [back, roofAt]
       }
       const myWalls = walls.filter(q => !q.equals(win))
-      const need = myWalls.length + roof.length
+      const need = myWalls.length + roof.length + (lowWindow ? 1 : 0)
       if (need > have) { tried.blocks++; continue }
       // Куб спавна через окно: луч из глаз проходит плоскость стены в
       // пределах грани окна и дальше чист.
       let seen = 0
-      for (const x of [-3, -1, 1, 3]) for (const z of [-3, -1, 1, 3]) for (const y of [0, 1.5, 3]) {
+      if (!lowWindow) for (const x of [-3, -1, 1, 3]) for (const z of [-3, -1, 1, 3]) for (const y of [0, 1.5, 3]) {
         const q = c.offset(x, y, z)
         const dx = q.x - eye.x; const dz = q.z - eye.z
         const along = dx * sd.x + dz * sd.z
@@ -1184,9 +1185,9 @@ function planKillBox (bot, spawner, have, { hMin = 3, hMax = 7.5, hBest = 5 }: a
         if (Math.abs(lat) > 0.45 || hy < pos.y + 1.05 || hy > pos.y + 1.95) continue
         if (losClearBut(bot, eye, q, [win])) seen++
       }
-      if (seen < 3) { tried.view++; continue }
-      const score = seen * 2 - need * 0.5 - Math.abs(h - hBest) * 0.8 - d * 0.3
-      if (!best || score > best.score) best = { cell: pos, front: sd, walls: myWalls, roof, digWin: digWin ? win : null, win, seen, need, h: Math.round(h * 10) / 10, score }
+      if (!lowWindow && seen < 3) { tried.view++; continue }
+      const score = seen * 2 - need * 0.5 - Math.abs(h - hBest) * 0.8 - d * 0.3 - (lowWindow ? pad.offset(0.5, 0.5, 0.5).distanceTo(c) : 0)
+      if (!best || score > best.score) best = { cell: pos, front: sd, walls: myWalls, roof, digWin: digWin ? win : null, win, lowWindow, seen, need, h: Math.round(h * 10) / 10, score }
     }
   }
   if (best) best.tried = tried
@@ -1227,7 +1228,7 @@ async function buildBunker (session, ctl, plan, setPhase) {
   const cell = plan.cell
   let open = 0
   for (const s of DOOR_SIDES) {
-    if (s.equals(plan.front)) { if (plan.win && !solidB(bot.blockAt(cell.plus(s)))) open++; continue }
+    if (s.equals(plan.front)) { if (plan.win && (!solidB(bot.blockAt(cell.plus(s).offset(0, plan.lowWindow ? 1 : 0, 0))) || !airB(bot.blockAt(plan.win)))) open++; continue }
     for (const y of [0, 1]) if (!solidB(bot.blockAt(cell.plus(s).offset(0, y, 0)))) open++
   }
   const roofed = solidB(bot.blockAt(cell.offset(0, 2, 0)))
@@ -1238,13 +1239,13 @@ async function buildBunker (session, ctl, plan, setPhase) {
 async function shutDoor (bot, b) {
   const { placeBlockAt } = require('./build')
   const cells = [b.cell.plus(b.front), b.cell.plus(b.front).offset(0, 1, 0)].filter(q => !solidB(bot.blockAt(q)))
-  b.shut = cells
+  b.shut = cells.length ? cells : (b.shut || [b.win || b.cell.plus(b.front).offset(0, 1, 0)])
   let ok = 0
   for (const q of cells) {
     const r = await placeBlockAt(bot, q, { timeoutMs: 900 }).catch(() => ({ ok: false }))
     if (r.ok) ok++
   }
-  return ok === cells.length
+  return ok === cells.length && [0, 1].every(y => solidB(bot.blockAt(b.cell.plus(b.front).offset(0, y, 0))))
 }
 async function openDoor (bot, b) {
   const tools = require('./tools')
@@ -1403,9 +1404,12 @@ async function holdSpawner (session, ctl, ctx) {
   const swingFor = async (e) => {
     await equipFor(e)
     if (gameClock.now() - Math.max(lastSwing, swapAt) < swingMs(bot)) return false
+    const aim = require('./pick').aim(bot, e)
+    if (!aim?.point) return false
     await setShield(false)
-    try { await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.6, 0), true) } catch {}
+    try { await bot.lookAt(aim.point, true) } catch {}
     try { if (lockOwner()) out.swingNoLease++; bot.attack(e); lastSwing = gameClock.now(); out.melee++ } catch {}
+    await setShield(true, inBunker() ? doorPoint() : blazeEye(e))
     return true
   }
   let idleSince = gameClock.now()
@@ -1420,6 +1424,7 @@ async function holdSpawner (session, ctl, ctx) {
   let bail = false
   let bunker = null
   let lastBow = gameClock.now()
+  let lowWindowCrouchAt = 0
   let sortieAfter = 0
   let lastVisAt = gameClock.now()
   let reposts = 0
@@ -1440,7 +1445,10 @@ async function holdSpawner (session, ctl, ctx) {
   const startedFireproof = fireproof()
   const setShield = async (on, face = null) => {
     if (face) { try { await bot.lookAt(face, true) } catch {} }
-    if (on && !shieldOn) { shieldOn = true; shieldAt = gameClock.now(); await guard.raise(true) } else if (!on && shieldOn) { shieldOn = false; out.shieldMs += gameClock.now() - shieldAt; await guard.raise(false) }
+    if (on) {
+      if (!shieldOn) { shieldOn = true; shieldAt = gameClock.now() }
+      await guard.raise(true)
+    } else if (shieldOn) { shieldOn = false; out.shieldMs += gameClock.now() - shieldAt; await guard.raise(false) }
   }
   if (ctx.ledger) ctx.ledger.probe = () => ({ up: combat.shieldUp(bot), want: shieldOn, ms: shieldOn ? gameClock.now() - shieldAt : undefined })
   const stopWalking = () => { try { bot.pathfinder.setGoal(null) } catch {}; bot.clearControlStates() }
@@ -1498,7 +1506,7 @@ async function holdSpawner (session, ctl, ctx) {
         setPhase('в толщу отлечиться')
         const dug: any = await digInNear(bot, ctl).catch(e => ({ ok: false, why: e.message }))
         log('в толщу отлечиться', dug)
-        if (dug.ok) {
+        if (dug.ok && dug.sealed) {
           const hp0 = Math.round(bot.health ?? 0)
           const t0 = gameClock.now()
           while (!ctl.aborted && gameClock.now() - t0 < Math.min(60000, Math.max(0, deadline - gameClock.now() - 15000)) && (bot.health ?? 0) < 19) {
@@ -1545,18 +1553,28 @@ async function holdSpawner (session, ctl, ctx) {
       setPhase('отдых в шалаше')
       const hp0 = Math.round(bot.health ?? 0)
       const shut = await shutDoor(bot, bunker)
+      if (!shut) {
+        await setShield(true, doorPoint())
+        return { rested: false, where: 'шалаш', shut: false, why: 'окно не закрыто — не ем' }
+      }
       const t0 = gameClock.now()
       let ate = 0
-      while (!ctl.aborted && gameClock.now() - t0 < 60000 && (bot.health ?? 0) < 19) {
-        if (!shut && meleeThreat()) break
+      while (!ctl.aborted && gameClock.now() - t0 < 60000 && ((bot.health ?? 0) < 19 || (bot.food ?? 20) < 18)) {
         if ((bot.food ?? 20) < 20) { try { const r = await actions.eat(session, {}); if (r && r.ate) ate++ } catch {} }
         if ((bot.food ?? 20) < 18 && !bot.inventory.items().some(i => FOOD_RE.test(i.name))) break
         await sleep(500)
       }
+      const rested = !ctl.aborted && (bot.health ?? 0) >= 19 && (bot.food ?? 0) >= 18
+      if (!rested) return { rested: false, where: 'шалаш', shut, opened: false, why: 'лечение не завершено — окно закрыто' }
+      // raise() подтверждает использование; blocking() также проверяет пять тиков.
+      await equipSword()
+      await setShield(true, doorPoint())
+      for (let k = 0; k < 20 && !guard.blocking() && !ctl.aborted; k++) await sleep(50)
+      if (!guard.blocking()) return { rested: false, where: 'шалаш', shut, opened: false, why: 'щит не готов — окно закрыто' }
       const opened = await openDoor(bot, bunker)
-      try { await actions.collectNearbyDrops(bot, ctl, { radius: 2, timeoutMs: 1500 }) } catch {}
-      if (!inBunker()) await walkNear(bot, ctl, bunker.cell, 0, 5000)
-      const rested = (bot.health ?? 0) >= 18 && (bot.food ?? 0) >= 18
+      if (!opened) return { rested: false, where: 'шалаш', shut, opened: false, why: 'окно не открылось' }
+      await equipSword()
+      await setShield(true, doorPoint())
       return { rested, why: rested ? undefined : 'шалаш не дал восстановиться', where: 'шалаш', shut, opened, hp: `${hp0} -> ${Math.round(bot.health ?? 0)}`, seconds: Math.round((gameClock.now() - t0) / 1000), ate: ate || undefined }
     }
     // Ифрит вплотную — не строить у него под рукой: сразу бегство (ниже).
@@ -1644,14 +1662,16 @@ async function holdSpawner (session, ctl, ctx) {
       // Без лука и стрел коробка — ближняя, под меч (2 бл. от спавнера): к дальнему окну ифриты не подлетают, «стрелы кончились»
       // (blz-lsb-7/blz-std-5 14.10: коробка в 3–7.5 бл. без лука — 0 убийств, смерть). Ревью Codex 14.10.
       const ranged = itemNamed(bot, 'bow') && arrowsHave(bot) > 0 && canUseRanged(session, { name: 'blaze' }, p0(ctx))
-      const plan = planKillBox(bot, spawner, blocksHave(bot), ranged ? {} : { hMin: 1.4, hMax: 3.2, hBest: 2 })
+      const plan = planKillBox(bot, spawner, blocksHave(bot), ranged ? {} : { hMin: 1.4, hMax: 3.2, hBest: 2, lowWindow: p0(ctx).lowWindow === true })
       if (plan.none) {
         out.bunker = { built: false, kind: 'окно', why: 'места под коробку с окном нет', tried: plan.tried }
+        if (p0(ctx).lowWindow === true) return { ...out, stopped: 'эксперимент: места под щель нет', bail: true }
       } else {
         setPhase('коробка с окном')
         const b = await buildBunker(session, ctl, plan, setPhase)
-        out.bunker = { built: b.ok, kind: 'окно', cell: xyz(plan.cell), front: xyz(plan.front), h: plan.h, seen: plan.seen, placed: b.placed, open: b.open, roofed: b.roofed, failed: b.failed, why: b.why }
-        if (b.ok) bunker = { cell: plan.cell, front: plan.front, window: true }
+        out.bunker = { built: b.ok, kind: plan.lowWindow ? 'ножная щель' : 'окно', cell: xyz(plan.cell), front: xyz(plan.front), h: plan.h, seen: plan.seen, placed: b.placed, open: b.open, roofed: b.roofed, failed: b.failed, why: b.why }
+        if (b.ok) bunker = { cell: plan.cell, front: plan.front, window: true, win: plan.win, lowWindow: plan.lowWindow }
+        else if (plan.lowWindow) return { ...out, stopped: 'эксперимент: щель не построена', bail: true }
         else boxPlan = plan
       }
       log('коробка с окном', out.bunker)
@@ -1713,6 +1733,36 @@ async function holdSpawner (session, ctl, ctx) {
         if (now > out.clearUntil) break
       }
       if (now > deadline) { stopped = 'время вышло'; break }
+      // shortcut: эксперимент проверяет удары из щели; приманивание и сбор проверяются отдельной сценой.
+      if (bunker?.lowWindow) {
+        if (!inBunker()) { stopped = 'эксперимент: тело вышло из щели'; bail = true; break }
+        try { bot.pathfinder.setGoal(null) } catch {}
+        for (const key of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) bot.setControlState(key, false)
+        if (!bot.getControlState('sneak')) { lowWindowCrouchAt = now; bot.setControlState('sneak', true) }
+        setPhase('щит у ножной щели')
+        const blazes = liveBlazes(bot, dead, 32)
+        const intact = solidB(bot.blockAt(bunker.cell.offset(0, -1, 0))) && solidB(bot.blockAt(bunker.cell.offset(0, 2, 0))) &&
+          DOOR_SIDES.every(s => [0, 1].every(y => s.equals(bunker.front) && y === 0 || solidB(bot.blockAt(bunker.cell.plus(s).offset(0, y, 0)))))
+        const fire = [0, 1].some(y => /fire|lava/.test(bot.blockAt(bunker.cell.offset(0, y, 0))?.name || '')) || !!(bot.entity.metadata?.[0] & 1)
+        if (!intact || fire || blazes.some(e => seesMe(bot, e)) || foesNow().some(e => e.name !== 'blaze')) {
+          stopped = 'эксперимент: укрытие нарушено, огонь или другой враг'; bail = true; break
+        }
+        if ((bot.health ?? 0) < 19 || (bot.food ?? 20) < 18) {
+          const r = await restNow(); out.rests.push(r)
+          if (!r.rested) { stopped = r.why || 'эксперимент: не вылечился'; bail = true; break }
+          await equipSword(); continue
+        }
+        await setShield(true, doorPoint())
+        const e = blazes.filter(e => require('./pick').canHit(bot, e)).sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
+        if (now - lastBeat > 2000) {
+          lastBeat = now
+          log('ножная щель', { t: Math.round((now - ctx.t0) / 1000), hp: bot.health, food: bot.food, melee: out.melee, hits: out.hits, kills: ctx.kills?.length, rods: countOf(bot, 'blaze_rod'), canHit: !!e, eye: myEye(bot), blocking: guard.blocking(), at: xyz(bot.entity.position) })
+        }
+        if (gameClock.now() - lowWindowCrouchAt >= 250 && guard.blocking() && !radar.incoming(gameClock.now()).length && e && await swingFor(e)) setPhase('меч из ножной щели')
+        if (gameClock.now() - lastSwing > 75000) { stopped = 'эксперимент: 75 с без удара из щели'; break }
+        await sleep(50)
+        continue
+      }
       if (startedFireproof && !fireproof() && !out.frLostAt) {
         let d = await drinkFireResistance(bot)
         // Эффект приходит отдельным пакетом после глотка — до 4 с (ферма 02.10 neF-blz-4: через 2 с ещё «нет» → зря кончил бой).
@@ -1920,7 +1970,7 @@ async function holdSpawner (session, ctl, ctx) {
       // Опасен тот, кого достаёт меч, и шаров к нам не летит: бить его, а не
       // стоять за щитом (замер 23: блейз в 1.3 блока, заряжен, 0 взмахов за 20 с).
       if (dangers.length && gameClock.now() - lastSwing >= swingMs(bot) && !radar.incoming(now).length) {
-        const close: any = blazes.filter((e : any) => reachTo(bot, e) <= MELEE && (losClear(bot, myEye(bot), e.position.offset(0, 0.9, 0)) || losClear(bot, myEye(bot), blazeEye(e))))
+        const close: any = blazes.filter((e : any) => reachTo(bot, e) <= MELEE && require('./pick').canHit(bot, e))
           .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))[0]
         if (close && await swingFor(close)) {
           setPhase('меч под огнём')
@@ -1945,12 +1995,12 @@ async function holdSpawner (session, ctl, ctx) {
         setPhase('достройка коробки')
         const b = await buildBunker(session, ctl, boxPlan, setPhase)
         log('достройка коробки', { n: boxTries, ok: b.ok, placed: b.placed, open: b.open, roofed: b.roofed, failed: b.failed })
-        if (b.ok) { bunker = { cell: boxPlan.cell, front: boxPlan.front, window: true }; boxPlan = null; out.bunker = { ...(out.bunker || {}), built: true, retries: boxTries } } else boxRetryAt = gameClock.now() + 8000
+        if (b.ok) { bunker = { cell: boxPlan.cell, front: boxPlan.front, window: true, win: boxPlan.win, lowWindow: boxPlan.lowWindow }; boxPlan = null; out.bunker = { ...(out.bunker || {}), built: true, retries: boxTries } } else boxRetryAt = gameClock.now() + 8000
         await equipSword()
         continue
       }
       // --- меч: видимый в досягаемости.
-      const inReach = blazes.filter((e : any) => reachTo(bot, e) <= MELEE && (losClear(bot, myEye(bot), e.position.offset(0, 0.9, 0)) || losClear(bot, myEye(bot), blazeEye(e))))
+      const inReach = blazes.filter((e : any) => reachTo(bot, e) <= MELEE && require('./pick').canHit(bot, e))
         .sort((a, b) => reachTo(bot, a) - reachTo(bot, b))
       if (inReach.length) {
         idleSince = now
@@ -2326,7 +2376,7 @@ async function holdSpawner (session, ctl, ctx) {
     // Набрал — лежащие стержни не нужны; без FR сбор при ифритах в виду — под удары (s1c-L-1 06.10: без FR 12 убийств, 5 стержней,
     // затем «сбор» — 5 ударов вплотную и шары, 20 → 2).
     const calmFloor = fireproof() || !liveBlazes(bot, dead, 10).some(e => seesMe(bot, e))
-    if (!ctl.aborted && !bail && droppedRods(bot, 16) > 0 && (bot.health ?? 20) >= 12 && countOf(bot, 'blaze_rod') < want && calmFloor) {
+    if (!bunker?.lowWindow && !ctl.aborted && !bail && droppedRods(bot, 16) > 0 && (bot.health ?? 20) >= 12 && countOf(bot, 'blaze_rod') < want && calmFloor) {
       await setShield(false)
       setPhase('сбор')
       if (bunker && inBunker()) { try { await require('./tools').breakFast(bot, bunker.cell.plus(bunker.front), { maxMs: 3000 }) } catch {} }
@@ -2334,6 +2384,9 @@ async function holdSpawner (session, ctl, ctx) {
       if (bunker && !inBunker()) { await walkNear(bot, ctl, bunker.cell, 0, 6000); if (inBunker()) { try { await require('./build').placeBlockAt(bot, bunker.cell.plus(bunker.front), { timeoutMs: 900 }) } catch {} } }
     }
   } finally {
+    if (bunker?.lowWindow && inBunker() && (bot.health ?? 0) > 0 && !ctl.aborted) {
+      out.windowSealed = await shutDoor(bot, bunker).catch(() => false)
+    }
     bot.removeListener('entityHurt', onBlazeHurt)
     bot.removeListener('heldItemChanged', onHeld)
     try { await setShield(false) } catch {}

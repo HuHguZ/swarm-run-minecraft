@@ -41,10 +41,27 @@ const scaffoldAny = () => process.env.ND_SCAFFOLD_ANY === '1'
 // Кирпич бастиона и соул-сэнд — тоже стройка (после бастиона незерака в рюкзаке бывало 0, а кирпича 20+:
 // окоп эндерменов стоял «нечем строить», chain6-15 30.09). Соул-сэнд — последним: на нём тело вязнет.
 const FILLER_NETHER = ['netherrack', 'dirt', 'basalt', 'blackstone', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'cobblestone', 'deepslate', 'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'end_stone', 'mossy_cobblestone', 'soul_soil', 'warped_wart_block', 'nether_wart_block', 'sand', 'gravel', 'soul_sand']
+// Гаст на виду (64) или слышен (15 с) — сперва взрывостойкое: шар (сила 1) рвёт незерак (стойкость 0.4) и коробку из него,
+// булыжник и чернокамень (6), базальт (4.2) — нет (Codex q8, jar 1.21.11). Касается и мостов: «гаст → лава» — пол из незерака.
+const BLAST_NETHER = ['cobblestone', 'cobbled_deepslate', 'blackstone', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff',
+  'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'mossy_cobblestone', 'end_stone', 'basalt', ...FILLER_NETHER]
+function ghastThreat (bot) {
+  if (process.env.ND_BLAST_FILLER === '0') return false
+  const now = gameClock.now()
+  const c = bot._ndGhastFiller
+  if (c && now - c.at < 1000) return c.v
+  let v = false
+  try {
+    v = require('./perception/eyes').entities(bot, { radius: 64 }).some(e => e.name === 'ghast' && e.seen) ||
+      require('./perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).length > 0
+  } catch {}
+  bot._ndGhastFiller = { at: now, v }
+  return v
+}
 function pickFiller (bot, { steady = false }: any = {}) {
   let nether = false
   try { nether = require('./worlds').worldOf(bot) === 'the_nether' } catch {}
-  for (const name of (nether ? FILLER_NETHER : FILLER)) {
+  for (const name of (nether ? (ghastThreat(bot) ? BLAST_NETHER : FILLER_NETHER) : FILLER)) {
     if (steady && FALLING.has(name)) continue
     const found = itemNamed(bot, name)
     if (found) return found
