@@ -14,14 +14,14 @@ async function runMiningLoop(firstProgress: boolean, mode = 'auto') {
   const own = new Set(['23,52,50', '23,53,50'])
   const st = { sealed: true, sealedDone: mode === 'barter', sealedState: { own, dug: 0 }, pitDone: false,
     pred: new Map([['87,35,139', { pos: { x: 87, y: 35, z: 139 } }]]), gold: new Map(),
-    noPick: false, blocks: 0, chests: [], towered: 3, barterRetry: '' }
+    noPick: false, blocks: 0, chests: [], towered: 3, barterRetry: '', chestSeen: new Map(), looted: new Set() }
   let mined = 0
   const context = { st, mode, deadline: 1_200_000, goldPhaseEnd: 1_200_000, barterWalks: 0,
     gameClock: { now: () => 1000 }, bot: { health: 20 }, ctl: { aborted: false }, session: {},
     p: { exit: false }, keep: 0, BF: { enabled: () => true }, miningCycle: { miningProgress },
     inLava: () => false, eatIfHungry: async () => {}, answerAttack: async () => false,
-    bruteDefense: async () => false, done: () => false, spare: () => 0,
-    countOf: () => 0, goldTarget: () => 144, log() {},
+    bruteDefense: async () => false, done: () => false, spare: () => 0, goldReady: async () => true,
+    countOf: () => 0, goldTarget: () => 144, log() {}, survey() {},
     sealedGold: async () => {
       if (++mined > 3) throw new Error('unbounded no-progress mining loop')
       if (firstProgress && mined === 1) { st.sealedState.dug++; own.add('24,52,50') }

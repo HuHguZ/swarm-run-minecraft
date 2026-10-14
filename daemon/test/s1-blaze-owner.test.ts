@@ -82,6 +82,16 @@ test('a visible ghast shooting at a bastion survey is handled by tactics before 
   assert.equal(observeTactics(s).protectedEncounter, true, 'a ghast hidden by the completed cover does not interrupt the skill')
 })
 
+test('a skeleton shooting at a bastion approach is handled by tactics, not owned by the skill (b2-5-1 14.10)', () => {
+  const s: any = session('bastion')
+  const clock = require('../src/game-clock')
+  s.bot.entities[3] = { id: 3, name: 'skeleton', position: new Vec3(10.5, 64, .5), height: 1.99, width: 0.6, isValid: true, metadata: [] }
+  s.autopilot = { lastHurt: { at: clock.now(), type: 'arrow', byMob: true, sourceId: 3, dimension: 'the_nether' } }
+  const state = observeTactics(s)
+  assert.ok(state.enemies.some((e: any) => e.kind === 'skeleton'))
+  assert.equal(state.protectedEncounter, false)
+})
+
 test('a bastion survey yields its hands to a level-2 incoming ghast shot', async () => {
   const { TacticalSystem } = require('../src/tactics/minecraft')
   const s = bastionUnderGhastShot()

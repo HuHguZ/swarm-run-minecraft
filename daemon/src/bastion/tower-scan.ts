@@ -45,7 +45,19 @@ async function towerScan (session, ctl, st) {
   let steps = 0
   // Выше, пока гипотеза стен слабая: один вал (score 3, голос одного вала) давал стену не там —
   const sure = q => q.direct.length > 0 || (q.walls.length > 0 && q.walls[0].from.length >= 2) || (q.start && q.start.score >= 1)
+  // Стрелки на виду (гаст в 48; пиглины без нашего золота, скелеты, ифриты в 24) — выше не строить: со столба тело не уходит,
+  // шар гаста сбрасывает (b5-6-1 14.10: вышка до y 85, шар → хп 2), арбалеты пиглинов добивают.
+  const shootersNear = () => {
+    const gold = [5, 6, 7, 8].some(s => /^golden_/.test(bot.inventory.slots[s]?.name || ''))
+    const seen = require('.././perception/eyes').entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null &&
+      ((e.name === 'ghast' && e.dist <= 48) || (/^(skeleton|blaze)$/.test(e.name) && e.dist <= 24) || (e.name === 'piglin' && !gold && e.dist <= 24)))
+    // Гаста слышно (громкий звук, 80 бл.: senses.heard) — тоже не строить.
+    const heard = require('.././perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).map(h => ({ name: 'ghast (слышно)', dist: 0 }))
+    return [...seen, ...heard]
+  }
   while (!ctl.aborted && !sure(pg) && steps < 5 && bot.entity.position.y < 84) {
+    const sh = process.env.ND_TOWER_SHOOTERS !== '0' ? shootersNear() : []
+    if (sh.length) { log('вышка: стрелки рядом — выше не строю', { n: sh.length, near: sh.slice(0, 3).map(e => `${e.name} ${Math.round(e.dist)}`) }); break }
     const y0 = bot.entity.position.y
     const up = await towerUp(bot, ctl, 6)
     // Потолок над головой (крона багрового гриба, уступ; ферма 29.09, sealed-1:

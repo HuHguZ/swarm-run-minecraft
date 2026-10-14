@@ -1,9 +1,10 @@
 const { approachWallSide, approachWallTop, foesNear, FOES_RE, digBooth, mergeTrades, exitTunnel, towerScan, routeGold, pocketOpen } = require('./tower-scan')
-const { log, sleep, xyz, mobs, seesMob, goals, walkGoal, gameClock, visibleOf, seesBlock, reachSet, angerSet, threatens, takeGoldBlock, inLava, lavaEscape, lavaEscapeDeep, inOwnTunnel, GOLD_PICK, makeIronPick, countOf, Vec3, fullCover, isBaby, raySees, eyePos, pickUp, BF, centerIn, waitWatched, clamp, fireRes, worlds, wearGold, PLACE, unpackGold, drinkFireRes, effectOn, keyOf, centerGuess, vantagePoints, goldWorn, nearestTrader, survey, nextTarget, lootChest, dropJunk, SIDES4, aggressive } = require('./take-gold-block')
+const { log, sleep, xyz, mobs, seesMob, goals, walkGoal, gameClock, visibleOf, seesBlock, reachSet, angerSet, threatens, takeGoldBlock, inLava, lavaEscape, lavaEscapeDeep, inOwnTunnel, GOLD_PICK, makeIronPick, countOf, Vec3, fullCover, isBaby, raySees, eyePos, pickUp, BF, centerIn, waitWatched, clamp, fireRes, worlds, wearGold, PLACE, unpackGold, drinkFireRes, effectOn, keyOf, centerGuess, vantagePoints, goldWorn, armGold, nearestTrader, survey, nextTarget, lootChest, dropJunk, SIDES4, aggressive } = require('./take-gold-block')
 const { walkUnlessBrute, bruteComing, tunnelTo, pitCandidates, tradeBreach, tradeExecute, trapCandidates, boothTrade, MEMO, exitReserveReady, barterRound, DAMAGE_TYPES, lavaWatched, ownTunnelAt } = require('./booth-trade')
 const { trade: penTrade } = require('./pen-trap')
 const { eatIfHungry, lastGoldBreak, baitAim, scanPiecesAsync } = require('./predict-gold')
 const miningCycle = require('./mining-cycle')
+const GOLD_ARMOR_RE = /\bgolden_(helmet|chestplate|leggings|boots)\b/
 async function bruteDefense (session, ctl, st, forced = null) {
   const bot = session.bot
   const pick = require('.././pick')
@@ -475,6 +476,13 @@ async function sealedGold (session, ctl, st, until) {
     if (S.exposed && inOwnTunnel(bot, S) && foesNear(bot, 6).some((e : any) => FOES_RE.test(e.name || '')) && await hunker(session, ctl, st, 'враг у пролома')) continue
     if ((bot.health ?? 20) < 8) { await eatIfHungry(session, ctl); if ((bot.health ?? 20) < 8) { S.fails.push('хп'); break } }
     await eatIfHungry(session, ctl)
+    // Без золотой брони: первое золото (сундук, блок) — сразу в броню, пока тело в закрытом штреке (верстак встаёт внутри), а не
+    // после всего захода (ревью Codex 14.10): дальше пиглины к нам нейтральны, и вскрытия/бартер не под их ударами.
+    if (st.goldless && !S.exposed && inOwnTunnel(bot, S) &&
+        countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') + Math.floor(countOf(bot, 'gold_nugget') / 9) >= 4 ||
+        st.goldless && GOLD_ARMOR_RE.test(bot.inventory.items().map(i => i.name).join(' '))) {
+      if (await armGold(session, ctl)) { st.goldless = false; log('штрек: золотая броня из первого золота', { ingots: countOf(bot, 'gold_ingot'), blocks: countOf(bot, 'gold_block') }) }
+    }
     // Кирки в штреке: каменные кончились — фильтр бастиона пускал железную на чернокамень и незерак, она стиралась, и
     if (process.env.ND_GUARD !== '0') {
       const G = require('.././ne-guard')
@@ -587,6 +595,13 @@ async function sealedGold (session, ctl, st, until) {
       continue
     }
     log('штрек: план', { from: r.start, moves: r.path.length, dig: r.path.reduce((n, m) => n + m.clear.length, 0), cost: Math.round(r.cost), nodes: r.nodes, ms: gameClock.wall.now() - t0 })
+    // Без золотой брони ко входу по открытому не идти (пиглины видят — бьют): закопаться здесь и планировать из своего кармана.
+    if (!inTunnel && st.goldless && !(me.x === r.start.x && me.y === r.start.y && me.z === r.start.z) && (st.burrowsSG || 0) < 2 && process.env.ND_BURROW !== '0') {
+      st.burrowsSG = (st.burrowsSG || 0) + 1
+      const bw = await burrow(session, ctl, st, 'без золотой брони ко входу штрека по открытому не иду')
+      if (bw.ok) { S.exposed = SL.exposure(bot, S.own).length > 0; continue }
+      log('закопаться не вышло', { why: bw.why })
+    }
     // Вход из открытого — сперва дойти ногами (без копки) до клетки входа.
     if (!inTunnel && !(me.x === r.start.x && me.y === r.start.y && me.z === r.start.z)) {
       S.walks++
@@ -1250,7 +1265,8 @@ async function bastion (session, ctl, p: any = {}) {
       fights: st.fights.length ? st.fights : undefined,
       brutesAvoided: st.brutes || undefined,
       tossed: st.tossed.length ? st.tossed : undefined,
-      lastBlocked: st.lastBlocked || undefined
+      lastBlocked: st.lastBlocked || undefined,
+      goldless: st.goldless || undefined
     }
     if (st.supplyNeeded) d.supplyNeeded = st.supplyNeeded
     if (stopped) d.stopped = stopped
@@ -1313,8 +1329,16 @@ async function bastion (session, ctl, p: any = {}) {
   }
   // tunnel — отладка своего штрека к клетке tx,ty,tz (сцены).
   if (mode === 'tunnel') return { ...out(), tunnel: await tunnelTo(session, ctl, new Vec3(p.tx, p.ty, p.tz), { maxSteps: p.maxSteps || 60 }) }
-  if (!(await wearGold(bot))) {
-    return { ...out('без золотой брони пиглины нападают сами (PiglinAi.isWearingSafeArmor: хватит одной вещи) — золотой шлем: 5 слитков'), need: { what: 'golden_helmet', count: 1, have: 0 } }
+  // Без золотой брони пиглины враждебны сами (PiglinAi.isWearingSafeArmor: хватит одной вещи), но целятся только видя нас
+  // (NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD — сенсор с лучом): закрытый штрек их не показывает. Поэтому без брони — не отказ
+  // (b0 14.10: бастион в 28 и 55 бл., «в бастион не иду» и 90 мин без добычи), а заход только закрытым штреком до первого золота
+  // (сундук, блок): броня из него — armGold, торг — после неё. Бартер с принесённым золотом без брони — прежний отказ.
+  if (!(await armGold(session, ctl))) {
+    if (mode === 'barter' || !st.sealed) {
+      return { ...out('без золотой брони пиглины нападают сами (PiglinAi.isWearingSafeArmor: хватит одной вещи) — золотой шлем: 5 слитков'), need: { what: 'golden_helmet', count: 1, have: 0 } }
+    }
+    st.goldless = true
+    log('бастион без золотой брони — только закрытым штреком до первого золота', { ingots: countOf(bot, 'gold_ingot'), nuggets: countOf(bot, 'gold_nugget') })
   }
   const needPick = mode !== 'barter' && !bot.inventory.items().some(i => GOLD_PICK.test(i.name))
   // Кирка сломалась, а золото в рюкзаке есть (≥ 18 слитков с блоками) — не выходить с ним: торговать
@@ -1459,9 +1483,18 @@ async function bastion (session, ctl, p: any = {}) {
   // ходил по точкам обзора все 500 с, и на обмен не осталось ни секунды).
   let goldPhaseEnd = mode === 'gold' ? deadline : t0 + (deadline - t0) * 0.6
   let barterNext = 0
+  // Без брони: после каждой добычи — броня из неё; пока её нет, ни торга, ни хода по двору.
+  const goldReady = async () => {
+    if (!st.goldless) return true
+    if (!(await armGold(session, ctl))) return false
+    st.goldless = false
+    log('золотая броня из добычи бастиона — дальше как обычно', { ingots: countOf(bot, 'gold_ingot'), blocks: countOf(bot, 'gold_block') })
+    return true
+  }
   const piglinsAround = () => mobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && seesMob(bot, e))
   const tryBarter = async (force = false) => {
     if (mode === 'gold' || done() || gameClock.now() < barterNext) return false
+    if (!(await goldReady())) return false
     if (!force && spare() < 24) return false
     if (countOf(bot, 'gold_ingot') - keep < 8 && countOf(bot, 'gold_block')) await unpackGold(session, ctl, keep + 27)
     const can = countOf(bot, 'gold_ingot') - keep
@@ -1570,7 +1603,8 @@ async function bastion (session, ctl, p: any = {}) {
           st.tunnel = { ok: true, route: true, steps: rr.steps, dug: rr.dug, at: rr.at }
         }
       }
-      if (!routed && (far1 > 40 || (nearG && (far1 > 12 || Math.abs(goal.y - me0.y) > 8))) && p.tunnel !== false) {
+      // Без золотой брони — штреком и вблизи: пешком на виду у пиглинов — бой с ними (b0-5-1 14.10: «враги 8 не по силам»).
+      if (!routed && (far1 > (st.goldless ? 12 : 40) || (nearG && (far1 > 12 || Math.abs(goal.y - me0.y) > 8))) && p.tunnel !== false) {
         const { tunnelTo } = require('.././tunnel')
         // Вход штрека подхода — клетка, откуда он начат: без него exitTunnel отвечал «входа нет», и после бастиона тело
         // оставалось в своём штреке под лавовым морем (neF-mB26-1 02.10: y 21, все шаги к спавнеру и порталу — на месте).
@@ -1655,7 +1689,7 @@ async function bastion (session, ctl, p: any = {}) {
       // Закрытый путь: после золота — торговое окно из штрека, потом штреком назад.
       if (st.sealed && st.sealedState && st.sealedDone && !st.pitDone) {
         st.pitDone = true
-        if (mode !== 'gold' && !done() && (spare() > 0 || countOf(bot, 'gold_block'))) {
+        if (mode !== 'gold' && !done() && (spare() > 0 || countOf(bot, 'gold_block')) && await goldReady()) {
           // Яма со ртом (добыча падает к нам); не вышла — окно в стене.
           let bo = null
           for (let tryN = 0; tryN < (BF.enabled() ? 2 : 6) && !bo && !ctl.aborted && gameClock.now() < deadline - 90000; tryN++) {
@@ -1783,6 +1817,7 @@ async function bastion (session, ctl, p: any = {}) {
       const goldOver = mode === 'barter' || spare() >= goldTarget() || gameClock.now() >= goldPhaseEnd
       if (goldOver) {
         if (mode === 'gold') break
+        if (!(await goldReady())) { st.lastBarter = st.lastBarter || 'без золотой брони к торговцам не иду'; break }
         // Злость пиглинов от сломанного золота — 600 тиков (30 с): торговать,
         // когда остынут, а до того сидеть там, где копал (они до нас не доходят).
         if (gameClock.now() - (st.lastBreak || 0) < 33000) { await sleep(2000); continue }
@@ -1830,15 +1865,21 @@ async function bastion (session, ctl, p: any = {}) {
         }
         if (st.chestsOnly) {
           await sealedGold(session, ctl, st, Math.max(gameClock.now() + 60000, deadline - 300000))
+          await goldReady()
           const made = await makeIronPick(session, ctl)
           log('железная кирка из сундуков', { made, ingots: countOf(bot, 'iron_ingot'), raw: countOf(bot, 'raw_iron'), nuggets: countOf(bot, 'iron_nugget'), blocks: countOf(bot, 'iron_block') })
           st.chestsOnly = false
           if (!made) { st.ironNeed = true; break }
           continue
         }
-        if (st.pred.size || st.gold.size) {
+        // Сундуки, увиденные с вышки (survey), — тоже цели закрытого штрека: в сундуках бастиона золото и золотая броня
+        // (loot_table chests/bastion_other: ботинки ×2, шлем, нагрудник, поножи, блок и слитки — 9 из 20 на бросок, бросков 2).
+        // Вслепую стены по шаблону часто не узнаются (b2-6-1 14.10), а сундук двора виден — без него заход кончался пустым.
+        const chestsLeft = [...st.chestSeen.keys()].some(k => !st.looted.has(k))
+        if (st.pred.size || st.gold.size || chestsLeft) {
           const beforeMining = miningSnapshot()
           await sealedGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 240000))
+          await goldReady()
           // Золото карты осталось — ходом по сетке к каждому (ND_GOLD_ROUTE=1).
           if (process.env.ND_GOLD_ROUTE === '1' && st.pred.size && !ctl.aborted) st.routeGold = await routeGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 200000))
           minedSinceRetry = miningCycle.miningProgress(beforeMining, miningSnapshot())
@@ -1851,6 +1892,7 @@ async function bastion (session, ctl, p: any = {}) {
         st.notRecognized = true
         break
       }
+      if (!(await goldReady())) { st.lastBarter = st.lastBarter || 'без золотой брони по двору не хожу'; break }
       survey(bot, st)
       const t = nextTarget(bot, st)
       // Целей не видно, а слитков на бартер хватает — к пиглинам (они в 32

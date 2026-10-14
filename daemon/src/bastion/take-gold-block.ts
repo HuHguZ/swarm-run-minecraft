@@ -95,6 +95,22 @@ async function wearGold (bot) {
   return goldWorn(bot)
 }
 
+// Броня из своего золота (хватит одной вещи — PiglinAi.isWearingSafeArmor): шлем — 5 слитков, ботинки — 4; блок и самородки —
+// сперва в слитки. Без неё пиглины враждебны сами, а бартер невозможен: первое золото бастиона (сундук, блок) — сюда (b0 14.10).
+async function armGold (session, ctl) {
+  const bot = session.bot
+  if (await wearGold(bot)) return true
+  const has = n => countOf(bot, n)
+  if (has('gold_ingot') + 9 * has('gold_block') + Math.floor(has('gold_nugget') / 9) < 4) return false
+  const A = require('.././actions')
+  try {
+    if (has('gold_ingot') < 4 && has('gold_block')) await A.craft(session, ctl, { item: 'gold_ingot', count: 9 })
+    if (has('gold_ingot') < 4 && has('gold_nugget') >= 9) await A.craft(session, ctl, { item: 'gold_ingot', count: Math.floor(has('gold_nugget') / 9) })
+    if (has('gold_ingot') >= 4) await A.craft(session, ctl, { item: has('gold_ingot') >= 5 ? 'golden_helmet' : 'golden_boots', count: 1 })
+  } catch (e) { log('золотая броня: не вышло', { error: e.message }) }
+  return wearGold(bot)
+}
+
 function canReach (bot, pos, reach = 4.4) {
   const eye = bot.entity.position.offset(0, bot.getControlState && bot.getControlState('sneak') ? 1.27 : 1.62, 0)
   return new Vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5).distanceTo(eye) <= reach
@@ -610,4 +626,4 @@ async function centerIn (bot, c, ms = 2500) {
   return f.x === c.x && f.y === c.y && f.z === c.z
 }
 
-module.exports = { gameClock, goals, Vec3, sleep, xyz, visibleOf, seesBlock, raySees, eyePos, worlds, BF, PLACE, ADMIRE_MS, LOVED, GOLD_ARMOR, ARMOR_DEST, GOLD_PICK, JUNK_KEEP, log, clamp, keyOf, countOf, itemNamed, metaOf, isBaby, aggressive, offhand, admiring, mobs, seesMob, angerSet, nearestTrader, goldWorn, wearGold, canReach, walkGoal, inLava, lavaFreeCell, effectOn, drinkFireRes, lavaEscapeDeep, makeIronPick, waitWatched, fireStep, lavaEscape, pickUp, handIngot, takeGoldBlock, lootChest, unpackGold, fireRes, reserveKeeper, dropJunk, vantagePoints, centerGuess, survey, nextTarget, inOwnTunnel, fullCover, reachSet, threatens, SIDES4, centerIn }
+module.exports = { gameClock, goals, Vec3, sleep, xyz, visibleOf, seesBlock, raySees, eyePos, worlds, BF, PLACE, ADMIRE_MS, LOVED, GOLD_ARMOR, ARMOR_DEST, GOLD_PICK, JUNK_KEEP, log, clamp, keyOf, countOf, itemNamed, metaOf, isBaby, aggressive, offhand, admiring, mobs, seesMob, angerSet, nearestTrader, goldWorn, wearGold, armGold,canReach, walkGoal, inLava, lavaFreeCell, effectOn, drinkFireRes, lavaEscapeDeep, makeIronPick, waitWatched, fireStep, lavaEscape, pickUp, handIngot, takeGoldBlock, lootChest, unpackGold, fireRes, reserveKeeper, dropJunk, vantagePoints, centerGuess, survey, nextTarget, inOwnTunnel, fullCover, reachSet, threatens, SIDES4, centerIn }
