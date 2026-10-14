@@ -60,19 +60,23 @@ export interface Prior { chests: Array<[string, number]>; outside?: Record<strin
 export const PRIOR: Record<string, Prior> = {
   ruined_portal: { chests: [['ruined_portal', 1]], overhead: 0 },
   village: { chests: [['village/village_plains_house', 0.7], ['village/village_weaponsmith', 0.23], ['village/village_tannery', 0.23], ['village/village_fisher', 0.23], ['village/village_cartographer', 0.11]], outside: { food: 5, bed: 1 }, overhead: 40 },
-  desert_pyramid: { chests: [['desert_pyramid', 4]], overhead: 15 },
-  jungle_pyramid: { chests: [['jungle_temple', 2]], overhead: 20 },
-  igloo: { chests: [['igloo_chest', 0.5]], overhead: 15 },
+  desert_pyramid: { chests: [['desert_pyramid', 4]], overhead: 10 },
+  jungle_pyramid: { chests: [['jungle_temple', 2]], overhead: 10 },
+  igloo: { chests: [['igloo_chest', 0.5]], overhead: 5 },
   shipwreck: { chests: [['shipwreck_map', 0.8], ['shipwreck_supply', 0.7], ['shipwreck_treasure', 0.7]], water: true, overhead: 10 },
   ocean_ruin: { chests: [['underwater_ruin_small', 1]], water: true, overhead: 10 },
   buried_treasure: { chests: [['buried_treasure', 1]], overhead: 0 }
 }
 // Работа до сундука сверх ходьбы и открытия, с: копать под песком/в стене, нырять, колодец храма, лестница иглу.
-export const CHEST_WORK: Record<string, number> = { shipwreck: 12, shipwreckWet: 22, ocean_ruin: 22, desert_pyramid: 8, jungle_pyramid: 15, igloo: 30, village: 8, ruined_portal: 3, buried_treasure: 15 }
+// Замер фермы 14.10 (try-lab-struct, с шаблонами, подход 10–16 бл.): пустынный храм — 4 сундука за 22–26 с (колодец 10 бл.,
+// плита), иглу с подвалом 33 бл. — 30–32 с, корабль под палубой на 13 бл. — 27 с на сундук, rightsideup_full — 3 за 80 с,
+// храм джунглей — 2 за 22 с, сундук храма деревни — 13–16 с, руины портала — ~12 с. Было 8 + 8 на сундук и 15 сверху —
+// храм в 66 бл. «−25 с — мимо» (g1-1) при настоящих ~25 с работы.
+export const CHEST_WORK: Record<string, number> = { shipwreck: 6, shipwreckWet: 22, ocean_ruin: 22, desert_pyramid: 2, jungle_pyramid: 6, igloo: 25, village: 6, ruined_portal: 3, buried_treasure: 15 }
 export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldenApple: 20, diamond: 20, bed: 15 }
 export const WALK_BPS = 2.5 // ход с обходами и прыжками; крюк — туда и половина обратно
 export const DETOUR = 1.5
-export const CHEST_SECONDS = 8
+export const CHEST_SECONDS = 4 // открыть и взять, стоя у сундука (замер: 4 сундука храма — ~8 с после колодца)
 // Путь к кладу по карте, пока карты нет: априор, не замер (поиск в 50 чанках — предел, не среднее; ревью Codex q2). Карта
 // прочитана — у записи клада своё расстояние (explore пишет «клад на x,z (N бл.)»).
 export const TREASURE_WALK = 160
@@ -98,12 +102,14 @@ function after (needs: Needs, items: Record<string, number>): Needs {
 export interface Chest { table: string; p: number; wet?: boolean }
 export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]>; chests: number; chain?: number; known?: boolean }
 
-// kind, расстояние, нужды; chests — сундуки узнанного шаблона (иначе — среднее по вариантам).
-export function structureWorth (kind: string, distance: number, needs: Needs, chests: Chest[] | null = null): Worth | null {
+// kind, расстояние, нужды; chests — сундуки узнанного шаблона (иначе — среднее по вариантам); wet — постройка под водой
+// (руины портала в океане: увидены ниже уровня моря — ферма 14.10, cs-3: «сундук 11 с» на 13 бл. под водой).
+// outside — добыча вне сундуков по узнанным шаблонам (деревня: кровати и сено домов), вместо априора.
+export function structureWorth (kind: string, distance: number, needs: Needs, chests: Chest[] | null = null, wet = false, outside: Record<string, number> | null = null): Worth | null {
   const P = PRIOR[kind]
   if (!P) return null
-  const list: Chest[] = chests !== null ? chests : P.chests.map(([table, p]) => ({ table, p, wet: P.water }))
-  const items: Record<string, number> = { ...(P.outside || {}) }
+  const list: Chest[] = chests !== null ? chests : P.chests.map(([table, p]) => ({ table, p, wet: !!P.water || wet }))
+  const items: Record<string, number> = { ...(outside || P.outside || {}) }
   let maps = 0
   let work = 0
   let nChests = 0
@@ -132,9 +138,10 @@ export function structureWorth (kind: string, distance: number, needs: Needs, ch
     if (chain >= 1) priced.push(['treasure_map', Math.round(Math.min(1, maps) * 100) / 100, chain])
   }
   // По воде — в полтора раза дольше; у узнанной постройки — по её сундукам (корабль на пляже — посуху).
-  const wet = chests === null ? !!P.water : list.some(c => c.p > 0 && c.wet)
-  const walk = distance / WALK_BPS * DETOUR * (wet ? 1.5 : 1)
-  const cost = walk + work + P.overhead
+  const swim = list.some(c => c.p > 0 && c.wet)
+  const walk = distance / WALK_BPS * DETOUR * (swim ? 1.5 : 1)
+  // Деревня с узнанными домами — без обхода дверей (structures.village): сверху 10 с, а не 40.
+  const cost = walk + work + (kind === 'village' && outside ? 10 : P.overhead)
   return { kind, distance, value, walk, cost, net: value - cost, items: priced, chests: Math.round(nChests * 10) / 10, chain, known: chests !== null }
 }
 

@@ -54,3 +54,21 @@ test('цена корабля: карта — цепочкой до клада, 
   // Под водой сундук дороже: нырять.
   assert.ok(structureWorth('shipwreck', 40, needs, [{ table: 'shipwreck_treasure', p: 1, wet: true }]).cost > noMap.cost)
 })
+
+test('цена: руины портала под водой — с нырком; клад за 400 бл. без нужды в железе — мимо', () => {
+  const needs = { iron: 8, lighter: true, food: 8, portal: false, diamondPick: true, beds: 5 }
+  const dry = structureWorth('ruined_portal', 30, needs)
+  const sunk = structureWorth('ruined_portal', 30, needs, null, true)
+  assert.ok(sunk.cost - dry.cost >= 22, `${describeWorth(dry)} | ${describeWorth(sunk)}`)
+  // Сильный игрок не идёт в 400 бл. за мелочью: железо уже есть — клад далеко не окупается; рядом — окупается.
+  const fed = { ...needs, iron: 0, food: 0, diamondPick: false }
+  assert.ok(structureWorth('buried_treasure', 400, fed).net < 0)
+  assert.ok(structureWorth('buried_treasure', 40, needs).net > 0)
+})
+
+test('цена деревни: дома узнаны без сундуков, кроватей и сена — мимо; по среднему — иду (ферма 14.10, cs-7)', () => {
+  const needs = { iron: 8, lighter: true, food: 6, portal: false, diamondPick: true, beds: 5 }
+  assert.ok(structureWorth('village', 47, needs, null).net > 0)
+  assert.ok(structureWorth('village', 47, needs, [], false, { food: 0, bed: 0 }).net < 0)
+  assert.ok(structureWorth('village', 47, needs, [], false, { food: 5, bed: 3 }).net > 0)
+})

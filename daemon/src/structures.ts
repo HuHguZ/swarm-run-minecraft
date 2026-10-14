@@ -124,7 +124,8 @@ const KINDS = {
     // Снаружи — замшелый и простой булыжник со ступенями (шаблон: 701 / 456 / 24); растяжки, рычаги и резной кирпич —
     // внутри (ферма 14.10: без булыжника в группах храм не узнавался и с 2 бл.). Деревня тайги из того же булыжника —
     // не в джунглях.
-    groups: [['tripwire_hook', 'tripwire'], ['mossy_cobblestone'], ['chiseled_stone_bricks'], ['dispenser', 'sticky_piston', 'lever'], ['cobblestone_stairs'], ['cobblestone']], min: 3, must: [1],
+    // Сквозь листву видно мало: двух групп хватает (замшелый булыжник обязателен), лишнее отсеют биом джунглей и шаблон.
+    groups: [['tripwire_hook', 'tripwire'], ['mossy_cobblestone'], ['chiseled_stone_bricks'], ['dispenser', 'sticky_piston', 'lever'], ['cobblestone_stairs'], ['cobblestone']], min: 2, must: [1],
     biomes: /jungle/, table: 'jungle_temple', handler: 'jungle', prio: 1,
     danger: 'растяжки из нити у раздатчиков со стрелами; сломаешь нить без ножниц — выстрелит',
     value: '2 сундука: золото, железо, алмазы изредка; стрелы в раздатчиках'
@@ -569,7 +570,8 @@ function recordedAt (session, pos, dim = null) {
 function describe (rec, me, looted = null) {
   const K = KINDS[rec.kind] || {}
   // Узнанный шаблон: невзятые сундуки с таблицами (для цены: campaign/structure-value).
-  const fit = rec.fit ? { name: rec.fit.name, chests: (rec.fit.chests || []).filter(([x, y, z]) => !looted || (!looted.has(`${x},${y},${z}`) && !looted.has(`miss:${x},${y},${z}`))).map(([x, y, z, table, p, wet]) => ({ x, y, z, table, p, wet: !!wet })) } : undefined
+  const ex = rec.fit && rec.fit.extra
+  const fit = rec.fit ? { name: rec.fit.name, chests: (rec.fit.chests || []).filter(([x, y, z]) => !looted || (!looted.has(`${x},${y},${z}`) && !looted.has(`miss:${x},${y},${z}`))).map(([x, y, z, table, p, wet]) => ({ x, y, z, table, p, wet: !!wet })), ...(ex && Number.isFinite(ex.houses) ? { houses: ex.houses, beds: ex.beds || 0, hay: ex.hay || 0 } : {}) } : undefined
   return {
     kind: rec.kind,
     name: K.ru,
@@ -605,7 +607,8 @@ function fitKnown (session, { kind = null, x, z, maxDistance = 64, debug = false
   const tf = templateFit(session, debug ? { ...rec, fit: null } : rec)
   const dbg = session._fitDebug
   session._fitDebug = null
-  return { fit: tf ? { name: tf.name, chests: tf.chests.filter(c => Number.isFinite(c.y) || c.basement).map(c => ({ x: c.x, y: c.y, z: c.z, table: c.table, p: c.p, wet: !!c.wet })) } : null, debug: dbg || undefined }
+  const ex = tf && tf.extra
+  return { fit: tf ? { name: tf.name, chests: tf.chests.filter(c => Number.isFinite(c.y) || c.basement).map(c => ({ x: c.x, y: c.y, z: c.z, table: c.table, p: c.p, wet: !!c.wet })), ...(ex && Number.isFinite(ex.houses) ? { houses: ex.houses, beds: ex.beds || 0, hay: ex.hay || 0 } : {}) } : null, debug: dbg || undefined }
 }
 
 // Для session.compactState: не весь список, а счёт и ближайшие.
@@ -1636,7 +1639,11 @@ function templateFit (session, rec, out = null) {
     const houses = F.fitHouses(bot, center, { radius: R, biome: F.villageBiome(bot, center) })
     for (const h of houses) chests.push(...h.chests.map(c => ({ ...c, from: h.name })))
     name = houses.map(h => h.name.split('/').pop()).join(', ') || null
-    extra = { houses: houses.length }
+    // Кровати и сено узнанных домов — по их шаблонам (цена деревни — не по среднему; ферма 14.10, cs-7: «+2 с — иду», 146 с, ничего).
+    let beds = 0
+    let hay = 0
+    for (const h of houses) { beds += templateCells(h, /_bed$/).length / 2; hay += templateCells(h, /^hay_block$/).length }
+    extra = { houses: houses.length, beds: Math.floor(beds), hay }
   } else {
     // Под водой или на пляже — по биому места (океан — затонувший, пляж — на мели: has_structure/shipwreck(_beached)).
     const biome = (() => { try { return biomeName(bot, bot.entity.position.floored()) || '' } catch { return '' } })()
@@ -1656,7 +1663,8 @@ function templateFit (session, rec, out = null) {
       if (rec.kind === 'desert_pyramid') extra.plate = templateCells(r.best, /^stone_pressure_plate$/)[0] || null
       if (rec.kind === 'jungle_pyramid') extra.traps = templateCells(r.best, /^(tripwire_hook|tripwire)$/)
     }
-    for (const c of chests) c.wet = wetShip
+    // Руины портала и прочее в океане (биом под ногами, F3) ниже уровня моря — тоже под водой: нырок, сторож воздуха.
+    for (const c of chests) c.wet = wetShip || (Number.isFinite(c.y) && c.y < 61 && /ocean|river/.test(biome))
   }
   const ms = Date.now() - t0
   // Узнан раньше (с лучшего места подхода: под водой видно на ~20 бл.) — то узнавание и берём.
@@ -2064,8 +2072,9 @@ const HANDLERS = {
     const bot = session.bot
     const R = rec.lootR || KINDS.village.lootR
     const fresh = () => containersNear(session, rec, R, rec.yR || 16).filter(q => !lootedSet(session).has(keyOf(q)))
-    // Дома узнаны по шаблонам — где сундуки, известно (общий лут копает к ним); заглядывать в двери не нужно.
-    if (fresh().length || (rec.tf && rec.tf.chests.length)) return
+    // Дома узнаны по шаблонам — где сундуки, известно (общий лут копает к ним); заглядывать в двери не нужно. Узнано 3+ дома и
+    // ни в одном сундука нет — тоже (обход дверей — 25–129 с, cs-7 14.10: 146 с впустую).
+    if (fresh().length || (rec.tf && (rec.tf.chests.length || (rec.tf.extra && rec.tf.extra.houses >= 3)))) return
     const doors = seenNear(bot, DOOR_NAMES, rec, R, 24).filter(d => (bot.blockAt(d)?.getProperties?.().half ?? 'lower') === 'lower')
       .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)).slice(0, 6)
     let peeked = 0

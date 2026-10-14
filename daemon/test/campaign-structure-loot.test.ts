@@ -17,6 +17,8 @@ function fixture ({ known = [], bag = {} as Record<string, number>, portal = nul
     gameClock: { now: () => 0 }, dim: () => 'overworld', goldOn: () => false, shieldOn: () => false, lighter: () => !!(bag.flint_and_steel || bag.fire_charge),
     foodUnits: () => bag.bread || 0, have: re => Object.entries(context.state.inventory).filter(([k]) => typeof re === 'string' ? re === k : re.test(k)).reduce((n, [, v]: any) => n + v, 0),
     refresh: async () => {}, craft: async () => {}, log: (s: string) => lines.push(s), graphFact: (k, v) => { facts[k] = v },
+    sense: async () => {}, sit: { inWater: false },
+    goToward: async (p) => { calls.push({ method: 'goToward', params: p }); context.state.pos = { x: p.x, y: 64, z: p.z }; return true },
     act: async (method, params) => {
       calls.push({ method, params })
       if (method === 'structure' && params.mode === 'list') return { detail: { known } }

@@ -2586,10 +2586,17 @@ async function lootSeenStructures (radius = 160) {
   // Сундуки глубже 16 бл. под водой (уровень моря 62) без кармана воздуха тело не берёт (structures.lootAll) — в цене их нет.
   // Под водой глубже 16 бл. (с дверями на карман — 26) не ныряю: те же пределы, что у lootAll (море на 62).
   const reachable = c => !c.wet || !Number.isFinite(c.y) || c.y >= (process.env.ND_AIR_POCKET === '1' ? 36 : 46)
-  const scored = list.map(x => ({ x, w: structureValue.structureWorth(x.kind, far(x), needs, x.fit ? x.fit.chests.filter(reachable) : null) })).sort((a, b) => b.w.net - a.w.net)
+  // Увидена ниже уровня моря (58) — под водой: нырок в цене (руины портала в океане).
+  const sunk = x => Number.isFinite(x.at.y) && x.at.y < 58 && x.kind !== 'buried_treasure'
+  // Деревня узнана (3+ дома) — кровати и сено по шаблонам домов (сено ≈ 2.5 ед. еды), а не среднее деревни.
+  const outside = x => x.kind === 'village' && x.fit && x.fit.houses >= 3 ? { food: (x.fit.hay || 0) * 2.5, bed: x.fit.beds || 0 } : null
+  const scored = list.map(x => ({ x, w: structureValue.structureWorth(x.kind, far(x), needs, x.fit ? x.fit.chests.filter(reachable) : null, sunk(x), outside(x)) })).sort((a, b) => b.w.net - a.w.net)
   for (const s of scored.slice(0, 3)) log(`постройка ${s.x.name || s.x.kind} в ${Math.round(s.w.distance)} бл.: ${structureValue.describeWorth(s.w)} — ${s.w.net > 0 ? 'иду' : 'мимо'}`)
   const best = scored[0]
   if (!(best.w.net > 0)) return false
+  // В воде к сухой постройке не начинать: тактика рвёт заход сразу (ферма 14.10, cs-3: дважды «1 с, прервано» с поверхности моря).
+  await sense()
+  if (sit.inWater && !sunk(best.x) && !/^(shipwreck|ocean_ruin)$/.test(best.x.kind)) { log(`постройка ${best.x.name || best.x.kind}: я в воде — сперва на берег`); return false }
   structLootTried.add(keyOf(best.x))
   // Глубоко под водой (сундуки ниже y 52 — больше 10 бл. воды) — двери на карманы воздуха, пока на суше: 6 досок → 3 двери.
   const deepest = Math.min(...((best.x.fit && best.x.fit.chests) || []).map(c => Number.isFinite(c.y) ? c.y : 99), Number.isFinite(best.x.at.y) ? best.x.at.y : 99)
@@ -2599,6 +2606,13 @@ async function lootSeenStructures (radius = 160) {
   }
   const bag0 = { ...(state.inventory || {}) }
   const t0 = gameClock.now()
+  // Далеко (за 48 бл.) — сперва дорогой кампании (отрезки, обходы, выход из-под крыши — goToward), explore — с подхода: шагом
+  // pathfinder'а explore через 400 бл. моря рвался тактикой (ферма 14.10, клад по карте корабля −1,13 → 313,249).
+  if (far(best.x) > 48 && !(await goToward(best.x.at, 24))) {
+    log(`постройка ${best.x.name || best.x.kind}: дорогой не дошёл${structLootRetried.has(keyOf(best.x)) ? '' : ' — ещё раз потом'}`)
+    if (!structLootRetried.has(keyOf(best.x))) { structLootRetried.add(keyOf(best.x)); structLootTried.delete(keyOf(best.x)) }
+    return true
+  }
   const e = await act('structure', { mode: 'explore', kind: best.x.kind, x: best.x.at.x, z: best.x.at.z, ...(Number.isFinite(best.x.at.y) ? { y: best.x.at.y } : {}),
     ...(best.x.kind === 'village' && needs.beds > 0 ? { beds: 1 } : {}), maxDistance: Math.ceil(far(best.x)) + 24, timeoutSeconds: Math.round(Math.min(420, best.w.cost * 2 + 60)) })
   await refresh()

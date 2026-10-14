@@ -68,10 +68,12 @@ async function main () {
     }
     rcon(`effect give ${PLAYER} minecraft:resistance 6 4 true`)
   }
+  let blocks = null
   const look = async () => {
     await sleep(6000)
     await gameClock.wall.sleep(3000) // прорисовка чанков у клиента — по стенным часам (750 TPS пошагово — 6 игр. с за доли секунды)
-    const scan = await call('structure', { mode: 'scan', radius: 64 })
+    const scan = await call('structure', { mode: 'scan', radius: 64, blocks: true })
+    blocks = (scan.detail && scan.detail.blocks) || scan.blocks || null // что глаза увидели из сигнатур построек (для разбора «не узнан»)
     return ((scan.detail && scan.detail.seen) || scan.seen || []).map(s => `${s.kind}@${s.at.x},${s.at.z}`)
   }
   put(DIST)
@@ -87,17 +89,30 @@ async function main () {
   let chain = null
   const maps = ((await call('structure', { mode: 'maps' })).detail || {}).maps || []
   if (maps.length && process.env.CHAIN !== '0') {
-    const m = maps[0]
+    let m = maps[0]
     const tc = gameClock.now()
+    // Дорога — отрезками по 64, как campaign.goToward (explore идёт только последний кусок); вне карты — перечитать её по пути.
+    const legs = []
+    for (let k = 0; k < 12; k++) {
+      const me = ((await call('status', {})).state || {}).pos
+      const d = me ? Math.hypot(m.x - me.x, m.z - me.z) : 0
+      if (!me || d <= 48) break
+      const f = Math.min(1, 64 / d)
+      const g = await call('goto', { x: Math.round(me.x + (m.x - me.x) * f), z: Math.round(me.z + (m.z - me.z) * f), range: 6, timeoutSeconds: 120 })
+      legs.push(`${g.status}${g.status !== 'done' ? ':' + String((g.detail && g.detail.stopped) || g.error || '').slice(0, 60) : ''}`)
+      const again = (((await call('structure', { mode: 'maps' })).detail || {}).maps || [])[0]
+      if (again) m = again
+      if (g.status !== 'done' && legs.filter(x => !x.startsWith('done')).length >= 3) break
+    }
     const tx = await call('structure', { mode: 'explore', kind: 'buried_treasure', x: m.x, z: m.z, maxDistance: 600, timeoutSeconds: 400 })
     const td = tx.detail || {}
-    chain = { map: m, status: tx.status, sec: Math.round((gameClock.now() - tc) / 1000), took: td.took || {}, stopped: td.stopped || null, lines: (td.lines || []).slice(0, 8) }
+    chain = { map: m, legs, status: tx.status, by: tx.by || null, eventsRaw: (tx.events || []).slice(0, 6), sec: Math.round((gameClock.now() - tc) / 1000), took: td.took || {}, stopped: td.stopped || null, lines: (td.lines || []).slice(0, 8) }
   }
   const st1 = await call('status', {})
   const bag = (st1 && st1.state && st1.state.inventory) || {}
   const rec = {
-    kind: KIND, at, approach, seed: process.env.SEED || null, templates: process.env.ND_STRUCT_TEMPLATES !== '0', seen, recognized: seen.some(s => s.startsWith(KIND)),
-    status: ex.status, by: ex.by || null, events: (ex.events || []).map(e => e.type + (e.action ? ':' + e.action : '')).join(' '), bag,
+    kind: KIND, at, approach, blocks, pos0: st0 && st0.state ? st0.state.pos : null, seed: process.env.SEED || null, templates: process.env.ND_STRUCT_TEMPLATES !== '0', seen, recognized: seen.some(s => s.startsWith(KIND)),
+    status: ex.status, by: ex.by || null, events: (ex.events || []).map(e => e.type + (e.action ? ':' + e.action : '')).join(' '), eventsRaw: (ex.events || []).slice(0, 8), bag,
     template: ((d.lines || []).filter(l => /шаблон/.test(l)).pop() || '').replace(/^▸ /, ''),
     chests: (d.chests || []).map(c => ({ at: c.at, planned: !!c.planned, took: c.took, error: c.error, sec: c.sec })),
     opened: (d.chests || []).filter(c => c.took).length,
@@ -106,7 +121,6 @@ async function main () {
     chain,
     lines: (d.lines || []).slice(0, 30)
   }
-  void st0
   fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
   console.log(JSON.stringify(rec, null, 1))
   conn.close()
