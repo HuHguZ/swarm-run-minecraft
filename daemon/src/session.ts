@@ -1092,6 +1092,7 @@ class Session {
       let progressRetries = 0
       let descentChecks = 0
       let stuckOut = false
+      let strictEscaped = false
       ctl.onAbort.push(() => descentWatch && descentWatch.stop())
       try {
       for (const step of plan) {
@@ -1139,6 +1140,23 @@ class Session {
             // отдельный план XZ; последнюю такую попытку прекращаем сразу.
             if (err.noStep) {
               try { bot.pathfinder.setGoal(null) } catch {}
+              // Поверху без копки из кармана ни шагу (своя лестница под крышей, верх своего столба — cl-l/cl-n 14.10: 5–35 мин
+              // «pathfinder закончил путь» на месте, потом смерть): один короткий отрезок к цели с копкой, дальше снова поверху.
+              if (strict && !boundedArena && !strictEscaped && away0 - away() < 1 && !outOfTime()) {
+                strictEscaped = true
+                const was = bot.entity.position.clone()
+                const ex = bx + .5 - was.x, ez = bz + .5 - was.z, n = Math.hypot(ex, ez) || 1
+                const leg = Math.min(12, n)
+                let timer
+                try {
+                  await Promise.race([bot.pathfinder.goto(new goals.GoalNearXZ(Math.floor(was.x + ex / n * leg), Math.floor(was.z + ez / n * leg), 2)),
+                    new Promise(resolve => { timer = gameClock.setTimeout(resolve, 20000) })])
+                } catch {} finally { gameClock.clearTimeout(timer); try { bot.pathfinder.setGoal(null) } catch {} }
+                if (ctl.aborted) throw new Error('прервано')
+                const moved = bot.entity.position.distanceTo(was)
+                tried.push(`выход с копкой: ${Math.round(moved)} бл.`)
+                if (moved >= 3) { retry--; continue }
+              }
               if (y != null && resolvedTo.y != null && !outOfTime()) {
                 const parkour = require('./navigation/parkour')
                 const local = boundedArena ? await parkour.executeJump(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, { arena: boundedArena }) : await parkour.tryLocal(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 })

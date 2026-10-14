@@ -37,9 +37,13 @@ export function blastNear(bot: Bot, margin = 0): Blast | null {
       const distance = entity.position.distanceTo(me)
       if (distance <= TNT_REACH + 1 + margin) blast = { id: entity.id, kind: 'tnt', distance, fuse: fuseOf(bot, entity), reach: TNT_REACH + 1 + margin, alarm: distance <= TNT_REACH + 1 }
     } else if (entity.name === 'falling_block') {
-      const flat = Math.hypot(entity.position.x - me.x, entity.position.z - me.z)
+      // It lands in its own column: a danger only while that column overlaps the body (half widths 0.49 + 0.3 per axis). The
+      // circle of 1.2 also took the next column of a staircase dug through gravel - Dodge broke dig_down nine times in a row
+      // and the iron stage paused (cl-k 14.10).
+      const dx = Math.abs(entity.position.x - me.x), dz = Math.abs(entity.position.z - me.z)
       const above = entity.position.y - me.y
-      if (flat < 1.2 + margin / 4 && above > 0.5 && above < 12) blast = { id: entity.id, kind: 'falling_block', distance: flat, fuse: null, reach: 1.6 + margin / 4, alarm: flat < 1.2 }
+      const reach = 0.8 + margin / 4
+      if (dx < reach && dz < reach && above > 0.5 && above < 12) blast = { id: entity.id, kind: 'falling_block', distance: Math.hypot(dx, dz), fuse: null, reach, alarm: dx < 0.8 && dz < 0.8 }
     } else if (entity.name === 'creeper' && entity.metadata?.[keyOf(bot, 'is_powered', 17)] === true) {
       const distance = entity.position.distanceTo(me)
       const swelling = entity.metadata?.[keyOf(bot, 'swell_dir', 16)] === 1

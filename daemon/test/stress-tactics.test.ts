@@ -73,6 +73,10 @@ test('primed TNT and a falling block overhead are level-4 blasts answered by Dod
   const anvil = observeTactics(session)
   assert.equal(anvil.blast, 'falling_block')
   assert.equal(threatLevel(anvil), 4)
+  bot.entities[8].position = new Vec3(.5, 66, 1.5)
+  const beside = observeTactics(session)
+  assert.equal(beside.explosion, false, 'gravel of the next staircase column lands beside the body')
+  assert.notEqual(candidates(beside)[0]?.id, 'Dodge')
 })
 
 test('a fight the verdict abandons after one exchange is not favourable (brute), a zombie fight still is', () => {
@@ -296,6 +300,13 @@ test('no last stand inside a blast alarm: Dodge wins at a swelling creeper even 
   const creeper = { id: 12, kind: 'creeper', distance: 2.5, player: false, threatening: true, hit: 20 }
   const ids = candidates(tactical({ contact: true, explosion: true, escapeExhausted: true, enemies: [creeper] })).map(candidate => candidate.id)
   assert.equal(ids[0], 'Dodge', ids.join(','))
+  assert.ok(!ids.includes('LastStand'))
+})
+
+test('no last stand under water out of air: Surface wins among drowned (cl-l 14.10)', () => {
+  const drowned = { id: 13, kind: 'drowned', distance: 1.5, player: false, threatening: true, hit: 9 }
+  const ids = candidates(tactical({ contact: true, drowning: true, water: true, escapeExhausted: true, enemies: [drowned] })).map(candidate => candidate.id)
+  assert.equal(ids[0], 'Surface', ids.join(','))
   assert.ok(!ids.includes('LastStand'))
 })
 

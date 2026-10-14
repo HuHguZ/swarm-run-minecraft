@@ -225,7 +225,8 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('Dodge', 150, 'explosion', state.explosion)
   add('EnterPortal', 115, 'nearby escape', critical && state.portal && !state.dangerousFall)
   // Never a stand inside a blast alarm: LastStand (155) outscored Dodge (150) at a swelling charged creeper (farm s4-stress-3).
-  add('LastStand', 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
+  // Nor under water out of air: a stand among drowned outscored Surface (148) - hp 18 to 0 in a second (cl-l 14.10, day, 7 min).
+  add('LastStand', 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat && !state.drowning)
   const repel = canRepelLavaAttacker(state)
   add('Fight', repel ? 157 : critical ? -100 : 90, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && melee && state.canFight && state.weapon && contact && !state.blast && !state.protectedEncounter && !provokes && !state.lava && !state.lavaEscapePending && !escapeExhausted)
   // A dead end is about the attackers; the swim out of lava (escapeFire) is no run from them: a ghast overhead made the pool

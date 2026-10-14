@@ -40,7 +40,7 @@ function fixture (move?: any, overrides: Record<string, any> = {}) {
 test('пустой путь goto не считается прибытием и не повторяется с рывками', async () => {
   const f = fixture()
   await assert.rejects(f.goto({ x: 95, z: -12, range: 4, surface: 'strict' }), /не дошёл|не достиг/)
-  assert.equal(f.counts.walks, 1)
+  assert.equal(f.counts.walks, 2, 'один маршрут поверху и один короткий выход с копкой, без повторов')
   assert.equal(f.counts.shakes, 0, 'отсутствие маршрута не является физическим застреванием')
   assert.equal(f.bot.pathfinder.movements.canDig, true)
   assert.deepEqual(f.bot.pathfinder.movements.scafoldingBlocks, [1])
@@ -125,4 +125,17 @@ test('strict goto first leaves a sealed own box toward the target (cl-a 14.10: 4
   const result = await f.goto({ x: 95, z: -12, range: 4, surface: 'strict' })
   assert.deepEqual(JSON.parse(JSON.stringify(broke)), [{ toward: { x: 95.5, z: -11.5 } }])
   assert.equal(result.arrived.x, 94)
+})
+
+test('strict goto with no step from a roofed pocket digs one short exit leg, then walks on top (cl-l/cl-n 14.10)', async () => {
+  let calls = 0
+  const f = fixture((bot, goal) => {
+    calls++
+    // 1: strict route is empty; 2: the exit leg with digging leaves the pocket; 3: strict again arrives.
+    if (calls === 2) { assert.equal(bot.pathfinder.movements.canDig, true); bot.entity.position = new Vec3(78.5, 66, -62.5) }
+    if (calls === 3) bot.entity.position = new Vec3(94.5, 67, -14.5)
+  })
+  const result = await f.goto({ x: 95, z: -12, range: 4, surface: 'strict' })
+  assert.equal(result.arrived.x, 94)
+  assert.equal(calls, 3)
 })

@@ -24,6 +24,13 @@ const FALLS = new Set([
   'black_concrete_powder'
 ])
 
+// Entity.isInWall (1.21.11) counts only suffocating states: by default blocksMotion && isCollisionShapeFullBlock, plus soul sand,
+// mud, farmland and dirt path (isSuffocating always). A bamboo stalk (its shape here without the per-position XZ offset), a fence
+// or a pane at the eyes hurts nobody: FreeEmbedded dug a "visible escape" 2936 times in 28 min inside bamboo (cl-m 14.10).
+const SUFFOCATING_THIN = /^(soul_sand|mud|farmland|dirt_path)$/
+const suffocating = b => SUFFOCATING_THIN.test(b.name) ||
+  (b.shapes ?? [[0, 0, 0, 1, 1, 1]]).some(s => s[0] <= 0 && s[1] <= 0 && s[2] <= 0 && s[3] >= 1 && s[4] >= 1 && s[5] >= 1)
+
 // Embedded blocks must be visible to the client ray before an honest escape dig.
 function buriedBy (this: any, bot) {
     // Entity.isInWall (1.21.11) tests a thin box at the eyes, width * .8.
@@ -43,14 +50,14 @@ function buriedBy (this: any, bot) {
     }
     for (const at of cells) {
       const b = bot.blockAt(at)
-      if (!b || b.boundingBox !== 'block') continue
+      if (!b || b.boundingBox !== 'block' || !suffocating(b)) continue
       const shapes = b.shapes ?? [[0, 0, 0, 1, 1, 1]]
       if (shapes.some(s => at.x + s[0] < eye.x + r && at.x + s[3] > eye.x - r &&
         at.y + s[1] < eye.y + .0000005 && at.y + s[4] > eye.y - .0000005 &&
         at.z + s[2] < eye.z + r && at.z + s[5] > eye.z - r)) return { name: b.name, block: b }
     }
     const head = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
-    if (head && (unstuck ??= require('../unstuck')).overlapsBody(bot, head)) return { name: head.name, block: head }
+    if (head && suffocating(head) && (unstuck ??= require('../unstuck')).overlapsBody(bot, head)) return { name: head.name, block: head }
     if (!this.announced) return null
     const above = bot.blockAt(bot.entity.position.offset(0, 2.2, 0))
     if (above && above.boundingBox === 'block' && FALLS.has(above.name)) {

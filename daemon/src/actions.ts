@@ -1528,6 +1528,10 @@ async function explore (session, ctl, {
   if (surface && require('./worlds').worldOf(bot) === 'overworld' && !ctl.aborted && deadline - gameClock.now() >= 10000 &&
     (!session.underSky?.() || require('./fortify').enclosure(bot, bot.entity.position.floored()).sealed)) {
     await require('./survival').surface(session, ctl, { timeoutSeconds: Math.min(30, (deadline - gameClock.now()) / 1000), hand: false, preferPillar: true })
+    // 30 с не хватило (карман под крышей своей лестницы: «поднялся на 6», до неба 2 блока — cl-n 14.10) — ещё подъём на остаток.
+    if (!ctl.aborted && typeof session.underSky === 'function' && !session.underSky() && deadline - gameClock.now() >= 10000) {
+      await require('./survival').surface(session, ctl, { timeoutSeconds: Math.min(30, (deadline - gameClock.now()) / 1000), hand: false, preferPillar: true })
+    }
     hit = findHit()
     if (hit) return { found: hit.name, at: xyz(hit.position), from, now: xyz(bot.entity.position), note: 'увидел после выхода наверх' }
   }
@@ -1561,6 +1565,7 @@ async function explore (session, ctl, {
   }
   let failStreak = 0
   let failFrom = null
+  let escaped = false
   // Своя запертая клетка (коробка тактики): поверху без копки из неё пути нет ни в одну сторону (cl-j 14.10: 22 мин «пути нет»).
   if (walkTop) await require('./fortify').leaveSealedCell(session, ctl, null)
   while (gameClock.now() < deadline && !ctl.aborted) {
@@ -1588,6 +1593,16 @@ async function explore (session, ctl, {
     if (!r.ok) {
       if (!failFrom) failFrom = bot.entity.position.clone()
       if (++failStreak >= SWEEP.length && bot.entity.position.distanceTo(failFrom) < 3 && process.env.ND_EXPLORE_STUCK !== '0') {
+        // Поверху без копки ни шагу (карман своей лестницы под крышей, верх столба — cl-l/cl-n 14.10: 5–35 мин на месте, потом
+        // смерть): один короткий отрезок с копкой — выйти из кармана, как игрок прокапывает выход; не вышло — отказ, как раньше.
+        if (walkTop && !escaped && !ctl.aborted && deadline - gameClock.now() > 5000) {
+          escaped = true
+          const [ex, ez] = direction && COMPASS[direction] ? COMPASS[direction] : SWEEP[0]
+          const was = bot.entity.position.clone()
+          const out = await travelXZ(bot, ctl, was.x + ex * 12, was.z + ez * 12, { range: 3, retries: 1, deadline })
+          legs.push(`выход с копкой ${ex},${ez}${out && out.ok ? '' : ' ✗ ' + (out && out.error)}`)
+          if (bot.entity.position.distanceTo(was) >= 3) { failStreak = 0; failFrom = null; continue }
+        }
         return { found: null, from, now: xyz(bot.entity.position), legs, stuck: true, note: `пути нет ни в одну из ${SWEEP.length} сторон отсюда — смени место или цель` }
       }
     } else { failStreak = 0; failFrom = null }

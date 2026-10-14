@@ -69,3 +69,10 @@ test('enclosure: a one-door room costs more than open ground (arena 12.10: do no
   assert.equal(open, 0)
   assert.ok(room > 10, `комната ${room}`)
 })
+
+test('mob avoidance prices a step but never forbids it: a polar bear family by the pillar (cl-l 14.10)', () => {
+  const bear = (x: number) => ({ name: 'polar_bear', position: new Vec3(x, 64, .5) })
+  const bot: any = { entity: { position: new Vec3(.5, 64, .5) }, entities: { 1: bear(1.5), 2: bear(.5), 3: bear(-.5) } }
+  const cost = flee.mobAvoidance(bot)({ position: new Vec3(0, 64, 0) })
+  assert.ok(cost > 0 && cost + 1 <= 100, String(cost))
+})

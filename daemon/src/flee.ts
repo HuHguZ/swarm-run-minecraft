@@ -549,8 +549,11 @@ function mobAvoidance (bot) {
       const r = Math.max(h.doc.radius || 0, h.doc.blast || 0)
       if (r && d < r) cost += (r - d) * (h.swelling ? 20 : h.doc.weight)
     }
-    return cost
+    // Цена обхода, не запрет: шаг дороже 100 pathfinder отбрасывает (movements.getMoveForward), и семья белых медведей
+    // у столба закрыла все восемь клеток — 35 мин «noPath, visited 1», потом смерть от медведя (cl-l 14.10).
+    return Math.min(cost, MOB_AVOID_CAP)
   }
 }
+const MOB_AVOID_CAP = 60
 
 module.exports = { smartFlee, hostilesAround, shaken, pickDirection, escapeRoute, edgeRisk, enclosure, runLength, insideArena, mobAvoidance, DOCTRINE, creeperSwelling }

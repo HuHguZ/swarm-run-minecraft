@@ -35,3 +35,13 @@ test('a neighbouring wall outside the eye footprint and a normal two-block roof 
     assert.equal(suffocation.buriedBy.call(auto, bot), null)
   }
 })
+
+test('a bamboo stalk through the eyes does not bury the body: not a suffocating state (cl-m 14.10, 2936 escape digs)', () => {
+  const stalk = (p: any) => ({ position: p.floored(), name: 'bamboo', boundingBox: 'block', shapes: [[0.15625, 0, 0.15625, 0.34375, 1, 0.34375]] })
+  const bot: any = { entity: { position: new Vec3(.25, 64, .25), height: 1.8, effects: [] },
+    blockAt: (p: any) => p.floored().x === 0 && p.floored().z === 0 && p.floored().y >= 64 ? stalk(p) : { position: p.floored(), name: 'air', boundingBox: 'empty', shapes: [] } }
+  assert.equal(suffocation.buriedBy.call({ announced: false, fallingOverhead: () => null }, bot), null)
+  const mud = fixture(new Vec3(.5, 64.4, .5), [])
+  mud.bot.blockAt = (p: any) => ({ position: p.floored(), name: p.floored().y === 66 ? 'mud' : 'air', boundingBox: p.floored().y === 66 ? 'block' : 'empty', shapes: p.floored().y === 66 ? [[0, 0, 0, 1, 0.875, 1]] : [] })
+  assert.equal(suffocation.buriedBy.call(mud.auto, mud.bot)?.name, 'mud', 'mud suffocates although its shape is 14/16')
+})
