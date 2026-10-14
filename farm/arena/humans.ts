@@ -11,7 +11,28 @@ const fs = require('fs')
 export const humanTeam = (teams) => teams && /^(red|blue)$/.test(process.env.ARMS_HUMAN_TEAM || (SOLO ? 'red' : '')) ? process.env.ARMS_HUMAN_TEAM || 'red' : null
 
 export function installHumanKit (ctx: ArenaContext) {
-  const { i, L, Y, bots, rel, HUMAN_TEAM, rcon, log, sleep } = ctx
+  const { i, L, X, Y, Z, bots, rel, HUMAN_TEAM, rcon, log, sleep } = ctx
+  // Место человека — комната спавна своей команды (колизей, 14.10): по кругу по комнатам в порядке появления, в комнате —
+  // рядом через 2 бл. вдоль неё. Нет комнат (другая карта) — null, как было.
+  const seat = new Map<string, number>()
+  ctx.humanHome = (h) => {
+    const rooms = (L?.spawnRooms || []).filter(r => r.team === HUMAN_TEAM)
+    if (!rooms.length) return null
+    if (!seat.has(h)) seat.set(h, seat.size)
+    const k = seat.get(h) as number; const r = rooms[k % rooms.length]
+    const du = [0, -2, 2, -4, 4][Math.floor(k / rooms.length) % 5]
+    return { x: X + r.spot.x + du + 0.5, y: Y + r.spot.y, z: Z + r.spot.z + 0.5, yaw: r.spot.yaw, room: r.id }
+  }
+  // Выбыл (соло): после возрождения — зритель над полем до конца раунда; раунд сменился раньше — старт раунда уже вернул его.
+  ctx.humanOutWatch = async (h) => {
+    const r = ctx.round
+    const gone = () => ctx.round !== r || ctx.between
+    let ok = 0
+    for (let t = 0; t < 240 && ok < 2 && !gone(); t++) { await sleep(500); const hp = /([\d.]+)f/.exec(String(await rcon(i, `data get entity ${h} Health`).catch(() => ''))); ok = hp && +hp[1] > 0 ? ok + 1 : 0 }
+    if (gone() || ok < 2) return
+    for (const c of [`gamemode spectator ${h}`, `tp ${h} ${X} ${Y + 28} ${Z}`, `title ${h} actionbar {"text":"Выбыл до конца раунда — смотри за своими","color":"gray"}`]) await rcon(i, c).catch(() => {})
+    log(`👻 ${h} выбыл до конца раунда ${r} (людей в бою: ${ctx.humanNames.filter(n => !ctx.humanOut.has(n)).join(', ') || 'никого'})`)
+  }
   // Набор живому игроку после смерти (пользователь 10.10: «после смерти выдавай всё снова и скорость»): силач против толпы.
   // ARMS_HUMAN_KIT=0 — выкл. Вещи погибшего остаются на земле — их лутают боты.
   const E = 'enchantments={'
@@ -33,7 +54,10 @@ export function installHumanKit (ctx: ArenaContext) {
     if (ok < 2) { log(`🎽 ${h} не возродился за 2 мин — набор не выдан`); return }
     // Соло (12.10: «возрождает не в Колизее — спавн ломается, блоки на арене меняются»): точку возрождения боты застраивают,
     // и сервер кидает на спавн мира, — после смерти ставлю сам на красную сторону, на свободный верх (как ботов).
-    if (SOLO && L) { const s0 = ctx.armsHome({ team: 'red' }, 0); await rcon(i, `spreadplayers ${Math.floor(s0.x)} ${Math.floor(s0.z)} 0 3 under ${Y + 3} false ${h}`).catch(() => {}) }
+    // Есть комнаты спавна (колизей, 14.10) — в свою комнату, её боты не застраивают сами по себе.
+    const home = ctx.humanHome(h)
+    if (home) await rcon(i, `tp ${h} ${home.x} ${home.y} ${home.z} ${home.yaw} 0`).catch(() => {})
+    else if (SOLO && L) { const s0 = ctx.armsHome({ team: 'red' }, 0); await rcon(i, `spreadplayers ${Math.floor(s0.x)} ${Math.floor(s0.z)} 0 3 under ${Y + 3} false ${h}`).catch(() => {}) }
     // Уже в наборе (зашёл с ним, раунд сменился) — не дублировать.
     if (/passed/i.test(String(await rcon(i, `execute if items entity ${h} container.* minecraft:netherite_sword if items entity ${h} armor.chest minecraft:netherite_chestplate`).catch(() => '')))) return
     for (const [slot, it] of HUMAN_ARMOR) await rcon(i, `item replace entity ${h} ${slot} with minecraft:${it}`).catch(() => {})
@@ -50,13 +74,16 @@ export function installHumanKit (ctx: ArenaContext) {
     const other = HUMAN_TEAM === 'red' ? 'blue' : 'red'
     rel[HUMAN_TEAM][h] = 20; rel[other][h] = -20
     const mate = bots.find(b => b.team === HUMAN_TEAM)
-    const at = mate ? ctx.armsHome(mate, bots.indexOf(mate)) : SOLO ? ctx.armsHome({ team: HUMAN_TEAM }, 0) : null
+    // Комната спавна (колизей) — старт и точка возрождения; иначе — к своим, как было.
+    const home = ctx.humanHome(h)
+    const at = home || (mate ? ctx.armsHome(mate, bots.indexOf(mate)) : SOLO ? ctx.armsHome({ team: HUMAN_TEAM }, 0) : null)
     const res: string[] = []
     for (const c of [`team join ${HUMAN_TEAM} ${h}`, `gamemode survival ${h}`, `clear ${h}`, `effect clear ${h}`, `effect give ${h} minecraft:instant_health 1 10 true`,
-      `effect give ${h} minecraft:saturation 1 20 true`, ...(at ? [`tp ${h} ${at.x} ${at.y} ${at.z}`] : [])]) res.push(String(await rcon(i, c, 15000).catch(e => 'ошибка: ' + e.message)).slice(0, 40))
+      `effect give ${h} minecraft:saturation 1 20 true`, ...(at ? [`tp ${h} ${at.x} ${at.y} ${at.z}${home ? ` ${home.yaw} 0` : ''}`] : []),
+      ...(home ? [`spawnpoint ${h} ${Math.floor(home.x)} ${Math.floor(home.y)} ${Math.floor(home.z)} ${home.yaw}`] : [])]) res.push(String(await rcon(i, c, 15000).catch(e => 'ошибка: ' + e.message)).slice(0, 40))
     // Набор — в фоне: после смерти он на экране возрождения, а сброс раунда ждать его не должен.
     if (SOLO) ctx.kitHuman(h).catch(() => {})
-    log(`🧍 ${h} — в ${HUMAN_TEAM === 'red' ? 'красных' : 'синих'}, на старт ${at ? `${Math.round(at.x)} ${Math.round(at.y)} ${Math.round(at.z)}` : '?'}: ${res.filter(r => /ошибка|Unknown|No player|not found/i.test(r)).join('; ') || 'ок'}`)
+    log(`🧍 ${h} — в ${HUMAN_TEAM === 'red' ? 'красных' : 'синих'}, на старт ${home ? `${home.room} ` : ''}${at ? `${Math.round(at.x)} ${Math.round(at.y)} ${Math.round(at.z)}` : '?'}: ${res.filter(r => /ошибка|Unknown|Incorrect|No player|not found/i.test(r)).join('; ') || 'ок'}`)
   }
 }
 

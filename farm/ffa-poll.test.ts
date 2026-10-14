@@ -113,7 +113,7 @@ test('owned round reset parks bodies before the clone and teleports before resto
   const events: string[] = [], state = { ownRed: { mode: 'survival', safe: false }, ownBlue: { mode: 'survival', safe: false } }
   const bots = Object.keys(state).map((name, k) => ({ name, team: k ? 'blue' : 'red', c: { call: async method => events.push(`${method} ${name}`) } }))
   const context: any = { arms: true, between: false, round: 1, roundWins: { red: 0, blue: 0 }, bots,
-    names: Object.keys(state), kills: {}, out: new Set(), deadNow: new Set(), HUMAN_TEAM: null, humanDown: false,
+    names: Object.keys(state), kills: {}, out: new Set(), deadNow: new Set(), HUMAN_TEAM: null, humanOut: new Set(),
     log() {}, sleep: async () => {}, i: 31, BOX: 'fixture',
     rcon: async (_slot, command) => {
       events.push(command)

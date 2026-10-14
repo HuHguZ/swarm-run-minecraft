@@ -35,14 +35,15 @@ export interface ArenaContext {
   perches: any[]
   // изменяемое между частями — только через ctx.<поле>
   between: boolean; round: number; stop: boolean; roundT0: number; lastKillAt: number; logAt: number
-  humanNames: string[]; humanDown: boolean; spawnAt: any
+  // выбывшие до конца раунда люди (соло: раунд синих, когда выбыли все)
+  humanNames: string[]; humanOut: Set<string>; spawnAt: any
   stockChests: (round: number, only?: any[] | null) => Promise<void>
   restoreArena: () => Promise<void>
   // ставят части: map — home, place, armsHome; rounds — readDeaths … endRound; humans — kitHuman … hostile;
   // supply — kitHas … labTask; radio — tell … callout; dangers — dodgeAway; watch — swarmDriver, enemiesOf
   home: Fn; place: Fn; armsHome: Fn
   readDeaths: Fn; board: Fn; reset: Fn; roundKit: Fn; giveBlue: Fn; spreadBots: Fn; endRound: Fn
-  kitHuman: Fn; humanStart: Fn; emote: Fn; eyeOf: Fn; relSay: Fn; hostile: Fn
+  kitHuman: Fn; humanStart: Fn; humanHome: Fn; humanOutWatch: Fn; emote: Fn; eyeOf: Fn; relSay: Fn; hostile: Fn
   kitHas: Fn; needOf: Fn; spare: Fn; armsPrep: Fn; brewTask: Fn; labTask: Fn
   tell: Fn; short: Fn; alive: Fn; radioSay: Fn; callout: Fn
   dodgeAway: Fn

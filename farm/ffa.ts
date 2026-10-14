@@ -84,7 +84,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
     humans: {},
     rel: { red: {}, blue: {} },
     humanNames: [],
-    humanDown: false
+    humanOut: new Set<string>()
   }
   const ctx = base as ArenaContext
   if (arms) await setupArmsMap(ctx)

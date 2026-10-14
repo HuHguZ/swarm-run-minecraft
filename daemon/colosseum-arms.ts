@@ -5,7 +5,8 @@
 //   · 8 камер (carceres) под подиумом и первым ярусом рядов, вход с песка; по 2 сундука, в 4 — тайник за досками;
 //   · лаборатория под северной ложей (стойка, верстак, печь, наковальня, стол, вода), оружейная под пульвинаром (юг);
 //   · 4 лестницы с песка на террасу (диагонали) — дальше ряды, пояса и вомитории на галереи 2-го и 3-го ярусов;
-//   · сундуки в галереях всех трёх ярусов, на первом — 2 тайника в стене; старты — у ворот (запад красным, восток синим).
+//   · сундуки в галереях всех трёх ярусов, на первом — 2 тайника в стене; старты — у ворот (запад красным, восток синим);
+//   · комнаты спавна людей — по две у каждых ворот, сквозные: колоннада в тоннель и портал на песок (spawnRooms).
 // Тот же формат, что arms-layout (farm/ffa.js arms): chests, rooms, secret, spawns, lab, areas (зоны лута с высотой), half.
 const C = require('./colosseum')
 
@@ -142,7 +143,7 @@ function generate (seed = 'colos') {
   }
 
   // ---- 5. Укрытия на песке: обломки колонн (1–3) и стенки 3×2 по касательной; не на дороге, лестницах, у дверей и лож.
-  const avoid = [...CAMERAS, ...STAIRS, 0, 90, 180, 270].map(deg)
+  const avoid = [...CAMERAS, ...STAIRS, 0, 90, 180, 270, 10, 170, 190, 350].map(deg) // 10/170/190/350 — боковые порталы комнат спавна
   const angDist = (a, b) => { const v = Math.abs(((a - b) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI); return v }
   let placed = 0
   for (let tries = 0; tries < 400 && placed < 22; tries++) {
@@ -230,10 +231,68 @@ function generate (seed = 'colos') {
   for (const [sx, sz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) out.areas.push({ id: `поле${sx}${sz}`, x: 12 * sx, y: 0, z: 12 * sz })
   for (const d of [20, 160, 200, 340]) { const q = at(deg(d), -5); out.areas.push({ id: `песок${d}`, x: q.x, y: 0, z: q.z }) }
 
+  // ---- 6. Комнаты спавна людей (пользователь 14.10: «комнаты закрытые с освещением для спавна игроков, интегрировать в
+  // колизей, чтобы красиво; сундуки с лутом с некоторой вероятностью»; затем: «проход только широкий — узкий не для толпы
+  // ботов; двери не надо, сквозной»): по две у каждых ворот, по бокам тоннеля, в засыпке под рядами (кольца 6..16, |z| 3..9,
+  // высота 4). Комната сквозная: к тоннелю — колоннада (проёмы 2+3+2), к арене — боковой портал 5 бл. сквозь подиум рядом с
+  // воротами. Запад — красным, восток — синим (как старты). Внутри: колонны по углам, пилястры, пол — шахматка
+  // кварц/песчаник с каймой, дорожка и знамя цвета команды, свет в потолке. Не в areas: сундуки боты видят только глазами.
+  const spawnRooms: any[] = []
+  for (const sx of [-1, 1]) {
+    const team = sx < 0 ? 'red' : 'blue'
+    for (const sz of [-1, 1]) {
+      const id = `спавн-${sx < 0 ? 'запад' : 'восток'}-${sz < 0 ? 'север' : 'юг'}`
+      // u — вдоль тоннеля от поля наружу (1..11 внутри, 0 и 12 — торцы), v = |z| (3..9 внутри, 2 — стена тоннеля, 10 — задняя).
+      const X = (u) => sx * (A1 + 5 + u); const Zv = (v) => sz * v
+      const front = sz > 0 ? 'north' : 'south' // к тоннелю
+      for (let u = 1; u <= 11; u++) {
+        for (let v = 3; v <= 9; v++) {
+          const rim = u === 1 || u === 11 || v === 3 || v === 9
+          S(X(u), -1, Zv(v), rim ? 'quartz_bricks' : (u + v) % 2 ? 'cut_sandstone' : 'smooth_quartz')
+          for (let y = 0; y <= 3; y++) S(X(u), y, Zv(v), 'air')
+          S(X(u), 4, Zv(v), 'smooth_quartz')
+        }
+      }
+      // Стены: цоколь кварцем, фриз резным песчаником (задняя и торцы).
+      for (let u = 0; u <= 12; u++) { S(X(u), 0, Zv(10), 'smooth_quartz'); S(X(u), 3, Zv(10), 'cut_sandstone') }
+      for (const u of [0, 12]) for (let v = 3; v <= 9; v++) { S(X(u), 0, Zv(v), 'smooth_quartz'); S(X(u), 3, Zv(v), 'cut_sandstone') }
+      // Пилястры задней стены и колонны в углах.
+      for (const u of [4, 8]) { for (let y = 0; y <= 2; y++) S(X(u), y, Zv(10), 'quartz_pillar[axis=y]'); S(X(u), 3, Zv(10), 'chiseled_quartz_block') }
+      for (const u of [1, 11]) for (const v of [3, 9]) { for (let y = 0; y <= 2; y++) S(X(u), y, Zv(v), 'quartz_pillar[axis=y]'); S(X(u), 3, Zv(v), 'chiseled_quartz_block') }
+      // Свет: светогриб в центре потолка, два фонаря под резными кессонами.
+      S(X(6), 4, Zv(6), 'shroomlight')
+      for (const u of [3, 9]) { S(X(u), 4, Zv(6), 'chiseled_quartz_block'); S(X(u), 3, Zv(6), 'lantern[hanging=true]') }
+      // Колоннада к тоннелю: стена тоннеля открыта на u 2..10, две колонны (u 4, 8), порог кварцем, архитрав сверху.
+      for (let u = 1; u <= 11; u++) S(X(u), 3, Zv(2), 'smooth_quartz')
+      for (let u = 2; u <= 10; u++) {
+        const col = u === 4 || u === 8
+        S(X(u), -1, Zv(2), 'quartz_bricks')
+        for (let y = 0; y <= 2; y++) S(X(u), y, Zv(2), col ? 'quartz_pillar[axis=y]' : 'air')
+      }
+      // Боковой портал на арену: проход v 4..8 от торца комнаты сквозь засыпку и подиум до песка (n < 0), высота 3;
+      // в лице подиума — перемычка резным кварцем и колонны по краям, свет в потолке прохода (плитка на террасе).
+      const face = (v) => { let u = 0; while (C.foot(A1, B1, X(u - 1), Zv(v)).n >= 0) u--; return u }
+      for (let v = 4; v <= 8; v++) {
+        for (let u = 0; u >= face(v); u--) { S(X(u), -1, Zv(v), 'cut_sandstone'); for (let y = 0; y <= 2; y++) S(X(u), y, Zv(v), 'air') }
+        S(X(face(v)), 3, Zv(v), 'chiseled_quartz_block')
+      }
+      for (const v of [3, 9]) for (let y = 0; y <= 3; y++) S(X(face(v)), y, Zv(v), 'quartz_pillar[axis=y]')
+      S(X(-2), 3, Zv(6), 'glowstone')
+      // Дорожка от тоннеля к знамени, знамя цвета команды на задней стене.
+      for (let v = 3; v <= 6; v++) S(X(6), 0, Zv(v), `${team}_carpet`)
+      S(X(6), 2, Zv(9), `${team}_wall_banner[facing=${front}]{patterns:[{color:"yellow",pattern:"minecraft:border"},{color:"yellow",pattern:"minecraft:stripe_middle"}]}`)
+      // Сундуки у задней стены — места; есть ли сундук в раунде, решает набивка (ARMS_SPAWN_CHEST, ffa loot).
+      chest(X(2), 0, Zv(9), front, id, 'spawn', 2)
+      chest(X(10), 0, Zv(9), front, id, 'spawn', 2)
+      // Точка — в конце дорожки, у знамени (не на ковре: точке возрождения нужна целая клетка воздуха), лицом к тоннелю.
+      spawnRooms.push({ id, team, spot: { x: X(6), y: 0, z: Zv(7), yaw: front === 'north' ? 180 : 0 } })
+    }
+  }
+
   return {
     seed: String(seed), version: 1, map: 'colosseum', half: Math.ceil(p.outA + 3), y0: -4, y1: 40, R,
     chests: out.chests, rooms: out.rooms, secret: out.secret, areas: out.areas, set: out.set, field: out.field,
-    spawns: [{ x: -36, y: 0, z: 0, yaw: -90 }, { x: 36, y: 0, z: 0, yaw: 90 }],
+    spawns: [{ x: -36, y: 0, z: 0, yaw: -90 }, { x: 36, y: 0, z: 0, yaw: 90 }], spawnRooms,
     lab, facade: FACADE, under: UNDER
   }
 }

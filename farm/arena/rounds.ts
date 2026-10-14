@@ -24,9 +24,9 @@ export function installRounds (ctx: ArenaContext) {
         const hm = !m && /\]: (\S+) (was .+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
         if (hm && humans[hm[1]] && !names.includes(hm[1])) {
           log(`☠ ${hm[1]} ${hm[2]}`)
-          // Соло (12.10: «умер — раунд полностью заново, обычный конец раунда»): красный выбыл — победа синих, сброс арены;
-          // набор и место выдаст старт раунда (humanStart → kitHuman после возрождения).
-          if (SOLO) { ctx.humanDown = true; ctx.endRound().catch(() => {}) } else ctx.kitHuman(hm[1])
+          // Соло (12.10: «умер — раунд заново»; 14.10, двое людей: «логика n людей»): погибший выбыл до конца раунда (зритель),
+          // как бот; раунд синих — когда выбыли все люди. Набор и место выдаст старт раунда (humanStart → kitHuman).
+          if (SOLO) { ctx.humanOut.add(hm[1]); ctx.humanOutWatch(hm[1]).catch(() => {}); ctx.endRound().catch(() => {}) } else ctx.kitHuman(hm[1])
           // Его вещи на земле — лут для бойцов, не подарок (10.10: выпавший трезубец засчитался союзом).
           if (humans[hm[1]].p) deathAt[hm[1]] = { p: humans[hm[1]].p, at: Date.now(), looted: new Set<string>(), inv: {}, armor: {}, team: null }
         }
@@ -74,7 +74,9 @@ export function installRounds (ctx: ArenaContext) {
   // Раунд дольше ROUND_S (420 реальных с) — победа той, где живых больше (ничья — по убийствам).
   ctx.endRound = async function endRound (timeout = false, forced: string | null = null) {
     if (!arms || ctx.between) return
-    const alive = (t) => bots.filter(b => b.team === t && !out.has(b.name)).length + (SOLO && t === HUMAN_TEAM && !ctx.humanDown ? 1 : 0)
+    // Люди в соло: живые — онлайн и не выбывшие; пока никого нет онлайн — считаю одного (раунд ждёт людей, а не кончается).
+    const humansIn = () => ctx.humanNames.length ? ctx.humanNames.filter(h => !ctx.humanOut.has(h)).length : 1
+    const alive = (t) => bots.filter(b => b.team === t && !out.has(b.name)).length + (SOLO && t === HUMAN_TEAM ? humansIn() : 0)
     let win = alive('red') === 0 ? 'blue' : alive('blue') === 0 ? 'red' : null
     if (!win && timeout) {
       const kt = (t) => names.filter(n => teamOf(n) === t).reduce((a, n) => a + (kills[n] || 0), 0)
@@ -117,7 +119,7 @@ export function installRounds (ctx: ArenaContext) {
     // По списку онлайн, а не по карте humans: под нагрузкой сброса раунда чтение Pos у неё отваливается (10.10: «не телепортировало»).
     await ctx.spreadBots()
     ctx.readDeaths()
-    out.clear(); deadNow.clear(); ctx.humanDown = false
+    out.clear(); deadNow.clear(); ctx.humanOut.clear()
     for (const b of bots) await rcon(i, `gamemode survival ${b.name}`)
     await ctx.giveBlue()
     if (HUMAN_TEAM) for (const h of new Set([...ctx.humanNames, ...Object.keys(humans)])) await ctx.humanStart(h)
@@ -202,8 +204,10 @@ export async function fighterLoop (ctx: ArenaContext, b) {
       out.add(b.name)
       await b.c.call('stop').catch(() => {})
       if (ctx.between || ctx.round !== deathRound) continue
-      // Анимация смерти (10.10): тело лежит, пока демон не возродится (ND_RESPAWN_MS), — зрителем только после.
-      for (let t = 0; t < 12 && !((pos[b.name]?.hp ?? 0) > 0 && t >= 3); t++) await sleep(500)
+      // Анимация смерти (10.10; 14.10 «опять пропала»): тело лежит, пока демон не возродится (ND_RESPAWN_MS), и не меньше
+      // 3.5 с от смерти — зрителем только после (старый хп из опроса давал зрителя через 1.5 с, тело исчезало на лету).
+      const diedAt = ctx.deathAt[b.name]?.at || Date.now()
+      for (let t = 0; t < 16 && !((pos[b.name]?.hp ?? 0) > 0 && Date.now() - diedAt >= 3500); t++) await sleep(500)
       for (const c of [`gamemode spectator ${b.name}`, `tp ${b.name} ${X} ${Y + 28} ${Z}`]) {
         if (ctx.between || ctx.round !== deathRound) break
         await rcon(i, c).catch(() => {})

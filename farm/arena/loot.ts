@@ -27,6 +27,9 @@ export function makeStockChests (ctx: ArenaContext) {
     const stats: any = { weapons: 0, armor: 0, items: 0 }
     const used = new Map<string, number>()
     for (const c of (only || L.chests)) {
+      // Сундуки комнат спавна (14.10: «сундуки с лутом с некоторой вероятностью»): место есть всегда, сундук в раунде — с
+      // вероятностью ARMS_SPAWN_CHEST (0.5), иначе пусто.
+      if (c.kind === 'spawn' && !only && rnd() >= Number(process.env.ARMS_SPAWN_CHEST ?? 0.5)) { await rcon(i, `setblock ${X + c.x} ${Y + c.y} ${Z + c.z} minecraft:air`).catch(() => {}); continue }
       const hidden = /secret|under|niche/.test(c.kind)
       const mat = () => (rnd() < (SOLO ? 0.75 : hidden ? 0.6 : 0.25) ? 'diamond' : 'iron')
       const gen = () => {
@@ -132,7 +135,7 @@ export function makeStockChests (ctx: ArenaContext) {
     // Полный набор на взрывное лечение — на каждой половине карты (запад — красным, восток — синим), каждый
     // ингредиент в своём сундуке: сварит команда, что обыщет свою сторону и свезёт алхимику (10.10: случайно — не собирался).
     for (const side of [-1, 1]) {
-      const mine = L.chests.filter(c => c.x * side > 0).sort(() => rnd() - 0.5)
+      const mine = L.chests.filter(c => c.x * side > 0 && c.kind !== 'spawn').sort(() => rnd() - 0.5) // сундука комнаты в раунде может не быть
       const SET = ['nether_wart 3', 'glistering_melon_slice 3', 'glowstone_dust 3', 'gunpowder 3', 'blaze_powder 2', 'glass_bottle 3', 'fermented_spider_eye 1']
       // Кузница: слитки и алмазы — вместе с палкой (в одном сундуке: крафт меча без своза).
       for (const [k, pair] of [['iron_ingot 2', 'stick 1'], ['diamond 2', 'stick 1']].entries()) {
