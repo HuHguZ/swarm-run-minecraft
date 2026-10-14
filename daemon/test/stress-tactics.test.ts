@@ -308,6 +308,8 @@ test('no last stand under water out of air: Surface wins among drowned (cl-l 14.
   const ids = candidates(tactical({ contact: true, drowning: true, water: true, escapeExhausted: true, enemies: [drowned] })).map(candidate => candidate.id)
   assert.equal(ids[0], 'Surface', ids.join(','))
   assert.ok(!ids.includes('LastStand'))
+  const afloat = candidates(tactical({ contact: true, inWater: true, escapeExhausted: true, enemies: [drowned] })).map(candidate => candidate.id)
+  assert.ok(!afloat.includes('LastStand'), 'head above water: still no stand in it (cl-s 14.10)')
 })
 
 test('a crit jump keeps the ground route: feet a block up still see the run they jumped from (farm slot 30: Fight<->LastStand)', () => {

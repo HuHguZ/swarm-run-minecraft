@@ -256,10 +256,22 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
   let target = null
 
   try {
+    let plugged = false
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
       const route = findSwimRoute(bot, { visibleOnly, radius })
       target = route?.target || null
-      if (!route) break
+      if (!route) {
+        // Шахта залита сверху (своя копка вверх в воду, cl-n 14.10: «не нашёл доступного пути из воды», смерть): воздуха в
+        // досягаемости нет — заткнуть клетку над головой; текущая вода в шахте без притока стекает за тики.
+        if (!plugged && headWet(bot)) {
+          plugged = true
+          const above = bot.entity.position.floored().offset(0, 2, 0)
+          let r = null
+          try { r = await require('./build').placeBlockAt(bot, above, { timeoutMs: 1500, honest: true, steady: true, ctl }) } catch {}
+          if (r && r.ok) { await sleep(1000); continue }
+        }
+        break
+      }
       if (route.kind === 'air' && !headWet(bot)) break
       const next = route.path[0] || route.target
       const horizontal = Math.hypot(next.x + 0.5 - bot.entity.position.x, next.z + 0.5 - bot.entity.position.z)

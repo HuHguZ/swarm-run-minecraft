@@ -124,6 +124,16 @@ for (const blocks of [32, 0]) test(`climbBack reuses swimming to reach the rim w
   } finally { s.close() }
 })
 
+test('a shaft flooded from above with no air in reach is plugged over the head (cl-n 14.10 drowned)', async () => {
+  const s = scene({ change: q => q.y <= 0 || q.x !== 0 || q.z !== 0 ? 'stone' : q.y < 20 ? 'water' : 'air' })
+  try {
+    assert.equal(movement.findSwimRoute(s.bot), null, 'no breath within the bounded search')
+    s.bot.placeBlock = async (ref, face) => { s.placements.push(ref.position.plus(face)) }
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 3000 }))
+    assert.ok(s.placements.some(p => p.equals(new Vec3(0, 3, 0))), JSON.stringify({ r, placements: s.placements }))
+  } finally { s.close() }
+})
+
 test('swim cancel arriving during look cannot send movement controls', async () => {
   const s = scene()
   s.bot.lookAt = async () => { s.ctl.aborted = true }
