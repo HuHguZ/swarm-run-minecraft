@@ -4934,7 +4934,13 @@ ws.on('open', async () => {
         stage = '-'
         await sense()
         if (sit.inWater) await leaveWater()
-        else await act('wait', { seconds: 20 })
+        else {
+          // Ждать — в закрытом: на ступенях своей лестницы скелет из пещеры стрелял, а ожидание шло по 20 с под стрелами (cl-an2
+          // 14.10: «wait 20» ×5 между боями со скелетом, смерть на 12-й мин). Замкнутый карман refuge признаёт сразу, коробка — 2–3 с.
+          const r = await act('refuge', { minHp: 20, maxSeconds: 60, stayIn: true, why: 'ночь: жду внизу в закрытом' })
+          const shut = !!(r && r.detail && (r.detail.stayed || r.detail.how === 'pocket'))
+          await act('wait', { seconds: shut ? 20 : 5 })
+        }
         continue
       }
       if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { stage = '-'; await ensurePick() }
