@@ -1778,7 +1778,9 @@ const castNear = () => !!known.lava && lavaSourceKnown && !!state.pos && Math.hy
 // поверху ночью работаю в полном железе (15).
 // С сумерек (11840), а не с ночи: нору копать до спавна мобов, а не под стрелами (cl-u 14.10: смерть на 10-й мин, через минуту
 // после темноты, пока искалось сухое место; cl-z: паук на 9.8).
-const nightHold = () => dim() === 'overworld' && !known.portal && (!!sit.night || !!sit.dusk) && state.playPolicy?.mode === 'speedrun' &&
+// И после литья портала: сборы (еда, кровать) ночью поверху — смерть от скелета на 173-й мин (cl-af 14.10). С порталом ночь
+// уходит в Ад, если готов, иначе — та же нора/коробка/работа внизу.
+const nightHold = () => dim() === 'overworld' && (!!sit.night || !!sit.dusk) && state.playPolicy?.mode === 'speedrun' &&
   armorPointsNow() < 15 && have(/_pickaxe$/) > 0 && process.env.ND_NIGHT_DIG !== '0'
 // Копать ночью вниз — только с деревом на сменные кирки: каменной хватает на один спуск лестницей (131 удар), без палок она
 // ломалась внизу, подъём рукой сквозь камень — 8 мин (cl-q 14.10). Без дерева ночь — в норе или коробке.
@@ -2065,6 +2067,7 @@ let quickHuntAt = 0
 let nightDigAt = 0
 let nightCastAt = 0
 let nightHeld = false
+let nightEnterAt = 0
 let foodSearchAt = 0
 async function quickHunt () {
   await sense()
@@ -4856,15 +4859,23 @@ ws.on('open', async () => {
       if (nightHeld && !nightHold() && !died) {
         nightHeld = false
         await sense()
-        if (!sit.surface && !sit.night && dim() === 'overworld' && !known.portal) { stage = '-'; log('рассвет — наверх своей лестницей'); await toSurface() }
+        if (!sit.surface && !sit.night && dim() === 'overworld') { stage = '-'; log('рассвет — наверх своей лестницей'); await toSurface() }
       }
       if (!died && nightHold()) {
         nightHeld = true
-        if (castNear() && gameClock.now() >= nightCastAt) {
+        if (!known.portal && castNear() && gameClock.now() >= nightCastAt) {
           nightCastAt = gameClock.now() + 120000
           stage = 'cast'
           log('ночь, но лава рядом и набор литья готов — литьё')
           try { await stageRun('cast')() } catch (e) { if (e.stopCampaign) throw e; log(`ночное литьё: ${e.message}`) }
+          continue
+        }
+        // Портал есть и в Ад готов — ночь не пережидать, а уйти в Ад (там нет ночи); портал рядом.
+        if (known.portal && READY.nether() && portalFar() < 96 && gameClock.now() >= nightEnterAt) {
+          nightEnterAt = gameClock.now() + 120000
+          stage = 'nether'
+          log('ночь, портал рядом и в Ад готов — ухожу в Ад')
+          try { await enterNether() } catch (e) { if (e.stopCampaign) throw e; log(`ночью в Ад: ${e.message}`) }
           continue
         }
         // Поверху ночью — сначала нора на месте (3 вниз, крыша), работа вниз — уже из неё: скелет бьёт за 15 бл., пока тело ищет
