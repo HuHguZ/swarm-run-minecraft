@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
 
+// Путь sealedGold с планом штрека (знание scan); вслепую его заменяет visibleGold (Codex q10) — здесь прежний путь (blind: false).
 interface Controller { aborted: boolean; onAbort: Array<() => void> }
 interface GuardResult { acted?: boolean; cancelled?: boolean; how?: string }
 interface Guard { react(session: unknown, ctl: Controller, options?: unknown): Promise<GuardResult> }
@@ -77,6 +78,7 @@ function sealedFixture(results: GuardResult[]) {
       if (name === '.././sealed') return { exposure: () => [], keyV: (v: Vec3) => v.toString() }
       if (name === '.././tunnel') return { lowPicks: () => 1 }
       if (name === '.././nether-route') return { bruteSpots: () => [] }
+      if (name === '.././nether-cover') return { blind: () => false }
       if (name === '.././assess') return { gearOf: () => ({ armor: 0, tough: 0, worn: [] }) }
       if (name === '.././ne-guard') return { hot: () => requests < results.length ? { why: 'hoglin в 2.5 бл.' } : null,
         react: async () => {

@@ -19,7 +19,7 @@ const SPIRAL = D.SPIRAL
 const LIQUID = /^(water|lava|bubble_column)$/
 const GOLD = /^(nether_gold_ore|gilded_blackstone)$/
 const BAD_FLOOR = /magma|fire|campfire/
-const STOP = /^(bedrock|spawner|nether_portal|end_portal|end_portal_frame)$|^infested_/
+const STOP = /^(bedrock|spawner|gold_block|chest|trapped_chest|barrel|nether_portal|end_portal|end_portal_frame)$|^infested_/
 const FOES = /^(piglin|piglin_brute|hoglin|zoglin|skeleton|wither_skeleton|ghast|blaze|magma_cube)$/
 const key = p => `${p.x},${p.y},${p.z}`
 const airish = b => !!b && b.boundingBox === 'empty' && !LIQUID.test(b.name) && b.name !== 'nether_portal'
@@ -102,6 +102,8 @@ async function closedStep (session, ctl, d, opts, out) {
     const flr = D.seen(bot, N.offset(0, -1, 0))
     // Враги на виду (пиглины без нашего золота, бруты, хоглины, скелеты, гасты) — коридор с открытым фронтом не строить: они идут
     // к нему (g2-5-2, g2-7-2: прибытие, коридор, пиглины — смерть на 1-й мин). Закладка и другой ход.
+    // Пиглины — тоже повод не строить коридор и с золотой вещью: открытый фронт через двор бастиона выводил к брутам (g10: с
+    // поблажкой для пиглинов при золоте — 3 смерти от брутов из 6).
     const foes = (() => { try { return require('./perception/eyes').entities(bot, { radius: 32 }).some(e => e.seen && e.dist != null && e.dist <= 24 && FOES.test(e.name)) } catch { return false } })()
     if (opts.corridor && !foes && !(opts.stop && out.view && opts.stop(out.view)) && flr && flr.boundingBox === 'block' && !BAD_FLOOR.test(flr.name) &&
       require('./sealed').fillerCount(bot) >= 24 && !a.wet.length) {
@@ -175,12 +177,13 @@ async function descend (session, ctl, n, d, out, minY) {
   return went
 }
 
-async function closedBore (session, ctl, target, { deadline = gameClock.now() + 40000, maxSteps = 24, onOpen = null, goldOk = null, minY = 40, stop = null }: any = {}) {
+async function closedBore (session, ctl, target, { deadline = gameClock.now() + 40000, maxSteps = 24, onOpen = null, goldOk = null, minY = 40, stop = null, adjacent = false, own = null }: any = {}) {
   const bot = session.bot
   const out: any = { dug: 0, placed: 0, moved: 0, mouths: 0, gold: 0, down: 0, unsealed: 0 }
   const mouthSet = new Set()
   Object.defineProperty(out, 'mouthSet', { value: mouthSet, enumerable: false })
-  const done = (ok, why = undefined) => ({ ok, ...out, why, at: xyz(bot.entity.position) })
+  const remember = () => { if (own) for (const p of bodyOf(feetCell(bot))) own.add(key(p)) }
+  const done = (ok, why = undefined) => { remember(); return { ok, ...out, why, at: xyz(bot.entity.position) } }
   try { bot.pathfinder.setGoal(null) } catch {}
   const same = (a, b) => !!a && !!b && a[0] === b[0] && a[1] === b[1]
   const axesNow = () => {
@@ -238,7 +241,33 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
     if (ctl.aborted) return done(false, 'прервано')
     if (gameClock.now() > deadline) return done(false, 'время вышло')
     const F = feetCell(bot)
-    if (Math.abs(target.x - F.x) <= 1 && Math.abs(target.z - F.z) <= 1) return done(true)
+    remember()
+    if (adjacent) {
+      if (target.y >= F.y && bodyOf(F).some(p => Math.abs(p.x - target.x) + Math.abs(p.y - target.y) + Math.abs(p.z - target.z) === 1)) return done(true)
+      if (Math.hypot(target.x - F.x, target.z - F.z) <= 3 && (target.y < F.y || target.y > F.y + 1)) {
+        // Высота цели — из шаблона; ступень и её опора узнаются глазами при вскрытии.
+        const d0 = axesNow().main; const k = Math.max(0, SPIRAL.findIndex(d => same(d, d0)))
+        const protectsTarget = d => [F.offset(d[0], 0, d[1]), F.offset(d[0], 1, d[1]), F.offset(d[0], -1, d[1])].some(p => p.equals(target))
+        let moved = false
+        if (target.y < F.y) {
+          const r = await D.stairStep(session, ctl, k, { careful: true, noDrop: true, early: true, bricks: STOP, throughBricks: false, only: d => !protectsTarget(d) })
+          out.dug += r.dug || 0; out.placed += r.placed || 0; moved = !!r.moved
+          if (moved) out.down++
+          else out.downWhy = r.why
+        } else {
+          for (let i = 0; i < 4 && !moved && !ctl.aborted; i++) {
+            const d = SPIRAL[(k + i) % 4]
+            if (protectsTarget(d)) continue
+            const r = await D.upStep(session, ctl, F.offset(d[0], 0, d[1]), { bricks: STOP })
+            out.dug += r.dug || 0; moved = !!r.ok
+            if (moved) out.moved++
+          }
+        }
+        out.unsealed += await seal(bot, bodyOf(feetCell(bot)), bodyOf(F), out)
+        if (!moved) return done(false, out.downWhy || 'ступень к цели не прошла')
+        continue
+      }
+    } else if (Math.abs(target.x - F.x) <= 1 && Math.abs(target.z - F.z) <= 1) return done(true)
     if (corridorDir) {
       const rc: any = await closedStep(session, ctl, corridorDir, { onOpen, goldOk, mouths: mouthSet, corridor: true, stop }, out)
       if (out.view && stop && stop(out.view)) return done(false, 'постройка видна из коридора')

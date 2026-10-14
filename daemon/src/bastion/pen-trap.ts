@@ -174,7 +174,7 @@ function seenFace (bot, v) {
 // Сломать блок только через грань, которую видит прицел (seenFace): взгляд в видимую точку этой грани, в block_dig —
 // эта грань (SL.digCell face+aim); иначе 'unseen'. Раньше хватало «какая-то точка видна», а копал SL.digCell с гранью
 // 'auto' — взгляд в центр блока, у боковых траншей сквозь пол Y0 (замечание проверки раунда 1).
-async function digSeen (bot, q) {
+async function digSeen (bot, q, opts: any = {}) {
   const SL = require('../sealed')
   const v = V(q)
   const b = bot.blockAt(v)
@@ -182,7 +182,7 @@ async function digSeen (bot, q) {
   if (SL.classOf(b) === SL.AIR) return 'air'
   const sf = seenFace(bot, v)
   if (!sf) return 'unseen'
-  return SL.digCell(bot, v, { face: sf.face, aim: sf.aim })
+  return SL.digCell(bot, v, { ...opts, face: sf.face, aim: sf.aim })
 }
 
 // Несколько клеток подряд, каждая — через видимую грань (digSeen); порядок — какая сейчас видна: вниз по ступени сперва

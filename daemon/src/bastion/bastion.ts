@@ -2,7 +2,7 @@ const { approachWallSide, approachWallTop, foesNear, FOES_RE, digBooth, mergeTra
 const { log, sleep, xyz, mobs, seesMob, goals, walkGoal, gameClock, visibleOf, seesBlock, reachSet, angerSet, threatens, takeGoldBlock, inLava, lavaEscape, lavaEscapeDeep, inOwnTunnel, GOLD_PICK, makeIronPick, countOf, Vec3, fullCover, isBaby, raySees, eyePos, pickUp, BF, centerIn, waitWatched, clamp, fireRes, worlds, wearGold, PLACE, unpackGold, drinkFireRes, effectOn, keyOf, centerGuess, vantagePoints, goldWorn, armGold, nearestTrader, survey, nextTarget, lootChest, dropJunk, SIDES4, aggressive } = require('./take-gold-block')
 const { walkUnlessBrute, bruteComing, tunnelTo, pitCandidates, tradeBreach, tradeExecute, trapCandidates, boothTrade, MEMO, exitReserveReady, barterRound, DAMAGE_TYPES, lavaWatched, ownTunnelAt } = require('./booth-trade')
 const { trade: penTrade } = require('./pen-trap')
-const { eatIfHungry, lastGoldBreak, baitAim, scanPiecesAsync } = require('./predict-gold')
+const { eatIfHungry, lastGoldBreak, baitAim, scanPiecesAsync, predictGoldAsync } = require('./predict-gold')
 const miningCycle = require('./mining-cycle')
 const GOLD_ARMOR_RE = /\bgolden_(helmet|chestplate|leggings|boots)\b/
 async function bruteDefense (session, ctl, st, forced = null) {
@@ -457,12 +457,94 @@ async function digToPredictedBody (session, ctl, st, t) {
   return res
 }
 
+// Координаты ниже — гипотезы шаблона из наблюдения fortress, не прочитанные клетки мира.
+function rememberStarts (bot, st, starts) {
+  const bp = require('.././bastion-pieces')
+  for (const [i, s] of (Array.isArray(starts) ? starts.slice(0, 4) : []).entries()) {
+    if (!bp.START_REL[s?.type] || !Number.isInteger(s.r) || s.r < 0 || s.r > 3 ||
+        !s.t || !['x', 'y', 'z'].every(k => Number.isFinite(s.t[k]))) continue
+    for (const c of bp.piecesFromStart(s)) {
+      const rank = 100 * (i + 1) + c.slot + 1
+      for (const pos of bp.goldOf(c)) {
+        const k = keyOf(pos)
+        if (!st.pred.has(k) && !st.gold.has(k)) st.pred.set(k, { pos, piece: c.piece, rank, wall: c })
+      }
+      for (const [x, y, z] of bp.lib()[c.piece].chests) {
+        const pos = bp.toWorld(c, x, y, z); const k = keyOf(pos)
+        if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos, pred: true, rank })
+      }
+    }
+  }
+}
+
+// Слепой заход: путь узнаётся только при вскрытии очередной клетки. Без SL.worldView/плана по скрытому объёму.
+async function visibleGold (session, ctl, st, until) {
+  const bot = session.bot; const S = st.sealedState; const dimension = bot.game?.dimension
+  const NC = require('.././nether-cover'); const D = require('.././endportal-descent')
+  const SL = require('.././sealed'); const PT = require('./pen-trap'); const eyes = require('.././perception/eyes')
+  S.filled ||= new Set()
+  S.entry ||= xyz(SL.bodyCells(bot)[0])
+  let stalls = 0
+  while (!ctl.aborted && session.bot === bot && bot.game?.dimension === dimension && (bot.health ?? 0) > 0 && gameClock.now() < until - 10000) {
+    if (ctl.waitReflex) await ctl.waitReflex()
+    survey(bot, st, 56)
+    for (const [k, g] of st.gold) if (!st.pred.has(k)) st.pred.set(k, { pos: g.pos, piece: 'видно', rank: 0 })
+    const now = gameClock.now()
+    const targets = [
+      ...(!st.chestsOnly ? [...st.pred].map(([k, v]) => ({ ...v, k, chest: false })) : []),
+      ...(st.lootChests ? [...st.chestSeen].filter(([k]) => !st.looted.has(k)).map(([k, v]) => ({ ...v, k, chest: true })) : [])
+    ].filter(t => (st.skip.get(t.k) || 0) <= now)
+      .sort((a, b) => a.pos.distanceTo(bot.entity.position) - b.pos.distanceTo(bot.entity.position))
+    const t = targets[0]
+    if (!t) break
+    const r = await NC.closedBore(session, ctl, t.pos, { adjacent: true, own: S.own,
+      deadline: Math.min(until - 10000, now + 30000), maxSteps: 16, minY: Math.max(0, t.pos.y - 2),
+      onOpen: async () => { survey(bot, st, 56); return null }
+    })
+    S.dug += r.dug || 0; S.moves += (r.moved || 0) + (r.down || 0); S.fills += r.placed || 0
+    S.exposed = !!r.unsealed
+    if (ctl.aborted || session.bot !== bot || bot.game?.dimension !== dimension) break
+    if (!r.ok || !eyes.seesNow(bot, t.pos)) {
+      st.skip.set(t.k, gameClock.now() + 15000)
+      S.fails.push(`слепой штрек ${t.k}: ${r.why || 'цель не видна'}`)
+      if (!r.moved && !r.down && ++stalls >= 3) break
+      continue
+    }
+    stalls = 0
+    if (S.exposed) { S.fails.push('закладка штрека не завершена'); st.lastBarter = 'закладка штрека не завершена'; break }
+    const b = bot.blockAt(t.pos) // Только после seesNow; в том числе видимый воздух на месте гипотезы.
+    if (!b) continue
+    if (t.chest === true) {
+      if (!/^(chest|trapped_chest|barrel)$/.test(b.name)) { st.chestSeen.delete(t.k); continue }
+      const took = await require('.././structures').takeWorth(session, ctl, t.pos, { kind: 'bastion' })
+      st.chests.push({ at: t.k, took: took?.took || {}, stopped: took?.stopped || took?.error })
+      if (require('./mining-cycle').confirmedChestLoot(took, t.pos, ctl.aborted)) st.looted.add(t.k)
+      else st.skip.set(t.k, gameClock.now() + 60000)
+    } else {
+      if (b.name !== 'gold_block') { st.pred.delete(t.k); st.gold.delete(t.k); st.predWrong++; continue }
+      if (t.pos.y < SL.bodyCells(bot)[0].y) { st.skip.set(t.k, gameClock.now() + 30000); continue }
+      if (SL.fillerCount(bot) < 1) { S.fails.push('нет блока закрыть золотую клетку'); break }
+      const dr = await PT.digSeen(bot, t.pos, { allowGuard: true })
+      if (dr !== 'ok') { st.skip.set(t.k, gameClock.now() + 30000); S.fails.push(dr); continue }
+      st.blocks++; st.lastBreak = gameClock.now(); st.pred.delete(t.k); st.gold.delete(t.k)
+      // Подбор рамкой тела, без выхода к дропу через двор; вернуть стенку сразу после окна подбора.
+      await sleep(550)
+      if (ctl.aborted || session.bot !== bot || bot.game?.dimension !== dimension) break
+      if (!(await D.placeAt(bot, t.pos))) { S.exposed = true; S.fails.push('золотая клетка не закрылась'); st.lastBarter = 'золотая клетка не закрылась'; break }
+      S.filled.add(t.k)
+    }
+    if (st.goldless && await armGold(session, ctl)) st.goldless = false
+    await eatIfHungry(session, ctl)
+  }
+}
+
 async function sealedGold (session, ctl, st, until) {
   const bot = session.bot
   const dimension = bot.game?.dimension
   const SL = require('.././sealed')
   const S = st.sealedState || (st.sealedState = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0 })
   S.deadline = until
+  if (require('.././nether-cover').blind()) return visibleGold(session, ctl, st, until)
   S.onThreat = async () => { try { await answerAttack(session, ctl, st) } catch {} }
   // BonusGold обходит проверку цели; в этом эксперименте охраняемое копаем только здесь.
   if (st.fastSafe) S.noBonus = true
@@ -1676,6 +1758,12 @@ async function bastion (session, ctl, p: any = {}) {
       st.towered = 3
       log('бастион по памяти', { gold: st.pred.size, chests: st.chestSeen.size })
     }
+    // Гипотезы стартов из обзора fortress (Codex q10: fortress передавал p.starts, bastion их не читал) — цели G/C закрытого штрека.
+    if (st.sealed && !st.noPick && !st.startsRemembered) {
+      st.startsRemembered = true
+      rememberStarts(bot, st, p.starts || rec?.starts)
+      if (st.pred.size || st.chestSeen.size) st.sealedDone = false
+    }
     const center = rec ? centerGuess(bot, rec) : bot.entity.position.floored()
     const points = rec ? vantagePoints(center, center.box) : []
     log('план обзора', { center: { x: center.x, y: center.y, z: center.z }, box: center.box, points: points.length })
@@ -1852,9 +1940,15 @@ async function bastion (session, ctl, p: any = {}) {
       // Закрытый штрек (sealed): вышка-обзор → золото по шаблону сквозь твёрдое.
       if (st.sealed && mode !== 'barter' && !st.sealedDone) {
         survey(bot, st, 56)
+        const blind = require('.././nether-cover').blind()
+        if (blind && !st.pred.size && !st.chestSeen.size) {
+          const pg = await predictGoldAsync(bot, 56, ctl)
+          rememberStarts(bot, st, pg.start?.all)
+          for (const g of pg.gold) { const k = keyOf(g.pos); if (!st.pred.has(k)) st.pred.set(k, { pos: g.pos, piece: g.piece, rank: g.rank, wall: g.wall }) }
+        }
         const chestsLeft = st.lootChests && [...st.chestSeen.keys()].some(k => !st.looted.has(k))
         const goldLeft = !st.chestsOnly && (st.pred.size > 0 || st.gold.size > 0)
-        if (!goldLeft && !chestsLeft && st.towered < 3 &&
+        if (!blind && !goldLeft && !chestsLeft && st.towered < 3 &&
             (!st.lastTower || st.lastTower.distanceTo(bot.entity.position) >= 4)) {
           st.towered++
           await towerScan(session, ctl, st)
@@ -1878,7 +1972,7 @@ async function bastion (session, ctl, p: any = {}) {
           await sealedGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 240000))
           await goldReady()
           // Золото карты осталось — ходом по сетке к каждому (ND_GOLD_ROUTE=1).
-          if (process.env.ND_GOLD_ROUTE === '1' && st.pred.size && !ctl.aborted) st.routeGold = await routeGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 200000))
+          if (!require('.././nether-cover').blind() && process.env.ND_GOLD_ROUTE === '1' && st.pred.size && !ctl.aborted) st.routeGold = await routeGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 200000))
           minedSinceRetry = miningCycle.miningProgress(beforeMining, miningSnapshot())
           st.sealedDone = true
           goldPhaseEnd = gameClock.now()
@@ -1927,11 +2021,11 @@ async function bastion (session, ctl, p: any = {}) {
           const targets = () => st.gold.size + [...st.chestSeen.keys()].filter(k => !st.looted.has(k)).length
           const r: any = await NC.closedBore(session, ctl, { x: center.x, z: center.z }, {
             deadline: Math.min(deadline - 20000, gameClock.now() + 60000), maxSteps: 24,
-            onOpen: async () => { survey(bot, st, 56); return { seen: targets() } }, stop: v => !!(v && v.seen > 0)
+            onOpen: async () => { survey(bot, st, 56); const pg = await predictGoldAsync(bot, 56, ctl); rememberStarts(bot, st, pg.start?.all); return { seen: targets() + st.pred.size } }, stop: v => !!(v && v.seen > 0)
           })
           survey(bot, st, 56)
           log('бастион: штреком к центру', { n: st.probes, ok: r.ok, moved: r.moved, mouths: r.mouths, corridor: r.corridor, gold: st.gold.size, chests: st.chestSeen.size, why: r.why, at: r.at })
-          if (r.moved || targets()) continue
+          if (r.moved || targets() || st.pred.size) continue
         }
         st.sealedDone = true
         st.notRecognized = true
@@ -2044,4 +2138,4 @@ async function bastion (session, ctl, p: any = {}) {
   return out(stopped)
 }
 
-module.exports = { approachGold, targetsByBruteHome, bruteHomeTake, pitAngerWait, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }
+module.exports = { approachGold, targetsByBruteHome, bruteHomeTake, pitAngerWait, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, rememberStarts, visibleGold, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }

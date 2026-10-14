@@ -1,4 +1,4 @@
-const { visibleOf, seesBlock, log, sleep, xyz, Vec3, reserveKeeper, countOf, mobs, LOVED, admiring, itemNamed } = require('./take-gold-block')
+const { visibleOf, seesBlock, log, sleep, xyz, Vec3, reserveKeeper, countOf, mobs, LOVED, admiring, itemNamed, seesMob } = require('./take-gold-block')
 async function eatIfHungry (session, ctl) {
   const bot = session.bot
   if ((bot.food ?? 20) >= 16 && (bot.health ?? 20) >= 14) return
@@ -145,13 +145,13 @@ function * predictGoldSteps (bot, radius = 56) {
       h.score += Math.max(-2, Math.min(3, chk / 25))
     }
     // Хоглины видны — конюшни (только этот тип их спавнит; бруты есть у всех): глазами, как человек узнаёт двор.
-    const hoglins = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'hoglin' && e.position && e.position.distanceTo(bot.entity.position) < 48).length
+    const hoglins = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'hoglin' && e.position && e.position.distanceTo(bot.entity.position) < 48 && seesMob(bot, e)).length
     if (hoglins) for (const h of hs) if (h.type === 'hoglin_stable') h.score += 1.5
     hs.sort((a, b) => b.score - a.score)
     // До четырёх гипотез разом (одна форма вала у трёх типов — тип решит копка): ранг гипотезы i — 100·(i+1) у верных
     const picked = hs.filter(h => h.score >= 0.3).slice(0, 4)
     picked.forEach((h, i) => {
-      const pcs = bp.goldPiecesFromStart(h).filter(g => g.p >= 0.3)
+      const pcs = bp.goldPiecesFromStart(h)
       for (const g of pcs) add(g, 'старт', 100 * (i + 1) + (g.p >= 0.85 ? 0 : g.slot + 1))
       h.pieces = pcs.map(g => g.piece.split('/').pop() + '@' + g.t.x + ',' + g.t.y + ',' + g.t.z + ' p' + g.p)
     })

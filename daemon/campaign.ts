@@ -3759,7 +3759,12 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
       continue
     }
     if (bs.openNext) { bs.openNext = false; bs.openTried = true }
-    if ((got && /золото кончилось/.test(d.stopped || '')) || bs.dry >= 2) {
+    const unfinished = /не узнан|не дош|пути.*нет|время вышло|заход кончился|не закрылась|закладка/.test(d.stopped || '') || (d.predLeft || 0) > 0 || (d.goldSeenLeft || 0) > 0
+    if (unfinished) {
+      deferBastionMining(b)
+      break
+    }
+    if (got && /золото кончилось/.test(d.stopped || '')) {
       bs.spent = true
       log(`${b.key} выработан`)
       await act('remember', { kind: 'прогресс', place: `выработан: ${b.key}`, text: 'Бартер завершён: золото выработано или два сухих захода подряд' })
@@ -3772,7 +3777,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
 
 // Пиглинам хватает любой золотой вещи: ботинки — 4 слитка, шлем — 5 (броня 1 против 2); из 4 слитков — ботинки, а не ещё одна руда.
 async function wearGold () {
-  await craft(have('gold_ingot') >= 5 ? 'golden_helmet' : 'golden_boots')
+  await craft('golden_boots')
   await act('armor')
 }
 // Native 1.21.11 Block.playerWillDestroy: guarded ore angers adults in the

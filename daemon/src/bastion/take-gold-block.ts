@@ -106,7 +106,7 @@ async function armGold (session, ctl) {
   try {
     if (has('gold_ingot') < 4 && has('gold_block')) await A.craft(session, ctl, { item: 'gold_ingot', count: 9 })
     if (has('gold_ingot') < 4 && has('gold_nugget') >= 9) await A.craft(session, ctl, { item: 'gold_ingot', count: Math.floor(has('gold_nugget') / 9) })
-    if (has('gold_ingot') >= 4) await A.craft(session, ctl, { item: has('gold_ingot') >= 5 ? 'golden_helmet' : 'golden_boots', count: 1 })
+    if (has('gold_ingot') >= 4) await A.craft(session, ctl, { item: 'golden_boots', count: 1 })
   } catch (e) { log('золотая броня: не вышло', { error: e.message }) }
   return wearGold(bot)
 }

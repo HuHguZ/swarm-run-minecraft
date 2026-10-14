@@ -411,7 +411,7 @@ function pieElevation (bot, flat, { range = 64, fov = 20, step = 2 }: any = {}) 
 
 // Ступень вверх в сторону cell (ровно на блок): над головой, голова и ноги ступени — копать видимое, пол ступени — сама клетка
 // cell (твёрдая) и прыжок. Жидкость — как у штрека. { ok, dug, why }.
-async function upStep (session, ctl, cell) {
+async function upStep (session, ctl, cell, { bricks = null }: any = {}) {
   const bot = session.bot
   const F = bot.entity.position.floored()
   let dug = 0
@@ -420,12 +420,13 @@ async function upStep (session, ctl, cell) {
     if (!b) return { ok: false, dug, why: 'забой не виден' }
     if (b.name === 'lava') return { ok: false, dug, why: 'лава' }
     if (b.boundingBox === 'empty') continue
-    if (ROOM.test(b.name) || b.name === 'bedrock' || (/^infested_/.test(b.name) && (bot.health ?? 20) < 12)) return { ok: false, dug, why: `${b.name} в забое` }
+    if (ROOM.test(b.name) || bricks?.test(b.name) || b.name === 'bedrock' || (/^infested_/.test(b.name) && (bot.health ?? 20) < 12)) return { ok: false, dug, why: `${b.name} в забое` }
     const r = await digCell(bot, session.mcData, c)
     if (!r.ok) return { ok: false, dug, why: r.why }
     dug++
   }
-  const fl = bot.blockAt(cell)
+  const fl = seen(bot, cell)
+  if (!fl) return { ok: false, dug, why: 'опора ступени не видна' }
   if (!fl || fl.boundingBox !== 'block') {
     // Ступени нет (воздух) — поставить её, если есть к чему прислонить.
     if (!(await placeAt(bot, cell))) return { ok: false, dug, why: 'ступень не встала' }

@@ -226,7 +226,7 @@ function boothCandidates (bot, view, own, radius = 40) {
       }
     }
   }
-  return out.filter(b => b.pigs >= 2).sort((a, b) => (Number(b.wide) - Number(a.wide)) || (b.pigs - a.pigs) || (a.d0 - b.d0))
+  return out.filter(b => b.pigs >= 1).sort((a, b) => (Number(b.wide) - Number(a.wide)) || (b.pigs - a.pigs) || (a.d0 - b.d0))
 }
 
 function currentPit (bot, S) {

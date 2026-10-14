@@ -51,10 +51,10 @@ function fixture(inventory, { worn = false, rejectConversion = false, ore = fals
       if (method === 'observe') detail = { entities: ore ? [] : [{ name: 'Piglin', dist: 4, ...(piglinAt ? { pos: piglinAt } : {}) }] }
       if (method === 'mine') detail = { dug: 0, stopped: 'виден взрослый пиглин в зоне злости' }
       if (method === 'craft') detail = craft(params)
-      if (method === 'armor' && state.inventory.golden_helmet) {
-        state.inventory.golden_helmet--
-        if (!state.inventory.golden_helmet) delete state.inventory.golden_helmet
-        state.armor.head = { item: 'golden_helmet' }
+      if (method === 'armor' && state.inventory.golden_boots) {
+        state.inventory.golden_boots--
+        if (!state.inventory.golden_boots) delete state.inventory.golden_boots
+        state.armor.feet = { item: 'golden_boots' }
       }
       queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true,
         result: { status: 'done', detail, state, events: [] } })))
@@ -75,11 +75,12 @@ for (const [blocks, ingots] of [[1, 0], [2, 4]]) {
   test(`Nether gold armor converts ${blocks} carried blocks before ore search with ${ingots} loose ingots`, async () => {
     const f = fixture({ gold_block: blocks, iron_pickaxe: 1, ...(ingots ? { gold_ingot: ingots } : {}) })
     await f.run()
-    assert.equal(f.state.armor.head?.item, 'golden_helmet')
+    // Из первого золота — ботинки за 4 слитка (координатор 14.10, Codex q10), не шлем за 5.
+    assert.equal(f.state.armor.feet?.item, 'golden_boots')
     assert.equal(f.calls.some(call => call.method === 'mine' || call.method === 'explore'), false)
     assert.equal(f.state.inventory.gold_block || 0, 0)
-    assert.equal(f.state.inventory.gold_ingot, blocks * 9 + ingots - 5)
-    assert.deepEqual(f.physicalCrafts.map(craft => [craft.item, craft.produced]), [['gold_ingot', blocks * 9], ['golden_helmet', 1]])
+    assert.equal(f.state.inventory.gold_ingot, blocks * 9 + ingots - 4)
+    assert.deepEqual(f.physicalCrafts.map(craft => [craft.item, craft.produced]), [['gold_ingot', blocks * 9], ['golden_boots', 1]])
   })
 }
 
