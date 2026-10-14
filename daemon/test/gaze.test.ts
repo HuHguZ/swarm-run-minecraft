@@ -19,7 +19,7 @@ function scene ({ intent = null, digging = false }: any = {}) {
   return bot
 }
 
-const tick = async bot => { bot.emit('physicsTick'); await new Promise(resolve => setImmediate(resolve)) }
+const tick = async bot => { bot.emit('physicTick'); await new Promise(resolve => setImmediate(resolve)) }
 
 test('between deeds the body looks off an enderman\'s eyes (cl-al 14.10: provoked at night, 20 hp to 0)', async () => {
   const bot = scene()

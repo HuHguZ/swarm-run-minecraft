@@ -11,7 +11,8 @@ function install (session, bot) {
   if (bot._ndGaze || process.env.ND_GAZE === '0') return
   bot._ndGaze = true
   const { starer, safePitch } = require('./dragon/dig-down-to')
-  bot.on('physicsTick', () => {
+  // Поздняя граница тика (physicTick, перед пакетом движения): pathfinder ставит взгляд на ходу в своём physicsTick.
+  const late = () => {
     try {
       if (session.bot !== bot || !bot.entity || bot.targetDigBlock || bot.usingHeldItem || bot.currentWindow) return
       if (bot._ndHandLock && bot._ndHandLock.on && bot._ndHandLock.on()) return
@@ -22,7 +23,9 @@ function install (session, bot) {
       // force — в пакет этого же тика (позиция уходит после physicsTick); плавный поворот дотянул бы взгляд через тики.
       bot.look(bot.entity.yaw, safePitch(bot, bot.entity.yaw, bot.entity.pitch), true).catch(() => {})
     } catch {}
-  })
+  }
+  Object.defineProperty(late, '_ndLatePacketAim', { value: true })
+  bot.on('physicTick', late)
 }
 
 module.exports = { install, OWN_GAZE }

@@ -2255,7 +2255,9 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
     await mineSeenAll('iron_ore')
     await mineSeenAll('deepslate_iron_ore')
     if (OW_DEEP && !known.portal && !have('water_bucket')) await bucketOnTheWay(t)
-    if (known.portal && have(PICK_IRON) && !goldOn() && have(/^(raw_gold|gold_ingot)$/) < 5) await mineSeenAll('gold_ore,deepslate_gold_ore')
+    // Золото на виду в штреке — и до портала: без золотой вещи пиглины враждебны (PiglinAi.isWearingSafeArmor), 4 слитка — ботинки
+    // (агент Ада 14.10: пиглины — главный убийца лаборатории, во всех слепых входах cl-* золотой брони не было). Только видимая руда.
+    if (have(PICK_IRON) && !goldOn() && have(/^(raw_gold|gold_ingot)$/) < 5) await mineSeenAll('gold_ore,deepslate_gold_ore')
     if (ironNow() < want) await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: Math.min(8, want - ironNow()), radius: OW_DEEP ? (process.env.ND_IRON_WIDE !== '0' ? 24 : 16) : 32, timeoutSeconds: 150 })
     if ((!known.lava || OW_DEEP) && !known.portal) await act('observe', { radius: 32 })
     if (have(/^(coal|charcoal)$/) < 12) await mineSeenAll('coal_ore')
@@ -2528,10 +2530,32 @@ async function lavaAtSeenRuins () {
   log(`к руинам портала ${rp.at.x},${rp.at.z} (${Math.round(far(rp))} бл.) — у руин бывает лава`)
   await goToward(rp.at, 8)
   if (died) return false
+  await ruinsChestNear(24)
+  if (died) return false
   skyLookAt = null
   await skyLavaLook()
   if (!lavaSourceKnown) await act('observe', { radius: 32 })
   return lavaSourceKnown
+}
+// Сундук руин портала рядом — ещё до Ада: золотая броня в ~60 % сундуков (loot_table chests/ruined_portal: 4–8 бросков), самородки
+// и блоки — на ботинки (4 слитка). Без золотой вещи пиглины враждебны (PiglinAi.isWearingSafeArmor; агент Ада 14.10: главный убийца
+// в лаборатории, во всех слепых входах cl-* золотой брони не было, а литьё у лавы руин сундук не открывало). Цена — подход в radius и
+// осмотр ≤ 120 с; уже открытые руины (done) — мимо.
+async function ruinsChestNear (radius = 32) {
+  if (dim() !== 'overworld' || goldOn() || have(/^golden_(helmet|chestplate|leggings|boots)$/) || !state.pos || died) return
+  await act('structure', { mode: 'scan', radius: 48 })
+  const list = ((await act('structure', { mode: 'list' })).detail?.known || [])
+    .filter(x => x && x.kind === 'ruined_portal' && !x.done && x.at && Number.isFinite(x.at.x))
+  const far = x => Math.hypot(x.at.x - state.pos.x, x.at.z - state.pos.z)
+  const t = list.filter(x => far(x) <= radius).sort((a, b) => far(a) - far(b))[0]
+  if (!t) return
+  log(`руины портала в ${Math.round(far(t))} бл. — сундук: золото на броню от пиглинов`)
+  const e = await act('structure', { mode: 'explore', kind: 'ruined_portal', x: t.at.x, z: t.at.z, timeoutSeconds: 120 })
+  await refresh()
+  if (have('gold_block')) await craft('gold_ingot', 9 * have('gold_block'))
+  if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
+  if (!goldOn() && have(/^golden_(helmet|chestplate|leggings|boots)$/)) await act('armor')
+  log(`руины: ${JSON.stringify((e.detail && e.detail.took) || {})}; золото на мне: ${goldOn() ? 'да' : 'нет'}`)
 }
 async function surfaceLavaSurvey () {
   if (process.env.ND_OW_SURVEY === '0' || !NATURAL || surveyDone) return
@@ -2930,6 +2954,8 @@ defStage('cast', () => !known.portal, async () => {
   await skyLavaLook()
   if (!known.lava) await act('observe', { radius: 48 })
   if (known.lava && state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) > 16) await goToward(known.lava, 8)
+  // Лава у руин (класс rp пула good-v2) — их сундук в двух шагах: золото на Ад до литья.
+  await ruinsChestNear(32)
   await ensureFlint()
   for (let i = 0; i < 6 && !known.portal; i++) {
     await recoverGuard()

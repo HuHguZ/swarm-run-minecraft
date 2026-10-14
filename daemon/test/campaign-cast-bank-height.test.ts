@@ -24,7 +24,7 @@ function fixture({ noPath = false } = {}) {
   vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code +
     `\nstate = testState; sit = { surface: false, foes: 0, free: 25, night: true };
     known.lava = { x: 156, y: -10, z: 196 };
-    sense = readMemory = recoverGuard = unclutter = ensureFlint = async () => {};
+    sense = readMemory = recoverGuard = unclutter = ensureFlint = ruinsChestNear = async () => {};
     act = testAct;
     castForKit = async () => ({ status: 'done', detail: { stopped: 'места на берегу нет' } });
     module.exports = { cast: stageRun('cast'), walkAway, known };`, withClockFixture(context))
