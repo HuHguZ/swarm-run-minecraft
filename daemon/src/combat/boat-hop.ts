@@ -1,8 +1,7 @@
 import { runBoatHops, type BoatHopPlan, type BoatHopResult, type HopPosition } from '../tactics/boat-hop-graph'
-import { boatItem, boatBaseVisible, boatLavaAim, placeBoatOn, placeBoatOnLava, mountBoat, type BoatController } from './boat-placement'
+import { boatItem, boatBaseVisible, boatLavaAim, placeBoatOn, placeBoatOnLava, mountBoat, boatClickAim, type BoatController } from './boat-placement'
 type Body = Record<string, any>
 const clock = require('../game-clock')
-const pick = require('../pick')
 const ride = require('../ride')
 const Vec3 = require('vec3')
 const count = (bot: Body): number => bot.inventory.items().filter((item: Body) => /_(boat|raft)$/.test(item.name) && !/chest/.test(item.name)).reduce((sum: number, item: Body) => sum + item.count, 0)
@@ -62,10 +61,10 @@ export async function breakBoatEntity(session: Body, ctl: BoatController, id: nu
   if (weapon && !ctl.aborted) await bot.equip(weapon, 'hand')
   const until = clock.now() + maxMs
   while (!ctl.aborted && bot.health > 0 && bot.entities[id] && clock.now() < until) {
-    const aim = pick.aim(bot, boat, { range: 3 })
+    const aim = boatClickAim(bot, boat)
     if (!aim?.point) return false
     await bot.lookAt(aim.point, true)
-    if (ctl.aborted) return false
+    if (ctl.aborted || !boatClickAim(bot, boat)?.point.equals(aim.point)) return false
     bot.attack(boat)
     await clock.sleep(100)
   }

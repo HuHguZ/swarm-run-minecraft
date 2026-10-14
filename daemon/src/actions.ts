@@ -31,14 +31,22 @@ async function reachBlock (bot, block, ctl) {
     },
     () => new goals.GoalNear(p.x, p.y, p.z, 2)
   ]
+  // Срок на подход к одному блоку: pathfinder на частичных путях топтался у бревна на кроне 240 с — весь бюджет mine (ферма
+  // 14.10, тайга 3292227454314326185: g1-4 и g2-s1-2, «mine any_log 239.9 с timeout», сытость 20 → 13, рядом другие деревья).
+  // Вышел срок — блок в недоступные (mine берёт следующий видимый), как при «No path».
+  const budget = Math.round(8 + bot.entity.position.distanceTo(p))
+  const until = gameClock.now() + budget * 1000
   let last = null
   for (const make of attempts) {
     if (ctl.aborted) return
+    const left = until - gameClock.now()
+    if (left <= 0) break
     try {
-      await bot.pathfinder.goto(make())
+      await withTimeout(bot.pathfinder.goto(make()), left, `не подошёл за ${budget} с`)
       if (bot.canDigBlock(block)) return
     } catch (e) {
       last = e
+      if (gameClock.now() >= until) { try { bot.pathfinder.setGoal(null) } catch {} }
     }
   }
   if (!bot.canDigBlock(block)) {

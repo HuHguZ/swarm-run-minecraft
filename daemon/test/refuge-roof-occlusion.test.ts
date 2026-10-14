@@ -25,7 +25,7 @@ function scene(options: any = {}) {
   const items = [{ name: 'dirt', count: 7, type: 1 }, { name: 'stone_sword', count: 1, type: 2 }]
   const entity = { id: 1, position: cell.offset(.53, 0, .53), onGround: true, height: 1.8, width: .6 }
   const zombie = { id: 2, name: options.neutral ? 'cow' : 'zombie', position: entity.position.offset(-.2, 0, -.2), height: 1.95, width: .6, _ndVisible: !options.unseen }
-  const bot: any = { entity, health: 20, entities: options.noMob ? { 1: entity } : { 1: entity, 2: zombie }, inventory: { items: () => items }, heldItem: options.loseAnchors ? null : items[0],
+  const bot: any = { registry: sourceRequire('prismarine-registry')('1.21.11'), entity, health: 20, entities: options.noMob ? { 1: entity } : { 1: entity, 2: zombie }, inventory: { items: () => items }, heldItem: options.loseAnchors ? null : items[0],
     blockAt: (p: any) => cells.get(p.floored().toString()), getControlState: () => false, setControlState() {}, look: async () => {}, lookAt: async () => {},
     equip: async (item: any) => { bot.heldItem = item; if (options.loseAnchors) for (const p of anchors) set(p, 'air') },
     attack(target: any) { hits++; delete bot.entities[target.id] },

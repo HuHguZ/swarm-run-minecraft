@@ -150,11 +150,28 @@ export async function placeBoatOn(session: Body, ctl: BoatController, { at, maxM
   return { ok: false, why: ctl.aborted ? 'boat placement interrupted' : 'boat spawn not confirmed' }
 }
 
+export function boatClickAim(bot: Body, boat: Body): Body | null {
+  const aim = pick.aim(bot, boat, { range: 3 })
+  if (!aim?.point) return null
+  const eye = pick.eyeOf(bot); const delta = aim.point.minus(eye)
+  const direction = delta.scaled(1 / Math.max(delta.norm(), 1e-9))
+  // shortcut: любой наблюдаемый AABB мешает клику; учитывать isPickable, если мешают предметы/стрелы.
+  for (const entity of Object.values(bot.entities || {}) as Body[]) {
+    if (!entity?.position || entity.id === boat.id || entity === bot.entity || entity.isValid === false || entity._ndVisible === false) continue
+    const box = pick.hitboxOf(bot, entity); const pad = pick.PICK_RADIUS[entity.name] || 0
+    const lo = new Vec3(box.lo.x - pad, box.lo.y - pad, box.lo.z - pad)
+    const hi = new Vec3(box.hi.x + pad, box.hi.y + pad, box.hi.z + pad)
+    const hit = pick.rayBox(eye, direction, lo, hi, aim.dist)
+    if (hit !== null && hit <= aim.dist) return null
+  }
+  return aim
+}
+
 export async function mountBoat(session: Body, ctl: BoatController, boat: Body, { maxMs = 2500 }: { maxMs?: number } = {}): Promise<BoatPlacementResult> {
   const bot = session.bot
   if (ctl.aborted || !boat?.position || !ride.isBoatName(boat.name || '') || boat.passengers?.length) return { ok: false, why: 'boat mount unavailable' }
-  const aim = pick.aim(bot, boat, { range: 3 })
+  const aim = boatClickAim(bot, boat)
   if (!aim?.point) return { ok: false, why: 'boat is outside visible interaction range' }
-  const mounted = await ride.mountOn(bot, ctl, boat, maxMs)
+  const mounted = await ride.mountOn(bot, ctl, boat, maxMs, () => boatClickAim(bot, boat)?.point)
   return mounted && !ctl.aborted && bot.vehicle?.id === boat.id ? { ok: true, boat } : { ok: false, why: 'server passenger mount not confirmed' }
 }

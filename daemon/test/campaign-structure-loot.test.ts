@@ -27,7 +27,7 @@ function fixture ({ known = [], bag = {} as Record<string, number>, portal = nul
       return { detail: {} }
     } }
   vm.runInNewContext(transformSync(`${fn}\nmodule.exports = lootSeenStructures`, { loader: 'ts', format: 'cjs' }).code, context)
-  return { calls, lines, facts, run: context.module.exports }
+  return { calls, lines, facts, sit: context.sit, run: context.module.exports }
 }
 
 const ruins = { kind: 'ruined_portal', name: 'руины портала', at: { x: 50, y: 64, z: 0 }, done: false }
@@ -49,6 +49,17 @@ test('a structure not worth its walk is passed by, and an opened one is not reco
   const opened = fixture({ known: [{ ...ruins, done: true }] })
   assert.equal(await opened.run(), false)
   assert.ok(!opened.calls.some(c => c.params?.mode === 'explore'))
+})
+
+test('a visit that would end after the dusk carries the night price in the log', async () => {
+  const day = fixture({ known: [ruins] })
+  await day.run()
+  const dusk = fixture({ known: [ruins] })
+  dusk.sit.tod = 11700 // 7 s to the dusk
+  await dusk.run()
+  const net = (lines: string[]) => Number((/→ ([+-]?\d+) с/.exec(lines.find(l => /руины портала в 50/.test(l)) || '') || [])[1])
+  assert.ok(dusk.lines.some(l => /ночь на исходе захода −\d+ с/.test(l)), dusk.lines.join('\n'))
+  assert.ok(net(dusk.lines) < net(day.lines), `${net(dusk.lines)} < ${net(day.lines)}`)
 })
 
 test('a looted village is reported to the graph as exhausted', async () => {

@@ -866,7 +866,9 @@ async function readMemory () {
     known.stronghold = places['крепость'] || known.stronghold
     known.endPortal = places['портал в Край'] || known.endPortal
     known.spawnBed = places['точка возрождения'] || null
-    if (!known.lava && places['лава'] && (places['лава'].dimension || 'overworld') === 'overworld') known.lava = places['лава']
+    // Озеро, у которого рама не встала (lavaBadSites), память не возвращает: g1-4 14.10 — «4 отказа — ищу другое озеро» и
+    // через минуту то же место из памяти, 14 заходов за 100 мин.
+    if (!known.lava && places['лава'] && (places['лава'].dimension || 'overworld') === 'overworld' && !lavaBad(places['лава'])) known.lava = places['лава']
   } catch {}
 }
 
@@ -1573,7 +1575,17 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
       // Ночью поверху каждый переход к сухому месту — под мобами (cl-p 14.10: 6 попыток у болота, смерть): после второго отказа
       // спуск ночью здесь кончаю — главный цикл держит ночь в коробке.
       if (wet) wetStops.push({ x: +wet[1], z: +wet[3] })
-      if (nightHold() && wetStops.length >= 2) throw new Error('ночь, вода под дёрном — вниз здесь не выйдет, до рассвета в укрытии')
+      // Отход на 24 бл. ночью — ~12 с поверху (цена structure-value.NIGHT_SECONDS за секунду), коробка до рассвета — вся ночь
+      // впустую (g3-s3-1 14.10: после второго отказа 9 мин ночи в коробке поверху, NO_BLOCKS, прогон без железа). Отход дороже
+      // ожидания, враги рядом или пятый мокрый отказ подряд — тогда коробка (cl-p: шесть попыток у болота — смерть).
+      if (nightHold() && wetStops.length >= 2) {
+        await sense()
+        const t = todNow()
+        const toDawn = t !== null && t >= 11840 && t < 23460 ? (23460 - t) / 20 : 0
+        const risk = 12 * structureValue.NIGHT_SECONDS
+        if (wetStops.length >= 5 || (sit.foes ?? 0) > 0 || toDawn < risk) throw new Error('ночь, вода под дёрном — вниз здесь не выйдет, до рассвета в укрытии')
+        log(`ночь: вода под дёрном — отхожу на 24 бл. (≈ ${risk} с риска поверху против ${Math.round(toDawn)} с до рассвета)`)
+      }
       const away = await awayFrom(wet ? { x: +wet[1], z: +wet[3] } : null, 24)
       if (away.status !== 'done') throw new Error('не смог отойти от воды — спуск здесь прекращаю')
       continue
@@ -1599,6 +1611,11 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
 let stairEntrance = null
 async function toSurface (tries = 4) {
   await sense()
+  if (sit.inWater) {
+    await leaveWater()
+    await sense()
+    if (died || sit.inWater) return false
+  }
   const e = stairEntrance
   if (!sit.surface && e && e.dim === dim() && state.pos && e.y > y() + 2 && Math.hypot(e.x - state.pos.x, e.z - state.pos.z) <= 64) {
     log(`наверх своей лестницей к ${e.x},${e.y},${e.z}`)
@@ -1619,7 +1636,7 @@ async function toSurface (tries = 4) {
     if (!pick) log('кирки нет и не из чего — лезу наверх рукой (камень 7.5 с за блок)')
     const from = state.pos && { ...state.pos }
     const r = await act('surface', { timeoutSeconds: pick ? 120 : 600, hand: !pick, preferPillar: pick })
-    if (died) return false
+    if (died || r.status === 'interrupted') return false
     if (r.detail && r.detail.out) return true
     const why0 = String((r.detail && r.detail.stopped) || '')
     if (/лопат[аы]? в рюкзаке нет|нужна лопата|_shovel/.test(why0) && !have(/_shovel$/) && !shovelTried) {
@@ -1807,7 +1824,7 @@ const nightHold = () => dim() === 'overworld' && (!!sit.night || !!sit.dusk) && 
   armorPointsNow() < 15 && have(/_pickaxe$/) > 0 && process.env.ND_NIGHT_DIG !== '0'
 // Копать ночью вниз — только с деревом на сменные кирки: каменной хватает на один спуск лестницей (131 удар), без палок она
 // ломалась внизу, подъём рукой сквозь камень — 8 мин (cl-q 14.10). Без дерева ночь — в норе или коробке.
-const nightDigWood = () => woodNow() >= 2 || have('stick') >= 4
+const nightDigWood = () => have(LOGS) > 0 || have(/_planks$/) >= 2 || have('stick') >= 2
 // Этапы, которые ночь ведут сами (iron: вниз и штреки) или не ходят поверху (крафт, еда, лечение).
 const NIGHT_STAGES = new Set(['iron', 'MineIron', 'stone', 'AcquireStoneTools', 'CraftPortalKit', 'EatFood', 'Heal', 'PrepareBread'])
 // Ночью без еды наверх за охотой не иду, пока хп хватает на работу внизу (≥ 6): охота ночью — главная из смертей серии.
@@ -2066,6 +2083,7 @@ async function foodRun () {
         const f = await act('fight', { target: kind, timeoutSeconds: 40, retreatAtHealth: 0,
           purpose: kind === 'sheep' && wantWool() && foodUnits() >= FOOD_STOCK ? 'resource' : 'food',
           ...(kind === 'sheep' && wantWool() && foodUnits() >= FOOD_STOCK ? { resourceGoal: { item: 'wool', count: have(/_wool$/) + wantBeds * 3 - woolMax() } } : {}) })
+        if (f.detail?.stopped) return
         if (f.status !== 'done' || (state.health ?? 20) < 10) break
       }
       await refresh()
@@ -2091,6 +2109,7 @@ let nightDigAt = 0
 let nightCastAt = 0
 let nightHeld = false
 let nightEnterAt = 0
+let nightWaterAt = 0
 let foodSearchAt = 0
 async function quickHunt () {
   await sense()
@@ -2105,6 +2124,7 @@ async function quickHunt () {
         (e.dist ?? 99) <= 24 && !(e.pos && Math.abs(e.pos.y - y()) > 4)).sort((a, b) => (a.dist ?? 99) - (b.dist ?? 99))[0]
       if (!prey) break
       const f = await act('fight', { target: String(prey.name).toLowerCase(), timeoutSeconds: 25, retreatAtHealth: 0, purpose: 'food' })
+      if (f.detail?.stopped) return
       if (f.status !== 'done') break
     }
   } finally { hunting = false }
@@ -2180,7 +2200,7 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
   (!!known.portal && rodsNow() >= 7 && !have(PICK_IRON)) ||
   (!!known.portal && fightGearWanted && rodsNow() < 7 && !fightReady() && ironRuns < 8) ||
   (!known.portal && castSurfaceFailed && !have(PICK_IRON)) ||
-  (!known.portal && !have(/bucket$/)), async () => {
+  (!known.portal && !have(/bucket$/)), async (portalOnly = false) => {
   ironRuns++
   if (!known.portal && have('raw_iron')) {
     const buckets = have(/bucket$/)
@@ -2193,7 +2213,7 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
       (fightGearWanted ? (worn('torso') ? 0 : 8) + (worn('legs') ? 0 : 7) + (worn('head') ? 0 : 5) + (shieldOn() ? 0 : 1) : 0))
     : 3 * portalBuckets() + 1 + ((castSurfaceFailed && !have(PICK_IRON)) ? 3 : 0)
   let want = ironBase
-  for (const item of ['iron_chestplate', 'iron_leggings', 'iron_helmet', 'iron_boots']) {
+  if (!portalOnly) for (const item of ['iron_chestplate', 'iron_leggings', 'iron_helmet', 'iron_boots']) {
     if (worn(ARMOR_SLOT[item.split('_').pop()])) continue
     const g = gearWorth(item)
     if (g.missing) { log(g.line); if (g.take) want += ARMOR_COST[item] }
@@ -2277,6 +2297,10 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
     if (OW_DEEP && OW_HEAR && !known.portal) await listenForLava('штрек за железом')
     await mineSeenAll('iron_ore')
     await mineSeenAll('deepslate_iron_ore')
+    // Портальный набор — железо и кремень: гравий видимый в штреке — сейчас, а не поиском поверху на рассвете (g3-s2-1 14.10:
+    // ночь в коробке с 4 железом без кремня, на рассвете гравий и деревня — смерть от зомби).
+    if (portalOnly && !have('flint') && !lighter()) await mineSeenAll('gravel', 16)
+    if (portalOnly && ironNow() >= want && (have('flint') || lighter())) break
     if (OW_DEEP && !known.portal && !have('water_bucket')) await bucketOnTheWay(t)
     if (ironNow() < want) await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: Math.min(8, want - ironNow()), radius: OW_DEEP ? (process.env.ND_IRON_WIDE !== '0' ? 24 : 16) : 32, timeoutSeconds: 150 })
     if ((!known.lava || OW_DEEP) && !known.portal) await act('observe', { radius: 32 })
@@ -2560,6 +2584,12 @@ async function lavaAtSeenRuins () {
 // шаблон (structure fit, «как спидраннер знает устройство»): цена по всем сундукам шаблона, видимым и нет; карта корабля —
 // цепочкой до клада. Взятая (done) или уже испробованная — мимо.
 const structureValue = require(path.join(__dirname, 'src', 'campaign', 'structure-value'))
+// Секунды до сумерек (11840) по часам situation: ночью и в сумерках — 0, вне верхнего мира и без часов — бесконечность.
+function dayLeft () {
+  const t = Number.isFinite(sit.tod) ? sit.tod : null
+  if (t === null || dim() !== 'overworld') return Infinity
+  return t < 11840 ? (11840 - t) / 20 : t >= 23460 ? (24000 - t + 11840) / 20 : 0
+}
 const structLootTried = new Set()
 const structLootRetried = new Set()
 let structLootNext = 0
@@ -2590,7 +2620,9 @@ async function lootSeenStructures (radius = 160) {
   const sunk = x => Number.isFinite(x.at.y) && x.at.y < 58 && x.kind !== 'buried_treasure'
   // Деревня узнана (3+ дома) — кровати и сено по шаблонам домов (сено ≈ 2.5 ед. еды), а не среднее деревни.
   const outside = x => x.kind === 'village' && x.fit && x.fit.houses >= 3 ? { food: (x.fit.hay || 0) * 2.5, bed: x.fit.beds || 0 } : null
-  const scored = list.map(x => ({ x, w: structureValue.structureWorth(x.kind, far(x), needs, x.fit ? x.fit.chests.filter(reachable) : null, sunk(x), outside(x)) })).sort((a, b) => b.w.net - a.w.net)
+  // Хвост захода за сумерками — цена ночи поверху (structure-value.withNight).
+  const day = dayLeft()
+  const scored = list.map(x => ({ x, w: structureValue.withNight(structureValue.structureWorth(x.kind, far(x), needs, x.fit ? x.fit.chests.filter(reachable) : null, sunk(x), outside(x)), day) })).sort((a, b) => b.w.net - a.w.net)
   for (const s of scored.slice(0, 3)) log(`постройка ${s.x.name || s.x.kind} в ${Math.round(s.w.distance)} бл.: ${structureValue.describeWorth(s.w)} — ${s.w.net > 0 ? 'иду' : 'мимо'}`)
   const best = scored[0]
   if (!(best.w.net > 0)) return false
@@ -4765,15 +4797,36 @@ async function executeStrategy (command, signal) {
       if (!visited && !strategyInterrupted) return { outcome: 'FAILURE', reason: 'подход или посещение постройки не завершены', events: [] }
       if (visited && !strategyInterrupted) graphFact(`${place}_exhausted`, true)
     } else if (skill === 'scoutStructures') {
+      // Хвост шага разведки за сумерками (11840) — секунды поверху ночью по цене structure-value.NIGHT_SECONDS (в воде — вдвое)
+      // против выгоды шага вслепую (находка в одном шаге — редкость: 99 «бюджет исчерпан» из ~160 разведок фермы): дороже —
+      // разведка встаёт, дальше работа внизу. g1-1 14.10: шаг на 10857, урон от скелета на 11473; g2-s2-1: сундук под водой
+      // на 11528 (40 с, «не дотянуться»), сумерки в воде — утопленники.
+      let dusk = false
+      const lateBy = (seconds, wet = false) => Math.max(0, seconds - dayLeft()) * structureValue.NIGHT_SECONDS * (wet ? 2 : 1)
       const search = await require(path.join(__dirname, 'src', 'campaign', 'structure-search')).scoutStructures({
         now: () => gameClock.now(), position: () => state.pos,
         scan: async () => { await act('structure', { mode: 'scan', radius: 96 }) },
         list: async () => ((await act('structure', { mode: 'list' })).detail?.known || []).map(entry => ({ ...entry,
           done: entry.done || graphFacts[`${entry.kind === 'buried_treasure' ? 'treasure' : entry.kind}_exhausted`]?.value === true })),
-        explore: async (direction, timeoutSeconds) => (await act('explore', { block: 'bell,chest,barrel', radius: 48, stepDistance: 60, direction, timeoutSeconds, dry: true, surface: true, unlootedContainers: true })).detail,
-        loot: async (at, timeoutSeconds) => Object.values((await act('loot', { ...at, visibleOnly: true, timeoutSeconds })).detail?.took || {}).some(n => Number(n) > 0),
+        explore: async (direction, timeoutSeconds) => {
+          // Звери на виду по пути разведки — как спидраннер: еда сейчас, а не после голода (g3-s1-2 14.10: разведка 4 × 30 с
+          // поверху, сытость 20 → 13, еды 0 — ночью NO_FOOD, хп не лечится; свиньи — только на 20-й мин).
+          if (foodUnits() < 4 && gameClock.now() >= quickHuntAt) { quickHuntAt = gameClock.now() + 90000; await quickHunt() }
+          await sense()
+          const risk = lateBy(timeoutSeconds)
+          if (risk > 10) { dusk = true; log(`разведка построек: шаг ${direction} кончится в сумерках — ночь поверху ≈ ${Math.round(risk)} с дороже шага вслепую, дальше внизу`); return undefined }
+          return (await act('explore', { block: 'bell,chest,barrel', radius: 48, stepDistance: 60, direction, timeoutSeconds, dry: true, surface: true, unlootedContainers: true })).detail
+        },
+        loot: async (at, timeoutSeconds) => {
+          await sense()
+          // Сундук, увиденный поверху ниже уровня моря (62) на 2+, — почти всегда под водой (корабль, руины): нырок.
+          const wet = Number.isFinite(at.y) && at.y < 60
+          const risk = lateBy(Math.min(timeoutSeconds, wet ? 40 : 20), wet)
+          if (risk > 30) { dusk = true; log(`разведка построек: сундук ${at.x},${at.y},${at.z}${wet ? ' под водой' : ''} — заход кончится в сумерках (≈ ${Math.round(risk)} с риска), мимо`); return false }
+          return Object.values((await act('loot', { ...at, visibleOnly: true, timeoutSeconds })).detail?.took || {}).some(n => Number(n) > 0)
+        },
         move: async (at, timeoutSeconds) => { await act('goto', { ...at, range: 6, surface: 'strict', timeoutSeconds }) },
-        interrupted: () => signal.aborted || strategyInterrupted || died, fact: graphFact, log
+        interrupted: () => signal.aborted || strategyInterrupted || died || dusk, fact: graphFact, log
       }, routeStructureSeconds * 1000)
       routeStructureSeconds = search.spentMs / 1000
       if (search.blocked) return { outcome: 'FAILURE', reason: 'путь поиска построек заблокирован до исчерпания бюджета', events: [] }
@@ -4840,7 +4893,7 @@ async function executeStrategy (command, signal) {
     else {
       const executor = STAGES.find(entry => entry.name === skill)
       if (!executor) return { outcome: 'FAILURE', reason: `нет навыка ${skill}`, events: [] }
-      await executor.run(command.strategy === 'AcquireWood' ? 5 : undefined)
+      await executor.run(command.strategy === 'AcquireWood' ? 5 : command.strategy === 'MineIron' ? true : undefined)
     }
     return { outcome: strategyInterrupted ? 'INTERRUPTED' : 'SUCCESS', events: strategyInterrupted ? [{ type: 'tactical_released' }] : [] }
   } catch (error) {
@@ -5014,6 +5067,26 @@ ws.on('open', async () => {
           try { await stageRun('cast')() } catch (e) { if (e.stopCampaign) throw e; log(`ночное литьё: ${e.message}`) }
           continue
         }
+        // Набор собран (ведро, огниво), лава-источник видена в 96 бл., нет только воды: ждать рассвета — N с впустую, заход за
+        // водой и литьё ночью поверху — ~90 с по цене structure-value.NIGHT_SECONDS. Ждать дороже — иду (пользователь: «ночью не
+        // пережидать»; g3-s2-1 14.10: ночь в коробке с готовым железом, на рассвете — смерть в деревне).
+        if (!known.portal && !have('water_bucket') && have(/^bucket$/) >= portalBuckets() && lighter() && lavaSourceKnown && known.lava && state.pos &&
+            Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96 && gameClock.now() >= nightWaterAt && (state.health ?? 20) >= 12) {
+          const t = todNow()
+          const toDawn = t !== null && t >= 11840 && t < 23460 ? (23460 - t) / 20 : 0
+          const risk = 90 * structureValue.NIGHT_SECONDS
+          if (toDawn > risk) {
+            nightWaterAt = gameClock.now() + 180000
+            log(`ночь: набор литья готов, лава видена, нет воды — до рассвета ${Math.round(toDawn)} с ждать, ночь поверху ≈ ${risk} с: за водой и литьё`)
+            stage = 'water'
+            try { await stageRun('water')() } catch (e) { if (e.stopCampaign) throw e; log(`ночью за водой: ${e.message}`) }
+            if (have('water_bucket') && !died && !known.portal) {
+              stage = 'cast'
+              try { await stageRun('cast')() } catch (e) { if (e.stopCampaign) throw e; log(`ночное литьё: ${e.message}`) }
+            }
+            continue
+          }
+        }
         // Портал есть и в Ад готов — ночь не пережидать, а уйти в Ад (там нет ночи); портал рядом.
         if (known.portal && READY.nether() && portalFar() < 96 && gameClock.now() >= nightEnterAt) {
           nightEnterAt = gameClock.now() + 120000
@@ -5049,7 +5122,7 @@ ws.on('open', async () => {
           stage = work
           log(work === 'iron' ? 'ночь, брони нет — работаю под землёй (железо на броню, уголь, гравий), поверху — с рассветом' : 'ночь, кирки по камню нет — камень под землёй, поверху — с рассветом')
           const before = stageProgress(work)
-          try { await stageRun(work)() } catch (e) { if (e.stopCampaign) throw e; log(`ночная работа внизу: ${e.message}`) }
+          try { await stageRun(work)(work === 'iron' && !known.portal) } catch (e) { if (e.stopCampaign) throw e; log(`ночная работа внизу: ${e.message}`) }
           // Железо, ведро, щит ночной работы — прогресс для сторожа (cl-k 14.10: 9 слитков и ведро за ночь, а сторож через 48 мин
           // «без прогресса» остановил кампанию: этапы вне хода не обновляли его отметку).
           await refresh()

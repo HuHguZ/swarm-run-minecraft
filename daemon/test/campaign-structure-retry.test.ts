@@ -25,6 +25,8 @@ function fixture(kind = 'village', completed = false) {
     graphFacts: facts, graphFact(name, value) { facts[name] = fact(value, 'observed', now) },
     routeStructureSeconds: 34.6, routeDeadline: 0, stage: 'iron', state,
     gameClock: { now: () => now }, campaignMap: () => null, log() {},
+    sense: async () => {}, dayLeft: () => context.day ?? Infinity, structureValue: { NIGHT_SECONDS: 4 },
+    foodUnits: () => context.food ?? 9, quickHuntAt: 0, async quickHunt () { calls.push({ method: 'quickHunt' }) },
     async routeStep() { now += 1000; return completed },
     async act(method, params) {
       calls.push({ method, params })
@@ -65,6 +67,25 @@ for (const kind of ['village', 'shipwreck', 'treasure']) test(`scouting past an 
   await f.run('scoutStructures')
   assert.ok(f.calls.some(call => call.method === 'explore'))
   assert.equal(f.context.routeStructureSeconds, 180)
+})
+
+test('a scouting step that would end in the dusk stops the search (night on the surface priced against a blind step)', async () => {
+  const f = fixture('village')
+  f.facts.village_exhausted = fact(true, 'observed', 0)
+  f.context.day = 8 // 8 s of daylight left, a step of 30 s: 22 s × 4 = 88 s of night risk
+  await f.run('scoutStructures')
+  assert.ok(!f.calls.some(call => call.method === 'explore'))
+  assert.ok(f.context.routeStructureSeconds < 180, 'the budget is kept for the morning')
+})
+
+test('scouting on the surface without food hunts the animals in sight first, once per 90 s', async () => {
+  const f = fixture('village')
+  f.facts.village_exhausted = fact(true, 'observed', 0)
+  f.context.food = 0
+  await f.run('scoutStructures')
+  const order = f.calls.map(call => call.method).filter(m => m === 'quickHunt' || m === 'explore')
+  assert.equal(order[0], 'quickHunt')
+  assert.ok(order.filter(m => m === 'quickHunt').length < order.filter(m => m === 'explore').length, order.join(','))
 })
 
 test('a closer physical approach is useful structure-iron progress, while waiting and retreating are not', () => {

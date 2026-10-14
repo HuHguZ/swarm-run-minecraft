@@ -189,10 +189,16 @@ async function dismount (bot, ms = 2500) {
   return ok || !bot.vehicle
 }
 
-async function mountOn (bot, ctl, e, ms = 3000) {
+async function mountOn (bot, ctl, e, ms = 3000, getAim = null) {
   patchVehicle(bot)
   if (ctl.aborted) return false
   if (bot.vehicle && bot.vehicle.id === e.id) return true
+  await emptyHand(bot)
+  if (ctl.aborted) return false
+  const point = getAim ? getAim() : e.position.offset(0, (e.height || 1) * 0.7, 0)
+  if (!point) return false
+  try { await bot.lookAt(point, true) } catch { return false }
+  if (ctl.aborted || getAim && !getAim()?.equals(point)) return false
   const on = new Promise<any>(resolve => {
     const done = ok => { gameClock.clearTimeout(t); bot.removeListener('mount', h); ctl.onAbort = ctl.onAbort.filter(fn => fn !== abort); resolve(ok) }
     const abort = () => done(false)
@@ -201,11 +207,6 @@ async function mountOn (bot, ctl, e, ms = 3000) {
     bot.on('mount', h)
     ctl.onAbort.push(abort)
   })
-  // Пустая рука: с предметом в руке клик — это его применение (седло, морковь…).
-  await emptyHand(bot)
-  if (ctl.aborted) return on
-  try { await bot.lookAt(e.position.offset(0, (e.height || 1) * 0.7, 0), true) } catch {}
-  if (ctl.aborted) return on
   try { bot.mount(e) } catch {}
   return on
 }

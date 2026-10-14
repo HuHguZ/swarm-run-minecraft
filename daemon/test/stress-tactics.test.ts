@@ -381,9 +381,15 @@ test('a started refuge holds against a shield at each volley and through its own
   assert.equal(heal.decide(tactical({ at: 0, contact: true, enemies: [zombie], health: 15.7, cover: true })).selected?.id, 'Heal')
   assert.equal(heal.decide(tactical({ at: 600, contact: true, enemies: [zombie], health: 16.2, cover: true })).selected?.id, 'Heal', 'one regenerated point is no reason to swap the run for a fight')
   const run = new TacticalArbiter()
-  const skeleton = { id: 3, kind: 'skeleton', distance: 6, player: false, threatening: true, hit: 2.8 }
-  assert.equal(run.decide(tactical({ at: 0, contact: true, enemies: [skeleton], canFight: false })).selected?.id, 'CreateDistance')
-  assert.equal(run.decide(tactical({ at: 2000, contact: true, enemies: [skeleton] })).selected?.id, 'CreateDistance', 'the retreat ends at its safe distance')
+  // A creeper: the run is the answer and it is kept. An archer at 6 is rushed instead once the body can fight (Codex q5 14.10:
+  // a run in the open from a skeleton is shot in the back — s4d «an archer within 8 blocks is rushed»).
+  const creeper = { id: 3, kind: 'creeper', distance: 6, player: false, threatening: true, hit: 2.8 }
+  assert.equal(run.decide(tactical({ at: 0, contact: true, enemies: [creeper], canFight: false })).selected?.id, 'CreateDistance')
+  assert.equal(run.decide(tactical({ at: 2000, contact: true, enemies: [creeper] })).selected?.id, 'CreateDistance', 'the retreat ends at its safe distance')
+  const archer = new TacticalArbiter()
+  const skeleton = { id: 7, kind: 'skeleton', distance: 6, player: false, threatening: true, hit: 2.8 }
+  assert.equal(archer.decide(tactical({ at: 0, contact: true, enemies: [skeleton], canFight: false })).selected?.id, 'CreateDistance')
+  assert.equal(archer.decide(tactical({ at: 2000, contact: true, enemies: [skeleton] })).selected?.id, 'Fight', 'the archer that shoots a runner in the back is rushed')
 })
 
 test('a kill ends the contact of the dead attacker, and a refuge run that ends at once sits out 2 s', async () => {

@@ -92,6 +92,14 @@ function canBreakOut (bot, filler) {
   }
 }
 
+// Оценка и стройка используют один материал: булыжник без кирки не отменяет землю в рюкзаке.
+function refugeFiller (bot, needed = 10) {
+  const filler = pickFiller(bot, { steady: true })
+  if (require('./worlds').worldOf(bot) !== 'overworld' || !filler || canBreakOut(bot, filler)) return filler
+  return bot.inventory.items().find(i => i.count >= needed &&
+    /^(dirt|coarse_dirt|grass_block|clay|snow_block)$|_planks$/.test(i.name) && canBreakOut(bot, i)) || filler
+}
+
 // Насколько закрыта клетка cell (ноги): сколько сторон заложены целиком (ноги
 // и голова), есть ли крыша, какие стороны открыты и чем.
 function enclosure (bot, cell) {
@@ -393,14 +401,14 @@ function refugePlan (bot, cell, toward = null) {
 // Подпорка в прыжке: верх стены (плоскость y+2) виден, только когда глаза
 // выше неё. Прыжок — и на подъёме, как только прицел (faceAim) берёт верхнюю
 // грань, — установка в неё. Возвращает как placeBlockAt: { ok, reason }.
-async function jumpPlace (bot, pos, { ctl = null, timeoutMs = 900 }: any = {}) {
+async function jumpPlace (bot, pos, { ctl = null, timeoutMs = 900, item = null }: any = {}) {
   const { waitForBlock } = require('./build')
   const { faceAim } = require('./pick')
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   if (solidAt(bot, pos)) return { ok: true, already: bot.blockAt(pos).name }
   const ref = bot.blockAt(pos.offset(0, -1, 0))
   if (!ref || ref.boundingBox !== 'block') return { ok: false, reason: 'под подпоркой нет блока' }
-  const stack = pickFiller(bot, { steady: true })
+  const stack = item ? bot.inventory.items().find(i => i.name === item) : pickFiller(bot, { steady: true })
   if (!stack) return { ok: false, reason: 'нечем строить' }
   try { if (!bot.heldItem || bot.heldItem.type !== stack.type) await withTimeout(bot.equip(stack, 'hand'), 2000) } catch (e) { return { ok: false, reason: e.message } }
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
@@ -483,6 +491,8 @@ async function refugeBox (bot, cell, { toward = null, ctl = null, timeoutMs = 80
   const here = feetCell(bot)
   if (!here.equals(cell) && refugeNeed(bot, here)) cell = here
   const plan = refugePlan(bot, cell, toward)
+  const filler = refugeFiller(bot, plan.length)
+  const item = filler?.name !== pickFiller(bot, { steady: true })?.name ? filler?.name : null
   let placed = 0
   const failed = []
   for (const step of plan) {
@@ -500,27 +510,27 @@ async function refugeBox (bot, cell, { toward = null, ctl = null, timeoutMs = 80
       // «это моя же клетка», E.)
       if (bodyIn(bot, step.pos)) await centerInCell(bot, 800, cell)
       let r = step.kind === 'support'
-        ? await jumpPlace(bot, step.pos, { ctl })
-        : await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady })
+        ? await jumpPlace(bot, step.pos, { ctl, item })
+        : await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady, item, ctl })
       if (!r.ok && /ответа от сервера нет|моя же клетка/.test(r.reason || '') && !(ctl && ctl.aborted)) {
         await centerInCell(bot, 800, cell)
-        r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady })
+        r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady, item, ctl })
       }
       // Моб вплотную у стены или крыши: стоит в её клетке или его рамка перекрыла прицел
       // (клиент в таком случае бьёт моба, а не ставит блок — «не к чему
       // прислонить», D: 5 столбов из 5 после такой коробки). Как игрок: ударить —
       // отбросит — и сразу блок в освободившуюся клетку.
       if (!r.ok && (step.kind === 'wall' || step.kind === 'roof' && refugeNeed(bot, cell)?.leans) && !(ctl && ctl.aborted) && /в клетке стоит|не к чему прислонить|ответа от сервера нет/.test(r.reason || '')) {
-        if (await shove(bot, step.pos)) r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady, ctl })
+        if (await shove(bot, step.pos)) r = await placeBlockAt(bot, step.pos, { timeoutMs, honest, steady, item, ctl })
       }
       // Подпорка не встала в прыжке — ещё раз: первый прыжок бывает из
       // неотцентрованного тела или с зомби, толкнувшим в бок.
-      if (step.kind === 'support' && !r.ok && !(ctl && ctl.aborted)) r = await jumpPlace(bot, step.pos, { ctl })
+      if (step.kind === 'support' && !r.ok && !(ctl && ctl.aborted)) r = await jumpPlace(bot, step.pos, { ctl, item })
       if (r.ok && !r.already) placed++
       else if (!r.ok) failed.push(`${step.kind} ${step.pos.x - cell.x},${step.pos.y - cell.y},${step.pos.z - cell.z}: ${r.reason}${r.noFooting ? ` (тело ${bot.entity.position.x.toFixed(2)},${bot.entity.position.y.toFixed(2)},${bot.entity.position.z.toFixed(2)})` : ''}`)
     } catch (e) { failed.push(`${step.kind}: ${e.message}`) }
   }
-  return { placed, cell, plan: plan.map(s => s.pos), kinds: plan.map(s => s.kind), failed: failed.length ? failed : undefined, ...enclosure(bot, cell) }
+  return { placed, cell, item, plan: plan.map(s => s.pos), kinds: plan.map(s => s.kind), failed: failed.length ? failed : undefined, ...enclosure(bot, cell) }
 }
 
 // Осесть на блок в своей коробке и закрыться крышкой на уровне головы: снизу
@@ -561,8 +571,8 @@ async function refugePatch (bot, box, { ctl = null, timeoutMs = 700 }: any = {})
     try {
       if (kind !== 'support') await landed(bot, 600)
       const r = kind === 'support'
-        ? await jumpPlace(bot, p, { ctl })
-        : await placeBlockAt(bot, p, { timeoutMs, honest: true, steady: kind !== 'wall' })
+        ? await jumpPlace(bot, p, { ctl, item: box.item })
+        : await placeBlockAt(bot, p, { timeoutMs, honest: true, steady: kind !== 'wall', item: box.item, ctl })
       if (r.ok && !r.already) placed++
     } catch {}
   }
@@ -771,7 +781,7 @@ async function takeNicheBody (bot, c, plan, { ctl = null, toward = null }: any =
 }
 
 module.exports = {
-  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, enclosure, centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, leaveSealedCell, siegePlan, pickFiller,
+  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, refugeFiller, enclosure, centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, leaveSealedCell, siegePlan, pickFiller,
   fullCube, openCell, refugeNeed, refugeBuildMs, refugeCell, refugePlan, jumpPlace, refugeBox, refugePatch, landed, shove, shoveNear, sinkRoof,
   nichePlan, takeNicheBody
 }

@@ -100,7 +100,7 @@ function after (needs: Needs, items: Record<string, number>): Needs {
 }
 
 export interface Chest { table: string; p: number; wet?: boolean }
-export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]>; chests: number; chain?: number; known?: boolean }
+export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]>; chests: number; chain?: number; known?: boolean; swim?: boolean; night?: number }
 
 // kind, расстояние, нужды; chests — сундуки узнанного шаблона (иначе — среднее по вариантам); wet — постройка под водой
 // (руины портала в океане: увидены ниже уровня моря — ферма 14.10, cs-3: «сундук 11 с» на 13 бл. под водой).
@@ -142,12 +142,23 @@ export function structureWorth (kind: string, distance: number, needs: Needs, ch
   const walk = distance / WALK_BPS * DETOUR * (swim ? 1.5 : 1)
   // Деревня с узнанными домами — без обхода дверей (structures.village): сверху 10 с, а не 40.
   const cost = walk + work + (kind === 'village' && outside ? 10 : P.overhead)
-  return { kind, distance, value, walk, cost, net: value - cost, items: priced, chests: Math.round(nChests * 10) / 10, chain, known: chests !== null }
+  return { kind, distance, value, walk, cost, net: value - cost, items: priced, chests: Math.round(nChests * 10) / 10, chain, known: chests !== null, swim }
 }
 
 // «путь ≈ 60 с + сундуки 3 ≈ 52 с, выгода ≈ 120 с (iron 9.4: 207 с, …) → +52 с».
+// Заход, который кончится после сумерек (11840), — секунды поверху ночью: цена риска, а не запрет. Смерть — ~1200 с прогона
+// (descent.DEATH_SECONDS); ночью поверху без брони серии cl-a…cl-ap и g1/g2 14.10 гибли за минуты (g2-s2-1: сундук под водой
+// на 11528, сумерки в воде — утопленники) — ~1/300 в секунду, 4 с за секунду; в воде — вдвое.
+export const NIGHT_SECONDS = 4
+export function withNight (w: Worth, dayLeft: number): Worth {
+  const over = Math.max(0, w.cost - Math.max(0, dayLeft))
+  if (!(over > 0)) return w
+  const night = over * NIGHT_SECONDS * (w.swim ? 2 : 1)
+  return { ...w, night, net: w.net - night }
+}
+
 export function describeWorth (w: Worth): string {
   const parts = w.items.filter(([, , s]) => s >= 1).sort((a, b) => b[2] - a[2]).map(([item, n, s]) => `${item} ${n}: ${Math.round(s)} с`)
   return `путь ≈ ${Math.round(w.walk)} с + сундуки ${w.chests}${w.known ? ' по шаблону' : ''} ≈ ${Math.round(w.cost - w.walk)} с, выгода ≈ ${Math.round(w.value)} с` +
-    `${parts.length ? ` (${parts.join(', ')})` : ''} → ${w.net >= 0 ? '+' : ''}${Math.round(w.net)} с`
+    `${parts.length ? ` (${parts.join(', ')})` : ''}${w.night ? `, ночь на исходе захода −${Math.round(w.night)} с` : ''} → ${w.net >= 0 ? '+' : ''}${Math.round(w.net)} с`
 }

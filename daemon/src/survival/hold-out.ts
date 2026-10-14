@@ -79,7 +79,6 @@ function refugeLook (session, { radius = 16 }: any = {}) {
   const near = walkers[0] || null
   const creeper = foes.find(h => h.e.name === 'creeper' && (h.d <= 9 || h.swelling))
   const blocks = require('.././pack').buildCount(bot, dim)
-  const filler = pickFiller(bot, { steady: true })
   let lava = !!bot.entity.isInLava
   for (const dy of [0, 1]) {
     const b = bot.blockAt(me.offset(0, dy, 0))
@@ -87,6 +86,7 @@ function refugeLook (session, { radius = 16 }: any = {}) {
   }
   const from = near ? near.e.position : shooters[0] ? shooters[0].e.position : null
   const cell = fortify.refugeCell(bot, from, { have: blocks, foes: foes.map(h => h.e) })
+  const filler = fortify.refugeFiller(grounded(bot), cell?.blocks ?? 10)
   const a: any = {
     dim,
     nether,

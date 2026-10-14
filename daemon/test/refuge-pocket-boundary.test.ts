@@ -70,7 +70,7 @@ function observe(session: any) {
   const flee = { DOCTRINE: { ghast: { range: 64 }, zombie: { radius: 1.45 } },
     hostilesAround: () => [{ e: foe, d: 4.4, doc: { radius: 1.45 } }] }
   const hold = sourceModule('survival/hold-out', { './surface-body': surface, '../flee': flee,
-    '../fortify': { feetCell: (b: any) => sealed.bodyCells(b)[0], refugeCell: () => null, pickaxeOf: () => null } })
+    '../fortify': { feetCell: (b: any) => sealed.bodyCells(b)[0], refugeCell: () => null, pickaxeOf: () => null, refugeFiller: () => null } })
   const tactics = sourceModule('tactics/minecraft', { '../survival': hold, '../flee': flee,
     '../combat-safety': { inspect: () => ({ action: 'recover', threats: [{ id: 2, distance: 4.4, hit: 3 }] }) },
     '../ne-guard': { hot: () => null }, '../pick': { aim: () => ({ point: foe.position }) },

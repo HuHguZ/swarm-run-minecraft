@@ -49,7 +49,8 @@ function fixture(options: any = {}) {
     './items': { GROUPS: {}, resolveBlockIds: () => [1], missingHarvestTool: () => null,
       equipBestTool: async () => {}, countItems: () => ({ ...state.inventory }),
       diffItems: (before, after) => Object.fromEntries(Object.entries(after).filter(([name, count]) => Number(count) !== (before[name] || 0)).map(([name, count]) => [name, Number(count) - (before[name] || 0)])) },
-    './build': {}, './pick': { blockSeen: () => !options.noPick }, './sight': { visibleOf: visible },
+    // reachBlock caps each approach with build.withTimeout (14.10); the stub passes the walk through.
+    './build': { withTimeout: p => p }, './pick': { blockSeen: () => !options.noPick }, './sight': { visibleOf: visible },
     './worlds': { worldOf: () => 'the_nether' },
     './perception/eyes': { nearest: () => [{ name: 'blackstone', x: 9, y: 56, z: 0, dist: 9, ago: 1 }] }
   }

@@ -839,7 +839,7 @@ export class TacticalSystem {
         await movement.sleep(200)
         return { extinguished: !!bot.entity.isInWater }
       }
-      case 'Surface': return movement.escapeWater(bot, ctl, { timeoutMs: 15000 })
+      case 'Surface': return movement.escapeWater(bot, ctl, { timeoutMs: 15000, visibleOnly: true })
       case 'EnterPortal': return require('../nether').enter(session, ctl, { scan: 4, timeoutSeconds: 20, noIgniter: true })
     }
   }

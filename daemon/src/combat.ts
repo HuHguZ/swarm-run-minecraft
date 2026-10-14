@@ -1752,6 +1752,10 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       await guard.raise(false)
       if (await require('./fightkit').healInFight(session, ctl, { weapon, retreatAtHealth }).catch(() => false)) continue
     }
+    if (decision.purpose === 'food' && guard.safety.hit() > 0) {
+      try { bot.pathfinder.setGoal(null) } catch {}
+      return { stopped: 'получил урон на охоте — новое наблюдение и защита', swings }
+    }
     const hp = bot.health ?? 20
     const safety = guard.safety.check({ target: entity, minHealth: Math.max(8, retreatAtHealth) })
     if (safety.action !== 'fight') {

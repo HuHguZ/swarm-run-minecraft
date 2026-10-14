@@ -127,7 +127,7 @@ export function runGain(state: TacticalState): number {
   const awaited = (enemy: TacticalEnemy) => S4D() && state.canFight && state.weapon && !enemy.player && !SHOOTERS.test(enemy.kind) && enemy.distance > 4.5 && (!state.burning || underFire)
   // The angry enderman teleports after a retreat (flee.DOCTRINE.fast): a run buys cover, not separation. It remains a
   // walker for shelter geometry; adding it to OUTPACING would also inherit the flyer dead-end rules.
-  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) || enemy.kind === 'enderman' ? .3 : awaited(enemy) ? .2 : 1), ...far.map(enemy => OUTPACING.test(enemy.kind) || enemy.kind === 'enderman' ? .3 : .5))
+  return Math.max(...near.map(enemy => enemy.player ? .4 : OUTPACING.test(enemy.kind) || enemy.kind === 'enderman' ? .3 : /^(skeleton|stray|bogged|parched|pillager)$/.test(enemy.kind) ? .5 : awaited(enemy) ? .2 : 1), ...far.map(enemy => OUTPACING.test(enemy.kind) || enemy.kind === 'enderman' ? .3 : .5))
 }
 export const deadEnd = (state: TacticalState): boolean => hasObservedTarget(state) && (!!state.escapeExhausted || outpaced(state))
 export const hasMeleeTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy))
