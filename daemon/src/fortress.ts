@@ -238,10 +238,17 @@ async function scout (session, ctl, p: any = {}) {
   if (worlds.worldOf(bot) !== 'the_nether' || p.mode === 'look' || p.mode === 'forget') return scoutBody(session, ctl, p)
   const feet = Math.floor(bot.entity.position.y)
   bot._ndNetherFloor = Math.min(40, feet)
+  // Обход по открытому Аду — под гастами: отбивать их шары (ne-guard.swatInstall) и здесь, а не только в bastion/blaze/ходе по сетке.
+  try { require('./ne-guard').swatInstall(bot) } catch {}
+  // Обход разведки — со строгим обходом лавы (session.lavaStepCost: шаг над обрывом к лаве в 14 бл. — 1000, у лавы — 200), как
+  // подход бастиона: на краю над лавовым морем шар гаста сбрасывал тело в лаву (ne-a, ne-c, b1-5-2, b4g-6-2 14.10: падение с y 70–83).
+  const strict0 = bot._ndLavaStrict
+  bot._ndLavaStrict = process.env.ND_SCOUT_LAVA_STRICT !== '0'
   try {
     return await scoutBody(session, ctl, p)
   } finally {
     bot._ndNetherFloor = 0
+    bot._ndLavaStrict = strict0
   }
 }
 
@@ -282,7 +289,12 @@ async function scoutBody (session, ctl, p: any = {}) {
   if (here !== 'the_nether') {
     return { found: false, stopped: `крепость Ада бывает только в Аду, а я ${worlds.inWorld(here)} — сначала mc_portal mode=enter` }
   }
-  if (p.mode === 'bastion') return bastionSearch(session, ctl, { deadline, radius, t0, high })
+  // Бастион — с вышки и кольцами вокруг портала по умолчанию (ND_BASTION_HIGH=0 — прежний обход полос региона): полосы региона
+  // уводили от бастиона в 51 бл. на север и за 430 бл. (b1-5-1, b0-5-2 14.10), а бастионы пула — в 70–144 бл. от входа.
+  if (p.mode === 'bastion') {
+    const highB = p.high ?? (high || process.env.ND_BASTION_HIGH !== '0')
+    return bastionSearch(session, ctl, { deadline, radius: highB ? clamp(p.radius ?? 128, 16, 128) : radius, t0, high: highB })
+  }
   const start = bot.entity.position.floored()
   const views = []
   let bastion = null
@@ -400,9 +412,14 @@ async function bastionSearch (session, ctl, { deadline, radius, t0, high = false
   let search = null
   if (!v.bastion && high) { const h = await highLook(session, ctl, glance); log('бастион: взгляд с вышки', { ...h, v: undefined }); if (h.v) v = h.v }
   if (!v.bastion) {
-    const r = await sweep(session, ctl, { deadline, glance, legs, v, want: 'bastion', high })
-    stopped = r.stopped
-    search = r.plan
+    // Кольца 56 и 112 бл. вокруг портала (а не 128/256 крепости): бастионы пула good-v2 — в 70–144 бл. от входа (квартили 93/116/136),
+    // с точки кольца вышка видит на 128.
+    bot._ndAvoidDeltas = true
+    try {
+      const r = await sweep(session, ctl, { deadline, glance, legs, v, want: 'bastion', high, rings: [56, 112] })
+      stopped = r.stopped
+      search = r.plan
+    } finally { bot._ndAvoidDeltas = false }
   }
   const detail: any = {
     mode: 'bastion',
@@ -431,6 +448,16 @@ async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
   const bot = session.bot
   const { towerUp } = require('./build')
   const base = bot.entity.position.floored()
+  // На столбе тело не уходит и не прячется: стрелки рядом (пиглины без нашего золота — арбалеты, скелеты, ифриты, гаст) — не
+  // строить (b5-5-1 14.10: столб 12 бл. у пиглинов, хп 20 → 0 за 2 с, «slain by Piglin»).
+  const goldWorn = [5, 6, 7, 8].some(s => /^golden_/.test(bot.inventory.slots[s]?.name || ''))
+  const shooters = require('./perception/eyes').entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null && (
+    (e.name === 'piglin' && !goldWorn && e.dist <= 24) || (/^(skeleton|blaze|piglin_brute)$/.test(e.name) && e.dist <= 24) || (e.name === 'ghast' && e.dist <= 48)))
+  if (shooters.length && process.env.ND_TOWER_SHOOTERS !== '0') return { skipped: `стрелки рядом: ${shooters.slice(0, 3).map(e => `${e.name} ${Math.round(e.dist)}`).join(', ')}` }
+  // Гаста слышно (его звук громкий — Ghast.getSoundVolume 5, сервер шлёт в 16·5 = 80 бл.; senses.heard — сторона и полоса, как
+  // субтитры) — столб под ним не строить (b5-7-3 14.10: вышка y 84 → 91 сразу у портала, шары, смерть за 30 с).
+  const ghastHeard = require('./perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).length > 0
+  if (ghastHeard && process.env.ND_TOWER_SHOOTERS !== '0') return { skipped: 'гаста слышно — вышку не строю' }
   let free = 0
   for (let y = 2; y <= up + 2; y++) { const b = bot.blockAt(base.offset(0, y, 0)); if (!b || b.boundingBox !== 'empty' || /lava/.test(b.name)) break; free++ }
   const n = Math.min(up, free - 1, 118 - base.y)
@@ -473,9 +500,23 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
     const tx = Math.round(start.x + dx * (along + step) + (dz !== 0 ? side : 0))
     const tz = Math.round(start.z + dz * (along + step) + (dx !== 0 ? side : 0))
     await keepBlocks(session, ctl)
+    const biomeHere = () => { try { return String(require('./perception').biomeName(bot, bot.entity.position.floored()) || '') } catch { return '' } }
+    const inDelta0 = bot._ndAvoidDeltas ? /basalt_deltas/.test(biomeHere()) : false
     const w = await legTo(session, ctl, tx, tz, deadline)
     legs.push({ to: { x: tx, z: tz }, ok: w.ok, down: w.down, bored: w.bored, fought: w.fought, error: w.ok ? undefined : w.error, from: xyz(me) })
     if (ctl.aborted) { stopped = 'прервано'; break }
+    // Поиск бастиона: базальтовые дельты (биом под ногами, F3) — бастионов там не бывает (bastion_remnant: все биомы Ада, кроме
+    // дельт), а магмовые кубы и гасты в базальте убивали (b0-7-1 14.10: хп 20 → 1 за 2 с) — направление закрыто. Только вход в
+    // дельты: из дельт, где уже стоим, отрезки выводят (b6-6-1 14.10: стоял в дельтах — каждый вызов «не иду» за 0 с).
+    if (bot._ndAvoidDeltas && !inDelta0 && process.env.ND_NE_DELTAS !== '0') {
+      if (/basalt_deltas/.test(biomeHere())) {
+        ;(bot._ndDeltaSeen ||= []).push(xyz(bot.entity.position))
+        stopped = `на ${WORDS[dirName]} базальтовые дельты — бастиона там не бывает, не иду`
+        blocked = true
+        if (resume) Object.assign(resume, { along, side, fails, blocked })
+        break
+      }
+    }
     if (w.fought) {
       // Отбился — тот же отрезок заново; не отбился и хп мало — стоп.
       if ((bot.health ?? 0) < 8) { stopped = w.error + `, хп ${Math.round(bot.health ?? 0)} — дальше не иду`; break }
@@ -624,7 +665,7 @@ async function walkTo (session, ctl, to, { deadline, glance, legs, stopWhen = nu
 // want='bastion' — тот же обход регионов, но цель — бастион (fortress mode=bastion): свой план в памяти (bastionSearch),
 // регион известной крепости и регионы, пройденные обходом крепости, пропускаются (в регионе одна постройка), стоп —
 // когда взгляд увидел бастион; кирпич крепости обход не останавливает.
-async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortress', high = false }: any) {
+async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortress', high = false, rings = [128, 256] }: any) {
   const bot = session.bot
   const forBastion = want === 'bastion'
   const KEY = forBastion ? 'bastionSearch' : 'fortressSearch'
@@ -665,7 +706,7 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
   // новых мирах 02.10), а крепость часто в соседнем регионе через границу (портал у z=−2, крепость у z=288).
   if (high && !plan.rings) {
     const pts = []
-    for (const R of [128, 256]) for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; pts.push({ x: Math.round(plan.origin.x + R * Math.cos(a)), z: Math.round(plan.origin.z + R * Math.sin(a)) }) }
+    for (const R of rings) for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; pts.push({ x: Math.round(plan.origin.x + R * Math.cos(a)), z: Math.round(plan.origin.z + R * Math.sin(a)) }) }
     const order = []
     let cur = { x: bot.entity.position.x, z: bot.entity.position.z }
     while (pts.length) {
@@ -681,6 +722,8 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
   let blocked = 0
   while (high && plan.rings && plan.rings.i < plan.rings.wps.length && !ctl.aborted && gameClock.now() < deadline) {
     const to = plan.rings.wps[plan.rings.i]
+    // Точка кольца в 48 бл. от увиденных дельт — бастиона там нет: следующая.
+    if (forBastion && (bot._ndDeltaSeen || []).some(d => Math.hypot(d.x - to.x, d.z - to.z) < 48)) { plan.rings.i++; delete plan.walk; save(); continue }
     const r = await walkTo(session, ctl, to, { deadline, glance, legs, stopWhen: hit, resume: plan.walk ||= {}, onProgress: save })
     v = r.v
     if (hit(v)) { stopped = null; save(); return { v, stopped, plan: { origin: plan.origin, rings: plan.rings.i, of: plan.rings.wps.length } } }
