@@ -12,7 +12,7 @@ function fixture() {
   const wood = source.slice(source.indexOf('let woodRoofed ='), source.indexOf("defStage(\"stone\""))
   const inventory: Record<string, number> = {}, calls: any[] = [], stages: any[] = []
   const have = re => Object.entries(inventory).reduce((n, [name, count]) => n + ((typeof re === 'string' ? name === re : re.test(name)) ? count : 0), 0)
-  const context: any = { process: { env: {} }, STAGES: stages, inventory, known: {}, died: false,
+  const context: any = { process: { env: {} }, STAGES: stages, inventory, known: {}, died: false, state: {},
     sit: { surface: true, night: false }, LOGS: /_(log|stem)$/, have,
     woodNow: () => have(/_log$/) + Math.floor(have(/_planks$/) / 4),
     defStage: (name, _needed, run) => stages.push({ name, run }), planksFor: () => 'oak_planks',
@@ -42,4 +42,9 @@ test('AcquireWood harvests the five-log bootstrap before returning control to th
 test('the standalone legacy wood actor retains its original reserve', async () => {
   const f = fixture(); await f.wood()
   assert.equal(f.calls.find(c => c.method === 'mine').params.count, 14)
+})
+
+test('in speedrun the legacy wood actor starts with six logs, the rest comes from reserve on the way (cl-u 14.10)', async () => {
+  const f = fixture(); f.context.state.playPolicy = { mode: 'speedrun' }; await f.wood()
+  assert.equal(f.calls.find(c => c.method === 'mine').params.count, 6)
 })

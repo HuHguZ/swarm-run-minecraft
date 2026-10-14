@@ -472,6 +472,13 @@ async function answerThreat (cause = 'unknown', source = null) {
       return
     }
     if (cause === 'drown' && sit.inWater) { await act('surface', { targetY: y() + 2, timeoutSeconds: 20, preferPillar: false }); return }
+    // Магма под ногами жжёт каждые полсекунды; под водой над ней столб пузырей тянет вниз (cl-w 14.10: «floor was lava», хп 17 → 0,
+    // а этап звал штрек, руду и гравий): сойти с неё — из воды на берег, на суше — отбежать.
+    if (cause === 'hot_floor') {
+      if (sit.inWater) await leaveWater()
+      else await act('flee', { timeoutSeconds: 6 })
+      return
+    }
     log(`урон «${cause}» — не нападение, нору не копаю`)
     return
   }
@@ -1857,7 +1864,9 @@ defStage('wood', () => !have(/_pickaxe$/) ||
   const starter = process.env.ND_ROUTE === '1' && !recovering && process.env.ND_ROUTE_WOOD_ONCE !== '0' &&
     have(/_pickaxe$/) && have('crafting_table') && have('stick') >= 2
   const stock = () => starter ? have(LOGS) : woodNow()
-  const want = bootstrap ?? (starter ? 5 : recovering ? 4 : (process.env.ND_ROUTE === '1' && !known.portal ? (Number(process.env.ND_ROUTE_WOODN) > 0 ? Number(process.env.ND_ROUTE_WOODN) : 6) : 14))
+  // Спидран: 6 брёвен на старте хватает на верстак, кирки и палки, остальное — reserve() по ходу; 14 гоняли по редколесью
+  // 15 мин до первой ночи (cl-u 14.10: 4 бревна, ещё 10 искал — смерть от утопленника на 15-й мин).
+  const want = bootstrap ?? (starter ? 5 : recovering ? 4 : (process.env.ND_ROUTE === '1' && !known.portal ? (Number(process.env.ND_ROUTE_WOODN) > 0 ? Number(process.env.ND_ROUTE_WOODN) : 6) : state.playPolicy?.mode === 'speedrun' ? 6 : 14))
   await sense()
   if (!sit.surface && !sit.night) await act('shelter', { mode: 'exit' })
   for (let i = 0; i < 10 && stock() < want; i++) {
@@ -2047,6 +2056,7 @@ async function foodRun () {
 let quickHuntAt = 0
 let nightDigAt = 0
 let nightCastAt = 0
+let nightHeld = false
 let foodSearchAt = 0
 async function quickHunt () {
   await sense()
@@ -2489,6 +2499,25 @@ async function skyLavaLook () {
   return best
 }
 let lavaSourceKnown = false
+// Руины портала, увиденные по пути (память построек — глаза): у руин часто лава (portal_2/7/8/10 и giant — 15–26 источников,
+// research/07), огниво и обсидиан. cl-o 14.10: сундук руин взят на 4-й мин, озеро у них не замечено, литьё искало за 300 бл.
+// К ближним руинам (≤ 400 бл.) один раз — и осмотреться оттуда, прежде чем искать вслепую.
+let ruinsLavaTried = false
+async function lavaAtSeenRuins () {
+  if (lavaSourceKnown || ruinsLavaTried || dim() !== 'overworld' || !state.pos) return false
+  const list = ((await act('structure', { mode: 'list' })).detail?.known || []).filter(e => e && e.kind === 'ruined_portal' && e.at && Number.isFinite(e.at.x))
+  const far = e => Math.hypot(e.at.x - state.pos.x, e.at.z - state.pos.z)
+  const rp = list.sort((a, b) => far(a) - far(b))[0]
+  if (!rp || far(rp) > 400) return false
+  ruinsLavaTried = true
+  log(`к руинам портала ${rp.at.x},${rp.at.z} (${Math.round(far(rp))} бл.) — у руин бывает лава`)
+  await goToward(rp.at, 8)
+  if (died) return false
+  skyLookAt = null
+  await skyLavaLook()
+  if (!lavaSourceKnown) await act('observe', { radius: 32 })
+  return lavaSourceKnown
+}
 async function surfaceLavaSurvey () {
   if (process.env.ND_OW_SURVEY === '0' || !NATURAL || surveyDone) return
   surveyDone = true
@@ -2932,6 +2961,7 @@ defStage('cast', () => !known.portal, async () => {
         continue
       }
       if (await skyLavaLook()) continue
+      if (await lavaAtSeenRuins()) continue
       const e = await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 150, surface: true })
       if (e.detail && e.detail.found) continue
       if (++surfaceLooks >= 2 && !known.lava) {
@@ -4609,6 +4639,7 @@ async function executeStrategy (command, signal) {
       const cell = () => state.pos && [dim(), ...['x', 'y', 'z'].map(axis => Math.floor(state.pos[axis] / 16))].join(':')
       if (cell()) lavaScoutCells.add(cell())
       await skyLavaLook()
+      if (!lavaSourceKnown) await lavaAtSeenRuins()
       await act('observe', { radius: 64 })
       if (!known.lava) await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90, surface: true })
       const viewed = cell()
@@ -4778,12 +4809,34 @@ ws.on('open', async () => {
       // Ночь до портала без брони (nightHold): работа под землёй той же цепочкой этапа iron (лесенкой к y 16, штреки: железо на
       // броню и щит, уголь, гравий); пережидать нельзя (правило пользователя), поверху — смерть (обе смерти cl-e 14.10 — ночью
       // поверху). Литьё у видимой лавы с готовым набором не прерываю (castNear).
+      // Ночь кончилась, а тело внизу: наверх своей лестницей до наземных этапов — разведка поверху из глубины шла пещерами
+      // (cl-t 14.10: с y 16 explore поднял в пещеру с тремя зомби, смерть на рассвете).
+      if (nightHeld && !nightHold() && !died) {
+        nightHeld = false
+        await sense()
+        if (!sit.surface && !sit.night && dim() === 'overworld' && !known.portal) { stage = '-'; log('рассвет — наверх своей лестницей'); await toSurface() }
+      }
       if (!died && nightHold()) {
+        nightHeld = true
         if (castNear() && gameClock.now() >= nightCastAt) {
           nightCastAt = gameClock.now() + 120000
           stage = 'cast'
           log('ночь, но лава рядом и набор литья готов — литьё')
           try { await stageRun('cast')() } catch (e) { if (e.stopCampaign) throw e; log(`ночное литьё: ${e.message}`) }
+          continue
+        }
+        // Поверху ночью — сначала нора на месте (3 вниз, крыша), работа вниз — уже из неё: скелет бьёт за 15 бл., пока тело ищет
+        // сухое место для лестницы (cl-u 14.10: смерть через минуту после темноты, у воды). Нора не копается — коробка.
+        if (sit.surface) {
+          stage = '-'
+          await act('shelter', { mode: 'enter', depth: 3 })
+          await sense()
+          // Вниз не вышло (вода под дёрном, болото, берег — cl-p 14.10: 3 мин ночью поверху в поисках сухого места, смерть от
+          // зомби): коробка на месте — стены от ходячих, крыша от стрел, до рассвета.
+          if (sit.surface && !died) {
+            const r = await act('refuge', { minHp: 20, maxSeconds: 60, stayIn: true, why: 'ночь: вниз здесь нельзя — коробка' })
+            if (!(r && r.detail && r.detail.stayed)) await act('wait', { seconds: 5 })
+          }
           continue
         }
         if (gameClock.now() >= nightDigAt && nightDigWood()) {
@@ -4801,18 +4854,9 @@ ws.on('open', async () => {
           continue
         }
         // Работа внизу сделана или отказала — наземные этапы графа (вода, охота, разведка) ночью не зову (cl-k 14.10: вода ночью
-        // вывела наверх, cl-h/cl-j: охота и берег ночью — смерть). Внизу — короткое ожидание в выработке, поверху — нора.
+        // вывела наверх, cl-h/cl-j: охота и берег ночью — смерть): короткое ожидание в выработке.
         stage = '-'
-        if (sit.surface) {
-          await act('shelter', { mode: 'enter', depth: 3 })
-          await sense()
-          // Вниз не вышло (вода под дёрном, болото, берег — cl-p 14.10: 3 мин ночью поверху в поисках сухого места, смерть от
-          // зомби): коробка на месте — стены от ходячих, крыша от стрел, до рассвета.
-          if (sit.surface && !died) {
-            const r = await act('refuge', { minHp: 20, maxSeconds: 60, stayIn: true, why: 'ночь: вниз здесь нельзя — коробка' })
-            if (!(r && r.detail && r.detail.stayed)) await act('wait', { seconds: 5 })
-          }
-        } else await act('wait', { seconds: 20 })
+        await act('wait', { seconds: 20 })
         continue
       }
       if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { stage = '-'; await ensurePick() }
