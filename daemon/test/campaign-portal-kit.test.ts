@@ -33,7 +33,7 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
   const casting = source.slice(source.indexOf("defStage('cast',"), source.indexOf("defStage('diamond',"))
   context.defStage = (_name, _needed, run) => { context.cast = run }
   Object.assign(context, { castRuns: 0, died: false, sit: { surface: true, night: false }, PICK_STONE: /_pickaxe$/,
-    sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null, lavaAtSeenRuins: async () => false, lavaSourceKnown: false,
+    sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null, lavaAtSeenRuins: async () => false, lavaSourceKnown: false, castSiteFails: new Map(), lavaBadSites: [], lavaBad: () => false,
     recoverGuard: async () => {}, unclutter: async () => {}, dim: () => 'overworld', y: () => 64,
     walkAway: async () => { calls.push({ method: 'walkAway', params: {} }) } })
   vm.createContext(context)
@@ -316,4 +316,21 @@ test('carried iron blocks fund the actual kit and sub-ingot nuggets remain intac
   assert.equal(f.inventory.shield, 1)
   assert.equal(f.inventory.iron_block, 0)
   assert.equal(f.inventory.iron_nugget, 8)
+})
+
+test('a lava site where the frame does not stand is dropped after four refusals and another lake is searched (cl-ai 14.10)', async () => {
+  const f = fixture({ water_bucket: 1, cobblestone: 24, flint_and_steel: 1 })
+  f.context.OW_DEEP = false
+  f.context.known.lava = { x: 0, y: 63, z: 0 }
+  f.context.state.pos = { x: 2, y: 64, z: 1 }
+  f.context.goToward = async () => true
+  f.context.spares = async () => {}
+  f.context.act = async (method, params) => {
+    f.calls.push({ method, params })
+    return { status: 'done', detail: method === 'portal' ? { stopped: 'места на берегу нет: берег не твёрдый (20)' } : {} }
+  }
+  await f.context.cast()
+  assert.equal(f.calls.filter(c => c.method === 'portal').length, 4)
+  assert.equal(f.context.known.lava, null)
+  assert.deepEqual(JSON.parse(JSON.stringify(f.context.lavaBadSites)), [{ x: 0, y: 63, z: 0 }])
 })

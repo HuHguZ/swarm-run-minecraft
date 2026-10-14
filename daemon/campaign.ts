@@ -372,7 +372,7 @@ async function act (method, params: any = {}, again = 0) {
       (dugInto ? { nearest: dugInto } : null)
     const closer = q => OW_DEEP && !!known.lava && !!state.pos && Math.hypot(q.x - state.pos.x, (q.y ?? y()) - state.pos.y, q.z - state.pos.z) + 8 <
       Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? y()) - state.pos.y, known.lava.z - state.pos.z)
-    if (seenLava && seenLava.nearest && (!known.lava || closer(seenLava.nearest))) {
+    if (seenLava && seenLava.nearest && (!known.lava || closer(seenLava.nearest)) && !lavaBad(seenLava.nearest)) {
       known.lava = seenLava.nearest
       log(`видел лаву на ${known.lava.x},${known.lava.y},${known.lava.z} — запомнил`)
       try { await call('remember', { kind: 'лава', text: `лава на ${known.lava.x},${known.lava.y},${known.lava.z}`, place: 'лава' }) } catch {}
@@ -2498,7 +2498,7 @@ async function skyLavaLook () {
   if (skyLookAt && Math.hypot(skyLookAt.x - state.pos.x, skyLookAt.z - state.pos.z) < 24) return null
   skyLookAt = { x: state.pos.x, z: state.pos.z }
   const sv = await act('portal_natural', { mode: 'survey', radius: 128 })
-  const best = sv.detail && sv.detail.best
+  const best = sv.detail && [sv.detail.best, ...(sv.detail.sites || [])].find(site => site && site.usable !== false && site.at && !lavaBad(site.at))
   if (!best || !best.at || !state.pos) { log('обзор вдаль: лавы под небом в 128 бл. не видно'); return null }
   const far = q => Math.hypot(q.x - state.pos.x, q.z - state.pos.z)
   if (!known.lava || far(best.at) + 8 < far(known.lava) || !lavaSourceKnown) {
@@ -2511,6 +2511,9 @@ async function skyLavaLook () {
   return best
 }
 let lavaSourceKnown = false
+const castSiteFails = new Map()
+const lavaBadSites = []
+const lavaBad = q => lavaBadSites.some(b => Math.hypot(b.x - q.x, b.z - q.z) < 24)
 // Руины портала, увиденные по пути (память построек — глаза): у руин часто лава (portal_2/7/8/10 и giant — 15–26 источников,
 // research/07), огниво и обсидиан. cl-o 14.10: сундук руин взят на 4-й мин, озеро у них не замечено, литьё искало за 300 бл.
 // К ближним руинам (≤ 400 бл.) один раз — и осмотреться оттуда, прежде чем искать вслепую.
@@ -2938,6 +2941,19 @@ defStage('cast', () => !known.portal, async () => {
     await readMemory()
     if (known.portal || died) break
     const why = String((r.detail && r.detail.stopped) || r.error || '')
+    // Литьё у этого озера не встаёт (лава под навесом, берег из жидкости — cl-ai 14.10: 100 мин «не вижу лавы-источника» и
+    // «места на берегу нет» у одной и той же пещерной лавы): после 4 отказов место плохое, ищем другое озеро.
+    if (known.lava && state.pos && /не вижу лавы|места на берегу нет|места под раму/.test(why) &&
+        Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? state.pos.y) - state.pos.y, known.lava.z - state.pos.z) <= 12) {
+      const key = `${Math.round(known.lava.x / 8)},${Math.round(known.lava.z / 8)}`
+      castSiteFails.set(key, (castSiteFails.get(key) || 0) + 1)
+      if (castSiteFails.get(key) >= 4) {
+        log(`литьё: у лавы ${known.lava.x},${known.lava.y},${known.lava.z} рама не встаёт (4 отказа) — ищу другое озеро`)
+        lavaBadSites.push({ ...known.lava })
+        known.lava = null; lavaSourceKnown = false; skyLookAt = null
+        break
+      }
+    }
     const needWhat = String((r.detail && r.detail.need && r.detail.need.what) || '')
     if (/cobblestone|stone/.test(needWhat)) {
       const filler = /^(cobblestone|cobbled_deepslate|dirt|stone|deepslate|andesite|diorite|granite|tuff|netherrack|blackstone|basalt|sandstone|red_sandstone)$/
