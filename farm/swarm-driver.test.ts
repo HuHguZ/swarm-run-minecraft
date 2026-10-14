@@ -405,3 +405,12 @@ test('a sighting is no fresher than the status request that carried it', () => {
     assert.equal(driver.enemies(bots[1])[0].seenAt, 10000, 'without a request time — now')
   } finally { Date.now = priorNow }
 })
+
+test('two naked allies panic at an enchanted netherite foe before any plan exists (native harness scene)', () => {
+  const bots: any[] = ['A', 'B'].map(name => ({ name, team: 'blue', c: { async call() { return {} } } }))
+  const pos = { A: { p: { x: .5, y: 64, z: -.5 }, hp: 20, inv: {}, armor: {} }, B: { p: { x: .5, y: 64, z: 1.5 }, hp: 20, inv: {}, armor: {} } }
+  const driver = createSwarmDriver({ bots, pos, alive: () => true, arena: { x: 3, y: 64, z: 0, r: 18 }, home: () => ({ x: -5, y: 64, z: 0 }), hostile: (_, id) => id === 'Foe', log: () => {} })
+  const seen = { id: 'Foe', visible: true, position: { x: 6.5, y: 64, z: .5 }, equipment: { weapon: 'netherite_sword', armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'], enchanted: true } }
+  for (const b of bots) driver.observe(b, [seen])
+  assert.deepEqual(bots.map(b => driver.panic(b)), [true, true], 'a futile trade is judged on the spot, not after the next plan')
+})

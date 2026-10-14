@@ -1,4 +1,4 @@
-import { SwarmBoard, planPvp, planTransfers, addBlueprint, nextBuild, assessSwarmFight, mustFlee, ownedCount } from '../daemon/src/swarm'
+import { SwarmBoard, planPvp, planTransfers, addBlueprint, nextBuild, assessSwarmFight, mustFlee, groupOf, groupVerdict, ownedCount } from '../daemon/src/swarm'
 const { swarmBlueprint } = require('../daemon/src/swarm-work')
 const WEAPON = /(_sword|_axe|_spear)$|^(mace|trident|bow|crossbow)$/
 const BLOCK = /^(cobblestone|stone|dirt|smooth_sandstone|sandstone|netherrack|.*_planks)$/
@@ -590,7 +590,7 @@ export function createSwarmDriver({ bots, pos, alive, arena, home, hostile, log,
     const board = boardOf(b), members = membersOf(b), member = members.find(m => m.id === b.name)
     const risk = member && assessSwarmFight(member, board.enemies(), members)
     const contact = !!member && board.enemies().some(e => distance(e.position, member.position) <= 4)
-    const v = !rangedAdvantage(b) && !!member && (!!risk && mustFlee(board, member, risk, contact) || planned.get(teamOf(b))?.get(b.name)?.kind === 'flee')
+    const v = !rangedAdvantage(b) && !!member && (!!risk && mustFlee(member, risk, contact, groupVerdict(groupOf(members, member), board.enemies())) || planned.get(teamOf(b))?.get(b.name)?.kind === 'flee')
     unsafeCache.set(b.name, { at: now(), v }); return v
   }
   const panic = b => unsafe(b) && !(b.swarmPreparingUntil > now() && boardOf(b).enemies().every(e => distance(e.position, pos[b.name].p) >= 14 && e.threat === 'melee'))

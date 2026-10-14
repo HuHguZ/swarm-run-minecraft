@@ -101,10 +101,6 @@ export class SwarmBoard {
   private current: { doctrine: Doctrine; since: number } | null = null
   // Последний командный счёт боя (planPvp): драйвер пишет в журнал, когда решение «держим бой» меняется.
   teamFight: SwarmTeamFight | null = null
-  // Свои в безнадёжном бою по последнему плану (planPvp), им бегство разрешено и при полном хп (mustFlee): futile — пустой
-  // размен (бежать и из рукопашной), outnumbered — поле за ними (отход к своим, но не из рукопашной).
-  futile = new Set<string>()
-  outnumbered = new Set<string>()
   private token = 0
   constructor(readonly team: string, readonly now: () => number = Date.now, readonly enemyTtlMs = 3000) {
     if (!team || !Number.isFinite(enemyTtlMs) || enemyTtlMs <= 0) throw new Error('Invalid swarm team/TTL')
@@ -233,7 +229,7 @@ export class SwarmBoard {
   tacticStats(): Partial<Record<Doctrine, { successes: number; failures: number }>> { return copy(this.learned) }
   doctrineState(): { doctrine: Doctrine; since: number } | null { return this.current ? { ...this.current } : null }
   setDoctrine(doctrine: Doctrine): void { if (this.current?.doctrine !== doctrine) this.current = { doctrine, since: this.now() } }
-  resetRound(): void { this.work.clear(); this.sightings.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.futile = new Set(); this.outnumbered = new Set() }
+  resetRound(): void { this.work.clear(); this.sightings.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null }
 }
 
 function liveMembers(board: SwarmBoard, members: SwarmMember[]) { return members.filter(m => m.team === board.team && m.health > 0) }
@@ -454,17 +450,31 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
   const loss = (side: 0 | 1) => units.filter(u => u.side === side).reduce((sum, u) => sum + (u.hp <= 0 ? 1 : (u.start - u.hp) / 20), 0)
   return { ourLoss: loss(0), theirLoss: loss(1), wipedUs: !alive(0), wipedThem: !alive(1), seconds: tick / 20, ours: units.filter(u => u.side === 0).length, theirs: enemies.length }
 }
+// Группа своих вокруг m: связные в 10 бл. (свой рядом со своим рядом с m).
+export function groupOf(team: SwarmMember[], m: SwarmMember): SwarmMember[] {
+  const group = [m]
+  for (let grew = true; grew;) { grew = false; for (const a of team) if (!group.includes(a) && group.some(g => distance(g.position, a.position) <= 10)) { group.push(a); grew = true } }
+  return group
+}
+// Приговор группы против врагов в 12 бл. от неё (assessTeamFight): futile — пустой размен, больше трёх своих за одного
+// врага (десять голых против незерита — тест Codex) или нас выносят, а мы не снимаем с них и четверти (голый одиночка
+// против брони); outnumbered — нас выносят, а у них остаётся не меньше тел, чем было нас (один против трёх, трое против
+// шести: это не бой роя, а отход к своим). Одна мера для планировщика и для мгновенной паники драйвера.
+export function groupVerdict(group: SwarmMember[], enemies: SharedEnemy[]): { futile: boolean; outnumbered: boolean } {
+  const foes = enemies.filter(e => group.some(a => distance(a.position, e.position) <= 12))
+  if (!foes.length) return { futile: false, outnumbered: false }
+  const score = assessTeamFight(group, foes)
+  const futile = score.ourLoss > 3 * Math.max(score.theirLoss, .5) || score.wipedUs && score.theirLoss < score.theirs / 4
+  return { futile, outnumbered: !futile && score.wipedUs && score.theirs - score.theirLoss >= Math.max(1, score.ours) }
+}
 // Политика боя (пользователь 14.10: «рои вырезают друг друга, бой должен кончаться; отступать — тактически и быстро на
-// хилку»). Бежит только тот, кого первый залп убьёт; тяжело раненый (меньше 35 % хп — сбегать полечиться и назад);
-// или тот, чья группа в безнадёжном размене (board.futile и board.outnumbered: голые против незерита — подготовка, а не прятки). Одно
-// правило для планировщика и драйвера.
-export function mustFlee(board: SwarmBoard, m: SwarmMember, risk: Pick<SwarmFightRisk, 'unsafe' | 'lethal' | 'killSeconds' | 'survivalSeconds' | 'ready'>, contact = false): boolean {
-  // Своя безнадёжность — сразу, ещё до плана, но только у одиночки (никто из своих не успеет, ready ≤ 1): убить его втрое
-  // дольше, чем я проживу (голый против незерита рядом). В общем бою личная оценка — не повод: на арене 14.10 так
-  // бежали при полном хп (447 из 910 бегств) из боя шесть на шесть. Отход к своим (безнадёжная группа) — только не из
-  // рукопашной (contact: враг ближе 4 бл.): начатая схватка — «любой ценой», её смена на бег рвала удары (арена 14.10).
-  // Пустой размен (futile) — бежать и из рукопашной: там «любой ценой» значит только потери.
-  return !!risk.lethal || !!risk.unsafe && (ratio(m) < .35 || board.futile.has(m.id) || !contact && board.outnumbered.has(m.id) || risk.ready <= 1 && risk.killSeconds > 3 * Math.max(1, risk.survivalSeconds))
+// хилку»). Бежит только тот, кого первый залп убьёт; тяжело раненый (меньше 35 % хп — сбегать полечиться и назад); чья
+// группа в пустом размене (бежать и из рукопашной: там «любой ценой» значит только потери); чья группа проиграла поле
+// (отход к своим, но не из рукопашной — contact, враг ближе 4 бл.: начатая схватка — «любой ценой», её смена на бег
+// рвала удары, арена 14.10); одиночка, к которому никто не успеет (ready ≤ 1), если убить врага втрое дольше, чем он
+// проживёт. В общем бою личная оценка «бьют все меня» — не повод: на арене так бежали при полном хп 447 раз из 910.
+export function mustFlee(m: SwarmMember, risk: Pick<SwarmFightRisk, 'unsafe' | 'lethal' | 'killSeconds' | 'survivalSeconds' | 'ready'>, contact: boolean, verdict: { futile: boolean; outnumbered: boolean }): boolean {
+  return !!risk.lethal || !!risk.unsafe && (ratio(m) < .35 || verdict.futile || !contact && verdict.outnumbered || risk.ready <= 1 && risk.killSeconds > 3 * Math.max(1, risk.survivalSeconds))
 }
 // Очки приёмов по обстановке. Взрывы и раненые — не жёсткие ворота, а цена (правило гибкости; ревью 13.10: в бою 20 на 20
 // кто-то ранен всегда, и «стадо» выбиралось навсегда): фонтан против взрывов почти всегда первый, стадо — по доле раненых.
@@ -580,25 +590,14 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
   // (тест Codex); один размен — мало: трое против шестерых меняются 3 на 3 и проигрывают поле. Начатый бой держится с
   // запасом в десятую часть всех тел боя (6 на 6 — 1.2 бота): оценка между пересчётами гуляет на бота, и бой мигал
   // «держим / не держим» каждые полсекунды (арена 14.10; в равной мясорубке «у них остался один» — монетка).
-  // Безнадёжный бой считает каждая группа своих (связные в 10 бл.) против врагов в 12 бл. от неё: больше трёх своих за
-  // одного врага (десять голых против незерита — тест Codex); нас выносят, а мы не снимаем с них и четверти (голый
-  // одиночка против брони); или нас выносят, а у них остаётся не меньше тел, чем было нас (один против трёх, трое против
-  // шести — это не бой роя, а отход к своим и сбор). Остальное — бой: «врага нужно уничтожить любой ценой» (14.10).
+  // Приговор каждой группы своих (groupVerdict); остальное — бой: «врага нужно уничтожить любой ценой» (14.10).
   const groups: SwarmMember[][] = []
-  for (const m of team) {
-    const near = groups.filter(g => g.some(a => distance(a.position, m.position) <= 10))
-    for (const g of near) groups.splice(groups.indexOf(g), 1)
-    groups.push([m, ...near.flat()])
-  }
+  for (const m of team) if (!groups.some(g => g.includes(m))) groups.push(groupOf(team, m))
   const futile = new Set<string>(), outnumbered = new Set<string>()
   for (const group of groups) {
-    const foes = enemies.filter(e => group.some(a => distance(a.position, e.position) <= 12))
-    if (!foes.length) continue
-    const score = assessTeamFight(group, foes)
-    const empty = score.ourLoss > 3 * Math.max(score.theirLoss, .5) || score.wipedUs && score.theirLoss < score.theirs / 4
-    for (const a of group) if (empty) futile.add(a.id); else if (score.wipedUs && score.theirs - score.theirLoss >= Math.max(1, score.ours)) outnumbered.add(a.id)
+    const verdict = groupVerdict(group, enemies)
+    for (const a of group) if (verdict.futile) futile.add(a.id); else if (verdict.outnumbered) outnumbered.add(a.id)
   }
-  board.futile = futile; board.outnumbered = outnumbered
   const hopeless = new Set([...futile, ...outnumbered])
   // Переиграли — 30 с готовиться (лут), а не охотиться обратно на того же (тест Codex: голые после бегства — к сундукам).
   if (hopeless.size) board.recordFact(team[0].id, board.now(), { id: 'outmatched', kind: 'mark', position: { ...center } }, 30000)
@@ -609,7 +608,7 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: { do
     const risk = assessSwarmFight(m, enemies, team)
     // Паника держится 3 игровых с: оценка у порога мигала «бегу / дерусь» каждые полсекунды, и каждое мигание рвало
     // начатое дело (арена 14.10: 108 переключений goto ↔ flee и 82 fight ↔ flee за минуту на 12 тел).
-    if (mustFlee(board, m, risk, enemies.some(e => distance(e.position, m.position) <= 4))) board.recordFact(m.id, board.now(), { id: 'panic:' + m.id, kind: 'mark', position: { ...m.position } }, 3000)
+    if (mustFlee(m, risk, enemies.some(e => distance(e.position, m.position) <= 4), { futile: futile.has(m.id), outnumbered: outnumbered.has(m.id) })) board.recordFact(m.id, board.now(), { id: 'panic:' + m.id, kind: 'mark', position: { ...m.position } }, 3000)
     else if (!board.facts().some(f => f.id === 'panic:' + m.id)) continue
     const threat = enemies.find(e => e.id === risk.target) || [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
     if (!threat) continue
