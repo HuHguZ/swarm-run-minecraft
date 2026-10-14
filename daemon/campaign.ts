@@ -1811,14 +1811,12 @@ const netherLack = () => [
   have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 ? '' : 'кирки',
   foodUnits() >= netherFoodNeed() ? '' : `еды (${foodUnits()} из ${netherFoodNeed()})`
 ].filter(Boolean).join(', ') || 'ничего'
-// Поножи и шлем — цена, а не допуск (правило пользователя 06.10): с нагрудником и щитом бой у спавнера из укрытия возможен,
-// а поход домой за ещё 12 слитками стоил 110 мин верхнего мира (cl-aa 14.10: бастион в 25 бл. и крепость в 74, «домой за
-// недостающим» — до конца прогона без стержней). Нагрудник и щит — по замеру (ферма 29.09: без нагрудника 0 из 8).
-const fightReady = () => READY.nether() && worn('torso') && shieldOn()
+const fightReady = () => READY.nether() && worn('torso') && shieldOn() && ((worn('legs') && worn('head')) || ironRuns >= 8)
 const fightLack = () => [
   netherLack() === 'ничего' ? '' : netherLack(),
   worn('torso') ? '' : 'нагрудника',
-  shieldOn() ? '' : 'щита'
+  shieldOn() ? '' : 'щита',
+  (worn('legs') && worn('head')) || ironRuns >= 8 ? '' : 'поножей или шлема'
 ].filter(Boolean).join(', ') || 'ничего'
 let fightGearWanted = false
 const DEFER = {
