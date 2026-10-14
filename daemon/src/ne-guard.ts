@@ -702,7 +702,7 @@ async function reactBody (session, ctl, opts, h) {
 // клики атаки съедает (Minecraft.handleKeybinds). По умолчанию включено (ND_GHAST_SWAT=0 — выкл.): сброс шаром гаста в лаву —
 // первая по частоте смерть лаборатории Ада (агент Ада 14.10: b6 — 3 из 9).
 const FB_ACCEL = 0.1
-const FB_INERTIA = 0.95
+const FB_INERTIA = Math.fround(0.95)
 function fbStep (s) {
   const n = Math.hypot(s.vx, s.vy, s.vz) || 1
   s.vx = (s.vx + s.vx / n * FB_ACCEL) * FB_INERTIA
@@ -725,9 +725,34 @@ function fbIncoming (s, me) {
   const t = (rx * s.vx + ry * s.vy + rz * s.vz) / sp
   return t > 0 && Math.hypot(rx - s.vx / sp * t, ry - s.vy / sp * t, rz - s.vz / sp * t) <= 2
 }
+// shortcut: constant observed ghast velocity through this return flight; re-aim from later shots if it turns.
+function fbReturnAim (bot, s, g, velocity, lagTicks) {
+  const pick = require('./pick')
+  const eye = pick.eyeOf(bot), origin = new Vec3(s.x, s.y, s.z)
+  const height = g.height || 4, half = (g.width || 4) / 2
+  let speed = 1, travelled = 0
+  for (let ticks = 1; ticks <= 64; ticks++) {
+    speed = (speed + FB_ACCEL) * FB_INERTIA
+    travelled += speed
+    const time = ticks + lagTicks
+    const target = g.position.offset(velocity.x * time, height / 2 + velocity.y * time, velocity.z * time)
+    const delta = target.minus(origin), distance = delta.norm()
+    if (distance < 1e-6 || travelled < distance) continue
+    const dir = delta.scaled(1 / distance)
+    const t = pick.rayBox(eye, dir, { x: s.x - 1.5, y: s.y - 1, z: s.z - 1.5 },
+      { x: s.x + 1.5, y: s.y + 2, z: s.z + 1.5 }, pick.RANGE)
+    if (t == null || pick.blockOnRay(bot, eye, dir, t)) return null
+    const end = pick.rayBox(origin, dir, { x: target.x - half, y: target.y - height / 2, z: target.z - half },
+      { x: target.x + half, y: target.y + height / 2, z: target.z + half }, distance)
+    if (end == null || pick.blockOnRay(bot, origin, dir, end)) return null
+    // AIM_DEFLECT takes the player's look, but launches at the projectile position.
+    return eye.plus(dir.scaled(distance))
+  }
+  return null
+}
 function swatInstall (bot) {
   if (!bot || bot._ndSwat || typeof bot.on !== 'function') return bot && bot._ndSwat
-  const st = { pend: null, n: 0, back: 0, fb: new Map(), rawVel: new Map(), type: null }
+  const st = { pend: null, n: 0, back: 0, fb: new Map(), rawVel: new Map(), ghasts: new Map(), type: null }
   bot._ndSwat = st
   try { st.type = bot.registry.entitiesByName.fireball.id } catch {}
   const show = s => { const e = bot.entities && bot.entities[s.id]; if (e && e.position && typeof e.position.set === 'function') e.position.set(s.x, s.y, s.z) }
@@ -778,10 +803,10 @@ function swatInstall (bot) {
     cl.on('entity_move_look', rel)
     cl.on('entity_destroy', data => { for (const id of data.entityIds || []) { st.fb.delete(id); st.rawVel.delete(id) } })
   }
-  bot.on('respawn', () => { st.fb.clear(); st.rawVel.clear(); st.pend = null })
+  bot.on('respawn', () => { st.fb.clear(); st.rawVel.clear(); st.ghasts.clear(); st.pend = null })
   const onTick = () => {
     try {
-      if (!st.fb.size) { st.pend = null; return }
+      if (!st.fb.size) { st.ghasts.clear(); st.pend = null; return }
       for (const s of st.fb.values()) {
         if (!bot.entities[s.id]) { st.fb.delete(s.id); continue }
         fbStep(s)
@@ -791,18 +816,32 @@ function swatInstall (bot) {
       const pick = require('./pick')
       const eye = pick.eyeOf(bot)
       const me = bot.entity.position
+      const now = gameClock.now()
+      const ghasts = (Object.values(bot.entities) as any[]).filter(g => g?.name === 'ghast' && g.position && g.isValid !== false &&
+        g.position.distanceTo(me) <= 64 && !!pick.aim(bot, g, { range: 66 })?.point)
+      const visible = new Set(ghasts.map(g => g.id))
+      for (const id of st.ghasts.keys()) if (!visible.has(id)) st.ghasts.delete(id)
+      for (const g of ghasts) {
+        const prev = st.ghasts.get(g.id), receipt = g._ndPositionReceipts?.[1]
+        if (prev && prev.receipt === receipt && prev.position.equals(g.position)) continue
+        const dt = prev ? (now - prev.at) / 50 : 0
+        const velocity = dt > 0 && dt <= 10 ? g.position.minus(prev.position).scaled(1 / dt) : new Vec3(0, 0, 0)
+        st.ghasts.set(g.id, { position: g.position.clone(), at: now, receipt, velocity })
+      }
       if (st.pend) {
         const s = st.fb.get(st.pend.id)
         const e = bot.entities[st.pend.id]
         if (!s || !e || fbReach(eye, s) > pick.RANGE) { st.pend = null; return }
         // Взгляд ещё не ушёл пакетом или щит снова поднят (тактика Shield) — ударить следующим тиком, пока шар в досягаемости.
         if (!st.pend.looked || bot.usingHeldItem) { st.pend.looked = false; return }
-        const ghast = st.pend.ghast
+        const { ghast, ghastId } = st.pend
         st.pend = null
+        const blocked = bot._ndBlockedHits || 0
         bot.attack(e)
+        if ((bot._ndBlockedHits || 0) !== blocked) return
         s.hitAt = gameClock.now()
         st.n++
-        log('шар гаста: удар', { n: st.n, d: +fbReach(eye, s).toFixed(2), ghast, blocked: bot._ndBlockedHits || 0 })
+        log('шар гаста: удар', { n: st.n, d: +fbReach(eye, s).toFixed(2), ghast, ghastId, blocked: bot._ndBlockedHits || 0 })
         return
       }
       let best = null
@@ -816,17 +855,16 @@ function swatInstall (bot) {
         if (!best || d < best.d) best = { s, n, d }
       }
       if (!best) return
-      // Прицел на гаста (шар уйдёт в него), если луч к гасту проходит через рамку прицела шара: 1×1, раздута на
-      // getPickRadius 1.0 (Projectile.isPickable — redirectable_projectile), ближе 3 бл.; иначе — на сам шар.
       const c = new Vec3(best.n.x, best.n.y + 0.5, best.n.z)
-      const g = bot.nearestEntity(e => e && e.name === 'ghast' && e.position && e.position.distanceTo(me) < 96)
-      let aimAt = c
-      if (g) {
-        const gc = g.position.offset(0, 2, 0)
-        const t = pick.rayBox(eye, gc.minus(eye).normalize(), { x: c.x - 1.5, y: c.y - 1.5, z: c.z - 1.5 }, { x: c.x + 1.5, y: c.y + 1.5, z: c.z + 1.5 }, pick.RANGE)
-        if (t != null) aimAt = gc
+      let aimAt = c, ghastId = null
+      for (const g of ghasts) {
+        const motion = st.ghasts.get(g.id)
+        const age = (now - motion.at) / 50
+        const velocity = age <= 10 ? motion.velocity : new Vec3(0, 0, 0)
+        const aim = fbReturnAim(bot, best.n, g, velocity, 1 + age)
+        if (aim) { aimAt = aim; ghastId = g.id; break }
       }
-      st.pend = { id: best.s.id, ghast: aimAt !== c, aim: aimAt, looked: false }
+      st.pend = { id: best.s.id, ghast: ghastId != null, ghastId, aim: aimAt, looked: false }
     } catch {}
   }
   // Взгляд — на поздней границе тика (physicTick, прямо перед пакетом движения): навык и pathfinder ставят свой взгляд в

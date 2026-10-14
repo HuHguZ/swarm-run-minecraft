@@ -165,8 +165,9 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.drowning) return 3
   if (state.lava || state.lavaEscapePending) return 2
   // A brute, a hoglin or three walkers coming (netherHide, 8 blocks): the hole goes down before they arrive, not under them.
-  // So does a ghast in sight over a lethal drop behind the body (ghastEdge): the box goes up before its first fireball.
-  if (state.contact || state.netherHide || state.ghastEdge || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
+  // So does a ghast in sight over a lethal drop behind the body (ghastEdge), when a box can go up: before its first fireball. With
+  // no box the level stays - a run from nobody "escaped" at once and looped (c16-6-3 14.10).
+  if (state.contact || state.netherHide || state.ghastEdge && state.shelter === 'BlockOff' || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
   if (foes.length) return 1
   return 0
 }

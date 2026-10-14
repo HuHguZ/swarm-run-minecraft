@@ -17,3 +17,22 @@ test('self knockback fix: another entity velocity never lands on a body whose id
   bot._client.emit('raw.entity_velocity', Buffer.from([0x63, 99, 0]))
   assert.deepEqual([bot.entity.velocity.x, bot.entity.velocity.y, bot.entity.velocity.z], [0, 0, 0])
 })
+
+// Скорость падения в пакете удара (агент Ада 14.10, c13–c16: y −1.9…−2.2 «странная» перед падением в лаву) — в пределах тела.
+test('self knockback fix: a fall speed of -2.1 from the server is applied, an impossible one is not', () => {
+  const lp = (vx: number, vy: number, vz: number, scale: number) => {
+    const q = (v: number) => BigInt(Math.round((v / scale + 1) * 32766 / 2))
+    const packed = (q(vz) << 33n) | (q(vy) << 18n) | (q(vx) << 3n) | BigInt(scale)
+    const buf = Buffer.alloc(6)
+    buf[0] = Number(packed & 0xFFn); buf[1] = Number((packed >> 8n) & 0xFFn); buf.writeUInt32BE(Number(packed >> 16n), 2)
+    return buf
+  }
+  const bot: any = { _client: new EventEmitter(), entity: { id: 7, velocity: new Vec3(0, 0, 0) },
+    registry: { protocol: { play: { toClient: { types: { packet_entity_velocity: ['container', [{ name: 'velocity', type: 'lpVec3' }]] } } } } } }
+  fixSelfKnockback(bot)
+  bot._client.emit('raw.entity_velocity', Buffer.concat([Buffer.from([0x63, 7]), lp(0, -2.1, 0, 3)]))
+  assert.ok(Math.abs(bot.entity.velocity.y + 2.1) < 0.01, String(bot.entity.velocity.y))
+  bot.entity.velocity.set(0, 0, 0)
+  bot._client.emit('raw.entity_velocity', Buffer.concat([Buffer.from([0x63, 7]), lp(0, -2.9, 0, 3)]))
+  assert.ok(Math.abs(bot.entity.velocity.y + 2.9) < 0.01, 'до предела 3.92 — тоже')
+})

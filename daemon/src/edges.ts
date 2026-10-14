@@ -1421,9 +1421,10 @@ function fixSelfKnockback (bot) {
         const id = readVarInt(buf, start)
         if (id.v !== bot.entity.id) continue
         const { x, y, z } = readLpVec3BE(buf, id.off)
-        // Больше, чем даёт удар (0.4 + спринт 0.5 + «Отдача II» 1.0) и прыжок,
-        // — не верить, а записать в лог.
-        if (Math.hypot(x, z) > 2.5 || Math.abs(y) > 1.5 || ![x, y, z].every(Number.isFinite)) {
+        // Больше предела тела — не верить, а записать в лог. По вертикали предел — скорость падения (3.92 бл./тик, LivingEntity
+        // travel: 0.98 на тик и −0.08): сервер шлёт её в пакете удара посреди падения (c13–c16 14.10: «странная скорость»
+        // y −1.9…−2.2 перед каждым падением в лаву — клиент оставлял неверную скорость mineflayer). По горизонтали — взрыв рядом.
+        if (Math.hypot(x, z) > 4 || Math.abs(y) > 4 || ![x, y, z].every(Number.isFinite)) {
           console.log('[kb] странная скорость — не применяю', JSON.stringify({ x, y, z }))
           return
         }
