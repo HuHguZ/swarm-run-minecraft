@@ -1917,6 +1917,20 @@ async function bastion (session, ctl, p: any = {}) {
             continue
           }
         }
+        // Вслепую без золотой вещи — к центру бастиона закрытым штреком (nether-cover), устья — окна обзора (survey): вскрытый двор
+        // показывает золото и сундуки, дальше — к ним (sealedGold). golden-v1 g1-5-1: бастион в 15 бл., «не узнан» за 2 с, брошен.
+        const NC = require('.././nether-cover')
+        if (!goldWorn(bot) && NC.blind() && (st.probes || 0) < 6 && gameClock.now() < deadline - 30000) {
+          st.probes = (st.probes || 0) + 1
+          const targets = () => st.gold.size + [...st.chestSeen.keys()].filter(k => !st.looted.has(k)).length
+          const r: any = await NC.closedBore(session, ctl, { x: center.x, z: center.z }, {
+            deadline: Math.min(deadline - 20000, gameClock.now() + 60000), maxSteps: 24,
+            onOpen: async () => { survey(bot, st, 56); return { seen: targets() } }, stop: v => !!(v && v.seen > 0)
+          })
+          survey(bot, st, 56)
+          log('бастион: штреком к центру', { n: st.probes, ok: r.ok, moved: r.moved, mouths: r.mouths, corridor: r.corridor, gold: st.gold.size, chests: st.chestSeen.size, why: r.why, at: r.at })
+          if (r.moved || targets()) continue
+        }
         st.sealedDone = true
         st.notRecognized = true
         break

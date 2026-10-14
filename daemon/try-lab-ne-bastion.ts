@@ -31,9 +31,16 @@ const STAGES = process.env.STAGES || 'bastion,eyes'
 let CENV: Record<string, any> = {} as Record<string, any>
 try { CENV = JSON.parse(process.env.CENV || '{}') } catch {}
 
-const KIT = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
-  'stone_pickaxe 2', 'water_bucket', 'bucket', 'flint_and_steel', 'cooked_beef 12', 'cobblestone 64',
-  'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'stick 8', 'obsidian 10', 'iron_ingot 2']
+const KITS = {
+  std: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
+    'stone_pickaxe 2', 'water_bucket', 'bucket', 'flint_and_steel', 'cooked_beef 12', 'cobblestone 64',
+    'cobbled_deepslate 64', 'crafting_table', 'oak_planks 16', 'stick 8', 'obsidian 10', 'iron_ingot 2'],
+  // ls — набор слепого входа (try-lab-ne-run KIT=lightshield): брони и золота нет — золото бастиона на ботинки и бартер (агент Ада 14.10).
+  ls: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'shield', 'water_bucket', 'bucket', 'flint_and_steel',
+    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
+    'white_bed', 'obsidian 10', 'iron_ingot 1']
+}
+const KIT = KITS[process.env.KIT || 'std'] || KITS.std
 const KIT_AFTER = ['blaze_rod 7']
 
 const conn = connect(WS)
