@@ -211,6 +211,12 @@ async function act (method, params: any = {}, again = 0) {
   // Блок под водой (вода прямо над ним) — не цель: подход вплавь, тактика всплывает и рвёт добычу, этап зовёт её снова
   // (cl-o/cl-q 14.10: камень и железо со дна озера — круги «из воды на берег» по 20+ мин).
   if (method === 'mine' && params.dry === undefined && dim() === 'overworld') params = { ...params, dry: true }
+  // Разведка поверху из глубины шла пещерами (cl-z 14.10: поиск построек с y 14 — паук, смерть на 10-й мин; cl-t: с y 16 —
+  // зомби): сперва наверх, своей лестницей, если она есть.
+  if (method === 'explore' && params.surface === true && dim() === 'overworld' && !died && !fighting && !resting && state.pos) {
+    await sense()
+    if (!sit.surface && y() < 56) { log('разведка поверху, а я внизу — сперва наверх'); await toSurface() }
+  }
   if (method === 'explore' && !params.direction && dim() === 'overworld') {
     const away = awayFromDanger()
     if (away) { log(`разведка — прочь от места нападения (${dangerZone.why}): ${away}`); params = { ...params, direction: away } }
@@ -1805,12 +1811,14 @@ const netherLack = () => [
   have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 ? '' : 'кирки',
   foodUnits() >= netherFoodNeed() ? '' : `еды (${foodUnits()} из ${netherFoodNeed()})`
 ].filter(Boolean).join(', ') || 'ничего'
-const fightReady = () => READY.nether() && worn('torso') && shieldOn() && ((worn('legs') && worn('head')) || ironRuns >= 8)
+// Поножи и шлем — цена, а не допуск (правило пользователя 06.10): с нагрудником и щитом бой у спавнера из укрытия возможен,
+// а поход домой за ещё 12 слитками стоил 110 мин верхнего мира (cl-aa 14.10: бастион в 25 бл. и крепость в 74, «домой за
+// недостающим» — до конца прогона без стержней). Нагрудник и щит — по замеру (ферма 29.09: без нагрудника 0 из 8).
+const fightReady = () => READY.nether() && worn('torso') && shieldOn()
 const fightLack = () => [
   netherLack() === 'ничего' ? '' : netherLack(),
   worn('torso') ? '' : 'нагрудника',
-  shieldOn() ? '' : 'щита',
-  (worn('legs') && worn('head')) || ironRuns >= 8 ? '' : 'поножей или шлема'
+  shieldOn() ? '' : 'щита'
 ].filter(Boolean).join(', ') || 'ничего'
 let fightGearWanted = false
 const DEFER = {
@@ -2478,6 +2486,7 @@ let surveyDone = false
 // спавна, разведка ушла на север; ни один из 22 прогонов cl-a…cl-k не дошёл до литья). Годное озеро — в known.lava.
 let skyLookAt = null
 let skyLookNext = 0
+let lookoutsDone = 0
 async function skyLavaLook () {
   if (dim() !== 'overworld' || known.portal || process.env.ND_SKY_LAVA === '0') return null
   await sense()
@@ -4780,9 +4789,21 @@ ws.on('open', async () => {
       }
       // Лава светится: осмотр вдаль с поверхности по ходу дела (не чаще раза в минуту, с нового места) — где озеро, знать
       // заранее, к литью идти туда (cl-o 14.10: озеро у руин в 26 бл. от спавна не заметил, литьё искал за 300 бл.).
-      if (dim() === 'overworld' && !known.portal && !known.lava && !died && sit.surface && !sit.night && gameClock.now() >= skyLookNext) {
+      if (dim() === 'overworld' && !known.portal && !lavaSourceKnown && !died && sit.surface && !sit.night && gameClock.now() >= skyLookNext) {
         skyLookNext = gameClock.now() + 60000
-        try { await skyLavaLook() } catch (e) { if (e.stopCampaign) throw e }
+        try {
+          await skyLavaLook()
+          // С земли озеро часто закрыто рельефом и деревьями (замер слота 1 14.10: 5 открытых клеток озера в 54 бл., ни одна не видна
+          // с земли): раз-два за прогон — столб на 10 вверх своими блоками, осмотр, спуск (как игрок с вышки). Блоки — после камня.
+          if (!lavaSourceKnown && lookoutsDone < 2 && have(COBBLE) + have('dirt') >= 12 && !died) {
+            lookoutsDone++
+            const y0 = y()
+            await act('tunnel', { direction: 'up', length: 10, timeoutSeconds: 25 })
+            const climbed = Math.round(y() - y0)
+            if (climbed >= 4) { skyLookAt = null; await skyLavaLook() }
+            if (climbed > 0 && !died) await act('tunnel', { direction: 'down', length: climbed, timeoutSeconds: 30 })
+          }
+        } catch (e) { if (e.stopCampaign) throw e }
       }
       // Еда по пути, как у игрока: днём, звери на виду, запас мал — добыть сейчас (quickHunt: только видимые в 24 бл., ≤ 60 с).
       // Граф ставит FindFood перед входом в Ад; cl-a/cl-c 14.10: первые 15–18 мин без еды, урон не лечится, смерть ночью.
@@ -4829,8 +4850,14 @@ ws.on('open', async () => {
         // сухое место для лестницы (cl-u 14.10: смерть через минуту после темноты, у воды). Нора не копается — коробка.
         if (sit.surface) {
           stage = '-'
-          await act('shelter', { mode: 'enter', depth: 3 })
+          const hole = await act('shelter', { mode: 'enter', depth: 3 })
           await sense()
+          // Нора с открытым боком у воды заливается: из воды — и коробку (cl-y 14.10).
+          if (sit.inWater && !died) { await leaveWater(); await sense() }
+          if (!sit.surface && !died && !sit.inWater && /ПОТОЛОК ОТКРЫТ/.test(String(hole.detail?.note || ''))) {
+            await act('refuge', { minHp: 20, maxSeconds: 60, stayIn: true, why: 'ночь: нора открыта — коробка' })
+            continue
+          }
           // Вниз не вышло (вода под дёрном, болото, берег — cl-p 14.10: 3 мин ночью поверху в поисках сухого места, смерть от
           // зомби): коробка на месте — стены от ходячих, крыша от стрел, до рассвета.
           if (sit.surface && !died) {
@@ -4854,9 +4881,12 @@ ws.on('open', async () => {
           continue
         }
         // Работа внизу сделана или отказала — наземные этапы графа (вода, охота, разведка) ночью не зову (cl-k 14.10: вода ночью
-        // вывела наверх, cl-h/cl-j: охота и берег ночью — смерть): короткое ожидание в выработке.
+        // вывела наверх, cl-h/cl-j: охота и берег ночью — смерть): короткое ожидание в выработке. Залило — сперва из воды
+        // (cl-y 14.10: нора у воды с открытым боком залилась, ожидание по 20 с под водой — утонул).
         stage = '-'
-        await act('wait', { seconds: 20 })
+        await sense()
+        if (sit.inWater) await leaveWater()
+        else await act('wait', { seconds: 20 })
         continue
       }
       if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { stage = '-'; await ensurePick() }
