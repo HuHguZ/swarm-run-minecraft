@@ -2279,17 +2279,15 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
     await mineSeenAll('iron_ore')
     await mineSeenAll('deepslate_iron_ore')
     if (OW_DEEP && !known.portal && !have('water_bucket')) await bucketOnTheWay(t)
-    // Золото на виду в штреке — и до портала: без золотой вещи пиглины враждебны (PiglinAi.isWearingSafeArmor), 4 слитка — ботинки
-    // (агент Ада 14.10: пиглины — главный убийца лаборатории, во всех слепых входах cl-* золотой брони не было). Только видимая руда.
-    if (have(PICK_IRON) && !goldOn() && have(/^(raw_gold|gold_ingot)$/) < 5) await mineSeenAll('gold_ore,deepslate_gold_ore')
     if (ironNow() < want) await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: Math.min(8, want - ironNow()), radius: OW_DEEP ? (process.env.ND_IRON_WIDE !== '0' ? 24 : 16) : 32, timeoutSeconds: 150 })
     if ((!known.lava || OW_DEEP) && !known.portal) await act('observe', { radius: 32 })
     if (have(/^(coal|charcoal)$/) < 12) await mineSeenAll('coal_ore')
     if (!have('flint') && !have('flint_and_steel')) await act('mine', { block: 'gravel', dry: true, count: 8, radius: 16, timeoutSeconds: 90 })
     await torches()
     if (t.detail && t.detail.need) break
-    const goldDone = !known.portal || goldOn() || have(/^(raw_gold|gold_ingot)$/) >= 5
-    if (i >= (known.portal ? 1 : 4) && ironNow() >= (known.portal ? want : 8) && (goldDone || i >= (known.portal ? 5 : 10))) break
+    // Золото в верхнем мире не ищу (пользователь 14.10: «если золота нет в основном мире, то тратить время на его поиски — тупим»):
+    // золото на броню и бартер берётся в Аду, здесь — только попутно из построек. Штреки кончаются по железу.
+    if (i >= (known.portal ? 1 : 4) && ironNow() >= (known.portal ? want : 8)) break
   }
   if (have('raw_iron') && !have(/^(coal|charcoal)$/) && woodNow() < 6 && ironToSmelt() > 0) {
     await smeltAll('raw_iron', 'iron_ingot', { fetchCoal: true, max: ironToSmelt() })
@@ -2297,11 +2295,6 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
   }
   await smeltAll('raw_iron', 'iron_ingot', { fetchCoal: true, max: ironToSmelt() })
   await spendIron()
-  // #piglin_safe_armor (PiglinAi.isWearingSafeArmor, paper-1.21.11 — см.
-  if (have(PICK_IRON) && have(/^(raw_gold|gold_ingot)$/) < 5) {
-    await mineSeenAll('gold_ore')
-    await mineSeenAll('deepslate_gold_ore')
-  }
   await smeltAll('raw_gold', 'gold_ingot')
   if (known.portal && !goldOn() && have('gold_ingot') >= 4) await wearGold()
 })
@@ -2554,32 +2547,52 @@ async function lavaAtSeenRuins () {
   log(`к руинам портала ${rp.at.x},${rp.at.z} (${Math.round(far(rp))} бл.) — у руин бывает лава`)
   await goToward(rp.at, 8)
   if (died) return false
-  await ruinsChestNear(24)
+  await lootSeenStructures(24)
   if (died) return false
   skyLookAt = null
   await skyLavaLook()
   if (!lavaSourceKnown) await act('observe', { radius: 32 })
   return lavaSourceKnown
 }
-// Сундук руин портала рядом — ещё до Ада: золотая броня в ~60 % сундуков (loot_table chests/ruined_portal: 4–8 бросков), самородки
-// и блоки — на ботинки (4 слитка). Без золотой вещи пиглины враждебны (PiglinAi.isWearingSafeArmor; агент Ада 14.10: главный убийца
-// в лаборатории, во всех слепых входах cl-* золотой брони не было, а литьё у лавы руин сундук не открывало). Цена — подход в radius и
-// осмотр ≤ 120 с; уже открытые руины (done) — мимо.
-async function ruinsChestNear (radius = 32) {
-  if (dim() !== 'overworld' || goldOn() || have(/^golden_(helmet|chestplate|leggings|boots)$/) || !state.pos || died) return
-  await act('structure', { mode: 'scan', radius: 48 })
-  const list = ((await act('structure', { mode: 'list' })).detail?.known || [])
-    .filter(x => x && x.kind === 'ruined_portal' && !x.done && x.at && Number.isFinite(x.at.x))
+// Постройки на виду — лут ценой (пользователь 14.10: «клады разные искать по структурам основного мира — это время экономит, если
+// они рядом»): руины портала (огниво, обсидиан, золото), деревни (еда, железо, кровати), храмы, иглу, корабли. Идти или нет —
+// выгода предметов при текущих нуждах против пути (src/campaign/structure-value.ts, таблицы лута 1.21.11), числа — в журнал.
+// Находит глаз (structure scan): постройки, которые бот видел сам. Взятая (done) или уже испробованная — мимо.
+const structureValue = require(path.join(__dirname, 'src', 'campaign', 'structure-value'))
+const structLootTried = new Set()
+let structLootNext = 0
+function structureNeeds () {
+  const kitIron = (have(/bucket$/) ? 0 : 3) + (lighter() ? 0 : 1) + (shieldOn() ? 0 : 1) + (have(PICK_IRON) ? 0 : 3)
+  const iron = have(/^(raw_iron|iron_ingot)$/) + Math.floor(have('iron_nugget') / 9)
+  return { iron: known.portal ? 0 : Math.max(0, kitIron - iron), lighter: !known.portal && !lighter(), food: Math.max(0, 8 - foodUnits()),
+    portal: !!known.portal, diamondPick: !known.portal && !have('diamond_pickaxe'), beds: Math.max(0, BEDS_END - have(/_bed$/)) }
+}
+async function lootSeenStructures (radius = 160) {
+  if (dim() !== 'overworld' || died || !state.pos || process.env.ND_STRUCT_LOOT === '0') return false
+  await act('structure', { mode: 'scan', radius: 96 })
   const far = x => Math.hypot(x.at.x - state.pos.x, x.at.z - state.pos.z)
-  const t = list.filter(x => far(x) <= radius).sort((a, b) => far(a) - far(b))[0]
-  if (!t) return
-  log(`руины портала в ${Math.round(far(t))} бл. — сундук: золото на броню от пиглинов`)
-  const e = await act('structure', { mode: 'explore', kind: 'ruined_portal', x: t.at.x, z: t.at.z, timeoutSeconds: 120 })
+  const keyOf = x => `${x.kind}:${x.at.x},${x.at.z}`
+  const list = ((await act('structure', { mode: 'list' })).detail?.known || [])
+    .filter(x => x && x.at && Number.isFinite(x.at.x) && !x.done && structureValue.LOOT[x.kind] && !structLootTried.has(keyOf(x)) && far(x) <= radius)
+  if (!list.length || died) return false
+  const needs = structureNeeds()
+  const scored = list.map(x => ({ x, w: structureValue.structureWorth(x.kind, far(x), needs) })).sort((a, b) => b.w.net - a.w.net)
+  for (const s of scored.slice(0, 3)) log(`постройка ${s.x.name || s.x.kind} в ${Math.round(s.w.distance)} бл.: ${structureValue.describeWorth(s.w)} — ${s.w.net > 0 ? 'иду' : 'мимо'}`)
+  const best = scored[0]
+  if (!(best.w.net > 0)) return false
+  structLootTried.add(keyOf(best.x))
+  const bag0 = { ...(state.inventory || {}) }
+  const t0 = gameClock.now()
+  const e = await act('structure', { mode: 'explore', kind: best.x.kind, x: best.x.at.x, z: best.x.at.z, ...(Number.isFinite(best.x.at.y) ? { y: best.x.at.y } : {}),
+    ...(best.x.kind === 'village' && needs.beds > 0 ? { beds: 1 } : {}), timeoutSeconds: Math.round(Math.min(300, best.w.cost * 2 + 60)) })
   await refresh()
   if (have('gold_block')) await craft('gold_ingot', 9 * have('gold_block'))
   if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
   if (!goldOn() && have(/^golden_(helmet|chestplate|leggings|boots)$/)) await act('armor')
-  log(`руины: ${JSON.stringify((e.detail && e.detail.took) || {})}; золото на мне: ${goldOn() ? 'да' : 'нет'}`)
+  const got = Object.entries(state.inventory || {}).filter(([k, n]) => (Number(n) || 0) > (Number(bag0[k]) || 0)).map(([k, n]) => `${k}+${Number(n) - (Number(bag0[k]) || 0)}`)
+  log(`постройка ${best.x.name || best.x.kind}: ${Math.round((gameClock.now() - t0) / 1000)} с (оценка ${Math.round(best.w.cost)} с), взял ${got.join(', ') || 'ничего'}${e.detail?.stopped ? ' — ' + String(e.detail.stopped).slice(0, 80) : ''}`)
+  if (/^(village|shipwreck)$/.test(best.x.kind)) graphFact(`${best.x.kind}_exhausted`, true)
+  return true
 }
 async function surfaceLavaSurvey () {
   if (process.env.ND_OW_SURVEY === '0' || !NATURAL || surveyDone) return
@@ -2978,8 +2991,8 @@ defStage('cast', () => !known.portal, async () => {
   await skyLavaLook()
   if (!known.lava) await act('observe', { radius: 48 })
   if (known.lava && state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) > 16) await goToward(known.lava, 8)
-  // Лава у руин (класс rp пула good-v2) — их сундук в двух шагах: золото на Ад до литья.
-  await ruinsChestNear(32)
+  // Лава у руин (класс rp пула good-v2) — их сундук в двух шагах: огниво, обсидиан — до литья, если окупается.
+  await lootSeenStructures(32)
   await ensureFlint()
   for (let i = 0; i < 6 && !known.portal; i++) {
     await recoverGuard()
@@ -3068,7 +3081,6 @@ defStage('diamond', () => !have(PICK_DIAMOND) && !known.portal, async () => {
     if (!known.lava && !known.portal) await act('observe', { radius: 32 })
     await act('mine', { block: 'deepslate_diamond_ore,diamond_ore', count: 6, radius: 32, timeoutSeconds: 180 })
     if (have('raw_iron') + have('iron_ingot') < 8) await mineSeenAll('deepslate_iron_ore,iron_ore', 24)
-    if (have(/^(raw_gold|gold_ingot)$/) < 5) await mineSeenAll('deepslate_gold_ore,gold_ore', 24)
     await torches()
     if (t.detail && t.detail.need) break
   }
@@ -3689,27 +3701,6 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
   }
 })
 
-// loot_table/chests/ruined_portal.json в server-1.21.11.jar) и золотые блоки
-let ruinTried = false
-async function ruinedPortalGold () {
-  if (ruinTried || dim() !== 'overworld' || goldOn()) return
-  ruinTried = true
-  const r = await act('structure', { mode: 'list' })
-  const ruins = ((r.detail && r.detail.known) || []).filter(x => x.kind === 'ruined_portal' && !x.done && x.dist != null && x.dist < 650)
-  if (!ruins.length) { log('руин портала в памяти нет — золото на шлем в Аду'); return }
-  const t = ruins[0]
-  log(`за золотом на шлем — руины портала ${t.at.x},${t.at.z} (${t.dist} бл.)`)
-  for (let k = 0; k < 6 && !died; k++) { await nightGuard(); if (await goToward(t.at, 24)) break }
-  const e = await act('structure', { mode: 'explore', kind: 'ruined_portal', x: t.at.x, z: t.at.z, timeoutSeconds: 180 })
-  await refresh()
-  if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
-  if (have('gold_block')) await craft('gold_ingot', 9 * have('gold_block'))
-  if (!goldOn() && have(/^golden_(helmet|chestplate|leggings|boots)$/)) await act('armor')
-  if (!goldOn() && have('gold_ingot') >= 4) await wearGold()
-  log(`руины: ${JSON.stringify((e.detail && e.detail.took) || {})}; золото на мне: ${goldOn() ? 'да' : 'нет'}`)
-  if (known.portal) for (let k = 0; k < 6 && !died; k++) { await nightGuard(); if (await goToward(known.portal, 6)) break }
-}
-
 // Пиглинам хватает любой золотой вещи: ботинки — 4 слитка, шлем — 5 (броня 1 против 2); из 4 слитков — ботинки, а не ещё одна руда.
 async function wearGold () {
   await craft(have('gold_ingot') >= 5 ? 'golden_helmet' : 'golden_boots')
@@ -3792,7 +3783,6 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
   if (dim() !== 'the_nether') {
     await refresh()
     if (!goldOn() && have('gold_ingot') >= 4) await wearGold()
-    if (!goldOn()) await ruinedPortalGold()
     if (known.portal && state.pos && Math.hypot(known.portal.x - state.pos.x, known.portal.z - state.pos.z) > 48) {
       for (let k = 0; k < 4 && !died; k++) {
         await nightGuard()
@@ -4936,6 +4926,11 @@ ws.on('open', async () => {
             if (climbed > 0 && !died) await act('tunnel', { direction: 'down', length: climbed, timeoutSeconds: 30 })
           }
         } catch (e) { if (e.stopCampaign) throw e }
+      }
+      // Постройки на виду — раз в минуту днём поверху: лут, если выгода больше пути (lootSeenStructures, числа в журнале).
+      if (dim() === 'overworld' && !died && sit.surface && !sit.night && gameClock.now() >= structLootNext && process.env.ND_STRUCT_LOOT !== '0') {
+        structLootNext = gameClock.now() + 60000
+        try { await lootSeenStructures() } catch (e) { if (e.stopCampaign) throw e }
       }
       // Еда по пути, как у игрока: днём, звери на виду, запас мал — добыть сейчас (quickHunt: только видимые в 24 бл., ≤ 60 с).
       // Граф ставит FindFood перед входом в Ад; cl-a/cl-c 14.10: первые 15–18 мин без еды, урон не лечится, смерть ночью.
