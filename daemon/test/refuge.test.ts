@@ -232,6 +232,16 @@ test('к берегу — не к утопленнику', () => {
   assert.ok(free && Math.max(Math.abs(free.target.x), Math.abs(free.target.z)) === 7)
 })
 
+// Океан: суши в 24 бл. нет (cl-ah 14.10: «берега в 16 бл. не вижу» за 0 с, утопленники добили) — ближайшая суша над водой.
+test('берег дальше 24 бл. — ближайшая суша над водой', () => {
+  const sea = (x, y, z) => (x > -40 && x < 30 && Math.abs(z) < 50 && y >= 50 && y <= 63 ? 'water' : null)
+  const s = scene({ items: KIT, at: sea, feet: [0.5, 62, 0.5], water: true })
+  assert.equal(survival.shoreRoute(s.bot, { radius: 24, rise: 14, drop: 8 }), null)
+  const p = hold.farShore(s.bot)
+  assert.ok(p, 'суша найдена')
+  assert.deepEqual([p.x, p.y, p.z], [30, 64, 0])
+})
+
 // Ниша (ND_REFUGE_NICHE): стена камня на востоке (x ≥ 1, y 64..66) — вкопаться туда; на ровном поле — нечего.
 test('ниша — в сплошную стену рядом, не в поле', () => {
   const wall = (x, y, z) => (x >= 1 && y >= 64 && y <= 66 ? 'stone' : null)

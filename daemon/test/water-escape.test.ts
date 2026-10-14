@@ -134,6 +134,16 @@ test('a shaft flooded from above with no air in reach is plugged over the head (
   } finally { s.close() }
 })
 
+test('short of breath in a flooded tunnel, air beyond 8 blocks is still found (cl-ac/cl-ai 14.10 drowned)', async () => {
+  const s = scene({ oxygen: 4, change: q => q.y >= 1 && q.y <= 2 && q.z === 0 && q.x >= 0 && q.x <= 14 ? (q.x <= 11 ? 'water' : 'air') : 'stone' })
+  try {
+    assert.equal(movement.findSwimRoute(s.bot), null, 'no breath within 8 blocks')
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 15000 }))
+    assert.equal(r.ok, true, JSON.stringify(r))
+    assert.ok(s.bot.entity.position.x >= 12, `out at ${s.bot.entity.position}`)
+  } finally { s.close() }
+})
+
 test('swim cancel arriving during look cannot send movement controls', async () => {
   const s = scene()
   s.bot.lookAt = async () => { s.ctl.aborted = true }

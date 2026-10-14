@@ -258,7 +258,10 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
   try {
     let plugged = false
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
-      const route = findSwimRoute(bot, { visibleOnly, radius })
+      // Воздух кончается, а в 8 бл. его нет (затопленный штрек, cl-ac/cl-ai 14.10: утонул в 1–2 бл. от своего хода) — шире:
+      // поиск при нехватке воздуха кончается на первом воздухе, так что широкий круг дёшев.
+      const route = findSwimRoute(bot, { visibleOnly, radius }) ||
+        (radius < 16 && (bot.oxygenLevel ?? 20) <= 8 && headWet(bot) ? findSwimRoute(bot, { visibleOnly, radius: 16, rise: 16 }) : null)
       target = route?.target || null
       if (!route) {
         // Шахта залита сверху (своя копка вверх в воду, cl-n 14.10: «не нашёл доступного пути из воды», смерть): воздуха в

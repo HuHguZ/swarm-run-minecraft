@@ -646,6 +646,38 @@ function shoreRoute (bot, { radius = 16, rise = 6, drop = 4, foes = [] }: any = 
   return { target: queue[best.i].p, path, cost: Math.round(best.cost) }
 }
 
+// Берег дальше 24 бл. (океан: cl-ag/cl-ah 14.10 — «берега в 16 бл. не вижу» за 0 с, круги по воде, утопленники добили):
+// ближайшая суша над уровнем воды — то, что видно с поверхности, — в загруженных чанках, кольцами от тела.
+function farShore (bot, { maxRadius = 64 }: any = {}) {
+  const water = require('.././movement').waterCell
+  const me = bot.entity.position.floored()
+  let top = me.y
+  while (top - me.y < 16 && water(bot.blockAt(new Vec3(me.x, top + 1, me.z)))) top++
+  const open = b => !!b && b.boundingBox === 'empty' && !water(b) && !/lava|fire/.test(b.name)
+  const stand = (x, z) => {
+    const at = bot.blockAt(new Vec3(x, top, z))
+    if (!at || water(at)) return null
+    for (let y = top + 3; y >= top; y--) {
+      const floor = bot.blockAt(new Vec3(x, y - 1, z))
+      if (floor && floor.boundingBox === 'block' && !water(floor) && !/magma|cactus/.test(floor.name) &&
+        open(bot.blockAt(new Vec3(x, y, z))) && open(bot.blockAt(new Vec3(x, y + 1, z)))) return new Vec3(x, y, z)
+    }
+    return null
+  }
+  for (let r = 2; r <= maxRadius; r++) {
+    let best = null
+    for (let dx = -r; dx <= r; dx++) {
+      for (const dz of Math.abs(dx) === r ? Array.from({ length: 2 * r + 1 }, (_, i) => i - r) : [-r, r]) {
+        const p = stand(me.x + dx, me.z + dz)
+        const d = p ? Math.hypot(dx, dz) : Infinity
+        if (p && (!best || d < best.d)) best = { p, d }
+      }
+    }
+    if (best) return best.p
+  }
+  return null
+}
+
 async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: any = {}) {
   const bot = session.bot
   const flee = require('.././flee')
@@ -657,16 +689,28 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
   let route = null
   let planAt = 0
   let target = null
+  let far = null
+  let limit = timeoutMs
   try {
-    while (!ctl.aborted && gameClock.now() - t0 < timeoutMs && (bot.health ?? 0) > 0 && !dry()) {
-      if (!route || gameClock.now() - planAt > 600) {
+    while (!ctl.aborted && gameClock.now() - t0 < limit && (bot.health ?? 0) > 0 && !dry()) {
+      // К дальнему берегу — пересчёт реже и только ближним поиском: в открытой воде он обходит тысячи клеток.
+      if (!route || gameClock.now() - planAt > (route.far ? 2000 : 600)) {
         const foes = flee.hostilesAround(bot, 20).filter(h => refugeFoe(bot, h.e, session)).map(h => h.e.position)
         // Ближнего берега нет — шире и выше (затопленная лесенка: сухие ступени выше 6 бл.; pool1 02.10 слот 16 — «берега в
         // 16 бл. не вижу» за 0.1 с, утопленник добил).
-        route = shoreRoute(bot, { foes }) || shoreRoute(bot, { foes, radius: 24, rise: 14, drop: 8 })
+        route = shoreRoute(bot, { foes }) || (far ? null : shoreRoute(bot, { foes, radius: 24, rise: 14, drop: 8 }))
         planAt = gameClock.now()
-        if (!route) { step('берега в 16 бл. не вижу'); break }
-        if (!target || !target.equals(route.target)) { target = route.target; step(`к берегу ${target.x},${target.y},${target.z} (${route.path.length} кл.)`) }
+        if (!route) {
+          // Дальше 24 бл. — плыть по поверхности к ближайшей видимой суше; время — по расстоянию (~1.9 бл/с вплавь со спринтом).
+          if (!far) {
+            far = farShore(bot)
+            if (!far) { step('берега в 64 бл. не вижу'); break }
+            const d = Math.hypot(far.x + 0.5 - bot.entity.position.x, far.z + 0.5 - bot.entity.position.z)
+            limit = Math.max(limit, Math.min(60000, (gameClock.now() - t0) + d / 1.5 * 1000 + 4000))
+            step(`берег далеко: плыву к ${far.x},${far.y},${far.z} (${Math.round(d)} бл.)`)
+          }
+          route = { target: far, path: [], far: true }
+        } else if (!target || !target.equals(route.target)) { target = route.target; step(`к берегу ${target.x},${target.y},${target.z} (${route.path.length} кл.)`) }
       }
       const me = bot.entity.position
       // Ближайшая точка пути, до которой ещё не доплыли.
@@ -676,7 +720,9 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
       await bot.look(Math.atan2(-dx, -dz), next.y + 0.5 > me.y + 0.3 ? 0.3 : 0, true).catch(() => {})
       set('forward', true)
       set('sprint', (bot.food ?? 20) > 6)
-      set('jump', true)
+      // Прыжок — в воде и на ступень; на суше без него: тело с зажатым прыжком скачет, onGround почти не бывает, и «на суше»
+      // не засчитывалось — шло вглубь берега до конца времени (ферма 14.10: вышел за 11 с, отход кончился на 25-й с).
+      set('jump', inWater(bot) || next.y > me.y + 0.5)
       await sleep(80)
     }
   } finally { stop() }
@@ -713,4 +759,4 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
   return { ok, seconds: Math.round((gameClock.now() - t0) / 100) / 10, target: target ? xyz(target) : null }
 }
 
-module.exports = { pillarPlan, standTop, grounded, refugeFoe, refugeLook, nicheOn, chooseRefuge, buildMsOf, outrun, lookLine, REFUGE_FOOD_BAD, hasFood, healStep, holdMouth, holdOut, planksFromLogs, takeNiche, takeBox, stepTo, SIT_CAP_MS, outsideDanger, openSkyOver, sitTight, waitClear, leaveBox, shoreRoute, toShore }
+module.exports = { pillarPlan, standTop, grounded, refugeFoe, refugeLook, nicheOn, chooseRefuge, buildMsOf, outrun, lookLine, REFUGE_FOOD_BAD, hasFood, healStep, holdMouth, holdOut, planksFromLogs, takeNiche, takeBox, stepTo, SIT_CAP_MS, outsideDanger, openSkyOver, sitTight, waitClear, leaveBox, shoreRoute, toShore, farShore }
