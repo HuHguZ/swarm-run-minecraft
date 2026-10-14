@@ -32,7 +32,7 @@ async function towerScan (session, ctl, st) {
       const score = h - n.d * 0.3
       if (!best || score > best.score) best = { pos: n.pos, score, h }
     }
-    if (best) await walkGoal(session, ctl, new goals.GoalBlock(best.pos.x, best.pos.y, best.pos.z), 25000, { dig: false })
+    if (best) await walkUnlessBrute(session, ctl, new goals.GoalBlock(best.pos.x, best.pos.y, best.pos.z), 25000, { dig: false })
   }
   // Вышка и штрек — из блоков стройки; после долгого пути по Аду их нет (trip2-9 30.09: вышка +0..+1,
   // «бастион не узнан»). Добрать незерака рядом.
@@ -55,16 +55,15 @@ async function towerScan (session, ctl, st) {
     const heard = require('.././perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).map(h => ({ name: 'ghast (слышно)', dist: 0 }))
     return [...seen, ...heard]
   }
-  while (!ctl.aborted && !sure(pg) && steps < 5 && bot.entity.position.y < 84) {
+  const topY = Math.max(84, base.y + 6)
+  while (!ctl.aborted && !sure(pg) && steps < 5 && bot.entity.position.y < topY) {
     const sh = process.env.ND_TOWER_SHOOTERS !== '0' ? shootersNear() : []
     if (sh.length) { log('вышка: стрелки рядом — выше не строю', { n: sh.length, near: sh.slice(0, 3).map(e => `${e.name} ${Math.round(e.dist)}`) }); break }
     const y0 = bot.entity.position.y
-    const up = await towerUp(bot, ctl, 6)
-    // Потолок над головой (крона багрового гриба, уступ; ферма 29.09, sealed-1:
-    if (!up.placed) {
-      const { digUp } = require('.././build')
-      try { await digUp(bot, ctl, { blocks: 6, mcData: bot.registry, tower: true }) } catch {}
-    }
+    const up = await towerUp(bot, ctl, Math.min(6, topY - Math.floor(bot.entity.position.y)), {
+      abortIf: () => process.env.ND_TOWER_SHOOTERS !== '0' && shootersNear().length ? 'стрелки рядом' : null
+    })
+    if (!up.placed) { log('вышка: стоп', { reason: up.reason, why: up.why }); break }
     steps++
     pg = await predictGoldAsync(bot, 56, ctl)
     if (bot.entity.position.y < y0 + 0.9) break

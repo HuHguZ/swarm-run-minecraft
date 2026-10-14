@@ -557,7 +557,7 @@ function survey (bot, st, goldR = 30) {
     if (!st.bricks.has(k)) st.bricks.set(k, b.position.clone())
   }
   const cids = [R.chest && R.chest.id, R.barrel && R.barrel.id, R.trapped_chest && R.trapped_chest.id].filter(Boolean)
-  for (const b of visibleOf(bot, cids, 26, { max: 16, rays: 800 })) {
+  for (const b of visibleOf(bot, cids, goldR, { max: 16, rays: 800 })) {
     const k = keyOf(b.position)
     if (!st.looted.has(k) && !st.chestSeen.has(k)) st.chestSeen.set(k, { pos: b.position.clone(), seen: now })
   }

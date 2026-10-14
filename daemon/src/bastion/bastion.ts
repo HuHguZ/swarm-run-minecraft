@@ -1845,25 +1845,17 @@ async function bastion (session, ctl, p: any = {}) {
       }
       // Закрытый штрек (sealed): вышка-обзор → золото по шаблону сквозь твёрдое.
       if (st.sealed && mode !== 'barter' && !st.sealedDone) {
-        if (!st.pred.size && !st.gold.size && st.towered < 3) {
-          // Вторая и третья вышка — ближе к видимому кирпичу бастиона (с первой вала не видно: booth-3, «basalt 0»).
-          if (st.towered > 0) {
-            survey(bot, st)
-            const br = [...st.bricks.values()]
-            const me0 = bot.entity.position
-            const aim = br.length ? br.reduce((a, q) => a.plus(q), new Vec3(0, 0, 0)).scaled(1 / br.length) : new Vec3(rec.x, me0.y, rec.z)
-            const dir = new Vec3(aim.x - me0.x, 0, aim.z - me0.z)
-            const len = Math.hypot(dir.x, dir.z) || 1
-            const step = Math.min(24, len)
-            const tgt = new Vec3(me0.x + dir.x / len * step, me0.y, me0.z + dir.z / len * step)
-            // После слепой вышки — с копкой: пешком из толщи не выйти (pit-v3-16 30.09: три вышки на одном месте).
-            await walkUnlessBrute(session, ctl, new goals.GoalNear(tgt.x, tgt.y, tgt.z, 4), 25000, { dig: !!st.blindTower })
-          }
+        survey(bot, st, 56)
+        const chestsLeft = st.lootChests && [...st.chestSeen.keys()].some(k => !st.looted.has(k))
+        const goldLeft = !st.chestsOnly && (st.pred.size > 0 || st.gold.size > 0)
+        if (!goldLeft && !chestsLeft && st.towered < 3 &&
+            (!st.lastTower || st.lastTower.distanceTo(bot.entity.position) >= 4)) {
           st.towered++
           await towerScan(session, ctl, st)
+          st.lastTower = bot.entity.position.clone()
           continue
         }
-        if (st.chestsOnly) {
+        if (st.chestsOnly && chestsLeft) {
           await sealedGold(session, ctl, st, Math.max(gameClock.now() + 60000, deadline - 300000))
           await goldReady()
           const made = await makeIronPick(session, ctl)
@@ -1875,8 +1867,7 @@ async function bastion (session, ctl, p: any = {}) {
         // Сундуки, увиденные с вышки (survey), — тоже цели закрытого штрека: в сундуках бастиона золото и золотая броня
         // (loot_table chests/bastion_other: ботинки ×2, шлем, нагрудник, поножи, блок и слитки — 9 из 20 на бросок, бросков 2).
         // Вслепую стены по шаблону часто не узнаются (b2-6-1 14.10), а сундук двора виден — без него заход кончался пустым.
-        const chestsLeft = [...st.chestSeen.keys()].some(k => !st.looted.has(k))
-        if (st.pred.size || st.gold.size || chestsLeft) {
+        if (goldLeft || chestsLeft) {
           const beforeMining = miningSnapshot()
           await sealedGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 240000))
           await goldReady()
@@ -1887,7 +1878,39 @@ async function bastion (session, ctl, p: any = {}) {
           goldPhaseEnd = gameClock.now()
           continue
         }
-        // Бастион не узнан — в закрытом режиме не бродить по двору (старый обход: booth-3, две смерти в лаве).
+        // shortcut: три перехода только по видимому полу; если не хватит, добавить поиск по пеленгам.
+        if (goldWorn(bot) && vantage < 3) {
+          const eyes = require('.././perception/eyes')
+          const view = { blockAt: pos => eyes.seesNow(bot, pos) ? bot.blockAt(pos) : null }
+          const me = bot.entity.position.clone()
+          st.been.push(me)
+          const aims = points.map(q => new Vec3(q.x, q.y, q.z)).filter(q => !st.been.some(v => v.distanceTo(q) < 4))
+          if (!aims.length) aims.push(new Vec3(center.x, center.y, center.z))
+          const A = require('.././assess')
+          const gear = A.gearOf([5, 6, 7, 8].map(i => bot.inventory.slots[i]))
+          const brutes = mobs(bot, 'piglin_brute', 40).filter(e => seesMob(bot, e))
+          const score = n => Math.min(...aims.map(q => q.distanceTo(n.pos))) + n.d * 0.3
+          const next = require('.././walkable').walkable(view, me, { radius: 20, maxNodes: 3000 })
+            .filter(n => !st.visited.has(keyOf(n.pos)) && !st.been.some(v => v.distanceTo(n.pos) < 4))
+            .filter(n => bruteWalkRisk(brutes, { threatens: () => false, nearTrader: e => e.position.distanceTo(n.pos) < 10,
+              hit: A.afterArmor(13, gear.armor, gear.tough), hp: bot.health ?? 20 }).go)
+            .sort((a, b) => score(a) - score(b))[0]
+          if (next) {
+            st.visited.add(keyOf(next.pos))
+            vantage++
+            const strict = bot._ndLavaStrict
+            bot._ndLavaStrict = true
+            let w
+            try {
+              w = await walkUnlessBrute(session, ctl, new goals.GoalBlock(next.pos.x, next.pos.y, next.pos.z),
+                Math.min(20000, deadline - gameClock.now() - 12000), { dig: false })
+            } finally { bot._ndLavaStrict = strict }
+            if (!ctl.aborted && session.bot === bot) survey(bot, st, 56)
+            log('закрытый заход: обзор', { to: xyz(next.pos), ok: w && w.ok, moved: me.distanceTo(bot.entity.position),
+              gold: st.gold.size, chests: st.chestSeen.size })
+            continue
+          }
+        }
         st.sealedDone = true
         st.notRecognized = true
         break
@@ -1987,7 +2010,7 @@ async function bastion (session, ctl, p: any = {}) {
   const tplLeft = [...st.pred.entries()].filter(([k, v]) => v.piece !== 'память' && v.piece !== 'видно' && !(st.sealedState && st.sealedState.own && st.sealedState.own.has(k))).length
   let stopped = null
   if (ctl.aborted) stopped = 'прервано'
-  else if (st.notRecognized) stopped = 'бастион не узнан с вышек (стены с золотом по шаблону не видны) — в закрытом режиме по двору не хожу'
+  else if (st.notRecognized) stopped = 'бастион не узнан — доступных целей после обзора нет'
   else if (done()) stopped = null
   else if (spare() <= 0 && leftGold === 0 && memLeft > 0) stopped = `золото по памяти осталось (${memLeft}), пути к нему нет${st.lastBarter ? `; бартер: ${st.lastBarter}` : ''}`
   // S1f: цели шаблона (predictGold: тип и поворот бастиона узнаны) остались — не «кончилось» (вслепую кампания по этой фразе
