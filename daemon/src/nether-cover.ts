@@ -196,14 +196,18 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
   let detour = null
   let skipMain = 0
   let last = null
+  // Клетки, пройденные этим вызовом: в них не возвращаться — обход у устьев ходил по кругу (g7-6-1: «24 шага» на месте, кирки на ветер).
+  const visited = new Set([key(feetCell(bot))])
   const order = () => {
     const { main, side } = axesNow()
+    const F0 = feetCell(bot)
+    const fresh = d => !visited.has(key(F0.offset(d[0], 0, d[1])))
     const sides = detour ? [detour, [-detour[0], -detour[1]]] : [side, [-side[0], -side[1]]]
     const list = skipMain > 0 ? [...sides, main] : [main, ...sides]
     const fwd = list.filter((d, i) => (d[0] || d[1]) && !(last && d[0] === -last[0] && d[1] === -last[1]) && list.findIndex(q => same(q, d)) === i)
     // Назад — последним: у портала (рамка, «nether_portal в забое») и в тупике между устьями вперёд хода нет (d9: ×500 на месте).
     const back = [-main[0], -main[1]]
-    return fwd.some(d => same(d, back)) ? fwd : [...fwd, back]
+    return (fwd.some(d => same(d, back)) ? fwd : [...fwd, back]).filter(fresh)
   }
   // Коридор (закрытый пролёт по полу пещеры) — когда вперёд и вбок только устья: держится своего направления до породы.
   let corridorDir = null
@@ -248,6 +252,7 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
     for (const d of order()) {
       const r: any = await closedStep(session, ctl, d, { onOpen, goldOk, mouths: mouthSet }, out)
       if (r.ok) {
+        visited.add(key(feetCell(bot)))
         if (same(d, main)) { detour = null; skipMain = 0 } else { detour = d; skipMain = mainFailed ? 3 : Math.max(0, skipMain - 1) }
         last = d
         stepped = true

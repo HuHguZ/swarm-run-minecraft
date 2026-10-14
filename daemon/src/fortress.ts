@@ -175,9 +175,10 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
   // Без золотой вещи — закрытым штреком (nether-cover, план координатора 14.10): в толще не видят пиглины, гасты и скелеты,
   // под ногами нет обрыва; устье в пещеру — окно (onOpen — взгляд поиска). Не вышло — как прежде (поверху — цена).
   const bot = session.bot
-  // С золотом — тоже штреком у бастиона (бруты бьют при любом золоте, g4-5-1: брут и хоглин у бастиона, смерть за 1.5 с) и при
+  // С золотом — тоже штреком у бастиона (48 бл.: бруты бьют при любом золоте, g4-5-1: брут и хоглин у бастиона, смерть за 1.5 с;
+  // дальше — к крепости — поверху: штрек над лавовым морем застревал, g7-6-1) и при
   // видимых брутах, хоглинах, гастах.
-  const coverNeeded = () => !require('./bastion/take-gold-block').goldWorn(bot) || bastionNear(session, bot.entity.position, 96) ||
+  const coverNeeded = () => !require('./bastion/take-gold-block').goldWorn(bot) || bastionNear(session, bot.entity.position, 48) ||
     (() => { try { return require('./perception/eyes').entities(bot, { radius: 40 }).some(e => e.seen && /^(piglin_brute|hoglin|zoglin|ghast)$/.test(e.name)) } catch { return false } })()
   if (process.env.ND_NE_COVER !== '0' && worlds.worldOf(bot) === 'the_nether' && coverNeeded() && gameClock.now() < deadline) {
     await keepPicks(session, ctl)
@@ -277,7 +278,9 @@ async function keepPicks (session, ctl) {
   const bot = session.bot
   if (T.lowUses(bot) >= 100 || gameClock.now() < (bot._ndKeepPicksAt || 0) || ctl.aborted) return
   bot._ndKeepPicksAt = gameClock.now() + 60000
-  try { log('кирки: запас', { made: await T.restockPicks(session, ctl, 2, { reservePlanks: 4 }), uses: T.lowUses(bot) }) } catch (e) { log('кирки: запас', { error: e.message }) }
+  // Верстак в рюкзаке — доски на запасной не держать: 4 доски = 4 кирки (g5-7-1: палок нет у крепости — «домой за недостающим»).
+  const table = bot.inventory.items().some(i => i.name === 'crafting_table')
+  try { log('кирки: запас', { made: await T.restockPicks(session, ctl, 2, { reservePlanks: table ? 0 : 4 }), uses: T.lowUses(bot) }) } catch (e) { log('кирки: запас', { error: e.message }) }
 }
 
 // Пиглины, которым мы враги (без нашей золотой вещи): на виду в 24 бл. или слышны ближе 16 за 10 с.
