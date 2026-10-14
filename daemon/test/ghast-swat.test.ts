@@ -12,8 +12,9 @@ const step = (s: any) => {
   for (const a of ['x', 'y', 'z']) s['v' + a] = (s['v' + a] + s['v' + a] / n * 0.1) * 0.95
   s.x += s.vx; s.y += s.vy; s.z += s.vz
 }
-const reach = (eye: any, s: any) => Math.hypot(Math.max(s.x - 0.5 - eye.x, 0, eye.x - s.x - 0.5),
-  Math.max(s.y - eye.y, 0, eye.y - s.y - 1), Math.max(s.z - 0.5 - eye.z, 0, eye.z - s.z - 0.5))
+// От глаз до рамки шара 1×1; g — раздутие рамки прицела (Projectile.getPickRadius 1.0).
+const reach = (eye: any, s: any, g = 0) => Math.hypot(Math.max(s.x - 0.5 - g - eye.x, 0, eye.x - s.x - 0.5 - g),
+  Math.max(s.y - g - eye.y, 0, eye.y - s.y - 1 - g), Math.max(s.z - 0.5 - g - eye.z, 0, eye.z - s.z - 0.5 - g))
 function body(fireball: any) {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
@@ -56,8 +57,8 @@ for (const shield of [false, true]) test(`шар гаста отбивается
     sent = { yaw: bot.entity.yaw, pitch: bot.entity.pitch }
   }
   assert.ok(atAttack, `удара нет: ${events.join(',')}`)
-  // Прицел клиента — по видимому шару (3 бл.), сервер принимает удар до 3 + 3 бл. (canInteractWithEntity) и до касания тела.
-  assert.ok(reach(eye, atAttack.seen) <= 3, `удар вне досягаемости прицела: ${reach(eye, atAttack.seen).toFixed(2)}`)
+  // Прицел клиента — по видимому шару (3 бл. до рамки прицела), сервер принимает удар до 3 + 3 бл. (canInteractWithEntity) и до касания тела.
+  assert.ok(reach(eye, atAttack.seen, 1) <= 3, `удар вне досягаемости прицела: ${reach(eye, atAttack.seen, 1).toFixed(2)}`)
   assert.ok(reach(eye, atAttack.server) <= 6, `сервер не примет удар: ${reach(eye, atAttack.server).toFixed(2)}`)
   assert.ok(Math.abs(atAttack.server.x - 0.5) >= 0.6, 'шар уже в рамке тела')
   assert.deepEqual(events.slice(shield ? -3 : -2), shield ? ['down', 'look', 'attack'] : ['look', 'attack'])

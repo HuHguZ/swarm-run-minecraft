@@ -16,6 +16,7 @@
 const { Vec3 } = require('vec3')
 
 const RANGE = 3.0
+const PICK_RADIUS = { fireball: 1.0, wind_charge: 1.0, breeze_wind_charge: 1.0 }
 // Нет коллизии, но контур есть и прицел в него упирается.
 const OUTLINE_FULL = new Set(['cobweb'])
 const FULL = [[0, 0, 0, 1, 1, 1]]
@@ -121,6 +122,10 @@ function aim (bot, e, { eye = null, range = RANGE }: any = {}) {
   if (!bot.entity || !e || !e.position) return null
   const o = eye || eyeOf(bot)
   const box = hitboxOf(bot, e)
+  // Снаряд с тегом redirectable_projectile (шар гаста, заряды ветра) прицел берёт по раздутой рамке: Projectile.getPickRadius = 1.0
+  // при isPickable (1.21.11; GameRenderer.pick → ProjectileUtil.getEntityHitResult, рамка inflate(pickRadius)).
+  const g = PICK_RADIUS[e.name] || 0
+  if (g) Object.assign(box, { lo: { x: box.lo.x - g, y: box.lo.y - g, z: box.lo.z - g }, hi: { x: box.hi.x + g, y: box.hi.y + g, z: box.hi.z + g }, w: box.w + 2 * g, h: box.h + 2 * g })
   let first = null
   for (const [fx, fy, fz] of FRACS) {
     const tp = new Vec3(box.lo.x + box.w * fx, box.lo.y + box.h * fy, box.lo.z + box.w * fz)
@@ -240,4 +245,4 @@ function install (bot) {
   }
 }
 
-module.exports = { aim, canHit, faceAim, blockSeen, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE }
+module.exports = { aim, canHit, faceAim, blockSeen, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE, PICK_RADIUS }

@@ -593,10 +593,11 @@ function fbStep (s) {
   s.x += s.vx; s.y += s.vy; s.z += s.vz
   return s
 }
-// От глаз до рамки шара 1×1 (позиция сущности — низ середины).
+// От глаз до рамки прицела шара: 1×1 (позиция сущности — низ середины), раздута на getPickRadius 1.0 (Projectile.isPickable —
+// redirectable_projectile, 1.21.11): прицел клиента берёт шар на блок раньше его рамки — удар на тик раньше, до касания тела.
 function fbReach (eye, s) {
-  return Math.hypot(Math.max(s.x - 0.5 - eye.x, 0, eye.x - s.x - 0.5), Math.max(s.y - eye.y, 0, eye.y - s.y - 1),
-    Math.max(s.z - 0.5 - eye.z, 0, eye.z - s.z - 0.5))
+  return Math.hypot(Math.max(s.x - 1.5 - eye.x, 0, eye.x - s.x - 1.5), Math.max(s.y - 1 - eye.y, 0, eye.y - s.y - 2),
+    Math.max(s.z - 1.5 - eye.z, 0, eye.z - s.z - 1.5))
 }
 // Летит ли шар в тело: ближайший подход его линии к середине тела — в 2 бл.
 function fbIncoming (s, me) {
