@@ -206,7 +206,7 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
       // AABB inflated by 16, with requireLineOfSight=false (native 1.21.11).
       // Only visible adults affect this choice; ordinary mine keeps its variant.
       const piglinRisk = () => {
-        if (!avoidPiglinAggro || target.name !== 'nether_gold_ore') return false
+        if (!avoidPiglinAggro || !/^(nether_gold_ore|gilded_blackstone)$/.test(target.name)) return false
         const me = bot.entity.position
         const baby = bot.registry.entitiesByName.piglin.metadataKeys.indexOf('baby')
         return (Object.values(bot.entities || {}) as any[]).some(e => {

@@ -714,6 +714,13 @@ async function rest (minHp = 16) {
         }
         return
       }
+      // Нора не вышла, а враги рядом или портал дальше 64 бл. — путь домой под ними хуже коробки на месте (b8-5-2 14.10: брут у
+      // бастиона, нора не вышла, «домой через портал» 71 бл. — смерть на первых шагах штрека).
+      if (!died && dim() === 'the_nether' && ((sit.foes ?? 0) > 0 || portalDist > 64)) {
+        log(`в Аду мало хп, нора не вышла (${bd.why || bd.pit || '?'}) — коробка на месте, не путь домой`)
+        await refugeRun(`отлёжка: хп ${Math.round(state.health ?? 0)}`, { minHp, maxSeconds: 120 })
+        return
+      }
     }
     if (dim() === 'the_nether' && known.netherPortal) {
       log('в Аду мало хп — домой через портал, лечиться там')
@@ -3741,11 +3748,11 @@ async function netherArrival () {
   log(`прибытие: штрек прочь к ${to.x},${to.z} — ${(t.detail && t.detail.note) || t.error || t.status}`)
 }
 
-// Руда — где взрослых пиглинов, брутов и хоглинов не видно в 20 бл.; видны — уйти от них ногами на 32 бл. (не «разведкой»: она
-// стоит на месте, когда руда уже видна — b0-6-2 14.10: «уже видно отсюда» ×3, золото брошено при 9 самородках), до 3 раз;
-// бюджет — 300 игр. с (b0-6-2: mine по 120 с без копки ×3).
-// Пустой заход руды — пауза 5 игр. мин (каждый вход этапа bastion звал её снова: b5-6-1 14.10 — 8 врагов у бастиона, руда на виду
-// у них ×6 за 10 мин, коробка-лечение-руда по кругу); толпа злых (≥ 3 видимых в 24) — сразу к закрытому штреку бастиона.
+// Золото Ада — по пути, не отдельной фазой (пользователь 14.10: «можно по пути накопать, пока идёшь к нужным структурам в аду»):
+// поиск и обход ведут свои отрезки и копают увиденную руду сами (fortress.goldOnTheWay). Здесь, у входа в этап bastion, —
+// только то, что видно рядом (10 бл.), и не на глазах у пиглинов: копка руды злит взрослых в коробке ±16 без луча
+// (Block.playerWillDestroy, 1.21.11) — враги в 24 бл. на виду, значит не трогать; без брони в бастион — закрытым штреком.
+// Самородки — в слитки, броня — как хватит на 4 слитка. Пустая попытка — пауза 2 игр. мин.
 let netherGoldNext = -Infinity
 async function netherGold () {
   await refresh()
@@ -3753,51 +3760,18 @@ async function netherGold () {
     await craft('gold_ingot', 9 * have('gold_block'))
     await refresh()
   }
+  if (have('gold_ingot') >= 4 && !goldOn()) await wearGold()
   if (goldOn() || gameClock.now() < netherGoldNext) return
-  const nuggets0 = have('gold_nugget') + 9 * have('gold_ingot')
-  netherGoldNext = gameClock.now() + 300000
-  const crowd = (((await act('observe', { radius: 24 })).detail || {}).entities || [])
-    .filter(e => /^(piglin|piglin[ _]brute|hoglin)$/i.test(String(e.name || ''))).length
-  if (crowd >= 3) { log(`пиглинов у руды ${crowd} — руду не ищу, золото — закрытым штреком`); return }
-  const t0 = gameClock.now()
-  let retreats = 0
-  let pigStops = 0
-  let standStill = 0
-  for (let i = 0; i < 10 && !goldOn() && dim() === 'the_nether' && !died && gameClock.now() - t0 < 300000; i++) {
-    const nuggets = have('gold_nugget') + 9 * have('gold_ingot')
-    if (nuggets >= 36) break
-    const o = await act('observe', { radius: 32 })
-    // 24 — угол коробки злости ±16 (16·√2 ≈ 22.6).
-    const foes = ((o.detail && o.detail.entities) || []).filter(e => /^(piglin|piglin[ _]brute|hoglin)$/i.test(String(e.name || '')) && (e.dist ?? 0) <= 24)
-    // Пиглины у руды — уйти от них за другой рудой (её в незераке много), а не бросать золото (cl-ab 14.10: бастион найден на 27-й
-    // мин, «пиглины рядом — руду не трогаю», домой).
-    if (foes.length) {
-      if (retreats >= 3 || !state.pos || !foes.every(e => e.pos)) { log(`пиглины рядом (${foes.length}) — золотую руду здесь не трогаю`); break }
-      retreats++
-      const cx = foes.reduce((n, e) => n + e.pos.x, 0) / foes.length, cz = foes.reduce((n, e) => n + e.pos.z, 0) / foes.length
-      const dx = state.pos.x - cx, dz = state.pos.z - cz, len = Math.hypot(dx, dz) || 1
-      const to = { x: Math.round(state.pos.x + dx / len * 32), z: Math.round(state.pos.z + dz / len * 32) }
-      log(`пиглины рядом (${foes.length}, ближний в ${Math.round(Math.min(...foes.map(e => e.dist ?? 99)))} бл.) — ухожу от них на 32 бл. к ${to.x},${to.z} за другой золотой рудой (${retreats}/3)`)
-      await act('goto', { x: to.x, z: to.z, range: 6, timeoutSeconds: 45 })
-      await refresh()
-      pigStops = 0
-      continue
-    }
-    const m = await act('mine', { block: 'nether_gold_ore', count: Math.max(2, Math.ceil((36 - nuggets) / 4)), radius: 40, timeoutSeconds: 60, avoidPiglinAggro: true })
-    await refresh()
-    if (m.detail && m.detail.dug) continue
-    // Остановился из-за пиглина в зоне злости — следующий круг уводит от него (обзор его видит); не видит дважды — разведка.
-    if (/пиглин/.test(String((m.detail && m.detail.stopped) || '')) && ++pigStops <= 2) continue
-    const e = await act('explore', { block: 'nether_gold_ore', radius: 40, stepDistance: 40, timeoutSeconds: 60 })
-    if (!(e.detail && e.detail.found)) break
-    // «Уже видно отсюда», а копка «не вижу» (руда у лавы, недоступна) — разведка стоит на месте: круг без толку (b1-5-2 14.10: ×10).
-    if (/уже видно/.test(String(e.detail.note || '')) && /не вижу/.test(String(m.error || '')) && ++standStill >= 2) break
-  }
+  netherGoldNext = gameClock.now() + 120000
+  const o = await act('observe', { radius: 32 })
+  const foes = ((o.detail && o.detail.entities) || []).filter(e => /^(piglin|piglin[ _]brute|hoglin)$/i.test(String(e.name || '')) && (e.dist ?? 0) <= 24)
+  if (foes.length) { log(`золото рядом не трогаю: пиглины в ${Math.round(Math.min(...foes.map(e => e.dist ?? 99)))} бл.`); return }
+  const nuggets = have('gold_nugget') + 9 * have('gold_ingot')
+  const m = await act('mine', { block: 'nether_gold_ore,gilded_blackstone', count: Math.max(2, Math.min(6, Math.ceil((36 - nuggets) / 4))), radius: 10, avoidPiglinAggro: true })
   await refresh()
   if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
   if (have('gold_ingot') >= 4 && !goldOn()) await wearGold()
-  // Самородки прибавились — следующий заход без долгой паузы.
-  if (have('gold_nugget') + 9 * have('gold_ingot') > nuggets0) netherGoldNext = gameClock.now() + 30000
+  if (m.detail && m.detail.dug) log(`золото рядом: руды ${m.detail.dug}, самородков ${have('gold_nugget') + 9 * have('gold_ingot') - nuggets}`)
 }
 
 // Сытость перед боем у спавнера: еда прерывается тактикой/ифритами («не поел»), а уход из боя без защиты навыка у спавнера
@@ -5133,13 +5107,16 @@ ws.on('open', async () => {
           // BlockOff у спавнера — смерть через секунды).
           log('стержни набраны, у спавнера ифриты — закапываюсь')
           await act('ne_burrow', { why: 'стержни набраны — ухожу от ифритов' })
-        } else if (netherThreatWaits >= 2 && gameClock.now() >= threatBurrowAt &&
+        } else if (netherThreatWaits >= 2 && (gameClock.now() >= threatBurrowAt || (state.health ?? 20) <= threatHp0 - 3) &&
           ((state.health ?? 20) <= threatHp0 - 3 || (sit.fight?.order || []).some(o => o && /^(blaze|ghast)$/.test(o.name)))) {
           // Угроза не снимается, а тело на открытом теряет хп или по нему стреляют издалека (ифриты/гасты у портала прибытия, b1-6-2
           // 14.10: 12 ожиданий по 3 с под огнём ифритов, хп 20 → 2, смерть) — из-под огня в толщу (закрытый карман), а не ждать.
-          threatBurrowAt = gameClock.now() + 60000
+          // Снова — через 15 с или сразу, если хп падает и после норы (b8-5-1 14.10: нора в 22-й мин, через 2 мин ифриты снова,
+          // пауза 60 с держала тело в ожиданиях под огнём, хп 20 → 0).
+          threatBurrowAt = gameClock.now() + 15000
           log(`в Аду угроза держится (${netherThreatWaits} ожиданий, хп ${Math.round(threatHp0)} → ${Math.round(state.health ?? 0)}) — в толщу, из-под огня`)
           await act('ne_burrow', { why: 'угроза держится — из-под огня' })
+          threatHp0 = state.health ?? 20
         } else {
           if (netherThreatWaits === 1) threatHp0 = state.health ?? 20
           log(`в Аду угроза (тактика ${state.tactics?.action || '?'}) — домой не иду, жду её конца`)

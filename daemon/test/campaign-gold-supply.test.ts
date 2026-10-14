@@ -100,23 +100,21 @@ test('unconfirmed block conversion cannot claim gold armor or mine beside visibl
   assert.equal(f.calls.some(call => call.method === 'mine'), false)
 })
 
-test('campaign selects cautious gold mining while a stop preserves ordinary fallback dispatch', async () => {
+// Золото Ада — по пути (пользователь 14.10): у входа в этап bastion только руда на виду рядом, осторожной копкой, без разведки.
+test('campaign mines only seen gold nearby, cautiously, without an ore search', async () => {
   const f = fixture({ stone_pickaxe: 1 }, { ore: true })
   await f.run()
   const mines = f.calls.filter(call => call.method === 'mine')
-  // A piglin stop the look does not confirm is retried twice, then the search moves on.
-  assert.equal(mines.length, 3)
-  assert.ok(mines.every(m => m.params.block === 'nether_gold_ore' && m.params.avoidPiglinAggro === true))
-  assert.equal(f.calls.some(call => call.method === 'explore'), true)
+  assert.equal(mines.length, 1)
+  assert.ok(/nether_gold_ore/.test(mines[0].params.block) && mines[0].params.avoidPiglinAggro === true && mines[0].params.radius <= 10, JSON.stringify(mines[0].params))
+  assert.equal(f.calls.some(call => call.method === 'explore'), false)
   assert.equal(f.state.armor.head, undefined)
 })
 
-test('piglins by the ore: the bot walks away from them on foot for other gold ore instead of giving up (cl-ab, b0-6-2 14.10)', async () => {
+test('piglins by the ore: the gold here is left, no walk away and no mining (gold comes on the way)', async () => {
   const f = fixture({ stone_pickaxe: 1 }, { piglinAt: { x: 4, y: 64, z: 0 } })
   await f.run()
-  const away = f.calls.filter(call => call.method === 'goto')
-  assert.equal(away.length, 3, 'three retreats, then the ore here is left')
-  assert.ok(away[0].params.x <= -30 && Math.abs(away[0].params.z) <= 1, JSON.stringify(away[0].params))
-  assert.equal(f.calls.some(call => call.method === 'explore'), false, 'a search would stand still while the ore is in sight')
+  assert.equal(f.calls.some(call => call.method === 'goto'), false)
+  assert.equal(f.calls.some(call => call.method === 'explore'), false)
   assert.equal(f.calls.some(call => call.method === 'mine'), false, 'never mines beside visible piglins')
 })

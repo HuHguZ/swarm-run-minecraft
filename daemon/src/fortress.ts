@@ -228,6 +228,35 @@ async function keepBlocks (session, ctl, { min = 24, want = 56 }: any = {}) {
   return now - have
 }
 
+// Золото Ада по пути (пользователь 14.10: «можно по пути накопать, пока идёшь к нужным структурам в аду» — не отдельной фазой):
+// руда Ада и позолоченный чернокамень на виду и рядом. Крюк — ценой против нужды: без золотой брони до 10 бл. (ботинки — 4 слитка,
+// 36 самородков), с бронёй — до 5 бл. (остальное — на бартер). Не на глазах у пиглинов: Block.playerWillDestroy злит взрослых
+// в коробке ±16 без луча (requireLineOfSight=false, 1.21.11) — пиглин на виду в 24 бл. или слышен ближе 16 — не копать.
+// Самородки — в слитки, как наберётся 9; первая броня — как хватит на 4 слитка (armGold).
+async function goldOnTheWay (session, ctl) {
+  const bot = session.bot
+  if (process.env.ND_GOLD_WAY === '0' || !bot.inventory || !bot.registry?.blocksByName || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted ||
+    gameClock.now() < (bot._ndGoldWayAt || 0)) return null
+  const T = require('./bastion/take-gold-block')
+  const worn = T.goldWorn(bot)
+  const R = worn ? 5 : 10
+  const ids = ['nether_gold_ore', 'gilded_blackstone'].map(n => bot.registry.blocksByName[n]?.id).filter(Boolean)
+  const seen = require('./sight').visibleOf(bot, ids, R, { max: 6 })
+  if (!seen.length) return null
+  bot._ndGoldWayAt = gameClock.now() + 15000
+  const eyesSeen = require('./perception/eyes').entities(bot, { radius: 24 }).filter(e => e.seen && /^piglin(_brute)?$/.test(e.name))
+  const earsNear = require('./perception/senses').heard(bot, { sinceMs: 10000 }).filter(h => /^piglin(_brute)?$/.test(h.who || '') && h.band !== 'далеко')
+  if (eyesSeen.length || earsNear.length) { log('золото по пути: пиглины рядом — не трогаю', { seen: eyesSeen.length, heard: earsNear.length }); return null }
+  const count = (n: string) => bot.inventory.items().filter(i => i.name === n).reduce((s, i) => s + i.count, 0)
+  const nug0 = count('gold_nugget') + 9 * count('gold_ingot')
+  let r: any = null
+  try { r = await require('./actions').mine(session, ctl, { block: 'nether_gold_ore,gilded_blackstone', count: Math.min(4, seen.length), radius: R, avoidPiglinAggro: true }) } catch (e) { r = { error: e.message } }
+  if (!worn) { try { await T.armGold(session, ctl) } catch {} }
+  else if (count('gold_nugget') >= 9) { try { await require('./actions').craft(session, ctl, { item: 'gold_ingot', count: Math.floor(count('gold_nugget') / 9) }) } catch {} }
+  log('золото по пути', { dug: r && r.dug, stopped: (r && (r.stopped || r.error)) || undefined, nuggets: count('gold_nugget') + 9 * count('gold_ingot') - nug0, worn: T.goldWorn(bot) })
+  return r
+}
+
 // mode=look — только глаза, тело не двигается. mode=explore — ноги по прямой
 // вдоль направления отрезками по 16 блоков, взгляд после каждого, пока
 // кирпич не увиден или не кончились distance/время.
@@ -517,6 +546,8 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
         break
       }
     }
+    await goldOnTheWay(session, ctl)
+    if (ctl.aborted) { stopped = 'прервано'; break }
     if (w.fought) {
       // Отбился — тот же отрезок заново; не отбился и хп мало — стоп.
       if ((bot.health ?? 0) < 8) { stopped = w.error + `, хп ${Math.round(bot.health ?? 0)} — дальше не иду`; break }

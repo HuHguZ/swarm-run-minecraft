@@ -66,11 +66,12 @@ test('an unfinished search reports no invented bastion and does not acquire gold
   assert.ok(!f.calls.some(c => ['mine', 'explore', 'bastion', 'craft', 'armor'].includes(c.method)))
 })
 
-test('legacy bastion retains its complete acquisition and barter stage', async () => {
+// Золото Ада — по пути (пользователь 14.10): этап берёт руду на виду рядом, отдельной разведки руды нет.
+test('legacy bastion retains its acquisition stage: seen gold nearby, no ore search', async () => {
   const f = fixture()
   await f.legacy()
-  assert.ok(f.calls.some(c => c.method === 'mine' && c.params.block === 'nether_gold_ore'))
-  assert.ok(f.calls.some(c => c.method === 'explore' && c.params.block === 'nether_gold_ore'))
+  assert.ok(f.calls.some(c => c.method === 'mine' && /nether_gold_ore/.test(c.params.block)))
+  assert.equal(f.calls.some(c => c.method === 'explore' && c.params.block === 'nether_gold_ore'), false)
 })
 
 test('cancelled FindBastions does not start discovery or acquisition', async () => {
