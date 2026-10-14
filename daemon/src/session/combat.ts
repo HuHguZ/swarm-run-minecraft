@@ -67,6 +67,8 @@ function structure (this: any, p: any = {}) {
         if (mode === 'where') return S.whereNext(this, p.kind || 'village')
         if (mode === 'plan') return { go: S.opportunities(this, { radius: p.radius || 192 }) }
         if (mode === 'forget') return S.forget(this, p)
+        if (mode === 'fit') return S.fitKnown(this, p)
+        if (mode === 'maps') return { maps: S.readTreasureMaps(this) }
         const r = S.scan(this, { radius: Math.min(96, p.radius || 48) })
         return { seen: r.found, fresh: r.fresh.length, dim: r.dim, blocks: p.blocks ? r.blocks : undefined }
       })

@@ -24,6 +24,13 @@ const FULL = [[0, 0, 0, 1, 1, 1]]
 function shapesOf (b) {
   if (!b) return null
   if (OUTLINE_FULL.has(b.name)) return FULL
+  const p = b.getProperties?.() || {}
+  if (b.name === 'stone_pressure_plate') return [[1 / 16, 0, 1 / 16, 15 / 16, p.powered ? 1 / 32 : 1 / 16, 15 / 16]]
+  if (b.name === 'tripwire') return [[0, p.attached ? 1 / 16 : 0, 0, 1, p.attached ? 2.5 / 16 : 8 / 16, 1]]
+  if (b.name === 'tripwire_hook') return [{
+    north: [5 / 16, 0, 10 / 16, 11 / 16, 10 / 16, 1], south: [5 / 16, 0, 0, 11 / 16, 10 / 16, 6 / 16],
+    east: [0, 0, 5 / 16, 6 / 16, 10 / 16, 11 / 16], west: [10 / 16, 0, 5 / 16, 1, 10 / 16, 11 / 16]
+  }[p.facing]]
   if (b.boundingBox !== 'block') return null
   return b.shapes && b.shapes.length ? b.shapes : null
 }
@@ -186,7 +193,7 @@ function faceAim (bot, refPos, face, { eye = null, range = 4.5, avoid = null }: 
 // САМОГО блока. Сквозь стекло и барьер видно; жидкости лучу не мешают (контура нет). Сетка 5 точек на грань.
 const SEE_THROUGH = /glass|_pane$|^barrier$|^iron_bars$/
 const FACE_FRACS = [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]
-function blockSeen (bot, pos, { eye = null, range = 64 }: any = {}) {
+function blockAim (bot, pos, { eye = null, range = 64, seeThrough = SEE_THROUGH }: any = {}) {
   if (!bot.entity) return false
   const o = eye || eyeOf(bot)
   let b = null
@@ -207,14 +214,24 @@ function blockSeen (bot, pos, { eye = null, range = 64 }: any = {}) {
         const delta = new Vec3(p.x - o.x, p.y - o.y, p.z - o.z)
         const len = delta.norm()
         if (len > range) continue
-        if (len < 1e-6) return true
-        const hit = blockOnRay(bot, o, delta.scaled(1 / len), len + 0.01, SEE_THROUGH)
-        if (hit && hit.pos.equals(pos)) return true
+        if (len < 1e-6) return new Vec3(p.x, p.y, p.z)
+        const dir = delta.scaled(1 / len)
+        const hit = blockOnRay(bot, o, dir, len + 0.01, seeThrough)
+        if (hit && hit.pos.equals(pos)) {
+          const blocked = seeThrough === null && (Object.values(bot.entities || {}) as any[]).some(e => {
+            if (!e || e === bot.entity || !e.position || !LIVING.test(e.name || e.type || '')) return false
+            const box = hitboxOf(bot, e); const t = rayBox(o, dir, box.lo, box.hi, len)
+            return t != null && t < hit.t - 0.01
+          })
+          if (!blocked) return new Vec3(p.x, p.y, p.z)
+        }
       }
     }
   }
   return false
 }
+
+function blockSeen (bot, pos, opts: any = {}) { return !!blockAim(bot, pos, opts) }
 
 // Честно ли бить прямо сейчас (для сторожа attack и сцен).
 function canHit (bot, e, opts: any = {}) {
@@ -245,4 +262,4 @@ function install (bot) {
   }
 }
 
-module.exports = { aim, canHit, faceAim, blockSeen, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE, PICK_RADIUS }
+module.exports = { aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE, PICK_RADIUS }

@@ -156,8 +156,13 @@ async function closeStray (bot) {
 // own 20s, and the window it eventually hands back is one nobody holds a
 // reference to — an open screen that blocks every UI for the rest of the
 // session. So keep the handle alive long enough to shut it.
-async function raceOpen (bot, opening, ms, message) {
+async function raceOpen (bot, opening, ms, message, ctl = null) {
   let gaveUp = false
+  let abort
+  const cancelled = ctl && Array.isArray(ctl.onAbort) && new Promise((_resolve, reject) => {
+    abort = () => reject(new Error('прервано'))
+    if (ctl.aborted) abort(); else ctl.onAbort.push(abort)
+  })
   opening.then(
     async win => {
       if (!gaveUp) return
@@ -173,12 +178,12 @@ async function raceOpen (bot, opening, ms, message) {
     () => {} // the loser still rejects, 20s from now, with nobody listening
   )
   try {
-    return await withTimeout(opening, ms, message)
+    return await withTimeout(cancelled ? Promise.race([opening, cancelled]) : opening, ms, message)
   } catch (err) {
     gaveUp = true
-    await closeStray(bot)
+    if (!ctl?.aborted) await closeStray(bot)
     throw err
-  }
+  } finally { const i = cancelled ? ctl.onAbort.indexOf(abort) : -1; if (i >= 0) ctl.onAbort.splice(i, 1) }
 }
 
 // The window's own 'update' as a wake-up tick, with a poll as the floor: a
@@ -761,7 +766,7 @@ async function reachContainer (bot, ctl, block, deadline) {
   }
 }
 
-async function openContainerAt (bot, ctl, block, deadline, visibleOnly = false) {
+async function openContainerAt (bot, ctl, block, deadline, visibleOnly = false, stay = false) {
   const aim = block.position.offset(0.5, 0.5, 0.5)
   let last = null
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -780,10 +785,10 @@ async function openContainerAt (bot, ctl, block, deadline, visibleOnly = false) 
       if (!hit || !hit.pos.equals(block.position)) throw new Error('сундук не в прицеле — не открываю сквозь стену')
     }
     try {
-      return await raceOpen(bot, bot.openContainer(block), 6000, `${block.name} не открылся`)
+      return await raceOpen(bot, bot.openContainer(block), 6000, `${block.name} не открылся`, ctl)
     } catch (err) {
       last = err
-      if (!/windowOpen|не открылся/.test(err.message)) throw err
+      if (stay || !/windowOpen|не открылся/.test(err.message)) throw err
       // Out of reach is far and away the usual cause, and the reach check above
       // only guarantees we were close enough when we started walking.
       const p = block.position
@@ -795,7 +800,7 @@ async function openContainerAt (bot, ctl, block, deadline, visibleOnly = false) 
   throw new Error(`${block.name} не открылся: ${last.message}`)
 }
 
-async function findAndOpen (session, ctl, { x, y, z, visibleOnly = false }: any, deadline) {
+async function findAndOpen (session, ctl, { x, y, z, visibleOnly = false, stay = false }: any, deadline) {
   const bot = session.bot
   // The one place all three chest actions walk from, so the teardown for the
   // walk lives here too.
@@ -805,8 +810,9 @@ async function findAndOpen (session, ctl, { x, y, z, visibleOnly = false }: any,
     ? containerAt(bot, x, y, z)
     : bot.findBlock({ matching: b => !!b && CONTAINER.test(b.name), maxDistance: 16 })
   if (!block) throw new Error('рядом нет ни сундука, ни бочки — в 16 блоках пусто')
-  await reachContainer(bot, ctl, block, deadline)
-  const win = await openContainerAt(bot, ctl, block, deadline, visibleOnly)
+  if (stay && !inReach(bot, block)) throw new Error('до сундука отсюда не дотянуться')
+  if (!stay) await reachContainer(bot, ctl, block, deadline)
+  const win = await openContainerAt(bot, ctl, block, deadline, visibleOnly, stay)
   return { block, win }
 }
 

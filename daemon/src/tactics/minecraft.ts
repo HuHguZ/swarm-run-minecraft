@@ -312,7 +312,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0),
     enemies, incomingProjectiles, burning, hotFloor, lava, lavaAhead, fireResistance,
     explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
-    inWater: !!bot.entity.isInWater, drowning: (bot.oxygenLevel ?? 20) <= 8 && movement.inWater(bot), piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand,
+    inWater: !!bot.entity.isInWater, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand,
     blocks: refuge?.blocks ?? (pack ??= require('../pack')).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
     water: !/nether/.test(dimension) && items.some(item => item.name === 'water_bucket'),
     edible: !!foodActions.bestFood(bot, session.mcData ?? bot.registry), canFight: hostile.length > 0 && (sustainableFight(inspected, bot.health ?? 0) || repel), contact,

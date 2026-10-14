@@ -99,6 +99,7 @@ async function breakFast (bot, pos, { maxMs = 8000 }: any = {}) {
 // паутину булыжником 20 с, стоя в лаве, и сгорел). В руке уже не хуже —
 // ничего не трогаем: лишняя смена предмета сбрасывает заряд удара.
 async function equipFastest (bot, block) {
+  if (block?.name === 'tripwire' && bot.heldItem?.name === 'shears') return bot.heldItem
   if (!breakable(block) || !bot.inventory) return null
   const plan = bestFor(bot, block)
   if (!plan.item) {
@@ -130,12 +131,14 @@ function install (bot) {
   if (!bot || bot._ndFastDig || typeof bot.dig !== 'function') return
   const raw = bot.dig
   bot._ndFastDig = true
-  bot.dig = async function (block, forceLook, digFace) {
+  bot.dig = async function (block, forceLook, digFace, ctl = null) {
     const me = bot.entity && bot.entity.position
     if (block && block.position && me && me.offset(0, 1.62, 0).distanceTo(block.position.offset(0.5, 0.5, 0.5)) > DIG_REACH) {
       throw new Error(`Digging aborted: блок ${block.position} вне досягаемости`)
     }
+    if (ctl?.aborted) throw new Error('прервано')
     try { await equipFastest(bot, block) } catch {}
+    if (ctl?.aborted) throw new Error('прервано')
     let onDeath = null
     const death = new Promise<any>((resolve, reject) => { onDeath = () => reject(new Error('Digging aborted: смерть')); if (typeof bot.once === 'function') bot.once('death', onDeath) })
     try {
