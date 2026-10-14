@@ -14,7 +14,7 @@ const Block = require('prismarine-block')(data)
 // The real escape controller, item selection and client ray run against native block dig times.
 // This fixture supplies only a clock/body: one in_wall HP per ten ticks, a walkable side cell,
 // and server confirmation after the selected tool's actual dig time. It is not a native proof.
-function fixture ({ head = 'obsidian', feet = 'air', side = true, sideFloor = 'stone', hasPick = true, hp = 6, abortAt = Infinity } = {}) {
+function fixture ({ head = 'obsidian', feet = 'air', side = true, sideFloor = 'stone', hasPick = true, hp = 6, abortAt = Infinity, above = 'air' } = {}) {
   let time = 100000; let sequence = 0
   const timers = new Map(); const cells = new Map(); const controls = {}; const digs = []; const events = []; const looks = []; const steps = []
   const ctl = { aborted: false, onAbort: [] }
@@ -26,7 +26,7 @@ function fixture ({ head = 'obsidian', feet = 'air', side = true, sideFloor = 's
     const b = Block.fromStateId(data.blocksByName[name].defaultState, 0); b.position = q
     return b
   }
-  put(position, feet); put(position.offset(0, 1, 0), head); put(position.offset(0, 2, 0), 'air')
+  put(position, feet); put(position.offset(0, 1, 0), head); put(position.offset(0, 2, 0), above)
   if (side) { put(position.offset(1, 0, 0), 'air'); put(position.offset(1, 1, 0), 'air'); put(position.offset(1, -1, 0), sideFloor) }
   const clock = {
     now: () => time,
@@ -115,6 +115,14 @@ test('a fast head block is mined rather than spending a longer side-step budget'
   assert.equal(f.digs[0].name, 'stone')
   assert.equal(f.digs[0].complete, true)
   assert.equal(f.bot.entity.position.x, .5)
+})
+
+test('gravel over gravel at the head: a side step before digging into the falling column (cl-x 14.10)', async () => {
+  const f = fixture({ head: 'gravel', above: 'gravel', hp: 6 })
+  const result = await f.run()
+  assert.equal(result.freed, true)
+  assert.equal(f.digs.length, 0, 'each dug block would be replaced by the next one of the column')
+  assert.ok(f.bot.entity.position.x >= 1)
 })
 
 test('a side escape clears the whole eye footprint before reporting arrival', async () => {

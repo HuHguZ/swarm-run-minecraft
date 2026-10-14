@@ -154,7 +154,10 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
           // Lava can turn the water at our head into obsidian. A clear side exit costs at most
           // ten ticks per attempt; compare that with the equipped dig time before spending HP.
           // Moving out does not grant permission to mine a hidden block behind the embedded one.
-          if ((!Number.isFinite(toolMs) || toolMs > WALL_STEP_MS) && await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, toolMs) })) break
+          // Сыпучее над сыпучим (карман гравия над штреком): каждый выкопанный блок заменяет следующий из колонки — шаг вбок, в
+          // открытый штрек, раньше копки (cl-x 14.10: двенадцать раскопок за 6 с, хп 20 → 0, «suffocated in a wall»).
+          const column = FALLS.has(cell.name) && FALLS.has(bot.blockAt(cell.position.offset(0, 1, 0))?.name || '')
+          if ((column || !Number.isFinite(toolMs) || toolMs > WALL_STEP_MS) && await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, toolMs) })) break
           if (ctl?.aborted) break
           await withTimeout(bot.dig(cell), Math.max(8000, (handMs || 0) + 1500, Number.isFinite(toolMs) ? toolMs + 1500 : 0), `${cell.name} не ломается`)
           this.dugTotal++
