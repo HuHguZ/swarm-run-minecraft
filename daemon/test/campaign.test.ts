@@ -1092,8 +1092,10 @@ test('speedrun bastion re-entry preserves prepared wood and iron instead of crea
     playPolicy: { mode: 'speedrun' }, armor: { feet: 'golden_boots' }, inventory: { oak_planks: 14,
       crafting_table: 1, iron_ingot: 7, stick: 2, iron_pickaxe: 1, stone_pickaxe: 2, cooked_beef: 12, flint_and_steel: 1 } }
   const methods: string[] = []
-  const c = campaign(state, { foes: 0, pickLeft: 343, surface: true, night: false }, method => {
+  const crafted: string[] = []
+  const c = campaign(state, { foes: 0, pickLeft: 343, surface: true, night: false }, (method, params) => {
     methods.push(method)
+    if (method === 'craft') crafted.push(params && params.item)
     if (method === 'chest_list') assert.fail('ready Nether supplies must not be spent on a new optional base chest')
     if (method === 'portal') { state.dimension = 'the_nether'; state.pos = { x: 87, y: 36, z: 137 }; return { went: true } }
     if (method === 'bastion') {
@@ -1112,7 +1114,8 @@ test('speedrun bastion re-entry preserves prepared wood and iron instead of crea
   assert.ok(methods.includes('portal'))
   assert.ok(methods.includes('bastion'), 'the real mature skill still executes after entering the Nether')
   assert.equal(methods.includes('chest_put'), false)
-  assert.equal(methods.includes('craft'), false)
+  // The only spend at the door is the shield the spawner fight requires (fightReady); a cheap one, crafted before entry (cl-ab 14.10).
+  assert.deepEqual(crafted.filter(item => item !== 'shield'), [])
 })
 
 test('частичная добыча железа позволяет продолжить этап без десятиминутного отдыха', async () => {

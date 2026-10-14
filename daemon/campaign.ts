@@ -3265,6 +3265,16 @@ async function enterNether () {
     await refresh()
     for (let k = 0; k < 3 && !died; k++) if (await goToward(known.portal, 4)) break
   }
+  // Дешёвое снаряжение на Ад до входа: щит (слиток + доски) и золото, если есть из чего (cl-ab 14.10: вход на 25-й мин без щита
+  // при слитке в рюкзаке — у бастиона «нет брони», у крепости «нет щита», обратно домой через 7 мин).
+  if (dim() === 'overworld' && !died) {
+    if (!shieldOn() && !have('shield') && have('iron_ingot') >= 1) {
+      if (have(/_planks$/) < 6) { const p = planksFor(); if (p) await craft(p, 8) }
+      if (have(/_planks$/) >= 6 && await craft('shield')) await act('armor')
+    }
+    if (!goldOn() && have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
+    if (!goldOn() && have('gold_ingot') >= 4) await wearGold()
+  }
   return act('portal', { mode: 'enter', timeoutSeconds: 120, ...(lighter() ? {} : { noIgniter: true }) })
 }
 defStage('prep', () => !!known.portal && dim() === 'overworld' && rodsNow() < 7 && (prepRuns < 1 || !lighter()) &&
@@ -3633,6 +3643,7 @@ async function wearGold () {
 // player AABB +16 blocks without line of sight. This is the cautious ore
 // variant; the body repeats its visible-piglin check at each actual swing.
 async function netherGold () {
+  let goldAway = 0
   await refresh()
   if (!goldOn() && have('gold_block') && have('gold_ingot') < 5) {
     await craft('gold_ingot', 9 * have('gold_block'))
@@ -3643,7 +3654,17 @@ async function netherGold () {
     if (nuggets >= 36) break
     const o = await act('observe', { radius: 24 })
     const ents = (o.detail && o.detail.entities) || []
-    if (ents.some(e => /^piglin( brute)?$/i.test(String(e.name || '')))) { log('пиглины рядом — золотую руду не трогаю'); break }
+    const piglin = ents.find(e => /^piglin( brute)?$/i.test(String(e.name || '')))
+    // Пиглины у руды — уйти от них за другой рудой (её в незераке много), а не бросать золото: без брони в бастион не иду, и
+    // поход домой за железом съедал прогон (cl-ab 14.10: бастион найден на 27-й мин, «пиглины рядом — руду не трогаю», домой).
+    if (piglin) {
+      if (++goldAway > 2 || !state.pos || !piglin.pos) { log('пиглины рядом — золотую руду не трогаю'); break }
+      const dx = state.pos.x - piglin.pos.x, dz = state.pos.z - piglin.pos.z
+      const direction = Math.abs(dx) >= Math.abs(dz) ? (dx >= 0 ? 'east' : 'west') : (dz >= 0 ? 'south' : 'north')
+      log(`пиглины рядом — ухожу от них (${direction}) за другой золотой рудой`)
+      await act('explore', { block: 'nether_gold_ore', radius: 32, stepDistance: 40, direction, timeoutSeconds: 60 })
+      continue
+    }
     const m = await act('mine', { block: 'nether_gold_ore', count: Math.max(2, Math.ceil((36 - nuggets) / 4)), radius: 40, timeoutSeconds: 120, avoidPiglinAggro: true })
     if (!(m.detail && m.detail.dug)) {
       if (/не вижу/.test(String(m.error || '')) && i > 0) break

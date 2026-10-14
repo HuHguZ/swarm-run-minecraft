@@ -8,7 +8,7 @@ const { transformSync } = require('esbuild')
 const { withClockFixture } = require('./clock-fixture')
 const data = require('minecraft-data')('1.21.11')
 
-function fixture(inventory, { worn = false, rejectConversion = false, ore = false }: any = {}) {
+function fixture(inventory, { worn = false, rejectConversion = false, ore = false, piglinAt = null }: any = {}) {
   const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
     inventory: { crafting_table: 1, ...inventory }, armor: worn ? { head: { item: 'golden_helmet' } } : {} }
   const situation = { pickLeft: 520, free: 36, foes: 0, surface: true }
@@ -48,7 +48,7 @@ function fixture(inventory, { worn = false, rejectConversion = false, ore = fals
       calls.push({ method, params })
       let detail: any = {}
       if (method === 'situation') detail = situation
-      if (method === 'observe') detail = { entities: ore ? [] : [{ name: 'Piglin', dist: 4 }] }
+      if (method === 'observe') detail = { entities: ore ? [] : [{ name: 'Piglin', dist: 4, ...(piglinAt ? { pos: piglinAt } : {}) }] }
       if (method === 'mine') detail = { dug: 0, stopped: 'виден взрослый пиглин в зоне злости' }
       if (method === 'craft') detail = craft(params)
       if (method === 'armor' && state.inventory.golden_helmet) {
@@ -109,4 +109,14 @@ test('campaign selects cautious gold mining while a stop preserves ordinary fall
   assert.equal(mines[0].params.avoidPiglinAggro, true)
   assert.equal(f.calls.some(call => call.method === 'explore'), true)
   assert.equal(f.state.armor.head, undefined)
+})
+
+test('piglins by the ore: the bot walks away from them for other gold ore instead of giving up (cl-ab 14.10)', async () => {
+  const f = fixture({ stone_pickaxe: 1 }, { piglinAt: { x: 4, y: 64, z: 0 } })
+  await f.run()
+  const away = f.calls.filter(call => call.method === 'explore')
+  assert.ok(away.length >= 1)
+  assert.equal(away[0].params.direction, 'west')
+  assert.equal(away[0].params.block, 'nether_gold_ore')
+  assert.equal(f.calls.some(call => call.method === 'mine'), false, 'never mines beside visible piglins')
 })
