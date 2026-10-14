@@ -107,6 +107,12 @@ function netherTunnel (this: any, p: any = {}) {
       const t = { x: Number(p.x), y: p.y !== undefined ? Number(p.y) : undefined, z: Number(p.z) }
       if (!Number.isFinite(t.x) || !Number.isFinite(t.z)) throw new Error('tunnel: нужны x и z')
       const nb = p.noBreachNear && Number.isFinite(Number(p.noBreachNear.x)) ? { x: Number(p.noBreachNear.x), z: Number(p.noBreachNear.z), r: Number(p.noBreachNear.r) || 48 } : null
+      // Вслепую в Аду — закрытым штреком по видимому (tunnelTo планирует по скрытому объёму: Codex q9, честность главной метрики).
+      const NC = require('../nether-cover')
+      if (NC.blind() && require('../worlds').worldOf(this.bot) === 'the_nether') {
+        const c = await NC.coveredTo(this, ctl, t, { deadline: gameClock.now() + budget * 1000, radius: p.radius ?? 4 })
+        return { ...c, note: c.ok ? `закрытым штреком дошёл: отрезков ${c.segs}, шагов ${c.moved}, копок ${c.dug}` : `закрытый штрек встал: ${c.why}` }
+      }
       const r = await tunnelTo(this, ctl, t, { band: p.band, radius: p.radius ?? 4, via: p.via, budgetCheck: p.budgetCheck === true, ironOk: p.ironOk === true, noBreachNear: nb, deadline: gameClock.now() + budget * 1000, log: (w, d) => console.log('[tunnel] ' + w + ' ' + JSON.stringify(d)) })
       delete r.own
       return { ...r, note: r.ok ? `штреком дошёл: кусков ${r.segs}, вскрытий ${r.breach}, обходов ${r.detours}, копок ${r.dug}` : `штрек встал: ${r.why}` }

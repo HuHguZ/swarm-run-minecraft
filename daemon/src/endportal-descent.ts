@@ -52,7 +52,7 @@ function visibleDrop (bot, cell) {
 // Решение на одну ступень из клетки ног F в сторону d — только по видимому. Чистая функция (тесты: одинакова в мирах, разных
 // лишь за стеной). { act: 'dig'|'seal'|'bridge'|'step'|'brick'|'turn', cell?, name?, fall?, why? }
 // wetOk — клетки воды, которые заложить не вышло: вода (не лава) — помеха, не стоп (течёт в лестницу — идём по ней).
-function judgeStep (bot, F, d, { bricks = null, careful = false, hp = 20, throughBricks = false, dropUnknown = false, wetOk = null }: any = {}) {
+function judgeStep (bot, F, d, { bricks = null, careful = false, hp = 20, throughBricks = false, dropUnknown = false, wetOk = null, noDrop = false }: any = {}) {
   const skip = (b, q) => b.name !== 'lava' && wetOk && wetOk.has(`${q.x},${q.y},${q.z}`)
   // Закладывать: лаву (любую) и источник воды. Текущая вода без источника рядом стекает сама — проходима (s5e-Q-1 07.10: заклад
   // текущей воды в своих клетках ступени — копать снова — течёт снова; лестница у озера затопилась).
@@ -82,6 +82,10 @@ function judgeStep (bot, F, d, { bricks = null, careful = false, hp = 20, throug
       if (b && LIQUID.test(b.name) && sealIt(b, q)) return { act: 'seal', cell: q, name: b.name, by: c }
     }
   }
+  // За ступенью обрыв (видимый воздух без пола на уровне ног ступени): walkInto держит «вперёд» до приземления — тело выносит
+  // за клетку ступени (d5-5-1/6-1 14.10, Ад: спуск в толщу у края пещеры — падение с y 54–64 в лавовое море). Другой ход.
+  const past = seen(bot, N.offset(d[0], -1, d[1]))
+  if (past && airish(past) && !solid(seen(bot, N.offset(d[0], -2, d[1])))) return { act: 'turn', why: 'за ступенью обрыв' }
   const land = N.offset(0, -2, 0)
   const lb = seen(bot, land)
   if (!lb) return { act: 'bridge', cell: land, why: 'пол ступени не виден' }
@@ -96,7 +100,8 @@ function judgeStep (bot, F, d, { bricks = null, careful = false, hp = 20, throug
   const dmg = fall === null ? Infinity : Math.max(0, fall - MAX_FREE_FALL)
   const ok = drop.bottom && fall !== null && solid(drop.bottom) && !HAZARD_FLOOR.test(drop.bottom.name) && hp >= 10 &&
     (dmg === 0 || (!careful && dmg <= Math.min(6, hp - 12)))
-  if (ok) return { act: 'step', fall }
+  // noDrop (закрытый штрек Ада, nether-cover.descend): только ступень на твёрдое прямо под ней — в падении тело несёт вперёд.
+  if (ok && !noDrop) return { act: 'step', fall }
   // Внутрь крепости сквозь потолок коридора (honestEnter): дна из проёма 1×1 не видно (свой пол заслоняет крутой луч), а под
   // потолком — коридор 3–5 бл. высотой: спрыгнуть — цена (≤ 2 урона), как человек, пробивший потолок. Лава/вода в видимой части
   // колонки — нет; хп < 14, осторожно (лава на слух) — нет.
@@ -125,7 +130,9 @@ async function placeAt (bot, cell) {
   try { const r = await placeBlockAt(bot, cell, { timeoutMs: 2000, steady: true, honest: true }); return !!(r && r.ok) } catch { return false }
 }
 
-async function walkInto (bot, ctl, goal, fall) {
+// early — отпустить «вперёд», как только тело в колонне цели, не дожидаясь приземления: в воздухе ход гасится медленно (0.91 за
+// тик), и тело уносило за клетку ступени (Ад, d6-6-1 14.10: спуск у пустоты — падение с y 85 в лавовое море).
+async function walkInto (bot, ctl, goal, fall, early = false) {
   const cx = goal.x + 0.5; const cz = goal.z + 0.5
   const t0 = gameClock.now()
   const from = bot.entity.position.floored()
@@ -133,7 +140,7 @@ async function walkInto (bot, ctl, goal, fall) {
   try {
     while (!ctl.aborted && gameClock.now() - t0 < 2500) {
       const p = bot.entity.position
-      if (Math.floor(p.x) === goal.x && Math.floor(p.z) === goal.z && Math.floor(p.y) <= goal.y) break
+      if (Math.floor(p.x) === goal.x && Math.floor(p.z) === goal.z && (Math.floor(p.y) <= goal.y || (early && Math.hypot(p.x - cx, p.z - cz) < 0.45))) break
       // Застрял на углу (тело не по центру своей клетки в проходе 1 бл.): сперва в центр своей клетки, потом снова к цели
       // (s5e-H-1 07.10: «не шагнул в …» ×4 в коридоре крепости у самой комнаты).
       if (!centred && gameClock.now() - t0 > 900) {
@@ -171,6 +178,8 @@ async function stairStep (session, ctl, k, o: any = {}) {
   const wetOk = o.wetOk || new Set()
   for (let t = 0; t < 4; t++) {
     const d = SPIRAL[(k + t) % 4]
+    // only(d) — разрешённые стороны (nether-cover.descend: ступень только в видимую породу, не к устью пещеры).
+    if (o.only && !o.only(d)) { why = why || 'сторона закрыта'; continue }
     let j = null
     for (let a = 0; a < 10 && !ctl.aborted; a++) {
       j = judgeStep(bot, F, d, { ...o, wetOk, hp: bot.health ?? 20 })
@@ -213,7 +222,7 @@ async function stairStep (session, ctl, k, o: any = {}) {
     if (j.act === 'step') {
       // Зигзаг 2×1 (следующая ступень — обратно): клетка головы следующей ступени — ноги этой, уже воздух: 2 блока на уровень
       // вместо 3 у спирали 2×2 (s5e-M-1: 80 ступеней по ~3.1 игр. с). Пол следующей ступени так же виден в проём до шага.
-      if (await walkInto(bot, ctl, F.offset(d[0], -1, d[1]), j.fall)) return { moved: true, k: (k + t + (process.env.ND_STAIR_SPIRAL === '1' ? 1 : 2)) % 4, fall: j.fall, dug, placed }
+      if (await walkInto(bot, ctl, F.offset(d[0], -1, d[1]), j.fall, !!o.early)) return { moved: true, k: (k + t + (process.env.ND_STAIR_SPIRAL === '1' ? 1 : 2)) % 4, fall: j.fall, dug, placed }
       why = 'не шагнул на ступень'
     }
   }
@@ -464,4 +473,4 @@ async function toLevel (session, ctl, ty, { deadline, bricks = null, maxSteps = 
   return { ok: Math.abs(bot.entity.position.floored().y - ty) <= 1, moved, dug, why }
 }
 
-module.exports = { honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL, pieElevation, upStep, toLevel }
+module.exports = { honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL, pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource }

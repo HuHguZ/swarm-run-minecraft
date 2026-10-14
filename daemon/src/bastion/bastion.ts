@@ -254,6 +254,8 @@ function burrowColumn (bot, f) {
 }
 
 async function burrow (session, ctl, st, why = '') {
+  // Вслепую — по видимому (nether-cover.coverHere): колонна burrowColumn выбиралась по скрытым блокам (Codex q9).
+  if (require('.././nether-cover').blind()) return require('.././nether-cover').coverHere(session, ctl)
   const bot = session.bot
   const SL = require('.././sealed')
   if (SL.fillerCount(bot) < 2) return { ok: false, why: 'нечем заложить шахту' }
@@ -1605,7 +1607,9 @@ async function bastion (session, ctl, p: any = {}) {
       }
       // Без золотой брони — штреком и вблизи: пешком на виду у пиглинов — бой с ними (b0-5-1 14.10: «враги 8 не по силам»).
       if (!routed && (far1 > (st.goldless ? 12 : 40) || (nearG && (far1 > 12 || Math.abs(goal.y - me0.y) > 8))) && p.tunnel !== false) {
-        const { tunnelTo } = require('.././tunnel')
+        // Вслепую — закрытым штреком по видимому (nether-cover.coveredTo): tunnelTo планирует по скрытому объёму (Codex q9).
+        const NC = require('.././nether-cover')
+        const tunnelTo = NC.blind() ? (s0, sub, g, o) => NC.coveredTo(s0, sub, g, { deadline: o.deadline, radius: o.radius }) : require('.././tunnel').tunnelTo
         // Вход штрека подхода — клетка, откуда он начат: без него exitTunnel отвечал «входа нет», и после бастиона тело
         // оставалось в своём штреке под лавовым морем (neF-mB26-1 02.10: y 21, все шаги к спавнеру и порталу — на месте).
         let tStart = bot.entity.position.floored()
@@ -1652,9 +1656,11 @@ async function bastion (session, ctl, p: any = {}) {
       }
       try {
         const left = () => goal === rec ? bot.entity.position.distanceTo(new Vec3(rec.x, rec.y, rec.z)) : Math.hypot(goal.x - bot.entity.position.x, goal.z - bot.entity.position.z)
-        let again = !nearG && left() > (goal === rec ? 40 : 12) ? await walk(180000 + (p.tripSeconds || 0) * 1000) : false
+        // Вслепую без золотой вещи поверху не идём (d5-7-1 14.10: штрек «пути нет» → пешком над лавовым морем, падение с y 74).
+        const openOk = !(require('.././nether-cover').blind() && !goldWorn(bot))
+        let again = openOk && !nearG && left() > (goal === rec ? 40 : 12) ? await walk(180000 + (p.tripSeconds || 0) * 1000) : false
         // Второй заход (бой по дороге, обрыв: booth-2 — «не дошёл: 76 блоков» за 38 с; вынырнули из лавы).
-        for (let k = 0; k < 3 && !nearG && !ctl.aborted && (again || left() > (goal === rec ? 48 : 20)) && gameClock.now() < deadline - 300000; k++) {
+        for (let k = 0; k < 3 && openOk && !nearG && !ctl.aborted && (again || left() > (goal === rec ? 48 : 20)) && gameClock.now() < deadline - 300000; k++) {
           if ((bot.health ?? 20) < 12) await eatIfHungry(session, ctl)
           again = await walk(150000)
         }

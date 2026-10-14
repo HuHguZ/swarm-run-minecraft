@@ -212,6 +212,9 @@ test('fortress.keepBlocks: в Аду меньше 24 строительных �
   const bot: any = { game: { dimension: 'the_nether' }, inventory: { items: () => items } }
   let calls = 0
   A.mine = async (_s: any, _c: any, p: any) => { calls++; assert.equal(p.block, 'netherrack'); items[0].count += p.count; return { dug: p.count } }
+  // Без золота добор незерака вокруг — выход из закрытого штрека (nether-cover): здесь прежний ход поверху.
+  const cover0 = process.env.ND_NE_COVER
+  process.env.ND_NE_COVER = '0'
   try {
     withEnv({ ND_NE_KEEP_BLOCKS: undefined }, () => {})
     assert.equal(await F.keepBlocks({ bot }, { aborted: false }), 53)
@@ -220,7 +223,7 @@ test('fortress.keepBlocks: в Аду меньше 24 строительных �
     bot._ndKeepBlocksAt = 0; items[0].count = 30
     assert.equal(await F.keepBlocks({ bot }, { aborted: false }), null, 'хватает')
     assert.equal(calls, 1)
-  } finally { A.mine = mine0 }
+  } finally { A.mine = mine0; if (cover0 === undefined) delete process.env.ND_NE_COVER; else process.env.ND_NE_COVER = cover0 }
 })
 
 test('клатч: доски — последними (в Аду дерево нужно на палки и кирки)', () => {

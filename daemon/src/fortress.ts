@@ -166,8 +166,27 @@ function rememberSpawner (session, sp) {
 // видно 0. Поэтому, пока тело выше 80, отрезок целится на 12 ниже (до 64):
 // pathfinder сам ищет спуск и копает — ломать блок у жидкости он не станет
 // (Movements.dontCreateFlow). Не вышло вниз — тот же отрезок по горизонтали.
-async function legTo (session, ctl, tx, tz, deadline) {
+async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = null }: any = {}) {
   const nether = require('./nether')
+  // Без золотой вещи — закрытым штреком (nether-cover, план координатора 14.10): в толще не видят пиглины, гасты и скелеты,
+  // под ногами нет обрыва; устье в пещеру — окно (onOpen — взгляд поиска). Не вышло — как прежде (поверху — цена).
+  const bot = session.bot
+  if (process.env.ND_NE_COVER !== '0' && worlds.worldOf(bot) === 'the_nether' && !require('./bastion/take-gold-block').goldWorn(bot) && gameClock.now() < deadline) {
+    await keepPicks(session, ctl)
+    const d0 = Math.hypot(tx - bot.entity.position.x, tz - bot.entity.position.z)
+    const c = await require('./nether-cover').closedBore(session, ctl, { x: tx, z: tz }, {
+      deadline: Math.min(deadline, gameClock.now() + 60000), maxSteps: 24, onOpen, stop, goldOk: () => !piglinsAround(bot), minY: 40
+    })
+    log('закрытый штрек', { to: { x: tx, z: tz }, ok: c.ok, moved: c.moved, dug: c.dug, placed: c.placed, mouths: c.mouths, corridor: c.corridor || undefined, gold: c.gold || undefined, down: c.down || undefined, unsealed: c.unsealed || undefined, why: c.why, at: c.at, view: c.view ? { seen: c.view.seen, bastion: !!c.view.bastion } : undefined })
+    // Руда из стен штрека — «золото по пути»: как хватит на 4 слитка, сразу ботинки (верстак — из рюкзака, в штреке).
+    if (c.gold && !ctl.aborted) { try { if (await require('./bastion/take-gold-block').armGold(session, ctl)) log('золото из стен штрека: броня надета', {}) } catch {} }
+    // Успех — по пройденному к цели (Codex q9: шаги туда-сюда у устья — не продвижение).
+    const gain = d0 - Math.hypot(tx - bot.entity.position.x, tz - bot.entity.position.z)
+    if (c.ok || gain >= 8 || (c.view && stop && stop(c.view))) return { ok: true, bored: c.dug, covered: true, view: c.view }
+    if (ctl.aborted) return { ok: false, error: 'прервано' }
+    // Поверху без золотой вещи не идём (d5-5-1, d7-6-1: отрезок ногами — уступ над лавовым морем, падение): отрезок закрыт.
+    if (process.env.ND_NE_COVER_WALK !== '1') return { ok: false, error: `закрытый штрек: ${c.why}`, bored: c.dug, covered: true, view: c.view }
+  }
   // Без нашего золота пиглины бьют всё, что видят (NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD — сенсор с лучом): видны в 24 бл.
   // или слышны ближе 16 — отрезок штреком, а не поверху (b11-6-2 14.10: поиск бастиона поверху, смерть через минуту). Штрек
   // медленнее — цена; не вышел — как прежде ногами.
@@ -231,6 +250,8 @@ async function walkLeg (bot, ctl, tx, tz, deadline) {
 async function keepBlocks (session, ctl, { min = 24, want = 56 }: any = {}) {
   const bot = session.bot
   if (process.env.ND_NE_KEEP_BLOCKS === '0' || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted) return null
+  // Закрытый штрек даёт незерак сам (два блока на шаг); копка вокруг — выход из укрытия.
+  if (process.env.ND_NE_COVER !== '0' && !require('./bastion/take-gold-block').goldWorn(bot)) return null
   const have = require('./pack').buildCount(bot, 'the_nether')
   if (have >= min || gameClock.now() < (bot._ndKeepBlocksAt || 0)) return null
   bot._ndKeepBlocksAt = gameClock.now() + 60000
@@ -239,6 +260,16 @@ async function keepBlocks (session, ctl, { min = 24, want = 56 }: any = {}) {
   const now = require('./pack').buildCount(bot, 'the_nether')
   log('блоки: добрал незерак', { was: have, now, error: r && r.error })
   return now - have
+}
+
+// Закрытый штрек ест кирки (1×2 — два блока на шаг; три кирки набора — ~256 бл. хода, Codex q9): запас каменных из булыжника
+// рюкзака, 4 доски — на новый верстак (c19-7-3: верстак потерян, досок 2 — кирок нет). Не чаще раза в игровую минуту.
+async function keepPicks (session, ctl) {
+  const T = require('./tunnel')
+  const bot = session.bot
+  if (T.lowUses(bot) >= 100 || gameClock.now() < (bot._ndKeepPicksAt || 0) || ctl.aborted) return
+  bot._ndKeepPicksAt = gameClock.now() + 60000
+  try { log('кирки: запас', { made: await T.restockPicks(session, ctl, 2, { reservePlanks: 4 }), uses: T.lowUses(bot) }) } catch (e) { log('кирки: запас', { error: e.message }) }
 }
 
 // Пиглины, которым мы враги (без нашей золотой вещи): на виду в 24 бл. или слышны ближе 16 за 10 с.
@@ -260,6 +291,8 @@ async function goldOnTheWay (session, ctl) {
   if (process.env.ND_GOLD_WAY === '0' || !bot.inventory || !bot.registry?.blocksByName || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted ||
     gameClock.now() < (bot._ndGoldWayAt || 0)) return null
   const T = require('./bastion/take-gold-block')
+  // Закрытый штрек сам копает руду в своих стенах; ходить к видимой руде поверху — выход из укрытия (нет).
+  if (process.env.ND_NE_COVER !== '0' && !T.goldWorn(bot)) return null
   const worn = T.goldWorn(bot)
   const R = worn ? 5 : 10
   const ids = ['nether_gold_ore', 'gilded_blackstone'].map(n => bot.registry.blocksByName[n]?.id).filter(Boolean)
@@ -503,8 +536,12 @@ async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
   // На столбе тело не уходит и не прячется: стрелки рядом (пиглины без нашего золота — арбалеты, скелеты, ифриты, гаст) — не
   // строить (b5-5-1 14.10: столб 12 бл. у пиглинов, хп 20 → 0 за 2 с, «slain by Piglin»).
   const goldWorn = [5, 6, 7, 8].some(s => /^golden_/.test(bot.inventory.slots[s]?.name || ''))
-  const shooters = require('./perception/eyes').entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null && (
+  // Без золотой вещи открытый столб — цена выше пользы (c19-5-1, d4-5-1: вышка у портала, арбалеты, смерть на 1-й мин): обзор —
+  // из устьев закрытого штрека и «пирогом» (Codex q5/q9).
+  if (!goldWorn && process.env.ND_NE_COVER !== '0') return { skipped: 'без золота вышку не строю — обзор из устьев штрека' }
+  const shootersNow = () => require('./perception/eyes').entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null && (
     (e.name === 'piglin' && !goldWorn && e.dist <= 24) || (/^(skeleton|blaze|piglin_brute)$/.test(e.name) && e.dist <= 24) || (e.name === 'ghast' && e.dist <= 48)))
+  const shooters = shootersNow()
   if (shooters.length && process.env.ND_TOWER_SHOOTERS !== '0') return { skipped: `стрелки рядом: ${shooters.slice(0, 3).map(e => `${e.name} ${Math.round(e.dist)}`).join(', ')}` }
   // Гаста слышно (его звук громкий — Ghast.getSoundVolume 5, сервер шлёт в 16·5 = 80 бл.; senses.heard — сторона и полоса, как
   // субтитры) — столб под ним не строить (b5-7-3 14.10: вышка y 84 → 91 сразу у портала, шары, смерть за 30 с).
@@ -514,9 +551,14 @@ async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
   for (let y = 2; y <= up + 2; y++) { const b = bot.blockAt(base.offset(0, y, 0)); if (!b || b.boundingBox !== 'empty' || /lava/.test(b.name)) break; free++ }
   const n = Math.min(up, free - 1, 118 - base.y)
   if (n < 8) return { skipped: `над головой открыто ${free}` }
-  const t = await towerUp(bot, ctl, n, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+  // Стрелки показались, пока столб рос (c19-5-1: вышка 20 бл., арбалеты пиглинов сбили с верха, падение 19 бл.) — стоп и вниз,
+  // как в bastion/tower-scan.ts.
+  const t: any = await towerUp(bot, ctl, n, {
+    sneak: true, abortIf: () => process.env.ND_TOWER_SHOOTERS !== '0' && (shootersNow().length || require('./perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).length) ? 'стрелки рядом' : null
+  }).catch(e => ({ ok: false, reason: e.message }))
   const top = bot.entity.position.floored()
-  const v = await glance()
+  const shot = !!t && (t.why || []).includes('стрелки рядом')
+  const v = shot ? { seen: 0 } : await glance()
   for (let i = 0; i < n + 6 && !ctl.aborted; i++) {
     const f = bot.entity.position.floored()
     if (f.y <= base.y) break
@@ -525,7 +567,7 @@ async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
     try { await bot.dig(below, true) } catch { break }
     await sleep(250)
   }
-  return { up: top.y - base.y, placed: t && t.placed, seen: v.seen, bastion: !!v.bastion, v }
+  return { up: top.y - base.y, placed: t && t.placed, seen: v.seen, bastion: !!(v as any).bastion, v: shot ? undefined : v, shot: shot || undefined }
 }
 
 function placeOf (session, key) {
@@ -536,7 +578,7 @@ function placeOf (session, key) {
 // Прямая по направлению отрезками по 16 блоков, взгляд после каждого, пока
 // кирпич не увиден или не кончились maxWalk/время. start и along — откуда
 // считать отрезки. stopWhen(v) — когда взгляд кончает прямую (по умолчанию — кирпич крепости или бастион).
-async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, deadline, glance, legs, onStep = null, stopWhen = null, resume = null, onProgress = null }: any) {
+async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, deadline, glance, legs, onStep = null, stopWhen = null, resume = null, onProgress = null, pie = null }: any) {
   const bot = session.bot
   const [dx, dz] = DIRS[dirName]
   along = resume?.along ?? along
@@ -554,8 +596,8 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
     await keepBlocks(session, ctl)
     const biomeHere = () => { try { return String(require('./perception').biomeName(bot, bot.entity.position.floored()) || '') } catch { return '' } }
     const inDelta0 = bot._ndAvoidDeltas ? /basalt_deltas/.test(biomeHere()) : false
-    const w = await legTo(session, ctl, tx, tz, deadline)
-    legs.push({ to: { x: tx, z: tz }, ok: w.ok, down: w.down, bored: w.bored, fought: w.fought, error: w.ok ? undefined : w.error, from: xyz(me) })
+    const w = await legTo(session, ctl, tx, tz, deadline, { onOpen: glance, stop: stopWhen || (x => !!(x && (x.seen || x.bastion))) })
+    legs.push({ to: { x: tx, z: tz }, ok: w.ok, down: w.down, bored: w.bored, covered: w.covered, fought: w.fought, error: w.ok ? undefined : w.error, from: xyz(me) })
     if (ctl.aborted) { stopped = 'прервано'; break }
     // Поиск бастиона: базальтовые дельты (биом под ногами, F3) — бастионов там не бывает (bastion_remnant: все биомы Ада, кроме
     // дельт), а магмовые кубы и гасты в базальте убивали (b0-7-1 14.10: хп 20 → 1 за 2 с) — направление закрыто. Только вход в
@@ -587,11 +629,37 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
     }
     if (resume) { Object.assign(resume, { along, side, fails, blocked }); onProgress?.() }
     if (blocked) break
-    v = await glance()
+    // Из устья закрытого штрека уже видно постройку — это и есть взгляд отрезка (из замкнутого штрека потом не видно ничего).
+    v = w.view && (stopWhen ? stopWhen(w.view) : (w.view.seen || w.view.bastion)) ? w.view : await glance()
+    if (pie && !(stopWhen ? stopWhen(v) : (v.seen || v.bastion))) v = (await pieLead(session, ctl, { type: pie, deadline, glance, legs, hit: stopWhen || (x => !!(x && (x.seen || x.bastion))) })) || v
     if (stopWhen ? stopWhen(v) : (v.seen || v.bastion)) break
   }
   if (!v.seen && !stopped) stopped = ctl.aborted ? 'прервано' : (along >= maxWalk ? `прошёл ${along} блоков на ${WORDS[dirName]} — кирпича не видно` : 'время вышло')
   return { v, along, stopped, blocked }
+}
+
+// «Пирог» F3 (AGENTS.md: есть ли рядом в прорисованных чанках сундуки или спавнер — без клетки, место ищется ходом): из закрытого
+// штрека постройку не видно, а пирог её чует — у бастиона сундуков много (chest ≥ 2: у руин портала один), у крепости спавнер.
+// Пеленг дуги — отрезок 20 бл. к нему (legTo, устья — взгляд), снова пеленг, до 5 раз или до находки (hit).
+async function pieLead (session, ctl, { type, deadline, glance, legs, hit }) {
+  const S = require('./perception/senses')
+  const bot = session.bot
+  let v = null
+  for (let k = 0; k < 5 && !ctl.aborted && gameClock.now() < deadline; k++) {
+    const p = S.pie(bot, { range: 64 })
+    const n = (p && p.byType && p.byType[type]) || 0
+    if (n < (type === 'chest' ? 2 : 1)) break
+    const arc = S.pieArcs(bot, type, { fov: 30 })[0]
+    if (!arc || arc.center === null) break
+    const d = S.vecOf(arc.center)
+    const me = bot.entity.position
+    const w = await legTo(session, ctl, Math.round(me.x + d.x * 20), Math.round(me.z + d.z * 20), deadline, { onOpen: glance, stop: hit })
+    legs.push({ ok: !!w.ok, at: xyz(bot.entity.position), pie: { type, n, yaw: arc.center }, covered: w.covered, error: w.ok ? undefined : w.error })
+    log('пирог: к постройке', { type, n, yaw: arc.center, ok: !!w.ok, at: xyz(bot.entity.position) })
+    v = w.view && hit(w.view) ? w.view : await glance()
+    if (hit(v) || !w.ok) break
+  }
+  return v
 }
 
 // Поиск по регионам nether_complexes (байткод paper-1.21.11,
@@ -660,7 +728,7 @@ function nextRegion (plan) {
 
 // До точки по прямым: сначала по оси, где дальше, потом по другой — отрезками
 // по 16 со взглядом после каждого (walkLine).
-async function walkTo (session, ctl, to, { deadline, glance, legs, stopWhen = null, resume = {}, onProgress = null }: any) {
+async function walkTo (session, ctl, to, { deadline, glance, legs, stopWhen = null, resume = {}, onProgress = null, pie = null }: any) {
   const bot = session.bot
   let v: any = { seen: 0 }
   let stopped = null
@@ -696,7 +764,8 @@ async function walkTo (session, ctl, to, { deadline, glance, legs, stopWhen = nu
       legs,
       stopWhen,
       resume: line,
-      onProgress
+      onProgress,
+      pie
     })
     v = r.v
     if (stopWhen ? stopWhen(v) : (v.seen || v.bastion)) { stopped = null; break }
@@ -778,7 +847,7 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
     const to = plan.rings.wps[plan.rings.i]
     // Точка кольца в 48 бл. от увиденных дельт — бастиона там нет: следующая.
     if (forBastion && (bot._ndDeltaSeen || []).some(d => Math.hypot(d.x - to.x, d.z - to.z) < 48)) { plan.rings.i++; delete plan.walk; save(); continue }
-    const r = await walkTo(session, ctl, to, { deadline, glance, legs, stopWhen: hit, resume: plan.walk ||= {}, onProgress: save })
+    const r = await walkTo(session, ctl, to, { deadline, glance, legs, stopWhen: hit, resume: plan.walk ||= {}, onProgress: save, pie: forBastion ? 'chest' : 'spawner' })
     v = r.v
     if (hit(v)) { stopped = null; save(); return { v, stopped, plan: { origin: plan.origin, rings: plan.rings.i, of: plan.rings.wps.length } } }
     if (ctl.aborted || gameClock.now() >= deadline) break
@@ -803,7 +872,7 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
       if (high) { const h = await highLook(session, ctl, glance); if (h.v && hit(h.v)) { v = h.v; stopped = null; break } }
     }
     const to = plan.wps[plan.i]
-    const r = await walkTo(session, ctl, to, { deadline, glance, legs, stopWhen: forBastion ? hit : null, resume: plan.walk ||= {}, onProgress: save })
+    const r = await walkTo(session, ctl, to, { deadline, glance, legs, stopWhen: forBastion ? hit : null, resume: plan.walk ||= {}, onProgress: save, pie: forBastion ? 'chest' : 'spawner' })
     v = r.v
     stopped = r.stopped
     if (hit(v)) { stopped = null; break }
@@ -828,6 +897,8 @@ async function sweep (session, ctl, { deadline, glance, legs, v, want = 'fortres
 // не видно ни глазами, ни в памяти.
 async function climbTo (session, ctl, top, deadline) {
   const bot = session.bot
+  // Точка бывает простым {x,y,z} (toSpawnerBody: клетка в 3.5 бл. от спавнера) — blockAt с ним падал «pos.floored is not a function» (c13-7-2).
+  top = new Vec3(top.x, top.y, top.z)
   const floor = bot.blockAt(top)
   const exact = !!floor?.shapes?.some(s => s[0] === 0 && s[2] === 0 && s[3] === 1 && s[4] === 1 && s[5] === 1) &&
     require('./pick').blockSeen(bot, floor.position)

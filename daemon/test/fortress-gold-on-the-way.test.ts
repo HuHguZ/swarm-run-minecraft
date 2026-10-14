@@ -7,6 +7,8 @@ const { transformSync } = require('esbuild')
 const Vec3 = require('vec3')
 
 // Золото Ада по пути (пользователь 14.10): руда на виду и рядом, не при пиглинах; без брони — крюк шире и броня из добытого.
+// Ход к руде поверху; вслепую без золота руду копает закрытый штрек в своих стенах (nether-cover) — здесь прежний путь.
+process.env.ND_NE_COVER = '0'
 function fixture({ worn = false, piglin = false, heard = false, nuggets = 0 }: any = {}) {
   const file = path.resolve(__dirname, '../src/fortress.ts'), mod: any = new Module(file, module)
   mod.filename = file; mod.paths = module.paths

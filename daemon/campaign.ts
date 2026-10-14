@@ -3739,6 +3739,14 @@ async function wearGold () {
 async function netherArrival () {
   if (dim() !== 'the_nether' || died) return
   await refresh()
+  // Без золотой вещи — сразу в укрытие (план координатора 14.10): вслепую ne_burrow закрывает видимые проёмы у тела или уводит
+  // ступенями в толщу (nether-cover.coverHere); дальше поиск идёт закрытым штреком из этой клетки.
+  if (!goldOn() && process.env.ND_NE_COVER !== '0') {
+    const c = await act('ne_burrow', { why: 'прибытие: сразу в укрытие' })
+    await refresh()
+    log(`прибытие: укрытие — ${(c.detail && (c.detail.how || c.detail.why)) || c.error || c.status}`)
+    if (died || dim() !== 'the_nether') return
+  }
   const o = await act('observe', { radius: 40 })
   const ents = ((o.detail && o.detail.entities) || []).filter(e => e && e.pos)
   const nm = e => String(e.name || '').toLowerCase().replace(/ /g, '_')
