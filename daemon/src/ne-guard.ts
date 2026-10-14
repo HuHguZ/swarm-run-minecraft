@@ -187,6 +187,43 @@ function hot (bot, { ms = 1500, near = 3.0 }: any = {}) {
   return null
 }
 
+// Ходячие, от которых дуэль не спасает: брут/хоглин/зоглин (топор выбивает щит, 40–50 хп), трое и больше ближних (бьют с боков
+// мимо щита), или хп < 9 (lowHp: для тактики — нет, у тела вплотную нора не успевает). Им — нора, столб, иначе коробка. Двое —
+// дуэль со щитом и отход: норой двое мечников убивали в 6 из 8, дуэлью с отходом — в 0 из 8.
+// Сцена try-lab-ne-piglin 14.10: брут в 7 бл. — бегом 7 смертей из 8, норой 1–2.
+// walkers — считать толпу без ифритов и кубов магмы (они летают или прыгают к норе и столбу): так решает тактика; ответ самого стража
+// считает всех ближних, как прежде.
+function bigMelee (bot, foes = meleeFoes(bot, 8), e = null, { lowHp = true, walkers = false }: any = {}) {
+  const crowd = walkers ? foes.filter((f: any) => !/^(blaze|magma_cube)$/.test(f.name || '')) : foes
+  const wsk = foes.filter((f : any) => f.name === 'wither_skeleton').length
+  return HIDE_FROM.test((e && e.name) || '') || foes.some((f : any) => HIDE_FROM.test(f.name || '')) || crowd.length >= 3 || wsk >= 2 || lowHp && (bot.health ?? 20) < 9
+}
+// Высота столба: проба 03.10 (2 брута) — с +2 брут достаёт (удары по ногам на y+2.00 от брута на y+0.00), берём +3.
+function pillarHeight () { return Math.max(2, Math.min(4, Number(process.env.ND_GUARD_PILLAR || 3))) }
+// Столб на месте встаёт: над головой PH+1 воздуха, блоков хватает, и только на открытом (хотя бы 2 стороны у ног —
+// воздух): из ямы бартера столб выводил к бруту у её рта (B1-3 03.10: брут во рту ямы бил сверху, +2 — достаёт).
+function pillarFits (bot) {
+  if (!bot.entity) return false
+  const PH = pillarHeight()
+  if (guardCount(bot) < PH) return false
+  const f0 = bot.entity.position.floored()
+  const air = v => { const b = bot.blockAt(v); return !!b && b.boundingBox === 'empty' && !/lava|water|fire/.test(b.name) }
+  for (let k = 2; k <= PH + 1; k++) if (!air(f0.offset(0, k, 0))) return false
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => air(f0.offset(dx, 0, dz))).length >= 2
+}
+// Тело вне их рук: выше всех ближних на 2.5+ (свой столб) или ниже на 2+ (своя нора: рамка атаки ходячего не опускается ниже
+// его ног — Mob.getAttackBoundingBox раздувает только по горизонтали).
+function above (bot, foes) {
+  const y = bot.entity.position.y
+  return foes.length > 0 && foes.every((f: any) => y - f.position.y >= 2.5 || f.position.y - y >= 2)
+}
+// Нора на месте копается: толща на 2 вниз, пол и стенки твёрдые, под полом не лава, и есть кирка.
+function holeFits (bot) {
+  if (!bot.entity || process.env.ND_GUARD_HOLE === '0') return false
+  if (!bot.inventory.items().some(i => /_pickaxe$/.test(i.name))) return false
+  return holeOk(bot, bot.entity.position.floored(), 2)
+}
+
 function sealOn () { return process.env.ND_GUARD_SEAL !== '0' }
 function cls (bot, v) { return require('./sealed').classOf(bot.blockAt(v)) }
 // Клетка — толща (твёрдое: можно копать и стоять, не руда-охрана, не гравий).
@@ -221,13 +258,17 @@ async function hideDown (session, ctl) {
   try { bot.pathfinder && bot.pathfinder.setGoal(null) } catch {}
   bot.clearControlStates()
   const cells = []
+  const t0 = gameClock.now()
+  const ms = []
   for (let i = 1; i <= 2; i++) {
     const v = f.offset(0, -i, 0)
     const r = await SL.digCell(bot, v)
-    if (r !== 'ok' && r !== 'air') return { ok: i > 1, depth: i - 1, why: 'копка: ' + r, cells }
+    ms.push(gameClock.now() - t0)
+    if (r !== 'ok' && r !== 'air') return { ok: i > 1, depth: i - 1, why: 'копка: ' + r, cells, ms }
     cells.push(SL.keyV(v))
     const ok = await SL.stepMove(bot, ctl, { kind: 'vdown', to: { x: v.x, y: v.y, z: v.z } })
-    if (!ok) return { ok: false, depth: i - 1, why: 'не опустился', cells }
+    ms.push(gameClock.now() - t0)
+    if (!ok) return { ok: false, depth: i - 1, why: 'не опустился', cells, ms }
   }
   // Третья копка и пробка над головой (от арбалета и огня): клетка f−3 — толща, пол под ней твёрдый.
   let capped = false
@@ -244,7 +285,8 @@ async function hideDown (session, ctl) {
       }
     }
   }
-  return { ok: true, depth, capped, cells }
+  ms.push(gameClock.now() - t0)
+  return { ok: true, depth, capped, cells, ms }
 }
 
 // Сидеть в яме/на столбе, пока ближние рядом (≤ ms), есть, если голодно. Сверху (столб) — мечом по видимым.
@@ -255,27 +297,52 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = 
   let quiet = 0
   let swings = 0
   const g = bot._ndGuard
-  while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
-    // Бьют сквозь «коробку» (диагональ, щель) — сидеть дальше нельзя (V2-1 03.10: брут на (−1,+1,−1) — 3 удара за 13 с, смерть).
-    if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && gameClock.now() - h.t < 1500 && meleeName(h.name || ''))) return { s: Math.round((gameClock.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
-    const foes = meleeFoes(bot, 6)
-    if (!foes.length) { if (!quiet) quiet = gameClock.now(); if (gameClock.now() - quiet > 3000) break } else quiet = 0
-    if (swing && foes.length) {
-      const pick = require('./pick')
-      const e: any = foes[0]
-      if (pick.canHit(bot, e) && gameClock.now() - lastSitSwing > 640) {
-        try {
-          const sw = bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => rank(b) - rank(a))[0]
-          if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) await bot.equip(sw, 'hand')
-          await bot.lookAt(e.position.offset(0, (e.height || 1.9) * 0.7, 0), true)
-          bot.attack(e); lastSitSwing = gameClock.now(); swings++
-        } catch {}
+  // Со столба (swing) щит — между взмахами к ближайшему стрелку (арбалет пиглина, ифрит, гаст, скелет), иначе к ближнему: ходячие
+  // снизу не достают, а стрела в спину на столбе — весь урон (сцена try-lab-ne-piglin 14.10, два с мечом и арбалет).
+  const shield = swing && process.env.ND_SIT_SHIELD !== '0' && bot.inventory.slots[45]?.name === 'shield' ? require('./combat').makeShield(session, ctl, { shield: 'always' }) : null
+  try {
+    if (shield) await shield.wear()
+    while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
+      // Бьют сквозь «коробку» (диагональ, щель) — сидеть дальше нельзя (V2-1 03.10: брут на (−1,+1,−1) — 3 удара за 13 с, смерть).
+      if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && gameClock.now() - h.t < 1500 && meleeName(h.name || ''))) return { s: Math.round((gameClock.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
+      const foes = meleeFoes(bot, 6)
+      if (!foes.length) { if (!quiet) quiet = gameClock.now(); if (gameClock.now() - quiet > 3000) break } else quiet = 0
+      if (swing && foes.length) {
+        const pick = require('./pick')
+        const e: any = foes[0]
+        if (pick.canHit(bot, e) && gameClock.now() - lastSitSwing > 640) {
+          try {
+            const sw = bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => rank(b) - rank(a))[0]
+            if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) await bot.equip(sw, 'hand')
+            await shield?.raise(false)
+            await bot.lookAt(e.position.offset(0, (e.height || 1.9) * 0.7, 0), true)
+            bot.attack(e); lastSitSwing = gameClock.now(); swings++
+          } catch {}
+        }
       }
+      if (shield) {
+        const face = shooterNear(bot) || foes[0]
+        if (face) { try { await bot.lookAt(face.position.offset(0, (face.height || 1.8) * 0.8, 0), true) } catch {} }
+        await shield.raise(true)
+      }
+      if ((bot.food ?? 20) < 18 && (bot.health ?? 20) < 18) { try { await require('./actions').eat(session, ctl, {}) } catch {} }
+      await sleep(250)
     }
-    if ((bot.food ?? 20) < 18 && (bot.health ?? 20) < 18) { try { await require('./actions').eat(session, ctl, {}) } catch {} }
-    await sleep(250)
-  }
+  } finally { shield?.close() }
   return { s: Math.round((gameClock.now() - t0) / 1000), swings, left: meleeFoes(bot, 6).length }
+}
+// Ближайший видимый стрелок в 24 бл.: пиглин с арбалетом, ифрит, гаст, скелет.
+function shooterNear (bot) {
+  const me = bot.entity.position
+  let best = null; let bd = 25
+  for (const e of Object.values(bot.entities || {}) as any[]) {
+    if (!e || !e.position || e === bot.entity || e.isValid === false) continue
+    const shooter = /^(blaze|ghast|skeleton|wither_skeleton)$/.test(e.name || '') || (/^piglin$/.test(e.name || '') && e.equipment?.[0]?.name === 'crossbow')
+    if (!shooter) continue
+    const d = e.position.distanceTo(me)
+    if (d < bd && sees(bot, e)) { best = e; bd = d }
+  }
+  return best
 }
 const rank = i => /netherite/.test(i.name) ? 5 : /diamond/.test(i.name) ? 4 : /iron/.test(i.name) ? 3 : /stone/.test(i.name) ? 2 : 1
 
@@ -394,6 +461,20 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
   const t0 = gameClock.now()
   let last = 0; let swings = 0; let far = 0; let foe = target
   const out: any = { swings: 0 }
+  // Взмах в такт врага (ND_DUEL_TEMPO=0 — прежний «раз в 640 мс»): удар ходячего приходит в поднятый щит, а щиту после
+  // подъёма нужно 5 тиков; откат врага после удара — 20 тиков (MeleeAttack.create(20)). Свой взмах — когда он нас сейчас не
+  // достаёт (его рамка атаки — своя рамка + 0.83 по горизонтали, Mob.getAttackBoundingBox) или только что ударил; иначе щит
+  // держим. Сцена try-lab-ne-piglin 14.10: взмах вслепую — пиглин бил в опущенный щит, 8 хп за раз.
+  const swungAt = new Map()
+  const onSwing = e => { if (e && e.id != null) swungAt.set(e.id, gameClock.now()) }
+  bot.on('entitySwingArm', onSwing)
+  const reachesUs = f => {
+    const me = bot.entity.position
+    const half = (f.width || 0.6) / 2 + 0.83 + 0.3
+    return Math.abs(f.position.x - me.x) < half && Math.abs(f.position.z - me.z) < half && f.position.y < me.y + 1.8 && f.position.y + (f.height || 1.95) > me.y
+  }
+  const tempoOk = f => !hasShield || process.env.ND_DUEL_TEMPO === '0' || !reachesUs(f) ||
+    gameClock.now() - (swungAt.get(f.id) ?? -Infinity) < 400 || gameClock.now() - Math.max(t0, swungAt.get(f.id) ?? -Infinity) > 2000
   try {
     await shield?.wear()
     while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
@@ -418,7 +499,7 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
       const d = foe.position.distanceTo(bot.entity.position)
       if (foe.name === 'blaze' && d >= 3.5) { out.stopped = 'блейз вне ближнего боя'; break }
       try { await bot.lookAt(foe.position.offset(0, (foe.height || 1.9) * 0.75, 0), true) } catch {}
-      if (gameClock.now() - last >= 640 && pick.canHit(bot, foe)) {
+      if (gameClock.now() - last >= 640 && pick.canHit(bot, foe) && tempoOk(foe)) {
         await shield?.raise(false)
         await sleep(50)
         if (ctl.aborted) break
@@ -433,7 +514,7 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
       bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && require('./moves').stepSafe(bot, require('./moves').keyDir(bot, 'forward')))
       await sleep(60)
     }
-  } finally { bot.setControlState('forward', false); shield?.close() }
+  } finally { bot.setControlState('forward', false); shield?.close(); bot.removeListener('entitySwingArm', onSwing) }
   out.swings = swings
   out.s = Math.round((gameClock.now() - t0) / 1000)
   return out
@@ -496,20 +577,37 @@ async function reactBody (session, ctl, opts, h) {
   bot.clearControlStates()
   const foes = meleeFoes(bot, 6)
   const e = h.e
-  const wsk = foes.filter((f : any) => f.name === 'wither_skeleton').length
-  const big = HIDE_FROM.test(e.name || '') || foes.some((f : any) => HIDE_FROM.test(f.name || '')) || foes.length >= 3 || wsk >= 2 || (bot.health ?? 20) < 9
+  // Видимые (луч) и тот, кто бьёт: за стеной сущность игроку не видна (AGENTS.md, без рентгена).
+  const big = !!opts.hide || bigMelee(bot, meleeFoes(bot, 8).filter((f: any) => f === e || sees(bot, f)), e)
   const out: any = { acted: true, why: h.why, foe: e.name, foes: foes.length, hp0 }
+  // Уже на своём столбе над ними (2.5+): рукой не достают — сидеть и бить сверху, а не строить второй столб.
+  if (big && above(bot, foes)) {
+    out.how = 'столб (уже)'
+    out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { swing: true }))
+    out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
+    log('ответ', out)
+    return out
+  }
   if (big) {
     const f0 = bot.entity.position.floored()
-    const air = v => { const b = bot.blockAt(v); return !!b && b.boundingBox === 'empty' && !/lava|water|fire/.test(b.name) }
-    // Высота столба: проба 03.10 (2 брута) — с +2 брут достаёт (удары по ногам на y+2.00 от брута на y+0.00), берём +3.
-    const PH = Math.max(2, Math.min(4, Number(process.env.ND_GUARD_PILLAR || 3)))
-    let head = true
-    for (let k = 2; k <= PH + 1; k++) if (!air(f0.offset(0, k, 0))) head = false
-    // Столб — только на открытом (хотя бы 2 стороны у ног — воздух): из ямы бартера столб выводил к бруту у её рта (B1-3
-    // 03.10: брут во рту ямы бил сверху, +2 — достаёт).
-    const sidesOpen = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => air(f0.offset(dx, 0, dz))).length
-    if (head && sidesOpen >= 2) {
+    // Нора на 2 вниз в толще — быстрее столба (netherrack железной киркой — доли секунды на клетку) и не рвётся отбрасыванием:
+    // с глубины 2 ходячий нас рукой не достаёт, а мы бьём его по ногам с края; третья клетка и пробка — от арбалета. Сцена
+    // try-lab-ne-piglin 14.10: столб под ударами «не подпрыгнул» (отбросило из клетки), брут убивал за 3 с в 7 из 8 попыток.
+    if (holeFits(bot)) {
+      const hd: any = await step(hideDown(session, ctl).catch(err => ({ ok: false, why: err.message })))
+      out.hole = hd
+      log('нора', { ...hd, hp: Math.round(bot.health ?? 0) })
+      if (hd.ok) {
+        if (opts.onOwn && hd.cells) { try { opts.onOwn(hd.cells) } catch {} }
+        out.how = 'нора'
+        out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { swing: !hd.capped }))
+        out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
+        log('ответ', out)
+        return out
+      }
+    }
+    const PH = pillarHeight()
+    if (pillarFits(bot)) {
       const y0 = bot.entity.position.y
       const ti = guardItem(bot)
       const tw = await step(require('./build').towerUp(bot, ctl, PH, { sneak: true, ...(ti ? { item: ti } : {}) }).catch(err => ({ ok: false, reason: err.message })))
@@ -732,4 +830,4 @@ function swatInstall (bot) {
 function busy (bot) { return !!(bot && bot._ndGuard && bot._ndGuard.reacting) }
 async function waitIdle (bot, ms = 30000) { const t = gameClock.now(); while (busy(bot) && gameClock.now() - t < ms) await sleep(200) }
 
-module.exports = { busy, waitIdle, attach, duel, boxIn, swatInstall, install, hot, react, hideDown, meleeFoes, holeOk, sit, aggressive, HIDE_FROM }
+module.exports = { busy, waitIdle, attach, duel, boxIn, swatInstall, install, hot, react, hideDown, meleeFoes, holeOk, sit, aggressive, HIDE_FROM, bigMelee, pillarFits, holeFits, above }

@@ -54,7 +54,8 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
     if (b.inLava && pool(lavaAt, world.spec.lavaExit ? 2 : 6) && p.y === 64) return block('lava')
     if (b.submerged > 0 && pool(waterAt, 3) && p.y >= 64 && p.y <= 66) return block('water')
     if (!world.spec.exits && ring >= 1 && ring <= 3 && p.y === 64) return block('fire')
-    if (p.y < 64 + lift(p.x, p.z)) return block(world.spec.nether ? 'netherrack' : world.spec.floorDiggable ? 'stone' : 'bedrock')
+    // An undiggable floor stays undiggable in the Nether too: the guard's hole two down reads this ground (ne-guard.holeFits).
+    if (p.y < 64 + lift(p.x, p.z)) return block(!world.spec.floorDiggable ? 'bedrock' : world.spec.nether ? 'netherrack' : 'stone')
     return block('air')
   }
 

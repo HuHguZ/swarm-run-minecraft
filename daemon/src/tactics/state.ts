@@ -50,6 +50,11 @@ export interface TacticalState {
   canFight: boolean
   contact: boolean
   shelter: 'BlockOff' | 'PillarUp' | 'DigDown' | 'Hide' | null
+  niche?: boolean
+  /** Nether walkers the shield duel does not answer (brute, hoglin, three and more) near, and a hole or our own refuge holds. */
+  netherHide?: boolean
+  /** A ghast in sight with a lethal drop behind the body: its blast throws the body off the ledge. */
+  ghastEdge?: boolean
   /** Damage expected during the physically planned descent, before the shelter closes. */
   digDownCostHp?: number
   protectedEncounter: boolean
@@ -74,6 +79,13 @@ export interface Candidate {
 }
 
 export const hasObservedTarget = (state: TacticalState): boolean => state.enemies.some(enemy => enemy.threatening)
+// A nearby sealed niche breaks piglin sight without an exposed run - before melee: a piglin within reach strikes every
+// second through the build, and the shield duel answers it there (try-lab-ne-piglin 14.10: niche at 1.6 blocks, 12 -> 0 hp).
+export const piglinNiche = (s: TacticalState): boolean => !!s.niche && s.shield && s.shelter === 'BlockOff' &&
+  hasObservedTarget(s) && s.enemies.every(e => !e.threatening || e.kind === 'piglin' && !e.player && e.distance > 3.5) &&
+  !s.lava && !s.lavaAhead && !s.lavaEscapePending && !s.burning && !s.hotFloor && !s.explosion && !s.blast &&
+  !s.dangerousFall && !s.emergencyController && !s.embedded && !s.inWater && !s.drowning && !s.airborne &&
+  !s.failedEscapes?.includes('BlockOff')
 // A sword reaches a ghast never and a hovering blaze only when it comes down to the body (farm telemetry 06.10 19:46,
 // slot 21: LastStand re-selected ~100 times in 120 s against five blazes, 0 swings, death).
 export const meleeReachable = (enemy: TacticalEnemy): boolean => enemy.kind !== 'ghast' && (!/^(blaze|phantom)$/.test(enemy.kind) || enemy.distance <= 3.5)
@@ -151,7 +163,8 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.burning && !state.fireResistance && state.health <= 8) return 3
   if (state.drowning) return 3
   if (state.lava || state.lavaEscapePending) return 2
-  if (state.contact || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
+  // A brute, a hoglin or three walkers coming (netherHide, 8 blocks): the hole goes down before they arrive, not under them.
+  if (state.contact || state.netherHide || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
   if (foes.length) return 1
   return 0
 }
@@ -173,6 +186,7 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   const contact = state.contact
   const observedTarget = hasObservedTarget(state)
   const escapeExhausted = deadEnd(state)
+  const niche = piglinNiche(state)
   // S1 (s1-full46/49): LastStand against a brute at the barter pit turned the watching piglins on the bot. Never strike a
   // brute in their sight; wall it off instead, even in an exhausted corner.
   const provokes = !!state.piglinWitnesses && state.enemies.some(enemy => enemy.threatening && enemy.kind === 'piglin_brute')
@@ -227,9 +241,16 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // Never a stand inside a blast alarm: LastStand (155) outscored Dodge (150) at a swelling charged creeper (farm s4-stress-3).
   // Nor in water: a stand among drowned outscored Surface (148) - hp 18 to 0 in a second (cl-l 14.10); with the head above water
   // LastStand and Surface took turns, hp 9 to 0 in 0.6 s (cl-s 14.10). In water the drowned swim and strike, our hits do not crit.
-  add('LastStand', 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat && !state.drowning && !state.inWater)
+  add('LastStand', niche ? 90 : 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat && !state.drowning && !state.inWater)
   const repel = canRepelLavaAttacker(state)
   add('Fight', repel ? 157 : critical ? -100 : 90, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && melee && state.canFight && state.weapon && contact && !state.blast && !state.protectedEncounter && !provokes && !state.lava && !state.lavaEscapePending && !escapeExhausted)
+  // The Nether guard's answer to a brute, a hoglin or three walkers near is its hole two down (their reach stops at their feet) and
+  // strikes from it: a run from a brute is two axe blows in a second (c2-5-2, c2-6-3 14.10: CreateDistance "does not get away",
+  // 20 -> 0; try-lab-ne-piglin: hole 1-2 deaths of 8). Its own id (PillarUp), so the arbiter leaves a running duel for it; above a
+  // last stand - the hole is the new exit.
+  add('PillarUp', critical ? 160 : 158, 'hole or pillar out of the reach of Nether walkers', !!state.netherHide && level >= 2 &&
+    !state.blast && !state.explosion && !state.protectedEncounter && !state.lava && !state.lavaEscapePending && !state.dangerousFall &&
+    !state.embedded && !state.aerialCombat && !state.inWater)
   // A dead end is about the attackers; the swim out of lava (escapeFire) is no run from them: a ghast overhead made the pool
   // a "dead end" and the body burned with no action at all (stress stand v2 fuzz2-2182/2376/4393, level 4 unhandled); under
   // fire resistance too, when no wall step offers a climb. A swim that already failed (observed exhaustion) stays out.
@@ -240,10 +261,12 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('Flee', (critical ? 100 : 65) * gain, 'create safe distance', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
   // Not gated by canFight: a verdict flickering at the health threshold must not invalidate the retreat in progress.
   add('CreateDistance', (!armed || !observedTarget ? 85 : 50) * gain, 'unfavorable or unidentified attacker', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
-  const shelterScore = (exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95) *
+  // A ghast over a ledge: the box beats the shield and the swat - one missed fireball throws the body into the lava sea.
+  const ghastBox = !!state.ghastEdge && state.shelter === 'BlockOff'
+  const shelterScore = (ghastBox ? 130 : niche ? 110 : exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95) *
     (state.shelter === 'DigDown' && state.digDownCostHp !== undefined ? Math.max(0, 1 - state.digDownCostHp / state.health) : 1)
   // A validated shaft supplies its own closing block as it is dug; an existing pocket needs no construction.
-  if (state.shelter) add(state.shelter, shelterScore, 'available refuge', level >= 2 && shelterHolds && (state.blocks > 0 || state.shelter === 'DigDown' || state.shelter === 'Hide') && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && sheltered)
+  if (state.shelter) add(state.shelter, shelterScore, 'available refuge', level >= 2 && shelterHolds && (state.blocks > 0 || state.shelter === 'DigDown' || state.shelter === 'Hide') && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && (sheltered || niche))
   add('Hide', 110, 'existing cover', critical && state.cover && !creeperNear && !state.dangerousFall && !state.lava && sheltered)
   add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (level === 1 || state.incomingProjectiles > 0))
   add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending)

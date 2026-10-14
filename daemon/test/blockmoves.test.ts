@@ -498,3 +498,13 @@ test('исполнитель: телепорт, смерть, отменённа
     ex.stop()
   }
 })
+
+// Цена блока моста — от запаса (агент Ада 14.10, b8-6-3: мосты поиска съели 128 → 0): полный запас — прежняя цена, у резерва — дороже.
+test('scarceCost: прежняя цена при запасе, рост к резерву', () => {
+  const { scarceCost } = require('../src/blockmoves')
+  assert.equal(scarceCost(1.5, 128, 16), 1.5)
+  assert.equal(scarceCost(1.5, 64, 16), 1.5)
+  assert.ok(scarceCost(1.5, 40, 16) > 1.5)
+  assert.ok(scarceCost(1.5, 20, 16) > scarceCost(1.5, 40, 16))
+  assert.ok(scarceCost(1.5, 17, 16) >= 50)
+})

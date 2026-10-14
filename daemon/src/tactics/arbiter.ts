@@ -94,8 +94,11 @@ export class TacticalArbiter {
     const falling = !state.embedded && (state.dangerousFall || state.emergencyController)
     if (falling) selected = null
     this.node = falling ? 'EmergencyController' : 'Strategic'
-    // A residual fire tick crossing level 3 must not cancel and restart the same 32-tick bite.
-    const change = selected?.id !== this.current?.id || escalated && !!selected && !(selected.id === 'Eat' && burnRecovery(state))
+    // A residual fire tick crossing level 3 must not cancel and restart the same 32-tick bite. Nor the Nether hole half dug: the
+    // hit that escalated to level 3 restarted it from the top, 2.4 s instead of 1.1 (try-lab-ne-piglin c7: "PillarUp preempted by
+    // PillarUp", the piglins in the shaft before the plug).
+    const change = selected?.id !== this.current?.id || escalated && !!selected && !(selected.id === 'Eat' && burnRecovery(state)) &&
+      !(selected.id === 'PillarUp' && !!state.netherHide)
     if (change) this.changedAt = state.at
     if (this.current && selected?.id !== this.current.id) this.left.set(this.current.id, state.at)
     this.current = selected

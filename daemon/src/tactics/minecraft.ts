@@ -1,5 +1,5 @@
 import { TacticalArbiter } from './arbiter'
-import { S4D, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
+import { S4D, piglinNiche, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
 import { EscapeProgress, type EscapeObservation } from './escape-progress'
 import { lavaCapabilities, inLava, drinkFireResistance, climbFromLava } from './lava-escape'
 import { createEmergencyEscape, lavaFallFloor } from '../combat/emergency-escape'
@@ -18,7 +18,7 @@ interface Episode { action: Candidate; at: number; hp: number; level: ThreatLeve
 export function stateSnapshot(state: TacticalState): Record<string, unknown> {
   const flags = ['lava', 'burning', 'hotFloor', 'fireResistance', 'explosion', 'dangerousFall', 'inWater', 'drowning', 'cover', 'escapeRoute', 'contact',
     'canFight', 'weapon', 'shield', 'edible', 'water', 'embedded', 'airborne', 'lavaAhead', 'lavaEscapePending', 'escapeExhausted',
-    'piglinWitnesses', 'protectedEncounter', 'pearlEscape', 'flightEscape', 'fireResistancePotion'] as const
+    'piglinWitnesses', 'protectedEncounter', 'niche', 'netherHide', 'ghastEdge', 'pearlEscape', 'flightEscape', 'fireResistancePotion'] as const
   return { hp: Math.round(state.health * 10) / 10, food: state.food, armor: state.armor, blocks: state.blocks, shelter: state.shelter,
     blast: state.blast ?? undefined, digDownCostHp: state.digDownCostHp, projectiles: state.incomingProjectiles || undefined, failed: state.failedEscapes?.length ? state.failedEscapes : undefined,
     on: flags.filter(flag => state[flag]),
@@ -142,7 +142,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const sameWorld = !!incident && (incident.dimension === undefined || incident.dimension === dimension)
   const struck = sameWorld && incident.sourceId != null && at - incident.at < 10000 ? bot.entities?.[incident.sourceId] : null
   const attacker = struck && struck !== bot.entity && struck.isValid !== false && (struck.username || /^(enderman|piglin|zombified_piglin)$/.test(struck.name)) ? struck : null
-  const inspected = safety.inspect(bot, { target: target ?? attacker })
+  // A piglin with an attack target (mob_flags, no gold on us) is a threat on sight, not on its first strike: the shield needs
+  // 5 ticks, and a fight that began at 2 blocks took the first 8 hp before it every time (try-lab-ne-piglin 14.10).
+  const angry: MinecraftEntity[] = /nether/.test(dimension) && process.env.ND_PIGLIN_SIGHT !== '0'
+    ? (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => /^(piglin|zombified_piglin)$/.test(entity.name || '') && !!pick.aim(bot, entity, { range: 16 })?.point) : []
+  const inspected = safety.inspect(bot, { target: target ?? attacker ?? angry[0] ?? null })
   const hot = guard.hot(bot)
   const seen = new Set<number>()
   const enemies: TacticalEnemy[] = []
@@ -151,7 +155,8 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   // with no foe: "unidentified attacker", CreateDistance 85 and 12 s of run with it hitting the back (s5c-g3-3: 19.5 ->
   // 8.2 -> death; live telemetry 06-07.10: 176 such runs, 8 deaths). Strikes still go only where pick.js sees it.
   const struckMelee = S4D() && sameWorld && incident.sourceId != null && at - incident.at < 1500 && incident.byMob && /mob_attack/.test(String(incident.type || '')) ? incident.sourceId : null
-  for (const threat of [...(inspected.threats || []), ...(hot ? [{ id: hot.e.id, distance: hot.e.position.distanceTo(bot.entity.position) }] : [])]) {
+  for (const threat of [...(inspected.threats || []), ...(hot ? [{ id: hot.e.id, distance: hot.e.position.distanceTo(bot.entity.position) }] : []),
+    ...angry.map(entity => ({ id: entity.id, distance: entity.position.distanceTo(bot.entity.position) }))]) {
     const entity: MinecraftEntity | undefined = bot.entities[threat.id]
     if (!entity?.position || entity.isValid === false || seen.has(entity.id)) continue
     const unseen = !pick.aim(bot, entity, { range: 16 })?.point
@@ -188,7 +193,12 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const lavaEscapePending = !!(session._tacticalLavaClimbGoal && !session._tacticalLavaClimbGoal.failed && at < session._tacticalLavaClimbGoal.deadline)
   let refuge: MinecraftEntity | null = null
   // Geometry is cached by TacticalSystem; avoid this scan when there is no incident to solve.
-  if (!lava && !lavaEscapePending && enemies.some(enemy => enemy.threatening) && (bot.health < 16 || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman'))) {
+  // A ghast in sight with a drop behind the body (no floor 4 down or lava within 4 blocks away from it): its blast throws the body
+  // 2-3 blocks, and from a ledge over the lava sea that is the death (c2-6-1 14.10: 20 fireballs swatted at y 82, the 20th threw
+  // the body into the lava at y 28; b16-5-2: the same through a floor the blast broke). A sealed box stops the shot and its throw.
+  const ghastEdge = /nether/.test(dimension) && process.env.ND_GHAST_EDGE !== '0' && enemies.some(enemy => enemy.threatening && enemy.kind === 'ghast' &&
+    !!bot.entities[enemy.id]?.position && dropBehind(bot, bot.entities[enemy.id].position))
+  if (!lava && !lavaEscapePending && enemies.some(enemy => enemy.threatening) && (bot.health < 16 || ghastEdge || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman'))) {
     try { refuge = survival.refugeLook(session, { radius: 16 }) } catch {}
   }
   let fireResistance = false
@@ -213,6 +223,27 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     (Object.values(bot.entities || {}) as MinecraftEntity[]).some(entity => entity?.name === 'piglin' &&
     entity.position && entity.isValid !== false && entity.position.distanceTo(bot.entity.position) <= 16 &&
     !(babyKey >= 0 && entity.metadata?.[babyKey] === true) && !!pick.aim(bot, entity, { range: 16 })?.point)
+  // Walkers of the Nether the shield duel does not answer (ne-guard.bigMelee) near: the guard's hole two down, or the hole or pillar
+  // it is in already. A pillar is no first answer: knockback throws the body off the cell mid-climb ("did not jump up", c4: brute
+  // 7 of 8 deaths); without diggable ground the box stays the refuge. Not blazes or magma cubes (they fly or jump up to it); not
+  // in sight of piglins when our gold keeps them calm - a strike at a brute there turns them (S1, s1-full46/49).
+  let netherHide = false
+  if (/nether/.test(dimension) && process.env.ND_NETHER_HIDE !== '0') {
+    try {
+      // Only the ones in sight (pick ray): an entity behind a wall is not known to a player (AGENTS.md, no x-ray).
+      const near = (guard.meleeFoes(bot, 8) as MinecraftEntity[]).filter(entity => !/^(blaze|magma_cube)$/.test(entity.name || '') && !!pick.aim(bot, entity, { range: 16 })?.point)
+      const gold = [5, 6, 7, 8].some(slot => /^golden_/.test(bot.inventory.slots[slot]?.name || ''))
+      // The hole goes down before they arrive: dug with a walker at the body it lets them into the shaft before the plug (c10:
+      // three piglins at 3 blocks, the plug failed in 6 of 8 holes, 8 deaths). At the body the shield duel and the run stay.
+      // A brute, a hoglin or a zoglin from 3.5 blocks; a crowd of three only from 6 (piglins run faster than the hole goes down:
+      // c12, 2 swords and a crossbow from 7 blocks - 12 deaths of 12 in the hole, 4 of 8 with the duel and the run in c2).
+      const nearest = Math.min(...near.map(entity => entity.position.distanceTo(bot.entity.position)))
+      const heavy = near.some(entity => guard.HIDE_FROM.test(entity.name || ''))
+      netherHide = near.length > 0 && guard.bigMelee(bot, near, null, { lowHp: false, walkers: true }) && !(gold && piglinWitnesses) &&
+        (guard.above(bot, near) || nearest > (heavy ? 3.5 : 6) && guard.holeFits(bot)) ||
+        !!session._ndHideCtl && !session._ndHideCtl.aborted
+    } catch {}
+  }
   const recentHit = sameWorld && at - incident.at < 1500 && incident.byMob && incident.at > (session._tacticalRetreatSafeAt ?? -Infinity)
   const current = session.current?.name || ''
   const hostile = enemies.filter(enemy => enemy.threatening)
@@ -295,6 +326,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // без хозяина — 3 эндермена, смерть). Только пока в угрозе одни эндермены; уровень ≥3 — как прежде. ND_PEARLS_OWN=0 — выкл.
     // Осмотр бастиона не защищает от гаста: щит и укрытие должны прервать открытую вышку. И от стрелков (скелеты долины душ,
     // ифриты): ход навыка к бастиону на них не отвечает — 6 стрел за 5 с, 20 → 0 хп без щита (b2-5-1 14.10).
+    niche: /nether/.test(dimension) && !!refuge?.niche && refuge.blocks >= 2, netherHide, ghastEdge,
     shelter, digDownCostHp, protectedEncounter: !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
       // Бой на арене с игроком (fight с arena): лечение, отход, щит ведёт сам PvP — тактика тело не отбирает (колизей 10.10:
       // «прервано (tactical)» каждые 1–3 с при 20 хп — бот метался и не бил).
@@ -703,6 +735,28 @@ export class TacticalSystem {
         }
       case 'BlockOff': case 'PillarUp': case 'Hide': case 'Heal':
         {
+          // Nether walkers out of reach (netherHide): the guard's hole two down or its pillar, then strikes from it. The episode
+          // holds its own flag while it digs, climbs and sits: airborne steps and the shrinking head room flipped the flag off
+          // mid-climb, and CreateDistance took the hands 0.3 s in (try-lab-ne-piglin c3, brute: 7 of 8 died).
+          if (action.id === 'PillarUp' && state.netherHide && /nether/.test(String(bot.game?.dimension || ''))) {
+            const near = enemy ? bot.entities[enemy.id] : (guard.meleeFoes(bot, 8) as MinecraftEntity[])[0]
+            if (near) {
+              session._ndHideCtl = ctl
+              try { return await guard.react(session, ctl, { force: { e: near, why: 'tactical hide' }, _owned: true, hide: true, sitMs: 8000 }) }
+              finally { if (session._ndHideCtl === ctl) session._ndHideCtl = null }
+            }
+          }
+          if (action.id === 'BlockOff' && piglinNiche(state)) {
+            const previous = session._refugeBuild
+            session._refugeBuild = ctl
+            let entry: any
+            try {
+              entry = await require('../survival/hold-out').takeNiche(session, ctl,
+                survival.refugeLook(session), () => {})
+            } finally { if (session._refugeBuild === ctl) session._refugeBuild = previous }
+            if (ctl.aborted) return { cancelled: true, entry }
+            if (!entry || !survival.refugeLook(session).pocket) return { failed: true, reason: 'piglin niche was not sealed or is occupied' }
+          }
           const result = await survival.refuge(session, ctl, { minHp: 16, maxSeconds: 30, stayIn: action.id === 'BlockOff', why: 'tactical ' + action.id })
           return result?.code && result.code !== 'OK' ? { ...result, failed: true, reason: result.stopped || 'refuge was not confirmed' } : result
         }

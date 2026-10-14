@@ -218,3 +218,14 @@ test('полное хп при сытости 17 — отдых окончен, 
   assert.equal(r.rested, true)
   assert.equal(r.why, undefined)
 })
+
+// Дуэль со щитом против ходячих Ада (агент Ада 14.10, c13-5-1): при сытости < 18 — размен, а не «восстановиться» в коробке под ударами.
+test('shieldDuel: пиглин при еде 17 — бой, без щита — отход на восстановление', () => {
+  const piglin = { name: 'piglin', hit: 4, distance: 9 }
+  const fed = { health: 20, food: 17, foodPoints: 48, weapon: true, threats: [piglin] }
+  assert.equal(evaluate(fed).action, 'recover')
+  const duel = evaluate({ ...fed, shieldDuel: true })
+  assert.equal(duel.action, 'fight')
+  assert.equal(duel.trade, true)
+  assert.equal(evaluate({ ...fed, health: 11, shieldDuel: true }).action, 'recover', 'после размена хп меньше половины порога — отход')
+})

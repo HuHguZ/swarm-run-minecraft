@@ -84,7 +84,12 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
       .then(() => reflexLock.run(this, ctl, start))
       .then(
         async detail => { if (!ctl.aborted) await ctl.waitReflex(); return { status: 'done', detail: detail ?? null } },
-        err => ({ status: 'failed', error: String((err && err.message) || err), ...(err && typeof err.code === 'string' && /^[A-Z][A-Z_]+$/.test(err.code) ? { code: err.code } : {}) })
+        err => {
+          // Ошибка кода (TypeError и т.п.) — со стеком в журнал демона: в ответе RPC остаётся одно сообщение (c13-7-2 14.10:
+          // fortress spawner «pos.floored is not a function» без места падения).
+          if (err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError) console.error('[intent] ' + name + ' упал:', err.stack)
+          return { status: 'failed', error: String((err && err.message) || err), ...(err && typeof err.code === 'string' && /^[A-Z][A-Z_]+$/.test(err.code) ? { code: err.code } : {}) }
+        }
       ).catch(err => ({ status: 'failed', error: String(err?.message || err), ...(err?.code ? { code: err.code } : {}) }))
     if (!beside) this.current.done = work
 

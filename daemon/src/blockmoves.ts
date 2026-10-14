@@ -93,6 +93,15 @@ function replanCount (st, sig, pos) {
 }
 const goalKey = g => g ? JSON.stringify([g.constructor && g.constructor.name, g.x, g.y, g.z, g.rangeSq, g.goals && g.goals.length]) : ''
 
+// Цена блока — от запаса (агент Ада 14.10, b8-6-3: мосты поиска бастиона съели 128 → 17 за 6 мин, затем 0 и тупик «пути нет»):
+// пока запас втрое больше резерва — прежняя цена, дальше растёт обратно остатку сверх резерва; у резерва — запрет (как было).
+// ND_BLOCK_SCARCITY=0 — прежняя постоянная цена.
+function scarceCost (base, remaining, reserve = 0) {
+  if (process.env.ND_BLOCK_SCARCITY === '0' || !Number.isFinite(remaining)) return base
+  const spare = Math.max(1, remaining - reserve)
+  return base * Math.max(1, 48 / spare)
+}
+
 function bridgeMove (mv, node, dir, opts: any = {}) {
   if (!(node.remainingBlocks > (opts.reserve ?? 0))) return null
   const o = cellOf(node)
@@ -124,7 +133,7 @@ function bridgeMove (mv, node, dir, opts: any = {}) {
   if (gy != null && Math.abs(C.position.y - gy) > (opts.goalBand ?? 3)) return null
   // Над водой мост дешевле: плыть вдвое медленнее шага, а из глубокой реки pathfinder выплывал через раз (mv-gap-1:
   // wait 2/6, base 1/6); при цене 2.5 за клетку A* выбирал то мост, то плавание (mv-gap-3: 0 блоков, 7.7 с).
-  let cost = 1 + (u.water ? (opts.waterCost ?? 0.5) : (opts.blockCost ?? 1.5))
+  let cost = 1 + scarceCost(u.water ? (opts.waterCost ?? 0.5) : (opts.blockCost ?? 1.5), node.remainingBlocks, opts.reserve ?? 0)
   if (!u.water && u.depth >= 4) cost += opts.deepCost ?? 0.5
   // Без дна в пределах depthMax (небо, бездонный обрыв) — сорвался, и не спасёт уже ничто: дороже (ферма 02.10,
   // mv-gap-6: на лавовом озере A* обходил лаву мостом над пустотой за стендом, своя постановка pathfinder'а там
@@ -182,7 +191,7 @@ function descendMove (mv, node, dir, opts: any = {}) {
     if (fullCube(b)) { ref = { pos: b.position, face: { x: -r.x, y: 0, z: -r.z } }; break }
   }
   if (!ref) return null
-  let cost = 1 + (opts.blockCost ?? 1.5) + (opts.descendCost ?? 1.5)
+  let cost = 1 + scarceCost(opts.blockCost ?? 1.5, node.remainingBlocks, opts.reserve ?? 0) + (opts.descendCost ?? 1.5)
   const T = mv.getBlock(o, dir.x, -2, dir.z)
   cost += mv.exclusionStep(T)
   if (cost >= 100) return null
@@ -750,4 +759,4 @@ function install (session, deps: any = {}) {
   return st
 }
 
-module.exports = { replanSig, replanCount, goalKey, on, addBridge, bridgeMove, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }
+module.exports = { replanSig, replanCount, goalKey, on, addBridge, bridgeMove, scarceCost, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }

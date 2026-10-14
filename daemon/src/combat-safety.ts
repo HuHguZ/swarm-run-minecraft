@@ -31,11 +31,14 @@ const COST_K = 2.5
 // крипер в 11–15 бл. с «ударом» 19.4 давал порог ≥ 20 → «уходить» и при одном зомби вплотную — бег/коробка вместо боя
 // (s5c-b1-1, f2-2, g3-3: смерть), второй зомби в 15.7 бл. поднимал порог и «дёшево» — коробка при еде 12 (s8-f1-12, смерть).
 const S4D = () => process.env.ND_S4D !== '0'
+// Ходячие Ада, чей удар принимает щит, и доля удара, что доходит в дуэли со щитом (ND_SHIELD_COST=0 — прежний счёт без щита).
+const SHIELDED = /^(piglin|zombified_piglin|hoglin|zoglin|wither_skeleton|magma_cube)$/
+const SHIELD_SHARE = 0.5
 const WHITE = /^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|parched|bogged|slime|silverfish)$/
 const RANGED = new Set(Object.keys(assess.MOBS).filter(name => assess.MOBS[name].ranged))
 const inExchange = t => t.name === 'creeper' ? !!t.swelling || t.distance <= 4 : RANGED.has(t.name) || t.distance <= 6
 function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
-  threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null }: any = {}) {
+  threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null, shieldDuel = false }: any = {}) {
   const live = S4D() ? threats.filter(t => t.distance <= 16 && (t.name !== 'creeper' || inExchange(t))) : threats
   const near = live.filter(inExchange)
   const hits = (S4D() ? (near.length ? near : live) : threats.filter(t => t.distance <= 16)).map(t => t.hit).sort((a, b) => b - a)
@@ -77,6 +80,7 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   // off the early-game white list (drowned with a trident, witch, anything unknown), keeps the food rule.
   const startTrade = phase !== 'start' || near.every(t => WHITE.test(String(t.name || '')))
   if (S4D() && FIGHT_COST() && dangerous && weapon && tradeable && startTrade && atBody && threshold < 20 && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true }
+  if (shieldDuel && dangerous && health - (burst + hit) >= minHealth / 2) return { ...result, trade: true, shieldDuel: true }
   if (phase === 'start' && dangerous && !weapon) return { ...result, action: 'leave', reason: 'нет пригодного оружия' }
   if (dangerous && !healable) return { ...result, action: 'leave', reason: 'нечем восстановить здоровье' }
   if (phase === 'start' && dangerous && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4) {
@@ -98,6 +102,7 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
   instantHeal ||= items.some(i => /golden_apple$/.test(i.name))
   const weapon = items.some(i => /_(sword|axe)$|^trident$|^mace$|_spear$/.test(i.name) && usesLeft(i) >= 4)
   const gear = assess.gearOf([5, 6, 7, 8].map(i => bot.inventory.slots[i]))
+  const shieldReady = process.env.ND_SHIELD_COST !== '0' && bot.inventory.slots[45]?.name === 'shield' && gameClock.now() >= (bot._ndShieldDisabledUntil || 0)
   const threats = []
   const seen = new Set()
   const mobs = []
@@ -126,7 +131,11 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     if (FIGHT_COST() && !player && hand && !(e.name === 'blaze' && distance < 3)) {
       try { const z = assess.sizeUp(bot, e, gear); if (z && typeof z.hit === 'number' && z.hit > hit) hit = z.hit } catch {}
     }
-    threats.push({ id: e.id, name: e.username || e.name, distance, hit, ...(e.name === 'creeper' && require('./flee').creeperSwelling(bot, e) ? { swelling: true } : {}) })
+    // Ходячий Ада бьёт в поднятый щит (LivingEntity.hurtServer: блок спереди, 5 тиков после подъёма), кроме топора — тот щит
+    // выбивает. Дуэль ne-guard опускает щит только на взмах: доходит доля удара, а не каждый (сцена try-lab-ne-piglin 14.10:
+    // без щита в счёте один пиглин с мечом — «бой невыгоден», бег под ударами, хп 20 → 2–10 и пиглин жив через 40 с).
+    if (shieldReady && !player && SHIELDED.test(e.name) && !/_axe$/.test(hand || '')) hit = Math.round(hit * SHIELD_SHARE * 10) / 10
+    threats.push({ id: e.id, name: e.username || e.name, distance, hit, ...(/_axe$/.test(hand || '') ? { axe: true } : {}), ...(e.name === 'creeper' && require('./flee').creeperSwelling(bot, e) ? { swelling: true } : {}) })
   }
   if (!threats.length && expectedEnemy && assess.MOBS[expectedEnemy]) {
     const damage = expectedEnemy === 'blaze' ? 6 : assess.MOBS[expectedEnemy].dmg
@@ -137,7 +146,11 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
   if (FIGHT_COST() && !people && mobs.length) {
     try { const p = assess.plan(bot, { entities: mobs, radius: 16 }); if (p && p.foes) expected = p.expectedDamage } catch {}
   }
-  const result = { ...evaluate({ health: bot.health ?? 0, food: bot.food ?? 0, foodPoints, expected,
+  // Дуэль со щитом против одного-двух ходячих Ада (без топора) — размен и при сытости < 18: коробка или бег от пиглина под его
+  // ударами дороже дуэли (c13-5-1 14.10: «recover» при еде 17 — коробка с пиглином в 11 бл., 20 → 4 за 3.5 с, смерть).
+  const shieldDuel = shieldReady && weapon && threats.length > 0 && threats.length <= 2 &&
+    threats.every(t => SHIELDED.test(String(t.name || '')) && !t.axe)
+  const result = { ...evaluate({ health: bot.health ?? 0, food: bot.food ?? 0, foodPoints, expected, shieldDuel,
     weapon, threats, observedHit, minHealth, phase, instantHeal,
     dangerous: !!expectedEnemy || !!(target && (assess.MOBS[target.name] || target.username || target.name === 'player')) || threats.length > 0 }), ourArmor: gear.armor }
   const repel = result.action !== 'dead' && repelLava && weapon && target?.position && target.isValid !== false &&
