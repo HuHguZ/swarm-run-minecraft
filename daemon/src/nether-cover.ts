@@ -20,6 +20,7 @@ const LIQUID = /^(water|lava|bubble_column)$/
 const GOLD = /^(nether_gold_ore|gilded_blackstone)$/
 const BAD_FLOOR = /magma|fire|campfire/
 const STOP = /^(bedrock|spawner|nether_portal|end_portal|end_portal_frame)$|^infested_/
+const FOES = /^(piglin|piglin_brute|hoglin|zoglin|skeleton|wither_skeleton|ghast|blaze|magma_cube)$/
 const key = p => `${p.x},${p.y},${p.z}`
 const airish = b => !!b && b.boundingBox === 'empty' && !LIQUID.test(b.name) && b.name !== 'nether_portal'
 // Клетка ног над низким полом (песок душ 0.875): floored — клетка самого песка, голова тогда в трёх клетках, и шаг в вырытые две
@@ -99,7 +100,10 @@ async function closedStep (session, ctl, d, opts, out) {
     // отсюда, крыша — из новой клетки (грань прежней крыши видна оттуда). Фронт открыт — цена (окно 1×2 вперёд). Пол над пустотой
     // не мостим (честная грань пола из своей клетки не видна): там — закладка и другой ход.
     const flr = D.seen(bot, N.offset(0, -1, 0))
-    if (opts.corridor && !(opts.stop && out.view && opts.stop(out.view)) && flr && flr.boundingBox === 'block' && !BAD_FLOOR.test(flr.name) &&
+    // Враги на виду (пиглины без нашего золота, бруты, хоглины, скелеты, гасты) — коридор с открытым фронтом не строить: они идут
+    // к нему (g2-5-2, g2-7-2: прибытие, коридор, пиглины — смерть на 1-й мин). Закладка и другой ход.
+    const foes = (() => { try { return require('./perception/eyes').entities(bot, { radius: 32 }).some(e => e.seen && e.dist != null && e.dist <= 24 && FOES.test(e.name)) } catch { return false } })()
+    if (opts.corridor && !foes && !(opts.stop && out.view && opts.stop(out.view)) && flr && flr.boundingBox === 'block' && !BAD_FLOOR.test(flr.name) &&
       require('./sealed').fillerCount(bot) >= 24 && !a.wet.length) {
       const sides = a.open.filter(q => q.y <= N.y + 1 && q.y >= N.y && !front.some(f => f.equals(q)))
       let ok = true

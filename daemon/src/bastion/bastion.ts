@@ -1885,7 +1885,9 @@ async function bastion (session, ctl, p: any = {}) {
           continue
         }
         // shortcut: три перехода только по видимому полу; если не хватит, добавить поиск по пеленгам.
-        if (goldWorn(bot) && vantage < 3) {
+        // Вслепую — и с золотом не ходить по бастиону открыто: бруты бьют при любом золоте (g4-9-1: обзор по двору на ботинках —
+        // брут, смерть на 3-й мин); обзор — зондом закрытого штрека ниже.
+        if (goldWorn(bot) && vantage < 3 && !require('.././nether-cover').blind()) {
           const eyes = require('.././perception/eyes')
           const view = { blockAt: pos => eyes.seesNow(bot, pos) ? bot.blockAt(pos) : null }
           const me = bot.entity.position.clone()
@@ -1920,7 +1922,7 @@ async function bastion (session, ctl, p: any = {}) {
         // Вслепую без золотой вещи — к центру бастиона закрытым штреком (nether-cover), устья — окна обзора (survey): вскрытый двор
         // показывает золото и сундуки, дальше — к ним (sealedGold). golden-v1 g1-5-1: бастион в 15 бл., «не узнан» за 2 с, брошен.
         const NC = require('.././nether-cover')
-        if (!goldWorn(bot) && NC.blind() && (st.probes || 0) < 6 && gameClock.now() < deadline - 30000) {
+        if (NC.blind() && (st.probes || 0) < 6 && gameClock.now() < deadline - 30000) {
           st.probes = (st.probes || 0) + 1
           const targets = () => st.gold.size + [...st.chestSeen.keys()].filter(k => !st.looted.has(k)).length
           const r: any = await NC.closedBore(session, ctl, { x: center.x, z: center.z }, {

@@ -119,6 +119,10 @@ function remember (session, seenAt, what) {
 // затирал старый — первый, ещё не пройденный, терялся; выработанный — «находился» снова).
 const BASTION_KEYS_ALL = [BASTION_PLACE, 'бастион 2 (ад)', 'бастион 3 (ад)']
 // Выработан ли бастион у точки p: запись кампании «выработан: <ключ>» в 100 блоках (campaign.js readMemory).
+function bastionNear (session, p, r = 96) {
+  const places = (session.journal.state && session.journal.state.places) || {}
+  return (Object.entries(places) as [string, any][]).some(([k, v]: any) => /бастион/.test(k) && v && worlds.worldOfRecord(v) === 'the_nether' && Math.hypot(v.x - p.x, v.z - p.z) <= r)
+}
 function bastionSpentNear (session, p) {
   const places = (session.journal.state && session.journal.state.places) || {}
   return (Object.entries(places) as [string, any][]).some(([k, v]: any) => /^выработан: бастион/.test(k) && v && worlds.worldOfRecord(v) === 'the_nether' && Math.hypot(v.x - p.x, v.z - p.z) <= 100)
@@ -171,7 +175,11 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
   // Без золотой вещи — закрытым штреком (nether-cover, план координатора 14.10): в толще не видят пиглины, гасты и скелеты,
   // под ногами нет обрыва; устье в пещеру — окно (onOpen — взгляд поиска). Не вышло — как прежде (поверху — цена).
   const bot = session.bot
-  if (process.env.ND_NE_COVER !== '0' && worlds.worldOf(bot) === 'the_nether' && !require('./bastion/take-gold-block').goldWorn(bot) && gameClock.now() < deadline) {
+  // С золотом — тоже штреком у бастиона (бруты бьют при любом золоте, g4-5-1: брут и хоглин у бастиона, смерть за 1.5 с) и при
+  // видимых брутах, хоглинах, гастах.
+  const coverNeeded = () => !require('./bastion/take-gold-block').goldWorn(bot) || bastionNear(session, bot.entity.position, 96) ||
+    (() => { try { return require('./perception/eyes').entities(bot, { radius: 40 }).some(e => e.seen && /^(piglin_brute|hoglin|zoglin|ghast)$/.test(e.name)) } catch { return false } })()
+  if (process.env.ND_NE_COVER !== '0' && worlds.worldOf(bot) === 'the_nether' && coverNeeded() && gameClock.now() < deadline) {
     await keepPicks(session, ctl)
     const d0 = Math.hypot(tx - bot.entity.position.x, tz - bot.entity.position.z)
     const c = await require('./nether-cover').closedBore(session, ctl, { x: tx, z: tz }, {
@@ -649,6 +657,9 @@ async function pieLead (session, ctl, { type, deadline, glance, legs, hit }) {
     const p = S.pie(bot, { range: 64 })
     const n = (p && p.byType && p.byType[type]) || 0
     if (n < (type === 'chest' ? 2 : 1)) break
+    // Сундуки уже выработанного бастиона рядом — не постройка для поиска (gb1-5-1: «пирог» 11 сундуков повёл обратно в тот же
+    // бастион, к бруту).
+    if (type === 'chest' && bastionSpentNear(session, bot.entity.position)) break
     const arc = S.pieArcs(bot, type, { fov: 30 })[0]
     if (!arc || arc.center === null) break
     const d = S.vecOf(arc.center)
