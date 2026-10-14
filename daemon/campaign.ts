@@ -1101,7 +1101,8 @@ async function goToward (p, range = 6, frKeep = 1) {
     if (state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) <= range + 2) return true
     log(`по сетке не довёл: ${(r.detail && r.detail.why) || r.error || '?'} — дальше штреком`)
   }
-  if (fromWorld === 'the_nether' && state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) > 60 && !died) {
+  // Без золотой вещи — штреком уже с 16 бл.: поверху пиглины бьют на виду (b11-6-1 14.10: к порталу в 28 бл. поверху — смерть).
+  if (fromWorld === 'the_nether' && state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) > (goldOn() ? 60 : 16) && !died) {
     const far = Math.hypot(p.x - state.pos.x, p.z - state.pos.z)
     const via = netherVia(state.pos, p)
     const tArgs = () => ({ x: p.x, y: p.y, z: p.z, radius: Math.max(range, 5), ...(via.length ? { via } : {}), ironOk: !nextBastion() || (process.env.ND_NE_STAY === '1' && pearlsNow() >= eyesWant()), timeoutSeconds: Math.min(via.length ? 2700 : 1800, Math.round(120 + far * (via.length ? 3 : 1.6))) })
@@ -1839,13 +1840,11 @@ const netherLack = () => [
 ].filter(Boolean).join(', ') || 'ничего'
 // Огнестойкость (зелье с бартера) снимает огонь ифритов — главный урон без брони (шар 5 + горение): с ней и щитом бой у спавнера
 // не ждёт железной брони из верхнего мира (b0-7-2 14.10: 30 мин за железом, на обратном пути — смерть). Цена боя — в графе (blazeRisk).
-const fightReady = () => READY.nether() && shieldOn() && (fireResReady() || (worn('torso') && ((worn('legs') && worn('head')) || ironRuns >= 8)))
-const fightLack = () => [
-  netherLack() === 'ничего' ? '' : netherLack(),
-  worn('torso') || fireResReady() ? '' : 'нагрудника',
-  shieldOn() ? '' : 'щита',
-  (worn('legs') && worn('head')) || ironRuns >= 8 || fireResReady() ? '' : 'поножей или шлема'
-].filter(Boolean).join(', ') || 'ничего'
+// Бой у спавнера без брони и огнестойкости — не запрет, а цена (AGENTS.md «гибкость»: «к ифритам только с огнестойкостью» — пример
+// запрещённого жёсткого правила): броню, щит и огнестойкость оценивает blazeRisk графа (core/speedrun.ts), вариант боя без них —
+// ближняя коробка для меча (blaze.ts planKillBox), щит на залп, отход на лечение и возврат. Здесь — только кирка и еда (ревью Codex 14.10).
+const fightReady = () => READY.nether()
+const fightLack = netherLack
 let fightGearWanted = false
 const DEFER = {
   food: () => nightWork() || (!sit.surface && have(FOOD) >= 6 && (state.food ?? 20) >= 14) ||
@@ -3815,10 +3814,6 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     if (died || dim() !== 'the_nether') return
     if (!have(/^(stone|iron|diamond|netherite)_pickaxe$/)) await spares(200)
     if (!fightReady()) {
-      if (READY.nether()) {
-        fightGearWanted = true
-        for (const item of ['iron_chestplate', 'iron_leggings', 'iron_helmet']) if (!worn(ARMOR_SLOT[item.split('_').pop()])) log(gearWorth(item).line)
-      }
       log(`бой у спавнера: не хватает ${fightLack()} — сохраняю добытые стержни`)
       return
     }

@@ -87,7 +87,12 @@ function look (bot, mcData, { radius = 64, perKind = 400, rayBudget = 500 }: any
   }
   if (bSeen.length >= 24) {
     bSeen.sort((a, b) => a.distanceTo(me) - b.distanceTo(me))
-    out.bastion = { seen: bSeen.length, nearest: xyz(bSeen[0]), dist: Math.round(bSeen[0].distanceTo(me)), bearing: bearingWords(bSeen[0].x - me.x, bSeen[0].z - me.z) }
+    // Большие руины портала Ада — тот же кирпич, но у них на виду обсидиан рамы (обычный и плачущий), у бастиона его нет
+    // (b10-5-2 14.10: «бастион» из 32 блоков у руин — вышки и обзор впустую, золота 0).
+    const oIds = ['obsidian', 'crying_obsidian'].map(n => mcData.blocksByName[n]).filter(Boolean).map(b => b.id)
+    const frame = bot.findBlocks({ matching: oIds, point: bSeen[0], maxDistance: 12, count: 12 }).some(p => { const b = bot.blockAt(p); return b && seesBlock(bot, b) })
+    if (frame && process.env.ND_NE_RUINS_CHECK !== '0') out.ruins = { seen: bSeen.length, nearest: xyz(bSeen[0]), dist: Math.round(bSeen[0].distanceTo(me)) }
+    else out.bastion = { seen: bSeen.length, nearest: xyz(bSeen[0]), dist: Math.round(bSeen[0].distanceTo(me)), bearing: bearingWords(bSeen[0].x - me.x, bSeen[0].z - me.z) }
   }
   if (seen.length) {
     const near = seen[0]
@@ -163,6 +168,14 @@ function rememberSpawner (session, sp) {
 // (Movements.dontCreateFlow). Не вышло вниз — тот же отрезок по горизонтали.
 async function legTo (session, ctl, tx, tz, deadline) {
   const nether = require('./nether')
+  // Без нашего золота пиглины бьют всё, что видят (NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD — сенсор с лучом): видны в 24 бл.
+  // или слышны ближе 16 — отрезок штреком, а не поверху (b11-6-2 14.10: поиск бастиона поверху, смерть через минуту). Штрек
+  // медленнее — цена; не вышел — как прежде ногами.
+  if (piglinsAround(session.bot) && process.env.ND_NE_PIGLIN_BORE !== '0' && gameClock.now() < deadline) {
+    const b = await nether.bore(session, ctl, { x: tx, z: tz }, { deadline: Math.min(deadline, gameClock.now() + 40000), maxSteps: 20, minY: 40 })
+    if (b.ok || b.moved >= 8) return { ok: true, bored: b.dug, bricks: b.bricks }
+    if (ctl.aborted) return { ok: false, error: 'прервано' }
+  }
   // Отрезок под охраной: ударили — бой с обидчиком, а не следующий отрезок
   // (nether.js guarded: эндермен убил тело посреди разведки, 2026-09-25).
   const w = await nether.guarded(session, ctl, sub => walkLeg(session.bot, sub, tx, tz, deadline))
@@ -228,6 +241,15 @@ async function keepBlocks (session, ctl, { min = 24, want = 56 }: any = {}) {
   return now - have
 }
 
+// Пиглины, которым мы враги (без нашей золотой вещи): на виду в 24 бл. или слышны ближе 16 за 10 с.
+function piglinsAround (bot) {
+  try {
+    if (!bot.inventory || require('./bastion/take-gold-block').goldWorn(bot)) return false
+    const seen = require('./perception/eyes').entities(bot, { radius: 32 }).some(e => e.seen && e.name === 'piglin' && e.dist != null && e.dist <= 24)
+    return seen || require('./perception/senses').heard(bot, { sinceMs: 10000 }).some(h => h.who === 'piglin' && h.band !== 'далеко')
+  } catch { return false }
+}
+
 // Золото Ада по пути (пользователь 14.10: «можно по пути накопать, пока идёшь к нужным структурам в аду» — не отдельной фазой):
 // руда Ада и позолоченный чернокамень на виду и рядом. Крюк — ценой против нужды: без золотой брони до 10 бл. (ботинки — 4 слитка,
 // 36 самородков), с бронёй — до 5 бл. (остальное — на бартер). Не на глазах у пиглинов: Block.playerWillDestroy злит взрослых
@@ -273,11 +295,15 @@ async function scout (session, ctl, p: any = {}) {
   // подход бастиона: на краю над лавовым морем шар гаста сбрасывал тело в лаву (ne-a, ne-c, b1-5-2, b4g-6-2 14.10: падение с y 70–83).
   const strict0 = bot._ndLavaStrict
   bot._ndLavaStrict = process.env.ND_SCOUT_LAVA_STRICT !== '0'
+  // Базальтовые дельты — и для крепости: тонкие колонны над лавой, падение в 26 бл. (b14-6-3 14.10: поиск крепости по базальту, y 56 → лава).
+  const deltas0 = bot._ndAvoidDeltas
+  bot._ndAvoidDeltas = true
   try {
     return await scoutBody(session, ctl, p)
   } finally {
     bot._ndNetherFloor = 0
     bot._ndLavaStrict = strict0
+    bot._ndAvoidDeltas = deltas0
   }
 }
 
@@ -443,12 +469,9 @@ async function bastionSearch (session, ctl, { deadline, radius, t0, high = false
   if (!v.bastion) {
     // Кольца 56 и 112 бл. вокруг портала (а не 128/256 крепости): бастионы пула good-v2 — в 70–144 бл. от входа (квартили 93/116/136),
     // с точки кольца вышка видит на 128.
-    bot._ndAvoidDeltas = true
-    try {
-      const r = await sweep(session, ctl, { deadline, glance, legs, v, want: 'bastion', high, rings: [56, 112] })
-      stopped = r.stopped
-      search = r.plan
-    } finally { bot._ndAvoidDeltas = false }
+    const r = await sweep(session, ctl, { deadline, glance, legs, v, want: 'bastion', high, rings: [56, 112] })
+    stopped = r.stopped
+    search = r.plan
   }
   const detail: any = {
     mode: 'bastion',
@@ -540,7 +563,7 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
     if (bot._ndAvoidDeltas && !inDelta0 && process.env.ND_NE_DELTAS !== '0') {
       if (/basalt_deltas/.test(biomeHere())) {
         ;(bot._ndDeltaSeen ||= []).push(xyz(bot.entity.position))
-        stopped = `на ${WORDS[dirName]} базальтовые дельты — бастиона там не бывает, не иду`
+        stopped = `на ${WORDS[dirName]} базальтовые дельты — колонны над лавой и магмовые кубы (бастиона там не бывает), не иду`
         blocked = true
         if (resume) Object.assign(resume, { along, side, fails, blocked })
         break

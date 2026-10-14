@@ -198,7 +198,8 @@ test('completed travel toward known gold preserves Bastion until two genuinely d
 test('Nether movement yields its current intent on a native interruption instead of launching another controller', async () => {
   for (const cause of ['tactical', 'damage']) for (const interrupted of ['ne_route', 'nether_tunnel', 'goto']) {
     const state = { health: 20, food: 20, dimension: 'the_nether',
-      pos: interrupted === 'goto' ? { x: 60, y: 35, z: 115 } : { x: 2, y: 63, z: 4 },
+      // goto — ближе 16 бл.: без золотой вещи дальше идёт штрек (goToward), а здесь проверяется сам goto.
+      pos: interrupted === 'goto' ? { x: 80, y: 35, z: 130 } : { x: 2, y: 63, z: 4 },
       inventory: { iron_pickaxe: 1, cooked_beef: 12 } }
     const movement = []
     const c = campaign(state, { foes: 0 }, (method) => {

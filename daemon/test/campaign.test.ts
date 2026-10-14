@@ -616,21 +616,23 @@ test('крафт освобождает место до расхода мате�
   assert.equal(calls.filter(x => x === 'craft').length, 1)
 })
 
-test('вход в Ад — кирка и еда без брони; бой у спавнера после износа щита или брони требует восстановления', () => {
+// Бой у спавнера без щита и брони — цена (blazeRisk графа), не запрет (AGENTS.md «гибкость», агент Ада 14.10); ворота — кирка и еда.
+test('вход в Ад и бой у спавнера — кирка и еда; щит и броня — цена, не запрет', () => {
   const state: Record<string, any> = { health: 20, food: 20, armor: { torso: 'iron_chestplate', legs: 'iron_leggings', head: 'iron_helmet' }, inventory: { stone_pickaxe: 1, stone_sword: 1, shield: 1, cooked_beef: 8 } }
   const c = campaign(state, {} as Record<string, any>)
   assert.equal(c.ready('nether'), true)
   assert.equal(c.fightReady(), true)
   delete state.inventory.shield
   assert.equal(c.ready('nether'), true, 'в Ад — без щита (путь спидраннеров)')
-  assert.equal(c.fightReady(), false, 'сытость не заменяет щит от шаров')
+  assert.equal(c.fightReady(), true, 'без щита — цена боя, а не запрет')
   state.inventory.shield = 1
   state.armor = {} as Record<string, any>
   assert.equal(c.ready('nether'), true, 'в Ад — без брони')
-  assert.equal(c.fightReady(), false, 'каменная кирка не заменяет броню у спавнера')
+  assert.equal(c.fightReady(), true, 'без брони — ближняя коробка у спавнера, а не отказ')
   state.armor.torso = 'iron_chestplate'
   state.inventory.cooked_beef = 1
   assert.equal(c.ready('nether'), false, 'запас лечения должен пережить Ад')
+  assert.equal(c.fightReady(), false, 'без еды на лечение бой не начинается')
 })
 
 test('смена измерения на обратном пути прекращает маршрут и не отправляет домой через портал повторно', async () => {
@@ -1340,19 +1342,16 @@ test('охота с полным рюкзаком сначала освобож�
   assert.ok(tidy >= 0 && tidy < search, 'сначала место под мясо, потом поиск и убийство животных')
 })
 
-test('без поножей и шлема бой у спавнера не начинается, пока железный заход не провалился восемь раз', () => {
+test('без поножей и шлема бой у спавнера начинается: железо за бронёй не требуется (цена, не запрет)', () => {
   const state: Record<string, any> = { health: 20, food: 20, dimension: 'overworld',
     armor: { torso: 'iron_chestplate', feet: 'iron_boots' }, offHand: { item: 'shield' },
     inventory: { stone_pickaxe: 2, iron_sword: 1, cooked_beef: 8, blaze_rod: 4 } }
   const c = campaign(state, {} as Record<string, any>)
   c.known.portal = { x: -19, y: 65, z: -24 }
   assert.equal(c.ready('nether'), true, 'вход в Ад — без брони (разведка крепости сразу)')
-  assert.equal(c.fightReady(), false, 'ферма 2026-09-29: с нагрудником и ботинками 0 из 8 и 4 смерти')
+  assert.equal(c.fightReady(), true, 'риск без брони считает blazeRisk графа')
   c.wantFightGear()
-  assert.equal(c.needs('iron'), true)
-  state.armor.legs = 'iron_leggings'
-  state.armor.head = 'iron_helmet'
-  assert.equal(c.fightReady(), true)
+  assert.equal(c.needs('iron'), false, 'за бронёй к спавнеру домой не идём')
 })
 
 test('бастион: выработанный первый — этап идёт ко второму по памяти, сухой заход не выжигает бастион', async () => {

@@ -1641,7 +1641,10 @@ async function holdSpawner (session, ctl, ctx) {
     // до 37° вверх, блейзы у спавнера висят выше и за минуту не показались ни
     // разу; открытый бой с точки обзора дал 5 стержней за 77 с (замер 3).
     if (spawner && !fireproof() && p0(ctx).box !== false && p0(ctx).bunker !== true) {
-      const plan = planKillBox(bot, spawner, blocksHave(bot))
+      // Без лука и стрел коробка — ближняя, под меч (2 бл. от спавнера): к дальнему окну ифриты не подлетают, «стрелы кончились»
+      // (blz-lsb-7/blz-std-5 14.10: коробка в 3–7.5 бл. без лука — 0 убийств, смерть). Ревью Codex 14.10.
+      const ranged = itemNamed(bot, 'bow') && arrowsHave(bot) > 0 && canUseRanged(session, { name: 'blaze' }, p0(ctx))
+      const plan = planKillBox(bot, spawner, blocksHave(bot), ranged ? {} : { hMin: 1.4, hMax: 3.2, hBest: 2 })
       if (plan.none) {
         out.bunker = { built: false, kind: 'окно', why: 'места под коробку с окном нет', tried: plan.tried }
       } else {

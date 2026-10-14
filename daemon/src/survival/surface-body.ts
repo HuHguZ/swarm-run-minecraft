@@ -601,7 +601,7 @@ const MOB_SPEED = {
   skeleton: 0.25, stray: 0.25, bogged: 0.25, parched: 0.25, wither_skeleton: 0.25, creeper: 0.25,
   witch: 0.25, silverfish: 0.25, endermite: 0.25, magma_cube: 0.2,
   spider: 0.3, cave_spider: 0.3, hoglin: 0.3, zoglin: 0.3, ravager: 0.3,
-  piglin_brute: 0.35, vindicator: 0.35, pillager: 0.35
+  piglin: 0.35, piglin_brute: 0.35, vindicator: 0.35, pillager: 0.35
 }
 
 function chaseBps (name) {

@@ -28,7 +28,10 @@ const KITS = {
   std: BASE,
   'std+fr': [...BASE, 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3'],
   // bow — с огнестойкостью (сравнение с std+fr по одному признаку, разбор Codex ne-blaze.md п.3).
-  bow: [...BASE, 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3', 'bow', 'arrow 64']
+  bow: [...BASE, 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3', 'bow', 'arrow 64'],
+  // ls — набор слепого входа (try-lab-ne-run KIT=lightshield): брони нет, щит — бой у спавнера без брони (агент Ада 14.10).
+  ls: ['shield', 'iron_sword', 'iron_pickaxe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'bucket',
+    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4']
 }
 const KIT = KITS[KIT_NAME]
 if (!KIT) { console.error(`KIT=${KIT_NAME}: жду ${Object.keys(KITS).join(', ')}`); process.exit(1) }
@@ -104,7 +107,9 @@ async function main () {
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n'); console.log(JSON.stringify(rec))
   }
   await kit.randomReset()
-  await kit.cmd('/gamemode survival')
+  // Постановка — в творческом: в выживании тело без набора стояло у спавнера под ифритами и гибло до замера (агент Ада 14.10:
+  // blz-ls-1 — хп 18 → 9 → смерть при постановке, «нет пригодного оружия» в верхнем мире). Выживание — после набора, перед боем.
+  await kit.cmd('/gamemode creative')
   await kit.setDifficulty('normal')
   await kit.gamerule('keep_inventory', KEEPINV) // правило пользователя 02.10: боевой режим — false
   for (const d of ['the_nether', 'the_end']) await kit.cmd(`/execute in minecraft:${d} run gamerule keep_inventory ${KEEPINV}`)
@@ -142,8 +147,10 @@ async function main () {
   }
   await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
   await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
+  await kit.cmd('/gamemode survival')
   await sleep(1500)
   await call('armor', {} as Record<string, any>).catch(() => null)
+  if ((await status()).dimension !== 'the_nether') { fail('тело не в Аду перед боем (постановка)'); process.exit(0) }
   const size = logSize()
   const tc = gameClock.now()
   const steps = []
@@ -157,12 +164,13 @@ async function main () {
     if (cnt(s0.inventory, /^blaze_rod$/) >= 7) break
     if ((s0.food ?? 20) < 18) await call('eat', {} as Record<string, any>).catch(() => null)
     const t = gameClock.now()
-    const r = await call('blaze', { rods: 7, timeoutSeconds: 400, box: false }).catch(e => ({ error: e.message }))
+    // Как кампания: без огнестойкости навык сам строит коробку с окном; BOX=0 — открытый бой (прежняя сцена).
+    const r = await call('blaze', { rods: 7, timeoutSeconds: 400, ...(process.env.BOX === '0' ? { box: false } : {}) }).catch(e => ({ error: e.message }))
     const d = r.detail || {} as Record<string, any>
     steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType })
     const s1 = await status()
     if (s1.dimension !== 'the_nether') break
-    if (deathLines(size).length >= 3) break
+    if (deathLines(size).length >= 1) break
   }
   try { await call('stop') } catch {}
   const s = await status()
