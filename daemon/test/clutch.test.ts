@@ -116,6 +116,14 @@ test('только полные негравитационные блоки, з�
   assert.equal(clutch.selectBlock(slots, 3), null)
   assert.equal(clutch.selectBlock(slots.slice(0, 38)), null)
 })
+test('паутина — последний клатч, когда твёрдых нет или они в запасе (14.10: «паутину себе могут ставить, когда в обрыв летят»)', () => {
+  const slots = []
+  slots[38] = { name: 'cobblestone', count: 3, slot: 38 }
+  slots[40] = { name: 'cobweb', count: 4, slot: 40 }
+  assert.equal(clutch.selectBlock(slots).name, 'cobblestone', 'твёрдый блок — первым')
+  assert.equal(clutch.selectBlock(slots, 3).name, 'cobweb', 'камень в запасе — паутина')
+  assert.equal(clutch.selectBlock([, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , slots[40]]).name, 'cobweb')
+})
 test('поздний клатч уменьшает падение, не объявляет его безвредным', () => {
   const m = model(p => p.x === -1 || p.y < 0 ? 'stone' : 'air')
   const s = state(new Vec3(0.5, 15.1, 0.5), new Vec3(0, -1.2, 0))

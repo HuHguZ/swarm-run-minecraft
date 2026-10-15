@@ -42,7 +42,7 @@ test('seen ruins without a lighter are looted, with the price in the log', async
 })
 
 test('a structure not worth its walk is passed by, and an opened one is not reconsidered', async () => {
-  const far = fixture({ known: [{ ...ruins, at: { x: 150, y: 64, z: 0 } }], bag: { flint_and_steel: 1, iron_ingot: 20, bread: 8 }, portal: { x: 0, z: 0 } })
+  const far = fixture({ known: [{ ...ruins, at: { x: 150, y: 64, z: 0 } }], bag: { flint_and_steel: 1, iron_ingot: 20, bread: 8, golden_boots: 1 }, portal: { x: 0, z: 0 } })
   assert.equal(await far.run(), false)
   assert.ok(far.lines.some(l => /— мимо/.test(l)))
   assert.ok(!far.calls.some(c => c.params?.mode === 'explore'))
@@ -60,6 +60,16 @@ test('a visit that would end after the dusk carries the night price in the log',
   const net = (lines: string[]) => Number((/→ ([+-]?\d+) с/.exec(lines.find(l => /руины портала в 50/.test(l)) || '') || [])[1])
   assert.ok(dusk.lines.some(l => /ночь на исходе захода −\d+ с/.test(l)), dusk.lines.join('\n'))
   assert.ok(net(dusk.lines) < net(day.lines), `${net(dusk.lines)} < ${net(day.lines)}`)
+})
+
+test('gold for the boots makes far ruins worth the walk; with a golden piece in the bag they are passed by', async () => {
+  const at = { ...ruins, at: { x: 150, y: 64, z: 0 } }
+  const bag = { flint_and_steel: 1, iron_ingot: 20, bread: 8 }
+  const want = fixture({ known: [at], bag: { ...bag }, portal: { x: 0, z: 0 } })
+  assert.equal(await want.run(), true)
+  assert.ok(want.lines.some(l => /gold 0\.93: \d+ с/.test(l) && /— иду/.test(l)), want.lines.join('\n'))
+  const dressed = fixture({ known: [at], bag: { ...bag, golden_helmet: 1 }, portal: { x: 0, z: 0 } })
+  assert.equal(await dressed.run(), false)
 })
 
 test('a looted village is reported to the graph as exhausted', async () => {

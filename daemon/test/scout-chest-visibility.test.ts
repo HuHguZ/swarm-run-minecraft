@@ -164,3 +164,38 @@ for (const stop of ['deadline', 'abort'] as const) test(`an observed chest canno
     loot: async () => { attempts++; return true }, move: async () => {}, interrupted: () => aborted, fact() {}, log() {} } as any, 0)
   assert.equal(attempts, 0)
 })
+
+test('chest take uses one validated budget inside the body and RPC', () => {
+  const c = require('../src/containers')
+  assert.equal(c.chestTakeMs(), 45000)
+  assert.equal(c.chestTakeMs(8), 8000)
+  assert.equal(c.chestTakeMs(999), 45000)
+  for (const invalid of [0, -1, NaN, Infinity]) assert.throws(() => c.chestTakeMs(invalid))
+  let options
+  require('../src/session/equipment').chestTake.call({ runIntent(_name, _work, opts) { options = opts } }, { timeoutSeconds: 8 })
+  assert.equal(options.timeoutMs, 10000)
+  assert.equal(options.params.timeoutSeconds, 8)
+})
+
+test('chest take cannot open after its eight seconds expire during lookAt', async t => {
+  const f = fixture(null), clock = require('../src/game-clock')
+  let now = 1000, opened = 0
+  t.mock.method(clock, 'now', () => now)
+  f.bot.pathfinder = { setGoal() {} }
+  f.bot.lookAt = async () => { now += 9000 }
+  f.bot.openContainer = async () => { opened++; return { inventoryStart: 27, containerItems: () => [], close() {} } }
+  await assert.rejects(require('../src/containers').chestTake(f.session, { aborted: false, onAbort: [] },
+    { ...f.chest, item: 'all', timeoutSeconds: 8 }), /время/)
+  assert.equal(opened, 0)
+})
+
+test('chest take forwards visibleOnly and stay instead of opening through a wall', async () => {
+  const f = fixture('chest')
+  let opened = 0
+  f.bot.pathfinder = { setGoal() {} }
+  f.bot.lookAt = async () => {}
+  f.bot.openContainer = async () => { opened++; return { inventoryStart: 27, containerItems: () => [], close() {} } }
+  await assert.rejects(require('../src/containers').chestTake(f.session, { aborted: false, onAbort: [] },
+    { ...f.chest, item: 'all', timeoutSeconds: 8, visibleOnly: true, stay: true }), /прицеле/)
+  assert.equal(opened, 0)
+})

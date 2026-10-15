@@ -65,8 +65,9 @@ export function installHumanKit (ctx: ArenaContext) {
     await rcon(i, `effect give ${h} minecraft:speed infinite ${SOLO ? 1 : 4} true`).catch(() => {})
     if (!SOLO) await rcon(i, `effect give ${h} minecraft:strength infinite 1 true`).catch(() => {})
     await rcon(i, `effect give ${h} minecraft:resistance 4 4 true`).catch(() => {})
-    // Соло: Сопротивление I (−20%), +8 хп, огнестойкость, сытость — бессрочно; без Силы и регенерации (12.10: «слишком легко»).
-    if (SOLO) for (const fx of ['resistance infinite 0', 'health_boost infinite 1', 'fire_resistance infinite 0', 'saturation infinite 0', 'instant_health 1 10'])
+    // Соло: +8 хп, сытость — бессрочно; без Силы и регенерации (12.10: «слишком легко»), без огнестойкости (14.10: «огнестойкость
+    // убери, навсегда не будет») и без бессрочного Сопротивления (14.10: «сопротивление навсегда убирай, оно слишком усилило нас»).
+    if (SOLO) for (const fx of ['health_boost infinite 1', 'saturation infinite 0', 'instant_health 1 10'])
       await rcon(i, `effect give ${h} minecraft:${fx} true`).catch(() => {})
     log(`🎽 ${h} возродился — набор и «Скорость V» выданы`)
   }
@@ -80,7 +81,8 @@ export function installHumanKit (ctx: ArenaContext) {
     const res: string[] = []
     for (const c of [`team join ${HUMAN_TEAM} ${h}`, `gamemode survival ${h}`, `clear ${h}`, `effect clear ${h}`, `effect give ${h} minecraft:instant_health 1 10 true`,
       `effect give ${h} minecraft:saturation 1 20 true`, ...(at ? [`tp ${h} ${at.x} ${at.y} ${at.z}${home ? ` ${home.yaw} 0` : ''}`] : []),
-      ...(home ? [`spawnpoint ${h} ${Math.floor(home.x)} ${Math.floor(home.y)} ${Math.floor(home.z)} ${home.yaw}`] : [])]) res.push(String(await rcon(i, c, 15000).catch(e => 'ошибка: ' + e.message)).slice(0, 40))
+      // Поворот точки в 1.21.11 — два числа (yaw pitch): с одним команда не проходила («Incomplete»), точки не было (14.10).
+      ...(home ? [`spawnpoint ${h} ${Math.floor(home.x)} ${Math.floor(home.y)} ${Math.floor(home.z)} ${home.yaw} 0`] : [])]) res.push(String(await rcon(i, c, 15000).catch(e => 'ошибка: ' + e.message)).slice(0, 40))
     // Набор — в фоне: после смерти он на экране возрождения, а сброс раунда ждать его не должен.
     if (SOLO) ctx.kitHuman(h).catch(() => {})
     log(`🧍 ${h} — в ${HUMAN_TEAM === 'red' ? 'красных' : 'синих'}, на старт ${home ? `${home.room} ` : ''}${at ? `${Math.round(at.x)} ${Math.round(at.y)} ${Math.round(at.z)}` : '?'}: ${res.filter(r => /ошибка|Unknown|Incorrect|No player|not found/i.test(r)).join('; ') || 'ок'}`)
@@ -115,7 +117,8 @@ export function watchHumans (ctx: ArenaContext) {
   let humanListAt = 0
   let humanBusy = false
   let humanErrAt = 0
-  ctx.hostile = (b, name) => names.includes(name) ? name !== b.name && (!teams || teamOf(name) !== b.team) : !teams || (HUMAN_TEAM ? HUMAN_TEAM !== b.team : (rel[b.team]?.[name] || 0) < 0)
+  // Выбывший человек (соло: наблюдатель до конца раунда) — не цель: рой лез и копал к нему, летающему над ареной (15.10).
+  ctx.hostile = (b, name) => names.includes(name) ? name !== b.name && (!teams || teamOf(name) !== b.team) : !ctx.humanOut?.has(name) && (!teams || (HUMAN_TEAM ? HUMAN_TEAM !== b.team : (rel[b.team]?.[name] || 0) < 0))
   const watchedFoes = new Map<string, string>()
   const humanT = setInterval(async () => {
     if (humanBusy) return

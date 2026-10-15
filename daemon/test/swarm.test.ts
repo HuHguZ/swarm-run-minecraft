@@ -222,6 +222,39 @@ test('swarm PvP: a single known enemy gets enough force, reserves and old sighti
   assert.equal(f.board.ack(claim.id, claim.assignedTo!, { token: claim.claim.token, confirmed: true }), false, 'changed action fences its old receipt')
 })
 
+test('swarm PvP: never-seen enemy means plain search; the last seen place keeps the enemy height for a breach', () => {
+  const members = Array.from({ length: 4 }, (_, i) => member('a' + i, { position: p(i, 64, 0), inventory: { diamond_sword: 1 }, armor: ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots'] }))
+  const f = scene(members)
+  assert.ok([...planPvp(f.board, members, { aggressive: true }).values()].every(t => !t.data?.hunt), 'no breach under own feet before any sighting')
+  for (const m of members) f.see(m.id, 'enemy', p(10, 70, 0))
+  planPvp(f.board, members, { aggressive: true })
+  f.advance(65000)
+  const later = [...planPvp(f.board, members, { aggressive: true }).values()].filter(t => t.data?.hunt)
+  assert.ok(later.length && later.every(t => t.data!.enemyPosition.y === 70), 'a walled-in camper is still hunted after a minute, at its own height')
+})
+
+test('swarm transfers: a paused pair yields to another donor until cooldown expires', () => {
+  const members = [member('near', { inventory: { bread: 6 } }), member('far', { position: p(10), inventory: { bread: 6 } }), member('recipient', { position: p(1), needs: { bread: 6 } })]
+  const f = scene(members), first = planTransfers(f.board, members)[0]
+  assert.equal(first.assignedTo, 'near')
+  const claim = f.board.claim(first.id, 'near')!
+  assert.ok(claim)
+  assert.ok(f.board.release(first.id, 'near', claim.claim.token))
+  const cooldown = new Map([[first.id, f.board.now() + 30000]])
+  const canTransfer = (donor: SwarmMember, recipient: SwarmMember, item: string) => (cooldown.get(`transfer:${donor.id}:${recipient.id}:${item}`) || 0) <= f.board.now()
+  const next = planTransfers(f.board, members, canTransfer)
+  assert.deepEqual(next.map(t => t.assignedTo), ['far'])
+  assert.ok(!f.board.tasks().some(t => t.id === first.id), 'paused pending task is removed')
+  const live = f.board.claim(next[0].id, 'far')!
+  assert.ok(live)
+  assert.equal(planTransfers(f.board, members, () => false)[0].claim!.token, live.claim.token, 'live transfer keeps its reservation')
+  assert.ok(f.board.release(live.id, 'far', live.claim.token))
+  cooldown.set(next[0].id, f.board.now() + 30000)
+  assert.deepEqual(planTransfers(f.board, members, canTransfer), [])
+  f.advance(30000)
+  assert.deepEqual(planTransfers(f.board, members, canTransfer).map(t => t.assignedTo), ['near'])
+})
+
 test('swarm transfers: reserves protect last required items and near deficits share surplus fairly', () => {
   const members = [member('donor', { inventory: { bread: 9, iron_sword: 1 }, reserve: { bread: 3, iron_sword: 1 } }), member('close', { position: p(1), inventory: {}, needs: { bread: 6, iron_sword: 1 } }), member('far', { position: p(20), inventory: {}, needs: { bread: 6 } })]
   const f = scene(members)

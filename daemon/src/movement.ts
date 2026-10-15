@@ -206,10 +206,11 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
     return known.get(key)
   }
   const start = bot.entity.position.floored()
+  const underRoof = visibleOnly && (geometry.verticalLift(bot, bot.entity.position, 1) ?? 1) < 1
   const key = p => `${p.x},${p.y},${p.z}`
   const queue = [{ p: start, parent: -1 }]
   const seen = new Set([key(start)])
-  let air = null
+  let air = null, water = null
   const urgent = (bot.oxygenLevel ?? 20) <= 8 && headWet(bot)
   const route = (i, kind) => {
     const path = []
@@ -229,6 +230,9 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
       if (!air) air = route(i, 'air')
       if (urgent) return air
     }
+    // Under an overhang, visible water can lead upward before its air becomes visible (j1k1-s2-4).
+    if (underRoof && waterCell(feet) && waterCell(head) && p.y > start.y &&
+        (p.x !== start.x || p.z !== start.z) && (!water || p.y > water.target.y)) water = route(i, 'water')
     const over = read(p.offset(0, 2, 0))
     const next = [...sides.map(d => p.plus(d)), p.offset(0, 1, 0), p.offset(0, -1, 0)]
     // A swim jump can leave water onto the ledge one block above it.
@@ -243,7 +247,7 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
       queue.push({ p: q, parent: i })
     }
   }
-  return air
+  return air || water
 }
 
 // Follow the connected swim route with manual controls: the old direct line to
@@ -254,36 +258,92 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
   let target = null
+  let exit = 'dry', loops = 0, kind = null
 
   try {
     let plugged = false
+    let opened = false
+    let wide = null, wideAt = 0, diveTo = null
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
       // Воздух кончается, а в 8 бл. его нет (затопленный штрек, cl-ac/cl-ai 14.10: утонул в 1–2 бл. от своего хода) — шире:
       // поиск при нехватке воздуха кончается на первом воздухе, так что широкий круг дёшев.
-      const route = findSwimRoute(bot, { visibleOnly, radius }) ||
+      let route = findSwimRoute(bot, { visibleOnly, radius }) ||
         (radius < 16 && (bot.oxygenLevel ?? 20) <= 8 && headWet(bot) ? findSwimRoute(bot, { visibleOnly, radius: 16, rise: 16 }) : null)
       target = route?.target || null
+      kind = route?.kind || null
+      loops++
       if (!route) {
+        // Своя нора залита и закрыта сверху (tw-a-s1-3 15.10: нора у пруда «потолок закрыт», вода натекла; тактика Surface
+        // 13 раз «не нашёл доступного пути из воды» за 2 с, утонул на месте): твёрдый потолок над головой — вскрыть один раз,
+        // за ним бывает воздух. Вода над головой (шахта залита сверху) — ниже, затычка.
+        const roof = !opened && headWet(bot) ? bot.blockAt(bot.entity.position.floored().offset(0, 2, 0)) : null
+        if (roof && roof.boundingBox === 'block' && !/^(bedrock|obsidian|crying_obsidian|reinforced_deepslate)$/.test(roof.name) &&
+            (typeof bot.canDigBlock !== 'function' || bot.canDigBlock(roof))) {
+          opened = true
+          try { await require('./items').equipBestTool(bot, roof); await bot.dig(roof, true) } catch {}
+          await sleep(200)
+          continue
+        }
+        // Открытая вода над головой (озеро, море — у глубины лучи глаз воздуха не видят): плыть вверх, как человек
+        // (tw-cr2-s1-3 15.10: Surface 15 с «пути нет», под водой без маршрута, хп 20 → 11.7 → смерть). Узкая шахта 1×1 без
+        // соседней воды — ниже, затычка.
+        const feetC = bot.entity.position.floored()
+        const upCell = bot.blockAt(feetC.offset(0, 2, 0))
+        const openWater = [feetC.offset(0, 1, 0), feetC.offset(0, 2, 0)].some(c => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => waterCell(bot.blockAt(c.offset(dx, 0, dz)))))
+        if (headWet(bot) && waterCell(upCell) && openWater) {
+          exit = 'swim-up'
+          bot.setControlState('forward', false)
+          bot.setControlState('sprint', false)
+          bot.setControlState('jump', true)
+          await sleep(160)
+          continue
+        }
         // Шахта залита сверху (своя копка вверх в воду, cl-n 14.10: «не нашёл доступного пути из воды», смерть): воздуха в
         // досягаемости нет — заткнуть клетку над головой; текущая вода в шахте без притока стекает за тики.
-        if (!plugged && headWet(bot)) {
+        if (!plugged && !opened && headWet(bot)) {
           plugged = true
           const above = bot.entity.position.floored().offset(0, 2, 0)
           let r = null
           try { r = await require('./build').placeBlockAt(bot, above, { timeoutMs: 1500, honest: true, steady: true, ctl }) } catch {}
           if (r && r.ok) { await sleep(1000); continue }
         }
+        exit = 'no-route'
         break
       }
-      if (route.kind === 'air' && !headWet(bot)) break
+      if (route.kind === 'air' && !headWet(bot)) {
+        // Голова над водой, а берега в 8 бл. нет. Раньше — выход сразу: клавиши снимались, тело тонуло, тактика снова звала
+        // Surface — качели «вынырнул — утонул», воздух 6–8 и вниз (j1k1-s2-2/3/4 15.10: 3 утопления за 10 мин). Теперь: с
+        // поверхности видно дальше — берег в 24 бл.; нет и его — держаться на плаву (прыжок), пока воздух не восстановится.
+        // Широкий поиск дорог (лучи по клеткам) — не чаще раза в секунду.
+        if (gameClock.now() >= wideAt) { wideAt = gameClock.now() + 1000; wide = findSwimRoute(bot, { visibleOnly, radius: 24, rise: 4 }) }
+        if (wide && wide.kind === 'land') {
+          target = wide.target; kind = 'land-wide'
+          const passed = wide.path.findIndex(p => p.equals(bot.entity.position.floored()))
+          if (passed >= 0) wide.path.splice(0, passed + 1)
+          route = wide
+        } else if ((bot.oxygenLevel ?? 20) < 18) {
+          exit = 'tread'
+          bot.setControlState('forward', false)
+          bot.setControlState('sprint', false)
+          bot.setControlState('jump', true)
+          await sleep(160)
+          continue
+        } else {
+          exit = 'air-dry-head'
+          break
+        }
+      }
       const next = route.path[0] || route.target
+      // Finish sinking to a lower route cell before jumping again (j1k1-s2-3).
+      if (next.y < bot.entity.position.floored().y) diveTo = next.y
+      if (diveTo !== null && bot.entity.position.y <= diveTo) diveTo = null
       const horizontal = Math.hypot(next.x + 0.5 - bot.entity.position.x, next.z + 0.5 - bot.entity.position.z)
       await bot.lookAt(next.offset(0.5, 1.62, 0.5), true)
-      if (ctl.aborted || gameClock.now() >= deadline) break
+      if (ctl.aborted || gameClock.now() >= deadline) { exit = ctl.aborted ? 'aborted' : 'deadline'; break }
       bot.setControlState('forward', horizontal > 0.25)
       bot.setControlState('sprint', horizontal > 0.25 && (bot.food ?? 20) > 6)
       // Jump doubles as "swim up" in water and keeps the head above surface.
-      bot.setControlState('jump', inWater(bot))
+      bot.setControlState('jump', inWater(bot) && diveTo === null)
       await sleep(160)
     }
   } finally {
@@ -293,11 +353,15 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
   const out = dryFooting(bot)
   const head = bot.blockAt(require('./pick').eyeOf(bot))
   const breathing = swimPassable(head) && !waterCell(head)
+  if (exit === 'dry' && !out) exit = ctl.aborted ? 'aborted' : 'deadline'
+  const feet = bot.blockAt(bot.entity.position)
   return {
     ok: out,
     breathing,
     wasInWater: true,
     target: target ? xyz(target) : null,
+    // Почему кончилось (разбор утоплений 15.10: «не нашёл пути» при найденной цели): выход цикла, вид маршрута, клетки глаз/ног.
+    exit, loops, kind, eye: head ? head.name : null, feet: feet ? feet.name : null, air: bot.oxygenLevel ?? null,
     error: out ? undefined : breathing ? 'голова в воздухе, но на сухой берег не вышел' : 'не нашёл доступного пути из воды'
   }
 }

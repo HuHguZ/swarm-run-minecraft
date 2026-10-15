@@ -75,11 +75,18 @@ function take (s) {
 // Приказной уворот/побег (арена 12.10: рывок от булавы и зелья, джук от лука, ветер, жемчуг, элитры, укрытие) — уже ответ
 // на угрозу. Неаварийный рефлекс (щит и бой тактики, жест, сторож) посреди него отбирал руки и ноги: рывок вставал
 // (mace-7: «reflex: действие прервано», бот под булавой не сдвинулся). Аварийный (падение, лава) — как раньше.
-const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
+const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|clear_water|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
+// Подъём к цели (goto climb, Codex 15.10): щит и бой тактики от летящего трезубца не отбирают ноги — «лезу к RedTest1 —
+// The goal was changed» на каждом броске. Аварии (падение, лава, мало хп, застрял в блоке, взрыв) — как раньше.
+function protectedClimb (s) {
+  const c = s.current, h = s.tactics?.snapshot?.()?.state
+  return (c?.name === 'goto' && !!c.params?.climb || c?.name === 'swarm_work' && c.params?.kind === 'dig' && !!c.params?._climb) && !c.ctl?.aborted && (s.bot?.health ?? 0) > (s.cfg?.lowHealth ?? 8) && !!h &&
+    !s.bot?.entity?.isInLava && !['dangerousFall', 'emergencyController', 'lava', 'lavaAhead', 'lavaEscapePending', 'embedded', 'explosion', 'drowning'].some(k => h[k])
+}
 function start (s, fn, { triggerAt = gameClock.now(), source = 'melee', owner = 'Tactical', priority = 2, preempt = false, immediate = false }: any = {}) {
   install(s)
   const st = state(s)
-  if (owner !== 'Emergency' && s.current && !s.current.ctl?.aborted && COMMANDED_ESCAPE.test(s.current.name || '')) return Promise.resolve({ acted: false, cancelled: true, why: 'идёт уворот по приказу' })
+  if (owner !== 'Emergency' && s.current && !s.current.ctl?.aborted && (COMMANDED_ESCAPE.test(s.current.name || '') || protectedClimb(s))) return Promise.resolve({ acted: false, cancelled: true, why: 'идёт уворот по приказу' })
   if (st.active) {
     if (!preempt || st.active.priority > priority) return s.reflex
     st.active.ctl.abort()
@@ -284,4 +291,4 @@ function install (s) {
     }
   }
 }
-module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency }
+module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb }

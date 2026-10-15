@@ -17,10 +17,10 @@ function callerBlocks () {
   if (flagAt >= medicalAt - 80 && flagAt >= 0) medicalAt = flagAt
   const medicalEnd = source.indexOf('    const their = usingItem', medicalAt)
   const crystalAt = source.indexOf("    if (prof.player && blockName(bot, me.floored()) !== 'cobweb'")
-  const crystalEnd = source.indexOf("    if (ready('dressMid')", crystalAt)
-  const rebuffAt = source.lastIndexOf('\n', source.indexOf("ready('rebuff')", crystalEnd)) + 1
+  const crystalEnd = source.indexOf('    const dressInputs = ', crystalAt) >= 0 ? source.indexOf('    const dressInputs = ', crystalAt) : source.indexOf("    if (ready('dressMid')", crystalAt)
+  const rebuffAt = source.indexOf('    if (!punishAfterRecovery && prof.player', crystalEnd)
   const rebuffEnd = source.indexOf('    if (prof.player && duo.active())', rebuffAt)
-  const healAt = source.lastIndexOf('\n', source.indexOf("&& ready('heal'))", rebuffEnd)) + 1
+  const healAt = source.indexOf('    if (!punishAfterRecovery && (hp <= healAt', rebuffEnd)
   const healEnd = source.indexOf('    const canHeal =', healAt)
   for (const [start, end] of [[medicalAt, medicalEnd], [crystalAt, crystalEnd], [rebuffAt, rebuffEnd], [healAt, healEnd]]) {
     assert.ok(start >= 0 && end > start, 'the actual ordered caller block is present')
@@ -228,15 +228,16 @@ test('actual ordered medical, crystal, rebuff and heal callers reserve one attac
       ready: key => key === 'crystal' || (alternative === 'rebuff' && key === 'rebuff') || (alternative === 'heal' && key === 'heal'),
       rest () {}, blockName: () => 'air', track: { vel: () => ({ x: 0, y: 0, z: 0 }) }, pressing: false,
       GRAPH: false, gp: null, after: () => true, style: { reactMs: 150 }, noticed: {},
+      routeInputs: () => '', itemInputs: () => '', failedCrystal: null, failedHealSpace: null, lastStand: false,
       heldName: () => f.bot.heldItem.name, switched () {}, stepSafe: () => true, maceNow: () => false,
       gameClock: { wall: { now: () => w.game.now() } }, used () {}, noteExchange () {},
       cx: { engaged: () => alternative === 'crystal-eat' || alternative === 'defense',
         plan: () => ({ kind: alternative === 'defense' ? 'dodge' : 'eat' }),
         run: async (_ctl, action) => { assert.equal(f.activeAt(), Infinity); if (action.kind === 'eat') seen.crystalEat++; else seen.defenses++; return { ok: true } } },
-      hasEffect: () => false, findItem: f.ctx.findItem, potionOf: f.ctx.potionOf, fortSealed: () => false,
+      hasEffect: () => alternative !== 'rebuff', findItem: f.ctx.findItem, potionOf: f.ctx.potionOf, fortSealed: () => false,
       buffUp: async () => { seen.buffs++; await f.recovery.buffUp() },
       hp: 15, healAt: 16, archer: false, calmHeal: true, theirR: 22, busyFoe: false,
-      findPotion: () => ({ name: 'splash_potion', count: 1 }),
+      findPotion: () => alternative === 'heal' ? ({ name: 'splash_potion', count: 1 }) : null,
       useAt: async () => { seen.heals++; return true },
       attack: () => { assert.equal(f.activeAt(), Infinity); assert.equal(f.bot.inventory.slots[45], f.shield); seen.attacks++ }
     }
@@ -254,4 +255,73 @@ test('actual ordered medical, crystal, rebuff and heal callers reserve one attac
       }
     } finally { w.close() }
   }
+})
+
+
+test('failed consumption waits for its actual safety cause to clear, not the next call', async () => {
+  const w = world(); const f = fighter(w.game)
+  let equips = 0
+  f.bot.equip = async (item, hand) => { equips++; if (hand === 'off-hand') f.bot.inventory.slots[45] = item; else f.bot.heldItem = item }
+  f.unsafe(true)
+  await w.finish(f.consume())
+  const before = equips
+  await w.step(200)
+  await w.finish(f.consume())
+  assert.equal(equips, before, 'unchanged unsafe window must not equip again')
+  f.unsafe(false)
+  assert.equal(await w.finish(f.consume()), true)
+  w.close()
+})
+
+test('a timed-out consumption cannot spend again by age; a matching late receipt permits the next use', async () => {
+  const w = world(); const f = fighter(w.game); let uses = 0
+  f.bot.activateItem = () => { uses++ }
+  try {
+    assert.equal(await w.finish(f.consume()), false)
+    await w.step(1200)
+    assert.equal(await w.finish(f.consume()), false)
+    assert.equal(uses, 1)
+    f.potion.count--
+    f.bot.activateItem = () => { uses++; w.game.setTimeout(() => { f.potion.count-- }, 1600) }
+    assert.equal(await w.finish(f.consume()), true)
+    assert.equal(uses, 2)
+  } finally { w.close() }
+})
+
+test('pearl watchdog is a failed teleport, never proof of safe arrival or permission to throw again', async () => {
+  const w = world(); const f = fighter(w.game); let shots = 0
+  const pearl = { name: 'ender_pearl', slot: 38, count: 3 }
+  const find = f.ctx.findItem
+  f.ctx.findItem = (bot, predicate) => predicate(pearl) && pearl.count > 0 ? pearl : find(bot, predicate)
+  f.ctx.Vec3 = Vec3; f.ctx.tt.threats = () => []
+  f.ctx.throwMod = { escapePick: () => () => null, throwAt: async () => {
+    shots++; pearl.count--; return { thrown: true, ticks: 30, land: { x: 12, y: 0, z: 0 } }
+  } }
+  try {
+    const first = await w.finish(f.recovery.escapePearl())
+    assert.equal(first.clear, false, 'no teleport position receipt has arrived')
+    await w.step(1200)
+    assert.equal(await w.finish(f.recovery.escapePearl()), null)
+    assert.equal(shots, 1)
+    f.entity.position.z++
+    f.ctx.throwMod.throwAt = async () => { shots++; pearl.count--; w.game.setTimeout(() => { f.bot.entity.position.x = 12 }, 100)
+      return { thrown: true, ticks: 30, land: { x: 12, y: 0, z: 0 } } }
+    const next = await w.finish(f.recovery.escapePearl())
+    assert.equal(next.clear, true, 'the changed trajectory and actual teleport permit progress')
+    assert.equal(shots, 2)
+  } finally { w.close() }
+})
+
+test('offhand consumption uses slot 45 receipt even though inventory.items excludes that hand', async () => {
+  const w = world(); const f = fighter(w.game)
+  f.bot.inventory.slots[45] = f.potion
+  const items = f.bot.inventory.items
+  f.bot.inventory.items = () => items().filter(item => item !== f.potion)
+  f.ctx.countOf = (bot, name) => bot.inventory.items().reduce((n, item) => n + (item.name === name ? item.count : 0), 0)
+  try {
+    assert.equal(f.ctx.countOf(f.bot, 'potion'), 0, 'match native inventory.items range 9..44')
+    assert.equal(await w.finish(f.recovery.eatHeld('potion', null, { offhand: true })), true)
+    assert.equal(f.potion.count, 2)
+    assert.equal(f.starts(), 1)
+  } finally { w.close() }
 })

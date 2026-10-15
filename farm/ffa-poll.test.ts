@@ -2,8 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
-import { watchStatus, installSight } from './arena/watch'
+import { watchStatus, installSight, watchAlarm } from './arena/watch'
 import { installRounds } from './arena/rounds'
+import { installSupply, startTactics } from './arena/supply'
 const turn = () => new Promise(resolve => setImmediate(resolve))
 // Ручки окружения, меняющие опрос и конец раунда: тест — на умолчаниях.
 delete process.env.FFA_POLL_MS; delete process.env.ARMS_MOBS; delete process.env.ARMS_PHASES
@@ -23,7 +24,7 @@ function fixture(t) {
     fast: { p: { x: 0, y: 64, z: 0 }, hp: 20, tick: 10, inv: {}, clockId: 'fast', frame: 10, observedAt: 10000, frameAt: 10000 },
     slow: { p: { x: 0, y: 64, z: 0 }, hp: 20, tick: 10, inv: {}, clockId: 'slow', frame: 10, observedAt: 10000, frameAt: 10000 }
   }, between: false, round: 1, stop: false,
-    busy: new Set(), alive: () => true, enemiesOf: () => [],
+    busy: new Set(), out: new Set(), deadNow: new Set(), alive: () => true, enemiesOf: () => [], teamOf: name => bots.find(b => b.name === name)?.team,
     Y: 64, humans: {}, readDeaths() {}, STOPF: path.join(os.tmpdir(), `ffa-poll-no-stop-${process.pid}`),
     arms: false, teams: false, names: ['fast', 'slow'], labNeed: {}, deathAt: {}, log() {},
     swarmDriver: { observe: (b, data) => observations.push({ name: b.name, data }), panic: () => false }
@@ -168,4 +169,222 @@ test('a chest taken through the arena wrapper is marked opened, so the ARMS_LOOT
   await bot.c.call('chest_take', { item: 'all', x: 1, y: 1, z: 1 })
   await turn()
   assert.deepEqual([...ctx.opened].sort(), ['-4,5,2', '10,5,10'], 'single chest by its cell, double chest by its second half, a foreign chest ignored')
+})
+
+for (const [method, params, grace] of [
+  ['chest_take', { timeoutSeconds: 8 }, 12000],
+  ['chest_take', {}, 49000],
+  ['assist', { mode: 'pickup' }, 10000]
+] as const) test('the watchdog respects and expires the loot budget: ' + method + ' ' + grace, t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+  b.last = { m: method, p: params, at: 50000 - grace + 1 }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.name === 'fast' && c.method === 'stop').length, 0)
+  b.last.at--
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.name === 'fast' && c.method === 'stop').length, 1)
+})
+
+test('fresh fight does not inherit a stationary goto anchor', t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  f.context.enemiesOf = () => [{ d: 3.3, mob: false }]
+  b.last = { m: 'fight', at: 50000, p: { target: 'Foe', timeoutSeconds: 12 } }
+  b.anchor = { p: { ...f.context.pos.fast.p }, at: 30000 }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 0)
+  b.last.at = 42000
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 1)
+})
+
+test('queued aim dodge does not cancel a newly started melee fight', t => {
+  const { installDangers } = require('./arena/dangers')
+  const calls: string[] = [], p = { x: 0, y: 64, z: 0 }
+  let queued: any
+  t.mock.method(globalThis, 'setTimeout', fn => { queued = fn; return 0 })
+  t.mock.method(Math, 'random', () => 0)
+  const b: any = {
+    name: 'A', team: 'blue', last: { m: 'goto' },
+    c: { call: async method => { calls.push(method); return {} } },
+    dodgeStyle: { delay: 0, len: 2, cd: 500, skip: 0, jumpy: 0 }
+  }
+  const ctx: any = {
+    bots: [b], pos: { A: { p, inv: {} } },
+    busy: new Set(), out: new Set(), deadNow: new Set(),
+    enemiesOf: () => [{ d: 3.2, mob: false }],
+    swarmDriver: { panic: () => false, canEngage: () => true }, log () {}
+  }
+  installDangers(ctx)
+  b.c.onDanger({ pos: p, dangers: { aims: [{
+    name: 'Foe', weapon: 'trident',
+    at: { x: 5, y: 64, z: 0 }, side: { x: 1, z: 0 }
+  }] } })
+  b.last = { m: 'fight' }
+  queued()
+  assert.deepEqual(calls, [])
+})
+
+test('тревога прерывает копателя с _hunt в контакте', t => {
+  const f = fixture(t), b = f.bots[0]
+  b.climbing = true
+  b.last = { m: 'goto', at: Date.now(), p: { _hunt: true } }
+  b.swarmTask = { data: { dig: '0,63,0' } }
+  f.context.teamOf = () => b.team
+  f.context.enemiesOf = () => [{ n: 'RedTest1', d: 3, spd: 6, human: true }]
+  let tick: any
+  t.mock.method(globalThis, 'setInterval', fn => { tick = fn; return 1 as any })
+  watchAlarm(f.context); tick()
+  assert.ok(f.calls.some(c => c.name === b.name && c.method === 'stop'))
+})
+
+test('alarm cancels each current action once, including old actions and immediate new danger work', t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.teamOf = () => b.team
+  f.context.enemiesOf = () => [{ n: 'Foe', d: 3, spd: 6, human: true }]
+  let tick: any
+  t.mock.method(globalThis, 'setInterval', fn => { tick = fn; return 1 as any })
+  b.last = { m: 'goto', at: 0, p: {} }
+  watchAlarm(f.context); tick(); tick()
+  assert.equal(f.calls.filter(c => c.name === b.name && c.method === 'stop').length, 1)
+  b.last = { m: 'craft', at: Date.now(), p: {} }
+  tick()
+  assert.equal(f.calls.filter(c => c.name === b.name && c.method === 'stop').length, 2)
+  f.advance(3600000); tick()
+  assert.equal(f.calls.filter(c => c.name === b.name && c.method === 'stop').length, 2)
+})
+
+test('watchdog protects a pending craft until its receipt, then diagnoses an abandoned action', t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+  b.last = { m: 'craft', at: 0, p: {}, pending: true }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 0)
+  b.last.pending = false; b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 1)
+})
+
+test('watchdog records the failed approach and escalates a second freeze without a forty-second window', async t => {
+  const f = fixture(t), b = f.bots[0]
+  const stuck = () => {
+    f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = Date.now()
+    b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+    b.last = { m: 'goto', at: 0, p: { x: 8, y: 64, z: 0, timeoutSeconds: 4 } }
+    f.watchdog()
+  }
+  b.following = 'Leader'; stuck(); await turn()
+  assert.equal(b.badSpots[0].until, undefined)
+  assert.deepEqual(b.badSpots[0].from, f.context.pos.fast.p)
+  assert.equal(b.followCd, undefined, 'one failed route does not ban following every leader')
+  f.advance(41000); stuck(); await turn()
+  assert(f.calls.some(c => c.method === 'dig_to'))
+  f.context.pos.fast.p.x = 4; stuck(); await turn()
+  assert.equal(b.frozen.n, 1, 'a different stuck cell starts its own evidence')
+})
+
+test('panic cancels once per operation token and can cancel the next unsafe operation immediately', async t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.swarmDriver.panic = () => true
+  let releases = 0; f.context.swarmDriver.release = () => releases++
+  b.last = { m: 'chest_take', at: 0 }
+  f.poll(); await turn(); f.poll(); await turn()
+  assert.equal(releases, 1)
+  b.last = { m: 'goto', at: Date.now() }
+  f.poll(); await turn()
+  assert.equal(releases, 2)
+})
+
+test('potion holders split a pair once per action and a new nearby pair is urgent', async t => {
+  const f = fixture(t), b = f.bots[0], dodges: any[] = []
+  for (const bot of f.bots) bot.team = 'blue'
+  f.context.names = ['fast', 'slow']; f.context.teamOf = () => 'blue'
+  f.context.dodgeAway = (...args) => dodges.push(args)
+  const reply = () => ({ state: { pos: { x: 0, y: 64, z: 0 }, health: 20, inventory: {}, clock: { ticks: 10 } },
+    detail: { dangers: { holders: [{ name: 'Foe', at: { x: 5, y: 64, z: 0 } }] } } })
+  b.c.call = async m => m === 'status' ? reply() : {}
+  b.last = { m: 'chest_take' }
+  f.poll(); await turn(); f.poll(); await turn()
+  assert.equal(dodges.length, 1)
+  f.context.pos.slow.p.x = 10; f.poll(); await turn()
+  f.context.pos.slow.p.x = 1; f.poll(); await turn()
+  assert.equal(dodges.length, 2, 'separation and re-entry, without waiting for potAt')
+})
+
+test('start loot completes all finite zones even if server and wall clocks cross the old phase budget', async t => {
+  let now = 0, visits = 0
+  t.mock.method(Date, 'now', () => now)
+  const b: any = { name: 'A', team: 'blue', c: { call: async (method, p) => {
+    if (method === 'goto' && p.range === 3) { visits++; now += 1000000; ctx.pos.A.tick += 100000 }
+    return { status: 'done', detail: {} }
+  } } }
+  const ctx: any = { bots: [b], pos: { A: { p: { x: 0, y: 64, z: 0 }, tick: 0, inv: {}, armor: {} } }, busy: new Set(),
+    L: { areas: [{ id: 'one', x: 0, z: 0 }, { id: 'two', x: 4, z: 0 }], chests: [], half: 10, lab: { brewing: { x: 0, y: 0, z: 0 }, crafting: { x: 0, y: 0, z: 0 } } },
+    AL: {}, X: 0, Y: 64, Z: 0, kit: 'fixture', alchemist: {}, brewed: {}, labNeed: {}, armsHome: () => ({ x: 0, y: 64, z: 0 }), log() {}, sleep: async () => {} }
+  installSupply(ctx); await ctx.armsPrep()
+  assert.equal(visits, 2, 'phase ends on completed search work, not on elapsed time')
+})
+
+test('roles react to equipment and membership; identical frames and inventory key order do not reshuffle', async t => {
+  const intervals: any[] = [], lines: string[] = []
+  t.mock.method(globalThis, 'setInterval', (fn, ms) => { intervals.push({ fn, ms }); return intervals.length })
+  const ctx: any = { i: 31, teams: true, arms: false, bots: [{ name: 'A', team: 'blue' }, { name: 'B', team: 'blue' }],
+    pos: { A: { inv: { bow: 1, arrow: 4 }, armor: {} }, B: { inv: {}, armor: {} } }, busy: new Set(),
+    alive: () => true, labNeed: {}, brewed: {}, alchemist: {}, log: line => lines.push(line), sleep: async () => {} }
+  await startTactics(ctx)
+  const check = () => intervals.filter(i => i.ms <= 2000).forEach(i => i.fn())
+  check(); assert.equal(lines.length, 1)
+  ctx.pos.B.inv = { splash_potion: 3 }; check()
+  assert.equal(lines.length, 2); assert(lines.at(-1).includes('B=лекарь'))
+  ctx.pos.A.inv = { arrow: 4, bow: 1 }; check()
+  assert.equal(lines.length, 2)
+  ctx.bots.pop(); check()
+  assert.equal(lines.length, 3); assert(!lines.at(-1).includes('B='))
+})
+
+test('arena wrapper keeps operation ownership until its own receipt; reads and old replies do not steal it', async () => {
+  const waiters: any[] = []
+  const bot: any = { name: 'A', c: { call: method => method === 'craft' ? new Promise(resolve => waiters.push(resolve)) : Promise.resolve({}) } }
+  const ctx: any = { bots: [bot], names: ['A'], pos: {}, humans: {}, X: 0, Y: 64, Z: 0, R: 20, log() {}, alive: () => true }
+  installSight(ctx)
+  const one = bot.c.call('craft', { item: 'ladder' }), first = bot.last
+  await bot.c.call('swarm_pose', { at: { x: 1, y: 64, z: 0 }, inspectOnly: true })
+  assert.equal(bot.last, first)
+  assert.equal(first.pending, true)
+  const two = bot.c.call('craft', { item: 'iron_sword' }), second = bot.last
+  waiters[0]({ status: 'done' }); await one; await turn()
+  assert.equal(bot.last, second); assert.equal(second.pending, true)
+  waiters[1]({ status: 'done' }); await two; await turn()
+  assert.equal(second.pending, false)
+})
+
+test('watchdog follows operation ownership rather than the former swarm busy/hold deadlines', t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  b.swarmExecuting = true; b.swarmBusyUntil = 1; b.swarmHoldUntil = 1
+  b.last = { m: 'goto', at: 0, p: { timeoutSeconds: 4 } }; b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 0)
+  b.swarmExecuting = false; b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 1, 'an abandoned field cannot hide a missing owner')
+})
+
+test('an unsuccessful watchdog dig does not become a timed retry; a new tool can reopen recovery', async t => {
+  const f = fixture(t), b = f.bots[0]
+  const stuck = async () => {
+    f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = Date.now()
+    b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+    b.last = { m: 'goto', at: 0, p: { x: 8, y: 64, z: 0, timeoutSeconds: 4 } }
+    f.watchdog(); await turn()
+  }
+  await stuck(); f.advance(10000); await stuck()
+  assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 1)
+  f.advance(3600000); await stuck()
+  assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 1, 'the same failed recovery stays failed')
+  f.context.pos.fast.inv = { iron_pickaxe: 1 }; await stuck()
+  assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 2)
 })

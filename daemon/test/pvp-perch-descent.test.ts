@@ -338,7 +338,7 @@ test('the actual pickaxe is equipped before the dig priced at its speed', async 
 // Execute the actual caller branch rather than duplicate its HP/continue
 // conditions. The complete fight needs live inventory, routing and opponents;
 // this isolates only the integration from that unrelated infrastructure.
-async function perchCaller(hp: number, result: { ok: boolean; acted: boolean }) {
+async function perchCaller(hp: number, result: { ok: boolean; acted: boolean }, options: any = {}) {
   const source = readFileSync(process.env.ND_TEST_PERCH_CALLER_SOURCE || join(__dirname, '../src/pvp.ts'), 'utf8')
   const start = source.lastIndexOf('if (perch)', source.indexOf('const noArrows'))
   const end = source.indexOf('const inc = threats.incoming', start)
@@ -349,7 +349,7 @@ async function perchCaller(hp: number, result: { ok: boolean; acted: boolean }) 
     bot: { entity: { position: new Vec3(.5, 126, .5), attributes: {} }, food: 0 }, entity: {},
     findItem: () => null, ready: () => true, rest: () => {}, used: () => {}, canHeal: false,
     hasEffect: () => false, rangedAllowed: () => true, vision: { visible: () => true },
-    dropFromPerch: async () => { ctx.calls++; return result }
+    dropFromPerch: async () => { ctx.calls++; return result }, ...options
   }
   await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch}\n normalCombat++ } })()`, ctx)
   return ctx
@@ -365,4 +365,32 @@ test('actual PvP caller keeps fighting after a descent refusal without action', 
   const ctx = await perchCaller(20, { ok: false, acted: false })
   assert.equal(ctx.calls, 1)
   assert.equal(ctx.normalCombat, 1, 'a declined plan does not unconditionally continue')
+})
+
+test('useful ranged perch does not expire after forty-five seconds', async () => {
+  const ctx = await perchCaller(20, { ok: true, acted: true }, { now: 60000,
+    findItem: (_bot, predicate) => [{ name: 'bow' }, { name: 'arrow' }].find(predicate) })
+  assert.equal(ctx.calls, 0)
+  assert.equal(ctx.normalCombat, 1)
+})
+
+test('healing still makes a perch useful even after running out of arrows', async () => {
+  const ctx = await perchCaller(8, { ok: true, acted: true }, { canHeal: true, now: 60000 })
+  assert.equal(ctx.calls, 0)
+})
+
+test('a failed perch dig is not aged away, and a newly available descent resource opens another choice', async () => {
+  const s = scene(); await s.ready()
+  const source = readFileSync(join(__dirname, '../src/pvp.ts'), 'utf8')
+  const init = source.indexOf('  let failedPerchDrop = ')
+  const start = init >= 0 ? init : source.indexOf('  const dropFromPerch = ')
+  const end = source.indexOf('  let fort = ', start)
+  let calls = 0, water = false
+  const ctx: any = { bot: s.bot, session: {}, tools: { bestFor: () => ({ ms: 150 }) },
+    routeInputs: () => 'same support and stance', hasEffect: () => false,
+    itemInputs: () => water ? 'water_bucket:36:1' : '',
+    pvpSkills: { dropFromPerch: async () => { calls++; return { ok: false, acted: true, kind: 'dig' } } } }
+  runInNewContext(require('esbuild').transformSync(source.slice(start, end) + '\nglobalThis.tryDrop = dropFromPerch', { loader: 'ts' }).code, ctx)
+  await ctx.tryDrop(); ctx.now = 60000; await ctx.tryDrop(); assert.equal(calls, 1)
+  water = true; await ctx.tryDrop(); assert.equal(calls, 2, 'an available bucket must let the planner compare its other descent means')
 })

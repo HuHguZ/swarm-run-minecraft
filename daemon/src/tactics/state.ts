@@ -12,6 +12,8 @@ export interface TacticalEnemy {
   hit?: number
   /** struck us in melee within 1.5 s but the eye ray misses it (S4d): known from damage_event, not seen */
   unseen?: boolean
+  /** a player the arena names as an enemy (watch_dangers): not striking us yet, but walks round a raised shield */
+  foe?: boolean
 }
 
 /** S4d round-4 tactics (07.10): ND_S4D=0 restores the S4c behaviour for the native A/B on one code. */
@@ -172,6 +174,18 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   return 0
 }
 
+// The hits taken while a hole goes down are its price, from every melee walker that reaches the body before the floor
+// sinks (closing at up to 4 b/s from its 1.5-block reach: spider 3.9, piglin 3.5, zombie 2.3; an enderman teleports in).
+// It was priced for endermen only: a zombie at the body struck through the whole dig, and the free hole (95) outbid the
+// run (85) into 14 -> 6 hp before it was deep enough (stress stand rough, 40 000 tapes: 9.4% deaths, 3/4 of them DigDown>Flee).
+export function digDownCost(foes: Array<{ kind: string; distance: number; hit?: number; everyMs?: number }>, digMs: number): number {
+  return foes.reduce((cost, foe) => {
+    if (!foe.hit || !foe.everyMs) return cost
+    const arriveMs = foe.kind === 'enderman' ? 0 : Math.max(0, foe.distance - 1.5) / 4 * 1000
+    return cost + foe.hit * Math.ceil(Math.max(0, digMs - arriveMs) / foe.everyMs)
+  }, 0)
+}
+
 export const KEEP_WORKING = 30
 export function candidates(state: TacticalState, level = threatLevel(state)): Candidate[] {
   if (level === 0) return []
@@ -231,7 +245,10 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // Nor does it stop a flyer: a phantom swoops onto a pillar, a blaze shoots down at it (farm s1-LK-8: PillarUp x3 under
   // blazes 15 -> 5 hp, then death; stand: PillarUp against a phantom and a husk, killed on top).
   const flyer = state.enemies.some(enemy => enemy.threatening && /^(phantom|vex|bee|blaze|ghast)$/.test(enemy.kind))
-  const shelterHolds = !((playerFoe || flyer) && (state.shelter === 'DigDown' || state.shelter === 'PillarUp')) && !state.blast
+  // Walls only delay a player, and the wait inside is the whole fight lost: the box holds the body until it heals while the
+  // player breaks in or walks away (arena 14.10, the user: «закапываются и стоят афк и не дерутся»; 36 boxes against people in
+  // 30 min). Against a player - a fight, or a short run to heal and come back; no box, no cover rest.
+  const shelterHolds = !playerFoe && !(flyer && (state.shelter === 'DigDown' || state.shelter === 'PillarUp')) && !state.blast
   // Lava without fire resistance: the swim to the shore finds its own exit (lava pools have no dry 3-block run).
   const route = state.escapeRoute || state.lava && !state.fireResistance
   add('FreeEmbedded', 180, 'solid block after teleport or suffocation', !!state.embedded)
@@ -276,9 +293,14 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
     (state.shelter === 'DigDown' && state.digDownCostHp !== undefined ? Math.max(0, 1 - state.digDownCostHp / state.health) : 1)
   // A validated shaft supplies its own closing block as it is dug; an existing pocket needs no construction.
   if (state.shelter) add(state.shelter, shelterScore, 'available refuge', level >= 2 && shelterHolds && (state.blocks > 0 || state.shelter === 'DigDown' || state.shelter === 'Hide') && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && (sheltered || niche))
-  add('Hide', 110, 'existing cover', critical && state.cover && !creeperNear && !state.dangerousFall && !state.lava && sheltered)
-  add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (level === 1 || state.incomingProjectiles > 0))
-  add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending)
+  add('Hide', 110, 'existing cover', critical && state.cover && !creeperNear && !state.dangerousFall && !state.lava && sheltered && !playerFoe)
+  // A shield covers one side. Against a player it is for a shot in flight, and only with no second player of theirs near:
+  // the second walks round it and strikes the back (arena 14.10, the user: «с щитом против игрока стоят, я со спины подхожу
+  // и такого фармлю»; 69 shields at level 1 against people in 10 min, none at a shot in flight, a second human 6-14 blocks
+  // off). Without a shot the skill's own fight or retreat goes on.
+  const flankers = state.enemies.filter(enemy => enemy.player && (enemy.threatening || enemy.foe) && enemy.distance <= 12).length
+  add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (playerFoe ? state.incomingProjectiles > 0 && flankers <= 1 : level === 1 || state.incomingProjectiles > 0))
+  add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && !playerFoe)
   const recoverBurn = burnRecovery(state)
   add('Eat', recoverBurn ? 105 : 45, recoverBurn ? 'restore regeneration after burning' : 'restore food',
     (recoverBurn || level <= 1 && state.food < 16) && state.edible && !state.dangerousFall)

@@ -77,9 +77,17 @@ export function shieldableBlast(bot: Bot): { entity: Bot; kind: string; distance
 // (dodgeCreeper) left zombies and skeletons hitting the back for 3 s per dodge and a creeper that kept up: Dodge x4-5 to
 // death in live telemetry (s5c-b1-1/2, s8-f1-6, f2-11 and f3-11 "blown up" while dodging). Standing still, the creeper
 // walks in and spends itself on the shield.
-export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }, { maxMs = 4000 } = {}) {
+// The stance and the run last while the source does: the explosion removes the TNT entity. A 4 s cap lowered the shield
+// 0.4 s before the blast and the bot died at full hp (arena 16.10, 15-19 TPS; user 15.10: modes end by the world, not
+// by N seconds). The synced fuse (physics, 80 ticks by default) only bounds an entity that somehow stays.
+function blastBound(bot: Bot, entity: Bot | undefined): number {
+  return ((entity?.name === 'tnt' ? fuseOf(bot, entity) : null) ?? 80) * 50 + 1000
+}
+
+export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }) {
   const bot = session.bot
   const start = gameClock.now()
+  let until = Infinity
   const shield = require('../combat').makeShield(session, ctl, { shield: 'always' })
   try { bot.pathfinder?.setGoal(null) } catch {}
   try { bot.clearControlStates() } catch {}
@@ -87,9 +95,10 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
   let blocked = false
   try {
     if (!await shield.wear()) return { how: 'shield-blast', unavailable: true, reason: 'shield not worn' }
-    while (!ctl.aborted && gameClock.now() - start < maxMs && (bot.health ?? 0) > 0) {
+    while (!ctl.aborted && gameClock.now() < until && (bot.health ?? 0) > 0) {
       const source = shieldableBlast(bot)
       if (!source) break
+      if (until === Infinity) until = start + blastBound(bot, source.entity)
       kind = source.kind
       await bot.lookAt(source.entity.position.offset(0, (source.entity.height || 1) * .5, 0), true)
       if (!shield.blocking()) await shield.raise(true)
@@ -104,25 +113,32 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
 
 // Run out of reach along flee.pickDirection (terrain run length, mobs on the way): the blast is one more danger source,
 // so dodging TNT does not run into a creeper (stress stand: TNT + creeper, dodged into the creeper's blast).
-export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }, { maxMs = 4000 } = {}) {
+export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }) {
   const bot = session.bot
   const start = gameClock.now()
+  let until = Infinity
   const set = (key: string, value: boolean) => { try { bot.setControlState(key, value) } catch {} }
   const stop = () => { for (const key of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(key, false) }
   ctl.onAbort.push(stop)
   try { bot.pathfinder?.setGoal(null) } catch {}
   let last: Blast | null = null
   let prevYaw: number | null = null
+  let cornered = false
   try {
-    while (!ctl.aborted && gameClock.now() - start < maxMs && (bot.health ?? 0) > 0) {
+    while (!ctl.aborted && gameClock.now() < until && (bot.health ?? 0) > 0) {
       const blast = blastNear(bot, 2)
       // A calm charged creeper nearby is no reason to keep running once nothing alarms.
       if (!blast || blast.kind === 'charged_creeper' && !blast.alarm && last?.kind !== 'charged_creeper') break
+      if (until === Infinity) until = start + blastBound(bot, bot.entities[blast.id])
       last = blast
       const me = bot.entity.position
       const source = { e: bot.entities[blast.id], doc: { radius: blast.reach, weight: 10, blast: blast.reach }, d: blast.distance, swelling: true }
-      const plan: { yaw: number; dir: { x: number; z: number } } | null = flee.pickDirection(bot, [source, ...flee.hostilesAround(bot, 16)], prevYaw)
-      if (!plan) { stop(); break }
+      // Every primed TNT steers the run, not only the deepest: the second one on the other side was run into (arena 16.10).
+      const others = (Object.values(bot.entities || {}) as Bot[]).filter(e => e?.name === 'tnt' && e.id !== blast.id && e.isValid !== false &&
+        e.position && e.position.distanceTo(me) <= TNT_REACH + 3)
+        .map(e => ({ e, doc: { radius: TNT_REACH + 3, weight: 10, blast: TNT_REACH + 3 }, d: e.position.distanceTo(me), swelling: true }))
+      const plan: { yaw: number; dir: { x: number; z: number } } | null = flee.pickDirection(bot, [source, ...others, ...flee.hostilesAround(bot, 16)], prevYaw)
+      if (!plan) { cornered = true; stop(); break }
       prevYaw = plan.yaw
       await bot.look(plan.yaw, 0, true)
       // A step only where it is safe (review g, S4c): the run's direction was chosen by run length, but sprint momentum at
@@ -134,6 +150,6 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
     }
   } finally { stop() }
   const remaining = blastNear(bot)
-  return { how: 'dodge-blast', kind: last?.kind ?? null, clear: !remaining, distance: remaining ? Math.round(remaining.distance * 10) / 10 : null,
+  return { how: 'dodge-blast', kind: last?.kind ?? null, clear: !remaining, ...(cornered ? { cornered } : {}), distance: remaining ? Math.round(remaining.distance * 10) / 10 : null,
     seconds: Math.round((gameClock.now() - start) / 100) / 10 }
 }

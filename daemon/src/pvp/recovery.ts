@@ -6,6 +6,13 @@ const bow = require('../bow')
 type CombatContext = Record<string, any>
 
 export function createRecovery(ctx: CombatContext) {
+const failedConsumes = new Map<string, any>()
+let failedPearl = null
+let failedFarCharge = null
+const consumeInputs = (item, opt) => [item.name, item.slot, item.count, /potion$/.test(item.name) ? ctx.potionOf(item) : null,
+    ctx.tt.safe(ctx.tempo.consumeMs(item.name), { fortSealed: ctx.fortSealed() }).ok,
+    !!ctx.fortSealed(), !!ctx.maceNow(), !!ctx.bot.entity.onGround, !!ctx.bot.entity.elytraFlying,
+    !!opt.desperate, !!ctx.punishable(), ctx.session?._reflexState?.active || null].join('|')
 const punishable = () => {
     try {
       if (!ctx.prof.player || !ctx.tempo.ON || !ctx.entity || !ctx.entity.isValid || !ctx.bot.entity) return null
@@ -69,7 +76,11 @@ const punishable = () => {
   }
 
 const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, offhand = false, flightStable = false, onPunish = null }: any = {}) => {
-    const had = ctx.countOf(ctx.bot, name)
+    const remaining = () => {
+      const off = ctx.bot.inventory.slots[45]
+      return ctx.countOf(ctx.bot, name) + (off?.name === name ? off.count : 0)
+    }
+    const had = remaining()
     await ctx.sleep(120)
     const inHand = offhand ? ctx.bot.inventory.slots[45] : ctx.bot.heldItem
     if (!inHand || inHand.name !== name) return false
@@ -109,7 +120,7 @@ const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, 
       ctx.bot.activateItem(offhand)
       const t0 = ctx.gameClock.now()
       startedAt = t0
-      while (ctx.gameClock.now() - t0 < 2400 && ctx.countOf(ctx.bot, name) >= had && !ctx.ctl.aborted && !(abortIf && abortIf())) {
+      while (ctx.gameClock.now() - t0 < 2400 && remaining() >= had && !ctx.ctl.aborted && !(abortIf && abortIf())) {
         if (ctx.FIX && ctx.maceNow()) { dropped = 'mace'; break }
         const decision = evaluate(true)
         if (decision.node === 'CancelOnApproach' || decision.node === 'WaitForWindow') { nodes[decision.node] = (nodes[decision.node] || 0) + 1; dropped = true; break }
@@ -122,13 +133,17 @@ const eatHeld = async (name, abortIf = null, { desperate = false, buff = false, 
       try { ctx.bot.deactivateItem() } catch {}
       if (controls) { ctx.set(controls.key, !ctx.ctl.aborted && controls.was); ctx.set('sprint', !ctx.ctl.aborted && controls.sprint) }
     }
-    const ok = ctx.countOf(ctx.bot, name) < had
+    const ok = remaining() < had
     if (!ok && dropped === 'mace') ctx.maceAbort('глоток')
     else if (!ok && dropped === 'punish') { ctx.st.eatPunish.swaps++; ctx.used('бросил свой глоток — он сам пьёт, наказываю'); if (!ctx.ctl.aborted) onPunish?.() } else if (!ok && dropped) { ctx.tt.stats.aborted++; ctx.used('бросил глоток: ' + (ctx.tt.lastAbort || 'опасно')) }
     return ok
   }
 
 const consumeItem = async (item, abortIf = null, opt: any = {}) => {
+    const key = item.name + ':' + (/potion$/.test(item.name) ? ctx.potionOf(item) : '')
+    const inputs = consumeInputs(item, opt)
+    if (failedConsumes.get(key)?.inputs === inputs) return false
+    if (ctx.itemReady && !ctx.itemReady(item) || ctx.bot._ndUse?.cur) return false
     const previousOff = ctx.bot.inventory.slots[45]
     const enemyReach = ctx.reachFrom(ctx.entity.position.offset(0, ctx.EYE, 0), ctx.bot.entity)
     const hand = consumeHand({ main: ctx.bot.heldItem?.name || null, off: previousOff?.name || null,
@@ -137,12 +152,12 @@ const consumeItem = async (item, abortIf = null, opt: any = {}) => {
       flightStable: !!opt.flightStable && !!ctx.bot.entity.elytraFlying,
       usingMain: !!ctx.bot.usingHeldItem,
       shieldNeeded: enemyReach < 7 && !ctx.fortSealed(), totemNeeded: (ctx.bot.health ?? 20) <= 10 })
-    if (!hand) return false
+    if (!hand) { failedConsumes.set(key, { inputs, why: 'no_safe_consume_hand' }); return false }
     const offhand = hand === 'off-hand'
     let consumed = false
     try {
-      if (offhand) { try { await ctx.bot.equip(item, 'off-hand') } catch { return false } }
-      else if (!(await ctx.holdItem(item))) return false
+      if (offhand) { try { await ctx.bot.equip(item, 'off-hand') } catch { failedConsumes.set(key, { inputs, why: 'equip_rejected' }); return false } }
+      else if (!(await ctx.holdItem(item))) { failedConsumes.set(key, { inputs, why: 'equip_unconfirmed' }); return false }
       consumed = await ctx.eatHeld(item.name, abortIf, { ...opt, offhand })
     } finally {
       if (offhand && previousOff && ctx.countOf(ctx.bot, previousOff.name) > 0) {
@@ -150,6 +165,8 @@ const consumeItem = async (item, abortIf = null, opt: any = {}) => {
         try { await ctx.bot.equip(restored, 'off-hand') } catch {}
       }
     }
+    if (consumed) failedConsumes.delete(key)
+    else failedConsumes.set(key, { inputs: consumeInputs(item, opt), why: ctx.maceNow() ? 'mace' : ctx.punishable() ? 'punish_window' : 'consume_not_confirmed' })
     return consumed
   }
 
@@ -161,22 +178,35 @@ const drink = async (item, what, abortIf = null, opt: any = {}) => {
     return true
   }
 
-const escapePearl = async () => {
+const throwPearl = async (target, options: any = {}) => {
     const pearl = ctx.findItem(ctx.bot, i => i.name === 'ender_pearl')
-    if (!pearl || !ctx.ready('pearl') || !canSurvivePearl(ctx.bot)) return null
-    ctx.rest('pearl', 3000)
+    if (!pearl || ctx.itemReady && !ctx.itemReady(pearl) || !canSurvivePearl(ctx.bot)) return null
+    const quote = () => [ctx.bot.entity.position, ctx.entity.id, ctx.entity.position, pearl.slot, pearl.count,
+      ctx.routeInputs?.(), !!target, ctx.session?._reflexState?.active || null].join('|')
+    const inputs = quote()
+    if (failedPearl?.inputs === inputs) return null
+    const origin = ctx.bot.entity.position.clone()
+    const r = (await ctx.holdItem(pearl)) ? await ctx.throwMod.throwAt(ctx.bot, target, {
+      ...options, item: ctx.bot.heldItem
+    }).catch(() => null) : null
+    if (!r?.thrown) { failedPearl = { inputs: quote(), why: r?.why || 'throw_unconfirmed' }; return r }
+    const start = ctx.gameClock?.now()
+    const arrived = () => ctx.bot.entity.position.distanceTo(origin) > 2 && (!r.land || Math.hypot(ctx.bot.entity.position.x - r.land.x,
+      ctx.bot.entity.position.y - r.land.y, ctx.bot.entity.position.z - r.land.z) < 2)
+    while (start != null && !ctx.ctl?.aborted && !arrived() && ctx.gameClock.now() - start < ((r.ticks || 40) + 2) * ctx.TICK_MS) await ctx.sleep(ctx.TICK_MS)
+    failedPearl = arrived() ? null : { inputs: quote(), why: 'teleport_not_confirmed' }
+    return { ...r, teleported: arrived() }
+  }
+
+const escapePearl = async () => {
     const from = ctx.entity.position.clone()
     ctx.aim = 'free'
-    const r = (await ctx.holdItem(pearl)) ? await ctx.throwMod.throwAt(ctx.bot, null, {
-      item: pearl,
-      jump: 'auto', // S6b pearl-jump
-      pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4 })
-    }).catch(() => null) : null
+    const r = await throwPearl(null, { jump: 'auto',
+      pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4 }) })
     ctx.aim = 'target'
     if (!r?.thrown) { await ctx.holdWeapon(); return null }
     ctx.used('жемчуг: оторвался')
-    await ctx.sleep(900)
-    return { thrown: true, how: 'уход жемчугом', clear: !ctx.tt.threats().some(e => e?.position && e.isValid !== false && e.position.distanceTo(ctx.bot.entity.position) < 8) }
+    return { thrown: true, how: 'уход жемчугом', clear: r.teleported && !ctx.tt.threats().some(e => e?.position && e.isValid !== false && e.position.distanceTo(ctx.bot.entity.position) < 8) }
   }
 
 const buffUp = async (minD = 6, extra: any = []) => {
@@ -214,24 +244,28 @@ const buffUp = async (minD = 6, extra: any = []) => {
   }
 
 const spearChargeFar = async (r0, d0) => {
-    if (!ctx.prof.player || !ctx.seesNow() || (ctx.bot.food ?? 20) <= 6 || !ctx.ready('spearCharge')) return false
+    if (!ctx.prof.player || !ctx.seesNow() || (ctx.bot.food ?? 20) <= 6) return false
     const sp = ctx.spear.spearOf(ctx.bot)
     if (!sp || !ctx.stepSafe(ctx.bot, ctx.keyDir(ctx.bot, 'forward'))) return false
     const me0 = ctx.bot.entity.position
     const v0 = ctx.track.vel()
     const tw = (v0.x * (me0.x - ctx.entity.position.x) + v0.z * (me0.z - ctx.entity.position.z)) / Math.max(d0, 0.1)
     if (!ctx.spear.chargeWindow(sp.item.name, r0, tw)) return false
-    ctx.rest('spearCharge', 3000)
+    const inputs = [ctx.routeInputs?.(), ctx.bot.entity.position.floored(), ctx.entity.id, ctx.entity.position.floored(), sp.item.name,
+      ctx.session?._reflexState?.active || null].join('|')
+    if (failedFarCharge?.inputs === inputs) return false
     if (!ctx.bot.heldItem || ctx.bot.heldItem.name !== sp.item.name) await ctx.holdItem(sp.item)
     if (ctx.guard) await ctx.guard.raise(false)
     ctx.aim = 'free'
     const hpS = ctx.healthOf(ctx.bot, ctx.entity)
     const ch = await ctx.spear.charge(ctx.bot, ctx.ctl, ctx.entity, { maxMs: 1800, safe: k => ctx.stepSafe(ctx.bot, ctx.keyDir(ctx.bot, k)), vel: () => ctx.track.vel(), onHit: () => { ctx.st.landed++ } })
+    failedFarCharge = ch.hit ? null : { inputs: [ctx.routeInputs?.(), ctx.bot.entity.position.floored(), ctx.entity.id, ctx.entity.position.floored(), sp.item.name,
+      ctx.session?._reflexState?.active || null].join('|'), why: ch.why || 'charge_missed' }
     ctx.aim = 'target'
     ctx.st.spearCharges = (ctx.st.spearCharges || 0) + 1
     if (ch.hit) ctx.st.spearChargeHits = (ctx.st.spearChargeHits || 0) + 1
     ctx.used(ch.hit ? `разгон копьём — попал (${hpS != null && ctx.healthOf(ctx.bot, ctx.entity) != null ? Math.round((hpS - ctx.healthOf(ctx.bot, ctx.entity)) * 10) / 10 : '?'} хп)` : `разгон копьём — мимо (${ch.why || 'время'})`)
     return true
   }
-return { punishable, eatHeld, consumeItem, drink, escapePearl, buffUp, spearChargeFar }
+return { punishable, eatHeld, consumeItem, drink, throwPearl, escapePearl, buffUp, spearChargeFar }
 }

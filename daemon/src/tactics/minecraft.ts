@@ -1,5 +1,5 @@
 import { TacticalArbiter } from './arbiter'
-import { S4D, piglinNiche, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
+import { S4D, digDownCost, piglinNiche, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
 import { EscapeProgress, type EscapeObservation } from './escape-progress'
 import { lavaCapabilities, inLava, drinkFireResistance, climbFromLava } from './lava-escape'
 import { createEmergencyEscape, lavaFallFloor } from '../combat/emergency-escape'
@@ -58,7 +58,10 @@ function exitsNear(bot: MinecraftEntity): { route: boolean; signature: string } 
     let y = 0
     for (let distance = 1; distance <= 3 && open; distance++) {
       const point = feet.offset(dx * distance, 0, dz * distance)
-      facts.push([-1, 0, 1].map(dy => bot.blockAt(point.offset(0, dy, 0))?.name ?? 'unknown').join('/'))
+      facts.push([-1, 0, 1].map(dy => {
+        const block = bot.blockAt(point.offset(0, dy, 0))
+        return block ? `${block.name}:${block.boundingBox}:${JSON.stringify(block.shapes || [])}` : 'unknown'
+      }).join('/'))
       const step = [0, 1, -1, -2].find(dy => {
         const at = point.offset(0, y + dy, 0)
         const room = dy === 1 ? clear(bot.blockAt(feet.offset(dx * (distance - 1), y + 2, dz * (distance - 1))))
@@ -97,8 +100,32 @@ export function dropBehind(bot: MinecraftEntity, from: { x: number; z: number })
 export const FLEE_SAFE_DISTANCE = 17
 export const EXHAUSTION_HOLD_MS = 400
 export const FIGHT_RECOVERY_HP = 4
-export const UNREACHABLE_MS = 20000
 const IDLE_COOLED = new Set<ActionId>(['Fight', 'LastStand', 'Hide', 'Heal', 'BlockOff', 'PillarUp', 'DigDown'])
+
+interface UnreachableContact { entity: MinecraftEntity; dimension: string; facts: string }
+function contactFacts(bot: MinecraftEntity, entity: MinecraftEntity): string {
+  const tools = bot.inventory.items().filter((item: MinecraftEntity) => /_(sword|axe|pickaxe|spear)$|^trident$|^mace$/.test(item.name) &&
+    (itemTools ??= require('../items')).usesLeft(item) >= 4)
+    .map((item: MinecraftEntity) => item.name + ':' + JSON.stringify(item.enchants || []))
+  return [bot.entity.position.floored(), entity.position.floored(), exitsNear(bot).signature, [...new Set(tools)].sort().join(',')].join('|')
+}
+function rememberUnreachable(session: MinecraftSession, entity: MinecraftEntity): void {
+  if (!entity || entity.isValid === false) return
+  const entries: Map<number, UnreachableContact> = session._ndUnreachable ||= new Map()
+  const bot = session.bot, dimension = String(bot.game?.dimension || '')
+  for (const [id, entry] of entries) if (bot.entities[id] !== entry.entity || entry.entity.isValid === false || entry.dimension !== dimension) entries.delete(id)
+  entries.set(entity.id, { entity, dimension, facts: contactFacts(bot, entity) })
+}
+function unreachableContact(session: MinecraftSession, entity: MinecraftEntity): boolean {
+  const entries: Map<number, UnreachableContact> | undefined = session._ndUnreachable
+  const entry = entries?.get(entity.id), bot = session.bot
+  if (!entry) return false
+  if (entry.entity !== entity || entity.isValid === false || entry.dimension !== String(bot.game?.dimension || '')) { entries!.delete(entity.id); return false }
+  // Hidden movement is not new information about the failed contact.
+  if (!pick.aim(bot, entity, { range: 16 })?.point) return true
+  if (entity.position.distanceTo(bot.entity.position) <= 4 || contactFacts(bot, entity) !== entry.facts) { entries!.delete(entity.id); return false }
+  return true
+}
 
 export interface TacticalSnapshot {
   threatLevel: ThreatLevel
@@ -145,9 +172,8 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const attacker = struck && struck !== bot.entity && struck.isValid !== false && (struck.username || /^(enderman|piglin|zombified_piglin)$/.test(struck.name)) ? struck : null
   // A piglin with an attack target (mob_flags, no gold on us) is a threat on sight, not on its first strike: the shield needs
   // 5 ticks, and a fight that began at 2 blocks took the first 8 hp before it every time (try-lab-ne-piglin 14.10).
-  // One the duel could not reach is no sight threat for a while, unless it comes to the body (UNREACHABLE_MS above).
-  const unreachable = (entity: MinecraftEntity) => ((session._ndUnreachable as Map<number, number> | undefined)?.get(entity.id) ?? -Infinity) > at &&
-    entity.position.distanceTo(bot.entity.position) > 4
+  // A failed contact is retried after a changed visible stance, route or tool, or on arrival at the body.
+  const unreachable = (entity: MinecraftEntity) => unreachableContact(session, entity)
   const angry: MinecraftEntity[] = /nether/.test(dimension) && process.env.ND_PIGLIN_SIGHT !== '0'
     ? (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => /^(piglin|zombified_piglin)$/.test(entity.name || '') && !unreachable(entity) && !!pick.aim(bot, entity, { range: 16 })?.point) : []
   const inspected = safety.inspect(bot, { target: target ?? (attacker && !unreachable(attacker) ? attacker : null) ?? angry[0] ?? null })
@@ -173,7 +199,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   for (const entity of Object.values(bot.entities || {}) as MinecraftEntity[]) {
     if (!entity?.username || entity === bot.entity || seen.has(entity.id) || !entity.position) continue
     const distance = entity.position.distanceTo(bot.entity.position)
-    if (distance <= 16) enemies.push({ id: entity.id, kind: entity.username, distance, player: true, threatening: false })
+    if (distance <= 16) enemies.push({ id: entity.id, kind: entity.username, distance, player: true, threatening: false, ...((session._ndFoes as string[] | undefined)?.includes(entity.username) ? { foe: true } : {}) })
   }
   let incomingProjectiles = 0
   try { incomingProjectiles = (threats ??= require('../threats')).incoming(bot).filter((projectile: MinecraftEntity) => projectile.ticks <= 10).length } catch {}
@@ -285,13 +311,13 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   }
   const choice = refuge ? survival.chooseRefuge(refuge) : null
   const shelter = choice?.how === 'box' || choice?.how === 'niche' ? 'BlockOff' : choice?.how === 'pillar' ? 'PillarUp' : choice?.how === 'hole' ? 'DigDown' : choice?.how === 'pocket' ? 'Hide' : null
-  // The open three-block shaft admits an Enderman until its roof closes. Price
-  // every dig/sink and that supported roof, including the final incoming hit.
-  const digDownMs = shelter === 'DigDown' && refuge?.hole ? refuge.hole.ms + require('../fortify').refugeBuildMs({ blocks: 1, roofSolid: false, leans: true }) : 0
-  const digDownCostHp = shelter === 'DigDown' && refuge?.hole && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman') ? enemies.reduce((cost, enemy) => {
-    const every = require('../assess').MOBS[enemy.kind]?.every
-    return cost + (enemy.threatening && enemy.distance <= 4.5 && every ? (enemy.hit ?? 0) * Math.ceil(digDownMs / (every * 1000)) : 0)
-  }, 0) : undefined
+  // Every dig/sink is priced by the hits of the walkers that reach the body meanwhile (state.digDownCost). The open
+  // three-block shaft admits an Enderman until its roof closes: with one near, the supported roof is part of the dig.
+  const enderman = enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')
+  const digDownMs = shelter === 'DigDown' && refuge?.hole ? refuge.hole.ms + (enderman ? require('../fortify').refugeBuildMs({ blocks: 1, roofSolid: false, leans: true }) : 0) : 0
+  const MOBS = require('../assess').MOBS
+  const digDownCostHp = shelter === 'DigDown' && refuge?.hole ? digDownCost(enemies.filter(enemy => enemy.threatening && !MOBS[enemy.kind]?.ranged && enemy.distance <= 12)
+    .map(enemy => ({ kind: enemy.kind, distance: enemy.distance, hit: enemy.hit, everyMs: (MOBS[enemy.kind]?.every ?? 0) * 1000 })), digDownMs) : undefined
   const ground = exitsNear(bot)
   const rescue = lava || lavaEscapePending || hotFloor || burning && !fireResistance ? lavaCapabilities(session) : { potion: false, climb: false, exit: '' }
   const air = lava || lavaAhead ? createEmergencyEscape(bot, { away: () => bot.entities[hostile[0]?.id]?.position }).snapshot() : { flightReady: false, pearlReady: false, landing: null }
@@ -363,7 +389,7 @@ function shieldCanContinue(state: TacticalState | null): state is TacticalState 
 }
 
 const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
-function commandedEscape(session: any): boolean { const c = session.current; return !!c && !c.ctl?.aborted && COMMANDED_ESCAPE.test(c.name || '') }
+function commandedEscape(session: any): boolean { const c = session.current; return !!c && !c.ctl?.aborted && (COMMANDED_ESCAPE.test(c.name || '') || locks.protectedClimb(session)) }
 
 export class TacticalSystem {
   private readonly ports: TacticalPorts
@@ -528,7 +554,8 @@ export class TacticalSystem {
     }
     // Losing contact while a wall is placed must not cancel bounded defence for Shield. A flight runs to its own safe
     // distance: released at the 16-block sight edge, a pursuer still inside its FOLLOW_RANGE walked back into contact.
-    if (this.pending && (decision.level <= 1 && ['Fight', 'LastStand', 'BlockOff', 'PillarUp', 'DigDown', 'Hide'].includes(this.episode?.action.id || '') ||
+    // A calm sample is not the server receipt of a pending bite or recovery.
+    if (this.pending && (decision.level <= 1 && ['Fight', 'LastStand', 'BlockOff', 'PillarUp', 'DigDown', 'Hide', 'Heal', 'Eat'].includes(this.episode?.action.id || '') ||
       decision.level === 0 && ['FreeEmbedded', 'FlightEscape', 'PearlEscape', 'ClimbOut', 'WebBoatEscape', 'BoatLavaHop', 'Flee', 'CreateDistance'].includes(this.episode?.action.id || ''))) {
       if (this.episode) this.arbiter.hold(this.episode.action)
       return
@@ -683,10 +710,10 @@ export class TacticalSystem {
       case 'LastStand': {
         const result = await require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined,
           allowPlayer: enemy?.player, timeoutSeconds: 15, lastStand: true, retreatAtHealth: 0, purpose: 'defense' })
-        // A whole stand without a swing (a crossbow piglin across a gap): it is no melee target for a while (c15-5-1 14.10: five
+        // A whole stand without a swing (a crossbow piglin across a gap): retry only after contact conditions change (c15-5-1 14.10: five
         // stands of 15 s at a shooter 5 blocks off, 9 -> 0 hp).
         if (enemy && !enemy.player && /nether/.test(String(bot.game?.dimension || '')) && result && typeof result === 'object' && !ctl.aborted &&
-            !(result as { swings?: number }).swings && !((result as { kills?: unknown[] }).kills || []).length) (session._ndUnreachable ||= new Map()).set(enemy.id, clock.now() + UNREACHABLE_MS)
+            !(result as { swings?: number }).swings && !((result as { kills?: unknown[] }).kills || []).length) rememberUnreachable(session, bot.entities[enemy.id])
         return result
       }
       case 'Fight': {
@@ -700,22 +727,29 @@ export class TacticalSystem {
         if (/nether/.test(String(bot.game?.dimension || '')) && enemy) {
           const entity = bot.entities[enemy.id]
           const result = await guard.react(session, ctl, { force: { e: entity, why: 'tactical fight' }, _owned: true, duelMs: 15000, sitMs: 8000 })
-          // Not reached in the whole duel (across a gap, a crossbow out of a sword's reach): 20 s it is no target of a fight -
+          // Not reached in the whole duel (across a gap, a crossbow out of a sword's reach): remember the failed contact -
           // c13-5-3 14.10: a piglin at 8 blocks behind a drop, Fight "out of reach" 179 times a minute, 90 minutes of the run gone.
-          if (result?.duel?.stopped === 'не достать' && !result.duel.swings) (session._ndUnreachable ||= new Map()).set(enemy.id, clock.now() + UNREACHABLE_MS)
+          if (!ctl.aborted && result?.duel?.stopped === 'не достать' && !result.duel.swings) rememberUnreachable(session, entity)
           return result
         }
         return require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined, allowPlayer: enemy?.player, timeoutSeconds: 15, engaged: true })
       }
       case 'Dodge':
+        // Primed TNT: run - out of its 8 blocks in a 2 s sprint of the 4 s fuse. The shield faces one source, and a TNT on the
+        // other side killed the shielded bot (arena 16.10, user: «не щитом надо прикрываться, а убегать»). The shield only
+        // when the run has nowhere to go.
+        if (state.blast === 'tnt') {
+          const ran = await dodgeBlast(session, ctl)
+          return ran.cornered && state.shield && !ctl.aborted ? shieldBlast(session, ctl) : ran
+        }
         // S4d: with a shield the blast is taken on it, facing the source (tactics/blast.ts shieldBlast) - unless a fall waits
         // behind the body: the explosion knockback still applies to a blocking player (ServerExplosion.hurtEntities pushes
         // every entity whose damage was not cancelled).
         if (S4D() && state.shield && state.blast !== 'falling_block') {
           const source = shieldableBlast(bot)
-          if (source && !dropBehind(bot, source.entity.position)) return shieldBlast(session, ctl, { maxMs: 4000 })
+          if (source && !dropBehind(bot, source.entity.position)) return shieldBlast(session, ctl)
         }
-        return state.blast ? dodgeBlast(session, ctl, { maxMs: state.blast === 'charged_creeper' ? 5000 : 4000 }) : survival.dodgeCreeper(session, ctl, {})
+        return state.blast ? dodgeBlast(session, ctl) : survival.dodgeCreeper(session, ctl, {})
       case 'Flee': case 'CreateDistance':
         // Lava: the swim out. Burning on dry ground: a water bucket puts it out (escapeFire pours it); without one a run does
         // not, and escapeFire's blind 1.2 s sprint-jump toward the nearest floor cell went over platform and bridge edges

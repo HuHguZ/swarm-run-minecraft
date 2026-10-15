@@ -1003,6 +1003,10 @@ function pushPlan (bot, e, { sees = true, theyUp = false, busy = null, closing =
   if (dist < 2.2 || dist > 14) return null
   const have = windCount(bot)
   if (knockOff(bot, e, { blocking })) return { why: 'в яму' }
+  // Заряд — к булаве (пользователь 14.10: «грозу ветра сливают, просто стреляют в игрока ей, хотя надо с булавой
+  // комбинировать»): с булавой толкать — только насмерть, остальное — на подброс и удар сверху; без неё — толчки только
+  // с трёх зарядов, один-два — на выход из ямы.
+  if (countOf(bot, 'mace') > 0 || have < 3) return null
   if (theyUp && dist < 12) return { why: 'со столба' }
   if (busy && have >= 2 && dist > 3.6) return { why: busy }
   if (closing > 0.18 && dist < 6 && dist > 2.8 && cooldownLeft > 300 && have >= 3) return { why: 'сбил рывок' }

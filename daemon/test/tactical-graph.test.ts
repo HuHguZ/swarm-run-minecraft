@@ -40,11 +40,10 @@ test('fight graph is interrupted by a critical refuge, then healing and strategi
   assert.equal(critical.change, true)
   const healing = arbiter.decide(state({ at: 650, enemies: [{ ...enemy, distance: 10 }], health: 5, cover: true }))
   assert.equal(healing.selected?.id, 'Heal')
-  assert.equal(arbiter.decide(state({ at: 800, health: 16 })).release, false)
-  assert.equal(arbiter.decide(state({ at: 1100, health: 16 })).release, true)
+  assert.equal(arbiter.decide(state({ at: 650, health: 16 })).release, true, 'confirmed calm releases without a timer tail')
 })
 
-test('utility hysteresis retains a valid action but escalation skips its hold time', () => {
+test('utility hysteresis retains a valid action but an emergency bypasses commitment', () => {
   const arbiter = new TacticalArbiter()
   assert.equal(arbiter.decide(state({ contact: true, enemies: [enemy] })).selected?.id, 'Fight')
   const modest = arbiter.decide(state({ at: 150, contact: true, enemies: [enemy], shelter: 'BlockOff' }))
@@ -52,6 +51,42 @@ test('utility hysteresis retains a valid action but escalation skips its hold ti
   const explosion = arbiter.decide(state({ at: 200, contact: true, enemies: [enemy], explosion: true }))
   assert.equal(explosion.selected?.id, 'Dodge')
   assert.equal(explosion.change, true)
+})
+
+test('a materially better available action starts immediately, independent of the clock', () => {
+  for (const at of [0, 500, 3000, 15000, 60000]) {
+    const arbiter = new TacticalArbiter()
+    const threatened = state({ contact: true, enemies: [enemy], health: 12 })
+    assert.equal(arbiter.decide(threatened).selected?.id, 'Fight')
+    const shelter = arbiter.decide({ ...threatened, at, cover: true })
+    assert.equal(shelter.selected?.id, 'Heal', `real cover is useful immediately at ${at}`)
+  }
+})
+
+test('the same critical threat does not restart a running action after an arbitrary clock jump', () => {
+  const arbiter = new TacticalArbiter()
+  const hot = state({ health: 8, burning: true, contact: true, canFight: false, shelter: 'BlockOff',
+    enemies: [{ ...enemy, distance: 4.6 }] })
+  const first = arbiter.decide(hot).selected?.id
+  arbiter.decide({ ...hot, health: 9, at: 500 })
+  const again = arbiter.decide({ ...hot, at: 60000 })
+  assert.equal(again.selected?.id, first); assert.equal(again.change, false)
+  const newcomer = arbiter.decide({ ...hot, at: 60000, enemies: [{ ...enemy, id: 3 }] })
+  assert.equal(newcomer.change, true, 'a newly observed critical attacker is new information')
+})
+
+test('returning by preference keeps its score margin until the run ends or the alternative really improves', () => {
+  const arbiter = new TacticalArbiter(), threatened = state({ contact: true, enemies: [enemy] })
+  let fight = 100, heal = 90
+  arbiter.graph.candidates = () => [{ id: 'Fight', score: fight, reason: 'contact' }, { id: 'Heal', score: heal, reason: 'cover' }]
+    .sort((a, b) => b.score - a.score) as any
+  assert.equal(arbiter.decide(threatened).selected?.id, 'Fight')
+  heal = 180
+  assert.equal(arbiter.decide({ ...threatened, at: 3000 }).selected?.id, 'Heal')
+  fight = 210
+  for (const at of [3500, 6000, 60000]) assert.equal(arbiter.decide({ ...threatened, at }).selected?.id, 'Heal')
+  fight = 260
+  assert.equal(arbiter.decide({ ...threatened, at: 60000 }).selected?.id, 'Fight', 'the margin is a price, not a permanent ban')
 })
 
 test('airborne emergency releases movement actions to the tick controller', () => {

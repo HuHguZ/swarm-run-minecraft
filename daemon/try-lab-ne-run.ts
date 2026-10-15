@@ -75,7 +75,13 @@ const KITS = {
   // chests/ruined_portal 4–8 бросков, 60/398 на бросок) — мерка цены золота на входе.
   lsgold: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'shield', 'golden_boots', 'water_bucket', 'bucket', 'flint_and_steel',
     'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
-    'white_bed', 'obsidian 10', 'iron_ingot 1']
+    'white_bed', 'obsidian 10', 'iron_ingot 1'],
+  // contract — набор на входе по договору с агентом построек (координатор 14.10): ведро, огниво, 2 кирки, меч, щит, жареная еда,
+  // 64 булыжника, верстак; contractgold — то же с золотыми ботинками из построек верхнего мира. Досок и палок нет.
+  contract: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'cooked_mutton 8',
+    'cobblestone 64', 'crafting_table'],
+  contractgold: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table']
 }
 const KIT = KITS[KIT_NAME]
 if (!KIT) { console.error(`KIT=${KIT_NAME}: жду ${Object.keys(KITS).join(', ')}`); process.exit(1) }

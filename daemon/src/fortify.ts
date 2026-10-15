@@ -156,7 +156,7 @@ function boxPlan (cell, toward, roof) {
   return plan
 }
 
-function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true }: any = {}) {
+function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true, material = null }: any = {}) {
   const need = refugeNeed(bot, cell), plan = boxPlan(cell, toward, roof)
   if (!need) return { ok: false, why: 'клетка не закрывается целыми стенами', plan, blocks: Infinity, ms: Infinity }
   const pick = require('./pick'), predicted = new Map(), center = cell.offset(.5, 0, .5)
@@ -177,16 +177,17 @@ function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true }: an
     if (!FACES.some(face => pick.faceAim(view, p.minus(face), face, { eye }))) return { ok: false, why: 'нет видимой опоры стены или крыши', plan, blocks, ms: Infinity }
     predicted.set(p.toString(), { name: 'dirt', boundingBox: 'block', position: p, shapes: [[0, 0, 0, 1, 1, 1]] }); blocks++
   }
-  const filler = pickFiller(bot, { steady: true })
-  const have = bot.inventory.items().filter(i => i.name === filler?.name || HARD.includes(i.name)).reduce((n, i) => n + i.count, 0)
+  // Строят выбранным материалом (коробка кемпера) — его запас и считать (Codex 15.10: земля ×10 + булыжник — «не хватит»).
+  const filler = material ? { name: material } : pickFiller(bot, { steady: true })
+  const have = bot.inventory.items().filter(i => i.name === filler?.name || !material && HARD.includes(i.name)).reduce((n, i) => n + i.count, 0)
   if (have < blocks) return { ok: false, why: 'не хватит блоков закрыть все стены и крышу', plan, blocks, ms: Infinity }
   return { ok: true, plan, blocks, ms: refugeBuildMs({ ...need, blocks }) }
 }
 
 // Every cell must have an honest construction route before the body puts its weapon away.
-async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs = 700, hard = true, abortIf = null }: any = {}) {
-  const cell = feetCell(bot), check = boxCheck(bot, { cell, toward, roof }), plan = check.plan
-  const mats = hard ? boxMaterials(bot, plan) : plan.map(() => null)
+async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs = 700, hard = true, abortIf = null, material = null }: any = {}) {
+  const cell = feetCell(bot), check = boxCheck(bot, { cell, toward, roof, material }), plan = check.plan
+  const mats = material ? plan.map(() => material) : hard ? boxMaterials(bot, plan) : plan.map(() => null)
   let placed = 0
   const failed = []
   let why = check.ok ? null : check.why, wake
@@ -211,7 +212,7 @@ async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs =
             guard(); if (local.aborted) break
             const item = mats[i] && countItem(bot, mats[i]) > 0 ? mats[i] : null
             const r = roof && i === plan.length - 2 && !solidAt(bot, p)
-              ? await jumpPlace(bot, p, { ctl: local, timeoutMs })
+              ? await jumpPlace(bot, p, { ctl: local, timeoutMs, item })
               : await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, ctl: local })
             if (local.aborted) break
             if (r.ok && !r.already) placed++

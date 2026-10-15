@@ -161,13 +161,15 @@ function faceAim (bot, refPos, face, { eye = null, range = 4.5, avoid = null }: 
   const o = eye || eyeOf(bot)
   const others = avoid || (Object.values(bot.entities || {}) as any[]).filter((e : any) => e && e !== bot.entity && e.position && LIVING.test(e.name || e.type || '') && e.position.distanceTo(o) < 6)
   const axis = face.x ? 'x' : face.y ? 'y' : 'z'
-  const plane = refPos[axis] + (face[axis] > 0 ? 1 : 0)
   const us = axis === 'x' ? ['y', 'z'] : axis === 'y' ? ['x', 'z'] : ['x', 'y']
-  for (const [a, b] of [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8], [0.5, 0.15], [0.5, 0.85], [0.15, 0.5], [0.85, 0.5]]) {
+  const i = 'xyz'.indexOf(axis), u = 'xyz'.indexOf(us[0]), v = 'xyz'.indexOf(us[1])
+  // Грань — по контуру блока, а не куба: верх нижней плиты — y+0.5 (Codex 15.10: ямы на крыше-террасе «occluded» — прицел
+  // искал плоскость y+1, где плиты нет).
+  for (const box of shapesOf(bot.blockAt(refPos)) || FULL) for (const [a, b] of [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8], [0.5, 0.15], [0.5, 0.85], [0.15, 0.5], [0.85, 0.5]]) {
     const p = { x: 0, y: 0, z: 0 }
-    p[axis] = plane
-    p[us[0]] = refPos[us[0]] + a
-    p[us[1]] = refPos[us[1]] + b
+    p[axis] = refPos[axis] + box[i + (face[axis] > 0 ? 3 : 0)]
+    p[us[0]] = refPos[us[0]] + box[u] + (box[u + 3] - box[u]) * a
+    p[us[1]] = refPos[us[1]] + box[v] + (box[v + 3] - box[v]) * b
     const P = new Vec3(p.x, p.y, p.z)
     const delta = P.minus(o)
     const len = delta.norm()

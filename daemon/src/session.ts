@@ -462,7 +462,11 @@ class Session {
       movements.exclusionAreasPlace.push(cost)
       movements.exclusionAreasBreak.push(cost)
       const neighbors = movements.getNeighbors.bind(movements)
-      movements.getNeighbors = node => neighbors(node).filter(n => within(bot, { x: n.x + .5, y: n.y, z: n.z + .5 }, arena))
+      movements.getNeighbors = node => {
+        const p = bot.entity.position
+        const from = node.x === Math.floor(p.x) && node.y === Math.floor(p.y) && node.z === Math.floor(p.z) ? p : { x: node.x + .5, y: node.y, z: node.z + .5 }
+        return neighbors(node).filter(n => within(bot, { x: n.x + .5, y: n.y, z: n.z + .5 }, arena, from))
+      }
     }
     movements.exclusionAreasStep.push(blk => this.stuckPenalty(blk))
     bot.pathfinder.setMovements(movements)
@@ -645,6 +649,8 @@ class Session {
         if (typed) hit = null
         // Принятый урон падения спуска (navigation/descent.ts, гибкость): не рвать им goto.
         const planned = bot._ndExpectFall && gameClock.now() < bot._ndExpectFall.until && last - hp <= bot._ndExpectFall.max && (!typed || typed.cause === 'fall')
+        // Журнал урона (разбор смертей 15.10: «откуда 20 → 7 на 2-й минуте» не восстанавливался): причина, кто, что делал, где.
+        if (process.env.ND_HURT_LOG !== '0') { const p = bot.entity?.position; console.log('[hurt] ' + JSON.stringify({ lost: Math.round((last - hp) * 10) / 10, hp: Math.round(hp * 10) / 10, cause: typed?.cause || null, by: typed?.source || null, doing: this.current?.name || null, at: p ? [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)] : null, t: Math.round(gameClock.now() / 1000) })) }
         if (planned) console.log('[descent] принятый урон падения', JSON.stringify({ lost: last - hp, hp }))
         else this.bus.emit('damage', { health: Math.round(hp), lost: Math.round(last - hp), ...(typed ? { cause: typed.cause, ...(typed.source ? { source: typed.source } : {}) } : {}) })
       }
@@ -869,11 +875,14 @@ class Session {
 
   // ------------------------------------------------------------ intent runner
 
-  cancel () {
-    for (const cancel of (this as any)._prestartIntents || []) cancel()
+  // by — кто перебил (имя нового намерения, 'stop'): в журнале «interrupted {type: cancelled, by}» (Codex 15.10: 151 из 282
+  // отменённых боёв стенда — 0/0 до первого взмаха, отправитель не был виден). Первая причина (тактика) не затирается.
+  cancel (by = 'cancel') {
+    for (const cancel of (this as any)._prestartIntents || []) cancel(by)
     require('./reflex-lock').cancel(this)
     this.followGoal = null
     if (this.current) {
+      this.current.ctl.interruptedBy ||= { type: 'cancelled', by }
       this.current.ctl.abort()
       this.current = null
     }
@@ -915,21 +924,27 @@ class Session {
   }
 
   // runIntent's clock ran out, and on an abort it throws — so the report was
-  goto ({ x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena }: any) {
+  goto ({ x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena, climb, exactY }: any) {
     // Validate before runIntent can cancel another action or change its movement settings.
     let boundedArena
     if (arena !== undefined) {
       const bot = this.require(), target = { x: Number(x), y: y == null ? bot.entity.position.y : Number(y), z: Number(z) }
       if (!arena || typeof arena !== 'object' || ![target.x, target.y, target.z].every(Number.isFinite)) throw Object.assign(new Error('invalid arena goto'), { code: 'ARENA_BOUNDARY' })
-      boundedArena = Object.freeze({ ...arena })
+      if (arena.avoid !== undefined && (!Array.isArray(arena.avoid) || !arena.avoid.every(e => e && [e.x, e.y, e.z, e.r].every(Number.isFinite) && e.r >= 0))) throw Object.assign(new Error('invalid arena avoid'), { code: 'ARENA_BOUNDARY' })
+      const start = bot.entity.position
+      // A bot already near a threat may stand or leave, but must not get any closer.
+      const avoid = arena.avoid?.map(e => Object.freeze({ ...e, r: Math.min(e.r, Math.hypot(start.x - e.x, start.y - e.y, start.z - e.z)) }))
+      boundedArena = Object.freeze({ ...arena, ...(avoid ? { avoid: Object.freeze(avoid) } : {}) })
       const within = require('./navigation/parkour').withinArena
       if (!within(bot, target, boundedArena) || !within(bot, { ...target, x: Math.floor(target.x) + .5, z: Math.floor(target.z) + .5 }, boundedArena)) throw Object.assign(new Error('goto target is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
     }
+    const avoiding = !!boundedArena?.avoid?.length
     const secs = Math.max(5, Math.min(600, timeoutSeconds))
     return this.runIntent('goto', async (ctl) => {
       const bot = this.require()
       const previousArena = this.gotoArena, previousStrict = this.surfaceStrict
       const previousSurface = this.surfaceWalk, previousY = this.pathGoalY
+      const previousThinkTimeout = bot.pathfinder.thinkTimeout
       let boundaryError, rejectBounds, restored = false
       const boundsFailure = new Promise((resolve, reject) => { rejectBounds = reject })
       boundsFailure.catch(() => {})
@@ -939,6 +954,7 @@ class Session {
         if (this.gotoArena !== boundedArena) return
         this.gotoArena = previousArena; this.surfaceStrict = previousStrict
         this.surfaceWalk = previousSurface; this.pathGoalY = previousY
+        if (avoiding) bot.pathfinder.thinkTimeout = previousThinkTimeout
         this.updateMovements(true)
       }
       const checkBounds = () => {
@@ -947,21 +963,23 @@ class Session {
         let next = bot.entity.position
         try {
           if (bot.physics?.simulatePlayer && bot.entity.velocity) next = parkour.simulatePlan(bot, [{ yaw: bot.entity.yaw ?? 0, control: { ...parkour.IDLE, ...bot.controlState } }]).pos
-          if (parkour.withinArena(bot, bot.entity.position, boundedArena) && parkour.withinArena(bot, next, boundedArena)) return
+          if (parkour.withinArena(bot, bot.entity.position, boundedArena) && parkour.withinArena(bot, next, boundedArena, bot.entity.position)) return
           boundaryError = Object.assign(new Error('next physical step leaves arena bounds'), { code: 'ARENA_BOUNDARY' })
         } catch (err) { boundaryError = Object.assign(new Error('cannot verify next arena step: ' + err.message), { code: 'ARENA_BOUNDARY' }) }
         rejectBounds(boundaryError)
         try { bot.pathfinder.setGoal(null); bot.clearControlStates() } catch {}
       }
       if (boundedArena) {
-        this.gotoArena = boundedArena; this.surfaceStrict = true
+        // В границах арены — по поверхности (без копания и столбов), кроме подъёма к цели (climb, пользователь 14.10: «залез
+        // наверх — не строятся»): столбы из своих блоков и прокоп разрешены, границы те же.
+        this.gotoArena = boundedArena; this.surfaceStrict = !climb
         ctl.onAbort.push(restoreBounds); bot.on('physicsTick', checkBounds)
       }
       try {
       checkBounds()
       if (boundaryError) throw boundaryError
       const deadline = gameClock.now() + secs * 1000
-      const strict = surface === 'strict' || !!boundedArena
+      const strict = surface === 'strict' || !!boundedArena && !climb
       // Мост на ходу на этот переход (сцены A/B на одном демоне): bridge true/false поверх ND_BRIDGE; не задан —
       // как в окружении. Держится до следующего goto.
       this.bridgeWanted = typeof bridge === 'boolean' ? bridge : undefined
@@ -972,7 +990,7 @@ class Session {
       this.gotoTarget = bot.entity ? new Vec3(Math.floor(x) + 0.5, y == null ? bot.entity.position.y : Number(y), Math.floor(z) + 0.5) : null
       // Пустой частичный результат поиска — ждать продолжения, а не «дошёл» (movement.gotoGoal): ND_GOTO_WAIT=1,
       // pathWait:true или мост на ходу (обход и мост ищутся дольше 40 мс первого тика).
-      const waitPartial = typeof pathWait === 'boolean' ? pathWait : (gotoWaitOn() || !!(this.bridgeWanted ?? blockmoves.on()))
+      const waitPartial = avoiding || (typeof pathWait === 'boolean' ? pathWait : (gotoWaitOn() || !!(this.bridgeWanted ?? blockmoves.on())))
       if (this.bridgeWanted) blockmoves.install(this)
       this.updateMovements()
       // Лестница выхода из застреваний (unstuck.js): ND_UNSTUCK или goto { unstuck }; только в новом goto (gotoGoal).
@@ -993,7 +1011,9 @@ class Session {
         goal = new goals.GoalNearXZ(bx, bz, Math.max(1, range))
         resolvedTo = { x: bx, y: null, z: bz, mode: 'xz' }
       } else {
-        const yy = standableY(bot, bx, Math.floor(y), bz) ?? (strict ? Math.floor(y) : null)
+        // exactY — ровно на эту высоту, хоть в воздух (столбик к цели на краю крыши): standableY нашёл бы пол ниже, и «дошёл»
+        // засчитывался внизу (Codex 15.10, паузы стенда «-2.5 по высоте»).
+        const yy = exactY && climb ? Math.floor(y) : standableY(bot, bx, Math.floor(y), bz) ?? (strict ? Math.floor(y) : null)
         if (yy === null) {
           goal = new goals.GoalNearXZ(bx, bz, Math.max(2, range))
           resolvedTo = { x: bx, y: null, z: bz, mode: 'xz (нет места встать на заданной высоте)' }
@@ -1063,7 +1083,13 @@ class Session {
         const onReset = (reason) => {
           if (reason === 'place_error' && ++placeErrors >= 6) failPlace(new Error('блок под ноги не ставится — шесть отказов подряд, этот путь не работает'))
         }
+        const onPath = r => {
+          // Исчерпан поиск — нет пути в обход; «timeout» с частичным путём — идти по нему (соседи уже вне зоны врага): со срезом
+          // 250 мс и отказом на timeout лутающие стояли — путь по колизею в 40 бл. не находился (стенд 15.10: 11–18 сбросов сторожа).
+          if (avoiding && (r?.status === 'noPath' || r?.status === 'timeout' && !r.path?.length)) failPlace(Object.assign(new Error('no route outside enemy clearance: ' + r.status), { code: 'AVOID_NO_PATH' }))
+        }
         bot.on('path_reset', onReset)
+        if (avoiding) bot.on('path_update', onPath)
         let pathRequest
         const cancelPath = () => pathRequest?.cancel?.()
         ctl.onAbort.push(cancelPath)
@@ -1084,16 +1110,17 @@ class Session {
           if (index >= 0) ctl.onAbort.splice(index, 1)
           failDescent = null
           bot.removeListener('path_reset', onReset)
+          if (avoiding) bot.removeListener('path_update', onPath)
           this.surfaceWalk = false
           this.pathGoalY = null
-          this.surfaceStrict = !!boundedArena
+          this.surfaceStrict = !!boundedArena && !climb
           if (strict && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
           guard.stop()
         }
       }
 
       const plan = [{ goal, mode: resolvedTo.mode }]
-      if (resolvedTo.mode === 'near' && !strict) {
+      if (resolvedTo.mode === 'near' && !strict && !(exactY && climb)) {
         plan.push({ goal: new goals.GoalNearXZ(bx, bz, Math.max(2, range)), mode: 'xz' })
       }
 
@@ -1141,6 +1168,10 @@ class Session {
           } catch (err) {
             if (boundaryError) throw boundaryError
             if (ctl.aborted) throw err
+            if (avoiding) {
+              try { bot.pathfinder.setGoal(null); bot.clearControlStates() } catch {}
+              throw Object.assign(err, { code: err.code || 'AVOID_NO_PATH' })
+            }
             if (err.descent) {
               // Сторож спуска: решить у края; «пешком» — сюда не возвращаться. Попытка не в счёт.
               try { bot.pathfinder.setGoal(null) } catch {}
@@ -1212,7 +1243,7 @@ class Session {
         `не дошёл (${tried.length} попытки)${pit.wasInPit ? `, из ямы вылез на ${pit.climbed}${pit.stopped ? ' — ' + pit.stopped : ''}` : ''}. ` +
         `Последняя: ${lastError.message}`)
       } finally { restoreBounds() }
-    }, { timeoutMs: (secs + 15) * 1000 })
+    }, { timeoutMs: (secs + 15) * 1000, params: { climb: !!climb }, ...(climb ? { interruptOn: HOLDING } : {}) })
   }
 
   // Sets a persistent follow goal and returns straight away. Block afterwards
@@ -1233,7 +1264,7 @@ class Session {
 
   stop () {
     return this.immediate(async () => {
-      this.cancel()
+      this.cancel('stop')
       return { stopped: true }
     })
   }

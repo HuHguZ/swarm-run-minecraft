@@ -131,7 +131,7 @@ async function swarmWork(session, ctl, params: any = {}) {
 
   const plan = kind === 'dig' ? tools.bestFor(bot, before) : null
   const budget = timeoutSeconds * 1000
-  if (plan && (!Number.isFinite(plan.ms) || plan.ms > budget)) return result('work_exceeds_budget')
+  if (plan && (!Number.isFinite(plan.ms) || plan.ms > budget)) return result('work_exceeds_budget', { ms: plan.ms, before: before.name, tool: plan.item?.name || 'hand' })
   let why = '', foe = null, confirmedState = null, receipt = null
   const sight = createLastSeen(bot), expectedEnd = clock.now() + (plan?.ms ?? 500)
   let wake!: (value: any) => void
@@ -147,7 +147,8 @@ async function swarmWork(session, ctl, params: any = {}) {
   }
   const cancel = () => stop('cancelled')
   const dead = () => stop('disconnected_or_dead')
-  const check = () => { if (why || ctl?.aborted) return; foe = directThreat(bot, allies, Math.max(0, expectedEnd - clock.now()), sight.observe, { contained }); if (foe) stop('direct_threat') }
+  // Свой встал на копаемую клетку уже после начала — стоп (Codex 15.10: проверка была только до начала копки).
+  const check = () => { if (why || ctl?.aborted) return; if (kind === 'dig' && alliedSupport(bot, pos, allies)) { stop('allied_support'); return } foe = directThreat(bot, allies, Math.max(0, expectedEnd - clock.now()), sight.observe, { contained }); if (foe) stop('direct_threat') }
   let hp = bot.health
   // Рядом запертый (кокон) — мелкий тычок сквозь щель кладку не рвёт: только потеря больше четверти или ниже 8.
   const health = () => { const lost = hp - bot.health; if (lost > 0 && (!contained.length || lost >= hp * .25 || bot.health < 8)) stop('taking_damage'); hp = bot.health }

@@ -1,6 +1,61 @@
 type CombatContext = Record<string, any>
 
 export function createEquipment(ctx: CombatContext) {
+const stack = item => item && [item.name, item.type, item.metadata, item.slot, item.count, JSON.stringify(item.components || []), JSON.stringify(item.nbt || null), item.durabilityUsed].join(':')
+let failedSelection = null
+const uses = new Map<string, string>()
+const throws = new Map<string, any>()
+const placements = new Map<string, any>()
+const cooldowns = new Map<string, number>()
+const onCooldown = packet => cooldowns.set(String(packet.cooldownGroup).replace(/^minecraft:/, ''), ctx.gameClock.now() + Math.max(0, packet.cooldownTicks || 0) * 50)
+const itemReady = item => !!item && (cooldowns.get(item.componentMap?.get('use_cooldown')?.data?.cooldownGroup?.replace(/^minecraft:/, '') || item.name) || 0) <= (ctx.gameClock?.now() ?? 0)
+const owner = () => ctx.session?._reflexState?.active || null
+const line = () => {
+  const from = ctx.bot.entity.position.toString()
+  const to = ctx.entity.position
+  let hit = null
+  try { const eye = ctx.pick.eyeOf(ctx.bot); const delta = to.offset(0, .9, 0).minus(eye); hit = ctx.pick.blockOnRay(ctx.bot, eye, delta.normalize(), delta.norm()) } catch {}
+  return [ctx.entity.id, from, to.toString(), hit?.pos?.toString(), hit?.block?.stateId ?? hit?.block?.name].join('|')
+}
+const onSpawn = packet => {
+  if (Number(packet.objectData) !== ctx.bot.entity?.id) return
+  for (const attempt of throws.values()) {
+    if (attempt.sent && attempt.id == null && ctx.bot.registry?.entitiesByName?.[attempt.name]?.id === packet.type) {
+      attempt.id = packet.entityId
+      break
+    }
+  }
+}
+const onGone = e => {
+  for (const attempt of throws.values()) {
+    if (attempt.id === e?.id) attempt.resolved = true
+    if (attempt.cloudId === e?.id) attempt.cloudResolved = true
+  }
+}
+ctx.bot._client?.on?.('spawn_entity', onSpawn)
+ctx.bot._client?.on?.('set_cooldown', onCooldown)
+ctx.bot.on?.('entityGone', onGone)
+const closeEquipment = () => {
+  ctx.bot._client?.removeListener?.('spawn_entity', onSpawn)
+  ctx.bot._client?.removeListener?.('set_cooldown', onCooldown)
+  ctx.bot.removeListener?.('entityGone', onGone)
+}
+const splashDanger = () => {
+  for (const attempt of throws.values()) {
+    if (!attempt.sent || !/potion/.test(attempt.name)) continue
+    const at = attempt.land || attempt.target
+    const cloud = attempt.name === 'lingering_potion' && !attempt.cloudResolved && (attempt.cloudId != null ? ctx.bot.entities?.[attempt.cloudId] :
+      (Object.values(ctx.bot.entities || {}) as any[]).find(e => e.name === 'area_effect_cloud' && e.position?.distanceTo(new ctx.Vec3(at.x, at.y, at.z)) < 2))
+    if (cloud) attempt.cloudId = cloud.id
+    const inFlight = !attempt.resolved && (attempt.id != null || (ctx.gameClock?.now() ?? 0) - attempt.started < ((attempt.ticks || 40) + 2) * 50)
+    if (!attempt.resolved && attempt.id == null && !inFlight && !cloud && require('./last-seen').seesPlayer(ctx.bot, { position: new ctx.Vec3(at.x, at.y, at.z), width: .25, height: .25 })) {
+      attempt.sent = false; attempt.why = 'projectile_not_confirmed'
+      continue
+    }
+    if (!attempt.resolved || cloud) return { id: cloud?.id ?? attempt.id, at: cloud?.position || at, radius: 4, pending: attempt.id == null, inFlight }
+  }
+  return null
+}
 const heldName = () => (ctx.bot.heldItem ? ctx.bot.heldItem.name : null)
 
 const switched = (before) => {
@@ -30,6 +85,12 @@ const holdWeapon = async () => {
   }
 
 const holdItem = async (item) => {
+    if (!item || !itemReady(item)) return false
+    const wanted = stack(item)
+    const same = () => !!ctx.bot.heldItem && (ctx.bot.registry?.itemsByName
+      ? require('../invsync').sameStack(ctx.bot, ctx.bot.heldItem, item) : stack(ctx.bot.heldItem) === stack(item))
+    if (same()) { failedSelection = null; return true }
+    if (failedSelection?.wanted === wanted && failedSelection.owner === owner() && failedSelection.equip === ctx.bot.equip && !same()) return false
     const before = ctx.heldName()
     try {
       // Зелье — свежим поиском по содержимому (слот предмета из прошлого тика мог уже занять другое зелье).
@@ -45,14 +106,18 @@ const holdItem = async (item) => {
       if (/potion$/.test(item.name)) {
         const potionOf = require('../pvp').potionOf
         const held = ctx.bot.heldItem
-        if (!held || held.name !== item.name || potionOf(held) !== potionOf(item)) return false
+        if (!held || held.name !== item.name || potionOf(held) !== potionOf(item)) { failedSelection = { wanted, owner: owner(), equip: ctx.bot.equip, why: 'equip_mismatch' }; return false }
       }
+      if (!same()) { failedSelection = { wanted, owner: owner(), equip: ctx.bot.equip, why: 'equip_mismatch' }; return false }
+      failedSelection = null
       return true
-    } catch { return false } finally { ctx.switched(before) }
+    } catch (error) { failedSelection = { wanted, owner: owner(), equip: ctx.bot.equip, why: error.message }; return false } finally { ctx.switched(before) }
   }
 
 const useAt = async (yaw, pitch, { holdMs = 0, item = ctx.bot.heldItem }: any = {}) => {
     if (!item) return false
+    const key = item.name + ':' + (item.componentMap?.get('potion_contents')?.data?.potionId ?? '')
+    if (!itemReady(item) || uses.get(key) === stack(item)) return false
     const selected = structuredClone(item)
     ctx.aim = 'point'
     ctx.aimPoint = { yaw, pitch }
@@ -62,6 +127,7 @@ const useAt = async (yaw, pitch, { holdMs = 0, item = ctx.bot.heldItem }: any = 
       // Пока ждали прицел, рефлекс/обновление рюкзака могли сменить руку.
       if (!require('../invsync').sameStack(ctx.bot, ctx.bot.heldItem, selected)) return false
       ctx.bot.activateItem()
+      uses.set(key, stack(selected))
       if (holdMs) {
         await ctx.sleep(holdMs)
         ctx.bot.deactivateItem()
@@ -87,9 +153,22 @@ const reachable = (item) => {
   }
 
 const throwAt = async (item, what, { minLand = 4.5 }: any = {}) => {
+    const previousClearance = throws.get(item.name + ':' + (item.componentMap?.get('potion_contents')?.data?.potionId ?? '') + ':' + ctx.entity.id)?.refusal === 'splash_clearance'
+    if (previousClearance && /potion/.test(item.name)) {
+      const mine = ctx.pick.hitboxOf(ctx.bot, ctx.bot.entity), target = ctx.pick.hitboxOf(ctx.bot, ctx.entity)
+      const gap = Math.hypot(...['x', 'y', 'z'].map(a => Math.max(0, mine.lo[a] - target.hi[a] - .425, target.lo[a] - mine.hi[a] - .425)))
+      if (gap < 4) return false
+    }
+    const key = item.name + ':' + (item.componentMap?.get('potion_contents')?.data?.potionId ?? '') + ':' + ctx.entity.id
+    const inputs = line() + '|' + stack(item) + '|' + minLand
+    const previous = throws.get(key)
+    if (!itemReady(item) || previous?.sent && !previous.resolved || previous?.inputs === inputs && !previous.sent && previous.owner === owner()) return false
     if (!ctx.reachable(item)) return false
     if (!(await ctx.holdItem(item))) return false
     ctx.aim = 'free'
+    const attempt: any = { inputs, owner: owner(), why: 'awaiting_projectile', sent: true, id: null,
+      name: item.name, target: ctx.entity.position.clone(), started: ctx.gameClock?.now() ?? 0 }
+    throws.set(key, attempt)
     let r = null
     try {
       r = await ctx.throwMod.throwAt(ctx.bot, ctx.leadFn(0.5), {
@@ -104,15 +183,19 @@ const throwAt = async (item, what, { minLand = 4.5 }: any = {}) => {
           // моей рамке — не бросаю.
           const mine = ctx.pick.hitboxOf(ctx.bot, ctx.bot.entity)
           const gap = (box, pad) => Math.hypot(...['x', 'y', 'z'].map(a => Math.max(0, mine.lo[a] - box.hi[a] - pad, box.lo[a] - mine.hi[a] - pad)))
-          if (/potion/.test(item.name) && ctx.entity && ctx.entity.position && gap(ctx.pick.hitboxOf(ctx.bot, ctx.entity), 0.3 + 0.125) < 4) return false
-          if (/potion/.test(item.name) && at && gap({ lo: at, hi: at }, 0.125) < 4) return false
+          if (/potion/.test(item.name) && ctx.entity && ctx.entity.position && gap(ctx.pick.hitboxOf(ctx.bot, ctx.entity), 0.3 + 0.125) < 4) { attempt.refusal = 'splash_clearance'; return false }
+          if (/potion/.test(item.name) && at && gap({ lo: at, hi: at }, 0.125) < 4) { attempt.refusal = 'landing_clearance'; return false }
           if (!at) return true
           if (at.y < me0.y - 2.3) return true
           return Math.hypot(at.x - me0.x, at.z - me0.z) >= minLand
         }
       })
-    } catch {}
+    } catch (error) { r = { thrown: false, why: error.message } }
     ctx.aim = 'target'
+    attempt.sent = !!r?.thrown
+    attempt.why = r?.thrown ? 'projectile_in_flight' : r?.why || 'trajectory_rejected'
+    attempt.land = r?.land
+    attempt.ticks = r?.ticks
     if (r && r.thrown) { ctx.used(what); return true }
     await ctx.holdWeapon()
     return false
@@ -126,6 +209,9 @@ const placeAt = async (item, point, what, ctl = ctx.ctl) => {
     if (!below || below.boundingBox !== 'block' || !here || here.boundingBox !== 'empty' || here.name !== 'air') return false
     const faceP = ctx.pick.faceAim(ctx.bot, below.position, new ctx.Vec3(0, 1, 0))
     if (!faceP) return false
+    const key = item.name + ':' + cell.toString()
+    const inputs = [ctx.bot.entity.position.floored(), below.stateId ?? below.name, here.stateId ?? here.name, faceP, stack(item)].join('|')
+    if (placements.get(key)?.inputs === inputs && placements.get(key)?.owner === owner()) return false
     if (!(await ctx.holdItem(item))) return false
     ctx.aim = 'free'
     try {
@@ -134,9 +220,10 @@ const placeAt = async (item, point, what, ctl = ctx.ctl) => {
     } catch {}
     ctx.aim = 'target'
     const placed = ctx.blockName(ctx.bot, cell)
-    if (placed === item.name) { ctx.used(what); return true }
+    if (placed === item.name) { placements.delete(key); ctx.used(what); return true }
+    placements.set(key, { inputs, owner: owner(), why: 'block_not_confirmed' })
     return false
   }
 const placeUnder = (item, what) => placeAt(item, ctx.entity.position, what)
-return { heldName, switched, pickWeaponFor, holdWeapon, holdItem, useAt, foeGrounded, leadFn, reachable, throwAt, placeUnder, placeAt }
+return { heldName, switched, pickWeaponFor, holdWeapon, holdItem, useAt, foeGrounded, leadFn, reachable, throwAt, placeUnder, placeAt, itemReady, splashDanger, closeEquipment }
 }

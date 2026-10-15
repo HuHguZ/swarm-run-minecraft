@@ -60,7 +60,11 @@ export const SCENARIOS: Scenario[] = [
     { at: 59, type: 'enemy', kind: 'phantom', distance: 6.5, angle: 5.8 }] },
   // Round 4 (S4c): a respawn among zombies on natural ground (farm slot 18, 06.10 22:57:41-46 MSK, 4 deaths): the flat-only
   // exit check found a route on some cells and none on others, LastStand<->CreateDistance on every step (roughScenario 7).
-  { ...roughScenario(7), name: 'regress-rough-ground' }
+  { ...roughScenario(7), name: 'regress-rough-ground' },
+  // 14.10 (offline, 40 000 rough tapes): the hole was priced for endermen only - DigDown under a zombie's blows outbid the run,
+  // 14 -> 6 hp before the floor sank, then a run at 6 hp; 9.4% of the tapes died where a simple policy lived (state.digDownCost).
+  { ...roughScenario(1443), name: 'regress-dig-under-zombie' },
+  { ...roughScenario(49), name: 'regress-fist-dig-under-zombie' }
 ]
 
 // Round 4 (S4c): zombies (a spider in every fifth) around a body without blocks on stage B's rough ground (1-block steps),

@@ -383,6 +383,119 @@ test('a selected fight never calls combat when its observed target vanished befo
   } finally { combat.fight = previous }
 })
 
+test('calm observation keeps an unfinished recovery lease until its executor confirms completion', async () => {
+  const clock = require('../src/game-clock'), timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
+  try {
+  for (const action of ['Eat', 'Heal']) {
+    const { session, bot } = observingFixture()
+    let state = { ...observeTactics(session), health: 12, food: 10, burning: action === 'Eat', cover: action === 'Heal',
+      contact: action === 'Heal', canFight: false, enemies: [] }
+    let complete!: (value: any) => void, aborted = false
+    const system = new TacticalSystem(session, { observe: () => ({ ...state, at: clock.now() }), record: () => {},
+      execute: (_action: any, ctl: any) => new Promise(resolve => {
+        complete = resolve
+        ctl.onAbort.push(() => { aborted = true; resolve({ cancelled: true }) })
+      }) })
+    try {
+      system.attach(bot); system.update(true)
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(lock.owner(session)?.source, action)
+      state = { ...state, health: 16, food: 20, burning: false, cover: false, contact: false }
+      system.update(true)
+      timer.advanceTicks(1200); system.update(true)
+      assert.equal(lock.owner(session)?.source, action, `${action}: level 0 is not the pending operation's receipt`)
+      assert.equal(aborted, false)
+      complete({ confirmed: true }); await system.waitForRelease()
+      assert.equal(lock.owner(session), null)
+      assert.equal(system.snapshot().requireObservation, true)
+    } finally { system.detach() }
+  }
+  } finally { timer.dispose(); clock.activate(null) }
+})
+
+async function unreachablePiglin(action = 'Fight', configure = (_f: any) => {}) {
+  const f = observingFixture(), guard = require('../src/ne-guard'), combat = require('../src/combat')
+  f.bot.game.dimension = 'the_nether'
+  configure(f)
+  f.bot.registry.entitiesByName.piglin = { metadataKeys: ['mob_flags'] }
+  const piglin = f.bot.entities[2] = { id: 2, name: 'piglin', position: new Vec3(7.5, 64, .5), height: 1.95, width: .6,
+    isValid: true, metadata: [4], equipment: [{ name: 'crossbow' }] }
+  const state = observeTactics(f.session)
+  assert.ok(state.enemies.some(enemy => enemy.id === 2 && enemy.threatening))
+  const react = guard.react, fight = combat.fight
+  guard.react = async () => ({ duel: { stopped: 'не достать', swings: 0 } })
+  combat.fight = async () => ({ swings: 0, kills: [] })
+  try {
+    await new TacticalSystem(f.session).execute({ id: action, score: 90, reason: 'contact' }, { aborted: false, onAbort: [] }, state)
+  } finally { guard.react = react; combat.fight = fight }
+  return { ...f, piglin, threatening: () => observeTactics(f.session).enemies.some(enemy => enemy.id === 2 && enemy.threatening) }
+}
+
+test('a confirmed unreachable duel is not retried by elapsed time, for Fight and LastStand', async () => {
+  const clock = require('../src/game-clock'), timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
+  try {
+    for (const action of ['Fight', 'LastStand']) {
+      const f = await unreachablePiglin(action)
+      assert.equal(f.threatening(), false)
+      timer.advanceTicks(1200)
+      assert.equal(f.threatening(), false, `${action}: an unchanged gap is still a gap after a minute`)
+    }
+  } finally { timer.dispose(); clock.activate(null) }
+})
+
+test('unreachable contact reopens immediately on a changed stance, target cell, route or weapon', async () => {
+  const mutations = [
+    (f: any) => { f.bot.entity.position.x += 1 },
+    (f: any) => { f.piglin.position.z += 1 },
+    (f: any) => { const read = f.bot.blockAt; f.bot.blockAt = (p: any) => p.x === 1 && p.y === 63 && p.z === 0
+      ? { name: 'air', boundingBox: 'empty', position: p.floored(), shapes: [] } : read(p) },
+    (f: any) => { f.bot.inventory.items = () => [{ name: 'diamond_sword', count: 1 }] }
+  ]
+  for (const mutate of mutations) {
+    const f = await unreachablePiglin()
+    assert.equal(f.threatening(), false)
+    mutate(f)
+    assert.equal(f.threatening(), true, mutate.toString())
+  }
+})
+
+test('unrelated inventory and health changes do not repair an unreachable contact', async () => {
+  const f = await unreachablePiglin(), items = f.bot.inventory.items()
+  f.bot.health = 19
+  f.bot.inventory.items = () => [...items, { name: 'arrow', count: 12 }]
+  assert.equal(f.threatening(), false)
+  f.piglin.position.x = 3.5
+  assert.equal(f.threatening(), true, 'arrival at contact range is an immediate exit from the failed path')
+})
+
+test('changed collision reopens the route with the same block name; unrelated block state does not', async () => {
+  let open = false, unrelated = false
+  const f = await unreachablePiglin('Fight', ({ bot }) => {
+    const read = bot.blockAt
+    bot.blockAt = (p: any) => p.x === 1 && p.y === 63 && p.z === 0
+      ? { name: 'oak_trapdoor', stateId: open ? 2 : unrelated ? 3 : 1, boundingBox: open ? 'empty' : 'block', position: p.floored(), shapes: open ? [] : [[0, 0, 0, 1, 1, 1]] }
+      : read(p)
+  })
+  assert.equal(f.threatening(), false)
+  unrelated = true
+  assert.equal(f.threatening(), false, 'only collision, not every stateId change, can repair this route')
+  open = true
+  assert.equal(f.threatening(), true)
+})
+
+test('a reused entity id and a dimension transfer cannot inherit another unreachable encounter', async () => {
+  for (const replace of [true, false]) {
+    const f = await unreachablePiglin()
+    assert.equal(f.threatening(), false)
+    if (replace) f.bot.entities[2] = { ...f.piglin, position: f.piglin.position.clone() }
+    else {
+      f.bot.game.dimension = 'overworld'
+      f.session.autopilot = { lastHurt: { at: require('../src/game-clock').now(), dimension: 'overworld', sourceId: 2, byMob: true, type: 'mob_attack' } }
+    }
+    assert.equal(f.threatening(), true)
+  }
+})
+
 test('a fresh attacker behind a wall remains an injury contact but is not an observed combat target', () => {
   const { session, bot } = observingFixture()
   bot.entities[2] = { id: 2, name: 'zombie', position: new Vec3(.5, 64, 2.5), height: 1.8, width: .6, equipment: [], metadata: [] }

@@ -3048,7 +3048,7 @@ async function farmRods (session, ctl, p: any = {}) {
       // Запись есть, а на месте уже не спавнер (сломан) — забыть, а не ждать
       // его 50 секунд (сцена (в): «спавнер молчит» у убранного спавнера).
       const b = bot.blockAt(spawner)
-      if (b && b.name !== 'spawner') {
+      if (b && b.name !== 'spawner' && seesBlock(bot, b)) {
         session.journal.patch(s => { if (s.places) delete s.places[SPAWNER_PLACE] })
         spawner = null
         spawnerFrom = null

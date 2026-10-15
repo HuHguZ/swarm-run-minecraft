@@ -728,6 +728,12 @@ const REACH = 3.6
 // on their own, and a walk that eats the lot leaves nothing for the clicking.
 const CHEST_MS = 45000
 
+function chestTakeMs (timeoutSeconds = 45) {
+  const seconds = Number(timeoutSeconds)
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('timeoutSeconds должен быть положительным числом')
+  return Math.min(CHEST_MS, seconds * 1000)
+}
+
 function inReach (bot, block) {
   return block.position.offset(0.5, 0.5, 0.5)
     .distanceTo(bot.entity.position.offset(0, EYE, 0)) <= REACH
@@ -771,21 +777,19 @@ async function openContainerAt (bot, ctl, block, deadline, visibleOnly = false, 
   let last = null
   for (let attempt = 0; attempt < 2; attempt++) {
     if (ctl.aborted) throw new Error('прервано')
-    // The first attempt goes ahead whatever the clock says — opening the thing
-    // is the point of the call, and refusing to try at all is a worse answer
-    // than trying once and failing.
-    if (attempt && gameClock.now() >= deadline) break
+    if (gameClock.now() >= deadline) throw new Error('время открытия сундука вышло')
     await closeStray(bot)
     await bot.lookAt(aim, true) // force: see openFurnaceAt
+    const left = deadline - gameClock.now()
+    if (ctl.aborted || left <= 0) throw new Error('время открытия сундука вышло или прервано')
     if (visibleOnly) {
-      if (ctl.aborted || gameClock.now() >= deadline) throw new Error('время добычи вышло или прервано')
       const eye = require('./pick').eyeOf(bot)
       const delta = aim.minus(eye)
       const hit = require('./pick').blockOnRay(bot, eye, delta.scaled(1 / delta.norm()), Math.min(4.5, delta.norm()))
       if (!hit || !hit.pos.equals(block.position)) throw new Error('сундук не в прицеле — не открываю сквозь стену')
     }
     try {
-      return await raceOpen(bot, bot.openContainer(block), 6000, `${block.name} не открылся`, ctl)
+      return await raceOpen(bot, bot.openContainer(block), Math.min(6000, left), `${block.name} не открылся`, ctl)
     } catch (err) {
       last = err
       if (stay || !/windowOpen|не открылся/.test(err.message)) throw err
@@ -1022,15 +1026,15 @@ function resolveFromContainer (win, name) {
   return [...out]
 }
 
-async function chestTake (session, ctl, { item, count = null, x, y, z }: any = {}) {
+async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSeconds, visibleOnly = false, stay = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   if (!String(item || '').trim()) throw new Error('не сказано, что брать')
 
   let budget = budgetOf(count)
 
-  const deadline = gameClock.now() + CHEST_MS
-  const { block, win } = await findAndOpen(session, ctl, { x, y, z }, deadline)
+  const deadline = gameClock.now() + chestTakeMs(timeoutSeconds)
+  const { block, win } = await findAndOpen(session, ctl, { x, y, z, visibleOnly, stay }, deadline)
   const shut = guardWindow(ctl, win)
 
   let pass = null
@@ -2157,6 +2161,7 @@ module.exports = {
   conversionFuels: bot => FUELS.filter(f => !f.onlyIfAsked).map(f => fuelOption(bot, f)).filter(Boolean).map(f => ({ item: f.name, items: f.items, spare: f.spare })),
   chestPut,
   chestTake,
+  chestTakeMs,
   chestList,
   base,
   baseNow,

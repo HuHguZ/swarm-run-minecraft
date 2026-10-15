@@ -1609,7 +1609,9 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
 }
 
 let stairEntrance = null
-async function toSurface (tries = 4) {
+async function toSurface (tries = 4, deadline = Infinity) {
+  const left = seconds => Math.max(0, Math.min(seconds, (deadline - gameClock.now()) / 1000))
+  if (!left(1)) return false
   await sense()
   if (sit.inWater) {
     await leaveWater()
@@ -1619,7 +1621,7 @@ async function toSurface (tries = 4) {
   const e = stairEntrance
   if (!sit.surface && e && e.dim === dim() && state.pos && e.y > y() + 2 && Math.hypot(e.x - state.pos.x, e.z - state.pos.z) <= 64) {
     log(`наверх своей лестницей к ${e.x},${e.y},${e.z}`)
-    await act('goto', { x: e.x, y: e.y, z: e.z, range: 1, timeoutSeconds: 90 })
+    await act('goto', { x: e.x, y: e.y, z: e.z, range: 1, timeoutSeconds: left(90) })
     if (died) return false
     await sense()
     if (sit.surface) return true
@@ -1631,13 +1633,24 @@ async function toSurface (tries = 4) {
   for (let i = 0; i < tries; i++) {
     await sense()
     if (sit.surface) return true
+    if (!left(1)) return false
     await spares(120)
     const pick = await ensurePick()
+    if (!left(1)) return false
     if (!pick) log('кирки нет и не из чего — лезу наверх рукой (камень 7.5 с за блок)')
     const from = state.pos && { ...state.pos }
-    const r = await act('surface', { timeoutSeconds: pick ? 120 : 600, hand: !pick, preferPillar: pick })
+    const r = await act('surface', { timeoutSeconds: left(pick ? 120 : 600), hand: !pick, preferPillar: pick })
     if (died || r.status === 'interrupted') return false
     if (r.detail && r.detail.out) return true
+    if (!left(1)) return false
+    // An open space under a sand overhang needs a lateral exit, not another identical vertical dig.
+    if (r.detail?.pit === false && from) {
+      const [dx, dz] = [[1, 0], [0, 1], [-1, 0], [0, -1]][i % 4]
+      await act('goto', { x: from.x + dx * 12, y: from.y, z: from.z + dz * 12, range: 2, timeoutSeconds: left(20), surface: 'strict' })
+      await sense()
+      if (sit.surface) return true
+      continue
+    }
     const why0 = String((r.detail && r.detail.stopped) || '')
     if (/лопат[аы]? в рюкзаке нет|нужна лопата|_shovel/.test(why0) && !have(/_shovel$/) && !shovelTried) {
       shovelTried = true
@@ -2046,7 +2059,7 @@ async function foodRun () {
   const remaining = deepEarly ? Math.max(0, FOOD_CAP_MS - foodSpentMs) : 120000
   if (deepEarly && remaining < 10000 && !weakAndHungry()) { log('охота: бюджет до портала (3 мин) исчерпан'); return }
   const deadline = gameClock.now() + (deepEarly ? Math.min(60000, remaining) : 120000)
-  if (!(await toSurface())) { log('за едой не вышел на поверхность — сначала устранить причину подъёма'); return }
+  if (!(await toSurface(4, deadline))) { log('за едой не вышел на поверхность — сначала устранить причину подъёма'); return }
   await unclutter()
   if (have(/^bucket$/) && !have('water_bucket')) await act('bucket', { fluid: 'water', radius: 32 })
   let blocked = false
@@ -2092,7 +2105,7 @@ async function foodRun () {
         if (have(FOOD) && (state.food ?? 20) < 20) await act('eat')
       }
     } else {
-      if (!(await toSurface())) break
+      if (!(await toSurface(4, deadline))) break
       const y0 = y()
       const w = await walkAway(64, blocked || climbing ? Math.PI / 2 : 0)
       blocked = !(w && w.status === 'done')
@@ -2531,14 +2544,32 @@ let surveyDone = false
 // спавна, разведка ушла на север; ни один из 22 прогонов cl-a…cl-k не дошёл до литья). Годное озеро — в known.lava.
 let skyLookAt = null
 let skyLookNext = 0
-let lookoutsDone = 0
+const lavaLookoutCells = new Set()
+async function lavaLookout () {
+  await sense()
+  if (dim() !== 'overworld' || known.portal || lavaSourceKnown || !sit.surface || sit.inWater || died || !state.pos ||
+      !have(/_pickaxe$/) || have(COBBLE) + have('dirt') < 10) return
+  // Existing command budgets: 25 s up + 30 s down versus a 90 s surface search; wounds raise the tower's price.
+  if (55 * 20 / Math.max(1, state.health ?? 20) > 90) return
+  const key = [state.pos.x, state.pos.y, state.pos.z].map(Math.floor).join(':')
+  if (lavaLookoutCells.has(key)) return
+  lavaLookoutCells.add(key)
+  const y0 = y()
+  try {
+    await act('tunnel', { direction: 'up', length: 10, timeoutSeconds: 25 })
+    if (y() - y0 >= 4 && !died) await skyLavaLook()
+  } finally {
+    const climbed = Math.round(y() - y0)
+    if (climbed > 0 && !died && !strategyInterrupted) await act('tunnel', { direction: 'down', length: climbed, timeoutSeconds: 30 })
+  }
+}
 async function skyLavaLook () {
   if (dim() !== 'overworld' || known.portal || process.env.ND_SKY_LAVA === '0') return null
   await sense()
   if (!sit.surface || !state.pos) return null
   // Тот же вид с того же места второй раз ничего не даст.
-  if (skyLookAt && Math.hypot(skyLookAt.x - state.pos.x, skyLookAt.z - state.pos.z) < 24) return null
-  skyLookAt = { x: state.pos.x, z: state.pos.z }
+  if (skyLookAt && Math.hypot(skyLookAt.x - state.pos.x, skyLookAt.z - state.pos.z) < 24 && Math.abs(skyLookAt.y - state.pos.y) < 4) return null
+  skyLookAt = { x: state.pos.x, y: state.pos.y, z: state.pos.z }
   const sv = await act('portal_natural', { mode: 'survey', radius: 128 })
   const best = sv.detail && [sv.detail.best, ...(sv.detail.sites || [])].find(site => site && site.usable !== false && site.at && !lavaBad(site.at))
   if (!best || !best.at || !state.pos) { log('обзор вдаль: лавы под небом в 128 бл. не видно'); return null }
@@ -2596,8 +2627,10 @@ let structLootNext = 0
 function structureNeeds () {
   const kitIron = (have(/bucket$/) ? 0 : 3) + (lighter() ? 0 : 1) + (shieldOn() ? 0 : 1) + (have(PICK_IRON) ? 0 : 3)
   const iron = have(/^(raw_iron|iron_ingot)$/) + Math.floor(have('iron_nugget') / 9)
+  // Золотые ботинки на вход в Ад (набор координатора 14.10): золотая вещь уже есть — нужды нет, иначе слитков до 4.
+  const gold = goldOn() || have(/^golden_(helmet|chestplate|leggings|boots)$/) ? 0 : Math.max(0, 4 - have(/^(gold_ingot|raw_gold)$/) - Math.floor(have('gold_nugget') / 9))
   return { iron: known.portal ? 0 : Math.max(0, kitIron - iron), lighter: !known.portal && !lighter(), food: Math.max(0, 8 - foodUnits()),
-    portal: !!known.portal, diamondPick: !known.portal && !have('diamond_pickaxe'), beds: Math.max(0, BEDS_END - have(/_bed$/)) }
+    portal: !!known.portal, diamondPick: !known.portal && !have('diamond_pickaxe'), beds: Math.max(0, BEDS_END - have(/_bed$/)), gold }
 }
 async function lootSeenStructures (radius = 160) {
   if (dim() !== 'overworld' || died || !state.pos || process.env.ND_STRUCT_LOOT === '0') return false
@@ -3792,7 +3825,8 @@ async function netherArrival () {
   await refresh()
   // Без золотой вещи — сразу в укрытие (план координатора 14.10): вслепую ne_burrow закрывает видимые проёмы у тела или уводит
   // ступенями в толщу (nether-cover.coverHere); дальше поиск идёт закрытым штреком из этой клетки.
-  if (!goldOn() && process.env.ND_NE_COVER !== '0') {
+  // И с золотыми ботинками: бруты, хоглины и гасты бьют при любом золоте (h1: брут на 1.7 мин у портала, ботинки на ногах).
+  if (process.env.ND_NE_COVER !== '0') {
     const c = await act('ne_burrow', { why: 'прибытие: сразу в укрытие' })
     await refresh()
     log(`прибытие: укрытие — ${(c.detail && (c.detail.how || c.detail.why)) || c.error || c.status}`)
@@ -4854,6 +4888,7 @@ async function executeStrategy (command, signal) {
       const cell = () => state.pos && [dim(), ...['x', 'y', 'z'].map(axis => Math.floor(state.pos[axis] / 16))].join(':')
       if (cell()) lavaScoutCells.add(cell())
       await skyLavaLook()
+      if (!known.lava) await lavaLookout()
       if (!lavaSourceKnown) await lavaAtSeenRuins()
       await act('observe', { radius: 64 })
       if (!known.lava) await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90, surface: true })
@@ -5016,14 +5051,7 @@ ws.on('open', async () => {
           await skyLavaLook()
           // С земли озеро часто закрыто рельефом и деревьями (замер слота 1 14.10: 5 открытых клеток озера в 54 бл., ни одна не видна
           // с земли): раз-два за прогон — столб на 10 вверх своими блоками, осмотр, спуск (как игрок с вышки). Блоки — после камня.
-          if (!lavaSourceKnown && lookoutsDone < 2 && have(COBBLE) + have('dirt') >= 12 && !died && !sit.inWater && y() >= 60) {
-            lookoutsDone++
-            const y0 = y()
-            await act('tunnel', { direction: 'up', length: 10, timeoutSeconds: 25 })
-            const climbed = Math.round(y() - y0)
-            if (climbed >= 4) { skyLookAt = null; await skyLavaLook() }
-            if (climbed > 0 && !died) await act('tunnel', { direction: 'down', length: climbed, timeoutSeconds: 30 })
-          }
+          if (!lavaSourceKnown) await lavaLookout()
         } catch (e) { if (e.stopCampaign) throw e }
       }
       // Постройки на виду — раз в минуту днём поверху: лут, если выгода больше пути (lootSeenStructures, числа в журнале).

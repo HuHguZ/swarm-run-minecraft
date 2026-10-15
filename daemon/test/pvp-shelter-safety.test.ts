@@ -123,3 +123,64 @@ test('cancellation during roof-support equipment cannot enable a late jump or pl
   const result = await f.fortify.jumpPlace(f.bot, at, { ctl: f.ctl })
   assert.equal(result.ok, false); assert.equal(f.control.jump, undefined); assert.equal(f.calls.length, 0)
 })
+
+function sealedRecovery(hp = 10, food = 20) {
+  const f = fixture(hp)
+  f.bot.food = food; f.enemy.isValid = false; f.ctx.tt.eta = () => Infinity
+  f.ctx.style.patchBudget = 10; f.ctx.style.reactMs = 0; f.ctx.style.boxPatienceMs = 0
+  f.ctx.healItem = () => null; f.ctx.foeHpDecide = () => null
+  const cell = f.fortify.feetCell(f.bot)
+  f.ctx.fortify = { ...f.fortify, boxCheck: () => ({ ok: true, ms: 0 }),
+    boxIn: async () => ({ cell, placed: 0, sealed: true, plan: [], mats: [] }),
+    enclosure: () => ({ sealed: true }), breakOut: async () => ({ ok: false }) }
+  return f
+}
+
+test('a sealed box keeps useful recovery across 0.5/3/15/60 seconds and exits on recovered health', async () => {
+  const f = sealedRecovery(), sleep = f.ctx.sleep, deltas = [500, 2500, 12000, 45000, 0]
+  let samples = 0
+  f.ctx.sleep = async () => {
+    await sleep(deltas[samples++] ?? 0)
+    if (samples === 5) f.bot.health = 18
+    if (samples > 5) f.ctl.abort()
+  }
+  await f.ctx.fortOut()
+  assert.equal(samples, 5, 'elapsed time cannot end useful regeneration')
+  assert.equal(f.bot.health, 18); assert.equal(f.control.sneak, false)
+})
+
+test('a sealed box with no healing or regeneration exits without waiting for patience', async () => {
+  const f = sealedRecovery(10, 17)
+  let sleeps = 0
+  f.ctx.sleep = async () => { sleeps++; f.ctl.abort() }
+  await f.ctx.fortOut()
+  assert.equal(sleeps, 0)
+})
+
+test('being knocked out ends the box recovery at the next world observation', async () => {
+  const f = sealedRecovery()
+  let sleeps = 0
+  f.ctx.sleep = async () => { if (++sleeps === 1) f.bot.entity.position.x += 3; else f.ctl.abort() }
+  await f.ctx.fortOut()
+  assert.equal(sleeps, 1)
+  assert.equal(f.ctx.fort, null); assert.equal(f.control.sneak, false)
+})
+
+test('confirmed repairs spend the block budget without a three-breaches time window', async () => {
+  const f = sealedRecovery()
+  let patches = 0
+  f.ctx.fortify.enclosure = () => ({ sealed: patches >= 4 })
+  f.ctx.fortify.patch = async () => { if (++patches === 4) f.bot.health = 18; return 1 }
+  await f.ctx.fortOut()
+  assert.equal(patches, 4); assert.equal(f.ctx.st.blocks, 4)
+})
+
+test('unconfirmed recovery ends the box attempt instead of waiting forever on the same item', async () => {
+  const f = sealedRecovery(10, 17)
+  let sleeps = 0
+  f.ctx.healItem = () => ({ name: 'golden_apple' }); f.ctx.consumeItem = async () => false
+  f.ctx.sleep = async () => { sleeps++; f.ctl.abort() }
+  await f.ctx.fortOut()
+  assert.equal(sleeps, 0)
+  assert.ok(f.notes.some(note => /не подтверждено/.test(note)))
+})

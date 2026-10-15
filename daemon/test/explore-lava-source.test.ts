@@ -90,7 +90,8 @@ test('seeing a remembered flow after approaching it still requires a source', as
 })
 
 test('a first walking leg that reveals only a flow continues to another observation', async () => {
-  const f = fixture({ flowX: 61, flowAfter: 1, revealAfter: 2, sourceZ: 60 })
+  // 15.10 (Codex ow-golden 02): лучи разведки — от начала вызова (60 на восток, потом 60 на юг от старта), а не цепочкой.
+  const f = fixture({ flowX: 61, flowAfter: 1, revealAfter: 2, sourceX: 3, sourceZ: 60 })
   const result = await f.run()
   assert.equal(result.at.z, 60)
   assert.deepEqual(f.calls, ['travel', 'travel'])

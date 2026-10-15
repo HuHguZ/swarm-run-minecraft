@@ -17,8 +17,8 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     // дождаться; остальные приказы — как раньше, после тактики.
     // stop must also cancel a queued RPC before it owns a worker controller.
     const cancelled = Symbol('cancelled before start')
-    let stopped = false, cancelPrestart
-    const abort = new Promise(resolve => { cancelPrestart = () => { stopped = true; resolve(cancelled) } })
+    let stopped = false, cancelPrestart, cancelledBy
+    const abort = new Promise(resolve => { cancelPrestart = by => { stopped = true; cancelledBy ||= { type: 'cancelled', by }; resolve(cancelled) } })
     const waiting = this._prestartIntents ||= new Set()
     waiting.add(cancelPrestart)
     const beforeStart = async promise => {
@@ -39,7 +39,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     if (stopped) throw cancelled
     } catch (err) {
       if (err !== cancelled) throw err
-      const result: any = { status: 'interrupted', by: { type: 'cancelled' }, notStarted: true,
+      const result: any = { status: 'interrupted', by: cancelledBy || { type: 'cancelled' }, notStarted: true,
         events: this.bus.drain(), state: this.state() }
       result.code = resultCode(result)
       return result
@@ -50,7 +50,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     // Директор (director.js) не рвёт mc_wait мозга: мозг ждёт и слушает, пока
     // директор работает, и прерывания будят его как обычно.
     const fromDirector = require('../director').byDirector()
-    if (exclusive && !(fromDirector && this.current && this.current.name === 'wait')) this.cancel()
+    if (exclusive && !(fromDirector && this.current && this.current.name === 'wait')) this.cancel(name)
 
     const ctl: any = { aborted: false, onAbort: [] }
     const reflexLock = require('../reflex-lock')

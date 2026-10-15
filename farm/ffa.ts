@@ -99,7 +99,10 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
       for (const b of bots.filter(b => b.team === t)) await rcon(i, `team join ${t} ${b.name}`).catch(() => {})
     }
   }
-  for (const c of [`gamerule immediate_respawn ${arms && process.env.ARMS_DEATH_ANIM !== '0' ? 'false' : 'true'}`, `gamerule keep_inventory ${arms && process.env.ARMS_KEEP !== '1' ? 'false' : 'true'}`, 'gamerule spawn_mobs false', LAN ? 'gamerule log_admin_commands false' : 'gamerule send_command_feedback false', 'gamerule advance_time false', 'time set day', 'weather clear']) await rcon(i, c).catch(() => {})
+  for (const c of [`gamerule immediate_respawn ${arms && process.env.ARMS_DEATH_ANIM !== '0' ? 'false' : 'true'}`, `gamerule keep_inventory ${arms && process.env.ARMS_KEEP !== '1' ? 'false' : 'true'}`, 'gamerule spawn_mobs false', LAN ? 'gamerule log_admin_commands false' : 'gamerule send_command_feedback false', 'gamerule advance_time false', 'time set day',
+    // ARMS_WEATHER=thunder (14.10: «боты бьют молниями» — трезубец с «Громовержцем» зовёт молнию только в грозу): погода на
+    // все раунды, без смены; умолчание — ясно, как было.
+    `weather ${process.env.ARMS_WEATHER || 'clear'}`, `gamerule advance_weather ${process.env.ARMS_WEATHER && process.env.ARMS_WEATHER !== 'clear' ? 'false' : 'true'}`]) await rcon(i, c).catch(() => {})
   if (LAN && !fs.existsSync(LOGF)) fs.writeFileSync(LOGF, '')
   ctx.logAt = fs.statSync(LOGF).size
   const { rescueT, fallT } = guardFalls(ctx)

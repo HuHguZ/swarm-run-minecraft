@@ -53,7 +53,7 @@ for (const waiting of ['tactics', 'dodge', 'emergency']) {
       await session.stop()
       const result: any = await bounded(pending)
       assert.equal(result.status, 'interrupted')
-      assert.equal(result.by.type, 'cancelled')
+      assert.deepEqual(result.by, { type: 'cancelled', by: 'stop' })
       assert.equal(result.notStarted, true)
       assert.equal(result.code, 'CANCELLED')
       assert.equal(result.state.busy, null)
@@ -128,4 +128,25 @@ test('the queued cancellation does not cancel a replacement worker after the old
     replacementGate.resolve()
     assert.equal((await bounded(replacement)).status, 'done')
   } finally { oldGate.resolve(); replacementGate.resolve(); session.cancel(); await queued; await replacement; game.dispose() }
+})
+
+for (const [by, prior] of [
+  ['test_next', null], ['stop', null], ['stop', { type: 'tactical' }]
+] as const) test('cancel source ' + by + ' ' + (prior?.type || ''), async () => {
+  const { session, game } = fixture()
+  let ctl
+  const pending = session.runIntent('test_current', c => {
+    ctl = c
+    if (prior) c.interruptedBy = prior
+    return new Promise(resolve => c.onAbort.push(() => resolve({ swings: 0, landed: 0 })))
+  }, { timeoutMs: 0, interruptible: false })
+  try {
+    await turn()
+    if (by === 'stop') await session.stop()
+    else await session.runIntent(by, () => ({}), { timeoutMs: 0, interruptible: false })
+    const result = await bounded(pending), expected = prior || { type: 'cancelled', by }
+    assert.deepEqual(ctl.interruptedBy, expected)
+    assert.deepEqual(result.by, expected)
+    assert.equal(result.code, prior ? 'TACTICAL' : 'CANCELLED')
+  } finally { session.cancel(); await pending; game.dispose() }
 })

@@ -42,8 +42,16 @@ export async function setupArmsMap (ctx: ArenaContext) {
     // новый, и старая точка оказалась в блоке — сервер сбросил её на спавн мира). Ищу 2 клетки воздуха над опорой.
     let sy = Y
     for (let y = Y; y < Y + 10; y++) if (/passed/.test(String(await rcon(i, `execute if block ${X} ${y} ${Z} minecraft:air if block ${X} ${y + 1} ${Z} minecraft:air unless block ${X} ${y - 1} ${Z} minecraft:air`).catch(() => '')))) { sy = y; break }
-    const ppl = String(await rcon(i, 'list').catch(() => '')).replace(/^.*online:\s*/, '').split(/,\s*/).map(x => x.trim()).filter(x => x && !x.startsWith(`NeuroFarm${i}`) && x !== LAN_NAME)
-    for (const h of ppl) await rcon(i, `spawnpoint ${h} ${X} ${sy} ${Z}`).catch(() => {})
+    // Люди — и из журнала входов (ctx.humanNames): list по RCON при 40 ботах обрезается, и человеку точка не ставилась —
+    // возрождение на спавне мира, вне Колизея (14.10). Есть комната спавна — точка в ней (поворот в 1.21.11 — два числа).
+    const ppl = [...new Set([...String(await rcon(i, 'list').catch(() => '')).replace(/^.*online:\s*/, '').split(/,\s*/).map(x => x.trim()), ...(ctx.humanNames || [])])].filter(x => x && x !== '...' && !x.startsWith(`NeuroFarm${i}`) && x !== LAN_NAME)
+    for (const h of ppl) {
+      const home = ctx.humanHome?.(h)
+      await rcon(i, home ? `spawnpoint ${h} ${Math.floor(home.x)} ${Math.floor(home.y)} ${Math.floor(home.z)} ${home.yaw} 0` : `spawnpoint ${h} ${X} ${sy} ${Z}`).catch(() => {})
+    }
+    // Запасной спавн мира — в комнате людей, без разброса: точку возрождения могут застроить, и сервер кидает на спавн мира.
+    const room = (L?.spawnRooms || []).find(r => r.team === (ctx.HUMAN_TEAM || 'red'))
+    if (room) for (const c of [`setworldspawn ${X + room.spot.x} ${Y + room.spot.y} ${Z + room.spot.z}`, 'gamerule respawn_radius 0']) await rcon(i, c).catch(() => {})
     ctx.spawnAt = { x: X, y: sy, z: Z }
   }
   for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`)
@@ -84,6 +92,21 @@ export function guardFalls (ctx: ArenaContext) {
   // кроме зрителей; дальше обычный ход смерти (боец — в зрители, человек — набор и на свою сторону).
   // Спасение из пропасти (тело: rescue_config) — куда лететь и где смерть; раз в 20 с всем (переподключённым тоже).
   const rescueT = arms ? setInterval(() => { for (const b of bots) b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3 }).catch(() => {}) }, 20000) : null
-  const fallT = arms ? setInterval(() => { if (!ctx.between) rcon(i, `kill @a[gamemode=survival,x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${Y + L.y0 - 3 + 64}]`).catch(() => {}) }, 1000) : null
+  // Улетел за Колизей (элитры, заряд, жемчуг) дальше 8 бл. за границу арены — как упавший: оттуда путь в арену не строится
+  // (стенд 15.10, 31ad на x 370: «точка подъёма вне арены» по кругу).
+  const fallT = arms ? setInterval(() => {
+    if (ctx.between) return
+    rcon(i, `kill @a[gamemode=survival,x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${Y + L.y0 - 3 + 64}]`).catch(() => {})
+    for (const b of bots) {
+      const p = ctx.pos?.[b.name]?.p
+      if (!p || !ctx.alive?.(b.name) || (Math.abs(p.x - X) <= L.half + 8 && Math.abs(p.z - Z) <= L.half + 8)) { b.outSince = 0; continue }
+      // 4 с на возврат (летит на элитрах над краем — ещё вернётся); дальше — как упавший.
+      b.outSince = b.outSince || Date.now()
+      if (Date.now() - b.outSince < 4000 || (b.outKillAt || 0) > Date.now()) continue
+      b.outKillAt = Date.now() + 5000
+      ctx.log?.(`🛫 ${b.name}: за пределами Колизея (${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}) — как упавший`)
+      rcon(i, `execute unless entity @a[name=${b.name},x=${X - L.half - 8},z=${Z - L.half - 8},y=-64,dx=${2 * L.half + 16},dz=${2 * L.half + 16},dy=448] run kill ${b.name}`).catch(() => {})
+    }
+  }, 1000) : null
   return { rescueT, fallT }
 }

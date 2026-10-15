@@ -34,7 +34,9 @@ const FILLER = [
 const FALLING = new Set(['sand', 'red_sand', 'gravel'])
 // Арена (ND_SCAFFOLD_ANY=1, 12.10: «кирку нашли — ломать Колизей и строиться его блоками»): стройка — и блоки постройки
 // (песчаник, кварц, кирпич, бетон, терракота), не только простые.
-const ARENA_FILLER = /^(smooth_sandstone|cut_sandstone|chiseled_sandstone|smooth_red_sandstone|smooth_quartz|quartz_block|chiseled_quartz_block|quartz_pillar|quartz_bricks|stone_bricks|smooth_stone|obsidian|.*_terracotta|.*_concrete)$/
+// Песок, песчаник, доски (14.10: песок поля руками — 16 бл. за 15 с, а столб из него строитель путей не ставил: не было в
+// списке) — башня 1×1 из песка стоит (кладётся на опору под ногами); мост из песка упадёт — ponytail: мосты без песка, если станут.
+const ARENA_FILLER = /^(sand|red_sand|sandstone|red_sandstone|oak_planks|smooth_sandstone|cut_sandstone|chiseled_sandstone|smooth_red_sandstone|smooth_quartz|quartz_block|chiseled_quartz_block|quartz_pillar|quartz_bricks|stone_bricks|smooth_stone|obsidian|.*_terracotta|.*_concrete)$/
 const scaffoldAny = () => process.env.ND_SCAFFOLD_ANY === '1'
 
 // В Аду — незерак первым: булыжник там — запасные кирки (см. worlds.tuneMovements).

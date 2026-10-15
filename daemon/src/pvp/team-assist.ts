@@ -4,6 +4,10 @@
 // на видимую грань опоры (pick.faceAim, как кристалл и лодка), не сквозь стену.
 const Vec3 = require('vec3')
 const pick = require('../pick')
+// Отход дарителя и подбор — честным шагом с проверкой опоры, границ арены и killY (Codex 15.10: «назад 8 тиков» и сырой
+// pathfinder.goto уводили в дыры и за упавшей вниз вещью).
+const { executeJump, ROUTE_FRAMES } = require('../navigation/parkour')
+const { supportAt } = require('../navigation/geometry')
 
 // Только лечение и регенерация по содержимому (13.10, соло-арена: «зельки неправильно кидают и сами себе урон наносят» —
 // бралось любое взрывное зелье, а в сундуках соло лежат и вред, и яд: «лечение под ноги» вредом себе и своим).
@@ -106,7 +110,7 @@ export async function healAt (bot: any, at: any) {
 
 // Кинуть союзнику вещь в бою (Q): он ≤ 4 бл. и виден — взгляд на его грудь, выброс стака (скорость броска — от
 // взгляда). Без похода к нему: give (handover) искал пеший путь и в бою на рельефе/в полёте не дошёл ни разу (0/32).
-export async function tossTo (bot: any, ally: any, name: string, count = 1) {
+export async function tossTo (bot: any, ally: any, name: string, count = 1, arena?: any, ctl = { aborted: false }) {
   if (!ally?.position) return { ok: false, why: 'союзника не видно' }
   const d = bot.entity.position.distanceTo(ally.position)
   // ≤ 3 бл. и в ноги: с 4 бл. стак ложился мимо (показ 10.10: 7 бросков, подобрано 0) — подбор только вплотную.
@@ -115,29 +119,43 @@ export async function tossTo (bot: any, ally: any, name: string, count = 1) {
   const it = bot.inventory.items().find((i: any) => i.name === name)
   if (!it) return { ok: false, why: 'нет ' + name }
   await bot.lookAt(ally.position.offset(0, 0.2, 0), true)
-  await bot.toss(it.type, null, Math.min(count, it.count))
-  return { ok: true, why: `кинул ${name}×${Math.min(count, it.count)} с ${d.toFixed(1)} бл.` }
+  // Всё число сразу (из нескольких стопок): первой стопки не хватало на заявку — «подобрал», а дельта не набрана (Codex 15.10).
+  const total = bot.inventory.items().filter((i: any) => i.name === name).reduce((n: number, i: any) => n + i.count, 0)
+  await bot.toss(it.type, null, Math.min(count, total))
+  // Шаг назад: брошенное подбирается через 40 тиков ближайшим — стоя рядом, донор забирал вещь обратно (14.10).
+  // Отказ отхода — не отказ броска: вещь уже брошена.
+  if (!ctl.aborted) {
+    const at = bot.entity.position.offset(Math.sin(bot.entity.yaw) * 1.5, 0, Math.cos(bot.entity.yaw) * 1.5)
+    await executeJump(bot, ctl, at, { allowWalk: true, maxFallDamage: 0, arena, maxFrames: ROUTE_FRAMES }).catch(() => null)
+  }
+  return { ok: true, why: `кинул ${name}×${Math.min(count, total)} с ${d.toFixed(1)} бл.` }
 }
 
 // Подобрать брошенное своим: вещь на земле видна глазами (сущность item) — встать на неё и дождаться задержки подбора
 // (брошенное игроком — 40 тиков). Без этого бросок «ложился рядом»: гонка 10.10 — 7 передач каптёра, подобрано 0.
-export async function pickup (bot: any, name: string | null, maxD = 6) {
+export async function pickup (bot: any, name: string | null, maxD = 6, arena?: any, ctl = { aborted: false }) {
   const me = bot.entity.position
-  const seen = (e: any) => { try { return pick.canHit(bot, e, { range: maxD + 1 }) || e.position.distanceTo(me) < 2 } catch { return false } }
-  const items = Object.values(bot.entities || {}).filter((e: any) => e && e.name === 'item' && e.position && e.position.distanceTo(me) <= maxD &&
-    (!name || (() => { try { return e.getDroppedItem()?.name === name } catch { return true } })()) && seen(e)) as any[]
-  const it = items.sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
+  // Брошенное союзником у ног (передача роя, 14.10: «бросил, не подобрал» 46 из 59): предмет мал, и луч прицела его часто
+  // не видит — в 3 бл. хватает близости; тип вещи приходит метаданными позже самой сущности — без типа тоже берём.
+  const seen = (e: any) => { try { return e.position.distanceTo(me) < 3 || pick.canHit(bot, e, { range: maxD + 1 }) } catch { return false } }
+  const nameOf = (e: any) => { try { return e.getDroppedItem()?.name ?? null } catch { return null } }
+  const find = () => (Object.values(bot.entities || {}).filter((e: any) => e && e.name === 'item' && e.position && e.position.distanceTo(me) <= maxD &&
+    (!name || nameOf(e) === name || nameOf(e) === null) && seen(e)) as any[]).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
+  // Сущность брошенного приходит от сервера на тик-два позже броска: зовут сразу после него — «не вижу вещи» в 7 из 10.
+  let it = find()
+  for (let t = 0; t < 20 && !it && !ctl.aborted; t++) { await bot.waitForTicks(1); it = find() }
+  if (ctl.aborted) return { ok: false, why: 'прервано' }
   // Нет на земле, а в рюкзаке есть — уже подобрал сам по дороге (до проверки).
   if (!it) return (name && bot.inventory.items().some((i: any) => i.name === name)) ? { ok: true, why: `уже подобрал ${name}` } : { ok: false, why: 'не вижу вещи' }
   const before = bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
-  const { goals } = require('mineflayer-pathfinder')
-  try {
-    await Promise.race([bot.pathfinder.goto(new goals.GoalNear(it.position.x, it.position.y, it.position.z, 0.6)), bot.waitForTicks(60)])
-  } catch {}
-  try { bot.pathfinder.setGoal(null) } catch {}
-  for (let t = 0; t < 50 && it.isValid !== false && bot.entities[it.id]; t++) await bot.waitForTicks(1)
+  const at = it.position.clone(), support = supportAt(bot, at)
+  if (!support) return { ok: false, why: 'у вещи нет безопасной опоры' }
+  at.y = support.top
+  const move = await executeJump(bot, ctl, at, { allowWalk: true, maxFallDamage: 0, arena, maxTicks: 60, maxFrames: ROUTE_FRAMES }).catch((e: any) => ({ ok: false, why: e.message }))
+  for (let t = 0; move.ok && t < 50 && !ctl.aborted && it.isValid !== false && bot.entities[it.id]; t++) await bot.waitForTicks(1)
+  if (ctl.aborted) return { ok: false, why: 'прервано' }
   const after = bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
-  return { ok: after > before, why: after > before ? `подобрал ${name || 'вещь'}` : 'не подобрал' }
+  return { ok: after > before, why: after > before ? `подобрал ${name || 'вещь'}` : move.why || 'не подобрал' }
 }
 
 // Уничтожить чужой лут на земле (гонка 10.10: «вещи врага, что нам не нужны, — в лаву или сжечь, чтобы не достались им»):
@@ -185,14 +203,14 @@ export async function denyLoot (bot: any, at: any, maxD = 4) {
 }
 
 // RPC assist: { mode: 'heal' (ally | at) | 'wall' | 'pincer' | 'pickup' | 'deny', ally, foe, at }.
-export async function assist (session: any, p: any = {}) {
+export async function assist (session: any, p: any = {}, ctl = { aborted: false }) {
   const bot = session.require()
   const ent = (name: string) => name && bot.players[name]?.entity
   const ally = ent(p.ally)
   if (p.mode === 'heal') return p.at ? healAt(bot, p.at) : healAlly(bot, ally)
   if (p.mode === 'wall') return wallFor(bot, ally, ent(p.foe))
-  if (p.mode === 'toss') return tossTo(bot, ally, p.item, p.count || 1)
-  if (p.mode === 'pickup') return pickup(bot, p.item || null, p.maxD || 6)
+  if (p.mode === 'toss') return tossTo(bot, ally, p.item, p.count || 1, p.arena, ctl)
+  if (p.mode === 'pickup') return pickup(bot, p.item || null, p.maxD || 6, p.arena, ctl)
   if (p.mode === 'deny') return denyLoot(bot, p.at || null, p.maxD || 4)
   return { ok: false, why: 'режим?' }
 }

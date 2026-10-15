@@ -7,7 +7,8 @@
 // paper-1.21.11.jar: броски пула × вес / сумму весов × среднее set_count; железо — слитки + самородки/9 + железная кирка
 // за 3; еда — в единицах campaign.foodUnits, min(1, голод/6), пшеница → хлеб /3). Цена предмета — сколько секунд он
 // экономит при текущих нуждах, по априорам графа (core/speedrun.ts): MineIron 180 с на 8 слитков, FindFood 90 с на 8
-// единиц еды, LavaPoolPortal 120 с на раму. Золото — попутно, не повод для крюка (пользователь 14.10: золото — в Аду).
+// единиц еды, LavaPoolPortal 120 с на раму. Золото — на золотые ботинки дорого (координатор 14.10: без золотой вещи бот гибнет у
+// портала Ада в 4 случаях из 5; это лут построек по цене, а не поиск золота), сверх ботинок — попутно.
 // Цена — путь (по расстоянию, по воде в полтора раза дольше), сундук (открыть 8 с) и работа до него: копать к сундуку
 // под песком или в доме, нырять под воду, колодец храма, лестница иглу (CHEST_WORK). Карта сокровищ — цепочка
 // «корабль → карта → клад» целиком: доля карты × (выгода клада − путь к нему и копка).
@@ -19,6 +20,7 @@ export interface Needs {
   portal: boolean // портал уже есть (обсидиан не нужен)
   diamondPick: boolean // запасной путь через алмазную кирку ещё открыт
   beds: number // кроватей не хватает на дракона
+  gold?: number // слитков не хватает на золотые ботинки (0 — золотая вещь уже есть)
 }
 
 // Ожидание на сундук (таблицы jar 1.21.11, расчёт 14.10). lighter, golden_armor — вероятность хоть одного.
@@ -73,7 +75,8 @@ export const PRIOR: Record<string, Prior> = {
 // храм джунглей — 2 за 22 с, сундук храма деревни — 13–16 с, руины портала — ~12 с. Было 8 + 8 на сундук и 15 сверху —
 // храм в 66 бл. «−25 с — мимо» (g1-1) при настоящих ~25 с работы.
 export const CHEST_WORK: Record<string, number> = { shipwreck: 6, shipwreckWet: 22, ocean_ruin: 22, desert_pyramid: 2, jungle_pyramid: 6, igloo: 25, village: 6, ruined_portal: 3, buried_treasure: 15 }
-export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldenApple: 20, diamond: 20, bed: 15 }
+// goldBoots — ботинки целиком: смерть у портала без них 4 из 5, с ними ~2 из 5 (агент Ада 14.10, серии g4/g5) — 0.4 × 1200 с.
+export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldBoots: 480, goldenApple: 20, diamond: 20, bed: 15 }
 export const WALK_BPS = 2.5 // ход с обходами и прыжками; крюк — туда и половина обратно
 export const DETOUR = 1.5
 export const CHEST_SECONDS = 4 // открыть и взять, стоя у сундука (замер: 4 сундука храма — ~8 с после колодца)
@@ -96,7 +99,8 @@ export function itemSeconds (item: string, n: number, needs: Needs): number {
 }
 // Нужды после добычи items (для цепочки: клад после корабля).
 function after (needs: Needs, items: Record<string, number>): Needs {
-  return { ...needs, iron: Math.max(0, needs.iron - (items.iron || 0)), food: Math.max(0, needs.food - (items.food || 0)), lighter: needs.lighter && (items.lighter || 0) < 0.5, beds: Math.max(0, needs.beds - (items.bed || 0)) }
+  return { ...needs, iron: Math.max(0, needs.iron - (items.iron || 0)), food: Math.max(0, needs.food - (items.food || 0)), lighter: needs.lighter && (items.lighter || 0) < 0.5, beds: Math.max(0, needs.beds - (items.bed || 0)),
+    gold: (items.golden_armor || 0) >= 0.5 ? 0 : Math.max(0, (needs.gold || 0) - (items.gold || 0)) }
 }
 
 export interface Chest { table: string; p: number; wet?: boolean }
@@ -128,6 +132,15 @@ export function structureWorth (kind: string, distance: number, needs: Needs, ch
     work += (chests !== null ? 1 : c.p) * W + c.p * CHEST_SECONDS
   }
   const priced = Object.entries(items).map(([item, n]) => [item, Math.round(n * 100) / 100, itemSeconds(item, n, needs)] as [string, number, number])
+  // Ботинки — одна нужда на кусок золотой брони и слитки: доля, которой постройка её закрывает, × цена ботинок; слитки сверх — попутно.
+  if (needs.gold) {
+    const cover = Math.min(1, (items.golden_armor || 0) + (items.gold || 0) / needs.gold)
+    for (const row of priced) {
+      if (row[0] === 'gold') row[2] = cover * SECONDS.goldBoots + Math.max(0, row[1] - needs.gold) * SECONDS.gold
+      if (row[0] === 'golden_armor') row[2] = 0
+    }
+    if (!items.gold && cover > 0) priced.push(['gold', 0, cover * SECONDS.goldBoots])
+  }
   let value = priced.reduce((s, [, , v]) => s + v, 0)
   // Цепочка карты: клад после добычи этой постройки — доля карты × (выгода клада − путь и копка).
   let chain = 0

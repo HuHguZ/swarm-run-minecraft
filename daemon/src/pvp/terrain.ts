@@ -1,8 +1,9 @@
 type CombatContext = Record<string, any>
 
 export function createTerrain(ctx: CombatContext) {
+let failedPunch = null
+const groundAttempts = new Map<string, any>()
 const punchThrough = async () => {
-    ctx.rest('punch', 700)
     const eye0 = ctx.bot.entity.position.offset(0, ctx.EYE, 0)
     const to = ctx.entity.position.offset(0, (ctx.entity.height || 1.8) * 0.6, 0)
     const delta = to.minus(eye0)
@@ -14,13 +15,17 @@ const punchThrough = async () => {
     if (require('../swarm-work').isKept(ctx.bot, hit.position)) return false
     const plan = ctx.tools.bestFor(ctx.bot, hit)
     if (plan.ms > 1500) return false
+    const inputs = [ctx.bot.entity.position.floored(), hit.position, hit.stateId ?? hit.name, plan.item?.name, plan.ms,
+      ctx.pick?.faceAim?.(ctx.bot, hit.position, new ctx.Vec3(0, 1, 0)), ctx.session?._reflexState?.active || null].join('|')
+    if (failedPunch?.inputs === inputs) return false
     ctx.pathTo(false); ctx.pathing = false
     ctx.clear()
     ctx.aim = 'free'
     const r = await ctx.tools.breakFast(ctx.bot, hit.position, { maxMs: 1500 })
     ctx.aim = 'target'
     await ctx.holdWeapon()
-    if (r.ok) { ctx.used(`пробил его стенку (${r.tool})`); return true }
+    if (r.ok) { failedPunch = null; ctx.used(`пробил его стенку (${r.tool})`); return true }
+    failedPunch = { inputs, why: r.why || 'opening_not_confirmed' }
     return false
   }
 
@@ -145,7 +150,6 @@ const lavaIntoPit = async (lava) => {
         }
         ctx.clear()
         ctx.aim = 'target'
-        ctx.rest('pitLava', 250)
         ctx.used('сошёл с его крыши — вскрывать')
         return true
       }
@@ -159,8 +163,8 @@ const lavaIntoPit = async (lava) => {
       ctx.aim = 'target'
       await ctx.holdWeapon()
       if (stop) ctx.used(`бросил вскрывать крышу: ${stop}`)
-      else if (!ctx.solid(ctx.bot, roof)) { ctx.rest('pitLava', 250); ctx.used(`вскрыл крышу его коробки (${plan.item ? plan.item.name : 'рукой'}) — лью в дыру`) }
-      return true
+      else if (!ctx.solid(ctx.bot, roof)) { ctx.used(`вскрыл крышу его коробки (${plan.item ? plan.item.name : 'рукой'}) — лью в дыру`) }
+      return !ctx.solid(ctx.bot, roof)
     }
     const inColumn = c => c.x === f.x && c.z === f.z && c.y >= f.y && c.y <= ctx.theirPit.rimY
     const eye0 = ctx.bot.entity.position.offset(0, ctx.EYE, 0)
@@ -173,6 +177,7 @@ const lavaIntoPit = async (lava) => {
     const pick = cands.filter(pt => pt.distanceTo(eye0) < 4.4).find(pt => { const land = ctx.bucketLanding(pt); return land && inColumn(land.cell) })
     if (ctx.process.env.ND_DEBUG_PVP) console.log('[pitlava]', JSON.stringify({ me: ctx.bot.entity.position.floored(), him: f, rimY: ctx.theirPit.rimY, cands: cands.map(pt => { const land = ctx.bucketLanding(pt); return { pt: [pt.x, pt.y, pt.z], dist: +pt.distanceTo(eye0).toFixed(2), land: land && [land.cell.x, land.cell.y, land.cell.z], hit: land && [land.block.x, land.block.y, land.block.z] } }), pick: !!pick }))
     if (!pick) return false
+    const landing = ctx.bucketLanding(pick)
     if (!(await ctx.holdItem(lava))) return false
     ctx.aim = 'free'
     await ctx.bot.lookAt(pick, true).catch(() => {})
@@ -180,6 +185,9 @@ const lavaIntoPit = async (lava) => {
     try { ctx.bot.activateItem() } catch {}
     await ctx.sleep(80)
     ctx.aim = 'target'
+    const started = ctx.gameClock.now()
+    while (!ctx.ctl.aborted && ctx.blockName(ctx.bot, landing.cell) !== 'lava' && ctx.gameClock.now() - started < 600) await ctx.sleep(50)
+    if (ctx.ctl.aborted || ctx.blockName(ctx.bot, landing.cell) !== 'lava') return false
     ctx.used('вылил лаву ему в яму')
     await ctx.holdWeapon()
     return true
@@ -206,11 +214,17 @@ const useOnGroundAt = async (item, cell, what) => {
     const face = new ctx.Vec3(0, 1, 0)
     const at = fire ? ctx.pick.faceAim(ctx.bot, below.position, face) : below.position.offset(0.5, 1, 0.5)
     if (!at) return false
+    const key = item.name + ':' + cell.toString()
+    const ground = ctx.bot.blockAt(cell)
+    const inputs = [ctx.bot.entity?.position?.floored(), cell, below.stateId ?? below.name, ctx.blockName(ctx.bot, cell), ground?.stateId,
+      item.slot, item.count, at, ctx.session?._reflexState?.active || null].join('|')
+    if (groundAttempts.get(key)?.inputs === inputs || ctx.itemReady && !ctx.itemReady(item)) return false
     if (/_bucket$/.test(item.name)) {
       const land = ctx.bucketLanding(below.position.offset(0.5, 1, 0.5))
       if (!land || !land.cell.equals(cell)) return false
     }
     if (!(await ctx.holdItem(item))) return false
+    groundAttempts.set(key, { inputs, why: 'ground_use_unconfirmed' })
     ctx.aim = 'free'
     try {
       await ctx.bot.lookAt(at, true)
@@ -231,7 +245,14 @@ const useOnGroundAt = async (item, cell, what) => {
       const started = ctx.gameClock.now()
       while (!ctx.ctl.aborted && ctx.blockName(ctx.bot, cell) !== 'fire' && ctx.gameClock.now() - started < 500) await ctx.sleep(50)
       if (ctx.ctl.aborted || ctx.blockName(ctx.bot, cell) !== 'fire') return false
+    } else if (/_bucket$/.test(item.name)) {
+      const liquid = item.name.replace(/_bucket$/, '')
+      const confirmed = () => ctx.blockName(ctx.bot, cell) === liquid || liquid === 'water' && /^(obsidian|cobblestone)$/.test(ctx.blockName(ctx.bot, cell))
+      const started = ctx.gameClock.now()
+      while (!ctx.ctl.aborted && !confirmed() && ctx.gameClock.now() - started < 600) await ctx.sleep(50)
+      if (ctx.ctl.aborted || !confirmed()) return false
     }
+    groundAttempts.delete(key)
     ctx.used(what)
     return true
   }
@@ -259,6 +280,7 @@ const towerShield = async () => {
     const drawMs = ctx.bowWatch.drawAt ? ctx.gameClock.now() - ctx.bowWatch.drawAt : -1
     if (!xbow && drawMs < ctx.TOWER_SAFE_DRAW_MS) return null
     if (!ctx.raySees(ctx.bot, ctx.entity.position.offset(0, ctx.EYE, 0), ctx.bot.entity.position.offset(0, 1.2, 0))) return null
+    ctx.threats.dangers(ctx.bot)
     try { await ctx.bot.lookAt(ctx.entity.position.offset(0, 1.4, 0), true) } catch {}
     const raised = await ctx.guard.raise(true)
     if (ctx.process.env.ND_DEBUG_TOWER) console.log('[towerShield] raise', JSON.stringify({ drawMs, xbow, raised, shots: ctx.bowWatch.shots }))
@@ -272,7 +294,13 @@ const towerShield = async () => {
       ctx.bot.lookAt(ctx.entity.position.offset(0, 1.4, 0), true).catch(() => {})
       await ctx.sleep(ctx.TICK_MS)
     }
-    if (shot) await ctx.sleep(Math.min(400, 60 + ctx.entity.position.distanceTo(ctx.bot.entity.position) * 17))
+    if (shot) {
+      while (!ctx.ctl.aborted && (ctx.threats.incoming(ctx.bot).some(p => /arrow|trident|firework/.test(p.name)) || ctx.threats.dangers(ctx.bot).arrows.length)) {
+        if (ctx.gameClock.now() - t0 >= 4000) throw new Error('снаряд ещё закрывает окно стройки')
+        await ctx.sleep(ctx.TICK_MS)
+      }
+    } else if (!ctx.ctl.aborted && ctx.entity.isValid && (ctx.bowWatch.drawAt || ctx.bowWatch.loadedAt) &&
+        ctx.raySees(ctx.bot, ctx.entity.position.offset(0, ctx.EYE, 0), ctx.bot.entity.position.offset(0, 1.2, 0))) throw new Error('стрелок не открыл окно стройки')
     await ctx.guard.raise(false)
     if (ctx.process.env.ND_DEBUG_TOWER) console.log('[towerShield] lower', JSON.stringify({ shot, waited: ctx.gameClock.now() - t0 }))
     if (shot) { ctx.st.towerShots = (ctx.st.towerShots || 0) + 1; if (ctx.ready('towerShieldNote')) { ctx.rest('towerShieldNote', 3000); ctx.used('на столбе — стрела в щит, строю дальше') } }

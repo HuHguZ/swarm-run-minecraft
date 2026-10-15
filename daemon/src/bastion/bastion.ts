@@ -457,6 +457,13 @@ async function digToPredictedBody (session, ctl, st, t) {
   return res
 }
 
+// План штрека: вслепую — мир по шаблону гипотез (видимое — как есть, скрытое — символ куска), иначе — живой мир.
+function planView (bot, st) {
+  if (!require('.././nether-cover').blind()) return require('.././sealed').worldView(bot)
+  const TV = require('./template-view')
+  return TV.templateView(bot, TV.piecesOf(st))
+}
+
 // Координаты ниже — гипотезы шаблона из наблюдения fortress, не прочитанные клетки мира.
 function rememberStarts (bot, st, starts) {
   const bp = require('.././bastion-pieces')
@@ -464,6 +471,7 @@ function rememberStarts (bot, st, starts) {
     if (!bp.START_REL[s?.type] || !Number.isInteger(s.r) || s.r < 0 || s.r > 3 ||
         !s.t || !['x', 'y', 'z'].every(k => Number.isFinite(s.t[k]))) continue
     for (const c of bp.piecesFromStart(s)) {
+      ;(st.pieces ||= []).push(c)
       const rank = 100 * (i + 1) + c.slot + 1
       for (const pos of bp.goldOf(c)) {
         const k = keyOf(pos)
@@ -477,74 +485,15 @@ function rememberStarts (bot, st, starts) {
   }
 }
 
-// Слепой заход: путь узнаётся только при вскрытии очередной клетки. Без SL.worldView/плана по скрытому объёму.
-async function visibleGold (session, ctl, st, until) {
-  const bot = session.bot; const S = st.sealedState; const dimension = bot.game?.dimension
-  const NC = require('.././nether-cover'); const D = require('.././endportal-descent')
-  const SL = require('.././sealed'); const PT = require('./pen-trap'); const eyes = require('.././perception/eyes')
-  S.filled ||= new Set()
-  S.entry ||= xyz(SL.bodyCells(bot)[0])
-  let stalls = 0
-  while (!ctl.aborted && session.bot === bot && bot.game?.dimension === dimension && (bot.health ?? 0) > 0 && gameClock.now() < until - 10000) {
-    if (ctl.waitReflex) await ctl.waitReflex()
-    survey(bot, st, 56)
-    for (const [k, g] of st.gold) if (!st.pred.has(k)) st.pred.set(k, { pos: g.pos, piece: 'видно', rank: 0 })
-    const now = gameClock.now()
-    const targets = [
-      ...(!st.chestsOnly ? [...st.pred].map(([k, v]) => ({ ...v, k, chest: false })) : []),
-      ...(st.lootChests ? [...st.chestSeen].filter(([k]) => !st.looted.has(k)).map(([k, v]) => ({ ...v, k, chest: true })) : [])
-    ].filter(t => (st.skip.get(t.k) || 0) <= now)
-      .sort((a, b) => a.pos.distanceTo(bot.entity.position) - b.pos.distanceTo(bot.entity.position))
-    const t = targets[0]
-    if (!t) break
-    const r = await NC.closedBore(session, ctl, t.pos, { adjacent: true, own: S.own,
-      deadline: Math.min(until - 10000, now + 30000), maxSteps: 16, minY: Math.max(0, t.pos.y - 2),
-      onOpen: async () => { survey(bot, st, 56); return null }
-    })
-    S.dug += r.dug || 0; S.moves += (r.moved || 0) + (r.down || 0); S.fills += r.placed || 0
-    S.exposed = !!r.unsealed
-    if (ctl.aborted || session.bot !== bot || bot.game?.dimension !== dimension) break
-    if (!r.ok || !eyes.seesNow(bot, t.pos)) {
-      st.skip.set(t.k, gameClock.now() + 15000)
-      S.fails.push(`слепой штрек ${t.k}: ${r.why || 'цель не видна'}`)
-      if (!r.moved && !r.down && ++stalls >= 3) break
-      continue
-    }
-    stalls = 0
-    if (S.exposed) { S.fails.push('закладка штрека не завершена'); st.lastBarter = 'закладка штрека не завершена'; break }
-    const b = bot.blockAt(t.pos) // Только после seesNow; в том числе видимый воздух на месте гипотезы.
-    if (!b) continue
-    if (t.chest === true) {
-      if (!/^(chest|trapped_chest|barrel)$/.test(b.name)) { st.chestSeen.delete(t.k); continue }
-      const took = await require('.././structures').takeWorth(session, ctl, t.pos, { kind: 'bastion' })
-      st.chests.push({ at: t.k, took: took?.took || {}, stopped: took?.stopped || took?.error })
-      if (require('./mining-cycle').confirmedChestLoot(took, t.pos, ctl.aborted)) st.looted.add(t.k)
-      else st.skip.set(t.k, gameClock.now() + 60000)
-    } else {
-      if (b.name !== 'gold_block') { st.pred.delete(t.k); st.gold.delete(t.k); st.predWrong++; continue }
-      if (t.pos.y < SL.bodyCells(bot)[0].y) { st.skip.set(t.k, gameClock.now() + 30000); continue }
-      if (SL.fillerCount(bot) < 1) { S.fails.push('нет блока закрыть золотую клетку'); break }
-      const dr = await PT.digSeen(bot, t.pos, { allowGuard: true })
-      if (dr !== 'ok') { st.skip.set(t.k, gameClock.now() + 30000); S.fails.push(dr); continue }
-      st.blocks++; st.lastBreak = gameClock.now(); st.pred.delete(t.k); st.gold.delete(t.k)
-      // Подбор рамкой тела, без выхода к дропу через двор; вернуть стенку сразу после окна подбора.
-      await sleep(550)
-      if (ctl.aborted || session.bot !== bot || bot.game?.dimension !== dimension) break
-      if (!(await D.placeAt(bot, t.pos))) { S.exposed = true; S.fails.push('золотая клетка не закрылась'); st.lastBarter = 'золотая клетка не закрылась'; break }
-      S.filled.add(t.k)
-    }
-    if (st.goldless && await armGold(session, ctl)) st.goldless = false
-    await eatIfHungry(session, ctl)
-  }
-}
-
 async function sealedGold (session, ctl, st, until) {
   const bot = session.bot
   const dimension = bot.game?.dimension
   const SL = require('.././sealed')
   const S = st.sealedState || (st.sealedState = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0 })
   S.deadline = until
-  if (require('.././nether-cover').blind()) return visibleGold(session, ctl, st, until)
+  // Вслепую — план по шаблону узнанного бастиона (template-view), сверка исполнителя — только с видимым (S.honest); попутная
+  // руда (bonusGold) судит по скрытым соседям — выкл.
+  if (require('.././nether-cover').blind()) { S.honest = true; S.noBonus = true }
   S.onThreat = async () => { try { await answerAttack(session, ctl, st) } catch {} }
   // BonusGold обходит проверку цели; в этом эксперименте охраняемое копаем только здесь.
   if (st.fastSafe) S.noBonus = true
@@ -606,8 +555,9 @@ async function sealedGold (session, ctl, st, until) {
     const chestsOk = targetsByBruteHome(chestsT, c => c.pos, BH6, bot.health ?? 20, gear6)
     if (!preds.length && !chestsOk.length) break
     const minRank = preds.length ? Math.min(...preds.map(([, v]) => v.rank || 0)) : 0
-    const tg = [...preds.filter(([, v]) => (v.rank || 0) === minRank).map(([k, v]) => ({ k, pos: v.pos })), ...(minRank === 0 ? chestsOk : [])]
-    const view = SL.worldView(bot)
+    const tg = [...preds.map(([k, v]) => ({ k, pos: v.pos })), ...chestsOk]
+    const view = planView(bot, st)
+    S.view = S.honest ? view : null
     // S1f: клетка ног — с поправкой на песок душ (высота 0.875: на нём floored() — клетка самого песка). План от floored() начинался
     // внутри пола: «не шагнул vdown/up … (я …,N.88,…) пол soul_sand» — 50 из 61 остановок штрека во вслепую сериях S1e/S1f, заход с 0
     // золота при верном шаблоне. ND_SOUL_FEET=0 — прежнее.
@@ -639,7 +589,7 @@ async function sealedGold (session, ctl, st, until) {
       cls: view.cls, dig: view.dig, own: S.own, starts, box, maxNodes: inTunnel ? 60000 : 160000,
       goal: (x, y, z) => tgGoals.some(q => q.g(x, y, z)),
       h: (x, y, z) => Math.min(...tgGoals.map(q => q.h(x, y, z))),
-      targets: new Set(tg.filter((t : any) => !t.chest).map(t => t.k)), vup: SL.fillerCount(bot) >= 6
+      targets: new Set(tg.filter((t : any) => !t.chest).map(t => t.k)), vup: SL.fillerCount(bot) >= 6, vdown: !S.honest
     }
     let r = await SL.plan(planO)
     // Вход из открытой пещеры: первая клетка в толще почти всегда касается воздуха пещеры сбоку (неровная стена), и
@@ -891,7 +841,9 @@ async function digTrap (session, ctl, st, until) {
   S.deadline = until
   S.noBonus = true
   for (let tries = 0; tries < 3 && !ctl.aborted && gameClock.now() < until - 20000; tries++) {
-    const view = SL.worldView(bot)
+    const view = planView(bot, st)
+    S.honest = S.honest || require('.././nether-cover').blind()
+    if (S.honest) S.view = view
     const cands = trapCandidates(bot, view, S.own).slice(0, 16)
     if (!cands.length) { log('ловушка: места нет', { pigs: mobs(bot, 'piglin', 40).length }); return null }
     const me = bot.entity.position.floored()
@@ -901,7 +853,7 @@ async function digTrap (session, ctl, st, until) {
     const box = { x0: Math.min(...xs) - 10, x1: Math.max(...xs) + 10, y0: Math.max(5, Math.min(...ys) - 8), y1: Math.min(120, Math.max(...ys) + 8), z0: Math.min(...zs) - 10, z1: Math.max(...zs) + 10 }
     const hs = cands.map(b => b.H)
     const r = await SL.plan({
-      cls: view.cls, dig: view.dig, own: S.own, box, maxNodes: 80000, vup: SL.fillerCount(bot) >= 6,
+      cls: view.cls, dig: view.dig, own: S.own, box, maxNodes: 80000, vup: SL.fillerCount(bot) >= 6, vdown: !S.honest,
       starts: [{ x: me.x, y: me.y, z: me.z, g: 0 }],
       goal: (x, y, z) => goalMap.has(SL.key(x, y, z)),
       h: (x, y, z) => Math.min(...hs.map(t => Math.abs(x - t.x) + Math.abs(y - t.y) + Math.abs(z - t.z)))
@@ -1141,7 +1093,9 @@ async function digPit (session, ctl, st, until) {
       S.exposed = true
     } }
   for (let tries = 0; tries < 3 && !ctl.aborted && gameClock.now() < until - 20000; tries++) {
-    const view = SL.worldView(bot)
+    const view = planView(bot, st)
+    S.honest = S.honest || require('.././nether-cover').blind()
+    if (S.honest) S.view = view
     // Яма — не у дома брута из копии (S1d s1d-AB-4 B: план ямы в 39 ходах к 92,59,−87, в 7 бл. от брута 85,58,−88 — два удара на пути, смерть).
     const BH = require('.././nether-route').bruteSpots(session)
     const cands = pitsAwayFromBrutes(pitCandidates(bot, view, S.own, BF.enabled() ? 64 : 40).filter(b => !(S.badPits && S.badPits.has(SL.key(b.M.x, b.M.y, b.M.z)))), BH).slice(0, 16)
@@ -1152,7 +1106,7 @@ async function digPit (session, ctl, st, until) {
     const box = { x0: Math.min(...xs) - 10, x1: Math.max(...xs) + 10, y0: Math.max(5, Math.min(...ys) - 8), y1: Math.min(120, Math.max(...ys) + 8), z0: Math.min(...zs) - 10, z1: Math.max(...zs) + 10 }
     const hs = cands.map(b => b.P)
     const pitPlan = extra => SL.plan({
-      cls: view.cls, dig: view.dig, own: S.own, box, maxNodes: 80000, vup: SL.fillerCount(bot) >= 6, breachOk: tradeBreach(S),
+      cls: view.cls, dig: view.dig, own: S.own, box, maxNodes: 80000, vup: SL.fillerCount(bot) >= 6, vdown: !S.honest, breachOk: tradeBreach(S),
       starts: [{ x: me.x, y: me.y, z: me.z, g: 0 }],
       goal: (x, y, z) => goalMap.has(SL.key(x, y, z)),
       h: (x, y, z) => Math.min(...hs.map(t => Math.abs(x - t.x) + Math.abs(y - t.y) + Math.abs(z - t.z))),
@@ -2138,4 +2092,4 @@ async function bastion (session, ctl, p: any = {}) {
   return out(stopped)
 }
 
-module.exports = { approachGold, targetsByBruteHome, bruteHomeTake, pitAngerWait, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, rememberStarts, visibleGold, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }
+module.exports = { approachGold, targetsByBruteHome, bruteHomeTake, pitAngerWait, bruteWalkRisk, nearBruteHome, pitsAwayFromBrutes, goldWindowOk, rememberStarts, planView, bruteDefense, FAST_SAFE, goldExposes, hunker, burrowColumn, burrow, answerAttack, digToPredicted, digToPredictedBody, sealedGold, digTrap, buildTrap, sealBody, prepareBarterCover, digPit, moveBarterSite, bastion }

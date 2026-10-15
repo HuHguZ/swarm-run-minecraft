@@ -137,6 +137,47 @@ test('a hissing creeper is taken on the raised shield, facing it; with a drop be
   } finally { survival.dodgeCreeper = saved.dodge; combat.makeShield = saved.shield }
 })
 
+test('a primed TNT is taken on the shield until it explodes, not for 4 s (arena 16.10: lowered 0.4 s before the blast)', async () => {
+  const { shieldBlast } = require('../src/tactics/blast')
+  const saved = combat.makeShield
+  combat.makeShield = () => { let up = false; return { wear: async () => true, raise: async () => { up = true; return true }, blocking: () => up, failure: () => null, close: () => {} } }
+  const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
+  const bot = creeperField()
+  bot.entities[3] = { id: 3, name: 'tnt', position: new Vec3(3, 64, .5), height: .98, isValid: true, metadata: [] }
+  try {
+    const done = shieldBlast({ bot }, { aborted: false, onAbort: [] })
+    for (let i = 0; i < 120; i++) { timer.advanceTicks(1); if (i === 90) delete bot.entities[3]; await new Promise(resolve => setImmediate(resolve)) }
+    const r = await done
+    assert.equal(r.blocked, true)
+    assert.equal(r.clear, true, 'the shield came down only after the TNT was gone')
+    assert.ok(r.seconds >= 4.5, `held ${r.seconds} s, past the former 4 s cap`)
+  } finally { timer.dispose(); gameClock.activate(null); combat.makeShield = saved }
+})
+
+test('a primed TNT is run from even with a shield; the shield only when the run has nowhere to go (arena 16.10)', async () => {
+  const saved = { pick: flee.pickDirection, shield: combat.makeShield }
+  let way: any = { yaw: Math.PI / 2, dir: { x: -1, z: 0 } }
+  flee.pickDirection = () => way
+  combat.makeShield = () => { let up = false; return { wear: async () => true, raise: async () => { up = true; return true }, blocking: () => up, failure: () => null, close: () => {} } }
+  const run = async () => {
+    const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
+    const bot = creeperField()
+    bot.look = async () => {}
+    bot.entities[3] = { id: 3, name: 'tnt', position: new Vec3(3, 64, .5), height: .98, isValid: true, metadata: [] }
+    const system = new TacticalSystem({ bot, bus: { emit: () => {} } })
+    const done = (system as any).execute({ id: 'Dodge', score: 150, reason: '' }, { aborted: false, onAbort: [] }, tactical({ shield: true, explosion: true, blast: 'tnt' }))
+    try {
+      for (let i = 0; i < 40; i++) { timer.advanceTicks(1); if (i === 20) delete bot.entities[3]; await new Promise(resolve => setImmediate(resolve)) }
+      return await done
+    } finally { timer.dispose(); gameClock.activate(null) }
+  }
+  try {
+    assert.equal((await withFlagAsync(undefined, run)).how, 'dodge-blast', 'a free run: away from the TNT, no shield')
+    way = null
+    assert.equal((await withFlagAsync(undefined, run)).how, 'shield-blast', 'cornered: the shield')
+  } finally { flee.pickDirection = saved.pick; combat.makeShield = saved.shield }
+})
+
 test('a tactical run says "не отрывается" after 3 game s when the walker keeps within 5 blocks; other callers run on (S4c: wither skeleton, edge)', async () => {
   const run = async (chaseExit: boolean) => {
     const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
@@ -221,7 +262,7 @@ test('a walker already at the body is fought while the body outlasts burst + one
   assert.notEqual(withFlag('0', () => evaluate({ ...hungry, health: 16 }).action), 'fight', 'S4c: "сытость не позволяет лечиться"')
 })
 
-test('after a kill the next attacker is met with Fight at once, not by a run while Fight sits out its re-entry time', () => {
+test('a different attacker is met with Fight immediately even without an explicit kill notification', () => {
   const { TacticalArbiter } = require('../src/tactics/arbiter')
   const zombie = { id: 2, kind: 'zombie', distance: 3, player: false, threatening: true, hit: 1.4 }
   const run = (forgive: boolean) => {
@@ -233,7 +274,7 @@ test('after a kill the next attacker is met with Fight at once, not by a run whi
     return arbiter.decide(tactical({ at: 450, contact: true, enemies: [{ ...zombie, id: 3 }] })).selected?.id
   }
   assert.equal(run(true), 'Fight')
-  assert.notEqual(run(false), 'Fight', 'without forgive: the re-entry cooldown picks a run')
+  assert.equal(run(false), 'Fight', 'a new target cannot inherit the previous fight penalty')
 })
 
 test('an archer within 8 blocks is rushed by a hungry body that outlasts the exchange; one at 12 is not a trade yet (s8-f3-3: shot in the back)', () => {

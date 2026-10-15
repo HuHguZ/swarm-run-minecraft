@@ -104,3 +104,142 @@ for (const kind of ['horizontal', 'kill plane']) test(`the actual next native ${
   assert.deepEqual(f.bot.entity.position, before, 'a forecast must never move the actual entity')
   assert.equal(f.s.gotoArena, undefined)
 })
+
+
+// Real 1.21.11 collision blocks, native mineflayer-pathfinder A*, Session.goto and native next-tick forecast.
+function avoidSearch(f, corridor = false) {
+  const AStar = require('mineflayer-pathfinder/lib/astar')
+  const Move = require('mineflayer-pathfinder/lib/move')
+  const blockAt = f.bot.blockAt
+  if (corridor) f.bot.blockAt = p => {
+    if (p.y === 63 && p.z !== 0) {
+      const b = Block.fromStateId(registry.blocksByName.air.defaultState); b.position = p.floored(); return b
+    }
+    return blockAt(p)
+  }
+  const paths = [], budgets = []
+  f.bot.pathfinder.thinkTimeout = 5000
+  const originalGoal = f.bot.pathfinder.setGoal
+  f.bot.pathfinder.setGoal = function(goal) {
+    originalGoal.call(this, goal)
+    if (!goal) return
+    budgets.push(this.thinkTimeout)
+    setImmediate(() => {
+      if (this.goal !== goal) return
+      const at = f.bot.entity.position.floored()
+      const search = new AStar(new Move(at.x, at.y, at.z, 0, 0), this.movements, goal, this.thinkTimeout, 20)
+      const step = () => {
+        if (this.goal !== goal) return
+        const r = search.compute()
+        if (r.status === 'partial') { setImmediate(step); return }
+        paths.push(r)
+        f.bot.emit('path_update', r)
+        if (r.status === 'success' && this.goal === goal) {
+          for (const n of r.path) { f.bot.entity.position = new Vec3(n.x + .5, n.y, n.z + .5); f.bot.emit('physicsTick') }
+          if (this.goal === goal) f.bot.emit('goal_reached', goal)
+        }
+      }
+      step()
+    })
+  }
+  return { paths, budgets }
+}
+
+test('avoid: withinArena excludes spheres, accepts the surface/zero radius and rejects malformed input without throwing', () => {
+  const bot = { physics: { playerHalfWidth: .3 } }
+  const a = { x: .5, z: .5, r: 30, killY: 60, minY: 64, avoid: [{ x: 5.5, y: 64, z: .5, r: 2 }] }
+  assert.equal(parkour.withinArena(bot, { x: 5.5, y: 64, z: .5 }, a), false)
+  assert.equal(parkour.withinArena(bot, { x: 3.5, y: 64, z: .5 }, a), true)
+  assert.equal(parkour.withinArena(bot, { x: 5.5, y: 66, z: .5 }, a), true)
+  assert.equal(parkour.withinArena(bot, { x: 0, y: 63.99, z: 0 }, a), false)
+  for (const avoid of [null, {}, [null], [{ x: 0, y: 64, z: 0, r: NaN }], [{ x: 0, y: 64, z: 0, r: -1 }]])
+    assert.equal(parkour.withinArena(bot, { x: 0, y: 64, z: 0 }, { ...a, avoid }), false)
+  assert.equal(parkour.withinArena(bot, { x: 0, y: 64, z: 0 }, { ...a, avoid: [{ x: 0, y: 64, z: 0, r: 0 }] }), true)
+})
+
+test('avoid: an edge crossing the sphere is forbidden even when both endpoints are outside', () => {
+  const a = { x: .5, z: .5, r: 30, avoid: [{ x: .5, y: 64, z: .5, r: 1 }] }
+  const bot = { physics: { playerHalfWidth: .3 } }, from = { x: -1.5, y: 64, z: .5 }, to = { x: 2.5, y: 64, z: .5 }
+  assert.equal(parkour.withinArena(bot, from, a), true)
+  assert.equal(parkour.withinArena(bot, to, a), true)
+  assert.equal(parkour.withinArena(bot, to, a, from), false)
+})
+
+test('avoid: goto A* detours around an enemy between safe endpoints', async t => {
+  const f = fixture(t, 'search'), trace = avoidSearch(f)
+  const foe = { x: 5.5, y: 64, z: .5, r: 2.5 }
+  const run = await f.s.goto({ x: 10, y: 64, z: 0, range: .1, arena: { ...arena, r: 20, avoid: [foe] } })
+  assert.ok(run.arrived)
+  assert.equal(trace.paths[0].status, 'success')
+  assert.ok(trace.paths[0].path.some(n => Math.abs(n.z) >= 3), 'A* must leave the direct lane')
+  for (const n of trace.paths[0].path) assert.ok(Math.hypot(n.x + .5 - foe.x, n.y - foe.y, n.z + .5 - foe.z) >= foe.r - 1e-6)
+  assert.equal(f.bot.pathfinder.thinkTimeout, 5000)
+  assert.equal(f.s.gotoArena, undefined)
+})
+
+test('avoid: starting inside a zone, off cell centre, permits standing and a route away', async t => {
+  const f = fixture(t, 'search'), trace = avoidSearch(f)
+  f.bot.entity.position.x = .9
+  const foe = { x: -3.5, y: 64, z: .5, r: 22 }, input = { ...arena, r: 30, avoid: [foe] }
+  const run = f.s.goto({ x: 8, y: 64, z: 0, range: .1, arena: input })
+  try {
+    assert.equal(f.s.gotoArena.avoid[0].r, 4.4)
+    assert.equal(parkour.withinArena(f.bot, f.bot.entity.position, f.s.gotoArena), true)
+    assert.ok((await run).arrived)
+    assert.ok(trace.paths[0].path.every(n => Math.hypot(n.x + .5 - foe.x, n.y - foe.y, n.z + .5 - foe.z) >= 4.4 - 1e-6))
+    assert.equal(foe.r, 22, 'normalisation must not mutate the caller')
+  } finally { f.s.ctl.abort(); await run.catch(() => {}) }
+})
+
+test('avoid: invalid input rejects before cancelling an existing action', async t => {
+  for (const avoid of [null, {}, [null], [{ x: 4, y: 64, z: 0, r: '2' }], [{ x: 4, y: 64, z: 0, r: -1 }]]) {
+    const f = fixture(t, 'wait'), old = f.bot.pathfinder.movements
+    let error, run
+    try { run = f.s.goto({ x: 2, y: 64, z: 0, arena: { ...arena, avoid } }) } catch (e) { error = e }
+    if (run) { f.s.ctl.abort(); await run.catch(() => {}) }
+    assert.equal(error?.code, 'ARENA_BOUNDARY')
+    assert.equal(f.calls.starts, 0); assert.equal(f.calls.cancels, 0)
+    assert.equal(f.bot.pathfinder.movements, old)
+  }
+})
+
+test('avoid: the next native physical step cannot enter the enemy zone', async t => {
+  const f = fixture(t, 'wait'), guarded = { ...arena, r: 20, avoid: [{ x: 2.5, y: 64, z: .5, r: 1.5 }] }
+  const run = f.s.goto({ x: -3, y: 64, z: 0, arena: guarded })
+  await new Promise(resolve => setImmediate(resolve))
+  f.bot.entity.velocity.x = 1
+  f.bot.emit('physicsTick')
+  const stopped = f.bot.pathfinder.goal === null
+  if (!stopped) f.s.ctl.abort()
+  await assert.rejects(run)
+  assert.equal(stopped, true)
+  assert.ok(f.calls.cleared)
+})
+
+test('avoid: an impassable corridor fails once within the search budget without local jump/retry', async t => {
+  const f = fixture(t, 'search'), trace = avoidSearch(f, true)
+  const timer = setTimeout(() => f.s.ctl?.abort(), 1200)
+  const started = performance.now()
+  try {
+    await assert.rejects(f.s.goto({ x: 10, y: 64, z: 0, range: .1, pathWait: true,
+      arena: { ...arena, r: 20, avoid: [{ x: 5.5, y: 64, z: .5, r: 2.5 }] } }), (e: any) => e.code === 'AVOID_NO_PATH')
+    assert.equal(trace.paths.length, 1)
+    assert.ok(performance.now() - started < 1000)
+    assert.equal(f.bot.pathfinder.goal, null)
+    assert.equal(f.bot.pathfinder.thinkTimeout, 5000)
+    assert.equal(f.bot.listenerCount('path_update'), 0)
+    assert.equal(f.bot.listenerCount('physicsTick'), 0)
+  } finally { clearTimeout(timer); f.s.ctl?.abort() }
+})
+
+test('avoid: climb keeps the same excluded path cells while ordinary climb keeps its original arena', async t => {
+  for (const avoid of [undefined, [{ x: 2.5, y: 64, z: .5, r: 1 }]]) {
+    const f = fixture(t, 'wait'), a = { ...arena, r: 20, ...(avoid ? { avoid } : {}) }
+    const run = f.s.goto({ x: -2, y: 64, z: 0, climb: true, exactY: true, arena: a })
+    await new Promise(resolve => setImmediate(resolve))
+    try {
+      assert.equal(f.bot.pathfinder.movements.canDig, true)
+      assert.equal(Number.isFinite(f.stepCost(new Vec3(2, 64, 0))), !avoid)
+    } finally { f.s.ctl.abort(); await assert.rejects(run) }
+  }
+})

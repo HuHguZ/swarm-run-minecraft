@@ -60,7 +60,8 @@ export function installRounds (ctx: ArenaContext) {
   }
   // Выдача синим в начале каждого раунда (13.10: «ближайшие раунды — с элитрами и фейерверками, чтобы это тестить»):
   // ARMS_GIVE="elytra 1,firework_rocket 64" — через запятую «предмет число», после разноса.
-  const GIVE = (process.env.ARMS_GIVE || '').split(',').map(x => x.trim()).filter(Boolean)
+  // Запятые внутри [] и {} — часть предмета (чары трезубца: {loyalty:3,channeling:1}), не разделитель.
+  const GIVE = (process.env.ARMS_GIVE || '').split(/,(?![^{[]*[}\]])/).map(x => x.trim()).filter(Boolean)
   ctx.giveBlue = async () => { for (const g of GIVE) await rcon(i, `give @a[team=blue,gamemode=survival] minecraft:${g}`).catch(() => {}); if (GIVE.length) log(`🎒 синим выдано: ${GIVE.join(', ')}`) }
   ctx.spreadBots = async () => {
     for (const [k, b] of bots.entries()) {

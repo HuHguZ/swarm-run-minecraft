@@ -342,6 +342,7 @@ class Autopilot {
     this.hookDamage(bot)
     this.syncDamageContext(bot)
     this.hookCreeper(bot)
+    require('./fire-punch').hookFirePunch(this.session, bot)
     // Жесты людей (присед, прыжки, взгляд, брошенный предмет) — на слушателях,
     // не в этом тике: gestures.js.
     gestures.hook(this, bot)

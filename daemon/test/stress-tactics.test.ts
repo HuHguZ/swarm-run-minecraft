@@ -271,13 +271,23 @@ test('an arena duel to the death keeps its fight at level 3; lava under the duel
   } finally { system.detach(); timer.dispose(); gameClock.activate(null) }
 })
 
-test('no pillar or hole against an attacking player, a wall still delays one (arena slot 27: DigDown, death)', () => {
+test('no pillar, hole, box or cover rest against an attacking player (arena slot 27: DigDown, death; 14.10: "закапываются и стоят афк")', () => {
   const tank = { id: 5, kind: 'Tank', distance: 3, player: true, threatening: true, hit: 6 }
   const hole = candidates(tactical({ health: 12, contact: true, canFight: false, shelter: 'DigDown', enemies: [tank] })).map(candidate => candidate.id)
   assert.ok(!hole.includes('DigDown'), hole.join(','))
-  assert.ok(candidates(tactical({ health: 12, contact: true, canFight: false, shelter: 'BlockOff', escapeRoute: false, enemies: [tank] }))
-    .some(candidate => candidate.id === 'BlockOff'))
+  const walled = candidates(tactical({ health: 12, contact: true, canFight: false, shelter: 'BlockOff', escapeRoute: false, cover: true, edible: true, enemies: [tank] })).map(candidate => candidate.id)
+  assert.ok(!walled.some(id => ['BlockOff', 'Hide', 'Heal'].includes(id)), walled.join(','))
   assert.ok(candidates(tactical({ health: 12, contact: true, canFight: false, shelter: 'DigDown', enemies: [zombie] })).some(candidate => candidate.id === 'DigDown'))
+})
+
+test('no shield stance against people without a shot in flight, nor with a second of them near (14.10: "я со спины подхожу и такого фармлю")', () => {
+  const striker = { id: 5, kind: 'player', distance: 9, player: true, threatening: true }
+  const second = { id: 6, kind: 'HuHguZ', distance: 7, player: true, threatening: false, foe: true }
+  const ids = (s: Partial<TacticalState>) => candidates(tactical({ shield: true, ...s })).map(candidate => candidate.id)
+  assert.ok(!ids({ enemies: [striker] }).includes('Shield'), 'one player walking up, nothing in flight: the skill goes on')
+  assert.ok(ids({ enemies: [striker], incomingProjectiles: 1 }).includes('Shield'), 'his arrow in flight: the shield')
+  assert.ok(!ids({ enemies: [striker, second], incomingProjectiles: 1 }).includes('Shield'), 'a second one near walks round the shield')
+  assert.ok(ids({ enemies: [striker, { ...second, foe: false }], incomingProjectiles: 1 }).includes('Shield'), 'an ally bot near is no flanker')
 })
 
 test('a charged creeper is a 12-block blast: alarm when it swells, dodged by dodgeBlast (farm s4-stress-1: death at 4-5 blocks)', () => {
@@ -473,10 +483,10 @@ test('no pillar or hole against a flyer: a phantom swoops onto it, a blaze shoot
   assert.ok(candidates(tactical({ health: 5, contact: true, enemies: [zombie], canFight: false, shelter: 'PillarUp' })).some(c => c.id === 'PillarUp'), 'a walker cannot reach a pillar')
 })
 
-test('an attacking player alone is run from at .4 of the price (he sprints as fast): a wall first, a run when nothing else is left (slot 27, 18 swaps)', () => {
+test('an attacking player alone is run from at .4 of the price (he sprints as fast), never walled off (slot 27, 18 swaps; arena 14.10)', () => {
   const tank = { id: 5, kind: 'Tank', distance: 2.5, player: true, threatening: true, hit: 7 }
   const offered = candidates(tactical({ health: 9, contact: true, enemies: [tank], canFight: false, shelter: 'BlockOff' }))
-  assert.equal(offered[0].id, 'BlockOff', JSON.stringify(offered))
+  assert.equal(offered[0].id, 'CreateDistance', JSON.stringify(offered))
   assert.ok(offered.some(candidate => candidate.id === 'CreateDistance' && candidate.score === 85 * .4), JSON.stringify(offered))
   const bare = candidates(tactical({ health: 9, contact: true, enemies: [tank], canFight: false, blocks: 0 }))
   assert.equal(bare[0].id, 'CreateDistance', `no wall, shield or strike: run for cover rather than stand (${JSON.stringify(bare)})`)

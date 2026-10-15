@@ -39,9 +39,15 @@ function intersects (cell, pos, width = 0.6, height = 1.8) {
   return pos.x + width / 2 > cell.x && pos.x - width / 2 < cell.x + 1 &&
     pos.z + width / 2 > cell.z && pos.z - width / 2 < cell.z + 1 && pos.y < cell.y + 1 && pos.y + height > cell.y
 }
+// Паутина — последней (пользователь 14.10: «паутину себе могут ставить, когда в обрыв летят, если ничего другого нет —
+// погасит скорость»): твёрдого блока нет — паутина под ноги; в ней скорость падения ×0.05 и fallDistance сброшен (тег
+// FALLDAMAGE_RESETTING), а дальше клатч молчит (climbing).
 function selectBlock (slots: any, reserve: any = 0, pending: any = 0) {
+  return selectOf(slots, FILLER, reserve, pending) || selectOf(slots, /^cobweb$/, 0, pending)
+}
+function selectOf (slots: any, kind: RegExp, reserve: any, pending: any) {
   // S1f: доски — последними (в Аду дерево — палки и кирки: s1f-FB-1 «нет безопасного дерева на 4 доски», доски ушли в клатч и мост).
-  const items = slots.filter(i => i && FILLER.test(i.name)).sort((p, q) => (/_planks$/.test(p.name) ? 1 : 0) - (/_planks$/.test(q.name) ? 1 : 0))
+  const items = slots.filter(i => i && kind.test(i.name)).sort((p, q) => (/_planks$/.test(p.name) ? 1 : 0) - (/_planks$/.test(q.name) ? 1 : 0))
   const total = pending instanceof Map ? [...pending.values()].reduce((n, v) => n + v, 0) : pending
   if (items.reduce((s, i) => s + i.count, 0) - total <= reserve) return null
   let left = total
@@ -316,7 +322,7 @@ function install (session, opts) {
     if (opts.prepare === false || preparing || now() - lastPrepare < 1000 || bot.currentWindow || hand.on && hand.on()) return
     lastPrepare = now()
     if (selectBlock(bot.inventory.slots, opts.reserve ?? 0)) return
-    const it = bot.inventory.items().find(i => FILLER.test(i.name) && i.slot < 36)
+    const it = bot.inventory.items().find(i => FILLER.test(i.name) && i.slot < 36) || bot.inventory.items().find(i => i.name === 'cobweb' && i.slot < 36)
     if (!it || typeof bot.moveSlotItem !== 'function') return
     let dest = -1
     for (let i = 36; i <= 44; i++) if (!bot.inventory.slots[i] && i !== bot.quickBarSlot + 36) { dest = i; break }

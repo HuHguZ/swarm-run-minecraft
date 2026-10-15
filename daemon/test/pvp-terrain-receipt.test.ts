@@ -122,3 +122,51 @@ test('cancel during the post-tower look cannot start a lateral step', async () =
   assert.deepEqual(f.controls, [])
   assert.deepEqual(f.notes, [])
 })
+
+
+test('a failed opening retries on a changed block or usable tool, never clock age alone', async () => {
+  let now = 1000, digs = 0, state = 1, ms = 200
+  const target = new Vec3(2, 0, 0), hit = { position: new Vec3(1, 1, 0), stateId: state, name: 'stone' }
+  const ctx: any = { bot: { entity: { position: new Vec3(0, 0, 0) }, world: { raycast: () => ({ ...hit, stateId: state }) } },
+    entity: { position: target }, EYE: 1.62, Vec3, gameClock: { now: () => now }, ready: () => true, rest() {},
+    tools: { bestFor: () => ({ ms, item: { name: 'stone_pickaxe' } }), breakFast: async () => { digs++; return { ok: false, why: 'no block receipt' } } },
+    pathTo() {}, clear() {}, holdWeapon: async () => {}, used() {}, pick: { faceAim: () => null } }
+  const terrain = createTerrain(ctx)
+  assert.equal(await terrain.punchThrough(), false)
+  now += 60000; await terrain.punchThrough(); assert.equal(digs, 1)
+  ms = 100; await terrain.punchThrough(); assert.equal(digs, 2)
+  state++; await terrain.punchThrough(); assert.equal(digs, 3)
+})
+
+test('a bucket without a liquid receipt fails and does not resend until its placement cause changes', async () => {
+  let now = 1000, uses = 0, floor = 'stone', liquid = 'air', succeeds = false
+  const cell = new Vec3(2, 0, 0), bucket = { name: 'water_bucket', slot: 36, count: 1 }
+  const bot: any = { entity: { position: new Vec3(0, 0, 0) }, heldItem: bucket,
+    blockAt: p => ({ position: p, name: p.y < 0 ? floor : liquid, boundingBox: p.y < 0 ? 'block' : 'empty' }),
+    lookAt: async () => {}, activateItem: () => { uses++; if (succeeds) liquid = 'water' } }
+  const ctx: any = { bot, ctl: { aborted: false }, Vec3, gameClock: { now: () => now },
+    pick: { faceAim: () => cell.offset(.5, 0, .5) }, bucketLanding: () => ({ cell }),
+    holdItem: async () => true, blockName: (_b, p) => bot.blockAt(p).name, sleep: async ms => { now += ms }, used() {} }
+  const terrain = createTerrain(ctx)
+  assert.equal(await terrain.useOnGroundAt(bucket, cell, 'water'), false)
+  now += 60000
+  assert.equal(await terrain.useOnGroundAt(bucket, cell, 'water'), false)
+  assert.equal(uses, 1)
+  floor = 'dirt'; succeeds = true
+  assert.equal(await terrain.useOnGroundAt(bucket, cell, 'water'), true)
+  assert.equal(uses, 2)
+})
+
+test('tower shield stays up for the released bolt corridor, not its old four-hundred-ms tail', async () => {
+  let now = 1000, lowered = 0
+  const watch = { drawAt: 500, loadedAt: 500, shots: 0 }
+  const ctx: any = { bot: { entity: { position: new Vec3(0, 0, 0) }, lookAt: async () => {} },
+    entity: { isValid: true, position: new Vec3(8, 0, 0), equipment: [{ name: 'crossbow' }] }, prof: { player: true },
+    guard: { stats: { worn: true }, raise: async up => { if (!up) lowered = now; return true } },
+    bowWatch: watch, gameClock: { now: () => now }, ctl: { aborted: false }, EYE: 1.62, TOWER_SAFE_DRAW_MS: 500,
+    raySees: () => true, TICK_MS: 50, process: { env: {} }, st: {}, ready: () => true, rest() {}, used() {},
+    threats: { incoming: () => now < 2000 ? [{ name: 'arrow' }] : [], dangers: () => ({ arrows: [] }) },
+    sleep: async ms => { now += ms; watch.drawAt = 0; watch.loadedAt = 0; watch.shots = 1 } }
+  assert.equal(await createTerrain(ctx).towerShield(), 'waited')
+  assert.equal(lowered, 2000, 'lower only once the observed bolt no longer intersects the body')
+})

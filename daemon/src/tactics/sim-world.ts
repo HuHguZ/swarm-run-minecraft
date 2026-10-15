@@ -15,7 +15,7 @@
 //   goal mobs drop the target beyond it (TargetGoal.canContinueToUse), the brute's brain keeps an acquired target.
 // Mob numbers: assess.MOBS (hp, melee damage with the held weapon, attack period), speeds: surface-body.chaseBps.
 // Everything the bot does is a coarse effect model (ponytail: hand calibrated; calibrate from `tactical` telemetry).
-import { sustainableFight, type ActionId, type TacticalEnemy, type TacticalState } from './state'
+import { digDownCost, sustainableFight, type ActionId, type TacticalEnemy, type TacticalState } from './state'
 
 const assess: { MOBS: Record<string, { hp: number; dmg: number; every: number; ranged?: boolean; armor?: number }>; afterArmor(dmg: number, armor: number, tough: number): number } = require('../assess')
 const safety: { evaluate(input: Record<string, unknown>): { action: string } } = require('../combat-safety')
@@ -292,6 +292,11 @@ export function observeWorld(w: SimWorld, session: Record<string, unknown> = {})
   // survival/hold-out.chooseRefuge: a swelling creeper or one within 4 blocks means flee, not a box.
   const boxBreaker = visible.some(e => e.kind === 'creeper' && (e.swell > 0 && dist(w, e.x, e.z) <= 7 || dist(w, e.x, e.z) <= 4))
   const shelter = shelterChoice(w, hostile, boxBreaker)
+  // tactics/minecraft.ts prices the hole by the hits taken while it goes down (state.digDownCost); here the dig is stepAction's 50 ticks.
+  const digDownCostHp = shelter === 'DigDown' ? digDownCost(hostile.map(enemy => {
+    const e = w.enemies.find(foe => foe.id === enemy.id)!
+    return { kind: enemy.kind, distance: enemy.distance, hit: e.range ? 0 : enemy.hit, everyMs: e.every * 50 }
+  }), 50 / w.spec.physics * 50) : undefined
   // Lava under the body changes the real signature (exitsNear block names, the rescue exit); so does it here.
   session._tacticalExitGeometry = `${Math.round(b.x)},${Math.round(b.z)}|${b.inLava}|${w.spec.exits}|${b.shelter?.kind ?? ''}|${shelter}|${b.pearls > 0}|${b.frPotion > 0}`
   const lava = b.inLava
@@ -301,7 +306,7 @@ export function observeWorld(w: SimWorld, session: Record<string, unknown> = {})
     fireResistance: b.fireRes > 0, explosion: !!creeper || tnt, blast: tntNear ? 'tnt' : chargedNear ? 'charged_creeper' : null, dangerousFall: falling && b.waterBucket && !w.spec.nether, emergencyController: false,
     inWater: b.submerged > 0, drowning: b.submerged > 0 && b.air <= 120, cover: w.spec.cover && !lava, portal: w.spec.portal && b.hp >= 10 && b.hp < 12, escapeRoute: w.spec.exits && !b.falling,
     blocks: b.blocks, water: !w.spec.nether && b.waterBucket, edible: b.meals > 0, canFight: hostile.length > 0 && sustainableFight(verdict, b.hp), contact,
-    shelter, protectedEncounter: false, embedded: b.embedded, airborne: !!b.falling || jumpHeight(w) > 0, aerialCombat: false,
+    shelter, digDownCostHp, protectedEncounter: false, embedded: b.embedded, airborne: !!b.falling || jumpHeight(w) > 0, aerialCombat: false,
     flightEscape: false, pearlEscape: lava && b.pearls > 0 && w.spec.landing, fireResistancePotion: (lava || b.burning > 0) && b.frPotion > 0,
     lavaClimb: w.spec.lavaExit, lavaEscapePending: false, webBoatEscape: false, boatLavaHop: false }
 }

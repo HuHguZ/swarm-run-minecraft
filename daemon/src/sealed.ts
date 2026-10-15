@@ -155,6 +155,7 @@ async function plan (o) {
     }
     const mine = new Set([key(cur.x, cur.y, cur.z), key(cur.x, cur.y + 1, cur.z), ...cur.clear])
     for (const mv of moveList(cur, !!o.vup)) {
+      if (o.vdown === false && mv.kind === 'vdown') continue
       const t = mv.to
       if (!inBox(t.x, t.y, t.z)) { why.box++; continue }
       const tk = key(t.x, t.y, t.z)
@@ -533,18 +534,22 @@ async function execute (session, ctl, path, S) {
     if ((bot.health ?? 20) < 7) return { ok: false, why: `хп ${Math.round(bot.health)}`, done: i }
     const body = bodyCells(bot).map(keyV)
     const moveK = mv.clear.map(keyV)
+    // S.honest (вслепую, координатор 14.10): сверка — только с видимым; скрытая клетка — как в шаблоне плана (S.view, bastion
+    // template-view), а не настоящий блок за стеной. Вид пересчитывается на каждом ходе: вскрытое копкой видно.
+    if (S.honest && S.view && S.view.forget) S.view.forget()
+    const live = p => S.honest && S.view ? S.view.cls(p.x, p.y, p.z) : liveCls(bot, p)
     // Сверка с живым миром.
     for (const c of mv.clear) {
       const v = vec(c)
       const k = keyV(c)
       const b = bot.blockAt(v, false)
-      const cc = classOf(b)
+      const cc = S.honest && S.view ? S.view.cls(v.x, v.y, v.z) : classOf(b)
       if (cc === FLUID || cc === HARD || cc === UNKNOWN) return { ok: false, why: `${b ? b.name : '?'} на пути ${k}`, done: i }
       if (cc === AIR) { if (!S.own.has(k) && !body.includes(k) && !(S.openOk && S.openOk.has(k))) return { ok: false, why: `чужой воздух ${k}`, done: i }; continue }
       for (const [dx, dy, dz] of FACES) {
         const n = v.offset(dx, dy, dz)
         const nk = keyV(n)
-        const nc = liveCls(bot, n)
+        const nc = live(n)
         if (nc === FLUID) return { ok: false, why: `жидкость у ${k}`, done: i }
         if (S.own.has(nk) || body.includes(nk) || moveK.includes(nk)) continue
         if (nc === UNKNOWN) return { ok: false, why: `жидкость у ${k}`, done: i }
@@ -555,7 +560,7 @@ async function execute (session, ctl, path, S) {
     // Пол хода — по живому миру и до копки (для vdown после копки тело уже падает).
     if (mv.floor) {
       const fk = keyV(mv.floor)
-      const fc = liveCls(bot, vec(mv.floor))
+      const fc = live(vec(mv.floor))
       if (!(fc === SOLID || fc === HARD || fc === GUARD) || S.own.has(fk)) return { ok: false, why: `пол хода ${fk} ненадёжен`, done: i }
     }
     if (mv.kind === 'vup' && !fillerName(bot)) return { ok: false, why: 'нечем строить столб', done: i }
@@ -570,6 +575,11 @@ async function execute (session, ctl, path, S) {
         if (b0 && b0.name === 'nether_gold_ore') { S.ores++; S.lastBreak = gameClock.now() }
       }
       S.own.add(k)
+      if (S.honest) S.view?.forget?.()
+    }
+    if (S.honest && mv.floor) {
+      const fc = live(vec(mv.floor))
+      if (!(fc === SOLID || fc === HARD || fc === GUARD)) return { ok: false, why: `после копки пол хода ${keyV(mv.floor)} ненадёжен`, done: i }
     }
     const before = bodyCells(bot)
     const ok = await stepMove(bot, ctl, mv)

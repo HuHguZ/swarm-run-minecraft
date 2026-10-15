@@ -36,7 +36,7 @@ export interface MovementBot extends CollisionWorld {
 export interface Cancellation { aborted: boolean; onAbort?: Array<() => void> }
 export interface PlanningDiagnostics { why?: string; frames: number; profiles: number; closest?: { pos: Point; vel: Point; onGround: boolean; distance: number }; workMs?: number; reboundCeiling?: number; momentum?: { runway: Point; entry: Point; contact: Point; contactTick: number } }
 /** `maxFrames` bounds planning by native forecast ticks: deterministic at any server tick rate and machine load. `planningMs` is a wall-clock cap. */
-export interface MovementArena { x: number; y?: number; z: number; r: number; killY?: number; minY?: number }
+export interface MovementArena { x: number; y?: number; z: number; r: number; killY?: number; minY?: number; avoid?: ReadonlyArray<Point & { r: number }> }
 export interface JumpOptions { beam?: number; maxTicks?: number; tolerance?: number; web?: boolean; sprint?: boolean; allowWalk?: boolean; planningMs?: number; maxFrames?: number; diagnostics?: PlanningDiagnostics; bounce?: Point; chain?: Point[]; climb?: Point; maxFallDamage?: number; arena?: MovementArena }
 /** Forecast-tick budget of one routed landing (≈180 ms of the former wall budget on an idle core). */
 export const ROUTE_FRAMES = 6000
@@ -73,12 +73,19 @@ const { PlayerState } = require('../tick-plugins').getPhysics() as { PlayerState
 export const IDLE: Control = Object.freeze({ forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false })
 const flat = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.z - b.z)
 const controls = (extra: Partial<Control> = {}): Control => ({ ...IDLE, ...extra })
-export function withinArena(bot: CollisionWorld, pos: Point, arena?: MovementArena): boolean {
+export function withinArena(bot: CollisionWorld, pos: Point, arena?: MovementArena, from: Point = pos): boolean {
   if (!arena) return true
   const half = dimensions(bot).half
   return [arena.x, arena.z, arena.r, ...(arena.y === undefined ? [] : [arena.y]), ...(arena.killY === undefined ? [] : [arena.killY]), ...(arena.minY === undefined ? [] : [arena.minY])].every(Number.isFinite) &&
     Math.abs(pos.x - arena.x) + half <= arena.r - 1 && Math.abs(pos.z - arena.z) + half <= arena.r - 1 &&
-    (arena.killY === undefined || pos.y > arena.killY) && (arena.minY === undefined || pos.y >= arena.minY)
+    (arena.killY === undefined || pos.y > arena.killY) && (arena.minY === undefined || pos.y >= arena.minY) &&
+    (arena.avoid === undefined || Array.isArray(arena.avoid) && arena.avoid.every(e => {
+      if (!e || ![e.x, e.y, e.z, e.r].every(Number.isFinite) || e.r < 0) return false
+      // Check the swept edge too: safe endpoints can cut a chord through the sphere.
+      const dx = pos.x - from.x, dy = pos.y - from.y, dz = pos.z - from.z
+      const t = Math.max(0, Math.min(1, ((e.x - from.x) * dx + (e.y - from.y) * dy + (e.z - from.z) * dz) / (dx * dx + dy * dy + dz * dz || 1)))
+      return Math.hypot(from.x + dx * t - e.x, from.y + dy * t - e.y, from.z + dz * t - e.z) + 1e-6 >= e.r
+    }))
 }
 function clone(st: State): State { return Object.assign(Object.create(Object.getPrototypeOf(st)) as State, st, { pos: st.pos.clone(), vel: st.vel.clone(), control: { ...st.control } }) }
 function worldOf(bot: MovementBot) {

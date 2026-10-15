@@ -486,7 +486,8 @@ function pushPlan (bot, foe, { vel = null, reach = 2.7, kb = null }: any = {}) {
     const from = new Vec3(fp.x + Math.sin(yaw) * reach, fp.y, fp.z + Math.cos(yaw) * reach)
     if (!outcome(from, true, false)) continue
     // Нам там стоять можно: не над ямой и не у самого края.
-    if (lethalAt(bot, from, cache) || clearance(bot, from, 0.6, cache) < 0.35) continue
+    // И тело там помещается (Codex 15.10: «sure» давал стойку внутри камня).
+    if (!geometry.bodyClear(bot, from) || lethalAt(bot, from, cache) || clearance(bot, from, 0.6, cache) < 0.35) continue
     let dy = Math.abs(yaw - bearing) % (Math.PI * 2)
     if (dy > Math.PI) dy = Math.PI * 2 - dy
     const sure = outcome(from, true, true)

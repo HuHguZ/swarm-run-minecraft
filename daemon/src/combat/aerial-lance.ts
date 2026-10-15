@@ -200,8 +200,8 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
   const cruiseY = () => Math.min(ceilY(), foe().y + 7)
   if (!sky.gliding(bot.entity)) {
     const away = yawTo(foe(), bot.entity.position)
-    const to = await sky.takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats })
-    if (!to.ok) { await sky.chestDown(bot, ctl, { stats }); out.note = 'таран: не взлетел — ' + to.why; return out }
+    const to = await sky.takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats, arena })
+    if (!to.ok) { await sky.chestDown(bot, ctl, { stats, arena }); out.note = 'таран: не взлетел — ' + to.why; return out }
   }
   stats.lances = (stats.lances || 0) + 1
   used('элитры: таран копьём — разбег')
@@ -232,7 +232,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       // Показ 09.10: у стены точка разбега ужата до ~10 бл., а разворот ждал 13 — бот кружил до «долго» (4 с).
       // Разворот — по фактической длине разбега (не дальше 13).
       let runR = 13
-      const climb = await sky.fly(bot, ctl, {
+      const climb = await sky.fly(bot, ctl, { arena,
         maxMs: 4000, stats, phase: 'таран: разбег',
         goal: () => { const P = runUp(); const f = foe(); if (!inside(P)) { P.x = f.x + (P.x - f.x) * 0.6; P.z = f.z + (P.z - f.z) * 0.6 } runR = Math.min(13, Math.hypot(P.x - f.x, P.z - f.z) - 1.5); return { kind: 'point', at: P, reach: true, minY: foe().y + 3, maxY: ceilY(), gap: 3, speedMin: 0.5 } },
         rocketIf: (s: any) => (s.p.y < foe().y + 4 || Math.hypot(s.v.x, s.v.z) < 0.5) ? true : null,
@@ -352,7 +352,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       if (tr.length < 12) tr.push(`${res.why}: ближе ${res.close ? res.close.d : '?'} (dy ${res.close ? res.close.dy : '?'}, ${res.close ? res.close.sp : '?'} б/т, копьё ${res.close ? res.close.use : '?'} т), план ${res.planned} т`)
       if (!valid() || !sky.gliding(bot.entity)) break
       // 3) Выход вверх и прочь от стен: точка впереди по ходу на cruiseY.
-      await sky.fly(bot, ctl, {
+      await sky.fly(bot, ctl, { arena,
         maxMs: 1500, stats, phase: 'таран: выход',
         // Отказ от захода (его копьё на изготовке, опасный выход) — прочь от него, а не «по ходу» (по ходу — в его
         // копьё: s7j р.1 «таран — мимо, себе −20», встречный разгон убил тараном его копья).
@@ -402,10 +402,10 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       const inside = arena ? (x: number, z: number) => Math.abs(x - arena.x) <= arena.r - 1 && Math.abs(z - arena.z) <= arena.r - 1 : null
       const live = e && e.isValid !== false && e.position
       const spot = sky.landingSpot(bot, W, { near: bot.entity.position, away: live ? foe() : null, floorY: live ? foe().y : null, radius: 16, inside })
-      l = await sky.land(bot, landCtl, { at: spot, away: live ? foe() : null, stats })
+      l = await sky.land(bot, landCtl, { at: spot, away: live ? foe() : null, stats, arena })
     }
     await clock.sleep(150)
-    if ((bot.health ?? 0) > 0 && !/_chestplate$/.test(bot.inventory.slots[6]?.name || '')) await sky.chestDown(bot, ctl, { stats })
+    if ((bot.health ?? 0) > 0 && !/_chestplate$/.test(bot.inventory.slots[6]?.name || '')) await sky.chestDown(bot, ctl, { stats, arena })
     if (!l.ok) stats.lanceBadLand = (stats.lanceBadLand || 0) + 1
     return l
   }

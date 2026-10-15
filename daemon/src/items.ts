@@ -67,6 +67,8 @@ const GROUPS = {
   any_ore: /_ore$|^ancient_debris$/,
   stone_like: /^(stone|cobblestone|deepslate|cobbled_deepslate|andesite|diorite|granite|tuff|blackstone|basalt)$/,
   any_sand: /^(sand|red_sand|gravel)$/,
+  // Любой блок постройки (ямы-ловушки арены: в мире на месте ямы бывает не тот блок, что в модели — «не вижу cut_sandstone»).
+  arena_block: /sandstone|quartz|_slab$|_stairs$|stone|bricks|terracotta|concrete|_planks$|cobble|^dirt$|^sand$|^gravel$/,
   any_bed: /_bed$/,
   any_container: /^(chest|trapped_chest|barrel|ender_chest)$/,
   any_furnace: /^(furnace|blast_furnace|smoker)$/

@@ -463,16 +463,15 @@ const fortOut = async () => {
     // Сидеть на шифте (пользователь 10.10: «прячутся — пусть шифт жмут, ника тогда не видно сквозь стены»).
     try { ctx.bot.setControlState('sneak', true) } catch {}
     if (box.hardN) ctx.used(`коробка: лицо, бока и крыша — ${box.hard}`)
-    const t0 = ctx.gameClock.now()
     let patchedTotal = 0
     let hitThrough = 0
-    let breaches = 0
     let holeSince = 0
     let budget = ctx.style.patchBudget
     let why = null
     let breakAway = false
-    while (!ctx.ctl.aborted && ctx.gameClock.now() - t0 < 70000) {
+    while (!ctx.ctl.aborted) {
       if ((ctx.bot.health ?? 0) <= 0) break
+      if (!ctx.bot.entity.position.floored().equals(box.cell)) break
       const hpNow = ctx.bot.health ?? 20
       const swell = ctx.bot.nearestEntity(e => e && e.name === 'creeper' && e.position.distanceTo(ctx.bot.entity.position) < 6 && ctx.creeperSwelling(ctx.bot, e))
       if (swell) { ctx.used('крипер у коробки — выхожу'); break }
@@ -515,12 +514,12 @@ const fortOut = async () => {
         const breach = canHitMe ? 'он достаёт через дыру' : digging ? 'он ломает стену' : hurtNow ? 'по мне попали' : nearHole ? 'дыра, он рядом' : burningNow ? 'горю, воды нет' : null
         // Латать, а не выбегать (пользователь 10.10: «ломаю сверху укрытие — блоки не ставят, чтобы закрыться»): дыра есть
         // и есть чем — заделать сразу; стену ещё ломают — ждать дыру и заделать. Выход — когда по мне уже попали, латать
-        // нечем, бюджет кончился или ломает быстрее, чем латаю (3 вскрытия за 12 с).
-        const canPatch = breach && !hurtNow && !burningNow && budget > 0 && ctx.pickFiller(ctx.bot) && !(breaches >= 3 && ctx.gameClock.now() - t0 < 12000)
+        // нечем, бюджет подтверждённых блоков кончился или дыру не удалось закрыть.
+        const canPatch = breach && !hurtNow && !burningNow && budget > 0 && ctx.pickFiller(ctx.bot)
         if (canPatch && !encB.sealed) {
           const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats, ctl: ctx.guardCtl(ctx.buildGuard()) })
           if (n) {
-            patchedTotal += n; budget -= n; breaches++; holeSince = 0; ctx.st.blocks = (ctx.st.blocks || 0) + n
+            patchedTotal += n; budget -= n; holeSince = 0; ctx.st.blocks = (ctx.st.blocks || 0) + n
             if (ctx.ready('patchNote')) { ctx.rest('patchNote', 2000); ctx.used(`заделал дыру (${breach})`) }
             continue
           }
@@ -536,10 +535,9 @@ const fortOut = async () => {
       }
       const enc = ctx.fortify.enclosure(ctx.bot, box.cell)
       if (!enc.sealed) {
-        if (!holeSince) { holeSince = ctx.gameClock.now(); breaches++ }
+        if (!holeSince) holeSince = ctx.gameClock.now()
         const filler = ctx.pickFiller(ctx.bot)
         if (!filler || budget <= 0) { why = 'латать нечем или хватит'; break }
-        if (breaches >= 3 && ctx.gameClock.now() - t0 < 12000) { why = 'ломает быстрее, чем латаю'; break }
         if (ctx.gameClock.now() - holeSince >= ctx.style.reactMs) {
           const n = await ctx.fortify.patch(ctx.bot, box.plan, { mats: box.mats, ctl: ctx.guardCtl(ctx.buildGuard()) })
           if (n) { patchedTotal += n; budget -= n; ctx.st.blocks = (ctx.st.blocks || 0) + n; holeSince = 0 }
@@ -557,18 +555,17 @@ const fortOut = async () => {
         ctx.tt.safe(ctx.tempo.consumeMs(item0.name), { fortSealed: ctx.fortSealed() }).ok) ? item0 : null
       if (item) {
         ctx.rest('fortEat', 1800)
+        let confirmed = false
         if (/splash_potion/.test(item.name)) {
-          if (await ctx.holdItem(item) && await ctx.useAt(ctx.bot.entity.yaw, -Math.PI / 2, { item })) { ctx.used('лечение под ноги'); ctx.st.healed.push('взрывное лечения') }
+          confirmed = await ctx.holdItem(item) && await ctx.useAt(ctx.bot.entity.yaw, -Math.PI / 2, { item })
+          if (confirmed) { ctx.used('лечение под ноги'); ctx.st.healed.push('взрывное лечения') }
           ctx.aim = 'free'
-        } else if (await ctx.consumeItem(item)) { ctx.used('съел в коробке ' + item.name); ctx.st.healed.push(item.name) }
+        } else if (await ctx.consumeItem(item)) { confirmed = true; ctx.used('съел в коробке ' + item.name); ctx.st.healed.push(item.name) }
+        if (!confirmed) { why = 'лечение не подтверждено — перепланирую'; break }
       }
-      const waited = ctx.gameClock.now() - t0
-      const regen = (ctx.bot.food ?? 0) >= 18
-      if (hpNow >= 18) break
-      if (!ctx.healItem() && hpNow >= 14 && waited > 12000) break
-      if (!ctx.healItem() && !regen && waited > 15000) break
-      if (waited > Math.max(ctx.style.boxPatienceMs, 20000) && hpNow >= 10) { why = 'надоело сидеть'; break }
-      if (waited > 60000) break
+      const regen = (ctx.bot.food ?? 0) >= 18 || ctx.hasEffect(ctx.bot, 'regeneration')
+      if ((ctx.bot.health ?? 0) >= 18) break
+      if (!ctx.healItem() && !regen) { why = 'лечиться больше нечем'; break }
       await ctx.sleep(100)
     }
     try { ctx.bot.setControlState('sneak', false) } catch {}

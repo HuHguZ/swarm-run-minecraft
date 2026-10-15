@@ -84,6 +84,8 @@ async function sinkOne (bot, mcData) {
     for (const dy of [-1, -2]) {
       const side = bot.blockAt(feet.offset(dx, dy, dz))
       if (side && /lava/.test(side.name)) return { stopped: 'лава в стенке ямы — тут не копаю' }
+      // Вода в стенке затечёт в нору, а закрытый потолок сделает её ловушкой (tw-a-s1-3 15.10: нора у пруда, утонул).
+      if (side && /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/.test(side.name)) return { stopped: 'вода в стенке ямы — тут не копаю' }
     }
   }
   if (under && under.boundingBox === 'empty') {
@@ -186,6 +188,13 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
     }
   }
 
+  // Вода натекла в нору (бок, промытый ход) — потолок над водой не ставить: это утопление, а не ночлег.
+  if (inWater(bot)) {
+    const note = `нора на ${dug} вниз залита водой — потолок не ставлю, выхожу`
+    session.journal.append('убежище', note, bot.entity.position)
+    try { await escapeWater(bot, ctl, { timeoutMs: 15000 }) } catch {}
+    return { mode: 'enter', at: xyz(bot.entity.position), depth: dug, sealed: false, torch: false, note, stopped: 'вода в норе' }
+  }
   let seal = await sealAbove(bot, ctl)
   // Two deep leaves the roof hanging in the air above the surface with no
   if (!seal.ok && dug < 3 && !stopped && !ctl.aborted && gameClock.now() < deadline) {

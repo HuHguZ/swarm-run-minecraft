@@ -99,14 +99,21 @@ function refuseOtherWorld (bot, rec, what) {
 function wrapPlaceBlock (bot) {
   if (bot._ndPlaceWrapped || typeof bot._genericPlace !== 'function') return
   bot._ndPlaceWrapped = true
-  const inMe = (dest) => {
-    const p = bot.entity.position
-    return p.x + 0.3 > dest.x && p.x - 0.3 < dest.x + 1 && p.z + 0.3 > dest.z && p.z - 0.3 < dest.z + 1 && p.y < dest.y + 1 && p.y + 1.8 > dest.y
+  // Рамка блока: лестница — пластина 3/16 у грани опоры (LadderBlock), её ставят и в клетку, где стоит своя голова
+  // (лестница вверх изнутри, 15.10: «своя рамка в клетке» на каждой ступени); прочее — целая клетка.
+  const inMe = (dest, face) => {
+    const p = bot.entity.position, t = 3 / 16
+    const b = { x0: dest.x, x1: dest.x + 1, z0: dest.z, z1: dest.z + 1 }
+    if (bot.heldItem?.name === 'ladder' && face) {
+      if (face.x > 0) b.x1 = dest.x + t; else if (face.x < 0) b.x0 = dest.x + 1 - t
+      if (face.z > 0) b.z1 = dest.z + t; else if (face.z < 0) b.z0 = dest.z + 1 - t
+    }
+    return p.x + 0.3 > b.x0 && p.x - 0.3 < b.x1 && p.z + 0.3 > b.z0 && p.z - 0.3 < b.z1 && p.y < dest.y + 1 && p.y + 1.8 > dest.y
   }
   bot.placeBlock = async (ref, face) => {
     const dest = ref.position.plus(face)
-    for (let t = 0; t < 12 && inMe(dest); t++) await bot.waitForTicks(1)
-    if (inMe(dest)) throw new Error('своя рамка в клетке постановки')
+    for (let t = 0; t < 12 && inMe(dest, face); t++) await bot.waitForTicks(1)
+    if (inMe(dest, face)) throw new Error('своя рамка в клетке постановки')
     const old = bot.blockAt(dest)
     await bot._genericPlace(ref, face, { swingArm: 'right' })
     for (let t = 0; t < 10; t++) {

@@ -131,7 +131,7 @@ function chestTake (this: any, p: any = {}) {
       this.require()
       this.updateMovements()
       return containers.chestTake(this, ctl, p)
-    }, { timeoutMs: 60000, interruptOn: HOLDING })
+    }, { timeoutMs: containers.chestTakeMs(p.timeoutSeconds) + 2000, params: p, interruptOn: HOLDING })
   }
 
 function chestList (this: any, p: any = {}) {

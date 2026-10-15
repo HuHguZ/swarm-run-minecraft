@@ -11,6 +11,20 @@ const ALL_POTIONS = ['night_vision', 'long_night_vision', 'invisibility', 'long_
   'strength', 'long_strength', 'strong_strength', 'weakness', 'long_weakness', 'luck', 'slow_falling', 'long_slow_falling',
   'wind_charged', 'weaving', 'oozing', 'infested']
 
+// Ярусы колизея (пользователь 14.10: «чем выше этаж — тем круче лут: снизу слабое, на самом верху, куда просто так не
+// залезть, — незерит, крутые чары; у всех мотивация лезть наверх»). Ярус — по высоте сундука над песком (dy): 0 — песок,
+// камеры, нижние галереи, комнаты спавна; 1 — терраса, нижние ряды, галерея 8; 2 — средние ряды, галерея 16; 3 — верх рядов,
+// галерея 24; 4 — крыша-терраса (31, только жемчугом, столбом, на элитрах); 5 — венец стены (34). Тайник — на ярус выше.
+export const tierOf = (y: number) => y <= 2 ? 0 : y <= 10 ? 1 : y <= 18 ? 2 : y <= 27 ? 3 : y <= 32 ? 4 : 5
+const TIERS = [
+  { weapon: ['stone', 'stone', 'iron'], armor: ['leather', 'chainmail', 'chainmail', 'iron'], ench: 0.25, lv: 0.3, weapons: 1, armorN: 1, totem: 0, gapple: 0, elytra: 0.1, tnt: 0.35, blocks: 0.6 },
+  { weapon: ['stone', 'iron', 'iron'], armor: ['chainmail', 'iron', 'iron'], ench: 0.45, lv: 0.5, weapons: 2, armorN: 2, totem: 0.05, gapple: 0, elytra: 0.15, tnt: 0.3, blocks: 0.5 },
+  { weapon: ['iron', 'diamond', 'diamond'], armor: ['iron', 'diamond'], ench: 0.7, lv: 0.7, weapons: 2, armorN: 2, totem: 0.12, gapple: 0.05, elytra: 0.2, tnt: 0.25, blocks: 0.4 },
+  { weapon: ['diamond', 'diamond', 'netherite'], armor: ['diamond', 'diamond', 'netherite'], ench: 0.9, lv: 0.85, weapons: 2, armorN: 3, totem: 0.25, gapple: 0.12, elytra: 0.3, tnt: 0.25, blocks: 0.3 },
+  { weapon: ['diamond', 'netherite', 'netherite'], armor: ['diamond', 'netherite', 'netherite'], ench: 1, lv: 1, weapons: 3, armorN: 3, totem: 0.5, gapple: 0.3, elytra: 0.45, tnt: 0.3, blocks: 0.3 },
+  { weapon: ['netherite'], armor: ['netherite'], ench: 1, lv: 1, max: true, weapons: 3, armorN: 4, totem: 0.8, gapple: 0.6, elytra: 0.6, tnt: 0.3, blocks: 0.3 }
+] as const
+
 // Свой лут на 12 бойцов (пользователь 10.10: «добавь ресурсов, покруче»): карта arms-layout рассчитана на дуэль —
 // 14 оружия на 12, лава в сундуках. Сундук очищается и набивается заново (seed): оружие железо/алмаз, броня,
 // щиты, яблоки, зелья, жемчуг, еда, блоки; тайники — лучше. Нарочно неровно: кому-то два меча, кому-то пусто —
@@ -32,34 +46,45 @@ export function makeStockChests (ctx: ArenaContext) {
       if (c.kind === 'spawn' && !only && rnd() >= Number(process.env.ARMS_SPAWN_CHEST ?? 0.5)) { await rcon(i, `setblock ${X + c.x} ${Y + c.y} ${Z + c.z} minecraft:air`).catch(() => {}); continue }
       const hidden = /secret|under|niche/.test(c.kind)
       const mat = () => (rnd() < (SOLO ? 0.75 : hidden ? 0.6 : 0.25) ? 'diamond' : 'iron')
+      const tier = L.map === 'colosseum' ? Math.min(5, tierOf(c.y) + (hidden ? 1 : 0)) : null
+      const T: any = tier === null ? null : TIERS[tier]
+      if (T) (stats.tiers ||= [0, 0, 0, 0, 0, 0])[tier]++
       const gen = () => {
       const items: string[] = []
       // Оружие (пользователь 10.10: «разное — булава, копьё, чарованное; лут как в сундуках Края»): в 80% сундуков, в
       // тайнике — и второе; чары — в 40% (тайник 70%), уровни случайны. Тайник — лут города Края: алмаз, изредка незерит.
-      const lv = (max) => 1 + Math.floor(rnd() * max)
-      const ench = (base, list) => rnd() < (SOLO ? 1 : hidden ? 0.7 : 0.4) ? `${base}[enchantments={${list.filter(() => rnd() < 0.7).join(',') || list[0]}}]` : base
-      const mat2 = () => (SOLO ? rnd() < (hidden ? 0.4 : 0.2) : hidden && rnd() < 0.08) ? 'netherite' : mat()
+      const lv = (max) => T?.max ? max : 1 + Math.floor(rnd() * (T ? Math.ceil(max * T.lv) : max))
+      const ench = (base, list) => rnd() < (T ? T.ench : SOLO ? 1 : hidden ? 0.7 : 0.4) ? `${base}[enchantments={${(T?.max ? list : list.filter(() => rnd() < 0.7)).join(',') || list[0]}}]` : base
+      const mat2 = () => T ? pickOne(T.weapon) : (SOLO ? rnd() < (hidden ? 0.4 : 0.2) : hidden && rnd() < 0.08) ? 'netherite' : mat()
       // Раунд кристаллов (10.10: «в основном взрывают друг друга») — без оружия в сундуках: бой кристаллами, а не мечом.
-      for (let w = 0; w < (process.env.ARMS_CRYSTAL === '1' ? 0 : hidden ? 3 : 2); w++) if (rnd() < 0.8) {
-        const kind = pickOne(['sword', 'sword', 'sword', 'axe', 'axe', 'spear', 'spear', 'mace', 'trident', 'bow', 'bow', 'crossbow'])
+      for (let w = 0; w < (process.env.ARMS_CRYSTAL === '1' ? 0 : T ? T.weapons : hidden ? 3 : 2); w++) if (T || rnd() < 0.8) {
+        // Соло (14.10: «не замечаю, чтоб атаковали булавой или копьём в полёте»): булав и копий втрое/вдвое больше — было 1 из 12.
+        const kind = pickOne(['sword', 'sword', 'sword', 'axe', 'axe', 'spear', 'spear', 'mace', 'trident', 'bow', 'bow', 'crossbow', ...(SOLO ? ['mace', 'mace', 'spear', 'spear'] : [])])
         const m = mat2()
         if (kind === 'sword') items.push(ench(`${m}_sword`, [`sharpness:${lv(5)}`, `fire_aspect:${lv(2)}`, `knockback:${lv(2)}`, 'sweeping_edge:2']) + ' 1')
         else if (kind === 'axe') items.push(ench(`${m}_axe`, [`sharpness:${lv(5)}`, 'efficiency:3']) + ' 1')
-        else if (kind === 'spear') items.push(ench(`${m === 'netherite' ? 'diamond' : m}_spear`, [`sharpness:${lv(5)}`, `knockback:${lv(2)}`]) + ' 1')
+        else if (kind === 'spear') items.push(ench(`${m === 'netherite' && !T ? 'diamond' : m}_spear`, [`sharpness:${lv(5)}`, `knockback:${lv(2)}`]) + ' 1')
         else if (kind === 'mace') items.push(ench('mace', [`density:${lv(5)}`, `breach:${lv(4)}`, 'wind_burst:1']) + ' 1', 'wind_charge 6')
         else if (kind === 'trident') items.push(ench('trident', [`impaling:${lv(5)}`, `loyalty:${lv(3)}`]) + ' 1')
         else if (kind === 'bow') items.push(ench('bow', [`power:${lv(5)}`, `punch:${lv(2)}`, 'flame:1']) + ' 1', 'arrow 32')
         else items.push(ench('crossbow', [`quick_charge:${lv(3)}`, 'multishot:1', `piercing:${lv(4)}`]) + ' 1', 'arrow 32')
         stats.weapons++
       }
-      const nArmor = Math.floor(rnd() * (hidden ? 3 : 2)) + 2
+      const nArmor = T ? T.armorN + (T.max ? 0 : Math.floor(rnd() * 2)) : Math.floor(rnd() * (hidden ? 3 : 2)) + 2
       for (let a = 0; a < nArmor; a++) {
-        const piece = pickOne(['helmet', 'chestplate', 'leggings', 'boots'])
-        items.push(ench(`${mat2()}_${piece}`, [`protection:${lv(4)}`, 'unbreaking:3', ...(piece === 'boots' ? [`feather_falling:${lv(4)}`] : []), ...(piece === 'leggings' ? [`blast_protection:${lv(4)}`] : [])]) + ' 1')
+        const piece = T?.max ? ['helmet', 'chestplate', 'leggings', 'boots'][a % 4] : pickOne(['helmet', 'chestplate', 'leggings', 'boots'])
+        items.push(ench(`${T ? pickOne(T.armor) : mat2()}_${piece}`, [`protection:${lv(4)}`, 'unbreaking:3', ...(piece === 'boots' ? [`feather_falling:${lv(4)}`] : []), ...(piece === 'leggings' ? [`blast_protection:${lv(4)}`] : [])]) + ' 1')
         stats.armor++
       }
       for (let e = 0; e < 2 + (hidden ? 2 : 1); e++) items.push(pickOne(['golden_apple 2', `${heal} 2`, 'shield 1', 'ender_pearl 2', 'cooked_beef 8', 'cobblestone 32', 'golden_apple 1', `${heal} 1`, 'wind_charge 4', 'wind_charge 8']))
-      if (hidden && rnd() < 0.12) items.push('enchanted_golden_apple 1')
+      if (T ? rnd() < T.gapple : hidden && rnd() < 0.12) items.push('enchanted_golden_apple 1')
+      // Динамит (пользователь 14.10: «динамитом взрывать — достать игрока или разнести колизей к чертям, больше анархии»): с
+      // огнивом или огненными зарядами; блоки — строить столбы и мосты к человеку наверху (ND_SCAFFOLD_ANY).
+      if (T && rnd() < T.tnt) items.push(`tnt ${2 + Math.floor(rnd() * 4)}`, rnd() < 0.7 ? 'flint_and_steel 1' : 'fire_charge 4')
+      if (T && rnd() < T.blocks) items.push(`${pickOne(['cobblestone', 'sandstone', 'oak_planks'])} ${pickOne([32, 48, 64])}`)
+      // Лестницы (пользователь 14.10: «лестницу, по которой другие залезут; дерево в сундуках — крафтить лестницы»): готовые
+      // или брёвна (1 бревно ≈ 3 лестницы).
+      if (T && rnd() < 0.35) items.push(rnd() < 0.6 ? `ladder ${pickOne([16, 24, 32])}` : `oak_log ${pickOne([4, 6, 8])}`)
       // Щит — в каждом втором (10.10: «от булавы без щита не защищаются»; щит держит и смэш булавы).
       if (rnd() < 0.5) items.push('shield 1')
       // Чем уничтожать чужой лут (лава, огонь): ведро лавы, огниво, огненный заряд — иногда.
@@ -68,8 +93,11 @@ export function makeStockChests (ctx: ArenaContext) {
       if (rnd() < 0.45) items.push('water_bucket 1')
       // Паутина — закрыть проход за собой (10.10).
       if (rnd() < 0.4) items.push('cobweb 4')
-      if (rnd() < (SOLO ? (hidden ? 0.5 : 0.2) : hidden ? 0.1 : 0)) items.push('totem_of_undying 1')
-      if (SOLO && rnd() < 0.25) items.push('elytra[enchantments={unbreaking:3}] 1', 'firework_rocket 16')
+      // Удочка (пользователь 14.10: «удочки добавь в сундуки для пвп — пусть боты ими притягивают игроков и врагов»): в
+      // трети сундуков, в тайнике — в половине; бой берёт её сам (utility: подтяг под удар, со столба, в лаву или яму).
+      if (rnd() < (hidden ? 0.5 : 0.35)) items.push('fishing_rod[enchantments={unbreaking:3}] 1')
+      if (rnd() < (T ? T.totem : SOLO ? (hidden ? 0.5 : 0.2) : hidden ? 0.1 : 0)) items.push('totem_of_undying 1')
+      if (SOLO && rnd() < (T ? T.elytra : 0.25)) items.push('elytra[enchantments={unbreaking:3}] 1', 'firework_rocket 16')
       // Зелья (пользователь 10.10: «больше зелий — хилок и опасных»): лечение чаще всего, вред/яд взрывные, сила/реген.
       for (let e = 0; e < (hidden ? 4 : 3); e++) items.push(pickOne([`${heal} 2`, `${heal} 1`, `${heal} 2`, pot('splash_potion', 'strong_harming') + ' 1', pot('splash_potion', 'harming') + ' 2',
         pot('splash_potion', 'poison') + ' 1', pot('potion', 'strength') + ' 1', pot('potion', 'regeneration') + ' 1']))
@@ -155,14 +183,14 @@ export function makeStockChests (ctx: ArenaContext) {
     await rcon(i, `setblock ${LC.x} ${LC.y} ${LC.z} chest[facing=south]`).catch(() => {})
     for (const [k, it] of ['nether_wart 2', 'glistering_melon_slice 2', 'glowstone_dust 2', 'gunpowder 2', 'blaze_powder 4', 'glass_bottle 6', 'fermented_spider_eye 2'].entries())
       await rcon(i, `item replace block ${LC.x} ${LC.y} ${LC.z} container.${k} with minecraft:${it}`).catch(() => {})
-    log(`гонка: сундуки набиты (раунд ${round}) — оружия ${stats.weapons}, брони ${stats.armor}, всего предметов ${stats.items}, двойных сундуков ${stats.doubled || 0}/${L.chests.length} (без лавы)`)
+    log(`гонка: сундуки набиты (раунд ${round}) — оружия ${stats.weapons}, брони ${stats.armor}, всего предметов ${stats.items}, двойных сундуков ${stats.doubled || 0}/${L.chests.length}${stats.tiers ? `, по ярусам ${stats.tiers.join('/')}` : ''} (без лавы)`)
   }
 }
 
 // Лут пропорционально бойцам (10.10: «30 на 30 — лута пропорционально»): сундук на 27 ячеек больше не вмещает, поэтому
 // открытый сундук пополняется заново, пока не выдаст ARMS_LOOT_X наборов за раунд (умолчание — бойцов / 24).
 export function startRefills (ctx: ArenaContext) {
-  const { arms, N, L, opened, refills, log } = ctx
+  const { arms, N, L, X, Y, Z, opened, refills, log } = ctx
   const LOOT_X = Number(process.env.ARMS_LOOT_X) || Math.max(1, (N || 24) / 24)
   let refillRound = 0
   return arms && LOOT_X > 1 ? setInterval(async () => {
@@ -171,6 +199,8 @@ export function startRefills (ctx: ArenaContext) {
     if (!due.length) return
     for (const c of due) { const k = `${c.x},${c.y},${c.z}`; refills.set(k, (refills.get(k) || 0) + 1); opened.delete(k) }
     await ctx.stockChests(1000 + ++refillRound, due).catch(() => {})
+    // Пополнен — рой узнаёт об этом сундуке (Codex 1b): пустой больше не считается пустым, без срока «через 60 с проверить снова».
+    for (const c of due) ctx.swarmDriver?.refill?.({ x: X + c.x, y: Y + c.y, z: Z + c.z })
     log(`🎁 пополнил сундуков ${due.length} (лут ×${LOOT_X.toFixed(1)} на ${N} бойцов)`)
   }, 20000) : null
 }

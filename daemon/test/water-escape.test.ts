@@ -71,7 +71,7 @@ function scene({ oxygen = 20, blocks = 32, change = null }: any = {}) {
     if (error) throw error
     return result
   }
-  return { bot, ctl, clock, run, positions, placements, stack, activeControls, controls: () => controls,
+  return { bot, ctl, clock, run, positions, placements, stack, activeControls, cells, controls: () => controls,
     close() { if (!stopped) { stopped = true; clock.dispose() } } }
 }
 
@@ -131,6 +131,68 @@ test('a shaft flooded from above with no air in reach is plugged over the head (
     s.bot.placeBlock = async (ref, face) => { s.placements.push(ref.position.plus(face)) }
     const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 3000 }))
     assert.ok(s.placements.some(p => p.equals(new Vec3(0, 3, 0))), JSON.stringify({ r, placements: s.placements }))
+  } finally { s.close() }
+})
+
+test('own sealed hole flooded under a pond: the roof is opened, not plugged again (tw-a-s1-3 15.10 drowned)', async () => {
+  // Пруд: вода в y=3 над каменным дном y<=2; своя нора 1x1 в (0,0): вода y=0..1, потолок из булыжника y=2; берег — камень до y=3.
+  const s = scene({ oxygen: 10, change: q => {
+    const pond = Math.abs(q.x) <= 6 && Math.abs(q.z) <= 6
+    if (q.x === 0 && q.z === 0 && q.y >= 0 && q.y <= 1) return 'water'
+    if (q.x === 0 && q.z === 0 && q.y === 2) return 'cobblestone'
+    if (pond) return q.y <= 2 ? 'stone' : q.y === 3 ? 'water' : 'air'
+    return q.y <= 3 ? 'stone' : 'air'
+  } })
+  s.bot.entity.position = new Vec3(.5, 0, .5)
+  const dug: Vec3[] = []
+  s.bot.canDigBlock = () => true
+  s.bot.dig = async (b: any) => {
+    dug.push(b.position.clone())
+    const w = Block.fromStateId(registry.blocksByName.water.defaultState); w.position = b.position.clone()
+    s.cells.set(b.position.toString(), w) // пруд сверху затекает в вскрытую клетку
+  }
+  s.bot.placeBlock = async (ref, face) => { s.placements.push(ref.position.plus(face)) }
+  try {
+    assert.equal(movement.findSwimRoute(s.bot, { visibleOnly: true }), null, 'sealed: no air in reach')
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 12000, visibleOnly: true }))
+    assert.deepEqual(dug.map(String), [String(new Vec3(0, 2, 0))], 'the roof over the head is opened once')
+    assert.deepEqual(s.placements, [], 'no plug over an opened roof')
+    assert.equal(r.breathing || r.ok, true, JSON.stringify({ r, at: s.bot.entity.position }))
+  } finally { s.close() }
+})
+
+test('deep open water with no air in the bounded search: swims straight up (tw-cr2-s1-3 15.10 drowned)', async () => {
+  // Озеро 11×11 глубиной 20 (вода y=1..20), берег — камень до y=20; бот на дне. Поиск (подъём ≤ 12/16) воздуха не видит.
+  const s = scene({ oxygen: 20, change: q => {
+    if (q.y <= 0) return 'stone'
+    const lake = Math.abs(q.x) <= 5 && Math.abs(q.z) <= 5
+    if (lake) return q.y <= 20 ? 'water' : 'air'
+    return q.y <= 20 ? 'stone' : 'air'
+  } })
+  s.bot.entity.position = new Vec3(.5, 1, .5)
+  s.bot.placeBlock = async (ref, face) => { s.placements.push(ref.position.plus(face)) }
+  try {
+    assert.equal(movement.findSwimRoute(s.bot, { visibleOnly: true }), null, 'no air within the bounded search')
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 20000, visibleOnly: true }))
+    assert.deepEqual(s.placements, [], 'open water is not plugged')
+    assert.ok(s.bot.entity.position.y > 15, 'rose toward the surface: ' + s.bot.entity.position + ' ' + JSON.stringify(r))
+  } finally { s.close() }
+})
+
+test('surfaced in a wide lake with no shore in 8 blocks: swims to the visible bank instead of sinking (j1k1-s2 15.10 drowned x3)', async () => {
+  // Озеро 31×31 глубиной 2 (вода y=1..2, воздух выше), берег — камень до y=2 за |x|,|z| > 15; тело в центре, голова над водой.
+  const s = scene({ oxygen: 8, change: q => {
+    if (q.y <= 0) return 'stone'
+    const lake = Math.abs(q.x) <= 15 && Math.abs(q.z) <= 15
+    if (lake) return q.y <= 2 ? 'water' : 'air'
+    return q.y <= 2 ? 'stone' : 'air'
+  } })
+  s.bot.entity.position = new Vec3(.5, 1.6, .5)
+  try {
+    assert.equal(movement.findSwimRoute(s.bot, { visibleOnly: true })?.kind, 'air', 'no bank within the old 8-block search')
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 20000, visibleOnly: true }))
+    assert.equal(r.ok, true, JSON.stringify({ r, at: s.bot.entity.position }))
+    assert.ok(Math.max(Math.abs(s.bot.entity.position.x), Math.abs(s.bot.entity.position.z)) > 15, 'reached the bank')
   } finally { s.close() }
 })
 

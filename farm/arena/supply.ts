@@ -9,14 +9,6 @@ const crowd = require(path.join(ROOT, 'daemon', 'src', 'pvp', 'crowd'))
 
 export function installSupply (ctx: ArenaContext) {
   const { i, kit, COLOS_MAP, AL, L, X, Y, Z, bots, pos, busy, labNeed, brewed, alchemist, log, sleep } = ctx
-  const healing = new Set<string>()
-  // Сбор на хилку (по команде лекаря): раненые сбегаются к нему, он бросает зелье в гущу, все — обратно в бой.
-  // Рамки, чтобы не зациклиться и не ломать бой: один сбор на команду, длится ≤ 6 игровых с (4 — взрывы отбрасывали, не добегали) (без паузы между сборами —
-  // пользователь 10.10: экстренно нужен снова, особенно с кристаллами); бегут
-  // только раненые (≤ 12 хп) на земле в 12 бл.; враг у лекаря (< 3 бл.) — бросок сразу.
-  const rally: Record<string, any> = {}
-  const giving = new Set<string>()
-  const spreadAt: Record<string, number> = {}
   // Чего не хватает бойцу (по его рюкзаку): яблоко при ≤ 14 хп, зелья лекарю, блоки на стенки, оружие.
   // Что из ресурсов в этом бою вообще бывает (набор): зелья и блоки просят, только если их выдают.
   ctx.kitHas = (re: RegExp) => (KITS[kit] || []).some(it => re.test(it))
@@ -59,11 +51,10 @@ export function installSupply (ctx: ArenaContext) {
     return n > 0 ? { item: need.item, count: n } : null
   }
   // ---------------------------------------------------------------- гонка: лут и каптёр
-  // Лут (LOOT_S игровых с): зоны — комнаты (кроме тайных) и четверти поля — делятся в команде (своя заявка на зону:
+  // Лут до завершения обхода: зоны — комнаты (кроме тайных) и четверти поля — делятся в команде (своя заявка на зону:
   // двое не бегут в одну). Сундук — только увиденный (blocks_around seen), забирается целиком; один сундук — одному.
   // Каптёр: команда сходится на своём старте, лишнее — тем, у кого пусто (оружие, слот брони, еда), всё надеть.
   ctx.armsPrep = async function armsPrep () {
-    const LOOT_T = Number(process.env.LOOT_S || 150) * 20
     const areas = L.areas || [...L.rooms.filter(r => !L.secret.includes(r.id)).map(r => ({ id: r.id, x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2 })),
       ...[[-1, -1], [-1, 1], [1, -1], [1, 1]].map(([sx, sz]) => ({ id: `поле${sx}${sz}`, x: 6 * sx, z: 6 * sz })),
       // Крыши коридора и комнат (y=5) — по лестницам, как в arms-run.knownAreas.
@@ -72,18 +63,18 @@ export function installSupply (ctx: ArenaContext) {
     const taken = new Set<string>()
     const got: Record<string, number> = {}
     await sleep(800)
-    const t0 = Math.max(...bots.map(b => pos[b.name]?.tick || 0))
-    const w0 = Date.now(); const LOOT_WALL = Number(process.env.LOOT_WALL_S || 25) * 1000
-    const looting = (b) => (pos[b.name]?.tick || 0) - t0 < LOOT_T || Date.now() - w0 < LOOT_WALL
-    log(`гонка: лут ${LOOT_T / 20} игровых с, зон ${areas.length} — делятся в команде`)
+    const round = ctx.round
+    const looting = () => !ctx.stop && ctx.round === round
+    log(`гонка: лут до обхода ${areas.length} зон — делятся в команде`)
     await Promise.all(bots.map(async (b) => {
-      while (looting(b)) {
-        const me = pos[b.name]; if (!me?.p) { await sleep(300); continue }
+      while (looting()) {
+        const me = pos[b.name]; if (!me?.p) break
         const mine = claimed[b.team]
         const area = areas.filter(a => !mine.has(a.id)).sort((a, c) => Math.hypot(X + a.x - me.p.x, Z + a.z - me.p.z) - Math.hypot(X + c.x - me.p.x, Z + c.z - me.p.z))[0]
         if (!area) break
         mine.add(area.id)
         await b.c.call('goto', { x: X + area.x, y: Y + ((area as any).y || 0), z: Z + area.z, range: 3, timeoutSeconds: 15 }).catch(() => {})
+        if (!looting()) return
         // Тайники: облицовка (доски в стене, каменистая земля в полу — признак, виден глазами) — сломать, за ней сундук.
         for (const cover of [AL.FACADE, AL.UNDER]) {
           const cv = await b.c.call('blocks_around', { find: cover, seen: true, radius: 10, count: 4 }).catch(() => null)
@@ -97,7 +88,7 @@ export function installSupply (ctx: ArenaContext) {
         }
         const res = await b.c.call('blocks_around', { find: 'chest', seen: true, radius: 14, count: 16 }).catch(() => null)
         for (const c of ((res && res.detail && res.detail.found) || [])) {
-          if (!looting(b)) break
+          if (!looting()) break
           const key = `${c.x},${c.y},${c.z}`
           if (taken.has(key) || Math.max(Math.abs(c.x - X), Math.abs(c.z - Z)) > L.half) continue
           taken.add(key)
@@ -109,6 +100,7 @@ export function installSupply (ctx: ArenaContext) {
       }
       await b.c.call('armor').catch(() => {})
     }))
+    if (!looting()) return
     log(`гонка: лут окончен — сундуков открыто ${taken.size}/${L.chests.length}; ${bots.map(b => `${b.name.replace('NeuroFarm' + i, '#') || '#'}:${got[b.name] || 0}`).join(' ')}`)
     // Каптёр: сход на своём старте (≤ 10 игровых с), затем передачи «лишнее → пустому» внутри команды.
     await Promise.all(bots.map((b, k) => { const h = ctx.armsHome(b, k); return b.c.call('goto', { x: h.x, y: h.y, z: h.z, range: 2, timeoutSeconds: COLOS_MAP ? 40 : 10 }).catch(() => {}) }))
@@ -219,35 +211,35 @@ export function installSupply (ctx: ArenaContext) {
     })
   }
   ctx.labTask = function labTask (b, fn) {
+    // Не посреди боя (вызов лаборатории отменял fight; Codex 15.10).
+    if (busy.has(b.name) || b.last?.m === 'fight' || ctx.enemiesOf(b, pos[b.name]?.p).some(e => e.d <= 3.5)) return
     busy.add(b.name)
     fn().catch(() => {}).finally(() => { busy.delete(b.name); b.c.call('armor').catch(() => {}) })
   }
 }
 
 export async function startTactics (ctx: ArenaContext) {
-  const { i, teams, arms, bots, pos, busy, labNeed, brewed, alchemist, X, Y, Z, log, sleep } = ctx
-  // ---------------------------------------------------------------- роли, отход команды, ротации
-  // Роли — по снаряжению (crowd.assignRoles), пересчёт раз в минуту. Отход: видимые силы (crowd.teamForce) — заметно
-  // слабее → вся команда к своему старту на ≤ 10 игровых с, обратно — когда сравнялись; новый отход не раньше 15 с
-  // (гистерезис, иначе дёргается). Ротация: раненый (≤ 10 хп) при здоровом своём рядом уходит к лекарю, его врага
-  // берёт здоровый («подменяю»); на бойца не чаще раза в 10 игровых с.
+  const { i, teams, arms, bots, pos, busy, labNeed, brewed, alchemist, log, sleep } = ctx
+  // Роли пересчитываются при смене состава или снаряжения; период опроса не задаёт срок роли.
   const roles: Record<string, string> = {}
-  const teamMode: Record<string, any> = { red: { retreat: false, until: 0, nextAt: 0 }, blue: { retreat: false, until: 0, nextAt: 0 } }
-  const rotating: Record<string, any> = {}
-  const rotateCd: Record<string, number> = {}
-  const homeOf = (b) => arms ? ctx.armsHome(b, 0) : { x: X + (b.team === 'red' ? -12 : 12), y: Y, z: Z }
+  let assigned = ''
   const assign = () => {
     if (!teams) return
-    for (const t of ['red', 'blue']) Object.assign(roles, crowd.assignRoles(bots.filter(b => b.team === t && pos[b.name]).map(b => ({ name: b.name, inv: pos[b.name].inv, armor: pos[b.name].armor })), tierOf))
+    const members = bots.filter(b => pos[b.name] && (!ctx.alive || ctx.alive(b.name))).map(b => ({ name: b.name, team: b.team, inv: pos[b.name].inv || {}, armor: pos[b.name].armor || {} })).sort((a, b) => a.name.localeCompare(b.name))
+    const key = JSON.stringify(members.map(b => [b.name, b.team, Object.entries(b.inv).filter(([, n]) => Number(n) > 0).sort(([a], [b]) => a.localeCompare(b)), Object.entries(b.armor).sort(([a], [b]) => a.localeCompare(b))]))
+    if (key === assigned) return
+    assigned = key
+    for (const n of Object.keys(roles)) delete roles[n]
+    for (const t of ['red', 'blue']) Object.assign(roles, crowd.assignRoles(members.filter(b => b.team === t), tierOf))
     log('роли: ' + ['red', 'blue'].map(t => (t === 'red' ? '🟥 ' : '🟦 ') + bots.filter(b => b.team === t).map(b => `${b.name.replace('NeuroFarm' + i, '#') || '#'}=${roles[b.name] || '?'}`).join(' ')).join('  '))
   }
   await sleep(600)
   assign()
-  const rolesT = setInterval(assign, 60000)
+  const rolesT = setInterval(assign, 250)
   const tactT = setInterval(() => {
     if (!teams) return
     if (arms && !ctx.between && Date.now() - ctx.roundT0 > Number(process.env.ROUND_S || 420) * 1000) ctx.endRound(true).catch(() => {})
-    if (arms) for (const t of ['red', 'blue']) {
+    if (arms && !ctx.between) for (const t of ['red', 'blue']) {
       const chef = bots.find(b => b.name === alchemist[t])
       if (chef && !busy.has(chef.name) && !brewed[t + 'strong_healing'] && (labNeed[chef.name] || []).length && labNeed[chef.name].every(x => (pos[chef.name]?.inv || {})[x])) { log(`⚗ ${chef.name}: набор собран — снова в лабораторию`); ctx.brewTask(chef, t) }
     }

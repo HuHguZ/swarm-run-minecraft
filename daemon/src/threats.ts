@@ -296,7 +296,9 @@ function aims (bot, foes: string[] | null, scope: string | null) {
     const f = e.metadata?.[ix]
     const eq = e.equipment || []
     const it = typeof f === 'number' && (f & 0x02) ? eq[1] : eq[0]
-    const drawn = it && ((it.name === 'bow' && typeof f === 'number' && (f & 0x01)) || it.name === 'crossbow')
+    // Трезубец в замахе (рука активна, как натянутый лук) — тоже прицел (пользователь 14.10: «трезубцы — плохо уворачиваются,
+    // только прыжки, а надо стрейфить постоянно»): раньше видели только летящий трезубец — поздно, рывок вместо джука.
+    const drawn = it && (((it.name === 'bow' || it.name === 'trident') && typeof f === 'number' && (f & 0x01)) || it.name === 'crossbow')
     if (!drawn) continue
     // Взгляд mineflayer: (−sin yaw, …, −cos yaw); угол до меня по горизонтали.
     const want = Math.atan2(-(me.x - e.position.x), -(me.z - e.position.z))
@@ -358,7 +360,7 @@ function dangers (bot, { radius = 12, foes = null as string[] | null } = {}) {
     if (!l || Math.hypot(l.at.x - me.x, l.at.z - me.z) > 4.5) continue
     // A foreign potion's contents are not a visible tooltip; unknown is a throw threat.
     const role = null
-    if (!/^(heal|regen|buff)$/.test(role || '')) potions.push({ at: l.at, ticks: l.ticks, name: e.name, role })
+    if (!/^(heal|regen|buff)$/.test(role || '')) potions.push({ at: l.at, from: r.p, ticks: l.ticks, name: e.name, role })
   }
   const holders = []
   for (const raw of Object.values(bot.entities) as any[]) {

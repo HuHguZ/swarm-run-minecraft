@@ -1592,7 +1592,7 @@ async function explore (session, ctl, {
     }
     const [dx, dz] = direction && COMPASS[direction] ? COMPASS[direction] : SWEEP[i % SWEEP.length]
     const spread = direction ? i + 1 : 1 + Math.floor(i / SWEEP.length)
-    const here = bot.entity.position
+    const here = from // Rays share an origin; relative rays return to the start after east/south/west/north.
     // И без копки: разведка — это взгляд с поверхности, а не штрек сквозь
     // гору (session.goto surface:'strict'). Нет пути поверху — следующий луч.
     const r = await walk(here.x + dx * stepDistance * spread, here.z + dz * stepDistance * spread, { range: 6 })
