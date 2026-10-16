@@ -238,4 +238,44 @@ const DAMAGE_TYPES = ['arrow', 'bad_respawn_point', 'cactus', 'campfire', 'cramm
   'wither', 'wither_skull']
 const damageTypeName = id => (Number.isInteger(id) && DAMAGE_TYPES[id]) || null
 
-module.exports = { fixMaterials, fixPlanks, fixWhiteWool, fixAttributes, fixProtocol, fixEnchants, fixBreath, DAMAGE_TYPES, damageTypeName }
+// Own body only; a small collision crop is read once on death, never every physics tick.
+function bodySnapshot (bot, local = false) {
+  const e = bot?.entity, p = e?.position
+  if (!p) return undefined
+  const round = n => Number.isFinite(n) ? Math.round(n * 10000) / 10000 : null
+  const vec = v => v ? [round(v.x), round(v.y), round(v.z)] : null
+  const keys = bot.registry?.entitiesByName?.player?.metadataKeys || []
+  const out: Record<string, any> = { p: vec(p), v: vec(e.velocity), yaw: round(e.yaw), pitch: round(e.pitch),
+    onGround: !!e.onGround, inWater: !!e.isInWater, inLava: !!e.isInLava,
+    height: e._ndPoseHeight ?? e.height ?? 1.8, pose: e.metadata?.[keys.indexOf('pose')] ?? null,
+    air: e.metadata?.[keys.indexOf('air_supply')] ?? null, oxygen: bot.oxygenLevel ?? null,
+    effects: Object.entries(e.effects || {}).map(([id, fx]: [string, any]) => [Number(id), fx.amplifier ?? 0, fx.duration ?? null]),
+    held: bot.heldItem?.name ?? null, gameTick: bot.ndClock?.ticks ?? null,
+    gameMs: bot.ndClock?.now?.() ?? null, physicsTicks: bot._ndPhysicsTicks ?? null, wallMs: round(performance.now()) }
+  // Replay needs the actual dangers used by flee, including loaded mobs behind a wall; telemetry only.
+  out.mobs = Object.values(bot.entities || {}).filter((m: any) => m !== e && (m.type === 'mob' || m.type === 'hostile') && m.position && m.isValid !== false && m.position.distanceTo(p) <= 16)
+    .sort((a: any, b: any) => a.position.distanceTo(p) - b.position.distanceTo(p)).slice(0, 16)
+    .map((m: any) => {
+      const names = bot.registry?.entitiesByName?.[m.name]?.metadataKeys || []
+      return { id: m.id, kind: m.name, p: vec(m.position), v: vec(m.velocity),
+        sw: m.name === 'creeper' ? m.metadata?.[names.indexOf('swell_dir')] ?? null : undefined,
+        charged: m.name === 'creeper' ? m.metadata?.[names.indexOf('is_powered')] ?? null : undefined }
+    })
+  if (local && typeof bot.blockAt === 'function') {
+    const min = [Math.floor(p.x) - 3, Math.floor(p.y) - 2, Math.floor(p.z) - 3], size = [7, 9, 7], runs: number[] = [], palette: number[] = [], cell = p.clone()
+    let previous = -2, count = 0
+    for (let y = min[1]; y < min[1] + size[1]; y++) for (let z = min[2]; z < min[2] + size[2]; z++) for (let x = min[0]; x < min[0] + size[0]; x++) {
+      let sid = -1
+      try { sid = bot.blockAt(cell.set(x, y, z))?.stateId ?? -1 } catch {}
+      const index = sid < 0 ? -1 : palette.indexOf(sid) >= 0 ? palette.indexOf(sid) : palette.push(sid) - 1
+      if (index !== previous && count) { runs.push(count, previous); count = 0 }
+      previous = index; count++
+    }
+    if (count) runs.push(count, previous)
+    out.near = { version: bot.version, min, size, palette, runs }
+    out.trail = (bot._ndBodyTrail || []).map(frame => [...frame])
+  }
+  return out
+}
+
+module.exports = { bodySnapshot, fixMaterials, fixPlanks, fixWhiteWool, fixAttributes, fixProtocol, fixEnchants, fixBreath, DAMAGE_TYPES, damageTypeName }

@@ -7,8 +7,8 @@
 // paper-1.21.11.jar: броски пула × вес / сумму весов × среднее set_count; железо — слитки + самородки/9 + железная кирка
 // за 3; еда — в единицах campaign.foodUnits, min(1, голод/6), пшеница → хлеб /3). Цена предмета — сколько секунд он
 // экономит при текущих нуждах, по априорам графа (core/speedrun.ts): MineIron 180 с на 8 слитков, FindFood 90 с на 8
-// единиц еды, LavaPoolPortal 120 с на раму. Золото — на золотые ботинки дорого (координатор 14.10: без золотой вещи бот гибнет у
-// портала Ада в 4 случаях из 5; это лут построек по цене, а не поиск золота), сверх ботинок — попутно.
+// единиц еды, LavaPoolPortal 120 с на раму. Золото — сырьё и защита от обычных пиглинов; старая премия за защиту
+// проверяется отдельно (ND_STRUCT_GOLD_RECEIPTS), сверх ботинок — попутно.
 // Цена — путь (по расстоянию, по воде в полтора раза дольше), сундук (открыть 8 с) и работа до него: копать к сундуку
 // под песком или в доме, нырять под воду, колодец храма, лестница иглу (CHEST_WORK). Карта сокровищ — цепочка
 // «корабль → карта → клад» целиком: доля карты × (выгода клада − путь к нему и копка).
@@ -75,7 +75,7 @@ export const PRIOR: Record<string, Prior> = {
 // храм джунглей — 2 за 22 с, сундук храма деревни — 13–16 с, руины портала — ~12 с. Было 8 + 8 на сундук и 15 сверху —
 // храм в 66 бл. «−25 с — мимо» (g1-1) при настоящих ~25 с работы.
 export const CHEST_WORK: Record<string, number> = { shipwreck: 6, shipwreckWet: 22, ocean_ruin: 22, desert_pyramid: 2, jungle_pyramid: 6, igloo: 25, village: 6, ruined_portal: 3, buried_treasure: 15 }
-// goldBoots — ботинки целиком: смерть у портала без них 4 из 5, с ними ~2 из 5 (агент Ада 14.10, серии g4/g5) — 0.4 × 1200 с.
+// goldBoots — старый априор защиты; g4/g5 обе с lsgold, поэтому это не замер эффекта золота (R5).
 export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldBoots: 480, goldenApple: 20, diamond: 20, bed: 15 }
 export const WALK_BPS = 2.5 // ход с обходами и прыжками; крюк — туда и половина обратно
 export const DETOUR = 1.5
@@ -104,7 +104,7 @@ function after (needs: Needs, items: Record<string, number>): Needs {
 }
 
 export interface Chest { table: string; p: number; wet?: boolean }
-export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]>; chests: number; chain?: number; known?: boolean; swim?: boolean; night?: number }
+export interface Worth { kind: string; distance: number; value: number; walk: number; cost: number; net: number; items: Array<[string, number, number]>; chests: number; chain?: number; known?: boolean; swim?: boolean; night?: number; waterRisk?: number }
 
 // kind, расстояние, нужды; chests — сундуки узнанного шаблона (иначе — среднее по вариантам); wet — постройка под водой
 // (руины портала в океане: увидены ниже уровня моря — ферма 14.10, cs-3: «сундук 11 с» на 13 бл. под водой).
@@ -133,7 +133,9 @@ export function structureWorth (kind: string, distance: number, needs: Needs, ch
   }
   const priced = Object.entries(items).map(([item, n]) => [item, Math.round(n * 100) / 100, itemSeconds(item, n, needs)] as [string, number, number])
   // Ботинки — одна нужда на кусок золотой брони и слитки: доля, которой постройка её закрывает, × цена ботинок; слитки сверх — попутно.
-  if (needs.gold) {
+  // R5: 0 прибавок золотой защиты за 23 посещения руин; до проверки добычи премию не авансировать.
+  // По умолчанию премию не авансируем (пары ферм 16.10: Ад 10/54 против 4/55); ND_STRUCT_GOLD_RECEIPTS=0 — прежний аванс.
+  if (needs.gold && process.env.ND_STRUCT_GOLD_RECEIPTS === '0') {
     const cover = Math.min(1, (items.golden_armor || 0) + (items.gold || 0) / needs.gold)
     for (const row of priced) {
       if (row[0] === 'gold') row[2] = cover * SECONDS.goldBoots + Math.max(0, row[1] - needs.gold) * SECONDS.gold
@@ -144,7 +146,8 @@ export function structureWorth (kind: string, distance: number, needs: Needs, ch
   let value = priced.reduce((s, [, , v]) => s + v, 0)
   // Цепочка карты: клад после добычи этой постройки — доля карты × (выгода клада − путь и копка).
   let chain = 0
-  if (maps > 0 && kind !== 'buried_treasure') {
+  // R5: 2 карты / 29 заходов в ocean_ruin, ни одной завершённой цепочки до клада.
+  if (maps > 0 && kind !== 'buried_treasure' && !(kind === 'ocean_ruin' && process.env.ND_STRUCT_MAP_RECEIPTS === '1')) {
     const t = structureWorth('buried_treasure', TREASURE_WALK, after(needs, items))
     if (t && t.net > 0) chain = Math.min(1, maps) * t.net
     value += chain
@@ -155,7 +158,10 @@ export function structureWorth (kind: string, distance: number, needs: Needs, ch
   const walk = distance / WALK_BPS * DETOUR * (swim ? 1.5 : 1)
   // Деревня с узнанными домами — без обхода дверей (structures.village): сверху 10 с, а не 40.
   const cost = walk + work + (kind === 'village' && outside ? 10 : P.overhead)
-  return { kind, distance, value, walk, cost, net: value - cost, items: priced, chests: Math.round(nChests * 10) / 10, chain, known: chests !== null, swim }
+  // shortcut: общий априор 6 смертей / 27 эпизодов при 0–1 вещах брони; пересчитать после исправления подводного навыка.
+  const waterRisk = process.env.ND_STRUCT_WATER_RISK === '1' && kind === 'ocean_ruin' && swim
+    ? 6 / 27 * Math.max(0, Number(process.env.ND_DEATH_COST_MIN) || 60) * 60 : 0
+  return { kind, distance, value, walk, cost, net: value - cost - waterRisk, items: priced, chests: Math.round(nChests * 10) / 10, chain, known: chests !== null, swim, waterRisk }
 }
 
 // «путь ≈ 60 с + сундуки 3 ≈ 52 с, выгода ≈ 120 с (iron 9.4: 207 с, …) → +52 с».
@@ -173,5 +179,5 @@ export function withNight (w: Worth, dayLeft: number): Worth {
 export function describeWorth (w: Worth): string {
   const parts = w.items.filter(([, , s]) => s >= 1).sort((a, b) => b[2] - a[2]).map(([item, n, s]) => `${item} ${n}: ${Math.round(s)} с`)
   return `путь ≈ ${Math.round(w.walk)} с + сундуки ${w.chests}${w.known ? ' по шаблону' : ''} ≈ ${Math.round(w.cost - w.walk)} с, выгода ≈ ${Math.round(w.value)} с` +
-    `${parts.length ? ` (${parts.join(', ')})` : ''}${w.night ? `, ночь на исходе захода −${Math.round(w.night)} с` : ''} → ${w.net >= 0 ? '+' : ''}${Math.round(w.net)} с`
+    `${parts.length ? ` (${parts.join(', ')})` : ''}${w.waterRisk ? `, подводный риск −${Math.round(w.waterRisk)} с` : ''}${w.night ? `, ночь на исходе захода −${Math.round(w.night)} с` : ''} → ${w.net >= 0 ? '+' : ''}${Math.round(w.net)} с`
 }

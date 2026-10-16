@@ -15,11 +15,12 @@ export const HAZARD = /^(lava|fire|soul_fire|magma_block|campfire|soul_campfire|
 export function dimensions(world: CollisionWorld): { half: number; height: number } {
   return { half: world.physics?.playerHalfWidth ?? Math.fround(.6) / 2, height: world.entity?._ndPoseHeight ?? world.physics?.playerHeight ?? 1.8 }
 }
-export function shapeBoxes(block: CollisionBlock): Box[] {
+export function shapeBoxes(block: CollisionBlock, at?: Point): Box[] {
   // Real Blocks always supply state-specific shapes. Shape-less legacy fixtures
   // retain their explicit full-block bounding box; an explicit [] stays empty.
   const shapes = block.shapes ?? (block.boundingBox === 'block' ? [[0, 0, 0, 1, 1, 1] as Shape] : [])
-  const p = block.position
+  // A fixture block without its own position is the queried cell (bodyClear passes it).
+  const p = block.position ?? at
   return shapes.map(s => ({ minX: p.x + s[0], minY: p.y + s[1], minZ: p.z + s[2], maxX: p.x + s[3], maxY: p.y + s[4], maxZ: p.z + s[5] }))
 }
 export function bodyBox(world: CollisionWorld, pos: Point): Box {
@@ -38,8 +39,8 @@ export function bodyClear(world: CollisionWorld, pos: Point, { web = false, wate
         const block = world.blockAt(new Vec3(x, y, z), false)
         if (!block) return false
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
-        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && require('../movement').waterCell(block))) return false
-        if (shapeBoxes(block).some(box => intersects(body, box))) return false
+        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && require('../movement').waterCell?.(block))) return false
+        if (shapeBoxes(block, { x, y, z }).some(box => intersects(body, box))) return false
       }
     }
   }
@@ -166,7 +167,7 @@ export function invalidateStands(cache: Map<string, Vec3[]>, at: Point): void {
 }
 
 export function containsWater(block: CollisionBlock): boolean {
-  return require('../movement').waterCell(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
+  return require('../movement').waterCell?.(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
 }
 
 /** Body centers that fit inside one observed fluid cell and its real shapes. */

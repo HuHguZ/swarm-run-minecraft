@@ -36,7 +36,9 @@ export class TacticalArbiter {
 
   decide(state: TacticalState): TacticalDecision {
     const level = threatLevel(state)
-    const choices = this.graph.candidates(state, this.current?.id || this.node)
+    // Construction exposure prices a new build; the running builder must not pay the whole interval again after a hit.
+    const committedBox = this.current?.id === 'BlockOff' && state.shelter === 'BlockOff'
+    const choices = this.graph.candidates(committedBox ? { ...state, buildCostHp: undefined } : state, this.current?.id || this.node)
     const foes = new Set(state.enemies.filter(enemy => enemy.threatening).map(enemy => enemy.id))
     const newFoe = [...foes].some(id => !this.foes.has(id))
     if (level === 0 && !this.current) { this.high = 0; this.left.clear(); this.foes.clear() }
@@ -46,7 +48,11 @@ export class TacticalArbiter {
     this.high = Math.max(this.high, level) as ThreatLevel
     for (const id of foes) this.foes.add(id)
     const best = choices[0] || null
-    const found = choices.find(candidate => candidate.id === this.current?.id)
+    // The score floor may hide one retreat name while its shared executor still has a physical route (stage B/55).
+    const alternateRun = this.current && SAME_RUN[this.current.id]
+      ? choices.find(candidate => SAME_RUN[candidate.id] === SAME_RUN[this.current!.id]) : undefined
+    const found = choices.find(candidate => candidate.id === this.current?.id) ??
+      (alternateRun ? { ...alternateRun, id: this.current!.id } : undefined)
     // A sealed refuge hides the attacker: its candidate disappears with the attacker's line of sight, and the 1.5 s hit
     // memory then pulled the body out of a finished box into the archer's fire (stress stand, skeleton at hp 8).
     const sealed = !!this.current && SHELTERS.has(this.current.id) && level >= 2 && level < 4 && !creeperWalksUp(state)
@@ -85,7 +91,9 @@ export class TacticalArbiter {
     // hit that escalated to level 3 restarted it from the top, 2.4 s instead of 1.1 (try-lab-ne-piglin c7: "PillarUp preempted by
     // PillarUp", the piglins in the shaft before the plug).
     const change = selected?.id !== this.current?.id || escalated && !!selected && !(selected.id === 'Eat' && burnRecovery(state)) &&
-      !(selected.id === 'PillarUp' && !!state.netherHide)
+      !(selected.id === 'Surface' && state.waterEscape) &&
+      !(process.env.ND_OW_NIGHT_BLOCKOFF === '1' && level === 3 && !newFoe && SHELTERS.has(selected.id)) &&
+      !(selected.id === 'PillarUp' && (!!state.netherHide || state.polarBear?.action === 'PillarUp'))
     if (this.current && selected?.id !== this.current.id && level > 0) this.left.add(this.current.id)
     this.current = selected
     this.level = level

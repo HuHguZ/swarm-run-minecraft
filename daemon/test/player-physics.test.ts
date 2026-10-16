@@ -47,8 +47,8 @@ function botFor (version = '1.21.11') {
       isCollidedVertically: false, elytraFlying: false, yaw: 0, pitch: 0, effects: {} as Record<string, any>, attributes: {} as Record<string, any> }
   }
 }
-// Powder snow fields are independent of this native comparison; the scoped pose height is asserted explicitly.
-const plain = ({ ndInPowderSnow, ndLeatherBoots, ...state }) => ({ ...state, pos: { ...state.pos }, vel: { ...state.vel }, control: { ...state.control } })
+// Scoped pose/swimming inputs are asserted explicitly; compare every native output below.
+const plain = ({ ndInPowderSnow, ndLeatherBoots, ndSwimming, ...state }) => ({ ...state, pos: { ...state.pos }, vel: { ...state.vel }, control: { ...state.control } })
 const boots = level => ({ nbt: { type: 'compound', value: { Enchantments: { type: 'list', value: { type: 'compound', value: [{ id: { type: 'string', value: 'minecraft:depth_strider' }, lvl: { type: 'short', value: level } }] } } } } })
 
 test('scoped physics caches native metadata per version without retaining effects or equipment', () => {
@@ -63,6 +63,8 @@ test('scoped physics caches native metadata per version without retaining effect
       bot.inventory.slots[6] = level ? { name: 'elytra' } : null
       const state = new scoped.PlayerState(bot, { ...IDLE })
       assert.equal(state.ndPoseHeight, 1.8, 'each standing state owns the real height independently of cached metadata')
+      assert.equal(state.ndSwimming, false)
+      assert.equal(state.pitch, bot.entity.pitch)
       assert.deepEqual(plain(state), { ...plain(new native.PlayerState(bot, { ...IDLE })), ndPoseHeight: 1.8 })
       assert.equal(state.speed, level)
       assert.equal(state.depthStrider, level)

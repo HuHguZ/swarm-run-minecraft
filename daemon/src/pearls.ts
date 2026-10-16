@@ -2006,6 +2006,7 @@ async function huntFoxhole (session, ctl, p: any = {}) {
   const detail: any = {
     mode: 'hunt',
     style: 'окоп',
+    ...((process.env.ND_NE_RECOVER === '1' || process.env.ND_EM_PRICE_RECEIPTS === '1') ? { prepared: !!fox } : {}),
     pearls: { before: pearls0, now: pearls, gained: pearls - pearls0, want },
     kills,
     aggros,

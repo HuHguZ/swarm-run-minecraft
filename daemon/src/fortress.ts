@@ -85,7 +85,15 @@ function look (bot, mcData, { radius = 64, perKind = 400, rayBudget = 500 }: any
     const b = bot.blockAt(bCand[i])
     if (b && seesBlock(bot, b)) bSeen.push(bCand[i])
   }
-  if (bSeen.length >= 24) {
+  let housing = null
+  if (bSeen.length >= 8 && bSeen.length < 24 && bot.world?.getColumn && bot.world?.raycast) {
+    // The sparse candidate scan may miss most of a visible facade; require a template fit before lowering detection.
+    const steps = require('./bastion/entry-route').observeSteps(bot)
+    let next = steps.next()
+    while (!next.done) next = steps.next()
+    if (next.value?.type === 'units') housing = next.value
+  }
+  if (bSeen.length >= 24 || housing) {
     bSeen.sort((a, b) => a.distanceTo(me) - b.distanceTo(me))
     // Большие руины портала Ада — тот же кирпич, но у них на виду обсидиан рамы (обычный и плачущий), у бастиона его нет
     // (b10-5-2 14.10: «бастион» из 32 блоков у руин — вышки и обзор впустую, золота 0).
@@ -94,6 +102,7 @@ function look (bot, mcData, { radius = 64, perKind = 400, rayBudget = 500 }: any
     if (frame && process.env.ND_NE_RUINS_CHECK !== '0') out.ruins = { seen: bSeen.length, nearest: xyz(bSeen[0]), dist: Math.round(bSeen[0].distanceTo(me)) }
     else out.bastion = { seen: bSeen.length, nearest: xyz(bSeen[0]), dist: Math.round(bSeen[0].distanceTo(me)), bearing: bearingWords(bSeen[0].x - me.x, bSeen[0].z - me.z) }
   }
+  if (housing && out.bastion) { out.bastion.type = 'units'; out.bastion.hypotheses = housing.hypotheses.length }
   if (seen.length) {
     const near = seen[0]
     out.nearest = xyz(near)
@@ -154,6 +163,15 @@ async function rememberBastion (session, b, ctl) {
 }
 
 function rememberSpawner (session, sp) {
+  const seen = session._ndSpawnerSight ||= new Set()
+  const key = `${worlds.worldOf(session.bot)}:${sp.x},${sp.y},${sp.z}`
+  if (!seen.has(key)) {
+    const block = session.bot.blockAt?.(new Vec3(sp.x, sp.y, sp.z))
+    if (block?.name === 'spawner' && seesBlock(session.bot, block)) {
+      seen.add(key)
+      log('спавнер: вижу', { gameMs: gameClock.now(), at: xyz(session.bot.entity.position), spawner: xyz(block.position) })
+    }
+  }
   const places = (session.journal.state && session.journal.state.places) || {}
   const old = places[SPAWNER_PLACE]
   if (old && old.x === sp.x && old.y === sp.y && old.z === sp.z) return
@@ -364,6 +382,11 @@ async function scoutBody (session, ctl, p: any = {}) {
   const radius = clamp(p.radius ?? (['look', 'explore', 'forget'].includes(p.mode) ? 64 : high ? 128 : 96), 16, high ? 128 : 96)
   const here = worlds.worldOf(bot)
   if (p.mode === 'spawner') return toSpawner(session, ctl, { deadline, tunnel: p.tunnel === true || process.env.ND_SPAWNER_TUNNEL === '1', breach: p.breach === true })
+  if (p.mode === 'advance' && process.env.ND_FORTRESS_FRONTIER === '0') return { advanced: false, frontierTried: 0, disabled: true }
+  if (p.mode === 'advance' && here === 'the_nether') {
+    return tour(session, ctl, { deadline, hops: 14, pie: true, advance: true })
+  }
+  if (p.mode === 'continue' && here === 'the_nether') return continueFortress(session, ctl, { ...p, deadline })
   // map — знание карты из копии этого же мира (AGENTS.md разрешает его основному телу; на ферме записи снимает
   // try-lab-ne-map.js с правды мира): крепость, спавнер, бастионы (с золотом и сундуками) — только записи Ада.
   if (p.mode === 'map') {
@@ -400,7 +423,7 @@ async function scoutBody (session, ctl, p: any = {}) {
   const glance = async () => {
     const v: any = look(bot, mcData, { radius })
     views.push({ at: xyz(bot.entity.position), seen: v.seen, rayChecked: v.rayChecked })
-    console.log('[fortress] взгляд', JSON.stringify({ at: xyz(bot.entity.position), seen: v.seen, candidates: v.candidates, rayChecked: v.rayChecked }))
+    console.log('[fortress] взгляд', JSON.stringify({ gameMs: gameClock.now(), at: xyz(bot.entity.position), seen: v.seen, spawners: (v.spawners || []).length, candidates: v.candidates, rayChecked: v.rayChecked }))
     for (const sp of v.spawners || []) rememberSpawner(session, sp)
     if (v.bastion) { bastion = v.bastion; await rememberBastion(session, v.bastion, ctl) }
     return v
@@ -990,20 +1013,169 @@ function axisLeg (pool, feet, visited, len = 24) {
 
 // Один кирпич памяти не задаёт ось моста. От закрытого взгляда сначала шаг
 // на видимый пол с местом для тела, затем новый взгляд: никаких целей за стеной.
-function viewLeg (bot, visited) {
+// One observed adjacent deck cell at a time; memory is committed only after actual arrival.
+function deckLeg (bot, state: any) {
+  if (typeof bot.blockAt !== 'function') return null // макет без мира (тест прогресса обхода) — прежний подъём/обзор
+  const at = bot.entity.position.floored()
+  const key = p => [p.x, p.y, p.z].join(',')
+  const near = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.z - b.z) === 1 && Math.abs(a.y - b.y) <= 1
+  state.seen ||= new Set(); state.blocked ||= new Set(); state.stack ||= []
+  if (state.pending) {
+    const last = state.pending
+    if (at.equals(last.to)) { if (last.back) state.stack.pop(); else state.stack.push(last.from) }
+    else state.blocked.add(key(last.to))
+    state.pending = null
+  }
+  const open = b => b && seesBlock(bot, b) && b.boundingBox === 'empty' && !/lava|water|fire/.test(b.name)
+  const deck = p => {
+    const floor = bot.blockAt(p.offset(0, -1, 0))
+    return floor && seesBlock(bot, floor) && floor.name === 'nether_bricks' && floor.boundingBox === 'block' &&
+      open(bot.blockAt(p)) && open(bot.blockAt(p.offset(0, 1, 0)))
+  }
+  if (!deck(at)) return null
+  state.seen.add(key(at))
+  let to = null, back = false
+  for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+    for (const dy of [0, 1, -1]) {
+      const q = at.offset(dx, dy, dz)
+      if (state.seen.has(key(q)) || state.blocked.has(key(q)) || !deck(q)) continue
+      if (dy === 1 && !open(bot.blockAt(at.offset(0, 2, 0)))) continue
+      to = q; break
+    }
+    if (to) break
+  }
+  if (!to) {
+    const parent = state.stack[state.stack.length - 1]
+    if (!parent || !near(at, parent) || state.blocked.has(key(parent)) || !deck(parent)) return null
+    to = parent; back = true
+  }
+  state.pending = { from: at, to, back }
+  return { floor: to.offset(0, -1, 0), back }
+}
+
+function continuationSupply (bot) {
+  const picks: Record<string,number> = {}
+  for (const i of bot.inventory?.items() || []) if (/pickaxe$/.test(i.name)) {
+    const max = i.maxDurability || bot.registry?.itemsByName?.[i.name]?.maxDurability
+    picks[i.name] = (picks[i.name] || 0) + (max ? Math.max(0,max-(i.durabilityUsed || 0)) : 1) * i.count
+  }
+  return { blocks:require('./sealed').fillerCount(bot),picks }
+}
+
+// The local visible floor is only one route: remembered brick and a straight
+// bridge row can justify opening the next section, never its hidden contents.
+function continuationPlan (session, v: any = {}) {
+  if (process.env.ND_FORTRESS_CONTINUE === '0') return null
+  const bot = session.bot, me = bot.entity.position, here = worlds.worldOf(bot)
+  const frontier = session._ndFortressFrontier
+  if (here !== 'the_nether' || frontier?.world !== here) return null
+  const vec = k => new Vec3(...String(k).replace(/[()]/g,'').split(',').map(Number))
+  const points = [...frontier.bricks].map(vec).filter(p => [p.x,p.y,p.z].every(Number.isFinite))
+  const views = session._ndTourVisited?.world === here ? session._ndTourVisited.views || [me] : [me]
+  const { blocks,picks } = continuationSupply(bot)
+  const nearest = Math.min(v.blazes?.nearest ?? Infinity, v.routeThreat ?? Infinity)
+  const covered = !!v.boxed || nearest <= (session._ndFortressContinue?.covered ? 32 : 24)
+  const threat = JSON.stringify([covered, nearest <= 16])
+  const routes = session._ndFortressContinue?.world === here ? session._ndFortressContinue.routes : new Map()
+  const candidates = new Map()
+  const add = (to, source) => {
+    const feet = to.offset(.5,1,.5), distance = feet.distanceTo(me)
+    const novel = Math.min(...views.map(p => p.distanceTo(feet)))
+    if (distance > 48 || novel < 8 || to.y + 1 < me.y - 1) return
+    const key = to.toString(), mark = routes.get(key)
+    if (mark && mark.revision === frontier.bricks.size && me.distanceTo(mark.origin) < 8 &&
+        blocks <= mark.blocks && Object.entries(picks).every(([name,left]) => left <= (mark.picks[name] || 0)) && threat === mark.threat) return
+    // shortcut: prior ETA for two brick cuts and one floor (three cover blocks)
+    // per step; replace with continuation receipts when enough native legs exist.
+    const { DIG, C } = require('./nether-grid')
+    const steps = Math.abs(to.x + .5 - me.x) + Math.abs(to.z + .5 - me.z)
+    const seconds = steps * (.25 + 2 * DIG[C.STONE] + (covered ? 3 : 1) * 1.4) + Math.abs(feet.y - me.y) * 1.3
+    if (!candidates.has(key)) candidates.set(key, { key, to, source, covered, seconds, blocks, picks, threat })
+  }
+  for (const p of points) add(p, 'seen brick')
+  // Only rows actually seen, or walked on, vote for an axis; no seed/structure NBT.
+  const deck = session._ndDeckTour?.world === here ? [...(session._ndDeckTour.seen || [])].map(k => vec(k).offset(0,-1,0)) : []
+  for (const axis of ['x','z']) {
+    const cross = axis === 'x' ? 'z' : 'x', rows = new Map()
+    for (const p of deck.length ? deck : points) {
+      const k = `${p.y},${p[cross]}`
+      if (!rows.has(k)) rows.set(k, [])
+      rows.get(k).push(p)
+    }
+    for (const row of rows.values()) {
+      row.sort((a,b) => a[axis]-b[axis])
+      if (row.length < 3 || row.at(-1)[axis]-row[0][axis] < 3) continue
+      if (row.some((p,i) => i && p[axis]-row[i-1][axis]>1)) continue
+      for (const [p, sign] of [[row[0],-1],[row.at(-1),1]]) {
+        if (p.distanceTo(me) > 24) continue
+        const to = p.clone(); to[axis] += sign * 8
+        add(to, 'bridge axis')
+      }
+    }
+  }
+  return [...candidates.values()].sort((a,b) => a.seconds-b.seconds)[0] || null
+}
+
+async function continueFortress (session, ctl, { deadline, planOnly = false, planKey = null, maxCostSeconds = Infinity }: any = {}) {
+  const bot = session.bot, here = worlds.worldOf(bot), start = bot.entity.position.clone()
+  if (session._ndFortressFrontier?.world !== here) session._ndFortressFrontier = { world: here, bricks: new Set(), blocked: new Map() }
+  if (session._ndFortressContinue?.world !== here) session._ndFortressContinue = { world: here, routes: new Map() }
+  const frontier = session._ndFortressFrontier
+  const observe = () => {
+    const v = look(bot, session.mcData, { radius:64 })
+    const foes = require('./perception/eyes').entities(bot, { radius:32 }).filter(e => /^(blaze|ghast|skeleton|wither_skeleton|piglin_brute|hoglin|zoglin)$/.test(e.name))
+    const bands = { рядом:3,близко:6,средне:12,далеко:20 } // senses.BAND_MID: coarse sound, never a hidden position
+    v.routeThreat = Math.min(Infinity,...foes.map(e => e.seen ? e.dist : e.lastPos ?
+      bot.entity.position.distanceTo(new Vec3(e.lastPos.x,e.lastPos.y,e.lastPos.z)) : bands[e.heard?.band]).filter(Number.isFinite))
+    const cover = require('./nether-cover'), feet = bot.entity.position.floored()
+    if (typeof cover.around === 'function') v.boxed = cover.around(bot,[feet,feet.offset(0,1,0)]).open.length === 0
+    for (const p of v.seenList || []) frontier.bricks.add(p.toString())
+    for (const sp of v.spawners || []) rememberSpawner(session,sp)
+    return v
+  }
+  let v = observe()
+  const revision = frontier.bricks.size, plan = continuationPlan(session,v)
+  session._ndFortressContinue.covered = !!plan?.covered
+  const out = extra => ({ frontierRevision:frontier.bricks.size, at:xyz(bot.entity.position), ...extra })
+  if (planOnly) return out({ plan, spawners:v.spawners })
+  if (!plan || v.spawners?.length || ctl.aborted) return out({ advanced:false, continuationTried:0, frontierExhausted:!plan })
+  if ((planKey && planKey !== plan.key) || plan.seconds > maxCostSeconds) return out({ advanced:false, continuationTried:0, changed:true })
+  const bore = () => require('./nether-cover').closedBore(session,ctl,plan.to,{ deadline,maxSteps:24,adjacent:true,minY:Math.floor(start.y),onOpen:observe })
+  let w = await (plan.covered ? bore() : climbTo(session,ctl,plan.to,deadline)).catch(e => ({ ok:false,error:e.message }))
+  if (!plan.covered && !w.ok && !w.fought && !ctl.aborted && gameClock.now()<deadline) w = await bore().catch(e=>({ok:false,error:e.message}))
+  v = observe()
+  const advanced = bot.entity.position.distanceTo(start) >= 8 || frontier.bricks.size > revision
+  if (!session._ndTourVisited || session._ndTourVisited.world !== here) session._ndTourVisited = { world:here,points:[],views:[] }
+  const visited = session._ndTourVisited
+  if (visited.points.every(p => p.distanceTo(bot.entity.position)>=8)) visited.points.push(bot.entity.position.clone())
+  visited.views ||= []
+  if (visited.views.every(p => p.distanceTo(bot.entity.position)>=.8)) visited.views.push(bot.entity.position.clone())
+  // Record the resulting cause: our own spent blocks cannot reopen this refusal.
+  session._ndFortressContinue.routes.set(plan.key,{ origin:bot.entity.position.clone(),revision:frontier.bricks.size,
+    ...continuationSupply(bot),
+    threat:JSON.stringify([!!v.boxed || Math.min(v.blazes?.nearest ?? Infinity,v.routeThreat ?? Infinity) <= (plan.covered ? 32 : 24),
+      Math.min(v.blazes?.nearest ?? Infinity,v.routeThreat ?? Infinity)<=16]) })
+  log('продолжение', { source:plan.source,to:xyz(plan.to),covered:plan.covered,seconds:plan.seconds,advanced,moved:bot.entity.position.distanceTo(start),ok:w.ok,error:w.error || w.why })
+  return out({ advanced,continuationTried:1,explored:visited.points.length,spawners:v.spawners,blazes:v.blazes,receipt:w })
+}
+
+function viewLeg (bot, visited, { toward = null, blocked = null }: any = {}) {
   const { blockSeen } = require('./pick')
   const me = bot.entity.position
-  const open = b => b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name)
+  const open = b => b && b.boundingBox === 'empty' && !/lava|water|fire/.test(b.name)
   let best = null
   let bestPrice = -Infinity
   for (const p of bot.findBlocks({ matching: b => b.boundingBox === 'block', maxDistance: 16, count: 512 })) {
     const b = bot.blockAt(p)
     if (!b?.shapes?.some(s => s[0] === 0 && s[2] === 0 && s[3] === 1 && s[4] === 1 && s[5] === 1)) continue
-    if (!open(bot.blockAt(p.offset(0, 1, 0))) || !open(bot.blockAt(p.offset(0, 2, 0)))) continue
+    const body = [1, 2].map(dy => bot.blockAt(p.offset(0, dy, 0)))
+    if (!body.every(b => seesBlock(bot, b) && open(b))) continue
     const feet = p.offset(0.5, 1, 0.5)
     if (feet.distanceTo(me) < 0.8 || !blockSeen(bot, p, { range: 16 })) continue
     const novel = Math.min(...visited.map(q => Math.hypot(feet.x - q.x, feet.z - q.z)))
-    const price = novel - feet.distanceTo(me) * 0.25 - Math.max(0, me.y - feet.y - 3) * 2
+    if (blocked && (novel < 0.8 || blocked.get(p.toString()) === [b, ...body].map(b => b.name).join(','))) continue
+    const gain = toward ? me.distanceTo(toward) - feet.distanceTo(toward) : 0
+    const price = novel + gain - feet.distanceTo(me) * 0.25 - Math.max(0, me.y - feet.y - 3) * 2
     if (price > bestPrice) { best = p; bestPrice = price }
   }
   return best
@@ -1012,7 +1184,7 @@ function viewLeg (bot, visited) {
 /** S1f: два пеленга F3-yaw развёрнуты больше чем на 110° — цель между точками взгляда (почти над/под телом). */
 const hintFlipped = (a, b) => Math.abs(((b - a + 540) % 360) - 180) > 110
 
-async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}) {
+async function tour (session, ctl, { deadline, hops = 8, pie = false, advance = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const here = worlds.worldOf(bot)
@@ -1026,6 +1198,14 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
   let lastHint = null
   let verticals = 0
   let stuckAt = null
+  let deckSteps = 0
+  if (session._ndDeckTour?.world !== here) session._ndDeckTour = { world: here }
+  const deck = session._ndDeckTour
+  const activeFrontier = process.env.ND_FORTRESS_FRONTIER !== '0' && typeof bot.findBlocks === 'function' && typeof bot.blockAt === 'function'
+  if (session._ndFortressFrontier?.world !== here) session._ndFortressFrontier = { world: here, bricks: new Set(), blocked: new Map() }
+  const frontier = session._ndFortressFrontier
+  const start = bot.entity.position.clone()
+  let frontierTried = 0, frontierExhausted = false
   // Short observation steps also matter on the next call, without earning the
   // separate eight-block exploration credit. Keep a bounded recent history.
   const views = (session._ndTourVisited.views ||= [])
@@ -1035,17 +1215,20 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       if (views.length > 256) views.shift()
     }
     const v: any = look(bot, mcData, { radius: 64 })
+    if (activeFrontier) for (const p of v.seenList || []) frontier.bricks.add(p.toString())
     for (const sp of v.spawners || []) rememberSpawner(session, sp)
-    console.log('[fortress] обход', JSON.stringify({ at: xyz(bot.entity.position), seen: v.seen, spawners: (v.spawners || []).length, blazes: v.blazes }))
+    console.log('[fortress] обход', JSON.stringify({ gameMs: gameClock.now(), at: xyz(bot.entity.position), seen: v.seen, spawners: (v.spawners || []).length, blazes: v.blazes }))
     return v
   }
   let v: any = lookNow()
+  const revision0 = frontier.bricks.size
   let still = 0
   let lastAt = null
   for (let i = 0; i < hops && !v.spawners && !ctl.aborted && gameClock.now() < deadline; i++) {
     const me = bot.entity.position
+    if (advance && (me.distanceTo(start) >= 8 || frontier.bricks.size > revision0)) break
     // S1f: три остановки подряд без сдвига (s1f-C1-1: 14 «остановок» на одном месте моста, блоков 0) — обход кончен.
-    still = lastAt && me.distanceTo(lastAt) < 2 ? still + 1 : 0
+    still = lastAt && me.distanceTo(lastAt) < 0.8 ? still + 1 : 0
     lastAt = me.clone()
     if (still >= 3) { path.push({ stuck: true, at: xyz(me) }); break }
     // S1f: ифриты видны рядом (≤ 16) или хп < 14 — обход с «пирогом» кончен: дальше бой ведёт blaze (коробка с окном, щит, отдых),
@@ -1053,8 +1236,20 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
     if (pie && process.env.ND_TOUR_STOP !== '0' && ((v.blazes && v.blazes.nearest <= 16) || (bot.health ?? 20) < 14)) { path.push({ handover: true, blazes: v.blazes, hp: Math.round(bot.health ?? 0) }); break }
     await keepBlocks(session, ctl)
     if (visited.every(p => p.distanceTo(me) >= 8)) visited.push(me.clone())
+    const adjacent = deckLeg(bot, deck)
+    if (adjacent) {
+      const w = await climbWalk(session, ctl, adjacent.floor, deadline, { exact: true })
+      path.push({ deck: true, back: adjacent.back, to: xyz(adjacent.floor), ok: w.ok, error: w.ok ? undefined : w.error })
+      v = lookNow()
+      if (w.ok) deckSteps++
+      if (deckSteps >= hops * 64) break
+      i--
+      continue
+    }
     // S1f (вслепую): «пирог» F3 показывает спавнер в прорисовке или ифрит слышен — сперва туда, отрезком по пеленгу (до 6 раз).
-    const hint = pie && hinted < 6 && process.env.ND_TOUR_PIE !== '0' ? spawnerHint(bot) : null
+    const overhead = (v.seenList || []).filter(p => p.y >= me.y + 2 && Math.hypot(p.x - me.x, p.z - me.z) <= 2)
+      .sort((a, b) => a.y - b.y)[0]
+    const hint = !overhead && pie && hinted < 6 && process.env.ND_TOUR_PIE !== '0' ? spawnerHint(bot) : null
     // Пеленг «пирога» развернулся (> 110°) после короткого отрезка — спавнер почти над/под нами (s1f-A2-3, сид 7777…: тело на y 50–52
     // ходило туда-сюда под тронным залом, спавнер −85,77,60 — в 3–5 бл. по горизонтали и 25 выше). Тронный зал — наверху крепости
     // (палубы 48–90): столбом вверх к палубе и взгляд, а не новый отрезок по пеленгу.
@@ -1082,6 +1277,33 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       v = lookNow()
       continue
     }
+    if (activeFrontier && !overhead) {
+      // Новый вариант пути не повторяет свой noPath до изменения наблюдений, тела или снабжения.
+      const supplies = (bot.inventory?.items() || []).filter(i => /pickaxe$|^(cobblestone|blackstone|netherrack|nether_bricks)$/.test(i.name))
+        .map(i => [i.name, i.count, i.durabilityUsed || 0]).sort()
+      const cause = JSON.stringify([frontier.bricks.size, supplies, bot.health, v.blazes?.seen || 0, (v.blazes?.nearest ?? Infinity) <= 16, hint && [hint.by, hint.yaw, hint.dir, hint.band]])
+      if (frontier.cause !== cause || (frontier.origin && me.distanceTo(frontier.origin) >= 8)) {
+        frontier.blocked.clear(); frontier.cause = cause; frontier.origin = me.clone()
+      }
+      const rec = placeOf(session, PLACE)
+      const brick = hint ? new Vec3(hint.x, me.y, hint.z) : (v.seenList || [])[0] || (rec && worlds.worldOfRecord(rec) === here ? new Vec3(rec.x, rec.y, rec.z) : null)
+      // shortcut: видимый пол в 16 блоках; расширять по натурным отказам дальнего подхода.
+      const view = viewLeg(bot, views, { toward: brick, blocked: frontier.blocked })
+      if (view) {
+        const before = me.clone()
+        const fingerprint = [0, 1, 2].map(dy => bot.blockAt(view.offset(0, dy, 0))?.name).join(',')
+        if (hint) { hinted++; if (hint.by === 'пирог') lastHint = { yaw: hint.yaw, at: before.clone() } }
+        let w = await climbWalk(session, ctl, view, deadline, { exact: true })
+        if (!w.ok && !w.fought && !ctl.aborted && gameClock.now() < deadline) w = await climbTo(session, ctl, view, deadline)
+        frontierTried++
+        if (!w.ok && !w.fought && !ctl.aborted) frontier.blocked.set(view.toString(), fingerprint)
+        path.push({ frontier: true, view: true, by: hint?.by || 'кирпич', to: xyz(view), ok: w.ok, moved: Math.round(bot.entity.position.distanceTo(before) * 10) / 10, error: w.error })
+        if (hint) stuckAt = bot.entity.position.distanceTo(before) < 3 ? bot.entity.position.clone() : null
+        v = lookNow()
+        continue
+      }
+      if (advance) { frontierExhausted = true; break }
+    }
     if (hint) {
       hinted++
       if (hint.by === 'пирог') lastHint = { yaw: hint.yaw, at: me.clone() }
@@ -1106,7 +1328,7 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       v = lookNow()
       continue
     }
-    let pool = (v.seenList || []).filter(p => p.distanceTo(me) <= 64)
+    let pool = (overhead ? [overhead] : (v.seenList || [])).filter(p => p.distanceTo(me) <= 64)
     if (!pool.length) {
       // Кирпича не видно — к крепости из памяти.
       const rec = placeOf(session, PLACE)
@@ -1126,7 +1348,7 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
       // Выше палубы не лезем; ниже — вверх, даже если кирпич сверху не виден:
       // снизу видны 3-4 блока днища, и «над головой ничего» — это не правда
       // (прогон 00:00: y=45, «видно 3», столба не было).
-      const above0 = pool.filter(p => Math.hypot(p.x - feet.x, p.z - feet.z) <= 16 && p.y >= feet.y + 3)
+      const above0 = pool.filter(p => Math.hypot(p.x - feet.x, p.z - feet.z) <= 16 && p.y >= feet.y + 2)
       const above = above0.length ? above0 : (feet.y < 60 ? pool : [])
       if (!above.length || pillars >= 2) {
         // На палубе видно только ближний кирпич (sr-1010 10.10: тело на мосту y 74, «обход 0 остановок» — 0 стержней): как
@@ -1180,7 +1402,11 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false }: any = {}
     path.push({ to: xyz(top), ok: w.ok, y: Math.floor(bot.entity.position.y), error: w.ok ? undefined : w.error })
     v = lookNow()
   }
-  return { spawners: v.spawners, blazes: v.blazes, seen: v.seen, hops: path, explored: visited.length, at: xyz(bot.entity.position) }
+  const advanced = bot.entity.position.distanceTo(start) >= 8 || frontier.bricks.size > revision0
+  console.log('[fortress] обход: итог', JSON.stringify({ deckSteps, deckVisited: deck.seen?.size || 0, hops: path.length,
+    explored: visited.length, spawners: (v.spawners || []).length, at: xyz(bot.entity.position), advanced, frontierRevision: frontier.bricks.size, frontierTried, frontierExhausted }))
+  return { spawners: v.spawners, blazes: v.blazes, seen: v.seen, hops: path, deckSteps, deckVisited: deck.seen?.size || 0, explored: visited.length, at: xyz(bot.entity.position),
+    advanced, frontierRevision: frontier.bricks.size, frontierTried, frontierExhausted }
 }
 
 // mode=spawner — дойти до спавнера блейзов. Спавнер виден клиенту, как только
@@ -1369,6 +1595,7 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
   }
   for (let i = 0; !sp && fort && worlds.worldOfRecord(fort) === 'the_nether' && i < 40 && !ctl.aborted && gameClock.now() < deadline; i++) {
     const me = bot.entity.position
+    const before = me.clone()
     const flat = Math.hypot(fort.x - me.x, fort.z - me.z)
     if (flat <= 24) break
     const k = Math.min(1, 24 / flat)
@@ -1376,20 +1603,10 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
     legs.push({ ok: !!w.ok, at: xyz(bot.entity.position), error: w.ok ? undefined : w.error })
     if (w.fought && (bot.health ?? 0) < 10) return { found: false, reached: false, stopped: `бой по дороге к крепости, хп ${Math.round(bot.health ?? 0)}`, legs }
     sp = spawnerNear()
+    if (process.env.ND_FORTRESS_FRONTIER !== '0' && !sp && !w.fought && bot.entity.position.distanceTo(before) < 0.8) break
   }
   if (!sp) sp = spawnerNear()
-  // S10: не видно, но «пирог» F3 показывает спавнер в прорисовке — ходом по пеленгу (как люди: повернуть камеру, идти,
-  // смотреть снова), до 4 отрезков по 20 бл.; ND_PIE_SPAWNER=0 — без этого.
-  for (let k = 0; !sp && k < 4 && process.env.ND_PIE_SPAWNER !== '0' && worlds.worldOf(bot) === 'the_nether' && !ctl.aborted && gameClock.now() < deadline; k++) {
-    const S = require('./perception/senses')
-    const arc = S.pieArcs(bot, 'spawner', { fov: 30 })[0]
-    if (!arc || arc.center === null) break
-    const v = S.vecOf(arc.center)
-    const me = bot.entity.position
-    const w = await legTo(session, ctl, Math.round(me.x + v.x * 20), Math.round(me.z + v.z * 20), deadline)
-    legs.push({ ok: !!w.ok, at: xyz(bot.entity.position), pie: arc.center, error: w.ok ? undefined : w.error })
-    sp = spawnerNear()
-  }
+  // tour already follows F3/sound hints, after attempting the visible walking deck.
   // S1f (вслепую — главное открытое S1e: 0 стержней во всех M4, «крепость видна, спавнера в прогруженных нет»): у крепости
   // спавнер не виден и «пирог» отсюда молчит — обход крепости по видимому кирпичу (палубы мостов 48–75) с «пирогом» и слухом
   // ифритов на каждой остановке (tour pie), как игрок с F3. ND_TOUR_PIE=0 — без обхода (прежнее «не видно»).
@@ -1398,9 +1615,9 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
     toured = await tour(session, ctl, { deadline: Math.min(deadline - 10000, gameClock.now() + 300000), hops: 14, pie: true })
     if (toured.spawners && toured.spawners.length) sp = new Vec3(toured.spawners[0].x, toured.spawners[0].y, toured.spawners[0].z)
     if (!sp) sp = spawnerNear()
-    legs.push({ ok: !!sp, tour: (toured.hops || []).length, at: xyz(bot.entity.position) })
+    legs.push({ ok: !!sp, tour: (toured.hops || []).length, deckSteps: toured.deckSteps, deckVisited: toured.deckVisited, at: xyz(bot.entity.position) })
   }
-  if (!sp) return { found: false, explored: toured?.explored, stopped: fort ? `у крепости спавнера в прогруженных чанках не видно${toured ? ` (обход ${(toured.hops || []).length} остановок)` : ''}` : 'крепости в памяти нет — сперва найти (fortress без mode)', legs, ...(toured && toured.blazes ? { blazes: toured.blazes } : {}) }
+  if (!sp) return { found: false, explored: toured?.explored, frontierRevision: toured?.frontierRevision, stopped: fort ? `у крепости спавнера в прогруженных чанках не видно${toured ? ` (обход ${(toured.hops || []).length} остановок)` : ''}` : 'крепости в памяти нет — сперва найти (fortress без mode)', legs, ...(toured && toured.blazes ? { blazes: toured.blazes } : {}) }
   rememberSpawner(session, { x: sp.x, y: sp.y, z: sp.z })
   // «Дошёл» — на уровне спавнера (±2) и в 6 блоках по горизонтали: блейзы
   // спавнятся в коробке 9×3×9 вокруг него, и из-под пола (8 блоков, но на 7
@@ -1650,4 +1867,4 @@ async function toSpawnerBody (session, ctl, { deadline, tunnel = false, breach =
   return { found: true, reached: lvl, spawner: xyz(sp), dist: Math.round(d), legs, stopped: lvl ? undefined : `до спавнера ${Math.round(d)} блоков, по высоте ${Math.floor(bot.entity.position.y) - sp.y} — не на его уровне` }
 }
 
-module.exports = { scout, look, tour, climbTo, spawnerHint, hintFlipped, axisLeg, keepBlocks, bastionRegions, regionOf, walkLeg, toSpawner, placeOf, FORTRESS_BLOCKS, BASTION_BLOCKS, PLACE, SPAWNER_PLACE, BASTION_PLACE }
+module.exports = { deckLeg, scout, look, tour, climbTo, spawnerHint, hintFlipped, axisLeg, keepBlocks, bastionRegions, regionOf, walkLeg, toSpawner, placeOf, FORTRESS_BLOCKS, BASTION_BLOCKS, PLACE, SPAWNER_PLACE, BASTION_PLACE }

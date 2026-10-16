@@ -1,9 +1,11 @@
 'use strict'
+require('./require-cache')
 const gameClock = require('./game-clock')
 // 03.10: require('./src/index') ради проверки загрузки поднимал демон на 8765 (порт арены) → 25565 — дважды за день.
 // Демон запускается только как точка входа (node src/index.js); проверка загрузки — node --check.
 if (require.main !== module) throw new Error('index.js — точка входа демона, не модуль; проверка загрузки — node --check src/index.js')
 const { WebSocketServer } = require('ws')
+if (process.env.ND_LAG_PROFILE === '1') require('./lag-profile').startLagProfile()
 const cfg = require('./config')
 const { EventBus } = require('./events')
 const { Journal } = require('./journal')

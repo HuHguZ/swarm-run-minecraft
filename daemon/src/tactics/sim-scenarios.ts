@@ -4,7 +4,46 @@ import type { Scenario, SimEvent } from './sim-world'
 import { rng } from './sim-world'
 
 const iron = { armor: 15, toughness: 0 }
+
+// A lower bound on observed arrivals, not a night-spawn rate. Lost sightings must not duplicate the same mob.
+// shortcut: no entity IDs in old tactical records; replacement by another mob of the same kind is unknowable.
+export function observedArrivals(frames: Array<{ at: number; enemies: Array<{ kind: string; distance: number; angle?: number }> }>): SimEvent[] {
+  const maximum = new Map<string, number>(), events: SimEvent[] = []
+  let previous = 0
+  for (const frame of frames) {
+    if (!Number.isInteger(frame.at) || frame.at < previous) throw new Error('unordered observation tick')
+    previous = frame.at
+    const counts = new Map<string, number>()
+    for (const enemy of frame.enemies) {
+      if (typeof enemy.kind !== 'string' || !enemy.kind || !Number.isFinite(enemy.distance) || enemy.distance < 0 || enemy.angle !== undefined && !Number.isFinite(enemy.angle)) throw new Error('invalid observed enemy')
+      const ordinal = (counts.get(enemy.kind) ?? 0) + 1; counts.set(enemy.kind, ordinal)
+      if (ordinal > (maximum.get(enemy.kind) ?? 0)) events.push({ at: frame.at, type: 'enemy', ...enemy })
+    }
+    for (const [kind, count] of counts) maximum.set(kind, Math.max(count, maximum.get(kind) ?? 0))
+  }
+  return events
+}
+
 export const SCENARIOS: Scenario[] = [
+  { name: 'regress-box-flight-arrow', seed: 3008, ticks: 600,
+    body: { hp: 4, food: 15, armor: 7 }, events: [
+      { at: 99, type: 'enemy', kind: 'skeleton', distance: 3.6, angle: 4.6 }] },
+  { name: 'regress-retreat-box-eta', seed: 3309, ticks: 600,
+    body: { hp: 8, food: 13, armor: 0 }, world: { physics: .5 }, events: [
+      { at: 77, type: 'enemy', kind: 'zombie', distance: 13.9, angle: 3.8 },
+      { at: 77, type: 'enemy', kind: 'zombie', distance: 12.4, angle: 6.4 },
+      { at: 77, type: 'enemy', kind: 'zombie', distance: 13.7, angle: 7.7 }] },
+  // Two runs with no useful distance gain must leave an untried physical box in the price comparison.
+  { name: 'regress-ow-exhausted-refuge', seed: 1, ticks: 900,
+    body: { hp: 9, food: 13, armor: 0, weapon: 'stone_sword', blocks: 16, meals: 0 }, world: { physics: .7, floorDiggable: false },
+    events: [{ at: 10, type: 'enemy', kind: 'spider', distance: 4.3 }] },
+  // Native cmk1-s1-3: Fight closed on a creeper at 4.3 before Dodge; mk1-s2-5: a critical arrow restarted BlockOff.
+  { name: 'regress-ow-creeper-approach', seed: 1, ticks: 600,
+    body: { hp: 16, food: 20, armor: 0, weapon: 'stone_sword', blocks: 0, meals: 0 }, world: { physics: .5 },
+    events: [{ at: 10, type: 'enemy', kind: 'creeper', distance: 4.3 }] },
+  { name: 'regress-ow-box-critical-hit', seed: 1, ticks: 600,
+    body: { hp: 12, food: 13, armor: 0, weapon: 'stone_sword', blocks: 240, meals: 0 }, world: { physics: .5, floorDiggable: false },
+    events: [{ at: 10, type: 'enemy', kind: 'skeleton', distance: 6.3 }] },
   { name: 'diamond-tank', body: { ...iron, blocks: 16 }, events: [
     { at: 20, type: 'enemy', kind: 'player', player: true, distance: 6, damage: 10, armor: 20, toughness: 8, hostile: true }] },
   { name: 'tnt-falling', events: [{ at: 20, type: 'tnt', distance: .5, fuse: 60 }] },

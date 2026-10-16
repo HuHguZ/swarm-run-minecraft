@@ -24,8 +24,7 @@ public final class FarmLockstep {
     stallNanos = stallMs * 1_000_000L;
   }
 
-  // ServerGamePacketListenerImpl.handleClientTickEnd, after ensureRunningOnSameThread. A silent or stalled client opts
-  // in again with its next tick_end, from the current server tick.
+  // ServerGamePacketListenerImpl.handleClientTickEnd, after ensureRunningOnSameThread.
   public static void tickEnd(Object listener) {
     long[] peer = peers.computeIfAbsent(listener, key -> new long[]{normalTicks, 0, 0});
     peer[1]++;
@@ -37,8 +36,10 @@ public final class FarmLockstep {
       Map.Entry<Object, long[]> entry = it.next();
       long[] peer = entry.getValue();
       if (normalTicks - peer[0] < peer[1] + window) continue;
-      // Valve: a disconnected client, or one silent for `stall` wall time, stops gating until it speaks again.
-      if (now - peer[2] > stallNanos || !accepting(entry.getKey())) { it.remove(); valves++; continue; }
+      if (!accepting(entry.getKey())) { it.remove(); valves++; continue; }
+      // A live client's wall stall invalidates this farm run; releasing its debt lets mobs kill an unstepped body.
+      if (now - peer[2] > stallNanos) throw new IllegalStateException("[farm-lockstep] connected client stalled: normalTicks=" +
+        normalTicks + " tickEnds=" + peer[1] + " pending=" + (normalTicks - peer[0] - peer[1]) + " silentMs=" + (now - peer[2]) / 1_000_000);
       return false;
     }
     return true;
@@ -65,8 +66,8 @@ public final class FarmLockstep {
       rateTick = type.getMethod("tick");
     }
     boolean runs = !(Boolean) call(frozen, rates) || (Boolean) call(stepping, rates);
+    if (runs && accepting == null && !peers.isEmpty()) accepting = peers.keySet().iterator().next().getClass().getMethod("isAcceptingMessages");
     if (runs && !ready(System.nanoTime())) {
-      if (accepting == null && !peers.isEmpty()) accepting = peers.keySet().iterator().next().getClass().getMethod("isAcceptingMessages");
       long start = System.nanoTime();
       waits++;
       call(block, server, (BooleanSupplier) () -> ready(System.nanoTime()));
@@ -86,7 +87,7 @@ public final class FarmLockstep {
       " waitMs=" + waitNanos / 1_000_000 + " valves=" + valves + " peers=" + peers.size();
   }
 
-  // Self-check (run by FarmDigClock.main when the agent is built): credit, window, opt-in and the stall valve.
+  // Self-check (run by FarmDigClock.main when the agent is built): credit, window and a failed-closed stall.
   public static void check() {
     configure(2, 50);
     Object bot = new Object();
@@ -100,9 +101,11 @@ public final class FarmLockstep {
     tickEnd(bot);
     if (!ready(peer[2])) throw new AssertionError("a tick_end grants the next tick");
     normalTicks++;
-    if (!ready(peer[2] + stallNanos + 1) || peers.containsKey(bot)) throw new AssertionError("a stalled client stops gating");
+    try { ready(peer[2] + stallNanos + 1); throw new AssertionError("a live stalled client must not release the world"); }
+    catch (IllegalStateException expected) { }
+    if (!peers.containsKey(bot)) throw new AssertionError("a stall must preserve the client's outstanding debt");
     tickEnd(bot);
-    if (peers.get(bot)[0] != normalTicks || !ready(System.nanoTime())) throw new AssertionError("a returning client opts in from now");
+    if (peers.get(bot) != peer || !ready(System.nanoTime())) throw new AssertionError("a fresh tick_end repays the existing debt");
     peers.clear(); normalTicks = 0; valves = 0;
   }
 }

@@ -71,8 +71,10 @@ test('enclosure: a one-door room costs more than open ground (arena 12.10: do no
 })
 
 test('mob avoidance prices a step but never forbids it: a polar bear family by the pillar (cl-l 14.10)', () => {
-  const bear = (x: number) => ({ name: 'polar_bear', position: new Vec3(x, 64, .5) })
-  const bot: any = { entity: { position: new Vec3(.5, 64, .5) }, entities: { 1: bear(1.5), 2: bear(.5), 3: bear(-.5) } }
+  const bear = (id: number, x: number, baby = false) => ({ id, name: 'polar_bear', position: new Vec3(x, 64, .5),
+    height: baby ? .7 : 1.4, width: baby ? .7 : 1.4, metadata: { 16: baby } })
+  const bot: any = { entity: { position: new Vec3(.5, 64, .5) }, entities: { 1: bear(1, 1.5), 2: bear(2, .5, true), 3: bear(3, -.5) },
+    blockAt: p => ({ position: p.floored(), name: p.y < 64 ? 'stone' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty', shapes: p.y < 64 ? [[0, 0, 0, 1, 1, 1]] : [] }) }
   const cost = flee.mobAvoidance(bot)({ position: new Vec3(0, 64, 0) })
   assert.ok(cost > 0 && cost + 1 <= 100, String(cost))
 })

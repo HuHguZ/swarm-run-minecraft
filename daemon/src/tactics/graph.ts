@@ -12,6 +12,7 @@ const refuge: ActionId[] = ['Flee', 'CreateDistance', 'BlockOff', 'PillarUp', 'D
 const edges: TacticalTransition[] = []
 const edge = (from: TacticalNodeId, to: TacticalNodeId, when: TacticalTransition['when']) => edges.push({ from, to, when })
 for (const action of actions) {
+  for (const response of ['Fight', 'Flee', 'Surface', 'PillarUp'] as const) edge(action, response, state => state.polarBear?.action === response)
   edge('Strategic', action, state => candidates(state).some(candidate => candidate.id === action))
   edge(action, 'Strategic', state => threatLevel(state) === 0)
   edge(action, 'EmergencyController', state => state.dangerousFall || state.emergencyController)
@@ -30,7 +31,7 @@ for (const action of actions) {
   for (const shelter of refuge) edge(action, shelter, state => threatLevel(state) >= 2 && (!state.canFight || state.health < 12 || action === 'Fight' || shelter === 'BlockOff' && piglinNiche(state) || shelter === 'PillarUp' && !!state.netherHide || shelter === 'BlockOff' && !!state.ghastEdge))
   edge(action, 'Heal', state => state.cover && state.health < 16 && state.edible)
   edge(action, 'Eat', state => state.edible && (burnRecovery(state) || state.food < 16 && threatLevel(state) <= 1))
-  edge(action, 'Shield', state => state.shield && (state.incomingProjectiles > 0 || threatLevel(state) === 1))
+  edge(action, 'Shield', state => state.shield && (!!state.owGuard || state.incomingProjectiles > 0 || threatLevel(state) === 1))
   edge(action, 'Fight', state => canRepelLavaAttacker(state) || hasObservedTarget(state) && state.contact && state.canFight && state.health > 6 && !state.explosion)
 }
 edge('EmergencyController', 'Strategic', state => !state.dangerousFall && !state.emergencyController && threatLevel(state) === 0)

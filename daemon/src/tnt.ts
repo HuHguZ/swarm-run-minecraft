@@ -7,8 +7,9 @@
 // Итог: { ok, placed, lit, why }.
 const Vec3 = require('vec3')
 const build = require('./build')
+const pick = require('./pick')
 
-async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6 }: any = {}) {
+async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = false, beforeIgnite = null }: any = {}) {
   const bot = session.require()
   if (!at || ![at.x, at.y, at.z].every(Number.isFinite)) return { ok: false, why: 'нужна точка at' }
   const items = bot.inventory.items()
@@ -19,7 +20,7 @@ async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6 }: any = {})
   const t = new Vec3(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z))
   // Клетки: точка и соседи ±1 (по высоте дороже); пустая, не вода/лава, в досягаемости; ближе к точке — лучше.
   const cells: any[] = []
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+  for (const dy of exact ? [0] : [-1, 0, 1]) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
     const c = t.offset(dx, dy, dz); const b = bot.blockAt(c)
     if (!b || b.boundingBox !== 'empty' || /water|lava|fire/.test(b.name)) continue
     if (c.offset(0.5, 0.5, 0.5).distanceTo(eye) > reach) continue
@@ -39,7 +40,10 @@ async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6 }: any = {})
     const lighter = bot.inventory.items().find(i => i.name === fire.name)
     if (!lighter) return { ok: false, placed: c, why: 'огниво пропало' }
     await bot.equip(lighter, 'hand')
-    await bot.lookAt(c.offset(0.5, 0.5, 0.5), true)
+    const aim = pick.blockAim(bot, c, { range: reach, seeThrough: null })
+    if (!aim) return { ok: false, placed: c, lit: false, why: 'динамит закрыт прицелом' }
+    await bot.lookAt(aim, true)
+    if (ctl?.aborted || beforeIgnite && !beforeIgnite() || !pick.blockAim(bot, c, { range: reach, seeThrough: null })) return { ok: false, placed: c, lit: false, why: 'обстановка изменилась перед поджигом' }
     await bot.activateBlock(block).catch(() => {})
     await bot.waitForTicks(3)
     // Зажжённый динамит — уже сущность, в клетке пусто.

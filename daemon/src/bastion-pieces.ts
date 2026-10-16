@@ -340,6 +340,11 @@ const START_REL = {
     { d: [-18, 23, 0], dr: 0, v: { 'hoglin_stable/ramparts/ramparts_1': 1 / 3, 'hoglin_stable/ramparts/ramparts_2': 1 / 3, 'hoglin_stable/ramparts/ramparts_3': 1 / 3 } }
   ]
 }
+// Vanilla 1.21.11: JigsawStructure chunk minimum, start_height=33, StructurePoolElement ground delta=1.
+function startFitsGenerator (s) {
+  return !!START_REL[s?.type] && Number.isInteger(s.r) && s.r >= 0 && s.r <= 3 && s.t?.y === 32 &&
+    ['x', 'z'].every(k => Number.isInteger(s.t[k]) && s.t[k] % 16 === 0)
+}
 // Узнанный кусок c {piece, r, t} → гипотезы старта [{ type, r, t, w }] (кусок встречается в таблице — по месту слота).
 function startsFrom (c) {
   const out = []
@@ -410,4 +415,4 @@ function * voteBySteps (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMi
 const BASALT_ANCHORS = ['bridge/bridge_pieces/bridge', 'bridge/starting_pieces/entrance', 'hoglin_stable/ramparts/ramparts_1', 'hoglin_stable/ramparts/ramparts_2', 'hoglin_stable/ramparts/ramparts_3', 'treasure/ramparts/mid_wall_main', 'treasure/ramparts/mid_wall_side', 'treasure/ramparts/top_wall']
 const GOLD_ANCHORS = ['bridge/bridge_pieces/bridge', 'treasure/bases/centers/center_0', 'treasure/bases/centers/center_1', 'treasure/bases/centers/center_2', 'treasure/bases/centers/center_3']
 
-module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS, GOLD_ANCHORS }
+module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL, startFitsGenerator, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS, GOLD_ANCHORS }

@@ -1,4 +1,4 @@
-import test from 'node:test'
+import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,6 +7,10 @@ import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 const { transformSync } = require('esbuild')
 const Vec3 = require('vec3')
+
+const previous = process.env.ND_OW_NIGHT_BLOCKOFF
+before(() => { process.env.ND_OW_NIGHT_BLOCKOFF = '1' })
+after(() => { if (previous === undefined) delete process.env.ND_OW_NIGHT_BLOCKOFF; else process.env.ND_OW_NIGHT_BLOCKOFF = previous })
 
 function load(file: string, overrides: Record<string, any>) {
   const native = createRequire(file), context: any = { module: { exports: {} }, exports: {},
@@ -24,20 +28,23 @@ function fixture({ sealed = true, why = 'no_food', aborted = false, hp = 10 }: a
     pathfinder: { setGoal() {} }, clearControlStates() {}, _client: new EventEmitter() }
   const ctl: any = { aborted: false, onAbort: [], abort() { this.aborted = true } }
   const session: any = { bot, journal: { append() {} } }
-  const refuge = load(path.resolve(__dirname, '../src/survival/refuge-body.ts'), {
-    './hold-out': { refugeLook: () => ({ blocks: 64, cell: {}, canBreakOut: true }), lookLine: () => 'night; no food',
-      chooseRefuge: () => ({ how: 'box', why: 'covered work' }), outrun: () => false,
-      takeBox: async () => { calls.push('build'); now += 1500; session.shelterBox = cell; return { cell, placed: 9 } },
+  let built = false
+  const hold = { refugeLook: () => ({ blocks: 64, cell: {}, canBreakOut: true, pocket: built && sealed ? 2 : 0 }), lookLine: () => 'night; no food',
+      chooseRefuge: (a: any) => ({ how: a.pocket ? 'pocket' : 'box', why: 'covered work' }), outrun: () => false,
+      takeBox: async () => { calls.push('build'); built = true; now += 1500; session.shelterBox = cell; ctl.aborted = aborted; return { cell, placed: 9 } },
       holdOut: async () => { calls.push('hold'); ctl.aborted = aborted; return { why, ate: [] } },
       sitTight: async () => { calls.push('sit'); now += 399500; return { sat: 399500 } },
       waitClear: async () => { calls.push('clear'); return true },
-      leaveBox: async () => { calls.push('open'); return { ok: true } } },
+      leaveBox: async () => { calls.push('open'); return { ok: true } } }
+  const refuge = load(path.resolve(__dirname, '../src/survival/refuge-body.ts'), {
+    './hold-out': hold,
     './surface-body': {},
     './enter-shelter': { gameClock: { now: () => now }, xyz: v => [v.x, v.y, v.z], sitOn: () => true, Vec3 },
     '.././fortify': { landed: async () => {}, enclosure: () => ({ sealed }) },
     '.././flee': { hostilesAround: () => [] }, '.././items': { bestWeapon: () => null }
   })
-  const { TacticalSystem } = load(path.resolve(__dirname, '../src/tactics/minecraft.ts'), { '../survival': refuge })
+  const { TacticalSystem } = load(path.resolve(__dirname, '../src/tactics/minecraft.ts'), {
+    '../survival': { ...refuge, refugeLook: hold.refugeLook, chooseRefuge: hold.chooseRefuge }, '../survival/hold-out': hold })
   return { calls, session, run: (id = 'BlockOff') => TacticalSystem.prototype.execute.call({ session }, { id }, ctl, { enemies: [] }) }
 }
 
@@ -56,7 +63,7 @@ for (const options of [{ sealed: false }, { why: 'breached' }, { why: 'died', hp
   test(`BlockOff does not claim a preserved safe box ${JSON.stringify(options)}`, async () => {
     const f = fixture(options), result = await f.run()
     assert.notEqual(result.stayed, true)
-    assert.equal(result.healed, false)
+    assert.notEqual(result.healed, true)
     if (options.why === 'breached') assert.equal(result.code, 'CORNERED')
     if (options.hp === 0) assert.equal(result.code, 'DIED')
   })

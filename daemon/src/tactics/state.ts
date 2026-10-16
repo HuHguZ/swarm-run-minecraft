@@ -20,6 +20,7 @@ export interface TacticalEnemy {
 export const S4D = (): boolean => process.env.ND_S4D !== '0'
 
 export interface TacticalState {
+  polarBear?: { id: number; action: string; cost: number; seconds: number; loss: number; top: number; signature: string } | null
   at: number
   health: number
   food: number
@@ -28,6 +29,8 @@ export interface TacticalState {
   shield: boolean
   enemies: TacticalEnemy[]
   incomingProjectiles: number
+  /** Present only for the overworld shield policy; null means the visible shot/draw has ended. */
+  owGuard?: import('../ow-shield').GuardPoint | null
   burning: boolean
   hotFloor?: boolean
   lava: boolean
@@ -41,6 +44,8 @@ export interface TacticalState {
   inWater: boolean
   /** submerged with air at or below 8 of 20 bubbles (stress stand: drowning was invisible to the tactics) */
   drowning?: boolean
+  /** Submerged work was hit; retain defence until safe footing/pocket or recovered air without contact. */
+  waterEscape?: boolean
   /** adult piglins in sight: hitting a brute broadcasts its anger to them (PiglinBruteAi.wasHurtBy -> PiglinAi.maybeRetaliate) */
   piglinWitnesses?: boolean
   cover: boolean
@@ -59,6 +64,8 @@ export interface TacticalState {
   ghastEdge?: boolean
   /** Damage expected during the physically planned descent, before the shelter closes. */
   digDownCostHp?: number
+  /** Damage expected before the planned box or niche closes, including visible shooters. */
+  buildCostHp?: number
   protectedEncounter: boolean
   embedded?: boolean
   airborne?: boolean
@@ -169,7 +176,7 @@ export function threatLevel(state: TacticalState): ThreatLevel {
   // A brute, a hoglin or three walkers coming (netherHide, 8 blocks): the hole goes down before they arrive, not under them.
   // So does a ghast in sight over a lethal drop behind the body (ghastEdge), when a box can go up: before its first fireball. With
   // no box the level stays - a run from nobody "escaped" at once and looped (c16-6-3 14.10).
-  if (state.contact || state.netherHide || state.ghastEdge && state.shelter === 'BlockOff' || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
+  if (state.waterEscape || state.owGuard || state.polarBear || state.contact || state.netherHide || state.ghastEdge && state.shelter === 'BlockOff' || state.incomingProjectiles > 0 || state.burning && !state.fireResistance) return 2
   if (foes.length) return 1
   return 0
 }
@@ -186,16 +193,24 @@ export function digDownCost(foes: Array<{ kind: string; distance: number; hit?: 
   }, 0)
 }
 
+// shortcut: OW walkers and bows only; extend the estimate after calibrating other attack phases.
+export function boxBuildCost(foes: Parameters<typeof digDownCost>[0], buildMs: number): number | undefined {
+  return foes.every(foe => /^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|bogged|parched)$/.test(foe.kind))
+    ? digDownCost(foes, buildMs) : undefined
+}
+
 export const KEEP_WORKING = 30
 export function candidates(state: TacticalState, level = threatLevel(state)): Candidate[] {
   if (level === 0) return []
   const result: Candidate[] = []
+  const failedRetreat = process.env.ND_OW_NIGHT_FLEE === '1' && !!state.escapeExhausted && hasObservedTarget(state) && !outpaced(state) &&
+    !state.lava && !state.lavaEscapePending && !state.hotFloor && !state.inWater && !state.drowning
   // Below level 3 an action is weighed against keeping the skill going (KEEP_WORKING): a run priced down by a pursuer that
   // keeps up (a lone blaze in sight at full health: Flee 19.5) is not worth the interrupted work (stand fuzz2/fuzz-2601:
   // Hide>Flee to cover and back every 2 s at 20 hp). At level 3 anything beats standing still.
   // A contacting enderman still needs a fallback when neither a safe strike nor a local shelter is available. Its
   // discounted run must compete with the risky hole, not disappear below the "keep working" price.
-  const floor = level >= 3 || state.contact && state.enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman') ? -Infinity : KEEP_WORKING
+  const floor = level >= 3 || state.contact && (failedRetreat || state.enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')) ? -Infinity : KEEP_WORKING
   const add = (id: ActionId, score: number, reason: string, available: boolean) => {
     if (available && !state.failedEscapes?.includes(id) && Number.isFinite(score) && score >= floor) result.push({ id, score, reason })
   }
@@ -207,7 +222,8 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // S1 (s1-full46/49): LastStand against a brute at the barter pit turned the watching piglins on the bot. Never strike a
   // brute in their sight; wall it off instead, even in an exhausted corner.
   const provokes = !!state.piglinWitnesses && state.enemies.some(enemy => enemy.threatening && enemy.kind === 'piglin_brute')
-  const melee = hasMeleeTarget(state)
+  const target = state.enemies.filter(enemy => enemy.threatening && meleeReachable(enemy)).sort((a, b) => a.distance - b.distance)[0]
+  const melee = !!target
   // A last stand answers the foe at the body: a reachable one 13 blocks off that never engaged is no reason to walk out
   // (stress stand: a circling phantom made the cornered body attack a distant brute).
   const atBody = state.enemies.some(enemy => enemy.threatening && meleeReachable(enemy) && enemy.distance <= 6)
@@ -215,7 +231,7 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // in 20 s, also when hunger alone made the verdict "recover").
   // (Shooters that out-range a run - blaze, ghast - are walled off at any health: a wall stops their shots.)
   const swoops = outpaced(state) && !state.enemies.some(enemy => enemy.threatening && /^(blaze|ghast)$/.test(enemy.kind))
-  const sheltered = (!escapeExhausted || provokes || !atBody) && !(swoops && state.weapon && state.health >= 10)
+  const sheltered = (failedRetreat || !escapeExhausted || provokes || !atBody) && !(swoops && state.weapon && state.health >= 10)
   // A wall takes ~1.5 s inside the attacker's reach (contact: a brute closes 4.5 blocks in under a second): two hits that
   // leave less than the 8 HP fight floor make building in place a trade (stress stand brute-in-nether: box at 20 HP,
   // abandoned 3 ticks before the seal at 4.8 HP, cf. Full40). Break contact first, as refuge does when the walker outruns
@@ -228,7 +244,10 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // started inside 8 blocks was dropped a sample later (stress stand fuzz-2564: Flee>BlockOff>Flee at hp 3). A score, not a
   // gate: a box started further out keeps the score it was chosen with (arbiter SHELTERS) as the creeper walks in.
   const creeperInBuild = state.enemies.some(enemy => enemy.threatening && enemy.kind === 'creeper' && enemy.distance <= 8)
-  const exposedBuild = state.escapeRoute && !state.dangerousFall && (pressure > 0 && state.health - pressure * 2 < 8 || creeperInBuild)
+  // Compare construction against a viable run by its remaining HP; an affordable hit is not a reason to abandon cover.
+  const buildReserve = state.buildCostHp !== undefined && state.escapeRoute && !state.escapeExhausted && runGain(state) > .3
+    ? state.health - Math.max(0, state.buildCostHp) : undefined
+  const exposedBuild = state.escapeRoute && !state.dangerousFall && (pressure > 0 && state.health - pressure * 2 < 8 || creeperInBuild || buildReserve !== undefined && buildReserve < 8)
   const creeperNear = creeperWalksUp(state)
 
   // A favourable verdict without a weapon is no fight (Fight needs one): score the retreats as for an unfavourable one
@@ -259,17 +278,26 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('UseFireResistance', 156, 'available fire resistance before climbing', frWorth(state) && !state.fireResistance && !!state.fireResistancePotion)
   add('BoatLavaHop', 154, 'existing expendable boats and a visible collision-free lava route', state.lava && !!state.boatLavaHop)
   add('ClimbOut', 140, 'fire resistant swimming or visible wall steps', (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
-  add('Surface', 148, 'air running out under water', !!state.drowning && !state.dangerousFall)
+  add('Surface', state.drowning || critical || !state.canFight ? 148 : 85,
+    state.waterEscape ? 'hurt during underwater work; reach dry ground' : 'air running out under water', !!(state.drowning || state.waterEscape) && !state.dangerousFall)
   add('Flee', 142, 'leave damaging magma', !!state.hotFloor && !state.dangerousFall && !state.emergencyController)
   add('UseWater', 145, 'fire', state.water && state.burning && !state.fireResistance && !state.lava)
   add('Dodge', 150, 'explosion', state.explosion)
   add('EnterPortal', 115, 'nearby escape', critical && state.portal && !state.dangerousFall)
+  if (state.polarBear) {
+    add(state.polarBear.action as ActionId, 130, `polar bear: ${state.polarBear.seconds.toFixed(1)}s, ${state.polarBear.loss.toFixed(1)} HP`, !state.dangerousFall && !state.emergencyController)
+    return result.sort((a, b) => b.score - a.score)
+  }
   // Never a stand inside a blast alarm: LastStand (155) outscored Dodge (150) at a swelling charged creeper (farm s4-stress-3).
   // Nor in water: a stand among drowned outscored Surface (148) - hp 18 to 0 in a second (cl-l 14.10); with the head above water
   // LastStand and Surface took turns, hp 9 to 0 in 0.6 s (cl-s 14.10). In water the drowned swim and strike, our hits do not crit.
-  add('LastStand', niche ? 90 : 155, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat && !state.drowning && !state.inWater)
+  // Failed ground retreats do not prove an untried refuge impossible; three close hits price the stand against it.
+  const standScore = niche ? 90 : failedRetreat ? 90 / (1 + 3 * pressure / state.health) : 155
+  add('LastStand', standScore, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat && !state.drowning && !state.inWater)
   const repel = canRepelLavaAttacker(state)
-  add('Fight', repel ? 157 : critical ? -100 : 90, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && melee && state.canFight && state.weapon && contact && !state.blast && !state.protectedEncounter && !provokes && !state.lava && !state.lavaEscapePending && !escapeExhausted)
+  // Closing on the selected creeper starts its fuse; a distant creeper behind a nearer walker is not that fight's price.
+  const fightScore = process.env.ND_OW_NIGHT_CREEPER === '1' && target?.kind === 'creeper' && !target.player ? 90 / (1 + (target.hit ?? 0) / state.health) : 90
+  add('Fight', repel ? 157 : critical ? -100 : fightScore, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && melee && state.canFight && state.weapon && contact && !state.blast && !state.protectedEncounter && !provokes && !state.lava && !state.lavaEscapePending && !escapeExhausted)
   // The Nether guard's answer to a brute, a hoglin or three walkers near is its hole two down (their reach stops at their feet) and
   // strikes from it: a run from a brute is two axe blows in a second (c2-5-2, c2-6-3 14.10: CreateDistance "does not get away",
   // 20 -> 0; try-lab-ne-piglin: hole 1-2 deaths of 8). Its own id (PillarUp), so the arbiter leaves a running duel for it; above a
@@ -279,17 +307,18 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
     !state.embedded && !state.aerialCombat && !state.inWater)
   // A dead end is about the attackers; the swim out of lava (escapeFire) is no run from them: a ghast overhead made the pool
   // a "dead end" and the body burned with no action at all (stress stand v2 fuzz2-2182/2376/4393, level 4 unhandled); under
-  // fire resistance too, when no wall step offers a climb. A swim that already failed (observed exhaustion) stays out.
-  // Only runs that were tried and failed here (observed exhaustion) are out; a pursuer that keeps up prices the run down
-  // (runGain) instead of closing it, so a body with no wall, shield or strike still runs for cover (S4c).
-  const runOpen = !(observedTarget && state.escapeExhausted)
-  const gain = runGain(state)
+  // fire resistance too, when no wall step offers a climb. A failed ground retreat keeps the existing unshakeable-pursuer
+  // price, so a body without a payable refuge or strike can still move toward cover.
+  const runOpen = !(observedTarget && state.escapeExhausted && !failedRetreat)
+  const gain = runGain(state) * (failedRetreat ? .3 : 1)
   add('Flee', (critical ? 100 : 65) * gain, 'create safe distance', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
   // Not gated by canFight: a verdict flickering at the health threshold must not invalidate the retreat in progress.
   add('CreateDistance', (!armed || !observedTarget ? 85 : 50) * gain, 'unfavorable or unidentified attacker', level >= 2 && route && !state.dangerousFall && !state.aerialCombat && !state.lavaEscapePending && runOpen)
   // A ghast over a ledge: the box beats the shield and the swat - one missed fireball throws the body into the lava sea.
   const ghastBox = !!state.ghastEdge && state.shelter === 'BlockOff'
+  // Half the existing eight-HP exchange floor is the reserve after construction.
   const shelterScore = (ghastBox ? 130 : niche ? 110 : exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95) *
+    (buildReserve === undefined ? 1 : Math.max(0, Math.min(1, buildReserve / 4))) *
     (state.shelter === 'DigDown' && state.digDownCostHp !== undefined ? Math.max(0, 1 - state.digDownCostHp / state.health) : 1)
   // A validated shaft supplies its own closing block as it is dug; an existing pocket needs no construction.
   if (state.shelter) add(state.shelter, shelterScore, 'available refuge', level >= 2 && shelterHolds && (state.blocks > 0 || state.shelter === 'DigDown' || state.shelter === 'Hide') && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && (sheltered || niche))
@@ -299,7 +328,8 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // и такого фармлю»; 69 shields at level 1 against people in 10 min, none at a shot in flight, a second human 6-14 blocks
   // off). Without a shot the skill's own fight or retreat goes on.
   const flankers = state.enemies.filter(enemy => enemy.player && (enemy.threatening || enemy.foe) && enemy.distance <= 12).length
-  add('Shield', 80, 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat && (playerFoe ? state.incomingProjectiles > 0 && flankers <= 1 : level === 1 || state.incomingProjectiles > 0))
+  add('Shield', state.owGuard ? 110 : 80, state.owGuard ? 'visible draw or incoming shot' : 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat &&
+    (state.owGuard !== undefined ? !!state.owGuard : playerFoe ? state.incomingProjectiles > 0 && flankers <= 1 : level === 1 || state.incomingProjectiles > 0))
   add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && !playerFoe)
   const recoverBurn = burnRecovery(state)
   add('Eat', recoverBurn ? 105 : 45, recoverBurn ? 'restore regeneration after burning' : 'restore food',

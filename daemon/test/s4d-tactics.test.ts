@@ -207,15 +207,20 @@ test('a tactical run says "не отрывается" after 3 game s when the wa
 })
 
 test('the blaze skill keeps its blazes; a wither skeleton at the body is the tactics\' fight (s1c-A-5: slain at the spawner, no tactics in 40 s)', () => {
+  // Прежний бой holdSpawner: при ND_BLAZE_MELEE (по умолчанию с 16.10) иссушителя у спавнера бьёт сам цикл меча (blaze-melee.ts).
+  const melee = process.env.ND_BLAZE_MELEE; process.env.ND_BLAZE_MELEE = '0'
+  try {
   const bot = walled()
   bot.blockAt = (p: any) => { const q = p.floored(); const solid = q.y < 64
     return { name: solid ? 'stone' : 'air', position: q, boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [] } }
   bot.entities[2] = { id: 2, name: 'blaze', type: 'mob', position: new Vec3(5.5, 65, .5), height: 1.8, width: .6, isValid: true, metadata: [] }
   const session: any = { bot, current: { name: 'blaze', ctl: { aborted: false } }, reflex: null, bus: { emit: () => {} } }
+  session._blazeCombatCtl = session.current.ctl
   assert.equal(withFlag(undefined, () => observeTactics(session)).protectedEncounter, true, 'blazes only: the skill fights')
   bot.entities[3] = { id: 3, name: 'wither_skeleton', type: 'mob', position: new Vec3(2.5, 64, .5), height: 2.4, width: .7, isValid: true, metadata: [] }
   assert.equal(withFlag(undefined, () => observeTactics(session)).protectedEncounter, false)
   assert.equal(withFlag('0', () => observeTactics(session)).protectedEncounter, true, 'S4c: the skill owned it')
+  } finally { if (melee === undefined) delete process.env.ND_BLAZE_MELEE; else process.env.ND_BLAZE_MELEE = melee }
 })
 
 test('a wither skeleton\'s stone sword is counted once (javap: ATTACK_DAMAGE 4 + sword 4 = 8; brute 7 + golden axe 6 = 13)', () => {

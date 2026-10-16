@@ -289,12 +289,51 @@ function geomOf (plan) {
   return geom(new Vec3(plan.origin.x, plan.origin.y, plan.origin.z), plan.axis, plan.side)
 }
 
+// Keep the observed partial frame when changing the bucket layout.
+function resumeOnePlan (session, { maxDig = MAX_DIG, windows = false }: any = {}) {
+  const bot = session.bot
+  if (bot.game?.dimension !== 'overworld') return null
+  const rec = session.journal.state?.places?.[require('./cast1').PLACE1]
+  const one = session.castPlan1 || (rec && (rec.dimension || 'overworld') === 'overworld'
+    ? { origin: { x: rec.x, y: rec.y, z: rec.z }, axis: rec.axis, side: rec.side } : null)
+  if (!one || !['x', 'z'].includes(one.axis) || ![-1, 1].includes(one.side) ||
+      !['x', 'y', 'z'].every(k => Number.isInteger(one.origin?.[k]))) return null
+  const g = geomOf(one), read = p => bot.blockAt(p)
+  if (g.at(0, 0).distanceTo(bot.entity.position) > 24) return null
+  const frame = new Set(frameKeys(g).map(p => p.toString()))
+  if (!frameKeys(g).some(p => read(p)?.name === 'obsidian')) return null
+  for (let i = -1; i <= 2; i++) {
+    if (!steadyFloor(read, g.at(i, -2)) || !steadyFloor(read, g.F(i, -2))) return null
+    for (const p of [g.at(i, 4), g.F(i, 6)]) {
+      const b = read(p)
+      if (!b || hasFluid(b) || FALLING.test(b.name)) return null
+    }
+  }
+  const dig = []
+  for (const p of clearanceKeys(g)) {
+    const b = read(p)
+    if (!b || hasFluid(b)) return null
+    if (b.name === 'obsidian' && frame.has(p.toString())) continue
+    if (isAir(b)) continue
+    if (digRisk(read, p)) return null
+    dig.push(xyz(p))
+  }
+  if (dig.length > maxDig) return null
+  return { origin: xyz(g.origin), axis: g.axis, side: g.side, dig,
+    corners: [xyz(g.at(-1, -1)), xyz(g.at(2, -1))], lavaAt: [], windows: !!windows }
+}
+
+function refillState (bot, plan) {
+  const frame = frameKeys(geomOf(plan)).map(p => (bot.blockAt(p) || {}).name || '?')
+  const visible = lavaSources(bot, 28).map(b => b.position.toString()).sort()
+  const carried = countOf(bot, 'lava_bucket')
+  return { frame: `${frame.filter(n => n === 'obsidian').length}/10 обсидиан`, empty: !visible.length && !carried,
+    key: JSON.stringify([plan.origin, plan.axis, plan.side, bot.entity.position.floored().toString(), frame, visible, carried, countOf(bot, 'water_bucket')]) }
+}
+
 // ---------------------------------------------------------------- вёдра
 
-// Видимые источники лавы. Через sight.visibleOf, а не findBlocks + луч:
-// ближние четыреста клеток озера — толща под поверхностью или лава за стеной,
-// и видимая гладь дальше отсечки не попадала бы никогда (та же болезнь, что
-// была у mine: отсечка по числу до луча).
+// Видимые источники лавы. Через sight.visibleOf: ближние клетки могут быть за стеной.
 function lavaSources (bot, radius = 24) {
   const id = bot.registry.blocksByName.lava.id
   const me = bot.entity.position
@@ -854,7 +893,8 @@ function liveLava (bot, seeds, ref, { limit = 12, cap = 1500 }: any = {}) {
   for (let i = 0; i < q.length && seen.size < cap; i++) {
     const p = q[i]
     const b = bot.blockAt(p)
-    if (b && levelOf(b) === 0 && isAir(bot.blockAt(p.plus(UP)))) open.push(p)
+    if (b && levelOf(b) === 0 && isAir(bot.blockAt(p.plus(UP))) &&
+        (process.env.ND_OW_KIT_FRAME === '0' || require('./sight').seesBlock(bot, b))) open.push(p)
     for (const v of [...SIDES4, UP, DOWN]) {
       const n = p.plus(v)
       if (seen.has(key(n))) continue
@@ -983,7 +1023,7 @@ async function castCell (session, ctl, g, t, report) {
   if (!lavaHere && !countOf(bot, 'lava_bucket')) {
     const s0 = await stand(session, ctl, g, t.col, -1, report)
     if (!s0.ok) return { ok: false, why: s0.why }
-    if (!(await refillLava(session, ctl, report))) return { ok: false, why: 'лава кончилась: зачерпнуть не вышло' }
+    if (!(await refillLava(session, ctl, report))) return { ok: false, fatal: process.env.ND_OW_KIT_FRAME !== '0', why: 'лава кончилась: зачерпнуть не вышло' }
   }
   if (!(await ensureWater(session, ctl))) return { ok: false, why: 'нет воды в ведре' }
   const s = await stand(session, ctl, g, t.col, t.h, report)
@@ -1101,6 +1141,16 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
     const far = g0.at(0, 0).distanceTo(bot.entity.position) > 24
     if (far) { plan = null; session.castPlan = null }
   }
+  if (!plan && process.env.ND_OW_KIT_FRAME !== '0') {
+    plan = resumeOnePlan(session, { maxDig, windows })
+    if (plan) {
+      session.castPlan = plan
+      session.journal.patch(st => {
+        st.places ||= {}; st.places[PLACE] = { ...plan.origin, dimension: bot.game?.dimension, axis: plan.axis, side: plan.side,
+          lavaAt: plan.lavaAt, windows: plan.windows, dig: plan.dig, note: 'литьё рамы' }
+      })
+    }
+  }
   if (!plan) {
     const hintList = hint ? [hint] : []
     let lava = scoopableSources(bot, hintList).map(b => b.position)
@@ -1134,6 +1184,12 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
   }
   const g = geomOf(plan)
   report.site = { origin: plan.origin, axis: plan.axis, side: plan.side, lavaDist: plan.lavaDist }
+  if (process.env.ND_OW_KIT_FRAME !== '0' && session.castLavaFailure) {
+    const current = refillState(bot, plan)
+    if (current.empty && current.key === session.castLavaFailure.key) return { ...report, built: false, frame: current.frame,
+      stopped: session.castLavaFailure.stopped, retryBlocked: true }
+    session.castLavaFailure = null
+  }
   const late = () => gameClock.now() > deadline || ctl.aborted
   const groundY = g.F(0, -1).y
 
@@ -1284,6 +1340,10 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
   const frame = frameKeys(g).map(p => bot.blockAt(p)).map(b => (b ? b.name : '?'))
   const done = frame.filter(n => n === 'obsidian').length
   const built = done === 10
+  if (process.env.ND_OW_KIT_FRAME !== '0' && !built && !ctl.aborted && /лава кончилась/.test(stopped || '')) {
+    const current = refillState(bot, plan)
+    if (current.empty) session.castLavaFailure = { key: current.key, stopped }
+  }
   return {
     ...report,
     built,
@@ -1294,4 +1354,4 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
 
 module.exports = { castPortal, planCast, judge, geom, lavaSources, landing, aimFor, windowCandidates, openWindow, scoopAim, standSpots, hearLava, hearWater, liveLava, outlineAim, steadyFloor, SOFT_PLANT, PLACE }
 // Внутренности для cast1.js (одно ведро): те же прицел, черпак, копка и ходьба.
-module.exports._in = { digVisible, digRisk, scoopAim, pour, scoop, aimFor, landing, levelOf, isAir, isSolid, hasFluid, walk, centreOn, feetCell, descend, dryFeet, hold, countOf, standSpots, lavaSources, liveLava, eyes }
+module.exports._in = { resumeOnePlan, refillState, digVisible, digRisk, scoopAim, pour, scoop, aimFor, landing, levelOf, isAir, isSolid, hasFluid, walk, centreOn, feetCell, descend, dryFeet, hold, countOf, standSpots, lavaSources, liveLava, eyes }

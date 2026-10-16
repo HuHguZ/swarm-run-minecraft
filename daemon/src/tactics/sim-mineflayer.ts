@@ -2,8 +2,8 @@
 // (minecraft.ts) reads it - blocks, entities, metadata, effects, inventory, damage packets - instead of the observeWorld
 // mirror. Flat ground at y 63; the world's facts become blocks: a box/hole/pillar shelter is stone around the body,
 // lava/water are fluid cells, "no exits" is a ring of fire (exitsNear refuses fire cells, sight passes through).
-// Shots in flight are projectile entities on the straight line shooter -> body (threats.incoming reads their position
-// receipts); ponytail: cover pockets are not built (cover stays false).
+// Bow arrows retain their ballistic position/velocity; legacy fireballs use a timed trajectory toward the body.
+// threats.incoming reads the position receipts; ponytail: cover pockets are not built (cover stays false).
 import { EventEmitter } from 'node:events'
 import { jumpHeight, type SimWorld } from './sim-world'
 
@@ -64,10 +64,11 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
     const b = world.body
     const y = b.shelter?.kind === 'pillar' && b.shelter.breach <= 0 ? 67 : b.shelter?.kind === 'hole' && b.shelter.breach <= 0 ? 62 : 64 + lift(Math.floor(b.x + .5), Math.floor(b.z + .5))
     const jump = jumpHeight(world)
-    bot.entity.position = new Vec3(b.x + .5, y + jump, b.z + .5)
+    bot.entity.position = new Vec3(b.x + .5, y + b.y + jump, b.z + .5)
+    bot.entity.velocity = new Vec3(b.vx, b.vy, b.vz)
     lavaAt = b.inLava ? lavaAt ?? body() : null
     waterAt = b.submerged > 0 ? waterAt ?? body() : null
-    bot.entity.onGround = !b.falling && jump <= 0
+    bot.entity.onGround = !b.falling && jump <= 0 && b.y <= 0
     bot.entity.isInLava = b.inLava
     bot.entity.isInWater = b.submerged > 0
     bot.entity.metadata[0] = b.burning > 0 && b.fireRes <= 0 ? 1 : 0
@@ -91,15 +92,16 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
       if (e.hp <= 0) continue
       const name = e.player ? 'player' : e.kind
       const metadata: unknown[] = []
-      if (e.kind === 'creeper') { metadata[swell] = e.swell > 0 ? 1 : -1; metadata[powered] = e.charged }
+      if (e.kind === 'creeper') { metadata[swell] = e.swellDir; metadata[powered] = e.charged }
+      if (e.kind === 'polar_bear') { metadata[15] = e.hostile ? 4 : 0; metadata[16] = false }
+      if (/^(skeleton|stray|bogged|parched)$/.test(e.kind)) metadata[registry.entitiesByName[e.kind].metadataKeys.indexOf('living_entity_flags')] = e.bowDraw >= 0 ? 1 : 0
       entities[e.id] = { id: e.id, name, type: e.player ? 'player' : 'mob', ...(e.player ? { username: `Tank${e.id}` } : {}),
-        position: new Vec3(e.x + .5, 64 + lift(Math.floor(e.x + .5), Math.floor(e.z + .5)), e.z + .5), velocity: new Vec3(0, 0, 0), height: HEIGHT[name] ?? 1.95, width: .6, isValid: true,
-        equipment: HAND[name] ? [item(HAND[name])] : [], metadata }
+        position: new Vec3(e.x + .5, 64 + e.y + lift(Math.floor(e.x + .5), Math.floor(e.z + .5)), e.z + .5), velocity: new Vec3(0, 0, 0), height: name === 'polar_bear' ? 1.4 : HEIGHT[name] ?? 1.95, width: name === 'polar_bear' ? 1.4 : .6, isValid: true,
+        yaw: Math.atan2(e.x - b.x, e.z - b.z), equipment: /^(stray|bogged|parched)$/.test(name) ? [item('bow')] : HAND[name] ? [item(HAND[name])] : [], metadata }
     }
     world.tnts.forEach((t, i) => { entities[1000 + i] = { id: 1000 + i, name: 'tnt', type: 'other', position: new Vec3(t.x + .5, 64, t.z + .5),
       velocity: new Vec3(0, 0, 0), height: .98, width: .98, isValid: true, metadata: [0, 300, null, false, false, false, 0, 0, t.fuse] } })
-    // A shot in flight: fireball (ghast), small_fireball (blaze) or arrow; an arrow's first velocity lifts it against gravity
-    // .05 (threats.closestApproach: step, drag .99, gravity) so it meets the body when the world says it does.
+    // Ballistic bow shots keep their own velocity; the legacy timed projectiles retain their old projection.
     const now = clock.now()
     world.arrows.forEach((a, i) => {
       if (a.due <= world.tick) return
@@ -107,9 +109,9 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
       const name = shooter?.kind === 'ghast' ? 'fireball' : shooter?.kind === 'blaze' ? 'small_fireball' : 'arrow'
       const flight = Math.max(1, a.due - a.fired), done = (world.tick - a.fired) / flight, left = a.due - world.tick
       const from = new Vec3(a.x + .5, 65.5, a.z + .5), to = bot.entity.position.offset(0, .9, 0)
-      const at = from.plus(to.minus(from).scaled(done))
+      const at = a.baseDamage !== undefined ? new Vec3(a.x + .5, 64 + a.y!, a.z + .5) : from.plus(to.minus(from).scaled(done))
       const g = name === 'arrow' ? .05 : 0
-      const v = new Vec3((to.x - at.x) / left, (to.y - at.y + g * left * (left - 1) / 2) / left, (to.z - at.z) / left)
+      const v = a.baseDamage !== undefined ? new Vec3(a.vx!, a.vy!, a.vz!) : new Vec3((to.x - at.x) / left, (to.y - at.y + g * left * (left - 1) / 2) / left, (to.z - at.z) / left)
       entities[2000 + i] = { id: 2000 + i, name, type: 'projectile', position: at, velocity: v, height: .5, width: .5, isValid: true, metadata: [],
         _ndPositionReceipts: [{ x: at.x - v.x, y: at.y - v.y, z: at.z - v.z, t: now - 50 }, { x: at.x, y: at.y, z: at.z, t: now }], _ndObservationNow: () => clock.now() }
     })

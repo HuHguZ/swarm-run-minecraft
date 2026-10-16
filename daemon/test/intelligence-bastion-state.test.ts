@@ -6,7 +6,7 @@ const vm = require('node:vm')
 const { createRequire } = require('node:module')
 const { withClockFixture } = require('./clock-fixture')
 
-function campaignFixture(interrupted = false, conversion = true, goldLeft = 17) {
+function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, endermen = '1') {
   const state = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 87, y: 35, z: 139 },
     armor: { feet: 'golden_boots' }, potions: {} as Record<string, number>, inventory: { stone_pickaxe: 2, iron_pickaxe: 1, cooked_beef: 12,
       crafting_table: 1, oak_planks: 16, stick: 8, cobblestone: 64 } as Record<string, number> }
@@ -41,7 +41,7 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17) 
   const local = createRequire(filename)
   const context = { require: (name: string) => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : local(name),
     __dirname: path.dirname(filename), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: { ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: '1' } },
+    process: { argv: ['node', 'campaign.js'], env: { ND_NE_RECOVER: '0', ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: endermen } }, // прежний путь (J2 сам включает ND_NE_RECOVER)
     console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, AbortController, fixtureState: state }
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
     state = fixtureState; sit = { surface: false, foes: 0, pickLeft: 512 };
@@ -60,12 +60,12 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17) 
   return { context, state, calls, requests }
 }
 
-test('two dry approaches cannot exhaust known mapped gold or enable Enderman fallback', async () => {
+test('two dry approaches preserve mapped gold while hunting remains available by price', async () => {
   const { context, calls } = campaignFixture()
   await context.module.exports.run()
   await context.module.exports.run()
   assert.equal(context.module.exports.next()?.key, 'бастион (ад)')
-  assert.equal(context.module.exports.endermen(), false)
+  assert.equal(context.module.exports.endermen(), true)
   assert.equal(calls.includes('remember'), false)
 })
 
@@ -107,7 +107,7 @@ test('an unreachable graph cannot send the body home for rods while factual Bast
   const returnsHome = (pending: boolean) => {
     const context = { selection: null, dim: () => 'the_nether', bastionPearlsPending: () => pending,
       need: [{ name: 'nether' }, { name: 'bastion' }], READY: { nether: () => false }, fightGearWanted: false,
-      fightReady: () => false, result: false, gameClock: { now: () => 0 }, homeForGearAfter: -Infinity }
+      fightReady: () => false, result: false, gameClock: { now: () => 0 }, homeForGearAfter: -Infinity, homeForGearState: null, netherRetryState: () => "same" }
     vm.runInNewContext(guard, context)
     return context.result
   }
@@ -136,7 +136,7 @@ test('one to three remaining mapped gold blocks cannot be reported exhausted', a
     await context.module.exports.run()
     await context.module.exports.run()
     assert.equal(context.module.exports.next()?.key, 'бастион (ад)')
-    assert.equal(context.module.exports.endermen(), false)
+    assert.equal(context.module.exports.endermen(), true)
     assert.equal(calls.includes('remember'), false)
   }
 })
@@ -149,7 +149,7 @@ test('an interrupted Bastion RPC without detail cannot change exhaustion or reme
     assert.equal(result.outcome, 'INTERRUPTED')
     assert.equal(context.module.exports.next().key, initial.key)
   }
-  assert.equal(context.module.exports.endermen(), false)
+  assert.equal(context.module.exports.endermen(), true)
   assert.equal(calls.filter(method => method === 'bastion').length, 3)
   assert.equal(calls.includes('remember'), false)
 })
@@ -263,4 +263,12 @@ test('two carried barters without a single ingot exhaust barter and defer the Ba
   assert.equal(observation.facts.barter_exhausted.value, true)
   assert.equal(context.module.exports.active().key, 'бастион 2 (ад)', 'the barren Bastion waits; the next mapped one is still work')
   assert.equal(observation.facts.bastions_exhausted.value, false)
+})
+
+
+test('pearl stage ignores the old flag, incomplete rods and still available mapped gold', () => {
+  const { context, state } = campaignFixture(false, true, 17, '0')
+  assert.equal(state.inventory.blaze_rod || 0, 0)
+  assert.ok(context.module.exports.next())
+  assert.equal(context.module.exports.endermen(), true)
 })

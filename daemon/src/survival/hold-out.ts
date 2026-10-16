@@ -440,8 +440,19 @@ async function stepTo (bot, ctl, cell, ms = 1500) {
 
 const SIT_CAP_MS = 9.5 * 60000
 
-function outsideDanger (bot, at, { untilDawn = false, session = bot._ndGuard?.session }: any = {}) {
-  const hs = refugeThreats(bot, session)
+function outsideDanger (bot, at, { untilDawn = false, session = bot._ndGuard?.session, shooters = new Set() }: any = {}) {
+  const spatial = process.env.ND_REFUGE_SPATIAL_EXIT === '1' && !untilDawn
+  let hs = refugeThreats(bot, session, spatial ? 18 : 16)
+  if (spatial) {
+    const held = new Set(shooters)
+    shooters.clear()
+    hs = hs.filter(h => {
+      if (!/^(skeleton|stray|bogged|parched|pillager)$/.test(h.e.name)) return true
+      const danger = h.d <= (held.has(h.e.id) ? 18 : 16) && require('.././assess').inSight(bot, h.e)
+      if (danger) shooters.add(h.e.id)
+      return danger
+    })
+  }
   const hp = bot.health ?? 0
   // Ходячие у самых стен (≤ 6 бл. по горизонтали от клетки) — выйти значит в их руки. Бродящие дальше — не повод
   const horiz = h => Math.hypot(h.e.position.x - (at.x + 0.5), h.e.position.z - (at.z + 0.5))
@@ -452,7 +463,7 @@ function outsideDanger (bot, at, { untilDawn = false, session = bot._ndGuard?.se
   if (walkers.length >= 2 || (close.length && hp < 12)) return `ходячих ${walkers.length} в 10 бл.`
   if (hs.some(h => h.e.name === 'creeper' && h.d <= 8)) return 'крипер у стен'
   // Стрелок в своей дальности: на выходе первая же стрела (на открытом месте без щита — 3–5 хп раз в ~3 с).
-  if (hs.some(h => /^(skeleton|stray|bogged|parched|pillager)$/.test(h.e.name) && h.d <= 16)) return 'стрелок рядом'
+  if (hs.some(h => /^(skeleton|stray|bogged|parched|pillager)$/.test(h.e.name) && h.d <= (spatial ? 18 : 16))) return 'стрелок рядом'
   if (hs.some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))) return 'стрелок на виду'
   const t = bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : 6000
   const night = t >= 12542 && t <= 23459
@@ -482,7 +493,9 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
   const bot = session.bot
   const fortify = require('.././fortify')
   const s0 = gameClock.now()
-  let why = outsideDanger(bot, at, { untilDawn, session })
+  const shooters = new Set()
+  const spatial = process.env.ND_REFUGE_SPATIAL_EXIT === '1' && !untilDawn
+  let why = outsideDanger(bot, at, { untilDawn, session, shooters })
   if (!why) return { sat: 0 }
   step(`снаружи опасно (${why}) — сижу`)
   let clearSince = 0
@@ -503,7 +516,8 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
       if (!n && !fortify.enclosure(bot, box.cell).sealed && ++failedPatches >= 5) { step('коробку не залатать — не сижу'); break }
     }
     await healStep(session, ctl, 20).catch(() => null)
-    const w = outsideDanger(bot, at, { untilDawn, session })
+    const w = outsideDanger(bot, at, { untilDawn, session, shooters })
+    if (spatial && !w) break
     if (w) { why = w; clearSince = 0 } else if (!clearSince) clearSince = gameClock.now()
     // Стихло 8 с подряд — выходить.
     if (clearSince && gameClock.now() - clearSince >= 8000) break
@@ -693,6 +707,13 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
   let limit = timeoutMs
   try {
     while (!ctl.aborted && gameClock.now() - t0 < limit && (bot.health ?? 0) > 0 && !dry()) {
+      // Retain the existing threat-aware shore route while breath is full.
+      if (process.env.ND_WATER_ESCAPE_BUDGET !== '0' && (require('../movement').airTicks(bot) < 270 || bot.entity._ndPoseHeight === .6)) {
+        const swim = await escapeWater(bot, ctl, { timeoutMs: Math.max(0, limit - (gameClock.now() - t0)), visibleOnly: true, radius: 16 })
+        target = swim.target ? new Vec3(swim.target.x, swim.target.y, swim.target.z) : null
+        if (!swim.ok) return { ...swim, seconds: (gameClock.now() - t0) / 1000 }
+        break
+      }
       // К дальнему берегу — пересчёт реже и только ближним поиском: в открытой воде он обходит тысячи клеток.
       if (!route || gameClock.now() - planAt > (route.far ? 2000 : 600)) {
         const foes = flee.hostilesAround(bot, 20).filter(h => refugeFoe(bot, h.e, session)).map(h => h.e.position)

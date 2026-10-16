@@ -674,6 +674,7 @@ async function nearTrunk (t, timeoutSeconds) {
 
 async function routeStep (s) {
   await ctx.refresh()
+  await ctx.earlyShield?.()
   if (golemEncounter && ctx.state.pos) {
     const g = await ctx.act('golem', { mode: 'kill', radius: 64, timeoutSeconds: 30, angry: true })
     if (g.detail?.killed) golemEncounter = null
@@ -986,6 +987,7 @@ async function routeStep (s) {
       await ctx.smeltAll('raw_iron', 'iron_ingot', { fetchCoal: false, max })
       await ctx.refresh()
       if (ctx.have('iron_nugget') >= 9 && ctx.have('iron_ingot') < 6) { await ctx.ensureTable(); await ctx.act('craft', { item: 'iron_ingot', count: Math.floor(ctx.have('iron_nugget') / 9) }); await ctx.refresh() }
+      await ctx.earlyShield?.()
       for (let k = 0; k < 2 && ctx.have(/bucket$/) < wantB && ctx.have('iron_ingot') >= 3; k++) await ctx.craft('bucket')
       await ctx.refresh()
       if (!ctx.lighter() && ctx.have('iron_ingot') >= 1 && ctx.have('flint')) await ctx.craft('flint_and_steel')

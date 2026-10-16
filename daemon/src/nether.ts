@@ -1455,16 +1455,23 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
           if (!r.ok) { why = `пол забоя не заложить: ${r.reason}`; continue }
           placed++
         }
-        const t0 = gameClock.now()
+        const t0 = gameClock.now(), from = bot.entity.position.clone()
+        const landed = () => {
+          const p = bot.entity.position, v = bot.entity.velocity || { x: 0, z: 0 }
+          return sameCell(p, feet) && bot.entity.onGround && Math.hypot(p.x - feet.x - .5, p.z - feet.z - .5) < .2 && Math.hypot(v.x, v.z) < .03
+        }
         try {
-          while (gameClock.now() - t0 < 1800 && !sameCell(bot.entity.position, feet)) {
-            await bot.lookAt(feet.offset(0.5, 1.6, 0.5), true)
-            bot.setControlState('forward', true)
-            if (dy > 0) bot.setControlState('jump', true)
+          while (!ctl.aborted && gameClock.now() - t0 < 1800 && !landed()) {
+            if (dy <= 0 && bot.entity.position.y < feet.y - .2) break
+            const steer = require('./blockmoves').steerTo(bot, bot.entity, { x: feet.x + .5, z: feet.z + .5 }, false)
+            await bot.look(steer.yaw, 0, true)
+            bot.setControlState('forward', steer.forward)
+            bot.setControlState('jump', dy > 0 && bot.entity.position.y < feet.y)
             await sleep(50)
           }
         } finally { try { bot.setControlState('forward', false); bot.setControlState('jump', false) } catch {} }
-        if (sameCell(bot.entity.position, feet)) { moved++; stepped = true; break }
+        if (landed()) { moved++; stepped = true; break }
+        if (bot.entity.position.distanceTo(from) > .25) return out(false, { why: 'клетка после шага изменилась — нужен новый обзор' })
         why = 'в забой не шагнуть'
       }
     }

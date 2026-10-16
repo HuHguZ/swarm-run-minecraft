@@ -1,5 +1,5 @@
 import { TacticalArbiter } from './arbiter'
-import { S4D, digDownCost, piglinNiche, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
+import { S4D, digDownCost, boxBuildCost, piglinNiche, threatLevel, hasObservedTarget, canRepelLavaAttacker, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from './state'
 import { EscapeProgress, type EscapeObservation } from './escape-progress'
 import { lavaCapabilities, inLava, drinkFireResistance, climbFromLava } from './lava-escape'
 import { createEmergencyEscape, lavaFallFloor } from '../combat/emergency-escape'
@@ -7,6 +7,7 @@ import { webBoatPlan, webBoatEscape } from './web-boat'
 import { boatHopAvailable, runBoatHop } from '../combat/boat-hop'
 import { mountedBoatDry } from '../combat/boat-placement'
 import { blastNear, dodgeBlast, shieldBlast, shieldableBlast } from './blast'
+import { rangedGuard } from '../ow-shield'
 
 // Mineflayer plugins extend the bot/session at runtime; this is the protocol boundary.
 type MinecraftSession = Record<string, any>
@@ -15,14 +16,14 @@ interface Controller { aborted: boolean; onAbort: Array<() => void>; abort(): vo
 interface Episode { action: Candidate; at: number; hp: number; level: ThreatLevel; candidates: Candidate[]; token: number; state: Record<string, unknown>; intent?: Controller }
 
 // What the arbiter saw when it chose (telemetry, farm/tactics-report): enough to replay a death on the stress stand.
-export function stateSnapshot(state: TacticalState): Record<string, unknown> {
-  const flags = ['lava', 'burning', 'hotFloor', 'fireResistance', 'explosion', 'dangerousFall', 'inWater', 'drowning', 'cover', 'escapeRoute', 'contact',
+export function stateSnapshot(state: TacticalState, bot?: MinecraftEntity): Record<string, unknown> {
+  const flags = ['lava', 'burning', 'hotFloor', 'fireResistance', 'explosion', 'dangerousFall', 'inWater', 'drowning', 'waterEscape', 'cover', 'escapeRoute', 'contact',
     'canFight', 'weapon', 'shield', 'edible', 'water', 'embedded', 'airborne', 'lavaAhead', 'lavaEscapePending', 'escapeExhausted',
     'piglinWitnesses', 'protectedEncounter', 'niche', 'netherHide', 'ghastEdge', 'pearlEscape', 'flightEscape', 'fireResistancePotion'] as const
-  return { hp: Math.round(state.health * 10) / 10, food: state.food, armor: state.armor, blocks: state.blocks, shelter: state.shelter,
-    blast: state.blast ?? undefined, digDownCostHp: state.digDownCostHp, projectiles: state.incomingProjectiles || undefined, failed: state.failedEscapes?.length ? state.failedEscapes : undefined,
+  return { ...(bot ? { body: require('../gamedata').bodySnapshot(bot) } : {}), hp: Math.round(state.health * 10) / 10, food: state.food, armor: state.armor, blocks: state.blocks, shelter: state.shelter,
+    blast: state.blast ?? undefined, digDownCostHp: state.digDownCostHp, buildCostHp: state.buildCostHp, polarBear: state.polarBear ?? undefined, owGuard: state.owGuard, projectiles: state.incomingProjectiles || undefined, failed: state.failedEscapes?.length ? state.failedEscapes : undefined,
     on: flags.filter(flag => state[flag]),
-    enemies: state.enemies.map(enemy => ({ kind: enemy.kind, d: Math.round(enemy.distance * 10) / 10, ...(enemy.threatening ? {} : { calm: true }),
+    enemies: state.enemies.map(enemy => ({ id: enemy.id, kind: enemy.kind, unseen: enemy.unseen || undefined, d: Math.round(enemy.distance * 10) / 10, ...(enemy.threatening ? {} : { calm: true }),
       ...(typeof enemy.hit === 'number' ? { hit: Math.round(enemy.hit * 10) / 10 } : {}) })) }
 }
 
@@ -34,6 +35,8 @@ const flee = require('../flee')
 const guard = require('../ne-guard')
 const movement = require('../movement')
 const pick = require('../pick')
+const { Vec3 } = require('vec3')
+const polarBear = require('../polar-bear')
 let autopilot: any, threats: any, itemTools: any, pack: any
 const foodActions: {
   bestFood(bot: MinecraftEntity, data: MinecraftEntity): MinecraftEntity | null
@@ -170,6 +173,12 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const sameWorld = !!incident && (incident.dimension === undefined || incident.dimension === dimension)
   const struck = sameWorld && incident.sourceId != null && at - incident.at < 10000 ? bot.entities?.[incident.sourceId] : null
   const attacker = struck && struck !== bot.entity && struck.isValid !== false && (struck.username || /^(enderman|piglin|zombified_piglin)$/.test(struck.name)) ? struck : null
+  const bears: any[] = polarBear.risks(bot, sameWorld ? struck?.id : null)
+  const bearRoute = bears.filter(bear => !bear.attacking).map(bear => `${bear.e.id}:${bear.e.position.floored()}:${bear.avoiding}`).sort().join('|')
+  if (bearRoute !== (session._ndBearRoute ?? '')) {
+    session._ndBearRoute = bearRoute
+    if (session.current && !locks.owner(session) && !bot._ndNoMobAvoid) session.updateMovements?.(true)
+  }
   // A piglin with an attack target (mob_flags, no gold on us) is a threat on sight, not on its first strike: the shield needs
   // 5 ticks, and a fight that began at 2 blocks took the first 8 hp before it every time (try-lab-ne-piglin 14.10).
   // A failed contact is retried after a changed visible stance, route or tool, or on arrival at the body.
@@ -186,10 +195,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   // 8.2 -> death; live telemetry 06-07.10: 176 such runs, 8 deaths). Strikes still go only where pick.js sees it.
   const struckMelee = S4D() && sameWorld && incident.sourceId != null && at - incident.at < 1500 && incident.byMob && /mob_attack/.test(String(incident.type || '')) ? incident.sourceId : null
   for (const threat of [...(inspected.threats || []), ...(hot ? [{ id: hot.e.id, distance: hot.e.position.distanceTo(bot.entity.position) }] : []),
-    ...angry.map(entity => ({ id: entity.id, distance: entity.position.distanceTo(bot.entity.position) }))]) {
+    ...angry.map(entity => ({ id: entity.id, distance: entity.position.distanceTo(bot.entity.position) })),
+    ...bears.filter(bear => bear.visible && bear.attacking && polarBear.canReach(bot, bear.e)).map(bear => ({ id: bear.e.id, distance: bear.d }))]) {
     const entity: MinecraftEntity | undefined = bot.entities[threat.id]
     if (!entity?.position || entity.isValid === false || seen.has(entity.id)) continue
-    const unseen = !pick.aim(bot, entity, { range: 16 })?.point
+    const unseen = !pick.aim(bot, entity, { range: entity.name === 'polar_bear' && polarBear.enabled() ? 32 : 16 })?.point
     if (unseen && !(entity.id === struckMelee && threat.distance <= 4.5)) continue
     seen.add(entity.id)
     enemies.push({ id: entity.id, kind: entity.name || entity.username, distance: threat.distance,
@@ -231,12 +241,14 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const ghastEdge = /nether/.test(dimension) && process.env.ND_GHAST_EDGE !== '0' && (Object.values(bot.entities || {}) as MinecraftEntity[]).some(entity =>
     entity?.name === 'ghast' && entity.position && entity.isValid !== false && entity.position.distanceTo(bot.entity.position) <= 64 &&
     dropBehind(bot, entity.position) && !!pick.aim(bot, entity, { range: 66 })?.point)
-  if (!lava && !lavaEscapePending && (ghastEdge || enemies.some(enemy => enemy.threatening) && (bot.health < 16 || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')))) {
+  if (!lava && !lavaEscapePending && (process.env.ND_TACTICS_WATER_HURT === '1' && session._tacticalWaterEscape && bot.entity.onGround || ghastEdge || enemies.some(enemy => enemy.threatening) && (bot.health < 16 || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')))) {
     try { refuge = survival.refugeLook(session, { radius: 16 }) } catch {}
   }
   let fireResistance = false
   const resistance = bot.registry?.effectsByName?.fire_resistance || bot.registry?.effectsByName?.FireResistance
   if (resistance) fireResistance = !!bot.entity.effects?.[resistance.id]
+  // Выпитая телом огнестойкость по часам (blaze.ts frByClock): эффект тела клиент не всегда видит (16.10).
+  if (!fireResistance && bot._ndFrUntil && clock.now() < bot._ndFrUntil) fireResistance = true
   const burning = !!(bot.entity.metadata?.[0] & 1)
   // Contact heat sets neither the burning bit nor isInLava. Sample the real
   // support surface: a campfire holds the feet at its fractional top (.4375).
@@ -283,11 +295,20 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   }
   const recentHit = sameWorld && at - incident.at < 1500 && incident.byMob && incident.at > (session._tacticalRetreatSafeAt ?? -Infinity)
   const current = session.current?.name || ''
+  const waterSafety = process.env.ND_TACTICS_WATER_HURT === '1'
+  const wetBody = waterSafety ? !dryMountedBoat && movement.inWater(bot) : !!bot.entity.isInWater
+  const breathBlock = waterSafety ? bot.blockAt(pick.eyeOf(bot)) : null
+  const breathing = !!breathBlock && breathBlock.boundingBox === 'empty' && (!movement.waterCell(breathBlock) || breathBlock.name === 'bubble_column')
+  const safeSupport = waterSafety && bot.entity.onGround && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block' && (!wetBody || refuge?.pocket && breathing)
+  const clearAir = breathing && (bot.oxygenLevel ?? 20) >= 18 && !hot && !recentHit && !enemies.some(enemy => enemy.threatening)
+  if (!waterSafety || safeSupport || clearAir || session._tacticalWaterWorld !== dimension) session._tacticalWaterEscape = false
+  session._tacticalWaterWorld = dimension
+  if (waterSafety && wetBody && !safeSupport && recentHit && /^(structure|mine|explore)$/.test(current)) session._tacticalWaterEscape = true
   const hostile = enemies.filter(enemy => enemy.threatening)
   const contact = !!hot || !!recentHit || hostile.some(enemy => enemy.distance <= 4.5 || (flee.DOCTRINE[enemy.kind]?.range || 0) >= enemy.distance)
-  const fall = !dryMountedBoat && (bot._ndClutch?.lastDecision?.action === 'clutch' || bot._ndClutch?.lastDecision?.action === 'water' || !!bot._ndFallGuard?.placed)
+  const fall = !lava && !dryMountedBoat && (bot._ndClutch?.lastDecision?.action === 'clutch' || bot._ndClutch?.lastDecision?.action === 'water' || !!bot._ndFallGuard?.placed)
   const control = locks.owner(session)
-  const emergencyController = !!(control?.owner === 'Emergency' && control.source === 'fall-controller' && !bot.entity.onGround && !dryMountedBoat)
+  const emergencyController = !lava && !!(control?.owner === 'Emergency' && control.source === 'fall-controller' && !bot.entity.onGround && !dryMountedBoat)
   const lavaAhead = !dryMountedBoat && !fall && !emergencyController && lavaFallFloor(bot) !== null
   const aerialCombat = !!(bot._ndDescend || bot._ndSmashNow || bot.entity.elytraFlying || bot._ndAerialRecovering?.())
   const boatEncounter = bot._ndEndermanBoatEncounter
@@ -316,6 +337,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const enderman = enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')
   const digDownMs = shelter === 'DigDown' && refuge?.hole ? refuge.hole.ms + (enderman ? require('../fortify').refugeBuildMs({ blocks: 1, roofSolid: false, leans: true }) : 0) : 0
   const MOBS = require('../assess').MOBS
+  const buildMs = shelter === 'BlockOff' ? survival.buildMsOf(refuge, choice.how) : 0
+  // The attack phase is unknown: a visible shooter can release its next shot during this construction interval.
+  const buildCostHp = shelter === 'BlockOff' && /overworld/.test(dimension) && Number.isFinite(buildMs) ? boxBuildCost(enemies.filter(enemy => enemy.threatening)
+    .map(enemy => ({ kind: enemy.kind, distance: MOBS[enemy.kind]?.ranged ? 0 : enemy.distance,
+      hit: enemy.hit, everyMs: (MOBS[enemy.kind]?.every ?? 0) * 1000 })), buildMs) : undefined
   const digDownCostHp = shelter === 'DigDown' && refuge?.hole ? digDownCost(enemies.filter(enemy => enemy.threatening && !MOBS[enemy.kind]?.ranged && enemy.distance <= 12)
     .map(enemy => ({ kind: enemy.kind, distance: enemy.distance, hit: enemy.hit, everyMs: (MOBS[enemy.kind]?.every ?? 0) * 1000 })), digDownMs) : undefined
   const ground = exitsNear(bot)
@@ -334,11 +360,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if (current === 'stronghold' && process.env.ND_SHAFT_STAND !== '0' && /overworld/.test(dimension) && !lava && !burning) {
     try { const here = bot.blockAt(bot.entity.position.floored()); shaftStand = !!here && here.skyLight === 0 } catch {}
   }
-  return { at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0,
+  return { at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0, polarBear: polarBear.plan(session, bears),
     weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0),
-    enemies, incomingProjectiles, burning, hotFloor, lava, lavaAhead, fireResistance,
+    enemies, incomingProjectiles, owGuard: rangedGuard(bot, enemies), burning, hotFloor, lava, lavaAhead, fireResistance,
     explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
-    inWater: !!bot.entity.isInWater, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
+    inWater: wetBody, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), waterEscape: !!session._tacticalWaterEscape, piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
     blocks: refuge?.blocks ?? (pack ??= require('../pack')).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
     water: !/nether/.test(dimension) && items.some(item => item.name === 'water_bucket'),
     edible: !!foodActions.bestFood(bot, session.mcData ?? bot.registry), canFight: hostile.length > 0 && (sustainableFight(inspected, bot.health ?? 0) || repel), contact,
@@ -364,7 +390,8 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // Осмотр бастиона не защищает от гаста: щит и укрытие должны прервать открытую вышку. И от стрелков (скелеты долины душ,
     // ифриты): ход навыка к бастиону на них не отвечает — 6 стрел за 5 с, 20 → 0 хп без щита (b2-5-1 14.10).
     niche: /nether/.test(dimension) && !!refuge?.niche && refuge.blocks >= 2, netherHide, ghastEdge,
-    shelter, digDownCostHp, protectedEncounter: !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
+    buildCostHp,
+    shelter, digDownCostHp, protectedEncounter: !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && (process.env.ND_BLAZE_WORLD_STATE === '0' || !!session._blazeCombatCtl && session._blazeCombatCtl === session.current?.ctl) && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !(process.env.ND_BLAZE_MELEE !== '0' && /^(wither_skeleton|magma_cube)$/.test(enemy.kind)) && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
       // Бой на арене с игроком (fight с arena): лечение, отход, щит ведёт сам PvP — тактика тело не отбирает (колизей 10.10:
       // «прервано (tactical)» каждые 1–3 с при 20 хп — бот метался и не бил).
       current === 'fight' && !!session.current?.params?.arena && hostile.some(enemy => enemy.player), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
@@ -383,6 +410,7 @@ const minecraftPorts: TacticalPorts = { observe: observeTactics,
   record: row => require('../telemetry').record({ ...row, ...(process.env.MC_PORT ? { mcPort: Number(process.env.MC_PORT) } : {}) }) }
 
 function shieldCanContinue(state: TacticalState | null): state is TacticalState {
+  if (state?.owGuard !== undefined) return !!state.shield && !!state.owGuard && !state.dangerousFall && !state.drowning && !state.lava
   return !!state?.shield && !state.dangerousFall && !state.airborne &&
     (threatLevel(state) === 1 || state.incomingProjectiles > 0 || state.enemies.some(enemy =>
       enemy.threatening && !enemy.unseen && (flee.DOCTRINE[enemy.kind]?.range || 0) >= enemy.distance))
@@ -510,7 +538,7 @@ export class TacticalSystem {
     this.level = decision.level
     // An arena duel (pvp.duel with tempo, fight { arena }) is to the death by design: a retreat at level 3 only interrupted
     // the losing side's fight (S7 20:08, arms race). Lava, a fall, a blast, a wall or water stay with the tactics.
-    const hazard = state.lava || state.lavaAhead || state.dangerousFall || state.embedded || state.explosion || state.drowning
+    const hazard = state.lava || state.lavaAhead || state.dangerousFall || state.embedded || state.explosion || state.drowning || state.waterEscape
     const arena = state.protectedEncounter && !!this.session.current?.params?.arena && !hazard
     // The blaze skill under fire resistance keeps level 3 too (S1 21:01): at the spawner a crowd of 3+ blazes makes hp < 12
     // level 3, and the takeover (BlockOff/Flee off the platform) died in at least 35 of 66 such episodes in S1's farm
@@ -518,7 +546,7 @@ export class TacticalSystem {
     // Без огнестойкости — тоже (s1c 06.10, решение пользователя «FR — не допуск»): навык сам ведёт бой без неё (радар залпов, щит,
     // коробка с окном, отдых и возврат); перехват уровня 3 рвал его и кампания звала его снова — два хозяина одного боя.
     const blazeOwned = state.protectedEncounter && this.session.current?.name === 'blaze' && !hazard
-    if (state.protectedEncounter && (decision.level < 3 || arena || blazeOwned)) {
+    if (state.protectedEncounter && (decision.level < 3 && !state.waterEscape || arena || blazeOwned)) {
       // Защищённый навык (blaze/дракон/дуэль) забирает руки у начатого раньше эпизода уровня <3: иначе Fight тактики держал
       // аренду, lookAt навыка ждал её, а ифриты били в упор (s1-post05 06.10: blaze «меч» 0 взмахов, 30 урона, смерть).
       if (this.episode && (this.episode.level < 3 || arena || blazeOwned) && locks.owner(this.session)?.owner !== 'Emergency' &&
@@ -535,7 +563,7 @@ export class TacticalSystem {
       // Чистое падение под рефлексом не «существенно»: по его концу release() не рвёт навык (MLG pathfinder'а, спуск блоками:
       // goto «interrupted» сразу после посадки — s6c-desc-bucket2 4/4 в обоих плечах).
       if (!fallOnly) this.substantive = true
-      this.incident ||= { at: state.at, hp: state.health, threat: decision.level, actions: new Set(), chain: [], state: stateSnapshot(state), intent: this.session.current?.ctl }
+      this.incident ||= { at: state.at, hp: state.health, threat: decision.level, actions: new Set(), chain: [], state: stateSnapshot(state, this.session.bot), intent: this.session.current?.ctl }
       this.incident.threat = Math.max(this.incident.threat, decision.level) as ThreatLevel
     }
     if (decision.level === 0 && !this.episode && !this.pending && !this.session.reflex) { this.release('safe'); return }
@@ -543,7 +571,7 @@ export class TacticalSystem {
     // ответ на угрозу: щит/бой тактики рвали его («reflex: действие прервано», mace-5: булава сверху — угроза 3-го уровня,
     // и рывок обрывался щитом). Пока он идёт — тактика не вмешивается; аварии (падение, лава) — свой рефлекс Emergency.
     if (commandedEscape(this.session)) return
-    if (decision.level >= 3 && !fallOnly) this.interruptSkill(decision.level)
+    if ((decision.level >= 3 || state.waterEscape) && !fallOnly) this.interruptSkill(decision.level)
     // A fireball disappears on impact, before its later hurt sample. The observed shooter remains: cancelling the
     // started guard here dropped offhand use before the native five-tick ACK (sr1011-b ghast scene). Keep its existing
     // bounded executor unless a more valuable defence or an emergency takes over; unseen shooters do not hold it.
@@ -574,7 +602,8 @@ export class TacticalSystem {
     if (fightBest && fightBest.score >= decision.selected.score && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) return
     const active = locks.owner(this.session)
     const repelDuringClimb = active?.source === 'ClimbOut' && decision.selected.id === 'Fight' && canRepelLavaAttacker(state)
-    if (active?.owner === 'Emergency' && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb) return
+    const fluidHandoff = active?.source === 'fall-controller' && state.lava
+    if (active?.owner === 'Emergency' && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb && !fluidHandoff) return
     this.begin(decision.selected, decision.candidates, state, decision.level)
   }
 
@@ -588,7 +617,7 @@ export class TacticalSystem {
   private begin(action: Candidate, candidates: Candidate[], state: TacticalState, level: ThreatLevel): void {
     const previous = this.episode
     if (previous) { this.finish(previous, 'preempted', { by: action.id }); locks.cancel(this.session) }
-    const episode: Episode = { action, at: state.at, hp: state.health, level, candidates, token: ++this.generation, state: stateSnapshot(state), intent: this.session.current?.ctl }
+    const episode: Episode = { action, at: state.at, hp: state.health, level, candidates, token: ++this.generation, state: stateSnapshot(state, this.session.bot), intent: this.session.current?.ctl }
     this.episode = episode
     this.escapes.begin(action.id, this.escapeObservation(state))
     this.incident?.actions.add(action.id)
@@ -666,7 +695,7 @@ export class TacticalSystem {
       .sort((a, b) => Number(meleeReachable(b)) - Number(meleeReachable(a)) || a.distance - b.distance)
       .find(candidate => bot.entities[candidate.id]?.position &&
       bot.entities[candidate.id].isValid !== false && (candidate.unseen || pick.aim(bot, bot.entities[candidate.id], {
-        range: action.id === 'Shield' ? Math.max(16, candidate.distance + 1) : 16 })?.point))
+        range: state.polarBear?.id === candidate.id ? 32 : action.id === 'Shield' ? Math.max(16, candidate.distance + 1) : 16 })?.point))
     if ((action.id === 'Fight' || action.id === 'LastStand') && !enemy) {
       return { unavailable: true, reason: 'observed target disappeared or lost line of sight before act' }
     }
@@ -717,6 +746,8 @@ export class TacticalSystem {
         return result
       }
       case 'Fight': {
+        if (state.polarBear?.action === 'Fight') return require('../combat').fight(session, ctl, {
+          target: '#' + state.polarBear.id, purpose: 'defense', lastStand: true, shield: 'always', timeoutSeconds: 15 })
         const attacker = state.enemies.find(candidate => candidate.threatening && candidate.distance <= 3 &&
           bot.entities[candidate.id]?.isValid !== false && bot.entities[candidate.id]?.position &&
           pick.aim(bot, bot.entities[candidate.id], { range: 3.2 })?.point)
@@ -765,7 +796,7 @@ export class TacticalSystem {
         if (blastNear(bot, 2)) await dodgeBlast(session, ctl)
         if (ctl.aborted) return { cancelled: true }
         // An attacking player is a pursuer too (smartFlee steers by mob doctrine; without him it "escaped" in a tick).
-        return flee.smartFlee(session, ctl, { timeoutMs: 12000, reason: 'tactical', safeDist: FLEE_SAFE_DISTANCE, chaseExit: true,
+        return flee.smartFlee(session, ctl, { timeoutMs: 12000, reason: 'tactical', safeDist: state.polarBear ? polarBear.MECH.followMax + polarBear.MECH.reach : FLEE_SAFE_DISTANCE, chaseExit: true,
           foes: state.enemies.filter(foe => foe.player && foe.threatening).map(foe => foe.id) })
       case 'DigDown':
         if (state.enemies.some(foe => foe.threatening && foe.kind === 'enderman')) {
@@ -791,6 +822,7 @@ export class TacticalSystem {
         }
       case 'BlockOff': case 'PillarUp': case 'Hide': case 'Heal':
         {
+          if (action.id === 'PillarUp' && state.polarBear) return polarBear.pillar(session, ctl, state.polarBear)
           // Nether walkers out of reach (netherHide): the guard's hole two down or its pillar, then strikes from it. The episode
           // holds its own flag while it digs, climbs and sits: airborne steps and the shrinking head room flipped the flag off
           // mid-climb, and CreateDistance took the hands 0.3 s in (try-lab-ne-piglin c3, brute: 7 of 8 died).
@@ -803,16 +835,24 @@ export class TacticalSystem {
               finally { if (session._ndHideCtl === ctl) session._ndHideCtl = null }
             }
           }
-          if (action.id === 'BlockOff' && piglinNiche(state)) {
+          const nightBlockOff = process.env.ND_OW_NIGHT_BLOCKOFF === '1'
+          // The selected shelter was already priced against flight; its executor must build before generic recovery.
+          if (action.id === 'BlockOff' && (piglinNiche(state) || nightBlockOff && /overworld/.test(String(bot.game?.dimension || ''))) &&
+              (!nightBlockOff || !survival.refugeLook(session).pocket)) {
+            const site = survival.refugeLook(session)
+            const how = piglinNiche(state) ? 'niche' : survival.chooseRefuge(site).how
+            if (how !== 'box' && how !== 'niche') return { failed: true, reason: 'selected box geometry changed before construction' }
             const previous = session._refugeBuild
             session._refugeBuild = ctl
             let entry: any
             try {
-              entry = await require('../survival/hold-out').takeNiche(session, ctl,
-                survival.refugeLook(session), () => {})
+              const hold = require('../survival/hold-out')
+              entry = await (how === 'niche' ? hold.takeNiche : hold.takeBox)(session, ctl, site, () => {})
             } finally { if (session._refugeBuild === ctl) session._refugeBuild = previous }
             if (ctl.aborted) return { cancelled: true, entry }
-            if (!entry || !survival.refugeLook(session).pocket) return { failed: true, reason: 'piglin niche was not sealed or is occupied' }
+            if (!entry || nightBlockOff && entry.intruder || !survival.refugeLook(session).pocket) return nightBlockOff
+              ? { failed: true, entry, reason: 'selected box was not sealed or is occupied' }
+              : { failed: true, reason: 'piglin niche was not sealed or is occupied' }
           }
           const result = await survival.refuge(session, ctl, { minHp: 16, maxSeconds: 30, stayIn: action.id === 'BlockOff', why: 'tactical ' + action.id })
           return result?.code && result.code !== 'OK' ? { ...result, failed: true, reason: result.stopped || 'refuge was not confirmed' } : result
@@ -832,7 +872,8 @@ export class TacticalSystem {
         const cancelled = new Promise<void>(resolve => { abort = resolve; if (ctl.aborted) resolve(); else ctl.onAbort.push(abort) })
         try {
           if (!await shield.wear()) throw new Error('shield unavailable')
-          if (enemy && bot.entities[enemy.id]) await bot.lookAt(bot.entities[enemy.id].position.offset(0, 1.5, 0), true)
+          if (state.owGuard) await bot.lookAt(new Vec3(state.owGuard.point.x, state.owGuard.point.y, state.owGuard.point.z), true)
+          else if (enemy && bot.entities[enemy.id]) await bot.lookAt(bot.entities[enemy.id].position.offset(0, 1.5, 0), true)
           if (ctl.aborted) return { cancelled: true }
           const deadline = clock.now() + combat.SHIELD_NATIVE_CONFIRM_MS
           await shield.raise(true)
@@ -842,7 +883,7 @@ export class TacticalSystem {
             if (failure) throw new Error(failure)
             const observed = observeTactics(session)
             const permissible = shieldCanContinue(observed)
-            if (!permissible || clock.now() >= deadline) {
+            if (!permissible || clock.now() >= deadline && (observed?.owGuard === undefined || !shield.blocking())) {
               // The threat passing before the server confirmed the block is not a failed shield (farm telemetry 06.10:
               // 13 of 28 Shields "failed", several within 1-2 ticks of raising); only the confirmation deadline is.
               if (!shield.blocking() && permissible) throw new Error('shield blocking not confirmed')
@@ -851,7 +892,10 @@ export class TacticalSystem {
             const facing = observed.enemies.filter(candidate => candidate.threatening).sort((a, b) => a.distance - b.distance)
               .find(candidate => bot.entities[candidate.id]?.position && bot.entities[candidate.id].isValid !== false &&
                 pick.aim(bot, bot.entities[candidate.id], { range: Math.max(16, candidate.distance + 1) })?.point)
-            if (facing) {
+            if (observed.owGuard) {
+              const p = observed.owGuard.point
+              await bot.lookAt(new Vec3(p.x, p.y, p.z), true)
+            } else if (facing) {
               const entity = bot.entities[facing.id]
               await bot.lookAt(entity.position.offset(0, (entity.height || 1.8) * .75, 0), true)
             }
@@ -890,7 +934,7 @@ export class TacticalSystem {
     const outcome = hp <= 0 ? 'died' : facts.killed ? 'killed' : facts.mode === 'оторвался' || facts.safe ? 'escaped' : 'alive'
     this.ports.record({ level: 'tactical', skill: episode.action.id, skillVersion: 1, threat: episode.level,
       candidates: episode.candidates, selected: episode.action.id, sec: (clock.now() - episode.at) / 1000,
-      hp0: episode.hp, hp, result: hp <= 0 ? 'died' : result, outcome, alive: hp > 0, detail, state: episode.state })
+      hp0: episode.hp, hp, result: hp <= 0 ? 'died' : result, outcome, alive: hp > 0, detail, state: episode.state, body: require('../gamedata').bodySnapshot(this.session.bot, hp <= 0) })
   }
 
   private escapeObservation(state: TacticalState): EscapeObservation {
@@ -931,7 +975,7 @@ export class TacticalSystem {
         const hp = this.session.bot?.health ?? 0
         this.ports.record({ level: 'tactical_episode', threat: this.incident.threat,
           actions: [...this.incident.actions], chain: this.incident.chain, state: this.incident.state, sec: (clock.now() - this.incident.at) / 1000,
-          hp0: this.incident.hp, hp, result: hp <= 0 ? 'died' : reason, replanRevision: this.session.replanRevision })
+          body: require('../gamedata').bodySnapshot(this.session.bot), hp0: this.incident.hp, hp, result: hp <= 0 ? 'died' : reason, replanRevision: this.session.replanRevision })
         this.incident = null
       }
       this.session.bus.emit('tactical_released', { reason, replanRevision: this.session.replanRevision, requireObservation: true })

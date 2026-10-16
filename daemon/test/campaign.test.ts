@@ -56,11 +56,14 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
     console: { log () {}, error () {} }, setTimeout, Date: clock ? fakeDate(clock) : Date, queueMicrotask
   }
   vm.runInNewContext(fs.readFileSync(process.env.CAMPAIGN_TEST_SOURCE || path.join(__dirname, '../campaign.js'), 'utf8') + `
-    module.exports = { act, refresh, readMemory, nextBastion, viaNetherTo, died: () => died, stage: name => { stage = name }, craft, replenishNetherSupply, nightGuard, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, lightUp, known, makeBed,
-      fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
-      runStage: name => STAGES.find(s => s.name === name).run(),
+    module.exports = { act, refresh, readMemory, nextBastion, viaNetherTo, ensurePick, ensureTable, died: () => died, stage: name => { stage = name }, craft, replenishNetherSupply, nightGuard, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, mineSeenAll, lightUp, known, makeBed,
+      changeNetherCause: () => typeof changeNetherCause === 'function' ? changeNetherCause() : false, deferBastionMining, pearlTrip: () => ({ ...pearlTrips }), pearlPrice: endermenSecondsPerPearl, forestToHunt, emptyForests: () => emptyForests, trackedHunt: async () => { strategyExecuting = true; try { return await act('pearls', {}) } finally { strategyExecuting = false; strategyInterrupted = false } }, retryState: typeof netherRetryState === 'function' ? netherRetryState : () => '', fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
+      continueFortressChoice: (selection, blocked) => typeof continueFortressChoice === 'function' ? continueFortressChoice(selection, blocked) : false, worldObservation: () => intelligence.environment.observe(),
+      runStage: (name, ...args) => STAGES.find(s => s.name === name).run(...args),
       needs: name => STAGES.find(s => s.name === name).needed(),
       ready: name => STAGES.find(s => s.name === name).ready(),
+      done: name => STAGES.find(s => s.name === name).done(),
+      wantBeds: n => { wantBeds = n },
       defers: name => STAGES.find(s => s.name === name).defer(),
       boot: () => ws.listeners.get('open')(), intelligenceObservation, executeStrategy,
       keepStages: names => { const keep = STAGES.filter(s => names.includes(s.name)); STAGES.splice(0, STAGES.length, ...keep) },
@@ -81,6 +84,162 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
   return context.module.exports
 }
 
+test('R5 kd2: five cooked porkchops need neither eight stock units nor a bed before entry', async () => {
+  for (const enabled of [false, true]) {
+    const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory: { cooked_porkchop: 5, stone_pickaxe: 1, flint_and_steel: 1 } }
+    const calls: string[] = []
+    const c = campaign(state, { surface: true, foes: 0, night: false }, method => { calls.push(method); return {} }, { env: { ND_ENTRY_SUPPLIES: enabled ? '1' : '0', ND_NETHER_FOOD_POINTS: '1' } })
+    c.known.portal = { x: 0, y: 64, z: 0 }
+    assert.equal(c.ready('nether'), true)
+    assert.equal(c.needs('food'), !enabled)
+    assert.equal(c.done('prep'), enabled)
+    if (enabled) { await c.runStage('prep'); assert.ok(!calls.some(method => ['explore', 'goto', 'fight', 'mine'].includes(method)), calls.join(',')) }
+  }
+})
+test('R5: a manually retried food stage does not hunt wool when entry food already suffices', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory: { cooked_porkchop: 5, stone_pickaxe: 1, flint_and_steel: 1 } }
+  const calls: string[] = []
+  const c = campaign(state, { surface: true, foes: 0, night: false }, method => { calls.push(method); return {} }, { env: { ND_ENTRY_SUPPLIES: '1' } })
+  c.known.portal = { x: 0, y: 64, z: 0 }
+  await c.runStage('food')
+  assert.ok(!calls.some(method => ['observe', 'explore', 'goto', 'fight'].includes(method)), calls.join(','))
+})
+test('R5: insufficient food, the old nutrition switch, and the later End stock retain their goals', () => {
+  const make = (count, env: any = {}) => {
+    const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory: { cooked_porkchop: count, stone_pickaxe: 1, flint_and_steel: 1 } }
+    const c = campaign(state, { surface: true, foes: 0, night: false }, undefined, { env: { ND_ENTRY_SUPPLIES: '1', ...env } })
+    return c
+  }
+  const hungry = make(1); hungry.known.portal = { x: 0, y: 64, z: 0 }; assert.equal(hungry.needs('food'), true); assert.equal(hungry.done('prep'), false)
+  const legacy = make(5, { ND_NETHER_FOOD_POINTS: '0' }); legacy.known.portal = { x: 0, y: 64, z: 0 }; assert.equal(legacy.needs('food'), true)
+  const later = make(5); assert.equal(later.needs('food'), true, 'before the portal the old food stock remains')
+  later.known.portal = { x: 0, y: 64, z: 0 }; assert.equal(later.needs('food'), false)
+  later.wantBeds(5); assert.equal(later.needs('food'), true, 'End preparation still has its own food and wool goal')
+})
+test('R5: a hungry entry hunt takes the first food prey and stops at the existing nutrition reserve', async () => {
+  const state: any = { health: 20, food: 20, biome: 'plains', dimension: 'overworld', pos: { x: 0, y: 64, z: 0 },
+    inventory: { cooked_porkchop: 4, white_wool: 1, stone_pickaxe: 1, flint_and_steel: 1 } }
+  const fights: any[] = []
+  const c = campaign(state, { surface: true, foes: 0, night: false }, (method, params) => {
+    if (method === 'recall') return { state: { places: { 'портал': { x: 0, y: 64, z: 0, dimension: 'overworld' } } } }
+    if (method === 'observe') return { entities: [{ name: 'cow', dist: 3 }, { name: 'sheep', dist: 4 }] }
+    if (method === 'fight') { fights.push(params); state.inventory.cooked_porkchop++; return {} }
+    return {}
+  }, { env: { ND_ENTRY_SUPPLIES: '1' } })
+  c.known.portal = { x: 0, y: 64, z: 0 }
+  c.hooks({ toSurface: async () => true, recoverGuard: async () => {} })
+  await c.runStage('food')
+  assert.equal(fights.length, 1)
+  assert.equal(fights[0].target, 'cow', 'do not prefer a sheep for wool over the first food prey')
+  assert.equal(fights[0].purpose, 'food')
+  assert.equal(c.needs('food'), false)
+})
+test('R5: entry supplies keep the existing three-meal night portal state and the later End bed goal', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 },
+    inventory: { cooked_porkchop: 3, stone_pickaxe: 1, flint_and_steel: 1 } }
+  const c = campaign(state, { surface: true, foes: 0, night: true }, undefined, { env: { ND_ENTRY_SUPPLIES: '1' } })
+  c.known.portal = { x: 0, y: 64, z: 0 }
+  assert.equal(c.needs('food'), false)
+  assert.equal(c.done('prep'), true)
+  state.inventory.cooked_porkchop = 8
+  const seen: any[] = []
+  const f = campaign(state, { surface: true, foes: 0, night: false }, (method, params) => {
+    if (method === 'observe') return { entities: [{ name: 'sheep', dist: 3 }] }
+    if (method === 'fight') { seen.push(params); state.inventory.white_bed = 5; return {} }
+    return {}
+  }, { env: { ND_ENTRY_SUPPLIES: '1' } })
+  f.known.portal = c.known.portal; f.wantBeds(5); f.hooks({ toSurface: async () => true, recoverGuard: async () => {} })
+  await f.runStage('food')
+  assert.equal(seen.length, 1); assert.equal(seen[0].purpose, 'resource'); assert.equal(seen[0].resourceGoal.count, 15)
+})
+function earlyIronFixture(env: Record<string, string>, { surface = false, collect = true } = {}) {
+  const inventory: any = { stone_pickaxe: 1, stone_sword: 1, oak_log: 8, oak_planks: 8, stick: 8, cobblestone: 64,
+    furnace: 1, crafting_table: 1, flint: 1, coal: 2, cooked_beef: 8 }
+  const state: any = { dimension: 'overworld', health: 20, food: 20, pos: { x: 0, y: surface ? 64 : 16, z: 0 }, inventory }
+  const calls: any[] = []
+  const c = campaign(state, { surface, night: false, foes: 0, pickLeft: 200 }, (method, p) => {
+    calls.push({ method, p })
+    if (method === 'mine_seen') return { spots: [] }
+    if (method === 'mine') return { dug: 0 }
+    if (method === 'explore' && p.block === 'iron_ore') { if (collect) inventory.raw_iron = 4; return { found: 'iron_ore', at: { x: 3, y: state.pos.y, z: 0 } } }
+    if (method === 'tunnel') { state.pos.x += p.length; if (collect) inventory.raw_iron = 4; return { walked: p.length, dug: 2 * p.length } }
+    if (method === 'smelt') { const n = Math.min(p.count, inventory.raw_iron || 0); inventory.raw_iron -= n; inventory.iron_ingot = (inventory.iron_ingot || 0) + n }
+    if (method === 'craft' && p.item === 'bucket') { inventory.iron_ingot -= 3; inventory.bucket = 1 }
+    if (method === 'craft' && p.item === 'flint_and_steel') { inventory.iron_ingot--; inventory.flint--; inventory.flint_and_steel = 1 }
+    return {}
+  }, { env })
+  c.hooks({ spares: async () => {}, ensurePick: async () => true, recoverGuard: async () => {} })
+  return { c, calls, state }
+}
+test('R6: early iron checks its seen vein within 16 blocks; default keeps 32', async () => {
+  for (const enabled of [false, true]) {
+    const f = earlyIronFixture({ ND_IRON_VISIBLE_LEGS: enabled ? '1' : '0' })
+    await f.c.runStage('iron', true)
+    assert.equal(f.calls.find(c => c.method === 'tunnel').p.length, enabled ? 16 : 32)
+    assert.equal(f.state.inventory.bucket, 1); assert.equal(f.state.inventory.flint_and_steel, 1)
+  }
+})
+test('R6: shorter iron legs preserve the original maximum search distance', async () => {
+  for (const enabled of [false, true]) {
+    const f = earlyIronFixture({ ND_IRON_VISIBLE_LEGS: enabled ? '1' : '0' }, { collect: false })
+    await f.c.runStage('iron', true)
+    const legs = f.calls.filter(c => c.method === 'tunnel')
+    assert.equal(legs.length, enabled ? 28 : 14)
+    assert.equal(legs.reduce((n, c) => n + c.p.length, 0), 448)
+    assert.deepEqual(legs.map(c => c.p.direction), Array.from({ length: enabled ? 28 : 14 }, (_, i) =>
+      ['north', 'east', 'south', 'west'][(enabled ? Math.floor(i / 2) : i) % 4]))
+  }
+})
+test('R6: the staircase collects an actually remembered vein between spatial portions and stops at four iron', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 },
+    inventory: { stone_pickaxe: 1, oak_log: 8, oak_planks: 8, crafting_table: 1, cobblestone: 64 } }
+  const calls: any[] = []
+  const c = campaign(state, { surface: false, night: false, foes: 0 }, (method, p) => {
+    calls.push({ method, p })
+    if (method === 'dig_down') { state.pos.y -= p.depth; return { steps: p.depth, dug: p.depth * 3 } }
+    if (method === 'mine_seen' && p.limit) return { spots: state.pos.y <= 52 ? [{ name: 'iron_ore', fromMe: 3, at: { x: 3, y: 52, z: 0 } }] : [] }
+    if (method === 'mine_seen' && p.at) state.inventory.raw_iron = 4
+    return {}
+  }, { env: { ND_IRON_VISIBLE_LEGS: '1' } })
+  c.hooks({ spares: async () => {}, ensurePick: async () => true, recoverGuard: async () => {} })
+  await c.descend(16, { oreRemaining: () => 4 - (state.inventory.raw_iron || 0) })
+  assert.equal(state.inventory.raw_iron, 4)
+  assert.equal(state.pos.y, 52, 'the inventory goal, not y16, ends this descent')
+  assert.deepEqual(calls.filter(c => c.method === 'dig_down').map(c => c.p.depth), [12])
+  assert.equal(calls.filter(c => c.method === 'mine_seen' && c.p.at).length, 1)
+})
+test('R6: a verified stale ore row advances to the next remembered vein without repeating that row', async () => {
+  for (const enabled of [false, true]) {
+    const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 16, z: 0 }, inventory: { stone_pickaxe: 1 } }
+    const attempts: number[] = []
+    const c = campaign(state, { surface: false, foes: 0, night: false }, (method, p) => {
+      if (method !== 'mine_seen') return {}
+      // The old row deliberately remains in this reply, modelling a stale RPC/list snapshot.
+      if (p.limit) return { spots: [1, 2].map(x => ({ name: 'iron_ore', fromMe: x, at: { x, y: 16, z: 0 } })) }
+      attempts.push(p.at.x)
+      if (p.at.x === 1) return { gone: [{ at: p.at }] }
+      state.inventory.raw_iron = 4
+      return { dug: 4 }
+    }, { env: { ND_IRON_STALE_LEDGER: enabled ? '1' : '0' } })
+    await c.mineSeenAll('iron_ore', 24, () => 4 - (state.inventory.raw_iron || 0))
+    assert.deepEqual(attempts, enabled ? [1, 2] : [1])
+    assert.equal(state.inventory.raw_iron || 0, enabled ? 4 : 0)
+  }
+})
+test('R6: a zero-gain physical refusal or tactical interruption still ends remembered ore collection', async () => {
+  for (const interrupted of [false, true]) {
+    const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 16, z: 0 }, inventory: { stone_pickaxe: 1 } }
+    let attempts = 0
+    const c = campaign(state, { surface: false, foes: 0, night: false }, (method, p) => {
+      if (method !== 'mine_seen') return {}
+      if (p.limit) return { spots: [1, 2].map(x => ({ name: 'iron_ore', fromMe: x, at: { x, y: 16, z: 0 } })) }
+      attempts++
+      return interrupted ? { rpcResult: { status: 'interrupted', detail: { gone: [{ at: p.at }] }, state, events: [] } } : { stopped: 'нет пути' }
+    }, { env: { ND_IRON_STALE_LEDGER: '1' } })
+    await c.mineSeenAll('iron_ore', 24, () => 4)
+    assert.equal(attempts, 1)
+  }
+})
 test('structure scout loots a freshly observed chest before walking another search leg', async () => {
   const state: any = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory: { stone_pickaxe: 1 } }
   const clock = { t: 100000 }; const calls = []
@@ -2305,5 +2464,345 @@ test('s1f: огнестойкость в рюкзаке, жемчуга ≥ 6, �
     try { await c.runStage('bastion') } catch (e) { err = e }
     assert.equal(!!err && /стержни/.test(err.message), !off, off ? 'выключено — бастион как прежде' : 'сперва стержни')
     assert.equal(calls.includes('bastion'), off)
+  }
+})
+
+
+test('neP-2: impossible sticks and pick recipes send no RPC; newly carried wood reopens the same recipe', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: -71, y: 76, z: 79 },
+    inventory: { crafting_table: 1, cobblestone: 6 } }
+  const crafts: string[] = []
+  const c = campaign(state, { foes: 0 }, (method, params) => {
+    if (method === 'craft') {
+      crafts.push(params.item)
+      if (params.item === 'stick' && state.inventory.oak_planks >= 2) { state.inventory.oak_planks -= 2; state.inventory.stick = 4 }
+      if (params.item === 'stone_pickaxe' && state.inventory.stick >= 2) state.inventory.stone_pickaxe = 1
+    }
+    return {}
+  })
+  assert.equal(await c.ensurePick(), false); assert.equal(await c.ensurePick(), false)
+  assert.equal(crafts.length, 0)
+  state.inventory.oak_planks = 2
+  assert.equal(await c.ensurePick(), true)
+  assert.deepEqual(crafts, ['stick', 'stone_pickaxe'])
+})
+
+test('a missing table with no plank recipe is observed once without repeating impossible table crafts', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: -53, y: 87, z: 51 }, inventory: {} }
+  const calls: string[] = []
+  const c = campaign(state, { foes: 0 }, method => { calls.push(method); return {} })
+  assert.equal(await c.ensureTable(), false)
+  assert.equal(calls.filter(m => m === 'craft').length, 0)
+  assert.equal(calls.filter(m => m === 'mine').length, 1, 'the physical nearby table can still be recovered')
+})
+
+test('neR-1: five carried meals do not force a healthy Nether body back through the portal', () => {
+  const state: any = { health: 20, food: 19, dimension: 'the_nether', pos: { x: 31, y: 58, z: -11 },
+    inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_mutton: 5 } }
+  const c = campaign(state, { foes: 0, surface: false })
+  assert.equal(c.fightReady(), true)
+  delete state.inventory.iron_pickaxe
+  assert.equal(c.fightReady(), false, 'a digging route still needs its physical tool')
+})
+
+test('neP-1: a tactical interruption exits covered healing after one observation wait', async () => {
+  const state: any = { health: 8, food: 20, dimension: 'the_nether', pos: { x: -45, y: 28, z: 96 },
+    inventory: { iron_pickaxe: 1, cooked_mutton: 6 } }
+  let waits = 0
+  const c = campaign(state, { foes: 0 }, method => method === 'ne_burrow' ? { ok: true } :
+    method === 'wait' ? (waits++, { rpcResult: { status: 'interrupted', code: 'TACTICAL', by: { type: 'tactical' }, detail: {}, state, events: [] } }) : {},
+    { env: { ND_NE_STAY: '1' } })
+  await c.rest(18)
+  assert.equal(waits, 1, 'the next decision must see the changed physical state')
+})
+
+test('a failed spawner approach returns for observation instead of repeating the same RPC in the stage', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 3, y: 66, z: 1 },
+    inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_mutton: 8, cobblestone: 64, crafting_table: 1 } }
+  let attempts = 0
+  const c = campaign(state, { foes: 0, pickLeft: 381 }, method => {
+    if (method === 'fortress') { attempts++; return { found: false, stopped: 'no newly seen deck or spawner' } }
+    return {}
+  })
+  c.known.portal = { x: 0, y: 65, z: 0 }; c.known.fortress = true
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.runStage('nether')
+  assert.equal(attempts, 1)
+})
+
+test('failed Nether search retries on changed evidence or eight-block displacement, never on elapsed time or unrelated stock', () => {
+  const state: any = { health: 20, food: 19, dimension: 'the_nether', pos: { x: 7.99, y: 58, z: -11 },
+    inventory: { iron_pickaxe: 1, cooked_mutton: 5 } }
+  const situation: any = { foes: 0, pickLeft: 300, fight: { order: [] } }
+  const c = campaign(state, situation)
+  const source = fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8')
+  const start = source.indexOf('const cooling ='), end = source.indexOf('const resetPauses =', start)
+  assert.ok(start >= 0 && end > start)
+  let now = 0
+  const context: any = { state, fails: new Map(), failureKey: s => s, netherRetryState: c.retryState,
+    dim: () => state.dimension, gameClock: { now: () => now }, process: { env: { ND_NE_STAY: '1' } },
+    PAUSE_MIN: [5,10,20,40], log() {}, have: () => 0, known: c.known, barterFlow: { enabled: () => false } }
+  vm.runInNewContext(source.slice(start, end) + '\n    globalThis.isBlocked = () => cooling({ name: "nether" }); globalThis.fail = () => failStage("nether", "nether");', context)
+  context.fail()
+  assert.equal(context.isBlocked(), true)
+  now += 24 * 3600000; state.health = 20; state.inventory.quartz = 64
+  assert.equal(context.isBlocked(), true)
+  state.pos.x = 8.01
+  assert.equal(context.isBlocked(), true, 'crossing a coordinate grid edge is not a new approach')
+  state.pos.x = 16
+  assert.equal(context.isBlocked(), false)
+  context.fail()
+  assert.equal(context.isBlocked(), true, 'the new failure has its own spatial origin')
+  state.tactics = { threatLevel: 2 }
+  assert.equal(context.isBlocked(), false, 'the physical threat changed')
+})
+
+for (const change of ['position', 'geometry']) test(`a blocked fortress search creates its own new ${change} before another search`, async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
+    inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_beef: 12, cobblestone: 64 } }
+  let attempts = 0, advances = 0, waits = 0
+  const c = campaign(state, { foes: 0, pickLeft: 400 }, (method, params) => {
+    if (method === 'fortress' && params.mode === 'advance') {
+      advances++
+      if (change === 'position') state.pos.x += 8
+      return { advanced: true, frontierTried: 1, frontierRevision: change === 'geometry' ? 2 : 1 }
+    }
+    if (method === 'wait') { waits++; state.inventory.blaze_rod = 7 }
+    if (method === 'portal') { state.dimension = 'overworld'; return { went: true } }
+    return {}
+  }, { argv: ['nether'], env: { ND_NE_STAY: '1' } })
+  c.known.fortress = { x: 32, y: 64, z: 0 }
+  c.hooks({ recoverGuard: async () => {} })
+  c.netherOnly(async () => { if (++attempts === 2) state.inventory.blaze_rod = 7 })
+  await c.boot()
+  assert.equal(advances, 1, 'the state gate needs an action that changes what the bot can observe')
+  assert.equal(attempts, 2)
+  assert.equal(waits, 0, 'HP20/food20 must not enter the observation polling loop')
+})
+
+test('ND_FORTRESS_FRONTIER=0 preserves the previous blocked-search control', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
+    inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_beef: 12 } }
+  let advances = 0, waits = 0
+  const c = campaign(state, { foes: 0, pickLeft: 400 }, (method, params) => {
+    if (method === 'fortress' && params.mode === 'advance') advances++
+    if (method === 'wait') { waits++; state.inventory.blaze_rod = 7 }
+    if (method === 'portal') { state.dimension = 'overworld'; return { went: true } }
+    return {}
+  }, { argv: ['nether'], env: { ND_NE_STAY: '1', ND_FORTRESS_FRONTIER: '0' } })
+  c.known.fortress = { x: 32, y: 64, z: 0 }
+  c.hooks({ recoverGuard: async () => {} })
+  c.netherOnly(async () => {})
+  await c.boot()
+  assert.equal(advances, 0)
+  assert.equal(waits, 1)
+})
+
+test('a changed tactical action reopens its interrupted fortress route even at the same threat level', () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
+    inventory: { iron_pickaxe: 1 }, tactics: { threatLevel: 1, action: 'Fight' } }
+  const c = campaign(state, { foes: 1, pickLeft: 400, fight: { order: [{ name: 'blaze' }] } })
+  const before = c.retryState(state.pos)
+  state.tactics.action = 'Idle'
+  assert.notEqual(c.retryState(state.pos), before)
+})
+
+test('the shared Nether stage advances a failed view before repeating spawner search, including graph callers', async () => {
+  const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
+    inventory: { iron_pickaxe: 1, iron_sword: 1, cooked_beef: 12, cobblestone: 64 } }
+  const modes: string[] = []
+  let searches = 0
+  const c = campaign(state, { foes: 0, pickLeft: 400 }, (method, params) => {
+    if (method === 'fortress') {
+      modes.push(params.mode)
+      if (params.mode === 'advance') { state.pos.x += 8; return { advanced: true, frontierTried: 1, frontierRevision: 1 } }
+      if (++searches === 2) state.inventory.blaze_rod = 7
+      return { found: false, explored: 1, frontierRevision: 1, stopped: 'not visible' }
+    }
+    return {}
+  })
+  c.known.fortress = { x: 32, y: 64, z: 0 }
+  c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
+  await c.runStage('nether')
+  await c.runStage('nether')
+  assert.deepEqual(modes, ['spawner', 'advance', 'spawner'])
+})
+
+test('a calm failed Nether search takes its own new exploration action, never idle wait; unchanged failed actions are finite', async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',pos:{x:-8,y:64,z:69},inventory:{iron_pickaxe:1,stone_pickaxe:1,iron_sword:1,cooked_mutton:8,cobblestone:64,crafting_table:1}}
+  const calls:any[]=[],c=campaign(state,{foes:0,pickLeft:381},(m,p)=>{calls.push({m,p});return{}},{env:{ND_NE_RECOVER:'1'}})
+  c.known.portal={x:0,y:65,z:0};c.known.fortress={x:-25,y:65,z:97}
+  await c.changeNetherCause()
+  assert.ok(calls.some(r=>r.m==='explore'),'a refused observation must have a physical actuator')
+  assert.equal(calls.some(r=>r.m==='wait'),false,'calm is not a reason to wait for the same state')
+  const n=calls.filter(r=>r.m==='explore').length
+  await c.changeNetherCause()
+  assert.equal(calls.filter(r=>r.m==='explore').length,n,'the failed actuator cannot repeat without changed cause')
+  state.pos.x+=8
+  await c.refresh()
+  await c.changeNetherCause()
+  assert.equal(calls.filter(r=>r.m==='explore').length,n+1,'an actual new viewpoint permits another leg')
+})
+
+test('Nether recovery waits only for an observed active threat and does not start a new exploration leg',async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',pos:{x:-8,y:64,z:69},tactics:{threatLevel:2},inventory:{iron_pickaxe:1,cooked_mutton:8}}
+  const calls:string[]=[],c=campaign(state,{foes:1,pickLeft:300},m=>{calls.push(m);return{}},{env:{ND_NE_RECOVER:'1'}})
+  await c.changeNetherCause()
+  assert.equal(calls.includes('explore'),false)
+  assert.equal(calls.filter(m=>m==='wait').length,1)
+})
+
+test('an interrupted scout with no physical or observed change is still a failed actuator, not a new retry cause',async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',pos:{x:-8,y:64,z:69},inventory:{iron_pickaxe:1,stone_pickaxe:1,iron_sword:1,cooked_mutton:8,cobblestone:64,crafting_table:1}}
+  let attempts=0
+  const c=campaign(state,{foes:0,pickLeft:381},m=>m==='explore'?(attempts++,{rpcResult:{status:'interrupted',by:{type:'cancelled'},state,events:[],detail:{}}}):{},{env:{ND_NE_RECOVER:'1'}})
+  await c.changeNetherCause();await c.changeNetherCause()
+  assert.equal(attempts,1)
+})
+
+test('fj2-1-b-101: a scout interrupted by a tactical reflex is retried once for the same state, not an immediate blocker',async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',pos:{x:-8,y:64,z:69},inventory:{iron_pickaxe:1,stone_pickaxe:1,iron_sword:1,cooked_mutton:8,cobblestone:64,crafting_table:1}}
+  let attempts=0
+  const c=campaign(state,{foes:0,pickLeft:381},m=>m==='explore'?(attempts++,{rpcResult:{status:'interrupted',by:{type:'reflex'},state,events:[],detail:{}}}):{},{env:{ND_NE_RECOVER:'1'}})
+  assert.equal(await c.changeNetherCause(),true)
+  await c.changeNetherCause();await c.changeNetherCause()
+  assert.equal(attempts,2,'one retry after the threat, then the unchanged interruption is a failed actuator')
+})
+
+test('failed bastion stock stays remembered while its unchanged approach is replaced by a different known site',async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',pos:{x:0,y:64,z:0},inventory:{iron_pickaxe:1,stone_pickaxe:1,cooked_mutton:8}}
+  const c=campaign(state,{foes:0,pickLeft:381},()=>({}),{env:{ND_NE_RECOVER:'1'}})
+  const a={key:'бастион (ад)',dimension:'the_nether',x:10,y:40,z:0,gold:[[10,36,0]]},b={...a,key:'бастион 2 (ад)',x:80}
+  c.known.bastions=[a,b]
+  c.deferBastionMining(a)
+  assert.equal(c.nextBastion().key,b.key)
+  assert.equal(a.gold.length,1)
+})
+
+test('bz0-b-101: the actual campaign leaves a calm failed search through its own actuator instead of an eighteen-minute observe/wait loop',async()=>{
+  const state:any={connected:true,health:20,food:20,dimension:'the_nether',playPolicy:{mode:'speedrun'},pos:{x:-8,y:64,z:69},inventory:{iron_pickaxe:1,stone_pickaxe:1,iron_sword:1,cooked_mutton:8,cobblestone:64,crafting_table:1}}
+  const calls:any[]=[],logs:string[]=[],clock={t:100000}
+  const places={'портал':{x:0,y:65,z:0,dimension:'overworld'},'портал (ад)':{x:0,y:64,z:0,dimension:'the_nether'},'крепость (ад)':{x:-25,y:65,z:97,dimension:'the_nether'}}
+  const c=campaign(state,{foes:0,pickLeft:381,surface:false},(m,p)=>{
+    calls.push({m,p});if(m==='recall')return{state:{places}}
+    if(m==='wait'){clock.t+=p.seconds*1000;if(calls.filter(r=>r.m==='wait').length>=400)state.inventory.blaze_rod=7}
+    if(m==='portal'){state.dimension='overworld';return{went:true}}
+    return{}
+  },{env:{ND_NE_RECOVER:'1',ND_NE_STAY:'1'},argv:['nether'],clock,logs})
+  c.netherOnly(async()=>{})
+  await c.boot()
+  assert.equal(calls.filter(r=>r.m==='wait').length,0)
+  assert.equal(calls.filter(r=>r.m==='explore').length,1)
+  assert.ok(logs.some(l=>l.includes('завершаю без пустого ожидания')))
+  assert.ok(calls.some(r=>r.m==='disconnect'),'a physically unreachable scene ends explicitly rather than pretending progress')
+})
+
+test('p7-b-103: a tactically interrupted hunt still pays its actual seconds and inventory pearl once, without declaring an unseen forest empty',async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',pos:{x:0,y:49,z:0},inventory:{iron_pickaxe:1,cooked_mutton:8,cobblestone:64}}
+  const clock={t:100000};let n=0
+  const c=campaign(state,{foes:0,pickLeft:300},m=>{
+    if(m==='recall')return{state:{places:{'искажённый лес (ад)':{x:0,y:49,z:0,dimension:'the_nether'}}}}
+    if(m==='pearls'){
+      n++;clock.t+=n===1?396200:341700;state.inventory.ender_pearl=1
+      return n===1?{seenEndermen:4}:{rpcResult:{status:'interrupted',by:{type:'tactical'},state,events:[],detail:{seenEndermen:0}}}
+    }
+    return{}
+  },{clock,env:{ND_EM_PRICE_RECEIPTS:'1'}})
+  await c.readMemory()
+  await c.trackedHunt()
+  assert.equal(Math.round(c.pearlPrice()),292)
+  await assert.rejects(c.trackedHunt(),/STRATEGY_INTERRUPTED/)
+  assert.equal(Math.round(c.pearlTrip().seconds*10)/10,737.9)
+  assert.equal(c.pearlTrip().pearls,1)
+  assert.equal(c.pearlTrip().zero,0,'an interrupted unseen interval is not proof of an empty forest')
+  assert.equal(Math.round(c.pearlPrice()),406)
+})
+
+test('a completed hunt is charged once through the same real stage; disabling the switch preserves the legacy price path',async()=>{
+  for(const enabled of ['0','1']){
+    const state:any={health:20,food:20,dimension:'the_nether',pos:{x:0,y:49,z:0},inventory:{iron_pickaxe:1,cooked_mutton:8,cobblestone:64}}
+    const clock={t:100000}
+    const c=campaign(state,{foes:0,pickLeft:300},m=>{
+      if(m==='recall')return{state:{places:{'искажённый лес (ад)':{x:0,y:49,z:0,dimension:'the_nether'}}}}
+      if(m==='pearls'){clock.t+=10000;state.inventory.ender_pearl=14;return{seenEndermen:4}}
+      return{}
+    },{clock,env:{ND_EM_PRICE_RECEIPTS:enabled}})
+    await c.readMemory();c.hooks({recoverGuard:async()=>{},spares:async()=>{}})
+    await c.runStage('pearls')
+    assert.equal(c.pearlTrip().seconds,10)
+    assert.equal(c.pearlTrip().pearls,14)
+  }
+})
+
+test('p7-b-101/102: failed foxhole preparation is one refused approach, not proof that the whole forest is empty; a new F3 forest position supplies the next approach',async()=>{
+  const state:any={health:20,food:20,dimension:'the_nether',biome:'warped_forest',pos:{x:0,y:49,z:0},inventory:{iron_pickaxe:1,cooked_mutton:8,cobblestone:64}}
+  let hunts=0
+  const c=campaign(state,{foes:0,pickLeft:300},m=>{
+    if(m==='recall')return{state:{places:{'искажённый лес (ад)':{x:0,y:49,z:0,dimension:'the_nether'}}}}
+    if(m==='pearls'){hunts++;return{prepared:false,seenEndermen:0,stopped:'ровного места под окоп рядом нет'}}
+    return{}
+  },{env:{ND_NE_RECOVER:'1',ND_EM_PRICE_RECEIPTS:'1'}})
+  await c.readMemory();c.hooks({recoverGuard:async()=>{},spares:async()=>{}})
+  await assert.rejects(c.runStage('pearls'),/окоп не подготовлен/)
+  assert.equal(hunts,1)
+  assert.equal(c.pearlTrip().zero,0)
+  assert.equal(c.emptyForests().length,0)
+  assert.equal(c.forestToHunt(),null,'the failed physical approach is not retried from the same position')
+  state.pos.x=10;await c.refresh()
+  assert.equal(c.forestToHunt().x,10,'F3 underfoot and actual displacement provide a different approach without a seed map')
+})
+
+
+test('fs1: after floor exhaustion a priced physical continuation competes with the next graph goal', async()=>{
+  for(const seconds of [1,10000]) {
+    const state:any={health:20,food:20,dimension:'the_nether',pos:{x:12,y:72,z:-12},inventory:{iron_pickaxe:1,stone_pickaxe:1,iron_sword:1,cooked_mutton:8,cobblestone:64,crafting_table:1}}
+    const calls:any[]=[],c=campaign(state,{foes:0,pickLeft:381},(m,p)=>{
+      calls.push({m,p});if(m==='recall')return{state:{places:{'крепость (ад)':{x:46,y:70,z:-13,dimension:'the_nether'}}}}
+      return m==='fortress' && p.planOnly ? {plan:{key:'observed-plan',seconds}} : {}
+    },{env:{ND_FORTRESS_CONTINUE:'1',ND_NE_RECOVER:'1'}})
+    c.known.fortress={x:46,y:70,z:-13}
+    const before=await c.worldObservation()
+    const blocked={observed:c.retryState(),origin:{...state.pos},frontier:c.retryState()}
+    const selected:any={before,strategy:{id:'HuntEndermen',estimateCost:()=>2000,estimateRisk:()=>0.5}}
+    const ran=await c.continueFortressChoice(selected,blocked)
+    assert.equal(!!ran,seconds===1)
+    assert.equal(calls.filter(r=>r.m==='fortress' && !r.p.planOnly).length,seconds===1?1:0)
+    assert.equal(calls.some(r=>r.m==='wait'),false)
+  }
+})
+
+test('fs1: failed continuation leaves the actual campaign through B7 recovery, with no healthy observe/wait loop',async()=>{
+  const state:any={connected:true,health:20,food:20,dimension:'the_nether',playPolicy:{mode:'speedrun'},pos:{x:12,y:72,z:-12},inventory:{iron_pickaxe:1,stone_pickaxe:1,iron_sword:1,cooked_mutton:8,cobblestone:64,crafting_table:1}}
+  const calls:any[]=[],logs:string[]=[],clock={t:100000}
+  let attempted=0
+  const places={'портал':{x:0,y:65,z:0,dimension:'overworld'},'крепость (ад)':{x:46,y:70,z:-13,dimension:'the_nether'}}
+  const c=campaign(state,{foes:0,pickLeft:381,surface:false},(m,p)=>{
+    calls.push({m,p});if(m==='recall')return{state:{places}}
+    if(m==='fortress') {
+      if(p.mode!=='continue')return{frontierExhausted:true}
+      if(p.planOnly)return{plan:attempted?null:{key:'failed-physical-leg',seconds:1}}
+      attempted++;return{advanced:false,continuationTried:1}
+    }
+    if(m==='wait'){clock.t+=p.seconds*1000;if(calls.filter(r=>r.m==='wait').length>=400)state.inventory.blaze_rod=7}
+    return{}
+  },{env:{ND_NE_STAY:'1'},argv:['nether'],clock,logs})
+  c.netherOnly(async()=>{})
+  await c.boot()
+  assert.ok(calls.some(r=>r.m==='fortress' && r.p.mode==='continue'),'the body asks for a physical continuation after floor exhaustion')
+  assert.equal(attempted,1,'the same failed physical actuator is not an endless source of RPC retries')
+  assert.equal(calls.filter(r=>r.m==='wait').length,0)
+  assert.equal(calls.filter(r=>r.m==='explore').length,1,'the fallback is B7, not a second general scout loop')
+  assert.ok(logs.some(l=>l.includes('завершаю без пустого ожидания')))
+})
+
+test('fs1: a real active threat or the continuation switch prevents starting a new construction leg',async()=>{
+  for(const [flag,threat] of [['0',0],['1',2]]) {
+    const env={ND_FORTRESS_CONTINUE:flag}
+    const state:any={health:20,food:20,dimension:'the_nether',tactics:{threatLevel:threat},pos:{x:12,y:72,z:-12},inventory:{iron_pickaxe:1}}
+    const calls:string[]=[],c=campaign(state,{foes:1,pickLeft:200},m=>{calls.push(m);return{}},{env})
+    c.known.fortress={x:46,y:70,z:-13}
+    const mark={observed:c.retryState(),origin:{...state.pos},frontier:c.retryState()}
+    assert.equal(await c.continueFortressChoice(null,mark),false)
+    assert.equal(calls.length,0)
   }
 })

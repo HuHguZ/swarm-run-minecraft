@@ -6,6 +6,7 @@ import vm from 'node:vm'
 import { createRequire } from 'node:module'
 
 const { Vec3 } = require('vec3')
+const { RaycastIterator } = require('prismarine-world/src/iterators')
 
 function fixture (y: number, closed = false) {
   const blocks = new Map<string, string>()
@@ -18,6 +19,16 @@ function fixture (y: number, closed = false) {
     } },
     findBlocks: ({ matching, maxDistance }) => [...blocks.keys()].map(k => new Vec3(...k.split(',').map(Number)))
       .filter(p => p.distanceTo(bot.entity.position) <= maxDistance && matching(bot.blockAt(p))) }
+  bot.world = { raycast: (origin, direction, range, match) => {
+    const ray = new RaycastIterator(origin, direction, range)
+    let p = origin
+    while (p) {
+      const b = bot.blockAt(new Vec3(p.x, p.y, p.z))
+      if (match ? match(b, ray) : ray.intersect(b.shapes, b.position)) return b
+      p = ray.next()
+    }
+    return null
+  } }
   const file = path.resolve(__dirname, '../src/fortress.js')
   const context: any = { require: createRequire(file), module: { exports: {} }, console: { log () {} }, process, testBot: bot, moves: [] }
   vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
@@ -147,4 +158,47 @@ test('a cancelled ceiling tower does not begin a late upward excavation', async 
   await f.context.module.exports.tour(f.session, ctl, { deadline: Infinity, hops: 1 })
   assert.equal(ctl.aborted, true)
   assert.equal(f.digs.length, 0)
+})
+
+
+test('fortress view probe cannot infer headroom above a visible bridge underside', () => {
+  const f = fixture(60)
+  f.bot.entity.position = new Vec3(124.5, 57, -130.5)
+  vm.runInNewContext('module.exports.testViewLeg = viewLeg;', f.context)
+  assert.equal(f.context.module.exports.testViewLeg(f.bot, [f.bot.entity.position]), null)
+})
+
+function deckFixture () {
+  const f = fixture(64)
+  f.blocks.clear()
+  for (const [x, z] of [[124, -131], [125, -131], [126, -131], [124, -130], [124, -129]]) f.blocks.set(`${x},63,${z}`, 'nether_bricks')
+  return f
+}
+test('visible deck DFS backtracks from a dead end and visits the other branch', () => {
+  const f = deckFixture(), state = {}, walked = []
+  for (let i = 0; i < 12; i++) {
+    const leg = f.context.module.exports.deckLeg(f.bot, state)
+    if (!leg) break
+    walked.push(leg)
+    f.bot.entity.position = leg.floor.offset(0.5, 1, 0.5)
+  }
+  assert.ok(walked.some(p => p.back))
+  assert.ok(walked.some(p => p.floor.x === 124 && p.floor.z === -129))
+})
+test('visible deck DFS does not retry an acknowledged move without actual arrival', () => {
+  const f = deckFixture(), state = {}
+  const first = f.context.module.exports.deckLeg(f.bot, state)
+  const next = f.context.module.exports.deckLeg(f.bot, state)
+  assert.ok(first && next)
+  assert.equal(next.floor.equals(first.floor), false)
+})
+
+
+test('neR-1: the visible bridge overhead is approached before following a horizontal pie hint below it', async () => {
+  const f = coveredBridge()
+  vm.runInNewContext('spawnerHint = () => ({ x: 148, z: -131, by: "пирог", yaw: 90 });', f.context)
+  await f.context.module.exports.tour(f.session, { aborted: false }, { deadline: Infinity, hops: 1, pie: true })
+  assert.equal(f.rises.length, 1)
+  assert.equal(f.digs[0]?.blocks, 3)
+  assert.equal(f.bot.entity.position.y, 54)
 })

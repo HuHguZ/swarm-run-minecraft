@@ -114,7 +114,12 @@ function underFeet (bot) {
 const UNDERWATER = /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/
 function underWater (bot, p) {
   const up = bot.blockAt(p.offset(0, 1, 0))
-  return !!up && UNDERWATER.test(up.name)
+  return (require('./movement').waterBudgetOn?.() ?? false) ? require('./movement').waterCell?.(up) : !!up && UNDERWATER.test(up.name)
+}
+
+function priceResources (bot, candidates) {
+  const prices = new Map<any, number>(candidates.map(b => [b, bot.entity.position.distanceTo(b.position) + (require('./movement').waterApproachCost?.(bot, b.position) ?? 0)]))
+  return candidates.sort((a, b) => prices.get(a) - prices.get(b))
 }
 
 async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, at = null, collect = true, dry = false, avoidPiglinAggro = false }: any = {}) {
@@ -193,6 +198,7 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
       break
     }
 
+    if ((require('./movement').waterBudgetOn?.() ?? false)) priceResources(bot, visible)
     const target = visible[0]
     if (pendingAt && target.position.distanceTo(pendingAt) > 5) await flush()
     const problem = missingHarvestTool(bot, target, mcData)
@@ -1223,7 +1229,7 @@ function descentGuard (session, { dir = null, again, own = true }: any) {
 // with this same staircase, and «прыгну, если позовёшь mc_dig_down» sent from
 // inside it would name a sixteen-level dig past the pile instead of the retry.
 async function digStairs (session, ctl, {
-  depth = 16, direction = null, torchEvery = 6, timeoutSeconds = 240, maxFallHp = 0, call = null
+  depth = 16, direction = null, torchEvery = 6, timeoutSeconds = 240, maxFallHp = 0, call = null, nightWork = false
 }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
@@ -1386,6 +1392,12 @@ async function digStairs (session, ctl, {
     // step itself is the next second or so.
     const opened = await guard.check()
     if (opened) { stopped = opened; break }
+    const work = nightWork ? require('./night-work').step(bot, low, feet, 3.25, undefined, 3) : null
+    if (work?.stopped) {
+      const cover = await require('./night-work').closeBehind(bot, ctl, mid)
+      stopped = `${work.stopped}; ${cover || 'проход закрыт перед собой'}`
+      break
+    }
 
     // Into a drop the body goes by walkOff, which lands it in the column the
     // drop was judged on; a free three-block drop that drifts onto a deeper
@@ -1446,16 +1458,20 @@ async function digStairs (session, ctl, {
     // seconds every fourth level, the longest stretch of a level with no look.
     const landed = await guard.check()
     if (landed) { stopped = landed; break }
+    if (work?.close) {
+      stopped = await require('./night-work').closeBehind(bot, ctl, feet)
+      if (stopped) break
+    }
     // Light the step we just left. An unlit staircase is a mob spawner pointed
     // at our own back — the run that died at depth was killed by something that
     // spawned in the dark behind it, not by anything it dug into.
-    if (torchEvery > 0 && cut % torchEvery === 0 && await placeTorch(bot, feet)) torches++
+    if (!work?.close && torchEvery > 0 && cut % torchEvery === 0 && await placeTorch(bot, feet)) torches++
 
     // Collecting after every step costs more than the cobblestone is worth.
-    if (cut % 4 === 0) await collectNearbyDrops(bot, ctl, { radius: 3, timeoutMs: 2500 })
+    if (!work?.close && cut % 4 === 0) await collectNearbyDrops(bot, ctl, { radius: 3, timeoutMs: 2500 })
   }
 
-  await collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 4000 })
+  if (!nightWork) await collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 4000 })
   // Swings left matters more the deeper we are: the climb home is three digs a
   // level, so the brain has to be able to turn back while it still can.
   const picks = toolStatus(bot, 'pickaxe')
@@ -1496,7 +1512,9 @@ const SWEEP = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, 
 // не находил склон никогда: двенадцать ближних клеток камня — под дёрном.
 // dry — без блоков под водой (см. underWater).
 function firstVisible (bot, ids, radius, useFair, dry = false, skip = null) {
-  return visibleOf(bot, ids, radius, { max: 1, fair: useFair, ...((dry || skip) ? { skip: p => (dry && underWater(bot, p)) || !!skip?.(p) } : {}) })[0] || null
+  const candidates = visibleOf(bot, ids, radius, { max: (require('./movement').waterBudgetOn?.() ?? false) ? 12 : 1, fair: useFair, ...((dry || skip) ? { skip: p => (dry && underWater(bot, p)) || !!skip?.(p) } : {}) })
+  if ((require('./movement').waterBudgetOn?.() ?? false)) priceResources(bot, candidates)
+  return candidates[0] || null
 }
 
 // Walk around until the thing we want comes into view. Returns partial

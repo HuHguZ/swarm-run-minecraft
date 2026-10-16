@@ -63,13 +63,21 @@ test('a visit that would end after the dusk carries the night price in the log',
 })
 
 test('gold for the boots makes far ruins worth the walk; with a golden piece in the bag they are passed by', async () => {
-  const at = { ...ruins, at: { x: 150, y: 64, z: 0 } }
-  const bag = { flint_and_steel: 1, iron_ingot: 20, bread: 8 }
-  const want = fixture({ known: [at], bag: { ...bag }, portal: { x: 0, z: 0 } })
-  assert.equal(await want.run(), true)
-  assert.ok(want.lines.some(l => /gold 0\.93: \d+ с/.test(l) && /— иду/.test(l)), want.lines.join('\n'))
-  const dressed = fixture({ known: [at], bag: { ...bag, golden_helmet: 1 }, portal: { x: 0, z: 0 } })
-  assert.equal(await dressed.run(), false)
+  // Аванс премии за ботинки — только по ND_STRUCT_GOLD_RECEIPTS=0 (по умолчанию с 16.10 не авансируется).
+  const prev = process.env.ND_STRUCT_GOLD_RECEIPTS
+  process.env.ND_STRUCT_GOLD_RECEIPTS = '0'
+  try {
+    const at = { ...ruins, at: { x: 150, y: 64, z: 0 } }
+    const bag = { flint_and_steel: 1, iron_ingot: 20, bread: 8 }
+    const want = fixture({ known: [at], bag: { ...bag }, portal: { x: 0, z: 0 } })
+    assert.equal(await want.run(), true)
+    assert.ok(want.lines.some(l => /gold 0\.93: \d+ с/.test(l) && /— иду/.test(l)), want.lines.join('\n'))
+    const dressed = fixture({ known: [at], bag: { ...bag, golden_helmet: 1 }, portal: { x: 0, z: 0 } })
+    assert.equal(await dressed.run(), false)
+  } finally {
+    if (prev === undefined) delete process.env.ND_STRUCT_GOLD_RECEIPTS
+    else process.env.ND_STRUCT_GOLD_RECEIPTS = prev
+  }
 })
 
 test('a looted village is reported to the graph as exhausted', async () => {

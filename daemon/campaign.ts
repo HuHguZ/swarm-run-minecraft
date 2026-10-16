@@ -9,6 +9,8 @@ const telParams = p => { try { return JSON.stringify(p).slice(0, 300) } catch { 
 const WS = process.env.ND_WS || 'ws://127.0.0.1:8769'
 const LOG = process.env.ND_CAMPAIGN_LOG || path.join(__dirname, 'campaign.log')
 const only = process.argv[2] ? process.argv[2].split(',') : null
+// J2 uses B7's shared recovery; an explicitly selected B7 control still wins.
+if ((!only || only.includes('nether')) && process.env.ND_FORTRESS_CONTINUE !== '0' && process.env.ND_FORTRESS_FRONTIER !== '0' && process.env.ND_NE_RECOVER === undefined) process.env.ND_NE_RECOVER = '1'
 
 const ws = new WebSocket(WS)
 let rid = 0
@@ -46,11 +48,11 @@ let state: any = {}
 let sit: any = {}
 const E2E = process.env.ND_E2E === '1'
 let memorySnapshot = null
-const SEAM_FLAGS = ['ND_E2E', 'ND_END_SEAM', 'ND_ENDKIT', 'ND_WORLD_SEED', 'ND_EYES_NEED',
+const SEAM_FLAGS = ['ND_E2E', 'ND_END_SEAM', 'ND_ENDKIT', 'ND_END_PREP_PRICE', 'ND_WORLD_SEED', 'ND_EYES_NEED',
   'ND_ROUTE', 'ND_ROUTE_FOOD2', 'ND_OW_DEEP', 'ND_OW_HEAR', 'ND_PORTAL_NATURAL',
   'ND_BASTION_FIRST', 'ND_NE_ROUTE', 'ND_NE_STAY', 'ND_SH_NETHER', 'ND_SH_STAY', 'ND_SH_BLIND', 'ND_OBS_EXIT',
-  'ND_SEALED_BREACH', 'ND_SPAWNER_TUNNEL', 'ND_GOLD_FAST_SAFE', 'ND_GUARD', 'ND_BLAZE_FP', 'ND_ENDERMEN',
-  'ND_EMERGENCY', 'ND_UNSTUCK', 'ND_BRIDGE', 'ND_SPRINT', 'ND_PEARL_GOTO',
+  'ND_SEALED_BREACH', 'ND_SPAWNER_TUNNEL', 'ND_FORTRESS_FRONTIER', 'ND_FORTRESS_CONTINUE', 'ND_GOLD_FAST_SAFE', 'ND_GUARD', 'ND_BLAZE_FP', 'ND_ENDERMEN',
+  'ND_NE_RECOVER', 'ND_EM_PRICE_RECEIPTS', 'ND_EMERGENCY', 'ND_UNSTUCK', 'ND_BRIDGE', 'ND_SPRINT', 'ND_PEARL_GOTO',
   'ND_RUNNER', 'ND_RUN_SWORD', 'ND_RUN_SWORD_PED', 'ND_CRYSTALS', 'ND_CRYS_KEEP', 'ND_DIGUP', 'ND_DIGUP_FIRST']
 function seamSnapshot (seam) {
   if (!E2E) return
@@ -195,6 +197,14 @@ async function tunnelAwayBody () {
 }
 
 async function act (method, params: any = {}, again = 0) {
+  const safeNight = stage === 'nightWork' && process.env.ND_NIGHT_WORK_SAFE !== '0'
+  if (safeNight) {
+    if (method === 'dig_down' || method === 'tunnel') params = { ...params, nightWork: true }
+    if (method === 'bucket') params = { ...params, walk: false }
+    if (method === 'mine' && /^(stone|stone_like|cobblestone)$/.test(params.block)) {
+      return act('tunnel', { length: Math.min(8, Math.max(1, Math.ceil((params.count || 2) / 2))), torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 90 })
+    }
+  }
   // blaze — сам ответ на ифритов у спавнера (бой ведёт навык, тактика его не перебивает ниже уровня 3): прерывание
   // подхода тактикой не повод уходить из боя (s1-post02 06.10: «спавнер в 24 бл. — бой отсюда», а blaze не звался). ne_burrow —
   // уход в толщу, когда FR кончилась у спавнера (s1-post33: «закапываюсь» бросал STRATEGY_INTERRUPTED, смерть через секунды).
@@ -205,11 +215,12 @@ async function act (method, params: any = {}, again = 0) {
   // начинаю — назад в главный цикл, там ночь идёт под землёй (nightHold). cl-m 14.10: MineIron/вода в болоте ещё 2 мин после
   // темноты, хп 20 → 1 и смерть утром.
   if (sit.surface && (/^(goto|explore|loot|mine|structure)$/.test(method) || (method === 'fight' && /^(food|resource)$/.test(params.purpose || ''))) &&
-      stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && !(stage === 'cast' && castNear() && method !== 'explore') && nightHold()) {
+      stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && !(/^(cast|nightWork)$/.test(stage) && castNear() && method !== 'explore') && nightHold()) {
     throw Object.assign(new Error(`ночь, брони нет — наверху ${method} не начинаю, работа под землёй`), { strategyInterrupted: true })
   }
   // Вход своей лестницы с поверхности: наверх потом — ею, без копки нового колодца (cl-q 14.10: подъём столбом с y 16 съел
   // последнюю кирку, 8 мин рукой сквозь камень).
+  if (/^(goto|explore|mine|loot|structure)$/.test(method)) await earlyShield()
   if (method === 'dig_down' && params.mode === 'stairs' && sit.surface && state.pos && dim() === 'overworld') stairEntrance = { x: Math.floor(state.pos.x), y: Math.floor(state.pos.y), z: Math.floor(state.pos.z), dim: dim() }
   // Блок под водой (вода прямо над ним) — не цель: подход вплавь, тактика всплывает и рвёт добычу, этап зовёт её снова
   // (cl-o/cl-q 14.10: камень и железо со дна озера — круги «из воды на берег» по 20+ мин).
@@ -286,6 +297,7 @@ async function act (method, params: any = {}, again = 0) {
   if (method === 'stronghold' && params.mode === 'fill' && params.enter) seamSnapshot('before-end')
   let r
   const dimBefore = state.dimension || 'overworld'
+  const pearlTrial = method === 'pearls' && process.env.ND_EM_PRICE_RECEIPTS === '1' ? { at: gameClock.now(), pearls: have('ender_pearl') } : null
   const tel = telemetry.on() ? { t0: gameClock.now(), wallT0: gameClock.wall.now(), before: telemetry.snapshot(state, sit) } : null
   try {
     r = await call(method, params)
@@ -295,10 +307,19 @@ async function act (method, params: any = {}, again = 0) {
     return { status: 'failed', error: e.message, detail: {} }
   }
   acceptResult(r)
+  if (pearlTrial) {
+    pearlTrips.seconds += Math.max(0, gameClock.now() - pearlTrial.at) / 1000
+    if (!died && (state.health ?? 0) > 0 && dimBefore === 'the_nether' && dim() === 'the_nether') {
+      pearlTrips.pearls += Math.max(0, have('ender_pearl') - pearlTrial.pearls)
+      if (Number(r.detail?.seenEndermen) > 0) pearlTrips.zero = 0
+      else if (r.status === 'done' && r.detail?.seenEndermen === 0 && r.detail?.prepared !== false) pearlTrips.zero++
+    }
+  }
   const eatFailure = method === 'eat' && r.detail?.ate === null
     ? Object.fromEntries(['error', 'during', 'held', 'offHand', 'windowOpen', 'busy', 'tried', 'food', 'note']
       .filter(key => Object.prototype.hasOwnProperty.call(r.detail, key)).map(key => [key, r.detail[key]])) : null
   if (method === 'fortress' && dim() === 'the_nether' && Number.isFinite(r.detail?.explored)) netherExplored = Math.max(netherExplored, r.detail.explored)
+  if (method === 'fortress' && dim() === 'the_nether' && Number.isFinite(r.detail?.frontierRevision)) netherViewRevision = Math.max(netherViewRevision, r.detail.frontierRevision)
   if (tel) {
     const after = telemetry.snapshot(state, sit)
     const barter = method === 'bastion' ? {
@@ -359,9 +380,9 @@ async function act (method, params: any = {}, again = 0) {
       return routeMod.digRefuse(hp, !!(have(FOOD) || have(RAW)) || (state.food ?? 20) >= 18).refuse
     }
     if (routeSafe && process.env.ND_ROUTE_RISK !== '0' && !died && (state.health ?? 20) < 13 && (state.food ?? 20) < 18 && have(FOOD)) { await act('eat', {}); await refresh() }
-    if (!died && !resting && !fighting && hpLow()) await rest()
+    if (!safeNight && !died && !resting && !fighting && hpLow()) await rest()
     if (died && stage !== '-') throw new Error('умер — этап прерван, следующий шаг выбираю после возрождения')
-    if (!strategyExecuting && !died && r.status !== 'done' && !hpLow() && !NO_REPEAT.has(method) && again < 2 && (state.dimension || 'overworld') === dimBefore) {
+    if (!strategyExecuting && stage !== 'nightWork' && !died && r.status !== 'done' && !hpLow() && !NO_REPEAT.has(method) && again < 2 && (state.dimension || 'overworld') === dimBefore) {
       log(`повторяю шаг после отхода: ${method}`)
       return act(method, params, again + 1)
     }
@@ -373,18 +394,22 @@ async function act (method, params: any = {}, again = 0) {
     const seenLava = (Array.isArray(r.detail.blocks) ? r.detail.blocks : []).find(b => b && b.name === 'lava') ||
       (r.detail.found === 'lava' && r.detail.at ? { nearest: r.detail.at } : null) ||
       (dugInto ? { nearest: dugInto } : null)
-    const closer = q => OW_DEEP && !!known.lava && !!state.pos && Math.hypot(q.x - state.pos.x, (q.y ?? y()) - state.pos.y, q.z - state.pos.z) + 8 <
-      Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? y()) - state.pos.y, known.lava.z - state.pos.z)
+    const seenIsSource = method === 'explore' && params.lavaSource === true
+    const closer = q => !!known.lava && !!state.pos && (process.env.ND_OW_KIT_LAVA !== '0'
+      ? lavaApproachSeconds(q, seenIsSource) < lavaApproachSeconds(known.lava, lavaSourceKnown)
+      : OW_DEEP && Math.hypot(q.x - state.pos.x, (q.y ?? y()) - state.pos.y, q.z - state.pos.z) + 8 <
+        Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? y()) - state.pos.y, known.lava.z - state.pos.z))
     if (seenLava && seenLava.nearest && (!known.lava || closer(seenLava.nearest)) && !lavaBad(seenLava.nearest)) {
       known.lava = seenLava.nearest
+      if (process.env.ND_OW_KIT_LAVA !== '0') lavaSourceKnown = seenIsSource
       log(`видел лаву на ${known.lava.x},${known.lava.y},${known.lava.z} — запомнил`)
       try { await call('remember', { kind: 'лава', text: `лава на ${known.lava.x},${known.lava.y},${known.lava.z}`, place: 'лава' }) } catch {}
     }
-    if (OW_DEEP && !known.portal && !have('water_bucket')) {
+    if ((OW_DEEP || process.env.ND_OW_KIT_WATER !== '0') && !known.portal) {
       const wet = /вода (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String(r.detail.stopped || ''))
       const seenW = (Array.isArray(r.detail.blocks) ? r.detail.blocks : []).find(b => b && b.name === 'water' && b.nearest)
       const q = wet ? { x: +wet[1], y: +wet[2], z: +wet[3] } : seenW ? seenW.nearest : null
-      if (q && state.pos && y() < 60 && (!knownWater || Math.hypot(q.x - state.pos.x, q.y - state.pos.y, q.z - state.pos.z) < Math.hypot(knownWater.x - state.pos.x, knownWater.y - state.pos.y, knownWater.z - state.pos.z))) knownWater = q
+      if (q && state.pos && !have('water_bucket') && (y() < 60 || process.env.ND_OW_KIT_WATER !== '0') && (!knownWater || Math.hypot(q.x - state.pos.x, q.y - state.pos.y, q.z - state.pos.z) < Math.hypot(knownWater.x - state.pos.x, knownWater.y - state.pos.y, knownWater.z - state.pos.z))) knownWater = q
     }
   }
   if (!died && !fighting && (r.events || []).some(e => /^(buried|digging_out|still_buried)$/.test(e.type))) {
@@ -399,9 +424,9 @@ async function act (method, params: any = {}, again = 0) {
     fighting = true
     try { await answerThreat(hurtCause(r), hurtSource(r)) } finally { fighting = false }
   }
-  if (!resting && !fighting && method !== 'wait' && (state.health ?? 20) < 10 && !died &&
+  if (!safeNight && !resting && !fighting && method !== 'wait' && (state.health ?? 20) < 10 && !died &&
     (gameClock.now() > restIdleUntil || have(FOOD) || have(RAW))) await rest()
-  if (!died && !resting && !fighting && !hunting && stage !== '-' && stage !== 'food' && weakAndHungry()) {
+  if (!safeNight && !died && !resting && !fighting && !hunting && stage !== '-' && stage !== 'food' && weakAndHungry()) {
     throw new Error(`хп ${Math.round(state.health ?? 0)} и еды нет — бросаю «${stage}», сначала еда`)
   }
   return r
@@ -704,13 +729,15 @@ async function rest (minHp = 16) {
     if ((process.env.ND_NE_STAY === '1' || portalFar) && dim() === 'the_nether' && (have(FOOD) || (state.food ?? 0) >= 18)) {
       const bw = await act('ne_burrow', { why: 'лечиться в Аду' })
       await refresh()
+      if (process.env.ND_HEAL_WORLD_STATE === '1' && (died || (state.health ?? 0) >= minHp)) return
       const bd = bw.detail || {}
       if (!died && dim() === 'the_nether' && (bd.ok || /уже в своём штреке/.test(bd.why || ''))) {
         log(`в Аду мало хп — лечусь в толще${portalFar ? ' (портал далеко)' : ' (ND_NE_STAY)'}`)
         for (let i = 0; i < 12 && (state.health ?? 20) < minHp && !died; i++) {
           if ((state.food ?? 20) < 20 && (have(FOOD) || have(RAW))) await act('eat')
+          if (process.env.ND_HEAL_WORLD_STATE === '1' && ((state.health ?? 0) >= minHp || (state.food ?? 20) < 18)) break
           const w = await act('wait', { seconds: 10 })
-          if (w.by && w.by.type === 'damage') break
+          if (w.status === 'interrupted' || (w.by && w.by.type === 'damage')) break
         }
         return
       }
@@ -727,6 +754,7 @@ async function rest (minHp = 16) {
       if (await returnFromNether()) {
         if ((have(FOOD) || have(RAW)) && (state.food ?? 20) < 20) await act('eat')
         for (let i = 0; i < 12 && (state.health ?? 20) < minHp && !died; i++) {
+          if (process.env.ND_HEAL_WORLD_STATE === '1' && (state.food ?? 20) < 18) break
           const w = await act('wait', { seconds: 10 })
           if (w.by && w.by.type === 'damage') break
           if ((state.food ?? 20) < 18 && (have(FOOD) || have(RAW))) await act('eat')
@@ -822,8 +850,11 @@ const LOGS = /_(log|stem)$/
 const COBBLE = /^(cobblestone|cobbled_deepslate|blackstone)$/
 const RAW = /^(beef|porkchop|mutton|chicken|rabbit|cod|salmon)$/
 const FOOD = /^(cooked_[a-z_]+|bread|baked_potato|golden_carrot|apple|carrot|sweet_berries|melon_slice|pumpkin_pie|golden_apple|mushroom_stew|beetroot_soup|rabbit_stew|dried_kelp|cookie)$/
-const { foodUnits: unitsOfFood } = require(path.join(__dirname, 'src', 'play-policy'))
+const { foodUnits: unitsOfFood, foodPoints: pointsOfFood } = require(path.join(__dirname, 'src', 'play-policy'))
 const foodUnits = () => unitsOfFood(state.inventory)
+// Запас на Ад — по сытости, а не по числу штук: жареная свинина 8, а порция — 6 (kd2-7-102 16.10: портал горит на 3-й мин,
+// 5 свиных котлет = 40 сытости, «еды 5 из 6» — охота за 90 бл. и 25 мин без входа). ND_NETHER_FOOD_POINTS=0 — прежний счёт штук.
+const netherFoodHave = () => process.env.ND_NETHER_FOOD_POINTS === '0' ? foodUnits() : Math.max(foodUnits(), Math.round(pointsOfFood(state.inventory) / 6 * 100) / 100)
 const PICK_STONE = /^(stone|iron|diamond|netherite)_pickaxe$/
 const PICK_IRON = /^(iron|diamond|netherite)_pickaxe$/
 const PICK_DIAMOND = /^(diamond|netherite)_pickaxe$/
@@ -868,7 +899,8 @@ async function readMemory () {
     known.spawnBed = places['точка возрождения'] || null
     // Озеро, у которого рама не встала (lavaBadSites), память не возвращает: g1-4 14.10 — «4 отказа — ищу другое озеро» и
     // через минуту то же место из памяти, 14 заходов за 100 мин.
-    if (!known.lava && places['лава'] && (places['лава'].dimension || 'overworld') === 'overworld' && !lavaBad(places['лава'])) known.lava = places['лава']
+    const lava = lavaMemoryPlace(places['лава'])
+    if (!known.lava && lava && (lava.dimension || 'overworld') === 'overworld' && !lavaBad(lava)) known.lava = lava
   } catch {}
 }
 
@@ -1305,6 +1337,7 @@ async function ensureTable () {
     if (have('crafting_table')) return true
   }
   if (have(/_planks$/) < 4) { const p = planksFor(); if (p) await act('craft', { item: p, count: 4 }) }
+  if (have(/_planks$/) < 4) return false
   for (let k = 0; k < 3 && !have('crafting_table'); k++) {
     const r = await act('craft', { item: 'crafting_table', count: 1 })
     if (r.status === 'interrupted' || died || strategyInterrupted) return false
@@ -1317,7 +1350,8 @@ async function ensureTable () {
 
 async function craft (item, count = 1) {
   await unclutter()
-  if (TABLE_ITEMS.test(item) && item !== 'crafting_table') { await refresh(); if (!(await ensureTable())) return false }
+  const handIgniter = item === 'flint_and_steel' && process.env.ND_OW_IRON_HAND_IGNITER !== '0'
+  if (TABLE_ITEMS.test(item) && item !== 'crafting_table' && !handIgniter) { await refresh(); if (!(await ensureTable())) return false }
   let r = await act('craft', { item, count })
   if (r.status !== 'done' && /не прибавилось|не открылся|автопилот сейчас|нужен верстак|missing ingredient/.test(String(r.error || ''))) {
     await sleep(1500)
@@ -1344,6 +1378,7 @@ async function craft (item, count = 1) {
 async function sticks (n) {
   if (have('stick') >= n) return
   if (have(/_planks$/) < 2) { const p = planksFor(); if (p) await craft(p, 4) }
+  if (have(/_planks$/) < 2) return
   await craft('stick', Math.max(4, n - have('stick')))
 }
 
@@ -1452,6 +1487,7 @@ async function ensurePick () {
   if (!have('crafting_table') && have(/_planks$/) >= 4) await craft('crafting_table')
   if (have('crafting_table')) {
     await sticks(2)
+    if (have('stick') < 2) return false
     if (have(COBBLE) >= 3 && await craft('stone_pickaxe')) return true
     if (have(/_planks$/) >= 3 && await craft('wooden_pickaxe')) return true
   }
@@ -1466,7 +1502,7 @@ function cavesFoes (o) {
   return f.length ? f.map(e => e.name).slice(0, 4).join(', ') : ''
 }
 let descendLava = null
-async function descend (toY, { stopAtLava = false, short = false } = {}) {
+async function descend (toY, { stopAtLava = false, short = false, wetCluster = false, oreRemaining = null } = {}) {
   const dirs = ['north', 'east', 'south', 'west']
   descendLava = null
   // short — короткий спуск маршрута к лаве (≤ 24 бл.): запас дерева на кирки под землёй не нужен (s8-r2-9: reserve → lumber 6
@@ -1482,14 +1518,23 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
   }
   let surfaceWet = 0
   const wetStops = []
+  // Retreat from the observed wet cluster rather than orbiting its last edge.
+  const wetOrigin = last => wetCluster && process.env.ND_OW_IRON_WET !== '0' && wetStops.length ? {
+    x: wetStops.reduce((sum, p) => sum + p.x, 0) / wetStops.length,
+    z: wetStops.reduce((sum, p) => sum + p.z, 0) / wetStops.length
+  } : last
   let caveSkips = 0
-  for (let i = 0; i < 8 && y() > toY + 2; i++) {
+  for (let i = 0; i < (oreRemaining ? 16 : 8) && y() > toY + 2 && (!oreRemaining || oreRemaining() > 0); i++) {
     await recoverGuard()
     if (died) return
     await unclutter()
     await spares(Math.min(260, (y() - toY) * 2 + 60))
     if (!(await ensurePick())) { log('кирки нет и не из чего — вниз не иду'); return }
-    let stairsDepth = 24
+    if (oreRemaining) {
+      await mineSeenAll('iron_ore,deepslate_iron_ore', 24, oreRemaining)
+      if (died || strategyInterrupted || oreRemaining() <= 0) return
+    }
+    let stairsDepth = oreRemaining ? 12 : 24
     if (OW_DEEP && OW_SHAFT) {
       const shTop = state.pos ? { x: Math.floor(state.pos.x), y: Math.floor(state.pos.y), z: Math.floor(state.pos.z) } : null
       const shSurface = sit.surface
@@ -1547,7 +1592,7 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
             const g = await act('goto', { x: dry.x, y: dry.y, z: dry.z, range: 2, timeoutSeconds: 60, surface: 'strict' })
             if (g && g.status === 'done') { i--; continue }
           }
-          const away = await awayFrom({ x: +shWet[1], z: +shWet[3] }, 24 + 12 * surfaceWet).catch(() => null)
+          const away = await awayFrom(wetOrigin({ x: +shWet[1], z: +shWet[3] }), 24 + 12 * surfaceWet).catch(() => null)
           if (away && away.status === 'done') { i--; continue }
         }
       }
@@ -1586,7 +1631,7 @@ async function descend (toY, { stopAtLava = false, short = false } = {}) {
         if (wetStops.length >= 5 || (sit.foes ?? 0) > 0 || toDawn < risk) throw new Error('ночь, вода под дёрном — вниз здесь не выйдет, до рассвета в укрытии')
         log(`ночь: вода под дёрном — отхожу на 24 бл. (≈ ${risk} с риска поверху против ${Math.round(toDawn)} с до рассвета)`)
       }
-      const away = await awayFrom(wet ? { x: +wet[1], z: +wet[3] } : null, 24)
+      const away = await awayFrom(wetOrigin(wet ? { x: +wet[1], z: +wet[3] } : null), 24)
       if (away.status !== 'done') throw new Error('не смог отойти от воды — спуск здесь прекращаю')
       continue
     }
@@ -1712,20 +1757,73 @@ async function toSurface (tries = 4, deadline = Infinity) {
 }
 
 const portalBuckets = () => process.env.ND_ROUTE_ONE === '0' ? 2 : 1
+let castKitSupplyFailure = ''
 // A carried second bucket costs no extra iron; it can rescue a shore the one-bucket geometry cannot use.
 async function castForKit (params) {
   const one = portalBuckets() === 1
   const r = await act('portal', { ...params, ...(one ? { one: true, hint: undefined } : {}) })
+  if (process.env.ND_OW_KIT_FRAME !== '0' && one && r.status !== 'interrupted' && !died && !strategyInterrupted &&
+      /места на берегу нет|лавы со столба не достать|лавы в досягаемости нет/.test(String(r.detail?.stopped || ''))) {
+    const supplyKey = () => JSON.stringify([state.pos, have('iron_ingot'), have('raw_iron'), have(/bucket$/), r.detail?.site, r.detail?.stopped])
+    if (have(/bucket$/) < 2 && castKitSupplyFailure !== supplyKey()) {
+      const s = await intelligence.environment.observe()
+      const scout = intelligence.registry.get('ScoutLava'), iron = intelligence.registry.get('MineIron')
+      const bars = Math.max(0, 3 - have('iron_ingot')), ore = Math.max(0, bars - have('raw_iron'))
+      const second = 20 + bars * 10 + ore * structureValue.SECONDS.iron + (ore ? iron.estimateRisk(s) * 3600 : 0)
+      const top = stairEntrance?.y ?? surfaceShaft?.top ?? y()
+      // shortcut: shaft receipts give about 2 s/block; replace with measured route ETA after paired scenes.
+      const exit = sit.surface ? 0 : Math.max(0, top - y()) * 2
+      const search = scout.estimateCost(s) / 20 + scout.estimateRisk(s) * 3600 + exit
+      log(`литьё: второе ведро ≈ ${Math.round(second)} с, новая разведка ≈ ${Math.round(search)} с`)
+      if (second < search) {
+        if (ore) {
+          const mined = await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: ore, radius: 16, dry: true, timeoutSeconds: 45 })
+          if (mined.status === 'interrupted' || died || strategyInterrupted) return mined
+        }
+        if (have('iron_ingot') + have('raw_iron') >= 3 && have('iron_ingot') < 3) await smeltAll('raw_iron', 'iron_ingot', { max: 3 - have('iron_ingot') })
+        if (died || strategyInterrupted) return r
+        if (have('iron_ingot') >= 3) await craft('bucket')
+        if (died || strategyInterrupted) return r
+        if (have(/bucket$/) < 2) castKitSupplyFailure = supplyKey()
+      }
+    }
+    if (have(/bucket$/) >= 2) return act('portal', { ...params, one: undefined, hint: undefined })
+    return r
+  }
   if (one && r.status !== 'interrupted' && !died && have(/bucket$/) >= 2 && /места на берегу нет/.test(String(r.detail?.stopped || ''))) {
     log('литьё: берег для одного ведра не подходит, два ведра уже с собой — другая раскладка')
     return act('portal', { ...params, hint: undefined, windows: false })
   }
   return r
 }
+let earlyShieldBusy = false
+let earlyShieldFailed = null
+async function earlyShield () {
+  if (process.env.ND_OW_SHIELD === '0' || earlyShieldBusy || died || fighting || resting || strategyInterrupted || state.connected === false || state.playPolicy?.mode === 'free' || dim() !== 'overworld' || have('iron_ingot') < 1 || shieldOn()) return false
+  const quote = () => require(path.join(__dirname, 'src', 'ow-shield')).price({ inventory: state.inventory, shield: shieldOn(), hp: state.health ?? 20,
+    night: !!sit.night, surface: sit.surface !== false, kitIron: 3 * Math.max(0, portalBuckets() - have(/bucket$/)) + (lighter() ? 0 : 1),
+    exposedDps: (sit.fight?.order || []).reduce((n, f) => n + (f.dps || 0), 0) })
+  if (!quote().take) return false
+  await refresh(); await sense()
+  const p = quote(), cause = JSON.stringify([state.pos && [Math.floor(state.pos.x), Math.floor(state.pos.y), Math.floor(state.pos.z)],
+    Object.entries(state.inventory || {}).sort(([a], [b]) => a.localeCompare(b)), state.offHand, sit.fight?.order?.map(f => [f.name, Math.floor(f.dist)])])
+  if (!p.take || earlyShieldFailed === cause) return false
+  earlyShieldBusy = true
+  try {
+    await ensureTable()
+    if (have(/_planks$/) < 6) { const pl = planksFor(); if (pl) await craft(pl, 4 * Math.ceil((6 - have(/_planks$/)) / 4)) }
+    await refresh()
+    log(`ранний щит: цена ${Math.round(p.costS)} с, ожидаемая потеря без него +${Math.round(p.avoidedS)} с`)
+    if (have(/_planks$/) >= 6 && await craft('shield')) { await act('armor'); earlyShieldFailed = null; return true }
+    earlyShieldFailed = cause
+    return false
+  } catch (e) { earlyShieldFailed = cause; throw e } finally { earlyShieldBusy = false }
+}
 async function spendIron () {
   await refresh()
   if (have('iron_block')) await craft('iron_ingot', 9 * have('iron_block'))
   if (have('iron_nugget') >= 9) await craft('iron_ingot', Math.floor(have('iron_nugget') / 9))
+  await earlyShield()
   const noShield = () => !have('shield') && !(state.offHand && /shield/.test(JSON.stringify(state.offHand)))
   const plan = known.portal ? [
     ['flint_and_steel', 1, () => !lighter() && have('flint') > 0],
@@ -1793,7 +1891,9 @@ function gearWorth (item, { inBag = false } = {}) {
   const rate = pts => C.DEATHS_PER_H_AT8 * (1 - armorCut(pts)) / (1 - armorCut(8))
   const d0 = rate(pts0) * C.NETHER_H
   const d1 = rate(pts1) * C.NETHER_H
-  const gain = Math.max(0, d0 - d1) * C.DEATH_COST_MIN
+  const firstDeath = process.env.ND_ARMOR_FIRST_DEATH === '1'
+  // shortcut: constant hazard is an A/B assumption; replace it with measured first-death probabilities when available.
+  const gain = Math.max(0, firstDeath ? Math.exp(-d1) - Math.exp(-d0) : d0 - d1) * C.DEATH_COST_MIN
   const need = ARMOR_COST[item] || 0
   const gold = /^golden_/.test(item)
   const haveBars = gold ? have('gold_ingot') + have('raw_gold') : have('iron_ingot') + have('raw_iron')
@@ -1801,10 +1901,13 @@ function gearWorth (item, { inBag = false } = {}) {
   const cost = missing ? C.TRIP_MIN + missing * C.MIN_PER_INGOT : C.CRAFT_MIN
   const take = pts1 > pts0 && gain > cost
   const f = x => (Math.round(x * 10) / 10).toString()
+  const exposure = firstDeath
+    ? `риск первой смерти в Аду за ${f(C.NETHER_H * 60)} мин: ${f((1 - Math.exp(-d0)) * 100)}% → ${f((1 - Math.exp(-d1)) * 100)}%`
+    : `смертей в Аду за ${f(C.NETHER_H * 60)} мин: ${f(d0)} → ${f(d1)}`
   return {
     take, cost, gain, missing,
     line: `броня по расчёту: ${item} — ${missing ? `поход за ${missing} слитк. ≈ ${f(cost)} мин` : `из рюкзака ≈ ${f(cost)} мин`} против пользы ${f(gain)} мин ` +
-      `(смертей в Аду за ${f(C.NETHER_H * 60)} мин: ${f(d0)} → ${f(d1)} при броне ${pts0} → ${pts1}, смерть ${C.DEATH_COST_MIN} мин) — ${take ? 'беру' : 'не беру'}`
+      `(${exposure} при броне ${pts0} → ${pts1}, смерть ${C.DEATH_COST_MIN} мин) — ${take ? 'беру' : 'не беру'}`
   }
 }
 function worn (slot) {
@@ -1820,7 +1923,8 @@ const fed = (items, level) => have(FOOD) + ((have('furnace') || have(COBBLE) >= 
 // Набор литья готов и лава видена рядом — портал важнее ночной копки (cl-h 14.10: в 24.5 бл. от лавы ушёл копать, погиб внизу).
 // Только проверенный источник (обзор вдаль видел годное озеро): лава из обзора 64 бывает текущей, ночью к ней шёл и искал
 // источник разведкой — смерть от скелета (cl-s 14.10, 52-я мин).
-const castNear = () => !!known.lava && lavaSourceKnown && !!state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96 &&
+const castNear = () => !!known.lava && !!state.pos && ((lavaSourceKnown && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96) ||
+  (process.env.ND_OW_KIT_LAVA !== '0' && !sit.surface && Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? y()) - y(), known.lava.z - state.pos.z) <= 12)) &&
   have('water_bucket') > 0 && READY.cast()
 // Ночь спидрана до портала без брони: поверху — смерть (cl-a…cl-k 14.10: 15 смертей из 22 прогонов, почти все ночью — охота,
 // поиск воды, берег). Есть кирка и дерево на кирки — ночь идёт работой под землёй (главный цикл), наземные этапы — с рассветом.
@@ -1834,7 +1938,7 @@ const castNear = () => !!known.lava && lavaSourceKnown && !!state.pos && Math.hy
 // И после литья портала: сборы (еда, кровать) ночью поверху — смерть от скелета на 173-й мин (cl-af 14.10). С порталом ночь
 // уходит в Ад, если готов, иначе — та же нора/коробка/работа внизу.
 const nightHold = () => dim() === 'overworld' && (!!sit.night || !!sit.dusk) && state.playPolicy?.mode === 'speedrun' &&
-  armorPointsNow() < 15 && have(/_pickaxe$/) > 0 && process.env.ND_NIGHT_DIG !== '0'
+  armorPointsNow() < 15 && (have(/_pickaxe$/) > 0 || (process.env.ND_NIGHT_WORK !== '0' && nightHeld && !sit.surface)) && process.env.ND_NIGHT_DIG !== '0'
 // Копать ночью вниз — только с деревом на сменные кирки: каменной хватает на один спуск лестницей (131 удар), без палок она
 // ломалась внизу, подъём рукой сквозь камень — 8 мин (cl-q 14.10). Без дерева ночь — в норе или коробке.
 const nightDigWood = () => have(LOGS) > 0 || have(/_planks$/) >= 2 || have('stick') >= 2
@@ -1854,19 +1958,21 @@ const READY = {
   obsidian: () => have(PICK_DIAMOND) > 0 && have(/bucket$/) > 0,
   portal: () => have('obsidian') >= 10,
   prep: () => have(PICK_STONE) > 0,
-  nether: () => have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 && foodUnits() >= netherFoodNeed(),
+  nether: () => have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 && (dim() === 'the_nether' || netherFoodHave() >= netherFoodNeed()),
   pearls: () => (have(PICK_IRON) > 0 || have(/^(iron|diamond|netherite)_sword$/) > 0),
   bastion: () => (have(PICK_IRON) > 0 || (!ironChestTried && dim() === 'the_nether' && have('iron_ingot') + have('raw_iron') + have('iron_nugget') / 9 >= 1)) && (foodUnits() >= 6 || (state.food ?? 0) >= 18)
 }
 function netherFoodNeed () {
   const base = rodsNow() >= 5 ? 3 : 6
   if (process.env.ND_ROUTE === '1' && process.env.ND_ROUTE_FOOD2 !== '0') return Math.min(base, 2)
-  if (sit.night && !sit.surface && known.portal && portalFar() < 48) return Math.min(base, 3)
+  // Ночь у горящего портала: в Аду ночи нет, поверху — тоже 3 порции (fp1-s13-1 16.10: портал на 29 мин, 3 свиных котлеты,
+  // поверху «еды мало» — 17 мин ночных штреков вместо входа). ND_NIGHT_PORTAL_SURFACE=0 — прежнее «только снизу».
+  if (sit.night && (!sit.surface || process.env.ND_NIGHT_PORTAL_SURFACE !== '0') && known.portal && portalFar() < 48) return Math.min(base, 3)
   return base
 }
 const netherLack = () => [
   have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 ? '' : 'кирки',
-  foodUnits() >= netherFoodNeed() ? '' : `еды (${foodUnits()} из ${netherFoodNeed()})`
+  netherFoodHave() >= netherFoodNeed() ? '' : `еды (${netherFoodHave()} из ${netherFoodNeed()})`
 ].filter(Boolean).join(', ') || 'ничего'
 // Огнестойкость (зелье с бартера) снимает огонь ифритов — главный урон без брони (шар 5 + горение): с ней и щитом бой у спавнера
 // не ждёт железной брони из верхнего мира (b0-7-2 14.10: 30 мин за железом, на обратном пути — смерть). Цена боя — в графе (blazeRisk).
@@ -1893,6 +1999,7 @@ const DONE: any = {}
 function defStage (name, needed, run) { STAGES.push({ name, needed, run, ready: READY[name] || (() => true), defer: DEFER[name] || (() => false), done: () => (DONE[name] ? DONE[name]() : !needed()) }) }
 
 let netherExplored = 0
+let netherViewRevision = 0
 function stageProgress (name) {
   const resources = {
     wood: /_log$|_stem$|_planks$|_pickaxe$/,
@@ -1916,7 +2023,7 @@ function stageProgress (name) {
   if (re) for (const [item, count] of Object.entries(state.inventory || {})) if (re.test(item)) result[item] = count
   for (const key of ['portal', 'fortress', 'stronghold', 'endPortal', 'dragonWon']) result[`known:${key}`] = known[key] ? 1 : 0
   if (dim() === 'the_end') result.end = 1
-  if (name === 'nether') result.explored = netherExplored
+  if (name === 'nether') { result.explored = netherExplored; result.fortressView = netherViewRevision }
   return result
 }
 
@@ -2037,7 +2144,10 @@ const FOOD_STOCK = 8
 let foodHuntEmpty = 0
 let foodSpentMs = 0
 const FOOD_CAP_MS = 180000
-defStage('food', () => foodUnits() < FOOD_STOCK, async () => {
+// До первого Ада запас уже оценён netherFoodNeed; шерсть — цель endkit, а не условие входа.
+const entrySupplies = () => process.env.ND_ENTRY_SUPPLIES === '1' && dim() === 'overworld' && rodsNow() < 7 && wantBeds === 1
+const foodShort = () => Math.max(0, entrySupplies() && known.portal ? netherFoodNeed() - netherFoodHave() : FOOD_STOCK - foodUnits())
+defStage('food', () => foodShort() > 0, async () => {
   hunting = true
   const before = foodUnits()
   const t0 = gameClock.now()
@@ -2049,10 +2159,10 @@ async function foodRun () {
   await cook()
   await makeBed()
   const woolMax = () => Math.max(0, ...Object.entries(state.inventory || {}).filter(([k]) => /_wool$/.test(k)).map(([, v]) => Number(v)))
-  const wantWool = () => (huntWool || !have(/_bed$/)) && have(/_bed$/) + Math.floor(woolMax() / 3) < wantBeds
-  if (foodUnits() >= FOOD_STOCK && !wantWool()) return
+  const wantWool = () => !entrySupplies() && (huntWool || !have(/_bed$/)) && have(/_bed$/) + Math.floor(woolMax() / 3) < wantBeds
+  if (!foodShort() && !wantWool()) return
   await sense()
-  if (OW_DEEP && known.portal && !sit.surface && y() < 40 && foodUnits() >= netherFoodNeed()) { log(`еды ${foodUnits()} — на вход в Ад хватает, с глубины за запасом не поднимаюсь`); return }
+  if (OW_DEEP && known.portal && !sit.surface && y() < 40 && netherFoodHave() >= netherFoodNeed()) { log(`еды ${netherFoodHave()} — на вход в Ад хватает, с глубины за запасом не поднимаюсь`); return }
   // В спидране охоту уже выбрал граф по цене; старый общий бюджет не отменяет его шаг без действий.
   const deepEarly = OW_DEEP && !known.portal && state.playPolicy?.mode !== 'speedrun'
   if (deepEarly && /frozen|peaks|ice_spikes|snowy_slopes|grove/.test(String(state.biome || ''))) { log(`охота: ${state.biome} — рыхлый снег, звери редки; без охоты`); return }
@@ -2065,7 +2175,7 @@ async function foodRun () {
   let blocked = false
   let climbing = false
   let searchedMelons = false
-  for (let i = 0; i < 4 && gameClock.now() < deadline && (foodUnits() < FOOD_STOCK || wantWool()); i++) {
+  for (let i = 0; i < 4 && gameClock.now() < deadline && (foodShort() > 0 || wantWool()); i++) {
     await sense()
     if (nightWork()) break
     await nightGuard()
@@ -2075,27 +2185,27 @@ async function foodRun () {
     const o = await act('observe', { radius: 64 })
     const ents = (o.detail && o.detail.entities) || []
     const melons = (Array.isArray(o.detail?.blocks) ? o.detail.blocks : []).some(b => b.name === 'melon')
-    if (foodUnits() < FOOD_STOCK && (melons || (!searchedMelons && /jungle/.test(state.biome || '')))) {
+    if (foodShort() > 0 && (melons || (!searchedMelons && /jungle/.test(state.biome || '')))) {
       searchedMelons = true
-      await act('mine', { block: 'melon', count: Math.min(4, Math.ceil((FOOD_STOCK - foodUnits()) / 1.5)),
+      await act('mine', { block: 'melon', count: Math.min(4, Math.ceil(foodShort() / 1.5)),
         radius: 64, timeoutSeconds: 30 })
       if (died) return
-      if (foodUnits() >= FOOD_STOCK && !wantWool()) break
+      if (!foodShort() && !wantWool()) break
     }
     // Visible water alone is no attacker. Actual drowning/hostiles remain handled by act and the body's reflexes.
     const myY = y()
     const animals = ents.filter(e => /^(cow|pig|sheep|chicken|rabbit|mooshroom)$/.test(String(e.name || '').toLowerCase()) &&
       !(e.pos && Math.abs(e.pos.y - myY) > 6))
-    const woolFor = have(/_bed$/) + Math.floor(woolMax() / 3) < Math.max(2, wantBeds)
-    const foodFull = foodUnits() >= FOOD_STOCK
+    const woolFor = !entrySupplies() && have(/_bed$/) + Math.floor(woolMax() / 3) < Math.max(2, wantBeds)
+    const foodFull = !foodShort()
     const prey = (woolFor && animals.find(e => /^sheep$/i.test(e.name))) || (foodFull ? null : animals[0])
     if (prey) {
       const kind = String(prey.name).toLowerCase()
       if ((prey.dist ?? 0) > 20 && prey.pos) await act('goto', { x: prey.pos.x, z: prey.pos.z, range: 8, timeoutSeconds: 45, surface: 'strict' })
-      for (let k = 0; k < 4 && gameClock.now() < deadline && (foodUnits() < FOOD_STOCK || (kind === 'sheep' && wantWool())) && !died; k++) {
+      for (let k = 0; k < 4 && gameClock.now() < deadline && (foodShort() > 0 || (kind === 'sheep' && wantWool())) && !died; k++) {
         const f = await act('fight', { target: kind, timeoutSeconds: 40, retreatAtHealth: 0,
-          purpose: kind === 'sheep' && wantWool() && foodUnits() >= FOOD_STOCK ? 'resource' : 'food',
-          ...(kind === 'sheep' && wantWool() && foodUnits() >= FOOD_STOCK ? { resourceGoal: { item: 'wool', count: have(/_wool$/) + wantBeds * 3 - woolMax() } } : {}) })
+          purpose: kind === 'sheep' && wantWool() && !foodShort() ? 'resource' : 'food',
+          ...(kind === 'sheep' && wantWool() && !foodShort() ? { resourceGoal: { item: 'wool', count: have(/_wool$/) + wantBeds * 3 - woolMax() } } : {}) })
         if (f.detail?.stopped) return
         if (f.status !== 'done' || (state.health ?? 20) < 10) break
       }
@@ -2233,10 +2343,15 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
   }
   const ironNow = () => have(/^(raw_iron|iron_ingot)$/) + Math.floor(have('iron_nugget') / 9) + 9 * have('iron_block') + 9 * have('raw_iron_block') +
     (!known.portal ? 3 * Math.min(portalBuckets(), have(/bucket$/)) + (lighter() ? 1 : 0) : 0)
+  const useMemory = process.env.ND_OW_IRON_MEMORY !== '0' && dim() === 'overworld'
   await sense()
   if (weakAndHungry()) { log(`хп ${Math.round(state.health ?? 0)} и еды нет — вниз не иду, сначала охота`); return }
   await cook()
   if ((state.food ?? 20) < 18 && have(FOOD)) await act('eat')
+  if (useMemory) {
+    await mineSeenAll('iron_ore,deepslate_iron_ore', 24, () => want - ironNow())
+    if (died || strategyInterrupted) return
+  }
   if (OW_DEEP && !known.portal && ironNow() < want && sit.surface && !sit.night && dim() === 'overworld') {
     const high = y() > 90
     for (let k = 0; k < (high ? 2 : 1) && ironNow() < want && !died; k++) {
@@ -2278,16 +2393,25 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
       shaftWaterSeen = w ? w.nearest : null
     }
   }
-  if (ironNow() < want && y() > 24) await descend(16)
+  const visibleLegs = process.env.ND_IRON_VISIBLE_LEGS === '1' && !known.portal && dim() === 'overworld'
+  if (ironNow() < want && y() > 24) await descend(16, { wetCluster: dim() === 'overworld',
+    ...(visibleLegs ? { oreRemaining: () => want - ironNow() } : {}) })
   if (died) return
   if (OW_DEEP && OW_HEAR && !known.portal && y() < 40) await listenForLava('низ колодца')
   if (OW_DEEP && ironNow() < want) await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: want - ironNow(), radius: process.env.ND_IRON_WIDE !== '0' ? 24 : 14, timeoutSeconds: 120 })
   if (died) return
   await lightUp()
   const ironDir = n => ['north', 'east', 'south', 'west'][n % 4]
-  for (let i = 0; i < 14 && ironNow() < want; i++) {
+  // Штрек 32 оставлял раннюю виденную руду за радиусом добора 24; между короткими частями — mineSeenAll.
+  const ironLegLength = visibleLegs ? 16 : 32
+  for (let i = 0; i < 14 * 32 / ironLegLength && ironNow() < want; i++) {
     await recoverGuard()
     if (died) return
+    if (useMemory) {
+      await mineSeenAll('iron_ore,deepslate_iron_ore', 24, () => want - ironNow())
+      if (died || strategyInterrupted) return
+      if (ironNow() >= want) break
+    }
     await unclutter()
     await spares()
     await sense()
@@ -2298,18 +2422,19 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
       if (await toSurface()) { await nightGuard(); await lumber(10); await spares(300) }
       break
     }
-    let tdir = ironDir(ironLeg++)
+    // Две части по 16 сохраняют прежний поворот через 32 блока и область поиска.
+    let tdir = ironDir(Math.floor(ironLeg++ * ironLegLength / 32))
     if (state.pos) {
       const here = `${Math.floor(state.pos.x)},${Math.floor(state.pos.z)}`
       for (let k = 0; k < 4 && ironBlocked.has(`${here}:${tdir}`); k++) tdir = ['north', 'east', 'south', 'west'][(['north', 'east', 'south', 'west'].indexOf(tdir) + 1) % 4]
     }
     const tFrom = state.pos ? `${Math.floor(state.pos.x)},${Math.floor(state.pos.z)}` : ''
-    const t = await act('tunnel', { direction: tdir, length: 32, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 300 })
+    const t = await act('tunnel', { direction: tdir, length: ironLegLength, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 300 })
     if (t.detail && t.detail.stopped && !(t.detail.walked > 0)) ironBlocked.add(`${tFrom}:${tdir}`)
     if (await mobInTheWay(t)) continue
     if (OW_DEEP && OW_HEAR && !known.portal) await listenForLava('штрек за железом')
-    await mineSeenAll('iron_ore')
-    await mineSeenAll('deepslate_iron_ore')
+    if (useMemory) await mineSeenAll('iron_ore,deepslate_iron_ore', 24, () => want - ironNow())
+    else { await mineSeenAll('iron_ore'); await mineSeenAll('deepslate_iron_ore') }
     // Портальный набор — железо и кремень: гравий видимый в штреке — сейчас, а не поиском поверху на рассвете (g3-s2-1 14.10:
     // ночь в коробке с 4 железом без кремня, на рассвете гравий и деревня — смерть от зомби).
     if (portalOnly && !have('flint') && !lighter()) await mineSeenAll('gravel', 16)
@@ -2352,9 +2477,14 @@ async function bucketOnTheWay (t) {
   }
 }
 
-async function mineSeenAll (block, maxDist = 24) {
+async function mineSeenAll (block, maxDist = 24, remaining = null) {
   const names = block.split(',').map(s => s.trim())
+  const boundedIron = remaining && process.env.ND_OW_IRON_MEMORY !== '0'
+  const cleared = new Set<string>()
   for (let i = 0; i < 3; i++) {
+    const before = boundedIron ? remaining() : Infinity
+    const count = boundedIron ? Math.min(8, before) : 8
+    if (count <= 0) return
     let spots = []
     try {
       const r: any = await call('mine_seen', { limit: 40 })
@@ -2364,11 +2494,16 @@ async function mineSeenAll (block, maxDist = 24) {
     // оставалась). ND_IRON_WIDE=0 — прежнее.
     const wide = process.env.ND_IRON_WIDE !== '0'
     const levelOk = p => !OW_DEEP || (Math.abs(((p.at && p.at.y) ?? y()) - y()) <= (wide ? 8 : 4) && (p.fromMe ?? 99) <= (wide ? 24 : 16))
-    const s = spots.find(p => names.includes(p.name) && (p.fromMe ?? 99) <= maxDist && levelOk(p) &&
-      (p.why !== 'в прямой видимости' || (p.fromMe ?? 99) <= 5))
+    const s = spots.find(p => !cleared.has(JSON.stringify(p.at)) && names.includes(p.name) && (p.fromMe ?? 99) <= maxDist &&
+      (boundedIron || (levelOk(p) && (p.why !== 'в прямой видимости' || (p.fromMe ?? 99) <= 5))))
     if (!s) return
-    const r = await act('mine_seen', { at: s.at, timeoutSeconds: 120 })
+    const r = await act('mine_seen', { at: s.at, ...(boundedIron ? { count } : {}), timeoutSeconds: 120 })
     if (r.status !== 'done' || died) return
+    if (boundedIron && remaining() >= before) {
+      // Блок честно проверен и вычеркнут: причина изменилась, следующая жила ещё не пробовалась.
+      if (process.env.ND_IRON_STALE_LEDGER === '1' && r.detail?.gone?.length) cleared.add(JSON.stringify(s.at))
+      else return
+    }
   }
 }
 
@@ -2434,6 +2569,15 @@ async function smeltAll (from, into, { fetchCoal = false, max = Infinity } = {})
     if (!coal && !wood) { log(`плавить ${from} нечем: угля нет, а дерево — запас на глубину`); break }
     const r = await act('smelt', { item: into, count: left(), fuel: coal ? undefined : wood, timeoutSeconds: 400 })
     await refresh()
+    if (metal && /печки нет/.test(String(r.error || '')) && process.env.ND_OW_IRON_FURNACE !== '0' && dim() === 'overworld') {
+      if (died || strategyInterrupted || r.status === 'interrupted') break
+      if (have(COBBLE) < 8) {
+        const stone = await act('mine', { block: 'stone', count: 8 - have(COBBLE), radius: 32, dry: true, timeoutSeconds: 120 })
+        if (died || strategyInterrupted || stone.status === 'interrupted') break
+        if (have(COBBLE) < 8) await act('dig_down', { mode: 'stairs', depth: 6, torchEvery: 0, timeoutSeconds: 120 })
+      }
+      if (died || strategyInterrupted || have(COBBLE) < 8) break
+    }
     if (r.status !== 'done' && !coal && !wood) break
   }
 }
@@ -2457,8 +2601,67 @@ async function torches () {
   await craft('torch', 8)
 }
 
+let waterSearchView = '', waterSearchFailedView = ''
+async function kitWaterHere () {
+  if (process.env.ND_OW_KIT_WATER === '0' || dim() !== 'overworld' || !state.pos || died || !have('bucket') || have('water_bucket')) return false
+  const interrupted = r => r.status === 'interrupted' || died || strategyInterrupted
+  const first = await act('bucket', { fluid: 'water', radius: 48 })
+  if (interrupted(first)) return null
+  if (have('water_bucket')) return true
+  const top = stairEntrance?.y ?? surfaceShaft?.top ?? Math.max(64, y())
+  // shortcut: 40 s is GetWater's graph price, 2 s/block is the measured shaft ascent ETA.
+  const outside = 40 + (sit.surface ? 0 : Math.max(0, top - y()) * 2)
+  if (knownWater) {
+    const q = knownWater, flat = Math.hypot(q.x - state.pos.x, q.z - state.pos.z)
+    if (flat / 2.5 + Math.abs(q.y - y()) * 2 + 12 < outside) {
+      if (Math.hypot(flat, q.y - y()) > 4 && interrupted(await act('goto', { ...q, range: 3, surface: false, descent: false, timeoutSeconds: 45 }))) return null
+      if (interrupted(await act('portal', { mode: 'cast', waterHint: q, timeoutSeconds: 120 }))) return null
+      if (have('water_bucket')) return true
+      knownWater = null
+    }
+  }
+  if (!OW_HEAR || sit.surface || died || strategyInterrupted) return false
+  const h = await act('portal', { mode: 'cast', listen: 16, fluid: 'water', timeoutSeconds: 30 })
+  if (interrupted(h)) return null
+  const heard = h.detail?.heard?.[0]
+  if (!heard || died || strategyInterrupted) return false
+  const length = Math.max(1, Math.min(16, (heard.flat || 0) + 3))
+  if (length * 2 + Math.abs(heard.height || 0) * 2 + 12 >= outside) return false
+  log(`вода рядом: слышу ${heard.dir}, ~${heard.dist} бл.; короткий подкоп дешевле подъёма`)
+  const vertical = Math.abs(heard.height || 0) > (heard.flat || 0)
+  const t = await act('tunnel', { direction: vertical ? (heard.height > 0 ? 'up' : 'down') : heard.dir,
+    length: vertical ? Math.min(16, Math.abs(heard.height)) : length, torchEvery: 0, timeoutSeconds: 90 })
+  if (interrupted(t)) return null
+  const wet = /вода (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String(t.detail?.stopped || ''))
+  if (wet && interrupted(await act('portal', { mode: 'cast', waterHint: { x: +wet[1], y: +wet[2], z: +wet[3] }, timeoutSeconds: 120 }))) return null
+  if (!have('water_bucket') && interrupted(await act('bucket', { fluid: 'water', radius: 32 }))) return null
+  return have('water_bucket') > 0
+}
+
+async function waterSearchDirection () {
+  if (process.env.ND_OW_KIT_WATER === '0' || !sit.surface || !state.pos) return null
+  // Surface-water prior, not a height gate: search near the valley costs less than staying high.
+  const price = floorY => 80 / 2.5 + Math.max(0, floorY + 1 - 64) * 2
+  let best = price(y() - 1), direction = null
+  const hits = []
+  for (const pitch of [20, 45]) for (const [yaw, dir] of [[0, 'south'], [90, 'west'], [180, 'north'], [270, 'east']]) {
+    const r = await act('perceive', { mode: 'surface', yaw, pitch, maxDist: 96 })
+    if (r.status === 'interrupted' || died || strategyInterrupted) return undefined
+    const s = r.detail?.surface
+    hits.push(s ? [s.name, s.pos, s.water] : null)
+    if (!s?.pos || s.water || /water|lava|leaves|_log$/.test(String(s.name))) continue
+    const score = price(s.pos.y)
+    if (score < best) { best = score; direction = dir }
+  }
+  waterSearchView = JSON.stringify([['x', 'y', 'z'].map(k => Math.floor(state.pos[k])), hits])
+  if (waterSearchView === waterSearchFailedView) return undefined
+  return direction
+}
+
 defStage('water', () => have(/^bucket$/) > 0 && !have('water_bucket') && !known.portal, async () => {
   await sense()
+  const local = await kitWaterHere()
+  if (local || local === null) return
   if (OW_DEEP && !sit.surface && y() < 50) {
     const viaShaft = surfaceShaftNear() && !!shaftWaterSeen
     if (await deepWater({ legs: viaShaft ? 2 : 5 })) return
@@ -2475,11 +2678,21 @@ defStage('water', () => have(/^bucket$/) > 0 && !have('water_bucket') && !known.
     await nightGuard()
     const r2 = await act('bucket', { fluid: 'water', radius: 32 })
     if (have('water_bucket') || (r2.detail && r2.detail.need)) break
-    const e = await act('explore', { block: 'water', waterSource: true, radius: 48, stepDistance: 80, timeoutSeconds: 150 })
+    const direction = await waterSearchDirection()
+    if (died || strategyInterrupted || direction === undefined) return
+    const from = state.pos && { ...state.pos }
+    const e = await act('explore', { block: 'water', waterSource: true, radius: 48, stepDistance: 80, direction,
+      newView: process.env.ND_OW_KIT_WATER !== '0', timeoutSeconds: 150 })
     if (!(e.detail && e.detail.found)) await walkAway(60, Math.PI / 4)
     // Источник виден дальше радиуса ведра (32) — explore отвечает «уже видно», ведро «не вижу»: подойти к нему.
     else if (e.detail.at && state.pos && Math.hypot(e.detail.at.x - state.pos.x, e.detail.at.y - state.pos.y, e.detail.at.z - state.pos.z) > 6) {
       await act('goto', { x: e.detail.at.x, y: e.detail.at.y, z: e.detail.at.z, range: 4, timeoutSeconds: 60 })
+    }
+    if (process.env.ND_OW_KIT_WATER !== '0' && !e.detail?.found && from && state.pos &&
+        Math.hypot(from.x - state.pos.x, from.y - state.pos.y, from.z - state.pos.z) < 1) {
+      waterSearchFailedView = waterSearchView
+      log('вода: разведка и обход без пути — тот же вид не повторяю')
+      return
     }
   }
 })
@@ -2534,9 +2747,138 @@ const DEEP_Y = -54
 let deepLava = null // лава за блоком у штрека (чутьё безопасности) — ориентир окна
 const deepBad = [] // лава, у которой окно или место не вышли
 const near3 = (p, r) => !!p && !!state.pos && Math.hypot(p.x - state.pos.x, (p.y ?? y()) - state.pos.y, p.z - state.pos.z) <= r
+const lavaApproachSeconds = (q, proven = false) => !q || !state.pos ? Infinity :
+  Math.hypot(q.x - state.pos.x, q.z - state.pos.z) / 2.5 + Math.abs((q.y ?? y()) - y()) * 2 + (proven ? 0 : 60)
+function lavaMemoryPlace (place) {
+  if (!place || process.env.ND_OW_KIT_LAVA === '0') return place
+  // remember records the observer's feet; the campaign's own note records the seen source.
+  const at = /^лава на (-?\d+),(-?\d+),(-?\d+)$/.exec(String(place.note || ''))
+  return at ? { ...place, x: +at[1], y: +at[2], z: +at[3] } : place
+}
 const surfaceLavaNear = () => !!known.lava && (known.lava.y ?? 64) >= 0 && !!state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96
 let skyLavaSeen = (() => { try { const h = process.env.ND_OW_LAVA_HINT ? JSON.parse(process.env.ND_OW_LAVA_HINT) : null; return h && Number.isFinite(h.x) ? { x: h.x, y: h.y, z: h.z, hint: true } : null } catch { return null } })()
 const NATURAL = process.env.ND_PORTAL_NATURAL === '1'
+function dayLavaActive () {
+  return process.env.ND_OW_DAY_LAVA !== '0' && !died && dim() === 'overworld' && !sit.night && !!state.pos &&
+    !known.portal && !known.lava && have('water_bucket') > 0 && !!lighter()
+}
+
+function dayLavaQuotes (view: any) {
+  const { pos, terrain } = view
+  const jobs = [], dirs = [['east', 1, 0], ['south', 0, 1], ['west', -1, 0], ['north', 0, -1],
+    ['southeast', 1, 1], ['southwest', -1, 1], ['northwest', -1, -1], ['northeast', 1, -1]]
+  const route = to => Math.hypot(to.x - pos.x, to.z - pos.z) / 4.317 + Math.abs((to.y ?? pos.y) - pos.y) * 2
+  const levelSeconds = n => 3 * n + Math.SQRT2 / 4.317
+  const down = y => Math.max(0, y) * levelSeconds(terrain.stoneSeconds) +
+    Math.max(0, Math.min(y, 0) + 54) * levelSeconds(terrain.deepslateSeconds) + view.searchSeconds
+  const add = (id, kind, seconds, mine, extra: any = {}) => {
+    const hazard = mine ? view.mineHazard : view.scoutHazard
+    jobs.push({ id, kind, seconds, price: seconds - Math.expm1(-hazard * seconds) * view.deathSeconds, ...extra })
+  }
+  const overlap = (r, R, d) => {
+    if (d >= r + R) return 0
+    if (d <= Math.abs(r - R)) return Math.PI * Math.min(r, R) ** 2
+    const a = Math.acos(Math.max(-1, Math.min(1, (d * d + r * r - R * R) / (2 * d * r))))
+    const b = Math.acos(Math.max(-1, Math.min(1, (d * d + R * R - r * r) / (2 * d * R))))
+    return r * r * a + R * R * b - Math.sqrt((-d + r + R) * (d + r - R) * (d - r + R) * (d + r + R)) / 2
+  }
+  // shortcut: lake attempts and the largest overlap give an optimistic ETA; calibrate visibility/union after paired scenes.
+  const chance = (to, radius) => {
+    const area = Math.PI * radius * radius
+    const old = Math.max(0, ...view.views.map(v => overlap(radius, v.radius,
+      Math.hypot(to.x - v.pos.x, to.z - v.pos.z))))
+    return -Math.expm1(-Math.max(0, area - old) / 256 / 200)
+  }
+  const horizon = Math.max(1, Math.min(128, terrain.horizon))
+  for (const p of terrain.points) {
+    if (p.at.y < pos.y - 3) add(`cave:${JSON.stringify(p.at)}`, 'cave', route(p.at) + down(p.at.y), true, { to: p.at })
+    else if (view.surface && p.at.y > pos.y + 3) {
+      // Clearing the actually observed occluders can reveal the full skyline; this is a value estimate, not a hidden-height scan.
+      const radius = p.at.y + 1.62 > terrain.occluderTop ? 128 : horizon
+      add(`view:${JSON.stringify(p.at)}`, 'view', (route(p.at) + 1) / chance(p.at, radius), false, { to: p.at })
+    }
+  }
+  for (const r of view.ruins) add(`ruin:${JSON.stringify(r.at)}`, 'ruin', (route(r.at) + 1) / 0.715, false, { to: r.at })
+  const h = view.heard
+  if (h) add(`sound:${h.dir}:${!!h.above}:${!!h.below}`, 'sound', Math.min(8, h.dist) * levelSeconds(terrain.stoneSeconds), true,
+    { direction: h.dir, depth: Math.max(1, Math.min(8, h.dist)), above: !!h.above, below: !!h.below })
+  for (const [direction, dx, dz] of dirs) {
+    const norm = Math.hypot(+dx, +dz), to = { x: pos.x + +dx * 64 / norm, z: pos.z + +dz * 64 / norm }
+    const exit = view.surface ? 0 : Math.max(0, view.exitY - pos.y) * levelSeconds(terrain.stoneSeconds)
+    add(`frontier:${direction}`, 'frontier', exit + (64 / 4.317 + 1) / chance(to, horizon), false, { to, direction })
+  }
+  for (const direction of ['north', 'east', 'south', 'west']) {
+    if (pos.y > -54) add(`down:${direction}`, 'down', down(pos.y), true, { direction, depth: Math.min(8, Math.ceil(pos.y + 54)) })
+    else add(`drift:${direction}`, 'drift', view.searchSeconds, true, { direction })
+  }
+  return jobs.filter(j => Number.isFinite(j.price)).sort((a, b) => a.price - b.price)
+}
+
+const dayLavaViews = []
+const dayLavaFailures = new Set()
+async function dayLavaStep () {
+  if (!dayLavaActive()) return false
+  await sense()
+  if (!dayLavaActive() || strategyInterrupted) return false
+  await readMemory()
+  if (known.lava || known.portal) return false
+  const scan = await act('portal_natural', { mode: 'survey', radius: 128, need: 1, terrain: true })
+  if (died || strategyInterrupted || scan.status === 'interrupted') return true
+  const site = [scan.detail?.best, ...(scan.detail?.sites || []), ...(scan.detail?.terrain?.sources || [])].find(s => s?.at && !lavaBad(s.at))
+  if (site) {
+    known.lava = { ...site.at }; lavaSourceKnown = true
+    const at = `${site.at.x},${site.at.y},${site.at.z}`
+    log(`день: вижу источник лавы ${at} — к литью`)
+    try { await call('remember', { kind: 'лава', text: `лава на ${at}`, place: 'лава' }) } catch {}
+    return true
+  }
+  const terrain = scan.detail?.terrain
+  if (!terrain) return false
+  const eye = { ...state.pos }
+  if (!dayLavaViews.some(v => v.signature === terrain.signature && Math.hypot(v.pos.x - eye.x, v.pos.y - eye.y, v.pos.z - eye.z) < 1)) {
+    dayLavaViews.push({ pos: eye, radius: Math.max(1, terrain.horizon), signature: terrain.signature })
+  }
+  let heard = null
+  if (OW_HEAR) {
+    const h = await act('portal', { mode: 'cast', listen: 16, timeoutSeconds: 30 })
+    if (died || strategyInterrupted || h.status === 'interrupted') return true
+    heard = h.detail?.heard?.[0] || null
+  }
+  const structures = await act('structure', { mode: 'list' })
+  if (died || strategyInterrupted || structures.status === 'interrupted') return true
+  const s = await intelligence.environment.observe()
+  const scout = intelligence.registry.get('ScoutLava'), mine = intelligence.registry.get('MineIron')
+  const hazard = model => -Math.log1p(-Math.min(0.99, Math.max(0, model.estimateRisk(s)))) / Math.max(1, model.estimateCost(s) / 20)
+  const jobs = dayLavaQuotes({ pos: { ...state.pos }, surface: !!sit.surface,
+    exitY: stairEntrance?.y ?? surfaceShaft?.top ?? Math.max(63, ...dayLavaViews.map(v => v.pos.y)), terrain, heard,
+    ruins: [...(structures.detail?.known || []).filter(r => r.kind === 'ruined_portal' && r.at), ...(scan.detail?.ruins || [])], views: dayLavaViews,
+    searchSeconds: Math.max(1, scout.estimateCost(s) / 20), scoutHazard: hazard(scout), mineHazard: hazard(mine),
+    deathSeconds: (Number(process.env.ND_DEATH_COST_MIN) || 60) * 60 })
+  const cause = () => JSON.stringify([['x', 'y', 'z'].map(k => Math.floor(state.pos[k])), terrain.signature, terrain.tools, heard])
+  const key = cause(), job = jobs.find(j => !dayLavaFailures.has(`${j.id}:${key}`))
+  if (!job) { log('день: причины отказов поиска лавы не изменились — нужен другой ход планировщика'); return true }
+  log(`день: поиск лавы ${job.id}, цена ≈ ${Math.round(job.price)} с; альтернативы ${jobs.slice(0, 4).map(j => `${j.kind}:${Math.round(j.price)}`).join(', ')}`)
+  const before = { ...state.pos }
+  let r
+  if (job.kind === 'down' || job.kind === 'sound' && job.below) {
+    await spares(3 * job.depth)
+    if (died || strategyInterrupted) return true
+    await sense()
+    if (!dayLavaActive() || strategyInterrupted || Math.hypot(state.pos.x - before.x, state.pos.y - before.y, state.pos.z - before.z) >= 0.5) return true
+    r = await act('dig_down', { mode: 'stairs', depth: job.depth, direction: job.direction, maxFallHp: 0, torchEvery: 0, timeoutSeconds: 90 })
+  } else if (job.kind === 'drift' || job.kind === 'sound') {
+    r = await act('tunnel', { direction: job.above ? 'up' : job.direction, length: job.depth || 8, torchEvery: 0, timeoutSeconds: 90 })
+  } else {
+    r = await act('goto', { ...job.to, range: job.kind === 'ruin' ? 8 : 2, surface: job.kind === 'frontier' || job.kind === 'view' ? 'strict' : false, timeoutSeconds: 60 })
+  }
+  if (died || strategyInterrupted || r.status === 'interrupted') return true
+  const moved = Math.hypot(state.pos.x - before.x, state.pos.y - before.y, state.pos.z - before.z)
+  if (moved < 0.5 && !(r.detail?.dug > 0) && !(r.detail?.walked > 0)) dayLavaFailures.add(`${job.id}:${key}`)
+  if (job.kind === 'ruin' && moved >= 0.5) await lootSeenStructures(24)
+  if (!died && !strategyInterrupted && moved >= 0.5) await act('observe', { radius: 32 })
+  return true
+}
+
 let naturalTried = 0
 let surveyDone = false
 // Взгляд вдаль на лаву под небом (portal_natural survey: верх столбцов в 128 бл., луч видимости из глаз — как игрок, который
@@ -2574,7 +2916,9 @@ async function skyLavaLook () {
   const best = sv.detail && [sv.detail.best, ...(sv.detail.sites || [])].find(site => site && site.usable !== false && site.at && !lavaBad(site.at))
   if (!best || !best.at || !state.pos) { log('обзор вдаль: лавы под небом в 128 бл. не видно'); return null }
   const far = q => Math.hypot(q.x - state.pos.x, q.z - state.pos.z)
-  if (!known.lava || far(best.at) + 8 < far(known.lava) || !lavaSourceKnown) {
+  if (!known.lava || (process.env.ND_OW_KIT_LAVA !== '0'
+    ? lavaApproachSeconds(best.at, true) < lavaApproachSeconds(known.lava, lavaSourceKnown)
+    : far(best.at) + 8 < far(known.lava) || !lavaSourceKnown)) {
     known.lava = { x: best.at.x, y: best.at.y, z: best.at.z }
     lavaSourceKnown = true
     const at = `${best.at.x},${best.at.y},${best.at.z}`
@@ -2585,6 +2929,7 @@ async function skyLavaLook () {
 }
 let lavaSourceKnown = false
 const castSiteFails = new Map()
+const castSiteFailAt = new Map()
 const lavaBadSites = []
 const lavaBad = q => lavaBadSites.some(b => Math.hypot(b.x - q.x, b.z - q.z) < 24)
 // Руины портала, увиденные по пути (память построек — глаза): у руин часто лава (portal_2/7/8/10 и giant — 15–26 источников,
@@ -2893,6 +3238,7 @@ async function deepCast () {
       const r = await castForKit({ mode: 'cast', windows: true, hint: deepLava, maxDig: 64, keep: 8, radius: 12, timeoutSeconds: 540 })
       await readMemory()
       if (known.portal || died) return
+      if (process.env.ND_OW_KIT_FRAME !== '0' && r.detail?.retryBlocked) { log('литьё глубоко: причина отказа не изменилась — возвращаю выбор плану'); return }
       const why = String((r.detail && r.detail.stopped) || r.error || '')
       const needWhat = String((r.detail && r.detail.need && r.detail.need.what) || '')
       if (/cobblestone|stone/.test(needWhat) && !cobbleTried) {
@@ -3076,7 +3422,29 @@ async function deepWater ({ legs = 5 } = {}) {
   return have('water_bucket') > 0
 }
 
-defStage('cast', () => !known.portal, async () => {
+async function approachCastLava () {
+  if (process.env.ND_OW_KIT_LAVA === '0' || !known.lava || !state.pos || dim() !== 'overworld') return false
+  const q = { ...known.lava }, distance = () => Math.hypot(q.x - state.pos.x, (q.y ?? y()) - y(), q.z - state.pos.z)
+  // Each repetition requires a shorter three-dimensional route, including actual descent.
+  while (!died && !strategyInterrupted && distance() > 4) {
+    const before = distance()
+    const r = await act('goto', { x: q.x, y: (q.y ?? y()) + 1, z: q.z, range: 3, surface: false, descent: false, timeoutSeconds: 60 })
+    if (r.status === 'interrupted' || died || strategyInterrupted) return false
+    const dx = q.x - state.pos.x, dz = q.z - state.pos.z, lower = y() - q.y
+    if (distance() >= before && lower > 4 && Math.hypot(dx, dz) <= 16) {
+      const down = await act('dig_down', { mode: 'stairs', depth: Math.min(12, lower - 3),
+        direction: Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 'east' : 'west') : (dz > 0 ? 'south' : 'north'),
+        maxFallHp: 0, torchEvery: 0, timeoutSeconds: 90 })
+      if (down.status === 'interrupted') return false
+    }
+    if (died || strategyInterrupted || distance() >= before) return false
+  }
+  return !died && !strategyInterrupted && distance() <= 4
+}
+
+// Литьё без воды в ведре невозможно (портал из лавы и воды; «одно ведро: вода с собой»): этап cast без water_bucket падал сразу
+// «нет воды в ведре», дважды — пауза, а вода сама в паузе (ocr0-fp1-s11-1-kit-941 16.10: 7-я–24-я мин без шага). ND_CAST_NEEDS_WATER=0 — прежнее.
+defStage('cast', () => !known.portal && (process.env.ND_CAST_NEEDS_WATER === '0' || have('water_bucket') > 0), async () => {
   castRuns++
   let surfaceLooks = 0
   await sense()
@@ -3088,8 +3456,11 @@ defStage('cast', () => !known.portal, async () => {
     if (!deepLava && known.lava && !sit.surface && near3(known.lava, 48) && !deepBad.some(b => Math.hypot(b.x - known.lava.x, b.y - known.lava.y, b.z - known.lava.z) < 6)) deepLava = known.lava
     if (deepLava || !surfaceLavaNear()) { await deepCast(); return }
   }
-  if (!sit.surface && dim() === 'overworld' && !sit.night) await act('shelter', { mode: 'exit' })
-  await readMemory()
+  if (await dayLavaStep()) return
+  if (process.env.ND_OW_KIT_LAVA !== '0') await readMemory()
+  if (!sit.surface && dim() === 'overworld' && !sit.night &&
+      (process.env.ND_OW_KIT_LAVA === '0' || !known.lava)) await act('shelter', { mode: 'exit' })
+  if (process.env.ND_OW_KIT_LAVA === '0') await readMemory()
   await skyLavaLook()
   if (!known.lava) await act('observe', { radius: 48 })
   if (known.lava && state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) > 16) await goToward(known.lava, 8)
@@ -3105,14 +3476,25 @@ defStage('cast', () => !known.portal, async () => {
     const r = await castForKit({ mode: 'cast', timeoutSeconds: 540 })
     await readMemory()
     if (known.portal || died) break
+    if (process.env.ND_OW_KIT_FRAME !== '0' && r.detail?.retryBlocked) {
+      log('литьё: источники у сохранённой рамы не изменились — новая точка обзора вместо того же повтора')
+      await act('explore', { block: 'lava', newView: true, radius: 48, stepDistance: 16, surface: !!sit.surface, timeoutSeconds: 60 })
+      break
+    }
     const why = String((r.detail && r.detail.stopped) || r.error || '')
     // Литьё у этого озера не встаёт (лава под навесом, берег из жидкости — cl-ai 14.10: 100 мин «не вижу лавы-источника» и
     // «места на берегу нет» у одной и той же пещерной лавы): после 4 отказов место плохое, ищем другое озеро.
+    // Тот же отказ с той же точки (тело не сдвинулось на 3 бл. с прошлого отказа у этой лавы) — причина не изменилась: место плохое
+    // сразу; издалека тоже считается (ocr/m2g/rgk 16.10: 278 отказов «не вижу лавы-источника» на 75 сцен, литьё до конца 25 мин).
+    const castSame = process.env.ND_CAST_SAME_FAIL === '1'
     if (known.lava && state.pos && /не вижу лавы|места на берегу нет|места под раму/.test(why) &&
-        Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? state.pos.y) - state.pos.y, known.lava.z - state.pos.z) <= 12) {
+        (castSame || Math.hypot(known.lava.x - state.pos.x, (known.lava.y ?? state.pos.y) - state.pos.y, known.lava.z - state.pos.z) <= 12)) {
       const key = `${Math.round(known.lava.x / 8)},${Math.round(known.lava.z / 8)}`
+      const lastAt = castSame ? castSiteFailAt.get(key) : null
+      const samePlace = castSame && lastAt && Math.hypot(lastAt.x - state.pos.x, lastAt.y - state.pos.y, lastAt.z - state.pos.z) < 3
+      if (castSame) castSiteFailAt.set(key, { ...state.pos })
       castSiteFails.set(key, (castSiteFails.get(key) || 0) + 1)
-      if (castSiteFails.get(key) >= 4) {
+      if (samePlace || castSiteFails.get(key) >= 4) {
         log(`литьё: у лавы ${known.lava.x},${known.lava.y},${known.lava.z} рама не встаёт (4 отказа) — ищу другое озеро`)
         lavaBadSites.push({ ...known.lava })
         known.lava = null; lavaSourceKnown = false; skyLookAt = null
@@ -3131,7 +3513,12 @@ defStage('cast', () => !known.portal, async () => {
     }
     if (r.detail && r.detail.need) break
     if (/не вижу лавы/.test(why)) {
-      if (known.lava && state.pos && i < 3) {
+      if (process.env.ND_OW_KIT_LAVA !== '0' && known.lava) {
+        const before = state.pos && { ...state.pos }
+        await approachCastLava()
+        if (died || strategyInterrupted) return
+        if (before && state.pos && ['x', 'y', 'z'].some(axis => Math.floor(state.pos[axis]) !== Math.floor(before[axis]))) continue
+      } else if (known.lava && state.pos && i < 3) {
         const before = { ...state.pos }
         const dx = known.lava.x - before.x
         const dz = known.lava.z - before.z
@@ -3444,6 +3831,11 @@ const lighter = () => have('flint_and_steel') > 0 || have('fire_charge') > 0
 async function enterNether () {
   if (!lighter()) log('огнива нет и сделать не из чего — вхожу без него (погасший портал = возврат через кровать)')
   await refresh()
+  if (process.env.ND_NETHER_COOK === '1' && dim() === 'overworld' && !died && !sit.foes && have(RAW)) {
+    await cook()
+    await refresh()
+    if (died || strategyInterrupted) return { status: 'interrupted', detail: { went: false } }
+  }
   if (known.portal && state.pos && dim() === 'overworld' && state.pos.y < (known.portal.y ?? 64) - 5) {
     log(`к порталу из-под земли (y ${Math.round(state.pos.y)}) — сперва наверх`)
     await act('surface', { timeoutSeconds: 120, hand: false, preferPillar: true })
@@ -3463,22 +3855,24 @@ async function enterNether () {
   return act('portal', { mode: 'enter', timeoutSeconds: 120, ...(lighter() ? {} : { noIgniter: true }) })
 }
 defStage('prep', () => !!known.portal && dim() === 'overworld' && rodsNow() < 7 && (prepRuns < 1 || !lighter()) &&
-  (!lighter() || foodUnits() < FOOD_STOCK || (!shieldOn() && have('iron_ingot') > 0)), async () => {
+  (!lighter() || foodShort() > 0 || (!shieldOn() && have('iron_ingot') > 0)), async () => {
   prepRuns++
   await sense()
-  if (OW_DEEP && known.portal && near3(known.portal, 48) && lighter() && foodUnits() >= netherFoodNeed()) {
+  if (entrySupplies() && READY.nether() && lighter()) { log('сборы: еды на вход хватает — без охоты за шерстью и дальнего сбора щита'); return }
+  if (OW_DEEP && known.portal && near3(known.portal, 48) && lighter() && netherFoodHave() >= netherFoodNeed()) {
     log(`сборы: портал в ${Math.round(portalFar())} бл., огниво есть, еды ${foodUnits()} — в Ад без сборов`)
     return
   }
   await nightGuard()
   await sense()
   if (!sit.surface && !sit.night) await act('shelter', { mode: 'exit' })
-  huntWool = !spawnAtPortal()
+  huntWool = !entrySupplies() && !spawnAtPortal()
   try {
-    if (foodUnits() < FOOD_STOCK) await stageRun('food')()
+    if (foodShort() > 0) await stageRun('food')()
   } finally { huntWool = false }
   await cook()
   await makeBed()
+  if (entrySupplies() && READY.nether() && lighter()) return
   const ironWant = lighter() ? 0 : 1
   if (ironWant) {
     await refresh()
@@ -3550,27 +3944,37 @@ const bState = b => {
   return bastionState.get(key)
 }
 function deferBastionMining (b) {
+  if (process.env.ND_NE_RECOVER === '1') {
+    bState(b).blocked = { observed: netherFailureState('bastion'), origin: state.pos && { ...state.pos } }
+    bastionDry = 0
+    log(b.key + ': этот подход не дал добычи — другой подход или цель по цене; известное золото сохранено')
+    return
+  }
   bState(b).miningDeferredUntil = Math.max(bState(b).miningDeferredUntil || 0, gameClock.now() + 2700000)
   bastionDry = 0
   log(`${b.key}: два законченных захода без добычи — отложен на бюджет следующего маршрута 2700 с; остаток известного золота сохранён`)
+}
+const bastionBlocked = b => {
+  const mark = bState(b).blocked
+  return process.env.ND_NE_RECOVER === '1' && !!mark && mark.observed === netherFailureState('bastion', mark.origin)
 }
 const nextBastion = () => {
   const left = (known.bastions || []).filter(b => !bState(b).spent)
   if (barterFlow.enabled() && pearlsNow() < eyesWant() && have('gold_ingot') + 9 * have('gold_block') >= 8 && state.pos) {
     // Свои слитки — и к выработанному бастиону (10.10 server-run: «выработан» после 50 слитков — кончилось НАШЕ золото, пиглины
     // на месте; с 85 слитками кампания шла копать к бастиону 2 за 570 бл. и без кирок — домой).
-    const nearby = (known.bastions || []).filter(b => Math.hypot(b.x - state.pos.x, b.z - state.pos.z) < 96)
+    const nearby = (known.bastions || []).filter(b => !bastionBlocked(b) && Math.hypot(b.x - state.pos.x, b.z - state.pos.z) < 96)
       .sort((a, b) => Math.hypot(a.x - state.pos.x, a.z - state.pos.z) - Math.hypot(b.x - state.pos.x, b.z - state.pos.z))
     if (nearby[0]) return nearby[0]
   }
-  return left.find(b => (bState(b).miningDeferredUntil || 0) <= gameClock.now() &&
+  return left.find(b => !bastionBlocked(b) && (bState(b).miningDeferredUntil || 0) <= gameClock.now() &&
     (!barterFlow.enabled() || (bState(b).barterUntil || 0) <= gameClock.now())) ||
     left.slice().sort((a, b) => (bState(a).miningDeferredUntil || 0) - (bState(b).miningDeferredUntil || 0))[0] || null
 }
 // Бастион «в работе» — не выработан и копка не отложена. nextBastion() отдаёт и отложенные (ход туда, когда больше нечего
 // делать), а ворота графа и этапов («жемчуг прежде ифритов», эндермены после бастионов) смотрят сюда: отложенный бастион
 // ждёт срока, тело тем временем идёт за стержнями или жемчугом (разбор 06.10: ворота без выхода, стержней 0 во всех Full).
-const activeBastion = () => (known.bastions || []).find(b => !bState(b).spent && (bState(b).miningDeferredUntil || 0) <= gameClock.now()) || null
+const activeBastion = () => (known.bastions || []).find(b => !bState(b).spent && !bastionBlocked(b) && (bState(b).miningDeferredUntil || 0) <= gameClock.now()) || null
 // Бартер исчерпан: два захода подряд с сохранённым золотом не отдали ни слитка (укрытие не встало, торговцы не подходят).
 let barterZero = 0
 const barterExhausted = () => barterZero >= 2
@@ -3604,7 +4008,10 @@ let lastBastionGoldLeft = 0
 // Бастион ждёт пополнения инструментов, а пополнить здесь нечем (нет безопасного дерева, S1e s1e-B0-3: 70 игр. мин «откладываю до
 // пополнения» ↔ «к крепости пока не иду, жемчуга 0/14» до таймаута) — «сперва жемчуг» не держит ифритов, как при READY.bastion «нечем».
 let supplyBlockedAt = -Infinity
-const bastionSupplyBlocked = () => gameClock.now() - supplyBlockedAt < 300000 && !netherSupply.netherToolsReady(netherSupplyState())
+let supplyBlockedState = null
+const bastionSupplyBlocked = () => (process.env.ND_NE_RECOVER === '1'
+  ? supplyBlockedState?.observed === netherFailureState('netherTools', supplyBlockedState?.origin)
+  : gameClock.now() - supplyBlockedAt < 300000) && !netherSupply.netherToolsReady(netherSupplyState())
 let lastPauseWhy = ''
 function pauseWaitPays () {
   if (gameClock.now() >= bastionPausedUntil) return true
@@ -3620,7 +4027,7 @@ function pauseWaitPays () {
 }
 // bastionDry ≥ 3 снимает этап bastion (needed) — тогда и ифриты его не ждут: иначе тупик «бастион не нужен / к крепости не иду,
 // сперва жемчуг» и «в Аду нечем — домой» (b0-6-2 14.10).
-const bastionPearlsPending = () => BASTION_FIRST && (!only || only.includes('bastion')) && pearlsNow() < eyesWant() && !blazeBeforePearls() &&
+const bastionPearlsPending = () => process.env.ND_NE_RECOVER !== '1' && BASTION_FIRST && (!only || only.includes('bastion')) && pearlsNow() < eyesWant() && !blazeBeforePearls() &&
   pauseWaitPays() && READY.bastion() && !bastionSupplyBlocked() && bastionDry < 3 &&
   (!!activeBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 && !barterExhausted()))
 const SCOUT_HIGH = process.env.ND_SCOUT_HIGH === '1'
@@ -3684,7 +4091,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
       (!state.pos || Math.hypot(b.x - state.pos.x, b.z - state.pos.z) <= 64)
     if (!carriedTrade && !netherSupply.netherToolsReady(netherSupplyState())) {
       const supply = await replenishNetherSupply()
-      if (!supply.ready) { supplyBlockedAt = gameClock.now(); log(`копку и путь к бастиону откладываю до пополнения инструментов: ${supply.reason}`); return }
+      if (!supply.ready) { supplyBlockedAt = gameClock.now(); supplyBlockedState = { observed: netherFailureState('netherTools'), origin: state.pos && { ...state.pos } }; log(`копку и путь к бастиону откладываю до пополнения инструментов: ${supply.reason}`); return }
     }
     const bs = bState(b)
     bs.runs++
@@ -3956,8 +4363,17 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
       if (died || dim() !== 'the_nether') return
       if (state.pos && Math.hypot(spHere.x - state.pos.x, spHere.z - state.pos.z) <= 40) { i--; continue }
     }
+    const needsView = process.env.ND_FORTRESS_FRONTIER !== '0' && netherSearchFailure && netherSearchFailure.observed === netherRetryState(netherSearchFailure.origin)
+    if (!atSpawner && needsView && netherSearchFailure.exhausted) throw new Error('крепость: видимые выходы исчерпаны, нужен новый путь или обзор')
     const s = atSpawner ? { detail: { reached: true, spawner: { x: spHere.x, y: spHere.y, z: spHere.z }, dist: 0 } } as any
-      : await act('fortress', { mode: 'spawner', timeoutSeconds: Math.min(600, 300 + Math.round(spFar / 2)), ...(process.env.ND_SPAWNER_TUNNEL === '1' ? { tunnel: true } : {}) })
+      : await act('fortress', needsView ? { mode: 'advance', timeoutSeconds: 90 }
+        : { mode: 'spawner', timeoutSeconds: Math.min(600, 300 + Math.round(spFar / 2)), ...(process.env.ND_SPAWNER_TUNNEL === '1' ? { tunnel: true } : {}) })
+    if (!atSpawner && needsView) {
+      await readMemory()
+      if (!died && dim() === 'the_nether' && netherSearchFailure.observed !== netherRetryState(netherSearchFailure.origin)) { i--; continue }
+      netherSearchFailure.exhausted = s.detail?.frontierExhausted === true
+      return
+    }
     // Не «дошёл», но спавнер в 24 бл. (ифриты уже бьют: s1-post01b 06.10 — 15 бл. над спавнером, подход рвала тактика,
     // кампания шла домой и умерла) — бой отсюда: blaze сам ищет точку боя и стреляет из лука.
     const spAt = (s.detail && s.detail.spawner) || memorySnapshot?.places?.['спавнер блейзов'] || null
@@ -3966,7 +4382,11 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     // навык blaze бьёт видимых и сам ищет спавнер (s1f-A2-3: тело под тронным залом, ифриты били — смерть без боя на 19-й мин).
     // ND_BLAZE_SEEN=0 — прежнее (только у спавнера).
     const blazesNear = process.env.ND_BLAZE_SEEN !== '0' && !!(s.detail && s.detail.blazes && s.detail.blazes.seen > 0 && s.detail.blazes.nearest <= 24)
-    if (!(s.detail && s.detail.reached) && !spNear && !blazesNear) { log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); if (i >= 1) break; continue }
+    if (!(s.detail && s.detail.reached) && !spNear && !blazesNear) {
+      if (process.env.ND_FORTRESS_FRONTIER !== '0') netherSearchFailure = { observed: netherRetryState(), origin: state.pos && { ...state.pos }, exhausted: false }
+      log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); break
+    }
+    netherSearchFailure = null
     if (!(s.detail && s.detail.reached)) log(`к спавнеру не дошёл (${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 80)}), но ${spNear ? 'он в 24 бл.' : `ифриты видны (${s.detail.blazes.seen}, ближний в ${s.detail.blazes.nearest} бл.)`} — бой отсюда`)
     else log(`у спавнера ${JSON.stringify(s.detail.spawner)} (${s.detail.dist} бл.)`)
     if (!(await fedForBlazes())) { log('сытость не восстановилась — бой с блейзами не начинаю'); return }
@@ -3981,6 +4401,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     // тело на 4 бл. ниже помоста) — после двух таких подряд заново к спавнеру штреком со вскрытием стены зала (fortress tunnel+breach),
     // а не тот же вызов с того же места.
     const bzd = (bz && bz.detail) || {}
+    if (bzd.clearing?.length) log(`расчистка спавнера: ${bzd.clearing.filter(r => r.ok).length}/${bzd.clearing.length}, прогноз экономии ${Math.round(bzd.clearing.reduce((s, r) => s + (r.ok ? r.savedSeconds - r.costSeconds : 0), 0))}с; результат — по стержням и урону`)
     blazeNoView = /доступной точки обзора нет/.test(String(bzd.stopped || '')) && !(Number(bzd.kills) > 0) ? blazeNoView + 1 : 0
     if (blazeNoView >= 2 && rodsWanted() && dim() === 'the_nether' && !died) {
       log(`ифриты за стеной ${blazeNoView}-й вызов подряд — к спавнеру штреком со вскрытием зала`)
@@ -4010,9 +4431,140 @@ let blazeDugInAt = -Infinity
 let netherShieldAt = -Infinity
 let blazeNoView = 0
 let blazeDugInPos = null
-let homeForGearAfter = -Infinity
-const ENDERMEN_OK = process.env.ND_ENDERMEN === '1'
-defStage('pearls', () => ENDERMEN_OK && !!known.portal && rodsShort() === 0 && have('ender_pearl') + have('ender_eye') < eyesWant() && !activeBastion() && !bastionSearchWanted(), async () => {
+let netherSearchFailure = null
+// Only changes to the failed search/supply/path can reopen a Nether attempt.
+function netherRetryState (origin = null) {
+  const p = state.pos
+  const sp = memorySnapshot?.places?.['спавнер блейзов']
+  return JSON.stringify([dim(), !!(origin && p && Math.hypot(p.x - origin.x, p.y - origin.y, p.z - origin.z) >= 8),
+    known.fortress && [known.fortress.x, known.fortress.y, known.fortress.z], sp && [sp.x, sp.y, sp.z], netherExplored, netherViewRevision,
+    have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0, netherSupply.netherToolsReady(netherSupplyState()),
+    have('obsidian') >= 10 && !!lighter(), state.tactics?.threatLevel ?? 0,
+    process.env.ND_FORTRESS_FRONTIER === '0' ? null : [state.tactics?.action, have(/^(cobblestone|blackstone|netherrack|nether_bricks)$/)],
+    [...new Set((sit.fight?.order || []).map(e => e.name))].sort()])
+}
+let homeForGearState = null
+async function continueFortressChoice (selection, blocked) {
+  if (process.env.ND_FORTRESS_CONTINUE === '0' || process.env.ND_FORTRESS_FRONTIER === '0' || dim() !== 'the_nether' || died ||
+      !known.fortress || !rodsWanted() || (state.tactics?.threatLevel ?? 0) >= 2 || blocked?.observed === undefined) return false
+  const cause = netherRetryState(blocked.origin)
+  if (blocked.frontier !== cause && !netherSearchFailure?.exhausted) return false
+  const quote = await act('fortress', { mode:'continue',planOnly:true,timeoutSeconds:90 })
+  await readMemory()
+  if (cause !== netherRetryState(blocked.origin)) return true
+  const plan = quote.detail?.plan
+  if (quote.status !== 'done' || !plan || !Number.isFinite(plan.seconds) || plan.seconds < 0) return false
+  const alternative = selection?.strategy
+  if (alternative) {
+    // Same expected-loss price as core/strategy.ts: 72000 ticks = 3600 seconds.
+    const risk = intelligence.registry.get('FindFortress')?.estimateRisk(selection.before) ?? 0
+    const price = plan.seconds + risk * 3600
+    const other = alternative.estimateCost(selection.before) / 20 + alternative.estimateRisk(selection.before) * 3600
+    log(`крепость: продолжение ≈${Math.round(price)} с; ${alternative.id} ≈${Math.round(other)} с`)
+    if (price >= other) return false
+  }
+  await act('fortress', { mode:'continue',planKey:plan.key,maxCostSeconds:plan.seconds,timeoutSeconds:90 })
+  await refresh(); await readMemory()
+  return true
+}
+function netherFailureName (name) {
+  if (/^(FindFortress|GetBlazeRods)$/.test(name)) return 'nether'
+  if (/^(BastionBarter|PiglinBarter|AcquireGold|MoveToNextBastion|FindBastions|SearchNextBastion)$/.test(name)) return 'bastion'
+  if (name === 'HuntEndermen') return 'pearls'
+  if (name === 'AcquireNetherTools') return 'netherTools'
+  return name
+}
+function netherFailureState (name, origin = null) {
+  const common = netherRetryState(origin)
+  if (name === 'bastion') return JSON.stringify([common, (known.bastions || []).map(b => [b.key, b.x, b.z]),
+    have('gold_ingot') + 9 * have('gold_block'), pearlsNow()])
+  if (name === 'pearls') { const forest = forestToHunt(); return JSON.stringify([common, forest && [forest.x, forest.y, forest.z], pearlsNow()]) }
+  if (name === 'netherTools') return JSON.stringify([common, Math.min(8, have(/_planks$/) + 4 * have(/_(log|stem)$/)),
+    Math.min(2, have('stick')), have('crafting_table') > 0, Math.min(3, have(/^(cobblestone|cobbled_deepslate|blackstone)$/)),
+    have('iron_ingot') + Math.floor(have('iron_nugget') / 9) + 9 * have('iron_block') >= 3])
+  return common
+}
+// Причина неудачи этапа верхнего мира (ND_OW_CAUSE_RETRY=1): повтор — когда изменилось то, от чего зависел заход (место с точностью
+// до 16 бл., ночь/день, известные вода и лава, ведро/огниво, еда), а не через N минут (правило пользователя 15.10). Было: «два пустых
+// захода — пауза 5 мин» (m2g1-fp1-s14-2-kit-911 16.10: вода «пауза 5 мин» на 2-й минуте, ночь до 19-й, набор не успел к 25-й).
+function overworldFailureState (origin = null) {
+  const p = state.pos, o = origin
+  const moved = !!(p && o && Math.hypot(p.x - o.x, p.z - o.z) >= 16)
+  return JSON.stringify([dim(), moved, !!sit.night, known.water ? [known.water.x, known.water.z] : null, known.lava ? [known.lava.x, known.lava.z] : null,
+    lavaSourceKnown, have('bucket'), have('water_bucket'), !!lighter(), foodUnits(), Math.floor((state.health ?? 20) / 7), state.tactics?.threatLevel ?? 0])
+}
+const netherRecoveryActions = new Map()
+async function changeNetherCause () {
+  if (process.env.ND_NE_RECOVER !== '1' || dim() !== 'the_nether' || died) return false
+  if ((state.tactics?.threatLevel ?? 0) >= 2) {
+    const cover = netherRecoveryActions.get('threatCover')
+    if (!cover || cover.observed !== netherRetryState(cover.origin) || (state.health ?? 20) <= cover.hp - 3) {
+      await act('ne_burrow', { why: 'реальная угроза перед сменой подхода' })
+      await refresh()
+      netherRecoveryActions.set('threatCover', { observed: netherRetryState(), origin: state.pos && { ...state.pos }, hp: state.health ?? 20 })
+    }
+    await act('wait', { seconds: 3 })
+    return true
+  }
+  // J owns the next seen fortress deck. This is the existing general scout outside that search, never a repeated failed RPC.
+  for (const action of ['explore', 'home']) {
+    if (action === 'home' && netherSupply.netherToolsReady(netherSupplyState()) && READY.nether() && (!fightGearWanted || fightReady())) continue
+    if (action === 'home' && homeForGearState && homeForGearState.observed === netherRetryState(homeForGearState.origin)) continue
+    const mark = netherRecoveryActions.get(action)
+    if (mark && mark.observed === netherFailureState('netherTools', mark.origin)) continue
+    const from = state.pos && { ...state.pos }
+    const before = netherFailureState('netherTools', from)
+    let r = null
+    if (action === 'explore') {
+      log('отказ: доступных целей нет — новый наблюдаемый участок, не ожидание')
+      r = await act('explore', { block: only?.includes('nether') && !only.includes('pearls') ? 'nether_bricks' : 'warped_nylium', newView: true, radius: 48, stepDistance: 16, timeoutSeconds: 90 })
+    } else {
+      log('отказ: здесь снабжение недоступно — домой за недостающим')
+      await returnFromNether()
+    }
+    await refresh(); await readMemory()
+    if (dim() !== 'the_nether' || died) return true
+    // Прерывание тактикой (reflex/tactical) — не отказ мира: угроза была временной причиной. Повтор того же разведочного хода —
+    // один раз на неизменное состояние; второе прерывание при том же состоянии — уже отказ (fj2-1-b-101 16.10: explore прерван
+    // reflex и сразу БЛОКЕР, этап брошен на 7-й минуте при хп 20).
+    const byThreat = r && r.status === 'interrupted' && (/^(reflex|tactical|damage|low_health)$/.test(r.by?.type || '') || /reflex|tactical|тактик/.test(String(r.error || r.detail?.stopped || '')))
+    if (byThreat && !strategyInterrupted) {
+      const again = netherFailureState('netherTools', from)
+      const prev = netherRecoveryActions.get(action + ':interrupted')
+      if (!prev || prev.observed !== again) {
+        netherRecoveryActions.set(action + ':interrupted', { observed: again })
+        log(`разведка прервана тактикой — повторю после угрозы (${r.detail?.stopped || r.error || 'reflex'})`)
+        return true
+      }
+    }
+    netherRecoveryActions.set(action, { observed: netherFailureState('netherTools'), origin: state.pos && { ...state.pos } })
+    if (action === 'home') homeForGearState = { observed: netherRetryState(), origin: state.pos && { ...state.pos } }
+    if ((state.tactics?.threatLevel ?? 0) >= 2 || r?.detail?.found || before !== netherFailureState('netherTools', from)) return true
+  }
+  // Пешей дороги нет ни в одну сторону (базальтовые дельты, обрыв над лавой: nbs-5408-111 16.10 — «пути нет ни в одном направлении»
+  // и БЛОКЕР на 22-й мин при хп 20): закрытый штрек на 48 бл. по стороне света, ещё не испробованной из этого места, — новый обзор
+  // ценой копки. Все четыре не сдвинули тело — тогда БЛОКЕР.
+  if (state.pos && have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 && process.env.ND_NE_TUNNEL_RECOVER !== '0') {
+    const here = state.pos, cell = `${Math.round(here.x / 16)},${Math.round(here.z / 16)}`
+    const tried = netherRecoveryActions.get('tunnel:' + cell)?.dirs || []
+    for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+      const key = `${dx},${dz}`
+      if (tried.includes(key)) continue
+      tried.push(key)
+      netherRecoveryActions.set('tunnel:' + cell, { dirs: tried })
+      const to = { x: Math.round(here.x + dx * 48), y: Math.round(here.y), z: Math.round(here.z + dz * 48) }
+      log(`отказ: пешком некуда — закрытый штрек к ${to.x},${to.y},${to.z} (новый обзор ценой копки)`)
+      const t = await act('nether_tunnel', { ...to, radius: 4, timeoutSeconds: 240 })
+      await refresh(); await readMemory()
+      if (dim() !== 'the_nether' || died) return true
+      if (state.pos && Math.hypot(state.pos.x - here.x, state.pos.z - here.z) >= 8) return true
+      if (t?.status === 'interrupted') return true
+    }
+  }
+  log('БЛОКЕР: Ад — новые подходы и снабжение недоступны при том же состоянии; завершаю без пустого ожидания')
+  return false
+}
+defStage('pearls', () => !!known.portal && have('ender_pearl') + have('ender_eye') < eyesWant(), async () => {
   if (dim() !== 'the_nether') {
     if (known.portal && state.pos && Math.hypot(known.portal.x - state.pos.x, known.portal.z - state.pos.z) > 48) {
       for (let k = 0; k < 4 && !died; k++) { await nightGuard(); if (await goToward(known.portal, 6)) break }
@@ -4061,9 +4613,15 @@ defStage('pearls', () => ENDERMEN_OK && !!known.portal && rodsShort() === 0 && h
     const h = await act('pearls', { count: eyesWant() - have('ender_eye') - have('ender_pearl'), timeoutSeconds: 400, style: PEARL_STYLE })
     await refresh()
     const hd = (h && h.detail) || {}
-    pearlTrips.seconds += (gameClock.now() - tHunt) / 1000
-    pearlTrips.pearls += Math.max(0, have('ender_pearl') - p0)
-    pearlTrips.zero = (Number(hd.seenEndermen) || 0) > 0 ? 0 : pearlTrips.zero + 1
+    if (process.env.ND_EM_PRICE_RECEIPTS !== '1') {
+      pearlTrips.seconds += (gameClock.now() - tHunt) / 1000
+      pearlTrips.pearls += Math.max(0, have('ender_pearl') - p0)
+      if (process.env.ND_NE_RECOVER !== '1' || hd.prepared !== false) pearlTrips.zero = (Number(hd.seenEndermen) || 0) > 0 ? 0 : pearlTrips.zero + 1
+    }
+    if (process.env.ND_NE_RECOVER === '1' && hd.prepared === false) {
+      if (state.pos) failedHuntSites.push({ ...state.pos })
+      throw new Error('эндермены: окоп не подготовлен — другой наблюдаемый участок, лес не объявляю пустым')
+    }
     log(`жемчуг: ${have('ender_pearl')} (+очей ${have('ender_eye')}); эндерменов в виду за заход ${hd.seenEndermen ?? '?'}; цена ${Math.round(endermenSecondsPerPearl())} с/жемчуг`)
     // Два захода подряд без единого эндермена в виду — место пустое (S1d: 23–40 мин охоты без единого): лес помечен, охота кончена.
     if (pearlTrips.zero >= 2) {
@@ -4080,14 +4638,17 @@ const PEARL_STYLE = process.env.ND_PEARL_STYLE || 'foxhole'
 const pearlTrips = { seconds: 0, pearls: 0, zero: 0 }
 // Пустые места (2 захода без эндерменов в виду): лес в 48 бл. от них не берём снова; запись глаз хранит и другие увиденные леса (alts).
 const emptyForests = []
+const failedHuntSites = []
+const failedHuntSite = p => process.env.ND_NE_RECOVER === '1' && failedHuntSites.some(s => Math.hypot(s.x-p.x,s.y-p.y,s.z-p.z) < 8)
 const forestEmpty = p => emptyForests.some(e => Math.hypot(e.x - p.x, e.z - p.z) < 48)
 function forestToHunt () {
   const rec = memorySnapshot?.places?.['искажённый лес (ад)']
   // Место, откуда глаза видели больше всего эндерменов разом (nether-forest.js), — первым: окоп отдаёт столько, сколько видно с места.
   const em = memorySnapshot?.places?.['эндермены (ад)']
   const seenAt = em && Number.isFinite(em.x) && (em.count || 0) >= 3 ? [{ ...em, score: 1000 + em.count }] : []
-  if (!rec && !seenAt.length) return null
-  const all = [...seenAt, ...(rec ? [rec, ...(Array.isArray(rec.alts) ? rec.alts : [])] : [])].filter(f => f && Number.isFinite(f.x) && !forestEmpty(f))
+  const here = process.env.ND_NE_RECOVER === '1' && state.biome === 'warped_forest' && state.pos ? [{ ...state.pos, note: 'F3: искажённый лес под ногами' }] : []
+  if (!rec && !seenAt.length && !here.length) return null
+  const all = [...seenAt, ...(rec ? [rec, ...(Array.isArray(rec.alts) ? rec.alts : [])] : []), ...here].filter(f => f && Number.isFinite(f.x) && !forestEmpty(f) && !failedHuntSite(f))
   return all.sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null
 }
 function endermenSecondsPerPearl () {
@@ -4160,6 +4721,30 @@ const arrowsNow = () => have('arrow') + have('spectral_arrow')
 let endkitRuns = 0
 const ENDKIT_OFF = process.env.ND_ENDKIT === '0'
 const END_SEAM = process.env.ND_END_SEAM !== '0'
+const END_PREP_PRICE = process.env.ND_END_PREP_PRICE === '1'
+const endPrep = require(path.join(__dirname, 'src', 'campaign', 'end-prep'))
+const endPrepRefused = new Map<string, string>()
+const endPrepRelevant = () => !!known.endPortal || !!known.stronghold || have('ender_eye') >= EYES_NEED
+const endPrepState = () => JSON.stringify([state.inventory, state.health, state.food, sit.foes,
+  state.pos && [Math.floor(state.pos.x / 8), Math.floor(state.pos.y / 8), Math.floor(state.pos.z / 8)]])
+const endPrepOffer = () => endPrep.endPrepOffers(state.inventory || {}, BEDS_END).find(o => endPrepRefused.get(o.item) !== endPrepState())
+async function pricedEndPrep () {
+  await refresh()
+  const offer = endPrepOffer()
+  if (!offer) { log(`END_PREP_PRICE: сборы не окупаются; дальше к крепости; нехватка ${endCoreLack().join(', ') || 'нет'}`); return }
+  log(`END_PREP_PRICE: ${offer.item} +${offer.count}; cost=${offer.cost}s value=${offer.value}s`)
+  for (const step of offer.plan.steps) {
+    const before = have(step.output.item)
+    const r = await act('craft', { item: step.output.item, count: step.output.count })
+    await refresh()
+    if (died || strategyInterrupted || r.status === 'interrupted') return
+    if (r.status !== 'done' || have(step.output.item) < before + step.output.count) {
+      endPrepRefused.set(offer.item, endPrepState())
+      log(`END_PREP_PRICE: ${step.output.item} не подтверждён — повтор после изменения рюкзака или места`)
+      return
+    }
+  }
+}
 function endCoreLack () {
   return [
     have(/_bed$/) < BEDS_END ? `beds:${have(/_bed$/)}/${BEDS_END}` : '',
@@ -4216,7 +4801,9 @@ async function checkEndEntry () {
     log(`РИСК END_PROFILE: лук ${have('bow')}, стрел ${arrowsNow()}/${ARROWS_END}, яблок ${have(/^(enchanted_)?golden_apple$/)}/3; броня ${JSON.stringify(state.armor || {})} — это не набор campaign2 с Protection II`)
   }
 }
-const endkitPending = () => END_SEAM
+const endkitPending = () => END_PREP_PRICE
+  ? !ENDKIT_OFF && !known.dragonWon && dim() === 'overworld' && endPrepRelevant() && !!endPrepOffer()
+  : END_SEAM
   ? !ENDKIT_OFF && !known.dragonWon && dim() === 'overworld' && endkitRuns < 3 &&
     (!!known.endPortal || have('ender_eye') >= EYES_NEED ||
       (have('ender_eye') + have('ender_pearl') >= EYES_NEED && have(/^(blaze_rod|blaze_powder)$/) > 0)) &&
@@ -4224,6 +4811,7 @@ const endkitPending = () => END_SEAM
   : !ENDKIT_OFF && !known.dragonWon && !known.endPortal && have('ender_eye') + have('ender_pearl') >= EYES_NEED &&
     rodsNow() >= 6 && endkitRuns < 3 && (have(/_bed$/) < BEDS_END || obsidianEnd() < OBSIDIAN_END || have('water_bucket') < BUCKETS_END || !have(/_boat$/) || fillNow() < FILL_END)
 defStage('endkit', () => endkitPending() && dim() === 'overworld', async () => {
+  if (END_PREP_PRICE) { await pricedEndPrep(); return }
   endkitRuns++
   await nightGuard()
   await sense()
@@ -4610,13 +5198,14 @@ defStage('stronghold', () => dim() !== 'the_end' && (have('ender_eye') >= Math.m
 let altTried = false
 let detours = 0
 
-DONE.prep = () => shieldOn() && lighter() && foodUnits() >= FOOD_STOCK && (spawnAtPortal() || have(/_bed$/) > 0)
+DONE.prep = () => entrySupplies() && known.portal ? READY.nether() && !!lighter() : shieldOn() && lighter() && foodUnits() >= FOOD_STOCK && (spawnAtPortal() || have(/_bed$/) > 0)
 DONE.nether = () => !rodsWanted()
 DONE.bastion = () => pearlsNow() >= eyesWant() && !obsShort()
 DONE.pearls = () => have('ender_pearl') + have('ender_eye') >= eyesWant()
 DONE.eyes = () => have('ender_eye') >= eyesWant()
-DONE.endkit = () => have(/_bed$/) >= BEDS_END && obsidianEnd() >= OBSIDIAN_END && have('water_bucket') >= waterWant() &&
-  have(/_boat$/) > 0 && fillNow() >= fillWant()
+DONE.endkit = () => END_PREP_PRICE ? endPrepRelevant() && (ENDKIT_OFF || !endPrepOffer())
+  : have(/_bed$/) >= BEDS_END && obsidianEnd() >= OBSIDIAN_END && have('water_bucket') >= waterWant() &&
+    have(/_boat$/) > 0 && fillNow() >= fillWant()
 DONE.stronghold = () => process.env.ND_END_ENTRY !== '0' ? dim() === 'the_end' : !!known.endPortal
 
 defStage('dragon', () => !known.dragonWon && (dim() === 'the_end' || !!known.endPortal), async () => {
@@ -4744,6 +5333,7 @@ get routeWater () { return routeWater },
 get sense () { return sense },
 get sit () { return sit }, set sit (value) { sit = value },
 get smeltAll () { return smeltAll },
+get earlyShield () { return earlyShield },
 get stageRun () { return stageRun },
 get state () { return state }, set state (value) { state = value },
 get surfaceShaft () { return surfaceShaft }, set surfaceShaft (value) { surfaceShaft = value },
@@ -4786,6 +5376,7 @@ async function intelligenceObservation () {
   graphFact('nether_tools_ready', netherSupply.netherToolsReady(netherSupplyState()))
   graphFact('nether_pick_swings', sit.pickLeft ?? 0)
   graphFact('fortress_explored', netherExplored)
+  if (process.env.ND_NE_RECOVER === '1') graphFact('nether_search_state', netherRetryState())
   graphFact('fire_resistance_count', fireResNow())
   graphFact('fire_resistance_active', state.fireResistance === true || state.tactics?.state?.fireResistance === true)
   graphFact('bastion_gold_dug', bastionGoldDug)
@@ -4794,7 +5385,6 @@ async function intelligenceObservation () {
   // Огнестойкость — не допуск к ифритам, а риск/цена GetBlazeRods в графе (speedrun.ts, решение пользователя 06.10 22:33).
   graphFact('blaze_allowed', !bastionPearlsPending())
   graphFact('end_ready', DONE.endkit())
-  graphFact('endermen_allowed', ENDERMEN_OK)
   graphFact('endermen_seconds_per_pearl', Math.round(endermenSecondsPerPearl()))
   graphFact('bastions_exhausted', !activeBastion() && !bastionSearchWanted())
   const next = nextBastion()
@@ -4887,11 +5477,13 @@ async function executeStrategy (command, signal) {
     } else if (skill === 'scoutLava') {
       const cell = () => state.pos && [dim(), ...['x', 'y', 'z'].map(axis => Math.floor(state.pos[axis] / 16))].join(':')
       if (cell()) lavaScoutCells.add(cell())
-      await skyLavaLook()
-      if (!known.lava) await lavaLookout()
-      if (!lavaSourceKnown) await lavaAtSeenRuins()
-      await act('observe', { radius: 64 })
-      if (!known.lava) await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90, surface: true })
+      if (!(await dayLavaStep())) {
+        await skyLavaLook()
+        if (!known.lava) await lavaLookout()
+        if (!lavaSourceKnown) await lavaAtSeenRuins()
+        await act('observe', { radius: 64 })
+        if (!known.lava) await act('explore', { block: 'lava', lavaSource: true, radius: 48, stepDistance: 60, timeoutSeconds: 90, surface: true })
+      }
       const viewed = cell()
       if (viewed && !lavaScoutCells.has(viewed)) { lavaScoutCells.add(viewed); lavaScoutViews++ }
       graphFact('lava_scout_views', lavaScoutViews)
@@ -4944,12 +5536,229 @@ async function executeStrategy (command, signal) {
 const intelligence = require(path.join(__dirname, 'src', 'campaign', 'intelligence')).createCampaignIntelligence({
   observe: intelligenceObservation, call, now: () => gameClock.now(), sleep,
   execute: (command, signal) => { const run = executeStrategy(command, signal); strategyTail = run.catch(() => undefined); return run },
-  eyes: EYES_NEED, beds: BEDS_END,
+  eyes: EYES_NEED, beds: BEDS_END, endPrepPrice: END_PREP_PRICE,
   record: decision => {
     telemetry.record({ ...decision, sec: decision.seconds, stage, sinceStart: Math.round((gameClock.now() - T0) / 1000) })
     if (decision.level === 'decision') log(`ГРАФ ${decision.reason}: ${(decision.plan || []).join(' → ')}`)
   }
 })
+
+const nightWorkEnabled = process.env.ND_NIGHT_WORK !== '0'
+const nightWorkSafe = process.env.ND_NIGHT_WORK_SAFE !== '0'
+const nightWorkSafety = nightWorkSafe ? require(path.join(__dirname, 'src', 'night-work')) : null
+const nightWorkFailures = new Map()
+let nightWorkFoes = ''
+let nightWorkLavaView = ''
+const nightWorkCastCause = () => JSON.stringify([known.lava, nightWorkLavaView])
+const nightWorkItems = re => JSON.stringify(Object.entries(state.inventory || {}).filter(([k]) => re.test(k)).sort())
+function nightWorkDependency (why, need) {
+  if (/NIGHT_RISK|закрыться на месте|факел/.test(why)) return JSON.stringify([sit.work, state.health, state.food, nightWorkFoes, sit.fight?.order,
+    nightWorkItems(/^(torch|coal|charcoal|cobblestone|cobbled_deepslate|dirt|netherrack|stick)$|_log$|_planks$/)])
+  if (/здоров|хп|NO_FOOD/.test(why)) return JSON.stringify([state.health, state.food, nightWorkItems(FOOD), nightWorkItems(RAW)])
+  if (MOB_BLOCKED.test(why) || /CAST_UNSAFE|моб|враг|скелет|зомби|creeper|skeleton|zombie|spider/.test(why)) return nightWorkFoes
+  if (/кирк|инструмент|нечем копать/.test(why)) return nightWorkItems(/_pickaxe$|_log$|_planks$|^stick$|^crafting_table$/)
+  if (need?.what) return JSON.stringify([need.what, have(need.what)])
+  return ''
+}
+function nightWorkBlocked (id, cause) {
+  const f = nightWorkFailures.get(id)
+  return !!f && f.cause === cause && f.dependency === nightWorkDependency(f.why, f.need) && !!state.pos &&
+    Math.hypot(state.pos.x - f.at.x, state.pos.y - f.at.y, state.pos.z - f.at.z) < 8
+}
+function nightWorkHere () {
+  const need = 3 * Math.max(0, portalBuckets() - have(/bucket$/)) + (lighter() ? 0 : 1)
+  const raw = Math.max(0, need - have('iron_ingot'))
+  // 300 тиков на доску, 200 на слиток; две доски оставляет существующий smeltAll.
+  const planks = have(/^(?!crimson_|warped_).*_planks$/) + 4 * have(/^(?!(?:stripped_)?(?:crimson|warped)_).*_log$/) - (have('crafting_table') ? 0 : 4) - 2
+  const heat = 8 * have(/^(coal|charcoal)$/) + 100 * have('lava_bucket') + Math.max(0, planks) * 1.5
+  const carriedKit = process.env.ND_IRON_FINISH_HERE === '1' && !known.portal && need > 0 &&
+    have('iron_ingot') + have('raw_iron') >= need && (lighter() || have('flint') || have('gravel')) &&
+    (have('crafting_table') || have(/_planks$/) + 4 * have(LOGS) >= 4) &&
+    (!raw || heat >= raw && (have('furnace') || have(COBBLE) >= 8))
+  return nightWorkEnabled && !sit.surface && ((known.portal && READY.nether() && near3(known.portal, 12)) ||
+    (!known.portal && have('water_bucket') && READY.cast() && near3(known.lava, 12) &&
+      !nightWorkBlocked('cast', nightWorkCastCause())) || carriedKit)
+}
+async function nightWorkPath (q) {
+  const dx = q.x - state.pos.x, dz = q.z - state.pos.z, dy = q.y + 1 - y()
+  const direction = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 'east' : 'west') : (dz > 0 ? 'south' : 'north')
+  if (dy < -2) return act('dig_down', { mode: 'stairs', direction, depth: Math.min(8, Math.ceil(-dy)), maxFallHp: 0, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 90 })
+  if (dy > Math.max(2, Math.hypot(dx, dz))) return act('tunnel', { direction: 'up', length: Math.min(8, Math.ceil(dy)), timeoutSeconds: 90 })
+  return act('tunnel', { direction, length: Math.min(8, Math.max(1, Math.ceil(Math.hypot(dx, dz) - 2))), torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 90 })
+}
+async function nightWorkWater () {
+  const r = await act('bucket', { fluid: 'water', radius: 4, walk: false })
+  if (r.status === 'interrupted' || died || strategyInterrupted || have('water_bucket')) return r
+  if (knownWater && !near3(knownWater, 4)) return nightWorkPath(knownWater)
+  if (OW_HEAR) {
+    const h = await act('portal', { mode: 'cast', listen: 16, fluid: 'water', timeoutSeconds: 30 })
+    if (h.status === 'interrupted' || died || strategyInterrupted) return h
+    const sound = h.detail?.heard?.[0]
+    if (sound) {
+      const vertical = Math.abs(sound.height || 0) > (sound.flat || 0)
+      return act('tunnel', { direction: vertical ? (sound.height > 0 ? 'up' : 'down') : sound.dir,
+        length: Math.max(1, Math.min(8, vertical ? Math.abs(sound.height) : (sound.flat || 0) + 3)), torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 90 })
+    }
+  }
+  return r
+}
+// Отказ «хп N и еды нет — сначала еда» (act) и смерть внутри ночной работы раньше вылетали из главного цикла — кампания
+// падала («прогон упал», gr0/gr1-fp1-s14-2-kit 16.10, nw1-s16-1 C8). Здесь — как у шагов маршрута: еда, затем новый выбор.
+async function nightWorkStep () {
+  try { return await nightWorkStepInner() } catch (e) {
+    if (e.stopCampaign || manualControl || e.strategyInterrupted) throw e
+    log(`ночная работа прервана: ${e.message}`)
+    if (/сначала еда/.test(e.message) && !died) {
+      try { await stageRun('food')() } catch (e2) { if (e2.stopCampaign || manualControl) throw e2; log(`еда ночью: ${e2.message}`) }
+    }
+    return { progress: false }
+  }
+}
+async function nightWorkStepInner () {
+  if (!nightWorkEnabled || died || dim() !== 'overworld' || !state.pos) return null
+  if (sit.inWater) { await leaveWater(); return { progress: false } }
+  const jobs = []
+  const observed = await intelligence.environment.observe()
+  const add = (id, seconds, strategy, cause, run) => {
+    const risk = strategy ? intelligence.registry.get(strategy).estimateRisk(observed) : 0
+    const guarded = /^(down:|tunnel:|sound$|lava-path$|water$)/.test(id)
+    const extra = nightWorkSafe && !guarded && !/^(cover|light|torches|eat|pick|craft|cook|smelt|flint)$/.test(id)
+      ? nightWorkSafety.price({ ...sit.work, hp: state.health, night: sit.night, fight: sit.fight }, seconds) : 0
+    jobs.push({ id, seconds, extra, price: seconds + (nightWorkSafe ? extra : risk * (Number(process.env.ND_DEATH_COST_MIN) || 60) * 60), cause, run })
+  }
+  if (known.portal && READY.nether() && portalFar() < 96) add('enter', portalFar() / 2.5 + 10, null,
+    () => JSON.stringify([known.portal, state.dimension]), () => enterNether())
+  const castJob = () => add('cast', 120, 'LavaPoolPortal',
+    nightWorkCastCause, async () => {
+      // The caster opens visible windows, resumes its own frame and validates reachable sources.
+      const r = await castForKit({ mode: 'cast', windows: true, maxDig: 64, keep: 8, radius: 12, timeoutSeconds: 540 })
+      if (r.status !== 'interrupted' && !died && !strategyInterrupted) await readMemory()
+      return r
+    })
+  if (!known.portal && have('water_bucket') && READY.cast() && near3(known.lava, 12) && (!sit.surface || lavaSourceKnown)) castJob()
+  if (!sit.surface) {
+    stage = 'nightWork'
+    const o = await act('observe', { radius: 32 })
+    if (o.status === 'interrupted' || died || strategyInterrupted) return { progress: false }
+    nightWorkFoes = JSON.stringify((o.detail?.entities || []).filter(e => CAVE_FOES.test(e.name)).map(e => [e.id, e.name, e.pos]).sort())
+    const blocks = o.detail?.blocks || []
+    nightWorkLavaView = JSON.stringify(blocks.filter(b => b.name === 'lava').map(b => [b.nearest, b.count]))
+    const kit = have(/bucket$/) >= portalBuckets() && lighter()
+    const ironNeed = !known.portal ? 3 * Math.max(0, portalBuckets() - have(/bucket$/)) + (lighter() ? 0 : 1)
+      : (!have(PICK_IRON) ? 3 : 0) + (!shieldOn() ? 1 : 0)
+    const fuel = () => nightWorkItems(/^(coal|charcoal|lava_bucket)$|_log$|_planks$|^stick$/)
+    if (nightWorkSafe) {
+      const w = sit.work || {}, dark = !(Number(w.block) > 0 || !sit.night && Number(w.sky) > 7)
+      if (!w.sealed && (dark || sit.foes)) add('cover', w.coverSeconds || 3, null,
+        () => JSON.stringify(w), () => act('shelter', { mode: 'box' }))
+      if (dark && !have('torch') && have(/^(coal|charcoal)$/) >= 2) add('torches', 1.6, null,
+        () => nightWorkItems(/^(coal|charcoal|stick|torch)$|_planks$|_log$/), () => torches())
+      if (dark && have('torch')) add('light', .8, null, () => JSON.stringify(w) + have('torch'),
+        () => act('shelter', { mode: 'light' }))
+    }
+    if ((state.food ?? 20) < 20 && (have(FOOD) || have(RAW))) add('eat', 1.6, null,
+      () => JSON.stringify([state.food, nightWorkItems(FOOD), nightWorkItems(RAW)]), () => act('eat'))
+    if ((state.health ?? 20) < 20 && (state.food ?? 20) >= 18) add('heal', 40, null,
+      () => JSON.stringify([state.health, state.food]), () => nightWorkSafe ? act('wait', { seconds: 5 })
+        : act('refuge', { minHp: 20, maxSeconds: 60, stayIn: true, why: 'ночная работа: регенерация' }))
+    if (have(RAW)) add('cook', 10 * have(RAW), null, () => nightWorkItems(RAW) + fuel() + have('furnace') + have(COBBLE),
+      () => cook({ reserveHunger: netherFoodNeed() * 6 }))
+    if (have('iron_ingot') < ironNeed && have('raw_iron')) add('smelt', 10 * Math.min(have('raw_iron'), ironNeed - have('iron_ingot')), null,
+      () => JSON.stringify([ironNeed, have('raw_iron'), have('iron_ingot'), fuel(), have('furnace'), have(COBBLE)]),
+      () => smeltAll('raw_iron', 'iron_ingot', { max: ironNeed - have('iron_ingot'), fetchCoal: false }))
+    if ((!kit && (have('iron_ingot') >= 3 && have(/bucket$/) < portalBuckets() || !lighter() && have('flint') && have('iron_ingot'))) ||
+        (known.portal && ironNeed && have('iron_ingot') >= ironNeed)) add('craft', 20, null,
+      () => nightWorkItems(/^(iron_ingot|iron_nugget|iron_block|flint|stick|crafting_table|shield)$|bucket$|_pickaxe$|_log$|_planks$/), () => spendIron())
+    if (!lighter() && !have('flint') && have('gravel')) add('flint', 20, null, () => String(have('gravel')),
+      () => act('flint_grind', { max: 40, timeoutSeconds: 90 }))
+    const wantOre = have('raw_iron') + have('iron_ingot') < ironNeed
+    const wantCoal = have(/^(coal|charcoal)$/) < 2 && (wantOre || have('raw_iron') || have(RAW))
+    const wantGravel = !lighter() && !have('flint') && !have('gravel')
+    const ledger: any = await call('mine_seen', { limit: 40 })
+    for (const p of ledger.detail?.spots || []) {
+      if ((p.fromMe ?? Infinity) > 24 || !(wantOre && /^(deepslate_)?iron_ore$/.test(p.name) || wantCoal && /^(deepslate_)?coal_ore$/.test(p.name))) continue
+      add(`ore:${p.name}:${JSON.stringify(p.at)}`, 10, 'MineIron', () => JSON.stringify(p.at),
+        () => nightWorkSafe && !near3(p.at, 3) ? nightWorkPath(p.at) : act('mine_seen', { at: p.at, timeoutSeconds: 90 }))
+    }
+    const gravel = blocks.find(b => b.name === 'gravel' && b.nearest)
+    if (wantGravel && gravel) add('gravel', 15, 'MineIron', () => JSON.stringify(gravel.nearest),
+      () => nightWorkSafe && !near3(gravel.nearest, 3) ? nightWorkPath(gravel.nearest)
+        : act('mine', { block: 'gravel', count: 4, radius: nightWorkSafe ? 4 : 24, dry: true, timeoutSeconds: 60 }))
+    if (!known.portal && have('bucket') && !have('water_bucket')) add('water', 40, 'GetWater',
+      () => JSON.stringify(knownWater), () => nightWorkSafe ? nightWorkWater() : kitWaterHere())
+    if (!known.portal && kit && have('water_bucket')) {
+      // Observe may have discovered lava since the job list was started.
+      if (near3(known.lava, 12) && !jobs.some(j => j.id === 'cast')) castJob()
+      else if (known.lava && !near3(known.lava, 12)) add('lava-path', lavaApproachSeconds(known.lava, lavaSourceKnown), 'LavaPoolPortal',
+        () => JSON.stringify(known.lava), () => nightWorkSafe ? nightWorkPath(known.lava) : approachCastLava(known.lava))
+    }
+    const search = !known.portal && (!kit || !have('water_bucket') || !near3(known.lava, 12) || nightWorkBlocked('cast', nightWorkCastCause()))
+    if (search || known.portal && (wantOre || wantCoal || have(COBBLE) < 64)) {
+      // Do not send an empty bucket to deep lava. First water/kit/iron, then the deep lava band.
+      const goal = !known.portal && kit && have('water_bucket') ? DEEP_Y : Math.min(16, y())
+      const purpose = !kit ? 'набор: железо/гравий' : !have('water_bucket') ? 'вода' : 'лава'
+      if (OW_HEAR && kit && have('water_bucket') && !known.portal) {
+        const h = await act('portal', { mode: 'cast', listen: 16, timeoutSeconds: 30 })
+        if (h.status === 'interrupted' || died || strategyInterrupted) return { progress: false }
+        const sound = h.detail?.heard?.[0]
+        if (sound) {
+          heardLava = { ...sound, from: { ...state.pos }, t: gameClock.now() }
+          const vertical = Math.abs(sound.height || 0) > (sound.flat || 0)
+          const direction = vertical ? (sound.height > 0 ? 'up' : 'down') : sound.dir
+          const length = Math.max(1, Math.min(16, vertical ? Math.abs(sound.height) : (sound.flat || 0) + 3))
+          add('sound', length * 2, 'ScoutLava', () => JSON.stringify(sound),
+            () => act('tunnel', { direction, length, torchEvery: nightWorkSafe && have('torch') ? 8 : 0, timeoutSeconds: 90 }))
+        }
+      }
+      for (const direction of ['north', 'east', 'south', 'west']) {
+        const remaining = Math.max(0, y() - goal), depth = Math.min(12, Math.ceil(remaining))
+        const searchPrice = remaining * 3.25 + (!kit ? structureValue.SECONDS.iron : 60)
+        // shortcut: stairs 3.25 s/level (467 receipts A1-A5), horizontal leg ~2 s/block; verify on paired snapshots.
+        if (depth) add(`down:${direction}`, searchPrice, 'MineIron', () => `${purpose}:${goal}`,
+          () => act('dig_down', { mode: 'stairs', direction, depth, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 120 }))
+        add(`tunnel:${direction}`, searchPrice + 16 * 2, 'MineIron', () => `${purpose}:${goal}`,
+          () => act('tunnel', { direction, length: 16, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 120 }))
+      }
+    }
+    if ((sit.pickLeft ?? 0) < 48) add('pick', 20, null,
+      () => nightWorkItems(/_pickaxe$|_log$|_planks$|^stick$|^crafting_table$|^(cobblestone|cobbled_deepslate|iron_ingot)$/), () => spares(48))
+  }
+  const reasons = []
+  const kitOnly = process.env.ND_IRON_FINISH_HERE === '1' && !sit.night && !known.portal && !READY.cast()
+  for (const job of jobs.filter(j => !kitOnly || ['cover', 'light', 'torches', 'eat', 'smelt', 'craft', 'flint'].includes(j.id)).sort((a, b) => a.price - b.price)) {
+    if (nightWorkBlocked(job.id, job.cause())) { reasons.push(`${job.id}: ${nightWorkFailures.get(job.id).why}`); continue }
+    if (nightWorkSafe && job.extra > job.seconds) { reasons.push(`${job.id}: NIGHT_RISK ${Math.round(job.extra)} с > выигрыш ${Math.round(job.seconds)} с`); continue }
+    stage = 'nightWork'
+    const before = JSON.stringify([state.inventory, state.health, state.food, known.lava, known.portal, dim()]), at = { ...state.pos }
+    log(`ночная работа: ${job.id}, цена ≈ ${Math.round(job.price)} с`)
+    let r
+    try { r = await job.run() } catch (e) {
+      if (e.stopCampaign) throw e
+      if (e.strategyInterrupted || died) return { progress: false }
+      r = { error: e.message }
+    }
+    if (r?.status === 'interrupted' || died || strategyInterrupted) return { progress: false }
+    await refresh(); await sense()
+    const progress = before !== JSON.stringify([state.inventory, state.health, state.food, known.lava, known.portal, dim()]) ||
+      Math.hypot(at.x - state.pos.x, at.y - state.pos.y, at.z - state.pos.z) >= 1 || (r?.detail?.dug || 0) > 0
+    const why = String(r?.detail?.stopped || r?.error || (!progress ? 'без прогресса' : ''))
+    if (why) {
+      nightWorkFailures.set(job.id, { at: { ...state.pos }, cause: job.cause(), why, need: r?.detail?.need,
+        dependency: nightWorkDependency(why, r?.detail?.need) })
+      reasons.push(`${job.id}: ${why}`)
+    } else nightWorkFailures.delete(job.id)
+    if (progress) return { progress: true }
+    if (sit.surface) return null
+  }
+  if (kitOnly) return { progress: false }
+  if (sit.surface) return null
+  stage = 'nightWork'
+  const why = `ночь: нет доступной работы — ${reasons.join('; ') || (known.portal ? 'портал есть, нужны еда/путь; местная подготовка закончена' : 'нет инструмента или доступных целей')}`
+  log(why)
+  if (!nightWorkSafe) await act('refuge', { minHp: 20, maxSeconds: 60, stayIn: true, why })
+  if (!died) await act('wait', { seconds: 5 }) // observation polling, never re-admits a refused job
+  return { progress: false }
+}
 
 ws.on('open', async () => {
   try {
@@ -4966,11 +5775,37 @@ ws.on('open', async () => {
     let threatHp0 = 20
     let threatBurrowAt = -Infinity
     const failureKey = name => {
+      if (process.env.ND_NE_RECOVER === '1' && dim() === 'the_nether') name = netherFailureName(name)
       const site = name === 'bastion' ? nextBastion() : null
       return site ? `${name}:${site.dimension || 'the_nether'}:${site.x}:${site.z}` : name
     }
-    const cooling = s => { const f = fails.get(failureKey(s.name)); return !!f && f.until > gameClock.now() }
+    const cooling = s => {
+      const f = fails.get(failureKey(s.name))
+      if (f?.ow) return dim() === 'overworld' && f.observed === overworldFailureState(f.origin)
+      if (f?.observed !== undefined) return dim() === 'the_nether' && f.observed === (f.kind ? netherFailureState(f.kind, f.origin) : netherRetryState(f.origin))
+      if (process.env.ND_NE_RECOVER === '1' && netherFailureName(s.name) === 'bastion') { const b = nextBastion(); if (b && bastionBlocked(b)) return true }
+      return !!f && f.until > gameClock.now()
+    }
     const failStage = (name, key) => {
+      const kind = process.env.ND_NE_RECOVER === '1' ? netherFailureName(name) : null
+      if (kind && dim() === 'the_nether' && ['nether', 'bastion', 'pearls', 'netherTools', 'bastionSupply'].includes(kind)) {
+        fails.set(key, { kind, observed: netherFailureState(kind), origin: state.pos && { ...state.pos }, until: Infinity })
+        log('этап ' + kind + ': повтор после смены причины; дальше другой подход или цель по цене')
+        return
+      }
+      if (name === 'nether' && dim() === 'the_nether') {
+        fails.set(key, { observed: netherRetryState(), origin: state.pos && { ...state.pos }, until: Infinity })
+        log('поиск крепости не продвинулся — повтор после нового обзора, пути, снабжения или смены угрозы')
+        return
+      }
+      if (process.env.ND_OW_CAUSE_RETRY === '1' && dim() === 'overworld') {
+        const prev = fails.get(key)
+        const n = prev?.ow ? prev.n + 1 : 1
+        // Первый пустой заход — сразу другой этап по цене; второй при том же состоянии — ждать смены причины.
+        fails.set(key, { ow: true, n, observed: n >= 2 ? overworldFailureState(state.pos) : '', origin: state.pos && { ...state.pos }, until: 0 })
+        if (n >= 2) log(`этап ${name}: пустой заход при том же состоянии — повтор после смены причины (место, ночь, вода/лава, снаряжение, еда)`)
+        return
+      }
       const f = fails.get(key) || { n: 0, level: 0, until: 0 }
       f.n++
       f.at = gameClock.now()
@@ -5051,7 +5886,7 @@ ws.on('open', async () => {
           await skyLavaLook()
           // С земли озеро часто закрыто рельефом и деревьями (замер слота 1 14.10: 5 открытых клеток озера в 54 бл., ни одна не видна
           // с земли): раз-два за прогон — столб на 10 вверх своими блоками, осмотр, спуск (как игрок с вышки). Блоки — после камня.
-          if (!lavaSourceKnown) await lavaLookout()
+          if (!lavaSourceKnown && !dayLavaActive()) await lavaLookout()
         } catch (e) { if (e.stopCampaign) throw e }
       }
       // Постройки на виду — раз в минуту днём поверху: лут, если выгода больше пути (lootSeenStructures, числа в журнале).
@@ -5071,7 +5906,11 @@ ws.on('open', async () => {
           // Зверей на виду нет, а еды нет совсем и сытость уже не лечит (≤ 15): днём — охота с поиском (этап food, ≤ 2 мин),
           // пока светло, а не ночью с 4 хп (cl-g 14.10: обе смерти — ночью без единой еды за 13–23 мин).
           await refresh()
-          if (!died && foodUnits() < 2 && (state.food ?? 20) <= 15 && gameClock.now() >= foodSearchAt && !cooling(STAGES.find(x => x.name === 'food'))) {
+          // Лава с набором рядом (castNear) — сперва литьё (2–3 мин, портал не пропадёт), еда — после: kc6-fp1-s16-1-kit-202 16.10:
+          // лава в 32 бл., вода и огниво в рюкзаке, «днём ищу зверей» увёл за 135 бл., ночь в норе, 25 мин без портала.
+          // ND_CAST_BEFORE_FOOD=0 — прежний порядок.
+          const castFirst = process.env.ND_CAST_BEFORE_FOOD !== '0' && !known.portal && castNear() && (state.food ?? 20) > 6
+          if (!died && !castFirst && foodUnits() < 2 && (state.food ?? 20) <= 15 && gameClock.now() >= foodSearchAt && !cooling(STAGES.find(x => x.name === 'food'))) {
             foodSearchAt = gameClock.now() + 300000
             log(`еды ${foodUnits()}, сытость ${state.food} — днём ищу зверей, пока светло`)
             const before = stageProgress('food')
@@ -5089,11 +5928,21 @@ ws.on('open', async () => {
       if (nightHeld && !nightHold() && !died) {
         nightHeld = false
         await sense()
-        if (!sit.surface && !sit.night && dim() === 'overworld') { stage = '-'; log('рассвет — наверх своей лестницей'); await toSurface() }
+        if (!sit.surface && !sit.night && dim() === 'overworld') {
+          if (nightWorkHere()) {
+            const worked = await nightWorkStep()
+            if (worked?.progress) { lastProgressAt = gameClock.now(); nightHeld = true; continue }
+          }
+          stage = '-'; log('рассвет — наверх своей лестницей'); await toSurface()
+        }
       }
       if (!died && nightHold()) {
         nightHeld = true
-        if (!known.portal && castNear() && gameClock.now() >= nightCastAt) {
+        if (nightWorkEnabled) {
+          const worked = await nightWorkStep()
+          if (worked) { if (worked.progress) lastProgressAt = gameClock.now(); continue }
+        }
+        if (!nightWorkEnabled && !known.portal && castNear() && gameClock.now() >= nightCastAt) {
           nightCastAt = gameClock.now() + 120000
           stage = 'cast'
           log('ночь, но лава рядом и набор литья готов — литьё')
@@ -5103,7 +5952,7 @@ ws.on('open', async () => {
         // Набор собран (ведро, огниво), лава-источник видена в 96 бл., нет только воды: ждать рассвета — N с впустую, заход за
         // водой и литьё ночью поверху — ~90 с по цене structure-value.NIGHT_SECONDS. Ждать дороже — иду (пользователь: «ночью не
         // пережидать»; g3-s2-1 14.10: ночь в коробке с готовым железом, на рассвете — смерть в деревне).
-        if (!known.portal && !have('water_bucket') && have(/^bucket$/) >= portalBuckets() && lighter() && lavaSourceKnown && known.lava && state.pos &&
+        if (!nightWorkEnabled && !known.portal && !have('water_bucket') && have(/^bucket$/) >= portalBuckets() && lighter() && lavaSourceKnown && known.lava && state.pos &&
             Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) <= 96 && gameClock.now() >= nightWaterAt && (state.health ?? 20) >= 12) {
           const t = todNow()
           const toDawn = t !== null && t >= 11840 && t < 23460 ? (23460 - t) / 20 : 0
@@ -5121,7 +5970,7 @@ ws.on('open', async () => {
           }
         }
         // Портал есть и в Ад готов — ночь не пережидать, а уйти в Ад (там нет ночи); портал рядом.
-        if (known.portal && READY.nether() && portalFar() < 96 && gameClock.now() >= nightEnterAt) {
+        if (!nightWorkEnabled && known.portal && READY.nether() && portalFar() < 96 && gameClock.now() >= nightEnterAt) {
           nightEnterAt = gameClock.now() + 120000
           stage = 'nether'
           log('ночь, портал рядом и в Ад готов — ухожу в Ад')
@@ -5180,13 +6029,16 @@ ws.on('open', async () => {
       if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { stage = '-'; await ensurePick() }
       const need = STAGES.filter(s => !(only && !only.includes(s.name)) && s.needed() && (dim() === 'overworld' || OTHER_WORLD.has(s.name)))
       const selection = only ? null : await intelligence.select(need, cooling)
+      if (await continueFortressChoice(selection, fails.get(failureKey('nether')))) continue
       if (!selection && dim() === 'the_nether' && !bastionPearlsPending() && need.some(s => s.name === 'nether') && (!READY.nether() || (fightGearWanted && !fightReady())) &&
-          gameClock.now() >= homeForGearAfter) {
+          homeForGearState?.observed !== netherRetryState(homeForGearState?.origin)) {
         stage = '-'
         log(`для ифритов не хватает ${fightGearWanted ? fightLack() : netherLack()} — домой за недостающим`)
         await returnFromNether()
-        // Портал не дался (s1c-F-17 06.10: «до порога портала не дошёл» 2 883 раза за секунды, 38 МБ телеметрии) — пауза 5 игр. мин.
-        if (dim() === 'the_nether') { homeForGearAfter = gameClock.now() + 300000; await act('ne_burrow', { why: 'домой не вышло' }) }
+        if (dim() === 'the_nether') {
+          await act('ne_burrow', { why: 'домой не вышло' })
+          homeForGearState = { observed: netherRetryState(), origin: state.pos && { ...state.pos } }
+        }
         continue
       }
       if (!selection && !need.length && dim() === 'the_nether') {
@@ -5270,7 +6122,38 @@ ws.on('open', async () => {
       if (!s) {
         stage = '-'
         const upNeed = dim() === 'the_nether' ? STAGES.filter(x => !(only && !only.includes(x.name)) && !OTHER_WORLD.has(x.name) && x.needed()) : []
+        const blockedSearch = fails.get(failureKey('nether'))
+        // Закрытый повтор поиска нуждается в собственном ходе к следующему наблюдаемому месту.
+        if (dim() === 'the_nether' && known.fortress && rodsWanted() && blockedSearch?.observed !== undefined && process.env.ND_FORTRESS_FRONTIER !== '0') {
+          const cause = netherRetryState(blockedSearch.origin)
+          if (blockedSearch.frontier !== cause) {
+            const probe = await act('fortress', { mode: 'advance', timeoutSeconds: 90 })
+            const stoppedCause = netherRetryState(blockedSearch.origin)
+            await refresh()
+            await readMemory()
+            if (!cooling({ name: 'nether' }) || (probe.status === 'done' && probe.detail?.frontierTried > 0)) continue
+            blockedSearch.frontier = stoppedCause
+            log(probe.detail?.frontierExhausted ? 'крепость: доступные видимые точки обзора исчерпаны; та же недоступная цель не повторяется'
+              : `крепость: новый обзор не выполнен (${probe.code || probe.status}); повтор после смены причины`)
+          }
+        }
+        if (await continueFortressChoice(null, blockedSearch)) continue
+        if (process.env.ND_NE_RECOVER === '1' && dim() === 'the_nether') {
+          if (await changeNetherCause()) continue
+          break
+        }
         if (process.env.ND_NE_STAY === '1' && dim() === 'the_nether' && need.length && need.every(x => cooling(x))) {
+          const blocked = fails.get(failureKey('nether'))
+          if (blocked?.observed !== undefined) {
+            if (!blocked.covered) {
+              blocked.covered = true
+              await act('ne_burrow', { why: 'поиск крепости: укрытие перед новым наблюдением' })
+              await refresh()
+            }
+            await act('observe', { radius: 40 })
+            await act('wait', { seconds: 3 }) // observation polling; elapsed time does not reopen the search
+            continue
+          }
           log(`в Аду этапы на паузе (${need.map(x => x.name).join(', ')}) — жду в толще (ND_NE_STAY)`)
           await act('ne_burrow', { why: 'жду конца паузы' })
           await refresh()
@@ -5356,7 +6239,7 @@ ws.on('open', async () => {
         fails.delete(attemptedKey)
         lastProgressAt = gameClock.now()
         log('частичный полезный результат — продолжаю без ожидания и отката')
-      } else if (s.name === 'bastion' && barterFlow.enabled() && barterRetryPending) {
+      } else if (process.env.ND_NE_RECOVER !== '1' && s.name === 'bastion' && barterFlow.enabled() && barterRetryPending) {
         barterRetryPending = false
         fails.delete(attemptedKey)
         log('бартер: золото есть — 15 с в закрытом укрытии и другой поиск, FR-гейт сохраняю')

@@ -311,11 +311,13 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
 // и закрыть ход над собой; не вышло вниз или уже у стены — закрыть видимые проёмы вокруг тела (это и есть коробка на месте).
 async function coverHere (session, ctl, { minY = 40 }: any = {}) {
   const bot = session.bot
+  if (require('./tactics/lava-escape').inLava(bot)) return { ok: false, sealed: false, why: 'тело в лаве — сначала выход из жидкости' }
   session._ndCoverUntil = gameClock.now() + 4000
   const out: any = { dug: 0, placed: 0, moved: 0, mouths: 0, gold: 0, down: 0, unsealed: 0 }
   if (around(bot, bodyOf(feetCell(bot))).open.length > 3) await descend(session, ctl, 3, [1, 0], out, minY)
   out.unsealed += await seal(bot, bodyOf(feetCell(bot)), [], out)
-  const left = around(bot, bodyOf(feetCell(bot))).open.length
+  const a = around(bot, bodyOf(feetCell(bot)))
+  const left = a.open.length + a.wet.length
   return { ok: left === 0, sealed: left === 0, how: out.down ? 'в толщу ступенями' : 'проёмы вокруг закрыл', ...out, at: xyz(bot.entity.position), why: left ? `проёмов осталось ${left}` : undefined }
 }
 

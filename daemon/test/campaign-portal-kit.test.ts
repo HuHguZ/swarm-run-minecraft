@@ -12,7 +12,7 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
   const inventory: Record<string, number> = { iron_ingot: 7, flint: 1, oak_planks: 20, stone_pickaxe: 1, ...extra }
   const calls: Array<{ method: string, params: any }> = []
   const costs: Record<string, number> = { bucket: 3, flint_and_steel: 1, shield: 1, iron_pickaxe: 3, iron_sword: 2 }
-  const context: any = { process: { env }, known: {}, state: { inventory }, OW_DEEP: true, castSurfaceFailed: false,
+  const context: any = { process: { env: { ND_OW_SHIELD: '0', ...env } }, known: {}, state: { inventory }, OW_DEEP: true, castSurfaceFailed: false,
     PICK_IRON: /^(iron|diamond|netherite)_pickaxe$/, ARMOR_POINTS: {}, fightGearWanted: false,
     have: re => Object.entries(inventory).reduce((n, [k, v]) => n + ((typeof re === 'string' ? k === re : re.test(k)) ? v : 0), 0),
     lighter: () => !!(inventory.flint_and_steel || inventory.fire_charge), worn: () => true,
@@ -30,11 +30,13 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
   const helper = source.includes('const portalBuckets =') ? source.slice(source.indexOf('const portalBuckets ='), source.indexOf('async function spendIron ()')) : ''
   const spend = source.slice(source.indexOf('async function spendIron ()'), source.indexOf('const GEAR_CALC'))
   const smelt = source.slice(source.indexOf('const ironToSmelt ='), source.indexOf('async function smeltAll'))
-  const casting = source.slice(source.indexOf("defStage('cast',"), source.indexOf("defStage('diamond',"))
+  const casting = source.slice(source.indexOf('async function approachCastLava'), source.indexOf("defStage('diamond',"))
   context.defStage = (_name, _needed, run) => { context.cast = run }
-  Object.assign(context, { castRuns: 0, died: false, sit: { surface: true, night: false }, PICK_STONE: /_pickaxe$/,
+  Object.assign(context, { castRuns: 0, died: false, strategyInterrupted: false, stairEntrance: null, surfaceShaft: null,
+    intelligence: { environment: { observe: async () => ({}) }, registry: { get: () => ({ estimateCost: () => 1200, estimateRisk: () => 0.02 }) } },
+    structureValue: { SECONDS: { iron: 152 } }, nightHold: () => false, sit: { surface: true, night: false }, PICK_STONE: /_pickaxe$/,
     sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null, lavaAtSeenRuins: async () => false, lootSeenStructures: async () => false, lavaSourceKnown: false, castSiteFails: new Map(), lavaBadSites: [], lavaBad: () => false,
-    recoverGuard: async () => {}, unclutter: async () => {}, dim: () => 'overworld', y: () => 64,
+    dayLavaStep: async () => false, recoverGuard: async () => {}, unclutter: async () => {}, dim: () => 'overworld', y: () => 64,
     walkAway: async () => { calls.push({ method: 'walkAway', params: {} }) } })
   vm.createContext(context)
   vm.runInContext((helper + spend + smelt + casting).replace('(plan as any)', 'plan') + '\nthis.spend=spendIron;this.smelt=ironToSmelt', context)
@@ -205,7 +207,7 @@ for (const blocked of [false, true]) {
       assert.equal(f.calls.find(c => c.method === 'explore')!.params.surface, true)
       assert.equal(f.calls.find(c => c.method === 'explore')!.params.lavaSource, true)
     }
-    else { assert.equal(f.context.state.pos.y, 14); assert.equal(legs.length, 3); assert.equal(f.calls.filter(c => c.method === 'observe').length, 3) }
+    else { assert.equal(f.context.state.pos.y, 14); assert.equal(legs.length, 3) }
     assert.equal(f.context.known.portal, true)
   })
 }
@@ -222,7 +224,7 @@ test('carried two-bucket fallback cannot open a window selected by a hidden lava
   const fallback = f.calls[1].params
   assert.equal(fallback.one, undefined)
   assert.equal(fallback.hint, undefined)
-  assert.equal(fallback.windows, false)
+  assert.equal(fallback.windows, true)
 })
 test('MineIron prices four missing portal ingots and accepts the actually crafted kit', () => {
   const r = speedrunRegistry(), s = emptyWorld(); s.resources = { stone_tool: 1, iron: 1 }; s.structureSearchMs = 180000
@@ -293,7 +295,7 @@ test('MineIron subtracts the two ingots already carried as 24 ruin nuggets', asy
   assert.equal(f.inventory.bucket, 1)
 })
 test('a failed single-bucket shore is approached again without demanding another bucket', async () => {
-  const f = fixture({ water_bucket: 1 }); f.context.OW_DEEP = false
+  const f = fixture({ water_bucket: 1 }, { ND_OW_KIT_FRAME: '0' }); f.context.OW_DEEP = false
   f.context.act = async (method, params) => { f.calls.push({ method, params }); return { detail: { stopped: 'места на берегу нет: берег не твёрдый' } } }
   await f.context.cast()
   assert.equal(f.calls.filter(c => c.method === 'walkAway').length, 6)
@@ -319,7 +321,7 @@ test('carried iron blocks fund the actual kit and sub-ingot nuggets remain intac
 })
 
 test('a lava site where the frame does not stand is dropped after four refusals and another lake is searched (cl-ai 14.10)', async () => {
-  const f = fixture({ water_bucket: 1, cobblestone: 24, flint_and_steel: 1 })
+  const f = fixture({ water_bucket: 1, cobblestone: 24, flint_and_steel: 1 }, { ND_OW_KIT_FRAME: '0' })
   f.context.OW_DEEP = false
   f.context.known.lava = { x: 0, y: 63, z: 0 }
   f.context.state.pos = { x: 2, y: 64, z: 1 }

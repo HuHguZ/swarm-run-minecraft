@@ -461,20 +461,6 @@ function install (session, deps: any = {}) {
   // торможение» из расчёта Codex (codex-lab/mv-descent/sim.js walk-brake): нужное изменение скорости → взгляд по
   // нему и «вперёд», если оно больше половины разгона за тик (на земле и в воздухе — свои коэффициенты физики).
   st.desc = null
-  function steerTo (e, dest, sneak) {
-    const ph = bot.physics || {}
-    const onG = !!e.onGround
-    const slip = ph.defaultSlipperiness ?? 0.6
-    const inertia = onG ? slip * 0.91 : (ph.airborneInertia ?? 0.91)
-    const base = onG ? (ph.playerSpeed ?? 0.1) * 0.1627714 / inertia ** 3 : (ph.airborneAcceleration ?? 0.02)
-    const acc = base * 0.98 * (sneak ? (ph.sneakSpeed ?? 0.3) : 1)
-    const dx = dest.x - e.position.x; const dz = dest.z - e.position.z
-    const len = Math.hypot(dx, dz); const speed = Math.hypot(e.velocity.x, e.velocity.z)
-    const want = Math.min(sneak ? 0.06 : 0.19, len * 0.5)
-    const ax = (len ? dx / len * want / inertia : 0) - e.velocity.x
-    const az = (len ? dz / len * want / inertia : 0) - e.velocity.z
-    return { yaw: Math.atan2(-ax, -az), forward: Math.hypot(ax, az) > acc * 0.5 && !(len < 0.03 && speed < 0.015) }
-  }
   function descTick (e) {
     const d = st.desc
     const C = d.cell
@@ -509,7 +495,7 @@ function install (session, deps: any = {}) {
       // грань видна из центра своей ступени, а с её края луч цепляет саму ступень — стоять в центре.
       const edge = d.ref.x === C.x - d.tag.dir.x && d.ref.z === C.z - d.tag.dir.z
       const from = d.tag.from
-      const st2 = steerTo(e, edge ? T : new Vec3(from.x + 0.5, p.y, from.z + 0.5), true)
+      const st2 = steerTo(bot, e, edge ? T : new Vec3(from.x + 0.5, p.y, from.z + 0.5), true)
       const eye = p.offset(0, EYE, 0)
       const fp = d.ref.offset(0.5 + d.face.x * 0.5, 0.5, 0.5 + d.face.z * 0.5)
       const pitch = Math.atan2(fp.y - eye.y, Math.max(0.05, Math.hypot(fp.x - eye.x, fp.z - eye.z)))
@@ -523,7 +509,7 @@ function install (session, deps: any = {}) {
       d.ticksA = (d.ticksA || 0) + 1
       return { phase: 'place' }
     }
-    const st2 = steerTo(e, T, false)
+    const st2 = steerTo(bot, e, T, false)
     bot.look(st2.yaw, 0, true)?.catch?.(() => {})
     keys(st2.forward, false)
     if (!d.stepAt) d.stepAt = now()
@@ -759,4 +745,19 @@ function install (session, deps: any = {}) {
   return st
 }
 
-module.exports = { replanSig, replanCount, goalKey, on, addBridge, bridgeMove, scarceCost, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }
+function steerTo (bot, e, dest, sneak) {
+  const ph = bot.physics || {}
+  const onG = !!e.onGround
+  const slip = ph.defaultSlipperiness ?? 0.6
+  const inertia = onG ? slip * 0.91 : (ph.airborneInertia ?? 0.91)
+  const base = onG ? (ph.playerSpeed ?? 0.1) * 0.1627714 / inertia ** 3 : (ph.airborneAcceleration ?? 0.02)
+  const acc = base * 0.98 * (sneak ? (ph.sneakSpeed ?? 0.3) : 1)
+  const dx = dest.x - e.position.x; const dz = dest.z - e.position.z
+  const len = Math.hypot(dx, dz); const speed = Math.hypot(e.velocity.x, e.velocity.z)
+  const want = Math.min(sneak ? 0.06 : 0.19, len * 0.5)
+  const ax = (len ? dx / len * want / inertia : 0) - e.velocity.x
+  const az = (len ? dz / len * want / inertia : 0) - e.velocity.z
+  return { yaw: Math.atan2(-ax, -az), forward: Math.hypot(ax, az) > acc * 0.5 && !(len < 0.03 && speed < 0.015) }
+}
+
+module.exports = { steerTo, replanSig, replanCount, goalKey, on, addBridge, bridgeMove, scarceCost, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }

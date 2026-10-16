@@ -246,6 +246,12 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       out.how = 'hole'
       out.depth = h.depth
       hold = await holdOut(session, ctl, { kind: 'hole', minHp, deadline, note: step })
+      if (process.env.ND_NIGHT_WORK !== '0' && out.stayIn && !out.untilDawn && !h.open &&
+          !/^(breached|died)$/.test(hold.why) && !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
+        step('остаюсь в закрытой норе — дальше работа')
+        out.stayed = true
+        break
+      }
       if ((sitOn() || out.untilDawn) && !h.open && hold.why !== 'breached' && hold.why !== 'died') {
         const st = await sitTight(session, ctl, { at: bot.entity.position.floored(), t0, step, untilDawn: out.untilDawn })
         if (st.sat) out.sat = Math.round(st.sat / 1000)
@@ -267,7 +273,13 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       out.how = 'pocket'
       step(`сижу в замкнутом кармане (${a.pocket} кл.)`)
       hold = await holdOut(session, ctl, { kind: 'pocket', minHp, deadline, note: step })
-      if (session.playPolicy?.mode === 'speedrun' && !out.untilDawn && hold.why === 'no_food' &&
+      if (process.env.ND_NIGHT_WORK !== '0' && out.stayIn && !out.untilDawn &&
+          !/^(breached|died)$/.test(hold.why) && !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
+        step('остаюсь в кармане — дальше работа')
+        out.stayed = true
+        break
+      }
+      if ((process.env.ND_OW_NIGHT_BLOCKOFF === '1' && out.stayIn || session.playPolicy?.mode === 'speedrun') && !out.untilDawn && hold.why === 'no_food' &&
         !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
         step('остаюсь в кармане — дальше работа или еда')
         out.stayed = true

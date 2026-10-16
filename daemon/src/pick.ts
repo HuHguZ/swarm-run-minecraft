@@ -93,6 +93,9 @@ function poseOf (bot, entity) {
 // Avatar.POSES in Minecraft 1.21.11 supplies pose-specific eye heights.
 function eyeHeight (bot, entity = bot.entity) {
   const pose = poseOf(bot, entity)
+  if (entity === bot.entity && process.env.ND_WATER_ESCAPE_BUDGET !== '0' && entity._ndPoseHeight != null && ![1, 4, 'fall_flying', 'spin_attack'].includes(pose)) {
+    return entity._ndPoseHeight === .6 ? .4 : entity._ndPoseHeight === 1.5 ? 1.27 : 1.62
+  }
   if (pose === 1 || pose === 3 || pose === 4 || pose === 'fall_flying' || pose === 'swimming' || pose === 'spin_attack') return 0.4
   if (pose === 5 || pose === 'crouching' || entity.height === 1.5 || (entity === bot.entity && bot.getControlState?.('sneak'))) return 1.27
   return 1.62

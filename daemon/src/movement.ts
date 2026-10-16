@@ -5,6 +5,7 @@ const Vec3 = require('vec3')
 const geometry = require('./navigation/geometry')
 
 const sleep = (ms) => gameClock.sleep(ms)
+const waterBudgetOn = () => process.env.ND_WATER_ESCAPE_BUDGET !== '0'
 // Floor, not round. An entity standing at x=121.5 is in block 121, but rounding
 // reports 122 — and the brain then hands 122 to /setblock or to its own
 // coordinate arithmetic and acts on the block next door. This is what the game
@@ -154,7 +155,7 @@ function inWater (bot) {
     const b = bot.blockAt(p.offset(0, dy, 0))
     if (waterCell(b)) return true
   }
-  return false
+  return process.env.ND_WATER_RESCUE === '1' && waterCell(bot.blockAt(require('./pick').eyeOf(bot)))
 }
 
 // Nearest spot with solid ground and breathable air above it.
@@ -182,15 +183,85 @@ function findNearestLand (bot, maxRadius = 24) {
 }
 
 // These plants contain source water even though their collision box is empty.
-const waterCell = b => !!b && /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/.test(b.name)
+const waterCell = b => !!b && (/^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/.test(b.name) ||
+  (process.env.ND_WATER_ESCAPE_BUDGET !== '0' || process.env.ND_WATER_RESCUE === '1') && (b.isWaterlogged || b.getProperties?.().waterlogged === true))
 const swimPassable = b => !!b && b.boundingBox === 'empty' && !/lava/.test(b.name)
-const headWet = bot => waterCell(bot.blockAt(require('./pick').eyeOf(bot)))
+const breathCell = b => swimPassable(b) && (!waterCell(b) || process.env.ND_WATER_RESCUE === '1' && b.name === 'bubble_column')
+const headWet = bot => {
+  const b = bot.blockAt(require('./pick').eyeOf(bot))
+  return waterCell(b) && !(process.env.ND_WATER_RESCUE === '1' && b.name === 'bubble_column')
+}
 const dryFooting = bot => !!bot.entity.onGround && !inWater(bot) && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block'
+const idleBreath = bot => {
+  const p = bot.entity.position.offset(0, 1.62, 0)
+  if (!require('./perception/eyes').seesNow(bot, p)) return false
+  const b = bot.blockAt(p)
+  return breathCell(b)
+}
+
+// LivingEntity.baseTick: air -20 costs 2 HP, resets to 0; oxygenLevel is rounded air/15.
+function airTicks (bot) {
+  const key = bot.registry?.entitiesByName?.player?.metadataKeys?.indexOf('air_supply') ?? -1
+  const air = key >= 0 ? bot.entity.metadata?.[key] : undefined
+  return Number.isFinite(air) ? air : Math.max(0, (bot.oxygenLevel ?? 20) * 15 - 7)
+}
+
+// LivingEntity.jumpInLiquid / travelInWater: +.04, vertical drag .8, gravity .005.
+function swimUpTicks (height, velocity = 0) {
+  let y = 0, ticks = 0
+  while (y < height && ticks < 320) { velocity += .04; y += velocity; velocity = velocity * .8 - .005; ticks++ }
+  return ticks
+}
+
+// Extra path cost in dry walking steps: a submerged step includes a visible return to air.
+// Unknown/hidden depth is not inspected, and water remains a finite-cost option.
+function waterStepCost (bot, block) {
+  if (process.env.ND_WATER_ESCAPE_BUDGET === '0' || !block?.position || !waterCell(block)) return 0
+  let depth = 0
+  for (let y = 1; y <= 16; y++) {
+    const p = block.position.offset(0, y, 0)
+    if (!require('./perception/eyes').seesNow(bot, p) || !waterCell(bot.blockAt(p))) break
+    depth++
+  }
+  const sprint = (bot.food ?? 20) > 6
+  const eta = (1 - (sprint ? .9 : .8)) / (.02 * .98) + swimUpTicks(depth)
+  const walkTicks = (1 - .546) / (.1 * .98 * (sprint ? 1.3 : 1))
+  const hp = 2 * Math.ceil(Math.max(0, eta - airTicks(bot) - 20) / 20)
+  // One path unit per predicted HP is a policy price, not a damage multiplier.
+  return Math.min(90, Math.max(0, eta / walkTicks - 1) + hp)
+}
+
+// A dry ore can still have a wet approach (fp3-s14-1). Price only cells currently seen.
+function waterApproachCost (bot, target) {
+  if (process.env.ND_WATER_ESCAPE_BUDGET === '0' || !bot.world || !bot.registry || !bot.game) return 0
+  const from = bot.entity.position, d = Math.ceil(from.distanceTo(target)), seen = new Set()
+  let cost = 0
+  for (let i = 1; i <= d; i++) {
+    const p = from.scaled(1 - i / d).plus(target.scaled(i / d)).floored(), key = p.toString()
+    if (seen.has(key) || !require('./perception/eyes').seesNow(bot, p)) continue
+    seen.add(key)
+    cost += waterStepCost(bot, bot.blockAt(p))
+  }
+  return cost
+}
+
+// Only the column currently visible from our eyes; no knowledge of air behind a roof.
+function airAbove (bot) {
+  const eye = require('./pick').eyeOf(bot)
+  for (let y = Math.floor(eye.y); y <= Math.floor(eye.y) + 16; y++) {
+    const p = new Vec3(eye.x, y, eye.z)
+    if (!require('./perception/eyes').seesNow(bot, p)) return null
+    const b = bot.blockAt(p)
+    if (!swimPassable(b)) return null
+    if (breathCell(b)) return p
+  }
+  return null
+}
 
 // Search connected body-sized cells, rather than declaring a whole pool closed
 // because one column has a roof. Unknown cells and lava cannot be crossed.
 // The first breath wins when air is scarce; otherwise try to reach dry ground.
-function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any = {}) {
+function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false, breathOnly = false, toward = null, observed = null }: any = {}) {
   // The PvP escape observes water/air as well as solid faces. Do not plan through
   // an opaque block containing our head; that remains the embedded-body rescue.
   if (visibleOnly && !geometry.bodyClear(bot, bot.entity.position, { water: true, web: true })) return null
@@ -200,7 +271,7 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
     const key = p.toString()
     if (!known.has(key)) {
       let block = null
-      try { if (require('./perception/eyes').seesNow(bot, p)) block = bot.blockAt(p) } catch {}
+      try { if (require('./perception/eyes').seesNow(bot, p)) { block = bot.blockAt(p); if (block) observed?.set(key, block) } else block = observed?.get(key) || null } catch {}
       known.set(key, block)
     }
     return known.get(key)
@@ -211,7 +282,8 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
   const queue = [{ p: start, parent: -1 }]
   const seen = new Set([key(start)])
   let air = null, water = null
-  const urgent = (bot.oxygenLevel ?? 20) <= 8 && headWet(bot)
+  const urgent = (breathOnly || (bot.oxygenLevel ?? 20) <= 8) && headWet(bot)
+  const eyeCell = process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? Math.floor(require('./pick').eyeHeight(bot)) : 1
   const route = (i, kind) => {
     const path = []
     const target = queue[i].p
@@ -219,17 +291,19 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
     return { kind, target, path }
   }
   const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
-  for (let i = 0; i < queue.length; i++) {
+  // Same bounded observation work as shoreRoute; a partial search can still return a visible breath.
+  for (let i = 0; i < queue.length && (process.env.ND_WATER_ESCAPE_BUDGET === '0' || i < 6000); i++) {
     const p = queue[i].p
     const feet = read(p)
-    const head = read(p.offset(0, 1, 0))
+    const head = read(p.offset(0, eyeCell, 0))
     const floor = read(p.offset(0, -1, 0))
     const land = swimPassable(feet) && swimPassable(head) && !waterCell(feet) && !waterCell(head) && floor?.boundingBox === 'block'
     if (land) return route(i, 'land')
-    if (swimPassable(head) && !waterCell(head)) {
+    if (breathCell(head)) {
       if (!air) air = route(i, 'air')
       if (urgent) return air
     }
+    if (toward && p.equals(toward)) return route(i, 'water')
     // Under an overhang, visible water can lead upward before its air becomes visible (j1k1-s2-4).
     if (underRoof && waterCell(feet) && waterCell(head) && p.y > start.y &&
         (p.x !== start.x || p.z !== start.z) && (!water || p.y > water.target.y)) water = route(i, 'water')
@@ -240,35 +314,84 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false }: any
     for (const q of next) {
       if (Math.max(Math.abs(q.x - start.x), Math.abs(q.z - start.z)) > radius || Math.abs(q.y - start.y) > rise) continue
       if (seen.has(key(q))) continue
-      const f = read(q); const h = read(q.offset(0, 1, 0)); const g = read(q.offset(0, -1, 0))
+      const f = read(q); const h = read(q.offset(0, eyeCell, 0)); const g = read(q.offset(0, -1, 0))
       if (!swimPassable(f) || !swimPassable(h)) continue
-      if (!waterCell(f) && !waterCell(h) && g?.boundingBox !== 'block') continue
+      if (!waterCell(f) && !waterCell(h) && g?.boundingBox !== 'block' && !(process.env.ND_WATER_ESCAPE_BUDGET !== '0' && waterCell(g))) continue
       seen.add(key(q))
       queue.push({ p: q, parent: i })
     }
   }
-  return air || water
+  return air || (toward ? null : water)
 }
 
 // Follow the connected swim route with manual controls: the old direct line to
 // the bank could point through a wall while jump stayed stuck under a roof.
 async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, radius = 8 }: any = {}) {
-  if (!inWater(bot)) return { ok: true, wasInWater: false }
+  if (!inWater(bot)) return { ok: true, wasInWater: false, error: undefined }
 
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
   let target = null
-  let exit = 'dry', loops = 0, kind = null
+  let exit = 'dry', loops = 0, kind = null, breathBudget = null, etaTicks = null
+  const budget = process.env.ND_WATER_ESCAPE_BUDGET !== '0'
+  const rescue = process.env.ND_WATER_RESCUE === '1'
+  const routes = new Map()
+  const observed = new Map()
+  let waterToward = null
+  const changed = () => { routes.clear(); observed.clear(); waterToward = null }
+  if (budget) bot.on?.('blockUpdate', changed)
+  const plan = opts => {
+    if (!budget) return findSwimRoute(bot, opts)
+    const p = bot.entity.position
+    const key = [Math.floor(p.x * 2), Math.floor(p.y * 2), Math.floor(p.z * 2), require('./pick').eyeHeight(bot), headWet(bot), (bot.oxygenLevel ?? 20) <= 8, opts.radius, opts.rise, opts.breathOnly, waterToward?.toString()].join(',')
+    if (routes.has(key)) return routes.get(key)
+    const route = findSwimRoute(bot, { ...opts, observed, toward: waterToward })
+    if (route) routes.set(key, route)
+    return route
+  }
 
   try {
     let plugged = false
     let opened = false
     let wide = null, wideAt = 0, diveTo = null
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
+      if (waterToward && Math.hypot(waterToward.x + .5 - bot.entity.position.x, waterToward.z + .5 - bot.entity.position.z) <= .35 && bot.entity.position.y >= waterToward.y) waterToward = null
+      if (budget && !headWet(bot) && airTicks(bot) < 270) {
+        // Recover breath before the bank route can send us below another overhang.
+        exit = 'recover-air'
+        const eye = require('./pick').eyeOf(bot)
+        bot.setControlState('forward', false); bot.setControlState('sprint', !!bot.entity._ndSwimming && !idleBreath(bot))
+        bot.setControlState('jump', eye.y < Math.floor(eye.y) + .5 && (bot.entity.velocity?.y ?? 0) <= 0)
+        await sleep(50); loops++; continue
+      }
+      if (budget && headWet(bot)) {
+        breathBudget = Math.max(0, airTicks(bot) + 20)
+        const up = airAbove(bot), eye = require('./pick').eyeOf(bot)
+        if (up && (geometry.verticalLift(bot, bot.entity.position, up.y - eye.y) ?? 0) >= up.y - eye.y - 1e-7) {
+          exit = 'air-budget-up'; kind = 'air'; target = up
+          etaTicks = swimUpTicks(up.y - eye.y, bot.entity.velocity?.y ?? 0)
+          await bot.lookAt(up, true)
+          if (ctl.aborted || gameClock.now() >= deadline) { exit = ctl.aborted ? 'aborted' : 'deadline'; break }
+          bot.setControlState('forward', false); bot.setControlState('sprint', false); bot.setControlState('jump', true)
+          await sleep(50); loops++; continue
+        }
+      }
       // Воздух кончается, а в 8 бл. его нет (затопленный штрек, cl-ac/cl-ai 14.10: утонул в 1–2 бл. от своего хода) — шире:
       // поиск при нехватке воздуха кончается на первом воздухе, так что широкий круг дёшев.
-      let route = findSwimRoute(bot, { visibleOnly, radius }) ||
-        (radius < 16 && (bot.oxygenLevel ?? 20) <= 8 && headWet(bot) ? findSwimRoute(bot, { visibleOnly, radius: 16, rise: 16 }) : null)
+      let route = plan({ visibleOnly: budget || visibleOnly, radius }) ||
+        (radius < 16 && (budget || (bot.oxygenLevel ?? 20) <= 8) && headWet(bot) ? plan({ visibleOnly: budget || visibleOnly, radius: 16, rise: 16 }) : null)
+      // A previously observed opening stays the goal until reached or invalidated by blocks.
+      if (budget) waterToward = route?.kind === 'water' ? route.target : null
+      if (budget && headWet(bot)) {
+        breathBudget = Math.max(0, airTicks(bot) + 20)
+        // ETA uses the reviewed water acceleration/drag; the air deadline determines whether shore needs a breath stop.
+        const stepTicks = (1 - ((bot.food ?? 20) > 6 ? .9 : .8)) / (.02 * .98)
+        etaTicks = route ? Math.ceil(route.path.length * stepTicks) : Infinity
+        if (route?.kind === 'land' && etaTicks > breathBudget) {
+          route = plan({ visibleOnly: true, radius: 16, rise: 16, breathOnly: true }) || route
+          etaTicks = Math.ceil(route.path.length * stepTicks)
+        }
+      }
       target = route?.target || null
       kind = route?.kind || null
       loops++
@@ -276,11 +399,27 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
         // Своя нора залита и закрыта сверху (tw-a-s1-3 15.10: нора у пруда «потолок закрыт», вода натекла; тактика Surface
         // 13 раз «не нашёл доступного пути из воды» за 2 с, утонул на месте): твёрдый потолок над головой — вскрыть один раз,
         // за ним бывает воздух. Вода над головой (шахта залита сверху) — ниже, затычка.
-        const roof = !opened && headWet(bot) ? bot.blockAt(bot.entity.position.floored().offset(0, 2, 0)) : null
+        const roofAt = budget ? new Vec3(Math.floor(bot.entity.position.x), Math.ceil(bot.entity.position.y + geometry.dimensions(bot).height - 1e-7), Math.floor(bot.entity.position.z)) : bot.entity.position.floored().offset(0, 2, 0)
+        const roof = !opened && headWet(bot) ? bot.blockAt(roofAt) : null
+        const cause = () => roof && `${roof.position}:${roof.stateId}:${bot.heldItem?.type}:${geometry.dimensions(bot).height}`
+        const lifeTicks = () => airTicks(bot) + 20 + Math.max(0, Math.ceil(bot.health / 2) - 1) * 20
+        const sameCause = budget && bot._ndWaterDigRefusal === cause() && lifeTicks() <= (bot._ndWaterDigBudget ?? Infinity)
         if (roof && roof.boundingBox === 'block' && !/^(bedrock|obsidian|crying_obsidian|reinforced_deepslate)$/.test(roof.name) &&
-            (typeof bot.canDigBlock !== 'function' || bot.canDigBlock(roof))) {
+            !sameCause && (!budget || require('./pick').blockSeen(bot, roof.position)) && (typeof bot.canDigBlock !== 'function' || bot.canDigBlock(roof))) {
           opened = true
-          try { await require('./items').equipBestTool(bot, roof); await bot.dig(roof, true) } catch {}
+          try {
+            if (budget) bot.clearControlStates()
+            await require('./items').equipBestTool(bot, roof)
+            if (ctl.aborted) break
+            // The watchdog is the body's remaining air/HP, not another arbitrary dig timeout.
+            if (budget) {
+              bot._ndWaterDigRefusal = cause()
+              bot._ndWaterDigBudget = lifeTicks()
+              const ms = Math.max(50, lifeTicks() * 50)
+              try { await require('./build').withTimeout(bot.dig(roof, true), Math.min(ms, Math.max(1, deadline - gameClock.now())), 'кончился бюджет воздуха на вскрытие потолка') }
+              finally { try { bot.stopDigging() } catch {} }
+            } else await bot.dig(roof, true)
+          } catch {}
           await sleep(200)
           continue
         }
@@ -288,9 +427,14 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
         // (tw-cr2-s1-3 15.10: Surface 15 с «пути нет», под водой без маршрута, хп 20 → 11.7 → смерть). Узкая шахта 1×1 без
         // соседней воды — ниже, затычка.
         const feetC = bot.entity.position.floored()
-        const upCell = bot.blockAt(feetC.offset(0, 2, 0))
-        const openWater = [feetC.offset(0, 1, 0), feetC.offset(0, 2, 0)].some(c => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => waterCell(bot.blockAt(c.offset(dx, 0, dz)))))
-        if (headWet(bot) && waterCell(upCell) && openWater) {
+        const headCell = budget ? require('./pick').eyeOf(bot).floored() : feetC.offset(0, 1, 0)
+        const upCell = bot.blockAt(headCell.offset(0, 1, 0))
+        const openWater = [headCell, headCell.offset(0, 1, 0)].some(c => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => waterCell(bot.blockAt(c.offset(dx, 0, dz)))))
+        const headBlock = bot.blockAt(require('./pick').eyeOf(bot)), feetBlock = bot.blockAt(feetC)
+        const headLevel = headBlock?.getProperties?.().level ?? headBlock?.metadata
+        const feetLevel = feetBlock?.getProperties?.().level ?? feetBlock?.metadata
+        const flowingShaft = rescue && !openWater && headBlock?.name === 'water' && headLevel > 0 && feetBlock?.name === 'water' && feetLevel > 0
+        if (headWet(bot) && waterCell(upCell) && !flowingShaft && (openWater || rescue)) {
           exit = 'swim-up'
           bot.setControlState('forward', false)
           bot.setControlState('sprint', false)
@@ -300,9 +444,10 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
         }
         // Шахта залита сверху (своя копка вверх в воду, cl-n 14.10: «не нашёл доступного пути из воды», смерть): воздуха в
         // досягаемости нет — заткнуть клетку над головой; текущая вода в шахте без притока стекает за тики.
-        if (!plugged && !opened && headWet(bot)) {
+        // A plug cuts a flowing inlet; it cannot drain source water already occupying the body.
+        if (!plugged && !opened && headWet(bot) && (!rescue || flowingShaft)) {
           plugged = true
-          const above = bot.entity.position.floored().offset(0, 2, 0)
+          const above = budget ? roofAt : bot.entity.position.floored().offset(0, 2, 0)
           let r = null
           try { r = await require('./build').placeBlockAt(bot, above, { timeoutMs: 1500, honest: true, steady: true, ctl }) } catch {}
           if (r && r.ok) { await sleep(1000); continue }
@@ -315,13 +460,13 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
         // Surface — качели «вынырнул — утонул», воздух 6–8 и вниз (j1k1-s2-2/3/4 15.10: 3 утопления за 10 мин). Теперь: с
         // поверхности видно дальше — берег в 24 бл.; нет и его — держаться на плаву (прыжок), пока воздух не восстановится.
         // Широкий поиск дорог (лучи по клеткам) — не чаще раза в секунду.
-        if (gameClock.now() >= wideAt) { wideAt = gameClock.now() + 1000; wide = findSwimRoute(bot, { visibleOnly, radius: 24, rise: 4 }) }
+        if (gameClock.now() >= wideAt) { wideAt = gameClock.now() + 1000; wide = plan({ visibleOnly: budget || visibleOnly, radius: 24, rise: 4 }) }
         if (wide && wide.kind === 'land') {
           target = wide.target; kind = 'land-wide'
           const passed = wide.path.findIndex(p => p.equals(bot.entity.position.floored()))
           if (passed >= 0) wide.path.splice(0, passed + 1)
           route = wide
-        } else if ((bot.oxygenLevel ?? 20) < 18) {
+        } else if ((bot.oxygenLevel ?? 20) < 18 || budget && !idleBreath(bot)) {
           exit = 'tread'
           bot.setControlState('forward', false)
           bot.setControlState('sprint', false)
@@ -335,24 +480,28 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
       }
       const next = route.path[0] || route.target
       // Finish sinking to a lower route cell before jumping again (j1k1-s2-3).
-      if (next.y < bot.entity.position.floored().y) diveTo = next.y
+      const surfaceStroke = budget && !headWet(bot) && idleBreath(bot) && (geometry.verticalLift(bot, bot.entity.position, 1) ?? 0) >= 1
+      if (surfaceStroke) diveTo = null
+      else if (next.y < bot.entity.position.floored().y) diveTo = next.y
       if (diveTo !== null && bot.entity.position.y <= diveTo) diveTo = null
       const horizontal = Math.hypot(next.x + 0.5 - bot.entity.position.x, next.z + 0.5 - bot.entity.position.z)
-      await bot.lookAt(next.offset(0.5, 1.62, 0.5), true)
+      await bot.lookAt(next.offset(0.5, budget ? require('./pick').eyeHeight(bot) : 1.62, 0.5), true)
       if (ctl.aborted || gameClock.now() >= deadline) { exit = ctl.aborted ? 'aborted' : 'deadline'; break }
       bot.setControlState('forward', horizontal > 0.25)
-      bot.setControlState('sprint', horizontal > 0.25 && (bot.food ?? 20) > 6)
+      // Skim the open surface without re-entering a dive; compact air pockets retain their swimming pose.
+      bot.setControlState('sprint', (horizontal > 0.25 || budget && headWet(bot) && bot.entity._ndSwimming) && (bot.food ?? 20) > 6 && (!budget || headWet(bot) || !idleBreath(bot)))
       // Jump doubles as "swim up" in water and keeps the head above surface.
       bot.setControlState('jump', inWater(bot) && diveTo === null)
       await sleep(160)
     }
   } finally {
+    if (budget) bot.removeListener?.('blockUpdate', changed)
     try { bot.clearControlStates() } catch {}
   }
 
   const out = dryFooting(bot)
   const head = bot.blockAt(require('./pick').eyeOf(bot))
-  const breathing = swimPassable(head) && !waterCell(head)
+  const breathing = breathCell(head)
   if (exit === 'dry' && !out) exit = ctl.aborted ? 'aborted' : 'deadline'
   const feet = bot.blockAt(bot.entity.position)
   return {
@@ -362,6 +511,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
     target: target ? xyz(target) : null,
     // Почему кончилось (разбор утоплений 15.10: «не нашёл пути» при найденной цели): выход цикла, вид маршрута, клетки глаз/ног.
     exit, loops, kind, eye: head ? head.name : null, feet: feet ? feet.name : null, air: bot.oxygenLevel ?? null,
+    ...(budget ? { breathBudget, etaTicks: Number.isFinite(etaTicks) ? etaTicks : null } : {}),
     error: out ? undefined : breathing ? 'голова в воздухе, но на сухой берег не вышел' : 'не нашёл доступного пути из воды'
   }
 }
@@ -710,5 +860,5 @@ function gotoPath (bot, goal) {
 
 module.exports = {
   sleep, xyz, shaftFromDescent, standableY, describeStall, stuckGuard, unstick, centerOnFloor, travelXZ,
-  findNearestLand, findSwimRoute, escapeWater, inWater, waterCell, gotoGoal, gotoPath, gotoWaitOn, sprintOn, pathKeepAlive, pathKeepAliveOn, timeoutWalkOn
+  findNearestLand, findSwimRoute, escapeWater, inWater, waterCell, waterStepCost, waterApproachCost, airTicks, waterBudgetOn, gotoGoal, gotoPath, gotoWaitOn, sprintOn, pathKeepAlive, pathKeepAliveOn, timeoutWalkOn
 }

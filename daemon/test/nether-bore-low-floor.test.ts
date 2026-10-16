@@ -33,6 +33,7 @@ async function floorBore (name) {
       return block
     },
     pathfinder: { setGoal () {} },
+    async look (yaw) { this.entity.yaw = yaw },
     async lookAt (p) { this.entity.yaw = Math.atan2(-(p.x - this.entity.position.x), -(p.z - this.entity.position.z)) },
     setControlState (key, value) { controls[key] = value }
   }

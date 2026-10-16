@@ -17,7 +17,7 @@ async function chestRead(receipt: unknown, aborted = false) {
   const st = { looted: new Set<string>(), skip: new Map<string, number>(), chests: [] }
   const ctl = { aborted }
   const context = { st, ctl, session: {}, t: { chest: true, k: chestKey, pos: chest }, gameClock: { now: () => 1000 },
-    log() {}, miningCycle: require('../src/bastion/mining-cycle'),
+    routeRetryAt: (ms: number) => 1000 + ms, log() {}, miningCycle: require('../src/bastion/mining-cycle'),
     require: () => ({ takeWorth: async () => {
       if (receipt instanceof Error) throw receipt
       return receipt

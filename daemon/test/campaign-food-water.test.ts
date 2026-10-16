@@ -14,7 +14,7 @@ function fixture({ water = true, prey = true, hp = 9, surface = true } = {}) {
     OW_DEEP: false, FOOD_STOCK: 8, huntWool: false, wantBeds: 0, foodSpentMs: 0, FOOD_CAP_MS: 180000,
     FOOD: /cooked_/, RAW: /beef/, gameClock: { now: () => now }, y: () => 64,
     have: (re: RegExp | string) => re instanceof RegExp && re.test('beef') ? food : 0,
-    foodUnits: () => food, cook: async () => {}, makeBed: async () => {}, sense: async () => {},
+    foodUnits: () => food, foodShort: () => Math.max(0, 8 - food), entrySupplies: () => false, cook: async () => {}, makeBed: async () => {}, sense: async () => {},
     toSurface: async () => surface, unclutter: async () => {}, lumber: async () => {}, nightWork: () => false,
     nightGuard: async () => {}, recoverGuard: async () => {}, refresh: async () => {}, log: () => {},
     awayFrom: async () => { calls.push({ method: 'away' }); now += 120001 },

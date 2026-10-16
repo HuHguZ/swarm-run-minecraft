@@ -21,12 +21,13 @@ export interface CampaignPort {
   record(record: DecisionRecord): void
   eyes: number
   beds: number
+  endPrepPrice?: boolean
 }
 export function createCampaignIntelligence(port: CampaignPort) {
   // Flags from the S3 simulator search (06.10), off by default — нужна ферма: ND_GRAPH_ECONOMY=1 needs the skills
   // bastionGold {ingots} and bastionMove in the campaign (S1); ND_GRAPH_RETRY_S — timed re-admission backoff (sim: 60–120 s beat 300 s).
   const registry = speedrunRegistry({ eyes: port.eyes, beds: port.beds, economy: process.env.ND_GRAPH_ECONOMY === '1',
-    portalBuckets: process.env.ND_ROUTE_ONE === '0' ? 2 : 1 })
+    portalBuckets: process.env.ND_ROUTE_ONE === '0' ? 2 : 1, endPrepPrice: port.endPrepPrice })
   const progressFor = (skill: string): Strategy['progressCondition'] => skill === 'scoutLava'
     ? (before, after) => Number(after.facts.lava_scout_views?.value ?? 0) > Number(before.facts.lava_scout_views?.value ?? 0)
     : skill === 'netherTools' ? netherSupplyProgress : ['bastion', 'bastionSupply', 'piglinBarter', 'nether'].includes(skill)
@@ -34,6 +35,17 @@ export function createCampaignIntelligence(port: CampaignPort) {
   for (const strategy of registry.all()) {
     const progress = progressFor(strategy.skill)
     if (progress) strategy.progressCondition = progress
+  }
+  const physicalRetry = (before: WorldState, after: WorldState) => before.dimension === 'the_nether' && after.dimension === 'the_nether' &&
+    (netherStageProgress('nether', before, after) ||
+      (typeof before.facts.nether_search_state?.value === 'string' && typeof after.facts.nether_search_state?.value === 'string' && before.facts.nether_search_state.value !== after.facts.nether_search_state.value) ||
+      (before.position && after.position && Math.hypot(after.position.x-before.position.x, after.position.y-before.position.y, after.position.z-before.position.z) >= 8) ||
+      (before.facts.nether_tools_ready?.value !== true && after.facts.nether_tools_ready?.value === true) || before.threatLevel !== after.threatLevel)
+  if (process.env.ND_NE_RECOVER === '1') for (const strategy of registry.all()) {
+    if (!['findFortress', 'nether', 'findBastions', 'bastion', 'piglinBarter', 'bastionGold', 'bastionMove', 'pearls'].includes(strategy.skill)) continue
+    const retry = strategy.retryCondition
+    strategy.retryCondition = (before, after) => !!retry?.(before, after) || !!physicalRetry(before, after)
+    strategy.timeRetry = false
   }
   const mapped = new Map<string, CampaignStage>()
   for (const [id, name, seconds] of [['MappedOverworldRoute', 'route', 900], ['MappedRouteEnter', 'routeEnter', 45]] as const) {
@@ -73,7 +85,8 @@ export function createCampaignIntelligence(port: CampaignPort) {
     const id = `Recovery_${stage.name}`
     if (!registry.get(id)) registry.register({ id, skill: stage.name, version: 1,
       preconditions: state => state.alive && stage.ready() && !stage.defer() && recoveryAllowed(stage, state), expectedEffects: {},
-      estimateCost: () => 1200, estimateRisk: () => 0.02, timeoutMs: 900000, successCondition: () => stage.done(), progressCondition: progressFor(stage.name) })
+      estimateCost: () => 1200, estimateRisk: () => 0.02, timeoutMs: 900000, successCondition: () => stage.done(), progressCondition: progressFor(stage.name),
+      ...(process.env.ND_NE_RECOVER === '1' && ['nether', 'bastion', 'pearls'].includes(stage.name) ? { retryCondition: physicalRetry } : {}) })
     return wrapStrategy(registry.get(id)!, stage)
   }
   function recoveryAllowed(stage: CampaignStage, state: WorldState): boolean {
@@ -90,8 +103,21 @@ export function createCampaignIntelligence(port: CampaignPort) {
       for (const stage of available) if (stage.name === 'route' || stage.name === 'routeEnter') mapped.set(stage.name, stage)
       // Маршрут по карте и кусочные стратегии конкурируют по цене (S8b 07.10: флаг-приоритет ND_ROUTE_FIRST снят; корень —
       // цена RuinedPortal/LavaPoolPortal в cost-model.ts по их фактическому этапу cast, а не по шагу ruin «только сундук»).
-      const desired = director.decide(before)
+      const activeRecovery = process.env.ND_NE_RECOVER === '1' && before.dimension === 'the_nether'
+      const blockedNames = new Set(activeRecovery ? stages.filter(stage => ['nether', 'bastion', 'pearls'].includes(stage.name) && blocked(stage)).map(stage => stage.name) : [])
+      const group = (strategy: Strategy) => ['bastionGold', 'bastionMove', 'bastionSupply'].includes(strategy.skill) ? 'bastion' : stageFor(strategy)
+      const allowed = blockedNames.size ? new Set(registry.all().filter(candidate => !blockedNames.has(group(candidate))).map(candidate => candidate.id)) : undefined
+      const desired = director.decide(before, allowed)
       let strategy = desired.steps[0]
+      if (!strategy && activeRecovery && blockedNames.size) {
+        const excluded = new Set(registry.all().filter(candidate => !allowed!.has(candidate.id) || !director.canRun(candidate, before)).map(candidate => candidate.id))
+        const alternative = plan(registry, before, state => netherStageProgress('nether', before, state) || netherStageProgress('bastion', before, state) ||
+          netherSupplyProgress(before, state) || ['fortress', 'bastion'].some(name => state.facts[name]?.value === true && before.facts[name]?.value !== true),
+          { excluded, maxDepth: 1 })
+        strategy = alternative.steps[0]
+        if (strategy) port.record({ level: 'decision', reason: 'Nether alternative after refusal', before, plan: [strategy.id],
+          alternatives: registry.all().filter(candidate => !excluded.has(candidate.id)).map(candidate => ({ id: candidate.id, cost: candidate.estimateCost(before), risk: candidate.estimateRisk(before) })) })
+      }
       if (!strategy && desired.reason !== 'goal' && ['overworld', 'the_nether'].includes(before.dimension)) {
         const excluded = new Set(registry.all().filter(candidate => !['food', 'eatFood', 'heal', 'prepareBread'].includes(candidate.skill) ||
           !director.canRun(candidate, before)).map(candidate => candidate.id))

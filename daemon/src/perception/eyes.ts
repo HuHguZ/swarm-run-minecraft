@@ -31,7 +31,7 @@ const PER_NAME = 400 // ponytail: потолок памяти на имя (да�
 
 const dimOf = bot => String((bot.game && bot.game.dimension) || 'overworld').replace(/^minecraft:/, '')
 const env = (k, d) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d }
-const eyeOf = bot => { const p = bot.entity.position; return { x: p.x, y: p.y + (bot.entity.eyeHeight || 1.62), z: p.z } }
+const eyeOf = bot => { const p = bot.entity.position; return { x: p.x, y: p.y + (process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? require('../pick').eyeHeight(bot) : bot.entity.eyeHeight || 1.62), z: p.z } }
 const keyOf = (x, y, z) => `${x},${y},${z}`
 const nowMs = () => { const t = process.hrtime(); return t[0] * 1e3 + t[1] / 1e6 }
 

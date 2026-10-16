@@ -713,7 +713,7 @@ function quickBreak (bot, block) {
     return Number.isFinite(ms) && ms <= 1500
   } catch { return false }
 }
-async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180 }: any = {}) {
+async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180, nightWork = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const want = clamp(length, 1, MAX_LENGTH, 16)
@@ -737,6 +737,10 @@ async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180 }: a
   for (let i = 0; i < want * 2 && !ctl.aborted; i++) {
     const feet = bot.entity.position.floored()
     if (startY - feet.y >= want) break
+    if (nightWork) {
+      const w = require('./night-work'), v = w.profile(bot)
+      if (w.price({ ...v, hp: bot.health, fight: require('./assess').plan(bot, { radius: 16 }) }, 3.25) > 3.25) { stopped = 'NIGHT_RISK: открытый или опасный колодец'; break }
+    }
     if (gameClock.now() > deadline) { stopped = `время вышло на ${startY - feet.y}-м уровне`; break }
     if ((bot.health ?? 20) <= LOW_HEALTH) { stopped = `хп ${Math.round(bot.health ?? 0)} — колодец бросаю`; break }
     // Моб — помеха, только если может до нас добраться (reach.reachOf: удар, выстрел, путь) или стоит прямо под
@@ -832,7 +836,7 @@ async function shaftDown (session, ctl, { length = 16, timeoutSeconds = 180 }: a
 // копается, если надо, с проверкой жидкости за ним; прыжок и блок под ноги, towerUp). Нужен глубокому пути: вода
 // штреками у y 16 не нашлась (ow-P1: 2 из 8 прогонов без воды до конца), а поверху она почти всегда видна — подняться
 // своим колодцем, зачерпнуть и снова вниз. toY — до какой высоты ног (устье колодца); моб, который дотянется, — стоп.
-async function shaftUp (session, ctl, { length = 16, timeoutSeconds = 120, toY = null }: any = {}) {
+async function shaftUp (session, ctl, { length = 16, timeoutSeconds = 120, toY = null, nightWork = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const build = require('./build')
@@ -849,6 +853,10 @@ async function shaftUp (session, ctl, { length = 16, timeoutSeconds = 120, toY =
     const y = bot.entity.position.y
     if (toY !== null && Math.floor(y) >= toY) break
     if (y - startY >= want) break
+    if (nightWork) {
+      const w = require('./night-work'), v = w.profile(bot)
+      if (w.price({ ...v, hp: bot.health, fight: require('./assess').plan(bot, { radius: 16 }) }, 3.25) > 3.25) { stopped = 'NIGHT_RISK: открытый или опасный подъём'; break }
+    }
     if (gameClock.now() > deadline) { stopped = `время вышло на +${Math.round(y - startY)}`; break }
     if ((bot.health ?? 20) <= LOW_HEALTH) { stopped = `хп ${Math.round(bot.health ?? 0)} — подъём бросаю`; break }
     const r = await build.digUp(bot, ctl, { blocks: 1, mcData, tower: true, guard })
@@ -863,11 +871,12 @@ async function tunnel (session, ctl, {
   height = 2,
   torchEvery = 8,
   timeoutSeconds = 180,
-  toY = null
+  toY = null,
+  nightWork = false
 }: any = {}) {
   // Вниз — колодец со своим чутьём (см. shaftDown); вверх — своим колодцем столбом (shaftUp).
-  if (direction === 'down' || direction === 'вниз') return shaftDown(session, ctl, { length, timeoutSeconds })
-  if (direction === 'up' || direction === 'вверх') return shaftUp(session, ctl, { length, timeoutSeconds, toY })
+  if (direction === 'down' || direction === 'вниз') return shaftDown(session, ctl, { length, timeoutSeconds, nightWork })
+  if (direction === 'up' || direction === 'вверх') return shaftUp(session, ctl, { length, timeoutSeconds, toY, nightWork })
   const bot = session.bot
   const mcData = session.mcData
   const dir = resolveDirection(bot, direction)
@@ -1135,6 +1144,12 @@ async function tunnel (session, ctl, {
     }
 
     const behind = cursor
+    const work = nightWork ? require('./night-work').step(bot, cell, behind, 2, undefined, tall) : null
+    if (work?.stopped) {
+      const cover = await require('./night-work').closeBehind(bot, ctl, cell)
+      stopped = `${work.stopped}; ${cover || 'проход закрыт перед собой'}`
+      break
+    }
     const moved = await walkTo(bot, ctl, cell)
     if (!moved) {
       const stall = describeStall(bot)
@@ -1152,14 +1167,17 @@ async function tunnel (session, ctl, {
     // just walked past — the same loss noteExposedOre exists to prevent.
     if (!cursor.equals(cell)) noteExposedOre(bot, oreSet, cursor, tall, seen, groups, why)
 
-    await sweepDrops(bot, ctl, onLine, 2500, abandoned)
+    if (work?.close) {
+      stopped = await require('./night-work').closeBehind(bot, ctl, behind)
+      if (stopped) break
+    } else await sweepDrops(bot, ctl, onLine, 2500, abandoned)
     // Back on the cursor before the torch goes in: a sweep that walked two
     // blocks back leaves the torch either in the wrong square or out of reach,
     // and an unlit corridor is what the walk home is ambushed in.
     await holdAxis()
 
     // The cell we just left: empty, floored, and out of the way of the swing.
-    if (every && step % every === 0) {
+    if (!work?.close && every && step % every === 0) {
       if (await placeTorch(bot, behind)) { torches++; lastTorch = behind }
     }
 

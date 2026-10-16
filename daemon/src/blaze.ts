@@ -24,7 +24,8 @@ const drops = require('./drops')
 //     на блейза в среднем; сгоревший в лаве или упавший не даёт ничего.
 //   * спавнер: работает, пока игрок в 16 блоках от его центра; раз в 200–799
 //     тиков 4 попытки в кубе ±4 по x/z и -1..+1 по y; не больше 6 блейзов в
-//     кубе 9x9x9 вокруг; свет и пол не нужны.
+//     кубе 9x9x9 вокруг; свет и пол не нужны. X/Z — разность двух nextDouble (центр чаще краёв).
+//     Если все 4 клетки не годятся, повтор на следующем тике; длинная задержка — после успеха/переполнения.
 // Рецепты (data/minecraft/recipe): blaze_powder — бесформенный из 1 стержня, 2
 // порошка; ender_eye — бесформенный из порошка и жемчуга. Значит, стержень —
 // это два ока.
@@ -294,7 +295,12 @@ async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, 
 // (effectsByName.FireResistance, id 11 — совпадает с номером в пакете
 // entity_effect); по snake_case там пусто, и проверка «зелье уже действует»
 // молча отвечала «нет».
+// Огнестойкость, выпитая самим телом, — по часам (16.10: в сценах у спавнера entity.effects тела пуст всегда — эффекта клиент не видит,
+// а сервер его дал; цикл боя пил все зелья подряд и сгорал после первых 3 мин). Зелье огнестойкости — 3600 тиков (jar Potions:
+// fire_resistance 3600), взрывное — то же.
+function frByClock (bot) { return !!bot._ndFrUntil && gameClock.now() < bot._ndFrUntil }
 function hasEffect (bot, name) {
+  if (name === 'fire_resistance' && frByClock(bot)) return true
   try {
     const pascal = String(name).split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('')
     const eff = bot.registry.effectsByName[name] || bot.registry.effectsByName[pascal]
@@ -304,8 +310,13 @@ function hasEffect (bot, name) {
 
 // Огнестойкость, если она есть: шар — это огонь, и под зельем он не жжёт
 // вовсе (fireball в #is_fire). Пьём заранее, а не на половине хп.
-async function drinkFireResistance (bot) {
-  if (hasEffect(bot, 'fire_resistance')) return 'уже действует'
+// Есть ли зелье огнестойкости (обычное или взрывное) — для боя мечом (blaze-melee.ts).
+function drinkable (bot) {
+  const { potionOf } = require('./pvp')
+  return bot.inventory.items().some(i => /^(potion|splash_potion)$/.test(i.name) && /fire_resistance$/.test(potionOf(i) || ''))
+}
+async function drinkFireResistance (bot, { renew = false }: any = {}) {
+  if (hasEffect(bot, 'fire_resistance') && !renew) return 'уже действует'
   const { potionOf } = require('./pvp')
   const pot = bot.inventory.items().find(i => i.name === 'potion' && /fire_resistance$/.test(potionOf(i) || ''))
   if (!pot) {
@@ -319,14 +330,18 @@ async function drinkFireResistance (bot) {
       bot.activateItem()
       await sleep(250)
       bot.deactivateItem()
+      bot._ndFrUntil = gameClock.now() + 3600 * 50 - 2000
       return 'выпил fire_resistance'
     } catch (e) {
       return `взрывное не бросил: ${e.message}`
     }
   }
   try {
+    const before = bot.inventory.items().filter(i => i.name === 'potion' && /fire_resistance$/.test(potionOf(i) || '')).reduce((n, i) => n + i.count, 0)
     await bot.equip(pot, 'hand')
     await bot.consume()
+    const after = bot.inventory.items().filter(i => i.name === 'potion' && /fire_resistance$/.test(potionOf(i) || '')).reduce((n, i) => n + i.count, 0)
+    if (after < before) bot._ndFrUntil = gameClock.now() + 3600 * 50 - 2000
     return 'выпил fire_resistance'
   } catch (e) {
     return `зелье не выпил: ${e.message}`
@@ -360,16 +375,31 @@ function makeTrack (e) {
   }
 }
 
-async function walkNear (bot, ctl, target, range, ms) {
+function canApproachSpawner (bot, dead) {
+  return hasEffect(bot, 'fire_resistance') || watchers(bot, dead) === 0
+}
+async function walkNear (bot, ctl, target, range, ms, { stopIf = null }: any = {}) {
+  if (stopIf?.()) return { ok: false, error: 'на пути линия огня — сначала бой или укрытие' }
   const guard = stuckGuard(bot, ctl)
   let timer = null
   const path = gotoPath(bot, new goals.GoalNear(target.x, target.y, target.z, range))
+  let stopped = false, release = null
+  const changed = new Promise<void>(resolve => { release = resolve })
+  const onTick = () => {
+    if (!stopIf?.()) return
+    stopped = true
+    try { bot.pathfinder.setGoal(null) } catch {}
+    path.cancel?.(); release?.()
+  }
+  if (stopIf) bot.on('physicsTick', onTick)
   try {
     await Promise.race([
       path,
       guard.promise,
+      changed,
       new Promise<any>((_resolve, reject) => { timer = gameClock.setTimeout(() => reject(new Error('время вышло')), ms) })
     ])
+    if (stopped) return { ok: false, error: 'на пути появилась линия огня — новый выбор боя или укрытия' }
     // goto «успешен» и на пустом пути (noPath длины 0, mineflayer-pathfinder
     // lib/goto.js) — дошёл, только если правда рядом.
     const d = bot.entity.position.distanceTo(new Vec3(target.x + 0.5, target.y, target.z + 0.5))
@@ -378,6 +408,7 @@ async function walkNear (bot, ctl, target, range, ms) {
     try { bot.pathfinder.setGoal(null) } catch {}
     return { ok: false, error: e.message }
   } finally {
+    if (stopIf) bot.removeListener('physicsTick', onTick)
     path.cancel?.()
     guard.stop()
     if (timer) gameClock.clearTimeout(timer)
@@ -619,6 +650,31 @@ function aimFrac (bot, e) {
 }
 const blazeEye = e => e.position.offset(0, BLAZE_EYE, 0)
 const seesMe = (bot, e) => losClear(bot, blazeEye(e), myEye(bot))
+
+// SmallFireball 5, melee 6, shield delay 5 ticks (jar 1.21.11); only current rays/projectiles enter the price.
+function blazeShieldPrice (bot, blazes, radar, guard, fireproof, face) {
+  const now = gameClock.now()
+  const incoming = fireproof ? [] : radar.incoming(now)
+  const sources = incoming.map(b => ({ from: b.from, hit: 5, eta: b.eta }))
+  for (const e of blazes) {
+    if (!seesMe(bot, e)) continue
+    if (e.position.distanceTo(bot.entity.position) < 2) sources.push({ from: blazeEye(e), hit: 6, eta: 0 })
+    else if (!fireproof && e.position.distanceTo(bot.entity.position) < 48 && radar.untilDanger(e, now) === 0) sources.push({ from: blazeEye(e), hit: 5, eta: 0 })
+  }
+  const me = bot.entity.position
+  const to = face?.minus(me)
+  const shield = guard.stats.worn && bot.inventory.slots[45]?.name === 'shield' && now >= (bot._ndShieldDisabledUntil || 0)
+  const ready = shield && !!guard.blocking?.()
+  const armor = require('./assess').gearOf([5, 6, 7, 8].map(i => bot.inventory.slots[i]))
+  const damage = sources.reduce((n, s) => {
+    const d = s.from.minus(me)
+    const blocked = shield && to && d.x * to.x + d.z * to.z >= 0 && (ready || s.eta >= 5 * 50)
+    return n + (blocked ? 0 : require('./assess').afterArmor(s.hit, armor.armor, armor.tough))
+  }, 0)
+  // shortcut: the burning metadata has no remaining duration; reserve a full projectile burn until native telemetry supplies it.
+  const fire = !fireproof && (bot.entity.metadata?.[0] & 1) ? 5 : 0
+  return { damage, fire, cost: damage + fire, sources, incoming }
+}
 
 // Сырой spawn_entity: id, entityId (varint), UUID (16), type (varint), x y z
 // (f64 BE), lpVec3 — minecraft-protocol читает lpVec3 как little-endian, и
@@ -1370,6 +1426,8 @@ async function holdSpawner (session, ctl, ctx) {
   const { bestWeapon } = require('./items')
   const { spawner, want, deadline, dead, setPhase, fireproof: fp } = ctx
   const out: any = { melee: 0, arrows: 0, blocks: 0, rests: [], sorties: 0, shieldMs: 0, foes: [], bunker: null, hits: 0, swingNoLease: 0 }
+  let clearRevision = 0, clearChecked = ''
+  const onClearBlock = () => { clearRevision++ }
   // Свидетель попадания — entityHurt ифрита, а не счёт взмахов (s1-post07 06.10: melee 17, убийств 0).
   const onBlazeHurt = e => { if (e && e.name === 'blaze') out.hits++ }
   bot.on('entityHurt', onBlazeHurt)
@@ -1457,8 +1515,18 @@ async function holdSpawner (session, ctl, ctx) {
   // Близкий враг запрещает неподвижный отдых, но требует раннего отхода.
   const meleeThreat = () => liveBlazes(bot, dead, 6).find((e : any) => e.position.distanceTo(bot.entity.position) < 2.7 && seesMe(bot, e)) || null
   const foesNow = () => require('./flee').hostilesAround(bot, 24).map(h => h.e).filter(e => !dead.has(e.id))
-  const checkSafety = phase => safety.check({ entities: foesNow(), phase,
-    expectedEnemy: phase === 'start' ? 'blaze' : null, minHealth: Math.max(8, ctx.restAt) })
+  const checkSafety = phase => {
+    const foes = foesNow()
+    const risk = safety.check({ entities: foes, phase,
+      expectedEnemy: phase === 'start' ? 'blaze' : null, minHealth: Math.max(8, ctx.restAt) })
+    if (process.env.ND_BLAZE_WORLD_STATE === '0' || !foes.length || foes.some(e => e.name !== 'blaze') ||
+        risk.action !== 'leave' || !/не переживу ближайший размен/.test(risk.reason || '')) return risk
+    const vis = liveBlazes(bot, dead, 48).filter(e => seesMe(bot, e))
+    const from = [...vis.map(blazeEye), ...radar.incoming(gameClock.now()).map(b => b.from)]
+    const price = blazeShieldPrice(bot, vis, radar, guard, fireproof(), from.length ? faceFor(from) : null)
+    if (price.cost >= (bot.health ?? 0)) return risk
+    return { ...risk, action: 'fight', reason: 'размен по лучам, щиту и летящим шарам', blazeCost: price.cost }
+  }
   // Опасность: видящие нас в окне очереди и летящие к нам шары.
   const dangersNow = (vis, now) => {
     const out2 = []
@@ -1475,9 +1543,41 @@ async function holdSpawner (session, ctl, ctx) {
     if (Math.hypot(sx, sz) < 0.3 * dangers.length) return dangers.slice().sort((a, b) => a.distanceTo(me) - b.distanceTo(me))[0]
     return me.offset(sx * 4, 1.6, sz * 4)
   }
+  let blockedCorner = null
   // Отдых: в шалаше — заложить дверь; без шалаша — коробка.
   const restNow = async () => {
     stopWalking()
+    if (process.env.ND_BLAZE_WORLD_STATE !== '0' && !fireproof()) {
+      const blazes = liveBlazes(bot, dead, 48)
+      // A connected neighbouring corner is cheaper than digging a pit under the current volley.
+      const feet = bot.entity.position.floored()
+      const exposed = blazes.some(e => seesMe(bot, e)) || radar.incoming(gameClock.now()).length > 0
+      const corner = exposed && !inBunker() && DOOR_SIDES.map(d => feet.plus(d)).find(pos =>
+        seesBlock(bot, bot.blockAt(pos.offset(0, -1, 0))) && standable(bot, pos) &&
+        [0, 1].every(y => !/fire|lava/.test(bot.blockAt(pos.offset(0, y, 0))?.name || '')) &&
+        blazes.every(e => !losClear(bot, blazeEye(e), pos.offset(0.5, 1.62, 0.5))) &&
+        radar.incoming(gameClock.now()).every(b => !losClear(bot, b.from, pos.offset(0.5, 0.9, 0.5))))
+      if (corner) {
+        const key = JSON.stringify([xyz(feet), xyz(corner), [-1, 0, 1].map(y => bot.blockAt(corner.offset(0, y, 0))?.stateId),
+          blazes.filter(e => e.position.distanceTo(corner) < 2).map(e => [e.id, xyz(e.position)])])
+        if (key !== blockedCorner) {
+          blockedCorner = key
+          const from = blazes.filter(e => seesMe(bot, e)).map(blazeEye)
+          await setShield(true, from.length ? faceFor(from) : null)
+          setPhase('за соседний угол до лечения')
+          await require('./sealed').stepMove(bot, ctl, { kind: 'flat', to: corner }).catch(() => null)
+        }
+      }
+      // The existing radar ends this wait when the physical volley/flight ends or its ray is closed.
+      while (!ctl.aborted && (bot.health ?? 0) > 0 && gameClock.now() < deadline && guard.stats.worn) {
+        const vis = liveBlazes(bot, dead, 48).filter(e => seesMe(bot, e))
+        const from = [...dangersNow(vis, gameClock.now()), ...radar.incoming(gameClock.now()).map(b => b.from)]
+        if (!from.length) break
+        setPhase('щит до укрытия для лечения')
+        await setShield(true, faceFor(from))
+        await sleep(50)
+      }
+    }
     // Нельзя опустить щит и строить/есть под рукой. Отрыв тот же, что в PvP;
     // затем существующее бегство от стрелков ищет разрыв линии огня.
     await setShield(false)
@@ -1654,6 +1754,7 @@ async function holdSpawner (session, ctl, ctx) {
       log('отдых до боя', r)
       if (!r.rested) return { ...out, stopped: r.why || 'не восстановился до боя', bail: true }
     }
+    if (spawner && p0(ctx).clearSpawner !== false && process.env.ND_BLAZE_CLEAR !== '0') require('./blaze-clear').observe(bot, spawner)
     // --- шалаш
     // Шалаш — по желанию (bunker: true): замер 7 — из-под крыши видно только
     // до 37° вверх, блейзы у спавнера висят выше и за минуту не показались ни
@@ -1719,6 +1820,7 @@ async function holdSpawner (session, ctl, ctx) {
       log('точка боя', out.post || { none: true })
     }
     await equipSword()
+    bot.on('blockUpdate', onClearBlock)
     while (!ctl.aborted && !bail) {
       // Каждый оборот — через таймер: ветка без sleep (вылазка, которой нечего
       // собрать) иначе держит цикл событий, и пакеты мира не читаются.
@@ -2131,6 +2233,39 @@ async function holdSpawner (session, ctl, ctx) {
         if (bunker && !inBunker()) { setPhase('назад в шалаш'); await walkNear(bot, ctl, bunker.cell, 0, 8000) }
         continue
       }
+      if (spawner && p0(ctx).clearSpawner !== false && process.env.ND_BLAZE_CLEAR !== '0') {
+        const workWindow = () => {
+          if (meleeThreat() || foesNow().some(e => e.name !== 'blaze')) return 0
+          if (fireproof()) return Infinity
+          return Math.min(...liveBlazes(bot, dead, 32).filter(e => seesMe(bot, e)).map(e => radar.untilDanger(e)), ...radar.incoming(gameClock.now()).map(b => b.eta)) - SHIELD_LEAD_MS
+        }
+        // Existing blazes and floor drops satisfy part of the demand before another spawn is useful.
+        const remaining = Math.max(0, want - countOf(bot, 'blaze_rod') - droppedRods(bot, 16, { reachable: true }) - blazes.length * .5)
+        const at = bot.entity.position
+        const inventory = bot.inventory.items().filter(i => /_pickaxe$|^(tnt|flint_and_steel|fire_charge)$/.test(i.name)).map(i => `${i.name}:${i.count}:${i.durabilityUsed}:${JSON.stringify(i.enchants || [])}`).join(',')
+        const state = `${clearRevision}/${at.x},${at.y},${at.z}/${remaining}/${inventory}/${fireproof()}/${workWindow() > 0}/${blazes.map(e => `${e.id}:${radar.charged(e)}`).join(',')}/${radar.incoming(gameClock.now()).length}`
+        if (remaining && state !== clearChecked) {
+          clearChecked = state
+          const protectedCells = []
+          for (const shelter of [bunker?.cell, boxPlan?.cell, home].filter(Boolean)) {
+            for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) for (let y = -1; y <= 3; y++) protectedCells.push(shelter.floored().offset(x, y, z))
+          }
+          const clearing = require('./blaze-clear')
+          const plan = clearing.plan(bot, spawner, { rods: remaining, protectedCells, horizon: (deadline - gameClock.now()) / 1000, windowMs: workWindow() })
+          if (plan) {
+            await setShield(false)
+            setPhase('расчистка спавнера')
+            const safe = (remainingMs = 0) => countOf(bot, 'blaze_rod') < want && workWindow() > remainingMs && !!bot.entity.onGround && (fireproof() || !(bot.entity.metadata?.[0] & 1))
+            const result = await clearing.execute(session, ctl, plan, safe)
+            const receipt = { ...result, pos: xyz(plan.pos), mode: plan.mode, gain: plan.gain, beforeUpper: plan.beforeUpper, savedSeconds: plan.savedSeconds, costSeconds: plan.costSeconds, remaining }
+            ;(out.clearing || (out.clearing = [])).push(receipt)
+            log('расчистка спавнера', receipt)
+            await equipSword()
+            if (result.ok) clearRevision++
+            continue
+          }
+        }
+      }
       if (!blazes.length) {
         if (now - idleSince > (spawner ? 50000 : 8000)) {
           if (spawner && silentApproach < 2 && bot.entity.position.distanceTo(spawner.offset(0.5, 0.5, 0.5)) > 15) {
@@ -2387,6 +2522,7 @@ async function holdSpawner (session, ctl, ctx) {
     if (bunker?.lowWindow && inBunker() && (bot.health ?? 0) > 0 && !ctl.aborted) {
       out.windowSealed = await shutDoor(bot, bunker).catch(() => false)
     }
+    bot.removeListener('blockUpdate', onClearBlock)
     bot.removeListener('entityHurt', onBlazeHurt)
     bot.removeListener('heldItemChanged', onHeld)
     try { await setShield(false) } catch {}
@@ -2980,6 +3116,9 @@ async function farmRods (session, ctl, p: any = {}) {
   let fled = null
   let dugIn = null
   let radius = clamp(p.radius ?? 20, 8, 32)
+  // Бой мечом (ND_BLAZE_MELEE) владеет руками с начала навыка: тактика не рвёт подготовку у спавнера (bnf3/bnf4 16.10: TACTICAL
+  // на 2–4-й с — заход потерян до первого взмаха). Чужие враги вплотную тактика по-прежнему берёт (protectedEncounter).
+  if (process.env.ND_BLAZE_MELEE !== '0' && worlds.worldOf(bot) === 'the_nether') session._blazeCombatCtl = ctl
   const rods0 = countOf(bot, 'blaze_rod')
   const short = rodsShort(bot, p.eyes ?? EYES_WANTED)
   // rods — сколько должно СТАТЬ в рюкзаке (так зовёт автомат: blaze {rods: 7});
@@ -3111,10 +3250,10 @@ async function farmRods (session, ctl, p: any = {}) {
         log('путь к спавнеру по сетке', { ok: rr.ok, why: rr.why, steps: rr.steps, dug: rr.dug, s: rr.seconds, at: xyz(bot.entity.position) })
       }
     }
-    if (spawner && bot.entity.position.distanceTo(spawner.offset(0.5, 0.5, 0.5)) > SPAWNER_RANGE - 4) {
+    if (spawner && canApproachSpawner(bot, dead) && bot.entity.position.distanceTo(spawner.offset(0.5, 0.5, 0.5)) > SPAWNER_RANGE - 4) {
       walked = bot.entity.position.distanceTo(spawner) > 32
         ? await require('./nether').walkToward(session, ctl, spawner, Math.min(deadline, gameClock.now() + 150000), { range: 7 })
-        : await walkNear(bot, ctl, spawner, 7, Math.max(5000, Math.min(60000, deadline - gameClock.now())))
+        : await walkNear(bot, ctl, spawner, 7, Math.max(5000, Math.min(60000, deadline - gameClock.now())), { stopIf: () => !canApproachSpawner(bot, dead) })
     }
 
     // Место под стержни — до боя (рюкзак после хода по Аду бывает полон: стержень рядом не подбирается — B16f21 03.10).
@@ -3126,6 +3265,8 @@ async function farmRods (session, ctl, p: any = {}) {
       for (let i = 0; i < 20 && !hasEffect(bot, 'fire_resistance'); i++) await sleep(100)
     }
 
+    // Only the running combat loop owns the hands; the preceding survey/path still needs tactical protection.
+    session._blazeCombatCtl = ctl
     // Без огнестойкости бой не запрещён (ND_FR_STRICT убран 06.10, решение пользователя): holdSpawner ведёт его по механике ифрита.
     if (here === 'the_nether' && !hasEffect(bot, 'fire_resistance')) log('бой без огнестойкости', { potion, hp: Math.round(bot.health ?? 0) })
     // Яма (ND_BLAZE_HOLE=1) сама доходит до клетки у спавнера ходом по сетке, отбиваясь (holeCamp fightClose), — лагерь и с 9 бл.
@@ -3144,7 +3285,17 @@ async function farmRods (session, ctl, p: any = {}) {
     }
     // Лагерь кончился без огнестойкости — дальше holdSpawner без неё (вылазки там под радаром залпов, не «по-старому»).
     if (camp && camp.inHole) { stopped = stopped || camp.stopped; bail = true }
-    if (!bail && !p.legacy && !(camp && (camp.stopped === 'набрал' || /^хп/.test(camp.stopped)))) {
+    // ND_BLAZE_MELEE=1 — бой «мечом по месту» (blaze-melee.ts) вместо holdSpawner: бить того, кто в досягаемости, подходить к
+    // видимому на высоте глаз, без коробки с окном; отлёжка — только когда вплотную никого.
+    if (!bail && !p.legacy && spawner && !camp && process.env.ND_BLAZE_MELEE !== '0') {
+      phase = 'бой мечом у спавнера'
+      held = await require('./blaze-melee').meleeCamp(session, ctl, { spawner, want, deadline, dead, setPhase: s => { phase = s } })
+      log('бой мечом', held)
+      stopped = held.stopped === 'набрал' ? null : held.stopped
+      bail = !!held.bail
+      camp = held
+    }
+    if (!bail && !p.legacy && !(held && held.mode === 'melee') && !(camp && (camp.stopped === 'набрал' || /^хп/.test(camp.stopped)))) {
       // Бой по механике блейза (holdSpawner): щит под очереди, меч/лук между
       // ними, коробка на отдых. Старый цикл — legacy: true (для сравнения).
       phase = 'бой у спавнера'
@@ -3367,6 +3518,7 @@ async function farmRods (session, ctl, p: any = {}) {
     if (!ctl.aborted && !bail && !(dugIn && dugIn.ok)) await collectRods(bot, ctl, 12, 5000)
   } finally {
     bot.removeListener('entityDead', onDead)
+    if (session._blazeCombatCtl === ctl) delete session._blazeCombatCtl
     bot.removeListener('entityGone', onGone)
     bot.removeListener('entityHurt', onHurt)
     ledger.stop()
@@ -3386,6 +3538,7 @@ async function farmRods (session, ctl, p: any = {}) {
     snowballs: thrown ? { thrown, left: countOf(bot, 'snowball') } : undefined,
     hpLost: Math.max(0, hp0 - Math.round(bot.health ?? 0)),
     camp: camp || undefined,
+    clearing: held?.clearing,
     safety: held?.safety,
     escape: held?.escape,
     damage: ledger.report(),
@@ -3419,4 +3572,4 @@ async function farmRods (session, ctl, p: any = {}) {
   return detail
 }
 
-module.exports = { walkNear, digInPlace, digInNear, pitWhyAt, choosePost, windowForPost, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }
+module.exports = { drinkable, floorUnder, makeRadar, blazeEye, seesMe, fightMoves, droppedRods, collectRods, canApproachSpawner, walkNear, digInPlace, digInNear, pitWhyAt, choosePost, windowForPost, liveBlazes, sweepRisk, farmRods, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner, boxRest, drinkFireResistance, hasEffect, EYES_WANTED, SPAWNER_PLACE }

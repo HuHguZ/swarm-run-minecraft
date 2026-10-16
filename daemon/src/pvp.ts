@@ -41,6 +41,7 @@ const crystal = require('./crystal')
 const { counterattackAfterFailedEscape } = require('./pvp/last-stand')
 const { foodAnimals, foodIgnitionAllowed } = require('./pvp/food-fire')
 const { createLastSeen } = require('./pvp/last-seen')
+const owShield = require('./ow-shield')
 
 const TICK_MS = 50
 const HIT_REACH = 2.9
@@ -843,6 +844,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
 
   let aim = 'target'
   let aimPoint = null
+  let owShot = null
   let sightOff = null
   const aimTimer = gameClock.setInterval(() => {
     vision.observe(entity)
@@ -867,6 +869,7 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
         return
       }
       if (pathing || edges.falling(bot)) return
+      if (owShot) { const p = owShot.point; bot.lookAt(new Vec3(p.x, p.y, p.z), true).catch(() => {}); return }
       if (aim === 'target') {
         // Прогноз следящего бывает с NaN по x/z (s7-arms11, [nan-guard] lookAt({x:null,y:106,z:null})) — тогда смотрю на тело.
         const p0 = track.at(2)
@@ -1662,6 +1665,7 @@ const pvpSkills = {
     if (opts.repelLava && (entity.position.distanceTo(bot.entity.position) > 3 || !hasEffect(bot, 'fire_resistance'))) return finish({ repelled: true })
     if (now > deadline) return finish({ timeout: true, targetAlive: true })
 
+    owShot = !prof.player && guard?.stats?.worn ? owShield.rangedGuard(bot, tt.threats()) : null
     track.update()
     const me = bot.entity.position
     const eye = me.offset(0, EYE, 0)
@@ -3284,7 +3288,7 @@ const pvpSkills = {
       continue
     }
 
-    const bowShield = theyBow && !hisCb && (prof.player || prof.ranged) && guard?.stats?.worn && sees && r > HIT_REACH
+    const bowShield = owShield.enabled(bot) && !prof.player && owShot !== undefined ? !!owShot : theyBow && !hisCb && (prof.player || prof.ranged) && guard?.stats?.worn && sees && r > HIT_REACH
     if (bowShield) {
       guard.raise(true)
       if (ready('bowShieldNote')) { rest('bowShieldNote', 4000); used(their === 'trident' ? 'щит от трезубца' : 'щит от стрелы') }
@@ -3618,7 +3622,8 @@ const pvpSkills = {
     const hisReadyMs = fsH && fsH.swungAt ? Math.max(0, fsH.swungAt + tempo.swingCooldownMs(hisHand) - now) : 0
     const race = prof.player && theirR <= tempo.PLAYER_REACH && hisReadyMs <= TICK_MS
     const cdHit = race ? mf.clock.leftMs(0.91) : cooldownLeft
-    const canHit = cdHit === 0 && iframes === 0 && r <= HIT_REACH && !intoShield && inSight
+    const owMelee = guard?.stats?.worn && gameClock.now() >= (bot._ndShieldDisabledUntil || 0) ? owShield.meleeGuard(bot, entity, fsH?.swungAt || 0, guard.blocking?.() || false) : null
+    const canHit = cdHit === 0 && iframes === 0 && r <= HIT_REACH && !intoShield && inSight && owMelee !== true && !owShot
     let forward = false
     let back = false
     let strafe = null
@@ -3920,12 +3925,12 @@ const pvpSkills = {
     const theirHand = hisHand
     const offShield = bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield'
     if (guard && guard.stats && guard.stats.worn && offShield) {
-      const adv = mf.shield({ theirR, closing, hisReadyMs, hisHand: theirHand, myLeftMs: cdHit, inMyReach: r <= HIT_REACH })
+      const adv = owMelee === null ? mf.shield({ theirR, closing, hisReadyMs, hisHand: theirHand, myLeftMs: cdHit, inMyReach: r <= HIT_REACH }) : owMelee ? 'raise' : 'lower'
       if (adv === 'raise') guard.raise(true)
-      else if (adv === 'lower' && !cbShield) await guard.raise(false)
+      else if (adv === 'lower' && !cbShield && !(owShield.enabled(bot) && !prof.player && bowShield)) await guard.raise(false)
     }
 
-    const edgeSpam = edgeHit === 'hit' && iframes === 0 && r <= HIT_REACH && !intoShield && inSight && cooldownLeft > 0
+    const edgeSpam = edgeHit === 'hit' && iframes === 0 && r <= HIT_REACH && !intoShield && inSight && cooldownLeft > 0 && owMelee !== true && !owShot
     if (edgeSpam && ready('edgeSpamNote')) { rest('edgeSpamNote', 3000); used('бью у края, не дожидаясь заряда') }
     // Хит-селект = (1) ответный удар в тик его отброса (melee.counterFn: свой спринт-удар ×0.6 гасит часть его толчка —
     // Player.causeExtraKnockback) и (2) ожидание его удара до 3 тиков. ND_HS_WAIT=0 — без (2): по jar выигрыш даёт только

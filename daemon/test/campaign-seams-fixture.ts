@@ -32,7 +32,7 @@ function load (state, handle: (...args: any[]) => any = () => ({} as Record<stri
   }
   vm.runInNewContext(fs.readFileSync(process.env.CAMPAIGN_TEST_SOURCE || path.join(__dirname, '../campaign.js'), 'utf8') + `
     state = testState; sit = { foes: 0, surface: false };
-    module.exports = { known, needed: n => STAGES.find(s => s.name === n).needed(),
+    module.exports = { known, done: n => DONE[n](), select: () => intelligence.select(STAGES, () => false), needed: n => STAGES.find(s => s.name === n).needed(),
       run: n => { stage = n; return STAGES.find(s => s.name === n).run() },
       runs: n => { endkitRuns = n }, hooks: h => { if (h.rest) rest = h.rest; if (h.nightGuard) nightGuard = h.nightGuard; },
       acceptResult, boot: () => ws.listeners.get('open')(),

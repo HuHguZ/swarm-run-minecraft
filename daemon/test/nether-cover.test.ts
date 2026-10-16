@@ -67,3 +67,13 @@ test('штрек: лава у забоя — под заклад, руда зо�
   assert.deepEqual(a.gold.map(xyz), [[1, 61, -1]])
   assert.equal(a.open.length, 0)
 })
+
+
+test('neP-1: liquid in the body cannot be reported as a sealed healing pocket', async () => {
+  const W = world()
+  W.set(new Vec3(0,60,0), 'lava'); W.set(new Vec3(0,61,0), 'lava')
+  W.bot.entity.isInLava = true
+  const result = await require('../src/nether-cover').coverHere({ bot: W.bot }, { aborted: false })
+  assert.equal(result.ok, false)
+  assert.equal(result.sealed, false)
+})

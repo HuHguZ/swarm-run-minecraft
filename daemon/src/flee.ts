@@ -73,11 +73,8 @@ const DOCTRINE = {
   creaking: { radius: 6, weight: 5 },
   shulker: { radius: 0, weight: 4, range: 20 },
   piglin: { radius: 7, weight: 5, range: 12 },
-  // Белый медведь (с медвежатами нападает сам): PolarBear.createAttributes 1.21.11 (константы класса) — MAX_HEALTH 30,
-  // ATTACK_DAMAGE 6, MOVEMENT_SPEED 0.25 (как у зомби), FOLLOW_RANGE 20. ow-E2 02.10 слот 14: DEATH_LOOP у спавна —
-  // 4 смерти от медведя, отход его не видел («бьёт невидимый»). Не драться — уходить; в бой (combat.HOSTILES) не берём,
-  // чтобы не задирать мирного.
-  polar_bear: { radius: 8, weight: 8, fight: 'не драться: 30 хп, бьёт 6 — уйти' }
+  // polar-bear.risks distinguishes a visible family and an attacker from a calm neutral; the radius is a path cost.
+  polar_bear: { radius: 8, weight: 8, fight: 'нейтрален; нападение — берег, столб или меч/щит по цене' }
 }
 
 // Напавший игрок (id передаёт тактика): бегает как мы, бьёт с 3 бл. и с разгона; с луком/арбалетом/трезубцем — ещё и стрелок.
@@ -92,14 +89,17 @@ function playerDoctrine (e) {
 function hostilesAround (bot, radius = 32, foes: number[] = []) {
   const me = bot.entity.position
   const out = []
+  const bears = require('./polar-bear').enabled() ? require('./polar-bear').risks(bot) : null
   for (const e of ((Object.values(bot.entities) as any[]) as any)) {
     if (!e || e === bot.entity || !e.position || !e.name) continue
-    const doc = e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
+    const bear = e.name === 'polar_bear' ? bears?.find(h => h.e.id === e.id) : null
+    if (e.name === 'polar_bear' && bears && !bear) continue
+    const doc = bear ? { ...DOCTRINE.polar_bear, radius: bear.avoiding ? require('./polar-bear').MECH.followMax : require('./polar-bear').MECH.cubMax + require('./polar-bear').MECH.reach } : e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
     if (!doc) continue
     if (e.username && !require('./pvp/last-seen').seesPlayer(bot, e)) continue
-    const d = e.position.distanceTo(me)
+    const d = (bear?.e ?? e).position.distanceTo(me)
     if (d > radius) continue
-    out.push({ e, doc, d, swelling: e.name === 'creeper' && creeperSwelling(bot, e) })
+    out.push({ e: bear?.e ?? e, doc, d, swelling: e.name === 'creeper' && creeperSwelling(bot, e) })
   }
   return out.sort((a, b) => a.d - b.d)
 }

@@ -9,13 +9,15 @@ const { Vec3 } = require('vec3')
 const esbuild = require('esbuild')
 
 // Run the actual combat loop; perception hides the tracked entity behind a wall.
-async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = true, aborted = false, spawner = null, found = false, visible = false, viewDistance = 2, stopViews = 1 }: any = {}) {
+async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = true, aborted = false, spawner = null, found = false, visible = false, viewDistance = 2, stopViews = 1, clearPlan = null, clearEnabled = true, burning = false }: any = {}) {
   let clock = 1000
   const walks = [], views = [], phases = [], goals = []
+  const clearCalls = [], clearExec = []
   const ctl = { aborted }
   const bot: any = new EventEmitter()
   bot.health = bot.food = 20
   bot.entity = { id: 1, position: new Vec3(0.5, 64, 0.5), onGround: true, velocity: new Vec3(0, 0, 0) }
+  bot.entity.metadata = [burning ? 1 : 0]
   bot.entities = hidden ? { 2: { id: 2, name: 'blaze', position: hidden, isValid: true, height: 1.8, width: 0.6 } } : {}
   bot.visible = visible
   bot.inventory = { items: () => [{ name: 'iron_sword', count: 1 }], slots: new Array(46).fill(null) }
@@ -40,6 +42,11 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
       if (name === './movement') return { ...req(name), sleep: async ms => { clock += ms } }
       if (name === './combat') return { ...req(name), makeShield: () => guard }
       if (name === './walkable') return { walkable: () => [], standable: () => false }
+      if (name === './blaze-clear') return {
+        observe() {},
+        plan: (_b, _sp, options) => { clearCalls.push(options); return clearPlan },
+        execute: async (_s, _c, p, safe) => { clearExec.push(p); const ok = safe(500); ctl.aborted = true; return { ok, seconds: .5 } }
+      }
       if (name === './combat-safety') return { ...req(name), watch: () => ({ check: () => ({ action: 'fight' }), close() {} }) }
       if (name === './fortress') return {
         PLACE: 'крепость (ад)', placeOf: () => known ? session.journal.state.places['крепость (ад)'] : null,
@@ -66,9 +73,9 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
   `, context, { filename: file })
   const result = await context.module.exports.testHold(session, ctl, {
     spawner, want: 1, deadline: 51000, dead: new Set(), setPhase: p => phases.push(p),
-    p: { box: false }
+    p: { box: false, clearSpawner: clearEnabled }
   })
-  return { walks, views, result, phases, clock, bot, goals }
+  return { walks, views, result, phases, clock, bot, goals, clearCalls, clearExec }
 }
 
 test('no-spawner combat acquires a fortress view instead of repeating a hidden entity coordinate', async () => {
@@ -125,4 +132,33 @@ test('a new no-spawner view becomes the current fight position instead of walkin
   assert.equal(r.views.length, 2)
   assert.equal(r.goals.length, 0, 'the old fight post must not undo deliberate acquisition')
   assert.equal(r.views[1].from.x, r.views[0].from.x + 12)
+})
+
+test('the actual spawner loop executes a priced clear action and returns its receipt', async () => {
+  const plan = { mode: 'pick', pos: new Vec3(3, 65, 4), gain: .05, costSeconds: .5, savedSeconds: 2 }
+  const r = await acquire({ hidden: null, spawner: new Vec3(4, 64, 4), clearPlan: plan })
+  assert.equal(r.clearExec.length, 1)
+  assert.equal(r.clearCalls[0].rods, 1)
+  assert.ok(r.clearCalls[0].horizon > 0)
+  assert.equal(r.result.clearing[0].ok, true)
+  assert.ok(r.phases.includes('расчистка спавнера'))
+  assert.equal(r.bot.listenerCount('blockUpdate'), 0)
+})
+
+test('the actual spawner loop does not repeatedly re-price an unchanged unprofitable world', async () => {
+  const r = await acquire({ hidden: null, spawner: new Vec3(4, 64, 4) })
+  assert.equal(r.clearCalls.length, 1)
+  assert.equal(r.clearExec.length, 0)
+})
+
+test('the fire metadata alone does not reject a priced dig while fire resistance prevents its damage', async () => {
+  const clearPlan = { mode: 'pick', pos: new Vec3(3, 65, 4), gain: .05, costSeconds: .5, savedSeconds: 2 }
+  const r = await acquire({ hidden: null, spawner: new Vec3(4, 64, 4), clearPlan, burning: true })
+  assert.equal(r.result.clearing?.[0]?.ok, true)
+})
+
+test('control scenes and an aborted spawner call do not start clearing', async () => {
+  const disabled = await acquire({ hidden: null, spawner: new Vec3(4, 64, 4), clearEnabled: false })
+  const aborted = await acquire({ hidden: null, spawner: new Vec3(4, 64, 4), aborted: true })
+  assert.equal(disabled.clearCalls.length + aborted.clearCalls.length, 0)
 })

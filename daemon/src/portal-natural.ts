@@ -225,7 +225,40 @@ function skyLava (bot, radius, { up = 40, down = 48, rays = 1500 }: any = {}) {
 
 // Что видно отсюда. radius — сфера взгляда (лава светится, озеро видно издалека, если чанк прогружен);
 // rays — потолок лучей на вызов (visibleOf). Возвращает площадки, лучшие первыми.
-function survey (bot, { radius = 128, rays = 3000, need = NEED }: any = {}) {
+function terrainView (bot) {
+  const eyes = require('./perception/eyes')
+  const me = bot.entity.position
+  const points = new Map(), sources = new Map(), horizon = [], signature = []
+  let occluderTop = me.y
+  for (let yaw = 0; yaw < 360; yaw += 22.5) {
+    for (const pitch of [-20, 0, 20, 55]) {
+      const hit = eyes.surface(bot, { yaw, pitch, maxDist: 128 })
+      if (pitch === 0) horizon.push(hit ? hit.dist : 128)
+      if (!hit) continue
+      signature.push([yaw, pitch, hit.name, hit.pos])
+      if (hit.name === 'lava') {
+        const b = bot.blockAt(new Vec3(hit.pos.x, hit.pos.y, hit.pos.z))
+        if (isLavaSrc(b)) sources.set(JSON.stringify(hit.pos), { at: hit.pos })
+        continue
+      }
+      occluderTop = Math.max(occluderTop, hit.pos.y + 1)
+      if (Math.abs(hit.pos.y + 1 - me.y) < 4 || /lava|leaves|log/.test(hit.name)) continue
+      const at = { x: hit.pos.x + 0.5, y: hit.pos.y + 1, z: hit.pos.z + 0.5 }
+      points.set(`${at.x},${at.y},${at.z}`, { at, water: hit.water })
+    }
+  }
+  const Block = require('prismarine-block')(bot.registry)
+  const items = bot.inventory?.items?.() || []
+  const picks = items.filter(i => /_pickaxe$/.test(i.name))
+  const seconds = name => Math.min(...(picks.length ? picks : [{ type: null }]).map(i =>
+    Block.fromStateId(bot.registry.blocksByName[name].defaultState).digTime(i.type, false, false, false) / 1000))
+  horizon.sort((a, b) => a - b)
+  return { horizon: horizon[Math.floor(horizon.length / 2)], occluderTop, points: [...points.values()], sources: [...sources.values()],
+    stoneSeconds: seconds('stone'), deepslateSeconds: seconds('deepslate'), signature: JSON.stringify(signature),
+    tools: JSON.stringify(items.filter(i => /_pickaxe$|_log$|_planks$|^(stick|cobblestone|dirt)$/.test(i.name)).map(i => [i.name, i.count, i.durabilityUsed])) }
+}
+
+function survey (bot, { radius = 128, rays = 3000, need = NEED, terrain = false }: any = {}) {
   const t0 = gameClock.wall.now()
   const reg = bot.registry
   const me = bot.entity.position.floored()
@@ -278,7 +311,8 @@ function survey (bot, { radius = 128, rays = 3000, need = NEED }: any = {}) {
     skySample: sky.sample,
     best: usable[0] || null,
     sites: [...usable, ...sites.filter(s => !s.usable).sort((a, b) => a.dist - b.dist)].slice(0, 8),
-    ruins: ruins.sort((a, b) => a.dist - b.dist).slice(0, 4)
+    ruins: ruins.sort((a, b) => a.dist - b.dist).slice(0, 4),
+    ...(terrain ? { terrain: terrainView(bot) } : {})
   }
 }
 
@@ -810,4 +844,4 @@ function rpc (session, p: any = {}) {
   return Promise.resolve({ status: 'failed', error: `mode: survey | order | run, не ${mode}` })
 }
 
-module.exports = { survey, searchOrder, run, rpc, lavaBody, skyAbove, rpNear, estimate, lookoutSpot, edgeSpot, shoreSources, refreshCastLava, softCells, legTarget, wetShare, hintFor, poolInfo, skyOfScan, NEED }
+module.exports = { survey, terrainView, searchOrder, run, rpc, lavaBody, skyAbove, rpNear, estimate, lookoutSpot, edgeSpot, shoreSources, refreshCastLava, softCells, legTarget, wetShare, hintFor, poolInfo, skyOfScan, NEED }

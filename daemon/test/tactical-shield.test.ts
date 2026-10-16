@@ -61,6 +61,58 @@ function actor() {
 }
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+
+function drawingSkeleton(a) {
+  const e = a.bot.entities[2]
+  e.name = 'skeleton'; e.position = new Vec3(.5, 64, -9.5); e.yaw = Math.PI
+  e.equipment = [{ name: 'bow' }]
+  e.metadata[a.bot.registry.entitiesByName.skeleton.metadataKeys.indexOf('living_entity_flags')] = 1
+  return e
+}
+
+test('OW visible draw is a shield reason before the first arrow and expires on its actual release', () => {
+  const a = actor()
+  try {
+    const e = drawingSkeleton(a), state = a.tactics.observeTactics(a.session)
+    assert.equal(state.owGuard?.id, 2)
+    const choices = require('../src/tactics/state').candidates(state)
+    assert.equal(choices[0].id, 'Shield')
+    e.metadata[a.bot.registry.entitiesByName.skeleton.metadataKeys.indexOf('living_entity_flags')] = 0
+    assert.equal(a.tactics.observeTactics(a.session).owGuard?.kind, 'unmeasured bow flight')
+    a.bot.entity.position.x += 2
+    assert.equal(a.tactics.observeTactics(a.session).owGuard, null, 'crossing out of its old firing line ends that uncertainty')
+  } finally { a.close() }
+})
+
+test('OW confirmed Shield survives the old 600ms completion while a visible bow remains drawn', async () => {
+  const a = actor()
+  let pending: Promise<any>, done = false
+  try {
+    const e = drawingSkeleton(a), system = new a.tactics.TacticalSystem(a.session)
+    pending = system.execute({ id: 'Shield', score: 110 }, a.ctl, a.tactics.observeTactics(a.session)).then((r: any) => { done = true; return r })
+    await turn(); a.metadata(3); a.age(1001)
+    for (let tick = 2; tick < 25; tick++) { a.age(1000 + tick); a.c.advanceTicks(1); await turn() }
+    assert.equal(done, false, 'confirmation timeout is not the duration of a defence mode')
+    e.metadata[a.bot.registry.entitiesByName.skeleton.metadataKeys.indexOf('living_entity_flags')] = 0
+    for (let tick = 0; tick < 25 && !done; tick++) { a.c.advanceTicks(1); await turn() }
+    assert.equal(done, true); assert.equal((await pending).shielded, true)
+  } finally { a.ctl.abort(); await pending; a.close() }
+})
+
+test('OW Shield faces the incoming projectile instead of the nearest unrelated shooter', async () => {
+  const a = actor(), looks: any[] = []
+  let pending: Promise<any>
+  try {
+    drawingSkeleton(a)
+    a.bot.entities[3] = { id: 3, name: 'arrow', position: new Vec3(6.5, 64.9, .5) }
+    observeProjectile(a)
+    a.bot.lookAt = async (at: any) => { looks.push(at.clone()) }
+    pending = new a.tactics.TacticalSystem(a.session).execute({ id: 'Shield', score: 110 }, a.ctl, a.tactics.observeTactics(a.session))
+    await turn()
+    assert.equal(looks[0]?.x, 6.5)
+  } finally { a.ctl.abort(); await pending; a.close() }
+})
+
 function observeProjectile(a, id = 3) {
   const e = a.bot.entities[id], current = e.position.clone()
   e.position = current.offset(1, 0, 0)
@@ -385,7 +437,9 @@ async function rangedDuelFixture({ name = 'skeleton', hand = 'bow', player = fal
   a.bot.entity.attributes = {}
   a.bot.controlState = {}
   a.bot.setControlState = (key: string, value: boolean) => { a.bot.controlState[key] = value }
+  a.bot.getControlState = (key: string) => !!a.bot.controlState[key]
   a.bot._client.write = () => {}
+  a.bot.attack = () => {}
   a.bot.look = async () => {}
   a.bot.equip = async (item: unknown) => { a.bot.heldItem = item }
   a.bot.getEquipmentDestSlot = () => 36
@@ -410,6 +464,22 @@ test('a visible skeleton beyond melee reach keeps the existing offhand guard dur
   assert.equal(result.swings, 0, 'the target is outside honest melee reach')
   assert.ok(raises.includes(true), 'the existing guard must defend from the observed ranged mob: ' + JSON.stringify(raises))
   assert.ok(raises.slice(0, -1).every(value => value === true), 'the far-approach branch must not lower the bow shield in the same loop: ' + JSON.stringify(raises))
+})
+
+test('OW middle approach does not lower its bow shield later in the same movement loop', async () => {
+  const { raises } = await rangedDuelFixture({ distance: 6 })
+  assert.ok(raises.includes(true))
+  assert.ok(raises.slice(0, -1).every(value => value === true), JSON.stringify(raises))
+})
+
+test('ranged mobs outside the new bow policy retain their existing guard', async () => {
+  assert.ok((await rangedDuelFixture({ name: 'pillager', hand: 'crossbow' })).raises.includes(true))
+})
+
+test('OW first unknown zombie exchange raises the shield instead of dropping it for a ready sword', async () => {
+  const { raises, result } = await rangedDuelFixture({ name: 'zombie', hand: 'iron_sword', distance: 1 })
+  assert.ok(raises.includes(true))
+  assert.equal(result.swings, 0)
 })
 
 test('player bow uses the same far shield while crossbow keeps its existing loaded-aim gate', async () => {

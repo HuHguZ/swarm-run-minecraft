@@ -83,7 +83,7 @@ function getPhysics () {
     bot.entity.ndInPowderSnow = this.ndInPowderSnow
 `)
   if ((powderSource.match(/ndInPowderSnow/g) || []).length !== 7 || !powderSource.includes('const ndPowderSnowId')) throw new Error('Cannot apply reviewed powder snow movement to native physics')
-  // Avatar 1.21.11: crouching is 1.5 high; Player.updatePlayerPose retains it
+  // Avatar 1.21.11: swimming is .6 high, crouching 1.5; Player.updatePlayerPose retains it
   // while the standing body cannot fit. Keep the dimension on each state, never
   // mutate a Physics instance shared by live integration and independent forecasts.
   const poseSource = powderSource
@@ -100,15 +100,37 @@ function getPhysics () {
         const box = getPlayerBB(entity.pos, { ndPoseHeight: height }).contract(1e-7, 1e-7, 1e-7)
         return !getSurroundingBBs(world, box).some(block => box.intersects(block))
       }
-      entity.ndPoseHeight = fits(1.5) && (entity.control.sneak || !fits(physics.playerHeight)) ? 1.5 : physics.playerHeight
+      // Entity.updateSwimming / Player.updatePlayerPose run on the client too.
+      if (ndWaterBudget) {
+        const eyeY = entity.pos.y + (entity.ndPoseHeight === .6 ? .4 : entity.ndPoseHeight === 1.5 ? 1.27 : 1.62)
+        const eye = world.getBlock(entity.pos.offset(0, eyeY - entity.pos.y, 0)), depth = getRenderedDepth(eye)
+        const height = depth >= 0 && getRenderedDepth(world.getBlock(eye.position.offset(0, 1, 0))) >= 0 ? 1 : 1 - (depth + 1) / 9
+        const underWater = depth >= 0 && eyeY < eye.position.y + height
+        entity.ndSwimming = entity.control.sprint && (entity.ndSwimming ? entity.isInWater : underWater && getRenderedDepth(world.getBlock(entity.pos)) >= 0)
+      }
+      const swim = ndWaterBudget && fits(.6) && (entity.ndSwimming || !fits(1.5))
+      entity.ndPoseHeight = swim ? .6 : fits(1.5) && (entity.control.sneak || !fits(physics.playerHeight)) ? 1.5 : physics.playerHeight
     } else entity.ndPoseHeight = physics.playerHeight`)
     .replace('    this.isInWeb = bot.entity.isInWeb\n', `    this.isInWeb = bot.entity.isInWeb
-    this.ndPoseHeight = bot.entity._ndPoseHeight ?? (bot.entity.metadata?.[6] === 5 ? 1.5 : bot.physics?.playerHeight ?? 1.8)
+    this.ndPoseHeight = bot.entity._ndPoseHeight ?? (ndWaterBudget && bot.entity.metadata?.[6] === 3 ? .6 : bot.entity.metadata?.[6] === 5 ? 1.5 : bot.physics?.playerHeight ?? 1.8)
+    this.ndSwimming = bot.entity._ndSwimming ?? bot.entity.metadata?.[6] === 3
 `)
     .replace('    bot.entity.isInWeb = this.isInWeb\n', `    bot.entity.isInWeb = this.isInWeb
     bot.entity._ndPoseHeight = this.ndPoseHeight
+    bot.entity._ndSwimming = this.ndSwimming
 `)
-  if (!poseSource.includes('entity?.ndPoseHeight ?? physics.playerHeight') || (poseSource.match(/ndPoseHeight/g) || []).length !== 8) throw new Error('Cannot apply reviewed native crouching dimensions')
+  if (!poseSource.includes('entity?.ndPoseHeight ?? physics.playerHeight') || (poseSource.match(/ndPoseHeight/g) || []).length !== 10) throw new Error('Cannot apply reviewed native crouching dimensions')
+  // The old .401 vertical contraction inverts a .6 swimming box. Fluid checks use its actual height.
+  const swimSource = poseSource.replace('contract(0.001, 0.401, 0.001)', 'contract(0.001, entity.ndPoseHeight === .6 ? .001 : .401, 0.001)')
+    // FlowingFluid.getFlow reads FluidState.FALLING, not a waterlogged block's orientation bits.
+    .replace('if (block.metadata >= 8) {', 'if (block.metadata >= 8 && (!ndWaterBudget || waterIds.includes(block.type))) {')
+    // Player.travel steers vertical swimming velocity toward the look vector.
+    .replace('    moveEntityWithHeading(entity, world, strafe, forward)', `    if (ndWaterBudget && entity.ndSwimming && entity.isInWater && !entity.elytraFlying) {
+      const dy = Math.sin(entity.pitch || 0)
+      if (dy <= 0 || entity.control.jump || getRenderedDepth(world.getBlock(pos.offset(0, .9, 0))) >= 0) vel.y += (dy - vel.y) * (dy < -.2 ? .085 : .06)
+    }
+    moveEntityWithHeading(entity, world, strafe, forward)`)
+  if (!swimSource.includes('entity.ndPoseHeight === .6 ? .001 : .401') || !swimSource.includes('!ndWaterBudget || waterIds.includes(block.type)') || !swimSource.includes('const dy = Math.sin(entity.pitch || 0)')) throw new Error('Cannot apply reviewed swimming fluid bounds/flow/travel')
   const modules = new Map()
   const data = new Map()
   const scopedRequire = request => {
@@ -128,8 +150,8 @@ function getPhysics () {
     return modules.get(request)
   }
   const localModule = { exports: {} }
-  new Function('require', 'module', 'exports', '__filename', '__dirname', 'ndClimbableNames',
-    `${poseSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)))
+  new Function('require', 'module', 'exports', '__filename', '__dirname', 'ndClimbableNames', 'ndWaterBudget',
+    `${swimSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)), process.env.ND_WATER_ESCAPE_BUDGET !== '0')
   return (cachedPhysics = localModule.exports)
 }
 

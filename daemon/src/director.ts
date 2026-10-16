@@ -72,6 +72,7 @@ function situation (d) {
     foes: fight && typeof fight.foes === 'number' ? fight.foes : 0,
     verdict: fight ? fight.verdict : 'чисто',
     fight,
+    ...(process.env.ND_NIGHT_WORK_SAFE !== '0' && bot.game?.dimension === 'overworld' ? { work: require('./night-work').profile(bot) } : {}),
     hurtRecently: now - (d.lastHurt || 0) < 4000,
     armed: count(bot, /_(sword|axe)$/) > 0,
     edible: count(bot, FOOD) + count(bot, RAW),

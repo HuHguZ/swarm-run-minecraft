@@ -37,11 +37,16 @@ const UNTIL = process.env.UNTIL || 'nether'
 const EYES = Number(process.env.EYES || 12)
 const DEATHS_MAX = Number(process.env.DEATHS_MAX || 5)
 const CAMPAIGN = process.env.CAMPAIGN || 'campaign.js'
-const KIT = (process.env.KIT || '').split(';').map(x => x.trim()).filter(Boolean)
+// «предмет*N» — то же, что «предмет N», но без пробела (env сцен делится по пробелам: snap-scene.sh).
+const KIT = (process.env.KIT || '').split(';').map(x => x.trim().replace(/\*(\d+)$/, ' $1')).filter(Boolean)
 const STAGES = process.env.STAGES || ''
 const KEEP_INV = process.env.KEEP_INV === 'true' || process.env.KEEP_INV === '1'
 const START_Y = process.env.START_Y !== undefined && process.env.START_Y !== '' ? Number(process.env.START_Y) : null
-const STEPS = ['portal', 'nether', 'rods', 'pearls', 'eyes', 'endportal', 'end', 'dragon']
+// KEEP_STATE=1 — сцена со снимка перед этапом (16.10): мир, тело, рюкзак и время суток — как в снимке; только /random reset и правила.
+const KEEP_STATE = process.env.KEEP_STATE === '1'
+// A replacement KIT is a separate laboratory fixture; preserve snapshot position, health and day phase.
+const KIT_REPLACE = process.env.KIT_REPLACE === '1'
+const STEPS = ['kit', 'portal', 'nether', 'rods', 'pearls', 'eyes', 'endportal', 'end', 'dragon']
 if (!STEPS.includes(UNTIL)) { console.error(`UNTIL=${UNTIL}: жду одно из ${STEPS.join(', ')}`); process.exit(1) }
 
 const conn = connect(WS)
@@ -77,6 +82,8 @@ function reached (s, text) {
   const inv = s.inventory || {} as Record<string, any>
   const rods = cnt(inv, /^blaze_rod$/) + Math.floor(cnt(inv, /^blaze_powder$/) / 2) + Math.floor(cnt(inv, /^ender_eye$/) / 2)
   switch (UNTIL) {
+    // Набор литья (короткие прогоны бисекта 16.10): ведро (любое) и огниво/огненный заряд в рюкзаке, или уже в Аду.
+    case 'kit': return s.dimension === 'the_nether' || (cnt(inv, /bucket$/) > 0 && cnt(inv, /^(flint_and_steel|fire_charge)$/) > 0)
     case 'portal': return /ВЕХА (cast|portal)/.test(text) || s.dimension === 'the_nether'
     // Вход по журналу маршрута тоже считается: граф Ада мог сразу увести тело назад (s8-f1-9: «для ифритов не хватает еды —
     // домой» через 1 с после входа, опрос раз в 30 с его не застал — прогон записан таймаутом).
@@ -92,6 +99,16 @@ function reached (s, text) {
 }
 
 async function scene () {
+  const expected = new Map<string, number>()
+  if (KIT_REPLACE) {
+    if (!KIT.length) throw new Error('KIT_INVALID: empty replacement')
+    for (const g of KIT) {
+      const m = /^([a-z0-9_]+)(?: (\d+))?$/.exec(g)
+      const count = Number(m?.[2] || 1)
+      if (!m || !Number.isSafeInteger(count) || count < 1) throw new Error(`KIT_INVALID: ${g}`)
+      expected.set(m[1], (expected.get(m[1]) || 0) + count)
+    }
+  }
   // Сиды мира и копии мира независимы только со сброшенными последовательностями ГСЧ (AGENTS.md: ферма).
   await kit.randomReset()
   await kit.cmd('/gamemode survival')
@@ -100,11 +117,36 @@ async function scene () {
   // KEEP_INV=true — старые серии (до 02.10 17:15) для сравнения.
   await kit.gamerule('keep_inventory', KEEP_INV ? 'true' : 'false')
   await kit.gamerule('send_command_feedback', 'true')
-  await kit.cmd('/clear @s')
-  await kit.cmd('/effect clear @s')
-  // Утро: мир поднят за минуты до прогона, сутки — 20 минут.
-  await kit.cmd('/time set 1000')
+  if (!KEEP_STATE) {
+    await kit.cmd('/clear @s')
+    await kit.cmd('/effect clear @s')
+    // Утро: мир поднят за минуты до прогона, сутки — 20 минут.
+    await kit.cmd('/time set 1000')
+  }
+  if (KEEP_STATE && KIT_REPLACE) await kit.cmd('/clear @s')
   for (const g of KIT) await kit.cmd(`/give @s minecraft:${g}`)
+  if (KIT_REPLACE) {
+    let s, actual, missing
+    // Server command feedback can precede the client's inventory packet; only this transport wait uses wall time.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await call('armor', {} as Record<string, any>)
+      s = await status()
+      actual = { ...s.inventory }
+      for (const item of [...Object.values(s.armor || {}), s.offHand?.item]) {
+        if (typeof item === 'string') actual[item] = (actual[item] || 0) + 1
+      }
+      missing = [...expected].filter(([item, count]) => (actual[item] || 0) < count)
+      for (const [suffix, slot] of [['helmet', 'head'], ['chestplate', 'torso'], ['leggings', 'legs'], ['boots', 'feet']]) {
+        const requested = [...expected.keys()].filter(item => item.endsWith('_' + suffix))
+        if (requested.length && !requested.includes(s.armor?.[slot])) missing.push([`worn:${requested.join('|')}`, 1])
+      }
+      if (expected.has('shield') && s.offHand?.item !== 'shield') missing.push(['offhand:shield', 1])
+      if (!missing.length) break
+      if (attempt < 19) await gameClock.wall.sleep(50)
+    }
+    if (missing.length) throw new Error(`KIT_MISSING: ${missing.map(([item, count]) => `${item}:${actual[item] || 0}/${count}`).join(', ')}`)
+    console.log('KIT_READY', JSON.stringify({ inventory: s.inventory, armor: s.armor, offHand: s.offHand, health: s.health, food: s.food }))
+  }
   if (START_Y !== null) {
     // Вниз у места, где стоит тело: карман 1×2 и опора под ногами (лаборатория отрезка «у лавы»).
     await kit.cmd(`/fill ~ ${START_Y} ~ ~ ${START_Y + 1} ~ air`)

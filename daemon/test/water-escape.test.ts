@@ -13,7 +13,15 @@ const edges = require('../src/edges')
 const pick = require('../src/pick')
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 
-function scene({ oxygen = 20, blocks = 32, change = null }: any = {}) {
+async function rescueEnabled(run: () => any) {
+  const previous = process.env.ND_WATER_RESCUE
+  process.env.ND_WATER_RESCUE = '1'
+  try { return await run() } finally {
+    if (previous === undefined) delete process.env.ND_WATER_RESCUE; else process.env.ND_WATER_RESCUE = previous
+  }
+}
+
+function scene({ oxygen = 20, blocks = 32, change = null, placement = false }: any = {}) {
   const clock = clockMod.activate(new clockMod.GameClock({ manual: true, epoch: 0 }))
   const cells = new Map<string, any>()
   const world: any = { getBlock(p: Vec3) {
@@ -51,7 +59,15 @@ function scene({ oxygen = 20, blocks = 32, change = null }: any = {}) {
       const d = p.minus(pick.eyeOf(bot))
       bot.entity.yaw = Math.atan2(-d.x, -d.z); bot.entity.pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
     },
-    _genericPlace: async (ref, face) => { placements.push(ref.position.plus(face)); throw new Error('swim should not place') }
+    _genericPlace: async (ref, face) => {
+      const cell = ref.position.plus(face); placements.push(cell)
+      if (!placement) throw new Error('swim should not place')
+      assert.ok(bot.entity.position.y >= cell.y + 1 - 1e-7, 'server placement must not intersect the real player box')
+      assert.ok(pick.faceAim(bot, ref.position, face), 'the real eye ray sees the reference face')
+      const block = Block.fromStateId(registry.blocksByName.cobblestone.defaultState); block.position = cell
+      const prev = world.getBlock(cell); cells.set(cell.toString(), block); stack.count--
+      bot.emit('blockUpdate', prev, block)
+    }
   })
   require('../src/swimming').install(bot)
   const run = async (fn: () => Promise<any>, afterTick?: (tick: number) => void) => {
@@ -86,6 +102,105 @@ test('existing swim controller can leave the two-layer native-physics pit withou
     assert.deepEqual(s.controls(), IDLE)
   } finally { s.close() }
 })
+
+test('A6 waterlogged recognition stays enabled with rescue off; both switches can be disabled', t => {
+  const keys = ['ND_WATER_ESCAPE_BUDGET', 'ND_WATER_RESCUE'] as const
+  const before = keys.map(key => process.env[key])
+  t.after(() => keys.forEach((key, i) => {
+    if (before[i] === undefined) delete process.env[key]; else process.env[key] = before[i]
+  }))
+  const lichen = Block.fromProperties(registry.blocksByName.glow_lichen.id,
+    { ...Block.fromStateId(registry.blocksByName.glow_lichen.defaultState).getProperties(), north: true, waterlogged: true }, 0)
+  for (const budget of [undefined, '0', '1']) for (const rescue of [undefined, '0', '1']) {
+    if (budget === undefined) delete process.env.ND_WATER_ESCAPE_BUDGET; else process.env.ND_WATER_ESCAPE_BUDGET = budget
+    if (rescue === undefined) delete process.env.ND_WATER_RESCUE; else process.env.ND_WATER_RESCUE = rescue
+    assert.equal(movement.waterCell(lichen), budget !== '0' || rescue === '1', `${budget}/${rescue}`)
+  }
+})
+
+test('a stale dry physics flag cannot hide water at the real eye position', () => rescueEnabled(() => {
+  const s = scene({ oxygen: 2, change: q => q.y < 1 ? 'stone' : q.y === 2 ? 'water' : 'air' })
+  s.bot.entity.isInWater = false
+  try { assert.equal(movement.inWater(s.bot), true) } finally { s.close() }
+}))
+
+test('a one-cell flooded shaft deeper than the visible air search with glow lichen is swum up without plugging source water', () => rescueEnabled(async () => {
+  const s = scene({ oxygen: 8, change: q => {
+    if (q.y <= 0 || q.x !== 0 || q.z !== 0) return 'stone'
+    return q.y <= 20 ? 'water' : 'air'
+  } })
+  const lichen = Block.fromProperties(registry.blocksByName.glow_lichen.id,
+    { ...Block.fromStateId(registry.blocksByName.glow_lichen.defaultState).getProperties(), north: true, waterlogged: true }, 0)
+  lichen.position = new Vec3(0, 2, 0); s.cells.set(lichen.position.toString(), lichen)
+  s.bot.placeBlock = async (ref, face) => { s.placements.push(ref.position.plus(face)) }
+  try {
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 8000, visibleOnly: true }))
+    assert.ok(r.breathing || r.ok, JSON.stringify({ r, p: s.bot.entity.position }))
+    assert.ok(s.bot.entity.position.y > 19.3, 'the body physically rose through the shaft')
+    assert.deepEqual(s.placements, [], 'sealing over source water would leave the source cells submerged')
+  } finally { s.close() }
+}))
+
+test('bubble column at the eyes is a breathing destination, while waterlogged blocks are not', () => rescueEnabled(async () => {
+  for (const drag of [false, true]) {
+    const s = scene({ oxygen: 2, change: q => q.y <= 0 || q.x !== 0 || q.z !== 0 || q.y > 3 ? 'stone' : 'water' })
+    const bubble = Block.fromProperties(registry.blocksByName.bubble_column.id, { drag }, 0)
+    bubble.position = new Vec3(0, 2, 0); s.cells.set(bubble.position.toString(), bubble)
+    try {
+      const route = movement.findSwimRoute(s.bot, { visibleOnly: true })
+      assert.equal(route?.kind, 'air', 'jar LivingEntity excludes BUBBLE_COLUMN at eye position from drowning')
+      assert.ok(route.target.equals(new Vec3(0, 1, 0)))
+    } finally { s.close() }
+  }
+}))
+
+for (const [oxygen, timeoutMs, maxMs] of [[8, 2000, 2200], [3, 8000, 8200]]) test(`rescue keeps the A6 roof-dig RPC deadline (${oxygen} bubbles)`, () => rescueEnabled(async () => {
+  const s = scene({ oxygen, change: q => q.x !== 0 || q.z !== 0 || q.y <= 0 || q.y >= 3 ? 'stone' : 'water' })
+  let digs = 0, stops = 0
+  s.bot.canDigBlock = () => true
+  s.bot.dig = async (b: any) => {
+    assert.ok(pick.blockAim(s.bot, b.position, { range: 4.5 }), 'dig is on a visible reachable ceiling face')
+    digs++
+    return new Promise(() => {})
+  }
+  s.bot.stopDigging = () => { stops++ }
+  try {
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs, visibleOnly: true }))
+    assert.equal(digs, 1)
+    assert.equal(stops, 1)
+    assert.equal(r.ok, false, 'a started dig is not proof of an exit')
+    assert.ok(clockMod.now() <= maxMs, 'the rescue flag preserves the A6 caller deadline')
+  } finally { s.close() }
+}))
+
+test('only a flowing shaft is plugged overhead; client water updates must prove that air appeared', () => rescueEnabled(async () => {
+  const s = scene({ oxygen: 8, change: q => q.x !== 0 || q.z !== 0 || q.y <= 0 ? 'stone' : 'water' })
+  for (const y of [1, 2]) {
+    const falling = Block.fromProperties(registry.blocksByName.water.id, { level: 8 }, 0)
+    falling.position = new Vec3(0, y, 0); s.cells.set(falling.position.toString(), falling)
+  }
+  let placed = false
+  s.bot.placeBlock = async (ref: any, face: any) => {
+    const p = ref.position.plus(face)
+    assert.ok(pick.faceAim(s.bot, ref.position, face), 'placement uses an observed reference face')
+    assert.ok(p.y >= s.bot.entity.position.y + 1.8, 'plug does not intersect the player')
+    s.placements.push(p); placed = true
+    const stone = Block.fromStateId(registry.blocksByName.cobblestone.defaultState); stone.position = p
+    const previous = s.bot.blockAt(p); s.cells.set(p.toString(), stone); s.bot.emit('blockUpdate', previous, stone)
+  }
+  try {
+    const r = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 3000, visibleOnly: true }), tick => {
+      if (!placed || tick < 10) return
+      // Server block-update contract, not a fluid solver: flowing cells drained after closing their only inlet.
+      for (const y of [1, 2]) {
+        const air = Block.fromStateId(registry.blocksByName.air.defaultState); air.position = new Vec3(0, y, 0)
+        s.cells.set(air.position.toString(), air)
+      }
+    })
+    assert.ok(s.placements.some(p => p.equals(new Vec3(0, 3, 0))), JSON.stringify({ r, placements: s.placements }))
+    assert.equal(r.breathing, true, 'placement alone is not counted as breathing: ' + JSON.stringify({ r, p: s.bot.entity.position }))
+  } finally { s.close() }
+}))
 
 test('surface swims to a connected bank beyond the first breathing pocket', async () => {
   // A long flooded cave has breathable air below its roof, but the supported
@@ -126,6 +241,10 @@ for (const blocks of [32, 0]) test(`climbBack reuses swimming to reach the rim w
 
 test('a shaft flooded from above with no air in reach is plugged over the head (cl-n 14.10 drowned)', async () => {
   const s = scene({ change: q => q.y <= 0 || q.x !== 0 || q.z !== 0 ? 'stone' : q.y < 20 ? 'water' : 'air' })
+  for (const y of [1, 2]) {
+    const water = Block.fromProperties(registry.blocksByName.water.id, { level: 8 }, 0)
+    water.position = new Vec3(0, y, 0); s.cells.set(water.position.toString(), water)
+  }
   try {
     assert.equal(movement.findSwimRoute(s.bot), null, 'no breath within the bounded search')
     s.bot.placeBlock = async (ref, face) => { s.placements.push(ref.position.plus(face)) }
@@ -349,5 +468,57 @@ for (const cap of ['stone', 'lava', null]) test(`known swim planning does not cr
     assert.equal(r.breathing, false)
     assert.deepEqual(s.activeControls, [])
     assert.deepEqual(s.placements, [])
+  } finally { s.close() }
+})
+
+test('polar bear shore choice reaches dry ground with native player physics', async () => {
+  const s = scene()
+  try {
+    const polar = require('../src/polar-bear')
+    s.bot.entity.position.y = 2.3; s.bot.entity.onGround = false
+    s.bot.entities[2] = { id: 2, name: 'polar_bear', position: new Vec3(18, 3, .5), height: 1.4, width: 1.4,
+      isValid: true, metadata: { 15: 4, 16: false } }
+    const choice = polar.plan({ bot: s.bot })
+    assert.equal(choice.action, 'Surface')
+    const result = await s.run(() => movement.escapeWater(s.bot, s.ctl, { timeoutMs: 8000, visibleOnly: true }))
+    assert.equal(result.ok, true)
+    assert.equal(s.bot.entity.isInWater, false)
+    assert.equal(s.bot.entity.onGround, true)
+  } finally { s.close() }
+})
+
+test('polar bear pillar clears a three-block support under native player physics', async () => {
+  const s = scene({ placement: true, change: q => q.y <= 0 ? 'stone' : 'air' })
+  try {
+    s.bot.entity.isInWater = false
+    s.bot.entities[2] = { id: 2, name: 'polar_bear', position: new Vec3(14, 1, .5), height: 1.4, width: 1.4,
+      isValid: true, metadata: { 15: 4, 16: false } }
+    const polar = require('../src/polar-bear'), session = { bot: s.bot }
+    const plan = polar.plan(session)
+    assert.equal(plan.action, 'PillarUp')
+    const result = await s.run(() => polar.pillar(session, s.ctl, plan))
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.equal(s.bot.entity.position.y, 4)
+    assert.equal(s.placements.length, 3)
+    assert.equal(polar.canReach(s.bot, s.bot.entities[2]), false)
+  } finally { s.close() }
+})
+
+test('a refused bear pillar is not attempted again until its physical cause changes', async () => {
+  const s = scene({ placement: true, change: q => q.y <= 0 ? 'stone' : 'air' })
+  try {
+    s.bot.entity.isInWater = false
+    s.bot.entities[2] = { id: 2, name: 'polar_bear', position: new Vec3(14, 1, .5), height: 1.4, width: 1.4,
+      isValid: true, metadata: { 15: 4, 16: false } }
+    const polar = require('../src/polar-bear'), session = { bot: s.bot }
+    s.bot._genericPlace = async () => { s.placements.push(s.bot.entity.position.clone()); throw new Error('placement refused') }
+    const result = await s.run(() => polar.pillar(session, s.ctl, polar.plan(session)))
+    assert.equal(result.failed, true)
+    assert.equal(s.placements.length, 1, 'one physical refusal ends this construction')
+    assert.notEqual(polar.plan(session).action, 'PillarUp')
+    assert.notEqual(polar.plan(session).action, 'PillarUp', 'waiting alone does not reopen it')
+    const dirt = Block.fromStateId(registry.blocksByName.dirt.defaultState); dirt.position = new Vec3(0, 0, 0)
+    s.cells.set(dirt.position.toString(), dirt)
+    assert.equal(polar.plan(session).action, 'PillarUp', 'a changed support reopens the failed physical plan')
   } finally { s.close() }
 })

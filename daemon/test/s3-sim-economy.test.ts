@@ -39,7 +39,7 @@ test('economy: a spent bastion moves to the known next one, or searches once whe
   spent.facts.bastions_left = fact(0, 'map', 0)
   assert.equal(plan(registry, spent, pearlGoal).steps[0]?.id, 'SearchNextBastion')
   spent.facts.bastion_searches = fact(1, 'observed', 0)
-  assert.equal(plan(registry, spent, pearlGoal).reason, 'unreachable', 'endermen not allowed and nothing left: a ResetRun situation')
+  assert.equal(plan(registry, spent, pearlGoal).steps[0]?.id, 'HuntEndermen', 'the remaining deficit has a priced fallback without an allow flag')
   spent.facts.endermen_allowed = fact(true, 'observed', 0)
   assert.equal(plan(registry, spent, pearlGoal).steps[0]?.id, 'HuntEndermen')
 })

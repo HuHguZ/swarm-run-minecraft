@@ -17,7 +17,7 @@ test('проход без кирки использует видимую рас�
   let remaining = true
   const block = p => ({ name: p.equals(cell) && remaining ? 'netherrack' : p.y < 65 ? 'stone' : 'air', type: 1,
     position: p, hardness: .4, boundingBox: p.equals(cell) && remaining || p.y < 65 ? 'block' : 'empty', shapes: [[0, 0, 0, 1, 1, 1]] })
-  const bot = { entity: { position: new Vec3(.5, 64, .5) }, inventory: { items: () => [] }, entities: {},
+  const bot = { entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true }, inventory: { items: () => [] }, entities: {},
     pathfinder: { setGoal () {} }, blockAt: block, world: { raycast: () => block(cell) },
     dig: async () => { remaining = false; ctl.aborted = true } }
   const context: any = { module: { exports: {} }, console, process, setTimeout, clearTimeout,
@@ -41,9 +41,9 @@ async function fallingBore ({ name = 'gravel', falls = 2, afterDig = null }: any
     return { name: material, type: data.id, position: p, hardness: data.hardness, diggable: data.diggable,
       boundingBox: material === 'air' || material === 'lava' ? 'empty' : 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
   }
-  const bot = { entity: { position: new Vec3(.5, 64, .5) }, inventory: { items: () => [] }, entities: {}, blockAt: block,
+  const bot = { entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true }, inventory: { items: () => [] }, entities: {}, blockAt: block,
     pathfinder: { setGoal () {} }, world: { raycast: () => hidden ? block(cell.offset(-1, 0, 0)) : block(cell) },
-    lookAt: async () => {}, setControlState (key, value) { if (key === 'forward' && value) this.entity.position = new Vec3(1.5, 64, .5) },
+    look: async () => {}, lookAt: async () => {}, setControlState (key, value) { if (key === 'forward' && value) this.entity.position = new Vec3(1.5, 64, .5) },
     dig: async () => { digs++; if (afterDig === 'abort') ctl.aborted = true; if (afterDig === 'deadline') now = 1000; if (afterDig === 'lava') lava = true; if (afterDig === 'hidden') hidden = true } }
   const context: any = { module: { exports: {} }, console, process, setTimeout, clearTimeout,
     require: dependency => dependency === './movement' ? { ...realRequire(dependency), sleep: async () => {} }
@@ -112,8 +112,8 @@ async function gravityWindowBore ({ mode = 'landed' } = {}) {
     return { name: material, type: data.id, position: p, hardness: data.hardness, diggable: data.diggable,
       boundingBox: /air|lava/.test(material) ? 'empty' : 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
   }
-  const bot = { entity: { position: new Vec3(.5, 64, .5) }, inventory: { items: () => [] }, entities: {}, blockAt: block,
-    pathfinder: { setGoal () {} }, world: { raycast: () => block(headPresent ? head : feet) }, lookAt: async () => {},
+  const bot = { entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true }, inventory: { items: () => [] }, entities: {}, blockAt: block,
+    pathfinder: { setGoal () {} }, world: { raycast: () => block(headPresent ? head : feet) }, look: async () => {}, lookAt: async () => {},
     setControlState (key, value) { if (key === 'forward' && value) { movedAt.push(now); this.entity.position = new Vec3(1.5, 64, .5) } },
     dig: async b => { digs++; if (b.position.equals(head)) { headPresent = false; if (!landed) falling = true } else feetPresent = false } }
   const context: any = { module: { exports: {} }, console, process, setTimeout, clearTimeout,
@@ -176,7 +176,7 @@ for (const [height, aborted, climbs] of [[5, false, 1], [0, false, 0], [5, true,
     const { functionSource } = require('./source-fixture')
     const ctl = { aborted, onAbort: [] }
     const target = new Vec3(0, 64 + height, 0)
-    const bot = { entity: { position: new Vec3(.5, 64, .5) }, health: 20 }
+    const bot = { entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true }, health: 20 }
     const moves = []
     const door = { origin: target, axis: 'x', cells: [target], bottom: [target] }
     const context: any = { Vec3, console, MIN_ENTER_HP: 8, IGNITERS: [], HOLD_LIMIT_MS: 15000, gameClock: { now: () => 0 },

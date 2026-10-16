@@ -18,7 +18,7 @@ function fixture(inventory: Record<string, number>, wantBeds = 1, firstDrop?: st
     RAW: /^(beef|porkchop|mutton|chicken|rabbit|cod|salmon)$/, FOOD: /^cooked_/,
     FOOD_STOCK: 8, FOOD_CAP_MS: 180000, foodSpentMs: 0, OW_DEEP: true, known: {}, huntWool: wantBeds > 1, wantBeds, died: false,
     sit: { surface: true, night: false }, gameClock: { now: () => 0 }, foodUnits: () => foodUnits(state.inventory), y: () => 70,
-    netherFoodNeed: () => 6, weakAndHungry: () => true,
+    foodShort: () => Math.max(0, 8 - foodUnits(state.inventory)), entrySupplies: () => false, netherFoodNeed: () => 6, weakAndHungry: () => true,
     cook: async () => {}, makeBed: async () => {}, sense: async () => {}, refresh: async () => {}, unclutter: async () => {},
     toSurface: async () => true, nightWork: () => false, nightGuard: async () => {}, recoverGuard: async () => {}, log: () => {},
     walkAway: async () => { throw new Error('visible prey ignored') },

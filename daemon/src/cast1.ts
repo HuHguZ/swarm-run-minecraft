@@ -128,6 +128,16 @@ function lakeReach (read, g, { rays = false, dig = null, cols = [0] }: any = {})
   return { ground, top }
 }
 
+function sourceState1 (bot, plan) {
+  const g = geomOf1(plan)
+  const pending = cells(g).filter(t => (bot.blockAt(t.c) || {}).name !== 'obsidian')
+  const reach = lakeReach(p => bot.blockAt(p), g, { rays: true, dig: new Set((plan.dig || []).map(keyOf)), cols: shiftOn() ? [0, -1, 1] : [0] })
+  const carried = C().countOf(bot, 'lava_bucket')
+  return { frame: `${10 - pending.length}/10 обсидиан`, key: JSON.stringify([[...reach.ground].sort(), [...reach.top].sort(), carried]),
+    short: pending.filter(t => t.h > 0).length > reach.top.size + carried ||
+    pending.length > new Set([...reach.ground, ...reach.top]).size + carried }
+}
+
 // Клик ведром: взгляд (force — пакет взгляда не уходит, поворот едет в самом use_item, 1.21.2+), клик, ждать ответа
 // сервера — убыли предмета from в рюкзаке (опрос 10 мс; слот приходит через ~15 мс). Paper 1.21.11 молча роняет
 // use_item чаще раза в тик (лаб ow-c1l/m, 03.10: без паузы ~каждый 6–9-й клик пропал, пауза 30 мс — пропуски, 55 мс —
@@ -173,7 +183,8 @@ function judge1 (read, g, { me = null, maxDig = 40 }: any = {}) {
   const union = new Set([...R.ground, ...R.top])
   const lava = union.size
   const high = R.top.size
-  if (R.ground.size < 6 || high < 4 || lava < 11) return bad(`лавы в досягаемости: с земли ${R.ground.size}, со столба ${high}, всего ${lava}`)
+  const sourcesNeeded = process.env.ND_OW_KIT_FRAME === '0' ? 11 : 10
+  if (R.ground.size < 6 || high < 4 || lava < sourcesNeeded) return bad(`лавы в досягаемости: с земли ${R.ground.size}, со столба ${high}, всего ${lava}`)
   // Берег: пол G(i,-1) твёрдый и не сыпучий (сыпучий, если держится); над ним 2 (у G(0) — 5) воздуха.
   for (let i = -1; i <= 2; i++) {
     const fl = blockAt(g.G(i, -1))
@@ -241,7 +252,7 @@ function judge1 (read, g, { me = null, maxDig = 40 }: any = {}) {
   // Лава по лучу — с учётом того, что будет выкопано.
   const R2 = lakeReach(read, g, { rays: true, dig: new Set(dig.map(keyOf)), cols })
   const union2 = new Set([...R2.ground, ...R2.top])
-  if (R2.ground.size < 6 || R2.top.size < 4 || union2.size < 11) return bad(`лава за породой: по лучу с земли ${R2.ground.size}, со столба ${R2.top.size}, всего ${union2.size}`)
+  if (R2.ground.size < 6 || R2.top.size < 4 || union2.size < sourcesNeeded) return bad(`лава за породой: по лучу с земли ${R2.ground.size}, со столба ${R2.top.size}, всего ${union2.size}`)
   // Без сдвига столба — дешевле: верх из G(0).
   const top0 = cols.length > 1 ? lakeReach(read, g, { rays: true, dig: new Set(dig.map(keyOf)) }).top.size : R2.top.size
   // Копка рядом с жидкостью и под сыпучим — нельзя (то же чутьё, что у cast.js).
@@ -457,6 +468,12 @@ async function castOne (session, ctl, p: any = {}) {
   const siteThreat = hazard(g.G(0, 0))
   if (siteThreat) return { ...report, code: 'CAST_UNSAFE', hazard: siteThreat, built: false, stopped: `CAST_UNSAFE: ${siteThreat.name}` }
   report.site = { origin: plan.origin, axis: plan.axis, side: plan.side, lava: plan.lava }
+  const failed = session.castOneSourceFailure
+  if (process.env.ND_OW_KIT_FRAME !== '0' && failed?.plan === plan) {
+    const current = sourceState1(bot, plan)
+    if (current.short && current.key === failed.key) return { ...report, ...failed.report, frame: current.frame, retryBlocked: true, seconds: 0 }
+    session.castOneSourceFailure = null
+  }
   const materialNeed = materialNeed1(q => bot.blockAt(q), plan)
   if (fill() < materialNeed) return { ...report, built: false, stopped: `на выбранную раму нужно блоков ${materialNeed}`, need: { what: 'cobblestone', count: materialNeed, have: fill() } }
   const dropPlan = r => { session.castPlan1 = null; try { session.journal.patch(st => { if (st.places) delete st.places[PLACE1] }) } catch {}; return r }
@@ -887,8 +904,12 @@ async function castOne (session, ctl, p: any = {}) {
   const frame = [g.at(0, -1), g.at(1, -1), g.at(-1, 0), g.at(-1, 1), g.at(-1, 2), g.at(2, 0), g.at(2, 1), g.at(2, 2), g.at(0, 3), g.at(1, 3)]
   const done = frame.filter(q => (bot.blockAt(q) || {}).name === 'obsidian').length
   const built = done === 10
+  if (process.env.ND_OW_KIT_FRAME !== '0' && !built && !ctl.aborted && /лавы со столба не достать|лавы в досягаемости нет/.test(stopped || '')) {
+    const current = sourceState1(bot, plan)
+    if (current.short) session.castOneSourceFailure = { plan, key: current.key, report: { built: false, frame: current.frame, stopped } }
+  }
   return { ...report, built, frame: `${done}/10 обсидиан`, seconds: Math.round((gameClock.now() - t0) / 1000), stopped: built ? undefined : (stopped || `рама не собралась: ${done}/10`),
     ...(!built && noBlocks ? { need: { what: 'cobblestone', count: Math.max(1, materialNeed1(q => bot.blockAt(q), plan)), have: fill() } } : {}) }
 }
 
-module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, siteCells1, materialNeed1, lakeReach, useAt, PLACE1 }
+module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, siteCells1, materialNeed1, lakeReach, sourceState1, useAt, PLACE1 }

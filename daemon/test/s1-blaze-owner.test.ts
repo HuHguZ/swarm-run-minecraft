@@ -15,8 +15,18 @@ function session(current: string | null) {
   bot.entities = {}
   bot.game = { dimension: 'the_nether', gameMode: 'survival' }
   bot.blockAt = (p: any) => ({ name: p.y < 64 ? 'netherrack' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty', position: p.floored(), shapes: p.y < 64 ? [[0, 0, 0, 1, 1, 1]] : [] })
-  return { bot, current: current ? { name: current } : null, reflex: null, bus: { emit: () => {} }, tempo: null }
+  const ctl = { aborted: false, onAbort: [] }
+  return { bot, current: current ? { name: current, ctl } : null, _blazeCombatCtl: current === 'blaze' ? ctl : null,
+    reflex: null, bus: { emit: () => {} }, tempo: null }
 }
+
+test('the blaze RPC approach has no combat owner: incoming fire may take the hands', () => {
+  const s: any = session('blaze')
+  delete s._blazeCombatCtl
+  assert.equal(observeTactics(s).protectedEncounter, false)
+  s._blazeCombatCtl = { aborted: false }
+  assert.equal(observeTactics(s).protectedEncounter, false, 'a stale child control is no owner')
+})
 
 test('blaze skill owns the spawner fight: protectedEncounter while blaze runs, not during the fortress approach', () => {
   assert.equal(observeTactics(session('blaze')).protectedEncounter, true)
@@ -41,7 +51,8 @@ test('a protected blaze skill takes the hands back from a level-2 tactical episo
     tactics.begin({ id: 'Fight', score: 151, reason: 'blaze in reach' }, [], observeTactics(s), 2)
     await new Promise<void>(resolve => setImmediate(resolve))
     assert.equal(lock.owner(s)?.source, 'Fight')
-    s.current = { name: 'blaze' }
+    s.current = { name: 'blaze', ctl: { aborted: false, onAbort: [] } }
+    s._blazeCombatCtl = s.current.ctl
     tactics.update(true)
     await tactics.waitForRelease()
     assert.equal(aborted, true, 'the stale Fight lease is cancelled once blaze owns the encounter')

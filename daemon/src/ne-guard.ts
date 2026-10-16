@@ -498,6 +498,12 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
         foe = meleeFoes(bot, 6)[0]
         if (!foe) { out.killed = true; break }
       }
+      // A reachable walker arriving from another side takes precedence over the distant original shooter.
+      const close: any = meleeFoes(bot, 4.5).find((e: any) => pick.aim(bot, e, { range: 3.2 })?.point)
+      if (close && close !== foe && (!pick.aim(bot, foe, { range: 3.2 })?.point ||
+          reachesUs(close) && !reachesUs(foe) || close.position.distanceTo(bot.entity.position) + 0.5 < foe.position.distanceTo(bot.entity.position))) {
+        foe = close; far = 0
+      }
       // Мало хп — уйти в коробку, если есть чем (иначе бой до конца: B2-3 03.10 — хп 7, стоп, коробки нет, смерть стоя).
       const canBox = guardCount(bot) >= 4
       if (((bot.health ?? 20) < 7 && canBox && !lastStand) || (!crowdOk && meleeFoes(bot, 6).length >= 3)) { out.stopped = (bot.health ?? 20) < 7 ? 'хп' : 'толпа'; break }

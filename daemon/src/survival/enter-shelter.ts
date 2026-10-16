@@ -125,9 +125,11 @@ async function shelter (session, ctl, { mode = 'enter', depth = 2, torch = true 
   const how = mode === null || mode === undefined ? 'enter' : String(mode).trim().toLowerCase()
   if (how === 'enter') return enterShelter(session, ctl, { depth, torch: torch !== false })
   if (how === 'exit') return exitShelter(session, ctl, { depth })
+  if (how === 'box') return await boxShelter(session, ctl) || { stopped: 'не удалось закрыться на месте', sealed: false }
+  if (how === 'light') return { torch: await lightNiche(session.bot, ctl) }
   // Digging a hole because the mode was misspelled is the worst possible
   // reading of an unclear order.
-  throw new Error(`не знаю режим ${mode}, бывает enter или exit`)
+  throw new Error(`не знаю режим ${mode}, бывает enter, exit, box или light`)
 }
 
 async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings = null, center = false }: any) {
@@ -354,10 +356,10 @@ async function boxShelter (session, ctl) {
   const fortify = require('.././fortify')
   try {
     const box = await fortify.boxIn(bot, { roof: true, ctl, timeoutMs: 800, hard: false })
-    if (!box.sealed && box.plan) await fortify.patch(bot, box.plan, { timeoutMs: 800 }).catch(() => 0)
+    if (!ctl.aborted && !box.sealed && box.plan) await fortify.patch(bot, box.plan, { timeoutMs: 800, ctl }).catch(() => 0)
     if (!box.cell || !fortify.enclosure(bot, box.cell).sealed) return null
     session.shelterBox = box.cell
-    const note = 'нора не копается — закрылся коробкой из блоков'
+    const note = 'закрылся коробкой из блоков на месте'
     session.journal.append('убежище', note, bot.entity.position)
     return { mode: 'enter', at: xyz(bot.entity.position), depth: 0, sealed: true, box: true, torch: false, note }
   } catch { return null }

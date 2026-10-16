@@ -130,8 +130,7 @@ async function placeAt (bot, cell) {
   try { const r = await placeBlockAt(bot, cell, { timeoutMs: 2000, steady: true, honest: true }); return !!(r && r.ok) } catch { return false }
 }
 
-// early — отпустить «вперёд», как только тело в колонне цели, не дожидаясь приземления: в воздухе ход гасится медленно (0.91 за
-// тик), и тело уносило за клетку ступени (Ад, d6-6-1 14.10: спуск у пустоты — падение с y 85 в лавовое море).
+// early — торможение тем же рулём, что у спуска блоками; шаг подтверждается опорой на своей ступени, не входом в колонну.
 async function walkInto (bot, ctl, goal, fall, early = false) {
   const cx = goal.x + 0.5; const cz = goal.z + 0.5
   const t0 = gameClock.now()
@@ -140,10 +139,11 @@ async function walkInto (bot, ctl, goal, fall, early = false) {
   try {
     while (!ctl.aborted && gameClock.now() - t0 < 2500) {
       const p = bot.entity.position
-      if (Math.floor(p.x) === goal.x && Math.floor(p.z) === goal.z && (Math.floor(p.y) <= goal.y || (early && Math.hypot(p.x - cx, p.z - cz) < 0.45))) break
+      if (early && (p.y < goal.y - 0.1 || bot.entity.isInLava)) break
+      if (Math.floor(p.x) === goal.x && Math.floor(p.z) === goal.z && (Math.floor(p.y) <= goal.y && (!early || bot.entity.onGround && Math.hypot(p.x - cx, p.z - cz) < 0.2 && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 0.03))) break
       // Застрял на углу (тело не по центру своей клетки в проходе 1 бл.): сперва в центр своей клетки, потом снова к цели
       // (s5e-H-1 07.10: «не шагнул в …» ×4 в коридоре крепости у самой комнаты).
-      if (!centred && gameClock.now() - t0 > 900) {
+      if (!early && !centred && gameClock.now() - t0 > 900) {
         centred = true
         const t1 = gameClock.now()
         while (!ctl.aborted && gameClock.now() - t1 < 700 && Math.hypot(bot.entity.position.x - from.x - 0.5, bot.entity.position.z - from.z - 0.5) > 0.15) {
@@ -154,15 +154,21 @@ async function walkInto (bot, ctl, goal, fall, early = false) {
         bot.setControlState('forward', false)
         continue
       }
-      await bot.lookAt(new Vec3(cx, p.y + 1.6, cz), true).catch(() => {})
-      bot.setControlState('forward', true)
+      if (early) {
+        const steer = require('./blockmoves').steerTo(bot, bot.entity, { x: cx, z: cz }, false)
+        await bot.look(steer.yaw, 0, true)
+        bot.setControlState('forward', steer.forward)
+      } else {
+        await bot.lookAt(new Vec3(cx, p.y + 1.6, cz), true).catch(() => {})
+        bot.setControlState('forward', true)
+      }
       await sleep(50)
     }
   } finally { try { bot.setControlState('forward', false) } catch {} }
   const t1 = gameClock.now()
   while (!ctl.aborted && gameClock.now() - t1 < 1000 + fall * 200 && !bot.entity.onGround) await sleep(50)
   const f = bot.entity.position.floored()
-  return f.x === goal.x && f.z === goal.z && f.y <= goal.y
+  return f.x === goal.x && f.z === goal.z && f.y <= goal.y && (!early || !ctl.aborted && bot.entity.onGround && f.y === goal.y)
 }
 
 function lavaNearBelow (bot) {
@@ -223,6 +229,7 @@ async function stairStep (session, ctl, k, o: any = {}) {
       // Зигзаг 2×1 (следующая ступень — обратно): клетка головы следующей ступени — ноги этой, уже воздух: 2 блока на уровень
       // вместо 3 у спирали 2×2 (s5e-M-1: 80 ступеней по ~3.1 игр. с). Пол следующей ступени так же виден в проём до шага.
       if (await walkInto(bot, ctl, F.offset(d[0], -1, d[1]), j.fall, !!o.early)) return { moved: true, k: (k + t + (process.env.ND_STAIR_SPIRAL === '1' ? 1 : 2)) % 4, fall: j.fall, dug, placed }
+      if (!bot.entity.position.floored().equals(F)) return { moved: false, k, why: 'после шага клетка изменилась — нужен новый обзор', dug, placed }
       why = 'не шагнул на ступень'
     }
   }

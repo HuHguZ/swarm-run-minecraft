@@ -387,6 +387,8 @@ class Session {
     // (cl-e 14.10: 20 кругов «к деревне по дну озера» → Surface → берег за 3 мин). Клетка воды под водой — ещё цена воды
     // сверху (liquidCost), чтобы путь плыл поверху или шёл в обход.
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => {
+      if (process.env.ND_WATER_ESCAPE_BUDGET !== '0') return Math.max(require('./movement').waterStepCost(bot, block),
+        block?.position && require('./movement').waterCell(block) && require('./movement').waterCell(bot.blockAt(block.position.offset(0, 1, 0), false)) ? (movements.liquidCost ?? 1) : 0)
       if (!block || block.name !== 'water' || !block.position) return 0
       const above = bot.blockAt(block.position.offset(0, 1, 0), false)
       return above && above.name === 'water' ? (movements.liquidCost ?? 1) : 0
@@ -635,7 +637,7 @@ class Session {
       bot._client.on('damage_event', pk => {
         if (this.bot !== bot || !bot.entity || !pk || pk.entityId !== bot.entity.id) return
         const src = pk.sourceCauseId > 0 && bot.entities ? bot.entities[pk.sourceCauseId - 1] : null
-        hit = { cause: gamedata.damageTypeName(pk.sourceTypeId) || `type_${pk.sourceTypeId}`, source: src ? (src.username || src.name) : null, at: gameClock.now() }
+        hit = { cause: gamedata.damageTypeName(pk.sourceTypeId) || `type_${pk.sourceTypeId}`, source: src ? (src.username || src.name) : null, at: gameClock.now(), body: gamedata.bodySnapshot(bot) }
       })
     } catch {}
     // Mineflayer starts with hp20 before the first server update. That first
@@ -650,7 +652,7 @@ class Session {
         // Принятый урон падения спуска (navigation/descent.ts, гибкость): не рвать им goto.
         const planned = bot._ndExpectFall && gameClock.now() < bot._ndExpectFall.until && last - hp <= bot._ndExpectFall.max && (!typed || typed.cause === 'fall')
         // Журнал урона (разбор смертей 15.10: «откуда 20 → 7 на 2-й минуте» не восстанавливался): причина, кто, что делал, где.
-        if (process.env.ND_HURT_LOG !== '0') { const p = bot.entity?.position; console.log('[hurt] ' + JSON.stringify({ lost: Math.round((last - hp) * 10) / 10, hp: Math.round(hp * 10) / 10, cause: typed?.cause || null, by: typed?.source || null, doing: this.current?.name || null, at: p ? [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)] : null, t: Math.round(gameClock.now() / 1000) })) }
+        if (process.env.ND_HURT_LOG !== '0') { const p = bot.entity?.position; console.log('[hurt] ' + JSON.stringify({ lost: Math.round((last - hp) * 10) / 10, hp: Math.round(hp * 10) / 10, cause: typed?.cause || null, by: typed?.source || null, doing: this.current?.name || null, at: p ? [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)] : null, t: Math.round(gameClock.now() / 1000), body: gamedata.bodySnapshot(bot, hp <= 0), hitBody: typed?.body })) }
         if (planned) console.log('[descent] принятый урон падения', JSON.stringify({ lost: last - hp, hp }))
         else this.bus.emit('damage', { health: Math.round(hp), lost: Math.round(last - hp), ...(typed ? { cause: typed.cause, ...(typed.source ? { source: typed.source } : {}) } : {}) })
       }
@@ -683,7 +685,13 @@ class Session {
     // Physics heartbeat. A frozen body and a body with no path look identical
     // from the outside; the tick rate tells them apart.
     this.ticks = 0
-    bot.on('physicsTick', () => { this.ticks++ })
+    bot.on('physicsTick', () => {
+      this.ticks++; bot._ndPhysicsTicks = this.ticks
+      const e = bot.entity, trail = bot._ndBodyTrail ||= []
+      if (e?.position && e.velocity) trail.push([bot.ndClock?.ticks ?? null, e.position.x, e.position.y, e.position.z, e.velocity.x, e.velocity.y, e.velocity.z, !!e.onGround, bot.oxygenLevel ?? null])
+      if (trail.length > 40) trail.shift()
+    })
+    bot.on('respawn', () => { bot._ndBodyTrail = [] })
     // Падение в выкопанную клетку перед следующей копкой — не проезжать её (steerIntoDig выше). Узлы — живой массив
     // pathfinder'а (path_update отдаёт тот же массив, что он сдвигает по ходу).
     bot.on('physicsTick', () => {

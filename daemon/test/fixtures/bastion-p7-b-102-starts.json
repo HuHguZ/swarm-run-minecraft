@@ -1,0 +1,10 @@
+{
+  "source": "farm/results/p7-b-102, visible-derived starts sent to bastion RPC; no structure NBT is supplied to the planner",
+  "starts": [
+    {"type":"units","r":2,"t":{"x":130,"y":31,"z":18},"score":12.9},
+    {"type":"bridge","r":2,"t":{"x":148,"y":31,"z":32},"score":4.4},
+    {"type":"units","r":2,"t":{"x":130,"y":31,"z":34},"score":3.4},
+    {"type":"hoglin_stable","r":2,"t":{"x":128,"y":32,"z":32},"score":2.9}
+  ],
+  "possible": {"type":"hoglin_stable","r":2,"t":{"x":128,"y":32,"z":32}}
+}

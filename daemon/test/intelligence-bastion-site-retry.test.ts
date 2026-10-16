@@ -39,7 +39,8 @@ test('a failed B1 attempt that selects B2 reopens the existing strategy for its 
   assert.equal(next.steps[0]?.id, 'BastionBarter')
   assert.equal(f.state.facts.bastions_exhausted.value, false)
   await f.director.run(f.bastion); await f.director.run(f.bastion)
-  assert.equal(f.director.decide(f.state).reason, 'unreachable', 'the same second site still gets only two failed attempts')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.bastion.id), false, 'the same second site still gets only two failed attempts')
+  assert.ok(f.director.exhaustedStrategies().includes(f.bastion.id), 'the failed producer stays exhausted even with a priced alternative')
 })
 
 test('healing, time, incidental stock and vertical target refinement cannot reset a stalled bastion', async () => {
@@ -50,9 +51,11 @@ test('healing, time, incidental stock and vertical target refinement cannot rese
   f.state.inventory.blackstone = 64; f.state.inventory.enchanted_book = 1
   f.state.resources.blocks = 128
   f.state.facts.bastion_position = fact({ x: 87, y: 50, z: 139 }, 'map', 999)
-  assert.equal(f.director.decide(f.state).reason, 'unreachable')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.bastion.id), false)
+  assert.ok(f.director.exhaustedStrategies().includes(f.bastion.id), 'the failed producer stays exhausted even with a priced alternative')
   f.state.facts.bastion_position = fact(null, 'map', 1000)
-  assert.equal(f.director.decide(f.state).reason, 'unreachable', 'losing the known site is not a new observed alternative')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.bastion.id), false, 'losing the known site is not a new observed alternative')
+  assert.ok(f.director.exhaustedStrategies().includes(f.bastion.id), 'the failed producer stays exhausted even with a priced alternative')
 })
 
 test('the real next bastion reopens tool replenishment before travel after a depleted B1 attempt', async () => {
@@ -60,7 +63,8 @@ test('the real next bastion reopens tool replenishment before travel after a dep
   await f.director.run(f.bastion); await f.director.run(f.bastion)
   f.state.facts.nether_tools_ready = fact(false, 'observed', 1)
   f.state.facts.nether_pick_swings = fact(234, 'observed', 1)
-  assert.equal(f.director.decide(f.state).reason, 'unreachable', 'a worn pick alone cannot reset a failed site')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.bastion.id), false, 'a worn pick alone cannot reset a failed site')
+  assert.ok(f.director.exhaustedStrategies().includes(f.bastion.id), 'the failed producer stays exhausted even with a priced alternative')
   f.state.facts.bastion_position = fact({ x: 545, y: 48, z: -99 }, 'map', 1)
   const next = f.director.decide(f.state)
   assert.equal(next.reason, 'goal')

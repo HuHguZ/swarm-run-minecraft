@@ -36,6 +36,7 @@ const { raySees, eyePos } = require('./perception')
 const { walkable } = require('./walkable')
 const { seesBlock } = require('./sight')
 const worlds = require('./worlds')
+const pick = require('./pick')
 
 const PLACE = 'крепость'
 const ROOM = 'портал в Край'
@@ -43,7 +44,7 @@ const ROOM = 'портал в Край'
 // увидел его под землёй, значит, ты в крепости (или в руинах/иглу, что
 // отличит только комната).
 const BRICKS = /^(stone_bricks|mossy_stone_bricks|cracked_stone_bricks|chiseled_stone_bricks|infested_(stone_bricks|mossy_stone_bricks|cracked_stone_bricks|chiseled_stone_bricks)|stone_brick_stairs|mossy_stone_brick_stairs|stone_brick_slab|iron_bars|end_portal_frame)$/
-const REACH = 4.2
+const REACH = 4.5
 const DIRS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
 
 function clamp (v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
@@ -1970,21 +1971,36 @@ function frameState (bot, pos) {
   return { pos, eye: String(pr.eye) === 'true', facing: pr.facing }
 }
 
+function frameAim (bot, pos) {
+  for (const face of [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, -1, 0)]) {
+    const point = pick.faceAim(bot, pos, face, { range: REACH })
+    if (point) return { point, face }
+  }
+  return null
+}
+
 // Спавнер чешуйниц на лестнице комнаты рождает их, пока тело в 16 бл.; укусы рвут вставку глаз аварийным отходом
 // автопилота (ферма 02.10, neF-sh-3: оба захода fill прерваны — EMERGENCY, затем хп 7 и LOW_HP, этап «в Энд не вошёл»).
 // Сломать его до вставки (кирка — 1–2 с; только видимый: копать сквозь стену нельзя), рождённых рядом — добить.
 async function breakRoomSpawner (session, ctl, anchor, deadline) {
   const bot = session.bot
   const id = bot.registry.blocksByName.spawner.id
-  const sp = bot.findBlocks({ matching: [id], maxDistance: 20, point: anchor, count: 2 })[0]
+  const sp = visibleOf(bot, [id], 20, 8).find(b => b.position.distanceTo(anchor) <= 8)?.position
   if (!sp) return null
   const out: any = { at: xyz(sp), broken: false }
   const c = sp.offset(0.5, 0.5, 0.5)
   if (eyePos(bot).distanceTo(c) > 4.2) await walkTo(bot, ctl, sp, 3, Math.max(1000, Math.min(20000, deadline - gameClock.now() - 60000)))
   const b = bot.blockAt(sp)
   if (!b || b.name !== 'spawner') { out.broken = true; return out }
-  if (eyePos(bot).distanceTo(c) > 4.5 || !seesBlock(bot, b)) { out.why = 'не дотянулся или не видно'; return out }
-  try { await equipBestTool(bot, b); await bot.dig(b); out.broken = true } catch (e) { out.why = e.message.slice(0, 80) }
+  try {
+    await equipBestTool(bot, b)
+    const point = pick.blockAim(bot, sp, { range: 4.5, seeThrough: null })
+    if (!point || ctl.aborted || gameClock.now() > deadline) { out.why = 'не дотянулся, не видно или прервано'; return out }
+    await bot.lookAt(point, true)
+    const check = pick.blockAim(bot, sp, { range: 4.5, seeThrough: null })
+    if (!check || !check.equals(point) || ctl.aborted || gameClock.now() > deadline) { out.why = 'прицел или обстановка изменились'; return out }
+    await bot.dig(b, 'ignore'); out.broken = true
+  } catch (e) { out.why = e.message.slice(0, 80) }
   const fish = () => (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'silverfish' && e.position && e.position.distanceTo(bot.entity.position) < 8)
   if (out.broken && fish() && !ctl.aborted) {
     try { await require('./combat').fight(session, ctl, { timeoutSeconds: 20, retreatAtHealth: 6 }) } catch {}
@@ -2062,32 +2078,44 @@ async function fillFrames (session, ctl, p: any = {}) {
   // дотянулся: 5 бл.», и портал не загорелся).
   for (const f of order) {
     if (ctl.aborted || gameClock.now() > deadline) break
-    const centre = f.pos.offset(0.5, 0.8, 0.5)
-    if (eyePos(bot).distanceTo(centre) > REACH) {
+    let aim = frameAim(bot, f.pos)
+    if (!aim) {
       await walkTo(bot, ctl, f.pos, 2, Math.min(20000, deadline - gameClock.now()))
+      aim = frameAim(bot, f.pos)
     }
-    if (eyePos(bot).distanceTo(centre) > REACH && !f.retried) {
+    if (!aim && !f.retried) {
       f.retried = true
       // Не на саму рамку: внутри кольца — бассейн лавы под порталом (ферма,
       // крепость A: «tried to swim in lava» при заливке) — только туда, откуда
       // рамку видно с 4 блоков.
       for (const g of [new goals.GoalLookAtBlock(f.pos, bot.world, { reach: 4 })]) {
-        if (eyePos(bot).distanceTo(centre) <= REACH || ctl.aborted) break
+        if (aim || ctl.aborted) break
         try { await Promise.race([bot.pathfinder.goto(g), sleep(Math.min(15000, Math.max(1000, deadline - gameClock.now())))]) } catch {}
         try { bot.pathfinder.setGoal(null) } catch {}
+        aim = frameAim(bot, f.pos)
       }
     }
-    if (eyePos(bot).distanceTo(centre) > REACH + 0.3) {
-      failedAt.push({ at: xyz(f.pos), why: `не дотянулся: ${Math.round(eyePos(bot).distanceTo(centre) * 10) / 10} бл.` })
+    if (!aim) {
+      failedAt.push({ at: xyz(f.pos), why: 'нет доступной прицелом грани рамки' })
       continue
     }
     const eyeItem = itemNamed(bot, 'ender_eye')
     if (!eyeItem) { failedAt.push({ at: xyz(f.pos), why: 'глаза кончились' }); break }
     try {
       await bot.equip(eyeItem, 'hand')
+      if (ctl.aborted || gameClock.now() > deadline) break
       const block = bot.blockAt(f.pos)
-      await bot.lookAt(centre, true)
-      await bot.activateBlock(block, new Vec3(0, 1, 0))
+      if (!block || block.name !== 'end_portal_frame' || String(block.getProperties().eye) === 'true') continue
+      aim = frameAim(bot, f.pos)
+      if (!aim) { failedAt.push({ at: xyz(f.pos), why: 'прицел изменился при смене предмета' }); continue }
+      await bot.lookAt(aim.point, true)
+      const check = frameAim(bot, f.pos)
+      if (ctl.aborted || gameClock.now() > deadline) break
+      if (!check || !check.point.equals(aim.point) || !check.face.equals(aim.face)) {
+        failedAt.push({ at: xyz(f.pos), why: 'прицел изменился перед вставкой' }); continue
+      }
+      // activateBlock заново смотрит в центр блока; _genericPlace сохраняет проверенную грань рамки высотой 0.8125.
+      await bot._genericPlace(block, aim.face, { forceLook: 'ignore', delta: aim.point.minus(f.pos), swingArm: 'right' })
     } catch (e) {
       failedAt.push({ at: xyz(f.pos), why: e.message.slice(0, 60) })
       continue

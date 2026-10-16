@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events')
 const { transformSync } = require('esbuild')
 const { Vec3 } = require('vec3')
 
-function fixture ({ distant = false, hidden = false, shield = true, arrives = 0, abortAt = Infinity }: any = {}) {
+function fixture ({ distant = false, hidden = false, shield = true, arrives = 0, abortAt = Infinity, walkerAt = Infinity, walkerHidden = false }: any = {}) {
   let now = 10000
   const intervals = new Map()
   const ctl = { aborted: false, onAbort: [] as Array<() => void> }
@@ -26,8 +26,10 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
   const foe = { id: 1, name: 'skeleton', position: new Vec3(.5,64,3), height: 1.99, isValid: true }
   const shot: any = { id: 2, name: 'fireball', position: new Vec3(.5,65,-5), height: .3125, isValid: true, _ndObservationNow: () => now }
   bot.entities = { 1: foe }
+  const walker = { id: 3, name: 'wither_skeleton', position: new Vec3(.5,64,-1), height: 2.4, isValid: true }
   const update = () => {
     const elapsed = now - 10000
+    if (elapsed >= walkerAt) bot.entities[3] = walker
     if (elapsed >= arrives && elapsed < arrives + 400) {
       shot.position.z = (distant ? -30 : -5) + (elapsed - arrives) * .6 / 50
       shot._ndPositionReceipts = [
@@ -42,7 +44,7 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
   bot.lookAt = async p => { events.push({ kind: 'aim', at: now - 10000, z: p.z }) }
   bot.activateItem = () => { bot.entity.metadata[0] = 3; events.push({ kind: 'up', at: now - 10000 }) }
   bot.deactivateItem = () => { bot.entity.metadata[0] = 0; events.push({ kind: 'down', at: now - 10000 }) }
-  bot.attack = () => events.push({ kind: 'attack', at: now - 10000 })
+  bot.attack = e => events.push({ kind: 'attack', target: e.id, at: now - 10000 })
   bot.setControlState = (key, value) => events.push({ kind: key, value, at: now - 10000 })
   const clock = {
     now: () => now, observationNow: () => now,
@@ -63,7 +65,7 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
       if (id === './pvp/last-seen') return require('../src/pvp/last-seen')
       if (id === './threats' || id === './combat') return load(id.slice(2))
       if (id === './sealed') return { fillerCount: () => 0 }
-      if (id === './pick') return { canHit: () => true, aim: (_bot, e) => ({ point: e.position }) }
+      if (id === './pick') return { canHit: () => true, aim: (_bot, e) => walkerHidden && e.id === 3 ? null : ({ point: e.position }) }
       if (id === './moves') return { stepSafe: () => true, keyDir: () => ({ x: 0,z: 1 }) }
       if (id === './items') return { itemNamed: () => null }
       if (id === './bow') return { observeCharge: () => {
@@ -126,4 +128,18 @@ test('abort during projectile defence releases controls and native shield listen
   assert.equal(f.bot._client.listenerCount('sound_effect'),0)
   assert.equal(f.bot.listenerCount('health'),0)
   assert.equal(f.events.filter(e => e.kind === 'forward').at(-1).value,false)
+})
+
+
+test('neR-2: an approaching visible wither skeleton takes the shield and sword from a distant shooter', async () => {
+  const f = fixture({ arrives: Infinity, walkerAt: 200 })
+  await f.run()
+  assert.ok(f.events.some(e => e.kind === 'aim' && e.at >= 200 && e.z < 0), JSON.stringify(f.events.filter(e => e.kind === 'aim' || e.kind === 'attack')))
+  assert.ok(f.events.some(e => e.kind === 'attack' && e.target === 3))
+})
+
+test('an occluded wither skeleton cannot become the duel target', async () => {
+  const f = fixture({ arrives: Infinity, walkerAt: 200, walkerHidden: true })
+  await f.run()
+  assert.equal(f.events.some(e => e.kind === 'attack' && e.target === 3), false)
 })

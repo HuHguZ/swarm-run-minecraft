@@ -120,6 +120,10 @@ test('Director loop installs its next wait on replacement clocks after disconnec
 
 test('shared movement wait unwinds controls when its clock ends during an intent', async () => {
   const { escapeWater } = require('../src/movement')
+  // The A6 water budget plans only visible routes; this fake bot has no world to raycast, so pin the legacy path —
+  // the subject here is the clock unwinding, not route visibility.
+  const prevBudget = process.env.ND_WATER_ESCAPE_BUDGET
+  process.env.ND_WATER_ESCAPE_BUDGET = '0'
   const clock = gameClock.activate(new gameClock.GameClock({ manual: true }))
   const ctl: Record<string, any> = { aborted: false }
   let cleared = 0
@@ -143,7 +147,11 @@ test('shared movement wait unwinds controls when its clock ends during an intent
     assert.equal(settled, true)
     await moving
     assert.equal(cleared, 1)
-  } finally { ctl.aborted = true; clock.dispose(); gameClock.activate(null) }
+  } finally {
+    ctl.aborted = true; clock.dispose(); gameClock.activate(null)
+    if (prevBudget === undefined) delete process.env.ND_WATER_ESCAPE_BUDGET
+    else process.env.ND_WATER_ESCAPE_BUDGET = prevBudget
+  }
 })
 
 test('Director restart while frozen keeps one cycle and discards the previous generation', async () => {

@@ -48,6 +48,7 @@ async function predictGoldAsync (bot, radius = 56, ctl: any = {}) {
 
 function * predictGoldSteps (bot, radius = 56) {
   const bp = require('.././bastion-pieces')
+  const rootGrid = process.env.ND_BASTION_ROOT_GRID === '1' && require('.././nether-cover').blind()
   const R = bot.registry.blocksByName
   const cids = [R.chest && R.chest.id, R.trapped_chest && R.trapped_chest.id, R.barrel && R.barrel.id].filter(Boolean)
   const chests = visibleOf(bot, cids, radius, { max: 40, rays: 3000 }).map(b => ({ pos: b.position, block: b }))
@@ -55,6 +56,8 @@ function * predictGoldSteps (bot, radius = 56) {
   const bids = ['basalt', 'polished_basalt'].map(n => R[n] && R[n].id).filter(Boolean)
   const basalt = visibleOf(bot, bids, radius, { max: 300, rays: 4000 })
   yield
+  const entry = bot.world?.getColumn && bot.world?.raycast
+    ? yield * require('./entry-route').observeSteps(bot) : null
   const byChest = bp.locate(bot, chests).found
   yield
   let byBasalt = []
@@ -100,7 +103,11 @@ function * predictGoldSteps (bot, radius = 56) {
     .sort((a, b) => b.score - a.score)
   const direct = byChest.filter(c => !bp.RAMPART_SHAPES.has(c.piece) && c.gold > 0)
   const gold = []
-  const add = (c, src, rank?: any) => { for (const v of bp.goldOf(c)) gold.push({ pos: v, piece: c.piece, src, rank, wall: c }) }
+  const add = (c, src, rank?: any) => {
+    const roots = rootGrid ? bp.startsFrom(c) : []
+    if (roots.length && !roots.some(bp.startFitsGenerator)) return
+    for (const v of bp.goldOf(c)) gold.push({ pos: v, piece: c.piece, src, rank, wall: c })
+  }
   if (bestWalls[0]) { add(bestWalls[0].wall, 'стена'); add(bestWalls[0].conn, 'стена') }
   for (const c of direct) add(c, 'сундук')
   // Все типы (dev-F 02.10): любой узнанный кусок таблицы START_REL (сундук, базальт якорей, видимое золото моста и
@@ -122,6 +129,7 @@ function * predictGoldSteps (bot, radius = 56) {
       if (seenA.has(ak)) continue
       seenA.add(ak)
       for (const S of bp.startsFrom(c)) {
+        if (rootGrid && !bp.startFitsGenerator(S)) continue
         const k = S.type + '|' + S.r + '|' + S.t.x + ',' + S.t.y + ',' + S.t.z
         const h = hyp.get(k) || { ...S, score: 0, from: [] }
         h.score += S.w * (1 + Math.max(0, (c.match || 0) - 2 * (c.miss || 0)) / 20)
@@ -149,7 +157,9 @@ function * predictGoldSteps (bot, radius = 56) {
     if (hoglins) for (const h of hs) if (h.type === 'hoglin_stable') h.score += 1.5
     hs.sort((a, b) => b.score - a.score)
     // До четырёх гипотез разом (одна форма вала у трёх типов — тип решит копка): ранг гипотезы i — 100·(i+1) у верных
-    const picked = hs.filter(h => h.score >= 0.3).slice(0, 4)
+    const picked = entry?.start ? [{ ...entry.start, score: 100, from: ['two observed contours'] }]
+      : hs.filter(h => h.score >= 0.3).slice(0, 4)
+    if (entry?.start) gold.length = 0
     picked.forEach((h, i) => {
       const pcs = bp.goldPiecesFromStart(h)
       for (const g of pcs) add(g, 'старт', 100 * (i + 1) + (g.p >= 0.85 ? 0 : g.slot + 1))

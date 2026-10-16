@@ -734,3 +734,14 @@ test('a predicted brief floor touch cannot suppress the second block needed to s
     assert.equal(guard.stats.saved, 1, 'completion requires the confirmed physical landing')
   } finally { guard.stop() }
 })
+
+
+test('neP-1: nine carried full Nether bricks are usable clutch stock rather than no_blocks', () => {
+  const b = block('nether_bricks', new Vec3(0,0,0))
+  assert.equal(b.boundingBox, 'block')
+  assert.deepEqual(b.shapes, [[0,0,0,1,1,1]])
+  const slots = Array(46).fill(null)
+  slots[36] = { name: 'nether_bricks', count: 9, slot: 36 }
+  assert.equal(clutch.selectBlock(slots), slots[36])
+  assert.equal(clutch.selectBlock(slots, 9), null, 'reserved blocks remain reserved')
+})

@@ -113,6 +113,7 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     const base = assess.MOBS[e.name]
     const player = e.name === 'player' || !!e.username
     if (!base && !player) continue
+    if (e.name === 'polar_bear' && (!require('./polar-bear').enabled() || e !== target && !entities && !require('./polar-bear').attacking(bot, e))) continue
     // Нейтральный моб становится участником только как цель/известный нападающий.
     if (e !== target && !entities && /^(enderman|piglin|zombified_piglin)$/.test(e.name)) continue
     if (player && e !== target && !entities) continue

@@ -27,7 +27,7 @@ test('missing mining supplies can be replenished for remaining bastions after al
   state.facts.bastions_exhausted = fact(true, 'observed', 0)
   assert.equal(registry.get('AcquireNetherTools')!.preconditions(state), false)
 })
-test('usable barter gold blocks enderman hunting until trading is observably exhausted', () => {
+test('usable barter gold wins by price while enderman hunting remains available', () => {
   const hunt = speedrunRegistry().get('HuntEndermen')!
   const barter = speedrunRegistry().get('PiglinBarter')!
   const state = worldFromObservation({ state: { dimension: 'the_nether', health: 20, inventory: { gold_block: 9 } },
@@ -38,7 +38,7 @@ test('usable barter gold blocks enderman hunting until trading is observably exh
   assert.equal(barter.preconditions(state), true, 'carried gold can be traded before mining the remaining bastion')
   assert.equal(plan(speedrunRegistry(), state, s => amount(s, 'pearls') >= 12).steps[0]?.id, 'PiglinBarter')
   state.facts.bastions_exhausted = fact(true, 'observed', 0)
-  assert.equal(hunt.preconditions(state), false)
+  assert.equal(hunt.preconditions(state), true)
   state.facts.barter_exhausted = fact(true, 'observed', 0)
   assert.equal(hunt.preconditions(state), true)
   delete state.facts.barter_exhausted

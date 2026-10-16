@@ -21,7 +21,7 @@ function fixture (prey) {
     FOOD: /^cooked_/, FOOD_STOCK: 8, FOOD_CAP_MS: 180000, foodSpentMs: 240000,
     OW_DEEP: true, known: {}, huntWool: false, wantBeds: 0, died: false,
     sit: { surface: true, night: false }, gameClock: { now: () => elapsed },
-    foodUnits: () => 0, y: () => state.pos.y, netherFoodNeed: () => 6, weakAndHungry: () => true,
+    foodUnits: () => 0, foodShort: () => 8, entrySupplies: () => false, y: () => state.pos.y, netherFoodNeed: () => 6, weakAndHungry: () => true,
     cook: async () => {}, makeBed: async () => {}, sense: async () => {}, refresh: async () => {},
     unclutter: async () => {}, toSurface: async () => true, nightWork: () => false,
     nightGuard: async () => {}, recoverGuard: async () => {}, canWorkAtNight: () => true, log: () => {},

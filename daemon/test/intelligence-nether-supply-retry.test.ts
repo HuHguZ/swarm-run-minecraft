@@ -44,7 +44,8 @@ test('dimension, healing, time and unrelated stock cannot revive a failed wood p
   assert.equal(f.director.decide(f.state).steps[0]?.id, 'RecoverNetherWood', 'Overworld can gather the missing wood without reviving the failed producer')
   assert.equal(f.director.canRun(f.supply, f.state), false)
   f.state.health = 20; f.state.hunger = 20; f.state.dimension = 'the_nether'
-  assert.equal(f.director.decide(f.state).reason, 'unreachable')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.supply.id), false)
+  assert.ok(f.director.exhaustedStrategies().includes(f.supply.id), 'the failed producer stays exhausted even with a priced alternative')
 })
 
 test('supply retry recognizes newly usable pick ingredients only when the pick reserve was missing', () => {
@@ -68,17 +69,20 @@ test('a complete carried nugget recipe reopens exhausted pick supply and still b
   f.state.resources.wood = 16
   f.state.facts.nether_pick_swings = fact(167, 'observed', 0)
   await f.director.run(f.supply); await f.director.run(f.supply)
-  assert.equal(f.director.decide(f.state).reason, 'unreachable')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.supply.id), false)
+  assert.ok(f.director.exhaustedStrategies().includes(f.supply.id), 'the failed producer stays exhausted even with a priced alternative')
   f.state.inventory.iron_nugget = 64
   f.state.resources.iron = 9
   const next = f.director.decide(f.state)
   assert.equal(next.reason, 'goal')
   assert.equal(next.steps[0]?.id, 'AcquireNetherTools')
   await f.director.run(f.supply); await f.director.run(f.supply)
-  assert.equal(f.director.decide(f.state).reason, 'unreachable', 'new material permits only the existing two attempts')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.supply.id), false, 'new material permits only the existing two attempts')
+  assert.ok(f.director.exhaustedStrategies().includes(f.supply.id), 'the failed producer stays exhausted even with a priced alternative')
   f.state.inventory.iron_nugget = 80
   f.state.elapsedMs += 3600000; f.state.health = 19; f.state.inventory.enchanted_book = 1
-  assert.equal(f.director.decide(f.state).reason, 'unreachable', 'excess recipe material and unrelated noise cannot restart the same failure')
+  assert.equal(f.director.decide(f.state).steps.some(step => step.id === f.supply.id), false, 'excess recipe material and unrelated noise cannot restart the same failure')
+  assert.ok(f.director.exhaustedStrategies().includes(f.supply.id), 'the failed producer stays exhausted even with a priced alternative')
 })
 
 test('pick-material retry counts only whole nugget groups and the actual block-to-nine-ingots recipe', () => {

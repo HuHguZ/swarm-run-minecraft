@@ -193,6 +193,10 @@ const WET_LIMIT = 4
 const eyeWet = bot => isWater(bot.blockAt(bot.entity.position.offset(0, 1.62, 0)))
 
 async function outOfWater (bot, ctl, deadline) {
+  if (process.env.ND_WATER_ESCAPE_BUDGET !== '0') {
+    const swim = await escapeWater(bot, ctl, { visibleOnly: true, radius: 16, timeoutMs: Math.max(0, deadline - gameClock.now()) })
+    return { ...swim, how: swim.ok ? 'выплыл на берег' : undefined, plugged: [], tried: swim.error ? [swim.error] : [] }
+  }
   const feet = bot.entity.position.floored()
   const tried = []
   const plugged = []

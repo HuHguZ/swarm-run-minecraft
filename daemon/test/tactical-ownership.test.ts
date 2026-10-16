@@ -314,7 +314,7 @@ test('bounded cover and combat complete before weaker contact selects Shield or 
       assert.equal(tactics.snapshot().action, null)
       if (visible) {
         tactics.update(true)
-        assert.equal(tactics.snapshot().action, 'Shield', 'Shield remains available after the actual completed receipt')
+        assert.equal(tactics.snapshot().action, null, 'a zombie five blocks away supplies no imminent block; the completed executor still released its hands')
       }
     } finally { for (const complete of completions) complete({ cancelled: true }); tactics.detach() }
   }
@@ -686,3 +686,36 @@ test(blocked ? 'unbreakable embedding emits tactical failure without reporting r
   session.tactics.detach()
 })
 }
+
+
+test('neP-1: contact with lava supersedes a stale fall-controller observation', () => {
+  const { session, bot } = observingFixture()
+  bot.game.dimension = 'the_nether'; bot.entity.onGround = false; bot.entity.isInLava = true
+  bot._ndClutch = { lastDecision: { action: 'clutch' } }; bot._ndFallGuard = { placed: true }
+  const state = observeTactics(session)
+  assert.equal(state.lava, true)
+  assert.equal(state.dangerousFall, false)
+  assert.equal(state.emergencyController, false)
+  const { TacticalArbiter } = require('../src/tactics/arbiter')
+  assert.equal(new TacticalArbiter().decide(state).selected?.id, 'Flee')
+})
+
+test('lava escape can take the obsolete fall lease without waiting for its watchdog', async () => {
+  const { session, bot } = observingFixture()
+  const tactics = session.tactics = new TacticalSystem(session)
+  tactics.attach(bot)
+  let fallCtl: any, release: (() => void) | undefined
+  const actions: string[] = []
+  const pending = lock.start(session, ctl => { fallCtl = ctl; return new Promise<void>(r => { release = r }) },
+    { source: 'fall-controller', owner: 'Emergency', priority: 3 })
+  await new Promise<void>(r => setImmediate(r))
+  bot.game.dimension = 'the_nether'; bot.entity.onGround = false; bot.entity.isInLava = true
+  bot._ndClutch = { lastDecision: { action: 'clutch' } }
+  tactics.execute = async action => { actions.push(action.id); return { safe: true } }
+  try {
+    tactics.update(true)
+    await new Promise<void>(r => setImmediate(r))
+    assert.equal(fallCtl.aborted, true)
+    assert.equal(actions[0], 'Flee')
+  } finally { release?.(); lock.cancel(session); await pending; tactics.detach() }
+})

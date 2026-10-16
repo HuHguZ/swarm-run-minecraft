@@ -74,8 +74,9 @@ function visibleSources (bot, name, radius) {
   const id = bot.registry.blocksByName[name] && bot.registry.blocksByName[name].id
   if (id === undefined) return []
   const me = bot.entity.position
-  return bot.findBlocks({ matching: id, maxDistance: radius, count: 400 })
-    .map(p => bot.blockAt(p))
+  const candidates = process.env.ND_OW_KIT_WATER === '0' ? bot.findBlocks({ matching: id, maxDistance: radius, count: 400 }).map(p => bot.blockAt(p))
+    : require('./sight').visibleOf(bot, [id], radius, { max: 24, rays: 1500, skip: p => !isSource(bot.blockAt(p), name) })
+  return candidates
     .filter(b => isSource(b, name) && seen(bot, b.position))
     .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))
 }
@@ -111,7 +112,7 @@ async function waitHeld (bot, name, ms = 1500) {
 // ------------------------------------------------------------------ ведро
 
 // Набрать ведро воды или лавы из видимого источника.
-async function fillBucket (session, ctl, { fluid = 'water', radius = 24 }: any = {}) {
+async function fillBucket (session, ctl, { fluid = 'water', radius = 24, walk: approach = true }: any = {}) {
   const bot = session.bot
   const full = `${fluid}_bucket`
   if (countOf(bot, full) > 0) return { already: true, have: full }
@@ -130,6 +131,7 @@ async function fillBucket (session, ctl, { fluid = 'water', radius = 24 }: any =
     const tag = `${p.x},${p.y},${p.z}`
     // Подойти так, чтобы верх клетки был в досягаемости, и не встать в лаву.
     if (p.offset(0.5, 0.85, 0.5).distanceTo(eye(bot)) > REACH - 0.3) {
+      if (!approach) { why.push(`${tag}: вне досягаемости, нужен отдельный подход`); continue }
       const goal = new goals.GoalNear(p.x, p.y + 1, p.z, 2)
       if (!(await walk(bot, ctl, goal))) { why.push(`${tag}: не дошёл`); continue }
     }

@@ -29,6 +29,7 @@ function fixture({ remembered = false, looted = true, name = 'chest' } = {}) {
       if (name === './worlds') return { worldOf: () => 'overworld' }
       if (name === './perception/eyes') return { nearest: () => [{ name: old.name, x: old.position.x, y: 64, z: 0 }] }
       if (name === './fortify') return { leaveSealedCell: async () => null }
+      if (name === './movement') return {} // A6: без waterBudgetOn — прежний выбор ближайшего
       throw new Error(name)
     }
   }

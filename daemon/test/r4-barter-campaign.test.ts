@@ -66,7 +66,7 @@ function fixture (env: any = {} as Record<string, any>) {
     if (method === 'recall') return { state: { places } }
     if (method === 'bastion') return { ingotsTraded: 0, goldBlocksDug: 0, knownGoldLeft: 1, barterRetry: 'нет места', stopped: 'бартер встал' }
     return {} as Record<string, any>
-  }, { env: { ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_EYES_NEED: '10', ...env }, logs })
+  }, { env: { ND_NE_RECOVER: '0', ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_EYES_NEED: '10', ...env }, logs })
   c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
   return { c, state, logs, calls }
 }
@@ -180,7 +180,7 @@ test('completed travel toward known gold preserves Bastion until two genuinely d
       return { goldBlocksDug: 0, ingotsTraded: 0, knownGoldLeft: 17, stopped: 'золото по памяти осталось: 17, пути к нему нет' }
     }
     return {}
-  }, { env: { ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_GOLD_FAST_SAFE: '1', ND_EYES_NEED: '10' }, logs })
+  }, { env: { ND_NE_RECOVER: '0',  ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_GOLD_FAST_SAFE: '1', ND_EYES_NEED: '10' }, logs })
   c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
   await c.readMemory()
   await c.runStage('bastion')
@@ -238,7 +238,7 @@ test('s1c: two dry calls defer the only mapped bastion (no endless re-calls when
     if (method === 'recall') return { state: { places } }
     if (method === 'bastion') return { goldBlocksDug: 0, ingotsTraded: 0, knownGoldLeft: 2, stopped: 'золото по памяти осталось (2), пути к нему нет' }
     return {} as Record<string, any>
-  }, { env: { ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_GOLD_FAST_SAFE: '1', ND_EYES_NEED: '12' }, logs })
+  }, { env: { ND_NE_RECOVER: '0',  ND_BARTER_FLOW: '1', ND_BASTION_FIRST: '1', ND_NE_ROUTE: '1', ND_GOLD_FAST_SAFE: '1', ND_EYES_NEED: '12' }, logs })
   c.hooks({ recoverGuard: async () => {}, spares: async () => {} })
   await c.readMemory()
   await c.runStage('bastion')

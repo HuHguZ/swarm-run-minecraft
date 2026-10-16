@@ -13,7 +13,7 @@ const { Vec3 } = require('vec3')
 
 export interface Violation { kind: string; tick: number; detail: string }
 export interface SimResult {
-  scenario: string; died: string | null; hp: number; ticks: number; violations: Violation[]; selections: Array<{ tick: number; action: string; level: number; options?: number; result?: string; swoop?: boolean }>
+  scenario: string; died: string | null; hp: number; ticks: number; violations: Violation[]; selections: Array<{ tick: number; action: string; level: number; options?: number; result?: string; swoop?: boolean; shot?: number }>
   skillRestarts: number; skillProgress: number; replanRevision: number; rows: Array<Record<string, unknown>>; log: string[]
 }
 interface Run extends ActionRun { ctl: { aborted: boolean; onAbort: Array<() => void> }; resolve(value: unknown): void; reject(error: unknown): void }
@@ -22,6 +22,20 @@ type Policy = (state: TacticalState, current: ActionId | null) => ActionId | nul
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
 export const FLAP_TICKS = 40
 const INTERLUDES = new Set(['FreeEmbedded', 'Surface', 'Dodge', 'UseWater', 'UseFireResistance', 'PearlEscape', 'FlightEscape', 'ClimbOut', 'WebBoatEscape', 'BoatLavaHop'])
+
+// Replay decisions with their recorded durations; completed actions wait until the next recorded boundary.
+export function runRecorded(scenario: Scenario, actions: Array<{ at: number; ticks: number; id: ActionId }>) {
+  if (actions.some((a, i) => !Number.isInteger(a.at) || a.at < 0 || !Number.isInteger(a.ticks) || a.ticks < 0 || i > 0 && a.at < actions[i - 1].at)) throw new Error('invalid recorded action timing')
+  const world = createWorld(scenario), hits: Array<{ tick: number; lost: number; hp: number }> = []
+  let previous = world.body.hp, run: (ActionRun & { end: number }) | null = null, index = 0, completed = false
+  world.onHurt = () => { const lost = Math.max(0, previous - world.body.hp); if (lost) hits.push({ tick: world.tick, lost, hp: world.body.hp }); previous = world.body.hp }
+  while (world.tick < (scenario.ticks ?? 600) && world.body.hp > 0 && !world.body.escaped) {
+    while (index < actions.length && actions[index].at <= world.tick) { const a = actions[index++]; run = { id: a.id, started: world.tick, data: {}, end: a.at + a.ticks }; completed = false }
+    if (run && world.tick < run.end && !completed) completed = !!stepAction(world, run)
+    previous = world.body.hp; stepWorld(world); previous = world.body.hp
+  }
+  return { hp: world.body.hp, died: world.died, ticks: world.tick, damage: hits.reduce((sum, h) => sum + h.lost, 0), hits, log: world.log }
+}
 
 function fakeBot(world: SimWorld) {
   const bot: any = new EventEmitter()
@@ -61,6 +75,7 @@ export async function runSystem(scenario: Scenario, { observe = 'mirror' }: { ob
   Object.assign(session, { bot, current: null, reflex: null, replanRevision: 0, bus: { emit(name: string, payload: any) {
     if (name === 'tactical_selected') selections.push({ tick: world.tick, action: payload.action, level: payload.threatLevel,
       options: new Set((payload.candidates ?? []).map((candidate: Candidate) => candidate.id === 'CreateDistance' ? 'Flee' : candidate.id)).size,
+      shot: session.tactics?.snapshot().state?.owGuard?.id,
       swoop: /^(Fight|LastStand)$/.test(payload.action) && !!session.tactics?.snapshot().state && outpaced(session.tactics.snapshot().state) })
     if (name === 'tactical_finished') { const open = [...selections].reverse().find(s => s.action === payload.action && !s.result); if (open) open.result = payload.detail?.killed ? 'killed' : payload.result }
     world.log.push(`${world.tick} ${name} ${payload?.action ?? payload?.reason ?? ''}`)
@@ -123,7 +138,7 @@ export async function runSystem(scenario: Scenario, { observe = 'mirror' }: { ob
       stepRuns(world, runs)
       stepWorld(world)
       if (facade) facade.sync()
-      else { bot.health = world.body.hp; bot.food = world.body.food; bot.entity.position = new Vec3(world.body.x, 64, world.body.z) }
+      else { bot.health = world.body.hp; bot.food = world.body.food; bot.entity.position = new Vec3(world.body.x, 64 + world.body.y, world.body.z) }
       timer.advanceTicks(1)
       if (world.body.hp !== hp) bot.emit('health')
       bot.emit('physicsTick')
@@ -141,7 +156,8 @@ export async function runSystem(scenario: Scenario, { observe = 'mirror' }: { ob
       // for 2 s; the old 12-tick window missed a 1-2 s swing). An urgent interlude (Eat > UseWater on fire > Eat) is a resume.
       // A rescue between two runs of one action (FreeEmbedded, water on fire...) or repeated for a new cause (a second fire), a
       // fallback after B failed, a strike that killed, or one at the swoop of a flyer no run shakes (state.outpaced) is a resume.
-      if (c?.tick === world.tick && c.tick - a.tick < FLAP_TICKS && a.action === c.action && a.action !== b.action && a.level === b.level && b.level === c.level &&
+      const shotInterlude = b?.action === 'Shield' && b.shot !== undefined && a?.shot === undefined && c?.shot === undefined
+      if (c?.tick === world.tick && c.tick - a.tick < FLAP_TICKS && a.action === c.action && a.action !== b.action && a.level === b.level && b.level === c.level && !shotInterlude &&
         !INTERLUDES.has(b.action) && !INTERLUDES.has(a.action) && b.result !== 'failed' && b.result !== 'killed' && !a.swoop && !b.swoop && !(lastLevel4 > a.tick)) flag('flapping', `${a.action}>${b.action}>${c.action} in ${c.tick - a.tick} ticks`)
       const last = selections[selections.length - 1]
       if (last?.tick === world.tick && last.action === 'Fight' && world.body.hp <= 6 && !(world.body.inLava && world.body.fireRes > 0)) flag('fight-low-hp', `hp ${world.body.hp.toFixed(1)}`)

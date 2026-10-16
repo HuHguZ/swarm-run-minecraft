@@ -18,7 +18,7 @@ const gameClock = require('./game-clock')
 // Зависимости — параметрами (Vec3, faceAim, simulate, makeBlock, PlayerState,
 // общая рука lockHand): модуль переносим и тестируем без сокетов.
 const IDLE = Object.freeze({ forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false })
-const FILLER = /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|basalt|obsidian|crying_obsidian|[a-z_]+_planks)$/
+const FILLER = /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|nether_bricks|basalt|obsidian|crying_obsidian|[a-z_]+_planks)$/
 const REPLACE = /^(air|cave_air|void_air|water|lava|short_grass|tall_grass|fern|large_fern|dead_bush|snow)$/
 const INTERACTIVE = /chest|barrel|furnace|crafting_table|enchanting_table|anvil|door|trapdoor|button|lever|bed|shulker|hopper|dispenser|dropper|smoker|loom|stonecutter|grindstone|cartography_table|smithing_table|composter|note_block|jukebox|respawn_anchor/
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`

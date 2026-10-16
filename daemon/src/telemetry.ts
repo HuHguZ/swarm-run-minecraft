@@ -74,6 +74,8 @@ function snapshot (state: any = {}, sit: any = {}) {
     tod: sit.tod ?? null,
     night: sit.night ?? null,
     surface: sit.surface ?? null,
+    ...(sit.work ? { work: { block: sit.work.block ?? null, sky: sit.work.sky ?? null, walls: sit.work.walls,
+      roof: sit.work.roof, floor: sit.work.floor, sealed: sit.work.sealed } } : {}),
     foes: sit.foes ?? null,
     inWater: sit.inWater ?? null
   }

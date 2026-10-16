@@ -12,6 +12,7 @@
 const { raySees } = require('./perception')
 
 const MOBS = {
+  polar_bear: { hp: 30, dmg: 6, every: 1 }, // PolarBear.createAttributes, MeleeAttackGoal: 20 ticks (1.21.11 jar).
   // hp, dmg — удар в ближнем бою (или выстрел), every — секунд между атаками,
   // ranged — стреляет, armor — природная броня.
   zombie: { hp: 20, dmg: 3, every: 1, armor: 2 },
@@ -275,6 +276,7 @@ function plan (bot, { radius = 20, entities = null, exclude = null }: any = {}) 
   const list = entities || (Object.values(bot.entities) as any[])
   for (const e of list) {
     if (!e || e === bot.entity || !e.position || !MOBS[e.name]) continue
+    if (e.name === 'polar_bear' && !entities && (!require('./polar-bear').enabled() || !require('./polar-bear').attacking(bot, e))) continue
     if (e.isValid === false || (exclude && exclude.has(e.id)) || dying(bot, e)) continue
     // Только те, кого видно (или кто вплотную): эндермен в пещере под ареной
     // — не враг этого боя, а бот шёл «к нему» по полу на 35 блоков выше.

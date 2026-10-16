@@ -10,6 +10,7 @@ const Block = require('prismarine-block')(registry), Item = require('prismarine-
 const native = require('../src/tick-plugins').getPhysics(), clockMod = require('../src/game-clock')
 const movement = require('../src/movement'), pick = require('../src/pick')
 const data = JSON.parse(readFileSync(path.join(__dirname, 'fixtures/geo-j1-water.json'), 'utf8'))
+data.cases.push(...JSON.parse(readFileSync(path.join(__dirname, 'fixtures/geo-a6-water.json'), 'utf8')).cases)
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 
 async function replay(tag: string) {
@@ -47,6 +48,7 @@ async function replay(tag: string) {
     const i = new Item(registry.itemsByName[name].id, count); i.slot = 36 + stacks.length; slots[i.slot] = i; stacks.push(i)
   }
   const b = c.body
+  const airKey = registry.entitiesByName.player.metadataKeys.indexOf('air_supply'), poseKey = registry.entitiesByName.player.metadataKeys.indexOf('pose')
   const bot: any = Object.assign(new EventEmitter(), {
     version: '1.21.11', registry, world, game: { dimension: 'overworld', minY: -64, height: 384 },
     entity: { position: new Vec3(b.p[0], b.p[1], b.p[2]), velocity: new Vec3(b.v[0], b.v[1], b.v[2]), yaw: b.yaw, pitch: b.pitch, onGround: !!b.onGround,
@@ -67,6 +69,7 @@ async function replay(tag: string) {
       cells[indexOf(block.position)] = registry.blocksByName[wet(block.position.offset(0, 1, 0)) ? 'water' : 'air'].defaultState
     }
   })
+  bot.entity.metadata[airKey] = air; bot.entity.metadata[poseKey] = b.pose ?? 0
   require('../src/gamedata').fixMaterials(registry)
   require('../src/swimming').install(bot)
   assert.equal(bot.oxygenLevel, b.oxygen, 'same breath value as the recorded Surface start')
@@ -79,7 +82,7 @@ async function replay(tag: string) {
       inPhysics = true
       try { const state = new native.PlayerState(bot, controls); bot.physics.simulatePlayer(state, world); state.apply(bot); bot.entity.height = state.ndPoseHeight ?? 1.8 } finally { inPhysics = false }
       if (wet(pick.eyeOf(bot))) { if (--air <= -20) { air = 0; bot.health = Math.max(0, bot.health - 2) } } else air = Math.min(300, air + 4)
-      bot.oxygenLevel = Math.max(0, Math.round(air / 15))
+      bot.oxygenLevel = Math.max(0, Math.round(air / 15)); bot.entity.metadata[airKey] = air
       bot.emit('physicsTick'); clock.advanceTicks(1)
     }
     return { hp: bot.health, air, tick, result, error, digs, position: bot.entity.position.clone() }
@@ -109,4 +112,19 @@ test('j1 s2-3: restored recorded air pocket is reached by descending, then the c
   assert.equal(r.error, undefined)
   assert.ok(r.hp > 0, JSON.stringify(r)); assert.equal(r.result?.ok, true, JSON.stringify(r))
   assert.ok(r.position.y >= 63); assert.deepEqual(r.digs, [])
+})
+
+// Recorded positions/pose and raw block states; the bank is found through line of sight.
+test('A6: submerged glow lichen is water, not a breathable land target', async () => {
+  const r = await replay('ia8-fp1-s13-1-iron-401')
+  assert.equal(r.error, undefined); assert.equal(r.hp, 19, JSON.stringify(r))
+  assert.equal(r.result?.ok, true, JSON.stringify(r)); assert.ok(r.air > 125)
+  assert.deepEqual(r.digs, [])
+})
+
+test('A6: captured SWIMMING pose fits under the lake roof and reaches air', async () => {
+  const r = await replay('fp3-s14-1')
+  assert.equal(r.error, undefined); assert.ok(r.hp >= 16, JSON.stringify(r))
+  assert.equal(r.result?.breathing, true, JSON.stringify(r)); assert.ok(r.air >= 255)
+  assert.deepEqual(r.digs, [])
 })

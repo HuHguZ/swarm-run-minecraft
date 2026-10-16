@@ -108,6 +108,8 @@ test('добор лавы: всё тело озера по связности, �
   // Озеро 10×1 по x от 0 до 9 на y 63 (гладь), сверху воздух; берег — z ±1.
   for (let x = 0; x <= 9; x++) put(x, 63, 0, 'lava', 'empty', { level: 0 })
   const bot: Record<string, any> = { entity: { position: new Vec3(-5.5, 64, 0.5) }, blockAt: p => blocks.get(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`) || null, getControlState: () => false, entities: {} as Record<string, any> }
+  bot.world = new (require('prismarine-world')('1.21.11'))().sync
+  bot.world.getBlock = bot.blockAt
   const live = cast.liveLava(bot, [new Vec3(9, 63, 0)], new Vec3(-5, 64, 0), { limit: 4 })
   assert.ok(live.length >= 1, `живых: ${live.length}`)
   assert.ok(live[0].x <= 3, `ближний к раме — с края у рамы: ${live[0]}`)

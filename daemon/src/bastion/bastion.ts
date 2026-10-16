@@ -419,7 +419,7 @@ async function digToPredictedBody (session, ctl, st, t) {
   } finally { gameClock.clearInterval(samp) }
   const b = bot.blockAt(t.pos)
   const res: any = { walk: w && w.ok ? 'ok' : (w && w.error) || '?', block: b ? b.name : '?', tunnel: tun ? { ok: tun.ok, steps: tun.steps, why: tun.why } : undefined }
-  if (!(w && w.ok)) { st.skip.set(t.k, gameClock.now() + 45000); st.predMiss = (st.predMiss || 0) + 1; return res }
+  if (!(w && w.ok)) { st.skip.set(t.k, routeRetryAt(45000)); st.predMiss = (st.predMiss || 0) + 1; return res }
   if (b && b.boundingBox === 'empty' && st.blocks > 0 && t.pos.distanceTo(bot.entity.position) < 3) {
     // Воздух на месте предсказанного — уже выкопан (с видимого списка), не промах.
     st.pred.delete(t.k)
@@ -467,7 +467,9 @@ function planView (bot, st) {
 // Координаты ниже — гипотезы шаблона из наблюдения fortress, не прочитанные клетки мира.
 function rememberStarts (bot, st, starts) {
   const bp = require('.././bastion-pieces')
-  for (const [i, s] of (Array.isArray(starts) ? starts.slice(0, 4) : []).entries()) {
+  const list = Array.isArray(starts) ? starts : []
+  const possible = process.env.ND_BASTION_ROOT_GRID === '1' && require('.././nether-cover').blind() ? list.filter(bp.startFitsGenerator) : list
+  for (const [i, s] of possible.slice(0, 4).entries()) {
     if (!bp.START_REL[s?.type] || !Number.isInteger(s.r) || s.r < 0 || s.r > 3 ||
         !s.t || !['x', 'y', 'z'].every(k => Number.isFinite(s.t[k]))) continue
     for (const c of bp.piecesFromStart(s)) {
@@ -485,6 +487,8 @@ function rememberStarts (bot, st, starts) {
   }
 }
 
+// An unchanged physical failure stays closed for this RPC; the campaign reopens it after new evidence or an approach.
+function routeRetryAt (ms) { return process.env.ND_NE_RECOVER === '1' ? Infinity : gameClock.now() + ms }
 async function sealedGold (session, ctl, st, until) {
   const bot = session.bot
   const dimension = bot.game?.dimension
@@ -624,7 +628,7 @@ async function sealedGold (session, ctl, st, until) {
     if (!r.ok) {
       log('штрек: пути нет', { targets: tg.length, rank: minRank, nodes: r.nodes, why: r.why, from: inTunnel ? 'штрек' : 'снаружи', ms: gameClock.wall.now() - t0 })
       // Нет пути ни к одной цели этого ранга — отложить их; из штрека попробовать снаружи.
-      for (const t of tg) st.skip.set(t.k, gameClock.now() + 10 * 60000)
+      for (const t of tg) st.skip.set(t.k, routeRetryAt(10 * 60000))
       if (++noPlan >= 3) break
       continue
     }
@@ -676,7 +680,7 @@ async function sealedGold (session, ctl, st, until) {
       let took = null
       try { took = await require('.././structures').takeWorth(session, ctl, t.pos, { kind: 'bastion' }) } catch (e) { took = { error: e.message } }
       if (miningCycle.confirmedChestLoot(took, t.pos, ctl.aborted)) st.looted.add(t.k)
-      else st.skip.set(t.k, gameClock.now() + 60000)
+      else st.skip.set(t.k, routeRetryAt(60000))
       st.chests.push({ at: t.k, took: (took && took.took) || {}, stopped: took && (took.stopped || took.error) })
       log('штрек: сундук', { at: t.k, took: took && took.took, stopped: took && (took.stopped || took.error) })
       continue
@@ -736,7 +740,7 @@ async function sealedGold (session, ctl, st, until) {
     if (exposedFoes.length || (st.fastSafe && opens && SL.fillerCount(bot) < 3)) {
       // Пиглины бродят: отложить на 2 мин, а не на 10 (s1c-A-2 06.10: 9 из 22 блоков карты «пропустил» при 2–4 пиглинах рядом,
       // к концу захода «золото по памяти осталось (16), пути нет»). Блоков на заделку нет — по-прежнему надолго.
-      st.skip.set(t.k, gameClock.now() + (exposedFoes.length && SL.fillerCount(bot) >= 3 ? 120000 : 600000))
+      st.skip.set(t.k, exposedFoes.length ? gameClock.now() + (SL.fillerCount(bot) >= 3 ? 120000 : 600000) : routeRetryAt(600000))
       log('штрек: небезопасное вскрытие — пропустил', { at: t.k, foes: exposedFoes.length, win1, dropSafe, strongG, onTop, up: bot.blockAt(upC)?.name, dn: bot.blockAt(dnC)?.name, strong: strongNear.length, hp: Math.round(bot.health ?? 0), filler: SL.fillerCount(bot) })
       continue
     }
@@ -747,7 +751,7 @@ async function sealedGold (session, ctl, st, until) {
       await sealBody(bot, S).catch(() => null)
       S.exposed = SL.exposure(bot, S.own).length > 0
       if (S.exposed) {
-        st.skip.set(t.k, gameClock.now() + 60000)
+        st.skip.set(t.k, routeRetryAt(60000))
         log('штрек: ход открыт, пиглины в 16 — золото отложил', { at: t.k, n: angerSet(bot, null, true).length })
         continue
       }
@@ -763,7 +767,7 @@ async function sealedGold (session, ctl, st, until) {
     bot.setControlState('sneak', true)
     let dr
     try { dr = await SL.digCell(bot, t.pos, { allowGuard: true }) } finally { bot.setControlState('sneak', false) }
-    if (dr !== 'ok') { st.skip.set(t.k, gameClock.now() + 60000); log('штрек: золото не ломается', { at: t.k, r: dr }); continue }
+    if (dr !== 'ok') { st.skip.set(t.k, routeRetryAt(60000)); log('штрек: золото не ломается', { at: t.k, r: dr }); continue }
     S.own.add(t.k)
     st.pred.delete(t.k)
     st.blocks++
@@ -1304,6 +1308,7 @@ async function bastion (session, ctl, p: any = {}) {
       brutesAvoided: st.brutes || undefined,
       tossed: st.tossed.length ? st.tossed : undefined,
       lastBlocked: st.lastBlocked || undefined,
+      entryRoute: st.entryRoute || undefined,
       goldless: st.goldless || undefined
     }
     if (st.supplyNeeded) d.supplyNeeded = st.supplyNeeded
@@ -1734,6 +1739,20 @@ async function bastion (session, ctl, p: any = {}) {
       if (await answerAttack(session, ctl, st)) continue
       if (await bruteDefense(session, ctl, st)) continue
       if (mode !== 'gold' && done()) break
+      if (st.sealed && mode !== 'barter' && require('.././nether-cover').blind() && !st.entryDone) {
+        const entry = await require('./entry-route').approach(session, ctl, st, deadline)
+        if (entry.handled) {
+          st.entryRoute = { ok: entry.ok, start: entry.start, entry: entry.entry, why: entry.why }
+          if (entry.ok && entry.start) {
+            st.entryDone = true
+            st.pred.clear(); st.pieces = []
+            for (const [k,c] of st.chestSeen) if (c.pred) st.chestSeen.delete(k)
+            rememberStarts(bot, st, [entry.start])
+            st.sealedDone = false
+          } else if (entry.progress) continue
+          else return out(entry.why || 'housing: второго вида или закрытого пути к стене пока нет')
+        }
+      }
       // Закрытый путь: после золота — торговое окно из штрека, потом штреком назад.
       if (st.sealed && st.sealedState && st.sealedDone && !st.pitDone) {
         st.pitDone = true
@@ -2025,7 +2044,7 @@ async function bastion (session, ctl, p: any = {}) {
       }
       // Отложенные есть — подождать, пока пиглины разойдутся (или раздать слитки).
       const waiting = [...st.gold.keys()].some(k => (st.skip.get(k) || 0) >= gameClock.now())
-      if (waiting && idle < 3) {
+      if (waiting && idle < 3 && (process.env.ND_NE_RECOVER !== '1' || require('.././ne-guard').hot(bot))) {
         idle++
         if (!countOf(bot, 'gold_ingot') && countOf(bot, 'gold_block')) await unpackGold(session, ctl, 9)
         await sleep(3000)
