@@ -32,7 +32,6 @@
     "farm/arena/**/*.ts",
     "farm/crystal/**/*.ts",
     "farm/dragon/**/*.ts",
-    "farm/movement/**/*.ts",
     "farm/portal-scan/**/*.ts",
     "farm/route-scan/**/*.ts",
     "farm/stronghold_route/**/*.ts",

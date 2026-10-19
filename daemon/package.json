@@ -13,7 +13,6 @@
     "test": "node --enable-source-maps --test --test-timeout=120000 ../dist/daemon/test/*.test.js"
   },
   "dependencies": {
-    "@nxg-org/mineflayer-pathfinder": "^0.0.26",
     "canvas": "^3.2.3",
     "minecraft-data": "^3.112.0",
     "mineflayer": "^4.37.1",

@@ -56,7 +56,7 @@ MCP-сервер (mcp/)      мост для Claude Code: ~80 инструмен
 | `daemon/src/core/`, `daemon/src/environments/` | независимое ядро, состояние, реестр стратегий, Minecraft и абстрактный симулятор |
 | `daemon/src/tactics/`, `daemon/src/combat/` | тактический граф, управление приоритетами, воздушные действия и прогноз видимого жемчуга |
 | `daemon/test/` | тесты (`node:test`) |
-| `daemon/scenes/<этап>/try-*.ts` | сцены-проверки поведения против живого мира (готовят арену командами, печатают вердикты); этапы `ow`, `nether`, `end`, `move`, `pvp`, `infra`, общий код сцен — `scenes/lib/`, старые сцены до фермы — `scenes/legacy/`; `farm.js run` находит сцену по имени файла |
+| `daemon/scenes/<этап>/try-*.ts` | сцены-проверки поведения против живого мира (готовят арену командами, печатают вердикты); этапы `ow`, `nether`, `end`, `move`, `pvp`, `infra`, общий код сцен — `scenes/lib/`; `farm.js run` находит сцену по имени файла |
 | `daemon/arena/`, `daemon/castle/`, `daemon/sim/`, `daemon/tools/` | арена PvP и Колизей, замок, CLI симулятора стратега, мелкие утилиты |
 | `mcp/` | MCP-сервер для Claude Code (`node dist/mcp/src/index.js`) |
 | `farm/` | ферма тестовых миров: `farm.ts`, сиды `farm/seeds/`, скан карт `route-scan/`, серии этапов `series/`, сводки `analysis/`, стенды `scenes/`, `swarm/` |

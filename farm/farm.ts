@@ -27,7 +27,7 @@ const { REPO_ROOT }: typeof import('../daemon/src/paths') = require('../daemon/s
 //   node dist/farm/farm.js tick --all query         состояние тиков всех поднятых слотов
 //   node dist/farm/farm.js daemons 1-10              перезапустить только тела, миры не трогать
 //   node dist/farm/farm.js rcon all "time set day"   команда на все поднятые слоты (или 3, 1-4)
-//   node dist/farm/farm.js run try-lab-pearls.js --slots 1-8 --tag pearls-a STYLE=duel -- 2
+//   node dist/farm/farm.js run try-lab-ne-run.js --slots 1-8 --tag ne-a MINUTES=30 -- 2
 //        сцена на каждом слоте (cwd daemon/; имя без пути ищется в scenes/**, arena/, ../farm/scenes/), env: ND_WS, MC_USERNAME, MC_PORT,
 //        ND_SERVER_LOG, LAB_OUT=farm/results/<tag>/slot-<i>.jsonl, плюс KEY=VAL;
 //        аргументы после «--» — сцене. Ждёт всех, печатает сводку (report).
