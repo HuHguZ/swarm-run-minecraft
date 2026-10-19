@@ -13,7 +13,7 @@ import * as sorting from '../sorting'
 import * as farmMod from '../farm'
 import rideMod = require('../ride')
 import * as mechanismMod from '../mechanism'
-const HOLDING = ['chat', 'low_health', 'death', 'kicked', 'disconnected']
+import { HOLDING } from './shared'
 
 function strongholdIntent (this: any, p: any = {}) {
     if (p.mode === 'go' || p.mode === 'room' || p.mode === 'fill' || p.mode === 'travel') return this.strongholdPath(p)

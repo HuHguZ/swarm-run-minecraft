@@ -5,7 +5,8 @@ import { Vec3 } from 'vec3'
 import * as clock from '../src/game-clock'
 
 test('an unresisted lava emergency does not scan unusable climbing routes while the pearl waits for physics', () => {
-  const unstuck: typeof import('../src/unstuck') = require('../src/unstuck')
+  // fluidRoute определён в src/unstuck/tools: фасад unstuck переэкспортирует его геттером, подмена — на части
+  const unstuck: typeof import('../src/unstuck/tools') = require('../src/unstuck/tools')
   const previous = unstuck.fluidRoute
   const bot: any = { health: 20, entity: { position: new Vec3(.5, 100, .5), isInLava: true, effects: {} },
     registry: { effectsByName: { fire_resistance: { id: 12 } } },

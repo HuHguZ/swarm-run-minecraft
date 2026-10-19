@@ -1,14 +1,14 @@
 'use strict'
+import { bodySource } from './source-fixture'
 import { cjsContext } from './cjs-context'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const filename = path.resolve(__dirname, '../src/fauna.js')
-const code = (require('esbuild') as typeof import('esbuild')).transformSync(fs.readFileSync(filename.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+const code = bodySource(filename) // фасад fauna и части fauna/ одной областью
 const ctx = { module: { exports: {} as Record<string, any> }, require: createRequire(filename), process, console }
 vm.runInNewContext(code + '\nmodule.exports.floorNear = golemTopNear; module.exports.spotNear = golemSpotNear', cjsContext(ctx))
 

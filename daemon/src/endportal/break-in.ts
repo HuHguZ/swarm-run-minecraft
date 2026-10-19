@@ -1,9 +1,9 @@
 'use strict'
 // Крепость и портал в Край (endportal.ts): из своей шахты внутрь крепости: клетка внутри, вход по кирпичу, пролом.
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const { sleep, xyz }: typeof import('../movement') = require('../movement')
-const { equipBestTool, missingHarvestTool }: typeof import('../items') = require('../items')
-const { walkable }: typeof import('../walkable') = require('../walkable')
+import * as gameClock from '../game-clock'
+import { sleep, xyz } from '../movement'
+import { equipBestTool, missingHarvestTool } from '../items'
+import { walkable } from '../walkable'
 import { BRICKS, honestDescent, log, walkTo, INFESTED } from './common'
 
 // Шахта остановилась у кирпича — но тело ещё в своей шахте 1x1, а не в

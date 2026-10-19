@@ -10,7 +10,7 @@ import { act } from './act'
 import { closedShelter } from './guards'
 import { walkAway, awayFrom } from './travel'
 import { eatTo, ensurePick } from './kit'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 const refugeRunning = () => state.busy === 'refuge' || refugeSeenAt > 0
 async function awaitRefuge (why = '') {
   log(`идёт аварийный отход автопилота${why ? ` (${why})` : ''} — жду его конца, своё не зову`)

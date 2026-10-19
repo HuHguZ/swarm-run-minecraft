@@ -1,4 +1,4 @@
-import edges = require('../edges')
+import * as edges from '../edges'
 import * as tempo from '../tempo'
 
 // A stationary pathfinder can be doing useful work. Only the heuristic route

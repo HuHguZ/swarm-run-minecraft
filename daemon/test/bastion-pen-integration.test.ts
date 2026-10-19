@@ -2,17 +2,18 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 import 'node:fs'
 import * as fs from 'node:fs'
-import { transpiledSource } from './source-fixture'
+import { transpiledSource, declSource } from './source-fixture'
 
 // Exercise the actual speedrun dispatch, including the second barter site.
 test('speedrun gathers traders in its initial and retry pits; explicit booth/trap retain their executor', async () => {
-  const text = transpiledSource(require.resolve('../src/bastion/bastion'))
-  const start = text.indexOf('if (bo) {\n            st.pit =')
-  const end = text.indexOf('} else {\n            st.lastBarter', start)
-  assert.ok(start >= 0 && end > start)
-  const run = new Function('bo', 'st', 'session', 'ctl', 'deadline', 'keep', 'done', 'penTrade', 'boothTrade',
+  // Бартер в найденном месте — tradeAtSite в bastion/run-trade.ts (шаг цикла bastion(); состояние вызова — bx).
+  const text = declSource(require.resolve('../src/bastion/run-trade'), 'tradeAtSite')
+  assert.ok(text.includes('async function tradeAtSite('))
+  const tradeAtSite = new Function('done', 'penTrade', 'boothTrade',
     'log', 'countOf', 'gameClock', 'BF', 'moveBarterSite', 'digPit', 'mergeTrades', 'require',
-    `const bot = session.bot; return (async () => { ${text.slice(start, end)} } })();`)
+    text + '\nreturn tradeAtSite;')
+  const run = (bo, st, session, ctl, deadline, keep, done, ...rest) =>
+    tradeAtSite(done, ...rest)({ st, session, ctl, deadline, keep, bot: session.bot, p: {} }, bo)
   for (const kind of ['pit', 'booth', 'trap']) {
     const bo = { kind, F: { x: 0, y: 98, z: 0 }, P: { x: 0, y: 98, z: 0 }, M: { x: 0, y: 100, z: 0 } }
     const st: any = { sealedState: {} }

@@ -1,3 +1,4 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -30,7 +31,7 @@ const state = (extra: Partial<TacticalState> = {}): TacticalState => ({ at: 0, h
 
 function load(file: string, overrides: Record<string, any>) {
   const local = createRequire(file), module = { exports: {} as any }
-  const code = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const code = bodySource(file) // фасад и части tactics/minecraft/ одной областью
   vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     id => Object.prototype.hasOwnProperty.call(overrides, id) ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports

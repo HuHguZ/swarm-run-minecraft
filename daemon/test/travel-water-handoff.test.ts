@@ -1,7 +1,7 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
@@ -11,7 +11,8 @@ import * as clock from '../src/game-clock'
 function fixture({ swim = 'ok', deadline = 10000, cancelNever = false }: any = {}) {
   const file = path.resolve(__dirname, '../src/movement.ts'), local = createRequire(file)
   const module = { exports: {} as any }
-  const code = (require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  // Фасад movement и части movement/ одной областью: travelXZ видит подменённые escapeWater и gotoPath.
+  const code = bodySource(file)
   vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code + '\nmodule.exports.testWater = fn => { escapeWater = fn }; module.exports.testPath = fn => { gotoPath = fn }'), { filename: file })
     (module.exports, local, module, file, path.dirname(file))
   const movement = module.exports

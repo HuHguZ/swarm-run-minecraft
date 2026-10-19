@@ -1,13 +1,14 @@
 'use strict'
 import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
 const filename = path.resolve(__dirname, '../src/campaign/overworld-route.js')
-const source = (require('esbuild') as typeof import('esbuild')).transformSync(fs.readFileSync(filename.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+// Маршрут целиком (фасад и части overworld-route/) одной областью — require настоящий, от файла маршрута.
+const source = bodySource(filename)
 const box = { module: { exports: {} as Record<string, any> }, require: createRequire(filename) }
 vm.runInNewContext(source, cjsContext(box))
 

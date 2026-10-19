@@ -1,8 +1,12 @@
 type CombatContext = Record<string, any>
 
 export function createTerrain(ctx: CombatContext) {
+  return { ...createPits(ctx), ...createBuckets(ctx) }
+}
+
+// Пробить его стенку, счёт падений у края, ямы: выбраться, лава ему в яму.
+function createPits (ctx: CombatContext) {
 let failedPunch = null
-const groundAttempts = new Map<string, any>()
 const punchThrough = async () => {
     const eye0 = ctx.bot.entity.position.offset(0, ctx.EYE, 0)
     const to = ctx.entity.position.offset(0, (ctx.entity.height || 1.8) * 0.6, 0)
@@ -192,6 +196,12 @@ const lavaIntoPit = async (lava) => {
     await ctx.holdWeapon()
     return true
   }
+return { punchThrough, edgeTally, climbOut, lavaIntoPit }
+}
+
+// Вёдра и блоки под ноги, щит на столбе, опасность на пути, расчистка, копка под присмотром.
+function createBuckets (ctx: CombatContext) {
+const groundAttempts = new Map<string, any>()
 
 const bucketLanding = (pt) => {
     const eye = ctx.bot.entity.position.offset(0, ctx.bot.getControlState('sneak') ? 1.27 : ctx.EYE, 0)
@@ -364,5 +374,5 @@ const digWatch = async (block, abortIf) => {
     try { await ctx.withTimeout(ctx.bot.dig(block, true), (Number.isFinite(plan.ms) ? plan.ms : 1000) + 500) } catch {} finally { ctx.gameClock.clearInterval(iv) }
     return why
   }
-return { punchThrough, edgeTally, climbOut, lavaIntoPit, bucketLanding, useOnGroundAt, scoop, towerShield, hazardOnLine, unblockPath, digWatch }
+return { bucketLanding, useOnGroundAt, scoop, towerShield, hazardOnLine, unblockPath, digWatch }
 }

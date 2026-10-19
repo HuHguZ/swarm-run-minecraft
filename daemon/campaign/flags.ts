@@ -1,8 +1,8 @@
 'use strict'
 // Настройки запуска кампании: адрес демона, журнал, выбранные этапы и флаги окружения, которые читаются при загрузке.
 // Первый импорт входа: умолчание ND_NE_RECOVER ставится раньше, чем его прочтёт кто-то ещё.
-const path: typeof import('path') = require('path')
-const { REPO_ROOT } = require('../src/paths')
+import * as path from 'path'
+import { REPO_ROOT } from '../src/paths'
 const WS = process.env.ND_WS || 'ws://127.0.0.1:8769'
 const LOG = process.env.ND_CAMPAIGN_LOG || path.join(REPO_ROOT, 'daemon/campaign.log')
 const only = process.argv[2] ? process.argv[2].split(',') : null

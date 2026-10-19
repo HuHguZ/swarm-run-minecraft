@@ -1,11 +1,6 @@
-import { campaignRequire, campaignScript } from './campaign-source'
+import { campaignSocket, campaignVm, rpcDone } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import vm from 'node:vm'
-import { cjsContext } from './cjs-context'
-import { transformSync } from 'esbuild'
 import { withClockFixture } from './clock-fixture'
 
 function fixture({ found = true, known = false, rodsFirst = false }: any = {}) {
@@ -15,35 +10,25 @@ function fixture({ found = true, known = false, rodsFirst = false }: any = {}) {
     inventory: { stone_pickaxe: 3, netherrack: 64, crafting_table: 1, oak_planks: 16, ...(rodsFirst ? { ender_pearl: 6 } : {}) },
     armor: {}, ...(rodsFirst ? { potions: { fire_resistance: 2 } } : {}) }
   const calls: any[] = []
-  class Socket {
-    listeners = new Map<string, (...args: any[]) => void>()
-    on(name, fn) { this.listeners.set(name, fn) }
-    send(raw) {
-      const { id, method, params } = JSON.parse(raw)
-      calls.push({ method, params })
-      let detail: any = {}
-      if (method === 'situation') detail = { pickLeft: 520, free: 30, foes: 0, surface: true }
-      if (method === 'fortress') {
-        if (found) places['бастион (ад)'] = at
-        detail = { found, seconds: 75, ...(found ? { bastion: { nearest: at } } : {}) }
-      }
-      if (method === 'recall') detail = { state: { places } }
-      if (method === 'observe') detail = { entities: [] }
-      if (method === 'mine') detail = { dug: 0, stopped: 'виден взрослый пиглин в зоне злости' }
-      queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true,
-        result: { status: 'done', detail, state, events: [] } })))
+  const socket = campaignSocket((method, params) => {
+    calls.push({ method, params })
+    let detail: any = {}
+    if (method === 'situation') detail = { pickLeft: 520, free: 30, foes: 0, surface: true }
+    if (method === 'fortress') {
+      if (found) places['бастион (ад)'] = at
+      detail = { found, seconds: 75, ...(found ? { bastion: { nearest: at } } : {}) }
     }
-    close() {}
-  }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : campaignRequire(name),
-    __dirname: path.resolve(__dirname, '..'), module: { exports: {} }, process: { argv: ['node', 'campaign.js'], env: {} },
-    console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, testState: state,
-    testSituation: { pickLeft: 520, free: 30, foes: 0, surface: true }, testKnown: known, testAt: at, testRodsFirst: rodsFirst }
-  vm.runInNewContext(campaignScript() +
+    if (method === 'recall') detail = { state: { places } }
+    if (method === 'observe') detail = { entities: [] }
+    if (method === 'mine') detail = { dug: 0, stopped: 'виден взрослый пиглин в зоне злости' }
+    return rpcDone(detail, state)
+  })
+  const context = campaignVm(
     `\nstate = testState; sit = testSituation;
     if (testKnown) known.bastions = [{ key: 'бастион (ад)', ...testAt }];
     if (testRodsFirst) known.fortress = { x: 100, y: 64, z: 100 };
-    module.exports = { executeStrategy, known, legacy: stageRun('bastion') };`, cjsContext(withClockFixture(context)))
+    module.exports = { executeStrategy, known, legacy: stageRun('bastion') };`, { socket, wrap: withClockFixture,
+      globals: { testState: state, testSituation: { pickLeft: 520, free: 30, foes: 0, surface: true }, testKnown: known, testAt: at, testRodsFirst: rodsFirst } })
   return { calls, known: context.module.exports.known,
     run: signal => context.module.exports.executeStrategy({ skill: 'findBastions', strategy: 'FindBastions', params: {} }, signal),
     legacy: context.module.exports.legacy }

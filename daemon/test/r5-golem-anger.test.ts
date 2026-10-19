@@ -1,8 +1,8 @@
 'use strict'
+import { bodySource } from './source-fixture'
 import { cjsContext } from './cjs-context'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { withClockFixture } from './clock-fixture'
@@ -34,7 +34,7 @@ function fixture (rememberAnger, canAim = false, fill = 64) {
     advance: async ms => { clock.t += ms },
     descend: async () => { digs.push('descend'); bot.entity.position.y = 64 },
     approachFixture: async () => false }
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
+  vm.runInNewContext(bodySource(filename) + `
     sleep = advance; visible = () => true; descendPillar = descend; approach = approachFixture;
   `, cjsContext(withClockFixture(ctx)))
   return { session, golem, digs, run: () => ctx.module.exports.golemKill(session, { aborted: false, onAbort: [] }, { timeoutSeconds: 20 }) }

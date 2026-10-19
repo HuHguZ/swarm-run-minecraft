@@ -8,7 +8,7 @@ import survival = require('../survival')
 import * as containers from '../containers'
 import nether = require('../nether')
 import obsidianMod = require('../obsidian')
-const HOLDING = ['chat', 'low_health', 'death', 'kicked', 'disconnected']
+import { HOLDING } from './shared'
 
 function parkour(this: any, p: Parameters<typeof navigate>[2] & { timeoutSeconds?: number }) {
   const timeoutMs = p.mode === 'route' || p.mode === 'options'

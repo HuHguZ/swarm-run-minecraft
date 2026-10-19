@@ -1,8 +1,8 @@
 'use strict'
 import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
@@ -20,7 +20,7 @@ function fixture (skyAt: (p: any) => number, open = true) {
       if (name === './movement') return { ...actual, inWater: () => false, stuckGuard: () => ({ promise: new Promise<void>(() => {}), stop () {} }), unstick: async () => {} }
       return actual
     } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(10.5, 100, 0.5), onGround: true }
   bot.world = { getColumnAt: () => ({ minY: -64, skyLightSections: Array(26).fill({}) }) }

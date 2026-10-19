@@ -1,8 +1,8 @@
 'use strict'
 import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
@@ -23,7 +23,7 @@ function fixture (move?: any, overrides: Record<string, any> = {}) {
         unstick: async () => { counts.shakes++ } }
       return actual
     } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nmodule.exports.roofCost = underRoofCost;', cjsContext(context))
+  vm.runInNewContext(bodySource(file) + '\nmodule.exports.roofCost = underRoofCost;', cjsContext(context))
   const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(70.5, 63, -70.5), onGround: true }
   // goto ждёт события pathfinder'а (movement.gotoGoal, по умолчанию с 02.10): setGoal → шаг → path_update с пустым

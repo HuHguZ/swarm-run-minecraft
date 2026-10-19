@@ -1,4 +1,5 @@
 import { campaignTs, setterSource } from './campaign-source'
+import { declSource, functionSource } from './source-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
 import * as fs from 'node:fs'
@@ -33,8 +34,8 @@ function routeFixture(swings = 261, moveCount = 3) {
   const moves = Array.from({ length: moveCount }, (_, index) => ({ kind: 'flat', from: start.offset(-index, 0, 0),
     to: start.offset(-index - 1, 0, 0), dig: [[start.x - index - 1, 20, start.z], [start.x - index - 1, 21, start.z]] }))
   const planned = { path: moves, ok: false, limit: false, more: false, steps: moves.length }
-  const source = fs.readFileSync(path.join(__dirname, '../src/nether-route.ts'), 'utf8')
-  const body = source.match(/^async function routeTo\b[\s\S]*?^}/m)?.[0]
+  // routeTo — в nether-route/route.ts (фасад + части): текст функции по имени из склейки частей.
+  const body = functionSource(path.join(__dirname, '../src/nether-route.js'), 'routeTo', { ts: true })
   assert.ok(body)
   const deps = {
     gameClock: { now: () => now }, gridOf: () => grid, C: { BLOCK: 1 }, feetCell: (current: typeof bot) => current.entity.position.floored(),
@@ -165,27 +166,25 @@ test('missing table costs four additional planks in both the budget and actual r
 })
 
 test('Bastion saves confirmed route cells and returns supplyNeeded before legacy fallback', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/bastion/bastion.ts'), 'utf8')
-  const start = source.indexOf('      if (nearG && NR.enabled()')
-  const end = source.indexOf('      if (!routed &&', start)
-  assert.ok(start >= 0 && end > start)
-  const compiled = esbuild.transformSync('async function probe() { ' + source.slice(start, end) + '\nreturn { fallback: true }\n}',
-    { loader: 'ts', format: 'cjs', target: 'node24' }).code
+  // Ход по сетке к известному золоту — routeToGold в bastion/run-approach.ts (подход — a, состояние вызова bastion() — bx).
+  const source = declSource(require.resolve('../src/bastion/run-approach'), 'routeToGold')
+  assert.ok(source.includes('async function routeToGold('))
   const f = routeFixture()
   const supplyNeeded = { pickSwings: 259, requiredSwings: 260, woodEquivalent: 8, requiredWood: 8, table: true }
   const own = new Set(['-399,20,388', '-399,21,388'])
   let saved = false; let receivedFlag = false
   const state: Record<string, any> = {}
-  const deps = { nearG: { x: -415, y: 36, z: 414 }, far1: 30, goal: { x: -415, y: 36, z: 414 }, KG0: [{ x: -415, y: 36, z: 414 }],
+  const a = { nearG: { x: -415, y: 36, z: 414 }, far1: 30, goal: { x: -415, y: 36, z: 414 }, KG0: [{ x: -415, y: 36, z: 414 }], routed: false,
     NR: { enabled: () => true, gridOf: () => ({}), async routeTo(_session: unknown, _ctl: unknown, params: { supplyReserve: boolean }) {
-      receivedFlag = params.supplyReserve; return { ok: false, why: 'supply', own, supplyNeeded } } },
-    bot: f.bot, session: f.session, ctl: { aborted: false }, st: state, deadline: 1000000, gameClock: { now: () => 0 },
+      receivedFlag = params.supplyReserve; return { ok: false, why: 'supply', own, supplyNeeded } } } }
+  const bx = { bot: f.bot, session: f.session, ctl: { aborted: false }, st: state, deadline: 1000000 }
+  const deps = { gameClock: { now: () => 0 },
     lavaWatched: async (_bot: unknown, ctl: unknown, run: (ctl: unknown) => Promise<unknown>) => run(ctl),
-    out: (stopped: string) => ({ stopped, supplyNeeded: state.supplyNeeded }), log() {} }
-  const run = new Function('require', ...Object.keys(deps), 'let routed = false;\n' + compiled + '\nreturn probe')(
+    report: (_bx: unknown, stopped: string) => ({ stopped, supplyNeeded: state.supplyNeeded }), log() {} }
+  const routeToGold = new Function('require', ...Object.keys(deps), source + '\nreturn routeToGold')(
     (name: string) => name.endsWith('sealed') ? { exposure: () => [] } : name.endsWith('tunnel') ? { rememberOwn: () => { saved = true } } : require(name),
     ...Object.values(deps))
-  const result = await run()
+  const result = (await routeToGold(bx, a)) || { fallback: true }
   assert.equal(receivedFlag, true)
   assert.equal(result.fallback, undefined)
   assert.equal(result.supplyNeeded, supplyNeeded)

@@ -13,7 +13,7 @@ import { quickHunt } from '../food'
 import { routeMod, routeAvoid, routeDoneIds, routeFails, routeInfoGet, rlog, routeBlocks, routeFood, routeHunt,
   routeSleep, routeBedLate, routeRecover, routeHealToEnter, routeStep, routeSkills } from '../route-wiring'
 import { enterNether } from '../nether-trip'
-const gameClock: typeof import('../../src/game-clock') = require('../../src/game-clock')
+import * as gameClock from '../../src/game-clock'
 let routeDone = false
 let routeT0 = 0
 defStage('route', () => ROUTE && !routeDone && dim() === 'overworld' && (!known.portal || !routeDoneIds.has('enter')) && !!routeInfoGet(), async () => {

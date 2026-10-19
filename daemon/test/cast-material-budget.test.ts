@@ -1,13 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
 import { cjsContext } from './cjs-context'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
-const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/cast1.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+// cast1 — фасад + части (src/cast1/**) одной областью видимости (подмены по spec доходят до частей).
+const source = bodySource(path.join(__dirname, '../src/cast1.js'))
 function fixture(carried = 0) {
   const blocks = new Map<string, string>(), reads: string[] = []
   const key = p => `${p.x},${p.y},${p.z}`

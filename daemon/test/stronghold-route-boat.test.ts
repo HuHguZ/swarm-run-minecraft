@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { astar } from '../src/ride'
 import { planBoatRoute } from '../src/boat-route-plan'
+import { bodySource } from './source-fixture'
 
 function pondFixture (ox, oz) {
   const wet = new Set()
@@ -53,7 +54,8 @@ function boatCompletion (beached, stay) {
     setTimeout, clearTimeout, Buffer, testRide: async (session, ctl, boat, target, report) => { report.beached = beached; return true },
     testDismount: async () => { dismounted++; return true }, testPickup: async () => {}
   }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nrideBoat = testRide; dismount = testDismount; pickUpBoat = testPickup; sleep = async () => {}; module.exports.testRunBoat = runBoat;', cjsContext(context))
+  // ride — фасад + части (src/ride/**) одной областью видимости: подмены rideBoat/dismount/pickUpBoat/sleep доходят до runBoat.
+  vm.runInNewContext(bodySource(file) + '\nrideBoat = testRide; dismount = testDismount; pickUpBoat = testPickup; sleep = async () => {}; module.exports.testRunBoat = runBoat;', cjsContext(context))
   const boat = { id: 17, name: 'oak_boat', position: new Vec3(451, 62, -881) }
   const bot = { vehicle: boat, entity: { position: boat.position.clone() }, inventory: { items: () => [] } }
   return context.module.exports.testRunBoat({ bot }, { aborted: false }, { kind: 'boat', mode: 'go', stay }, {} as Record<string, any>,

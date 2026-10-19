@@ -4,7 +4,9 @@ import path = require('node:path')
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
 import ts from '@typescript/typescript6'
+import * as vm from 'node:vm'
 import { bodySource, moduleSourceTs } from './source-fixture'
+import { cjsContext } from './cjs-context'
 
 // Кампания для тестов — одной областью видимости: daemon/campaign.ts вместе с частями из daemon/campaign/, склеенными
 // source-fixture в порядке исполнения (import → текст части, export снят, spec пересчитаны от daemon/). Тесты исполняют
@@ -71,4 +73,69 @@ export function withSetters<T extends Record<string, any>> (ctx: T): T {
 export function setterSource (...names: string[]): string {
   const pairs: Array<[string, string]> = names.length ? names.map(name => [`set${name[0]!.toUpperCase()}${name.slice(1)}`, name]) : setters()
   return pairs.map(([setter, name]) => `function ${setter} (v) { return (${name} = v) }`).join('\n')
+}
+
+// ---------------------------------------------------------------- кампания в vm (общий загрузчик тестов)
+// Сокет демона для склейки в vm: send отвечает result(method, params) следующей микрозадачей, как сеть. result —
+// результат RPC целиком ({ status, detail, state, events }; rpcDone — обычный «done»), считается в момент send, а в
+// JSON — уже в микрозадаче (state уходит каким стал к ответу). Без result — сокет только с on(): кампания его не зовёт.
+export type RpcReply = (method: string, params: any) => any
+export function campaignSocket (result?: RpcReply): any {
+  if (!result) return class Socket { on () {} }
+  return class Socket {
+    listeners = new Map<string, (...args: any[]) => void>()
+    on (name: string, fn: (...args: any[]) => void) { this.listeners.set(name, fn) }
+    send (raw: string) {
+      const { id, method, params } = JSON.parse(raw)
+      const reply = result(method, params)
+      queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true, result: reply })))
+    }
+    close () {}
+  }
+}
+export const rpcDone = (detail: any, state: any): any => ({ status: 'done', detail, state, events: [] })
+
+export interface CampaignVmOptions {
+  socket?: any                                     // класс для require('ws'); по умолчанию — campaignSocket()
+  log?: (line: string) => void                     // fs.appendFileSync журнала кампании
+  require?: (name: string) => any                  // свои модули; undefined — настоящий (base или campaignRequire)
+  base?: NodeJS.Require                            // require прочих модулей (другой корень для A/B)
+  dirname?: string
+  env?: Record<string, any>
+  argv?: string[]                                  // process.argv целиком
+  date?: any                                       // Date контекста (часы теста)
+  console?: any
+  globals?: Record<string, any>                    // прочие имена контекста (testState, fixture, …)
+  source?: string                                  // снимок кампании (CAMPAIGN_TEST_SOURCE)
+  wrap?: (context: any) => any                     // обёртка контекста (withClockFixture)
+}
+
+// Кампания одной областью видимости в vm с внешней границей тестов: сокет вместо демона, журнал в память, свои модули.
+// append — код после склейки (подмены привязок, module.exports = { … }). Возвращает контекст (module.exports — его).
+export function campaignVm (append: string, o: CampaignVmOptions = {}): any {
+  const base = o.base || campaignRequire
+  const context: any = {
+    require: (name: string) => name === 'ws' ? (o.socket || campaignSocket()) : name === 'fs' ? { appendFileSync (_file: string, line: string) { o.log?.(line) } }
+      : (o.require && o.require(name)) ?? base(name),
+    __dirname: o.dirname ?? path.dirname(CAMPAIGN), module: { exports: {} as Record<string, any> },
+    process: { argv: o.argv || ['node', 'campaign.js'], env: o.env || {} },
+    console: o.console || { log () {}, error () {} }, setTimeout, Date: o.date || Date, queueMicrotask, ...o.globals
+  }
+  vm.runInNewContext(campaignScript(o.source) + append, cjsContext(o.wrap ? o.wrap(context) : context))
+  return context
+}
+
+// Часы теста для Date контекста: fakeDate — только Date.now() = clock.t; clockDate — и new Date() без аргументов.
+export function fakeDate (clock: { t?: number }): any { return class extends Date { static now () { return clock.t } } }
+export function clockDate (clock: { t?: number }): any {
+  return class Time extends Date { constructor (...args: any[]) { super(...((args.length ? args : [clock.t]) as [any])) } static now () { return clock.t } }
+}
+
+// Ответ «как демон» для загрузчиков с handle: situation и status — свои, остальное — handle(method, params);
+// detail.rpcResult — результат RPC целиком (отказ, прерывание).
+export function daemonReply (state: any, situation: any, handle: RpcReply, onStatus?: (() => any) | null): RpcReply {
+  return (method, params) => {
+    const detail = method === 'situation' ? situation : method === 'status' ? ((onStatus && onStatus()) || {}) : handle(method, params)
+    return detail?.rpcResult || rpcDone(detail, state)
+  }
 }

@@ -10,7 +10,7 @@ import { act } from './act'
 import { craft, smeltAll } from './kit'
 import { structureValue } from './scout'
 import { graphFact, intelligence } from './strategy-bridge'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 let castKitSupplyFailure = ''
 // A carried second bucket costs no extra iron; it can rescue a shore the one-bucket geometry cannot use.
 async function castForKit (params) {

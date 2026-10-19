@@ -1,13 +1,9 @@
 'use strict'
-import { campaignRequire, campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignSocket, campaignVm, rpcDone } from './campaign-source'
 // S8d (07.10): верхний мир вслепую — честная лава (замечание «а»), озёра лавы, цена копки в воде и ночного отрезка («г»),
 // риск голема против риска копки («д»), шаг «пещера» (железо в стенах пещеры по виду), explore без пути во все стороны.
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
-import path = require('node:path')
-import * as vm from 'node:vm'
 import route = require('../src/route')
 import { withClockFixture } from './clock-fixture'
 
@@ -134,27 +130,12 @@ test('scoutLava с озёрами: одиночная лава — не успе
   assert.ok(ctx.routeInfoV.sky && ctx.routeInfoV.sky.x <= -77 && ctx.routeInfoV.sky.y === 66, JSON.stringify(ctx.routeInfoV.sky))
 })
 
-// Кампания в песочнице (как test/campaign.test.ts): RPC вместо Minecraft.
+// Кампания в песочнице (как test/campaign-fixture.ts): RPC вместо Minecraft.
 function campaign (state, situation, handle: (m: string, p: any) => any, env: Record<string, any> = {}) {
-  class Socket {
-    declare listeners: any
-    constructor () { this.listeners = new Map() }
-    on (name, fn) { this.listeners.set(name, fn) }
-    send (raw) {
-      const { id, method, params } = JSON.parse(raw)
-      const detail = method === 'situation' ? situation : method === 'status' ? {} : handle(method, params)
-      queueMicrotask(() => this.listeners.get('message')(JSON.stringify({ id, ok: true, result: { status: 'done', detail, state, events: [] } })))
-    }
-    close () {}
-  }
-  const context: Record<string, any> = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : campaignRequire(name),
-    __dirname: path.resolve(__dirname, '..'), module: { exports: {} },
-    process: { argv: ['node', 'campaign.js'], env }, console: { log () {}, error () {} }, setTimeout, Date, queueMicrotask
-  }
-  vm.runInNewContext(campaignScript() + `
+  const socket = campaignSocket((method, params) => rpcDone(method === 'situation' ? situation : method === 'status' ? {} : handle(method, params), state))
+  const context = campaignVm(`
     module.exports = { act, known, init: () => { state = testState; sit = testSituation; } }
-  `, cjsContext(withClockFixture(Object.assign(context, { testState: state, testSituation: situation }))))
+  `, { socket, env, wrap: withClockFixture, globals: { testState: state, testSituation: situation } })
   context.module.exports.init()
   return context.module.exports
 }

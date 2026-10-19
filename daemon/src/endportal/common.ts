@@ -1,10 +1,10 @@
 'use strict'
 // Крепость и портал в Край (endportal.ts): общее — место в памяти, кирпич крепости, честный спуск, ходьба, чешуйницы, видимые рамки.
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
-const { stuckGuard }: typeof import('../movement') = require('../movement')
-const { seesBlock }: typeof import('../sight') = require('../sight')
+import * as gameClock from '../game-clock'
+import { Vec3 } from 'vec3'
+import { goals } from 'mineflayer-pathfinder'
+import { stuckGuard } from '../movement'
+import { seesBlock } from '../sight'
 
 const PLACE = 'крепость'
 const ROOM = 'портал в Край'

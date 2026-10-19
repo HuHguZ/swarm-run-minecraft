@@ -1,41 +1,16 @@
 'use strict'
-import { campaignRequire, campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignSocket, campaignVm, daemonReply, fakeDate } from './campaign-source'
 // Ночь не пережидать (ND_NIGHT_DOWN, поток survival 02.10): нора — вход вниз, ожидание только лечащее или аварийное.
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
-import path = require('node:path')
-import * as vm from 'node:vm'
 import { withClockFixture } from './clock-fixture'
 
 // Настоящие функции кампании, внешняя граница — RPC вместо живого Minecraft.
 // Загрузчик не открывает сокет, не пишет журнал и не запускает кампанию сам.
 // Часы кампании для тестов политики повторов: Date.now() — clock.t, «ожидание» двигает его вперёд.
-function fakeDate (clock) { return class extends Date { static now () { return clock.t } } }
 
 function campaign (state, situation, handle: (...args: any[]) => any = () => ({} as Record<string, any>), { logs = null, env = {} as Record<string, any>, argv = [], clock = null, onStatus = null }: any = {} as Record<string, any>) {
-  class Socket {
-  declare listeners: any
-
-    constructor () { this.listeners = new Map() }
-    on (name, fn) { this.listeners.set(name, fn) }
-    send (raw) {
-      const { id, method, params } = JSON.parse(raw)
-      const detail = method === 'situation' ? situation : method === 'status' ? ((onStatus && onStatus()) || {} as Record<string, any>) : handle(method, params)
-      queueMicrotask(() => this.listeners.get('message')(JSON.stringify({
-        id, ok: true, result: detail?.rpcResult || { status: 'done', detail, state, events: [] }
-      })))
-    }
-    close () {}
-  }
-  const context = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync (file, line) { if (logs) logs.push(String(line)) } } : campaignRequire(name),
-    __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js', ...argv], env },
-    console: { log () {}, error () {} }, setTimeout, Date: clock ? fakeDate(clock) : Date, queueMicrotask
-  }
-  vm.runInNewContext(campaignScript(process.env.CAMPAIGN_TEST_SOURCE) + `
+  const context = campaignVm(`
     module.exports = { act, refresh, readMemory, nextBastion, died: () => died, stage: name => { stage = name }, craft, nightGuard, nightGuardBody, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, lightUp, known, makeBed,
       fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
       runStage: name => STAGES.find(s => s.name === name).run(),
@@ -50,7 +25,9 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
         if (h.recoverGuard) recoverGuard = h.recoverGuard; if (h.toSurface) toSurface = h.toSurface; },
       init: () => { state = testState; sit = testSituation; }
     }
-  `, cjsContext(withClockFixture(Object.assign(context, { testState: state, testSituation: situation }))))
+  `, { socket: campaignSocket(daemonReply(state, situation, handle, onStatus)), log: line => { if (logs) logs.push(String(line)) },
+    argv: ['node', 'campaign.js', ...argv], env, date: clock ? fakeDate(clock) : Date, wrap: withClockFixture,
+    globals: { testState: state, testSituation: situation }, source: process.env.CAMPAIGN_TEST_SOURCE })
   context.module.exports.init()
   return context.module.exports
 }

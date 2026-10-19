@@ -1,3 +1,4 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -10,7 +11,8 @@ import * as esbuild from 'esbuild'
 function sourceModule(name: string, overrides: Record<string, unknown> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file), module = { exports: {} as Record<string, any> }
-  const code = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  // tactics/minecraft — фасад и части tactics/minecraft/ одной областью (подмены по spec доходят до частей)
+  const code = name === 'tactics/minecraft' ? bodySource(file) : esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
   vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports

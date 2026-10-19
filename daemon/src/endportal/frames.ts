@@ -1,13 +1,13 @@
 'use strict'
 // Крепость и портал в Край (endportal.ts): рамки: глаза в рамки, спавнер, вход в портал (mode=fill).
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
-const { sleep, xyz }: typeof import('../movement') = require('../movement')
-const { itemNamed, countOf, equipBestTool }: typeof import('../items') = require('../items')
-const { eyePos }: typeof import('../perception') = require('../perception')
-const worlds: typeof import('../worlds') = require('../worlds')
-const pick: typeof import('../pick') = require('../pick')
+import * as gameClock from '../game-clock'
+import { Vec3 } from 'vec3'
+import { goals } from 'mineflayer-pathfinder'
+import { sleep, xyz } from '../movement'
+import { itemNamed, countOf, equipBestTool } from '../items'
+import { eyePos } from '../perception'
+import * as worlds from '../worlds'
+import * as pick from '../pick'
 import { ROOM, clamp, placeOf, savePlace, walkTo, visibleOf } from './common'
 
 const REACH = 4.5

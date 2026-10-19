@@ -36,7 +36,7 @@ function reachTo (bot, e) {
   return Math.hypot(eye.x - cx, eye.y - cy, eye.z - cz)
 }
 
-const seesMob = (bot, e) => canSeePoint(bot, e.position.offset(0, (e.height || 1.8) * 0.55, 0))
+function seesMob (bot, e) { return canSeePoint(bot, e.position.offset(0, (e.height || 1.8) * 0.55, 0)) }
 // S1f (аудит S10 №20): ифриты, стержни и стрелы — только известные телу (видимые/слышимые: eyes.knownEntities), не все сущности слежения.
 const ents = (bot): any[] => (require('../perception/eyes') as typeof import('../perception/eyes')).knownEntities(bot)
 

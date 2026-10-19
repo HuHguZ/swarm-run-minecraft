@@ -1,33 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { runInNewContext } from 'node:vm'
 import { createRecovery } from '../src/pvp/recovery'
-import { cjsContext } from './cjs-context'
+import { NEXT, pvpParts } from './pvp-parts'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import * as clock from '../src/game-clock'
 import * as tempo from '../src/tempo'
 import * as ranged from '../src/ranged'
-import { transformSync } from 'esbuild'
 
-function callerBlocks () {
-  const source = readFileSync(resolve(__dirname, '../src/pvp.ts'), 'utf8')
-  let medicalAt = source.indexOf("    if (safety.action === 'recover' && safeMedical")
-  const flagAt = source.lastIndexOf('    let punishAfterRecovery = false', medicalAt)
-  if (flagAt >= medicalAt - 80 && flagAt >= 0) medicalAt = flagAt
-  const medicalEnd = source.indexOf('    const their = usingItem', medicalAt)
-  const crystalAt = source.indexOf("    if (prof.player && blockName(bot, me.floored()) !== 'cobweb'")
-  const crystalEnd = source.indexOf('    const dressInputs = ', crystalAt) >= 0 ? source.indexOf('    const dressInputs = ', crystalAt) : source.indexOf("    if (ready('dressMid')", crystalAt)
-  const rebuffAt = source.indexOf('    if (!punishAfterRecovery && prof.player', crystalEnd)
-  const rebuffEnd = source.indexOf('    if (prof.player && duo.active())', rebuffAt)
-  const healAt = source.indexOf('    if (!punishAfterRecovery && (hp <= healAt', rebuffEnd)
-  const healEnd = source.indexOf('    const canHeal =', healAt)
-  for (const [start, end] of [[medicalAt, medicalEnd], [crystalAt, crystalEnd], [rebuffAt, rebuffEnd], [healAt, healEnd]]) {
-    assert.ok(start >= 0 && end > start, 'the actual ordered caller block is present')
-  }
-  return { medical: source.slice(medicalAt, medicalEnd), crystal: source.slice(crystalAt, crystalEnd),
-    rebuff: source.slice(rebuffAt, rebuffEnd), heal: source.slice(healAt, healEnd) }
+// Настоящие ступени хода в прежнем порядке: лечение по безопасности, кристаллы, баффы, лечение (turn-heal, turn-blast).
+function callerBlocks (context) {
+  const stages = pvpParts(context, ['turn-heal', 'turn-blast'], ['recoverTurn', 'crystalTurn', 'rebuffTurn', 'healTurn'])
+  for (const stage of Object.values(stages)) assert.equal(typeof stage, 'function', 'the actual ordered caller block is present')
+  return { medical: stages.recoverTurn, crystal: stages.crystalTurn, rebuff: stages.rebuffTurn, heal: stages.healTurn }
 }
 
 const turn = () => new Promise<void>(done => setImmediate(done))
@@ -187,7 +171,6 @@ test('punish timing uses actual charge, movement, cooldown and throwable mechani
 })
 
 test('actual medical caller reaches attack after a punish yield and respects abort or death during cleanup', async () => {
-  const { medical } = callerBlocks()
   for (const outcome of ['attack', 'abort', 'death']) {
   const w = world(); const f = fighter(w.game, { loaded: true, arrows: true }); let attacks = 0
   const context: any = { safety: { action: 'recover' }, safeMedical: true, medical: f.potion,
@@ -200,7 +183,11 @@ test('actual medical caller reaches attack after a punish yield and respects abo
     drink: f.recovery.drink, pvpSkills: f.recovery, punishable: f.recovery.punishable, TICK_MS: 50,
     attack () { assert.equal(f.activeAt(), Infinity); assert.equal(f.bot.inventory.slots[45], f.shield); attacks++ } }
   try {
-    const pending = runInNewContext(`(async () => { for (let attempt = 0; attempt < 2 && !ctl.aborted && bot.health > 0; attempt++) { ${medical}; attack(); break } })()`, cjsContext(context))
+    const { medical } = callerBlocks(context)
+    const pending = (async () => { for (let attempt = 0; attempt < 2 && !context.ctl.aborted && context.bot.health > 0; attempt++) {
+      if (await medical(context, context) === NEXT) continue
+      context.attack(); break
+    } })()
     await turn(); await w.step(6)
     f.observe(() => ({ since: w.game.now() - 150, left: 850 }))
     await w.finish(pending)
@@ -211,11 +198,16 @@ test('actual medical caller reaches attack after a punish yield and respects abo
 })
 
 test('actual ordered medical, crystal, rebuff and heal callers reserve one attack pass without suppressing defense', async () => {
-  const blocks = callerBlocks()
-  const script = transformSync(`(async () => { for (let pass = 0; pass < 1 && !ctl.aborted && bot.health > 0; pass++) {
-    ${blocks.medical}\n${blocks.crystal}\n${blocks.rebuff}\n${blocks.heal}
-    attack()
-  } })()`, { loader: 'ts', target: 'node22' }).code
+  const script = context => {
+    const blocks = callerBlocks(context)
+    return (async () => { for (let pass = 0; pass < 1 && !context.ctl.aborted && context.bot.health > 0; pass++) {
+      if (await blocks.medical(context, context) === NEXT) continue
+      if (await blocks.crystal(context, context) === NEXT) continue
+      if (await blocks.rebuff(context, context) === NEXT) continue
+      if (await blocks.heal(context, context) === NEXT) continue
+      context.attack()
+    } })()
+  }
   for (const alternative of ['crystal-eat', 'rebuff', 'heal', 'defense']) {
     const w = world(); const f = fighter(w.game, { loaded: true, arrows: true })
     const seen = { attacks: 0, crystalEat: 0, buffs: 0, heals: 0, defenses: 0 }
@@ -243,7 +235,7 @@ test('actual ordered medical, crystal, rebuff and heal callers reserve one attac
       attack: () => { assert.equal(f.activeAt(), Infinity); assert.equal(f.bot.inventory.slots[45], f.shield); seen.attacks++ }
     }
     try {
-      const pending = runInNewContext(script, cjsContext(context))
+      const pending = script(context)
       await turn(); await w.step(6)
       f.observe(() => ({ since: w.game.now() - 150, left: 850 }))
       await w.finish(pending)
@@ -251,7 +243,7 @@ test('actual ordered medical, crystal, rebuff and heal callers reserve one attac
       assert.equal(f.starts(), 1); assert.equal(f.potion.count, 3)
       if (alternative !== 'defense') {
         context.safeMedical = false
-        await w.finish(runInNewContext(script, cjsContext(context)))
+        await w.finish(script(context))
         assert.equal(seen.crystalEat + seen.buffs + seen.heals, 1, 'the next pass can recover again without a cooldown')
       }
     } finally { w.close() }

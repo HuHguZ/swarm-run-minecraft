@@ -9,7 +9,7 @@ import { have, y, dim, LOGS, COBBLE, RAW, FOOD, PICK_IRON, planksFor, portalFar,
 import { sense, refresh } from './observe'
 import { canWorkAtNight } from './stages/table'
 import { act } from './act'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 async function eatTo (target = 18, interrupted = () => false) {
   // Each iteration must confirm a rising bar or a spent item; delayed slot ACKs are not extra bites.
   while (!died && !interrupted() && (state.food ?? 20) < target && (have(FOOD) || have(RAW))) {

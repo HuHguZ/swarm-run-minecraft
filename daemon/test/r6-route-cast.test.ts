@@ -1,11 +1,8 @@
 'use strict'
-import { campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignVm } from './campaign-source'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
-import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
 
 function load (inventory: any = {} as Record<string, any>, env: any = {} as Record<string, any>, hooks: any = {} as Record<string, any>) {
@@ -15,14 +12,9 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
   const logs = []
   const file = path.resolve(__dirname, '../campaign.js')
   const local = createRequire(file)
-  class Socket { on () {} }
   const fixture: any = { state, calls, logs, hooks }
   const route = { ...local('./src/route'), plan: (info, opts) => fixture.plan || local('./src/route').plan(info, opts) }
-  const context = { require: n => n === 'ws' ? Socket : n === 'fs' ? { appendFileSync () {} } : n === './src/route' ? route : local(n),
-    __dirname: path.dirname(file), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: { ND_ROUTE: '1', ND_OW_DEEP: '1', ...env } },
-    console: { log: (...args) => logs.push(args.join(' ')), error () {} }, setTimeout, Date, fixture }
-  vm.runInNewContext(campaignScript() + `
+  const context = campaignVm(`
     state = fixture.state; sit = { surface: false, night: false, inWater: false, foes: 0 };
     refresh = async () => {}; sense = async () => {}; readMemory = async () => {};
     nightGuard = async () => {}; recoverGuard = async () => {}; unclutter = async () => {};
@@ -61,7 +53,8 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
         return fixture.calls.find(([m]) => m === 'deadline')[1].ms;
       }
     };
-  `, cjsContext(context))
+  `, { require: n => n === './src/route' ? route : undefined, base: local, dirname: path.dirname(file),
+    env: { ND_ROUTE: '1', ND_OW_DEEP: '1', ...env }, console: { log: (...args) => logs.push(args.join(' ')), error () {} }, globals: { fixture } })
   return { ...context.module.exports, state, calls, logs }
 }
 

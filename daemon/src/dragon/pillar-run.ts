@@ -14,4 +14,5 @@ export { ocLanding, ocOwnClick, ocTakeoffRun, ocT1, seeStation } from './pillar-
 export { doubleRun, doubleRunAt, tryC, bedsPerch } from './pillar-run/beds-perch'
 export { standAt, placeFrom, placeHigh, runnerClean, pillarBuild, pillarEnter } from './pillar-run/pillar-build'
 export { clickLead, pillarRun } from './pillar-run/runner'
-export { stationBuild, stationStep, fightDragon } from './pillar-run/fight'
+export { stationBuild, stationStep } from './pillar-run/station'
+export { fightDragon } from './pillar-run/fight'

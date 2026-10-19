@@ -1,14 +1,17 @@
 import { recoveryDecision } from './recovery-graph'
 import { consumeHand } from './hand-policy'
 import { canSurvivePearl } from '../throw'
-import bow = require('../bow')
+import * as bow from '../bow'
 
 type CombatContext = Record<string, any>
 
 export function createRecovery(ctx: CombatContext) {
+  return { ...createConsume(ctx), ...createEscape(ctx) }
+}
+
+// Еда и зелья: окно наказания, съесть и выпить с отказом при опасности.
+function createConsume (ctx: CombatContext) {
 const failedConsumes = new Map<string, any>()
-let failedPearl = null
-let failedFarCharge = null
 const consumeInputs = (item, opt) => [item.name, item.slot, item.count, /potion$/.test(item.name) ? ctx.potionOf(item) : null,
     ctx.tt.safe(ctx.tempo.consumeMs(item.name), { fortSealed: ctx.fortSealed() }).ok,
     !!ctx.fortSealed(), !!ctx.maceNow(), !!ctx.bot.entity.onGround, !!ctx.bot.entity.elytraFlying,
@@ -177,6 +180,13 @@ const drink = async (item, what, abortIf = null, opt: any = {}) => {
     if (role === 'heal' || role === 'regen') ctx.st.healed.push(what)
     return true
   }
+return { punishable, eatHeld, consumeItem, drink }
+}
+
+// Жемчуг (бросок и уход), баффы, разгон копьём издалека.
+function createEscape (ctx: CombatContext) {
+let failedPearl = null
+let failedFarCharge = null
 
 const throwPearl = async (target, options: any = {}) => {
     const pearl = ctx.findItem(ctx.bot, i => i.name === 'ender_pearl')
@@ -267,5 +277,5 @@ const spearChargeFar = async (r0, d0) => {
     ctx.used(ch.hit ? `разгон копьём — попал (${hpS != null && ctx.healthOf(ctx.bot, ctx.entity) != null ? Math.round((hpS - ctx.healthOf(ctx.bot, ctx.entity)) * 10) / 10 : '?'} хп)` : `разгон копьём — мимо (${ch.why || 'время'})`)
     return true
   }
-return { punishable, eatHeld, consumeItem, drink, throwPearl, escapePearl, buffUp, spearChargeFar }
+return { throwPearl, escapePearl, buffUp, spearChargeFar }
 }

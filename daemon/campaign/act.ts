@@ -18,7 +18,7 @@ import { eatTo, ensurePick } from './kit'
 import { toSurface } from './underground'
 import { earlyShield } from './gear'
 import { routeMod, ROUTE_SLEEP, routeSleep } from './route-wiring'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 const REFUGE_PASS = new Set(['status', 'situation', 'recall', 'remember', 'stop', 'connect', 'disconnect', 'play_mode'])
 const NO_REPEAT = new Set(['wait', 'flee', 'fight', 'refuge', 'shelter', 'sleep', 'eat', 'escape_fire', 'surface'])
 

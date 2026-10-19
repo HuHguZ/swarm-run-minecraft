@@ -13,7 +13,7 @@ import { goToward, returnFromNether } from './travel'
 import { eatTo, craft } from './kit'
 import { cook } from './food'
 import { intelligence } from './strategy-bridge'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 async function enterNether () {
   if (!lighter()) log('огнива нет и сделать не из чего — вхожу без него (погасший портал = возврат через кровать)')
   await refresh()

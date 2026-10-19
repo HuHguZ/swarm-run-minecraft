@@ -4,16 +4,15 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 import path = require('node:path')
 import * as vm from 'node:vm'
-import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { bodySource } from './source-fixture'
+import { stubRequire } from './stub-require'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // A deliberately small physics oracle: SmallFireball 5 HP, shield activation 5 ticks,
 // and three arrivals separated by 6 ticks (BlazeAttackGoal). No farm process.
 async function exchange (enabled = true, haveShield = true, corner = false) {
   const file = process.env.BLAZE_TEST_FILE || path.join(__dirname, '../src/blaze.js')
-  const req = createRequire(file)
   let now = 100000
   let useSince = null
   let lost = 0
@@ -53,22 +52,25 @@ async function exchange (enabled = true, haveShield = true, corner = false) {
     close () {}, report: () => ({}) }
   const radar: any = { untilDanger: () => Infinity, charged: () => false, stop () {}, stats: {},
     incoming: () => shots.filter(s => !s.done && !(corner && bot.entity.position.x >= 1)).map(s => ({ from: s.from, eta: s.at - now, id: s.id })) }
+  // Заглушки по spec (stubRequire сверяет и разрешённый путь: части blaze/hold/* просят '../../combat'); unmatched() —
+  // заглушки, которые ни разу не сработали.
+  const req = stubRequire(file, {
+    './combat': { makeShield: () => guard, shieldUp: () => useSince !== null,
+      retreat: async () => ({ ok: false }) },
+    './walkable': { walkable: () => [], standable: () => true },
+    './sight': { seesBlock: () => corner },
+    './sealed': { stepMove: async (_b, _c, step) => { calls.push('corner'); bot.entity.position = step.to.offset(0.5, 0, 0.5); return { ok: true } } },
+    './flee': { hostilesAround: () => [{ e: enemy }], smartFlee: async () => ({}) }
+  }, {
+    './game-clock': actual => ({ ...actual, now: () => now }),
+    './movement': actual => ({ ...actual, sleep: advance }),
+    './combat-safety': actual => ({ ...actual, recover: async () => { calls.push('recover'); ctl.aborted = true; return { rested: true } }, watch: () => ({ close () {}, check: ({ phase }) => ({
+      action: phase === 'start' || continues++ === 0 ? 'fight' : 'recover', reason: 'heal', healable: true
+    }) }) })
+  })
   const context: any = { module: { exports: {} }, console: { log () {} }, Date, setTimeout, clearTimeout,
     process: { env: { ND_BLAZE_WORLD_STATE: enabled ? '1' : '0', ND_GUARD: '0', ND_NE_ROUTE: '0' } }, bot, calls, radar,
-    require: name => {
-      if (name === './game-clock') return { ...req(name), now: () => now }
-      if (name === './movement') return { ...req(name), sleep: advance }
-      if (name === './combat') return { makeShield: () => guard, shieldUp: () => useSince !== null,
-        retreat: async () => ({ ok: false }) }
-      if (name === './walkable') return { walkable: () => [], standable: () => true }
-      if (name === './sight') return { seesBlock: () => corner }
-      if (name === './sealed') return { stepMove: async (_b, _c, step) => { calls.push('corner'); bot.entity.position = step.to.offset(0.5, 0, 0.5); return { ok: true } } }
-      if (name === './combat-safety') return { ...req(name), recover: async () => { calls.push('recover'); ctl.aborted = true; return { rested: true } }, watch: () => ({ close () {}, check: ({ phase }) => ({
-        action: phase === 'start' || continues++ === 0 ? 'fight' : 'recover', reason: 'heal', healable: true
-      }) }) }
-      if (name === './flee') return { hostilesAround: () => [{ e: enemy }], smartFlee: async () => ({}) }
-      return req(name)
-    },
+    require: req,
     testDig: async () => { digAt = now; await advance(1200); ctl.aborted = true; return { ok: false } }
   }
   vm.runInNewContext(bodySource(file) + `
@@ -80,6 +82,8 @@ async function exchange (enabled = true, haveShield = true, corner = false) {
   `, cjsContext(context))
   await context.module.exports.testHold({ bot }, ctl, { spawner: null, want: 7, deadline: now + 10000,
     dead: new Set(), setPhase: p => calls.push(p), restAt: 12, bailAt: 6, p: { box: false }, t0: now })
+  // './sealed' (stepMove) is reached only on the corner path; the corner test checks it through calls.
+  assert.deepEqual(req.unmatched().filter(k => k !== './sealed'), [], 'every stub reaches the decomposed spawner loop')
   if (corner) assert.ok(calls.includes('recover'), calls.join(','))
   else assert.ok(digAt !== null, 'the skill still attempts recovery')
   return { lost, digAt, calls, helper: context.module.exports.testShieldPrice, bot, enemy, radar, guard }

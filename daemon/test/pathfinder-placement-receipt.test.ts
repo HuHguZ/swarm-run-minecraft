@@ -1,20 +1,13 @@
 'use strict'
+import * as tickFixture from './tick-plugins-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
-import path = require('node:path')
-import { createRequire } from 'node:module'
-import { transformSync } from 'esbuild'
 import { Vec3 } from 'vec3'
 import Move = require('mineflayer-pathfinder/lib/move')
 import { Movements, goals } from 'mineflayer-pathfinder'
 
-const fixtureFile = path.join(__dirname, 'tick-plugins.test.ts')
-const fixtureSource = fs.readFileSync(fixtureFile, 'utf8').split('\ntest(')[0]
-const helpers: any = { exports: {} }
-new Function('require', 'module', 'exports', transformSync(fixtureSource + '\nmodule.exports = { install, testClock, block }', {
-  loader: 'ts', format: 'cjs', target: 'node22'
-}).code)(createRequire(fixtureFile), helpers, helpers.exports)
+// Общий стенд установленных библиотек (tick-plugins-fixture) без его тестов.
+const helpers: any = { exports: tickFixture }
 
 async function placement (useOne = false) {
   const { install, testClock, block } = helpers.exports

@@ -24,7 +24,9 @@ import { dayLavaStep, lavaLookout, skyLavaLook, lavaAtSeenRuins, structureValue,
 import { routeMod, routeStep } from './route-wiring'
 import { enterNether, replenishNetherSupply } from './nether-trip'
 import { checkEndEntry, SH_NETHER, canLink } from './endgame'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
+import { createCampaignIntelligence } from '../src/campaign/intelligence'
+import type { ExecutionResult } from '../src/core/environment'
 const graphFacts: Record<string, import('../src/core/world-state').Fact> = {}
 const graphFact = (name: string, value: import('../src/core/world-state').FactValue | null, source: import('../src/core/world-state').FactSource = 'observed') => { graphFacts[name] = { status: value === null ? 'unknown' : 'known', value, source, at: gameClock.now(), confidence: value === null ? 0 : 1 } }
 let strategyMap
@@ -198,9 +200,9 @@ async function executeStrategy (command, signal) {
     return { outcome: error.strategyInterrupted || strategyInterrupted ? 'INTERRUPTED' : 'FAILURE', reason: error.message, events: [] }
   } finally { signal.removeEventListener('abort', onAbort); setStrategyExecuting(false); setStrategyInterrupted(false) }
 }
-const intelligence = require('../src/campaign/intelligence').createCampaignIntelligence({
+const intelligence = createCampaignIntelligence({
   observe: intelligenceObservation, call, now: () => gameClock.now(), sleep,
-  execute: (command, signal) => { const run = executeStrategy(command, signal); setStrategyTail(run.catch(() => undefined)); return run },
+  execute: (command, signal) => { const run = executeStrategy(command, signal); setStrategyTail(run.catch(() => undefined)); return run as Promise<ExecutionResult> },
   eyes: EYES_NEED, beds: BEDS_END, endPrepPrice: END_PREP_PRICE,
   record: decision => {
     telemetry.record({ ...decision, sec: decision.seconds, stage, sinceStart: Math.round((gameClock.now() - T0) / 1000) })

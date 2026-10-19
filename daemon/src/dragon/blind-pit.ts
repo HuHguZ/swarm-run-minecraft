@@ -1,11 +1,11 @@
-const { dragonOf, gameClock, clearControls, phaseOf, PHASE, SITTING, CENTER, sleep, makeTrack, Vec3, isSolid, stepTo, digDownTo, items, build, HEAD_AHEAD, partsOf, cloudsOf, nearPortal, voidBelow, overlap, BREATH_R, CLOUD_SLAB, EYE, findItem, isAirish, dbg, pearlHop, FILLER_RE, starer, LABENV, runnerOn }: typeof import('./dig-down-to') = require('./dig-down-to')
-const { blindTried, platformInner }: typeof import('./bridge-to-island') = require('./bridge-to-island')
-const { sight, doing, nearEdge, podiumTop, pickSpot, nearPillar, r1, breathOf, inClouds, standY, fastTower, angryEndermen, embeddedNow, unembed, hunters }: typeof import('./fall-guard') = require('./fall-guard')
-const { hazardNow, walkTo, guard, heal, ocLanding, bedsLayout, walkAround, bedsGo, makeDragonFeed, pillarRun, pillarEnter }: typeof import('./pillar-run') = require('./pillar-run')
-const { evade, predParts, countOf, dangerAt, bedDamage }: typeof import('./evade-raw') = require('./evade-raw')
-const { OC_ON, bedsBuild, takeoffSeen, pillowDys, pillarPlan, pillarKey, portalBlocks, runnerPlan }: typeof import('./pillar-plan') = require('./pillar-plan')
-const { placeNoBed, AXES }: typeof import('./ts-plan') = require('./ts-plan')
-const { groundAt, pillarPlanAutoAsync, pillarHere }: typeof import('./station-plan') = require('./station-plan')
+import { dragonOf, gameClock, clearControls, phaseOf, PHASE, SITTING, CENTER, sleep, makeTrack, Vec3, isSolid, stepTo, digDownTo, items, build, HEAD_AHEAD, partsOf, cloudsOf, nearPortal, voidBelow, overlap, BREATH_R, CLOUD_SLAB, EYE, findItem, isAirish, dbg, pearlHop, FILLER_RE, starer, LABENV, runnerOn } from './dig-down-to'
+import { blindTried, platformInner } from './bridge-to-island'
+import { sight, doing, nearEdge, podiumTop, pickSpot, nearPillar, r1, breathOf, inClouds, standY, fastTower, angryEndermen, embeddedNow, unembed, hunters } from './fall-guard'
+import { hazardNow, walkTo, guard, heal, ocLanding, bedsLayout, walkAround, bedsGo, makeDragonFeed, pillarRun, pillarEnter } from './pillar-run'
+import { evade, predParts, countOf, dangerAt, bedDamage } from './evade-raw'
+import { OC_ON, bedsBuild, takeoffSeen, pillowDys, pillarPlan, pillarKey, portalBlocks, runnerPlan } from './pillar-plan'
+import { placeNoBed, AXES } from './ts-plan'
+import { groundAt, pillarPlanAutoAsync, pillarHere } from './station-plan'
 async function blindPit (session, ctl, stats, deadline) {
   const bot = session.bot
   const d0 = dragonOf(bot)
@@ -623,9 +623,7 @@ async function dragonLab (session, ctl, stats, p, mode, deadline) {
   }
 }
 
-const headPlanExport = headPlan
-module.exports = { blindPit, takeoffAzOf, headAfterTakeoff, CARD4, pillarPlanAuto, headPlan, collectXp, eggItem, pickUp, takeEgg, goHome, respawnDragon, pearlApproach, LAB_PLANS, labCells, dragonLab }
 export {
-  blindPit, takeoffAzOf, headAfterTakeoff, CARD4, pillarPlanAuto, headPlanExport as headPlan, collectXp, eggItem,
+  blindPit, takeoffAzOf, headAfterTakeoff, CARD4, pillarPlanAuto, headPlan, collectXp, eggItem,
   pickUp, takeEgg, goHome, respawnDragon, pearlApproach, LAB_PLANS, labCells, dragonLab
 }

@@ -18,7 +18,7 @@ const LOGS = /_(log|stem)$/
 const COBBLE = /^(cobblestone|cobbled_deepslate|blackstone)$/
 const RAW = /^(beef|porkchop|mutton|chicken|rabbit|cod|salmon)$/
 const FOOD = /^(cooked_[a-z_]+|bread|baked_potato|golden_carrot|apple|carrot|sweet_berries|melon_slice|pumpkin_pie|golden_apple|mushroom_stew|beetroot_soup|rabbit_stew|dried_kelp|cookie)$/
-const { foodUnits: unitsOfFood, foodPoints: pointsOfFood } = require('../src/play-policy')
+import { foodUnits as unitsOfFood, foodPoints as pointsOfFood } from '../src/play-policy'
 const foodUnits = () => unitsOfFood(state.inventory)
 // Запас на Ад — по сытости, а не по числу штук: жареная свинина 8, а порция — 6 (kd2-7-102 16.10: портал горит на 3-й мин,
 // 5 свиных котлет = 40 сытости, «еды 5 из 6» — охота за 90 бл. и 25 мин без входа). ND_NETHER_FOOD_POINTS=0 — прежний счёт штук.

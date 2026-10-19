@@ -76,7 +76,8 @@ test('burn recovery checks local contact before the real bite and observes food/
 })
 
 test('a failed contact escape never starts the recovery bite', async () => {
-  const director: typeof import('../src/director') = require('../src/director')
+  // escapeFire определён в src/director/fire: фасад director переэкспортирует его геттером, подмена — на части
+  const director: typeof import('../src/director/fire') = require('../src/director/fire')
   const original = director.escapeFire
   let bites = 0
   const bot = { entities: {}, entity: { position: new Vec3(.5, 64, .5) }, inventory: { items: () => [] } }

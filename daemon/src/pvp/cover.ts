@@ -1,12 +1,16 @@
 import { bodyClear, supportAt } from '../navigation/geometry'
 import { ledgeOptions, planLedgeDrop } from '../navigation/descent'
 
-const damageModel: typeof import('./damage-model') = require('./damage-model')
-const read: typeof import('../read') = require('../read')
+import * as damageModel from './damage-model'
+import * as read from '../read'
 type CombatContext = Record<string, any>
 
 export function createCover(ctx: CombatContext) {
-const rememberBlock = b => b && ({ ...b, position: b.position.clone(), shapes: b.shapes?.map(shape => [...shape]) })
+  return { ...createBuildGuards(ctx), ...createWalls(ctx), ...createPerch(ctx), ...createFortSiting(ctx), ...createFortOut(ctx) }
+}
+
+// Стройка под ударами: сторож, прерывание, учёт построек.
+function createBuildGuards (ctx: CombatContext) {
 const buildGuard = () => {
     let n = 0
     let last = ctx.tt.myHurtAt
@@ -46,26 +50,11 @@ const noteBuild = (kind, ms) => {
     if (hot) ctx.st.build[kind + 'Hot']++
     return hot
   }
+return { buildGuard, guardCtl, buildDone, buildHot, noteBuild }
+}
 
-const shelterRisk = (ms) => {
-    const foes = (ctx.tt.threats?.() || [ctx.entity]).filter(e => e && e.isValid !== false && e._ndVisible !== false &&
-      (require('./last-seen') as typeof import('./last-seen')).seesPlayer(ctx.bot, e))
-    if (!foes.length) return null
-    const state = (require('../combat-safety') as typeof import('../combat-safety')).inspect(ctx.bot, { entities: foes, target: foes[0] })
-    let expected = 0
-    for (const foe of foes) {
-      const eta = ctx.tt.eta(foe), exposed = ms + ctx.style.reactMs - eta
-      if (exposed < 0) continue
-      const hand = { name: foe.equipment?.[0]?.name || '' }
-      const cooldown = ctx.cooldownMs(hand)
-      const hit = state.threats?.find(t => t.id === foe.id)?.hit || state.hit
-      if (!hit) return 'нет безопасного времени на коробку'
-      expected += hit * (1 + Math.floor(exposed / Math.max(50, cooldown)))
-    }
-    const hp = (ctx.bot.health ?? 0) + (read.absorptionOf(ctx.bot, ctx.bot.entity) || 0)
-    return expected >= hp ? 'риск смерти за время стройки' : null
-  }
-
+// Стенка между нами: колонка, 3×2 от лучника, укрытие перед питьём.
+function createWalls (ctx: CombatContext) {
 const wallToward = async (pos, what) => {
     if (!ctx.pickFiller(ctx.bot)) return 0
     const me0 = ctx.bot.entity.position
@@ -135,6 +124,12 @@ const coverForDrink = async () => {
       return await ctx.coverFrom(ctx.entity.position, { wide: archerNow, what: archerNow ? 'стенка 3×2 перед глотком (он с луком)' : 'колонна перед глотком' })
     } catch { return 0 }
   }
+return { wallToward, coverFrom, coverForDrink }
+}
+
+// Столб: высота, потолок, подъём и спуск со столба.
+function createPerch (ctx: CombatContext) {
+const rememberBlock = b => b && ({ ...b, position: b.position.clone(), shapes: b.shapes?.map(shape => [...shape]) })
 
 const perchHeight = () => {
     const need = ctx.entity.position.y + ctx.EYE + 1.25 + 3.0 + 0.1 - ctx.bot.entity.position.y
@@ -370,7 +365,11 @@ const dropFromPerch = async () => {
       if (choice.kind === 'water' && bot.entity.onGround && !waterGuard.placed) await ctx.holdWeapon()
     }
   }
+return { perchHeight, headroom, pillarOut, dropFromPerch }
+}
 
+// Коробка: чем лечиться, можно ли, где ставить.
+function createFortSiting (ctx: CombatContext) {
 const healItem = () => ctx.findPotion(ctx.bot, 'splash_potion', 'heal') || ctx.findPotion(ctx.bot, 'potion', 'heal') ||
     ctx.findPotion(ctx.bot, 'potion', 'regen') || ctx.findItem(ctx.bot, i => /golden_apple$/.test(i.name)) ||
     ctx.findItem(ctx.bot, i => /cooked_|bread|baked_potato|golden_carrot|steak/.test(i.name))
@@ -418,6 +417,29 @@ const fortSpot = () => {
       }
     }
     return best
+  }
+return { healItem, fortPossible, isAir, cellOk, fortSpot }
+}
+
+// Коробка: риск под ударами и сама постройка.
+function createFortOut (ctx: CombatContext) {
+const shelterRisk = (ms) => {
+    const foes = (ctx.tt.threats?.() || [ctx.entity]).filter(e => e && e.isValid !== false && e._ndVisible !== false &&
+      (require('./last-seen') as typeof import('./last-seen')).seesPlayer(ctx.bot, e))
+    if (!foes.length) return null
+    const state = (require('../combat-safety') as typeof import('../combat-safety')).inspect(ctx.bot, { entities: foes, target: foes[0] })
+    let expected = 0
+    for (const foe of foes) {
+      const eta = ctx.tt.eta(foe), exposed = ms + ctx.style.reactMs - eta
+      if (exposed < 0) continue
+      const hand = { name: foe.equipment?.[0]?.name || '' }
+      const cooldown = ctx.cooldownMs(hand)
+      const hit = state.threats?.find(t => t.id === foe.id)?.hit || state.hit
+      if (!hit) return 'нет безопасного времени на коробку'
+      expected += hit * (1 + Math.floor(exposed / Math.max(50, cooldown)))
+    }
+    const hp = (ctx.bot.health ?? 0) + (read.absorptionOf(ctx.bot, ctx.bot.entity) || 0)
+    return expected >= hp ? 'риск смерти за время стройки' : null
   }
 
 const fortOut = async () => {
@@ -623,5 +645,5 @@ const fortOut = async () => {
     await ctx.holdWeapon()
     return true
   }
-return { buildGuard, guardCtl, buildDone, buildHot, noteBuild, wallToward, coverFrom, coverForDrink, perchHeight, headroom, pillarOut, dropFromPerch, healItem, fortPossible, isAir, cellOk, fortSpot, fortOut }
+return { fortOut }
 }

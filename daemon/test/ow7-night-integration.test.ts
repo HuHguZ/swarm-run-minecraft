@@ -1,11 +1,8 @@
-import { campaignScript } from './campaign-source'
+import { campaignSocket, campaignVm } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
-import vm from 'node:vm'
 import { createRequire } from 'node:module'
-import { cjsContext } from './cjs-context'
 import { withClockFixture } from './clock-fixture'
 
 function campaign(refused = false, safe = false) {
@@ -14,27 +11,22 @@ function campaign(refused = false, safe = false) {
     inventory: { stone_pickaxe: 1, water_bucket: 1, flint_and_steel: 1, cobblestone: 64 }, playPolicy: { mode: 'speedrun' } }
   const situation = { surface: false, night: true, foes: 0, free: 24, pickLeft: 100,
     work: { sealed: true, floor: true, roof: true, walls: 4, block: 0, sky: 0 } }
-  class Socket {
-    listeners = new Map()
-    on(name, fn) { this.listeners.set(name, fn) }
-    send(raw) {
-      const { id, method, params } = JSON.parse(raw); calls.push({ method, params })
-      let detail: any = {}, status = 'done'
-      if (method === 'situation') detail = situation
-      if (method === 'recall') detail = { places: {} }
-      if (method === 'mine_seen') detail = { spots: [] }
-      if (method === 'dig_down' || method === 'tunnel') {
-        if (refused) { detail = { stopped: 'нет пути в этой геометрии' }; status = 'failed' }
-        else { state.pos.y -= params.depth || 0; detail = { dug: params.depth * 3, descended: params.depth } }
-      }
-      queueMicrotask(() => this.listeners.get('message')(JSON.stringify({ id, ok: true, result: { status, state, detail, events: [] } })))
+  const socket = campaignSocket((method, params) => {
+    calls.push({ method, params })
+    let detail: any = {}, status = 'done'
+    if (method === 'situation') detail = situation
+    if (method === 'recall') detail = { places: {} }
+    if (method === 'mine_seen') detail = { spots: [] }
+    if (method === 'dig_down' || method === 'tunnel') {
+      if (refused) { detail = { stopped: 'нет пути в этой геометрии' }; status = 'failed' }
+      else { state.pos.y -= params.depth || 0; detail = { dug: params.depth * 3, descended: params.depth } }
     }
-  }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } :
-      name === './src/telemetry' ? { on: () => false, record() {} } : baseRequire(name),
-    __dirname: path.dirname(file), module: { exports: {} }, process: { argv: ['node', file], env: { ND_MAP: '0', ND_NIGHT_WORK_SAFE: safe ? '1' : '0' } },
-    console: { log() {}, error() {} }, queueMicrotask, setTimeout, testState: state, testSituation: situation }
-  vm.runInNewContext(campaignScript() + '\nstate=testState;sit=testSituation;module.exports={step:nightWorkStep,hold:nightHold}', cjsContext(withClockFixture(context)))
+    return { status, state, detail, events: [] }
+  })
+  const context = campaignVm('\nstate=testState;sit=testSituation;module.exports={step:nightWorkStep,hold:nightHold}', { socket,
+    require: name => name === './src/telemetry' ? { on: () => false, record() {} } : undefined, base: baseRequire,
+    dirname: path.dirname(file), argv: ['node', file], env: { ND_MAP: '0', ND_NIGHT_WORK_SAFE: safe ? '1' : '0' },
+    wrap: withClockFixture, globals: { testState: state, testSituation: situation } })
   return { calls, state, c: context.module.exports }
 }
 test('real campaign/RPC flow makes consecutive useful night legs with no stage iron or idle wait', async () => {

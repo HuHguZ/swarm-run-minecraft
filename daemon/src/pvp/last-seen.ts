@@ -1,8 +1,8 @@
-const pick: typeof import('../pick') = require('../pick')
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const fastblocks: typeof import('../fastblocks') = require('../fastblocks')
-const { EventEmitter }: typeof import('node:events') = require('node:events')
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { EventEmitter } from 'node:events'
+import * as fastblocks from '../fastblocks'
+import * as gameClock from '../game-clock'
+import * as pick from '../pick'
+import { Vec3 } from './vec3'
 const SEE_THROUGH = /glass|_pane$|^barrier$|^iron_bars$/
 const FULL = [[0, 0, 0, 1, 1, 1]]
 
@@ -145,5 +145,4 @@ function createLastSeen (bot) {
   }
 }
 
-module.exports = { createLastSeen, seesPlayer, visiblePlayerItem, gearPartVisible, observePlayerGear }
 export { createLastSeen, seesPlayer, visiblePlayerItem, gearPartVisible, observePlayerGear }

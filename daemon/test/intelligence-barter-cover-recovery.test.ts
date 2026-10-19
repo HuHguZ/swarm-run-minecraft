@@ -1,13 +1,11 @@
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
 import { declSource } from './source-fixture'
 
 const filename = require.resolve('../src/bastion/bastion')
 const localRequire = createRequire(filename)
-const source = () => fs.readFileSync(filename, 'utf8')
 const pointKey = at => `${at.x},${at.y},${at.z}`
 
 function coverFixture({ floor = 'blackstone', known = true, acknowledgeMove = true, denyFill = false } = {}) {
@@ -71,12 +69,14 @@ test('unknown or hazardous support, an unconfirmed movement, and rejected walls 
   }
 })
 
+// Бартер принесённым золотом (mode barter, закрытый путь) — barterOnly в bastion/run-setup.ts; итог вызова — report в
+// bastion/run.ts (состояние вызова — bx).
+const barterOnlySource = () => declSource(localRequire.resolve('./run-setup'), 'barterOnly')
+const reportSource = () => declSource(localRequire.resolve('./run'), 'report')
+
 test('remote carried-gold barter physically approaches the known site before checking its actual cover', async () => {
-  const text = source()
-  const begin = text.slice(text.indexOf('const memoSave =')).search(/if \(mode === ["']barter["'] && st\.sealed\) \{/)
-    + text.indexOf('const memoSave =')
-  const end = text.indexOf('const done =', begin)
-  assert.ok(begin > 0 && end > begin)
+  const text = barterOnlySource()
+  assert.ok(text.includes('async function barterOnly('))
   for (const reached of [true, false]) {
     const bot = { entity: { position: new Vec3(2.5, 63, 4.5) } }
     const session = { bot }
@@ -94,16 +94,14 @@ test('remote carried-gold barter physically approaches the known site before che
         return { ok: reached, steps: 42, own: new Set(['40,39,60', '40,40,60']), why: reached ? undefined : 'budget' }
       }
     } : name === '.././tunnel' ? { rememberOwn() {} } : localRequire(name)
-    const outBegin = text.indexOf('const out = (')
-    const outEnd = text.indexOf('if (worlds.worldOf(bot)', outBegin)
-    assert.ok(outBegin > 0 && outEnd > outBegin)
-    const out = new Function('st', 'mode', 'bot', 'p', 't0', 'gameClock', 'BF', 'countOf', 'fireRes', 'Vec3',
-      text.slice(outBegin, outEnd) + '\nreturn out;')(
-      st, 'barter', bot, {}, 0, { now: () => 0 }, { enabled: () => true }, () => 0, () => 0, Vec3)
-    const run = new Function('mode', 'st', 'rec', 'bot', 'session', 'ctl', 'deadline', 'gameClock', 'Vec3', 'require', 'lavaWatched',
-      'prepareBarterCover', 'memoSave', 'log', 'out', `return (async () => { ${text.slice(begin, end)} return { reached: true }; })();`)
-    const result = await run('barter', st, rec, bot, session, ctl, 540000, { now: () => 0 }, Vec3, require,
-      async (_bot, _ctl, action) => action(ctl), async () => { covers++; return { ok: true } }, () => {}, () => {}, out)
+    const report = new Function('gameClock', 'BF', 'countOf', 'fireRes', 'Vec3', reportSource() + '\nreturn report;')(
+      { now: () => 0 }, { enabled: () => true }, () => 0, () => 0, Vec3)
+    const barterOnly = new Function('gameClock', 'Vec3', 'require', 'lavaWatched',
+      'prepareBarterCover', 'memoSave', 'log', 'report', text + '\nreturn barterOnly;')(
+      { now: () => 0 }, Vec3, require,
+      async (_bot, _ctl, action) => action(ctl), async () => { covers++; return { ok: true } }, () => {}, () => {}, report)
+    const result = (await barterOnly({ session, ctl, p: {}, bot, st, rec, deadline: 540000, keep: 0, mode: 'barter', t0: 0 })) ||
+      { reached: true }
     assert.equal(routes, 1)
     assert.equal(covers, reached ? 1 : 0)
     assert.equal(st.sealedState?.own.has('40,39,60'), true, 'a real partial route preserves its actual own cells')
@@ -116,22 +114,21 @@ test('remote carried-gold barter physically approaches the known site before che
 })
 
 test('s1c: no protected cover near the site — carried gold is bartered in the open when the risk is low, never with low hp', async () => {
-  const text = source()
-  const begin = text.slice(text.indexOf('const memoSave =')).search(/if \(mode === ["']barter["'] && st\.sealed\) \{/)
-    + text.indexOf('const memoSave =')
-  const end = text.indexOf('const done =', begin)
+  const text = barterOnlySource()
   for (const hp of [20, 10]) {
     const bot = { health: hp, entity: { position: new Vec3(80.5, 39, 130.5) } }
     const st: any = { sealed: true, sealedState: null, blocks: 0, bribed: 0, traded: 0, chests: [], gained: {}, gold: new Map(), pred: new Map(), fights: [], tossed: [] }
     let rounds = 0
-    const out = (stopped = null) => ({ stopped })
-    const run = new Function('mode', 'st', 'rec', 'bot', 'session', 'ctl', 'deadline', 'gameClock', 'Vec3', 'require', 'lavaWatched',
-      'prepareBarterCover', 'memoSave', 'log', 'out', 'countOf', 'keep', 'goldWorn', 'mobs', 'isBaby', 'unpackGold', 'barterRound',
-      `return (async () => { ${text.slice(begin, end)} return { reached: true }; })();`)
-    const result = await run('barter', st, { x: 87, y: 35, z: 139 }, bot, { bot }, { aborted: false }, 540000, { now: () => 0 }, Vec3, localRequire,
-      async (_b, _c, action) => action({ aborted: false }), async () => ({ ok: false, why: 'стены не замкнуты' }), () => {}, () => {}, out,
-      (_b, name) => name === 'gold_ingot' ? 20 : 0, 0, () => true, (_b, name) => name === 'piglin' ? [{ id: 5 }] : [], () => false,
+    const report = (_bx, stopped = null) => ({ stopped })
+    const barterOnly = new Function('gameClock', 'Vec3', 'require', 'lavaWatched',
+      'prepareBarterCover', 'memoSave', 'log', 'report', 'countOf', 'goldWorn', 'mobs', 'isBaby', 'unpackGold', 'barterRound',
+      text + '\nreturn barterOnly;')(
+      { now: () => 0 }, Vec3, localRequire,
+      async (_b, _c, action) => action({ aborted: false }), async () => ({ ok: false, why: 'стены не замкнуты' }), () => {}, () => {}, report,
+      (_b, name) => name === 'gold_ingot' ? 20 : 0, () => true, (_b, name) => name === 'piglin' ? [{ id: 5 }] : [], () => false,
       async () => {}, async () => { rounds++; return { spent: 20, pearls: 2 } })
+    const result = (await barterOnly({ session: { bot }, ctl: { aborted: false }, p: {}, bot, st, rec: { x: 87, y: 35, z: 139 },
+      deadline: 540000, keep: 0, mode: 'barter', t0: 0 })) || { reached: true }
     if (hp === 20) {
       assert.equal(rounds, 1)
       assert.deepEqual(result.openBarter, { spent: 20, pearls: 2 })

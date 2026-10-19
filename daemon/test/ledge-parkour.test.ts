@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
-import { readFileSync } from 'node:fs'
+import { moduleSourceTs } from './source-fixture'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
@@ -12,7 +12,8 @@ const native = (require('../src/tick-plugins') as typeof import('../src/tick-plu
 
 function source(withRim = true) {
   const file = path.resolve(__dirname, '../src/navigation/parkour.ts'), module = { exports: {} as any }
-  const input = readFileSync(file, 'utf8').replace(withRim ? /$^/ : /  const ledge = yield\* ledgeSearch\(bot, target, opts, world\)\r?\n  if \(ledge\) return ledge\r?\n/, '')
+  // Паркур целиком (фасад и части navigation/parkour/) одним текстом: вырезка поиска с уступа — в части search.
+  const input = moduleSourceTs(file).replace(withRim ? /$^/ : /  const ledge = yield\* ledgeSearch\(bot, target, opts, world\)\r?\n  if \(ledge\) return ledge\r?\n/, '')
   const code = (require('esbuild') as typeof import('esbuild')).transformSync(input, { loader: 'ts', format: 'cjs' }).code
   vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports, createRequire(file), module, file, path.dirname(file))
   return module.exports

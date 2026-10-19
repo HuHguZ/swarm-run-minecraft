@@ -1,13 +1,9 @@
-import { campaignScript } from './campaign-source'
+import { campaignScript, campaignSocket, campaignVm } from './campaign-source'
 import { cjsContext } from './cjs-context'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
-import path = require('node:path')
 import * as vm from 'node:vm'
-import { createRequire } from 'node:module'
 import { withClockFixture } from './clock-fixture'
-import { transpiledSource } from './source-fixture'
 
 function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, endermen = '1') {
   const state = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 87, y: 35, z: 139 },
@@ -15,38 +11,26 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, 
       crafting_table: 1, oak_planks: 16, stick: 8, cobblestone: 64 } as Record<string, number> }
   const calls: string[] = []
   const requests: Array<{ method: string; params: Record<string, unknown> }> = []
-  class Socket {
-    listeners = new Map<string, (...args: unknown[]) => void>()
-    on(name: string, handler: (...args: unknown[]) => void) { this.listeners.set(name, handler) }
-    send(raw: string) {
-      const { id, method, params } = JSON.parse(raw)
-      calls.push(method)
-      requests.push({ method, params })
-      if (method === 'craft' && params.item === 'gold_ingot' && conversion) {
-        state.inventory.gold_ingot = state.inventory.gold_block * 9
-        delete state.inventory.gold_block
-      }
-      const detail = method === 'recall' ? { state: { places: {
-        'бастион (ад)': { x: 87, y: 35, z: 139, dimension: 'the_nether', gold: [[87,35,139]] },
-        'бастион 2 (ад)': { x: 545, y: 48, z: -99, dimension: 'the_nether', gold: [[545,48,-99]],
-          chests: [[550,43,-97]], starts: [{ type: 'hoglin_stable', rotation: 0 }] },
-        'выработан: бастион (ад)': { x: 93, y: 39, z: 128, dimension: 'the_nether', note: 'Бартер завершён: золото выработано или два сухих захода подряд' }
-      } } } : method === 'bastion'
-        ? interrupted ? {} : { goldBlocksDug: 0, ingotsTraded: 0, knownGoldLeft: goldLeft, stopped: 'время вышло' }
-        : method === 'situation' ? { surface: false, foes: 0, pickLeft: 512 } : {}
-      const cut = method === 'bastion' && interrupted
-      queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true, result: { status: cut ? 'interrupted' : 'done',
-        ...(cut ? { code: 'TACTICAL', by: { type: 'tactical' }, error: 'reflex: действие прервано' } : {}), detail, state, events: [] } })))
+  const socket = campaignSocket((method, params) => {
+    calls.push(method)
+    requests.push({ method, params })
+    if (method === 'craft' && params.item === 'gold_ingot' && conversion) {
+      state.inventory.gold_ingot = state.inventory.gold_block * 9
+      delete state.inventory.gold_block
     }
-    close() {}
-  }
-  const filename = path.resolve(__dirname, '../campaign.js')
-  const local = createRequire(filename)
-  const context = { require: (name: string) => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : local(name),
-    __dirname: path.dirname(filename), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: { ND_NE_RECOVER: '0', ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: endermen } }, // прежний путь (J2 сам включает ND_NE_RECOVER)
-    console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, AbortController, fixtureState: state }
-  vm.runInNewContext(campaignScript() + `
+    const detail = method === 'recall' ? { state: { places: {
+      'бастион (ад)': { x: 87, y: 35, z: 139, dimension: 'the_nether', gold: [[87,35,139]] },
+      'бастион 2 (ад)': { x: 545, y: 48, z: -99, dimension: 'the_nether', gold: [[545,48,-99]],
+        chests: [[550,43,-97]], starts: [{ type: 'hoglin_stable', rotation: 0 }] },
+      'выработан: бастион (ад)': { x: 93, y: 39, z: 128, dimension: 'the_nether', note: 'Бартер завершён: золото выработано или два сухих захода подряд' }
+    } } } : method === 'bastion'
+      ? interrupted ? {} : { goldBlocksDug: 0, ingotsTraded: 0, knownGoldLeft: goldLeft, stopped: 'время вышло' }
+      : method === 'situation' ? { surface: false, foes: 0, pickLeft: 512 } : {}
+    const cut = method === 'bastion' && interrupted
+    return { status: cut ? 'interrupted' : 'done',
+      ...(cut ? { code: 'TACTICAL', by: { type: 'tactical' }, error: 'reflex: действие прервано' } : {}), detail, state, events: [] }
+  })
+  const context = campaignVm(`
     state = fixtureState; sit = { surface: false, foes: 0, pickLeft: 512 };
     recoverGuard = async () => {};
     known.portal = { x: 1, y: 64, z: 1 };
@@ -59,7 +43,8 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, 
     module.exports.deferBarter = () => { bState(known.bastions[0]).barterUntil = gameClock.now() + 60000 };
     module.exports.deferMining = () => { for (const b of known.bastions) deferBastionMining(b) };
     module.exports.active = () => activeBastion();
-  `, cjsContext(withClockFixture(context)))
+  `, { socket, wrap: withClockFixture, globals: { AbortController, fixtureState: state },
+    env: { ND_NE_RECOVER: '0', ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: endermen } }) // прежний путь (J2 сам включает ND_NE_RECOVER)
   return { context, state, calls, requests }
 }
 
@@ -90,7 +75,7 @@ test('an unsuccessful tool refill cannot launch real bastion excavation or exhau
 
 test('the actual campaign loop respects failed graph verification when incidental blocks increase', () => {
   const source = campaignScript()
-  const start = source.indexOf('      const progressed =')
+  const start = source.indexOf('const progressed =') // ход этапа — campaign/loop/stage
   const end = source.indexOf('\n', start)
   assert.ok(start >= 0 && end > start)
   const check = (s: { progressed?: () => boolean }, before: Record<string, number>, after: Record<string, number>) =>
@@ -103,7 +88,7 @@ test('the actual campaign loop respects failed graph verification when incidenta
 
 test('an unreachable graph cannot send the body home for rods while factual Bastion pearls are still pending', () => {
   const source = campaignScript()
-  const start = source.indexOf("      if (!selection && dim() === \"the_nether\"")
+  const start = source.indexOf("if (!selection && dim() === \"the_nether\"") // выбор шага — campaign/loop/select
   assert.ok(start >= 0)
   const end = source.indexOf('{', start)
   const guard = source.slice(start, end) + '{ result = true }'

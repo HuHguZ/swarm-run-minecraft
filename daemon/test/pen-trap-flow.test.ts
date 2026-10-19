@@ -93,7 +93,8 @@ for (const capture of ['default', 'freeze', 'lure', 'gather', 'gather-delayed', 
   c.start()
   const SL: typeof import('../src/sealed') = require('../src/sealed'); const PG: typeof import('../src/bastion/predict-gold') = require('../src/bastion/predict-gold'); const pick: typeof import('../src/pick') = require('../src/pick'); const BT: typeof import('../src/bastion/booth-trade') = require('../src/bastion/booth-trade')
   const PT: typeof import('../src/bastion/pen-trap') = require('../src/bastion/pen-trap')
-  const G: any = require('../src/ne-guard')
+  // busy/hot/react определены в ne-guard/react.ts: подмена — в определяющей части (фасад отдаёт её живым геттером).
+  const G: any = require('../src/ne-guard/react')
   const saved = { dig: SL.digCell, fill: SL.fillCell, face: pick.faceAim, hand: PG.handNoWalk, unhold: PG.unholdGold, toss: PG.tossOut, step: BT.stepCell, booth: BT.boothTrade }
   const savedGuard = { busy: G.busy, hot: G.hot, react: G.react }
   const air = new Set([k(0, 98, 0), k(0, 99, 0), k(0, 100, 0)])

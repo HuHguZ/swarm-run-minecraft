@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function bridgeFixture ({ aborted = false, grounded = true, z = 137.0596148, rejectProp = false, abortAfterProp = false } = {}) {
   const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
@@ -78,7 +79,8 @@ function bridgeFixture ({ aborted = false, grounded = true, z = 137.0596148, rej
     const filename = require.resolve(file)
     const actualRequire = createRequire(filename)
     const module = { exports: {} as Record<string, any> }
-    new Function('require', 'module', 'exports', fs.readFileSync(filename, 'utf8') + suffix)(
+    // nether-route — фасад + части (src/nether-route/**) одной областью видимости; build и bridge — целым файлом.
+    new Function('require', 'module', 'exports', (/nether-route$/.test(file) ? bodySource(filename) : fs.readFileSync(filename, 'utf8')) + suffix)(
       name => overrides[name] || actualRequire(name), module, module.exports)
     return module.exports
   }

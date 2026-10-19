@@ -8,6 +8,8 @@ import { dirname, resolve } from 'node:path'
 // подмена молча пропадала (настоящие часы, настоящая постройка вместо заглушки).
 //   const req = stubRequire(file, { './combat': fakeCombat }, { './build': actual => ({ ...actual, digUp }) })
 //   vm.runInNewContext(code, { require: req, … }); assert.deepEqual(req.unmatched(), [])
+// options.fallback(spec, real) — что отдать без совпадения (по умолчанию настоящий модуль): например, пустышку для всего,
+// кроме перечисленного, чтобы тест не тянул настоящие модули с побочными действиями.
 
 export type StubPatch = (actual: any, spec: string) => any
 export interface StubRequire {
@@ -20,7 +22,9 @@ export interface StubRequire {
 const stripExt = (path: string): string => path.replace(/\\/g, '/').replace(/\.(c|m)?(js|ts)$|\.json$/, '').replace(/\/index$/, '')
 const keyPath = (key: string): string => stripExt(key.replace(/^node:/, '')).replace(/^(\.\.?\/)+/, '')
 
-export function stubRequire (from: string, stubs: Record<string, any> = {}, patches: Record<string, StubPatch> = {}): StubRequire {
+export interface StubOptions { fallback?: (spec: string, real: NodeJS.Require) => any }
+
+export function stubRequire (from: string, stubs: Record<string, any> = {}, patches: Record<string, StubPatch> = {}, options: StubOptions = {}): StubRequire {
   const real = createRequire(from)
   const keys = [...new Set([...Object.keys(stubs), ...Object.keys(patches)])]
   const used = new Set<string>()
@@ -42,7 +46,7 @@ export function stubRequire (from: string, stubs: Record<string, any> = {}, patc
   }
   const req = ((spec: string) => {
     const key = keyFor(spec)
-    if (key === null) return real(spec)
+    if (key === null) return options.fallback ? options.fallback(spec, real) : real(spec)
     used.add(key)
     if (key in stubs) return stubs[key]
     return patches[key]!(real(spec), spec)

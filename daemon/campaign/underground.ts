@@ -12,7 +12,7 @@ import { recoverGuard } from './guards'
 import { walkAway, awayFrom } from './travel'
 import { craft, sticks, spares, unclutter, reserve, ensurePick, mineSeenAll, torches } from './kit'
 import { structureValue } from './scout'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 async function descend (toY, { stopAtLava = false, short = false, wetCluster = false, oreRemaining = null } = {}) {
   const dirs = ['north', 'east', 'south', 'west']
   setDescendLava(null)

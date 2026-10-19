@@ -2,10 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { runInNewContext } from 'node:vm'
-import { cjsContext } from './cjs-context'
+import { NEXT, pvpParts } from './pvp-parts'
 
 const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
 const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
@@ -340,11 +337,6 @@ test('the actual pickaxe is equipped before the dig priced at its speed', async 
 // conditions. The complete fight needs live inventory, routing and opponents;
 // this isolates only the integration from that unrelated infrastructure.
 async function perchCaller(hp: number, result: { ok: boolean; acted: boolean }, options: any = {}) {
-  const source = readFileSync(process.env.ND_TEST_PERCH_CALLER_SOURCE || join(__dirname, '../src/pvp.ts'), 'utf8')
-  const start = source.lastIndexOf('if (perch)', source.indexOf('const noArrows'))
-  const end = source.indexOf('const inc = threats.incoming', start)
-  assert.ok(start >= 0 && end > start, 'the real perch caller is present')
-  const branch = source.slice(start, end)
   const ctx: any = {
     hp, now: 1000, perch: { y0: 120, top: 126, h: 6, since: 0 }, calls: 0, normalCombat: 0,
     bot: { entity: { position: new Vec3(.5, 126, .5), attributes: {} }, food: 0 }, entity: {},
@@ -352,7 +344,10 @@ async function perchCaller(hp: number, result: { ok: boolean; acted: boolean }, 
     hasEffect: () => false, rangedAllowed: () => true, vision: { visible: () => true },
     dropFromPerch: async () => { ctx.calls++; return result }, ...options
   }
-  await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch}\n normalCombat++ } })()`, cjsContext(ctx))
+  // Настоящая ступень хода «на столбе» (pvp/turn-escape.ts): NEXT — ход занят спуском, иначе бой идёт дальше.
+  const { perchTurn } = pvpParts(ctx, ['turn-escape'], ['perchTurn'])
+  assert.equal(typeof perchTurn, 'function', 'the real perch caller is present')
+  if (await perchTurn(ctx, ctx) !== NEXT) ctx.normalCombat++
   return ctx
 }
 
@@ -382,16 +377,13 @@ test('healing still makes a perch useful even after running out of arrows', asyn
 
 test('a failed perch dig is not aged away, and a newly available descent resource opens another choice', async () => {
   const s = scene(); await s.ready()
-  const source = readFileSync(join(__dirname, '../src/pvp.ts'), 'utf8')
-  const init = source.indexOf('  let failedPerchDrop = ')
-  const start = init >= 0 ? init : source.indexOf('  const dropFromPerch = ')
-  const end = source.indexOf('  let fort = ', start)
   let calls = 0, water = false
   const ctx: any = { bot: s.bot, session: {}, tools: { bestFor: () => ({ ms: 150 }) },
     routeInputs: () => 'same support and stance', hasEffect: () => false,
     itemInputs: () => water ? 'water_bucket:36:1' : '',
     pvpSkills: { dropFromPerch: async () => { calls++; return { ok: false, acted: true, kind: 'dig' } } } }
-  runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(source.slice(start, end) + '\nglobalThis.tryDrop = dropFromPerch', { loader: 'ts' }).code, cjsContext(ctx))
+  pvpParts(ctx, ['duel-skills'], ['installPerchDrop']).installPerchDrop(ctx)
+  ctx.tryDrop = ctx.dropFromPerch
   await ctx.tryDrop(); ctx.now = 60000; await ctx.tryDrop(); assert.equal(calls, 1)
   water = true; await ctx.tryDrop(); assert.equal(calls, 2, 'an available bucket must let the planner compare its other descent means')
 })

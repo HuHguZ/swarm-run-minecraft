@@ -1,8 +1,8 @@
 'use strict'
 import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'fs'
 import path = require('path')
 import * as vm from 'vm'
 import { createRequire } from 'module'
@@ -10,7 +10,8 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 test('failed scoop is not counted in the high-source reserve', () => {
   const file = path.resolve(__dirname, '../src/cast1.js')
   const context = { require: createRequire(file), module: { exports: {} as Record<string, any> }, process }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  // cast1 — фасад + части (src/cast1/**) одной областью видимости: подмены C/lakeReach доходят до lavaInReach.
+  vm.runInNewContext(bodySource(file) + `
     C = () => ({ eyes: b => b.entity.position, levelOf: b => b.level, scoopAim: (b, p) => p });
     lakeReach = () => ({ top: new Set(['0,-1,3','1,-1,3','2,-1,3','3,-1,3']) });
     module.exports.check = lavaInReach;

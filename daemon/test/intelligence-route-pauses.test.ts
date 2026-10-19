@@ -5,12 +5,12 @@ import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { Vec3 } from 'vec3'
+import { functionSource } from './source-fixture'
 
 function routeFixture ({ alarms = 7, abortOnRelease = false, advanceOnRelease = 0, declinedGuard = false, cancelledGuard = false } = {}) {
-  const source = fs.readFileSync(process.env.NR_TEST_SOURCE || path.join(__dirname, '../src/nether-route.js'), 'utf8')
-  const start = source.indexOf('async function routeTo(')
-  assert.ok(start >= 0)
-  const body = source.slice(start, source.indexOf('\nmodule.exports', start))
+  // routeTo — в nether-route/route.ts (фасад + части): по имени из склейки частей, имена соседних частей — из контекста.
+  const body = functionSource(process.env.NR_TEST_SOURCE || path.join(__dirname, '../src/nether-route.js'), 'routeTo')
+  assert.ok(body.startsWith('async function routeTo('))
   let now = 0
   let calls = 0
   let releases = 0

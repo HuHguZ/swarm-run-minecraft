@@ -65,7 +65,7 @@ test('making a missing table conserves carried wood and a failed wheat conversio
 
 test('the actual bread executor uses the shared conversion plan and yields tactical cancellation', async () => {
   const source = campaignTs()
-  const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = require('))
+  const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = createCampaignIntelligence('))
   const calls: any[] = []
   const state = { inventory: { hay_block: 1, crafting_table: 1 } }
   const context: any = { state, strategyExecuting: false, strategyInterrupted: false, STAGES: [],

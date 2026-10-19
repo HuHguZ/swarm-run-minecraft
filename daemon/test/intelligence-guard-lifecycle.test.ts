@@ -8,6 +8,7 @@ import { Vec3 } from 'vec3'
 import { cjsContext } from './cjs-context'
 import locks = require('../src/reflex-lock')
 import { withClockFixture } from './clock-fixture'
+import { bodySource } from './source-fixture'
 
 interface Controller { aborted: boolean; onAbort: Array<() => void> }
 interface Result { acted: boolean; cancelled?: boolean; how?: string }
@@ -45,7 +46,8 @@ function fixture() {
       throw new Error('unexpected dependency: ' + name)
     }
   })
-  runInNewContext(readFileSync(process.env.GUARD_TEST_SOURCE || join(__dirname, '../src/ne-guard.js'), 'utf8'), cjsContext(context))
+  // ne-guard — фасад + части (src/ne-guard/**) одной областью видимости.
+  runInNewContext(bodySource(process.env.GUARD_TEST_SOURCE || join(__dirname, '../src/ne-guard.js')), cjsContext(context))
   const guard = context.module.exports as { react(targetSession: typeof session, ctl: Controller, options: unknown): Promise<Result> }
   return { bot, session, guard, hoglin, calls, logs, towerStarted, resolveTower }
 }

@@ -3,6 +3,7 @@ import assert = require('node:assert/strict')
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function physicalStep({ elevated = false, inheritedBack = false, inheritedSneak = false }: { elevated?: boolean; inheritedBack?: boolean; inheritedSneak?: boolean } = {}) {
   const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
@@ -45,7 +46,8 @@ function physicalStep({ elevated = false, inheritedBack = false, inheritedSneak 
   const routeFilename = require.resolve('../src/nether-route')
   const routeRequire = createRequire(routeFilename)
   const routeModule = { exports: {} as Record<string, any> }
-  new Function('require', 'module', 'exports', fs.readFileSync(routeFilename, 'utf8') + '\nmodule.exports.stepOne = stepOne')(
+  // nether-route — фасад + части (src/nether-route/**) одной областью видимости: stepOne — имя верхнего уровня.
+  new Function('require', 'module', 'exports', bodySource(routeFilename) + '\nmodule.exports.stepOne = stepOne')(
     name => name === './game-clock' ? clock : name === './sealed' ? module.exports : routeRequire(name), routeModule, routeModule.exports)
   const destination = new Vec3(1, elevated ? 63 : 64, 0)
   return { bot, controls, elapsed: () => now, run: () => module.exports.stepMove(bot, { aborted: false }, { kind: 'flat', to: destination }),

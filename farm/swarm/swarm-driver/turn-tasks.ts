@@ -1,0 +1,114 @@
+// Рой: задачи хода бота — бегство (насест, укрытие, отрыв), отход раненого, стойка (щиты, засада, кемпер), стройка у цели.
+import { blockCount, distance, cellKey } from './common'
+import type { SwarmDriverCtx, TurnCtx } from './common'
+
+export function swarmTurnTasks (sw: SwarmDriverCtx) {
+  const { now, alive, log, pos, arena, cooldown, boxed, boxTries, execute, reactCamp, go, loot, detail, rangedAdvantage, positionStep, search, buildStep } = sw
+  async function turnFlee (tc: TurnCtx) {
+    const { b, context, board, task, round, m, enemies } = tc
+    // Насест на элитрах (perch, пользователь 14.10: «могут наверх улетать и там сидеть, кемперить или с лука палить»):
+    // далеко — долететь (fly_to: над гребнем, посадка с открытым небом; не вышло — бежать, как обычно); на месте — лук
+    // из-за своей стенки в прыжке (peek_shot, с места не сходит), без лука — есть и сидеть на шифте.
+    if (task.data?.perch) {
+      if (distance(m.p, task.position) > 3) {
+        if ((cooldown.get(`fly:${b.name}`) || 0) <= now()) {
+          cooldown.set(`fly:${b.name}`, now() + 8000)
+          const r = detail(await b.c.call('fly_to', { at: task.position, timeoutSeconds: 15, arena }))
+          log(`🪽 ${b.name}: на насест ${cellKey({ x: Math.floor(task.position.x), y: Math.floor(task.position.y), z: Math.floor(task.position.z) })} — ${r.ok ? 'долетел' : r.why || '?'}`)
+          if (r.ok) return
+        }
+      } else {
+        const foe = enemies.find(e => e.id === task.data.target)
+        if (foe && now() - foe.seenAt < 1000 && m.inv?.bow && m.inv?.arrow) { await b.c.call('peek_shot', { target: foe.id, shots: 3 }); return }
+        await b.c.call('eat', { timeoutSeconds: 2 }).catch(() => {})
+        await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 2, arena })
+        return
+      }
+    }
+    // Укрытие без своих (пользователь 14.10: «если своих нет — прятаться в колизее, в блоках или на высоте, и шифт
+    // зажимать, чтобы мы не видели его»): дошёл — сидеть на шифте, ник за блоками не виден.
+    if ((task.data?.hide || task.data?.regroup) && !enemies.length && distance(m.p, task.position) >= 3) { await go(b, task.position, 2); return }
+    if (task.data?.hide && distance(m.p, task.position) < 3) { await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3, arena }); return }
+    if (rangedAdvantage(b)) { await b.c.call('fight', { target: task.data.target, targets: enemies.map(e => e.id), allowPlayer: true, allowRanged: true, timeoutSeconds: 3, retreatAtHealth: 8, arena }); return }
+    // Погоня (kite): отрыв по открытому без точки (smartFlee сам обходит тупики), до 22 бл.; к своим — к ним.
+    const outcome = detail(await b.c.call('flee', { from: enemies.map(e => e.id), toward: task.data?.kite && !task.data?.regroup ? [] : [task.position], timeoutSeconds: 3, safeDist: task.data?.kite ? 22 : 14, reason: task.data?.reason, arena }))
+    if (round !== sw.generation || !alive(b.name)) return
+    if (outcome.cornered && task.data?.target) {
+      log(`⚔ ${b.name}: физически зажат, отвечаю ${task.data.target}`)
+      await b.c.call('fight', { target: task.data.target, allowPlayer: true, allowRanged: true, lastStand: true, timeoutSeconds: 3, retreatAtHealth: 0, arena })
+    } else if (outcome.mode === 'оторвался') {
+      if (outcome.at) m.p = outcome.at
+      // Оторвался от погони — дальше решает планировщик (лут за 22 бл.), а не поход к группе или лут исполнителя.
+      if (task.data?.kite) return
+      if (task.data?.hide || task.data?.regroup) { await go(b, task.position, 2); return }
+      b.swarmPreparingUntil = now() + 7000
+      if (!await loot(b, board) && !await positionStep(b, context, m.inv?.bow ? 'ranged' : 'escape')) await search(b, context)
+    }
+    return
+  }
+
+  async function turnRecover (tc: TurnCtx) {
+    const { b, context, task, m, enemies, contact } = tc
+    if (contact) {
+      const out = detail(await b.c.call('flee', { from: enemies.map(e => e.id), timeoutSeconds: 3, safeDist: 14, arena }))
+      if (out.mode !== 'оторвался') return
+    }
+    // В кольце и «стаде» место раненого — середина строя: поиск укрытия подальше уводил его из-за щитов (ревью 13.10).
+    else if (['ring', 'weak-center'].includes(task.data?.doctrine)) { if (distance(m.p, task.position) > 1) await go(b, task.position, .6) }
+    else if (!await positionStep(b, context, 'recover') && distance(m.p, task.position) > 3) await go(b, task.position)
+    await b.c.call('eat', { timeoutSeconds: 4 }).catch(() => {})
+    return
+  }
+
+  async function turnHold (tc: TurnCtx) {
+    const { b, context, task, round, m, enemies } = tc
+    const range = task.data.range ?? .8
+    // Не дошёл до засады и не приблизился — она ему 15 с недоступна (Codex 15.10: сторож сбрасывал поход, а ход вёл туда же).
+    if (distance(m.p, task.position) > range + .4) {
+      const before = distance(m.p, task.position)
+      const walked = detail(await go(b, task.position, range).catch(e => ({ why: e.message })))
+      if (task.data.camp && !walked.arrived && distance(pos[b.name]?.p || m.p, task.position) > before - 1) cooldown.set('camp:' + task.data.camp, now() + 15000)
+      return
+    }
+    // Кемпер на месте — замуроваться (стены и крыша); раскопают — увидит врага в упор, и контакт поднимет бой.
+    if (task.data.camp && !boxed.has(`${b.name}:${task.data.camp}`) && (cooldown.get(`box:${b.name}`) || 0) <= now() && blockCount(m.inv) >= 10) {
+      const r = detail(await b.c.call('box_in', {}).catch(e => ({ why: e.message })))
+      if (round !== sw.generation || !alive(b.name)) return
+      const tries = (boxTries.get(`${b.name}:${task.data.camp}`) || 0) + 1; boxTries.set(`${b.name}:${task.data.camp}`, tries)
+      if (r.sealed || tries >= 2) boxed.add(`${b.name}:${task.data.camp}`); else cooldown.set(`box:${b.name}`, now() + 10000)
+      if (r.sealed) b.boxedCamp = task.data.camp
+      log(`🧱 ${b.name}: кемпер замуровался у ${task.data.camp} — ${r.sealed ? `готово (${r.placed} бл., ${r.material || '?'})` : String(r.why || `стен ${r.walls ?? '?'}`).slice(0, 60)}`)
+      return
+    }
+    const held = await execute(b, 'swarm_hold', { camp: !!b.boxedCamp, ...(task.data.hold === 'shield' ? { shield: true, face: task.data.face, timeoutSeconds: 4 } : { sneak: true, timeoutSeconds: 2 }),
+      enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), arena })
+    if (round !== sw.generation || !alive(b.name)) return
+    await reactCamp(b, held)
+    return
+  }
+
+  async function turnBuildSite (tc: TurnCtx) {
+    const { b, context, task, m, enemies } = tc
+    const enemy = enemies.find(e => e.id === task.data.target), o = task.data.origin
+    // Кокон — пока цель в своей клетке; отсечка — пока цель ещё перед стеной (она стоит на её пути, а не вокруг неё).
+    const ready = enemy && now() - enemy.seenAt <= 1000 && (task.data.buildKind === 'cutoff'
+      ? distance(enemy.position, o) <= 10
+      : Math.floor(enemy.position.x) === o.x && Math.floor(enemy.position.z) === o.z && Math.abs(enemy.position.y - o.y) < 1)
+    // Строитель работает в шаге от цели, «контакт» его не останавливает: угрозу у клетки проверяет сама кладка (прицел
+    // врага, урон) — иначе в 3.5 бл. от цели стройка не шла вовсе, а строитель уходил бродить.
+    // Цель в клетке кокона заперта: её тычок сквозь щель — цена, а не повод бросать кладку (swarm_work contained).
+    const contained = task.data.buildKind === 'cocoon' && ready ? [task.data.target] : []
+    if (ready && await buildStep(b, context, { kind: task.data.buildKind, origin: o, direction: task.data.direction, contained })) return
+    // Класть пока нечего (клетки у другого, крыша ждёт стен) — стоять у стройки, а не бродить. Но не в коробке кокона:
+    // строитель, доложивший свои клетки, стоял в щели и закрывал телом последнюю клетку крыши (лаборатория 14.10, 22/23).
+    const site = { x: o.x + .5, y: o.y, z: o.z + .5 }
+    const inBox = task.data.buildKind === 'cocoon' && m.p.y < o.y + 3 && [['x', o.x], ['z', o.z]].every(([k, c]: any) => m.p[k] + .3 > c - 1 && m.p[k] - .3 < c + 2)
+    const away = Math.hypot(m.p.x - site.x, m.p.z - site.z)
+    if (inBox) await go(b, away > .1 ? { x: site.x + (m.p.x - site.x) / away * 3.2, y: o.y, z: site.z + (m.p.z - site.z) / away * 3.2 } : { x: site.x + 3.2, y: o.y, z: site.z }, .8)
+    else if (distance(m.p, site) > 5) await go(b, site, 3)
+    else await b.c.call('swarm_hold', { sneak: true, timeoutSeconds: 1, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), arena })
+    return
+  }
+
+  return { turnFlee, turnRecover, turnHold, turnBuildSite }
+}

@@ -2,8 +2,8 @@
 // Журнал кампании и телеметрия: строка лога, снимок стыка (ND_E2E).
 import { LOG, E2E, SEAM_FLAGS } from './flags'
 import { T0, stage, state, sit, memorySnapshot, known } from './state'
-const fs: typeof import('fs') = require('fs')
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as fs from 'fs'
+import * as gameClock from '../src/game-clock'
 const telemetry = (() => { try { return (require('../src/telemetry') as typeof import('../src/telemetry')) } catch { return { on: () => false, snapshot: () => null, delta: () => ({}), outcome: () => ({}), record () {} } } })()
 const telParams = p => { try { return JSON.stringify(p).slice(0, 300) } catch { return null } }
 function seamSnapshot (seam) {

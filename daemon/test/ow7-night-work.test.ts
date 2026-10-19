@@ -330,7 +330,7 @@ test('losing the last pick underground does not send a held night into surface h
 })
 
 test('the main night loop calls the worker before the old timed branch', () => {
-  const a = source.indexOf('if (!died && nightHold()) {', source.indexOf('async function runCampaign ('))
+  const a = source.indexOf('if (!died && nightHold()) {', source.indexOf('async function loopNight (')) // ночь хода — campaign/loop/night
   const b = source.indexOf('if (only && dim()', a)
   const main = source.slice(a, b)
   assert.ok(main.indexOf('await nightWorkStep()') >= 0)

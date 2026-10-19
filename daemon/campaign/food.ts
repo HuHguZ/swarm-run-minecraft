@@ -12,7 +12,7 @@ import { walkAway } from './travel'
 import { craft, unclutter, smeltAll } from './kit'
 import { toSurface } from './underground'
 import { ROUTE_COOKED_HUNGER, routeCookedHunger } from './route-wiring'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 async function foodRun () {
   await cook()
   await makeBed()

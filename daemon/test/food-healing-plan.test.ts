@@ -73,7 +73,7 @@ test('recorded food costs make a depleted run recover before flint search while 
 })
 test('the actual Heal executor asks the body for the same eighteen-HP target as the graph', async () => {
   const source = campaignTs()
-  const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = require('))
+  const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = createCampaignIntelligence('))
   let target: number | undefined
   const context: any = { strategyExecuting: false, strategyInterrupted: false, rest: async (hp: number) => { target = hp } }
   vm.runInNewContext(executor, cjsContext(withSetters(context)))

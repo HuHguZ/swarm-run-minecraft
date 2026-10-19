@@ -1,10 +1,10 @@
 'use strict'
 // Крепость и портал в Край (endportal.ts): вода и лава у входа: сухая колонка, обход, штрек под водой.
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { sleep, xyz, travelXZ }: typeof import('../movement') = require('../movement')
-const { equipBestTool, missingHarvestTool }: typeof import('../items') = require('../items')
-const { walkable }: typeof import('../walkable') = require('../walkable')
+import * as gameClock from '../game-clock'
+import { Vec3 } from 'vec3'
+import { sleep, xyz, travelXZ } from '../movement'
+import { equipBestTool, missingHarvestTool } from '../items'
+import { walkable } from '../walkable'
 import { BRICKS, honestDescent, look } from './common'
 import { shaftToBricks } from './shaft'
 

@@ -168,7 +168,8 @@ test('ne-guard duel does not walk toward a foe over the edge of a bridge (review
 })
 
 test('burning on dry ground without a bucket: smartFlee from a foe in sight, escapeFire out of the fire with nobody to run from (s8-f3-15)', async () => {
-  const director: any = require('../src/director')
+  // escapeFire определён в src/director/fire: фасад director переэкспортирует его геттером, подмена — на части
+  const director: any = require('../src/director/fire')
   const calls: string[] = []
   const saved = { fire: director.escapeFire, flee: flee.smartFlee }
   director.escapeFire = async () => { calls.push('escapeFire'); return { status: 'done' } }

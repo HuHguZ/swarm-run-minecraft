@@ -1,7 +1,7 @@
 import { cjsContext } from './cjs-context'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
+import { declSource } from './source-fixture'
 import path = require('node:path')
 import * as vm from 'node:vm'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
@@ -19,10 +19,9 @@ interface SealedState {
 
 function restoreTrade(mode: string, options: { key?: string; cells?: string[]; age?: number; far?: boolean;
   persisted?: unknown; historical?: string[]; breach?: boolean; unloaded?: boolean; mouth?: boolean; lava?: boolean } = {}): SealedState {
-  const source = fs.readFileSync(path.resolve(__dirname, '../src/bastion/bastion.js'), 'utf8')
-  const start = source.indexOf('  const memoKey = ')
-  const end = source.indexOf('  const memoSave = ', start)
-  assert.ok(start > 0 && end > start, 'actual Bastion restoration block exists')
+  // Место и память между вызовами — restoreMemo в bastion/run-setup.ts (состояние вызова bastion() — bx).
+  const source = declSource(path.resolve(__dirname, '../src/bastion/run-setup.js'), 'restoreMemo')
+  assert.ok(source.includes('const memoKey = '), 'actual Bastion restoration block exists')
   const st: SealedState = { sealed: true, noPick: false, pred: new Map(), towered: 0, sealedDone: false }
   const rec = { x: 91, y: 49, z: 139 }
   const memory = { t: 0, pred: new Map([['105,48,132', { pos: { x: 105, y: 48, z: 132 } }]]), mined: new Set(),
@@ -38,14 +37,15 @@ function restoreTrade(mode: string, options: { key?: string; cells?: string[]; a
       : { name: 'blackstone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
   }
   const fresh = options.persisted !== undefined || options.historical !== undefined
-  const context = { mode, st, rec, Vec3, MEMO: fresh ? new Map() : new Map([[options.key ?? '91,139', memory]]),
+  const context = { Vec3, MEMO: fresh ? new Map() : new Map([[options.key ?? '91,139', memory]]),
     gameClock: { now: () => options.age ?? 1000, wall: { now: () => 1000 } },
     require: createRequire(path.resolve(__dirname, '../src/bastion/bastion.js')),
     worlds: (require('../src/worlds') as typeof import('../src/worlds')), fullCover: b => !!b && b.name === 'blackstone', log: () => {},
     session: { journal: { state: { bastionCovers: { '91,139': options.persisted } } }, _tunnelOwn: new Set(options.historical ?? []) },
     bot: { game: { dimension: 'the_nether' }, blockAt,
       entity: { position: options.far ? new Vec3(250, 54, 141) : new Vec3(89.5, 54, 141.5) } } }
-  vm.runInNewContext(source.slice(start, end), cjsContext(context))
+  const restoreMemo = vm.runInNewContext(source + '\nrestoreMemo', cjsContext(context))
+  assert.equal(restoreMemo({ session: context.session, p: rec, bot: context.bot, st, mode }), undefined)
   return st
 }
 

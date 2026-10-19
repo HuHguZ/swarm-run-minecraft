@@ -7,13 +7,7 @@ import fauna = require('../fauna')
 import bow = require('../bow')
 import * as throwMod from '../throw'
 import lootMod = require('../loot')
-function sleep (ms, ctl?: any) {
-  if (ctl?.aborted) return Promise.resolve()
-  return new Promise<void>(resolve => {
-    const t = gameClock.setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
-  })
-}
+import { sleep } from './shared'
 
 function fight (this: any, p: any = {}) {
     return this.runIntent('fight', ctl => {

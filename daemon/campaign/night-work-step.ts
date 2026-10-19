@@ -18,8 +18,8 @@ import { structureValue } from './scout'
 import { approachCastLava } from './deep-cast'
 import { enterNether } from './nether-trip'
 import { intelligence } from './strategy-bridge'
-const path: typeof import('path') = require('path')
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as path from 'path'
+import * as gameClock from '../src/game-clock'
 const nightWorkEnabled = process.env.ND_NIGHT_WORK !== '0'
 const nightWorkSafe = process.env.ND_NIGHT_WORK_SAFE !== '0'
 const nightWorkSafety = nightWorkSafe ? require('../src/night-work') : null

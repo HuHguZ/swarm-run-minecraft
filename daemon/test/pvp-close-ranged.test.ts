@@ -1,10 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { runInNewContext } from 'node:vm'
-import { cjsContext } from './cjs-context'
+import { pvpParts } from './pvp-parts'
 import { Vec3 } from 'vec3'
 import * as clock from '../src/game-clock'
 import combat = require('../src/combat')
@@ -200,17 +197,18 @@ test('a clear projectile lane starts the next native draw without the blocked-sh
 function blockedBow(t) {
   let screen = true
   const f = scene(t, { distance: 8, screen: () => screen })
-  const source = readFileSync(join(__dirname, '../src/pvp.ts'), 'utf8')
-  const a = source.indexOf('  const cd = '); const b = source.indexOf('\n  let targetHurtAt', a)
-  const c = source.indexOf('      if (shot.blocked) {'); const e = source.indexOf('      await holdWeapon()', c)
-  const x = source.indexOf('      if (xb && xb.blocked)'); const xe = source.indexOf('\n', x)
-  assert.ok(a > 0 && b > a && c > b && e > c)
   const ctx: any = { bot: f.bot, entity: f.foe, bowMod: bow, pick, ranged: (require('../src/ranged') as typeof import('../src/ranged')),
     prof: { player: true }, vision: { visible: () => true }, track: { vel: () => new Vec3(0, 0, 0) },
     BOW_DRAW_MS: bow.DRAW_MS, TICK_MS: 50, shot: { blocked: true }, st: {}, used() {},
     prepB: { drawMs: null }, gameClock: { now: () => ctx.now }, now: 1000,
-    repositionUntil: 0, reposition: null }
-  runInNewContext(`${source.slice(a, b)}\nglobalThis.block = () => { ${source.slice(c, e)} }; globalThis.blockX = () => { const xb = { blocked: true }; ${source.slice(x, xe)} }; globalThis.available = (kind = 'bow', point = null) => typeof shotReady === 'function' ? shotReady(kind, BOW_DRAW_MS, point) : ready(kind)`, cjsContext(ctx))
+    repositionUntil: 0, reposition: null, cd: {}, blockedShotTargets: { bow: null, xbow: null } }
+  // Настоящие части: ворота выстрела (installShotGate) и отметки заслонённого выстрела лука и арбалета (turn-ranged).
+  const { installShotGate, bowShotBlocked, xbowShotBlocked } = pvpParts(ctx, ['duel-melee', 'turn-ranged'], ['installShotGate', 'bowShotBlocked', 'xbowShotBlocked'])
+  assert.ok([installShotGate, bowShotBlocked, xbowShotBlocked].every(fn => typeof fn === 'function'))
+  installShotGate(ctx)
+  ctx.block = () => bowShotBlocked(ctx, ctx.shot)
+  ctx.blockX = () => xbowShotBlocked(ctx, { blocked: true })
+  ctx.available = (kind = 'bow', point = null) => ctx.shotReady(kind, ctx.BOW_DRAW_MS, point)
   return { ctx, clear: () => { screen = false } }
 }
 
@@ -255,11 +253,6 @@ test('a real blocked approach selects the already clear close shot without aging
 
 
 function projectileTurn() {
-  const source = readFileSync(join(__dirname, '../src/pvp.ts'), 'utf8')
-  const after = source.indexOf('    const arrowIn = ')
-  const start = source.indexOf('    const released = ', after) >= 0 ? source.indexOf('    const released = ', after) : source.indexOf('    if (sawRelease())', after)
-  const end = source.indexOf('    if (myPit', start)
-  assert.ok(start > after && end > start)
   const me = new Vec3(0, 0, 0), projectile = { id: 10, position: new Vec3(8, 1, 0) }
   const ctx: any = { bot: { entity: { position: me, yaw: 0 }, entities: { 10: projectile } }, me, inc: [],
     entity: { id: 2, position: new Vec3(8, 0, 0), yaw: Math.PI / 2 },
@@ -271,7 +264,9 @@ function projectileTurn() {
     ready: () => true, rest() {}, used() {} }
   const nativeDodge = ctx.threats.dodgeKey
   ctx.threats = { dodgeKey: nativeDodge }
-  runInNewContext(`globalThis.poll = () => { ${source.slice(start, end)}; return { shield: cbShield, active: !!dodgeKey && (dodgeLine ? true : now < dodgeUntil) } }`, cjsContext(ctx))
+  // Настоящая ступень хода: его выстрел и заряженный арбалет — щит или уход с линии (turn-projectiles).
+  const { dodgeTurn } = pvpParts(ctx, ['turn-projectiles'], ['dodgeTurn'])
+  ctx.poll = () => { dodgeTurn(ctx, ctx); return { shield: ctx.cbShield, active: !!ctx.dodgeKey && (ctx.dodgeLine ? true : ctx.now < ctx.dodgeUntil) } }
   const incoming = { name: 'arrow', entity: projectile, ticks: 8, vel: { x: -1, y: 0, z: 0 }, at: new Vec3(0, 1, 0) }
   return { ctx, incoming }
 }

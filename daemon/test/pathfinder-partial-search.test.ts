@@ -1,10 +1,11 @@
 'use strict'
+import * as tickFixture from './tick-plugins-fixture'
+import { bodySource } from './source-fixture'
 import test = require('node:test')
 import assert = require('node:assert/strict')
 import * as fs from 'node:fs'
 import path = require('node:path')
-import { createRequire, Module } from 'node:module'
-import { transformSync } from 'esbuild'
+import { Module } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import AStar = require('mineflayer-pathfinder/lib/astar')
@@ -17,16 +18,12 @@ const movementFile = path.join(__dirname, '../src/movement.js')
 const movementModule: any = new Module(movementFile, module)
 movementModule.filename = movementFile
 movementModule.paths = (Module as any)._nodeModulePaths(path.dirname(movementFile))
-movementModule._compile(transformSync(fs.readFileSync(movementFile.replace(/\.js$/, '.ts'), 'utf8'), {
-  loader: 'ts', format: 'cjs', target: 'node22'
-}).code, movementFile)
+// Фасад movement и его части (movement/) одной областью — текущий исходник, как раньше один файл.
+movementModule._compile(bodySource(movementFile), movementFile)
 const { gotoGoal } = movementModule.exports
 
-const fixtureFile = path.join(__dirname, 'tick-plugins.test.ts')
-const helpers: any = { exports: {} }
-new Function('require', 'module', 'exports', transformSync(fs.readFileSync(fixtureFile, 'utf8').split('\ntest(')[0] +
-  '\nmodule.exports = { install, testClock, block }', { loader: 'ts', format: 'cjs', target: 'node22' }).code)(
-  createRequire(fixtureFile), helpers, helpers.exports)
+// Общий стенд установленных библиотек (tick-plugins-fixture) без его тестов.
+const helpers: any = { exports: tickFixture }
 
 const node = (x, z) => new Move(x, 64, z, 0, 1)
 const edges = new Map([

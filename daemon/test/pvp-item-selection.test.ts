@@ -1,10 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { runInNewContext } from 'node:vm'
-import { cjsContext } from './cjs-context'
+import { pvpParts } from './pvp-parts'
 
 const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
@@ -22,9 +19,6 @@ function item(name: string, slot: number, components: any[] = []) {
 const potion = (slot: number, name: string) => item('splash_potion', slot, [{ type: 'potion_contents', data: { potionId: name } }])
 
 test('off-hand returns to shield on current HP and burst margin, without a five-second lock', async () => {
-  const source = readFileSync(join(__dirname, '../src/pvp.ts'), 'utf8')
-  const a = source.indexOf('    if (now >= totemAt) {'); const b = source.indexOf('    const archer = ', a)
-  assert.ok(a >= 0 && b > a)
   const shield = item('shield', 36); const totem = item('totem_of_undying', 45)
   const ctx: any = { now: 1000, totemAt: 0, prof: { player: true }, mc: { threat: () => null }, entity: {}, theirR: 8,
     tot: { lastSwitch: 999, lastPop: 999, shieldBack: 0 },
@@ -32,10 +26,13 @@ test('off-hand returns to shield on current HP and burst margin, without a five-
     totemMod: { wantTotem: () => ctx.wt }, used() {}, findItem: (_bot, predicate) => [shield, totem].find(predicate),
     bot: { inventory: { slots: Object.assign([], { 45: totem }) },
       async equip(chosen, hand) { assert.equal(hand, 'off-hand'); ctx.bot.inventory.slots[45] = chosen } } }
-  await runInNewContext(`(async () => { ${source.slice(a, b)} })()`, cjsContext(ctx))
+  // Настоящая ступень хода: левая рука — тотем или щит (pvp/turn-heal.ts).
+  const { offhandTurn } = pvpParts(ctx, ['turn-heal'], ['offhandTurn'])
+  assert.equal(typeof offhandTurn, 'function')
+  await offhandTurn(ctx, ctx)
   assert.equal(ctx.bot.inventory.slots[45], shield)
   ctx.bot.inventory.slots[45] = totem; ctx.totemAt = 0; ctx.wt.hp = 9
-  await runInNewContext(`(async () => { ${source.slice(a, b)} })()`, cjsContext(ctx))
+  await offhandTurn(ctx, ctx)
   assert.equal(ctx.bot.inventory.slots[45], totem, 'the existing HP hysteresis retains the totem near lethal burst')
 })
 

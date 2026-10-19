@@ -9,6 +9,7 @@ import path = require('node:path')
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import R = require('../src/reflex-lock')
+import { bodySource } from './source-fixture'
 function fixture ({ distance = 1.5, visible = true }: any = {} as Record<string, any>) {
   const b: any = new EventEmitter(); b._client = new EventEmitter(); const calls = []
   b.entity = { id: 1, position: new Vec3(.5,64,.5), onGround: true }
@@ -23,7 +24,7 @@ function fixture ({ distance = 1.5, visible = true }: any = {} as Record<string,
   const s = { bot: b, current: { name: 'ne_route', ctl: { aborted: false, onAbort: [] } } }
   const context = { module: { exports: {} as Record<string, any> }, console: { log () {} }, process, setTimeout, clearTimeout,
     require: n => n === 'vec3' ? { Vec3 } : n === './movement' ? { sleep: ms => new Promise<any>(r => setTimeout(r, Math.min(ms,1))) } : n === './worlds' ? { worldOf: () => 'the_nether' } : n === './reflex-lock' ? R : n === './perception' ? { eyePos: () => b.entity.position, raySees: () => visible } : n === './pick' ? { canHit: () => visible && distance < 3, aim: (_bot, e) => visible ? { point: e.position } : null } : n === './sealed' ? { fillerCount: () => 0 } : n === './threats' ? { incoming: () => [] } : n === './combat' ? { makeShield: () => ({ wear: async () => true, raise: async on => { if (on) b.activateItem(true); else b.deactivateItem() }, close: () => b.deactivateItem() }) } : {} as Record<string, any> }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/ne-guard.js'),'utf8'),cjsContext(withClockFixture(context)))
+  vm.runInNewContext(bodySource(path.join(__dirname,'../src/ne-guard.js')),cjsContext(withClockFixture(context)))
   const G = context.module.exports; G.attach(s)
   return { b,s,G,calls,hit: () => b._client.emit('damage_event',{ entityId: 1, sourceCauseId: 3, sourceDirectId: 3 }) }
 }

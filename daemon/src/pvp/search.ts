@@ -4,7 +4,7 @@ import { visibleLanding } from '../navigation/parkour'
 import { combatMovement } from './movement'
 import { goals, Movements } from 'mineflayer-pathfinder'
 import * as clock from '../game-clock'
-import pick = require('../pick')
+import * as pick from '../pick'
 
 // Shared by acquisition and LOS repositioning: packet-only cells stay unknown,
 // including apparently empty head space above a visible support.

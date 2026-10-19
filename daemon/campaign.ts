@@ -8,7 +8,7 @@ import { connect, ws } from './campaign/rpc'
 import './campaign/stages/all'
 import { assertStageOrder } from './campaign/stages/table'
 import { runCampaign } from './campaign/loop'
-const fs: typeof import('fs') = require('fs')
+import * as fs from 'fs'
 
 if (require.main === module) { try { fs.appendFileSync(LOG, `==== ${new Date().toISOString().slice(0, 10)} ${new Date().toTimeString().slice(0, 8)} запуск кампании, pid ${process.pid}, этапы: ${process.argv[2] || 'все'} ====
 `) } catch {} }

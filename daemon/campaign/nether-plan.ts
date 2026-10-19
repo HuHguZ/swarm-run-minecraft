@@ -8,8 +8,8 @@ import { log } from './log'
 import { have, dim, foodUnits, PICK_DIAMOND, lighter, fireResReady, pearlsNow } from './queries'
 import { bState } from './observe'
 import { READY } from './stages/table'
-const path: typeof import('path') = require('path')
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as path from 'path'
+import * as gameClock from '../src/game-clock'
 const EXIT_KIT = process.env.ND_EXIT_KIT !== '0' && process.env.ND_SH_NETHER === '1'
 const exitKitNow = () => require('../src/nether').exitKit(state.inventory || {})
 const pendingExitFrame = () => !!exitFrameTarget && dim() === 'the_nether' && lighter() && !!state.pos && Math.hypot(state.pos.x - Math.floor(exitFrameTarget.x / 8), state.pos.z - Math.floor(exitFrameTarget.z / 8)) <= 12
@@ -21,7 +21,7 @@ const obsShort = () => !known.endPortal && dim() === 'the_nether' && (EXIT_KIT ?
 const eyesWant = () => known.endPortal && Number.isFinite(known.portalEyes) && process.env.ND_EYES_FRAMES !== '0'
   ? Math.max(0, EYES_NEED - known.portalEyes) : EYES_NEED + (known.stronghold ? 0 : 2)
 const notePortalEyes = r => { const d = r && r.detail; const w = d && (Number.isFinite(d.withEye) ? d.withEye : d.room && d.room.withEye); if (Number.isFinite(w)) known.portalEyes = w }
-const barterFlow = require('../src/barter-flow')
+import * as barterFlow from '../src/barter-flow'
 function deferBastionMining (b) {
   if (process.env.ND_NE_RECOVER === '1') {
     bState(b).blocked = { observed: netherFailureState('bastion'), origin: state.pos && { ...state.pos } }
@@ -154,7 +154,7 @@ function endermenSecondsPerPearl () {
   const prior = forestToHunt() ? 240 : 900
   return (pearlTrips.seconds + prior * 2) / (pearlTrips.pearls + 2)
 }
-const netherSupply = require('../src/campaign/nether-supply')
+import * as netherSupply from '../src/campaign/nether-supply'
 const netherSupplyState = () => ({ dimension: dim(), health: state.health ?? 20, inventory: state.inventory || {}, pickSwings: sit.pickLeft ?? 0, woodAt: netherWoodSeen() })
 // Стебли, увиденные глазами (nether-forest.js), — в 200 бл. по горизонтали (S1e).
 function netherWoodSeen () {

@@ -1,7 +1,7 @@
 'use strict'
 // Общее состояние прогона: переменные, которые читают и пишут разные части. Пишут их только через сеттеры отсюда
 // (импорт ES-модуля только для чтения); чтение — как раньше, по имени.
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 let T0 = gameClock.now()
 gameClock.changes.once('bound', clock => { if (clock) T0 = clock.now() })
 let stage = '-'

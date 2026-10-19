@@ -1,3 +1,4 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -11,7 +12,8 @@ function sourceModule(name: string, overrides: Record<string, any> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file), module = { exports: {} as any }
   const dependencies = new Map(Object.entries(overrides).map(([id, value]) => [local.resolve(id), value]))
-  const code = transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  // tactics/minecraft — фасад и части tactics/minecraft/ одной областью (подмены по spec доходят до частей)
+  const code = name === 'tactics/minecraft' ? bodySource(file) : transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
   vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => dependencies.get(local.resolve(id)) ?? local(id), module, file, path.dirname(file))
   return module.exports

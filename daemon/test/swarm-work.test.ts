@@ -1,19 +1,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
-import * as esbuild from 'esbuild'
+import { bodySource } from './source-fixture'
+import { stubRequire } from './stub-require'
 
+// Свой экземпляр модуля из исходника (bodySource — модуль с папкой тела одним скриптом) с подменами по spec (stubRequire);
+// подмена, которую модуль ни разу не запросил, — ошибка фикстуры.
 function source(name: string, overrides: Record<string, any> = {}) {
-  const file = path.resolve(__dirname, '../src', name + '.ts'), local = createRequire(file)
+  const file = path.resolve(__dirname, '../src', name + '.js'), req = stubRequire(file, overrides)
   const module = { exports: {} as any }
-  const code = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
-    (id: string) => overrides[id] ?? local(id), module, file, path.dirname(file))
+  vm.runInThisContext(`(function (require, module, exports, __filename, __dirname) {${bodySource(file)}\n})`, { filename: file })(req,
+    module, module.exports, file, path.dirname(file))
+  assert.deepEqual(req.unmatched(), [], name + ': unused stubs')
   return module.exports
 }
 

@@ -22,7 +22,8 @@ import { ensureFlint } from './portal-kit'
 import { climbOwnShaft } from './scout'
 import { listenForLava, deepCast } from './deep-cast'
 import { enterNether } from './nether-trip'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
+import { createOverworldRoute } from '../src/campaign/overworld-route'
 const routeMod = (() => { try { return (require('../src/route') as typeof import('../src/route')) } catch (e) { return null } })()
 let routeInfoV
 const routeAvoid = new Set<string>()
@@ -60,7 +61,7 @@ async function routeRecover (...args) { return routeSkills.routeRecover(...args)
 async function routeHealToEnter (...args) { return routeSkills.routeHealToEnter(...args) }
 async function routeStep (...args) { return routeSkills.routeStep(...args) }
 
-const routeSkills = require('../src/campaign/overworld-route').createOverworldRoute({
+const routeSkills: any = createOverworldRoute({
 get BED_BLOCKS () { return BED_BLOCKS },
 get COBBLE () { return COBBLE },
 get FOOD () { return FOOD },

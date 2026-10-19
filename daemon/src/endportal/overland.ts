@@ -1,9 +1,9 @@
 'use strict'
 // Крепость и портал в Край (endportal.ts): дорога к крепости поверху: вплавь, мост, просека, другие крепости кольца, море.
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { sleep, travelXZ }: typeof import('../movement') = require('../movement')
-const { equipBestTool, missingHarvestTool }: typeof import('../items') = require('../items')
+import * as gameClock from '../game-clock'
+import { Vec3 } from 'vec3'
+import { sleep, travelXZ } from '../movement'
+import { equipBestTool, missingHarvestTool } from '../items'
 import { log } from './common'
 
 // Открытая вода без берега в 24 блоках (лаборатория 2026-09-27: тело в

@@ -3,6 +3,7 @@ import assert = require('node:assert/strict')
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 test('a dig receipt after disconnect cannot continue an old route or write into the new bot cost history', async () => {
   const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
@@ -37,7 +38,7 @@ test('a dig receipt after disconnect cannot continue an old route or write into 
           options.onReceipt({ gameMs: 1, wallMs: 1, serverWaitWallMs: 1, notificationDelayWallMs: 0, result: 'confirmed', packet: 'single' })
           return 'ok'
         } } : realRequire(name)
-    new Function('require', 'module', 'exports', fs.readFileSync(filename, 'utf8') + '\nmodule.exports.stepOne = stepOne')(
+    new Function('require', 'module', 'exports', bodySource(filename) + '\nmodule.exports.stepOne = stepOne')(
       localRequire, module, module.exports)
     const result = await module.exports.stepOne(session, ctl, { mark: (...args) => marks.push(args) },
       { kind: 'flat', from: { x: 0, y: 64, z: 0 }, to: { x: 1, y: 64, z: 0 } }, st)

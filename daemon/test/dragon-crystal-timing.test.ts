@@ -3,7 +3,8 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import dragon = require('../src/dragon')
-import bow = require('../src/bow')
+// shoot определён в части bow/shoot: фасад bow отдаёт его геттером, подмена — в части (дракон зовёт bow.shoot через фасад).
+import bow = require('../src/bow/shoot')
 
 function fixture (ph = 1, y = 104) {
   const d = { id: 1, name: 'ender_dragon', position: new Vec3(50, 100, 40), yaw: 0, metadata: [ph, 200] }

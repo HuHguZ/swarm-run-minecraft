@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function dropping(distance: number, { isolated = false, hazard = false, unknown = false, withClutch = false } = {}) {
   const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
@@ -60,7 +61,8 @@ function dropping(distance: number, { isolated = false, hazard = false, unknown 
   const nativeRequire = createRequire(filename)
   let motion = null
   const localModule = { exports: {} as Record<string, any> }
-  new Function('require', 'module', 'exports', fs.readFileSync(filename, 'utf8') + '\nmodule.exports.dropInto = dropInto')(
+  // nether-route — фасад + части (src/nether-route/**) одной областью видимости: dropInto — имя верхнего уровня.
+  new Function('require', 'module', 'exports', bodySource(filename) + '\nmodule.exports.dropInto = dropInto')(
     name => name === './game-clock' ? clock : name === './reflex-lock' ? { clock: () => gameMs }
       : name === './navigation/parkour' ? { async executeJump (...args) {
         motion = await nativeRequire(name).executeJump(...args); return motion

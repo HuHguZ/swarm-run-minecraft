@@ -1,32 +1,19 @@
-import { campaignRequire, campaignScript, campaignTs } from './campaign-source'
+import { campaignTs, campaignSocket, campaignVm } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
 import vm from 'node:vm'
 import { cjsContext } from './cjs-context'
-import { transformSync } from 'esbuild'
 import { withClockFixture } from './clock-fixture'
 
 function fixture(receipt: any = {}, preflight = false) {
   const calls: string[] = [], recovery: string[] = []
   const state = { health: 12, food: 8, dimension: 'overworld', replanRevision: 0,
     inventory: { stone_sword: 1 }, pos: { x: 104, y: 53, z: 137 } }
-  class Socket {
-    listeners = new Map<string, (...args: any[]) => void>()
-    on(name, fn) { this.listeners.set(name, fn) }
-    send(raw) {
-      const { id, method } = JSON.parse(raw)
-      calls.push(method)
-      queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true,
-        result: { status: 'done', state, events: [], detail: {}, ...(method === 'dig_down' ? receipt : {}) } })))
-    }
-    close() {}
-  }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : campaignRequire(name),
-    __dirname: path.resolve(__dirname, '..'), module: { exports: {} }, process: { argv: ['node', 'campaign.js'], env: {} },
-    console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, testState: state, receipt, preflight, recovery }
-  vm.runInNewContext(campaignScript() + `
+  const socket = campaignSocket(method => {
+    calls.push(method)
+    return { status: 'done', state, events: [], detail: {}, ...(method === 'dig_down' ? receipt : {}) }
+  })
+  const context = campaignVm(`
     state = testState; sit = { foes: 1, surface: false }; stage = 'MineIron';
     if (preflight) state.busy = 'refuge';
     answerThreat = async () => { recovery.push('answerThreat') };
@@ -34,7 +21,7 @@ function fixture(receipt: any = {}, preflight = false) {
     tunnelAway = async () => { recovery.push('tunnelAway'); return false };
     awaitRefuge = async () => { recovery.push('awaitRefuge'); acceptResult(receipt); return receipt };
     STAGES.push({ name: 'testMining', run: async () => { await act('dig_down', { mode: 'stairs', depth: 24 }); await act('mine', { block: 'iron_ore' }) } });
-    module.exports = { executeStrategy, act };`, cjsContext(withClockFixture(context)))
+    module.exports = { executeStrategy, act };`, { socket, wrap: withClockFixture, globals: { testState: state, receipt, preflight, recovery } })
   return { calls, recovery, context, run: () => context.module.exports.executeStrategy({ skill: 'testMining' }, new AbortController().signal) }
 }
 

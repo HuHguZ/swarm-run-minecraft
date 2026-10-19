@@ -131,7 +131,7 @@ function aimFrac (bot, e) {
   return null
 }
 const blazeEye = e => e.position.offset(0, BLAZE_EYE, 0)
-const seesMe = (bot, e) => losClear(bot, blazeEye(e), myEye(bot))
+function seesMe (bot, e) { return losClear(bot, blazeEye(e), myEye(bot)) }
 
 // SmallFireball 5, melee 6, shield delay 5 ticks (jar 1.21.11); only current rays/projectiles enter the price.
 function blazeShieldPrice (bot, blazes, radar, guard, fireproof, face) {

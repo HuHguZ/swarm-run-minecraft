@@ -1,24 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createRequire } from 'node:module'
-import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
-import { cjsContext } from './cjs-context'
+import { pvpParts } from './pvp-parts'
 
 const req = createRequire(resolve(__dirname, '../src/pvp.js'))
 const pick = req('./pick')
 const { createLastSeen } = req('./pvp/last-seen')
 const { raySees } = req('./perception')
 const { goals } = req('mineflayer-pathfinder')
-const source = readFileSync(process.env.ND_TEST_LOS_SOURCE || resolve(__dirname, '../src/pvp.ts'), 'utf8')
-const spotStart = source.indexOf('const losSpot = () => {')
-const spotEnd = source.indexOf('\n  let lastTrick', spotStart)
-const seenStart = source.indexOf('const seesBody = ')
-const seenEnd = source.indexOf('\n    // Честный прицел', seenStart)
-assert.ok(spotStart > 0 && spotEnd > spotStart && seenStart > 0 && seenEnd > seenStart, 'exercise the actual PvP closures')
+// Настоящие части боя (src/pvp/duel-*.ts, turn-*.ts): ступени хода и установщики контекста, внешние имена — из ctx.
+const parts = (ctx, names: string[]) => {
+  const fns = pvpParts(ctx, ['duel-probes', 'duel-melee', 'duel-events', 'duel-skills', 'duel-target', 'turn-target', 'turn-air', 'turn-foes', 'turn-reach', 'turn-mace', 'turn-melee'], names)
+  for (const name of names) assert.equal(typeof fns[name], 'function', 'exercise the actual PvP closures')
+  return fns
+}
 
 function scene (at = new Vec3(.5, 0, .5), terrain: (p: Vec3) => boolean = p => p.y < 0) {
   const bot: any = new EventEmitter()
@@ -44,7 +42,8 @@ function context (bot, position, vision = { visible: () => false }) {
     AR: null, onField: () => true, require: req, goals }
 }
 function spot (ctx) {
-  return runInNewContext(source.slice(spotStart, spotEnd) + '\nlosSpot()', cjsContext(ctx))
+  parts(ctx, ['installSight']).installSight(ctx)
+  return ctx.losSpot()
 }
 
 test('a player seen during an awaited skill retains that observation after landing behind cover', t => {
@@ -72,7 +71,7 @@ test('a player seen during an awaited skill retains that observation after landi
   assert.equal(entity._ndVisible, false)
   assert.deepEqual(entity.position, observed)
   ctx.eye = pick.eyeOf(bot)
-  runInNewContext(source.slice(seenStart, seenEnd), cjsContext(ctx))
+  parts(ctx, ['noteSightTurn']).noteSightTurn(ctx, ctx)
   assert.deepEqual(ctx.foeSeenPos, observed, 'the caller must use the observer receipt, including one received while awaiting a skill')
   assert.notDeepEqual(ctx.foeSeenPos, raw.position, 'never follow the hidden raw packet')
 })
@@ -107,12 +106,6 @@ test('a target hidden from the beginning does not create a remembered LOS positi
   assert.equal(spot(ctx), null)
 })
 
-function bodyPart(start: string, end: string) {
-  const a = source.indexOf(start); const b = source.indexOf(end, a)
-  assert.ok(a >= 0 && b > a, `actual PvP branch: ${start}`)
-  return source.slice(a, b)
-}
-
 function strafeScene() {
   const ctx: any = {
     bot: { entity: { position: new Vec3(.5, 0, .5) } }, now: 1000,
@@ -120,9 +113,8 @@ function strafeScene() {
     stepSafe: (_bot, dir) => !ctx.blocked.has(dir.x), blocked: new Set(),
     keyDir: (_bot, key) => ({ x: key === 'left' ? -1 : 1, z: 0 })
   }
-  const init = bodyPart('  let strafeKey = ', '  let dodgeKey = ')
-  const tick = bodyPart('    let forward = false', '    const shieldBroken = ')
-  runInNewContext(`${init}\nglobalThis.poll = () => { ${tick}\nreturn strafeKey }`, cjsContext(ctx))
+  parts(ctx, ['installStrafe']).installStrafe(ctx)
+  ctx.poll = () => { ctx.strafeStep(); return ctx.strafeKey }
   return ctx
 }
 
@@ -147,11 +139,11 @@ test('spear bracing follows the current dive instead of expiring after three sec
   const ctx: any = { bracing: 1000, skyThreat: { eta: 10 }, meInWeb: false,
     gameClock: { now: () => 60000 }, drops: 0, heldName: () => 'iron_spear',
     spear: req('./spear'), bot: { deactivateItem: () => { ctx.drops++ } } }
-  const branch = bodyPart('    if (bracing && ', '    // Он летит на нас')
-  runInNewContext(branch, cjsContext(ctx))
+  const { braceReleaseTurn } = parts(ctx, ['braceReleaseTurn'])
+  braceReleaseTurn(ctx, ctx)
   assert.equal(ctx.drops, 0)
   ctx.skyThreat = null
-  runInNewContext(branch, cjsContext(ctx))
+  braceReleaseTurn(ctx, ctx)
   assert.equal(ctx.drops, 1, 'the dive ending releases the spear immediately')
 })
 
@@ -161,9 +153,13 @@ function floorScene() {
     solid: (_bot, p) => p.y < 0, stepSafe: () => true, ready: () => true, rest() {}, used() {},
     gameClock: { now: () => ctx.now }, Math: Object.assign(Object.create(Math), { random: () => 0 }),
     keyDir: (_bot, k) => ({ x: k === 'forward' ? 1 : k === 'back' ? -1 : 0, z: k === 'left' ? 1 : k === 'right' ? -1 : 0 }) }
-  const init = bodyPart('  let floorEscape = ', '  let groundY = ')
-  const branch = bodyPart('\n    if (floorEscape', '    if (!meInWeb) {')
-  runInNewContext(`${init}\nglobalThis.poll = () => { const me = bot.entity.position; let forward = false, back = false, strafe = null, sprint = false, jump = false; ${branch}\nreturn { forward, back, strafe } }`, cjsContext(ctx))
+  const { installFloorWatch, floorEscapeTurn } = parts(ctx, ['installFloorWatch', 'floorEscapeTurn'])
+  installFloorWatch(ctx)
+  ctx.poll = () => {
+    Object.assign(ctx, { me: bot.entity.position, forward: false, back: false, strafe: null, sprint: false, jump: false })
+    floorEscapeTurn(ctx, ctx)
+    return { forward: ctx.forward, back: ctx.back, strafe: ctx.strafe }
+  }
   const block = { position: new Vec3(0, -1, 0) }
   return { ctx, crack: (breaker = 2) => bot.emit('blockBreakProgressObserved', block, 3, { id: breaker }),
     stop: (breaker = 2) => bot.emit('blockBreakProgressEnd', block, { id: breaker }) }
@@ -207,11 +203,10 @@ function routeScene() {
     ready: () => true, rest() {}, clear() {}, used() {}, sleep: async () => {},
     pathTo(on, goal) { ctx.commands.push({ on, goal }); bot.pathfinder.goal = on ? goal : null }, commands: [] }
   ctx.entity.id = 2
-  const helpers = source.indexOf('  const routeInputs = ')
-  const helperCode = helpers < 0 ? '' : source.slice(helpers, source.indexOf('\n  let lastTrick', helpers))
-  const branch = bodyPart('    // Окно перестановки', '    if (prof.flying')
-  const unblock = bodyPart('    if (st.blockedSince &&', "    if (back &&")
-  runInNewContext(`${helperCode}\nglobalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }; globalThis.unblock = async () => { for (let pass = 0; pass < 1; pass++) { ${unblock} } }`, cjsContext(ctx))
+  const { installSight, repositionTurn, unblockTurn } = parts(ctx, ['installSight', 'repositionTurn', 'unblockTurn'])
+  installSight(ctx)
+  ctx.poll = async () => { ctx.me = bot.entity.position; await repositionTurn(ctx, ctx) }
+  ctx.unblock = async () => { await unblockTurn(ctx, ctx) }
   return ctx
 }
 
@@ -281,8 +276,7 @@ async function attackerTurn({ visible = true, r = 8, inSight = false } = {}) {
     lastHurtByTarget: 1000, foeHpDecide: () => 20, theirHp: 20, r, d: r,
     busyFoe: false, inSight, vision: { visible: () => visible }, pick: { canHit: () => visible }, bot: {},
     turns: [] as number[], used() {}, retarget: e => ctx.turns.push(e.id), holdWeapon: async () => {} }
-  const at = source.indexOf('    if (prof.player && !duo.active()'); const branch = source.slice(at, source.indexOf('\n    if (', at + 8))
-  await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } })()`, cjsContext(ctx))
+  await parts(ctx, ['backAttackerTurn']).backAttackerTurn(ctx, ctx)
   return ctx.turns
 }
 
@@ -295,23 +289,6 @@ test('an available current contact is not abandoned for an equal nearby attacker
   assert.deepEqual(await attackerTurn({ visible: false }), [])
 })
 
-
-function ifBody(marker: string) {
-  let start = source.indexOf(marker)
-  assert.ok(start >= 0, marker)
-  start = source.indexOf('if (', start)
-  const open = source.indexOf('{', start)
-  let depth = 1, quote = '', escaped = false, at = open + 1
-  for (; at < source.length && depth; at++) {
-    const c = source[at]
-    if (escaped) escaped = false
-    else if (quote) { if (c === '\\') escaped = true; else if (c === quote) quote = '' }
-    else if ('\'"`'.includes(c)) quote = c
-    else if (c === '{') depth++
-    else if (c === '}') depth--
-  }
-  return source.slice(start, at)
-}
 
 function counterScene({ bow = false, near = false } = {}) {
   const bot = scene(new Vec3(.5, 0, .5)); const target = new Vec3(near ? .5 : 5.5, 4, .5)
@@ -330,13 +307,10 @@ function counterScene({ bow = false, near = false } = {}) {
     sleep: async () => {}, noteBuild() {}, buildGuard: () => ({}), guardCtl: g => g,
     towerShield() {}, holdWeapon: async () => {}, buildDone: () => false,
     towerUp: async () => { towers++; return { ok: false, placed: 0, why: 'face blocked' } } }
-  const columnStart = source.indexOf('  const columnInputs = ')
-  if (columnStart >= 0) {
-    ctx.edges = { fillerCount: () => 64 }; ctx.pick = pick
-    runInNewContext(source.slice(columnStart, source.indexOf('  const windInputs = ', columnStart)) + '\nglobalThis.columnInputs = columnInputs', cjsContext(ctx))
-  }
-  const branch = ifBody('    if (theyUp && prof.player && !perch && !reposition')
-  runInNewContext(`globalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
+  ctx.edges = { fillerCount: () => 64 }; ctx.pick = pick
+  const { installInputs, counterPillarTurn } = parts(ctx, ['installInputs', 'counterPillarTurn'])
+  installInputs(ctx)
+  ctx.poll = async () => { ctx.me = bot.entity.position; await counterPillarTurn(ctx, ctx) }
   return { ctx, commands, towers: () => towers, mining: v => { mining = v }, geometry: v => { geometry = v; const read = bot.blockAt; bot.blockAt = p => p.floored().equals(new Vec3(0, 2, 0)) ? { ...read(p), name: v, stateId: v } : read(p) } }
 }
 
@@ -380,10 +354,8 @@ test('failed shelter remains refused through time and unlocks on a changed mater
     fortSpot: () => new Vec3(0, 0, 0), fortify: { boxCheck: () => ({ ok: true, ms: 500 }) },
     wallInputs: () => material, buildHot: () => false, tt: { safe: () => ({ ok: true }) },
     pvpSkills: { fortOut: async () => { attempts++; return false } } }
-  const start = source.indexOf('  let failedFort = '), original = source.indexOf('  const fortOut = ')
-  const end = source.indexOf('\n  const punchThrough', original)
-  const init = start >= 0 ? source.slice(start, end) : source.slice(original, end)
-  runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(init + '\nglobalThis.tryFort = fortOut', { loader: 'ts' }).code, cjsContext(ctx))
+  parts(ctx, ['installFort']).installFort(ctx)
+  ctx.tryFort = ctx.fortOut
   await ctx.tryFort(); ctx.now = 60000; await ctx.tryFort(); assert.equal(attempts, 1)
   material = 'enough blocks with visible faces'; await ctx.tryFort(); assert.equal(attempts, 2)
 })
@@ -399,8 +371,8 @@ test('a failed smash does not repeat on the same launch; a changed available tra
     bot: { entity: { position: new Vec3(0, 0, 0) } }, clear() {}, aim: 'target', st: {}, mc: { st: {} },
     track: { vel: () => new Vec3(0, 0, 0) }, telemetryHp: () => null, used() {}, holdWeapon: async () => {},
     process: { env: {} }, console: { log() {} }, ctl: { aborted: false } }
-  const branch = ifBody('    if (!smashSetup && prof.player')
-  runInNewContext(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
+  const { smashTurn } = parts(ctx, ['smashTurn'])
+  ctx.poll = async () => { await smashTurn(ctx, ctx) }
   await ctx.poll(); ctx.now += 60000; nativeReady = true; await ctx.poll(); assert.equal(attempts, 1)
   trajectory = 'new safe landing'; await ctx.poll(); assert.equal(attempts, 2)
 })
@@ -412,9 +384,12 @@ function flankScene() {
     now: 1000, r: 8, d: 8, HIT_REACH: 2.9, TICK_MS: 50, theyUp: false, pathing: false,
     failedFlank: null, failedReposition: null, flankRoute: null, st: {}, goals, theyEat: false,
     routeInputs: () => geometry, miningProgress: () => mining, clear() {}, ready: () => true, rest() {}, used() {},
-    pathTo: on => commands.push(on), sleep: async () => {} }
-  const branch = ifBody('      } else if (r > HIT_REACH && !theyUp')
-  runInNewContext(`globalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
+    pathTo: on => commands.push(on), sleep: async () => {},
+    // Обход — ветка «он скрыт» (hiddenFoeTurn): коробки у него нет, пробивать нечего.
+    hidden: true, perch: null, reposition: null, exhaustedPunch: null, punches: 0, style: { punchLimit: 4 },
+    after: () => false, noticed: {}, punchThrough: async () => false, fortify: { enclosure: () => ({ walls: 0 }), pickaxeOf: () => null } }
+  const { hiddenFoeTurn } = parts(ctx, ['hiddenFoeTurn'])
+  ctx.poll = async () => { ctx.me = bot.entity.position; await hiddenFoeTurn(ctx, ctx) }
   return { ctx, commands, mining: v => { mining = v }, geometry: v => { geometry = v } }
 }
 
@@ -441,8 +416,8 @@ test('a grounded high target offers climb immediately, and a failed shaft needs 
     edges: { climbBack: async () => { climbs++; return { ok: false, why: 'shaft blocked' } } },
     bowWatch: { shots: 0 }, findItem: () => null, holdWeapon: async () => {}, used() {}, process: { env: {} },
     routeInputs: () => geometry, columnInputs: () => geometry }
-  const branch = ifBody('    if (!AR && prof.player && dy > 6')
-  runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, { loader: 'ts' }).code, cjsContext(ctx))
+  const { climbToHimTurn } = parts(ctx, ['climbToHimTurn'])
+  ctx.poll = async () => { await climbToHimTurn(ctx, ctx) }
   await ctx.poll(); assert.equal(climbs, 1)
   ctx.now += 60000; await ctx.poll(); assert.equal(climbs, 1)
   geometry = 'open'; ctx.climbInputs = 'open|open'; await ctx.poll(); assert.equal(climbs, 2)
@@ -458,8 +433,8 @@ test('a rejected combat hop chooses another means until its observed obstacle ch
     failedHop: null, failedReposition: null, failedFlank: null, miningProgress: () => false,
     routeInputs: () => geometry, hazardOnLine: () => ({}), st: {}, used() {}, sleep: async () => {}, gameClock: { now: () => ctx.now },
     require: id => { assert.equal(id, './navigation/parkour'); return { combatHop: async () => { attempts++; return { ok: false, why: 'no supported landing' } } } } }
-  const branch = ifBody('    if (HOP && prof.player')
-  runInNewContext(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
+  const { hopTurn } = parts(ctx, ['hopTurn'])
+  ctx.poll = async () => { await hopTurn(ctx, ctx) }
   await ctx.poll(); ctx.now += 60000; await ctx.poll(); assert.equal(attempts, 1)
   geometry = 'new support'; await ctx.poll(); assert.equal(attempts, 2)
 })

@@ -1,6 +1,6 @@
+import { bodySource } from './source-fixture'
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
@@ -9,7 +9,6 @@ import { TacticalArbiter } from '../src/tactics/arbiter'
 import { EscapeProgress } from '../src/tactics/escape-progress'
 import { SCENARIOS } from '../src/tactics/sim-scenarios'
 import { check } from '../src/tactics/sim-run'
-import { transformSync } from 'esbuild'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const flags = ['ND_OW_NIGHT_FLEE', 'ND_OW_NIGHT_BLOCKOFF', 'ND_OW_NIGHT_CREEPER']
@@ -103,7 +102,7 @@ function nativeBox({ sealed = true, abort = false, handoff = false, throws = fal
   const file = path.resolve(__dirname, '../src/tactics/minecraft.ts'), local = createRequire(file)
   const module = { exports: {} as any }
   const overrides = { '../survival': survival, '../survival/hold-out': hold }
-  const code = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const code = bodySource(file) // фасад и части tactics/minecraft/ одной областью
   vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     id => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   const execute = module.exports.TacticalSystem.prototype.execute

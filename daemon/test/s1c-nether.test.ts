@@ -43,9 +43,10 @@ test('wither skeleton: the route fights it from a 2-deep pit (its attack box is 
   const dug: string[] = []
   let climbed = 0
   Module._load = function (request: string, parent: any, isMain: boolean) {
-    if (request === './sealed') return { digCell: async (_b: any, c: any) => { dug.push(`${c.x},${c.y},${c.z}`); bot.entity.position = bot.entity.position.offset(0, -1, 0); return 'ok' } }
-    if (request === './build') return { towerUp: async () => { climbed++; return { ok: true } } }
-    if (request === './pick') return { canHit: () => true }
+    // pitFight — в nether-route/fight.ts: ленивые require там — '../sealed', '../build', '../pick'.
+    if (request === './sealed' || request === '../sealed') return { digCell: async (_b: any, c: any) => { dug.push(`${c.x},${c.y},${c.z}`); bot.entity.position = bot.entity.position.offset(0, -1, 0); return 'ok' } }
+    if (request === './build' || request === '../build') return { towerUp: async () => { climbed++; return { ok: true } } }
+    if (request === './pick' || request === '../pick') return { canHit: () => true }
     return realLoad.apply(this, arguments as any)
   }
   const foe: any = { id: 7, name: 'wither_skeleton', isValid: true, position: new Vec3(1.5, 64, 0.5) }

@@ -1,12 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createRequire } from 'node:module'
-import { runInNewContext } from 'node:vm'
-import { cjsContext } from './cjs-context'
-import { transpiledSource } from './source-fixture'
+import { pvpParts } from './pvp-parts'
 import { Vec3 } from 'vec3'
 const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
 const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
@@ -84,16 +81,18 @@ test('the actual PvP retarget adapter retains the native observation source and 
   const weak = Object.assign(new EventEmitter(), f.weak), strong = Object.assign(new EventEmitter(), f.strong)
   bot.entities = { 2: weak, 3: strong }
   const vision = (require('../src/pvp/last-seen') as typeof import('../src/pvp/last-seen')).createLastSeen(bot)
-  const file = resolve(__dirname, '../src/pvp.js'), source = transpiledSource(file)
-  const block = source.match(/  const maceChain = (\{[\s\S]*?\n  \});?\n  const combatContext/)
-  assert.ok(block, 'the regression runs the actual production adapter')
+  const file = resolve(__dirname, '../src/pvp.js')
   let selected
   try {
-    const chain = runInNewContext('(' + block[1] + ')', cjsContext({ bot, vision, entity: vision.observe(weak),
+    const ctx: any = { bot, vision, entity: vision.observe(weak),
       opts: { targets: ['Weak', 'Strong'] }, dead: new Set(), attackers: new Map(), deadline: 1e9, arena: null,
       track: { vel: () => ({ x: 0, y: 0, z: 0 }) }, foeEst: () => ({ lo: 0, hi: 20 }),
       kills: [], label: 'Weak', killed: false, used: () => {}, retarget: e => { selected = vision.observe(e) },
-      gameClock: { now: () => 1000 }, require: createRequire(file) }))
+      gameClock: { now: () => 1000 }, require: createRequire(file) }
+    const { installMaceChain } = pvpParts(ctx, ['duel-target'], ['installMaceChain'])
+    assert.equal(typeof installMaceChain, 'function', 'the regression runs the actual production adapter')
+    installMaceChain(ctx)
+    const chain = ctx.maceChain
     const choice = chain.choose(32)
     assert.equal(choice.entity.id, 3)
     chain.onTarget(choice)

@@ -1,8 +1,8 @@
 'use strict'
+import { bodySource } from './source-fixture'
 import { cjsContext } from './cjs-context'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
@@ -19,7 +19,7 @@ function fixture (hp, current = null) {
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval,
     require: name => name === './combat' ? { ...req(name), retreat: async () => { calls.push('cover'); return {} as Record<string, any> } }
       : name === './combat-safety' ? { ...req(name), disengage: async () => { calls.push('run'); return { clear: true } } } : req(name) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const session = { bot, current, bus: { emit: (type, data) => events.push({ type, ...data }) } }
   return { auto: new context.module.exports.Autopilot(session, { lowHealth: 8 }), bot, events, calls }
 }
@@ -51,7 +51,7 @@ function buriedFixture (current) {
     blockAt: p => (!took && Math.floor(p.y) === 65) ? { name: 'cobblestone', boundingBox: 'block', position: p } : { name: 'air', boundingBox: 'empty', position: p },
     _client: { on: (ev, f) => { (listeners[ev] = listeners[ev] || []).push(f) } } }
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, require: req }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const session = { bot, current, bus: { emit: (type, data) => events.push({ type, ...data }) } }
   const auto = new context.module.exports.Autopilot(session, { lowHealth: 8 })
   auto.takeTheMouth = async () => { took = true }
@@ -89,7 +89,7 @@ test('вне боя с драконом правило прежнее: блок 
 test('номер in_wall в автопилоте — тот же, что в реестре урона боя (1.21.11)', () => {
   const file = path.join(__dirname, '../src/autopilot.js')
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, require: createRequire(file) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   assert.equal(context.module.exports.IN_WALL_DAMAGE, (require('../src/dragon') as typeof import('../src/dragon')).DAMAGE_TYPES.indexOf('in_wall'))
 })
 
@@ -108,7 +108,7 @@ function emergencyFixture ({ hp = 6, current = null, zombieAt = 2, lastHurt = 'm
     require: name => name === './survival'
       ? { runRefuge: (s, p) => { refuges.push(p); return Promise.resolve({ status: 'done', detail: { how: 'box', code: 'OK', hp0: hp, hp: 17, healed: true }, events: [] }) } }
       : req(name) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const waiter: Record<string, any> = { got: null }
   const bus = { buffer: [], waiters: new Set([{ accepts: () => false, resolve: ev => { waiter.got = ev } }]),
     emit: (type, data) => { const ev = { seq: events.length + 1, type, ...data }; events.push(ev); return ev } }
@@ -195,7 +195,7 @@ test('при включённой тактике фоновый отход де�
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval,
     require: name => name === './combat' ? { ...req(name), retreat: async () => { calls.push('cover'); return {} } }
       : name === './combat-safety' ? { ...req(name), disengage: async (s, ctl) => { flightCtl = ctl; calls.push('run'); await gate; return { clear: false } } } : req(name) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const session: any = { bot, current: null, tactics: { enabled: () => true }, bus: { emit: () => {} } }
   const auto = new context.module.exports.Autopilot(session, { lowHealth: 8 })
   try {

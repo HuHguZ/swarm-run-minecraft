@@ -1,11 +1,6 @@
-import { campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignSocket, campaignVm, rpcDone } from './campaign-source'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
-import path = require('node:path')
-import * as vm from 'node:vm'
-import { createRequire } from 'node:module'
 import { withClockFixture } from './clock-fixture'
 
 // Выход из Ада без записи «портал (ад)» (вход прерван тактикой — s1-post08 06.10): идти к x/8, z/8 портала верхнего мира.
@@ -13,29 +8,16 @@ function exitFixture() {
   const state = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 106, y: 69, z: -151 },
     armor: {}, potions: {}, inventory: { ender_eye: 10, cooked_beef: 12 } as Record<string, number> }
   const requests: Array<{ method: string; params: Record<string, any> }> = []
-  class Socket {
-    listeners = new Map<string, (...args: unknown[]) => void>()
-    on(name: string, handler: (...args: unknown[]) => void) { this.listeners.set(name, handler) }
-    send(raw: string) {
-      const { id, method, params } = JSON.parse(raw)
-      requests.push({ method, params })
-      const detail = method === 'situation' ? { surface: false, foes: 0 } : {}
-      queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true, result: { status: 'done', detail, state, events: [] } })))
-    }
-    close() {}
-  }
-  const filename = path.resolve(__dirname, '../campaign.js')
-  const local = createRequire(filename)
-  const context = { require: (name: string) => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : local(name),
-    __dirname: path.dirname(filename), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: { ND_NE_ROUTE: '1' } },
-    console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, AbortController, fixtureState: state }
-  vm.runInNewContext(campaignScript() + `
+  const socket = campaignSocket((method, params) => {
+    requests.push({ method, params })
+    return rpcDone(method === 'situation' ? { surface: false, foes: 0 } : {}, state)
+  })
+  const context = campaignVm(`
     state = fixtureState; sit = { surface: false, foes: 0 };
     known.portal = { x: 236, y: 68, z: 170, dimension: 'overworld' };
     known.netherPortal = null;
     module.exports = { leave: returnFromNether };
-  `, cjsContext(withClockFixture(context)))
+  `, { socket, env: { ND_NE_ROUTE: '1' }, wrap: withClockFixture, globals: { AbortController, fixtureState: state } })
   return { context, requests }
 }
 

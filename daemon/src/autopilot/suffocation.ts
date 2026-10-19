@@ -1,8 +1,8 @@
 'use strict'
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const { sleep }: typeof import('../movement') = require('../movement')
-const { equipBestTool, missingHarvestTool }: typeof import('../items') = require('../items')
-const { withTimeout }: typeof import('../build') = require('../build')
+import * as gameClock from '../game-clock'
+import { sleep } from '../movement'
+import { equipBestTool, missingHarvestTool } from '../items'
+import { withTimeout } from '../build'
 let unstuck: any
 const WALL_STEP_MS = 10 * 50
 // in_wall deals one HP per damage-immunity window (10 ticks). Leave one HP for the next pulse.
@@ -296,5 +296,4 @@ function freed (this: any, bot, during) {
     })
   }
 
-module.exports = { buriedBy, fallingOverhead, freeIfBuried, visibleBurialBlock, freed, stepOutOfWall }
 export { buriedBy, fallingOverhead, freeIfBuried, visibleBurialBlock, freed, stepOutOfWall }

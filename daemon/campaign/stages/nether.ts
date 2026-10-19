@@ -21,7 +21,7 @@ import { ensureTable, craft, sticks, sticksReserve, spares, netherFillers, lumbe
 import { makeBed, cook } from '../food'
 import { ensureFlint } from '../portal-kit'
 import { enterNether, wearGold, netherGold, fedForBlazes, replenishNetherSupply } from '../nether-trip'
-const gameClock: typeof import('../../src/game-clock') = require('../../src/game-clock')
+import * as gameClock from '../../src/game-clock'
 let prepRuns = 0
 defStage('prep', () => !!known.portal && dim() === 'overworld' && rodsNow() < 7 && (prepRuns < 1 || !lighter()) &&
   (!lighter() || foodShort() > 0 || (!shieldOn() && have('iron_ingot') > 0)), async () => {

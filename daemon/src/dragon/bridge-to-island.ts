@@ -1,9 +1,9 @@
-const { hitBy, r1, doing, angryEndermen, fastTower, nearEdge, inClouds }: typeof import('./fall-guard') = require('./fall-guard')
-const { gameClock, FILLER_RE, items, findItem, EYE, ENDERMAN_EYE, dragonOf, phaseOf, hpOf, PHASE_RU, cloudsOf, fbSpawn, fbLineHit, fbTicksTo, metaOf, KIT, BEDS_KIT, Vec3, isSolid, lookSafe, sleep, CENTER, stepTo, yieldTick, CLOUD_SLAB, isAirish, build, fillerItem, FIREBALL_SNAP, supportCell, clearControls, PHASE, cloudBorn, overlap, inflate }: typeof import('./dig-down-to') = require('./dig-down-to')
-const { countOf, evade, blastReaches, virtualBot, exposure, tsClickPoint, dragonSeen, bedDamage, predParts }: typeof import('./evade-raw') = require('./evade-raw')
-const { DAMAGE_TYPES, r3, readVarIntAt, tsPlan, stationWorld, blastDestroyed }: typeof import('./ts-plan') = require('./ts-plan')
-const { fightEnderman, hazardNow, walkTo }: typeof import('./pillar-run') = require('./pillar-run')
-const { stepOnto }: typeof import('./station-plan') = require('./station-plan')
+import { hitBy, r1, doing, angryEndermen, fastTower, nearEdge, inClouds } from './fall-guard'
+import { gameClock, FILLER_RE, items, findItem, EYE, ENDERMAN_EYE, dragonOf, phaseOf, hpOf, PHASE_RU, cloudsOf, fbSpawn, fbLineHit, fbTicksTo, metaOf, KIT, BEDS_KIT, Vec3, isSolid, lookSafe, sleep, CENTER, stepTo, yieldTick, CLOUD_SLAB, isAirish, build, fillerItem, FIREBALL_SNAP, supportCell, clearControls, PHASE, cloudBorn, overlap, inflate } from './dig-down-to'
+import { countOf, evade, blastReaches, virtualBot, exposure, tsClickPoint, dragonSeen, bedDamage, predParts } from './evade-raw'
+import { DAMAGE_TYPES, r3, readVarIntAt, tsPlan, stationWorld, blastDestroyed } from './ts-plan'
+import { fightEnderman, hazardNow, walkTo } from './pillar-run'
+import { stepOnto } from './station-plan'
 function hitTracker (bot) {
   const f = (pk) => {
     // Только прямой удар (кто бил, тот и ударил): облако огня или фаербола несёт
@@ -655,12 +655,9 @@ declare namespace tsAPlan {
 
 const blindTried = new Set()
 
-const tsAddStationExport = tsAddStation
-const tsAPlanExport = tsAPlan
-module.exports = { hitTracker, TRACE_DIR, makeTrace, kitOf, clearedCrystals, clearCrystalKnowledge, noteCrystalClear, crystalKitState, missing, equipName, bridgeToIsland, platformInner, islandEdgeTop, creepToEdge, burrowTo, strafeThreat, juke, spawnVelocityRaw, fireballTracker, tsAddStation, tsAPlan, blindTried }
 export {
   hitTracker, TRACE_DIR, makeTrace, kitOf, clearedCrystals, clearCrystalKnowledge, noteCrystalClear,
   crystalKitState, missing, equipName, bridgeToIsland, platformInner, islandEdgeTop, creepToEdge, burrowTo,
-  strafeThreat, juke, spawnVelocityRaw, fireballTracker, tsAddStationExport as tsAddStation,
-  tsAPlanExport as tsAPlan, blindTried
+  strafeThreat, juke, spawnVelocityRaw, fireballTracker, tsAddStation,
+  tsAPlan, blindTried
 }

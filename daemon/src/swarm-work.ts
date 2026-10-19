@@ -1,13 +1,16 @@
 'use strict'
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const clock: typeof import('./game-clock') = require('./game-clock')
-const build: typeof import('./build') = require('./build')
-const pick: typeof import('./pick') = require('./pick')
-const tools: typeof import('./tools') = require('./tools')
-const safety: typeof import('./combat-safety') = require('./combat-safety')
-const { seesPlayer, createLastSeen }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
-const { watchDigReceipt }: typeof import('./environments/dig-receipt') = require('./environments/dig-receipt')
-const BlockFaces = (require('prismarine-world') as typeof import('prismarine-world')).iterators.BlockFace
+import vec3 from 'vec3'
+import * as clock from './game-clock'
+import * as build from './build'
+import * as pick from './pick'
+import * as tools from './tools'
+import * as safety from './combat-safety'
+import { seesPlayer, createLastSeen } from './pvp/last-seen'
+import { watchDigReceipt } from './environments/dig-receipt'
+import { iterators } from 'prismarine-world'
+// Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
+const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
+const BlockFaces = iterators.BlockFace
 
 type Cell = { x: number; y: number; z: number }
 const xyz = (p): Cell => ({ x: p.x, y: p.y, z: p.z })
@@ -227,5 +230,4 @@ async function swarmWork(session, ctl, params: any = {}) {
   }
 }
 
-module.exports = { swarmWork, swarmBlueprint, directThreat, keepBlocks, isKept }
 export { swarmWork, swarmBlueprint, directThreat, keepBlocks, isKept }

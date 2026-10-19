@@ -18,7 +18,7 @@ import { enterNether } from '../nether-trip'
 import { OBSIDIAN_END, obsidianEnd, ARROWS_END, BUCKETS_END, fillNow, fillWant, waterWant, ENDKIT_OFF, END_SEAM,
   endPrepRelevant, endPrepOffer, pricedEndPrep, checkEndEntry, endkitPending, SH_NETHER, SH_BLIND, SH_NETHER_MIN,
   canLink, viaNetherTo } from '../endgame'
-const gameClock: typeof import('../../src/game-clock') = require('../../src/game-clock')
+import * as gameClock from '../../src/game-clock'
 defStage('pearls', () => !!known.portal && have('ender_pearl') + have('ender_eye') < eyesWant(), async () => {
   if (dim() !== 'the_nether') {
     if (known.portal && state.pos && Math.hypot(known.portal.x - state.pos.x, known.portal.z - state.pos.z) > 48) {

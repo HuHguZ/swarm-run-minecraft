@@ -1,17 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { cjsContext } from './cjs-context'
+import { functionSource } from './source-fixture'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const Chunk: any = (require('prismarine-chunk') as typeof import('prismarine-chunk').default)('1.21.11')
 
 function reader() {
-  const source = fs.readFileSync(path.join(__dirname, '../src/session.ts'), 'utf8')
-  const body = source.slice(source.indexOf('function skyLightAt ('), source.indexOf('// Клетки «лава рядом»'))
   const context: any = {}
-  vm.runInNewContext(body + '\nthis.read = skyLightAt', cjsContext(context))
+  vm.runInNewContext(functionSource(path.join(__dirname, '../src/session.js'), 'skyLightAt') + '\nthis.read = skyLightAt', cjsContext(context))
   return context.read
 }
 const sky = reader()

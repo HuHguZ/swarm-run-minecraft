@@ -1,12 +1,11 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { cjsContext } from './cjs-context'
-import { transformSync } from 'esbuild'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { eat } from '../src/actions'
 import locks = require('../src/reflex-lock')
@@ -15,7 +14,7 @@ import * as clock from '../src/game-clock'
 function fixture(tacticsEnabled = true) {
   const file = path.join(__dirname, '../src/autopilot.js'), req = createRequire(file)
   const calls: string[] = [], events: string[] = []
-  const source = transformSync(fs.readFileSync(file.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const source = bodySource(file) // фасад autopilot и части autopilot/ одной областью
   const context: any = { module: { exports: {} }, process, console, setTimeout, clearTimeout, setInterval, clearInterval,
     require: (name: string) => name === './combat' ? { ...req(name), retreat: async () => { calls.push('cover') } }
       : name === './combat-safety' ? { ...req(name), inspect: () => ({ action: 'recover', threshold: 12 }),

@@ -1,18 +1,15 @@
 import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-import { transformSync } from 'esbuild'
 import { cjsContext } from './cjs-context'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Load both complete production modules. Visibility and walking are the boundary;
 // cast.lavaSources itself decides which observed lava can feed the portal skill.
-const code = Object.fromEntries(['actions', 'cast'].map(name => [name, name === 'actions'
-  ? bodySource(path.join(__dirname, '../src/actions.js')) // фасад + части src/actions/** одной областью видимости
-  : transformSync(fs.readFileSync(path.join(__dirname, `../src/${name}.ts`), 'utf8'), { loader: 'ts', format: 'cjs' }).code]))
+// actions и cast — фасад + части (src/actions/**, src/cast/**) одной областью видимости.
+const code = Object.fromEntries(['actions', 'cast'].map(name => [name, bodySource(path.join(__dirname, `../src/${name}.js`))]))
 
 function fixture(options: any = {}) {
   let now = 0, walks = 0, outside = options.outside !== false, sealed = !!options.sealed

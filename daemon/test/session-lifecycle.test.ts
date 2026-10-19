@@ -2,12 +2,19 @@
 import { cjsContext } from './cjs-context'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import { withClockFixture } from './clock-fixture'
 import { EventEmitter } from 'node:events'
+import { bodySource } from './source-fixture'
+import { stubRequire } from './stub-require'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
+
+// Настоящий mineflayer тут не создаёт бота никогда: без host он пошёл бы на localhost:25565 — сервер пользователя.
+// Сессия исполняется в vm целиком (фасад и части session/ одной областью, bodySource), mineflayer — заглушка; этот
+// сторож ловит ошибку фикстуры, если код когда-нибудь дотянется до настоящего пакета.
+;(require('mineflayer') as any).createBot = () => { throw new Error('session-lifecycle: настоящий mineflayer.createBot в тесте запрещён') }
+const SESSION = path.join(__dirname, '../src/session.js')
 test('parkour route honors a bounded extended game-time request without changing other action timeouts', () => {
   const parkour = (require('../src/session/resources') as typeof import('../src/session/resources')).parkour
   const session = { runIntent: (_name, _fn, options) => options }
@@ -22,25 +29,24 @@ function fixture () {
   const bots = []
   const events = []
   const fallback = new Proxy({} as Record<string, any>, { get: () => () => {} })
+  const req = stubRequire(SESSION, {
+    vec3: Vec3,
+    mineflayer: { createBot: () => bots.shift() },
+    'minecraft-data': () => ({} as Record<string, any>),
+    './play-policy': { configure: () => ({ mode: 'speedrun' }) },
+    './build': { withTimeout: p => p },
+    './gamedata': (require('../src/gamedata') as typeof import('../src/gamedata')),
+    './tactics/minecraft': { TacticalSystem: class {
+      enabled () { return false }
+      attach () {}
+      snapshot () { return null }
+      observed () {}
+    } },
+    './reflex-lock': { on: () => false, wait: async () => {}, run: (_session, _ctl, fn) => fn(), cancel () {} }
+  }, {}, { fallback: (name, real) => name.startsWith('./session/') ? real(name) : fallback })
   const context = { console: { log () {}, error () {} }, process: { env: {} }, setTimeout, clearTimeout, setInterval, clearInterval,
-    module: { exports: {} as Record<string, any> }, require (name) {
-      if (name === 'vec3') return Vec3
-      if (name === 'mineflayer') return { createBot: () => bots.shift() }
-      if (name === 'minecraft-data') return () => ({} as Record<string, any>)
-      if (name === './play-policy') return { configure: () => ({ mode: 'speedrun' }) }
-      if (name === './build') return { withTimeout: p => p }
-      if (name === './gamedata') return (require('../src/gamedata') as typeof import('../src/gamedata'))
-      if (name.startsWith('./session/')) return require('../src/' + name.slice(2))
-      if (name === './tactics/minecraft') return { TacticalSystem: class {
-        enabled () { return false }
-        attach () {}
-        snapshot () { return null }
-        observed () {}
-      } }
-      if (name === './reflex-lock') return { on: () => false, wait: async () => {}, run: (_session, _ctl, fn) => fn(), cancel () {} }
-      return fallback
-    } }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), cjsContext(withClockFixture(context)))
+    module: { exports: {} as Record<string, any> }, require: req }
+  vm.runInNewContext(bodySource(SESSION), cjsContext(withClockFixture(context)))
   const { Session } = context.module.exports
   const journal = { state: {} as Record<string, any>, append () {}, patch: fn => fn(journal.state) }
   const s = new Session({ lowHealth: 6 }, { emit: (type, detail) => events.push({ type, ...detail }) }, journal)
@@ -55,8 +61,15 @@ function fixture () {
     b.waitForChunksToLoad = async () => {}
     return b
   }
-  return { s, bots, bot, events }
+  return { s, bots, bot, events, req }
 }
+
+test('фикстура сессии: все заглушки живые, настоящий mineflayer недоступен', () => {
+  const { s, bot, req } = fixture()
+  const b = bot(); s.bot = b; s.wire(); s.cancel()
+  assert.deepEqual(req.unmatched(), [])
+  assert.throws(() => (require('mineflayer') as any).createBot({}), /запрещён/)
+})
 
 function setupAutopilot(s) {
   const fallback = new Proxy({}, { get: () => () => {} })
@@ -69,7 +82,7 @@ function setupAutopilot(s) {
     if (name === './gamedata') return (require('../src/gamedata') as typeof import('../src/gamedata'))
     return fallback
   }, setInterval: () => 1, clearInterval() {} }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/autopilot.js'), 'utf8'), cjsContext(withClockFixture(context)))
+  vm.runInNewContext(bodySource(path.join(__dirname, '../src/autopilot.js')), cjsContext(withClockFixture(context)))
   const auto = new context.module.exports.Autopilot(s, {})
   for (const method of ['hookTemper', 'hookDamage', 'syncDamageContext', 'hookCreeper', 'escapeWaterIfIdle', 'freeIfBuried', 'emergency', 'extinguish', 'fleeIfDying', 'eatIfHungry', 'wearArmor', 'noteDayPhase', 'heartbeat']) auto[method] = async () => {}
   let tools = 0, loot = 0, chest = 33, inventory = 0
@@ -340,11 +353,7 @@ test('ожидание (wait) рядом с идущим отходом не з�
 })
 
 test('падение в выкопанную клетку перед копкой: не проезжать её к краю столба (регрессия спуска 30.09)', () => {
-  const fs2: typeof import('node:fs') = require('node:fs')
-  const vm2: typeof import('node:vm') = require('node:vm')
-  const ctx = { console, module: { exports: {} as Record<string, any> }, setTimeout, clearTimeout, setInterval, clearInterval, require: n => n === 'vec3' ? Vec3 : new Proxy({} as Record<string, any>, { get: () => () => {} }) }
-  vm2.runInNewContext(fs2.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), cjsContext(withClockFixture(ctx)))
-  const { steerIntoDig } = ctx.module.exports
+  const { steerIntoDig }: typeof import('../src/session') = require('../src/session')
   const node = { x: 3049, y: 258, z: 3000, toBreak: [{ x: 3049, y: 258, z: 3000 }] }
   // mlg-reg-dbg1, 8.1 с: x 3049.54, едет на восток 0.11 бл/тик, в воздухе — прогноз 3049.98, вне центра: толкать назад.
   const c = steerIntoDig({ position: new Vec3(3049.54, 259.92, 3000.5), velocity: new Vec3(0.11, -0.16, 0), onGround: false }, node)

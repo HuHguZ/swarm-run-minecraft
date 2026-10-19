@@ -149,7 +149,7 @@ test('a selected lava repel invokes bounded combat before the Nether guard', asy
   bot.entity.effects[12] = { amplifier: 0, duration: 400 }
   bot.entities[2] = { id: 2, name: 'skeleton', position: new Vec3(2.5, 64, .5), height: 1.8, width: .6, equipment: [], metadata: [] }
   const combat: typeof import('../src/combat') = require('../src/combat')
-  const guard: typeof import('../src/ne-guard') = require('../src/ne-guard')
+  const guard: typeof import('../src/ne-guard/react') = require('../src/ne-guard/react')
   const originalFight = combat.fight; const originalReact = guard.react
   const calls: Array<Record<string, unknown>> = []
   combat.fight = async (_session: unknown, _ctl: unknown, options: Record<string, unknown>) => { calls.push(options); return { swings: 1 } }
@@ -171,7 +171,7 @@ test('a Nether refuge choice reaches the refuge executor instead of the guard me
   bot.game.dimension = 'the_nether'; bot.health = 10
   bot.entities[2] = { id: 2, name: 'blaze', position: new Vec3(10.5, 64, .5), height: 1.8, width: .6, equipment: [], metadata: [] }
   const survival: typeof import('../src/survival') = require('../src/survival')
-  const guard: typeof import('../src/ne-guard') = require('../src/ne-guard')
+  const guard: typeof import('../src/ne-guard/react') = require('../src/ne-guard/react')
   const originalRefuge = survival.refuge; const originalReact = guard.react
   const calls: Array<Record<string, unknown>> = []
   survival.refuge = async (_session: unknown, _ctl: unknown, options: Record<string, unknown>) => { calls.push(options); return { healed: true } }
@@ -414,7 +414,7 @@ test('calm observation keeps an unfinished recovery lease until its executor con
 })
 
 async function unreachablePiglin(action = 'Fight', configure = (_f: any) => {}) {
-  const f = observingFixture(), guard: typeof import('../src/ne-guard') = require('../src/ne-guard'), combat: typeof import('../src/combat') = require('../src/combat')
+  const f = observingFixture(), guard: typeof import('../src/ne-guard/react') = require('../src/ne-guard/react'), combat: typeof import('../src/combat') = require('../src/combat')
   f.bot.game.dimension = 'the_nether'
   configure(f)
   f.bot.registry.entitiesByName.piglin = { metadataKeys: ['mob_flags'] }

@@ -1,20 +1,11 @@
 'use strict'
-import * as gameClock from '../game-clock'
 import actions = require('../actions')
 import * as containers from '../containers'
 import armor = require('../armor')
 import obsidianMod = require('../obsidian')
 import * as packMod from '../pack'
 import * as prepMod from '../prep'
-function sleep (ms, ctl?: any) {
-  if (ctl?.aborted) return Promise.resolve()
-  return new Promise<void>(resolve => {
-    const t = gameClock.setTimeout(resolve, ms)
-    if (ctl) ctl.onAbort.push(() => { gameClock.clearTimeout(t); resolve() })
-  })
-}
-const HOLDING = ['chat', 'low_health', 'death', 'kicked', 'disconnected']
-const WORKBENCH = ['damage', 'low_health', 'death', 'kicked', 'disconnected']
+import { sleep, HOLDING, WORKBENCH } from './shared'
 
 function prep (this: any, p: any = {}) {
     return this.runIntent('prep', ctl => {

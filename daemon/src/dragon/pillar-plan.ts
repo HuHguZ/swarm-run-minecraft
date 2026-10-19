@@ -1,7 +1,7 @@
-const { EYE, gameClock, sleep, envNum, runnerOn, BREATH_R, CLOUD_SLAB, Vec3, playerBox, overlap, inflate, HURT_PAD, HEAD_AHEAD, boxDist, MELEE_REACH, isAirish, isSolid, pick, sitFix, partsOf, SITTING, phaseOf, PHASE, envv, CENTER, SAFE_FROM_CRYSTAL, bow, cloudsOf, yieldTick, nearPortal, PART, TOWER_FAR, RUN_FACING, PILLOW_DY, HEAD_ROOM }: typeof import('./dig-down-to') = require('./dig-down-to')
-const { lookAtSafe, BED_TOP, simClone, simHead, wrapDeg, msin, mcos, simNeck, SEEN_XZ, virtualBot, exposure, dragonSeen, DIRS4, SEEN_Y5 }: typeof import('./evade-raw') = require('./evade-raw')
-const { FACE_IDX, placeNoBed, placeBedAt, yRotOf }: typeof import('./ts-plan') = require('./ts-plan')
-const { breathOf, standY, doing, r1, cageBars, podiumTop, surfaceY, inClouds, nearEdge, nearPillar }: typeof import('./fall-guard') = require('./fall-guard')
+import { EYE, gameClock, sleep, envNum, runnerOn, BREATH_R, CLOUD_SLAB, Vec3, playerBox, overlap, inflate, HURT_PAD, HEAD_AHEAD, boxDist, MELEE_REACH, isAirish, isSolid, pick, sitFix, partsOf, SITTING, phaseOf, PHASE, envv, CENTER, SAFE_FROM_CRYSTAL, bow, cloudsOf, yieldTick, nearPortal, PART, TOWER_FAR, RUN_FACING, PILLOW_DY, HEAD_ROOM } from './dig-down-to'
+import { lookAtSafe, BED_TOP, simClone, simHead, wrapDeg, msin, mcos, simNeck, SEEN_XZ, virtualBot, exposure, dragonSeen, DIRS4, SEEN_Y5 } from './evade-raw'
+import { FACE_IDX, placeNoBed, placeBedAt, yRotOf } from './ts-plan'
+import { breathOf, standY, doing, r1, cageBars, podiumTop, surfaceY, inClouds, nearEdge, nearPillar } from './fall-guard'
 function crysOn () { return envv('ND_CRYSTALS') !== '0' }
 
 function crystalTimingAllowed (ph, distance) {
@@ -717,13 +717,10 @@ function portalBlocks (bot) {
   return bot.findBlocks({ matching: id, maxDistance: 48, count: 30, point: new Vec3(0, 60, 0) })
 }
 
-const runnerPlanExport = runnerPlan
-const pillarPlanExport = pillarPlan
-module.exports = { crysOn, crystalTimingAllowed, crystalShotFrom, crysState, crysTargets, crystalSpot, meleeSpot, OC_ON, scanPredict, OBS, OBS_ANY, pillarCells, faceClick, faceClickFacing, runnerPlan, runnerAim, pillarPlan, RUN_SWORD, SWORD_V2, SWORD_PED, SWORD_REACH, swordPick, BED_GAP_MS, BEDS_DOUBLE, BEDS_TAKEOFF, takeoffSeen, noteTakeoff, bedClickPoint, clickBedAt, bedsBuild, cardOf, cellsOnSeg, SEEN_Y, lowRowsOpen, bedPointFrom, doubleBuild, exposedNow, shieldFor, doubleHit, seeCalibrate, approachFar, pillowDys, pillarKey, stationBedPlaced, headPoint, portalBlocks }
 export {
   crysOn, crystalTimingAllowed, crystalShotFrom, crysState, crysTargets, crystalSpot, meleeSpot, OC_ON,
-  scanPredict, OBS, OBS_ANY, pillarCells, faceClick, faceClickFacing, runnerPlanExport as runnerPlan, runnerAim,
-  pillarPlanExport as pillarPlan, RUN_SWORD, SWORD_V2, SWORD_PED, SWORD_REACH, swordPick, BED_GAP_MS, BEDS_DOUBLE,
+  scanPredict, OBS, OBS_ANY, pillarCells, faceClick, faceClickFacing, runnerPlan, runnerAim,
+  pillarPlan, RUN_SWORD, SWORD_V2, SWORD_PED, SWORD_REACH, swordPick, BED_GAP_MS, BEDS_DOUBLE,
   BEDS_TAKEOFF, takeoffSeen, noteTakeoff, bedClickPoint, clickBedAt, bedsBuild, cardOf, cellsOnSeg, SEEN_Y,
   lowRowsOpen, bedPointFrom, doubleBuild, exposedNow, shieldFor, doubleHit, seeCalibrate, approachFar, pillowDys,
   pillarKey, stationBedPlaced, headPoint, portalBlocks

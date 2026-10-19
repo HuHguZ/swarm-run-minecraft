@@ -85,7 +85,7 @@ test('eating competes with travel time: distant travel eats first, a short trip 
 function bodyFixture(afterBite: (signal: AbortController) => void = () => {}) {
   const source = campaignTs()
   const helper = declarationsOf(source, 'eatTo') + '\n'
-  const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = require('))
+  const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = createCampaignIntelligence('))
   const controller = new AbortController()
   const context: Record<string, any> = { state: { health: 19, food: 6 }, died: false, strategyExecuting: false, strategyInterrupted: false,
     FOOD: /dried_kelp/, RAW: /beef|chicken/, bites: 0, have: () => 24, rest: async () => assert.fail('high HP meal must not call the early-returning rest'),

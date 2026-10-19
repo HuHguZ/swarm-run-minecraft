@@ -13,7 +13,7 @@ import { afterRefuge, refugeRun, waitDugOut } from './danger'
 import { homeLeash, walkAway, goToward, returnFromNether } from './travel'
 import { craft, ensurePick } from './kit'
 import { makeBed, cook } from './food'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 async function rest (minHp = 16) {
   setResting(true)
   try {

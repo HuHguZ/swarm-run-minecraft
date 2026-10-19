@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { resolve, dirname } from 'node:path'
-import { runInThisContext, runInNewContext } from 'node:vm'
-import { cjsContext } from './cjs-context'
+import { runInThisContext } from 'node:vm'
+import { bodySource } from './source-fixture'
+import { pvpParts } from './pvp-parts'
+import { stubRequire } from './stub-require'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import * as clock from '../src/game-clock'
 import boom = require('../src/boom')
@@ -51,14 +51,15 @@ function fixture ({ filler = true, screen = false, hidden = 'air' }: any = {}) {
   }
   bot.deactivateItem = () => { active = false; lowers++; if (consuming) game.clearTimeout(consuming); consuming = null }
   const placements: any[] = []
-  const file = resolve(__dirname, '../src/crystal.js'); const real = createRequire(file); const mod = { exports: {} as any }
+  const file = resolve(__dirname, '../src/crystal.js'); const mod = { exports: {} as any }
   const placeBlockAt = async (_bot, p, opts) => {
     assert.equal(active, false, 'consume is released before placing defense')
     placements.push({ at: game.now(), pos: p.clone(), item: opts.item })
     cells.set(key(p), make(p, opts.item)); return { ok: true }
   }
-  runInThisContext(`(function(require,module,exports,__filename,__dirname){${readFileSync(file, 'utf8')}\n})`, { filename: file })
-    (id => id === './build' ? { placeBlockAt } : real(id), mod, mod.exports, file, dirname(file))
+  // bodySource: фасад вместе с папкой тела crystal/ — один скрипт; './build' подменён у фасада (части берут его из deps).
+  runInThisContext(`(function(require,module,exports,__filename,__dirname){${bodySource(file)}\n})`, { filename: file })
+    (stubRequire(file, { './build': { placeBlockAt } }), mod, mod.exports, file, dirname(file))
   const cx = mod.exports.create(bot, { enemy: () => foe, telemetryHp: () => { throw new Error('telemetry cannot decide eat defense') } })
   const ctl = { aborted: false, onAbort: [] }
   const update = charges => {
@@ -186,10 +187,6 @@ test('almost completed apple and no beneficial defense can continue instead of u
 
 test('actual PvP caller executes eat then defense sequentially and preserves priority/error cleanup', async () => {
   // Execute the actual narrow caller, not a second hand-written copy of its handoff.
-  const source = readFileSync(process.env.ND_TEST_CRYSTAL_CALLER_SOURCE || resolve(__dirname, '../src/pvp.ts'), 'utf8')
-  const start = source.indexOf('const CXT = ')
-  const end = source.indexOf("aim = 'target'", start)
-  assert.ok(start >= 0 && end > start, 'real crystal caller is present')
   for (const outcome of ['defend', 'priority', 'error']) {
     const f = fixture()
     try {
@@ -208,7 +205,10 @@ test('actual PvP caller executes eat then defense sequentially and preserves pri
           if (action.kind === 'eat' && outcome === 'priority') urgent = true
           return value
         } } }
-      const pending = runInNewContext(`(async () => { ${source.slice(start, end)}; return rc })()`, cjsContext(ctx))
+      // Настоящая передача ветке кристаллов из ступени хода crystalTurn (pvp/turn-blast.ts).
+      const { runCrystalAction } = pvpParts(ctx, ['turn-blast'], ['runCrystalAction'])
+      assert.equal(typeof runCrystalAction, 'function', 'real crystal caller is present')
+      const pending = runCrystalAction(ctx, ctx.ca)
       await f.turn(); await f.step(7); f.update(1)
       const r: any = await f.finish(pending)
       assert.deepEqual(calls, outcome === 'priority' ? ['eat'] : ['eat', 'wall'])

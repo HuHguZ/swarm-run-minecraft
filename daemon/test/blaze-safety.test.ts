@@ -7,11 +7,11 @@ import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { bodySource } from './source-fixture'
+import { stubRequire } from './stub-require'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 async function hold ({ food = true, frForMs = 0, hp = null }: any = {} as Record<string, any>) {
   const file = path.join(__dirname, '../src/blaze.js')
-  const req = createRequire(file)
   const calls = []
   const enemy: Record<string, any> = { id: 2, name: 'blaze', position: new Vec3(0, 64, 2), isValid: true }
   const bot: any = new EventEmitter()
@@ -32,16 +32,19 @@ async function hold ({ food = true, frForMs = 0, hp = null }: any = {} as Record
   bot.inventory.slots[8] = { name: 'iron_boots' }
   const ctl: Record<string, any> = { aborted: false }
   const guard = { wear: async () => {}, raise: async () => {}, close () {}, report: () => ({} as Record<string, any>), stats: { blocked: 0 } }
+  // Заглушки по spec: части blaze/hold/* просят '../../combat' — stubRequire сверяет и разрешённый путь; unmatched() ловит
+  // заглушку, которая молча перестала срабатывать после разделения.
+  const req = stubRequire(file, {
+    './combat': { makeShield: () => guard, retreat: async () => { calls.push('wall'); ctl.aborted = true; return {} as Record<string, any> } },
+    './walkable': { walkable: () => [] },
+    './flee': { hostilesAround: () => [{ e: enemy }], smartFlee: async () => { calls.push('flee'); ctl.aborted = true; return { mode: 'нет укрытия' } } }
+  }, {
+    './combat-safety': actual => ({ ...actual, disengage: (s, c, foes) => actual.disengage(s, c, foes, {
+      kite: async () => { calls.push('run'); enemy.position = new Vec3(0, 64, 12); return 'оторвался' }
+    }) })
+  })
   const context = { module: { exports: {} as Record<string, any> }, console: { log () {} }, setTimeout, clearTimeout, Date, bot, calls, process: { env: { ND_GUARD: '0', ND_NE_ROUTE: '0' } },
-    require: name => {
-      if (name === './combat') return { makeShield: () => guard, retreat: async () => { calls.push('wall'); ctl.aborted = true; return {} as Record<string, any> } }
-      if (name === './walkable') return { walkable: () => [] }
-      if (name === './combat-safety') return { ...req(name), disengage: (s, c, foes) => req(name).disengage(s, c, foes, {
-        kite: async () => { calls.push('run'); enemy.position = new Vec3(0, 64, 12); return 'оторвался' }
-      }) }
-      if (name === './flee') return { hostilesAround: () => [{ e: enemy }], smartFlee: async () => { calls.push('flee'); ctl.aborted = true; return { mode: 'нет укрытия' } } }
-      return req(name)
-    } }
+    require: req }
   vm.runInNewContext(bodySource(file) + `
     makeRadar = () => ({ stop () {}, untilDanger: () => 99999, incoming: () => [], charged: () => false, stats: {} }); fightMoves = () => ({});
     losClear = () => true; liveBlazes = () => [bot.entities[2]];
@@ -53,6 +56,7 @@ async function hold ({ food = true, frForMs = 0, hp = null }: any = {} as Record
     spawner: null, want: 7, dead: new Set(), deadline: Date.now() + 2000,
     setPhase: p => calls.push(p), restAt: 12, bailAt: 6, p: { box: false }
   })
+  assert.deepEqual(req.unmatched(), [], 'every stub reaches the decomposed spawner loop')
   return { result, calls, bot }
 }
 

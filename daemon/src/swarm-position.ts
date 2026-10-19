@@ -3,8 +3,8 @@ import { observedCollision } from './pvp/search'
 import { bodyClear, dimensions, HAZARD, shapeBoxes, standPositions, supportAt, type Point, type CollisionWorld } from './navigation/geometry'
 import { landingDamage } from './navigation/landing'
 import { windInside, windLanding, type WindArena } from './combat/team-wind'
-import pick = require('./pick')
-import edges = require('./edges')
+import * as pick from './pick'
+import * as edges from './edges'
 import * as projectile from './throw'
 import { seesPlayer } from './pvp/last-seen'
 import * as clock from './game-clock'

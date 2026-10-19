@@ -5,7 +5,7 @@ import { stage, state, sit, known, netherExplored, netherViewRevision, foodHuntE
   castSurfaceFailed, lavaSourceKnown, waterDeepFailAt, wantBeds, ironChestTried } from '../state'
 import { have, y, dim, LOGS, COBBLE, RAW, FOOD, foodUnits, netherFoodHave, PICK_STONE, PICK_IRON, PICK_DIAMOND,
   portalFar, portalBuckets, armorPointsNow, rodsNow } from '../queries'
-const gameClock: typeof import('../../src/game-clock') = require('../../src/game-clock')
+import * as gameClock from '../../src/game-clock'
 const canWorkAtNight = () => sit.foes === 0 && !sit.inWater && !sit.buried &&
   (state.health ?? 0) >= 16 && (state.food ?? 0) >= 14 &&
   (!sit.surface || (NIGHT_DOWN2() ? stage === 'wood' || !sit.night : have(/_(sword|axe)$/) > 0 || stage === 'wood' || stage === 'stone'))

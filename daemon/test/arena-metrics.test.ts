@@ -7,6 +7,7 @@ import path = require('node:path')
 import * as vm from 'node:vm'
 import Module = require('node:module')
 import { transformSync } from 'esbuild'
+import { functionSource, declSource } from './source-fixture'
 function current (relative) {
   const file = path.join(__dirname, relative); const mod: any = new Module(file, module)
   mod.filename = file; mod.paths = (Module as any)._nodeModulePaths(path.dirname(file))
@@ -15,14 +16,14 @@ function current (relative) {
 }
 const metrics = current('../arena/arena-metrics.ts')
 const totem = current('../src/totem.ts')
+// Арена — скрипт (вход arena.ts + части arena/): функции берутся по имени из склейки, без запуска.
+const arenaJs = path.join(__dirname, '../arena/arena.js')
 
 test('arena return checks use physical position, not the floored exterior strip', async () => {
-  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena/arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  const start = source.indexOf('async function where(')
-  const end = source.indexOf('\n}', start) + 2
-  assert.ok(start >= 0 && end > start)
+  const source = functionSource(arenaJs, 'where')
+  assert.ok(source.startsWith('async function where(') && source.endsWith('}'))
   const context = vm.createContext(cjsContext({ X: 600, Y: 120, Z: 600, CLEAN_R: 24, COLOS: true, CEIL: true, CEIL_H: 16, deathBase: new Map() }))
-  vm.runInContext(source.slice(start, end) + '\nthis.where = where', context)
+  vm.runInContext(source + '\nthis.where = where', context)
   for (const [x, z, expected] of <[number, number, string][]>[[602.5, 626.6, 'gone'], [626.6, 602.5, 'gone'],
     [574.4, 602.5, 'gone'], [602.5, 574.4, 'gone'], [602.5, 624.7, 'in'], [576.3, 602.5, 'in']]) {
     let requested
@@ -65,8 +66,7 @@ async function arenaRound ({ missingFinal = false, staleFallback = false, totemB
   const A = client('A'); const B = client('B')
   const clock = { now: () => now, snapshot: () => ({ ticks: now / 50 }),
     setInterval: () => 1, clearInterval () {}, wall: { now: () => now, sleep: async ms => { now += ms }, setInterval: () => 1, clearInterval () {} } }
-  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena/arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  const body = source.slice(source.indexOf('async function round(')).split(/\n;?\s*\(async \(\) => \{/)[0]
+  const body = functionSource(arenaJs, 'round')
   assert.ok(body.startsWith('async function round(') && !body.includes('await A.ready'))
   const context = vm.createContext(cjsContext({
     A, B, NA: 'A', NB: 'B', A_URL: 'a', B_URL: 'b', HUMANS: [], HUMAN: null, PREP_RATE: 0, FIGHT_RATE: 0,
@@ -161,8 +161,7 @@ test('round totals weight measured averages, keep maxima and never add cumulativ
 })
 
 test('farm stop requests read only ND_SERVER_LOG and never the user client log', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../arena/arena.js'), 'utf8')
-  const body = source.slice(source.indexOf('const MC_LOG')).split('const ONLY')[0]
+  const body = declSource(arenaJs, 'MC_LOG', 'startedAt', 'stopRequested')
   for (const serverLog of ['farm/server-30/logs/latest.log', undefined]) {
     const reads = []
     const context = vm.createContext(cjsContext({ process: { env: { APPDATA: 'USER-CLIENT-MUST-NOT-BE-READ', ND_SERVER_LOG: serverLog } }, path,

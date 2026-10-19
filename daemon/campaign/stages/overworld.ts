@@ -25,7 +25,7 @@ import { NATURAL, dayLavaStep, skyLavaLook, castSiteFails, castSiteFailAt, lavaA
   surfaceLavaSurvey, naturalCast } from '../scout'
 import { deepBad, listenForLava, deepCast, surfaceShaftNear, waterViaShaft, deepWater, approachCastLava } from '../deep-cast'
 import { wearGold } from '../nether-trip'
-const gameClock: typeof import('../../src/game-clock') = require('../../src/game-clock')
+import * as gameClock from '../../src/game-clock'
 let ironRuns = 0
 let ironLeg = 0 // сквозной номер штрека этапа iron (змейка между заходами)
 const ironBlocked = new Set() // «x,z:сторона» — штрек отсюда туда не пошёл (глубокий путь)

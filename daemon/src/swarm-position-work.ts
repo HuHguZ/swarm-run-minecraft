@@ -1,12 +1,14 @@
 'use strict'
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const clock: typeof import('./game-clock') = require('./game-clock')
-const build: typeof import('./build') = require('./build')
-const pick: typeof import('./pick') = require('./pick')
-const { directThreat }: typeof import('./swarm-work') = require('./swarm-work')
-const { seesPlayer, createLastSeen }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
-const { observedCollision }: typeof import('./pvp/search') = require('./pvp/search')
-const { bodyClear, shapeBoxes, HAZARD }: typeof import('./navigation/geometry') = require('./navigation/geometry')
+import vec3 from 'vec3'
+import * as clock from './game-clock'
+import * as build from './build'
+import * as pick from './pick'
+import { directThreat } from './swarm-work'
+import { seesPlayer, createLastSeen } from './pvp/last-seen'
+import { observedCollision } from './pvp/search'
+import { bodyClear, shapeBoxes, HAZARD } from './navigation/geometry'
+// Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
+const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
 
 const point = p => ({ x: p.x, y: p.y, z: p.z })
 const key = p => `${p.x},${p.y},${p.z}`
@@ -196,5 +198,4 @@ async function swarmPillar(session, ctl, p: any = {}) {
   finally { bot._client.removeListener('block_change', single); bot._client.removeListener('multi_block_change', multi); g.close() }
 }
 
-module.exports = { pillarCheck, swarmHold, swarmPillar }
 export { pillarCheck, swarmHold, swarmPillar }

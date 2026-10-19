@@ -1,7 +1,7 @@
 'use strict'
 // Связь с демоном: WebSocket-клиент и вызов RPC. Сокет открывает только connect() из входа — импорт части без побочных действий.
-const WebSocket: typeof import('ws') = require('ws')
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import WebSocket from 'ws'
+import * as gameClock from '../src/game-clock'
 let ws: any = null
 let rid = 0
 const pending = new Map()

@@ -1,6 +1,5 @@
 'use strict'
-import { campaignRequire, campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignSocket, campaignVm, rpcDone } from './campaign-source'
 // Поток nether-end (research/dev-F-nether-end.md): чистые части правок Ада, крепости и дороги к Энду.
 import test = require('node:test')
 import assert = require('node:assert/strict')
@@ -46,33 +45,13 @@ test('мост: якорь bridge задаёт старт, золото мост
 })
 
 // --- кампания: этап nether (стержни) — только на недостающие очи
-import * as fs from 'node:fs'
-import path = require('node:path')
-import * as vm from 'node:vm'
 import { withClockFixture } from './clock-fixture'
 function campaignNeeds (inventory, places) {
   const state = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory }
-  class Socket {
-  declare listeners: any
-
-    constructor () { this.listeners = new Map() }
-    on (name, fn) { this.listeners.set(name, fn) }
-    send (raw) {
-      const { id, method } = JSON.parse(raw)
-      const detail = method === 'recall' ? { state: { places } } : {} as Record<string, any>
-      queueMicrotask(() => this.listeners.get('message')(JSON.stringify({ id, ok: true, result: { status: 'done', detail, state, events: [] } })))
-    }
-    close () {}
-  }
-  const context = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : campaignRequire(name),
-    __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: {} as Record<string, any> },
-    console: { log () {}, error () {} }, setTimeout, Date, queueMicrotask
-  }
-  vm.runInNewContext(campaignScript() + `
+  const socket = campaignSocket(method => rpcDone(method === 'recall' ? { state: { places } } : {}, state))
+  const context = campaignVm(`
     module.exports = { readMemory, needs: name => STAGES.find(s => s.name === name).needed(), init: () => { state = testState; sit = {} } }
-  `, cjsContext(withClockFixture(Object.assign(context, { testState: state }))))
+  `, { socket, wrap: withClockFixture, globals: { testState: state } })
   context.module.exports.init()
   return context.module.exports
 }

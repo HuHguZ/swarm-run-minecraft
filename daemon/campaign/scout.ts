@@ -12,7 +12,7 @@ import { act } from './act'
 import { goToward } from './travel'
 import { craft, spares } from './kit'
 import { graphFact, intelligence } from './strategy-bridge'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 const NATURAL = process.env.ND_PORTAL_NATURAL === '1'
 function dayLavaActive () {
   return process.env.ND_OW_DAY_LAVA !== '0' && !died && dim() === 'overworld' && !sit.night && !!state.pos &&
@@ -205,7 +205,7 @@ async function lavaAtSeenRuins () {
 // таблицы лута 1.21.11), числа — в журнал. Находит глаз (structure scan): постройки, которые бот видел сам; видно отсюда —
 // шаблон (structure fit, «как спидраннер знает устройство»): цена по всем сундукам шаблона, видимым и нет; карта корабля —
 // цепочкой до клада. Взятая (done) или уже испробованная — мимо.
-const structureValue = require('../src/campaign/structure-value')
+import * as structureValue from '../src/campaign/structure-value'
 // Секунды до сумерек (11840) по часам situation: ночью и в сумерках — 0, вне верхнего мира и без часов — бесконечность.
 function dayLeft () {
   const t = Number.isFinite(sit.tod) ? sit.tod : null

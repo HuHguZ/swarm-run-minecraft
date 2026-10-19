@@ -3,11 +3,11 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 import path = require('node:path')
 import * as vm from 'node:vm'
-import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import * as esbuild from 'esbuild'
 import { bodySource } from './source-fixture'
+import { stubRequire } from './stub-require'
 
 // Run the actual combat loop; perception hides the tracked entity behind a wall.
 async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = true, aborted = false, spawner = null, found = false, visible = false, viewDistance = 2, stopViews = 1, clearPlan = null, clearEnabled = true, burning = false }: any = {}) {
@@ -33,37 +33,39 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
   bot.physics = {}
   const guard = { wear: async () => {}, raise: async () => {}, lower: async () => {}, close() {}, report: () => ({}), stats: {} }
   const file = path.join(__dirname, '../src/blaze.ts')
-  const req = createRequire(file)
   const session: any = { bot, mcData: (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'), journal: { state: { places: known ? { 'крепость (ад)': { x: 4, y: 64, z: 4, dimension: 'the_nether' } } : {} } } }
+  // Заглушки по spec (stubRequire сверяет и разрешённый путь: части blaze/hold/* просят '../../fortress'); unmatched() —
+  // заглушки, которые ни разу не сработали.
+  const req = stubRequire(file, {
+    './game-clock': { now: () => clock, sleep: async ms => { clock += ms } },
+    './walkable': { walkable: () => [], standable: () => false },
+    './blaze-clear': {
+      observe() {},
+      plan: (_b, _sp, options) => { clearCalls.push(options); return clearPlan },
+      execute: async (_s, _c, p, safe) => { clearExec.push(p); const ok = safe(500); ctl.aborted = true; return { ok, seconds: .5 } }
+    },
+    './fortress': {
+      PLACE: 'крепость (ад)', placeOf: () => known ? session.journal.state.places['крепость (ад)'] : null,
+      tour: async (_s, _c, options) => {
+        views.push({ ...options, at: clock, from: bot.entity.position.clone() })
+        if (progress) bot.entity.position = bot.entity.position.offset(viewDistance, 0, 0)
+        if (progress && !found && views.length >= stopViews) ctl.aborted = true
+        // fortress.look omits spawners/blazes when none are actually seen.
+        return { spawners: found ? [{ x: 4, y: 64, z: 4, dist: 3 }] : undefined, blazes: undefined, seen: 1, hops: [], at: bot.entity.position }
+      }
+    }
+  }, {
+    './movement': actual => ({ ...actual, sleep: async ms => { clock += ms } }),
+    './combat': actual => ({ ...actual, makeShield: () => guard }),
+    './combat-safety': actual => ({ ...actual, watch: () => ({ check: () => ({ action: 'fight' }), close() {} }) })
+  })
   const context: any = {
     module: { exports: {} }, exports: {}, console: { log() {} }, setTimeout, clearTimeout, Date,
     process: { env: { ND_GUARD: '0', ND_NE_ROUTE: '0' } }, bot, ctl, walks,
-    require(name) {
-      if (name === './game-clock') return { now: () => clock, sleep: async ms => { clock += ms } }
-      if (name === './movement') return { ...req(name), sleep: async ms => { clock += ms } }
-      if (name === './combat') return { ...req(name), makeShield: () => guard }
-      if (name === './walkable') return { walkable: () => [], standable: () => false }
-      if (name === './blaze-clear') return {
-        observe() {},
-        plan: (_b, _sp, options) => { clearCalls.push(options); return clearPlan },
-        execute: async (_s, _c, p, safe) => { clearExec.push(p); const ok = safe(500); ctl.aborted = true; return { ok, seconds: .5 } }
-      }
-      if (name === './combat-safety') return { ...req(name), watch: () => ({ check: () => ({ action: 'fight' }), close() {} }) }
-      if (name === './fortress') return {
-        PLACE: 'крепость (ад)', placeOf: () => known ? session.journal.state.places['крепость (ад)'] : null,
-        tour: async (_s, _c, options) => {
-          views.push({ ...options, at: clock, from: bot.entity.position.clone() })
-          if (progress) bot.entity.position = bot.entity.position.offset(viewDistance, 0, 0)
-          if (progress && !found && views.length >= stopViews) ctl.aborted = true
-          // fortress.look omits spawners/blazes when none are actually seen.
-          return { spawners: found ? [{ x: 4, y: 64, z: 4, dist: 3 }] : undefined, blazes: undefined, seen: 1, hops: [], at: bot.entity.position }
-        }
-      }
-      return req(name)
-    }
+    require: req
   }
+  // seesMe/seesMob — объявления function: ниже их можно переприсвоить без правки текста.
   const code = esbuild.transformSync(bodySource(file), { loader: 'ts', format: 'cjs' }).code
-    .replace(/^const (seesMe|seesMob)\b/gm, 'let $1')
   vm.runInNewContext(code + `
     makeRadar = () => ({ untilDanger: () => Infinity, incoming: () => [], charged: () => false, stop() {}, stats: {} });
     fightMoves = () => ({}); hasEffect = () => true; witherClose = () => null;
@@ -76,6 +78,9 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
     spawner, want: 1, deadline: 51000, dead: new Set(), setPhase: p => phases.push(p),
     p: { box: false, clearSpawner: clearEnabled }
   })
+  // './blaze-clear' and './fortress' are reached only by the clearing and the no-spawner view paths; those tests check them
+  // through clearCalls and views.
+  assert.deepEqual(req.unmatched().filter(k => k !== './blaze-clear' && k !== './fortress'), [], 'every stub reaches the decomposed spawner loop')
   return { walks, views, result, phases, clock, bot, goals, clearCalls, clearExec }
 }
 

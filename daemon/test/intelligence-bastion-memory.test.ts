@@ -4,11 +4,11 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
 import { cjsContext } from './cjs-context'
-import { transpiledSource } from './source-fixture'
+import { transpiledSource, declSource } from './source-fixture'
 
-const filename = require.resolve('../src/bastion/bastion')
-const source = () => transpiledSource(filename)
-// sealedGold (сундук по пути, задачи сундуков) — в bastion/sealed-gold.ts; places/memoSave — в bastion() (bastion/bastion.ts).
+const restoreSource = () => declSource(require.resolve('../src/bastion/run-setup'), 'restoreMemo')
+const saveSource = () => declSource(require.resolve('../src/bastion/run'), 'memoSave')
+// sealedGold (сундук по пути, задачи сундуков) — в bastion/sealed-gold.ts; places — restoreMemo (bastion/run-setup.ts), memoSave — bastion/run.ts.
 const sealedSource = () => transpiledSource(require.resolve('../src/bastion/sealed-gold'))
 const chest = new Vec3(90, 73, 137)
 const chestKey = '90,73,137'
@@ -31,16 +31,13 @@ async function chestRead(receipt: unknown, aborted = false) {
 }
 
 function memoRound(memos: Map<string, unknown>, looted: Set<string>, bot: object, dimension = 'the_nether') {
-  const body = source()
-  const start = body.indexOf('  const places = ')
-  const end = body.indexOf('  if (st.noPick && st.sealed)', start)
-  const saveStart = body.indexOf('  const memoSave = () => {', end)
-  const nextBarter = /\n  if \(mode === ["']barter["'] && st.sealed\)/.exec(body.slice(saveStart))
-  const saveEnd = nextBarter ? saveStart + nextBarter.index : -1
+  // places/память — restoreMemo (bastion/run-setup.ts), запись памяти — memoSave (bastion/run.ts); состояние вызова — bx.
+  const restore = restoreSource()
+  const save = saveSource()
   const sealed = sealedSource()
   const taskStart = sealed.indexOf('    const chestsT = st.lootChests')
   const taskEnd = sealed.indexOf('\n    if (!preds.length', taskStart)
-  assert.ok(start > 0 && end > start && saveStart > end && saveEnd > saveStart && taskStart > 0)
+  assert.ok(restore.includes('const places = ') && save.includes('function memoSave(') && taskStart > 0)
   const target = new Vec3(87, 35, 139)
   const st = { sealed: true, lootChests: true, pred: new Map([['87,35,139', { pos: target, rank: 0 }]]),
     looted, chestSeen: new Map([[chestKey, { pos: chest }]]), skip: new Map(),
@@ -49,8 +46,9 @@ function memoRound(memos: Map<string, unknown>, looted: Set<string>, bot: object
     session: { journal: { state: {} } }, PLACE: 'бастион (ад)', Vec3,
     worlds: { worldOf: () => dimension }, gameClock: { now: () => 1000, wall: { now: () => 1000 } },
     require: () => ({ coverRecord: () => null }), log() {} }
-  const result = runInNewContext('(function () {\n' + body.slice(start, end) + '\n' + body.slice(saveStart, saveEnd) +
-    '\n memoSave();\n' + sealed.slice(taskStart, taskEnd) + '\n return { tasks: chestsT, remaining: st.pred.size } })()', cjsContext(context))
+  const result = runInNewContext('(function () {\n' + restore + '\n' + save +
+    '\n const bx = { session, p, bot, st, mode };\n restoreMemo(bx);\n memoSave(bx);\n' + sealed.slice(taskStart, taskEnd) +
+    '\n return { tasks: chestsT, remaining: st.pred.size } })()', cjsContext(context))
   return { st, tasks: result.tasks as unknown[], remaining: result.remaining as number }
 }
 

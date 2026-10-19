@@ -2,7 +2,9 @@
 // Кристаллы (crystal.ts): константы, рамки и лучи — куда ставить, чем бить, что закрывает.
 
 import * as pick from '../pick'
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import vec3 from 'vec3'
+// Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
+export const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
 
 const P = 6
 const EYE = 1.62

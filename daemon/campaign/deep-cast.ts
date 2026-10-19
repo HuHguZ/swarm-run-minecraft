@@ -14,7 +14,7 @@ import { craft, spares, unclutter } from './kit'
 import { descend } from './underground'
 import { castForKit } from './portal-kit'
 import { toShaftColumn } from './scout'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 const deepBad = [] // лава, у которой окно или место не вышли
 async function listenForLava (where) {
   if (heardLava && gameClock.now() - heardLava.t < 20 * 60000 && near3(heardLava.from, 32)) return

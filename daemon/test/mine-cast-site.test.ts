@@ -1,18 +1,15 @@
 import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-import { transformSync } from 'esbuild'
 import { cjsContext } from './cjs-context'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Run the complete mine module against the real one-bucket geometry. Only
 // visible candidates, digging and inventory pickup are the environment boundary.
-const code = Object.fromEntries(['actions', 'cast1'].map(name => [name, name === 'actions'
-  ? bodySource(path.join(__dirname, '../src/actions.js')) // фасад + части src/actions/** одной областью видимости
-  : transformSync(fs.readFileSync(path.join(__dirname, `../src/${name}.ts`), 'utf8'), { loader: 'ts', format: 'cjs' }).code]))
+// actions и cast1 — фасад + части (src/actions/**, src/cast1/**) одной областью видимости.
+const code = Object.fromEntries(['actions', 'cast1'].map(name => [name, bodySource(path.join(__dirname, `../src/${name}.js`))]))
 
 function fixture(options: any = {}) {
   const dug: any[] = [], reads: any[] = [], blocks: any[] = [], inventory: Record<string, number> = {}

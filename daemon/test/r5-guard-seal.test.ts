@@ -7,6 +7,7 @@ import path = require('node:path')
 import * as vm from 'node:vm'
 import { withClockFixture } from './clock-fixture'
 import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 function fixture ({ gap = null, shape = null, unknown = null, occupied = false, move = false, place = false }: any = {} as Record<string, any>) {
   const full = p => ({ name: 'blackstone', boundingBox: 'block', position: p, shapes: [[0,0,0,1,1,1]] })
   const air = p => ({ name: 'air', boundingBox: 'empty', position: p, shapes: [] })
@@ -23,7 +24,7 @@ function fixture ({ gap = null, shape = null, unknown = null, occupied = false, 
   const SL = { AIR: 0, PARTIAL: 1, FLUID: 2, classOf: b => !b ? 99 : b.name === 'air' ? 0 : /slab/.test(b.name) ? 1 : 3, fillerCount: () => 64, fillerName: () => 'netherrack', keyV: p => `${p.x},${p.y},${p.z}` }
   const ctx = { module: { exports: {} as Record<string, any> }, process, console: { log () {} }, setTimeout,
     require: n => n === 'vec3' ? { Vec3 } : n === './movement' ? { sleep: async () => {} } : n === './sealed' ? SL : n === './build' ? { placeBlockAt: async (_,v) => { if (!place) return { ok: false }; walls.set(key(v),full(v)); if (move) b.entity.position = new Vec3(3.5,64,.5); return { ok: true } } } : {} as Record<string, any> }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/ne-guard.js'),'utf8'),cjsContext(withClockFixture(ctx)))
+  vm.runInNewContext(bodySource(path.join(__dirname,'../src/ne-guard.js')),cjsContext(withClockFixture(ctx)))
   return { b, G: ctx.module.exports }
 }
 test('diagonal one block above the bot is not a sealed box (N1a1/N1a31)', async () => {

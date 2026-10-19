@@ -53,7 +53,8 @@ test('actual handNoWalk does not click a piglin hidden behind a block', async ()
   } finally { pick.aim = old }
 })
 test('relocation refuses missing copy grid without moving the bot', async () => {
-  const NR: typeof import('../src/nether-route') = require('../src/nether-route')
+  // gridOf определён в nether-route/base.ts: подмена — в определяющей части (фасад отдаёт её через живой геттер).
+  const NR: typeof import('../src/nether-route/base') = require('../src/nether-route/base')
   const old = NR.gridOf
   NR.gridOf = () => null
   try {

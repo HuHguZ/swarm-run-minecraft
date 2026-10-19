@@ -1,12 +1,7 @@
 'use strict'
-import { campaignRequire, campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignSocket, campaignVm, rpcDone } from './campaign-source'
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
-import path = require('node:path')
-import * as vm from 'node:vm'
-import { transformSync } from 'esbuild'
 import { withClockFixture } from './clock-fixture'
 const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
@@ -42,34 +37,22 @@ function fixture(inventory, { worn = false, rejectConversion = false, ore = fals
     }
     return { need: 'missing ingredients' }
   }
-  class Socket {
-    listeners = new Map<string, (...args: any[]) => void>()
-    on(name, fn) { this.listeners.set(name, fn) }
-    send(raw) {
-      const { id, method, params } = JSON.parse(raw)
-      calls.push({ method, params })
-      let detail: any = {}
-      if (method === 'situation') detail = situation
-      if (method === 'observe') detail = { entities: ore ? [] : [{ name: 'Piglin', dist: 4, ...(piglinAt ? { pos: piglinAt } : {}) }] }
-      if (method === 'mine') detail = { dug: 0, stopped: 'виден взрослый пиглин в зоне злости' }
-      if (method === 'craft') detail = craft(params)
-      if (method === 'armor' && state.inventory.golden_boots) {
-        state.inventory.golden_boots--
-        if (!state.inventory.golden_boots) delete state.inventory.golden_boots
-        state.armor.feet = { item: 'golden_boots' }
-      }
-      queueMicrotask(() => this.listeners.get('message')!(JSON.stringify({ id, ok: true,
-        result: { status: 'done', detail, state, events: [] } })))
+  const socket = campaignSocket((method, params) => {
+    calls.push({ method, params })
+    let detail: any = {}
+    if (method === 'situation') detail = situation
+    if (method === 'observe') detail = { entities: ore ? [] : [{ name: 'Piglin', dist: 4, ...(piglinAt ? { pos: piglinAt } : {}) }] }
+    if (method === 'mine') detail = { dug: 0, stopped: 'виден взрослый пиглин в зоне злости' }
+    if (method === 'craft') detail = craft(params)
+    if (method === 'armor' && state.inventory.golden_boots) {
+      state.inventory.golden_boots--
+      if (!state.inventory.golden_boots) delete state.inventory.golden_boots
+      state.armor.feet = { item: 'golden_boots' }
     }
-    close() {}
-  }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs'
-    ? { appendFileSync(_file, line) { logs.push(String(line)) } } : campaignRequire(name),
-    __dirname: path.resolve(__dirname, '..'), module: { exports: {} },
-    process: { argv: ['node', 'campaign.js'], env: {} }, console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask,
-    testState: state, testSituation: situation }
-  vm.runInNewContext(campaignScript() +
-    '\nstate = testState; sit = testSituation; module.exports = { netherGold };', cjsContext(withClockFixture(context)))
+    return rpcDone(detail, state)
+  })
+  const context = campaignVm('\nstate = testState; sit = testSituation; module.exports = { netherGold };',
+    { socket, log: line => logs.push(String(line)), wrap: withClockFixture, globals: { testState: state, testSituation: situation } })
   return { state, calls, physicalCrafts, logs, run: () => context.module.exports.netherGold() }
 }
 

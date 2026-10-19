@@ -6,14 +6,17 @@ import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
 import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
 
 // Путь sealedGold с планом штрека (знание scan); вслепую его заменяет visibleGold (Codex q10) — здесь прежний путь (blind: false).
 interface Controller { aborted: boolean; onAbort: Array<() => void> }
 interface GuardResult { acted?: boolean; cancelled?: boolean; how?: string }
 interface Guard { react(session: unknown, ctl: Controller, options?: unknown): Promise<GuardResult> }
 
-const source = (name: 'GUARD' | 'BASTION') => readFileSync(process.env[`${name}_TEST_SOURCE`] ||
-  join(__dirname, name === 'GUARD' ? '../src/ne-guard.js' : '../src/bastion/sealed-gold.js'), 'utf8')
+// ne-guard — фасад + части (src/ne-guard/**): одной областью видимости через bodySource.
+const source = (name: 'GUARD' | 'BASTION') => name === 'GUARD'
+  ? bodySource(process.env.GUARD_TEST_SOURCE || join(__dirname, '../src/ne-guard.js'))
+  : readFileSync(process.env.BASTION_TEST_SOURCE || join(__dirname, '../src/bastion/sealed-gold.js'), 'utf8')
 
 function delegatedGuard() {
   let requests = 0

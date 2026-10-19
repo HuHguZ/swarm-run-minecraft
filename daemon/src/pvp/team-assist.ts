@@ -2,8 +2,8 @@
 // Помощь союзнику в командном бою (показ 10.10, 6 на 6): взрывное зелье лечения ему под ноги и стенка прикрытия —
 // два блока между ним и тем, кто его бьёт. Только честно: зелье — взглядом на его ноги и бросок (use_item), блок —
 // на видимую грань опоры (pick.faceAim, как кристалл и лодка), не сквозь стену.
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-import pick = require('../pick')
+import { Vec3 } from './vec3'
+import * as pick from '../pick'
 // Отход дарителя и подбор — честным шагом с проверкой опоры, границ арены и killY (Codex 15.10: «назад 8 тиков» и сырой
 // pathfinder.goto уводили в дыры и за упавшей вниз вещью).
 import { executeJump, ROUTE_FRAMES } from '../navigation/parkour'

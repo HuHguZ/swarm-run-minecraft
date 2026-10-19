@@ -1,5 +1,5 @@
-const { inClouds, inCharge, standY, headroom, nearEdge, straightWalkable, embeddedNow, unembed, awayFromHead, r1, dragonVel, HOLE_TOP, duckPlan, duck, podiumTop, cloudAgeMs, fastTower, aboveCloudY, straightOut, doing }: typeof import('./fall-guard') = require('./fall-guard')
-const { cloudHits, FIREBALL_SNAP, lineDist, HEAD_AHEAD, playerBox, overlap, inflate, HURT_PAD, Vec3, voidBelow, zonesOf, nearPortal, dragonOf, stepTo, gameClock, sleep, cloudsOf, dbg, FILLER_RE, findItem, isSolid, build, clearControls, isAirish, items, CLOUD_SLAB, EYE, fillerItem, lookSafe, PHASE, box, pick }: typeof import('./dig-down-to') = require('./dig-down-to')
+import { inClouds, inCharge, standY, headroom, nearEdge, straightWalkable, embeddedNow, unembed, awayFromHead, r1, dragonVel, HOLE_TOP, duckPlan, duck, podiumTop, cloudAgeMs, fastTower, aboveCloudY, straightOut, doing } from './fall-guard'
+import { cloudHits, FIREBALL_SNAP, lineDist, HEAD_AHEAD, playerBox, overlap, inflate, HURT_PAD, Vec3, voidBelow, zonesOf, nearPortal, dragonOf, stepTo, gameClock, sleep, cloudsOf, dbg, FILLER_RE, findItem, isSolid, build, clearControls, isAirish, items, CLOUD_SLAB, EYE, fillerItem, lookSafe, PHASE, box, pick } from './dig-down-to'
 async function lookAtSafe (bot, point) {
   const eye = bot.entity.position.offset(0, EYE, 0)
   const d = point.minus(eye)
@@ -670,11 +670,9 @@ async function sneakPlace (bot, pos, opts) {
   try { return await build.placeBlockAt(bot, pos, { ...opts, item: fillerItem(bot) }) } finally { if (!was) bot.setControlState('sneak', false) }
 }
 
-const bedPlanExport = bedPlan
-module.exports = { lookAtSafe, countOf, dangerAt, SCAN_RANGE, noteNear, evade, evadeRaw, straightExposure, escapeSpot, bedPlan, takeoffSidestep, segPoint2, MSIN, mIdx, msin, mcos, DRAD, wrapDeg, clampN, nrm3, simStep, turnLanding, simClone, simPart, simHead, simNeck, landingForecast, predParts, landingHits, SEEN_Y5, exposure, DIRS4, addc, tsClickPoint, anClickPoint, RES_CACHE, blockRes, blastReaches, SNEAK_EYE, BED_TOP, hurtNear, bedCellFree, fillPlaceable, SOLID_SHAPE, BED_SHAPE, virtualBot, SEEN_XZ, bedDamage, SEEN_DX, SEEN_DY, dragonSeen, sneakPlace }
 export {
   lookAtSafe, countOf, dangerAt, SCAN_RANGE, noteNear, evade, evadeRaw, straightExposure, escapeSpot,
-  bedPlanExport as bedPlan, takeoffSidestep, segPoint2, MSIN, mIdx, msin, mcos, DRAD, wrapDeg, clampN, nrm3,
+  bedPlan, takeoffSidestep, segPoint2, MSIN, mIdx, msin, mcos, DRAD, wrapDeg, clampN, nrm3,
   simStep, turnLanding, simClone, simPart, simHead, simNeck, landingForecast, predParts, landingHits, SEEN_Y5,
   exposure, DIRS4, addc, tsClickPoint, anClickPoint, RES_CACHE, blockRes, blastReaches, SNEAK_EYE, BED_TOP,
   hurtNear, bedCellFree, fillPlaceable, SOLID_SHAPE, BED_SHAPE, virtualBot, SEEN_XZ, bedDamage, SEEN_DX, SEEN_DY,

@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events'
 import { performance } from 'node:perf_hooks'
 import { Vec3 } from 'vec3'
 import { ReceiptCostWindow } from '../src/environments/receipt-cost'
+import { bodySource } from './source-fixture'
 
 test('route plans reuse only confirmed dig receipts after eight samples and roll over recent costs', () => {
   const costs = new ReceiptCostWindow()
@@ -68,7 +69,7 @@ test('actual route dig callbacks retain their measured cost for the next RPC ses
   const filename = require.resolve('../src/nether-route')
   const realRequire = createRequire(filename)
   const module = { exports: {} }
-  new Function('require', 'module', 'exports', readFileSync(filename, 'utf8') +
+  new Function('require', 'module', 'exports', bodySource(filename) +
     '\nmodule.exports.probeStep = stepOne; module.exports.probeCost = session => { const history = receiptCostFor(session); return history.costs.seconds(history.context) }')(
     (name: string) => name === './sealed' ? sealed : name === './game-clock' ? clock : realRequire(name), module, module.exports)
   const route = module.exports as {

@@ -1,18 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
+import { bodySource } from './source-fixture'
+import { stubRequire } from './stub-require'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
 
+// Свой экземпляр модуля из исходника (bodySource) с подменами по spec (stubRequire); неиспользованная подмена — ошибка.
 function source(overrides = {}) {
-  const file = path.resolve(__dirname, '../src/swarm-position-work.ts'), local = createRequire(file), module = { exports: {} as any }
-  const code = (require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports, id => overrides[id] ?? local(id), module, file, path.dirname(file))
+  const file = path.resolve(__dirname, '../src/swarm-position-work.js'), req = stubRequire(file, overrides), module = { exports: {} as any }
+  vm.runInThisContext(`(function (require, module, exports, __filename, __dirname) {${bodySource(file)}\n})`, { filename: file })(req, module, module.exports, file, path.dirname(file))
+  assert.deepEqual(req.unmatched(), [], 'unused stubs')
   return module.exports
 }
 function fixture() {

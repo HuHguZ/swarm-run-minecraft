@@ -1,10 +1,10 @@
 'use strict'
 // Крепость и портал в Край (endportal.ts): шахта вниз до кирпича, шаг вбок, что не прокопать, шаг в соседнюю клетку.
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { sleep, xyz }: typeof import('../movement') = require('../movement')
-const { equipBestTool, missingHarvestTool }: typeof import('../items') = require('../items')
-const { seesBlock }: typeof import('../sight') = require('../sight')
+import * as gameClock from '../game-clock'
+import { Vec3 } from 'vec3'
+import { sleep, xyz } from '../movement'
+import { equipBestTool, missingHarvestTool } from '../items'
+import { seesBlock } from '../sight'
 import { BRICKS, honestDescent, log, INFESTED } from './common'
 
 const DIRS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]

@@ -12,7 +12,7 @@ import { rest, nightGuard } from './guards'
 import { walkAway, goToward } from './travel'
 import { eatTo, craft, sticks } from './kit'
 import { enterNether } from './nether-trip'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 async function arrowsRun (want = 48) {
   const t0 = gameClock.now()
   for (let k = 0; k < 24 && arrowsNow() < want && !died && gameClock.now() - t0 < 12 * 60000; k++) {
@@ -67,7 +67,7 @@ const fillWant = () => known.endPortal ? FILL_END : 0
 const waterWant = () => known.endPortal ? BUCKETS_END : 0
 const ENDKIT_OFF = process.env.ND_ENDKIT === '0'
 const END_SEAM = process.env.ND_END_SEAM !== '0'
-const endPrep = require('../src/campaign/end-prep')
+import * as endPrep from '../src/campaign/end-prep'
 const endPrepRefused = new Map<string, string>()
 const endPrepRelevant = () => !!known.endPortal || !!known.stronghold || have('ender_eye') >= EYES_NEED
 const endPrepState = () => JSON.stringify([state.inventory, state.health, state.food, sit.foes,

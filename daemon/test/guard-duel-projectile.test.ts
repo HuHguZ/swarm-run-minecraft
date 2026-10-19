@@ -8,6 +8,7 @@ import * as vm from 'node:vm'
 import { EventEmitter } from 'node:events'
 import { transformSync } from 'esbuild'
 import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function fixture ({ distant = false, hidden = false, shield = true, arrives = 0, abortAt = Infinity, walkerAt = Infinity, walkerHidden = false }: any = {}) {
   let now = 10000
@@ -77,8 +78,10 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
       } }
       return {}
     } }
-    const source = fs.readFileSync(path.join(__dirname,'../src',name + '.ts'),'utf8')
-    vm.runInNewContext(transformSync(source,{ loader: 'ts', format: 'cjs', target: 'node22' }).code,cjsContext(context))
+    // ne-guard — фасад + части (src/ne-guard/**) одной областью видимости; остальное — целым файлом.
+    const code = name === 'ne-guard' ? bodySource(path.join(__dirname, '../src/ne-guard.js'))
+      : transformSync(fs.readFileSync(path.join(__dirname,'../src',name + '.ts'),'utf8'),{ loader: 'ts', format: 'cjs', target: 'node22' }).code
+    vm.runInNewContext(code,cjsContext(context))
     modules[name] = context.module.exports
     return modules[name]
   }

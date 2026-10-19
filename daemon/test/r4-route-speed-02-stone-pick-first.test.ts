@@ -1,27 +1,16 @@
 'use strict'
-import { campaignScript } from './campaign-source'
-import { cjsContext } from './cjs-context'
+import { campaignVm } from './campaign-source'
 
 import test = require('node:test')
 import assert = require('node:assert/strict')
-import * as fs from 'node:fs'
 import path = require('node:path')
-import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
 const root = process.env.R4_SOURCE_ROOT || path.resolve(__dirname, '../..')
 const nativeRequire = createRequire(path.join(root, 'daemon/campaign.js'))
 function load (inventory: any = {} as Record<string, any>, env: any = {} as Record<string, any>, hooks: any = {} as Record<string, any>) {
   const requests = []
   const state = { inventory, health: 20, food: 20, pos: { x: 0.5, y: 65, z: 0.5 }, dimension: 'overworld' }
-  class Socket { constructor () {} on () {} }
-  const context = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : nativeRequire(name),
-    __dirname: path.join(root, 'daemon'), module: { exports: {} as Record<string, any> },
-    process: { argv: ['node', 'campaign.js'], env: { ND_ROUTE: '1', ND_OW_DEEP: '1', ...env } },
-    console: { log () {}, error () {} }, setTimeout, Date,
-    fixtureState: state, fixtureRequests: requests, fixtureHooks: hooks
-  }
-  vm.runInNewContext(campaignScript() + `
+  const context = campaignVm(`
     state = fixtureState; sit = { surface: true, night: false, inWater: false };
     refresh = async () => {}; sense = async () => {}; nightGuard = async () => {}; recoverGuard = async () => {};
     routeLeaveOutpost = async () => {}; routeGo = async () => true;
@@ -59,7 +48,8 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
       setRouteGo: f => { routeGo = f },
       setHook: (name, f) => { fixtureHooks[name] = f }
     };
-  `, cjsContext(context))
+  `, { base: nativeRequire, dirname: path.join(root, 'daemon'), env: { ND_ROUTE: '1', ND_OW_DEEP: '1', ...env },
+    globals: { fixtureState: state, fixtureRequests: requests, fixtureHooks: hooks } })
   return { ...context.module.exports, state, requests }
 }
 

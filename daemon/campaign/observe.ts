@@ -5,7 +5,7 @@ import { call } from './rpc'
 import { strategyExecuting, tacticalRevision, state, sit, known, heardLava, setDied, setLastRefuge, setLostAt,
   setLostBag, setMemorySnapshot, setRefugeSeenAt, setSit, setState, setStrategyInterrupted, setTacticalRevision } from './state'
 import { seamSnapshot, log } from './log'
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+import * as gameClock from '../src/game-clock'
 let lastDeathSeen
 function acceptResult (r) {
   const event = r.by?.type === 'death' ? r.by : (r.events || []).find(e => e.type === 'death')

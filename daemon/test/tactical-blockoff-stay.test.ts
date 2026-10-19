@@ -1,12 +1,11 @@
+import { bodySource } from './source-fixture'
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { cjsContext } from './cjs-context'
-import { transformSync } from 'esbuild'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const previous = process.env.ND_OW_NIGHT_BLOCKOFF
@@ -17,7 +16,7 @@ function load(file: string, overrides: Record<string, any>) {
   const native = createRequire(file), context: any = { module: { exports: {} }, exports: {},
     require: name => Object.prototype.hasOwnProperty.call(overrides, name) ? overrides[name] : native(name),
     process, console: { log() {}, error() {} }, setTimeout, clearTimeout }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
+  vm.runInNewContext(bodySource(file), cjsContext(context), { filename: file }) // фасад и части tactics/minecraft/ одной областью
   return context.module.exports
 }
 

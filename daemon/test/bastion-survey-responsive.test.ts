@@ -5,6 +5,7 @@ import path from 'node:path'
 import Module from 'node:module'
 import { EventEmitter } from 'node:events'
 import { transformSync } from 'esbuild'
+import { declSource } from './source-fixture'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Real recogniser/templates; only the visible client scene and rays are fixtures.
@@ -137,22 +138,20 @@ test('live read-only scan awaits the same cooperative recogniser and preserves i
 })
 
 test('actual bastion scan RPC passes its controller and awaits the scan result', async () => {
-  const ts: typeof import('@typescript/typescript6') = require('@typescript/typescript6')
-  const file = path.resolve(__dirname, '../src/bastion/bastion.ts')
-  const source = fs.readFileSync(file, 'utf8')
-  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
-  const node = tree.statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === 'bastion')
-  assert.ok(node)
+  // bastion() — оркестр в bastion/bastion.ts; состояние вызова — openRun, итог — report (bastion/run.ts).
+  const body = declSource(path.resolve(__dirname, '../src/bastion/bastion.js'), 'bastion') + '\n' +
+    declSource(path.resolve(__dirname, '../src/bastion/run.js'), 'openRun', 'report')
+  assert.match(body, /mode === ["']scan["']/)
   let queried = 0
   const scan = { proof: 'completed result' }; const bot = {}; const ctl = { aborted: false }
   const scanPiecesAsync = async (sameBot, radius, sameCtl) => {
     assert.equal(sameBot, bot); assert.equal(radius, 37); assert.equal(sameCtl, ctl)
     await new Promise<void>(resolve => setImmediate(resolve)); queried++; return scan
   }
-  const body = transformSync(node.getText(tree), { loader: 'ts', format: 'cjs' }).code
-  const call = new Function('require', 'gameClock', 'clamp', 'countOf', 'fireRes', 'BF', 'worlds', 'scanPiecesAsync',
-    'const goldMode = { fastSafe: false };\n' + body + '\nreturn bastion')(
-    () => ({}), { now: () => 0 }, v => v, () => 0, () => 0, { enabled: () => false }, { worldOf: () => 'the_nether' }, scanPiecesAsync)
+  const call = new Function('require', 'gameClock', 'clamp', 'countOf', 'fireRes', 'BF', 'worlds', 'scanPiecesAsync', 'goldMode',
+    body + '\nreturn bastion')(
+    () => ({}), { now: () => 0 }, v => v, () => 0, () => 0, { enabled: () => false }, { worldOf: () => 'the_nether' }, scanPiecesAsync,
+    { fastSafe: false })
   const result = await call({ bot }, ctl, { mode: 'scan', radius: 37 })
   assert.equal(queried, 1); assert.equal(result.scan, scan)
 })

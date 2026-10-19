@@ -8,6 +8,7 @@ import * as fs from 'node:fs'
 import * as vm from 'node:vm'
 import { withClockFixture } from './clock-fixture'
 import path = require('node:path')
+import { bodySource } from './source-fixture'
 const delay = ms => new Promise<any>(resolve => setTimeout(resolve, ms))
 function fixture () {
   const calls = []
@@ -31,7 +32,8 @@ function fixture () {
   const fallback = new Proxy({} as Record<string, any>, { get: () => () => {} })
   const context = { module: { exports: {} as Record<string, any> }, console: { log () {} }, process, setTimeout, clearTimeout, setImmediate,
     require (n) { if (n === 'vec3') return { Vec3 }; if (n === './worlds') return { worldOf: () => 'the_nether' }; if (n === './movement') return { sleep: delay }; if (n === './perception') return { eyePos: () => b.entity.position, raySees: () => true }; if (n === './reflex-lock') return (require('../src/reflex-lock') as typeof import('../src/reflex-lock')); return fallback } }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/ne-guard.js'), 'utf8'), cjsContext(withClockFixture(context)))
+  // ne-guard — фасад + части (src/ne-guard/**) одной областью видимости.
+  vm.runInNewContext(bodySource(path.join(__dirname, '../src/ne-guard.js')), cjsContext(withClockFixture(context)))
   const G = context.module.exports
   G.attach(s)
   return { b, s, calls, foe, G, hit: () => b._client.emit('damage_event', { entityId: 1, sourceCauseId: 3, sourceDirectId: 3 }) }

@@ -7,7 +7,8 @@ import { EventEmitter } from 'node:events'
 
 // Boundaries are mocked; the real barter function must consult the guard before walking/clicking.
 test('ND_BARTER_FLOW yields the hands to ND_GUARD before selecting a trader', async () => {
-  const G: typeof import('../src/ne-guard') = require('../src/ne-guard'); const worlds: typeof import('../src/worlds') = require('../src/worlds')
+  // attach/busy/hot/react — в ne-guard/react.ts: подмена в определяющей части (фасад отдаёт её живым геттером).
+  const G: typeof import('../src/ne-guard/react') = require('../src/ne-guard/react'); const worlds: typeof import('../src/worlds') = require('../src/worlds')
   const old = { attach: G.attach, busy: G.busy, hot: G.hot, react: G.react, worldOf: worlds.worldOf }
   const prior = process.env.ND_BARTER_FLOW
   process.env.ND_BARTER_FLOW = '1'

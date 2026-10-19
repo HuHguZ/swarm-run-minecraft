@@ -10,7 +10,7 @@ import { act } from './act'
 import { nightGuard } from './guards'
 import { unclutter, ensurePick } from './kit'
 import { toSurface } from './underground'
-const path: typeof import('path') = require('path')
+import * as path from 'path'
 const LEASH = 660
 const HUNT_LEASH = 660
 async function homeLeash () {
