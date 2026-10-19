@@ -1,16 +1,16 @@
-const { Vec3 } = require('vec3')
+import { Vec3 } from 'vec3'
 
 // Predict the available fall and steering with the same integrator as the real body.
 export function chainChoice(bot: any, candidates: any[], { peak = bot.entity.position.y, hp = () => ({ lo: 0, hi: 20 }), velocity = () => ({ x: 0, y: 0, z: 0 }), arena = null, launch = false }: any = {}) {
-  const mace = require('../mace'), dm = require('../pvp/damage-model')
-  const { seesPlayer, visiblePlayerItem } = require('../pvp/last-seen')
-  const observed = require('../pvp/search').observedCollision(bot)
+  const mace: typeof import('../mace') = require('../mace'), dm: typeof import('../pvp/damage-model') = require('../pvp/damage-model')
+  const { seesPlayer, visiblePlayerItem }: typeof import('../pvp/last-seen') = require('../pvp/last-seen')
+  const observed = (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot)
   const world = { getBlock: p => observed.blockAt(p) }
   const sim = (bot._ndSimOrig || bot.physics?.simulatePlayer)?.bind(bot.physics)
   if (!sim) return null
   const ownMace = bot.inventory.items().find(it => it.name === 'mace')
   if (!ownMace) return null
-  const read = require('../read'), ench = name => read.enchLevel(bot, ownMace, name)
+  const read: typeof import('../read') = require('../read'), ench = name => read.enchLevel(bot, ownMace, name)
   let best = null
   for (const raw of candidates) {
     if (!raw?.position || raw.isValid === false || raw.id === bot.entity.id || !seesPlayer(bot, raw)) continue
@@ -18,14 +18,14 @@ export function chainChoice(bot: any, candidates: any[], { peak = bot.entity.pos
     const metadata = []; metadata[0] = raw.metadata?.[0]; metadata[8] = raw.metadata?.[8]
     const entity = { id: raw.id, username: raw.username, name: raw.name, type: raw.type, position: raw.position, width: raw.width, height: raw.height, yaw: raw.yaw, isValid: raw.isValid, equipment: gear, metadata }
     if (mace.shieldAtUs(bot, entity)) continue
-    const targetVelocity = velocity(entity), state = require('../edges').stateOf(bot)
+    const targetVelocity = velocity(entity), state = (require('../edges') as typeof import('../edges')).stateOf(bot)
     if (launch) {
-      const support = require('../navigation/geometry').supportAt(observed, state.pos, .05)
+      const support = (require('../navigation/geometry') as typeof import('../navigation/geometry')).supportAt(observed, state.pos, .05)
       if (!state.onGround || !support) continue
       state.control = { forward: false, back: false, left: false, right: false, jump: true, sprint: false, sneak: false }
       try { sim(state, world); sim(state, world) } catch { continue }
       const burst = new Vec3(state.pos.x, support.top + .25, state.pos.z)
-      state.vel = state.vel.plus(require('./team-wind').windImpulse(bot, state.pos, burst))
+      state.vel = state.vel.plus((require('./team-wind') as typeof import('./team-wind')).windImpulse(bot, state.pos, burst))
       state.control.jump = false
     }
     let top = Math.max(peak, state.pos.y), contact = null
@@ -44,7 +44,7 @@ export function chainChoice(bot: any, candidates: any[], { peak = bot.entity.pos
     }
     if (!contact) continue
     const armor = gear.slice(2, 6).filter(Boolean), def = dm.defenseOf(armor)
-    const heldTicks = bot._ndMaceHeldAt ? Math.max(0, (require('../game-clock').now() - bot._ndMaceHeldAt) / 50) : 0
+    const heldTicks = bot._ndMaceHeldAt ? Math.max(0, ((require('../game-clock') as typeof import('../game-clock')).now() - bot._ndMaceHeldAt) / 50) : 0
     const rawDamage = mace.smashDamage(contact.fall, { base: 6, charge: Math.min(1, (heldTicks + contact.ticks) / 33), density: ench('density') })
     const min = dm.afterDefense(rawDamage, 'melee', { ...def, prot: armor.filter(it => it.enchanted).length * 4 }, { breach: ench('breach') })
     const max = dm.afterDefense(rawDamage, 'melee', def, { breach: ench('breach') })

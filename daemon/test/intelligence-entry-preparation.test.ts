@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats, entryDied, type SurvivalSample } from '../scene-nether-entry'
+import { prepareOverworldEntry, confirmSurvivalReadiness, cleanupPreparationThreats, entryDied, type SurvivalSample } from '../scenes/lib/scene-nether-entry'
 
 function fixture() {
   const portal = { x: -2, y: 71, z: 8, dimension: 'overworld', axis: 'x', inner: { x: -1, y: 70, z: 10 }, lit: true }

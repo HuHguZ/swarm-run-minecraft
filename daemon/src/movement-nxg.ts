@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // A second engine for the same body, standing NEXT TO movement.js instead of
 // replacing it. movement.js is the floor the other six modules stand on, and
 // swapping the pathfinder underneath them blind costs a day of debugging in
@@ -13,10 +13,10 @@ const gameClock = require('./game-clock')
 // goal objects at their own require() (actions, combat, containers, mining,
 // survival, movement, session). Porting means editing all seven, which is
 // exactly the blind swap this task exists to avoid.
-const nxg = require('@nxg-org/mineflayer-pathfinder')
-const { BlockInfo } = require('@nxg-org/mineflayer-pathfinder/dist/mineflayer-specific/world/cacheWorld')
-const legacy = require('mineflayer-pathfinder')
-const base = require('./movement')
+import * as nxg from '@nxg-org/mineflayer-pathfinder'
+import { BlockInfo } from '@nxg-org/mineflayer-pathfinder/dist/mineflayer-specific/world/cacheWorld'
+import * as legacy from 'mineflayer-pathfinder'
+import base = require('./movement')
 
 const { sleep, xyz, standableY, describeStall, findNearestLand, inWater, stuckGuard, unstick } = base
 
@@ -420,13 +420,15 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
   return { ok: false, error: lastError ? lastError.message : 'не дошёл' }
 }
 
-module.exports = {
+const goals = nxg.goals
+const PATHFINDER = 'nxg'
+export {
   // Identical to movement.js on purpose: geometry is not what is being
   // compared, and two copies of standableY would drift apart within a week.
   sleep, xyz, standableY, describeStall, stuckGuard, unstick, findNearestLand, inWater,
   // nxg-specific
   travelXZ, escapeWater,
   // the 2.4.5-shaped surface session.js needs in order to switch engines
-  pathfinder, Movements, goals: nxg.goals, translateGoal, stopPathing,
-  PATHFINDER: 'nxg'
+  pathfinder, Movements, goals, translateGoal, stopPathing,
+  PATHFINDER
 }

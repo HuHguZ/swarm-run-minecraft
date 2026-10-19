@@ -8,9 +8,9 @@
 //    chunkColumnLoad/Unload, пакеты update_light (столбец) и tile_entity_data (клетка), смена объекта мира. Тихая
 //    постановка блока мимо событий (blockmoves silentSet) зовёт invalidate сама. Блоки из кеша — только для чтения.
 // ND_S9=0 — прежний код (bot.blockAt на каждый вызов).
-const Vec3 = require('vec3')
-const nbt = require('prismarine-nbt')
-const gameClock = require('./game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const nbt: typeof import('prismarine-nbt') = require('prismarine-nbt')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 
 const LIMIT = 120000 // блоков в кеше (~0.5 КБ на Block — до ~70 МБ); больше — сброс целиком (ponytail: без LRU — поиск A* трогает ~6 тыс. клеток)
 const on = () => process.env.ND_S9 !== '0'
@@ -144,7 +144,7 @@ function patchFindBlocks (bot) {
   const orig = bot.findBlocks
   if (typeof orig !== 'function' || orig._ndFast) return
   let Octahedron
-  try { Octahedron = require('prismarine-world').iterators.OctahedronIterator } catch { return }
+  try { Octahedron = (require('prismarine-world') as typeof import('prismarine-world')).iterators.OctahedronIterator } catch { return }
   const fast = function (options: any = {}) {
     const reg = bot.registry && bot.registry.blocksByStateId
     if (!reg || !bot.world || typeof bot.world.getColumn !== 'function' || typeof options.matching === 'function' || options.useExtraInfo) return orig(options)
@@ -217,7 +217,7 @@ const LEGACY_PING_PACKET_ID = 0xfe
 function softTransform (chunk, enc, cb) {
     this.buffer = Buffer.concat([this.buffer, chunk])
     if (this.recognizeLegacyPing && this.buffer[0] === LEGACY_PING_PACKET_ID) {
-      const [, writeVarInt, sizeOfVarInt] = require('protodef').types.varint
+      const [, writeVarInt, sizeOfVarInt] = (require('protodef') as typeof import('protodef') & { types: Record<string, any> }).types.varint
       const header = Buffer.alloc(sizeOfVarInt(LEGACY_PING_PACKET_ID))
       writeVarInt(LEGACY_PING_PACKET_ID, header, 0)
       let payload = this.buffer.slice(1)
@@ -515,3 +515,4 @@ function defReader (bot) {
 function defAt (bot, x, y, z) { return defReader(bot)(x, y, z) }
 
 module.exports = { install, wrapMovements, defReader, defAt, FastBlocks, on, UNKNOWN, _softTransform: softTransform }
+export { install, wrapMovements, defReader, defAt, FastBlocks, on, UNKNOWN, softTransform as _softTransform }

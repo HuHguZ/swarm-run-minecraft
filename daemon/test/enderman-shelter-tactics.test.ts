@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const Vec3 = require('vec3')
-const esbuild = require('esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
 
 function sourceModule(name: string, overrides: Record<string, unknown> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file), module = { exports: {} as Record<string, any> }
   const code = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -41,7 +41,7 @@ test('the native open shaft is priced until its roof, without a blanket blockles
 })
 
 test('complete hit exposure can still favor a hole with armor-reduced observed damage', () => {
-  const assess = require('../src/assess'), hit = Math.round(assess.afterArmor(assess.MOBS.enderman.dmg, 20, 8) * 10) / 10
+  const assess: typeof import('../src/assess') = require('../src/assess'), hit = Math.round(assess.afterArmor(assess.MOBS.enderman.dmg, 20, 8) * 10) / 10
   const s = field({ armor: 20, enemies: [{ ...field().enemies[0], hit }], digDownCostHp: 3 * hit })
   assert.equal(state.candidates(s)[0]?.id, 'DigDown')
 })
@@ -75,7 +75,7 @@ test('fall ownership and player reach still exclude digging down', () => {
 })
 
 test('the observer charges full digging and the existing closing-roof cost in complete hits', () => {
-  const registry = require('minecraft-data')('1.21.11')
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const position = new Vec3(.5, 64, .5)
   const bot: any = { health: 20, food: 20, entity: { id: 1, position, height: 1.8, width: .6,
     eyeHeight: 1.62, onGround: true, metadata: [], effects: {} },
@@ -85,7 +85,7 @@ test('the observer charges full digging and the existing closing-roof cost in co
     blockAt(p: any) { const q = p.floored(); return { position: q, name: q.y < 64 ? 'dirt' : 'air',
       boundingBox: q.y < 64 ? 'block' : 'empty', shapes: q.y < 64 ? [[0, 0, 0, 1, 1, 1]] : [] } } }
   const survival = { refugeLook: () => ({ blocks: 0, hole: { depth: 3, ms: 1800 } }), chooseRefuge: () => ({ how: 'hole' }),
-    buildMsOf: require('../src/survival').buildMsOf }
+    buildMsOf: (require('../src/survival') as typeof import('../src/survival')).buildMsOf }
   const tactics = sourceModule('tactics/minecraft', { '../survival': survival,
     '../combat-safety': { inspect: () => ({ action: 'leave', threats: [{ id: 2, distance: 1, hit: 7 }] }) } })
   const s = tactics.observeTactics({ bot, mcData: registry })
@@ -95,7 +95,7 @@ test('the observer charges full digging and the existing closing-roof cost in co
 })
 
 test('real inspect saying fight does not hide a physical hole from an unarmed Enderman encounter', () => {
-  const registry = require('minecraft-data')('1.21.11'), position = new Vec3(.5, 64, .5)
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'), position = new Vec3(.5, 64, .5)
   const bot: any = { health: 20, food: 20, version: '1.21.11', entity: { id: 1, position,
     height: 1.8, width: .6, eyeHeight: 1.62, onGround: true, metadata: [], effects: {} },
     inventory: { slots: [], items: () => [{ name: 'diamond_shovel', count: 1 }] },
@@ -104,11 +104,11 @@ test('real inspect saying fight does not hide a physical hole from an unarmed En
       height: 2.9, width: .6, metadata: [], isValid: true } },
     blockAt(p: any) { const q = p.floored(); return { position: q, name: q.y < 64 ? 'dirt' : 'air',
       boundingBox: q.y < 64 ? 'block' : 'empty', shapes: q.y < 64 ? [[0, 0, 0, 1, 1, 1]] : [] } } }
-  assert.equal(require('../src/combat-safety').inspect(bot, { target: bot.entities[2] }).action, 'fight')
+  assert.equal((require('../src/combat-safety') as typeof import('../src/combat-safety')).inspect(bot, { target: bot.entities[2] }).action, 'fight')
   let scans = 0
   const tactics = sourceModule('tactics/minecraft', { '../survival': {
     refugeLook() { scans++; return { blocks: 0, hole: { depth: 3, ms: 1650 } } },
-    chooseRefuge: () => ({ how: 'hole' }), buildMsOf: require('../src/survival').buildMsOf } })
+    chooseRefuge: () => ({ how: 'hole' }), buildMsOf: (require('../src/survival') as typeof import('../src/survival')).buildMsOf } })
   const session = { bot, mcData: registry, current: { params: { target: '#2' } } }
   const s = tactics.observeTactics(session)
   assert.equal(s.weapon, false)
@@ -170,7 +170,7 @@ function executor({ valid = true, sealed = true, pocket = true, abort = false, h
 }
 
 test('escape progress keeps a validated blockless hole available when no run exit exists', () => {
-  const f = executor(), progress = new (require('../src/tactics/escape-progress').EscapeProgress)()
+  const f = executor(), progress = new ((require('../src/tactics/escape-progress') as typeof import('../src/tactics/escape-progress')).EscapeProgress)()
   const observation = f.system.escapeObservation(field({ escapeRoute: false }))
   assert.deepEqual(observation.actions, ['DigDown'])
   assert.equal(progress.observe(observation).exhausted, false)

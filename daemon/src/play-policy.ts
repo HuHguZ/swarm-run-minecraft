@@ -50,7 +50,7 @@ function foodUnits (inv) {
 // Only nutrition is read from minecraft-data: its saturation field is not a vanilla value.
 let foods
 function foodPoints (inv) {
-  foods ||= require('minecraft-data')('1.21.11').foodsByName
+  foods ||= (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11').foodsByName
   return Object.entries(inv || {}).reduce((n, [name, count]: any) => n + (FOOD.test(name) ? (foods[name]?.foodPoints || 0) * count : 0), 0)
 }
 function foodMeal (inv, hunger) {
@@ -86,7 +86,9 @@ function canUseRanged (session, entity, opts: any = {}) {
   if (FOOD_MOBS.has(entity.name) || entity.name === 'enderman') return false
   return amount(inventory(session), 'arrow') > (policy.arrowReserve ?? DEFAULTS.arrowReserve)
 }
-function decideFight (session, entity, opts: any = {}) {
+// Решение о бое: skip — не драться (stopped — почему), clearArea — радиус зачистки.
+interface FightDecision { skip: boolean; clearArea: number; purpose: string; stopped?: string }
+function decideFight (session, entity, opts: any = {}): FightDecision {
   const policy = session.playPolicy || DEFAULTS
   const speedrun = policy.mode === 'speedrun'
   const purpose = opts.purpose || (opts.target ? 'command' : 'defense')
@@ -106,4 +108,4 @@ function decideFight (session, entity, opts: any = {}) {
   } else throw new Error('purpose: food, resource, defense или command')
   return decision
 }
-module.exports = { configure, canUseRanged, decideFight, foodUnits, foodPoints, foodMeal }
+export { configure, canUseRanged, decideFight, foodUnits, foodPoints, foodMeal }

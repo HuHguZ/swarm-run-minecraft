@@ -1,5 +1,5 @@
 // Из чего состоит перерыв между посадками: время в фазах (0 кружит, 1 заход с фаерболом, 2 заход на посадку, 3 садится, 8 таран).
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 for (const pre of process.argv.slice(2)) {
   const tot: Record<string, any> = {} as Record<string, any>; let n = 0; const dur1 = []

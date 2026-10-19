@@ -1,12 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { cjsContext } from './cjs-context'
 
-const { Vec3 } = require('vec3')
-const { RaycastIterator } = require('prismarine-world/src/iterators')
+import { Vec3 } from 'vec3'
+import { RaycastIterator } from 'prismarine-world/src/iterators'
+import { bodySource } from './source-fixture'
 
 function fixture (y: number, closed = false) {
   const blocks = new Map<string, string>()
@@ -17,7 +18,7 @@ function fixture (y: number, closed = false) {
     blockAt: p => { const q = p.floored(); const name = blocks.get(`${q.x},${q.y},${q.z}`) || 'air'; const empty = /^(air|lava|fire)$/.test(name); return {
       name, position: q, boundingBox: empty ? 'empty' : 'block', shapes: empty ? [] : [[0, 0, 0, 1, 1, 1]]
     } },
-    findBlocks: ({ matching, maxDistance }) => [...blocks.keys()].map(k => new Vec3(...k.split(',').map(Number)))
+    findBlocks: ({ matching, maxDistance }) => [...blocks.keys()].map(k => new Vec3(...(k.split(',').map(Number) as [number, number, number])))
       .filter(p => p.distanceTo(bot.entity.position) <= maxDistance && matching(bot.blockAt(p))) }
   bot.world = { raycast: (origin, direction, range, match) => {
     const ray = new RaycastIterator(origin, direction, range)
@@ -31,7 +32,7 @@ function fixture (y: number, closed = false) {
   } }
   const file = path.resolve(__dirname, '../src/fortress.js')
   const context: any = { require: createRequire(file), module: { exports: {} }, console: { log () {} }, process, testBot: bot, moves: [] }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(bodySource(file) + `
     look = () => ({ seen: 0, seenList: [] });
     keepBlocks = async () => null;
     spawnerHint = () => null;
@@ -41,7 +42,7 @@ function fixture (y: number, closed = false) {
       testBot.entity.position = top.offset(0.5, 1, 0.5);
       return { ok: true };
     };
-  `, context)
+  `, cjsContext(context))
   return { bot, blocks, context, session: { bot, mcData: {} } }
 }
 
@@ -79,7 +80,7 @@ test('exact observation arrival rejects an acknowledged path without movement, p
       stuckGuard: () => ({ promise: new Promise(() => {}), stop () {} }),
       gotoPath: (_bot, g) => { goal = g; return Promise.resolve() }
     } : name === './nether' ? { guarded: (_session, ctl, run) => run(ctl) } : baseRequire(name) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nmodule.exports.testClimbWalk = climbWalk;', context)
+  vm.runInNewContext(bodySource(file) + '\nmodule.exports.testClimbWalk = climbWalk;', cjsContext(context))
   const top = new Vec3(126, 59, -131)
   const ack = await context.module.exports.testClimbWalk(f.session, { aborted: false }, top, Infinity, { exact: true })
   assert.equal(ack.ok, false, 'a successful path promise is not a new eye position')
@@ -121,7 +122,7 @@ function coveredBridge(cancel = false) {
   const f = fixture(51), rises: number[] = [], digs: any[] = []
   f.blocks.set('124,53,-131', 'nether_bricks')
   f.context.observed = [new Vec3(124, 53, -131)]
-  vm.runInNewContext('look = () => ({ seen: 1, seenList: observed });', f.context)
+  vm.runInNewContext('look = () => ({ seen: 1, seenList: observed });', cjsContext(f.context))
   const realRequire = f.context.require
   f.context.require = name => name === './build' ? {
     towerUp: async (_bot, ctl, blocks) => {
@@ -164,7 +165,7 @@ test('a cancelled ceiling tower does not begin a late upward excavation', async 
 test('fortress view probe cannot infer headroom above a visible bridge underside', () => {
   const f = fixture(60)
   f.bot.entity.position = new Vec3(124.5, 57, -130.5)
-  vm.runInNewContext('module.exports.testViewLeg = viewLeg;', f.context)
+  vm.runInNewContext('module.exports.testViewLeg = viewLeg;', cjsContext(f.context))
   assert.equal(f.context.module.exports.testViewLeg(f.bot, [f.bot.entity.position]), null)
 })
 
@@ -196,7 +197,7 @@ test('visible deck DFS does not retry an acknowledged move without actual arriva
 
 test('neR-1: the visible bridge overhead is approached before following a horizontal pie hint below it', async () => {
   const f = coveredBridge()
-  vm.runInNewContext('spawnerHint = () => ({ x: 148, z: -131, by: "пирог", yaw: 90 });', f.context)
+  vm.runInNewContext('spawnerHint = () => ({ x: 148, z: -131, by: "пирог", yaw: 90 });', cjsContext(f.context))
   await f.context.module.exports.tour(f.session, { aborted: false }, { deadline: Infinity, hops: 1, pie: true })
   assert.equal(f.rises.length, 1)
   assert.equal(f.digs[0]?.blocks, 3)

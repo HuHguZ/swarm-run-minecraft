@@ -1,5 +1,5 @@
 'use strict'
-const { connect } = require('../daemon/scene-kit')
+import { connect } from '../daemon/scenes/lib/scene-kit'
 const conn = connect('ws://127.0.0.1:8769')
 async function main () {
   await conn.ready

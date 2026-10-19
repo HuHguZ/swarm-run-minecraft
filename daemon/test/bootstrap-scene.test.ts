@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 function sceneFixture(name: 'try-lab-fresh' | 'try-lab-ne-run', kitName: string) {
   const calls: any[] = [], commands: any[] = []
@@ -28,22 +29,24 @@ function sceneFixture(name: 'try-lab-fresh' | 'try-lab-ne-run', kitName: string)
   const kit = { cmd: command, must: command, gamerule: async () => {}, setDifficulty: async () => {}, randomReset: async () => 1, ensureWorld: async () => {} }
   const clock = { now: () => now, wall: { now: () => now, sleep: async ms => { now += ms } } }
   const environment = { KIT: kitName, UNTIL: 'dragon', MINUTES: '1', LAB_OUT: 'fixture.jsonl', FARM_SLOT: '21' }
-  const source = path.resolve(process.env.ND_BOOT_SCENE_SOURCE || path.join(__dirname, '..'), `${name}.js`)
+  const stage = { 'try-lab-fresh': 'ow', 'try-lab-ne-run': 'nether' }[name]
+  const source = path.resolve(process.env.ND_BOOT_SCENE_SOURCE || path.join(__dirname, '..'), 'scenes', stage, `${name}.js`)
   const body = fs.readFileSync(source, 'utf8')
   const context: any = { module: { exports: {} }, __dirname: path.dirname(source), console: { log() {}, error() {} }, process: { env: environment, execPath: process.execPath, exit() {} }, require(id) {
-    if (id === './src/game-clock') return clock
-    if (id === './farm-bootstrap') return { farmBootstrap: async rpc => rpc('connect', { bootstrapPaused: true }) }
-    if (id === './scene-kit') return { connect: () => ({ ready: Promise.resolve(), call, heard: [] }), createKit: () => kit, sleep: async ms => { now += ms } }
-    if (id === './scene-nether-entry') return { prepareOverworldEntry: async () => state.pos, cleanupPreparationThreats: async () => [], confirmSurvivalReadiness: async port => { await port.sample(); return {} } }
-    if (id === './src/campaign/nether-supply') return { netherToolsReady: () => true }
-    if (id === './src/campaign/nether-progress') return {}
-    if (id === './src/route') return { mapLevel: () => 'blind' }
+    if (id === '../../src/game-clock') return clock
+    if (id === '../lib/farm-bootstrap') return { farmBootstrap: async rpc => rpc('connect', { bootstrapPaused: true }) }
+    if (id === '../lib/scene-kit') return { connect: () => ({ ready: Promise.resolve(), call, heard: [] }), createKit: () => kit, sleep: async ms => { now += ms } }
+    if (id === '../lib/scene-nether-entry') return { prepareOverworldEntry: async () => state.pos, cleanupPreparationThreats: async () => [], confirmSurvivalReadiness: async port => { await port.sample(); return {} } }
+    if (id === '../../src/campaign/nether-supply') return { netherToolsReady: () => true }
+    if (id === '../../src/campaign/nether-progress') return {}
+    if (id === '../../src/route') return { mapLevel: () => 'blind' }
     if (id === 'child_process') return { spawn: () => { throw measured }, execFileSync: () => '20.0f' }
     if (id === 'fs') return { statSync: () => ({ size: 0 }), writeFileSync() {}, readFileSync: () => 'level-seed=1' }
     if (id === 'path') return path
+    if (id === '../../src/paths') return (require('../src/paths') as typeof import('../src/paths'))
     throw new Error(`Unexpected scene dependency ${id}`)
   } }
-  vm.runInNewContext(body.slice(0, body.lastIndexOf('main().catch')) + '\nmodule.exports = { main };', context, { filename: source })
+  vm.runInNewContext(body.slice(0, body.lastIndexOf('main().catch')) + '\nmodule.exports = { main };', cjsContext(context), { filename: source })
   return { main: context.module.exports.main, measured, calls, commands, receipt: () => ({ inventory, naturalChest }) }
 }
 

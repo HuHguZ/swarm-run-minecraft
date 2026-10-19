@@ -11,7 +11,7 @@
 // Цифры длинных приёмов — априори из нативных серий и уточняются опытом этого бота за сессию (счёт попыток,
 // касаний и ударов о стену): s7f/s7k — касаний тарана 30 % (7/23), s7c5 — удар о стену 8 на 23 захода, урон о
 // стену 8–13 (fly_into_wall: 10·Δv − 3). Пике булавой: e2e s7e — 20 ударов из 21 взлёта, 0 урона в 2 из 20.
-const dm = require('./damage-model')
+import * as dm from './damage-model'
 
 const r1 = (x) => Math.round(x * 10) / 10
 const lvl = (it, k) => (it && it.ench && it.ench[k]) || 0
@@ -67,7 +67,7 @@ function noteExperience (store, kind, { hit = false, crash = false }: any = {}) 
 
 // Таран копьём: урон разгона = 1 + floor(rel·mult) (KineticWeapon), rel ≈ 1.5 б/т = 30 бл/с полёта под ракетой.
 function lanceOption (obs, spearName, store) {
-  const spec = require('../spear').SPEARS[spearName]
+  const spec = (require('../spear') as typeof import('../spear')).SPEARS[spearName]
   if (!spec) return null
   const def = dm.defenseOf(obs.foe.armor || [], { resistance: obs.foe.resistance ?? -1 })
   const raw = 1 + Math.floor(30 * spec.mult)
@@ -185,4 +185,4 @@ function comboLog (now = () => Date.now()) {
   }
 }
 
-module.exports = { meleeChoice, lanceOption, diveOption, decide, experience, noteExperience, comboLog, classOf, PRIOR }
+export { meleeChoice, lanceOption, diveOption, decide, experience, noteExperience, comboLog, classOf, PRIOR }

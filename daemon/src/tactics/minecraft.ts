@@ -15,28 +15,28 @@ type MinecraftEntity = Record<string, any>
 interface Controller { aborted: boolean; onAbort: Array<() => void>; abort(): void }
 interface Episode { action: Candidate; at: number; hp: number; level: ThreatLevel; candidates: Candidate[]; token: number; state: Record<string, unknown>; intent?: Controller }
 
-// What the arbiter saw when it chose (telemetry, farm/tactics-report): enough to replay a death on the stress stand.
+// What the arbiter saw when it chose (telemetry, farm/analysis/tactics-report): enough to replay a death on the stress stand.
 export function stateSnapshot(state: TacticalState, bot?: MinecraftEntity): Record<string, unknown> {
   const flags = ['lava', 'burning', 'hotFloor', 'fireResistance', 'explosion', 'dangerousFall', 'inWater', 'drowning', 'waterEscape', 'cover', 'escapeRoute', 'contact',
     'canFight', 'weapon', 'shield', 'edible', 'water', 'embedded', 'airborne', 'lavaAhead', 'lavaEscapePending', 'escapeExhausted',
     'piglinWitnesses', 'protectedEncounter', 'niche', 'netherHide', 'ghastEdge', 'pearlEscape', 'flightEscape', 'fireResistancePotion'] as const
-  return { ...(bot ? { body: require('../gamedata').bodySnapshot(bot) } : {}), hp: Math.round(state.health * 10) / 10, food: state.food, armor: state.armor, blocks: state.blocks, shelter: state.shelter,
+  return { ...(bot ? { body: (require('../gamedata') as typeof import('../gamedata')).bodySnapshot(bot) } : {}), hp: Math.round(state.health * 10) / 10, food: state.food, armor: state.armor, blocks: state.blocks, shelter: state.shelter,
     blast: state.blast ?? undefined, digDownCostHp: state.digDownCostHp, buildCostHp: state.buildCostHp, polarBear: state.polarBear ?? undefined, owGuard: state.owGuard, projectiles: state.incomingProjectiles || undefined, failed: state.failedEscapes?.length ? state.failedEscapes : undefined,
     on: flags.filter(flag => state[flag]),
     enemies: state.enemies.map(enemy => ({ id: enemy.id, kind: enemy.kind, unseen: enemy.unseen || undefined, d: Math.round(enemy.distance * 10) / 10, ...(enemy.threatening ? {} : { calm: true }),
       ...(typeof enemy.hit === 'number' ? { hit: Math.round(enemy.hit * 10) / 10 } : {}) })) }
 }
 
-const clock = require('../game-clock')
-const locks = require('../reflex-lock')
-const survival = require('../survival')
-const safety = require('../combat-safety')
-const flee = require('../flee')
-const guard = require('../ne-guard')
-const movement = require('../movement')
-const pick = require('../pick')
-const { Vec3 } = require('vec3')
-const polarBear = require('../polar-bear')
+const clock: typeof import('../game-clock') = require('../game-clock')
+const locks: typeof import('../reflex-lock') = require('../reflex-lock')
+const survival: typeof import('../survival') = require('../survival')
+const safety: typeof import('../combat-safety') = require('../combat-safety')
+const flee: typeof import('../flee') = require('../flee')
+const guard: typeof import('../ne-guard') = require('../ne-guard')
+const movement: typeof import('../movement') = require('../movement')
+const pick: typeof import('../pick') = require('../pick')
+const { Vec3 }: typeof import('vec3') = require('vec3')
+const polarBear: typeof import('../polar-bear') = require('../polar-bear')
 let autopilot: any, threats: any, itemTools: any, pack: any
 const foodActions: {
   bestFood(bot: MinecraftEntity, data: MinecraftEntity): MinecraftEntity | null
@@ -108,7 +108,7 @@ const IDLE_COOLED = new Set<ActionId>(['Fight', 'LastStand', 'Hide', 'Heal', 'Bl
 interface UnreachableContact { entity: MinecraftEntity; dimension: string; facts: string }
 function contactFacts(bot: MinecraftEntity, entity: MinecraftEntity): string {
   const tools = bot.inventory.items().filter((item: MinecraftEntity) => /_(sword|axe|pickaxe|spear)$|^trident$|^mace$/.test(item.name) &&
-    (itemTools ??= require('../items')).usesLeft(item) >= 4)
+    (itemTools ??= (require('../items') as typeof import('../items'))).usesLeft(item) >= 4)
     .map((item: MinecraftEntity) => item.name + ':' + JSON.stringify(item.enchants || []))
   return [bot.entity.position.floored(), entity.position.floored(), exitsNear(bot).signature, [...new Set(tools)].sort().join(',')].join('|')
 }
@@ -162,7 +162,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if ((bot.health ?? 0) <= 0 || preparation) return null
   const at: number = clock.now()
   const items: MinecraftEntity[] = bot.inventory.items()
-  const weapon = items.some(item => /_(sword|axe)$|^trident$|^mace$|_spear$/.test(item.name) && (itemTools ??= require('../items')).usesLeft(item) >= 4)
+  const weapon = items.some(item => /_(sword|axe)$|^trident$|^mace$|_spear$/.test(item.name) && (itemTools ??= (require('../items') as typeof import('../items'))).usesLeft(item) >= 4)
   const targetName = session.current?.target || session.current?.params?.target
   const target = targetName ? (Object.values(bot.entities || {}) as MinecraftEntity[]).find(entity =>
     entity && (entity.username === targetName || entity.name === targetName || '#' + entity.id === targetName)) : null
@@ -212,7 +212,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     if (distance <= 16) enemies.push({ id: entity.id, kind: entity.username, distance, player: true, threatening: false, ...((session._ndFoes as string[] | undefined)?.includes(entity.username) ? { foe: true } : {}) })
   }
   let incomingProjectiles = 0
-  try { incomingProjectiles = (threats ??= require('../threats')).incoming(bot).filter((projectile: MinecraftEntity) => projectile.ticks <= 10).length } catch {}
+  try { incomingProjectiles = (threats ??= (require('../threats') as typeof import('../threats'))).incoming(bot).filter((projectile: MinecraftEntity) => projectile.ticks <= 10).length } catch {}
   // S4d: a shooter past the 16-block horizon that is shooting at the body (a shot in flight, or a hit by a shot in 3 s) is in
   // plain sight up to its reach (flee.DOCTRINE, jar: blaze 48, ghast 64). Blind to blazes at 17-48 on a fortress bridge, the
   // tactics read the fireballs as "an unidentified attacker" and ran (CreateDistance 85) instead of shielding them: natives
@@ -258,7 +258,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     incident?.type === 'campfire' && /^(campfire|soul_campfire)$/.test(support?.name || '') && (lit === true || lit === 'true')
   const hotFloor = !dryMountedBoat && !fireResistance && sameWorld && contactHeat &&
     at >= incident.at && at - incident.at < 1000 && bot.entity.onGround
-  const creeper = process.env.ND_CREEPER_DODGE === '0' ? null : (autopilot ??= require('../autopilot')).creeperNeed(bot)
+  const creeper = process.env.ND_CREEPER_DODGE === '0' ? null : (autopilot ??= (require('../autopilot') as typeof import('../autopilot'))).creeperNeed(bot)
   const blast = blastNear(bot, 2)
   // The alarm is the blast reach; the 2 blocks past it only keep a fight from walking back into it (TNT: Fight>Dodge>Fight).
   const blastAlarm = !!blast?.alarm
@@ -335,9 +335,9 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   // Every dig/sink is priced by the hits of the walkers that reach the body meanwhile (state.digDownCost). The open
   // three-block shaft admits an Enderman until its roof closes: with one near, the supported roof is part of the dig.
   const enderman = enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')
-  const digDownMs = shelter === 'DigDown' && refuge?.hole ? refuge.hole.ms + (enderman ? require('../fortify').refugeBuildMs({ blocks: 1, roofSolid: false, leans: true }) : 0) : 0
-  const MOBS = require('../assess').MOBS
-  const buildMs = shelter === 'BlockOff' ? survival.buildMsOf(refuge, choice.how) : 0
+  const digDownMs = shelter === 'DigDown' && refuge?.hole ? refuge.hole.ms + (enderman ? (require('../fortify') as typeof import('../fortify')).refugeBuildMs({ blocks: 1, roofSolid: false, leans: true }) : 0) : 0
+  const MOBS = (require('../assess') as typeof import('../assess')).MOBS
+  const buildMs = shelter === 'BlockOff' ? survival.buildMsOf(refuge, choice!.how) : 0
   // The attack phase is unknown: a visible shooter can release its next shot during this construction interval.
   const buildCostHp = shelter === 'BlockOff' && /overworld/.test(dimension) && Number.isFinite(buildMs) ? boxBuildCost(enemies.filter(enemy => enemy.threatening)
     .map(enemy => ({ kind: enemy.kind, distance: MOBS[enemy.kind]?.ranged ? 0 : enemy.distance,
@@ -365,7 +365,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     enemies, incomingProjectiles, owGuard: rangedGuard(bot, enemies), burning, hotFloor, lava, lavaAhead, fireResistance,
     explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
     inWater: wetBody, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), waterEscape: !!session._tacticalWaterEscape, piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
-    blocks: refuge?.blocks ?? (pack ??= require('../pack')).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
+    blocks: refuge?.blocks ?? (pack ??= (require('../pack') as typeof import('../pack'))).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
     water: !/nether/.test(dimension) && items.some(item => item.name === 'water_bucket'),
     edible: !!foodActions.bestFood(bot, session.mcData ?? bot.registry), canFight: hostile.length > 0 && (sustainableFight(inspected, bot.health ?? 0) || repel), contact,
     // PvP-дуэль (pvp.duel держит session.tempo) ведёт бой сама: щит, лечение и укрытие у неё свои; Shield тактики
@@ -405,9 +405,9 @@ export interface TacticalPorts {
   record(row: Record<string, unknown>): void
   execute?(action: Candidate, ctl: Controller, state: TacticalState): Promise<unknown>
 }
-// MC_PORT ties the shared daemon/skills.jsonl rows of farm daemons to their slot (farm/tactics-report).
+// MC_PORT ties the shared daemon/skills.jsonl rows of farm daemons to their slot (farm/analysis/tactics-report).
 const minecraftPorts: TacticalPorts = { observe: observeTactics,
-  record: row => require('../telemetry').record({ ...row, ...(process.env.MC_PORT ? { mcPort: Number(process.env.MC_PORT) } : {}) }) }
+  record: row => (require('../telemetry') as typeof import('../telemetry')).record({ ...row, ...(process.env.MC_PORT ? { mcPort: Number(process.env.MC_PORT) } : {}) }) }
 
 function shieldCanContinue(state: TacticalState | null): state is TacticalState {
   if (state?.owGuard !== undefined) return !!state.shield && !!state.owGuard && !state.dangerousFall && !state.drowning && !state.lava
@@ -737,7 +737,7 @@ export class TacticalSystem {
         return result ?? { freed: true, dug: 0 }
       }
       case 'LastStand': {
-        const result = await require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined,
+        const result = await (require('../combat') as typeof import('../combat')).fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined,
           allowPlayer: enemy?.player, timeoutSeconds: 15, lastStand: true, retreatAtHealth: 0, purpose: 'defense' })
         // A whole stand without a swing (a crossbow piglin across a gap): retry only after contact conditions change (c15-5-1 14.10: five
         // stands of 15 s at a shooter 5 blocks off, 9 -> 0 hp).
@@ -746,13 +746,13 @@ export class TacticalSystem {
         return result
       }
       case 'Fight': {
-        if (state.polarBear?.action === 'Fight') return require('../combat').fight(session, ctl, {
+        if (state.polarBear?.action === 'Fight') return (require('../combat') as typeof import('../combat')).fight(session, ctl, {
           target: '#' + state.polarBear.id, purpose: 'defense', lastStand: true, shield: 'always', timeoutSeconds: 15 })
         const attacker = state.enemies.find(candidate => candidate.threatening && candidate.distance <= 3 &&
           bot.entities[candidate.id]?.isValid !== false && bot.entities[candidate.id]?.position &&
           pick.aim(bot, bot.entities[candidate.id], { range: 3.2 })?.point)
         if (attacker && canRepelLavaAttacker(state)) {
-          return require('../combat').fight(session, ctl, { target: '#' + attacker.id, allowPlayer: attacker.player,
+          return (require('../combat') as typeof import('../combat')).fight(session, ctl, { target: '#' + attacker.id, allowPlayer: attacker.player,
             timeoutSeconds: 4, purpose: 'defense', repelLava: true })
         }
         if (/nether/.test(String(bot.game?.dimension || '')) && enemy) {
@@ -763,7 +763,7 @@ export class TacticalSystem {
           if (!ctl.aborted && result?.duel?.stopped === 'не достать' && !result.duel.swings) rememberUnreachable(session, entity)
           return result
         }
-        return require('../combat').fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined, allowPlayer: enemy?.player, timeoutSeconds: 15, engaged: true })
+        return (require('../combat') as typeof import('../combat')).fight(session, ctl, { target: enemy ? '#' + enemy.id : undefined, allowPlayer: enemy?.player, timeoutSeconds: 15, engaged: true })
       }
       case 'Dodge':
         // Primed TNT: run - out of its 8 blocks in a 2 s sprint of the 4 s fuse. The shield faces one source, and a TNT on the
@@ -787,7 +787,7 @@ export class TacticalSystem {
         // (review g, S4c) - the run is smartFlee's from the shooters (edge guard, stepSafe, no fire cells).
         // No foe in sight while burning: smartFlee "escaped" nobody in a tick and the body stood in burning grass (s8-f3-15).
         if (state.hotFloor || state.lava || state.burning && !state.fireResistance && (state.water || !hasObservedTarget(state))) {
-          const result = await require('../director').escapeFire(session, ctl)
+          const result = await (require('../director') as typeof import('../director')).escapeFire(session, ctl)
           return result.status === 'failed' ? { ...result, failed: true, reason: result.detail?.how || 'contact escape not confirmed' } : result
         }
         // Past the default FOLLOW_RANGE 16 (Mob.createMobAttributes): smartFlee's own 14 left the creeper/skeleton/spider
@@ -800,7 +800,7 @@ export class TacticalSystem {
           foes: state.enemies.filter(foe => foe.player && foe.threatening).map(foe => foe.id) })
       case 'DigDown':
         if (state.enemies.some(foe => foe.threatening && foe.kind === 'enderman')) {
-          const fortify = require('../fortify')
+          const fortify: typeof import('../fortify') = require('../fortify')
           const valid = () => bot.entity.onGround && survival.holePlan(bot, session.mcData, fortify.feetCell(bot))
           if (!valid()) return { failed: true, reason: 'physical hole disappeared before descent' }
           await fortify.centerInCell(bot)
@@ -810,7 +810,7 @@ export class TacticalSystem {
           session._refugeBuild = ctl
           let entry: any
           try {
-            entry = await require('../survival/enter-shelter').enterShelter(session, ctl,
+            entry = await (require('../survival/enter-shelter') as typeof import('../survival/enter-shelter')).enterShelter(session, ctl,
               { depth: 3, torch: false, box: false, maxSwings: 5, center: true })
           } finally { if (session._refugeBuild === ctl) session._refugeBuild = previous }
           if (ctl.aborted) return { cancelled: true, entry }
@@ -846,7 +846,7 @@ export class TacticalSystem {
             session._refugeBuild = ctl
             let entry: any
             try {
-              const hold = require('../survival/hold-out')
+              const hold: typeof import('../survival/hold-out') = require('../survival/hold-out')
               entry = await (how === 'niche' ? hold.takeNiche : hold.takeBox)(session, ctl, site, () => {})
             } finally { if (session._refugeBuild === ctl) session._refugeBuild = previous }
             if (ctl.aborted) return { cancelled: true, entry }
@@ -859,14 +859,14 @@ export class TacticalSystem {
         }
       case 'Eat': {
         if (state.burning && !state.fireResistance) {
-          const escape = await require('../director').escapeFire(session, ctl)
+          const escape = await (require('../director') as typeof import('../director')).escapeFire(session, ctl)
           if (ctl.aborted) return { cancelled: true }
           if (escape.status !== 'done') return { failed: true, reason: 'fire contact remains before recovery bite', detail: escape.detail }
         }
         return foodActions.eat(session, ctl, {})
       }
       case 'Shield': {
-        const combat = require('../combat')
+        const combat: typeof import('../combat') = require('../combat')
         const shield = combat.makeShield(session, ctl, { shield: 'always' })
         let abort!: () => void
         const cancelled = new Promise<void>(resolve => { abort = resolve; if (ctl.aborted) resolve(); else ctl.onAbort.push(abort) })
@@ -918,7 +918,7 @@ export class TacticalSystem {
         return { extinguished: !!bot.entity.isInWater }
       }
       case 'Surface': return movement.escapeWater(bot, ctl, { timeoutMs: 15000, visibleOnly: true })
-      case 'EnterPortal': return require('../nether').enter(session, ctl, { scan: 4, timeoutSeconds: 20, noIgniter: true })
+      case 'EnterPortal': return (require('../nether') as typeof import('../nether')).enter(session, ctl, { scan: 4, timeoutSeconds: 20, noIgniter: true })
     }
   }
 
@@ -934,7 +934,7 @@ export class TacticalSystem {
     const outcome = hp <= 0 ? 'died' : facts.killed ? 'killed' : facts.mode === 'оторвался' || facts.safe ? 'escaped' : 'alive'
     this.ports.record({ level: 'tactical', skill: episode.action.id, skillVersion: 1, threat: episode.level,
       candidates: episode.candidates, selected: episode.action.id, sec: (clock.now() - episode.at) / 1000,
-      hp0: episode.hp, hp, result: hp <= 0 ? 'died' : result, outcome, alive: hp > 0, detail, state: episode.state, body: require('../gamedata').bodySnapshot(this.session.bot, hp <= 0) })
+      hp0: episode.hp, hp, result: hp <= 0 ? 'died' : result, outcome, alive: hp > 0, detail, state: episode.state, body: (require('../gamedata') as typeof import('../gamedata')).bodySnapshot(this.session.bot, hp <= 0) })
   }
 
   private escapeObservation(state: TacticalState): EscapeObservation {
@@ -975,7 +975,7 @@ export class TacticalSystem {
         const hp = this.session.bot?.health ?? 0
         this.ports.record({ level: 'tactical_episode', threat: this.incident.threat,
           actions: [...this.incident.actions], chain: this.incident.chain, state: this.incident.state, sec: (clock.now() - this.incident.at) / 1000,
-          body: require('../gamedata').bodySnapshot(this.session.bot), hp0: this.incident.hp, hp, result: hp <= 0 ? 'died' : reason, replanRevision: this.session.replanRevision })
+          body: (require('../gamedata') as typeof import('../gamedata')).bodySnapshot(this.session.bot), hp0: this.incident.hp, hp, result: hp <= 0 ? 'died' : reason, replanRevision: this.session.replanRevision })
         this.incident = null
       }
       this.session.bus.emit('tactical_released', { reason, replanRevision: this.session.replanRevision, requireObservation: true })

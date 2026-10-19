@@ -3,10 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 // Run the actual round setup and admission; only its external RPC/RCON and
 // clocks are scripted. No server, scene bootstrap, build or fight is started.
-const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
+const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
 const span = (from, to) => {
   const a = source.indexOf(from), b = source.indexOf(to, a)
   assert(a >= 0 && b > a)
@@ -73,7 +74,7 @@ function fixture({ delayedDamage = false, broken = null }: any = {}) {
     build: async () => ({ bad: 0 }), log() {}, knownAreas: () => [],
     brain: async (side, round) => { admitted.push({ name: side.name, ...side.stats.inv0 }); round.over = true },
     pace: advance }
-  const runRound = runInNewContext(body + '\nrunRound', context)
+  const runRound = runInNewContext(body + '\nrunRound', cjsContext(context))
   return { calls, admitted, run: () => runRound(1, sides[0], sides[1]) }
 }
 

@@ -1,9 +1,11 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
+import { cjsContext } from '../../daemon/test/cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { campaignRequire, campaignScript } from '../../daemon/test/campaign-source'
 const SOURCE = path.resolve(__dirname, '../../daemon/campaign.js')
 
 function brain (initial) {
@@ -23,15 +25,15 @@ function brain (initial) {
     }
     close () {}
   }
-  const context = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : require(name),
+  const context = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : campaignRequire(name),
     __dirname: path.dirname(SOURCE), module: { exports: {} as Record<string, any> }, process: { argv: ['node', 'campaign.js'], env: {} as Record<string, any> },
     console: { log () {}, error () {} }, setTimeout, Date, queueMicrotask, initial }
-  vm.runInNewContext(fs.readFileSync(SOURCE, 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = initial; sit = { night: false, surface: false, foes: 0 };
     let repaired = 0;
     ensurePick = async () => { repaired++; initial.inventory.stone_pickaxe = 1; state.inventory.stone_pickaxe = 1; return true };
     module.exports = { goToward, repaired: () => repaired };
-  `, context)
+  `, cjsContext(context))
   return { ...context.module.exports, calls }
 }
 

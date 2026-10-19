@@ -1,9 +1,10 @@
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Добивание мечом после 4-й кровати (02.10, поток dragon): по свидетелю DragonLab (позы головы по тикам) и плану станции R —
 // сколько тиков голова в досягаемости меча (3.0 от глаз до коробки головы 1×1×1) стоя и в прыжке (+1.25), от 4-го взрыва
 // (+10 тиков неуязвимости) до 5-го (или до посадки). Сидящий: голова = тело + 6.5 по взгляду, y −1.
-//   node farm/dragon/an-reach.js <тег> [<тег> ...]
-const fs = require('fs'); const path = require('path')
-const LOGS = path.join(__dirname, '..', 'logs')
+//   node dist/farm/dragon/an-reach.js <тег> [<тег> ...]
+import * as fs from 'fs'; import path = require('path')
+const LOGS = path.join(REPO_ROOT, 'farm/logs')
 const EYE = 1.62
 function boxDist (e, h) { // h — низ-центр головы
   const cx = Math.max(h[0] - 0.5, Math.min(e[0], h[0] + 0.5)); const cy = Math.max(h[1], Math.min(e[1], h[1] + 1)); const cz = Math.max(h[2] - 0.5, Math.min(e[2], h[2] + 0.5))
@@ -12,7 +13,7 @@ function boxDist (e, h) { // h — низ-центр головы
 const rows = []
 for (const tag of process.argv.slice(2)) {
   const dir = path.join(LOGS, 'trace-' + tag)
-  for (const s of fs.readdirSync(dir).filter(x => /^s\d+$/.test(x)).sort((a, b) => a.slice(1) - b.slice(1))) {
+  for (const s of fs.readdirSync(dir).filter(x => /^s\d+$/.test(x)).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))) {
     const lab = path.join(dir, s, 'lab-ev.jsonl'); if (!fs.existsSync(lab)) continue
     const tr = fs.readdirSync(path.join(dir, s)).filter(x => /^dragon-.*\.jsonl$/.test(x)).map(x => path.join(dir, s, x))
     let plan = null

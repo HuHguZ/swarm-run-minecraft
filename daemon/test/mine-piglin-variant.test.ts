@@ -1,3 +1,4 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -5,21 +6,23 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const file = path.join(__dirname, '../src/actions.ts')
-const code = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+// facade src/actions.ts + части src/actions/** одной областью видимости
+const code = bodySource(file)
 const realRequire = createRequire(file)
-const data = require('minecraft-data')('1.21.11')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 function fixture(options: any = {}) {
   const bag: Record<string, number> = {}, digs: any[] = []
   const piglin = { id: 9, name: 'piglin', isValid: true, width: 0.6, height: 1.95,
-    position: new Vec3(...(options.position || [8, 64, 0.5])),
+    position: new Vec3(...((options.position || [8, 64, 0.5]) as [number, number, number])),
     metadata: { [data.entitiesByName.piglin.metadataKeys.indexOf('baby')]: !!options.baby } }
   const blocks = [2, 3].map(x => ({ name: options.block || 'nether_gold_ore', type: 1, position: new Vec3(x, 64, 0) }))
   const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), width: 0.6, height: 1.8 },
     registry: data, entities: options.initial ? { 9: piglin } : {},
-    world: { raycast: () => options.hidden ? { position: new Vec3(...(options.wall || [1, 65, 0])) } : null },
+    world: { raycast: () => options.hidden ? { position: new Vec3(...((options.wall || [1, 65, 0]) as [number, number, number])) } : null },
     blockAt: p => { const wall = options.wall || [1, 65, 0]; const hidden = options.hidden && p.x === wall[0] && p.y === wall[1] && p.z === wall[2]; return { name: hidden ? 'stone' : 'air', position: p, shapes: hidden ? [[0, 0, 0, 1, 1, 1]] : [] } }, canDigBlock: () => true,
     async dig(b) { digs.push(b.position.x); b.name = 'air'; bag.gold_nugget = (bag.gold_nugget || 0) + 3 }
   }
@@ -35,7 +38,7 @@ function fixture(options: any = {}) {
     process: { env: {} }, reveal, options,
     require: name => imports[name] || realRequire(name) }
   vm.runInNewContext(code + '\nreachBlock = async () => { if (options.reveal === "reach") reveal() };' +
-    '\ncollectNearbyDrops = async () => { if (options.reveal === "pickup") reveal() };', context, { filename: file })
+    '\ncollectNearbyDrops = async () => { if (options.reveal === "pickup") reveal() };', cjsContext(context), { filename: file })
   const ctl = { aborted: false, onAbort: [] }
   return { digs, bag, run: (params: any = {}) => context.module.exports.mine({ bot, mcData: data, cfg: { fairPlay: true } }, ctl,
     { block: options.block || 'nether_gold_ore', count: 2, avoidPiglinAggro: true, ...params }) }

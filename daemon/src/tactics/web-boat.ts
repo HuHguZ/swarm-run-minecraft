@@ -1,10 +1,10 @@
 import { WebBoatGraph, type WebBoatFacts } from './web-boat-graph'
 import { boatItem, mountedBoatDry, placeBoatOn, mountBoat, type BoatController, type BoatPosition } from '../combat/boat-placement'
 type Body = Record<string, any>
-const build = require('../build')
-const pick = require('../pick')
-const clock = require('../game-clock')
-const Vec3 = require('vec3')
+import build = require('../build')
+import pick = require('../pick')
+import * as clock from '../game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 interface BlockPoint extends BoatPosition { offset(x: number, y: number, z: number): BlockPoint; minus(face: Body): BlockPoint }
 export interface WebBoatPlan { web: BlockPoint; supports: [BlockPoint, BlockPoint]; base: BlockPoint }

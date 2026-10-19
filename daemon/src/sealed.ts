@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Закрытый штрек: путь к цели сквозь твёрдое, при котором ни одна наша клетка
 // не касается гранью чужого воздуха, лавы или огня. Так бастион копают без
 // брутов, злых пиглинов и лавы: злые не дойдут (пути нет), арбалетчик не видит
@@ -19,7 +19,7 @@ const gameClock = require('./game-clock')
 // (штрек, клетки хода, клетки прошлого хода), а не воздух/лава/огонь/неполный
 // блок (плита, забор, цепь — через них бьют и видят). Над c — не гравий.
 
-const { Vec3 } = require('vec3')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 
 const AIR = 0; const SOLID = 1; const FLUID = 2; const HARD = 3; const GUARD = 4; const FALL = 5; const PARTIAL = 6; const HOT = 7; const UNKNOWN = 8
 const CLS_NAMES = ['air', 'solid', 'fluid', 'hard', 'guard', 'fall', 'partial', 'hot', 'unknown']
@@ -323,7 +323,7 @@ function exposure (bot, own) {
 }
 
 async function equipFor (bot, b) {
-  const items = require('./items')
+  const items: typeof import('./items') = require('./items')
   const needsIron = /^(gold_block|raw_gold_block|gold_ore|deepslate_gold_ore|diamond_ore|deepslate_diamond_ore|emerald_ore|redstone_ore)$/.test(b.name)
   if (!needsIron && /pickaxe/.test(b.material || '')) {
     const stone = bot.inventory.items().find(i => i.name === 'stone_pickaxe')
@@ -347,7 +347,7 @@ async function digCell (bot, v, { allowGuard = false, interrupted = () => false,
     !bot.inventory.items().some(item => b.canHarvest(item.type))) return 'tool:' + b.name
   const diagnostic: Record<string, unknown> = { block: b.name, position: { x: v.x, y: v.y, z: v.z }, hardness: b.hardness }
   const receipt = bot.version === '1.21.11' && bot._client
-    ? require('./environments/dig-receipt').watchDigReceipt(bot, v, interrupted) : null
+    ? (require('./environments/dig-receipt') as typeof import('./environments/dig-receipt')).watchDigReceipt(bot, v, interrupted) : null
   const confirm = async () => {
     const started = gameClock.now(); const wallStarted = gameClock.wall.monotonic()
     const result = await receipt.settle()
@@ -398,7 +398,7 @@ async function digCell (bot, v, { allowGuard = false, interrupted = () => false,
 }
 
 async function fillCell (bot, v) {
-  const { placeBlockAt } = require('./build')
+  const { placeBlockAt }: typeof import('./build') = require('./build')
   const b = bot.blockAt(v)
   if (b && classOf(b) !== AIR && classOf(b) !== PARTIAL) return true
   const item = fillerName(bot)
@@ -438,16 +438,16 @@ async function stepMove (bot, ctl, mv) {
     return at().equals(to)
   }
   if (mv.kind === 'vup') {
-    const { towerUp } = require('./build')
+    const { towerUp }: typeof import('./build') = require('./build')
     const item = fillerName(bot)
     if (!item) return false
     try { await towerUp(bot, ctl, 1, { item, maxDigMs: 1500 }) } catch {}
     await sleep(150)
     return at().equals(to)
   }
-  const t0 = require('./reflex-lock').clock(bot._ndReflexSession)
+  const t0 = (require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession)
   try {
-    while (require('./reflex-lock').clock(bot._ndReflexSession) - t0 < 3000 && !ctl.aborted) {
+    while ((require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession) - t0 < 3000 && !ctl.aborted) {
       if (at().equals(to) && bot.entity.onGround) break
       if (ctl.waitReflex) await ctl.waitReflex()
       const p = bot.entity.position
@@ -463,8 +463,8 @@ async function stepMove (bot, ctl, mv) {
   if (!at().equals(to) && !ctl.aborted) {
     try {
       bot.setControlState('back', true); await sleep(180); bot.setControlState('back', false)
-      const t1 = require('./reflex-lock').clock(bot._ndReflexSession)
-      while (require('./reflex-lock').clock(bot._ndReflexSession) - t1 < 1600 && !(at().equals(to) && bot.entity.onGround)) {
+      const t1 = (require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession)
+      while ((require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession) - t1 < 1600 && !(at().equals(to) && bot.entity.onGround)) {
         if (ctl.waitReflex) await ctl.waitReflex()
       const p = bot.entity.position
         await bot.lookAt(new Vec3(to.x + 0.5, p.y + 1.6, to.z + 0.5), true)
@@ -518,8 +518,8 @@ async function execute (session, ctl, path, S) {
     for (const q of bodyCells(bot)) { const b = bot.blockAt(q); if (b && /lava|fire/.test(b.name)) return { ok: false, why: 'огонь или лава в клетке тела', done: i } }
     // Страж ближнего боя (ne-guard, 03.10): удар/брут вплотную — ответ сразу (яма на 2 вниз, столб, бой), а не после
     // шага: VR23-2/VR26-2/VR31-3 — пиглин бил 5 раз за 5 с посреди хода штрека/ямы, тело шло дальше. По умолчанию вкл. (03.10, замер B0→B2→B4), ND_GUARD=0 — выкл.
-    if (process.env.ND_GUARD !== '0' && !S.noGuard && require('./worlds').worldOf(bot) === 'the_nether') {
-      const G = require('./ne-guard')
+    if (process.env.ND_GUARD !== '0' && !S.noGuard && (require('./worlds') as typeof import('./worlds')).worldOf(bot) === 'the_nether') {
+      const G: typeof import('./ne-guard') = require('./ne-guard')
       const h = G.hot(bot)
       if (h) {
         const rr = await G.react(session, ctl, { force: h, onOwn: cells => { for (const k of cells) S.own.add(k) } })
@@ -611,3 +611,8 @@ async function execute (session, ctl, path, S) {
 }
 
 module.exports = { localAir, bodyCells, FILL_NAMES: FILL, reachCells, AIR, SOLID, FLUID, HARD, GUARD, FALL, PARTIAL, HOT, UNKNOWN, CLS_NAMES, FACES, classOf, digSecondsOf, worldView, plan, adjacentGoal, manhattan, key, keyV, exposure, digCell, fillCell, stepMove, bonusGold, execute, fillerName, fillerCount }
+export {
+  localAir, bodyCells, FILL as FILL_NAMES, reachCells, AIR, SOLID, FLUID, HARD, GUARD, FALL, PARTIAL, HOT,
+  UNKNOWN, CLS_NAMES, FACES, classOf, digSecondsOf, worldView, plan, adjacentGoal, manhattan, key, keyV, exposure,
+  digCell, fillCell, stepMove, bonusGold, execute, fillerName, fillerCount
+}

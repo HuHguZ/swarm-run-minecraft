@@ -1,11 +1,12 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const Vec3 = require('vec3')
-const { createRequire } = require('node:module')
-const { coverRecord } = require('../src/bastion/cover-memory')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { createRequire } from 'node:module'
+import { coverRecord } from '../src/bastion/cover-memory'
 
 interface SealedState {
   sealed: boolean
@@ -40,11 +41,11 @@ function restoreTrade(mode: string, options: { key?: string; cells?: string[]; a
   const context = { mode, st, rec, Vec3, MEMO: fresh ? new Map() : new Map([[options.key ?? '91,139', memory]]),
     gameClock: { now: () => options.age ?? 1000, wall: { now: () => 1000 } },
     require: createRequire(path.resolve(__dirname, '../src/bastion/bastion.js')),
-    worlds: require('../src/worlds'), fullCover: b => !!b && b.name === 'blackstone', log: () => {},
+    worlds: (require('../src/worlds') as typeof import('../src/worlds')), fullCover: b => !!b && b.name === 'blackstone', log: () => {},
     session: { journal: { state: { bastionCovers: { '91,139': options.persisted } } }, _tunnelOwn: new Set(options.historical ?? []) },
     bot: { game: { dimension: 'the_nether' }, blockAt,
       entity: { position: options.far ? new Vec3(250, 54, 141) : new Vec3(89.5, 54, 141.5) } } }
-  vm.runInNewContext(source.slice(start, end), context)
+  vm.runInNewContext(source.slice(start, end), cjsContext(context))
   return st
 }
 

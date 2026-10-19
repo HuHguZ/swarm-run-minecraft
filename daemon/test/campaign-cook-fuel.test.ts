@@ -1,10 +1,12 @@
+import { campaignTs } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const source = campaignTs()
 const declaration = (name: string) => {
   const start = source.indexOf(`async function ${name} (`)
   assert.ok(start >= 0)
@@ -43,7 +45,7 @@ function fixture(extra: Record<string, number> = {}, { food = 10, hp = 20 } = {}
       return { status: 'done', detail: {} }
     }
   }
-  vm.runInNewContext(transformSync(declaration('cook') + '\n' + declaration('smeltAll') + '\nthis.cook=cook;this.smeltAll=smeltAll', { loader: 'ts' }).code, ctx)
+  vm.runInNewContext(transformSync(declaration('cook') + '\n' + declaration('smeltAll') + '\nthis.cook=cook;this.smeltAll=smeltAll', { loader: 'ts' }).code, cjsContext(ctx))
   return { ctx, inventory, calls }
 }
 

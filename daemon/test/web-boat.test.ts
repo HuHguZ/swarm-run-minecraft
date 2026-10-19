@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import { WebBoatGraph, type WebBoatFacts } from '../src/tactics/web-boat-graph'
 import { placeBoatOn, mountBoat } from '../src/combat/boat-placement'
 import { webBoatPlan, webBoatExit } from '../src/tactics/web-boat'
-const { Vec3 } = require('vec3')
+import { Vec3 } from 'vec3'
 
 test('web rescue advances only after each placement, passenger mount and safe height are observed', () => {
   const graph = new WebBoatGraph()

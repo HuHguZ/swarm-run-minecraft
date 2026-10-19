@@ -1,12 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { install } = require('../src/client-loaded')
-const read = require('../src/read')
-const gameClock = require('../src/game-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { install } from '../src/client-loaded'
+import * as read from '../src/read'
+import * as gameClock from '../src/game-clock'
 function bot (supported = true) {
-  const b = new EventEmitter()
+  const b: any = new EventEmitter()
   b.registry = { protocol: { play: { toServer: { types: supported ? { packet_player_loaded: ['container', []] } : {} as Record<string, any> } } } }
   b.sent = []
   b._client = { write: (name, data) => b.sent.push({ name, data }) }

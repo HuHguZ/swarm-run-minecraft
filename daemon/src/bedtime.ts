@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
+import * as gameClock from './game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals } from 'mineflayer-pathfinder'
 
 // Ночь и кровать — как у живого игрока: кровать носим с собой, в сумерки
 // ставим, ложимся ровно тогда, когда сервер позволит (раньше, чем вылезут
@@ -47,7 +47,7 @@ function sleep (ms) { return new Promise<any>(resolve => gameClock.setTimeout(re
 const tod = (bot) => bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : 6000
 // Гроза — по уровню грозы (perception.thundering, 2026-09-26): флаг
 // bot.isRaining на Paper вывернут и под дождём не встаёт.
-const storm = (bot) => require('./perception').thundering(bot)
+const storm = (bot) => (require('./perception') as typeof import('./perception')).thundering(bot)
 const sleepTime = (bot) => storm(bot) || (tod(bot) >= NIGHT_FROM && tod(bot) <= NIGHT_TO)
 const isBed = (b) => !!b && /_bed$/.test(b.name)
 const key = (p) => `${p.x},${p.y},${p.z}`
@@ -114,10 +114,10 @@ function bedItem (bot) {
 async function bunker (session, ctl, { depth = BUNKER_DEPTH, deadline }: any) {
   const bot = session.bot
   const mcData = session.mcData
-  const survival = require('./survival')
-  const { placeBlockAt } = require('./build')
-  const { equipBestTool, missingHarvestTool } = require('./items')
-  const { inWater } = require('./movement')
+  const survival: typeof import('./survival') = require('./survival')
+  const { placeBlockAt }: typeof import('./build') = require('./build')
+  const { equipBestTool, missingHarvestTool }: typeof import('./items') = require('./items')
+  const { inWater }: typeof import('./movement') = require('./movement')
   if (inWater(bot)) return { ok: false, why: 'я в воде — тут не закопаешься' }
 
   const startY = Math.floor(bot.entity.position.y)
@@ -176,14 +176,14 @@ async function climbOut (session, ctl, startY) {
   const bot = session.bot
   if (Math.floor(bot.entity.position.y) >= startY) return { ok: true, y: Math.floor(bot.entity.position.y) }
   let r = null
-  try { r = await require('./survival').surface(session, ctl, { timeoutSeconds: 90 }) } catch (e) { return { ok: false, why: e.message } }
+  try { r = await (require('./survival') as typeof import('./survival')).surface(session, ctl, { timeoutSeconds: 90 }) } catch (e) { return { ok: false, why: e.message } }
   return { ok: !!(r && r.out), y: Math.floor(bot.entity.position.y), why: r && !r.out ? (r.note || r.stopped) : undefined }
 }
 
 // Забрать кровать: ломается с руки за миг, падает одним предметом.
 async function takeBed (session, ctl, bedBlock) {
   const bot = session.bot
-  const actions = require('./actions')
+  const actions: typeof import('./actions') = require('./actions')
   const before = bot.inventory.items().filter(i => /_bed$/.test(i.name)).reduce((n, i) => n + i.count, 0)
   const b = bot.blockAt(bedBlock.position)
   if (!isBed(b)) return { took: false, why: 'кровати на месте нет' }
@@ -216,7 +216,7 @@ async function takeBed (session, ctl, bedBlock) {
 // бункера (true), p.invite — позвать других игроков лечь (true).
 async function night (session, ctl, p: any = {}) {
   const bot = session.bot
-  const actions = require('./actions')
+  const actions: typeof import('./actions') = require('./actions')
   const { untilMorning = true, waitSeconds = 60, take = 'auto', bunker: allowBunker = true, exit = true, invite = true } = p
   if (!session.myBeds) session.myBeds = new Set()
   const log = []
@@ -445,7 +445,7 @@ function install (session) {
 
 async function setSpawn (session, ctl, p: any = {}) {
   const bot = session.bot
-  const actions = require('./actions')
+  const actions: typeof import('./actions') = require('./actions')
   if (!session.myBeds) session.myBeds = new Set()
   const dim = bot.game && bot.game.dimension
   if (dim && dim !== 'overworld') throw new Error('точку возрождения кровать ставит только в верхнем мире — здесь она взрывается (в Аду точку ставит якорь возрождения)')
@@ -497,5 +497,5 @@ async function takeSpawnBed (session, ctl) {
   return { took: got.took, note: got.took ? 'кровать забрал; точки возрождения больше нет — возрождение на спавне мира' : got.why }
 }
 
-module.exports = { night, setSpawn, takeSpawnBed, install, bedThreats, bunker, takeBed, RESTLESS, NIGHT_FROM, NIGHT_TO, DUSK_FROM, sleepTime }
+export { night, setSpawn, takeSpawnBed, install, bedThreats, bunker, takeBed, RESTLESS, NIGHT_FROM, NIGHT_TO, DUSK_FROM, sleepTime }
 

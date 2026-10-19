@@ -1,53 +1,61 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { resultCode } = require('./session/results')
-const mineflayer = require('mineflayer')
-const { Movements, goals } = require('mineflayer-pathfinder')
-const tickPlugins = require('./tick-plugins')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { resultCode }: typeof import('./session/results') = require('./session/results')
+const mineflayer: typeof import('mineflayer') = require('mineflayer')
+const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const tickPlugins: typeof import('./tick-plugins') = require('./tick-plugins')
 const { pathfinder } = tickPlugins
-const mcDataLoader = require('minecraft-data')
-const Vec3 = require('vec3')
-const { observe, stateSummary, biomeName } = require('./perception')
-const { xyz, standableY, stuckGuard, unstick, escapeWater, inWater, gotoGoal, gotoWaitOn, sprintOn, pathKeepAlive } = require('./movement')
-const actions = require('./actions')
-const combat = require('./combat')
-const { escapePit, withTimeout } = require('./build')
-const mining = require('./mining')
-const survival = require('./survival')
-const containers = require('./containers')
-const armor = require('./armor')
-const { escort } = require('./escort')
-const social = require('./social')
-const nether = require('./nether')
-const handover = require('./handover')
-const gear = require('./preflight')
-const flee = require('./flee')
-const stronghold = require('./stronghold')
-const obsidianMod = require('./obsidian')
-const gamedata = require('./gamedata')
-const packMod = require('./pack')
-const fauna = require('./fauna')
-const bow = require('./bow')
-const throwMod = require('./throw')
-const prepMod = require('./prep')
-const lootMod = require('./loot')
-const worlds = require('./worlds')
-const fastblocks = require('./fastblocks')
-const edges = require('./edges')
-const blockmoves = require('./blockmoves')
-const hopgoto = require('./hopgoto')
-const blazeMod = require('./blaze')
-const endportal = require('./endportal')
-const fortressMod = require('./fortress')
-const pearlsMod = require('./pearls')
-const bastionMod = require('./bastion')
-const dragonMod = require('./dragon')
-const architect = require('./architect')
-const sorting = require('./sorting')
-const farmMod = require('./farm')
-const rideMod = require('./ride')
-const mechanismMod = require('./mechanism')
-const playPolicy = require('./play-policy')
+const mcDataLoader: typeof import('minecraft-data') = require('minecraft-data')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { observe, stateSummary, biomeName }: typeof import('./perception') = require('./perception')
+const { xyz, standableY, stuckGuard, unstick, escapeWater, inWater, gotoGoal, gotoWaitOn, sprintOn, pathKeepAlive }: typeof import('./movement') = require('./movement')
+const actions: typeof import('./actions') = require('./actions')
+const combat: typeof import('./combat') = require('./combat')
+const { escapePit, withTimeout }: typeof import('./build') = require('./build')
+const mining: typeof import('./mining') = require('./mining')
+const survival: typeof import('./survival') = require('./survival')
+const containers: typeof import('./containers') = require('./containers')
+const armor: typeof import('./armor') = require('./armor')
+const { escort }: typeof import('./escort') = require('./escort')
+const social: typeof import('./social') = require('./social')
+const nether: typeof import('./nether') = require('./nether')
+const handover: typeof import('./handover') = require('./handover')
+const gear: typeof import('./preflight') = require('./preflight')
+const flee: typeof import('./flee') = require('./flee')
+const stronghold: typeof import('./stronghold') = require('./stronghold')
+const obsidianMod: typeof import('./obsidian') = require('./obsidian')
+const gamedata: typeof import('./gamedata') = require('./gamedata')
+const packMod: typeof import('./pack') = require('./pack')
+const fauna: typeof import('./fauna') = require('./fauna')
+const bow: typeof import('./bow') = require('./bow')
+// Поля, которых нет в типах библиотек: политика игры на боте (читают items, pack), полуширина тела 1.21.11 в физике,
+// цена воды у Movements pathfinder'а, «в лаве» у сущности (ставит физика).
+declare module 'mineflayer' {
+  interface Bot { ndPlayPolicy?: any }
+  interface PhysicsOptions { playerHalfWidth?: number }
+}
+declare module 'mineflayer-pathfinder' { interface Movements { liquidCost?: number } }
+declare module 'prismarine-entity' { interface Entity { isInLava?: boolean } }
+const throwMod: typeof import('./throw') = require('./throw')
+const prepMod: typeof import('./prep') = require('./prep')
+const lootMod: typeof import('./loot') = require('./loot')
+const worlds: typeof import('./worlds') = require('./worlds')
+const fastblocks: typeof import('./fastblocks') = require('./fastblocks')
+const edges: typeof import('./edges') = require('./edges')
+const blockmoves: typeof import('./blockmoves') = require('./blockmoves')
+const hopgoto: typeof import('./hopgoto') = require('./hopgoto')
+const blazeMod: typeof import('./blaze') = require('./blaze')
+const endportal: typeof import('./endportal') = require('./endportal')
+const fortressMod: typeof import('./fortress') = require('./fortress')
+const pearlsMod: typeof import('./pearls') = require('./pearls')
+const bastionMod: typeof import('./bastion') = require('./bastion')
+const dragonMod: typeof import('./dragon') = require('./dragon')
+const architect: typeof import('./architect') = require('./architect')
+const sorting: typeof import('./sorting') = require('./sorting')
+const farmMod: typeof import('./farm') = require('./farm')
+const rideMod: typeof import('./ride') = require('./ride')
+const mechanismMod: typeof import('./mechanism') = require('./mechanism')
+const playPolicy: typeof import('./play-policy') = require('./play-policy')
 
 // Abortable sleep. The shared helper in movement.js has no cancellation, and
 // Прыжок вниз без ведра (пользователь 10.10: «убирай лимит глобально для всех режимов — пусть прыгают и подхиливаются»):
@@ -162,6 +170,7 @@ class Session {
   declare reflex: any
   declare crafting: any
   declare eating: any
+  declare _prestartIntents: Set<(by?: any) => void> | undefined
 
   constructor (cfg, bus, journal) {
     this.cfg = cfg
@@ -174,7 +183,7 @@ class Session {
     this.connecting = null
     this.bootstrapPaused = false
     this.replanRevision = 0
-    this.tactics = new (require('./tactics/minecraft').TacticalSystem)(this)
+    this.tactics = new ((require('./tactics/minecraft') as typeof import('./tactics/minecraft')).TacticalSystem)(this)
     this.playPolicy = playPolicy.configure(journal.state?.playPolicy)
     // Характер: как бот отвечает человеку, который его бьёт (autopilot.js
     // provoked). Меняется через mc_temper, живёт до перезапуска демона.
@@ -258,11 +267,11 @@ class Session {
       this.autopilot?.start()
       this.wireHealth(bot)
       bot.ndPlayPolicy = this.playPolicy
-      require('./client-loaded').install(bot)
+      ;(require('./client-loaded') as typeof import('./client-loaded')).install(bot)
       // Поправка данных игры до первого блока: у руд и обсидиана не тот
       // материал, и копка шла в 6-8 раз дольше ванильной (gamedata.js).
       gamedata.fixMaterials(bot.registry)
-      bot.once('inject_allowed', () => gamedata.fixMaterials(bot.registry))
+      bot.once('inject_allowed', () => { gamedata.fixMaterials(bot.registry) })
       // Доски из ободранного бревна и древесины — рецепт из тега (gamedata.js).
       bot.once('inject_allowed', () => { try { gamedata.fixPlanks(bot.registry); gamedata.fixWhiteWool(bot.registry) } catch {} })
       // Имена атрибутов в пакете (скорость и прочее) — gamedata.js.
@@ -282,26 +291,26 @@ class Session {
         if (settled) return
         try {
           try { if (bot.physics) bot.physics.playerHalfWidth = Math.fround(0.6) / 2 } catch {}
-          require('./swimming').install(bot)
+          ;(require('./swimming') as typeof import('./swimming')).install(bot)
           // Предметы на земле: скорость из пакета появления и физика полёта (drops.js) —
           // иначе брошенное видно в точке броска до секунды.
-          try { require('./drops').install(bot) } catch {}
+          try { (require('./drops') as typeof import('./drops')).install(bot) } catch {}
           // Рюкзак после окон сверяется с сервером (invsync.js): иначе верстак,
           // кирка и прочее «пропадают» у клиента, оставаясь у сервера.
-          try { require('./invsync').install(bot) } catch {}
+          try { (require('./invsync') as typeof import('./invsync')).install(bot) } catch {}
           // Сколько секунд куча после смерти реально тикала (lootclock.js).
-          try { require('./lootclock').install(this) } catch {}
+          try { (require('./lootclock') as typeof import('./lootclock')).install(this) } catch {}
           // Кровать-точка возрождения: сервер сбросил — забыть (bedtime.js).
-          try { require('./bedtime').install(this) } catch {}
+          try { (require('./bedtime') as typeof import('./bedtime')).install(this) } catch {}
           // Постройки игры глазами раз в 8 с → память и structure_seen (structures.js).
-          try { require('./structures').install(this) } catch {}
+          try { (require('./structures') as typeof import('./structures')).install(this) } catch {}
           // Глаза + память увиденного и слух (perception/, S10; ND_EYES=0 — без обхода глаз).
-          try { require('./perception/eyes').install(this); require('./perception/senses').installHearing(bot) } catch {}
+          try { (require('./perception/eyes') as typeof import('./perception/eyes')).install(this); ;(require('./perception/senses') as typeof import('./perception/senses')).installHearing(bot) } catch {}
           // Шар гаста отбивается из любого дела, а не только в четырёх навыках Ада (ne-guard.swatInstall; b6 14.10: сброс
           // шаром — 3 смерти из 9, в том числе на ожидании и ходьбе к бастиону).
-          try { require('./ne-guard').swatInstall(bot) } catch {}
+          try { (require('./ne-guard') as typeof import('./ne-guard')).swatInstall(bot) } catch {}
           // Искажённый лес Ада глазами (нилий в прорисовке + луч) → память «искажённый лес (ад)» (S1e, nether-forest.js).
-          try { require('./nether-forest').install(this) } catch {}
+          try { (require('./nether-forest') as typeof import('./nether-forest')).install(this) } catch {}
           // Слез / сброшен / телепортирован из седла — mineflayer этого не видит
           // (ride.js patchVehicle): без правки bot.vehicle висит вечно.
           try { rideMod.patchVehicle(bot) } catch {}
@@ -337,7 +346,7 @@ class Session {
     // Арена (ND_SCAFFOLD_ANY=1): столбы и мосты pathfinder ставит и блоками постройки (build.ARENA_FILLER).
     const arenaScaffold = process.env.ND_SCAFFOLD_ANY === '1'
     const scaffold = items
-      .filter(i => /^(dirt|cobblestone|cobbled_deepslate|netherrack|stone|oak_planks|spruce_planks|birch_planks)$/.test(i.name) || (arenaScaffold && require('./build').ARENA_FILLER.test(i.name)))
+      .filter(i => /^(dirt|cobblestone|cobbled_deepslate|netherrack|stone|oak_planks|spruce_planks|birch_planks)$/.test(i.name) || (arenaScaffold && (require('./build') as typeof import('./build')).ARENA_FILLER.test(i.name)))
       .reduce((n, i) => n + i.count, 0)
     const towers = scaffold >= 8
 
@@ -355,7 +364,7 @@ class Session {
     const swampy = (p) => { if (!p) return false; try { return /swamp|mangrove/.test(biomeName(bot, p) || '') } catch { return false } }
     const marsh = this.sprintWanted === undefined && (swampy(bot.entity && bot.entity.position) || swampy(this.gotoTarget))
     const sprint = !!(this.sprintWanted ?? sprintOn(worlds.worldOf(bot))) && (bot.food ?? 20) > 6 && fed && !marsh
-    const signature = `${canDig}:${towers}:${worlds.worldOf(bot)}:${mlg.ok}:${bridge ? 1 : 0}:${sprint ? 1 : 0}:${this.surfaceStrict ? 1 : 0}:${JSON.stringify(this.gotoArena ?? null)}:${arenaScaffold ? [...new Set(items.filter(i => require('./build').ARENA_FILLER.test(i.name)).map(i => i.name))].sort().join() : ''}`
+    const signature = `${canDig}:${towers}:${worlds.worldOf(bot)}:${mlg.ok}:${bridge ? 1 : 0}:${sprint ? 1 : 0}:${this.surfaceStrict ? 1 : 0}:${JSON.stringify(this.gotoArena ?? null)}:${arenaScaffold ? [...new Set(items.filter(i => (require('./build') as typeof import('./build')).ARENA_FILLER.test(i.name)).map(i => i.name))].sort().join() : ''}`
     if (!force && signature === this.movementsSignature) return
     this.movementsSignature = signature
 
@@ -364,7 +373,7 @@ class Session {
     fastblocks.wrapMovements(bot, movements)
     const defAt = fastblocks.defReader(bot)
     if (process.env.ND_ROUTE === '1' && process.env.ND_WORLD_SEED && process.env.ND_ROUTE_OUTPOSTPATH !== '0' && worlds.worldOf(bot) === 'overworld' && Array.isArray(movements.exclusionAreasStep)) {
-      const route = require('./route')
+      const route: typeof import('./route') = require('./route')
       if (!this.routeOutpostInfo) this.routeOutpostInfo = route.routeInfo(process.env.ND_WORLD_SEED)
       movements.exclusionAreasStep.push(block => {
         const at = block && (block.position || block)
@@ -374,7 +383,7 @@ class Session {
     }
     movements.canDig = canDig && !this.surfaceStrict
     movements.allow1by1towers = towers && !this.surfaceStrict
-    if (arenaScaffold) movements.scafoldingBlocks = [...new Set([...(movements.scafoldingBlocks || []), ...items.filter(i => require('./build').ARENA_FILLER.test(i.name)).map(i => i.type)])]
+    if (arenaScaffold) movements.scafoldingBlocks = [...new Set([...(movements.scafoldingBlocks || []), ...items.filter(i => (require('./build') as typeof import('./build')).ARENA_FILLER.test(i.name)).map(i => i.type)])]
     movements.maxDropDown = dropDown
     movements.allowSprinting = sprint
     // чем моб опаснее (flee.js DOCTRINE). Раньше маршрут шёл сквозь толпу, и
@@ -387,15 +396,16 @@ class Session {
     // (cl-e 14.10: 20 кругов «к деревне по дну озера» → Surface → берег за 3 мин). Клетка воды под водой — ещё цена воды
     // сверху (liquidCost), чтобы путь плыл поверху или шёл в обход.
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => {
-      if (process.env.ND_WATER_ESCAPE_BUDGET !== '0') return Math.max(require('./movement').waterStepCost(bot, block),
-        block?.position && require('./movement').waterCell(block) && require('./movement').waterCell(bot.blockAt(block.position.offset(0, 1, 0), false)) ? (movements.liquidCost ?? 1) : 0)
+      if (process.env.ND_WATER_ESCAPE_BUDGET !== '0') return Math.max((require('./movement') as typeof import('./movement')).waterStepCost(bot, block),
+        block?.position && (require('./movement') as typeof import('./movement')).waterCell(block) && (require('./movement') as typeof import('./movement')).waterCell(bot.blockAt(block.position.offset(0, 1, 0), false)) ? (movements.liquidCost ?? 1) : 0)
       if (!block || block.name !== 'water' || !block.position) return 0
       const above = bot.blockAt(block.position.offset(0, 1, 0), false)
       return above && above.name === 'water' ? (movements.liquidCost ?? 1) : 0
     })
     if (Array.isArray(movements.exclusionAreasStep)) {
       const fbm = bot._ndFastBlocks
-      movements.exclusionAreasStep.push(block => {
+      // На Block из кеша — память цены лавы (версия кеша fastblocks, флаг строгости, цена).
+      movements.exclusionAreasStep.push((block: import('mineflayer-pathfinder').SafeBlock & { _ndLavaVer?: number; _ndLavaK?: boolean; _ndLavaV?: number }) => {
         const p = block && block.position
         if (!p) return 0
         // Цена зависит только от блоков вокруг и флага строгости — по памяти на Block из кеша, пока мир не менялся
@@ -458,7 +468,7 @@ class Session {
     if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
     if (this.surfaceStrict) { movements.canDig = false; movements.allow1by1towers = false; movements.scafoldingBlocks = [] }
     if (this.gotoArena) {
-      const arena = this.gotoArena, within = require('./navigation/parkour').withinArena
+      const arena = this.gotoArena, within = (require('./navigation/parkour') as typeof import('./navigation/parkour')).withinArena
       const cost = block => { const p = block?.position; return p && within(bot, { x: p.x + .5, y: p.y, z: p.z + .5 }, arena) ? 0 : Infinity }
       movements.exclusionAreasStep.push(cost)
       movements.exclusionAreasPlace.push(cost)
@@ -721,28 +731,28 @@ class Session {
     edges.fixSelfKnockback(bot)
     // Предмет в ходу (еда, питьё, лук, щит) — ход ×0.2 и без спринта, как у
     // ванильного клиента (itemuse.js, просьба 2026-09-26 играть честно).
-    require('./itemuse').install(bot)
+    ;(require('./itemuse') as typeof import('./itemuse')).install(bot)
     // Копать только самым быстрым инструментом (tools.js install): паутину —
     // мечом, а не булыжником в руке после столба (арена 2026-09-26).
-    require('./tools').install(bot)
+    ;(require('./tools') as typeof import('./tools')).install(bot)
     // Не смотреть эндермену в глаза между делом (gaze.ts): взгляд вперёд на ходу злил их (cl-al 14.10).
-    require('./gaze').install(this, bot)
+    ;(require('./gaze') as typeof import('./gaze')).install(this, bot)
     // По магме — крадучись (careful.ts): присевшего она не жжёт, тактика не рвёт путь к сундуку руин.
-    require('./careful').install(this, bot)
+    ;(require('./careful') as typeof import('./careful')).install(this, bot)
     // Удар только по тому, что клиент игры взял бы в прицел (pick.js): сервер
     // прямую видимость не проверяет, и боты били сквозь стенку коробки.
-    require('./pick').install(bot)
+    ;(require('./pick') as typeof import('./pick')).install(bot)
     // Титры после выходного портала — всегда ответ perform_respawn (credits.ts): иначе игрок вне мира, часы стоят.
-    require('./credits').install(bot)
+    ;(require('./credits') as typeof import('./credits')).install(bot)
     // Бег вприпрыжку на прямых ровных участках пути (sprintjump.js; по умолчанию вкл., ND_SPRINT_JUMP=0 — выкл.).
-    try { require('./sprintjump').install(bot) } catch {}
+    try { (require('./sprintjump') as typeof import('./sprintjump')).install(bot) } catch {}
     // Свет чанков — со своей перестановкой x (prismarine-chunk 1.41, lightfix.js).
-    require('./lightfix').install(bot)
+    ;(require('./lightfix') as typeof import('./lightfix')).install(bot)
     // Заряженный арбалет — только прицельным выстрелом (ranged.guardCrossbow).
-    require('./ranged').guardCrossbow(bot)
+    ;(require('./ranged') as typeof import('./ranged')).guardCrossbow(bot)
     // Install after tool/pick wrappers; attach for ALL intents, including gold,
     // pearls, ne_route/ne_burrow and crafting, not just bastion/farmRods callers.
-    if (require('./reflex-lock').on()) require('./ne-guard').attach(this)
+    if ((require('./reflex-lock') as typeof import('./reflex-lock')).on()) (require('./ne-guard') as typeof import('./ne-guard')).attach(this)
     bot.on('nd_mlg', (e) => console.log('[mlg]', JSON.stringify({ ...e, y: bot.entity && Math.round(bot.entity.position.y * 10) / 10, hp: bot.health })))
 
     // Рюкзак полон (pack.js через collectNearbyDrops): выбросил дешёвое ради
@@ -770,7 +780,7 @@ class Session {
     // Возрождение: флаг копки pathfinder'а, оставшийся от копки до смерти, вешал все goto («застрял на air у air»,
     // isMining() навсегда — регрессия спуска 30.09). tools.install обрывает такую копку; здесь — страховка.
     bot.on('spawn', () => {
-      if (require('./tools').unstickPathfinderDig(bot)) console.log('[path] флаг копки после смерти сброшен')
+      if ((require('./tools') as typeof import('./tools')).unstickPathfinderDig(bot)) console.log('[path] флаг копки после смерти сброшен')
     })
     bot.on('death', () => {
       const pos = bot.entity ? xyz(bot.entity.position) : null
@@ -887,7 +897,7 @@ class Session {
   // отменённых боёв стенда — 0/0 до первого взмаха, отправитель не был виден). Первая причина (тактика) не затирается.
   cancel (by = 'cancel') {
     for (const cancel of (this as any)._prestartIntents || []) cancel(by)
-    require('./reflex-lock').cancel(this)
+    ;(require('./reflex-lock') as typeof import('./reflex-lock')).cancel(this)
     this.followGoal = null
     if (this.current) {
       this.current.ctl.interruptedBy ||= { type: 'cancelled', by }
@@ -902,7 +912,7 @@ class Session {
 
   // event fires (player chat, damage, low health, death, disconnect), or the
   runIntent (name, worker, options: any = {}) {
-    return require('./session/intent-runner').runIntent.call(this, name, worker, options)
+    return (require('./session/intent-runner') as typeof import('./session/intent-runner')).runIntent.call(this, name, worker, options)
   }
 
   // Non-blocking action: does not cancel whatever is running.
@@ -943,7 +953,7 @@ class Session {
       // A bot already near a threat may stand or leave, but must not get any closer.
       const avoid = arena.avoid?.map(e => Object.freeze({ ...e, r: Math.min(e.r, Math.hypot(start.x - e.x, start.y - e.y, start.z - e.z)) }))
       boundedArena = Object.freeze({ ...arena, ...(avoid ? { avoid: Object.freeze(avoid) } : {}) })
-      const within = require('./navigation/parkour').withinArena
+      const within = (require('./navigation/parkour') as typeof import('./navigation/parkour')).withinArena
       if (!within(bot, target, boundedArena) || !within(bot, { ...target, x: Math.floor(target.x) + .5, z: Math.floor(target.z) + .5 }, boundedArena)) throw Object.assign(new Error('goto target is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
     }
     const avoiding = !!boundedArena?.avoid?.length
@@ -967,7 +977,7 @@ class Session {
       }
       const checkBounds = () => {
         if (!boundedArena || ctl.aborted || boundaryError || this.gotoArena !== boundedArena) return
-        const parkour = require('./navigation/parkour')
+        const parkour: typeof import('./navigation/parkour') = require('./navigation/parkour')
         let next = bot.entity.position
         try {
           if (bot.physics?.simulatePlayer && bot.entity.velocity) next = parkour.simulatePlan(bot, [{ yaw: bot.entity.yaw ?? 0, control: { ...parkour.IDLE, ...bot.controlState } }]).pos
@@ -1002,17 +1012,17 @@ class Session {
       if (this.bridgeWanted) blockmoves.install(this)
       this.updateMovements()
       // Лестница выхода из застреваний (unstuck.js): ND_UNSTUCK или goto { unstuck }; только в новом goto (gotoGoal).
-      const un = !strict && waitPartial && require('./unstuck').on(unstuckWanted) ? require('./unstuck').watch(this, ctl, { deadline }) : null
+      const un = !strict && waitPartial && (require('./unstuck') as typeof import('./unstuck')).on(unstuckWanted) ? (require('./unstuck') as typeof import('./unstuck')).watch(this, ctl, { deadline }) : null
       console.log('[goto]', JSON.stringify({ to: [x, y ?? null, z], from: bot.entity ? [Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)] : null,
         bridge: !!(this.movements && this.movements.bridge), wait: waitPartial, unstuck: !!un, sprint: !!(bot.pathfinder.movements && bot.pathfinder.movements.allowSprinting), pearl: hopgoto.on(pearl) }))
       // С лестницей выхода к берегу плыть, только если он вплавь есть: пруд в яме (берег выше воды на 2+) escapeWater
       // обходил по 25 с впустую (try-lab-stuck pond, us-pilot1) — оттуда выводит ступенька/лесенка лестницы.
-      if (!strict && inWater(bot) && !(un && !require('./unstuck').landBySwim(bot))) await escapeWater(bot, ctl)
+      if (!strict && inWater(bot) && !(un && !(require('./unstuck') as typeof import('./unstuck')).landBySwim(bot))) await escapeWater(bot, ctl)
       const goalBelow = () => waitPartial && y != null && Number.isFinite(Number(y)) && Number(y) < bot.entity.position.y - 2
-      const pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
+      const pit: { wasInPit: boolean; climbed?: number; stopped?: string } = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
       const bx = Math.floor(x)
       const bz = Math.floor(z)
-      if (strict && !boundedArena) await require('./fortify').leaveSealedCell(this, ctl, { x: bx + 0.5, z: bz + 0.5 })
+      if (strict && !boundedArena) await (require('./fortify') as typeof import('./fortify')).leaveSealedCell(this, ctl, { x: bx + 0.5, z: bz + 0.5 })
       let goal
       let resolvedTo
       if (y === undefined || y === null) {
@@ -1031,7 +1041,7 @@ class Session {
         }
       }
 
-      if (boundedArena && resolvedTo.y != null && !require('./navigation/parkour').withinArena(bot, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, boundedArena)) throw Object.assign(new Error('resolved goto support is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
+      if (boundedArena && resolvedTo.y != null && !(require('./navigation/parkour') as typeof import('./navigation/parkour')).withinArena(bot, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, boundedArena)) throw Object.assign(new Error('resolved goto support is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
       // Цель под крышей (небо ≤ 7 в клетке ног цели): поверху к ней не дойти, а штраф крыши раздувает A* у самой цели
       // (s6b 06.10, арена S7: комнаты под перекрытием; над западом висит кусок рельефа, небо там на 1 темнее — A* запад
       // 62 узла против 9 зеркально, на 750 TPS «partial» по кругу; try-parkour-path-mirror.js). Только для цели с высотой:
@@ -1056,7 +1066,7 @@ class Session {
       // стены, если быстрее пешего пути pathfinder'а. descent: false | { minGain, maxFallDamage, … }; ND_DESCENT=0 — выкл.
       // На ходу — сторож (descent.watch): у края с готовым вариантом попытка pathfinder'а обрывается, решает maybeDescend.
       const descentRuns = []
-      const descentMod = require('./navigation/descent')
+      const descentMod: typeof import('./navigation/descent') = require('./navigation/descent')
       const descentOpt = typeof descent === 'object' && descent ? descent : {}
       const descendNow = async () => {
         let r
@@ -1068,7 +1078,7 @@ class Session {
       const firstDescent = !boundedArena && descentMod.on(descent) ? await descendNow() : null
       // Подъём на лодке по уступам (navigation/boat-moves.ts): цель выше на 4+ — сравнить с пешим путём. ND_ASCENT_BOAT=0 — выкл.
       if (!boundedArena && descentMod.on(descent) && !(firstDescent && firstDescent.used)) {
-        try { await require('./navigation/boat-moves').maybeAscend(this, ctl, { x: bx, y: resolvedTo.y, z: bz }, goal, descentOpt) } catch (err) { console.log('[ascent] ошибка: ' + err.message) }
+        try { await (require('./navigation/boat-moves') as typeof import('./navigation/boat-moves')).maybeAscend(this, ctl, { x: bx, y: resolvedTo.y, z: bz }, goal, descentOpt) } catch (err) { console.log('[ascent] ошибка: ' + err.message) }
         if (ctl.aborted) throw new Error('прервано')
       }
       let failDescent = null
@@ -1223,7 +1233,7 @@ class Session {
                 if (moved >= 3) { retry--; continue }
               }
               if (y != null && resolvedTo.y != null && !outOfTime()) {
-                const parkour = require('./navigation/parkour')
+                const parkour: typeof import('./navigation/parkour') = require('./navigation/parkour')
                 const local = boundedArena ? await parkour.executeJump(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, { arena: boundedArena }) : await parkour.tryLocal(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 })
                 if (ctl.aborted) throw new Error('прервано')
                 if (local.ok) return { arrived: xyz(bot.entity.position), target: { x: bx, y: resolvedTo.y, z: bz, mode: 'parkour' }, attempts: tried.length + 1, parkour: { ticks: local.ticks } }
@@ -1239,7 +1249,7 @@ class Session {
             }
             // exactly how the answer used to turn into a bare clock: the abort
             if (outOfTime()) return ranOut()
-            const out = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
+            const out: { wasInPit: boolean; climbed?: number; stopped?: string } = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
             if (out.wasInPit) tried.push(`вылез из ямы на ${out.climbed}${out.stopped ? ' (' + out.stopped + ')' : ''}`)
             if (!strict) await unstick(bot)
           }
@@ -1288,7 +1298,7 @@ class Session {
       return { waited: s }
       // Ожидание слышит и жесты людей (gestures.js): присед, взгляд в упор,
       // брошенную вещь — живой игрок на них отвечает, а не спит дальше.
-    }, { exclusive: holdPosition, timeoutMs: (s + 5) * 1000, interruptOn: [...require('./events').WAKES] })
+    }, { exclusive: holdPosition, timeoutMs: (s + 5) * 1000, interruptOn: [...(require('./events') as typeof import('./events')).WAKES] })
   }
 
   // Raw turn, no result envelope — used by vision before taking a shot so the
@@ -1526,7 +1536,7 @@ class Session {
         как: 'это память о виденном, а не зрение — забрать через mc_mine_seen'
       },
       // Постройки — счёт и последние (весь список — mc_structure mode=list).
-      structures: require('./structures').compact(s.structures),
+      structures: (require('./structures') as typeof import('./structures')).compact(s.structures),
       looted: Array.isArray(s.looted) ? s.looted.length : undefined
     }
   }
@@ -1539,6 +1549,7 @@ class Session {
   }
 }
 
-Object.assign(Session.prototype, require('./session/resources'), require('./session/progression'), require('./session/equipment'), require('./session/combat'))
+Object.assign(Session.prototype, (require('./session/resources') as typeof import('./session/resources')), (require('./session/progression') as typeof import('./session/progression')), (require('./session/equipment') as typeof import('./session/equipment')), (require('./session/combat') as typeof import('./session/combat')))
 
 module.exports = { Session, sleep, xyz, resultCode, steerIntoDig }
+export { Session, sleep, xyz, resultCode, steerIntoDig }

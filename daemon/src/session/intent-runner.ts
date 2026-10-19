@@ -1,8 +1,8 @@
 'use strict'
-const gameClock = require('../game-clock')
-const gear = require('../preflight')
-const { resultCode } = require('./results')
-const { INTERRUPTING } = require('../events')
+import * as gameClock from '../game-clock'
+import * as gear from '../preflight'
+import { resultCode } from './results'
+import { INTERRUPTING } from '../events'
 // ND_CHAT_INTERRUPT=0 — чат не рвёт работу (совместная игра 10.10: человек пишет, кампания идёт, а не «стоишь и тупишь»);
 // строки чата приезжают в событиях результата, wait по-прежнему будится чатом.
 const chatOff = process.env.ND_CHAT_INTERRUPT === '0'
@@ -28,7 +28,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     }
     try {
     if (DODGES.test(name)) {
-      const rl = require('../reflex-lock'); const o = rl.owner(this); if (o && o.owner !== 'Emergency') rl.cancel(this)
+      const rl: typeof import('../reflex-lock') = require('../reflex-lock'); const o = rl.owner(this); if (o && o.owner !== 'Emergency') rl.cancel(this)
       while (rl.owner(this)?.owner === 'Emergency' && this.reflex) await beforeStart(this.reflex)
     } else if (exclusive && this.tactics?.enabled()) await beforeStart(this.tactics.waitForRelease())
     const cur = this.current
@@ -49,11 +49,11 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     }
     // Директор (director.js) не рвёт mc_wait мозга: мозг ждёт и слушает, пока
     // директор работает, и прерывания будят его как обычно.
-    const fromDirector = require('../director').byDirector()
+    const fromDirector = (require('../director') as typeof import('../director')).byDirector()
     if (exclusive && !(fromDirector && this.current && this.current.name === 'wait')) this.cancel(name)
 
     const ctl: any = { aborted: false, onAbort: [] }
-    const reflexLock = require('../reflex-lock')
+    const reflexLock: typeof import('../reflex-lock') = require('../reflex-lock')
     ctl.waitReflex = () => reflexLock.wait(this, ctl)
     ctl.abort = () => {
       if (ctl.aborted) return
@@ -160,4 +160,4 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     return result
   }
 
-module.exports = { runIntent }
+export { runIntent }

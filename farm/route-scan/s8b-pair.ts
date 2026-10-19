@@ -1,10 +1,11 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // S8b (07.10): парное сравнение двух плеч серий «новый мир → Ад» по сидам (одни и те же сиды, по нескольку прогонов на сид).
 // Окно — CAP игровых минут (по умолчанию 20). Знак-тест по сидам: где плечо B лучше/хуже по доле входов.
-//   node farm/route-scan/s8b-pair.js --a s8b-a1,s8b-a2 --b s8b-b [--cap 20]
-const fs = require('fs')
-const path = require('path')
-const RES = path.join(__dirname, '..', 'results')
+//   node dist/farm/route-scan/s8b-pair.js --a s8b-a1,s8b-a2 --b s8b-b [--cap 20]
+import * as fs from 'fs'
+import path = require('path')
+const RES = path.join(REPO_ROOT, 'farm/results')
 const args = process.argv.slice(2)
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d }
 const CAP = Number(opt('--cap', 20))

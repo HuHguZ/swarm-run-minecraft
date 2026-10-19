@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import Module from 'node:module'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture(cancel = false) {
   const file = path.resolve(__dirname, '../src/fortress.ts'), mod: any = new Module(file, module)
@@ -20,7 +20,7 @@ function fixture(cancel = false) {
       return { start: { all: [{ type: 'bridge', r: 1 }] }, basalt: 20, chests: 1 }
     }
   } : raw(name)
-  mod._compile(transformSync(fs.readFileSync(file, 'utf8') + `
+  mod._compile(transformSync(bodySource(file) + `
     look = () => ({ seen: 24, rayChecked: 24, nearest: { x: 10, y: 64, z: 20 }, dist: 22,
       bastion: { nearest: { x: 10, y: 64, z: 20 }, dist: 22, seen: 24 } });
     keepBlocks = async () => null; legTo = async () => ({ ok: true });
@@ -61,7 +61,7 @@ test('walking a search leg awaits an asynchronous glance before deciding to cont
   let looked = 0
   const result = await f.mod.exports.walkLineForTest(f.session, f.ctl, {
     start: { x: 0, z: 0 }, dirName: 'east', maxWalk: 64,
-    deadline: require('../src/game-clock').now() + 10000, legs: [],
+    deadline: (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 10000, legs: [],
     glance: async () => { await new Promise<void>(resolve => setImmediate(resolve)); looked++; return { seen: 1 } }
   })
   assert.equal(result.v.seen, 1)

@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Vec3 = require('vec3')
-const movement = require('../src/movement')
-const { shoreRoute } = require('../src/survival/hold-out')
-const { waterLevel, standingInSource } = require('../src/survival/out-of-water')
-const geometry = require('../src/navigation/geometry')
-const geometryRegistry = require('minecraft-data')('1.21.11')
-const NativeBlock = require('prismarine-block')(geometryRegistry)
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import movement = require('../src/movement')
+import { shoreRoute } from '../src/survival/hold-out'
+import { waterLevel, standingInSource } from '../src/survival/out-of-water'
+import * as geometry from '../src/navigation/geometry'
+const geometryRegistry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const NativeBlock = (require('prismarine-block') as typeof import('prismarine-block'))(geometryRegistry as any)
 
 function geometryPool(name: string | null, head = 'air') {
   return { blockAt(at: any) {
@@ -66,7 +66,7 @@ test('shared water geometry preserves native waterlogging and the flowing-water 
   const waterlogged = blocks.find(block => block.getProperties().waterlogged === true)
   assert.ok(waterlogged)
   assert.equal(geometry.containsWater(waterlogged), true)
-  assert.equal(geometry.containsWater({ name: 'flowing_water' }), true)
+  assert.equal(geometry.containsWater({ name: 'flowing_water' } as any), true)
 })
 
 function plantedPool(name: string) {
@@ -114,14 +114,14 @@ test('ordinary dry grass remains dry ground', () => {
 })
 
 test('native pathfinder uses the existing water cost and swim moves for aquatic plants', () => {
-  const registry = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')(registry)
-  const { Movements } = require('mineflayer-pathfinder')
-  const { tuneMovements } = require('../src/worlds')
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
+  const { Movements }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+  const { tuneMovements }: typeof import('../src/worlds') = require('../src/worlds')
   let name = 'seagrass'
   const bot: any = { registry, entity: { position: new Vec3(.5, 64, .5) }, game: { dimension: 'overworld' },
     blockAt(p: any) { const b = Block.fromStateId(registry.blocksByName[name].defaultState, 0); b.position = p.floored(); return b } }
-  const movements = new Movements(bot)
+  const movements: any = new Movements(bot)
   tuneMovements(bot, movements)
   for (name of ['seagrass', 'tall_seagrass', 'kelp', 'kelp_plant', 'bubble_column']) {
     assert.equal(movements.getBlock(bot.entity.position, 0, 0, 0).liquid, true, `${name} must reach the native fluid branch`)

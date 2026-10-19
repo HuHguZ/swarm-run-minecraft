@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createPacketWitness, pairUseWitness } from '../air-ranged-witness'
-import { saveAirSummary } from '../try-air-ranged'
+import { createPacketWitness, pairUseWitness } from '../scenes/pvp/air-ranged-witness'
+import { saveAirSummary } from '../scenes/pvp/try-air-ranged'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -120,7 +120,7 @@ test('Air47 six-case failure remains a compact parseable farm receipt before the
     assert.deepEqual([saved.shots, saved.fired, saved.hits, saved.misses, saved.noShots, saved.validationFailures], [6, 5, 1, 4, 1, 1])
     assert.equal(saved.cases.length, 6)
     assert.equal('nativeTrace' in saved.cases[0], false)
-    const source = fs.readFileSync(path.join(__dirname, '../try-air-ranged.ts'), 'utf8')
+    const source = fs.readFileSync(path.join(__dirname, '../scenes/pvp/try-air-ranged.ts'), 'utf8')
     assert.ok(source.indexOf('saveAirSummary(process.env.LAB_OUT') < source.indexOf('assert.ok(rows.every'), 'real fixture persists before its existing strict checks')
   } finally { if (fs.existsSync(output)) fs.unlinkSync(output); fs.rmdirSync(dir) }
 })

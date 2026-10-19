@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const { liveBlazes, sweepRisk } = require('../src/blaze')
-const { cooldownMs } = require('../src/pvp')
-const BF = require('../src/barter-flow')
+import { Vec3 } from 'vec3'
+import { liveBlazes, sweepRisk } from '../src/blaze'
+import { cooldownMs } from '../src/pvp'
+import * as BF from '../src/barter-flow'
 
 // s1c 06.10: ифрит, которого знает игрок, — видимый лучом или слышимый (16 бл.); сквозь стену дальше 16 — нет.
 function botWith (entities: any[], wall: boolean) {
@@ -38,7 +38,7 @@ test('bastion batch contract: with mapped gold the barter model mines a whole-bl
 })
 
 test('wither skeleton: the route fights it from a 2-deep pit (its attack box is inflated only sideways), then climbs out', async () => {
-  const Module = require('node:module')
+  const Module: any = require('node:module')
   const realLoad = Module._load
   const dug: string[] = []
   let climbed = 0
@@ -55,7 +55,7 @@ test('wither skeleton: the route fights it from a 2-deep pit (its attack box is 
     blockAt: (p: any) => ({ name: 'nether_bricks', boundingBox: 'block' }) }
   try {
     delete require.cache[require.resolve('../src/nether-route')]
-    const NR = require('../src/nether-route')
+    const NR: typeof import('../src/nether-route') = require('../src/nether-route')
     const st: any = {}
     assert.equal(await NR.pitFight({ bot }, { aborted: false }, st, foe), true)
     assert.deepEqual(dug, ['0,63,0', '0,62,0'])

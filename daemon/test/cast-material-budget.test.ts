@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/cast1.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
 function fixture(carried = 0) {
@@ -12,7 +13,7 @@ function fixture(carried = 0) {
   const key = p => `${p.x},${p.y},${p.z}`
   const read = p => { reads.push(key(p)); const name = blocks.get(key(p)) || 'air'; return { name, boundingBox: name === 'air' ? 'empty' : 'block' } }
   const module = { exports: {} as any }
-  vm.runInNewContext(source, { module, exports: module.exports, process: { env: {} },
+  vm.runInNewContext(source, cjsContext({ module, exports: module.exports, process: { env: {} },
     require(name) {
       if (name === 'vec3') return Vec3
       if (name === 'mineflayer-pathfinder') return { goals: {} }
@@ -23,7 +24,7 @@ function fixture(carried = 0) {
       if (name === './cast') return { _in: { isSolid: b => !!b && b.boundingBox === 'block', countOf: (_bot, n) => n === 'water_bucket' ? 1 : n === 'dirt' ? carried : 0 } }
       throw new Error(`unexpected import ${name}`)
     }
-  })
+  }))
   const cast = module.exports, g = cast.geom1(new Vec3(10, 64, 20), 'x', 1)
   const plan = { origin: { x: 10, y: 64, z: 20 }, axis: 'x', side: 1, dig: [] as any[], place: [] as any[] }
   for (const q of [g.F(-2, -1), g.F(3, -1), g.B(0, -1), g.B(1, -1), g.at(-1, -1), g.at(2, -1), g.G(-1, -1), g.G(1, -1), g.G(2, -1)]) blocks.set(key(q), 'stone')

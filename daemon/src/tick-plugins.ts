@@ -2,10 +2,10 @@
 // Mineflayer keeps the vanilla 50 ms integrator. Only its gameplay scheduler
 // and elapsed-time measurements use our clock. Modules are evaluated with
 // lexical timer bindings, never by modifying globals or node_modules.
-const fs = require('node:fs')
-const path = require('node:path')
-const { createHash } = require('node:crypto')
-const { createRequire } = require('node:module')
+const fs: typeof import('node:fs') = require('node:fs')
+const path: typeof import('node:path') = require('node:path')
+const { createHash }: typeof import('node:crypto') = require('node:crypto')
+const { createRequire }: typeof import('node:module') = require('node:module')
 
 // Reviewed sources from Mineflayer 4.37.1 and pathfinder 2.4.5. Fail closed on
 // upgrades (including local patches) so a changed scheduler cannot slip through.
@@ -37,12 +37,12 @@ function reviewedSource (filename, expected, name) {
 let cachedPhysics
 function getPhysics () {
   if (cachedPhysics) return cachedPhysics
-  const version = require('prismarine-physics/package.json').version
+  const version = (require('prismarine-physics/package.json') as typeof import('prismarine-physics/package.json')).version
   if (version !== '1.11.1') throw new Error(`Unsupported prismarine-physics ${version} for tick-plugins; reviewed version is 1.11.1`)
   const { filename, source } = reviewedSource(require.resolve('prismarine-physics'),
     '90f1c249a2a7b43f8e8cae8ef3a7f06b5f1fee5dad8d3efa09d8d9b2dd5a2719', 'prismarine-physics')
   const nativeRequire = createRequire(filename)
-  const climbableData = require('../data/climbable-1.21.11.json')
+  const climbableData = (require('./paths') as typeof import('./paths')).repoJson('daemon/data/climbable-1.21.11.json')
   if (climbableData.version !== '1.21.11' || !Array.isArray(climbableData.climbable?.values) || climbableData.climbable.values.some(value => typeof value !== 'string' || !value.startsWith('minecraft:'))) throw new Error('Invalid reviewed vanilla climbable block tag')
   // LivingEntity.onClimbable uses BlockTags.CLIMBABLE. Upstream only knows the
   // two old ids; retain its clamps/acceleration and use the exact vanilla tag.
@@ -175,7 +175,7 @@ function disconnected () {
 function createScope (bot, clock) {
   const timers = new Map()
   const cleanups = new Set()
-  const wall = clock.wall || require('./game-clock').wall
+  const wall = clock.wall || (require('./game-clock') as typeof import('./game-clock')).wall
   const scope: any = { closed: false, now: () => clock.now(), observationNow: () => clock.observationNow?.() ?? clock.now(), cleanups }
   function clear (handle) {
     if (!timers.has(handle)) return
@@ -378,7 +378,7 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
     if (name === 'pathfinder' && request === './lib/goto') {
       const nativeGoto = nativeRequire(request)
       return (bot, goal) => {
-        const movement = require('./movement')
+        const movement: typeof import('./movement') = require('./movement')
         return movement.gotoWaitOn() ? movement.gotoGoal(bot, goal) : nativeGoto(bot, goal)
       }
     }
@@ -412,8 +412,8 @@ function observeEntityGround (bot, scope) {
   let bornVelocity = null
   // Модули — один раз, не require() на каждый пакет движения (S9: 2 % CPU демона в профиле lockstep).
   let dropsMod, elytraMod
-  const drops = () => dropsMod || (dropsMod = require('./drops'))
-  const elytra = () => elytraMod || (elytraMod = require('./elytra'))
+  const drops = () => dropsMod || (dropsMod = (require('./drops') as typeof import('./drops')))
+  const elytra = () => elytraMod || (elytraMod = (require('./elytra') as typeof import('./elytra')))
   const nativeVelocity = (packet, meta, bytes) => {
     if (bot.version !== '1.21.11' || !packet || packet.entityId === bot.entity?.id ||
       (meta?.name !== 'spawn_entity' && meta?.name !== 'entity_velocity')) return
@@ -528,9 +528,11 @@ function createTickPlugins (clock) {
 }
 
 let defaults
-function defaultPlugins () { return defaults || (defaults = createTickPlugins(require('./game-clock'))) }
+function defaultPlugins () { return defaults || (defaults = createTickPlugins((require('./game-clock') as typeof import('./game-clock')))) }
 module.exports = { createTickPlugins, getPhysics }
+export { createTickPlugins, getPhysics }
 Object.defineProperties(module.exports, {
   plugins: { enumerable: true, get: () => defaultPlugins().plugins },
   pathfinder: { enumerable: true, get: () => defaultPlugins().pathfinder }
 })
+export declare const plugins: any, pathfinder: any

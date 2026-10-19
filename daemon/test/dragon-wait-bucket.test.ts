@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const dragon = require('../src/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import dragon = require('../src/dragon')
 
 test('посадка и два независимых nextInt: два живых, близко', () => {
   assert.equal(typeof dragon.holdingOdds, 'function')

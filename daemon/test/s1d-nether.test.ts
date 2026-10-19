@@ -23,7 +23,7 @@ test('s1d: KillDragon priced by the S5c farm series (200 s, success 0.8, risk 0.
 })
 
 test('s1d: the bastion approach aims at gold away from the copy brute homes (4120… treasure entrance deaths)', () => {
-  const { approachGold } = require('../src/bastion/bastion')
+  const { approachGold }: typeof import('../src/bastion/bastion') = require('../src/bastion/bastion')
   const room = [{ x: 17, y: 36, z: -123 }, { x: 18, y: 37, z: -124 }, { x: 20, y: 36, z: -126 }]
   const wall = [{ x: 21, y: 69, z: -148 }, { x: 16, y: 70, z: -148 }]
   const brutes = [[18, 41, -115]]
@@ -33,7 +33,7 @@ test('s1d: the bastion approach aims at gold away from the copy brute homes (412
 })
 
 test('s1d: gold that opens the sealed tunnel is broken and patched when the drop stays inside (not only 1×1 windows)', () => {
-  const { goldWindowOk } = require('../src/bastion/bastion')
+  const { goldWindowOk }: typeof import('../src/bastion/bastion') = require('../src/bastion/bastion')
   assert.equal(goldWindowOk({ win1: true, dropSafe: false, strong: 0, hp: 20 }, {}), true)
   assert.equal(goldWindowOk({ win1: false, dropSafe: true, strong: 0, hp: 20 }, {}), true, 'floor gold with air above')
   assert.equal(goldWindowOk({ win1: false, dropSafe: false, strong: 0, hp: 20 }, {}), false, 'drop would fall into the yard')
@@ -45,15 +45,15 @@ test('s1d: gold that opens the sealed tunnel is broken and patched when the drop
 })
 
 test('s1d: a lit portal far from the remembered own portal is foreign (7777… loop through another portal)', () => {
-  const Vec3 = require('vec3')
-  const { notForeign } = require('../src/nether')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const { notForeign }: typeof import('../src/nether') = require('../src/nether')
   const own = new Vec3(-6, 92, -9)
   assert.equal(notForeign({ cells: [new Vec3(-5, 92, -10), new Vec3(-5, 93, -10)] }, own), true)
   assert.equal(notForeign({ cells: [new Vec3(-70, 63, 6), new Vec3(-70, 64, 6)] }, own), false)
 })
 
 test('s1d: the pit dump keeps stone for stone pickaxes ahead of netherrack (128 fill)', () => {
-  const PG = require('../src/bastion/predict-gold')
+  const PG: typeof import('../src/bastion/predict-gold') = require('../src/bastion/predict-gold')
   const items = [['netherrack', 64], ['netherrack', 64], ['netherrack', 64], ['cobbled_deepslate', 64], ['cobblestone', 46]]
     .map(([name, count], slot) => ({ name, count, slot }))
   const bot = { registry: { foodsByName: {} }, inventory: { items: () => items.slice() } }
@@ -63,7 +63,7 @@ test('s1d: the pit dump keeps stone for stone pickaxes ahead of netherrack (128 
 })
 
 test('s1d: barter pits keep away from copy brute homes (12, else 8)', () => {
-  const { pitsAwayFromBrutes } = require('../src/bastion/bastion')
+  const { pitsAwayFromBrutes }: typeof import('../src/bastion/bastion') = require('../src/bastion/bastion')
   const pit = (x, y, z) => ({ P: { x, y, z } })
   const brutes = [[85, 58, -88]]
   assert.deepEqual(pitsAwayFromBrutes([pit(92, 59, -87), pit(60, 42, -94)], brutes).map(b => b.P.x), [60])
@@ -71,9 +71,9 @@ test('s1d: barter pits keep away from copy brute homes (12, else 8)', () => {
 })
 
 test('s1d: the blaze rest pit is 3 deep so its cap (above the head) always has wall faces to be placed against', async () => {
-  const Vec3 = require('vec3')
-  const sealed = require('../src/sealed')
-  const { digInPlace } = require('../src/blaze')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const sealed: typeof import('../src/sealed') = require('../src/sealed')
+  const { digInPlace }: typeof import('../src/blaze') = require('../src/blaze')
   const air = new Set<string>()
   const k = (v: any) => `${v.x},${v.y},${v.z}`
   const block = (v: any) => (v.y >= 64 || air.has(k(v))) ? { name: 'air', boundingBox: 'empty' } : { name: 'netherrack', boundingBox: 'block' }
@@ -91,7 +91,7 @@ test('s1d: the blaze rest pit is 3 deep so its cap (above the head) always has w
 })
 
 test('s1d: a pick swing is priced by the pick stock in the Nether route plan', () => {
-  const NR = require('../src/nether-route')
+  const NR: typeof import('../src/nether-route') = require('../src/nether-route')
   const bag = (items: any[]) => ({ inventory: { items: () => items }, registry: { itemsByName: { iron_pickaxe: { maxDurability: 250 }, stone_pickaxe: { maxDurability: 131 } } } })
   const kit = bag([{ name: 'iron_pickaxe', count: 1, durabilityUsed: 0 }, { name: 'stone_pickaxe', count: 1, durabilityUsed: 31 },
     { name: 'oak_planks', count: 16 }, { name: 'oak_log', count: 4 }, { name: 'stick', count: 8 }, { name: 'cobblestone', count: 64 }])
@@ -102,9 +102,9 @@ test('s1d: a pick swing is priced by the pick stock in the Nether route plan', (
 })
 
 test('s1d: a 1–2 block thick platform (no room for depth 3) still gets the old depth-2 pit', async () => {
-  const Vec3 = require('vec3')
-  const sealed = require('../src/sealed')
-  const { digInPlace } = require('../src/blaze')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const sealed: typeof import('../src/sealed') = require('../src/sealed')
+  const { digInPlace }: typeof import('../src/blaze') = require('../src/blaze')
   const air = new Set<string>()
   const k = (v: any) => `${v.x},${v.y},${v.z}`
   // Solid only at y 61..63 (platform 3 thick under feet at 64): depth 3 needs a floor at 60 — air there.

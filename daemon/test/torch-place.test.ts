@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { placeBlockAt } = require('../src/build')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { placeBlockAt } from '../src/build'
 
 function fixture (item, target = new Vec3(0, 1, 0)) {
   let placed = false

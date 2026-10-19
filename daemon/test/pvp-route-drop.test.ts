@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { combatMovement } from '../src/pvp/movement'
-const { Vec3 } = require('vec3')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')(data)
-const { Movements, goals } = require('mineflayer-pathfinder')
-const AStar = require('mineflayer-pathfinder/lib/astar')
-const Move = require('mineflayer-pathfinder/lib/move')
+import { Vec3 } from 'vec3'
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(data as any)
+import { Movements, goals } from 'mineflayer-pathfinder'
+import AStar = require('mineflayer-pathfinder/lib/astar')
+import Move = require('mineflayer-pathfinder/lib/move')
 
 function routeFromLedge (height) {
   const bot: any = { registry: data, game: { minY: -8 }, entity: { position: new Vec3(.5, height, .5), effects: {} },
@@ -21,7 +21,7 @@ function routeFromLedge (height) {
   const mode = combatMovement(bot, { x: .5, y: 0, z: .5, r: 8 })
   try {
     return new AStar(new Move(0, height, 0, 0, 0), mv,
-      new goals.GoalFollow({ position: new Vec3(-.1, 0, 1.5) }, 2), 10000, 10000).compute()
+      new goals.GoalFollow({ position: new Vec3(-.1, 0, 1.5) } as any, 2), 10000, 10000).compute()
   } finally { mode.restore(); assert.equal(mv.maxDropDown, 9) }
 }
 

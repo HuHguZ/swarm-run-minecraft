@@ -4,12 +4,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const bench = require('../try-astar-bench')
-const fastblocks = require('../src/fastblocks')
-const AStar = require('mineflayer-pathfinder/lib/astar')
-const Move = require('mineflayer-pathfinder/lib/move')
-const { goals } = require('mineflayer-pathfinder')
+import { Vec3 } from 'vec3'
+import * as bench from '../scenes/infra/try-astar-bench'
+import fastblocks = require('../src/fastblocks')
+import AStar = require('mineflayer-pathfinder/lib/astar')
+import Move = require('mineflayer-pathfinder/lib/move')
+import { goals } from 'mineflayer-pathfinder'
 
 function height (x: number, z: number) {
   const h = 60 + Math.round(4 * Math.sin(x / 7) + 3 * Math.cos(z / 9))
@@ -183,7 +183,7 @@ test('S9: срез A* в узлах (ND_ASTAR_SLICE_NODES) — та же раз�
 })
 
 test('S9: accelerated A* yields within the server tick and keeps the same search', t => {
-  const gameClock = require('../src/game-clock')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   let rate = 20
   t.mock.method(gameClock, 'snapshot', () => ({ tickRate: rate }))
   const prev = { s9: process.env.ND_S9, r: process.env.ND_ASTAR_NODES_PER_MS, n: process.env.ND_ASTAR_SLICE_NODES }
@@ -283,7 +283,7 @@ test('S9: findBlocks по номеру состояния — те же клет
 
 test('S9: нарезка кадров протокола без исключения на конце буфера — те же кадры при любой нарезке потока', () => {
   const framing = require('minecraft-protocol/src/transforms/framing')
-  const [, writeVarInt, sizeOfVarInt] = require('protodef').types.varint
+  const [, writeVarInt, sizeOfVarInt] = (require('protodef') as any).types.varint
   // Поток кадров разной длины (длины с 1-, 2- и 3-байтовым varint).
   const frames: Buffer[] = []
   let s = 12345

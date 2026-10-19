@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Переход по Аду закрытым штреком (общий: бастион, крепость, портал; любой сид).
 //
 // Пешком по Аду тело гибло в каждой второй попытке на ~560 блоков (ферма 30.09, trip*: падения у
@@ -34,8 +34,8 @@ const makeToolFilter = (bot, strict = true) => (it, block) => !HIGH_PICK.test(it
 // Каменные кирки на запас: верстак из рюкзака ставит actions.craft. Итог — сколько сделано.
 async function restockPicks (session, ctl, want = 3, options: { reservePlanks?: number } = {}) {
   const bot = session.bot
-  const actions = require('./actions')
-  const { hasTableHandy, spendablePlanks } = require('./items')
+  const actions: typeof import('./actions') = require('./actions')
+  const { hasTableHandy, spendablePlanks }: typeof import('./items') = require('./items')
   let made = 0
   const reservePlanks = Math.max(0, options.reservePlanks ?? 0)
   // Две палки — на железную кирку, пока её нет, а железо (или самородки) есть (chain6-6 30.09: железо из
@@ -86,7 +86,7 @@ async function restockPicks (session, ctl, want = 3, options: { reservePlanks?: 
 // если её нет, а железо есть): сколько копок по незераку можно сделать.
 function pickBudget (bot, mcData = bot.registry, options: { reservePlanks?: number } = {}) {
   const reserve = (!bot.inventory.items().some(i => HIGH_PICK.test(i.name)) && (countOf(bot, /^(iron_ingot|raw_iron)$/) > 0 || countOf(bot, /^iron_nugget$/) >= 9)) ? 2 : 0
-  const tableCost = require('./items').hasTableHandy(bot, mcData) ? 0 : 4
+  const tableCost = (require('./items') as typeof import('./items')).hasTableHandy(bot, mcData) ? 0 : 4
   const planks = Math.max(0, countOf(bot, /_planks$/) + 4 * countOf(bot, WOOD_MAT) - tableCost - Math.max(0, options.reservePlanks ?? 0))
   // 1 бревно → 4 доски; 2 доски → 4 палки. На верстак уходит ещё 4 доски, если его нет.
   const sticks = countOf(bot, /^stick$/) + 4 * Math.floor(planks / 2) - reserve
@@ -99,12 +99,12 @@ function pickBudget (bot, mcData = bot.registry, options: { reservePlanks?: numb
 // по своему штреку иначе считался «чужой пещерой» и копался рядом заново. Сверка с живым миром — в adoptPrev
 // (клетка своя, только если сейчас воздух без лавы).
 const OWN_MAX = 40000
-function ownFile (session) { const d = session.cfg && session.cfg.memoryDir; return d ? require('path').join(d, 'tunnel-own.json') : null }
+function ownFile (session) { const d = session.cfg && session.cfg.memoryDir; return d ? (require('path') as typeof import('path')).join(d, 'tunnel-own.json') : null }
 function ownSet (session) {
   if (session._tunnelOwn) return session._tunnelOwn
   const s = new Set()
   try {
-    const f = ownFile(session); const fs = require('fs')
+    const f = ownFile(session); const fs: typeof import('fs') = require('fs')
     if (f && fs.existsSync(f)) for (const k of (JSON.parse(fs.readFileSync(f, 'utf8')).cells || [])) s.add(k)
   } catch {}
   return (session._tunnelOwn = s)
@@ -113,7 +113,7 @@ function rememberOwn (session, cells) {
   const keep = ownSet(session)
   for (const k of (cells || [])) keep.add(k)
   if (keep.size > OWN_MAX) { const arr = [...keep].slice(-OWN_MAX); keep.clear(); for (const k of arr) keep.add(k) }
-  try { const f = ownFile(session); if (f) require('fs').writeFileSync(f, JSON.stringify({ t: gameClock.now(), cells: [...keep] })) } catch {}
+  try { const f = ownFile(session); if (f) (require('fs') as typeof import('fs')).writeFileSync(f, JSON.stringify({ t: gameClock.now(), cells: [...keep] })) } catch {}
 }
 
 // Сколько копок у пути (клетки не воздух и не свои).
@@ -149,7 +149,7 @@ function viaDigs (me, via, target) {
 // Итог: { ok, why?, segs, breach, detours, crafted, dug, moves, fills, own, exposed, at }.
 async function tunnelTo (session, ctl, target, opts: any = {}) {
   const bot = session.bot
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   // S1f: клетка ног с поправкой на песок душ (высота 0.875: floored() — клетка самого песка): «не шагнул down/flat/vdown … (я …,N.88,…)»
   // — 36 остановок штрека по Аду во вслепую сериях S1e/S1f. ND_SOUL_FEET=0 — прежнее.
   const feetNow = () => process.env.ND_SOUL_FEET === '0' ? bot.entity.position.floored() : SL.bodyCells(bot)[0]
@@ -187,7 +187,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
   const S: any = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0, noBonus: true, deadline }
   const body = () => { const f = feetNow(); return [f, f.offset(0, 1, 0)] }
   // Прежние штреки — свои, если клетка и сейчас воздух (проверка по живому миру).
-  const V3 = require('vec3').Vec3
+  const V3 = (require('vec3') as typeof import('vec3')).Vec3
   // Только рядом (в 56 блоках): план куска смотрит не дальше, а своих клеток на диске — до 40 тыс.
   const adoptPrev = () => {
     const p = bot.entity.position
@@ -242,7 +242,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
       if (dist <= radius && yOk) return out(true)
       adoptPrev()
       if ((bot.health ?? 20) < 8) {
-        try { await require('./actions').eat(session, {}) } catch {}
+        try { await (require('./actions') as typeof import('./actions')).eat(session, {}) } catch {}
         if ((bot.health ?? 20) < 6) return out(false, `хп ${Math.round(bot.health ?? 0)}`)
       }
       if (lowPicks(bot) === 0) {
@@ -373,7 +373,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
         st.stepped = true
         let timer = null; let watch = null
         try {
-          const { goals } = require('mineflayer-pathfinder')
+          const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
           const gx = Math.round(me.x + ux * 8); const gz = Math.round(me.z + uz * 8)
           const lim = Math.max(1000, Math.min(20000, deadline - gameClock.now()))
           await Promise.race([
@@ -456,3 +456,7 @@ async function tunnelTo (session, ctl, target, opts: any = {}) {
 }
 
 module.exports = { tunnelTo, restockPicks, lowPicks, lowUses, makeToolFilter, NEEDS_HIGH, normVia, viaDigs, pickBudget, rememberOwn, ownSet }
+export {
+  tunnelTo, restockPicks, lowPicks, lowUses, makeToolFilter, NEEDS_HIGH, normVia, viaDigs, pickBudget,
+  rememberOwn, ownSet
+}

@@ -1,3 +1,4 @@
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -7,10 +8,11 @@ import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
 import { speedrunRegistry } from '../src/core/speedrun'
 import { emptyWorld, fact } from '../src/core/world-state'
+import { cjsContext } from './cjs-context'
 
 function fixture(kind = 'village', completed = false) {
   const file = path.resolve(__dirname, '../campaign.ts')
-  const source = fs.readFileSync(file, 'utf8')
+  const source = campaignTs()
   const start = source.indexOf('async function executeStrategy (')
   const end = source.indexOf('\nconst intelligence =', start)
   assert.ok(start >= 0 && end > start)
@@ -35,7 +37,7 @@ function fixture(kind = 'village', completed = false) {
       return { detail: {} }
     }
   }
-  vm.runInNewContext(transformSync(source.slice(start, end) + '\nmodule.exports = executeStrategy', { loader: 'ts', format: 'cjs' }).code, context, { filename: file })
+  vm.runInNewContext(transformSync(source.slice(start, end) + '\nmodule.exports = executeStrategy', { loader: 'ts', format: 'cjs' }).code, cjsContext(withSetters(context)), { filename: file })
   return { facts, calls, context, run: (skill: string, signal = new AbortController().signal) => context.module.exports({ skill, strategy: skill, params: { kind } }, signal) }
 }
 

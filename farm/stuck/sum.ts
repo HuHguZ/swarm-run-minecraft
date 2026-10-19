@@ -1,10 +1,11 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сводка сцены try-lab-stuck.js: сцена × режим — дошёл/всего, медиана времени удачных, среднее с провалом = срок,
 // мин. хп, блоков, ступени лестницы.
-//   node farm/stuck/sum.js <tag...>
-const fs = require('fs')
-const path = require('path')
-const RES = path.join(__dirname, '..', 'results')
+//   node dist/farm/stuck/sum.js <tag...>
+import * as fs from 'fs'
+import path = require('path')
+const RES = path.join(REPO_ROOT, 'farm/results')
 const rows = []
 for (const tag of process.argv.slice(2)) {
   const dir = path.join(RES, tag)

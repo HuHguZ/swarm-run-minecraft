@@ -1,8 +1,10 @@
 'use strict'
+import { bodySource } from './source-fixture'
+import { cjsContext } from './cjs-context'
 // S8c (07.10, верхний мир «новый мир → Ад», продолжение S8b).
-const test = require('node:test')
-const assert = require('node:assert')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert')
+import route = require('../src/route')
 
 const SEED = '3816274920780408390' // есть скан farm/route-scan/<сид>.json и строка good-v2
 
@@ -50,9 +52,9 @@ test('копка маршрута — цена и риск: враги вычи�
 })
 
 test('вслепую с ведром, огнивом и водой, лава неизвестна: граф ищет лаву, а не алмазы (цены запасного пути по телеметрии)', () => {
-  const { emptyWorld, knows } = require('../src/core/world-state')
-  const { speedrunRegistry } = require('../src/core/speedrun')
-  const { plan } = require('../src/core/strategy')
+  const { emptyWorld, knows }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const { speedrunRegistry }: typeof import('../src/core/speedrun') = require('../src/core/speedrun')
+  const { plan }: typeof import('../src/core/strategy') = require('../src/core/strategy')
   const w = emptyWorld()
   w.resources = { stone_tool: 1, bucket: 1, lighter: 1, water: 1, iron: 3, food: 6 }
   const steps = plan(speedrunRegistry(), w, (s: any) => knows(s, 'portal')).steps.map((s: any) => s.id)
@@ -76,9 +78,9 @@ test('постройки — ценой против копки: без руды
 
 // Брёвна дерева — один подбор на дерево (скорость, S8c): копка 3 брёвен ствола — один collect, дальний ствол — второй.
 function mineFixture (logs: Array<[number, number, number]>) {
-  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm')
-  const { createRequire } = require('node:module')
-  const Vec3 = require('vec3')
+  const fs: typeof import('node:fs') = require('node:fs'), path: typeof import('node:path') = require('node:path'), vm: typeof import('node:vm') = require('node:vm')
+  const { createRequire }: typeof import('node:module') = require('node:module')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const file = path.join(__dirname, '../src/actions.js')
   const realRequire = createRequire(file)
   const blocks = logs.map(([x, y, z]) => ({ name: 'oak_log', position: new Vec3(x, y, z), type: 1 }))
@@ -92,10 +94,10 @@ function mineFixture (logs: Array<[number, number, number]>) {
       if (name === './sight') return { ...actual, visibleOf: (_b: any, _i: any, _r: any, opts: any) => blocks.filter(b => !opts.skip(b.position)) }
       return actual
     } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(bodySource(file) + `
     underFeet = () => [];
     collectNearbyDrops = async (_bot, _ctl, o) => { moves.collections.push(o && o.from ? o.from.x : null); };
-  `, context)
+  `, cjsContext(context))
   const session = { bot, mcData: {}, cfg: { fairPlay: true } }
   return { moves, mine: (p: any) => context.module.exports.mine(session, { aborted: false, onAbort: [] }, p) }
 }
@@ -153,7 +155,7 @@ test('вслепую: лава поверху и в пещере — обе в �
 })
 
 test('вслепую: лава у первой не вышла — разведка засчитывает только новую, и она идёт в план вместо прежней', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const avoid = new Set<string>()
   const calls: string[] = []
   const ctx: Record<string, any> = {

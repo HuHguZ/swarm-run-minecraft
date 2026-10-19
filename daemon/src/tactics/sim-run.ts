@@ -7,9 +7,9 @@ import { createWorld, observeWorld, stepAction, stepWorld, threatTruth, type Act
 import { mineflayerFacade } from './sim-mineflayer'
 import { observeTactics } from './minecraft'
 
-const clock = require('../game-clock')
-const locks = require('../reflex-lock')
-const { Vec3 } = require('vec3')
+import * as clock from '../game-clock'
+import locks = require('../reflex-lock')
+import { Vec3 } from 'vec3'
 
 export interface Violation { kind: string; tick: number; detail: string }
 export interface SimResult {
@@ -85,7 +85,7 @@ export async function runSystem(scenario: Scenario, { observe = 'mirror' }: { ob
   // install() puts on the bot at attach) must never run while a tactical lease owns the body; a craft interrupted by a
   // lease must be finished locally without duplicate or lost items (reflex-lock REFLEX_RETRY).
   let progress = 0, restarts = 0
-  const leak = (what: string) => { if (locks.owner(session)) flag('skill-during-lease', `skill ${what} reached the body under ${locks.owner(session).source}`) }
+  const leak = (what: string) => { if (locks.owner(session)) flag('skill-during-lease', `skill ${what} reached the body under ${locks.owner(session)!.source}`) }
   const skill: 'mine' | 'walk' | 'craft' = typeof scenario.skill === 'string' ? scenario.skill : 'mine'
   bot.dig = async () => { leak('dig'); await clock.sleep(250); progress++ }
   bot.setControlState = (key: string, on: boolean) => { if (on) leak(`setControlState ${key}`) }

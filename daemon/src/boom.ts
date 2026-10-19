@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // «Динамит» на арене (просьба 2026-09-26: «про-игроки динамитом выстреливают и
 // убивают им, очень быстро, механизм какой-то»). Это cart PvP 1.21: рельс под
 // ноги, на него вагонетка с TNT, и горящая стрела из лука с «Огнём» — взрыв в
@@ -38,7 +38,7 @@ const gameClock = require('./game-clock')
 //  * блоки: светокамень и стекло — стойкость 0.3 (ломаются), обсидиан 1200 и
 //    барьер 3600000 — нет: дыры в полу — там, где полосы светокамня.
 
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const TICK_MS = 50
 const EYE = 1.62
@@ -136,8 +136,8 @@ function playerBox (pos, h = 1.8) {
 
 // Броня и чары: свои — слоты 5..8, чужие — equipment 2..5 (сапоги..шлем).
 function defenseOf (bot, who) {
-  const assess = require('./assess')
-  const read = require('./read')
+  const assess: typeof import('./assess') = require('./assess')
+  const read: typeof import('./read') = require('./read')
   const items = who === bot.entity ? [5, 6, 7, 8].map(s => bot.inventory.slots[s]) : ((who.equipment || []).slice(2, 6))
   const g = assess.gearOf(items)
   let epf = 0; let kbRes = 0
@@ -177,7 +177,7 @@ function blast (bot, center, P, pos, { h = 1.8, eyeH = 1.62, def = null, cache =
   else if (diff === 'easy') raw = Math.min(raw / 2 + 1, raw)
   else if (diff === 'peaceful') raw = 0
   const df = def || { armor: 0, tough: 0, epf: 0, kbRes: 0, resist: 0 }
-  const assess = require('./assess')
+  const assess: typeof import('./assess') = require('./assess')
   let dmg = assess.afterArmor(raw, df.armor, df.tough)
   dmg *= 1 - df.epf / 25
   dmg *= Math.max(0, 1 - 0.2 * df.resist)
@@ -196,7 +196,7 @@ function healthOf (bot, e) {
     return typeof hh === 'number' ? hh : null
   } catch { return null }
 }
-function absorptionOf (bot, e) { try { return require('./read').absorptionOf(bot, e) || 0 } catch { return 0 } }
+function absorptionOf (bot, e) { try { return (require('./read') as typeof import('./read')).absorptionOf(bot, e) || 0 } catch { return 0 } }
 function totemIn (e) {
   const eq = (e && e.equipment) || []
   return !!((eq[0] && eq[0].name === 'totem_of_undying') || (eq[1] && eq[1].name === 'totem_of_undying'))
@@ -205,7 +205,7 @@ function totemIn (e) {
 // Толкнёт ли взрыв его в яму или пустоту (прогон тела edges.knockRun).
 function knockedOff (bot, e, kb) {
   try {
-    const edges = require('./edges')
+    const edges: typeof import('./edges') = require('./edges')
     const cache = new Map()
     if (!edges.hazardAround(bot, e.position, 6, cache)) return false
     const base = edges.stateOf(bot)
@@ -223,7 +223,7 @@ function findItem (bot, test) {
 }
 function countOf (bot, name) { return bot.inventory.items().reduce((n, i) => n + (i.name === name ? i.count : 0), 0) }
 function flameBow (bot) {
-  const read = require('./read')
+  const read: typeof import('./read') = require('./read')
   return bot.inventory.items().find(i => i.name === 'bow' && read.enchLevel(bot, i, 'flame') > 0) || null
 }
 function arrowsIn (bot) { return !!findItem(bot, i => /arrow$/.test(i.name)) }
@@ -374,7 +374,7 @@ function spotsNear (bot, near, { crystal = false, foe = null, maxR = 2 }: any = 
 // Горящей (или любой — для кристалла) стрелой в точку взрывчатки. Натяжение
 // короткое для вагонетки (сила взрыва растёт со скоростью стрелы).
 async function shootAt (bot, ctl, ex, { drawMs = null, shouldStop = null, onDraw = null, anyBow = false }: any = {}) {
-  const { shoot } = require('./bow')
+  const { shoot }: typeof import('./bow') = require('./bow')
   const isCart = ex.name === 'tnt_minecart' && !anyBow
   if (isCart && !flameBow(bot)) return { shot: false, why: 'нет лука с «Огнём»' }
   if (!isCart && !findItem(bot, 'bow')) return { shot: false, why: 'нет лука' }
@@ -650,7 +650,7 @@ function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryH
       if (ex.name === 'tnt_minecart' && findItem(bot, 'bow') && arrowsIn(bot) && bot.entity.position.distanceTo(ex.position) < 24) {
         const fl = !!flameBow(bot)
         const ok = !fl || (t.his && t.his.dmg > t.my.dmg + 4 && t.my.dmg < myHp - 4)
-        const plain = bot.inventory.items().find(i => i.name === 'bow' && require('./read').enchLevel(bot, i, 'flame') === 0)
+        const plain = bot.inventory.items().find(i => i.name === 'bow' && (require('./read') as typeof import('./read')).enchLevel(bot, i, 'flame') === 0)
         if (ok || plain) {
           const useBow = (plain && !(fl && ok)) ? plain : (flameBow(bot) || plain)
           try { if (useBow && bot.heldItem !== useBow) await bot.equip(useBow, 'hand') } catch {}
@@ -723,3 +723,7 @@ function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryH
 }
 
 module.exports = { ON, create, blast, seenPercent, segmentBlocked, defenseOf, judge, worth, spotsNear, explosives, kitOf, hasBoom, placeCart, placeCrystal, shootAt, CRYSTAL_P, CART_P_MAX, CART_P_AVG }
+export {
+  ON, create, blast, seenPercent, segmentBlocked, defenseOf, judge, worth, spotsNear, explosives, kitOf, hasBoom,
+  placeCart, placeCrystal, shootAt, CRYSTAL_P, CART_P_MAX, CART_P_AVG
+}

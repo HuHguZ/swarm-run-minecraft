@@ -1,9 +1,10 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // One session owns the hands. AsyncLocalStorage distinguishes a suspended worker,
 // its late continuations, and the reflex, including callbacks created before takeover.
-const { AsyncLocalStorage } = require('node:async_hooks')
-const context = new AsyncLocalStorage()
+const { AsyncLocalStorage }: typeof import('node:async_hooks') = require('node:async_hooks')
+// Хранилище контекста: сессия, ctl навыка, захвативший руки рефлекс и операция (эпоха) плагина.
+const context = new AsyncLocalStorage<{ session?: any; ctl?: any; reflex?: any; op?: { epoch: number } }>()
 interface ControlLease {
   owner: 'Skill' | 'Tactical' | 'Emergency'
   priority: number
@@ -39,7 +40,7 @@ async function wait (s, ctl) {
   }
   if (ctl?.aborted || (context.getStore()?.reflex && !allowed(s))) throw cancelled()
 }
-function run (s, ctl, fn) { return context.run({ session: s, ctl }, fn) }
+function run<T> (s, ctl, fn: () => T): T { return context.run({ session: s, ctl }, fn) }
 function cancel (s) { state(s).active?.ctl.abort() }
 // The aborted worker's finally is fenced. Its intent must release the physical
 // keys outside that context, but never touch a replacement skill or defence.
@@ -176,7 +177,7 @@ async function operation (s, obj, name, raw, args) {
     }
     if (selectedItem) {
       const items = b.inventory.items()
-      const same = i => require('./invsync').sameStack(b, i, selectedItem)
+      const same = i => (require('./invsync') as typeof import('./invsync')).sameStack(b, i, selectedItem)
       // items() исключает броню и вторую руку; их актуальные клиентские слоты тоже законны.
       const atSlot = Number.isInteger(selectedItem.slot) && selectedItem.slot >= 0 ? b.inventory.slots?.[selectedItem.slot] : null
       attempt[0] = atSlot && same(atSlot) ? atSlot : items.find(same)
@@ -212,14 +213,14 @@ function craftSafe (s) {
   const covered = e => {
     if (process.env.ND_CRAFT_COVER === '0') return false
     try {
-      const P = require('./perception'); const eye = P.eyePos(s.bot)
+      const P: typeof import('./perception') = require('./perception'); const eye = P.eyePos(s.bot)
       // Do not relax the check for a gap at feet/torso while only the eyes are
       // hidden. Missing chunks/errors retain the original refusal.
       return [0.1, (e.height || 1.8) * 0.5, (e.height || 1.8) * 0.9]
         .every(y => !P.raySees(s.bot, eye, e.position.offset(0, y, 0)))
     } catch { return false }
   }
-  if (require('./worlds').worldOf(s.bot) === 'the_nether' && require('./ne-guard').meleeFoes(s.bot, 12).some(e => !covered(e))) {
+  if ((require('./worlds') as typeof import('./worlds')).worldOf(s.bot) === 'the_nether' && (require('./ne-guard') as typeof import('./ne-guard')).meleeFoes(s.bot, 12).some(e => !covered(e))) {
     throw Object.assign(new Error('reflex: крафт отложен, враг в 12 блоках'), { code: 'REFLEX_UNSAFE_CRAFT' })
   }
 }
@@ -292,3 +293,4 @@ function install (s) {
   }
 }
 module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb }
+export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb }

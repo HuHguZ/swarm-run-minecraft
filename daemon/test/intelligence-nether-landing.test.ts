@@ -1,21 +1,21 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
 
 function dropping(distance: number, { isolated = false, hazard = false, unknown = false, withClutch = false } = {}) {
-  const registry = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')(registry)
-  const { Physics, PlayerState } = require('../src/tick-plugins').getPhysics()
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
+  const { Physics, PlayerState } = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
   const controls = { forward: false, back: false, left: false, right: false, sprint: false, sneak: false, jump: false }
   const updates = new Map()
   const target = isolated ? new Vec3(0, 4 - distance, 1) : new Vec3(1, 64 - distance, 0)
   const block = (name, position) => { const b = Block.fromStateId(registry.blocksByName[name].defaultState); b.position = position; return b }
   const inventory = Object.assign(new EventEmitter(), { items () { return this.slots.filter(Boolean) }, slots: [] as Array<object | null> })
   if (withClutch) inventory.slots[36] = { name: 'netherrack', count: 8, slot: 36 }
-  const bot = Object.assign(new EventEmitter(), {
+  const bot: any = Object.assign(new EventEmitter(), {
     registry, version: '1.21.11', health: 20, jumpTicks: 0, jumpQueued: false,
     inventory, fireworkRocketDuration: 0, entities: {}, game: { dimension: 'minecraft:the_nether', gameMode: 'survival' },
     entity: { id: 1, position: isolated ? new Vec3(.8648808855, 4, .4998970508) : new Vec3(.5, 64, .5),
@@ -46,8 +46,8 @@ function dropping(distance: number, { isolated = false, hazard = false, unknown 
   const physics = Physics(registry, world)
   bot.physics = physics
   bot.world = { setBlockStateId (point, stateId) { updates.set(point.floored().toString(), Block.fromStateId(stateId)) } }
-  const guard = withClutch ? require('../src/clutch').install({ bot }, {
-    Vec3, PlayerState, faceAim: require('../src/pick').faceAim, makeBlock: p => block('netherrack', p),
+  const guard = withClutch ? (require('../src/clutch') as typeof import('../src/clutch')).install({ bot }, {
+    Vec3, PlayerState, faceAim: (require('../src/pick') as typeof import('../src/pick')).faceAim, makeBlock: p => block('netherrack', p),
     hand: { hold () {}, on: () => false, as: f => f() }, prepare: false, existingWater: false
   }) : null
   const clutchDecisions: string[] = []

@@ -1,16 +1,19 @@
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { stripTypeScriptTypes } from 'node:module'
-const source=fs.readFileSync(path.join(__dirname,'../campaign.ts'),'utf8').replace(/\r\n/g,'\n')
-const natural=require('../src/portal-natural'),registry=require('prismarine-registry')('1.21.11'),Vec3=require('vec3')
+import { cjsContext } from './cjs-context'
+const source=campaignTs().replace(/\r\n/g,'\n')
+import natural = require('../src/portal-natural')
+const registry=(require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11'), Vec3: typeof import('vec3').Vec3=require('vec3')
 const noop=async()=>{}
 function fn(name,context:any={}){
   const at=source.indexOf(`function ${name} (`);assert(at>=0,`missing ${name}`)
   const begin=source.slice(at-6,at)==='async '?at-6:at
-  return vm.runInNewContext(stripTypeScriptTypes(source.slice(begin,source.indexOf('\n}\n',at)+2))+'\n'+name,context)
+  return vm.runInNewContext(stripTypeScriptTypes(source.slice(begin,source.indexOf('\n}\n',at)+2))+'\n'+name,cjsContext(withSetters(context)))
 }
 const view=(extra:any={})=>({pos:{x:0,y:70,z:0},surface:true,exitY:70,terrain:{horizon:128,occluderTop:71,points:[],stoneSeconds:.6,deepslateSeconds:1.15,tools:'stone'},
   ruins:[],heard:null,views:[],searchSeconds:60,scoutHazard:.00034,mineHazard:.00023,deathSeconds:3600,...extra})
@@ -58,7 +61,7 @@ function terrainBot(shape:(x:number,y:number,z:number)=>string){
   const sid=(x,y,z)=>registry.blocksByName[shape(x,y,z)].defaultState
   return{registry,game:{minY:-64,height:384,dimension:'overworld'},entity:{position:new Vec3(.5,64,.5),eyeHeight:1.62},
     inventory:{items:()=>[{name:'stone_pickaxe',type:registry.itemsByName.stone_pickaxe.id,count:1,durabilityUsed:4}]},
-    blockAt:p=>{const b=require('prismarine-block')(registry).fromStateId(sid(p.x,p.y,p.z));b.position=new Vec3(p.x,p.y,p.z);return b},
+    blockAt:p=>{const b=(require('prismarine-block') as any)(registry).fromStateId(sid(p.x,p.y,p.z));b.position=new Vec3(p.x,p.y,p.z);return b},
     world:{getColumn:(cx,cz)=>({getBlockStateId:p=>sid(cx*16+p.x,p.y,cz*16+p.z)})}}
 }
 test('terrain cues use the existing first-hit rays: the hidden hill never becomes a target',()=>{
@@ -163,7 +166,7 @@ test('legacy cast asks the daylight scout before a blind attempt; the actual opt
     defStage:(_id,_needed,run)=>{ctx.run=run}}
   if(!enabled){ctx.dayLavaActive=fn('dayLavaActive',ctx);ctx.dayLavaStep=fn('dayLavaStep',ctx)}
   const start=source.indexOf("defStage('cast',"),end=source.indexOf("defStage('diamond',",start)
-  vm.runInNewContext(stripTypeScriptTypes(source.slice(start,end)),ctx)
+  vm.runInNewContext(stripTypeScriptTypes(source.slice(start,end)),cjsContext(withSetters(ctx)))
   await ctx.run();assert.deepEqual(calls,[enabled?'day-scout':'blind-cast'])
  }
 })

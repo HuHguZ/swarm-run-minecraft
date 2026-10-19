@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { AsyncLocalStorage } from 'node:async_hooks'
-const Vec3 = require('vec3')
-const bow = require('../src/bow')
-const sky = require('../src/elytra')
-const ranged = require('../src/ranged')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import bow = require('../src/bow')
+import sky = require('../src/elytra')
+import * as ranged from '../src/ranged'
 
 // An independent tick integrator catches changes in gravity/drag order and
 // launch inheritance, including the fractional segment inside an entity box.
@@ -59,7 +59,7 @@ test('3D lead recomputes reversed strafe and integrates native falling motion', 
 })
 
 test('target tracker follows the latest observed reversal and native falling velocity', () => {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const originalNow = clock.now
   let now = 1000
   clock.now = () => now
@@ -234,9 +234,9 @@ test('airborne crossbow uses gliding eyes, no inherited motion, and a fresh obse
   const owners: any[] = []
   const item = { name: 'crossbow', slot: 36, components: [{ type: 'charged_projectiles', data: { projectiles: [{ itemCount: 1, itemId: 1 }] } }] }
   // Use native component reader's object format from the existing ranged tests.
-  const read = require('../src/read')
+  const read: typeof import('../src/read') = require('../src/read')
   const saved = read.crossbowInfo
-  read.crossbowInfo = () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 })
+  read.crossbowInfo = () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }) as any
   const entity = { id: 2, type: 'player', position: new Vec3(20, 100, 0), height: 1.8, onGround: true }
   bot.entity = { id: 1, position: new Vec3(0, 100, 0), velocity: new Vec3(1, -.8, 0), metadata: { 6: 1 }, onGround: false }
   let age = 0
@@ -257,7 +257,7 @@ test('airborne crossbow uses gliding eyes, no inherited motion, and a fresh obse
 })
 
 test('crossbow release precedes later movement packets in a synchronous catch-up burst', async () => {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   const order: string[] = []
   ranged.afterPacket(bot, () => order.push('release'))
   order.push('movement 1')
@@ -267,7 +267,7 @@ test('crossbow release precedes later movement packets in a synchronous catch-up
 })
 
 test('bow release preserves its control owner and first movement origin through a catch-up burst', async () => {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
   const owner = new AsyncLocalStorage<string>()
   const bot: any = new EventEmitter()
@@ -300,8 +300,8 @@ test('bow release preserves its control owner and first movement origin through 
 })
 
 for (const weapon of ['bow', 'crossbow']) test(`aerial ${weapon} waits for velocity after absolute synchronization or a glide transition`, async t => {
-  const clock = require('../src/game-clock')
-  const read = require('../src/read')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const read: typeof import('../src/read') = require('../src/read')
   t.mock.method(read, 'crossbowInfo', () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }))
   for (const outcome of ['reversal', 'stationary', 'timeout', 'glide-reversal', 'glide-stationary', 'glide-timeout', 'fall-first', 'fall-first-timeout']) await t.test(outcome, async child => {
     const c = new clock.GameClock({ manual: true, epoch: 1000 })

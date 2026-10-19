@@ -1,6 +1,6 @@
 import type { Environment, EnvironmentEvent, ExecutionResult, SkillCommand } from '../core/environment'
 import { emptyWorld, fact, type Dimension, type Fact, type Position, type WorldState } from '../core/world-state'
-const { foodUnits, foodPoints } = require('../play-policy')
+import { foodUnits, foodPoints } from '../play-policy'
 
 export interface Observation {
   state: Record<string, unknown>

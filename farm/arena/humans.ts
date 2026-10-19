@@ -4,7 +4,7 @@
 import { SOLO } from './context'
 import { LAN_NAME } from './server'
 import type { ArenaContext } from './context'
-const fs = require('fs')
+import * as fs from 'fs'
 
 // Человек в команде (ARMS_HUMAN_TEAM=red|blue, 10.10: «сделай меня красным, спавни вместе с ними — буду бегать за лутом»):
 // своя команда — союзник (не бьют, прикрывают), чужая — враг; на старте раунда — пустой, со своими на их точке.

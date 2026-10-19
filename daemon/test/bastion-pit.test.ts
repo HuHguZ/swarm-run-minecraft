@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const bastion = require('../src/bastion')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import bastion = require('../src/bastion')
 
 // Мир-камень с вырезанными клетками (яма тела, свалка, пол пиглинов).
 function worldWith (air) {
@@ -17,7 +17,7 @@ function worldWith (air) {
 }
 
 test('barter resumes after tactical refuge by physically closing the current room before activating the protected branch', async () => {
-  const SL = require('../src/sealed')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
   const nativeAir = new Set(['0,100,0', '0,101,0', '0,102,0', '1,100,0', '1,101,0', '2,100,0', '2,101,0'])
   const bot: Record<string, any> = { health: 20, entities: {}, game: { dimension: 'the_nether' },
     entity: { position: new Vec3(.5, 100, .5), onGround: true },
@@ -26,12 +26,12 @@ test('barter resumes after tactical refuge by physically closing the current roo
   const session = { bot, _tunnelOwn: new Set(['2,100,0', '2,101,0']) }
   const ctl = { aborted: false }
   const fill = SL.fillCell
-  const prepared = require('../src/bastion/bastion').prepareBarterCover
+  const prepared = (require('../src/bastion/bastion') as typeof import('../src/bastion/bastion')).prepareBarterCover
   const st: Record<string, any> = { towered: 0 }
   const placed: string[] = []
   SL.fillCell = async (_bot, at) => { const key = SL.keyV(at); placed.push(key); nativeAir.delete(key); return true }
   try {
-    const result = await prepared(session, ctl, st, require('../src/game-clock').now() + 60000)
+    const result = await prepared(session, ctl, st, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)
     assert.equal(result.ok, true)
     assert.equal(st.sealedDone, true)
     assert.equal(st.sealedState.exposed, false)
@@ -41,24 +41,24 @@ test('barter resumes after tactical refuge by physically closing the current roo
     nativeAir.add('1,100,0')
     SL.fillCell = async () => true
     const rejected: Record<string, any> = {}
-    assert.equal((await prepared(session, ctl, rejected, require('../src/game-clock').now() + 60000)).ok, false,
+    assert.equal((await prepared(session, ctl, rejected, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)).ok, false,
       'a successful placement return cannot replace an actual confirmed wall')
     assert.equal(rejected.sealedState, undefined)
     SL.fillCell = async () => { ctl.aborted = true; return false }
-    assert.equal((await prepared(session, ctl, rejected, require('../src/game-clock').now() + 60000)).ok, false)
+    assert.equal((await prepared(session, ctl, rejected, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)).ok, false)
     assert.equal(rejected.sealedState, undefined, 'tactical interruption cannot publish a protected trade state')
   } finally { SL.fillCell = fill }
 })
 
 test('physical cover restoration preserves an existing safe upper trading mouth and rejects dangerous floors', async () => {
-  const SL = require('../src/sealed')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
   const air = [[0, 100, 0], [0, 101, 0], [0, 102, 0], [0, 102, 1]]
   const bot: Record<string, any> = { health: 20, game: { dimension: 'the_nether' },
     entity: { position: new Vec3(.5, 100, .5), onGround: true },
     pathfinder: { setGoal: () => {} }, clearControlStates: () => {}, inventory: { items: () => [] }, blockAt: worldWith(air) }
-  const prepare = require('../src/bastion/bastion').prepareBarterCover
+  const prepare = (require('../src/bastion/bastion') as typeof import('../src/bastion/bastion')).prepareBarterCover
   const st: Record<string, any> = {}
-  const result = await prepare({ bot }, { aborted: false }, st, require('../src/game-clock').now() + 60000)
+  const result = await prepare({ bot }, { aborted: false }, st, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)
   assert.equal(result.ok, true)
   assert.equal(result.n, 0)
   assert.equal(SL.classOf(bot.blockAt(new Vec3(0, 102, 0))), SL.AIR, 'a ready trading mouth stays open')
@@ -67,14 +67,14 @@ test('physical cover restoration preserves an existing safe upper trading mouth 
     { name: 'magma_block', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }]) {
     bot.blockAt = at => at.x === 0 && at.y === 99 && at.z === 0 ? floor : native(at)
     const unsafe: Record<string, any> = {}
-    assert.equal((await prepare({ bot }, { aborted: false }, unsafe, require('../src/game-clock').now() + 60000)).ok, false)
+    assert.equal((await prepare({ bot }, { aborted: false }, unsafe, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)).ok, false)
     assert.equal(unsafe.sealedDone, undefined)
   }
 })
 
 test('cover refusal carries the actual unrounded body and loaded geometry without authorizing barter', async () => {
-  const SL = require('../src/sealed')
-  const prepare = require('../src/bastion/bastion').prepareBarterCover
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
+  const prepare = (require('../src/bastion/bastion') as typeof import('../src/bastion/bastion')).prepareBarterCover
   const position = new Vec3(53.1723, 37, 112.9182)
   const bot = { health: 20, entities: {}, game: { dimension: 'the_nether' }, physics: { playerHalfWidth: .3, playerHeight: 1.8 },
     entity: { position, onGround: true }, pathfinder: { setGoal: () => {} }, clearControlStates: () => {},
@@ -84,7 +84,7 @@ test('cover refusal carries the actual unrounded body and loaded geometry withou
   SL.fillCell = async () => false
   const st: Record<string, any> = {}
   try {
-    const refused = await prepare({ bot }, { aborted: false }, st, require('../src/game-clock').now() + 60000)
+    const refused: any = await prepare({ bot }, { aborted: false }, st, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)
     assert.equal(refused.ok, false)
     assert.equal(refused.why, 'стены или потолок физически не замкнуты')
     assert.equal(st.sealedDone, undefined)
@@ -108,17 +108,17 @@ test('готовая физически закрытая яма сразу ис�
     registry: { entitiesByName: { piglin: { metadataKeys: ['baby', 'mob_flags'] } } },
     blockAt: worldWith(air), entities: { 7: piglin }, dig: async () => { digs++; throw new Error('ready pit must not dig') } }
   const S = { own: new Set(['0,100,0', '0,101,0']), fails: [] }
-  const bo = await require('../src/bastion/bastion').digPit({ bot }, { aborted: false }, { sealedState: S }, require('../src/game-clock').now() + 180000)
+  const bo = await (require('../src/bastion/bastion') as typeof import('../src/bastion/bastion')).digPit({ bot }, { aborted: false }, { sealedState: S }, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 180000)
   assert.equal(bo.reused, true)
   assert.deepEqual(bo.P, { x: 0, y: 100, z: 0 })
   assert.deepEqual(bo.O, { x: 0, y: 102, z: 1 })
   assert.equal(digs, 0)
   assert.equal(S.own.has('0,102,0'), true)
   bot.blockAt = worldWith([...air, [1, 100, 0]])
-  assert.equal(require('../src/bastion/booth-trade').currentPit(bot, S), null, 'an opening at body level forbids reusing the trade position')
+  assert.equal((require('../src/bastion/booth-trade') as typeof import('../src/bastion/booth-trade')).currentPit(bot, S), null, 'an opening at body level forbids reusing the trade position')
   bot.blockAt = worldWith(air)
   piglin.position.y = 105
-  assert.equal(require('../src/bastion/booth-trade').currentPit(bot, S), null, 'another floor cannot masquerade as an accessible trader')
+  assert.equal((require('../src/bastion/booth-trade') as typeof import('../src/bastion/booth-trade')).currentPit(bot, S), null, 'another floor cannot masquerade as an accessible trader')
 })
 
 test('свалка ямы: прицел находится, и брошенное при любом разбросе ложится на 1 ниже ног', () => {
@@ -146,7 +146,7 @@ test('бросок пиглина в яму: из 2 блоков перед рт
 })
 
 test('ловушка торговцев: место находится на ровном полу, и бросок из обеих клеток камеры долетает', () => {
-  const SL = require('../src/sealed')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
   // Пол пиглинов: ноги y=0 (блоки на −1), ниже — камень. Ловушка на O=(0,0,1), d=(0,1).
   const view = { cls: (x, y, z) => y >= 0 ? SL.AIR : SL.SOLID }
   const t = bastion.trapAt(view, new Set(), { x: 0, y: 0, z: 1 }, [0, 1])
@@ -223,7 +223,7 @@ test('золото в руке между сделками не держим: п
 })
 
 test('яма замыкается перед торгом: штрек у тела и угловые клетки заложены, свалка открыта', async () => {
-  const SL = require('../src/sealed')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
   const k = (x: any, y: any, z: any) => `${x},${y},${z}`
   // Тело (0,100,0)+(0,101,0); штрек подходит по +x: (1,100,0)/(1,101,0), дальше (2,100,0)/(2,101,0) и
   // угловой (1,100,1)/(1,101,1); свалка по −x: Dh (−1,101,0), D1 (−1,100,0), D2 (−1,99,0), к D1 примыкает

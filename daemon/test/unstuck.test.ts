@@ -1,12 +1,12 @@
 'use strict'
 // Лестница выхода из застреваний (unstuck.js): детектор, диагноз, лестница, наблюдатель в gotoGoal.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const unstuck = require('../src/unstuck')
-const { gotoGoal } = require('../src/movement')
-const { goals } = require('mineflayer-pathfinder')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as unstuck from '../src/unstuck'
+import { gotoGoal } from '../src/movement'
+import { goals } from 'mineflayer-pathfinder'
 
 // Мир из словаря «x,y,z» → имя блока; всё прочее — воздух. Твёрдое — полный куб.
 const LIQ = /water|lava/
@@ -20,7 +20,7 @@ function world (map: any = {} as Record<string, any>, { floorY = 63, floor = 'st
   }
 }
 function botAt (pos, map?: any, opts?: any) {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(pos.x, pos.y, pos.z), onGround: true, yaw: 0, isInWater: false }
   bot.blockAt = world(map, opts)
   bot.controls = {} as Record<string, any>
@@ -128,9 +128,9 @@ test('копка сохраняет фактическую соседнюю оп
 })
 
 test('breakAhead2 после снятия стены не толкает тело в пропасть, но проходит на подтверждённый пол', async () => {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Block = require('prismarine-block')(registry)
-  const native = require('../src/tick-plugins').getPhysics()
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+  const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
   for (const landing of [false, true]) {
     const map = new Map([['0,0,0', 'netherrack'], ['1,2,0', 'netherrack']])
     if (landing) map.set('1,0,0', 'netherrack')
@@ -210,7 +210,7 @@ test('gotoGoal + unstuck: ступени кончились — отказ STUCK
   const un = unstuck.watch(f.session, ctl, { now: () => t, tickMs: 5, sleep: async () => {}, log: () => {}, maxRungs: 3 })
   const clock = setInterval(() => { t += 700 }, 5)
   try {
-    await assert.rejects(gotoGoal(f.bot, new goals.GoalNearXZ(20, 0, 1), { unstuck: un }), err => err.code === 'STUCK' && /застрял \(open\) у 0,64,0/.test(err.message))
+    await assert.rejects(gotoGoal(f.bot, new goals.GoalNearXZ(20, 0, 1), { unstuck: un }), (err: any) => err.code === 'STUCK' && /застрял \(open\) у 0,64,0/.test(err.message))
   } finally { clearInterval(clock) }
   assert.equal(un.stats.gaveUp.cls, 'open')
   assert.ok(un.stats.gaveUp.tried.length >= 1)

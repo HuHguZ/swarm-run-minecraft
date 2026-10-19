@@ -1,5 +1,5 @@
 // Разбор журнала демона по goto: от строки [goto] до следующей. node an-goto-log.js <daemon.out.log> [fromLine]
-const fs = require('fs')
+import * as fs from 'fs'
 const [file, from = '0'] = process.argv.slice(2)
 const lines = fs.readFileSync(file, 'utf8').split('\n').slice(Number(from))
 const segs = []

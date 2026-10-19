@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { swarmPositions, pearlPositionPlan, pearlToPosition } from '../src/swarm-position'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 function fixture(extra: Array<[number, number, number, string]> = [], inventory: Record<string, number> = {}) {
   const cells = new Map<string, string>()

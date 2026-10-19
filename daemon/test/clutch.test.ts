@@ -1,13 +1,14 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const { EventEmitter }: typeof import('node:events') = require('node:events')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 const { Physics, PlayerState } = require('prismarine-physics')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')('1.21.11')
-const pick = require('../src/pick')
-const clutch = require('../src/clutch')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+import pick = require('../src/pick')
+import { repoJson } from '../src/paths'
+import clutch = require('../src/clutch')
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
 function block (name, p) {
@@ -149,7 +150,7 @@ test('своя рамка в entities не закрывает прицел; чу
   assert.equal(m.api.candidates(s, m.world, { entities: { 7: me, 8: cow }, selfId: 7 }).some(p => p.cell.equals(new Vec3(0, 19, 0))), false)
 })
 function fakeBot (m, s, inventory = [{ name: 'cobblestone', count: 8, slot: 38 }]) {
-  const bot = new EventEmitter(); bot._client = new EventEmitter(); bot.inventory = new EventEmitter()
+  const bot: any = new EventEmitter(); bot._client = new EventEmitter(); bot.inventory = new EventEmitter()
   bot.inventory.slots = []; for (const i of inventory) bot.inventory.slots[i.slot] = i
   bot.inventory.items = () => bot.inventory.slots.filter(Boolean)
   bot.entity = { position: s.pos.clone(), velocity: s.vel.clone(), onGround: s.onGround, yaw: 0, pitch: 0, effects: {} as Record<string, any>, attributes: {} as Record<string, any> }
@@ -180,8 +181,8 @@ function installFake (m, s, extra: any = {} as Record<string, any>) {
 }
 
 test('the shared Emergency lease preserves knockback clutch steering until the forecast landing', async () => {
-  const clock = require('../src/game-clock')
-  const locks = require('../src/reflex-lock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const locks: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
   const c = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
   const m = model(p => p.x <= 0 && p.y === 19 || p.y < -7 ? 'stone' : 'air')
   const bot = fakeBot(m, state(new Vec3(.804745268, 20.682234606, .962509927), new Vec3(.280162804, .523314686, .009144443)), [
@@ -192,7 +193,7 @@ test('the shared Emergency lease preserves knockback clutch steering until the f
   bot.pathfinder = { setGoal: () => {}, isMoving: () => false }
   const session: any = { bot, current: null }
   locks.install(session)
-  const guard = require('../src/edges').installFallGuard(session).clutch
+  const guard = (require('../src/edges') as typeof import('../src/edges')).installFallGuard(session).clutch
   const actions: any[] = []
   let landingTick = 0
   bot.on('nd_clutch', action => {
@@ -319,7 +320,7 @@ test('ordinary launch hands off idle previous keys and does not walk out of a wa
     }
   }
   try {
-    const result = await require('../src/navigation/parkour').enterWater(bot, { aborted: false }, crystal.position, 160, undefined, true)
+    const result = await (require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).enterWater(bot, { aborted: false }, crystal.position, 160, undefined, true)
     assert.equal(result.ok, true, JSON.stringify(result))
     assert.equal(guard.stats.water_saved, 1)
     assert.equal(bot.getControlState('forward'), false, 'the launch input must not become post-rescue motion')
@@ -331,7 +332,7 @@ test('ordinary launch hands off idle previous keys and does not walk out of a wa
 })
 
 test('ускоренные часы: готовое ведро проверяется по игровому barAt', () => {
-  const gameClock = require('../src/game-clock')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new gameClock.GameClock({ manual: true })
   gameClock.activate(clock)
   clock.advanceTicks(2000)
@@ -630,7 +631,7 @@ test('лестница: спуск по шахте не клатч', () => {
   guard.stop()
 })
 
-module.exports = { model, state, flight, block, data, Block, Vec3, Physics, PlayerState, EventEmitter, IDLE }
+export { model, state, flight, block, data, Block, Vec3, Physics, PlayerState, EventEmitter, IDLE }
 
 test('with ND_SOFT_LANDING a fall without water is steered onto a nearby hay bale and confirmed on it', () => {
   const m = model(p => p.y < -1 ? 'stone' : p.y === -1 ? (p.x === 2 && p.z === 0 ? 'hay_block' : 'stone') : 'air')
@@ -700,7 +701,7 @@ test('s1f: хотбар полон (без блоков) — блоки для �
 
 
 test('a predicted brief floor touch cannot suppress the second block needed to stop coasting over a cliff', () => {
-  const cells = new Map(require('./fixtures/clutch-coasting-z21-1.21.11.json').map(a => [a.slice(0, 3).join(','), a[3]]))
+  const cells = new Map(repoJson('daemon/test/fixtures/clutch-coasting-z21-1.21.11.json').map(a => [a.slice(0, 3).join(','), a[3]]))
   // Captured after the fatal run: undo only its own first rescue block in this
   // isolated model, then replay the actual recorded pose and native velocity.
   cells.delete('-108,95,46')

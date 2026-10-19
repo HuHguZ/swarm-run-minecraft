@@ -3,7 +3,7 @@
 // в неё упирается (так тушит и cast1). Пользователь 16.10: «не умеют огонь рукой тушить — это спасать будет их часто, и не
 // мешать им идти ко мне». Гасит то, что видит прицел в досягаемости: огонь у ног (стоит в нём или шагнёт) и огонь по пути
 // к цели — поиск пути огонь обходит, удар открывает коридор, путь пересчитывается сам (block_updated).
-const { blockOnRay, eyeOf } = require('./pick')
+import { blockOnRay, eyeOf } from './pick'
 
 const FIRE = /^(fire|soul_fire)$/
 const REACH = 4.5
@@ -48,4 +48,4 @@ function hookFirePunch (session, bot) {
   })
 }
 
-module.exports = { fireToPunch, hookFirePunch, FIRE }
+export { fireToPunch, hookFirePunch, FIRE }

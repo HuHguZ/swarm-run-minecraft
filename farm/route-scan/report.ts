@@ -1,10 +1,11 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сводка серий «новый мир → вход в Ад» (поток route): доля вошедших, время входа (медиана, p90), смерти, класс
 // неудачи, время по шагам маршрута (строки «МАРШРУТ шаг <id> ok|НЕ ВЫШЕЛ за N с» журнала кампании).
-//   node farm/route-scan/report.js <tag> [<tag> ...] [--steps] [--json]
-const fs = require('fs')
-const path = require('path')
-const ROOT = path.join(__dirname, '..', '..')
+//   node dist/farm/route-scan/report.js <tag> [<tag> ...] [--steps] [--json]
+import * as fs from 'fs'
+import path = require('path')
+const ROOT = REPO_ROOT
 const args = process.argv.slice(2)
 // --seeds <файл> — только сиды из файла (через запятую); --as <имя> — все серии одной строкой сводки.
 const optVal = k => { const i = args.indexOf(k); if (i < 0) return null; const v = args[i + 1]; args.splice(i, 2); return v }

@@ -11,22 +11,22 @@ one () {
   S=$1; ARM=$2; SEED=$3; shift 3
   for kv in $ARM; do export "$kv"; done
   L=farm/logs/$TAG-$S.log
-  node farm/farm.js down $S >> $L 2>&1
+  node dist/farm/farm.js down $S >> $L 2>&1
   P=$((25600 + S)); for w in $(seq 1 30); do netstat -ano | grep -q ":$P .*LISTENING" || break; sleep 2; done; sleep 3
-  env $ARM ND_DRAGON_TRACE="$PWD/$TR/s$S" node farm/farm.js up 1 --from $S --fresh --seeds $SEED >> $L 2>&1
-  for w in $(seq 1 24); do node farm/farm.js rcon $S "random reset *" > farm/logs/$TAG-rr-$S.txt 2>&1; cat farm/logs/$TAG-rr-$S.txt >> $L; grep -q "Reset" farm/logs/$TAG-rr-$S.txt && break; sleep 5; done; sleep 3
-  mkdir -p $TR/s$S; node farm/dragon/rec-dragon.js $S "$PWD/$TR/s$S/rec-1.jsonl" $(( ${MIN:-10} * 60 + 240 )) >> $L 2>&1 &
+  env $ARM ND_DRAGON_TRACE="$PWD/$TR/s$S" node dist/farm/farm.js up 1 --from $S --fresh --seeds $SEED >> $L 2>&1
+  for w in $(seq 1 24); do node dist/farm/farm.js rcon $S "random reset *" > farm/logs/$TAG-rr-$S.txt 2>&1; cat farm/logs/$TAG-rr-$S.txt >> $L; grep -q "Reset" farm/logs/$TAG-rr-$S.txt && break; sleep 5; done; sleep 3
+  mkdir -p $TR/s$S; node dist/farm/dragon/rec-dragon.js $S "$PWD/$TR/s$S/rec-1.jsonl" $(( ${MIN:-10} * 60 + 240 )) >> $L 2>&1 &
   RP=$!
   # сцена не поднялась («бот не в игре» под нагрузкой фермы) — ещё раз, пока итога нет (до 3 раз)
   for try in 1 2 3; do
   [ -s farm/logs/$TAG-s$S.jsonl ] && break
-  [ $try -gt 1 ] && { env $ARM ND_DRAGON_TRACE="$PWD/$TR/s$S" node farm/farm.js daemons $S >> $L 2>&1; sleep 10; }
-  env $ARM node farm/farm.js run try-dragon.js --slots $S --tag $TAG-s$S E2E=1 E2E_KIT=campaign2 E2E_BEDS=${BEDS:-7} E2E_ANCHORS=${ANCHORS:-0} \
+  [ $try -gt 1 ] && { env $ARM ND_DRAGON_TRACE="$PWD/$TR/s$S" node dist/farm/farm.js daemons $S >> $L 2>&1; sleep 10; }
+  env $ARM node dist/farm/farm.js run try-dragon.js --slots $S --tag $TAG-s$S E2E=1 E2E_KIT=campaign2 E2E_BEDS=${BEDS:-7} E2E_ANCHORS=${ANCHORS:-0} \
     E2E_OBSIDIAN=${OBSIDIAN:-4} E2E_CRYING=0 E2E_PEARLS=${PEARLS:-5} E2E_GAPPLES=2 E2E_MIN=${MIN:-10} \
     E2E_OUT="$PWD/farm/logs/$TAG-s$S.jsonl" "$@" -- e2e >> $L 2>&1
   done
   kill $RP 2>/dev/null
-  node farm/farm.js down $S >> $L 2>&1
+  node dist/farm/farm.js down $S >> $L 2>&1
 }
 for i in $(seq 1 $N); do
   SEED=$(node -e "console.log(String(Math.floor(Math.random()*9e15)-4e15))"); SEED2=$(node -e "console.log(String(Math.floor(Math.random()*9e15)-4e15))")

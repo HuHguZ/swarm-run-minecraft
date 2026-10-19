@@ -1,12 +1,12 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const { createRequire } = require('node:module')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import { createRequire } from 'node:module'
+import { Vec3 } from 'vec3'
 
 function physicalStep({ elevated = false, inheritedBack = false, inheritedSneak = false }: { elevated?: boolean; inheritedBack?: boolean; inheritedSneak?: boolean } = {}) {
-  const registry = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
   const { Physics, PlayerState } = require('prismarine-physics')
   const controls = { forward: false, back: inheritedBack, left: false, right: false, sprint: false, sneak: inheritedSneak, jump: false }
   let now = 0

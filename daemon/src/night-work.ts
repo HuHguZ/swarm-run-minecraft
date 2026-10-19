@@ -1,8 +1,8 @@
 'use strict'
-const fortify = require('./fortify')
-const build = require('./build')
-const assess = require('./assess')
-const route = require('./route')
+import fortify = require('./fortify')
+import build = require('./build')
+import * as assess from './assess'
+import route = require('./route')
 
 function profile (bot, at = bot.entity.position.floored(), height = null) {
   const solid = p => fortify.fullCube(bot.blockAt(p))
@@ -35,7 +35,7 @@ function price (view, seconds) {
   return death * Math.min(1, prior + damage / hp)
 }
 
-function step (bot, at, back, seconds, fight = assess.plan(bot, { radius: 16 }), height = null) {
+function step (bot, at, back, seconds, fight: any = assess.plan(bot, { radius: 16 }), height = null) {
   const v = profile(bot, at, height)
   const here = bot.entity.position.floored(), distance = Math.abs(at.x - here.x) + Math.abs(at.y - here.y) + Math.abs(at.z - here.z)
   const env = { ...v, block: Math.max(0, (v.block || 0) - distance), sky: Math.max(0, (v.sky || 0) - distance), hp: bot.health, fight }, open = price(env, seconds)
@@ -58,4 +58,4 @@ async function closeBehind (bot, ctl, back) {
   return null
 }
 
-module.exports = { profile, price, step, closeBehind }
+export { profile, price, step, closeBehind }

@@ -1,6 +1,6 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { createCampaignIntelligence } = require('../src/campaign/intelligence')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { createCampaignIntelligence } from '../src/campaign/intelligence'
 
 test('legacy recovery shares the director failure bound and leaves another eligible recovery available', async () => {
   const attempts: string[] = []

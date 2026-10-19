@@ -1,9 +1,9 @@
 import { runBoatHops, type BoatHopPlan, type BoatHopResult, type HopPosition } from '../tactics/boat-hop-graph'
 import { boatItem, boatBaseVisible, boatLavaAim, placeBoatOn, placeBoatOnLava, mountBoat, boatClickAim, type BoatController } from './boat-placement'
 type Body = Record<string, any>
-const clock = require('../game-clock')
-const ride = require('../ride')
-const Vec3 = require('vec3')
+import * as clock from '../game-clock'
+import ride = require('../ride')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const count = (bot: Body): number => bot.inventory.items().filter((item: Body) => /_(boat|raft)$/.test(item.name) && !/chest/.test(item.name)).reduce((sum: number, item: Body) => sum + item.count, 0)
 // anyFloor — посадка на любую твёрдую опору (спуск с обрыва: точка приземления заранее не известна с точностью 1.5 бл.).
 export interface BoatHopRequest { mode?: 'lava' | 'fall'; target?: HopPosition; anyFloor?: boolean; maxHops?: number; timeoutSeconds?: number }

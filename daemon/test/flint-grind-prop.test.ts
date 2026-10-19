@@ -4,9 +4,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
+import { cjsContext } from './cjs-context'
 
 function fixture({ lower = false, ledge = false, unsupported = false, wet = false, occluded = false, abortOnAim = false, gravel = 3 } = {}) {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const inventory: Record<string, number> = { gravel, flint: 0 }
   const placed: any[] = [], dug: any[] = [], aimed: any[] = []
   const cells = new Map<string, string>()
@@ -51,7 +52,7 @@ function fixture({ lower = false, ledge = false, unsupported = false, wet = fals
   }
   const load = file => {
     const context: any = { module: { exports: {} }, process: { env: { ND_GRIND_NICHE: '0' } }, require: dependencies }
-    vm.runInNewContext(transformSync(fs.readFileSync(path.resolve(__dirname, '../src', file), 'utf8'), { loader: 'ts', format: 'cjs' }).code, context)
+    vm.runInNewContext(transformSync(fs.readFileSync(path.resolve(__dirname, '../src', file), 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
     return context.module.exports
   }
   build = load('build.ts')
@@ -114,7 +115,7 @@ test('a single gravel block spent on the prop is reported without inventing a gr
 })
 
 test('a raised grinding cell cannot use a column of gravel falling into air or unknown terrain', () => {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   for (const base of ['air', null]) {
     const f = fixture()
     f.bot.blockAt = p => {
@@ -128,7 +129,7 @@ test('a raised grinding cell cannot use a column of gravel falling into air or u
 })
 
 test('a gravel column resting on stone remains a physical support for grinding', () => {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const f = fixture()
   f.bot.blockAt = p => {
     const name = p.y === 62 || p.y === 63 || p.y === 64 && Math.abs(p.x) + Math.abs(p.z) === 1 ? 'gravel'

@@ -86,7 +86,7 @@ test('a paid construction hit is not charged as a second complete build when the
 test('the stand prices the same physical build interval without reading the unknown bow phase', () => {
   const w = createWorld({ name: 'priced-box', body: { hp: 4, armor: 7 }, events: [
     { at: 1, type: 'enemy', kind: 'skeleton', distance: 3.6 }] })
-  const { stepWorld } = require('../src/tactics/sim-world')
+  const { stepWorld }: typeof import('../src/tactics/sim-world') = require('../src/tactics/sim-world')
   stepWorld(w)
   const before = observeWorld(w).buildCostHp
   assert.ok(before > 0)
@@ -95,7 +95,7 @@ test('the stand prices the same physical build interval without reading the unkn
 })
 
 test('the box estimate stays within its overworld walker and bow domain', () => {
-  const { stepWorld } = require('../src/tactics/sim-world')
+  const { stepWorld }: typeof import('../src/tactics/sim-world') = require('../src/tactics/sim-world')
   for (const [nether, kind] of [[true, 'skeleton'], [false, 'blaze'], [false, 'piglin_brute']] as const) {
     const w = createWorld({ name: 'outside-box-estimate', world: { nether }, events: [
       { at: 1, type: 'enemy', kind, distance: 6 }] })
@@ -107,7 +107,7 @@ test('the box estimate stays within its overworld walker and bow domain', () => 
 test('real observation publishes the physical box plan cost against a visible skeleton', () => {
   const w = createWorld({ name: 'native-box-estimate', body: { hp: 4, armor: 7 }, events: [
     { at: 1, type: 'enemy', kind: 'skeleton', distance: 3.6 }] })
-  require('../src/tactics/sim-world').stepWorld(w)
+  ;(require('../src/tactics/sim-world') as typeof import('../src/tactics/sim-world')).stepWorld(w)
   const session: any = {}, facade = mineflayerFacade(w, session)
   Object.assign(session, { bot: facade.bot })
   facade.sync()

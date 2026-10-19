@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { tidy, outputSlots, ignoreDrop } = require('../src/pack')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { tidy, outputSlots, ignoreDrop } from '../src/pack'
 function bag (stock) {
   const slots = Array(46).fill(null)
   stock.forEach((it, i) => { slots[i + 9] = { ...it, slot: i + 9, type: it.type || i + 1 } })
@@ -66,7 +66,7 @@ test('почти сломанная каменная кирка убираетс
 
 // Аварийный запас (research/05-synthesis.md F.5): блоков стройки ≥ 16, кирка ≥ 1,
 // еды ≥ 2 — любая разгрузка его не пробивает (коробке отхода нужны блоки).
-const { RESERVE, makeRoom, buildCount, tossPlan } = require('../src/pack')
+import { RESERVE, makeRoom, buildCount, tossPlan } from '../src/pack'
 test('equal-value craft room is opt-in and never permits valuable swaps or dropping protected ingredients', async () => {
   const full = extra => bag([...extra, ...Array.from({ length: 36 - extra.length }, () => ({ name: 'iron_sword', count: 1 }))])
   const ordinary = full([{ name: 'gilded_blackstone', count: 1 }])
@@ -123,12 +123,12 @@ test('запас: земля под ногами при недоборе зап�
 })
 
 for (const scenario of ['cliff', 'flat', 'cancelled']) test(`разгрузка: безопасный отход после выброса (${scenario})`, async () => {
-  const { EventEmitter } = require('node:events')
-  const { Vec3 } = require('vec3')
-  const registry = require('prismarine-registry')('1.21.11')
-  const Block = require('prismarine-block')(registry)
-  const native = require('../src/tick-plugins').getPhysics()
-  const clock = require('../src/game-clock')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { Vec3 }: typeof import('vec3') = require('vec3')
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+  const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const game = clock.activate(new clock.GameClock({ manual: true }))
   const ctl = { aborted: false, onAbort: [] as Array<() => void> }
   const bot = Object.assign(new EventEmitter(), bag([]))
@@ -138,7 +138,7 @@ for (const scenario of ['cliff', 'flat', 'cancelled']) test(`разгрузка:
     const block = Block.fromStateId(registry.blocksByName[support ? 'stone' : q.y === 32 ? 'lava' : 'air'].defaultState)
     block.position = q; return block
   } }
-  const { IDLE } = require('../src/navigation/parkour')
+  const { IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   let control = { ...IDLE }
   Object.assign(bot, { version: '1.21.11', registry, health: 20, food: 20,
     entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, -.0784000015258789, 0), onGround: true,
@@ -153,12 +153,12 @@ for (const scenario of ['cliff', 'flat', 'cancelled']) test(`разгрузка:
     bot.physics.simulatePlayer(state, world); state.apply(bot); bot.emit('physicsTick'); game.advanceTicks(1)
   }
   bot.waitForTicks = async ticks => { for (let i = 0; i < ticks; i++) step() }
-  const pack = require('../src/pack'); const original = pack.tidy
+  const pack: any = require('../src/pack'); const original = pack.tidy
   pack.tidy = async () => { if (scenario === 'cancelled') ctl.aborted = true; return { tossed: ['netherrack×10'] } }
   try {
     const session = { require: () => bot, runIntent: (_name, worker) => worker(ctl) }
     let done = false
-    const work = require('../src/session/equipment').pack.call(session, { mode: 'tidy' }).finally(() => { done = true })
+    const work = (require('../src/session/equipment') as typeof import('../src/session/equipment')).pack.call(session, { mode: 'tidy' }).finally(() => { done = true })
     for (let tick = 0; !done && tick < 3000; tick++) { await new Promise(resolve => setImmediate(resolve)); if (!done) step() }
     assert.equal(done, true, 'disposal must finish within its bounded movement')
     await work

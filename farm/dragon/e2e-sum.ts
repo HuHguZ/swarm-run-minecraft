@@ -1,11 +1,12 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сводка серии r-run3 (s5, 06.10): победы без смерти, смерти и причины, время убийства от платформы, кровати, реальное время,
 // темп и отставание часов, доля игрового времени в окне точности (события precision трассы).
-//   node farm/dragon/e2e-sum.js <тег> [--json]
-const fs = require('fs')
-const path = require('path')
+//   node dist/farm/dragon/e2e-sum.js <тег> [--json]
+import * as fs from 'fs'
+import path = require('path')
 const tag = process.argv[2]
-const logs = path.join(__dirname, '..', 'logs')
+const logs = path.join(REPO_ROOT, 'farm/logs')
 const files = fs.readdirSync(logs).filter(f => new RegExp(`^${tag}-s\\d+\\.jsonl$`).test(f)).sort((a, b) => Number(a.match(/s(\d+)\.jsonl/)[1]) - Number(b.match(/s(\d+)\.jsonl/)[1]))
 const q = (a, p) => { const s = a.filter(x => x != null).sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : null }
 const rows = []

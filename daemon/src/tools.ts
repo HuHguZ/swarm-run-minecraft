@@ -10,8 +10,8 @@
 // что в рюкзаке, и взять самое быстрое; в бою это решает, чем вскрывать
 // укрытие и какой блок в нём самый слабый.
 
-const { withTimeout } = require('./build')
-const { conserveTool } = require('./items')
+import { withTimeout } from './build'
+import { conserveTool } from './items'
 
 const TOOL = /_(pickaxe|axe|shovel|hoe|sword)$|^shears$/
 
@@ -160,4 +160,4 @@ function unstickPathfinderDig (bot) {
   } catch { return false }
 }
 
-module.exports = { breakable, digMs, bestFor, weakest, breakFast, equipFastest, install, unstickPathfinderDig, DIG_REACH }
+export { breakable, digMs, bestFor, weakest, breakFast, equipFastest, install, unstickPathfinderDig, DIG_REACH }

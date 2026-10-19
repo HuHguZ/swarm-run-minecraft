@@ -1,6 +1,6 @@
 // Взлёт: на сколько и куда поворачивается голова за 0.25/0.5/0.75 с в зависимости от
 // разницы между азимутом головы сидя и азимутом, куда потом полетело тело (узел пути).
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const wrap = a => { while (a > 180) a -= 360; while (a < -180) a += 360; return a }
 const pre = process.argv[2] || ''

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { requireInheritedResumeBody } from '../scene-nether-resume'
+import { requireInheritedResumeBody } from '../scenes/lib/scene-nether-resume'
 
 test('living inherited Overworld kit resumes only with the actual recalled portal', () => {
   const inherited = { dimension: 'overworld', health: 20 }

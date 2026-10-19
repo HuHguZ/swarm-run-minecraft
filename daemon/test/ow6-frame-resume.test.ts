@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Vec3=require('vec3')
-const {geom, _in, castPortal}=require('../src/cast')
+const Vec3: typeof import('vec3').Vec3=require('vec3')
+import { geom, _in, castPortal } from '../src/cast'
 
 function fixture(done=9) {
   const origin=new Vec3(1,69,-28),g=geom(origin,'z',-1),blocks=new Map<string,string>()
@@ -56,9 +56,9 @@ for(const persistedTwo of [false,true])test('executor restores its active two-bu
 })
 
 function nativeRefillFixture() {
-  const f=fixture(),registry=require('prismarine-registry')('1.21.11'),Block=require('prismarine-block')(registry)
+  const f=fixture(),registry=(require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11'),Block=(require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const read=p=>{p=p.floored();const name=f.read(p).name,b=Block.fromProperties(name,name==='lava'?{level:0}:{},0);b.position=p;return b}
-  const world=new (require('prismarine-world')('1.21.11'))().sync
+  const world:any=new ((require('prismarine-world') as typeof import('prismarine-world').default)('1.21.11'))().sync
   world.getBlock=read
   world.getColumn=(cx,cz)=>({getBlockStateId:p=>read(new Vec3(cx*16+p.x,p.y,cz*16+p.z)).stateId})
   Object.assign(f.session.bot,{registry,blockAt:read,world,game:{dimension:'overworld',minY:-64,height:384},

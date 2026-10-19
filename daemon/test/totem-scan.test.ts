@@ -1,18 +1,19 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Vec3 } = require('vec3')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Vec3 } from 'vec3'
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { transformSync } from 'esbuild'
 function current (relative) {
   const file = path.join(__dirname, relative); const req = createRequire(file)
   const context = { module: { exports: {} as any }, console, process,
     require: name => name === './pvp/last-seen' ? current('../src/pvp/last-seen.ts') : req(name) }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context, { filename: file })
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
   return context.module.exports
 }
 const totem = current('../src/totem.ts')
@@ -20,9 +21,9 @@ const { wantTotem } = totem
 const plain = value => JSON.parse(JSON.stringify(value))
 
 test('totem scans fresh visible anchors but never reacts to anchors behind a wall', () => {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Chunk = require('prismarine-chunk')(registry)
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Chunk: any = (require('prismarine-chunk') as typeof import('prismarine-chunk').default)(registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const columns = new Map()
   let reads = 0
   const column = (x, z) => {
@@ -43,7 +44,7 @@ test('totem scans fresh visible anchors but never reacts to anchors behind a wal
     registry,
     inventory: { slots, items: () => slots.filter(Boolean) },
     nearestEntity: () => null,
-    world: { getColumn: column, raycast: (eye, dir, range) => require('../src/pick').blockOnRay(bot, eye, dir, range)?.block || null },
+    world: { getColumn: column, raycast: (eye, dir, range) => (require('../src/pick') as typeof import('../src/pick')).blockOnRay(bot, eye, dir, range)?.block || null },
     blockAt: p => {
       const b = Block.fromStateId(column(p.x >> 4, p.z >> 4).getBlockStateId(new Vec3(p.x & 15, p.y, p.z & 15)), 0)
       b.position = p.clone()
@@ -122,19 +123,18 @@ test('missing boundary or a replaced bot makes the full-round totem count unknow
 })
 
 test('status totem telemetry is opt-in and uses the same live counters without installing listeners', async () => {
-  const file = path.join(__dirname, '../src/index.ts')
-  const source = fs.readFileSync(file, 'utf8')
-  const helpers = source.slice(source.indexOf('function enchantedGear'), source.indexOf('const methods ='))
-  const method = source.slice(source.indexOf('  status: async (p) =>'), source.indexOf('  // Наблюдатель сцены'))
+  // RPC status демона живёт в src/rpc/observation.ts; единственный модуль, который он тянет здесь, — totem.
+  const file = path.join(__dirname, '../src/rpc/observation.ts')
   const f = popFixture(); f.pop()
-  const context = { cfg: {}, session: { bot: f.bot, immediate: async fn => fn() }, require: name => {
-    assert.equal(name, './totem'); return totem
-  }, status: null }
-  vm.runInNewContext(`${helpers}\nthis.status = ({${method}}).status`, context)
-  assert.equal((await context.status({})).totem, undefined)
-  const before = (await context.status({ totem: true })).totem
+  const context = { module: { exports: {} as any }, require: name => {
+    assert.equal(name, '../totem'); return totem
+  } }
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
+  const status = context.module.exports.observationMethods({ cfg: {}, session: { bot: f.bot, immediate: async fn => fn() }, state: { dangerWatch: null } }).status
+  assert.equal((await status({})).totem, undefined)
+  const before = (await status({ totem: true })).totem
   f.pop()
-  const after = (await context.status({ totem: true })).totem
+  const after = (await status({ totem: true })).totem
   assert.equal(totem.delta(before, after).pops, 1)
   assert.equal(f.bot._client.listenerCount('entity_status'), 1)
 })

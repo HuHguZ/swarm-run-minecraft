@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Дорога к крепости через Ад — как у спидраннеров (mc_stronghold mode=travel,
 // 2026-09-26).
 //
@@ -19,15 +19,15 @@ const gameClock = require('./game-clock')
 //   3. наверху — endportal.goStronghold: к лестнице старта (угол +4,+4), шахта.
 // Каждый вызов смотрит, в каком мире тело и где, и продолжает с того шага.
 
-const { goals } = require('mineflayer-pathfinder')
-const Vec3 = require('vec3')
-const { sleep, xyz } = require('./movement')
-const { itemNamed, countOf, equipBestTool, missingHarvestTool } = require('./items')
-const { collectNearbyDrops } = require('./actions')
-const worlds = require('./worlds')
-const nether = require('./nether')
-const stronghold = require('./stronghold')
-const endportal = require('./endportal')
+import { goals } from 'mineflayer-pathfinder'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { sleep, xyz } from './movement'
+import { itemNamed, countOf, equipBestTool, missingHarvestTool } from './items'
+import { collectNearbyDrops } from './actions'
+import * as worlds from './worlds'
+import nether = require('./nether')
+import * as stronghold from './stronghold'
+import endportal = require('./endportal')
 
 const SCALE = 8
 const FRAME_NEED = 10
@@ -157,7 +157,7 @@ async function takeFrame (session, ctl, { need = FRAME_NEED, deadline }: any) {
 // перед всей рамой.
 async function ensureDoorway (session, ctl) {
   const bot = session.bot
-  const { placeBlockAt } = require('./build')
+  const { placeBlockAt }: typeof import('./build') = require('./build')
   const read = nether.reader(bot)
   const door = nether.findLitPortal(bot, session.mcData, 8)
   if (!door) return { ok: false, why: 'горящего портала рядом нет' }
@@ -245,7 +245,7 @@ function chamberPlan (read, feet) {
 // Копка фронтом: только видимые клетки списка в досягаемости; не видно ничего — шаг на клетку стояния (stands), ближе к остатку.
 async function digVisible (session, ctl, cells, stands, until) {
   const bot = session.bot
-  const { seesBlock } = require('./sight')
+  const { seesBlock }: typeof import('./sight') = require('./sight')
   const solid = () => cells.filter(c => { const b = bot.blockAt(c); return b && b.boundingBox === 'block' })
   let dug = 0
   let moves = 0
@@ -497,7 +497,7 @@ async function travel (session, ctl, p: any = {}) {
           return done({ route: 'walk', go: g, stopped: g.went ? undefined : g.stopped })
         }
         const w = await step('walk', async () => {
-          const { travelXZ } = require('./movement')
+          const { travelXZ }: typeof import('./movement') = require('./movement')
           return travelXZ(bot, ctl, target.x, target.z, { range: 8, retries: 3, deadline })
         })
         if (!w.ok) return done({ route: 'walk', stopped: `пешком не дошёл: ${w.error}` })
@@ -566,4 +566,4 @@ async function travel (session, ctl, p: any = {}) {
   }
 }
 
-module.exports = { travel, takeFrame, routeCost, ensureDoorway, chamberPlan, chamberSpot, exitChamber, openDoorway }
+export { travel, takeFrame, routeCost, ensureDoorway, chamberPlan, chamberSpot, exitChamber, openDoorway }

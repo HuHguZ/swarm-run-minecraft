@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3'
 import { bodyClear, standPositions, supportAt, dimensions, shapeBoxes, type CollisionWorld, type Point } from './geometry'
 import { clearanceMargin, detour } from './shape-detour'
 import { hasFallMitigation, landingDamage } from './landing'
+import { repoJson } from '../paths'
 
 export interface LandingOption { target: Vec3; key: string; score: number; support: string; mode?: 'climb'; climb?: Point; bounce?: Point; chain?: Point[]; door?: Point }
 export interface RoutingDiagnostics { workMs?: number; wallMs?: number; nodes?: number; expanded?: number }
@@ -62,7 +63,7 @@ export function doorOn(world: CollisionWorld, from: Point, to: Point): Point | u
     }
   }
 }
-const climbable = new Set<string>((require('../../data/climbable-1.21.11.json').climbable.values as string[]).map(name => name.replace('minecraft:', '')))
+const climbable = new Set<string>((repoJson('daemon/data/climbable-1.21.11.json').climbable.values as string[]).map(name => name.replace('minecraft:', '')))
 export function onClimbable(world: CollisionWorld, at: Point): boolean {
   const block = world.blockAt(new Vec3(at.x, at.y, at.z).floored(), false)
   return !!block && climbable.has(block.name)

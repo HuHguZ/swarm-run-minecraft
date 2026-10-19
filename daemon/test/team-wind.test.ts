@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { windImpulse, windShot, windLanding, windSteer, teamWindPlan, worldTick, matchingBurst } from '../src/combat/team-wind'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 function fixture(extra: Array<[number, number, number, string]> = []) {
   const cells = new Map<string, any>()
@@ -109,7 +109,7 @@ test('team wind: world tick coordination ignores connection epoch and only the p
 })
 
 test('wind feedback brakes actual dispersed impulses and centers on the intended support after edge contact', () => {
-  const edges = require('../src/edges')
+  const edges: typeof import('../src/edges') = require('../src/edges')
   for (const spread of [-.1, 0, .1]) {
     const { bot } = fixture([[4, 1, 0, 'stone'], [4, 2, 0, 'stone'], [4, 3, 0, 'stone']])
     const state = edges.stateOf(bot, edges.IDLE), simulate = edges.simOf(bot), world = edges.worldOf(bot), target = new Vec3(4.5, 4, .5)
@@ -133,7 +133,7 @@ test('wind feedback brakes actual dispersed impulses and centers on the intended
 })
 
 test('self wind uses the same forecast and exact landing receipt; unsupported and outside-arena targets refuse', () => {
-  const self = require('../src/wind-leap')
+  const self: typeof import('../src/wind-leap') = require('../src/wind-leap')
   const { bot } = fixture([[4, 1, 0, 'stone'], [4, 2, 0, 'stone'], [4, 3, 0, 'stone']])
   const target = new Vec3(4.5, 4, .5)
   const result = self.plan(bot, target)

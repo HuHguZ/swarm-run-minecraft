@@ -1,8 +1,8 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { goals } = require('mineflayer-pathfinder')
-const Vec3 = require('vec3')
-const geometry = require('./navigation/geometry')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const geometry: typeof import('./navigation/geometry') = require('./navigation/geometry')
 
 const sleep = (ms) => gameClock.sleep(ms)
 const waterBudgetOn = () => process.env.ND_WATER_ESCAPE_BUDGET !== '0'
@@ -155,7 +155,7 @@ function inWater (bot) {
     const b = bot.blockAt(p.offset(0, dy, 0))
     if (waterCell(b)) return true
   }
-  return process.env.ND_WATER_RESCUE === '1' && waterCell(bot.blockAt(require('./pick').eyeOf(bot)))
+  return process.env.ND_WATER_RESCUE === '1' && waterCell(bot.blockAt((require('./pick') as typeof import('./pick')).eyeOf(bot)))
 }
 
 // Nearest spot with solid ground and breathable air above it.
@@ -188,13 +188,13 @@ const waterCell = b => !!b && (/^(water|bubble_column|seagrass|tall_seagrass|kel
 const swimPassable = b => !!b && b.boundingBox === 'empty' && !/lava/.test(b.name)
 const breathCell = b => swimPassable(b) && (!waterCell(b) || process.env.ND_WATER_RESCUE === '1' && b.name === 'bubble_column')
 const headWet = bot => {
-  const b = bot.blockAt(require('./pick').eyeOf(bot))
+  const b = bot.blockAt((require('./pick') as typeof import('./pick')).eyeOf(bot))
   return waterCell(b) && !(process.env.ND_WATER_RESCUE === '1' && b.name === 'bubble_column')
 }
 const dryFooting = bot => !!bot.entity.onGround && !inWater(bot) && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block'
 const idleBreath = bot => {
   const p = bot.entity.position.offset(0, 1.62, 0)
-  if (!require('./perception/eyes').seesNow(bot, p)) return false
+  if (!(require('./perception/eyes') as typeof import('./perception/eyes')).seesNow(bot, p)) return false
   const b = bot.blockAt(p)
   return breathCell(b)
 }
@@ -220,7 +220,7 @@ function waterStepCost (bot, block) {
   let depth = 0
   for (let y = 1; y <= 16; y++) {
     const p = block.position.offset(0, y, 0)
-    if (!require('./perception/eyes').seesNow(bot, p) || !waterCell(bot.blockAt(p))) break
+    if (!(require('./perception/eyes') as typeof import('./perception/eyes')).seesNow(bot, p) || !waterCell(bot.blockAt(p))) break
     depth++
   }
   const sprint = (bot.food ?? 20) > 6
@@ -238,7 +238,7 @@ function waterApproachCost (bot, target) {
   let cost = 0
   for (let i = 1; i <= d; i++) {
     const p = from.scaled(1 - i / d).plus(target.scaled(i / d)).floored(), key = p.toString()
-    if (seen.has(key) || !require('./perception/eyes').seesNow(bot, p)) continue
+    if (seen.has(key) || !(require('./perception/eyes') as typeof import('./perception/eyes')).seesNow(bot, p)) continue
     seen.add(key)
     cost += waterStepCost(bot, bot.blockAt(p))
   }
@@ -247,10 +247,10 @@ function waterApproachCost (bot, target) {
 
 // Only the column currently visible from our eyes; no knowledge of air behind a roof.
 function airAbove (bot) {
-  const eye = require('./pick').eyeOf(bot)
+  const eye = (require('./pick') as typeof import('./pick')).eyeOf(bot)
   for (let y = Math.floor(eye.y); y <= Math.floor(eye.y) + 16; y++) {
     const p = new Vec3(eye.x, y, eye.z)
-    if (!require('./perception/eyes').seesNow(bot, p)) return null
+    if (!(require('./perception/eyes') as typeof import('./perception/eyes')).seesNow(bot, p)) return null
     const b = bot.blockAt(p)
     if (!swimPassable(b)) return null
     if (breathCell(b)) return p
@@ -271,7 +271,7 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false, breat
     const key = p.toString()
     if (!known.has(key)) {
       let block = null
-      try { if (require('./perception/eyes').seesNow(bot, p)) { block = bot.blockAt(p); if (block) observed?.set(key, block) } else block = observed?.get(key) || null } catch {}
+      try { if ((require('./perception/eyes') as typeof import('./perception/eyes')).seesNow(bot, p)) { block = bot.blockAt(p); if (block) observed?.set(key, block) } else block = observed?.get(key) || null } catch {}
       known.set(key, block)
     }
     return known.get(key)
@@ -283,7 +283,7 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false, breat
   const seen = new Set([key(start)])
   let air = null, water = null
   const urgent = (breathOnly || (bot.oxygenLevel ?? 20) <= 8) && headWet(bot)
-  const eyeCell = process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? Math.floor(require('./pick').eyeHeight(bot)) : 1
+  const eyeCell = process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? Math.floor((require('./pick') as typeof import('./pick')).eyeHeight(bot)) : 1
   const route = (i, kind) => {
     const path = []
     const target = queue[i].p
@@ -326,7 +326,9 @@ function findSwimRoute (bot, { radius = 8, rise = 12, visibleOnly = false, breat
 
 // Follow the connected swim route with manual controls: the old direct line to
 // the bank could point through a wall while jump stayed stuck under a roof.
-async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, radius = 8 }: any = {}) {
+// Итог escapeWater: был ли в воде, вышел ли, куда плыл (target) и разбор выхода (exit, kind, eye, feet…).
+interface WaterEscape { ok: boolean; wasInWater: boolean; error?: string; target?: { x: number; y: number; z: number } | null; [key: string]: any }
+async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, radius = 8 }: any = {}): Promise<WaterEscape> {
   if (!inWater(bot)) return { ok: true, wasInWater: false, error: undefined }
 
   try { bot.pathfinder.setGoal(null) } catch {}
@@ -343,7 +345,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
   const plan = opts => {
     if (!budget) return findSwimRoute(bot, opts)
     const p = bot.entity.position
-    const key = [Math.floor(p.x * 2), Math.floor(p.y * 2), Math.floor(p.z * 2), require('./pick').eyeHeight(bot), headWet(bot), (bot.oxygenLevel ?? 20) <= 8, opts.radius, opts.rise, opts.breathOnly, waterToward?.toString()].join(',')
+    const key = [Math.floor(p.x * 2), Math.floor(p.y * 2), Math.floor(p.z * 2), (require('./pick') as typeof import('./pick')).eyeHeight(bot), headWet(bot), (bot.oxygenLevel ?? 20) <= 8, opts.radius, opts.rise, opts.breathOnly, waterToward?.toString()].join(',')
     if (routes.has(key)) return routes.get(key)
     const route = findSwimRoute(bot, { ...opts, observed, toward: waterToward })
     if (route) routes.set(key, route)
@@ -359,14 +361,14 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
       if (budget && !headWet(bot) && airTicks(bot) < 270) {
         // Recover breath before the bank route can send us below another overhang.
         exit = 'recover-air'
-        const eye = require('./pick').eyeOf(bot)
+        const eye = (require('./pick') as typeof import('./pick')).eyeOf(bot)
         bot.setControlState('forward', false); bot.setControlState('sprint', !!bot.entity._ndSwimming && !idleBreath(bot))
         bot.setControlState('jump', eye.y < Math.floor(eye.y) + .5 && (bot.entity.velocity?.y ?? 0) <= 0)
         await sleep(50); loops++; continue
       }
       if (budget && headWet(bot)) {
         breathBudget = Math.max(0, airTicks(bot) + 20)
-        const up = airAbove(bot), eye = require('./pick').eyeOf(bot)
+        const up = airAbove(bot), eye = (require('./pick') as typeof import('./pick')).eyeOf(bot)
         if (up && (geometry.verticalLift(bot, bot.entity.position, up.y - eye.y) ?? 0) >= up.y - eye.y - 1e-7) {
           exit = 'air-budget-up'; kind = 'air'; target = up
           etaTicks = swimUpTicks(up.y - eye.y, bot.entity.velocity?.y ?? 0)
@@ -405,18 +407,18 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
         const lifeTicks = () => airTicks(bot) + 20 + Math.max(0, Math.ceil(bot.health / 2) - 1) * 20
         const sameCause = budget && bot._ndWaterDigRefusal === cause() && lifeTicks() <= (bot._ndWaterDigBudget ?? Infinity)
         if (roof && roof.boundingBox === 'block' && !/^(bedrock|obsidian|crying_obsidian|reinforced_deepslate)$/.test(roof.name) &&
-            !sameCause && (!budget || require('./pick').blockSeen(bot, roof.position)) && (typeof bot.canDigBlock !== 'function' || bot.canDigBlock(roof))) {
+            !sameCause && (!budget || (require('./pick') as typeof import('./pick')).blockSeen(bot, roof.position)) && (typeof bot.canDigBlock !== 'function' || bot.canDigBlock(roof))) {
           opened = true
           try {
             if (budget) bot.clearControlStates()
-            await require('./items').equipBestTool(bot, roof)
+            await (require('./items') as typeof import('./items')).equipBestTool(bot, roof)
             if (ctl.aborted) break
             // The watchdog is the body's remaining air/HP, not another arbitrary dig timeout.
             if (budget) {
               bot._ndWaterDigRefusal = cause()
               bot._ndWaterDigBudget = lifeTicks()
               const ms = Math.max(50, lifeTicks() * 50)
-              try { await require('./build').withTimeout(bot.dig(roof, true), Math.min(ms, Math.max(1, deadline - gameClock.now())), 'кончился бюджет воздуха на вскрытие потолка') }
+              try { await (require('./build') as typeof import('./build')).withTimeout(bot.dig(roof, true), Math.min(ms, Math.max(1, deadline - gameClock.now())), 'кончился бюджет воздуха на вскрытие потолка') }
               finally { try { bot.stopDigging() } catch {} }
             } else await bot.dig(roof, true)
           } catch {}
@@ -427,10 +429,10 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
         // (tw-cr2-s1-3 15.10: Surface 15 с «пути нет», под водой без маршрута, хп 20 → 11.7 → смерть). Узкая шахта 1×1 без
         // соседней воды — ниже, затычка.
         const feetC = bot.entity.position.floored()
-        const headCell = budget ? require('./pick').eyeOf(bot).floored() : feetC.offset(0, 1, 0)
+        const headCell = budget ? (require('./pick') as typeof import('./pick')).eyeOf(bot).floored() : feetC.offset(0, 1, 0)
         const upCell = bot.blockAt(headCell.offset(0, 1, 0))
         const openWater = [headCell, headCell.offset(0, 1, 0)].some(c => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => waterCell(bot.blockAt(c.offset(dx, 0, dz)))))
-        const headBlock = bot.blockAt(require('./pick').eyeOf(bot)), feetBlock = bot.blockAt(feetC)
+        const headBlock = bot.blockAt((require('./pick') as typeof import('./pick')).eyeOf(bot)), feetBlock = bot.blockAt(feetC)
         const headLevel = headBlock?.getProperties?.().level ?? headBlock?.metadata
         const feetLevel = feetBlock?.getProperties?.().level ?? feetBlock?.metadata
         const flowingShaft = rescue && !openWater && headBlock?.name === 'water' && headLevel > 0 && feetBlock?.name === 'water' && feetLevel > 0
@@ -449,7 +451,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
           plugged = true
           const above = budget ? roofAt : bot.entity.position.floored().offset(0, 2, 0)
           let r = null
-          try { r = await require('./build').placeBlockAt(bot, above, { timeoutMs: 1500, honest: true, steady: true, ctl }) } catch {}
+          try { r = await (require('./build') as typeof import('./build')).placeBlockAt(bot, above, { timeoutMs: 1500, honest: true, steady: true, ctl }) } catch {}
           if (r && r.ok) { await sleep(1000); continue }
         }
         exit = 'no-route'
@@ -485,7 +487,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
       else if (next.y < bot.entity.position.floored().y) diveTo = next.y
       if (diveTo !== null && bot.entity.position.y <= diveTo) diveTo = null
       const horizontal = Math.hypot(next.x + 0.5 - bot.entity.position.x, next.z + 0.5 - bot.entity.position.z)
-      await bot.lookAt(next.offset(0.5, budget ? require('./pick').eyeHeight(bot) : 1.62, 0.5), true)
+      await bot.lookAt(next.offset(0.5, budget ? (require('./pick') as typeof import('./pick')).eyeHeight(bot) : 1.62, 0.5), true)
       if (ctl.aborted || gameClock.now() >= deadline) { exit = ctl.aborted ? 'aborted' : 'deadline'; break }
       bot.setControlState('forward', horizontal > 0.25)
       // Skim the open surface without re-entering a dive; compact air pockets retain their swimming pose.
@@ -500,7 +502,7 @@ async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = false, 
   }
 
   const out = dryFooting(bot)
-  const head = bot.blockAt(require('./pick').eyeOf(bot))
+  const head = bot.blockAt((require('./pick') as typeof import('./pick')).eyeOf(bot))
   const breathing = breathCell(head)
   if (exit === 'dry' && !out) exit = ctl.aborted ? 'aborted' : 'deadline'
   const feet = bot.blockAt(bot.entity.position)
@@ -613,7 +615,7 @@ async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadline = nu
       // обрыва в Аду убивает (падение насмерть, try-nether-trip 2026-09-25).
       if (err.noStep) {
         if (!Number.isFinite(y) && bot.physics && bot.entity.onGround && Math.hypot(bot.entity.position.x - (Math.floor(x) + .5), bot.entity.position.z - (Math.floor(z) + .5)) <= 6) {
-          const jump = await require('./navigation/parkour').tryLocal(bot, ctl, { x, z })
+          const jump = await (require('./navigation/parkour') as typeof import('./navigation/parkour')).tryLocal(bot, ctl, { x, z })
           if (jump.ok) return { ok: true, parkour: jump }
         }
         return { ok: false, error: err.message, noStep: true }
@@ -673,7 +675,7 @@ function pathKeepAlive (bot, { minMove = 0.8 }: any = {}) {
       // Узел с копкой/стройкой и узлы своих исполнителей (мост, спуск) не трогаем: там свой порядок.
       if (!n0 || (n0.toBreak && n0.toBreak.length) || (n0.toPlace && n0.toPlace.length) || n0.ndBridge || n0.ndDescend) return
       if (Math.abs(n0.x - p.x) <= 0.35 && Math.abs(n0.z - p.z) <= 0.35) { mark = p.clone(); return } // и так засчитает
-      const n = new Vec3(p.x, p.y, p.z)
+      const n: any = new Vec3(p.x, p.y, p.z)
       n.toBreak = []; n.toPlace = []; n.parkour = false; n.cost = 0; n.remainingBlocks = n0.remainingBlocks; n.ndKeep = true
       r.path.unshift(n)
       mark = p.clone()
@@ -861,4 +863,9 @@ function gotoPath (bot, goal) {
 module.exports = {
   sleep, xyz, shaftFromDescent, standableY, describeStall, stuckGuard, unstick, centerOnFloor, travelXZ,
   findNearestLand, findSwimRoute, escapeWater, inWater, waterCell, waterStepCost, waterApproachCost, airTicks, waterBudgetOn, gotoGoal, gotoPath, gotoWaitOn, sprintOn, pathKeepAlive, pathKeepAliveOn, timeoutWalkOn
+}
+export {
+  sleep, xyz, shaftFromDescent, standableY, describeStall, stuckGuard, unstick, centerOnFloor, travelXZ,
+  findNearestLand, findSwimRoute, escapeWater, inWater, waterCell, waterStepCost, waterApproachCost, airTicks,
+  waterBudgetOn, gotoGoal, gotoPath, gotoWaitOn, sprintOn, pathKeepAlive, pathKeepAliveOn, timeoutWalkOn
 }

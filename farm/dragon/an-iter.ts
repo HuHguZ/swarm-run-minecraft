@@ -1,6 +1,6 @@
 // Сводка итерации (обе руки вместе): node an-iter.js <тег> <пар N>
-const { execFileSync } = require('child_process')
-const path = require('path')
+import { execFileSync } from 'child_process'
+import path = require('path')
 const [tag, N] = process.argv.slice(2)
 const out = execFileSync('node', [path.join(__dirname, 'an-pearl.js'), tag, N], { env: { ...process.env, ROWS: '1' } }).toString()
 const R = out.split('\n').filter(l => l.startsWith('{')).map(l => JSON.parse(l)).filter(r => !r.none)

@@ -1,12 +1,14 @@
+import { functionSource } from './source-fixture'
+import { CAMPAIGN } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 function fixture(kind = 'find') {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
-  const body = source.slice(source.indexOf('async function ensureFlint ()'), source.indexOf('let castRuns ='))
+  const body = functionSource(CAMPAIGN, 'ensureFlint', { ts: true })
   const inventory: Record<string, number> = { iron_ingot: 1 }
   const calls: Array<{ method: string, params: any }> = []
   const facts: Record<string, number> = {}
@@ -28,7 +30,7 @@ function fixture(kind = 'find') {
       return { status: kind === 'interrupted' ? 'interrupted' : 'done',
         detail: { found: kind === 'find' && legs >= 2 ? 'gravel' : null, stuck: kind === 'stuck' } }
     } }
-  vm.runInNewContext(body + '\nmodule.exports = ensureFlint', Object.assign(context, { module: { exports: {} } }))
+  vm.runInNewContext(body + '\nmodule.exports = ensureFlint', cjsContext(Object.assign(context, { module: { exports: {} } })))
   return { run: context.module.exports, calls, facts, inventory, context, now: () => now, resetLegs: () => { legs = 0 } }
 }
 

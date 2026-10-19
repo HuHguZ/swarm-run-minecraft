@@ -1,11 +1,11 @@
-const { gameClock, dragonOf, hpOf, PHASE_RU, phaseOf, CENTER, voidBelow, DEBUG, dbg, clearControls, armor, findItem, supportCell, offIsland, cloudsOf, isSolid, Vec3, pearlHop, starer, envv, digUpThrough, envNum, padOverVoid, runnerOn, sleep } = require('./dig-down-to')
-const { kitOf, clearCrystalKnowledge, missing, crystalKitState, hitTracker, fireballTracker, makeTrace, bridgeToIsland, burrowTo, noteCrystalClear } = require('./bridge-to-island')
-const { crystalsOf, lookGuard, fallGuard, cloudReflex, fireballAlarm, r1, inClouds, doing, pickSpot } = require('./fall-guard')
-const { crysAlive, waterToHotbar } = require('./station-plan')
-const { portalBlocks } = require('./pillar-plan')
-const { dragonLab, respawnDragon, takeEgg, goHome, pearlApproach, blindPit, collectXp } = require('./blind-pit')
-const { evade, countOf } = require('./evade-raw')
-const { walkTo, destroyCrystals, makeDragonFeed, fightDragon } = require('./pillar-run')
+const { gameClock, dragonOf, hpOf, PHASE_RU, phaseOf, CENTER, voidBelow, DEBUG, dbg, clearControls, armor, findItem, supportCell, offIsland, cloudsOf, isSolid, Vec3, pearlHop, starer, envv, digUpThrough, envNum, padOverVoid, runnerOn, sleep }: typeof import('./dig-down-to') = require('./dig-down-to')
+const { kitOf, clearCrystalKnowledge, missing, crystalKitState, hitTracker, fireballTracker, makeTrace, bridgeToIsland, burrowTo, noteCrystalClear }: typeof import('./bridge-to-island') = require('./bridge-to-island')
+const { crystalsOf, lookGuard, fallGuard, cloudReflex, fireballAlarm, r1, inClouds, doing, pickSpot }: typeof import('./fall-guard') = require('./fall-guard')
+const { crysAlive, waterToHotbar }: typeof import('./station-plan') = require('./station-plan')
+const { portalBlocks }: typeof import('./pillar-plan') = require('./pillar-plan')
+const { dragonLab, respawnDragon, takeEgg, goHome, pearlApproach, blindPit, collectXp }: typeof import('./blind-pit') = require('./blind-pit')
+const { evade, countOf }: typeof import('./evade-raw') = require('./evade-raw')
+const { walkTo, destroyCrystals, makeDragonFeed, fightDragon }: typeof import('./pillar-run') = require('./pillar-run')
 // 750 TPS (s5, 06.10): A* pathfinder'а считает бюджет в РЕАЛЬНЫХ мс — 40 мс на срез (tickTimeout) и до 5 с на путь
 // (thinkTimeout). На 750 тиках/с срез — 30 игровых тиков без физики, путь — до 190 игровых с (s5-b2-s2: 78 расчётов
 // «partial», 6.9 с реального времени у моста; s5-b2-s4: до центра не дошёл за 600 с). Бюджет боя — в игровом времени.
@@ -23,9 +23,9 @@ async function dragon (session, ctl, p: any = {}) {
   const undo = scalePathBudget(bot)
   // Выходной портал встаёт под станцией у столба (окоп в его кольце): после убийства тело падает в портал — титры.
   // Ответ perform_respawn теперь у всего демона (credits.ts, s5c 06.10), не только на время навыка (s5-e23-s7).
-  require('../credits').install(bot)
+  ;(require('../credits') as typeof import('../credits')).install(bot)
   // окно точности на ферме (dragon/precision.ts, ND_PRECISION_TPS): посадка при готовой станции и опасность рядом
-  const prec = require('./precision')
+  const prec: typeof import('./precision') = require('./precision')
   const pwTimer = prec.precisionRate() ? gameClock.setInterval(() => { try { prec.precisionTick(bot, ctl) } catch {} }, 100) : null
   try { return await dragonFight(session, ctl, p) } finally { if (pwTimer) gameClock.clearInterval(pwTimer); undo(); prec.precisionOff(bot, ctl) }
 }
@@ -411,3 +411,4 @@ async function dragonFight (session, ctl, p: any = {}) {
 }
 
 module.exports = { dragon, scalePathBudget }
+export { dragon, scalePathBudget }

@@ -3,11 +3,11 @@ import { observedCollision } from './pvp/search'
 import { bodyClear, dimensions, HAZARD, shapeBoxes, standPositions, supportAt, type Point, type CollisionWorld } from './navigation/geometry'
 import { landingDamage } from './navigation/landing'
 import { windInside, windLanding, type WindArena } from './combat/team-wind'
-const pick = require('./pick')
-const edges = require('./edges')
-const projectile = require('./throw')
-const { seesPlayer } = require('./pvp/last-seen')
-const clock = require('./game-clock')
+import pick = require('./pick')
+import edges = require('./edges')
+import * as projectile from './throw'
+import { seesPlayer } from './pvp/last-seen'
+import * as clock from './game-clock'
 const terrainMemory = new WeakMap<object, Map<string, { block: any; at: number }>>()
 
 export type PositionPurpose = 'ranged' | 'recover' | 'escape' | 'build'
@@ -222,7 +222,7 @@ export async function pearlToPosition(session: any, ctl: any, { to, arena }: { t
           if (windLanding(bot, state, target)) settled++; else settled = 0
           if (settled >= 6) { finish(true); return }
           if (state.onGround && Math.abs(state.pos.y - target.y) > .03 || state.isInLava || state.isInWater) { finish(false, 'wrong_or_unsafe_support'); return }
-          const control = require('./combat/team-wind').windSteer(bot, state, target, arena)
+          const control = (require('./combat/team-wind') as typeof import('./combat/team-wind')).windSteer(bot, state, target, arena)
           void bot.look(control.yaw, 0, true).catch(cancel)
           for (const [key, value] of Object.entries(control.control)) bot.setControlState(key, value)
         }
@@ -234,11 +234,11 @@ export async function pearlToPosition(session: any, ctl: any, { to, arena }: { t
 }
 
 function material(bot: any, counts: Record<string, number>, reserve: Record<string, number>) {
-  const Block = require('prismarine-block')(bot.registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
   return Object.keys(counts).filter(name => {
     const type = bot.registry.blocksByName[name]
     if (!type || HAZARD.test(name) || /glass|sand$|gravel$|concrete_powder$/.test(name) || counts[name] <= Math.max(1, reserve[name] || 0)) return false
-    const block = Block.fromStateId(type.defaultState)
+    const block = Block.fromStateId(type.defaultState, undefined)
     return block.shapes?.some(s => s.every((n, i) => n === (i < 3 ? 0 : 1)))
   }).sort((a, b) => counts[b] - counts[a])[0]
 }
@@ -293,7 +293,7 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
       if (plan.best) candidate.methods.push({ kind: 'pearl', cost: 1 + 5 / Math.max(1, bot.health || 20) + 3 / counts.ender_pearl, skill: 'pearl_to', params: { to: point(at), arena: query.arena, observed: true }, plan: plan.best })
     }
     if (!candidate.methods.length && methods.has('wind') && counts.wind_charge && windChecks++ < 2) {
-      const plan = (await require('./wind-leap').planAsync(physicsBot, at, { arena: query.arena, maxTries: 16 })).best
+      const plan = (await (require('./wind-leap') as typeof import('./wind-leap')).planAsync(physicsBot, at, { arena: query.arena, maxTries: 16 })).best
       if (plan) candidate.methods.push({ kind: 'wind', cost: plan.ticks / 20 + 2 / counts.wind_charge, skill: 'wind_leap', params: { to: candidate.at, arena: query.arena }, plan })
     }
   }
@@ -316,7 +316,7 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
     const item = material(bot, counts, query.reserve || {}), reserve = Math.max(1, query.reserve?.[item] || 0)
     if (item) for (let height = 1; height <= Math.min(16, counts[item] - reserve) && performance.now() < deadline; height++) {
       const params = { height, item, reserve, arena: query.arena }
-      const column = require('./swarm-position-work').pillarCheck(bot, params, world)
+      const column = (require('./swarm-position-work') as typeof import('./swarm-position-work')).pillarCheck(bot, params, world)
       if (!column.ok) break
       const at = vector(column.at), assessed = tactical(world, at, start, enemies, query.purpose, !!counts.bow && !!counts.arrow)
       const cost = height * .8 + height / Math.max(1, counts[item] - reserve) + 1

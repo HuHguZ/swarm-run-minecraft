@@ -69,7 +69,7 @@ interface TrajectorySample {
   expected: { pos: Point; velocity: Point; onGround: boolean; jumpQueued: boolean; jumpTicks: number };
   observation?: { actual: ReturnType<typeof bodyObservation>; expected: ReturnType<typeof bodyObservation> }
 }
-const { PlayerState } = require('../tick-plugins').getPhysics() as { PlayerState: new(bot: MovementBot, control: Control) => State }
+const { PlayerState } = (require('../tick-plugins') as typeof import('../tick-plugins')).getPhysics() as { PlayerState: new(bot: MovementBot, control: Control) => State }
 export const IDLE: Control = Object.freeze({ forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false })
 const flat = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.z - b.z)
 const controls = (extra: Partial<Control> = {}): Control => ({ ...IDLE, ...extra })
@@ -149,7 +149,7 @@ function safeFallCost(bot: MovementBot, damage: number): boolean {
   try {
     const tactical = bot._ndReflexSession?.tactics?.snapshot()
     if (tactical && (!tactical.state || tactical.state.enemies.some(enemy => enemy.threatening))) return false
-    const safety = require('../combat-safety').inspect(bot, { minHealth: 12 })
+    const safety = (require('../combat-safety') as typeof import('../combat-safety')).inspect(bot, { minHealth: 12 })
     return safety.action === 'fight' && safety.threats.length === 0 && (bot.health ?? 0) - damage > safety.threshold
   } catch { return false }
 }
@@ -665,7 +665,7 @@ export async function ledgeTo(session: { require(): MovementBot }, ctl: Cancella
   if (opts.arena !== undefined && (!opts.arena || typeof opts.arena !== 'object')) return refuse('invalid_ledge_request')
   if (target.y >= bot.entity.position.y - .55) return refuse('target_is_not_lower')
   if (ctl.aborted) return refuse('interrupted')
-  const clock = require('../game-clock')
+  const clock: typeof import('../game-clock') = require('../game-clock')
   let expired = false
   const local: Cancellation = { get aborted() { return expired || ctl.aborted }, onAbort: [] }
   const abort = () => { for (const callback of [...local.onAbort!]) callback() }
@@ -736,7 +736,7 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
     }
     const onDamage = (packet: { entityId: number; sourceTypeId: number; sourceCauseId: number; sourceDirectId: number }) => {
       if (done || packet.entityId !== bot.entity.id) return
-      if (fallReceipt || require('../gamedata').damageTypeName(packet.sourceTypeId) !== 'fall' || packet.sourceCauseId || packet.sourceDirectId || !landedOnForecast()) {
+      if (fallReceipt || (require('../gamedata') as typeof import('../gamedata')).damageTypeName(packet.sourceTypeId) !== 'fall' || packet.sourceCauseId || packet.sourceDirectId || !landedOnForecast()) {
         finish(false, 'unexpected_damage_receipt'); return
       }
       fallReceipt = true; onHealth()
@@ -916,7 +916,7 @@ export function planWaterEntry(bot: MovementBot, target: Point, maxTicks = 160, 
   if (!bot.physics || !bot.entity.onGround && bot.entity.velocity.y >= -.08 || bot.entity.isInLava) return null
   const cell = new Vec3(target.x, target.y, target.z).floored(); const block = bot.blockAt(cell, false)
   if (!block || !containsWater(block) || cell.y >= bot.entity.position.y) return null
-  const observed = bot.world ? (require('../sight').seesBlock as (bot: MovementBot, block: CollisionBlock) => boolean)(bot, block) : bot.canSeeBlock?.(block)
+  const observed = bot.world ? ((require('../sight') as typeof import('../sight')).seesBlock as (bot: MovementBot, block: CollisionBlock) => boolean)(bot, block) : bot.canSeeBlock?.(block)
   if (!observed) return null
   const base = new PlayerState(bot, controls()); const world = worldOf(bot); const geometry = geometryOf(bot, world); const sim = simulator(bot)
   const prefixSteps: Step[] = []; const prefixStates: State[] = []
@@ -1099,7 +1099,7 @@ export async function navigate(bot: MovementBot, ctl: Cancellation, options: Jum
   if (options.mode === 'waterentry') return enterWater(bot, ctl, options.target, options.ticks, options.launch, options.automatic)
   if (options.mode === 'riptide') {
     const me = bot.entity.position; const target = options.target
-    return require('../utility').riptide(bot, Math.atan2(me.x - target.x, me.z - target.z), options.pitch ?? Math.atan2(target.y - me.y, flat(me, target)), { target, ctl, launch: options.launch })
+    return (require('../utility') as typeof import('../utility')).riptide(bot, Math.atan2(me.x - target.x, me.z - target.z), options.pitch ?? Math.atan2(target.y - me.y, flat(me, target)), { target, ctl, launch: options.launch })
   }
   if (options.mode === 'drop') return dropOff(bot, ctl, options.target, options.ticks)
   if (options.mode === 'climb') return climb(bot, ctl, options.target, options.ticks)
@@ -1146,7 +1146,10 @@ export async function openDoor(bot: MovementBot, ctl: Cancellation, at: Point): 
 }
 
 type RouteOptions = { toward: Point; maxLandings?: number; maxTicks?: number; beam?: number; waypoints?: readonly Point[]; timeoutSeconds?: number; maxFallDamage?: number; frames?: number }
-type RouteResult = { ok: boolean; why?: string; landings: unknown[]; at: Point; visited: string[] }
+// Рывок «Тягуном» (riptide.runRiptide). utility.riptide без трезубца или воды отвечает { ok: false, why } без ticks — такой
+// отказ ворота ok || ticks > 0 не проходит, поэтому итог riptideTo здесь читается как итог runRiptide.
+type RiptideRun = import('./riptide').RiptideResult
+type RouteResult = { ok: boolean; why?: string; landings: unknown[]; rejected: unknown[]; reachedGoals: unknown[]; goalIndex: number; at: Point; visited: string[] }
 export async function route(bot: MovementBot, ctl: Cancellation, options: RouteOptions): Promise<RouteResult> {
   // Loaded collision tops persist across landings; only a nearby block change
   // can alter which body positions a cell supports.
@@ -1181,7 +1184,7 @@ async function routeLandings(bot: MovementBot, ctl: Cancellation, { toward: fina
     const boostKey = transitionKey(me, toward)
     if (!riptideAttempts.has(boostKey) && (flat(me, toward) > 4 || toward.y - me.y > 1.25)) {
       riptideAttempts.add(boostKey)
-      const boost = await require('../utility').riptideTo(bot, ctl, toward)
+      const boost = await (require('../utility') as typeof import('../utility')).riptideTo(bot, ctl, toward) as RiptideRun
       if (boost.ok || boost.ticks > 0) {
         const summary = { ...boost, target: toward, mode: 'riptide', at: { ...bot.entity.position }, hp: bot.health }
         landings.push(summary); bot.emit?.('nd_parkour_route', summary)
@@ -1355,7 +1358,7 @@ export async function tryLocal(bot: MovementBot, ctl: Cancellation, target: { x:
       const result = await executeJump(bot, ctl, position)
       if (result.ok || result.ticks > 0) return result
     }
-    const boost = await require('../utility').riptideTo(bot, ctl, position)
+    const boost = await (require('../utility') as typeof import('../utility')).riptideTo(bot, ctl, position) as RiptideRun
     if (boost.ok || boost.ticks > 0) return { ...boost, samples: boost.samples ?? [] }
   }
   return { ok: false, why: 'no_local_landing', ticks: 0, samples: [] }

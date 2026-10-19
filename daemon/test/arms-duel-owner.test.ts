@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { observeTactics } = require('../src/tactics/minecraft')
-const { Vec3 } = require('vec3')
+import { observeTactics } from '../src/tactics/minecraft'
+import { Vec3 } from 'vec3'
 
 // PvP-дуэль (pvp.duel держит session.tempo) — защищённый бой: тактика уровня <3 её не перебивает (s7 06.10).
 function session(current: string | null, tempo: boolean) {

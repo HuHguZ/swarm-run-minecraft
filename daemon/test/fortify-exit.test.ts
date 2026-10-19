@@ -1,11 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function scene ({ blockedAll = false, hazard = false, drop = false }: any = {} as Record<string, any>) {
   const file = path.join(__dirname, '../src/fortify.js')
@@ -21,7 +22,7 @@ function scene ({ blockedAll = false, hazard = false, drop = false }: any = {} a
   } }
   const context = { module: { exports: {} as Record<string, any> }, console,
     require: name => name === './tools' ? { bestFor: () => ({ ms: 100 }), breakFast: async (_bot, p) => { breaks.push(p); return { ok: true } } } : realRequire(name) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
   return { bot, breaks, exit: context.module.exports.breakOut }
 }
 

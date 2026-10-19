@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { resync, refresh, confirmedClick, install } = require('../src/invsync')
+import { resync, refresh, confirmedClick, install } from '../src/invsync'
 
 test('inventory refresh cannot drop a cursor stack and waits for a real full-state packet', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.inventory = { selectedItem: { name: 'iron_ingot' } }
   const packets: unknown[] = []
   bot._client.write = (_name: string, packet: unknown) => packets.push(packet)
@@ -27,10 +27,10 @@ test('inventory refresh cannot drop a cursor stack and waits for a real full-sta
 test('craft preparation closes the inventory before refreshing a carried stack and confirms an empty grid', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  const Item = require('prismarine-item')(bot.registry)
-  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
   const ingot = new Item(bot.registry.itemsByName.iron_ingot.id, 3)
   const stick = new Item(bot.registry.itemsByName.stick.id, 2)
   bot.inventory.selectedItem = ingot
@@ -74,10 +74,10 @@ test('craft preparation closes the inventory before refreshing a carried stack a
 test('confirmed click waits for the server slots and carried stack without predicting a craft', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  const Item = require('prismarine-item')(bot.registry)
-  const Window = require('prismarine-windows')(bot.registry)
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
+  const Window = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry)
   bot.inventory = Window.createWindow(0, 'minecraft:inventory', 'inventory')
   const ingot = new Item(bot.registry.itemsByName.iron_ingot.id, 9)
   bot.inventory.updateSlot(9, ingot)
@@ -120,10 +120,10 @@ test('confirmed click waits for the server slots and carried stack without predi
 test('a click cannot report success from an unrelated window or leave listeners after timeout', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
-  bot.inventory.updateSlot(9, new (require('prismarine-item')(bot.registry))(bot.registry.itemsByName.iron_ingot.id, 1))
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  bot.inventory.updateSlot(9, new ((require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry))(bot.registry.itemsByName.iron_ingot.id, 1))
   bot._client.write = () => bot._client.emit('window_items', { windowId: 2, items: [] })
   const failure = confirmedClick(bot, 9, 0, 0, 10)
   await assert.rejects(failure, /did not confirm/)
@@ -135,10 +135,10 @@ test('a click cannot report success from an unrelated window or leave listeners 
 test('pickup-filled crafting inventory keeps the material cursor and drops only expendable clutter after server confirmation', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  const Item = require('prismarine-item')(bot.registry)
-  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
   const stack = (name: string, count: number) => new Item(bot.registry.itemsByName[name].id, count)
   for (let slot = 9; slot < 45; slot++) bot.inventory.updateSlot(slot, stack('netherrack', 64))
   for (let slot = 1; slot <= 4; slot++) bot.inventory.updateSlot(slot, stack('oak_planks', 1))
@@ -155,7 +155,7 @@ test('pickup-filled crafting inventory keeps the material cursor and drops only 
     else { const old = slots[packet.slot]; slots[packet.slot] = carried; carried = old }
     bot._client.emit('window_items', { windowId: 0, stateId: ++stateId, items: slots.map(Item.toNotch), carriedItem: Item.toNotch(carried) })
   }
-  await require('../src/craft-confirmed').putCursorAway(bot, bot.inventory)
+  await (require('../src/craft-confirmed') as typeof import('../src/craft-confirmed')).putCursorAway(bot, bot.inventory)
   assert.equal(bot.inventory.selectedItem, null)
   assert.equal(bot.inventory.items().find(item => item.name === 'oak_planks')?.count, 2)
   assert.deepEqual(discarded, ['netherrack'])
@@ -163,17 +163,17 @@ test('pickup-filled crafting inventory keeps the material cursor and drops only 
   assert.equal(bot.inventory.slots.slice(1, 5).reduce((n, item) => n + item.count, 0), 4)
   for (let slot = 9; slot < 45; slot++) bot.inventory.updateSlot(slot, stack('iron_pickaxe', 1))
   bot.inventory.selectedItem = stack('oak_planks', 2)
-  await assert.rejects(require('../src/craft-confirmed').putCursorAway(bot, bot.inventory), /no inventory room/)
+  await assert.rejects((require('../src/craft-confirmed') as typeof import('../src/craft-confirmed')).putCursorAway(bot, bot.inventory), /no inventory room/)
   assert.deepEqual(discarded, ['netherrack'], 'gear and held recipe materials must never be dropped')
 })
 
 test('parking a crafted pickaxe preserves surplus recipe ingredients in a pickup-filled inventory', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  const Item = require('prismarine-item')(bot.registry)
-  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
   const stack = (name: string, count: number) => new Item(bot.registry.itemsByName[name].id, count)
   for (let slot = 9; slot < 45; slot++) bot.inventory.updateSlot(slot, stack('iron_sword', 1))
   bot.inventory.updateSlot(9, stack('blackstone', 12))
@@ -191,7 +191,7 @@ test('parking a crafted pickaxe preserves surplus recipe ingredients in a pickup
     else { const old = slots[packet.slot]; slots[packet.slot] = carried; carried = old }
     bot._client.emit('window_items', { windowId: 0, stateId: ++stateId, items: slots.map(Item.toNotch), carriedItem: Item.toNotch(carried) })
   }
-  await require('../src/craft-confirmed').putCursorAway(bot, bot.inventory, new Set(['blackstone', 'stick']))
+  await (require('../src/craft-confirmed') as typeof import('../src/craft-confirmed')).putCursorAway(bot, bot.inventory, new Set(['blackstone', 'stick']))
   assert.equal(bot.inventory.selectedItem, null)
   assert.deepEqual(discarded, ['basalt'])
   assert.equal(bot.inventory.items().find(item => item.name === 'blackstone')?.count, 12)
@@ -200,10 +200,10 @@ test('parking a crafted pickaxe preserves surplus recipe ingredients in a pickup
 test('S8: an unconfirmed click also times out by game ticks, not only by the 3 s wall timer (accelerated farm)', async () => {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
-  bot.inventory.updateSlot(9, new (require('prismarine-item')(bot.registry))(bot.registry.itemsByName.iron_ingot.id, 1))
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  bot.inventory.updateSlot(9, new ((require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry))(bot.registry.itemsByName.iron_ingot.id, 1))
   bot._client.write = () => {}
   const old = process.env.ND_CLICK_CONFIRM_GAME_MS
   process.env.ND_CLICK_CONFIRM_GAME_MS = '60'

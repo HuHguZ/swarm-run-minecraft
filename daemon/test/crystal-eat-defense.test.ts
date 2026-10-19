@@ -5,15 +5,16 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve, dirname } from 'node:path'
 import { runInThisContext, runInNewContext } from 'node:vm'
-const Vec3 = require('vec3')
-const clock = require('../src/game-clock')
-const boom = require('../src/boom')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as clock from '../src/game-clock'
+import boom = require('../src/boom')
 
 // Real crystal planner/run/poll and damage model; only the server's consume/place acknowledgements are simulated.
 function fixture ({ filler = true, screen = false, hidden = 'air' }: any = {}) {
   const game = clock.activate(new clock.GameClock({ manual: true, epoch: 1000 }))
   const bot: any = new EventEmitter(); bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.health = 12; bot.food = 20; bot.game = { difficulty: 'normal', dimension: 'overworld' }
   bot.entity = { id: 1, name: 'player', type: 'player', position: new Vec3(.5, 0, .5), width: .6, height: 1.8, metadata: [], yaw: -Math.PI / 2, onGround: true }
   const foe: any = { id: 2, name: 'player', type: 'player', username: 'Foe', position: new Vec3(5.5, 0, .5), width: .6, height: 1.8, isValid: true, equipment: [] }
@@ -207,7 +208,7 @@ test('actual PvP caller executes eat then defense sequentially and preserves pri
           if (action.kind === 'eat' && outcome === 'priority') urgent = true
           return value
         } } }
-      const pending = runInNewContext(`(async () => { ${source.slice(start, end)}; return rc })()`, ctx)
+      const pending = runInNewContext(`(async () => { ${source.slice(start, end)}; return rc })()`, cjsContext(ctx))
       await f.turn(); await f.step(7); f.update(1)
       const r: any = await f.finish(pending)
       assert.deepEqual(calls, outcome === 'priority' ? ['eat'] : ['eat', 'wall'])

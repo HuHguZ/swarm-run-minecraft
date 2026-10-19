@@ -1,15 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { createRequire } from 'node:module'
-import { runInNewContext } from 'node:vm'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const combat = require('../src/combat')
-const pvp = require('../src/pvp')
-const co = require('../src/pvp/combat-observe')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import combat = require('../src/combat')
+import pvp = require('../src/pvp')
+import * as co from '../src/pvp/combat-observe'
 
 const request = { requestId: 'loot-1', preparation: 'LootChest', quoteEvidence: '{"chest":"a","revision":1}', before: 200, after: 120 }
 const scope = { roundScope: 'round-1', fightId: 'fight-1', target: 'Foe' }
@@ -25,7 +21,7 @@ function fixture(t) {
   const bot: any = new EventEmitter()
   bot.setMaxListeners(100)
   bot._client = new EventEmitter(); bot._client.write = () => {}
-  bot.registry = require('minecraft-data')('1.21.11'); bot.version = '1.21.11'
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'); bot.version = '1.21.11'
   bot.username = 'NeuroDown'; bot.health = 20; bot.food = 20; bot.foodSaturation = 5
   bot.entity = { id: 1, type: 'player', username: bot.username, position: new Vec3(.5, 0, .5), velocity: new Vec3(0, 0, 0),
     onGround: true, yaw: -Math.PI / 2, pitch: 0, height: 1.8, width: .6, eyeHeight: 1.62, metadata: [], effects: {} }
@@ -111,11 +107,8 @@ test('P8 yield: foreign scope/id/target and malformed payload cannot replace an 
 
 test('P8 yield: RPC updates the original ctl immediately without draining combat events', async t => {
   const f = fixture(t)
-  const indexPath = resolve(__dirname, '../src/index.js')
-  const source = readFileSync(resolve(__dirname, '../src/index.ts'), 'utf8')
-  const body = source.slice(source.indexOf('const methods = {'), source.indexOf('const wss ='))
-  const code = require('esbuild').transformSync(body + '\nmethods', { loader: 'ts', format: 'cjs' }).code
-  const methods = runInNewContext(code, { session: f.session, cfg: {}, require: createRequire(indexPath) })
+  const { swarmMethods }: typeof import('../src/rpc/swarm') = require('../src/rpc/swarm')
+  const methods = swarmMethods({ session: f.session, cfg: {} })
   assert.equal(typeof methods.fight_yield, 'function')
   const original = f.session.current
   const running = combat.fight(f.session, f.ctl, f.params)
@@ -187,10 +180,10 @@ for (const mode of ['revoked', 'expired']) test(`P8 yield: ${mode} quote does no
 
 test('P8 yield: an awaited aerial skill finishes normally before the loop can hand off', async t => {
   const f = fixture(t)
-  const elytra = require('../src/elytra')
+  const elytra: typeof import('../src/elytra') = require('../src/elytra')
   const create = elytra.create
   let release: () => void, started = false
-  t.mock.method(elytra, 'create', (...args) => {
+  t.mock.method(elytra, 'create', (...args: Parameters<typeof create>) => {
     const sky = create(...args)
     return { ...sky, decide: () => started ? null : { kind: 'evade' }, async run() {
       started = true; f.bot.entity.onGround = false; f.bot.entity.elytraFlying = true
@@ -259,7 +252,7 @@ test('P8 yield: old completion cannot clear another controller request', async t
 test('P8 yield: confirmed hit survives handoff and dormant aging; raw HP never replaces the estimator', async t => {
   const f = fixture(t)
   const tracks = [], trackFoe = co.trackFoe
-  t.mock.method(co, 'trackFoe', (...args) => { const track = trackFoe(...args); tracks.push(track); return track })
+  t.mock.method(co, 'trackFoe', (...args: Parameters<typeof trackFoe>) => { const track = trackFoe(...args); tracks.push(track); return track })
   const running = combat.fight(f.session, f.ctl, f.params)
   for (let i = 0; i < 10 && !tracks.length; i++) await f.step()
   assert.equal(tracks.length, 1)

@@ -4,21 +4,22 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const combat = require('../src/combat')
-const bow = require('../src/bow')
-const pick = require('../src/pick')
-const tempo = require('../src/tempo')
+import { cjsContext } from './cjs-context'
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import combat = require('../src/combat')
+import bow = require('../src/bow')
+import pick = require('../src/pick')
+import * as tempo from '../src/tempo'
 
 function scene(t, { distance = 4.3, wallHeight = 1, hand = 'diamond_sword', screen = false, onTick = null }: any = {}) {
   const time = new clock.GameClock({ manual: true, epoch: 10000 }); clock.activate(time)
   t.mock.method(Math, 'random', () => .5)
   t.mock.method(console, 'log', () => {})
   const bot: any = new EventEmitter(); bot.setMaxListeners(100)
-  const data = require('minecraft-data')('1.21.11')
-  const Item = require('prismarine-item')('1.21.11')
-  const Block = require('prismarine-block')('1.21.11')
+  const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
   bot._client = new EventEmitter(); bot._client.state = 'play'
   const packets: any[] = []
   bot._client.write = (name, packet) => packets.push({ name, ...packet })
@@ -204,12 +205,12 @@ function blockedBow(t) {
   const c = source.indexOf('      if (shot.blocked) {'); const e = source.indexOf('      await holdWeapon()', c)
   const x = source.indexOf('      if (xb && xb.blocked)'); const xe = source.indexOf('\n', x)
   assert.ok(a > 0 && b > a && c > b && e > c)
-  const ctx: any = { bot: f.bot, entity: f.foe, bowMod: bow, pick, ranged: require('../src/ranged'),
+  const ctx: any = { bot: f.bot, entity: f.foe, bowMod: bow, pick, ranged: (require('../src/ranged') as typeof import('../src/ranged')),
     prof: { player: true }, vision: { visible: () => true }, track: { vel: () => new Vec3(0, 0, 0) },
     BOW_DRAW_MS: bow.DRAW_MS, TICK_MS: 50, shot: { blocked: true }, st: {}, used() {},
     prepB: { drawMs: null }, gameClock: { now: () => ctx.now }, now: 1000,
     repositionUntil: 0, reposition: null }
-  runInNewContext(`${source.slice(a, b)}\nglobalThis.block = () => { ${source.slice(c, e)} }; globalThis.blockX = () => { const xb = { blocked: true }; ${source.slice(x, xe)} }; globalThis.available = (kind = 'bow', point = null) => typeof shotReady === 'function' ? shotReady(kind, BOW_DRAW_MS, point) : ready(kind)`, ctx)
+  runInNewContext(`${source.slice(a, b)}\nglobalThis.block = () => { ${source.slice(c, e)} }; globalThis.blockX = () => { const xb = { blocked: true }; ${source.slice(x, xe)} }; globalThis.available = (kind = 'bow', point = null) => typeof shotReady === 'function' ? shotReady(kind, BOW_DRAW_MS, point) : ready(kind)`, cjsContext(ctx))
   return { ctx, clear: () => { screen = false } }
 }
 
@@ -265,12 +266,12 @@ function projectileTurn() {
     prof: { player: true }, seesBody: true, r: 8, d: 8, FAR: 7, HIT_REACH: 2.9, now: 1000,
     dodgeKey: null, dodgeUntil: 0, dodgeLine: null, cbShieldUntil: 0, strafeKey: 'left', st: { dodges: 0 },
     sawRelease: () => false, stepSafe: () => true, keyDir: (_b, k) => k,
-    threats: require('../src/threats'), foe: { aimedAtMe: () => null },
+    threats: (require('../src/threats') as typeof import('../src/threats')), foe: { aimedAtMe: () => null },
     read: { crossbowInfo: () => ({ loaded: false, piercing: false }) }, guard: { stats: { worn: true } },
     ready: () => true, rest() {}, used() {} }
   const nativeDodge = ctx.threats.dodgeKey
   ctx.threats = { dodgeKey: nativeDodge }
-  runInNewContext(`globalThis.poll = () => { ${source.slice(start, end)}; return { shield: cbShield, active: !!dodgeKey && (dodgeLine ? true : now < dodgeUntil) } }`, ctx)
+  runInNewContext(`globalThis.poll = () => { ${source.slice(start, end)}; return { shield: cbShield, active: !!dodgeKey && (dodgeLine ? true : now < dodgeUntil) } }`, cjsContext(ctx))
   const incoming = { name: 'arrow', entity: projectile, ticks: 8, vel: { x: -1, y: 0, z: 0 }, at: new Vec3(0, 1, 0) }
   return { ctx, incoming }
 }

@@ -1,11 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { bodySource } from './source-fixture'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture ({ hidden = false, lava = false, placement = true }: any = {} as Record<string, any>) {
   const file = path.join(__dirname, '../src/actions.js')
@@ -32,10 +34,10 @@ function fixture ({ hidden = false, lava = false, placement = true }: any = {} a
       } }
       return actual
     } }
-  vm.runInNewContext(fs.readFileSync(process.env.ACTIONS_TEST_SOURCE || file, 'utf8') + `
+  vm.runInNewContext(bodySource(process.env.ACTIONS_TEST_SOURCE || file) + `
     underFeet = () => [];
     collectNearbyDrops = async () => { moves.collections++; };
-  `, context)
+  `, cjsContext(context))
   const session = { bot, mcData: {} as Record<string, any>, cfg: { fairPlay: true } }
   const ctl = { aborted: false, onAbort: [] }
   return { moves, roof, mine: p => context.module.exports.mine(session, ctl, p),

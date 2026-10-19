@@ -41,7 +41,7 @@ seedtool.exe search --bastion 100 --count 20
 seedtool.exe info 5709596442716969862
 ```
 
-На ферму сиды ставятся так: `node farm/farm.js up <N> --seeds s1,s2,... --fresh` с явными слотами своего диапазона (справка — `node farm/farm.js` без аргументов).
+На ферму сиды ставятся так: `node dist/farm/farm.js up <N> --seeds s1,s2,... --fresh` с явными слотами своего диапазона (справка — `node dist/farm/farm.js` без аргументов).
 
 ## Точность
 

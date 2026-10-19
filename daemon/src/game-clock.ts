@@ -2,9 +2,9 @@
 // Gameplay time is counted in ticks. Legacy durations use NOMINAL ms: 50 = one
 // tick at every server rate. Network/CPU/calendar code explicitly uses wall.
 // Never patch process globals: ws, RCON, filesystem and A* keep real clocks.
-const { EventEmitter } = require('node:events')
-const { AsyncResource } = require('node:async_hooks')
-const { performance } = require('node:perf_hooks')
+import { EventEmitter } from 'node:events'
+import { AsyncResource } from 'node:async_hooks'
+import { performance } from 'node:perf_hooks'
 const wall: any = { now: () => Date.now(), monotonic: () => performance.now(), setTimeout, clearTimeout, setInterval, clearInterval, setImmediate, clearImmediate }
 wall.sleep = ms => new Promise<any>(resolve => wall.setTimeout(resolve, ms))
 const TICK_MS = 50
@@ -24,6 +24,8 @@ function stallMsOf (env = process.env) {
   return Number.isFinite(v) && v >= 0 ? v : 3000
 }
 let nextId = 0
+// attach() вешает часы на бота: bot.ndClock — во всех модулях, где бот типа mineflayer.Bot.
+declare module 'mineflayer' { interface Bot { ndClock?: GameClock } }
 
 class GameClock extends EventEmitter {
   declare id: any
@@ -399,5 +401,5 @@ function follow (s) {
   if (s.frozen) c.step(Math.max(0, c.serverTicks - c.ticks))
   c.start()
 }
-module.exports = { GameClock, TICK_MS, wall, bind, activate, lockstepOptions, now, serverNow, observationNow, snapshot, follow, changes, sleep,
-  setTimeout: setGameTimeout, setInterval: setGameInterval, clearTimeout: clearGameTimer, clearInterval: clearGameTimer }
+export { GameClock, TICK_MS, wall, bind, activate, lockstepOptions, now, serverNow, observationNow, snapshot, follow, changes, sleep,
+  setGameTimeout as setTimeout, setGameInterval as setInterval, clearGameTimer as clearTimeout, clearGameTimer as clearInterval }

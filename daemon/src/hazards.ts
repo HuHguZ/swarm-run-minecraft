@@ -4,7 +4,7 @@
 // Нужно для позиционной войны: столкнуть в лаву или яму, самому не стоять к
 // ним спиной, выбраться из ямы, запереть в ней другого.
 
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const AIRY = /^(air|cave_air|void_air|water|cobweb|short_grass|tall_grass|fern)$/
 
@@ -83,4 +83,4 @@ function nearest (list, from) {
   return best
 }
 
-module.exports = { hazardsNear, pitTrap, nearest }
+export { hazardsNear, pitTrap, nearest }

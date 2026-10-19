@@ -1,21 +1,21 @@
 'use strict'
 // Весь ход penTrade на макете мира (без Minecraft): стройка → вручение → поимка люком → торг с загоном → пополнение.
 // Физика пиглинов — правила javap: вручённый стоит и держит золото 119 тиков; сломан пол под ним — падает на 2.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const clock = require('../src/game-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as clock from '../src/game-clock'
 
 const k = (x, y, z) => `${x},${y},${z}`
 
 // State may change while handing the first ingot. Extra mobs behind the wall
 // must not influence the same visible scene.
 async function readyPenRun (kind, extra = 'none') {
-  const PT = require('../src/bastion/pen-trap')
-  const PG = require('../src/bastion/predict-gold')
-  const SL = require('../src/sealed')
-  const pick = require('../src/pick')
+  const PT: typeof import('../src/bastion/pen-trap') = require('../src/bastion/pen-trap')
+  const PG: any = require('../src/bastion/predict-gold')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
+  const pick: any = require('../src/pick')
   const c = new clock.GameClock({ epoch: 0 }); clock.activate(c); c.setState({ tick_rate: 2000 }); c.start()
   const old = { hand: PG.handNoWalk, toss: PG.tossOut, unhold: PG.unholdGold, lands: PG.throwLands, filler: SL.fillerName, count: SL.fillerCount, dig: SL.digCell, face: pick.seenFace }
   const ctl = { aborted: false }
@@ -91,9 +91,9 @@ for (const capture of ['default', 'freeze', 'lure', 'gather', 'gather-delayed', 
   clock.activate(c)
   c.setState({ tick_rate: 2000 })
   c.start()
-  const SL = require('../src/sealed'); const PG = require('../src/bastion/predict-gold'); const pick = require('../src/pick'); const BT = require('../src/bastion/booth-trade')
-  const PT = require('../src/bastion/pen-trap')
-  const G = require('../src/ne-guard')
+  const SL: typeof import('../src/sealed') = require('../src/sealed'); const PG: typeof import('../src/bastion/predict-gold') = require('../src/bastion/predict-gold'); const pick: typeof import('../src/pick') = require('../src/pick'); const BT: typeof import('../src/bastion/booth-trade') = require('../src/bastion/booth-trade')
+  const PT: typeof import('../src/bastion/pen-trap') = require('../src/bastion/pen-trap')
+  const G: any = require('../src/ne-guard')
   const saved = { dig: SL.digCell, fill: SL.fillCell, face: pick.faceAim, hand: PG.handNoWalk, unhold: PG.unholdGold, toss: PG.tossOut, step: BT.stepCell, booth: BT.boothTrade }
   const savedGuard = { busy: G.busy, hot: G.hot, react: G.react }
   const air = new Set([k(0, 98, 0), k(0, 99, 0), k(0, 100, 0)])
@@ -240,7 +240,7 @@ test('pen away: from B a closed tunnel back and sideways, a pause, the same way 
   clock.activate(c)
   c.setState({ tick_rate: 2000 })
   c.start()
-  const SL = require('../src/sealed'); const BT = require('../src/bastion/booth-trade'); const PT = require('../src/bastion/pen-trap')
+  const SL: typeof import('../src/sealed') = require('../src/sealed'); const BT: typeof import('../src/bastion/booth-trade') = require('../src/bastion/booth-trade'); const PT: typeof import('../src/bastion/pen-trap') = require('../src/bastion/pen-trap')
   const saved = { dig: SL.digCell, step: BT.stepCell }
   // Готовый загон (как после поимки): рот (0,100,0) и P (0,98,0) заложены; B, окно H, люки и траншеи — воздух.
   const air = new Set([k(-1, 98, 0), k(-1, 99, 0), k(0, 99, 0), k(-3, 99, 1)]) // (-3,99,1) — чужой карман
@@ -277,7 +277,7 @@ test('pen away: from B a closed tunnel back and sideways, a pause, the same way 
 })
 
 test('pen trade(): no pen geometry at this pit — the same call trades as the pit (boothTrade), own cells of a build go to st.sealedState.own', async () => {
-  const BT = require('../src/bastion/booth-trade'); const PT = require('../src/bastion/pen-trap')
+  const BT: typeof import('../src/bastion/booth-trade') = require('../src/bastion/booth-trade'); const PT: typeof import('../src/bastion/pen-trap') = require('../src/bastion/pen-trap')
   const saved = BT.boothTrade
   // Яма у края: над ртом не твёрдое — penPlan отказывает.
   const air = new Set([k(0, 98, 0), k(0, 99, 0), k(0, 100, 0), k(0, 101, 0), k(1, 100, 0), k(1, 101, 0)])

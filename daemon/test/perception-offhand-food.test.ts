@@ -4,12 +4,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { cjsContext } from './cjs-context'
 const file = path.resolve(__dirname, '../src/perception.ts'), req = createRequire(file)
-const esbuild = require('esbuild')
+import * as esbuild from 'esbuild'
 const moduleBody = fs.readFileSync(file, 'utf8')
-const module = { exports: {} as any }
+const sandboxModule = { exports: {} as any }
 vm.runInNewContext(esbuild.transformSync(moduleBody, { loader: 'ts', format: 'cjs', target: 'node20' }).code,
-  { module, exports: module.exports, require: req })
+  cjsContext({ module: sandboxModule, exports: sandboxModule.exports, require: req }))
 const { Vec3 } = req('vec3')
 const { foodUnits } = req('./play-policy')
 function state(off: any, include45 = false) {
@@ -19,7 +20,7 @@ function state(off: any, include45 = false) {
   const bot = { entity: { position: new Vec3(0, 170, 0) }, health: 15, food: 6,
     game: { dimension: 'overworld' }, players: {}, registry: { foodsByName },
     inventory: { slots, items: () => include45 && off ? [...bag, off] : bag }, blockAt: () => null }
-  return module.exports.stateSummary(bot)
+  return sandboxModule.exports.stateSummary(bot)
 }
 test('actual state counts edible offhand remainder as available food without losing its bag stock', () => {
   const s = state({ name: 'cooked_mutton', count: 5, slot: 45 })

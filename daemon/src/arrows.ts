@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Подбор стрел в бою. Просьба 2026-09-25: «они видят, где стрелы падают, могут
 // специально к ним подбегать и собирать, чтобы потом на дальнике атаковать».
 //
@@ -101,10 +101,10 @@ function standable (bot, x, y, z) {
   const fx = Math.floor(x); const fz = Math.floor(z)
   if (!solid(bot, fx, y - 1, fz)) return false
   for (const dy of [0, 1]) {
-    const b = bot.blockAt(new (require('vec3').Vec3)(fx, y + dy, fz))
+    const b = bot.blockAt(new ((require('vec3') as typeof import('vec3')).Vec3)(fx, y + dy, fz))
     if (!b || b.boundingBox === 'block' || BAD.test(b.name)) return false
   }
-  const under = bot.blockAt(new (require('vec3').Vec3)(fx, y - 1, fz))
+  const under = bot.blockAt(new ((require('vec3') as typeof import('vec3')).Vec3)(fx, y - 1, fz))
   return !(under && BAD.test(under.name))
 }
 
@@ -243,4 +243,4 @@ async function collect (bot, ctl, { target, safe = null, abortIf = null, maxMs =
   return { got, moved, why, ms: gameClock.now() - t0 }
 }
 
-module.exports = { track, plan, collect, pickable, arrowCount, hasRoom }
+export { track, plan, collect, pickable, arrowCount, hasRoom }

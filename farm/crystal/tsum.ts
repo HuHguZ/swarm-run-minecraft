@@ -4,9 +4,9 @@
 // бойцам и по ролям A/B (смена сторон), длительность, фактический TPS и
 // отставание часов, удары, затем приёмы — в скольких раундах, сколько раз и
 // оценка урона (trickDmg: падение хп врага за 1.5 с после приёма).
-//   node farm/crystal/tsum.js 'farm/crystal/s7-*.out' [--kit копья] [--top 25] [--json]
-const fs = require('fs')
-const path = require('path')
+//   node dist/farm/crystal/tsum.js 'farm/crystal/s7-*.out' [--kit копья] [--top 25] [--json]
+import * as fs from 'fs'
+import path = require('path')
 
 function files (args) {
   const out = []
@@ -91,7 +91,7 @@ function render (sums, { top = 25 } = {}) {
   return lines.join('\n')
 }
 
-module.exports = { parse, summarize, render }
+export { parse, summarize, render }
 
 if (require.main === module) {
   const argv = process.argv.slice(2)

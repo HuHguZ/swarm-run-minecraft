@@ -18,7 +18,7 @@ export interface RiptideBot extends MovementBot {
 }
 interface MetadataPacket { entityId: number; metadata: Array<{ key: number; value: unknown }> }
 export interface RiptidePlan extends JumpPlan { lift: number; impulse: Vec3 }
-const { PlayerState } = require('../tick-plugins').getPhysics() as { PlayerState: new(bot: MovementBot, control: typeof IDLE) => State }
+const { PlayerState } = (require('../tick-plugins') as typeof import('../tick-plugins')).getPhysics() as { PlayerState: new(bot: MovementBot, control: typeof IDLE) => State }
 
 // TridentItem.releaseUsing and the vanilla riptide enchantment component,
 // Paper 1.21.11: charge >=10, linear strength1.5+.75*(level-1), SELF lift1.2f.
@@ -92,8 +92,15 @@ export async function planRiptideTo(bot: MovementBot, ctl: Cancellation, level: 
   return null
 }
 
+// Итог рывка: ok/why/ticks, сэмплы фаз (ход к воде, активация, заряд, квитанция); при успехе — уровень, сила, смещение, посадка.
+export interface RiptideResult {
+  ok: boolean; why?: string; ticks: number; samples?: unknown[]
+  launchSamples?: unknown[]; activationSamples?: unknown[]; chargeSamples?: unknown[]; acknowledgementSamples?: unknown[]
+  chargedTicks?: number; serverSpin?: boolean; useServerAt?: number; releaseServerAt?: number; releaseState?: unknown
+  level?: number; strength?: number; moved?: number; landing?: Point
+}
 export async function runRiptide(bot: RiptideBot, ctl: Cancellation, item: RiptideItem, level: number, yaw: number, pitch: number,
-  wet: (state?: State) => boolean, releaseAtTick: (release: () => void) => Promise<unknown>, target?: Point, launch?: WaterLaunch) {
+  wet: (state?: State) => boolean, releaseAtTick: (release: () => void) => Promise<unknown>, target?: Point, launch?: WaterLaunch): Promise<RiptideResult> {
   if (!wet()) return { ok: false, why: 'riptide_requires_confirmed_water_or_rain', ticks: 0 }
   if (item.maxDurability != null && item.durabilityUsed != null && item.durabilityUsed + 1 >= item.maxDurability) return { ok: false, why: 'trident_next_damage_would_break', ticks: 0 }
   if (launch && (!Number.isInteger(launch.ticks) || launch.ticks < 1 || launch.ticks > 6 || !Number.isFinite(launch.yawOffset ?? 0))) return { ok: false, why: 'invalid_riptide_approach', ticks: 0 }

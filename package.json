@@ -6,19 +6,15 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:watch": "node scripts/build.mjs --watch",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.core.json",
-    "test": "npm run build && npm --prefix daemon test && node --test farm/*.test.js scripts/*.test.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "npm run build && npm run test:daemon && npm run test:farm",
+    "test:daemon": "cd daemon && node --enable-source-maps --test --test-timeout=120000 ../dist/daemon/test/*.test.js",
+    "test:farm": "node --enable-source-maps --test --test-timeout=120000 dist/farm/*.test.js scripts/*.test.mjs",
     "start:daemon": "npm run build && npm --prefix daemon start",
     "start:mcp": "npm run build && npm --prefix mcp start",
-    "campaign": "npm run build && node daemon/campaign.js",
-    "farm": "npm run build && node farm/farm.js",
-    "rpc": "npm run build && node run/rpc.js"
-  },
-  "imports": {
-    "#core/*": "./daemon/src/core/*.js",
-    "#body/*": "./daemon/src/*.js",
-    "#strategy/*": "./daemon/src/campaign/*.js",
-    "#tactics/*": "./daemon/src/tactics/*.js"
+    "campaign": "npm run build && node dist/daemon/campaign.js",
+    "farm": "npm run build && node dist/farm/farm.js",
+    "rpc": "npm run build && node dist/run/rpc.js"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { structureWorth, describeWorth } = require('../src/campaign/structure-value')
+import { structureWorth, describeWorth } from '../src/campaign/structure-value'
 
 const needs = (o: any = {}) => ({ iron: 8, lighter: true, food: 8, portal: false, diamondPick: true, beds: 5, ...o })
 

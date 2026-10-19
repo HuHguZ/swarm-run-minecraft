@@ -5,14 +5,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const Vec3 = require('vec3')
-const registry = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')(registry)
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
 
 function source(overrides = {}) {
   const file = path.resolve(__dirname, '../src/swarm-position-work.ts'), local = createRequire(file), module = { exports: {} as any }
-  const code = require('../../node_modules/esbuild').transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports, id => overrides[id] ?? local(id), module, file, path.dirname(file))
+  const code = (require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports, id => overrides[id] ?? local(id), module, file, path.dirname(file))
   return module.exports
 }
 function fixture() {
@@ -125,7 +125,7 @@ test('late tower continuation cannot emit controls or placement after cancellati
 })
 
 test('outpost includes a protected physical floor, two-high doorway and roof; beacon is two vertical real cells', () => {
-  const { swarmBlueprint } = require('../src/swarm-work')
+  const { swarmBlueprint }: typeof import('../src/swarm-work') = require('../src/swarm-work')
   const at = { x: 0, y: 64, z: 0 }, outpost = swarmBlueprint('outpost', at, 'north')
   assert.equal(outpost.cells.filter(c => c.at.y === 63).length, 9)
   assert.equal(outpost.cells.filter(c => c.at.y === 66).length, 9)
@@ -138,9 +138,9 @@ test('outpost includes a protected physical floor, two-high doorway and roof; be
 })
 
 test('observed position query prices an optional own-stock pillar and never proposes it through a ceiling or for recovery', async () => {
-  const f = fixture(), { swarmPositions } = require('../src/swarm-position')
+  const f = fixture(), { swarmPositions }: typeof import('../src/swarm-position') = require('../src/swarm-position')
   f.bot.inventory.items = () => [{ name: 'dirt', count: 8 }, { name: 'bow', count: 1 }, { name: 'arrow', count: 32 }]
-  const query = { purpose: 'ranged', methods: ['build'], radius: 1, limit: 3, reserve: { dirt: 2 } }
+  const query: import('../src/swarm-position').SwarmPositionQuery = { purpose: 'ranged', methods: ['build'], radius: 1, limit: 3, reserve: { dirt: 2 } }
   const result = await swarmPositions(f.bot, query)
   assert(result.candidates.length > 0)
   for (const c of result.candidates) {

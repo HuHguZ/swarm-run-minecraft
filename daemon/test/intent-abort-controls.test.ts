@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const lock = require('../src/reflex-lock')
-const { runIntent } = require('../src/session/intent-runner')
-const { EventBus } = require('../src/events')
+import lock = require('../src/reflex-lock')
+import { runIntent } from '../src/session/intent-runner'
+import { EventBus } from '../src/events'
 
 function deferred() {
   let resolve: (value?: any) => void
@@ -105,7 +105,7 @@ test('old intent abort cannot clear a replacement skill or its persistent goal',
 test('a defence started synchronously by path reset keeps its new keys', async () => {
   const f = fixture(), w = walking(f), release = deferred()
   await w.ready
-  const reset = f.bot.pathfinder.setGoal
+  const reset = f.bot.pathfinder.setGoal.bind(f.bot.pathfinder)
   let lease: any
   f.bot.pathfinder.setGoal = goal => {
     reset(goal)

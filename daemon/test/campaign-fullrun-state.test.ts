@@ -1,21 +1,29 @@
+import { declarationsOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
 
-const source = fs.readFileSync(process.env.CAMPAIGN_R4_SOURCE || path.join(__dirname, '../campaign.ts'), 'utf8')
+const source = campaignTs(process.env.CAMPAIGN_R4_SOURCE)
 function load(start: string, end: string, context: any) {
   const first = source.indexOf(start), last = source.indexOf(end, first)
   assert.ok(first >= 0 && last > first)
-  vm.runInNewContext(transformSync(source.slice(first, last), { loader: 'ts' }).code, context)
+  return run(source.slice(first, last), context)
+}
+// Объявления по именам: части daemon/campaign/ разнесли бывших соседей по текстам.
+function run(code: string, context: any) {
+  vm.runInNewContext(transformSync(code, { loader: 'ts' }).code, cjsContext(withSetters(context)))
   return context
 }
 const quantity = (inventory: any) => (name: any) => typeof name === 'string' ? inventory[name] || 0 :
   Object.entries(inventory).reduce((n, [item, count]) => n + (name.test(item) ? Number(count) : 0), 0)
 function gear(env: any = {}, inventory: any = { iron_ingot: 1 }, armor: any = {}) {
-  return load('const GEAR_CALC =', '\nfunction worn (', { process: { env }, state: { armor }, have: quantity(inventory) }).gearWorth('iron_chestplate')
+  return run(declarationsOf(source, 'GEAR_CALC', 'ARMOR_POINTS', 'ARMOR_COST', 'ARMOR_SLOT', 'armorPointsNow', 'armorCut', 'gearWorth'),
+    { process: { env }, state: { armor }, have: quantity(inventory) }).gearWorth('iron_chestplate')
 }
 
 test('fp1-s13: legacy armor estimate remains 18 minutes when the flag is off', () => {
@@ -84,7 +92,7 @@ async function enter(env: any, options: any = {}) {
     cook: async () => { calls.push('cook'); if (options.interrupt) ctx.strategyInterrupted = true },
     act: async (method: string) => { calls.push(method); return { status: 'done', detail: { went: true } } }
   }
-  load('async function enterNether ()', '\ndefStage(\'prep\'', ctx)
+  run(declarationsOf(source, 'enterNether'), ctx)
   await ctx.enterNether()
   return calls
 }

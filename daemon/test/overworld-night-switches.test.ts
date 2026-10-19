@@ -6,8 +6,9 @@ import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { candidates, type TacticalState } from '../src/tactics/state'
 import { TacticalArbiter } from '../src/tactics/arbiter'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const flags = ['ND_OW_NIGHT_FLEE', 'ND_OW_NIGHT_BLOCKOFF', 'ND_OW_NIGHT_CREEPER']
 function withFlags(values: Array<string | undefined>, fn: () => any) {
@@ -30,7 +31,7 @@ const state = (extra: Partial<TacticalState> = {}): TacticalState => ({ at: 0, h
 function load(file: string, overrides: Record<string, any>) {
   const local = createRequire(file), module = { exports: {} as any }
   const code = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     id => Object.prototype.hasOwnProperty.call(overrides, id) ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -96,7 +97,7 @@ for (const value of ['0', '1']) test(`BLOCKOFF=${value}: C7 and the speedrun poc
         sitOn: () => true, holdOut: async () => ({ why: 'no_food', ate: [] }),
         sitTight: async () => { calls.push('sit'); return { sat: 1 } } }
       const start = source.indexOf('async function refugeBody (')
-      vm.runInNewContext(transformSync(source.slice(start, source.indexOf('\nasync function takeHole', start)) + '\nthis.run=refugeBody', { loader: 'ts' }).code, ctx)
+      vm.runInNewContext(transformSync(source.slice(start, source.indexOf('\nasync function takeHole', start)) + '\nthis.run=refugeBody', { loader: 'ts' }).code, cjsContext(ctx))
       const result = await ctx.run({ bot, playPolicy: { mode: speedrun ? 'speedrun' : 'other' } }, { aborted: false },
         { t0: 0, minHp: 16, deadline: 60000, out, step() {}, hurts: [] })
       assert.equal(!!result.stayed, wanted, `C7=${night}, speedrun=${speedrun}`)

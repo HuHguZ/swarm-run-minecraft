@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const flee = require('../src/flee')
-const assess = require('../src/assess')
-const clockMod = require('../src/game-clock')
-const { outsideDanger, sitTight } = require('../src/survival/hold-out')
+import { Vec3 } from 'vec3'
+import flee = require('../src/flee')
+import assess = require('../src/assess')
+import * as clockMod from '../src/game-clock'
+import { outsideDanger, sitTight } from '../src/survival/hold-out'
 
 test('a lone occluded skeleton releases the recovered pocket without opening it or waiting eight seconds', async () => {
   const saved = { flag: process.env.ND_REFUGE_SPATIAL_EXIT, hostiles: flee.hostilesAround, sight: assess.inSight }
@@ -34,7 +34,7 @@ test('visible archer range has a spatial return margin; melee crowd and creeper 
   process.env.ND_REFUGE_SPATIAL_EXIT = '1'
   const at = new Vec3(0, 16, 0), archer = { id: 2, name: 'skeleton', position: new Vec3(0, 16, 15) }
   const bot: any = { health: 20, food: 20, game: { dimension: 'overworld' }, time: { timeOfDay: 6000 } }
-  let distance = 15, visible = true, foes = [{ e: archer, d: distance, doc: flee.DOCTRINE.skeleton }]
+  let distance = 15, visible = true, foes: any[] = [{ e: archer, d: distance, doc: flee.DOCTRINE.skeleton }]
   flee.hostilesAround = () => foes.map(h => ({ ...h, d: distance }))
   assess.inSight = () => visible
   const shooters = new Set<number>()

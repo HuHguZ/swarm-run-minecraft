@@ -7,9 +7,9 @@
 import { EventEmitter } from 'node:events'
 import { jumpHeight, type SimWorld } from './sim-world'
 
-const { Vec3 } = require('vec3')
-const clock = require('../game-clock')
-const registry = require('minecraft-data')('1.21.11')
+import { Vec3 } from 'vec3'
+import * as clock from '../game-clock'
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 const ARMOR: Record<number, string[]> = { 0: [], 7: ['leather'], 15: ['iron'], 20: ['diamond'] }
 const HEIGHT: Record<string, number> = { creeper: 1.7, spider: .9, cave_spider: .5, skeleton: 1.99, piglin_brute: 1.95, player: 1.8,
@@ -86,15 +86,15 @@ export function mineflayerFacade(world: SimWorld, session: Record<string, any>) 
       b.waterBucket && item('water_bucket'), b.frPotion > 0 && item('potion', b.frPotion, potion), b.pearls > 0 && item('ender_pearl', b.pearls)]
       .filter(Boolean) as Array<Record<string, unknown>>
     const entities: Record<number, any> = { 1: bot.entity }
-    const swell = registry.entitiesByName.creeper.metadataKeys.indexOf('swell_dir')
-    const powered = registry.entitiesByName.creeper.metadataKeys.indexOf('is_powered')
+    const swell = registry.entitiesByName.creeper.metadataKeys!.indexOf('swell_dir')
+    const powered = registry.entitiesByName.creeper.metadataKeys!.indexOf('is_powered')
     for (const e of world.enemies) {
       if (e.hp <= 0) continue
       const name = e.player ? 'player' : e.kind
       const metadata: unknown[] = []
       if (e.kind === 'creeper') { metadata[swell] = e.swellDir; metadata[powered] = e.charged }
       if (e.kind === 'polar_bear') { metadata[15] = e.hostile ? 4 : 0; metadata[16] = false }
-      if (/^(skeleton|stray|bogged|parched)$/.test(e.kind)) metadata[registry.entitiesByName[e.kind].metadataKeys.indexOf('living_entity_flags')] = e.bowDraw >= 0 ? 1 : 0
+      if (/^(skeleton|stray|bogged|parched)$/.test(e.kind)) metadata[registry.entitiesByName[e.kind].metadataKeys!.indexOf('living_entity_flags')] = e.bowDraw >= 0 ? 1 : 0
       entities[e.id] = { id: e.id, name, type: e.player ? 'player' : 'mob', ...(e.player ? { username: `Tank${e.id}` } : {}),
         position: new Vec3(e.x + .5, 64 + e.y + lift(Math.floor(e.x + .5), Math.floor(e.z + .5)), e.z + .5), velocity: new Vec3(0, 0, 0), height: name === 'polar_bear' ? 1.4 : HEIGHT[name] ?? 1.95, width: name === 'polar_bear' ? 1.4 : .6, isValid: true,
         yaw: Math.atan2(e.x - b.x, e.z - b.z), equipment: /^(stray|bogged|parched)$/.test(name) ? [item('bow')] : HAND[name] ? [item(HAND[name])] : [], metadata }

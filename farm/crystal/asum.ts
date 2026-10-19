@@ -1,6 +1,6 @@
 'use strict'
-// Сводка строк ARMS_ROUND гонки вооружений (s7, 06.10): node farm/crystal/asum.js <slot-27.out|jsonl> [--plan] [--dec]
-const fs = require('fs')
+// Сводка строк ARMS_ROUND гонки вооружений (s7, 06.10): node dist/farm/crystal/asum.js <slot-27.out|jsonl> [--plan] [--dec]
+import * as fs from 'fs'
 const rows: any[] = []
 for (const f of process.argv.slice(2).filter(a => !a.startsWith('--'))) for (const l of fs.readFileSync(f, 'utf8').split(/\r?\n/)) { const i = l.indexOf('{"n"'); if (i >= 0) try { rows.push(JSON.parse(l.slice(i))) } catch {} }
 for (const r of rows) {

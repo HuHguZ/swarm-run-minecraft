@@ -1,8 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const fs = require('node:fs'), path = require('node:path'), { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3'), data = require('minecraft-data')('1.21.11'), Block = require('prismarine-block')(data)
-const clear = fs.existsSync(path.join(__dirname, '../src/blaze-clear.js')) ? require('../src/blaze-clear') : {}
+import * as fs from 'node:fs'
+import path = require('node:path')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'), Block = (require('prismarine-block') as typeof import('prismarine-block'))(data as any)
+const clear: Partial<typeof import('../src/blaze-clear')> = fs.existsSync(path.join(__dirname, '../src/blaze-clear.js')) ? (require('../src/blaze-clear') as typeof import('../src/blaze-clear')) : {}
 const sp = new Vec3(0, 0, 0)
 function block(name, p) { const b = Block.fromStateId(data.blocksByName[name].defaultState, 0); b.position = p; return b }
 function fixture() {
@@ -52,7 +55,7 @@ test('a visible profitable isolated fence can be selected, then actually mined',
   const result = await clear.execute({ bot }, ctl, p, () => true)
   assert.equal(result.ok, true); assert.equal(bot.blockAt(p.pos).name, 'air')
   assert.equal(digLook, 'ignore', 'mineflayer must preserve the certified face aim instead of looking at the centre')
-  assert.ok(bot._ndBlazeClearOverheadMs >= require('../src/game-clock').TICK_MS)
+  assert.ok(bot._ndBlazeClearOverheadMs >= (require('../src/game-clock') as typeof import('../src/game-clock')).TICK_MS)
   assert.equal(bot.listenerCount('physicsTick'), 0)
 })
 test('no rods missing, no tool, protected cover, or an unreachable target means no pick action', () => {
@@ -111,7 +114,7 @@ test('a full above-platform column is priced as a set, and a threat after its fi
     }
     // Legitimate prior views from walking around the column; the current aim still has to reach both faces.
     bot._ndBlazeClearObserved = { world: bot.world, dimension: bot.game.dimension, cells: remembered }
-    const blocks = [...cells].map(([k, n]) => block(n, new Vec3(...k.split(',').map(Number))))
+    const blocks = [...cells].map(([k, n]) => block(n, new Vec3(...(k.split(',').map(Number) as [number, number, number]))))
     const before = clear.chance(sp, blocks)
     if ([1, 2].some(y => clear.chance(sp, blocks, new Set([`${x},${y},${z}`])) > before + 1e-12)) continue
     const p = clear.plan(bot, sp, { rods: 7 })
@@ -171,7 +174,7 @@ test('TNT uses minimum guaranteed masonry yield and maximum damage with a bounde
 })
 
 test('TNT exact placement and the final ignition guard preserve the previous arena API', async () => {
-  const tnt = require('../src/tnt'), build = require('../src/build'), original = build.placeBlockAt
+  const tnt: typeof import('../src/tnt') = require('../src/tnt'), build: typeof import('../src/build') = require('../src/build'), original = build.placeBlockAt
   try {
     for (const approved of [false, true]) {
       const { bot, put } = fixture(), placements = [], cell = new Vec3(2, 1, 0)

@@ -1,9 +1,10 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Run the actual RPC entry with the dimension switched before its first column arrives.
 function arrival ({ loaded = false, cancel = false, timeout = false, lost = null }: any = {}) {
@@ -43,9 +44,9 @@ function arrival ({ loaded = false, cancel = false, timeout = false, lost = null
     './precision': { precisionRate: () => 0, precisionOff () {} }
   }
   const module = { exports: {} as any }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext({
     module, exports: module.exports, require: name => mocks[name] || local(name), console: { error () {} }, process
-  }, { filename: file })
+  }), { filename: file })
   return { run: async () => {
     try { return await module.exports.dragon(session, ctl, { timeoutSeconds: 6 }) } catch (e) { return { error: e.message } }
   },

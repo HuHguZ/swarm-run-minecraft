@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { createSwarmDriver } = require('./swarm-driver')
+import { createSwarmDriver } from './swarm/swarm-driver'
 
 test('a fresh committed fight approaches the observed opponent and attacks on the next reported contact', async () => {
   const priorNow = Date.now; let now = priorNow()
@@ -47,7 +47,7 @@ test('a fresh long-range fight keeps a witnessed ranged high-ground position', a
 })
 
 test('independent allied reports share one planning cycle while a new danger still triggers immediate panic', async () => {
-  const { SwarmBoard } = require('../daemon/src/swarm')
+  const { SwarmBoard }: typeof import('../daemon/src/swarm') = require('../daemon/src/swarm')
   const priorUpsert = SwarmBoard.prototype.upsert, priorNow = Date.now
   let now = priorNow(), plans = 0
   Date.now = () => now
@@ -693,7 +693,7 @@ for (const interrupted of [false, true]) test('яма с места, без по
   assert.equal(calls.filter(c => c.method === 'swarm_work').length, work.length, 'готовую яму не копать снова')
 })
 test('отбор ямы: свой пол, вне опоры, в досягаемости нижнего блока', () => {
-  const { canDigTrap } = require('../daemon/src/swarm')
+  const { canDigTrap }: typeof import('../daemon/src/swarm') = require('../daemon/src/swarm')
   const s = { x: 1, y: 63, z: 0, feetY: 64 }
   assert.equal(canDigTrap({ x: .5, y: 64, z: .5 }, s), true)
   assert.equal(canDigTrap({ x: 1.25, y: 64, z: .5 }, s), false)
@@ -701,7 +701,7 @@ test('отбор ямы: свой пол, вне опоры, в досягаем
   assert.equal(canDigTrap({ x: .5, y: 72, z: .5 }, s), false)
 })
 test('копку ямы не отбирает обычная тактика; мало хп и аварии снимают защиту', () => {
-  const { protectedClimb } = require('../daemon/src/reflex-lock')
+  const { protectedClimb }: typeof import('../daemon/src/reflex-lock') = require('../daemon/src/reflex-lock')
   const s: any = { current: { name: 'swarm_work', params: { kind: 'dig', _climb: true }, ctl: { aborted: false } },
     bot: { health: 20, entity: {} }, cfg: { lowHealth: 8 }, tactics: { snapshot: () => ({ state: {} }) } }
   assert.equal(protectedClimb(s), true)

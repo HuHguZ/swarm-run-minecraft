@@ -1,7 +1,7 @@
 // Рельеф у фонтана Энда по файлам региона (02.10, поток dragon): высота земли вокруг столба относительно P (клетка над верхним
 // бедроком столба) — где можно стоять у головы сидящего. Читает world_the_end/DIM1/region/*.mca слота фермы (мир сохранён).
-//   node farm/dragon/offline/end-terrain.js farm/server-1 [farm/server-2 ...]
-const fs = require('fs'); const path = require('path'); const zlib = require('zlib')
+//   node dist/farm/dragon/offline/end-terrain.js farm/server-1 [farm/server-2 ...]
+import * as fs from 'fs'; import path = require('path'); import * as zlib from 'zlib'
 const nbt = require(path.join(__dirname, '..', '..', '..', 'daemon', 'node_modules', 'prismarine-nbt'))
 function readChunk (dir, cx, cz) {
   const rx = Math.floor(cx / 32); const rz = Math.floor(cz / 32)

@@ -1,9 +1,9 @@
 'use strict'
 // ARENA_TERRAIN=1 (D1, 2026-10-06): случайный рельеф отдельным модулем —
 // повторяем по seed, точки появления и полоса между ними свободны.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const tr = require('../arena-terrain-random')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as tr from '../arena/arena-terrain-random'
 
 async function build (seed) {
   const cmds = []

@@ -16,16 +16,16 @@
 // ХП ПРОТИВНИКА-ИГРОКА — ОЦЕНКА (hp-estimate), не метаданные: пользователь 06.10 — точное хп игрока чит.
 // Точное хп — только мобам (honest:false для игрока — только для замеров сцен) и телеметрии:
 // exactHpTelemetryOnly.
-const read = require('../read')
-const dm = require('./damage-model')
-const { createHpEstimate } = require('./hp-estimate')
-const gameClock = require('../game-clock')
+import * as read from '../read'
+import * as dm from './damage-model'
+import { createHpEstimate } from './hp-estimate'
+import * as gameClock from '../game-clock'
 
 const lazy = (path) => { let m = null; return () => m || (m = require(path)) }
 const pick = lazy('../pick')
 const assess = lazy('../assess')
 const gamedata = lazy('../gamedata')
-const pvp = lazy('../pvp')
+const potions = lazy('./potions')
 
 const isPlayer = (e) => !!e && (e.type === 'player' || !!e.username)
 
@@ -47,7 +47,7 @@ function itemObs (bot, it) {
   if (!it || !it.name) return null
   const ench = {}
   // Полный map нужен и подготовке: Unbreaking не усиливает удар, но стол не зачарует такую вещь заново.
-  try { for (const e of require('../enchant').enchantsOf(bot, it)) if (e.level > 0) ench[e.name] = e.level } catch {}
+  try { for (const e of (require('../enchant') as typeof import('../enchant')).enchantsOf(bot, it)) if (e.level > 0) ench[e.name] = e.level } catch {}
   const o: any = { name: it.name, count: it.count ?? 1, ench }
   if (it._ndVisual) o.enchanted = !!it.enchanted
   if (it.name === 'crossbow') o.crossbow = read.crossbowInfo(bot, it)
@@ -150,7 +150,7 @@ function readFoeEstimate (bot, { roundScope, target }: any = {}) {
 // noteAttack(range) зовёт бой сразу после удара/выстрела (range — planAttack(...).action.range).
 function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roundScope = null, now = () => gameClock.now() }: any = {}) {
   const player = isPlayer(entity)
-  const visible = () => { try { return isVisible ? isVisible(entity) : (entity._ndVisible ?? (player ? require('./last-seen').seesPlayer(bot, entity) : assess().inSight(bot, entity))) } catch { return false } }
+  const visible = () => { try { return isVisible ? isVisible(entity) : (entity._ndVisible ?? (player ? (require('./last-seen') as typeof import('./last-seen')).seesPlayer(bot, entity) : assess().inSight(bot, entity))) } catch { return false } }
   const memory = player && honest ? memoryFor(bot, roundScope) : null
   const key = foeKey(entity)
   let entry = key && memory?.targets.get(key)
@@ -168,7 +168,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
 
   // Только еда и зелья (ревью Codex: опущенный щит/лук после ≥ 30 тиков тоже «кончил использовать» — шёл в «съел»).
   const consumed = (u) => {
-    if (/potion$/.test(u.name)) { const n = pvp().potionOf(u.item); if (n) hp.drink(n); else if (T.honestHp) hp.heal(0, 20) } else if (bot.registry?.foodsByName?.[u.name]) {
+    if (/potion$/.test(u.name)) { const n = potions().potionOf(u.item); if (n) hp.drink(n); else if (T.honestHp) hp.heal(0, 20) } else if (bot.registry?.foodsByName?.[u.name]) {
       hp.eat(u.name)
       if (/^(enchanted_)?golden_apple$/.test(u.name)) T.seenApples++
     }
@@ -206,7 +206,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
       if (!vis) T.using = null
     }
     const rawUse = usingOf(bot, entity)
-    const u = rawUse && T.honestHp ? { name: rawUse.name, item: require('./last-seen').visiblePlayerItem(rawUse.item) } : rawUse
+    const u = rawUse && T.honestHp ? { name: rawUse.name, item: (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem(rawUse.item) } : rawUse
     if (u && (!T.using || T.using.name !== u.name)) {
       let vis = !T.honestHp
       vis = vis || visible()
@@ -220,7 +220,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
   // Разброс урона моего попадания: ближний — заряд 0.9…1 без крита и с критом; лук/арбалет — стрела.
   const guessRange = (type = 'player_attack') => {
     try {
-      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? require('./last-seen').visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
+      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
       // Не обычный удар рукой: таран/разгон копья (spear, до ~30 до брони), булава с падения (mace_smash, до ~45),
       // ракета/взрыв, трезубец — широкий разброс по своему типу (броня и чары — его, видимые).
       const wide = (rawMax, kind) => { const hi = dm.afterDefense(rawMax, kind, def); return { min: Math.min(1, hi), max: hi, mean: hi / 2, raw: rawMax } }
@@ -261,7 +261,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     if (!T.honestHp || !visible()) return
     const type = gamedata().damageTypeName(pk.sourceTypeId) || ''
     if (type === 'fall' && T.lastLanding && T.tick - T.lastLanding.tick <= 2) {
-      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? require('./last-seen').visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
+      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
       const d = dm.afterDefense(dm.fallRaw(T.lastLanding.h), 'fall', def)
       hp.env(d * 0.8, d * 1.1)
     } else {
@@ -284,9 +284,9 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     if (!T.honestHp || !visible() || !near(e.position, 4.25)) return
     try {
       const raw = (e.metadata || []).find(x => x && (x.itemId != null || x.components))
-      const Item = require('prismarine-item')(bot.version)
+      const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.version)
       const item = raw ? Item.fromNotch(raw) : null
-      const n = pvp().potionOf(T.honestHp ? require('./last-seen').visiblePlayerItem(item) : item)
+      const n = potions().potionOf(T.honestHp ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem(item) : item)
       if (n) hp.splash(n)
       else if (T.honestHp) hp.heal(0, 20)
     } catch {}
@@ -333,11 +333,11 @@ function reachTo (bot, e) {
 function observe (bot, entity, { tracker = null, since = 99, smash = null, boom = null, shieldOffTicks = 0, honest = true }: any = {}) {
   const me = bot.entity
   const player = isPlayer(entity)
-  const eq = (entity.equipment || []).map(it => player && honest ? require('./last-seen').visiblePlayerItem(it) : it)
+  const eq = (entity.equipment || []).map(it => player && honest ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem(it) : it)
   let hp
   if (player && honest) hp = tracker ? tracker.hp.snapshot() : { lo: 0, hi: 20, mean: 10, conf: 0, exact: false }
   else { const h = exactHpTelemetryOnly(bot, entity) ?? 20; hp = { lo: h, hi: h, mean: h, conf: 1, exact: true } }
-  const los = (() => { try { return entity._ndVisible ?? (player ? require('./last-seen').seesPlayer(bot, entity) : assess().inSight(bot, entity)) } catch { return false } })()
+  const los = (() => { try { return entity._ndVisible ?? (player ? (require('./last-seen') as typeof import('./last-seen')).seesPlayer(bot, entity) : assess().inSight(bot, entity)) } catch { return false } })()
   const effects = {}
   if (!honest || !player || los) for (const n of read.effectsOf(bot, entity)) effects[n] = true
   const using = !honest || !player || los ? usingOf(bot, entity) : null
@@ -397,4 +397,4 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   }
 }
 
-module.exports = { observe, trackFoe, readFoeEstimate, foeHpUpper, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }
+export { observe, trackFoe, readFoeEstimate, foeHpUpper, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }

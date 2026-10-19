@@ -16,7 +16,7 @@ test('food ignition requires an edible target, safe visible dry ground and a res
 })
 
 test('existing ground-use ignition emits only with an honest face and requires server fire receipt', async () => {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   let now = 0; let clicks = 0; let sees = true; let fire = false
   const item = { name: 'flint_and_steel' }
   const base = { name: 'stone', boundingBox: 'block', position: new Vec3(0, 0, 0) }

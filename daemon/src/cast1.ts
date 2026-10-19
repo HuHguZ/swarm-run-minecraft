@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Литьё рамы ОДНИМ ведром, стоя на берегу лавового озера (поток route, 03.10.2026) — раннерский приём.
 //
 // Зачем. cast.js льёт двумя вёдрами (лава + вода, 6 железа) и ходит к лаве на каждую клетку, со столбами у рамы
@@ -32,11 +32,11 @@ const gameClock = require('./game-clock')
 // пакете use_item, 1.21.2+; mineflayer lookAt(force) пакета взгляда не шлёт) — окно ~3 тика вместо 8–12, а лава
 // и все прицелы считаются ДО воды; лавы со столба нет — вода не льётся вовсе.
 
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz } = require('./movement')
-const { equipBestTool, missingHarvestTool } = require('./items')
-const { placeBlockAt, towerUp } = require('./build')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const { sleep, xyz }: typeof import('./movement') = require('./movement')
+const { equipBestTool, missingHarvestTool }: typeof import('./items') = require('./items')
+const { placeBlockAt, towerUp }: typeof import('./build') = require('./build')
 
 const UP = new Vec3(0, 1, 0)
 const DOWN = new Vec3(0, -1, 0)
@@ -169,7 +169,9 @@ async function useAt (bot, aim, from, { tries = 2, wait = 260 }: any = {}) {
 }
 
 // Оценка места. read(p) — блок или null. Возвращает { plan } или { why }.
-function judge1 (read, g, { me = null, maxDig = 40 }: any = {}) {
+// Вердикт judge1: why — отказ, plan — рама у озера.
+interface Judge1 { why?: string; plan?: { axis: any; side: any; origin: any; dig: any[]; place: any[]; lava: number; high: number; high0: number; score: number } }
+function judge1 (read, g, { me = null, maxDig = 40 }: any = {}): Judge1 {
   const dig = []
   const place = []
   const bad = why => ({ why })
@@ -913,3 +915,7 @@ async function castOne (session, ctl, p: any = {}) {
 }
 
 module.exports = { shoreFirst, castOne, plan1, judge1, geom1, cells, siteCells1, materialNeed1, lakeReach, sourceState1, useAt, PLACE1 }
+export {
+  shoreFirst, castOne, plan1, judge1, geom1, cells, siteCells1, materialNeed1, lakeReach, sourceState1, useAt,
+  PLACE1
+}

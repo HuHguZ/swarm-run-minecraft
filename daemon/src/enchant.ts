@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Зачарование: стол, книжные полки, лазурит, уровни опыта — и главное, ЧТО
 // зачаровывать и ЗАЧЕМ. Все числа — из самой игры (paper-1.21.11, байткод и
 // data/minecraft/enchantment/*.json), см. SPEEDRUN.md «Зачарование».
@@ -20,12 +20,12 @@ const gameClock = require('./game-clock')
 // Подсказка стола показывает ОДНО из зачарований строки; на дорогой строке их
 // часто два-три. Выбор здесь — по подсказке, с поправкой на цену строки.
 
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz } = require('./movement')
-const { withTimeout, placeBlockAt } = require('./build')
-const actions = require('./actions')
-const { countOf, equipBestTool } = require('./items')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals } from 'mineflayer-pathfinder'
+import { sleep, xyz } from './movement'
+import { withTimeout, placeBlockAt } from './build'
+import actions = require('./actions')
+import { countOf, equipBestTool } from './items'
 
 // ------------------------------------------------------------ факты игры
 
@@ -993,7 +993,7 @@ async function run (session, ctl, p: any = {}) {
       [5, 6, 7, 8].map(s => bot.inventory.slots[s]).find(i => i && i.name === p.item && !enchantsOf(bot, i).length)
     let it = look()
     // Рюкзак мог разойтись с сервером после чужого окна (invsync) — сверить раз.
-    if (!it) { try { require('./invsync').resync(bot) } catch {} await sleep(700); it = look() }
+    if (!it) { try { (require('./invsync') as typeof import('./invsync')).resync(bot) } catch {} await sleep(700); it = look() }
     if (!it) throw new Error(`нет незачарованного ${p.item}`)
     if (!kindOf(it.name)) throw new Error(`${p.item} в стол не кладётся (щит, элитры, ножницы — только наковальней)`)
     targets = [{ item: it, kind: kindOf(it.name) }]
@@ -1033,7 +1033,7 @@ async function run (session, ctl, p: any = {}) {
   return out
 }
 
-module.exports = {
+export {
   run, plan, shelfPower, shelfCells, costRange, enchantsOf, kindOf, worthFor, rankOffers,
   chooseTargets, anvilEstimate, conflicts, pointsBetween, xpForNext, ENCH, WANT, XP_WAYS
 }

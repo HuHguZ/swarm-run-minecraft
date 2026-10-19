@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Поиск крепости оком эндера (mc_stronghold mode=find | throw | solve | blind).
 //
 // Механика — исходники 1.21.11 (extremeheat/extracted_minecraft_data, ветка
@@ -38,10 +38,10 @@ const gameClock = require('./game-clock')
 // углов (гаусс, σ из точности замера). Один бросок — список вдоль луча с
 // вероятностями, два из разных точек — обычно одна точка с p ≈ 1.
 
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz, travelXZ } = require('./movement')
-const { itemNamed, countOf } = require('./items')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals } from 'mineflayer-pathfinder'
+import { sleep, xyz, travelXZ } from './movement'
+import { itemNamed, countOf } from './items'
 
 const TAU = Math.PI * 2
 const DEG = 180 / Math.PI
@@ -217,9 +217,9 @@ function ringOf (R) {
 // pathfinder «partial» 37 с): встать под ним, столбом вверх до листвы над
 // головой, сломать её — око падает на нас. Потом столб разобрать.
 async function climbFor (bot, ctl, item) {
-  const { towerUp } = require('./build')
-  const { standable } = require('./walkable')
-  const tools = require('./tools')
+  const { towerUp }: typeof import('./build') = require('./build')
+  const { standable }: typeof import('./walkable') = require('./walkable')
+  const tools: typeof import('./tools') = require('./tools')
   const p = item.position.floored()
   // Клетка под ним или рядом (до 2 по горизонтали): столб рядом тоже годится —
   // подбор берёт на блок вбок (коробка тела +1), лишь бы встать на его высоту.
@@ -296,7 +296,7 @@ async function climbFor (bot, ctl, item) {
 }
 
 async function fetchDrop (bot, ctl, item, had, { maxMs = 30000 }: any = {}) {
-  const { inWater, escapeWater } = require('./movement')
+  const { inWater, escapeWater }: typeof import('./movement') = require('./movement')
   const t0 = gameClock.now()
   let how = 'пешком'
   let swam = 0
@@ -817,7 +817,7 @@ function blindPlan (pos, world = 'the_nether') {
   }
 }
 
-module.exports = {
+export {
   mappedRoom, roomApproach,
   throwEye, findStronghold, solve, solveStored, intersect, candidates, lsPoint, ringDensity, ringOf,
   blindPlan, blindExpect, storedThrows, rememberThrow, asRay, RINGS, PLACE, EYE_REACH, POS_ERR

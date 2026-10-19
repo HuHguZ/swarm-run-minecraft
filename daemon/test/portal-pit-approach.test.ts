@@ -1,12 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
 const sourceFile = process.env.PORTAL_APPROACH_SOURCE || path.join(__dirname, '../src/nether.js')
 const realRequire = createRequire(sourceFile)
 const sourceCode = text => transformSync(text, { loader: 'ts' }).code
@@ -22,7 +23,7 @@ test('проход без кирки использует видимую рас�
     dig: async () => { remaining = false; ctl.aborted = true } }
   const context: any = { module: { exports: {} }, console, process, setTimeout, clearTimeout,
     require: name => name === './movement' ? { ...realRequire(name), sleep: async () => {} } : realRequire(name) }
-  vm.runInNewContext(sourceCode(fs.readFileSync(sourceFile, 'utf8')), context)
+  vm.runInNewContext(sourceCode(bodySource(sourceFile)), cjsContext(context))
   const result = await context.module.exports.bore({ bot, mcData: { blocks: { 1: { harvestTools: { 2: true } } }, items: { 2: { name: 'stone_pickaxe' } } } }, ctl,
     { x: 5, z: 0 }, { maxSteps: 2, maxY: 66 })
   assert.equal(result.dug, 1)
@@ -48,7 +49,7 @@ async function fallingBore ({ name = 'gravel', falls = 2, afterDig = null }: any
   const context: any = { module: { exports: {} }, console, process, setTimeout, clearTimeout,
     require: dependency => dependency === './movement' ? { ...realRequire(dependency), sleep: async () => {} }
       : dependency === './game-clock' ? { ...realRequire(dependency), now: () => now } : realRequire(dependency) }
-  vm.runInNewContext(sourceCode(fs.readFileSync(sourceFile, 'utf8')), context)
+  vm.runInNewContext(sourceCode(bodySource(sourceFile)), cjsContext(context))
   const result = await context.module.exports.bore({ bot, mcData }, ctl, { x: 3, z: 0 }, { maxSteps: 1, deadline: 1000 })
   return { digs, result }
 }
@@ -122,7 +123,7 @@ async function gravityWindowBore ({ mode = 'landed' } = {}) {
       name === './perception/eyes' ? { ...realRequire(name), entities: () => falling && (now >= 150 || mode.startsWith('initial')) ? [{ id: 1,
         name: mode === 'cow' ? 'cow' : 'falling_block', seen: mode !== 'hidden',
         pos: { x: mode === 'adjacent' ? 2.5 : 1.5, y: 66, z: .5 }, lastPos: { x: 1.5, y: 66, z: .5 } }] : [] } : realRequire(name) }
-  vm.runInNewContext(sourceCode(fs.readFileSync(sourceFile, 'utf8')), context)
+  vm.runInNewContext(sourceCode(bodySource(sourceFile)), cjsContext(context))
   const result = await context.module.exports.bore({ bot, mcData }, ctl, { x: 3, z: 0 }, { maxSteps: 1, deadline: mode === 'deadline' ? 250 : mode === 'initial-deadline' ? 450 : 1000 })
   return { result, digs, movedAt, now }
 }
@@ -173,7 +174,7 @@ for (const [mode, why] of [['initial-deadline', /время вышло/], ['init
 
 for (const [height, aborted, climbs] of [[5, false, 1], [0, false, 0], [5, true, 0]] as Array<[number, boolean, number]>) {
   test(`подход к порогу: высота ${height}, отмена ${aborted}, подъёмов ${climbs}`, async () => {
-    const { functionSource } = require('./source-fixture')
+    const { functionSource }: typeof import('./source-fixture') = require('./source-fixture')
     const ctl = { aborted, onAbort: [] }
     const target = new Vec3(0, 64 + height, 0)
     const bot = { entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true }, health: 20 }
@@ -185,7 +186,7 @@ for (const [height, aborted, climbs] of [[5, false, 1], [0, false, 0], [5, true,
       walkNear: async () => ({ ok: false }), walkToward: async (_s, _c, to, _d, options) => { moves.push(options); bot.entity.position = to; return { ok: true } },
       sameCell: () => bot.entity.position === target, portalChanged: () => false, insidePortal: () => false,
       xyz: p => ({ x: p.x, y: p.y, z: p.z }), sleep: async () => {}, stepTo: async () => { ctl.aborted = true } }
-    vm.runInNewContext(sourceCode(functionSource(sourceFile, 'enter') + ';this.run = enter'), context)
+    vm.runInNewContext(sourceCode(functionSource(sourceFile, 'enter') + ';this.run = enter'), cjsContext(context))
     const result = await context.run({ bot, mcData: {}, journal: { state: {} } }, ctl, { timeoutSeconds: 30 })
     assert.equal(moves.length, climbs)
     if (climbs) assert.equal(moves[0].range, 0)

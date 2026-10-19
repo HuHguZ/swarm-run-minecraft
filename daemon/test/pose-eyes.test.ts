@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-const Vec3 = require('vec3')
-const pick = require('../src/pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import pick = require('../src/pick')
 
 test('Minecraft player eye and body geometry follows pose and shared flags', () => {
   const bot: any = { entity: { position: new Vec3(0, 10, 0), metadata: [], height: 1.8 }, getControlState: () => false }

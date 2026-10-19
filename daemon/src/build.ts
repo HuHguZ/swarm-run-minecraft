@@ -1,8 +1,8 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { sleep, xyz, centerOnFloor } = require('./movement')
-const { itemNamed, itemMatching, equipBestTool, missingHarvestTool } = require('./items')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { sleep, xyz, centerOnFloor }: typeof import('./movement') = require('./movement')
+const { itemNamed, itemMatching, equipBestTool, missingHarvestTool }: typeof import('./items') = require('./items')
 
 // Putting a block at a *chosen* coordinate, as opposed to "somewhere near me".
 // actions.place() answers "drop a crafting table around here"; walling off a
@@ -54,15 +54,15 @@ function ghastThreat (bot) {
   if (c && now - c.at < 1000) return c.v
   let v = false
   try {
-    v = require('./perception/eyes').entities(bot, { radius: 64 }).some(e => e.name === 'ghast' && e.seen) ||
-      require('./perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).length > 0
+    v = (require('./perception/eyes') as typeof import('./perception/eyes')).entities(bot, { radius: 64 }).some(e => e.name === 'ghast' && e.seen) ||
+      (require('./perception/senses') as typeof import('./perception/senses')).heard(bot, { sinceMs: 15000, match: /ghast/ }).length > 0
   } catch {}
   bot._ndGhastFiller = { at: now, v }
   return v
 }
 function pickFiller (bot, { steady = false }: any = {}) {
   let nether = false
-  try { nether = require('./worlds').worldOf(bot) === 'the_nether' } catch {}
+  try { nether = (require('./worlds') as typeof import('./worlds')).worldOf(bot) === 'the_nether' } catch {}
   for (const name of (nether ? (ghastThreat(bot) ? BLAST_NETHER : FILLER_NETHER) : FILLER)) {
     if (steady && FALLING.has(name)) continue
     const found = itemNamed(bot, name)
@@ -241,7 +241,7 @@ async function againstFaces (bot, pos, timeoutMs, { honest = false, ctl = null }
     const ref = bot.blockAt(pos.minus(face))
     if (!ref || ref.boundingBox !== 'block' && ref.name !== 'cobweb') continue
     if (/water|lava/.test(ref.name)) continue
-    if (honest && !require('./pick').faceAim(bot, ref.position, face)) continue
+    if (honest && !(require('./pick') as typeof import('./pick')).faceAim(bot, ref.position, face)) continue
     refs++
     try {
       // Целимся туда же, куда прицелится сам placeBlock, а не в центр клетки.
@@ -345,7 +345,7 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
     let blocked = false
     for (const inTheWay of [feetB, bot.blockAt(feet.offset(0, 1, 0))]) {
       if (!inTheWay || inTheWay.name === 'air' || inTheWay.boundingBox !== 'empty' || /water|lava|air$/.test(inTheWay.name)) continue
-      const tools = require('./tools')
+      const tools: typeof import('./tools') = require('./tools')
       if (!tools.breakable(inTheWay)) continue
       const plan = tools.bestFor(bot, inTheWay)
       if (plan.ms > maxDigMs) { why.push(`мешает ${inTheWay.name}: ${plan.item ? plan.item.name : 'рукой'} ${(plan.ms / 1000).toFixed(1)} с`); blocked = true; break }
@@ -374,7 +374,7 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
       for (let t = 0; t < 24 && !bot.entity.onGround && !ctl?.aborted; t++) await sleep(25)
       await centerOnFloor(bot, ctl, 1000, { water: true })
       if (ctl?.aborted) break
-      const pick = require('./pick')
+      const pick: typeof import('./pick') = require('./pick')
       const dry = b => !!b && b.boundingBox === 'empty' && !/water|bubble_column|lava|fire|cobweb/.test(b.name)
       const full = b => b?.boundingBox === 'block' && b.shapes?.some(s => s.length === 6 && s.every((v, i) => v === (i < 3 ? 0 : 1)))
       const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
@@ -552,7 +552,7 @@ function inPit (bot) {
   // then dig for the sky from inside a perfectly good room. Required lazily
   // because survival.js needs this module back.
   if (walls < 2) return false
-  try { return !require('./survival').pitCheck(bot).free } catch { return false }
+  try { return !(require('./survival') as typeof import('./survival')).pitCheck(bot).free } catch { return false }
 }
 
 // Pathfinder cannot climb a 1x1 column: it plans a route the body cannot walk
@@ -575,6 +575,10 @@ async function escapePit (bot, ctl, { maxClimb = 24, mcData = null }: any = {}) 
 }
 
 module.exports = {
+  FACES, FILLER, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
+  isFree, occupiedByEntity, inPit, escapePit
+}
+export {
   FACES, FILLER, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
   isFree, occupiedByEntity, inPit, escapePit
 }

@@ -1,5 +1,5 @@
 // Взлёт: сколько длится фаза 4, как далеко голова уходит от места посадки по времени, перерыв между посадками.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const durs = []; const gaps = []; const byT: Record<string, any> = {} as Record<string, any>
 for (const d of fs.readdirSync(L).filter(f => f.startsWith('trace-'))) {

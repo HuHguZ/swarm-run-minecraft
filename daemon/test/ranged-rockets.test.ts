@@ -2,12 +2,12 @@
 // Звёзды фейерверков для арбалета (TODO п.8, 2026-10-06): пустая ракета для
 // элитр (0 звёзд) не ранит (FireworkRocketEntity.dealExplosionDamage:
 // f = 5 + 2·звёзд, только если звёзды есть) — её не заряжать и не стрелять ею.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const ranged = require('../src/ranged')
-const read = require('../src/read')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as ranged from '../src/ranged'
+import * as read from '../src/read'
 
-const registry = require('minecraft-data')('1.21.11')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const rocket = (stars, slot = 9, count = 16) => ({
   name: 'firework_rocket', count, slot,
   componentMap: stars ? new Map([['fireworks', { type: 'fireworks', data: { flightDuration: 1, explosions: Array.from({ length: stars }, () => ({ shape: 'small_ball' })) } }]]) : new Map()
@@ -71,7 +71,7 @@ test('plan: пустой ракетой не стреляет и пустую н
 
 // s7b 06.10: взрыв ракеты сбоку-сзади от него щит не держит (BlocksAttacks 90° от его взгляда до точки взрыва).
 test('shieldBypassPoint: точка в полу сбоку-сзади, луч мимо его рамки, угол > 95°; стена перед ним — нет точки', () => {
-  const { Vec3 } = require('vec3')
+  const { Vec3 }: typeof import('vec3') = require('vec3')
   const walls = new Set<string>()
   const world = (p: any) => {
     const solid = p.y < 100 || walls.has(`${p.x},${p.y},${p.z}`)

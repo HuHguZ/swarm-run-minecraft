@@ -1,23 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { createRequire } from 'node:module'
-import { runInNewContext } from 'node:vm'
 
 // Настоящий RPC handler без bootstrap демона, сокетов и подключения к миру.
-const indexPath = join(__dirname, '../src/index.js')
-const source = readFileSync(indexPath, 'utf8')
-const body = source.slice(source.indexOf('function enchantedGear'), source.indexOf('const wss ='))
+const { observationMethods }: typeof import('../src/rpc/observation') = require('../src/rpc/observation')
 function status(bot: any) {
-  const methods = runInNewContext(body + '\nmethods', {
-    session: { bot, immediate: (fn: any) => fn() }, cfg: {}, require: createRequire(indexPath)
-  })
+  const methods = observationMethods({ session: { bot, immediate: (fn: any) => fn() }, cfg: {}, state: { dangerWatch: null } })
   return methods.status
 }
 
 test('P7 ench status: реальные чары доходят до силы и физической готовности лаборатории', async () => {
-  const { powerOf, labReady } = require('../src/pvp/arms-graph')
+  const { powerOf, labReady }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const observe = async (ench: Record<string, number>) => {
     const slots = Array(46).fill(null)
     slots[9] = { name: 'iron_sword', count: 1, componentMap: new Map([['enchantments', { data: {

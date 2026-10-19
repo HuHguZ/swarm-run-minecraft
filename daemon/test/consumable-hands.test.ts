@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { eat } = require('../src/actions')
+import { eat } from '../src/actions'
 
 test('ordinary food uses the free second hand and restores its shield without moving the sword', async () => {
   const sword = { name: 'iron_sword', type: 1, count: 1 }

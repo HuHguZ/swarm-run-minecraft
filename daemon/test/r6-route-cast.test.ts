@@ -1,10 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
+import { campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
 
 function load (inventory: any = {} as Record<string, any>, env: any = {} as Record<string, any>, hooks: any = {} as Record<string, any>) {
   const calls = []
@@ -20,7 +22,7 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
     __dirname: path.dirname(file), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js'], env: { ND_ROUTE: '1', ND_OW_DEEP: '1', ...env } },
     console: { log: (...args) => logs.push(args.join(' ')), error () {} }, setTimeout, Date, fixture }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = fixture.state; sit = { surface: false, night: false, inWater: false, foes: 0 };
     refresh = async () => {}; sense = async () => {}; readMemory = async () => {};
     nightGuard = async () => {}; recoverGuard = async () => {}; unclutter = async () => {};
@@ -59,7 +61,7 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
         return fixture.calls.find(([m]) => m === 'deadline')[1].ms;
       }
     };
-  `, context)
+  `, cjsContext(context))
   return { ...context.module.exports, state, calls, logs }
 }
 

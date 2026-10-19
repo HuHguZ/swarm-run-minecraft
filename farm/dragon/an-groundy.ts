@@ -1,5 +1,5 @@
 // Высота ног бота на земле у фонтана (g=1) по кольцам радиуса; и Y сидящего дракона.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const h: Record<string, any> = {} as Record<string, any>; const Ys: Record<string, any> = {} as Record<string, any>
 for (const d of fs.readdirSync(L).filter(f => f.startsWith('trace-')).slice(0, 80)) {

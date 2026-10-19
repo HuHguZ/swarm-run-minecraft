@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const bow = require('../src/bow')
-const sky = require('../src/elytra')
+import { Vec3 } from 'vec3'
+import bow = require('../src/bow')
+import sky = require('../src/elytra')
 const Q = 1 / 4096
 
 function actor(p = new Vec3(4105.941915882921, 179.76704537049048, 3120.5), yaw = -Math.PI / 2, pitch = 0) {

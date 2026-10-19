@@ -1,3 +1,4 @@
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { speedrunRegistry, dragonGoal } from '../src/core/speedrun'
@@ -7,6 +8,7 @@ import { applyCosts } from '../src/core/cost-model'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 function depleted(health = 12) {
   const state = emptyWorld()
@@ -70,17 +72,17 @@ test('recorded food costs make a depleted run recover before flint search while 
   assert.equal(plan(registry, depleted(20), dragonGoal).steps[0]?.id, 'CraftPortalKit')
 })
 test('the actual Heal executor asks the body for the same eighteen-HP target as the graph', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = require('))
   let target: number | undefined
   const context: any = { strategyExecuting: false, strategyInterrupted: false, rest: async (hp: number) => { target = hp } }
-  vm.runInNewContext(executor, context)
+  vm.runInNewContext(executor, cjsContext(withSetters(context)))
   const result = await context.executeStrategy({ skill: 'heal' }, new AbortController().signal)
   assert.equal(result.outcome, 'SUCCESS')
   assert.equal(target, 18)
 })
 test('actual rest at sixteen HP continues to the selected target while ordinary rest keeps its sixteen-HP default', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const body = source.slice(source.indexOf('async function rest ('), source.indexOf('let nightSatUntil'))
   const context: any = { resting: false, died: false, state: { health: 16, food: 12, playPolicy: { mode: 'speedrun' } },
     sit: { foes: 0, night: false }, gameClock: { now: () => 1 }, blazeDugInAt: -Infinity, blazeDugInPos: null,
@@ -88,7 +90,7 @@ test('actual rest at sixteen HP continues to the selected target while ordinary 
     routeHealing: false, known: {}, process: { env: {} }, meals: 0, targets: [],
     act: async (skill: string) => { assert.equal(skill, 'eat'); context.meals++; context.state.food = 20 },
     refugeRun: async (_why: string, options: any) => { context.targets.push(options.minHp); context.state.health = options.minHp } }
-  vm.runInNewContext(body, context)
+  vm.runInNewContext(body, cjsContext(withSetters(context)))
   await context.rest()
   assert.equal(context.meals, 0)
   await context.rest(18)

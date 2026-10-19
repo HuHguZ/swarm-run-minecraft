@@ -1,12 +1,12 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const social = require('./social')
-const { raySees } = require('./perception')
-const { Mood } = require('./mood')
-const { evaluateSocial } = require('./social-graph')
-const controlLock = require('./reflex-lock')
+import * as gameClock from './game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals } from 'mineflayer-pathfinder'
+import * as social from './social'
+import { raySees } from './perception'
+import { Mood } from './mood'
+import { evaluateSocial, type SocialSignal } from './social-graph'
+import controlLock = require('./reflex-lock')
 
 // Жесты людей и ответ телом. social.js замечает, что человек подошёл; этот
 // файл — что он делает. В майне без слов говорят телом: присед-присед — это
@@ -179,7 +179,7 @@ async function faceHim (bot, ent) {
 async function pickUp (session, bot, item, ms = 7000) {
   const busy = () => { const cur = session.current; return !!(cur && cur.name !== 'wait') || !!bot.isSleeping || !!bot.targetDigBlock }
   if (busy()) return 'занят'
-  const res = await require('./drops').pickOne(bot, { get aborted () { return busy() } }, { id: item.id, e: item }, { timeoutMs: ms })
+  const res = await (require('./drops') as typeof import('./drops')).pickOne(bot, { get aborted () { return busy() } }, { id: item.id, e: item }, { timeoutMs: ms })
   if (res === 'прервано') return 'занят'
   return res === 'picked' ? 'подобрал' : 'не дотянулся'
 }
@@ -226,7 +226,7 @@ function hook (ap, bot) {
   }
   // Рефлекс в стороне от автопилота: не держать его тик.
   let reflexBusy = false
-  const reflex = (fn, signal = 'look', name = null) => {
+  const reflex = (fn, signal: SocialSignal = 'look', name = null) => {
     if (reflexBusy || !idle(session, bot)) return false
     const decision = evaluateSocial({ signal, mood: mood.state.mood, affinity: name ? mood.affinity(name) : 50,
       health: bot.health ?? 20, threatLevel: session.tactics?.snapshot()?.threatLevel ?? 0,
@@ -483,7 +483,7 @@ function hook (ap, bot) {
     // Нам ли: смотрел на нас, или летит в нашу сторону.
     let toMe = looksAtBody(bot, who, 1.2)
     // Скорость броска — из пакета появления (drops.js; у mineflayer она нулевая).
-    const vel = require('./drops').spawnVelocity(bot, item.id) || born.vel
+    const vel = (require('./drops') as typeof import('./drops')).spawnVelocity(bot, item.id) || born.vel
     if (!toMe && vel) {
       const vx = vel.x
       const vz = vel.z
@@ -642,4 +642,4 @@ function gaze (bot, ent) {
   }
 }
 
-module.exports = { hook, gaze, hpOf, lookDir, looksAtBody, blockLookedAt }
+export { hook, gaze, hpOf, lookDir, looksAtBody, blockLookedAt }

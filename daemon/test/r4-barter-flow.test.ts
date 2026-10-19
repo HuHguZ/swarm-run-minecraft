@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const BF = require('../src/barter-flow')
-const bastion = require('../src/bastion')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as BF from '../src/barter-flow'
+import bastion = require('../src/bastion')
 
 test('guarded barter runs by default and waits only for an actual bounded lure receipt', () => {
   const old = process.env.ND_BARTER_FLOW
@@ -41,7 +41,7 @@ test('retry keeps carried gold, but does not invent progress for a working or em
   assert.equal(BF.retry({ barterRetry: 'нет места', ingotsTraded: 2 }, { gold_block: 2 }), false)
 })
 test('actual handNoWalk does not click a piglin hidden behind a block', async () => {
-  const pick = require('../src/pick')
+  const pick: typeof import('../src/pick') = require('../src/pick')
   const old = pick.aim
   let clicked = 0
   pick.aim = () => null
@@ -53,7 +53,7 @@ test('actual handNoWalk does not click a piglin hidden behind a block', async ()
   } finally { pick.aim = old }
 })
 test('relocation refuses missing copy grid without moving the bot', async () => {
-  const NR = require('../src/nether-route')
+  const NR: typeof import('../src/nether-route') = require('../src/nether-route')
   const old = NR.gridOf
   NR.gridOf = () => null
   try {

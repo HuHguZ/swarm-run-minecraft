@@ -1,3 +1,4 @@
+import { repoJson } from '../paths'
 export interface ConversionRecipe {
   id: string
   mechanism: string
@@ -16,7 +17,7 @@ interface VanillaData {
   blockLoot: Record<string, unknown>
   itemTags: Record<string, unknown>
 }
-const data = require('../../data/conversions-1.21.11.json') as VanillaData
+const data = repoJson<VanillaData>('daemon/data/conversions-1.21.11.json')
 export const conversionProvenance = { version: data.version, jarSha256: data.jarSha256 }
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : []

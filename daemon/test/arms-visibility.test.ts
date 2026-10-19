@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const AL = require('../arms-layout')
-const pick = require('../src/pick')
+import { Vec3 } from 'vec3'
+import * as AL from '../arena/arms-layout'
+import pick = require('../src/pick')
 
 // Эмуляция зрения на раскладке гонки (замечание проверки раунда 1: blocks_around seen по raySees с допуском 1.2 бл.
 // «видел» 27/40 тайников из достижимых клеток, запад/восток 75–85 против 8–9 клеток). Мир — модель раскладки,

@@ -1,9 +1,11 @@
 'use strict'
+import { campaignRequire, campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
 // Поток nether-end (research/dev-F-nether-end.md): чистые части правок Ада, крепости и дороги к Энду.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { sameCell } = require('../src/nether')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { sameCell } from '../src/nether'
 
 test('порог на грязи/песке душ: ноги на y−0.125 — тело в клетке порога', () => {
   const door = new Vec3(21, 71, 4)
@@ -21,7 +23,7 @@ test('не та клетка: соседняя колонка, полблока 
 })
 
 // --- бастион: раскладка от старта (правда слота 23, 02.10: конюшни, air_base 80,32,−192 CCW90)
-const bp = require('../src/bastion-pieces')
+import bp = require('../src/bastion-pieces')
 test('конюшни: от старта — обе стены side_wall_1 на местах правды мира, и обратно — старт из стены', () => {
   const S = { type: 'hoglin_stable', r: 3, t: { x: 80, y: 32, z: -192 } }
   const g = bp.goldPiecesFromStart(S)
@@ -44,10 +46,10 @@ test('мост: якорь bridge задаёт старт, золото мост
 })
 
 // --- кампания: этап nether (стержни) — только на недостающие очи
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
 function campaignNeeds (inventory, places) {
   const state = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory }
   class Socket {
@@ -63,14 +65,14 @@ function campaignNeeds (inventory, places) {
     close () {}
   }
   const context = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : require(name),
+    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js'], env: {} as Record<string, any> },
     console: { log () {}, error () {} }, setTimeout, Date, queueMicrotask
   }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     module.exports = { readMemory, needs: name => STAGES.find(s => s.name === name).needed(), init: () => { state = testState; sit = {} } }
-  `, withClockFixture(Object.assign(context, { testState: state })))
+  `, cjsContext(withClockFixture(Object.assign(context, { testState: state }))))
   context.module.exports.init()
   return context.module.exports
 }
@@ -90,7 +92,7 @@ test('этап nether: ничего нет — нужен; 11 очей и 3 же
 })
 
 // --- блейзы: нейтральный на линии стрельбы (neF-fort25-3 02.10 — зомби-пиглины от промаха стрелы)
-const { bystanderOnLine } = require('../src/blaze')
+import { bystanderOnLine } from '../src/blaze'
 test('лук: зомби-пиглин на линии или сразу за блейзом — не стрелять; сбоку — можно', () => {
   const bot = { entity: { position: new Vec3(0, 64, 0) }, entities: {} as Record<string, any> }
   const blaze = { id: 1, name: 'blaze', position: new Vec3(10, 64, 0), height: 1.8 }
@@ -110,7 +112,7 @@ function fakeWorld (solid) {
   const at = v => solid(v.x, v.y, v.z)
   return { blockAt: v => { const k = at(v); return k === 'air' ? { name: 'air', boundingBox: 'empty' } : k === 'lava' ? { name: 'lava', boundingBox: 'empty' } : { name: k, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } } }
 }
-const { burrowColumn, goldExposes } = require('../src/bastion')
+import { burrowColumn, goldExposes } from '../src/bastion'
 test('закопаться: ровная толща незерака под ногами — колонна годится', () => {
   const bot = fakeWorld((x, y, z) => y < 64 ? 'netherrack' : 'air')
   assert.equal(burrowColumn(bot, new Vec3(0, 64, 0)), true)

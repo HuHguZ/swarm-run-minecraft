@@ -1,8 +1,8 @@
 'use strict'
 // Точность щелчка кровати по свидетелю сервера DragonLab (s5, 06.10, 750 TPS): для каждого урона дракону взрывом кровати
 // (dd, bad_respawn_point) — тик взрыва, голова в этот тик и лучший тик в ±6 (поза головы pose пишется каждый тик у центра).
-//   node farm/dragon/an-labclick.js <events.jsonl> [от_ISO] [до_ISO]
-const fs = require('fs')
+//   node dist/farm/dragon/an-labclick.js <events.jsonl> [от_ISO] [до_ISO]
+import * as fs from 'fs'
 const [file, from, to] = process.argv.slice(2)
 const t0 = from ? Date.parse(from) : 0; const t1 = to ? Date.parse(to) : Infinity
 const ev = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } })

@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Vec3 = require('vec3')
-const registry = require('minecraft-data')('1.21.11')
-const { bodySnapshot } = require('../src/gamedata')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+import { bodySnapshot } from '../src/gamedata'
 
 test('body telemetry records nearby mob poses and creeper charge, excluding players', () => {
   const keys = registry.entitiesByName.creeper.metadataKeys, metadata = []

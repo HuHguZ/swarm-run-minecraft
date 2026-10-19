@@ -1,15 +1,16 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const filename = path.resolve(__dirname, '../src/fauna.js')
-const code = require('esbuild').transformSync(fs.readFileSync(filename.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+const code = (require('esbuild') as typeof import('esbuild')).transformSync(fs.readFileSync(filename.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
 const ctx = { module: { exports: {} as Record<string, any> }, require: createRequire(filename), process, console }
-vm.runInNewContext(code + '\nmodule.exports.floorNear = golemTopNear; module.exports.spotNear = golemSpotNear', ctx)
+vm.runInNewContext(code + '\nmodule.exports.floorNear = golemTopNear; module.exports.spotNear = golemSpotNear', cjsContext(ctx))
 
 function floorFixture (dx: number, dz: number) {
   const bot = { blockAt: p => ({ boundingBox: p.y <= 63 || p.x === dx && p.z === dz && p.y === 64 ? 'block' : 'empty' }) }
@@ -72,9 +73,9 @@ test('the wide golem can use the edge of a raised third-cell support after one r
 })
 
 test('a blocked village perch returns without six repeated waits for the same neutral golem', async () => {
-  const { EventEmitter } = require('node:events')
-  const { withClockFixture } = require('./clock-fixture')
-  const local = createRequire(filename), bot = new EventEmitter()
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { withClockFixture }: typeof import('./clock-fixture') = require('./clock-fixture')
+  const local = createRequire(filename), bot: any = new EventEmitter()
   let time = 1000, waited = 0
   bot.entity = { position: new Vec3(.5, 64, .5) }
   bot.entities = { 2: { id: 2, name: 'iron_golem', position: new Vec3(2.5, 64, .5), height: 2.7, width: 1.4 } }
@@ -83,7 +84,7 @@ test('a blocked village perch returns without six repeated waits for the same ne
   class Time extends Date { static now () { return time } }
   const fixture = { module: { exports: {} as Record<string, any> }, process, console, Date: Time, require: local,
     advance: async ms => { time += ms; waited += ms } }
-  vm.runInNewContext(code + '\nsleep = advance; visible = () => true; golemSpotNear = () => null', withClockFixture(fixture))
+  vm.runInNewContext(code + '\nsleep = advance; visible = () => true; golemSpotNear = () => null', cjsContext(withClockFixture(fixture)))
   const out = await fixture.module.exports.golemKill({ bot }, { aborted: false, onAbort: [] }, { timeoutSeconds: 85 })
   assert.equal(out.hits, 0)
   assert.equal(out.noSpot, true, 'the caller can distinguish a physically blocked perch from an unfinished fight')
@@ -91,11 +92,11 @@ test('a blocked village perch returns without six repeated waits for the same ne
 })
 
 test('a diagonally close raised golem cannot be struck until the supported pillar clears its attack box', async () => {
-  const { EventEmitter } = require('node:events')
-  const { withClockFixture } = require('./clock-fixture')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { withClockFixture }: typeof import('./clock-fixture') = require('./clock-fixture')
   let t = 1000
   const attacks = [], towers = []
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   const golem = { id: 2, name: 'iron_golem', position: new Vec3(2.325, 65, 2.325), height: 2.7, width: 1.4 }
   bot.entity = { position: new Vec3(.5, 67, .5) }; bot.entities = { 2: golem }; bot.health = 20
   bot.inventory = { items: () => [{ name: 'cobblestone', count: 64 }, { name: 'stone_axe', count: 1 }] }
@@ -110,7 +111,7 @@ test('a diagonally close raised golem cannot be struck until the supported pilla
       : local(name),
     advance: async ms => { t += ms }, descend: async () => { bot.entity.position.y = 64 } }
   // Isolate the live mob-box check: a local height scan may predate the golem stepping up.
-  vm.runInNewContext(code + '\nsleep = advance; visible = () => true; golemTopNear = () => 64; descendPillar = descend', withClockFixture(fixture))
+  vm.runInNewContext(code + '\nsleep = advance; visible = () => true; golemTopNear = () => 64; descendPillar = descend', cjsContext(withClockFixture(fixture)))
   await fixture.module.exports.golemKill({ bot }, { aborted: false, onAbort: [] }, { timeoutSeconds: 20 })
   assert.deepEqual(attacks, [68], 'attack comes after the extra real tower step, not from unsafe Y67')
   assert.deepEqual(towers, [67])

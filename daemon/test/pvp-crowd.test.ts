@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const crowd = require('../src/pvp/crowd')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as crowd from '../src/pvp/crowd'
 
 const P = (x: number, z: number) => ({ x, y: 120, z })
 

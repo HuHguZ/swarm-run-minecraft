@@ -39,7 +39,7 @@ export function bodyClear(world: CollisionWorld, pos: Point, { web = false, wate
         const block = world.blockAt(new Vec3(x, y, z), false)
         if (!block) return false
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
-        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && require('../movement').waterCell?.(block))) return false
+        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && (require('../movement') as typeof import('../movement')).waterCell?.(block))) return false
         if (shapeBoxes(block, { x, y, z }).some(box => intersects(body, box))) return false
       }
     }
@@ -167,7 +167,7 @@ export function invalidateStands(cache: Map<string, Vec3[]>, at: Point): void {
 }
 
 export function containsWater(block: CollisionBlock): boolean {
-  return require('../movement').waterCell?.(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
+  return (require('../movement') as typeof import('../movement')).waterCell?.(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
 }
 
 /** Body centers that fit inside one observed fluid cell and its real shapes. */

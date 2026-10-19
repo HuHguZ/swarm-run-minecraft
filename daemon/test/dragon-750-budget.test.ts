@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { voidBelow } = require('../src/dragon/dig-down-to')
-const { scalePathBudget } = require('../src/dragon/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { voidBelow } from '../src/dragon/dig-down-to'
+import { scalePathBudget } from '../src/dragon/dragon'
 
 test('750 TPS: бюджет A* в игровом времени на бой, после боя — прежний', () => {
   const bot: any = { pathfinder: { tickTimeout: 40, thinkTimeout: 5000 } }
@@ -32,7 +32,7 @@ test('voidBelow по номерам состояний совпадает с blo
 })
 
 test('щелчок кровати: +1 тик на 20 TPS, 0 на 750, ND_CLICK_LEAD переопределяет', () => {
-  const { clickLead } = require('../src/dragon/pillar-run')
+  const { clickLead }: typeof import('../src/dragon/pillar-run') = require('../src/dragon/pillar-run')
   const was = process.env.ND_CLICK_LEAD
   delete process.env.ND_CLICK_LEAD
   try {
@@ -44,8 +44,8 @@ test('щелчок кровати: +1 тик на 20 TPS, 0 на 750, ND_CLICK_L
 })
 
 test('пакеты дракона пачками: тики — по пути, миг — по пакету без задержки разбора (750); на 20 — отметка как есть', () => {
-  const { feedTicks } = require('../src/dragon/pillar-run')
-  const gameClock = require('../src/game-clock')
+  const { feedTicks }: typeof import('../src/dragon/pillar-run') = require('../src/dragon/pillar-run')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const c = new gameClock.GameClock({ manual: true }); c.setState({ tick_rate: 750 }); gameClock.activate(c)
   try {
   // настоящие пакеты — раз в 3 тика (150 мс), скорость 0.8 бл/тик; разбор: первый вовремя, дальше пачками по 2–3
@@ -66,9 +66,9 @@ test('пакеты дракона пачками: тики — по пути, м
 })
 
 test('щелчок кровати по ровным часам: не раньше untilMono, без игрового until', async () => {
-  const gameClock = require('../src/game-clock')
-  const Vec3 = require('vec3')
-  const { clickBedAt } = require('../src/dragon/pillar-plan')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const { clickBedAt }: typeof import('../src/dragon/pillar-plan') = require('../src/dragon/pillar-plan')
   let at = null
   const bot: any = { setControlState () {}, swingArm () {}, _client: { write: (name) => { if (name === 'block_place' && at == null) at = gameClock.wall.monotonic() } } }
   const hit = { point: new Vec3(0.5, 0.5625, 0.5), block: { position: new Vec3(0, 0, 0) } }
@@ -76,20 +76,20 @@ test('щелчок кровати по ровным часам: не раньш�
   const seq = await clickBedAt(bot, hit, { aimed: true, untilMono: want })
   assert.ok(at != null && at >= want, `щелчок ${at} раньше ${want}`)
   assert.ok(at - want < 20, `опоздал на ${at - want} мс`)
-  assert.ok(seq > 0)
+  assert.ok((seq as number) > 0)
 })
 
 // Мир слота фермы для окна точности (precision.farmWorld): порт 25601..25632 и бот NeuroFarm<i>.
 function asFarm () {
-  const cfg = require('../src/config'); const was = { port: cfg.port, username: cfg.username }
+  const cfg: typeof import('../src/config') = require('../src/config'); const was = { port: cfg.port, username: cfg.username }
   cfg.port = 25601; cfg.username = 'NeuroFarm1'
   return () => Object.assign(cfg, was)
 }
 
 test('окно точности: только на ферме и с ND_PRECISION_TPS, включается раз и возвращает прежний темп', () => {
-  const { precisionWindow, precisionOff } = require('../src/dragon/precision')
-  const gameClock = require('../src/game-clock')
-  const cfg = require('../src/config')
+  const { precisionWindow, precisionOff }: typeof import('../src/dragon/precision') = require('../src/dragon/precision')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const cfg: typeof import('../src/config') = require('../src/config')
   const said = []
   const bot: any = { chat: (m) => said.push(m) }
   const was = process.env.ND_PRECISION_TPS
@@ -118,9 +118,9 @@ test('окно точности: только на ферме и с ND_PRECISION
 })
 
 test('честный отвод взгляда: голова опускается в теле, пакет совпадает с телом; за блоком эндермен не в счёт', () => {
-  const Vec3 = require('vec3')
-  const { EventEmitter } = require('node:events')
-  const { lookGuard } = require('../src/dragon/fall-guard')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { lookGuard }: typeof import('../src/dragon/fall-guard') = require('../src/dragon/fall-guard')
   const sent = []
   let wall = false
   const bot: any = new EventEmitter()
@@ -151,8 +151,8 @@ test('честный отвод взгляда: голова опускаетс�
 })
 
 test('титры после выходного портала: ответ perform_respawn и после конца навыка (s5-e23-s7), повтор до respawn', async () => {
-  const { EventEmitter } = require('node:events')
-  const d = require('../src/dragon/dragon')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const d: typeof import('../src/dragon/dragon') = require('../src/dragon/dragon')
   const client: any = new EventEmitter(); const sent = []
   client.write = (n, data) => sent.push([n, data])
   const bot: any = { _client: client, supportFeature: () => false, pathfinder: null }
@@ -170,9 +170,9 @@ test('титры после выходного портала: ответ perfor
 })
 
 test('окно точности: облако рядом включает 20 тиков и держит ещё 3 игровых с', () => {
-  const Vec3 = require('vec3')
-  const gameClock = require('../src/game-clock')
-  const { precisionTick } = require('../src/dragon/precision')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { precisionTick }: typeof import('../src/dragon/precision') = require('../src/dragon/precision')
   const was = process.env.ND_PRECISION_TPS
   const c = new gameClock.GameClock({ manual: true }); c.setState({ tick_rate: 750 }); gameClock.activate(c)
   const said = []
@@ -199,10 +199,10 @@ test('окно точности: облако рядом включает 20 т�
 })
 
 test('окно точности: подход с платформы — 20 тиков с начала навыка до станции или 40 игр. с (s5c-d1-s6)', () => {
-  const Vec3 = require('vec3')
-  const gameClock = require('../src/game-clock')
-  const { precisionTick } = require('../src/dragon/precision')
-  const cfg = require('../src/config'); const was = { port: cfg.port, username: cfg.username, env: process.env.ND_PRECISION_TPS }
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { precisionTick }: typeof import('../src/dragon/precision') = require('../src/dragon/precision')
+  const cfg: typeof import('../src/config') = require('../src/config'); const was = { port: cfg.port, username: cfg.username, env: process.env.ND_PRECISION_TPS }
   cfg.port = 25601; cfg.username = 'NeuroFarm1'; process.env.ND_PRECISION_TPS = '20'
   const c = new gameClock.GameClock({ manual: true }); c.setState({ tick_rate: 750 }); gameClock.activate(c)
   const said = []

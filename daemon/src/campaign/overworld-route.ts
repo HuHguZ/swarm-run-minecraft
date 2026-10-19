@@ -255,7 +255,7 @@ function routeShaftBackOn () { return ctx.process.env.ND_ROUTE === '1' && ctx.pr
 
 function routeRememberShaft (from, extend = false) {
   if (!ctx.routeShaftBackOn()) return
-  const next = ctx.require('./src/movement').shaftFromDescent(from, ctx.state.pos)
+  const next = (require('../movement') as typeof import('../movement')).shaftFromDescent(from, ctx.state.pos)
   if (!extend) { ctx.surfaceShaft = next; return }
   const old = ctx.surfaceShaft
   ctx.surfaceShaft = old && next && old.x === next.x && old.z === next.z && Math.abs(old.bottom - next.top) <= 1
@@ -1217,7 +1217,7 @@ async function routeStep (s) {
         if (p.pick !== 'surface' || ctx.process.env.ND_ROUTE_NIGHTPRICE === '0') return false
       }
       if (!ctx.sit.surface && !(await ctx.toSurface())) return false
-      const search = await require('./structure-search').scoutStructures({
+      const search = await (require('./structure-search') as typeof import('./structure-search')).scoutStructures({
         now: () => ctx.gameClock.now(), position: () => ctx.state.pos,
         scan: async () => { await ctx.act('structure', { mode: 'scan', radius: 96 }) },
         list: async () => (await ctx.act('structure', { mode: 'list' })).detail?.known || [],

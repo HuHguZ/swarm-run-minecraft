@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { shaftToBricks, mappedStepRisk } = require('../src/endportal')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { shaftToBricks, mappedStepRisk } from '../src/endportal'
 
 function rig (overrides: any = {} as Record<string, any>) {
   const bot: Record<string, any> = { entity: { position: new Vec3(0.5, 7, 0.5) }, registry: { itemsByName: {} as Record<string, any> }, entities: {} as Record<string, any>,

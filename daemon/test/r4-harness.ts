@@ -1,10 +1,12 @@
 'use strict'
-const fs = require('fs')
-const vm = require('vm')
-const { withClockFixture } = require('./clock-fixture')
-const path = require('path')
-const { createRequire } = require('module')
-function campaign (inventory: any = {} as Record<string, any>, situation: any = {} as Record<string, any>, env: any = {} as Record<string, any>) {
+import { campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import * as fs from 'fs'
+import * as vm from 'vm'
+import { withClockFixture } from './clock-fixture'
+import path = require('path')
+import { createRequire } from 'module'
+function campaign (inventory: any = {} as Record<string, any>, situation: any = {} as Record<string, any>, env: any = {} as Record<string, any>): Record<string, any> {
   const clock = { t: 1000 }
   const calls = []
   const state = { health: 20, food: 20, dimension: 'overworld', pos: { x: 0, y: 64, z: 0 }, inventory }
@@ -27,7 +29,7 @@ function campaign (inventory: any = {} as Record<string, any>, situation: any = 
   const context = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : local(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> }, process: { argv: ['node', 'campaign.js'], env: { ND_ROUTE: '1', ...env } },
     console: { log () {}, error () {} }, setTimeout, Date: Time, queueMicrotask, fixtureState: state, fixtureSit: sit }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = fixtureState; sit = fixtureSit;
     module.exports = { act, routeGo, routeHunt, routeStep, castOneAt, routeHealToEnter,
       deadline: t => { stage = 'route'; routeDeadline = t },
@@ -36,7 +38,7 @@ function campaign (inventory: any = {} as Record<string, any>, situation: any = 
         if (h.routeInfo) routeInfoGet = () => h.routeInfo; },
       portal: p => { known.portal = p },
     }
-  `, withClockFixture(context))
+  `, cjsContext(withClockFixture(context)))
   return { ...context.module.exports, clock, calls, state, sit }
 }
-module.exports = { campaign }
+export { campaign }

@@ -1,11 +1,11 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const { watchDigReceipt } = require('../src/environments/dig-receipt')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import { watchDigReceipt } from '../src/environments/dig-receipt'
 
 function receiptFixture() {
-  const bot = Object.assign(new EventEmitter(), { version: '1.21.11', _client: new EventEmitter(),
+  const bot: any = Object.assign(new EventEmitter(), { version: '1.21.11', _client: new EventEmitter(),
     block: { stateId: 83, name: 'netherrack', boundingBox: 'block' },
     blockAt() { return this.block },
     _updateBlockState(_at, stateId) { this.block = { stateId, name: stateId === 109 ? 'lava' : stateId ? 'netherrack' : 'air', boundingBox: stateId && stateId !== 109 ? 'block' : 'empty' } }

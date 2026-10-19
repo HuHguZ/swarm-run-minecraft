@@ -1,4 +1,5 @@
 'use strict'
+import { REPO_ROOT } from '../../../daemon/src/paths'
 // Офлайн-оценка «вторых клеток» подушки R (02.10 вечер, поток dragon): по свидетелю DragonLab (позы головы и тела по тикам
 // на снижении) — какой урон дал бы каждый вариант кровати на каждом проходе: расстояние голова—центр взрыва + seen родителя по
 // модели dragon.js (smCompile/smDragonSeen, сверена с сервером: |Δ| p90 0.009), коробка тела не даёт поставить F (bodyBlocksBed).
@@ -8,15 +9,15 @@
 //   lat P — вбок: F (−side,P,s), H (−side,P,0), ставка по грани −side булыжника (0,P,s) (опора P+1).
 // Цепочка: на каждом проходе — лучший вариант (бот прогнозирует проход с ошибкой головы p90 0.26). Убийство 4 кроватями —
 // если Σ4 модели набора ≥ Σ4 модели «как сейчас» + остаток хп после 4-й кровати.
-//   node farm/dragon/offline/rcells.js rs8 rs9 ...
-const fs = require('fs'); const path = require('path'); const vm = require('vm'); const Module = require('module')
+//   node dist/farm/dragon/offline/rcells.js rs8 rs9 ...
+import * as fs from 'fs'; import path = require('path'); import * as vm from 'vm'; import Module = require('module')
 const file = path.resolve(__dirname, '../../../daemon/src/dragon.js'); const req = Module.createRequire(file); const Vec3 = req('vec3')
 const src = fs.readFileSync(file, 'utf8') + '\nmodule.exports.__R={smCompile,smDragonSeen,bodyBlocksBed,bedDamage,faceClick,faceClickFacing,exposure,lowRowsOpen,LABENV};'
 const m = { exports: {} as Record<string, any> }
 new vm.Script(Module.wrap(src), { filename: file }).runInThisContext()(m.exports, req, m, file, path.dirname(file))
 const D = m.exports.__R
 D.LABENV.ND_RUNNER = '1'
-const LOGS = path.resolve(__dirname, '../../logs')
+const LOGS = path.resolve(REPO_ROOT, 'farm/logs')
 
 function worldBot (P, cells) {
   const o = P - 4

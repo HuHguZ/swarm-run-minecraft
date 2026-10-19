@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const clockMod = require('../src/game-clock')
-const movement = require('../src/movement')
-const { TacticalSystem, observeTactics } = require('../src/tactics/minecraft')
-const { TacticalArbiter } = require('../src/tactics/arbiter')
-const { candidates, threatLevel } = require('../src/tactics/state')
+import { Vec3 } from 'vec3'
+import * as clockMod from '../src/game-clock'
+import movement = require('../src/movement')
+import { TacticalSystem, observeTactics } from '../src/tactics/minecraft'
+import { TacticalArbiter } from '../src/tactics/arbiter'
+import { candidates, threatLevel } from '../src/tactics/state'
 
 function fixture(name = 'structure') {
   const clock = clockMod.activate(new clockMod.GameClock({ manual: true, epoch: 10000 }))
@@ -95,7 +95,7 @@ test('the real damage_event hook takes water rescue on the first drowned hit at 
   const f = fixture()
   let complete: (r: any) => void = () => {}
   f.bot._client = new EventEmitter(); f.bot.health = 20
-  const { Autopilot } = require('../src/autopilot')
+  const { Autopilot }: typeof import('../src/autopilot') = require('../src/autopilot')
   f.session.autopilot = new Autopilot(f.session, {})
   f.session.autopilot.hookDamage(f.bot)
   f.bot.entities[2] = { id: 2, name: 'drowned', position: new Vec3(1.5, 60, .5), height: 1.95, width: .6, metadata: [], equipment: [] }

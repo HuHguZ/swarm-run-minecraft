@@ -1,10 +1,10 @@
 // «Держать в LANDING»: кровать у центрального столба (подушка — клетка рядом со столбом), щелчок в миг
 // ближайшего прохода головы, после взрыва — толчок дракону (ServerExplosion), он заходит снова; новая
 // кровать на то же место не раньше чем через 11 тиков. Сколько взрывов и урона до «сел» — по прогнозу
-// посадки из записанных посадок (rec-*.jsonl). node farm/dragon/an-landchain.js rec...
-const fs = require('fs')
-const Vec3 = require('../../daemon/node_modules/vec3')
-const D = require('../../daemon/src/dragon')
+// посадки из записанных посадок (rec-*.jsonl). node dist/farm/dragon/an-landchain.js rec...
+import * as fs from 'fs'
+const Vec3: typeof import('../../daemon/node_modules/vec3').Vec3 = require('../../daemon/node_modules/vec3')
+import D = require('../../daemon/src/dragon')
 const q8 = r => Math.round(r * 256 / 360) * 360 / 256
 const MAXD = +(process.env.MAXD || 3.2)
 const res = []
@@ -27,6 +27,7 @@ for (const file of process.argv.slice(2)) {
     for (const pw of pillows) {
       const c = new Vec3(pw.x + 0.5, pw.y + 0.5, pw.z + 0.5)
       const T = { x: 0.5, y: P, z: 0.5 }
+      // @ts-expect-error dragon не экспортирует simClone (он в dragon/evade-raw): копия всегда через JSON.
       const s = D.simClone ? D.simClone(fc.path[0].st) : JSON.parse(JSON.stringify(fc.path[0].st))
       let last = -100; let dmg = 0; const booms = []; let k = 0; let sat = null
       let prevD = 99; let prevS = null

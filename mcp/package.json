@@ -4,15 +4,15 @@
   "private": true,
   "description": "MCP bridge between Claude Code and the NeuroDown daemon. Holds no game state of its own.",
   "type": "module",
-  "main": "src/index.js",
+  "main": "../dist/mcp/src/index.js",
   "scripts": {
     "build": "npm --prefix .. run build",
     "typecheck": "npm --prefix .. run typecheck",
     "prestart": "npm run build",
     "presmoke": "npm run build",
-    "start": "node --enable-source-maps src/index.js",
-    "smoke": "node smoke.js",
-    "smoke:live": "node smoke.js --live"
+    "start": "node --enable-source-maps ../dist/mcp/src/index.js",
+    "smoke": "node ../dist/mcp/smoke.js",
+    "smoke:live": "node ../dist/mcp/smoke.js --live"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

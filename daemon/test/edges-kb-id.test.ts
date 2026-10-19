@@ -1,10 +1,10 @@
 'use strict'
 // raw.entity_velocity: буфер — пакет целиком с номером 0x63 впереди. Тело с id 99 (= 0x63) не должно принимать чужие скорости.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const { fixSelfKnockback } = require('../src/edges')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { fixSelfKnockback } from '../src/edges'
 
 test('self knockback fix: another entity velocity never lands on a body whose id equals the packet id', () => {
   const bot: any = { _client: new EventEmitter(), entity: { id: 99, velocity: new Vec3(0.1, 0.2, 0.3) },

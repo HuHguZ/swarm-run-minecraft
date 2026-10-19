@@ -4,8 +4,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import {createRequire} from 'node:module'
-const B=require('../src/bastion/bastion')
-const data=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/bastion-p7-b-102-starts.json'),'utf8'))
+import { REPO_ROOT } from '../src/paths'
+import { cjsContext } from './cjs-context'
+import B = require('../src/bastion/bastion')
+const data=JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'daemon/test/fixtures/bastion-p7-b-102-starts.json'),'utf8'))
 
 function predict(starts,enabled){
   const old={ND_BASTION_ROOT_GRID:process.env.ND_BASTION_ROOT_GRID,ND_KNOWLEDGE:process.env.ND_KNOWLEDGE}
@@ -42,7 +44,7 @@ test('the live predictor filters its anchor roots and direct gold path too; a re
   const fake={...bp,locate:()=>({found:anchors}),verify:()=>({match:0,miss:0}),voteByBasaltSteps:function*(){return[]},voteBySteps:function*(){return[]}}
   const context:any={module:{exports:{}},console,process:{env:{ND_BASTION_ROOT_GRID:'1'}},Set,Map,
     require:id=>id==='.././bastion-pieces'?fake:id==='.././nether-cover'?{blind:()=>true}:id==='./take-gold-block'?{...native(id),visibleOf:()=>[]}:native(id)}
-  vm.runInNewContext(fs.readFileSync(file,'utf8'),context)
+  vm.runInNewContext(fs.readFileSync(file,'utf8'),cjsContext(context))
   const bot={registry:{blocksByName:{}},entity:{position:new Vec3(99,52,5)},entities:{},
     blockAt(){assert.fail('supplied observed anchors need no hidden block lookup')}}
   const result=context.module.exports.predictGold(bot)

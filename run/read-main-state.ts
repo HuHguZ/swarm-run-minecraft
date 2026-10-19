@@ -1,9 +1,10 @@
 'use strict'
+import { REPO_ROOT } from '../daemon/src/paths'
 // Только чтение состояния игрока на собственном run-сервере. Пароль не выводится.
-const fs = require('fs')
-const path = require('path')
-const net = require('net')
-const props = fs.readFileSync(path.join(__dirname, '../server-run/server.properties'), 'utf8')
+import * as fs from 'fs'
+import path = require('path')
+import * as net from 'net'
+const props = fs.readFileSync(path.join(REPO_ROOT, 'server-run/server.properties'), 'utf8')
 const prop = name => props.split(/\r?\n/).find(s => s.startsWith(name + '='))?.slice(name.length + 1)
 function query (command) {
   return new Promise<any>((resolve, reject) => {
@@ -17,7 +18,7 @@ function query (command) {
     const timer = setTimeout(() => { sock.destroy(); reject(new Error('read timeout')) }, 5000)
     let data = Buffer.alloc(0)
     sock.on('error', reject)
-    sock.on('data', chunk => {
+    sock.on('data', (chunk: Buffer) => {
       data = Buffer.concat([data, chunk])
       while (data.length >= 4 && data.length >= data.readInt32LE(0) + 4) {
         const size = data.readInt32LE(0)
@@ -31,7 +32,7 @@ function query (command) {
     })
   })
 }
-module.exports = { query }
+export { query }
 if (require.main === module) {
   ;(async () => {
     for (const field of ['Pos', 'Health', 'Air', 'OnGround']) console.log(await query('data get entity NeuroDown ' + field))

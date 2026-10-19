@@ -1,6 +1,6 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { sleep } = require('./movement')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { sleep }: typeof import('./movement') = require('./movement')
 
 // Putting armour on. mineflayer never does it by itself, and the bot has spent
 // whole nights carrying a full iron set in its backpack while being beaten to
@@ -157,7 +157,7 @@ function choose (candidates) {
 // Worn armour, straight out of the slots. Exported because perception.js
 // builds its inventory from items() and therefore cannot see any of this.
 function readWorn (bot) {
-  const out = {}
+  const out: Record<string, { item: string; points: number; durability: number | null } | null> = {}
   for (const [dest, slot] of SLOTS) {
     const it = bot.inventory.slots[slot]
     const a = it ? ARMOR[it.name] : null
@@ -433,3 +433,4 @@ function armorReport (session) {
 }
 
 module.exports = { equipBestArmor, armorReport, readWorn, readOffHand, defenseOf, ARMOR, OFF_HAND }
+export { equipBestArmor, armorReport, readWorn, readOffHand, defenseOf, ARMOR, OFF_HAND }

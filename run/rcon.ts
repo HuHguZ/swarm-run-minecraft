@@ -1,8 +1,8 @@
 'use strict'
 // Minimal RCON client for MY run server only (server-run, rcon port from its
 // server.properties). Usage: node rcon.js "gamerule keep_inventory true"
-const net = require('net')
-const fs = require('fs')
+import * as net from 'net'
+import * as fs from 'fs'
 const props = fs.readFileSync('C:/Users/user/Desktop/work/minecraft-claude/server-run/server.properties', 'utf8')
 const get = k => (new RegExp('^' + k.replace('.', '\\.') + '=(.*)$', 'm').exec(props) || [])[1]
 const port = Number(get('rcon.port'))
@@ -21,7 +21,7 @@ const pkt = (id, type, body) => {
 const sock = net.connect(port, '127.0.0.1', () => sock.write(pkt(1, 3, pass)))
 let acc = Buffer.alloc(0)
 let authed = false
-sock.on('data', d => {
+sock.on('data', (d: Buffer) => {
   acc = Buffer.concat([acc, d])
   while (acc.length >= 4) {
     const len = acc.readInt32LE(0)

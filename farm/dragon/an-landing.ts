@@ -1,5 +1,5 @@
 // Последние секунды LANDING: где голова относительно конечной (при SCANNING), высота дракона.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const buckets: Record<string, any> = {} as Record<string, any> // по времени до посадки (0.25 с): [dist head->final]
 const ybk: Record<string, any> = {} as Record<string, any>

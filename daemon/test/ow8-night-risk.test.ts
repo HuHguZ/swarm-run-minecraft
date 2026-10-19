@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
-const W = require('../src/night-work')
+import * as W from '../src/night-work'
 
 const open = { walls: 0, roof: false, floor: true, block: 0, sky: 0, sealed: false }
 const rock = { ...open, walls: 4, roof: true, sealed: true }
@@ -39,17 +39,17 @@ function body() {
 
 test('after the cut, a closed leg is cheaper than a dark rear opening; an open cave can be refused', () => {
   const { bot, world } = body(), back = new Vec3(0, 40, 0), next = new Vec3(1, 40, 0)
-  const plan = W.step(bot, next, back, 2, { order: [] })
+  const plan = W.step(bot, next, back, 2, { order: [] } as any)
   assert.equal(plan.close, true)
   for (const x of [1, 2]) for (const z of [-1, 1]) for (const y of [40, 41, 42]) world.set(`${x},${y},${z}`, 'air')
   world.set('1,42,0', 'air')
-  assert.match(W.step(bot, next, back, 2, { order: [] }).stopped, /NIGHT_RISK/)
+  assert.match(W.step(bot, next, back, 2, { order: [] } as any).stopped, /NIGHT_RISK/)
   bot.blockAt = p => ({ name: world.get(key(p)) || 'stone', boundingBox: world.get(key(p)) === 'air' ? 'empty' : 'block', light: 14, skyLight: 0 })
-  assert.equal(W.step(bot, next, back, 2, { order: [] }).stopped, undefined, 'lit open travel remains a priced alternative')
+  assert.equal(W.step(bot, next, back, 2, { order: [] } as any).stopped, undefined, 'lit open travel remains a priced alternative')
 })
 
 test('closing checks cancellation, actual placement and keeps the native honest controller', async () => {
-  const { bot, world } = body(), B = require('../src/build'), original = B.placeBlockAt
+  const { bot, world } = body(), B: typeof import('../src/build') = require('../src/build'), original = B.placeBlockAt
   const ctl: any = { aborted: false }, calls: any[] = []
   B.placeBlockAt = async (b, p, opts) => { calls.push({ p, opts }); world.set(key(p), 'stone'); return { ok: true } }
   try {

@@ -1,6 +1,6 @@
 # Starts/stops ONLY my campaign.js process (pid kept in campaign.pid here).
 param([switch]$Stop, [string]$Stages = '', [int]$EyesNeed = 0, [switch]$Endermen)
-$root = 'C:\Users\user\Desktop\work\minecraft-claude'
+$root = Split-Path $PSScriptRoot -Parent
 $pidFile = Join-Path $PSScriptRoot 'campaign.pid'
 if (Test-Path $pidFile) {
   $old = Get-Content $pidFile
@@ -15,6 +15,6 @@ if ($EyesNeed -gt 0) { $env:ND_EYES_NEED = "$EyesNeed" }
 # Enderman hunting (pearls stage) only with the user's permission.
 if ($Endermen) { $env:ND_ENDERMEN = '1' } else { Remove-Item Env:ND_ENDERMEN -ErrorAction SilentlyContinue }
 $argList = @('campaign.js'); if ($Stages) { $argList += $Stages }
-$p = Start-Process -FilePath node.exe -ArgumentList $argList -WorkingDirectory "$root\daemon" -RedirectStandardOutput "$root\daemon\campaign.out" -RedirectStandardError "$root\daemon\campaign.err" -WindowStyle Hidden -PassThru
+$p = Start-Process -FilePath node.exe -ArgumentList $argList -WorkingDirectory "$root\dist\daemon" -RedirectStandardOutput "$root\daemon\campaign.out" -RedirectStandardError "$root\daemon\campaign.err" -WindowStyle Hidden -PassThru
 $p.Id | Set-Content $pidFile
 Write-Host "campaign pid $($p.Id)"

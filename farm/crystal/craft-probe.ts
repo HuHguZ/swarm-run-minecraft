@@ -1,8 +1,8 @@
 'use strict'
 // Проба крафта кристалла (2026-09-30): третий бот на сервере слота 30, верстак, recipesFor/craft.
-const path = require('path')
+import path = require('path')
 const mineflayer = require(path.join(__dirname, '../../daemon/node_modules/mineflayer'))
-const { execFileSync } = require('child_process')
+import { execFileSync } from 'child_process'
 const Vec3 = require(path.join(__dirname, '../../daemon/node_modules/vec3'))
 const rcon = (c) => execFileSync(process.execPath, [path.join(__dirname, '../farm.js'), 'rcon', '30', c], { encoding: 'utf8' }).trim()
 const bot = mineflayer.createBot({ host: '127.0.0.1', port: 25630, username: 'NeuroFarm30c', version: '1.21.11', auth: 'offline' })

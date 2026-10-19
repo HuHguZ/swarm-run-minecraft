@@ -1,18 +1,21 @@
+import { moduleSourceTs } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const esbuild = require('esbuild')
+import { cjsContext } from './cjs-context'
+import * as esbuild from 'esbuild'
 const actionsFile = path.resolve(__dirname, '../src/actions.ts')
 const req = createRequire(actionsFile)
-const text = fs.readFileSync(actionsFile, 'utf8')
+// фасад + части src/actions/** одной областью (TS с комментариями; spec частей пересчитаны от src/)
+const text = moduleSourceTs(actionsFile)
 const mealSource = text.slice(text.indexOf('const RISKY_FOOD ='), text.indexOf('async function drop (session'))
 const handsFile = path.resolve(__dirname, '../src/consumable-hands.ts')
 const hands = { exports: {} as any }
 vm.runInNewContext(esbuild.transformSync(fs.readFileSync(handsFile, 'utf8'), { loader: 'ts', format: 'cjs' }).code,
-  { module: hands, exports: hands.exports, require: req })
+  cjsContext({ module: hands, exports: hands.exports, require: req }))
 
 function scene({ shield = false, resume = false, include45 = false, failed = false, count = 6, mainItem = 'iron_sword', returnBlocked = false, fullBag = false } = {}) {
   let time = 0, biteAt: number | null = null, useHand = 45
@@ -50,9 +53,9 @@ function scene({ shield = false, resume = false, include45 = false, failed = fal
   }
   const module = { exports: {} as any }
   vm.runInNewContext(esbuild.transformSync(mealSource + '\nmodule.exports = {eat, bestFood}', { loader: 'ts', format: 'cjs' }).code,
-    { module, exports: module.exports, gameClock: clock, sleep,
+    cjsContext({ module, exports: module.exports, gameClock: clock, sleep,
       itemNamed: (b, name) => b.inventory.items().find(i => i.name === name),
-      require: name => name === './consumable-hands' ? hands.exports : req(name) })
+      require: name => name === './consumable-hands' ? hands.exports : req(name) }))
   return { bot, slots, food, bag, time: () => time, eat: params => module.exports.eat({ bot,
     mcData: { foodsByName: { cooked_mutton: { foodPoints: 6, saturation: 9.6 } } } }, params) }
 }

@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import Module from 'node:module'
-const Vec3 = require('vec3'), esbuild = require('esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
 const src = path.resolve(__dirname, '../src')
 
 function sourceModule(name: string, overrides: Record<string, any> = {}) {

@@ -1,11 +1,12 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const esbuild = require('esbuild')
-const { Vec3 } = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import * as esbuild from 'esbuild'
+import { Vec3 } from 'vec3'
 type Vector = import('vec3').Vec3
 
 const sourceCache = new Map<string, { exports: unknown }>()
@@ -20,7 +21,7 @@ function sourceModule(name: string): unknown {
     ? sourceModule(request.slice(2)) : localRequire(request)
   vm.runInNewContext(esbuild.transformSync(fs.readFileSync(filename, 'utf8'),
     { loader: 'ts', format: 'cjs', target: 'node24' }).code,
-  { module: mod, require: sourceRequire, process, console, setImmediate, performance, Buffer })
+  cjsContext({ module: mod, require: sourceRequire, process, console, setImmediate, performance, Buffer }))
   return mod.exports
 }
 const sealed = sourceModule('sealed') as { fillCell(bot: unknown, position: Vector): Promise<boolean> }

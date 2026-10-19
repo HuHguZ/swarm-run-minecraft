@@ -1,9 +1,9 @@
 'use strict'
 // Сводка приёмов арены (farm/crystal/tsum) и сторож портов PvP-сцен (arms-guard), 2026-10-06.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const tsum = require('../../farm/crystal/tsum')
-const guard = require('../arms-guard')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as tsum from '../../farm/crystal/tsum'
+import * as guard from '../scenes/lib/arms-guard'
 
 test('tsum: победы по бойцам и ролям, приёмы с числами суммируются по местам, урон', () => {
   const r = (n, winner, aName, tricksA, dmgA) => 'x ROUND ' + JSON.stringify({ kit: 'копья', n, winner, durS: 30 + n, tps: 600 + n, lagMax: { a: 3, b: 18 },

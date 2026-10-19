@@ -1,13 +1,13 @@
 import { predictPearl, planPearlResponse, pearlHeightWorth, type ObservedPearl, type PearlPrediction, type PearlResponsePlan } from './pearl-intercept'
 
-const clock = require('../game-clock')
-const Vec3 = require('vec3')
-const pick = require('../pick')
-const pearls = require('../pearl-hop')
-const throws = require('../throw')
-const mace = require('../mace')
-const spear = require('../spear')
-const flight = require('../elytra')
+import * as clock from '../game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import pick = require('../pick')
+import * as pearls from '../pearl-hop'
+import * as throws from '../throw'
+import mace = require('../mace')
+import * as spear from '../spear'
+import flight = require('../elytra')
 interface Control { aborted: boolean }
 interface ResponseOptions {
   enemy(): any
@@ -133,7 +133,7 @@ export function createPearlResponse(bot: any, options: ResponseOptions) {
     return heightPlan()
   }
   const valid = (ctl: Control, id: number) => !ctl.aborted && bot.health > 8 && options.enemy()?.id === id && options.enemy()?.isValid !== false
-  const throwTo = async (ctl: Control, point: any, enemyId: number, check: () => boolean) => {
+  const throwTo = async (ctl: Control, point: any, enemyId: number, check: () => boolean): Promise<throws.ThrowResult> => {
     const item = bot.inventory.items().find((i: any) => i.name === 'ender_pearl')
     if (!item || !valid(ctl, enemyId)) return { thrown: false }
     return throws.throwAt(bot, point, { item, preferOffhand: true, onAim: (shot: any) => valid(ctl, enemyId) && check()

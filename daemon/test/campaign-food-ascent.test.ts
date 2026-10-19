@@ -1,10 +1,13 @@
+import { functionSource } from './source-fixture'
+import { CAMPAIGN, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { body } from './ow-golden-source'
 
-const campaign = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+// toSurface по имени (часть underground) — до метки конца
+const campaign = functionSource(CAMPAIGN, 'toSurface', { ts: true }) + '\n// конец toSurface'
 
 function surfaceFixture(pit = true, pick = pit) {
   let time = 0
@@ -20,7 +23,7 @@ function surfaceFixture(pit = true, pick = pit) {
       return { status: 'done', detail: { out: false, pit, stopped: 'колонка sand сыплется в забой' } }
     }
   }
-  return { calls, run: body(campaign, 'async function toSurface (', 'const portalBuckets', globals, 'toSurface'), time: () => time }
+  return { calls, run: body(campaign, 'async function toSurface (', '// конец toSurface', withSetters(globals), 'toSurface'), time: () => time }
 }
 
 test('food ascent uses its remaining budget, including a bare-hand climb', async () => {

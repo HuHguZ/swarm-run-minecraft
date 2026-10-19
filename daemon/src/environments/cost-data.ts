@@ -1,8 +1,9 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { CostModel } from '../core/cost-model'
+import { REPO_ROOT } from '../paths'
 
-export function loadCosts(filename = process.env.ND_STRATEGY_COSTS ?? resolve(__dirname, '../../strategy-costs.json')): CostModel[] {
+export function loadCosts(filename = process.env.ND_STRATEGY_COSTS ?? resolve(REPO_ROOT, 'daemon/strategy-costs.json')): CostModel[] {
   if (filename === '0' || !existsSync(filename)) return []
   const value: unknown = JSON.parse(readFileSync(filename, 'utf8'))
   const models = value && typeof value === 'object' && 'models' in value ? value.models : value

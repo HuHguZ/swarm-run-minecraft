@@ -1,9 +1,9 @@
 'use strict'
 // S7d: граф боя (pvp/fight-graph) и новые действия калькулятора (удочка, трезубец с «Громовержцем»).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const kp = require('../src/pvp/kill-planner')
-const fg = require('../src/pvp/fight-graph')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as kp from '../src/pvp/kill-planner'
+import * as fg from '../src/pvp/fight-graph'
 
 const kit = (mat, ench = {}) => ['helmet', 'chestplate', 'leggings', 'boots'].map(s => ({ name: `${mat}_${s}`, ench }))
 function obs ({ dist = 2.5, hp = { lo: 18, hi: 20, mean: 19 }, items = [{ name: 'iron_sword' }], held = 'iron_sword', foe = {}, me = {}, ...rest }: any = {}) {
@@ -89,18 +89,18 @@ test('комбо: цепочка приёмов перед потерей хп, 
 })
 
 test('оценка хп: попадания без заявки — разброс по модели урона моего меча, а не 0.5–12 (оценка не раздувается)', () => {
-  const { EventEmitter } = require('node:events')
-  const co = require('../src/pvp/combat-observe')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const co: typeof import('../src/pvp/combat-observe') = require('../src/pvp/combat-observe')
   const client = new EventEmitter()
   const bot: any = new EventEmitter()
   bot._client = client
   bot.entity = { id: 1, position: { x: 0, y: 64, z: 0 }, onGround: true }
   bot.heldItem = { name: 'iron_sword', count: 1 }
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const armor = ['iron_boots', 'iron_leggings', 'iron_chestplate', 'iron_helmet'].map(name => ({ name, count: 1 }))
   const foe: any = { id: 2, type: 'player', username: 'Foe', position: { x: 2, y: 64, z: 0 }, equipment: [null, null, ...armor], metadata: [] }
   const tr = co.trackFoe(bot, foe, { honest: true })
-  const PA = require('../src/gamedata').DAMAGE_TYPES.indexOf('player_attack')
+  const PA = (require('../src/gamedata') as typeof import('../src/gamedata')).DAMAGE_TYPES.indexOf('player_attack')
   for (let i = 0; i < 3; i++) client.emit('damage_event', { entityId: 2, sourceCauseId: 2, sourceTypeId: PA })
   const e = tr.hp.snapshot()
   tr.stop()
@@ -109,14 +109,14 @@ test('оценка хп: попадания без заявки — разбро
 })
 
 test('S7d: зелье в него — не бросаю, когда он ближе 4.5 бл. (разрыв о его тело заденет и меня, ThrownSplashPotion 4 бл.)', async () => {
-  const { createEquipment } = require('../src/pvp/equipment')
-  const Vec3 = require('vec3')
+  const { createEquipment }: typeof import('../src/pvp/equipment') = require('../src/pvp/equipment')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   let onAimResult = null
   const ctx: any = {
     bot: { entity: { position: new Vec3(0, 64, 0) }, heldItem: { name: 'splash_potion' } },
     entity: { position: new Vec3(3.3, 64, 0), height: 1.8 },
     reachable: () => true, holdItem: async () => true, holdWeapon: async () => {}, used: () => {},
-    leadFn: () => new Vec3(3.3, 65, 0), edges: { support: () => ({ drop: 0 }) }, Vec3, pick: require('../src/pick'),
+    leadFn: () => new Vec3(3.3, 65, 0), edges: { support: () => ({ drop: 0 }) }, Vec3, pick: (require('../src/pick') as typeof import('../src/pick')),
     throwMod: { throwAt: async (_bot, _t, o) => { onAimResult = o.onAim({ land: { at: new Vec3(5, 64, 0) } }); return { thrown: !!onAimResult } } }
   }
   const eq = createEquipment(ctx)
@@ -127,13 +127,14 @@ test('S7d: зелье в него — не бросаю, когда он бли�
 })
 
 test('S7d: взять зелье — по содержимому; в руке оказалось другое зелье того же имени — «не взял»', async () => {
-  const { createEquipment } = require('../src/pvp/equipment')
+  const { createEquipment }: typeof import('../src/pvp/equipment') = require('../src/pvp/equipment')
   const mk = (slot, p) => ({ name: 'splash_potion', slot, components: [{ type: 'potion_contents', data: { potionId: p } }] })
   const heal = mk(37, 'strong_healing'); const harm = mk(38, 'strong_harming')
   const bot: any = { heldItem: null, inventory: { items: () => [heal, harm] } }
-  const pvp = require('../src/pvp')
-  const was = pvp.potionOf
-  pvp.potionOf = (i) => i && i.components && i.components[0].data.potionId
+  // Подмена — в определяющем модуле (pvp/potions): pvp/equipment берёт potionOf оттуда в момент вызова.
+  const potions: typeof import('../src/pvp/potions') = require('../src/pvp/potions')
+  const was = potions.potionOf
+  potions.potionOf = (i) => i && i.components && i.components[0].data.potionId
   try {
     let equipped = null
     bot.equip = async (it) => { equipped = it; bot.heldItem = it === heal ? harm : it } // «устаревший слот»: взял соседнее
@@ -142,5 +143,5 @@ test('S7d: взять зелье — по содержимому; в руке о
     assert.equal(equipped, heal, 'искал свежий предмет по содержимому')
     bot.equip = async (it) => { bot.heldItem = it }
     assert.equal(await eq.holdItem({ ...heal }), true)
-  } finally { pvp.potionOf = was }
+  } finally { potions.potionOf = was }
 })

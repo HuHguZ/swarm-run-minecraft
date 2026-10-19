@@ -11,7 +11,7 @@
 // факелы 32...) — тоже: выбрасывается только сверх него.
 
 // Лениво: containers.js тянет actions.js, а actions.js — этот файл.
-const keepFor = (name) => require('./containers').keepFor(name)
+const keepFor = (name) => (require('./containers') as typeof import('./containers')).keepFor(name)
 
 const JUNK = /^(dirt|coarse_dirt|rooted_dirt|gravel|sand|red_sand|granite|diorite|andesite|tuff|calcite|dripstone_block|pointed_dripstone|rotten_flesh|poisonous_potato|wheat_seeds|beetroot_seeds|melon_seeds|pumpkin_seeds|[a-z_]+_sapling|dandelion|poppy|[a-z_]*tulip|oxeye_daisy|cornflower|azure_bluet|allium|blue_orchid|kelp|seagrass|short_grass|fern|dead_bush|spider_eye|ink_sac|clay_ball|snowball|egg|moss_block|moss_carpet|glow_lichen|hanging_roots|cobweb|wildflowers|pink_petals|leaf_litter|bush|firefly_bush|short_dry_grass|tall_dry_grass|cactus_flower|bone_meal)$/
 const COMMON = /^(cobblestone|cobbled_deepslate|netherrack|blackstone|basalt|smooth_basalt|deepslate|stone|end_stone|soul_sand|soul_soil|[a-z_]+_planks|[a-z_]+_log|[a-z_]+_wood|glass|torch|coal|charcoal|bread|apple|[a-z_]*wool|[a-z_]+_bed|stick|string|bone|leather|feather|flint)$/
@@ -258,4 +258,4 @@ async function tidy (bot, { also = null }: any = {}) {
   return { tossed, merged, free: bot.inventory.emptySlotCount() }
 }
 
-module.exports = { worth, fits, outputSlots, ignoreDrop, tossPlan, makeRoom, status, tidy, RESERVE, reserveKind, reserveLeft, buildCount, isBuild }
+export { worth, fits, outputSlots, ignoreDrop, tossPlan, makeRoom, status, tidy, RESERVE, reserveKind, reserveLeft, buildCount, isBuild }

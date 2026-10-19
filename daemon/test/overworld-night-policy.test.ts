@@ -9,8 +9,8 @@ import { TacticalArbiter } from '../src/tactics/arbiter'
 import { EscapeProgress } from '../src/tactics/escape-progress'
 import { SCENARIOS } from '../src/tactics/sim-scenarios'
 import { check } from '../src/tactics/sim-run'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const flags = ['ND_OW_NIGHT_FLEE', 'ND_OW_NIGHT_BLOCKOFF', 'ND_OW_NIGHT_CREEPER']
 const previous = flags.map(key => process.env[key])
@@ -104,7 +104,7 @@ function nativeBox({ sealed = true, abort = false, handoff = false, throws = fal
   const module = { exports: {} as any }
   const overrides = { '../survival': survival, '../survival/hold-out': hold }
   const code = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     id => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   const execute = module.exports.TacticalSystem.prototype.execute
   return { calls, session, previous, newer, run: () => execute.call({ session }, { id: 'BlockOff' }, ctl, state({ enemies: [] })) }

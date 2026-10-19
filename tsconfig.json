@@ -9,20 +9,26 @@
     "esModuleInterop": true,
     "moduleDetection": "force",
     "resolveJsonModule": true,
-    "noEmit": true,
     "types": ["node"],
-    "paths": {
-      "#core/*": ["./daemon/src/core/*.ts"],
-      "#body/*": ["./daemon/src/*.ts"],
-      "#strategy/*": ["./daemon/src/campaign/*.ts"],
-      "#tactics/*": ["./daemon/src/tactics/*.ts"]
-    }
+    "rootDir": ".",
+    "outDir": "dist",
+    "sourceMap": true
   },
   "include": [
     "daemon/src/**/*.ts",
     "daemon/test/**/*.ts",
     "daemon/*.ts",
+    "daemon/campaign/**/*.ts",
+    "daemon/scenes/**/*.ts",
+    "daemon/arena/**/*.ts",
+    "daemon/castle/**/*.ts",
+    "daemon/sim/**/*.ts",
+    "daemon/tools/**/*.ts",
     "farm/*.ts",
+    "farm/analysis/**/*.ts",
+    "farm/scenes/**/*.ts",
+    "farm/series/**/*.ts",
+    "farm/swarm/**/*.ts",
     "farm/arena/**/*.ts",
     "farm/crystal/**/*.ts",
     "farm/dragon/**/*.ts",
@@ -34,5 +40,5 @@
     "mcp/**/*.ts",
     "run/*.ts"
   ],
-  "exclude": ["**/node_modules", "farm/dragon/codex-*"]
+  "exclude": ["**/node_modules", "dist", "dist-*", "farm/dragon/codex-*"]
 }

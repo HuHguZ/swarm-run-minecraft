@@ -1,11 +1,13 @@
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
+import { cjsContext } from './cjs-context'
 
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+const source = campaignTs()
 const begin = source.indexOf('async function executeStrategy (')
 assert.ok(begin >= 0)
 const code = transformSync(source.slice(begin, source.indexOf('\n}', begin) + 2) + '\nthis.run=executeStrategy', { loader: 'ts' }).code
@@ -18,7 +20,7 @@ async function scout(knownLava = false, interrupted = false) {
     lavaScoutCells: new Set(), lavaScoutViews: 0, dim: () => 'overworld', graphFact() {}, dayLavaStep: async () => false, skyLavaLook: async () => null, lavaLookout: async () => null, lavaAtSeenRuins: async () => false, lavaSourceKnown: false,
     act: async (method, params) => { calls.push({ method, params }); if (interrupted) context.strategyInterrupted = true; return { status: 'done' } }
   }
-  vm.runInNewContext(code, context)
+  vm.runInNewContext(code, cjsContext(withSetters(context)))
   const result = await context.run({ skill: 'scoutLava' }, new AbortController().signal)
   return { calls, result }
 }

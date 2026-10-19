@@ -1,7 +1,7 @@
 // Сколько места над землёй у столба на снижении: по записи сервера (rec*.jsonl) — низ коробок головы/шеи/тела/крыльев
 // над кольцом r ∈ [R0, R1] от центра, относительно P (верх столба). node an-clear.js <rec>...
-const fs = require('fs')
-const S = require('./dsim')
+import * as fs from 'fs'
+import * as S from './dsim'
 const R0 = +(process.env.R0 || 3.5); const R1 = +(process.env.R1 || 5.5)
 const mins = []
 for (const f of process.argv.slice(2)) {
@@ -20,7 +20,7 @@ for (const f of process.argv.slice(2)) {
       const g0 = s.yRot * 0.017453292
       const body = { x: s.x + S.msin(g0) * 0.5, y: s.y, z: s.z - S.mcos(g0) * 0.5 }
       const w1 = { x: s.x + S.mcos(g0) * 4.5, y: s.y + 2, z: s.z + S.msin(g0) * 4.5 }; const w2 = { x: s.x - S.mcos(g0) * 4.5, y: s.y + 2, z: s.z - S.msin(g0) * 4.5 }
-      for (const [c, hw] of [[hd, 0.5], [nk, 1.5], [body, 2.5], [w1, 2], [w2, 2]]) {
+      for (const [c, hw] of [[hd, 0.5], [nk, 1.5], [body, 2.5], [w1, 2], [w2, 2]] as const) {
         // ближняя к центру и дальняя точки коробки по горизонтали; попадает ли коробка в кольцо
         const r = Math.hypot(c.x - 0.5, c.z - 0.5)
         if (r + hw * 1.42 < R0 || r - hw * 1.42 > R1) continue

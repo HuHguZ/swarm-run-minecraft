@@ -1,9 +1,9 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { withTimeout, placeBlockAt, pickFiller } = require('./build')
-const { itemNamed, countItems, diffItems, equipBestTool } = require('./items')
+import * as gameClock from './game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals } from 'mineflayer-pathfinder'
+import { withTimeout, placeBlockAt, pickFiller } from './build'
+import { itemNamed, countItems, diffItems, equipBestTool } from './items'
 
 // Механизмы из чертежа, которые тело строит само и потом ими пользуется.
 //
@@ -459,4 +459,4 @@ async function run (session, ctl, p: any = {}) {
   throw new Error(`режим ${mode} не знаю: build / collect / status / plan`)
 }
 
-module.exports = { run, caneLayout, caneCheck }
+export { run, caneLayout, caneCheck }

@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Кристаллы Края в бою с игроком (просьба 2026-09-30: «они много урона наносят
 // и тоже зрелищно драться ими, научи ботов ими биться зрелищно»). Бой — не
 // ваншот, а размен: взрывы, «попы» тотемов, обсидиан вокруг ног, подрыв
@@ -41,213 +41,22 @@ const gameClock = require('./game-clock')
 // окружения закрыт снизу); сбить его кристалл, когда ему больнее или в своё
 // окно; отойти, если его кристалл у меня и он его достаёт.
 
-const Vec3 = require('vec3')
-const boom = require('./boom')
-const pick = require('./pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const boom: typeof import('./boom') = require('./boom')
+const pick: typeof import('./pick') = require('./pick')
 
-const P = 6
-const EYE = 1.62
-const HIT_R = 3.0
-const PLACE_R = 4.5
-const TICK = 50
-const IFRAME_MS = 500
+import {
+  P, EYE, HIT_R, PLACE_R, TICK, IFRAME_MS, SIDES, ANCHOR_P, anchorReady, r1, shieldUpOf, without, shieldCovers, boxOf, intersects, crystalBox, boxDist, blockAt, copyCache, isAirB, solidB, baseFree, centerOf, pickBlockers, faceFor, hitAim, losClear, surrounded, feetCell
+} from './crystal/geometry'
+import { effHp, countOf, kitOf, armorWear, landed, worthHit } from './crystal/scoring'
+
 const ON = process.env.ND_CRYSTAL !== '0'
 const DEBUG = !!process.env.ND_DEBUG_CRYSTAL
-const AIRS = new Set(['air', 'cave_air', 'void_air'])
-const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
-// Якорь: сила 5, взрывается там, где не работает (верхний мир, Край).
-const ANCHOR_P = 5
-const ANCHOR_WORLDS = /overworld|end$|the_end/
-// Якорь готов к бою: якоря и светокамень есть, измерение — где он взрывается.
-const anchorReady = (bot, k) => k.anchors > 0 && k.glowstone > 0 && ANCHOR_WORLDS.test(bot.game && bot.game.dimension || 'overworld')
 
 const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
-const r1 = (x) => Math.round(x * 10) / 10
 // S7c (07.10): щит в размене и в защите, уход в укрытие и блок между, хп соперника-игрока — оценкой.
 // ND_CX2=0 — поведение до S7c (A/B серий).
 const CX2 = process.env.ND_CX2 !== '0'
-
-// Щит (javap 1.21.11, research/claude-1006/s7c/jar): взрыв кристалла/якоря не в #bypasses_shield,
-// LivingEntity.applyItemBlocking → BlocksAttacks.resolveBlockedDamage по DamageSource.getSourcePosition
-// (кристалл — его позиция, якорь — центр блока): горизонтальный угол взгляда на источник ≤ 90° — урон 0
-// (DamageReduction щита: base 0, factor 1). Толчок взрыва щит не гасит (ServerExplosion.hurtEntities: push
-// после hurtServer). Держит через 5 тиков после подъёма.
-function shieldUpOf (bot, e) {
-  try { const u = require('./pvp/combat-observe').usingOf(bot, e); return !!(u && u.name === 'shield') } catch { return false }
-}
-// Кэш лучей без одной клетки: якорь снимается раньше взрыва (RespawnAnchorBlock.explode: removeBlock, потом
-// explode) — его блок лучам не преграда. Кэш — как в boom.segmentBlocked (get/set по «x,y,z»).
-function without (cache, cell) {
-  const ak = `${cell.x},${cell.y},${cell.z}`
-  return { get: (k) => (k === ak ? null : cache.get(k)), set: (k, v) => { if (k !== ak) cache.set(k, v) }, has: (k) => k === ak || cache.has(k) }
-}
-function shieldCovers (e, at, src) {
-  const dm = require('./pvp/damage-model')
-  return dm.shieldAngle(e.headYaw ?? e.yaw ?? 0, at || e.position, src) <= dm.SHIELD_HALF_ANGLE
-}
-
-// ---------------------------------------------------------------- геометрия
-
-function boxOf (e) {
-  const w = e.width ?? 0.6
-  const h = e.height ?? 1.8
-  const p = e.position
-  return { minX: p.x - w / 2, minY: p.y, minZ: p.z - w / 2, maxX: p.x + w / 2, maxY: p.y + h, maxZ: p.z + w / 2 }
-}
-function intersects (a, b) {
-  return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY && a.minZ < b.maxZ && a.maxZ > b.minZ
-}
-// Рамка кристалла 2×2×2 с центром низа в c.
-function crystalBox (c) { return { minX: c.x - 1, minY: c.y, minZ: c.z - 1, maxX: c.x + 1, maxY: c.y + 2, maxZ: c.z + 1 } }
-function boxDist (p, b) {
-  const x = Math.max(b.minX, Math.min(p.x, b.maxX))
-  const y = Math.max(b.minY, Math.min(p.y, b.maxY))
-  const z = Math.max(b.minZ, Math.min(p.z, b.maxZ))
-  return Math.hypot(p.x - x, p.y - y, p.z - z)
-}
-
-function blockAt (bot, cache, x, y, z) {
-  const k = `${x},${y},${z}`
-  if (cache && cache.has('b' + k)) return cache.get('b' + k)
-  let b = null
-  try { b = (cache?.world || bot).blockAt(new Vec3(x, y, z), false) } catch {}
-  if (cache) cache.set('b' + k, b)
-  return b
-}
-const copyCache = cache => Object.assign(new Map(cache), cache?.world ? { world: cache.world } : {})
-const isAirB = (b) => !!b && AIRS.has(b.name)
-const isBaseB = (b) => !!b && (b.name === 'obsidian' || b.name === 'bedrock')
-const solidB = (b) => !!b && b.boundingBox === 'block'
-
-// Можно ли поставить кристалл на блок base (EndCrystalItem.useOn): обсидиан
-// или бедрок, над ним воздух, в столбе 1×2 над ним ни одной сущности.
-function baseFree (bot, base, { cache = null, ents = null }: any = {}) {
-  if (!isBaseB(blockAt(bot, cache, base.x, base.y, base.z))) return false
-  if (!isAirB(blockAt(bot, cache, base.x, base.y + 1, base.z))) return false
-  const col = { minX: base.x, minY: base.y + 1, minZ: base.z, maxX: base.x + 1, maxY: base.y + 3, maxZ: base.z + 1 }
-  for (const e of ents || (Object.values(bot.entities || {}) as any[])) {
-    if (!e || !e.position || e.isValid === false) continue
-    if (intersects(col, boxOf(e))) return false
-  }
-  return true
-}
-const centerOf = (base) => new Vec3(base.x + 0.5, base.y + 1, base.z + 0.5)
-
-// Живое и кристаллы перекрывают прицел клиента (GameRenderer.pick: сущность
-// под лучом раньше блока — клик уйдёт в неё, не в грань).
-function pickBlockers (bot, eye) {
-  return (Object.values(bot.entities || {}) as any[]).filter((e : any) => e && e !== bot.entity && e.position && e.isValid !== false &&
-    e.position.distanceTo(eye) < 9 && (e.type === 'player' || e.name === 'end_crystal' || /mob|hostile|animal|passive|water|ambient/.test(e.type || '')))
-}
-
-// Грань блока base, в которую можно честно кликнуть (pick.faceAim): верх
-// первым, потом бока к нам. Возвращает { face, pt } или null.
-const FACES = [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
-function faceFor (bot, base, eye, avoid) {
-  for (const f of FACES) {
-    const c = base.offset(0.5 + f.x * 0.5, 0.5 + f.y * 0.5, 0.5 + f.z * 0.5)
-    if ((eye.x - c.x) * f.x + (eye.y - c.y) * f.y + (eye.z - c.z) * f.z <= 0) continue
-    if (c.distanceTo(eye) > PLACE_R + 0.6) continue
-    const pt = pick.faceAim(bot, base, f, { eye, range: PLACE_R - 0.05, avoid })
-    if (pt) return { face: f, pt }
-  }
-  return null
-}
-
-// Ударить кристалл (в точке center) отсюда: рамка 2×2×2 в 3.0 от глаз, луч к
-// точке рамки не упирается в блок (как pick.aim) и не проходит сквозь рамку
-// сущности раньше кристалла — он сам, другой кристалл, моб: прицел клиента взял
-// бы их, не кристалл (GameRenderer.pick; ревью Codex 2026-09-30). Перебор точек
-// рамки — кристалл за его спиной виден краем.
-const AIM_FRACS = []
-for (const fy of [0.5, 0.8, 0.3, 0.95, 0.1]) {
-  for (const [fx, fz] of [[0.5, 0.5], [0.15, 0.5], [0.85, 0.5], [0.5, 0.15], [0.5, 0.85], [0.15, 0.15], [0.85, 0.85], [0.15, 0.85], [0.85, 0.15]]) AIM_FRACS.push([fx, fy, fz])
-}
-function hitAim (bot, center, eye, range = HIT_R - 0.1) {
-  const cb = crystalBox(center)
-  if (boxDist(eye, cb) > range) return null
-  const lo = { x: cb.minX, y: cb.minY, z: cb.minZ }
-  const hi = { x: cb.maxX, y: cb.maxY, z: cb.maxZ }
-  const occ = pickBlockers(bot, eye).filter((e : any) => e.position.distanceTo(center) >= 0.2).map(boxOf)
-  for (const [fx, fy, fz] of AIM_FRACS) {
-    const tp = new Vec3(lo.x + 2 * fx, lo.y + 2 * fy, lo.z + 2 * fz)
-    const delta = tp.minus(eye)
-    const len = delta.norm()
-    if (len < 1e-6) return tp
-    const d = delta.scaled(1 / len)
-    const tE = pick.rayBox(eye, d, lo, hi, range + 0.001)
-    if (tE == null || tE > range) continue
-    if (pick.blockOnRay(bot, eye, d, tE)) continue
-    if (occ.some(b => { const t = pick.rayBox(eye, d, { x: b.minX, y: b.minY, z: b.minZ }, { x: b.maxX, y: b.maxY, z: b.maxZ }, tE); return t != null && t < tE - 0.02 })) continue
-    return tp
-  }
-  return null
-}
-
-// Независимая проверка «не сквозь стену» для счёта (другой луч — prismarine
-// world.raycast по формам блоков): первый блок на пути к точке — не раньше неё.
-function losClear (bot, eye, pt, { expectBlock = null }: any = {}) {
-  try {
-    const d = pt.minus(eye)
-    const len = d.norm()
-    if (len < 1e-3) return true
-    const hit = bot.world.raycast(eye, d.scaled(1 / len), len + 0.05)
-    if (!hit) return true
-    if (expectBlock && hit.position && hit.position.equals(expectBlock)) return true
-    const at = hit.intersect ? hit.intersect.distanceTo(eye) : hit.position.offset(0.5, 0.5, 0.5).distanceTo(eye)
-    return at >= len - 0.03
-  } catch { return false }
-}
-
-// ---------------------------------------------------------------- состояние тела
-
-function effHp (bot, e) {
-  if (e === bot.entity) return (bot.health ?? 20) + (require('./totem').absorption(bot) || 0)
-  let h = null
-  try {
-    const keys = bot.registry.entitiesByName[e.name || 'player'].metadataKeys
-    const i = keys ? keys.indexOf('health') : -1
-    const v = e.metadata && e.metadata[i >= 0 ? i : 9]
-    if (typeof v === 'number') h = v
-  } catch {}
-  let abs = 0
-  try { abs = require('./read').absorptionOf(bot, e) || 0 } catch {}
-  return (h ?? 20) + abs
-}
-function countOf (bot, name) { return bot.inventory.items().reduce((n, i) => n + (i.name === name ? i.count : 0), 0) }
-function kitOf (bot) {
-  return {
-    crystals: countOf(bot, 'end_crystal'),
-    obsidian: countOf(bot, 'obsidian'),
-    bow: !!bot.inventory.items().find(i => i.name === 'bow'),
-    arrows: !!bot.inventory.items().find(i => /arrow$/.test(i.name)),
-    totems: countOf(bot, 'totem_of_undying') + (bot.inventory.slots[45] && bot.inventory.slots[45].name === 'totem_of_undying' ? 1 : 0),
-    anchors: countOf(bot, 'respawn_anchor'),
-    glowstone: countOf(bot, 'glowstone')
-  }
-}
-// Износ надетой брони с «Починкой»: доля потраченной прочности у самой
-// изношенной вещи и сколько прочности не хватает всем вместе (slots 5..8).
-function armorWear (bot) {
-  const read = require('./read')
-  let worst = 0; let missing = 0; let mending = 0
-  const items = {}
-  for (const sl of [5, 6, 7, 8]) {
-    const it = bot.inventory.slots[sl]
-    if (!it || !it.maxDurability) continue
-    if (read.enchLevel(bot, it, 'mending') <= 0) continue
-    mending++
-    const used = it.durabilityUsed || 0
-    items[sl] = { name: it.name, used }
-    missing += used
-    worst = Math.max(worst, used / it.maxDurability)
-  }
-  return { worst, missing, mending, items }
-}
-function surrounded (bot, cell, cache) {
-  return SIDES.every(s => solidB(blockAt(bot, cache, cell.x + s.x, cell.y, cell.z + s.z)))
-}
-function feetCell (p) { return new Vec3(Math.floor(p.x), Math.floor(p.y + 1e-3), Math.floor(p.z)) }
 
 // ---------------------------------------------------------------- оценка
 
@@ -259,49 +68,11 @@ function feetCell (p) { return new Vec3(Math.floor(p.x), Math.floor(p.y + 1e-3),
 // лучи вскользь по краю окружения), один — хлопнул свой тотем при прогнозе 0.3.
 // himShield — его щит поднят (shieldUpOf): источник в его передних 90° — ему 0 (сырой тоже: окна нет).
 function trade (bot, center, him, me, dHim, dMe, cache, { himAt = null, meAt = null, power = P, himShield = false }: any = {}) {
-  let h = boom.blast(bot, center, power, himAt || him.position, { def: dHim, cache })
+  let h: ReturnType<typeof boom.blast> & { blocked?: boolean } = boom.blast(bot, center, power, himAt || him.position, { def: dHim, cache })
   if (himShield && h.raw > 0 && shieldCovers(him, himAt, center)) h = { ...h, dmg: 0, raw: 0, blocked: true }
   const m = boom.blast(bot, center, power, meAt || me.position, { def: dMe, cache })
   const mx = boom.blast(bot, center, power, meAt || me.position, { def: dMe, seen: 1 })
   return { him: h.dmg, me: m.dmg, meMax: mx.dmg, himRaw: h.raw, meRaw: m.raw, himSeen: h.seen, meSeen: m.seen }
-}
-
-// Урон, который ему реально пройдёт с учётом его окна неуязвимости: в окне
-// проходит только превышение сырого над последним ударом (очень грубо —
-// пропорцией от урона после брони).
-// def — его защита: броня применяется к разнице сырого (LivingEntity.hurtServer
-// → actuallyHurt(amount − lastHurt)), не пропорцией (ревью Codex: 3.2 против 1.6).
-function landed (t, win, def = null) {
-  if (!win) return t.him
-  if (t.himRaw <= win.raw + 0.5) return 0
-  const delta = t.himRaw - win.raw
-  if (!def) return t.him * delta / t.himRaw
-  const assess = require('./assess')
-  return assess.afterArmor(delta, def.armor, def.tough) * (1 - (def.epf || 0) / 25) * Math.max(0, 1 - 0.2 * (def.resist || 0))
-}
-
-// Что стоит сделать с кристаллом сейчас. me — моё состояние; opts.minNet —
-// сколько «ему минус мне» считать выгодой.
-// Свой тотем своим же кристаллом не хлопать никогда (запас 3 хп); ему —
-// заметно; размен в нашу пользу хотя бы в 1.3 раза и не больше ~45% своего.
-// Добить (или сбить его тотем) — можно и при равном размене, если себе не
-// смертельно. Симметричная броня с «Взрывоустойчивостью» на открытом поле
-// даёт ~12.6 ему у ног и ~7.5 себе с 3.5 блоков — это ещё размен; себе
-// больше, чем ему, — никогда.
-// press — долго без размена (нажим pvp.js): размен 1:1 тоже годится, лишь бы
-// себе не смертельно, — иначе два бота в окружениях стоят до «застоя».
-// hisTotem — тотем у него в руке: «добить» — лишь сбить тотем, и за это
-// большой ценой себе (до смертельного) не платить — только обычным пределом.
-function worthHit (t, { myEff, hisEff, hisLand, press = false, hisTotem = false }: any) {
-  const worst = Math.max(t.me, t.meMax ?? t.me)
-  // ND_CRYSTAL_RECKLESS=1 (арена 10.10: «пусть все взрывают друг друга»): рвать, если ему ≥ 2.5, а сам переживу с запасом 2.
-  if (process.env.ND_CRYSTAL_RECKLESS === '1') return hisLand >= 2.5 && worst < myEff - 2
-  if (worst >= myEff - 3) return false
-  if (hisLand < 2.5) return false
-  const kill = hisLand >= hisEff - 0.5
-  if (kill && hisLand >= t.me && (hisTotem ? t.me <= Math.max(2.5, myEff * 0.45) : worst < myEff - 4)) return true
-  if (press) return hisLand >= t.me && t.me <= Math.max(2.5, myEff * 0.6) && t.me < myEff - 4
-  return hisLand >= t.me * 1.3 + 0.5 && t.me <= Math.max(2.5, myEff * 0.45)
 }
 
 // ---------------------------------------------------------------- бой
@@ -781,7 +552,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     const me = bot.entity.position
     const worst = threats.slice().sort((a, b) => b.t.me - a.t.me)[0]
     const yaw = Math.atan2(-(worst.c.position.x - me.x), -(worst.c.position.z - me.z))
-    const dm = require('./pvp/damage-model')
+    const dm: typeof import('./pvp/damage-model') = require('./pvp/damage-model')
     const open = threats.filter(th => dm.shieldAngle(yaw, me, th.c.position) > 85)
     const inHand = (bot.heldItem && bot.heldItem.name === 'shield') || (bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
     const use = guard && !guard.failure() ? guard.nativeUse() : null
@@ -1008,7 +779,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     //    — отошёл — стрела»).
     let best = null
     // Край, яма, лава рядом с ним (S7c): толчок взрыва (1−d)·вид. по «центр → глаза» сбросит его — к цене +5.
-    const edgy = CX2 && (() => { try { return require('./edges').hazardAround(bot, foe.position, 5, new Map()) } catch { return false } })()
+    const edgy = CX2 && (() => { try { return (require('./edges') as typeof import('./edges')).hazardAround(bot, foe.position, 5, new Map()) } catch { return false } })()
     // Толпа (ND_CRYSTAL_RECKLESS=1, арена 10.10: «взорвал — следующий сразу, пока не убьёшь кучу врагов»): за каждого
     // чужого игрока в 6 бл. от кристалла, кроме цели, — к цене (6 − d)·1.2; свои по команде (teamMap) не в счёт.
     const crowd = (pos) => {
@@ -1413,8 +1184,8 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
   }
 
   async function doSurround (ctl, foe) {
-    const fortify = require('./fortify')
-    const { placeBlockAt } = require('./build')
+    const fortify: typeof import('./fortify') = require('./fortify')
+    const { placeBlockAt }: typeof import('./build') = require('./build')
     await fortify.centerInCell(bot, 450)
     const cell = fortify.feetCell(bot)
     const toward = foe && foe.position ? foe.position : null
@@ -1523,7 +1294,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     }
     if (a.kind === 'wall') {
       lastDodge = gameClock.now()
-      const { placeBlockAt } = require('./build')
+      const { placeBlockAt }: typeof import('./build') = require('./build')
       let n = 0
       for (const cell of a.cells) {
         if (ctl.aborted || !alive(a).length) break
@@ -1603,7 +1374,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     }
     if (a.kind === 'anchor') {
       lastAnchor = gameClock.now()
-      const { placeBlockAt } = require('./build')
+      const { placeBlockAt }: typeof import('./build') = require('./build')
       let r = null
       myAnchorCells.add(cellKey(a.cell))
       try { r = await placeBlockAt(bot, a.cell, { item: 'respawn_anchor', honest: true, timeoutMs: 500 }) } catch (e) { r = { ok: false, reason: e.message } }
@@ -1669,7 +1440,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
     }
     if (a.kind === 'obby') {
       lastObby = gameClock.now()
-      const { placeBlockAt } = require('./build')
+      const { placeBlockAt }: typeof import('./build') = require('./build')
       let r = null
       try { r = await placeBlockAt(bot, a.cell, { item: 'obsidian', honest: true, timeoutMs: 500 }) } catch (e) { r = { ok: false, reason: e.message } }
       if (r && r.ok && !r.already) { st.obby++; out.ok = true; out.keepItem = false; out.wait = 60; return out }
@@ -1760,7 +1531,7 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
           await sleep(TICK)
           if (countOf(bot, a.item) < had) break
           if (ctl.aborted || ctx.stop?.()) { why = 'другая угроза'; break }
-          const defense = eatAnchorDefense(a.item, Math.max(0, require('./tempo').consumeMs(a.item) - (gameClock.now() - t0)), noticed, ctx.reactMs)
+          const defense = eatAnchorDefense(a.item, Math.max(0, (require('./tempo') as typeof import('./tempo')).consumeMs(a.item) - (gameClock.now() - t0)), noticed, ctx.reactMs)
           if (defense) { out.defense = defense; why = 'защита от видимого якоря дешевле остатка еды'; break }
           // Его кристалл у меня и мне от него смертельно — бросить есть.
           const f = enemy()
@@ -1825,4 +1596,6 @@ function create (bot, { enemy, used = () => {}, foeHp = null, noteAttack = null,
   return { st, plan, run, engaged, dominant, report, close, worstVsMe, evade, coverSpot, wallSpot, hisHp, guardFor, _onBlock: onBlock }
 }
 
-module.exports = { ON, CX2, create, baseFree, centerOf, hitAim, faceFor, trade, landed, worthHit, crystalBox, boxDist, surrounded, losClear, shieldCovers, P }
+export { ON, CX2, create, trade }
+export { baseFree, centerOf, hitAim, faceFor, crystalBox, boxDist, surrounded, losClear, shieldCovers, P } from './crystal/geometry'
+export { landed, worthHit } from './crystal/scoring'

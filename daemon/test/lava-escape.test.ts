@@ -1,18 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { splashImpact, drinkFireResistance, climbFromLava, lavaCapabilities } from '../src/tactics/lava-escape'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
 
 test('an unresisted lava emergency does not scan unusable climbing routes while the pearl waits for physics', () => {
-  const unstuck = require('../src/unstuck')
+  const unstuck: typeof import('../src/unstuck') = require('../src/unstuck')
   const previous = unstuck.fluidRoute
   const bot: any = { health: 20, entity: { position: new Vec3(.5, 100, .5), isInLava: true, effects: {} },
     registry: { effectsByName: { fire_resistance: { id: 12 } } },
     inventory: { items: () => [{ name: 'ender_pearl', count: 8 }] },
     blockAt: () => ({ name: 'lava', boundingBox: 'empty' }) }
   let scans = 0
-  unstuck.fluidRoute = () => { scans++; return { target: new Vec3(2.5, 101, .5) } }
+  unstuck.fluidRoute = () => { scans++; return { target: new Vec3(2.5, 101, .5) } as any }
   try {
     assert.deepEqual(lavaCapabilities({ bot }), { potion: false, climb: false, exit: '' })
     assert.equal(scans, 0)
@@ -51,7 +51,7 @@ test('fire resistance splashes against a visible nearby wall and waits for a del
 })
 
 test('a dry intermediate platform resumes the original shore goal after a native emergency interrupt', async () => {
-  const build = require('../src/build')
+  const build: typeof import('../src/build') = require('../src/build')
   const previous = build.towerUp
   const goal = { at: new Vec3(.5, 104, .5), deadline: clock.now() + 12000, startY: 100, placed: 1 }
   const bot: any = { health: 18, entity: { position: new Vec3(.5, 101, .5), onGround: true, effects: { 12: {} } },
@@ -80,7 +80,7 @@ test('a dry intermediate platform resumes the original shore goal after a native
 
 test('a failed climb retains the original shore and cannot report its own platform as an exit', async () => {
   const c = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
-  const build = require('../src/build')
+  const build: typeof import('../src/build') = require('../src/build')
   const previous = build.towerUp
   const goal = { at: new Vec3(-1.5, 105, .5), deadline: 12000, startY: 100, placed: 2 }
   const bot: any = { health: 18, entity: { position: new Vec3(.5, 103, .5), onGround: true, effects: { 12: {} } },
@@ -120,7 +120,7 @@ test('a platform at shore height still requires walking onto the original shore 
 
 test('confirmed stable height progress renews the rescue budget beyond twelve game seconds', async () => {
   const c = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
-  const build = require('../src/build'); const previous = build.towerUp
+  const build: typeof import('../src/build') = require('../src/build'); const previous = build.towerUp
   const goal = { at: new Vec3(.5, 105, .5), deadline: 12000, startY: 100, placed: 1 }
   const bot: any = { health: 18, entity: { position: new Vec3(.5, 101, .5), onGround: true, effects: { 12: {} } },
     registry: { effectsByName: { fire_resistance: { id: 12 } } }, inventory: { items: () => [{ name: 'cobblestone', count: 20 }] },

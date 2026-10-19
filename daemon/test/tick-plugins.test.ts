@@ -1,13 +1,14 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const fs = require('node:fs')
-const os = require('node:os')
-const path = require('node:path')
-const { Vec3 } = require('vec3')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')('1.21.11')
+const test: typeof import('node:test') = require('node:test')
+const assert: typeof import('node:assert/strict') = require('node:assert/strict')
+const { EventEmitter }: typeof import('node:events') = require('node:events')
+const fs: typeof import('node:fs') = require('node:fs')
+const os: typeof import('node:os') = require('node:os')
+const path: typeof import('node:path') = require('node:path')
+const { Vec3 }: typeof import('vec3') = require('vec3')
+const { repoJson }: typeof import('../src/paths') = require('../src/paths')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
 
 // Only the external server and its clock are doubled. Physics, block digTime,
 // Mineflayer injection and pathfinding use the installed production libraries.
@@ -84,7 +85,7 @@ function block (name, position) {
 }
 
 function testBot () {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot._client.state = 'play'
   bot.packets = []
@@ -110,7 +111,7 @@ function testBot () {
 }
 
 function install (clock, { digging = false, pathfinder = false, physicsEnabled = true }: any = {} as Record<string, any>) {
-  const { createTickPlugins } = require('../src/tick-plugins')
+  const { createTickPlugins }: typeof import('../src/tick-plugins') = require('../src/tick-plugins')
   const adapters = createTickPlugins(clock)
   const bot = testBot()
   adapters.plugins.physics(bot, { physicsEnabled })
@@ -125,7 +126,7 @@ function install (clock, { digging = false, pathfinder = false, physicsEnabled =
 test('native jump prediction traverses a water landing beyond its dry twenty-tick horizon', async () => {
   const clock = testClock(750)
   const bot = install(clock, { pathfinder: true })
-  const cells = require('./fixtures/water-landing-1.21.11.json')
+  const cells = repoJson('daemon/test/fixtures/water-landing-1.21.11.json')
   bot.blockAt = p => {
     const x = Math.floor(p.x) - 206, y = Math.floor(p.y) - 58, z = Math.floor(p.z) - 113
     const state = x >= 0 && x < 7 && y >= 0 && y < 8 && z >= 0 && z < 9 ? cells[(x * 8 + y) * 9 + z] : 0
@@ -133,11 +134,11 @@ test('native jump prediction traverses a water landing beyond its dry twenty-tic
   }
   bot.entity.position = new Vec3(209.46764459511138, 61, 119.49874620143578)
   bot.entity.velocity = new Vec3(0, -0.0784000015258789, 0)
-  const { Movements, goals } = require('mineflayer-pathfinder')
+  const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const mv = new Movements(bot)
   mv.canDig = false; mv.allow1by1towers = false
   bot.pathfinder.setMovements(mv)
-  const walk = require('../src/movement').gotoGoal(bot, new goals.GoalNearXZ(209, 116, .5))
+  const walk = (require('../src/movement') as typeof import('../src/movement')).gotoGoal(bot, new goals.GoalNearXZ(209, 116, .5))
   let arrived = null
   walk.then(() => { arrived = bot.entity.position.clone() }, () => {})
   try {
@@ -157,10 +158,10 @@ test('empty partial A* traverses a known detour while the goal search continues'
     const wall = z === 1 && x >= 0 && x < 50 && y >= 1 && y <= 3
     return block(floor || wall ? 'stone' : 'air', p)
   }
-  const { Movements, goals } = require('mineflayer-pathfinder')
+  const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const mv = new Movements(bot)
   mv.canDig = false; mv.allowParkour = false; mv.allow1by1towers = false; mv.maxDropDown = 1
-  require('../src/worlds').tuneMovements(bot, mv)
+  ;(require('../src/worlds') as typeof import('../src/worlds')).tuneMovements(bot, mv)
   const nativeNeighbors = mv.getNeighbors.bind(mv)
   mv.getNeighbors = node => {
     const until = performance.now() + .03
@@ -170,7 +171,7 @@ test('empty partial A* traverses a known detour while the goal search continues'
   bot.pathfinder.setMovements(mv)
   bot.pathfinder.tickTimeout = .01
   const goal = new goals.GoalBlock(0, 1, 1000)
-  const walk = require('../src/movement').gotoGoal(bot, goal)
+  const walk = (require('../src/movement') as typeof import('../src/movement')).gotoGoal(bot, goal)
   walk.catch(() => {})
   let slicedWhileMoving = false
   bot.on('path_update', r => {
@@ -191,7 +192,7 @@ test('empty partial A* traverses a known detour while the goal search continues'
 
 test('frontier fallback does not invent a step at an unexpanded start or a dead end', () => {
   const bot = install(testClock(), { pathfinder: true, physicsEnabled: false })
-  const { Movements, goals } = require('mineflayer-pathfinder')
+  const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   bot.blockAt = p => block(Math.floor(p.x) === 0 && Math.floor(p.z) === 0 && Math.floor(p.y) === 0 ? 'stone' : 'air', p)
   const mv = new Movements(bot)
   mv.canDig = false; mv.allowParkour = false; mv.allow1by1towers = false; mv.maxDropDown = 1
@@ -211,14 +212,14 @@ test('frontier fallback does not invent a step at an unexpanded start or a dead 
 
 for (const support of ['soul_sand', 'oak_slab']) test(`native partial A* expands the original cell above ${support}`, () => {
   const bot = install(testClock(), { pathfinder: true, physicsEnabled: false })
-  const { Movements, goals } = require('mineflayer-pathfinder')
+  const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const Move = require('mineflayer-pathfinder/lib/move')
   bot.blockAt = p => block(p.y < 1 ? support : 'air', p)
   const movements = new Movements(bot)
   movements.canDig = true
   movements.allowParkour = false
   movements.allow1by1towers = false
-  require('../src/worlds').tuneMovements(bot, movements)
+  ;(require('../src/worlds') as typeof import('../src/worlds')).tuneMovements(bot, movements)
   bot.pathfinder.setMovements(movements)
   const search = bot.pathfinder.getPathFromTo(movements, bot.entity.position, new goals.GoalBlock(1000, 1, 0), {
     tickTimeout: .1, timeout: 10000, startMove: new Move(0, 1, 0, 0, 0)
@@ -257,8 +258,8 @@ for (const api of ['helper', 'native']) for (const endpoint of [1000, 5]) test(`
     const floor = y === 0 && (x === 0 && z === 0 || x === 3 && z >= 0 && z <= 2 || z === 2 && x >= 0 && x <= 3 || x === 0 && z >= 2 && z <= 1000)
     return block(wall || floor ? 'stone' : 'air', p)
   }
-  const { goals, Movements } = require('mineflayer-pathfinder')
-  const { gotoGoal, pathKeepAlive } = require('../src/movement')
+  const { goals, Movements }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+  const { gotoGoal, pathKeepAlive }: typeof import('../src/movement') = require('../src/movement')
   const mv = new Movements(bot)
   mv.canDig = false; mv.allow1by1towers = false; mv.maxDropDown = 1
   mv.exclusionAreasStep.push(() => .001)
@@ -297,7 +298,7 @@ test('native goto opt-out keeps the reviewed upstream goal contract', async () =
   process.env.ND_GOTO_WAIT = '0'
   const clock = testClock(750)
   const bot = install(clock, { pathfinder: true })
-  const goal = new (require('mineflayer-pathfinder').goals.GoalBlock)(0, 1, 0)
+  const goal = new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).goals.GoalBlock)(0, 1, 0)
   const walk = bot.pathfinder.goto(goal)
   walk.catch(() => {})
   try {
@@ -315,11 +316,11 @@ test('native goto opt-out keeps the reviewed upstream goal contract', async () =
 test('pathfinder cancels detached steering on disconnect and awaited look still rejects', async () => {
   const clock = testClock(750)
   const bot = install(clock, { pathfinder: true })
-  require('../src/reflex-lock').install({ bot })
+  ;(require('../src/reflex-lock') as typeof import('../src/reflex-lock')).install({ bot })
   const look = bot.look
   let steered = 0
   bot.look = (...args) => { steered++; return look(...args) }
-  bot.pathfinder.setGoal(new (require('mineflayer-pathfinder').goals.GoalBlock)(0, 1, 8))
+  bot.pathfinder.setGoal(new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).goals.GoalBlock)(0, 1, 8))
   await clock.advanceGame(50)
   assert.ok(steered > 0, 'the production pathfinder has an unawaited steering call')
   bot.emit('end')
@@ -334,7 +335,7 @@ test('installed physics warns for external deprecated listeners but not marked l
   const warnings = []
   t.mock.method(console, 'warn', message => { warnings.push(String(message)) })
   let ownCalls = 0; let externalCalls = 0
-  const own = require('node:async_hooks').AsyncResource.bind(() => { ownCalls++ })
+  const own = (require('node:async_hooks') as typeof import('node:async_hooks')).AsyncResource.bind(() => { ownCalls++ })
   Object.defineProperty(own, '_ndLatePacketAim', { value: true })
   const external = () => { externalCalls++ }
   try {
@@ -351,7 +352,7 @@ test('installed physics warns for external deprecated listeners but not marked l
 })
 
 test('confirmed world elapsed runs installed physics once after a blocked producer turn', () => {
-  const { GameClock } = require('../src/game-clock')
+  const { GameClock }: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new GameClock({ epoch: 0 })
   const bot = install(clock)
   let frames = 0; let deadlines = 0; let intervals = 0
@@ -397,7 +398,7 @@ test('confirmed world elapsed runs installed physics once after a blocked produc
 test('native entity movement carries ground contact before mineflayer observers see falling motion', () => {
   const bot = testBot()
   require('mineflayer/lib/plugins/entities')(bot)
-  require('../src/tick-plugins').createTickPlugins(testClock()).plugins.physics(bot, { physicsEnabled: false })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(testClock()).plugins.physics(bot, { physicsEnabled: false })
   const Entity = require('prismarine-entity')('1.21.11')
   const enemy = new Entity(2); enemy.position = new Vec3(0, 20, 0)
   bot.entities[2] = enemy; bot.entities[1] = bot.entity
@@ -416,9 +417,9 @@ test('native entity movement carries ground contact before mineflayer observers 
 })
 
 test('native position receipts give identical target lead and projectile threats with trace on or off', async t => {
-  const gameClock = require('../src/game-clock')
-  const bow = require('../src/bow')
-  const threats = require('../src/threats')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const bow: typeof import('../src/bow') = require('../src/bow')
+  const threats: typeof import('../src/threats') = require('../src/threats')
   const Entity = require('prismarine-entity')('1.21.11')
   let currentClock: any
   t.mock.method(gameClock, 'observationNow', () => currentClock.now())
@@ -428,7 +429,7 @@ test('native position receipts give identical target lead and projectile threats
     currentClock = testClock(750)
     const bot = testBot()
     require('mineflayer/lib/plugins/entities')(bot)
-    require('../src/tick-plugins').createTickPlugins(currentClock).plugins.physics(bot, { physicsEnabled: false })
+    ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(currentClock).plugins.physics(bot, { physicsEnabled: false })
     const enemy = new Entity(2); enemy.position = new Vec3(0, 100, 0); enemy.metadata[0] = 128
     const arrow = new Entity(trace ? 4 : 3); arrow.name = 'arrow'; arrow.position = new Vec3(.5, 1.5, 6)
     bot.entities[enemy.id] = enemy; bot.entities[arrow.id] = arrow
@@ -467,12 +468,12 @@ test('compressed nongliding relative moves retain their tick lower bound and abs
   let at = 1000
   clock.observationNow = () => at
   require('mineflayer/lib/plugins/entities')(bot)
-  require('../src/tick-plugins').createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: false })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: false })
   const Entity = require('prismarine-entity')('1.21.11')
   const enemy = new Entity(2); enemy.position = new Vec3(0, 100, 0); enemy.metadata[0] = 0
   bot.entities[enemy.id] = enemy
   bot.emit('entitySpawn', enemy)
-  const tracker = require('../src/bow').trackTarget(enemy)
+  const tracker = (require('../src/bow') as typeof import('../src/bow')).trackTarget(enemy)
   assert.equal(tracker.hasVelocity(), false, 'spawn is a position baseline, not a measured velocity')
   at = 1050
   bot._client.emit('rel_entity_move', { entityId: 2, dX: 2048, dY: 0, dZ: 0, onGround: false })
@@ -502,7 +503,7 @@ test('Air35 native flying metadata does not turn the last fall step into measure
   let at = 1000
   clock.observationNow = () => at
   require('mineflayer/lib/plugins/entities')(bot)
-  require('../src/tick-plugins').createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: false })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: false })
   const Entity = require('prismarine-entity')('1.21.11')
   const enemy = new Entity(2); enemy.name = 'player'
   enemy.position = new Vec3(4100.5, 180, 3117.4850214545527)
@@ -513,7 +514,7 @@ test('Air35 native flying metadata does not turn the last fall step into measure
   bot._client.emit('entity_look', { entityId: 2, yaw: 0, pitch: 0, onGround: false })
   assert.equal(enemy._ndPositionReceipts[1], previousReceipt, 'rotation changes do not pretend the position was refreshed')
   assert.ok(enemy._ndGlideRevision > previousRevision, 'observed rotation reversal remains an invalidation')
-  const tracker = require('../src/bow').trackTarget(enemy)
+  const tracker = (require('../src/bow') as typeof import('../src/bow')).trackTarget(enemy)
   bot._client.emit('sync_entity_position', { entityId: 2, x: enemy.position.x, y: 180, z: enemy.position.z,
     dx: 0, dy: 0, dz: 0, yaw: 180, pitch: 0, onGround: false })
   bot._client.emit('entity_metadata', { entityId: 2, metadata: [{ key: 0, type: 'byte', value: 128 }] })
@@ -536,7 +537,7 @@ test('Air35 native flying metadata does not turn the last fall step into measure
 test('native foreign rocket attachment invalidates glide confidence and lasts until its final rocket disappears', () => {
   const bot = testBot(); const clock = testClock()
   require('mineflayer/lib/plugins/entities')(bot)
-  require('../src/tick-plugins').createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: false })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: false })
   const Entity = require('prismarine-entity')('1.21.11')
   const enemy = new Entity(2); enemy.name = 'player'; enemy.position = new Vec3(0, 100, 0)
   bot.entities[2] = enemy; bot.emit('entitySpawn', enemy)
@@ -564,7 +565,7 @@ test('native foreign rocket attachment invalidates glide confidence and lasts un
 test('native remote velocity packets reach installed entity observers in blocks per tick', () => {
   const bot = testBot()
   require('mineflayer/lib/plugins/entities')(bot)
-  require('../src/tick-plugins').createTickPlugins(testClock()).plugins.physics(bot, { physicsEnabled: false })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(testClock()).plugins.physics(bot, { physicsEnabled: false })
   const Entity = require('prismarine-entity')('1.21.11')
   const enemy = new Entity(526); enemy.position = new Vec3(0, 100, 0)
   bot.entities[enemy.id] = enemy
@@ -615,7 +616,7 @@ test('20 and 200 TPS produce identical movement in twenty fixed physics steps', 
 
 test('play ticks end after movement, including unloaded terrain, and stop outside play', async () => {
   const clock = testClock(200)
-  const { createTickPlugins } = require('../src/tick-plugins')
+  const { createTickPlugins }: typeof import('../src/tick-plugins') = require('../src/tick-plugins')
   const bot = testBot()
   bot._client.state = 'configuration'
   createTickPlugins(clock).plugins.physics(bot, {} as Record<string, any>)
@@ -654,11 +655,11 @@ test('play ticks end after movement, including unloaded terrain, and stop outsid
 })
 
 test('packet-bound actions release after the same native movement and tick end in a synchronous physics burst', async () => {
-  const { AsyncLocalStorage, AsyncResource } = require('node:async_hooks')
+  const { AsyncLocalStorage, AsyncResource }: typeof import('node:async_hooks') = require('node:async_hooks')
   const owner = new AsyncLocalStorage()
   const clock = testClock(750)
   const bot = install(clock)
-  const afterPacket = require('../src/edges').afterPacket
+  const afterPacket = (require('../src/edges') as typeof import('../src/edges')).afterPacket
   bot.packets.length = 0
   bot.setControlState('forward', true)
   let plannedPosition
@@ -808,12 +809,12 @@ test('disconnect rejects waiting and mining and removes their timers and block l
 
 test('native physics walks a partial route while accelerated AStar continues computing', async t => {
   require('../src/fastblocks')
-  const gameClock = require('../src/game-clock')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   t.mock.method(gameClock, 'snapshot', () => ({ tickRate: 750 }))
   const clock = testClock(750)
   const bot = install(clock, { pathfinder: true })
-  const keepAlive = require('../src/movement').pathKeepAlive(bot)
-  const { goals } = require('mineflayer-pathfinder')
+  const keepAlive = (require('../src/movement') as typeof import('../src/movement')).pathKeepAlive(bot)
+  const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   bot.pathfinder.movements.canDig = false
   bot.pathfinder.movements.allow1by1towers = false
   const updates = []
@@ -832,7 +833,7 @@ test('native physics walks a partial route while accelerated AStar continues com
 test('pathfinder stuck budget counts game time while AStar keeps wall CPU time', async () => {
   const clock = testClock(200)
   const bot = install(clock, { pathfinder: true, physicsEnabled: false })
-  const { goals } = require('mineflayer-pathfinder')
+  const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const resets = []
   bot.on('path_reset', reason => resets.push(reason))
   bot.pathfinder.setGoal(new goals.GoalBlock(6, 1, 0))
@@ -855,20 +856,20 @@ test('pathfinder stuck budget counts game time while AStar keeps wall CPU time',
 })
 
 test('adapter does not replace process Date, performance or native timers', async () => {
-  const original = { Date, now: Date.now, performance: require('node:perf_hooks').performance, setTimeout, setInterval }
+  const original = { Date, now: Date.now, performance: (require('node:perf_hooks') as typeof import('node:perf_hooks')).performance, setTimeout, setInterval }
   const clock = testClock()
   const bot = install(clock, { digging: true, pathfinder: true })
   await clock.advanceGame(50)
   assert.equal(Date, original.Date)
   assert.equal(Date.now, original.now)
-  assert.equal(require('node:perf_hooks').performance, original.performance)
+  assert.equal((require('node:perf_hooks') as typeof import('node:perf_hooks')).performance, original.performance)
   assert.equal(setTimeout, original.setTimeout)
   assert.equal(setInterval, original.setInterval)
   bot.emit('end')
 })
 
 function installInventory (clock) {
-  const { createTickPlugins } = require('../src/tick-plugins')
+  const { createTickPlugins }: typeof import('../src/tick-plugins') = require('../src/tick-plugins')
   const bot = testBot()
   createTickPlugins(clock).plugins.inventory(bot, {} as Record<string, any>)
   bot.QUICK_BAR_START = 36
@@ -897,7 +898,7 @@ test('post-dig inventory click waits 500 game milliseconds and stays pending whi
 test('consume watchdog uses game time and is cancelled with its task on disconnect', async () => {
   const clock = testClock(200)
   const bot = installInventory(clock)
-  const Item = require('prismarine-item')(data)
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(data)
   bot.inventory.updateSlot(36, new Item(data.itemsByName.bread.id, 1))
   const consuming = bot.consume()
   const rejected = assert.rejects(consuming, /disconnect/i)
@@ -911,7 +912,7 @@ test('consume watchdog uses game time and is cancelled with its task on disconne
 
 test('bed sleep keeps its listener while frozen and releases it on disconnect', async () => {
   const clock = testClock()
-  const { createTickPlugins } = require('../src/tick-plugins')
+  const { createTickPlugins }: typeof import('../src/tick-plugins') = require('../src/tick-plugins')
   const bot = testBot()
   createTickPlugins(clock).plugins.bed(bot)
   bot.time = { timeOfDay: 13000 }
@@ -934,7 +935,7 @@ test('bed sleep keeps its listener while frozen and releases it on disconnect', 
 
 test('entity placement ignores unrelated spawns and clears its watchdog after success', async () => {
   const clock = testClock()
-  const { createTickPlugins } = require('../src/tick-plugins')
+  const { createTickPlugins }: typeof import('../src/tick-plugins') = require('../src/tick-plugins')
   const bot = testBot()
   createTickPlugins(clock).plugins.place_entity(bot)
   bot.heldItem = { name: 'oak_boat', type: data.itemsByName.oak_boat.id }
@@ -953,7 +954,7 @@ test('entity placement ignores unrelated spawns and clears its watchdog after su
 
 test('entity placement rejects and removes its listener on disconnect', async () => {
   const clock = testClock()
-  const { createTickPlugins } = require('../src/tick-plugins')
+  const { createTickPlugins }: typeof import('../src/tick-plugins') = require('../src/tick-plugins')
   const bot = testBot()
   createTickPlugins(clock).plugins.place_entity(bot)
   bot.heldItem = { name: 'oak_boat', type: data.itemsByName.oak_boat.id }
@@ -1003,13 +1004,13 @@ test('native executor continues a jump around a soul sand stair corner', async (
     return cell ? block(cell === 's' ? 'soul_sand' : cell === 'r' ? 'netherrack' : 'air', p) : null
   }
   bot.entity.position.set(.5, .875, .48956619325173)
-  const { Movements, goals } = require('mineflayer-pathfinder')
+  const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const mv = new Movements(bot)
   mv.canDig = false; mv.allowParkour = false; mv.allow1by1towers = false
-  require('../src/worlds').tuneMovements(bot, mv)
+  ;(require('../src/worlds') as typeof import('../src/worlds')).tuneMovements(bot, mv)
   bot.pathfinder.setMovements(mv)
   const goal = new goals.GoalNearXZ(1, -1, .25)
-  const walk = require('../src/movement').gotoGoal(bot, goal)
+  const walk = (require('../src/movement') as typeof import('../src/movement')).gotoGoal(bot, goal)
   walk.catch(() => {})
   try {
     await clock.advanceGame(3000)
@@ -1023,7 +1024,7 @@ test('native executor continues a jump around a soul sand stair corner', async (
 
 function blockedBastionPrefix () {
   const bot = install(testClock(750), { pathfinder: true, physicsEnabled: false })
-  const cells = require('./fixtures/bastion-head-jump-1.21.11.json')
+  const cells = repoJson('daemon/test/fixtures/bastion-head-jump-1.21.11.json')
   bot.blockAt = p => {
     const x = Math.floor(p.x) + 111, y = Math.floor(p.y) - 92, z = Math.floor(p.z) - 40
     const state = x >= 0 && x < 9 && y >= 0 && y < 8 && z >= 0 && z < 8 ? cells[(x * 8 + y) * 8 + z] : 0
@@ -1031,10 +1032,10 @@ function blockedBastionPrefix () {
   }
   bot.entity.position = new Vec3(-107.3727390983362, 95.875, 43.987427419565556)
   bot.entity.velocity = new Vec3(0, 0, 0)
-  const mv = new (require('mineflayer-pathfinder').Movements)(bot)
+  const mv = new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).Movements)(bot)
   mv.canDig = false; mv.allow1by1towers = false
   bot.pathfinder.setMovements(mv)
-  const move = (x, y, z) => Object.assign(new Vec3(x, y, z), { hash: [Math.floor(x), Math.ceil(y), Math.floor(z)].join(','), toBreak: [], toPlace: [] })
+  const move = (x, y, z): import('vec3').Vec3 & Record<string, any> => Object.assign(new Vec3(x, y, z), { hash: [Math.floor(x), Math.ceil(y), Math.floor(z)].join(','), toBreak: [], toPlace: [] })
   const first = move(-108.5, 96.875, 44.5)
   const detour = [move(-108.5, 96.875, 43.5), move(-108.5, 95, 42.5), move(-109.5, 94, 42.5), move(-110.5, 94, 42.5), move(-111.5, 94, 42.5)]
   const start = { data: bot.entity.position, parent: null }
@@ -1045,8 +1046,8 @@ function blockedBastionPrefix () {
   // Only the search publications are controlled: physical eligibility uses the
   // same installed Physics instance and terrain captured from the native stall.
   bot.pathfinder.setGoal = () => {}
-  const goal = new (require('mineflayer-pathfinder').goals.GoalNearXZ)(-114, 44, 3)
-  const walk = require('../src/movement').gotoGoal(bot, goal)
+  const goal = new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).goals.GoalNearXZ)(-114, 44, 3)
+  const walk = (require('../src/movement') as typeof import('../src/movement')).gotoGoal(bot, goal)
   walk.catch(() => {})
   bot.emit('path_update', { status: 'partial', context, path: [first] })
   const finish = () => {

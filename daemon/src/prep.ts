@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Подготовка к бою из сырья: брёвна, слитки, алмазы → доски, палки, верстак,
 // меч, броня, щит, кирка. Рецепты — из самой игры (mineflayer recipesFor по
 // minecraft-data), здесь только порядок и выбор материала: из чего хватит на
@@ -13,9 +13,9 @@ const gameClock = require('./game-clock')
 //   smart — меч и нагрудник (самое ценное за слиток), дальше по обстановке:
 //          если он уже идёт на нас — в бой, иначе докрафтить остальное.
 
-const Vec3 = require('vec3')
-const { placeBlockAt, withTimeout } = require('./build')
-const { sleep } = require('./movement')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { placeBlockAt, withTimeout } from './build'
+import { sleep } from './movement'
 
 const TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden']
 const ARMOR_TIERS = ['netherite', 'diamond', 'iron', 'chainmail', 'golden', 'leather']
@@ -174,7 +174,7 @@ async function prepare (session, ctl, { strategy = 'full', shouldStop = null }: 
   await closeWindow(bot)
   // Надеть броню и щит — это делает бой (armor, guard.wear), но надеть сразу
   // дешевле: первый удар в бою уже по броне.
-  try { await require('./armor').equipBestArmor(session, ctl, { confirmMs: 300 }) } catch {}
+  try { await (require('./armor') as typeof import('./armor')).equipBestArmor(session, ctl, { confirmMs: 300 }) } catch {}
   return {
     strategy,
     made,
@@ -184,4 +184,4 @@ async function prepare (session, ctl, { strategy = 'full', shouldStop = null }: 
   }
 }
 
-module.exports = { prepare, PLANS }
+export { prepare, PLANS }

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { netherToolsReady, replenishNetherTools, type NetherSupplyPort, type NetherSupplyState } from '../src/campaign/nether-supply'
-const mcData = require('minecraft-data')('1.21.11')
+const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 function fixture(material: string | null = 'blackstone', stop = false, slowCraft = false) {
   const state: NetherSupplyState = { dimension: 'the_nether', health: 20,

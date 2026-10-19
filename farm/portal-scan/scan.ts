@@ -1,24 +1,25 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сканер лавы у спавна для техник портала без алмазной кирки (агент G, 02.10.2026).
 // Только ферма, только слоты 29–30.
 //
-//   node farm/portal-scan/scan.js gen <slot> [half=256]   прогрузить квадрат 2*half вокруг спавна (forceload),
+//   node dist/farm/portal-scan/scan.js gen <slot> [half=256]   прогрузить квадрат 2*half вокруг спавна (forceload),
 //                                                          save-all flush; мир остаётся на диске слота
-//   node farm/portal-scan/scan.js scan <slot> [half=256]  прочитать region-файлы слота и посчитать лаву/воду/магму;
+//   node dist/farm/portal-scan/scan.js scan <slot> [half=256]  прочитать region-файлы слота и посчитать лаву/воду/магму;
 //                                                          итог — farm/portal-scan/results/<seed>.json
-//   node farm/portal-scan/scan.js sum                      свести все results/*.json в таблицу
+//   node dist/farm/portal-scan/scan.js sum                      свести все results/*.json в таблицу
 //
 // Чтение — прямо из .mca (zlib + NBT, палитры 1.18+), без бота: данные мира, не то, что видно глазами. Это ответ
 // «что вообще генерируется», а не «что найдёт бот» — найти бот может только видимое (portal-natural.js).
-const fs = require('fs')
-const path = require('path')
-const zlib = require('zlib')
-const net = require('net')
+import * as fs from 'fs'
+import path = require('path')
+import * as zlib from 'zlib'
+import * as net from 'net'
 const nbt = require(path.join(__dirname, '..', '..', 'daemon', 'node_modules', 'prismarine-nbt'))
 
-const ROOT = path.join(__dirname, '..', '..')
+const ROOT = REPO_ROOT
 // PORTAL_SCAN_OUT — другая папка итогов (пул хороших сидов: results-pool), по умолчанию results (случайные сиды).
-const OUT = process.env.PORTAL_SCAN_OUT ? path.resolve(process.env.PORTAL_SCAN_OUT) : path.join(__dirname, 'results')
+const OUT = process.env.PORTAL_SCAN_OUT ? path.resolve(process.env.PORTAL_SCAN_OUT) : path.join(REPO_ROOT, 'farm/portal-scan/results')
 const MIN_Y = -64
 const H = 384
 const ALLOWED = new Set([29, 30])
@@ -35,7 +36,7 @@ function rconClient (port, pass) {
     buf.writeInt32LE(10 + b.length, 0); buf.writeInt32LE(id, 4); buf.writeInt32LE(type, 8); b.copy(buf, 12)
     return buf
   }
-  sock.on('data', d => {
+  sock.on('data', (d: Buffer) => {
     acc = Buffer.concat([acc, d])
     while (acc.length >= 4) {
       const len = acc.readInt32LE(0)

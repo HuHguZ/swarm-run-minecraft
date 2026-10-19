@@ -3,10 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
-const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
+const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
 const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
-const AG = require('../src/pvp/arms-graph')
+import * as AG from '../src/pvp/arms-graph'
 const key = p => `${p.x},${p.y},${p.z}`
 const pos = x => ({ x, y: 0, z: 0 })
 function fixture({ reply = { status: 'failed', error: 'noPath' }, inventory = {}, items = [], storage = Array(36).fill(null), chests = [pos(1), pos(8)] }: any = {}) {
@@ -26,13 +27,13 @@ function fixture({ reply = { status: 'failed', error: 'noPath' }, inventory = {}
       throw new Error(`unexpected RPC ${method}`)
     }
   }
-  const { emptyWorld, fact } = require('../src/core/world-state')
+  const { emptyWorld, fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
   const layout = { half: 30, spawns: [pos(0)] }
   for (const field of ['chests', 'g', 'secret']) Object.defineProperty(layout, field, { get() { throw new Error('hidden layout ' + field) } })
-  const context = { AG, get Loot() { return require('../src/pvp/arms-loot') }, LOOT_PRIOR: [[{ name: 'iron_sword' }]],
+  const context = { AG, get Loot() { return (require('../src/pvp/arms-loot') as typeof import('../src/pvp/arms-loot')) }, LOOT_PRIOR: [[{ name: 'iron_sword' }]],
     emptyWorld, fact, LOOT_MS: 60000, X: 0, Y: 0, Z: 0, L: layout, W: p => p, COVERS: [], key,
     every: (_ms, fn) => { watches.push(fn); return fn }, gameClock: { now: () => now, clearInterval() {} } }
-  const ArmsEnv = runInNewContext(body + '\nArmsEnv', context)
+  const ArmsEnv = runInNewContext(body + '\nArmsEnv', cjsContext(context))
   const env = new ArmsEnv(side, { over: false, roundScope: 'r1' })
   return { env, side, calls, watches, seen, now: () => now,
     command: (id = '8,0,0', roundScope = 'r1') => ({ skill: 'arms.loot', strategy: 'LootChest', params: { chestId: id, roundScope, quoteAt: now } }),
@@ -229,7 +230,7 @@ test('cancellation during the route-start observation prevents a late chest_take
 })
 
 test('confirmed loot stays SUCCESS when the watcher polls during post-receipt armor', async () => {
-  const { StrategicDirector } = require('../src/core/strategy')
+  const { StrategicDirector }: typeof import('../src/core/strategy') = require('../src/core/strategy')
   const items = []
   let f: any
   f = fixture({ items, chests: [pos(8)], reply: async () => {
@@ -254,7 +255,7 @@ test('confirmed loot stays SUCCESS when the watcher polls during post-receipt ar
 })
 
 test('a worse threat before the receipt still interrupts actual LootChest director execution', async () => {
-  const { StrategicDirector } = require('../src/core/strategy')
+  const { StrategicDirector }: typeof import('../src/core/strategy') = require('../src/core/strategy')
   let f: any
   f = fixture({ chests: [pos(8)], reply: async () => {
     await f.watches[0]()
@@ -273,7 +274,7 @@ test('a worse threat before the receipt still interrupts actual LootChest direct
 })
 
 test('an in-flight loot observation cannot interrupt after its chest receipt settles', async () => {
-  const { StrategicDirector } = require('../src/core/strategy')
+  const { StrategicDirector }: typeof import('../src/core/strategy') = require('../src/core/strategy')
   let f: any, pending: Promise<void>, release: (reply: any) => void, started: () => void
   let delayPlayers = false
   const queried = new Promise<void>(resolve => { started = resolve })

@@ -1,14 +1,15 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 test('parkour route honors a bounded extended game-time request without changing other action timeouts', () => {
-  const parkour = require('../src/session/resources').parkour
+  const parkour = (require('../src/session/resources') as typeof import('../src/session/resources')).parkour
   const session = { runIntent: (_name, _fn, options) => options }
   const target = { x: 0, y: 1, z: 0 }
   assert.equal(parkour.call(session, { mode: 'route', target, timeoutSeconds: 1000 }).timeoutMs, 1020000)
@@ -28,7 +29,7 @@ function fixture () {
       if (name === 'minecraft-data') return () => ({} as Record<string, any>)
       if (name === './play-policy') return { configure: () => ({ mode: 'speedrun' }) }
       if (name === './build') return { withTimeout: p => p }
-      if (name === './gamedata') return require('../src/gamedata')
+      if (name === './gamedata') return (require('../src/gamedata') as typeof import('../src/gamedata'))
       if (name.startsWith('./session/')) return require('../src/' + name.slice(2))
       if (name === './tactics/minecraft') return { TacticalSystem: class {
         enabled () { return false }
@@ -39,7 +40,7 @@ function fixture () {
       if (name === './reflex-lock') return { on: () => false, wait: async () => {}, run: (_session, _ctl, fn) => fn(), cancel () {} }
       return fallback
     } }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), withClockFixture(context))
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), cjsContext(withClockFixture(context)))
   const { Session } = context.module.exports
   const journal = { state: {} as Record<string, any>, append () {}, patch: fn => fn(journal.state) }
   const s = new Session({ lowHealth: 6 }, { emit: (type, detail) => events.push({ type, ...detail }) }, journal)
@@ -47,7 +48,7 @@ function fixture () {
   s.waitUntilWorldLoaded = async () => true
   s.state = () => ({ connected: !!s.bot })
   function bot () {
-    const b = new EventEmitter()
+    const b: any = new EventEmitter()
     b.entity = { position: new Vec3(0.5, 64, 0.5) }
     b.registry = {} as Record<string, any>; b.version = '1.21.11'; b.health = 20
     b.loadPlugin = () => {}; b.quit = () => {}
@@ -65,10 +66,10 @@ function setupAutopilot(s) {
     if (name === './gestures') return { hook() {} }
     if (name === './social') return { noticePlayers: async () => {} }
     if (name === './fightkit') return { autoUse: async () => {} }
-    if (name === './gamedata') return require('../src/gamedata')
+    if (name === './gamedata') return (require('../src/gamedata') as typeof import('../src/gamedata'))
     return fallback
   }, setInterval: () => 1, clearInterval() {} }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/autopilot.js'), 'utf8'), withClockFixture(context))
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/autopilot.js'), 'utf8'), cjsContext(withClockFixture(context)))
   const auto = new context.module.exports.Autopilot(s, {})
   for (const method of ['hookTemper', 'hookDamage', 'syncDamageContext', 'hookCreeper', 'escapeWaterIfIdle', 'freeIfBuried', 'emergency', 'extinguish', 'fleeIfDying', 'eatIfHungry', 'wearArmor', 'noteDayPhase', 'heartbeat']) auto[method] = async () => {}
   let tools = 0, loot = 0, chest = 33, inventory = 0
@@ -143,8 +144,8 @@ test('explicit teardown after an unfinished setup restores ordinary connection a
 })
 
 test('position-holding wait reserves the body while ordinary wait leaves autonomous movement available', () => {
-  const { Session } = require('../src/session')
-  const { Autopilot } = require('../src/autopilot')
+  const { Session }: typeof import('../src/session') = require('../src/session')
+  const { Autopilot }: typeof import('../src/autopilot') = require('../src/autopilot')
   const session: any = { runIntent(name, _worker, options) { this.current = { name }; return options } }
   const auto = new Autopilot(session, {})
   const ordinary = Session.prototype.wait.call(session, { seconds: 1 })
@@ -252,7 +253,7 @@ test('ошибка настройки после spawn завершает connec
   assert.equal(s.connecting, null)
 })
 test('конверт намерения несёт машинный code исхода: TIMEOUT, DAMAGE, CHAT, код навыка, FAILED, OK', async () => {
-  const { EventBus } = require('../src/events')
+  const { EventBus }: typeof import('../src/events') = require('../src/events')
   const { s } = fixture()
   s.bus = new EventBus()
   // Работа, которая отвечает отчётом на отмену (как длинные намерения), — без секунды ожидания.
@@ -320,7 +321,7 @@ test('нору рвут только человек, смерть и связь 
 })
 
 test('ожидание (wait) рядом с идущим отходом не занимает его место и, кончившись, не обнуляет его', async () => {
-  const { EventBus } = require('../src/events')
+  const { EventBus }: typeof import('../src/events') = require('../src/events')
   const { s } = fixture()
   s.bus = new EventBus()
   const endless = ctl => new Promise<any>(resolve => ctl.onAbort.push(() => resolve({ stopped: 'отменено' })))
@@ -339,10 +340,10 @@ test('ожидание (wait) рядом с идущим отходом не з�
 })
 
 test('падение в выкопанную клетку перед копкой: не проезжать её к краю столба (регрессия спуска 30.09)', () => {
-  const fs2 = require('node:fs')
-  const vm2 = require('node:vm')
+  const fs2: typeof import('node:fs') = require('node:fs')
+  const vm2: typeof import('node:vm') = require('node:vm')
   const ctx = { console, module: { exports: {} as Record<string, any> }, setTimeout, clearTimeout, setInterval, clearInterval, require: n => n === 'vec3' ? Vec3 : new Proxy({} as Record<string, any>, { get: () => () => {} }) }
-  vm2.runInNewContext(fs2.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), withClockFixture(ctx))
+  vm2.runInNewContext(fs2.readFileSync(path.join(__dirname, '../src/session.js'), 'utf8'), cjsContext(withClockFixture(ctx)))
   const { steerIntoDig } = ctx.module.exports
   const node = { x: 3049, y: 258, z: 3000, toBreak: [{ x: 3049, y: 258, z: 3000 }] }
   // mlg-reg-dbg1, 8.1 с: x 3049.54, едет на восток 0.11 бл/тик, в воздухе — прогноз 3049.98, вне центра: толкать назад.

@@ -1,14 +1,14 @@
 'use strict'
 // Ход одного раунда арены по трассам демонов (S7d, пересказ боёв вместо роликов): строки [trace] обоих бойцов
 // (ND_TRACE_PVP: время UTC, кто, +с от начала дуэли, приём/удар/урон/граф) в окне раунда из ROUND-строки.
-//   node farm/crystal/fightlog.js farm/results/<тег> <файл .out> <номер раунда> [--max 120]
+//   node dist/farm/crystal/fightlog.js farm/results/<тег> <файл .out> <номер раунда> [--max 120]
 // Окно: [конец раунда − durS − 5 с, конец + 2 с] по времени строки ROUND (UTC арены). Логи демонов — копии из папки
 // серии (daemon-<слот>.log, daemon-<слот>b.log, …c/d.log).
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 
 const [dir, file, nStr, ...rest] = process.argv.slice(2)
-if (!dir || !file || !nStr) { console.log('node farm/crystal/fightlog.js <папка серии> <файл .out> <раунд> [--max 120]'); process.exit(0) }
+if (!dir || !file || !nStr) { console.log('node dist/farm/crystal/fightlog.js <папка серии> <файл .out> <раунд> [--max 120]'); process.exit(0) }
 const MAX = rest.includes('--max') ? Number(rest[rest.indexOf('--max') + 1]) : 120
 // --logs <папки через запятую> — где логи демонов (по умолчанию — папка серии; живые — farm/crystal, farm).
 const LOGS = rest.includes('--logs') ? rest[rest.indexOf('--logs') + 1].split(',') : [dir]

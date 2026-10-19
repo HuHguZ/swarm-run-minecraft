@@ -1,17 +1,19 @@
+import { functionSource } from './source-fixture'
+import { CAMPAIGN, campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { body } from './ow-golden-source'
 
-const campaign = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+const campaign = campaignTs()
 
 test('lava survey cache admits a new elevated view at the same horizontal position', async () => {
   let scans = 0
   const globals: any = { dim: () => 'overworld', known: {}, process: { env: {} }, sense: async () => {},
     sit: { surface: true }, state: { pos: { x: 0, y: 64, z: 0 } }, skyLookAt: null, log: () => {},
     act: async () => { scans++; return { detail: {} } } }
-  const look = body(campaign, 'async function skyLavaLook (', 'let lavaSourceKnown', globals, 'skyLavaLook')
+  const look = body(functionSource(CAMPAIGN, 'skyLavaLook', { ts: true }) + '\n// конец', 'async function skyLavaLook (', '// конец', withSetters(globals), 'skyLavaLook')
   await look()
   await look()
   assert.equal(scans, 1)
@@ -30,7 +32,7 @@ test('a new lava lookout remains available after two old attempts; poor health r
     skyLavaLook: async () => { calls.push('survey') },
     act: async (_method: string, p: any) => { calls.push(p.direction); height += p.direction === 'up' ? 10 : -10; return { status: 'done', detail: {} } }
   }
-  const lookout = body(campaign, 'async function lavaLookout (', 'async function skyLavaLook (', globals, 'lavaLookout')
+  const lookout = body(campaign, 'async function lavaLookout (', 'async function skyLavaLook (', withSetters(globals), 'lavaLookout')
   await lookout()
   assert.deepEqual(calls, [])
   globals.state.health = 20

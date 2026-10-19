@@ -1,9 +1,9 @@
 import { Vec3 } from 'vec3'
 import { bodyBox, bodyClear, shapeBoxes, supportAt, HAZARD, type Point } from '../navigation/geometry'
 import { landingDamage } from '../navigation/landing'
-const edges = require('../edges')
-const pick = require('../pick')
-const boom = require('../boom')
+import edges = require('../edges')
+import pick = require('../pick')
+import boom = require('../boom')
 
 // WindChargeItem / AbstractWindCharge / ServerExplosion, reviewed 1.21.11 (PVP-RESEARCH б.8).
 export const WIND = Object.freeze({ speed: 1.5, reach: 2.4, knockback: 1.22, surfaceOffset: .25, forgivenessTicks: 40, dispersion: .0172275 })
@@ -314,7 +314,7 @@ export async function windBoost(session: any, ctl: any, p: { ally: string; plan:
   const ally = Object.values(bot.entities || {}).find((e: any) => e.username === p.ally) as any
   if (!ally || !pick.canHit(bot, ally, { range: 32 })) return { ok: false, why: 'ally_not_visible' }
   const charge = bot.inventory.items().find((i: any) => i.name === 'wind_charge')
-  if (!charge || require('../mace').windReady?.(bot) === false) return { ok: false, why: 'wind_charge_not_ready' }
+  if (!charge || (require('../mace') as typeof import('../mace')).windReady?.(bot) === false) return { ok: false, why: 'wind_charge_not_ready' }
   if (!plan || !finite(plan.target) || !finite(plan.thrower.start) || !finite(plan.receiver.start)) return { ok: false, why: 'invalid_plan' }
   if (vector(plan.thrower.start).distanceTo(bot.entity.position) > .15 || vector(plan.receiver.start).distanceTo(ally.position) > .2) return { ok: false, why: 'pair_start_changed' }
   if (![bot.entity.position, ally.position, plan.target].every(at => windInside(at, p.arena || plan.arena))) return { ok: false, why: 'arena_boundary' }

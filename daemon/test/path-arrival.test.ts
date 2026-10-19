@@ -1,12 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const AStar = require('mineflayer-pathfinder/lib/astar')
-const Move = require('mineflayer-pathfinder/lib/move')
-const { goals } = require('mineflayer-pathfinder')
-const { gotoGoal } = require('../src/movement')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import AStar = require('mineflayer-pathfinder/lib/astar')
+import Move = require('mineflayer-pathfinder/lib/move')
+import { goals } from 'mineflayer-pathfinder'
+import { gotoGoal } from '../src/movement'
 
 for (const [startZ, targetZ] of [[0, 4], [-5, -1]]) test(`progressive native AStar agrees with the physical final block at Z${targetZ}`, async () => {
   const bot: any = new EventEmitter()
@@ -44,7 +44,7 @@ for (const [startZ, targetZ] of [[0, 4], [-5, -1]]) test(`progressive native ASt
   await gotoGoal(bot, goal)
   assert.ok(partials >= 3)
   assert.equal(Math.floor(terminal.z), targetZ)
-  assert.equal(goal.isEnd(new Vec3(.5, 64, targetZ - .5)), true, 'the caller goal is not modified')
+  assert.equal(goal.isEnd(new Vec3(.5, 64, targetZ - .5) as any), true, 'the caller goal is not modified')
   assert.equal(Object.hasOwn(goal, 'isEnd'), false)
   for (const name of ['path_update', 'goal_updated', 'physicsTick', 'goal_reached']) assert.equal(bot.listenerCount(name), 0)
 })

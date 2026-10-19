@@ -1,10 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { clockFixture } = require('./clock-fixture')
-const path = require('node:path')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import 'node:fs'
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
+import { clockFixture } from './clock-fixture'
+import path = require('node:path')
 function fixture (inventory, { foes = 0, sealed = true, wood = true, stone = true, needsPick = false, target = { x: 0, z: 0 } }: any = {} as Record<string, any>) {
   const inv: Record<string, any> = { ...inventory }; const calls = []; let pickLeft = inventory.pickLeft || 0
   delete inv.pickLeft
@@ -38,9 +40,9 @@ function fixture (inventory, { foes = 0, sealed = true, wood = true, stone = tru
     lighter: () => true, log () {}, Date, Math }
   context.gameClock = clockFixture(context)
   const entry = path.join(__dirname, '../campaign.js')
-  const { functionSource } = require('./source-fixture')
+  const { functionSource }: typeof import('./source-fixture') = require('./source-fixture')
   const src = functionSource(entry, 'prepareExitSupply') + '\n' + functionSource(entry, 'prepareExitTools')
-  vm.runInNewContext(src + '\nthis.prepare = prepareExitTools', context)
+  vm.runInNewContext(src + '\nthis.prepare = prepareExitTools', cjsContext(context))
   return { calls, inv, run: () => context.prepare(target) }
 }
 test('ready picks cover the journey; twelve unused sticks are not an extra gate', async () => {

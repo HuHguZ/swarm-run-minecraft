@@ -1,5 +1,5 @@
 // По посадкам: сколько кроватей, время от SCANNING до 1-й и 2-й, урон за посадку (по хп дракона до/после), чем кончилась.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const rows = []
 for (const d of fs.readdirSync(L).filter(f => f.startsWith('trace-'))) {

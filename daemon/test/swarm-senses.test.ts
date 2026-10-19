@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-const { Vec3 } = require('vec3')
-const { swarmSightings, placementPoses } = require('../src/swarm-senses')
+import { Vec3 } from 'vec3'
+import { swarmSightings, placementPoses } from '../src/swarm-senses'
 
 test('swarm sight uses duel rays, never enemy health, inventory or enchantment levels', () => {
   const metadata = []

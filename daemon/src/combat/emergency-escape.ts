@@ -1,8 +1,8 @@
-const sky = require('../elytra')
-const pearls = require('../pearl-hop')
-const projectiles = require('../throw')
-const clock = require('../game-clock')
-const Vec3 = require('vec3')
+import sky = require('../elytra')
+import * as pearls from '../pearl-hop'
+import * as projectiles from '../throw'
+import * as clock from '../game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 export type EmergencyEscapeKind = 'flight' | 'pearl'
 export interface EmergencyEscapeState {

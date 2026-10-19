@@ -1,9 +1,9 @@
 'use strict'
 // Жемчуг как ход goto (hopgoto.js): время пешком по узлам A*, решение «бросать / идти».
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Vec3 } = require('vec3')
-const hg = require('../src/hopgoto')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Vec3 } from 'vec3'
+import * as hg from '../src/hopgoto'
 
 const node = (x, y, z, extra: any = {} as Record<string, any>) => Object.assign(new Vec3(x, y, z), { toBreak: [], toPlace: [], cost: 1 }, extra)
 

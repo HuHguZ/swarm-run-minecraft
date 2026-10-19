@@ -1,26 +1,26 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const Module = require('node:module')
-const esbuild = require('esbuild')
-const { Vec3 } = require('vec3')
-const Move = require('mineflayer-pathfinder/lib/move')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import Module = require('node:module')
+import * as esbuild from 'esbuild'
+import { Vec3 } from 'vec3'
+import Move = require('mineflayer-pathfinder/lib/move')
 
 // Real installed AStar and current production patch; only the reachable world
 // graph and body pose are doubled. Keep this instance isolated from other tests.
 function searchCase (options: any = {}) {
   const nativeFile = require.resolve('mineflayer-pathfinder/lib/astar')
-  const nativeModule = new Module(nativeFile, module)
+  const nativeModule: any = new Module(nativeFile, module)
   nativeModule.filename = nativeFile
-  nativeModule.paths = Module._nodeModulePaths(path.dirname(nativeFile))
+  nativeModule.paths = (Module as any)._nodeModulePaths(path.dirname(nativeFile))
   nativeModule._compile(fs.readFileSync(nativeFile, 'utf8'), nativeFile)
   const AStar = nativeModule.exports
   const file = path.join(__dirname, '../src/fastblocks.ts')
-  const patched = new Module(file, module)
+  const patched: any = new Module(file, module)
   patched.filename = file
-  patched.paths = Module._nodeModulePaths(path.dirname(file))
+  patched.paths = (Module as any)._nodeModulePaths(path.dirname(file))
   const nativeRequire = patched.require.bind(patched)
   patched.require = (request: string) => request === 'mineflayer-pathfinder/lib/astar' ? AStar : nativeRequire(request)
   const before = { s9: process.env.ND_S9, max: process.env.ND_ASTAR_NODES_PER_MS, slice: process.env.ND_ASTAR_SLICE_NODES }

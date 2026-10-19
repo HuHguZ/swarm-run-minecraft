@@ -1,10 +1,10 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { goals } = require('mineflayer-pathfinder')
-const Vec3 = require('vec3')
-const { sleep, xyz, inWater, escapeWater } = require('./movement')
-const { eat } = require('./actions')
-const { HOSTILES, liveAttacker } = require('./combat')
+import * as gameClock from './game-clock'
+import { goals } from 'mineflayer-pathfinder'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { sleep, xyz, inWater, escapeWater } from './movement'
+import { eat } from './actions'
+import { HOSTILES, liveAttacker } from './combat'
 
 // Escorting a player, watched. session.follow sets a GoalFollow and returns, and
 // everything that goes wrong afterwards goes wrong silently: GoalFollow.isValid
@@ -427,4 +427,4 @@ async function escort (session, ctl, { player, distance = 3, forSeconds = 60 }: 
   }
 }
 
-module.exports = { escort, pathHazard }
+export { escort, pathHazard }

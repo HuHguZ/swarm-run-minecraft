@@ -1,6 +1,6 @@
 // Сводка серии боёв: node dsum.js <префикс тега> [...]  (farm/logs/<тег>.jsonl)
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const LOGS = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const pre = process.argv.slice(2)
 const files = fs.readdirSync(LOGS).filter(f => f.endsWith('.jsonl') && pre.some(p => f.startsWith(p)))

@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { doorwayPlan } = require('../src/nether')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { doorwayPlan } from '../src/nether'
 const pos = new Vec3(-19, 65, -24)
 function world (entries: any = {} as Record<string, any>) {
   return p => {

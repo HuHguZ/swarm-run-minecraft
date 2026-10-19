@@ -1,10 +1,11 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 test('actual booth packet handlers count delivered barter stacks once, excluding gold, babies and another collector', async () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../src/bastion/booth-trade.js'), 'utf8')
@@ -40,7 +41,7 @@ test('actual booth packet handlers count delivered barter stacks once, excluding
       item(14, 'ender_pearl', 4, self, baby)
       item(15, 'obsidian', 1, self, piglin, 100)
     } }
-  vm.runInNewContext(source.slice(start, end) + '\nglobalThis.run = boothTrade', context)
+  vm.runInNewContext(source.slice(start, end) + '\nglobalThis.run = boothTrade', cjsContext(context))
   const run = context.run as (session: unknown, ctl: unknown, st: unknown, bo: unknown, until: number) => Promise<Record<string, unknown>>
   const result = await run({ bot }, { aborted: true }, {}, { kind: 'pit', O: { x: 0, y: 102, z: 1 }, M: { x: 0, y: 102, z: 0 } }, 10000)
   assert.equal(result.barterReceipts, 3, 'only three adult piglin non-gold item entities were observed')

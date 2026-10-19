@@ -5,20 +5,20 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const Vec3 = require('vec3')
-const esbuild = require('../../node_modules/esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
 
 function source(name: string, overrides: Record<string, any> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts'), local = createRequire(file), module = { exports: {} as any }
   const code = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => overrides[id] ?? local(id), module, file, path.dirname(file))
   return module.exports
 }
 
 function fixture(hp = 20) {
   const bot: any = new EventEmitter(), cells = new Map(), control: any = {}, calls: any[] = [], notes: string[] = []
-  const registry = require('prismarine-registry')('1.21.11'), Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11'), Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   let now = 5000
   const clock = { now: () => now, setTimeout, clearTimeout }
   bot.registry = registry; bot.health = hp; bot.food = 20; bot._client = new EventEmitter(); bot.version = '1.21.11'

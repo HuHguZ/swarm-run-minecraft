@@ -2,22 +2,22 @@
 // Помощь союзнику в командном бою (показ 10.10, 6 на 6): взрывное зелье лечения ему под ноги и стенка прикрытия —
 // два блока между ним и тем, кто его бьёт. Только честно: зелье — взглядом на его ноги и бросок (use_item), блок —
 // на видимую грань опоры (pick.faceAim, как кристалл и лодка), не сквозь стену.
-const Vec3 = require('vec3')
-const pick = require('../pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import pick = require('../pick')
 // Отход дарителя и подбор — честным шагом с проверкой опоры, границ арены и killY (Codex 15.10: «назад 8 тиков» и сырой
 // pathfinder.goto уводили в дыры и за упавшей вниз вещью).
-const { executeJump, ROUTE_FRAMES } = require('../navigation/parkour')
-const { supportAt } = require('../navigation/geometry')
+import { executeJump, ROUTE_FRAMES } from '../navigation/parkour'
+import { supportAt } from '../navigation/geometry'
 
 // Только лечение и регенерация по содержимому (13.10, соло-арена: «зельки неправильно кидают и сами себе урон наносят» —
 // бралось любое взрывное зелье, а в сундуках соло лежат и вред, и яд: «лечение под ноги» вредом себе и своим).
 const HEAL_KIND = /^(strong_)?healing$|^(long_|strong_)?regeneration$/
 const healPot = (bot: any) => {
-  const potionOf = require('../pvp').potionOf
+  const potionOf = (require('./potions') as typeof import('./potions')).potionOf
   return bot.inventory.items().find((i: any) => i.name === 'splash_potion' && HEAL_KIND.test(potionOf(i) || ''))
 }
 // В руке — то самое зелье (у одноимённых зелий equip мог взять соседний слот, pvp/equipment.holdItem).
-const heldIsHeal = (bot: any) => bot.heldItem?.name === 'splash_potion' && HEAL_KIND.test(require('../pvp').potionOf(bot.heldItem) || '')
+const heldIsHeal = (bot: any) => bot.heldItem?.name === 'splash_potion' && HEAL_KIND.test((require('./potions') as typeof import('./potions')).potionOf(bot.heldItem) || '')
 const BLOCK = /^(cobblestone|oak_planks|stone|dirt|obsidian|netherrack)$/
 
 async function hold (bot: any, item: any) {
@@ -173,7 +173,7 @@ export async function denyLoot (bot: any, at: any, maxD = 4) {
   if (!floor || floor.boundingBox !== 'block') return { ok: false, why: 'под вещами нет опоры' }
   const cell = floor.position.offset(0, 1, 0)
   const centre = cell.offset(0.5, 0.5, 0.5)
-  const { goals } = require('mineflayer-pathfinder')
+  const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const me = () => bot.entity.position
   if (me().distanceTo(centre) < 2 || me().distanceTo(centre) > 4) {
     const away = me().minus(centre); away.y = 0

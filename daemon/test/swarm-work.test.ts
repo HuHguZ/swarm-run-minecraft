@@ -5,14 +5,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const Vec3 = require('vec3')
-const esbuild = require('../../node_modules/esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
 
 function source(name: string, overrides: Record<string, any> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts'), local = createRequire(file)
   const module = { exports: {} as any }
   const code = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => overrides[id] ?? local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -20,7 +20,7 @@ function source(name: string, overrides: Record<string, any> = {}) {
 function fixture() {
   const bot: any = new EventEmitter(), cells = new Map(), calls: string[] = []
   bot._client = new EventEmitter(); bot.version = '1.21.11'; bot.health = 20; bot.food = 20
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.entity = { id: 1, position: new Vec3(.5, 64, .5), width: .6, height: 1.8, onGround: true, effects: {}, metadata: [] }
   bot.entities = {}; bot.inventory = { slots: [], items: () => [{ name: 'dirt', type: bot.registry.itemsByName.dirt.id, count: 64 }] }
   bot.pathfinder = { setGoal: () => calls.push('goal') }; bot.clearControlStates = () => calls.push('clear')
@@ -176,7 +176,7 @@ test('digging sends the visible face without a second recentering look', async (
   f.cells.set(upper.toString(), f.block(upper, 'dirt'))
   f.bot.dig = async (_b: any, forceLook: any) => {
     assert.equal(forceLook, 'ignore')
-    assert.equal(f.bot.targetDigFace, require('../node_modules/prismarine-world').iterators.BlockFace.BOTTOM)
+    assert.equal(f.bot.targetDigFace, (require('../node_modules/prismarine-world') as typeof import('../node_modules/prismarine-world')).iterators.BlockFace.BOTTOM)
     f.packet(upper, 'air')
   }
   const result = await f.work.swarmWork(f.session, f.ctl, { kind: 'dig', at: upper })
@@ -242,7 +242,7 @@ test('a weak contained enemy within reach does not stop work, an uncontained or 
 })
 
 test('combat never punches through a block the swarm keeps as its own structure', async () => {
-  const Vec3 = require('vec3'), { keepBlocks } = require('../src/swarm-work'), { createTerrain } = require('../src/pvp/terrain')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3'), { keepBlocks }: typeof import('../src/swarm-work') = require('../src/swarm-work'), { createTerrain }: typeof import('../src/pvp/terrain') = require('../src/pvp/terrain')
   const wall = new Vec3(1, 65, 0), broke: any[] = []
   const bot = { entity: { position: new Vec3(.5, 64, .5) }, world: { raycast: () => ({ position: wall, boundingBox: 'block' }) } }
   const ctx: any = { bot, EYE: 1.62, entity: { position: new Vec3(3.5, 64, .5), height: 1.8 }, rest() {}, pathTo() {}, clear() {}, async holdWeapon() {}, used() {},

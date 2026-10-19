@@ -1,12 +1,13 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const esbuild = require('esbuild')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import * as esbuild from 'esbuild'
+import { bodySource } from './source-fixture'
 
 // Run the actual combat loop; perception hides the tracked entity behind a wall.
 async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = true, aborted = false, spawner = null, found = false, visible = false, viewDistance = 2, stopViews = 1, clearPlan = null, clearEnabled = true, burning = false }: any = {}) {
@@ -33,7 +34,7 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
   const guard = { wear: async () => {}, raise: async () => {}, lower: async () => {}, close() {}, report: () => ({}), stats: {} }
   const file = path.join(__dirname, '../src/blaze.ts')
   const req = createRequire(file)
-  const session: any = { bot, mcData: require('minecraft-data')('1.21.11'), journal: { state: { places: known ? { 'крепость (ад)': { x: 4, y: 64, z: 4, dimension: 'the_nether' } } : {} } } }
+  const session: any = { bot, mcData: (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'), journal: { state: { places: known ? { 'крепость (ад)': { x: 4, y: 64, z: 4, dimension: 'the_nether' } } : {} } } }
   const context: any = {
     module: { exports: {} }, exports: {}, console: { log() {} }, setTimeout, clearTimeout, Date,
     process: { env: { ND_GUARD: '0', ND_NE_ROUTE: '0' } }, bot, ctl, walks,
@@ -61,7 +62,7 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
       return req(name)
     }
   }
-  const code = esbuild.transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const code = esbuild.transformSync(bodySource(file), { loader: 'ts', format: 'cjs' }).code
     .replace(/^const (seesMe|seesMob)\b/gm, 'let $1')
   vm.runInNewContext(code + `
     makeRadar = () => ({ untilDanger: () => Infinity, incoming: () => [], charged: () => false, stop() {}, stats: {} });
@@ -70,7 +71,7 @@ async function acquire({ hidden = new Vec3(10, 64, 0), known = true, progress = 
     losClear = () => false; reachTo = () => 99; aimFrac = () => null;
     walkNear = async (_b, _c, p) => { walks.push(p.clone()); return true };
     module.exports.testHold = holdSpawner;
-  `, context, { filename: file })
+  `, cjsContext(context), { filename: file })
   const result = await context.module.exports.testHold(session, ctl, {
     spawner, want: 1, deadline: 51000, dead: new Set(), setPhase: p => phases.push(p),
     p: { box: false, clearSpawner: clearEnabled }

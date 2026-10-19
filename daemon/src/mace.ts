@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Булава и заряды ветра (просьба 2026-09-26: «всё, что даёт версия»).
 // Четыре вещи:
 //  1. Удар с падения: взлёт на заряде ветра под ноги (или спуск со своего
@@ -37,12 +37,12 @@ const gameClock = require('./game-clock')
 //    сел не ниже точки всплеска — урона нет (40 тиков «прощения»);
 //  * world/entity/LivingEntity.applyItemBlocking: щит держит, если источник
 //    в 90° от взгляда ПО ГОРИЗОНТАЛИ; ровно над головой (горизонталь 0) — нет.
-// Замеры — daemon/try-mace.js на тестовом сервере (2026-09-26).
+// Замеры — daemon/scenes/pvp/try-mace.js на тестовом сервере (2026-09-26).
 
-const Vec3 = require('vec3')
-const edges = require('./edges')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const edges: typeof import('./edges') = require('./edges')
 // Честный удар (pick.js, 2026-09-26): сквозь крышу его коробки не бить.
-const pick = require('./pick')
+const pick: typeof import('./pick') = require('./pick')
 
 const EYE = 1.62
 // Player: entity_interaction_range 3.0 — от глаз до рамки цели.
@@ -89,7 +89,7 @@ function smashDamage (h, { base = MACE_BASE, charge = 1, density = 0 }: any = {}
 }
 function densityOf (bot) {
   const m = findItem(bot, 'mace')
-  try { return m ? require('./read').enchLevel(bot, m, 'density') : 0 } catch { return 0 }
+  try { return m ? (require('./read') as typeof import('./read')).enchLevel(bot, m, 'density') : 0 } catch { return 0 }
 }
 
 function reachFrom (eye, e, bot = null) {
@@ -370,7 +370,7 @@ function burnAt (bot, pos) {
 function landing (bot, control, { maxTicks = 60, observed = false, arena = null }: any = {}) {
   try {
     const sim = (bot._ndSimOrig || bot.physics.simulatePlayer).bind(bot.physics)
-    const view = observed ? require('./pvp/search').observedCollision(bot) : bot
+    const view = observed ? (require('./pvp/search') as typeof import('./pvp/search')).observedCollision(bot) : bot
     const world = { getBlock: (p) => view.blockAt(p, false) }
     const st = edges.stateOf(bot, control)
     for (let t = 0; t < maxTicks; t++) {
@@ -387,10 +387,10 @@ const AIR_KEYS = [{}, { forward: true }, { back: true }, { left: true }, { right
 function fallCost(bot, at, peak) {
   const floor = bot.blockAt(at.offset(0, -.01, 0).floored())
   if (!floor) return Infinity
-  const dm = require('./pvp/damage-model'), read = require('./read')
+  const dm: typeof import('./pvp/damage-model') = require('./pvp/damage-model'), read: typeof import('./read') = require('./read')
   const worn = [5, 6, 7, 8].map(s => bot.inventory.slots[s]).filter(Boolean).map(it => ({ name: it.name, ench: { protection: read.enchLevel(bot, it, 'protection'), feather_falling: read.enchLevel(bot, it, 'feather_falling') } }))
   const resistance = bot.registry?.effectsByName?.resistance
-  const raw = require('./navigation/landing').landingDamage(floor, Math.max(0, peak - at.y), bot.entity.attributes)
+  const raw = (require('./navigation/landing') as typeof import('./navigation/landing')).landingDamage(floor, Math.max(0, peak - at.y), bot.entity.attributes)
   return dm.afterDefense(raw, 'fall', dm.defenseOf(worn, { resistance: bot.entity.effects?.[resistance?.id]?.amplifier ?? -1 }))
 }
 
@@ -613,7 +613,7 @@ function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP
     let peak = bot.entity.position.y
     let fallPeak = peak, endAt = t0 + maxMs, rebounding = false, choiceAt = 0, relocation = null
     const hits = []
-    const burst = chain && require('./read').enchLevel(bot, findItem(bot, 'mace'), 'wind_burst') > 0
+    const burst = chain && (require('./read') as typeof import('./read')).enchLevel(bot, findItem(bot, 'mace'), 'wind_burst') > 0
     let hit = null
     let done = false
     let lastYaw = bot.entity.yaw
@@ -1090,4 +1090,9 @@ module.exports = {
   afterPacket,
   // Посадка в огонь (прогон физики до земли) — для сцены try-burnland.js.
   landing, burnAt, fallCost, AIR_KEYS, NO_KEYS
+}
+export {
+  SWAP, REACH, smashBonus, smashDamage, install, track, smashPlan, windSmash, descend, fallSmashReady, pushPlan,
+  windPush, knockOff, defend, fireWind, ensureHotbar, hotbarIndex, headroom, windReady, shieldAtUs, slamHit,
+  afterPacket, landing, burnAt, fallCost, AIR_KEYS, NO_KEYS
 }

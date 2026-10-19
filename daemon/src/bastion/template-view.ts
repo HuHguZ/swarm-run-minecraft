@@ -3,9 +3,9 @@
 // которые предсказывает шаблон узнанного бастиона, а не по настоящим скрытым блокам). Клетка, которую видно сейчас (луч глаз,
 // до 6 бл.), — как в мире; остальное — символ шаблона гипотезы (кусок jigsaw jar 1.21.11, bastion-pieces), вне кусков — незерак.
 // Расхождение видимого с шаблоном ловит исполнитель (sealed.execute с S.honest) и сверка целей (bastion).
-const { Vec3 } = require('vec3')
-const SL = require('../sealed')
-const bp = require('../bastion-pieces')
+import { Vec3 } from 'vec3'
+import SL = require('../sealed')
+import bp = require('../bastion-pieces')
 
 // Символ шаблона → блок того же класса для планировщика (sealed.classOf, digSecondsOf).
 const NAME = { '.': 'air', L: 'lava', G: 'gold_block', C: 'chest', g: 'gilded_blackstone', s: 'polished_blackstone_brick_stairs',
@@ -22,8 +22,8 @@ function piecesOf (st) {
 }
 
 function templateView (bot, pieces) {
-  const Block = require('prismarine-block')(bot.registry)
-  const eyes = require('../perception/eyes')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
+  const eyes: typeof import('../perception/eyes') = require('../perception/eyes')
   const fake = new Map()
   const fakeOf = n => {
     if (!fake.has(n)) { const d = bot.registry.blocksByName[n]; fake.set(n, d ? Block.fromStateId(d.defaultState, 0) : null) }
@@ -64,4 +64,4 @@ function templateView (bot, pieces) {
   }
 }
 
-module.exports = { templateView, piecesOf, NAME }
+export { templateView, piecesOf, NAME }

@@ -8,8 +8,8 @@
 // проходят его щит → окно неуязвимости → броню/чары (damage-model). Цель — максимум P(ЭХП ≤ урон за T тиков)
 // по распределению оценки хп (hp-estimate.cdf), с тотемом (вторая жизнь: 1 хп + 8 поглощения + Регенерация II)
 // и естественной регенерацией по ходу плана. Убить за T нельзя — максимум урона в секунду.
-const dm = require('./damage-model')
-const { cdf, REGEN_FAST, REGEN_SLOW } = require('./hp-estimate')
+import * as dm from './damage-model'
+import { cdf, REGEN_FAST, REGEN_SLOW } from './hp-estimate'
 
 const DEFAULTS = {
   horizon: 60, // T, тиков
@@ -189,7 +189,7 @@ function run (tpl, st, obs, P) {
       const rel = P.runway + Math.max(0, ((foe.approach || 0) + pull) * 20)
       const raw = dm.spearChargeRaw({ weapon: tpl.item, sharpness, rel })
       if (!(raw > 0) || st.dist < 3) return null
-      const s = require('../spear').SPEARS[tpl.item]
+      const s = (require('../spear') as typeof import('../spear')).SPEARS[tpl.item]
       const runUp = Math.ceil(Math.max(0, st.dist - 3) / (P.runway / 20))
       return { dt: sw + Math.max(Math.round(s.delay * 20), runUp), outs: [{ p: P.pHit.charge, raw, kind: 'melee' }], attack: false, dist: 2.5 + P.knockback }
     }
@@ -534,4 +534,4 @@ function planAttack (obs, opts: any = {}) {
   }
 }
 
-module.exports = { planAttack, dangerOf, catalog, pKillHits, DEFAULTS }
+export { planAttack, dangerOf, catalog, pKillHits, DEFAULTS }

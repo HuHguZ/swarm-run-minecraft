@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { classify, campaignFacts, mainDeathCause } = require('../scene-kit')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { classify, campaignFacts, mainDeathCause } from '../scenes/lib/scene-kit'
 
 const L = (m, stage, body) => `[12:00:00 +${String(m).padStart(3)}м] ${stage.padEnd(10)} ${body}`
 

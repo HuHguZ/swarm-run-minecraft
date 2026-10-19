@@ -1,4 +1,5 @@
 'use strict'
+const { REPO_ROOT }: typeof import('./paths') = require('./paths')
 // Узнавание кусков бастиона по видимому — как спидраннер узнаёт «стену с
 // золотом» по сундукам и кладке. Шаблоны — из jar 1.21.11
 // (data/minecraft/structure/bastion/**.nbt → data/bastion-pieces.json, сборка
@@ -19,12 +20,12 @@
 // «жилой» (units): units/walls/wall_base с началом 82,32,129 без поворота —
 // 9 золотых блоков в нижней камере (y 35–36) и 3 в средней (y 49–50), сундуки
 // 84–85,36,134; рядом units/walls/connected_wall (98,32,129) — ещё 5.
-const path = require('path')
-const { Vec3 } = require('vec3')
+const path: typeof import('path') = require('path')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 
 let LIB = null
 function lib () {
-  if (!LIB) LIB = require(path.join(__dirname, '..', 'data', 'bastion-pieces.json'))
+  if (!LIB) LIB = require(path.join(REPO_ROOT, 'daemon/data/bastion-pieces.json'))
   return LIB
 }
 
@@ -104,7 +105,7 @@ function candidatesFromChests (bot, chests) {
 // Проверка кандидата глазами: до maxChecks открытых в шаблоне клеток ближе
 // radius к телу. { match, miss, checked }.
 function verify (bot, c, { radius = 28, maxChecks = 260 }: any = {}) {
-  const { seesBlock } = require('./sight')
+  const { seesBlock }: typeof import('./sight') = require('./sight')
   const P = lib()[c.piece]
   const [X, Y, Z] = P.size
   const eye = bot.entity.position.offset(0, 1.62, 0)
@@ -416,3 +417,9 @@ const BASALT_ANCHORS = ['bridge/bridge_pieces/bridge', 'bridge/starting_pieces/e
 const GOLD_ANCHORS = ['bridge/bridge_pieces/bridge', 'treasure/bases/centers/center_0', 'treasure/bases/centers/center_1', 'treasure/bases/centers/center_2', 'treasure/bases/centers/center_3']
 
 module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL, startFitsGenerator, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS, GOLD_ANCHORS }
+export {
+  lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf,
+  unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL,
+  startFitsGenerator, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS,
+  GOLD_ANCHORS
+}

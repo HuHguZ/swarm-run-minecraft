@@ -1,13 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')('1.21.11')
-const { Session } = require('../src/session')
-const movement = require('../src/movement')
-const blockmoves = require('../src/blockmoves')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+import { Session } from '../src/session'
+import movement = require('../src/movement')
+import blockmoves = require('../src/blockmoves')
 
 const node = (x, y, z, extra: any = {}) => Object.assign(new Vec3(x, y, z), {
   hash: `${Math.floor(x)},${Math.ceil(y)},${Math.floor(z)}`, cost: 1,
@@ -15,13 +15,13 @@ const node = (x, y, z, extra: any = {}) => Object.assign(new Vec3(x, y, z), {
 }, extra)
 
 function contextFor (nodes) {
-  let last = { data: new Vec3(.5, 1, .5), parent: null }
+  let last: any = { data: new Vec3(.5, 1, .5), parent: null }
   for (const data of nodes) last = { data, parent: last }
   return { bestNode: last, openDataMap: new Map([[last.data.hash, last]]) }
 }
 
 function fixture () {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot.entity = { position: new Vec3(.5, 1, .5), velocity: new Vec3(0, 0, 0), onGround: true, yaw: 0 }
   bot.health = 20
@@ -49,7 +49,7 @@ function fixture () {
   // This is the production registration order: Session observes the publication
   // before gotoGoal's per-intent listener, then native assigns result.path.
   bot.on('path_update', r => Session.prototype.notePath.call(session, r))
-  const goal = new (require('mineflayer-pathfinder').goals.GoalNearXZ)(0, 8, 1)
+  const goal = new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).goals.GoalNearXZ)(0, 8, 1)
   const walk = movement.gotoGoal(bot, goal)
   walk.catch(() => {})
   const publish = (status, context, path) => {

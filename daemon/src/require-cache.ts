@@ -4,18 +4,20 @@
 // internalModuleStat, цикл событий стоит, ферма lockstep падает «connected client stalled», в обычной игре тело застывает.
 // Здесь имя файла запоминается на пару (родитель, запрос); уже загруженный модуль отдаётся из Module._cache как есть. Не загружен
 // (круговая загрузка) или вынут из кэша (тесты) — обычный require.
-const Module = require('module')
+import Module = require('module')
+// Внутренности Module, которых нет в типах node: кэш загруженных, разрешение имени файла, метка своей обёртки require.
+type ModuleInternals = typeof Module & { _cache: Record<string, any>; _resolveFilename (request: string, parent: any): string }
 function installRequireCache () {
-  if (Module.prototype.require._ndCached) return
+  if ((Module.prototype.require as typeof Module.prototype.require & { _ndCached?: boolean })._ndCached) return
   const original = Module.prototype.require
   const files = new Map()
   const cached = function (this: any, request: string) {
     if (typeof request === 'string' && (request.startsWith('./') || request.startsWith('../'))) {
       const key = this.filename + '\0' + request
       const file = files.get(key)
-      if (file) { const m = Module._cache[file]; if (m && m.loaded) return m.exports }
+      if (file) { const m = (Module as ModuleInternals)._cache[file]; if (m && m.loaded) return m.exports }
       const exp = original.call(this, request)
-      if (!file) { try { files.set(key, Module._resolveFilename(request, this)) } catch {} }
+      if (!file) { try { files.set(key, (Module as ModuleInternals)._resolveFilename(request, this)) } catch {} }
       return exp
     }
     return original.call(this, request)
@@ -24,4 +26,4 @@ function installRequireCache () {
   Module.prototype.require = cached
 }
 installRequireCache()
-module.exports = { installRequireCache }
+export { installRequireCache }

@@ -1,15 +1,12 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz } = require('./movement')
-const { withTimeout } = require('./build')
-const { collectNearbyDrops } = require('./actions')
-const {
-  GROUPS, TOOL_RESERVE, itemNamed, countOf, countItems, diffItems,
-  toolStatus, bestOfKind, usesLeft
-} = require('./items')
-const { readWorn } = require('./armor')
-const social = require('./social')
+import * as gameClock from './game-clock'
+import { goals } from 'mineflayer-pathfinder'
+import { sleep, xyz } from './movement'
+import { withTimeout } from './build'
+import { collectNearbyDrops } from './actions'
+import { GROUPS, TOOL_RESERVE, itemNamed, countOf, countItems, diffItems, toolStatus, bestOfKind, usesLeft } from './items'
+import { readWorn } from './armor'
+import * as social from './social'
 
 // Handing a thing to a person and taking a thing from him.
 //
@@ -348,7 +345,7 @@ function lyingAround (bot, { name = null, radius = 8, from = null }: any = {}) {
     // Где предмет сейчас по физике полёта (drops.js): mineflayer держит летящий в точке
     // броска до секунды, и «лёг» по двум одинаковым опросам мерил бы бросок в ноль.
     let pos = ent.position
-    try { pos = require('./drops').nowOf(bot, ent) } catch {}
+    try { pos = (require('./drops') as typeof import('./drops')).nowOf(bot, ent) } catch {}
     const dist = pos.distanceTo(me)
     if (dist > radius) continue
     const it = droppedItem(ent)
@@ -1034,7 +1031,7 @@ async function take (session, ctl, { item: ask = null, radius = 8, timeoutSecond
   return out
 }
 
-module.exports = {
+export {
   give,
   take,
   lyingAround,

@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const esbuild = require('../../node_modules/esbuild')
-const Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function source(name: string, overrides: Record<string, unknown>) {
   const file = path.resolve(__dirname, '../src', name + '.ts'), local = createRequire(file)
   const module = { exports: {} as Record<string, any> }
   const code = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports
 }

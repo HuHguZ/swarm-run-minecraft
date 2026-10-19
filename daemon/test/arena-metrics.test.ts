@@ -1,26 +1,27 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const Module = require('node:module')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import Module = require('node:module')
+import { transformSync } from 'esbuild'
 function current (relative) {
-  const file = path.join(__dirname, relative); const mod = new Module(file, module)
-  mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file))
+  const file = path.join(__dirname, relative); const mod: any = new Module(file, module)
+  mod.filename = file; mod.paths = (Module as any)._nodeModulePaths(path.dirname(file))
   mod._compile(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, file)
   return mod.exports
 }
-const metrics = current('../arena-metrics.ts')
+const metrics = current('../arena/arena-metrics.ts')
 const totem = current('../src/totem.ts')
 
 test('arena return checks use physical position, not the floored exterior strip', async () => {
-  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena/arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
   const start = source.indexOf('async function where(')
   const end = source.indexOf('\n}', start) + 2
   assert.ok(start >= 0 && end > start)
-  const context = vm.createContext({ X: 600, Y: 120, Z: 600, CLEAN_R: 24, COLOS: true, CEIL: true, CEIL_H: 16, deathBase: new Map() })
+  const context = vm.createContext(cjsContext({ X: 600, Y: 120, Z: 600, CLEAN_R: 24, COLOS: true, CEIL: true, CEIL_H: 16, deathBase: new Map() }))
   vm.runInContext(source.slice(start, end) + '\nthis.where = where', context)
   for (const [x, z, expected] of <[number, number, string][]>[[602.5, 626.6, 'gone'], [626.6, 602.5, 'gone'],
     [574.4, 602.5, 'gone'], [602.5, 574.4, 'gone'], [602.5, 624.7, 'in'], [576.3, 602.5, 'in']]) {
@@ -64,10 +65,10 @@ async function arenaRound ({ missingFinal = false, staleFallback = false, totemB
   const A = client('A'); const B = client('B')
   const clock = { now: () => now, snapshot: () => ({ ticks: now / 50 }),
     setInterval: () => 1, clearInterval () {}, wall: { now: () => now, sleep: async ms => { now += ms }, setInterval: () => 1, clearInterval () {} } }
-  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  const source = transformSync(fs.readFileSync(path.join(__dirname, '../arena/arena.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
   const body = source.slice(source.indexOf('async function round(')).split(/\n;?\s*\(async \(\) => \{/)[0]
   assert.ok(body.startsWith('async function round(') && !body.includes('await A.ready'))
-  const context = vm.createContext({
+  const context = vm.createContext(cjsContext({
     A, B, NA: 'A', NB: 'B', A_URL: 'a', B_URL: 'b', HUMANS: [], HUMAN: null, PREP_RATE: 0, FIGHT_RATE: 0,
     GENTLE: false, X: 0, Y: 100, Z: 0, CLEAN_R: 24, TP: '/tp', NOTIMER: true, MAX_MS: 100000, STALL_MS: 100000,
     RETURN_MS: 45000, GONE_MS: 10000, deathBase: new Map(), lagMax: { a: 0, b: 0 }, score: { A: 0, B: 0, draw: 0 },
@@ -77,7 +78,7 @@ async function arenaRound ({ missingFinal = false, staleFallback = false, totemB
     where: async c => c === A && deathAt ? 'dead' : 'in', diedIn: r => !!r.detail?.died || r.by?.type === 'death',
     lostLink: () => false, logSize: () => 0, roundDeaths: () => [{ who: 'A', kind: 'foe' }],
     ...metrics, totemDelta: totem.delta
-  })
+  }))
   vm.runInContext(body + '\nthis.run = round', context)
   await context.run({ name: 'test', a: [] }, 1)
   return { row: JSON.parse(lines.find(line => line.startsWith('ROUND ')).slice(6)), fightAt, deathAt, samples }
@@ -160,12 +161,12 @@ test('round totals weight measured averages, keep maxima and never add cumulativ
 })
 
 test('farm stop requests read only ND_SERVER_LOG and never the user client log', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../arena.js'), 'utf8')
+  const source = fs.readFileSync(path.join(__dirname, '../arena/arena.js'), 'utf8')
   const body = source.slice(source.indexOf('const MC_LOG')).split('const ONLY')[0]
   for (const serverLog of ['farm/server-30/logs/latest.log', undefined]) {
     const reads = []
-    const context = vm.createContext({ process: { env: { APPDATA: 'USER-CLIENT-MUST-NOT-BE-READ', ND_SERVER_LOG: serverLog } }, path,
-      gameClock: { wall: { now: () => 0 } }, fs: { statSync: filename => { reads.push(filename); throw new Error('no server log') } } })
+    const context = vm.createContext(cjsContext({ process: { env: { APPDATA: 'USER-CLIENT-MUST-NOT-BE-READ', ND_SERVER_LOG: serverLog } }, path,
+      gameClock: { wall: { now: () => 0 } }, fs: { statSync: filename => { reads.push(filename); throw new Error('no server log') } } }))
     vm.runInContext(body + '\nthis.stopped = stopRequested()', context)
     assert.equal(context.stopped, false)
     assert.deepEqual(reads, serverLog ? [serverLog] : [])

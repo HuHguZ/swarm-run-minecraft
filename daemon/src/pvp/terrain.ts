@@ -12,7 +12,7 @@ const punchThrough = async () => {
     let hit = null
     try { hit = ctx.bot.world.raycast(eye0, delta.scaled(1 / dist), dist, b => b && b.boundingBox === 'block') } catch {}
     if (!hit || hit.position.offset(0.5, 0.5, 0.5).distanceTo(eye0) > 4.5) return false
-    if (require('../swarm-work').isKept(ctx.bot, hit.position)) return false
+    if ((require('../swarm-work') as typeof import('../swarm-work')).isKept(ctx.bot, hit.position)) return false
     const plan = ctx.tools.bestFor(ctx.bot, hit)
     if (plan.ms > 1500) return false
     const inputs = [ctx.bot.entity.position.floored(), hit.position, hit.stateId ?? hit.name, plan.item?.name, plan.ms,

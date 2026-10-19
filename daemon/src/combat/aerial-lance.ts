@@ -14,10 +14,10 @@
 //    выбивает (Weapon(1), без disableBlocking) — против поднятого щита таран не планируем;
 //  * ракету и копьё одной рукой разом не «используют» (клиент игры, пока держит «использовать», второй не начинает):
 //    ракета — до копья, во время разгона — нет.
-const clock = require('../game-clock')
-const Vec3 = require('vec3')
-const sky = require('../elytra')
-const spear = require('../spear')
+const clock: typeof import('../game-clock') = require('../game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const sky: typeof import('../elytra') = require('../elytra')
+const spear: typeof import('../spear') = require('../spear')
 
 const EYE_FLY = 0.4
 const MIN_R = 2.0
@@ -150,7 +150,7 @@ function facing (e: any, at: any): number {
 function ehpTele (bot: any, e: any): number | null {
   const h = healthOf(bot, e)
   if (h == null) return null
-  try { return h + (require('../read').absorptionOf(bot, e) || 0) } catch { return h }
+  try { return h + ((require('../read') as typeof import('../read')).absorptionOf(bot, e) || 0) } catch { return h }
 }
 
 function healthOf (bot: any, e: any): number | null {

@@ -4,4 +4,4 @@ function markPearls (marks, inventory, seconds) {
   if (n >= 10 && marks.pearls10 === undefined) marks.pearls10 = seconds / 60
   return marks
 }
-module.exports = { markPearls }
+export { markPearls }

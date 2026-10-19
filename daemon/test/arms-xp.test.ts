@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { drink } = require('../src/pvp/xp-bottles')
+import { drink } from '../src/pvp/xp-bottles'
 
 // Бутылки опыта: взгляд вниз, бутылка в руке, бросков не больше, чем бутылок и max; без бутылок — ничего.
 test('xp_bottles: бросает по одной, перекладывая стопку в руку; без бутылок — 0', async () => {

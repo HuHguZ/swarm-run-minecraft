@@ -1,11 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { bodySource } from './source-fixture'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture ({ free = 0, output = true }: any = {} as Record<string, any>) {
   const file = path.join(__dirname, '../src/actions.js')
@@ -28,7 +30,7 @@ function fixture ({ free = 0, output = true }: any = {} as Record<string, any>) 
     require: n => n === './movement' ? { ...realRequire(n), sleep: async () => {} }
       : n === './pack' ? { outputSlots: () => 1, makeRoom: async () => ({ freed: 0, tossed: [], short: 1 }) }
         : realRequire(n) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const mcData = { itemsByName: { torch: { id: 3, stackSize: 64 } }, items: { 1: { name: 'coal' }, 2: { name: 'stick' }, 3: { name: 'torch' } } }
   return { bot, calls: () => calls, craft: () => context.module.exports.craft({ bot, mcData }, { aborted: false, onAbort: [] }, { item: 'torch', count: 4 }) }
 }
@@ -54,13 +56,13 @@ test('материалы списались, результат отсутств
 })
 
 test('the actual full Nether kit crafts four sticks after a pickup refills both output and cursor capacity', async () => {
-  const { EventEmitter } = require('node:events')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
   const bot: Record<string, any> = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'
-  const Item = require('prismarine-item')(bot.registry)
+  const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
   const stack = (name, count) => new Item(bot.registry.itemsByName[name].id, count)
-  bot.inventory = require('prismarine-windows')(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)(bot.registry).createWindow(0, 'minecraft:inventory', 'inventory')
   const stock = { iron_nugget: 91, potion: 5, string: 69, white_bed: 1, bucket: 1, iron_ingot: 7,
     splash_potion: 2, flint_and_steel: 1, cooked_beef: 12, crafting_table: 1, obsidian: 12, arrow: 44,
     spectral_arrow: 97, golden_chestplate: 1, ancient_debris: 1, water_bucket: 1, cooked_porkchop: 1,
@@ -79,13 +81,13 @@ test('the actual full Nether kit crafts four sticks after a pickup refills both 
     items: slots.map(Item.toNotch), carriedItem: Item.toNotch(carried) })
   bot._client = new EventEmitter()
   bot._client.on('window_items', packet => packet.items.forEach((value, index) => bot.inventory.updateSlot(index, Item.fromNotch(value))))
-  require('../src/invsync').install(bot)
+  ;(require('../src/invsync') as typeof import('../src/invsync')).install(bot)
   bot.tossStack = async item => { discarded.push(item.name); slots[item.slot] = null; emit() }
   bot.toss = async (type, metadata, count) => {
     const item = slots.find(item => item?.type === type && item.metadata === metadata)
     discarded.push(item.name); item.count -= count; if (!item.count) slots[item.slot] = null; emit()
   }
-  await require('../src/pack').tidy(bot, { also: { leather: 0 } })
+  await (require('../src/pack') as typeof import('../src/pack')).tidy(bot, { also: { leather: 0 } })
   const cleared = slots.findIndex((item, index) => index >= 9 && index < 45 && !item)
   slots[cleared] = stack('gilded_blackstone', 1); emit()
   assert.equal(bot.inventory.emptySlotCount(), 0, 'the observed new block refills the tidy slot')
@@ -112,7 +114,7 @@ test('the actual full Nether kit crafts four sticks after a pickup refills both 
   const recipe = { inShape: [[{ id: planks }], [{ id: planks }]], result: { id: sticks, count: 4 },
     delta: [{ id: planks, count: -2 }, { id: sticks, count: 4 }] }
   bot.recipesFor = () => [recipe]
-  const made = await require('../src/actions').craft({ bot, mcData: bot.registry }, { aborted: false, onAbort: [] },
+  const made = await (require('../src/actions') as typeof import('../src/actions')).craft({ bot, mcData: bot.registry }, { aborted: false, onAbort: [] },
     { item: 'stick', count: 4, conversionStep: true })
   assert.equal(made.count, 4); assert.equal(refilled, true)
   assert.equal(bot.inventory.selectedItem, null)
@@ -121,5 +123,5 @@ test('the actual full Nether kit crafts four sticks after a pickup refills both 
   assert.equal(bot.inventory.items().find(item => item.name === 'crafting_table').count, 1)
   assert.equal(bot.inventory.items().filter(item => /_pickaxe$/.test(item.name)).length, 2)
   assert.equal(bot.inventory.items().find(item => item.name === 'ender_pearl').count, 2)
-  assert.ok(require('../src/pack').buildCount(bot) >= require('../src/pack').RESERVE.build)
+  assert.ok((require('../src/pack') as typeof import('../src/pack')).buildCount(bot) >= (require('../src/pack') as typeof import('../src/pack')).RESERVE.build)
 })

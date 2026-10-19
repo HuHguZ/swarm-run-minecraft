@@ -4,9 +4,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { REPO_ROOT } from '../src/paths'
+import { cjsContext } from './cjs-context'
 let route: any = {}
-try { route = require('../src/bastion/entry-route') } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e }
-const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/bastion-housing-entry.json'), 'utf8'))
+try { route = (require('../src/bastion/entry-route') as typeof import('../src/bastion/entry-route')) } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e }
+const data = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'daemon/test/fixtures/bastion-housing-entry.json'), 'utf8'))
 const frames = () => data.views.map(v => ({ at: { x:v.at[0], y:v.at[1], z:v.at[2] }, blocks: v.cells.map(([x,y,z,name])=>({ name,position:{x,y,z} })) }))
 
 test('two saved honest housing views recover the root pose and lower-wall entry without reading a world', () => {
@@ -66,7 +68,7 @@ test('an ambiguous set of housing poses cannot produce an entry coordinate', () 
 
 test('cells above a shorter jar rampart variant remain unknown and cannot contradict the real housing pose', () => {
   assert.equal(typeof route.assess,'function')
-  const f=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/bastion-housing-variable-rampart.json'),'utf8'))
+  const f=JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'daemon/test/fixtures/bastion-housing-variable-rampart.json'),'utf8'))
   const views=f.views.map(v=>({at:{x:v.at[0],y:v.at[1],z:v.at[2]},blocks:v.cells.map(([x,y,z,name])=>({name,position:{x,y,z}}))}))
   assert.deepEqual(route.assess(views).start,f.expected)
 })
@@ -80,7 +82,7 @@ function routeFixture (move=true,cosmetic=false) {
   const session={bot},context:any={module:{exports:{}},process,console,setImmediate,Set,testMemory:mem,
     require:id=>id==='../nether-cover'?{closedBore:async (_s,_c,target,options)=>{calls.push({target,options});if(move)bot.entity.position=new Vec3(target.x+.5,target.y,target.z+.5);return{ok:move,moved:move?1:0,down:0,dug:cosmetic?2:0,placed:cosmetic?2:0,unsealed:0,why:move?null:'no physical route'}}}:
       id==='../perception/eyes'?{seesNow:()=>true}:id==='../sealed'?{bodyCells:b=>[b.entity.position.floored()]}:native(id)}
-  vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nmemory=()=>testMemory;',context)
+  vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nmemory=()=>testMemory;',cjsContext(context))
   return{run:()=>context.module.exports.approach(session,{aborted:false},{},Infinity),calls,bot,items,mem}
 }
 
@@ -120,7 +122,7 @@ test('the second view is scanned at its observed destination, after intermediate
   const mem:any={world:bot.world,dimension:'the_nether',frames:[{...f,at:{x:.5,y:60,z:.5}}],visited:new Set(),aim:new Vec3(6,60,0),assessment:{hypotheses:[data.expected]}}
   let scans=0
   const ctx:any={module:{exports:{}},process,console,setImmediate,Set,testMemory:mem,recordScan:()=>{scans++;return{hypotheses:[data.expected]}},require:id=>id==='../perception/eyes'?{seesNow:()=>true}:id==='../sealed'?{bodyCells:b=>[b.entity.position.floored()]}:id==='../walkable'?{walkable:()=>nodes.map(n=>({...n,d:Math.abs(n.pos.x-Math.floor(bot.entity.position.x))}))}:id==='../endportal-descent'?{walkInto:async(_b,_c,p)=>{bot.entity.position=p.offset(.5,0,.5);return true}}:native(id)}
-  vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nmemory=()=>testMemory;observe=async()=>recordScan();',ctx)
+  vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nmemory=()=>testMemory;observe=async()=>recordScan();',cjsContext(ctx))
   const run=()=>ctx.module.exports.approach({bot},{aborted:false},{},Infinity)
   for(let n=0;n<6;n++)await run()
   assert.equal(scans,0,'a partial approach must not consume the endpoint contour')

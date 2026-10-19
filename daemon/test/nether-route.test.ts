@@ -1,9 +1,9 @@
 'use strict'
 // План хода по сетке Ада (src/nether-route.js plan, src/nether-grid.js) — поток nether 03.10.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const NG = require('../src/nether-grid')
-const { plan } = require('../src/nether-route')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as NG from '../src/nether-grid'
+import { plan } from '../src/nether-route'
 const { C } = NG
 
 // Коробка 40×20×12: всё незерак, пол y 10; коридор воздуха на y 11–12 по z 5 от x 2 до 30.

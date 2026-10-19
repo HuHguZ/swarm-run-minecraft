@@ -1,6 +1,6 @@
 # NeuroDown — в репозиторий попадает только перечисленное ниже (белый список).
 # Всё остальное в папке проекта — миры серверов, память и логи бота, журналы агентов,
-# лаборатория Codex, живая арена — остаётся только на диске.
+# лаборатория Codex, живая арена, сборка dist/ и снимки кода фермы .snapshots/ — остаётся только на диске.
 
 /*
 !/.gitignore
@@ -25,8 +25,13 @@
 /daemon/*
 !/daemon/src/
 !/daemon/test/
+!/daemon/campaign/
 !/daemon/data/
-!/daemon/*.js
+!/daemon/scenes/
+!/daemon/arena/
+!/daemon/castle/
+!/daemon/sim/
+!/daemon/tools/
 !/daemon/*.ts
 !/daemon/*.ps1
 !/daemon/strategy-costs.json
@@ -36,12 +41,15 @@
 
 # farm — ферма тестовых миров: только код, сиды и наборы сидов
 /farm/*
-!/farm/*.js
 !/farm/*.ts
 !/farm/*.java
 !/farm/*.sh
 !/farm/limits.json
 !/farm/seeds/
+!/farm/analysis/
+!/farm/scenes/
+!/farm/series/
+!/farm/swarm/
 !/farm/arena/
 !/farm/crystal/
 !/farm/dragon/
@@ -66,7 +74,6 @@
 !/mcp/src/
 !/mcp/package.json
 !/mcp/package-lock.json
-!/mcp/smoke.js
 !/mcp/smoke.ts
 
 # run — скрипты основного мира
@@ -88,22 +95,6 @@ node_modules/
 *.bak
 *.bak2
 *.orig
-*.js.map
-/daemon/*.js
-/daemon/src/**/*.js
-/daemon/test/**/*.js
-/farm/*.js
-/farm/arena/**/*.js
-/farm/crystal/**/*.js
-/farm/dragon/**/*.js
-/farm/movement/**/*.js
-/farm/portal-scan/**/*.js
-/farm/route-scan/**/*.js
-/farm/stronghold_route/**/*.js
-/farm/stuck/**/*.js
-/mcp/src/**/*.js
-/mcp/smoke.js
-/run/*.js
 *.cpuprofile
 *.jar
 *.javap

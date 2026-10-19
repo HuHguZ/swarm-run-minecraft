@@ -1,12 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // session.goto with a stubbed pathfinder (as goto.test.ts): which surface walk did the attempt use?
 function fixture (skyAt: (p: any) => number, open = true) {
@@ -19,7 +20,7 @@ function fixture (skyAt: (p: any) => number, open = true) {
       if (name === './movement') return { ...actual, inWater: () => false, stuckGuard: () => ({ promise: new Promise<void>(() => {}), stop () {} }), unstick: async () => {} }
       return actual
     } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), cjsContext(context))
   const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(10.5, 100, 0.5), onGround: true }
   bot.world = { getColumnAt: () => ({ minY: -64, skyLightSections: Array(26).fill({}) }) }

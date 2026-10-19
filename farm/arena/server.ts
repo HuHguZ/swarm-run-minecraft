@@ -1,10 +1,11 @@
 'use strict'
+import { DIST_ROOT } from '../../daemon/src/paths'
 // Сервер слота: команды RCON (одно соединение на слот) или чатом распорядителя в LAN-мире пользователя, постройка
 // Колизея в LAN и игровое время драйвера на ускоренном сервере.
 import { ROOT, sleep, log } from './context'
-const fs = require('fs')
-const path = require('path')
-const net = require('net')
+import * as fs from 'fs'
+import path = require('path')
+import * as net from 'net'
 
 function props (i) { return fs.readFileSync(path.join(ROOT, 'farm', `server-${i}`, 'server.properties'), 'utf8') }
 const prop = (p, k) => (p.match(new RegExp('^' + k.replace('.', '\\.') + '=(.*)$', 'm')) || [])[1]
@@ -95,7 +96,7 @@ export async function buildLan (who) {
   log(`Колизей в LAN ${LAN}: ${X0} ${Y0} ${Z0}`)
   await lanCmd('gamerule log_admin_commands false')
   process.env.ARENA_COLOS_FLAG = process.env.ARENA_COLOS_FLAG || path.join(ROOT, 'farm', 'results', 'lan-colosseum.json')
-  const CZB = require(path.join(ROOT, 'daemon', 'build-colosseum'))
+  const CZB = require(path.join(DIST_ROOT, 'daemon', 'arena', 'build-colosseum'))
   const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const call = async (m, p) => {
     if (m === 'say') { await lanCmd(String(p.text).replace(/^\//, '')); return {} }

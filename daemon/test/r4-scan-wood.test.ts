@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const scan = require('../../farm/route-scan/scan')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as scan from '../../farm/route-scan/scan'
 test('offline scanner records reachable planks in buildings and their actual stand', () => {
   assert.equal(typeof scan.woodGroups, 'function')
   const cells = Array.from({ length: 12 }, (_, i) => ({ x: 80 + (i % 3), y: 65 + Math.floor(i / 3), z: 0, name: 'oak_planks', stand: { x: 79, y: 64, z: 0 } }))

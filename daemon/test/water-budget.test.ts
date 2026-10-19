@@ -1,3 +1,4 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -5,9 +6,11 @@ import vm from 'node:vm'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
+import { cjsContext } from './cjs-context'
 
-const registry = require('prismarine-registry')('1.21.11'), Block = require('prismarine-block')(registry)
-const movement = require('../src/movement'), native = require('../src/tick-plugins').getPhysics()
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11'), Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+import movement = require('../src/movement')
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 function pool() {
   const blocks = new Map(), read = p => {
@@ -80,7 +83,7 @@ test('A6 mine and explore price a wet approach to dry coal; the sole wet candida
     if (name === './sight') return { visibleOf: (_b, _ids, _r, opts) => choices.filter(c => !opts.skip?.(c.position)).slice(0, opts.max) }
     return actual
   } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), ctx)
+  vm.runInNewContext(bodySource(file), cjsContext(ctx))
   const s = { bot, cfg: { fairPlay: true }, mcData: registry }, ctl = { aborted: false, onAbort: [] }
   const found = await ctx.module.exports.explore(s, ctl, { block: 'coal_ore', dry: true })
   assert.equal(found.at.z, 6)
@@ -92,7 +95,7 @@ test('A6 mine and explore price a wet approach to dry coal; the sole wet candida
 })
 
 test('A6 failed roof dig is retried after a block change, not on each Surface call', async () => {
-  const { bot } = pool(), clocks = require('../src/game-clock'), clock = clocks.activate(new clocks.GameClock({ manual: true, epoch: 0 }))
+  const { bot } = pool(), clocks: typeof import('../src/game-clock') = require('../src/game-clock'), clock = clocks.activate(new clocks.GameClock({ manual: true, epoch: 0 }))
   let roof = 'stone', digs = 0
   const read = p => {
     const q = p.floored(), name = q.x === 0 && q.z === 0 && q.y >= 0 && q.y <= 1 ? 'water' : q.x === 0 && q.z === 0 && q.y === 2 ? roof : 'stone'

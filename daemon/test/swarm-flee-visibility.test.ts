@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const { hostilesAround } = require('../src/flee')
+import { Vec3 } from 'vec3'
+import { hostilesAround } from '../src/flee'
 
 test('panic flee cannot track a requested player through a wall or unloaded blocks', () => {
   let wall = true
@@ -17,7 +17,7 @@ test('panic flee cannot track a requested player through a wall or unloaded bloc
 })
 
 test('escape rays stop at the arena boundary while retaining a usable shorter route', () => {
-  const { runLength, pickDirection } = require('../src/flee')
+  const { runLength, pickDirection }: typeof import('../src/flee') = require('../src/flee')
   const bot = { entity: { position: new Vec3(.5, 64, .5) }, blockAt(p) {
     const solid = p.y === 63
     return { position: p.floored(), name: solid ? 'stone' : 'air', boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [] }

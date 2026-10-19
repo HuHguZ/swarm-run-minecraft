@@ -6,10 +6,11 @@ import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
 import { scoutStructures } from '../src/campaign/structure-search'
-const Vec3 = require('vec3')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')(data)
-const pick = require('../src/pick')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(data as any)
+import pick = require('../src/pick')
 
 function fixture(hidden: 'chest' | 'clue' | null) {
   const chest = new Vec3(3, 64, 0), clue = new Vec3(3, 64, 2)
@@ -17,14 +18,14 @@ function fixture(hidden: 'chest' | 'clue' | null) {
   if (hidden) for (const y of [64, 65]) cells.set(new Vec3(2, y, hidden === 'chest' ? 0 : 1).toString(), 'stone')
   const bot: any = { registry: data, game: { dimension: 'overworld' }, entity: { position: new Vec3(.5, 64, .5) }, entities: {},
     blockAt(p) { const at = p.floored(); const b = Block.fromStateId(data.blocksByName[cells.get(at.toString()) || 'air'].defaultState, 0); b.position = at; return b },
-    findBlocks({ matching }) { return [...cells].filter(([, name]) => data.blocksByName[name].id === matching).map(([at]) => new Vec3(...at.slice(1, -1).split(',').map(Number))) },
+    findBlocks({ matching }) { return [...cells].filter(([, name]) => data.blocksByName[name].id === matching).map(([at]) => new Vec3(...(at.slice(1, -1).split(',').map(Number) as [number, number, number]))) },
     findBlock(options) { return this.findBlocks(options)[0] || null } }
   const opens = []
-  const structures = { recordedAt: () => null, playerMarks: () => [], STRUCTURE_PLACES: require('../src/structures').STRUCTURE_PLACES,
+  const structures = { recordedAt: () => null, playerMarks: () => [], STRUCTURE_PLACES: (require('../src/structures') as typeof import('../src/structures')).STRUCTURE_PLACES,
     async takeWorth(_session, _ctl, at) { opens.push(at); return { took: { iron_ingot: 4 } } } }
   const file = path.join(__dirname, '../src/loot.ts'), req = createRequire(file)
   const context: any = { module: { exports: {} }, console, require: name => name === './structures' ? structures : req(name) }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context, { filename: file })
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
   const session = { bot, journal: { state: { looted: [], places: {} }, patch(fn) { fn(this.state) } } }
   return { chest, clue, bot, cells, opens, structures, session, loot: (options = { visibleOnly: true }) => context.module.exports.loot(session, { aborted: false, onAbort: [] }, { x: chest.x, y: chest.y, z: chest.z, ...options }) }
 }
@@ -118,7 +119,7 @@ test('ordinary Nether netherrack beside obsidian is not the overworld ruin signa
 
 test('the bounded scout loot RPC honors its remaining game seconds', () => {
   let options
-  require('../src/session/combat').loot.call({ runIntent(_name, _work, opts) { options = opts } }, { timeoutSeconds: 9, visibleOnly: true })
+  ;(require('../src/session/combat') as typeof import('../src/session/combat')).loot.call({ runIntent(_name, _work, opts) { options = opts } }, { timeoutSeconds: 9, visibleOnly: true })
   assert.equal(options.timeoutMs, 9000)
 })
 
@@ -128,9 +129,9 @@ for (const obstacle of ['wall', 'glass', 'deadline', 'none'] as const) test(`str
   f.bot.pathfinder = { setGoal() {} }
   f.bot.lookAt = async () => { if (obstacle === 'wall' || obstacle === 'glass') for (const y of [64, 65]) f.cells.set(new Vec3(2, y, 0).toString(), obstacle === 'wall' ? 'stone' : 'glass') }
   f.bot.openContainer = async () => { opened++; return {} }
-  const gc = require('../src/game-clock')
+  const gc: typeof import('../src/game-clock') = require('../src/game-clock')
   assert.equal(pick.blockSeen(f.bot, f.chest), true)
-  const open = require('../src/containers').findAndOpen({ bot: f.bot }, { aborted: false, onAbort: [] }, { ...f.chest, visibleOnly: true }, gc.now() + (obstacle === 'deadline' ? -1 : 1000))
+  const open = (require('../src/containers') as typeof import('../src/containers')).findAndOpen({ bot: f.bot }, { aborted: false, onAbort: [] }, { ...f.chest, visibleOnly: true }, gc.now() + (obstacle === 'deadline' ? -1 : 1000))
   if (obstacle === 'none') { await open; assert.equal(opened, 1) }
   else { await assert.rejects(open); assert.equal(opened, 0) }
 })
@@ -141,7 +142,7 @@ test('the overworld route scout also consumes its observed chest before another 
   const ctx = { state: { pos: { x: 0, y: 64, z: 0 } }, sit: { surface: true }, process: { env: {} }, died: false,
     have: () => 0, refresh: async () => {}, sense: async () => {}, gameClock: { now: () => now }, rlog() {},
     async act(method, params) { calls.push({ method, params }); if (method === 'explore') { now += 400; return { detail: { found: 'chest', at: { x: 3, y: 64, z: 0 } } } } return { detail: method === 'loot' ? { took: { iron_ingot: 4 } } : { known: [] } } } }
-  const result = await require('../src/campaign/overworld-route').createOverworldRoute(ctx).routeStep({ kind: 'scoutIron' })
+  const result = await (require('../src/campaign/overworld-route') as typeof import('../src/campaign/overworld-route')).createOverworldRoute(ctx).routeStep({ kind: 'scoutIron' })
   assert.equal(result, true)
   assert.equal(calls.filter(c => c.method === 'loot').length, 1)
   assert.equal(calls.find(c => c.method === 'loot').params.visibleOnly, true)
@@ -166,25 +167,25 @@ for (const stop of ['deadline', 'abort'] as const) test(`an observed chest canno
 })
 
 test('chest take uses one validated budget inside the body and RPC', () => {
-  const c = require('../src/containers')
+  const c: typeof import('../src/containers') = require('../src/containers')
   assert.equal(c.chestTakeMs(), 45000)
   assert.equal(c.chestTakeMs(8), 8000)
   assert.equal(c.chestTakeMs(999), 45000)
   for (const invalid of [0, -1, NaN, Infinity]) assert.throws(() => c.chestTakeMs(invalid))
   let options
-  require('../src/session/equipment').chestTake.call({ runIntent(_name, _work, opts) { options = opts } }, { timeoutSeconds: 8 })
+  ;(require('../src/session/equipment') as typeof import('../src/session/equipment')).chestTake.call({ runIntent(_name, _work, opts) { options = opts } }, { timeoutSeconds: 8 })
   assert.equal(options.timeoutMs, 10000)
   assert.equal(options.params.timeoutSeconds, 8)
 })
 
 test('chest take cannot open after its eight seconds expire during lookAt', async t => {
-  const f = fixture(null), clock = require('../src/game-clock')
+  const f = fixture(null), clock: typeof import('../src/game-clock') = require('../src/game-clock')
   let now = 1000, opened = 0
   t.mock.method(clock, 'now', () => now)
   f.bot.pathfinder = { setGoal() {} }
   f.bot.lookAt = async () => { now += 9000 }
   f.bot.openContainer = async () => { opened++; return { inventoryStart: 27, containerItems: () => [], close() {} } }
-  await assert.rejects(require('../src/containers').chestTake(f.session, { aborted: false, onAbort: [] },
+  await assert.rejects((require('../src/containers') as typeof import('../src/containers')).chestTake(f.session, { aborted: false, onAbort: [] },
     { ...f.chest, item: 'all', timeoutSeconds: 8 }), /время/)
   assert.equal(opened, 0)
 })
@@ -195,7 +196,7 @@ test('chest take forwards visibleOnly and stay instead of opening through a wall
   f.bot.pathfinder = { setGoal() {} }
   f.bot.lookAt = async () => {}
   f.bot.openContainer = async () => { opened++; return { inventoryStart: 27, containerItems: () => [], close() {} } }
-  await assert.rejects(require('../src/containers').chestTake(f.session, { aborted: false, onAbort: [] },
+  await assert.rejects((require('../src/containers') as typeof import('../src/containers')).chestTake(f.session, { aborted: false, onAbort: [] },
     { ...f.chest, item: 'all', timeoutSeconds: 8, visibleOnly: true, stay: true }), /прицеле/)
   assert.equal(opened, 0)
 })

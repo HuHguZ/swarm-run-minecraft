@@ -1,20 +1,21 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Второй боец на сервере слота фермы (дуэли кристаллами, 2026-09-30): демон
 // NeuroFarm<i>b на том же сервере 25600+i, ws 8900+i, viewer 3200+i, память
 // farm/memory-<i>b; приоритет «ниже обычного» (farm.js nice его не видит — порт
 // не фермы), оператор через RCON слота.
-//   node farm/crystal/bside.js up 29 30
-//   node farm/crystal/bside.js down 29 30
-//   node farm/crystal/bside.js restart 29 30
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const net = require('net')
-const { spawn, execFileSync } = require('child_process')
+//   node dist/farm/crystal/bside.js up 29 30
+//   node dist/farm/crystal/bside.js down 29 30
+//   node dist/farm/crystal/bside.js restart 29 30
+import * as fs from 'fs'
+import * as os from 'os'
+import path = require('path')
+import * as net from 'net'
+import { spawn, execFileSync } from 'child_process'
 
-const ROOT = path.resolve(__dirname, '..', '..')
-const DAEMON = path.join(ROOT, 'daemon')
-const OUT = __dirname
+const ROOT = REPO_ROOT
+import { codeDir } from '../code-dir'
+const OUT = path.join(REPO_ROOT, 'farm/crystal')
 const sleep = ms => new Promise<any>(r => setTimeout(r, ms))
 const log = (...a) => console.log(`[${new Date().toTimeString().slice(0, 8)}]`, ...a)
 
@@ -53,7 +54,7 @@ async function up (i, s = side(i)) {
   try { rec = JSON.parse(fs.readFileSync(path.join(ROOT, 'farm', 'slots.json'), 'utf8')).slots?.[i] || {} } catch {}
   // BSIDE_CODE=<снимок> — свой снимок для второй пары (основная пара слота — на коде из slots.json).
   if (process.env.BSIDE_CODE) rec = { ...rec, code: process.env.BSIDE_CODE === 'live' ? null : process.env.BSIDE_CODE }
-  const cwd = rec.code ? path.join(ROOT, '.daemon-' + rec.code) : DAEMON
+  const cwd = codeDir(rec.code)
   if (!fs.existsSync(path.join(cwd, 'src', 'index.js'))) throw new Error(`слот ${i}: снимка ${rec.code} нет (${cwd})`)
   const env = { ...process.env, ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem, ...(rec.lockstep ? { ND_LOCKSTEP: '1' } : {}) }
   const p = spawn(process.execPath, ['src/index.js'], { cwd, env, detached: true, stdio: ['ignore', out, err], windowsHide: true })
@@ -69,7 +70,7 @@ async function up (i, s = side(i)) {
   } catch {}
   for (let k = 0; k < 30 && !(await portOpen(s.ws)); k++) await sleep(1000)
   log(`${s.name}: демон ${s.ws} ${await portOpen(s.ws) ? '✓' : 'НЕ поднялся'} (pid ${p.pid}, ниже обычного, ядра по limits.json, код ${rec.code || 'живой'}${rec.lockstep ? ', пошаговый' : ''})`)
-  try { execFileSync(process.execPath, [path.join(ROOT, 'farm', 'farm.js'), 'rcon', String(i), `op ${s.name}`], { stdio: 'inherit' }) } catch (e) { log('op:', e.message) }
+  try { execFileSync(process.execPath, [path.join(__dirname, '..', 'farm.js'), 'rcon', String(i), `op ${s.name}`], { stdio: 'inherit' }) } catch (e) { log('op:', e.message) }
 }
 async function down (i, s = side(i)) {
   const pid = pidOnPort(s.ws)
@@ -83,7 +84,7 @@ async function down (i, s = side(i)) {
   // pair-up|pair-down|pair-restart <слот сервера> <слот портов>
   if (/^pair-/.test(cmd)) {
     const [i, j] = ids.map(Number)
-    if (!(i >= 1 && i <= 32 && j >= 1 && j <= 32 && i !== j)) { console.log('node farm/crystal/bside.js pair-up 27 17   — NeuroFarm27c/27d на сервере 27, ws 8817/8917'); return }
+    if (!(i >= 1 && i <= 32 && j >= 1 && j <= 32 && i !== j)) { console.log('node dist/farm/crystal/bside.js pair-up 27 17   — NeuroFarm27c/27d на сервере 27, ws 8817/8917'); return }
     for (const ab of ['c', 'd']) {
       const s = pairSide(i, j, ab)
       if (cmd !== 'pair-up') await down(i, s)
@@ -93,7 +94,7 @@ async function down (i, s = side(i)) {
     return
   }
   const slots = ids.map(Number).filter(n => n >= 1 && n <= 32)
-  if (!slots.length) { console.log("слоты 1–32: node farm/crystal/bside.js up|down|restart 27 28"); return }
+  if (!slots.length) { console.log("слоты 1–32: node dist/farm/crystal/bside.js up|down|restart 27 28"); return }
   for (const i of slots) {
     if (cmd === 'down' || cmd === 'restart') await down(i)
     if (cmd === 'restart') await sleep(1500)

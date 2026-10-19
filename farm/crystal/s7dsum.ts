@@ -2,11 +2,11 @@
 // Сводка серий арены S7d (08.10): ПОЛНЫЕ файлы серий (все строки ROUND), смерти — из ROUND.deaths (лог сервера слота
 // строго в окне раунда: arena.ts roundDeaths), причины: foe — убит соперником, crash — разбился сам (элитры о стену,
 // падение без него), self — своим (кристалл/стрела), blast — взрыв ни на кого (якорь), fall-escape — упал, убегая.
-//   node farm/crystal/s7dsum.js 'farm/results/s7d-b-27/*.out' [--rounds] [--json]
+//   node dist/farm/crystal/s7dsum.js 'farm/results/s7d-b-27/*.out' [--rounds] [--json]
 // Таблицы: исход, причины смертей, граф боя (выбор/запреты/оружие), комбо, ближний бой (спринт-сброс, хит-селект,
 // размены), щит, элитры, кристаллы/якоря, удочка, трезубец, булава, блоки в бою, частоты и урон приёмов.
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 
 const args = process.argv.slice(2)
 const SHOW = args.includes('--rounds')

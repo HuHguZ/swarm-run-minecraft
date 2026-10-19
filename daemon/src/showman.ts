@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Человек в бою (2026-09-26, просьба пользователя: «боты просто бегут и бьют
 // вслепую, тактики одинаковые; пусть затаиваются, отбегают, подзывают, жмут
 // шифт, машут мечом, кивают — как в боксе: подозвал, отбежал, и только потом
@@ -40,8 +40,8 @@ const gameClock = require('./game-clock')
 
 const ON = process.env.ND_HUMAN !== '0'
 const CHAT = process.env.ND_HUMAN_CHAT !== '0'
-const { evaluateSocial } = require('./social-graph')
-const controlLock = require('./reflex-lock')
+import { evaluateSocial } from './social-graph'
+import controlLock = require('./reflex-lock')
 // Качество боя (pvp.js FIX, 2026-09-26): нрав — на каждый бой случаем, а не
 // по нику (NeuroDown всегда «задира», NeuroDown2 всегда «хитрец» — второй
 // проигрывал 3:7, пятился и прятался); фазы короче; стойка — короткое окно;
@@ -827,4 +827,4 @@ function create (opts) {
   return { pre, steer, victory, report, close, hiding: () => !!hide, persona, human }
 }
 
-module.exports = { ON, create, personaOf, isBotName, hashName }
+export { ON, create, personaOf, isBotName, hashName }

@@ -1,12 +1,12 @@
 'use strict'
-const Vec3 = require('vec3')
-const clock = require('./game-clock')
-const build = require('./build')
-const pick = require('./pick')
-const { directThreat } = require('./swarm-work')
-const { seesPlayer, createLastSeen } = require('./pvp/last-seen')
-const { observedCollision } = require('./pvp/search')
-const { bodyClear, shapeBoxes, HAZARD } = require('./navigation/geometry')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const clock: typeof import('./game-clock') = require('./game-clock')
+const build: typeof import('./build') = require('./build')
+const pick: typeof import('./pick') = require('./pick')
+const { directThreat }: typeof import('./swarm-work') = require('./swarm-work')
+const { seesPlayer, createLastSeen }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
+const { observedCollision }: typeof import('./pvp/search') = require('./pvp/search')
+const { bodyClear, shapeBoxes, HAZARD }: typeof import('./navigation/geometry') = require('./navigation/geometry')
 
 const point = p => ({ x: p.x, y: p.y, z: p.z })
 const key = p => `${p.x},${p.y},${p.z}`
@@ -18,8 +18,10 @@ function inside(p, arena) {
 }
 const full = b => b && !HAZARD.test(b.name) && b.shapes?.some(s => s.every((n, i) => n === (i < 3 ? 0 : 1)))
 
+// why — отказ; при ok — блок, запас, высота, опора, вершина и клетки столба.
+interface PillarCheck { ok: boolean; why?: string; item?: string; reserve?: number; height?: number; base?: import('vec3').Vec3; at?: { x: number; y: number; z: number }; cells?: import('vec3').Vec3[] }
 /** A proposed pillar is an observed empty column above a real full support, never a mining route. */
-function pillarCheck(bot, { height = 1, item, reserve = 1, arena }: any = {}, world = observedCollision(bot)) {
+function pillarCheck(bot, { height = 1, item, reserve = 1, arena }: any = {}, world: import('./navigation/geometry').CollisionWorld = observedCollision(bot)): PillarCheck {
   const fail = why => ({ ok: false, why })
   const p = bot?.entity?.position
   if (!finite(p) || !Number.isInteger(height) || height < 1 || height > 16 || !Number.isInteger(reserve) || reserve < 0 ||
@@ -40,10 +42,10 @@ function pillarCheck(bot, { height = 1, item, reserve = 1, arena }: any = {}, wo
   if (!bodyClear(world, p)) return fail('blocked_start')
   const counts: Record<string, number> = {}
   for (const stack of bot.inventory?.items?.() || []) counts[stack.name] = (counts[stack.name] || 0) + stack.count
-  const Block = require('prismarine-block')(bot.registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
   const suitable = name => {
     const data = bot.registry.blocksByName[name]
-    return data && !/glass|sand$|gravel$|concrete_powder$/.test(name) && full(Block.fromStateId(data.defaultState))
+    return data && !/glass|sand$|gravel$|concrete_powder$/.test(name) && full(Block.fromStateId(data.defaultState, undefined))
   }
   item ||= Object.keys(counts).filter(suitable).sort((a, b) => counts[b] - counts[a])[0]
   if (!item || !suitable(item)) return fail('no_solid_item')
@@ -71,7 +73,7 @@ function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true }: {
     if (local.aborted) { if (ctl?.aborted) stop('cancelled'); return }
     if (!inside(bot.entity.position, p.arena)) { stop('outside_arena'); return }
     if (p.arena && bot.entity.velocity) {
-      const edges = require('./edges'), state = edges.stateOf(bot, Object.fromEntries(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].map(k => [k, !!bot.getControlState?.(k)])))
+      const edges: typeof import('./edges') = require('./edges'), state = edges.stateOf(bot, Object.fromEntries(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].map(k => [k, !!bot.getControlState?.(k)])))
       edges.simOf(bot)(state, edges.worldOf(bot))
       if (!inside(state.pos, p.arena)) { stop('arena_step'); return }
     }
@@ -110,7 +112,7 @@ async function swarmHold(session, ctl, p: any = {}) {
   try {
     g.check()
     if (shieldMode && g.active) {
-      shield = require('./combat').makeShield(session, g.local, { shield: 'always' })
+      shield = (require('./combat') as typeof import('./combat')).makeShield(session, g.local, { shield: 'always' })
       if (!(await shield.wear())) { const why = shield.report()?.why; shield.close(); shield = null; if (p.requireShield) { g.stop('no_shield'); return g.out({ shieldWhy: why }) } }
     }
     if (g.active) { bot.clearControlStates(); bot.setControlState('sneak', !shieldMode && p.sneak !== false) }
@@ -195,3 +197,4 @@ async function swarmPillar(session, ctl, p: any = {}) {
 }
 
 module.exports = { pillarCheck, swarmHold, swarmPillar }
+export { pillarCheck, swarmHold, swarmPillar }

@@ -1,19 +1,20 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 async function hold ({ food = true, frForMs = 0, hp = null }: any = {} as Record<string, any>) {
   const file = path.join(__dirname, '../src/blaze.js')
   const req = createRequire(file)
   const calls = []
   const enemy: Record<string, any> = { id: 2, name: 'blaze', position: new Vec3(0, 64, 2), isValid: true }
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   const items = [{ name: 'iron_sword', count: 1 }, ...(food ? [{ name: 'melon_slice', count: 9 }] : [])]
   Object.assign(bot, { version: '1.21.11', health: hp ?? (food ? 11.5 : 20), food: 20,
     entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: { 2: enemy },
@@ -41,13 +42,13 @@ async function hold ({ food = true, frForMs = 0, hp = null }: any = {} as Record
       if (name === './flee') return { hostilesAround: () => [{ e: enemy }], smartFlee: async () => { calls.push('flee'); ctl.aborted = true; return { mode: 'нет укрытия' } } }
       return req(name)
     } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(bodySource(file) + `
     makeRadar = () => ({ stop () {}, untilDanger: () => 99999, incoming: () => [], charged: () => false, stats: {} }); fightMoves = () => ({});
     losClear = () => true; liveBlazes = () => [bot.entities[2]];
     boxRest = async () => { calls.push('box'); return { rested: false }; };
     rest = async () => { calls.push('cover'); return { rested: false, why: 'нет места' }; };
     module.exports.testHold = holdSpawner;
-  `, context)
+  `, cjsContext(context))
   const result = await context.module.exports.testHold({ bot }, ctl, {
     spawner: null, want: 7, dead: new Set(), deadline: Date.now() + 2000,
     setPhase: p => calls.push(p), restAt: 12, bailAt: 6, p: { box: false }
@@ -85,7 +86,7 @@ test('закрытая коробка без восстановленного з
       : name === './fortify' ? { boxIn: async () => ({ sealed: true, cell: bot.entity.position, placed: 9 }),
         enclosure: () => ({ sealed: true }), breakOut: async () => { opened = true; return { ok: false } } }
         : name === './actions' ? { collectNearbyDrops: async () => {} } : req(name) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const r = await context.module.exports.boxRest({ bot }, { aborted: false }, { maxMs: 0 })
   assert.equal(r.rested, false)
   assert.equal(opened, false)

@@ -1,8 +1,8 @@
 import { FlightRouteGraph, type FlightGate } from './flight-route-graph'
 import type { Position } from '../core/world-state'
-const clock = require('../game-clock')
-const sky = require('../elytra')
-const Vec3 = require('vec3')
+import * as clock from '../game-clock'
+import sky = require('../elytra')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 export interface FlightRouteRequest { gates: FlightGate[]; landing: Position; timeoutSeconds?: number; gateSeconds?: number; rocketReserve?: number; arena?: import('./team-wind').WindArena }
 export async function runFlightRoute(session: any, ctl: { aborted: boolean }, params: FlightRouteRequest) {
@@ -10,7 +10,7 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
   const graph = new FlightRouteGraph(params.gates)
   if (!Object.values(params.landing).every(Number.isFinite)) throw new Error('Flight route needs a finite landing point')
   const landing = new Vec3(params.landing.x, params.landing.y, params.landing.z)
-  const inside = p => require('./team-wind').windInside(p, params.arena)
+  const inside = p => (require('./team-wind') as typeof import('./team-wind')).windInside(p, params.arena)
   if (!inside(bot.entity.position) || !inside(landing) || params.gates.some(g => !inside(g.center))) throw new Error('Flight route outside arena')
   const world = sky.worldOf(bot, { observed: !!params.arena })
   const floor = world.floorBelow(landing.x, landing.y, landing.z, 2)

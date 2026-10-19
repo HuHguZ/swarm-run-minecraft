@@ -8,10 +8,10 @@ import { SCENARIOS, randomScenario } from '../src/tactics/sim-scenarios'
 import { candidates, sustainableFight, threatLevel, type TacticalState } from '../src/tactics/state'
 import { TacticalArbiter } from '../src/tactics/arbiter'
 import type { Scenario } from '../src/tactics/sim-world'
-const { observeTactics } = require('../src/tactics/minecraft')
-const { Autopilot } = require('../src/autopilot')
-const safety = require('../src/combat-safety')
-const { Vec3 } = require('vec3')
+import { observeTactics } from '../src/tactics/minecraft'
+import { Autopilot } from '../src/autopilot'
+import safety = require('../src/combat-safety')
+import { Vec3 } from 'vec3'
 
 process.env.ND_TELEMETRY = '0'
 const named = (name: string): Scenario => SCENARIOS.find(scenario => scenario.name === name)!
@@ -210,8 +210,8 @@ test('no melee against a hovering blaze or a ghast: a cornered body walls off in
 })
 
 test('a strike that ends in its first tick sits out 2 s instead of being re-selected on every sample', async () => {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
-  const gameClock = require('../src/game-clock')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
   const { session, bot } = observing()
   const picks: string[] = []
@@ -246,8 +246,8 @@ test('a phantom is not outrun: a run is priced below the strike at its swoop, a 
 })
 
 test('an arena duel to the death keeps its fight at level 3; lava under the duel is still the tactics\' (S7 20:08)', async () => {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
-  const gameClock = require('../src/game-clock')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
   const { session, bot } = observing()
   const picks: string[] = []
@@ -292,7 +292,7 @@ test('no shield stance against people without a shot in flight, nor with a secon
 
 test('a charged creeper is a 12-block blast: alarm when it swells, dodged by dodgeBlast (farm s4-stress-1: death at 4-5 blocks)', () => {
   const { session, bot } = observing()
-  bot.registry.entitiesByName.creeper = require('minecraft-data')('1.21.11').entitiesByName.creeper
+  bot.registry.entitiesByName.creeper = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11').entitiesByName.creeper
   const keys = bot.registry.entitiesByName.creeper.metadataKeys
   const metadata: unknown[] = []
   metadata[keys.indexOf('is_powered')] = true; metadata[keys.indexOf('swell_dir')] = -1
@@ -336,8 +336,8 @@ test('a crit jump keeps the ground route: feet a block up still see the run they
 })
 
 function flicker(observe: (sample: number, now: number) => TacticalState, ends: Record<string, number> = {}, skill?: string) {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
-  const gameClock = require('../src/game-clock')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
   const { session, bot } = observing()
   const picks: string[] = []
@@ -403,8 +403,8 @@ test('a started refuge holds against a shield at each volley and through its own
 })
 
 test('a kill ends the contact of the dead attacker, and a refuge run that ends at once sits out 2 s', async () => {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
-  const gameClock = require('../src/game-clock')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
   const { session, bot } = observing()
   const system = new TacticalSystem(session, { observe: () => tactical({ at: gameClock.now(), contact: true, enemies: [zombie] }), record: () => {},
@@ -431,7 +431,7 @@ test('the blaze skill keeps level 3 at the spawner with or without fire resistan
 })
 
 test('a neutral mob that struck the body stays a threat for 10 s, past the 1.5 s hit memory of ne-guard; one that did not stays out (S1: 5 deaths by zombified piglins)', () => {
-  const gameClock = require('../src/game-clock')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
   try {
   const { session, bot } = observing()

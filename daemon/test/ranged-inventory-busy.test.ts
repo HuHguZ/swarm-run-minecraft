@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const ranged = require('../src/ranged')
-const registry = require('minecraft-data')('1.21.11')
+import * as ranged from '../src/ranged'
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 const stack = (name: string, count: number, slot: number) => ({ name, count, slot, nbt: { private: 'not telemetry' } })
 const brief = (item: any) => item ? { name: item.name, count: item.count, slot: item.slot } : null

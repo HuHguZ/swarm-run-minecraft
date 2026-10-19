@@ -1,16 +1,17 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сторож Колизея на ферме (2026-09-30): бот-наблюдатель висит над полем и пишет
 // каждое изменение блока ВНЕ поля (постройка, трибуны, фундамент под полем,
 // всё за барьерной коробкой) — держат ли стены и фундамент взрывы кристаллов.
 // Внутри поля (|dx|,|dz| ≤ R+1, от Y−2 до потолка Y+ceilH) правит сама арена
 // каждый раунд — не считается. Плюс взрывы (центр, сила) и выходы бойцов за
 // барьер (позиция игрока вне квадрата поля выше его пола).
-//   node farm/crystal/colos-watch.js --slot 29 --pos "600 120 600" [--R 24] [--ceil 16] [--out file.json]
+//   node dist/farm/crystal/colos-watch.js --slot 29 --pos "600 120 600" [--R 24] [--ceil 16] [--out file.json]
 // Стоп — Ctrl+C или файл farm/crystal/colos-watch.stop; итог — в --out и в вывод.
-const path = require('path')
-const fs = require('fs')
-const { execFileSync } = require('child_process')
-const D = path.join(__dirname, '../../daemon/node_modules/')
+import path = require('path')
+import * as fs from 'fs'
+import { execFileSync } from 'child_process'
+const D = path.join(REPO_ROOT, 'daemon/node_modules/')
 const mineflayer = require(D + 'mineflayer')
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ? process.argv[i + 1] : d }
@@ -18,8 +19,8 @@ const SLOT = Number(arg('slot', 29))
 const [X, Y, Z] = String(arg('pos', '600 120 600')).split(/\s+/).map(Number)
 const R = Number(arg('R', 24))
 const CEIL = Number(arg('ceil', 16))
-const OUT = arg('out', path.join(__dirname, `colos-watch-${SLOT}.json`))
-const STOP = path.join(__dirname, 'colos-watch.stop')
+const OUT = arg('out', path.join(REPO_ROOT, 'farm/crystal', `colos-watch-${SLOT}.json`))
+const STOP = path.join(REPO_ROOT, 'farm/crystal/colos-watch.stop')
 const NAME = `NeuroFarm${SLOT}w`
 const rcon = (c) => { try { return execFileSync(process.execPath, [path.join(__dirname, '../farm.js'), 'rcon', String(SLOT), c], { encoding: 'utf8' }).trim() } catch (e) { return 'rcon: ' + e.message } }
 const inField = (p) => Math.abs(p.x - X) <= R + 1 && Math.abs(p.z - Z) <= R + 1 && p.y >= Y - 2 && p.y <= Y + CEIL

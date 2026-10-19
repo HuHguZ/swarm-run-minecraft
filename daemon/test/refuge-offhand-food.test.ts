@@ -1,27 +1,30 @@
+import { moduleSourceTs } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const esbuild = require('esbuild')
+import { cjsContext } from './cjs-context'
+import * as esbuild from 'esbuild'
 const file = path.resolve(__dirname, '../src/survival/hold-out.ts')
 const req = createRequire(file)
-const actionsText = fs.readFileSync(path.resolve(__dirname, '../src/actions.ts'), 'utf8')
+// фасад + части src/actions/** одной областью (TS с комментариями)
+const actionsText = moduleSourceTs(path.resolve(__dirname, '../src/actions.ts'))
 const mealText = actionsText.slice(actionsText.indexOf('const RISKY_FOOD ='), actionsText.indexOf('async function drop (session'))
 const meals = { exports: {} as any }
 vm.runInNewContext(esbuild.transformSync(mealText + '\nmodule.exports={bestFood}', {loader:'ts',format:'cjs'}).code,
-  {module:meals,exports:meals.exports,require:req})
+  cjsContext({module:meals,exports:meals.exports,require:req}))
 const module0 = { exports: {} as any }
 let ate = 0
-vm.runInNewContext(esbuild.transformSync(fs.readFileSync(file, 'utf8'), {loader:'ts',format:'cjs'}).code, {
+vm.runInNewContext(esbuild.transformSync(fs.readFileSync(file, 'utf8'), {loader:'ts',format:'cjs'}).code, cjsContext({
   module:module0,exports:module0.exports,
   require: name => name === '.././actions' ? {...meals.exports,eat:async () => { ate++; return {ate:'cooked_beef'} }} :
     name === '.././fightkit' ? {hasEffect:()=>false,findPotion:()=>null} :
       name === './surface-body' || name === './enter-shelter' ? {} : req(name)
-})
+}))
 const refuge = module0.exports
-const foodsByName = require('minecraft-data')('1.21.11').foodsByName
+const foodsByName = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11').foodsByName
 function scene(bag: string[], off: string | null, data = true) {
   const slots = Array(46).fill(null)
   if (off) slots[45] = {name:off,count:3,slot:45}

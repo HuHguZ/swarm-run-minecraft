@@ -1,29 +1,30 @@
-const { getVersion } = require('prismarine-viewer/viewer/lib/version')
-const Block = require('prismarine-block')
-const Chunk = require('prismarine-chunk')
-const Vec3 = require('vec3')
+import { getVersion } from 'prismarine-viewer/viewer/lib/version'
+import Block = require('prismarine-block')
+const Chunk: typeof import('prismarine-chunk').default = require('prismarine-chunk')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 export function viewerMapping(version: string) {
   const target = getVersion(version)
   if (!target) throw new Error(`Viewer has no atlas for ${version}`)
   const sourceBlock = Block(version)
   const targetBlock = Block(target)
-  const registry = require('minecraft-data')(target)
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))(target)
   const cache = new Map<number, number>()
   const stateId = (id: number): number => {
     if (version === target) return id
     if (cache.has(id)) return cache.get(id)!
-    const source = sourceBlock.fromStateId(id)
+    const source = sourceBlock.fromStateId(id, undefined)
     const name = source.name === 'iron_chain' ? 'chain' : source.name
     const definition = registry.blocksByName[name]
     // New blocks without an atlas retain solid geometry; supported blocks retain their names and states.
-    const mapped = definition ? targetBlock.fromProperties(name, source.getProperties(), 1).stateId : registry.blocksByName.stone.defaultState
+    const mapped = definition ? targetBlock.fromProperties(name, source.getProperties() as Record<string, any>, 1).stateId : registry.blocksByName.stone.defaultState
     cache.set(id, mapped)
     return mapped
   }
   const column = (original: any) => {
     if (version === target) return original
-    const copy = Chunk(version).fromJson(original.toJson())
+    // Секции и палитры колонки — внутренности prismarine-chunk (в его типах fromJson отдаёт класс, а не колонку).
+    const copy: any = Chunk(version).fromJson(original.toJson())
     for (let i = 0; i < copy.sections.length; i++) {
       const section = copy.sections[i]
       if (Array.isArray(section.data.palette)) {

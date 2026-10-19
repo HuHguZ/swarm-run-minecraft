@@ -1,4 +1,4 @@
-const { voidBelow, blockDef, Vec3, isSolid, isAirish, stepIntoZone, CENTER, runwayAhead, cloudZones, nearPortal, cloudsOf, CLOUD_SLAB, cloudHits, BREATH_AHEAD, BREATH_R, starer, safePitch, gameClock, pvp, EYE, clearControls, dbg, fireballsOf, fbAlarmAt, cloudBorn, FILLER_RE, sleep, items, build, metaOf, findItem, actions, HEAD_AHEAD, stepTo, digDownTo } = require('./dig-down-to')
+const { voidBelow, blockDef, Vec3, isSolid, isAirish, stepIntoZone, CENTER, runwayAhead, cloudZones, nearPortal, cloudsOf, CLOUD_SLAB, cloudHits, BREATH_AHEAD, BREATH_R, starer, safePitch, gameClock, pvp, EYE, clearControls, dbg, fireballsOf, fbAlarmAt, cloudBorn, FILLER_RE, sleep, items, build, metaOf, findItem, actions, HEAD_AHEAD, stepTo, digDownTo }: typeof import('./dig-down-to') = require('./dig-down-to')
 function nearEdge (bot, pos, r = 3) {
   for (let dx = -r; dx <= r; dx++) {
     for (let dz = -r; dz <= r; dz++) {
@@ -701,3 +701,10 @@ function awayFromHead (d, parts, feet, dist) {
 }
 
 module.exports = { nearEdge, straightOut, surfaceY, standY, cageBars, crystalsOf, overCloud, inClouds, breathOf, lookGuard, stareGuard, fallGuard, afterPositionPacket, aboveCloudY, FB_ALARM_R, fireballAlarm, cloudReflex, hitBy, r1, doing, hunters, angryEndermen, unembed, embeddedNow, pickSpot, fastTower, hasEffect, potionItem, usePotion, healRaw, nearPillar, wingBoxes, dragonHist, dragonVel, sight, STAY_R, takeoffBoxes, podiumCache, podiumTop, inCharge, cloudAgeMs, straightWalkable, headroom, HOLE_TOP, DIGGABLE_RE, duckPlan, duck, awayFromHead }
+export {
+  nearEdge, straightOut, surfaceY, standY, cageBars, crystalsOf, overCloud, inClouds, breathOf, lookGuard,
+  stareGuard, fallGuard, afterPositionPacket, aboveCloudY, FB_ALARM_R, fireballAlarm, cloudReflex, hitBy, r1,
+  doing, hunters, angryEndermen, unembed, embeddedNow, pickSpot, fastTower, hasEffect, potionItem, usePotion,
+  healRaw, nearPillar, wingBoxes, dragonHist, dragonVel, sight, STAY_R, takeoffBoxes, podiumCache, podiumTop,
+  inCharge, cloudAgeMs, straightWalkable, headroom, HOLE_TOP, DIGGABLE_RE, duckPlan, duck, awayFromHead
+}

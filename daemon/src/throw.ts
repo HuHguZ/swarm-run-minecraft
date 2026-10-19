@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Броски: жемчуг, взрывные и оседающие зелья, снежки. Задача та же, что у лука
 // (bow.js), но физика своя, и прошлый прицел (pvp.ballisticPitch) её не знал:
 //   * порядок тика другой: у брошенного предмета (ThrowableProjectile.tick,
@@ -14,8 +14,9 @@ const gameClock = require('./game-clock')
 //     бегу уходит на метры.
 // Вылет — с высоты глаз − 0.1, как у стрелы.
 
-const Vec3 = require('vec3')
-const { sleep } = require('./movement')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import './movement'
+import { sleep } from './movement'
 
 const DEG = Math.PI / 180
 
@@ -251,7 +252,7 @@ function jumpChoice (bot, target, k, { jump, sprint = false, runYaw = null, pick
   const e = bot.entity
   if (!jump || !e || !e.onGround || e.isInWater || e.isInLava || e.elytraFlying) return null
   const feet = e.position
-  const eye = require('./pick').eyeHeight(bot) - 0.1
+  const eye = (require('./pick') as typeof import('./pick')).eyeHeight(bot) - 0.1
   const world = (x, y, z) => bot.blockAt(new Vec3(x, y, z))
   const P = target == null ? null : typeof target === 'function' ? target(0) : target
   const yaw = P ? Math.atan2(-(P.x - feet.x), -(P.z - feet.z)) : runYaw
@@ -280,7 +281,7 @@ function jumpChoice (bot, target, k, { jump, sprint = false, runYaw = null, pick
 function canSurvivePearl (bot) {
   if (bot.game?.gameMode === 'creative' || bot.game?.gameMode === 'spectator') return true
   const hp = bot.health ?? 0
-  return hp > 0 && hp + require('./read').absorptionOf(bot, bot.entity) > require('./pearl-hop').pearlDamage(bot)
+  return hp > 0 && hp + (require('./read') as typeof import('./read')).absorptionOf(bot, bot.entity) > (require('./pearl-hop') as typeof import('./pearl-hop')).pearlDamage(bot)
 }
 
 // Бросок: держим предмет в руке, прицел по последнему тику физики. Сервер
@@ -295,13 +296,15 @@ function canSurvivePearl (bot) {
 // же тике, что и бросок.
 // jump: false | true | 'auto', sprint, runYaw — бросок в прыжке (jumpChoice): прыжок/разбег делает сам throwAt,
 // бросок — на тике отрыва; в ответе jump: 'stand' | 'run' | null.
-async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null, pick = null, preferOffhand = false, jump = false, sprint = false, runYaw = null }: any = {}) {
+// Итог броска: thrown — ушёл ли предмет; why — отказ; ticks, land — расчётный полёт и приземление.
+export interface ThrowResult { thrown: boolean; why?: string; jump?: string | null; hand?: string; yawDeg?: number; pitchDeg?: number; ticks?: number; airborne?: any; moved?: any; land?: any }
+async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null, pick = null, preferOffhand = false, jump = false, sprint = false, runYaw = null }: any = {}): Promise<ThrowResult> {
   const held = bot.heldItem
   const it = item || held
   if (!it) return { thrown: false, why: 'нечего бросать' }
   const k = kindOf(it.name)
   if (!k) return { thrown: false, why: `${it.name} не бросается` }
-  const hand = require('./combat/throw-hand').throwHand({ item: it.name, mainItem: held?.name ?? null,
+  const hand = (require('./combat/throw-hand') as typeof import('./combat/throw-hand')).throwHand({ item: it.name, mainItem: held?.name ?? null,
     usingItem: !!bot.usingHeldItem, preferOffhand })
   const offBefore = bot.inventory.slots[45]?.name ?? null
   const equipped = hand === 'off-hand' ? bot.inventory.slots[45] : held
@@ -332,7 +335,7 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
   }
   const res: any = await new Promise<any>(resolve => {
     let done = false
-    const onT: any = require('node:async_hooks').AsyncResource.bind(() => {
+    const onT: any = (require('node:async_hooks') as typeof import('node:async_hooks')).AsyncResource.bind(() => {
       if (done) return
       const p = bot.entity.position
       moved = { x: p.x - lastPos.x, y: p.y - lastPos.y, z: p.z - lastPos.z }
@@ -352,7 +355,7 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
       release()
       done = true
       bot.removeListener('physicsTick', onT)
-      const eyeHeight = require('./pick').eyeHeight(bot)
+      const eyeHeight = (require('./pick') as typeof import('./pick')).eyeHeight(bot)
       const from = p.offset(0, eyeHeight - 0.1, 0)
       const airborne = !bot.entity.onGround
       let sol
@@ -367,7 +370,7 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
       if (sol) bot.look(sol.yaw, sol.pitch, true).catch(() => {})
       const land = sol ? landing(bot, from, sol.yaw, sol.pitch, k, mode === 'old' ? null : moved, airborne) : null
       const shot = { sol, land, from, airborne, moved: { ...moved } }
-      require('./edges').afterPacket(bot, () => {
+      ;(require('./edges') as typeof import('./edges')).afterPacket(bot, () => {
         if (!sol) { resolve(shot); return }
         if (onAim && onAim(shot) === false) { resolve({ ...shot, cancelled: true }); return }
         if (it.name === 'ender_pearl' && !canSurvivePearl(bot)) { resolve({ ...shot, cancelled: true }); return }
@@ -446,7 +449,7 @@ function safeLanding (bot, tp) {
   // passages too. Reject intersections that even that native pose cannot fit.
   const body = { blockAt: (p, extra) => bot.blockAt(p, extra),
     physics: { playerHalfWidth: bot.physics?.playerHalfWidth, playerHeight: Math.fround(.6) } }
-  if (!require('./navigation/geometry').bodyClear(body, tp, { water: true, web: true })) return null
+  if (!(require('./navigation/geometry') as typeof import('./navigation/geometry')).bodyClear(body, tp, { water: true, web: true })) return null
   const cell = tp.floored()
   const here = bot.blockAt(cell)
   if (!here || HURT.test(here.name)) return null
@@ -489,4 +492,4 @@ function escapePick (bot, score, { minDist = 8, maxDrop = Infinity }: any = {}) 
   }
 }
 
-module.exports = { KINDS, kindOf, launch, flight, solve, aim, landing, throwAt, canSurvivePearl, safeLanding, escapePick, jumpLaunch, jumpRoom, jumpChoice, JUMP_VY, RUN_TICKS, RUN_H, RUN_AHEAD, RUNWAY }
+export { KINDS, kindOf, launch, flight, solve, aim, landing, throwAt, canSurvivePearl, safeLanding, escapePick, jumpLaunch, jumpRoom, jumpChoice, JUMP_VY, RUN_TICKS, RUN_H, RUN_AHEAD, RUNWAY }

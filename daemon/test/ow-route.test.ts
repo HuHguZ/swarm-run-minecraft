@@ -1,10 +1,10 @@
 'use strict'
 // Поток overworld (02.10.2026, вечер): колодец через снег без лопаты и «крышка» над колодцем от моба сверху.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { shaftDown } = require('../src/mining')
-const build = require('../src/build')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { shaftDown } from '../src/mining'
+import build = require('../src/build')
 
 function rig (extra: any = {} as Record<string, any>) {
   const dug = new Set()
@@ -77,7 +77,7 @@ test('колодец: моб сверху у самого устья (ещё н�
 })
 
 test('сухое возвышение: низина на 63 с водой, холм 70 в 20 бл. к востоку — подсказка на холм', () => {
-  const { dryGround } = require('../src/mining')
+  const { dryGround }: typeof import('../src/mining') = require('../src/mining')
   const name = p => {
     const hill = p.x >= 18 && p.x <= 24 && Math.abs(p.z) <= 3
     const top = hill ? 69 : 62
@@ -96,11 +96,11 @@ test('сухое возвышение: низина на 63 с водой, хо�
 })
 
 test('подъём колодцем: digUp по уровню до toY, стоп на отказе', async () => {
-  const { shaftUp } = require('../src/mining')
-  const b = require('../src/build')
+  const { shaftUp }: typeof import('../src/mining') = require('../src/mining')
+  const b: typeof import('../src/build') = require('../src/build')
   const orig = b.digUp
   const bot: Record<string, any> = { entity: { position: new Vec3(0.5, 16, 0.5) }, health: 20, entities: {} as Record<string, any> }
-  b.digUp = async () => { bot.entity.position = bot.entity.position.offset(0, 1, 0); return { dug: 0 } }
+  b.digUp = async () => { bot.entity.position = bot.entity.position.offset(0, 1, 0); return { dug: 0 } as any }
   try {
     const r = await shaftUp({ bot, mcData: {} as Record<string, any> }, { aborted: false, onAbort: [] }, { length: 96, toY: 40, timeoutSeconds: 30 })
     assert.equal(r.climbed, 24)

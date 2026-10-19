@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { EventEmitter } from 'node:events'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
-const descent = require('../src/navigation/descent')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+import * as descent from '../src/navigation/descent'
 
 // Terrain function over cells; the body stands at `at` (feet).
 function worldOf(terrain: (x: number, y: number, z: number) => string, at = new Vec3(.5, 20, .5)) {
@@ -16,7 +16,7 @@ function worldOf(terrain: (x: number, y: number, z: number) => string, at = new 
     if (!b) { b = Block.fromStateId(registry.blocksByName[terrain(q.x, q.y, q.z)].defaultState); b.position = q; cache.set(k, b) }
     return b
   } }
-  const bot: Record<string, any> = Object.assign(new EventEmitter(), {
+  const bot: any = Object.assign(new EventEmitter(), {
     version: '1.21.11', registry, game: { minY: -64, height: 384, dimension: 'overworld' }, inventory: { slots: [], items: () => [] }, health: 20, food: 20,
     entity: { position: at.clone(), velocity: new Vec3(0, 0, 0), onGround: true, eyeHeight: 1.62,
       isInWater: false, isInLava: false, isInWeb: false, yaw: 0, pitch: 0, effects: {}, attributes: {} },
@@ -24,7 +24,7 @@ function worldOf(terrain: (x: number, y: number, z: number) => string, at = new 
     physics: native.Physics(registry, world)
   })
   // Honest sight ray over the same cells (sight.seesBlock uses world.raycast).
-  const { RaycastIterator } = require('prismarine-world').iterators
+  const { RaycastIterator } = (require('prismarine-world') as typeof import('prismarine-world')).iterators
   bot.world = { raycast(from: Vec3, dir: Vec3, range: number, match: (b: any, it: any) => boolean) {
     const it = new RaycastIterator(from, dir, range); let pos = it.next()
     while (pos) { const b = world.getBlock(new Vec3(pos.x, pos.y, pos.z)); if (b && match(b, it)) return b; pos = it.next() }
@@ -96,10 +96,10 @@ test('surfaceY reads the top of the goal column (goals without y)', () => {
 
 test('clutch deep: from the safe single-block plans the deepest (fall up to 3) wins, the ordinary rule keeps the shallowest', () => {
   const { Physics } = require('prismarine-physics')
-  const data = require('minecraft-data')('1.21.11')
-  const B = require('prismarine-block')('1.21.11')
-  const pick = require('../src/pick')
-  const clutch = require('../src/clutch')
+  const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const B = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+  const pick: typeof import('../src/pick') = require('../src/pick')
+  const clutch: typeof import('../src/clutch') = require('../src/clutch')
   const mk = (name: string, p: Vec3) => { const b = B.fromStateId(data.blocksByName[name].defaultState, 0); b.position = p.floored(); return b }
   const world = { getBlock: (p: Vec3) => mk(p.x < 0 || p.y < 0 ? 'stone' : 'air', p) }
   const physics = Physics(data, world)
@@ -157,8 +157,8 @@ test('soft landings: a cobweb catches the 20-block drop; hay only within the exp
 })
 
 test('tactics: a clutch block placed under the Emergency fall-controller lease does not abort the walking skill (descent by blocks)', () => {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
-  const locks = require('../src/reflex-lock')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const locks: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
   const bot: any = new EventEmitter()
   bot.version = '1.21.11'; bot.health = 20; bot.food = 20; bot.oxygenLevel = 20
   bot.inventory = { slots: [], items: () => [{ name: 'cobblestone', count: 32 }] }
@@ -171,7 +171,7 @@ test('tactics: a clutch block placed under the Emergency fall-controller lease d
   bot._ndClutch = { lastDecision: { action: 'clutch' } }
   const ctl: any = { aborted: false, onAbort: [], abort () { this.aborted = true } }
   const s: any = { bot, current: { name: 'goto', ctl }, reflex: null, bus: { emit: () => {} }, tempo: null }
-  const t = s.tactics = new TacticalSystem(s)
+  const t: any = s.tactics = new TacticalSystem(s)
   t.execute = () => new Promise(() => {})
   locks.start(s, () => new Promise(() => {}), { source: 'fall-controller', owner: 'Emergency', priority: 3, preempt: true, immediate: true })
   try {
@@ -187,7 +187,7 @@ test('tactics: a clutch block placed under the Emergency fall-controller lease d
 test('descent.watch fires once at a cliff with water below a lower goal; a skipped place stays quiet; a level goal never fires', () => {
   const { bot } = worldOf(cliff(), new Vec3(2.5, 20, .5))
   let fired = 0
-  const w = descent.watch(bot, { x: 12, y: 0, z: 0 }, () => fired++, { every: 5 })
+  const w = descent.watch(bot, { x: 12, y: 0, z: 0 }, (() => fired++) as () => void, { every: 5 })
   for (let i = 0; i < 20; i++) bot.emit('physicsTick')
   assert.equal(fired, 1, 'one event per arming')
   w.skip(bot.entity.position)
@@ -195,7 +195,7 @@ test('descent.watch fires once at a cliff with water below a lower goal; a skipp
   assert.equal(fired, 1, 'decided to walk here: not again within 8 blocks')
   w.stop()
   let level = 0
-  const w2 = descent.watch(bot, { x: -20, y: 20, z: 0 }, () => level++, { every: 5 })
+  const w2 = descent.watch(bot, { x: -20, y: 20, z: 0 }, (() => level++) as () => void, { every: 5 })
   for (let i = 0; i < 20; i++) bot.emit('physicsTick')
   w2.stop()
   assert.equal(level, 0)
@@ -264,7 +264,7 @@ test('wallStep from a placed block reads the support, not floor(position): the b
 })
 
 test('executePlan accepts the planned ledge damage after the landing tick (allowDamage), refuses more', async () => {
-  const { executePlan, IDLE } = require('../src/navigation/parkour')
+  const { executePlan, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const solid = (x: number, y: number, z: number) => y < 0 || x <= 3 && y <= 19 || x >= 5 && x <= 7 && y <= 14
   const run = async (lost: number) => {
     const { bot, world } = worldOf((x, y, z) => solid(x, y, z) ? 'stone' : 'air', new Vec3(3.5, 20, .5))

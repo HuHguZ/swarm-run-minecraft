@@ -1,11 +1,11 @@
 import { PassengerWitness, runBoatTrap, type BoatTrapResult } from './enderman-boat-graph'
 type Body = Record<string, any>
-const clock = require('../game-clock')
-const pick = require('../pick')
-const items = require('../items')
-const perception = require('../perception')
-const boatPlacement = require('./boat-placement')
-const Vec3 = require('vec3')
+import * as clock from '../game-clock'
+import pick = require('../pick')
+import * as items from '../items'
+import perception = require('../perception')
+import * as boatPlacement from './boat-placement'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const woods = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak', 'bamboo']
 
 export function cheapBoatWood(bot: Body): string | null {
@@ -15,7 +15,7 @@ export function cheapBoatWood(bot: Body): string | null {
   return woods.find(wood => (stock[`${wood}_planks`] || 0) >= 5 ||
     (stock[`${wood}_log`] || 0) + (stock[`stripped_${wood}_log`] || 0) >= 2) || null
 }
-function dryBase(bot: Body, base: Body): boolean {
+function dryBase(bot: Body, base: Body & boatPlacement.BoatPosition): boolean {
   if (!boatPlacement.boatBaseVisible(bot, base)) return false
   for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
     const floor = bot.blockAt(base.offset(dx, 0, dz))
@@ -41,7 +41,7 @@ export function boatTarget(session: Body): Body | null {
       other.position.distanceTo(me) < 8))
     .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
 }
-export async function tryEndermanBoat(session: Body, ctl: Body, target: Body, options: { captureMs?: number; killMs?: number } = {}): Promise<BoatTrapResult> {
+export async function tryEndermanBoat(session: Body, ctl: Body & boatPlacement.BoatController, target: Body, options: { captureMs?: number; killMs?: number } = {}): Promise<BoatTrapResult> {
   const bot = session.bot
   const me = bot.entity.position
   const dx = target.position.x - me.x; const dz = target.position.z - me.z
@@ -75,7 +75,7 @@ export async function tryEndermanBoat(session: Body, ctl: Body, target: Body, op
     async craft() {
       const wood = cheapBoatWood(bot)
       if (!wood) return false
-      const actions = require('../actions')
+      const actions: typeof import('../actions') = require('../actions')
       if ((items.countOf(bot, `${wood}_planks`) || 0) < 5) await actions.craft(session, ctl, { item: `${wood}_planks`, count: 8 })
       await actions.craft(session, ctl, { item: wood === 'bamboo' ? 'bamboo_raft' : `${wood}_boat`, count: 1 })
       return !!boatPlacement.boatItem(bot)
@@ -102,13 +102,13 @@ export async function tryEndermanBoat(session: Body, ctl: Body, target: Body, op
     async attack() {
       const weapon = items.bestWeapon(bot)
       if (!weapon || clock.now() < swingAt || boatId === undefined || !witness.has(boatId, target.id)) return false
-      if (!bot.heldItem || bot.heldItem.name !== weapon.name) { await bot.equip(weapon, 'hand'); swingAt = clock.now() + require('../pvp').cooldownMs(weapon); return false }
+      if (!bot.heldItem || bot.heldItem.name !== weapon.name) { await bot.equip(weapon, 'hand'); swingAt = clock.now() + (require('../pvp') as typeof import('../pvp')).cooldownMs(weapon); return false }
       const aim = pick.aim(bot, target, { range: 2.9 })
       if (!aim?.point) return false
       await bot.lookAt(aim.point, true)
       if (!safe() || !valid() || !witness.has(boatId, target.id) || !pick.aim(bot, target, { range: 2.9 })?.point) return false
       bot.attack(target)
-      swingAt = clock.now() + require('../pvp').cooldownMs(weapon)
+      swingAt = clock.now() + (require('../pvp') as typeof import('../pvp')).cooldownMs(weapon)
       return true
     },
     async cleanup() {

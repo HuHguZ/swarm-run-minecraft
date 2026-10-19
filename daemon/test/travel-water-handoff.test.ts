@@ -5,14 +5,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
 
 function fixture({ swim = 'ok', deadline = 10000, cancelNever = false }: any = {}) {
   const file = path.resolve(__dirname, '../src/movement.ts'), local = createRequire(file)
   const module = { exports: {} as any }
-  const code = require('esbuild').transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code + '\nmodule.exports.testWater = fn => { escapeWater = fn }; module.exports.testPath = fn => { gotoPath = fn }'), { filename: file })
+  const code = (require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code + '\nmodule.exports.testWater = fn => { escapeWater = fn }; module.exports.testPath = fn => { gotoPath = fn }'), { filename: file })
     (module.exports, local, module, file, path.dirname(file))
   const movement = module.exports
   const timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))

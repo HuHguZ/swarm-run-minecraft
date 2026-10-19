@@ -1,10 +1,10 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const movement = require('../src/movement')
-const blockmoves = require('../src/blockmoves')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import { goals } from 'mineflayer-pathfinder'
+import movement = require('../src/movement')
+import blockmoves = require('../src/blockmoves')
 
 function bridgeFixture () {
   const bot: any = new EventEmitter()

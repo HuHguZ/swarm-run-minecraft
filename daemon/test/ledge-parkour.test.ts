@@ -6,15 +6,15 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 function source(withRim = true) {
   const file = path.resolve(__dirname, '../src/navigation/parkour.ts'), module = { exports: {} as any }
   const input = readFileSync(file, 'utf8').replace(withRim ? /$^/ : /  const ledge = yield\* ledgeSearch\(bot, target, opts, world\)\r?\n  if \(ledge\) return ledge\r?\n/, '')
-  const code = require('esbuild').transformSync(input, { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports, createRequire(file), module, file, path.dirname(file))
+  const code = (require('esbuild') as typeof import('esbuild')).transformSync(input, { loader: 'ts', format: 'cjs' }).code
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports, createRequire(file), module, file, path.dirname(file))
   return module.exports
 }
 
@@ -194,7 +194,7 @@ test('an arena forecast rechecks actual velocity before applying the next input'
 })
 
 test('the local game deadline interrupts a descent and removes its timer and listeners', async () => {
-  const clock = require('../src/game-clock'), manual = new clock.GameClock({ manual: true, epoch: 0 })
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock'), manual = new clock.GameClock({ manual: true, epoch: 0 })
   clock.activate(manual)
   try {
     const p = source(), s = scene(), ctl = { aborted: false, onAbort: [] }

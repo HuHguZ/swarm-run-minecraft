@@ -1,3 +1,4 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -5,12 +6,14 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
-const AStar = require('mineflayer-pathfinder/lib/astar')
-const Move = require('mineflayer-pathfinder/lib/move')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import AStar = require('mineflayer-pathfinder/lib/astar')
+import Move = require('mineflayer-pathfinder/lib/move')
 const file = path.join(__dirname, '../src/actions.ts')
 const realRequire = createRequire(file)
-const code = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+// facade src/actions.ts + части src/actions/** одной областью видимости
+const code = bodySource(file)
 
 function fixture({ wall = false, height = 69 }: any = {}) {
   const target = { name: 'oak_log', type: 1, diggable: true, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]], position: new Vec3(99, height, 2) }
@@ -41,7 +44,7 @@ function fixture({ wall = false, height = 69 }: any = {}) {
     require: name => name === './items' ? { ...realRequire(name), resolveBlockIds: () => [1], countItems: () => ({ ...bag }),
       diffItems: (_before, after) => after, missingHarvestTool: () => null, equipBestTool: async () => {} }
       : name === './sight' ? { visibleOf: (_bot, _ids, _radius, { skip }) => !skip(target.position) ? [target] : [] } : realRequire(name) }
-  vm.runInNewContext(code, context, { filename: file })
+  vm.runInNewContext(code, cjsContext(context), { filename: file })
   return { bot, paths, dug, mine: () => context.module.exports.mine({ bot, mcData: {}, cfg: { fairPlay: true } },
     { aborted: false, onAbort: [] }, { block: 'any_log', count: 1, collect: false }) }
 }

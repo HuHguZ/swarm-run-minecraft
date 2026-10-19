@@ -1,19 +1,20 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Разбор застреваний по журналам фермы (поток unstuck, research/dev-H-unstuck.md).
-//   node farm/stuck/scan.js [--since 2026-09-28] [--out farm/stuck/episodes.jsonl] [--samples 3]
+//   node dist/farm/stuck/scan.js [--since 2026-09-28] [--out farm/stuck/episodes.jsonl] [--samples 3]
 // Источник — журналы кампаний farm/results/*/slot-*.campaign.log (настоящее поведение: кампания, этапы, ловушки).
 // Строка действия: «[чч:мм:сс + Nм] этап  действие {параметры} → статус hpX едаY (x,y,z) текст».
 // Время строки — конец действия; начало — время предыдущей строки того же журнала.
 // Эпизод — подряд идущие отказы движения в одном журнале у одной точки (≤ 4 бл. от первой, разрыв ≤ 120 с).
 // Потеряно — от начала первого отказа до конца последнего (минимум — длительность первого).
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 
-const ROOT = path.join(__dirname, '..', 'results')
+const ROOT = path.join(REPO_ROOT, 'farm/results')
 const args = process.argv.slice(2)
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d }
 const SINCE = opt('--since', null)
-const OUT = opt('--out', path.join(__dirname, 'episodes.jsonl'))
+const OUT = opt('--out', path.join(REPO_ROOT, 'farm/stuck/episodes.jsonl'))
 const SAMPLES = Number(opt('--samples', 3))
 
 // ---------------------------------------------------------------- отказ движения → класс
@@ -242,4 +243,4 @@ function main () {
 }
 
 if (require.main === module) main()
-module.exports = { classify, parseLog, scanLog, CLASSES }
+export { classify, parseLog, scanLog, CLASSES }

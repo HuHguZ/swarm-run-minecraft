@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { sleep } = require('./movement')
-const { Vec3 } = require('vec3')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { sleep }: typeof import('./movement') = require('./movement')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 
 const log = (what, o) => console.log('[guard]', new Date().toTimeString().slice(0, 8), what, JSON.stringify(o))
 // Стрелки — со своими ответами; ближний удар блейза также требует стража.
@@ -18,16 +18,16 @@ function metaOf (bot, e, key) {
 const aggressive = (bot, e) => ((Number(metaOf(bot, e, 'mob_flags')) || 0) & 4) !== 0
 const isBaby = (bot, e) => !!metaOf(bot, e, 'baby')
 function sees (bot, e) {
-  try { const P = require('./perception'); return P.raySees(bot, P.eyePos(bot), e.position.offset(0, (e.height || 1.9) * 0.6, 0)) } catch { return true }
+  try { const P: typeof import('./perception') = require('./perception'); return P.raySees(bot, P.eyePos(bot), e.position.offset(0, (e.height || 1.9) * 0.6, 0)) } catch { return true }
 }
 
-function worldIsNether (bot) { try { return require('./worlds').worldOf(bot) === 'the_nether' } catch { return false } }
+function worldIsNether (bot) { try { return (require('./worlds') as typeof import('./worlds')).worldOf(bot) === 'the_nether' } catch { return false } }
 // Сессия тела для сторожа (react без вызывающего). Зовут bastion/routeTo/farmRods на входе.
 function attach (session) {
   const g = install(session && session.bot)
   if (g) {
     g.session = session
-    if (require('./reflex-lock').on()) require('./reflex-lock').install(session)
+    if ((require('./reflex-lock') as typeof import('./reflex-lock')).on()) (require('./reflex-lock') as typeof import('./reflex-lock')).install(session)
   }
   return g
 }
@@ -49,7 +49,7 @@ function install (bot) {
       }
       // First attack, not second: own the hands before a health packet/craft
       // continuation arrives. The original intent remains alive under the lock.
-      if (require('./reflex-lock').on() && g.session && g.session.bot === bot && worldIsNether(bot) && meleeName(src.name || '') && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5)) {
+      if ((require('./reflex-lock') as typeof import('./reflex-lock')).on() && g.session && g.session.bot === bot && worldIsNether(bot) && meleeName(src.name || '') && (src.name !== 'blaze' || src.position.distanceTo(bot.entity.position) < 3.5)) {
         react(g.session, g.session.current?.ctl || { aborted: false, onAbort: [] }, {
           force: { e: src, why: 'первый удар ' + src.name }, triggerAt: g.hits.at(-1).t
         }).catch(() => null)
@@ -112,7 +112,7 @@ function install (bot) {
   bot.on('windowOpen', onWin)
   const onTick = () => {
     if (g.session?.tactics?.enabled()) { g.session.tactics.update(); return }
-    if (!require('./reflex-lock').on() || !g.session || g.session.bot !== bot || g.reacting || g.session.reflex || !worldIsNether(bot) || (bot.health ?? 0) <= 0) return
+    if (!(require('./reflex-lock') as typeof import('./reflex-lock')).on() || !g.session || g.session.bot !== bot || g.reacting || g.session.reflex || !worldIsNether(bot) || (bot.health ?? 0) <= 0) return
     const h = hot(bot)
     if (h) react(g.session, g.session.current?.ctl || { aborted: false, onAbort: [] }, { force: h }).catch(() => null)
   }
@@ -138,7 +138,7 @@ function meleeFoes (bot, r = 6) {
     if (e.position.distanceTo(me) > r) return false
     if (process.env.ND_GUARD_SEEN !== '0' && !struck.has(e.id)) {
       let seen = true
-      try { const aim = require('./pick').aim; if (typeof aim === 'function') seen = !!aim(bot, e, { range: r + 2 })?.point } catch {}
+      try { const aim = (require('./pick') as typeof import('./pick')).aim; if (typeof aim === 'function') seen = !!aim(bot, e, { range: r + 2 })?.point } catch {}
       if (!seen) return false
     }
     if (n === 'piglin') return aggressive(bot, e) && !isBaby(bot, e) && angryAtUs(bot)
@@ -177,7 +177,7 @@ function hot (bot, { ms = 1500, near = 3.0 }: any = {}) {
     // Мы выше на 2.5+ (свой столб) — он не достаёт: не повод строить ещё (иначе столб растёт каждый план хода).
     if (e.name === 'blaze') {
       // No mob_flags prerequisite: BlazeAttackGoal has its own target logic.
-      if (d <= 2.7 && require('./pick').canHit(bot, e)) return { e, why: 'блейз вплотную' }
+      if (d <= 2.7 && (require('./pick') as typeof import('./pick')).canHit(bot, e)) return { e, why: 'блейз вплотную' }
       continue
     }
     if (me.y - e.position.y >= 2.5) continue
@@ -189,7 +189,7 @@ function hot (bot, { ms = 1500, near = 3.0 }: any = {}) {
     }
     if (/^(piglin|zombified_piglin)$/.test(e.name) && d <= 2.2 && gameClock.now() - (g && g.reactEnd || 0) > 3000) {
       let can = false
-      try { can = require('./pick').canHit(bot, e) } catch {}
+      try { can = (require('./pick') as typeof import('./pick')).canHit(bot, e) } catch {}
       if (can) return { e, why: `злой ${e.name} в ${d.toFixed(1)} бл.` }
     }
   }
@@ -234,14 +234,14 @@ function holeFits (bot) {
 }
 
 function sealOn () { return process.env.ND_GUARD_SEAL !== '0' }
-function cls (bot, v) { return require('./sealed').classOf(bot.blockAt(v)) }
+function cls (bot, v) { return (require('./sealed') as typeof import('./sealed')).classOf(bot.blockAt(v)) }
 // Клетка — толща (твёрдое: можно копать и стоять, не руда-охрана, не гравий).
 function solidish (k, SL) { return k === SL.SOLID || k === SL.HOT }
 function wallOk (k, SL) { return k === SL.SOLID || k === SL.HARD || k === SL.GUARD || k === SL.HOT }
 // Можно ли уйти вниз на n клеток из клетки ног f: клетки f−1..f−n — копаемая толща, пол под ними твёрдый, стенки у
 // клеток f−1..f−n — твёрдые (не воздух — пещера, не лава), под полом не лава.
 function holeOk (bot, f, n) {
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   for (let i = 1; i <= n; i++) {
     const v = f.offset(0, -i, 0)
     if (!solidish(cls(bot, v), SL)) return false
@@ -256,7 +256,7 @@ function holeOk (bot, f, n) {
 // «Вниз на 2» (+ третья и пробка, если можно). { ok, depth, capped, cells: ['x,y,z' …] }.
 async function hideDown (session, ctl) {
   const bot = session.bot
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   for (let i = 0; i < 6 && !bot.entity.onGround; i++) await sleep(50)
   if (!bot.entity.onGround) return { ok: false, why: 'не на земле' }
   const p = bot.entity.position
@@ -309,7 +309,7 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = 
   const g = bot._ndGuard
   // Со столба (swing) щит — между взмахами к ближайшему стрелку (арбалет пиглина, ифрит, гаст, скелет), иначе к ближнему: ходячие
   // снизу не достают, а стрела в спину на столбе — весь урон (сцена try-lab-ne-piglin 14.10, два с мечом и арбалет).
-  const shield = swing && process.env.ND_SIT_SHIELD !== '0' && bot.inventory.slots[45]?.name === 'shield' ? require('./combat').makeShield(session, ctl, { shield: 'always' }) : null
+  const shield = swing && process.env.ND_SIT_SHIELD !== '0' && bot.inventory.slots[45]?.name === 'shield' ? (require('./combat') as typeof import('./combat')).makeShield(session, ctl, { shield: 'always' }) : null
   try {
     if (shield) await shield.wear()
     while (!ctl.aborted && gameClock.now() - t0 < ms && (bot.health ?? 0) > 0) {
@@ -318,7 +318,7 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = 
       const foes = meleeFoes(bot, 6)
       if (!foes.length) { if (!quiet) quiet = gameClock.now(); if (gameClock.now() - quiet > 3000) break } else quiet = 0
       if (swing && foes.length) {
-        const pick = require('./pick')
+        const pick: typeof import('./pick') = require('./pick')
         const e: any = foes[0]
         if (pick.canHit(bot, e) && gameClock.now() - lastSitSwing > 640) {
           try {
@@ -339,7 +339,8 @@ async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = 
         if (face) { try { await bot.lookAt(face.position.offset(0, (face.height || 1.8) * 0.8, 0), true) } catch {} }
         await shield.raise(true)
       }
-      if ((bot.food ?? 20) < 18 && (bot.health ?? 20) < 18) { try { await require('./actions').eat(session, ctl, {}) } catch {} }
+      // @ts-expect-error eat(session, { item }): ctl попадает в опции (item не задан — ест любую еду), {} лишний; поведение не трогаю.
+      if ((bot.food ?? 20) < 18 && (bot.health ?? 20) < 18) { try { await (require('./actions') as typeof import('./actions')).eat(session, ctl, {}) } catch {} }
       await sleep(250)
     }
   } finally { shield?.close() }
@@ -362,7 +363,7 @@ const rank = i => /netherite/.test(i.name) ? 5 : /diamond/.test(i.name) ? 4 : /i
 
 const EXTRA_FILL = ['crying_obsidian', 'nether_bricks', 'red_nether_bricks', 'gilded_blackstone', 'chiseled_polished_blackstone', 'polished_blackstone_brick_stairs', 'soul_soil', 'magma_block', 'end_stone', 'obsidian']
 function guardItem (bot) {
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   const n = SL.fillerName(bot)
   if (n) return n
   const items = bot.inventory.items()
@@ -373,19 +374,19 @@ function guardItem (bot) {
   return null
 }
 function guardCount (bot) {
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   const items = bot.inventory.items()
   let k = SL.fillerCount(bot)
   for (const name of EXTRA_FILL) { const c = items.filter(i => i.name === name).reduce((m, i) => m + i.count, 0); k += name === 'obsidian' ? Math.max(0, c - 10) : c }
   return k
 }
 async function guardFill (bot, v) {
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   const b = bot.blockAt(v)
   if (b && SL.classOf(b) !== SL.AIR && SL.classOf(b) !== SL.PARTIAL) return sealOn() ? fullWall(b) : true
   const item = guardItem(bot)
   if (!item) return false
-  try { const r = await require('./build').placeBlockAt(bot, v, { item, timeoutMs: 1500 }); return !!(r && r.ok) } catch { return false }
+  try { const r = await (require('./build') as typeof import('./build')).placeBlockAt(bot, v, { item, timeoutMs: 1500 }); return !!(r && r.ok) } catch { return false }
 }
 
 // Коробка вокруг тела: блоки в открытые клетки у ног и головы (4 стороны) и над головой, ближние к врагу — первыми.
@@ -408,7 +409,7 @@ function interiorHostiles (bot, f): InteriorHostile[] {
     if (e.position.x + half <= f.x || e.position.x - half >= f.x + 1 ||
       e.position.z + half <= f.z || e.position.z - half >= f.z + 1 ||
       e.position.y >= f.y + 2 || e.position.y + (e.height || 1.8) <= f.y) return false
-    try { return !!require('./pick').aim(bot, e, { range: 6 })?.point } catch { return false }
+    try { return !!(require('./pick') as typeof import('./pick')).aim(bot, e, { range: 6 })?.point } catch { return false }
   })
 }
 function sealedAt (bot, f) {
@@ -419,8 +420,10 @@ function sealedAt (bot, f) {
     p.x - half >= f.x && p.x + half <= f.x + 1 && p.z - half >= f.z && p.z + half <= f.z + 1 &&
     shellCells(f).every(v => fullWall(bot.blockAt(v))) && interiorHostiles(bot, f).length === 0
 }
-async function boxIn (bot, foe = null, { diag = false, ctl = null }: any = {}) {
-  const SL = require('./sealed')
+// Итог коробки: placed — поставлено, left — незакрытые клетки, pressure/interior — внутри стоит моб, why — отказ.
+interface BoxResult { ok: boolean; placed?: number; left?: string[]; why?: string; cancelled?: boolean; pressure?: boolean; interior?: number[] }
+async function boxIn (bot, foe = null, { diag = false, ctl = null }: any = {}): Promise<BoxResult> {
+  const SL: typeof import('./sealed') = require('./sealed')
   const cancelled = () => ctl?.aborted || bot._ndGuard?.ended || (bot.health ?? 20) <= 0
   if (cancelled()) return { ok: false, placed: 0, cancelled: true }
   if (guardCount(bot) < 2) return { ok: false, why: 'нечем' }
@@ -466,12 +469,12 @@ async function boxIn (bot, foe = null, { diag = false, ctl = null }: any = {}) {
 // в прицеле (pick) — щит вниз, удар, щит снова. Враг дальше 3.2 и виден дольше 2 с — шаг к нему (щит поднят: арбалет).
 async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastStand = false }: any = {}) {
   const bot = session.bot
-  const pick = require('./pick')
+  const pick: typeof import('./pick') = require('./pick')
   const sw = bot.inventory.items().filter(i => /_sword$/.test(i.name)).sort((a, b) => rank(b) - rank(a))[0]
   if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
   const hasShield = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield')
-  const shield = hasShield ? require('./combat').makeShield(session, ctl, { shield: 'always' }) : null
-  const imminent = () => hasShield && require('./threats').incoming(bot).find(p => p.ticks <= 10 && sees(bot, p.entity))
+  const shield = hasShield ? (require('./combat') as typeof import('./combat')).makeShield(session, ctl, { shield: 'always' }) : null
+  const imminent = () => hasShield && (require('./threats') as typeof import('./threats')).incoming(bot).find(p => p.ticks <= 10 && sees(bot, p.entity))
   const t0 = gameClock.now()
   let last = 0; let swings = 0; let far = 0; let foe = target
   const out: any = { swings: 0 }
@@ -537,7 +540,7 @@ async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastSt
       if (d > 3.2 && sees(bot, foe)) { if (!far) far = gameClock.now() } else far = 0
       // Шаг к врагу — только если шаг безопасен (S4c 07.10, замечание проверки г): клавиша «вперёд» к ифриту/иссушителю за краем
       // моста вела тело в пустоту или лаву; moves.stepSafe — обрыв > 3, лава/огонь/магма под шагом.
-      bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && require('./moves').stepSafe(bot, require('./moves').keyDir(bot, 'forward')))
+      bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && (require('./moves') as typeof import('./moves')).stepSafe(bot, (require('./moves') as typeof import('./moves')).keyDir(bot, 'forward')))
       await sleep(60)
     }
   } finally { bot.setControlState('forward', false); shield?.close(); bot.removeListener('entitySwingArm', onSwing) }
@@ -563,14 +566,14 @@ async function react (session, ctl, opts: any = {}) {
   }
   const h = opts.force || hot(session.bot, opts)
   if (!h) return { acted: false }
-  const R = require('./reflex-lock')
+  const R: typeof import('./reflex-lock') = require('./reflex-lock')
   if (R.on() && !opts._owned) {
     return R.start(session, async sub => {
       // Immediate defensive action before a tower/box needs inventory clicks.
       const b = session.bot
       if (b.inventory.slots[45]?.name === 'shield') {
         try { await b.lookAt(h.e.position.offset(0, (h.e.height || 1.9) * .8, 0), true); b.activateItem(true) } catch {}
-      } else if (require('./pick').canHit(b, h.e)) {
+      } else if ((require('./pick') as typeof import('./pick')).canHit(b, h.e)) {
         try { await b.lookAt(h.e.position.offset(0, (h.e.height || 1.9) * .7, 0), true); b.attack(h.e) } catch {}
       }
       return react(session, sub, { ...opts, force: h, _owned: true })
@@ -636,13 +639,13 @@ async function reactBody (session, ctl, opts, h) {
     if (pillarFits(bot)) {
       const y0 = bot.entity.position.y
       const ti = guardItem(bot)
-      const tw = await step(require('./build').towerUp(bot, ctl, PH, { sneak: true, ...(ti ? { item: ti } : {}) }).catch(err => ({ ok: false, reason: err.message })))
+      const tw = await step((require('./build') as typeof import('./build')).towerUp(bot, ctl, PH, { sneak: true, ...(ti ? { item: ti } : {}) }).catch(err => ({ ok: false, reason: err.message })))
       if (bot.entity.position.y >= y0 + PH - 0.1) {
         out.how = 'столб'
         out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { swing: true }))
         bot.setControlState('sneak', false)
         // Врагов в 8 нет — слезть (копать столб под собой), иначе дальше план со столба.
-        if (!meleeFoes(bot, 8).length && !ctl.aborted) { try { out.down = (await step(require('./pearls').pillarDown(bot, ctl, session.mcData, f0))).ok } catch {} }
+        if (!meleeFoes(bot, 8).length && !ctl.aborted) { try { out.down = (await step((require('./pearls') as typeof import('./pearls')).pillarDown(bot, ctl, session.mcData, f0))).ok } catch {} }
         active()
         out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
         log('ответ', out)
@@ -733,7 +736,7 @@ function fbIncoming (s, me) {
 }
 // shortcut: constant observed ghast velocity through this return flight; re-aim from later shots if it turns.
 function fbReturnAim (bot, s, g, velocity, lagTicks) {
-  const pick = require('./pick')
+  const pick: typeof import('./pick') = require('./pick')
   const eye = pick.eyeOf(bot), origin = new Vec3(s.x, s.y, s.z)
   const height = g.height || 4, half = (g.width || 4) / 2
   let speed = 1, travelled = 0
@@ -764,7 +767,7 @@ function swatInstall (bot) {
   const show = s => { const e = bot.entities && bot.entities[s.id]; if (e && e.position && typeof e.position.set === 'function') e.position.set(s.x, s.y, s.z) }
   const cl = bot._client
   if (cl && typeof cl.on === 'function' && st.type != null) {
-    const raw = require('./drops').velocityFromRaw
+    const raw = (require('./drops') as typeof import('./drops')).velocityFromRaw
     // Сырые байты есть только в 'packet', и он приходит раньше события по имени (drops.ts).
     cl.on('packet', (data, meta, buf) => {
       if (!meta || !data) return
@@ -819,7 +822,7 @@ function swatInstall (bot) {
         show(s)
       }
       if (process.env.ND_GHAST_SWAT === '0' || !bot.entity) return
-      const pick = require('./pick')
+      const pick: typeof import('./pick') = require('./pick')
       const eye = pick.eyeOf(bot)
       const me = bot.entity.position
       const now = gameClock.now()
@@ -879,7 +882,7 @@ function swatInstall (bot) {
     try {
       if (!st.pend || st.pend.looked || !bot.entity) return
       if (bot.usingHeldItem) { try { bot.deactivateItem() } catch {} }
-      const d = st.pend.aim.minus(require('./pick').eyeOf(bot))
+      const d = st.pend.aim.minus((require('./pick') as typeof import('./pick')).eyeOf(bot))
       bot.look(Math.atan2(-d.x, -d.z), Math.atan2(d.y, Math.hypot(d.x, d.z)), true).catch(() => {})
       st.pend.looked = true
     } catch {}
@@ -895,3 +898,7 @@ function busy (bot) { return !!(bot && bot._ndGuard && bot._ndGuard.reacting) }
 async function waitIdle (bot, ms = 30000) { const t = gameClock.now(); while (busy(bot) && gameClock.now() - t < ms) await sleep(200) }
 
 module.exports = { busy, waitIdle, attach, duel, boxIn, swatInstall, install, hot, react, hideDown, meleeFoes, holeOk, sit, aggressive, HIDE_FROM, bigMelee, pillarFits, holeFits, above }
+export {
+  busy, waitIdle, attach, duel, boxIn, swatInstall, install, hot, react, hideDown, meleeFoes, holeOk, sit,
+  aggressive, HIDE_FROM, bigMelee, pillarFits, holeFits, above
+}

@@ -1,10 +1,12 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import 'node:fs'
+import * as fs from 'node:fs'
+import { transpiledSource } from './source-fixture'
 
 // Exercise the actual speedrun dispatch, including the second barter site.
 test('speedrun gathers traders in its initial and retry pits; explicit booth/trap retain their executor', async () => {
-  const text = fs.readFileSync(require.resolve('../src/bastion/bastion'), 'utf8')
+  const text = transpiledSource(require.resolve('../src/bastion/bastion'))
   const start = text.indexOf('if (bo) {\n            st.pit =')
   const end = text.indexOf('} else {\n            st.lastBarter', start)
   assert.ok(start >= 0 && end > start)
@@ -28,7 +30,8 @@ test('speedrun gathers traders in its initial and retry pits; explicit booth/tra
 })
 
 test('another speedrun barter batch resumes the existing pen before trying a new pit', async () => {
-  const text = fs.readFileSync(require.resolve('../src/bastion/bastion'), 'utf8')
+  // digPit живёт в bastion/barter-site.ts (рядом с bastion.ts — spec './pen-trap', './booth-trade' те же).
+  const text = transpiledSource(require.resolve('../src/bastion/barter-site'))
   const start = text.indexOf('async function digPit(')
   const end = text.indexOf('const leftAnger =', start)
   assert.ok(start >= 0 && end > start)

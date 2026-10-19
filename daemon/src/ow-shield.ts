@@ -1,9 +1,9 @@
-const clock = require('./game-clock')
-const pick = require('./pick')
-const read = require('./read')
-const route = require('./route')
+import * as clock from './game-clock'
+import pick = require('./pick')
+import * as read from './read'
+import route = require('./route')
 
-export const enabled = (bot?): boolean => process.env.ND_OW_SHIELD !== '0' && (!bot || bot.game?.dimension === 'overworld')
+export const enabled = (bot?: any): boolean => process.env.ND_OW_SHIELD !== '0' && (!bot || bot.game?.dimension === 'overworld')
 const ARCHER = /^(skeleton|stray|bogged|parched)$/
 const WALKER = /^(zombie|zombie_villager|husk|drowned)$/
 const ORDINARY = /^(skeleton|stray|bogged|parched|drowned|zombie|zombie_villager|husk|spider|cave_spider|creeper)$/
@@ -14,7 +14,7 @@ const draws = new WeakMap<object, { id: number; from: any; to: any; until?: numb
 
 export function price({ inventory: inv, shield = false, hp = 20, night = false, surface = true, exposedDps = 0,
   kitIron = 4, deathS = (Number(process.env.ND_DEATH_COST_MIN) || 60) * 60, ironS = 66 }: any) {
-  const count = re => Object.entries(inv || {}).reduce((n, [name, value]) => n + (re.test(name) ? Number(value) : 0), 0)
+  const count = (re: RegExp) => Object.entries(inv || {}).reduce((n, [name, value]) => n + (re.test(name) ? Number(value) : 0), 0)
   const wood = count(/_planks$/) + count(/_(log|stem)$/) * 4
   const possible = !shield && !inv?.shield && inv?.iron_ingot >= 1 && wood >= 6 + (inv?.crafting_table ? 0 : 4)
   const replacementS = inv?.iron_ingot > kitIron ? 0 : (inv?.iron_ingot || 0) + (inv?.raw_iron || 0) > kitIron ? 10 : ironS
@@ -30,9 +30,9 @@ export function price({ inventory: inv, shield = false, hp = 20, night = false, 
 }
 
 export interface GuardPoint { id: number; point: { x: number; y: number; z: number }; kind: string }
-export function rangedGuard(bot, entities, incoming = null): GuardPoint | null | undefined {
+export function rangedGuard(bot: any, entities: any[], incoming: any[] | null = null): GuardPoint | null | undefined {
   if (!enabled(bot) || entities.some(e => !!e.username || e.player)) { draws.delete(bot); return undefined }
-  incoming ??= require('./threats').incoming(bot)
+  incoming ??= (require('./threats') as typeof import('./threats')).incoming(bot) as any[]
   const shot = incoming.find(p => /^(arrow|spectral_arrow|trident)$/.test(p.name) && p.ticks <= 10)
   const mobs = entities.map(e => bot.entities[e.id] || e).filter(e => ORDINARY.test(e.name || e.kind || ''))
   let drawing: GuardPoint | null = null
@@ -56,18 +56,18 @@ export function rangedGuard(bot, entities, incoming = null): GuardPoint | null |
     const across = d ? Math.abs((bot.entity.position.x - release.from.x) * dz - (bot.entity.position.z - release.from.z) * dx) / d : 0
     if (release.until === undefined) {
       const dy = release.to.y + .6 - release.from.y + d * Math.fround(.2), n = Math.hypot(dx, dy, dz) || 1
-      const hit = require('./threats').closestApproach(bot, release.from, { x: dx / n * Math.fround(1.6), y: dy / n * Math.fround(1.6), z: dz / n * Math.fround(1.6) }, .05, 24)
+      const hit = (require('./threats') as typeof import('./threats')).closestApproach(bot, release.from, { x: dx / n * Math.fround(1.6), y: dy / n * Math.fround(1.6), z: dz / n * Math.fround(1.6) }, .05, 24)
       // Release can precede the arrow's second position receipt: retain its ballistic ETA, never a renewed grace timer.
       release.until = clock.now() + (hit.ticks + 1) * 50
     }
-    if (across <= .9 && clock.now() < release.until) return { id: release.id, point: release.from, kind: 'unmeasured bow flight' }
+    if (across <= .9 && clock.now() < release.until!) return { id: release.id, point: release.from, kind: 'unmeasured bow flight' }
   }
   draws.delete(bot)
   if (!mobs.length) return undefined
   return null
 }
 
-export function meleeGuard(bot, e, lastSwingAt = 0, holding = false): boolean | null {
+export function meleeGuard(bot: any, e: any, lastSwingAt = 0, holding = false): boolean | null {
   if (!enabled(bot) || e.username || !WALKER.test(e.name) || /spear$|_axe$|^trident$/.test(e.equipment?.[0]?.name || '')) return null
   if (!pick.aim(bot, e, { range: 16 })?.point) return false
   const lead = RAISE_TICKS + 1, me = bot.entity, p = me.position, q = e.position

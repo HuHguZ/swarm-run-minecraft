@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Предметы на земле — общий слой подбора.
 //
 // Корень «бот не видит выпавшее» (замер pickprobe на ферме, 2026-09-29): mineflayer не
@@ -22,11 +22,11 @@ const gameClock = require('./game-clock')
 //     inflate(1.0, 0.5, 1.0), без проверки видимости);
 //  4. цикл сбора: не вышло с одним предметом — следующий, а не конец всего подбора;
 //     подобранным считается только то, что сервер отдал нам (пакет collect).
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
 // Кеш блоков тела (S9) — лениво и мягко: сцены и тесты грузят этот файл в песочнице без него.
 let fastblocksMod
-const fastblocks = () => { if (fastblocksMod === undefined) { try { fastblocksMod = require('./fastblocks') } catch { fastblocksMod = null } } return fastblocksMod }
+const fastblocks = () => { if (fastblocksMod === undefined) { try { fastblocksMod = (require('./fastblocks') as typeof import('./fastblocks')) } catch { fastblocksMod = null } } return fastblocksMod }
 
 const TICK_MS = 50
 const GRAVITY = 0.04
@@ -663,4 +663,9 @@ async function collect (bot, ctl, { radius = 6, timeoutMs = 8000, from = null, m
 module.exports = {
   install, pickupMark, pickupDelta, collect, pickOne, lying, nowOf, restOf, spawnVelocity, predictNow, predictRest, simulate, stepItem, inPickup, feetYAt, readLpVec3, velocityFromRaw,
   GoalPickup, isItemEntity, blockGetter, REACH_XZ, REACH_DOWN, REACH_UP
+}
+export {
+  install, pickupMark, pickupDelta, collect, pickOne, lying, nowOf, restOf, spawnVelocity, predictNow,
+  predictRest, simulate, stepItem, inPickup, feetYAt, readLpVec3, velocityFromRaw, GoalPickup, isItemEntity,
+  blockGetter, REACH_XZ, REACH_DOWN, REACH_UP
 }

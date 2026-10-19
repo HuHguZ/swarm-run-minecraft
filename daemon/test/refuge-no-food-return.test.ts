@@ -1,10 +1,12 @@
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const source = fs.readFileSync(path.join(__dirname, '../src/survival/refuge-body.ts'), 'utf8')
 
 function fixture({ kind = 'box', mode = 'speedrun', held = 'no_food', sealed = true, pocket = 2, untilDawn = false } = {}) {
@@ -29,7 +31,7 @@ function fixture({ kind = 'box', mode = 'speedrun', held = 'no_food', sealed = t
     if (name === '.././fortify') return { landed: async () => {}, enclosure: () => ({ sealed }) }
     throw new Error('Unexpected dependency ' + name)
   } }
-  vm.runInNewContext(transformSync(source, { loader: 'ts' }).code, context)
+  vm.runInNewContext(transformSync(source, { loader: 'ts' }).code, cjsContext(context))
   return { calls, run: () => exported.exports.refugeBody(session, { aborted: false }, { t0: 1000, minHp: 16, deadline: 121000,
     out: { how: 'none', code: 'OK', hp0: 12, steps: [], untilDawn }, step: () => {}, hurts: [] }) }
 }
@@ -78,7 +80,7 @@ test('a healed refuge keeps the existing clearance decision', async () => {
 })
 
 function callerFixture({ code = 'NO_FOOD', surface = false, inWater = false, foes = 1 } = {}) {
-  const campaign = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const campaign = campaignTs()
   const names = ['refugeRun', 'tunnelAway', 'tunnelAwayBody']
   const functions = names.map(name => {
     const start = campaign.indexOf(`async function ${name} (`)
@@ -91,7 +93,7 @@ function callerFixture({ code = 'NO_FOOD', surface = false, inWater = false, foe
     tunnelingAway: false, process: { env: {} }, log() {}, sense: async () => {}, dim: () => 'overworld',
     nearWalkers: async () => 0, afterRefuge: async () => { calls.push('after-refuge') },
     act: async (method: string) => { calls.push(method); return method === 'refuge' ? { detail } : { detail: { walked: 5 } } } }
-  vm.runInNewContext(transformSync(functions + '\nthis.run = refugeRun', { loader: 'ts' }).code, context)
+  vm.runInNewContext(transformSync(functions + '\nthis.run = refugeRun', { loader: 'ts' }).code, cjsContext(withSetters(context)))
   return { calls, detail, run: () => context.run('actual no-food receipt') }
 }
 

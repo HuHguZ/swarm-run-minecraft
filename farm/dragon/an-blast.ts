@@ -1,13 +1,14 @@
 'use strict'
-// Сводка лаборатории взрыва кровати (daemon/try-lab-dragon-blast.js): по плечам гипотез.
-//   node farm/dragon/an-blast.js <тег> [<тег> …]      — farm/results/<тег>/slot-*.jsonl
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Сводка лаборатории взрыва кровати (daemon/scenes/end/try-lab-dragon-blast.js): по плечам гипотез.
+//   node dist/farm/dragon/an-blast.js <тег> [<тег> …]      — farm/results/<тег>/slot-*.jsonl
 //   ALL=1 — все взрывы (по умолчанию только снижение LAND_ON_PORTAL; сидячие salvage — отдельной строкой)
 // Урон — по серверу (плагин DragonLab: хп до/после взрыва), не по клиенту.
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const tags = process.argv.slice(2)
-if (!tags.length) { console.log('node farm/dragon/an-blast.js <тег> [...]'); process.exit(1) }
-const R = path.join(__dirname, '..', 'results')
+if (!tags.length) { console.log('node dist/farm/dragon/an-blast.js <тег> [...]'); process.exit(1) }
+const R = path.join(REPO_ROOT, 'farm/results')
 const rows = []
 for (const tag of tags) {
   const dir = path.join(R, tag)

@@ -1,14 +1,14 @@
 'use strict'
 // S5e (07.10): конец игры на случайном сиде — честный спуск к крепости (без рентгена толщи), «пирог» к комнате.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Мир из настоящих чанков 1.21.11 (как в s10-perception): камень y 0..70, воздух выше.
 function world (fill: (x: number, y: number, z: number) => string | null = () => null) {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Chunk = require('prismarine-chunk')(registry)
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Chunk: any = (require('prismarine-chunk') as typeof import('prismarine-chunk').default)(registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const columns = new Map()
   const w: any = {}
   w.getColumn = (cx: number, cz: number) => {
@@ -42,7 +42,7 @@ function inShaft (W: any) { for (let y = 60; y <= 70; y++) W.set(new Vec3(0, y, 
 
 // Ступень на восток до шага: решения judgeStep, копка — по решению (клетка → воздух).
 function stepDecisions (W: any, opts: any = {}) {
-  const { judgeStep } = require('../src/endportal-descent')
+  const { judgeStep }: typeof import('../src/endportal-descent') = require('../src/endportal-descent')
   const F = new Vec3(0, 60, 0)
   const out = []
   for (let i = 0; i < 8; i++) {
@@ -79,13 +79,13 @@ test('честный спуск: увиденная в проёме лава —
   const lava = world((x, y, z) => (x === 2 && z === 0 && y === 60 ? 'lava' : null)); inShaft(lava)
   const d = stepDecisions(lava)
   assert.equal(d[d.length - 1], 'seal@2,60,0', d.join(' '))
-  const { BRICKS } = require('../src/endportal')
+  const { BRICKS }: typeof import('../src/endportal') = require('../src/endportal')
   const brick = world((x, y, z) => (x === 1 && z === 0 && y === 59 ? 'stone_bricks' : null)); inShaft(brick)
   assert.deepEqual(stepDecisions(brick, { bricks: BRICKS }), ['dig@1,61,0', 'dig@1,60,0', 'brick@1,59,0'])
 })
 
 test('выбор колонки шахты в rsg не читает пещер толщи (колонка над пещерой — та же, что над сплошной), в scan — обходит', () => {
-  const { dryEntry } = require('../src/endportal')
+  const { dryEntry }: typeof import('../src/endportal') = require('../src/endportal')
   const blockAt = (p: any) => {
     if (p.y > 70) return { name: 'air', boundingBox: 'empty' }
     if (p.x >= 96 && p.x <= 104 && Math.abs(p.z) <= 4 && p.y >= 50 && p.y <= 60) return { name: 'cave_air', boundingBox: 'empty' }
@@ -93,7 +93,7 @@ test('выбор колонки шахты в rsg не читает пещер �
   }
   // Глаза видят только верх (y ≥ 70): толща скрыта.
   const bot: any = { entity: { position: new Vec3(100, 71, 0) }, blockAt }
-  const eyes = require('../src/perception/eyes')
+  const eyes: typeof import('../src/perception/eyes') = require('../src/perception/eyes')
   const old = eyes.seesNow
   eyes.seesNow = (_b: any, p: any) => p.y >= 70
   const save = process.env.ND_KNOWLEDGE
@@ -110,10 +110,10 @@ test('выбор колонки шахты в rsg не читает пещер �
 // Тактика (узкая правка S5e): под землёй на навыке stronghold бег не выход (s5d-T-1: бег из шахты в пещеру — падение 24 бл.;
 // T-7/R-8 — бег вниз до хп 2–9) — escapeRoute снят, бой/заслон; под небом и на другом навыке — как прежде.
 test('тактика: в шахте к крепости (без неба) бег не предлагается, под небом и вне навыка — предлагается', () => {
-  const { EventEmitter } = require('node:events')
-  const { observeTactics } = require('../src/tactics/minecraft')
-  const { candidates } = require('../src/tactics/state')
-  const md = require('minecraft-data')('1.21.11')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { observeTactics }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const { candidates }: typeof import('../src/tactics/state') = require('../src/tactics/state')
+  const md = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const session = (current: string, sky: number) => {
     const bot: any = new EventEmitter()
     bot.version = '1.21.11'; bot.health = 14; bot.food = 20
@@ -137,7 +137,7 @@ test('тактика: в шахте к крепости (без неба) бег
 // S5e (г): бой без кроватей — оценка: хп дракона ≤ 40 — добить его самого (mode dragon), иначе кристаллы (full); своё хп < 14 —
 // сперва поесть/отлежаться (s5d-T-5: full при 20 хп дракона — смерть от дыхания; T-6: full 20 мин по кристаллам при 10 хп дракона).
 test('дракон без кроватей: full, пока хп дракона не известно/высоко; ≤ 40 — режим dragon; низкое своё хп — еда перед боем', async () => {
-  const { load, ready } = require('./campaign-seams-fixture')
+  const { load, ready }: typeof import('./campaign-seams-fixture') = require('./campaign-seams-fixture')
   const state = ready({ red_bed: 0 }); state.dimension = 'the_end'; state.health = 12
   const hps = [120, 30]
   let k = 0
@@ -161,7 +161,7 @@ test('честный вход: сквозь потолок коридора — 
     if (x === 1 && z === 0 && y === 59) return 'stone_bricks'
     return null
   })
-  const { BRICKS } = require('../src/endportal')
+  const { BRICKS }: typeof import('../src/endportal') = require('../src/endportal')
   const a = corridor(); inShaft(a)
   assert.deepEqual(stepDecisions(a, { bricks: BRICKS, throughBricks: true }).slice(-1), ['bridge@1,58,0'])
   const b = corridor(); inShaft(b)
@@ -172,7 +172,7 @@ test('честный вход: сквозь потолок коридора — 
 
 // «Пирог» по вертикали: угол возвышения спавнера (наклон камеры) → высота при известной дальности, ±2 бл.
 test('«пирог» по вертикали: высота спавнера в 10 и 30 бл. — с точностью ±2', () => {
-  const { pieElevation } = require('../src/endportal-descent')
+  const { pieElevation }: typeof import('../src/endportal-descent') = require('../src/endportal-descent')
   for (const [sx, sy] of [[10, 40], [30, 52]]) {
     const W = world((x, y, z) => (x === sx && y === sy && z === 0 ? 'spawner' : null))
     W.bot.entity.position = new Vec3(0.5, 71, 0.5)
@@ -189,7 +189,7 @@ test('честный спуск: вода в клетке ступени — з�
 
 // Зигзаг 2×1: вторая ступень обратно — голова у неё уже воздух (ноги первой), 2 блока на уровень вместо 3.
 test('честный спуск: зигзаг — вторая ступень (обратно) копает 2 блока, пол виден до шага', () => {
-  const { judgeStep } = require('../src/endportal-descent')
+  const { judgeStep }: typeof import('../src/endportal-descent') = require('../src/endportal-descent')
   const W = world(); inShaft(W)
   for (const c of [[1, 61, 0], [1, 60, 0], [1, 59, 0]]) W.set(new Vec3(c[0], c[1], c[2]), 'air')
   W.bot.entity.position = new Vec3(1.5, 59, 0.5)
@@ -206,7 +206,7 @@ test('честный спуск: зигзаг — вторая ступень (�
 
 // Очи в рамках найденной комнаты — тоже очи для графа (s5e-G-1: 7 вставлено, 7 у тела — граф увёл в Ад «за очами»).
 test('граф: очи в рамках комнаты считаются вместе с очами у тела', () => {
-  const { worldFromObservation } = require('../src/environments/mineflayer')
+  const { worldFromObservation }: typeof import('../src/environments/mineflayer') = require('../src/environments/mineflayer')
   const obs = (known: any) => ({ state: { dimension: 'overworld', pos: { x: 0, y: 60, z: 0 }, health: 20, food: 20, inventory: { ender_eye: 7 } }, known, situation: {}, facts: {}, map: {} })
   assert.equal(worldFromObservation(obs({ endPortal: { x: 1, y: 2, z: 3 }, portalEyes: 7 }), 0).resources.eyes, 14)
   assert.equal(worldFromObservation(obs({}), 0).resources.eyes, 7)

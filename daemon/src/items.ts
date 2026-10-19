@@ -519,7 +519,7 @@ function countOf (bot, name) {
 }
 
 function countItems (bot) {
-  const out = {}
+  const out: Record<string, number> = {}
   for (const i of bot.inventory.items()) out[i.name] = (out[i.name] || 0) + i.count
   return out
 }
@@ -540,7 +540,7 @@ function diffItems (before, after) {
 function resolveBlockIds (name, mcData) {
   const parts = String(name || '').split(',').map(s => s.trim()).filter(Boolean)
   if (!parts.length) throw new Error('не указано, что добывать')
-  const ids = new Set()
+  const ids = new Set<number>()
   for (const part of parts) {
     if (GROUPS[part]) {
       for (const b of ((Object.values(mcData.blocksByName) as any[]) as any)) {
@@ -559,8 +559,8 @@ function resolveBlockIds (name, mcData) {
 function resolveItemNames (name, bot) {
   const parts = String(name || '').split(',').map(s => s.trim()).filter(Boolean)
   if (!parts.length) return []
-  const owned = new Set(bot.inventory.items().map(i => i.name))
-  const out = new Set()
+  const owned = new Set<string>(bot.inventory.items().map(i => i.name))
+  const out = new Set<string>()
   for (const part of parts) {
     if (part === 'all' || part === 'всё' || part === 'все') {
       for (const n of owned) out.add(n)
@@ -573,7 +573,7 @@ function resolveItemNames (name, bot) {
   return [...out]
 }
 
-module.exports = {
+export {
   TIERS,
   CRAFT_TIERS,
   FREE_TIERS,

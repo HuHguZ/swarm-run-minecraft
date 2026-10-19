@@ -3,14 +3,14 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const Item = require('prismarine-item')(registry)
-const native = require('../src/tick-plugins').getPhysics()
-const clockMod = require('../src/game-clock')
-const movement = require('../src/movement')
-const edges = require('../src/edges')
-const pick = require('../src/pick')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+import * as clockMod from '../src/game-clock'
+import movement = require('../src/movement')
+import edges = require('../src/edges')
+import pick = require('../src/pick')
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 
 async function rescueEnabled(run: () => any) {
@@ -69,7 +69,7 @@ function scene({ oxygen = 20, blocks = 32, change = null, placement = false }: a
       bot.emit('blockUpdate', prev, block)
     }
   })
-  require('../src/swimming').install(bot)
+  ;(require('../src/swimming') as typeof import('../src/swimming')).install(bot)
   const run = async (fn: () => Promise<any>, afterTick?: (tick: number) => void) => {
     let settled = false, result: any, error: any
     fn().then(v => { result = v; settled = true }, e => { error = e; settled = true })
@@ -215,7 +215,7 @@ test('surface swims to a connected bank beyond the first breathing pocket', asyn
   try {
     assert.equal(movement.findSwimRoute(s.bot).kind, 'air', 'the old eight-cell search sees only a breathing pocket')
     assert.equal(movement.findSwimRoute(s.bot, { radius: 16 }).kind, 'land')
-    const r = await s.run(() => require('../src/survival/out-of-water').outOfWater(s.bot, s.ctl, 16000))
+    const r = await s.run(() => (require('../src/survival/out-of-water') as typeof import('../src/survival/out-of-water')).outOfWater(s.bot, s.ctl, 16000))
     assert.equal(r.ok, true, JSON.stringify(r))
     assert.equal(movement.inWater(s.bot), false)
     assert.equal(s.bot.entity.onGround, true, 'actual physics confirms a supported landing')
@@ -451,7 +451,7 @@ test('hidden shore changes cannot create a visible route around an opaque bend',
       return 'stone'
     } })
     try {
-      assert.equal(require('../src/perception/eyes').seesNow(s.bot, new Vec3(3, 3, 3)), false)
+      assert.equal((require('../src/perception/eyes') as typeof import('../src/perception/eyes')).seesNow(s.bot, new Vec3(3, 3, 3)), false)
       assert.equal(movement.findSwimRoute(s.bot, { visibleOnly: true }), null)
       assert.equal(movement.findSwimRoute(s.bot)?.kind ?? null, open ? 'land' : null,
         'raw world controls differ, so the hidden edit is causally relevant to an oracle search')
@@ -474,7 +474,7 @@ for (const cap of ['stone', 'lava', null]) test(`known swim planning does not cr
 test('polar bear shore choice reaches dry ground with native player physics', async () => {
   const s = scene()
   try {
-    const polar = require('../src/polar-bear')
+    const polar: typeof import('../src/polar-bear') = require('../src/polar-bear')
     s.bot.entity.position.y = 2.3; s.bot.entity.onGround = false
     s.bot.entities[2] = { id: 2, name: 'polar_bear', position: new Vec3(18, 3, .5), height: 1.4, width: 1.4,
       isValid: true, metadata: { 15: 4, 16: false } }
@@ -493,7 +493,7 @@ test('polar bear pillar clears a three-block support under native player physics
     s.bot.entity.isInWater = false
     s.bot.entities[2] = { id: 2, name: 'polar_bear', position: new Vec3(14, 1, .5), height: 1.4, width: 1.4,
       isValid: true, metadata: { 15: 4, 16: false } }
-    const polar = require('../src/polar-bear'), session = { bot: s.bot }
+    const polar: typeof import('../src/polar-bear') = require('../src/polar-bear'), session = { bot: s.bot }
     const plan = polar.plan(session)
     assert.equal(plan.action, 'PillarUp')
     const result = await s.run(() => polar.pillar(session, s.ctl, plan))
@@ -510,7 +510,7 @@ test('a refused bear pillar is not attempted again until its physical cause chan
     s.bot.entity.isInWater = false
     s.bot.entities[2] = { id: 2, name: 'polar_bear', position: new Vec3(14, 1, .5), height: 1.4, width: 1.4,
       isValid: true, metadata: { 15: 4, 16: false } }
-    const polar = require('../src/polar-bear'), session = { bot: s.bot }
+    const polar: typeof import('../src/polar-bear') = require('../src/polar-bear'), session = { bot: s.bot }
     s.bot._genericPlace = async () => { s.placements.push(s.bot.entity.position.clone()); throw new Error('placement refused') }
     const result = await s.run(() => polar.pillar(session, s.ctl, polar.plan(session)))
     assert.equal(result.failed, true)

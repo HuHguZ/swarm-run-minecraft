@@ -2,10 +2,10 @@
 // them at all). 1.21.11: PrimedTnt power 4, default fuse 80, synced fuse metadata (minecraft-data key "fuse"); entity
 // damage of an explosion reaches 2 * power blocks (ExplosionDamageCalculator). A falling anvil/dripstone hurts, sand or
 // gravel buries: step out of its column.
-const gameClock = require('../game-clock')
-const movement = require('../movement')
-const flee = require('../flee')
-const moves = require('../moves')
+import * as gameClock from '../game-clock'
+import movement = require('../movement')
+import * as flee from '../flee'
+import * as moves from '../moves'
 
 type Bot = Record<string, any>
 export interface Blast { id: number; kind: 'tnt' | 'falling_block' | 'charged_creeper'; distance: number; fuse: number | null; reach: number; alarm: boolean }
@@ -88,7 +88,7 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
   const bot = session.bot
   const start = gameClock.now()
   let until = Infinity
-  const shield = require('../combat').makeShield(session, ctl, { shield: 'always' })
+  const shield = (require('../combat') as typeof import('../combat')).makeShield(session, ctl, { shield: 'always' })
   try { bot.pathfinder?.setGoal(null) } catch {}
   try { bot.clearControlStates() } catch {}
   let kind: string | null = null

@@ -1,9 +1,9 @@
 'use strict'
 // Блоки в бою по всем сериям (S7d, пункт G): приём → поставил/сломал (успех/попыток, среднее время), по наборам;
 // ошибки (не подтвердил сервер, своя опора); приёмы-метки боя с блоками (used): стенка, укрытие, коробка, столб…
-//   node farm/crystal/s7dblocks.js farm/results/s7d-g-27 farm/results/s7d-i-29 …
-const fs = require('fs')
-const path = require('path')
+//   node dist/farm/crystal/s7dblocks.js farm/results/s7d-g-27 farm/results/s7d-i-29 …
+import * as fs from 'fs'
+import path = require('path')
 
 const agg = { place: {}, dig: {} }
 const err = { nc: 0, os: 0 }

@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { castOne } = require('../src/cast1')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { castOne } from '../src/cast1'
 function fixture (bear) {
   return { bot: { entity: { position: new Vec3(0, 64, 0) }, world: { raycast: () => null }, entities: { 1: bear }, inventory: { items: () => [] },
     pathfinder: { setGoal () {} }, clearControlStates () {} } }

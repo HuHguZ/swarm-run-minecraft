@@ -1,8 +1,8 @@
 import { bodyClear, supportAt } from '../navigation/geometry'
 import { ledgeOptions, planLedgeDrop } from '../navigation/descent'
 
-const damageModel = require('./damage-model')
-const read = require('../read')
+const damageModel: typeof import('./damage-model') = require('./damage-model')
+const read: typeof import('../read') = require('../read')
 type CombatContext = Record<string, any>
 
 export function createCover(ctx: CombatContext) {
@@ -49,9 +49,9 @@ const noteBuild = (kind, ms) => {
 
 const shelterRisk = (ms) => {
     const foes = (ctx.tt.threats?.() || [ctx.entity]).filter(e => e && e.isValid !== false && e._ndVisible !== false &&
-      require('./last-seen').seesPlayer(ctx.bot, e))
+      (require('./last-seen') as typeof import('./last-seen')).seesPlayer(ctx.bot, e))
     if (!foes.length) return null
-    const state = require('../combat-safety').inspect(ctx.bot, { entities: foes, target: foes[0] })
+    const state = (require('../combat-safety') as typeof import('../combat-safety')).inspect(ctx.bot, { entities: foes, target: foes[0] })
     let expected = 0
     for (const foe of foes) {
       const eta = ctx.tt.eta(foe), exposed = ms + ctx.style.reactMs - eta

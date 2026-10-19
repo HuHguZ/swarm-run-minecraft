@@ -1,10 +1,12 @@
+import { moduleSourceTs } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture({ remembered = false, looted = true, name = 'chest' } = {}) {
   let now = 0
@@ -16,7 +18,7 @@ function fixture({ remembered = false, looted = true, name = 'chest' } = {}) {
     pathfinder: { movements: { canDig: true, scafoldingBlocks: [] } } }
   const session = { bot, cfg: { fairPlay: true }, mcData: { blocks: [{ name: 'chest' }] },
     journal: { state: { looted: looted ? [`${old.position.x},64,0`] : [] } }, underSky: () => true, surfaceWalk: false }
-  const source = fs.readFileSync(path.join(__dirname, '../src/actions.ts'), 'utf8')
+  const source = moduleSourceTs(path.join(__dirname, '../src/actions.ts')) /* фасад + части src/actions/** */
   const body = source.slice(source.indexOf('function firstVisible ('), source.indexOf('// ---------------------------------------------------------------- place'))
   const context: any = { module: { exports: {} }, process: { env: {} }, console: { log() {} }, Vec3,
     gameClock: { now: () => now }, xyz: p => ({ x: p.x, y: p.y, z: p.z }),
@@ -33,7 +35,7 @@ function fixture({ remembered = false, looted = true, name = 'chest' } = {}) {
       throw new Error(name)
     }
   }
-  vm.runInNewContext(transformSync(body + '\nmodule.exports = explore', { loader: 'ts', format: 'cjs' }).code, context)
+  vm.runInNewContext(transformSync(body + '\nmodule.exports = explore', { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
   return { calls, old, fresh, run: (options = {}) => context.module.exports(session, { aborted: false, onAbort: [] },
     { block: 'bell,chest,barrel', radius: 48, stepDistance: 60, direction: 'east', timeoutSeconds: 3, ...options }) }
 }

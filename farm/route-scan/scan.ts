@@ -1,22 +1,23 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Скан копии мира для маршрута (поток route, 03.10.2026): руда железа, уголь, гравий и вода, которые ВИДНЫ из воздуха,
 // связанного с поверхностью (пещеры, овраги, склоны — куда можно войти не копая). Правило AGENTS.md: знание карты из
 // копии этого же мира разрешено; бот всё равно копает только то, что видит прицел (pick.js), — скан говорит, куда идти.
 // Только ферма, только свои слоты (8–15, 27–30).
 //
-//   node farm/route-scan/scan.js gen <slot> [half=160]    прогрузить квадрат 2*half вокруг спавна (forceload), save-all
-//   node farm/route-scan/scan.js scan <slot> [half=160]   прочитать region-файлы слота → farm/route-scan/<seed>.json
-//   node farm/route-scan/scan.js sum                       сводка по всем <seed>.json
+//   node dist/farm/route-scan/scan.js gen <slot> [half=160]    прогрузить квадрат 2*half вокруг спавна (forceload), save-all
+//   node dist/farm/route-scan/scan.js scan <slot> [half=160]   прочитать region-файлы слота → farm/route-scan/<seed>.json
+//   node dist/farm/route-scan/scan.js sum                       сводка по всем <seed>.json
 //
 // Чтение .mca — как farm/portal-scan/scan.js (агент G): zlib + NBT, палитры 1.18+.
-const fs = require('fs')
-const path = require('path')
-const zlib = require('zlib')
-const net = require('net')
+import * as fs from 'fs'
+import path = require('path')
+import * as zlib from 'zlib'
+import * as net from 'net'
 const nbt = require(path.join(__dirname, '..', '..', 'daemon', 'node_modules', 'prismarine-nbt'))
 
-const ROOT = path.join(__dirname, '..', '..')
-const OUT = __dirname
+const ROOT = REPO_ROOT
+const OUT = path.join(REPO_ROOT, 'farm/route-scan')
 const MIN_Y = -64
 const H = 384
 // Слоты потока route (раунд 3, 03.10 13:34): 8–20 и 27–29.
@@ -33,7 +34,7 @@ function rconClient (port, pass) {
     buf.writeInt32LE(10 + b.length, 0); buf.writeInt32LE(id, 4); buf.writeInt32LE(type, 8); b.copy(buf, 12)
     return buf
   }
-  sock.on('data', d => {
+  sock.on('data', (d: Buffer) => {
     acc = Buffer.concat([acc, d])
     while (acc.length >= 4) {
       const len = acc.readInt32LE(0)
@@ -598,4 +599,4 @@ async function main () {
   console.log('gen <slot> [half] | scan <slot> [half] | sum')
 }
 if (require.main === module) main().catch(e => { console.error(e); process.exit(1) })
-module.exports = { codeOf, C, woodGroups }
+export { codeOf, C, woodGroups }

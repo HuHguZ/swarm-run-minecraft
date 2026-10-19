@@ -1,7 +1,7 @@
 // Хронология боя «только кровати» по трассам: node bsum.js <префикс тега> [последних строк]
 // Посадки (фазы 2–7), кровати (план/щелчок/итог/отказ), удары по телу, смерть.
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const pre = process.argv[2] || 'b1-'
 const tailN = Number(process.argv[3] || 30)

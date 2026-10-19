@@ -1,17 +1,17 @@
 'use strict'
 // S7c (07.10): щит в размене кристаллов (его поднятый щит гасит взрыв в передних 90°), уклонение ценой —
 // щит лицом к кристаллу / укрытие / блок между — и хп соперника-игрока только оценкой.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const cr = require('../src/crystal')
-const boom = require('../src/boom')
-const { EventEmitter } = require('node:events')
-const clock = require('../src/game-clock')
-const combat = require('../src/combat')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import cr = require('../src/crystal')
+import boom = require('../src/boom')
+import { EventEmitter } from 'node:events'
+import * as clock from '../src/game-clock'
+import combat = require('../src/combat')
 
 function duelBot ({ foeAt = new Vec3(4.5, 0, 0.5), inv = null, extra = {} as Record<string, any> }: any = {}) {
-  const registry = require('minecraft-data')('1.21.11')
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const blocks = new Map(Object.entries<any>(extra))
   const block = (p) => {
     const k = `${p.x},${p.y},${p.z}`
@@ -204,17 +204,17 @@ test('S7d честно: его якорь за стеной (не виден) �
 })
 
 test('S7d close crystal needs first LOS even inside two blocks; opening the wall reveals it', () => {
-  const fs = require('node:fs'); const path = require('node:path'); const Module = require('node:module')
+  const fs: typeof import('node:fs') = require('node:fs'); const path: typeof import('node:path') = require('node:path'); const Module: any = require('node:module')
   const file = path.join(__dirname, '../src/crystal.ts'); const mod = new Module(file, module)
   mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file))
-  mod._compile(require('esbuild').transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, file)
+  mod._compile((require('esbuild') as typeof import('esbuild')).transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, file)
   const { bot, foe } = duelBot({ inv: ['diamond_sword'] })
   const open = bot.blockAt; let wall = true
   bot.blockAt = p => wall && Math.floor(p.x) === 1
     ? { name: 'obsidian', boundingBox: 'block', position: p.floored(), shapes: [[0, 0, 0, 1, 1, 1]] }
     : open(p)
   bot.world.raycast = (eye, dir, len) => {
-    const hit = require('../src/pick').blockOnRay(bot, eye, dir, len)
+    const hit = (require('../src/pick') as typeof import('../src/pick')).blockOnRay(bot, eye, dir, len)
     return hit && { position: hit.pos, intersect: eye.plus(dir.scaled(hit.t)) }
   }
   const cry = crystalAt(bot, 9, 2.2, .5); cry.position.y = 1
@@ -333,7 +333,7 @@ test('скрытое изменение уже увиденного якоря �
     c._onBlock(anchorBlock(3, 0), anchorBlock(3, 0))
     // Убираем заслон только из расчёта урона/прицела: память состояния должна сама
     // запрещать новый charge, даже если запоздалый blockUpdate уже попал в мир.
-    const pick = require('../src/pick')
+    const pick: typeof import('../src/pick') = require('../src/pick')
     const seen = pick.blockSeen
     try {
       pick.blockSeen = () => false

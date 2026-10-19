@@ -2,12 +2,12 @@
 // Бой «только кроватями» (2026-09-30): план кровати у головы сидящего, честный
 // щелчок по видимой части кровати, набор на вход. Мир фермы: земля — ноги на 61,
 // фонтан (столб bedrock 0,60..63,0) — верх 64, дракон сидит на Y 64.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const dragon = require('../src/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import dragon = require('../src/dragon')
 
-const registry = require('minecraft-data')('1.21.11')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const KEYS = registry.entitiesByName.ender_dragon.metadataKeys
 function world (extra = new Map()) {
   return p => {

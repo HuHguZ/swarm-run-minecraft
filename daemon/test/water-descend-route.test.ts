@@ -2,8 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 
-const { findSwimRoute } = require('../src/movement')
-const { shoreRoute } = require('../src/survival/hold-out')
+import { findSwimRoute } from '../src/movement'
+import { shoreRoute } from '../src/survival/hold-out'
 
 // A swim bob puts the feet above the fluid. The bank is reachable through the
 // water one cell below, while the unsupported air cannot be walked across.

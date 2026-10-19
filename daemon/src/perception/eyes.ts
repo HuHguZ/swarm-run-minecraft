@@ -14,8 +14,8 @@
 // Луч: клетка непрозрачна, если у неё коробка 'block' (полная или часть: плита, забор, листва — с запасом в сторону
 // «не видно») или это лава; вода, воздух, трава, стекло, решётки, паутина — прозрачны. Незагруженный столбец — конец
 // луча (не знаем — не видим). Отключить слой: ND_EYES=0. Бюджет: ND_EYES_EVERY (тиков), ND_EYES_RAYS, ND_EYES_MS, ND_EYES_R.
-const Vec3 = require('vec3')
-const gameClock = require('../game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as gameClock from '../game-clock'
 
 const SEE_THROUGH = /glass|_pane$|^barrier$|^iron_bars$|^cobweb$|^light$/
 // Что запоминать (видимое, с открытой гранью). По измерениям — в Аду лава повсюду, её не копим.
@@ -31,7 +31,7 @@ const PER_NAME = 400 // ponytail: потолок памяти на имя (да�
 
 const dimOf = bot => String((bot.game && bot.game.dimension) || 'overworld').replace(/^minecraft:/, '')
 const env = (k, d) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d }
-const eyeOf = bot => { const p = bot.entity.position; return { x: p.x, y: p.y + (process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? require('../pick').eyeHeight(bot) : bot.entity.eyeHeight || 1.62), z: p.z } }
+const eyeOf = bot => { const p = bot.entity.position; return { x: p.x, y: p.y + (process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? (require('../pick') as typeof import('../pick')).eyeHeight(bot) : bot.entity.eyeHeight || 1.62), z: p.z } }
 const keyOf = (x, y, z) => `${x},${y},${z}`
 const nowMs = () => { const t = process.hrtime(); return t[0] * 1e3 + t[1] / 1e6 }
 
@@ -504,7 +504,7 @@ function surface (bot, { dir = null, yaw = null, pitch = 0, toward = null, maxDi
     if (shapes.opaque(s)) {
       const pos = new Vec3(x, y, z)
       let biome = null
-      try { biome = require('../perception').biomeName(bot, pos) } catch {}
+      try { biome = (require('../perception') as typeof import('../perception')).biomeName(bot, pos) } catch {}
       return { name: shapes.name(s), pos: { x, y, z }, dist: Math.round(t * 10) / 10, biome, water }
     }
     if (shapes.name(s) === 'water') water = true
@@ -523,7 +523,7 @@ function entities (bot, { radius = 64, rememberMs = 5000, hearMs = 4000 }: any =
   const now = gameClock.now()
   const lastSeen = e ? (e._ent || (e._ent = new Map())) : new Map()
   let heard = null
-  try { heard = require('./senses').heardEntities(bot, { sinceMs: hearMs }) } catch {}
+  try { heard = (require('./senses') as typeof import('./senses')).heardEntities(bot, { sinceMs: hearMs }) } catch {}
   const out = []
   for (const ent of Object.values(bot.entities || {}) as any[]) {
     if (!ent || ent === bot.entity || !ent.position) continue
@@ -553,7 +553,7 @@ function entities (bot, { radius = 64, rememberMs = 5000, hearMs = 4000 }: any =
 function knownEntities (bot, { radius = 64 }: any = {}): any[] {
   const all = Object.values(bot.entities || {}) as any[]
   const e = bot && bot._ndEyes
-  if (!e || process.env.ND_HONEST_ENT === '0' || require('./knowledge').level() === 'scan') return all
+  if (!e || process.env.ND_HONEST_ENT === '0' || (require('./knowledge') as typeof import('./knowledge')).level() === 'scan') return all
   const now = gameClock.now()
   let c = e._known
   if (!c || c.r !== radius || now - c.t >= 250 || now < c.t) {
@@ -570,7 +570,7 @@ function locate (bot, names, { radius = 64, max = 6, rays = 600, filter = null }
   const reg = bot.registry
   const ids = names.map(n => reg.blocksByName[n]).filter(Boolean).map(b => b.id)
   if (!ids.length || !bot.entity) return []
-  if (require('./knowledge').level() === 'scan') {
+  if ((require('./knowledge') as typeof import('./knowledge')).level() === 'scan') {
     const f = bot.findBlocks({ matching: ids, maxDistance: radius, count: max * 4 })
     return (filter ? f.filter(filter) : f).slice(0, max)
   }
@@ -582,7 +582,7 @@ function locate (bot, names, { radius = 64, max = 6, rays = 600, filter = null }
     out.set(keyOf(r.x, r.y, r.z), new Vec3(r.x, r.y, r.z))
   }
   try {
-    for (const b of require('../sight').visibleOf(bot, ids, Math.min(radius, 96), { max: max * 2, rays })) out.set(keyOf(b.position.x, b.position.y, b.position.z), b.position.clone())
+    for (const b of (require('../sight') as typeof import('../sight')).visibleOf(bot, ids, Math.min(radius, 96), { max: max * 2, rays })) out.set(keyOf(b.position.x, b.position.y, b.position.z), b.position.clone())
   } catch {}
   let list = [...out.values()]
   if (filter) list = list.filter(filter)
@@ -599,4 +599,4 @@ function stats (bot) {
     cached: e.cache.size, remembered: byName, opts: e.opts, cpu: e.cpu() }
 }
 
-module.exports = { install, nearest, locate, seesNow, surface, entities, knownEntities, stats, Eyes, reader, shapeCache, ray, seesCell, WATCH, PIE, dimOf }
+export { install, nearest, locate, seesNow, surface, entities, knownEntities, stats, Eyes, reader, shapeCache, ray, seesCell, WATCH, PIE, dimOf }

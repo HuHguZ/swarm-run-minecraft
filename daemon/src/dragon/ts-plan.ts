@@ -1,6 +1,6 @@
-const { Vec3, isSolid, isAirish, nearPortal, playerBox, box, overlap, inflate, EYE, pick, gameClock, build, fillerItem, FILLER_RE, dbg, sleep, items, findItem } = require('./dig-down-to')
-const { surfaceY, r1 } = require('./fall-guard')
-const { DIRS4, addc, bedCellFree, landingHits, hurtNear, predParts, BED_TOP, DRAD, virtualBot, exposure, anClickPoint, tsClickPoint, SNEAK_EYE, fillPlaceable, blastReaches, bedDamage, dragonSeen, simClone, simHead, simNeck, simStep, turnLanding, mcos, msin, blockRes, wrapDeg, lookAtSafe } = require('./evade-raw')
+const { Vec3, isSolid, isAirish, nearPortal, playerBox, box, overlap, inflate, EYE, pick, gameClock, build, fillerItem, FILLER_RE, dbg, sleep, items, findItem }: typeof import('./dig-down-to') = require('./dig-down-to')
+const { surfaceY, r1 }: typeof import('./fall-guard') = require('./fall-guard')
+const { DIRS4, addc, bedCellFree, landingHits, hurtNear, predParts, BED_TOP, DRAD, virtualBot, exposure, anClickPoint, tsClickPoint, SNEAK_EYE, fillPlaceable, blastReaches, bedDamage, dragonSeen, simClone, simHead, simNeck, simStep, turnLanding, mcos, msin, blockRes, wrapDeg, lookAtSafe }: typeof import('./evade-raw') = require('./evade-raw')
 const DAMAGE_TYPES = ['arrow', 'bad_respawn_point', 'cactus', 'campfire', 'cramming', 'dragon_breath', 'drown', 'dry_out',
   'ender_pearl', 'explosion', 'fall', 'falling_anvil', 'falling_block', 'falling_stalactite', 'fireball', 'fireworks',
   'fly_into_wall', 'freeze', 'generic', 'generic_kill', 'hot_floor', 'in_fire', 'in_wall', 'indirect_magic', 'lava',
@@ -697,4 +697,15 @@ async function placeNoBed (bot, pos, { timeoutMs = 1200 }: any = {}) {
   } finally { if (!was) bot.setControlState('sneak', false) }
 }
 
+const tsPlanExport = tsPlan
+const tsSecondExport = tsSecond
+const tsOwnStationExport = tsOwnStation
+const tsOwnPlanExport = tsOwnPlan
 module.exports = { DAMAGE_TYPES, r3, readVarIntAt, yRotOf, lpVec3At, pushedForecast, NODE_ADJ, nodesCache, dragonNodes, nd2, ndist, closestNode, findNodePath, takeoffNode, blastPush, takeoffForecast, FACE_IDX, tsPlan, tsSecond, blastDestroyed, stationCells, stationWorld, tsOwnStation, tsOwnPlan, placeAnchorAt, anchorCharges, chargeAnchor, TURN_SAFE_R, turnSafe, clearOfDragon, placeBedAt, AXES, placeNoBed }
+export {
+  DAMAGE_TYPES, r3, readVarIntAt, yRotOf, lpVec3At, pushedForecast, NODE_ADJ, nodesCache, dragonNodes, nd2, ndist,
+  closestNode, findNodePath, takeoffNode, blastPush, takeoffForecast, FACE_IDX, tsPlanExport as tsPlan,
+  tsSecondExport as tsSecond, blastDestroyed, stationCells, stationWorld, tsOwnStationExport as tsOwnStation,
+  tsOwnPlanExport as tsOwnPlan, placeAnchorAt, anchorCharges, chargeAnchor, TURN_SAFE_R, turnSafe, clearOfDragon,
+  placeBedAt, AXES, placeNoBed
+}

@@ -1,12 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { bodySource } from './source-fixture'
 
 async function floorBore (name) {
   const file = path.join(__dirname, '../src/nether.ts')
@@ -59,7 +59,8 @@ async function floorBore (name) {
         : dependency === './build' ? { ...realRequire(dependency), placeBlockAt: async (_bot, p) => {
           placements.push(p.clone()); return { ok: false, reason: 'нет грани под тонким полом' }
         } } : realRequire(dependency) }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code + '\nclearCells = clearFixture', context)
+  // nether.ts — фасад; bore и clearCells живут в nether/dig.ts: bodySource склеивает фасад с частями в одну область.
+  vm.runInNewContext(bodySource(file) + '\nclearCells = clearFixture', cjsContext(context))
   const result = await context.module.exports.bore({ bot, mcData: registry }, { aborted: false, onAbort: [] }, { x: 3, z: 0 }, { deadline: 5000, maxSteps: 4 })
   return { result, dug, placements, bot, top, controls }
 }

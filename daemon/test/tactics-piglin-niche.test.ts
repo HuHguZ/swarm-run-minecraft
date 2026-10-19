@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { candidates, piglinNiche } = require('../src/tactics/state')
+import { candidates, piglinNiche } from '../src/tactics/state'
 
 // Пиглины без нашего золота (ревью Codex 14.10, codex-lab/piglin-defense-20261014): закрытая ниша рядом рвёт их луч без
 // открытого бега — BlockOff выше CreateDistance и LastStand, а при других угрозах выбор прежний.
-const make = (n = 1, changes: Record<string, any> = {}) => ({ at: 0, health: 20, food: 20, armor: 0, weapon: true, shield: true,
+const make = (n = 1, changes: Record<string, any> = {}): import('../src/tactics/state').TacticalState => ({ at: 0, health: 20, food: 20, armor: 0, weapon: true, shield: true,
   enemies: Array.from({ length: n }, (_, i) => ({ id: i + 1, kind: 'piglin', distance: 4, threatening: true, player: false, hit: 8 })),
   incomingProjectiles: 0, burning: false, lava: false, fireResistance: false, explosion: false, dangerousFall: false,
   emergencyController: false, inWater: false, cover: false, portal: false, escapeRoute: true, blocks: 128, water: false,

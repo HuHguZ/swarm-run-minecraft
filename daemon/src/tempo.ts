@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Темп боя с человеком (жалобы пользователя после живых дуэлей 2026-09-25):
 //  · «ел, пока его забивали насмерть» — есть и пить только когда безопасно, и
 //    бросать глоток в тот же тик, когда безопасно быть перестало;
@@ -15,9 +15,9 @@ const gameClock = require('./game-clock')
 // Числа механики — из кода игры 1.21.11 (github extremeheat/extracted_minecraft_data,
 // ветка client1.21.11); класс указан рядом с числом.
 
-const { raySees } = require('./perception')
-const { blockName, stepSafe, keyDir, wantsJump } = require('./moves')
-const { sleep } = require('./movement')
+import { raySees } from './perception'
+import { blockName, stepSafe, keyDir, wantsJump } from './moves'
+import { sleep } from './movement'
 
 const ON = process.env.ND_TEMPO !== '0'
 // Качество боя (pvp.js FIX, 2026-09-26); ND_FIGHTFIX=0 — как раньше.
@@ -61,7 +61,7 @@ const PEARL_DAMAGE = 5
 // «Защита» (+1 за уровень): 5 × (1 − min(20, EPF)/25).
 function pearlDamage (bot) {
   try {
-    const read = require('./read')
+    const read: typeof import('./read') = require('./read')
     const worn = [5, 6, 7, 8].map(i => bot.inventory.slots[i]).filter(Boolean)
     const epf = worn.reduce((n, it) => n + read.enchLevel(bot, it, 'protection') + 3 * read.enchLevel(bot, it, 'feather_falling'), 0)
     return PEARL_DAMAGE * (1 - Math.min(20, epf) / 25)
@@ -99,7 +99,7 @@ function useKind (name) {
 }
 
 function potionName (item) {
-  try { return require('./pvp').potionOf(item) } catch { return null }
+  try { return (require('./pvp') as typeof import('./pvp')).potionOf(item) } catch { return null }
 }
 
 function flagsOf (e) {
@@ -205,7 +205,7 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
   // 09-26) не повод выскакивать в первую же секунду его копания.
   const onDig = (block, stage, breaker) => {
     if (!breaker || !isFoe(breaker) || !block || !block.position) return
-    if (!require('./pick').blockSeen(bot, block.position)) return
+    if (!(require('./pick') as typeof import('./pick')).blockSeen(bot, block.position)) return
     breaker = foeList().find(t => t.id === breaker.id)
     const s = S(breaker)
     const now = gameClock.now()
@@ -403,7 +403,7 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
       // тотема у него 1 хп + 8 поглощения: вред убивает при EPF ≤ 6, иначе
       // рывок (арена с чарами, 2026-09-26).
       let epf = 0
-      try { epf = Math.min(20, [2, 3, 4, 5].reduce((n, i) => n + (e.equipment && e.equipment[i] ? require('./read').enchLevel(bot, e.equipment[i], 'protection') : 0), 0)) } catch {}
+      try { epf = Math.min(20, [2, 3, 4, 5].reduce((n, i) => n + (e.equipment && e.equipment[i] ? (require('./read') as typeof import('./read')).enchLevel(bot, e.equipment[i], 'protection') : 0), 0)) } catch {}
       const harmKills = 12 * (1 - epf / 25) >= 9
       if (has.harm && harmKills && sees && d > 2.5 && d < 7) return { kind: 'harm', why: ai.why, left: ai.left }
       return { kind: 'rush', why: ai.why, left: ai.left }
@@ -470,7 +470,7 @@ function pickOpening ({ d, hp, aggression = 0.5, has = {}, foeBusy = false }: an
 // спринтом и прыжками. until() — хватит, стало безопасно; stop() — он догнал.
 // Взгляд ведёт сам: aim в pvp.js на это время 'free'.
 async function kite (bot, ctl, threats, { ms = 1500, until = null, stop = null }: any = {}) {
-  const flee = require('./flee')
+  const flee: typeof import('./flee') = require('./flee')
   const t0 = gameClock.now()
   let plan = null
   let planAt = 0
@@ -503,7 +503,7 @@ async function kite (bot, ctl, threats, { ms = 1500, until = null, stop = null }
   return out
 }
 
-module.exports = {
+export {
   ON, track, pickOpening, kite, consumeMs, useKind, swingCooldownMs, reachFrom,
   SPRINT_BPT, WALK_BPT, USE_SPEED_MUL, WEB_MUL, FULL_DRAW_MS, ARROW_BPT, HURT_WINDOW_MS, PEARL_DAMAGE, pearlDamage, FLAGS_INDEX, PLAYER_REACH
 }

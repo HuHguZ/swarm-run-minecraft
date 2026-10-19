@@ -1,13 +1,13 @@
 'use strict'
-const Vec3 = require('vec3')
-const clock = require('./game-clock')
-const build = require('./build')
-const pick = require('./pick')
-const tools = require('./tools')
-const safety = require('./combat-safety')
-const { seesPlayer, createLastSeen } = require('./pvp/last-seen')
-const { watchDigReceipt } = require('./environments/dig-receipt')
-const BlockFaces = require('prismarine-world').iterators.BlockFace
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const clock: typeof import('./game-clock') = require('./game-clock')
+const build: typeof import('./build') = require('./build')
+const pick: typeof import('./pick') = require('./pick')
+const tools: typeof import('./tools') = require('./tools')
+const safety: typeof import('./combat-safety') = require('./combat-safety')
+const { seesPlayer, createLastSeen }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
+const { watchDigReceipt }: typeof import('./environments/dig-receipt') = require('./environments/dig-receipt')
+const BlockFaces = (require('prismarine-world') as typeof import('prismarine-world')).iterators.BlockFace
 
 type Cell = { x: number; y: number; z: number }
 const xyz = (p): Cell => ({ x: p.x, y: p.y, z: p.z })
@@ -62,8 +62,8 @@ function swarmBlueprint(kind, origin, direction = 'north') {
 // надетая броня с чарами. Не видно — бесконечно (прежняя осторожность).
 function hitBound(bot, e) {
   try {
-    const dm = require('./pvp/damage-model'), { enchantsOf } = require('./enchant')
-    const held = require('./pvp/last-seen').observePlayerGear(bot, e).equipment[0]
+    const dm: typeof import('./pvp/damage-model') = require('./pvp/damage-model'), { enchantsOf }: typeof import('./enchant') = require('./enchant')
+    const held = (require('./pvp/last-seen') as typeof import('./pvp/last-seen')).observePlayerGear(bot, e).equipment[0]
     const weapon = held?.name || null
     const raw = dm.meleeRaw({ weapon, sharpness: held?.enchanted && /_(sword|axe|spear)$/.test(weapon || '') ? 5 : 0, crit: true, density: held?.enchanted && weapon === 'mace' ? 5 : 0 })
     const armor = [5, 6, 7, 8].map(i => bot.inventory?.slots?.[i]).filter(Boolean)
@@ -90,7 +90,7 @@ function directThreat(bot, allies: string[] = [], remainingMs = 500, observe = e
     if (closing > 0 && Math.max(0, distance - 3) / closing * 1000 <= remainingMs + 350) return e
   }
   if (visible.length && ranged) {
-    const aimed = require('./threats').dangers(bot, { foes: visible.map(e => e.username) }).aims || []
+    const aimed = (require('./threats') as typeof import('./threats')).dangers(bot, { foes: visible.map(e => e.username) }).aims || []
     const archer = visible.find(e => aimed.some(a => a.name === e.username))
     if (archer) return archer
   }
@@ -228,3 +228,4 @@ async function swarmWork(session, ctl, params: any = {}) {
 }
 
 module.exports = { swarmWork, swarmBlueprint, directThreat, keepBlocks, isKept }
+export { swarmWork, swarmBlueprint, directThreat, keepBlocks, isKept }

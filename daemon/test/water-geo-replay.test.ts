@@ -4,13 +4,16 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
+import { REPO_ROOT } from '../src/paths'
 
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry), Item = require('prismarine-item')(registry)
-const native = require('../src/tick-plugins').getPhysics(), clockMod = require('../src/game-clock')
-const movement = require('../src/movement'), pick = require('../src/pick')
-const data = JSON.parse(readFileSync(path.join(__dirname, 'fixtures/geo-j1-water.json'), 'utf8'))
-data.cases.push(...JSON.parse(readFileSync(path.join(__dirname, 'fixtures/geo-a6-water.json'), 'utf8')).cases)
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry), Item = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+import * as clockMod from '../src/game-clock'
+import movement = require('../src/movement')
+import pick = require('../src/pick')
+const data = JSON.parse(readFileSync(path.join(REPO_ROOT, 'daemon/test/fixtures/geo-j1-water.json'), 'utf8'))
+data.cases.push(...JSON.parse(readFileSync(path.join(REPO_ROOT, 'daemon/test/fixtures/geo-a6-water.json'), 'utf8')).cases)
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 
 async function replay(tag: string) {
@@ -70,8 +73,8 @@ async function replay(tag: string) {
     }
   })
   bot.entity.metadata[airKey] = air; bot.entity.metadata[poseKey] = b.pose ?? 0
-  require('../src/gamedata').fixMaterials(registry)
-  require('../src/swimming').install(bot)
+  ;(require('../src/gamedata') as typeof import('../src/gamedata')).fixMaterials(registry)
+  ;(require('../src/swimming') as typeof import('../src/swimming')).install(bot)
   assert.equal(bot.oxygenLevel, b.oxygen, 'same breath value as the recorded Surface start')
   movement.escapeWater(bot, ctl, { timeoutMs: 15000, visibleOnly: true }).then(r => { result = r; settled = true }, e => { error = e; settled = true })
   let tick = 0

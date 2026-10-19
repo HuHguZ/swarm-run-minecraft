@@ -2,17 +2,17 @@
 // movement.pathKeepAlive: пока поиск идёт, pathFromPlayer срезает узел, на котором стоит тело, и исполнитель
 // pathfinder'а не засчитывает узлы — через 3.5 с «stuck» и поиск с нуля (рельеф пула, mv-spr-dbg4). Метка в точке тела
 // в начале нового пути — только если тело сдвинулось на 0.8+ блока.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const { pathKeepAlive } = require('../src/movement')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { pathKeepAlive } from '../src/movement'
 
 const node = (x, y, z, extra: any = {} as Record<string, any>) => Object.assign(new Vec3(x, y, z), { toBreak: [], toPlace: [], parkour: false, remainingBlocks: 16 }, extra)
 
 for (const event of ['end', 'death']) test(`gotoGoal settles ${event} even when game time is frozen`, async () => {
-  const clock = require('../src/game-clock')
-  const { gotoGoal } = require('../src/movement')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { gotoGoal }: typeof import('../src/movement') = require('../src/movement')
   const c = new clock.GameClock({ manual: true, epoch: 0 }); clock.activate(c)
   const bot: any = new EventEmitter()
   bot.pathfinder = { setGoal: () => {}, isMoving: () => true }
@@ -25,9 +25,9 @@ for (const event of ['end', 'death']) test(`gotoGoal settles ${event} even when 
 })
 
 test('a bounded walk cancels its paused goal without taking hands from Emergency', async t => {
-  const clock = require('../src/game-clock')
-  const lock = require('../src/reflex-lock')
-  const { travelXZ } = require('../src/movement')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const lock: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
+  const { travelXZ }: typeof import('../src/movement') = require('../src/movement')
   const before = process.env.ND_GOTO_WAIT; process.env.ND_GOTO_WAIT = '1'
   t.after(() => { if (before === undefined) delete process.env.ND_GOTO_WAIT; else process.env.ND_GOTO_WAIT = before })
   t.mock.method(clock, 'setTimeout', (fn, ms) => setTimeout(fn, Math.min(ms, 20)))
@@ -42,7 +42,7 @@ test('a bounded walk cancels its paused goal without taking hands from Emergency
   const move = lock.run(session, ctl, () => travelXZ(bot, ctl, 16, 0, { retries: 0, deadline: clock.now() + 2000 }))
   let release
   setImmediate(() => lock.start(session, () => new Promise(resolve => { release = resolve }), { owner: 'Emergency' }))
-  const r = await move
+  const r: any = await move
   assert.equal(r.outOfTime, true)
   assert.equal(lock.owner(session).owner, 'Emergency')
   assert.equal(goals, 1)
@@ -52,14 +52,15 @@ test('a bounded walk cancels its paused goal without taking hands from Emergency
 })
 
 test('bounded Nether walks keep empty partial searches, timeout prefixes and the goal after a reflex', async t => {
-  const { travelXZ } = require('../src/movement')
-  const fortress = require('../src/fortress')
-  const nether = require('../src/nether')
-  const blaze = require('../src/blaze')
-  const clock = require('../src/game-clock')
+  const { travelXZ }: typeof import('../src/movement') = require('../src/movement')
+  const fortress: typeof import('../src/fortress') = require('../src/fortress')
+  const nether: typeof import('../src/nether') = require('../src/nether')
+  const blaze: typeof import('../src/blaze') = require('../src/blaze')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const rawGoto = require('mineflayer-pathfinder/lib/goto')
   t.mock.method(clock, 'snapshot', () => null)
-  t.mock.method(nether, 'bore', async () => { assert.fail('a live search must not fall back to boring') })
+  // bore живёт в nether/dig.ts: подменяется в определяющем модуле (фасад nether только переэкспортирует, его не пропатчить).
+  t.mock.method(require('../src/nether/dig') as typeof import('../src/nether/dig'), 'bore', async () => { assert.fail('a live search must not fall back to boring') })
   const before = process.env.ND_GOTO_WAIT
   process.env.ND_GOTO_WAIT = '1'
   t.after(() => { if (before === undefined) delete process.env.ND_GOTO_WAIT; else process.env.ND_GOTO_WAIT = before })
@@ -73,7 +74,7 @@ test('bounded Nether walks keep empty partial searches, timeout prefixes and the
     { name: 'blaze refuge exit', y: 64, run: bot => blaze.walkNear(bot, ctl(), new Vec3(16, 64, 0), 0, 5000) }
   ]
   for (const walk of walks) for (const status of ['partial', 'timeout', 'reflex']) {
-    const bot = new EventEmitter()
+    const bot: any = new EventEmitter()
     bot.entity = { position: new Vec3(.5, walk.y, .5), onGround: true }
     bot.blockAt = () => ({ name: 'air' })
     let timer
@@ -118,7 +119,7 @@ test('bounded Nether walks keep empty partial searches, timeout prefixes and the
 })
 
 test('a consumed partial prefix waits for its search instead of following a stale branch', async () => {
-  const { gotoGoal } = require('../src/movement')
+  const { gotoGoal }: typeof import('../src/movement') = require('../src/movement')
   const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(.5, 64, .5) }
   const start = { data: node(0, 64, 0), parent: null }
@@ -138,7 +139,7 @@ test('a consumed partial prefix waits for its search instead of following a stal
 })
 
 test('a final search branch resumes from the consumed prefix, but never after disconnect', async () => {
-  const { gotoGoal } = require('../src/movement')
+  const { gotoGoal }: typeof import('../src/movement') = require('../src/movement')
   for (const disconnect of [false, true]) {
     const bot: any = new EventEmitter()
     bot.entity = { position: new Vec3(.5, 64, .5) }
@@ -173,7 +174,7 @@ test('метка пути: тело бежит — узел-метка в нач
   const was = process.env.ND_PATH_KEEPALIVE
   process.env.ND_PATH_KEEPALIVE = '1'
   t.after(() => { if (was === undefined) delete process.env.ND_PATH_KEEPALIVE; else process.env.ND_PATH_KEEPALIVE = was })
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(10.5, 64, 0.5) }
   const k = pathKeepAlive(bot)
   const upd = (path) => { const r = { status: 'partial', path }; bot.emit('path_update', r); return r.path }
@@ -210,11 +211,11 @@ test('метка пути: тело бежит — узел-метка в нач
 // gotoGoal: A* не уложился в 5 с ('timeout'), но лучший путь есть — идти по нему до конца (pathfinder в конце встаёт сам,
 // без нового поиска), а не отказывать «Took to long» (goto.js): session.goto повторит из нового места.
 test('gotoGoal: таймаут поиска с путём — идёт до конца пути и отдаёт «дошёл» (флаг), без флага — отказ', async (t) => {
-  const { gotoGoal } = require('../src/movement')
+  const { gotoGoal }: typeof import('../src/movement') = require('../src/movement')
   const was = process.env.ND_GOTO_TIMEOUT_WALK
   t.after(() => { if (was === undefined) delete process.env.ND_GOTO_TIMEOUT_WALK; else process.env.ND_GOTO_TIMEOUT_WALK = was })
   const mk = () => {
-    const bot = new EventEmitter()
+    const bot: any = new EventEmitter()
     let left = 0
     bot.pathfinder = {
       isMoving: () => left > 0,

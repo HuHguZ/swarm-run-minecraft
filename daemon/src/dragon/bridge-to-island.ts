@@ -1,9 +1,9 @@
-const { hitBy, r1, doing, angryEndermen, fastTower, nearEdge, inClouds } = require('./fall-guard')
-const { gameClock, FILLER_RE, items, findItem, EYE, ENDERMAN_EYE, dragonOf, phaseOf, hpOf, PHASE_RU, cloudsOf, fbSpawn, fbLineHit, fbTicksTo, metaOf, KIT, BEDS_KIT, Vec3, isSolid, lookSafe, sleep, CENTER, stepTo, yieldTick, CLOUD_SLAB, isAirish, build, fillerItem, FIREBALL_SNAP, supportCell, clearControls, PHASE, cloudBorn, overlap, inflate } = require('./dig-down-to')
-const { countOf, evade, blastReaches, virtualBot, exposure, tsClickPoint, dragonSeen, bedDamage, predParts } = require('./evade-raw')
-const { DAMAGE_TYPES, r3, readVarIntAt, tsPlan, stationWorld, blastDestroyed } = require('./ts-plan')
-const { fightEnderman, hazardNow, walkTo } = require('./pillar-run')
-const { stepOnto } = require('./station-plan')
+const { hitBy, r1, doing, angryEndermen, fastTower, nearEdge, inClouds }: typeof import('./fall-guard') = require('./fall-guard')
+const { gameClock, FILLER_RE, items, findItem, EYE, ENDERMAN_EYE, dragonOf, phaseOf, hpOf, PHASE_RU, cloudsOf, fbSpawn, fbLineHit, fbTicksTo, metaOf, KIT, BEDS_KIT, Vec3, isSolid, lookSafe, sleep, CENTER, stepTo, yieldTick, CLOUD_SLAB, isAirish, build, fillerItem, FIREBALL_SNAP, supportCell, clearControls, PHASE, cloudBorn, overlap, inflate }: typeof import('./dig-down-to') = require('./dig-down-to')
+const { countOf, evade, blastReaches, virtualBot, exposure, tsClickPoint, dragonSeen, bedDamage, predParts }: typeof import('./evade-raw') = require('./evade-raw')
+const { DAMAGE_TYPES, r3, readVarIntAt, tsPlan, stationWorld, blastDestroyed }: typeof import('./ts-plan') = require('./ts-plan')
+const { fightEnderman, hazardNow, walkTo }: typeof import('./pillar-run') = require('./pillar-run')
+const { stepOnto }: typeof import('./station-plan') = require('./station-plan')
 function hitTracker (bot) {
   const f = (pk) => {
     // Только прямой удар (кто бил, тот и ударил): облако огня или фаербола несёт
@@ -17,8 +17,8 @@ const TRACE_DIR = process.env.ND_DRAGON_TRACE || null
 
 function makeTrace (bot, ctl, stats) {
   if (!TRACE_DIR) return { ev () {}, close () {}, file: null }
-  const fs = require('fs')
-  const path = require('path')
+  const fs: typeof import('fs') = require('fs')
+  const path: typeof import('path') = require('path')
   try { fs.mkdirSync(TRACE_DIR, { recursive: true }) } catch {}
   const file = path.join(TRACE_DIR, `dragon-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`)
   const t0 = gameClock.now()
@@ -655,4 +655,12 @@ declare namespace tsAPlan {
 
 const blindTried = new Set()
 
+const tsAddStationExport = tsAddStation
+const tsAPlanExport = tsAPlan
 module.exports = { hitTracker, TRACE_DIR, makeTrace, kitOf, clearedCrystals, clearCrystalKnowledge, noteCrystalClear, crystalKitState, missing, equipName, bridgeToIsland, platformInner, islandEdgeTop, creepToEdge, burrowTo, strafeThreat, juke, spawnVelocityRaw, fireballTracker, tsAddStation, tsAPlan, blindTried }
+export {
+  hitTracker, TRACE_DIR, makeTrace, kitOf, clearedCrystals, clearCrystalKnowledge, noteCrystalClear,
+  crystalKitState, missing, equipName, bridgeToIsland, platformInner, islandEdgeTop, creepToEdge, burrowTo,
+  strafeThreat, juke, spawnVelocityRaw, fireballTracker, tsAddStationExport as tsAddStation,
+  tsAPlanExport as tsAPlan, blindTried
+}

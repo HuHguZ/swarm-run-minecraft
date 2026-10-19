@@ -1,13 +1,15 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const Vec3 = require('vec3')
-const gameClock = require('../src/game-clock')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import 'node:fs'
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as gameClock from '../src/game-clock'
 
-const clickSource = require('./source-fixture').functionSource(path.join(__dirname, '..', 'src', 'dragon.js'), 'clickBedAt')
+const clickSource = (require('./source-fixture') as typeof import('./source-fixture')).functionSource(path.join(__dirname, '..', 'src', 'dragon.js'), 'clickBedAt')
 function click (until, untilMono = null) {
   const packets = []
   const ctx: any = {
@@ -16,7 +18,7 @@ function click (until, untilMono = null) {
     hit: { point: new Vec3(0.5, 0.5625, 0.5), block: { position: new Vec3(0, 0, 0) } }, until, untilMono
   }
   // The VM timeout makes the old synchronous spin fail instead of hanging the test process.
-  vm.runInNewContext(clickSource + '\ncompletion = clickBedAt(bot, hit, { aimed: true, until, untilMono })', ctx, { timeout: 500 })
+  vm.runInNewContext(clickSource + '\ncompletion = clickBedAt(bot, hit, { aimed: true, until, untilMono })', cjsContext(ctx), { timeout: 500 })
   return { packets, completion: ctx.completion }
 }
 
@@ -39,7 +41,7 @@ test('lockstep native weak blast: an expired mono deadline cannot spend a bed 17
 })
 
 test('lockstep dragon receipts keep the grant stamp instead of inferring packet lag from older movement', () => {
-  const { feedTicks } = require('../src/dragon/pillar-run')
+  const { feedTicks }: typeof import('../src/dragon/pillar-run') = require('../src/dragon/pillar-run')
   const clock = new gameClock.GameClock({ manual: true, lockstep: true })
   clock.setState({ tick_rate: 750 }); gameClock.activate(clock)
   try {

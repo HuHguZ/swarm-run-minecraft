@@ -1,16 +1,17 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
-const path = require('node:path')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
+import path = require('node:path')
 const delay = ms => new Promise<any>(resolve => setTimeout(resolve, ms))
 function fixture () {
   const calls = []
-  const b = new EventEmitter(); b._client = new EventEmitter()
+  const b: any = new EventEmitter(); b._client = new EventEmitter()
   b.entity = { id: 1, position: new Vec3(.5, 64, .5), onGround: true }
   const foe = { id: 2, name: 'piglin_brute', position: new Vec3(2, 64, .5), height: 1.95, metadata: [4] }
   b.entities = { 1: b.entity, 2: foe }; b.health = 20
@@ -29,8 +30,8 @@ function fixture () {
   const s: { bot: any; current: any; reflex?: any } = { bot: b, current: { name: 'bastion', ctl: { aborted: false, onAbort: [] } } }
   const fallback = new Proxy({} as Record<string, any>, { get: () => () => {} })
   const context = { module: { exports: {} as Record<string, any> }, console: { log () {} }, process, setTimeout, clearTimeout, setImmediate,
-    require (n) { if (n === 'vec3') return { Vec3 }; if (n === './worlds') return { worldOf: () => 'the_nether' }; if (n === './movement') return { sleep: delay }; if (n === './perception') return { eyePos: () => b.entity.position, raySees: () => true }; if (n === './reflex-lock') return require('../src/reflex-lock'); return fallback } }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/ne-guard.js'), 'utf8'), withClockFixture(context))
+    require (n) { if (n === 'vec3') return { Vec3 }; if (n === './worlds') return { worldOf: () => 'the_nether' }; if (n === './movement') return { sleep: delay }; if (n === './perception') return { eyePos: () => b.entity.position, raySees: () => true }; if (n === './reflex-lock') return (require('../src/reflex-lock') as typeof import('../src/reflex-lock')); return fallback } }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/ne-guard.js'), 'utf8'), cjsContext(withClockFixture(context)))
   const G = context.module.exports
   G.attach(s)
   return { b, s, calls, foe, G, hit: () => b._client.emit('damage_event', { entityId: 1, sourceCauseId: 3, sourceDirectId: 3 }) }
@@ -48,7 +49,7 @@ test('первый удар забирает руки и ставит session.re
   b.emit('end')
 })
 
-const R = require('../src/reflex-lock')
+import R = require('../src/reflex-lock')
 test('первое защитное действие на первом ударе укладывается в 500 мс', async () => {
   const { b, s, hit } = fixture()
   const actions = []
@@ -159,7 +160,7 @@ test('общий крафт в Аду не начинается при враг�
   let crafted = false
   b.craft = async () => { crafted = true }
   b._ndReflexLock = false; R.install(s)
-  await assert.rejects(R.run(s, s.current.ctl, () => b.craft({ result: { id: 99, count: 1 } }, 1)), { code: 'REFLEX_UNSAFE_CRAFT' })
+  await assert.rejects(R.run(s, s.current.ctl, () => b.craft({ result: { id: 99, count: 1 } }, 1)) as Promise<unknown>, { code: 'REFLEX_UNSAFE_CRAFT' })
   assert.equal(crafted, false)
   b.emit('end')
 })

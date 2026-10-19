@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { cjsContext } from './cjs-context'
 
 test('optional entry trace records changed honest views, including an unrecognized facade; identical state and the disabled flag add no logs',async()=>{
   for(const enabled of ['0','1']){
@@ -13,7 +14,7 @@ test('optional entry trace records changed honest views, including an unrecogniz
       blockAt(){assert.fail('diagnostic output must not read a hidden world')},inventory:{items:()=>[]}}
     const mem={world:bot.world,dimension:'the_nether',frames:[frame],visited:new Set()},rows:any[]=[]
     const context:any={module:{exports:{}},process:{env:{ND_BASTION_ENTRY_TRACE:enabled}},console:{log:(p,s)=>rows.push({p,...JSON.parse(s)})},setImmediate,Set,testMemory:mem,require:native}
-    vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nmemory=()=>testMemory;observe=async()=>({type:null,hypotheses:[]});',context)
+    vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nmemory=()=>testMemory;observe=async()=>({type:null,hypotheses:[]});',cjsContext(context))
     const run=()=>context.module.exports.approach({bot},{aborted:false},{},Infinity)
     assert.equal((await run()).handled,false)
     await run()

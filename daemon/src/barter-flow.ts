@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 const enabled = () => process.env.ND_BARTER_FLOW !== '0'
 const ADMIRE_MS = 119 * 50
 function awaitingLure (lastConfirmedToss: number | undefined, now: number): boolean {
@@ -46,7 +46,7 @@ function retry (detail, bag) {
 function plan (s: { pearls: number; required: number; gold: number; siteIngots: number | null; next?: Array<{ ingots: number; blocks: number }>;
   delivered?: number; thrown?: number; mined?: { ingots: number; seconds: number }; traded?: { ingots: number; seconds: number };
   endermen?: boolean; fireRes?: { have: number; want: number; valueSeconds?: number } }) {
-  const BM = require('./core/barter-model')
+  const BM: typeof import('./core/barter-model') = require('./core/barter-model')
   const timing = BM.learnTiming(BM.DEFAULT_TIMING, { minedIngots: s.mined?.ingots, mineSeconds: s.mined?.seconds, tradedIngots: s.traded?.ingots, tradeSeconds: s.traded?.seconds })
   const delivery = BM.deliveryEstimate(s.delivered ?? 0, s.thrown ?? 0)
   const fire = s.fireRes && s.fireRes.have < s.fireRes.want ? { fire_resistance: { have: s.fireRes.have, want: s.fireRes.want, valueSeconds: s.fireRes.valueSeconds ?? 300 } } : undefined
@@ -55,4 +55,4 @@ function plan (s: { pearls: number; required: number; gold: number; siteIngots: 
     endermenSecondsPerPearl: s.endermen ? 240 : undefined, wants: fire })
   return { ...d, delivery, timing, line: `бартер-модель: ${d.action}${d.batch ? ` ${d.batch} сл.` : ''}, E ${Math.round(d.eSeconds)} с, P(цель) ${d.pReach.toFixed(2)}, q̂ ${delivery.toFixed(2)} — ${d.why}` }
 }
-module.exports = { enabled, ADMIRE_MS, awaitingLure, pearlChance, pearlBudget, stock, ready, retry, plan }
+export { enabled, ADMIRE_MS, awaitingLure, pearlChance, pearlBudget, stock, ready, retry, plan }

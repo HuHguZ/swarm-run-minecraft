@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Общий выход из застреваний (поток unstuck, 02.10.2026; журнал research/dev-H-unstuck.md, разбор research/stuck-cases.md).
 //
 // До этого выход был разбросан по модулям: stuckGuard (8 с без сдвига → отказ), unstick (рывок назад с прыжком),
@@ -18,14 +18,14 @@ const gameClock = require('./game-clock')
 //
 // Подключение — крючки: movement.gotoGoal(bot, goal, { unstuck }) и session.goto (watch на весь переход).
 // Флаг ND_UNSTUCK: по умолчанию вкл., '0' — выкл.; goto { unstuck: true|false } — поверх флага (сцены A/B на одном демоне).
-const Vec3 = require('vec3')
-const { bodyBox, shapeBoxes, standPositions } = require('./navigation/geometry')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { bodyBox, shapeBoxes, standPositions } from './navigation/geometry'
 
 // По умолчанию включено с 03.10.2026 ~01:55 МСК после замеров (research/dev-H-unstuck.md): стенды по случаям — kelp 0/10 → 9/10,
 // lavapit0 0/10 → 10/10, pond 4/10 → 10/10 (−48 % времени); MLG 24/24, стенд mv-gap и рельеф — без регресса.
 // ND_UNSTUCK=0 — откат (прежний goto).
 const DEFAULT_ON = true
-function on (override) {
+function on (override?) {
   if (typeof override === 'boolean') return override
   const v = process.env.ND_UNSTUCK
   if (v === '1') return true
@@ -170,7 +170,7 @@ function eye (bot) { return bot.entity.position.offset(0, 1.62, 0) }
 
 // Видимая точка блока: луч из глаз до неё упирается именно в этот блок (как прицел клиента), не дальше 4.5.
 function visiblePoint (bot, pos) {
-  const pick = require('./pick')
+  const pick: typeof import('./pick') = require('./pick')
   const o = eye(bot)
   const c = pos.offset(0.5, 0.5, 0.5)
   const d0 = c.minus(o)
@@ -225,7 +225,7 @@ function safeToBreak (bot, pos, { maxMs = 6000 }: any = {}) {
     }
   }
   try {
-    const tools = require('./tools')
+    const tools: typeof import('./tools') = require('./tools')
     if (!tools.breakable(b)) return { ok: false, why: `${b.name} не ломается` }
     const plan = tools.bestFor(bot, b)
     if (plan.ms > maxMs) return { ok: false, why: `${b.name}: ${(plan.ms / 1000).toFixed(1)} с` }
@@ -242,7 +242,7 @@ async function digVisible (ctx, pos, opts: any = {}) {
   try {
     await bot.lookAt(P, true)
     let ms = 6000
-    try { ms = require('./tools').bestFor(bot, s.block).ms } catch {}
+    try { ms = (require('./tools') as typeof import('./tools')).bestFor(bot, s.block).ms } catch {}
     const done = bot.dig(s.block, 'ignore')
     await withTimeout(done, ms + 1500)
     return { ok: true, name: s.block.name }
@@ -281,14 +281,14 @@ function groundNear (bot, cell) {
 const RUNGS = {
   // Флаг копки pathfinder'а без копки (смерть посреди копки, чанк ушёл): сбросить.
   async clearDig (ctx) {
-    const did = require('./tools').unstickPathfinderDig(ctx.bot)
+    const did = (require('./tools') as typeof import('./tools')).unstickPathfinderDig(ctx.bot)
     return { applied: did, why: did ? 'флаг копки снят' : 'флага нет' }
   },
   // Свежие ходы pathfinder'а и поиск с нуля из этой точки.
   async replan (ctx) {
     const { bot, session } = ctx
     try { bot.clearControlStates() } catch {}
-    try { require('./tools').unstickPathfinderDig(bot) } catch {}
+    try { (require('./tools') as typeof import('./tools')).unstickPathfinderDig(bot) } catch {}
     if (session && typeof session.updateMovements === 'function') { try { session.updateMovements(true) } catch {} }
     return { applied: true, why: 'новые ходы, поиск заново' }
   },
@@ -332,7 +332,7 @@ const RUNGS = {
   // Из воды — к ближнему берегу (movement.escapeWater: путь по клеткам воды до сухой опоры или до воздуха).
   async swimOut (ctx) {
     const { bot } = ctx
-    const m = require('./movement')
+    const m: typeof import('./movement') = require('./movement')
     if (!m.inWater(bot)) return { applied: false, why: 'не в воде' }
     // Берег вплавь в 16 бл. (с прыжком на уступ в 1 блок); нет — сразу ступенька/лесенка (пруд в яме, берег на 2+ выше).
     return swimTo(ctx, waterB, () => m.inWater(bot), { radius: 16, ms: 10000 })
@@ -352,7 +352,7 @@ const RUNGS = {
   // вровень с водой: вперёд с прыжком — и на нём (симуляция: 36 тиков). Под водой копка медленнее — до 12 с.
   async notch (ctx) {
     const { bot, toward } = ctx
-    const m = require('./movement')
+    const m: typeof import('./movement') = require('./movement')
     if (!m.inWater(bot)) return { applied: false, why: 'не в воде' }
     const dir = axisTo(bot, toward)
     if (!dir) return { applied: false, why: 'нет направления' }
@@ -384,7 +384,7 @@ const RUNGS = {
   // столб на 1 и шаг.
   async stepUp (ctx) {
     const { bot, toward, ctl } = ctx
-    const build = require('./build')
+    const build: typeof import('./build') = require('./build')
     const dir = axisTo(bot, toward)
     if (!dir) return { applied: false, why: 'нет направления' }
     const feet = bot.entity.position.floored()
@@ -414,7 +414,7 @@ const RUNGS = {
   // Вылезти из своей ямы/шахты столбом (build.escapePit: потолок с жидкостью за ним не вскрывает).
   async climbOut (ctx) {
     const { bot, ctl, mcData } = ctx
-    const build = require('./build')
+    const build: typeof import('./build') = require('./build')
     if (!build.inPit(bot)) return { applied: false, why: 'не в яме' }
     const r = await build.escapePit(bot, ctl, { maxClimb: 8, mcData })
     return { applied: !!(r && r.climbed > 0), why: `из ямы на ${r && r.climbed}${r && r.stopped ? ' — ' + r.stopped : ''}` }
@@ -424,8 +424,8 @@ const RUNGS = {
   async waypoint (ctx) {
     const { bot, toward } = ctx
     if (!toward) return { applied: false, why: 'нет цели' }
-    const { goals } = require('mineflayer-pathfinder')
-    const { gotoGoal } = require('./movement')
+    const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+    const { gotoGoal }: typeof import('./movement') = require('./movement')
     const p0 = bot.entity.position.clone()
     const dx = toward.x - p0.x; const dz = toward.z - p0.z
     const dist = Math.hypot(dx, dz)
@@ -573,7 +573,7 @@ async function breakToward (ctx, depth) {
       const targets = standPositions(bot, next, { rise: 1.25, drop: down ? 3 : 0 })
         .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
       for (const target of targets.slice(0, 3)) {
-        const moved = await require('./navigation/parkour').executeJump(bot, ctx.ctl || { aborted: false }, target, { allowWalk: true, planningMs: 180 })
+        const moved = await (require('./navigation/parkour') as typeof import('./navigation/parkour')).executeJump(bot, ctx.ctl || { aborted: false }, target, { allowWalk: true, planningMs: 180 })
         if (moved.ok || moved.ticks || aborted(ctx)) break
       }
     }
@@ -785,7 +785,7 @@ function watch (session, ctl, { deadline = Infinity, maxRungs = 7, maxTotal = 30
 
 // Есть ли сухой берег вплавь (movement.findSwimRoute — путь по клеткам воды до опоры).
 function landBySwim (bot) {
-  try { const r = require('./movement').findSwimRoute(bot); return !!r && r.kind === 'land' } catch { return true }
+  try { const r = (require('./movement') as typeof import('./movement')).findSwimRoute(bot); return !!r && r.kind === 'land' } catch { return true }
 }
 
 // Один заход лестницы вне goto (для этапов: штрек, колодец, подъём): до maxRungs ступеней, пока тело не сдвинется на 1.5.
@@ -807,4 +807,4 @@ async function freeHere (session, ctl, { toward = null, maxRungs = 5, log = cons
   return { ok: bot.entity.position.distanceTo(p0) >= 1.5, cls: d.cls, tried }
 }
 
-module.exports = { on, DEFAULT_ON, landBySwim, fluidRoute, diagnose, ladder, createDetector, watch, freeHere, noteRefusal, RUNGS, LADDERS, REFUSED, overlapsBody, towardOf, axisTo, safeToBreak, visiblePoint, SOFT }
+export { on, DEFAULT_ON, landBySwim, fluidRoute, diagnose, ladder, createDetector, watch, freeHere, noteRefusal, RUNGS, LADDERS, REFUSED, overlapsBody, towardOf, axisTo, safeToBreak, visiblePoint, SOFT }

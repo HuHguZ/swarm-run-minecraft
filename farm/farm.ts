@@ -1,6 +1,7 @@
 'use strict'
+const { REPO_ROOT }: typeof import('../daemon/src/paths') = require('../daemon/src/paths')
 // Ферма тестовых миров: N серверов Paper 1.21.11, на каждом свой бот-оператор
-// со своим демоном. Одна сцена этапа (daemon/try-lab-*.js и т.п.) идёт сразу
+// со своим демоном. Одна сцена этапа (daemon/scenes/<этап>/try-lab-*.js и т.п.) идёт сразу
 // на всех мирах, итоги сводятся в одну таблицу — данных в N раз быстрее.
 //
 // Раскладка слота i (1..32):
@@ -9,84 +10,85 @@
 //   демон    ws 8800+i, viewer 3100+i, память farm/memory-<i>
 // Шаблон сервера — server-twin (jar, библиотеки, настройки); миры — свои.
 //
-//   node farm/farm.js up 8                      8 миров с сидом двойника прохождения
-//   node farm/farm.js up 8 --random             у каждого свой случайный сид (разные карты)
-//   node farm/farm.js up 8 --seeds 1,2,3        сиды по кругу
-//   node farm/farm.js up 8 --pool [файл]         хорошие сиды: farm/seeds/good-v2.json (с лавой) или v1, без повтора
-//   node farm/farm.js up 4 --from 9             слоты 9..12
-//   node farm/farm.js up 4 --tick-rate 100      целевые 100 тиков/с; TICK_RATE=100 — то же (умолчание 20)
-//   node farm/farm.js up 8 --fresh              стереть миры и память слотов (чистый старт)
-//   node farm/farm.js up 1 --lockstep           пошаговый мир (ND_LOCKSTEP=1 — то же): тик идёт, только когда боты
+//   node dist/farm/farm.js up 8                      8 миров с сидом двойника прохождения
+//   node dist/farm/farm.js up 8 --random             у каждого свой случайный сид (разные карты)
+//   node dist/farm/farm.js up 8 --seeds 1,2,3        сиды по кругу
+//   node dist/farm/farm.js up 8 --pool [файл]         хорошие сиды: farm/seeds/good-v2.json (с лавой) или v1, без повтора
+//   node dist/farm/farm.js up 4 --from 9             слоты 9..12
+//   node dist/farm/farm.js up 4 --tick-rate 100      целевые 100 тиков/с; TICK_RATE=100 — то же (умолчание 20)
+//   node dist/farm/farm.js up 8 --fresh              стереть миры и память слотов (чистый старт)
+//   node dist/farm/farm.js up 1 --lockstep           пошаговый мир (ND_LOCKSTEP=1 — то же): тик идёт, только когда боты
 //                                               обсчитали предыдущие (FarmLockstep.java); демоны и сцены слота — тоже
 //                                               в этом режиме; окно ND_LOCKSTEP_WINDOW (2), клапан ND_LOCKSTEP_STALL_MS (2000)
-//   node farm/farm.js up 8 --world server-twin  миры — копия чужой папки (тот сервер должен
+//   node dist/farm/farm.js up 8 --world server-twin  миры — копия чужой папки (тот сервер должен
 //                                               стоять или быть в save-off; сид — из level.dat)
-//   node farm/farm.js status
-//   node farm/farm.js tick 1-4 rate 100         RCON: скорость серверов (query / freeze / unfreeze / step 40)
-//   node farm/farm.js tick --all query         состояние тиков всех поднятых слотов
-//   node farm/farm.js daemons 1-10              перезапустить только тела, миры не трогать
-//   node farm/farm.js rcon all "time set day"   команда на все поднятые слоты (или 3, 1-4)
-//   node farm/farm.js run try-lab-pearls.js --slots 1-8 --tag pearls-a STYLE=duel -- 2
-//        сцена на каждом слоте (cwd daemon/), env: ND_WS, MC_USERNAME, MC_PORT,
+//   node dist/farm/farm.js status
+//   node dist/farm/farm.js tick 1-4 rate 100         RCON: скорость серверов (query / freeze / unfreeze / step 40)
+//   node dist/farm/farm.js tick --all query         состояние тиков всех поднятых слотов
+//   node dist/farm/farm.js daemons 1-10              перезапустить только тела, миры не трогать
+//   node dist/farm/farm.js rcon all "time set day"   команда на все поднятые слоты (или 3, 1-4)
+//   node dist/farm/farm.js run try-lab-pearls.js --slots 1-8 --tag pearls-a STYLE=duel -- 2
+//        сцена на каждом слоте (cwd daemon/; имя без пути ищется в scenes/**, arena/, ../farm/scenes/), env: ND_WS, MC_USERNAME, MC_PORT,
 //        ND_SERVER_LOG, LAB_OUT=farm/results/<tag>/slot-<i>.jsonl, плюс KEY=VAL;
 //        аргументы после «--» — сцене. Ждёт всех, печатает сводку (report).
 //        --tick-rate / TICK_RATE — скорость перед сценой; бюджеты MINUTES — игровые минуты.
-//   node farm/farm.js report <tag>              сводка по итогам (ok, числа: среднее/мин/макс)
-//   node farm/farm.js kill-runs <tag>           оборвать сцены партии
-//   node farm/farm.js down [слоты]              штатно: RCON stop (мир сохраняется), демоны — стоп
-//   node farm/farm.js nice                      приоритет/ядра фермы — поднятым серверам и демонам
-//   node farm/farm.js up 1 --from 8 --reup …    то же, но слоты диапазона сперва down под замком up (серии сид за сидом)
-//   node farm/farm.js snapshot s1d-a            заморозить собранный код демона и сцен для серии: копия *.js/*.json и
-//                                               data/ в .daemon-<имя> (рядом с daemon/), node_modules — ссылкой
-//   node farm/farm.js up 1 --from 21 --code s1d-a   демон слота — из снимка (запомнится: daemons и run слота — тоже);
+//   node dist/farm/farm.js report <tag>              сводка по итогам (ok, числа: среднее/мин/макс)
+//   node dist/farm/farm.js kill-runs <tag>           оборвать сцены партии
+//   node dist/farm/farm.js down [слоты]              штатно: RCON stop (мир сохраняется), демоны — стоп
+//   node dist/farm/farm.js nice                      приоритет/ядра фермы — поднятым серверам и демонам
+//   node dist/farm/farm.js up 1 --from 8 --reup …    то же, но слоты диапазона сперва down под замком up (серии сид за сидом)
+//   node dist/farm/farm.js snapshot s1d-a       заморозить собранный код демона и сцен для серии: копия *.js/*.json
+//                                               из dist/daemon и dist/farm в .snapshots/<имя>/, node_modules — ссылкой
+//   node dist/farm/farm.js up 1 --from 21 --code s1d-a   демон слота — из снимка (запомнится: daemons и run слота — тоже);
 //                                               daemons 21 --code <имя> — сменить снимок; --code live — живое дерево;
 //                                               snapshot <имя> --drop — удалить снимок (ссылку node_modules — первой)
 // Лимит миров разом (вместе с server-run 25569) и ядра — farm/limits.json: играет пользователь или нет.
 // Долгие дела (up, run) запускать в фоне с выводом в файл — не через | tail.
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const net = require('net')
-const crypto = require('crypto')
-const { spawn, execFileSync } = require('child_process')
-const { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter } = require('./tick-control')
-const { acceleratedDigArgs } = require('./accelerated-dig')
+const fs: typeof import('fs') = require('fs')
+const os: typeof import('os') = require('os')
+const path: typeof import('path') = require('path')
+const net: typeof import('net') = require('net')
+const crypto: typeof import('crypto') = require('crypto')
+const { spawn, execFileSync }: typeof import('child_process') = require('child_process')
+const { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter }: typeof import('./tick-control') = require('./tick-control')
+const { acceleratedDigArgs }: typeof import('./accelerated-dig') = require('./accelerated-dig')
 
-const ROOT = path.resolve(__dirname, '..')
-const FARM = __dirname
-const DAEMON = path.join(ROOT, 'daemon')
+const ROOT = REPO_ROOT
+const FARM = path.join(REPO_ROOT, 'farm')
 // Снимок кода для серии (07.10: «контрольная» серия шла на 7–11 разных версиях кода — другие агенты правили общее дерево,
-// сравнения «до/после» недоказательны). Снимок лежит рядом с daemon/ (та же глубина: пути __dirname/.. ведут в корень).
-const codeDir = name => !name || name === 'live' ? DAEMON : path.join(ROOT, '.daemon-' + name)
+// сравнения «до/после» недоказательны). Живой код — dist/daemon, снимок — .snapshots/<имя>/ (farm/code-dir).
+const { LIVE_DAEMON, codeDir, snapshotDir }: typeof import('./code-dir') = require('./code-dir')
 const slotCode = i => readState().slots?.[i]?.code || null
 function cmdSnapshot (args) {
   const name = args._[0]
   if (!name || !/^[\w.-]+$/.test(name) || name === 'live') throw new Error('snapshot: имя снимка — буквы, цифры, «.-_» (не live)')
-  const dest = codeDir(name)
+  const root = snapshotDir(name), dest = codeDir(name)
   if (args.drop) {
     // node_modules снимка — ссылка на daemon/node_modules: сначала снять ссылку, иначе рекурсивное удаление уйдёт по ней.
     const link = path.join(dest, 'node_modules')
     try { if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link) } catch {}
     if (fs.existsSync(link)) throw new Error(`${link} — не ссылка, не удаляю`)
-    fs.rmSync(dest, { recursive: true, force: true })
+    fs.rmSync(root, { recursive: true, force: true })
     return log(`снимок ${name} удалён`)
   }
-  if (fs.existsSync(dest)) throw new Error(`снимок ${name} уже есть (${dest}) — новое имя или snapshot ${name} --drop`)
+  if (fs.existsSync(root)) throw new Error(`снимок ${name} уже есть (${root}) — новое имя или snapshot ${name} --drop`)
+  if (!fs.existsSync(path.join(LIVE_DAEMON, 'src', 'index.js'))) throw new Error('snapshot: нет собранного кода в dist/ — сначала npm run build')
   let files = 0
-  const copy = (from, to, all) => {
+  const copy = (from, to, deep) => {
     for (const e of fs.readdirSync(from, { withFileTypes: true })) {
       const a = path.join(from, e.name), b = path.join(to, e.name)
       if (e.isDirectory()) {
-        if (from === DAEMON && /^(node_modules|test|castle-shots|colosseum-shots)$/.test(e.name)) continue
-        copy(a, b, all || e.name === 'data')
-      } else if (all || /\.(js|cjs|mjs|json)$/.test(e.name)) { fs.mkdirSync(to, { recursive: true }); fs.copyFileSync(a, b); files++ }
+        if (!deep || /^(node_modules|test|castle-shots|colosseum-shots)$/.test(e.name)) continue
+        copy(a, b, deep)
+      } else if (/\.(js|cjs|mjs|json)$/.test(e.name)) { fs.mkdirSync(to, { recursive: true }); fs.copyFileSync(a, b); files++ }
     }
   }
-  copy(DAEMON, dest, false)
-  fs.symlinkSync(path.join(DAEMON, 'node_modules'), path.join(dest, 'node_modules'), 'junction')
+  copy(LIVE_DAEMON, dest, true)
+  copy(path.join(LIVE_DAEMON, '..', 'farm'), path.join(root, 'farm'), true)
+  fs.symlinkSync(path.join(REPO_ROOT, 'daemon', 'node_modules'), path.join(dest, 'node_modules'), 'junction')
   let head = ''; try { head = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim() } catch {}
-  fs.writeFileSync(path.join(dest, 'SNAPSHOT.json'), JSON.stringify({ name, at: new Date().toISOString(), head, files }, null, 2))
-  log(`снимок ${name}: ${files} файлов → ${dest} (git ${head} + незакоммиченное дерево на момент снимка)`)
+  fs.writeFileSync(path.join(root, 'SNAPSHOT.json'), JSON.stringify({ name, at: new Date().toISOString(), head, files }, null, 2))
+  log(`снимок ${name}: ${files} файлов → ${root} (git ${head} + незакоммиченное дерево на момент снимка)`)
 }
 const TEMPLATE = path.join(ROOT, 'server-twin')
 const JAVA = 'C:\\Users\\user\\AppData\\Roaming\\.minecraft\\runtime\\java-runtime-delta\\windows\\java-runtime-delta\\bin\\java.exe'
@@ -102,7 +104,7 @@ const MAX_SLOTS = 32 // 29.09: 17–32 — миры со случайными с
 //   играет    { "maxUp": 4,  "cores": "ccd1" }
 //   не играет { "maxUp": 28, "cores": "all" }   (30.09 00:20: «вырубил игру, нагружай максимально»)
 // Нет файла — щадящий режим.
-function readLimits () { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'limits.json'), 'utf8')) } catch { return {} as Record<string, any> } }
+function readLimits () { try { return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'farm/limits.json'), 'utf8')) } catch { return {} as Record<string, any> } }
 const LIMITS = readLimits()
 const MAX_UP = Number(process.env.FARM_MAX_UP || LIMITS.maxUp || 4)
 const AFFINITY = process.env.FARM_AFFINITY || (LIMITS.cores === 'all' ? '0xFFFFFFFF' : '0xFFFF0000')
@@ -247,7 +249,7 @@ function rcon (port, pass, cmd, timeoutMs = 8000) {
     let acc = Buffer.alloc(0)
     let authed = false
     const t = setTimeout(() => { sock.destroy(); reject(new Error('rcon timeout')) }, timeoutMs)
-    sock.on('data', d => {
+    sock.on('data', (d: Buffer) => {
       acc = Buffer.concat([acc, d])
       while (acc.length >= 4) {
         const len = acc.readInt32LE(0)
@@ -354,7 +356,7 @@ async function startDaemon (s, rate = readState().slots?.[s.i]?.tickRate ?? tick
   const err = fs.openSync(path.join(FARM, `daemon-${s.i}.err.log`), 'w')
   const env = runEnv(process.env, { ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(s.mc), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem, ...lockstepEnv(s.i) }, rate)
   const cwd = codeDir(slotCode(s.i))
-  if (cwd !== DAEMON) {
+  if (cwd !== LIVE_DAEMON) {
     if (!fs.existsSync(path.join(cwd, 'src', 'index.js'))) throw new Error(`слот ${s.i}: снимка кода ${cwd} нет`)
     log(`слот ${s.i}: демон из снимка ${path.basename(cwd)}`)
   }
@@ -393,13 +395,13 @@ async function cmdUp (args) {
   const extra = ids.filter(i => !up.includes(slot(i).mc)).length
   if (up.length + extra > MAX_UP) throw new Error(`лимит ${MAX_UP} миров разом (farm/limits.json — играет ли пользователь): уже подняты порты ${up.join(', ') || '—'}, просишь ещё ${extra}. Сначала down лишних.`)
   if (lockstep && extra < ids.length) throw new Error('--lockstep: сервер слота уже поднят, а режим задаётся агентом при старте — сначала down')
-  if (args.code && !fs.existsSync(path.join(codeDir(args.code), 'src', 'index.js'))) throw new Error(`--code ${args.code}: снимка нет — сначала node farm/farm.js snapshot ${args.code}`)
+  if (args.code && !fs.existsSync(path.join(codeDir(args.code), 'src', 'index.js'))) throw new Error(`--code ${args.code}: снимка нет — сначала node dist/farm/farm.js snapshot ${args.code}`)
   // --pool [файл] — хорошие сиды (farm/seeds/good-v1.json по умолчанию): случайные без повтора среди поднятых слотов
   // (решение пользователя 02.10: спидран пока тренируем только на хороших сидах). lava === false — пропустить.
   let seeds = args.seeds ? String(args.seeds).split(',') : null
   if (args.pool) {
-    const v2 = path.join(__dirname, 'seeds', 'good-v2.json')
-    const pf = typeof args.pool === 'string' ? args.pool : fs.existsSync(v2) ? v2 : path.join(__dirname, 'seeds', 'good-v1.json')
+    const v2 = path.join(REPO_ROOT, 'farm/seeds/good-v2.json')
+    const pf = typeof args.pool === 'string' ? args.pool : fs.existsSync(v2) ? v2 : path.join(REPO_ROOT, 'farm/seeds/good-v1.json')
     const used = new Set(Object.values<any>((readState().slots) || {} as Record<string, any>).map(x => String(x && x.seed)))
     // good-v2 (portal-tech): lava — метры до годной лавы, false — нет в 200 м, null — не сканирован. Сперва проверенные.
     const rows = JSON.parse(fs.readFileSync(pf, 'utf8')).seeds.filter(x => x.lava !== false)
@@ -447,7 +449,7 @@ async function cmdDaemons (args) {
   if (!spec && !args.all) throw new Error('daemons: укажи слоты (daemons 3-5 или --slots 3-5); все разом — daemons --all')
   const ids = parseSlots(spec || undefined, upSlots())
   if (args.code) {
-    if (!fs.existsSync(path.join(codeDir(args.code), 'src', 'index.js'))) throw new Error(`--code ${args.code}: снимка нет — сначала node farm/farm.js snapshot ${args.code}`)
+    if (!fs.existsSync(path.join(codeDir(args.code), 'src', 'index.js'))) throw new Error(`--code ${args.code}: снимка нет — сначала node dist/farm/farm.js snapshot ${args.code}`)
     const st = readState()
     for (const i of ids) if (st.slots?.[i]) { if (args.code === 'live') delete st.slots[i].code; else st.slots[i].code = args.code }
     writeState(st)
@@ -544,11 +546,29 @@ async function cmdRcon (args) {
   }
 }
 
+// Сцена по имени: «try-lab-fresh.js» — файл в папках сцен кода слота (scenes/<этап>/, arena/, ../farm/scenes/).
+// Путь с «/» или файл, что лежит прямо в коде слота (старые снимки), — как есть; не нашлось — как есть (ошибку покажет node).
+const SCENE_DIRS = ['scenes', 'arena', path.join('..', 'farm', 'scenes')]
+function sceneFile (dir, scene) {
+  if (/[\\/]/.test(scene) || fs.existsSync(path.join(dir, scene))) return scene
+  const found = []
+  const walk = rel => {
+    for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      if (e.isDirectory()) walk(path.join(rel, e.name))
+      else if (e.name === scene) found.push(path.join(rel, e.name))
+    }
+  }
+  for (const d of SCENE_DIRS) if (fs.existsSync(path.join(dir, d))) walk(d)
+  if (found.length > 1) throw new Error(`run: сцена ${scene} не одна: ${found.join(', ')} — укажите путь`)
+  return found[0] || scene
+}
+
 async function cmdRun (args, sceneArgs) {
   const rate = tickRate(args, process.env, LIMITS.tickRate)
   const scene = args._[0]
   if (!scene) throw new Error('run: какая сцена?')
   const ids = parseSlots(args.slots, upSlots())
+  const files = Object.fromEntries(ids.map(i => [i, sceneFile(codeDir(slotCode(i)), scene)]))
   const tag = args.tag || `${path.basename(scene, '.js')}-${new Date().toISOString().slice(5, 16).replace(/[-:T]/g, '')}`
   const dir = path.join(FARM, 'results', tag)
   fs.mkdirSync(dir, { recursive: true })
@@ -556,7 +576,7 @@ async function cmdRun (args, sceneArgs) {
   for (const kv of args.env) { const k = kv.slice(0, kv.indexOf('=')); extra[k] = kv.slice(kv.indexOf('=') + 1) }
   // Уровень знания карты (S10, daemon/src/perception/knowledge): явно в окружение сцены и в batch.json — сцена, кампания и
   // строки итогов (report) видят один и тот же уровень; без ND_KNOWLEDGE — из старых флагов, по умолчанию rsg.
-  try { extra.ND_KNOWLEDGE = require('../daemon/src/perception/knowledge').level({ ...process.env, ...extra }) } catch {}
+  try { extra.ND_KNOWLEDGE = (require('../daemon/src/perception/knowledge') as typeof import('../daemon/src/perception/knowledge')).level({ ...process.env, ...extra }) } catch {}
   // Применить всем выбранным серверам до старта любой сцены; сервер может быть
   // восстановленной копией с сохранённой другой скоростью или заморозкой.
   for (const i of ids) {
@@ -583,10 +603,11 @@ async function cmdRun (args, sceneArgs) {
     }, rate)
     const out = fs.openSync(path.join(dir, `slot-${i}.out`), 'a')
     const err = fs.openSync(path.join(dir, `slot-${i}.err`), 'a')
-    const p = spawn(process.execPath, [scene, ...sceneArgs], { cwd: codeDir(slotCode(i)), env, stdio: ['ignore', out, err], windowsHide: true })
+    const file = files[i]
+    const p = spawn(process.execPath, [file, ...sceneArgs], { cwd: codeDir(slotCode(i)), env, stdio: ['ignore', out, err], windowsHide: true })
     pids[i] = p.pid
     fs.writeFileSync(path.join(dir, 'pids.json'), JSON.stringify(pids))
-    log(`слот ${i}: ${scene} ${sceneArgs.join(' ')} → pid ${p.pid}`)
+    log(`слот ${i}: ${file} ${sceneArgs.join(' ')} → pid ${p.pid}`)
     p.on('exit', code => { log(`слот ${i}: сцена кончилась, код ${code}`); resolve() })
   }))
   const lockstepSlots = ids.filter(i => readState().slots?.[i]?.lockstep)

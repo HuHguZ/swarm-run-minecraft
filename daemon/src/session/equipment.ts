@@ -1,11 +1,11 @@
 'use strict'
-const gameClock = require('../game-clock')
-const actions = require('../actions')
-const containers = require('../containers')
-const armor = require('../armor')
-const obsidianMod = require('../obsidian')
-const packMod = require('../pack')
-const prepMod = require('../prep')
+import * as gameClock from '../game-clock'
+import actions = require('../actions')
+import * as containers from '../containers'
+import armor = require('../armor')
+import obsidianMod = require('../obsidian')
+import * as packMod from '../pack'
+import * as prepMod from '../prep'
 function sleep (ms, ctl?: any) {
   if (ctl?.aborted) return Promise.resolve()
   return new Promise<void>(resolve => {
@@ -31,28 +31,28 @@ function prep (this: any, p: any = {}) {
   }
 
 function enchant (this: any, p: any = {}) {
-    if (p.mode === 'plan') return this.immediate(async () => { this.require(); return require('../enchant').plan(this, p) })
+    if (p.mode === 'plan') return this.immediate(async () => { this.require(); return (require('../enchant') as typeof import('../enchant')).plan(this, p) })
     return this.runIntent('enchant', ctl => {
       this.require()
-      return require('../enchant').run(this, ctl, p)
+      return (require('../enchant') as typeof import('../enchant')).run(this, ctl, p)
     }, { timeoutMs: 240000, interruptOn: WORKBENCH })
   }
 
 function brew (this: any, p: any = {}) {
-    if (p.plan) return this.immediate(async () => { this.require(); return require('../brew').brew(this, { aborted: false, onAbort: [] }, p) })
-    const steps = (require('../brew').chainOf(require('../brew').resolvePotion(p.potion || 'fire_resistance') || 'awkward') || []).length + (p.splash ? 1 : 0)
+    if (p.plan) return this.immediate(async () => { this.require(); return (require('../brew') as typeof import('../brew')).brew(this, { aborted: false, onAbort: [] }, p) })
+    const steps = ((require('../brew') as typeof import('../brew')).chainOf((require('../brew') as typeof import('../brew')).resolvePotion(p.potion || 'fire_resistance') || 'awkward') || []).length + (p.splash ? 1 : 0)
     const batches = Math.ceil(Math.max(1, Math.min(6, p.count || 3)) / 3)
     return this.runIntent('brew', ctl => {
       this.require()
-      return require('../brew').brew(this, ctl, p)
+      return (require('../brew') as typeof import('../brew')).brew(this, ctl, p)
     }, { timeoutMs: (150 + steps * batches * 25) * 1000, interruptOn: WORKBENCH })
   }
 
 function kit (this: any, p: any = {}) {
-    if (p.craft === false) return this.immediate(async () => { this.require(); return require('../fightkit').kit(this, { aborted: false, onAbort: [] }, p) })
+    if (p.craft === false) return this.immediate(async () => { this.require(); return (require('../fightkit') as typeof import('../fightkit')).kit(this, { aborted: false, onAbort: [] }, p) })
     return this.runIntent('kit', ctl => {
       this.require()
-      return require('../fightkit').kit(this, ctl, p)
+      return (require('../fightkit') as typeof import('../fightkit')).kit(this, ctl, p)
     }, { timeoutMs: 180000, interruptOn: WORKBENCH })
   }
 
@@ -83,7 +83,7 @@ function pack (this: any, p: any = {}) {
       if (r.tossed.length && !ctl.aborted && bot.entity.onGround) {
         const yaw = bot.entity.yaw
         const away = bot.entity.position.offset(Math.sin(yaw) * 3, 0, Math.cos(yaw) * 3)
-        await require('../navigation/parkour').executeJump(bot, ctl, away, { allowWalk: true, planningMs: 180 })
+        await (require('../navigation/parkour') as typeof import('../navigation/parkour')).executeJump(bot, ctl, away, { allowWalk: true, planningMs: 180 })
       }
       return { ...r, free: bot.inventory.emptySlotCount(), was: before.free }
     }, { timeoutMs: 20000, interruptOn: ['death', 'kicked', 'disconnected'] })
@@ -112,8 +112,9 @@ function cache (this: any, p: any = {}) {
         while (taken.has(`схрон-${n}`)) n++
         name = `схрон-${n}`
       }
-      const set = await containers.base(this, ctl, { mode: 'set', name, radius: 6, torch: false })
-      const put = await containers.stash(this, ctl, { mode: 'put', name, item: p.item || 'all', keep: p.keep || null })
+      // Отчёты base/stash — разные по ветке; здесь читаются только общие поля.
+      const set: Record<string, any> = await containers.base(this, ctl, { mode: 'set', name, radius: 6, torch: false })
+      const put: Record<string, any> = await containers.stash(this, ctl, { mode: 'put', name, item: p.item || 'all', keep: p.keep || null })
       return { name, at: set.at || put.at, put: put.put, kept: put.kept, stopped: put.stopped, note: put.note }
     }, { timeoutMs: 120000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'] })
   }
@@ -190,4 +191,4 @@ function dropItem (this: any, p: any = {}) {
     return this.immediate(() => { this.require(); return actions.drop(this, p) })
   }
 
-module.exports = { prep, enchant, brew, kit, bucket, pack, cache, chestPut, chestTake, chestList, base, stash, wearBestArmor, equipItem, eat, dropItem }
+export { prep, enchant, brew, kit, bucket, pack, cache, chestPut, chestTake, chestList, base, stash, wearBestArmor, equipItem, eat, dropItem }

@@ -1,12 +1,12 @@
 'use strict'
-const gameClock = require('../game-clock')
-const Vec3 = require('vec3')
-const combat = require('../combat')
-const flee = require('../flee')
-const fauna = require('../fauna')
-const bow = require('../bow')
-const throwMod = require('../throw')
-const lootMod = require('../loot')
+import * as gameClock from '../game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import combat = require('../combat')
+import * as flee from '../flee'
+import fauna = require('../fauna')
+import bow = require('../bow')
+import * as throwMod from '../throw'
+import lootMod = require('../loot')
 function sleep (ms, ctl?: any) {
   if (ctl?.aborted) return Promise.resolve()
   return new Promise<void>(resolve => {
@@ -58,7 +58,7 @@ function loot (this: any, p: any = {}) {
   }
 
 function structure (this: any, p: any = {}) {
-    const S = require('../structures')
+    const S: typeof import('../structures') = require('../structures')
     const mode = p.mode || 'scan'
     if (mode !== 'explore' && mode !== 'loot') {
       return this.immediate(async () => {
@@ -281,7 +281,7 @@ async function retaliate (this: any, name, p: any = {}) {
     bot.once('death', onDeath)
     try {
       this.updateMovements()
-      return await require('../reflex-lock').run(this, ctl, () => combat.fight(this, ctl, { target: name, allowPlayer: true, ...p }))
+      return await (require('../reflex-lock') as typeof import('../reflex-lock')).run(this, ctl, () => combat.fight(this, ctl, { target: name, allowPlayer: true, ...p }))
     } catch (err) {
       return { error: String((err && err.message) || err) }
     } finally {
@@ -310,7 +310,7 @@ async function defend (this: any, entityId, friend, p: any = {}) {
     bot.on('entityDead', onDead)
     try {
       this.updateMovements()
-      const r = await require('../reflex-lock').run(this, ctl, () => combat.fight(this, ctl, { target: `#${entityId}`, allowPlayer: false, timeoutSeconds: 45, retreatAtHealth: 6, ...p }))
+      const r = await (require('../reflex-lock') as typeof import('../reflex-lock')).run(this, ctl, () => combat.fight(this, ctl, { target: `#${entityId}`, allowPlayer: false, timeoutSeconds: 45, retreatAtHealth: 6, ...p }))
       if (slain && r && typeof r === 'object' && !r.killed) r.killed = r.target || true
       return r
     } catch (err) {
@@ -323,4 +323,4 @@ async function defend (this: any, entityId, friend, p: any = {}) {
     }
   }
 
-module.exports = { fight, flee: fleeIntent, loot, structure, autoLoot, shoot, throwTest, animals, golem, trade, retaliate, defend }
+export { fight, fleeIntent as flee, loot, structure, autoLoot, shoot, throwTest, animals, golem, trade, retaliate, defend }

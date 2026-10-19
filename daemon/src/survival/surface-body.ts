@@ -1,6 +1,6 @@
-const { SIDES, gameClock, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, spot, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, Vec3 } = require('./enter-shelter')
-const { flat, looseOver, wet, looseLine, worldTop, pitCheck, openSky, seenBy, MOB_WATCH, shutOut, WALL_LIMIT, WALL_BLOCKS, behindWall, legLevels, FALLS, levelWord, hazardNear, hazardLine } = require('./recover-loot')
-const { stepUpInto, dangerousNow, wallOff, whereToFight, WET_LIMIT, waterStop, outOfWater, ASIDE_LIMIT, eyeWet, waterNext, AGAIN_WONT_HELP } = require('./out-of-water')
+const { SIDES, gameClock, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, spot, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, Vec3 }: typeof import('./enter-shelter') = require('./enter-shelter')
+const { flat, looseOver, wet, looseLine, worldTop, pitCheck, openSky, seenBy, MOB_WATCH, shutOut, WALL_LIMIT, WALL_BLOCKS, behindWall, legLevels, FALLS, levelWord, hazardNear, hazardLine }: typeof import('./recover-loot') = require('./recover-loot')
+const { stepUpInto, dangerousNow, wallOff, whereToFight, WET_LIMIT, waterStop, outOfWater, ASIDE_LIMIT, eyeWet, waterNext, AGAIN_WONT_HELP }: typeof import('./out-of-water') = require('./out-of-water')
 let handClimb = false
 
 function handBreaks (bot, b) {
@@ -309,7 +309,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
 
     const health = Math.round(bot.health ?? 20)
     // Стоять внизу на малом хп имеет смысл, только если оно вернётся: сытость
-    const canHeal = (bot.food ?? 20) >= 18 || !!(session.mcData && require('.././actions').bestFood(bot, session.mcData))
+    const canHeal = (bot.food ?? 20) >= 18 || !!(session.mcData && (require('.././actions') as typeof import('.././actions')).bestFood(bot, session.mcData))
     if (health < 6 && canHeal) { stopped = `здоровья ${health} — дальше не лезу`; break }
 
     // The climb is what the reserve exists for, so nothing is held back here:
@@ -631,7 +631,7 @@ function holePlan (bot, mcData, feet) {
     }
     if (mcData && missingHarvestTool(bot, b, mcData)) return null
     let t = Infinity
-    try { t = require('.././tools').bestFor(bot, b).ms } catch {}
+    try { t = (require('.././tools') as typeof import('.././tools')).bestFor(bot, b).ms } catch {}
     if (!Number.isFinite(t) || t > 2500) return null
     ms += t + 450 // и падение в выкопанное (sinkOne ждёт 450 мс)
   }
@@ -642,8 +642,8 @@ function holePlan (bot, mcData, feet) {
 
 function pocketOf (bot, foes) {
   let air = null
-  try { air = require('.././sealed').localAir(bot) } catch { return null }
-  if (!air || air.size < 2 || require('.././sealed').exposure(bot, new Set(air)).length) return null
+  try { air = (require('.././sealed') as typeof import('.././sealed')).localAir(bot) } catch { return null }
+  if (!air || air.size < 2 || (require('.././sealed') as typeof import('.././sealed')).exposure(bot, new Set(air)).length) return null
   for (const h of foes) {
     // Клетка, занятая мобом, для localAir — не воздух (liveCls), и карман «замыкался» у самого зомби: trap0 02.10,
     // лесенка в пещере — «карман без врагов» при зомби в 0.7 бл., смерть. Моб в кармане или у его края — не карман.

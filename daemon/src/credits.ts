@@ -4,7 +4,7 @@
 // при значении 0 отвечает сразу, при 1 показывает титры, которые игрок пропускает; mineflayer отвечает только на 1.
 // Без ответа нет update_time — игровые часы демона стояли (s5-c5-s1, s5-e23-s7). Отвечаем всегда (как пропуск титров)
 // и повторяем раз в 2 с, пока не придёт respawn (лишний ответ сервер молча пропускает: wonGame уже false).
-const { wall } = require('./game-clock')
+import { wall } from './game-clock'
 
 function install (bot) {
   const c = bot && bot._client
@@ -27,4 +27,4 @@ function install (bot) {
   c.on('end', stop)
 }
 
-module.exports = { install }
+export { install }

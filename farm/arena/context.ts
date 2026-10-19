@@ -1,9 +1,11 @@
 'use strict'
-// Общее для частей арены (запуск — farm/ffa.ts, части боя — farm/arena/*): корень, сон, журнал, ручки окружения и
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Общее для частей арены (запуск — farm/arena/ffa.ts, части боя — farm/arena/*): корень, сон, журнал, ручки окружения и
 // контекст боя. Контекст создаёт run() и отдаёт каждой части: изменяемое между частями читается и пишется только полем
 // ctx (ctx.between, ctx.round…), не копией; функции частей зовутся через ctx — часть может встать позже той, что её зовёт.
-const path = require('path')
-export const ROOT = path.resolve(__dirname, '..', '..')
+import 'path'
+import path = require('path')
+export const ROOT = REPO_ROOT
 export const sleep = ms => new Promise<any>(r => setTimeout(r, ms))
 export const log = (...a) => console.log(`[${new Date().toTimeString().slice(0, 8)}]`, ...a)
 export const SEG_S = Number(process.env.FFA_SEG_S || 30)

@@ -1,9 +1,10 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs'), path = require('node:path')
-const { Module, createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import path = require('node:path')
+import { Module, createRequire } from 'node:module'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function room ({ wall = false, glass = false, spawners = [], hidden = new Set(), onEquip = null, onLook = null }: any = {}) {
   const filename = path.resolve(__dirname, '../src/endportal.js'), real = createRequire(filename)
@@ -43,9 +44,10 @@ function room ({ wall = false, glass = false, spawners = [], hidden = new Set(),
     './sight': { seesBlock: (_b, block) => !hidden.has(String(block.position)) },
     './items': { countOf: () => eyes, itemNamed: () => eyes ? { name: 'ender_eye' } : null, equipBestTool: async () => bot.equip({ name: 'iron_pickaxe' }, 'hand') }
   }
-  const mod = new Module(filename); mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename))
+  const mod: any = new Module(filename); mod.filename = filename; mod.paths = (Module as any)._nodeModulePaths(path.dirname(filename))
   mod.require = name => Object.prototype.hasOwnProperty.call(mocks, name) ? mocks[name] : real(name)
-  mod._compile(fs.readFileSync(filename, 'utf8'), filename)
+  // Тело endportal разнесено по endportal/: bodySource склеивает его в один скрипт — подмены по spec доходят до частей.
+  mod._compile(bodySource(filename), filename)
   const session = { bot, mcData: md, journal: { state: { places: { 'портал в Край': { x: 0, y: 64, z: 0, dimension: 'overworld' } } }, patch: fn => fn(session.journal.state), append: () => {} } }
   return { bot, target, ctl, clicks, digs, walks, looks, run: () => mod.exports.fillFrames(session, ctl, { timeoutSeconds: 90 }) }
 }

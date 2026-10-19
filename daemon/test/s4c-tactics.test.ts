@@ -6,10 +6,10 @@ import { EventEmitter } from 'node:events'
 import { check } from '../src/tactics/sim-run'
 import { roughScenario } from '../src/tactics/sim-scenarios'
 import { runGain, type TacticalState } from '../src/tactics/state'
-const flee = require('../src/flee')
-const { observeTactics, TacticalSystem } = require('../src/tactics/minecraft')
-const gameClock = require('../src/game-clock')
-const { Vec3 } = require('vec3')
+import flee = require('../src/flee')
+import { observeTactics, TacticalSystem } from '../src/tactics/minecraft'
+import * as gameClock from '../src/game-clock'
+import { Vec3 } from 'vec3'
 
 process.env.ND_TELEMETRY = '0'
 const tactical = (changes: Partial<TacticalState> = {}): TacticalState => ({ at: 0, health: 20, food: 20, armor: 15, weapon: true, shield: false,
@@ -138,7 +138,7 @@ for (const delay of [0, 10]) test(`a run that "escaped" ${delay ? 'within a seco
 })
 
 test('ne-guard duel does not walk toward a foe over the edge of a bridge (review g: falls under Fight at blazes and withers)', async () => {
-  const guard = require('../src/ne-guard')
+  const guard: typeof import('../src/ne-guard') = require('../src/ne-guard')
   const run = async (bridge: boolean) => {
     const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
     const bot: any = new EventEmitter()
@@ -168,11 +168,11 @@ test('ne-guard duel does not walk toward a foe over the edge of a bridge (review
 })
 
 test('burning on dry ground without a bucket: smartFlee from a foe in sight, escapeFire out of the fire with nobody to run from (s8-f3-15)', async () => {
-  const director = require('../src/director')
+  const director: any = require('../src/director')
   const calls: string[] = []
   const saved = { fire: director.escapeFire, flee: flee.smartFlee }
   director.escapeFire = async () => { calls.push('escapeFire'); return { status: 'done' } }
-  flee.smartFlee = async () => { calls.push('smartFlee'); return { mode: 'оторвался' } }
+  flee.smartFlee = (async () => { calls.push('smartFlee'); return { mode: 'оторвался' } }) as any
   try {
     const bot: any = new EventEmitter()
     bot.entity = { id: 1, position: new Vec3(.5, 64, .5) }
@@ -191,7 +191,7 @@ test('burning on dry ground without a bucket: smartFlee from a foe in sight, esc
 })
 
 test('escapeFire on dry ground without a bucket leaves only a fire cell, by safe steps - no blind 1.2 s sprint-jump (review g)', async () => {
-  const { escapeFire } = require('../src/director')
+  const { escapeFire }: typeof import('../src/director') = require('../src/director')
   const run = async (inFire: boolean, z = .5, fireZ = 0) => {
     const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
     const bot: any = new EventEmitter()
@@ -208,7 +208,7 @@ test('escapeFire on dry ground without a bucket leaves only a fire cell, by safe
       if (key === 'forward' && on) bot.entity.position = bot.entity.position.offset(-Math.sin(bot.entity.yaw) * .216, 0, -Math.cos(bot.entity.yaw) * .216)
     }
     bot.clearControlStates = () => {}
-    const done = escapeFire({ bot }, { aborted: false, onAbort: [] })
+    const done: Promise<any> = escapeFire({ bot }, { aborted: false, onAbort: [] })
     try { for (let i = 0; i < 40; i++) { timer.advanceTicks(1); await new Promise(resolve => setImmediate(resolve)) } return { result: await done, keys } }
     finally { timer.dispose(); gameClock.activate(null) }
   }
@@ -238,8 +238,8 @@ test('a flight does not end at a drop: pickDirection prices the edge at its end 
 })
 
 test('two runs that left an armed body\'s pursuer as close make the escape exhausted, wherever they ended (native s4c-ab: wither skeleton, knocked off the platform)', () => {
-  const { EscapeProgress } = require('../src/tactics/escape-progress')
-  const at = (x: number, d: number, extra: Record<string, unknown> = {}) => ({ at: x * 100, position: { x, y: 64, z: 0 }, threatDistance: d,
+  const { EscapeProgress }: typeof import('../src/tactics/escape-progress') = require('../src/tactics/escape-progress')
+  const at = (x: number, d: number, extra: Record<string, unknown> = {}): import('../src/tactics/escape-progress').EscapeObservation => ({ at: x * 100, position: { x, y: 64, z: 0 }, threatDistance: d,
     exits: `cell-${x}`, available: true, actions: ['Flee', 'CreateDistance'], armed: true, ...extra })
   const chase = (armed: boolean) => {
     const p = new EscapeProgress()

@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { cjsContext } from './cjs-context'
 
-const { Vec3 } = require('vec3')
+import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 test('real fortress tour credits new physical stops once, not successful path promises without movement', async () => {
   const file = path.resolve(__dirname, '../src/fortress.js')
@@ -14,12 +15,12 @@ test('real fortress tour credits new physical stops once, not successful path pr
   let moving = true
   const context: any = { require: createRequire(file), module: { exports: {} }, console: { log () {} }, process,
     testBot: bot, move: () => { if (moving) bot.entity.position.x += 20 } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(bodySource(file) + `
     look = () => ({ seen: 1, seenList: [testBot.entity.position.offset(2, -1, 0)] });
     keepBlocks = async () => null;
     spawnerHint = () => ({ x: testBot.entity.position.x + 20, z: 0, by: 'пирог', yaw: 90 });
     climbTo = legTo = async () => { move(); return { ok: true }; };
-  `, context)
+  `, cjsContext(context))
   const session: any = { bot, mcData: {} }
   const first = await context.module.exports.tour(session, { aborted: false }, { deadline: Infinity, hops: 3, pie: true })
   assert.equal(first.explored, 3, 'three new actual observation stops are useful without any rods yet')

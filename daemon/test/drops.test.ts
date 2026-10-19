@@ -1,9 +1,9 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const drops = require('../src/drops')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import drops = require('../src/drops')
 
 // Мир: пол из полных блоков на y=150 (верх 151), по желанию — плита, яма.
 const FULL = [[0, 0, 0, 1, 1, 1]]
@@ -11,7 +11,7 @@ const SLAB = [[0, 0, 0, 1, 0.5, 1]]
 
 test('craft conservation receives only bounded native own pickup counts with actual item metadata', () => {
   const create = () => {
-    const bot = new EventEmitter()
+    const bot: any = new EventEmitter()
     bot._client = new EventEmitter()
     bot.entity = { id: 1 }
     bot.registry = { entitiesByName: { item: { id: 71 } }, itemsByName: { blackstone: { id: 1 } } }
@@ -115,7 +115,7 @@ function mineflayerLike (bot) {
 
 // Тело с pathfinder-заглушкой: цель — GoalPickup, «идём» сразу в ближайший узел, где isEnd.
 function fakeBot (w) {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot.registry = { entitiesByName: { item: { id: 71 } } }
   bot.entity = { position: new Vec3(0.5, 151, 0.5), isCollidedHorizontally: false }

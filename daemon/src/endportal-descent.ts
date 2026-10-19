@@ -11,11 +11,11 @@
 //   • кирпич крепости (каменный кирпич, решётки, рамки), увиденный в забое или в проёме, — пришли.
 // Итог — как у endportal.shaftToBricks: { found, at, dug, fromY } | { reached, at, dug, fromY } | { stopped, dug }.
 // На уровне знания scan и при ND_HONEST_SHAFT=0 — прежний shaftToBricks (endportal.honestDescent()).
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { sleep, xyz } = require('./movement')
-const { equipBestTool, missingHarvestTool } = require('./items')
-const eyes = require('./perception/eyes')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { sleep, xyz }: typeof import('./movement') = require('./movement')
+const { equipBestTool, missingHarvestTool }: typeof import('./items') = require('./items')
+const eyes: typeof import('./perception/eyes') = require('./perception/eyes')
 
 const LIQUID = /^(water|lava|bubble_column)$/
 const HAZARD_FLOOR = /lava|magma|pointed_dripstone|powder_snow|cactus|campfire|fire/
@@ -126,7 +126,7 @@ async function digCell (bot, mcData, cell) {
 }
 
 async function placeAt (bot, cell) {
-  const { placeBlockAt } = require('./build')
+  const { placeBlockAt }: typeof import('./build') = require('./build')
   try { const r = await placeBlockAt(bot, cell, { timeoutMs: 2000, steady: true, honest: true }); return !!(r && r.ok) } catch { return false }
 }
 
@@ -155,7 +155,7 @@ async function walkInto (bot, ctl, goal, fall, early = false) {
         continue
       }
       if (early) {
-        const steer = require('./blockmoves').steerTo(bot, bot.entity, { x: cx, z: cz }, false)
+        const steer = (require('./blockmoves') as typeof import('./blockmoves')).steerTo(bot, bot.entity, { x: cx, z: cz }, false)
         await bot.look(steer.yaw, 0, true)
         bot.setControlState('forward', steer.forward)
       } else {
@@ -173,7 +173,7 @@ async function walkInto (bot, ctl, goal, fall, early = false) {
 
 function lavaNearBelow (bot) {
   if (process.env.ND_OW_HEAR === '0') return false
-  try { return require('./cast').hearLava(bot, { radius: 12 }).some(h => h.below && h.flat <= 6) } catch { return false }
+  try { return (require('./cast') as typeof import('./cast')).hearLava(bot, { radius: 12 }).some(h => h.below && h.flat <= 6) } catch { return false }
 }
 
 // Одна ступень вниз из клетки ног: сторона спирали k, при отказе — следующие три. { moved, k, found?, room?, why, dug, placed, fall }
@@ -261,12 +261,12 @@ async function honestShaft (session, ctl, { minY = -58, deadline, targetY = null
       if (hb && /water/.test(hb.name) && (bot.oxygenLevel ?? 20) < 16) return out({ stopped: 'лестницу залило — голова в воде', wet: true, drowning: true })
     }
     if (!careful && steps % 4 === 0 && lavaNearBelow(bot)) { careful = true; log('слышу лаву ниже — осторожный спуск', { at: xyz(F) }) }
-    if (require('./tunnel').lowPicks(bot) < 2) { try { await require('./tunnel').restockPicks(session, ctl, 2) } catch {} }
+    if ((require('./tunnel') as typeof import('./tunnel')).lowPicks(bot) < 2) { try { await (require('./tunnel') as typeof import('./tunnel')).restockPicks(session, ctl, 2) } catch {} }
     // Кирпич крепости в проёме (виден лучом рядом) — пришли.
     if (brickIds.length && !mapped) {
       try {
         // Только под землёй (на 4+ ниже начала шахты): кирпич руин портала/тропы у поверхности — не крепость.
-        const v = require('./sight').visibleOf(bot, brickIds, 5, { max: 3, rays: 120 }).filter(b => b.position.y < fromY - 4)
+        const v = (require('./sight') as typeof import('./sight')).visibleOf(bot, brickIds, 5, { max: 3, rays: 120 }).filter(b => b.position.y < fromY - 4)
         if (v.length) return out({ found: v[0].name, at: xyz(v[0].position) })
       } catch {}
     }
@@ -482,3 +482,7 @@ async function toLevel (session, ctl, ty, { deadline, bricks = null, maxSteps = 
 }
 
 module.exports = { honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL, pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource }
+export {
+  honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL,
+  pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource
+}

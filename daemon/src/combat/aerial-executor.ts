@@ -1,14 +1,14 @@
 import { evaluateAerial, type AerialDecision, type AerialActor } from './aerial-graph'
 import { beginAerialRecovery } from './aerial-recovery'
 
-const clock = require('../game-clock')
-const Vec3 = require('vec3')
-const spear = require('../spear')
-const pick = require('../pick')
-const pearls = require('../pearl-hop')
-const projectiles = require('../throw')
-const bow = require('../bow')
-const ranged = require('../ranged')
+import * as clock from '../game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as spear from '../spear'
+import pick = require('../pick')
+import * as pearls from '../pearl-hop'
+import * as projectiles from '../throw'
+import bow = require('../bow')
+import * as ranged from '../ranged'
 
 interface FlightControl { aborted: boolean }
 interface FlightOperations {
@@ -135,7 +135,7 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     rangedAt = clock.now()
     const stop = () => {
       if (!valid(ctl, target.id) || bot.health <= 8 || !operations.gliding(bot.entity)) return true
-      const flight = require('../elytra').rollout(operations.worldOf(bot), bot.entity.position, bot.entity.velocity,
+      const flight = (require('../elytra') as typeof import('../elytra')).rollout(operations.worldOf(bot), bot.entity.position, bot.entity.velocity,
         bot.entity.yaw, bot.entity.pitch, bot.fireworkRocketDuration ?? 0, 8)
       return !!flight.kind
     }

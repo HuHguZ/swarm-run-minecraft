@@ -1,10 +1,10 @@
 'use strict'
 // Сводка дуэлей кристаллами (2026-09-30): строки «ROUND {...}» из вывода
 // арены (farm/crystal/*.out или daemon/arena-88xx.log).
-//   node farm/crystal/csum.js farm/crystal/c2-29.out farm/crystal/c2-30.out
-//   node farm/crystal/csum.js 'farm/crystal/c3-*.out'
-const fs = require('fs')
-const path = require('path')
+//   node dist/farm/crystal/csum.js farm/crystal/c2-29.out farm/crystal/c2-30.out
+//   node dist/farm/crystal/csum.js 'farm/crystal/c3-*.out'
+import * as fs from 'fs'
+import path = require('path')
 
 function files (args) {
   const out = []

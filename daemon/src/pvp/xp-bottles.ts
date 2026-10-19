@@ -2,7 +2,7 @@
 // Бутылки опыта под ноги (гонка вооружений, s7 06.10): уровни для стола зачарований лаборатории.
 // Бросок — use_item с бутылкой в руке, взгляд вниз (как mend в crystal.ts); сферы впитываются по одной раз в
 // 2 тика (Player.takeXpDelay) — стоять, пока рядом есть сферы, не дольше 4 с.
-const gameClock = require('../game-clock')
+import * as gameClock from '../game-clock'
 
 async function drink (session, ctl, { max = 64 }: any = {}) {
   const bot = session.bot
@@ -26,4 +26,4 @@ async function drink (session, ctl, { max = 64 }: any = {}) {
   return { thrown, level: level(), gained: level() - level0 }
 }
 
-module.exports = { drink }
+export { drink }

@@ -1,9 +1,10 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // S8c (07.10): шаги маршрута серии — по виду шага: сколько раз, доля удачных, медиана и сумма секунд на прогон.
-//   node farm/route-scan/s8c-steps.js <префикс[,префикс]>
-const fs = require('fs')
-const path = require('path')
-const RES = path.join(__dirname, '..', 'results')
+//   node dist/farm/route-scan/s8c-steps.js <префикс[,префикс]>
+import * as fs from 'fs'
+import path = require('path')
+const RES = path.join(REPO_ROOT, 'farm/results')
 for (const prefix of process.argv.slice(2)) {
   const dirs = prefix.split(',').flatMap(pre => fs.readdirSync(RES).filter(d => d.startsWith(pre + '-') && /^-[0-9]+$/.test(d.slice(pre.length))))
   const by = {}

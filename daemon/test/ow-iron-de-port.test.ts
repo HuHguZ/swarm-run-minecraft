@@ -1,15 +1,18 @@
+import { statementOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { stripTypeScriptTypes } from 'node:module'
-const source=fs.readFileSync(path.join(__dirname,'../campaign.ts'),'utf8').replace(/\r\n/g,'\n')
+import { cjsContext } from './cjs-context'
+const source=campaignTs().replace(/\r\n/g,'\n')
 const noop=async()=>{}
 function fn(name:string,context:any){
   const at=source.indexOf(`function ${name} (`),start=source.slice(at-6,at)==='async '?at-6:at
   assert(at>=0,name)
-  return vm.runInNewContext("'use strict';\n"+stripTypeScriptTypes(source.slice(start,source.indexOf('\n}\n',at)+2))+'\n'+name,context)
+  return vm.runInNewContext("'use strict';\n"+stripTypeScriptTypes(source.slice(start,source.indexOf('\n}\n',at)+2))+'\n'+name,cjsContext(withSetters(context)))
 }
 const counter=bag=>item=>typeof item==='string'?bag[item]||0:Object.entries(bag).reduce((s,[k,n]:any)=>s+(item.test(k)?n:0),0)
 test('a funded lighter crafts in the inventory grid without a table; HAND_IGNITER=0 retains the old refusal',async()=>{
@@ -106,8 +109,7 @@ test('iron memory is consumed before descent or a new drift; MEMORY=0 restores t
       act:async(m,p)=>{calls.push(m);assert.equal(m,'mine_seen');if(mode==='interrupted'){context.strategyInterrupted=true;return{status:'interrupted'}}bag.raw_iron=(bag.raw_iron||0)+p.count;return{status:'done'}},
       defStage:(_n,_needed,run)=>{context.run=run}}
     context.mineSeenAll=fn('mineSeenAll',context)
-    const begin=source.indexOf("defStage('iron'"),end=source.indexOf('\nasync function bucketOnTheWay',begin)
-    vm.runInNewContext(stripTypeScriptTypes(source.slice(begin,end)),context)
+    vm.runInNewContext(stripTypeScriptTypes(statementOf(source,"defStage('iron',")),cjsContext(withSetters(context)))
     if(off)await assert.rejects(context.run(true),e=>e===dig)
     else{await context.run(true);assert.deepEqual(calls,['mine_seen']);assert.equal(bag.iron_ingot,mode==='interrupted'?3:4)}
   }

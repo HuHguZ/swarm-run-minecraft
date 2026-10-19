@@ -1,6 +1,6 @@
-const Vec3 = require('../../daemon/node_modules/vec3')
-const REG = require('../../daemon/node_modules/minecraft-data')('1.21.11')
-const dragon = require('../../daemon/src/dragon')
+const Vec3: typeof import('../../daemon/node_modules/vec3').Vec3 = require('../../daemon/node_modules/vec3')
+const REG = (require('../../daemon/node_modules/minecraft-data') as typeof import('../../daemon/node_modules/minecraft-data'))('1.21.11')
+import dragon = require('../../daemon/src/dragon')
 const P = 65
 function world (extra) {
   const o = P - 4

@@ -1,8 +1,8 @@
 // Огонь тушится ударом: у ног и по пути к цели, только видимый прицелом (пользователь 16.10).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const { fireToPunch } = require('../src/fire-punch')
+import { Vec3 } from 'vec3'
+import { fireToPunch } from '../src/fire-punch'
 
 function field(fires: number[][], walls: number[][] = [], goal: any = null) {
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`

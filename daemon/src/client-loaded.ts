@@ -15,4 +15,4 @@ function install (bot) {
     } catch {}
   })
 }
-module.exports = { install }
+export { install }

@@ -1,15 +1,15 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { Physics } = require('prismarine-physics')
 const AABB = require('prismarine-physics/lib/aabb')
 const attribute = require('prismarine-physics/lib/attribute')
-const { goals } = require('mineflayer-pathfinder')
-const { withTimeout } = require('./build')
-const { itemNamed, countItems, diffItems, bestWeapon } = require('./items')
-const { canSeePoint } = require('./perception')
-const { inWater, escapeWater } = require('./movement')
-const { planBoatRoute } = require('./boat-route-plan')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const { withTimeout }: typeof import('./build') = require('./build')
+const { itemNamed, countItems, diffItems, bestWeapon }: typeof import('./items') = require('./items')
+const { canSeePoint }: typeof import('./perception') = require('./perception')
+const { inWater, escapeWater }: typeof import('./movement') = require('./movement')
+const { planBoatRoute }: typeof import('./boat-route-plan') = require('./boat-route-plan')
 
 // Езда: лошадь (осёл, мул) и лодка. Одна и та же суть у обоих: транспорт,
 // которым правит игрок, СЧИТАЕТ КЛИЕНТ, а сервер только принимает координаты.
@@ -678,7 +678,7 @@ async function craftBoat (session, ctl, report) {
   if (!WOODS.some(w => (stock[`${w}_planks`] || 0) >= 5)) {
     const log = WOODS.find(w => (stock[`${w}_log`] || 0) + (stock[`stripped_${w}_log`] || 0) >= 2)
     if (log) {
-      try { await require('./actions').craft(session, ctl, { item: `${log}_planks`, count: 8 }) } catch {}
+      try { await (require('./actions') as typeof import('./actions')).craft(session, ctl, { item: `${log}_planks`, count: 8 }) } catch {}
       stock = countItems(bot)
     }
   }
@@ -690,7 +690,7 @@ async function craftBoat (session, ctl, report) {
     return null
   }
   const name = wood === 'bamboo' ? 'bamboo_raft' : `${wood}_boat`
-  const actions = require('./actions')
+  const actions: typeof import('./actions') = require('./actions')
   try {
     await actions.craft(session, ctl, { item: name, count: 1 })
   } catch (err) {
@@ -1190,3 +1190,7 @@ async function runBoat (session, ctl, p, report, target, deadline) {
 const mode = p => String(p.mode || 'go').toLowerCase()
 
 module.exports = { run, dismount, mountOn, tameHorse, patchVehicle, isTamedHorse, isSaddled, horseInfo, HORSES, HORSE_MODES, BOAT_MODES, isBoatName, astar }
+export {
+  run, dismount, mountOn, tameHorse, patchVehicle, isTamedHorse, isSaddled, horseInfo, HORSES, HORSE_MODES,
+  BOAT_MODES, isBoatName, astar
+}

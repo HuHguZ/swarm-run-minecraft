@@ -1,13 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { fixBreath } = require('../src/gamedata')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { fixBreath } from '../src/gamedata'
 
 function body () {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot.version = '1.21.11'
-  bot.registry = require('minecraft-data')(bot.version)
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))(bot.version)
   bot.supportFeature = bot.registry.supportFeature
   bot._client = new EventEmitter()
   bot._client.write = () => {}

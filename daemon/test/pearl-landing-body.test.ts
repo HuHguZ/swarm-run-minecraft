@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
-const { safeLanding, escapePick } = require('../src/throw')
+import { safeLanding, escapePick } from '../src/throw'
 
 function world(extra: (p: Vec3) => any = () => undefined) {
   const block = (p: Vec3, name: string, shapes: number[][] = []) => ({ name, position: p, shapes,

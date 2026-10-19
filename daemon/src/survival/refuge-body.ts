@@ -1,6 +1,6 @@
-const { standTop, grounded, refugeFoe, refugeLook, lookLine, toShore, chooseRefuge, planksFromLogs, outrun, buildMsOf, takeNiche, takeBox, holdOut, sitTight, waitClear, leaveBox, SIT_CAP_MS } = require('./hold-out')
+const { standTop, grounded, refugeFoe, refugeLook, lookLine, toShore, chooseRefuge, planksFromLogs, outrun, buildMsOf, takeNiche, takeBox, holdOut, sitTight, waitClear, leaveBox, SIT_CAP_MS }: typeof import('./hold-out') = require('./hold-out')
 const { PILLAR, holePlan, HOLE_DEPTH, surface, REFUGE_FLEE_MS } = require('./surface-body')
-const { worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, enterShelter, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, exitShelter, sitOn, gameClock, Vec3 } = require('./enter-shelter')
+const { worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, enterShelter, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, exitShelter, sitOn, gameClock, Vec3 }: typeof import('./enter-shelter') = require('./enter-shelter')
 async function refuge (session, ctl, p: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
@@ -28,7 +28,7 @@ async function refuge (session, ctl, p: any = {}) {
   const onHurt = pk => {
     if (!pk || !bot.entity || pk.entityId !== bot.entity.id || hurts.length >= 10) return
     let type = null
-    try { type = require('.././gamedata').damageTypeName(pk.sourceTypeId) } catch {}
+    try { type = (require('.././gamedata') as typeof import('.././gamedata')).damageTypeName(pk.sourceTypeId) } catch {}
     const src = pk.sourceCauseId > 0 && bot.entities ? bot.entities[pk.sourceCauseId - 1] : null
     // Откуда бил: смещение моба от нас (разбор «достают на столбе»).
     const off = src && src.position ? ` @${(src.position.x - bot.entity.position.x).toFixed(1)},${(src.position.y - bot.entity.position.y).toFixed(1)},${(src.position.z - bot.entity.position.z).toFixed(1)}` : ''
@@ -65,11 +65,11 @@ async function refuge (session, ctl, p: any = {}) {
 
 async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts }: any) {
   const bot = session.bot
-  const flee = require('.././flee')
+  const flee: typeof import('.././flee') = require('.././flee')
   // Клетка ног — с пола: в прыжке floored-клетка на блок выше, и вся оценка
   // (клетка коробки, нора) съезжает на уровень.
   try { bot.pathfinder.setGoal(null) } catch {}
-  await require('.././fortify').landed(bot, 600)
+  await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
   let a: any = refugeLook(session)
   out.look = lookLine(a)
   out.lookMs = a.ms
@@ -86,7 +86,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       const r = await toShore(session, ctl, { step })
       step(`берег: ${r.ok ? 'на суше' : 'не вышел'} за ${r.seconds} с`)
     } catch (e) { step(`берег: ${e.message}`) }
-    await require('.././fortify').landed(bot, 600)
+    await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
     a = refugeLook(session)
   }
   if (a.water && !ctl.aborted) {
@@ -101,7 +101,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
   let pick = chooseRefuge(a)
   // Паук вплотную, а с ним не больше одного ходячего — сперва бой (ND_REFUGE_SPIDER=1): от паука не оторваться в
   const spiderFirst = async () => {
-    if (process.env.ND_REFUGE_SPIDER === '0' || ctl.aborted || (bot.health ?? 0) < 8 || !require('.././items').bestWeapon(bot)) return false
+    if (process.env.ND_REFUGE_SPIDER === '0' || ctl.aborted || (bot.health ?? 0) < 8 || !(require('.././items') as typeof import('.././items')).bestWeapon(bot)) return false
     const hs = flee.hostilesAround(bot, 10).filter(h => refugeFoe(bot, h.e, session))
     // Паук в 6 бл. — дойдёт за 1.5 с (3.9 бл/с, прыжок с 2–4): от него не оторваться и коробку при нём не закрыть.
     const sp = hs.find(h => /^(spider|cave_spider)$/.test(h.e.name) && h.d <= 6 && Math.abs(h.e.position.y - bot.entity.position.y) <= 3)
@@ -111,9 +111,9 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
     {
       step(`${sp.e.name} вплотную (${sp.d.toFixed(1)} бл.) — сперва бой`)
       let r = null
-      try { r = await require('.././combat').fight(session, ctl, { target: '#' + sp.e.id, timeoutSeconds: 12, retreatAtHealth: 5, purpose: 'defense' }) } catch (e) { r = { error: e.message } }
+      try { r = await (require('.././combat') as typeof import('.././combat')).fight(session, ctl, { target: '#' + sp.e.id, timeoutSeconds: 12, retreatAtHealth: 5, purpose: 'defense' }) } catch (e) { r = { error: e.message } }
       step(`паук: ${r && (r.killed || (r.kills && r.kills.length)) ? 'убит' : String((r && (r.stopped || r.error)) || 'бой кончился').slice(0, 60)}, хп ${Math.round(bot.health ?? 0)}`)
-      await require('.././fortify').landed(bot, 600)
+      await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
       a = refugeLook(session)
       pick = chooseRefuge(a)
       return true
@@ -141,7 +141,7 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
     const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
     const moved = bot.entity.position.distanceTo(p0)
     out.ran = (out.ran || 0) + Math.round(moved)
-    await require('.././fortify').landed(bot, 600)
+    await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
     a = refugeLook(session)
     pick = chooseRefuge(a)
     if (f.cornered) { step('прижали — строюсь где стою'); break }
@@ -163,14 +163,14 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
     if (ctl.aborted || (bot.health ?? 0) <= 0) break
     // Откат (коробка не встала): место и мобы уже другие — если ходячий дойдёт
     if (!first && (how === 'hole' || how === 'pillar')) {
-      await require('.././fortify').landed(bot, 600)
+      await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
       a = refugeLook(session)
       if (a.nearest && a.nearest.d <= 8) { step(`${how}: ${a.nearest.name} в ${a.nearest.d} бл. — не успеть, бегство`); continue }
       if (outrun(a, how)) {
         step(`${how}: ${a.nearest.name} в ${a.nearest.d} бл. — сперва рывок`)
         const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
         out.ran = (out.ran || 0) + (f.ran || 0)
-        await require('.././fortify').landed(bot, 600)
+        await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
         a = refugeLook(session)
         if ((how === 'hole' && !a.hole) || (how === 'pillar' && !a.pillar)) continue
       }
@@ -207,22 +207,22 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       // speedrun caller can choose work or food without reopening to the shooter.
       const noFoodWork = session.playPolicy?.mode === 'speedrun' && !out.untilDawn && hold.why === 'no_food'
       if ((out.stayIn || noFoodWork) && hold.why !== 'breached' && hold.why !== 'died' && !ctl.aborted && (bot.health ?? 0) > 0 &&
-        require('.././fortify').enclosure(bot, b.cell).sealed) {
+        (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
         step('остаюсь в коробке — дальше вниз из неё')
         out.stayed = true
         break
       }
       // Снаружи опасно, а коробка цела — сидеть (NO_FOOD/срок не повод выходить к ним).
-      if ((sitOn() || out.untilDawn) && hold.why !== 'breached' && hold.why !== 'died' && require('.././fortify').enclosure(bot, b.cell).sealed) {
+      if ((sitOn() || out.untilDawn) && hold.why !== 'breached' && hold.why !== 'died' && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
         const st = await sitTight(session, ctl, { at: b.cell, t0, box: b, step, untilDawn: out.untilDawn })
         if (st.sat) out.sat = Math.round(st.sat / 1000)
       }
       // Вскрыли — не ждать у дыры, выходить с дальней стороны.
-      if (hold.why !== 'breached' && require('.././fortify').enclosure(bot, b.cell).sealed) {
+      if (hold.why !== 'breached' && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
         const clear = await waitClear(session, ctl, b.cell, { deadline: Math.min(deadline + 20000, gameClock.now() + 30000), reach: 4, step })
         // Срок вышел и хп полное — не повод вскрывать целую коробку к толпе (как у норы ниже; Codex ne-deaths №4:
         // VR25-3 — вышел к 10 ифритам, VR26-1 — к эндерменам). Дальше — вниз/вбок из коробки, как stayIn.
-        if (!clear && sitOn() && !ctl.aborted && (bot.health ?? 0) > 0 && require('.././fortify').enclosure(bot, b.cell).sealed) {
+        if (!clear && sitOn() && !ctl.aborted && (bot.health ?? 0) > 0 && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
           step('у выхода враги — коробку не вскрываю, остаюсь')
           out.stayed = true
           break
@@ -347,11 +347,11 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
 
 async function takeHole (session, ctl, step) {
   // Место могло смениться (рывок, коробка не встала) — нора копается ли здесь.
-  if (!holePlan(grounded(session.bot), session.mcData, require('.././fortify').feetCell(session.bot))) { step('нора: здесь не копается'); return null }
+  if (!holePlan(grounded(session.bot), session.mcData, (require('.././fortify') as typeof import('.././fortify')).feetCell(session.bot))) { step('нора: здесь не копается'); return null }
   try {
     // После рывка тело где попало на клетке: sinkOne копает блок под floored-клеткой,
     // а стоит тело и на соседней — не проваливается. Сперва встать в центр.
-    try { await require('.././fortify').centerInCell(session.bot) } catch {}
+    try { await (require('.././fortify') as typeof import('.././fortify')).centerInCell(session.bot) } catch {}
     const r = await enterShelter(session, ctl, { depth: HOLE_DEPTH, torch: false, box: false, maxSwings: HOLE_DEPTH + 2, center: true })
     step(`нора: ${r.note || ''}`)
     if (r.sealed) return { depth: r.depth }
@@ -365,7 +365,7 @@ async function takeHole (session, ctl, step) {
     if (r.sealed) return { depth: r.depth }
     // Открытая нора при ходячих рядом — не укрытие: зомби сваливается в ствол
     // сверху и бьёт в голову (J: 3 смерти). Сидеть — только если их нет.
-    const walkers = require('.././flee').hostilesAround(session.bot, 8).filter(h => refugeFoe(session.bot, h.e, session) && h.doc.radius > 0)
+    const walkers = (require('.././flee') as typeof import('.././flee')).hostilesAround(session.bot, 8).filter(h => refugeFoe(session.bot, h.e, session) && h.doc.radius > 0)
     if (r.depth >= 2 && !walkers.length) { step('нора открыта, но на 2+ вниз и ходячих нет — сижу'); return { depth: r.depth, open: true } }
     if (r.depth) await exitShelter(session, ctl, { depth: r.depth })
   } catch (e) { step(`нора: ${e.message}`) }
@@ -374,16 +374,16 @@ async function takeHole (session, ctl, step) {
 
 async function takePillar (session, ctl, step) {
   const bot = session.bot
-  try { await require('.././fortify').centerInCell(bot) } catch {}
-  const lift = standTop(bot, require('.././fortify').feetCell(bot))
+  try { await (require('.././fortify') as typeof import('.././fortify')).centerInCell(bot) } catch {}
+  const lift = standTop(bot, (require('.././fortify') as typeof import('.././fortify')).feetCell(bot))
   const want = PILLAR + lift
-  if (require('.././pack').buildCount(bot, worlds.worldOf(bot)) < want) { step(`столб: на ${want} блоков не хватает`); return null }
+  if ((require('.././pack') as typeof import('.././pack')).buildCount(bot, worlds.worldOf(bot)) < want) { step(`столб: на ${want} блоков не хватает`); return null }
   const y0 = bot.entity.position.y
   // Ходячий вплотную толкает тело с прыжка: блок встаёт, а тело — рядом на земле
   // (G: «4 бл., ноги y150»). Сперва отбросить его ударом, как у стены коробки.
-  try { await require('.././fortify').shoveNear(bot, 1.6) } catch {}
+  try { await (require('.././fortify') as typeof import('.././fortify')).shoveNear(bot, 1.6) } catch {}
   let r
-  try { r = await require('.././build').towerUp(bot, ctl, want, { sneak: true, fast: true }) } catch (e) { r = { placed: 0, why: [e.message] } }
+  try { r = await (require('.././build') as typeof import('.././build')).towerUp(bot, ctl, want, { sneak: true, fast: true }) } catch (e) { r = { placed: 0, why: [e.message] } }
   const rose = bot.entity.position.y - y0
   step(`столб: ${r.placed} бл., подъём ${rose.toFixed(1)}${r.why ? ' — ' + r.why.slice(0, 2).join('; ') : ''}`)
   // Верх — по телу, а не по счёту блоков.
@@ -394,7 +394,7 @@ async function takePillar (session, ctl, step) {
 async function leavePillar (session, ctl, step) {
   const bot = session.bot
   if ((bot.health ?? 0) <= 0) return null
-  const foes = require('.././flee').hostilesAround(bot, 16).filter(h => refugeFoe(bot, h.e, session))
+  const foes = (require('.././flee') as typeof import('.././flee')).hostilesAround(bot, 16).filter(h => refugeFoe(bot, h.e, session))
   let yaw = bot.entity.yaw
   if (foes.length) {
     const f = foes[0].e.position
@@ -408,15 +408,15 @@ async function leavePillar (session, ctl, step) {
     bot.setControlState('jump', true)
     await sleep(450)
   } catch {} finally { try { bot.clearControlStates() } catch {} }
-  await require('.././fortify').landed(bot, 1500)
+  await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 1500)
   step(`слез со столба, хп ${Math.round(bot.health ?? 0)}`)
   return { ok: true }
 }
 
 async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 3000 }: any = {}) {
   const bot = session.bot
-  const flee = require('.././flee')
-  const { stepSafe, keyDir } = require('.././moves')
+  const flee: typeof import('.././flee') = require('.././flee')
+  const { stepSafe, keyDir }: typeof import('.././moves') = require('.././moves')
   const t0 = gameClock.now()
   const hp0 = Math.round(bot.health ?? 0)
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
@@ -424,7 +424,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
   ctl.onAbort.push(stop)
   try { bot.stopDigging() } catch {}
   try { bot.pathfinder.setGoal(null) } catch {}
-  const edgeGuard = require('.././edges').guard(bot)
+  const edgeGuard = (require('.././edges') as typeof import('.././edges')).guard(bot)
   // Ближний опасный крипер на каждом шаге: шипящий важнее, второй крипер не забывать (ревью Codex 02.10).
   const creeper = () => {
     let best = null
@@ -467,7 +467,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
       if (moved > 0.4) { lastPos = bot.entity.position.clone(); stuckSince = 0 } else if (!stuckSince) stuckSince = now
       // Прижали — сперва заслон: блок между нами на уровне глаз (и ног) рвёт ему видимость, а без неё SwellGoal.tick
       // гасит фитиль (MOBS.md §1). Ставится честно (placeBlockAt honest), ~0.2 с. Не встал — удар.
-      if ((!plan || (stuckSince && now - stuckSince > 500)) && dist <= 4.5 && !walled && require('.././build').pickFiller(bot)) {
+      if ((!plan || (stuckSince && now - stuckSince > 500)) && dist <= 4.5 && !walled && (require('.././build') as typeof import('.././build')).pickFiller(bot)) {
         walled = true
         stop()
         const me = bot.entity.position
@@ -478,7 +478,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
         let put = 0
         for (const dy of [1, 0]) {
           try {
-            const r = await require('.././build').placeBlockAt(bot, cell.offset(0, dy, 0), { timeoutMs: 500, honest: true, steady: true })
+            const r = await (require('.././build') as typeof import('.././build')).placeBlockAt(bot, cell.offset(0, dy, 0), { timeoutMs: 500, honest: true, steady: true })
             if (r && r.ok) put++
           } catch {}
         }
@@ -486,11 +486,11 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
         if (put) { await sleep(100); continue }
       }
       if ((!plan || (stuckSince && now - stuckSince > 500)) && dist <= 3.6 && now - hitAt > 650) {
-        const aimed = require('.././pick').aim(bot, c)
+        const aimed = (require('.././pick') as typeof import('.././pick')).aim(bot, c)
         if (aimed && aimed.point) {
           stop()
           try {
-            const w = require('.././items').bestWeapon(bot)
+            const w = (require('.././items') as typeof import('.././items')).bestWeapon(bot)
             if (w && (!bot.heldItem || bot.heldItem.type !== w.type)) await bot.equip(w, 'hand').catch(() => {})
             await bot.lookAt(aimed.point, true)
             bot.attack(c)
@@ -505,7 +505,7 @@ async function dodgeCreeper (session, ctl, { id = null, minDist = 8, maxMs = 300
       const yaw = plan ? plan.yaw : Math.atan2(-(me.x - c.position.x), -(me.z - c.position.z))
       bot.look(yaw, 0, true).catch(() => {})
       const f = keyDir(bot, 'forward')
-      set('forward', stepSafe(bot, f) || require('.././movement').inWater(bot))
+      set('forward', stepSafe(bot, f) || (require('.././movement') as typeof import('.././movement')).inWater(bot))
       set('sprint', (bot.food ?? 20) > 6)
       const ahead = bot.blockAt(me.offset(f.x * 0.8, 0, f.z * 0.8).floored())
       set('jump', !!(ahead && ahead.boundingBox === 'block'))

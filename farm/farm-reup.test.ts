@@ -1,7 +1,7 @@
 'use strict'
 // S8c (07.10, замечание проверки д): up --reup гасит только свои слоты диапазона.
-const test = require('node:test')
-const assert = require('node:assert/strict')
+import test = require('node:test')
+import assert = require('node:assert/strict')
 const { reupPlan } = require('./farm')
 
 test('--reup: свой снимок (тот же поток) — down; чужой или без снимка — отказ; не поднятый — только чистка записи', () => {

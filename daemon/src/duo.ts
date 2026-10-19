@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // 1 против 2 (2026-09-26: пользователь с другом часто бьют одного бота вдвоём;
 // PVP-RESEARCH б.21, в.9). Что делает про-игрок против двоих:
 //  · держит обоих в передней полусфере: угол между ними из его точки больше
@@ -27,14 +27,14 @@ const gameClock = require('./game-clock')
 //  * LivingEntity.travel: спринт 0.28 бл/тик (tempo.SPRINT_BPT) — догоняют с той
 //    же скоростью, поэтому рывок — не побег, а способ растянуть их.
 
-const Vec3 = require('vec3')
-const edges = require('./edges')
-const tempo = require('./tempo')
-const read = require('./read')
-const mace = require('./mace')
-const assess = require('./assess')
-const { raySees } = require('./perception')
-const { solid, stepSafe, keyDir } = require('./moves')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import edges = require('./edges')
+import * as tempo from './tempo'
+import * as read from './read'
+import mace = require('./mace')
+import * as assess from './assess'
+import { raySees } from './perception'
+import { solid, stepSafe, keyDir } from './moves'
 
 const ON = process.env.ND_DUO !== '0'
 const EYE = 1.62
@@ -159,7 +159,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
 
   // Хп игрока — оценкой (правило пользователя 06.10, pvp/combat-observe.trackFoe), мобам — точное. Трекер на
   // каждого врага-игрока этого боя, снимается в close().
-  const co = require('./pvp/combat-observe')
+  const co: typeof import('./pvp/combat-observe') = require('./pvp/combat-observe')
   const hpTrackers = new Map()
   const ehpOf = (e) => {
     if (!co.isPlayer(e)) { const hp = read.healthRaw(bot, e); return (hp == null ? 20 : hp) + read.absorptionOf(bot, e) }
@@ -649,4 +649,4 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   }
 }
 
-module.exports = { create, ON }
+export { create, ON }

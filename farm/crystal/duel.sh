@@ -1,5 +1,5 @@
 #!/bin/sh
-# Дуэли кристаллами на слоте фермы (2026-09-30): арена daemon/arena.js на
+# Дуэли кристаллами на слоте фермы (2026-09-30): арена daemon/arena/arena.js на
 # сервере слота, бойцы NeuroFarm<i> (демон 8800+i) и NeuroFarm<i>b (8900+i).
 #   sh farm/crystal/duel.sh 29 10 c2-29          10 раундов, вывод farm/crystal/c2-29.out
 #   EXTRA="ARENA_HOLES=8" sh farm/crystal/duel.sh 30 6 holes-30
@@ -24,7 +24,7 @@ CODE_DIR=$(node -e '
   const code = JSON.parse(fs.readFileSync("farm/slots.json", "utf8")).slots?.[process.argv[1]]?.code
   if (code && !/^[\w.-]+$/.test(code)) throw new Error("invalid slot snapshot")
   const dir = code && code !== "live" ? ".daemon-" + code : "daemon"
-  if (!fs.existsSync(dir + "/arena.js")) throw new Error("arena harness missing: " + dir)
+  if (!fs.existsSync(dir + "/arena/arena.js")) throw new Error("arena harness missing: " + dir)
   process.stdout.write(dir)
 ' "$SLOT") || exit 1
 cd "$CODE_DIR" || exit 1
@@ -32,4 +32,4 @@ env ARENA_A=ws://127.0.0.1:$PA$PS ARENA_B=ws://127.0.0.1:$PB$PS \
   ARENA_NAME_A=$NA_ ARENA_NAME_B=$NB_ ND_SERVER_LOG="${ND_SERVER_LOG:-../farm/server-$SLOT/logs/latest.log}" \
   ARENA_ENCH=0 ARENA_NOTIMER=1 ARENA_STALL_S=120 ARENA_RETURN_S=120 ARENA_R=${ARENA_R:-24} \
   ARENA_POS="${ARENA_POS:-200 100 200}" ARENA_MODE=${ARENA_MODE:-kits}   ARENA_PREP_RATE=${ARENA_PREP_RATE:-20} ARENA_FIGHT_RATE=${ARENA_FIGHT_RATE:-750} $EXTRA \
-  node arena.js "$ROUNDS" "${KIT:-кристаллы}" > "${OUT:-../farm/crystal/$TAG.out}" 2>&1
+  node arena/arena.js "$ROUNDS" "${KIT:-кристаллы}" > "${OUT:-../farm/crystal/$TAG.out}" 2>&1

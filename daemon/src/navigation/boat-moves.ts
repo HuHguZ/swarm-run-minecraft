@@ -3,11 +3,11 @@
 // подобрать (не расходуется). Верхнюю грань выше глаз не видно, поэтому уступ — на 2 бл.: в прыжке глаза выше его грани.
 // Цепочкой — по уступам, пока они есть; дальше столб или ступени (решает вызывающий по цене).
 import { Vec3 } from 'vec3'
-const clock = require('../game-clock')
-const pick = require('../pick')
-const ride = require('../ride')
-const { boatItem, boatBaseVisible, placeBoatOn, mountBoat } = require('../combat/boat-placement')
-const { breakBoatEntity } = require('../combat/boat-hop')
+import * as clock from '../game-clock'
+import pick = require('../pick')
+import ride = require('../ride')
+import { boatItem, boatBaseVisible, placeBoatOn, mountBoat } from '../combat/boat-placement'
+import { breakBoatEntity } from '../combat/boat-hop'
 
 type Body = Record<string, any>
 type Ctl = { aborted: boolean; onAbort: Array<() => void> }
@@ -50,7 +50,7 @@ export async function boatClimbStep(session: Body, ctl: Ctl, base: Vec3): Promis
   await bot.lookAt(top, true)
   // Прыжок; в верхней точке (глаза выше грани уступа) — лодка на грань.
   bot.setControlState('jump', true)
-  let placed: Body | null = null
+  let placed: Body | null | undefined = null
   try {
     for (let t = 0; t < 14 && !ctl.aborted && !placed; t++) {
       await clock.sleep(50)
@@ -74,7 +74,7 @@ export async function boatClimbStep(session: Body, ctl: Ctl, base: Vec3): Promis
   for (let k = 0; k < 3 && bot.vehicle && !ctl.aborted; k++) await ride.dismount(bot, 1500)
   log(`высадка: ${JSON.stringify({ vehicle: !!bot.vehicle, pos: bot.entity.position.toString() })}`)
   await breakBoatEntity(session, ctl, placed.id, 2500)
-  try { await require('../actions').collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 2500 }) } catch {}
+  try { await (require('../actions') as typeof import('../actions')).collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 2500 }) } catch {}
   const up = bot.entity.position.y - y0
   return done(up >= 1.5 && !bot.vehicle, up >= 1.5 ? undefined : 'not_raised')
 }
@@ -118,7 +118,7 @@ export async function maybeAscend(session: Body, ctl: Ctl, goalXYZ: { x: number;
   const dx = goalXYZ.x + .5 - me.x; const dz = goalXYZ.z + .5 - me.z
   const dir = Math.abs(dx) >= Math.abs(dz) ? new Vec3(Math.sign(dx) || 1, 0, 0) : new Vec3(0, 0, Math.sign(dz) || 1)
   if (!climbLedge(bot, dir)) return { used: null, why: 'нет уступа' }
-  const hopgoto = require('../hopgoto')
+  const hopgoto: typeof import('../hopgoto') = require('../hopgoto')
   const walk = await hopgoto.planWalk(bot, goal, { ms: opt.planMs ?? 400, abortIf: () => ctl.aborted })
   const speed = bot.pathfinder?.movements?.allowSprinting ? hopgoto.RUN : hopgoto.WALK
   const tail = walk?.path?.length ? walk.path[walk.path.length - 1] : null

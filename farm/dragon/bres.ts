@@ -1,7 +1,7 @@
 // Итоги серии «только кровати»: node bres.js <префикс тега> [с какого времени ISO/HH:MM МСК]
 // Победа — сервер: дракона нет и портал горит (try-dragon e2e killed) и тело не умирало.
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const pre = process.argv[2] || 'b3-'
 let since = process.argv[3] || null

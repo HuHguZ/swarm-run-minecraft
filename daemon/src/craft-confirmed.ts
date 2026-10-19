@@ -1,8 +1,8 @@
 import type { Bot } from 'mineflayer'
 import type { Window } from 'prismarine-windows'
 
-const { confirmedClick, refresh, sameStack } = require('./invsync')
-const clock = require('./game-clock')
+import { confirmedClick, refresh, sameStack } from './invsync'
+import * as clock from './game-clock'
 
 interface Ingredient { id: number; metadata?: number | null; count?: number }
 export interface CraftRecipe {
@@ -26,7 +26,7 @@ export async function putCursorAway(bot: Bot, window: Window, preserve?: Readonl
       if (!window.slots[slot]) { destination = slot; break }
     }
     if (destination < 0) {
-      const disposable = require('./pack').tossPlan(bot, { below: 2, inventory: window, preserve })[0]
+      const disposable = (require('./pack') as typeof import('./pack')).tossPlan(bot, { below: 2, inventory: window, preserve })[0]
       if (disposable) {
         const discarded = window.slots[disposable.slot]
         await confirmedClick(bot, disposable.slot)

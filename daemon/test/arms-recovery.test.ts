@@ -2,23 +2,20 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 // Исполняем настоящий ArmsEnv, не сетевой bootstrap сцены внизу arms-run.
-const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
+const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
 const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
-const indexPath = join(__dirname, '../src/index.js')
-const indexSource = readFileSync(indexPath, 'utf8')
-const statusBody = indexSource.slice(indexSource.indexOf('function enchantedGear'), indexSource.indexOf('const wss ='))
+// Настоящий RPC status демона (src/rpc/observation.ts) над тестовой сессией — без bootstrap демона.
+const { observationMethods }: typeof import('../src/rpc/observation') = require('../src/rpc/observation')
 function fixture({ food = 10, inventory = {}, items = null, eat = null, at = null, interrupted = false, foe = null, bot = null, fight = null }: any = {}) {
   let now = 0
   let health = 3
   const calls: any[] = []
-  const status = bot && runInNewContext(statusBody + '\nmethods.status', {
-    session: { bot, immediate: (fn: any) => fn() }, cfg: {}, require: createRequire(indexPath)
-  })
+  const status = bot && observationMethods({ session: { bot, immediate: (fn: any) => fn() }, cfg: {}, state: { dangerWatch: null } }).status
   const side: any = { t0: 0, foe: foe?.name, know: { foe: null, areas: [], scouted: new Set(), chests: new Map(), caches: new Map() },
     stats: { engages: 0, firstEngage: null, powerAtEngage: null, fightEvents: [], fightWhy: {}, fights: 0 },
     async call(method: string, params: any) {
@@ -34,20 +31,20 @@ function fixture({ food = 10, inventory = {}, items = null, eat = null, at = nul
       throw new Error(`unexpected RPC ${method}`)
     }
   }
-  const { emptyWorld, fact } = require('../src/core/world-state')
-  const context = { AG: require('../src/pvp/arms-graph'), Loot: require('../src/pvp/arms-loot'), LOOT_PRIOR: [], emptyWorld, fact, LOOT_MS: 60000, X: 0, Y: 0, Z: 0, L: { spawns: [{}] }, W: (p: any) => p,
+  const { emptyWorld, fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const context = { AG: (require('../src/pvp/arms-graph') as typeof import('../src/pvp/arms-graph')), Loot: (require('../src/pvp/arms-loot') as typeof import('../src/pvp/arms-loot')), LOOT_PRIOR: [], emptyWorld, fact, LOOT_MS: 60000, X: 0, Y: 0, Z: 0, L: { spawns: [{}] }, W: (p: any) => p,
     every: () => null, gameClock: { now: () => now, clearInterval() {} },
     pace: async (ms: number) => { now += ms; if (at) ({ health, food } = at(now, { health, food })) }
   }
-  const ArmsEnv = runInNewContext(body + '\nArmsEnv', context)
+  const ArmsEnv = runInNewContext(body + '\nArmsEnv', cjsContext(context))
   const env = new ArmsEnv(side, { over: false, roundScope: 'test-round' })
   return { side, calls, now: () => now, observe: () => env.observe(), run: () => env.execute({ skill: 'arms.heal' }, new AbortController().signal),
     engage: () => env.execute({ skill: 'arms.engage' }, new AbortController().signal) }
 }
 
 test('P8 status → Recover → Engage: observer и бой читают одну честную оценку без двойного aging', async () => {
-  const co = require('../src/pvp/combat-observe')
-  const { Vec3 } = require('vec3')
+  const co: typeof import('../src/pvp/combat-observe') = require('../src/pvp/combat-observe')
+  const { Vec3 }: typeof import('vec3') = require('vec3')
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter(); bot.inventory = { slots: [] }
   bot.entity = { id: 1, position: new Vec3(0, 0, 0), onGround: true }

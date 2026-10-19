@@ -1,11 +1,14 @@
+import { declarationsOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { stripTypeScriptTypes } from 'node:module'
+import { cjsContext } from './cjs-context'
 
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+const source = campaignTs()
 function fixture(env = {}) {
   const calls: any[] = [], inventory: any = { bucket: 1, flint_and_steel: 1, stone_pickaxe: 1 }
   const ctx: any = { process: { env }, state: { pos: { x: 0, y: 8, z: 0 }, health: 20 },
@@ -19,11 +22,11 @@ function fixture(env = {}) {
     smeltAll: async () => { inventory.iron_ingot = 3; inventory.raw_iron = 0 },
     craft: async () => { inventory.iron_ingot -= 3; inventory.bucket++ }
   }
-  vm.createContext(ctx)
-  vm.runInContext(source.slice(source.indexOf('const lavaApproachSeconds ='), source.indexOf('const surfaceLavaNear =')) + '\nthis.lavaPrice=lavaApproachSeconds', ctx)
-  for (const [a, b] of [['async function kitWaterHere', "defStage('water',"], ['async function approachCastLava', "defStage('cast',"], ['const portalBuckets =', 'async function spendIron ()']]) {
-    const start = source.indexOf(a), end = source.indexOf(b, start)
-    if (start >= 0) vm.runInContext(source.slice(start, end), ctx)
+  vm.createContext(cjsContext(withSetters(ctx)))
+  // Объявления по именам: части daemon/campaign/ разнесли бывших соседей (stages/table, observe, portal-kit, deep-cast, gear).
+  vm.runInContext(declarationsOf(source, 'lavaApproachSeconds', 'lavaMemoryPlace') + '\nthis.lavaPrice=lavaApproachSeconds', ctx)
+  for (const names of [['kitWaterHere', 'waterSearchDirection'], ['approachCastLava'], ['portalBuckets', 'castKitSupplyFailure', 'castForKit', 'earlyShieldBusy', 'earlyShieldFailed', 'earlyShield']]) {
+    vm.runInContext(declarationsOf(source, ...names), ctx)
   }
   return { ctx, calls, inventory }
 }
@@ -115,7 +118,7 @@ test('snapshot lava memory restores the seen source rather than the observer 53 
   assert.equal(fixture({ND_OW_KIT_LAVA:'0'}).ctx.lavaMemoryPlace(place),place)
   assert.equal(f.ctx.lavaMemoryPlace({...place,note:'сгорел тут'}).y,15)
   Object.assign(f.ctx,{BASTION_KEYS:[],lavaBad:()=>false,call:async()=>({detail:{state:{places:{'лава':place}}}})})
-  vm.runInContext(stripTypeScriptTypes(source.slice(source.indexOf('async function readMemory ()'),source.indexOf('let guarding ='))),f.ctx)
+  vm.runInContext(stripTypeScriptTypes(declarationsOf(source,'readMemory')),f.ctx)
   await f.ctx.readMemory()
   assert.deepEqual([f.ctx.known.lava.x,f.ctx.known.lava.y,f.ctx.known.lava.z],[-2,68,-26])
 })

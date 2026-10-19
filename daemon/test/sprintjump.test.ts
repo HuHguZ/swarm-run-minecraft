@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { shouldJump } = require('../src/sprintjump')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { shouldJump } from '../src/sprintjump'
 
 // Floor y=0 along x 0..8, z -1..1 (stone); feet at y=1. `extra` overrides cells "x,y,z".
 function bot (extra: Record<string, string> = {}) {
@@ -30,8 +30,8 @@ test('sprint jump only on a straight segment whose sides hold the body (no lava,
 })
 
 function rig (nodes: any[], extra: Record<string, string> = {}) {
-  const { EventEmitter } = require('node:events')
-  const { install } = require('../src/sprintjump')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { install }: typeof import('../src/sprintjump') = require('../src/sprintjump')
   const b: any = Object.assign(new EventEmitter(), bot(extra))
   b.setControlState = () => {}
   install(b)

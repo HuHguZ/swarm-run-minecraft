@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 interface ArmorItem { name: string; slot: number; maxDurability: number; durabilityUsed: number }
 function armorFixture(worn: string[] = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'],
@@ -26,9 +27,9 @@ function armorFixture(worn: string[] = ['iron_helmet', 'iron_chestplate', 'iron_
       goldCounts.push(slots.slice(5, 9).filter(entry => entry?.name.startsWith('golden_')).length)
     } }
   const module = { exports: {} as { equipBestArmor(session: unknown, ctl: unknown): Promise<{ equipped: unknown[]; defense: number }> } }
-  runInNewContext(readFileSync(process.env.ARMOR_TEST_SOURCE ?? resolve(__dirname, '../src/armor.js'), 'utf8'), {
+  runInNewContext(readFileSync(process.env.ARMOR_TEST_SOURCE ?? resolve(__dirname, '../src/armor.js'), 'utf8'), cjsContext({
     module, require: (name: string) => name === './game-clock' ? { now: () => now } : name === './movement'
-      ? { sleep: async (milliseconds: number) => { now += milliseconds; timing.afterSleep?.() } } : undefined })
+      ? { sleep: async (milliseconds: number) => { now += milliseconds; timing.afterSleep?.() } } : undefined }))
   return { bot, clicks, goldCounts, timing, session: { bot }, equip: module.exports.equipBestArmor }
 }
 

@@ -1,10 +1,10 @@
 'use strict'
 // Регрессии по ревью Codex 30.09 (codex-lab/review-bastion2-20260930.md): закрытый штрек и переход по Аду.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Vec3 } = require('vec3')
-const SL = require('../src/sealed')
-const data = require('minecraft-data')('1.21.11')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Vec3 } from 'vec3'
+const SL: any = require('../src/sealed')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 // Тело в мире-незераке: клетки из world — воздух и т. п.; копка превращает клетку в воздух; шаг вперёд —
 // телепорт в клетку взгляда (как в пробах Codex).
@@ -53,7 +53,7 @@ test('закрытый штрек: новый пробой после закры
   try {
     assert.equal((await SL.execute({ bot }, { aborted: false }, [flat(2)], S)).ok, true)
   } finally { SL.fillCell = fill0 }
-  assert.ok(filled > 0 || S.exposed === true, 'пробой замечен: засыпка за спиной или exposed')
+  assert.ok(filled > 0 || (S.exposed as boolean) === true, 'пробой замечен: засыпка за спиной или exposed')
 })
 
 test('закрытый штрек: гравий — не пол (план)', async () => {
@@ -70,7 +70,7 @@ test('закрытый штрек: гравий — не пол (план)', asy
 })
 
 test('штрек по Аду: вне радиуса — не «дошёл», даже если цель куска расширилась', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   SL.plan = async o => { const a = o.starts[0]; return o.goal(a.x, a.y, a.z) ? { ok: true, path: [] } : { ok: false, why: {} as Record<string, any> } }
   try {
@@ -82,7 +82,7 @@ test('штрек по Аду: вне радиуса — не «дошёл», д�
 })
 
 test('штрек по Аду: запрет вскрытия у бастиона — по каждой клетке, а не по старту куска', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   const ctl: Record<string, any> = { aborted: false }
   let inside = null; let outside = null
@@ -101,7 +101,7 @@ test('штрек по Аду: запрет вскрытия у бастиона 
 })
 
 test('штрек по Аду: финальный план не вскрывает двор внутри noBreachNear', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan; const execute0 = SL.execute
   const ctl: Record<string, any> = { aborted: false }
   const breaches = []
@@ -131,9 +131,9 @@ test('штрек по Аду: финальный план не вскрывае�
 })
 
 test('фильтр инструментов: при штреке по незераку железная кирка не берётся, для золота — берётся', () => {
-  const tools = require('../src/tools')
-  const T = require('../src/tunnel')
-  const mcBlock = require('prismarine-block')('1.21.11')
+  const tools: typeof import('../src/tools') = require('../src/tools')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
+  const mcBlock = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
   const pick = (name, left, slot) => ({ name, type: data.itemsByName[name].id, maxDurability: data.itemsByName[name].maxDurability, durabilityUsed: data.itemsByName[name].maxDurability - left, slot, count: 1 })
   const stone = pick('stone_pickaxe', 8, 10)
   const iron = pick('iron_pickaxe', 250, 11)
@@ -147,7 +147,7 @@ test('фильтр инструментов: при штреке по незер
 })
 
 test('штрек по Аду: в радиусе по горизонтали, но на 40 блоков ниже цели — не «дошёл»', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   SL.plan = async o => { const a = o.starts[0]; return o.goal(a.x, a.y, a.z) ? { ok: true, path: [] } : { ok: false, why: {} as Record<string, any> } }
   try {
@@ -159,7 +159,7 @@ test('штрек по Аду: в радиусе по горизонтали, н�
 })
 
 test('штрек по маршруту: кирок на дорогу не хватит — не начинает', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   let plans = 0
   SL.plan = async () => { plans++; return { ok: false, why: {} as Record<string, any> } }
@@ -174,7 +174,7 @@ test('штрек по маршруту: кирок на дорогу не хва
 })
 
 test('штрек по маршруту: вход у ближней к цели точки, куски — без права вскрытия', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   const ctl: Record<string, any> = { aborted: false }
   const calls = []
@@ -197,7 +197,7 @@ test('штрек по маршруту: вход у ближней к цели �
 })
 
 test('штрек по маршруту: тело у начала маршрута входит в его начало, а не у конца', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   const ctl: Record<string, any> = { aborted: false }
   let first = null
@@ -213,7 +213,7 @@ test('штрек по маршруту: тело у начала маршрут�
 })
 
 test('штрек по маршруту: открытая площадка портала допускает один безопасный вход ногами', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   SL.plan = async () => ({ ok: false, nodes: 1, why: { foreign: 12, hard: 2 } })
   try {
@@ -235,7 +235,7 @@ test('штрек по маршруту: открытая площадка пор
 })
 
 test('штрек по маршруту: отказ без движения не пропускает точки как пройденные', async () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const plan0 = SL.plan
   SL.plan = async () => ({ ok: false, nodes: 1, why: { foreign: 12 } })
   try {
@@ -251,8 +251,8 @@ test('штрек по маршруту: отказ без движения не 
 })
 
 test('запас кирок: брёвна из pickBudget действительно превращаются в каменные кирки', async () => {
-  const T = require('../src/tunnel')
-  const actions = require('../src/actions')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
+  const actions: typeof import('../src/actions/craft') = require('../src/actions/craft') // craft — в части craft (фасад — геттеры)
   const craft0 = actions.craft
   const item = (name, count) => ({ name, count, type: data.itemsByName[name].id, maxDurability: data.itemsByName[name].maxDurability, durabilityUsed: 0 })
   const inv = [item('birch_log', 3), item('oak_planks', 1), item('stick', 1), item('blackstone', 6), item('crafting_table', 1)]
@@ -274,9 +274,9 @@ test('запас кирок: брёвна из pickBudget действитель
 })
 
 test('запас кирок: при палках и брёвнах сначала делает недостающий верстак', async () => {
-  const T = require('../src/tunnel')
-  const actions = require('../src/actions')
-  const { spendablePlanks } = require('../src/items')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
+  const actions: typeof import('../src/actions/craft') = require('../src/actions/craft') // craft — в части craft (фасад — геттеры)
+  const { spendablePlanks }: typeof import('../src/items') = require('../src/items')
   const craft0 = actions.craft
   const item = (name, count) => ({ name, count, type: data.itemsByName[name].id })
   const inv = [item('birch_log', 1), item('oak_planks', 1), item('stick', 5), item('blackstone', 6)]
@@ -309,7 +309,7 @@ test('запас кирок: при палках и брёвнах сначал�
 })
 
 test('бюджет кирок: одно бревно даёт 4 доски, а новый верстак стоит ещё 4', () => {
-  const T = require('../src/tunnel')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
   const bot = fakeBot([{ name: 'birch_log', count: 3 }, { name: 'oak_planks', count: 1 }, { name: 'stick', count: 5 }, { name: 'blackstone', count: 60 }])
   bot.findBlock = () => null
   assert.equal(T.pickBudget(bot).craftable, 10, '13 досок минус 4 верстаку: 16 палок плюс имеющиеся 5')

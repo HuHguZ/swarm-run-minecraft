@@ -2,9 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createRecovery } from '../src/pvp/recovery'
-const Vec3 = require('vec3')
-const projectiles = require('../src/throw')
-const registry = require('minecraft-data')('1.21.11')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as projectiles from '../src/throw'
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const resistanceId = registry.effectsByName.Resistance.id
 const fireResistanceId = registry.effectsByName.FireResistance.id
 

@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 
-const SL = require('../src/sealed')
-const tools = require('../src/tools')
-const registry = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')(registry)
+import SL = require('../src/sealed')
+import * as tools from '../src/tools'
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
 
 type HandItem = { name: string; type: number; count: number; slot: number; maxDurability?: number; durabilityUsed?: number; enchants: [] }
 

@@ -5,14 +5,16 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
 import { EventEmitter } from 'node:events'
-const Vec3 = require('vec3')
-const esbuild = require('esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
+import { moduleSourceTs } from './source-fixture'
 
 function sourceModule(name: string, overrides: Record<string, unknown> = {}, extra = '') {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file), module = { exports: {} as Record<string, any> }
-  const code = esbuild.transformSync(readFileSync(file, 'utf8') + extra, { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  // actions — фасад и части src/actions/**: склейка одной областью видимости (spec частей пересчитаны от src/)
+  const code = esbuild.transformSync((name === 'actions' ? moduleSourceTs(file) : readFileSync(file, 'utf8')) + extra, { loader: 'ts', format: 'cjs' }).code
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -50,8 +52,10 @@ function fixture({ foe = 'zombie', distance = 1.1, visible = true, afterDuel = n
   const combat = sourceModule('combat', {
     './actions': actions, './combat-safety': safety,
     './play-policy': { decideFight: () => ({ skip: false }) },
-    './pvp': { duel: async () => { killed.isValid = false; afterDuel?.({ bot, ctl, remaining }); return { kills: ['zombie'], hp: '19 -> 15', landed: 4 } } }
-  }, `\nmodule.exports.__fightBody = fightBody; dressForFight = async () => ({}); corridorShape = () => ({ corridor: ${corridor} });`)
+    './pvp': { duel: async () => { killed.isValid = false; afterDuel?.({ bot, ctl, remaining }); return { kills: ['zombie'], hp: '19 -> 15', landed: 4 } } },
+    // Форма штрека — в части combat/corridor: подмена её модуля, а не переприсваивание в тексте combat.ts.
+    './combat/corridor': { ...(require('../src/combat/corridor') as typeof import('../src/combat/corridor')), corridorShape: () => ({ corridor }) }
+  }, `\nmodule.exports.__fightBody = fightBody; dressForFight = async () => ({});`)
   const guard = { watch() {}, sawMobs() {}, wear: async () => { if (corridor) killed.isValid = false }, raise: async () => {}, safety: { check: (p: any) => safety.inspect(bot, p) } }
   return { bot, ctl, checks, seen, remaining, run: () => combat.__fightBody({ bot }, ctl, { target: '#1966', engaged: true }, guard) }
 }

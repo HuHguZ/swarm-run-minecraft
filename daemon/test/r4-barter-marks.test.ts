@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { markPearls } = require('../src/barter-marks')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { markPearls } from '../src/barter-marks'
 test('first ten pearls timestamp persists after spending pearls or later samples', () => {
   const marks: Record<string, any> = {} as Record<string, any>; markPearls(marks, { ender_pearl: 9 }, 60)
   assert.equal(marks.pearls10, undefined)

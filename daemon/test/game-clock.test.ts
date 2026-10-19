@@ -1,9 +1,9 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { AsyncLocalStorage } = require('node:async_hooks')
-const { GameClock, wall, follow, snapshot, changes } = require('../src/game-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { GameClock, wall, follow, snapshot, changes } from '../src/game-clock'
 
 test('game delays and intervals use ticks, with cancellation and callback arguments', () => {
   const c = new GameClock({ manual: true, epoch: 1000 })
@@ -74,7 +74,7 @@ test('server age uses elapsed ticks, never daylight time or absolute world age',
 })
 
 test('bound clock listens to protocol controls and stops on end', () => {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   const c = new GameClock({ manual: true }).attach(bot)
   bot._client.emit('set_ticking_state', { tick_rate: 60, is_frozen: true })
@@ -352,8 +352,8 @@ test('air27 packet intervals date moving targets at observed TPS and recover a c
     c.dispose()
   }
 
-  const Vec3 = require('vec3')
-  const bow = require('../src/bow')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const bow: typeof import('../src/bow') = require('../src/bow')
   const c = new GameClock({ epoch: 0 })
   c.setState({ tick_rate: 750 })
   at = 17700; c.syncAge(11435841n)
@@ -374,9 +374,9 @@ test('air27 packet intervals date moving targets at observed TPS and recover a c
 })
 
 test('air28 native corrections neither compress movement time nor erase a glider velocity', t => {
-  const clock = require('../src/game-clock')
-  const bow = require('../src/bow')
-  const Vec3 = require('vec3')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const bow: typeof import('../src/bow') = require('../src/bow')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   let at = 3427.904
   t.mock.method(wall, 'monotonic', () => at)
   const c = new GameClock({ epoch: 0 })
@@ -415,8 +415,8 @@ test('air28 native corrections neither compress movement time nor erase a glider
 })
 
 test('air33 compressed position receipts cannot imply multiple native moves in less than their tick count', t => {
-  const bow = require('../src/bow')
-  const Vec3 = require('vec3')
+  const bow: typeof import('../src/bow') = require('../src/bow')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   let at = 0
   t.mock.method(wall, 'monotonic', () => at)
   const c = new GameClock({ epoch: 0 })
@@ -466,7 +466,7 @@ test('air33 compressed position receipts cannot imply multiple native moves in l
 
 test('rate and dimension changes discard the previous age sampling window', async t => {
   const time = driver(t)
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   const c = new GameClock({ manual: true }).attach(bot)
   c.setState({ tick_rate: 100 })
@@ -707,7 +707,7 @@ test('lockstep runs each confirmed grant at once with physics, never by measured
 
 test('lockstep keeps its age anchor across respawn; ordinary clocks re-anchor', () => {
   for (const lockstep of [false, true]) {
-    const bot = new EventEmitter()
+    const bot: any = new EventEmitter()
     bot._client = new EventEmitter()
     const c = new GameClock({ manual: true, lockstep }).attach(bot)
     bot._client.emit('update_time', { age: 100n })
@@ -721,7 +721,7 @@ test('lockstep keeps its age anchor across respawn; ordinary clocks re-anchor', 
 })
 
 test('lockstep options come only from the farm env', () => {
-  const { lockstepOptions } = require('../src/game-clock')
+  const { lockstepOptions }: typeof import('../src/game-clock') = require('../src/game-clock')
   assert.deepEqual(lockstepOptions({}), {})
   assert.deepEqual(lockstepOptions({ ND_LOCKSTEP: '0' }), {})
   assert.deepEqual(lockstepOptions({ ND_LOCKSTEP: '1' }), { lockstep: true, predictionTicks: 2 })

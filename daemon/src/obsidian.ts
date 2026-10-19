@@ -1,11 +1,11 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const tools = require('./tools')
-const pick = require('./pick')
-const { raySees } = require('./perception')
-const { withTimeout } = require('./build')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const tools: typeof import('./tools') = require('./tools')
+const pick: typeof import('./pick') = require('./pick')
+const { raySees }: typeof import('./perception') = require('./perception')
+const { withTimeout }: typeof import('./build') = require('./build')
 
 // Вёдра и обсидиан — то, без чего нет портала в Ад. nether.js ставит раму из
 // обсидиана в рюкзаке и сам его не добывает; здесь — откуда он берётся:
@@ -75,7 +75,7 @@ function visibleSources (bot, name, radius) {
   if (id === undefined) return []
   const me = bot.entity.position
   const candidates = process.env.ND_OW_KIT_WATER === '0' ? bot.findBlocks({ matching: id, maxDistance: radius, count: 400 }).map(p => bot.blockAt(p))
-    : require('./sight').visibleOf(bot, [id], radius, { max: 24, rays: 1500, skip: p => !isSource(bot.blockAt(p), name) })
+    : (require('./sight') as typeof import('./sight')).visibleOf(bot, [id], radius, { max: 24, rays: 1500, skip: p => !isSource(bot.blockAt(p), name) })
   return candidates
     .filter(b => isSource(b, name) && seen(bot, b.position))
     .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))
@@ -140,7 +140,7 @@ async function fillBucket (session, ctl, { fluid = 'water', radius = 24, walk: a
     if (!(await holdItem(bot, 'bucket'))) { why.push('ведро не взял в руку'); break }
     // Клик ведром — как в cast1.useAt: поворот в самом use_item, до 3 повторов с ожиданием ответа (Paper роняет use_item,
     // замок руки автопилота отменяет клик; rt3 03.10: «черпак мимо (пусто)» у шести источников подряд при чистом луче).
-    await require('./cast1').useAt(bot, p.offset(0.5, 0.85, 0.5), 'bucket', { tries: 3, wait: 400 })
+    await (require('./cast1') as typeof import('./cast1')).useAt(bot, p.offset(0.5, 0.85, 0.5), 'bucket', { tries: 3, wait: 400 })
     if (await waitHeld(bot, full, 600)) {
       return { filled: true, have: full, from: { x: p.x, y: p.y, z: p.z } }
     }
@@ -152,7 +152,7 @@ async function fillBucket (session, ctl, { fluid = 'water', radius = 24, walk: a
       if (b === true) {
         await sleep(400)
         if (await holdItem(bot, 'bucket')) {
-          await require('./cast1').useAt(bot, p.offset(0.5, 0.85, 0.5), 'bucket', { tries: 3, wait: 400 })
+          await (require('./cast1') as typeof import('./cast1')).useAt(bot, p.offset(0.5, 0.85, 0.5), 'bucket', { tries: 3, wait: 400 })
           if (await waitHeld(bot, full, 600)) return { filled: true, have: full, from: { x: p.x, y: p.y, z: p.z }, breached: true }
         }
         why.push(`${tag}: стенку сломал, черпак мимо (${firstOnRay(bot, p.offset(0.5, 0.85, 0.5))})`)
@@ -411,3 +411,4 @@ async function obsidian (session, ctl, { count = 10, radius = 20, timeoutSeconds
 }
 
 module.exports = { fillBucket, obsidian, visibleSources, pourOnto, scoopWater, isSource }
+export { fillBucket, obsidian, visibleSources, pourOnto, scoopWater, isSource }

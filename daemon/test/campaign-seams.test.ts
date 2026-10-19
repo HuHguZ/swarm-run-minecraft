@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { load, ready } = require('./campaign-seams-fixture')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { load, ready } from './campaign-seams-fixture'
 
 test('mapped portal with seven empty frames still requires a dragon kit', () => {
   const c = load(ready({ red_bed: 1, ender_eye: 7, blaze_powder: 1 }), undefined, { ND_EYES_NEED: '7' })
@@ -48,7 +48,7 @@ test('three failed collection passes never authorize an under-equipped End entry
     return method === 'dragon' ? { dragon: { won: true } } : {} as Record<string, any>
   }, { ND_END_GEAR_PRICE: '0' })
   c.known.endPortal = { x: 0, y: 60, z: 0 }; c.runs(3)
-  await assert.rejects(c.run('dragon'), e => e.stopCampaign && /END_SEAM_NOT_READY.*beds/.test(e.message))
+  await assert.rejects(c.run('dragon'), (e: any) => e.stopCampaign && /END_SEAM_NOT_READY.*beds/.test(e.message))
   assert.equal(c.calls.some(x => x.method === 'stronghold' && x.params.mode === 'fill'), false)
 })
 
@@ -123,5 +123,5 @@ test('under-equipped End entry after exhausted collection is a priced risk; no d
   for (const k of Object.keys(bare.inventory)) if (/_sword$|_axe$|^bow$|arrow/.test(k)) delete bare.inventory[k]
   const d = load(bare, () => ({}))
   d.known.endPortal = { x: 0, y: 60, z: 0 }; d.runs(3)
-  await assert.rejects(d.run('dragon'), e => e.stopCampaign && /END_SEAM_NOT_READY.*beds/.test(e.message))
+  await assert.rejects(d.run('dragon'), (e: any) => e.stopCampaign && /END_SEAM_NOT_READY.*beds/.test(e.message))
 })

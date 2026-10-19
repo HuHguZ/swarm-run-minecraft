@@ -1,18 +1,18 @@
 'use strict'
 // Мост на ходу (blockmoves.js): ход A* и исполнитель на настоящей prismarine-physics.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const { Physics, PlayerState } = require('prismarine-physics')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')('1.21.11')
-const Movements = require('mineflayer-pathfinder/lib/movements')
-const AStar = require('mineflayer-pathfinder/lib/astar')
-const Move = require('mineflayer-pathfinder/lib/move')
-const { goals } = require('mineflayer-pathfinder')
-const pick = require('../src/pick')
-const bm = require('../src/blockmoves')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import { Physics, PlayerState } from 'prismarine-physics'
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+import Movements = require('mineflayer-pathfinder/lib/movements')
+import AStar = require('mineflayer-pathfinder/lib/astar')
+import Move = require('mineflayer-pathfinder/lib/move')
+import { goals } from 'mineflayer-pathfinder'
+import pick = require('../src/pick')
+import bm = require('../src/blockmoves')
 
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
 function block (name, p) {
@@ -110,7 +110,7 @@ test('окно щелчка: тело за плоскостью грани на 
 
 // Исполнитель на живой физике: тело на краю, путь — мост через провал в 5, затем плато.
 function fakeBot (w, physics, pos) {
-  const bot = new EventEmitter(); bot._client = new EventEmitter(); bot.inventory = new EventEmitter()
+  const bot: any = new EventEmitter(); bot._client = new EventEmitter(); bot.inventory = new EventEmitter()
   bot.version = '1.21.11'; bot.registry = data
   bot.inventory.slots = []; bot.inventory.slots[36] = { name: 'cobblestone', count: 16, slot: 36, type: data.itemsByName.cobblestone.id }
   bot.inventory.items = () => bot.inventory.slots.filter(Boolean)
@@ -501,7 +501,7 @@ test('исполнитель: телепорт, смерть, отменённа
 
 // Цена блока моста — от запаса (агент Ада 14.10, b8-6-3: мосты поиска съели 128 → 0): полный запас — прежняя цена, у резерва — дороже.
 test('scarceCost: прежняя цена при запасе, рост к резерву', () => {
-  const { scarceCost } = require('../src/blockmoves')
+  const { scarceCost }: typeof import('../src/blockmoves') = require('../src/blockmoves')
   assert.equal(scarceCost(1.5, 128, 16), 1.5)
   assert.equal(scarceCost(1.5, 64, 16), 1.5)
   assert.ok(scarceCost(1.5, 40, 16) > 1.5)

@@ -1,22 +1,22 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const { createRequire, Module } = require('node:module')
-const { transformSync } = require('esbuild')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const AStar = require('mineflayer-pathfinder/lib/astar')
-const Move = require('mineflayer-pathfinder/lib/move')
-const { goals, Movements } = require('mineflayer-pathfinder')
-require('../src/fastblocks')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import { createRequire, Module } from 'node:module'
+import { transformSync } from 'esbuild'
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import AStar = require('mineflayer-pathfinder/lib/astar')
+import Move = require('mineflayer-pathfinder/lib/move')
+import { goals, Movements } from 'mineflayer-pathfinder'
+import '../src/fastblocks'
 
 // Exercise current source without writing the frozen compiled daemon.
 const movementFile = path.join(__dirname, '../src/movement.js')
-const movementModule = new Module(movementFile, module)
+const movementModule: any = new Module(movementFile, module)
 movementModule.filename = movementFile
-movementModule.paths = Module._nodeModulePaths(path.dirname(movementFile))
+movementModule.paths = (Module as any)._nodeModulePaths(path.dirname(movementFile))
 movementModule._compile(transformSync(fs.readFileSync(movementFile.replace(/\.js$/, '.ts'), 'utf8'), {
   loader: 'ts', format: 'cjs', target: 'node22'
 }).code, movementFile)
@@ -90,7 +90,7 @@ for (const variant of ['ready', 'keep marker then ready', 'unsafe', 'wrong body'
         assert.equal(native.canMove(candidate),false,'the native simulator rejects the blocked connection')
       }
       if (variant.startsWith('keep marker')) {
-        const marker = new Vec3(bot.entity.position.x,bot.entity.position.y,bot.entity.position.z)
+        const marker: any = new Vec3(bot.entity.position.x,bot.entity.position.y,bot.entity.position.z)
         marker.toBreak = []; marker.toPlace = []; marker.ndKeep = true
         next.path.unshift(marker)
         if (variant === 'keep marker then blocked') assert.equal(native.canMove(next.path),true,'a zero marker alone cannot prove the next edge')

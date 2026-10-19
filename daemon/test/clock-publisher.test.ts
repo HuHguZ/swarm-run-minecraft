@@ -1,16 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const { EventEmitter } = require('node:events')
-const { GameClock } = require('../src/game-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { GameClock } from '../src/game-clock'
 
 test('RPC clocks advance on game ticks, expose freeze and step, and detach old clocks', async () => {
-  // Exercise the actual entrypoint wiring without opening ports or loading a bot.
-  const source = fs.readFileSync(path.join(__dirname, '../src/index.ts'), 'utf8')
-  const wiring = source.slice(source.indexOf('let clients = 0'), source.search(/\nfunction log\s*\(/))
-  const wss = new EventEmitter(); const ws = new EventEmitter(); const changes = new EventEmitter()
+  // Exercise the actual entrypoint wiring (src/rpc/server.ts) without opening ports or loading a bot.
+  const { attachClients }: typeof import('../src/rpc/server') = require('../src/rpc/server')
+  const wss = new EventEmitter(); const ws: any = new EventEmitter(); const changes = new EventEmitter()
   const messages = []; let active; let heartbeat; let cleared = false
   const session: Record<string, any> = {} as Record<string, any>
   const facade = { changes, snapshot: () => active && !active.disposed ? active.snapshot() : null, wall: {
@@ -18,7 +15,7 @@ test('RPC clocks advance on game ticks, expose freeze and step, and detach old c
   } }
   ws.readyState = 1
   ws.send = text => messages.push(JSON.parse(text))
-  new Function('wss', 'session', 'gameClock', 'methods', 'log', wiring)(wss, session, facade, {} as Record<string, any>, () => {})
+  attachClients(wss, { session, gameClock: facade, methods: {} as Record<string, any>, log: () => {}, state: { dangerWatch: null } })
   wss.emit('connection', ws)
   active = new GameClock({ manual: true }); active.start(); active.setState({ tick_rate: 750 })
   session.bot = { ndClock: active }

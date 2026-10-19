@@ -13,8 +13,8 @@
 // Слух (hearing): звуки сервера с позицией (sound_effect, entity_sound_effect) — их сервер шлёт только в 16·max(1,
 //   громкость) бл. (SoundEvent.getRange, jar 1.21.11) — как субтитры: что, сторона (8 румбов от слушателя) и полоса
 //   дальности, без точки. Лава и вода — по-прежнему cast.hearLava/hearWater (звуки клиента, ND_OW_HEAR).
-const gameClock = require('../game-clock')
-const eyes = require('./eyes')
+import * as gameClock from '../game-clock'
+import * as eyes from './eyes'
 
 const DIR8 = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest']
 const DIR4 = ['north', 'east', 'south', 'west']
@@ -39,7 +39,7 @@ function f3 (bot) {
   let light = null
   try { const b = bot.blockAt(p.floored()); if (b) light = { sky: b.skyLight, block: b.light } } catch {}
   let biome = null
-  try { biome = require('../perception').biomeName(bot, p.floored()) } catch {}
+  try { biome = (require('../perception') as typeof import('../perception')).biomeName(bot, p.floored()) } catch {}
   let chunks = null
   try { chunks = bot.world.getColumns ? bot.world.getColumns().length : null } catch {}
   let near = 0; let total = 0
@@ -93,7 +93,7 @@ const inSector = (c, yaw, fov) => Math.abs(norm180(yawOf(c.dx, c.dz) - yaw)) <= 
 // Счёт блок-сущностей по типу в прорисовке; yaw+fov — только в секторе взгляда.
 function pie (bot, { range = 64, yaw = null, fov = null }: any = {}) {
   if (!bot || !bot.entity || !bot.registry) return null
-  const byType = {}
+  const byType: Record<string, number> = {}
   let total = 0
   for (const c of pieCells(bot, range)) {
     if (yaw !== null && fov && !inSector(c, yaw, fov)) continue
@@ -165,7 +165,7 @@ function triangulate (samples, { yawError = 1 }: any = {}) {
 
 // Имя звука пакета — melee.soundName (сдвиг номера 1.21.11: в minecraft-data номера звуков с 1; mineflayer
 // soundEffectHeard его не делает — нативная сцена s10-e-1: хаск слышался «entity.hostile.swim» вместо entity.husk.ambient).
-const soundName = (bot, holder) => holder ? require('../melee').soundName(bot, { sound: holder }) || null : null
+const soundName = (bot, holder) => holder ? (require('../melee') as typeof import('../melee')).soundName(bot, { sound: holder }) || null : null
 // Субтитр: entity.<тип>.<событие> — моб, block.<блок>.<…> — блок.
 function subtitle (name) {
   const m = /^(entity|block|item|ambient|weather|event)\.([a-z_]+)(?:\.([a-z_.]+))?/.exec(String(name || '').replace(/^minecraft:/, ''))
@@ -292,7 +292,7 @@ function hearLavaPoint (bot, { radius = 32, maxDy = 12, skip = null }: any = {})
 // дальше — глазами/копкой (клад: BuriedTreasure ставит сундук в клетку чанка 9,9 — treasure).
 async function pieSeek (session, ctl, { type = 'chest', base = 24, fov = 30, timeoutSeconds = 120, near = 10 }: any = {}) {
   const bot = session.bot
-  const { travelXZ } = require('../movement')
+  const { travelXZ }: typeof import('../movement') = require('../movement')
   const deadline = gameClock.now() + Math.max(20, Math.min(600, timeoutSeconds)) * 1000
   const here = () => ({ x: bot.entity.position.x, z: bot.entity.position.z })
   const samples = []
@@ -350,7 +350,7 @@ async function pieSeek (session, ctl, { type = 'chest', base = 24, fov = 30, tim
 
 function perceive (session, p: any = {}) {
   const bot = session.bot
-  const knowledge = require('./knowledge')
+  const knowledge: typeof import('./knowledge') = require('./knowledge')
   const mode = p.mode || 'summary'
   const what = p.re ? new RegExp(p.re) : (p.block || p.blocks || 'log')
   switch (mode) {
@@ -371,4 +371,4 @@ function perceive (session, p: any = {}) {
   }
 }
 
-module.exports = { f3, pie, pieArcs, triangulate, installHearing, heard, heardEntities, hearPoint, hearLavaPoint, subtitle, dir8, dir4, band, yawOf, vecOf, pieSeek, perceive }
+export { f3, pie, pieArcs, triangulate, installHearing, heard, heardEntities, hearPoint, hearLavaPoint, subtitle, dir8, dir4, band, yawOf, vecOf, pieSeek, perceive }

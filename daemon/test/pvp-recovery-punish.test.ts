@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { createRecovery } from '../src/pvp/recovery'
-const Vec3 = require('vec3')
-const clock = require('../src/game-clock')
-const tempo = require('../src/tempo')
-const ranged = require('../src/ranged')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as clock from '../src/game-clock'
+import * as tempo from '../src/tempo'
+import * as ranged from '../src/ranged'
+import { transformSync } from 'esbuild'
 
 function callerBlocks () {
   const source = readFileSync(resolve(__dirname, '../src/pvp.ts'), 'utf8')
@@ -84,7 +85,7 @@ function fighter (game, { d = 22, dy = 5, loaded = false, arrows = false, bow = 
     rangedAllowed: () => true, ranged: { ...ranged, crossbows: () => items.includes(crossbow)
       ? [{ item: crossbow, info: { loaded, quickCharge: quickCharge || 0, ammo: loaded ? 'arrow' : null } }] : [] },
     potionOf: item => item.name === 'splash_potion' ? 'strong_harming' : 'strength', potionRole: () => 'buff', hasEffect: (_bot, name) => effects.has(name),
-    throwMod: require('../src/throw'), pick: require('../src/pick'),
+    throwMod: (require('../src/throw') as typeof import('../src/throw')), pick: (require('../src/pick') as typeof import('../src/pick')),
     cooldownMs: () => 625, ready: () => true, rest () {}, coverForDrink: async () => {},
     holdItem: async item => { bot.heldItem = item; return true }, holdWeapon: async () => { bot.heldItem = sword }
   }
@@ -199,7 +200,7 @@ test('actual medical caller reaches attack after a punish yield and respects abo
     drink: f.recovery.drink, pvpSkills: f.recovery, punishable: f.recovery.punishable, TICK_MS: 50,
     attack () { assert.equal(f.activeAt(), Infinity); assert.equal(f.bot.inventory.slots[45], f.shield); attacks++ } }
   try {
-    const pending = runInNewContext(`(async () => { for (let attempt = 0; attempt < 2 && !ctl.aborted && bot.health > 0; attempt++) { ${medical}; attack(); break } })()`, context)
+    const pending = runInNewContext(`(async () => { for (let attempt = 0; attempt < 2 && !ctl.aborted && bot.health > 0; attempt++) { ${medical}; attack(); break } })()`, cjsContext(context))
     await turn(); await w.step(6)
     f.observe(() => ({ since: w.game.now() - 150, left: 850 }))
     await w.finish(pending)
@@ -242,7 +243,7 @@ test('actual ordered medical, crystal, rebuff and heal callers reserve one attac
       attack: () => { assert.equal(f.activeAt(), Infinity); assert.equal(f.bot.inventory.slots[45], f.shield); seen.attacks++ }
     }
     try {
-      const pending = runInNewContext(script, context)
+      const pending = runInNewContext(script, cjsContext(context))
       await turn(); await w.step(6)
       f.observe(() => ({ since: w.game.now() - 150, left: 850 }))
       await w.finish(pending)
@@ -250,7 +251,7 @@ test('actual ordered medical, crystal, rebuff and heal callers reserve one attac
       assert.equal(f.starts(), 1); assert.equal(f.potion.count, 3)
       if (alternative !== 'defense') {
         context.safeMedical = false
-        await w.finish(runInNewContext(script, context))
+        await w.finish(runInNewContext(script, cjsContext(context)))
         assert.equal(seen.crystalEat + seen.buffs + seen.heals, 1, 'the next pass can recover again without a cooldown')
       }
     } finally { w.close() }

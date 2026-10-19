@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
-const AG = require('../src/pvp/arms-graph'), Loot = require('../src/pvp/arms-loot')
-const { emptyWorld, fact } = require('../src/core/world-state')
-const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
+import * as AG from '../src/pvp/arms-graph'
+import * as Loot from '../src/pvp/arms-loot'
+import { emptyWorld, fact } from '../src/core/world-state'
+const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
 const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
 const at = { x: 1, y: 0, z: 0 }, here = { x: 0, y: 0, z: 0 }
 const remaining = ['iron_sword', 'bow', 'arrow', 'iron_pickaxe', 'iron_axe', 'cooked_beef', 'cobblestone'].map(name => ({ name, count: 1 }))
@@ -26,9 +28,9 @@ async function learned({ interrupted = true, moved = { bread: 8 }, ticks = 9 }: 
         contents: interrupted ? Object.fromEntries(remaining.map(i => [i.name, i.count])) : {} } }
     }
   }
-  const ArmsEnv = runInNewContext(body + '\nArmsEnv', { AG, Loot, LOOT_PRIOR: [remaining], emptyWorld, fact, LOOT_MS: 60000,
+  const ArmsEnv = runInNewContext(body + '\nArmsEnv', cjsContext({ AG, Loot, LOOT_PRIOR: [remaining], emptyWorld, fact, LOOT_MS: 60000,
     X: 0, Y: 0, Z: 0, L: { half: 30, spawns: [here] }, W: p => p, COVERS: [], key: p => `${p.x},${p.y},${p.z}`,
-    every: () => null, gameClock: { now: () => now, clearInterval() {} } })
+    every: () => null, gameClock: { now: () => now, clearInterval() {} } }))
   const env = new ArmsEnv(side, { over: false, roundScope: 'r1' })
   const result = await env.execute({ skill: 'arms.loot', params: { chestId: chest.id, roundScope: 'r1' } }, new AbortController().signal)
   const state = await env.observe()

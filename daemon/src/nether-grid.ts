@@ -6,8 +6,8 @@
 //
 // Файл: <memoryDir>/nether-grid.bin (1 байт на клетку, x быстрее всех, потом z, потом y) + nether-grid.json
 // { x0, y0, z0, sx, sy, sz, at, cols }. Клетки вне коробки — UNKNOWN.
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 
 const C = {
   AIR: 0, // воздух
@@ -72,7 +72,7 @@ class Grid {
   declare sz: any
   declare lavaMemo: any
 
-  constructor (h, data) {
+  constructor (h, data?) {
     Object.assign(this, { x0: h.x0, y0: h.y0, z0: h.z0, sx: h.sx, sy: h.sy, sz: h.sz })
     this.data = data || new Uint8Array(h.sx * h.sy * h.sz).fill(C.UNKNOWN)
   }
@@ -139,4 +139,4 @@ function decodeSection (sec, fill) {
   }
 }
 
-module.exports = { C, NAMES, Grid, classOfName, DIG, passable, floorOk, headerOf, save, load, decodeSection }
+export { C, NAMES, Grid, classOfName, DIG, passable, floorOk, headerOf, save, load, decodeSection }

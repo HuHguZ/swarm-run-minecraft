@@ -1,12 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // A deliberately small physics oracle: SmallFireball 5 HP, shield activation 5 ticks,
 // and three arrivals separated by 6 ticks (BlazeAttackGoal). No farm process.
@@ -70,13 +71,13 @@ async function exchange (enabled = true, haveShield = true, corner = false) {
     },
     testDig: async () => { digAt = now; await advance(1200); ctl.aborted = true; return { ok: false } }
   }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(bodySource(file) + `
     makeRadar = () => radar; fightMoves = () => ({}); liveBlazes = () => [bot.entities[2]];
     losClear = (_b, _a, b) => bot.testLineOfSight !== false && !(bot.testCorner && b.x >= 1.4);
     digInNear = testDig; witherClose = () => null;
     module.exports.testHold = holdSpawner;
     module.exports.testShieldPrice = typeof blazeShieldPrice === 'function' ? blazeShieldPrice : null;
-  `, context)
+  `, cjsContext(context))
   await context.module.exports.testHold({ bot }, ctl, { spawner: null, want: 7, deadline: now + 10000,
     dead: new Set(), setPhase: p => calls.push(p), restAt: 12, bailAt: 6, p: { box: false }, t0: now })
   if (corner) assert.ok(calls.includes('recover'), calls.join(','))

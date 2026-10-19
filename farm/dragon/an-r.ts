@@ -1,9 +1,10 @@
-// Сводка серии боёв (02.10, поток dragon): node farm/dragon/an-r.js <тег> [<тег2> ...]   (ROWS=1 — построчно)
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Сводка серии боёв (02.10, поток dragon): node dist/farm/dragon/an-r.js <тег> [<тег2> ...]   (ROWS=1 — построчно)
 // Итоги — farm/logs/<тег>-s<k>.jsonl (сцена try-dragon e2e), трассы — farm/logs/trace-<тег>/s<k>/dragon-*.jsonl (только вызовы боя).
 // Победа — дракон убит (сервер: дракона нет) и бот жив; портал — отдельно. Станция до первого снижения — первая удачная
 // pillarBuild раньше первой фазы LANDING (3). Кровати до станции — bedDone раньше станции.
-const fs = require('fs'); const path = require('path')
-const L = path.join(__dirname, '..', 'logs')
+import * as fs from 'fs'; import path = require('path')
+const L = path.join(REPO_ROOT, 'farm/logs')
 const q = (xs, p) => { const v = xs.filter(x => x != null && !Number.isNaN(x)).sort((a, b) => a - b); return v.length ? Math.round(v[Math.min(v.length - 1, Math.floor((v.length - 1) * p + 0.5))] * 10) / 10 : '-' }
 const tally = (m, k) => { m[k] = (m[k] || 0) + 1 }
 const isoOf = f => { const m = /dragon-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d+)Z/.exec(f); return m ? Date.parse(`${m[1]}:${m[2]}:${m[3]}.${m[4]}Z`) : 0 }

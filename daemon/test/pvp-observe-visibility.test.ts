@@ -1,14 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const co = require('../src/pvp/combat-observe')
+import { Vec3 } from 'vec3'
+import * as co from '../src/pvp/combat-observe'
 
 test('PvP default observation ignores a player behind a wall inside four blocks', () => {
   let wall = true
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.entity = { id: 1, position: new Vec3(.5, 0, .5), onGround: true }
   bot.inventory = { items: () => [], slots: [] }
   bot.health = 20

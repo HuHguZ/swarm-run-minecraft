@@ -5,13 +5,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { runGain, type TacticalState } from '../src/tactics/state'
-const { evaluate } = require('../src/combat-safety')
-const flee = require('../src/flee')
-const survival = require('../src/survival')
-const combat = require('../src/combat')
-const { observeTactics, TacticalSystem, dropBehind } = require('../src/tactics/minecraft')
-const gameClock = require('../src/game-clock')
-const { Vec3 } = require('vec3')
+import { evaluate } from '../src/combat-safety'
+import flee = require('../src/flee')
+import survival = require('../src/survival')
+const combat: any = require('../src/combat')
+// makeShield определён в части combat/shield; фасад combat отдаёт его геттером — подменять в части.
+const shieldPart: any = require('../src/combat/shield')
+import { observeTactics, TacticalSystem, dropBehind } from '../src/tactics/minecraft'
+import * as gameClock from '../src/game-clock'
+import { Vec3 } from 'vec3'
 
 process.env.ND_TELEMETRY = '0'
 const withFlag = <T>(value: string | undefined, fn: () => T): T => {
@@ -108,10 +110,10 @@ function creeperField({ drop = false } = {}) {
 test('a hissing creeper is taken on the raised shield, facing it; with a drop behind the body it is still run from', async () => {
   assert.equal(dropBehind(creeperField(), new Vec3(3, 64, .5)), false)
   assert.equal(dropBehind(creeperField({ drop: true }), new Vec3(3, 64, .5)), true)
-  const saved = { dodge: survival.dodgeCreeper, shield: combat.makeShield }
+  const saved = { dodge: survival.dodgeCreeper, shield: shieldPart.makeShield }
   const calls: string[] = []
   survival.dodgeCreeper = async () => { calls.push('run'); return { how: 'dodge' } }
-  combat.makeShield = () => {
+  shieldPart.makeShield = () => {
     let up = false
     return { wear: async () => true, raise: async () => { up = true; calls.push('raise'); return true }, blocking: () => up, failure: () => null, close: () => {} }
   }
@@ -134,13 +136,13 @@ test('a hissing creeper is taken on the raised shield, facing it; with a drop be
     assert.equal((await withFlagAsync(undefined, () => run(true))).how, 'dodge', 'knockback over the drop: run')
     assert.equal((await withFlagAsync('0', () => run(false))).how, 'dodge', 'S4c: always the run')
     assert.ok(!calls.includes('raise'))
-  } finally { survival.dodgeCreeper = saved.dodge; combat.makeShield = saved.shield }
+  } finally { survival.dodgeCreeper = saved.dodge; shieldPart.makeShield = saved.shield }
 })
 
 test('a primed TNT is taken on the shield until it explodes, not for 4 s (arena 16.10: lowered 0.4 s before the blast)', async () => {
-  const { shieldBlast } = require('../src/tactics/blast')
-  const saved = combat.makeShield
-  combat.makeShield = () => { let up = false; return { wear: async () => true, raise: async () => { up = true; return true }, blocking: () => up, failure: () => null, close: () => {} } }
+  const { shieldBlast }: typeof import('../src/tactics/blast') = require('../src/tactics/blast')
+  const saved = shieldPart.makeShield
+  shieldPart.makeShield = () => { let up = false; return { wear: async () => true, raise: async () => { up = true; return true }, blocking: () => up, failure: () => null, close: () => {} } }
   const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
   const bot = creeperField()
   bot.entities[3] = { id: 3, name: 'tnt', position: new Vec3(3, 64, .5), height: .98, isValid: true, metadata: [] }
@@ -151,14 +153,14 @@ test('a primed TNT is taken on the shield until it explodes, not for 4 s (arena 
     assert.equal(r.blocked, true)
     assert.equal(r.clear, true, 'the shield came down only after the TNT was gone')
     assert.ok(r.seconds >= 4.5, `held ${r.seconds} s, past the former 4 s cap`)
-  } finally { timer.dispose(); gameClock.activate(null); combat.makeShield = saved }
+  } finally { timer.dispose(); gameClock.activate(null); shieldPart.makeShield = saved }
 })
 
 test('a primed TNT is run from even with a shield; the shield only when the run has nowhere to go (arena 16.10)', async () => {
-  const saved = { pick: flee.pickDirection, shield: combat.makeShield }
+  const saved = { pick: flee.pickDirection, shield: shieldPart.makeShield }
   let way: any = { yaw: Math.PI / 2, dir: { x: -1, z: 0 } }
   flee.pickDirection = () => way
-  combat.makeShield = () => { let up = false; return { wear: async () => true, raise: async () => { up = true; return true }, blocking: () => up, failure: () => null, close: () => {} } }
+  shieldPart.makeShield = () => { let up = false; return { wear: async () => true, raise: async () => { up = true; return true }, blocking: () => up, failure: () => null, close: () => {} } }
   const run = async () => {
     const timer = gameClock.activate(new gameClock.GameClock({ manual: true, epoch: 0 }))
     const bot = creeperField()
@@ -175,7 +177,7 @@ test('a primed TNT is run from even with a shield; the shield only when the run 
     assert.equal((await withFlagAsync(undefined, run)).how, 'dodge-blast', 'a free run: away from the TNT, no shield')
     way = null
     assert.equal((await withFlagAsync(undefined, run)).how, 'shield-blast', 'cornered: the shield')
-  } finally { flee.pickDirection = saved.pick; combat.makeShield = saved.shield }
+  } finally { flee.pickDirection = saved.pick; shieldPart.makeShield = saved.shield }
 })
 
 test('a tactical run says "не отрывается" after 3 game s when the walker keeps within 5 blocks; other callers run on (S4c: wither skeleton, edge)', async () => {
@@ -224,7 +226,7 @@ test('the blaze skill keeps its blazes; a wither skeleton at the body is the tac
 })
 
 test('a wither skeleton\'s stone sword is counted once (javap: ATTACK_DAMAGE 4 + sword 4 = 8; brute 7 + golden axe 6 = 13)', () => {
-  const assess = require('../src/assess')
+  const assess: typeof import('../src/assess') = require('../src/assess')
   const bot: any = { entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => [] }, registry: {} }
   const iron = { armor: 15, tough: 0 }
   const ws = { name: 'wither_skeleton', position: new Vec3(3, 64, 0), equipment: [{ name: 'stone_sword' }] }
@@ -259,7 +261,7 @@ test('a walker already at the body is fought while the body outlasts burst + one
   const at16 = withFlag(undefined, () => evaluate({ ...hungry, health: 16 }))
   assert.equal(at16.action, 'fight')
   assert.equal(at16.trade, true)
-  const { sustainableFight } = require('../src/tactics/state')
+  const { sustainableFight }: typeof import('../src/tactics/state') = require('../src/tactics/state')
   assert.equal(sustainableFight(at16, 16), true)
   assert.notEqual(withFlag(undefined, () => evaluate({ ...hungry, health: 9 }).action), 'fight', 'burst 6 + blow 3: not at 9')
   assert.notEqual(withFlag(undefined, () => evaluate({ ...hungry, health: 16, threats: [{ name: 'zombie', hit: 3, distance: 5 }] }).action), 'fight', 'not yet at the body: "recover" stands')
@@ -268,7 +270,7 @@ test('a walker already at the body is fought while the body outlasts burst + one
 })
 
 test('a different attacker is met with Fight immediately even without an explicit kill notification', () => {
-  const { TacticalArbiter } = require('../src/tactics/arbiter')
+  const { TacticalArbiter }: typeof import('../src/tactics/arbiter') = require('../src/tactics/arbiter')
   const zombie = { id: 2, kind: 'zombie', distance: 3, player: false, threatening: true, hit: 1.4 }
   const run = (forgive: boolean) => {
     const arbiter = new TacticalArbiter()
@@ -289,7 +291,7 @@ test('an archer within 8 blocks is rushed by a hungry body that outlasts the exc
 })
 
 test('a husk\'s iron spear adds its material bonus: 3 + 2 = 5 (Item$Properties.spear, ToolMaterial.IRON 2)', () => {
-  const assess = require('../src/assess')
+  const assess: typeof import('../src/assess') = require('../src/assess')
   const bot: any = { entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => [] }, registry: {} }
   const husk = { name: 'husk', position: new Vec3(3, 64, 0), equipment: [{ name: 'iron_spear' }] }
   assert.equal(withFlag(undefined, () => assess.sizeUp(bot, husk, { armor: 0, tough: 0 }).hit), 5)
@@ -356,7 +358,7 @@ test('a fight dropped at full health (hunger) comes back at full health: the rec
 })
 
 test('time to kill reads a mob\'s synced health: a zombie at 4 hp is a short fight (mobs only)', () => {
-  const assess = require('../src/assess')
+  const assess: typeof import('../src/assess') = require('../src/assess')
   const bot: any = { entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => [{ name: 'stone_sword', count: 1 }] },
     registry: { entitiesByName: { zombie: { metadataKeys: [...Array(9).fill('x'), 'health'] } } } }
   const zombie = (hp: number) => { const metadata: any[] = []; metadata[9] = hp; return { name: 'zombie', position: new Vec3(2, 64, 0), equipment: [], metadata } }

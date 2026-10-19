@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Session } = require('../src/session')
-const { EventBus } = require('../src/events')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Session } from '../src/session'
+import { EventBus } from '../src/events'
 
 test('снимок смерти остаётся после чтения событий и создания нового тела', () => {
   const bus = new EventBus()

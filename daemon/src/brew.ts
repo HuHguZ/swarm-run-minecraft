@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Зелья: варочная стойка, огненный порошок, бутылки с водой, адский нарост →
 // «неловкое», дальше то, что нужно для прохождения. Рецепты — из самой игры:
 // PotionBrewing.addVanillaMixes (paper-1.21.11), см. SPEEDRUN.md «Зелья».
@@ -12,11 +12,11 @@ const gameClock = require('./game-clock')
 // Бот варит партиями по 3 бутылки: один ингредиент и одна единица топлива на
 // шаг — на 3 бутылки столько же, сколько на одну.
 
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz } = require('./movement')
-const { withTimeout } = require('./build')
-const actions = require('./actions')
-const { countOf } = require('./items')
+import { goals } from 'mineflayer-pathfinder'
+import { sleep, xyz } from './movement'
+import { withTimeout } from './build'
+import actions = require('./actions')
+import { countOf } from './items'
 
 // ------------------------------------------------------------ рецепты
 
@@ -114,7 +114,7 @@ function resolvePotion (name) {
 
 function potionName (item) {
   if (!item || !/potion$/.test(item.name)) return null
-  try { return require('./pvp').potionOf(item) } catch { return null }
+  try { return (require('./pvp') as typeof import('./pvp')).potionOf(item) } catch { return null }
 }
 const isWaterBottle = i => i && i.name === 'potion' && potionName(i) === 'water'
 function countPotions (bot, name, container = 'potion') {
@@ -326,7 +326,7 @@ async function prepare (session, ctl, need, lines) {
     const glassWant = Math.ceil(bottlesShort / 3) * 3
     if (countOf(bot, 'glass') < glassWant && countOf(bot, 'sand') + countOf(bot, 'red_sand') > 0) {
       try {
-        const smelt = require('./containers').smelt
+        const smelt = (require('./containers') as typeof import('./containers')).smelt
         await smelt(session, ctl, { item: 'glass', count: glassWant - countOf(bot, 'glass'), timeoutSeconds: 90 })
       } catch (e) { lines.push(`⚠ стекло не выплавил: ${e.message}`) }
     }
@@ -510,4 +510,4 @@ async function brew (session, ctl, p: any = {}) {
   }
 }
 
-module.exports = { brew, chainOf, resolvePotion, needsFor, readyPlanks, MIX, USE, WHERE, potionName, countPotions }
+export { brew, chainOf, resolvePotion, needsFor, readyPlanks, MIX, USE, WHERE, potionName, countPotions }

@@ -1,3 +1,4 @@
+import { campaignRequire, campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -8,6 +9,7 @@ import { applyEffect, emptyWorld } from '../src/core/world-state'
 import { worldFromObservation } from '../src/environments/mineflayer'
 import { plan } from '../src/core/strategy'
 import { createCampaignIntelligence } from '../src/campaign/intelligence'
+import { cjsContext } from './cjs-context'
 const effects = (strategy: any, state: any) => typeof strategy.expectedEffects === 'function' ? strategy.expectedEffects(state) : strategy.expectedEffects
 
 test('carried hay becomes three real bread without pretending the player has already eaten', () => {
@@ -62,14 +64,14 @@ test('making a missing table conserves carried wood and a failed wheat conversio
 })
 
 test('the actual bread executor uses the shared conversion plan and yields tactical cancellation', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = require('))
   const calls: any[] = []
   const state = { inventory: { hay_block: 1, crafting_table: 1 } }
   const context: any = { state, strategyExecuting: false, strategyInterrupted: false, STAGES: [],
-    require, path, __dirname: path.resolve(__dirname, '..'),
+    require: campaignRequire, path, __dirname: path.resolve(__dirname, '..'),
     craft: async (...args: any[]) => { calls.push(args); state.inventory = { bread: 3, crafting_table: 1 } as any; return true } }
-  vm.runInNewContext(executor, context)
+  vm.runInNewContext(executor, cjsContext(withSetters(context)))
   assert.equal((await context.executeStrategy({ skill: 'prepareBread' }, new AbortController().signal)).outcome, 'SUCCESS')
   assert.deepEqual(calls, [['bread', 3]])
   context.state.inventory = { hay_block: 1, crafting_table: 1 }

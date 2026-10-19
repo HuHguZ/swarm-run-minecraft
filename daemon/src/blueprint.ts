@@ -130,7 +130,13 @@ function derived (base, suffix, has) {
 
 // Палитра — роли, а не блоки: стена, каркас, пол, крыша, конёк, дверь, окно,
 // свет, табличка. Генераторы просят роли, а палитра говорит, чем их закрыть.
-function palette (material, has) {
+// Палитра постройки; window, light, fill, ladder, bed дописывает architect по рюкзаку.
+interface Palette {
+  material: string; main: string; frame: string; floor: string; stairs: string | null; slab: string | null; wall: string | null
+  fence: string | null; door: string | null; sign: string; roofFill: string
+  window?: string | null; light?: string | null; fill?: string; ladder?: string | null; bed?: string
+}
+function palette (material, has): Palette {
   const m = String(material || '').trim().toLowerCase()
   const wood = WOODS.find(w => m === w || m === `${w}_planks` || m === `${w}_log` || m === `${w}_stem`)
   if (wood) {
@@ -772,7 +778,7 @@ const KINDS = {
   castle: { ru: 'замок', make: castle, site: 'surface', roles: ['stairs', 'frame', 'light'], defaults: { width: 13, height: 4 }, note: 'стена с зубцами, угловые башни, ворота с аркой, лестница на стену' }
 }
 
-module.exports = {
+export {
   DIRS,
   OPP,
   CW,

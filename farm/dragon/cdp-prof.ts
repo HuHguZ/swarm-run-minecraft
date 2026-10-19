@@ -1,6 +1,6 @@
-// node farm/dragon/cdp-prof.js <port> <seconds> <out.cpuprofile> — профиль CPU процесса node с --inspect (s5 06.10)
-const WebSocket = require(require('path').join(__dirname, '..', '..', 'daemon', 'node_modules', 'ws'))
-const http = require('http')
+// node dist/farm/dragon/cdp-prof.js <port> <seconds> <out.cpuprofile> — профиль CPU процесса node с --inspect (s5 06.10)
+const WebSocket = require((require('path') as typeof import('path')).join(__dirname, '..', '..', 'daemon', 'node_modules', 'ws'))
+import * as http from 'http'
 const [port, secs, out] = [process.argv[2], Number(process.argv[3]), process.argv[4]]
 http.get(`http://127.0.0.1:${port}/json/list`, res => {
   let b = ''; res.on('data', d => { b += d }); res.on('end', () => {
@@ -11,7 +11,7 @@ http.get(`http://127.0.0.1:${port}/json/list`, res => {
     ws.on('open', async () => {
       await send('Profiler.enable'); await send('Profiler.setSamplingInterval', { interval: 250 }); await send('Profiler.start')
       console.log('profiling', secs, 's')
-      setTimeout(async () => { const r = await send('Profiler.stop'); require('fs').writeFileSync(out, JSON.stringify(r.profile)); console.log('saved', out); ws.close() }, secs * 1000)
+      setTimeout(async () => { const r = await send('Profiler.stop'); ;(require('fs') as typeof import('fs')).writeFileSync(out, JSON.stringify(r.profile)); console.log('saved', out); ws.close() }, secs * 1000)
     })
   })
 })

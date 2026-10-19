@@ -1,5 +1,6 @@
 'use strict'
-const gameClock = require('./game-clock')
+const { REPO_ROOT }: typeof import('./paths') = require('./paths')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Природная лава для портала без алмазной кирки (агент G, 02.10.2026; research/07-portal-techniques.md).
 // Найти ГЛАЗАМИ ближайшую годную лаву, выбрать технику, дойти, отлить раму (cast.js — не правлю, только зову) и
 // зажечь (nether.portal). Новое поведение — RPC portal_natural (index.js); активный ход — под ND_PORTAL_NATURAL=1.
@@ -22,10 +23,10 @@ const gameClock = require('./game-clock')
 // Честность: лава засчитана, только если луч от глаз упёрся в источник (sight.visibleOf). Источники одного тела
 // (озера) считаются по связности от видимого и только с открытым верхом — их видно сверху тем же взглядом.
 
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { visibleOf, seesBlock } = require('./sight')
-const { travelXZ, sleep, xyz, inWater, escapeWater } = require('./movement')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const { visibleOf, seesBlock }: typeof import('./sight') = require('./sight')
+const { travelXZ, sleep, xyz, inWater, escapeWater }: typeof import('./movement') = require('./movement')
 
 const ON = () => process.env.ND_PORTAL_NATURAL === '1'
 // Источников с открытым верхом на раму: cast.js льёт 10 клеток, по ведру на клетку, плюс промахи.
@@ -226,7 +227,7 @@ function skyLava (bot, radius, { up = 40, down = 48, rays = 1500 }: any = {}) {
 // Что видно отсюда. radius — сфера взгляда (лава светится, озеро видно издалека, если чанк прогружен);
 // rays — потолок лучей на вызов (visibleOf). Возвращает площадки, лучшие первыми.
 function terrainView (bot) {
-  const eyes = require('./perception/eyes')
+  const eyes: typeof import('./perception/eyes') = require('./perception/eyes')
   const me = bot.entity.position
   const points = new Map(), sources = new Map(), horizon = [], signature = []
   let occluderTop = me.y
@@ -247,11 +248,11 @@ function terrainView (bot) {
       points.set(`${at.x},${at.y},${at.z}`, { at, water: hit.water })
     }
   }
-  const Block = require('prismarine-block')(bot.registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
   const items = bot.inventory?.items?.() || []
   const picks = items.filter(i => /_pickaxe$/.test(i.name))
   const seconds = name => Math.min(...(picks.length ? picks : [{ type: null }]).map(i =>
-    Block.fromStateId(bot.registry.blocksByName[name].defaultState).digTime(i.type, false, false, false) / 1000))
+    Block.fromStateId(bot.registry.blocksByName[name].defaultState, undefined).digTime(i.type, false, false, false) / 1000))
   horizon.sort((a, b) => a - b)
   return { horizon: horizon[Math.floor(horizon.length / 2)], occluderTop, points: [...points.values()], sources: [...sources.values()],
     stoneSeconds: seconds('stone'), deepslateSeconds: seconds('deepslate'), signature: JSON.stringify(signature),
@@ -429,17 +430,17 @@ function skyOfScan (r) {
 function poolInfo (seed, { file = null, dir = null }: any = {}) {
   const none = { scanned: false, hint: null }
   if (seed === undefined || seed === null || seed === '') return none
-  if (!require('./perception/knowledge').allows('lava', 'portal-natural.poolInfo')) return none // S10: в rsg скан не читается
-  const path = require('path'); const fs = require('fs')
+  if (!(require('./perception/knowledge') as typeof import('./perception/knowledge')).allows('lava', 'portal-natural.poolInfo')) return none // S10: в rsg скан не читается
+  const path: typeof import('path') = require('path'); const fs: typeof import('fs') = require('fs')
   const toHint = sky => sky && Array.isArray(sky.at) ? { x: sky.at[0], y: sky.at[1], z: sky.at[2], kind: sky.cls, src: sky.src, dist: sky.d } : null
   try {
-    const f = file || path.join(__dirname, '..', '..', 'farm', 'seeds', 'good-v2.json')
+    const f = file || path.join(REPO_ROOT, 'farm/seeds/good-v2.json')
     const j = JSON.parse(fs.readFileSync(f, 'utf8'))
     const s = (j.seeds || []).find(x => String(x.seed) === String(seed))
     if (s && (s.sky !== undefined || (s.lava !== null && s.lava !== undefined))) return { scanned: true, hint: toHint(s.sky) }
   } catch {}
   try {
-    const f = path.join(dir || path.join(__dirname, '..', '..', 'farm', 'portal-scan', 'results-pool'), `${seed}.json`)
+    const f = path.join(dir || path.join(REPO_ROOT, 'farm/portal-scan/results-pool'), `${seed}.json`)
     if (fs.existsSync(f)) return { scanned: true, hint: toHint(skyOfScan(JSON.parse(fs.readFileSync(f, 'utf8')))) }
   } catch {}
   return none
@@ -490,7 +491,7 @@ function edgeSpot (bot, at, opts?: any) {
 // видимых при выборе места) и ±2 от них; когда они вычерпаны — «лава кончилась» при живом озере (pn-hint 02.10, сид
 // 6162616963942616824: рама 4/10, 63 открытых источника, шесть заходов «к 231,68,349: дошёл, видно 0»; переход тела
 // к берегу не помогал — cast.js сперва идёт к раме). Обновить список ближними к раме живыми источниками с берегом.
-function refreshCastLava (session, at, ref) {
+function refreshCastLava (session, at, ref?) {
   const bot = session.bot
   const plan = session.castPlan
   if (!plan) return 0
@@ -506,7 +507,7 @@ function refreshCastLava (session, at, ref) {
   }
   if (!live.length) return 0
   plan.lavaAt = live
-  try { session.journal.patch(st => { const pl = st.places && st.places[require('./cast').PLACE]; if (pl) pl.lavaAt = live }) } catch {}
+  try { session.journal.patch(st => { const pl = st.places && st.places[(require('./cast') as typeof import('./cast')).PLACE]; if (pl) pl.lavaAt = live }) } catch {}
   return live.length
 }
 
@@ -523,7 +524,7 @@ function softCells (cast) {
   return out
 }
 async function clearSoft (bot, ctl, cells) {
-  const { blockOnRay, eyeOf } = require('./pick')
+  const { blockOnRay, eyeOf }: typeof import('./pick') = require('./pick')
   let n = 0
   const done = new Set()
   for (const p of cells) {
@@ -568,8 +569,8 @@ function canopyTop (bot, r = 6) {
 
 async function pillarLook (session, ctl, { height = 10, radius = 128 }: any = {}) {
   const bot = session.bot
-  const { towerUp } = require('./build')
-  const { equipBestTool } = require('./items')
+  const { towerUp }: typeof import('./build') = require('./build')
+  const { equipBestTool }: typeof import('./items') = require('./items')
   const y0 = bot.entity.position.floored().y
   // В лесу — выше кроны (глаза на +1.6 над её верхом), но не больше 20.
   height = Math.min(20, Math.max(height, canopyTop(bot) - y0 + 1))
@@ -739,7 +740,7 @@ async function run (session, ctl, p: any = {}) {
     const left = Math.round((deadline - gameClock.now()) / 1000)
     if (left < 45) break
     const t1 = gameClock.now()
-    const castMod = require('./cast')
+    const castMod: typeof import('./cast') = require('./cast')
     cast = await castMod.castPortal(session, ctl, { timeoutSeconds: Math.min(540, left), radius: 9 })
     mark('литьё', { built: cast.built, frame: cast.frame, stopped: cast.stopped, refills: cast.refills, trace: Array.isArray(cast.trace) ? cast.trace.slice(-6) : undefined, buckets: ['bucket', 'water_bucket', 'lava_bucket'].map(n => bot.inventory.items().filter(i => i.name === n).reduce((a, i) => a + i.count, 0)).join('/') })
     if (cast.built) break
@@ -785,7 +786,7 @@ async function run (session, ctl, p: any = {}) {
   }
   let light = null
   if (cast && cast.built && !ctl.aborted) {
-    light = await require('./nether').portal(session, ctl, { mode: 'build', timeoutSeconds: 60 })
+    light = await (require('./nether') as typeof import('./nether')).portal(session, ctl, { mode: 'build', timeoutSeconds: 60 })
     mark('поджиг', { lit: !!(light && light.lit) })
   }
   return {
@@ -845,3 +846,7 @@ function rpc (session, p: any = {}) {
 }
 
 module.exports = { survey, terrainView, searchOrder, run, rpc, lavaBody, skyAbove, rpNear, estimate, lookoutSpot, edgeSpot, shoreSources, refreshCastLava, softCells, legTarget, wetShare, hintFor, poolInfo, skyOfScan, NEED }
+export {
+  survey, terrainView, searchOrder, run, rpc, lavaBody, skyAbove, rpNear, estimate, lookoutSpot, edgeSpot,
+  shoreSources, refreshCastLava, softCells, legTarget, wetShare, hintFor, poolInfo, skyOfScan, NEED
+}

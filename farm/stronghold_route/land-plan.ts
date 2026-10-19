@@ -1,8 +1,9 @@
 'use strict'
-const fs = require('fs')
-const path = require('path')
-process.env.SURFACE_REGION = path.resolve(__dirname, '../server-2/world/region')
-const { height, block } = require('./surface-map')
+import { REPO_ROOT } from '../../daemon/src/paths'
+import * as fs from 'fs'
+import path = require('path')
+process.env.SURFACE_REGION = path.resolve(REPO_ROOT, 'farm/server-2/world/region')
+import { height, block } from './surface-map'
 const S = { x: -20, z: -24 }
 const G = { x: -236, z: 736 }
 const STEP = 4
@@ -64,5 +65,5 @@ for (let i = 0; i < route.length - 1;) {
   waypoints.push(route[j]); i = j
 }
 const rec = { found: true, nodes, estimatedCost: Math.round(done.g), distance: Math.round(route.slice(1).reduce((n, p, i) => n + Math.hypot(p.x - route[i].x, p.z - route[i].z), 0)), waypoints, route }
-fs.writeFileSync(path.join(__dirname, 'land-plan.json'), JSON.stringify(rec))
+fs.writeFileSync(path.join(REPO_ROOT, 'farm/stronghold_route/land-plan.json'), JSON.stringify(rec))
 console.log(JSON.stringify({ ...rec, route: undefined }))

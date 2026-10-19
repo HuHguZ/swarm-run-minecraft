@@ -1,17 +1,19 @@
+import { declarationsOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const source = campaignTs()
 const declaration = (name: string) => {
   const start = source.indexOf(`async function ${name} (`)
   assert.ok(start >= 0)
   return source.slice(start, source.indexOf('\n}', start) + 2)
 }
-const weakStart = source.indexOf('const weakAndHungry =')
-const weak = source.slice(weakStart, source.indexOf('\nlet ironRuns', weakStart))
+const weak = declarationsOf(source, 'weakAndHungry')
 
 function fixture({ night = true, mode = 'speedrun', hp = 1, food = 10, raw = 0, hold = false } = {}) {
   const calls: string[] = []
@@ -28,7 +30,7 @@ function fixture({ night = true, mode = 'speedrun', hp = 1, food = 10, raw = 0, 
       return { status: 'done', detail: { stopped: 'здоровья 1 — дальше не копаю', dug: 0, steps: 0 }, events: [] }
     }
   }
-  vm.runInNewContext(transformSync(weak + '\n' + declaration('act') + '\nthis.act=act;this.urgent=weakAndHungry', { loader: 'ts' }).code, context)
+  vm.runInNewContext(transformSync(weak + '\n' + declaration('act') + '\nthis.act=act;this.urgent=weakAndHungry', { loader: 'ts' }).code, cjsContext(withSetters(context)))
   return { context, calls }
 }
 

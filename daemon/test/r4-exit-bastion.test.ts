@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const bastion = require('../src/bastion')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import bastion = require('../src/bastion')
 const bot = bag => ({ inventory: { items: () => Object.entries<any>(bag).map(([name, count]: any) => ({ name, count })) } })
 
 function env (t, name, value) {

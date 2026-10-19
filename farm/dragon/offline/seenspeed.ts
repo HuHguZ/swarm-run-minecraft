@@ -1,6 +1,9 @@
 'use strict'
 // Скорость и проверка smDragonSeen (02.10): мир — чаша/столб + станция R, тело в нескольких точках; сверка с Codex seenmodel.
-const fs = require('fs'), path = require('path'), vm = require('vm'), Module = require('module')
+import * as fs from 'fs'
+import path = require('path')
+import * as vm from 'vm'
+import Module = require('module')
 const file = path.resolve(__dirname, '../../../daemon/src/dragon.js'), req = Module.createRequire(file), Vec3 = req('vec3')
 const src = fs.readFileSync(file, 'utf8') + '\nmodule.exports.__S={smCompile,smDragonSeen,bedDamage};'
 const m = { exports: {} as Record<string, any> }

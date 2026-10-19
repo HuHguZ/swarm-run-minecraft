@@ -1,5 +1,5 @@
-const pick = require('./pick')
-const assess = require('./assess')
+import pick = require('./pick')
+import * as assess from './assess'
 const enabled = () => process.env.ND_POLAR_BEAR !== '0'
 // Paper 1.21.11: PolarBear, MeleeAttackGoal, Mob, MoveControl, LivingEntity (REPORT.md).
 const reach = .7 + Math.sqrt(2.04) - .6 + .3
@@ -48,8 +48,8 @@ function risks(bot, struckId = null) {
 const attacking = (bot, e) => risks(bot).some(r => r.e.id === e.id && r.attacking && r.visible && canReach(bot, r.e))
 function pillarCause(bot) {
   const feet = bot.entity.position.floored()
-  return [bot.game?.dimension, feet.toString(), require('./pack').buildCount(bot, 'overworld'),
-    require('./fortify').pickFiller(bot, { steady: true })?.name,
+  return [bot.game?.dimension, feet.toString(), (require('./pack') as typeof import('./pack')).buildCount(bot, 'overworld'),
+    (require('./fortify') as typeof import('./fortify')).pickFiller(bot, { steady: true })?.name,
     ...Array.from({ length: 8 }, (_, k) => bot.blockAt(feet.offset(0, k - 1, 0))?.stateId ?? bot.blockAt(feet.offset(0, k - 1, 0))?.name)].join('|')
 }
 
@@ -75,7 +75,7 @@ function plan(session, known = risks(session.bot)) {
   const active = known.filter(r => r.attacking && r.visible && r.d < MECH.followMax && canReach(bot, r.e))
   if (!enabled() || !active.length) return null
   const bear = active.sort((a, b) => a.d - b.d)[0]
-  const movement = require('./movement'), fortify = require('./fortify'), flee = require('./flee')
+  const movement: typeof import('./movement') = require('./movement'), fortify: typeof import('./fortify') = require('./fortify'), flee: typeof import('./flee') = require('./flee')
   const water = movement.inWater(bot), p = bot.entity.position, feet = p.floored()
   const gap = Math.min(...active.map(r => { const dx = Math.abs(p.x - r.e.position.x), dz = Math.abs(p.z - r.e.position.z)
     return Math.max(dx, dz) ? Math.hypot(dx, dz) * Math.max(0, 1 - reach / Math.max(dx, dz)) : 0 }))
@@ -91,10 +91,10 @@ function plan(session, known = risks(session.bot)) {
     shoreSeconds = length / MECH.swim
   }
   // Three above the highest neighbouring foothold: a jumping 1.4-high bear reaches 1.4 + 1.252 < 3.
-  const lift = require('./survival/hold-out').standTop(bot, feet), top = feet.y + 3 + lift
+  const lift = (require('./survival/hold-out') as typeof import('./survival/hold-out')).standTop(bot, feet), top = feet.y + 3 + lift
   const signature = pillarCause(bot)
   const filler = fortify.pickFiller(bot, { steady: true })
-  const pillar = !water && bot.entity.onGround && filler && require('./pack').buildCount(bot, 'overworld') >= top - feet.y &&
+  const pillar = !water && bot.entity.onGround && filler && (require('./pack') as typeof import('./pack')).buildCount(bot, 'overworld') >= top - feet.y &&
     bot.blockAt(feet.offset(0, -1, 0))?.boundingBox === 'block' &&
     Array.from({ length: top - feet.y + 2 }, (_, k) => bot.blockAt(feet.offset(0, k + 1, 0))).every(b => b?.boundingBox === 'empty' && !/water|lava/.test(b.name)) &&
     signature !== bot._ndBearPillarFailed
@@ -103,7 +103,7 @@ function plan(session, known = risks(session.bot)) {
   const dryRoute = run && run.run >= 3 && !flee.runLength(bot, run.dir, run.run).wet &&
     run.end.distanceTo(bear.e.position) > bear.d
   const response = building ? { action: 'PillarUp', cost: 0, seconds: 0, loss: 0 } : choose({
-    hp: bot.health, hit, fightSeconds, shield: bot.inventory.slots[45]?.name === 'shield' && require('./game-clock').now() >= (bot._ndShieldDisabledUntil || 0), water, distance: bear.d, gap,
+    hp: bot.health, hit, fightSeconds, shield: bot.inventory.slots[45]?.name === 'shield' && (require('./game-clock') as typeof import('./game-clock')).now() >= (bot._ndShieldDisabledUntil || 0), water, distance: bear.d, gap,
     route: !!dryRoute, shoreSeconds, food: bot.food,
     pillarSeconds: pillar ? (top - feet.y) * (JUMP.ticks + 1) / 20 : Infinity })
   return { ...response, id: bear.e.id, top: building ? session._ndBearPillar.top : top, signature }
@@ -116,7 +116,7 @@ async function pillar(session, ctl, target) {
     bot.pathfinder?.setGoal(null); bot.clearControlStates()
     let placed = 0
     while (!ctl.aborted && bot.health > 0 && bot.entity.position.y < target.top) {
-      const result = await require('./build').towerUp(bot, ctl, 1, { sneak: true, fast: true, maxDigMs: 0, item: require('./fortify').pickFiller(bot, { steady: true })?.name })
+      const result = await (require('./build') as typeof import('./build')).towerUp(bot, ctl, 1, { sneak: true, fast: true, maxDigMs: 0, item: (require('./fortify') as typeof import('./fortify')).pickFiller(bot, { steady: true })?.name })
       placed += result.placed
       if (!result.ok) {
         if (!ctl.aborted) bot._ndBearPillarFailed = pillarCause(bot)
@@ -126,4 +126,4 @@ async function pillar(session, ctl, target) {
     return { ok: !ctl.aborted && bot.health > 0 && bot.entity.position.y >= target.top, placed }
   } finally { if (session._ndBearPillar?.ctl === ctl) session._ndBearPillar = null }
 }
-module.exports = { enabled, MECH, JUMP, canReach, risks, attacking, choose, plan, pillar }
+export { enabled, MECH, JUMP, canReach, risks, attacking, choose, plan, pillar }

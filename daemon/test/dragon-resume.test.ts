@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const dragon = require(process.env.ND_DRAGON_TEST_IMPL || '../src/dragon')
 
 const kit = { bow: 1, arrows: 11, blocks: 26, weapon: 'iron_sword', pickaxe: 'iron_pickaxe', food: 13, beds: 5 }
@@ -74,7 +74,7 @@ test('знание кристаллов не переносится между �
 })
 
 test('настоящий вход dragon full пропускает повторную проверку arrow32 для того же боя', async () => {
-  const bot = Object.assign(new EventEmitter(), body())
+  const bot: any = Object.assign(new EventEmitter(), body())
   bot.health = 20
   bot.registry = { entitiesByName: { ender_dragon: { metadataKeys: ['health', 'phase'] } }, blocksByName: {} as Record<string, any> }
   bot.entities[42].metadata = [68, 0]

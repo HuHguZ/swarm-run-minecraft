@@ -1,4 +1,4 @@
-const clock = require('../game-clock')
+import * as clock from '../game-clock'
 
 export function beginAerialRecovery(bot: any, ctl: { aborted: boolean }, durationMs = 750) {
   const until = clock.now() + durationMs

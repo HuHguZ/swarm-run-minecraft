@@ -12,7 +12,7 @@ stub('../src/bastion/bastion', { burrow: async () => burrowResult })
 stub('../src/blaze', { digInNear: async () => { pits.push('pit'); return { ok: true, sealed: true, depth: 3, at: { x: 1, y: 61, z: 2 } } } })
 const covers: string[] = []
 stub('../src/nether-cover', { blind: () => process.env.ND_NE_COVER !== '0', coverHere: async () => { covers.push('cover'); return { ok: true, how: 'проёмы вокруг закрыл' } } })
-const { burrowIntent } = require('../src/bastion/burrow-intent')
+import { burrowIntent } from '../src/bastion/burrow-intent'
 // Прежний путь (колонна, яма) — при знании scan / ND_NE_COVER=0; вслепую — nether-cover.coverHere (тест ниже).
 process.env.ND_NE_COVER = '0'
 const session = { bot: { game: { dimension: 'the_nether' } } }

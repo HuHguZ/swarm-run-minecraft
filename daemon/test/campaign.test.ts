@@ -1,12 +1,15 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
-const pack = require('../src/pack')
-const netherSupply = require('../src/campaign/nether-supply')
+import { campaignRequire, campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import { REPO_ROOT } from '../src/paths'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
+import * as pack from '../src/pack'
+import * as netherSupply from '../src/campaign/nether-supply'
 
 test('возобновление кампании сохраняет выработанный бастион и выбирает следующий', async () => {
   const state: Record<string, any> = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 300, y: 20, z: 150 },
@@ -49,13 +52,13 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
   }
   const context = {
     require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync (file, line) { if (logs) logs.push(String(line)) } } :
-      name === './src/telemetry' && records ? { ...require('../src/telemetry'), on: () => true, record: row => records.push(row) } :
-      name === path.resolve(__dirname, '../src/campaign/nether-supply') ? netherSupply : require(name),
+      name === './src/telemetry' && records ? { ...(require('../src/telemetry') as typeof import('../src/telemetry')), on: () => true, record: row => records.push(row) } :
+      name === './src/campaign/nether-supply' ? netherSupply : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js', ...argv], env },
     console: { log () {}, error () {} }, setTimeout, Date: clock ? fakeDate(clock) : Date, queueMicrotask
   }
-  vm.runInNewContext(fs.readFileSync(process.env.CAMPAIGN_TEST_SOURCE || path.join(__dirname, '../campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript(process.env.CAMPAIGN_TEST_SOURCE) + `
     module.exports = { act, refresh, readMemory, nextBastion, viaNetherTo, ensurePick, ensureTable, died: () => died, stage: name => { stage = name }, craft, replenishNetherSupply, nightGuard, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, mineSeenAll, lightUp, known, makeBed,
       changeNetherCause: () => typeof changeNetherCause === 'function' ? changeNetherCause() : false, deferBastionMining, pearlTrip: () => ({ ...pearlTrips }), pearlPrice: endermenSecondsPerPearl, forestToHunt, emptyForests: () => emptyForests, trackedHunt: async () => { strategyExecuting = true; try { return await act('pearls', {}) } finally { strategyExecuting = false; strategyInterrupted = false } }, retryState: typeof netherRetryState === 'function' ? netherRetryState : () => '', fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
       continueFortressChoice: (selection, blocked) => typeof continueFortressChoice === 'function' ? continueFortressChoice(selection, blocked) : false, worldObservation: () => intelligence.environment.observe(),
@@ -79,7 +82,7 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
         if (h.recoverGuard) recoverGuard = h.recoverGuard; if (h.toSurface) toSurface = h.toSurface; },
       init: () => { state = testState; sit = testSituation; }
     }
-  `, withClockFixture(Object.assign(context, { testState: state, testSituation: situation })))
+  `, cjsContext(withClockFixture(Object.assign(context, { testState: state, testSituation: situation }))))
   context.module.exports.init()
   return context.module.exports
 }
@@ -2535,14 +2538,14 @@ test('failed Nether search retries on changed evidence or eight-block displaceme
     inventory: { iron_pickaxe: 1, cooked_mutton: 5 } }
   const situation: any = { foes: 0, pickLeft: 300, fight: { order: [] } }
   const c = campaign(state, situation)
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8')
+  const source = campaignScript()
   const start = source.indexOf('const cooling ='), end = source.indexOf('const resetPauses =', start)
   assert.ok(start >= 0 && end > start)
   let now = 0
   const context: any = { state, fails: new Map(), failureKey: s => s, netherRetryState: c.retryState,
     dim: () => state.dimension, gameClock: { now: () => now }, process: { env: { ND_NE_STAY: '1' } },
     PAUSE_MIN: [5,10,20,40], log() {}, have: () => 0, known: c.known, barterFlow: { enabled: () => false } }
-  vm.runInNewContext(source.slice(start, end) + '\n    globalThis.isBlocked = () => cooling({ name: "nether" }); globalThis.fail = () => failStage("nether", "nether");', context)
+  vm.runInNewContext(source.slice(start, end) + '\n    globalThis.isBlocked = () => cooling({ name: "nether" }); globalThis.fail = () => failStage("nether", "nether");', cjsContext(context))
   context.fail()
   assert.equal(context.isBlocked(), true)
   now += 24 * 3600000; state.health = 20; state.inventory.quartz = 64

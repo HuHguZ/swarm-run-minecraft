@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Блочный клатч от падения (TODO.md «Спидраннерское перемещение блоками», шаг 1;
 // Codex 30.09.2026, codex-lab/clutch — механика по javap Paper 1.21.11, таблицы
 // там же: placement-mechanics.md, fall-mechanics.md). Там, где вода не годится —
@@ -497,7 +497,7 @@ function install (session, opts) {
       st.steering = { yaw: plan.yaw, control: plan.control, previous }
     })
   }
-  const ladderState = facing => require('prismarine-block')(bot.registry).fromProperties('ladder', { facing, waterlogged: false }).stateId
+  const ladderState = facing => (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry).fromProperties('ladder', { facing, waterlogged: false } as Record<string, any>, undefined).stateId
   function fireLadder (plan, snapshot) {
     if (st.stopped || scheduled !== plan) return
     cancelScheduled()
@@ -627,3 +627,4 @@ function install (session, opts) {
   return st
 }
 module.exports = { create, install, decide, intersects, selectBlock, FILLER, IDLE, copyState }
+export { create, install, decide, intersects, selectBlock, FILLER, IDLE, copyState }

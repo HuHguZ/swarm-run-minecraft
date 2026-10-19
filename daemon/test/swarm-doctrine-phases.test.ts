@@ -160,7 +160,7 @@ test('panic: a flee holds for three game seconds while the risk estimate flicker
 })
 
 test('risk: allies who can arrive in time count as helpers even if only one of them sees the foes', () => {
-  const { assessSwarmFight } = require('../src/swarm')
+  const { assessSwarmFight }: typeof import('../src/swarm') = require('../src/swarm')
   const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
   const team = [['a', 0, 0], ['b', -5, 1], ['c', -5, -1], ['d', -6, 0]].map(([id, x, z]) => member(id as string, { position: p(x as number, 64, z as number), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))
   const board = new SwarmBoard('blue', () => 1000, 3000)
@@ -172,7 +172,7 @@ test('risk: allies who can arrive in time count as helpers even if only one of t
 })
 
 test('risk: six armed allies take turns against one stronger foe instead of all fleeing from it', () => {
-  const { assessSwarmFight } = require('../src/swarm')
+  const { assessSwarmFight }: typeof import('../src/swarm') = require('../src/swarm')
   const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'], DIAMOND = ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots']
   const risk = (n: number) => {
     const team = Array.from({ length: n }, (_, i) => member('b' + i, { position: p(0, 64, i - n / 2), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))
@@ -230,7 +230,7 @@ test('fight to the finish: equal or slightly fewer fight on, a crushed group reg
 })
 
 test('hp estimate: the board keeps the lowest honest upper bound across allies, and the team fight uses it', () => {
-  const { assessTeamFight } = require('../src/swarm')
+  const { assessTeamFight }: typeof import('../src/swarm') = require('../src/swarm')
   const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'], gear = { equipment: { weapon: 'iron_sword', armor: IRON } }
   const team = ['a', 'b'].map((id, i) => member(id, { position: p(0, 64, i * 1.5), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))
   const board = new SwarmBoard('blue', () => 1000, 3000)

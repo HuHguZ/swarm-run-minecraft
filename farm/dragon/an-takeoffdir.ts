@@ -1,6 +1,6 @@
 // Куда уходит голова на взлёте: смещение головы (и тела) через 0.25–1 с от начала TAKEOFF
 // в осях «вдоль взгляда сидящего / поперёк».
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const by: Record<string, any> = {} as Record<string, any>
 for (const d of fs.readdirSync(L).filter(f => f.startsWith('trace-'))) {

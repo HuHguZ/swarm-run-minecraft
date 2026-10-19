@@ -1,15 +1,17 @@
+import { campaignRequire, campaignScript } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const { withClockFixture } = require('./clock-fixture')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+import { withClockFixture } from './clock-fixture'
 
 function fixture({ noPath = false } = {}) {
   const calls: any[] = []
   class Socket { on() {} }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : require(name),
+  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} },
     process: { argv: ['node', 'campaign.js'], env: {} },
     console: { log() {}, error() {} }, setTimeout, Date,
@@ -21,13 +23,13 @@ function fixture({ noPath = false } = {}) {
       context.module.exports.known.portal = { x: 156, y: -10, z: 194 }
       return { status: 'done', detail: {} }
     } }
-  vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code +
+  vm.runInNewContext(campaignScript() +
     `\nstate = testState; sit = { surface: false, foes: 0, free: 25, night: true };
     known.lava = { x: 156, y: -10, z: 196 };
     sense = readMemory = recoverGuard = unclutter = ensureFlint = lootSeenStructures = async () => {};
     act = testAct;
     castForKit = async () => ({ status: 'done', detail: { stopped: 'места на берегу нет' } });
-    module.exports = { cast: stageRun('cast'), walkAway, known };`, withClockFixture(context))
+    module.exports = { cast: stageRun('cast'), walkAway, known };`, cjsContext(withClockFixture(context)))
   return { calls, cast: context.module.exports.cast, walkAway: context.module.exports.walkAway }
 }
 

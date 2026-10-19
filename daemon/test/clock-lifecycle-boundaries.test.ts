@@ -1,14 +1,18 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const Vec3 = require('vec3')
-const gameClock = require('../src/game-clock')
-const { clockFixture } = require('./clock-fixture')
+import { campaignScript, withSetters } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import 'node:fs'
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as gameClock from '../src/game-clock'
+import { clockFixture } from './clock-fixture'
+import { transpiledSource } from './source-fixture'
 
-const campaignSource = fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8')
+const campaignSource = campaignScript()
 const turn = () => new Promise<any>(resolve => setImmediate(resolve))
 
 // Keep actual campaign branches in the fixture while holding game time frozen.
@@ -18,7 +22,7 @@ function frozenCampaign (code, context) {
   clock.setState({ is_frozen: true })
   let wallMs = 0
   const waits = []
-  const port = clockFixture({ setTimeout: (...args) => clock.setTimeout(...args) })
+  const port = clockFixture({ setTimeout: (...args: Parameters<typeof clock.setTimeout>) => clock.setTimeout(...args) })
   const setWallTimeout = (resolve, ms) => {
     const wait = { at: wallMs + ms, resolve }
     waits.push(wait)
@@ -30,7 +34,7 @@ function frozenCampaign (code, context) {
     clearTimeout: wait => { const index = waits.indexOf(wait); if (index >= 0) waits.splice(index, 1) }
   }
   const sandbox = { ...context, gameClock: port, module: { exports: null } }
-  vm.runInNewContext(`const sleep = ms => gameClock.sleep(ms); ${code}; module.exports = run`, sandbox)
+  vm.runInNewContext(`const sleep = ms => gameClock.sleep(ms); ${code}; module.exports = run`, cjsContext(withSetters(sandbox)))
   return {
     clock, run: sandbox.module.exports,
     advanceWall (ms) {
@@ -70,7 +74,7 @@ test('campaign retries a failed connection using wall time while game ticks are 
 
 test('campaign closes its socket after the wall RPC watchdog in a frozen world', async () => {
   const start = campaignSource.indexOf('    if (!detached && !manualControl')
-  const end = campaignSource.indexOf('\n  }\n})', start)
+  const end = campaignSource.indexOf('\n  }\n}', start) // конец runCampaign (campaign/loop)
   assert.ok(start >= 0 && end > start)
   let closed = false
   const context = { detached: false, manualControl: false, state: {} as Record<string, any>, log () {},
@@ -90,7 +94,7 @@ test('campaign closes its socket after the wall RPC watchdog in a frozen world',
 })
 
 test('Director loop installs its next wait on replacement clocks after disconnect', async () => {
-  const { Director } = require('../src/director')
+  const { Director }: typeof import('../src/director') = require('../src/director')
   let botReads = 0
   const director = Object.create(Director.prototype)
   Object.assign(director, { on: true, session: { get bot () { botReads++; return null } } })
@@ -119,7 +123,7 @@ test('Director loop installs its next wait on replacement clocks after disconnec
 })
 
 test('shared movement wait unwinds controls when its clock ends during an intent', async () => {
-  const { escapeWater } = require('../src/movement')
+  const { escapeWater }: typeof import('../src/movement') = require('../src/movement')
   // The A6 water budget plans only visible routes; this fake bot has no world to raycast, so pin the legacy path —
   // the subject here is the clock unwinding, not route visibility.
   const prevBudget = process.env.ND_WATER_ESCAPE_BUDGET
@@ -155,7 +159,7 @@ test('shared movement wait unwinds controls when its clock ends during an intent
 })
 
 test('Director restart while frozen keeps one cycle and discards the previous generation', async () => {
-  const { Director } = require('../src/director')
+  const { Director }: typeof import('../src/director') = require('../src/director')
   const clock = gameClock.activate(new gameClock.GameClock({ manual: true }))
   clock.setState({ is_frozen: true })
   const director = Object.create(Director.prototype)

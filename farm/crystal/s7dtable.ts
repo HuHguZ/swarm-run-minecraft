@@ -1,9 +1,9 @@
 'use strict'
 // Таблица по механикам для отчёта S7d: строка на (серия, набор) — раундов, победы, ничьи, причины смертей,
 // ключевые частоты набора, темп. Полные файлы серий (все ROUND), смерти — ROUND.deaths (лог сервера в окне раунда).
-//   node farm/crystal/s7dtable.js farm/results/s7d-g-27 farm/results/s7d-i-29p …
-const fs = require('fs')
-const path = require('path')
+//   node dist/farm/crystal/s7dtable.js farm/results/s7d-g-27 farm/results/s7d-i-29p …
+import * as fs from 'fs'
+import path = require('path')
 
 const num = (x) => Number(x) || 0
 const sum = (xs) => xs.reduce((s, x) => s + num(x), 0)

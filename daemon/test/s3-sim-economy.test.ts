@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeSkillSample } from '../../farm/strategy-costs'
+import { normalizeSkillSample } from '../../farm/analysis/strategy-costs'
 import { applyCosts, learnCosts, modelFor, type CostModel } from '../src/core/cost-model'
 import { speedrunRegistry, travelTicks, dragonGoal } from '../src/core/speedrun'
 import { plan, StrategicDirector, StrategyRegistry, type Strategy } from '../src/core/strategy'
 import { amount, emptyWorld, fact, knows, type WorldState } from '../src/core/world-state'
 import { attemptModel, measuredPartial, partialEffect, SimEnvironment } from '../src/environments/sim'
-import { simulate, resetPolicy } from '../sim'
+import { simulate, resetPolicy } from '../sim/sim'
 
 function nether(extra: Partial<WorldState> = {}): WorldState {
   const s = emptyWorld()

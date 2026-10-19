@@ -6,7 +6,7 @@
 // Вниз — только то, что видно: наши подтверждённые попадания (damage_event по нему в окне после удара),
 // урон от видимых источников (лава, огонь, падение, взрыв). Вверх — видимое лечение (еда, зелья, тотем)
 // и естественная регенерация в границах FoodData. Для мобов адаптер ставит точное хп (exact).
-const dm = require('./damage-model')
+import * as dm from './damage-model'
 
 const MAX_HP = 20
 // FoodData (javap): saturatedRegenRate 10 — при сытости 20 и насыщении > 0 лечит min(насыщение, 6)/6 хп
@@ -174,4 +174,4 @@ function cdf (est, x) {
   return hi > mean ? 0.5 + 0.5 * (x - mean) / (hi - mean) : 1
 }
 
-module.exports = { createHpEstimate, cdf, REGEN_FAST, REGEN_SLOW, FOOD, POTION, MAX_HP }
+export { createHpEstimate, cdf, REGEN_FAST, REGEN_SLOW, FOOD, POTION, MAX_HP }

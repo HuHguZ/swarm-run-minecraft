@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Стояние на столбах (интеграционная арена 2026-09-26): оба бота на своих
 // столбах в 4–5 блоках над полом, в 4.8 друг от друга, и минутами никто
 // никого не бьёт: рефлекс края (edges.guard) не пускает шагнуть с обрыва
@@ -11,9 +11,9 @@ const gameClock = require('./game-clock')
 //    (world/entity/LivingEntity.calculateFallDamage, клиент 1.21.11), при
 //    запасе хп и безопасной посадке; рефлекс края пропускает по allow().
 
-const Vec3 = require('vec3')
-const edges = require('./edges')
-const { placeBlockAt, pickFiller } = require('./build')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const edges: typeof import('./edges') = require('./edges')
+const { placeBlockAt, pickFiller }: typeof import('./build') = require('./build')
 
 const EYE = 1.62
 const HIT_REACH = 2.9
@@ -128,3 +128,4 @@ async function dropDown (bot, ctl, foe, { edgeGuard, minHpAfter = 8 }: any = {})
 }
 
 module.exports = { elevatedToward, nextCell, build, dropDown, reachFrom, stepOnto }
+export { elevatedToward, nextCell, build, dropDown, reachFrom, stepOnto }

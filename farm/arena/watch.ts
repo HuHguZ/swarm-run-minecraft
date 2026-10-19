@@ -4,8 +4,8 @@
 import { ROOT, SOLO } from './context'
 import { SPRINT, power, MOB_SPD, worthOf } from './gear'
 import type { ArenaContext } from './context'
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 
 const dist3 = (a, c) => Math.hypot(a.x - c.x, a.y - c.y, a.z - c.z)
 
@@ -50,15 +50,15 @@ export function installSight (ctx: ArenaContext) {
   // Соло (люди против роя): натиск — бегут только на хилку, без обманок, голые сперва лутаются (14.10: «не атакуют»).
   // Укрытия для слабых (натиск): закрытые места колизея — камеры, галереи, лаборатория, оружейная, комнаты спавна.
   const hideouts = arms && L?.map === 'colosseum' ? [...L.areas.filter(a => /^(камера|галерея|лаборатория|оружейная)/.test(a.id)), ...(L.spawnRooms || []).filter(r => r.team !== (ctx.HUMAN_TEAM || 'red')).map(r => r.spot)]
-    .map(a => ({ x: X + a.x + .5, y: Y + a.y, z: Z + a.z + .5, tier: require('./loot').tierOf(a.y) })) : []
+    .map(a => ({ x: X + a.x + .5, y: Y + a.y, z: Z + a.z + .5, tier: (require('./loot') as typeof import('./loot')).tierOf(a.y) })) : []
   // Сундуки крыши и венца (ярусы 4–5, лучший лут) — тоже места обхода: пешком туда не дойти, только столбом с галереи 4 (dy 24)
   // (пользователь 15.10: «проверь, что сундуки с самой большой высоты лутают»; за ночной раунд их не открыли ни разу).
-  const chestTops = arms && L?.map === 'colosseum' ? (L.chests || []).filter(c => c.y >= 30).map(c => ({ x: X + c.x + .5, y: Y + c.y, z: Z + c.z + .5, climbFrom: Y + 24, tier: require('./loot').tierOf(c.y) })) : []
+  const chestTops = arms && L?.map === 'colosseum' ? (L.chests || []).filter(c => c.y >= 30).map(c => ({ x: X + c.x + .5, y: Y + c.y, z: Z + c.z + .5, climbFrom: Y + 24, tier: (require('./loot') as typeof import('./loot')).tierOf(c.y) })) : []
   // Обрыв у цели (окружение — бить с другой стороны, чтобы отбросило вниз): по модели колизея с раскладкой — в 8 сторонах на
   // 1–3 бл. от него пола нет на 4+ бл. вниз. Модель — как построено (столбы и воронки раунда не видит).
   let edgeOf = null, digSites = null, surfaceY = null, ladderSites: any[] = []
   if (arms && L?.map === 'colosseum') {
-    const C = require('../../daemon/colosseum'); const g = C.model({ R: 24, ceilH: 16 }).g
+    const C: typeof import('../../daemon/arena/colosseum') = require('../../daemon/arena/colosseum'); const g = C.model({ R: 24, ceilH: 16 }).g
     for (const [x, y, z, b] of [...L.field, ...L.set]) g.set(x, y, z, b === 'air' ? '' : b.replace(/\{.*$/, ''))
     // Пол поля (песок на −1) кладут команды раскладки, в модели его нет; лава ям — не пол (туда и скидывать).
     const solid = (x, y, z) => { const b = g.get(x, y, z); return b ? !/carpet|banner|lantern|button|torch|ladder|lava/.test(b) : y === -1 && Math.abs(x) <= L.R && Math.abs(z) <= L.R }
@@ -80,7 +80,7 @@ export function installSight (ctx: ArenaContext) {
     // Места для ям-ловушек: клетка пола этажа (галереи dy 8/16/24, крыша-терраса 31), под ней 2 блока, ниже — пустота 4+
     // (этаж ниже): вскрыть 2 — дыра с падением 6–8 бл.
     const holeCells: any[] = []
-    const mc = require('../../daemon/node_modules/minecraft-data')('1.21.11')
+    const mc = (require('../../daemon/node_modules/minecraft-data') as typeof import('../../daemon/node_modules/minecraft-data'))('1.21.11')
     const floorTop = (x, y, z) => { const b = g.get(x, y, z); if (C.sturdyFace(b, 'up')) return y + 1; return C.isSlab(b) && C.parse(b).props?.type === 'bottom' ? y + .5 : null }
     const handMs = b => { const d = b && mc.blocksByName[C.parse(b).name]; return !d || d.diggable === false || d.hardness < 0 ? Infinity : Math.ceil(d.hardness * (d.harvestTools ? 100 : 30)) * 50 }
     for (let x = -L.half; x <= L.half; x++) for (let z = -L.half; z <= L.half; z++) for (const F of [8, 16, 24, 31]) {
@@ -121,7 +121,7 @@ export function installSight (ctx: ArenaContext) {
     // Замер 14.10: отрезки по поверхности — с песка на крышу за 58 с и 29 блоков без кирки; по прямой — внутрь засыпки рядов.
     surfaceY = (x, z, top) => { const rx = Math.floor(x - X), rz = Math.floor(z - Z); for (let y = Math.floor(top - Y); y >= -2; y--) if (solid(rx, y - 1, rz) && !solid(rx, y, rz) && !solid(rx, y + 1, rz)) return Y + y; return null }
   }
-  ctx.swarmDriver = require('../swarm-driver').createSwarmDriver({ bots, pos, alive: ctx.alive, arms, arena, hideouts, chestTops, perches: ctx.perches, drops: () => Object.values(ctx.deathAt), aggressive: SOLO && process.env.SWARM_AGGRO !== '0',
+  ctx.swarmDriver = (require('../swarm/swarm-driver') as typeof import('../swarm/swarm-driver')).createSwarmDriver({ bots, pos, alive: ctx.alive, arms, arena, hideouts, chestTops, perches: ctx.perches, drops: () => Object.values(ctx.deathAt), aggressive: SOLO && process.env.SWARM_AGGRO !== '0',
     sandSpot: arms && L?.map === 'colosseum' ? { x: X + 0.5, y: Y, z: Z + 10.5 } : null, edgeOf, digSites, surfaceY, ladderSites,
     announce: SOLO ? (text, color) => rcon(i, `tellraw @a ${JSON.stringify([{ text: '[рой] ', color: 'dark_aqua' }, { text, color }])}`) : null,
     home: b => { if (arms) return ctx.armsHome(b, 0); const [x, z] = ctx.home(b, 0).split(/\s+/).map(Number); return { x, y: Y, z } }, log,

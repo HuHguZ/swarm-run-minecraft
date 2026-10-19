@@ -4,8 +4,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const { Vec3 } = require('vec3')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import { Vec3 } from 'vec3'
+import { transformSync } from 'esbuild'
 
 async function receipt({ sky = true, openSides = 2, targetY = null, pitExit = false } = {}) {
   const file = path.join(__dirname, '../src/survival/surface-body.ts'), realRequire = createRequire(file)
@@ -25,7 +26,7 @@ async function receipt({ sky = true, openSides = 2, targetY = null, pitExit = fa
     if (name === './recover-loot') return { ...actual, pitCheck: () => ({ out: pitExit, free: false, sky }), openSky: () => sky }
     return actual
   } }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts' }).code, context)
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts' }).code, cjsContext(context))
   return context.module.exports.surface({ bot, mcData: {}, journal: { append() {} } },
     { aborted: !sky && targetY === null || openSides < 2 && !pitExit, onAbort: [] }, { targetY })
 }

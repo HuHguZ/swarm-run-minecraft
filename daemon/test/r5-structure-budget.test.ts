@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import route = require('../src/route')
 const info = {
   spawn: { x: 0, z: 0 }, sky: { x: 40, y: 64, z: 0, src: 20 },
   treasure: { x: 320, z: 0 }, village: null, outposts: [],
@@ -41,7 +41,7 @@ test('explicit budget disable preserves the former structure choice', () => {
   }
 })
 test('campaign caps the structure RPC and keeps consumed search time on the next plan', async () => {
-  const { fixture } = require('./r5-budget-fixture')
+  const { fixture }: typeof import('./r5-budget-fixture') = require('./r5-budget-fixture')
   const i = { ...info, treasure: { x: 20, z: 0 }, village: { x: 80, z: 0 }, ores: { ...info.ores,
     chests: [{ x: 20, y: 64, z: 0, table: 'buried_treasure' }], golems: [{ x: 80, y: 64, z: 0 }] } }
   const c = fixture(i); await c.run()

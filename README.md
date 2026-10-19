@@ -43,7 +43,7 @@ MCP-сервер (mcp/)      мост для Claude Code: ~80 инструмен
 - **Иерархия решений.** Стратегический граф выбирает путь к дракону. Тактический граф пересчитывает угрозу 0–4 и
   может сменить бой на отход, укрытие или лечение. Экстренное спасение имеет высший приоритет; после инцидента
   кампания обновляет состояние и перепланирует. Владение управлением: Emergency → Tactical → Skill.
-- **Удар и установка блока — только по тому, что видит прицел** (`daemon/src/pick.js`): сквозь стены бот не бьёт.
+- **Удар и установка блока — только по тому, что видит прицел** (`daemon/src/pick.ts`): сквозь стены бот не бьёт.
 - **Механика сверена с кодом игры 1.21.11** (байткод Paper): урон взрыва кровати, фазы дракона, бартер пиглинов,
   форма портала из 10 обсидиана и т.д. — числа в `SPEEDRUN.md`.
 
@@ -52,13 +52,14 @@ MCP-сервер (mcp/)      мост для Claude Code: ~80 инструмен
 | Путь | Что |
 |---|---|
 | `daemon/src/` | тело бота: движение, бой, выживание, Ад, бастион, крепость, дракон… |
-| `daemon/campaign.ts`, `daemon/src/campaign/` | кампания и адаптер зрелых навыков к стратегическому графу |
+| `daemon/campaign.ts` (вход), `daemon/campaign/` (этапы, навыки, цикл), `daemon/src/campaign/` | кампания и адаптер зрелых навыков к стратегическому графу |
 | `daemon/src/core/`, `daemon/src/environments/` | независимое ядро, состояние, реестр стратегий, Minecraft и абстрактный симулятор |
 | `daemon/src/tactics/`, `daemon/src/combat/` | тактический граф, управление приоритетами, воздушные действия и прогноз видимого жемчуга |
 | `daemon/test/` | тесты (`node:test`) |
-| `daemon/try-*.js` | сцены-проверки поведения против живого мира (готовят арену командами, печатают вердикты) |
-| `mcp/` | MCP-сервер для Claude Code (`node mcp/src/index.js`) |
-| `farm/` | ферма тестовых миров: `farm.js`, сиды `farm/seeds/`, скан карт `route-scan/`, серии этапов |
+| `daemon/scenes/<этап>/try-*.ts` | сцены-проверки поведения против живого мира (готовят арену командами, печатают вердикты); этапы `ow`, `nether`, `end`, `move`, `pvp`, `infra`, общий код сцен — `scenes/lib/`, старые сцены до фермы — `scenes/legacy/`; `farm.js run` находит сцену по имени файла |
+| `daemon/arena/`, `daemon/castle/`, `daemon/sim/`, `daemon/tools/` | арена PvP и Колизей, замок, CLI симулятора стратега, мелкие утилиты |
+| `mcp/` | MCP-сервер для Claude Code (`node dist/mcp/src/index.js`) |
+| `farm/` | ферма тестовых миров: `farm.ts`, сиды `farm/seeds/`, скан карт `route-scan/`, серии этапов `series/`, сводки `analysis/`, стенды `scenes/`, `swarm/` |
 | `run/` | скрипты основного мира (PowerShell): демон, кампания, RCON |
 | `tools/seedtool/` | подбор сидов на [cubiomes](https://github.com/Cubitect/cubiomes) с генерацией 1.21.11 |
 | `AGENTS.md` | правила проекта для ИИ-агентов (честная игра, ресурсы машины, что не трогать) |
@@ -83,43 +84,45 @@ npm run typecheck
 npm test                                  # тесты, сервер не нужен
 ```
 
-Исходники JavaScript перенесены в TypeScript. Сборка esbuild создаёт `.js` и карты исходников рядом с `.ts`, чтобы
-сохранить существующие команды фермы, пути памяти и загрузку модулей. Сгенерированные файлы в Git не хранятся.
-`npm run build:watch` пересобирает изменённые модули; запущенный демон после изменения кода нужно перезапустить.
-Новое ядро, адаптеры и графы проверяются в strict-режиме. В прежних навыках сохранены динамические типы;
-общий `typecheck` проверяет и их, но перевод всех внутренних структур навыков в strict остаётся отдельной работой.
+Код — TypeScript с ES-модулями; `tsc` (TypeScript 7) собирает его в CommonJS в папку `dist/` с той же раскладкой,
+что у исходников (`dist/daemon/src`, `dist/farm`, `dist/mcp`, `dist/run`), с картами исходников. Рядом с `.ts`
+собранных файлов нет; запуск — из `dist/`. `npm run build:watch` пересобирает изменённые модули; запущенный демон после
+изменения кода нужно перезапустить. Пути к данным, логам, памяти бота и мирам строятся от корня репозитория
+(`REPO_ROOT` из `daemon/src/paths.ts`), к собранным модулям — от `__dirname`.
 
-Для импортов доступны `#core/*`, `#body/*`, `#strategy/*`, `#tactics/*`; пути согласованы в TypeScript и Node.js.
+`npm run typecheck` проверяет весь проект и строгую зону — файлы из `include` в `tsconfig.core.json` (ядро, среды,
+тактика, навигация, графы). Зона расширяется переносом файлов в её `include`.
+
 Из корня доступны `npm run start:daemon`, `start:mcp`, `campaign`, `farm`, `rpc` с аргументами после `--`.
 
 Стратегии регистрируются в `daemon/src/core/speedrun.ts`: предусловия, количественные эффекты, цена, риск,
 срок и проверка успеха по новому наблюдению. Граф выбирает дешёвый путь, повышает цену неудачной ветви и
 прекращает бессмысленные повторы. Готовый маршрут по карте остаётся отдельным навыком. Явные этапы
-`node daemon/campaign.js iron` сохраняют прежний режим для сравнительных проверок.
+`node dist/daemon/campaign.js iron` сохраняют прежний режим для сравнительных проверок.
 
-`node daemon/sim.js 100` прогоняет тот же стратег в абстрактной среде. После числа прогонов можно передать
+`node dist/daemon/sim/sim.js 100` прогоняет тот же стратег в абстрактной среде. После числа прогонов можно передать
 JSONL телеметрии для калибровки длительности и исходов. Симулятор проверяет развилки и тупики, физику навыков
 проверяет ферма Paper. Решения стратега и тактические эпизоды записываются вместе с телеметрией навыков.
 
 1. Поднимите сервер Paper 1.21.11 (офлайн-режим, RCON включён). Для сцен лаборатории боту нужен оператор; для честного
    прохождения — нет. Пороги проверки движения в `spigot.yml` стоит ослабить
    (`moved-too-quickly-multiplier`, `moved-wrongly-threshold`): физика mineflayer чуть расходится с сервером 1.21.11.
-2. Запустите демон: `cd daemon && node src/index.js` (порт WebSocket — `ND_WS_PORT`, сервер — `MC_HOST`/`MC_PORT`,
-   ник — `MC_USERNAME`, память — `ND_MEMORY_DIR`; все настройки — `daemon/src/config.js`).
-3. Дальше либо **кампания** — `cd daemon && node campaign.js` (бот проходит этапы сам; адрес демона — `ND_WS`,
+2. Запустите демон: `npm run start:daemon` или `node dist/daemon/src/index.js` (порт WebSocket — `ND_WS_PORT`,
+   сервер — `MC_HOST`/`MC_PORT`, ник — `MC_USERNAME`, память — `ND_MEMORY_DIR`; все настройки — `daemon/src/config.ts`).
+3. Дальше либо **кампания** — `node dist/daemon/campaign.js` (бот проходит этапы сам; адрес демона — `ND_WS`,
    по умолчанию `ws://127.0.0.1:8769`), либо **Claude Code** — подключите MCP-сервер
-   (`claude mcp add neurodown -- node mcp/src/index.js`), и Claude управляет ботом инструментами `mc_*`.
+   (`claude mcp add neurodown -- node dist/mcp/src/index.js`), и Claude управляет ботом инструментами `mc_*`.
 
-Скрипты `run/*.ps1` и `farm/farm.js` написаны под машину автора: корень проекта и папки серверов (`server-run`,
+Скрипты `run/*.ps1` и `farm/farm.ts` написаны под машину автора: корень проекта и папки серверов (`server-run`,
 `server-twin` — шаблон сервера для фермы, с `paper-1.21.11-132.jar`) заданы в начале файлов — поправьте под себя.
 
 ## Ферма тестовых миров
 
 ```bash
-node farm/farm.js                                   # справка
-node farm/farm.js up 4 --pool --fresh               # хорошие сиды (farm/seeds/good-v2.json), в пределах limits.json
-node farm/farm.js run try-lab-fresh.js --slots 1-4 --tag test UNTIL=nether MINUTES=30
-node farm/farm.js down 1-4
+node dist/farm/farm.js                                   # справка
+node dist/farm/farm.js up 4 --pool --fresh               # хорошие сиды (farm/seeds/good-v2.json), в пределах limits.json
+node dist/farm/farm.js run try-lab-fresh.js --slots 1-4 --tag test UNTIL=nether MINUTES=30
+node dist/farm/farm.js down 1-4
 ```
 
 Слот `i`: сервер 25600+i, RCON 25700+i, демон 8800+i. Одна сцена идёт сразу на всех мирах, итоги — в
@@ -133,16 +136,16 @@ MCP использует те же часы демона и показывает
 heartbeat раз в 250 реальных мс сохраняется для паузы и остановки.
 
 ```bash
-node farm/farm.js up 1 --from 29 --tick-rate 100
-node farm/farm.js run try-tick-clock.js --slots 29 --tag ticks-100 --tick-rate 100
-node farm/farm.js tick 29 rate 200
-node farm/farm.js tick 29 freeze
-node farm/farm.js tick 29 step 3
-node farm/farm.js tick 29 unfreeze
-node farm/farm.js down 29
+node dist/farm/farm.js up 1 --from 29 --tick-rate 100
+node dist/farm/farm.js run try-tick-clock.js --slots 29 --tag ticks-100 --tick-rate 100
+node dist/farm/farm.js tick 29 rate 200
+node dist/farm/farm.js tick 29 freeze
+node dist/farm/farm.js tick 29 step 3
+node dist/farm/farm.js tick 29 unfreeze
+node dist/farm/farm.js down 29
 ```
 
-`TICK_RATE=100` задаёт скорость серий `farm/collect.sh`; явный `--tick-rate` имеет приоритет. При запуске
+`TICK_RATE=100` задаёт скорость серий `farm/series/collect.sh`; явный `--tick-rate` имеет приоритет. При запуске
 ферма снимает сохранённую паузу и применяет выбранную скорость из `farm/limits.json`. Текущий профиль:
 четыре мира, все ядра, запрос 750 TPS (около 645 фактических TPS в проверенной серии). Явные `--tick-rate` и
 `TICK_RATE` позволяют выбрать другую скорость; без настройки профиля запасное значение — 20. `/tick sprint` не используется:
@@ -169,7 +172,7 @@ node farm/farm.js down 29
 Для последовательного замера уже поднятого слота:
 
 ```powershell
-node daemon/try-tick-speed.js --slot 31 --rates 100,200,400,800 --repeats 3 --seconds 8 --tag tick-speed-a
+node dist/daemon/scenes/infra/try-tick-speed.js --slot 31 --rates 100,200,400,800 --repeats 3 --seconds 8 --tag tick-speed-a
 ```
 
 Отчёт `farm/results/tick-speed-a.json` сравнивает фактические TPS сервера и бота, отставание бота,

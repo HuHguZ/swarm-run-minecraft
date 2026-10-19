@@ -3,9 +3,9 @@
 // Раз в несколько игровых секунд в Аду: кандидаты нилия в загруженных клиентом чанках → луч глаз (sight.seesBlock, как
 // fortress.look) — видимые блоки сине-бирюзового нилия; плюс «биом под ногами» (экран F3). Лучшее увиденное место (больше всего
 // видимого нилия) — в память «искажённый лес (ад)», где его ищет этап эндерменов кампании. Запись по карте копии не трогаем.
-const gameClock = require('./game-clock')
-const { seesBlock } = require('./sight')
-const { biomeName, canSeePoint } = require('./perception')
+import * as gameClock from './game-clock'
+import { seesBlock } from './sight'
+import { biomeName, canSeePoint } from './perception'
 
 const PLACE = 'искажённый лес (ад)'
 // Стебли багрового/искажённого леса — дерево Ада на палки и верстак (nether-supply идёт к ним, если рядом не видно).
@@ -115,4 +115,4 @@ function install (session) {
   if (session._forestTimer.unref) session._forestTimer.unref()
 }
 
-module.exports = { install, look, spot, remember, noteEndermen, PLACE, WOOD_PLACE, EM_PLACE }
+export { install, look, spot, remember, noteEndermen, PLACE, WOOD_PLACE, EM_PLACE }

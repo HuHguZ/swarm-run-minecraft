@@ -135,7 +135,7 @@ function fixAttributes (bot) {
 // createBot) — модуль грузится раньше.
 function fixProtocol (version = '1.21.11') {
   try {
-    const proto = require('minecraft-data')(version).protocol
+    const proto = (require('minecraft-data') as typeof import('minecraft-data'))(version).protocol
     const sc = proto && proto.types && proto.types.SlotComponent
     const sw = sc && sc[1] && sc[1][1] && sc[1][1].type && sc[1][1].type[1]
     if (sw && sw.fields && sw.fields.intangible_projectile === 'void') { sw.fields.intangible_projectile = 'anonymousNbt'; return 1 }
@@ -176,7 +176,7 @@ function fixEnchants () {
     const d = proto && Object.getOwnPropertyDescriptor(proto, 'enchants')
     if (!d || !d.get || proto.__ndEnchFixed) return Item
     let table = null
-    try { table = typeof registryOrVersion === 'string' ? require('minecraft-data')(registryOrVersion).enchantments : registryOrVersion.enchantments } catch {}
+    try { table = typeof registryOrVersion === 'string' ? (require('minecraft-data') as typeof import('minecraft-data'))(registryOrVersion).enchantments : registryOrVersion.enchantments } catch {}
     Object.defineProperty(proto, 'enchants', {
       configurable: true,
       enumerable: d.enumerable,
@@ -278,4 +278,4 @@ function bodySnapshot (bot, local = false) {
   return out
 }
 
-module.exports = { bodySnapshot, fixMaterials, fixPlanks, fixWhiteWool, fixAttributes, fixProtocol, fixEnchants, fixBreath, DAMAGE_TYPES, damageTypeName }
+export { bodySnapshot, fixMaterials, fixPlanks, fixWhiteWool, fixAttributes, fixProtocol, fixEnchants, fixBreath, DAMAGE_TYPES, damageTypeName }

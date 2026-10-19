@@ -1,5 +1,5 @@
 // Скорость лечения дракона по трассам: подъёмы хп между сэмплами; и сколько раз был «полный» (200) после урона
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 let up = 0; let upT = 0; let flat = 0; let flatT = 0
 const ex = []

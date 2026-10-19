@@ -186,7 +186,9 @@ function defenseOf (items: any[] = [], { resistance = -1 }: any = {}) {
     resistance
   }
 }
-const NO_DEFENSE = Object.freeze({ armor: 0, tough: 0, prot: 0, blast: 0, proj: 0, fall: 0, fire: 0, resistance: -1 })
+// Защита цели: броня, твёрдость, EPF чар по видам урона, уровень Сопротивления (−1 — нет).
+interface Defense { armor: number; tough: number; prot: number; blast: number; proj: number; fall: number; fire: number; resistance: number }
+const NO_DEFENSE: Readonly<Defense> = Object.freeze({ armor: 0, tough: 0, prot: 0, blast: 0, proj: 0, fall: 0, fire: 0, resistance: -1 })
 
 // EnchantmentHelper.getDamageProtection — сумма по броне (protection.json 1·L; blast_protection 2·L
 // при #is_explosion; projectile_protection 2·L при #is_projectile; feather_falling 3·L при #is_fall;
@@ -209,7 +211,7 @@ function epfFor (def, kind) {
 //    #bypasses_armor (падение, огонь на теле…) броню пропускает;
 //  * Сопротивление: (25 − 5·(amp+1))/25 (lambda$handleEntityDamage$23);
 //  * чары — epfFor.
-function afterDefense (raw, kind, def = NO_DEFENSE, { breach = 0 }: any = {}) {
+function afterDefense (raw, kind, def: Partial<Defense> = NO_DEFENSE, { breach = 0 }: any = {}) {
   let d = Math.max(0, raw)
   if (d <= 0) return 0
   if (kind !== 'fall') {
@@ -274,7 +276,7 @@ const instantHeal = (amp) => 4 << Math.max(0, amp)
 // LivingEntity.calculateFallDamage: floor(fallDistance + 1e-6 − 3 (safe_fall_distance)) × множители.
 const fallRaw = (h) => Math.max(0, Math.floor(h + 1e-6 - 3))
 
-module.exports = {
+export {
   TICKS_PER_SECOND, AXE_SPEED, CRIT_CHARGE, AXE_DISABLE_TICKS, SMASH_MIN, BOW_FULL_TICKS, CROSSBOW_ARROW_SPEED,
   CRYSTAL_POWER, ANCHOR_POWER, SHIELD_DELAY_TICKS, SHIELD_HALF_ANGLE, IFRAME_TICKS, TOTEM, NO_DEFENSE,
   attackSpeed, attackDamage, attackDelayTicks, chargeAfter, ticksToCharge, isAxe, isSpear, isMeleeWeapon,

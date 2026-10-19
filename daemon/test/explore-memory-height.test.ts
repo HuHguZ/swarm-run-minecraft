@@ -1,3 +1,4 @@
+import { moduleSourceTs } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -5,7 +6,8 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { EventEmitter } from 'node:events'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function exploreFixture({ outside = true, rise = true, abort = false } = {}) {
   let now = 0
@@ -16,7 +18,7 @@ function exploreFixture({ outside = true, rise = true, abort = false } = {}) {
   const session = { bot, cfg: { fairPlay: true }, mcData: { blocks: [{ name: 'gravel' }] },
     underSky: () => outside, surfaceWalk: false }
   const ctl = { aborted: false, onAbort: [] }
-  const source = fs.readFileSync(path.join(__dirname, '../src/actions.ts'), 'utf8')
+  const source = moduleSourceTs(path.join(__dirname, '../src/actions.ts')) /* фасад + части src/actions/** */
   const body = source.slice(source.indexOf('async function explore (session'), source.indexOf('// ---------------------------------------------------------------- place'))
   const context: any = { module: { exports: {} }, process: { env: {} }, console: { log() {} }, Vec3,
     gameClock: { now: () => now }, xyz: p => ({ x: p.x, y: p.y, z: p.z }),
@@ -41,7 +43,7 @@ function exploreFixture({ outside = true, rise = true, abort = false } = {}) {
       throw new Error(name)
     }
   }
-  vm.runInNewContext(transformSync(body + '\nmodule.exports = explore', { loader: 'ts', format: 'cjs' }).code, context)
+  vm.runInNewContext(transformSync(body + '\nmodule.exports = explore', { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
   return { calls, session, run: () => context.module.exports(session, ctl, { block: 'gravel', dry: true, surface: true, timeoutSeconds: 10 }) }
 }
 
@@ -79,8 +81,8 @@ test('interruption restores the remembered leg movement settings', async () => {
 })
 
 test('a height-aware bounded travel rejects an XZ-only arrival and retains legacy column travel', async t => {
-  const movement = require('../src/movement')
-  const clock = require('../src/game-clock')
+  const movement: typeof import('../src/movement') = require('../src/movement')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const before = process.env.ND_GOTO_WAIT; process.env.ND_GOTO_WAIT = '0'
   t.after(() => { if (before === undefined) delete process.env.ND_GOTO_WAIT; else process.env.ND_GOTO_WAIT = before })
   t.mock.method(clock, 'sleep', async () => {})

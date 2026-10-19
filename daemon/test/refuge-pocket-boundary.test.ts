@@ -4,15 +4,15 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const { Vec3 } = require('vec3')
-const { transformSync } = require('esbuild')
+import { Vec3 } from 'vec3'
+import { transformSync } from 'esbuild'
 
 function sourceModule(name: string, overrides: Record<string, any> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file), module = { exports: {} as any }
   const dependencies = new Map(Object.entries(overrides).map(([id, value]) => [local.resolve(id), value]))
   const code = transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports,
     (id: string) => dependencies.get(local.resolve(id)) ?? local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -22,7 +22,7 @@ const state = sourceModule('tactics/state')
 
 function field({ wetFeet = false, pool = false, y = pool ? 60.5 : 60, boundary = 'stone' }: any = {}) {
   const bot: any = {
-    version: '1.21.11', registry: require('minecraft-data')('1.21.11'), health: 10, food: 15,
+    version: '1.21.11', registry: (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'), health: 10, food: 15,
     entity: { id: 1, position: new Vec3(.5, y, .5), onGround: !pool && Number.isInteger(y), isInWater: wetFeet || pool, height: 1.8, metadata: [0], effects: {} },
     game: { dimension: 'overworld' }, inventory: { slots: [], items: () => [] }, entities: {},
     getControlState: () => false,

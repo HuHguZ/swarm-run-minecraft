@@ -1,8 +1,8 @@
 'use strict'
-const gameClock = require('../game-clock')
-const { sleep } = require('../movement')
-const { equipBestTool, missingHarvestTool } = require('../items')
-const { withTimeout } = require('../build')
+const gameClock: typeof import('../game-clock') = require('../game-clock')
+const { sleep }: typeof import('../movement') = require('../movement')
+const { equipBestTool, missingHarvestTool }: typeof import('../items') = require('../items')
+const { withTimeout }: typeof import('../build') = require('../build')
 let unstuck: any
 const WALL_STEP_MS = 10 * 50
 // in_wall deals one HP per damage-immunity window (10 ticks). Leave one HP for the next pulse.
@@ -36,7 +36,7 @@ function buriedBy (this: any, bot) {
     // Entity.isInWall (1.21.11) tests a thin box at the eyes, width * .8.
     // A jumping body or a head across a cell edge can suffocate while feet+1.2 is air.
     // Contact only identifies the obstruction; visibleBurialBlock still gates every dig.
-    const eye = require('../pick').eyeOf(bot)
+    const eye = (require('../pick') as typeof import('../pick')).eyeOf(bot)
     const r = (bot.entity.width || .6) * .4
     const centre = eye.floored()
     const cells = [centre]
@@ -57,7 +57,7 @@ function buriedBy (this: any, bot) {
         at.z + s[2] < eye.z + r && at.z + s[5] > eye.z - r)) return { name: b.name, block: b }
     }
     const head = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
-    if (head && suffocating(head) && (unstuck ??= require('../unstuck')).overlapsBody(bot, head)) return { name: head.name, block: head }
+    if (head && suffocating(head) && (unstuck ??= (require('../unstuck') as typeof import('../unstuck'))).overlapsBody(bot, head)) return { name: head.name, block: head }
     if (!this.announced) return null
     const above = bot.blockAt(bot.entity.position.offset(0, 2.2, 0))
     if (above && above.boundingBox === 'block' && FALLS.has(above.name)) {
@@ -224,7 +224,7 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
 
 function visibleBurialBlock (this: any, bot, block) {
     try {
-      const pick = require('../pick')
+      const pick: typeof import('../pick') = require('../pick')
       const eye = pick.eyeOf(bot)
       const delta = block.position.offset(0.5, 0.5, 0.5).minus(eye)
       const distance = delta.norm()
@@ -238,9 +238,9 @@ function visibleBurialBlock (this: any, bot, block) {
 // directions by distance alone, sneaking against unseen edges; unknown contact risk
 // remains, compared with continuing in_wall damage. Never excavate a hidden neighbour.
 async function stepOutOfWall (this: any, bot, { ctl = null, maxMs = Infinity }: any = {}) {
-  const Vec3 = require('vec3')
-  const pick = require('../pick')
-  const { HAZARD } = require('../navigation/geometry')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const pick: typeof import('../pick') = require('../pick')
+  const { HAZARD }: typeof import('../navigation/geometry') = require('../navigation/geometry')
   const at = bot.entity.position.clone()
   const base = at.floored()
   const cells = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([dx, dz]) => base.offset(dx, 0, dz))
@@ -297,3 +297,4 @@ function freed (this: any, bot, during) {
   }
 
 module.exports = { buriedBy, fallingOverhead, freeIfBuried, visibleBurialBlock, freed, stepOutOfWall }
+export { buriedBy, fallingOverhead, freeIfBuried, visibleBurialBlock, freed, stepOutOfWall }

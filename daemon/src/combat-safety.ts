@@ -1,9 +1,9 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Общая граница риска для боевых модулей. Тактика моба выбирает атаки,
 // но не может отменить решение о сохранении жизни близостью противника.
-const assess = require('./assess')
-const { usesLeft } = require('./items')
+const assess: typeof import('./assess') = require('./assess')
+const { usesLeft }: typeof import('./items') = require('./items')
 const RISKY = /^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|chicken|suspicious_stew)$/
 const HOT = /^(lava|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|wither_rose)$/
 
@@ -37,8 +37,14 @@ const SHIELD_SHARE = 0.5
 const WHITE = /^(zombie|husk|zombie_villager|spider|cave_spider|skeleton|stray|parched|bogged|slime|silverfish)$/
 const RANGED = new Set(Object.keys(assess.MOBS).filter(name => assess.MOBS[name].ranged))
 const inExchange = t => t.name === 'creeper' ? !!t.swelling || t.distance <= 4 : RANGED.has(t.name) || t.distance <= 6
+// Решение evaluate/inspect: общая часть и пометки отдельных веток.
+interface SafetyVerdict {
+  action: string; reason: string | null; health: number; food: number; foodPoints: number; healable: boolean
+  hit: number; burst: number; threshold: number; threats: any[]
+  cost?: number; cheap?: boolean; trade?: boolean; shieldDuel?: boolean; hazard?: boolean; ourArmor?: number
+}
 function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
-  threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null, shieldDuel = false }: any = {}) {
+  threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null, shieldDuel = false }: any = {}): SafetyVerdict {
   const live = S4D() ? threats.filter(t => t.distance <= 16 && (t.name !== 'creeper' || inExchange(t))) : threats
   const near = live.filter(inExchange)
   const hits = (S4D() ? (near.length ? near : live) : threats.filter(t => t.distance <= 16)).map(t => t.hit).sort((a, b) => b - a)
@@ -94,9 +100,9 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
 }
 
 function inspect (bot, { target = null, entities = null, observedHit = 0, minHealth = 8,
-  phase = 'continue', instantHeal = false, expectedEnemy = null, repelLava = false }: any = {}) {
+  phase = 'continue', instantHeal = false, expectedEnemy = null, repelLava = false }: any = {}): SafetyVerdict {
   const items = bot.inventory.items()
-  const data = bot.registry?.foodsByName || require('minecraft-data')(bot.version).foodsByName
+  const data = bot.registry?.foodsByName || (require('minecraft-data') as typeof import('minecraft-data'))(bot.version).foodsByName
   const foodPoints = items.reduce((n, i) => n + (!RISKY.test(i.name) && !/_bucket$/.test(i.name)
     ? (data[i.name]?.foodPoints || 0) * i.count : 0), 0)
   instantHeal ||= items.some(i => /golden_apple$/.test(i.name))
@@ -113,7 +119,7 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     const base = assess.MOBS[e.name]
     const player = e.name === 'player' || !!e.username
     if (!base && !player) continue
-    if (e.name === 'polar_bear' && (!require('./polar-bear').enabled() || e !== target && !entities && !require('./polar-bear').attacking(bot, e))) continue
+    if (e.name === 'polar_bear' && (!(require('./polar-bear') as typeof import('./polar-bear')).enabled() || e !== target && !entities && !(require('./polar-bear') as typeof import('./polar-bear')).attacking(bot, e))) continue
     // Нейтральный моб становится участником только как цель/известный нападающий.
     if (e !== target && !entities && /^(enderman|piglin|zombified_piglin)$/.test(e.name)) continue
     if (player && e !== target && !entities) continue
@@ -136,7 +142,7 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     // выбивает. Дуэль ne-guard опускает щит только на взмах: доходит доля удара, а не каждый (сцена try-lab-ne-piglin 14.10:
     // без щита в счёте один пиглин с мечом — «бой невыгоден», бег под ударами, хп 20 → 2–10 и пиглин жив через 40 с).
     if (shieldReady && !player && SHIELDED.test(e.name) && !/_axe$/.test(hand || '')) hit = Math.round(hit * SHIELD_SHARE * 10) / 10
-    threats.push({ id: e.id, name: e.username || e.name, distance, hit, ...(/_axe$/.test(hand || '') ? { axe: true } : {}), ...(e.name === 'creeper' && require('./flee').creeperSwelling(bot, e) ? { swelling: true } : {}) })
+    threats.push({ id: e.id, name: e.username || e.name, distance, hit, ...(/_axe$/.test(hand || '') ? { axe: true } : {}), ...(e.name === 'creeper' && (require('./flee') as typeof import('./flee')).creeperSwelling(bot, e) ? { swelling: true } : {}) })
   }
   if (!threats.length && expectedEnemy && assess.MOBS[expectedEnemy]) {
     const damage = expectedEnemy === 'blaze' ? 6 : assess.MOBS[expectedEnemy].dmg
@@ -155,8 +161,8 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     weapon, threats, observedHit, minHealth, phase, instantHeal,
     dangerous: !!expectedEnemy || !!(target && (assess.MOBS[target.name] || target.username || target.name === 'player')) || threats.length > 0 }), ourArmor: gear.armor }
   const repel = result.action !== 'dead' && repelLava && weapon && target?.position && target.isValid !== false &&
-    target.position.distanceTo(bot.entity.position) <= 3 && require('./fightkit').hasEffect(bot, 'fire_resistance') &&
-    !!require('./pick').aim(bot, target, { range: 3.2 })?.point
+    target.position.distanceTo(bot.entity.position) <= 3 && (require('./fightkit') as typeof import('./fightkit')).hasEffect(bot, 'fire_resistance') &&
+    !!(require('./pick') as typeof import('./pick')).aim(bot, target, { range: 3.2 })?.point
   if (result.action !== 'dead' && !safeGround(bot, { fireResistantLava: repel })) return { ...result,
     action: result.healable ? 'recover' : 'leave', hazard: true, reason: 'опасность под ногами: нельзя стоять и лечиться' }
   if (repel) return { ...result, action: 'fight', reason: 'короткая контратака при огнестойкости перед продолжением спасения' }
@@ -192,7 +198,7 @@ async function disengage (session, ctl, foes, { kite, ms = 4000 }: any = {}) {
   if ((bot.health ?? 0) <= 0 || ctl.aborted) return { clear: false, how: 'прервано' }
   const safe = () => !contact() && safeGround(bot)
   if (safe()) return { clear: true, how: 'контакта уже нет' }
-  const run = kite || require('./tempo').kite
+  const run = kite || (require('./tempo') as typeof import('./tempo')).kite
   const how = await run(bot, ctl, foes, { ms, until: safe, stop: () => (bot.health ?? 0) <= 0 })
   return { clear: !ctl.aborted && (bot.health ?? 0) > 0 && safe(), how, health: bot.health }
 }
@@ -201,7 +207,7 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat }: 
   const bot = session.bot
   const start = gameClock.now()
   const hp0 = bot.health
-  const consume = eat || (() => require('./actions').eat(session, {}))
+  const consume = eat || (() => (require('./actions') as typeof import('./actions')).eat(session, {}))
   let ate = 0
   let why = null
   let hazard = false
@@ -220,7 +226,7 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat }: 
       if (bot.food > before) ate++
       else if (bot.food < 18) { why = `сытость для лечения не восстановилась${r && (r.error || r.note) ? ': ' + (r.error || r.note) : ''}`; break }
     }
-    await require('./movement').sleep(250)
+    await (require('./movement') as typeof import('./movement')).sleep(250)
   }
   return { rested: !ctl.aborted && (bot.health ?? 0) > 0 && healthy() && safeGround(bot) && !!safe?.(), hazard,
     why: why || (ctl.aborted ? 'прервано' : undefined), hp: `${hp0} -> ${bot.health}`, ate,
@@ -228,3 +234,4 @@ async function recover (session, ctl, { safe, until = 18, maxMs = 30000, eat }: 
 }
 
 module.exports = { evaluate, inspect, watch, disengage, recover, safeGround }
+export { evaluate, inspect, watch, disengage, recover, safeGround }

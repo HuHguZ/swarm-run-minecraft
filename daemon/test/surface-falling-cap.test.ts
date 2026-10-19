@@ -4,8 +4,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const Vec3 = require('vec3')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { transformSync } from 'esbuild'
 
 async function climb(cap: string, count = 2) {
   const file = path.join(__dirname, '../src/survival/surface-body.ts')
@@ -37,7 +38,7 @@ async function climb(cap: string, count = 2) {
       moves.stairs++; bot.entity.position = feet.plus(dir).offset(.5, 1, .5);
       return { ok: true, dug: 3 };
     };
-  `, { loader: 'ts' }).code, context)
+  `, { loader: 'ts' }).code, cjsContext(context))
   const result = await context.module.exports.surface({ bot, mcData: {}, journal: { append() {} } }, { aborted: false, onAbort: [] }, { preferPillar: true, targetY: 60, timeoutSeconds: 10 })
   return { moves, result }
 }

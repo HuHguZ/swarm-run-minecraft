@@ -73,4 +73,4 @@ function keyDir (bot, key) {
   return { x: 0, z: 0 }
 }
 
-module.exports = { blockName, solid, stepSafe, wantsJump, keyDir, HURTS }
+export { blockName, solid, stepSafe, wantsJump, keyDir, HURTS }

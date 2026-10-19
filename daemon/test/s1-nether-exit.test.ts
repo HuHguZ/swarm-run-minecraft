@@ -1,10 +1,12 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { withClockFixture } = require('./clock-fixture')
+import { campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { withClockFixture } from './clock-fixture'
 
 // Выход из Ада без записи «портал (ад)» (вход прерван тактикой — s1-post08 06.10): идти к x/8, z/8 портала верхнего мира.
 function exitFixture() {
@@ -28,12 +30,12 @@ function exitFixture() {
     __dirname: path.dirname(filename), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js'], env: { ND_NE_ROUTE: '1' } },
     console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, AbortController, fixtureState: state }
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = fixtureState; sit = { surface: false, foes: 0 };
     known.portal = { x: 236, y: 68, z: 170, dimension: 'overworld' };
     known.netherPortal = null;
     module.exports = { leave: returnFromNether };
-  `, withClockFixture(context))
+  `, cjsContext(withClockFixture(context)))
   return { context, requests }
 }
 

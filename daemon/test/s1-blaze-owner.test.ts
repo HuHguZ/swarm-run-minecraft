@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { observeTactics } = require('../src/tactics/minecraft')
-const { Vec3 } = require('vec3')
+import { observeTactics } from '../src/tactics/minecraft'
+import { Vec3 } from 'vec3'
 
 // Бой у спавнера ведёт навык blaze (лук, отдых, коробка, огнестойкость): тактика уровня <3 его не перебивает (s1 06.10).
 function session(current: string | null) {
@@ -35,14 +35,14 @@ test('blaze skill owns the spawner fight: protectedEncounter while blaze runs, n
 })
 
 test('a protected blaze skill takes the hands back from a level-2 tactical episode started before it', async () => {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
-  const lock = require('../src/reflex-lock')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const lock: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
   const s: any = session('fortress')
   const events: any[] = []
   s.bus = { emit: (type: string, detail: any) => events.push({ type, ...detail }) }
   s.bot.pathfinder = { setGoal: () => {}, setMovements: () => {}, stop: () => {} }
   s.bot.clearControlStates = () => {}
-  const tactics = s.tactics = new TacticalSystem(s)
+  const tactics: any = s.tactics = new TacticalSystem(s)
   let aborted = false
   tactics.execute = (_action: unknown, ctl: { onAbort: Array<() => void> }) =>
     new Promise(resolve => ctl.onAbort.push(() => { aborted = true; resolve({ cancelled: true }) }))
@@ -75,7 +75,7 @@ test('the bastion skill owns its encounters below level 3 (s1c: 96 tactical inte
 
 function bastionUnderGhastShot() {
   const s: any = session('bastion')
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   s.bot.entities[2] = { id: 2, name: 'ghast', position: new Vec3(45.5, 64, .5), height: 4, width: 4, isValid: true, metadata: [] }
   s.autopilot = { lastHurt: { at: clock.now(), type: 'fireball', byMob: true, sourceId: 2, dimension: 'the_nether' } }
   return s
@@ -95,7 +95,7 @@ test('a visible ghast shooting at a bastion survey is handled by tactics before 
 
 test('a skeleton shooting at a bastion approach is handled by tactics, not owned by the skill (b2-5-1 14.10)', () => {
   const s: any = session('bastion')
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   s.bot.entities[3] = { id: 3, name: 'skeleton', position: new Vec3(10.5, 64, .5), height: 1.99, width: 0.6, isValid: true, metadata: [] }
   s.autopilot = { lastHurt: { at: clock.now(), type: 'arrow', byMob: true, sourceId: 3, dimension: 'the_nether' } }
   const state = observeTactics(s)
@@ -104,7 +104,7 @@ test('a skeleton shooting at a bastion approach is handled by tactics, not owned
 })
 
 test('a bastion survey yields its hands to a level-2 incoming ghast shot', async () => {
-  const { TacticalSystem } = require('../src/tactics/minecraft')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
   const s = bastionUnderGhastShot()
   const state = { ...observeTactics(s), incomingProjectiles: 1, shield: true }
   s.bot.pathfinder = { setGoal: () => {}, setMovements: () => {}, stop: () => {} }
@@ -112,7 +112,7 @@ test('a bastion survey yields its hands to a level-2 incoming ghast shot', async
   let aborted = false
   s.current.ctl = { aborted: false, onAbort: [], abort() { this.aborted = true; aborted = true } }
   const chosen: string[] = []
-  const tactics = s.tactics = new TacticalSystem(s, { observe: () => state, record: () => {} })
+  const tactics: any = s.tactics = new TacticalSystem(s, { observe: () => state, record: () => {} })
   tactics.execute = (action: any) => { chosen.push(action.id); return Promise.resolve({ blocked: true }) }
   try {
     tactics.attach(s.bot)

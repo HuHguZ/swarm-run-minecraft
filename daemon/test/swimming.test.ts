@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { install } = require('../src/swimming')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { install } from '../src/swimming'
 function simulate ({ sprint = true, water = true, food = 20, throws = false }: any = {} as Record<string, any>) {
   const bot = { food, physics: { waterInertia: 0.8, waterGravity: 0.005, outOfLiquidImpulse: 0.3,
     simulatePlayer (state, _world?: unknown) {

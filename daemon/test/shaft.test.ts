@@ -1,9 +1,9 @@
 'use strict'
 // Колодец вниз со своим чутьём (mining.shaftDown, поток overworld 02.10.2026).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { shaftDown } = require('../src/mining')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { shaftDown } from '../src/mining'
 
 function rig (extra: any = {} as Record<string, any>) {
   const dug = new Set()

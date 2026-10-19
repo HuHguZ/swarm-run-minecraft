@@ -1,7 +1,8 @@
-// Сводка серии без рук (01.10): node farm/dragon/an-series.js <тег> <слотов> [<тег2> <слотов2> ...]
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Сводка серии без рук (01.10): node dist/farm/dragon/an-series.js <тег> <слотов> [<тег2> <слотов2> ...]
 // Победы при ≤4/≤5/≤6 кроватях, смерти, урон p50, станция p50, взрывов в снижении p50, проигрыши и смерти построчно (ROWS=1).
-const fs = require('fs'); const path = require('path')
-const L = path.join(__dirname, '..', 'logs')
+import * as fs from 'fs'; import path = require('path')
+const L = path.join(REPO_ROOT, 'farm/logs')
 const a = process.argv.slice(2)
 const q = xs => { const v = xs.filter(x => x != null).sort((p, r) => p - r); return v.length ? v[Math.min(v.length - 1, Math.floor((v.length - 1) / 2 + 0.5))] : '-' }
 for (let i = 0; i < a.length; i += 2) {

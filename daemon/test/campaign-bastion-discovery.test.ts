@@ -1,10 +1,12 @@
+import { campaignRequire, campaignScript } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const { withClockFixture } = require('./clock-fixture')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+import { withClockFixture } from './clock-fixture'
 
 function fixture({ found = true, known = false, rodsFirst = false }: any = {}) {
   const at = { x: 14, y: 65, z: 91, dimension: 'the_nether' }
@@ -33,15 +35,15 @@ function fixture({ found = true, known = false, rodsFirst = false }: any = {}) {
     }
     close() {}
   }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : require(name),
+  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} }, process: { argv: ['node', 'campaign.js'], env: {} },
     console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, testState: state,
     testSituation: { pickLeft: 520, free: 30, foes: 0, surface: true }, testKnown: known, testAt: at, testRodsFirst: rodsFirst }
-  vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code +
+  vm.runInNewContext(campaignScript() +
     `\nstate = testState; sit = testSituation;
     if (testKnown) known.bastions = [{ key: 'бастион (ад)', ...testAt }];
     if (testRodsFirst) known.fortress = { x: 100, y: 64, z: 100 };
-    module.exports = { executeStrategy, known, legacy: stageRun('bastion') };`, withClockFixture(context))
+    module.exports = { executeStrategy, known, legacy: stageRun('bastion') };`, cjsContext(withClockFixture(context)))
   return { calls, known: context.module.exports.known,
     run: signal => context.module.exports.executeStrategy({ skill: 'findBastions', strategy: 'FindBastions', params: {} }, signal),
     legacy: context.module.exports.legacy }

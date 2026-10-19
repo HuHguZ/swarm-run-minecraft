@@ -1,14 +1,17 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // A log the pathfinder cannot settle on (partial paths around a crown, farm 14.10 taiga: 240 s on one log) costs its own
 // deadline, then the next visible log is taken.
-const code = transformSync(fs.readFileSync(path.join(__dirname, '../src/actions.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+// facade src/actions.ts + части src/actions/** одной областью видимости
+const code = bodySource(path.join(__dirname, '../src/actions.js'))
 
 test('mine gives up on a block it cannot reach in time and takes the next visible one', async () => {
   let now = 0
@@ -40,8 +43,8 @@ test('mine gives up on a block it cannot reach in time and takes the next visibl
     './sight': { visibleOf: (_bot, _ids, _radius, { skip }) => blocks.filter(b => !skip(b.position)).sort((a, b) => b.position.y - a.position.y) }
   }
   const module = { exports: {} as any }
-  vm.runInNewContext(code, { module, exports: module.exports, process: { env: {} }, console: { log () {} }, setTimeout,
-    require (request) { if (request in imports) return imports[request]; throw new Error(`unexpected dependency ${request}`) } })
+  vm.runInNewContext(code, cjsContext({ module, exports: module.exports, process: { env: {} }, console: { log () {} }, setTimeout,
+    require (request) { if (request in imports) return imports[request]; throw new Error(`unexpected dependency ${request}`) } }))
   const result = await module.exports.mine({ bot, cfg: { fairPlay: true }, mcData: {} }, { aborted: false, onAbort: [] }, { block: 'spruce_log', count: 2, collect: false })
   assert.deepEqual(dug, ['spruce_log'], 'the reachable log is dug')
   assert.ok(goals.includes('stop'), 'the hung goto is cancelled')

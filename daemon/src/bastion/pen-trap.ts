@@ -16,9 +16,9 @@
 // Ставим и ломаем только видимые грани (pick.faceAim; fillCell honest). Ломаем обычные блоки — злости нет
 // (злят только #guarded_by_piglins и удар). Расчёт полёта (predict-gold.throwLands) для 27 положений в трёх полосах —
 // 27/27 к ногам в B (тест pen-trap.test).
-const { gameClock, countOf, Vec3, mobs, isBaby, aggressive, admiring, sleep, xyz, log, centerIn, unpackGold } = require('./take-gold-block')
-const PG = require('./predict-gold')
-const BF = require('../barter-flow')
+import { gameClock, countOf, Vec3, mobs, isBaby, aggressive, admiring, sleep, xyz, log, centerIn, unpackGold } from './take-gold-block'
+import PG = require('./predict-gold')
+import * as BF from '../barter-flow'
 
 const ADMIRE_MS = 119 * 50 // PiglinAi.admireGoldItem: ADMIRING_ITEM на 119 тиков
 const FACES6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
@@ -28,7 +28,7 @@ const V = q => new Vec3(q.x, q.y, q.z)
 // Геометрия загона у ямы bo {P,H,M,O,d}. cls(x,y,z) → класс sealed; own(x,y,z) — наш штрек (воздух, закрытый снаружи).
 // Чистая функция: { F, M, P, H, Bf, Bh, lanes:[{k,T,Y,Z,W}] } или { why }.
 function penPlan (bo, cls, { own = (_x, _y, _z) => false, lanes: want = 3 }: any = {}) {
-  const SL = require('../sealed')
+  const SL: typeof import('../sealed') = require('../sealed')
   const c = q => cls(q.x, q.y, q.z)
   const firm = q => { const k = c(q); return k === SL.SOLID || k === SL.HARD || k === SL.GUARD }
   const digg = q => c(q) === SL.SOLID
@@ -75,8 +75,8 @@ function penPlan (bo, cls, { own = (_x, _y, _z) => false, lanes: want = 3 }: any
 
 // Яма, в которой стоит бот: P — ноги, H — голова, M — рот над головой, O — пол пиглинов перед ртом.
 function pitHere (bot) {
-  const SL = require('../sealed')
-  const { SIDES4 } = require('./take-gold-block')
+  const SL: typeof import('../sealed') = require('../sealed')
+  const { SIDES4 }: typeof import('./take-gold-block') = require('./take-gold-block')
   const cls = q => SL.classOf(bot.blockAt(V(q)))
   const P = bot.entity.position.floored()
   const H = at(P, 0, 1, 0); const M = at(P, 0, 2, 0); const R = at(P, 0, 3, 0)
@@ -90,8 +90,8 @@ function pitHere (bot) {
 // Готовый загон: бот в B (ноги Bf), впереди заложенная клетка P, над окном H — заложенный рот M, за окном открытый
 // люк Y0 и траншея Z0. Полосы — открытые (Y и Z воздух). План с ready:true — penTrade сразу торгует.
 function penHere (bot) {
-  const SL = require('../sealed')
-  const { SIDES4 } = require('./take-gold-block')
+  const SL: typeof import('../sealed') = require('../sealed')
+  const { SIDES4 }: typeof import('./take-gold-block') = require('./take-gold-block')
   const cls = q => SL.classOf(bot.blockAt(V(q)))
   const firm = q => [SL.SOLID, SL.HARD, SL.GUARD].includes(cls(q))
   const Bf = xyz(bot.entity.position.floored()); const Bh = at(Bf, 0, 1, 0)
@@ -155,7 +155,7 @@ function trenchAim (bot, plan, open, gb) {
 // блок или сущность, ≤4.5 бл.): сперва грани с видимым центром, затем ближайшая к глазам; null — блок прицелом не
 // взять. Боковые траншеи Z±p из ямы видны только нижней частью грани (центр закрыт полом Y0 — тест pen-trap).
 function seenFace (bot, v) {
-  const pick = require('../pick')
+  const pick: typeof import('../pick') = require('../pick')
   const eye = pick.eyeOf(bot)
   let best = null
   for (const [fx, fy, fz] of FACES6) {
@@ -175,7 +175,7 @@ function seenFace (bot, v) {
 // эта грань (SL.digCell face+aim); иначе 'unseen'. Раньше хватало «какая-то точка видна», а копал SL.digCell с гранью
 // 'auto' — взгляд в центр блока, у боковых траншей сквозь пол Y0 (замечание проверки раунда 1).
 async function digSeen (bot, q, opts: any = {}) {
-  const SL = require('../sealed')
+  const SL: typeof import('../sealed') = require('../sealed')
   const v = V(q)
   const b = bot.blockAt(v)
   if (!b) return 'unloaded'
@@ -242,7 +242,7 @@ async function handOne (bot, list, eye) {
 // catchSeconds (сколько ждать кандидатов в фазе ямы).
 async function penTrade (session, ctl, bo, opts: any = {}) {
   const bot = session.bot
-  const SL = require('../sealed')
+  const SL: typeof import('../sealed') = require('../sealed')
   const t0 = gameClock.now()
   const until = opts.until ?? t0 + (opts.seconds ?? 240) * 1000
   const keep = opts.keep ?? 0
@@ -262,7 +262,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
   const eye = () => bot.entity.position.offset(0, 1.62, 0)
   const seenAdults = new Map()
   const seenBabies = new Map()
-  const visible = e => PG.rayClear(require('../drops').blockGetter(bot), eye(), e.position.offset(0, PG.PIGLIN_EYE * (isBaby(bot, e) ? 0.5 : 1), 0))
+  const visible = e => PG.rayClear((require('../drops') as typeof import('../drops')).blockGetter(bot), eye(), e.position.offset(0, PG.PIGLIN_EYE * (isBaby(bot, e) ? 0.5 : 1), 0))
   const adults = (rad = 16) => mobs(bot, 'piglin', rad).filter(e => {
     if (!visible(e)) return false
     if (isBaby(bot, e)) { seenBabies.set(e.id, { id: e.id, position: e.position.clone(), width: e.width }); seenAdults.delete(e.id); return false }
@@ -275,7 +275,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     if (ctl.aborted || session.bot !== bot || (bot.health ?? 20) <= 0) return false
     if (gameClock.now() >= until) { r.stopped = 'время вышло'; return false }
     if (opts.st && BF.enabled()) {
-      const G = require('../ne-guard')
+      const G: typeof import('../ne-guard') = require('../ne-guard')
       if (G.busy(bot) || G.hot(bot)) { await G.react(session, ctl); r.stopped = 'страж изменил место'; return false }
     }
     if (bot.entity.position.distanceTo(standingAt) > 0.9) { r.stopped = 'ушёл из места бартера'; return false }
@@ -349,7 +349,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
       // Обычная яма (boothTrade: вручение «чей бросок долетит», приманки, хлам, её правила остановки), пока у люка не
       // соберутся ≥gatherNear взрослых при запасе времени ≥40 с; не собрались — вызов и был торгом ямы (ok, penned:false).
       // Раунд 1 вместо этого торговал упрощённой ямой ≤90 с и отказывал «к люку не собрались» (s2-bast04/05: 3 из 13).
-      const BT = require('./booth-trade')
+      const BT: typeof import('./booth-trade') = require('./booth-trade')
       const st = opts.st || { traded: 0, gained: {}, barters: [], tossed: [] }
       const gathered = () => {
         trace()
@@ -368,7 +368,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     }
     const want = Math.min(opts.want ?? plan.lanes.length, plan.lanes.length)
     const catchUntil = Math.min(until - (mode === 'gather' ? 40000 : 20000), catchFrom + (opts.catchSeconds ?? 90) * 1000)
-    const gb = require('../drops').blockGetter(bot)
+    const gb = (require('../drops') as typeof import('../drops')).blockGetter(bot)
     // Подобравший слиток с пола тоже стоит 119 тиков (pickUpItem → stopWalking + admire): время — с первого взгляда.
     const since = new Map()
     let lastAct = catchFrom; let lures1 = r.lures1 || 0; const lures1Max = lures1 + 6; let lureAims = null
@@ -411,7 +411,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
     const tc = gameClock.now()
     if (!(await canContinue())) return r
     if (!(await SL.fillCell(bot, V(plan.M)))) { r.ok = false; r.stopped = 'рот не закрылся'; return r }
-    const { stepCell } = require('./booth-trade')
+    const { stepCell }: typeof import('./booth-trade') = require('./booth-trade')
     // Ноги на песке душ — на 0.125 ниже клетки (как sealed.feetCell).
     const inCell = c => { const p = bot.entity.position; const f = p.floored(); const y = bot.entity.onGround && p.y - f.y >= 0.8 ? f.y + 1 : f.y; return f.x === c.x && f.z === c.z && y === c.y }
     // Поимка сорвалась после закрытого рта — вернуть яму (шаг в P, рот открыть через видимую грань), чтобы торг ямы
@@ -482,7 +482,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
       // Рюкзак почти полон — хлам ямы (pitJunk) в траншею: в полный рюкзак добыча не идёт и лежит у ног
       // (s2-lure03: 190 сделок, доставка 82–92 % против 100 % при 90 сделках).
       if (typeof bot.inventory.emptySlotCount === 'function' && bot.inventory.emptySlotCount() < 3) {
-        const ta = trenchAim(bot, plan, open, require('../drops').blockGetter(bot))
+        const ta = trenchAim(bot, plan, open, (require('../drops') as typeof import('../drops')).blockGetter(bot))
         if (ta) for (const it of PG.pitJunk(bot)) { try { await bot.lookAt(ta.aim, true); await sleep(80); await bot.tossStack(it); r.junked = (r.junked || 0) + it.count } catch {} }
       }
       const free = pen.filter(e => BF.ready(bot, e, busyUntil))
@@ -510,7 +510,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
         const babyNear = [...seenBabies.values()].some(e => !inPen(plan, e) && e.position.distanceTo(Zc) <= Math.min(5, nearestAdult + 0.5))
         if (babyNear && !babyIn && !lying && outside.length) r.lureBabyWait = (r.lureBabyWait || 0) + 1
         if (!babyIn && !babyNear && !lying && outside.length) {
-          const ta = trenchAim(bot, plan, open, require('../drops').blockGetter(bot))
+          const ta = trenchAim(bot, plan, open, (require('../drops') as typeof import('../drops')).blockGetter(bot))
           if (ta && await canContinue() && await PG.tossOut(bot, plan, 'gold_ingot', 1, ta.aim)) { r.lures++; lastLure = gameClock.now(); penAtLure = pen.length }
           else if (!ta) r.lureNoAim = (r.lureNoAim || 0) + 1
         }
@@ -556,7 +556,7 @@ async function penTrade (session, ctl, bo, opts: any = {}) {
 // когда торговцев у люка много (арена 5–8 → 0.72–0.78 сл/с против 0.55 у ямы); в бастионе с 1–3 у люка — 0.15–0.41,
 // не быстрее ямы (s2-bast03/04), зато доставка 100 % и удержание между пакетами. own(x,y,z) — свой штрек.
 function penCheck (bot, bo, own = undefined) {
-  const SL = require('../sealed')
+  const SL: typeof import('../sealed') = require('../sealed')
   const plan: any = penPlan(bo, (x, y, z) => SL.classOf(bot.blockAt(new Vec3(x, y, z))), { own })
   if (!plan.lanes) return { ok: false, why: plan.why, lanes: 0, near: 0 }
   const T0 = V(plan.lanes.find(l => l.k === 0).T).offset(0.5, 0, 0.5)
@@ -576,7 +576,7 @@ async function trade (session, ctl, st, bo, until, { keep = 8, done = () => fals
   const r = await penTrade(session, ctl, ready || bo, { plan: ready || undefined, until, seconds, keep, done, want, refill, penMax, capture, patience, st, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
   if (own && r.own) for (const key of r.own) own.add(key)
   if (!ready && r.ok === false && !r.spent && /^(загон не строится|нет блоков)/.test(r.stopped || '')) {
-    const bt = await require('./booth-trade').boothTrade(session, ctl, st, bo, until, { keep, done })
+    const bt = await (require('./booth-trade') as typeof import('./booth-trade')).boothTrade(session, ctl, st, bo, until, { keep, done })
     return { ...bt, mode: 'pit', penned: false, pen: r.stopped }
   }
   return r
@@ -588,8 +588,8 @@ async function trade (session, ctl, st, bo, until, { keep = 8, done = () => fals
 // обратно тем же путём. Поворот вбок закрывает линию взгляда из траншеи/от рта. Итог: удержание загона и кто рядом.
 async function penAway (session, ctl, p: any = {}) {
   const bot = session.bot
-  const SL = require('../sealed')
-  const { stepCell } = require('./booth-trade')
+  const SL: typeof import('../sealed') = require('../sealed')
+  const { stepCell }: typeof import('./booth-trade') = require('./booth-trade')
   const pen = penHere(bot); const pit = pen ? null : pitHere(bot)
   if (!pen && !pit) return { ok: false, stopped: 'не у загона и не в яме' }
   const home = bot.entity.position.floored()
@@ -646,7 +646,7 @@ async function penIntent (session, ctl, p: any = {}) {
   const seconds = Math.max(20, Math.min(1200, Number(p.timeoutSeconds) || 240))
   const done = p.pearls ? () => countOf(bot, 'ender_pearl') >= p.pearls : () => false
   if ((p.mode || 'pen') === 'pit') {
-    const BT = require('./booth-trade')
+    const BT: typeof import('./booth-trade') = require('./booth-trade')
     const st = { traded: 0, gained: {}, barters: [], tossed: [] }
     const t0 = gameClock.now()
     const r = await BT.boothTrade(session, ctl, st, bo, t0 + seconds * 1000, { keep: p.keep ?? 0, done })
@@ -657,4 +657,4 @@ async function penIntent (session, ctl, p: any = {}) {
   return penTrade(session, ctl, bo, { plan: ready || undefined, seconds, keep: p.keep, done, want: p.want, catchSeconds: p.catchSeconds, lanes: p.lanes, refill: p.refill, penMax: p.penMax, capture: p.capture, patience: p.patience, own: own ? (x, y, z) => own.has(`${x},${y},${z}`) : undefined })
 }
 
-module.exports = { trade, penCheck, penHere, penPlan, trenchAim, pitHere, inStrip, lanesUnder, inPen, digSeen, digSeenAll, seenFace, throwJournal, penTrade, penIntent, penAway, ADMIRE_MS }
+export { trade, penCheck, penHere, penPlan, trenchAim, pitHere, inStrip, lanesUnder, inPen, digSeen, digSeenAll, seenFace, throwJournal, penTrade, penIntent, penAway, ADMIRE_MS }

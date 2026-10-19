@@ -1,10 +1,10 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { placeBlockAt, withTimeout } = require('./build')
-const { canSeePoint } = require('./perception')
-const ride = require('./ride')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const { placeBlockAt, withTimeout }: typeof import('./build') = require('./build')
+const { canSeePoint }: typeof import('./perception') = require('./perception')
+const ride: typeof import('./ride') = require('./ride')
 
 // Животные, питомцы, голем и жители — механики, которых у тела не было:
 // приручить волка и кошку, развести животных, построить железного или
@@ -350,7 +350,7 @@ function golemTopNear (bot, base, golem?: any) {
   if (!golem || top <= base.y + 1) return top
   // A roof over a four-block wall is not a walking threat. Reuse the mob's
   // bounded step search with our future supported column; retain real stairs.
-  const { reachOf } = require('./reach')
+  const { reachOf }: typeof import('./reach') = require('./reach')
   const future = Object.create(bot)
   future.entity = { ...bot.entity }
   const walking = { ...golem, name: 'iron_golem', width: golem.width || 1.4, height: golem.height || 2.7 }
@@ -419,7 +419,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
     e.position.distanceTo(bot.entity.position) <= radius).sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
   let g: any = golems().find(e => visible(bot, e)) || golems()[0]
   if (!g) return { ...out, stopped: `голема не вижу в ${radius} бл.` }
-  const { towerUp, pickFiller } = require('./build')
+  const { towerUp, pickFiller }: typeof import('./build') = require('./build')
   // Блоки любых годных видов вместе (столб ставится по блоку, каждый раз берёт, что есть): rt-R2 слот 12 — «нужно 5»
   // при 3 булыжниках, земле и песчанике.
   const FILL = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'blackstone', 'basalt']
@@ -542,7 +542,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
         const d = golemReach(bot, g)
         // Прицел — по рамке голема, куда луч свободен (pick.aim): со столба над вплотную прижатым големом луч к центру
         // уходил в свой же блок столба, сторож прицела удар не пускал (rt-R3 слот 30: 43 взмаха — голем жив).
-        const a = d <= 2.95 ? require('./pick').aim(bot, g) : null
+        const a = d <= 2.95 ? (require('./pick') as typeof import('./pick')).aim(bot, g) : null
         if (a && a.point) {
           farSince = gameClock.now()
           if (w && (!bot.heldItem || bot.heldItem.name !== w.name)) { try { await bot.equip(w, 'hand') } catch {} }
@@ -600,7 +600,7 @@ async function golemKill (session, ctl, { radius = 48, timeoutSeconds = 85 }: an
 }
 function tier (n) { return /^netherite/.test(n) ? 5 : /^diamond/.test(n) ? 4 : /^iron/.test(n) ? 3 : /^stone/.test(n) ? 2 : 1 }
 async function descendPillar (bot, ctl, groundY) {
-  const { equipBestTool } = require('./items')
+  const { equipBestTool }: typeof import('./items') = require('./items')
   for (let k = 0; k < GOLEM_PILLAR + 3 && !ctl.aborted; k++) {
     const feet = bot.entity.position.floored()
     if (feet.y <= groundY) return true
@@ -745,8 +745,8 @@ function woolColorPick (bot, list, want) {
 }
 async function wool (session, ctl, { count = 3, radius = 40, x = null, z = null, timeoutSeconds = 90, color = null }: any = {}) {
   const bot = session.bot
-  const combat = require('./combat')
-  const actions = require('./actions')
+  const combat: typeof import('./combat') = require('./combat')
+  const actions: typeof import('./actions') = require('./actions')
   const t0 = gameClock.now()
   const out: any = { color: null, killed: 0, sheared: 0, seen: 0, steps: [] }
   const step = s => { out.steps.push(`${Math.round((gameClock.now() - t0) / 100) / 10}с ${s}`) }
@@ -814,3 +814,7 @@ async function wool (session, ctl, { count = 3, radius = 40, x = null, z = null,
 }
 
 module.exports = { castHazard, tame, breed, pet, golem, golemKill, golemReach, pillarSpotOk, golemTopNear, golemSpotNear, trade, wool, sheepAround, WOOL_COLORS, TAME, BREED, isTamed, isBaby, GOLEM_PILLAR }
+export {
+  castHazard, tame, breed, pet, golem, golemKill, golemReach, pillarSpotOk, golemTopNear, golemSpotNear, trade,
+  wool, sheepAround, WOOL_COLORS, TAME, BREED, isTamed, isBaby, GOLEM_PILLAR
+}

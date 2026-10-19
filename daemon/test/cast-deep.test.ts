@@ -1,9 +1,9 @@
 'use strict'
 // Литьё глубоко (поток overworld, 02.10.2026): окно к лаве за блоком и место рамы в штреке у дна.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { windowCandidates, planCast, geom } = require('../src/cast')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { windowCandidates, planCast, geom } from '../src/cast'
 
 // Штрек на y −54 (ноги) вдоль x 0..10 при z 0, вокруг глубинный сланец; озеро лавы на y −55 при x 11..20, z −3..3,
 // над ним сланец (лава за блоком: штрек встал «лава на 11,-55,0 (в 1 впереди)»).
@@ -70,7 +70,7 @@ test('место рамы в штреке: копать ≤ 64, рабочие �
 })
 
 test('черпак: вода на уровне ног в соседней клетке под потолком — прицел в бок клетки, а не в верх сквозь камень', () => {
-  const { scoopAim } = require('../src/cast')
+  const { scoopAim }: typeof import('../src/cast') = require('../src/cast')
   // Тело в штреке на y −54 (x 0..10, z 0), вода в стенке сбоку (1,-54,-1), над ней сланец.
   const read = world({ '1,-54,-1': 'water' })
   const b = bot(read, new Vec3(1.5, -54, 0.5))
@@ -80,7 +80,7 @@ test('черпак: вода на уровне ног в соседней кле
 })
 
 test('черпак в пещере над озером: стоять — на берегу (конец штрека), не над лавой; источник под потолком не «виден»', () => {
-  const { standSpots, lavaSources } = require('../src/cast')
+  const { standSpots, lavaSources }: typeof import('../src/cast') = require('../src/cast')
   const extra: Record<string, any> = {} as Record<string, any>
   for (let x = 11; x <= 18; x++) for (let z = -3; z <= 3; z++) for (const y of [-54, -53, -52]) extra[`${x},${y},${z}`] = 'air'
   const b = bot(world(extra), new Vec3(5.5, -54, 0.5))
@@ -95,7 +95,7 @@ test('черпак в пещере над озером: стоять — на б
 })
 
 test('слух: лава с воздухом над ней в 16 бл. — сторона и дальность; под потолком — не слышно', () => {
-  const { hearLava } = require('../src/cast')
+  const { hearLava }: typeof import('../src/cast') = require('../src/cast')
   // Озеро −55 x 11..18 под потолком (−54 сланец) — не булькает.
   const quiet = bot(world(), new Vec3(2.5, -54, 0.5))
   assert.deepEqual(hearLava(quiet, { radius: 16 }), [])

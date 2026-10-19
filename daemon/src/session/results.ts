@@ -16,4 +16,4 @@ function resultCode (result) {
   return own || 'OK'
 }
 
-module.exports = { resultCode }
+export { resultCode }

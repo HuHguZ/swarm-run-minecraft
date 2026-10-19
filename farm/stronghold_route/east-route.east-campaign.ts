@@ -1,4 +1,5 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Честный прогон «от пустого рюкзака до дракона»: мозг-автомат по RPC.
 //
 // Играет тем же набором намерений, что и мозг через MCP, и так же, как мозг
@@ -18,12 +19,12 @@
 //   node campaign.js                  всё подряд
 //   node campaign.js wood,stone       только эти этапы
 //   ND_WS=ws://127.0.0.1:8769 node campaign.js
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const WebSocket = require("C:\\Users\\user\\Desktop\\work\\minecraft-claude\\daemon\\node_modules\\ws")
 
 const WS = process.env.ND_WS || 'ws://127.0.0.1:8769'
-const LOG = process.env.ND_CAMPAIGN_LOG || path.join(__dirname, 'campaign.log')
+const LOG = process.env.ND_CAMPAIGN_LOG || path.join(REPO_ROOT, 'farm/stronghold_route/campaign.log')
 const only = process.argv[2] ? process.argv[2].split(',') : null
 
 const ws = new WebSocket(WS)

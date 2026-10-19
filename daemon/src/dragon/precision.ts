@@ -4,12 +4,12 @@
 // 5–10 бл. вместо 2, урон кровати 7–30 вместо 45–55). Ускорение фермы — подделка времени, в игре 20 тиков; поэтому
 // на ферме, только если задано ND_PRECISION_TPS=<n> (бот — оператор фермы), сервер на время захода на посадку, снижения
 // и посадки идёт на n тиках/с, потом — прежний темп. В основном мире переменной нет: ничего не делает.
-const gameClock = require('../game-clock')
+import * as gameClock from '../game-clock'
 
 // Защита фермой, а не только переменной (замечание проверки, s5c 06.10): окно открывается лишь в мире слота фермы —
 // сервер на порту 25601..25632 (farm.ts: 25600+i) и бот NeuroFarm<i>. В основном мире (25569, NeuroDown, бот не оп)
 // команда не уходит даже при заданной ND_PRECISION_TPS.
-function farmWorld (cfg = require('../config')) {
+function farmWorld (cfg = (require('../config') as typeof import('../config'))) {
   return cfg.port >= 25601 && cfg.port <= 25632 && /^NeuroFarm\d+$/.test(cfg.username || '')
 }
 const APPROACH_MS = 40000
@@ -46,8 +46,8 @@ function precisionOff (bot, ctl) {
 // 27 мс, демон уходит из него за 2–4 удара). Облако в 4 бл. от его края, фаербол в 48 бл., заход с фаерболом, злой эндермен
 // в 12 бл. Держится ещё 3 игровых с после последней опасности.
 function dangerNear (bot) {
-  const { cloudsOf, fireballsOf, dragonOf, phaseOf, PHASE } = require('./dig-down-to')
-  const { angryEndermen } = require('./fall-guard')
+  const { cloudsOf, fireballsOf, dragonOf, phaseOf, PHASE }: typeof import('./dig-down-to') = require('./dig-down-to')
+  const { angryEndermen }: typeof import('./fall-guard') = require('./fall-guard')
   const me = bot.entity && bot.entity.position
   if (!me) return null
   if (cloudsOf(bot).some(c => Math.hypot(c.pos.x - me.x, c.pos.z - me.z) < c.r + 4 && Math.abs(c.pos.y - me.y) < 4)) return 'облако'
@@ -61,7 +61,7 @@ function dangerNear (bot) {
 // Раз в 100 игровых мс на всё время навыка: точность нужна на заходе/снижении/посадке при готовой станции и при опасности.
 function precisionTick (bot, ctl) {
   if (!precisionRate() || !bot.entity) return null
-  const { dragonOf, phaseOf, PHASE, SITTING } = require('./dig-down-to')
+  const { dragonOf, phaseOf, PHASE, SITTING }: typeof import('./dig-down-to') = require('./dig-down-to')
   const d = dragonOf(bot)
   const ph = d ? phaseOf(bot, d) : null
   const landing = !!(ctl.pillar && ctl.pillar.built) && (ph === PHASE.APPROACH || ph === PHASE.LANDING || SITTING.has(ph))
@@ -78,4 +78,4 @@ function precisionTick (bot, ctl) {
   return r
 }
 
-module.exports = { precisionRate, precisionWindow, precisionOff, precisionTick, dangerNear, farmWorld }
+export { precisionRate, precisionWindow, precisionOff, precisionTick, dangerNear, farmWorld }

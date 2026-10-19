@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Копьё (новое в 1.21.11; PVP-RESEARCH б.9, в.8; просьба 2026-09-26: «все
 // приёмы про-игроков, по максимуму того, что даёт версия»).
 //
@@ -29,8 +29,8 @@ const gameClock = require('./game-clock')
 //  * до 60 тиков после входа и возрождения сервер действия игнорирует, пока клиент
 //    не скажет player_loaded (read.installLoaded).
 
-const Vec3 = require('vec3')
-const { sleep } = require('./movement')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { sleep } from './movement'
 
 const TICK_MS = 50
 const EYE = 1.62
@@ -91,8 +91,8 @@ function dirOf (yaw, pitch) { return { x: -Math.sin(yaw) * Math.cos(pitch), y: M
 
 // Куда смотреть, чтобы луч копья прошёл через него: в середину туловища.
 function aimAt (bot, e) {
-  const eye = require('./pick').eyeOf(bot)
-  const box = require('./pick').hitboxOf(bot, e)
+  const eye = (require('./pick') as typeof import('./pick')).eyeOf(bot)
+  const box = (require('./pick') as typeof import('./pick')).hitboxOf(bot, e)
   const c = e.position.offset(0, box.h * 0.55, 0)
   const dx = c.x - eye.x; const dy = c.y - eye.y; const dz = c.z - eye.z
   return { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)), dist: Math.hypot(dx, dy, dz) }
@@ -101,10 +101,10 @@ function aimAt (bot, e) {
 // (или начало отрезка внутри неё), блоков на пути нет.
 function jabReach (bot, e, fwd = 0) {
   if (!bot.entity || !e || !e.position) return { ok: false }
-  const eye = require('./pick').eyeOf(bot)
+  const eye = (require('./pick') as typeof import('./pick')).eyeOf(bot)
   const a = aimAt(bot, e)
   const dir = dirOf(a.yaw, a.pitch)
-  const body = { ...e, height: require('./pick').hitboxOf(bot, e).h }
+  const body = { ...e, height: (require('./pick') as typeof import('./pick')).hitboxOf(bot, e).h }
   const hit = rayBox(eye, dir, body)
   if (!hit) return { ok: false, why: 'мимо луча' }
   const maxT = MAX_R + Math.max(0, fwd)
@@ -252,4 +252,4 @@ function chargeWindow (name, r, towardMe) {
   return { at: Math.round(at * 10) / 10, ticks }
 }
 
-module.exports = { SPEARS, isSpear, spearOf, chargeTicks, jabReach, jab, charge, chargeWindow, readyIn, install, rayBox, afterPacket, KB_SPEED, DMG_REL, MIN_R, MAX_R }
+export { SPEARS, isSpear, spearOf, chargeTicks, jabReach, jab, charge, chargeWindow, readyIn, install, rayBox, afterPacket, KB_SPEED, DMG_REL, MIN_R, MAX_R }

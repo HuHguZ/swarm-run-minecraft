@@ -1,12 +1,14 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { spawnSync } = require('node:child_process')
-const path = require('node:path')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { tickRate, tickAction, configureTick, runEnv, disablePacketLimiter } = require('./tick-control')
+import { cjsContext } from '../daemon/test/cjs-context'
+import { REPO_ROOT } from '../daemon/src/paths'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { spawnSync } from 'node:child_process'
+import path = require('node:path')
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { tickRate, tickAction, configureTick, runEnv, disablePacketLimiter } from './tick-control'
 
 test('tick rate defaults to 20 and CLI takes priority over scene and parent env', () => {
   assert.equal(tickRate({} as Record<string, any>, {} as Record<string, any>), 20)
@@ -88,7 +90,7 @@ function farmHarness ({ running = [], prepareChanged = false, failReload = 0, li
     mkdirSync: () => {}, rmSync: () => {}, openSync: () => 123,
     readdirSync: () => []
   }
-  const context = vm.createContext({
+  const context = vm.createContext(cjsContext({
     require: name => name === 'fs' ? fakeFs : name === 'child_process' ? {
       execFileSync: () => { throw new Error('unexpected shell operation') },
       spawn: (exe, args, options) => {
@@ -99,7 +101,7 @@ function farmHarness ({ running = [], prepareChanged = false, failReload = 0, li
     __dirname, __filename: cli, process: { env: {} as Record<string, any>, execPath: process.execPath },
     console: { log () {}, error () {} }, Buffer, setTimeout: fn => { fn(); return 1 }, clearTimeout () {}, queueMicrotask,
     events, running, prepareChanged, failReload
-  })
+  }))
   const source = fs.readFileSync(cli, 'utf8').split(/\n;?\s*\(async \(\) => \{/)[0]
   assert.ok(!source.includes('process.argv.slice(2)'), 'fixture excludes farm CLI entry point')
   vm.runInContext(source + '\nthis.api = { cmdUp, cmdRun, cmdTick, parseArgs, tickSelection, prepareSlot, slot };\n' +
@@ -121,17 +123,17 @@ test('up configures each ready server before spawning its daemon and records sel
     assert.equal(spawn.env.ND_TICK_RATE, '80')
     assert.ok(events.indexOf(commands[2]) < events.indexOf(spawn))
   }
-  const state = JSON.parse(files.get(path.join(__dirname, 'slots.json')))
+  const state = JSON.parse(files.get(path.join(REPO_ROOT, 'farm/slots.json')))
   assert.equal(state.slots[1].tickRate, 80)
   assert.equal(state.slots[2].tickRate, 80)
 })
 
 test('up --code runs the slot daemon and later scenes from the frozen snapshot, not the live tree', async () => {
   const { api, events, files } = farmHarness()
-  const snap = path.join(__dirname, '..', '.daemon-t1')
+  const snap = (require('./code-dir') as typeof import('./code-dir')).codeDir('t1')
   files.set(path.join(snap, 'src', 'index.js'), '')
   await api.cmdUp({ _: ['1'], code: 't1' })
-  assert.equal(JSON.parse(files.get(path.join(__dirname, 'slots.json'))).slots[1].code, 't1')
+  assert.equal(JSON.parse(files.get(path.join(REPO_ROOT, 'farm/slots.json'))).slots[1].code, 't1')
   assert.equal(events.find(event => event.kind === 'spawn').cwd, snap)
   await api.cmdRun({ _: ['probe.js'], slots: '1', tag: 'snap', env: [] }, [])
   assert.equal(events.filter(event => event.kind === 'spawn').pop().cwd, snap)
@@ -149,7 +151,7 @@ test('run resets every selected world before parallel scenes and records game-cl
     assert.equal(event.env.ND_CLOCK, 'game')
     assert.deepEqual(Array.from(event.args), ['probe.js', 'once'])
   }
-  const batch = JSON.parse(files.get(path.join(__dirname, 'results', 'test', 'batch.json')))
+  const batch = JSON.parse(files.get(path.join(REPO_ROOT, 'farm/results/test/batch.json')))
   assert.equal(batch.tickRate, 20)
   assert.equal(batch.clock, 'game')
   assert.equal(batch.env.FLAG, '1')
@@ -208,7 +210,7 @@ test('changed live farm config reloads once before tick or scene commands', asyn
 
 test('tick query reads status without writing or reloading a legacy config', async () => {
   const { api, events, files } = farmHarness({ failReload: 1 })
-  const file = path.join(__dirname, 'server-1', 'config', 'paper-global.yml')
+  const file = path.join(REPO_ROOT, 'farm/server-1/config/paper-global.yml')
   const original = '_version: 31\npacket-limiter:\n  all-packets:\n    interval: 7.0\n    max-packet-rate: 500.0\n'
   files.set(file, original)
   const writes = []
@@ -227,7 +229,7 @@ test('Paper normalization of an already disabled block does not trigger another 
 
 test('failed Paper reload restores prior bytes so the next command retries it', async () => {
   const { api, events, files } = farmHarness({ failReload: 1 })
-  const file = path.join(__dirname, 'server-1', 'config', 'paper-global.yml')
+  const file = path.join(REPO_ROOT, 'farm/server-1/config/paper-global.yml')
   const original = '_version: 31\npacket-limiter:\n  all-packets:\n    interval: 7.0\n    max-packet-rate: 500.0\n'
   files.set(file, original)
   await assert.rejects(api.cmdTick({ _: ['1', 'rate', '250'], env: [] }), /paper reload/)

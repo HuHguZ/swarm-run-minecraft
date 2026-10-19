@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const dragon = require('../src/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import dragon = require('../src/dragon')
 
 // Край острова по трассе dtr-1-1 (2026-09-29, смерть на 45 с, out_of_world):
 // тело на эндерняке у края (83.4, 55, −6.1), фаербол падает рядом (82.9, 56.9,

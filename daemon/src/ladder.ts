@@ -7,14 +7,14 @@
 // следующая над головой, на грань стены перед лицом (pick.faceAim); лезть — вперёд в стену и прыжок.
 // Вход: wall {x,y,z} — нижний блок стены; face {x,z} — сторона лестницы (единичная по оси); top — верхний y стены.
 // Итог: { ok, placed, at, why }; ok — стоит на верху стены или у верхней ступени.
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }: any = {}) {
   const bot = session.require()
   if (!wall || !face || !Number.isFinite(top)) return { ok: false, why: 'нужны wall, face, top' }
   const dir = new Vec3(Math.sign(face.x) || 0, 0, Math.sign(face.z) || 0)
   if (Math.abs(dir.x) + Math.abs(dir.z) !== 1) return { ok: false, why: 'face — по одной оси' }
-  const pick = require('./pick')
+  const pick: typeof import('./pick') = require('./pick')
   const wallAt = y => new Vec3(wall.x, y, wall.z)
   const cellAt = y => wallAt(y).plus(dir)
   const solid = p => { const b = bot.blockAt(p); return !!b && b.boundingBox === 'block' }
@@ -78,4 +78,4 @@ async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }:
   } finally { clear() }
 }
 
-module.exports = { ladderUp }
+export { ladderUp }

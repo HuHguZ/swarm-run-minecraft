@@ -1,11 +1,12 @@
 'use strict'
-// Сводка пар natural/baseline: node farm/portal-scan/pairs-report.js <tag> [<tag> ...] [--steps]
-const fs = require('fs'); const path = require('path')
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Сводка пар natural/baseline: node dist/farm/portal-scan/pairs-report.js <tag> [<tag> ...] [--steps]
+import * as fs from 'fs'; import path = require('path')
 const tags = process.argv.slice(2).filter(a => !a.startsWith('--'))
 const steps = process.argv.includes('--steps')
 const rows = []
 for (const t of tags) {
-  const dir = path.join(__dirname, '..', 'results', t)
+  const dir = path.join(REPO_ROOT, 'farm/results', t)
   for (const f of fs.readdirSync(dir).filter(f => /^slot-\d+\.jsonl$/.test(f))) {
     for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/)) if (line.trim()) rows.push({ tag: t, ...JSON.parse(line) })
   }

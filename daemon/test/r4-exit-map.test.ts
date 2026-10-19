@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { mappedRoom, roomApproach } = require('../src/stronghold')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { mappedRoom, roomApproach } from '../src/stronghold'
 
 test('B4-31: recover exact room and height from the existing map note', () => {
   const rec = { dimension: 'overworld', note: 'карта (копия мира): крепость Края, комната портала -888,-7,-1413..-878,0,-1398; рамок 12, с оком 1' }

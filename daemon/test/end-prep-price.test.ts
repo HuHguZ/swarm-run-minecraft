@@ -1,7 +1,8 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { load, ready } = require('./campaign-seams-fixture')
-const { speedrunRegistry } = require('../src/core/speedrun')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { load, ready } from './campaign-seams-fixture'
+import { speedrunRegistry } from '../src/core/speedrun'
+import type { Effect } from '../src/core/world-state'
 const enabled = { ND_END_PREP_PRICE: '1' }
 const bare = (extra = {}) => ready({ red_bed: 0, obsidian: 0, oak_boat: 0, ender_eye: 16, ...extra })
 
@@ -39,14 +40,14 @@ test('pricing: the graph records a decision without inventing beds, water or blo
 })
 
 test('pricing: portal-room collection remains available with only the empty frames worth of eyes', () => {
-  const { emptyWorld, fact } = require('../src/core/world-state')
+  const { emptyWorld, fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
   const s = emptyWorld(); s.resources.eyes = 7; s.facts.end_portal = fact(true, 'observed', 0)
   assert.equal(speedrunRegistry({ endPrepPrice: true }).get('PrepareEnd').preconditions(s), true)
   assert.equal(speedrunRegistry().get('PrepareEnd').preconditions(s), false)
 })
 
 test('pricing: a readiness decision does not turn off survival food when the bag is empty', () => {
-  const { emptyWorld, fact } = require('../src/core/world-state')
+  const { emptyWorld, fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
   const s = emptyWorld(); s.resources.food = 0; s.facts.end_ready = fact(true, 'observed', 0)
   assert.equal(speedrunRegistry({ endPrepPrice: true }).get('FindFood').preconditions(s), true)
   assert.equal(speedrunRegistry().get('FindFood').preconditions(s), false)
@@ -66,16 +67,16 @@ test('pricing: the switch defaults to the previous collection and graph effects'
     assert.equal(c.needed('endkit'), true)
     assert.equal(c.done('endkit'), false)
   }
-  assert.ok(speedrunRegistry().get('PrepareEnd').expectedEffects.atLeast.beds > 0)
+  assert.ok((speedrunRegistry().get('PrepareEnd').expectedEffects as Effect).atLeast.beds > 0)
 })
 
 test('carried offers: full kit never duplicates beds or farms optional arrows', () => {
-  const { endPrepOffers } = require('../src/campaign/end-prep')
+  const { endPrepOffers }: typeof import('../src/campaign/end-prep') = require('../src/campaign/end-prep')
   assert.deepEqual(endPrepOffers(ready({ red_bed: 6, feather: 64, flint: 64 }).inventory, 5), [])
 })
 
 test('carried offers: use the jar recipe for a missing bed and compare both sides in seconds', () => {
-  const { endPrepOffers } = require('../src/campaign/end-prep')
+  const { endPrepOffers }: typeof import('../src/campaign/end-prep') = require('../src/campaign/end-prep')
   const [offer] = endPrepOffers({ white_wool: 3, oak_planks: 3, crafting_table: 1 }, 1)
   assert.equal(offer.item, 'white_bed')
   assert.equal(offer.value, 15)
@@ -85,7 +86,7 @@ test('carried offers: use the jar recipe for a missing bed and compare both side
 })
 
 test('carried offers: table and material conversions are part of the price', () => {
-  const { endPrepOffers } = require('../src/campaign/end-prep')
+  const { endPrepOffers }: typeof import('../src/campaign/end-prep') = require('../src/campaign/end-prep')
   assert.equal(endPrepOffers({ white_wool: 3, oak_log: 2 }, 1).length, 0,
     'planks, table and bed cost more than the one-bed value')
   const [batch] = endPrepOffers({ white_wool: 9, oak_planks: 13 }, 3)
@@ -94,7 +95,7 @@ test('carried offers: table and material conversions are part of the price', () 
 })
 
 test('carried offers: wool colors and gold shortages are real recipe constraints', () => {
-  const { endPrepOffers } = require('../src/campaign/end-prep')
+  const { endPrepOffers }: typeof import('../src/campaign/end-prep') = require('../src/campaign/end-prep')
   assert.equal(endPrepOffers({ red_wool: 1, blue_wool: 1, green_wool: 1, oak_planks: 16 }).length, 0)
   const [apple] = endPrepOffers({ apple: 1, gold_ingot: 8, crafting_table: 1 })
   assert.equal(apple.item, 'golden_apple')

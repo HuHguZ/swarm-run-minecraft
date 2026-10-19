@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { useAt } = require('../src/cast1')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { useAt } from '../src/cast1'
 test('bucket re-aims after click spacing, before sending use_item', async () => {
   const aim = new Vec3(2, 0.8, 0); let gaze; let empty = 1; let sent
   const bot = { _ndCast1Last: Date.now(), heldItem: { name: 'bucket' },

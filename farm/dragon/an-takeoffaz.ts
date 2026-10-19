@@ -1,5 +1,5 @@
 // Куда летит тело на взлёте (азимут смещения тела через ~1.5–2 с) — один ли узел для мира.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const h: Record<string, any> = {} as Record<string, any>; const byYaw: Record<string, any> = {} as Record<string, any>
 for (const d of fs.readdirSync(L).filter(f => f.startsWith("trace-" + (process.argv[2] || "")))) {

@@ -1,5 +1,5 @@
 // Для каждой посадки: откуда шёл дракон (LANDING), где был бот, куда смотрела голова, сев.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const deg = r => Math.round(r * 180 / Math.PI)
 const wrap = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a }

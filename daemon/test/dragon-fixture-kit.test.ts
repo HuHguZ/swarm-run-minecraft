@@ -1,15 +1,16 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
 
 function kit (env) {
-  const source = fs.readFileSync(require.resolve('../try-dragon'), 'utf8')
+  const source = fs.readFileSync(require.resolve('../scenes/end/try-dragon'), 'utf8')
   const start = source.indexOf('function e2eKit(')
   const end = source.indexOf('function deathCause(', start)
   assert.ok(start > 0 && end > start)
-  return vm.runInNewContext(source.slice(start, end) + '\ne2eKit()', { process: { env } })
+  return vm.runInNewContext(source.slice(start, end) + '\ne2eKit()', cjsContext({ process: { env } }))
 }
 
 test('iron End fixture can carry campaign station obsidian without enchantments', () => {

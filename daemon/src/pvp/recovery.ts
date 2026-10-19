@@ -1,7 +1,7 @@
 import { recoveryDecision } from './recovery-graph'
 import { consumeHand } from './hand-policy'
-const { canSurvivePearl } = require('../throw')
-const bow = require('../bow')
+import { canSurvivePearl } from '../throw'
+import bow = require('../bow')
 
 type CombatContext = Record<string, any>
 

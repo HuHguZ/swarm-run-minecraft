@@ -1,15 +1,15 @@
 'use strict'
 // Real penTrade, controlled capture receipts; native normal-AI proof is separate.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const clock = require('../src/game-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as clock from '../src/game-clock'
 
 async function gather (kind = 'capture') {
-  const PT = require('../src/bastion/pen-trap')
-  const PG = require('../src/bastion/predict-gold')
-  const SL = require('../src/sealed')
+  const PT: typeof import('../src/bastion/pen-trap') = require('../src/bastion/pen-trap')
+  const PG: typeof import('../src/bastion/predict-gold') = require('../src/bastion/predict-gold')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
   const c = new clock.GameClock({ epoch: 100000 }); clock.activate(c); c.setState({ tick_rate: 2000 }); c.start()
   const old = { hand: PG.handNoWalk, toss: PG.tossOut, filler: SL.fillerName, count: SL.fillerCount }
   const bot: any = new EventEmitter()

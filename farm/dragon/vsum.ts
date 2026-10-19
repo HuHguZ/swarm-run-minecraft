@@ -1,6 +1,6 @@
 // Сводка боёв, начатых после момента (заморозка кода): node vsum.js <ISO или HH:MM МСК> [префиксы через запятую]
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const LOGS = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 let since = process.argv[2]
 if (/^\d\d:\d\d$/.test(since)) since = `2026-09-30T${since}:00+03:00`

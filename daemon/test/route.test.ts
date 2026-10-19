@@ -1,9 +1,9 @@
 'use strict'
 // Маршрут по знанию карты (поток route, 03.10.2026): план шагов по сиду, голем со столба, литьё — трава и песок.
-const test = require('node:test')
-const assert = require('node:assert')
-const Vec3 = require('vec3')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import route = require('../src/route')
 
 const base = {
   seed: '1',
@@ -66,7 +66,7 @@ test('железа мало от одной деревни — клад рядо
 })
 
 test('голем: из глаз на столбе 3 удар достаёт макушку, а голем ноги игрока — нет', () => {
-  const { golemReach, GOLEM_PILLAR } = require('../src/fauna')
+  const { golemReach, GOLEM_PILLAR }: typeof import('../src/fauna') = require('../src/fauna')
   // Тело на столбе высотой 3 над полом y 64, голем вплотную к столбу.
   const bot: Record<string, any> = { entity: { position: new Vec3(0.5, 64 + GOLEM_PILLAR, 0.5) } }
   const golem = { position: new Vec3(1.9, 64, 0.5), width: 1.4, height: 2.7 }
@@ -82,7 +82,7 @@ test('голем: из глаз на столбе 3 удар достаёт ма
 })
 
 test('литьё: трава в проёме видна контуром, песок с опорой — пол', () => {
-  const cast = require('../src/cast')
+  const cast: typeof import('../src/cast') = require('../src/cast')
   const blocks = new Map()
   const put = (x, y, z, name, bb = 'block', props: any = {} as Record<string, any>) => blocks.set(`${x},${y},${z}`, { name, boundingBox: bb, position: new Vec3(x, y, z), shapes: bb === 'block' ? [[0, 0, 0, 1, 1, 1]] : [], getProperties: () => props })
   for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) { put(x, 63, z, 'sand'); put(x, 62, z, 'sandstone'); put(x, 64, z, 'air', 'empty'); put(x, 65, z, 'air', 'empty'); put(x, 66, z, 'air', 'empty') }
@@ -101,14 +101,14 @@ test('литьё: трава в проёме видна контуром, пес
 })
 
 test('добор лавы: всё тело озера по связности, ближние к раме открытые источники', () => {
-  const cast = require('../src/cast')
+  const cast: typeof import('../src/cast') = require('../src/cast')
   const blocks = new Map()
   const put = (x, y, z, name, bb = 'block', props: any = {} as Record<string, any>) => blocks.set(`${x},${y},${z}`, { name, boundingBox: bb, position: new Vec3(x, y, z), shapes: bb === 'block' ? [[0, 0, 0, 1, 1, 1]] : [], getProperties: () => props })
   for (let x = -12; x <= 12; x++) for (let z = -12; z <= 12; z++) { put(x, 62, z, 'stone'); put(x, 64, z, 'air', 'empty'); put(x, 65, z, 'air', 'empty'); put(x, 63, z, 'stone') }
   // Озеро 10×1 по x от 0 до 9 на y 63 (гладь), сверху воздух; берег — z ±1.
   for (let x = 0; x <= 9; x++) put(x, 63, 0, 'lava', 'empty', { level: 0 })
   const bot: Record<string, any> = { entity: { position: new Vec3(-5.5, 64, 0.5) }, blockAt: p => blocks.get(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`) || null, getControlState: () => false, entities: {} as Record<string, any> }
-  bot.world = new (require('prismarine-world')('1.21.11'))().sync
+  bot.world = new ((require('prismarine-world') as typeof import('prismarine-world').default)('1.21.11'))().sync
   bot.world.getBlock = bot.blockAt
   const live = cast.liveLava(bot, [new Vec3(9, 63, 0)], new Vec3(-5, 64, 0), { limit: 4 })
   assert.ok(live.length >= 1, `живых: ${live.length}`)
@@ -139,7 +139,7 @@ test('скан копии v2: руины по сундуку, руины под 
 })
 
 test('голем: столб учитывает бугор и настоящий путь, а недоступная стена не делает место опасным', () => {
-  const { golemTopNear, golemSpotNear } = require('../src/fauna')
+  const { golemTopNear, golemSpotNear }: typeof import('../src/fauna') = require('../src/fauna')
   const blocks = new Map()
   const put = (x, y, z, name) => blocks.set(`${x},${y},${z}`, { name, boundingBox: name === 'air' ? 'empty' : 'block' })
   for (let x = -8; x <= 8; x++) for (let z = -8; z <= 8; z++) { put(x, 63, z, 'grass_block'); for (let y = 64; y <= 72; y++) put(x, y, z, 'air') }
@@ -164,7 +164,7 @@ test('голем: столб учитывает бугор и настоящий
 })
 
 test('литьё одним ведром: место на ровном берегу у озера, вровень с лавой; клетки и грани раскладки', () => {
-  const cast1 = require('../src/cast1')
+  const cast1: typeof import('../src/cast1') = require('../src/cast1')
   const blocks = new Map()
   const put = (x, y, z, name, props: any = {} as Record<string, any>) => blocks.set(`${x},${y},${z}`, { name, boundingBox: /air|lava|water/.test(name) ? 'empty' : 'block', position: new Vec3(x, y, z), shapes: /air|lava|water/.test(name) ? [] : [[0, 0, 0, 1, 1, 1]], getProperties: () => props })
   for (let x = -16; x <= 16; x++) for (let z = -12; z <= 12; z++) { for (let y = 90; y <= 99; y++) put(x, y, z, 'stone'); for (let y = 100; y <= 112; y++) put(x, y, z, 'air') }
@@ -192,7 +192,7 @@ test('литьё одним ведром: место на ровном бере�
 })
 
 test('литьё одним ведром: лава в досягаемости черпака — с земли ≥ 6, со столба ≥ 4; узкая полоса лавы — мимо', () => {
-  const cast1 = require('../src/cast1')
+  const cast1: typeof import('../src/cast1') = require('../src/cast1')
   const mk = lavaBox => {
     const blocks = new Map()
     const put = (x, y, z, name, props: any = {} as Record<string, any>) => blocks.set(`${x},${y},${z}`, { name, boundingBox: /air|lava|water/.test(name) ? 'empty' : 'block', position: new Vec3(x, y, z), shapes: /air|lava|water/.test(name) ? [] : [[0, 0, 0, 1, 1, 1]], getProperties: () => props })
@@ -217,7 +217,7 @@ test('литьё одним ведром: лава в досягаемости �
 })
 
 test('клик ведром: пауза ≥ 55 мс между кликами, пропавший клик — повтор, ответ — по убыли предмета', async () => {
-  const cast1 = require('../src/cast1')
+  const cast1: typeof import('../src/cast1') = require('../src/cast1')
   const inv = [{ name: 'water_bucket', count: 1 }]
   const calls = []
   let drop = 1

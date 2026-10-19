@@ -6,18 +6,18 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
 import { Vec3 } from 'vec3'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
-const parkour = require('../src/navigation/parkour')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+import * as parkour from '../src/navigation/parkour'
 const arena = { x: .5, z: .5, r: 5, killY: 60 }
 
 function fixture(t, mode = 'arrive') {
-  t.mock.method(require('../src/edges'), 'mlgDrop', () => ({ ok: false, drop: 3 }))
-  t.mock.method(require('../src/blockmoves'), 'on', () => false)
+  t.mock.method((require('../src/edges/mlg') as typeof import('../src/edges/mlg')), 'mlgDrop', () => ({ ok: false, drop: 3 }))
+  t.mock.method((require('../src/blockmoves') as typeof import('../src/blockmoves')), 'on', () => false)
   const file = path.resolve(__dirname, '../src/session.ts'), local = createRequire(file), module = { exports: {} as any }
-  const code = require('esbuild').transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(code), { filename: file })(module.exports, local, module, file, path.dirname(file))
+  const code = (require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(code), { filename: file })(module.exports, local, module, file, path.dirname(file))
   const calls = { starts: 0, cancels: 0, cleared: 0 }, items = [
     { name: 'iron_pickaxe', type: registry.itemsByName.iron_pickaxe.id, count: 1 },
     { name: 'cobblestone', type: registry.itemsByName.cobblestone.id, count: 64 }
@@ -146,20 +146,20 @@ function avoidSearch(f, corridor = false) {
 }
 
 test('avoid: withinArena excludes spheres, accepts the surface/zero radius and rejects malformed input without throwing', () => {
-  const bot = { physics: { playerHalfWidth: .3 } }
+  const bot: any = { physics: { playerHalfWidth: .3 } }
   const a = { x: .5, z: .5, r: 30, killY: 60, minY: 64, avoid: [{ x: 5.5, y: 64, z: .5, r: 2 }] }
   assert.equal(parkour.withinArena(bot, { x: 5.5, y: 64, z: .5 }, a), false)
   assert.equal(parkour.withinArena(bot, { x: 3.5, y: 64, z: .5 }, a), true)
   assert.equal(parkour.withinArena(bot, { x: 5.5, y: 66, z: .5 }, a), true)
   assert.equal(parkour.withinArena(bot, { x: 0, y: 63.99, z: 0 }, a), false)
-  for (const avoid of [null, {}, [null], [{ x: 0, y: 64, z: 0, r: NaN }], [{ x: 0, y: 64, z: 0, r: -1 }]])
+  for (const avoid of [null, {}, [null], [{ x: 0, y: 64, z: 0, r: NaN }], [{ x: 0, y: 64, z: 0, r: -1 }]] as any[])
     assert.equal(parkour.withinArena(bot, { x: 0, y: 64, z: 0 }, { ...a, avoid }), false)
   assert.equal(parkour.withinArena(bot, { x: 0, y: 64, z: 0 }, { ...a, avoid: [{ x: 0, y: 64, z: 0, r: 0 }] }), true)
 })
 
 test('avoid: an edge crossing the sphere is forbidden even when both endpoints are outside', () => {
   const a = { x: .5, z: .5, r: 30, avoid: [{ x: .5, y: 64, z: .5, r: 1 }] }
-  const bot = { physics: { playerHalfWidth: .3 } }, from = { x: -1.5, y: 64, z: .5 }, to = { x: 2.5, y: 64, z: .5 }
+  const bot: any = { physics: { playerHalfWidth: .3 } }, from = { x: -1.5, y: 64, z: .5 }, to = { x: 2.5, y: 64, z: .5 }
   assert.equal(parkour.withinArena(bot, from, a), true)
   assert.equal(parkour.withinArena(bot, to, a), true)
   assert.equal(parkour.withinArena(bot, to, a, from), false)

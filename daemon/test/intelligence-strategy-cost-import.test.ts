@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeSkillSample } from '../../farm/strategy-costs'
+import { normalizeSkillSample } from '../../farm/analysis/strategy-costs'
 import { learnCosts, applyCosts } from '../src/core/cost-model'
 import { speedrunRegistry } from '../src/core/speedrun'
 import { emptyWorld } from '../src/core/world-state'

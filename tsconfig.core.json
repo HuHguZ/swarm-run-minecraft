@@ -19,7 +19,7 @@
     "daemon/src/pvp/hand-policy.ts",
     "daemon/src/social-graph.ts",
     "mcp/src/daemon-client.ts",
-    "farm/strategy-costs.ts",
+    "farm/analysis/strategy-costs.ts",
     "daemon/src/conversions/registry.ts",
     "daemon/src/conversions/repair-policy.ts",
     "daemon/src/conversions/planner.ts",

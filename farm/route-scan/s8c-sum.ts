@@ -1,11 +1,12 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // S8c (07.10): сводка серий «новый мир → Ад» по префиксам тегов (как s8b-sum) + уровень знания (map из итога сцены), темп
 // (игровые тики / реальные секунды, от batch.json до итоговой строки) и фазы: шаги маршрута (level step) и верхние этапы
 // кампании (level stage, кроме route) — вслепую старым путём шагов маршрута нет.
-//   node farm/route-scan/s8c-sum.js <префикс[,префикс]> [...] [--cap 20] [--rows]
-const fs = require('fs')
-const path = require('path')
-const RES = path.join(__dirname, '..', 'results')
+//   node dist/farm/route-scan/s8c-sum.js <префикс[,префикс]> [...] [--cap 20] [--rows]
+import * as fs from 'fs'
+import path = require('path')
+const RES = path.join(REPO_ROOT, 'farm/results')
 const args = process.argv.slice(2)
 const capI = args.indexOf('--cap'); const CAP = capI >= 0 ? Number(args.splice(capI, 2)[1]) : 20
 const showRows = args.includes('--rows')

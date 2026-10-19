@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const melee = require('../src/melee')
+import * as melee from '../src/melee'
 
 // Ход с NaN не уходит на сервер (Paper кикает «Invalid move player packet received»), обычный — уходит.
 test('nan-guard: position/look с NaN не отправляются, конечные — отправляются', async () => {

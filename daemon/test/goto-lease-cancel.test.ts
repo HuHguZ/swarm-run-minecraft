@@ -7,14 +7,15 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
 const filename = path.resolve(__dirname, '../src/session.ts'), local = createRequire(filename), sourceModule = { exports: {} as any }
-vm.runInThisContext(require('node:module').wrap(require('esbuild').transformSync(readFileSync(filename, 'utf8'), { loader: 'ts', format: 'cjs' }).code), { filename })(sourceModule.exports, local, sourceModule, filename, path.dirname(filename))
+vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap((require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(filename, 'utf8'), { loader: 'ts', format: 'cjs' }).code), { filename })(sourceModule.exports, local, sourceModule, filename, path.dirname(filename))
 const { Session } = sourceModule.exports
-const reflex = require('../src/reflex-lock')
-const clock = require('../src/game-clock')
-const parkour = require('../src/navigation/parkour')
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+import reflex = require('../src/reflex-lock')
+import * as clock from '../src/game-clock'
+import '../src/navigation/parkour'
+import * as parkour from '../src/navigation/parkour'
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 const arena = { x: .5, z: .5, r: 6, killY: 60 }
 const turn = () => new Promise(resolve => setImmediate(resolve))
 
@@ -25,8 +26,8 @@ function fixture(t) {
   t.mock.method(clock, 'setInterval', fn => { const timer = { fn, interval: true }; timers.add(timer); return timer })
   t.mock.method(clock, 'clearTimeout', timer => timers.delete(timer))
   t.mock.method(clock, 'clearInterval', timer => timers.delete(timer))
-  t.mock.method(require('../src/edges'), 'mlgDrop', () => ({ ok: false, drop: 3 }))
-  t.mock.method(require('../src/blockmoves'), 'on', () => false)
+  t.mock.method((require('../src/edges/mlg') as typeof import('../src/edges/mlg')), 'mlgDrop', () => ({ ok: false, drop: 3 }))
+  t.mock.method((require('../src/blockmoves') as typeof import('../src/blockmoves')), 'on', () => false)
   const world = { getBlock(p) {
     const cell = p.floored(), b = Block.fromStateId(registry.blocksByName[cell.y === 63 ? 'stone' : 'air'].defaultState)
     b.position = cell; return b

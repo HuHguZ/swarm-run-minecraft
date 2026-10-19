@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Vec3 = require('vec3')
-const clock = require('../src/game-clock')
-const ow = require('../src/ow-shield')
-const mc = require('minecraft-data')('1.21.11')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as clock from '../src/game-clock'
+import * as ow from '../src/ow-shield'
+const mc = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 function actor() {
   const bot: any = { game: { dimension: 'overworld' }, registry: mc,

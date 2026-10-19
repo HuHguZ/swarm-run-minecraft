@@ -1,10 +1,10 @@
 'use strict'
 // «Один цикл» (2026-09-30): физика дракона по байткоду 1.21.11 — прогноз посадки по
 // пакетам, отставание головы сидящего (yRotA), станция в окопе для кровати на снижении.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const dragon = require('../src/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import dragon = require('../src/dragon')
 
 // Плоский мир фермы: земля — ноги на 61, фонтан (столб 0,60..63,0) — верх 64.
 function world (extra = new Map()) {
@@ -102,7 +102,7 @@ test('на пути снижения: крылья снижающегося бь
 
 test('вторая кровать снижения (L0) с другой стороны окопа: окоп закрыт от обоих взрывов, кровать L переживает L0', () => {
   const bot: any = fakeBot()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const target = new Vec3(7.2, 63.9, 0.6)
   const plan = dragon.tsPlan(bot, target, { lift: 1 })
   assert.ok(plan)

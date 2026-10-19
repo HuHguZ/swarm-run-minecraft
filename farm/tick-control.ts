@@ -83,3 +83,4 @@ function disableSpamLimiter (yaml) {
 }
 
 module.exports = { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter }
+export { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter }

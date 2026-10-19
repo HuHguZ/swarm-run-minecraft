@@ -1,15 +1,15 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
 
 function bridgeFixture ({ aborted = false, grounded = true, z = 137.0596148, rejectProp = false, abortAfterProp = false } = {}) {
-  const registry = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
   const { Physics, PlayerState } = require('prismarine-physics')
-  const pick = require('../src/pick')
+  const pick: typeof import('../src/pick') = require('../src/pick')
   const key = p => `${p.x},${p.y},${p.z}`
   const blocks = new Map([['69,42,136', 'netherrack']])
   const controls = { forward: false, back: false, left: false, right: false, sprint: false, sneak: false, jump: false }

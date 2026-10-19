@@ -52,4 +52,4 @@ function planBoatRoute ({ start, target, grid, astar, landingAt = null, maxNodes
   return { path, complete: !!chosen, seen: head, goal, landing, fromShore: distance(goal) }
 }
 
-module.exports = { planBoatRoute }
+export { planBoatRoute }

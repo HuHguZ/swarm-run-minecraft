@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Честность (просьба 2026-09-26: «бот должен играть с людьми честно»): пока
 // предмет «в ходу» — ест, пьёт, тянет лук, заряжает арбалет, держит щит, —
 // ванильный клиент режет ввод движения и не даёт начать спринт. Сервер этого
@@ -313,4 +313,4 @@ function install (bot) {
   return U
 }
 
-module.exports = { install, usable, effectsOf, scaledControl, minorCollision }
+export { install, usable, effectsOf, scaledControl, minorCollision }

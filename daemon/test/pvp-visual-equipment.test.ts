@@ -1,13 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const { createLastSeen } = require('../src/pvp/last-seen')
-const co = require('../src/pvp/combat-observe')
+import { Vec3 } from 'vec3'
+import { createLastSeen } from '../src/pvp/last-seen'
+import * as co from '../src/pvp/combat-observe'
 
 function scene () {
   const bot: any = new EventEmitter(); bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.entity = { id: 1, position: new Vec3(.5, 0, .5), onGround: true }
   bot.health = 20; bot.inventory = { items: () => [], slots: [] }
   bot.blockAt = p => ({ name: 'air', position: p, boundingBox: 'empty', shapes: [] })
@@ -69,7 +69,7 @@ test('PvP loaded crossbow and potion visuals do not carry ammunition count, star
     assert.equal(loaded.ammo, 'unknown')
     assert.equal(loaded.stars, null)
     assert.deepEqual(e.equipment[1].componentMap.get('potion_contents').data, { customColor: 12345 })
-    assert.equal(require('../src/pvp').potionOf(e.equipment[1]), null)
+    assert.equal((require('../src/pvp') as typeof import('../src/pvp')).potionOf(e.equipment[1]), null)
   } finally { f.vision.close() }
 })
 

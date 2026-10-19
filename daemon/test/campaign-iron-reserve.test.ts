@@ -1,12 +1,15 @@
+import { statementOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
+import { cjsContext } from './cjs-context'
 export {}
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { transformSync } = require('esbuild')
-const mc = require('minecraft-data')('1.21.11')
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { transformSync } from 'esbuild'
+const mc = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const source = campaignTs()
 const declaration = (name: string) => {
   const start = source.indexOf(`async function ${name} (`)
   assert.ok(start >= 0)
@@ -15,7 +18,7 @@ const declaration = (name: string) => {
 const buckets = source.match(/^const portalBuckets = .+$/m)[0]
 const smeltStart = source.indexOf('const ironToSmelt =')
 const smelt = source.slice(smeltStart, source.indexOf('\n}', smeltStart) + 2)
-const iron = source.slice(source.indexOf("defStage('iron'"), source.indexOf('\nasync function bucketOnTheWay'))
+const iron = statementOf(source, "defStage('iron',")
 const noop = async () => {}
 
 function fixture (extra: Record<string, number> = {}, known = {}, water = false) {
@@ -61,7 +64,7 @@ function fixture (extra: Record<string, number> = {}, known = {}, water = false)
     },
     defStage: (_name: string, _needed: () => boolean, executor: () => Promise<void>) => { context.runIron = executor }
   }
-  vm.runInNewContext(transformSync(buckets + '\n' + smelt + '\n' + declaration('spendIron') + '\n' + iron + '\nthis.spend=spendIron', { loader: 'ts' }).code, context)
+  vm.runInNewContext(transformSync(buckets + '\n' + smelt + '\n' + declaration('spendIron') + '\n' + iron + '\nthis.spend=spendIron', { loader: 'ts' }).code, cjsContext(withSetters(context)))
   return { context, inventory, calls }
 }
 

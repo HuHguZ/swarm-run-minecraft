@@ -1,12 +1,12 @@
 // Офлайн по записанным взлётам (rec-*.jsonl): две кровати из ОДНОГО окопа (две станции L-типа у общего окопа).
 //   MODE=nat (взлёт сам, сидел ≥ 95 тиков): 1 — голова на k=KA, 2 — на k=KB (через ≥ 10 тиков).
 //   MODE=dmg (взлёт от урона): 1 — голова сидя (X, взрыв поднимает на взлёт), 2 — голова на k=10.
-// node farm/dragon/an-tkpair.js farm/logs/trace-fin3-*/rec-*.jsonl
-const fs = require('fs')
+// node dist/farm/dragon/an-tkpair.js farm/logs/trace-fin3-*/rec-*.jsonl
+import * as fs from 'fs'
 const REG = require('C:/Users/user/Desktop/work/minecraft-claude/daemon/node_modules/minecraft-data')('1.21.11')
-const Vec3 = require('../../daemon/node_modules/vec3')
-const dragon = require('../../daemon/src/dragon')
-const S = require('./dsim')
+const Vec3: typeof import('../../daemon/node_modules/vec3').Vec3 = require('../../daemon/node_modules/vec3')
+import dragon = require('../../daemon/src/dragon')
+import * as S from './dsim'
 
 function world (P) {
   const top = P - 4

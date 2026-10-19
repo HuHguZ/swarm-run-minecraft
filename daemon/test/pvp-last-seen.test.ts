@@ -1,17 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const { createLastSeen } = require('../src/pvp/last-seen')
-const bow = require('../src/bow')
-const pick = require('../src/pick')
+import { Vec3 } from 'vec3'
+import { createLastSeen } from '../src/pvp/last-seen'
+import bow = require('../src/bow')
+import pick = require('../src/pick')
 
 function scene () {
   let now = 1000
   let wall = false
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.entity = { id: 1, position: new Vec3(.5, 0, .5), onGround: true }
   bot.blockAt = p => ({ name: wall && p.x === 1 ? 'stone' : 'air', position: p,
     boundingBox: wall && p.x === 1 ? 'block' : 'empty', shapes: wall && p.x === 1 ? [[0, 0, 0, 1, 1, 1]] : [] })
@@ -33,7 +33,7 @@ function scene () {
 }
 
 function socialScene (t, x = 6.5) {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const time = new clock.GameClock({ manual: true, epoch: 10000 }); clock.activate(time)
   t.mock.method(Math, 'random', () => .5)
   t.mock.method(console, 'log', () => {})
@@ -45,7 +45,7 @@ function socialScene (t, x = 6.5) {
   const vision = createLastSeen(f.bot)
   const target = vision.observe(f.raw)
   const session = { bot: f.bot, current: null, tactics: { snapshot: () => ({ threatLevel: 0 }) } }
-  const hm = require('../src/showman').create({ bot: f.bot, session, target: () => target, observe: vision.observe,
+  const hm = (require('../src/showman') as typeof import('../src/showman')).create({ bot: f.bot, session, target: () => target, observe: vision.observe,
     set: () => {}, aimTo: () => {}, stopPath: () => {}, stepOk: () => true, fillerCount: () => 0 })
   return { ...f, target, hm, time, looks, close: () => { hm.close(); vision.close(); time.dispose() } }
 }
@@ -89,7 +89,7 @@ for (const visible of [false, true]) test(`PvP: showman victory looks at ${visib
   const f = socialScene(t, 2.5)
   const ctl = { aborted: false }
   let celebration = Promise.resolve()
-  t.mock.method(require('../src/reflex-lock'), 'start', (_session, run) => (celebration = run(ctl)))
+  t.mock.method((require('../src/reflex-lock') as typeof import('../src/reflex-lock')), 'start', (_session, run) => (celebration = run(ctl)))
   try {
     if (!visible) f.wall(true)
     f.move(12)
@@ -155,9 +155,9 @@ test('PvP: tempo and HP estimation ignore hidden item, swing, totem, and environ
   const f = scene()
   const vision = createLastSeen(f.bot)
   const e = vision.observe(f.raw)
-  const tempo = require('../src/tempo').track(f.bot, { threats: () => [vision.observe(e)] })
-  const read = require('../src/read').watch(f.bot, { threats: tempo.threats, visible: vision.visible })
-  const calc = require('../src/pvp/combat-observe').trackFoe(f.bot, e, { visible: vision.visible })
+  const tempo = (require('../src/tempo') as typeof import('../src/tempo')).track(f.bot, { threats: () => [vision.observe(e)] })
+  const read = (require('../src/read') as typeof import('../src/read')).watch(f.bot, { threats: tempo.threats, visible: vision.visible })
+  const calc = (require('../src/pvp/combat-observe') as typeof import('../src/pvp/combat-observe')).trackFoe(f.bot, e, { visible: vision.visible })
   const flags = f.bot.registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')
   try {
     f.raw.equipment[0].name = 'golden_apple'
@@ -196,10 +196,10 @@ test('PvP: the two-opponent tracker cannot replace an observed target with the l
   f.bot.players = { Foe: { entity: f.raw } }
   const vision = createLastSeen(f.bot)
   const e = vision.observe(f.raw)
-  const duo = require('../src/duo').create(f.bot, { target: () => e, observe: vision.observe,
-    attackers: new Map([[2, { e: f.raw, at: require('../src/game-clock').now() }]]) })
+  const duo = (require('../src/duo') as typeof import('../src/duo')).create(f.bot, { target: () => e, observe: vision.observe,
+    attackers: new Map([[2, { e: f.raw, at: (require('../src/game-clock') as typeof import('../src/game-clock')).now() }]]) })
   try {
-    f.bot._ndDuo.seen.set('Foe', require('../src/game-clock').now())
+    f.bot._ndDuo.seen.set('Foe', (require('../src/game-clock') as typeof import('../src/game-clock')).now())
     f.wall(true)
     f.move(12)
     assert.strictEqual(duo.foes()[0], e)
@@ -211,7 +211,7 @@ test('PvP: only visible block cracks interrupt cover, even when the miner is hid
   const f = scene()
   const vision = createLastSeen(f.bot)
   const e = vision.observe(f.raw)
-  const tempo = require('../src/tempo').track(f.bot, { threats: () => [vision.observe(e)] })
+  const tempo = (require('../src/tempo') as typeof import('../src/tempo')).track(f.bot, { threats: () => [vision.observe(e)] })
   const blockAt = f.bot.blockAt
   f.bot.blockAt = p => ({ ...blockAt(p), digTime: () => 1000 })
   try {

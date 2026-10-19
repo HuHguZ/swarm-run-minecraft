@@ -1,6 +1,6 @@
 // Сводка A/B моста: node absum.js [префикс=ab-]
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const LOGS = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const pre = process.argv[2] || 'ab-'
 const by: Record<string, any> = {} as Record<string, any>

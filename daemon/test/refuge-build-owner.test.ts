@@ -5,14 +5,14 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const Vec3 = require('vec3')
-const esbuild = require('../../node_modules/esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as esbuild from 'esbuild'
 
 function sourceModule(name: string, overrides: Record<string, unknown> = {}) {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file), module = { exports: {} as Record<string, any> }
   const source = esbuild.transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code
-  vm.runInThisContext(require('node:module').wrap(source), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(source), { filename: file })(module.exports,
     (id: string) => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -21,7 +21,7 @@ function actor() {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot.version = '1.21.11'; bot.health = 14.2; bot.food = 16
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.inventory = { slots: [], items: () => [{ name: 'stone_sword', count: 1 }, { name: 'oak_planks', count: 12 }] }
   bot.entity = { id: 1, position: new Vec3(.5, 64, .5), height: 1.8, eyeHeight: 1.62, width: .6,
     onGround: true, yaw: 0, pitch: 0, effects: {}, metadata: [] }
@@ -55,7 +55,7 @@ test('U2 spider contact cannot trade the current bounded shelter construction fo
 })
 
 for (const how of ['box', 'niche'] as const) for (const ending of ['return', 'throw', 'replace'] as const) test(`${how} construction ownership is scoped to the actual helper and released on ${ending}`, async () => {
-  const a = actor(), hold = require('../src/survival/hold-out'), fortify = require('../src/fortify')
+  const a = actor(), hold: typeof import('../src/survival/hold-out') = require('../src/survival/hold-out'), fortify: typeof import('../src/fortify') = require('../src/fortify')
   const cell = new Vec3(.5, 64, .5), look = { blocks: 12, nether: true, foes: 0, cell: { cell, blocks: 8 }, canBreakOut: true }
   let builds = 0, holds = 0
   const replacement = { aborted: false }
@@ -69,10 +69,10 @@ for (const how of ['box', 'niche'] as const) for (const ending of ['return', 'th
     './hold-out': { ...hold, refugeLook: () => look, lookLine: () => '', chooseRefuge: () => ({ how }), takeBox: build, takeNiche: build,
       holdOut: async () => { holds++; assert.equal(a.session._refugeBuild, ending === 'replace' ? replacement : undefined, 'healing is outside the construction scope'); a.bot.health = 16; return { why: 'healed', ate: [] } } },
     '.././fortify': { ...fortify, landed: async () => {}, enclosure: () => ({ sealed: true }) },
-    './enter-shelter': { ...require('../src/survival/enter-shelter'), sitOn: () => false }
+    './enter-shelter': { ...(require('../src/survival/enter-shelter') as typeof import('../src/survival/enter-shelter')), sitOn: () => false }
   })
   const out: any = { how: 'none', code: 'OK', hp0: 14, steps: [], stayIn: true }
-  const work = module.refugeBody(a.session, a.ctl, { t0: require('../src/game-clock').now(), minHp: 16, deadline: Infinity, out, step: () => {}, hurts: [] })
+  const work = module.refugeBody(a.session, a.ctl, { t0: (require('../src/game-clock') as typeof import('../src/game-clock')).now(), minHp: 16, deadline: Infinity, out, step: () => {}, hurts: [] })
   if (ending === 'throw') await assert.rejects(work, /placement failed/)
   else { await work; assert.equal(holds, 1) }
   assert.equal(builds, 1); assert.equal(a.session._refugeBuild, ending === 'replace' ? replacement : undefined)
@@ -87,7 +87,7 @@ test('a stale or cancelled shelter controller never claims the next intent', () 
 })
 
 test('a live Tactical BlockOff keeps its own construction lease when current is another intent', async () => {
-  const a = actor(), tactics = sourceModule('tactics/minecraft'), locks = require('../src/reflex-lock')
+  const a = actor(), tactics = sourceModule('tactics/minecraft'), locks: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
   a.session.current.name = 'explore'
   let finish!: () => void, building: any
   const system = new tactics.TacticalSystem(a.session, { execute: async (_action: any, ctl: any) => {

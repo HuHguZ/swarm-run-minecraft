@@ -2,12 +2,12 @@
 import { runFlightRoute, type FlightRouteRequest } from '../combat/flight-route'
 import { runBoatHop, type BoatHopRequest } from '../combat/boat-hop'
 import { navigate } from '../navigation/parkour'
-const actions = require('../actions')
-const mining = require('../mining')
-const survival = require('../survival')
-const containers = require('../containers')
-const nether = require('../nether')
-const obsidianMod = require('../obsidian')
+import actions = require('../actions')
+import * as mining from '../mining'
+import survival = require('../survival')
+import * as containers from '../containers'
+import nether = require('../nether')
+import obsidianMod = require('../obsidian')
 const HOLDING = ['chat', 'low_health', 'death', 'kicked', 'disconnected']
 
 function parkour(this: any, p: Parameters<typeof navigate>[2] & { timeoutSeconds?: number }) {
@@ -32,7 +32,7 @@ function boatHop(this: any, p: BoatHopRequest = {}) {
 
 // Подъём на лодке (navigation/boat-moves): уступы по 2 бл. — лодка на грань в прыжке, посадка, высадка, лодку назад.
 function boatClimb(this: any, p: any = {}) {
-  return this.runIntent('boat_climb', (ctl: any) => { this.require(); return require('../navigation/boat-moves').boatClimb(this, ctl, p) }, {
+  return this.runIntent('boat_climb', (ctl: any) => { this.require(); return (require('../navigation/boat-moves') as typeof import('../navigation/boat-moves')).boatClimb(this, ctl, p) }, {
     timeoutMs: ((p.timeoutSeconds ?? 30) + 5) * 1000, interruptOn: ['chat', 'death', 'kicked', 'disconnected'], params: p
   })
 }
@@ -175,14 +175,14 @@ function sleepInBed (this: any, p: any = {}) {
     if (p.mode === 'spawn' || p.mode === 'take') {
       return this.runIntent('sleep', ctl => {
         this.require()
-        const bt = require('../bedtime')
+        const bt: typeof import('../bedtime') = require('../bedtime')
         return p.mode === 'spawn' ? bt.setSpawn(this, ctl, p) : bt.takeSpawnBed(this, ctl)
       }, { timeoutMs: 40000, params: p })
     }
     return this.runIntent('sleep', ctl => {
       this.require()
       this.updateMovements()
-      return require('../bedtime').night(this, ctl, p)
+      return (require('../bedtime') as typeof import('../bedtime')).night(this, ctl, p)
     }, { timeoutMs: (Math.max(60, Math.min(600, p.timeoutSeconds ?? 300)) + 20) * 1000, params: p })
   }
 
@@ -208,7 +208,7 @@ function portal (this: any, p: any = {}) {
       return this.runIntent('portal', async ctl => {
         this.require()
         this.updateMovements()
-        const r = await require('../cast').castPortal(this, ctl, p)
+        const r = await (require('../cast') as typeof import('../cast')).castPortal(this, ctl, p)
         if (!r.built || ctl.aborted) return r
         const lit = await nether.portal(this, ctl, { mode: 'build', timeoutSeconds: 60 })
         return { ...r, lit: !!(lit && lit.lit), light: lit }
@@ -229,4 +229,4 @@ function portal (this: any, p: any = {}) {
     })
   }
 
-module.exports = { mine, mineSeen, digDown, explore, craft, place, smelt, furnaceTake, tunnel, shelter, surface, recoverLoot, sleepInBed, wakeUp, portal, obsidian, flightRoute, boatHop, boatClimb, parkour }
+export { mine, mineSeen, digDown, explore, craft, place, smelt, furnaceTake, tunnel, shelter, surface, recoverLoot, sleepInBed, wakeUp, portal, obsidian, flightRoute, boatHop, boatClimb, parkour }

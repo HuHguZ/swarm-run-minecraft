@@ -1,15 +1,18 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Complete production modules, with visibility, native movement/digging and
 // crafting as boundaries. The supply fallback dispatches the actual explore.
-const code = Object.fromEntries(['actions', 'campaign/nether-supply'].map(name => [name,
-  transformSync(fs.readFileSync(path.join(__dirname, `../src/${name}.ts`), 'utf8'), { loader: 'ts', format: 'cjs' }).code]))
+const code = Object.fromEntries(['actions', 'campaign/nether-supply'].map(name => [name, name === 'actions'
+  ? bodySource(path.join(__dirname, '../src/actions.js')) // фасад + части src/actions/** одной областью видимости
+  : transformSync(fs.readFileSync(path.join(__dirname, `../src/${name}.ts`), 'utf8'), { loader: 'ts', format: 'cjs' }).code]))
 
 function fixture(options: any = {}) {
   let now = 0, walks = 0, interrupted = false
@@ -56,11 +59,11 @@ function fixture(options: any = {}) {
   }
   const load = (name: string): any => {
     const module = { exports: {} }
-    vm.runInNewContext(code[name], { module, exports: module.exports, process: { env: {} }, console: { log() {} },
+    vm.runInNewContext(code[name], cjsContext({ module, exports: module.exports, process: { env: {} }, console: { log() {} },
       require(request: string) {
         if (request in imports) return imports[request]
         throw new Error(`unexpected dependency ${request}`)
-      } }, { filename: path.join(__dirname, `../src/${name}.ts`) })
+      } }), { filename: path.join(__dirname, `../src/${name}.ts`) })
     return module.exports
   }
   const actions = load('actions'), supply = load('campaign/nether-supply')

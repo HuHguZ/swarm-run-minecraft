@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createWorld, stepWorld, hurt } from '../src/tactics/sim-world'
 import { mineflayerFacade } from '../src/tactics/sim-mineflayer'
-const clock = require('../src/game-clock')
-const ow = require('../src/ow-shield')
-const threats = require('../src/threats')
-const assess = require('../src/assess')
+import * as clock from '../src/game-clock'
+import * as ow from '../src/ow-shield'
+import threats = require('../src/threats')
+import * as assess from '../src/assess'
 
 function bowScene(draw: boolean) {
   const c = clock.activate(new clock.GameClock({ manual: true, epoch: 1000 }))

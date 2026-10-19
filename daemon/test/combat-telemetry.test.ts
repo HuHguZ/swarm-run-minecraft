@@ -1,18 +1,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve, dirname } from 'node:path'
 import { runInThisContext } from 'node:vm'
-const Vec3 = require('vec3')
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function load (name: string, mocks: Record<string, any>, overrides: Record<string, any> = {}) {
   const file = resolve(__dirname, '../src', name + '.js')
   const real = createRequire(file)
   const mod = { exports: {} as any }
   const inject = Object.keys(overrides).map(key => `${key} = __overrides[${JSON.stringify(key)}]`).join('\n')
-  runInThisContext(`(function(require,module,exports,__filename,__dirname,__overrides){${readFileSync(file, 'utf8')}\n${inject}\n})`, { filename: file })
+  // bodySource: модуль вместе с папкой тела (elytra/, crystal/) — один скрипт; подмены по spec и переприсваивание имён
+  // (overrides) действуют во всех его частях.
+  runInThisContext(`(function(require,module,exports,__filename,__dirname,__overrides){${bodySource(file)}\n${inject}\n})`, { filename: file })
     ((id: string) => id in mocks ? mocks[id] : real(id), mod, mod.exports, file, dirname(file), overrides)
   return mod.exports
 }
@@ -20,7 +22,7 @@ function load (name: string, mocks: Record<string, any>, overrides: Record<strin
 function fixture () {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.health = 20
   bot.entity = { id: 1, name: 'player', type: 'player', position: new Vec3(.5, 0, .5), velocity: new Vec3(0, 0, 0), onGround: true, metadata: [], yaw: 0 }
   const foe = { id: 2, name: 'player', type: 'player', username: 'Foe', position: new Vec3(2.5, 0, .5), width: .6, height: 1.8, isValid: true, onGround: true, metadata: [], equipment: [], _ndVisible: true }
@@ -213,7 +215,7 @@ test('dive uses confirmed own damage, not a sent swing or exact HP, and removes 
     f.bot.activateItem = () => { f.bot.entity.elytraFlying = false }
     const state = { fd: 10, driving: 0 }
     const sky = load('elytra', { './game-clock': f.clock,
-      './pick': { ...require('../src/pick'), canHit: () => {
+      './pick': { ...(require('../src/pick') as typeof import('../src/pick')), canHit: () => {
         if (mode === 'blocked') { f.clock.setTimeout(() => { f.bot.entity.onGround = true }, 50); return false }
         return true
       } },

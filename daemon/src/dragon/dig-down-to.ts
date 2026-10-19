@@ -1,29 +1,29 @@
 
-const gameClock = require('.././game-clock')
+const gameClock: typeof import('.././game-clock') = require('.././game-clock')
 
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
-const { Movements, goals } = require('mineflayer-pathfinder')
+const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
 
-const { sleep } = require('.././movement')
+const { sleep }: typeof import('.././movement') = require('.././movement')
 
-const bow = require('.././bow')
+const bow: typeof import('.././bow') = require('.././bow')
 
-const build = require('.././build')
+const build: typeof import('.././build') = require('.././build')
 
-const threats = require('.././threats')
+const threats: typeof import('.././threats') = require('.././threats')
 
-const pvp = require('.././pvp')
+const pvp: typeof import('.././pvp') = require('.././pvp')
 
-const items = require('.././items')
+const items: typeof import('.././items') = require('.././items')
 
-const armor = require('.././armor')
+const armor: typeof import('.././armor') = require('.././armor')
 
-const actions = require('.././actions')
+const actions: typeof import('.././actions') = require('.././actions')
 
-const pick = require('.././pick')
+const pick: typeof import('.././pick') = require('.././pick')
 
-const pearlHop = require('.././pearl-hop')
+const pearlHop: typeof import('.././pearl-hop') = require('.././pearl-hop')
 
 const DEBUG = !!process.env.ND_DEBUG_DRAGON
 
@@ -777,3 +777,17 @@ function fillerItem (bot) {
 }
 
 module.exports = { gameClock, Vec3, Movements, goals, sleep, bow, build, threats, pvp, items, armor, actions, pick, pearlHop, DEBUG, yieldTick, dbg, PHASE, PHASE_RU, SITTING, PILLOW_DY, TOWER_FAR, RUN_TOWER1, RUN_FACING, RUN_ARROW, RUN_HIGH, RUN_MELEE, RUN_BOX, RUN_SEEN, RUN_GAPARROW, RUN_KEEPCOB, RUN_TICKSEEN, RUN_LATEHEAD, pillarTriesMax, KEEP_ON, KEEP_N, FIRST_MAX, BUILD_MAX_MS, PLACE_LEAD, PILLAR_BAD, HEAD_ROOM, LABENV, envv, runnerOn, envNum, HEAD_AHEAD, HURT_PAD, NECK_AHEAD, SIT_HEAD_DY, PART, SIT_TAKEOFF, CRYSTAL_BLAST, SAFE_FROM_CRYSTAL, BREATH_R, BREATH_AHEAD, FIREBALL_SNAP, CLOUD_SLAB, STARE_TOL, STARE_MARGIN, ENDERMAN_EYE, MELEE_REACH, EYE, CENTER, holdingOdds, dragonWaitBand, dragonWaitStop, KIT, BEDS_KIT, FILLER_RE, metaOf, dragonOf, phaseOf, hpOf, headDir, makeTrack, box, inflate, boxDist, overlap, playerBox, partsOf, isSolid, isAirish, blockDef, voidBelow, digUpThrough, padOverVoid, supportCell, offIsland, floorAt, runwayAhead, stepKeys, nearPortal, zoneCache, cloudZones, zonesOf, inZone, stepIntoZone, cloudsOf, cloudHits, starer, safePitch, fbAlarmAt, fbAlarm, lookSafe, findItem, runnerBowl, clearControls, stepTo, digDownTo, fbSpawn, FB_PATH, fbTicksTo, fbLineHit, lineDist, fbSeen, fireballsOf, cloudBorn, sitFix, placeItemAt, fillerItem }
+export {
+  gameClock, Vec3, Movements, goals, sleep, bow, build, threats, pvp, items, armor, actions, pick, pearlHop,
+  DEBUG, yieldTick, dbg, PHASE, PHASE_RU, SITTING, PILLOW_DY, TOWER_FAR, RUN_TOWER1, RUN_FACING, RUN_ARROW,
+  RUN_HIGH, RUN_MELEE, RUN_BOX, RUN_SEEN, RUN_GAPARROW, RUN_KEEPCOB, RUN_TICKSEEN, RUN_LATEHEAD, pillarTriesMax,
+  KEEP_ON, KEEP_N, FIRST_MAX, BUILD_MAX_MS, PLACE_LEAD, PILLAR_BAD, HEAD_ROOM, LABENV, envv, runnerOn, envNum,
+  HEAD_AHEAD, HURT_PAD, NECK_AHEAD, SIT_HEAD_DY, PART, SIT_TAKEOFF, CRYSTAL_BLAST, SAFE_FROM_CRYSTAL, BREATH_R,
+  BREATH_AHEAD, FIREBALL_SNAP, CLOUD_SLAB, STARE_TOL, STARE_MARGIN, ENDERMAN_EYE, MELEE_REACH, EYE, CENTER,
+  holdingOdds, dragonWaitBand, dragonWaitStop, KIT, BEDS_KIT, FILLER_RE, metaOf, dragonOf, phaseOf, hpOf, headDir,
+  makeTrack, box, inflate, boxDist, overlap, playerBox, partsOf, isSolid, isAirish, blockDef, voidBelow,
+  digUpThrough, padOverVoid, supportCell, offIsland, floorAt, runwayAhead, stepKeys, nearPortal, zoneCache,
+  cloudZones, zonesOf, inZone, stepIntoZone, cloudsOf, cloudHits, starer, safePitch, fbAlarmAt, fbAlarm, lookSafe,
+  findItem, runnerBowl, clearControls, stepTo, digDownTo, fbSpawn, FB_PATH, fbTicksTo, fbLineHit, lineDist,
+  fbSeen, fireballsOf, cloudBorn, sitFix, placeItemAt, fillerItem
+}

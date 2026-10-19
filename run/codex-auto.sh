@@ -13,7 +13,7 @@ log () { echo "$(date '+%m-%d %H:%M:%S') $*" >> $L/driver.log; }
 # в конце работы драйвера — ферма не должна оставаться поднятой
 farmdown () {
   for s in $(node -e "console.log(Object.keys(require('./farm/slots.json').slots).join(' '))"); do
-    node farm/crystal/bside.js down $s >> $L/driver.log 2>&1; node farm/farm.js down $s >> $L/driver.log 2>&1
+    node dist/farm/crystal/bside.js down $s >> $L/driver.log 2>&1; node dist/farm/farm.js down $s >> $L/driver.log 2>&1
   done
 }
 echo $$ > $L/driver.pid

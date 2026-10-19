@@ -1,12 +1,12 @@
 'use strict'
-const gameClock = require('./game-clock')
-const armor = require('./armor')
-const { countOf, craftPlan, plankCount, spendablePlanks, GROUPS, TABLE_PLANKS } = require('./items')
-const actions = require('./actions')
-const { canSeePoint } = require('./perception')
+import * as gameClock from './game-clock'
+import armor = require('./armor')
+import { countOf, craftPlan, plankCount, spendablePlanks, GROUPS, TABLE_PLANKS } from './items'
+import actions = require('./actions')
+import { canSeePoint } from './perception'
 // No cycle: combat pulls armor, items, build, actions and social, none of which
 // knows this file.
-const { liveAttacker, HOSTILES, ARMOR_GAP, SWING_MS } = require('./combat')
+import { liveAttacker, HOSTILES, ARMOR_GAP, SWING_MS } from './combat'
 
 // What a long intent needs on the body before it leaves, checked once, in one
 // place, at the door (session.runIntent).
@@ -835,7 +835,7 @@ function summary (kit) {
   return out
 }
 
-module.exports = {
+export {
   requirements,
   preflight,
   freshKit,

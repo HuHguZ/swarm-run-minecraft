@@ -1,12 +1,14 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { transformSync } = require('esbuild')
-const { withClockFixture } = require('./clock-fixture')
-const data = require('minecraft-data')('1.21.11')
+import { campaignRequire, campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { transformSync } from 'esbuild'
+import { withClockFixture } from './clock-fixture'
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 
 function fixture(inventory, { worn = false, rejectConversion = false, ore = false, piglinAt = null }: any = {}) {
   const state: any = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 0, y: 64, z: 0 },
@@ -20,7 +22,7 @@ function fixture(inventory, { worn = false, rejectConversion = false, ore = fals
   function craft(params) {
     if (rejectConversion && params.item === 'gold_ingot') return { need: 'server did not confirm conversion' }
     const item = data.itemsByName[params.item]
-    for (const recipe of data.recipes[item.id] || []) {
+    for (const recipe of (data.recipes[item.id] || []) as any[]) {
       const needed: Record<string, number> = {}
       for (const id of recipe.ingredients || (recipe.inShape || []).flat()) {
         if (id == null || id < 0) continue
@@ -62,12 +64,12 @@ function fixture(inventory, { worn = false, rejectConversion = false, ore = fals
     close() {}
   }
   const context: any = { require: name => name === 'ws' ? Socket : name === 'fs'
-    ? { appendFileSync(_file, line) { logs.push(String(line)) } } : require(name),
+    ? { appendFileSync(_file, line) { logs.push(String(line)) } } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} },
     process: { argv: ['node', 'campaign.js'], env: {} }, console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask,
     testState: state, testSituation: situation }
-  vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code +
-    '\nstate = testState; sit = testSituation; module.exports = { netherGold };', withClockFixture(context))
+  vm.runInNewContext(campaignScript() +
+    '\nstate = testState; sit = testSituation; module.exports = { netherGold };', cjsContext(withClockFixture(context)))
   return { state, calls, physicalCrafts, logs, run: () => context.module.exports.netherGold() }
 }
 

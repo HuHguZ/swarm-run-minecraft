@@ -1,10 +1,11 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Продолжение сохранённого слота 5 существующим goStronghold/room, без горной/ночной кампании.
-const fs = require('fs')
-const path = require('path')
-const { connect, createKit, sleep } = require('../../daemon/scene-kit')
-const ROOT = path.resolve(__dirname, '../..')
-const PREFIX = path.join(__dirname, 'direct-room')
+import * as fs from 'fs'
+import path = require('path')
+import { connect, createKit, sleep } from '../../daemon/scenes/lib/scene-kit'
+const ROOT = REPO_ROOT
+const PREFIX = path.join(REPO_ROOT, 'farm/stronghold_route/direct-room')
 const MEM = path.join(ROOT, 'farm/memory-5/state.json')
 const read = () => JSON.parse(fs.readFileSync(MEM, 'utf8'))
 const c = connect('ws://127.0.0.1:8805')

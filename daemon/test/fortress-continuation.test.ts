@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
-const { Vec3 } = require('vec3')
+import { cjsContext } from './cjs-context'
+import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function fixture({ enabled = '1', covered = false, move = false } = {}) {
   const file = path.resolve(__dirname, '../src/fortress.ts'), native = createRequire(file)
@@ -23,13 +24,13 @@ function fixture({ enabled = '1', covered = false, move = false } = {}) {
       if (move) bot.entity.position = new Vec3(goal.x+.5, goal.y+1, goal.z+.5)
       return { ok: move, moved: move ? 8 : 0, why: 'closed face', error: 'noPath' }
     }, require: name => name === './nether-cover' ? { closedBore: async (_s,_c,goal,opts) => context.fixtureMove('covered', goal, opts) } : native(name) }
-  vm.runInNewContext(transformSync(fs.readFileSync(file,'utf8'),{ loader:'ts',format:'cjs' }).code + `
+  vm.runInNewContext(transformSync(bodySource(file),{ loader:'ts',format:'cjs' }).code + `
     look = () => fixtureView;
     climbTo = async (_s,_c,goal) => fixtureMove('open',goal,{});
     module.exports.plan = typeof continuationPlan === 'function' ? continuationPlan : () => null;
     module.exports.run = typeof continueFortress === 'function' ? continueFortress : async () => ({ advanced:false });
     module.exports.rpcBody = scoutBody;
-  `, context)
+  `, cjsContext(context))
   return { bot, session, bricks, items, view, calls,
     plan: () => context.module.exports.plan(session, view),
     preview: () => context.module.exports.rpcBody(session,{aborted:false},{mode:'continue',planOnly:true}),

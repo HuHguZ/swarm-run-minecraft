@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { options, querySample, analyze } = require('../try-tick-speed')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { options, querySample, analyze } from '../scenes/infra/try-tick-speed'
 interface TickSample { name: string; rate: number; status: string; realSeconds?: number; ticks?: number; actualServerTPS?: number; lagTicks: number }
 const trial = (actual: number): { sceneExit: number; runnerExit: number; queries: Record<string, number>[]; rows: TickSample[] } => ({ sceneExit: 0, runnerExit: 0, queries: [{ target: 100, mspt: 4, p95MSPT: 5 }], rows:
   ['wait40', 'walk24', 'dig-stone', 'fight-zombie'].map(name => ({ name, rate: 100, status: 'done', realSeconds: 8, ticks: actual * 8, actualServerTPS: actual, lagTicks: 0 })) })
@@ -39,7 +39,7 @@ test('RCON query preserves native P95, MSPT and overload status', () => {
 })
 
 test('steady probe completes waits above the per-RPC 300 second cap', async () => {
-  const { waitInChunks } = require('../try-tick-clock')
+  const { waitInChunks }: typeof import('../scenes/infra/try-tick-clock') = require('../scenes/infra/try-tick-clock')
   const chunks = []
   const result = await waitInChunks(async (method, p) => {
     assert.equal(method, 'wait')

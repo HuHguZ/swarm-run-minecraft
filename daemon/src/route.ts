@@ -1,4 +1,5 @@
 'use strict'
+const { REPO_ROOT }: typeof import('./paths') = require('./paths')
 // Маршрут спидраннера по знанию карты (поток route, 03.10.2026; журнал research/dev-E-overworld.md).
 //
 // Знание карты — из копии этого же мира (AGENTS.md: разрешено): постройки — seedtool (cubiomes, 1.21.11: деревня,
@@ -17,10 +18,10 @@
 //   литьё у видимой лавы (portal_natural run с подсказкой) — медиана 161 с от подсказки до горящей рамы (07 §8.1).
 // Ходьба по рельефу — ~2.5 м/с (portal_natural «к подсказке»: 245 м за ~100 с).
 
-const fs = require('fs')
-const path = require('path')
+const fs: typeof import('fs') = require('fs')
+const path: typeof import('path') = require('path')
 
-const ROOT = path.join(__dirname, '..', '..')
+const ROOT = REPO_ROOT
 const SEEDTOOL = path.join(ROOT, 'tools', 'seedtool', 'seedtool.exe')
 const POOL = path.join(ROOT, 'farm', 'seeds', 'good-v2.json')
 const CACHE = path.join(ROOT, 'farm', 'seeds', 'route-info.json')
@@ -58,7 +59,7 @@ const asXZ = p => (Array.isArray(p) ? { x: p[0], z: p[1] } : p)
 
 // ------------------------------------------------------------------ данные по сиду
 
-const knowledge = require('./perception/knowledge')
+const knowledge: typeof import('./perception/knowledge') = require('./perception/knowledge')
 let poolCache = null
 function poolRow (seed) {
   if (!knowledge.allows('lava', 'route.poolRow')) return null // S10: в rsg скан копии (good-v2) не читается
@@ -79,7 +80,7 @@ function seedInfo (seed, { run = true }: any = {}) {
   if (c[String(seed)]) return c[String(seed)]
   if (!run || !fs.existsSync(SEEDTOOL)) return null
   try {
-    const out = require('child_process').execFileSync(SEEDTOOL, ['info', String(seed)], { encoding: 'utf8', timeout: 20000, windowsHide: true })
+    const out = (require('child_process') as typeof import('child_process')).execFileSync(SEEDTOOL, ['info', String(seed)], { encoding: 'utf8', timeout: 20000, windowsHide: true })
     const j = JSON.parse(out.trim().split('\n')[0])
     c[String(seed)] = j
     try { fs.writeFileSync(CACHE, JSON.stringify(c)) } catch {}
@@ -645,7 +646,7 @@ function describe (p) {
     p.steps.map(s => `${s.id}${s.d !== undefined ? `(${s.d} м)` : ''} ${s.budget} с`).join(' → ')
 }
 
-// Кэш seedtool по пулу: node daemon/src/route.js cache  (300 сидов — ~10 с).
+// Кэш seedtool по пулу: node dist/daemon/src/route.js cache  (300 сидов — ~10 с).
 if (require.main === module) {
   const cmd = process.argv[2]
   if (cmd === 'cache') {
@@ -654,7 +655,7 @@ if (require.main === module) {
     const left = seeds.filter(s => !c[s])
     for (let i = 0; i < left.length; i += 50) {
       const chunk = left.slice(i, i + 50)
-      const out = require('child_process').execFileSync(SEEDTOOL, ['info', ...chunk], { encoding: 'utf8', timeout: 120000, windowsHide: true })
+      const out = (require('child_process') as typeof import('child_process')).execFileSync(SEEDTOOL, ['info', ...chunk], { encoding: 'utf8', timeout: 120000, windowsHide: true })
       for (const line of out.trim().split('\n')) { try { const j = JSON.parse(line); c[String(j.seed)] = j } catch {} }
     }
     fs.writeFileSync(CACHE, JSON.stringify(c))
@@ -670,7 +671,7 @@ if (require.main === module) {
     for (const s of seeds) { const p = plan(routeInfo(s)); by[p.route] = (by[p.route] || 0) + 1; budgets.push(p.budget) }
     budgets.sort((a, b) => a - b)
     console.log(JSON.stringify({ n: seeds.length, medianBudgetMin: Math.round(budgets[budgets.length >> 1] / 6) / 10, p90Min: Math.round(budgets[Math.floor(budgets.length * 0.9)] / 6) / 10, routes: (Object.entries(by) as [string, any][]).sort((a: any, b: any) => b[1] - a[1]) }, null, 1))
-  } else console.log('node daemon/src/route.js cache | plan <сид> | stats')
+  } else console.log('node dist/daemon/src/route.js cache | plan <сид> | stats')
 }
 
 /** Учёт исхода шага маршрута (S8b 07.10). Удачный шаг — в done; мягкие food/water — тоже done (еда ещё перед входом, вода — у
@@ -728,7 +729,7 @@ function waterDigPrice (digBlocks?: number, shoreDist?: number) {
   const shore = Number.isFinite(shoreDist) && shoreDist >= 0 ? shoreDist : 10
   return { extraS: Math.round(blocks * DIG_BLOCK_S * 4 * 10) / 10, leaveS: Math.round((2 + shore / SWIM_MS) * 10) / 10 }
 }
-function routeActRisk ({ hp, canEat, foeDamage = 0, inWater = false, digging = false, buried = false, digBlocks, shoreDist }: { hp: number, canEat: boolean, foeDamage?: number, inWater?: boolean, digging?: boolean, buried?: boolean, digBlocks?: number, shoreDist?: number }) {
+function routeActRisk ({ hp, canEat, foeDamage = 0, inWater = false, digging = false, buried = false, digBlocks, shoreDist }: { hp: number, canEat: boolean, foeDamage?: number, inWater?: boolean, digging?: boolean, buried?: boolean, digBlocks?: number, shoreDist?: number }): { refuse: boolean; why: string; riskT?: number; healT?: number } {
   if (buried) return { refuse: true, why: 'завалило — сперва откопаться' }
   const hpEff = Math.max(0, hp - (foeDamage || 0))
   const r = digRefuse(hpEff, canEat)
@@ -792,3 +793,10 @@ function lavaLakes (cells: { x: number, y: number, z: number }[]) {
 }
 
 module.exports = { seenInfo, interruptCap, routeActRisk, waterDigPrice, digBlocksOf, scoutLegPrice, lavaLakes, GOLEM_DEATH_P, MINE_DEATH_P, DEATH_S, mapLevel, structOnly, digRefuse, digRiskTicks, healTicks, bookStep, foodHerds, structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands, BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints, describe, routeName, LOOT, WORK, SPEED }
+export {
+  seenInfo, interruptCap, routeActRisk, waterDigPrice, digBlocksOf, scoutLegPrice, lavaLakes, GOLEM_DEATH_P,
+  MINE_DEATH_P, DEATH_S, mapLevel, structOnly, digRefuse, digRiskTicks, healTicks, bookStep, foodHerds,
+  structureSearchLeft, outpostStepCost, woodCandidates, outpostNear, outpostWaypoint, sheepHerds, bedCands,
+  BUCKETS, routeInfo, seedInfo, poolRow, oresOf, plan, pickLava, lavaCands, castOdds, ironNeed, orderPoints,
+  describe, routeName, LOOT, WORK, SPEED
+}

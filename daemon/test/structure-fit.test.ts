@@ -1,18 +1,18 @@
 'use strict'
 // Узнавание построек по шаблонам jar 1.21.11 (structure-fit): шаблон, поставленный в мир настоящих чанков с известным
 // поворотом и сдвигом, узнаётся по видимому, и сундуки шаблона ложатся на свои клетки; за стеной ничего не читается.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('events')
-const { Vec3 } = require('vec3')
-const F = require('../src/structure-fit')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'events'
+import { Vec3 } from 'vec3'
+import * as F from '../src/structure-fit'
 
 const CH = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%&()*+,-/:;<=>?@[]^_`{|}~'
 
 function world (floor = 'sand', B = { x: 0, z: 0 }) {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Chunk = require('prismarine-chunk')(registry)
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Chunk: any = (require('prismarine-chunk') as typeof import('prismarine-chunk').default)(registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const columns = new Map()
   const w: any = new EventEmitter()
   w.getColumn = (cx, cz) => {
@@ -129,7 +129,7 @@ test('далеко от начала мира (x 2000, z −3000): голос д
 })
 
 test('центр деревни: колокол на виду — центр по нему; без него — среднее увиденного с разных мест', () => {
-  const S = require('../src/structures')
+  const S: typeof import('../src/structures') = require('../src/structures')
   const state: any = { structures: [] }
   const session: any = { journal: { state, patch: fn => fn(state), append: () => {} }, director: null }
   S.remember(session, { kind: 'village', at: { x: 100, y: 64, z: 100 }, evidence: ['hay_block'] }, 'overworld')
@@ -143,7 +143,7 @@ test('центр деревни: колокол на виду — центр п�
 })
 
 test('копка — только по прицелу: за камнем не копается; стоя на сундуке — он и есть дно колодца', async () => {
-  const S = require('../src/structures')
+  const S: typeof import('../src/structures') = require('../src/structures')
   const W = world('sand')
   const dug = []
   Object.assign(W.bot, {
@@ -166,7 +166,7 @@ test('копка — только по прицелу: за камнем не к
 })
 
 test('иглу узнаётся снаружи: снежный купол и окно-льдинка, ковёр внутри не нужен', () => {
-  const S = require('../src/structures')
+  const S: typeof import('../src/structures') = require('../src/structures')
   const W = world('grass_block')
   const raw = W.bot.blockAt
   W.bot.blockAt = p => { const b = raw(p); if (b) b.biome = { name: 'snowy_plains' }; return b }

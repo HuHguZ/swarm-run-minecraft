@@ -1,12 +1,13 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
 
 function load(env, full = true, equip = true) {
-  const file = require.resolve('../try-lab-fresh'), local = createRequire(file), commands = [], calls = [], logs = []
+  const file = require.resolve('../scenes/ow/try-lab-fresh'), local = createRequire(file), commands = [], calls = [], logs = []
   const state: any = { inventory: {}, armor: {}, health: 18, food: 19, dimension: 'overworld' }
   const kit = { randomReset: async () => {}, setDifficulty: async () => {}, gamerule: async () => {}, cmd: async text => {
     commands.push(text)
@@ -14,7 +15,7 @@ function load(env, full = true, equip = true) {
     const m = /^\/give @s minecraft:(\w+)(?: (\d+))?$/.exec(text)
     if (m && full) state.inventory[m[1]] = (state.inventory[m[1]] || 0) + Number(m[2] || 1)
   } }
-  const mocks = { './farm-bootstrap': {}, './scene-kit': { connect: () => ({ call: async method => {
+  const mocks = { '../lib/farm-bootstrap': {}, '../lib/scene-kit': { connect: () => ({ call: async method => {
     calls.push(method)
     if (method === 'armor' && equip && state.inventory.iron_helmet) {
       state.inventory.iron_helmet--; state.armor.head = 'iron_helmet'
@@ -24,7 +25,7 @@ function load(env, full = true, equip = true) {
   const ctx: any = { require: name => mocks[name] || local(name), __dirname: path.dirname(file),
     moduleExports: null, process: { env: { KEEP_STATE: '1', KIT: 'ender_eye*16;iron_helmet;white_bed*6', ...env } },
     console: { log: (...args) => logs.push(args.join(' ')), error() {} } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8').replace(/main\(\)\.catch\([\s\S]*$/, '') + '\nmoduleExports = { scene };', ctx)
+  vm.runInNewContext(fs.readFileSync(file, 'utf8').replace(/main\(\)\.catch\([\s\S]*$/, '') + '\nmoduleExports = { scene };', cjsContext(ctx))
   return { scene: ctx.moduleExports.scene, commands, calls, logs }
 }
 

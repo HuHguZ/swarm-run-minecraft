@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Жемчуг как ход goto (TODO.md «Жемчуг как перемещение», п. 1, общий ход; поток movement, 02.10.2026).
 // Включается параметром goto { pearl: true | {reserve, hpMin, hpSec, minGain, minShare, maxHops, jump} } или ND_PEARL_GOTO=1.
 //
@@ -11,8 +11,8 @@ const gameClock = require('./game-clock')
 // знает, сколько нужно); по умолчанию резерв 12 — без явного резерва жемчуг на ходьбу почти не тратится.
 // Сорвались с края после посадки — ловит сторож падения (clutch.js), блок под ноги.
 
-const Vec3 = require('vec3')
-const pearlHop = require('./pearl-hop')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as pearlHop from './pearl-hop'
 
 const WALK = 4.317 // бл/с — шаг без спринта (pathfinder: allowSprinting = false)
 // Бег (allowSprinting): 5.612 по прямой, но pathfinder бежит только на прямых отрезках (canStraightLine) — в среднем
@@ -123,4 +123,4 @@ async function maybeHop (session, ctl, goalXYZ, goal, opt: any = {}) {
 
 function on (p) { return p !== undefined ? !!p : process.env.ND_PEARL_GOTO !== '0' }
 
-module.exports = { pathSeconds, planWalk, maybeHop, options, on, WALK, RUN }
+export { pathSeconds, planWalk, maybeHop, options, on, WALK, RUN }

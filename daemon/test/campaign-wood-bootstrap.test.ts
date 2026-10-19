@@ -1,14 +1,16 @@
+import { campaignScript, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
-import { functionSource } from './source-fixture'
+import { functionSource, transpiledSource } from './source-fixture'
+import { cjsContext } from './cjs-context'
 
 const campaign = path.join(__dirname, '../campaign.js')
 function fixture() {
-  const source = fs.readFileSync(process.env.WOOD_BOOTSTRAP_SOURCE || campaign, 'utf8')
+  const source = campaignScript(process.env.WOOD_BOOTSTRAP_SOURCE)
   const wood = source.slice(source.indexOf('let woodRoofed ='), source.indexOf("defStage(\"stone\""))
   const inventory: Record<string, number> = {}, calls: any[] = [], stages: any[] = []
   const have = re => Object.entries(inventory).reduce((n, [name, count]) => n + ((typeof re === 'string' ? name === re : re.test(name)) ? count : 0), 0)
@@ -24,8 +26,8 @@ function fixture() {
     }, sticks: async count => { inventory.oak_planks -= Math.ceil(count / 4) * 2; inventory.stick = Math.ceil(count / 4) * 4 },
     strategyExecuting: false, strategyInterrupted: false }
   assert.ok(wood.startsWith('let woodRoofed =') && wood.includes('defStage'), 'actual wood actor source must be captured')
-  vm.runInNewContext(transformSync(wood, { loader: 'js', format: 'cjs' }).code, context)
-  vm.runInNewContext(functionSource(process.env.WOOD_BOOTSTRAP_SOURCE || campaign, 'executeStrategy') + ';this.execute=executeStrategy', context)
+  vm.runInNewContext(transformSync(wood, { loader: 'js', format: 'cjs' }).code, cjsContext(withSetters(context)))
+  vm.runInNewContext(functionSource(process.env.WOOD_BOOTSTRAP_SOURCE || campaign, 'executeStrategy') + ';this.execute=executeStrategy', cjsContext(withSetters(context)))
   return { context, calls, inventory, wood: stages[0].run }
 }
 

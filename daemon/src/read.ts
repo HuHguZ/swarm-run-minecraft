@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Чтение противника (PVP-RESEARCH б.20 и в.7; просьба 2026-09-26: «все приёмы
 // про-игроков, по максимуму того, что даёт версия»). Что сервер сам говорит о
 // нём всем, кто рядом, — и что бот раньше пропускал:
@@ -26,7 +26,7 @@ const gameClock = require('./game-clock')
 // Имя звука — общим разбором melee.soundName (2026-09-26): своя копия поправки
 // номера (SOUND_SHIFT) здесь была второй правдой, которая могла разойтись с
 // melee.js; melee.js ничего не требует, круга нет.
-const { soundName } = require('./melee')
+import { soundName } from './melee'
 
 const TICK_MS = 50
 const EYE = 1.62
@@ -73,7 +73,7 @@ function healthRaw (bot, e) {
 // Эффекты по частицам: Set имён. Частица приходит как { type: 'entity_effect',
 // data: ARGB } (протокол 1.21.11: Particle, entity_effect → i32).
 function effectsOf (bot, e) {
-  const out = new Set()
+  const out = new Set<string>()
   if (!e || !e.metadata) return out
   const arr = e.metadata[metaIdx(bot, e, 'effect_particles', 10)]
   if (!Array.isArray(arr)) return out
@@ -179,7 +179,7 @@ function spearIn (e) {
 // Ванильный клиент шлёт ServerboundPlayerLoadedPacket, как только мир вокруг
 // загружен, — делаем так же.
 function installLoaded (bot) {
-  require('./client-loaded').install(bot)
+  (require('./client-loaded') as typeof import('./client-loaded')).install(bot)
 }
 
 function watch (bot, { threats = () => [], visible = () => true }: any = {}) {
@@ -291,7 +291,7 @@ function watch (bot, { threats = () => [], visible = () => true }: any = {}) {
   return W
 }
 
-module.exports = {
+export {
   watch, installLoaded, absorptionOf, healthRaw, effectsOf, enchLevel, crossbowInfo, aimAngle, lookDir, hasTotemInHand, spearIn,
   EFFECT_COLOR, TOTEM_WINDOW_MS, SHIELD_OFF_MS
 }

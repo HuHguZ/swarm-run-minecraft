@@ -1,11 +1,11 @@
 // Офлайн: L0 — кровать на проход головы у центра за 11–20 тиков до «сел» (подушка у столба, станция в
 // окопе за краем чаши), и уживается ли она с L (за 2 тика до «сел»): L0 не сносит кровать L, окоп общий
 // или свой. Плоский мир с точной чашей фонтана (EndPodiumFeature) и стойкостью блоков 1.21.11.
-// node farm/dragon/an-l0pillar.js farm/logs/trace-fin3-*/rec-*.jsonl
-const fs = require('fs')
-const REG = require('../../daemon/node_modules/minecraft-data')('1.21.11')
-const Vec3 = require('../../daemon/node_modules/vec3')
-const dragon = require('../../daemon/src/dragon')
+// node dist/farm/dragon/an-l0pillar.js farm/logs/trace-fin3-*/rec-*.jsonl
+import * as fs from 'fs'
+const REG = (require('../../daemon/node_modules/minecraft-data') as typeof import('../../daemon/node_modules/minecraft-data'))('1.21.11')
+const Vec3: typeof import('../../daemon/node_modules/vec3').Vec3 = require('../../daemon/node_modules/vec3')
+import dragon = require('../../daemon/src/dragon')
 
 function world (P) {
   const o = Math.floor(P) - 4 // origin.y: слой портала; пол чаши — o − 1; обод — на o

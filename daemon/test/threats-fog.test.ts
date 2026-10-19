@@ -1,14 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const threats = require('../src/threats')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import threats = require('../src/threats')
 
 function scene(t) {
   const timer = clock.activate(new clock.GameClock({ manual: true, epoch: 1000 }))
   const bot: any = new EventEmitter(); bot._client = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.entity = { id: 1, position: new Vec3(.5, 0, .5), height: 1.8 }
   let wall = false
   bot.blockAt = p => ({ name: wall && p.x === 1 ? 'stone' : 'air', position: p,
@@ -94,7 +94,7 @@ test('29-allied-player danger polling removes both immediate and persistent obse
 test('empty enemy lists retain unknown-owner arrows, potions, clouds and lava while skipping known allied shots', t => {
   const f = scene(t)
   let velocity = { x: -1.5, y: 0, z: 0 }
-  t.mock.method(require('../src/drops'), 'velocityFromRaw', () => velocity)
+  t.mock.method((require('../src/drops') as typeof import('../src/drops')), 'velocityFromRaw', () => velocity)
   player(f.bot, 2, 'Ally')
   threats.dangers(f.bot, { foes: [] })
   const spawn = (id: number, name: string, owner: number, x: number) => {
@@ -140,7 +140,7 @@ test('bow, mace and potion reflexes cannot observe a player behind a wall inside
 
 test('unknown projectile spawn behind a wall cannot create a threat; observed motion works after acquisition', t => {
   const f = scene(t)
-  t.mock.method(require('../src/drops'), 'velocityFromRaw', () => ({ x: -1.5, y: 0, z: 0 }))
+  t.mock.method((require('../src/drops') as typeof import('../src/drops')), 'velocityFromRaw', () => ({ x: -1.5, y: 0, z: 0 }))
   const e: any = { id: 2, name: 'arrow', position: new Vec3(8, 1.6, .5), height: .25, width: .25 }
   f.bot.entities[2] = e; f.wall(true)
   threats.dangers(f.bot)
@@ -161,7 +161,7 @@ test('a visible mace holder cannot reveal an occluded supporting block', t => {
     yaw: 0, metadata: [], equipment: [{ name: 'mace' }], height: 1.8, width: .6 }
   f.bot.entities[2] = foe
   f.bot.blockAt = p => p.floored().equals(new Vec3(2, 4, 0)) ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : baseAt(p)
-  const support = t.mock.method(require('../src/pick'), 'blockSeen', () => false)
+  const support = t.mock.method((require('../src/pick') as typeof import('../src/pick')), 'blockSeen', () => false)
   assert.equal(threats.dangers(f.bot, { foes: ['Foe'] }).smashes.length, 1, 'unseen support cannot suppress the visible aerial threat')
   support.mock.mockImplementation(() => true)
   assert.equal(threats.dangers(f.bot, { foes: ['Foe'] }).smashes.length, 0, 'visibly standing on a roof is not a fall')
@@ -169,7 +169,7 @@ test('a visible mace holder cannot reveal an occluded supporting block', t => {
 
 test('a seen launch retains its own prediction without hidden packet updates, and own launches are ignored', t => {
   const f = scene(t)
-  t.mock.method(require('../src/drops'), 'velocityFromRaw', () => ({ x: -1.5, y: 0, z: 0 }))
+  t.mock.method((require('../src/drops') as typeof import('../src/drops')), 'velocityFromRaw', () => ({ x: -1.5, y: 0, z: 0 }))
   const e: any = { id: 2, name: 'arrow', position: new Vec3(8, 1.6, .5), height: .25, width: .25 }
   f.bot.entities[2] = e
   threats.dangers(f.bot)

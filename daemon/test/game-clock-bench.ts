@@ -1,10 +1,10 @@
 'use strict'
 // Run explicitly: node test/game-clock-bench.js [milliseconds per rate]
 // This opens only an ephemeral loopback echo socket; no Minecraft server needed.
-const net = require('node:net')
-const { performance } = require('node:perf_hooks')
-const { once } = require('node:events')
-const { GameClock, wall } = require('../src/game-clock')
+import * as net from 'node:net'
+import { performance } from 'node:perf_hooks'
+import { once } from 'node:events'
+import { GameClock, wall } from '../src/game-clock'
 
 function percentile (values, p) {
   const sorted = values.slice().sort((a, b) => a - b)
@@ -36,7 +36,7 @@ async function main () {
   const server = net.createServer(socket => socket.pipe(socket))
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
-  const client = net.connect(server.address().port, '127.0.0.1')
+  const client = net.connect((server.address() as net.AddressInfo).port, '127.0.0.1')
   client.setNoDelay(true)
   await once(client, 'connect')
   const pending = new Map()

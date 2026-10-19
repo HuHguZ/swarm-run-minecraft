@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import Module from 'node:module'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Золото Ада по пути (пользователь 14.10): руда на виду и рядом, не при пиглинах; без брони — крюк шире и броня из добытого.
 // Ход к руде поверху; вслепую без золота руду копает закрытый штрек в своих стенах (nether-cover) — здесь прежний путь.
@@ -25,7 +25,7 @@ function fixture({ worn = false, piglin = false, heard = false, nuggets = 0 }: a
     './bastion/take-gold-block': { goldWorn: () => worn, armGold: async () => { calls.push(['armGold']); return true } }
   }
   mod.require = (name: string) => stubs[name] || raw(name)
-  mod._compile(transformSync(fs.readFileSync(file, 'utf8') + '\nmodule.exports.goldOnTheWayForTest = goldOnTheWay;', { loader: 'ts', format: 'cjs' }).code, file)
+  mod._compile(transformSync(bodySource(file) + '\nmodule.exports.goldOnTheWayForTest = goldOnTheWay;', { loader: 'ts', format: 'cjs' }).code, file)
   const bot: any = { game: { dimension: 'the_nether' }, entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => inv },
     registry: { blocksByName: { nether_gold_ore: { id: 1 }, gilded_blackstone: { id: 2 } } } }
   return { calls, run: () => mod.exports.goldOnTheWayForTest({ bot }, { aborted: false }) }

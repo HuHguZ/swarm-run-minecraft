@@ -1,5 +1,5 @@
-// Сводка серий try-lab-mv-terrain.js по ногам: node farm/movement/an-terr.js <tag>
-const fs = require('fs'); const path = require('path')
+// Сводка серий try-lab-mv-terrain.js по ногам: node dist/farm/movement/an-terr.js <tag>
+import * as fs from 'fs'; import path = require('path')
 const rows = []
 for (const t of process.argv.slice(2)) {
   const dir = path.join('C:/Users/user/Desktop/work/minecraft-claude/farm/results', t)

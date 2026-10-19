@@ -24,4 +24,4 @@ function install (bot) {
   bot.__ndSwimmingFixed = true
   return true
 }
-module.exports = { install }
+export { install }

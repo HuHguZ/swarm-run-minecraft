@@ -1,12 +1,12 @@
 'use strict'
 // Лодка как ход goto (14.10): уступ под подъём (стена ровно в 2, по проступи до неё ровно) и цена спуска с риском промаха.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Vec3 } from 'vec3'
 
 function world () {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const cells = new Map()
   const set = (x, y, z, n) => cells.set(`${x},${y},${z}`, n)
   for (let x = -4; x <= 8; x++) for (let z = -3; z <= 3; z++) set(x, 63, z, 'stone')
@@ -15,7 +15,7 @@ function world () {
 }
 
 test('уступ под лодку: стена в 2 через клетку проступи — прыжок у стены; стена в 3 и ступень в 1 — не уступ', () => {
-  const { climbLedge } = require('../src/navigation/boat-moves')
+  const { climbLedge }: typeof import('../src/navigation/boat-moves') = require('../src/navigation/boat-moves')
   const W = world()
   for (let z = -3; z <= 3; z++) for (let x = 2; x <= 8; x++) { W.set(x, 64, z, 'stone'); W.set(x, 65, z, 'stone') }
   const l = climbLedge(W.bot, new Vec3(1, 0, 0))
@@ -28,7 +28,7 @@ test('уступ под лодку: стена в 2 через клетку пр
 })
 
 test('цена спуска лодкой: смертельный промах дороже несмертельного, ведро воды страхует', () => {
-  const { boatSeconds } = require('../src/navigation/descent')
+  const { boatSeconds }: typeof import('../src/navigation/descent') = require('../src/navigation/descent')
   assert.ok(boatSeconds(14, 20, false) < 10, 'невысоко — почти без риска')
   assert.ok(boatSeconds(30, 20, false) > 100, '30 бл. при 20 хп — промах смертелен')
   assert.ok(boatSeconds(30, 20, true) < boatSeconds(30, 20, false))

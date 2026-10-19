@@ -1,10 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
+import { campaignRequire, campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
 function fakeDate (clock) { return class extends Date { static now () { return clock.t } } }
 
 function campaign (state, situation, handle: (...args: any[]) => any = () => ({} as Record<string, any>), { logs = null, env = {} as Record<string, any>, argv = [], clock = null, onStatus = null }: any = {} as Record<string, any>) {
@@ -23,12 +25,12 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
     close () {}
   }
   const context = {
-    require: name => path.basename(name) === 'barter-flow' ? { ...require(name), enabled: () => env.ND_BARTER_FLOW === '1' } : name === 'ws' ? Socket : name === 'fs' ? { appendFileSync (file, line) { if (logs) logs.push(String(line)) } } : require(name),
+    require: name => path.basename(name) === 'barter-flow' ? { ...campaignRequire(name), enabled: () => env.ND_BARTER_FLOW === '1' } : name === 'ws' ? Socket : name === 'fs' ? { appendFileSync (file, line) { if (logs) logs.push(String(line)) } } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js', ...argv], env },
     console: { log () {}, error () {} }, setTimeout, Date: clock ? fakeDate(clock) : Date, queueMicrotask
   }
-  vm.runInNewContext(fs.readFileSync(process.env.CAMPAIGN_TEST_SOURCE || path.join(__dirname, '../campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript(process.env.CAMPAIGN_TEST_SOURCE) + `
     module.exports = { act, refresh, readMemory, nextBastion, died: () => died, stage: name => { stage = name }, craft, nightGuard, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, lightUp, known, makeBed,
       fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
       pearlsPending: () => bastionPearlsPending(), pauseBastion: ms => { bastionPausedUntil = gameClock.now() + ms },
@@ -46,7 +48,7 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
         if (h.recoverGuard) recoverGuard = h.recoverGuard; if (h.toSurface) toSurface = h.toSurface; },
       init: () => { state = testState; sit = testSituation; }
     }
-  `, withClockFixture(Object.assign(context, { testState: state, testSituation: situation })))
+  `, cjsContext(withClockFixture(Object.assign(context, { testState: state, testSituation: situation }))))
   context.module.exports.init()
   return context.module.exports
 }
@@ -452,7 +454,7 @@ test('s1e: blind bastion search is budgeted by search time (900 s), not cut at 3
 })
 
 test('s1e: leaving the Nether far from the own portal with obsidian and a lighter — a new portal on the spot (price), near — walk home', async () => {
-  const { exitChoice } = require('../src/campaign/nether-pause')
+  const { exitChoice }: typeof import('../src/campaign/nether-pause') = require('../src/campaign/nether-pause')
   assert.equal(exitChoice({ homeDistance: 300, obsidian: 10, lighter: true }).build, true)
   assert.equal(exitChoice({ homeDistance: 40, obsidian: 10, lighter: true }).build, false, 'home is close — walk')
   assert.equal(exitChoice({ homeDistance: 300, obsidian: 9, lighter: true }).build, false, 'no frame without 10 obsidian')

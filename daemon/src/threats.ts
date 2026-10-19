@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { Vec3 } = require('vec3')
-const { seesPlayer, createLastSeen, visiblePlayerItem } = require('./pvp/last-seen')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { Vec3 }: typeof import('vec3') = require('vec3')
+const { seesPlayer, createLastSeen, visiblePlayerItem }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
 // Что летит в бота и куда от этого деваться. Общий для PvP и для побега от
 // мобов: стрела скелета и стрела человека — одна и та же сущность, и уклоняться
 // от неё надо одинаково.
@@ -209,7 +209,7 @@ function dodgeKey (bot, proj, safe: (direction: string) => boolean = () => true)
 // Лечение, реген и баффы — не угроза (свои кидают лечение); неизвестное — угроза.
 const SPLASH = /^(splash_potion|lingering_potion)$/
 function potionRoleOf (bot, item) {
-  try { const pvp = require('./pvp'); return pvp.potionRole(pvp.potionOf(item)) } catch { return null }
+  try { const pvp: typeof import('./pvp') = require('./pvp'); return pvp.potionRole(pvp.potionOf(item)) } catch { return null }
 }
 // Падающий сверху враг (булава с высоты, 12.10: «залетел на бота — он тупо смотрел»): его ноги — шаг тика как у игрока
 // в воздухе (LivingEntity.travel: y = (y − 0.08)·0.98, по горизонтали трение 0.91), пока не опустятся до моей головы;
@@ -232,7 +232,7 @@ function smashes (bot, foes: string[], scope: string | null = null) {
     try { under = bot.blockAt(e.position.offset(0, -0.3, 0), false) } catch {}
     const world = Object.create(bot)
     world.blockAt = p => { try { return bot.blockAt(p, false) || { name: 'unknown', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } } catch { return { name: 'unknown', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } } }
-    const knownSupport = under?.boundingBox === 'block' && require('./pick').blockSeen(world, under.position || e.position.offset(0, -.3, 0).floored())
+    const knownSupport = under?.boundingBox === 'block' && (require('./pick') as typeof import('./pick')).blockSeen(world, under.position || e.position.offset(0, -.3, 0).floored())
     if (knownSupport) continue
     // Взлёт (ветер, прыжок) — тоже угроза: вниз он вернётся; скачок позиции от телепорта даёт дикую скорость — в пределах
     // взлёта на заряде ветра (замер mace-2: телепорт на 14 бл. вверх — «летит вверх», удар замечен за 6 тиков).
@@ -258,7 +258,7 @@ function thrownTracker (bot) {
   const types = new Map([...PROJECTILES].filter(n => !HARMLESS.has(n)).map(n => [bot.registry.entitiesByName[n]?.id, n]).filter(([id]) => id != null) as any)
   bot._client.on('packet', (data, meta, buf) => {
     if (!meta || meta.name !== 'spawn_entity' || !data || !types.has(data.type)) return
-    const v = require('./drops').velocityFromRaw(buf, 'spawn')
+    const v = (require('./drops') as typeof import('./drops')).velocityFromRaw(buf, 'spawn')
     // objectData снаряда — id бросившего (Projectile.getOwner в пакете спавна, 1.21): свой бросок и союзный — не угроза.
     const own = Number(data.objectData) > 0 && Number(data.objectData) === bot.entity.id
     const body = { name: types.get(data.type), position: new Vec3(data.x, data.y, data.z), width: .25, height: .25 }
@@ -391,3 +391,4 @@ function dangers (bot, { radius = 12, foes = null as string[] | null } = {}) {
 }
 
 module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers }
+export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers }

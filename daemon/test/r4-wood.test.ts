@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import route = require('../src/route')
 const info = { spawn: { x: 0, z: 0 }, sky: { x: 40, y: 64, z: 0, src: 20 }, outposts: [], ores: { trees: [] } }
 test('wood plan uses mapped small grove above 25-block band', () => {
   const i = { ...info, ores: { trees: [{ x: 70, y: 107, z: 0, n: 4 }] } }

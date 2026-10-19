@@ -1,13 +1,13 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { AsyncLocalStorage } = require('async_hooks')
-const assess = require('./assess')
-const bedtime = require('./bedtime')
-const { WorldMap, ORES } = require('./worldmap')
+import * as gameClock from './game-clock'
+import { AsyncLocalStorage } from 'async_hooks'
+import * as assess from './assess'
+import * as bedtime from './bedtime'
+import { WorldMap, ORES } from './worldmap'
 
 // Чьё намерение: контекст «это директор» тянется через все await шага, а
 // вызовы мозга по WebSocket приходят без него (session.runIntent смотрит сюда).
-const owner = new AsyncLocalStorage()
+const owner = new AsyncLocalStorage<{ director?: boolean }>()
 function byDirector () { const st = owner.getStore(); return !!(st && st.director) }
 
 const NIGHT_FROM = 12542
@@ -72,7 +72,7 @@ function situation (d) {
     foes: fight && typeof fight.foes === 'number' ? fight.foes : 0,
     verdict: fight ? fight.verdict : 'чисто',
     fight,
-    ...(process.env.ND_NIGHT_WORK_SAFE !== '0' && bot.game?.dimension === 'overworld' ? { work: require('./night-work').profile(bot) } : {}),
+    ...(process.env.ND_NIGHT_WORK_SAFE !== '0' && bot.game?.dimension === 'overworld' ? { work: (require('./night-work') as typeof import('./night-work')).profile(bot) } : {}),
     hurtRecently: now - (d.lastHurt || 0) < 4000,
     armed: count(bot, /_(sword|axe)$/) > 0,
     edible: count(bot, FOOD) + count(bot, RAW),
@@ -386,7 +386,7 @@ class Director {
       if (s.pick === 0 && (d.pos.y < p.y - 2 || Math.hypot(d.pos.x - p.x, d.pos.z - p.z) > 64)) continue
       // Цена кучи против дороги: записан рюкзак (session death) — дальше 64
       if (Array.isArray(d.bag) && d.bag.length && Math.hypot(d.pos.x - p.x, d.pos.z - p.z) > 64) {
-        const pack = require('./pack')
+        const pack: typeof import('./pack') = require('./pack')
         const top = Math.max(0, ...d.bag.map(it => pack.worth(it.name)))
         const sum = d.bag.reduce((n, it) => n + pack.worth(it.name) * Math.min(16, it.count), 0)
         if (top < 3 && sum < 24) continue
@@ -586,7 +586,7 @@ class Director {
     }
     if (s.free <= 2 && s.foes === 0 && s.hp >= 12 && s.food >= 18 && bot.entity.onGround && this.ok('repair_tools')) {
       try {
-        const pair = require('./conversions/repair').repairOptions(S)
+        const pair = (require('./conversions/repair') as typeof import('./conversions/repair')).repairOptions(S)
         const anvil = pair?.mechanism === 'anvil' && bot.experience.level >= 2 && bot.findBlock({ matching: b => /^(chipped_|damaged_)?anvil$/.test(b.name), maxDistance: 4 })
         if (pair && (pair.mechanism === 'craft' || anvil)) return { prio: 'обычно', name: 'repair_tools',
           why: `освободить ячейку и восстановить ${pair.first.name}`, ok: r => !!r?.detail?.repaired,
@@ -625,7 +625,7 @@ class Director {
     const S = this.session
     return S.runIntent('cave_escape', async (ctl) => {
       const bot = S.require()
-      const { goals, Movements } = require('mineflayer-pathfinder')
+      const { goals, Movements }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
       const m = new Movements(bot)
       m.canDig = true
       m.allowSprinting = false
@@ -640,7 +640,8 @@ class Director {
         }
         return true
       }
-      const goal = new goals.Goal()
+      // В типах pathfinder Goal абстрактный, в JS — обычный базовый класс с методами-заглушками.
+      const goal = new (goals.Goal as any)()
       goal.heuristic = (n) => Math.max(0, startY + 40 - n.y) * 0.8
       goal.isEnd = (n) => n.y >= startY + 3 && sky(n)
       goal.hasChanged = () => false
@@ -840,26 +841,28 @@ class Director {
   }
 }
 
-async function escapeFire (session, ctl: any = null) {
+// Итог escapeFire: status — done / interrupted / failed, detail — отчёт ветки (how, escaped, nether, поля навыка спасения).
+interface FireEscape { status: string; detail: Record<string, any> }
+async function escapeFire (session, ctl: any = null): Promise<FireEscape> {
   const bot = session.bot
-  ctl ||= require('./reflex-lock').owner(session)?.ctl || { aborted: false, onAbort: [] }
-  const rescue = require('./tactics/lava-escape')
+  ctl ||= (require('./reflex-lock') as typeof import('./reflex-lock')).owner(session)?.ctl || { aborted: false, onAbort: [] }
+  const rescue: typeof import('./tactics/lava-escape') = require('./tactics/lava-escape')
   if (rescue.inLava(bot)) {
-    const air = require('./combat/emergency-escape').createEmergencyEscape(bot)
+    const air = (require('./combat/emergency-escape') as typeof import('./combat/emergency-escape')).createEmergencyEscape(bot)
     const capabilities = air.snapshot()
-    for (const kind of ['flight', 'pearl']) {
+    for (const kind of ['flight', 'pearl'] as const) {
       if (ctl.aborted) return { status: 'interrupted', detail: { how: 'lava rescue interrupted' } }
       if (!capabilities[kind === 'flight' ? 'flightReady' : 'pearlReady']) continue
       const result = await air.run(ctl, kind)
       if (result.ok && !rescue.inLava(bot)) return { status: 'done', detail: { how: kind, ...result } }
     }
-    const kit = require('./fightkit')
+    const kit: typeof import('./fightkit') = require('./fightkit')
     if (!kit.hasEffect(bot, 'fire_resistance') && rescue.lavaCapabilities(session).potion) await rescue.drinkFireResistance(session, ctl)
     if (kit.hasEffect(bot, 'fire_resistance')) {
       const result = await rescue.climbFromLava(session, ctl)
       return { status: result.ok ? 'done' : ctl.aborted ? 'interrupted' : 'failed', detail: result }
     }
-    const result = await require('./unstuck').RUNGS.swimOutLava({ bot, session: session, ctl, sleep })
+    const result = await (require('./unstuck') as typeof import('./unstuck')).RUNGS.swimOutLava({ bot, session: session, ctl, sleep })
     const escaped = !rescue.inLava(bot) && bot.entity.onGround
     return { status: escaped ? 'done' : ctl.aborted ? 'interrupted' : 'failed', detail: { ...result, escaped } }
   }
@@ -874,7 +877,7 @@ async function escapeFire (session, ctl: any = null) {
   // спринт с прыжком 1.2 с вслепую к «ближайшей клетке с полом» (часто своей же) — с моста или платформы в пустоту и лаву
   // под огнём ифрита (S4c 07.10, замечание проверки г; звали директор «горю», тактика Flee и укрытие).
   const me = bot.entity.position.floored()
-  const { HURTS, stepSafe, keyDir } = require('./moves')
+  const { HURTS, stepSafe, keyDir }: typeof import('./moves') = require('./moves')
   const hot = v => HURTS.has(bot.blockAt(v)?.name || '')
   const fiery = c => [c.offset(0, -1, 0), c, c.offset(0, 1, 0)].some(hot)
   // Огонь жжёт, когда его клетку задевает хитбокс 0.6×1.8, а не только клетка под ногами: у горящей травы бот 9 раз ответил
@@ -912,4 +915,4 @@ async function escapeFire (session, ctl: any = null) {
   return { status: ctl.aborted ? 'interrupted' : escaped ? 'done' : 'failed', detail: { how: escaped ? 'вышел из огня' : 'некуда', escaped, ...(nether ? { nether: true } : {}) } }
 }
 
-module.exports = { Director, situation, GOALS, byDirector, escapeFire }
+export { Director, situation, GOALS, byDirector, escapeFire }

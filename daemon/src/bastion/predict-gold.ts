@@ -1,9 +1,9 @@
-const { visibleOf, seesBlock, log, sleep, xyz, Vec3, reserveKeeper, countOf, mobs, LOVED, admiring, itemNamed, seesMob } = require('./take-gold-block')
+const { visibleOf, seesBlock, log, sleep, xyz, Vec3, reserveKeeper, countOf, mobs, LOVED, admiring, itemNamed, seesMob }: typeof import('./take-gold-block') = require('./take-gold-block')
 async function eatIfHungry (session, ctl) {
   const bot = session.bot
   if ((bot.food ?? 20) >= 16 && (bot.health ?? 20) >= 14) return
   if ((bot.food ?? 20) >= 20) return
-  try { await require('.././actions').eat(session, {}) } catch {}
+  try { await (require('.././actions') as typeof import('.././actions')).eat(session, {}) } catch {}
 }
 
 function predictGold (bot, radius = 56) {
@@ -47,8 +47,8 @@ async function predictGoldAsync (bot, radius = 56, ctl: any = {}) {
 }
 
 function * predictGoldSteps (bot, radius = 56) {
-  const bp = require('.././bastion-pieces')
-  const rootGrid = process.env.ND_BASTION_ROOT_GRID === '1' && require('.././nether-cover').blind()
+  const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
+  const rootGrid = process.env.ND_BASTION_ROOT_GRID === '1' && (require('.././nether-cover') as typeof import('.././nether-cover')).blind()
   const R = bot.registry.blocksByName
   const cids = [R.chest && R.chest.id, R.trapped_chest && R.trapped_chest.id, R.barrel && R.barrel.id].filter(Boolean)
   const chests = visibleOf(bot, cids, radius, { max: 40, rays: 3000 }).map(b => ({ pos: b.position, block: b }))
@@ -57,7 +57,7 @@ function * predictGoldSteps (bot, radius = 56) {
   const basalt = visibleOf(bot, bids, radius, { max: 300, rays: 4000 })
   yield
   const entry = bot.world?.getColumn && bot.world?.raycast
-    ? yield * require('./entry-route').observeSteps(bot) : null
+    ? yield * (require('./entry-route') as typeof import('./entry-route')).observeSteps(bot) : null
   const byChest = bp.locate(bot, chests).found
   yield
   let byBasalt = []
@@ -191,7 +191,7 @@ function rayClear (getBlock, a, b) {
 
 function baitAim (bot, bo) {
   const T = bo.C2
-  const gb = require('.././drops').blockGetter(bot)
+  const gb = (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
   for (const hy of [1.0, 0.8, 1.3, 0.6, 1.6]) {
     for (const far of [0.6, 0.8, 0.4, 0.95]) {
       const aim = new Vec3(T.x + 0.5 + bo.d[0] * (far - 0.5), T.y + hy, T.z + 0.5 + bo.d[1] * (far - 0.5))
@@ -212,7 +212,7 @@ function distToBox (p, e) {
 }
 
 async function handNoWalk (bot, pg) {
-  const pick = require('.././pick')
+  const pick: typeof import('.././pick') = require('.././pick')
   if (!bot.entities[pg.id] || admiring(pg)) return false
   const a = pick.aim(bot, pg)
   if (!a || !a.point) return false
@@ -252,7 +252,7 @@ async function tossOut (bot, bo, name, count = 1, aim = null) {
 const WEAPON_RANK = n => n.startsWith('netherite') ? 5 : n.startsWith('diamond') ? 4 : n.startsWith('iron') ? 3 : n.startsWith('stone') ? 2 : 1
 
 async function hitThroughWindow (bot) {
-  const pick = require('.././pick')
+  const pick: typeof import('.././pick') = require('.././pick')
   const eye = bot.entity.position.offset(0, 1.62, 0)
   const t = [...mobs(bot, 'piglin_brute', 5), ...mobs(bot, 'hoglin', 5), ...mobs(bot, 'zoglin', 5)].filter(e => distToBox(eye, e) <= 2.9)[0]
   if (!t) return false
@@ -273,7 +273,7 @@ const JUNK_OUT = { gravel: 0, soul_sand: 8, soul_soil: 0, nether_brick: 0, quart
 function dumpAim (bot, bo) {
   if (!bo.dump) return null
   const { D1, D2 } = bo.dump
-  const getBlock = require('.././drops').blockGetter(bot)
+  const getBlock = (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
   const px = D1.x - bo.P.x; const pz = D1.z - bo.P.z
   for (const far of [0.9, 0.7, 0.5, 0.3]) {
     for (const hy of [1.3, 1.1, 1.5, 0.9, 0.6]) {
@@ -295,7 +295,7 @@ const PIT_FILL_KEEP = 128
 const END_FILLER = /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|end_stone)$/
 
 function pitJunk (bot) {
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const out = []
   let fill = 0
   // Камень на каменные кирки (stone_tool_materials: булыжник, чернокамень, глубинный булыжник) — первым в запас заливки: незерак на
@@ -363,8 +363,8 @@ async function junkOut (bot, bo, tally = null) {
 }
 
 async function makeSill (bot, bo) {
-  const SL = require('.././sealed')
-  const { placeBlockAt } = require('.././build')
+  const SL: typeof import('.././sealed') = require('.././sealed')
+  const { placeBlockAt }: typeof import('.././build') = require('.././build')
   const C = new Vec3(bo.C.x, bo.C.y, bo.C.z)
   const b = bot.blockAt(C)
   if (b && b.name === 'soul_sand') return true
@@ -381,7 +381,7 @@ async function makeSill (bot, bo) {
 const PIGLIN_EYE = 1.79
 
 function throwLands (bot, from, feet = bot.entity.position, getBlock = null) {
-  const drops = require('.././drops')
+  const drops: typeof import('.././drops') = require('.././drops')
   getBlock = getBlock || drops.blockGetter(bot)
   const t = { x: feet.x - from.x, y: feet.y + 1 - from.y, z: feet.z - from.z }
   const L = Math.hypot(t.x, t.y, t.z) || 1
@@ -427,7 +427,7 @@ function floorRegion (gb, x0, z0, fy, max = 800) {
 }
 
 function pitLures (bot, bo, gb = null) {
-  gb = gb || require('.././drops').blockGetter(bot)
+  gb = gb || (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
   const me = bot.entity.position
   const eye = me.offset(0, 1.62, 0)
   const d = bo.d; const pp = [d[1], d[0]]
@@ -483,7 +483,7 @@ async function unholdGold (bot) {
 }
 
 function tossLands (bot, aim, getBlock = null, dvy = 0) {
-  const drops = require('.././drops')
+  const drops: typeof import('.././drops') = require('.././drops')
   getBlock = getBlock || drops.blockGetter(bot)
   const me = bot.entity.position
   const eye = me.offset(0, 1.62, 0)
@@ -510,7 +510,7 @@ function piecesReport (bot, radius, pg) {
   const R = bot.registry.blocksByName
   const cids = [R.chest && R.chest.id, R.trapped_chest && R.trapped_chest.id, R.barrel && R.barrel.id].filter(Boolean)
   const chests = visibleOf(bot, cids, radius, { max: 40, rays: 3000 }).map(b => ({ pos: b.position, block: b }))
-  const bp = require('.././bastion-pieces')
+  const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
   const loc = bp.locate(bot, chests)
   const props = b => { try { return b.getProperties() || {} } catch { return {} } }
   return {
@@ -527,3 +527,9 @@ function piecesReport (bot, radius, pg) {
 }
 
 module.exports = { eatIfHungry, predictGold, predictGoldAsync, lastGoldBreak, rayClear, baitAim, distToBox, handNoWalk, pitLike, aimOut, tossOut, WEAPON_RANK, hitThroughWindow, JUNK_OUT, dumpAim, PIT_KEEP, PIT_FILL_KEEP, END_FILLER, pitJunk, junkOut, makeSill, PIGLIN_EYE, throwLands, floorRegion, pitLures, unholdGold, tossLands, scanPieces, scanPiecesAsync }
+export {
+  eatIfHungry, predictGold, predictGoldAsync, lastGoldBreak, rayClear, baitAim, distToBox, handNoWalk, pitLike,
+  aimOut, tossOut, WEAPON_RANK, hitThroughWindow, JUNK_OUT, dumpAim, PIT_KEEP, PIT_FILL_KEEP, END_FILLER, pitJunk,
+  junkOut, makeSill, PIGLIN_EYE, throwLands, floorRegion, pitLures, unholdGold, tossLands, scanPieces,
+  scanPiecesAsync
+}

@@ -5,19 +5,19 @@
 // очередь: заряд 60 тиков, 3 шара через 6, откат 100; ифрит сам не подлетает, пока видит цель. Значит, ифрита в досягаемости бить
 // сразу (не строить и не лечиться под ним), к ифриту на высоте глаз ±2 — подходить; без огнестойкости — щит к заряженному,
 // отлёжка в коробке (boxRest) при малом хп, когда вплотную никого. Удар — только по тому, что видит прицел (pick.aim/canHit).
-const gameClock = require('./game-clock')
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz } = require('./movement')
-const { countOf } = require('./items')
+import * as gameClock from './game-clock'
+import { goals } from 'mineflayer-pathfinder'
+import { sleep, xyz } from './movement'
+import { countOf } from './items'
 
 const REACH = 2.95
 
 async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhase = (_: string) => {} }: any) {
   const bot = session.bot
-  const B = require('./blaze')
-  const pick = require('./pick')
-  const actions = require('./actions')
-  const guard = require('./combat').makeShield(session, ctl, { shield: 'ranged' })
+  const B: typeof import('./blaze') = require('./blaze')
+  const pick: typeof import('./pick') = require('./pick')
+  const actions: typeof import('./actions') = require('./actions')
+  const guard = (require('./combat') as typeof import('./combat')).makeShield(session, ctl, { shield: 'ranged' })
   const radar = B.makeRadar(bot)
   const saved = bot.pathfinder.movements
   bot.pathfinder.setMovements(B.fightMoves(session))
@@ -33,7 +33,7 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
   const fr = () => B.hasEffect(bot, 'fire_resistance')
   const stopWalk = () => { try { bot.pathfinder.setGoal(null) } catch {} }
   const sword = async () => {
-    const w = require('./items').bestWeapon(bot)
+    const w = (require('./items') as typeof import('./items')).bestWeapon(bot)
     if (w && bot.heldItem?.name !== w.name) { try { await bot.equip(w, 'hand') } catch {} }
   }
   const eyeDy = e => B.blazeEye(e).y - pick.eyeOf(bot).y
@@ -64,11 +64,11 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
         // Иссушитель в досягаемости — первым (удар 8 + иссушение, bnf6/bnf8 на −2642…: смерти от иссушителя при фокусе на ифрите).
         const e = inReach.find(x => x.name === 'wither_skeleton') || inReach.find(x => x.id === focus) || inReach[0]
         focus = e.id
-        const ready = now - Math.max(lastSwing, swapAt) >= require('./pvp').cooldownMs(bot.heldItem)
+        const ready = now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem)
         // Крит (Player.attack: падение, не на земле, не в воде/на лестнице, без слепоты) ×1.5: 9 вместо 6 — ифрит за 3 удара.
         // Прыжок за откат до готовности; удар — на спуске. Без опоры над головой (потолок гасит прыжок).
         const v = bot.entity.velocity, falling = !bot.entity.onGround && v.y < -0.08 && !bot.entity.isInWater
-        if (!ready && bot.entity.onGround && now - jumpAt > 500 && now - Math.max(lastSwing, swapAt) >= require('./pvp').cooldownMs(bot.heldItem) - 350) {
+        if (!ready && bot.entity.onGround && now - jumpAt > 500 && now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem) - 350) {
           const head = bot.blockAt(bot.entity.position.offset(0, 2.2, 0))
           if (!head || head.boundingBox === 'empty') { jumpAt = now; bot.setControlState('jump', true); gameClock.setTimeout(() => bot.setControlState('jump', false), 100) }
         }
@@ -89,7 +89,7 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       }
       // 1б. Ифрит чуть выше досягаемости (до +1.2 по высоте, рядом по горизонтали) — прыжок: удар на спуске, он же крит.
       const overhead = blazes.find(e => pick.canHit(bot, e, { range: REACH + 1.2 }) && B.reachTo(bot, e) <= REACH + 1.2 && eyeDy(e) > 0.3)
-      if (overhead && bot.entity.onGround && now - jumpAt > 450 && now - Math.max(lastSwing, swapAt) >= require('./pvp').cooldownMs(bot.heldItem) - 300) {
+      if (overhead && bot.entity.onGround && now - jumpAt > 450 && now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem) - 300) {
         stopWalk()
         focus = overhead.id
         try { await guard.raise(false); await bot.lookAt(B.blazeEye(overhead), true) } catch {}
@@ -193,4 +193,4 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
   return out
 }
 
-module.exports = { meleeCamp }
+export { meleeCamp }

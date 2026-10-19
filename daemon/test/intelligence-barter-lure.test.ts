@@ -1,12 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const BF = require('../src/barter-flow')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import * as BF from '../src/barter-flow'
 
 function tradeFixture ({ reachable = true, score = 6, seconds = 540, hand = false, abortAt = Infinity } = {}) {
   let now = 100000
@@ -31,7 +32,7 @@ function tradeFixture ({ reachable = true, score = 6, seconds = 540, hand = fals
   const to = source.indexOf('\nconst MEMO', from)
   assert.ok(from >= 0 && to > from)
   let handed = false
-  const context = vm.createContext({
+  const context = vm.createContext(cjsContext({
     Vec3, Map, Set, Number, Math,
     gameClock: { now: () => now },
     BF: { ...BF, enabled: () => true, ready: () => true },
@@ -54,7 +55,7 @@ function tradeFixture ({ reachable = true, score = 6, seconds = 540, hand = fals
       return true
     },
     sleep: async ms => { now += ms; if (now - started >= abortAt) ctl.aborted = true }
-  })
+  }))
   vm.runInContext(source.slice(from, to) + '\nthis.run = boothTrade', context)
   return { run: () => context.run({ bot }, ctl, { traded: 0 }, bo, started + seconds * 1000, { keep: 0 }), tossAt }
 }

@@ -1,17 +1,18 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const esbuild = require('esbuild')
-const { Vec3 } = require('vec3')
-const { EventEmitter } = require('node:events')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import * as esbuild from 'esbuild'
+import { Vec3 } from 'vec3'
+import { EventEmitter } from 'node:events'
 type Vector = import('vec3').Vec3
-const sourceRequire = require('node:module').createRequire(path.join(__dirname, '../src/sealed.ts'))
+const sourceRequire = (require('node:module') as typeof import('node:module')).createRequire(path.join(__dirname, '../src/sealed.ts'))
 const sealedModule = { exports: {} }
 vm.runInNewContext(esbuild.transformSync(fs.readFileSync(path.join(__dirname, '../src/sealed.ts'), 'utf8'),
   { loader: 'ts', format: 'cjs', target: 'node24' }).code,
-{ module: sealedModule, require: sourceRequire, process, console, setImmediate, performance, Buffer })
+cjsContext({ module: sealedModule, require: sourceRequire, process, console, setImmediate, performance, Buffer }))
 const realSealed = sealedModule.exports as {
   bodyCells(bot: { entity: { position: Vector; onGround?: boolean } }): Vector[]
   keyV(at: Vector): string
@@ -20,7 +21,8 @@ const realSealed = sealedModule.exports as {
 }
 
 function goldAttempt(options: { threat?: boolean; noDrop?: boolean; fullBag?: boolean; foreign?: boolean; abort?: boolean; takeover?: boolean; opens?: boolean; emptyOwn?: boolean; unknownBody?: boolean; unsafeFloor?: boolean } = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '../src/bastion/bastion.ts'), 'utf8')
+  // sealedGold живёт в bastion/sealed-gold.ts.
+  const source = fs.readFileSync(path.join(__dirname, '../src/bastion/sealed-gold.ts'), 'utf8')
   const start = source.indexOf("    const had = countOf(bot, 'gold_block')", source.indexOf('async function sealedGold'))
   const end = source.indexOf("    log('штрек: золото',", start)
   assert.ok(start >= 0 && end > start)
@@ -82,7 +84,7 @@ function goldAttempt(options: { threat?: boolean; noDrop?: boolean; fullBag?: bo
   const coverEnd = sharedSource.indexOf('\n}', coverStart) + 2
   assert.ok(ownStart >= 0 && coverStart >= 0)
   const body = `${sharedSource.slice(ownStart, ownEnd)}\n${sharedSource.slice(coverStart, coverEnd)}\nasync function attempt() { for (let attempt = 0; attempt < 1; attempt++) { ${source.slice(start, end)} } } attempt()`
-  const run = () => vm.runInNewContext(esbuild.transformSync(body, { loader: 'ts', format: 'cjs', target: 'node24' }).code, context)
+  const run = () => vm.runInNewContext(esbuild.transformSync(body, { loader: 'ts', format: 'cjs', target: 'node24' }).code, cjsContext(context))
   return { run, events, slept: () => slept, gold: () => gold, S, ctl }
 }
 
@@ -178,7 +180,7 @@ function stationaryCollector({ foreign = false, distant = false, cancel = false 
   } }
   const context = { module: { exports: {} }, process, console, Buffer, require: (name: string) => name === './game-clock' ? clock : require(name) }
   const source = fs.readFileSync(path.join(__dirname, '../src/drops.ts'), 'utf8')
-  vm.runInNewContext(esbuild.transformSync(source, { loader: 'ts', format: 'cjs', target: 'node24' }).code, context)
+  vm.runInNewContext(esbuild.transformSync(source, { loader: 'ts', format: 'cjs', target: 'node24' }).code, cjsContext(context))
   drops = context.module.exports as typeof drops
   const mark = drops.pickupMark(bot)
   return { ctl, run: () => drops.collect(bot, ctl, { radius: 8, timeoutMs: 1500, appearMs: 0, allowMovement: false }),

@@ -1,9 +1,10 @@
-// A/B подхода жемчугом: node farm/dragon/an-pearl.js <тег> <пар N> [<тег2> <N2> ...]
+import { REPO_ROOT } from '../../daemon/src/paths'
+// A/B подхода жемчугом: node dist/farm/dragon/an-pearl.js <тег> <пар N> [<тег2> <N2> ...]
 // Пара i: слот i — A (ND_PEARL=0), слот i+N — B (ND_PEARL=1), сид общий. Итоги — farm/logs/<тег>-s<S>.jsonl,
 // трассы — farm/logs/trace-<тег>/s<S>/dragon-*.jsonl (взрывы кроватей: bed/bedDone).
-const fs = require('fs')
-const path = require('path')
-const L = path.join(__dirname, '..', 'logs')
+import * as fs from 'fs'
+import path = require('path')
+const L = path.join(REPO_ROOT, 'farm/logs')
 const args = process.argv.slice(2)
 const rows = []
 for (let a = 0; a < args.length; a += 2) {

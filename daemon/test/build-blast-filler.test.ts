@@ -1,9 +1,9 @@
 'use strict'
 // Под гастом — стройка из булыжника, а не незерака (шар силы 1 рвёт незерак, булыжник держит: Codex q8, jar 1.21.11).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const gameClock = require('../src/game-clock')
-const { pickFiller } = require('../src/build')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as gameClock from '../src/game-clock'
+import { pickFiller } from '../src/build'
 
 const bot = (ghast, dimension = 'the_nether') => ({
   game: { dimension },

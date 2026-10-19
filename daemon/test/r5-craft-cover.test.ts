@@ -1,18 +1,19 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
-const path = require('node:path')
-const { Vec3 } = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
+import path = require('node:path')
+import { Vec3 } from 'vec3'
 function fixture (visible) {
   let crafts = 0
   const b = { entity: { position: new Vec3(.5,64,.5) }, inventory: { items: () => [] }, craft: async (_recipe?: unknown, _count?: number) => { crafts++ } }
   const s = { bot: b }; const foe = { position: new Vec3(3,64,.5), height: 1.95 }
   const ctx = { module: { exports: {} as Record<string, any> }, process, Date,
     require: n => n === 'node:async_hooks' ? require(n) : n === './worlds' ? { worldOf: () => 'the_nether' } : n === './ne-guard' ? { meleeFoes: () => [foe] } : n === './perception' ? { eyePos: () => b.entity.position, raySees: () => visible } : {} as Record<string, any> }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/reflex-lock.js'),'utf8'),withClockFixture(ctx))
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/reflex-lock.js'),'utf8'),cjsContext(withClockFixture(ctx)))
   const R = ctx.module.exports; R.install(s)
   return { run: () => R.run(s,{ aborted: false },() => b.craft({ result: { id: 1, count: 1 } },1)), crafts: () => crafts }
 }

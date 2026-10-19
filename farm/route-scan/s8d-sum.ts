@@ -1,12 +1,13 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // S8d (07.10): сводка серий «новый мир → Ад» по префиксам тегов + вехи на ОДИНАКОВОЙ работе (замечание проверки S8c «в»):
 // время (игровые с от начала маршрута, по концу шага маршрута, где веха появилась в рюкзаке) до деревянной кирки, каменной
 // кирки, ведра (любого), ведра + огня (огниво/заряд), ведра воды + огня (готовность к литью), входа в Ад; отрезки между вехами;
 // дерево — секунд на бревно (шаг wood / брёвен в рюкзаке после него). Темп — игровые тики / реальные секунды (batch.json → итог).
-//   node farm/route-scan/s8d-sum.js <префикс[,префикс]> [...] [--cap 20] [--ready 12] [--rows] [--pairs A B]
-const fs = require('fs')
-const path = require('path')
-const RES = path.join(__dirname, '..', 'results')
+//   node dist/farm/route-scan/s8d-sum.js <префикс[,префикс]> [...] [--cap 20] [--ready 12] [--rows] [--pairs A B]
+import * as fs from 'fs'
+import path = require('path')
+const RES = path.join(REPO_ROOT, 'farm/results')
 const args = process.argv.slice(2)
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? Number(args.splice(i, 2)[1]) : d }
 const CAP = opt('--cap', 20)

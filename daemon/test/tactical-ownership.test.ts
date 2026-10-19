@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const lock = require('../src/reflex-lock')
-const { Autopilot } = require('../src/autopilot')
-const { TacticalSystem, observeTactics } = require('../src/tactics/minecraft')
-const { threatLevel } = require('../src/tactics/state')
-const { Vec3 } = require('vec3')
+import lock = require('../src/reflex-lock')
+import { Autopilot } from '../src/autopilot'
+import { TacticalSystem, observeTactics } from '../src/tactics/minecraft'
+import { threatLevel } from '../src/tactics/state'
+import { Vec3 } from 'vec3'
 
 function fixture() {
   const writes: string[] = []
@@ -79,7 +79,7 @@ test('a server-mounted dry boat supersedes stale player lava and falling flags, 
 })
 
 test('a matching planned jump prevents pre-lava takeover without hiding damage or actual lava contact', () => {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const timer = new clock.GameClock({ manual: true, epoch: 0 }); clock.activate(timer)
   const { session, bot } = observingFixture()
   session.current = { name: 'parkour' }
@@ -127,7 +127,7 @@ test('a fire-resistant body can repel a visible nearby attacker in lava with a u
 
 test('lava rescue skips refuge geometry which is unavailable in the active graph', () => {
   const { session, bot } = observingFixture()
-  const survival = require('../src/survival')
+  const survival: typeof import('../src/survival') = require('../src/survival')
   const original = survival.refugeLook
   let calls = 0
   bot.health = 8; bot.entity.isInLava = true
@@ -148,14 +148,14 @@ test('a selected lava repel invokes bounded combat before the Nether guard', asy
   bot.registry.effectsByName.fire_resistance = { id: 12 }
   bot.entity.effects[12] = { amplifier: 0, duration: 400 }
   bot.entities[2] = { id: 2, name: 'skeleton', position: new Vec3(2.5, 64, .5), height: 1.8, width: .6, equipment: [], metadata: [] }
-  const combat = require('../src/combat')
-  const guard = require('../src/ne-guard')
+  const combat: typeof import('../src/combat') = require('../src/combat')
+  const guard: typeof import('../src/ne-guard') = require('../src/ne-guard')
   const originalFight = combat.fight; const originalReact = guard.react
   const calls: Array<Record<string, unknown>> = []
   combat.fight = async (_session: unknown, _ctl: unknown, options: Record<string, unknown>) => { calls.push(options); return { swings: 1 } }
   guard.react = async () => { throw new Error('legacy guard must not replace lava repel') }
   try {
-    const system = new TacticalSystem(session)
+    const system: any = new TacticalSystem(session)
     const ctl = { aborted: false, onAbort: [], abort() { this.aborted = true } }
     await system.execute({ id: 'Fight', owner: 'Tactical', score: 151, cost: 1, risk: .1 }, ctl, observeTactics(session))
     assert.equal(calls.length, 1)
@@ -170,14 +170,14 @@ test('a Nether refuge choice reaches the refuge executor instead of the guard me
   const { session, bot } = observingFixture()
   bot.game.dimension = 'the_nether'; bot.health = 10
   bot.entities[2] = { id: 2, name: 'blaze', position: new Vec3(10.5, 64, .5), height: 1.8, width: .6, equipment: [], metadata: [] }
-  const survival = require('../src/survival')
-  const guard = require('../src/ne-guard')
+  const survival: typeof import('../src/survival') = require('../src/survival')
+  const guard: typeof import('../src/ne-guard') = require('../src/ne-guard')
   const originalRefuge = survival.refuge; const originalReact = guard.react
   const calls: Array<Record<string, unknown>> = []
   survival.refuge = async (_session: unknown, _ctl: unknown, options: Record<string, unknown>) => { calls.push(options); return { healed: true } }
   guard.react = async () => { throw new Error('a distant blaze is no melee refuge') }
   try {
-    const system = new TacticalSystem(session)
+    const system: any = new TacticalSystem(session)
     const ctl = { aborted: false, onAbort: [], abort() { this.aborted = true } }
     const state = observeTactics(session)
     // Heal already used refuge; keep that contract while removing the four Nether overrides.
@@ -190,7 +190,7 @@ test('a Nether refuge choice reaches the refuge executor instead of the guard me
 })
 
 test('a visible attacker preempts an active fire-resistant climb without losing its shore goal', async () => {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const c = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
   const { session, bot } = observingFixture()
   bot.entity.isInLava = true
@@ -198,7 +198,7 @@ test('a visible attacker preempts an active fire-resistant climb without losing 
   bot.entity.effects[12] = { amplifier: 0, duration: 400 }
   const goal = { at: new Vec3(.5, 68, .5), deadline: 12000, startY: 64, placed: 1 }
   session._tacticalLavaClimbGoal = goal
-  const system = new TacticalSystem(session)
+  const system: any = new TacticalSystem(session)
   session.tactics = system
   const calls: string[] = []
   let climbAborted = false
@@ -265,13 +265,13 @@ test('only the live intended Enderman boat encounter is protected from minor tac
 test('enemy disappearance preserves the completed LastStand result before strategic release', async () => {
   const { session, bot } = observingFixture()
   bot.entities[2] = { id: 2, name: 'zombie', position: new Vec3(.5, 64, 2.5), height: 1.8, width: .6, equipment: [], metadata: [] }
-  const combat = require('../src/combat')
+  const combat: typeof import('../src/combat') = require('../src/combat')
   const previous = combat.fight
   const events: any[] = []
   let complete!: (result: any) => void
   combat.fight = () => new Promise(resolve => { complete = resolve })
   session.bus.emit = (type: string, detail: any) => events.push({ type, ...detail })
-  const tactics = session.tactics = new TacticalSystem(session)
+  const tactics: any = session.tactics = new TacticalSystem(session)
   try {
     tactics.attach(bot)
     const state = observeTactics(session)
@@ -298,7 +298,7 @@ test('bounded cover and combat complete before weaker contact selects Shield or 
     bot.inventory.slots[45] = { name: 'shield' }
     if (visible) bot.entities[2] = { id: 2, name: 'zombie', position: new Vec3(.5, 64, 5.5), height: 1.8, width: .6, equipment: [], metadata: [] }
     session.bus.emit = (type: string, detail: any) => events.push({ type, ...detail })
-    const tactics = session.tactics = new TacticalSystem(session)
+    const tactics: any = session.tactics = new TacticalSystem(session)
     const completions: Array<(result: any) => void> = []
     tactics.execute = () => new Promise(resolve => { completions.push(resolve) })
     try {
@@ -322,7 +322,7 @@ test('bounded cover and combat complete before weaker contact selects Shield or 
 
 test('a native fall cancels pending cover immediately despite its completion protection', async () => {
   const { session, bot } = observingFixture()
-  const tactics = session.tactics = new TacticalSystem(session)
+  const tactics: any = session.tactics = new TacticalSystem(session)
   let worker: any
   let complete!: () => void
   tactics.execute = (action: any, ctl: any) => { worker = ctl; return new Promise<void>(resolve => { complete = resolve }) }
@@ -342,14 +342,14 @@ test('a native fall cancels pending cover immediately despite its completion pro
 test('an external Emergency takeover records interruption before a cancelled tactical worker settles', async () => {
   const { session, bot } = observingFixture()
   bot.entities[2] = { id: 2, name: 'zombie', position: new Vec3(.5, 64, 2.5), height: 1.8, width: .6, equipment: [], metadata: [] }
-  const combat = require('../src/combat')
+  const combat: typeof import('../src/combat') = require('../src/combat')
   const previous = combat.fight
   const events: any[] = []
   let complete!: () => void
   let release!: () => void
   combat.fight = () => new Promise<void>(resolve => { complete = resolve })
   session.bus.emit = (type: string, detail: any) => events.push({ type, ...detail })
-  const tactics = session.tactics = new TacticalSystem(session)
+  const tactics: any = session.tactics = new TacticalSystem(session)
   try {
     tactics.attach(bot)
     tactics.begin({ id: 'Fight', score: 90, reason: 'contact' }, [], observeTactics(session), 2)
@@ -371,12 +371,12 @@ test('a selected fight never calls combat when its observed target vanished befo
   const state = observeTactics(session)
   assert.equal(state.enemies[0].id, 2)
   delete bot.entities[2]
-  const combat = require('../src/combat')
+  const combat: typeof import('../src/combat') = require('../src/combat')
   const previous = combat.fight
   let fights = 0
   combat.fight = async () => { fights++ }
   try {
-    const tactics = new TacticalSystem(session)
+    const tactics: any = new TacticalSystem(session)
     const result = await tactics.execute({ id: 'Fight', score: 90, reason: 'contact' }, { aborted: false, onAbort: [] }, state)
     assert.equal(result.unavailable, true)
     assert.equal(fights, 0)
@@ -384,7 +384,7 @@ test('a selected fight never calls combat when its observed target vanished befo
 })
 
 test('calm observation keeps an unfinished recovery lease until its executor confirms completion', async () => {
-  const clock = require('../src/game-clock'), timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock'), timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
   try {
   for (const action of ['Eat', 'Heal']) {
     const { session, bot } = observingFixture()
@@ -414,7 +414,7 @@ test('calm observation keeps an unfinished recovery lease until its executor con
 })
 
 async function unreachablePiglin(action = 'Fight', configure = (_f: any) => {}) {
-  const f = observingFixture(), guard = require('../src/ne-guard'), combat = require('../src/combat')
+  const f = observingFixture(), guard: typeof import('../src/ne-guard') = require('../src/ne-guard'), combat: typeof import('../src/combat') = require('../src/combat')
   f.bot.game.dimension = 'the_nether'
   configure(f)
   f.bot.registry.entitiesByName.piglin = { metadataKeys: ['mob_flags'] }
@@ -426,13 +426,13 @@ async function unreachablePiglin(action = 'Fight', configure = (_f: any) => {}) 
   guard.react = async () => ({ duel: { stopped: 'не достать', swings: 0 } })
   combat.fight = async () => ({ swings: 0, kills: [] })
   try {
-    await new TacticalSystem(f.session).execute({ id: action, score: 90, reason: 'contact' }, { aborted: false, onAbort: [] }, state)
+    await (new TacticalSystem(f.session) as any).execute({ id: action, score: 90, reason: 'contact' }, { aborted: false, onAbort: [] }, state)
   } finally { guard.react = react; combat.fight = fight }
   return { ...f, piglin, threatening: () => observeTactics(f.session).enemies.some(enemy => enemy.id === 2 && enemy.threatening) }
 }
 
 test('a confirmed unreachable duel is not retried by elapsed time, for Fight and LastStand', async () => {
-  const clock = require('../src/game-clock'), timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock'), timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
   try {
     for (const action of ['Fight', 'LastStand']) {
       const f = await unreachablePiglin(action)
@@ -490,7 +490,7 @@ test('a reused entity id and a dimension transfer cannot inherit another unreach
     if (replace) f.bot.entities[2] = { ...f.piglin, position: f.piglin.position.clone() }
     else {
       f.bot.game.dimension = 'overworld'
-      f.session.autopilot = { lastHurt: { at: require('../src/game-clock').now(), dimension: 'overworld', sourceId: 2, byMob: true, type: 'mob_attack' } }
+      f.session.autopilot = { lastHurt: { at: (require('../src/game-clock') as typeof import('../src/game-clock')).now(), dimension: 'overworld', sourceId: 2, byMob: true, type: 'mob_attack' } }
     }
     assert.equal(f.threatening(), true)
   }
@@ -551,7 +551,7 @@ test('creative preparation cancels the active rescue lease and fences its late c
   const skill = { aborted: false, abort() { this.aborted = true } }
   session.current = { name: 'map', ctl: skill }
   bot.setControlState = () => writes.push('control')
-  const tactics = session.tactics = new TacticalSystem(session)
+  const tactics: any = session.tactics = new TacticalSystem(session)
   tactics.attach(bot)
   const old = lock.start(session, async (ctl: any) => {
     oldCtl = ctl
@@ -696,13 +696,13 @@ test('neP-1: contact with lava supersedes a stale fall-controller observation', 
   assert.equal(state.lava, true)
   assert.equal(state.dangerousFall, false)
   assert.equal(state.emergencyController, false)
-  const { TacticalArbiter } = require('../src/tactics/arbiter')
+  const { TacticalArbiter }: typeof import('../src/tactics/arbiter') = require('../src/tactics/arbiter')
   assert.equal(new TacticalArbiter().decide(state).selected?.id, 'Flee')
 })
 
 test('lava escape can take the obsolete fall lease without waiting for its watchdog', async () => {
   const { session, bot } = observingFixture()
-  const tactics = session.tactics = new TacticalSystem(session)
+  const tactics: any = session.tactics = new TacticalSystem(session)
   tactics.attach(bot)
   let fallCtl: any, release: (() => void) | undefined
   const actions: string[] = []

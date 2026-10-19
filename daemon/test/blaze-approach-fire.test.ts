@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import {createRequire} from 'node:module'
 import {EventEmitter} from 'node:events'
-const Vec3=require('vec3')
+import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3=require('vec3')
 function fixture(){
   const file=path.resolve(__dirname,'../src/blaze.js'),native=createRequire(file),bot:any=new EventEmitter(),calls:string[]=[]
   const ctl={aborted:false},state={seen:false,fr:false}
@@ -13,7 +14,7 @@ function fixture(){
   const context:any={module:{exports:{}},console,process,setTimeout,clearTimeout,fixtureState:state,
     require:id=>id==='./movement'?{...native(id),stuckGuard:()=>({promise:new Promise(()=>{}),stop(){}}),gotoPath:()=>{calls.push('path');const p:any=new Promise(()=>{});p.cancel=()=>calls.push('cancel');return p}}:
       id==='./game-clock'?{now:()=>0,setTimeout:()=>0,clearTimeout(){}}:native(id)}
-  vm.runInNewContext(fs.readFileSync(file,'utf8')+'\nhasEffect=()=>fixtureState.fr;watchers=()=>fixtureState.seen?1:0;',context)
+  vm.runInNewContext(bodySource(file)+'\nhasEffect=()=>fixtureState.fr;watchers=()=>fixtureState.seen?1:0;',cjsContext(context))
   return{module:context.module.exports,bot,ctl,state,calls}
 }
 test('ne6 visible shooter selects fight or cover before the unguarded spawner approach, with no potion gate',()=>{

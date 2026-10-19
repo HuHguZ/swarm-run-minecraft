@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { swarmSightings } from '../src/swarm-senses'
-const { createLastSeen, gearPartVisible } = require('../src/pvp/last-seen')
+import { createLastSeen, gearPartVisible } from '../src/pvp/last-seen'
 
 function scene() {
   let wall = true
   const bot: any = Object.assign(new EventEmitter(), {
     entity: { id: 1, position: new Vec3(.5, 0, .5), onGround: true },
-    registry: require('minecraft-data')('1.21.11'),
+    registry: (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'),
     blockAt(p: Vec3) {
       const at = p.floored(), solid = wall && at.x === 3 && at.z === 0 && at.y >= 0 && at.y <= 1
       return { position: at, name: solid ? 'stone' : 'air', boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, at.y === 1 ? .5 : 1, 1]] : [] }

@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const fs = require('fs')
-const path = require('path')
+import * as gameClock from './game-clock'
+import * as fs from 'fs'
+import path = require('path')
 
 // Карта мира в голове: где был (по чанкам, по измерениям) и на какой высоте
 // искать какую руду. Два вопроса, которые раньше решались случайностью:
@@ -58,7 +58,7 @@ class WorldMap {
   declare liveLast: any
   declare saveAt: any
 
-  constructor (memoryDir) {
+  constructor (memoryDir?) {
     this.file = memoryDir ? path.join(memoryDir, 'worldmap.json') : null
     this.seen = {} // dimension -> { 'cx,cz': t }
     this.hints = {} // dimension -> { 'cx,cz': { trees, water, lava, stone, animals } }
@@ -176,4 +176,4 @@ class WorldMap {
   }
 }
 
-module.exports = { WorldMap, ORES, oreFor, CHUNK }
+export { WorldMap, ORES, oreFor, CHUNK }

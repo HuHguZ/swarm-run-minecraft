@@ -1,9 +1,9 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const careful = require('../src/careful')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as careful from '../src/careful'
 
 // Пол: магма под клеткой x = 0 (y 63), дальше камень.
 function scene (x = 0.5) {

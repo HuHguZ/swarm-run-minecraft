@@ -1,8 +1,8 @@
 'use strict'
 // S8 (07.10, верхний мир «новый мир → Ад»): выбор лавы по ожидаемой цене, маршрут без кровати в спидране.
-const test = require('node:test')
-const assert = require('node:assert')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert')
+import route = require('../src/route')
 
 const withEnv = (env: Record<string, string | undefined>, fn: () => void) => {
   const old: Record<string, string | undefined> = {}
@@ -38,20 +38,20 @@ test('ND_ROUTE_LAVAP (умолчание): дальнее озеро повер�
 })
 
 test('цена, не флаг: в верхнем мире с картой граф сам берёт маршрут по карте (RuinedPortal — по цене этапа cast), после двух провалов — кусочные стратегии', async () => {
-  const { createCampaignIntelligence } = require('../src/campaign/intelligence')
-  const { modelFor } = require('../src/core/cost-model')
+  const { createCampaignIntelligence }: typeof import('../src/campaign/intelligence') = require('../src/campaign/intelligence')
+  const { modelFor }: typeof import('../src/core/cost-model') = require('../src/core/cost-model')
   const known = { status: 'known', value: true, source: 'observed', at: 0, confidence: 1 }
   const records: any[] = []
   const intelligence = createCampaignIntelligence({
     eyes: 10, beds: 0, now: () => 0,
-    observe: async () => ({ state: { dimension: 'overworld', health: 20, food: 20, inventory: {} }, facts: { ruined_portal: known, village: known } }),
+    observe: (async () => ({ state: { dimension: 'overworld', health: 20, food: 20, inventory: {} }, facts: { ruined_portal: known, village: known } })) as any,
     call: async () => ({}), sleep: async () => {}, record: (r: any) => records.push(r),
     execute: async () => ({ outcome: 'FAILURE', events: [] })
   })
   // Цена RuinedPortal — из этапа, который он исполняет (cast), а не из шага маршрута ruin (только сундук, 512 тиков).
-  const models = new Map(require('../src/environments/cost-data').loadCosts().map((m: any) => [m.key, m]))
+  const models = new Map((require('../src/environments/cost-data') as typeof import('../src/environments/cost-data')).loadCosts().map((m: any) => [m.key, m]))
   const ruined = intelligence.registry.get('RuinedPortal')
-  const state = { dimension: 'overworld', health: 20 }
+  const state: any = { dimension: 'overworld', health: 20 }
   assert.ok(['RuinedPortal', 'cast'].includes(String(modelFor(ruined, state, models)?.key).split('@')[0]), String(modelFor(ruined, state, models)?.key))
   const stage = (name: string) => ({ name, needed: () => true, ready: () => true, defer: () => false, done: () => false, run: async () => {} })
   const stages = [stage('wood'), stage('stone'), stage('route')]
@@ -66,7 +66,7 @@ test('цена, не флаг: в верхнем мире с картой гра
 })
 
 test('ND_ROUTE_CAVEDOWN=1: пещерная лава на 12 ниже тела — сперва колодец вниз, литьё сверху не пробуется', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   let y = 80
   const ctx: any = {
@@ -84,7 +84,7 @@ test('ND_ROUTE_CAVEDOWN=1: пещерная лава на 12 ниже тела �
 })
 
 test('еда маршрута: без топлива сырое не жарится (не копать печь впустую); вода на виду — в ведро без крюка к карте', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   const bag: Record<string, number> = { beef: 8, furnace: 1, oak_log: 2, oak_planks: 3, bucket: 1 }
   const have = (p: any) => Object.entries(bag).filter(([k]) => (p instanceof RegExp ? p.test(k) : p === k)).reduce((n, [, v]) => n + v, 0)
@@ -107,7 +107,7 @@ test('еда маршрута: без топлива сырое не жарит�
 })
 
 test('ND_ROUTE_CAVEDOWN=1: озеро под холмом — castOneAt сперва колодцем к уровню лавы, потом литьё', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   let y = 90
   const ctx: any = {
@@ -123,7 +123,7 @@ test('ND_ROUTE_CAVEDOWN=1: озеро под холмом — castOneAt спер
 })
 
 test('дерево по карте: тело на кронах выше стволов — лесенкой вниз к ним и снова брёвна', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   let y = 91
   let logs = 0
@@ -146,7 +146,7 @@ test('дерево по карте: тело на кронах выше ство
 })
 
 test('литьё: вода кончилась посреди рамы — набрать воду и продолжить ту же раму', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   let calls = 0
   const ctx: any = {
@@ -167,8 +167,8 @@ test('литьё: вода кончилась посреди рамы — наб
 })
 
 test('flint_grind: гравий у ног — ставит и копает до кремня, без ходьбы; клетки без пола — отказ', async () => {
-  const Vec3 = require('vec3')
-  const build = require('../src/build'); const items = require('../src/items'); const cast = require('../src/cast')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const build: typeof import('../src/build') = require('../src/build'); const items: typeof import('../src/items') = require('../src/items'); const cast: typeof import('../src/cast') = require('../src/cast')
   const saved = [build.placeBlockAt, items.equipBestTool, cast._in.digVisible]
   const world = new Map<string, string>()
   const key = (p: any) => `${p.x},${p.y},${p.z}`
@@ -185,7 +185,7 @@ test('flint_grind: гравий у ног — ставит и копает до 
   cast._in.digVisible = async (_b: any, g: any) => { world.delete(key(g.position)); if (++digs === 3) inv.flint = 1; else inv.gravel++ }
   delete require.cache[require.resolve('../src/flint-grind')]
   try {
-    const { flintGrind } = require('../src/flint-grind')
+    const { flintGrind }: typeof import('../src/flint-grind') = require('../src/flint-grind')
     const r = await flintGrind({ bot }, { aborted: false }, { max: 10, timeoutSeconds: 30 })
     assert.strictEqual(r.ok, true)
     assert.strictEqual(r.tries, 3)
@@ -197,8 +197,8 @@ test('flint_grind: гравий у ног — ставит и копает до 
 })
 
 test('pathfinder: порошковый снег в blocksToAvoid (пустой по форме — тело вязло и замерзало)', () => {
-  const worlds = require('../src/worlds')
-  const reg = require('minecraft-data')('1.21.11')
+  const worlds: typeof import('../src/worlds') = require('../src/worlds')
+  const reg = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const movements: any = { blocksToAvoid: new Set(), blocksCantBreak: new Set(), getNeighbors: () => [] }
   const bot: any = { registry: reg, entity: { position: { y: 64 } }, game: { dimension: 'overworld' } }
   worlds.tuneMovements(bot, movements)
@@ -221,8 +221,8 @@ test('шаг еды (ND_ROUTE_FOODMAP=1, «со знанием стад»): ст
 }))
 
 test('литьё: источники у берега — вперёд (ND_CAST1_EDGE), середина озера — после', () => {
-  const Vec3 = require('vec3')
-  const cast1 = require('../src/cast1')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const cast1: typeof import('../src/cast1') = require('../src/cast1')
   const blocks = new Map<string, any>()
   const put = (x: number, y: number, z: number, name: string) => blocks.set(`${x},${y},${z}`, { name, boundingBox: /air|lava/.test(name) ? 'empty' : 'block', position: new Vec3(x, y, z), shapes: /air|lava/.test(name) ? [] : [[0, 0, 0, 1, 1, 1]], getProperties: () => ({ level: 0 }) })
   for (let x = -2; x <= 8; x++) for (let z = -2; z <= 8; z++) put(x, 64, z, x >= 0 && x <= 6 && z >= 0 && z <= 6 ? 'lava' : 'stone')
@@ -234,7 +234,7 @@ test('литьё: источники у берега — вперёд (ND_CAST1_
 })
 
 test('ND_ROUTE_FURNDIR=1: печь — лесенка в воду не идёт, другая сторона и штрек дают булыжник', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   const bag: Record<string, number> = { cobblestone: 0 }
   const ctx: any = {
@@ -255,7 +255,7 @@ test('ND_ROUTE_FURNDIR=1: печь — лесенка в воду не идёт,
 })
 
 test('кремень: огниво скрафчено из первого кремня — гравий больше не копается (кремня 0 — не «нужен ещё»)', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const work: string[] = []
   const bag: Record<string, number> = { iron_ingot: 1 }
   const have = (p: any) => Object.entries(bag).filter(([k]) => (p instanceof RegExp ? p.test(k) : p === k)).reduce((n, [, v]) => n + v, 0)
@@ -277,8 +277,8 @@ test('кремень: огниво скрафчено из первого кре
 })
 
 test('flint_grind: стороны у ног заняты — гравий ставится по диагонали; сыпучий пол — только на твёрдом', () => {
-  const Vec3 = require('vec3')
-  const { grindSpot } = require('../src/flint-grind')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const { grindSpot }: typeof import('../src/flint-grind') = require('../src/flint-grind')
   const world = new Map<string, string>()
   const key = (p: any) => `${p.x},${p.y},${p.z}`
   for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) world.set(key({ x, y: 63, z }), 'gravel')

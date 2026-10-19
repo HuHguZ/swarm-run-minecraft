@@ -3,26 +3,30 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
+import { cjsContext } from './cjs-context'
+import { transpiledSource } from './source-fixture'
 
 const filename = require.resolve('../src/bastion/bastion')
-const source = () => readFileSync(filename, 'utf8')
+const source = () => transpiledSource(filename)
+// sealedGold (сундук по пути, задачи сундуков) — в bastion/sealed-gold.ts; places/memoSave — в bastion() (bastion/bastion.ts).
+const sealedSource = () => transpiledSource(require.resolve('../src/bastion/sealed-gold'))
 const chest = new Vec3(90, 73, 137)
 const chestKey = '90,73,137'
 
 async function chestRead(receipt: unknown, aborted = false) {
-  const body = source()
+  const body = sealedSource()
   const start = body.indexOf('    if (t.chest) {')
   const end = body.indexOf('\n    const b = bot.blockAt(t.pos)', start)
   assert.ok(start > 0 && end > start)
   const st = { looted: new Set<string>(), skip: new Map<string, number>(), chests: [] }
   const ctl = { aborted }
   const context = { st, ctl, session: {}, t: { chest: true, k: chestKey, pos: chest }, gameClock: { now: () => 1000 },
-    routeRetryAt: (ms: number) => 1000 + ms, log() {}, miningCycle: require('../src/bastion/mining-cycle'),
+    routeRetryAt: (ms: number) => 1000 + ms, log() {}, miningCycle: (require('../src/bastion/mining-cycle') as typeof import('../src/bastion/mining-cycle')),
     require: () => ({ takeWorth: async () => {
       if (receipt instanceof Error) throw receipt
       return receipt
     } }) }
-  await runInNewContext('(async () => { for (let once = 0; once < 1; once++) {\n' + body.slice(start, end) + '\n} })()', context)
+  await runInNewContext('(async () => { for (let once = 0; once < 1; once++) {\n' + body.slice(start, end) + '\n} })()', cjsContext(context))
   return st
 }
 
@@ -33,8 +37,9 @@ function memoRound(memos: Map<string, unknown>, looted: Set<string>, bot: object
   const saveStart = body.indexOf('  const memoSave = () => {', end)
   const nextBarter = /\n  if \(mode === ["']barter["'] && st.sealed\)/.exec(body.slice(saveStart))
   const saveEnd = nextBarter ? saveStart + nextBarter.index : -1
-  const taskStart = body.indexOf('    const chestsT = st.lootChests')
-  const taskEnd = body.indexOf('\n    if (!preds.length', taskStart)
+  const sealed = sealedSource()
+  const taskStart = sealed.indexOf('    const chestsT = st.lootChests')
+  const taskEnd = sealed.indexOf('\n    if (!preds.length', taskStart)
   assert.ok(start > 0 && end > start && saveStart > end && saveEnd > saveStart && taskStart > 0)
   const target = new Vec3(87, 35, 139)
   const st = { sealed: true, lootChests: true, pred: new Map([['87,35,139', { pos: target, rank: 0 }]]),
@@ -45,7 +50,7 @@ function memoRound(memos: Map<string, unknown>, looted: Set<string>, bot: object
     worlds: { worldOf: () => dimension }, gameClock: { now: () => 1000, wall: { now: () => 1000 } },
     require: () => ({ coverRecord: () => null }), log() {} }
   const result = runInNewContext('(function () {\n' + body.slice(start, end) + '\n' + body.slice(saveStart, saveEnd) +
-    '\n memoSave();\n' + body.slice(taskStart, taskEnd) + '\n return { tasks: chestsT, remaining: st.pred.size } })()', context)
+    '\n memoSave();\n' + sealed.slice(taskStart, taskEnd) + '\n return { tasks: chestsT, remaining: st.pred.size } })()', cjsContext(context))
   return { st, tasks: result.tasks as unknown[], remaining: result.remaining as number }
 }
 
@@ -99,8 +104,8 @@ test('the existing unsealed chest path also leaves failed or partial reads retry
     const context = { canReach: () => true, keyOf: () => chestKey, gameClock: { now: () => 1000 },
       require: name => name.endsWith('/structures')
         ? { takeWorth: async () => receipt, piglinsWatching: () => [] }
-        : require('../src/bastion/mining-cycle') }
-    const run = runInNewContext(body.slice(start, end) + '\nlootChest', context)
+        : (require('../src/bastion/mining-cycle') as typeof import('../src/bastion/mining-cycle')) }
+    const run = runInNewContext(body.slice(start, end) + '\nlootChest', cjsContext(context))
     const result = await run({ bot: {} }, { aborted: false }, chest, st)
     assert.equal(st.looted.has(chestKey), receipt === confirmed)
     assert.equal(result, receipt === confirmed ? 'looted' : 'partial')

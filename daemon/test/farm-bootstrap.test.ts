@@ -1,9 +1,10 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('fs')
-const path = require('path')
-const vm = require('vm')
-const { transformSync } = require('esbuild')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import fs = require('fs')
+import path = require('path')
+import * as vm from 'vm'
+import { transformSync } from 'esbuild'
 
 function fixture (options: any = {}) {
   const root = path.resolve(__dirname, '..', '..')
@@ -56,25 +57,25 @@ function fixture (options: any = {}) {
     const module = { exports: {} }; cache.set(file, module)
     const requireStub = name => {
       if (/game-clock$/.test(name)) return clock
-      if (name === './src/build') return { withTimeout: require('../src/build').withTimeout }
+      if (name === '../../src/build') return { withTimeout: (require('../src/build') as typeof import('../src/build')).withTimeout }
       if (name === 'fs') return { ...fs, readFileSync: (file, encoding) => /server\.properties$/.test(file)
         ? `server-port=${options.mcPort ?? 25622}\nrcon.port=${options.rconPort ?? 25722}\n` : fs.readFileSync(file, encoding) }
       if (/tick-control$/.test(name)) return load(path.join(root, 'farm/tick-control.ts'))
       if (/try-lab-ne-map$/.test(name)) return { rconOf: slot => { assert.equal(slot, 22); madeAdapter++; return send }, netherMap: () => assert.fail('map must never be called') }
-      if (name === './farm-bootstrap') return load(path.join(root, 'daemon/farm-bootstrap.ts'))
-      if (name === './scene-kit') return { connect: () => ({ ready: Promise.resolve(), call, heard: [] }), createKit: () => ({}), sleep: clock.wall.sleep }
+      if (name === '../lib/farm-bootstrap') return load(path.join(root, 'daemon/scenes/lib/farm-bootstrap.ts'))
+      if (name === '../lib/scene-kit') return { connect: () => ({ ready: Promise.resolve(), call, heard: [] }), createKit: () => ({}), sleep: clock.wall.sleep }
       if (name.startsWith('.')) return require(path.resolve(path.dirname(file), name))
       return require(name)
     }
     const code = transformSync(supplied ?? fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs', target: 'node22' }).code
-    vm.runInNewContext(code, { require: requireStub, module, exports: module.exports, __dirname: path.dirname(file), process: { env }, console }, { filename: file })
+    vm.runInNewContext(code, cjsContext({ require: requireStub, module, exports: module.exports, __dirname: path.dirname(file), process: { env }, console }), { filename: file })
     return module.exports
   }
-  const bootstrap = load(path.join(root, 'daemon/farm-bootstrap.ts')).farmBootstrap
+  const bootstrap = load(path.join(root, 'daemon/scenes/lib/farm-bootstrap.ts')).farmBootstrap
   return { call, rows, load, root, bootstrap: () => bootstrap(call, options.ws ?? 'ws://127.0.0.1:8822', options.player ?? 'NeuroFarm22'), state: () => ({ at, target, connected, ready, madeAdapter, settled }), complete: value => complete?.(value), reject: error => rejectConnect?.(error) }
 }
 
-for (const file of ['try-lab-fresh.ts', 'try-lab-ne-run.ts']) test(`actual ${file} first bootstrap protects unknown column before scene preparation`, async () => {
+for (const file of ['scenes/ow/try-lab-fresh.ts', 'scenes/nether/try-lab-ne-run.ts']) test(`actual ${path.basename(file)} first bootstrap protects unknown column before scene preparation`, async () => {
   const f = fixture(), full = path.join(f.root, 'daemon', file), text = fs.readFileSync(full, 'utf8')
   const start = text.indexOf('async function main ()'), end = text.indexOf('  const t0 = gameClock.now()', start)
   assert.ok(start > 0 && end > start)

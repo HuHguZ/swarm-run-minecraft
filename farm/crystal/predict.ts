@@ -3,8 +3,8 @@
 // ног и удар (прогноз ему X, мне Y)» → следующая «[crystal] мой взрыв: {dealt,
 // self}» (урон — по здоровью и поглощению за 400 мс). Без «попов» (там урон —
 // всё здоровье). Ошибка — медиана и доля в пределах ±2 хп.
-//   node farm/crystal/predict.js farm/daemon-29.out.log farm/crystal/daemon-29b.out.log
-const fs = require('fs')
+//   node dist/farm/crystal/predict.js farm/daemon-29.out.log farm/crystal/daemon-29b.out.log
+import * as fs from 'fs'
 const pairs = []
 for (const f of process.argv.slice(2)) {
   const lines = fs.readFileSync(f, 'utf8').split(/\r?\n/)

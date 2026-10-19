@@ -5,9 +5,9 @@ import { Vec3 } from 'vec3'
 import { verticalLift } from '../src/navigation/geometry'
 import { riptideImpulse, planRiptide, planRiptideTo, runRiptide } from '../src/navigation/riptide'
 import { IDLE } from '../src/navigation/parkour'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 function model(terrain: (p: Vec3) => [string, Record<string, unknown>?]) {
   const world = { getBlock(p: Vec3) {
@@ -85,7 +85,7 @@ test('navigation Riptide reaches a loaded raised platform whose exposed landing 
   const bot = model(p => p.x >= 22 && p.x <= 34 && Math.abs(p.z) <= 1 && p.y >= 1 && p.y <= 14 ? ['stone'] : p.y < 1 ? ['stone'] : ['air'])
   bot.world = { getBlock: bot.blockAt, raycast: require('prismarine-world/src/worldsync').prototype.raycast }
   const target = new Vec3(28.5, 15, .5)
-  assert.equal(require('../src/navigation/parkour').visibleLanding(bot, target), false, 'the front wall hides the top from eye-level sight')
+  assert.equal((require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).visibleLanding(bot, target), false, 'the front wall hides the top from eye-level sight')
   assert.ok(planRiptide(bot, 3, -Math.PI / 2, .6, target), 'the same native forecast clears the observed front wall and lands without damage')
   const chosen = await planRiptideTo(bot, { aborted: false }, 3, target, () => true)
   assert.ok(chosen, 'movement must inspect the whole loaded trajectory instead of vetoing a hidden top')
@@ -110,7 +110,7 @@ test('ordinary shared route selects an existing enchanted Riptide and waits for 
   }, 1)
   try {
     const target = new Vec3(18.5, 1, .5)
-    const result = await require('../src/navigation/parkour').route(bot, { aborted: false }, { toward: target, maxLandings: 2 })
+    const result = await (require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).route(bot, { aborted: false }, { toward: target, maxLandings: 2 })
     assert.equal(result.ok, true, JSON.stringify(result))
     assert.ok(result.landings.some((landing: any) => landing.mode === 'riptide' && landing.serverSpin && landing.ok))
     assert.ok(bot.entity.position.distanceTo(target) < .3); assert.equal(bot.entity.onGround, true); assert.equal(bot.health, 20)
@@ -120,7 +120,7 @@ test('ordinary shared route selects an existing enchanted Riptide and waits for 
 })
 
 test('rain activation requires the actual observed biome and loaded sky column', () => {
-  const { rainAt } = require('../src/utility')
+  const { rainAt }: typeof import('../src/utility') = require('../src/utility')
   const bot = model(p => p.y < 1 ? ['stone'] : ['air'])
   bot.rainState = 1; bot.game = { dimension: 'overworld', minY: 0, height: 16 }
   assert.equal(rainAt(bot, bot.entity.position), true)
@@ -283,7 +283,7 @@ test('a delayed native spin receipt keeps only the validated safe coast owned be
 })
 
 test('rain at the launch cannot authorize a projected airborne release beneath an actual loaded roof', async () => {
-  const { rainAt } = require('../src/utility')
+  const { rainAt }: typeof import('../src/utility') = require('../src/utility')
   const bot = model(p => p.y === 44 && p.x >= 2 ? ['stone'] : p.x === 0 && p.z === 0 && p.y >= 3 && p.y < 41 ? ['stone'] : p.y < 0 ? ['stone'] : p.y < 3 ? ['water'] : ['air'])
   bot.entity.position.y = 41; bot.rainState = 1; bot.game = { dimension: 'overworld', minY: 0, height: 64 }
   const before = bot.entity.position.clone()

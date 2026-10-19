@@ -1,11 +1,11 @@
 'use strict'
 // Станция у центрального столба (2026-10-01): кровать изголовьем у бедрок-столба на P − 1, опора и заслон —
 // обсидиан, бот в окопе за ободом. Мир — точная чаша фонтана (EndPodiumFeature: origin P − 4).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const REG = require('minecraft-data')('1.21.11')
-const dragon = require('../src/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const REG = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+import dragon = require('../src/dragon')
 
 const P = 65
 function world (extra) {

@@ -1,8 +1,8 @@
 import { chooseRepairPair, type RepairItem } from './repair-policy'
-const clock = require('../game-clock')
-const pick = require('../pick')
-const { confirmedClick, refresh } = require('../invsync')
-const { putSlotAway, putCursorAway } = require('../craft-confirmed')
+import * as clock from '../game-clock'
+import pick = require('../pick')
+import { confirmedClick, refresh } from '../invsync'
+import { putSlotAway, putCursorAway } from '../craft-confirmed'
 
 function enchantments(bot: any, item: any): Record<string, number> {
   const component = item.componentMap?.get('enchantments')?.data

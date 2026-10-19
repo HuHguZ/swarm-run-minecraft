@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Жемчуг как быстрое перемещение (2026-10-01, агент дракона). Общий модуль: «добраться до точки goal
 // одним-тремя бросками вместо пешего пути/моста», если это быстрее с учётом цены в хп.
 //
@@ -27,8 +27,8 @@ const gameClock = require('./game-clock')
 //     своим движением), проверка факта (куда перенесло, сколько хп), еда между бросками, у края — шаг от пустоты.
 //   Крючок opts.onEdge(bot, info) — будущее «блок под ноги у края» (сейчас не используется по умолчанию).
 
-const Vec3 = require('vec3')
-const throwMod = require('./throw')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as throwMod from './throw'
 
 const K = throwMod.KINDS.ender_pearl
 const DRAG = 0.99
@@ -245,7 +245,7 @@ function pearlDamage (bot) {
   for (let s = 5; s <= 8; s++) {
     const it = slots[s]
     if (!it) continue
-    const read = require('./read')
+    const read: typeof import('./read') = require('./read')
     let legacy = []
     try { if (Array.isArray(it.enchants)) legacy = it.enchants } catch {}
     const level = name => read.enchLevel(bot, it, name) || legacy.find(e => e.name === name)?.lvl || 0
@@ -582,4 +582,4 @@ async function hopTo (bot, goal, opts: any = {}) {
   return out
 }
 
-module.exports = { recover, hopWorth, worldOf, reach, simulate, settle, surfaceAt, groundBelow, pitchesFor, planHop, planRoute, worth, walkEstimate, hopSeconds, pearlDamage, obstaclesOf, hopTo, stepFromEdge, velOf, PEARL_DMG, SPREAD, EYE }
+export { recover, hopWorth, worldOf, reach, simulate, settle, surfaceAt, groundBelow, pitchesFor, planHop, planRoute, worth, walkEstimate, hopSeconds, pearlDamage, obstaclesOf, hopTo, stepFromEdge, velOf, PEARL_DMG, SPREAD, EYE }

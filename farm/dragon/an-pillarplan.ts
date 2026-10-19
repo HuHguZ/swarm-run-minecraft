@@ -1,8 +1,8 @@
 // Офлайн: станция у столба (pillarPlan) в плоском мире с точной чашей фонтана — есть ли, сколько обсидиана,
-// где бот, видимость дракона из центра взрыва. node farm/dragon/an-pillarplan.js [P]
-const REG = require('../../daemon/node_modules/minecraft-data')('1.21.11')
-const Vec3 = require('../../daemon/node_modules/vec3')
-const dragon = require('../../daemon/src/dragon')
+// где бот, видимость дракона из центра взрыва. node dist/farm/dragon/an-pillarplan.js [P]
+const REG = (require('../../daemon/node_modules/minecraft-data') as typeof import('../../daemon/node_modules/minecraft-data'))('1.21.11')
+const Vec3: typeof import('../../daemon/node_modules/vec3').Vec3 = require('../../daemon/node_modules/vec3')
+import dragon = require('../../daemon/src/dragon')
 const P = +(process.argv[2] || 65)
 function world (P, extra = new Map()) {
   const o = P - 4

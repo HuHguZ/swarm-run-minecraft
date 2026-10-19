@@ -1,10 +1,11 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
-const { GameClock, wall } = require('../src/game-clock')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { GameClock, wall } from '../src/game-clock'
 
 // The native hang searched a missing island with no dragon and a frozen game clock.
 function search (stop, lostDragon = false) {
@@ -33,9 +34,10 @@ function search (stop, lostDragon = false) {
     './pillar-plan': { ...local('./pillar-plan'), portalBlocks: () => [] }
   }
   const module = { exports: {} as any }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+  // Тело pillar-run разнесено по dragon/pillar-run/: bodySource склеивает его в один скрипт (подмены по spec — во всех частях).
+  vm.runInNewContext(bodySource(file), cjsContext({
     module, exports: module.exports, require: name => mocks[name] || local(name), process, console, setImmediate, setTimeout, clearTimeout
-  }, { filename: file })
+  }), { filename: file })
   const rep = { dragon: {} as any }
   return { run: () => module.exports.fightDragon(session, ctl, rep, {}, { deadline: 1000 }),
     rep, scans: () => scans, pulse: () => pulse, pending: () => clock.timers.size, close: () => clock.dispose() }

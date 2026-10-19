@@ -1,9 +1,9 @@
 'use strict'
 // Природная лава для портала (агент G, 02.10.2026): тело озера, небо, руины, оценка и порядок поиска.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { lavaBody, skyAbove, rpNear, estimate, searchOrder, legTarget, hintFor, edgeSpot, refreshCastLava, softCells, poolInfo, skyOfScan, NEED } = require('../src/portal-natural')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { lavaBody, skyAbove, rpNear, estimate, searchOrder, legTarget, hintFor, edgeSpot, refreshCastLava, softCells, poolInfo, skyOfScan, NEED } from '../src/portal-natural'
 
 // Озеро лавы 4×4 на y 62 (x 0..3, z 0..3), под ним ещё слой на y 61; над озером воздух, кроме клетки (3,63,3) —
 // там камень (закрытый верх). Вокруг и ниже — камень, выше 62 — воздух.
@@ -85,7 +85,7 @@ test('луч мимо воды: на восток в море — короче �
 })
 
 test('подсказка из пула: поле sky по сиду, нет сида — null', () => {
-  const fs = require('fs'); const os = require('os'); const path = require('path')
+  const fs: typeof import('fs') = require('fs'); const os: typeof import('os') = require('os'); const path: typeof import('path') = require('path')
   const f = path.join(os.tmpdir(), `nd-pool-${process.pid}.json`)
   fs.writeFileSync(f, JSON.stringify({ seeds: [{ seed: '-5', sky: { d: 91, cls: 'surface', at: [-8, 63, -91], src: 86 } }, { seed: '7', sky: null }] }))
   const k0 = process.env.ND_KNOWLEDGE
@@ -141,7 +141,7 @@ test('скан копии мира: видимая сверху лава — о�
   } }
   assert.deepEqual(skyOfScan(r), { d: 120, cls: 'surface', at: [3, 64, 4], src: 80 }) // 100+40 > 120; руины в 40 вглубь — нет
   assert.equal(skyOfScan({ byClass: { 'open-cave': r.byClass['open-cave'] } }), null)
-  const fs = require('fs'); const os = require('os'); const path = require('path')
+  const fs: typeof import('fs') = require('fs'); const os: typeof import('os') = require('os'); const path: typeof import('path') = require('path')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-scan-'))
   const pool = path.join(dir, 'pool.json')
   fs.writeFileSync(pool, JSON.stringify({ seeds: [{ seed: '1', lava: 50, sky: null }, { seed: '2', lava: null }] }))

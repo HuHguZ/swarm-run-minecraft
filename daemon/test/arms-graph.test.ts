@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { plan } = require('../src/core/strategy')
-const { emptyWorld, fact } = require('../src/core/world-state')
-const { armsRegistry, opponentDefeated, powerOf, visiblePower, loseChance, ARMS_RISK_PENALTY } = require('../src/pvp/arms-graph')
+import { plan } from '../src/core/strategy'
+import { emptyWorld, fact } from '../src/core/world-state'
+import { armsRegistry, opponentDefeated, powerOf, visiblePower, loseChance, ARMS_RISK_PENALTY } from '../src/pvp/arms-graph'
 
 function state(resources: Record<string, number>, facts: Record<string, any> = {}) {
   const s = emptyWorld()
@@ -24,8 +24,8 @@ test('LootChest quote remains an option after deadline; price and risk decide ag
 })
 
 test('one concrete loot quote yields only one projected gain until a new observation', () => {
-  const { applyEffect } = require('../src/core/world-state')
-  const loot = armsRegistry().get('LootChest')
+  const { applyEffect }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const loot: any = armsRegistry().get('LootChest')
   const s = state({ power: 1, chests: 20 }, { loot_target_id: 'a', loot_round_scope: 'r1', loot_gain: 8.6, loot_cost_ticks: 200, loot_risk: 0.01 })
   const after = applyEffect(s, loot.expectedEffects(s))
   assert.equal(after.resources.power, 9.6)
@@ -33,15 +33,15 @@ test('one concrete loot quote yields only one projected gain until a new observa
 })
 
 test('loot verification needs matching receipts, not changed power or abandoned candidates', () => {
-  const { cloneWorld } = require('../src/core/world-state')
-  const { StrategicDirector } = require('../src/core/strategy')
+  const { cloneWorld }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const { StrategicDirector }: typeof import('../src/core/strategy') = require('../src/core/strategy')
   const registry = armsRegistry(), loot = registry.get('LootChest')
   const before = state({ power: 1, chests: 2, loot_completed: 0, loot_progress: 0 })
   const abandoned = cloneWorld(before); abandoned.resources.chests--
   assert.equal(loot.successCondition(before, abandoned), false)
   assert.equal(loot.progressCondition(before, abandoned), false)
   const partial = cloneWorld(before); partial.resources.power = 12; partial.resources.loot_progress++
-  const director = new StrategicDirector(registry, { now: () => 0 }, { goal: opponentDefeated })
+  const director = new StrategicDirector(registry, { now: () => 0 } as any, { goal: opponentDefeated })
   assert.equal(director.verify(loot, before, partial, { outcome: 'PARTIAL', events: [] }), 'PARTIAL')
 })
 
@@ -49,7 +49,7 @@ test('Scout/OpenCache forecast uses observed inventory prior and cannot command 
   for (const resource of ['unscouted', 'caches']) {
     const s = state({ power: 1, [resource]: 1 }, { enemy_power: 1, loot_prior_gain: 8.6 })
     assert.equal(first(s)[0], resource === 'unscouted' ? 'ScoutArea' : 'OpenCache')
-    const { applyEffect } = require('../src/core/world-state')
+    const { applyEffect }: typeof import('../src/core/world-state') = require('../src/core/world-state')
     const registry = armsRegistry(), prep = registry.get(first(s)[0]), loot = registry.get('LootChest')
     const after = applyEffect(s, typeof prep.expectedEffects === 'function' ? prep.expectedEffects(s) : prep.expectedEffects)
     assert.equal(loot.preconditions(after), true)
@@ -59,7 +59,7 @@ test('Scout/OpenCache forecast uses observed inventory prior and cannot command 
 })
 
 test('loot retry follows a changed target or access evidence, never quote timestamp alone', () => {
-  const { cloneWorld } = require('../src/core/world-state')
+  const { cloneWorld }: typeof import('../src/core/world-state') = require('../src/core/world-state')
   const loot = armsRegistry().get('LootChest')
   const before = state({}, { loot_target_id: 'a', loot_evidence: 'a:0', loot_quote_at: 0 })
   const later = cloneWorld(before); later.facts.loot_quote_at = fact(40000, 'inferred', 40000)
@@ -69,7 +69,7 @@ test('loot retry follows a changed target or access evidence, never quote timest
 })
 
 test('P7 ench: Sharpness учитывается по уровню; Unbreaking не добавляет урон и не провоцирует худший крафт', () => {
-  const { bestCraft } = require('../src/pvp/arms-graph')
+  const { bestCraft }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const plain = powerOf([{ name: 'iron_sword' }]).total
   assert.equal(powerOf([{ name: 'iron_sword', ench: { sharpness: 1 } }]).total, 11.2)
   assert.equal(powerOf([{ name: 'iron_sword', ench: { sharpness: 5 } }]).total, 14.4)
@@ -177,7 +177,7 @@ test('P7 ranged: бонус только за оружие с совместим
 })
 
 test('крафт: из слитков и палки — железный меч; без палки и досок — нет; граф берёт крафт, когда он есть', () => {
-  const { bestCraft } = require('../src/pvp/arms-graph')
+  const { bestCraft }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   assert.equal(bestCraft([{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }])?.item, 'iron_sword')
   assert.equal(bestCraft([{ name: 'iron_ingot', count: 3 }]), null)
   assert.equal(bestCraft([{ name: 'diamond_sword' }, { name: 'iron_ingot', count: 2 }, { name: 'oak_planks', count: 4 }]), null, 'меч хуже имеющегося — не нужен')
@@ -186,7 +186,7 @@ test('крафт: из слитков и палки — железный меч;
 })
 
 test('засада без позиции не даёт бонуса: неудачное ожидание не меняет риск боя (S7d, ревью Codex)', () => {
-  const { armsRegistry } = require('../src/pvp/arms-graph')
+  const { armsRegistry }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const eng = armsRegistry().all().find((x: any) => x.id === 'Engage')
   const a = state({ power: 10 }, { deadline: true, enemy_power: 10, enemy_known: true })
   const b = state({ power: 10 }, { deadline: true, enemy_power: 10, enemy_known: true, ambushed: true })
@@ -195,7 +195,7 @@ test('засада без позиции не даёт бонуса: неуда�
 })
 
 test('гонка, S7d (ревью Codex): польза сундука тает к полному набору; при 3 хп от сильного — сперва восстановиться', () => {
-  const { chestMargin, powerOf } = require('../src/pvp/arms-graph')
+  const { chestMargin, powerOf }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const full = powerOf(['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots', 'diamond_sword', 'shield'].map(name => ({ name }))).total
   assert.ok(chestMargin(1) > 0.9 && chestMargin(full) < 0.3)
   const fullPlan = first(state({ power: Math.round(full), chests: 3 }, { enemy_power: Math.round(full), enemy_known: true }))
@@ -218,7 +218,7 @@ test('Recover: голод без еды и одни зелья не обещаю
 })
 
 test('Recover: ожидание расходует сытость и не создаёт полное здоровье из пустого инвентаря', () => {
-  const { applyEffect } = require('../src/core/world-state')
+  const { applyEffect }: typeof import('../src/core/world-state') = require('../src/core/world-state')
   const recover = armsRegistry().get('Recover')
   let s = state({ power: 14 }, { enemy_power: 10, enemy_known: true, enemy_near: true })
   s.health = 3; s.hunger = 20
@@ -234,9 +234,9 @@ test('Recover: ожидание расходует сытость и не соз
 })
 
 test('Recover: еда в прогнозе конечна, неподтверждённые зелья и рыба в ведре не еда', () => {
-  const { applyEffect } = require('../src/core/world-state')
-  const { recoveryFood } = require('../src/pvp/arms-graph')
-  const recover = armsRegistry().get('Recover')
+  const { applyEffect }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const { recoveryFood }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
+  const recover: any = armsRegistry().get('Recover')
   const s = state({ power: 35, heal_items: 2 }, { enemy_power: 20 })
   s.health = 3; s.hunger = 10; s.inventory = { bread: 2, potion: 4, salmon_bucket: 1 }
   assert.equal(recoveryFood(s.inventory).count, 2)
@@ -251,8 +251,8 @@ test('Recover: еда в прогнозе конечна, неподтвержд
 })
 
 test('Recover: яблоки дают конечную регенерацию даже ниже 18 еды; план сравнивает её с боем', () => {
-  const { applyEffect } = require('../src/core/world-state')
-  const recover = armsRegistry().get('Recover')
+  const { applyEffect }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const recover: any = armsRegistry().get('Recover')
   for (const [name, gain] of [['golden_apple', 4], ['enchanted_golden_apple', 12]] as const) {
     const s = state({ power: 35, heal_items: 1 }, { enemy_power: 20, enemy_known: true })
     s.health = 3; s.hunger = 10; s.inventory = { [name]: 1 }
@@ -266,8 +266,8 @@ test('Recover: яблоки дают конечную регенерацию д�
 })
 
 test('Recover: прогноз совпадает с выбором eat и не тратит одно яблоко вместо другой еды', () => {
-  const { applyEffect } = require('../src/core/world-state')
-  const recover = armsRegistry().get('Recover')
+  const { applyEffect }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const recover: any = armsRegistry().get('Recover')
   const s = state({ power: 35, heal_items: 2 }, { enemy_power: 20 })
   s.health = 3; s.hunger = 10; s.inventory = { golden_apple: 1, cod: 1 }
   const apple = applyEffect(s, recover.expectedEffects(s))
@@ -280,8 +280,8 @@ test('Recover: прогноз совпадает с выбором eat и не �
 })
 
 test('Recover: один настоящий HP — результат; новое наблюдение врага без лечения — провал без таймерного повтора', () => {
-  const { StrategicDirector } = require('../src/core/strategy')
-  const { cloneWorld } = require('../src/core/world-state')
+  const { StrategicDirector }: typeof import('../src/core/strategy') = require('../src/core/strategy')
+  const { cloneWorld }: typeof import('../src/core/world-state') = require('../src/core/world-state')
   const registry = armsRegistry()
   const recover = registry.get('Recover')
   const before = state({ power: 30 }, { enemy_power: 18, enemy_known: true })
@@ -290,7 +290,7 @@ test('Recover: один настоящий HP — результат; новое
   assert.equal(recover.successCondition(before, healed), true)
   const after = cloneWorld(before); after.facts.enemy_near = fact(false, 'observed', 1)
   let now = 0
-  const director = new StrategicDirector(registry, { now: () => now }, { goal: opponentDefeated, maxFailures: 1, retryAfterMs: 30000, riskPenalty: ARMS_RISK_PENALTY })
+  const director = new StrategicDirector(registry, { now: () => now } as any, { goal: opponentDefeated, maxFailures: 1, retryAfterMs: 30000, riskPenalty: ARMS_RISK_PENALTY })
   assert.equal(director.verify(recover, before, after, { outcome: 'PARTIAL', events: [] }), 'FAILURE')
   now = 31000
   director.decide(after)
@@ -301,7 +301,7 @@ test('Recover: один настоящий HP — результат; новое
 })
 
 test('лаборатория: книга + ≥6 бутылок или лазурит + ≥20; цель — меч/броня не хуже камня', () => {
-  const { labReady } = require('../src/pvp/arms-graph')
+  const { labReady }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   assert.equal(labReady([{ name: 'lapis_lazuli', count: 3 }, { name: 'experience_bottle', count: 20 }, { name: 'iron_sword' }]), true)
   assert.equal(labReady([{ name: 'lapis_lazuli', count: 3 }, { name: 'experience_bottle', count: 16 }, { name: 'iron_sword' }]), false, '16 бутылок = 7 ур. — столу мало')
   assert.equal(labReady([{ name: 'enchanted_book' }, { name: 'experience_bottle', count: 8 }, { name: 'iron_sword' }]), true, 'книга на наковальне дешевле')
@@ -310,9 +310,9 @@ test('лаборатория: книга + ≥6 бутылок или лазур
 })
 
 test('сторож боя (S7d): выстрел (отпустил «использовать») и урон по другому — прогресс; без них и под ударами — бросить', async () => {
-  const { watchFight } = require('../src/combat')
-  const gameClock = require('../src/game-clock')
-  const { EventEmitter } = require('node:events')
+  const { watchFight }: typeof import('../src/combat') = require('../src/combat')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
   const mk = () => { const b: any = new EventEmitter(); b.health = 20; b.entity = { position: { distanceTo: () => 5 } }; b.attack = () => {}; b.deactivateItem = () => {}; return b }
   const a = mk(); const wa = watchFight(a, { aborted: false, onAbort: [] })
   const b = mk(); const wb = watchFight(b, { aborted: false, onAbort: [] })

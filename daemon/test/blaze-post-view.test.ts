@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const data = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')(data)
-const pick = require('../src/pick')
-const { choosePost, windowForPost } = require('../src/blaze')
+import { Vec3 } from 'vec3'
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(data as any)
+import pick = require('../src/pick')
+import { choosePost, windowForPost } from '../src/blaze'
 
 // Native E21 local slice captured before the isolated scene. It has a supported
 // one-step exit at 202,65,-108; the suggested diagonal climb floor is absent.

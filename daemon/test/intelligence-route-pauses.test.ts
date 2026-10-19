@@ -1,9 +1,10 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { Vec3 } = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { Vec3 } from 'vec3'
 
 function routeFixture ({ alarms = 7, abortOnRelease = false, advanceOnRelease = 0, declinedGuard = false, cancelledGuard = false } = {}) {
   const source = fs.readFileSync(process.env.NR_TEST_SOURCE || path.join(__dirname, '../src/nether-route.js'), 'utf8')
@@ -60,7 +61,7 @@ function routeFixture ({ alarms = 7, abortOnRelease = false, advanceOnRelease = 
       return 'ok'
     }
   }
-  const routeTo = vm.runInNewContext(`${body}\nrouteTo`, context)
+  const routeTo = vm.runInNewContext(`${body}\nrouteTo`, cjsContext(context))
   return { session, ctl, run: seconds => routeTo(session, ctl, { x: 1, y: 11, z: 0, maxPlans: 1, timeoutSeconds: seconds }), stats: () => ({ calls, releases, steps }) }
 }
 

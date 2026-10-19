@@ -2,10 +2,10 @@ type Body = Record<string, any>
 export interface BoatController { aborted: boolean; onAbort: Array<() => void> }
 export interface BoatPosition { x: number; y: number; z: number }
 export interface BoatPlacementResult { ok: boolean; why?: string; boat?: Body }
-const clock = require('../game-clock')
-const pick = require('../pick')
-const ride = require('../ride')
-const Vec3 = require('vec3')
+import * as clock from '../game-clock'
+import pick = require('../pick')
+import ride = require('../ride')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 export function boatItem(bot: Body): Body | null {
   return bot.inventory.items().find((item: Body) => /_(boat|raft)$/.test(item.name) && !/chest/.test(item.name)) || null

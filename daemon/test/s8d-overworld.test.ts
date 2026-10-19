@@ -1,13 +1,15 @@
 'use strict'
+import { campaignRequire, campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
 // S8d (07.10): верхний мир вслепую — честная лава (замечание «а»), озёра лавы, цена копки в воде и ночного отрезка («г»),
 // риск голема против риска копки («д»), шаг «пещера» (железо в стенах пещеры по виду), explore без пути во все стороны.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const route = require('../src/route')
-const { withClockFixture } = require('./clock-fixture')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import route = require('../src/route')
+import { withClockFixture } from './clock-fixture'
 
 test('озёра лавы: зеркало озера — цель, лавопад из одного источника — нет', () => {
   const lake = []
@@ -75,7 +77,7 @@ function owCtx (over: Record<string, any> = {}) {
 }
 
 test('пещера: колодец до потолка пещеры, спрыгнуть, руда в стенах по виду — железа хватает', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   let inCaveNow = false
   const ctx = owCtx()
   ctx.act = async (m: string, p: any) => {
@@ -97,7 +99,7 @@ test('пещера: колодец до потолка пещеры, спрыг�
 })
 
 test('пещера: колодец дошёл донизу без пещеры — шаг не вышел (дальше этап железа)', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const ctx = owCtx()
   ctx.act = async (m: string, p: any) => {
     ctx.calls.push({ m, p })
@@ -111,7 +113,7 @@ test('пещера: колодец дошёл донизу без пещеры �
 })
 
 test('scoutLava с озёрами: одиночная лава — не успех, увиденное озеро — успех и цель плана', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   let seen: any[] = [{ name: 'lava', x: 30, y: 70, z: 0 }]
   const ctx = owCtx({ routeInfoV: undefined })
   ctx.process.env.ND_ROUTE_LAVADIG = '0'
@@ -146,13 +148,13 @@ function campaign (state, situation, handle: (m: string, p: any) => any, env: Re
     close () {}
   }
   const context: Record<string, any> = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : require(name),
+    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync () {} } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} },
     process: { argv: ['node', 'campaign.js'], env }, console: { log () {}, error () {} }, setTimeout, Date, queueMicrotask
   }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     module.exports = { act, known, init: () => { state = testState; sit = testSituation; } }
-  `, withClockFixture(Object.assign(context, { testState: state, testSituation: situation })))
+  `, cjsContext(withClockFixture(Object.assign(context, { testState: state, testSituation: situation }))))
   context.module.exports.init()
   return context.module.exports
 }
@@ -181,7 +183,7 @@ test('шаг, сорванный тактикой 3 раза: постройка
 })
 
 test('пещеры нет, но руду в стенке колодца глаза видели — к ней по памяти и копать', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const ctx = owCtx()
   ctx.act = async (m: string, p: any) => {
     ctx.calls.push({ m, p })
@@ -198,12 +200,12 @@ test('пещеры нет, но руду в стенке колодца глаз
 })
 
 test('explore: 8 сторон подряд без пути, тело на месте — отказ отсюда (stuck), а не кручение до срока', { timeout: 15000 }, async () => {
-  const Vec3 = require('vec3')
-  const gameClock = require('../src/game-clock')
-  const { explore } = require('../src/actions')
-  const mcData = require('minecraft-data')('1.21.11')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { explore }: typeof import('../src/actions') = require('../src/actions')
+  const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const c = new gameClock.GameClock({ epoch: 0, stallMs: 0 }); c.setState({ tick_rate: 200 }); gameClock.activate(c); c.start()
-  const bot: any = Object.assign(new (require('node:events').EventEmitter)(), { entity: { position: new Vec3(0.5, 64, 0.5), isInWater: false, onGround: true, yaw: 0, pitch: 0, eyeHeight: 1.62 },
+  const bot: any = Object.assign(new ((require('node:events') as typeof import('node:events')).EventEmitter)(), { entity: { position: new Vec3(0.5, 64, 0.5), isInWater: false, onGround: true, yaw: 0, pitch: 0, eyeHeight: 1.62 },
     blockAt: p => p.y < 64 ? { name: 'ice', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]], position: p } : { name: 'air', boundingBox: 'empty', shapes: [], position: p },
     registry: mcData, game: { minY: -64, height: 384 }, world: { getColumn: () => null },
     pathfinder: { setGoal: goal => { if (goal) queueMicrotask(() => bot.emit('path_update', { status: 'noPath', path: [] })) }, movements: null, goto: () => Promise.reject(new Error('noPath')) },
@@ -219,13 +221,13 @@ test('explore: 8 сторон подряд без пути, тело на мес
 })
 
 test('постройки: сундуки/золото/кровати — по глазам (eyes.locate), а не findBlocks сквозь стены; ND_STRUCT_EYES=0 — прежнее', () => {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const eyesPath = require.resolve('../src/perception/eyes')
   const saved = require.cache[eyesPath]
   const seenCalls: any[] = []
   require.cache[eyesPath] = { id: eyesPath, filename: eyesPath, loaded: true, exports: { locate: (bot, names, o) => { seenCalls.push({ names, o }); return [new Vec3(10, 64, 0), new Vec3(40, 64, 0)].filter(o.filter) } } } as any
   try {
-    const { seenNear } = require('../src/structures')
+    const { seenNear }: typeof import('../src/structures') = require('../src/structures')
     const bot: any = { entity: { position: new Vec3(0, 64, 0) }, registry: { blocksByName: { chest: { id: 1 } } }, findBlocks: () => [new Vec3(3, 50, 0)] }
     const got = seenNear(bot, ['chest'], { x: 8, y: 64, z: 0 }, 12)
     assert.deepEqual(got.map(v => v.x), [10], 'видимый сундук в радиусе постройки; спрятанный в толще (findBlocks) — нет')

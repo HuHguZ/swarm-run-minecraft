@@ -2,15 +2,15 @@
 // Жемчуг в прыжке (06.10): дальность, точка переноса против прогона модели, отказ у края/лавы/потолка.
 // Тело — настоящая prismarine-physics (как у бота), «сервер» — сдвиг последнего пакета движения
 // (getKnownMovement; вертикаль — только при onGround = false) и полёт жемчуга pearl-hop.simulate.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const { Physics, PlayerState } = require('prismarine-physics')
-const mcData = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')('1.21.11')
-const T = require('../src/throw')
-const hop = require('../src/pearl-hop')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { Physics, PlayerState } from 'prismarine-physics'
+const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+import * as T from '../src/throw'
+import * as hop from '../src/pearl-hop'
 
 const K = T.KINDS.ender_pearl
 const physics = Physics(mcData, null)

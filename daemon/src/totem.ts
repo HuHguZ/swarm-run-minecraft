@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Тотем (PVP-RESEARCH в.2, просьба 2026-09-26): проверка «тотем в левую руку
 // при ≤ 14 хп» стояла в главном цикле боя, а тот бывает занят по 1–1.6 с
 // (натяжение, еда, коробка) — бот мог умереть с тотемом в рюкзаке. Здесь:
@@ -21,9 +21,9 @@ const gameClock = require('./game-clock')
 //  * урон после брони — world/damagesource/CombatRules.getDamageAfterAbsorb
 //    (assess.afterArmor), крит ×1.5 (Player.attack), сила +3 за уровень.
 
-const assess = require('./assess')
-const read = require('./read')
-const { seesPlayer } = require('./pvp/last-seen')
+const assess: typeof import('./assess') = require('./assess')
+const read: typeof import('./read') = require('./read')
+const { seesPlayer }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
 
 const OFF = 45
 // Урон оружия (атрибут руки, с базовой 1 игрока) — PVP-RESEARCH б.1.
@@ -128,7 +128,7 @@ const COUNTERS = ['pops', 'reequips', 'fails', 'fast', 'slow']
 // Read-only telemetry: no new reflex/listener, no reset of the lifetime counters.
 function snapshot (bot) {
   if (!bot) return null
-  if (!counterIds.has(bot)) counterIds.set(bot, require('node:crypto').randomUUID())
+  if (!counterIds.has(bot)) counterIds.set(bot, (require('node:crypto') as typeof import('node:crypto')).randomUUID())
   const t = bot._ndTotem
   return { id: counterIds.get(bot), pops: t?.pops ?? 0, reequips: t?.reequips ?? 0,
     fails: t?.reequipFails ?? 0, fast: t?.fast ?? 0, slow: t?.slow ?? 0, why: { ...t?.why } }
@@ -162,7 +162,7 @@ function wantTotem (bot, ctx: any = {}) {
     boom = bot.nearestEntity(x => x && x.position && (x.name === 'end_crystal' || x.name === 'tnt' || x.name === 'tnt_minecart') && x.position.distanceTo(me) < 8 && seesPlayer(bot, x))
     if (!boom) {
       const id = bot.registry.blocksByName.respawn_anchor.id
-      const anchor = require('./sight').visibleOf(bot, [id], 6, { max: 1, fair: true })[0]
+      const anchor = (require('./sight') as typeof import('./sight')).visibleOf(bot, [id], 6, { max: 1, fair: true })[0]
       if (anchor) boom = anchor
     }
   } catch {}
@@ -177,3 +177,4 @@ function wantTotem (bot, ctx: any = {}) {
 }
 
 module.exports = { install, snapshot, delta, wantTotem, burstOf, absorption, hotbarTotem, offName, WEAPON }
+export { install, snapshot, delta, wantTotem, burstOf, absorption, hotbarTotem, offName, WEAPON }

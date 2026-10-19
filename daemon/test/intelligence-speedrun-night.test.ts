@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { createOverworldRoute } = require('../src/campaign/overworld-route')
+import { createOverworldRoute } from '../src/campaign/overworld-route'
 
 test('speedrun mapped route does not craft a bed or leave its work position to sleep', async () => {
   const work: string[] = []

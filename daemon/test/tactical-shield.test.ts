@@ -5,16 +5,16 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import vm from 'node:vm'
-const Vec3 = require('vec3')
-const clock = require('../src/game-clock')
-const esbuild = require('../../node_modules/esbuild')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as clock from '../src/game-clock'
+import * as esbuild from 'esbuild'
 
 function sourceModule(name: string, overrides: Record<string, unknown> = {}, expose = '') {
   const file = path.resolve(__dirname, '../src', name + '.ts')
   const local = createRequire(file)
   const module = { exports: {} as Record<string, any> }
   const source = esbuild.transformSync(readFileSync(file, 'utf8') + expose, { loader: 'ts', format: 'cjs', target: 'node24' }).code
-  vm.runInThisContext(require('node:module').wrap(source), { filename: file })(module.exports,
+  vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap(source), { filename: file })(module.exports,
     (id: string) => id in overrides ? overrides[id] : local(id), module, file, path.dirname(file))
   return module.exports
 }
@@ -24,7 +24,7 @@ function actor() {
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot.version = '1.21.11'; bot.health = 20; bot.food = 20
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.game = { dimension: 'overworld', gameMode: 'survival' }
   bot.entity = { id: 1, position: new Vec3(.5, 64, .5), height: 1.8, width: .6,
     onGround: true, yaw: 0, pitch: 0, metadata: [], effects: {} }
@@ -54,7 +54,9 @@ function actor() {
   const session: any = { bot, current: null, bus: { emit: () => {} } }
   const ctl: any = { aborted: false, onAbort: [], abort() { this.aborted = true; for (const fn of this.onAbort) fn() } }
   const bow = sourceModule('bow')
-  const combat = sourceModule('combat', { './bow': bow })
+  // makeShield с ленивым require('../bow') живёт в части combat/shield: лук подменяется в ней, она — в combat.
+  const shieldPart = sourceModule('combat/shield', { '../bow': bow })
+  const combat = sourceModule('combat', { './combat/shield': shieldPart })
   const tactics = sourceModule('tactics/minecraft', { '../combat': combat })
   return { c, bot, session, ctl, key, shield, metadata, age, bow, combat, tactics, writes,
     releases: () => releases, close() { bot.emit('end'); c.dispose() } }
@@ -75,7 +77,7 @@ test('OW visible draw is a shield reason before the first arrow and expires on i
   try {
     const e = drawingSkeleton(a), state = a.tactics.observeTactics(a.session)
     assert.equal(state.owGuard?.id, 2)
-    const choices = require('../src/tactics/state').candidates(state)
+    const choices = (require('../src/tactics/state') as typeof import('../src/tactics/state')).candidates(state)
     assert.equal(choices[0].id, 'Shield')
     e.metadata[a.bot.registry.entitiesByName.skeleton.metadataKeys.indexOf('living_entity_flags')] = 0
     assert.equal(a.tactics.observeTactics(a.session).owGuard?.kind, 'unmeasured bow flight')
@@ -116,7 +118,7 @@ test('OW Shield faces the incoming projectile instead of the nearest unrelated s
 function observeProjectile(a, id = 3) {
   const e = a.bot.entities[id], current = e.position.clone()
   e.position = current.offset(1, 0, 0)
-  require('../src/threats').incoming(a.bot)
+  ;(require('../src/threats') as typeof import('../src/threats')).incoming(a.bot)
   a.c.advanceTicks(1); e.position = current
 }
 
@@ -324,7 +326,7 @@ for (const next of ['occluded', 'fall', 'melee']) test(`a started ranged Shield 
 test('BlockOff preserves a CORNERED receipt and its pressure diagnostics without reporting a completed refuge', async () => {
   const a = actor()
   a.bot.game.dimension = 'the_nether'
-  const survival = require('../src/survival')
+  const survival: typeof import('../src/survival') = require('../src/survival')
   const receipt = { code: 'CORNERED', how: 'none', healed: false, box: { ok: false, placed: 0, left: ['91,52,142'], pressure: true } }
   const refuge = survival.refuge
   survival.refuge = async () => receipt
@@ -450,7 +452,7 @@ async function rangedDuelFixture({ name = 'skeleton', hand = 'bow', player = fal
     wear: async () => true, watch() {}, swung() {}, report: () => ({}),
     raise: async (value: boolean) => { raises.push(value); return value }
   }
-  const movement = require('../src/movement')
+  const movement: typeof import('../src/movement') = require('../src/movement')
   const pvp = sourceModule('pvp', { './movement': { ...movement, sleep: async (ms: number) => { a.c.advanceTicks(Math.max(1, Math.ceil(ms / 50))); await turn() } } })
   try {
     if (aborted) a.ctl.abort()

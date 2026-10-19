@@ -1,6 +1,6 @@
-// Загрузка ЦП всего ПК раз в N с (os.cpus, без прав администратора): node farm/dragon/cpu-log.js <файл> [сек=5] [минут=180]
+// Загрузка ЦП всего ПК раз в N с (os.cpus, без прав администратора): node dist/farm/dragon/cpu-log.js <файл> [сек=5] [минут=180]
 // Строка: ISO-время и % занятости всех ядер. Сводка боёв по CPU — farm/dragon/an-crys.js (окно боя по трассе).
-const fs = require('fs'); const os = require('os')
+import * as fs from 'fs'; import * as os from 'os'
 const out = process.argv[2]; const sec = Number(process.argv[3] || 5); const mins = Number(process.argv[4] || 180)
 if (!out) { console.error('файл?'); process.exit(1) }
 const snap = () => os.cpus().reduce((a, c) => { const t = c.times; a.idle += t.idle; a.all += t.user + t.nice + t.sys + t.idle + t.irq; return a }, { idle: 0, all: 0 })

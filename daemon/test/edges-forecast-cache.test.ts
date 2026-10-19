@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Vec3 } = require('vec3')
-const edges = require('../src/edges')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Vec3 } from 'vec3'
+import edges = require('../src/edges')
 
 const base = () => ({ pos: new Vec3(.5, 64, .5), vel: new Vec3(0, 0, 0), onGround: true })
 const forecast = bot => edges.run(bot, base(), {} as Record<string, any>, { hold: 2, max: 3, groundY: 64 })
@@ -108,14 +108,14 @@ test('terrain columns still inspect the current full block outside physics forec
 })
 
 test('cached forecasts match the installed physics for full blocks, slabs and waterlogged stairs', () => {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const { Physics, PlayerState } = require('prismarine-physics')
   for (const [name, properties] of [
     ['stone', {} as Record<string, any>],
     ['oak_slab', { type: 'bottom', waterlogged: false }],
     ['oak_stairs', { facing: 'north', half: 'bottom', shape: 'straight', waterlogged: true }]
-  ]) {
+  ] as Array<[string, Record<string, any>]>) {
     let reads = 0
     const stateId = Block.fromProperties(name, properties).stateId
     const read = p => {
@@ -144,8 +144,8 @@ test('cached forecasts match the installed physics for full blocks, slabs and wa
 })
 
 test('pushPlan shares one exact geometry snapshot across trajectories and refreshes for its next call', () => {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const { Physics } = require('prismarine-physics')
   const worlds = new Set()
   const reads = new Map()

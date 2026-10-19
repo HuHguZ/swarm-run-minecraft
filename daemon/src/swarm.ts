@@ -1,6 +1,6 @@
 // Общая доска команды: факты из союзного зрения, задачи и аренда исполнения существующими RPC.
 import { aimingAt } from './pvp/crowd'
-const damage = require('./pvp/damage-model')
+import * as damage from './pvp/damage-model'
 
 export type SwarmPosition = { x: number; y: number; z: number }
 export type SwarmRole = 'fighter' | 'healer' | 'ranged' | 'flank' | 'miner-builder'

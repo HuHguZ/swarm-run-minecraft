@@ -1,16 +1,17 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Запись дракона со стороны сервера по тикам (истина для прогноза головы):
-//   node farm/dragon/rec-dragon.js <слот> <out.jsonl> [секунд]
+//   node dist/farm/dragon/rec-dragon.js <слот> <out.jsonl> [секунд]
 // RCON: data get entity … Pos / Motion / Rotation / DragonPhase / Health + time query gametime —
 // по полю отдельной командой (большой ответ RCON режет на куски по 4096), все шесть разом;
 // команды исполняет главный поток между тиками — почти каждый тик.
-const net = require('net')
-const fs = require('fs')
-const path = require('path')
+import * as net from 'net'
+import * as fs from 'fs'
+import path = require('path')
 const slot = Number(process.argv[2])
 const out = process.argv[3]
 const secs = Number(process.argv[4] || 1200)
-const props = fs.readFileSync(path.join(__dirname, '..', `server-${slot}`, 'server.properties'), 'utf8')
+const props = fs.readFileSync(path.join(REPO_ROOT, 'farm', `server-${slot}`, 'server.properties'), 'utf8')
 const get = k => (new RegExp('^' + k.replace('.', '\\.') + '=(.*)$', 'm').exec(props) || [])[1]
 const port = Number(get('rcon.port')); const pass = get('rcon.password')
 const pkt = (id, type, body) => {

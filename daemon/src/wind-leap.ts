@@ -6,12 +6,13 @@
 // прыжок, спринт-прыжок 2–4 тика), тик броска, куда в пол (под ноги или за спину на 0.4–1.2), и честная физика тела
 // (edges: simulatePlayer по миру бота) с рулём в воздухе к цели — до посадки. Годен вариант, где тело садится на
 // выбранную опору с полной свободной рамкой и шестью тиками остановки. Исполнение — те же клавиши по тикам.
-const Vec3 = require('vec3')
-const gameClock = require('./game-clock')
-const edges = require('./edges')
-const wind = require('./combat/team-wind')
-const geometry = require('./navigation/geometry')
-const { landingDamage } = require('./navigation/landing')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import './game-clock'
+import * as gameClock from './game-clock'
+import edges = require('./edges')
+import * as wind from './combat/team-wind'
+import * as geometry from './navigation/geometry'
+import { landingDamage } from './navigation/landing'
 
 const EYE = 1.62
 const LIFT = wind.WIND.surfaceOffset
@@ -150,7 +151,7 @@ async function leap (session, ctl, to, { dryRun = false, arena = undefined }: an
         const pos = bot.entity.position
         const B = floorBurst(bot, pos.x - dir.x * v.back, pos.z - dir.z * v.back, pos.y)
         if (!B) return { ok: false, why: 'некуда бросить' }
-        const actual = wind.windShot(bot, require('./pick').eyeOf(bot), B.offset(0, -LIFT, 0), new Vec3(moved.x, bot.entity.onGround ? 0 : moved.y, moved.z))
+        const actual = wind.windShot(bot, (require('./pick') as typeof import('./pick')).eyeOf(bot), B.offset(0, -LIFT, 0), new Vec3(moved.x, bot.entity.onGround ? 0 : moved.y, moved.z))
         if (!actual) return { ok: false, why: 'actual_charge_ray_changed' }
         await bot.look(actual.yaw, actual.pitch, true)
         bot.entity.yaw = actual.yaw; bot.entity.pitch = actual.pitch
@@ -208,4 +209,4 @@ async function leapToward (session, ctl, goal, { dryRun = false, arena = undefin
   return { ok: false, why: cands.length ? 'ни на один уступ не допрыгнуть' : 'уступов ближе к цели нет', cands: cands.length }
 }
 
-module.exports = { plan, planAsync, leap, simulate, leapToward }
+export { plan, planAsync, leap, simulate, leapToward }

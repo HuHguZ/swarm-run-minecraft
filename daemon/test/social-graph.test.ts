@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { evaluateSocial, type SocialState } from '../src/social-graph'
 import { EventEmitter } from 'node:events'
-const locks = require('../src/reflex-lock')
+import locks = require('../src/reflex-lock')
 
 const state: SocialState = { signal: 'crouch', mood: 65, affinity: 60, health: 20,
   threatLevel: 0, bodyBusy: false, airborne: false, interrupted: false, distance: 3 }

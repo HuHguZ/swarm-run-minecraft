@@ -1,4 +1,4 @@
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const v = []; const byDoing: Record<string, any> = {} as Record<string, any>
 for (const d of fs.readdirSync(L).filter(f => f.startsWith('trace-'))) {

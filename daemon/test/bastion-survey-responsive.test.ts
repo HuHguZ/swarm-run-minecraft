@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Module from 'node:module'
 import { EventEmitter } from 'node:events'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Real recogniser/templates; only the visible client scene and rays are fixtures.
 function scene(n = 30) {
@@ -137,7 +137,7 @@ test('live read-only scan awaits the same cooperative recogniser and preserves i
 })
 
 test('actual bastion scan RPC passes its controller and awaits the scan result', async () => {
-  const ts = require('@typescript/typescript6')
+  const ts: typeof import('@typescript/typescript6') = require('@typescript/typescript6')
   const file = path.resolve(__dirname, '../src/bastion/bastion.ts')
   const source = fs.readFileSync(file, 'utf8')
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
@@ -151,7 +151,7 @@ test('actual bastion scan RPC passes its controller and awaits the scan result',
   }
   const body = transformSync(node.getText(tree), { loader: 'ts', format: 'cjs' }).code
   const call = new Function('require', 'gameClock', 'clamp', 'countOf', 'fireRes', 'BF', 'worlds', 'scanPiecesAsync',
-    'let FAST_SAFE = false;\n' + body + '\nreturn bastion')(
+    'const goldMode = { fastSafe: false };\n' + body + '\nreturn bastion')(
     () => ({}), { now: () => 0 }, v => v, () => 0, () => 0, { enabled: () => false }, { worldOf: () => 'the_nether' }, scanPiecesAsync)
   const result = await call({ bot }, ctl, { mode: 'scan', radius: 37 })
   assert.equal(queried, 1); assert.equal(result.scan, scan)

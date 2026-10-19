@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const edges = require('../src/edges')
-const reflex = require('../src/reflex-lock')
-const clock = require('../src/game-clock')
+import { Vec3 } from 'vec3'
+import edges = require('../src/edges')
+import reflex = require('../src/reflex-lock')
+import * as clock from '../src/game-clock'
 
 // Real guard, hand/reflex wrappers and game clock. Only packet/world receipts are simulated.
 function fixture () {

@@ -1,7 +1,7 @@
 'use strict'
 // Короткое решение MCP-мозга по уже увиденному дереву основного мира.
 // Координаты из честного explore 22:56; здесь нет команд оператора.
-const { connect } = require('../daemon/scene-kit')
+import { connect } from '../daemon/scenes/lib/scene-kit'
 const conn = connect('ws://127.0.0.1:8769')
 let lastDeath
 async function step (method, params: any = {} as Record<string, any>) {

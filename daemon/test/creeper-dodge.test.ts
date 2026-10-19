@@ -1,10 +1,10 @@
 'use strict'
 // Рефлекс «крипер рядом» (поток survival, 02.10): autopilot.creeperNeed — когда бросать дело и отбегать.
 // Механика 1.21.11 Creeper.SwellGoal: шипит с < 3 бл., гаснет дальше 7; фитиль 30 тиков.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { creeperNeed, CREEPER } = require('../src/autopilot')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { creeperNeed, CREEPER } from '../src/autopilot'
 
 function bot (creepers, gameMode = 'survival') {
   const entities: Record<string, any> = {} as Record<string, any>

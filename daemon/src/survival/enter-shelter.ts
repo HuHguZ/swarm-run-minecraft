@@ -1,28 +1,28 @@
 
-const gameClock = require('.././game-clock')
+const gameClock: typeof import('.././game-clock') = require('.././game-clock')
 
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
-const { goals } = require('mineflayer-pathfinder')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
 
-const { sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater } = require('.././movement')
+const { sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater }: typeof import('.././movement') = require('.././movement')
 
 const {
   itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget,
   toolShortfall, SWINGS_PER_LEVEL
-} = require('.././items')
+}: typeof import('.././items') = require('.././items')
 
-const { placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity } = require('.././build')
+const { placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity }: typeof import('.././build') = require('.././build')
 
-const { digStairs } = require('.././actions')
+const { digStairs }: typeof import('.././actions') = require('.././actions')
 
-const { nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED } = require('.././combat')
+const { nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED }: typeof import('.././combat') = require('.././combat')
 
-const { canSeePoint } = require('.././perception')
+const { canSeePoint }: typeof import('.././perception') = require('.././perception')
 
-const { reachOf } = require('.././reach')
+const { reachOf }: typeof import('.././reach') = require('.././reach')
 
-const worlds = require('.././worlds')
+const worlds: typeof import('.././worlds') = require('.././worlds')
 
 const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
 
@@ -162,7 +162,7 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
     const step = await sinkOne(bot, mcData)
     swings++
     if (step.stopped) { stopped = step.stopped; break }
-    if (center && depthNow() === was) { try { await require('.././fortify').centerInCell(bot, 500) } catch {} await sleep(250) }
+    if (center && depthNow() === was) { try { await (require('.././fortify') as typeof import('.././fortify')).centerInCell(bot, 500) } catch {} await sleep(250) }
   }
   if (!stopped && depthNow() < want) {
     if (ctl.aborted) stopped = 'прервано'
@@ -353,7 +353,7 @@ function nearestPlayerName (bot, radius) {
 
 async function boxShelter (session, ctl) {
   const bot = session.bot
-  const fortify = require('.././fortify')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
   try {
     const box = await fortify.boxIn(bot, { roof: true, ctl, timeoutMs: 800, hard: false })
     if (!ctl.aborted && !box.sealed && box.plan) await fortify.patch(bot, box.plan, { timeoutMs: 800, ctl }).catch(() => 0)
@@ -374,7 +374,7 @@ async function exitShelter (session, ctl, { depth }: any) {
   const boxCell = session.shelterBox
   session.shelterBox = null
   if (boxCell && bot.entity.position.floored().distanceTo(boxCell) < 1.5) {
-    try { await require('.././fortify').breakOut(bot, boxCell, {}) } catch {}
+    try { await (require('.././fortify') as typeof import('.././fortify')).breakOut(bot, boxCell, {}) } catch {}
   }
   // The shaft we dug plus the ceiling we sealed, and one spare for whatever
   // fell in on top of us while we sat there.
@@ -551,3 +551,13 @@ const spot = p => `${p.x},${p.y},${p.z}`
 const sitOn = () => process.env.ND_REFUGE_SIT !== '0'
 
 module.exports = { gameClock, Vec3, goals, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, digStairs, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, canSeePoint, reachOf, worlds, SIDES, clampDepth, canStepOut, lightNiche, sinkOne, sealAbove, shelter, enterShelter, armShelterGuard, nearestPlayerName, boxShelter, exitShelter, DESPAWN_MINUTES, SECONDS_PER_LEVEL, PICKUP_RESERVE_MS, BLOCKS_PER_SECOND, AROUND, deathPos, descentPlan, SWEEP_HOP_MS, SWEEP_STALL_MS, WRITTEN_OFF_MS, writtenOff, ledgerOf, isDrop, stackLabel, stackWord, hopOnto, sweepDrops, leftWhy, spot, sitOn }
+export {
+  gameClock, Vec3, goals, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, itemNamed,
+  countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL,
+  placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, digStairs, nearestHostile, HOSTILES,
+  corridorShape, openSides, liveAttacker, RANGED, canSeePoint, reachOf, worlds, SIDES, clampDepth, canStepOut,
+  lightNiche, sinkOne, sealAbove, shelter, enterShelter, armShelterGuard, nearestPlayerName, boxShelter,
+  exitShelter, DESPAWN_MINUTES, SECONDS_PER_LEVEL, PICKUP_RESERVE_MS, BLOCKS_PER_SECOND, AROUND, deathPos,
+  descentPlan, SWEEP_HOP_MS, SWEEP_STALL_MS, WRITTEN_OFF_MS, writtenOff, ledgerOf, isDrop, stackLabel, stackWord,
+  hopOnto, sweepDrops, leftWhy, spot, sitOn
+}

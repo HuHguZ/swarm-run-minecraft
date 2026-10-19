@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Побег от мобов, который смотрит на ВСЕХ, кто рядом, а не на одного.
 //
 // Старый отход (combat.retreat) считал направление «прочь от этого моба» и
@@ -19,19 +19,19 @@ const gameClock = require('./game-clock')
 // Спринт в pathfinder выключен из-за расхождения физики (session.js), но это
 // про длинные маршруты; короткий рывок клавишами сервер принимает.
 
-const Vec3 = require('vec3')
-const { sleep, xyz, inWater } = require('./movement')
-const { raySees } = require('./perception')
-const threats = require('./threats')
-const throwMod = require('./throw')
-const { stepSafe, keyDir } = require('./moves')
-const { bodyClear } = require('./navigation/geometry')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { sleep, xyz, inWater } from './movement'
+import { raySees } from './perception'
+import threats = require('./threats')
+import * as throwMod from './throw'
+import { stepSafe, keyDir } from './moves'
+import { bodyClear } from './navigation/geometry'
 
 // Доктрина по мобам. radius — докуда моб опасен в ближнем бою (с запасом на
 // его скорость), weight — насколько. range — дальность стрельбы (опасен, только
 // если видит). blast — радиус взрыва. fast — бегом не оторваться. fight —
 // что делать, если прижали (для мозга и для боя).
-const DOCTRINE = {
+const DOCTRINE: Record<string, { radius: number; weight: number; range?: number; blast?: number; fast?: boolean; fight?: string }> = {
   zombie: { radius: 8, weight: 6, fight: 'бить, отходить в перезарядке' },
   zombie_villager: { radius: 8, weight: 6 },
   husk: { radius: 8, weight: 6 },
@@ -89,14 +89,14 @@ function playerDoctrine (e) {
 function hostilesAround (bot, radius = 32, foes: number[] = []) {
   const me = bot.entity.position
   const out = []
-  const bears = require('./polar-bear').enabled() ? require('./polar-bear').risks(bot) : null
+  const bears = (require('./polar-bear') as typeof import('./polar-bear')).enabled() ? (require('./polar-bear') as typeof import('./polar-bear')).risks(bot) : null
   for (const e of ((Object.values(bot.entities) as any[]) as any)) {
     if (!e || e === bot.entity || !e.position || !e.name) continue
     const bear = e.name === 'polar_bear' ? bears?.find(h => h.e.id === e.id) : null
     if (e.name === 'polar_bear' && bears && !bear) continue
-    const doc = bear ? { ...DOCTRINE.polar_bear, radius: bear.avoiding ? require('./polar-bear').MECH.followMax : require('./polar-bear').MECH.cubMax + require('./polar-bear').MECH.reach } : e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
+    const doc = bear ? { ...DOCTRINE.polar_bear, radius: bear.avoiding ? (require('./polar-bear') as typeof import('./polar-bear')).MECH.followMax : (require('./polar-bear') as typeof import('./polar-bear')).MECH.cubMax + (require('./polar-bear') as typeof import('./polar-bear')).MECH.reach } : e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
     if (!doc) continue
-    if (e.username && !require('./pvp/last-seen').seesPlayer(bot, e)) continue
+    if (e.username && !(require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e)) continue
     const d = (bear?.e ?? e).position.distanceTo(me)
     if (d > radius) continue
     out.push({ e: bear?.e ?? e, doc, d, swelling: e.name === 'creeper' && creeperSwelling(bot, e) })
@@ -235,7 +235,7 @@ function edgeRisk (bot, E) {
 function insideArena(p, arena) {
   return !arena || Math.abs(p.x - arena.x) + .3 <= arena.r && Math.abs(p.z - arena.z) + .3 <= arena.r && p.y > (arena.killY ?? -64)
 }
-function pickDirection (bot, hs, prevYaw = null, goals: any[] = [], arena = null) {
+function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null) {
   const me = bot.entity.position
   let best = null
   const options = []
@@ -365,7 +365,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   ctl.onAbort.push(stop)
   // Рефлекс края (edges.js) и на бегу: спринт скользит дальше шага, который
   // проверяет stepSafe, а удар в спину кидает на 2-4 блока (2026-09-25).
-  const edgeGuard = require('./edges').guard(bot)
+  const edgeGuard = (require('./edges') as typeof import('./edges')).guard(bot)
   ctl.onAbort.push(() => edgeGuard.stop())
 
   const start = xyz(bot.entity.position)
@@ -556,4 +556,4 @@ function mobAvoidance (bot) {
 }
 const MOB_AVOID_CAP = 60
 
-module.exports = { smartFlee, hostilesAround, shaken, pickDirection, escapeRoute, edgeRisk, enclosure, runLength, insideArena, mobAvoidance, DOCTRINE, creeperSwelling }
+export { smartFlee, hostilesAround, shaken, pickDirection, escapeRoute, edgeRisk, enclosure, runLength, insideArena, mobAvoidance, DOCTRINE, creeperSwelling }

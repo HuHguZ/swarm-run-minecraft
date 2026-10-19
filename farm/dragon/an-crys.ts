@@ -1,10 +1,11 @@
-// Сводка серий «кристаллы с места ожидания» (03.10, поток dragon): node farm/dragon/an-crys.js <тег> [<тег2> ...]  (ROWS=1 — построчно)
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Сводка серий «кристаллы с места ожидания» (03.10, поток dragon): node dist/farm/dragon/an-crys.js <тег> [<тег2> ...]  (ROWS=1 — построчно)
 // Итоги — farm/logs/<тег>-s<k>.jsonl (try-dragon e2e), трассы — farm/logs/trace-<тег>/s<k>/dragon-*.jsonl, CPU — CPU=<файл>
 // (farm/dragon/cpu-log.js, по умолчанию farm/logs/cpu-crys.log): средняя загрузка за окно боя (первая → последняя запись трасс).
 // Время — от платформы (секунды сцены): центр, станция, первый заход на посадку, убийство; кристаллы — выстрелов, сбито своими,
 // живых по серверу после боя; A/B — PAIR=тегA,тегB: попарно по номеру боя (одни сиды).
-const fs = require('fs'); const path = require('path')
-const L = path.join(__dirname, '..', 'logs')
+import * as fs from 'fs'; import path = require('path')
+const L = path.join(REPO_ROOT, 'farm/logs')
 const q = (xs, p) => { const v = xs.filter(x => x != null && !Number.isNaN(x)).sort((a, b) => a - b); return v.length ? Math.round(v[Math.min(v.length - 1, Math.floor((v.length - 1) * p + 0.5))] * 10) / 10 : '-' }
 const isoOf = f => { const m = /dragon-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d+)Z/.exec(f); return m ? Date.parse(`${m[1]}:${m[2]}:${m[3]}.${m[4]}Z`) : 0 }
 const cpuFile = process.env.CPU || path.join(L, 'cpu-crys.log')

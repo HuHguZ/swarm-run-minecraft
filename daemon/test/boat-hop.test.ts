@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { runBoatHops, type BoatHopPort } from '../src/tactics/boat-hop-graph'
 import { boatLavaAim, placeBoatOnLava } from '../src/combat/boat-placement'
 import { boatHopPlan } from '../src/combat/boat-hop'
-const { Vec3 } = require('vec3')
+import { Vec3 } from 'vec3'
 
 test('lava emergency finds the nearest visible progressing hop without scanning every fluid ray', () => {
   let reads = 0
@@ -94,7 +94,7 @@ test('lava boat placement uses a visible fluid ray and does not claim an absent 
 })
 
 test('lava placement confirms a short-lived native boat in its spawn event before the next game tick', async () => {
-  const { EventEmitter } = require('node:events')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
   const bot: any = new EventEmitter()
   const item = { name: 'oak_boat', count: 2 }
   const boat = { id: 123, name: 'oak_boat', position: new Vec3(1.5, 63 + 8 / 9, .5) }

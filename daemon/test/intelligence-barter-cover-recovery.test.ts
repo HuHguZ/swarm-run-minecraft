@@ -1,8 +1,9 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const { createRequire } = require('node:module')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import { createRequire } from 'node:module'
+import { Vec3 } from 'vec3'
+import { declSource } from './source-fixture'
 
 const filename = require.resolve('../src/bastion/bastion')
 const localRequire = createRequire(filename)
@@ -39,14 +40,15 @@ function coverFixture({ floor = 'blackstone', known = true, acknowledgeMove = tr
       if (acknowledgeMove) bot.entity.position = target
       return { ok: true }
     } } : localRequire(name)
-  const text = source()
-  const begin = text.indexOf('async function sealBody(')
-  const end = text.indexOf('async function digPit(', begin)
-  assert.ok(begin >= 0 && end > begin)
-  const run = new Function('require', 'Vec3', 'worlds', 'fullCover', 'SIDES4', 'gameClock', 'FAST_SAFE', 'pocketOpen', 'log', 'xyz',
-    text.slice(begin, end) + '\nreturn prepareBarterCover;')(
+  // sealBody — в bastion/defense.ts, prepareBarterCover — в bastion/barter-site.ts (рядом с bastion.ts: spec те же);
+  // режим FAST_SAFE теперь goldMode.fastSafe (bastion/gold-mode.ts).
+  const text = declSource(localRequire.resolve('./defense'), 'sealBody') + '\n' +
+    declSource(localRequire.resolve('./barter-site'), 'prepareBarterCover')
+  assert.ok(text.includes('async function sealBody(') && text.includes('async function prepareBarterCover('))
+  const run = new Function('require', 'Vec3', 'worlds', 'fullCover', 'SIDES4', 'gameClock', 'goldMode', 'pocketOpen', 'log', 'xyz',
+    text + '\nreturn prepareBarterCover;')(
     require, Vec3, { worldOf: () => 'the_nether' }, b => !!b && b.boundingBox === 'block',
-    [[1, 0], [-1, 0], [0, 1], [0, -1]], { now: () => 0 }, true, () => true, () => {}, at => ({ x: at.x, y: at.y, z: at.z }))
+    [[1, 0], [-1, 0], [0, 1], [0, -1]], { now: () => 0 }, { fastSafe: true }, () => true, () => {}, at => ({ x: at.x, y: at.y, z: at.z }))
   return { bot, st, movements: () => movements, run: () => run(session, ctl, st, 60000) }
 }
 

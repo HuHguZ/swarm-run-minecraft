@@ -1,8 +1,9 @@
-// Лаборатория: доля снижений, где первые N взрывов (сервер) дают ≥ T урона (02.10): node farm/dragon/an-sum4.js <тег> [N=4]
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Лаборатория: доля снижений, где первые N взрывов (сервер) дают ≥ T урона (02.10): node dist/farm/dragon/an-sum4.js <тег> [N=4]
 // MAXCYC=24 — только первые циклы слота (в labS1/labS2 кончался булыжник — опора P + 1). Порог 209 — 200 хп + ~9 лечения кристаллами за цепочку в бою. По плечам: снижений, взрывов/снижение, Σ p25/p50, ≥200, ≥209.
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const tag = process.argv[2]; const N = Number(process.argv[3] || 4)
-const dir = path.join(__dirname, '..', 'results', tag)
+const dir = path.join(REPO_ROOT, 'farm/results', tag)
 const cyc = new Map(); const cycRec = []
 for (const f of fs.readdirSync(dir).filter(f => /^slot-\d+\.jsonl$/.test(f))) {
   for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {

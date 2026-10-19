@@ -4,13 +4,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { stripTypeScriptTypes } from 'node:module'
-const Vec3 = require('vec3')
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const World = require('prismarine-world')('1.21.11')
-const { visibleSources } = require('../src/obsidian')
-const { liveLava } = require('../src/cast')
-const { judge1, geom1 } = require('../src/cast1')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const World = (require('prismarine-world') as typeof import('prismarine-world').default)('1.21.11')
+import { visibleSources } from '../src/obsidian'
+import { liveLava } from '../src/cast'
+import { judge1, geom1 } from '../src/cast1'
 
 function waterWorld() {
   const cells = new Map<string, any>(), waters: any[] = []
@@ -27,7 +27,7 @@ function waterWorld() {
   for(let x=-1;x<=12;x++)for(let y=57;y<=64;y++)for(let z=-6;z<=7;z++)
     if(x<1||x>10||y<59||y>62||z< -4||z>5)put(x,y,z,'stone')
   put(-20,65,0,'water',{level:0}); put(-3,65,0,'water',{level:3})
-  const world=new World().sync; world.getBlock=read
+  const world:any=new World().sync; world.getBlock=read
   world.getColumn=(cx,cz)=>({getBlockStateId:p=>read(new Vec3(cx*16+p.x,p.y,cz*16+p.z)).stateId})
   const bot={registry,game:{minY:-64,height:384},entity:{position:new Vec3(-1.5,65,0.5),eyeHeight:1.62},world,blockAt:read,
     findBlocks:({count})=>waters.slice().sort((a,b)=>a.distanceTo(bot.entity.position)-b.distanceTo(bot.entity.position)).slice(0,count)}

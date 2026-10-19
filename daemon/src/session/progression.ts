@@ -1,24 +1,24 @@
 'use strict'
-const gameClock = require('../game-clock')
-const Vec3 = require('vec3')
-const stronghold = require('../stronghold')
-const blazeMod = require('../blaze')
-const endportal = require('../endportal')
-const fortressMod = require('../fortress')
-const pearlsMod = require('../pearls')
-const bastionMod = require('../bastion')
-const dragonMod = require('../dragon')
-const architect = require('../architect')
-const sorting = require('../sorting')
-const farmMod = require('../farm')
-const rideMod = require('../ride')
-const mechanismMod = require('../mechanism')
+import * as gameClock from '../game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as stronghold from '../stronghold'
+import blazeMod = require('../blaze')
+import endportal = require('../endportal')
+import fortressMod = require('../fortress')
+import pearlsMod = require('../pearls')
+import bastionMod = require('../bastion')
+import dragonMod = require('../dragon')
+import * as architect from '../architect'
+import * as sorting from '../sorting'
+import * as farmMod from '../farm'
+import rideMod = require('../ride')
+import * as mechanismMod from '../mechanism'
 const HOLDING = ['chat', 'low_health', 'death', 'kicked', 'disconnected']
 
 function strongholdIntent (this: any, p: any = {}) {
     if (p.mode === 'go' || p.mode === 'room' || p.mode === 'fill' || p.mode === 'travel') return this.strongholdPath(p)
     if (p.mode === 'solve') return this.immediate(async () => { this.require(); return stronghold.solveStored(this, p) })
-    if (p.mode === 'blind') return this.immediate(async () => { const bot = this.require(); return stronghold.blindPlan(bot.entity.position, require('../worlds').worldOf(bot)) })
+    if (p.mode === 'blind') return this.immediate(async () => { const bot = this.require(); return stronghold.blindPlan(bot.entity.position, (require('../worlds') as typeof import('../worlds')).worldOf(bot)) })
     const find = p.mode !== 'throw'
     const budget = Math.min(600, p.timeoutSeconds ?? 240)
     return this.runIntent('stronghold', async ctl => {
@@ -103,13 +103,13 @@ function netherTunnel (this: any, p: any = {}) {
     return this.runIntent('nether_tunnel', async ctl => {
       this.require()
       this.updateMovements()
-      const { tunnelTo } = require('../tunnel')
+      const { tunnelTo }: typeof import('../tunnel') = require('../tunnel')
       const t = { x: Number(p.x), y: p.y !== undefined ? Number(p.y) : undefined, z: Number(p.z) }
       if (!Number.isFinite(t.x) || !Number.isFinite(t.z)) throw new Error('tunnel: нужны x и z')
       const nb = p.noBreachNear && Number.isFinite(Number(p.noBreachNear.x)) ? { x: Number(p.noBreachNear.x), z: Number(p.noBreachNear.z), r: Number(p.noBreachNear.r) || 48 } : null
       // Вслепую в Аду — закрытым штреком по видимому (tunnelTo планирует по скрытому объёму: Codex q9, честность главной метрики).
-      const NC = require('../nether-cover')
-      if (NC.blind() && require('../worlds').worldOf(this.bot) === 'the_nether') {
+      const NC: typeof import('../nether-cover') = require('../nether-cover')
+      if (NC.blind() && (require('../worlds') as typeof import('../worlds')).worldOf(this.bot) === 'the_nether') {
         const c = await NC.coveredTo(this, ctl, t, { deadline: gameClock.now() + budget * 1000, radius: p.radius ?? 4 })
         return { ...c, note: c.ok ? `закрытым штреком дошёл: отрезков ${c.segs}, шагов ${c.moved}, копок ${c.dug}` : `закрытый штрек встал: ${c.why}` }
       }
@@ -125,7 +125,7 @@ function netherTunnel (this: any, p: any = {}) {
 
 function strongholdPath (this: any, p: any = {}) {
     const budget = Math.min(600, p.timeoutSeconds ?? (p.mode === 'fill' ? 180 : 300))
-    const work = { go: endportal.goStronghold, room: endportal.findRoom, fill: endportal.fillFrames, travel: (s, c, q) => require('../travel').travel(s, c, q) }[p.mode]
+    const work = { go: endportal.goStronghold, room: endportal.findRoom, fill: endportal.fillFrames, travel: (s, c, q) => (require('../travel') as typeof import('../travel')).travel(s, c, q) }[p.mode]
     return this.runIntent('stronghold', ctl => {
       this.require()
       this.updateMovements()
@@ -214,4 +214,4 @@ function mechanism (this: any, p: any = {}) {
     }, { timeoutMs: (Math.min(600, p.timeoutSeconds ?? 240) + 15) * 1000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'] })
   }
 
-module.exports = { stronghold: strongholdIntent, blaze, dragon, fortress, pearls, bastion, netherTunnel, strongholdPath, build, sortStorage, writeSign, farm, ride, mechanism }
+export { strongholdIntent as stronghold, blaze, dragon, fortress, pearls, bastion, netherTunnel, strongholdPath, build, sortStorage, writeSign, farm, ride, mechanism }

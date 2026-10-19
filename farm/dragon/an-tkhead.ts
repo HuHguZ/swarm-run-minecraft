@@ -1,7 +1,7 @@
 // Голова на взлёте относительно головы сидя (запись сервера rec-*.jsonl): взлёт сам (сидел ≥ 95 тиков)
-// и от урона. node farm/dragon/an-tkhead.js <файлы rec...>
-const fs = require('fs')
-const S = require('./dsim')
+// и от урона. node dist/farm/dragon/an-tkhead.js <файлы rec...>
+import * as fs from 'fs'
+import * as S from './dsim'
 const RAD = Math.PI / 180
 const rows = { nat: [], dmg: [] }
 const KS = [1, 2, 5, 8, 10, 11, 12, 13, 15, 20]

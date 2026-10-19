@@ -13,7 +13,7 @@
 //
 // Чиним чтение: getSkyLight/getBlockLight того класса столбца, который создаёт
 // мир бота, смотрят в переставленный x. Запись (пакеты света) идёт тем же
-// путём, так что всё согласовано. Проверка: daemon/try-light.js.
+// путём, так что всё согласовано. Проверка: daemon/scenes/legacy/try-light.js.
 //   ND_LIGHT_FIX=0 — без поправки.
 const flipX = (x) => { const l = x & 15; return x - l + (14 - 2 * (l >> 1) + (l & 1)) }
 
@@ -50,4 +50,4 @@ function install (bot) {
   bot.on('chunkColumnLoad', onLoad)
 }
 
-module.exports = { install, flipX, patch }
+export { install, flipX, patch }

@@ -1,7 +1,7 @@
 // Съеденные кровати: по записи сервера — тики, где коробки дракона (голова/шея/тело) накрывают клетки кровати H/F,
 // между установкой ('pillar:bed') и щелчком. node an-eat.js <dir>...
-const fs = require('fs'); const path = require('path')
-const S = require('./dsim')
+import * as fs from 'fs'; import path = require('path')
+import * as S from './dsim'
 for (const dir of process.argv.slice(2)) {
   const tf = fs.readdirSync(dir).filter(f => /^dragon-/.test(f))[0]; const rf = fs.readdirSync(dir).filter(f => /^rec/.test(f))[0]
   if (!tf || !rf) continue

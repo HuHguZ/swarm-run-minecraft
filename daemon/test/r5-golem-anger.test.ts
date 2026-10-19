@@ -1,17 +1,18 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture (rememberAnger, canAim = false, fill = 64) {
   const clock: Record<string, any> = { t: 1000 }; const digs = []
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   const golem = { id: 2, name: 'iron_golem', position: new Vec3(2.5, 64, .5) }
   bot.entity = { position: new Vec3(.5, 67, .5) }
   bot.entities = { 2: golem }; bot.health = 20
@@ -35,7 +36,7 @@ function fixture (rememberAnger, canAim = false, fill = 64) {
     approachFixture: async () => false }
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
     sleep = advance; visible = () => true; descendPillar = descend; approach = approachFixture;
-  `, withClockFixture(ctx))
+  `, cjsContext(withClockFixture(ctx)))
   return { session, golem, digs, run: () => ctx.module.exports.golemKill(session, { aborted: false, onAbort: [] }, { timeoutSeconds: 20 }) }
 }
 test('retry with zero new hits never descends to a previously attacked live golem', async () => {

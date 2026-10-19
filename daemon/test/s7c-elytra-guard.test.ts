@@ -1,9 +1,9 @@
 'use strict'
 // S7c (замечание проверки S7b а): рефлекс столкновения — летит, а рулит никто (S.driving = 0), нынешний взгляд
 // за 8 тиков ведёт в стену с уроном — этот тик взгляд меняется; при руле (fly/таран/пике) — не вмешивается.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fakeBot (wallX = 6) {
   const handlers: Record<string, any[]> = {}
@@ -22,7 +22,7 @@ function fakeBot (wallX = 6) {
 }
 
 test('рефлекс столкновения: без руля в стену — отворот; с рулём — нет', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const a = fakeBot()
   const S = sky.install(a.bot)
   a.tick()
@@ -39,7 +39,7 @@ test('рефлекс столкновения: без руля в стену —
 })
 
 test('ракета «надо»: идёт только со взглядом, при котором полёт с ней не кончается стеной с уроном (тормоз ракетой — тоже выход)', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const W = (wallX) => ({ at: (x, y) => (y < 100 || x >= wallX) ? 1 : 0, solid (x, y, z) { return this.at(x, y, z) === 1 }, boxHit (x, y, z, h = 1.8) { for (const X of [Math.floor(x - 0.3), Math.floor(x + 0.3)]) for (let Y = Math.floor(y); Y <= Math.floor(y + h); Y++) if (Y < 100 || X >= wallX) return true; return false }, floorBelow () { return { top: 100 } } })
   const st = { p: { x: 0.5, y: 110, z: 0.5 }, v: { x: 1.6, y: 0, z: 0 }, boost: 0, fd: 0 }
   const goal = { kind: 'point', at: { x: 40, y: 110, z: 0.5 } }
@@ -55,7 +55,7 @@ test('ракета «надо»: идёт только со взглядом, п
 })
 
 test('S7d: руль один — пока полёт ведёт fly/таран, чужой поворот взгляда отбит, рулевой (steer) проходит', async () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const a = fakeBot(1000)
   const S = sky.install(a.bot)
   S.driving = 1
@@ -70,7 +70,7 @@ test('S7d: руль один — пока полёт ведёт fly/таран, 
 })
 
 test('S7d: стена в 1 блок под ракетой 1.6 б/т — прогон видит удар (раньше рамка «перепрыгивала» стекло арены)', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   // Стекло арены — только клетка x = 175, за ней воздух (арена в небе), пол далеко внизу.
   const at = (x, y, z) => (x === 175 || y <= 99) ? 1 : 0
   const W = { at, boxHit (x, y, z, h = 1.8) { const H = 0.3; for (let X = Math.floor(x - H); X <= Math.floor(x + H - 1e-9); X++) for (let Y = Math.floor(y); Y <= Math.floor(y + h - 1e-9); Y++) for (let Z = Math.floor(z - H); Z <= Math.floor(z + H - 1e-9); Z++) if (at(X, Y, Z)) return true; return false }, floorBelow: () => ({ top: 100 }) }
@@ -82,7 +82,7 @@ test('S7d: стена в 1 блок под ракетой 1.6 б/т — прог
 })
 
 test('S7d: полёт кончился высоко (падаю, элитры на теле) — рефлекс раскрывает снова; у пола и с булавой — нет', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const a = fakeBot(1000)
   const writes = []
   a.bot._client.write = (name, data) => writes.push({ name, data })
@@ -108,7 +108,7 @@ test('S7d: полёт кончился высоко (падаю, элитры н
 })
 
 test('S7d: взлёт — уступ в 2 бл. по заказанному взгляду: launchLook отворачивает или берёт круче; чисто — заказанный', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   // Пол y ≤ 99, уступ-стена x 2..3 высотой до y 103 (колизей с рельефом), потолок далеко.
   const wall = (x, y) => x >= 2 && x <= 3 && y <= 103
   const at = (x, y, z) => (y <= 99 || wall(x, y)) ? 1 : 0
@@ -127,7 +127,7 @@ test('S7d: взлёт — уступ в 2 бл. по заказанному вз
 })
 
 test('S7d: чёрный ящик держит тики полёта 10 тиков после касания (урон падения приходит после)', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const a = fakeBot(1000)
   const S = sky.install(a.bot)
   a.tick(); a.tick()
@@ -141,7 +141,7 @@ test('S7d: чёрный ящик держит тики полёта 10 тико�
 })
 
 test('S7d: воздушный бой с копьём — цель «пролёт у груди» (point+reach+gap) не ведёт в пол; «strike» (модель булавы) — ведёт', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const FLOOR = 120
   const at = (x, y, z) => (y < FLOOR || Math.abs(x - 600) > 40 || Math.abs(z - 600) > 40 || y > 150) ? 1 : 0
   const W = { at, boxHit (x, y, z, h = 1.8) { const H = 0.3; for (let X = Math.floor(x - H); X <= Math.floor(x + H - 1e-9); X++) for (let Y = Math.floor(y); Y <= Math.floor(y + h - 1e-9); Y++) for (let Z = Math.floor(z - H); Z <= Math.floor(z + H - 1e-9); Z++) if (at(X, Y, Z)) return true; return false }, floorBelow (x, y, z, depth = 40) { for (let Y = Math.floor(y); Y >= Math.floor(y) - depth; Y--) if (at(Math.floor(x), Y, Math.floor(z))) return { top: Y + 1 }; return null } }
@@ -166,7 +166,7 @@ test('S7d: воздушный бой с копьём — цель «пролёт
 })
 
 test('S7d: элитры на теле в воздухе — «надеть лучшую броню» нагрудник не ставит (полёт гас), на земле — ставит', () => {
-  const armor = require('../src/armor')
+  const armor: typeof import('../src/armor') = require('../src/armor')
   const slots: any[] = new Array(46).fill(null)
   slots[6] = { name: 'elytra', maxDurability: 432, durabilityUsed: 0 }
   const chest = { name: 'diamond_chestplate', maxDurability: 528, durabilityUsed: 0, slot: 20 }
@@ -181,7 +181,7 @@ test('S7d: элитры на теле в воздухе — «надеть лу�
 })
 
 test('S7d: посадка с 22 бл. — спуск без пике (высота падения на спуске ≤ 5), касание без урона', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const FLOOR = 120
   const at = (x, y, z) => (y < FLOOR || Math.abs(x - 600) > 30 || Math.abs(z - 600) > 30) ? 1 : 0
   const W = { at, boxHit (x, y, z, h = 1.8) { const H = 0.3; for (let X = Math.floor(x - H); X <= Math.floor(x + H - 1e-9); X++) for (let Y = Math.floor(y); Y <= Math.floor(y + h - 1e-9); Y++) for (let Z = Math.floor(z - H); Z <= Math.floor(z + H - 1e-9); Z++) if (at(X, Y, Z)) return true; return false }, floorBelow (x, y, z, depth = 40) { for (let Y = Math.floor(y); Y >= Math.floor(y) - depth; Y--) if (at(Math.floor(x), Y, Math.floor(z))) return { top: Y + 1 }; return null } }
@@ -197,7 +197,7 @@ test('S7d: посадка с 22 бл. — спуск без пике (высот
 })
 
 test('S7d: воздушный бой с копьём — цель «в 3 бл. от его груди с моей стороны»: пролёт в окне копья 2–4.5 бл., не в пол', () => {
-  const sky = require('../src/elytra')
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
   const FLOOR = 120
   const at = (x, y, z) => (y < FLOOR || Math.abs(x - 600) > 40 || Math.abs(z - 600) > 40 || y > 150) ? 1 : 0
   const W = { at, boxHit (x, y, z, h = 1.8) { const H = 0.3; for (let X = Math.floor(x - H); X <= Math.floor(x + H - 1e-9); X++) for (let Y = Math.floor(y); Y <= Math.floor(y + h - 1e-9); Y++) for (let Z = Math.floor(z - H); Z <= Math.floor(z + H - 1e-9); Z++) if (at(X, Y, Z)) return true; return false }, floorBelow (x, y, z, depth = 40) { for (let Y = Math.floor(y); Y >= Math.floor(y) - depth; Y--) if (at(Math.floor(x), Y, Math.floor(z))) return { top: Y + 1 }; return null } }

@@ -2,22 +2,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { REPO_ROOT } from '../daemon/src/paths'
 
 export function acceleratedDigArgs(java: string, server: string, env = process.env): string[] {
-  if (!/^server-(?:[1-9]|[12][0-9]|3[0-2])$/.test(path.basename(server)) || path.dirname(path.resolve(server)) !== path.resolve(__dirname)) {
+  if (!/^server-(?:[1-9]|[12][0-9]|3[0-2])$/.test(path.basename(server)) || path.dirname(path.resolve(server)) !== path.resolve(REPO_ROOT, 'farm')) {
     throw new Error('accelerated digging is restricted to farm/server-1..32')
   }
-  const source = path.join(__dirname, 'FarmDigClock.java')
-  const lockSource = path.join(__dirname, 'FarmLockstep.java')
-  const asm = path.resolve(__dirname, '../server-twin/libraries/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar')
-  const tree = path.resolve(__dirname, '../server-twin/libraries/org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar')
+  const source = path.join(REPO_ROOT, 'farm/FarmDigClock.java')
+  const lockSource = path.join(REPO_ROOT, 'farm/FarmLockstep.java')
+  const asm = path.resolve(REPO_ROOT, 'server-twin/libraries/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar')
+  const tree = path.resolve(REPO_ROOT, 'server-twin/libraries/org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar')
   const native = path.join(server, 'versions/1.21.11/paper-1.21.11.jar')
   const hash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
   if (hash(native) !== '3a73f0cc4020a5eb45629a67629b14263331c68de45552f8505df8060fa8ed43') {
     throw new Error('FarmDigClock requires the verified Paper 1.21.11 build 132; audit a new jar before accelerating digging')
   }
   const fingerprint = createHash('sha256').update(hash(source)).update(hash(lockSource)).update(hash(asm)).update(hash(tree)).digest('hex')
-  const output = path.join(__dirname, '.accelerated-dig', fingerprint)
+  const output = path.join(REPO_ROOT, 'farm/.accelerated-dig', fingerprint)
   const agent = path.join(output, 'farm-dig-clock.jar')
   if (!fs.existsSync(agent)) {
     const classes = path.join(output, 'classes')

@@ -1,10 +1,11 @@
 'use strict'
-// Сводка серии «один цикл»: node farm/dragon/oc-sum.js <тег-префикс> [...]
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Сводка серии «один цикл»: node dist/farm/dragon/oc-sum.js <тег-префикс> [...]
 // По каждому бою (farm/logs/trace-<тег>-*/dragon-*.jsonl и farm/logs/<тег>*.jsonl): победа, смерть,
 // посадки и урон за посадку (кровати по фазам), слепота, кровати на снижении; и урон взрыва
 // против расстояния изголовье–голова в миг щелчка (dist — до головы по прогнозу/частям).
-const fs = require('fs'); const path = require('path')
-const L = path.join(__dirname, '..', 'logs')
+import * as fs from 'fs'; import path = require('path')
+const L = path.join(REPO_ROOT, 'farm/logs')
 const tags = process.argv.slice(2)
 const rows = []; const pairs = []
 for (const tag of tags) {

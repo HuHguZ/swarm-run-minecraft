@@ -1,4 +1,4 @@
-const { deathPos, worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, gameClock, DESPAWN_MINUTES, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, descentPlan, BLOCKS_PER_SECOND, SECONDS_PER_LEVEL, PICKUP_RESERVE_MS, digStairs, ledgerOf, isDrop, spot, WRITTEN_OFF_MS, sweepDrops, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, AROUND, stackWord, SWEEP_HOP_MS, leftWhy, stackLabel, Vec3, SIDES, canSeePoint, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity } = require('./enter-shelter')
+const { deathPos, worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, gameClock, DESPAWN_MINUTES, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, descentPlan, BLOCKS_PER_SECOND, SECONDS_PER_LEVEL, PICKUP_RESERVE_MS, digStairs, ledgerOf, isDrop, spot, WRITTEN_OFF_MS, sweepDrops, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, AROUND, stackWord, SWEEP_HOP_MS, leftWhy, stackLabel, Vec3, SIDES, canSeePoint, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity }: typeof import('./enter-shelter') = require('./enter-shelter')
 async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, timeoutSeconds = 90, force = false, maxFallHp = 0 }: any = {}) {
   const bot = session.bot
   const deaths = Array.isArray(session.journal.state.deaths) ? session.journal.state.deaths : []
@@ -118,7 +118,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
     }
     // Куча стареет, только пока её чанк тикает (lootclock.js): вдали от неё
     const tickingEta = ticked !== null
-      ? Math.round(Math.min(walkBlocks, require('.././lootclock').SIM * 16) / BLOCKS_PER_SECOND) + digSeconds
+      ? Math.round(Math.min(walkBlocks, (require('.././lootclock') as typeof import('.././lootclock')).SIM * 16) / BLOCKS_PER_SECOND) + digSeconds
       : etaSeconds
     if (leftSeconds !== null && tickingEta > leftSeconds) {
       return refuse(`не успею: дорога ~${etaSeconds}с (из них у кучи ~${tickingEta}с), а вещи пропадут через ${leftSeconds}с`)
@@ -179,7 +179,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   const arrived = !ledged && (away() <= reach || (trip.ok && plan.down < 2))
 
   // The weapon the preflight put in hand at the door is not in hand here: the
-  const rearm = () => require('.././preflight').rearm(session, ctl).catch(() => null)
+  const rearm = () => (require('.././preflight') as typeof import('.././preflight')).rearm(session, ctl).catch(() => null)
   await rearm()
 
   // One ledger for every sweep of this call: a stack written off at the pile is
@@ -680,3 +680,9 @@ async function screenOff (session, ctl, mob, deadline) {
 }
 
 module.exports = { recoverLoot, TOUCHING, flat, hazardNear, hazardLine, wet, FALLS, LOOSE_REACH, LOOSE_LIMIT, looseOver, looseLine, worldTop, openSky, PIT_REACH, STEP_UP, STEPS, walkAway, end, pitCheck, SECONDS_PER_CLIMB_LEVEL, levelWord, legLevels, MOB_WATCH, seenBy, threatEye, NEAR_SLACK, shutOut, behindWall, WALL_LIMIT, WALL_BLOCKS, CONTACT, WALL_BUDGET_MS, putBlock, buildColumn, wallRecord, sealDrift, screenOff }
+export {
+  recoverLoot, TOUCHING, flat, hazardNear, hazardLine, wet, FALLS, LOOSE_REACH, LOOSE_LIMIT, looseOver, looseLine,
+  worldTop, openSky, PIT_REACH, STEP_UP, STEPS, walkAway, end, pitCheck, SECONDS_PER_CLIMB_LEVEL, levelWord,
+  legLevels, MOB_WATCH, seenBy, threatEye, NEAR_SLACK, shutOut, behindWall, WALL_LIMIT, WALL_BLOCKS, CONTACT,
+  WALL_BUDGET_MS, putBlock, buildColumn, wallRecord, sealDrift, screenOff
+}

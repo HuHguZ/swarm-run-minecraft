@@ -1,7 +1,10 @@
 'use strict'
-// Офлайн-проверка плана R (02.10, поток dragon): node farm/dragon/offline/rplan.js [P] — чаша/столб по EndPodiumFeature,
+// Офлайн-проверка плана R (02.10, поток dragon): node dist/farm/dragon/offline/rplan.js [P] — чаша/столб по EndPodiumFeature,
 // план runnerPlan текущего dragon.js, по ярусам: ноги, точка ставки на грани K, угол взгляда к оси F→H (изголовье), запас до 45°.
-const fs = require('fs'), path = require('path'), vm = require('vm'), Module = require('module')
+import * as fs from 'fs'
+import path = require('path')
+import * as vm from 'vm'
+import Module = require('module')
 const file = path.resolve(__dirname, '../../../daemon/src/dragon.js'), req = Module.createRequire(file), Vec3 = req('vec3')
 const src = fs.readFileSync(file, 'utf8') + '\nmodule.exports.__R={runnerPlan,LABENV,faceClickFacing,faceClick,exposure};'
 const m = { exports: {} as Record<string, any> }

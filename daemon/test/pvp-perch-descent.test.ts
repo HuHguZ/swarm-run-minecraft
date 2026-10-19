@@ -5,12 +5,13 @@ import { Vec3 } from 'vec3'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
-const { createCover } = require('../src/pvp/cover')
-const pick = require('../src/pick')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+import { createCover } from '../src/pvp/cover'
+import pick = require('../src/pick')
 
 function scene({ hp = 8, floor = 'stone', own = true, height = 6, digMs = 150, move = true } = {}) {
   const blocks = new Map<string, string>()
@@ -114,7 +115,7 @@ test('a ready water clutch competes with digging the whole perch', async () => {
   const bucket = { name: 'water_bucket', slot: 39, count: 1 }
   s.bot.inventory.slots[39] = bucket
   s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
-  s.ctx.tempo = require('../src/tempo')
+  s.ctx.tempo = (require('../src/tempo') as typeof import('../src/tempo'))
   s.ctx.entity.position.x = 24.5
   s.ctx.tt = { eta: () => Math.max(0, s.ctx.tempo.reachFrom(s.ctx.entity.position.offset(0, 1.62, 0), s.bot.entity) - s.ctx.tempo.PLAYER_REACH) / s.ctx.tempo.SPRINT_BPT * 50 }
   let claimed = 0, released = 0
@@ -146,7 +147,7 @@ test('an opponent waiting below raises the water-drop price', async () => {
   const s = scene({ digMs: 400 }); await s.ready()
   const bucket = { name: 'water_bucket', slot: 39, count: 1 }
   s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
-  s.ctx.tempo = require('../src/tempo')
+  s.ctx.tempo = (require('../src/tempo') as typeof import('../src/tempo'))
   s.ctx.entity.position = new Vec3(2.5, 120, .5)
   s.ctx.tt = { eta: () => 1000 }
   s.bot._ndFallGuard = { waterReady: () => ({ ok: true }), planWater: () => assert.fail('exposed landing must not win this comparison') }
@@ -158,7 +159,7 @@ test('bucket preparation reprices changed HP instead of keeping an old jump or b
   await s.ctx.sleep(100)
   const bucket = { name: 'water_bucket', slot: 39, count: 1 }
   s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
-  s.ctx.tempo = require('../src/tempo')
+  s.ctx.tempo = (require('../src/tempo') as typeof import('../src/tempo'))
   s.ctx.entity.position.x = 24.5
   s.ctx.tt = { eta: () => 3500 }
   let settled = false
@@ -177,7 +178,7 @@ test('preparation cleanup waits for the repriced descent to release its hand', a
   await s.ctx.sleep(100)
   const bucket = { name: 'water_bucket', slot: 39, count: 1 }
   s.ctx.findItem = (_bot, predicate) => predicate(bucket) ? bucket : null
-  s.ctx.tempo = require('../src/tempo'); s.ctx.entity.position.x = 24.5
+  s.ctx.tempo = (require('../src/tempo') as typeof import('../src/tempo')); s.ctx.entity.position.x = 24.5
   s.ctx.tt = { eta: () => 3500 }
   let settled = false, restored = 0, enter, resume
   const entered = new Promise<void>(resolve => { enter = resolve })
@@ -351,7 +352,7 @@ async function perchCaller(hp: number, result: { ok: boolean; acted: boolean }, 
     hasEffect: () => false, rangedAllowed: () => true, vision: { visible: () => true },
     dropFromPerch: async () => { ctx.calls++; return result }, ...options
   }
-  await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch}\n normalCombat++ } })()`, ctx)
+  await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch}\n normalCombat++ } })()`, cjsContext(ctx))
   return ctx
 }
 
@@ -390,7 +391,7 @@ test('a failed perch dig is not aged away, and a newly available descent resourc
     routeInputs: () => 'same support and stance', hasEffect: () => false,
     itemInputs: () => water ? 'water_bucket:36:1' : '',
     pvpSkills: { dropFromPerch: async () => { calls++; return { ok: false, acted: true, kind: 'dig' } } } }
-  runInNewContext(require('esbuild').transformSync(source.slice(start, end) + '\nglobalThis.tryDrop = dropFromPerch', { loader: 'ts' }).code, ctx)
+  runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(source.slice(start, end) + '\nglobalThis.tryDrop = dropFromPerch', { loader: 'ts' }).code, cjsContext(ctx))
   await ctx.tryDrop(); ctx.now = 60000; await ctx.tryDrop(); assert.equal(calls, 1)
   water = true; await ctx.tryDrop(); assert.equal(calls, 2, 'an available bucket must let the planner compare its other descent means')
 })

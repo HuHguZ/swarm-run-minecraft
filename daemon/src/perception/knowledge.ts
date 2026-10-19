@@ -75,4 +75,4 @@ function mapLevel (e = env()): 'blind' | 'struct' | 'blocks' {
 const TITLE: Record<Level, string> = { rsg: 'случайный сид', ssg: 'известный сид', scan: 'полный скан' }
 function describe (e = env()) { const l = level(e); return `${l} (${TITLE[l]}${explicit(e) ? '' : ', из старых флагов'})` }
 
-module.exports = { level, allows, mapLevel, describe, legacy, NEED, RANK }
+export { level, allows, mapLevel, describe, legacy, NEED, RANK }

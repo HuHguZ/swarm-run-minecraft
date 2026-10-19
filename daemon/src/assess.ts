@@ -9,9 +9,10 @@
 // «Damage»). Урон моба с оружием = его базовый + (урон оружия − 1): оружие
 // даёт модификатор атрибута attack_damage поверх базы моба.
 
-const { raySees } = require('./perception')
+import './perception'
+import { raySees } from './perception'
 
-const MOBS = {
+const MOBS: Record<string, { hp: number; dmg: number; every: number; armor?: number; ranged?: boolean; armed?: string; blast?: boolean }> = {
   polar_bear: { hp: 30, dmg: 6, every: 1 }, // PolarBear.createAttributes, MeleeAttackGoal: 20 ticks (1.21.11 jar).
   // hp, dmg — удар в ближнем бою (или выстрел), every — секунд между атаками,
   // ranged — стреляет, armor — природная броня.
@@ -276,7 +277,7 @@ function plan (bot, { radius = 20, entities = null, exclude = null }: any = {}) 
   const list = entities || (Object.values(bot.entities) as any[])
   for (const e of list) {
     if (!e || e === bot.entity || !e.position || !MOBS[e.name]) continue
-    if (e.name === 'polar_bear' && !entities && (!require('./polar-bear').enabled() || !require('./polar-bear').attacking(bot, e))) continue
+    if (e.name === 'polar_bear' && !entities && (!(require('./polar-bear') as typeof import('./polar-bear')).enabled() || !(require('./polar-bear') as typeof import('./polar-bear')).attacking(bot, e))) continue
     if (e.isValid === false || (exclude && exclude.has(e.id)) || dying(bot, e)) continue
     // Только те, кого видно (или кто вплотную): эндермен в пещере под ареной
     // — не враг этого боя, а бот шёл «к нему» по полу на 35 блоков выше.
@@ -327,4 +328,4 @@ function weaponFor (bot, e) {
   return bestAgainst(bot, armor, g.tough)
 }
 
-module.exports = { plan, sizeUp, bestAgainst, weaponFor, afterArmor, gearOf, inSight, MOBS, WEAPON }
+export { plan, sizeUp, bestAgainst, weaponFor, afterArmor, gearOf, inSight, MOBS, WEAPON }

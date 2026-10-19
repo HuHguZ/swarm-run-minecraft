@@ -1,6 +1,6 @@
 // Взлёт по записи сервера: голова по тикам от начала TAKEOFF и прогноз dsim с узлами (узел y — перебор).
-const fs = require('fs')
-const S = require('./dsim')
+import * as fs from 'fs'
+import * as S from './dsim'
 const [file, gtStart] = [process.argv[2], Number(process.argv[3])]
 const L = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(x => x.ph != null && x.p && x.p.length === 3)
 const byGt = new Map(L.map(x => [x.gt, x]))

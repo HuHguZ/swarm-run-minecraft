@@ -1,5 +1,5 @@
 // Сводка трассы боя: node tsum.js <файл.jsonl> [от_с] [до_с]
-const fs = require('fs')
+import * as fs from 'fs'
 const [file, from = 0, to = 1e9] = process.argv.slice(2)
 const L = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
 let lastDoing = null; let lastP = null; let lastHp = null; let lastPh = null

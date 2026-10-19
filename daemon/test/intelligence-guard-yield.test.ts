@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
+import { cjsContext } from './cjs-context'
 
 // Путь sealedGold с планом штрека (знание scan); вслепую его заменяет visibleGold (Codex q10) — здесь прежний путь (blind: false).
 interface Controller { aborted: boolean; onAbort: Array<() => void> }
@@ -12,7 +13,7 @@ interface GuardResult { acted?: boolean; cancelled?: boolean; how?: string }
 interface Guard { react(session: unknown, ctl: Controller, options?: unknown): Promise<GuardResult> }
 
 const source = (name: 'GUARD' | 'BASTION') => readFileSync(process.env[`${name}_TEST_SOURCE`] ||
-  join(__dirname, name === 'GUARD' ? '../src/ne-guard.js' : '../src/bastion/bastion.js'), 'utf8')
+  join(__dirname, name === 'GUARD' ? '../src/ne-guard.js' : '../src/bastion/sealed-gold.js'), 'utf8')
 
 function delegatedGuard() {
   let requests = 0
@@ -31,7 +32,7 @@ function delegatedGuard() {
       if (name === 'vec3') return { Vec3 }
       throw new Error('unexpected dependency: ' + name)
     } }
-  runInNewContext(source('GUARD'), context)
+  runInNewContext(source('GUARD'), cjsContext(context))
   return { bot, session, guard: context.module.exports as Guard, requests: () => requests }
 }
 
@@ -68,7 +69,8 @@ function sealedFixture(results: GuardResult[]) {
   const st = { fastSafe: true, pred: new Map(), gold: new Map(), skip: new Map(), blocks: 0 }
   const code = source('BASTION')
   const start = code.indexOf('async function sealedGold(')
-  const end = code.indexOf('async function digTrap(', start)
+  // sealedGold — в bastion/sealed-gold.ts, следом за ним digToPredicted.
+  const end = code.indexOf('async function digToPredicted(', start)
   assert.ok(start >= 0 && end > start)
   const context = {
     process, gameClock: { now: () => 1000 }, GOLD_PICK: /iron_pickaxe/,
@@ -88,7 +90,7 @@ function sealedFixture(results: GuardResult[]) {
       throw new Error('unexpected dependency: ' + name)
     }
   }
-  const sealedGold = runInNewContext(code.slice(start, end) + '\nsealedGold', context) as
+  const sealedGold = runInNewContext(code.slice(start, end) + '\nsealedGold', cjsContext(context)) as
     (session: unknown, ctl: Controller, state: unknown, until: number) => Promise<unknown>
   return { run: () => sealedGold(session, ctl, st, 100000), requests: () => requests, logs }
 }

@@ -1,17 +1,19 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { EventEmitter } = require('node:events')
-const { createRequire } = require('node:module')
-const path = require('node:path')
-const Vec3 = require('vec3')
+import { bodySource } from './source-fixture'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import * as vm from 'node:vm'
+import { EventEmitter } from 'node:events'
+import { createRequire } from 'node:module'
+import path = require('node:path')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Мир — пол на y=63 (верх 64). Подбор (drops.js) ведёт тело, пока рамка подбора не
 // коснётся предмета; «сервер» отдаёт стопку пакетом collect.
 function fakeBot (drop) {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot.registry = { entitiesByName: { item: { id: 71 } } }
   bot.entity = { position: new Vec3(1.5, 64, 0.5), isCollidedHorizontally: false }
@@ -45,7 +47,7 @@ test('подбор ведёт тело, пока рамка подбора не 
   }, 20)
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, Date, process: { env: {} as Record<string, any> },
     require: n => n === './pack' ? { fits: () => true, ignoreDrop: () => false } : realRequire(n) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   try {
     const picked = await context.module.exports.collectNearbyDrops(bot, { aborted: false }, { timeoutMs: 2000 })
     assert.equal(picked, 1)
@@ -62,7 +64,7 @@ test('исчезнувшее без пакета collect (слилось, сго
   setTimeout(() => { delete bot.entities[11] }, 100)
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, Date, process: { env: {} as Record<string, any> },
     require: n => n === './pack' ? { fits: () => true, ignoreDrop: () => false } : realRequire(n) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   const picked = await context.module.exports.collectNearbyDrops(bot, { aborted: false }, { timeoutMs: 1500 })
   assert.equal(picked, 0)
 })
@@ -79,7 +81,7 @@ test('known harvest waits for a delayed spawn packet within its pickup budget', 
   }, 20)
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, Date,
     process: { env: {} as Record<string, any> }, require: n => n === './pack' ? { fits: () => true, ignoreDrop: () => false } : realRequire(n) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   try { assert.equal(await context.module.exports.collectNearbyDrops(bot, { aborted: false }, { timeoutMs: 1500, appearMs: 1500 }), 1) }
   finally { clearTimeout(appear); clearInterval(pickup) }
 })
@@ -97,7 +99,7 @@ test('750 TPS still waits for native spawn and pickup replies without counting a
   const pickup = setTimeout(() => { bot.emit('playerCollect', bot.entity, drop); delete bot.entities[13] }, 200)
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, Date,
     process: { env: {} as Record<string, any> }, require: n => n === './pack' ? { fits: () => true, ignoreDrop: () => false } : realRequire(n) }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context)
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   try {
     const result = await context.module.exports.collectNearbyDrops(bot, { aborted: false }, { timeoutMs: 1500, appearMs: 1500 })
     assert.equal(result, 1)

@@ -1,11 +1,12 @@
 // Диагностика остановок цикла событий (16.10, Claude-сим): ферма lockstep падает «connected client stalled», когда демон молчит
 // по реальному времени дольше порога — в обычной игре это тело, застывшее на секунды.
-// ND_LAG_PROFILE=1: профайлер V8 окнами по 5 с в главном потоке; окно, где цикл стоял > 1.5 с, — в ../farm/lag/<игрок>-<время>.cpuprofile.
+// ND_LAG_PROFILE=1: профайлер V8 окнами по 5 с в главном потоке; окно, где цикл стоял > 1.5 с, — в farm/lag/<игрок>-<время>.cpuprofile.
 // Бесконечный синхронный цикл так не пишется: Profiler из рабочего потока (connectToMainThread) в Node 24 не обслуживается, пока главный
 // поток занят (проверено 16.10).
-const fs = require('fs')
-const path = require('path')
-const dirOf = () => path.join(process.cwd(), '..', 'farm', 'lag')
+import * as fs from 'fs'
+import path = require('path')
+import { REPO_ROOT } from './paths'
+const dirOf = () => path.join(REPO_ROOT, 'farm', 'lag')
 function save (profile: any, ms: number, tag = '') {
   try {
     fs.mkdirSync(dirOf(), { recursive: true })
@@ -15,7 +16,7 @@ function save (profile: any, ms: number, tag = '') {
   } catch { return null }
 }
 function startMainThread () {
-  const inspector = require('node:inspector')
+  const inspector: typeof import('node:inspector') = require('node:inspector')
   const s = new inspector.Session()
   s.connect()
   const post = (m: string, p: any = {}) => new Promise<any>((res, rej) => s.post(m, p, (e, r) => e ? rej(e) : res(r)))
@@ -36,4 +37,4 @@ function startMainThread () {
 function startLagProfile () {
   startMainThread()
 }
-module.exports = { startLagProfile }
+export { startLagProfile }

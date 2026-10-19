@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { EventEmitter } from 'node:events'
 import { throwHand } from '../src/combat/throw-hand'
-const Vec3 = require('vec3')
-const { throwAt } = require('../src/throw')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { throwAt } from '../src/throw'
 
 test('offhand throws preserve melee weapons and respect an active use action', () => {
   const state = { item: 'ender_pearl', mainItem: 'mace', usingItem: false, preferOffhand: true }
@@ -63,7 +63,7 @@ test('a catch-up burst releases the projectile before later ticks can change its
 })
 
 test('the packet callback keeps the emergency lease when physics events arrive outside it', async () => {
-  const locks = require('../src/reflex-lock')
+  const locks: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
   const bot: any = new EventEmitter()
   bot.health = 20
   const item = { name: 'ender_pearl', type: 2, slot: 36 }
@@ -85,7 +85,7 @@ test('the packet callback keeps the emergency lease when physics events arrive o
 })
 
 test('a clock catch-up that fires the stall timer with the first physics tick still throws (750 TPS, s5)', async () => {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
   try {
     const bot: any = new EventEmitter()
@@ -110,7 +110,7 @@ test('a clock catch-up that fires the stall timer with the first physics tick st
 })
 
 test('use_item уносит взгляд броска, даже если bot.look ещё не применён (750 TPS, s5)', async () => {
-  const clock = require('../src/game-clock')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const c = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(c)
   try {
     const bot: any = new EventEmitter()

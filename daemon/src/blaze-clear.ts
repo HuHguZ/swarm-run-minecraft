@@ -1,7 +1,9 @@
 'use strict'
 // BaseSpawner/EntityType/ServerExplosion, Paper 1.21.11: report and offline evidence in codex-lab/blaze-clear.
-const { Vec3 } = require('vec3')
-const pick = require('./pick'), tools = require('./tools'), eyes = require('./perception/eyes')
+import { Vec3 } from 'vec3'
+import pick = require('./pick')
+import * as tools from './tools'
+import * as eyes from './perception/eyes'
 const FULL = [[0, 0, 0, 1, 1, 1]], UNKNOWN = [[0, 0, 0, 1, 1.5, 1]]
 const HALF = Math.fround(.6) / 2, HEIGHT = Math.fround(1.8)
 const key = p => `${p.x},${p.y},${p.z}`
@@ -133,7 +135,7 @@ function plan(bot, sp, { rods, protectedCells = [], horizon = Infinity, windowMs
   let best = null
   // A 1.8-high blaze can need a pair; all three above-platform cells can free both upper foot levels together.
   // Keep the collection floor and price only a column reachable from the current post.
-  const overheadMs = Math.max(require('./game-clock').TICK_MS, bot._ndBlazeClearOverheadMs || 0)
+  const overheadMs = Math.max((require('./game-clock') as typeof import('./game-clock')).TICK_MS, bot._ndBlazeClearOverheadMs || 0)
   for (const b of candidates) {
     const above = candidates.find(c => c.position.equals(b.position.offset(0, 1, 0)))
     const top = above && candidates.find(c => c.position.equals(b.position.offset(0, 2, 0)))
@@ -185,7 +187,7 @@ function tntEnvelope(bot, cell, keep, seen) {
     for (const dx of offsets[0]) for (const dy of offsets[1]) for (const dz of offsets[2]) {
       let p = centre.map((v, i) => v + [dx, dy, dz][i]), energy = Math.fround(5.2)
       while (energy > 0) {
-        const pos = new Vec3(...p.map(Math.floor)), b = pos.equals(cell) ? null : seen(pos)
+        const pos = new Vec3(...(p.map(Math.floor) as [number, number, number])), b = pos.equals(cell) ? null : seen(pos)
         if (!pos.equals(cell) && !b) return null
         if (b && !air(b)) {
           const resistance = bot.registry.blocksByName[b.name]?.resistance
@@ -236,7 +238,7 @@ function tntPrice(bot, sp, { rods, protectedCells = [], horizon = Infinity, seen
   return null
 }
 async function execute(session, ctl, p, safe) {
-  const bot = session.bot, clock = require('./game-clock'), started = clock.now(), hp = bot.health
+  const bot = session.bot, clock: typeof import('./game-clock') = require('./game-clock'), started = clock.now(), hp = bot.health
   let workEnd = started + p.costSeconds * 1000
   const ready = () => !ctl.aborted && safe(Math.max(0, workEnd - clock.now())) && (bot.health ?? 0) >= hp
   if (!ready()) return { ok: false, why: 'обстановка изменилась' }
@@ -256,14 +258,14 @@ async function execute(session, ctl, p, safe) {
       return p.route.every(q => air(seen(q)) && air(seen(q.offset(0, 1, 0))) && seen(q.offset(0, -1, 0))?.boundingBox === 'block') && !!tntEnvelope(bot, p.pos, p.protectedCells, seen)
     }
     if (!certified()) return { ok: false, why: 'TNT: обстановка изменилась' }
-    const result = await require('./tnt').tntAt(session, ctl, { at: p.pos.offset(.5, 0, .5), maxOff: 0, exact: true, beforeIgnite: certified })
+    const result = await (require('./tnt') as typeof import('./tnt')).tntAt(session, ctl, { at: p.pos.offset(.5, 0, .5), maxOff: 0, exact: true, beforeIgnite: certified })
     if (!result.lit) return { ok: false, why: result.why }
     const fuseEnd = clock.now() + 4000
-    const retreat = await require('./blaze').walkNear(bot, ctl, p.retreat, 0, 3500)
+    const retreat = await (require('./blaze') as typeof import('./blaze')).walkNear(bot, ctl, p.retreat, 0, 3500)
     // Fuse physics, not a strategy mode timer. The caller returns to the same protected post after detonation.
     await clock.sleep(Math.max(0, fuseEnd - clock.now()))
     const back = retreat.ok && ready()
-      ? await require('./blaze').walkNear(bot, ctl, p.home.floored(), 0, 5000) : null
+      ? await (require('./blaze') as typeof import('./blaze')).walkNear(bot, ctl, p.home.floored(), 0, 5000) : null
     return { ok: !!retreat.ok, returned: !!back?.ok, mode: 'tnt', placed: result.placed, seconds: (clock.now() - started) / 1000 }
   }
   if (bot.blockAt(p.pos)?.stateId !== p.stateId || !safeCell(bot, p.pos, p.protectedCells)) return { ok: false, why: 'клетка изменилась' }
@@ -278,7 +280,7 @@ async function execute(session, ctl, p, safe) {
     await bot.lookAt(aim, true)
     workEnd = clock.now() + p.costSeconds * 1000
     if (!ready()) return { ok: false, why: 'окна для копки уже нет' }
-    await require('./build').withTimeout(bot.dig(bot.blockAt(p.pos), 'ignore'), p.costSeconds * 1000 + 1500)
+    await (require('./build') as typeof import('./build')).withTimeout(bot.dig(bot.blockAt(p.pos), 'ignore'), p.costSeconds * 1000 + 1500)
     const elapsed = clock.now() - started
     if (!interrupted && air(bot.blockAt(p.pos))) bot._ndBlazeClearOverheadMs = Math.max(clock.TICK_MS, bot._ndBlazeClearOverheadMs || 0, elapsed - p.digSeconds * 1000)
     return { ok: !interrupted && air(bot.blockAt(p.pos)), mode: p.mode, pos: p.pos, gain: p.gain, savedSeconds: p.savedSeconds, seconds: (clock.now() - started) / 1000 }
@@ -287,4 +289,4 @@ async function execute(session, ctl, p, safe) {
     bot.stopDigging()
   }
 }
-module.exports = { chance, rate, price, plan, safeCell, tntPrice, execute, tntEnvelope, observe }
+export { chance, rate, price, plan, safeCell, tntPrice, execute, tntEnvelope, observe }

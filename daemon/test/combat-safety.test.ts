@@ -1,9 +1,9 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { evaluate, inspect, watch, disengage, recover } = require('../src/combat-safety')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { evaluate, inspect, watch, disengage, recover } from '../src/combat-safety'
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const ready = { health: 20, food: 20, foodPoints: 18, weapon: true, threats: [{ hit: 4.8, distance: 2 }] }
 
@@ -71,7 +71,7 @@ test('зелье не разрешает атаковать толпу, кото
 })
 
 function body (items = []) {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   Object.assign(bot, { version: '1.21.11', health: 20, food: 20, entity: { id: 1, position: new Vec3(0, 64, 0) },
     entities: {} as Record<string, any>, inventory: { items: () => items, slots: Array(46).fill(null) },
     blockAt: p => ({ name: p.y < 64 ? 'stone' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty' }),
@@ -164,14 +164,14 @@ test('огнестойкость разрешает короткую видим�
   b.entity.isInLava = true
   b.blockAt = () => ({ name: 'lava', boundingBox: 'empty' })
   const target = { id: 2, name: 'skeleton', isValid: true, position: new Vec3(0, 64, 2) }
-  const pick = require('../src/pick'); const original = pick.aim
+  const pick: typeof import('../src/pick') = require('../src/pick'); const original = pick.aim
   try {
-    pick.aim = () => ({ point: target.position })
+    pick.aim = () => ({ point: target.position }) as any
     assert.equal(inspect(b, { target }).hazard, true)
     assert.equal(inspect(b, { target, repelLava: true }).action, 'fight')
     pick.aim = () => ({ blocked: { name: 'stone' } })
     assert.equal(inspect(b, { target, repelLava: true }).hazard, true)
-    pick.aim = () => ({ point: target.position })
+    pick.aim = () => ({ point: target.position }) as any
     b.blockAt = () => ({ name: 'cactus', boundingBox: 'block' })
     assert.equal(inspect(b, { target, repelLava: true }).hazard, true)
     b.blockAt = () => ({ name: 'lava', boundingBox: 'empty' })

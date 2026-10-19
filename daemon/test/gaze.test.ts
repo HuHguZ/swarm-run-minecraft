@@ -1,10 +1,10 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const gaze = require('../src/gaze')
-const { starer } = require('../src/dragon/dig-down-to')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as gaze from '../src/gaze'
+import { starer } from '../src/dragon/dig-down-to'
 
 // Тело на ровном месте смотрит на север (yaw 0 → −z) прямо в глаза эндермену в 20 бл. (глаза на 2.55 над его ногами).
 function scene ({ intent = null, digging = false }: any = {}) {

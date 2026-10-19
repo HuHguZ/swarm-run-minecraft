@@ -1,13 +1,14 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const native = require('prismarine-physics')
-const nativeData = require('minecraft-data')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import 'node:path'
+import path = require('node:path')
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import native = require('prismarine-physics')
+import nativeData = require('minecraft-data')
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 
 // Count only the adapter's lexical dependencies; do not patch global loading,
@@ -77,9 +78,9 @@ test('scoped physics caches native metadata per version without retaining effect
 })
 
 test('scoped installed physics retains exact trajectories for full blocks, slabs and waterlogged stairs', () => {
-  const scoped = require('../src/tick-plugins').getPhysics()
-  const registry = require('prismarine-registry')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const scoped = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   for (const [name, properties] of [['stone', {} as Record<string, any>], ['oak_slab', { type: 'bottom', waterlogged: false }], ['oak_stairs', { facing: 'north', half: 'bottom', shape: 'straight', waterlogged: true }]]) {
     const stateId = Block.fromProperties(name, properties).stateId
     const world = { getBlock: p => {
@@ -106,13 +107,13 @@ test('scoped installed physics retains exact trajectories for full blocks, slabs
 
 test('scoped physics leaves native exports, module cache and process globals unchanged', () => {
   const exports = { ...native }
-  const globals = [Date, setTimeout, setInterval, clearTimeout, clearInterval, performance, require('node:module')._load]
-  const scoped = require('../src/tick-plugins').getPhysics()
+  const globals = [Date, setTimeout, setInterval, clearTimeout, clearInterval, performance, (require('node:module') as any)._load]
+  const scoped = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
   assert.notEqual(scoped, native)
   assert.notEqual(scoped.PlayerState, native.PlayerState)
   assert.deepEqual(native, exports)
   assert.equal(require.cache[require.resolve('prismarine-physics')].exports, native)
-  assert.deepEqual([Date, setTimeout, setInterval, clearTimeout, clearInterval, performance, require('node:module')._load], globals)
+  assert.deepEqual([Date, setTimeout, setInterval, clearTimeout, clearInterval, performance, (require('node:module') as any)._load], globals)
 })
 
 test('physics and pathfinder both construct the shared scoped PlayerState', () => {
@@ -123,13 +124,13 @@ test('physics and pathfinder both construct the shared scoped PlayerState', () =
   scoped.PlayerState = class extends State { constructor (...args) { super(...args); constructions++ } }
   const callbacks = []
   const clock = { now: () => 1000000, setInterval: fn => { callbacks.push(fn); return fn }, clearInterval () {}, setTimeout: () => null, clearTimeout () {} }
-  const bot = Object.assign(new EventEmitter(), botFor())
+  const bot: any = Object.assign(new EventEmitter(), botFor())
   bot._client = Object.assign(new EventEmitter(), { state: 'play', write () {} })
   bot.supportFeature = bot.registry.supportFeature
   bot.game = { gameMode: 'survival', minY: -64 }
   bot.isAlive = true
   bot.health = 20
-  const Block = require('prismarine-block')('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
   bot.blockAt = p => { const b = Block.fromStateId(bot.registry.blocksByName[p.y < 64 ? 'stone' : 'air'].defaultState); b.position = p.floored(); return b }
   const plugins = adapter.createTickPlugins(clock)
   plugins.plugins.physics(bot, { physicsEnabled: true })
@@ -140,8 +141,8 @@ test('physics and pathfinder both construct the shared scoped PlayerState', () =
   bot.lookAt = () => Promise.resolve()
   plugins.pathfinder(bot)
   bot.pathfinder.movements.allowFreeMotion = true
-  const { GoalFollow } = require('mineflayer-pathfinder').goals
-  bot.pathfinder.setGoal(new GoalFollow({ position: new Vec3(.5, 64, -2.5) }, 1), true)
+  const { GoalFollow } = (require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).goals
+  bot.pathfinder.setGoal(new GoalFollow({ position: new Vec3(.5, 64, -2.5) } as any, 1), true)
   bot.emit('physicsTick')
   assert.ok(constructions > 1, 'pathfinder/lib/physics uses the same constructor')
   bot.emit('end')

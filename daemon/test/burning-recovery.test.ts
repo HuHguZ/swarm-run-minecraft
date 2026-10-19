@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 import { candidates, type TacticalState } from '../src/tactics/state'
 import { TacticalGraph } from '../src/tactics/graph'
 import { TacticalArbiter } from '../src/tactics/arbiter'
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const { TacticalSystem } = require('../src/tactics/minecraft')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import { TacticalSystem } from '../src/tactics/minecraft'
 
 // H2 native: shore soul_sand/air, FR bottles empty, cooked_beef x2, food 17,
 // HP 10 -> 0 from on_fire while the route action had nobody to flee from.
@@ -76,12 +76,13 @@ test('burn recovery checks local contact before the real bite and observes food/
 })
 
 test('a failed contact escape never starts the recovery bite', async () => {
-  const director = require('../src/director')
+  const director: typeof import('../src/director') = require('../src/director')
   const original = director.escapeFire
   let bites = 0
   const bot = { entities: {}, entity: { position: new Vec3(.5, 64, .5) }, inventory: { items: () => [] } }
   const system = new TacticalSystem({ bot, bus: { emit() {} } })
-  const actions = require('../src/actions'), oldEat = actions.eat
+  // eat определён в src/actions/food: фасад actions переэкспортирует его геттером, подмена — на части
+  const actions: typeof import('../src/actions/food') = require('../src/actions/food'), oldEat = actions.eat
   director.escapeFire = async () => ({ status: 'failed', detail: { escaped: false } })
   actions.eat = async () => { bites++; return { ate: 'cooked_beef' } }
   try {

@@ -1,21 +1,22 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const esbuild = require('esbuild')
-const { Vec3 } = require('vec3')
-const mcData = require('minecraft-data')('1.21.11')
-const items = require('../src/items')
-const tunnel = require('../src/tunnel')
-const { netherToolsReady } = require('../src/campaign/nether-supply')
-const { speedrunRegistry } = require('../src/core/speedrun')
-const { plan } = require('../src/core/strategy')
-const { StrategicDirector } = require('../src/core/strategy')
-const { netherStageProgress } = require('../src/campaign/nether-progress')
-const { emptyWorld, fact, amount } = require('../src/core/world-state')
+import { campaignTs, setterSource } from './campaign-source'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as esbuild from 'esbuild'
+import { Vec3 } from 'vec3'
+const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+import * as items from '../src/items'
+import tunnel = require('../src/tunnel')
+import { netherToolsReady } from '../src/campaign/nether-supply'
+import { speedrunRegistry } from '../src/core/speedrun'
+import { plan } from '../src/core/strategy'
+import { StrategicDirector } from '../src/core/strategy'
+import { netherStageProgress } from '../src/campaign/nether-progress'
+import { emptyWorld, fact, amount } from '../src/core/world-state'
 
 function routeFixture(swings = 261, moveCount = 3) {
-  const inventory = [
+  const inventory: any[] = [
     { ...mcData.itemsByName.iron_pickaxe, count: 1, durabilityUsed: 0 },
     { ...mcData.itemsByName.stone_pickaxe, count: 1, durabilityUsed: 131 - (swings - 250) },
     { ...mcData.itemsByName.oak_planks, count: 8 }, { ...mcData.itemsByName.crafting_table, count: 1 },
@@ -193,12 +194,13 @@ test('Bastion saves confirmed route cells and returns supplyNeeded before legacy
 })
 
 function campaignSupplyReceipt(state, needed: boolean) {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const start = source.indexOf('    const d = r.detail || {}', source.indexOf("const r = await act('bastion', { x: b.x"))
   const end = source.indexOf('    const approached =', start)
   const execute = source.match(/^async function executeStrategy\b[\s\S]*?^}/m)?.[0]
   assert.ok(start > 0 && end > start && execute)
   const body = `let strategyExecuting = false, strategyInterrupted = false, died = false, bastionGoldDug = 0, bastionIngotsTraded = 0;
+    ${setterSource()}
     async function receipt() { ${source.slice(start, end)} }
     const STAGES = [{ name: 'bastion', run: receipt }];
     ${execute}\nreturn executeStrategy;`

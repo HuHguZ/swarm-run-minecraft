@@ -5,9 +5,9 @@
 // (стойкость 0.8). Честно: клетка ставится по видимой грани (build honest), поджиг — взглядом на блок. Отбежать — дело
 // вызывающего (драйвер роя: отход и предупреждение своих).
 // Итог: { ok, placed, lit, why }.
-const Vec3 = require('vec3')
-const build = require('./build')
-const pick = require('./pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import build = require('./build')
+import pick = require('./pick')
 
 async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = false, beforeIgnite = null }: any = {}) {
   const bot = session.require()
@@ -53,4 +53,4 @@ async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = fal
   return { ok: false, why }
 }
 
-module.exports = { tntAt }
+export { tntAt }

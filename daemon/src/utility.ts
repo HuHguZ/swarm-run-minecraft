@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Удочка, трезубец, хорус, ловушки (2026-09-26, «мега-бот»: всё, чем дерутся
 // про-игроки; PVP-RESEARCH б.6, б.12, б.15, б.17; в.12–в.15). Взрывчатки нет
 // намеренно: TNT и кристаллы ломают небесную арену пользователя.
@@ -43,18 +43,19 @@ const gameClock = require('./game-clock')
 //    лава встаёт в клетку перед гранью, в которую смотрим; поэтому лава на
 //    врага в паутине — в верхнюю грань паутины, в клетку его головы.
 
-const Vec3 = require('vec3')
-const edges = require('./edges')
-const tempo = require('./tempo')
-const read = require('./read')
-const bowMod = require('./bow')
-const hazards = require('./hazards')
-const { afterPacket } = require('./mace')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import edges = require('./edges')
+import './tempo'
+import * as tempo from './tempo'
+import * as read from './read'
+import bowMod = require('./bow')
+import * as hazards from './hazards'
+import { afterPacket } from './mace'
 // Дождь и гроза — общий помощник по уровням (perception.raining/thundering,
 // 2026-09-26): флаг bot.isRaining на Paper вывернут.
-const { raySees, raining, thundering } = require('./perception')
-const { placeBlockAt, pickFiller } = require('./build')
-const { sleep } = require('./movement')
+import { raySees, raining, thundering } from './perception'
+import { placeBlockAt, pickFiller } from './build'
+import { sleep } from './movement'
 
 const EYE = 1.62
 const USE_RANGE = 4.4
@@ -373,17 +374,18 @@ async function throwTrident (bot, e, t, { velFn = null, onDraw = null }: any = {
 
 // «Тягун»: рывок по взгляду (yaw, pitch). Сервер толкает только у себя
 // (Entity.push без hurtMarked) — скорость и подъём прибавляем сами, как клиент.
-async function riptide (bot, yaw, pitch = 0, options: any = {}) {
+// Без трезубца с «Тягуном» или воды — отказ { ok: false, why } без ticks; иначе итог runRiptide.
+async function riptide (bot, yaw, pitch = 0, options: any = {}): Promise<Partial<import('./navigation/riptide').RiptideResult> & { ok: boolean }> {
   const t = tridents(bot).filter(x => x.riptide).sort((a, b) => b.riptide - a.riptide)[0]
   if (!t) return { ok: false, why: 'нет трезубца с «Тягуном»' }
   if (!wetOrRain(bot)) return { ok: false, why: 'не в воде и не под дождём' }
-  return require('./navigation/riptide').runRiptide(bot, options.ctl ?? { aborted: false }, t.item, t.riptide, yaw, pitch,
+  return (require('./navigation/riptide') as typeof import('./navigation/riptide')).runRiptide(bot, options.ctl ?? { aborted: false }, t.item, t.riptide, yaw, pitch,
     state => wetOrRain(bot, state), release => onTickThen(bot, () => ({ yaw, pitch }), release), options.target, options.launch)
 }
 async function riptideTo(bot, ctl, target) {
   const trident = tridents(bot).filter(t => t.riptide).sort((a, b) => b.riptide - a.riptide)[0]
   if (!trident || !wetOrRain(bot) || ctl.aborted || bot._ndClutch?.waterPlan) return { ok: false, why: 'no_available_navigation_riptide', ticks: 0 }
-  const chosen = await require('./navigation/riptide').planRiptideTo(bot, ctl, trident.riptide, target, state => wetOrRain(bot, state))
+  const chosen = await (require('./navigation/riptide') as typeof import('./navigation/riptide')).planRiptideTo(bot, ctl, trident.riptide, target, state => wetOrRain(bot, state))
   if (!chosen) return { ok: false, why: 'no_safe_navigation_riptide', ticks: 0 }
   return riptide(bot, chosen.yaw, chosen.pitch, { ctl, target })
 }
@@ -492,7 +494,7 @@ function escapeChoice (bot, { hp, foes = [], trapped = null, pearls = 0, canHeal
   // Жемчуг сам почти убивает: 5 хп, меньше с «Невесомостью» и «Защитой»
   // (tempo.pearlDamage — арена с чарами).
   let pd = 5
-  try { pd = require('./tempo').pearlDamage(bot) } catch {}
+  try { pd = (require('./tempo') as typeof import('./tempo')).pearlDamage(bot) } catch {}
   const low = hp <= pd + 1
   const want = trapped || (low && hp <= pearlAt) || (!pearls && !canHeal && hp <= pearlAt)
   if (!want) return null
@@ -872,7 +874,7 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
   return { step, chorusMaybe, riptideAway, stuckOf: (e) => stuckOf(bot, e), stats: st, close }
 }
 
-module.exports = {
+export {
   create, installRodPull, rodFlight, rodPitch, rodPlan, rodPull, myHook, hookedBy,
   tridentPlan, throwTrident, riptide, riptideTo, rainAt, chorusOdds, escapeChoice, chorusEscape,
   stuckOf, anvilPlan, dropAnvil, blockInPlan, blockIn, lavaPlan, pourLava, ROD_MAX

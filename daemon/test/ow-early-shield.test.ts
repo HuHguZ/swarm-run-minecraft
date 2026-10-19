@@ -1,9 +1,11 @@
+import { campaignScript } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { cjsContext } from './cjs-context'
 
 function fixture(inventory: Record<string, number>, env = {}, fail = false) {
   const file = path.resolve(__dirname, '../campaign.js'), local = createRequire(file)
@@ -12,7 +14,7 @@ function fixture(inventory: Record<string, number>, env = {}, fail = false) {
   const context: any = { require: id => id === 'ws' ? Socket : id === 'fs' ? { appendFileSync() {} } : local(id),
     __dirname: path.dirname(file), module: { exports: {} }, process: { argv: ['node', file], env },
     console: { log() {}, error() {} }, setTimeout, clearTimeout, Date, fixture: f }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = fixture.state; sit = { night: true, surface: true, foes: 0 };
     refresh = async () => {}; sense = async () => {}; ensureTable = async () => {};
     craft = async (item, count = 1) => {
@@ -29,7 +31,7 @@ function fixture(inventory: Record<string, number>, env = {}, fail = false) {
     smeltAll = async () => { state.inventory.iron_ingot = (state.inventory.iron_ingot || 0) + (state.inventory.raw_iron || 0); state.inventory.raw_iron = 0; };
     module.exports = { earlyShield, spendIron, routeStep, move: () => { state.pos.x++; },
       change: values => { Object.assign(sit, values); } };
-  `, context)
+  `, cjsContext(context))
   return { ...context.module.exports, ...f }
 }
 

@@ -1,15 +1,47 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const gameClock = require('../src/game-clock')
-const { EventBus } = require('../src/events')
-const { Session } = require('../src/session')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as gameClock from '../src/game-clock'
+import { EventBus } from '../src/events'
+import { Session } from '../src/session'
+
+// Модули, где бюджеты — только игровые часы: сам src/<имя>.js и вся его папка тела src/<имя>/** — части, на которые
+// модуль разделён, проверяются без правки списка. «фасад:папка» — тело живёт не в папке с именем фасада (index → rpc/).
+const GAME_TIME_MODULES = ['dragon', 'clutch', 'blockmoves', 'edges', 'pvp', 'combat', 'movement', 'bastion', 'nether', 'actions', 'crystal',
+  'mining', 'containers', 'architect', 'structures', 'index:rpc']
+// Файлы тел, где стеночные часы по делу (путь от src/): метка «клещей» между ботами команды живёт в реальном времени
+// (ставит team-assist, читает aerial-lance), журнал комбо fight-graph — отметки для разбора, не бюджет; templateFit
+// (structures/templates) меряет время процессора.
+const WALL_CLOCK_ALLOWED = ['combat/aerial-lance.js', 'pvp/team-assist.js', 'pvp/fight-graph.js', 'structures/templates.js']
+
+function gameTimeFiles (): string[] {
+  const src = path.join(__dirname, '../src')
+  const files: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.name.endsWith('.js')) files.push(full)
+    }
+  }
+  for (const entry of GAME_TIME_MODULES) {
+    const [name, body = name] = entry.split(':')
+    files.push(path.join(src, name + '.js'))
+    if (fs.existsSync(path.join(src, body))) walk(path.join(src, body))
+  }
+  return [...new Set(files)].filter(file => !WALL_CLOCK_ALLOWED.includes(path.relative(src, file).split(path.sep).join('/')))
+}
 
 test('dragon, MLG, combat, navigation and intent budgets have no implicit wall clocks', () => {
-  for (const name of ['dragon', 'clutch', 'blockmoves', 'edges', 'pvp', 'combat', 'movement', 'bastion', 'nether', 'actions']) {
-    const source = fs.readFileSync(path.join(__dirname, '../src', name + '.js'), 'utf8')
+  const src = path.join(__dirname, '../src')
+  for (const allowed of WALL_CLOCK_ALLOWED) assert.ok(fs.existsSync(path.join(src, allowed)), `исключение ${allowed} устарело — файла нет`)
+  const files = gameTimeFiles()
+  assert.ok(files.length > GAME_TIME_MODULES.length, 'папки тел просканированы')
+  for (const file of files) {
+    const name = path.relative(src, file)
+    const source = fs.readFileSync(file, 'utf8')
     assert.doesNotMatch(source, /Date\.now\b/, name)
     assert.doesNotMatch(source, /(?<![\w.])(?:setTimeout|setInterval)\s*\(/, name)
   }
@@ -34,8 +66,8 @@ test('intent timeout follows ticks and disconnect grace returns even in a frozen
 })
 
 test('session background timers resume on a new clock after reconnect', () => {
-  const loot = require('../src/lootclock')
-  const structures = require('../src/structures')
+  const loot: typeof import('../src/lootclock') = require('../src/lootclock')
+  const structures: typeof import('../src/structures') = require('../src/structures')
   const death = { pos: { x: 0, z: 0 }, dimension: 'overworld', ticking: 0 }
   const session: any = { bot: { entity: { position: { x: 0, z: 0 } }, game: { dimension: 'overworld' } },
     journal: { state: { deaths: [death] } }, structuresAuto: false }

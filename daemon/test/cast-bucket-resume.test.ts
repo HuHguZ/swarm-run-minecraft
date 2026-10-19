@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 const source = fs.readFileSync(path.join(__dirname, '../src/cast1.ts'), 'utf8')
 const resume = source.slice(source.indexOf("  if (cnt('lava_bucket') && !cnt('water_bucket')) {", source.indexOf('// 3а.')), source.indexOf('  // 4. Клетки.'))
@@ -23,7 +24,7 @@ async function fixture(visible = true) {
     gameClock: { now: () => 0 }, sleep: async () => {}, tr: () => {}, xyz: q => q,
     require: () => ({ fillBucket: async () => { throw new Error('own water should be recovered first') } })
   }
-  const result = await vm.runInNewContext(`(async () => { ${resume} })()`, context)
+  const result = await vm.runInNewContext(`(async () => { ${resume} })()`, cjsContext(context))
   return { result, calls, inventory }
 }
 

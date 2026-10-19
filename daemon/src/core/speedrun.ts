@@ -4,7 +4,7 @@ import { applyCosts, type CostModel } from './cost-model'
 import { barterPlan, chanceAll, DEFAULT_TIMING, expectedIngots, meanPerIngot, perIngot, type BarterDecision, type BarterState } from './barter-model'
 import { carriedBread } from '../campaign/bread'
 import { endPrepOffers } from '../campaign/end-prep'
-const { foodMeal, foodUnits, foodPoints } = require('../play-policy')
+import { foodMeal, foodUnits, foodPoints } from '../play-policy'
 
 export interface SpeedrunOptions {
   eyes?: number; beds?: number; iron?: number; structureBudgetMs?: number; costs?: CostModel[]

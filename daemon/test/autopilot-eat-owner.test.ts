@@ -5,11 +5,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
-const { eat } = require('../src/actions')
-const locks = require('../src/reflex-lock')
-const clock = require('../src/game-clock')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { eat } from '../src/actions'
+import locks = require('../src/reflex-lock')
+import * as clock from '../src/game-clock'
 
 function fixture(tacticsEnabled = true) {
   const file = path.join(__dirname, '../src/autopilot.js'), req = createRequire(file)
@@ -19,13 +20,13 @@ function fixture(tacticsEnabled = true) {
     require: (name: string) => name === './combat' ? { ...req(name), retreat: async () => { calls.push('cover') } }
       : name === './combat-safety' ? { ...req(name), inspect: () => ({ action: 'recover', threshold: 12 }),
         disengage: async () => { calls.push('run') } } : req(name) }
-  vm.runInNewContext(source, context)
+  vm.runInNewContext(source, cjsContext(context))
   const bot: any = new EventEmitter()
   const sword = { name: 'stone_sword', type: 1, count: 1 }, food = { name: 'apple', type: 2, count: 10 }
   const table = { name: 'crafting_table', type: 3, count: 3 }
   const slots: any[] = []; slots[45] = table
   const enemy = { id: 2, name: 'skeleton', isValid: true, position: new Vec3(.5, 64, 10) }
-  Object.assign(bot, { health: 16, food: 16, heldItem: sword, version: '1.21.11', registry: require('minecraft-data')('1.21.11'),
+  Object.assign(bot, { health: 16, food: 16, heldItem: sword, version: '1.21.11', registry: (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11'),
     entity: { position: new Vec3(.5, 64, .5), onGround: true }, entities: { 2: enemy }, nearestEntity: () => enemy,
     inventory: { slots, items: () => [sword, food, table].filter(i => i.count > 0) },
     pathfinder: { setGoal: () => {} }, clearControlStates: () => {}, stopDigging: () => {},

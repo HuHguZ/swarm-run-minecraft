@@ -1,14 +1,15 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сторож зависания демона (s5, 06.10: после убийства дракона демон дважды замолкал — сервер «Timed out», бой не возвращался).
 // Раз в 3 с реального времени — RPC status демона слота (тайм-аут 2 с). Не ответил дважды подряд — цикл событий занят:
 // профиль CPU 3 с через инспектор (демон с NODE_OPTIONS=--inspect=127.0.0.1:0, адрес — из farm/daemon-<слот>.err.log).
 // Ответил, но часы стоят (ticks ≥ serverTicks+20 и не растут 10 с) — пишет снимок. Всё — в <папка>/hang-*.{json,cpuprofile}.
-//   node farm/dragon/hang-watch.js <слот> <папка> [секунд]
-const fs = require('fs')
-const path = require('path')
+//   node dist/farm/dragon/hang-watch.js <слот> <папка> [секунд]
+import * as fs from 'fs'
+import path = require('path')
 const WebSocket = require(path.join(__dirname, '..', '..', 'daemon', 'node_modules', 'ws'))
 const [slot, dir, secs] = [Number(process.argv[2]), process.argv[3], Number(process.argv[4] || 7200)]
-const root = path.join(__dirname, '..', '..')
+const root = REPO_ROOT
 fs.mkdirSync(dir, { recursive: true })
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-')
 function rpc (method, ms = 2000) {

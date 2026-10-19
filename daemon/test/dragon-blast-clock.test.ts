@@ -1,16 +1,17 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
 
 // Load the analysis without opening the scene's WebSocket/RCON connections.
-const source = fs.readFileSync(path.join(__dirname, '..', 'try-lab-dragon-blast.js'), 'utf8')
+const source = fs.readFileSync(path.join(__dirname, '..', 'scenes', 'end', 'try-lab-dragon-blast.js'), 'utf8')
 const analysis = source.slice(source.indexOf('const dist ='), source.search(/\nasync function toEnd\s*\(/))
 function load (tickRate) {
   const ctx: any = { gameClock: { snapshot: () => ({ tickRate }) }, PLAYER: 'NeuroFarm1', r2: v => Math.round(v * 100) / 100 }
-  vm.runInNewContext(analysis + '\nresult = analyse', ctx)
+  vm.runInNewContext(analysis + '\nresult = analyse', cjsContext(ctx))
   return ctx.result
 }
 const events = [

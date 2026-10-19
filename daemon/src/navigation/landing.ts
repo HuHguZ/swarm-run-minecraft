@@ -1,7 +1,8 @@
 import type { CollisionBlock } from './geometry'
+import { repoJson } from '../paths'
 interface Rule { block: string; properties: Record<string, string>; distanceOffset: number; damageMultiplier: number; distanceMultiplier?: number; bounce?: number }
 interface FallRules { version: string; safeFallDistance: number; epsilon: number; rules: Rule[]; bedRule: { suffix: string; distanceMultiplier: number; damageMultiplier: number; bounce: number } }
-const rules = require('../../data/landing-damage-1.21.11.json') as FallRules
+const rules = repoJson<FallRules>('daemon/data/landing-damage-1.21.11.json')
 if (rules.version !== '1.21.11') throw new Error('landing damage mechanics require reviewed 1.21.11 data')
 const bed: Rule = { block: '*_bed', properties: {}, distanceOffset: 0, ...rules.bedRule }
 const ruleFor = (block: CollisionBlock): Rule | undefined => block.name.endsWith(rules.bedRule.suffix) ? bed

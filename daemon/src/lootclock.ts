@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Часы кучи после смерти. Предмет стареет только в своём tick()
 // (ItemEntity.age++, исчезает на despawnRate = 6000 тиков), а тикают лишь
 // сущности в чанках в пределах дистанции симуляции от игрока
@@ -44,4 +44,4 @@ function install (session) {
   if (session._lootclock.unref) session._lootclock.unref()
 }
 
-module.exports = { install, SIM }
+export { install, SIM }

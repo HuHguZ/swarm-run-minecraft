@@ -1,17 +1,18 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter, once } = require('node:events')
-const { WebSocketServer } = require('ws')
-const gameClock = require('../src/game-clock')
-const { connect, createKit, createGameBot, sleep } = require('../scene-kit')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter, once } from 'node:events'
+import { WebSocketServer } from 'ws'
+import * as gameClock from '../src/game-clock'
+import { connect, createKit, createGameBot, sleep } from '../scenes/lib/scene-kit'
 
 function portalFallback() {
-  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm')
-  const file = path.join(__dirname, '../try-lab-ne-util.ts'), mod = { exports: {} }
-  vm.runInNewContext(require('esbuild').transformSync(fs.readFileSync(file, 'utf8'),
+  const fs: typeof import('node:fs') = require('node:fs'), path: typeof import('node:path') = require('node:path'), vm: typeof import('node:vm') = require('node:vm')
+  const file = path.join(__dirname, '../scenes/lib/try-lab-ne-util.ts'), mod = { exports: {} }
+  vm.runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(fs.readFileSync(file, 'utf8'),
     { loader: 'ts', format: 'cjs', target: 'node24' }).code,
-  { module: mod, require: require('node:module').createRequire(file), process, console })
+  cjsContext({ module: mod, require: (require('node:module') as typeof import('node:module')).createRequire(file), process, console }))
   return mod.exports as { portalTp(kit: unknown, status: () => Promise<unknown>, inner: unknown, call: (method: string, params: unknown) => Promise<unknown>): Promise<boolean> }
 }
 
@@ -31,7 +32,7 @@ test('scene follows unsolicited primary snapshots, freezes waits, and ignores a 
   const rememberClock = clock => { if (clock) clocks.push(clock) }
   gameClock.changes.on('bound', rememberClock)
   server.on('connection', peer => peers.push(peer))
-  const url = `ws://127.0.0.1:${server.address().port}`
+  const url = `ws://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`
   const primary = connect(url)
   const secondary = connect(url)
   const snapshot = ticks => ({ id: 'primary', ticks, gameMs: 1000000 + ticks * 50,
@@ -160,11 +161,11 @@ test('fixture arrival readiness bounds a missing RPC acknowledgement in wall tim
 })
 
 test('native scene bots have separate tick plugin scopes and only primary supplies process time', t => {
-  const mineflayer = require('mineflayer')
+  const mineflayer: typeof import('mineflayer') = require('mineflayer')
   const options = []
   t.mock.method(mineflayer, 'createBot', supplied => {
     options.push(supplied)
-    const bot = new EventEmitter()
+    const bot: any = new EventEmitter()
     bot._client = new EventEmitter()
     return bot
   })
@@ -184,7 +185,7 @@ test('native scene bots have separate tick plugin scopes and only primary suppli
     assert.equal(gameClock.now(), a.ndClock.now())
     assert.equal(b.ndClock.ticks, 0)
   } finally {
-    for (const bot of [a, b, observer]) bot.emit('end')
+    for (const bot of [a, b, observer] as any[]) bot.emit('end')
     gameClock.activate(null)
   }
 })

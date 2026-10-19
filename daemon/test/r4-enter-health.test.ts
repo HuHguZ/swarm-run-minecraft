@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { campaign } = require('./r4-harness')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { campaign } from './r4-harness'
 test('portal heal does not cook or mine for a furnace with raw meat at the frame', async () => {
   const c = campaign({ beef: 3 }); c.state.health = 1; c.state.food = 16
   c.hooks({ rest: async () => {}, eatTo: async () => { c.state.food = 20 } })

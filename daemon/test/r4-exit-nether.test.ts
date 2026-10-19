@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const nether = require('../src/nether')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import nether = require('../src/nether')
 
 test('exit kit: only ordinary obsidian, a diamond pick does not waive ten', () => {
   assert.equal(nether.exitKit({ obsidian: 9, crying_obsidian: 64, diamond_pickaxe: 1, flint_and_steel: 1 }).ready, false)

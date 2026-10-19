@@ -2,12 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-const invsync = require('../src/invsync')
-const ranged = require('../src/ranged')
-const registry = require('minecraft-data')('1.21.11')
-const Item = require('prismarine-item')(registry)
-const windows = require('prismarine-windows')(registry)
-const codec = require('minecraft-protocol/src/transforms/serializer')
+import * as invsync from '../src/invsync'
+import * as ranged from '../src/ranged'
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
+const windows: any = (require('prismarine-windows') as typeof import('prismarine-windows').default)(registry as any)
+import codec = require('minecraft-protocol/src/transforms/serializer')
 const serializer = codec.createSerializer({ state: 'play', version: '1.21.11' })
 const parser = codec.createDeserializer({ state: 'play', version: '1.21.11', isServer: true })
 

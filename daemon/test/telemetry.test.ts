@@ -1,10 +1,11 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const T = require('../src/telemetry')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'fs'
+import * as os from 'os'
+import path = require('path')
+import T = require('../src/telemetry')
 
 test('resources: counters and best tools from inventory', () => {
   const r = T.resources({ raw_iron: 3, iron_ingot: 2, oak_log: 4, white_bed: 1, ender_pearl: 6, stone_pickaxe: 1, iron_pickaxe: 1, cobblestone: 20 })
@@ -55,7 +56,7 @@ test('record: JSONL next to the campaign log; ND_TELEMETRY=0 disables', () => {
 })
 
 test('code version changes when an extracted child skill changes, but ignores generated JavaScript', () => {
-  const vm = require('node:vm')
+  const vm: typeof import('node:vm') = require('node:vm')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-version-'))
   const sourceDir = path.join(dir, 'daemon', 'src')
   fs.mkdirSync(path.join(sourceDir, 'combat'), { recursive: true })
@@ -64,8 +65,8 @@ test('code version changes when an extracted child skill changes, but ignores ge
   const source = fs.readFileSync(require.resolve('../src/telemetry'), 'utf8')
   const hash = () => {
     const module = { exports: {} as Record<string, any> }
-    vm.runInNewContext(source, { module, exports: module.exports, __dirname: sourceDir, process,
-      require: name => name === './game-clock' ? { snapshot: () => null } : require(name) })
+    vm.runInNewContext(source, cjsContext({ module, exports: module.exports, __dirname: sourceDir, process,
+      require: name => name === './game-clock' ? { snapshot: () => null } : name === './paths' ? (require('../src/paths') as typeof import('../src/paths')) : require(name) }))
     return module.exports.version().code
   }
   try {

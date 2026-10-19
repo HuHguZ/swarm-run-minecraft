@@ -13,7 +13,7 @@
 // неё нет, а прицел в неё упирается); глаза внутри контура (голова в паутине)
 // — прицел на ней с первого же шага (VoxelShape.clip: старт внутри формы).
 // Здесь то же самое: ищем точку его рамки, до которой луч свободен.
-const { Vec3 } = require('vec3')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 
 const RANGE = 3.0
 const PICK_RADIUS = { fireball: 1.0, wind_charge: 1.0, breeze_wind_charge: 1.0 }
@@ -268,3 +268,7 @@ function install (bot) {
 }
 
 module.exports = { aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE, PICK_RADIUS }
+export {
+  aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf,
+  RANGE, PICK_RADIUS
+}

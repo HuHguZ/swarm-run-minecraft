@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Портал в Ад без алмазной кирки: литьё рамы вёдрами (спидран-приём).
 //
 // Механика — по исходникам 1.21.11 (extracted_minecraft_data, client1.21.11):
@@ -36,13 +36,13 @@ const gameClock = require('./game-clock')
 // Потом подпорки долой, проём чистый; поджиг — nether.portal: готовую раму он
 // находит сам и зажигает.
 
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { sleep, xyz } = require('./movement')
-const { itemNamed, equipBestTool, missingHarvestTool } = require('./items')
-const { placeBlockAt, towerUp, pickFiller, withTimeout } = require('./build')
-const { visibleOf } = require('./sight')
-const { faceAim, eyeOf, blockOnRay } = require('./pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+const { sleep, xyz }: typeof import('./movement') = require('./movement')
+const { itemNamed, equipBestTool, missingHarvestTool }: typeof import('./items') = require('./items')
+const { placeBlockAt, towerUp, pickFiller, withTimeout }: typeof import('./build') = require('./build')
+const { visibleOf }: typeof import('./sight') = require('./sight')
+const { faceAim, eyeOf, blockOnRay }: typeof import('./pick') = require('./pick')
 
 const UP = new Vec3(0, 1, 0)
 const AX = { x: new Vec3(1, 0, 0), z: new Vec3(0, 0, 1) }
@@ -293,7 +293,7 @@ function geomOf (plan) {
 function resumeOnePlan (session, { maxDig = MAX_DIG, windows = false }: any = {}) {
   const bot = session.bot
   if (bot.game?.dimension !== 'overworld') return null
-  const rec = session.journal.state?.places?.[require('./cast1').PLACE1]
+  const rec = session.journal.state?.places?.[(require('./cast1') as typeof import('./cast1')).PLACE1]
   const one = session.castPlan1 || (rec && (rec.dimension || 'overworld') === 'overworld'
     ? { origin: { x: rec.x, y: rec.y, z: rec.z }, axis: rec.axis, side: rec.side } : null)
   if (!one || !['x', 'z'].includes(one.axis) || ![-1, 1].includes(one.side) ||
@@ -894,7 +894,7 @@ function liveLava (bot, seeds, ref, { limit = 12, cap = 1500 }: any = {}) {
     const p = q[i]
     const b = bot.blockAt(p)
     if (b && levelOf(b) === 0 && isAir(bot.blockAt(p.plus(UP))) &&
-        (process.env.ND_OW_KIT_FRAME === '0' || require('./sight').seesBlock(bot, b))) open.push(p)
+        (process.env.ND_OW_KIT_FRAME === '0' || (require('./sight') as typeof import('./sight')).seesBlock(bot, b))) open.push(p)
     for (const v of [...SIDES4, UP, DOWN]) {
       const n = p.plus(v)
       if (seen.has(key(n))) continue
@@ -915,7 +915,7 @@ async function ensureWater (session, ctl) {
   const bot = session.bot
   if (countOf(bot, 'water_bucket')) return true
   if (!countOf(bot, 'bucket')) return false
-  const r = await require('./obsidian').fillBucket(session, ctl, { fluid: 'water', radius: 32 })
+  const r = await (require('./obsidian') as typeof import('./obsidian')).fillBucket(session, ctl, { fluid: 'water', radius: 32 })
   return !!(r && (r.filled || r.already))
 }
 
@@ -1082,7 +1082,7 @@ async function castCell (session, ctl, g, t, report) {
 async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, maxDig = MAX_DIG, keep = LAVA_KEEP, hint = null, windows = false, waterHint = null }: any = {}) {
   const bot = session.bot
   // Одно ведро, с берега озера (cast1.js, поток route): portal cast {one: true}.
-  if (arguments[2] && arguments[2].one) return require('./cast1').castOne(session, ctl, arguments[2])
+  if (arguments[2] && arguments[2].one) return (require('./cast1') as typeof import('./cast1')).castOne(session, ctl, arguments[2])
   // Слух (ND_OW_HEAR): лава с воздухом над ней в 16 бл. — направление и примерная дальность, без движения тела.
   if (arguments[2] && arguments[2].listen) {
     const rad = Number(arguments[2].listen) > 1 ? Number(arguments[2].listen) : 16
@@ -1095,7 +1095,7 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
     const near = []
     for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (let dy = -1; dy <= 0; dy++) {
       const q = h.offset(dx, dy, dz); const b = bot.blockAt(q)
-      if (b && b.name === 'lava') near.push({ at: xyz(q), level: levelOf(b), up: (bot.blockAt(q.plus(UP)) || {}).name, sees: (() => { try { return require('./sight').seesBlock(bot, b) } catch (e) { return 'err ' + e.message } })(), aim: !!scoopAim(bot, q) })
+      if (b && b.name === 'lava') near.push({ at: xyz(q), level: levelOf(b), up: (bot.blockAt(q.plus(UP)) || {}).name, sees: (() => { try { return (require('./sight') as typeof import('./sight')).seesBlock(bot, b) } catch (e) { return 'err ' + e.message } })(), aim: !!scoopAim(bot, q) })
     }
     return { built: false, probe: true, pos: xyz(bot.entity.position), eye: (p => [p.x, p.y, p.z].map(v => Math.round(v * 100) / 100))(eyes(bot)), sources: lavaSources(bot, 28).map(b => xyz(b.position)).slice(0, 10), near: near.filter(n => n.level === 0).slice(0, 20), spots: standSpots(bot, h).slice(0, 5).map(x => xyz(x.S)), windows: windowCandidates(bot, h).slice(0, 5).map(c => xyz(c.w)) }
   }
@@ -1106,7 +1106,7 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
     if (countOf(bot, 'water_bucket')) return { ...rep0, water: true, built: false }
     if (!countOf(bot, 'bucket')) return { ...rep0, water: false, built: false, stopped: 'нет пустого ведра' }
     await openWindow(session, ctl, waterHint, rep0, { fluid: 'water' })
-    const r = await require('./obsidian').fillBucket(session, ctl, { fluid: 'water', radius: 8 })
+    const r = await (require('./obsidian') as typeof import('./obsidian')).fillBucket(session, ctl, { fluid: 'water', radius: 8 })
     return { ...rep0, water: !!(r && (r.filled || r.already)), built: false, stopped: r && r.stopped }
   }
   const deadline = gameClock.now() + Math.max(60, Math.min(600, timeoutSeconds)) * 1000 - 5000
@@ -1353,5 +1353,11 @@ async function castPortal (session, ctl, { timeoutSeconds = 540, radius = 9, max
 }
 
 module.exports = { castPortal, planCast, judge, geom, lavaSources, landing, aimFor, windowCandidates, openWindow, scoopAim, standSpots, hearLava, hearWater, liveLava, outlineAim, steadyFloor, SOFT_PLANT, PLACE }
+export {
+  castPortal, planCast, judge, geom, lavaSources, landing, aimFor, windowCandidates, openWindow, scoopAim,
+  standSpots, hearLava, hearWater, liveLava, outlineAim, steadyFloor, SOFT_PLANT, PLACE
+}
 // Внутренности для cast1.js (одно ведро): те же прицел, черпак, копка и ходьба.
-module.exports._in = { resumeOnePlan, refillState, digVisible, digRisk, scoopAim, pour, scoop, aimFor, landing, levelOf, isAir, isSolid, hasFluid, walk, centreOn, feetCell, descend, dryFeet, hold, countOf, standSpots, lavaSources, liveLava, eyes }
+const _inExport = { resumeOnePlan, refillState, digVisible, digRisk, scoopAim, pour, scoop, aimFor, landing, levelOf, isAir, isSolid, hasFluid, walk, centreOn, feetCell, descend, dryFeet, hold, countOf, standSpots, lavaSources, liveLava, eyes }
+module.exports._in = _inExport
+export { _inExport as _in }

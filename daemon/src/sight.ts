@@ -8,11 +8,11 @@
 // если луч упёрся именно в него.
 
 // require вне горячих функций: visibleOf зовут на каждом шаге mine/explore (s5c-f4-4: 2109 проб профиля — разбор пути модуля).
-const VEC3 = require('vec3')
+const VEC3: typeof import('vec3').Vec3 = require('vec3')
 
 function seesBlock (bot, block) {
   if (!block || !bot || !bot.entity) return false
-  const eye = bot.entity.position.offset(0, process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? require('./pick').eyeHeight(bot) : bot.entity.eyeHeight || 1.62, 0)
+  const eye = bot.entity.position.offset(0, process.env.ND_WATER_ESCAPE_BUDGET !== '0' ? (require('./pick') as typeof import('./pick')).eyeHeight(bot) : bot.entity.eyeHeight || 1.62, 0)
   const centre = block.position.offset(0.5, 0.5, 0.5)
   const delta = centre.minus(eye)
   const dist = delta.norm()
@@ -150,3 +150,4 @@ function visibleOf (bot, ids, radius, { max = 12, rays = 800, skip = null, fair 
 }
 
 module.exports = { seesBlock, visibleOf }
+export { seesBlock, visibleOf }

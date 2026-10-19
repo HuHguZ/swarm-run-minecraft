@@ -1,13 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import vm from 'node:vm'
-import { createRequire } from 'node:module'
 
-const { Vec3 } = require('vec3')
-const { EventBus } = require('../src/events')
-const { Session } = require('../src/session')
+import { Vec3 } from 'vec3'
+import { EventBus } from '../src/events'
+import { Session } from '../src/session'
 
 function fixture () {
   const bus = new EventBus()
@@ -18,13 +14,10 @@ function fixture () {
   const session: any = { bot, bus, current: { name: 'fortress' },
     state: () => ({ connected: true, health: 20, inventory: {} }) }
   session.immediate = worker => Session.prototype.immediate.call(session, worker)
-  const file = path.resolve(__dirname, '../src/index.js')
-  const source = fs.readFileSync(file, 'utf8')
-  const context: any = { require: createRequire(file), module: { exports: {} }, session, bus,
-    cfg: { fairPlay: true, host: '127.0.0.1', port: 25621 }, console }
-  // Execute the real handlers, omitting only process/server startup.
-  vm.runInNewContext(source.slice(source.indexOf('function enchantedGear'), source.indexOf('const wss =')) + '\nmodule.exports = methods;', context)
-  return { bus, bot, session, methods: context.module.exports }
+  const { observationMethods }: typeof import('../src/rpc/observation') = require('../src/rpc/observation')
+  // Execute the real handlers (src/rpc/observation.ts), omitting only process/server startup.
+  const methods: Record<string, any> = observationMethods({ session, bus, cfg: { fairPlay: true, host: '127.0.0.1', port: 25621 }, state: { dangerWatch: null } })
+  return { bus, bot, session, methods }
 }
 
 test('peek observes physics and inventory while preserving buffered damage/emergency/chat for status', async () => {

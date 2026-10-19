@@ -1,9 +1,9 @@
 'use strict'
 // S1f (07.10): Ад на случайном сиде — честные сущности, сетка только на scan, цены вместо порогов (проверка S1e).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('events')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'events'
+import { Vec3 } from 'vec3'
 
 function withEnv (env: Record<string, string | undefined>, fn: () => any) {
   const old: Record<string, string | undefined> = {}
@@ -13,9 +13,9 @@ function withEnv (env: Record<string, string | undefined>, fn: () => any) {
 
 // Мир из настоящих чанков 1.21.11 (как test/s10-perception): пол y 50..63, стена z = −3.
 function world () {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Chunk = require('prismarine-chunk')(registry)
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Chunk: any = (require('prismarine-chunk') as typeof import('prismarine-chunk').default)(registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const columns = new Map()
   const w: any = new EventEmitter()
   w.getColumn = (cx, cz) => {
@@ -43,7 +43,7 @@ function world () {
 }
 
 test('eyes.knownEntities: эндермен за стеной не известен, на виду — известен; без глаз и при ND_HONEST_ENT=0 — все', () => {
-  const eyes = require('../src/perception/eyes')
+  const eyes: typeof import('../src/perception/eyes') = require('../src/perception/eyes')
   const { bot } = world()
   const em = (id, x, z) => ({ id, name: 'enderman', type: 'hostile', position: new Vec3(x, 64, z), height: 2.9, isValid: true })
   bot.entities = { 1: em(1, 0.5, 8.5), 2: em(2, 0.5, -8.5) } // 2 — за стеной z = −3
@@ -57,11 +57,13 @@ test('eyes.knownEntities: эндермен за стеной не известе
 })
 
 test('pearls/blaze: выбор цели — через eyes.knownEntities (эндермен за стеной не цель)', () => {
-  const fs = require('fs')
-  const src = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'pearls.ts'), 'utf8')
+  const fs: typeof import('fs') = require('fs')
+  // nearestEnderman живёт в pearls/aim.ts (pearls.ts — фасад).
+  const src = fs.readFileSync((require('path') as typeof import('path')).join(__dirname, '..', 'src', 'pearls', 'aim.ts'), 'utf8')
   const fn = src.slice(src.indexOf('function nearestEnderman'), src.indexOf('function nearestEnderman') + 700)
   assert.match(fn, /return ents\(bot\)/)
-  const bz = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'blaze.ts'), 'utf8')
+  // nearestBlaze, droppedRods, arrowsOnFloor и ents живут в blaze/targets.ts (blaze.ts — фасад).
+  const bz = fs.readFileSync((require('path') as typeof import('path')).join(__dirname, '..', 'src', 'blaze', 'targets.ts'), 'utf8')
   for (const f of ['function nearestBlaze', 'function droppedRods', 'function arrowsOnFloor']) {
     const body = bz.slice(bz.indexOf(f), bz.indexOf(f) + 500)
     assert.match(body, /ents\(bot\)/, f)
@@ -70,11 +72,11 @@ test('pearls/blaze: выбор цели — через eyes.knownEntities (эн�
 })
 
 test('nether-route.gridOf: сетка копии читается только на scan', () => {
-  const fs = require('fs'); const os = require('os'); const path = require('path')
+  const fs: typeof import('fs') = require('fs'); const os: typeof import('os') = require('os'); const path: typeof import('path') = require('path')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 's1f-grid-'))
-  const NG = require('../src/nether-grid')
+  const NG: typeof import('../src/nether-grid') = require('../src/nether-grid')
   NG.save(dir, new NG.Grid({ x0: 0, y0: 0, z0: 0, sx: 2, sy: 2, sz: 2 }), {})
-  const NR = require('../src/nether-route')
+  const NR: typeof import('../src/nether-route') = require('../src/nether-route')
   const session = { cfg: { memoryDir: dir } }
   withEnv({ ND_KNOWLEDGE: 'rsg' }, () => assert.equal(NR.gridOf(session), null, 'rsg — без сетки'))
   withEnv({ ND_KNOWLEDGE: 'ssg' }, () => assert.equal(NR.gridOf(session), null, 'ssg — без сетки'))
@@ -82,8 +84,8 @@ test('nether-route.gridOf: сетка копии читается только �
 })
 
 test('бастион: цель у дома брута — ценой от брони и хп (не порог 16)', () => {
-  const B = require('../src/bastion/bastion')
-  const A = require('../src/assess')
+  const B: typeof import('../src/bastion/bastion') = require('../src/bastion/bastion')
+  const A: typeof import('../src/assess') = require('../src/assess')
   const iron = A.gearOf(['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots'].map(name => ({ name })))
   withEnv({ ND_BRUTE_HOME_PRICE: undefined }, () => {
     assert.equal(B.bruteHomeTake(20, iron).take, true, 'железо, хп 20: два удара (2×9.1) переживаем')
@@ -101,8 +103,8 @@ test('бастион: цель у дома брута — ценой от бро
 })
 
 test('бастион: ждать злость перед ямой — ценой (злых нет — не ждать; мало осталось — ждать; долго — не ждать)', () => {
-  const B = require('../src/bastion/bastion')
-  const A = require('../src/assess')
+  const B: typeof import('../src/bastion/bastion') = require('../src/bastion/bastion')
+  const A: typeof import('../src/assess') = require('../src/assess')
   const iron = A.gearOf(['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots'].map(name => ({ name })))
   assert.equal(B.pitAngerWait({ angry: 0, hp: 20, leftS: 30, gear: iron }).wait, false)
   assert.equal(B.pitAngerWait({ angry: 1, hp: 20, leftS: 30, gear: iron }).wait, true)
@@ -111,8 +113,8 @@ test('бастион: ждать злость перед ямой — ценой
 })
 
 test('fortress.spawnerHint: «пирог» F3 со спавнером за стеной — пеленг в его сторону (клетка не известна); пусто — null', () => {
-  const eyes = require('../src/perception/eyes')
-  const F = require('../src/fortress')
+  const eyes: typeof import('../src/perception/eyes') = require('../src/perception/eyes')
+  const F: typeof import('../src/fortress') = require('../src/fortress')
   const W = world()
   const { bot } = W
   eyes.install(bot, { every: 100000 })
@@ -132,7 +134,7 @@ test('fortress.spawnerHint: «пирог» F3 со спавнером за ст�
 })
 
 test('fortress.bastionRegions: регион увиденного бастиона (nether_complexes: одна постройка на регион 432) — крепость там не ищем', () => {
-  const F = require('../src/fortress')
+  const F: typeof import('../src/fortress') = require('../src/fortress')
   const places = { 'бастион (ад)': { x: 100, y: 60, z: -20, dimension: 'the_nether' }, 'бастион 2 (ад)': { x: 300, y: 50, z: -10, dimension: 'the_nether' },
     'бастион 3 (ад)': { x: 900, y: 50, z: 10, dimension: 'overworld' } }
   assert.deepEqual(F.bastionRegions(places), [[0, -1]], 'два бастиона одного региона — один; запись верхнего мира — мимо')
@@ -140,9 +142,9 @@ test('fortress.bastionRegions: регион увиденного бастион�
 })
 
 test('граф по умолчанию: цена охоты на эндерменов — недостача × факт endermen_seconds_per_pearl (ND_EM_PRICE=0 — 600 с)', () => {
-  const { speedrunRegistry } = require('../src/core/speedrun')
-  const { fact } = require('../src/core/world-state')
-  const { worldFromObservation } = require('../src/environments/mineflayer')
+  const { speedrunRegistry }: typeof import('../src/core/speedrun') = require('../src/core/speedrun')
+  const { fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const { worldFromObservation }: typeof import('../src/environments/mineflayer') = require('../src/environments/mineflayer')
   const state = (sec: number) => worldFromObservation({ state: { dimension: 'the_nether', health: 20, inventory: { ender_pearl: 8 } },
     facts: { bastions_exhausted: fact(true, 'observed', 0), endermen_allowed: fact(true, 'observed', 0), endermen_seconds_per_pearl: fact(sec, 'observed', 0) } }, 0)
   withEnv({ ND_EM_PRICE: undefined }, () => {
@@ -157,13 +159,13 @@ test('граф по умолчанию: цена охоты на эндерме�
 })
 
 test('мост в Аду: над смертельной высотой (lethalDepth) — нет, над мелким провалом — да', () => {
-  const data = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')('1.21.11')
-  const { Movements, goals } = require('mineflayer-pathfinder')
+  const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+  const { Movements, goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const { AStar } = require('mineflayer-pathfinder/lib/astar') ?? {}
   const AS = AStar || require('mineflayer-pathfinder/lib/astar')
   const Move = require('mineflayer-pathfinder/lib/move')
-  const bm = require('../src/blockmoves')
+  const bm: typeof import('../src/blockmoves') = require('../src/blockmoves')
   const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
   const world = terrain => ({ getBlock: p => { const b = Block.fromStateId(data.blocksByName[terrain(new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)))].defaultState, 0); b.position = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)); return b } })
   const moves = w => {
@@ -183,21 +185,21 @@ test('мост в Аду: над смертельной высотой (lethalDe
 })
 
 test('fortress.walkLeg: ниже 44 в Аду отрезок целится вверх (до 56), а не вдоль берега лавы', async () => {
-  const F = require('../src/fortress')
+  const F: typeof import('../src/fortress') = require('../src/fortress')
   const goalsSeen: any[] = []
   const bot: any = new EventEmitter()
   Object.assign(bot, { entity: { position: new Vec3(0.5, 35, 0.5) }, health: 20,
     pathfinder: { goto: async (g: any) => { goalsSeen.push(g); bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5) }, setGoal (g) { if (g) this.goto(g).then(() => bot.emit('goal_reached', g)) } } })
   const ctl = { aborted: false, onAbort: [] }
   withEnv({ ND_NE_RISE: undefined }, () => {})
-  const r = await F.walkLeg(bot, ctl, 16, 0, require('../src/game-clock').now() + 60000)
+  const r = await F.walkLeg(bot, ctl, 16, 0, (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 60000)
   assert.equal(r.ok, true)
   assert.equal(goalsSeen[0].y, 47, 'y 35 + 12')
   assert.equal(r.up, 12)
 })
 
 test('fortress.hintFlipped: пеленг развернулся > 110° — цель между точками (вертикаль), иначе — нет', () => {
-  const F = require('../src/fortress')
+  const F: typeof import('../src/fortress') = require('../src/fortress')
   assert.equal(F.hintFlipped(156, -70), true, 's1f-A2-3: 156° → −70°')
   assert.equal(F.hintFlipped(-63, 104), true)
   assert.equal(F.hintFlipped(170, -170), false, 'через ±180 — 20°')
@@ -205,8 +207,8 @@ test('fortress.hintFlipped: пеленг развернулся > 110° — це
 })
 
 test('fortress.keepBlocks: в Аду меньше 24 строительных — добыть незерак (не чаще раза в минуту); хватает — нет', async () => {
-  const F = require('../src/fortress')
-  const A = require('../src/actions')
+  const F: typeof import('../src/fortress') = require('../src/fortress')
+  const A: any = require('../src/actions/gather') // mine определён в части gather (фасад — геттеры)
   const mine0 = A.mine
   const items: any[] = [{ name: 'netherrack', count: 3 }]
   const bot: any = { game: { dimension: 'the_nether' }, inventory: { items: () => items } }
@@ -227,7 +229,7 @@ test('fortress.keepBlocks: в Аду меньше 24 строительных �
 })
 
 test('клатч: доски — последними (в Аду дерево нужно на палки и кирки)', () => {
-  const C = require('../src/clutch')
+  const C: typeof import('../src/clutch') = require('../src/clutch')
   const slots: any[] = []
   slots[36] = { name: 'oak_planks', count: 16, slot: 36 }
   slots[37] = { name: 'netherrack', count: 5, slot: 37 }
@@ -237,19 +239,20 @@ test('клатч: доски — последними (в Аду дерево н
 })
 
 test('штрек бастиона: тело на песке душ (y N.88) — клетка ног выше пола, план стартует из неё (ND_SOUL_FEET=0 — прежнее floored)', () => {
-  const SL = require('../src/sealed')
+  const SL: typeof import('../src/sealed') = require('../src/sealed')
   const bot: any = { entity: { position: new Vec3(-85.5, 51.875, -44.5), onGround: true } }
   assert.deepEqual(SL.bodyCells(bot)[0].toArray(), [-86, 52, -45], 'ноги — над песком душ')
-  const fs = require('fs')
-  const src = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'bastion', 'bastion.ts'), 'utf8')
+  const fs: typeof import('fs') = require('fs')
+  // план штрека (sealedGold) — в bastion/sealed-gold.ts.
+  const src = fs.readFileSync((require('path') as typeof import('path')).join(__dirname, '..', 'src', 'bastion', 'sealed-gold.ts'), 'utf8')
   assert.match(src, /const me = feet\(\)/, 'старт плана — feet()')
   assert.match(src, /SL\.bodyCells\(bot\)\[0\]/)
 })
 
 test('тактика: тело в своём окопе охоты — стрелок вдали (скелет в 12 бл.) охоту не рвёт; вне окопа или вплотную — рвёт (ND_FOXHOLE_HOLD=0 — прежнее)', () => {
-  const { EventEmitter } = require('node:events')
-  const { observeTactics } = require('../src/tactics/minecraft')
-  const gameClock = require('../src/game-clock')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { observeTactics }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
   const session = (foe: string, dist: number, inFox: boolean) => {
     const bot: any = new EventEmitter()
     bot.version = '1.21.11'; bot.health = 20; bot.food = 20

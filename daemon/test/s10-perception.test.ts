@@ -1,12 +1,12 @@
 'use strict'
 // S10 (07.10): честное восприятие — переключатель знания, глаза + память, «пирог» без клетки, слух, F3.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('events')
-const { Vec3 } = require('vec3')
-const knowledge = require('../src/perception/knowledge')
-const eyes = require('../src/perception/eyes')
-const senses = require('../src/perception/senses')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'events'
+import { Vec3 } from 'vec3'
+import * as knowledge from '../src/perception/knowledge'
+import * as eyes from '../src/perception/eyes'
+import * as senses from '../src/perception/senses'
 
 function withEnv (env: Record<string, string | undefined>, fn: () => void) {
   const old: Record<string, string | undefined> = {}
@@ -40,8 +40,8 @@ test('ND_KNOWLEDGE: по умолчанию rsg; старые флаги выв�
 })
 
 test('rsg: загрузчики не читают ни скан копии, ни seedtool, ни его кэш (проверка в загрузчике)', () => {
-  const fs = require('fs')
-  const cp = require('child_process')
+  const fs: typeof import('fs') = require('fs')
+  const cp: typeof import('child_process') = require('child_process')
   const reads = []
   const rf = fs.readFileSync; const ex = fs.existsSync; const ef = cp.execFileSync
   fs.readFileSync = function (f, ...a) { reads.push(String(f)); return rf.call(this, f, ...a) }
@@ -49,8 +49,8 @@ test('rsg: загрузчики не читают ни скан копии, ни
   cp.execFileSync = function (...a) { reads.push('exec ' + a[0]); return ef.apply(this, a) }
   const SEED = '3816274920780408390' // есть строка good-v2 и скан farm/route-scan (как в s8c-overworld)
   try {
-    const route = require('../src/route')
-    const pn = require('../src/portal-natural')
+    const route: typeof import('../src/route') = require('../src/route')
+    const pn: typeof import('../src/portal-natural') = require('../src/portal-natural')
     withEnv({ ...CLEAN, ND_KNOWLEDGE: 'rsg', ND_MAP: 'blocks' }, () => {
       assert.equal(route.routeInfo(SEED), null)
       assert.equal(route.seedInfo(SEED), null)
@@ -72,9 +72,9 @@ test('rsg: загрузчики не читают ни скан копии, ни
 // ---------------------------------------------------------------- мир из настоящих чанков 1.21.11
 
 function world () {
-  const registry = require('prismarine-registry')('1.21.11')
-  const Chunk = require('prismarine-chunk')(registry)
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+  const Chunk: any = (require('prismarine-chunk') as typeof import('prismarine-chunk').default)(registry)
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
   const columns = new Map()
   const w: any = new EventEmitter()
   w.getColumn = (cx, cz) => {
@@ -99,7 +99,7 @@ function world () {
     blockAt: p => { const s = get(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)); if (s === null) return null; const b = Block.fromStateId(s, 0); b.position = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)); return b }
   })
   // Луч мира — как prismarine-world raycast (sight.seesBlock, visibleOf).
-  const { RaycastIterator } = require('prismarine-world').iterators
+  const { RaycastIterator } = (require('prismarine-world') as typeof import('prismarine-world')).iterators
   w.raycast = (from, dir, range, matcher = null) => {
     const iter = new RaycastIterator(from, dir, range)
     let pos = iter.next()
@@ -170,14 +170,14 @@ test('память: увиденное помнится за спиной, block
 
 test('«пирог»: счёт по типу в прорисовке без клетки; бочку не считает; сектор и пеленг; место — ходом по пеленгам', () => {
   const { bot } = scene()
-  const p = senses.pie(bot)
+  const p: any = senses.pie(bot)
   assert.equal(p.byType.chest, 3, 'видимый, закопанный и за стеной — все в «пироге»')
   assert.equal(p.byType.barrel, undefined, 'у бочки нет отрисовщика')
   const flat = JSON.stringify(p)
   assert.ok(!/"x"|"y"|"z"/.test(flat), 'в ответе нет клеток: ' + flat)
   // Сектор взгляда: на север (yaw 180) — только сундук за стеной (0,64,-6).
-  assert.equal(senses.pie(bot, { yaw: 180, fov: 30 }).byType.chest, 1)
-  assert.equal(senses.pie(bot, { yaw: 0, fov: 30 }).byType.chest, 1, 'юг — закопанный 0,58,6')
+  assert.equal((senses.pie(bot, { yaw: 180, fov: 30 }).byType as Record<string, number>).chest, 1)
+  assert.equal((senses.pie(bot, { yaw: 0, fov: 30 }).byType as Record<string, number>).chest, 1, 'юг — закопанный 0,58,6')
   // Пеленг дугой поворота: один сундук — середина дуги на его направлении (±шаг).
   const arcs = senses.pieArcs(bot, 'chest', { fov: 30, step: 2 })
   const north = arcs.find(a => Math.abs(Math.abs(a.center) - 180) < 4)
@@ -276,7 +276,7 @@ test('explore: увиденное раньше (за стеной теперь) 
   bot.entity.position = new Vec3(0.5, 64, 0.5)
   assert.equal(eyes.seesNow(bot, { x: -40, y: 64, z: 0 }), false, 'отсюда не видно')
   bot.pathfinder = { goto: async g => { bot.entity.position = new Vec3(g.x + (g.x < bot.entity.position.x ? 3 : -3) + 0.5, 64, g.z + 0.5) }, setGoal (g) { if (g) this.goto(g).then(() => bot.emit('goal_reached', g)) }, movements: null }
-  const actions = require('../src/actions')
+  const actions: typeof import('../src/actions') = require('../src/actions')
   const r = await actions.explore({ bot, mcData: registry, cfg: { fairPlay: true } }, { aborted: false, onAbort: [] }, { block: 'oak_log', radius: 32, timeoutSeconds: 5 })
   assert.equal(r.found, 'oak_log', JSON.stringify(r))
   assert.match(r.legs[0], /^память oak_log -40,64,0/)
@@ -290,7 +290,7 @@ test('observe: увиденное раньше (сейчас за стеной) 
   e.sweep({ rays: 5000, maxMs: 1000 })
   bot.entity.position = new Vec3(0.5, 64, -5.5) // за стеной: сундук 6,64,0 не виден
   bot.blockAtCursor = () => null
-  const { observe } = require('../src/perception')
+  const { observe }: typeof import('../src/perception') = require('../src/perception')
   const o = observe(bot, registry, { radius: 24 })
   // Бочка 3,64,5 видна была от начала, отсюда — за стеной: помнится. Сундук отсюда виден (0,64,-6) — группа зрения, без пометки.
   const barrel = o.blocks.find(b => b.name === 'barrel')
@@ -301,7 +301,7 @@ test('observe: увиденное раньше (сейчас за стеной) 
 })
 
 test('fairPlay выключается только на scan: в rsg ND_FAIR_PLAY=false не даёт рентгена', () => {
-  const load = () => { delete require.cache[require.resolve('../src/config')]; const c = require('../src/config'); return (c.cfg || c.config || c).fairPlay }
+  const load = () => { delete require.cache[require.resolve('../src/config')]; const c: any = require('../src/config'); return (c.cfg || c.config || c).fairPlay }
   withEnv({ ...CLEAN, ND_FAIR_PLAY: 'false', ND_KNOWLEDGE: 'rsg' }, () => assert.equal(load(), true))
   withEnv({ ...CLEAN, ND_FAIR_PLAY: 'false', ND_KNOWLEDGE: 'scan' }, () => assert.equal(load(), false))
   withEnv({ ...CLEAN, ND_FAIR_PLAY: undefined }, () => assert.equal(load(), true))
@@ -341,7 +341,7 @@ test('слух лавы: только лава с воздухом сверху 
 })
 
 test('stateSummary: живой с 0.24 хп — health 1, а не 0 (арена читала 0 как смерть, S7d)', () => {
-  const { stateSummary } = require('../src/perception')
+  const { stateSummary }: typeof import('../src/perception') = require('../src/perception')
   const bot: any = { entity: { position: new Vec3(0.5, 64, 0.5), effects: {} }, inventory: { slots: new Array(46).fill(null), items: () => [] }, players: {}, game: { dimension: 'overworld' }, blockAt: () => null, food: 20 }
   bot.health = 0.24
   assert.equal(stateSummary(bot).health, 1)

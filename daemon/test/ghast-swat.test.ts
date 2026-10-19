@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const { swatInstall } = require('../src/ne-guard')
+import { Vec3 } from 'vec3'
+import { swatInstall } from '../src/ne-guard'
 
 // Шар гаста: сервер шлёт его позицию раз в 10 тиков (EntityType.FIREBALL updateInterval 10), тело ведёт его само
 // (AbstractHurtingProjectile: v = (v + норм(v)·0.1)·0.95, pos += v) и бьёт в первый тик досягаемости — взгляд тиком раньше,

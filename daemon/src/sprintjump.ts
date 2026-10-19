@@ -10,7 +10,7 @@
 // Края и лава (s6b 06.10): в воздухе руль слабый (0.02 против 0.1 на земле), боковой снос прыжка не поправить —
 // поэтому по бокам каждой клетки прямого отрезка нужен пол или стена (не лава, не огонь, не яма), а тело,
 // которым владеет паркур (_ndParkourForecast) или рефлекс падения (waterPlan), прыжками не трогаем.
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const AHEAD = 5
 // bot._ndSprintJumpWanted (goto {sprintJump}) — на один goto поверх env (A/B в одном сеансе).
@@ -107,4 +107,4 @@ function install (bot) {
   })
 }
 
-module.exports = { install, on, shouldJump, AHEAD }
+export { install, on, shouldJump, AHEAD }

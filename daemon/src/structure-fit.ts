@@ -1,4 +1,5 @@
 'use strict'
+import { REPO_ROOT } from './paths'
 // Шаблоны построек — знание игры, как у спидраннера (пользователь 14.10: «спидраннеры просто знают устройство всех структур
 // и откапывают все сундуки»). Это не карта сида и не рентген: бот видит часть постройки (блоки по лучу из глаз), подбирает
 // шаблон jar 1.21.11 (tools/structure-templates.js → data/structure-templates.json), поворот, отражение и сдвиг — и знает,
@@ -13,9 +14,10 @@
 // Перенос шаблона в мир — StructureTemplate.transform: сперва зеркало (FRONT_BACK: x → -x), потом поворот вокруг вертикали;
 // точка поворота (pivot) — постоянный сдвиг, он входит в t. Корабль, иглу, подводные руины, дома деревни (jigsaw) — без
 // зеркала; руины портала и слепки храмов (StructurePiece.setOrientation: SOUTH и WEST — с отражением) — все 8.
-const fs = require('fs')
-const path = require('path')
-const { Vec3 } = require('vec3')
+import * as fs from 'fs'
+import path = require('path')
+import 'vec3'
+import { Vec3 } from 'vec3'
 
 const CH = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%&()*+,-/:;<=>?@[]^_`{|}~'
 
@@ -73,7 +75,7 @@ let LIB = null
 const PREP = new Map()
 function lib () {
   if (!LIB) {
-    const f = path.join(__dirname, '..', 'data', 'structure-templates.json')
+    const f = path.join(REPO_ROOT, 'daemon/data/structure-templates.json')
     LIB = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).templates : {}
   }
   return LIB
@@ -144,7 +146,7 @@ const SEE_R = 48
 const SEE_R_WET = 20
 function eyeOf (bot) { const p = bot.entity.position; return { x: p.x, y: p.y + (bot.entity.eyeHeight || 1.62), z: p.z } }
 function visionKit (bot) {
-  const eyes = require('./perception/eyes')
+  const eyes: typeof import('./perception/eyes') = require('./perception/eyes')
   const read = eyes.reader(bot)
   const shapes = (bot._ndEyes && bot._ndEyes.shapes) || eyes.shapeCache(bot.registry)
   const o = eyeOf(bot)
@@ -413,7 +415,7 @@ function fitHouses (bot, center, { radius = 48, biome = null, maxHouses = 8, deb
 // tags/worldgen/biome/has_structure/village_*.json). Неизвестный биом — все пять.
 function villageBiome (bot, center) {
   let b = null
-  try { b = require('./perception').biomeName(bot, bot.entity.position.floored()) } catch {}
+  try { b = (require('./perception') as typeof import('./perception')).biomeName(bot, bot.entity.position.floored()) } catch {}
   if (!b) return null
   return /desert/.test(b) ? 'desert' : /savanna/.test(b) ? 'savanna' : /snowy/.test(b) ? 'snowy' : /taiga/.test(b) ? 'taiga' : /plains|meadow|sunflower/.test(b) ? 'plains' : null
 }
@@ -438,4 +440,4 @@ function iglooBasement (h) {
   }
 }
 
-module.exports = { lib, names, prep, cls, toWorld, toLocal, rotXZ, observe, verify, fit, chestsOf, fitHouses, villageBiome, iglooBasement, COMMON }
+export { lib, names, prep, cls, toWorld, toLocal, rotXZ, observe, verify, fit, chestsOf, fitHouses, villageBiome, iglooBasement, COMMON }

@@ -1,10 +1,12 @@
+import { campaignRequire, campaignScript, campaignTs } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const { withClockFixture } = require('./clock-fixture')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+import { withClockFixture } from './clock-fixture'
 
 function fixture(receipt: any = {}, preflight = false) {
   const calls: string[] = [], recovery: string[] = []
@@ -21,10 +23,10 @@ function fixture(receipt: any = {}, preflight = false) {
     }
     close() {}
   }
-  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : require(name),
+  const context: any = { require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync() {} } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} }, process: { argv: ['node', 'campaign.js'], env: {} },
     console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, testState: state, receipt, preflight, recovery }
-  vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code + `
+  vm.runInNewContext(campaignScript() + `
     state = testState; sit = { foes: 1, surface: false }; stage = 'MineIron';
     if (preflight) state.busy = 'refuge';
     answerThreat = async () => { recovery.push('answerThreat') };
@@ -32,7 +34,7 @@ function fixture(receipt: any = {}, preflight = false) {
     tunnelAway = async () => { recovery.push('tunnelAway'); return false };
     awaitRefuge = async () => { recovery.push('awaitRefuge'); acceptResult(receipt); return receipt };
     STAGES.push({ name: 'testMining', run: async () => { await act('dig_down', { mode: 'stairs', depth: 24 }); await act('mine', { block: 'iron_ore' }) } });
-    module.exports = { executeStrategy, act };`, withClockFixture(context))
+    module.exports = { executeStrategy, act };`, cjsContext(withClockFixture(context)))
   return { calls, recovery, context, run: () => context.module.exports.executeStrategy({ skill: 'testMining' }, new AbortController().signal) }
 }
 
@@ -66,26 +68,26 @@ test('ordinary mining still completes and legacy campaign still answers an unhan
 })
 
 for (const only of [null, ['food']]) test(`campaign stage entry leaves recovery to the graph unless stages were explicitly selected: ${only}`, async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const entry = source.indexOf('const attemptedKey = failureKey(s.name)')
   assert.ok(entry >= 0)
   const start = source.indexOf('try {', entry) + 'try {'.length
   const end = source.indexOf('} catch (e)', start)
   assert.ok(end > start)
   const calls: string[] = []
-  await vm.runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+  await vm.runInNewContext(`(async () => { ${source.slice(start, end)} })()`, cjsContext({
     only, recoverGuard: async () => { calls.push('recoverGuard') }, s: { run: async () => { calls.push('run') } }
-  })
+  }))
   assert.deepEqual(calls, only ? ['recoverGuard', 'run'] : ['run'])
 })
 
 test('legacy urgent food does not replace a graph step that prepares already carried ingredients', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const start = source.indexOf('const urgent = weakAndHungry()')
   const end = source.indexOf('if (!s &&', start)
   assert.ok(start >= 0 && end > start)
   const food = { name: 'food', ready: () => true, defer: () => false }
   const context = { only: null, weakAndHungry: () => true, urgentOk: () => true, need: [food], cooling: () => false,
     selection: { stage: { name: 'PrepareBread' } }, intelligence: { wrap: () => ({ name: 'Recovery_food' }) } }
-  assert.equal(vm.runInNewContext(`(() => { ${source.slice(start, end)}; return s.name })()`, context), 'PrepareBread')
+  assert.equal(vm.runInNewContext(`(() => { ${source.slice(start, end)}; return s.name })()`, cjsContext(context)), 'PrepareBread')
 })

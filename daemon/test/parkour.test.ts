@@ -2,12 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { EventEmitter } from 'node:events'
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+import { repoJson } from '../src/paths'
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 test('author checkpoint receipt parses the native 1.21.11 respawn position without treating chat absence as activation failure', () => {
-  const { authorRespawn } = require('../try-parkour-map')
+  const { authorRespawn }: typeof import('../scenes/move/try-parkour-map') = require('../scenes/move/try-parkour-map')
   assert.deepEqual(authorRespawn('NeuroFarm29 has the following entity data: {pos: [I; -21, 90, -35], forced: 1b, dimension: "minecraft:overworld"}'), { x: -21, y: 90, z: -35 })
   assert.deepEqual(authorRespawn('{pos:[I;-22,99,-38]}'), { x: -22, y: 99, z: -38 })
   assert.equal(authorRespawn('No entity was found'), undefined)
@@ -27,7 +28,7 @@ function worldOf(cells: Array<[number, number, number, string, Record<string, un
     air.position = q
     return air
   } }
-  const bot: Record<string, any> = Object.assign(new EventEmitter(), {
+  const bot: any = Object.assign(new EventEmitter(), {
     version: '1.21.11', registry, game: { minY: -64, height: 384 }, inventory: { slots: [], items: () => [] }, health: 20, food: 20,
     entity: { position: new Vec3(.5, 1, .5), velocity: new Vec3(0, 0, 0), onGround: true,
       isInWater: false, isInLava: false, isInWeb: false, yaw: -Math.PI / 2, pitch: 0, effects: {}, attributes: {} },
@@ -38,9 +39,9 @@ function worldOf(cells: Array<[number, number, number, string, Record<string, un
 }
 
 test('hay landing damage uses the collided support and native fallOn multiplier without accepting a harmful dry drop', async () => {
-  const { landingDamage } = require('../src/navigation/landing')
-  const { supportAt } = require('../src/navigation/geometry')
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { landingDamage }: typeof import('../src/navigation/landing') = require('../src/navigation/landing')
+  const { supportAt }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 7, 0, 'stone'], [2, 0, 0, 'hay_block'], [3, 0, 0, 'stone'], [4, 1, 0, 'stone']])
   const hay = bot.blockAt(new Vec3(2, 0, 0)); const stone = bot.blockAt(new Vec3(3, 0, 0))
   assert.equal(landingDamage(hay, 9), 1, 'HayBlock.fallOn passes 0.2f before LivingEntity rounds down; Author41 shaft is not a zero-damage drop')
@@ -73,8 +74,8 @@ test('hay landing damage uses the collided support and native fallOn multiplier 
 })
 
 test('an opt-in controlled hay drop has a real native contact while default, stone, low health and threats refuse it', async () => {
-  const { planJumpAsync } = require('../src/navigation/parkour')
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const cells: Array<[number, number, number, string]> = [[0, 9, 0, 'sand'], [1, 9, 0, 'sand'], [2, 0, 0, 'hay_block']]
   const { bot } = worldOf(cells)
   bot.entity.position = new Vec3(1.63552862687186, 10, .500763381991554); bot.entity.velocity.y = -.0784000015258789
@@ -105,8 +106,8 @@ test('an opt-in controlled hay drop has a real native contact while default, sto
 })
 
 test('controlled deep routing uses an observed open shaft instead of hay behind a solid upper floor', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
-  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   // Translated Author42: the lower hay body is clear, but its upper concrete
   // floor cannot be crossed by falling toward the same horizontal position.
   const cells: Array<[number, number, number, string]> = []
@@ -124,7 +125,7 @@ test('controlled deep routing uses an observed open shaft instead of hay behind 
   for (const option of route) {
     const plan = await planJumpAsync(bot, { aborted: false }, option.target, { allowWalk: true, maxFallDamage: 1, planningMs: 180 })
     assert.ok(plan, 'each selected approach/drop/walk still needs the existing native forecast')
-    plan.states.at(-1).apply(bot)
+    ;(plan.states.at(-1) as any).apply(bot)
     if (plan.fall) bot.health -= plan.fall.damage
   }
   assert.equal(bot.health, 19)
@@ -140,8 +141,8 @@ test('controlled deep routing uses an observed open shaft instead of hay behind 
 })
 
 test('controlled drop execution accepts only its grounded native fall receipt and bounded health loss, including reversed receipt order', async () => {
-  const { planJumpAsync, executePlan, IDLE } = require('../src/navigation/parkour')
-  const fallType = require('../src/gamedata').DAMAGE_TYPES.indexOf('fall')
+  const { planJumpAsync, executePlan, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const fallType = (require('../src/gamedata') as typeof import('../src/gamedata')).DAMAGE_TYPES.indexOf('fall')
   for (const mode of ['valid', 'health_first', 'late_receipt', 'foreign', 'unknown', 'early', 'excess', 'missing', 'missing_complete_when', 'changed_floor', 'cancel']) {
     const { bot, world } = worldOf([[0, 9, 0, 'sand'], [1, 9, 0, 'sand'], [2, 0, 0, 'hay_block']])
     bot.entity.id = 1; bot.entity.position = new Vec3(1.63552862687186, 10, .500763381991554); bot.entity.velocity.y = -.0784000015258789
@@ -192,8 +193,8 @@ test('a loaded bent runway preserves a real intermediate landing before the next
   bot.physics.playerHalfWidth = Math.fround(.6) / 2
   bot.entity.position = new Vec3(3.54227155072947, 1, 1.536848335588923); bot.entity.velocity.y = -.0784000015258789
   const before = bot.entity.position.clone(); const target = new Vec3(6.5, 2, 5.5)
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
-  const { bodyClear } = require('../src/navigation/geometry')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { bodyClear }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, planningMs: 180 })
   assert.ok(plan, 'stopping at every center must not erase an observed, physically reachable two-jump continuation')
   assert.deepEqual(bot.entity.position, before, 'forecasting may not move the bot or inject velocity')
@@ -226,8 +227,8 @@ test('a native grounded flag after leaving a lava-side ledge cannot supply a del
   const { bot } = worldOf(cells)
   bot.physics.playerHalfWidth = Math.fround(.6) / 2
   bot.entity.position = new Vec3(.47467265494781, 1, .562079224545182); bot.entity.velocity.y = -.0784000015258789
-  const { planJumpAsync } = require('../src/navigation/parkour')
-  const { bodyClear, supportAt } = require('../src/navigation/geometry')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { bodyClear, supportAt }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   const plan = await planJumpAsync(bot, { aborted: false }, new Vec3(2.5, 2, 4.5), { allowWalk: true, maxTicks: 38, beam: 24, planningMs: 180 })
   assert.ok(!plan || plan.states.every((s: any) => !s.onGround || s.vel.y >= 0 || supportAt(bot, s.pos, .04) || bodyClear(bot, s.pos.offset(0, s.vel.y, 0))),
     'Author36 frame5 was unsupported over lava; matching client endpoints still received native lava damage')
@@ -243,20 +244,20 @@ test('one native trajectory preserves a slime rebound and finishes on the next s
   const cells: Array<[number, number, number, string]> = [[0, 5, 0, 'stone'], [1, 5, 0, 'stone'], [2, 5, 0, 'stone'], [4, 0, 0, 'slime_block'], [5, 0, 0, 'slime_block'], [7, 3, 0, 'stone'], [8, 3, 0, 'stone']]
   const { bot } = worldOf(cells)
   bot.entity.position = new Vec3(2.5, 6, .5); bot.entity.velocity.y = -.0784000015258789
-  const { planJump, simulatePlan } = require('../src/navigation/parkour')
+  const { planJump, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const plan = planJump(bot, new Vec3(7.5, 4, .5), { bounce: new Vec3(4.5, 1, .5), maxTicks: 90 })
   assert.ok(plan, 'the shared native integrator must discover drop, bounce, steering and final rest')
   assert.ok(plan.states.some((state: any) => state.pos.y === 1 && state.vel.y > .3 && state.onGround), 'real slime collision must reverse falling velocity')
   const landed = simulatePlan(bot, plan.steps)
   assert.equal(landed.onGround, true); assert.equal(landed.pos.y, 4)
   assert.ok(landed.pos.distanceTo(new Vec3(7.5, 4, .5)) < .22)
-  assert.equal(require('../src/navigation/landing').landingDamage(bot.blockAt(new Vec3(4, 0, 0)), 20), 0)
+  assert.equal((require('../src/navigation/landing') as typeof import('../src/navigation/landing')).landingDamage(bot.blockAt(new Vec3(4, 0, 0)), 20), 0)
 })
 
 test('an observed diagonal spring approach tries its supported run-up before exhausting unrelated native profiles', () => {
   const { bot } = worldOf([[0, 0, 0, 'stone'], [-5, -5, -3, 'slime_block'], [-4, -5, -3, 'slime_block'], [-9, -2, -6, 'stone'], [-8, -2, -6, 'stone']])
   bot.entity.position = new Vec3(.3942147, 1, .6100089); bot.entity.velocity.y = -.0784000015258789
-  const { planJump, simulatePlan } = require('../src/navigation/parkour')
+  const { planJump, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const diagnostics = { frames: 0, profiles: 0 }
   const target = new Vec3(-8.5, -1, -5.5)
   const plan = planJump(bot, target, { bounce: new Vec3(-4.5, -4, -2.5), maxTicks: 90, diagnostics })
@@ -268,7 +269,7 @@ test('an observed diagonal spring approach tries its supported run-up before exh
 })
 
 test('a higher semantic approach earns the native spring velocity needed for the following lower checkpoint', () => {
-  const { planJump, simulatePlan } = require('../src/navigation/parkour')
+  const { planJump, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const target = new Vec3(7.5, 6, .5)
   for (const height of [5, 9]) {
     const { bot } = worldOf([[0, height - 1, 0, 'stone'], [4, -1, 0, 'slime_block'], [5, -1, 0, 'slime_block'], [7, 5, 0, 'stone'], [8, 5, 0, 'stone']])
@@ -295,7 +296,7 @@ test('a native local trajectory catches an offset ladder around a tall corner an
   for (let y = 1; y <= 2; y++) cells.push([1, y, 0, 'ladder', { facing: 'east', waterlogged: false }])
   const { bot } = worldOf(cells)
   bot.entity.position = new Vec3(.5, 1, 2.5); bot.entity.velocity.y = -.0784000015258789
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const target = new Vec3(.5, 3, .5)
   const plan = await planJumpAsync(bot, { aborted: false }, target, { climb: new Vec3(1.5, 1, .5), maxTicks: 90, planningMs: 180 })
   assert.ok(plan, 'the shared predictor must retain native ladder contact after the corner approach')
@@ -310,7 +311,7 @@ test('a real exposed stair tread beside a high wall stays reachable inside the l
   for (let y = 1; y <= 3; y++) cells.push([0, y, 1, 'stone'])
   const { bot } = worldOf(cells)
   bot.entity.position = new Vec3(.6074165, 1, .4952658); bot.entity.velocity.y = -.0784000015258789
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const target = new Vec3(-.5, 1.5, 2.2)
   const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, planningMs: 180 })
   assert.ok(plan, 'an optional detour cushion cannot hide an actually clear partial support')
@@ -324,9 +325,9 @@ test('exhausted native spring profiles bound only the impossible height family f
   const { bot } = worldOf(cells)
   bot.entity.position = new Vec3(2.5, 4, .5); bot.entity.velocity.y = -.0784000015258789
   const target = new Vec3(7.5, 5, .5); const spring = new Vec3(4.5, 1, .5)
-  const { planJump } = require('../src/navigation/parkour')
-  const { supportRoute, transitionKey, landingKey } = require('../src/navigation/support-route')
-  const diagnostics: Record<string, any> = { frames: 0, profiles: 0 }
+  const { planJump }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { supportRoute, transitionKey, landingKey }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
+  const diagnostics: import('../src/navigation/parkour').PlanningDiagnostics = { frames: 0, profiles: 0 }
   assert.equal(planJump(bot, target, { bounce: spring, maxTicks: 90, diagnostics }), null)
   assert.equal(diagnostics.why, 'rebound_ceiling', 'the unobstructed native rebound apex refuses the family, never a CPU cutoff')
   assert.equal(diagnostics.profiles, 0, 'an impossible height family enumerates no launch profiles')
@@ -349,7 +350,7 @@ test('landing visibility uses the exposed collision top when neighbouring floor 
   bot.canSeeBlock = () => false
   let endY = 0
   bot.world = { raycast(from: Vec3, direction: Vec3, distance: number) { endY = from.y + direction.y * distance; return endY < 1 ? {} : null } }
-  const { visibleLanding, localOptions } = require('../src/navigation/parkour')
+  const { visibleLanding, localOptions }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   assert.equal(visibleLanding(bot, new Vec3(2.5, 1, .5)), true)
   assert.ok(endY > 1 && endY < 1.03)
   assert.ok(localOptions(bot, { toward: new Vec3(2.5, 1, .5) }).some((option: any) => option.target.x === 2.5))
@@ -364,10 +365,10 @@ test('support routing approaches around a ridge taller than the native jump inst
   for (let x = -7; x <= 7; x++) for (let z = 4; z <= 7; z++) cells.push([x, 1, z, 'stone'])
   const { bot } = worldOf(cells)
   bot.entity.velocity.y = -.0784000015258789
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const path = await supportRoute(bot, bot.entity.position, new Vec3(.5, 2, 6.5), new Set(), 8)
   assert.ok(path.length)
-  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   for (const option of path) {
     const plan = await planJumpAsync(bot, { aborted: false }, option.target, { allowWalk: true, planningMs: 180 })
     assert.ok(plan, `the chosen approach must have a real native trajectory to ${option.target}`)
@@ -378,19 +379,19 @@ test('support routing approaches around a ridge taller than the native jump inst
 
 test('a nearby lower goal can require intermediate supports above its height', async () => {
   const { bot } = worldOf([[0, 0, 0, 'stone'], [1, 1, 0, 'stone'], [2, 2, 0, 'stone'], [3, 3, 0, 'stone'], [4, 4, 0, 'stone'], [5, 3, 0, 'stone'], [6, 2, 0, 'stone'], [7, 1, 0, 'stone']])
-  const path = await require('../src/navigation/support-route').supportRoute(bot, bot.entity.position, new Vec3(7.5, 2, .5), new Set(), 8)
+  const path = await (require('../src/navigation/support-route') as typeof import('../src/navigation/support-route')).supportRoute(bot, bot.entity.position, new Vec3(7.5, 2, .5), new Set(), 8)
   assert.ok(path.some((option: any) => option.target.y >= 4), 'the bounded graph must retain the higher intermediate approach')
 })
 
 test('support discovery derives stable exposed edges from collision shapes above the floor block', () => {
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [0, 1, 0, 'oak_fence', { north: false, south: false, east: true, west: true, waterlogged: false }]])
-  const { standPositions, bodyClear, supportAt } = require('../src/navigation/geometry')
+  const { standPositions, bodyClear, supportAt }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   const choices = standPositions(bot, new Vec3(0, 1, 0), { rise: 0, drop: 0 })
   assert.ok(choices.length, 'the observed floor has exposed support beside the elevated rail even though its center clips it')
   for (const p of choices) {
     assert.equal(bodyClear(bot, p), true); assert.ok(supportAt(bot, p, .01))
     bot.entity.position = p; bot.entity.velocity = new Vec3(0, -.0784000015258789, 0)
-    const state = new native.PlayerState(bot, { ...require('../src/navigation/parkour').IDLE, sneak: true })
+    const state = new native.PlayerState(bot, { ...(require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).IDLE, sneak: true })
     for (let tick = 0; tick < 6; tick++) bot.physics.simulatePlayer(state, world)
     assert.equal(state.onGround, true); assert.equal(state.pos.y, 1); assert.ok(state.pos.distanceTo(p) < 1e-6)
   }
@@ -398,7 +399,7 @@ test('support discovery derives stable exposed edges from collision shapes above
 
 test('routing can recognise an actual stable partial top within native step height while refusing unsupported or airborne poses', () => {
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [0, 1, 0, 'daylight_detector']])
-  const { settledLanding, IDLE } = require('../src/navigation/parkour')
+  const { settledLanding, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   bot.entity.position = new Vec3(-.05, 1.375, .64); bot.entity.velocity = new Vec3(0, -.0784000015258789, 0)
   const state = new native.PlayerState(bot, { ...IDLE, sneak: true })
   for (let tick = 0; tick < 6; tick++) {
@@ -412,13 +413,13 @@ test('routing can recognise an actual stable partial top within native step heig
 
 test('edge support follows actual 1.21.11 shapes, including narrow centers and fence height', () => {
   const { bot } = worldOf([[0, 0, 0, 'oak_fence', { north: false, south: false, east: false, west: false, waterlogged: false }]])
-  const support = require('../src/edges').support
+  const support = (require('../src/edges') as typeof import('../src/edges')).support
   assert.equal(support(bot, new Vec3(.5, 1.5, .5)).drop, 0)
   assert.ok(support(bot, new Vec3(.05, 1.5, .05)).drop > 3, 'the corners of the cell are air, not fence support')
 })
 
 test('geometry selects shape tops and tests the entire player body against rotated states', () => {
-  const { supportAt, bodyClear, standPositions } = require('../src/navigation/geometry')
+  const { supportAt, bodyClear, standPositions }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   for (const [name, properties, height] of [
     ['skeleton_skull', { rotation: 0 }, .5],
     ['oak_slab', { type: 'bottom', waterlogged: false }, .5],
@@ -441,7 +442,7 @@ test('geometry selects shape tops and tests the entire player body against rotat
 })
 
 test('native parkour crosses a gap, lands on a narrow support and keeps a safe resting body', () => {
-  const { planJump, simulatePlan } = require('../src/navigation/parkour')
+  const { planJump, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 0, 0, 'oak_fence', { north: false, south: false, east: false, west: false, waterlogged: false }]])
   const target = new Vec3(2.5, 1.5, .5)
   const plan = planJump(bot, target)
@@ -453,12 +454,12 @@ test('native parkour crosses a gap, lands on a narrow support and keeps a safe r
 })
 
 test('air steering goes around a full wall and returns to a fence behind it', () => {
-  const { planJump, simulatePlan } = require('../src/navigation/parkour')
+  const { planJump, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [0, 0, -1, 'stone'], [1, 1, 0, 'stone'], [1, 2, 0, 'stone'],
     [2, 0, 0, 'oak_fence', { north: false, south: false, east: false, west: false, waterlogged: false }]])
   // Grounded clients retain native downward gravity, including the physical
   // fixture's state. A zero-velocity construction hid run-up search failures.
-  const idle = new native.PlayerState(bot, require('../src/navigation/parkour').IDLE)
+  const idle = new native.PlayerState(bot, (require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).IDLE)
   bot.physics.simulatePlayer(idle, { getBlock: bot.blockAt })
   bot.entity.velocity = idle.vel
   const target = new Vec3(2.5, 1.5, .5)
@@ -471,7 +472,7 @@ test('air steering goes around a full wall and returns to a fence behind it', ()
 })
 
 test('normal parkour refuses web trajectories and unsupported or head-blocked targets', () => {
-  const { planJump } = require('../src/navigation/parkour')
+  const { planJump }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const blocked = worldOf([[0, 0, 0, 'stone'], [2, 0, 0, 'stone'], [2, 2, 0, 'stone']])
   assert.equal(planJump(blocked.bot, new Vec3(2.5, 1, .5)), null)
   const web = worldOf([[0, 0, 0, 'stone'], [1, 1, 0, 'cobweb'], [2, 0, 0, 'stone']])
@@ -480,8 +481,8 @@ test('normal parkour refuses web trajectories and unsupported or head-blocked ta
 })
 
 test('a genuine upward tip may support standing but refuses a damaging fall onto it', () => {
-  const { planJump } = require('../src/navigation/parkour')
-  const { bodyClear, supportAt } = require('../src/navigation/geometry')
+  const { planJump }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { bodyClear, supportAt }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, -1, 0, 'stone'],
     [2, 0, 0, 'pointed_dripstone', { vertical_direction: 'up', thickness: 'tip', waterlogged: false }]])
   const target = new Vec3(2.375, .6875, .375)
@@ -491,7 +492,7 @@ test('a genuine upward tip may support standing but refuses a damaging fall onto
 })
 
 test('shared scoped physics climbs ordinary, Nether and cave vines from the vanilla 1.21.11 tag', () => {
-  const tag = require('../data/climbable-1.21.11.json').climbable.values as string[]
+  const tag = repoJson('daemon/data/climbable-1.21.11.json').climbable.values as string[]
   for (const entry of tag) {
     const name = entry.replace('minecraft:', '')
     if (name === 'scaffolding') continue // Its one-way collision is a separate native-physics limitation.
@@ -507,7 +508,7 @@ test('shared scoped physics climbs ordinary, Nether and cave vines from the vani
 })
 
 test('a falling body can steer into an observed web and actually slow in native physics', () => {
-  const { planWebCatch, simulatePlan } = require('../src/navigation/parkour')
+  const { planWebCatch, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[1, 3, 0, 'cobweb'], [1, 0, 0, 'stone']])
   bot.entity.position = new Vec3(.9, 7, .5)
   bot.entity.velocity = new Vec3(.04, -.3, 0)
@@ -521,7 +522,7 @@ test('a falling body can steer into an observed web and actually slow in native 
 })
 
 test('shared route motion walks continuous floor and discovers visible shape landings', () => {
-  const { planJump, localOptions } = require('../src/navigation/parkour')
+  const { planJump, localOptions }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [1, 0, 0, 'stone'], [2, 0, 0, 'skeleton_skull', { rotation: 0 }]])
   const plan = planJump(bot, new Vec3(1.5, 1, .5), { allowWalk: true, beam: 16 })
   assert.ok(plan)
@@ -533,14 +534,14 @@ test('shared route motion walks continuous floor and discovers visible shape lan
 })
 
 test('ascending routes try actual higher supports even when the route initially bends away from the goal', () => {
-  const { localOptions } = require('../src/navigation/parkour')
+  const { localOptions }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[-2, 0, 0, 'stone'], [-1, 0, 0, 'stone'], [0, 0, 0, 'stone'], [1, 0, 0, 'stone'], [2, 1, 0, 'stone']])
   const options = localOptions(bot, { toward: new Vec3(-10, 7, .5) })
   assert.equal(options[0].target.y, 2, 'flat floor closer to a distant checkpoint must not starve its climbing approach')
 })
 
 test('cooperative native search shares the block cache with body geometry and keeps timers running', async () => {
-  const { planJumpAsync, IDLE } = require('../src/navigation/parkour')
+  const { planJumpAsync, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [0, 0, -1, 'stone'], [1, 1, 0, 'stone'], [1, 2, 0, 'stone'],
     [2, 0, 0, 'oak_fence', { north: false, south: false, east: false, west: false, waterlogged: false }]])
   const idle = new native.PlayerState(bot, IDLE)
@@ -559,7 +560,7 @@ test('cooperative native search shares the block cache with body geometry and ke
 export { worldOf }
 
 test('loaded support graph chooses a chain around the goal and removes refused native edges', async () => {
-  const { supportRoute, landingKey } = require('../src/navigation/support-route')
+  const { supportRoute, landingKey }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone'], [4, 2, 1, 'stone'], [2, 3, 3, 'stone'], [0, 4, 4, 'stone'], [-2, 5, 4, 'stone']])
   const goal = new Vec3(-1.5, 6, 4.5)
   const path = await supportRoute(bot, bot.entity.position, goal, new Set())
@@ -573,7 +574,7 @@ test('loaded support graph chooses a chain around the goal and removes refused n
 })
 
 test('a refused optimistic gap leaves loaded short ascents available behind a sight obstruction and away from the goal', async () => {
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [1, 0, -1, 'stone'], [1, 0, 0, 'stone'], [2, 0, 0, 'stone'], [1, 0, 1, 'stone'],
     [-5, 1, 0, 'stone'], [2, 1, -3, 'stone'], [3, 1, -3, 'stone'], [3, 1, -2, 'stone'], [3, 2, -5, 'stone']])
   bot.entity.position = new Vec3(.470686, 1, .471266); bot.entity.velocity.y = -.0784000015258789
@@ -602,7 +603,7 @@ test('a refused wide gap explores an unvisited flat approach instead of returnin
   for (let z = 1; z < 5; z++) cells.push([-7, 1, z, 'stone'])
   cells.push([-7, 2, -2, 'stone'], [-7, 3, -4, 'stone'])
   const { bot, world } = worldOf(cells)
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   bot.entity.velocity.y = -.0784000015258789; bot.canSeeBlock = () => false
   let control = { ...IDLE }
   bot.setControlState = (key: string, value: boolean) => { control[key] = value }
@@ -620,7 +621,7 @@ test('a refused wide gap explores an unvisited flat approach instead of returnin
 
 test('a macro route replans from six real supported stopping frames after a bounded landing correction without claiming its exact target', async () => {
   const { bot, world } = worldOf(Array.from({ length: 9 }, (_, x) => [x, 0, 0, 'stone'] as [number, number, number, string]))
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   bot.entity.velocity.y = -.0784000015258789
   let control = { ...IDLE }; let corrected = false
   bot.setControlState = (key: string, value: boolean) => { control[key] = value }
@@ -643,7 +644,7 @@ test('a macro route replans from six real supported stopping frames after a boun
 })
 
 test('loaded support graph connects a real climbable column to its upper platform', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, 0, 0, 'stone']]
   for (let y = 1; y < 6; y++) cells.push([1, y, 0, 'stone'], [0, y, 0, 'ladder', { facing: 'west', waterlogged: false }])
   const { bot } = worldOf(cells)
@@ -654,7 +655,7 @@ test('loaded support graph connects a real climbable column to its upper platfor
 })
 
 test('a translated observed closed door and wooden ladder room cannot create a climb graph connection from outside', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   // Author39: translated by (+21,-102,-41). The exact door state is native;
   // the remaining room shell was read from the official unchanged map copy.
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = []
@@ -672,8 +673,8 @@ test('a translated observed closed door and wooden ladder room cannot create a c
 })
 
 test('a complete observed long ladder or vine connects its actual exit and retains a native stable landing', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   for (const name of ['ladder', 'vine']) {
     const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, 0, 0, 'stone']]
     // The open lower shaft of the map copy, translated from Y94..106 to Y1..13.
@@ -695,7 +696,7 @@ test('a complete observed long ladder or vine connects its actual exit and retai
 })
 
 test('the shared route executes a full observed long climb through the existing controller and releases its owner', async () => {
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, 0, 0, 'stone']]
   for (let y = 0; y <= 13; y++) cells.push([-1, y, 0, 'stone'])
   for (let y = 1; y <= 13; y++) cells.push([0, y, 0, 'ladder', { facing: 'east', waterlogged: false }])
@@ -720,8 +721,8 @@ test('the shared route executes a full observed long climb through the existing 
 })
 
 test('a long climb refuses an unknown column end or a solid roof before native movement', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
-  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, 0, 0, 'stone']]
   for (let y = 0; y <= 13; y++) cells.push([-1, y, 0, 'stone'])
   for (let y = 1; y <= 13; y++) cells.push([0, y, 0, 'ladder', { facing: 'east', waterlogged: false }])
@@ -740,7 +741,7 @@ test('a long climb refuses an unknown column end or a solid roof before native m
 })
 
 test('complete column observation respects actual world bounds, cancellation and a CPU budget', () => {
-  const { climbColumn } = require('../src/navigation/support-route')
+  const { climbColumn }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const { bot } = worldOf([[0, 1, 0, 'ladder', { facing: 'east', waterlogged: false }]])
   const ladder = bot.blockAt(new Vec3(0, 1, 0)); let reads = 0
   bot.game = { minY: 0, height: 32 }
@@ -756,8 +757,8 @@ test('complete column observation respects actual world bounds, cancellation and
 })
 
 test('a real side approach around a tall corner remains a native climb connection when the direct body path is blocked', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, 0, 2, 'stone']]
   for (let y = 0; y <= 2; y++) cells.push([0, y, 0, 'stone'])
   for (let y = 0; y <= 3; y++) cells.push([0, y, 1, 'stone'])
@@ -774,8 +775,8 @@ test('a real side approach around a tall corner remains a native climb connectio
 })
 
 test('a native jump over a low enclosure can catch its ladder from a higher approach plane', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = []
   for (let x = -2; x <= 2; x++) for (let z = -3; z <= 3; z++) cells.push([x, 0, z, 'stone'])
   for (const x of [-1, 1]) for (let z = 0; z <= 2; z++) cells.push([x, 1, z, 'stone'])
@@ -793,7 +794,7 @@ test('a native jump over a low enclosure can catch its ladder from a higher appr
 })
 
 test('an optimistic climb refusal preserves its assigned contact and bounded observed body geometry without moving', async () => {
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, 0, 0, 'stone']]
   for (let y = 1; y <= 4; y++) cells.push([3, y, 0, 'stone'], [2, y, 0, 'ladder', { facing: 'west', waterlogged: false }])
   for (let y = 1; y <= 6; y++) for (let z = -3; z <= 3; z++) cells.push([1, y, z, 'stone'])
@@ -803,7 +804,7 @@ test('an optimistic climb refusal preserves its assigned contact and bounded obs
   bot.clearControlStates = () => { control = { ...IDLE } }
   bot.waitForTicks = async () => assert.fail('a refused optimistic climb may not execute any motion')
   const result = await route(bot, { aborted: false }, { toward: new Vec3(3.5, 5, .5), maxLandings: 1 })
-  const refused = result.rejected.find((receipt: any) => receipt.mode === 'climb')
+  const refused: any = result.rejected.find((receipt: any) => receipt.mode === 'climb')
   assert.ok(refused, 'the loaded tag column creates an optimistic graph edge, then full native body clearance refuses its blocked catch')
   assert.equal(refused.ticks, 0); assert.equal(refused.why, 'no_safe_native_trajectory')
   assert.deepEqual(refused.climb, { x: 2.5, y: 1, z: .5 })
@@ -818,7 +819,7 @@ test('an optimistic climb refusal preserves its assigned contact and bounded obs
 })
 
 test('native movement changes controls between every tick of a synchronous catch-up batch', async () => {
-  const { planJump, executePlan, IDLE } = require('../src/navigation/parkour')
+  const { planJump, executePlan, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone']])
   const plan = planJump(bot, new Vec3(2.5, 2, .5))
   assert.ok(plan)
@@ -848,7 +849,7 @@ test('native movement changes controls between every tick of a synchronous catch
 })
 
 test('the shared controller executes through installed Mineflayer look, queued jump, input and tick plugins', async () => {
-  const { planJump, executePlan } = require('../src/navigation/parkour')
+  const { planJump, executePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone']])
   const callbacks: Array<() => void> = []; let elapsed = 0
   const clock = { now: () => elapsed, setInterval: (fn: () => void) => { callbacks.push(fn); return fn }, clearInterval() {}, setTimeout: () => null, clearTimeout() {} }
@@ -856,11 +857,11 @@ test('the shared controller executes through installed Mineflayer look, queued j
   bot._client = Object.assign(new EventEmitter(), { state: 'play', write: (name: string) => { packets.push(name) } })
   bot.supportFeature = registry.supportFeature; bot.entity.id = 1; bot.entities = {}; bot.isAlive = true
   bot.game = { gameMode: 'survival', minY: -64 }
-  require('../src/tick-plugins').createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: true })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(clock).plugins.physics(bot, { physicsEnabled: true })
   bot.emit('login'); bot._client.emit('position', { x: .5, y: 1, z: .5, yaw: 90, pitch: 0, flags: {}, teleportId: 1 })
   for (let tick = 0; tick < 2; tick++) { elapsed += 50; callbacks[0]() } // Actual floor contact after the airborne position receipt.
   const plan = planJump(bot, new Vec3(2.5, 2, .5))
-  assert.ok(plan, JSON.stringify(new native.PlayerState(bot, { ...require('../src/navigation/parkour').IDLE })))
+  assert.ok(plan, JSON.stringify(new native.PlayerState(bot, { ...(require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).IDLE })))
   try {
     const work = executePlan(bot, { aborted: false }, plan, (state: { pos: Vec3; onGround: boolean }) => state.onGround && state.pos.distanceTo(new Vec3(2.5, 2, .5)) < .25)
     for (let tick = 0; tick < plan.steps.length; tick++) { elapsed += 50; callbacks[0]() }
@@ -873,7 +874,7 @@ test('the shared controller executes through installed Mineflayer look, queued j
 })
 
 test('a loaded connected route still executes native movement when the next floor is not visible', async () => {
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [1, 0, 0, 'stone'], [2, 0, 0, 'stone']])
   let control = { ...IDLE }
   bot.canSeeBlock = () => false
@@ -894,9 +895,9 @@ test('a loaded connected route still executes native movement when the next floo
 })
 
 test('route returns its completed landings and interrupted trajectory at its own game deadline before the outer RPC timeout', async () => {
-  const clockModule = require('../src/game-clock')
+  const clockModule: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new clockModule.GameClock({ manual: true, epoch: 0 }); clockModule.activate(clock)
-  const { navigate, IDLE } = require('../src/navigation/parkour')
+  const { navigate, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf(Array.from({ length: 5 }, (_, x) => [x, 0, 0, 'stone'] as [number, number, number, string]))
   const ctl = { aborted: false, onAbort: [] as Array<() => void> }
   let control = { ...IDLE }; let completed = 0
@@ -915,7 +916,7 @@ test('route returns its completed landings and interrupted trajectory at its own
     }
   }
   try {
-    const result = await navigate(bot, ctl, { mode: 'route', target: new Vec3(4.5, 1, .5), waypoints: [new Vec3(2.5, 1, .5)], maxLandings: 8, timeoutSeconds: 1000 })
+    const result: any = await navigate(bot, ctl, { mode: 'route', target: new Vec3(4.5, 1, .5), waypoints: [new Vec3(2.5, 1, .5)], maxLandings: 8, timeoutSeconds: 1000 })
     assert.equal(result.ok, false); assert.equal(result.why, 'route_deadline')
     assert.equal(result.landings.length, 2, 'the report keeps the completed landing and the motion interrupted at the deadline')
     assert.equal(result.landings[0].ok, true)
@@ -931,7 +932,7 @@ test('route returns its completed landings and interrupted trajectory at its own
 })
 
 test('a support graph stops reading loaded blocks when cancellation arrives at its cooperative yield', async () => {
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const { bot } = worldOf(Array.from({ length: 13 }, (_, i) => Array.from({ length: 13 }, (_, j) => [i - 6, 0, j - 6, 'stone'] as [number, number, number, string])).flat())
   let cancelled = false; let reads = 0; let readsAfterCancellation = 0
   const observed = { physics: bot.physics, blockAt(p: Vec3) { reads++; if (cancelled) readsAfterCancellation++; return bot.blockAt(p) } }
@@ -945,9 +946,9 @@ test('a support graph stops reading loaded blocks when cancellation arrives at i
 })
 
 test('a route deadline reached inside the next support scan retains the preceding physical landing without launching another edge', async () => {
-  const clockModule = require('../src/game-clock')
+  const clockModule: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new clockModule.GameClock({ manual: true, epoch: 0 }); clockModule.activate(clock)
-  const { navigate, IDLE } = require('../src/navigation/parkour')
+  const { navigate, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf(Array.from({ length: 9 }, (_, x) => [x, 0, 0, 'stone'] as [number, number, number, string]))
   const ctl = { aborted: false, onAbort: [] as Array<() => void> }
   let control = { ...IDLE }; let expiry: ReturnType<typeof setImmediate> | undefined; let readsAfterDeadline = 0
@@ -966,7 +967,7 @@ test('a route deadline reached inside the next support scan retains the precedin
     }
   }
   try {
-    const result = await navigate(bot, ctl, { mode: 'route', target: new Vec3(8.5, 1, .5), waypoints: [new Vec3(2.5, 1, .5)], maxLandings: 8, timeoutSeconds: 1000 })
+    const result: any = await navigate(bot, ctl, { mode: 'route', target: new Vec3(8.5, 1, .5), waypoints: [new Vec3(2.5, 1, .5)], maxLandings: 8, timeoutSeconds: 1000 })
     assert.equal(result.why, 'route_deadline'); assert.equal(result.ok, false)
     assert.equal(result.landings.length, 1); assert.equal(result.landings[0].ok, true)
     assert.equal(result.reachedGoals.length, 1); assert.equal(result.rejected.length, 0)
@@ -977,7 +978,7 @@ test('a route deadline reached inside the next support scan retains the precedin
 })
 
 test('failed long bounce forecasts do not blacklist a support reachable after a shorter real bounce', async () => {
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[-4, 3, 0, 'stone'], [0, 0, 2, 'slime_block'], [1, 0, 2, 'slime_block'],
     [4, 3, 2, 'spruce_slab'], [5, 3, 2, 'spruce_slab'], [6, 3, 2, 'spruce_slab'], [8, 3, -1, 'spruce_slab']])
   bot.entity.position = new Vec3(-3.41, 4, .49855); bot.entity.velocity.y = -.0784000015258789
@@ -999,13 +1000,13 @@ test('failed long bounce forecasts do not blacklist a support reachable after a 
 })
 
 test('real edge guard retains native simulation for a confirmed plan and resumes after drift, damage or expiry', () => {
-  const clockModule = require('../src/game-clock')
+  const clockModule: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new clockModule.GameClock({ manual: true }); clockModule.activate(clock)
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [2, 0, 0, 'stone']])
-  const control = { ...require('../src/navigation/parkour').IDLE, forward: true }
+  const control = { ...(require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).IDLE, forward: true }
   const nativeSim = bot.physics.simulatePlayer.bind(bot.physics); let calls = 0
   bot.physics.simulatePlayer = (state: any, terrain: any) => { calls++; return nativeSim(state, terrain) }
-  const guard = require('../src/edges').guard(bot)
+  const guard = (require('../src/edges') as typeof import('../src/edges')).guard(bot)
   const run = () => { calls = 0; return bot.physics.simulatePlayer(new native.PlayerState(bot, control), world) }
   try {
     for (let tick = 0; tick < 3; tick++) { clock.advanceTicks(1); run() }
@@ -1020,7 +1021,7 @@ test('real edge guard retains native simulation for a confirmed plan and resumes
 })
 
 test('a refused execution retains native expected frames and the observed fluid layer below the actual body', async () => {
-  const { route, IDLE } = require('../src/navigation/parkour')
+  const { route, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [1, 0, 0, 'lava'], [2, 1, 0, 'stone']])
   bot.entity.velocity.y = -.0784000015258789
   bot._ndClutch = { stats: { water_saved: 0 }, forecast: { landing: { lava: true, top: 0 }, guardAllow: false, intentional: false } }
@@ -1038,7 +1039,7 @@ test('a refused execution retains native expected frames and the observed fluid 
   }
   const result = await route(bot, { aborted: false }, { toward: new Vec3(2.5, 2, .5), maxLandings: 1 })
   assert.equal(result.ok, false); assert.equal(result.why, 'hurt_during_trajectory')
-  const last = result.landings[0].trajectory.at(-1)
+  const last = (result.landings[0] as any).trajectory.at(-1)
   assert.equal(last.tick, 2); assert.equal(last.hp, 16)
   assert.ok(Math.abs(last.pos.x - last.expected.pos.x - .1) < 1e-8, 'small real corrections must stay visible even below the controller divergence threshold')
   assert.ok(last.observation.actual.cells.some((cell: any) => cell.name === 'lava' && cell.position.y === 0 && cell.loaded), 'the receipt records actual loaded blocks below the now-rising body')
@@ -1052,13 +1053,13 @@ test('a refused execution retains native expected frames and the observed fluid 
 })
 
 test('installed edge guard keeps only actual physics for a stationary grounded body and resumes for movement or knockback', () => {
-  const clockModule = require('../src/game-clock')
+  const clockModule: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new clockModule.GameClock({ manual: true }); clockModule.activate(clock)
   const { bot, world } = worldOf([[0, 0, 0, 'stone']])
-  const control = { ...require('../src/navigation/parkour').IDLE, sneak: true }
+  const control = { ...(require('../src/navigation/parkour') as typeof import('../src/navigation/parkour')).IDLE, sneak: true }
   const nativeSim = bot.physics.simulatePlayer.bind(bot.physics); let calls = 0
   bot.physics.simulatePlayer = (state: unknown, terrain: unknown) => { calls++; return nativeSim(state, terrain) }
-  const guard = require('../src/edges').guard(bot)
+  const guard = (require('../src/edges') as typeof import('../src/edges')).guard(bot)
   const run = () => { calls = 0; return bot.physics.simulatePlayer(new native.PlayerState(bot, control), world) }
   try {
     for (let tick = 0; tick < 3; tick++) { clock.advanceTicks(1); run() }
@@ -1072,7 +1073,7 @@ test('installed edge guard keeps only actual physics for a stationary grounded b
 })
 
 test('native direct profiles solve ordinary rises before a route edge CPU budget expires', async () => {
-  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone']])
   const plan = await planJumpAsync(bot, { aborted: false }, new Vec3(2.5, 2, .5), { planningMs: 180 })
   assert.ok(plan)
@@ -1080,7 +1081,7 @@ test('native direct profiles solve ordinary rises before a route edge CPU budget
 })
 
 test('one-cell water entry uses free body volume beside real waterlogged crystal shapes', () => {
-  const { waterEntries } = require('../src/navigation/geometry')
+  const { waterEntries }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   const { bot } = worldOf([[0, -1, 0, 'stone'], [0, 0, 0, 'large_amethyst_bud', { facing: 'west', waterlogged: true }]])
   const narrow = waterEntries(bot, new Vec3(0, 0, 0))
   assert.ok(narrow.length)
@@ -1093,7 +1094,7 @@ test('one-cell water entry uses free body volume beside real waterlogged crystal
 })
 
 test('a route can jump a gap to a slightly lower platform instead of only trying to walk off its edge', async () => {
-  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 0, 0, 'dirt_path']])
   const plan = await planJumpAsync(bot, { aborted: false }, new Vec3(2.5, .9375, .5), { allowWalk: true, planningMs: 180 })
   assert.ok(plan)
@@ -1101,7 +1102,7 @@ test('a route can jump a gap to a slightly lower platform instead of only trying
 })
 
 test('native search CPU budget excludes time yielded to the physical clock', async () => {
-  const { planJumpAsync } = require('../src/navigation/parkour')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone']])
   // A busy clock callback runs while the planner cooperatively yields. It must
   // not turn a short valid native profile into a false unreachable landing.
@@ -1113,7 +1114,7 @@ test('native search CPU budget excludes time yielded to the physical clock', asy
 })
 
 test('native fall controller reaches observed one-cell water and refuses unreachable water', () => {
-  const { planWaterEntry, simulatePlan } = require('../src/navigation/parkour')
+  const { planWaterEntry, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string, Record<string, unknown>?]> = [[0, -1, 0, 'stone'], [0, 0, 0, 'water']]
   for (const height of [12, 45, 100]) {
     const { bot } = worldOf(cells)
@@ -1143,7 +1144,7 @@ test('native fall controller reaches observed one-cell water and refuses unreach
 })
 
 function drive(bot: Record<string, any>, world: { getBlock(p: Vec3): unknown }) {
-  const { IDLE } = require('../src/navigation/parkour')
+  const { IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   let control = { ...IDLE }
   bot.setControlState = (key: string, value: boolean) => { control[key] = value }
   bot.clearControlStates = () => { control = { ...IDLE } }
@@ -1158,8 +1159,8 @@ function drive(bot: Record<string, any>, world: { getBlock(p: Vec3): unknown }) 
 }
 
 test('a spring edge is refused when a rim between spring and landing stands above the native rebound apex', async () => {
-  const { reboundApex } = require('../src/navigation/parkour')
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { reboundApex }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   const base: Array<[number, number, number, string]> = [[0, 4, 0, 'stone'], [1, 4, 0, 'stone'], [4, 0, 0, 'slime_block']]
   const probe = worldOf(base).bot
   const spring = new Vec3(4.5, 1, .5)
@@ -1179,7 +1180,7 @@ test('a spring edge is refused when a rim between spring and landing stands abov
 })
 
 test('a route edge refused only by its frame budget is retried once with a larger budget', async () => {
-  const { route } = require('../src/navigation/parkour')
+  const { route }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [3, 0, 0, 'stone']])
   bot.entity.velocity.y = -.0784000015258789
   drive(bot, world)
@@ -1190,7 +1191,7 @@ test('a route edge refused only by its frame budget is retried once with a large
 })
 
 test('a near goal unreachable inside the local graph widens the routing disc instead of wandering below it', async () => {
-  const { route } = require('../src/navigation/parkour')
+  const { route }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   // An enclosed pad one block above the floor (CP18 shape): reachable only by a
   // staircase at x 16..19 and a bridge back west, outside the 14-block disc.
   const cells: Array<[number, number, number, string]> = []
@@ -1208,10 +1209,10 @@ test('a near goal unreachable inside the local graph widens the routing disc ins
 })
 
 test('a planned jump keeps its forecast ownership however far the server clock runs ahead of the next client frame', async () => {
-  const clockModule = require('../src/game-clock')
+  const clockModule: typeof import('../src/game-clock') = require('../src/game-clock')
   const clock = new clockModule.GameClock({ manual: true, epoch: 0 }); clockModule.activate(clock)
-  const { executeJump, IDLE } = require('../src/navigation/parkour')
-  const { lavaFallFloor } = require('../src/combat/emergency-escape')
+  const { executeJump, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { lavaFallFloor }: typeof import('../src/combat/emergency-escape') = require('../src/combat/emergency-escape')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [3, 0, 0, 'stone']])
   bot.entity.velocity.y = -.0784000015258789
   let control = { ...IDLE }; let checked: unknown = 'unchecked'
@@ -1238,7 +1239,7 @@ test('a planned jump keeps its forecast ownership however far the server clock r
 })
 
 test('a stalled native tick wait ends the edge with its samples instead of rejecting the route', async () => {
-  const { executeJump } = require('../src/navigation/parkour')
+  const { executeJump }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [3, 0, 0, 'stone']])
   bot.entity.velocity.y = -.0784000015258789
   drive(bot, world)
@@ -1251,7 +1252,7 @@ test('a stalled native tick wait ends the edge with its samples instead of rejec
 })
 
 test('a combat hop takes the best-scored visible local landing within a small native frame budget', async () => {
-  const { combatHop } = require('../src/navigation/parkour')
+  const { combatHop }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'stone'], [1, 0, 0, 'stone'], [2, 1, 0, 'stone'], [-2, 0, 0, 'stone']])
   bot.entity.velocity.y = -.0784000015258789
   drive(bot, world)
@@ -1263,7 +1264,7 @@ test('a combat hop takes the best-scored visible local landing within a small na
 })
 
 test("a web catch requested before the first falling frame waits for the real descent above the web", async () => {
-  const { catchWeb } = require('../src/navigation/parkour')
+  const { catchWeb }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 0, 0, 'cobweb'], [0, -1, 0, 'stone']])
   bot.entity.position = new Vec3(.5, 8, .5); bot.entity.velocity = new Vec3(0, 0, 0); bot.entity.onGround = false
   drive(bot, world)
@@ -1273,7 +1274,7 @@ test("a web catch requested before the first falling frame waits for the real de
 })
 
 test('native physics slows a body only while its feet cell is powder snow (PowderSnowBlock.entityInside 1.21.11)', () => {
-  const { simulatePlan, IDLE } = require('../src/navigation/parkour')
+  const { simulatePlan, IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const floor: Array<[number, number, number, string]> = Array.from({ length: 12 }, (_, x) => [x, 0, 0, 'stone'] as [number, number, number, string])
   const run = (cells: Array<[number, number, number, string]>) => {
     const { bot } = worldOf([...floor, ...cells]); bot.entity.velocity.y = -.0784000015258789
@@ -1288,7 +1289,7 @@ test('native physics slows a body only while its feet cell is powder snow (Powde
 })
 
 test('a short powder snow crossing is planned without crawling sneak inside the snow (s6-pk-powder6 shape)', () => {
-  const { planJump } = require('../src/navigation/parkour')
+  const { planJump }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const cells: Array<[number, number, number, string]> = [0, 1, 2, 3, 4, 5].map(x => [x, 0, 0, 'stone'] as [number, number, number, string])
   for (const x of [2, 3, 4]) cells.push([x, 1, 0, 'powder_snow'])
   const { bot } = worldOf(cells); bot.entity.velocity.y = -.0784000015258789
@@ -1299,7 +1300,7 @@ test('a short powder snow crossing is planned without crawling sneak inside the 
 })
 
 test('a goal whose only approach leaves the 24-block disc is reached through the one-off wide support graph', async () => {
-  const { route } = require('../src/navigation/parkour')
+  const { route }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   // CP21→CP22 shape: an enclosed pad near the start, reachable only by stairs at
   // x 30..33 (outside the 24-block disc) and a bridge back over its enclosure.
   const cells: Array<[number, number, number, string]> = []
@@ -1317,8 +1318,8 @@ test('a goal whose only approach leaves the 24-block disc is reached through the
 })
 
 test('a fall is steered onto a nearby hay bale when it hurts less than the floor straight below', () => {
-  const { planNearbySoftLanding, simulatePlan } = require('../src/navigation/parkour')
-  const { landingDamage } = require('../src/navigation/landing')
+  const { planNearbySoftLanding, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { landingDamage }: typeof import('../src/navigation/landing') = require('../src/navigation/landing')
   const cells: Array<[number, number, number, string]> = []
   for (let x = -3; x <= 4; x++) for (let z = -3; z <= 3; z++) if (x !== 2 || z !== 0) cells.push([x, 0, z, 'stone'])
   cells.push([2, 0, 0, 'hay_block'])
@@ -1335,8 +1336,8 @@ test('a fall is steered onto a nearby hay bale when it hurts less than the floor
 })
 
 test('a spring chain falls from one rebound onto a second slime and reaches a ledge no single spring reaches (CP25 shape)', async () => {
-  const { planJump, reboundApex, simulatePlan } = require('../src/navigation/parkour')
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { planJump, reboundApex, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   // Tower top 7 → slime A (top 0) → slime B (top -1) → ledge 2: three above B, 8.5 from A.
   const cells: Array<[number, number, number, string]> = [[0, 6, 0, 'stone']]
   for (const z of [0, 1]) cells.push([6, -1, z, 'slime_block'], [7, -1, z, 'slime_block'], [11, -2, z, 'slime_block'], [12, -2, z, 'slime_block'])
@@ -1357,8 +1358,8 @@ test('a spring chain falls from one rebound onto a second slime and reaches a le
 })
 
 test('an explicit plain-floor fall budget (2..4) takes a 6-block walk-off onto stone; 1 HP still needs a mitigating floor (CP28 shape)', async () => {
-  const { planJumpAsync } = require('../src/navigation/parkour')
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   // Cliff top 6 (feet 7) and an island one block lower than 1 HP allows: floor 0 (feet 1), 2.5 blocks out.
   const { bot } = worldOf([[0, 6, 0, 'stone'], [3, 0, 0, 'end_stone'], [4, 0, 0, 'end_stone']])
   bot.entity.position = new Vec3(.5, 7, .5); bot.entity.velocity.y = -.0784000015258789
@@ -1373,7 +1374,7 @@ test('an explicit plain-floor fall budget (2..4) takes a 6-block walk-off onto s
 })
 
 test('a hop over a higher slab step walks on and steps down to the lower target (CP28 roof: 165.5 → slab 166.5 → 166)', async () => {
-  const { planJumpAsync, simulatePlan } = require('../src/navigation/parkour')
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const slab = { type: 'bottom', waterlogged: false }
   const { bot } = worldOf([[0, 0, 0, 'smooth_stone_slab', slab], [-1, 0, 0, 'smooth_stone_slab', slab], [1, 0, 0, 'stone'], [1, 1, 0, 'smooth_stone_slab', slab], [2, 0, 0, 'stone'], [3, 0, 0, 'stone']])
   bot.entity.position = new Vec3(.7, .5, .5); bot.entity.velocity.y = -.0784000015258789
@@ -1386,22 +1387,22 @@ test('a hop over a higher slab step walks on and steps down to the lower target 
 })
 
 test('lab drop walks off the ledge with ordinary keys, releases them in the air and reports the landing', async () => {
-  const { navigate } = require('../src/navigation/parkour')
+  const { navigate }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot, world } = worldOf([[0, 4, 0, 'stone'], [1, 0, 0, 'stone'], [2, 0, 0, 'stone'], [3, 0, 0, 'stone']])
   bot.entity.position = new Vec3(.7, 5, .5); bot.entity.velocity.y = -.0784000015258789
   drive(bot, world)
   let forward = false
   const set = bot.setControlState; bot.setControlState = (key: string, value: boolean) => { if (key === 'forward') forward = value; set(key, value) }
   bot.getControlState = (key: string) => key === 'forward' ? forward : false
-  const result = await navigate(bot, { aborted: false }, { mode: 'drop', target: new Vec3(3.5, 5, .5), ticks: 80 })
+  const result: any = await navigate(bot, { aborted: false }, { mode: 'drop', target: new Vec3(3.5, 5, .5), ticks: 80 })
   assert.equal(result.ok, true, JSON.stringify(result))
   assert.equal(result.at.y, 1); assert.ok(result.fall >= 3.9 && result.fall <= 4.1, String(result.fall))
   assert.equal(forward, false, 'keys are released once airborne')
 })
 
 test('a closed wooden door in the way is a route edge that opens it by hand first; an iron door is a wall (CP28 house)', async () => {
-  const { route } = require('../src/navigation/parkour')
-  const { supportRoute } = require('../src/navigation/support-route')
+  const { route }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { supportRoute }: typeof import('../src/navigation/support-route') = require('../src/navigation/support-route')
   for (const kind of ['oak_door', 'iron_door']) {
     // Floor x 0..4, wall x = 2 (z -2..2, two high) with a door at (2, 1..2, 0).
     const cells: Array<[number, number, number, string, Record<string, unknown>?]> = []

@@ -140,4 +140,4 @@ function takeoffTarget (nodes, s, crystals = 10) {
   if (!path || path.length < 2) return { i, j, path, node: null }
   return { i, j, path, node: nodes[path[1]] }
 }
-module.exports = { msin, mcos, wrap, step, clone, headOf, neckOf, turnLanding, turnDefault, nodesOf, closestNode, findPath, takeoffTarget, ADJ }
+export { msin, mcos, wrap, step, clone, headOf, neckOf, turnLanding, turnDefault, nodesOf, closestNode, findPath, takeoffTarget, ADJ }

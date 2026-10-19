@@ -1,6 +1,6 @@
-const { gameClock, log, mobs, sleep, xyz, Vec3, walkGoal, goals, keyOf, survey, aggressive, angerSet, pickUp, countOf } = require('./take-gold-block')
-const { boothCandidates, tradeBreach, tradeExecute, walkUnlessBrute } = require('./booth-trade')
-const { lastGoldBreak, predictGoldAsync, eatIfHungry } = require('./predict-gold')
+const { gameClock, log, mobs, sleep, xyz, Vec3, walkGoal, goals, keyOf, survey, aggressive, angerSet, pickUp, countOf }: typeof import('./take-gold-block') = require('./take-gold-block')
+const { boothCandidates, tradeBreach, tradeExecute, walkUnlessBrute }: typeof import('./booth-trade') = require('./booth-trade')
+const { lastGoldBreak, predictGoldAsync, eatIfHungry }: typeof import('./predict-gold') = require('./predict-gold')
 const FOES_RE = /^(piglin_brute|hoglin|zoglin)$/
 
 function foesNear (bot, r = 10) {
@@ -10,7 +10,7 @@ function foesNear (bot, r = 10) {
 
 async function towerScan (session, ctl, st) {
   const bot = session.bot
-  const { towerUp } = require('.././build')
+  const { towerUp }: typeof import('.././build') = require('.././build')
   // Над головой крыша (внутри бастиона вышка не росла: +0..+1, ферма 29.09) —
   // сначала к месту с небом: клетка в 20 блоках, где над головой больше воздуха.
   const headroom = p => { let n = 0; for (let y = 2; y <= 25; y++) { const b = bot.blockAt(p.offset(0, y, 0)); if (!b || b.boundingBox !== 'empty' || /lava/.test(b.name)) break; n++ } return n }
@@ -24,7 +24,7 @@ async function towerScan (session, ctl, st) {
   }
   const here0 = bot.entity.position.floored()
   if (headroom(here0) < 14 || lavaNear(here0)) {
-    const { walkable } = require('.././walkable')
+    const { walkable }: typeof import('.././walkable') = require('.././walkable')
     let best = null
     for (const n of walkable(bot, bot.entity.position, { radius: 20, maxNodes: 3000 })) {
       const h = headroom(n.pos)
@@ -36,9 +36,9 @@ async function towerScan (session, ctl, st) {
   }
   // Вышка и штрек — из блоков стройки; после долгого пути по Аду их нет (trip2-9 30.09: вышка +0..+1,
   // «бастион не узнан»). Добрать незерака рядом.
-  const SLf = require('.././sealed')
+  const SLf: typeof import('.././sealed') = require('.././sealed')
   if (SLf.fillerCount(bot) < 24) {
-    try { const g = await require('.././edges').gatherBlocks(bot, ctl, { want: 40 - SLf.fillerCount(bot), maxMs: 40000, radius: 10 }); log('вышка: блоки', { got: g && g.got, have: SLf.fillerCount(bot) }) } catch {}
+    try { const g = await (require('.././edges') as typeof import('.././edges')).gatherBlocks(bot, ctl, { want: 40 - SLf.fillerCount(bot), maxMs: 40000, radius: 10 }); log('вышка: блоки', { got: g && g.got, have: SLf.fillerCount(bot) }) } catch {}
   }
   const base = bot.entity.position.floored()
   let pg = await predictGoldAsync(bot, 56, ctl)
@@ -49,10 +49,10 @@ async function towerScan (session, ctl, st) {
   // шар гаста сбрасывает (b5-6-1 14.10: вышка до y 85, шар → хп 2), арбалеты пиглинов добивают.
   const shootersNear = () => {
     const gold = [5, 6, 7, 8].some(s => /^golden_/.test(bot.inventory.slots[s]?.name || ''))
-    const seen = require('.././perception/eyes').entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null &&
+    const seen = (require('.././perception/eyes') as typeof import('.././perception/eyes')).entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null &&
       ((e.name === 'ghast' && e.dist <= 48) || (/^(skeleton|blaze)$/.test(e.name) && e.dist <= 24) || (e.name === 'piglin' && !gold && e.dist <= 24)))
     // Гаста слышно (громкий звук, 80 бл.: senses.heard) — тоже не строить.
-    const heard = require('.././perception/senses').heard(bot, { sinceMs: 15000, match: /ghast/ }).map(h => ({ name: 'ghast (слышно)', dist: 0 }))
+    const heard = (require('.././perception/senses') as typeof import('.././perception/senses')).heard(bot, { sinceMs: 15000, match: /ghast/ }).map(h => ({ name: 'ghast (слышно)', dist: 0 }))
     return [...seen, ...heard]
   }
   const topY = Math.max(84, base.y + 6)
@@ -73,7 +73,7 @@ async function towerScan (session, ctl, st) {
   st.blindTower = !pg.basalt && !pg.chests && !(st.bricks && st.bricks.size)
   log('вышка', { from: xyz(base), to: xyz(top), blind: st.blindTower || undefined, basalt: pg.basalt, chests: pg.chests, walls: pg.walls.map(w => ({ at: xyz(w.wall.t), r: w.wall.r, score: Math.round(w.score), from: w.from.length })), direct: pg.direct.map(c => c.piece), gold: pg.gold.length, start: pg.start ? { type: pg.start.type, score: Math.round(pg.start.score * 10) / 10, pieces: pg.start.pieces } : undefined, votes: pg.debug && pg.debug[0] })
   // Две лучшие гипотезы стен (ранг 0 и 1): вал над connected_wall тоже бывает
-  const bp = require('.././bastion-pieces')
+  const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
   pg.walls.slice(0, 2).forEach((w, rank) => {
     for (const c of [w.wall, w.conn]) {
       for (const v of bp.goldOf(c)) {
@@ -109,7 +109,7 @@ async function towerScan (session, ctl, st) {
 
 async function approachWallTop (session, ctl, wall) {
   const bot = session.bot
-  const bp = require('.././bastion-pieces')
+  const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
   // Снаружи, у внешних граней стены (шаблон x=0 и z=15 — там не двор
   for (const [x, y, z] of [[-3, 9, 10], [8, 9, 18]]) {
     const p = bp.toWorld(wall, x, y, z)
@@ -130,8 +130,8 @@ async function approachWallTop (session, ctl, wall) {
 
 async function approachWallSide (session, ctl, wall, target) {
   const bot = session.bot
-  const bp = require('.././bastion-pieces')
-  const { walkable } = require('.././walkable')
+  const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
+  const { walkable }: typeof import('.././walkable') = require('.././walkable')
   const a = bp.toWorld(wall, 0, 0, 0)
   const b = bp.toWorld(wall, 15, 0, 15)
   const box = { x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z), y0: wall.t.y, y1: wall.t.y + 31 }
@@ -186,8 +186,8 @@ async function approachWallSide (session, ctl, wall, target) {
 
 async function routeGold (session, ctl, st, until) {
   const bot = session.bot
-  const NR = require('.././nether-route')
-  const SL = require('.././sealed')
+  const NR: typeof import('.././nether-route') = require('.././nether-route')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   if (!NR.enabled() || !NR.gridOf(session)) return { tried: 0 }
   const out: any = { tried: 0, dug: 0, routeFails: 0, skipped: 0, sealed: 0 }
   const KG = [...st.pred.values()].map(v => v.pos).filter(Boolean)
@@ -201,7 +201,7 @@ async function routeGold (session, ctl, st, until) {
     // ND_GUARD=1: злой пиглин/брут бьёт — ответ до следующего золота (B0-31/B0-3 03.10: пиглин, разозлённый ломкой, 5 ударов
     // за 4 с, а тело ломало следующее золото по сетке).
     if (process.env.ND_GUARD !== '0') {
-      const GD = require('.././ne-guard')
+      const GD: typeof import('.././ne-guard') = require('.././ne-guard')
       const h = GD.hot(bot)
       if (h) {
         const rr = await GD.react(session, ctl, { force: h, onOwn: cells => { if (st.sealedState && st.sealedState.own) for (const c of cells) st.sealedState.own.add(c) } })
@@ -249,7 +249,7 @@ async function routeGold (session, ctl, st, until) {
       // S1d 07.10: злость страшна только тем, кто нас видит или дойдёт (как takeGoldBlock: threatens по заливке тела) — из своего хода
       // клетку золота сломать и сразу заделать (ниже: foreign → fillCell). Было: любой пиглин в 16 — пропуск (s1d-AB-2: 14 из 16).
       if (openNext) {
-        const TG = require('./take-gold-block')
+        const TG: typeof import('./take-gold-block') = require('./take-gold-block')
         const reach = TG.reachSet(bot)
         const near = angerSet(bot, null, !!bot.getControlState('sneak'))
         if (near.some(e => TG.threatens(bot, e, reach))) { out.skippedPig = (out.skippedPig || 0) + 1; continue }
@@ -278,7 +278,7 @@ async function routeGold (session, ctl, st, until) {
   const homeD = bot.entity.position.floored().distanceTo(home)
   // ND_GOLD_BACK=1 (по умолчанию нет: D7b-32 03.10 — из начала хода «яма: пути нет» ×10, 15 золотых блоков без бартера).
   if (process.env.ND_GOLD_BACK === '1' && out.dug && !ctl.aborted && homeD > 1.5 && homeD <= 20 && ![...mobs(bot, 'piglin_brute', 24), ...mobs(bot, 'hoglin', 24)].length) {
-    const back = await NR.routeTo(session, ctl, { x: home.x, y: home.y, z: home.z, r: 0, dy: 0, zone, zoneExpo: 14, abortNear: { re: '^(piglin_brute|hoglin)$', r: 12 }, timeoutSeconds: 60 }).catch(e => ({ ok: false, why: e.message }))
+    const back: Partial<import('.././nether-route').NetherRouteResult> = await NR.routeTo(session, ctl, { x: home.x, y: home.y, z: home.z, r: 0, dy: 0, zone, zoneExpo: 14, abortNear: { re: '^(piglin_brute|hoglin)$', r: 12 }, timeoutSeconds: 60 }).catch(e => ({ ok: false, why: e.message }))
     out.back = back.ok ? 'да' : back.why
     for (const c of (back.own || [])) { if (st.sealedState && st.sealedState.own) st.sealedState.own.add(c) }
   }
@@ -288,7 +288,7 @@ async function routeGold (session, ctl, st, until) {
 
 async function digBooth (session, ctl, st, until) {
   const bot = session.bot
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const S = st.sealedState
   if (!S) return null
   S.deadline = until
@@ -372,7 +372,7 @@ function mergeTrades (a, b) {
 
 async function exitTunnel (session, ctl, st, until) {
   const bot = session.bot
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const S = st.sealedState
   if (!S || !S.entry) return { ok: false, why: 'входа нет' }
   const E = S.entry
@@ -402,3 +402,7 @@ async function exitTunnel (session, ctl, st, until) {
 }
 
 module.exports = { FOES_RE, foesNear, towerScan, approachWallTop, approachWallSide, routeGold, digBooth, pocketOpen, mergeTrades, exitTunnel }
+export {
+  FOES_RE, foesNear, towerScan, approachWallTop, approachWallSide, routeGold, digBooth, pocketOpen, mergeTrades,
+  exitTunnel
+}

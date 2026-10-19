@@ -1,6 +1,6 @@
 'use strict'
-const gameClock = require('./game-clock')
-const fastblocks = require('./fastblocks')
+import * as gameClock from './game-clock'
+import fastblocks = require('./fastblocks')
 // В каком мире тело и какому миру принадлежит запись памяти. Одно определение
 // на весь демон (NETHER.md срез 1 и 2).
 //
@@ -131,7 +131,7 @@ function tuneMovements (bot, movements) {
   wrapPlaceBlock(bot)
   // Aquatic plants contain the same source water as an ordinary water block.
   if (movements.liquids) for (const block of Object.values(reg.blocksByName)) {
-    if (require('./movement').waterCell(block)) movements.liquids.add((block as any).id)
+    if ((require('./movement') as typeof import('./movement')).waterCell(block)) movements.liquids.add((block as any).id)
   }
   // Жёсткий пол для разведки в Аду (bot._ndNetherFloor ставит fortress.scout):
   // ни один ход не кончается ниже него. Штраф 12 за клетку ниже y=40 (ниже)
@@ -144,7 +144,7 @@ function tuneMovements (bot, movements) {
   if (typeof neighbors === 'function') {
     movements.getNeighbors = function (node) {
       // Native partial paths share A* Moves: executor centering must not change the search cell.
-      if (!Number.isInteger(node.x) || !Number.isInteger(node.y) || !Number.isInteger(node.z)) node = Object.assign(Object.create(node), require('./blockmoves').cellOf(node))
+      if (!Number.isInteger(node.x) || !Number.isInteger(node.y) || !Number.isInteger(node.z)) node = Object.assign(Object.create(node), (require('./blockmoves') as typeof import('./blockmoves')).cellOf(node))
       const out = neighbors.call(this, node)
       if (worldOf(bot) !== 'the_nether') return out
       // Не только разведка: дорога к порталу тоже спускалась к морю — y=27,
@@ -175,7 +175,7 @@ function tuneMovements (bot, movements) {
     }
   }
   const magma = reg.blocksByName.magma_block
-  const hurts = require('./moves').HURTS
+  const hurts = (require('./moves') as typeof import('./moves')).HURTS
   if (Array.isArray(movements.exclusionAreasStep)) {
     movements.exclusionAreasStep.push(block => {
       try {
@@ -369,7 +369,7 @@ function installWorldTracker (session, bot) {
   }
 }
 
-module.exports = {
+export {
   worldOf,
   worldOfRecord,
   sameWorld,

@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const fs = require('fs')
-const path = require('path')
+import * as gameClock from './game-clock'
+import * as fs from 'fs'
+import path = require('path')
 
 // Настроение бота и отношение к каждому человеку — из того, что было за
 // сессию: подарил вещь, вступились друг за друга, поздоровался — теплее;
@@ -168,4 +168,4 @@ class Mood {
   }
 }
 
-module.exports = { Mood, word, relation, WARM, RUDE }
+export { Mood, word, relation, WARM, RUDE }

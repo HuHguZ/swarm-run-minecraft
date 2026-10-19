@@ -5,7 +5,7 @@ import { SOLO } from './context'
 import { dress } from './gear'
 import { LAN, lanCmd } from './server'
 import type { ArenaContext } from './context'
-const fs = require('fs')
+import * as fs from 'fs'
 
 export function installRounds (ctx: ArenaContext) {
   const { i, teams, arms, bots, names, pos, deaths, kills, deadNow, out, deathAt, killGaps, humans, roundWins, radio, opened, chestBy, chestFail, refills, labNeed, brewed, alchemist, LOGF, BOX, HUMAN_TEAM, Y, teamOf, rcon, log, sleep } = ctx

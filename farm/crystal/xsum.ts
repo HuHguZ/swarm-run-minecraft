@@ -1,13 +1,14 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сводка серий арены S7c (07.10): ПОЛНЫЕ файлы серии (все строки ROUND) + причина смерти из лога сервера слота.
-//   node farm/crystal/xsum.js 'farm/results/s7c1/*.out' [--slot 27] [--rounds]
+//   node dist/farm/crystal/xsum.js 'farm/results/s7c1/*.out' [--slot 27] [--rounds]
 // Кристаллы по сторонам: подрывов по сопернику (свой взрыв, ему ≥ 1), урон взрывами, его подрывы у меня
 // (threats) и удачные уклонения (evaded: пришло ≤ max(1.5, ¼ прогноза)), щит/укрытие/блок между, сбитые его
 // кристаллы, самоподрывы. Причина смерти — строка сервера «<имя> was blown up by …» в окне раунда
 // (время ROUND — UTC арены, лог сервера — местное МСК, +3 ч).
-const fs = require('fs')
-const path = require('path')
-const zlib = require('zlib')
+import * as fs from 'fs'
+import path = require('path')
+import * as zlib from 'zlib'
 
 const args = process.argv.slice(2)
 const opt = (k, d = null) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d }
@@ -47,7 +48,7 @@ if (!rounds.length) { console.log('раундов нет'); process.exit(0) }
 // Смерти из логов сервера слота (latest.log и *.log.gz за последние двое суток).
 const deaths = []
 try {
-  const dir = path.join(__dirname, '..', `server-${SLOT}`, 'logs')
+  const dir = path.join(REPO_ROOT, 'farm', `server-${SLOT}`, 'logs')
   const names = new Set(rounds.flatMap(r => [r.a && r.a.name, r.b && r.b.name]).filter(Boolean))
   const cut = Date.now() - 2 * 86400e3
   for (const f of fs.readdirSync(dir)) {

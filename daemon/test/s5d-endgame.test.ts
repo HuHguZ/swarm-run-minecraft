@@ -1,8 +1,8 @@
 'use strict'
 // S5d (07.10): конец игры — путь к крепости через Ад, подход к комнате, дракон.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Толща незерака со штреком 1×2 вдоль +x (y 48–49, z 0) — как у точки выхода после nether_tunnel (s5d-p1-1).
 function tunnelWorld (extra: (p: any) => string | null = () => null) {
@@ -21,8 +21,8 @@ function tunnelWorld (extra: (p: any) => string | null = () => null) {
 function scanFor (t: any) { const s = process.env.ND_KNOWLEDGE; process.env.ND_KNOWLEDGE = 'scan'; t.after(() => { if (s === undefined) delete process.env.ND_KNOWLEDGE; else process.env.ND_KNOWLEDGE = s }) }
 
 test('камера под раму выхода: в толще со штреком стройка без камеры не находит места или копает невидимое, с камерой — рама в камере', () => {
-  const { chamberPlan } = require('../src/travel')
-  const nether = require('../src/nether')
+  const { chamberPlan }: typeof import('../src/travel') = require('../src/travel')
+  const nether: typeof import('../src/nether') = require('../src/nether')
   const { read, air } = tunnelWorld()
   const feet = new Vec3(0, 48, 0)
   const nearAir = (c: any) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => air.has(`${c.x + x},${c.y + y},${c.z + z}`))
@@ -40,7 +40,7 @@ test('камера под раму выхода: в толще со штреко
 })
 
 test('камера: сторона с лавой в 2 бл. от будущей рамы — не годится; лава со всех сторон — отказ с причиной', () => {
-  const { chamberPlan } = require('../src/travel')
+  const { chamberPlan }: typeof import('../src/travel') = require('../src/travel')
   const feet = new Vec3(0, 48, 0)
   // Лава в z = +3 (сбоку от камеры по +x/−x и прямо перед камерой по +z).
   const side = tunnelWorld(p => (p.z === 3 && p.y === 48 ? 'lava' : null))
@@ -54,7 +54,7 @@ test('камера: сторона с лавой в 2 бл. от будущей 
 })
 
 test('камера: у края лавового озера здесь не ставится — ближняя годная клетка в 11 бл. от точки Ада (s5d-p3-1)', () => {
-  const { chamberPlan, chamberSpot } = require('../src/travel')
+  const { chamberPlan, chamberSpot }: typeof import('../src/travel') = require('../src/travel')
   // Пол незерака y ≤ 78, воздух выше; лавовое озеро в полу x ∈ [0, 5], z ∈ [-3, 3].
   const read = (p: any) => {
     if (p.y === 78 && p.x >= 0 && p.x <= 5 && Math.abs(p.z) <= 3) return { name: 'lava', boundingBox: 'empty', position: p }
@@ -70,7 +70,7 @@ test('камера: у края лавового озера здесь не ст
 
 test('шахта к комнате по карте: колонка с пещерой до уровня комнаты — не вход, берётся целая в 24 бл. (s5d-p4-1)', (t) => {
   scanFor(t)
-  const { dryEntry } = require('../src/endportal')
+  const { dryEntry }: typeof import('../src/endportal') = require('../src/endportal')
   // Суша: камень до y 70, воздух выше. Пещера x ∈ [96, 104], y 50..60 (под шахтой x 100); комната на y 40.
   const blockAt = (p: any) => {
     if (p.y > 70) return { name: 'air', boundingBox: 'empty' }
@@ -89,9 +89,9 @@ test('шахта к комнате по карте: колонка с пещер
 // Тактика (узкая правка S5d): одни чешуйницы/эндермиты при броне ≥ 10 — навык идёт (s5d-p6-1: Fight сквозь решётку ×100+,
 // s5d-p6-2: еда у комнаты оборвана — БЛОКЕР «hunger 6/18»); зомби или чешуйница без брони — тактика как прежде.
 test('тактика: чешуйницы у портальной комнаты в броне не забирают навык, зомби и голое тело — забирают', () => {
-  const { EventEmitter } = require('node:events')
-  const { observeTactics } = require('../src/tactics/minecraft')
-  const md = require('minecraft-data')('1.21.11')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { observeTactics }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const md = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const session = (mob: string | null, armor: boolean, hp = 20) => {
     const bot: any = new EventEmitter()
     bot.version = '1.21.11'; bot.health = hp; bot.food = 20
@@ -114,7 +114,7 @@ test('тактика: чешуйницы у портальной комнаты 
 
 test('шахта к комнате: колонка, от которой штрек на уровне комнаты идёт мимо воды (s5d-p7-1)', (t) => {
   scanFor(t)
-  const { dryEntry } = require('../src/endportal')
+  const { dryEntry }: typeof import('../src/endportal') = require('../src/endportal')
   // Камень до y 70; на уровне комнаты (y 39–42) вода x ∈ [102, 105], z ∈ [−8, −2] — прямо между колонкой (100, −5) и целью
   // (108, 40, −5); годна колонка, от которой прямая до цели идёт мимо воды.
   const blockAt = (p: any) => {
@@ -130,7 +130,7 @@ test('шахта к комнате: колонка, от которой штре
 })
 
 test('камера: под гравием не ставится — сторона или клетка без сыпучего над камерой (s5d-H-2)', () => {
-  const { chamberPlan } = require('../src/travel')
+  const { chamberPlan }: typeof import('../src/travel') = require('../src/travel')
   const feet = new Vec3(0, 48, 0)
   // Гравий над камерой по +x (x 1..2, y 51..52) — камера уходит в другую сторону.
   const w = tunnelWorld(p => (p.x >= 1 && p.x <= 2 && p.y >= 51 && p.y <= 52 && Math.abs(p.z) <= 2 ? 'gravel' : null))
@@ -141,7 +141,7 @@ test('камера: под гравием не ставится — сторон
 
 test('шахта: целой колонки нет нигде — колонка с пещерой ≤ 4 бл. без капельника, а не первая сухая (s5d-R-1)', (t) => {
   scanFor(t)
-  const { dryEntry } = require('../src/endportal')
+  const { dryEntry }: typeof import('../src/endportal') = require('../src/endportal')
   // Везде пещера y 50..52 (3 бл.); у колонки шахты (|x−100| ≤ 3) в пещере капельник.
   const blockAt = (p: any) => {
     if (p.y > 70) return { name: 'air', boundingBox: 'empty' }

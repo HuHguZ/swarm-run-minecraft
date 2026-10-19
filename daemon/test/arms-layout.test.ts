@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const AL = require('../arms-layout')
+import * as AL from '../arena/arms-layout'
 
 test('раскладка гонки: проверки проходят на 20 seed, зеркальна, тайники закрыты облицовкой, бюджеты сторон близки', () => {
   for (let s = 0; s < 20; s++) {

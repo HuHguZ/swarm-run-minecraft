@@ -2,14 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { candidates, threatLevel } from '../src/tactics/state'
 import { TacticalGraph } from '../src/tactics/graph'
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const { observeTactics, TacticalSystem } = require('../src/tactics/minecraft')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import { observeTactics, TacticalSystem } from '../src/tactics/minecraft'
 
 function field() {
   const bot: any = new EventEmitter()
-  bot.registry = require('minecraft-data')('1.21.11')
+  bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   bot.version = '1.21.11'; bot.health = 18; bot.food = 20
   bot.entity = { id: 1, position: new Vec3(50.7, 26, -126.3), height: 1.8, onGround: true, yaw: 0, metadata: [0], effects: {} }
   bot.entities = {}; bot.game = { dimension: 'the_nether' }

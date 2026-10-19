@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
-const { StrategicDirector } = require('../src/core/strategy')
-const { emptyWorld, fact, cloneWorld } = require('../src/core/world-state')
-const AG = require('../src/pvp/arms-graph'), Loot = require('../src/pvp/arms-loot')
-const source = readFileSync(join(__dirname, '../arms-run.js'), 'utf8')
+import { cjsContext } from './cjs-context'
+import { StrategicDirector } from '../src/core/strategy'
+import { emptyWorld, fact, cloneWorld } from '../src/core/world-state'
+import * as AG from '../src/pvp/arms-graph'
+import * as Loot from '../src/pvp/arms-loot'
+const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
 const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
 const pos = x => ({ x, y: 0, z: 0 }), key = p => `${p.x},${p.y},${p.z}`
 const rewards = [{ name: 'diamond_sword', count: 1 }, { name: 'diamond_chestplate', count: 1 }]
@@ -35,10 +37,10 @@ function fixture() {
     }
     throw new Error('unexpected RPC ' + method)
   }
-  const ArmsEnv = runInNewContext(body + '\nArmsEnv', { AG, Loot, LOOT_PRIOR: [rewards], emptyWorld, fact, LOOT_MS: 60000,
+  const ArmsEnv = runInNewContext(body + '\nArmsEnv', cjsContext({ AG, Loot, LOOT_PRIOR: [rewards], emptyWorld, fact, LOOT_MS: 60000,
     X: 0, Y: 0, Z: 0, L: { half: 30, spawns: [pos(0)] }, W: p => p, COVERS: [], HUNT: [pos(0)], key,
     sleep: async ms => { sleeps.push(ms); now += ms }, pace: async ms => { now += ms },
-    every: (ms, fn) => { const w = { ms, fn, active: true }; watches.push(w); return w }, gameClock: { now: () => now, clearInterval: w => { w.active = false } } })
+    every: (ms, fn) => { const w = { ms, fn, active: true }; watches.push(w); return w }, gameClock: { now: () => now, clearInterval: w => { w.active = false } } }))
   const env = new ArmsEnv(side, round)
   side.director = new StrategicDirector(AG.armsRegistry(), env, { goal: AG.opponentDefeated, riskPenalty: AG.ARMS_RISK_PENALTY, maxFailures: 2 })
   const request = () => calls.filter(c => c.method === 'fight_yield' && c.params.request).at(-1)?.params
@@ -56,7 +58,7 @@ test('director bounded comparison reuses penalties and leaves ordinary full plan
   const records = [], s = emptyWorld()
   s.resources = { power: 1, unscouted: 1, chests: 0 }
   s.facts.enemy_power = fact(20, 'observed', 0); s.facts.loot_prior_gain = fact(20, 'inferred', 0)
-  const env = { now: () => 0 }, d = new StrategicDirector(AG.armsRegistry(), env, { goal: AG.opponentDefeated, riskPenalty: 6000, record: x => records.push(x) })
+  const env = { now: () => 0 }, d = new StrategicDirector(AG.armsRegistry(), env as any, { goal: AG.opponentDefeated, riskPenalty: 6000, record: x => records.push(x) })
   assert.equal(d.decide(s).steps[0].id, 'ScoutArea')
   const count = records.length
   assert.deepEqual(d.decide(s, undefined, { maxDepth: 1, record: false }).steps.map(x => x.id), ['Engage'])

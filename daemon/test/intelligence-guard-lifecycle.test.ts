@@ -5,8 +5,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
-const locks = require('../src/reflex-lock')
-const { withClockFixture } = require('./clock-fixture')
+import { cjsContext } from './cjs-context'
+import locks = require('../src/reflex-lock')
+import { withClockFixture } from './clock-fixture'
 
 interface Controller { aborted: boolean; onAbort: Array<() => void> }
 interface Result { acted: boolean; cancelled?: boolean; how?: string }
@@ -44,7 +45,7 @@ function fixture() {
       throw new Error('unexpected dependency: ' + name)
     }
   })
-  runInNewContext(readFileSync(process.env.GUARD_TEST_SOURCE || join(__dirname, '../src/ne-guard.js'), 'utf8'), context)
+  runInNewContext(readFileSync(process.env.GUARD_TEST_SOURCE || join(__dirname, '../src/ne-guard.js'), 'utf8'), cjsContext(context))
   const guard = context.module.exports as { react(targetSession: typeof session, ctl: Controller, options: unknown): Promise<Result> }
   return { bot, session, guard, hoglin, calls, logs, towerStarted, resolveTower }
 }

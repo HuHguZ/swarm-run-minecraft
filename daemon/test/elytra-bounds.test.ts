@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
-const sky = require('../src/elytra')
+import sky = require('../src/elytra')
 const empty = { boxHit: () => false, floorBelow: () => null }
 
 test('elytra rollout checks the complete boosted trajectory and full body, while legacy flight keeps its behavior', () => {

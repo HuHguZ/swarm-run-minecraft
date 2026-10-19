@@ -1,9 +1,9 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals } = require('mineflayer-pathfinder')
-const { xyz } = require('./movement')
-const { countItems } = require('./items')
+import * as gameClock from './game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals } from 'mineflayer-pathfinder'
+import { xyz } from './movement'
+import { countItems } from './items'
 
 // Склад по категориям: что куда класть, какие сундуки чьи, таблички на них.
 // Сундуки открывает containers.js (там оплачены все болезни окон 1.21.11),
@@ -94,7 +94,7 @@ function partnerOf (bot, block) {
 // Табличка «при сундуке»: над ним, на его передней грани, или над парной
 // половиной. Текст читается из блок-сущности, которую сервер присылает.
 function signFor (bot, block) {
-  const architect = require('./architect')
+  const architect: typeof import('./architect') = require('./architect')
   const spots = [block.position.offset(0, 1, 0)]
   const f = propsOf(block).facing
   if (f && HORIZ[f]) spots.push(block.position.plus(HORIZ[f]))
@@ -146,7 +146,7 @@ function findStorage (session, { radius = 12, at = null }: any = {}) {
 // ---------------------------------------------------------------- sort
 
 async function walkNear (bot, pos, ms = 12000) {
-  const { withTimeout } = require('./build')
+  const { withTimeout }: typeof import('./build') = require('./build')
   if (bot.entity.position.offset(0, 1.62, 0).distanceTo(pos.offset(0.5, 0.5, 0.5)) < 3.6) return true
   try {
     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)), ms, 'не дошёл')
@@ -163,7 +163,7 @@ async function walkNear (bot, pos, ms = 12000) {
 // WallSignBlock/StandingSignBlock.canSurvive смотрят isSolid, не крепость грани).
 async function labelChest (session, ctl, ch, category) {
   const bot = session.bot
-  const architect = require('./architect')
+  const architect: typeof import('./architect') = require('./architect')
   const sign = bot.inventory.items().find(i => /_sign$/.test(i.name) && !/hanging/.test(i.name))
   if (!sign) return { ok: false, why: 'табличек нет' }
   const wall = sign.name.replace(/_sign$/, '_wall_sign')
@@ -193,7 +193,7 @@ async function labelChest (session, ctl, ch, category) {
 async function sort (session, ctl, p: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
-  const containers = require('./containers')
+  const containers: typeof import('./containers') = require('./containers')
   const deadline = gameClock.now() + Math.min(600, p.timeoutSeconds ?? 180) * 1000
   const chests = findStorage(session, { radius: Math.max(4, Math.min(24, p.radius ?? 12)), at: p.at || null })
   if (!chests.length) {
@@ -216,7 +216,7 @@ async function sort (session, ctl, p: any = {}) {
 
   // Что из рюкзака отдаём: всё сверх снаряжения и запасов (containers KEEP),
   // или всё подряд с everything=true. Взятое из чужого сундука — целиком.
-  const plan = p.everything ? { plan: countItems(bot) } : containers.surplusPlan(bot)
+  const plan: { plan: Record<string, number>; kept?: Record<string, number> } = p.everything ? { plan: countItems(bot) } : containers.surplusPlan(bot)
   // Сколько каждого ещё можно отдать: лишнее сверх запаса плюс взятое из чужих
   // сундуков. Уменьшается с каждым положенным — иначе второй круг снова отдаёт
   // «лишние» четыре палки из тех восьми, что положено держать при себе.
@@ -354,7 +354,7 @@ const sleep = ms => new Promise<any>(resolve => gameClock.setTimeout(resolve, ms
 // Написать на табличке: существующую переписать, иначе повесить новую.
 async function sign (session, ctl, p: any = {}) {
   const bot = session.bot
-  const architect = require('./architect')
+  const architect: typeof import('./architect') = require('./architect')
   if (p.x === undefined || p.y === undefined || p.z === undefined) throw new Error('где: нужны x, y, z')
   const lines = Array.isArray(p.text) ? p.text : String(p.text || '').split(/\n|\|/)
   if (!lines.join('').trim()) throw new Error('что писать: text пуст (строки через | или \\n, до 4 по 15 знаков)')
@@ -399,4 +399,5 @@ declare namespace sign {
 }
 
 
-module.exports = { CATS, categoryOf, categoryFromText, labelsFor, findStorage, sort, sign, labelChest }
+const signExport = sign
+export { CATS, categoryOf, categoryFromText, labelsFor, findStorage, sort, signExport as sign, labelChest }

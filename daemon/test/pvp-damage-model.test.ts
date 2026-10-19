@@ -1,10 +1,10 @@
 'use strict'
 // Боевой калькулятор: урон 1.21.11 по байткоду Paper (src/pvp/damage-model.ts). Числа — руками по формулам
 // из jar (ссылки в модуле), сверка с уже существующими assess.afterArmor и mace.smashDamage.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const dm = require('../src/pvp/damage-model')
-const assess = require('../src/assess')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as dm from '../src/pvp/damage-model'
+import * as assess from '../src/assess'
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} ≠ ${b}`)
 const kit = (mat, ench = {}) => ['helmet', 'chestplate', 'leggings', 'boots'].map(s => ({ name: `${mat}_${s}`, ench }))
@@ -52,7 +52,7 @@ test('булава с 10 блоков против незерита: бонус 
   // MaceItem: 22 + (10 − 8) = 24; (6 + 24)·1.5 = 45 — то же, что mace.smashDamage.
   const raw = dm.meleeRaw({ weapon: 'mace', fall: 10, charge: 1 })
   near(raw, 45)
-  near(raw, require('../src/mace').smashDamage(10))
+  near(raw, (require('../src/mace') as typeof import('../src/mace')).smashDamage(10))
   // 20 − 45/(2 + 3) = 11 → ×(1 − 0.44) = 25.2.
   near(dm.afterDefense(raw, 'melee', def), 25.2)
   // Пролом IV: доля брони 0.44 − 0.6 → 0: весь урон.

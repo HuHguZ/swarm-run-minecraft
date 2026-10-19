@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { campaign } = require('./r4-harness')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { campaign } from './r4-harness'
 test('route food fight uses remaining step time', async () => {
   const c = campaign(); c.deadline(2500)
   await c.act('fight', { target: '#7', purpose: 'food', timeoutSeconds: 25 })

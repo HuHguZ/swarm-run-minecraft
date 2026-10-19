@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Крепость из блоков — «кошки-мышки» из PvP-роликов: закрыться в своей
 // клетке (стены по 2 блока с 4 сторон и крыша), отлечиться, латать дыры,
 // которые выламывает противник, выйти с нужной стороны. И обратное — осада:
@@ -14,10 +14,10 @@ const gameClock = require('./game-clock')
 // что закрываться булыжником можно только с киркой, иначе это ловушка для
 // себя; землю (0.5) руками — ~0.75 с.
 
-const Vec3 = require('vec3')
-const { placeBlockAt, pickFiller, withTimeout, FACES, occupiedByEntity } = require('./build')
-const { sleep } = require('./movement')
-const tools = require('./tools')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { placeBlockAt, pickFiller, withTimeout, FACES, occupiedByEntity }: typeof import('./build') = require('./build')
+const { sleep }: typeof import('./movement') = require('./movement')
+const tools: typeof import('./tools') = require('./tools')
 
 const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
 const PICKS = ['netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'golden_pickaxe', 'wooden_pickaxe']
@@ -82,7 +82,7 @@ function canBreakOut (bot, filler) {
   const block = bot.registry.blocksByName[filler.name]
   if (!block) return !!pickaxeOf(bot) || SOFT.test(filler.name)
   try {
-    const Block = require('prismarine-block')(bot.registry)
+    const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
     const b = new Block(block.id, 0, 0)
     // 3.5 с: доски и брёвна рукой — 3 с на блок (выход — 2 блока, 6 с, когда снаружи уже тихо); булыжник рукой —
     // 10 с, ловушка для себя.
@@ -95,7 +95,7 @@ function canBreakOut (bot, filler) {
 // Оценка и стройка используют один материал: булыжник без кирки не отменяет землю в рюкзаке.
 function refugeFiller (bot, needed = 10) {
   const filler = pickFiller(bot, { steady: true })
-  if (require('./worlds').worldOf(bot) !== 'overworld' || !filler || canBreakOut(bot, filler)) return filler
+  if ((require('./worlds') as typeof import('./worlds')).worldOf(bot) !== 'overworld' || !filler || canBreakOut(bot, filler)) return filler
   return bot.inventory.items().find(i => i.count >= needed &&
     /^(dirt|coarse_dirt|grass_block|clay|snow_block)$|_planks$/.test(i.name) && canBreakOut(bot, i)) || filler
 }
@@ -159,8 +159,8 @@ function boxPlan (cell, toward, roof) {
 function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true, material = null }: any = {}) {
   const need = refugeNeed(bot, cell), plan = boxPlan(cell, toward, roof)
   if (!need) return { ok: false, why: 'клетка не закрывается целыми стенами', plan, blocks: Infinity, ms: Infinity }
-  const pick = require('./pick'), predicted = new Map(), center = cell.offset(.5, 0, .5)
-  const entities = Object.fromEntries((Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity && require('./pvp/last-seen').seesPlayer(bot, e)).map(e => [e.id, e]))
+  const pick: typeof import('./pick') = require('./pick'), predicted = new Map(), center = cell.offset(.5, 0, .5)
+  const entities = Object.fromEntries((Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity && (require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e)).map(e => [e.id, e]))
   const view = { ...bot, entity: { ...bot.entity, position: center }, entities, blockAt: p => predicted.get(p.toString()) || bot.blockAt(p) }
   let blocks = 0
   for (let i = 0; i < plan.length; i++) {
@@ -171,7 +171,7 @@ function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true, mate
     if (!openCell(view.blockAt(p))) return { ok: false, why: 'клетка стены занята', plan, blocks, ms: Infinity }
     let eye = pick.eyeOf(view)
     if (roof && i === plan.length - 2) {
-      const lift = require('./navigation/geometry').verticalLift(view, center, 1)
+      const lift = (require('./navigation/geometry') as typeof import('./navigation/geometry')).verticalLift(view, center, 1)
       eye = eye.offset(0, lift || 0, 0)
     }
     if (!FACES.some(face => pick.faceAim(view, p.minus(face), face, { eye }))) return { ok: false, why: 'нет видимой опоры стены или крыши', plan, blocks, ms: Infinity }
@@ -403,8 +403,8 @@ function refugePlan (bot, cell, toward = null) {
 // выше неё. Прыжок — и на подъёме, как только прицел (faceAim) берёт верхнюю
 // грань, — установка в неё. Возвращает как placeBlockAt: { ok, reason }.
 async function jumpPlace (bot, pos, { ctl = null, timeoutMs = 900, item = null }: any = {}) {
-  const { waitForBlock } = require('./build')
-  const { faceAim } = require('./pick')
+  const { waitForBlock }: typeof import('./build') = require('./build')
+  const { faceAim }: typeof import('./pick') = require('./pick')
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   if (solidAt(bot, pos)) return { ok: true, already: bot.blockAt(pos).name }
   const ref = bot.blockAt(pos.offset(0, -1, 0))
@@ -450,7 +450,7 @@ async function landed (bot, ms = 900) {
 // pick.aim), чтобы отбросило. true — ударил.
 const SHOVE_MOBS = /^(zombie|husk|drowned|zombie_villager|skeleton|stray|bogged|parched|spider|cave_spider|witch|piglin_brute|hoglin|zoglin|wither_skeleton|vindicator|pillager|silverfish|endermite|magma_cube|slime|creaking)$/
 async function shove (bot, pos, r = 1.9) {
-  const pick = require('./pick')
+  const pick: typeof import('./pick') = require('./pick')
   const c = { x: pos.x + 0.5, z: pos.z + 0.5 }
   const e = (Object.values(bot.entities || {}) as any[])
     .filter((m : any) => m && m !== bot.entity && m.position && SHOVE_MOBS.test(m.name || '') && Math.abs(m.position.y - pos.y) < 2.5 &&
@@ -460,7 +460,7 @@ async function shove (bot, pos, r = 1.9) {
   const a = pick.aim(bot, e)
   if (!a || !a.point) return false
   try {
-    const w = require('./items').bestWeapon(bot)
+    const w = (require('./items') as typeof import('./items')).bestWeapon(bot)
     if (w && (!bot.heldItem || bot.heldItem.type !== w.type)) await withTimeout(bot.equip(w, 'hand'), 1500)
     await bot.lookAt(a.point, true)
     bot.attack(e)
@@ -598,7 +598,7 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
     // Пролом своей стены перед следующей стеной/лавой не выпускает тело.
     // Проверяем клетку за стеной до копки: воздух для ног и головы, опора.
     const outside = cell.plus(s.scaled(2))
-    if (!require('./walkable').standable(bot, outside)) continue
+    if (!(require('./walkable') as typeof import('./walkable')).standable(bot, outside)) continue
     let sc = 0
     if (away) {
       const ax = away.x - c.x; const az = away.z - c.z
@@ -678,7 +678,7 @@ async function leaveSealedCell (session, ctl, toward) {
   if (!enclosure(bot, cell).sealed) return false
   const out = await breakOut(bot, cell, { toward })
   if (ctl.aborted) throw new Error('прервано')
-  const up = out.ok ? null : await require('./survival/enter-shelter').exitShelter(session, ctl, { depth: 3 })
+  const up = out.ok ? null : await (require('./survival/enter-shelter') as typeof import('./survival/enter-shelter')).exitShelter(session, ctl, { depth: 3 })
   if (out.ok) session.shelterBox = null
   console.log('[goto] заперт в клетке', JSON.stringify({ cell: { x: cell.x, y: cell.y, z: cell.z }, side: out.ok, steps: out.steps, up: up ? { out: up.out, stopped: up.stopped } : undefined }))
   if (ctl.aborted) throw new Error('прервано')
@@ -716,7 +716,7 @@ function siegePlan (bot, targetCell, from) {
 // на двух уровнях, потолок над головой, пол) — целые блоки без жидкости. Вернёт лучшую сторону или null.
 const NICHE_BAD = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|bedrock|obsidian|crying_obsidian|reinforced_deepslate|spawner|chest|barrel|.*_ore|ancient_debris|.*shulker_box)$/
 function nichePlan (bot, c, { away = null, maxMs = 1200 }: any = {}) {
-  const Block = (() => { try { return require('prismarine-block')(bot.registry) } catch { return null } })()
+  const Block = (() => { try { return (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry) } catch { return null } })()
   let best = null
   for (const s of SIDES) {
     const w = c.plus(s)
@@ -785,4 +785,10 @@ module.exports = {
   SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, refugeFiller, enclosure, centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, leaveSealedCell, siegePlan, pickFiller,
   fullCube, openCell, refugeNeed, refugeBuildMs, refugeCell, refugePlan, jumpPlace, refugeBox, refugePatch, landed, shove, shoveNear, sinkRoof,
   nichePlan, takeNicheBody
+}
+export {
+  SIDES, HARD, feetCell, solidAt, pickaxeOf, hardFiller, boxMaterials, canBreakOut, refugeFiller, enclosure,
+  centerInCell, boxPlan, boxCheck, boxIn, patch, breakBlock, breakOut, leaveSealedCell, siegePlan, pickFiller,
+  fullCube, openCell, refugeNeed, refugeBuildMs, refugeCell, refugePlan, jumpPlace, refugeBox, refugePatch,
+  landed, shove, shoveNear, sinkRoof, nichePlan, takeNicheBody
 }

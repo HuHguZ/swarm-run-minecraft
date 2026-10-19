@@ -2,9 +2,9 @@ import { Vec3 } from 'vec3'
 import { standPositions } from '../navigation/geometry'
 import { visibleLanding } from '../navigation/parkour'
 import { combatMovement } from './movement'
-const { goals, Movements } = require('mineflayer-pathfinder')
-const clock = require('../game-clock')
-const pick = require('../pick')
+import { goals, Movements } from 'mineflayer-pathfinder'
+import * as clock from '../game-clock'
+import pick = require('../pick')
 
 // Shared by acquisition and LOS repositioning: packet-only cells stay unknown,
 // including apparently empty head space above a visible support.

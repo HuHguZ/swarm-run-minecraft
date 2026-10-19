@@ -5,10 +5,10 @@ N=${1:-5}
 HALF=${2:-384}
 for k in $(seq 1 $N); do
   echo "== цикл $k $(date +%H:%M:%S)"
-  node farm/farm.js down 29-30
-  node farm/farm.js up 2 --from 29 --fresh --random
-  node farm/portal-scan/scan.js gen 29 $HALF &
-  node farm/portal-scan/scan.js gen 30 $HALF &
+  node dist/farm/farm.js down 29-30
+  node dist/farm/farm.js up 2 --from 29 --fresh --random
+  node dist/farm/portal-scan/scan.js gen 29 $HALF &
+  node dist/farm/portal-scan/scan.js gen 30 $HALF &
   wait
   node --max-old-space-size=6144 farm/portal-scan/scan.js scan 29 $HALF
   node --max-old-space-size=6144 farm/portal-scan/scan.js scan 30 $HALF

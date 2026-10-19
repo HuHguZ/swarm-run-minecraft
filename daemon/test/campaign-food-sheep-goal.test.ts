@@ -1,11 +1,13 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { decideFight, foodUnits } = require('../src/play-policy')
+import { campaignTs } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { decideFight, foodUnits } from '../src/play-policy'
 
-const source = fs.readFileSync(path.resolve(__dirname, '../campaign.ts'), 'utf8')
+const source = campaignTs()
 const food = source.slice(source.indexOf('async function foodRun ('), source.indexOf('async function quickHunt ('))
 
 function fixture(inventory: Record<string, number>, wantBeds = 1, firstDrop?: string) {
@@ -32,7 +34,7 @@ function fixture(inventory: Record<string, number>, wantBeds = 1, firstDrop?: st
       throw stop
     }
   }
-  vm.runInNewContext(food, context)
+  vm.runInNewContext(food, cjsContext(context))
   const decision = (index = 0) => decideFight({
     bot: { inventory: { items: () => Object.entries(state.inventory).map(([name, count]) => ({ name, count })) } }, playPolicy: { mode: 'speedrun' }
   }, { name: 'sheep' }, calls[index].params)

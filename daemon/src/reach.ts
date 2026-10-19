@@ -1,7 +1,7 @@
 'use strict'
-const Vec3 = require('vec3')
-const { xyz } = require('./movement')
-const { RANGED } = require('./combat')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { xyz } from './movement'
+import { RANGED } from './combat'
 
 // Can this mob get at me — one question, asked the same way by the drift, by
 // the errand that comes back for ore, and by the climb.
@@ -354,4 +354,4 @@ function sceneryOf (mob, r) {
   return { mob: mob.name, dist: r.dist, at: xyz(mob.position), where: r.where, why: r.why }
 }
 
-module.exports = { reachOf, sceneryOf, clearLine, PATH_MAX }
+export { reachOf, sceneryOf, clearLine, PATH_MAX }

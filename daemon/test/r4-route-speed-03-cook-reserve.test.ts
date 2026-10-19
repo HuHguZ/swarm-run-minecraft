@@ -1,11 +1,13 @@
 'use strict'
+import { campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
 
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
 const root = process.env.R4_SOURCE_ROOT || path.resolve(__dirname, '../..')
 const nativeRequire = createRequire(path.join(root, 'daemon/campaign.js'))
 function load (inventory: any = {} as Record<string, any>, env: any = {} as Record<string, any>, hooks: any = {} as Record<string, any>) {
@@ -19,7 +21,7 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
     console: { log () {}, error () {} }, setTimeout, Date,
     fixtureState: state, fixtureRequests: requests, fixtureHooks: hooks
   }
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'daemon/campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = fixtureState; sit = { surface: true, night: false, inWater: false };
     refresh = async () => {}; sense = async () => {}; nightGuard = async () => {}; recoverGuard = async () => {};
     routeLeaveOutpost = async () => {}; routeGo = async () => true;
@@ -57,7 +59,7 @@ function load (inventory: any = {} as Record<string, any>, env: any = {} as Reco
       setRouteGo: f => { routeGo = f },
       setHook: (name, f) => { fixtureHooks[name] = f }
     };
-  `, context)
+  `, cjsContext(context))
   return { ...context.module.exports, state, requests }
 }
 

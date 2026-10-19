@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import route = require('../src/route')
 test('path forbids entering outpost and permits outward escape', () => {
   assert.equal(typeof route.outpostStepCost, 'function')
   const info = { outposts: [{ x: 0, z: 0, r: 72 }] }

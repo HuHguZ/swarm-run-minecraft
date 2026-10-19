@@ -4,9 +4,9 @@
 // Знание — только своё: сундук попадает в WorldState, когда его увидели глазами (arms-run, blocks_around seen).
 import { StrategyRegistry, type Strategy } from '../core/strategy'
 import { amount, knows, type WorldState } from '../core/world-state'
-const { WEAPON } = require('../assess')
-const { foodsByName } = require('minecraft-data')('1.21.11')
-const dm = require('./damage-model')
+import { WEAPON } from '../assess'
+const { foodsByName } = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+import * as dm from './damage-model'
 
 // ---------------------------------------------------------------- сила снаряжения
 // Грубая шкала «насколько опасен в бою»: ближнее оружие ≈ урон за секунду (меч ×1.6 удара/с,
@@ -120,7 +120,7 @@ export function recoveryFood(inventory: Record<string, number>, remaining = Infi
   // В цепочке прогнозов heal_items уже уменьшен, а наблюдавшийся inventory неизменен: пропускаем съеденные порции.
   let spent = total - count
   let selected = null
-  const { bestFood } = require('../actions')
+  const { bestFood }: typeof import('../actions') = require('../actions')
   while ((selected = bestFood({ inventory: { items: () => foods } }, { foodsByName }))) {
     if (spent < selected.count) break
     spent -= selected.count

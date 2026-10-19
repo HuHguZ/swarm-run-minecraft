@@ -1,7 +1,7 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { warmFixture, waitForMob } = require('../try-tick-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { warmFixture, waitForMob } from '../scenes/infra/try-tick-clock'
 
 function fixture (states) {
   let at = 0; let calls = 0
@@ -29,7 +29,7 @@ test('warmup waits through startup lag and requires a continuous healthy interva
 
 test('persistent lag fails warmup and retains the actual lag', async () => {
   const f = fixture([{ lagTicks: 1171 }])
-  await assert.rejects(warmFixture(f.call, 250, { wall: f.wall, timeoutMs: 600 }), error => {
+  await assert.rejects(warmFixture(f.call, 250, { wall: f.wall, timeoutMs: 600 }), (error: any) => {
     assert.equal(error.warmup.status, 'failed')
     assert.equal(error.warmup.maxLagTicks, 1171)
     assert.equal(error.warmup.lagTicks, 1171)

@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const Vec3 = require('vec3')
-const sky = require('../src/elytra')
-const clock = require('../src/game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import sky = require('../src/elytra')
+import clock = require('../src/game-clock')
 
 function approach(weapon: string, x = 0, speed = 1.5, velocity = new Vec3(0, 0, 0), using = true) {
   const bot: any = new EventEmitter()

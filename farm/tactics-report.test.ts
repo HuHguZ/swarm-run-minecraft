@@ -16,12 +16,12 @@ test('tactics report keeps farm rows (mcPort), orders episode chains and lists d
     { level: 'tactical', at, skill: 'Shield', threat: 1, result: 'completed', sec: 1, hp0: 20, hp: 20 }
   ]
   fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n')
-  const out = JSON.parse(childProcess.execFileSync(process.execPath, [path.join(__dirname, 'tactics-report.js'), '--file', file, '--json'], { encoding: 'utf8' }))
+  const out = JSON.parse(childProcess.execFileSync(process.execPath, [path.join(__dirname, 'analysis', 'tactics-report.js'), '--file', file, '--json'], { encoding: 'utf8' }))
   assert.equal(out.rows, 3, 'a row without mcPort (unit test) is left out')
   assert.deepEqual(out.episodes.chains, [['BlockOff>Flee>BlockOff ✝', 1]])
   assert.deepEqual(out.actions.find((action: any) => action.skill === 'BlockOff').preemptedBy, [['Flee', 1]])
   assert.equal(out.deaths[0].state.enemies[0].kind, 'piglin_brute')
   assert.deepEqual(out.actions.find((action: any) => action.skill === 'Flee').outcomes, [['died', 1]])
-  const everything = JSON.parse(childProcess.execFileSync(process.execPath, [path.join(__dirname, 'tactics-report.js'), '--file', file, '--json', '--all'], { encoding: 'utf8' }))
+  const everything = JSON.parse(childProcess.execFileSync(process.execPath, [path.join(__dirname, 'analysis', 'tactics-report.js'), '--file', file, '--json', '--all'], { encoding: 'utf8' }))
   assert.equal(everything.rows, 4)
 })

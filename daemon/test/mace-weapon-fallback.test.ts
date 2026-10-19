@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { bestWeapon } = require('../src/items')
-const { createEquipment } = require('../src/pvp/equipment')
+import { bestWeapon } from '../src/items'
+import { createEquipment } from '../src/pvp/equipment'
 
 test('a mace-only combat kit keeps its real weapon after landing and retargeting', async () => {
   const item = { name: 'mace' }, calls = []

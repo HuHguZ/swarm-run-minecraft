@@ -1,13 +1,14 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
-const { astar } = require('../src/ride')
-const { planBoatRoute } = require('../src/boat-route-plan')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { astar } from '../src/ride'
+import { planBoatRoute } from '../src/boat-route-plan'
 
 function pondFixture (ox, oz) {
   const wet = new Set()
@@ -52,7 +53,7 @@ function boatCompletion (beached, stay) {
     setTimeout, clearTimeout, Buffer, testRide: async (session, ctl, boat, target, report) => { report.beached = beached; return true },
     testDismount: async () => { dismounted++; return true }, testPickup: async () => {}
   }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nrideBoat = testRide; dismount = testDismount; pickUpBoat = testPickup; sleep = async () => {}; module.exports.testRunBoat = runBoat;', context)
+  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nrideBoat = testRide; dismount = testDismount; pickUpBoat = testPickup; sleep = async () => {}; module.exports.testRunBoat = runBoat;', cjsContext(context))
   const boat = { id: 17, name: 'oak_boat', position: new Vec3(451, 62, -881) }
   const bot = { vehicle: boat, entity: { position: boat.position.clone() }, inventory: { items: () => [] } }
   return context.module.exports.testRunBoat({ bot }, { aborted: false }, { kind: 'boat', mode: 'go', stay }, {} as Record<string, any>,

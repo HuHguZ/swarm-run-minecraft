@@ -1,15 +1,15 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const dragon = require('../src/dragon')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import dragon = require('../src/dragon')
 
 // Тело дракона по трассе dtr-1-2 (2026-09-29, смерть на 556 с «slain by Ender
 // Dragon»): пять заходов в коробки крыльев садящегося и взлетающего дракона —
 // по три удара (5, в железе 2.5), подброс, падение; добил взлёт. Мир фермы:
 // земля — ноги на 61, фонтан (столб bedrock 0,60..63,0) — верх 64, сидит на
 // Y 63.8–64.9.
-const registry = require('minecraft-data')('1.21.11')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const KEYS = registry.entitiesByName.ender_dragon.metadataKeys
 function world (holes = []) {
   const hole = new Set(holes.map(([x, y, z]: any) => `${x},${y},${z}`))

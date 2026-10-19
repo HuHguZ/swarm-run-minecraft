@@ -1,8 +1,8 @@
 'use strict'
 // S5c (06.10): подход к комнате крепости по карте копии мира — сухой вход дальше 14 бл. (комната под океаном).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // S5e (07.10): шахта и штрек по прогруженным чанкам (рентген толщи) — только «полный скан»; в rsg/ssg — честный спуск
 // (endportal-descent, test/s5e-endgame). Эти тесты — про ход scan.
@@ -10,7 +10,7 @@ function scanFor (t: any) { const s = process.env.ND_KNOWLEDGE; process.env.ND_K
 
 test('сухой вход к комнате под океаном: ближайшая суша до 48 бл., вода и непрогруженное — не вход', (t) => {
   scanFor(t)
-  const { dryEntry } = require('../src/endportal')
+  const { dryEntry }: typeof import('../src/endportal') = require('../src/endportal')
   // Море |x−100| < 30 (вода y 50..62, дно y 49), суша дальше (камень до y 64); x > 140 — чанк не прогружен.
   const blockAt = p => {
     if (p.x > 140) return null
@@ -31,8 +31,8 @@ test('сухой вход к комнате под океаном: ближай�
 // Тактика (узкая правка s5c 06.10): падение ведёт рефлекс клатча — тактика без выбранного действия навык не рвёт;
 // угроза с действием (тонет — Surface) рвёт, как прежде.
 test('тактика: падение под клатчем без действия не обрывает навык (s5c-f2-3: 49 обрывов goto), утопление — обрывает', () => {
-  const { EventEmitter } = require('node:events')
-  const { TacticalSystem } = require('../src/tactics/minecraft')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
   const mk = (water: boolean) => {
     const bot: any = new EventEmitter()
     bot.version = '1.21.11'; bot.health = 20; bot.food = 20; bot.oxygenLevel = water ? 4 : 20
@@ -48,7 +48,7 @@ test('тактика: падение под клатчем без действи
     if (!water) bot._ndClutch = { lastDecision: { action: 'water' } }
     const ctl: any = { aborted: false, onAbort: [], abort () { this.aborted = true } }
     const s: any = { bot, current: { name: 'goto', ctl }, reflex: null, bus: { emit: () => {} }, tempo: null }
-    const t = s.tactics = new TacticalSystem(s)
+    const t: any = s.tactics = new TacticalSystem(s)
     t.execute = () => new Promise(() => {})
     return { s, t, ctl }
   }
@@ -61,10 +61,10 @@ test('тактика: падение под клатчем без действи
 // s5c-f4-4 (06.10): explore в воде без пути — travelXZ отказывал без единого таймера, цикл крутился микрозадачами, игровые
 // часы не шли (срок не наступал), демон 100 % CPU 12+ мин. Теперь после отказа — пауза игрового времени, срок наступает.
 test('explore: отрезок отказал сразу — цикл отдаёт события и кончается по сроку игровых часов', { timeout: 15000 }, async () => {
-  const Vec3 = require('vec3')
-  const gameClock = require('../src/game-clock')
-  const { explore } = require('../src/actions')
-  const mcData = require('minecraft-data')('1.21.11')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { explore }: typeof import('../src/actions') = require('../src/actions')
+  const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const c = new gameClock.GameClock({ epoch: 0, stallMs: 0 }); c.setState({ tick_rate: 200 }); gameClock.activate(c); c.start()
   // В толще воды под камнем: ни берега, ни воздуха — escapeWater «нет пути» мгновенно.
   const bot: any = { entity: { position: new Vec3(0.5, 60, 0.5), isInWater: true, onGround: false, yaw: 0, pitch: 0, eyeHeight: 1.62 },
@@ -84,13 +84,13 @@ test('explore: отрезок отказал сразу — цикл отдаё�
 })
 
 test('шахта/штрек: снег без лопаты пробиваем руками (дроп не нужен), долгий удар — стоп (s5c-g2-3)', () => {
-  const { cantDigThrough } = require('../src/endportal')
-  const mcData = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')('1.21.11')
+  const { cantDigThrough }: typeof import('../src/endportal') = require('../src/endportal')
+  const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
   const snow = Block.fromStateId(mcData.blocksByName.snow_block.defaultState, 0)
   const obsidian = Block.fromStateId(mcData.blocksByName.obsidian.defaultState, 0)
   const bot: any = { registry: mcData, inventory: { items: () => [] }, heldItem: null, digTime: b => b.name === 'snow_block' ? 1000 : 250000 }
-  assert.ok(require('../src/items').missingHarvestTool(bot, snow, mcData), 'для дропа снега нужна лопата')
+  assert.ok((require('../src/items') as typeof import('../src/items')).missingHarvestTool(bot, snow, mcData), 'для дропа снега нужна лопата')
   assert.equal(cantDigThrough(bot, snow, mcData), null)
   assert.ok(cantDigThrough(bot, obsidian, mcData), 'обсидиан руками — стоп')
 })

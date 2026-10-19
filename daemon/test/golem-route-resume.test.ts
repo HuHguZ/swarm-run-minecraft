@@ -1,14 +1,15 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
 const filename = path.resolve(__dirname, '../src/campaign/overworld-route.js')
-const source = require('esbuild').transformSync(fs.readFileSync(filename.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
+const source = (require('esbuild') as typeof import('esbuild')).transformSync(fs.readFileSync(filename.replace(/\.js$/, '.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code
 const box = { module: { exports: {} as Record<string, any> }, require: createRequire(filename) }
-vm.runInNewContext(source, box)
+vm.runInNewContext(source, cjsContext(box))
 
 function fixture () {
   let fill = 8, mode = 'injury', escape = false, pursuing = false, arrived = true

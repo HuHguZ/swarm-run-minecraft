@@ -1,6 +1,6 @@
-const { findItem, clearControls, gameClock, sleep, cloudsOf, CENTER, Vec3, SAFE_FROM_CRYSTAL, EYE, bow, PHASE, stepTo, dbg } = require('./dig-down-to')
-const { countOf } = require('./evade-raw')
-const { surfaceY, inClouds, nearEdge, standY } = require('./fall-guard')
+const { findItem, clearControls, gameClock, sleep, cloudsOf, CENTER, Vec3, SAFE_FROM_CRYSTAL, EYE, bow, PHASE, stepTo, dbg }: typeof import('./dig-down-to') = require('./dig-down-to')
+const { countOf }: typeof import('./evade-raw') = require('./evade-raw')
+const { surfaceY, inClouds, nearEdge, standY }: typeof import('./fall-guard') = require('./fall-guard')
 async function unstick (bot, ctl, stats) {
   stats.dodges = stats.dodges || {}
   stats.dodges.застрял = (stats.dodges.застрял || 0) + 1
@@ -117,3 +117,4 @@ function chargeOf (bot, d, ph) {
 }
 
 module.exports = { unstick, makeRubberband, crystalShotSpot, pointBlank, takeoffSoon, chargeRec, chargeOf }
+export { unstick, makeRubberband, crystalShotSpot, pointBlank, takeoffSoon, chargeRec, chargeOf }

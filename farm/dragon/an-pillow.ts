@@ -1,8 +1,8 @@
 // Где голова проходит над фонтаном на снижении (rec-*.jsonl): минимум расстояния от низа-центра
 // головы до «подушек» у центрального столба (кровать на P−1 вплотную к столбу и на P−2/P−3), сколько
-// тиков голова в ≤ 2.5 от каждой, по последним 80 тикам LANDING. node farm/dragon/an-pillow.js rec...
-const fs = require('fs')
-const S = require('./dsim')
+// тиков голова в ≤ 2.5 от каждой, по последним 80 тикам LANDING. node dist/farm/dragon/an-pillow.js rec...
+import * as fs from 'fs'
+import * as S from './dsim'
 const rows = []
 for (const file of process.argv.slice(2)) {
   const L = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(x => x && x.ph != null && x.p)

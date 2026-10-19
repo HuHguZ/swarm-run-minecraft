@@ -12,7 +12,7 @@
 // Центр — из своей точки и метки игрока (ошибка ≤ 2^s/2 блока, а центры стоят через 128·2^s — центр точный); крестик —
 // центр + байт·2^(s−1) (±1 на округлении), затем привязка к клетке 9 чанка: клад ставится в locate_offset [9, 0, 9]
 // (worldgen/structure_set/buried_treasures.json) — ExplorationMapFunction кладёт крестик в точку поиска постройки.
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 
 const T = { player: 0, red_x: 26, off_map: 6, off_limits: 7 }
 
@@ -36,7 +36,9 @@ function mapIdOf (item) {
 }
 
 // Байты карты → мировые координаты крестика. me — {x, z} тела. { x, z } (клетка сундука), или { toward, why } вне карты.
-function decode (m, me) {
+// Чтение карты: x, z — клад; toward — к краю карты, пока я вне её; why — почему не прочитать.
+interface MapRead { x?: number; z?: number; toward?: { x: number; z: number }; why?: string; center?: { x: number; z: number }; scale?: number }
+function decode (m, me): MapRead {
   if (!m || !m.icons) return { why: 'карта ещё не пришла' }
   const s = m.scale ?? 1
   const size = 128 * (1 << s)
@@ -81,4 +83,4 @@ function read (bot) {
   return out
 }
 
-module.exports = { install, read, decode, mapIdOf, T }
+export { install, read, decode, mapIdOf, T }

@@ -1,3 +1,4 @@
+import { moduleSourceTs } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -5,7 +6,7 @@ import path from 'node:path'
 import { body } from './ow-golden-source'
 
 function explorer(direction: string | null) {
-  const source = fs.readFileSync(path.join(__dirname, '../src/actions.ts'), 'utf8')
+  const source = moduleSourceTs(path.join(__dirname, '../src/actions.ts')) /* фасад + части src/actions/** */
   let time = 0
   const targets: number[][] = []
   const bot: any = { entity: { position: { x: 0, y: 64, z: 0 } }, pathfinder: { movements: {} } }

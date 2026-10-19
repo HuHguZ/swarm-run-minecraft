@@ -1,11 +1,11 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const PT = require('../src/bastion/pen-trap')
-const PG = require('../src/bastion/predict-gold')
-const SL = require('../src/sealed')
-const pick = require('../src/pick')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as PT from '../src/bastion/pen-trap'
+import PG = require('../src/bastion/predict-gold')
+import SL = require('../src/sealed')
+import pick = require('../src/pick')
 
 // Мир-чернокамень с вырезанными клетками. Рот M=(0,100,0), d=+x: яма P=(0,98,0), H=(0,99,0); пол пиглинов y=100,
 // x 1..5, z −3..3 (пол под ним y=99 — твёрдый).

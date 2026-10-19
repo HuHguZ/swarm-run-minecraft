@@ -1,11 +1,11 @@
 'use strict'
 // Оценка хп противника-игрока без метаданных (src/pvp/hp-estimate.ts) и честность адаптера
 // (src/pvp/combat-observe.ts): против игрока точное хп в решения не идёт.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { createHpEstimate, cdf, REGEN_FAST, REGEN_SLOW } = require('../src/pvp/hp-estimate')
-const co = require('../src/pvp/combat-observe')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { createHpEstimate, cdf, REGEN_FAST, REGEN_SLOW } from '../src/pvp/hp-estimate'
+import * as co from '../src/pvp/combat-observe'
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} ≠ ${b}`)
 
@@ -139,7 +139,7 @@ test('адаптер: моб — точное хп; трекер: наше по�
 })
 
 test('S7d: быстрая регенерация ограничена насыщением — за 60 с без попаданий верх не больше 20, а после ~13 хп — медленная', () => {
-  const { createHpEstimate } = require('../src/pvp/hp-estimate')
+  const { createHpEstimate }: typeof import('../src/pvp/hp-estimate') = require('../src/pvp/hp-estimate')
   const e = createHpEstimate()
   e.hit({ min: 15, max: 15 }) // 5 хп
   e.tick(200) // 10 с: быстрая по насыщению до +13.3, не больше
@@ -158,7 +158,7 @@ test('S7d: быстрая регенерация ограничена насыщ
 })
 
 test('S7d: насыщение тратится только на лечение — минута на полном хп бюджет быстрой регенерации не съедает', () => {
-  const { createHpEstimate } = require('../src/pvp/hp-estimate')
+  const { createHpEstimate }: typeof import('../src/pvp/hp-estimate') = require('../src/pvp/hp-estimate')
   const e = createHpEstimate()
   e.tick(1200) // 60 с без урона: верх у 20, лечить нечего
   near(e.snapshot().satHp, 20 / 1.5, 1e-6)
@@ -169,14 +169,14 @@ test('S7d: насыщение тратится только на лечение 
 })
 
 test('S7d (честность): его еда — только увиденная от начала до конца; щит/лук «опустил» — не еда', () => {
-  const visionMod = require('../src/pvp/last-seen')
+  const visionMod: typeof import('../src/pvp/last-seen') = require('../src/pvp/last-seen')
   const was = visionMod.seesPlayer
   let visible = true
   visionMod.seesPlayer = () => visible
   try {
     const foe: any = foePlayer()
     const bot: any = fakeBot(foe)
-    bot.registry = require('minecraft-data')('1.21.11')
+    bot.registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
     let tick = null
     bot.on = (n, f) => { if (n === 'physicsTick') tick = f }
     const keys = bot.registry.entitiesByName.player.metadataKeys

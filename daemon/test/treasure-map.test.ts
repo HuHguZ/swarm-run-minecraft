@@ -1,9 +1,9 @@
 'use strict'
 // Карта сокровищ по пакету карты (MapItemSavedData 1.21.11): центр — из своей точки и своей метки, крестик — в клетке 9 чанка.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const tm = require('../src/treasure-map')
-const { structureWorth, describeWorth } = require('../src/campaign/structure-value')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as tm from '../src/treasure-map'
+import { structureWorth, describeWorth } from '../src/campaign/structure-value'
 
 // Как сервер: центр карты масштаба s у точки клада, байт метки = (int)(f·2 + 0.5), f = (мир − центр) / 2^s, край ±63.
 function packet (target, me, s = 1) {

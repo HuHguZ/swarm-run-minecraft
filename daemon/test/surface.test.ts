@@ -1,11 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Minecraft-физика на границе заменена шагами по одному блоку. Выбор способа,
 // проверка опасных блоков и подсчёт инструмента — настоящие из survival.js.
@@ -33,7 +34,7 @@ async function climb ({ preferPillar, hazard = null, filler = true, pillarMoves 
       return actual
     }, bot, moves
   }
-  vm.runInNewContext(require('./source-fixture').bodySource(process.env.SURVIVAL_TEST_SOURCE || file) + `
+  vm.runInNewContext((require('./source-fixture') as typeof import('./source-fixture')).bodySource(process.env.SURVIVAL_TEST_SOURCE || file) + `
     pitCheck = () => ({ out: false, free: false }); openSky = () => false;
     seenBy = () => null; legLevels = () => 4;
     stairStep = async (_bot, _data, _ctl, feet, dir) => {
@@ -41,7 +42,7 @@ async function climb ({ preferPillar, hazard = null, filler = true, pillarMoves 
       return { ok: true, dug: 3 };
     };
     module.exports.testSurface = surface;
-  `, context)
+  `, cjsContext(context))
   const result = await context.module.exports.testSurface({ bot, mcData: {} as Record<string, any>, journal: { append () {} } }, { aborted: false, onAbort: [] },
     { targetY: 1, preferPillar, timeoutSeconds: 10 })
   return { moves, result }
@@ -102,7 +103,7 @@ async function guardedPillar (dangerAfter) {
   vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
     towerUp = async () => { moves.jumps++; return { placed: 1 }; };
     module.exports.testDigUp = digUp;
-  `, context)
+  `, cjsContext(context))
   const result = await context.module.exports.testDigUp(bot, { aborted: false }, {
     blocks: 1, guard: () => moves.digs >= dangerAfter ? { who: { name: 'zombie' }, dist: 5 } : null
   })

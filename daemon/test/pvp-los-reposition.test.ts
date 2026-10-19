@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { Vec3 } from 'vec3'
+import { cjsContext } from './cjs-context'
 
 const req = createRequire(resolve(__dirname, '../src/pvp.js'))
 const pick = req('./pick')
@@ -43,7 +44,7 @@ function context (bot, position, vision = { visible: () => false }) {
     AR: null, onField: () => true, require: req, goals }
 }
 function spot (ctx) {
-  return runInNewContext(source.slice(spotStart, spotEnd) + '\nlosSpot()', ctx)
+  return runInNewContext(source.slice(spotStart, spotEnd) + '\nlosSpot()', cjsContext(ctx))
 }
 
 test('a player seen during an awaited skill retains that observation after landing behind cover', t => {
@@ -71,7 +72,7 @@ test('a player seen during an awaited skill retains that observation after landi
   assert.equal(entity._ndVisible, false)
   assert.deepEqual(entity.position, observed)
   ctx.eye = pick.eyeOf(bot)
-  runInNewContext(source.slice(seenStart, seenEnd), ctx)
+  runInNewContext(source.slice(seenStart, seenEnd), cjsContext(ctx))
   assert.deepEqual(ctx.foeSeenPos, observed, 'the caller must use the observer receipt, including one received while awaiting a skill')
   assert.notDeepEqual(ctx.foeSeenPos, raw.position, 'never follow the hidden raw packet')
 })
@@ -121,7 +122,7 @@ function strafeScene() {
   }
   const init = bodyPart('  let strafeKey = ', '  let dodgeKey = ')
   const tick = bodyPart('    let forward = false', '    const shieldBroken = ')
-  runInNewContext(`${init}\nglobalThis.poll = () => { ${tick}\nreturn strafeKey }`, ctx)
+  runInNewContext(`${init}\nglobalThis.poll = () => { ${tick}\nreturn strafeKey }`, cjsContext(ctx))
   return ctx
 }
 
@@ -147,10 +148,10 @@ test('spear bracing follows the current dive instead of expiring after three sec
     gameClock: { now: () => 60000 }, drops: 0, heldName: () => 'iron_spear',
     spear: req('./spear'), bot: { deactivateItem: () => { ctx.drops++ } } }
   const branch = bodyPart('    if (bracing && ', '    // Он летит на нас')
-  runInNewContext(branch, ctx)
+  runInNewContext(branch, cjsContext(ctx))
   assert.equal(ctx.drops, 0)
   ctx.skyThreat = null
-  runInNewContext(branch, ctx)
+  runInNewContext(branch, cjsContext(ctx))
   assert.equal(ctx.drops, 1, 'the dive ending releases the spear immediately')
 })
 
@@ -162,7 +163,7 @@ function floorScene() {
     keyDir: (_bot, k) => ({ x: k === 'forward' ? 1 : k === 'back' ? -1 : 0, z: k === 'left' ? 1 : k === 'right' ? -1 : 0 }) }
   const init = bodyPart('  let floorEscape = ', '  let groundY = ')
   const branch = bodyPart('\n    if (floorEscape', '    if (!meInWeb) {')
-  runInNewContext(`${init}\nglobalThis.poll = () => { const me = bot.entity.position; let forward = false, back = false, strafe = null, sprint = false, jump = false; ${branch}\nreturn { forward, back, strafe } }`, ctx)
+  runInNewContext(`${init}\nglobalThis.poll = () => { const me = bot.entity.position; let forward = false, back = false, strafe = null, sprint = false, jump = false; ${branch}\nreturn { forward, back, strafe } }`, cjsContext(ctx))
   const block = { position: new Vec3(0, -1, 0) }
   return { ctx, crack: (breaker = 2) => bot.emit('blockBreakProgressObserved', block, 3, { id: breaker }),
     stop: (breaker = 2) => bot.emit('blockBreakProgressEnd', block, { id: breaker }) }
@@ -210,7 +211,7 @@ function routeScene() {
   const helperCode = helpers < 0 ? '' : source.slice(helpers, source.indexOf('\n  let lastTrick', helpers))
   const branch = bodyPart('    // Окно перестановки', '    if (prof.flying')
   const unblock = bodyPart('    if (st.blockedSince &&', "    if (back &&")
-  runInNewContext(`${helperCode}\nglobalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }; globalThis.unblock = async () => { for (let pass = 0; pass < 1; pass++) { ${unblock} } }`, ctx)
+  runInNewContext(`${helperCode}\nglobalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }; globalThis.unblock = async () => { for (let pass = 0; pass < 1; pass++) { ${unblock} } }`, cjsContext(ctx))
   return ctx
 }
 
@@ -281,7 +282,7 @@ async function attackerTurn({ visible = true, r = 8, inSight = false } = {}) {
     busyFoe: false, inSight, vision: { visible: () => visible }, pick: { canHit: () => visible }, bot: {},
     turns: [] as number[], used() {}, retarget: e => ctx.turns.push(e.id), holdWeapon: async () => {} }
   const at = source.indexOf('    if (prof.player && !duo.active()'); const branch = source.slice(at, source.indexOf('\n    if (', at + 8))
-  await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } })()`, ctx)
+  await runInNewContext(`(async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } })()`, cjsContext(ctx))
   return ctx.turns
 }
 
@@ -332,10 +333,10 @@ function counterScene({ bow = false, near = false } = {}) {
   const columnStart = source.indexOf('  const columnInputs = ')
   if (columnStart >= 0) {
     ctx.edges = { fillerCount: () => 64 }; ctx.pick = pick
-    runInNewContext(source.slice(columnStart, source.indexOf('  const windInputs = ', columnStart)) + '\nglobalThis.columnInputs = columnInputs', ctx)
+    runInNewContext(source.slice(columnStart, source.indexOf('  const windInputs = ', columnStart)) + '\nglobalThis.columnInputs = columnInputs', cjsContext(ctx))
   }
   const branch = ifBody('    if (theyUp && prof.player && !perch && !reposition')
-  runInNewContext(`globalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }`, ctx)
+  runInNewContext(`globalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
   return { ctx, commands, towers: () => towers, mining: v => { mining = v }, geometry: v => { geometry = v; const read = bot.blockAt; bot.blockAt = p => p.floored().equals(new Vec3(0, 2, 0)) ? { ...read(p), name: v, stateId: v } : read(p) } }
 }
 
@@ -382,7 +383,7 @@ test('failed shelter remains refused through time and unlocks on a changed mater
   const start = source.indexOf('  let failedFort = '), original = source.indexOf('  const fortOut = ')
   const end = source.indexOf('\n  const punchThrough', original)
   const init = start >= 0 ? source.slice(start, end) : source.slice(original, end)
-  runInNewContext(require('esbuild').transformSync(init + '\nglobalThis.tryFort = fortOut', { loader: 'ts' }).code, ctx)
+  runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(init + '\nglobalThis.tryFort = fortOut', { loader: 'ts' }).code, cjsContext(ctx))
   await ctx.tryFort(); ctx.now = 60000; await ctx.tryFort(); assert.equal(attempts, 1)
   material = 'enough blocks with visible faces'; await ctx.tryFort(); assert.equal(attempts, 2)
 })
@@ -399,7 +400,7 @@ test('a failed smash does not repeat on the same launch; a changed available tra
     track: { vel: () => new Vec3(0, 0, 0) }, telemetryHp: () => null, used() {}, holdWeapon: async () => {},
     process: { env: {} }, console: { log() {} }, ctl: { aborted: false } }
   const branch = ifBody('    if (!smashSetup && prof.player')
-  runInNewContext(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, ctx)
+  runInNewContext(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
   await ctx.poll(); ctx.now += 60000; nativeReady = true; await ctx.poll(); assert.equal(attempts, 1)
   trajectory = 'new safe landing'; await ctx.poll(); assert.equal(attempts, 2)
 })
@@ -413,7 +414,7 @@ function flankScene() {
     routeInputs: () => geometry, miningProgress: () => mining, clear() {}, ready: () => true, rest() {}, used() {},
     pathTo: on => commands.push(on), sleep: async () => {} }
   const branch = ifBody('      } else if (r > HIT_REACH && !theyUp')
-  runInNewContext(`globalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }`, ctx)
+  runInNewContext(`globalThis.poll = async () => { me = bot.entity.position; for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
   return { ctx, commands, mining: v => { mining = v }, geometry: v => { geometry = v } }
 }
 
@@ -441,7 +442,7 @@ test('a grounded high target offers climb immediately, and a failed shaft needs 
     bowWatch: { shots: 0 }, findItem: () => null, holdWeapon: async () => {}, used() {}, process: { env: {} },
     routeInputs: () => geometry, columnInputs: () => geometry }
   const branch = ifBody('    if (!AR && prof.player && dy > 6')
-  runInNewContext(require('esbuild').transformSync(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, { loader: 'ts' }).code, ctx)
+  runInNewContext((require('esbuild') as typeof import('esbuild')).transformSync(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, { loader: 'ts' }).code, cjsContext(ctx))
   await ctx.poll(); assert.equal(climbs, 1)
   ctx.now += 60000; await ctx.poll(); assert.equal(climbs, 1)
   geometry = 'open'; ctx.climbInputs = 'open|open'; await ctx.poll(); assert.equal(climbs, 2)
@@ -458,7 +459,7 @@ test('a rejected combat hop chooses another means until its observed obstacle ch
     routeInputs: () => geometry, hazardOnLine: () => ({}), st: {}, used() {}, sleep: async () => {}, gameClock: { now: () => ctx.now },
     require: id => { assert.equal(id, './navigation/parkour'); return { combatHop: async () => { attempts++; return { ok: false, why: 'no supported landing' } } } } }
   const branch = ifBody('    if (HOP && prof.player')
-  runInNewContext(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, ctx)
+  runInNewContext(`globalThis.poll = async () => { for (let pass = 0; pass < 1; pass++) { ${branch} } }`, cjsContext(ctx))
   await ctx.poll(); ctx.now += 60000; await ctx.poll(); assert.equal(attempts, 1)
   geometry = 'new support'; await ctx.poll(); assert.equal(attempts, 2)
 })

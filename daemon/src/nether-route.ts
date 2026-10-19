@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Ход по Аду по сетке «из копии этого же мира» (nether-grid.js; поток nether, 03.10).
 //
 // Пешком по Аду тело гибло на обрывах, в лаве и под гастами, а закрытый штрек (tunnel.js / sealed.plan) кусками по
@@ -13,13 +13,13 @@ const gameClock = require('./game-clock')
 //
 // Вкл. по умолчанию (ND_NE_ROUTE=0 — выкл.) в своих местах: fortress.toSpawner, bastion подход/золото, кампания goToward по
 // Аду (у кампании — ND_NE_ROUTE=1 в её окружении); RPC ne_route.
-const fs = require('fs')
-const path = require('path')
-const { Vec3 } = require('vec3')
-const NG = require('./nether-grid')
+const fs: typeof import('fs') = require('fs')
+const path: typeof import('path') = require('path')
+const { Vec3 }: typeof import('vec3') = require('vec3')
+const NG: typeof import('./nether-grid') = require('./nether-grid')
 const { C, DIG } = NG
-const { performance } = require('node:perf_hooks')
-const { ReceiptCostWindow } = require('./environments/receipt-cost')
+const { performance }: typeof import('node:perf_hooks') = require('node:perf_hooks')
+const { ReceiptCostWindow }: typeof import('./environments/receipt-cost') = require('./environments/receipt-cost')
 const receiptCosts = new WeakMap<object, import('./environments/receipt-cost').ReceiptCostWindow>()
 interface RouteSupplyNeed {
   pickSwings: number
@@ -28,7 +28,7 @@ interface RouteSupplyNeed {
   requiredWood: 8
   table: boolean
 }
-interface NetherRouteResult {
+export interface NetherRouteResult {
   ok: boolean
   why?: string
   steps: number
@@ -79,7 +79,7 @@ function gridOf (session) {
   const dir = session && session.cfg && session.cfg.memoryDir
   if (!dir) return null
   // S1f (аудит S10): сетка Ада — скан копии мира, читать только на уровне знания scan (rsg/ssg — вслепую, без сетки).
-  if (!require('./perception/knowledge').allows('grid', 'nether-route')) return null
+  if (!(require('./perception/knowledge') as typeof import('./perception/knowledge')).allows('grid', 'nether-route')) return null
   let st
   try { st = fs.statSync(path.join(dir, 'nether-grid.json')) } catch { return null }
   if (cached && cached.dir === dir && cached.mtime === st.mtimeMs) return cached.grid
@@ -524,10 +524,10 @@ function liveClass (bot, c) {
 // столб в 3 блока и луком сверху. Нет лука или стрел — как было (бой вплотную в threatCheck).
 async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower = true }: any = {}) {
   const bot = session.bot
-  const { itemNamed } = require('./items')
+  const { itemNamed }: typeof import('./items') = require('./items')
   const arrows = () => bot.inventory.items().filter(i => /arrow$/.test(i.name)).reduce((n, i) => n + i.count, 0)
   if (!itemNamed(bot, 'bow') || arrows() === 0) return false
-  const P = require('./perception')
+  const P: typeof import('./perception') = require('./perception')
   const seen = e => { try { return P.raySees(bot, P.eyePos(bot), e.position.offset(0, 1.6, 0)) } catch { return false } }
   const pick = () => (Object.values(bot.entities || {}) as any[]).filter((e : any) => e && e.position && e.isValid !== false && /^(wither_skeleton|piglin_brute)$/.test(e.name || '') && e.position.distanceTo(bot.entity.position) < radius && seen(e))
     .sort((a: any, b: any) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
@@ -540,7 +540,7 @@ async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower
     const above = bot.entity.position.y - foe.position.y >= 2.6
     const d = foe.position.distanceTo(bot.entity.position)
     if (!above && tower && !towered && d > 3.2 && bot.entity.onGround) {
-      const r = await require('./build').towerUp(bot, ctl, 3, { sneak: true }).catch(() => ({ ok: false }))
+      const r = await (require('./build') as typeof import('./build')).towerUp(bot, ctl, 3, { sneak: true }).catch(() => ({ ok: false }))
       towered = true
       log('столб от иссушителя', { foe: foe.name, ok: !!(r && r.ok), y: Math.round(bot.entity.position.y * 10) / 10 })
       continue
@@ -548,7 +548,7 @@ async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower
     if (!above) return false
     bot.setControlState('sneak', true)
     const e: any = foe
-    const r = await require('./bow').shoot(bot, e, { follow: false, mode: 'settle', point: () => e.position.offset(0, (e.height || 2.4) * 0.6, 0), shouldStop: () => !e.isValid }).catch(err => ({ shot: false, why: err.message }))
+    const r = await (require('./bow') as typeof import('./bow')).shoot(bot, e, { follow: false, mode: 'settle', point: () => e.position.offset(0, (e.height || 2.4) * 0.6, 0), shouldStop: () => !e.isValid }).catch(err => ({ shot: false, why: err.message }))
     if (!(r && r.shot)) await sleep(300)
     foe = pick()
   }
@@ -562,8 +562,8 @@ async function rangedClear (session, ctl, st, { radius = 9, maxMs = 25000, tower
 // встал, «бой на ходу» 20 → 0 за 3 с: 18 ударами и 14 иссушением). Пол на −3 твёрдый, лавы рядом нет; потом столб 2 наверх.
 async function pitFight (session, ctl, st, foe) {
   const bot = session.bot
-  const SL = require('./sealed')
-  const pick = require('./pick')
+  const SL: typeof import('./sealed') = require('./sealed')
+  const pick: typeof import('./pick') = require('./pick')
   for (let i = 0; i < 20 && !bot.entity.onGround && !ctl.aborted; i++) await sleep(50)
   const f = bot.entity.position.offset(0, 0.2, 0).floored()
   const firm = c => { const b = bot.blockAt(c); return !!b && b.boundingBox === 'block' && !/lava|water|fire|magma|spawner|bedrock|chest/.test(b.name) }
@@ -585,14 +585,14 @@ async function pitFight (session, ctl, st, foe) {
     if (!e || e.isValid === false || e.position.distanceTo(bot.entity.position) > 8) break
     const sw = bot.inventory.items().find(i => /_sword$/.test(i.name))
     if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
-    if (pick.canHit(bot, e) && gameClock.now() - (st.lastSwing || 0) > require('./pvp').cooldownMs(bot.heldItem)) {
+    if (pick.canHit(bot, e) && gameClock.now() - (st.lastSwing || 0) > (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem)) {
       try { await bot.lookAt(e.position.offset(0, 0.4, 0), true) } catch {}
       try { bot.attack(e); st.lastSwing = gameClock.now(); swings++ } catch {}
     }
     await sleep(100)
   }
   const left = !!(bot.entities[foe.id] && bot.entities[foe.id].isValid !== false)
-  const up = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+  const up = await (require('./build') as typeof import('./build')).towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
   st.pits = (st.pits || 0) + 1
   log('яма от иссушителя', { ok: true, swings, left, s: Math.round((gameClock.now() - t0) / 1000), hp: Math.round(bot.health ?? 0), up: !!(up && up.ok) })
   return true
@@ -615,7 +615,7 @@ async function threatCheck (session, ctl, st) {
   // Блейз: не гоняться (combat.fight бегал за летающим, удары вплотную сняли 13 хп: neF-B5f23-1 03.10) — один взмах,
   // если в досягаемости и виден, и дальше по пути.
   if (foe.e.name === 'blaze') {
-    const pick = require('./pick')
+    const pick: typeof import('./pick') = require('./pick')
     if (foe.d <= 3.2 && pick.canHit(bot, foe.e) && gameClock.now() - (st.lastSwing || 0) > 640) {
       const sw = bot.inventory.items().find(i => /_sword$/.test(i.name))
       if (sw && (!bot.heldItem || bot.heldItem.name !== sw.name)) { try { await bot.equip(sw, 'hand') } catch {} }
@@ -629,9 +629,9 @@ async function threatCheck (session, ctl, st) {
   // По умолчанию (s1c 06.10): «бой на ходу» с брутом — смерть за 2–3 удара (s1c-D-3/A-8: у входа в сокровищницу 4120…, 20 → 0 за
   // 2 с); столб 2 — по той же механике рамки удара (раздута только вширь). ND_BRUTE_HUNKER=0 — выкл.
   if (process.env.ND_BRUTE_HUNKER !== '0' && /^(piglin_brute|hoglin)$/.test(foe.e.name)) {
-    const pick = require('./pick')
+    const pick: typeof import('./pick') = require('./pick')
     const y0 = bot.entity.position.y
-    const tw = await require('./build').towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+    const tw: Partial<Awaited<ReturnType<typeof import('./build').towerUp>>> = await (require('./build') as typeof import('./build')).towerUp(bot, ctl, 2, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
     const up = bot.entity.position.y >= y0 + 1.9
     const t0 = gameClock.now()
     let swings = 0
@@ -653,7 +653,7 @@ async function threatCheck (session, ctl, st) {
   }
   if (foe.e.name === 'wither_skeleton' && process.env.ND_WITHER_PIT !== '0' && await pitFight(session, ctl, st, foe.e).catch(() => false)) return true
   st.fights++
-  const r = await require('./combat').fight(session, ctl, { target: '#' + foe.e.id, timeoutSeconds: 20, retreatAtHealth: 7, shield: 'always', clearArea: 0 }).catch(err => ({ error: err.message }))
+  const r = await (require('./combat') as typeof import('./combat')).fight(session, ctl, { target: '#' + foe.e.id, timeoutSeconds: 20, retreatAtHealth: 7, shield: 'always', clearArea: 0 }).catch(err => ({ error: err.message }))
   log('бой на ходу', { foe: foe.e.name, d: Math.round(foe.d * 10) / 10, hp: Math.round(bot.health ?? 0), killed: !!(r && (r.killed || (r.kills && r.kills.length))), error: r && r.error })
   return true
 }
@@ -662,7 +662,7 @@ async function eatIfLow (session, ctl) {
   const bot = session.bot
   if ((bot.food ?? 20) >= 14 && (bot.health ?? 20) >= 14) return
   if ((bot.food ?? 20) >= 20) return
-  try { await require('./actions').eat(session, {}) } catch {}
+  try { await (require('./actions') as typeof import('./actions')).eat(session, {}) } catch {}
 }
 
 // Клетки, которые ход вскрывает (копка по живым блокам), — сверху вниз.
@@ -704,7 +704,7 @@ function routeFrame (bot, ctl, deadline) {
 async function exposeBridgeFace (bot, ctl, support, destination) {
   const face = destination.minus(support)
   if (Math.abs(face.x) + Math.abs(face.z) !== 1 || face.y !== 0) return false
-  const pick = require('./pick')
+  const pick: typeof import('./pick') = require('./pick')
   const deadline = gameClock.wall.now() + 3000
   try {
     for (let frames = 0; frames < 24 && !ctl.aborted; frames++) {
@@ -728,7 +728,7 @@ async function exposeBridgeFace (bot, ctl, support, destination) {
 async function dropInto (bot, ctl, to) {
   if (ctl.waitReflex) await ctl.waitReflex()
   if (ctl.aborted || !bot.physics || !bot.entity.onGround) return false
-  const result = await require('./navigation/parkour').executeJump(bot, ctl, to.offset(0.5, 0, 0.5),
+  const result = await (require('./navigation/parkour') as typeof import('./navigation/parkour')).executeJump(bot, ctl, to.offset(0.5, 0, 0.5),
     { allowWalk: true, planningMs: 180 })
   return result.ok && !ctl.aborted && bot.entity.onGround && feetCell(bot).equals(to)
 }
@@ -736,7 +736,7 @@ async function dropInto (bot, ctl, to) {
 // Один ход: проверить живые блоки, вскрыть клетки, шагнуть. Итог: 'ok' | 'replan' | 'stop:<почему>'.
 async function stepOne (session, ctl, g, mv, st) {
   const bot = session.bot
-  const SL = require('./sealed')
+  const SL: typeof import('./sealed') = require('./sealed')
   if (ctl.aborted) return 'stop:прервано'
   const describe = () => ({ at: { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z },
     velocity: bot.entity.velocity ? { x: bot.entity.velocity.x, y: bot.entity.velocity.y, z: bot.entity.velocity.z } : null,
@@ -793,7 +793,7 @@ async function stepOne (session, ctl, g, mv, st) {
     if (ctl.aborted || session.bot !== bot) return 'stop:прервано'
     // Не докопал (рукой — долго, кирок нет): сделать каменные и ещё раз; не вышло — обойти (пометка «твёрдое»).
     if (/^failed|^left/.test(r) && !ctl.aborted) {
-      if (!bot.inventory.items().some(i => /_pickaxe$/.test(i.name))) { const made = await require('./tunnel').restockPicks(session, ctl, 3).catch(() => 0); st.crafted = (st.crafted || 0) + (made || 0) }
+      if (!bot.inventory.items().some(i => /_pickaxe$/.test(i.name))) { const made = await (require('./tunnel') as typeof import('./tunnel')).restockPicks(session, ctl, 3).catch(() => 0); st.crafted = (st.crafted || 0) + (made || 0) }
       if (ctl.aborted || session.bot !== bot) return 'stop:прервано'
       if (!bot.inventory.items().some(i => /_pickaxe$/.test(i.name))) st.crafted = (st.crafted || 0) + await goldPicks(session, ctl, 2)
       if (ctl.aborted || session.bot !== bot) return 'stop:прервано'
@@ -815,7 +815,7 @@ async function stepOne (session, ctl, g, mv, st) {
     const fb = bot.blockAt(fc)
     if (fb && fb.boundingBox !== 'block') {
       if (!bot.entity.onGround || /lava|water|fire/.test(fb.name)) return 'replan'
-      const { placeBlockAt } = require('./build')
+      const { placeBlockAt }: typeof import('./build') = require('./build')
       bot.setControlState('sprint', false)
       bot.setControlState('sneak', true)
       try {
@@ -843,7 +843,7 @@ async function stepOne (session, ctl, g, mv, st) {
         }
         if (!r.already) st.placed = (st.placed || 0) + 1
         g.mark(fc.x, fc.y, fc.z, C.SOFT)
-        await require('./bridge').stepOnto(bot, ctl, fc)
+        await (require('./bridge') as typeof import('./bridge')).stepOnto(bot, ctl, fc)
       } finally { bot.setControlState('sneak', false) }
     } else await SL.stepMove(bot, ctl, { kind: 'flat', to })
   } else if (isDrop) {
@@ -910,7 +910,7 @@ async function makeRoom (bot, want = 5) {
         try { await bot.tossStack(it); have -= it.count; tossed.push(`${name}×${it.count}`) } catch {}
       }
     }
-    if (bot.inventory.emptySlotCount() < Math.min(3, want)) { try { await require('./pack').makeRoom(bot, { slots: Math.min(3, want) }) } catch {} }
+    if (bot.inventory.emptySlotCount() < Math.min(3, want)) { try { await (require('./pack') as typeof import('./pack')).makeRoom(bot, { slots: Math.min(3, want) }) } catch {} }
   } finally { await bot.look(yaw0, pitch0, true).catch(() => {}) }
   if (tossed.length) log('рюкзак: выбросил', { tossed, free: bot.inventory.emptySlotCount() })
   return tossed.length
@@ -979,7 +979,7 @@ function bruteSpots (session) {
 // быстрее железной): D6-23 03.10 — 13 слитков в рюкзаке, «для ифритов не хватает кирки — домой», 20 мин ходу назад.
 async function goldPicks (session, ctl, want = 2) {
   const bot = session.bot
-  const A = require('./actions')
+  const A: typeof import('./actions') = require('./actions')
   const has = n => bot.inventory.items().filter(i => i.name === n).reduce((k, i) => k + i.count, 0)
   let made = 0
   try {
@@ -1045,8 +1045,8 @@ function bastionZones (session) {
 // К цели по сетке: план, исполнение, перепланирование (живые поправки — g.mark). Итог { ok, why, steps, dug, … }.
 async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   const bot = session.bot
-  try { require('./ne-guard').swatInstall(bot) } catch {}
-  try { require('./ne-guard').attach(session) } catch {}
+  try { (require('./ne-guard') as typeof import('./ne-guard')).swatInstall(bot) } catch {}
+  try { (require('./ne-guard') as typeof import('./ne-guard')).attach(session) } catch {}
   const g = gridOf(session)
   const goal = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), r: p.r ?? 0, dy: p.dy ?? 0 }
   const st: any = { ok: false, steps: 0, dug: 0, plans: 0, mismatch: 0, digFails: 0, stepFails: 0, fights: 0, goal, fireproof: false, piglinsAngry: !!p.piglinsAngry }
@@ -1058,7 +1058,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   const filter0 = bot._ndToolFilter
   // Железную беречь всегда (нужна золоту, спуску к крепости Края — SH1 03.10: 825 копок по Аду стёрли все кирки, наверху
   // «до кирпича не докопался: голыми руками»); каменные — из запаса и по дороге (restockPicks).
-  bot._ndToolFilter = require('./tunnel').makeToolFilter(bot, false)
+  bot._ndToolFilter = (require('./tunnel') as typeof import('./tunnel')).makeToolFilter(bot, false)
   // ND_NE_STAY=1: других кирок нет (каменные стёрлись, сделать не из чего) — железная лучше рук (B2-26 03.10: 608 копок руками,
   // 13 мин хода домой).
   const ironOnly = () => !bot.inventory.items().some(i => /^(stone|wooden|golden|diamond|netherite)_pickaxe$/.test(i.name)) && bot.inventory.items().some(i => i.name === 'iron_pickaxe')
@@ -1073,14 +1073,14 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   // bastion ↔ AcquireNetherTools 10+ мин, и отказ уже ПОСЛЕ прихода к цели).
   const keepSupply = async (craft = true, need = 260): Promise<boolean> => {
     if (!p.supplyReserve) return true
-    const tools = require('./items')
+    const tools: typeof import('./items') = require('./items')
     let swings = tools.toolBudget(bot, 'pickaxe')
     if (swings >= need) return true
-    const calm = (bot.health ?? 0) >= 12 && !require('./ne-guard').meleeFoes(bot, 12).length
+    const calm = (bot.health ?? 0) >= 12 && !(require('./ne-guard') as typeof import('./ne-guard')).meleeFoes(bot, 12).length
     if (craft && calm && !ctl.aborted && session.bot === bot && gameClock.now() < deadline) {
-      const made = await require('./tunnel').restockPicks(session, ctl, 2, { reservePlanks: 8 }).catch(() => 0)
+      const made = await (require('./tunnel') as typeof import('./tunnel')).restockPicks(session, ctl, 2, { reservePlanks: 8 }).catch(() => 0)
       st.crafted = (st.crafted || 0) + made
-      if (made) log('кирки: запас подхода', { made, low: require('./tunnel').lowPicks(bot) })
+      if (made) log('кирки: запас подхода', { made, low: (require('./tunnel') as typeof import('./tunnel')).lowPicks(bot) })
     }
     if (ctl.aborted || session.bot !== bot) return false
     swings = tools.toolBudget(bot, 'pickaxe')
@@ -1100,7 +1100,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   // Гаст в 96 бл. с лучом к нам (раз в план): дальнобойный, выше пола — опасен на любом открытом шаге, не по расстоянию.
   const ghastSeen = () => {
     try {
-      const P = require('./perception')
+      const P: typeof import('./perception') = require('./perception')
       // …и ифриты с лучом в 24 бл.: выход от спавнера открытым ходом убивал (s1-LI-7 06.10: 6 стержней, 10 очей, ne_route из норы у
       // спавнера — смерть на первом шаге).
       return (Object.values(bot.entities || {}) as any[]).some((e: any) => e && e.position && e.isValid !== false && (
@@ -1118,7 +1118,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
   }
   const planOptions = blocks => ({ solidFloor: !!p.solidFloor, maxNodes: p.maxNodes, maxMs: p.maxPlanMs, blocks: Math.min(24, blocks), fireproof: st.fireproof, partial: true, zone: p.zone, zones: bastionZones(session), zoneExpo: p.zoneExpo,
     digWaitSeconds: receiptCostFor(session).costs.seconds(receiptCostFor(session).context) + (receiptCostFor(session).swing || 0),
-    alarm: () => ctl.aborted || !!session.reflex || (process.env.ND_GUARD_REFLEX === '0' && process.env.ND_GUARD !== '0' && !!require('./ne-guard').hot(bot)),
+    alarm: () => ctl.aborted || !!session.reflex || (process.env.ND_GUARD_REFLEX === '0' && process.env.ND_GUARD !== '0' && !!(require('./ne-guard') as typeof import('./ne-guard')).hot(bot)),
     dangers: liveDangers(session), hot: [...(p.hot || []), ...spawnerHot(session, goal, st.fireproof)], expoMul: ghastSeen() || nearSpawner() ? 3 : 1 })
   const planLog = (pl, from, speculative) => log('план', { from: xyz(from), goal, leg: pl.leg, more: pl.more, prefetched: speculative, ok: pl.ok, steps: pl.steps, digs: pl.digs, expo: pl.expo, risk: pl.risk || 0, cost: pl.cost, digWaitSeconds: pl.digWaitSeconds, nodes: pl.nodes, ms: pl.ms, why2: pl.why2, why: pl.ok ? undefined : pl.why,
     head: (pl.path || []).slice(0, pl.steps <= 12 ? 12 : 4).map(m => `${m.kind}@${m.to.x},${m.to.y},${m.to.z}`).join(' ') })
@@ -1127,16 +1127,16 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
     if (ctl.waitReflex) await ctl.waitReflex()
     if (!(await keepSupply(true, 120))) break
     if (reached()) { st.ok = true; break }
-    st.fireproof = require('./blaze').hasEffect(bot, 'fire_resistance')
+    st.fireproof = (require('./blaze') as typeof import('./blaze')).hasEffect(bot, 'fire_resistance')
     if (inLava(bot)) {
       // Огнестойкость, если есть, — и к берегу.
-      if (!st.fireproof) { try { const B = require('./blaze'); await B.drinkFireResistance(bot); st.fireproof = B.hasEffect(bot, 'fire_resistance') } catch {} }
+      if (!st.fireproof) { try { const B: typeof import('./blaze') = require('./blaze'); await B.drinkFireResistance(bot); st.fireproof = B.hasEffect(bot, 'fire_resistance') } catch {} }
       await lavaSwim(bot, ctl, st)
     }
     if (ctl.aborted) break
     // Перед планом (он бывает 2–15 с): брут/злой вплотную — сперва ответ (VR23-1 03.10: брут бил 8 с, пока считался план).
     if (process.env.ND_GUARD !== '0') {
-      const G = require('./ne-guard')
+      const G: typeof import('./ne-guard') = require('./ne-guard')
       const h = G.hot(bot, { near: 4 })
       if (h) {
         const rr = await G.react(session, ctl, { force: h, onOwn: cells => { for (const k of cells) own.add(k) } })
@@ -1151,7 +1151,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
     st.synced = (st.synced || 0) + syncAround(bot, g, st.plans ? 5 : 8)
     // Клетки, куда тело не шагнуло дважды, — снова «непроходимы» (сверка с живыми блоками их стирала: B7f31).
     for (const k of (st.blocked || [])) { const [bx, by, bz] = k.split(',').map(Number); g.mark(bx, by, bz, C.BLOCK) }
-    const blocks = bot.inventory.items().filter(i => require('./sealed').FILL_NAMES.includes(i.name)).reduce((n, i) => n + i.count, 0)
+    const blocks = bot.inventory.items().filter(i => (require('./sealed') as typeof import('./sealed')).FILL_NAMES.includes(i.name)).reduce((n, i) => n + i.count, 0)
     let pl
     if (prefetch && from.x === prefetch.from.x && from.y === prefetch.from.y && from.z === prefetch.from.z && prefetch.fireproof === st.fireproof) {
       pl = await prefetch.promise
@@ -1194,7 +1194,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
       // Страж ближнего боя (ND_GUARD=1, ne-guard): удар/брут вплотную — ответ до шага (проверка угроз раз в 4 шага
       // запаздывала на секунды: VR22-3/VR31-2 03.10 — брут, 3 удара за 2 с посреди хода к золоту).
       if (process.env.ND_GUARD !== '0') {
-        const G = require('./ne-guard')
+        const G: typeof import('./ne-guard') = require('./ne-guard')
         const h = G.hot(bot)
         if (h) {
           const rr = await G.react(session, ctl, { force: h, onOwn: cells => { for (const k of cells) own.add(k) } })
@@ -1215,7 +1215,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
       // abortNear: враг из списка виден ближе r — ход бросить (золото у двора: брут — D2-31 03.10, три удара за 2 с). На каждом шаге,
       // а не раз в 4 (s1c-F-3 06.10: ход к помосту среди ифритов — 26 урона ударами до обрыва хода).
       if (p.abortNear) {
-        const P = require('./perception')
+        const P: typeof import('./perception') = require('./perception')
         const re = p.abortNear.re instanceof RegExp ? p.abortNear.re : new RegExp(p.abortNear.re || '^(piglin_brute|hoglin)$')
         const near: any = (Object.values(bot.entities || {}) as any[]).find((e : any) => e && e.position && e.isValid !== false && re.test(e.name || '') && e.position.distanceTo(bot.entity.position) < (p.abortNear.r || 10) && (() => { try { return P.raySees(bot, P.eyePos(bot), e.position.offset(0, 1.2, 0)) } catch { return true } })())
         if (near) { res = 'stop:рядом ' + near.name; break }
@@ -1228,15 +1228,15 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
         if (nearGoal && bot._ndToolFilter && p.ironOk) bot._ndToolFilter = filter0
         if (process.env.ND_NE_STAY === '1' && bot._ndToolFilter && ironOnly()) bot._ndToolFilter = filter0
         // ND_GUARD=1: ближний враг в 12 бл. — не крафт (верстак — секунды без ответа: B1-31 03.10, брут убил за крафтом кирок).
-        const calm = process.env.ND_GUARD === '0' || !require('./ne-guard').meleeFoes(bot, 12).length
-        if (calm && !nearGoal && i % 12 === 0 && pl.path.slice(i, i + 12).some(m => m.dig.length) && require('./tunnel').lowPicks(bot) < 2) {
-          const made = await require('./tunnel').restockPicks(session, ctl, 2, p.supplyReserve ? { reservePlanks: 8 } : {}).catch(() => 0)
+        const calm = process.env.ND_GUARD === '0' || !(require('./ne-guard') as typeof import('./ne-guard')).meleeFoes(bot, 12).length
+        if (calm && !nearGoal && i % 12 === 0 && pl.path.slice(i, i + 12).some(m => m.dig.length) && (require('./tunnel') as typeof import('./tunnel')).lowPicks(bot) < 2) {
+          const made = await (require('./tunnel') as typeof import('./tunnel')).restockPicks(session, ctl, 2, p.supplyReserve ? { reservePlanks: 8 } : {}).catch(() => 0)
           st.crafted = (st.crafted || 0) + (made || 0)
-          if (made) log('кирки', { made, low: require('./tunnel').lowPicks(bot) })
+          if (made) log('кирки', { made, low: (require('./tunnel') as typeof import('./tunnel')).lowPicks(bot) })
           // Камня на каменные нет, а кирок никаких — железная из слитков/самородков/блоков сундуков (D5-23/31 03.10: «бой у
           // спавнера: не хватает кирки» при 2 слитках и самородках).
           if (!made && !bot.inventory.items().some(it => /_pickaxe$/.test(it.name))) {
-            const ok = await require('./bastion').makeIronPick(session, ctl).catch(() => false)
+            const ok = await (require('./bastion') as typeof import('./bastion')).makeIronPick(session, ctl).catch(() => false)
             log('кирки: железная', { ok })
             if (!ok) { const g = await goldPicks(session, ctl, 2); if (g) log('кирки: золотые', { made: g }) }
           }
@@ -1249,8 +1249,8 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
       // (спавнер: блейзы) — любое зелье.
       const nearFr = p.frNear && Math.hypot(bot.entity.position.x - p.frNear.x, bot.entity.position.z - p.frNear.z) <= (p.frNear.r ?? 20) && Math.abs(bot.entity.position.y - (p.frNear.y ?? bot.entity.position.y)) <= 24
       if ((p.frKeep != null || nearFr) && !st.fireproof && (nearFr || pl.path.slice(i, i + 5).some(m => m.risk))) {
-        const B = require('./blaze')
-        const { potionOf } = require('./pvp')
+        const B: typeof import('./blaze') = require('./blaze')
+        const { potionOf }: typeof import('./pvp') = require('./pvp')
         const frN = bot.inventory.items().filter(it => /potion$/.test(it.name) && /fire_resistance$/.test(potionOf(it) || '')).reduce((n, it) => n + it.count, 0)
         if ((nearFr ? frN > 0 : frN > p.frKeep) && !B.hasEffect(bot, 'fire_resistance')) {
           const d = await B.drinkFireResistance(bot).catch(e => e.message)
@@ -1262,7 +1262,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
       }
       const r = await stepOne(session, ctl, g, pl.path[i], st)
       if (r !== 'ok') { res = r; break }
-      if (i % 20 === 0) st.fireproof = require('./blaze').hasEffect(bot, 'fire_resistance')
+      if (i % 20 === 0) st.fireproof = (require('./blaze') as typeof import('./blaze')).hasEffect(bot, 'fire_resistance')
       st.steps++
       if (st.steps % 50 === 0) log('ход', { steps: st.steps, of: pl.steps, dug: st.dug, s: Math.round((gameClock.now() - t0) / 1000), at: xyz(bot.entity.position), hp: Math.round(bot.health ?? 0) })
       // Свои клетки (тело прошло, копал) — для штрека бастиона (sealedGold: «свои» не чужой воздух).
@@ -1287,3 +1287,7 @@ async function routeTo (session, ctl, p: any = {}): Promise<NetherRouteResult> {
 }
 
 module.exports = { swingsLeft, swingPrice, gridOf, plan, legGoal, routeTo, enabled, feetCell, makeRoom, rangedClear, pitFight, bruteSpots, goldPicks }
+export {
+  swingsLeft, swingPrice, gridOf, plan, legGoal, routeTo, enabled, feetCell, makeRoom, rangedClear, pitFight,
+  bruteSpots, goldPicks
+}

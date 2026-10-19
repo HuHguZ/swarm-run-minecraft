@@ -1,13 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const { createRequire } = require('node:module')
-const { transformSync } = require('esbuild')
-const { Vec3 } = require('vec3')
-const Move = require('mineflayer-pathfinder/lib/move')
-const { Movements, goals } = require('mineflayer-pathfinder')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import { createRequire } from 'node:module'
+import { transformSync } from 'esbuild'
+import { Vec3 } from 'vec3'
+import Move = require('mineflayer-pathfinder/lib/move')
+import { Movements, goals } from 'mineflayer-pathfinder'
 
 const fixtureFile = path.join(__dirname, 'tick-plugins.test.ts')
 const fixtureSource = fs.readFileSync(fixtureFile, 'utf8').split('\ntest(')[0]
@@ -25,7 +25,7 @@ async function placement (useOne = false) {
   bot.blockAt = p => block(p.floored().equals(destination) ? placed : p.y < 56 ? 'nether_bricks' : 'air', p)
   const mv = new Movements(bot)
   mv.canDig = false
-  mv.getScaffoldingItem = () => ({ name: 'nether_bricks', type: bot.registry.itemsByName.nether_bricks.id, count: 8 })
+  mv.getScaffoldingItem = () => ({ name: 'nether_bricks', type: bot.registry.itemsByName.nether_bricks.id, count: 8 }) as any
   bot.pathfinder.setMovements(mv)
   bot.pathfinder.LOSWhenPlacingBlocks = false
   const node = new Move(-415, 57, 171, 7, 1)

@@ -1,5 +1,5 @@
-const { reachOf, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, spot, gameClock, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, SIDES } = require('./enter-shelter')
-const { CONTACT, threatEye, WALL_BUDGET_MS, sealDrift, screenOff, flat } = require('./recover-loot')
+const { reachOf, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, spot, gameClock, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, SIDES }: typeof import('./enter-shelter') = require('./enter-shelter')
+const { CONTACT, threatEye, WALL_BUDGET_MS, sealDrift, screenOff, flat }: typeof import('./recover-loot') = require('./recover-loot')
 function dangerousNow (session, mob) {
   const r = reachOf(session.bot, mob.who)
   if (mob.dist <= CONTACT && r.reaches && (r.steps === null || r.steps <= 1)) return 'вплотную'
@@ -115,7 +115,7 @@ async function stepUpInto (bot, ctl, cell) {
 
 const ASIDE_LIMIT = 4
 
-const isWater = require('.././movement').waterCell
+const isWater = (require('.././movement') as typeof import('.././movement')).waterCell
 
 function waterLevel (b) {
   if (!isWater(b)) return null
@@ -300,3 +300,8 @@ function waterStop (bot, tried) {
 }
 
 module.exports = { dangerousNow, whereToFight, wallOff, AGAIN_WONT_HELP, stepUpInto, ASIDE_LIMIT, isWater, waterLevel, pushOf, waterFeeders, standingInSource, SWIM_REACH, SWIM_MS_PER_BLOCK, airOver, dryCell, dryStep, PLUG_MS, DRAIN_MS, WET_LIMIT, eyeWet, outOfWater, waterNext, waterStop }
+export {
+  dangerousNow, whereToFight, wallOff, AGAIN_WONT_HELP, stepUpInto, ASIDE_LIMIT, isWater, waterLevel, pushOf,
+  waterFeeders, standingInSource, SWIM_REACH, SWIM_MS_PER_BLOCK, airOver, dryCell, dryStep, PLUG_MS, DRAIN_MS,
+  WET_LIMIT, eyeWet, outOfWater, waterNext, waterStop
+}

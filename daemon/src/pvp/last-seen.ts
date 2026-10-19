@@ -1,8 +1,8 @@
-const pick = require('../pick')
-const gameClock = require('../game-clock')
-const fastblocks = require('../fastblocks')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+const pick: typeof import('../pick') = require('../pick')
+const gameClock: typeof import('../game-clock') = require('../game-clock')
+const fastblocks: typeof import('../fastblocks') = require('../fastblocks')
+const { EventEmitter }: typeof import('node:events') = require('node:events')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const SEE_THROUGH = /glass|_pane$|^barrier$|^iron_bars$/
 const FULL = [[0, 0, 0, 1, 1, 1]]
 
@@ -121,7 +121,7 @@ function createLastSeen (bot) {
       view._ndVisible = false
       view._ndObservationNow = () => raw._ndObservationNow?.() ?? gameClock.observationNow()
       Object.defineProperties(view, {
-        velocity: { get: () => require('../bow').trackTarget(view).vel() },
+        velocity: { get: () => (require('../bow') as typeof import('../bow')).trackTarget(view).vel() },
         heldItem: { get: () => view.equipment?.[0] }
       })
       rec = { raw, view }
@@ -146,3 +146,4 @@ function createLastSeen (bot) {
 }
 
 module.exports = { createLastSeen, seesPlayer, visiblePlayerItem, gearPartVisible, observePlayerGear }
+export { createLastSeen, seesPlayer, visiblePlayerItem, gearPartVisible, observePlayerGear }

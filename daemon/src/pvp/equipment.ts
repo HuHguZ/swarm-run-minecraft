@@ -48,7 +48,7 @@ const splashDanger = () => {
       (Object.values(ctx.bot.entities || {}) as any[]).find(e => e.name === 'area_effect_cloud' && e.position?.distanceTo(new ctx.Vec3(at.x, at.y, at.z)) < 2))
     if (cloud) attempt.cloudId = cloud.id
     const inFlight = !attempt.resolved && (attempt.id != null || (ctx.gameClock?.now() ?? 0) - attempt.started < ((attempt.ticks || 40) + 2) * 50)
-    if (!attempt.resolved && attempt.id == null && !inFlight && !cloud && require('./last-seen').seesPlayer(ctx.bot, { position: new ctx.Vec3(at.x, at.y, at.z), width: .25, height: .25 })) {
+    if (!attempt.resolved && attempt.id == null && !inFlight && !cloud && (require('./last-seen') as typeof import('./last-seen')).seesPlayer(ctx.bot, { position: new ctx.Vec3(at.x, at.y, at.z), width: .25, height: .25 })) {
       attempt.sent = false; attempt.why = 'projectile_not_confirmed'
       continue
     }
@@ -88,14 +88,14 @@ const holdItem = async (item) => {
     if (!item || !itemReady(item)) return false
     const wanted = stack(item)
     const same = () => !!ctx.bot.heldItem && (ctx.bot.registry?.itemsByName
-      ? require('../invsync').sameStack(ctx.bot, ctx.bot.heldItem, item) : stack(ctx.bot.heldItem) === stack(item))
+      ? (require('../invsync') as typeof import('../invsync')).sameStack(ctx.bot, ctx.bot.heldItem, item) : stack(ctx.bot.heldItem) === stack(item))
     if (same()) { failedSelection = null; return true }
     if (failedSelection?.wanted === wanted && failedSelection.owner === owner() && failedSelection.equip === ctx.bot.equip && !same()) return false
     const before = ctx.heldName()
     try {
       // Зелье — свежим поиском по содержимому (слот предмета из прошлого тика мог уже занять другое зелье).
       if (/potion$/.test(item.name)) {
-        const potionOf = require('../pvp').potionOf
+        const potionOf = (require('./potions') as typeof import('./potions')).potionOf
         const want = potionOf(item)
         item = ctx.bot.inventory.items().find(i => i.name === item.name && potionOf(i) === want) || item
       }
@@ -104,7 +104,7 @@ const holdItem = async (item) => {
       // слоту брал соседнее — «лечение под ноги» вредом себе, −12 и смерть «using magic» (S7d, репетиция показа z2,
       // «арсенал»). В руке не то зелье — не бросать.
       if (/potion$/.test(item.name)) {
-        const potionOf = require('../pvp').potionOf
+        const potionOf = (require('./potions') as typeof import('./potions')).potionOf
         const held = ctx.bot.heldItem
         if (!held || held.name !== item.name || potionOf(held) !== potionOf(item)) { failedSelection = { wanted, owner: owner(), equip: ctx.bot.equip, why: 'equip_mismatch' }; return false }
       }
@@ -125,7 +125,7 @@ const useAt = async (yaw, pitch, { holdMs = 0, item = ctx.bot.heldItem }: any = 
       await ctx.bot.look(yaw, pitch, true).catch(() => {})
       await ctx.sleep(60)
       // Пока ждали прицел, рефлекс/обновление рюкзака могли сменить руку.
-      if (!require('../invsync').sameStack(ctx.bot, ctx.bot.heldItem, selected)) return false
+      if (!(require('../invsync') as typeof import('../invsync')).sameStack(ctx.bot, ctx.bot.heldItem, selected)) return false
       ctx.bot.activateItem()
       uses.set(key, stack(selected))
       if (holdMs) {

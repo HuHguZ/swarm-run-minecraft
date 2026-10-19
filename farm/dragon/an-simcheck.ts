@@ -1,7 +1,8 @@
 // Проверка dsim по записи сервера (rec-*.jsonl): посадка (LANDING → цель (0.5, P, 0.5)).
 // Для пары выборок a→b подбираем yRotA(a) по yRot(b), потом предсказываем c (дальше) и сравниваем.
-const fs = require('fs'); const path = require('path')
-const S = require('./dsim')
+import * as fs from 'fs'; import 'path'
+import path = require('path')
+import * as S from './dsim'
 const files = process.argv.slice(2)
 const errs = []; const herrs = []
 for (const f of files) {

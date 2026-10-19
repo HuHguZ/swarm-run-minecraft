@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { flightCourse } from '../try-flight-route'
+import { flightCourse } from '../scenes/pvp/try-flight-route'
 import { FlightRouteGraph } from '../src/combat/flight-route-graph'
 
 test('flight course has isolated grounded pads and twelve ordered physical ring gates', () => {

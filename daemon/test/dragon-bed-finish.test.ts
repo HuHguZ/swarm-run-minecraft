@@ -1,10 +1,11 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
-const { missing } = require('../src/dragon')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { missing } from '../src/dragon'
 
 async function finish (weapon, bow, arrows, ph = 0) {
   const file = require.resolve('../src/dragon/pillar-run')
@@ -31,10 +32,11 @@ async function finish (weapon, bow, arrows, ph = 0) {
     './pillar-plan': { ...local('./pillar-plan'), noteTakeoff: () => {}, stationBedPlaced: () => false, crysOn: () => false }
   }
   const module = { exports: {} as any }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\ndragonZones = () => ({}); hazardNow = () => null; perchAttack = onPerch;', {
+  // Тело pillar-run разнесено по dragon/pillar-run/: bodySource склеивает его в один скрипт (подмены по spec — во всех частях).
+  vm.runInNewContext(bodySource(file) + '\ndragonZones = () => ({}); hazardNow = () => null; perchAttack = onPerch;', cjsContext({
     module, exports: module.exports, require: name => mocks[name] || local(name), process, console, setImmediate,
     onPerch: async () => { perches++; ctl.aborted = true }
-  }, { filename: file })
+  }), { filename: file })
   const rep: any = { dragon: {} }
   await module.exports.fightDragon({ bot }, ctl, rep, { phases: [], dodges: {} }, { deadline: 10000 })
   return { rep, shots, waits, perches }

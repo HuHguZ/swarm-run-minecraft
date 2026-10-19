@@ -1,10 +1,10 @@
 'use strict'
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 // Slot numbers live in exactly one place. Three copies of 5..8 and 45 is the
 // way they eventually disagree, and armor.js is the file that already has to
 // know them. No import cycle: perception -> armor -> movement, and movement
 // knows nothing about perception.
-const { readWorn, readOffHand, defenseOf } = require('./armor')
+const { readWorn, readOffHand, defenseOf }: typeof import('./armor') = require('./armor')
 
 // Blocks worth reporting. Everything else is terrain noise and only shows up
 // in the coarse summary.
@@ -151,7 +151,7 @@ function stateSummary (bot, extra: any = {}) {
     // Живой с 0.24 хп — не «0»: арена (where) читала 0 как смерть и обрывала раунд (S7d, s7d-p-27 р.3 swap).
     health: (bot.health ?? 0) > 0 ? Math.max(1, Math.round(bot.health)) : 0,
     food: Math.round(bot.food ?? 0),
-    fireResistance: require('./blaze').hasEffect(bot, 'fire_resistance'),
+    fireResistance: (require('./blaze') as typeof import('./blaze')).hasEffect(bot, 'fire_resistance'),
     time: timeLabel(bot),
     isRaining: raining(bot),
     held,
@@ -176,7 +176,7 @@ function stateSummary (bot, extra: any = {}) {
 function potionsSummary (bot) {
   const out = {}
   try {
-    const { potionOf } = require('./pvp')
+    const { potionOf }: typeof import('./pvp') = require('./pvp')
     for (const it of bot.inventory.items()) {
       if (!/potion$/.test(it.name)) continue
       const k = (it.name === 'splash_potion' ? 'splash_' : '') + (potionOf(it) || 'unknown')
@@ -229,7 +229,7 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
     // ПОСЛЕ зрения (sight.visibleOf): findBlocks count 300 брал ближние клетки
     // (руда в толще, вода под дном), луч отсеивал их, и видимая лава в тридцати
     // блоках до луча не доходила вовсе — та же болезнь, что у mine (2026-09-26).
-    const found = require('./sight').visibleOf(bot, ids, radius, { max: maxBlocks, fair, rays: 1500 })
+    const found = (require('./sight') as typeof import('./sight')).visibleOf(bot, ids, radius, { max: maxBlocks, fair, rays: 1500 })
     const groups = new Map()
     for (const block of found) {
       if (!block) continue
@@ -247,7 +247,7 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
     // remembered и возрастом (ago, игр. с). Только при зрении (fair) и в 2·radius; ND_OBSERVE_MEM=0 — без памяти.
     if (fair && bot._ndEyes && process.env.ND_OBSERVE_MEM !== '0') {
       const re = new RegExp(INTERESTING.map(r => r.source).join('|'))
-      for (const m of require('./perception/eyes').nearest(bot, re, { max: 200, maxDist: radius * 2 })) {
+      for (const m of (require('./perception/eyes') as typeof import('./perception/eyes')).nearest(bot, re, { max: 200, maxDist: radius * 2 })) {
         if (groups.has(m.name)) { const g = groups.get(m.name); if (!g.remembered) continue }
         const g = groups.get(m.name)
         if (!g) groups.set(m.name, { name: m.name, count: 1, nearest: { x: m.x, y: m.y, z: m.z }, dist: m.dist, remembered: true, ago: m.ago })
@@ -274,3 +274,4 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
 }
 
 module.exports = { observe, stateSummary, canSeePoint, raySees, eyePos, timeLabel, biomeName, raining, thundering, Vec3 }
+export { observe, stateSummary, canSeePoint, raySees, eyePos, timeLabel, biomeName, raining, thundering, Vec3 }

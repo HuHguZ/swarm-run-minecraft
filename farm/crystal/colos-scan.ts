@@ -1,24 +1,25 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Сверка постройки Колизея с моделью (2026-09-30): бот-наблюдатель над полем,
 // каждая клетка модели colosseum.js ВНЕ объёма поля (|dx|,|dz| ≤ R+1, dy −2…+ceil
 // правит сама арена) сравнивается по имени блока с миром. Несовпадения — по
 // видам и первые примеры. До дуэлей и после: новых несовпадений 0 — взрывы
 // кристаллов постройку не тронули.
-//   node farm/crystal/colos-scan.js --slot 29 --pos "600 120 600" [--R 24] [--ceil 16] --out file.json
-const path = require('path')
-const fs = require('fs')
-const { execFileSync } = require('child_process')
+//   node dist/farm/crystal/colos-scan.js --slot 29 --pos "600 120 600" [--R 24] [--ceil 16] --out file.json
+import path = require('path')
+import * as fs from 'fs'
+import { execFileSync } from 'child_process'
 const D = path.join(__dirname, '../../daemon/')
 const mineflayer = require(D + 'node_modules/mineflayer')
 const Vec3 = require(D + 'node_modules/vec3')
-const CZ = require(D + 'colosseum')
+const CZ = require(D + 'arena/colosseum')
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ? process.argv[i + 1] : d }
 const SLOT = Number(arg('slot', 29))
 const [X, Y, Z] = String(arg('pos', '600 120 600')).split(/\s+/).map(Number)
 const R = Number(arg('R', 24))
 const CEIL = Number(arg('ceil', 16))
-const OUT = arg('out', path.join(__dirname, `colos-scan-${SLOT}.json`))
+const OUT = arg('out', path.join(REPO_ROOT, 'farm/crystal', `colos-scan-${SLOT}.json`))
 const NAME = `NeuroFarm${SLOT}s`
 const rcon = (c) => { try { return execFileSync(process.execPath, [path.join(__dirname, '../farm.js'), 'rcon', String(SLOT), c], { encoding: 'utf8' }).trim() } catch (e) { return 'rcon: ' + e.message } }
 const sleep = ms => new Promise<any>(r => setTimeout(r, ms))

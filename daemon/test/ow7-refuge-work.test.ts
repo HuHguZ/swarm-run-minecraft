@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const file = process.env.OW7_REFUGE_TEST_SOURCE || path.join(__dirname, '../src/survival/refuge-body.ts')
 const source = fs.readFileSync(file, 'utf8')
 async function run(how, { env = {}, held = 'healed', open = false, untilDawn = false, alive = true, aborted = false, stayIn = true, closed = true } = {} as any) {
@@ -22,7 +23,7 @@ async function run(how, { env = {}, held = 'healed', open = false, untilDawn = f
     exitShelter: async () => { calls.push('exitShelter'); return { out: true } }
   }
   const start = source.indexOf('async function refugeBody (')
-  vm.runInNewContext(transformSync(source.slice(start, source.indexOf('\nasync function takeHole', start)) + '\nthis.run=refugeBody', { loader: 'ts' }).code, ctx)
+  vm.runInNewContext(transformSync(source.slice(start, source.indexOf('\nasync function takeHole', start)) + '\nthis.run=refugeBody', { loader: 'ts' }).code, cjsContext(ctx))
   const out = { hp0: 20, code: 'OK', stayIn, untilDawn, steps: [] }
   const result = await ctx.run(session, { aborted }, { t0: 0, minHp: 20, deadline: 60000, out, step() {}, hurts: [] })
   return { calls, result }

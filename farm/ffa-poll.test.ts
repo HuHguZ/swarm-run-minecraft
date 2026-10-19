@@ -201,7 +201,7 @@ test('fresh fight does not inherit a stationary goto anchor', t => {
 })
 
 test('queued aim dodge does not cancel a newly started melee fight', t => {
-  const { installDangers } = require('./arena/dangers')
+  const { installDangers }: typeof import('./arena/dangers') = require('./arena/dangers')
   const calls: string[] = [], p = { x: 0, y: 64, z: 0 }
   let queued: any
   t.mock.method(globalThis, 'setTimeout', fn => { queued = fn; return 0 })

@@ -2,11 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-const invsync = require('../src/invsync')
-const ranged = require('../src/ranged')
-const registry = require('minecraft-data')('1.21.11')
-const Item = require('prismarine-item')(registry)
-const windows = require('prismarine-windows')(registry)
+import * as invsync from '../src/invsync'
+import * as ranged from '../src/ranged'
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
+const windows: any = (require('prismarine-windows') as typeof import('prismarine-windows').default)(registry as any)
 
 // Real mineflayer click/transfer/close/equip code, with a separate server Window.
 // The valid click's predicted cursor already agrees with the server, so the
@@ -17,7 +17,7 @@ function fixture () {
   bot.registry = registry
   bot.supportFeature = registry.supportFeature
   bot._client = new EventEmitter()
-  bot.entity = { id: 1, position: new (require('vec3'))(0, 120, 0), yaw: 0, pitch: 0, onGround: true }
+  bot.entity = { id: 1, position: new ((require('vec3') as typeof import('vec3').Vec3))(0, 120, 0), yaw: 0, pitch: 0, onGround: true }
   const packets: Array<{ name: string, packet: any }> = []
   const menus = new Map<number, any>()
   const player = windows.createWindow(0, 'minecraft:inventory', 'player')

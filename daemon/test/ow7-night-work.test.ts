@@ -1,17 +1,21 @@
+import { partSource } from './source-fixture'
+import { CAMPAIGN, campaignRequire, campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { transformSync } = require('esbuild')
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const source = campaignTs()
 
 function fixture(env = {}) {
-  const start = source.indexOf('const nightWorkEnabled =')
-  assert.ok(start >= 0, 'world-driven night worker must exist')
+  // Часть night-work-step целиком (от nightWorkEnabled до nightWorkStepInner)
+  const nightWork = partSource(CAMPAIGN, 'night-work-step', { ts: true })
+  assert.ok(nightWork.includes('const nightWorkEnabled ='), 'world-driven night worker must exist')
   const calls: any[] = [], logs: string[] = []
   const inventory: any = { water_bucket: 1, flint_and_steel: 1, stone_pickaxe: 1, cobblestone: 64 }
-  const ctx: any = { process: { env: { ND_NIGHT_WORK_SAFE: '0', ...env } }, require, path, __dirname: path.join(__dirname, '..'), state: { pos: { x: 0, y: 16, z: 0 }, health: 20, food: 20, inventory, dimension: 'overworld' },
+  const ctx: any = { process: { env: { ND_NIGHT_WORK_SAFE: '0', ...env } }, require: campaignRequire, path, __dirname: path.join(__dirname, '..'), state: { pos: { x: 0, y: 16, z: 0 }, health: 20, food: 20, inventory, dimension: 'overworld' },
     sit: { surface: false, night: true, pickLeft: 100, foes: 0 }, known: {}, knownWater: null,
     died: false, strategyInterrupted: false, stage: '-', OW_HEAR: true, heardLava: null, DEEP_Y: -54,
     LOGS: /_log$/, COBBLE: /^(cobblestone|cobbled_deepslate|blackstone)$/, PICK_STONE: /^(stone|iron|diamond)_pickaxe$/, PICK_IRON: /^iron_pickaxe$/,
@@ -42,7 +46,7 @@ function fixture(env = {}) {
       return { status: 'done', detail: {} }
     }
   }
-  vm.runInNewContext(transformSync(source.slice(start, source.indexOf("\nws.on('open', async", start)) + '\nthis.work=nightWorkStep;this.here=nightWorkHere;this.blocked=nightWorkBlocked;this.failures=nightWorkFailures', { loader: 'ts' }).code, ctx)
+  vm.runInNewContext(transformSync(nightWork + '\nthis.work=nightWorkStep;this.here=nightWorkHere;this.blocked=nightWorkBlocked;this.failures=nightWorkFailures', { loader: 'ts' }).code, cjsContext(withSetters(ctx)))
   return { ctx, calls, inventory, logs }
 }
 
@@ -319,14 +323,14 @@ test('losing the last pick underground does not send a held night into surface h
   const start = source.indexOf('const nightHold ='), end = source.indexOf('\n//', start)
   const ctx: any = { dim: () => 'overworld', sit: { night: true, surface: false }, state: { playPolicy: { mode: 'speedrun' } },
     armorPointsNow: () => 0, have: () => 0, nightHeld: true, process: { env: {} } }
-  vm.runInNewContext(source.slice(start, end) + '\nthis.hold=nightHold', ctx)
+  vm.runInNewContext(source.slice(start, end) + '\nthis.hold=nightHold', cjsContext(withSetters(ctx)))
   assert.equal(ctx.hold(), true)
   ctx.process.env.ND_NIGHT_WORK = '0'; assert.equal(ctx.hold(), false)
   delete ctx.process.env.ND_NIGHT_WORK; ctx.sit.night = false; assert.equal(ctx.hold(), false)
 })
 
 test('the main night loop calls the worker before the old timed branch', () => {
-  const a = source.indexOf('if (!died && nightHold()) {', source.indexOf('ws.on(\'open\''))
+  const a = source.indexOf('if (!died && nightHold()) {', source.indexOf('async function runCampaign ('))
   const b = source.indexOf('if (only && dim()', a)
   const main = source.slice(a, b)
   assert.ok(main.indexOf('await nightWorkStep()') >= 0)

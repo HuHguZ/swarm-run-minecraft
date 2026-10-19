@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Vec3 = require('vec3')
-const suffocation = require('../src/autopilot/suffocation')
-const pick = require('../src/pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import suffocation = require('../src/autopilot/suffocation')
+import pick = require('../src/pick')
 
 function fixture(position, solidCells) {
   const bot: any = { entity: { position, height: 1.8, effects: [] },

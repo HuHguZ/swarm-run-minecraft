@@ -1,8 +1,8 @@
-const { countOf, DIRS4, virtualBot, SNEAK_EYE, fillPlaceable, exposure, landingForecast, lookAtSafe, bedDamage } = require('./evade-raw')
-const { pillowDys, pillarPlan, pillarKey, pillarCells, faceClick, runnerAim, headPoint } = require('./pillar-plan')
-const { cloudsOf, Vec3, cloudHits, runnerOn, EYE, findItem, gameClock, dragonOf, hpOf, phaseOf, PHASE, PHASE_RU, sleep, pick, partsOf, makeTrack, isAirish, envNum, supportCell, CENTER, offIsland, dbg, lookSafe, voidBelow, isSolid, clearControls, FILLER_RE, bow, SITTING, actions, build, items } = require('./dig-down-to')
-const { surfaceY, r1, inClouds, doing, standY } = require('./fall-guard')
-const { FACE_IDX, AXES, DAMAGE_TYPES } = require('./ts-plan')
+const { countOf, DIRS4, virtualBot, SNEAK_EYE, fillPlaceable, exposure, landingForecast, lookAtSafe, bedDamage }: typeof import('./evade-raw') = require('./evade-raw')
+const { pillowDys, pillarPlan, pillarKey, pillarCells, faceClick, runnerAim, headPoint }: typeof import('./pillar-plan') = require('./pillar-plan')
+const { cloudsOf, Vec3, cloudHits, runnerOn, EYE, findItem, gameClock, dragonOf, hpOf, phaseOf, PHASE, PHASE_RU, sleep, pick, partsOf, makeTrack, isAirish, envNum, supportCell, CENTER, offIsland, dbg, lookSafe, voidBelow, isSolid, clearControls, FILLER_RE, bow, SITTING, actions, build, items }: typeof import('./dig-down-to') = require('./dig-down-to')
+const { surfaceY, r1, inClouds, doing, standY }: typeof import('./fall-guard') = require('./fall-guard')
+const { FACE_IDX, AXES, DAMAGE_TYPES }: typeof import('./ts-plan') = require('./ts-plan')
 async function waterToHotbar (bot) {
   const i = bot.inventory.slots.findIndex((it, k) => k >= 36 && k <= 44 && it && it.name === 'water_bucket')
   if (i >= 0) return true
@@ -415,7 +415,7 @@ async function runnerGapArrow (session, ctl, feed, P, { minHit, maxHit, deadline
   if (!bow || countOf(bot, /arrow$/) < 1) return { why: 'нет лука или стрел' }
   const out: any = {}
   try { await bot.equip(bow, 'hand') } catch (e) { return { why: 'лук: ' + e.message } }
-  const charge = require('../bow').observeCharge(bot)
+  const charge = (require('../bow') as typeof import('../bow')).observeCharge(bot)
   if (!charge.start()) { charge.close(); return { why: charge.why(), fullChargeConfirmed: false } }
   const tDraw = gameClock.now()
   try {
@@ -472,7 +472,7 @@ async function runnerArrow (session, ctl, feed, P, lastBoom) {
   if (!bow || countOf(bot, /arrow$/) < 1) return { why: 'нет лука или стрел' }
   const out: any = {}
   try { await bot.equip(bow, 'hand') } catch (e) { return { why: 'лук: ' + e.message } }
-  const charge = require('../bow').observeCharge(bot)
+  const charge = (require('../bow') as typeof import('../bow')).observeCharge(bot)
   if (!charge.start()) { charge.close(); return { why: charge.why(), fullChargeConfirmed: false } }
   const tDraw = gameClock.now()
   const hp0 = (() => { const dd = dragonOf(bot); return dd ? hpOf(bot, dd) : null })()
@@ -695,4 +695,14 @@ function dynamicPlace (bot, st) {
   return place
 }
 
+const runnerSupportExport = runnerSupport
+const standForExport = standFor
+const chooseStationExport = chooseStation
 module.exports = { waterToHotbar, stepOnto, CRYS_BAND, crysAlive, dropSpot, dropOff, onOwnPillar, onSpike, getDown, towerUnsafe, tidy, rangedShot, runnerSupport, standFor, pillarHere, pillarPlanAutoAsync, SM_EMPTY, SM_FULL, smAxes, smAxis, smShapes, smRayHit, smCompile, smSeenBox, smDragonSeen, bodyBlocksBed, runnerGapArrow, runnerArrow, ST_N, stationCell, groundAt, stationPlan, chooseStation, bedHere, stationPlaceBed, stationBlow, dynamicPlace }
+export {
+  waterToHotbar, stepOnto, CRYS_BAND, crysAlive, dropSpot, dropOff, onOwnPillar, onSpike, getDown, towerUnsafe,
+  tidy, rangedShot, runnerSupportExport as runnerSupport, standForExport as standFor, pillarHere,
+  pillarPlanAutoAsync, SM_EMPTY, SM_FULL, smAxes, smAxis, smShapes, smRayHit, smCompile, smSeenBox, smDragonSeen,
+  bodyBlocksBed, runnerGapArrow, runnerArrow, ST_N, stationCell, groundAt, stationPlan,
+  chooseStationExport as chooseStation, bedHere, stationPlaceBed, stationBlow, dynamicPlace
+}

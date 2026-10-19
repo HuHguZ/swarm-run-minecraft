@@ -1,9 +1,9 @@
 const { PILLAR, CLIMBERS, REFUGE_NEUTRAL, HOT_CELL, MOB_REACH, chaseBps, holePlan, pocketOf } = require('./surface-body')
-const { gameClock, worlds, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, Vec3, exitShelter } = require('./enter-shelter')
+const { gameClock, worlds, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, Vec3, exitShelter }: typeof import('./enter-shelter') = require('./enter-shelter')
 function pillarPlan (bot, blocks, foes, shooters) {
   if (blocks < PILLAR || shooters.length) return null
   if (foes.some(h => CLIMBERS.test(h.e.name) || h.e.name === 'creeper' || (h.doc.radius === 0 && h.doc.range))) return null
-  const feet = require('.././fortify').feetCell(bot)
+  const feet = (require('.././fortify') as typeof import('.././fortify')).feetCell(bot)
   const lift = standTop(bot, feet)
   if (blocks < PILLAR + lift) return null
   // Над головой свободно на весь подъём и прыжок с верха.
@@ -46,8 +46,8 @@ function grounded (bot) {
 function refugeFoe (bot, e, session = bot._ndGuard?.session) {
   if (!e || e.isValid === false) return false
   if (!REFUGE_NEUTRAL.test(e.name)) return true
-  if (require('../combat').liveAttacker(session)?.id === e.id) return true
-  if (require('../ne-guard').aggressive(bot, e)) return true
+  if ((require('../combat') as typeof import('../combat')).liveAttacker(session)?.id === e.id) return true
+  if ((require('../ne-guard') as typeof import('../ne-guard')).aggressive(bot, e)) return true
   if (e.name === 'enderman') {
     const i = bot.registry?.entitiesByName.enderman?.metadataKeys?.indexOf('creepy') ?? -1
     return i >= 0 && !!e.metadata?.[i]
@@ -56,18 +56,18 @@ function refugeFoe (bot, e, session = bot._ndGuard?.session) {
 }
 
 function refugeThreats (bot, session, radius = 16) {
-  const flee = require('.././flee')
+  const flee: typeof import('.././flee') = require('.././flee')
   // Гаст стреляет с 64 блоков: дальнего стрелка учитываем только в его дальности и на виду.
   return flee.hostilesAround(bot, Math.max(radius, flee.DOCTRINE.ghast.range))
     .filter(h => refugeFoe(bot, h.e, session) && (h.d <= radius ||
-      (h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))))
+      (h.doc.range && h.d <= h.doc.range && (require('.././assess') as typeof import('.././assess')).inSight(bot, h.e))))
 }
 
 function refugeLook (session, { radius = 16 }: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
-  const fortify = require('.././fortify')
-  const assess = require('.././assess')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
+  const assess: typeof import('.././assess') = require('.././assess')
   const dim = worlds.worldOf(bot)
   const nether = dim === 'the_nether'
   const feet = fortify.feetCell(bot)
@@ -78,7 +78,7 @@ function refugeLook (session, { radius = 16 }: any = {}) {
   const shooters = foes.filter(h => h.doc.range && h.d <= h.doc.range && assess.inSight(bot, h.e))
   const near = walkers[0] || null
   const creeper = foes.find(h => h.e.name === 'creeper' && (h.d <= 9 || h.swelling))
-  const blocks = require('.././pack').buildCount(bot, dim)
+  const blocks = (require('.././pack') as typeof import('.././pack')).buildCount(bot, dim)
   let lava = !!bot.entity.isInLava
   for (const dy of [0, 1]) {
     const b = bot.blockAt(me.offset(0, dy, 0))
@@ -148,7 +148,7 @@ function chooseRefuge (a) {
   const pillar = !!a.pillar
   const pillarWhy = `столб в ${a.pillar ? a.pillar.height : PILLAR}: ходячие рукой не достанут (блоков ${a.blocks})`
   // Ниша быстрее коробки (пещера, склон) или коробки нет — в нишу.
-  const boxMs = box ? require('.././fortify').refugeBuildMs(a.cell) + (a.cell.dist || 0) / 4.3 * 1000 : Infinity
+  const boxMs = box ? (require('.././fortify') as typeof import('.././fortify')).refugeBuildMs(a.cell) + (a.cell.dist || 0) / 4.3 * 1000 : Infinity
   const nicheWhy = () => `ниша в стене: копать ~${(a.niche.digMs / 1000).toFixed(1)} с, заложить 2 бл.`
   if (a.foeClose && a.niche && a.niche.ms < boxMs && (a.blocks >= 2)) return { how: 'niche', why: nicheWhy() }
   if (a.foeClose && box) return { how: 'box', why: boxWhy() }
@@ -170,7 +170,7 @@ function chooseRefuge (a) {
 
 function buildMsOf (a, how) {
   if (how === 'niche' && a.niche) return a.niche.ms
-  if (how === 'box' && a.cell) return require('.././fortify').refugeBuildMs(a.cell) + a.cell.dist / 4.3 * 1000
+  if (how === 'box' && a.cell) return (require('.././fortify') as typeof import('.././fortify')).refugeBuildMs(a.cell) + a.cell.dist / 4.3 * 1000
   if (how === 'hole' && a.hole) return a.hole.ms * 2 / 3 // на 2 вниз рука моба уже не достаёт
   if (how === 'pillar' && a.pillar) return 300 + PILLAR * 600
   return 0
@@ -200,13 +200,13 @@ const REFUGE_FOOD_BAD = /^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|c
 function hasFood (session) {
   const bot = session.bot
   const foods = (session.mcData && session.mcData.foodsByName) || (bot.registry && bot.registry.foodsByName) || {}
-  const meal = require('.././actions').bestFood(bot, { foodsByName: foods })
+  const meal = (require('.././actions') as typeof import('.././actions')).bestFood(bot, { foodsByName: foods })
   return !!meal && !REFUGE_FOOD_BAD.test(meal.name)
 }
 
 async function healStep (session, ctl, minHp) {
   const bot = session.bot
-  const kit = require('.././fightkit')
+  const kit: typeof import('.././fightkit') = require('.././fightkit')
   const hp = bot.health ?? 0
   if (hp >= minHp) return null
   const apple = !kit.hasEffect(bot, 'absorption') && hp <= 8 &&
@@ -220,7 +220,7 @@ async function healStep (session, ctl, minHp) {
   if ((bot.food ?? 0) < 20 && hasFood(session)) {
     session.eating = true
     try {
-      const r = await require('.././actions').eat(session, {})
+      const r = await (require('.././actions') as typeof import('.././actions')).eat(session, {})
       if (r && r.ate) return r.ate
     } catch {} finally { session.eating = false }
   }
@@ -235,8 +235,8 @@ function holdMouth (session, ctl) {
 
 async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note, topY = null }: any) {
   const bot = session.bot
-  const fortify = require('.././fortify')
-  const flee = require('.././flee')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
+  const flee: typeof import('.././flee') = require('.././flee')
   const st: any = { ate: [], patched: 0, breaches: 0, why: null }
   let lastHp = bot.health ?? 0
   let hurtAt = 0
@@ -266,7 +266,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
         lastPatch = gameClock.now()
         const n = await fortify.refugePatch(bot, box, { ctl })
         st.patched += n
-        if (!n && !st.noFill && !require('.././build').pickFiller(bot, { steady: true })) { st.noFill = true; note('латать нечем — коробка открыта') }
+        if (!n && !st.noFill && !(require('.././build') as typeof import('.././build')).pickFiller(bot, { steady: true })) { st.noFill = true; note('латать нечем — коробка открыта') }
       }
     }
     // Бьют внутри закрытого укрытия — кто-то внутри или рядом с дырой, которую
@@ -282,13 +282,13 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
     // На столбе: достают — стрелок видит или бьют — слезать и бежать.
     if (kind === 'pillar') {
       if (topY !== null && bot.entity.position.y < topY - 0.6 && !st.fell) { st.fell = true; note(`со столба упал: ноги y${bot.entity.position.y.toFixed(1)} при верхе ${topY}`) }
-      const shot = refugeThreats(bot, session).some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))
+      const shot = refugeThreats(bot, session).some(h => h.doc.range && h.d <= h.doc.range && (require('.././assess') as typeof import('.././assess')).inSight(bot, h.e))
       if (shot) { st.why = 'breached'; break }
       if (gameClock.now() - hurtAt < 700) {
         // Достают снизу — выше, пока есть блоки (до +2), и только потом слезать.
-        if ((st.raised || 0) < 2 && require('.././pack').buildCount(bot, worlds.worldOf(bot)) > 0) {
+        if ((st.raised || 0) < 2 && (require('.././pack') as typeof import('.././pack')).buildCount(bot, worlds.worldOf(bot)) > 0) {
           let r = null
-          try { r = await require('.././build').towerUp(bot, ctl, 1, { sneak: true, fast: true }) } catch {}
+          try { r = await (require('.././build') as typeof import('.././build')).towerUp(bot, ctl, 1, { sneak: true, fast: true }) } catch {}
           if (r && r.placed) { st.raised = (st.raised || 0) + 1; note('достают — столб выше'); hurtAt = 0; continue }
         }
         st.why = 'breached'; break
@@ -300,7 +300,7 @@ async function holdOut (session, ctl, { kind, box = null, minHp, deadline, note,
       // Стрелок видит — тоже бежать (из-под прицела), а не есть под стрелами.
       const hs = refugeThreats(bot, session)
       const near = hs.filter(h => h.doc.radius > 0 && h.d < 7)
-      const aimed = hs.some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))
+      const aimed = hs.some(h => h.doc.range && h.d <= h.doc.range && (require('.././assess') as typeof import('.././assess')).inSight(bot, h.e))
       if (near.length || aimed) { st.why = 'contact'; break }
     }
     const got = await healStep(session, ctl, minHp)
@@ -322,7 +322,7 @@ async function planksFromLogs (session, ctl, logs = 2) {
   if (!session.mcData.itemsByName[plank]) return 0
   const before = bot.inventory.items().filter(i => i.name === plank).reduce((n, i) => n + i.count, 0)
   try {
-    await require('.././actions').craft(session, ctl, { item: plank, count: before + Math.min(logs, log.count) * 4, spendReserve: true })
+    await (require('.././actions') as typeof import('.././actions')).craft(session, ctl, { item: plank, count: before + Math.min(logs, log.count) * 4, spendReserve: true })
   } catch {}
   const after = bot.inventory.items().filter(i => i.name === plank).reduce((n, i) => n + i.count, 0)
   return Math.max(0, after - before)
@@ -330,10 +330,10 @@ async function planksFromLogs (session, ctl, logs = 2) {
 
 async function takeNiche (session, ctl, a, step) {
   const bot = session.bot
-  const fortify = require('.././fortify')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
   await fortify.landed(bot, 600)
   const feet = fortify.feetCell(bot)
-  const near = a.nearest ? require('.././flee').hostilesAround(bot, 16).find(h => h.e.name === a.nearest.name) : null
+  const near = a.nearest ? (require('.././flee') as typeof import('.././flee')).hostilesAround(bot, 16).find(h => h.e.name === a.nearest.name) : null
   const plan = fortify.nichePlan(bot, feet, { away: near ? near.e.position : null })
   if (!plan) { step('ниша: здесь не вкопаться'); return null }
   try { await fortify.centerInCell(bot, 500) } catch {}
@@ -354,10 +354,10 @@ async function takeNiche (session, ctl, a, step) {
 
 async function takeBox (session, ctl, a, step, report = (_box: any) => {}) {
   const bot = session.bot
-  const fortify = require('.././fortify')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
   const target = a.cell
   if (!target || ctl.aborted || (bot.health ?? 0) <= 0) return null
-  const toward = a.nearest ? require('.././flee').hostilesAround(bot, 16).find(h => h.e.name === a.nearest.name)?.e.position : null
+  const toward = a.nearest ? (require('.././flee') as typeof import('.././flee')).hostilesAround(bot, 16).find(h => h.e.name === a.nearest.name)?.e.position : null
   // Клетка в том же столбце (на блок ниже/выше ног) — тело ещё в прыжке после выхода из воды или рывка: дождаться пола,
   // а не «идти» к ней (trap2 02.10, вода: «к клетке (0 бл.) — до клетки не дошёл», откат на столб под трезубцем).
   {
@@ -380,8 +380,8 @@ async function takeBox (session, ctl, a, step, report = (_box: any) => {}) {
   const occupied = (box: any = { cell: fortify.feetCell(bot), placed: 0 }) => {
     const cell = fortify.feetCell(bot)
     if (ctl.aborted || (bot.health ?? 0) <= 0 || !fortify.refugeNeed(bot, cell)) return null
-    const intruder = require('.././flee').hostilesAround(bot, 3).find(h => refugeFoe(bot, h.e, session) &&
-      (require('.././pick').aim(bot, h.e)?.point || require('../combat').liveAttacker(session)?.id === h.e.id) &&
+    const intruder = (require('.././flee') as typeof import('.././flee')).hostilesAround(bot, 3).find(h => refugeFoe(bot, h.e, session) &&
+      ((require('.././pick') as typeof import('.././pick')).aim(bot, h.e)?.point || (require('../combat') as typeof import('../combat')).liveAttacker(session)?.id === h.e.id) &&
       [cell, cell.offset(0, 1, 0)].some(p => occupiedByEntity({ entity: bot.entity, entities: { [h.e.id]: h.e } }, p)))
     if (!intruder) return null
     const breached = { ...box, cell, intruder: intruder.e.name }
@@ -391,7 +391,7 @@ async function takeBox (session, ctl, a, step, report = (_box: any) => {}) {
   }
   const before = occupied()
   if (before) return before
-  const b = await fortify.refugeBox(bot, target.cell, { toward, ctl })
+  const b: Awaited<ReturnType<typeof fortify.refugeBox>> & { sunk?: boolean } = await fortify.refugeBox(bot, target.cell, { toward, ctl })
   // Не закрылась — ещё до двух заходов латания (зомби отходит из клетки стены).
   for (let k = 0; k <= 2; k++) {
     const breach = occupied(b)
@@ -418,7 +418,7 @@ async function takeBox (session, ctl, a, step, report = (_box: any) => {}) {
 }
 
 async function stepTo (bot, ctl, cell, ms = 1500) {
-  const fortify = require('.././fortify')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
   try { bot.pathfinder.setGoal(null) } catch {}
   const until = gameClock.now() + ms
   try {
@@ -448,7 +448,7 @@ function outsideDanger (bot, at, { untilDawn = false, session = bot._ndGuard?.se
     shooters.clear()
     hs = hs.filter(h => {
       if (!/^(skeleton|stray|bogged|parched|pillager)$/.test(h.e.name)) return true
-      const danger = h.d <= (held.has(h.e.id) ? 18 : 16) && require('.././assess').inSight(bot, h.e)
+      const danger = h.d <= (held.has(h.e.id) ? 18 : 16) && (require('.././assess') as typeof import('.././assess')).inSight(bot, h.e)
       if (danger) shooters.add(h.e.id)
       return danger
     })
@@ -464,7 +464,7 @@ function outsideDanger (bot, at, { untilDawn = false, session = bot._ndGuard?.se
   if (hs.some(h => h.e.name === 'creeper' && h.d <= 8)) return 'крипер у стен'
   // Стрелок в своей дальности: на выходе первая же стрела (на открытом месте без щита — 3–5 хп раз в ~3 с).
   if (hs.some(h => /^(skeleton|stray|bogged|parched|pillager)$/.test(h.e.name) && h.d <= (spatial ? 18 : 16))) return 'стрелок рядом'
-  if (hs.some(h => h.doc.range && h.d <= h.doc.range && require('.././assess').inSight(bot, h.e))) return 'стрелок на виду'
+  if (hs.some(h => h.doc.range && h.d <= h.doc.range && (require('.././assess') as typeof import('.././assess')).inSight(bot, h.e))) return 'стрелок на виду'
   const t = bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : 6000
   const night = t >= 12542 && t <= 23459
   // До рассвета (кампания уже решила: ночь наверху) — без проверки неба: листва над коробкой — не крыша от мобов
@@ -491,7 +491,7 @@ function openSkyOver (bot, at) {
 
 async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = false }: any) {
   const bot = session.bot
-  const fortify = require('.././fortify')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
   const s0 = gameClock.now()
   const shooters = new Set()
   const spatial = process.env.ND_REFUGE_SPATIAL_EXIT === '1' && !untilDawn
@@ -530,7 +530,7 @@ async function sitTight (session, ctl, { at, t0, box = null, step, untilDawn = f
 
 async function waitClear (session, ctl, at, { deadline, reach = 3, step }: any) {
   const bot = session.bot
-  const flee = require('.././flee')
+  const flee: typeof import('.././flee') = require('.././flee')
   const t0 = gameClock.now()
   const near = () => flee.hostilesAround(bot, 12).some(h => refugeFoe(bot, h.e, session) && h.doc.radius > 0 &&
     Math.hypot(h.e.position.x - (at.x + 0.5), h.e.position.z - (at.z + 0.5)) <= reach &&
@@ -549,14 +549,14 @@ async function waitClear (session, ctl, at, { deadline, reach = 3, step }: any) 
 
 async function leaveBox (session, ctl, b, hold, step) {
   const bot = session.bot
-  const fortify = require('.././fortify')
+  const fortify: typeof import('.././fortify') = require('.././fortify')
   const live = () => !ctl.aborted && (bot.health ?? 0) > 0
   session.shelterBox = null
   if (hold.why === 'died' || (bot.health ?? 0) <= 0) return null
   // Отход оборвали (новое намерение, чат, смерть) — стены не ломать и не выходить: решает тот, кто оборвал.
   if (!live()) return null
   if (!bot.entity.position.floored().equals(b.cell) && !fortify.feetCell(bot).equals(b.cell)) return { ok: true, note: 'уже снаружи' }
-  const foes = require('.././flee').hostilesAround(bot, 12).filter(h => refugeFoe(bot, h.e, session))
+  const foes = (require('.././flee') as typeof import('.././flee')).hostilesAround(bot, 12).filter(h => refugeFoe(bot, h.e, session))
   const away = foes.length ? foes[0].e.position : null
   let r = null
   // Ниша: выйти тем же проёмом — выломать свои 2 блока и шагнуть.
@@ -608,7 +608,7 @@ async function leaveBox (session, ctl, b, hold, step) {
 function shoreRoute (bot, { radius = 16, rise = 6, drop = 4, foes = [] }: any = {}) {
   const start = bot.entity.position.floored()
   const key = p => `${p.x},${p.y},${p.z}`
-  const water = require('.././movement').waterCell
+  const water = (require('.././movement') as typeof import('.././movement')).waterCell
   const passable = b => !!b && b.boundingBox === 'empty' && !/lava/.test(b.name)
   const queue = [{ p: start, parent: -1, n: 0 }]
   const seen = new Set([key(start)])
@@ -663,7 +663,7 @@ function shoreRoute (bot, { radius = 16, rise = 6, drop = 4, foes = [] }: any = 
 // Берег дальше 24 бл. (океан: cl-ag/cl-ah 14.10 — «берега в 16 бл. не вижу» за 0 с, круги по воде, утопленники добили):
 // ближайшая суша над уровнем воды — то, что видно с поверхности, — в загруженных чанках, кольцами от тела.
 function farShore (bot, { maxRadius = 64 }: any = {}) {
-  const water = require('.././movement').waterCell
+  const water = (require('.././movement') as typeof import('.././movement')).waterCell
   const me = bot.entity.position.floored()
   let top = me.y
   while (top - me.y < 16 && water(bot.blockAt(new Vec3(me.x, top + 1, me.z)))) top++
@@ -694,7 +694,7 @@ function farShore (bot, { maxRadius = 64 }: any = {}) {
 
 async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: any = {}) {
   const bot = session.bot
-  const flee = require('.././flee')
+  const flee: typeof import('.././flee') = require('.././flee')
   const t0 = gameClock.now()
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
   const stop = () => { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(k, false) }
@@ -708,7 +708,7 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
   try {
     while (!ctl.aborted && gameClock.now() - t0 < limit && (bot.health ?? 0) > 0 && !dry()) {
       // Retain the existing threat-aware shore route while breath is full.
-      if (process.env.ND_WATER_ESCAPE_BUDGET !== '0' && (require('../movement').airTicks(bot) < 270 || bot.entity._ndPoseHeight === .6)) {
+      if (process.env.ND_WATER_ESCAPE_BUDGET !== '0' && ((require('../movement') as typeof import('../movement')).airTicks(bot) < 270 || bot.entity._ndPoseHeight === .6)) {
         const swim = await escapeWater(bot, ctl, { timeoutMs: Math.max(0, limit - (gameClock.now() - t0)), visibleOnly: true, radius: 16 })
         target = swim.target ? new Vec3(swim.target.x, swim.target.y, swim.target.z) : null
         if (!swim.ok) return { ...swim, seconds: (gameClock.now() - t0) / 1000 }
@@ -763,7 +763,7 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
         const yaw = Math.atan2(wx / n, wz / n) // прочь от середины воды
         const until = gameClock.now() + 900
         await bot.look(yaw, 0, true).catch(() => {})
-        const { stepSafe, keyDir } = require('.././moves')
+        const { stepSafe, keyDir }: typeof import('.././moves') = require('.././moves')
         while (gameClock.now() < until && !ctl.aborted && (bot.health ?? 0) > 0) {
           const f = keyDir(bot, 'forward')
           set('forward', stepSafe(bot, f))
@@ -773,7 +773,7 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
           await sleep(50)
         }
         stop()
-        await require('.././fortify').landed(bot, 600)
+        await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
       }
     } catch {} finally { stop() }
   }
@@ -781,3 +781,8 @@ async function toShore (session, ctl, { timeoutMs = 15000, step = () => {} }: an
 }
 
 module.exports = { pillarPlan, standTop, grounded, refugeFoe, refugeLook, nicheOn, chooseRefuge, buildMsOf, outrun, lookLine, REFUGE_FOOD_BAD, hasFood, healStep, holdMouth, holdOut, planksFromLogs, takeNiche, takeBox, stepTo, SIT_CAP_MS, outsideDanger, openSkyOver, sitTight, waitClear, leaveBox, shoreRoute, toShore, farShore }
+export {
+  pillarPlan, standTop, grounded, refugeFoe, refugeLook, nicheOn, chooseRefuge, buildMsOf, outrun, lookLine,
+  REFUGE_FOOD_BAD, hasFood, healStep, holdMouth, holdOut, planksFromLogs, takeNiche, takeBox, stepTo, SIT_CAP_MS,
+  outsideDanger, openSkyOver, sitTight, waitClear, leaveBox, shoreRoute, toShore, farShore
+}

@@ -1,7 +1,7 @@
 // Stress stand from the command line (no Minecraft): named distractions or seeded random tapes against the real
 // TacticalSystem, invariant violations by kind, and the minimal tape of each kind.
-//   node daemon/src/tactics/sim-fuzz.js [--from 1] [--count 300] [--gen 1|2|rough] [--observe mirror|minecraft] [--shrink] [--deaths] [--named] [--json out.json]
-//   node daemon/src/tactics/sim-fuzz.js --tape '{"events":[{"at":20,"type":"tnt","distance":2,"fuse":40}]}'   (one tape, log)
+//   node dist/daemon/src/tactics/sim-fuzz.js [--from 1] [--count 300] [--gen 1|2|rough] [--observe mirror|minecraft] [--shrink] [--deaths] [--named] [--json out.json]
+//   node dist/daemon/src/tactics/sim-fuzz.js --tape '{"events":[{"at":20,"type":"tnt","distance":2,"fuse":40}]}'   (one tape, log)
 // Deaths count only where one of the simple policies survived the same tape (sim-run.check).
 import { check } from './sim-run'
 import { SCENARIOS, randomScenario, randomScenario2, roughScenario, shrink } from './sim-scenarios'
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   console.log(`${tapes.length} tapes, ${observe}, ${Date.now() - started} ms`)
   for (const [kind, list] of byKind) console.log(`${kind} ${list.length}: ${list.slice(0, 15).map(s => s.name).join(' ')}`)
   const out = opt('--json', '')
-  if (out) require('fs').writeFileSync(out, JSON.stringify({ observe, gen: opt('--gen', '1'), from, count: tapes.length, ms: Date.now() - started, details }, null, 1))
+  if (out) (require('fs') as typeof import('fs')).writeFileSync(out, JSON.stringify({ observe, gen: opt('--gen', '1'), from, count: tapes.length, ms: Date.now() - started, details }, null, 1))
   if (!args.includes('--shrink')) return
   for (const [kind, list] of byKind) {
     if (kind === 'death' && !args.includes('--deaths')) continue

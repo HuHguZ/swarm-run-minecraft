@@ -1,12 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { Vec3 } = require('vec3')
-const { visibleOf } = require('../src/sight')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { Vec3 } from 'vec3'
+import { visibleOf } from '../src/sight'
 
 function fixture ({ metadata = true, storage = 'palette', targets = [], hidden = [] }: any = {} as Record<string, any>) {
   const minY = -64
-  const blocks = new Map(targets.map(p => [p.join(','), new Vec3(...p)]))
+  const blocks = new Map(targets.map(p => [p.join(','), new Vec3(...(p as [number, number, number]))]))
   const hiddenKeys = new Set(hidden.map(p => p.join(',')))
   const columns = new Map()
   let reads = 0
@@ -42,10 +42,10 @@ function fixture ({ metadata = true, storage = 'palette', targets = [], hidden =
       getColumn: column,
       raycast: (_eye, delta) => {
         const target = targets.find(p => {
-          const d = new Vec3(...p).offset(0.5, 0.5, 0.5).minus(bot.entity.position.offset(0, 1.62, 0)).normalize()
+          const d = new Vec3(...(p as [number, number, number])).offset(0.5, 0.5, 0.5).minus(bot.entity.position.offset(0, 1.62, 0)).normalize()
           return d.distanceTo(delta) < 1e-9
         })
-        return target && !hiddenKeys.has(target.join(',')) ? bot.blockAt(new Vec3(...target)) : null
+        return target && !hiddenKeys.has(target.join(',')) ? bot.blockAt(new Vec3(...(target as [number, number, number]))) : null
       }
     }
   }

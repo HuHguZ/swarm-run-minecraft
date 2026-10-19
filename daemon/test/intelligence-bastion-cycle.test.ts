@@ -4,10 +4,12 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { miningProgress, needsKnownGoldApproach } from '../src/bastion/mining-cycle'
+import { cjsContext } from './cjs-context'
+import { transpiledSource } from './source-fixture'
 
 async function runMiningLoop(firstProgress: boolean, mode = 'auto') {
   const filename = require.resolve('../src/bastion/bastion')
-  const source = readFileSync(filename, 'utf8')
+  const source = transpiledSource(filename)
   const start = source.indexOf('    let minedSinceRetry = ')
   const end = source.indexOf('    if (!st.sealedState) await pickUp', start)
   assert.ok(start > 0 && end > start, 'test executes the actual Bastion mining/trading loop')
@@ -28,7 +30,7 @@ async function runMiningLoop(firstProgress: boolean, mode = 'auto') {
     },
     process: { env: { ND_GOLD_ROUTE: '0' } }, require: createRequire(filename),
     out: () => ({ mined, retry: st.barterRetry, remaining: st.pred.size }) }
-  return await runInNewContext('(async () => {\n' + source.slice(start, end) + '\n return out() })()', context)
+  return await runInNewContext('(async () => {\n' + source.slice(start, end) + '\n return out() })()', cjsContext(context))
 }
 
 test('failed mining returns with mapped gold preserved instead of starving native packets in a retry loop', async () => {
@@ -57,9 +59,9 @@ test('a partial own tunnel still requires approaching far mapped gold', () => {
 })
 
 async function routeHandoff(ok: boolean, aborted = false) {
-  const { Vec3 } = require('vec3')
+  const { Vec3 }: typeof import('vec3') = require('vec3')
   const filename = require.resolve('../src/bastion/bastion')
-  const source = readFileSync(filename, 'utf8')
+  const source = transpiledSource(filename)
   const start = source.indexOf('        const rStart = bot.entity.position.floored()')
   const end = source.indexOf('\n      }\n      if (!routed &&', start)
   assert.ok(start > 0 && end > start)
@@ -75,7 +77,7 @@ async function routeHandoff(ok: boolean, aborted = false) {
       if (name.endsWith('/sealed')) return { exposure: () => ['24,58,49'] }
       throw new Error(`unexpected dependency ${name}`)
     } }
-  await runInNewContext('(async () => {\n' + source.slice(start, end) + '\n})()', context)
+  await runInNewContext('(async () => {\n' + source.slice(start, end) + '\n})()', cjsContext(context))
   return { st, remembered, routed: context.routed }
 }
 

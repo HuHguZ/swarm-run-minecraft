@@ -1,3 +1,5 @@
+import { declarationsOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { worldFromObservation } from '../src/environments/mineflayer'
@@ -7,7 +9,8 @@ import { plan } from '../src/core/strategy'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
-const { foodUnits } = require('../src/play-policy')
+import { cjsContext } from './cjs-context'
+import { foodUnits } from '../src/play-policy'
 const effect = (strategy: any, state: WorldState) => typeof strategy.expectedEffects === 'function' ? strategy.expectedEffects(state) : strategy.expectedEffects
 
 test('graph food stock uses the same units as the body, including berries, melons and raw chicken', () => {
@@ -80,14 +83,14 @@ test('eating competes with travel time: distant travel eats first, a short trip 
   assert.equal(travelTicks(world, 'LavaPoolPortal') / travelTicks(fed, 'LavaPoolPortal'), 1.3)
 })
 function bodyFixture(afterBite: (signal: AbortController) => void = () => {}) {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
-  const helper = source.slice(source.indexOf('async function eatTo ('), source.indexOf('function planksFor ('))
+  const source = campaignTs()
+  const helper = declarationsOf(source, 'eatTo') + '\n'
   const executor = source.slice(source.indexOf('async function executeStrategy ('), source.indexOf('const intelligence = require('))
   const controller = new AbortController()
   const context: Record<string, any> = { state: { health: 19, food: 6 }, died: false, strategyExecuting: false, strategyInterrupted: false,
     FOOD: /dried_kelp/, RAW: /beef|chicken/, bites: 0, have: () => 24, rest: async () => assert.fail('high HP meal must not call the early-returning rest'),
     act: async (skill: string) => { assert.equal(skill, 'eat'); context.bites++; context.state.food++; afterBite(controller) } }
-  vm.runInNewContext(helper + executor, context)
+  vm.runInNewContext(helper + executor, cjsContext(withSetters(context)))
   return { context, controller }
 }
 test('the actual campaign EatFood executor fills high-HP hunger using fourteen one-point bites', async () => {
@@ -136,9 +139,9 @@ test('slot acknowledgements cannot exhaust the meal loop before twenty actual on
   assert.equal(context.bites, 39)
 })
 test('the real Session cannot enable sprint from carried food at hunger six', () => {
-  const { Session } = require('../src/session')
-  const { Vec3 } = require('vec3')
-  const registry = require('minecraft-data')('1.21.11')
+  const { Session }: typeof import('../src/session') = require('../src/session')
+  const { Vec3 }: typeof import('vec3') = require('vec3')
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const session = new Session({ lowHealth: 8 }, { drain: () => [] }, { state: {}, patch() {} })
   const bot: any = { version: '1.21.11', health: 19, food: 6, registry, game: { dimension: 'overworld' },
     entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => [{ name: 'bread', count: 6, type: registry.itemsByName.bread.id }] },

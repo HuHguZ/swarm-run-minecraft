@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Сборы перед большим делом и «не забыть» в бою: золотые яблоки, зелья, лук и
 // стрелы, щит, еда, блоки, ведро, кровати на дракона. Чек-лист на поход
 // (nether, bastion, end/dragon, fight) — что есть, чего нет, что скрафчено
@@ -13,10 +13,11 @@ const gameClock = require('./game-clock')
 //   loot_table/blocks/oak_leaves.json, dark_oak_leaves.json — яблоко 0.5% с
 //     листа без ножниц (удача: 0.56 / 0.63 / 0.83 / 2.5%) — ~200 листьев на яблоко.
 
-const { sleep } = require('./movement')
-const { withTimeout } = require('./build')
-const actions = require('./actions')
-const { countOf } = require('./items')
+import { sleep } from './movement'
+import './build'
+import { withTimeout } from './build'
+import actions = require('./actions')
+import { countOf } from './items'
 
 // ------------------------------------------------------------ мелочи
 
@@ -31,7 +32,7 @@ function onFire (bot) {
   try { return (bot.entity.metadata[0] & 0x01) !== 0 } catch { return false }
 }
 function potionName (item) {
-  try { return require('./pvp').potionOf(item) } catch { return null }
+  try { return (require('./pvp') as typeof import('./pvp')).potionOf(item) } catch { return null }
 }
 function findPotion (bot, base, { splash = null }: any = {}) {
   return bot.inventory.items().find(i =>
@@ -39,7 +40,7 @@ function findPotion (bot, base, { splash = null }: any = {}) {
     String(potionName(i) || '').replace(/^(long|strong)_/, '') === base) || null
 }
 function potionsOf (bot) {
-  const out = {}
+  const out: Record<string, number> = {}
   for (const i of bot.inventory.items()) {
     if (!/potion$/.test(i.name)) continue
     const n = potionName(i)
@@ -56,7 +57,7 @@ const wornOrHas = (bot, re) => bot.inventory.items().some(i => re.test(i.name)) 
 // Выпить/съесть и дождаться свидетеля: эффекта или убыли стопки. Рука — назад.
 async function consume (bot, item, effect, ms = 3500) {
   const previous = bot.heldItem
-  const { consumeInOffhand, restoreOffhand } = require('./consumable-hands')
+  const { consumeInOffhand, restoreOffhand }: typeof import('./consumable-hands') = require('./consumable-hands')
   const offHand = consumeInOffhand(bot)
   const previousOff = bot.inventory.slots?.[45]
   const had = countOf(bot, item.name)
@@ -106,7 +107,7 @@ async function autoUse (autopilot, bot) {
     // Темп (2026-09-25): в бою с человеком (pvp.js держит session.tempo) пить
     // 1.6 с со скоростью ×0.2 — только если он не успеет добежать или
     // дострелить; взрывное под ноги — мгновенно, его можно всегда.
-    const tempoMod = require('./tempo')
+    const tempoMod: typeof import('./tempo') = require('./tempo')
     const duel = s.tempo && tempoMod.ON ? s.tempo : null
     const splashFr = findPotion(bot, 'fire_resistance', { splash: true })
     const drinkFr = findPotion(bot, 'fire_resistance', { splash: false })
@@ -296,7 +297,7 @@ async function kit (session, ctl, p: any = {}) {
     const hasMats = countRe(bot, /^(iron_ingot|diamond|.*_log|.*_planks)$/) > 0
     if (needGear && hasMats && !ctl.aborted) {
       try {
-        const r = await require('./prep').prepare(session, ctl, { strategy: 'smart' })
+        const r = await (require('./prep') as typeof import('./prep')).prepare(session, ctl, { strategy: 'smart' })
         for (const m of (r.made || [])) made.push(m.what)
       } catch (e) { lines.push(`⚠ prep: ${e.message}`) }
     }
@@ -387,4 +388,4 @@ async function kit (session, ctl, p: any = {}) {
   }
 }
 
-module.exports = { kit, autoUse, healInFight, consume, hasEffect, onFire, findPotion, potionsOf, makeGapples, KITS, ITEMS }
+export { kit, autoUse, healInFight, consume, hasEffect, onFire, findPotion, potionsOf, makeGapples, KITS, ITEMS }

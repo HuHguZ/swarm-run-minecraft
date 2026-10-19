@@ -43,8 +43,8 @@ test('airborne ranged node requires available ammunition, firing corridor and sa
 })
 
 test('a flight that enters ranged reach stops interception and fires the selected volley', async () => {
-  const Vec3 = require('vec3')
-  const ranged = require('../src/ranged')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const ranged: typeof import('../src/ranged') = require('../src/ranged')
   const originals = { crossbows: ranged.crossbows, fire: ranged.fire }
   const crossbow = { name: 'crossbow', slot: 36 }
   const target = { id: 2, position: new Vec3(80, 100, 0), velocity: new Vec3(0, 0, 0), flying: true }

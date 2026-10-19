@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const L = require('../src/combat/aerial-lance')
-const sky = require('../src/elytra')
+import * as L from '../src/combat/aerial-lance'
+import sky = require('../src/elytra')
 
 // Плоский мир: всё ниже y=100 твёрдое, стена x ≥ wallX (если задана).
 function flatWorld (wallX = Infinity) {
@@ -75,7 +75,7 @@ test('таран: план годен с элитрами, ракетами, к�
 })
 
 test('касание тарана — только damage_event цели с причиной «я» (S7c, замечание проверки S7b в)', () => {
-  const { ownHit } = require('../src/combat/aerial-lance')
+  const { ownHit }: typeof import('../src/combat/aerial-lance') = require('../src/combat/aerial-lance')
   assert.equal(ownHit({ entityId: 7, sourceCauseId: 4, sourceDirectId: 4 }, 3, 7), true, 'мой удар')
   assert.equal(ownHit({ entityId: 7, sourceCauseId: 0, sourceDirectId: 0 }, 3, 7), false, 'без источника (падение, кинетическая)')
   assert.equal(ownHit({ entityId: 7, sourceCauseId: 8, sourceDirectId: 9 }, 3, 7), false, 'его же кристалл/другой игрок')

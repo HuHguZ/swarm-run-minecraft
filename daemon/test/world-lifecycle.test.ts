@@ -1,12 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const { installWorldTracker } = require('../src/worlds')
-const { portalChanged } = require('../src/nether')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { installWorldTracker } from '../src/worlds'
+import { portalChanged } from '../src/nether'
 function fixture () {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   bot.entity = { id: 1, position: new Vec3(0.5, 65, 0.5) }
   bot.entities = { 1: bot.entity }; bot.players = {} as Record<string, any>

@@ -2,15 +2,15 @@
 // Аварийный отход (survival.refuge, research/05-synthesis.md F.5): оценка места
 // и выбор способа на фейковом боте. Мир — настоящие блоки 1.21.11
 // (prismarine-block: формы, твёрдость, время копки), мобы — сущности с позицией.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const mcData = require('minecraft-data')('1.21.11')
-const survival = require('../src/survival')
-const fortify = require('../src/fortify')
-const hold = require('../src/survival/hold-out')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const mcData = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+import survival = require('../src/survival')
+import fortify = require('../src/fortify')
+import hold = require('../src/survival/hold-out')
 
 const blockOf = (name, pos) => {
   const b = Block.fromStateId(registry.blocksByName[name].defaultState, 0)
@@ -27,7 +27,7 @@ function scene ({ floor = 'stone', at = null, dim = 'overworld', mobs = [], item
     game: { dimension: dim },
     health: hp,
     food,
-    entity: { id: 1, position: new Vec3(...feet), onGround: true, isInWater: water, isInLava: false, effects: {} as Record<string, any>, metadata: [], height: 1.8, width: 0.6 },
+    entity: { id: 1, position: new Vec3(...(feet as [number, number, number])), onGround: true, isInWater: water, isInLava: false, effects: {} as Record<string, any>, metadata: [], height: 1.8, width: 0.6 },
     entities: {} as Record<string, any>,
     heldItem: null,
     world: { raycast: () => null },
@@ -80,7 +80,7 @@ test('дальний враг за стеной, вне своей дально�
 test('holdOut покидает открытое место и столб при видимом гасте в 45 блоках до еды', async () => {
   for (const [kind, why] of [['pillar', 'breached'], ['open', 'contact']]) {
     const s = scene({ dim: 'the_nether', mobs: [['ghast', 45.5, 0.5]], items: [], food: 10 })
-    const r = await hold.holdOut(s, { aborted: false }, { kind, minHp: 18, deadline: require('../src/game-clock').now() + 1000, note () {} })
+    const r = await hold.holdOut(s, { aborted: false }, { kind, minHp: 18, deadline: (require('../src/game-clock') as typeof import('../src/game-clock')).now() + 1000, note () {} })
     assert.equal(r.why, why)
     assert.deepEqual(r.ate, [])
   }
@@ -279,7 +279,7 @@ function neutralScene (name = 'piglin', { angry = false, hit = false, expired = 
   const e = s.bot.entities[10]
   const keys = registry.entitiesByName[name].metadataKeys
   e.metadata[keys.indexOf(name === 'enderman' ? 'creepy' : 'mob_flags')] = angry ? (name === 'enderman' ? true : 4) : 0
-  if (hit) s.lastAttacker = { id: e.id, at: require('../src/game-clock').now() - (expired ? 21000 : 0), how: 'damage_event' }
+  if (hit) s.lastAttacker = { id: e.id, at: (require('../src/game-clock') as typeof import('../src/game-clock')).now() - (expired ? 21000 : 0), how: 'damage_event' }
   return s
 }
 

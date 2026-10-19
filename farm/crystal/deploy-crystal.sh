@@ -2,7 +2,7 @@
 # ВЫКЛАДКА ДУЭЛЕЙ КРИСТАЛЛАМИ НА ЖИВУЮ АРЕНУ — ПОДГОТОВЛЕНО, НЕ ЗАПУСКАЛОСЬ (агент crystal, 2026-09-30).
 # Запускает только пользователь или координатор с его согласия. Делает то же, что обычная выкладка
 # (шапка deploy-arena.sh), и ничего сверх:
-#   1) снимок: daemon/src → daemon-stage/src, daemon/arena.js → deploy-tmp/arena-next.js;
+#   1) снимок: daemon/src → daemon-stage/src, dist/daemon/arena/arena.js → deploy-tmp/arena-next.js;
 #   2) deploy-arena.sh ждёт конца текущего раунда, deploy-live.ps1 меняет src у демонов 8765/8768,
 #      arena-live.js ← arena-next.js, арена снова запускается.
 # Наборы арены — в последней строке deploy-arena.sh ("арсенал,небо и порох"). Чтобы шли кристаллы,
@@ -19,7 +19,7 @@ R=/c/Users/user/Desktop/work/minecraft-claude
 mkdir -p "$R/deploy-tmp"
 rm -rf "$R/daemon-stage/src"
 cp -r "$R/daemon/src" "$R/daemon-stage/src"
-cp "$R/daemon/arena.js" "$R/deploy-tmp/arena-next.js"
+cp "$R/dist/daemon/arena/arena.js" "$R/deploy-tmp/arena-next.js"
 echo "снимок готов: daemon-stage/src, deploy-tmp/arena-next.js"
 grep -n 'arena-live.js 0' "$R/deploy-arena.sh" | sed 's/^/наборы сейчас: /'
 cd "$R" && nohup sh deploy-arena.sh > deploy-tmp/deploy.log 2>&1 < /dev/null &

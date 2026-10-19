@@ -1,11 +1,11 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const { createRequire } = require('node:module')
-const { transformSync } = require('esbuild')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import { createRequire } from 'node:module'
+import { transformSync } from 'esbuild'
+import { Vec3 } from 'vec3'
 
 // Reuse the installed-library fixture without running its unrelated tests.
 const fixtureFile = path.join(__dirname, 'tick-plugins.test.ts')
@@ -19,14 +19,14 @@ fixture(createRequire(fixtureFile), helpers, helpers.exports)
 function scene() {
   const { install, testClock, block } = helpers.exports
   const bot = install(testClock(750), { pathfinder: true, physicsEnabled: false })
-  const mv = new (require('mineflayer-pathfinder').Movements)(bot)
+  const mv = new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).Movements)(bot)
   mv.canDig = false; mv.allow1by1towers = false
-  mv.getScaffoldingItem = () => ({ type: bot.registry.itemsByName.cobblestone.id, count: 8 })
+  mv.getScaffoldingItem = () => ({ type: bot.registry.itemsByName.cobblestone.id, count: 8 }) as any
   bot.pathfinder.setMovements(mv)
   const node = (toPlace = []) => Object.assign(new Vec3(1.5, 1, .5), { toBreak: [], toPlace })
   let next = node([{ x: 0, y: 0, z: 0, dx: 1, dy: 0, dz: 0 }])
   bot.pathfinder.getPathTo = () => ({ status: 'success', path: [next] })
-  bot.pathfinder.setGoal(new (require('mineflayer-pathfinder').goals.GoalBlock)(4, 1, 0))
+  bot.pathfinder.setGoal(new ((require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder')).goals.GoalBlock)(4, 1, 0))
   const tick = () => bot.emit('physicsTick')
   const finishPlacement = () => {
     // The real placed-block update resets native placement without clearing

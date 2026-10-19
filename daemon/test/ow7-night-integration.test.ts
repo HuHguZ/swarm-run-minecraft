@@ -1,10 +1,12 @@
+import { campaignScript } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const { withClockFixture } = require('./clock-fixture')
+import { cjsContext } from './cjs-context'
+import { withClockFixture } from './clock-fixture'
 
 function campaign(refused = false, safe = false) {
   const file = path.join(__dirname, '../campaign.js'), baseRequire = createRequire(file), calls: any[] = []
@@ -32,7 +34,7 @@ function campaign(refused = false, safe = false) {
       name === './src/telemetry' ? { on: () => false, record() {} } : baseRequire(name),
     __dirname: path.dirname(file), module: { exports: {} }, process: { argv: ['node', file], env: { ND_MAP: '0', ND_NIGHT_WORK_SAFE: safe ? '1' : '0' } },
     console: { log() {}, error() {} }, queueMicrotask, setTimeout, testState: state, testSituation: situation }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nstate=testState;sit=testSituation;module.exports={step:nightWorkStep,hold:nightHold}', withClockFixture(context))
+  vm.runInNewContext(campaignScript() + '\nstate=testState;sit=testSituation;module.exports={step:nightWorkStep,hold:nightHold}', cjsContext(withClockFixture(context)))
   return { calls, state, c: context.module.exports }
 }
 test('real campaign/RPC flow makes consecutive useful night legs with no stage iron or idle wait', async () => {

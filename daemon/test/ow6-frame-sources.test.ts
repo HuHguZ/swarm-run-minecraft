@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Vec3=require('vec3')
-const one=require('../src/cast1')
+const Vec3: typeof import('vec3').Vec3=require('vec3')
+import one = require('../src/cast1')
 
 function fixture() {
   const origin=new Vec3(1,69,-28),g=one.geom1(origin,'z',-1),blocks=new Map<string,string>()
@@ -19,7 +19,7 @@ test('the same nine-block source deficit returns its receipt before any building
   const f=fixture(),state=one.sourceState1?.(f.bot,f.plan)
   assert.ok(state?.short,'the physical deficit must be known')
   f.session.castOneSourceFailure={plan:f.plan,key:state.key,report:{frame:'9/10 обсидиан',built:false,stopped:'лавы со столба не достать'}}
-  const clock=require('../src/game-clock'),now=clock.now
+  const clock: typeof import('../src/game-clock')=require('../src/game-clock'),now=clock.now
   try {
     for(const elapsed of [0,3600000]) {
       clock.now=()=>elapsed

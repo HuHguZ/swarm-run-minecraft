@@ -9,7 +9,7 @@
 // «укрытие» за стеной арены и на её крыше — pathfinder туда не доходил, и все
 // четыре попытки отдыха ушли в никуда. Заливка знает только связанные клетки.
 
-const Vec3 = require('vec3')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const HAZARD = /lava|fire|portal|gateway|magma_block|campfire|cactus|sweet_berry|powder_snow|cobweb/
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
@@ -67,4 +67,4 @@ function walkable (bot, start, { radius = 24, maxNodes = 4000, doors = false }: 
   return out
 }
 
-module.exports = { walkable, standable, passable, isDoorway, HAZARD }
+export { walkable, standable, passable, isDoorway, HAZARD }

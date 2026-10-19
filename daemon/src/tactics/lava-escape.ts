@@ -2,12 +2,12 @@
 type Body = Record<string, any>
 interface Controller { aborted: boolean; onAbort?: Array<() => void> }
 interface Result { ok: boolean; why?: string; placed?: number; climbed?: number; method?: string; target?: Body; at?: Body }
-const clock = require('../game-clock')
-const kit = require('../fightkit')
-const unstuck = require('../unstuck')
-const build = require('../build')
-const Vec3 = require('vec3')
-const pick = require('../pick')
+import * as clock from '../game-clock'
+import * as kit from '../fightkit'
+import * as unstuck from '../unstuck'
+import build = require('../build')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import pick = require('../pick')
 const lavaBlock = (block: Body | null): boolean => !!block && /lava/.test(block.name)
 
 export function splashImpact(bot: Body): Body | null {

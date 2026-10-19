@@ -10,7 +10,7 @@ const OWN_GAZE = /^(pearls|dragon|shoot|peek_shot)$/
 function install (session, bot) {
   if (bot._ndGaze || process.env.ND_GAZE === '0') return
   bot._ndGaze = true
-  const { starer, safePitch } = require('./dragon/dig-down-to')
+  const { starer, safePitch }: typeof import('./dragon/dig-down-to') = require('./dragon/dig-down-to')
   // Поздняя граница тика (physicTick, перед пакетом движения): pathfinder ставит взгляд на ходу в своём physicsTick.
   const late = () => {
     try {
@@ -28,4 +28,4 @@ function install (session, bot) {
   bot.on('physicTick', late)
 }
 
-module.exports = { install, OWN_GAZE }
+export { install, OWN_GAZE }

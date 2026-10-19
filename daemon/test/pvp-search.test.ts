@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const { acquireTarget } = require('../src/pvp/search')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import { acquireTarget } from '../src/pvp/search'
 
 function scene (t) {
   const time = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(time)
@@ -90,7 +90,7 @@ test('PvP search abort releases controls and timers even with a frozen native cl
   const running = acquireTarget(f.bot, f.ctl, f.vision, f.raw, { deadline: 10000 })
   f.ctl.aborted = true
   for (const cancel of [...f.ctl.onAbort]) cancel()
-  const result = await Promise.race([running, new Promise((_, reject) => setTimeout(() => reject(new Error('abort waited for game time')), 100))])
+  const result: any = await Promise.race([running, new Promise((_, reject) => setTimeout(() => reject(new Error('abort waited for game time')), 100))])
   assert.equal(result.entity, null)
   assert.equal(f.goals.at(-1), null)
   assert.equal(f.time.timers.size, 0)
@@ -115,7 +115,7 @@ test('PvP acquisition protects intermediate arena nodes and floor, then restores
 })
 
 test('PvP route can leave a shallow crater along its current floor without digging the arena floor', () => {
-  const { combatMovement } = require('../src/pvp/movement')
+  const { combatMovement }: typeof import('../src/pvp/movement') = require('../src/pvp/movement')
   const neighbors = [{ x: 589, y: 119, z: 594 }, { x: 590, y: 120, z: 593 }, { x: 589, y: 118, z: 594 }]
   const mv = { getNeighbors: () => neighbors, exclusionAreasBreak: [] }
   const bot = { entity: { position: new Vec3(589.7, 119, 593.3) }, pathfinder: { movements: mv } }
@@ -139,7 +139,7 @@ test('PvP acquisition and route costs cannot inspect a hidden ceiling above visi
       if (c.equals(new Vec3(0, 1, -3)) || roof && c.equals(hidden)) return { name: 'obsidian', position: c, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
       return open(p)
     }
-    assert.equal(require('../src/pick').blockSeen(f.bot, hidden), false)
+    assert.equal((require('../src/pick') as typeof import('../src/pick')).blockSeen(f.bot, hidden), false)
     const mv = { bot: f.bot, getBlock(pos, dx, dy, dz) { return pos ? this.bot.blockAt(pos.offset(dx, dy, dz)) : null },
       allowEntityDetection: true, exclusionAreasBreak: [] }
     const getBlock = mv.getBlock
@@ -156,10 +156,10 @@ test('PvP acquisition and route costs cannot inspect a hidden ceiling above visi
 })
 
 test('PvP acquisition hides cached packet geometry from fastblocks route candidates and restores the cache', async t => {
-  const { Movements } = require('mineflayer-pathfinder')
+  const { Movements }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   const Move = require('mineflayer-pathfinder/lib/move')
-  const bench = require('../try-astar-bench')
-  const fastblocks = require('../src/fastblocks')
+  const bench: typeof import('../scenes/infra/try-astar-bench') = require('../scenes/infra/try-astar-bench')
+  const fastblocks: typeof import('../src/fastblocks') = require('../src/fastblocks')
   const before = process.env.ND_S9
   process.env.ND_S9 = '1'
   t.after(() => { if (before === undefined) delete process.env.ND_S9; else process.env.ND_S9 = before })
@@ -174,14 +174,14 @@ test('PvP acquisition hides cached packet geometry from fastblocks route candida
     const bot = Object.assign(native, { canSeeBlock: f.bot.canSeeBlock })
     bot.entity.yaw = 0
     bot.pathfinder.setGoal = goal => f.goals.push(goal)
-    const mv = new Movements(bot)
+    const mv: any = new Movements(bot)
     bot.pathfinder.setMovements(mv)
     fastblocks.wrapMovements(bot, mv)
     const cachedGetBlock = mv.getBlock
     const cache = mv._ndFast
     assert(cache, 'exercise the real fastblocks wrapper')
     assert.notEqual(cachedGetBlock, Movements.prototype.getBlock)
-    assert.equal(require('../src/pick').blockSeen(bot, hidden), false)
+    assert.equal((require('../src/pick') as typeof import('../src/pick')).blockSeen(bot, hidden), false)
     // Seed the real block cache before acquisition: observed reads must not reuse this hidden value.
     assert.equal(mv.getBlock(hidden, 0, 0, 0).name, roof ? 'obsidian' : 'air')
     const candidates = () => mv.getNeighbors(new Move(0, 0, -5, 0, 0)).map(m => ({
@@ -208,7 +208,7 @@ test('PvP acquisition hides cached packet geometry from fastblocks route candida
 })
 
 test('PvP LOS and acquisition cannot see packet cells beyond an unknown plane', async t => {
-  const { observedCollision } = require('../src/pvp/search')
+  const { observedCollision }: typeof import('../src/pvp/search') = require('../src/pvp/search')
   const results = []
   for (const stone of [false, true]) {
     const f = scene(t)

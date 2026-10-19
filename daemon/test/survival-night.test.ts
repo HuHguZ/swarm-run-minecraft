@@ -1,11 +1,13 @@
 'use strict'
+import { campaignRequire, campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
 // Ночь не пережидать (ND_NIGHT_DOWN, поток survival 02.10): нора — вход вниз, ожидание только лечащее или аварийное.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { withClockFixture } = require('./clock-fixture')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { withClockFixture } from './clock-fixture'
 
 // Настоящие функции кампании, внешняя граница — RPC вместо живого Minecraft.
 // Загрузчик не открывает сокет, не пишет журнал и не запускает кампанию сам.
@@ -28,12 +30,12 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
     close () {}
   }
   const context = {
-    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync (file, line) { if (logs) logs.push(String(line)) } } : require(name),
+    require: name => name === 'ws' ? Socket : name === 'fs' ? { appendFileSync (file, line) { if (logs) logs.push(String(line)) } } : campaignRequire(name),
     __dirname: path.resolve(__dirname, '..'), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js', ...argv], env },
     console: { log () {}, error () {} }, setTimeout, Date: clock ? fakeDate(clock) : Date, queueMicrotask
   }
-  vm.runInNewContext(fs.readFileSync(process.env.CAMPAIGN_TEST_SOURCE || path.join(__dirname, '../campaign.js'), 'utf8') + `
+  vm.runInNewContext(campaignScript(process.env.CAMPAIGN_TEST_SOURCE) + `
     module.exports = { act, refresh, readMemory, nextBastion, died: () => died, stage: name => { stage = name }, craft, nightGuard, nightGuardBody, rest, eatTo, recoverGuard, descend, goToward, returnFromNether, spares, toSurface, unclutter, smeltAll, lightUp, known, makeBed,
       fightReady: () => fightReady(), gearWorth: (item, o) => gearWorth(item, o), wantFightGear: () => { fightGearWanted = true },
       runStage: name => STAGES.find(s => s.name === name).run(),
@@ -48,7 +50,7 @@ function campaign (state, situation, handle: (...args: any[]) => any = () => ({}
         if (h.recoverGuard) recoverGuard = h.recoverGuard; if (h.toSurface) toSurface = h.toSurface; },
       init: () => { state = testState; sit = testSituation; }
     }
-  `, withClockFixture(Object.assign(context, { testState: state, testSituation: situation })))
+  `, cjsContext(withClockFixture(Object.assign(context, { testState: state, testSituation: situation }))))
   context.module.exports.init()
   return context.module.exports
 }

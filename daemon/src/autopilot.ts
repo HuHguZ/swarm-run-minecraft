@@ -1,17 +1,17 @@
 'use strict'
-const gameClock = require('./game-clock')
-const { escapeWater, inWater, sleep } = require('./movement')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { escapeWater, inWater, sleep }: typeof import('./movement') = require('./movement')
 const {
   equipBestTool, missingHarvestTool, toolPlan, toolBudget, itemNamed, plankCount
-} = require('./items')
-const { withTimeout } = require('./build')
-const { HOSTILES, retreat, nearestHostile } = require('./combat')
-const lootMod = require('./loot')
-const { equipBestArmor } = require('./armor')
-const { eat, craft, place, bestFood, RISKY_FOOD } = require('./actions')
-const social = require('./social')
-const gestures = require('./gestures')
-const survival = require('./combat-safety')
+}: typeof import('./items') = require('./items')
+const { withTimeout }: typeof import('./build') = require('./build')
+const { HOSTILES, retreat, nearestHostile }: typeof import('./combat') = require('./combat')
+const lootMod: typeof import('./loot') = require('./loot')
+const { equipBestArmor }: typeof import('./armor') = require('./armor')
+const { eat, craft, place, bestFood, RISKY_FOOD }: typeof import('./actions') = require('./actions')
+const social: typeof import('./social') = require('./social')
+const gestures: typeof import('./gestures') = require('./gestures')
+const survival: typeof import('./combat-safety') = require('./combat-safety')
 
 // Сырое, у чего в печи есть жареная пара (рецепты smelting 1.21.11:
 // beef, porkchop, mutton, chicken, rabbit, cod, salmon, potato).
@@ -54,9 +54,9 @@ const HOLD_INTENTS = new Set(['smelt', 'craft', 'chest_put', 'chest_take', 'pack
 const CREEPER_GUARDED = new Set(['fight', 'retaliate', 'defend', 'flee', 'refuge', 'escape_fire', 'dragon'])
 // flee — один раз, не require() на каждый тик у крипера (S9).
 let fleeMod
-const fleeLazy = () => fleeMod || (fleeMod = require('./flee'))
+const fleeLazy = () => fleeMod || (fleeMod = (require('./flee') as typeof import('./flee')))
 let fightkitMod
-const fightkitLazy = () => fightkitMod || (fightkitMod = require('./fightkit'))
+const fightkitLazy = () => fightkitMod || (fightkitMod = (require('./fightkit') as typeof import('./fightkit')))
 function creeperNeed (bot) {
   if (!bot.entity || (bot.health ?? 0) <= 0) return null
   const gm = bot.game && bot.game.gameMode
@@ -82,8 +82,8 @@ function creeperNeed (bot) {
 // Имя типа урона по номеру: одна копия реестра в gamedata (dev-A, H1); пока её
 // нет — та же таблица боя (dragon.DAMAGE_TYPES, тест сверяет номер in_wall).
 function damageTypeName (id) {
-  try { const g = require('./gamedata'); if (typeof g.damageTypeName === 'function') return g.damageTypeName(id) } catch {}
-  try { return require('./dragon').DAMAGE_TYPES[id] || null } catch { return null }
+  try { const g: typeof import('./gamedata') = require('./gamedata'); if (typeof g.damageTypeName === 'function') return g.damageTypeName(id) } catch {}
+  try { return (require('./dragon') as typeof import('./dragon')).DAMAGE_TYPES[id] || null } catch { return null }
 }
 
 // Нужен ли отход прямо сейчас. Чистая функция по телу и последнему урону:
@@ -100,14 +100,14 @@ function emergencyNeed (bot, { lastHurt = null, lowHealth = 8, now = gameClock.n
   let safety
   try { safety = survival.inspect(bot, { minHealth: lowHealth }) } catch { return null }
   if (!safety || safety.action === 'dead' || !safety.threats.length || hp > safety.threshold) return null
-  const DOC = require('./flee').DOCTRINE
+  const DOC = (require('./flee') as typeof import('./flee')).DOCTRINE
   const me = bot.entity.position
   const reach = []
   for (const t of safety.threats) {
     if (t.anticipated) continue
     const e = bot.entities && bot.entities[t.id]
     if (!e || !e.position) continue
-    const doc = DOC[e.name] || {}
+    const doc: { range?: number; radius?: number } = DOC[e.name] || {}
     const shoots = doc.range && t.distance <= doc.range
     const walks = doc.radius > 0 && Math.abs(e.position.y - me.y) <= EMERGENCY.walkDy && t.distance <= EMERGENCY.walkDist
     if (shoots || walks) reach.push({ e, t })
@@ -342,7 +342,7 @@ class Autopilot {
     this.hookDamage(bot)
     this.syncDamageContext(bot)
     this.hookCreeper(bot)
-    require('./fire-punch').hookFirePunch(this.session, bot)
+    ;(require('./fire-punch') as typeof import('./fire-punch')).hookFirePunch(this.session, bot)
     // Жесты людей (присед, прыжки, взгляд, брошенный предмет) — на слушателях,
     // не в этом тике: gestures.js.
     gestures.hook(this, bot)
@@ -408,7 +408,7 @@ class Autopilot {
       .filter(b => b && Math.abs(b.position.y - me.y) <= 3)
       .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
     if (!pool) return
-    const { goals } = require('mineflayer-pathfinder')
+    const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
     try {
       bot.pathfinder.setGoal(new goals.GoalBlock(pool.position.x, pool.position.y, pool.position.z))
       const t0 = gameClock.now()
@@ -497,7 +497,7 @@ class Autopilot {
       const ev = bus.emit('emergency', { hp: Math.round(bot.health ?? 0), from: 'creeper', dist, foes: 1, kind: 'creeper',
         why: `крипер ${need.swelling ? 'шипит' : 'вплотную'} в ${dist} бл.`, during: busy ? cur.name : null })
       if (busy) this.interruptFor(ev)
-      const r = await require('./survival').runDodgeCreeper(this.session, { id: need.e.id })
+      const r = await (require('./survival') as typeof import('./survival')).runDodgeCreeper(this.session, { id: need.e.id })
       const d = (r && r.detail) || {}
       console.log('[creeper]', JSON.stringify({ dist0: dist, swelling: need.swelling, during: busy ? cur.name : null, ...d }))
       bus.emit('refuge', { how: 'dodge', code: d.code || (r && r.status !== 'done' ? String(r.status).toUpperCase() : null), hp0: d.hp0, hp: d.hp ?? Math.round(bot.health ?? 0),
@@ -537,7 +537,7 @@ class Autopilot {
     const t0 = gameClock.now()
     let run
     try {
-      run = require('./survival').runRefuge(this.session, { why: `emergency: ${need.why}`, minHp: EMERGENCY.rearmHp, maxSeconds: 120 })
+      run = (require('./survival') as typeof import('./survival')).runRefuge(this.session, { why: `emergency: ${need.why}`, minHp: EMERGENCY.rearmHp, maxSeconds: 120 })
     } catch (e) {
       this.refuging = false
       throw e
@@ -603,13 +603,13 @@ class Autopilot {
     this.fleeing = true
     this.session.bus.emit('fleeing', { from: threat?.name || 'опасный блок', health: Math.round(hp), reason: safety.reason, threshold: safety.threshold })
     const run = async ctl => {
-      await survival.disengage(this.session, ctl, () => require('./flee').hostilesAround(bot, 16).map(h => h.e))
+      await survival.disengage(this.session, ctl, () => (require('./flee') as typeof import('./flee')).hostilesAround(bot, 16).map(h => h.e))
       if (threat && !ctl.aborted) await retreat(this.session, ctl, threat, { timeoutMs: 12000 })
     }
     try {
       // With the tactics on, this idle flight is a low-priority lease (reflex-lock): one owner of the body, and a tactical
       // action cancels it instead of pausing it under its own lease and letting the stale flight resume afterwards.
-      if (this.session.tactics?.enabled?.()) await require('./reflex-lock').start(this.session, run, { source: 'fleeIfDying', owner: 'Tactical', priority: 1 })
+      if (this.session.tactics?.enabled?.()) await (require('./reflex-lock') as typeof import('./reflex-lock')).start(this.session, run, { source: 'fleeIfDying', owner: 'Tactical', priority: 1 })
       else await run({ aborted: false, onAbort: [] })
     } catch {
     } finally {
@@ -843,6 +843,7 @@ class Autopilot {
   }
 }
 
-Object.assign(Autopilot.prototype, require('./autopilot/suffocation'))
+Object.assign(Autopilot.prototype, (require('./autopilot/suffocation') as typeof import('./autopilot/suffocation')))
 
 module.exports = { Autopilot, IN_WALL_DAMAGE, SELF_GUARDED, EMERGENCY, emergencyNeed, MOB_DAMAGE, CREEPER, creeperNeed }
+export { Autopilot, IN_WALL_DAMAGE, SELF_GUARDED, EMERGENCY, emergencyNeed, MOB_DAMAGE, CREEPER, creeperNeed }

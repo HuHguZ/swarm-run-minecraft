@@ -1,12 +1,14 @@
+import { functionSource } from './source-fixture'
+import { CAMPAIGN } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 function fixture(distance: number, visible = true) {
-  const source = fs.readFileSync(path.resolve(__dirname, '../campaign.ts'), 'utf8')
-  const body = source.slice(source.indexOf('async function ensureFlint ()'), source.indexOf('let castRuns ='))
+  const body = functionSource(CAMPAIGN, 'ensureFlint', { ts: true })
   const inventory: Record<string, number> = { iron_ingot: 1 }
   const calls: Array<{ method: string, params: any }> = []
   let now = 0, walking = 0
@@ -26,7 +28,7 @@ function fixture(distance: number, visible = true) {
       if (method === 'flint_grind') { assert.equal(inventory.gravel, 1); inventory.gravel = 0; inventory.flint = 1; return { status: 'done', detail: { ok: true } } }
       throw Error('unexpected method ' + method)
     } }
-  vm.runInNewContext(body + '\nmodule.exports = ensureFlint', Object.assign(context, { module: { exports: {} } }))
+  vm.runInNewContext(body + '\nmodule.exports = ensureFlint', cjsContext(Object.assign(context, { module: { exports: {} } })))
   return { run: context.module.exports, calls, inventory, walked: () => walking }
 }
 

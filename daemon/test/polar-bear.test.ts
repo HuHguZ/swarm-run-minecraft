@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
-const assess = require('../src/assess')
-const safety = require('../src/combat-safety')
-const { observeTactics } = require('../src/tactics/minecraft')
-const { candidates } = require('../src/tactics/state')
+import * as assess from '../src/assess'
+import safety = require('../src/combat-safety')
+import { observeTactics } from '../src/tactics/minecraft'
+import { candidates } from '../src/tactics/state'
 
 function scene() {
   const bot: any = Object.assign(new EventEmitter(), {
@@ -37,7 +37,7 @@ test('an attacking polar bear is priced and enters tactics before it kills the u
 })
 
 test('a solitary calm adult and a cub alone do not start a fight or tax the route', () => {
-  const { bot, bear, session } = scene(), polar = require('../src/polar-bear')
+  const { bot, bear, session } = scene(), polar: typeof import('../src/polar-bear') = require('../src/polar-bear')
   bear(2, 4)
   assert.deepEqual(polar.risks(bot), [])
   assert.equal(safety.inspect(bot).threats.length, 0)
@@ -48,7 +48,7 @@ test('a solitary calm adult and a cub alone do not start a fight or tax the rout
 })
 
 test('visible cub uses the jar box, with spatial hysteresis and no timed re-entry', () => {
-  const { bot, bear } = scene(), polar = require('../src/polar-bear')
+  const { bot, bear } = scene(), polar: typeof import('../src/polar-bear') = require('../src/polar-bear')
   const adult = bear(2, 10), cub = bear(3, 18.9, true)
   assert.equal(polar.risks(bot)[0].avoiding, true)
   cub.position.x = 40
@@ -75,7 +75,7 @@ test('new visible family and its spatial release invalidate a running path once 
 })
 
 test('a cub behind an opaque wall cannot make a visible neutral bear hostile', () => {
-  const { bot, bear } = scene(), polar = require('../src/polar-bear'), read = bot.blockAt
+  const { bot, bear } = scene(), polar: typeof import('../src/polar-bear') = require('../src/polar-bear'), read = bot.blockAt
   bear(2, 4); bear(3, 8, true)
   bot.blockAt = (p: Vec3) => p.x >= 6 && p.x < 7 ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p)
   assert.equal(polar.risks(bot).length, 0)
@@ -84,13 +84,13 @@ test('a cub behind an opaque wall cannot make a visible neutral bear hostile', (
 test('a damage packet identifies a neutral attacker without requiring a second hit', () => {
   const { bot, bear, session } = scene()
   bear(2, 3)
-  session['autopilot'] = { lastHurt: { sourceId: 2, at: require('../src/game-clock').now(), byMob: true, type: 'mob_attack', dimension: 'overworld' } }
+  session['autopilot'] = { lastHurt: { sourceId: 2, at: (require('../src/game-clock') as typeof import('../src/game-clock')).now(), byMob: true, type: 'mob_attack', dimension: 'overworld' } }
   assert.equal(observeTactics(session).enemies[0]?.kind, 'polar_bear')
   assert.equal(safety.inspect(bot).threats[0]?.name, 'polar_bear')
 })
 
 test('water never offers a losing straight swim as an escape; a nearby shore still competes on price', () => {
-  const { choose } = require('../src/polar-bear')
+  const { choose }: typeof import('../src/polar-bear') = require('../src/polar-bear')
   const state = { hp: 20, hit: 6, fightSeconds: 3.75, shield: true, water: true, distance: 3, route: true }
   assert.equal(choose(state).action, 'Fight')
   assert.equal(choose({ ...state, distance: 14, shoreSeconds: .5 }).action, 'Surface')
@@ -98,13 +98,13 @@ test('water never offers a losing straight swim as an escape; a nearby shore sti
 })
 
 test('spawn follow-range variation is covered by the outer escape boundary', () => {
-  const { MECH } = require('../src/polar-bear')
+  const { MECH }: typeof import('../src/polar-bear') = require('../src/polar-bear')
   assert.equal(MECH.followMax, 20 * (1 + .11485))
   assert.equal(MECH.cubMax, MECH.followMax / 2)
 })
 
 test('sprint, walking, a support column and the sword compete by current survival and time', () => {
-  const { choose } = require('../src/polar-bear')
+  const { choose }: typeof import('../src/polar-bear') = require('../src/polar-bear')
   const state = { hp: 20, hit: 6, fightSeconds: 3.75, shield: false, water: false, distance: 10, route: true }
   assert.equal(choose(state).action, 'Flee')
   assert.equal(choose({ ...state, food: 6, shield: true }).action, 'Fight')
@@ -112,13 +112,13 @@ test('sprint, walking, a support column and the sword compete by current surviva
 })
 
 test('waiting for a distant bear to arrive cannot erase the price of the fight after contact', () => {
-  const result = require('../src/polar-bear').choose({ hp: 20, hit: 6, fightSeconds: 3.75,
+  const result = (require('../src/polar-bear') as typeof import('../src/polar-bear')).choose({ hp: 20, hit: 6, fightSeconds: 3.75,
     shield: false, water: false, distance: 20 })
   assert.ok(result.loss > 0)
 })
 
 test('a dry body cannot price a route through surrounding water as a winning land sprint', () => {
-  const { bot, bear, session } = scene(), polar = require('../src/polar-bear'), read = bot.blockAt
+  const { bot, bear, session } = scene(), polar: typeof import('../src/polar-bear') = require('../src/polar-bear'), read = bot.blockAt
   bear(2, 10, false, true)
   bot.blockAt = (p: Vec3) => p.y >= 63 && p.y < 64 && (Math.floor(p.x) !== 0 || Math.floor(p.z) !== 0)
     ? { name: 'water', position: p.floored(), boundingBox: 'empty', shapes: [] } : read(p)
@@ -126,7 +126,7 @@ test('a dry body cannot price a route through surrounding water as a winning lan
 })
 
 test('three blocks above the observed bear are safe; two blocks are inside its possible jump', () => {
-  const { bot, bear, session } = scene(), polar = require('../src/polar-bear')
+  const { bot, bear, session } = scene(), polar: typeof import('../src/polar-bear') = require('../src/polar-bear')
   const e = bear(2, 2, false, true)
   bot.entity.position.y = 66
   assert.equal(polar.canReach(bot, e), true)
@@ -147,7 +147,7 @@ test('the env switch restores the old observation without bear tactical response
 })
 
 test('the tactical graph can change a bear response on a changed route or contact, including at low HP', () => {
-  const { bot, bear, session } = scene(), { TacticalGraph } = require('../src/tactics/graph')
+  const { bot, bear, session } = scene(), { TacticalGraph }: typeof import('../src/tactics/graph') = require('../src/tactics/graph')
   bear(2, 3, false, true)
   const s = observeTactics(session), graph = new TacticalGraph()
   s.health = 4; s.canFight = false
@@ -158,8 +158,8 @@ test('the tactical graph can change a bear response on a changed route or contac
 })
 
 test('a visible attacking bear beyond sixteen blocks reaches the real defense executor', async () => {
-  const { bot, bear, session } = scene(), { TacticalSystem } = require('../src/tactics/minecraft')
-  const combat = require('../src/combat'), original = combat.fight
+  const { bot, bear, session } = scene(), { TacticalSystem }: typeof import('../src/tactics/minecraft') = require('../src/tactics/minecraft')
+  const combat: typeof import('../src/combat') = require('../src/combat'), original = combat.fight
   bear(2, 20, false, true)
   const state = observeTactics(session)
   assert.equal(state.enemies[0]?.id, 2)
@@ -167,7 +167,7 @@ test('a visible attacking bear beyond sixteen blocks reaches the real defense ex
   let options
   combat.fight = async (_session, _ctl, opts) => { options = opts; return { swings: 1 } }
   try {
-    await new TacticalSystem(session).execute({ id: 'Fight' }, { aborted: false }, state)
+    await (new TacticalSystem(session) as any).execute({ id: 'Fight' }, { aborted: false }, state)
     assert.equal(options?.target, '#2')
     assert.equal(options.lastStand, true)
     assert.equal(options.shield, 'always')
@@ -175,8 +175,8 @@ test('a visible attacking bear beyond sixteen blocks reaches the real defense ex
 })
 
 test('the tactical simulator uses the jar bear health, pursuit speed and reach', () => {
-  const { createWorld, stepWorld } = require('../src/tactics/sim-world')
-  const { MECH } = require('../src/polar-bear')
+  const { createWorld, stepWorld }: typeof import('../src/tactics/sim-world') = require('../src/tactics/sim-world')
+  const { MECH }: typeof import('../src/polar-bear') = require('../src/polar-bear')
   const world = createWorld({ name: 'bear-model', events: [{ at: 0, type: 'enemy', kind: 'polar_bear', distance: 8 }] })
   stepWorld(world)
   const bear = world.enemies[0]
@@ -186,7 +186,7 @@ test('the tactical simulator uses the jar bear health, pursuit speed and reach',
 })
 
 test('sim-world: a shielded body fights the bear in deep water through real tactical selection', async () => {
-  const { runSystem } = require('../src/tactics/sim-run')
+  const { runSystem }: typeof import('../src/tactics/sim-run') = require('../src/tactics/sim-run')
   const result = await runSystem({ name: 'polar-water-contact', ticks: 220, skill: false,
     body: { armor: 0, weapon: 'stone_sword', shield: true, blocks: 0, meals: 0, food: 17 },
     world: { exits: false, cover: false }, events: [
@@ -198,11 +198,11 @@ test('sim-world: a shielded body fights the bear in deep water through real tact
 })
 
 test('sim-world: bear combat holds the shield between swings through its five-tick raise delay', () => {
-  const { createWorld, stepAction, stepWorld, hurt } = require('../src/tactics/sim-world')
+  const { createWorld, stepAction, stepWorld, hurt }: typeof import('../src/tactics/sim-world') = require('../src/tactics/sim-world')
   const w = createWorld({ name: 'polar-shield-ready', body: { shield: true, weapon: 'stone_sword' },
     events: [{ at: 0, type: 'enemy', kind: 'polar_bear', distance: 1.5 }] })
   stepWorld(w)
-  const run = { id: 'Fight', started: w.tick, data: {} }
+  const run: any = { id: 'Fight', started: w.tick, data: {} }
   for (let i = 0; i < 6; i++) { stepAction(w, run); stepWorld(w) }
   assert.equal(w.body.shieldUp, 5)
   w.body.invul = 0
@@ -210,8 +210,8 @@ test('sim-world: bear combat holds the shield between swings through its five-ti
 })
 
 test('sim-world: approaching the bear in water uses swimming rather than walking speed', () => {
-  const { createWorld, stepAction, stepWorld } = require('../src/tactics/sim-world')
-  const { MECH } = require('../src/polar-bear')
+  const { createWorld, stepAction, stepWorld }: typeof import('../src/tactics/sim-world') = require('../src/tactics/sim-world')
+  const { MECH }: typeof import('../src/polar-bear') = require('../src/polar-bear')
   const w = createWorld({ name: 'polar-water-approach', events: [
     { at: 0, type: 'water', ticks: 100 }, { at: 0, type: 'enemy', kind: 'polar_bear', distance: 8 }
   ] })
@@ -222,7 +222,7 @@ test('sim-world: approaching the bear in water uses swimming rather than walking
 })
 
 test('sim-world: the land escape clears the bear follow range and does not stop inside it', async () => {
-  const { runSystem } = require('../src/tactics/sim-run')
+  const { runSystem }: typeof import('../src/tactics/sim-run') = require('../src/tactics/sim-run')
   const result = await runSystem({ name: 'polar-land-clear', ticks: 400, skill: false,
     body: { armor: 0, weapon: 'stone_sword', shield: false, blocks: 0, meals: 0, food: 17 },
     world: { exits: true, cover: false, floorDiggable: false },

@@ -9,10 +9,10 @@
 //   • старт на открытом (больше трёх проёмов у тела) — сперва вниз на 3 ступени в толщу пола, ход над головой заложить;
 //   • руда золота Ада в стенах (goldOk) — копать: самородки падают в штрек, проём за ней закрыть.
 // Ответ в форме nether.bore: { ok, dug, moved, placed, mouths, gold, down, why, view }.
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const D = require('./endportal-descent')
-const { sleep, xyz } = require('./movement')
+import * as gameClock from './game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import D = require('./endportal-descent')
+import { sleep, xyz } from './movement'
 
 const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map(([x, y, z]) => new Vec3(x, y, z))
 const SPIRAL = D.SPIRAL
@@ -26,12 +26,12 @@ const airish = b => !!b && b.boundingBox === 'empty' && !LIQUID.test(b.name) && 
 // Клетка ног над низким полом (песок душ 0.875): floored — клетка самого песка, голова тогда в трёх клетках, и шаг в вырытые две
 // не проходит (d8-7-1, долина душ: «в забой не шагнул» ×43). Как nether.bore — над верхом опоры.
 const feetCell = bot => {
-  const f = require('./fortify').feetCell(bot)
-  try { const s = require('./navigation/geometry').supportAt(bot, bot.entity.position, 0.04); if (s && Math.ceil(s.top - 1e-3) > f.y) f.y = Math.ceil(s.top - 1e-3) } catch {}
+  const f = (require('./fortify') as typeof import('./fortify')).feetCell(bot)
+  try { const s = (require('./navigation/geometry') as typeof import('./navigation/geometry')).supportAt(bot, bot.entity.position, 0.04); if (s && Math.ceil(s.top - 1e-3) > f.y) f.y = Math.ceil(s.top - 1e-3) } catch {}
   return f
 }
 const bodyOf = F => [F, F.offset(0, 1, 0)]
-const lavaBelow = bot => { try { return require('./cast').hearLava(bot, { radius: 12 }).some(h => h.below && h.flat <= 6) } catch { return false } }
+const lavaBelow = bot => { try { return (require('./cast') as typeof import('./cast')).hearLava(bot, { radius: 12 }).some(h => h.below && h.flat <= 6) } catch { return false } }
 
 // Что видно вокруг клеток cells (кроме них самих и except): проёмы (воздух), жидкость под заклад, золото в стенах.
 function around (bot, cells, except = []) {
@@ -104,9 +104,9 @@ async function closedStep (session, ctl, d, opts, out) {
     // к нему (g2-5-2, g2-7-2: прибытие, коридор, пиглины — смерть на 1-й мин). Закладка и другой ход.
     // Пиглины — тоже повод не строить коридор и с золотой вещью: открытый фронт через двор бастиона выводил к брутам (g10: с
     // поблажкой для пиглинов при золоте — 3 смерти от брутов из 6).
-    const foes = (() => { try { return require('./perception/eyes').entities(bot, { radius: 32 }).some(e => e.seen && e.dist != null && e.dist <= 24 && FOES.test(e.name)) } catch { return false } })()
+    const foes = (() => { try { return (require('./perception/eyes') as typeof import('./perception/eyes')).entities(bot, { radius: 32 }).some(e => e.seen && e.dist != null && e.dist <= 24 && FOES.test(e.name)) } catch { return false } })()
     if (opts.corridor && !foes && !(opts.stop && out.view && opts.stop(out.view)) && flr && flr.boundingBox === 'block' && !BAD_FLOOR.test(flr.name) &&
-      require('./sealed').fillerCount(bot) >= 24 && !a.wet.length) {
+      (require('./sealed') as typeof import('./sealed')).fillerCount(bot) >= 24 && !a.wet.length) {
       const sides = a.open.filter(q => q.y <= N.y + 1 && q.y >= N.y && !front.some(f => f.equals(q)))
       let ok = true
       for (const q of sides) { if (await D.placeAt(bot, q)) out.placed++; else { ok = false; break } }
@@ -145,6 +145,7 @@ async function closedStep (session, ctl, d, opts, out) {
       const r = await D.digCell(bot, session.mcData, q)
       if (!r.ok) continue
       out.gold++
+      // @ts-expect-error movement.sleep(ms) — ctl лишний: пауза не прерывается по ctl; поведение не трогаю.
       await sleep(300, ctl)
       out.unsealed += await seal(bot, [q], cells, out)
     }
@@ -311,7 +312,7 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
 // и закрыть ход над собой; не вышло вниз или уже у стены — закрыть видимые проёмы вокруг тела (это и есть коробка на месте).
 async function coverHere (session, ctl, { minY = 40 }: any = {}) {
   const bot = session.bot
-  if (require('./tactics/lava-escape').inLava(bot)) return { ok: false, sealed: false, why: 'тело в лаве — сначала выход из жидкости' }
+  if ((require('./tactics/lava-escape') as typeof import('./tactics/lava-escape')).inLava(bot)) return { ok: false, sealed: false, why: 'тело в лаве — сначала выход из жидкости' }
   session._ndCoverUntil = gameClock.now() + 4000
   const out: any = { dug: 0, placed: 0, moved: 0, mouths: 0, gold: 0, down: 0, unsealed: 0 }
   if (around(bot, bodyOf(feetCell(bot))).open.length > 3) await descend(session, ctl, 3, [1, 0], out, minY)
@@ -336,6 +337,6 @@ async function coveredTo (session, ctl, target, { deadline, radius = 2 }: any) {
   return { ok: false, segs, moved, dug, placed, why: why || (ctl.aborted ? 'прервано' : 'время вышло'), at: xyz(bot.entity.position) }
 }
 
-const blind = () => process.env.ND_NE_COVER !== '0' && require('./perception/knowledge').level() !== 'scan'
+const blind = () => process.env.ND_NE_COVER !== '0' && (require('./perception/knowledge') as typeof import('./perception/knowledge')).level() !== 'scan'
 
-module.exports = { closedBore, closedStep, around, seal, descend, coverHere, coveredTo, blind }
+export { closedBore, closedStep, around, seal, descend, coverHere, coveredTo, blind }

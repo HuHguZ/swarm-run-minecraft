@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const co = require('../src/pvp/combat-observe')
-const { createHpEstimate } = require('../src/pvp/hp-estimate')
+import { Vec3 } from 'vec3'
+import * as co from '../src/pvp/combat-observe'
+import { createHpEstimate } from '../src/pvp/hp-estimate'
 
 function scene() {
   let time = 1000

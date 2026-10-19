@@ -1,3 +1,5 @@
+import { declarationsOf, statementOf } from './source-fixture'
+import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -6,8 +8,9 @@ import vm from 'node:vm'
 import { speedrunRegistry } from '../src/core/speedrun'
 import { emptyWorld, applyEffect, amount } from '../src/core/world-state'
 import { worldFromObservation } from '../src/environments/mineflayer'
+import { cjsContext } from './cjs-context'
 
-const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+const source = campaignTs()
 function fixture(extra: Record<string, number> = {}, env: Record<string, string> = {}) {
   const inventory: Record<string, number> = { iron_ingot: 7, flint: 1, oak_planks: 20, stone_pickaxe: 1, ...extra }
   const calls: Array<{ method: string, params: any }> = []
@@ -27,10 +30,11 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
     },
     act: async (method, params) => { calls.push({ method, params }); return { status: 'done', detail: {} } }
   }
-  const helper = source.includes('const portalBuckets =') ? source.slice(source.indexOf('const portalBuckets ='), source.indexOf('async function spendIron ()')) : ''
-  const spend = source.slice(source.indexOf('async function spendIron ()'), source.indexOf('const GEAR_CALC'))
+  // Объявления по именам: части daemon/campaign/ разнесли бывших соседей (queries, portal-kit, gear, kit, deep-cast, stages).
+  const helper = declarationsOf(source, 'portalBuckets', 'castKitSupplyFailure', 'castForKit', 'earlyShieldBusy', 'earlyShieldFailed', 'earlyShield') + '\n'
+  const spend = declarationsOf(source, 'spendIron') + '\n'
   const smelt = source.slice(source.indexOf('const ironToSmelt ='), source.indexOf('async function smeltAll'))
-  const casting = source.slice(source.indexOf('async function approachCastLava'), source.indexOf("defStage('diamond',"))
+  const casting = declarationsOf(source, 'approachCastLava') + '\n' + statementOf(source, "defStage('cast',") + '\n'
   context.defStage = (_name, _needed, run) => { context.cast = run }
   Object.assign(context, { castRuns: 0, died: false, strategyInterrupted: false, stairEntrance: null, surfaceShaft: null,
     intelligence: { environment: { observe: async () => ({}) }, registry: { get: () => ({ estimateCost: () => 1200, estimateRisk: () => 0.02 }) } },
@@ -38,7 +42,7 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
     sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null, lavaAtSeenRuins: async () => false, lootSeenStructures: async () => false, lavaSourceKnown: false, castSiteFails: new Map(), lavaBadSites: [], lavaBad: () => false,
     dayLavaStep: async () => false, recoverGuard: async () => {}, unclutter: async () => {}, dim: () => 'overworld', y: () => 64,
     walkAway: async () => { calls.push({ method: 'walkAway', params: {} }) } })
-  vm.createContext(context)
+  vm.createContext(cjsContext(withSetters(context)))
   vm.runInContext((helper + spend + smelt + casting).replace('(plan as any)', 'plan') + '\nthis.spend=spendIron;this.smelt=ironToSmelt', context)
   return { inventory, calls, context }
 }
@@ -259,7 +263,7 @@ test('partial portal inventory reduces MineIron while an explicit reserve remain
 })
 test('iron stage retains the material value of buckets crafted during its mining loop', async () => {
   const f = fixture({ iron_ingot: 0 }); f.context.OW_DEEP = true
-  const ironStage = source.slice(source.indexOf("defStage('iron',"), source.indexOf('async function bucketOnTheWay'))
+  const ironStage = statementOf(source, "defStage('iron',")
   let tunnel = 0, mined = 0
   Object.assign(f.context, { ironRuns: 0, ironLeg: 0, ironBlocked: new Set(), state: { inventory:f.inventory, food:20, pos:{x:0,y:16,z:0} },
     y: () => 16, foodUnits: () => 10, cook: async () => {}, lightUp: async () => {}, spares: async () => {},
@@ -279,7 +283,7 @@ test('iron stage retains the material value of buckets crafted during its mining
 })
 test('MineIron subtracts the two ingots already carried as 24 ruin nuggets', async () => {
   const f = fixture({ iron_ingot: 0, iron_nugget: 24, fire_charge: 1 })
-  const ironStage = source.slice(source.indexOf("defStage('iron',"), source.indexOf('async function bucketOnTheWay'))
+  const ironStage = statementOf(source, "defStage('iron',")
   Object.assign(f.context, { ironRuns: 0, ironLeg: 0, ironBlocked: new Set(), state: { inventory: f.inventory, food: 20, pos: { x: 0, y: 16, z: 0 } },
     y: () => 16, foodUnits: () => 10, cook: async () => {}, lightUp: async () => {}, spares: async () => {},
     foodHuntEmpty: 0, gearWorth: () => ({ missing: 0 }), ARMOR_SLOT: {}, OW_HEAR: false, LOGS: /_log$/, COBBLE: /cobblestone/,

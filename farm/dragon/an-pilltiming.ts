@@ -1,9 +1,9 @@
 // Точность щелчков станции у столба по записи сервера: тик взрыва = тик падения хп дракона в LANDING;
 // расстояние головы до центра подушки в этот тик и минимум в ±4 тиках (насколько промахнулись по времени).
-// Подушка — из трассы бота (pillarPlan H). node farm/dragon/an-pilltiming.js trace-dir...
-const fs = require('fs')
-const path = require('path')
-const S = require('./dsim')
+// Подушка — из трассы бота (pillarPlan H). node dist/farm/dragon/an-pilltiming.js trace-dir...
+import * as fs from 'fs'
+import path = require('path')
+import * as S from './dsim'
 const rows = []
 for (const dir of process.argv.slice(2)) {
   const trace = fs.readdirSync(dir).filter(f => /^dragon-.*\.jsonl$/.test(f)).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n')

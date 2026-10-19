@@ -1,16 +1,16 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Vec3 } = require('vec3')
-const edges = require('../src/edges')
-const reflex = require('../src/reflex-lock')
-const gameClock = require('../src/game-clock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
+import edges = require('../src/edges')
+import reflex = require('../src/reflex-lock')
+import * as gameClock from '../src/game-clock'
 
 // Real hand/reflex wrappers around the bot boundary: force-look changes the
 // entity synchronously in Mineflayer, but reflex.operation awaits before it.
 function fixture (look?: any) {
-  const bot = new EventEmitter()
+  const bot: any = new EventEmitter()
   bot._client = new EventEmitter()
   const packets = []
   bot._client.write = (name, data) => packets.push({ name, ...data })

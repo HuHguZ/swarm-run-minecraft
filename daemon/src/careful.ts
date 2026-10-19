@@ -26,4 +26,4 @@ function install (session, bot) {
   bot.on('physicTick', late)
 }
 
-module.exports = { install }
+export { install }

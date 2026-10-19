@@ -1,6 +1,6 @@
 'use strict'
-process.chdir(require('path').join(__dirname, '..', '..', 'daemon'))
-const { connect, createKit, sleep } = require(require('path').join(process.cwd(), 'scene-kit'))
+process.chdir((require('path') as typeof import('path')).join(__dirname, '..', '..', 'daemon'))
+const { connect, createKit, sleep } = require((require('path') as typeof import('path')).join(process.cwd(), 'scenes', 'lib', 'scene-kit'))
 const conn = connect('ws://127.0.0.1:8830')
 ;(async () => {
   await conn.ready; await conn.call('connect')

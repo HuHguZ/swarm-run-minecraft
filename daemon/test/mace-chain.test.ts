@@ -5,9 +5,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
-const { Vec3 } = require('vec3')
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
+import { cjsContext } from './cjs-context'
+import { transpiledSource } from './source-fixture'
+import { Vec3 } from 'vec3'
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
 
 function fixture(height) {
   const world = { getBlock(p) { const block = Block.fromStateId(registry.blocksByName[p.y < 1 ? 'stone' : 'air'].defaultState); block.position = p.floored(); return block } }
@@ -16,7 +18,7 @@ function fixture(height) {
     inventory: { slots: [], items: () => [{ name: 'mace', enchants: [] }] },
     entity: { id: 1, position: new Vec3(.5, height, .5), velocity: new Vec3(0, -.1, 0), onGround: false, yaw: 0, pitch: 0, effects: {}, attributes: {} },
     blockAt: p => world.getBlock(p), jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0,
-    physics: require('../src/tick-plugins').getPhysics().Physics(registry, world),
+    physics: (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics().Physics(registry, world),
     getControlState: () => false
   }
   const weak: any = { id: 2, username: 'Weak', type: 'player', name: 'player', isValid: true, position: new Vec3(1.5, 1, .5), equipment: [{ name: 'wooden_sword' }], metadata: [] }
@@ -26,7 +28,7 @@ function fixture(height) {
 }
 
 test('native reachable smash selects weak prey low, dangerous armored prey high without enemy HP', () => {
-  const { chainChoice } = require('../src/combat/mace-chain')
+  const { chainChoice }: typeof import('../src/combat/mace-chain') = require('../src/combat/mace-chain')
   const low = fixture(8), high = fixture(32)
   const a = chainChoice(low.bot, [low.weak, low.strong], { peak: 8 })
   const b = chainChoice(high.bot, [high.weak, high.strong], { peak: 32 })
@@ -38,7 +40,7 @@ test('native reachable smash selects weak prey low, dangerous armored prey high 
 })
 
 test('a reachable thirteenth enemy in a twenty-player squad remains eligible regardless of entity ordering', t => {
-  const { chainChoice } = require('../src/combat/mace-chain')
+  const { chainChoice }: typeof import('../src/combat/mace-chain') = require('../src/combat/mace-chain')
   const { bot, weak } = fixture(8)
   const distant = Array.from({ length: 19 }, (_, i) => ({ ...weak, metadata: weak.metadata, id: 10 + i, username: 'Far' + i, position: new Vec3(45 + i * .2, 1, .5) }))
   const mixed = [...distant.slice(0, 12), weak, ...distant.slice(12)]
@@ -53,7 +55,7 @@ test('a reachable thirteenth enemy in a twenty-player squad remains eligible reg
 })
 
 test('chain rejects hidden, unreachable and protected targets, including glint with unknown levels', () => {
-  const { chainChoice } = require('../src/combat/mace-chain')
+  const { chainChoice }: typeof import('../src/combat/mace-chain') = require('../src/combat/mace-chain')
   const { bot, weak, strong } = fixture(5)
   strong.position.x = 90
   assert.equal(chainChoice(bot, [strong], { peak: 5 }), null)
@@ -67,7 +69,7 @@ test('chain rejects hidden, unreachable and protected targets, including glint w
 })
 
 test('visible glint widens armor protection and every predicted tick respects the arena death boundary', () => {
-  const { chainChoice } = require('../src/combat/mace-chain')
+  const { chainChoice }: typeof import('../src/combat/mace-chain') = require('../src/combat/mace-chain')
   const { bot, weak, strong } = fixture(50)
   for (const item of strong.equipment.slice(2)) item.componentMap = new Map([['enchantments', { get data() { throw new Error('hidden enchantment levels') } }]])
   assert.equal(chainChoice(bot, [weak, strong], { peak: 50 })?.entity.id, strong.id)
@@ -81,17 +83,17 @@ test('the actual PvP retarget adapter retains the native observation source and 
   const f = fixture(32), bot = Object.assign(new EventEmitter(), f.bot)
   const weak = Object.assign(new EventEmitter(), f.weak), strong = Object.assign(new EventEmitter(), f.strong)
   bot.entities = { 2: weak, 3: strong }
-  const vision = require('../src/pvp/last-seen').createLastSeen(bot)
-  const file = resolve(__dirname, '../src/pvp.js'), source = readFileSync(file, 'utf8')
+  const vision = (require('../src/pvp/last-seen') as typeof import('../src/pvp/last-seen')).createLastSeen(bot)
+  const file = resolve(__dirname, '../src/pvp.js'), source = transpiledSource(file)
   const block = source.match(/  const maceChain = (\{[\s\S]*?\n  \});?\n  const combatContext/)
   assert.ok(block, 'the regression runs the actual production adapter')
   let selected
   try {
-    const chain = runInNewContext('(' + block[1] + ')', { bot, vision, entity: vision.observe(weak),
+    const chain = runInNewContext('(' + block[1] + ')', cjsContext({ bot, vision, entity: vision.observe(weak),
       opts: { targets: ['Weak', 'Strong'] }, dead: new Set(), attackers: new Map(), deadline: 1e9, arena: null,
       track: { vel: () => ({ x: 0, y: 0, z: 0 }) }, foeEst: () => ({ lo: 0, hi: 20 }),
       kills: [], label: 'Weak', killed: false, used: () => {}, retarget: e => { selected = vision.observe(e) },
-      gameClock: { now: () => 1000 }, require: createRequire(file) })
+      gameClock: { now: () => 1000 }, require: createRequire(file) }))
     const choice = chain.choose(32)
     assert.equal(choice.entity.id, 3)
     chain.onTarget(choice)
@@ -103,7 +105,7 @@ test('the actual PvP retarget adapter retains the native observation source and 
 })
 
 test('combo relocation prices its own Feather Falling and the actual landing surface', () => {
-  const f = fixture(32), mace = require('../src/mace')
+  const f = fixture(32), mace: typeof import('../src/mace') = require('../src/mace')
   const feet = new Vec3(.5, 1, .5)
   assert.equal(mace.fallCost(f.bot, feet, 32), 28)
   f.bot.inventory.slots[8] = { name: 'netherite_boots', componentMap: new Map([['enchantments', { data: { enchantments: [{ id: 'feather_falling', level: 4 }] } }]]) }

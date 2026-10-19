@@ -1,3 +1,4 @@
+import { campaignTs } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -6,9 +7,10 @@ import vm from 'node:vm'
 import { transformSync } from 'esbuild'
 import { createCampaignIntelligence } from '../src/campaign/intelligence'
 import { emptyWorld, fact } from '../src/core/world-state'
+import { cjsContext } from './cjs-context'
 
 function fixture() {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const branch = source.slice(source.indexOf("} else if (skill === 'scoutLava') {") + "} else if (skill === 'scoutLava') {".length,
     source.indexOf("} else if (skill === 'ruinedPortal') {"))
   const facts: Record<string, number> = {}
@@ -19,7 +21,7 @@ function fixture() {
     graphFact: (name, value) => { facts[name] = value },
     act: async (method, params) => { calls.push({ method, params }); if (method === 'explore') context.state.pos = { ...destination } }
   }
-  vm.runInNewContext(transformSync(`module.exports = async () => { ${branch} }`, { loader: 'ts', format: 'cjs' }).code, context)
+  vm.runInNewContext(transformSync(`module.exports = async () => { ${branch} }`, { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
   return { calls, facts, run: context.module.exports, destination: p => { destination = p } }
 }
 

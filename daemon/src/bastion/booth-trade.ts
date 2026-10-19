@@ -1,5 +1,5 @@
-const { gameClock, countOf, Vec3, BF, mobs, isBaby, sleep, xyz, unpackGold, aggressive, admiring, raySees, eyePos, seesMob, inLava, lavaEscape, walkGoal, goals, dropJunk, lavaEscapeDeep, log, SIDES4, inOwnTunnel } = require('./take-gold-block')
-const { pitLike, junkOut, eatIfHungry, hitThroughWindow, lastGoldBreak, makeSill, unholdGold, distToBox, throwLands, handNoWalk, tossLands, aimOut, pitLures, floorRegion, tossOut, rayClear, PIGLIN_EYE } = require('./predict-gold')
+const { gameClock, countOf, Vec3, BF, mobs, isBaby, sleep, xyz, unpackGold, aggressive, admiring, raySees, eyePos, seesMob, inLava, lavaEscape, walkGoal, goals, dropJunk, lavaEscapeDeep, log, SIDES4, inOwnTunnel }: typeof import('./take-gold-block') = require('./take-gold-block')
+const { pitLike, junkOut, eatIfHungry, hitThroughWindow, lastGoldBreak, makeSill, unholdGold, distToBox, throwLands, handNoWalk, tossLands, aimOut, pitLures, floorRegion, tossOut, rayClear, PIGLIN_EYE }: typeof import('./predict-gold') = require('./predict-gold')
 const ownTunnelAt = (bot, S) => inOwnTunnel(bot, S)
 
 async function lavaWatched (bot, ctl, fn) {
@@ -30,7 +30,7 @@ async function lavaWatched (bot, ctl, fn) {
 
 async function barterRound (session, ctl, st, count, deadline) {
   const bot = session.bot
-  const pearls = require('.././pearls')
+  const pearls: typeof import('.././pearls') = require('.././pearls')
   const secs = Math.max(20, Math.min(180, Math.round((deadline - gameClock.now()) / 1000) - 5))
   const r = await pearls.barter(session, ctl, { count, timeoutSeconds: secs, force: !BF.enabled() })
   st.traded += r.spent || 0
@@ -138,7 +138,7 @@ async function tunnelTo (session, ctl, target, { maxSteps = 60 }: any = {}) {
       if (cells.some(c => c.equals(target))) continue
       // Каждая клетка — через грань, которую видит прицел (pen-trap.digSeenAll, S2b 06.10): прежде bot.dig 'auto' смотрел
       // в центр блока, и вниз по ступени нижняя клетка копалась сквозь пол под ногами.
-      const dr = await require('./pen-trap').digSeenAll(bot, cells)
+      const dr = await (require('./pen-trap') as typeof import('./pen-trap')).digSeenAll(bot, cells)
       if (dr !== 'ok') { why.push(`не копается ${dr}`); continue }
       if (o.vertical && sy < 0) { await sleep(500); moved = true; break }
       // Шаг сам (вперёд, при подъёме — с прыжком): pathfinder на шаг в
@@ -170,7 +170,7 @@ const DAMAGE_TYPES = ['arrow', 'bad_respawn_point', 'cactus', 'campfire', 'cramm
   'wither', 'wither_skull']
 
 function boothAt (view, own, O, d) {
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const c = (x, y, z) => view.cls(x, y, z)
   const stand = k => k === SL.SOLID || k === SL.HARD || k === SL.GUARD || k === SL.FALL
   const firm = k => k === SL.SOLID || k === SL.HARD || k === SL.GUARD
@@ -230,20 +230,20 @@ function boothCandidates (bot, view, own, radius = 40) {
 }
 
 function currentPit (bot, S) {
-  const SL = require('.././sealed')
-  const CM = require('./cover-memory')
+  const SL: typeof import('.././sealed') = require('.././sealed')
+  const CM: typeof import('./cover-memory') = require('./cover-memory')
   if (!S?.own || !bot.entity.onGround) return null
   const P = bot.entity.position.floored()
   const H = P.offset(0, 1, 0); const M = P.offset(0, 2, 0); const R = P.offset(0, 3, 0)
   const air = q => SL.classOf(bot.blockAt(new Vec3(q.x, q.y, q.z))) === SL.AIR
-  const firm = q => require('./take-gold-block').fullCover(bot.blockAt(new Vec3(q.x, q.y, q.z)))
-  const own = new Set(S.own)
+  const firm = q => (require('./take-gold-block') as typeof import('./take-gold-block')).fullCover(bot.blockAt(new Vec3(q.x, q.y, q.z)))
+  const own = new Set<string>(S.own)
   if (!own.has(SL.keyV(P)) || !own.has(SL.keyV(H)) || !air(P) || !air(H) || !air(M) || !firm(P.offset(0, -1, 0)) ||
     !CM.protectedGeometry(P, own, SL.exposure(bot, own), air, firm)) return null
   const d = SIDES4.find(([dx, dz]) => air(M.offset(dx, 0, dz)) && air(M.offset(dx, 1, dz)) && firm(M.offset(dx, -1, dz)))
   if (!d) return null
   const O = M.offset(d[0], 0, d[1])
-  const region = floorRegion(require('.././drops').blockGetter(bot), O.x, O.z, M.y)
+  const region = floorRegion((require('.././drops') as typeof import('.././drops')).blockGetter(bot), O.x, O.z, M.y)
   const pigs = mobs(bot, 'piglin', 16).filter(pg => !isBaby(bot, pg) && !aggressive(bot, pg) &&
     Math.abs(pg.position.y - M.y) < 0.6 && region.has(`${Math.floor(pg.position.x)},${Math.floor(pg.position.z)}`))
   if (!pigs.length || mobs(bot, 'piglin_brute', 7, O).length) return null
@@ -253,7 +253,7 @@ function currentPit (bot, S) {
 }
 
 function pitAt (view, own, O, d) {
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const c = (x, y, z) => view.cls(x, y, z)
   const stand = k => k === SL.SOLID || k === SL.HARD || k === SL.GUARD || k === SL.FALL
   const firm = k => k === SL.SOLID || k === SL.HARD || k === SL.GUARD
@@ -323,7 +323,7 @@ function pitCandidates (bot, view, own, radius = 40) {
 }
 
 function catchScore (bot, bo) {
-  const base = require('.././drops').blockGetter(bot)
+  const base = (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
   const openK = new Set([bo.M, bo.H, bo.P].map(c => `${c.x},${c.y},${c.z}`))
   const AIRB = { name: 'air', shapes: [], boundingBox: 'empty' }
   const getBlock = (x, y, z) => openK.has(`${x},${y},${z}`) ? AIRB : base(x, y, z)
@@ -346,7 +346,7 @@ function catchScore (bot, bo) {
 }
 
 function trapAt (view, own, O, d) {
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const c = (x, y, z) => view.cls(x, y, z)
   const stand = k => k === SL.SOLID || k === SL.HARD || k === SL.GUARD || k === SL.FALL
   const firm = k => k === SL.SOLID || k === SL.HARD || k === SL.GUARD
@@ -434,7 +434,7 @@ function tradeBreach (S: any, extra: any = () => false) {
 }
 
 async function tradeExecute (session, ctl, path, S, local = null) {
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const prevOpen = S.openOk; const prevBreach = S.breachOk
   S.openOk = local
   S.breachOk = tradeBreach(S, (ck, nk) => !!(local && local.has(nk)))
@@ -458,7 +458,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   const itemType = bot.registry.entitiesByName.item && bot.registry.entitiesByName.item.id
   const handedAt = new Map()
   const busyUntil = new Map()
-  if (BF.enabled()) { try { require('.././ne-guard').attach(session) } catch {} }
+  if (BF.enabled()) { try { (require('.././ne-guard') as typeof import('.././ne-guard')).attach(session) } catch {} }
   const badCells = new Map()
   const onSpawn = p => {
     if (p.type !== itemType) return
@@ -489,7 +489,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   while (!ctl.aborted && gameClock.now() < until - 3000) {
     if (done()) { r.stopped = 'цель'; break }
     if (BF.enabled()) {
-      const G = require('.././ne-guard')
+      const G: typeof import('.././ne-guard') = require('.././ne-guard')
       // Guard may move the body while a trade loop is waiting. Never reuse the old mouth.
       if (G.busy(bot) || G.hot(bot)) { await G.react(session, ctl); r.stopped = 'страж изменил место'; break }
       if (bot.entity.position.distanceTo(new Vec3(bo.F.x + 0.5, bo.F.y, bo.F.z + 0.5)) > 0.9) { r.stopped = 'ушёл из места бартера'; break }
@@ -535,7 +535,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     let handed = false
     // Вручать тому, кто видит нас глаз в глаз сквозь окно: только он бросит добычу к нам
     const eyeSees = pg => raySees(bot, eye, pg.position.offset(0, (pg.height || 1.95) * 0.92, 0))
-    const getBlock = pitLike(bo) ? require('.././drops').blockGetter(bot) : null
+    const getBlock = pitLike(bo) ? (require('.././drops') as typeof import('.././drops')).blockGetter(bot) : null
     let firstLureBudget = 0
     for (const pg of (pigs as any)) {
       if (distToBox(eye, pg) > 2.9) break
@@ -590,7 +590,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
             (() => { try { const d = e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } })())
           if (still) { lastLure.L.bad = true; r.lureBad = (r.lureBad || 0) + 1 }
         }
-        const gbl = require('.././drops').blockGetter(bot)
+        const gbl = (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
         const adults = mobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && !aggressive(bot, e))
         const reachableLures = lures.filter(x => {
           if (x.bad || x.score < 3) return false
@@ -688,7 +688,12 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
 const MEMO = new Map()
 
 function exitReserveReady (bot, p: any = {}) {
-  return process.env.ND_EXIT_KIT === '0' || !(p.obsidian >= 10) || require('.././nether').exitKit(bot).ready
+  return process.env.ND_EXIT_KIT === '0' || !(p.obsidian >= 10) || (require('.././nether') as typeof import('.././nether')).exitKit(bot).ready
 }
 
 module.exports = { ownTunnelAt, lavaWatched, barterRound, nextToBlock, bruteComing, walkUnlessBrute, stepCell, tunnelTo, DAMAGE_TYPES, boothAt, boothCandidates, currentPit, pitAt, pitCandidates, catchScore, trapAt, trapCandidates, tradeBreach, tradeExecute, boothTrade, MEMO, exitReserveReady }
+export {
+  ownTunnelAt, lavaWatched, barterRound, nextToBlock, bruteComing, walkUnlessBrute, stepCell, tunnelTo,
+  DAMAGE_TYPES, boothAt, boothCandidates, currentPit, pitAt, pitCandidates, catchScore, trapAt, trapCandidates,
+  tradeBreach, tradeExecute, boothTrade, MEMO, exitReserveReady
+}

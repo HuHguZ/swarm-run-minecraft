@@ -1,12 +1,14 @@
+import { campaignTs } from './campaign-source'
+import { cjsContext } from './cjs-context'
 export {}
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const esbuild = require('esbuild')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import * as esbuild from 'esbuild'
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'campaign.ts'), 'utf8')
+const source = campaignTs()
 const body = (name, next) => source.slice(source.indexOf(`async function ${name} (`), source.indexOf(`async function ${next} (`))
 
 function fixture (prey) {
@@ -39,7 +41,7 @@ function fixture (prey) {
   }
   // Keep the actual lumber body: the earlier food fixture replaced it with a
   // no-op and could not detect a tree search spending the whole hunting budget.
-  vm.createContext(ctx)
+  vm.createContext(cjsContext(ctx))
   vm.runInContext(esbuild.transformSync(body('lumber', 'unclutter') + body('foodRun', 'quickHunt'),
     { loader: 'ts', format: 'cjs' }).code, ctx)
   return { run: () => ctx.foodRun(), calls, hunt }

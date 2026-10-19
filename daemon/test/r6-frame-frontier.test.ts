@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const nether = require('../src/nether')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import nether = require('../src/nether')
 
 function fixture ({ outside = false, fluid = false, unchanged = false }: any = {} as Record<string, any>) {
   const front = new Vec3(0, 64, 0); const back = new Vec3(0, 65, 1)

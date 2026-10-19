@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const afterMovePacket = require('./edges').afterPacket
-const { AsyncResource } = require('node:async_hooks')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const afterMovePacket = (require('./edges') as typeof import('./edges')).afterPacket
+const { AsyncResource }: typeof import('node:async_hooks') = require('node:async_hooks')
 // Лук. Один модуль и для боя (pvp.js), и для тира (try-bow.js), чтобы то,
 // что проверено в тире, и было тем, что стреляет в бою.
 //
@@ -13,9 +13,9 @@ const { AsyncResource } = require('node:async_hooks')
 // блоках это полблока), упреждал по «дистанция / 3» и держал тетиву ровно 1.05 с —
 // на лаге стрела уходила недотянутой и падала короче.
 
-const Vec3 = require('vec3')
-const { sleep } = require('./movement')
-const pick = require('./pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { sleep }: typeof import('./movement') = require('./movement')
+const pick: typeof import('./pick') = require('./pick')
 
 const SPEED = 3.0
 const GRAVITY = 0.05
@@ -166,7 +166,7 @@ function solvePitch (dx, dy, speed = SPEED, g = GRAVITY, steep: any = false) {
 
 // Прицел по движущейся цели на точный дробный тик перехвата.
 // targetAt(ticks) -> Vec3 точки, куда целимся.
-function aim (from, targetAt, speed = SPEED, g = GRAVITY, steep = false) {
+function aim (from, targetAt, speed = SPEED, g = GRAVITY, steep: boolean | string = false) {
   return aimMoving(from, targetAt, { x: 0, y: 0, z: 0 }, false, speed, g, steep)
 }
 
@@ -245,7 +245,7 @@ function blockedAt (bot, from, sol, u = { x: 0, y: 0, z: 0 }, speed = SPEED) {
 // середина туловища (0.55 роста): туда стрела ложится при любой ошибке по
 // высоте в пределах полблока.
 function leadTarget (entity, velFn, bot = null, frac = .55) {
-  const sky = require('./elytra')
+  const sky: typeof import('./elytra') = require('./elytra')
   return (ticks) => {
     const v = velFn ? velFn() : observedVelocity(entity)
     ticks += v.ageTicks || 0
@@ -313,7 +313,7 @@ function observedGlideVelocity(previous, current, yaw, pitch) {
   // At zero pitch vertical motion is a monotone piecewise affine map, independent
   // of horizontal speed. Other pitches are not promoted by this bounded inverse.
   if (pitch !== 0 || !Number.isFinite(yaw) || !['x', 'y', 'z'].every(a => Number.isFinite(previous[a]) && Number.isFinite(current[a]))) return null
-  const sky = require('./elytra')
+  const sky: typeof import('./elytra') = require('./elytra')
   if (!levelGlideIntervals) {
     const nextY = y => { const p = { x: 0, y: 0, z: 0 }; const v = { x: 0, y, z: 0 }; sky.glideStep(p, v, 0, 0, false); return v.y }
     const down = nextY(-1) - nextY(-2); const downLoss = nextY(-1) + down
@@ -397,7 +397,7 @@ function trackTarget (entity, nowOf = null) {
   let airSamples = []
   let fallDelta = null
   let glideDelta = null
-  let flying = require('./elytra').gliding(entity)
+  let flying = (require('./elytra') as typeof import('./elytra')).gliding(entity)
   let yaw = entity.yaw; let pitch = entity.pitch; let boosted = !!entity._ndGlideBoosted
   let revision = entity._ndGlideRevision || 0
   let phasePending = false
@@ -408,7 +408,7 @@ function trackTarget (entity, nowOf = null) {
     const freshReceipt = receipt && receipt !== lastReceipt
     if (freshReceipt) lastReceipt = receipt
     const relative = receipt?.kind === 'rel_entity_move' || receipt?.kind === 'entity_move_look'
-    const nextFlying = require('./elytra').gliding(entity)
+    const nextFlying = (require('./elytra') as typeof import('./elytra')).gliding(entity)
     if (receipts && receipt?.kind && (nextFlying !== flying || (nextFlying &&
       (entity.yaw !== yaw || entity.pitch !== pitch || !!entity._ndGlideBoosted !== boosted || (entity._ndGlideRevision || 0) !== revision)))) {
       // A motion change can straddle the last old-phase step (Air35).
@@ -503,7 +503,7 @@ function trackTarget (entity, nowOf = null) {
             velocity.z = distance ? dz / distance * speed : 0
           }
         }
-        if (entity.onGround === false && !require('./elytra').gliding(entity)) {
+        if (entity.onGround === false && !(require('./elytra') as typeof import('./elytra')).gliding(entity)) {
           const d = Math.fround(.98); const sum = (1 - d ** dt) / (1 - d)
           const start = (p.y - base.y + .08 * d * (dt - sum) / (1 - d)) / sum
           velocity.y = start * d ** dt - .08 * d * sum
@@ -704,7 +704,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
     if (spawnPkt || !pkt || meta?.name !== 'spawn_entity' || pkt.type !== bot.registry?.entitiesByName?.arrow?.id) return
     const px = pkt.x; const pz = pkt.z
     if (typeof px !== 'number' || Math.hypot(px - me.x, pz - me.z) > 3) return
-    spawnPkt = { ...pkt, velocity: require('./drops').velocityFromRaw(bytes, 'spawn') }
+    spawnPkt = { ...pkt, velocity: (require('./drops') as typeof import('./drops')).velocityFromRaw(bytes, 'spawn') }
   }
   let hit = false
   // Урон цели в ближайшие ~2 с после спуска — наша стрела (ближний бой в это
@@ -858,3 +858,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
 }
 
 module.exports = { shoot, observeCharge, aim, aimMoving, solvePitch, peakPitch, flight, leadTarget, trackTarget, observedVelocity, hasObservedVelocity, traceTarget, blockedAt, DRAW_MS, SPEED, GRAVITY }
+export {
+  shoot, observeCharge, aim, aimMoving, solvePitch, peakPitch, flight, leadTarget, trackTarget, observedVelocity,
+  hasObservedVelocity, traceTarget, blockedAt, DRAW_MS, SPEED, GRAVITY
+}

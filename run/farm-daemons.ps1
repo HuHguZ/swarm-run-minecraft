@@ -2,7 +2,7 @@
 # у farm.js startDaemon: ws 8800+i, бот NeuroFarm<i>, сервер 25600+i, viewer
 # 3100+i, память farm\memory-<i>. Сервер слота не трогает.
 param([int[]]$Slots = @(1,2,3,4,5,6,7,8,9,10))
-$root = 'C:\Users\user\Desktop\work\minecraft-claude'
+$root = Split-Path $PSScriptRoot -Parent
 foreach ($i in $Slots) {
   $ws = 8800 + $i
   $conn = Get-NetTCPConnection -LocalPort $ws -State Listen -ErrorAction SilentlyContinue
@@ -11,7 +11,7 @@ foreach ($i in $Slots) {
 Start-Sleep 2
 foreach ($i in $Slots) {
   $env:ND_WS_PORT = "$(8800 + $i)"; $env:MC_USERNAME = "NeuroFarm$i"; $env:MC_PORT = "$(25600 + $i)"; $env:ND_VIEWER_PORT = "$(3100 + $i)"; $env:ND_MEMORY_DIR = "$root\farm\memory-$i"
-  $p = Start-Process -FilePath node.exe -ArgumentList 'src/index.js' -WorkingDirectory "$root\daemon" -RedirectStandardOutput "$root\farm\daemon-$i.out.log" -RedirectStandardError "$root\farm\daemon-$i.err.log" -WindowStyle Hidden -PassThru
+  $p = Start-Process -FilePath node.exe -ArgumentList 'src/index.js' -WorkingDirectory "$root\dist\daemon" -RedirectStandardOutput "$root\farm\daemon-$i.out.log" -RedirectStandardError "$root\farm\daemon-$i.err.log" -WindowStyle Hidden -PassThru
   Write-Host "slot $i daemon pid $($p.Id)"
 }
 $deadline = (Get-Date).AddSeconds(40)

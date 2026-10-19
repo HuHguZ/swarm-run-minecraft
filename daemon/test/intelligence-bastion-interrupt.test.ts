@@ -1,6 +1,6 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
 
 function watched(lava = { present: false, escaped: 0 }) {
   const source = fs.readFileSync(require.resolve('../src/bastion/booth-trade'), 'utf8')

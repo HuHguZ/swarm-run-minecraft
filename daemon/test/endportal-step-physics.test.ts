@@ -4,10 +4,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const Vec3 = require('vec3')
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 // Real movement/collision engine, a one-block stair, and lava 23 blocks below it.
 async function stepScene(dx: number, dz: number, offset: number, speed: number) {
@@ -42,7 +43,7 @@ async function stepScene(dx: number, dz: number, offset: number, speed: number) 
   const file = path.resolve(__dirname, '../src/endportal-descent.js'), real = createRequire(file)
   const context: any = { module: { exports: {} }, process, console, require: id =>
     id === './game-clock' ? { now: () => ticks * 50 } : id === './movement' ? { ...real(id), sleep: async ms => advance(ms) } : real(id) }
-  vm.runInNewContext(fs.readFileSync(file,'utf8'),context)
+  vm.runInNewContext(fs.readFileSync(file,'utf8'),cjsContext(context))
   const ok = await context.module.exports.walkInto(bot, { aborted: false }, new Vec3(dx,54,dz),0,true)
   const returned = { ok, pos: bot.entity.position.clone(), ground: bot.entity.onGround, ticks }
   advance(2000)
@@ -69,7 +70,7 @@ test('a failed stair whose body changed cells stops before trying another old-co
   vm.runInNewContext(fs.readFileSync(file,'utf8') + `
     judgeStep = () => ({ act: 'step', fall: 0 });
     walkInto = async () => { calls.push(1); testBot.entity.position = new Vec3(1.5,34,.5); return false };
-  `,context)
+  `,cjsContext(context))
   const result = await context.module.exports.stairStep({ bot, mcData: registry }, { aborted: false },0,{ early: true, noDrop: true })
   assert.equal(result.moved,false)
   assert.equal(calls.length,1)

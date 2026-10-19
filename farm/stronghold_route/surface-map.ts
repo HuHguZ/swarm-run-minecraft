@@ -1,10 +1,11 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // Офлайн-данные высот из разрешённой копии мира; основной мир не читается/не меняется.
-const fs = require('fs')
-const path = require('path')
-const zlib = require('zlib')
+import * as fs from 'fs'
+import path = require('path')
+import * as zlib from 'zlib'
 const nbt = require('../../daemon/node_modules/prismarine-nbt')
-const REGION = process.env.SURFACE_REGION || path.resolve(__dirname, '../pristine-run/world/region')
+const REGION = process.env.SURFACE_REGION || path.resolve(REPO_ROOT, 'farm/pristine-run/world/region')
 const chunks = new Map()
 const regions = new Map()
 function long (v) { return typeof v === 'bigint' ? BigInt.asUintN(64, v) : BigInt.asUintN(64, BigInt(v[0]) << 32n | BigInt(v[1] >>> 0)) }
@@ -62,8 +63,8 @@ if (require.main === module) {
     }
     rows.push(row)
   }
-  fs.writeFileSync(path.join(__dirname, 'surface-grid.json'), JSON.stringify({ x0, z0, x1, z1, step, rows }))
+  fs.writeFileSync(path.join(REPO_ROOT, 'farm/stronghold_route/surface-grid.json'), JSON.stringify({ x0, z0, x1, z1, step, rows }))
   console.log('x:', rows[0].map(c => c.x).join(' '))
   for (const r of rows) console.log(r[0].z, r.map(c => c.y === null ? '?' : c.floor === 'water' ? '~' : Math.floor(c.y / 10).toString(36)).join(''))
 }
-module.exports = { height, block, chunk }
+export { height, block, chunk }

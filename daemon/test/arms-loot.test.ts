@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const Loot = require('../src/pvp/arms-loot')
-const AL = require('../arms-layout')
+import * as Loot from '../src/pvp/arms-loot'
+import * as AL from '../arena/arms-layout'
 const room = () => Array(36).fill(null)
 
 async function withdrawAll(reward: any[], storage: any[]) {
-  const { withdrawPass } = require('../src/containers')
-  const clock = require('../src/game-clock'), data = require('minecraft-data')('1.21.11')
+  const { withdrawPass }: typeof import('../src/containers') = require('../src/containers')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock'), data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const game = clock.activate(new clock.GameClock({ manual: true, epoch: 1000 }))
   const slots = [...reward, ...storage].map(item => item && structuredClone(item))
   const start = reward.length
@@ -54,7 +54,7 @@ const nearlyFull = (free: number) => Array.from({ length: 36 }, (_, i) =>
 test('known contents preserve first-name order: real all transfer takes bread before arrows in the last slot', async () => {
   const reward = [{ name: 'bread', count: 1 }, { name: 'arrow', count: 12 }], storage = nearlyFull(1)
   const contents = contentsReceipt(reward), actual = await withdrawAll(reward, storage)
-  const { powerOf } = require('../src/pvp/arms-graph')
+  const { powerOf }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const gain = powerOf(actual.inventory).total - powerOf(storage.filter(Boolean)).total
   assert.deepEqual(actual.receipt.took, { bread: 1 })
   assert.equal(Loot.marginalGain(storage.filter(Boolean), contents, storage), gain)
@@ -64,7 +64,7 @@ test('known contents preserve first-name order: real all transfer takes bread be
 test('aggregated separated stacks retain the actual all transfer order by first name', async () => {
   const reward = [{ name: 'bread', count: 1 }, { name: 'arrow', count: 12 }, { name: 'bread', count: 64 }]
   const storage = nearlyFull(2), contents = contentsReceipt(reward), actual = await withdrawAll(reward, storage)
-  const { powerOf } = require('../src/pvp/arms-graph')
+  const { powerOf }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   assert.deepEqual(actual.receipt.took, { bread: 65 })
   assert.equal(Loot.marginalGain(storage.filter(Boolean), contents, storage),
     powerOf(actual.inventory).total - powerOf(storage.filter(Boolean)).total)
@@ -76,7 +76,7 @@ test('public sample capacity groups repeated names like all transfer without los
     [{ name: 'iron_sword', count: 1 }, { name: 'totem_of_undying', count: 1 }, { name: 'iron_sword', count: 1, ench: { sharpness: 5 } }]
   ]) {
     const storage = nearlyFull(2), actual = await withdrawAll(reward, storage)
-    const { powerOf } = require('../src/pvp/arms-graph')
+    const { powerOf }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
     assert.equal(Loot.marginalGain(storage.filter(Boolean), reward, storage),
       powerOf(actual.inventory).total - powerOf(storage.filter(Boolean)).total)
     if (reward[0].name === 'iron_sword') assert.deepEqual(actual.inventory.slice(-2).map(item => item.ench), [undefined, { sharpness: 5 }])
@@ -135,8 +135,8 @@ const p = (x: number, z = 0) => ({ x, y: 0, z })
 const chest = (id: string, at: any, contents: any[] | null = null) => ({ ...at, id, seenAt: 0, seenFrom: at, opened: contents !== null, looted: false, contents, taken: 0, attempt: null })
 const traversal = (to: any, points: any[], ticks = 300, completed = true) => ({ from: points[0], to, points, ticks, completed, at: 0 })
 function quote(c: any, { owned = [], traversals = [], foe = null, now = 0 }: any = {}) {
-  const { emptyWorld, fact } = require('../src/core/world-state')
-  const { armsRegistry, powerOf } = require('../src/pvp/arms-graph')
+  const { emptyWorld, fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
+  const { armsRegistry, powerOf }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const state = emptyWorld(); state.position = p(0)
   state.resources.power = powerOf(owned).total; state.facts.enemy_power = fact(10, 'observed', 0)
   return Loot.quoteLoot({ state, owned, storage: room(), chest: c, prior: [[{ name: 'iron_sword' }]], traversals, foe,
@@ -192,9 +192,9 @@ test('quote ordering is deterministic and a failed elapsed action cannot erase i
 
 test('unknown approach can justify a useful first chest without charging two guaranteed fights', () => {
   const q = quote(chest('a', p(5)))
-  const s = require('../src/core/world-state').emptyWorld()
-  s.position = p(0); s.resources.power = 1; s.facts.enemy_power = require('../src/core/world-state').fact(10, 'observed', 0)
-  const engage = require('../src/pvp/arms-graph').armsRegistry().get('Engage')
+  const s = (require('../src/core/world-state') as typeof import('../src/core/world-state')).emptyWorld()
+  s.position = p(0); s.resources.power = 1; s.facts.enemy_power = (require('../src/core/world-state') as typeof import('../src/core/world-state')).fact(10, 'observed', 0)
+  const engage = (require('../src/pvp/arms-graph') as typeof import('../src/pvp/arms-graph')).armsRegistry().get('Engage')
   const direct = engage.estimateCost(s) + engage.estimateRisk(s) * 6000
   assert(q.totalWithFight < direct)
   assert.equal(q.exposureLo, 0); assert.equal(q.exposureHi, 1)

@@ -1,12 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
-const registry = require('minecraft-data')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const edges = require('../src/edges')
-const build = require('../src/build')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
+import edges = require('../src/edges')
+import build = require('../src/build')
 
 // Same geometry as native c-shaft: 3x3 pit, feet117 -> field120, liquid only117.
 // Use real Block collision/dig data; changing the lower layer is the causal stimulus.

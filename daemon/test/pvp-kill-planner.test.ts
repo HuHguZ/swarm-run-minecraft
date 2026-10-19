@@ -1,9 +1,9 @@
 'use strict'
 // Планировщик добивания (src/pvp/kill-planner.ts): решения на конкретных боях и арифметика P(убить).
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const kp = require('../src/pvp/kill-planner')
-const dm = require('../src/pvp/damage-model')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as kp from '../src/pvp/kill-planner'
+import * as dm from '../src/pvp/damage-model'
 
 const kit = (mat, ench = {}) => ['helmet', 'chestplate', 'leggings', 'boots'].map(s => ({ name: `${mat}_${s}`, ench }))
 function obs ({ dist = 2.5, hp = { lo: 18, hi: 20, mean: 19 }, totem = false, items = [{ name: 'diamond_sword' }], held = 'diamond_sword', foe = {}, me = {}, ...rest }: any = {}) {

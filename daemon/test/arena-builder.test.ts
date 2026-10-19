@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { arenaPlan } from '../arena-builder'
-import { terrainHeightAt, pitAt } from '../arena-terrain'
+import { arenaPlan } from '../arena/arena-builder'
+import { terrainHeightAt, pitAt } from '../arena/arena-terrain'
 
 test('farm colosseum rests on measured ground and has an open sky and a deep lava moat', () => {
   const plan = arenaPlan({ min: 65, max: 82 })

@@ -1,6 +1,6 @@
 // Взлёт: подбор (узел, y цели, yRotA на посадке) по записи сервера; ошибка головы на 5/10/15/20 тиках.
-const fs = require('fs')
-const S = require('./dsim')
+import * as fs from 'fs'
+import * as S from './dsim'
 const file = process.argv[2]
 const L = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(x => x.ph != null && x.p && x.p.length === 3)
 const byGt = new Map(L.map(x => [x.gt, x]))

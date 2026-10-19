@@ -1,12 +1,13 @@
 'use strict'
+import { DIST_ROOT } from '../../daemon/src/paths'
 // Поле и карта: гонка — раскладка arms-layout или Колизей (сброс арены каждый раунд, насесты), точки старта бойцов и
 // падение с арены.
 import { ROOT } from './context'
 import { LAN_NAME } from './server'
 import { makeStockChests } from './loot'
 import type { ArenaContext } from './context'
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 
 // Гонка: карта у центра поля (ARMS_POS), Колизей из чистой копии, раскладка, насесты; первая набивка сундуков.
 export async function setupArmsMap (ctx: ArenaContext) {
@@ -25,7 +26,7 @@ export async function setupArmsMap (ctx: ArenaContext) {
       let have = ''; try { have = JSON.parse(fs.readFileSync(flagF, 'utf8')).at } catch {}
       if (have !== want) {
         const t0 = Date.now()
-        const CZB = require(path.join(ROOT, 'daemon', 'build-colosseum'))
+        const CZB = require(path.join(DIST_ROOT, 'daemon', 'arena', 'build-colosseum'))
         const P = CZB.plan({ X, Y, Z, R: 24, ceilH: 16 })
         for (const c of [...P.clear, ...P.cmds, ...P.field]) await rcon(i, c.replace(/^\//, ''), 20000).catch(() => {})
         for (let y = y0; y <= y1; y++) await rcon(i, `clone ${X - h} ${y} ${Z - h} ${X + h} ${y} ${Z + h} ${X + SX - h} ${y} ${Z - h}`, 20000).catch(() => {})
@@ -60,7 +61,7 @@ export async function setupArmsMap (ctx: ArenaContext) {
   // Насесты (10.10: «жемчуг высоко на Колизей — никто не достанет»): клетки, где можно стоять, на крышах ярусов и
   // вершинах (модель постройки: опора, над ней 2 воздуха; 11+ над полем). Туда бросает жемчуг тот, кому не убежать.
   if (COLOS_MAP) {
-    const g = require(path.join(ROOT, 'daemon', 'build-colosseum')).plan({ X, Y, Z, R: 24, ceilH: 16 }).m.g
+    const g = require(path.join(DIST_ROOT, 'daemon', 'arena', 'build-colosseum')).plan({ X, Y, Z, R: 24, ceilH: 16 }).m.g
     const pal = (x, y, z) => (x < g.x0 || x > g.x1 || y < g.y0 || y > g.y1 || z < g.z0 || z > g.z1) ? 'air' : (g.pal[g.data[g.i(x, y, z)]] || 'air')
     const solid = (x, y, z) => { const n = pal(x, y, z); return n !== 'air' && !/air|slab|stairs|fence|wall|pane|bars|torch|lantern/.test(n) }
     for (let x = g.x0; x <= g.x1; x += 2) for (let z = g.z0; z <= g.z1; z += 2) for (let y = g.y1; y >= 11; y--) {

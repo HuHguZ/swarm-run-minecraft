@@ -4,9 +4,9 @@
 // и его ставят снова. Кампания делала то же парой RPC place + mine (поиск блока, путь, подбор) — ~10 игр. с на попытку
 // (s8-r2-11: 18 попыток за 200 с; s8-f1-2: шаг кремня 198 с); здесь — постановка и копка по видимой грани без ходьбы.
 // Честно: ставится по видимой грани (placeBlockAt honest), копается по видимой грани (cast.digVisible).
-const gameClock = require('./game-clock')
-const { placeBlockAt } = require('./build')
-const { equipBestTool } = require('./items')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
+const { placeBlockAt }: typeof import('./build') = require('./build')
+const { equipBestTool }: typeof import('./items') = require('./items')
 
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 // Клетки у ног: 4 стороны, затем 4 диагонали (после копки гравия тело часто стоит в яме из гравия — сторон мало).
@@ -46,7 +46,7 @@ async function flintGrind (session, ctl, { max = 40, timeoutSeconds = 90 }: any 
   const count = name => bot.inventory.items().filter(i => i.name === name).reduce((n, i) => n + i.count, 0)
   const flint0 = count('flint')
   let spot = grindSpot(bot)
-  const digVisible = require('./cast')._in.digVisible
+  const digVisible = (require('./cast') as typeof import('./cast'))._in.digVisible
   // Места нет (колодец 1×1, тупик штрека — S8d, s8d-b-v1-3: «некуда поставить» ×6 подряд): вырыть нишу сбоку — клетку у ног и над ней
   // (видимые грани стенки), пол под ней остаётся. ND_GRIND_NICHE=0 — прежнее.
   if (!spot && process.env.ND_GRIND_NICHE !== '0') {
@@ -83,7 +83,7 @@ async function flintGrind (session, ctl, { max = 40, timeoutSeconds = 90 }: any 
     // Дроп отлетел дальше досягаемости подбора (S8d, s8d-a-v1-3: 22 попытки — 10 гравия ушли на землю, «гравий кончился» без
     // кремня) — подобрать ходом, пока лежит рядом. ND_GRIND_PICKUP=0 — прежнее.
     if (count('flint') === flint0 && count('gravel') < before && process.env.ND_GRIND_PICKUP !== '0' && !ctl.aborted) {
-      try { await require('./actions').collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 3000, appearMs: 300 }) } catch {}
+      try { await (require('./actions') as typeof import('./actions')).collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 3000, appearMs: 300 }) } catch {}
       try { bot.pathfinder.setGoal(null) } catch {}
     }
   }
@@ -92,3 +92,4 @@ async function flintGrind (session, ctl, { max = 40, timeoutSeconds = 90 }: any 
 }
 
 module.exports = { flintGrind, grindSpot }
+export { flintGrind, grindSpot }

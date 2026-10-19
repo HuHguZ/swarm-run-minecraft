@@ -1,5 +1,5 @@
-const { seesPlayer, observePlayerGear } = require('./pvp/last-seen')
-const clock = require('./game-clock')
+import { seesPlayer, observePlayerGear } from './pvp/last-seen'
+import * as clock from './game-clock'
 const previous = new WeakMap<object, Map<number, any>>()
 const gearMemory = new WeakMap<object, Map<number, any>>()
 
@@ -24,7 +24,7 @@ export function swarmSightings(bot: any, allies: string[] = []) {
     const gear = projection.equipment
     const equipment = { weapon: gear[0]?.name || null, armor: gear.slice(2, 6).map(it => it?.name).filter(Boolean), ...(projection.unknownArmorSlots ? { unknownArmorSlots: projection.unknownArmorSlots } : {}), ...(gear.some(it => it?.enchanted) ? { enchanted: true } : {}) }
     const threat = /bow|crossbow/.test(equipment.weapon || '') ? 'bow' : /end_crystal|tnt/.test(equipment.weapon || '') ? 'blast' : e.elytraFlying || equipment.weapon === 'mace' && velocity.y < -.2 ? 'aerial' : 'melee'
-    const hp = require('./pvp/combat-observe').foeHpUpper(bot, e)
+    const hp = (require('./pvp/combat-observe') as typeof import('./pvp/combat-observe')).foeHpUpper(bot, e)
     sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, ...(Number.isFinite(hp) && hp < 20 ? { hpEstimate: hp } : {}) })
     current.set(e.id, { position, now })
   }
@@ -36,11 +36,11 @@ export function swarmSightings(bot: any, allies: string[] = []) {
 // A nearby cell may be in hand range while all its reference faces are hidden.
 export function placementPoses(bot: any, at: any) {
   if (!bot?.entity || !at || !['x', 'y', 'z'].every(k => Number.isSafeInteger(at[k])) || at.y < -64 || at.y > 319 || Math.abs(at.x) >= 30000000 || Math.abs(at.z) >= 30000000) return []
-  const { Vec3 } = require('vec3'), pick = require('./pick')
-  const { standPositions, verticalLift } = require('./navigation/geometry')
-  const observed = require('./pvp/search').observedCollision(bot)
+  const { Vec3 }: typeof import('vec3') = require('vec3'), pick: typeof import('./pick') = require('./pick')
+  const { standPositions, verticalLift }: typeof import('./navigation/geometry') = require('./navigation/geometry')
+  const observed = (require('./pvp/search') as typeof import('./pvp/search')).observedCollision(bot)
   const target = new Vec3(at.x, at.y, at.z), poses = [], explore = []
-  const references = require('./build').FACES.map(face => ({ face, pos: target.minus(face) })).filter(ref => {
+  const references = (require('./build') as typeof import('./build')).FACES.map(face => ({ face, pos: target.minus(face) })).filter(ref => {
     const block = observed.blockAt(ref.pos)
     return block?.boundingBox === 'block'
   })

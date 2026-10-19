@@ -1,6 +1,6 @@
 // Сколько посадок до смерти дракона при уроне D за посадку и лечении 2 хп/с в перерывах
 // (перерывы — эмпирические, из трасс: от конца сидения до следующего SCANNING).
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 const gaps = []
 for (const d of fs.readdirSync(L).filter(f => f.startsWith('trace-'))) {

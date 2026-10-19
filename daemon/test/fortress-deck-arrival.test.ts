@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
-const { Vec3 } = require('vec3')
+import { cjsContext } from './cjs-context'
+import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function scene({ visible = true, floor = true, boreY = 62, abort = false, landed = false } = {}) {
   const top = new Vec3(0, 63, 0)
@@ -33,7 +34,7 @@ function scene({ visible = true, floor = true, boreY = 62, abort = false, landed
         return { dug: 0, why: 'no physical ascent' }
       }
     } : native(name) }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context)
+  vm.runInNewContext(transformSync(bodySource(file), { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
   return { bot, ctl, top, goals, bores, run: () => context.module.exports.climbTo({ bot }, ctl, top, 100000) }
 }
 

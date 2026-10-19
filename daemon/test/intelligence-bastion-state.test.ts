@@ -1,10 +1,13 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { withClockFixture } = require('./clock-fixture')
+import { campaignScript } from './campaign-source'
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { withClockFixture } from './clock-fixture'
+import { transpiledSource } from './source-fixture'
 
 function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, endermen = '1') {
   const state = { health: 20, food: 20, dimension: 'the_nether', pos: { x: 87, y: 35, z: 139 },
@@ -43,7 +46,7 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, 
     __dirname: path.dirname(filename), module: { exports: {} as Record<string, any> },
     process: { argv: ['node', 'campaign.js'], env: { ND_NE_RECOVER: '0', ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: endermen } }, // прежний путь (J2 сам включает ND_NE_RECOVER)
     console: { log() {}, error() {} }, setTimeout, Date, queueMicrotask, AbortController, fixtureState: state }
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
+  vm.runInNewContext(campaignScript() + `
     state = fixtureState; sit = { surface: false, foes: 0, pickLeft: 512 };
     recoverGuard = async () => {};
     known.portal = { x: 1, y: 64, z: 1 };
@@ -56,7 +59,7 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, 
     module.exports.deferBarter = () => { bState(known.bastions[0]).barterUntil = gameClock.now() + 60000 };
     module.exports.deferMining = () => { for (const b of known.bastions) deferBastionMining(b) };
     module.exports.active = () => activeBastion();
-  `, withClockFixture(context))
+  `, cjsContext(withClockFixture(context)))
   return { context, state, calls, requests }
 }
 
@@ -86,12 +89,12 @@ test('an unsuccessful tool refill cannot launch real bastion excavation or exhau
 })
 
 test('the actual campaign loop respects failed graph verification when incidental blocks increase', () => {
-  const source = fs.readFileSync(path.resolve(__dirname, '../campaign.js'), 'utf8')
+  const source = campaignScript()
   const start = source.indexOf('      const progressed =')
   const end = source.indexOf('\n', start)
   assert.ok(start >= 0 && end > start)
   const check = (s: { progressed?: () => boolean }, before: Record<string, number>, after: Record<string, number>) =>
-    vm.runInNewContext(source.slice(start, end) + '\nprogressed', { s, before, after })
+    vm.runInNewContext(source.slice(start, end) + '\nprogressed', cjsContext({ s, before, after }))
   assert.equal(check({ progressed: () => false }, { blocks: 64 }, { blocks: 128 }), false,
     'native tunnel netherrack cannot turn a failed Bastion skill into a useful partial stage or reset its watchdog')
   assert.equal(check({ progressed: () => true }, {}, {}), true, 'verified movement or handoff progress survives a constant inventory')
@@ -99,7 +102,7 @@ test('the actual campaign loop respects failed graph verification when incidenta
 })
 
 test('an unreachable graph cannot send the body home for rods while factual Bastion pearls are still pending', () => {
-  const source = fs.readFileSync(path.resolve(__dirname, '../campaign.js'), 'utf8')
+  const source = campaignScript()
   const start = source.indexOf("      if (!selection && dim() === \"the_nether\"")
   assert.ok(start >= 0)
   const end = source.indexOf('{', start)
@@ -108,7 +111,7 @@ test('an unreachable graph cannot send the body home for rods while factual Bast
     const context = { selection: null, dim: () => 'the_nether', bastionPearlsPending: () => pending,
       need: [{ name: 'nether' }, { name: 'bastion' }], READY: { nether: () => false }, fightGearWanted: false,
       fightReady: () => false, result: false, gameClock: { now: () => 0 }, homeForGearAfter: -Infinity, homeForGearState: null, netherRetryState: () => "same" }
-    vm.runInNewContext(guard, context)
+    vm.runInNewContext(guard, cjsContext(context))
     return context.result
   }
   assert.equal(returnsHome(true), false, 'unfinished mapped Bastions and missing pearls retain their resource phase')

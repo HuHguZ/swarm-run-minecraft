@@ -1,5 +1,5 @@
 // Перерывы между посадками (конец сидения → следующее «высматривает») по префиксу трасс: node an-gaps.js b2- b4-
-const fs = require('fs'); const path = require('path')
+import * as fs from 'fs'; import path = require('path')
 const L = 'C:/Users/user/Desktop/work/minecraft-claude/farm/logs'
 for (const pre of process.argv.slice(2)) {
   const gaps = []; let strafes = 0; let firstPerch = []

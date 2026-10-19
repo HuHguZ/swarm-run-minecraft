@@ -1,15 +1,16 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
-const data = require('minecraft-data')('1.21.11')
-require('../src/gamedata').fixMaterials(data)
-const Block = require('prismarine-block')(data)
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+;(require('../src/gamedata') as typeof import('../src/gamedata')).fixMaterials(data)
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(data as any)
 
 // The real escape controller, item selection and client ray run against native block dig times.
 // This fixture supplies only a clock/body: one in_wall HP per ten ticks, a walkable side cell,
@@ -56,7 +57,7 @@ function fixture ({ head = 'obsidian', feet = 'air', side = true, sideFloor = 's
         let timer
         return Promise.race([promise, new Promise((_, reject) => { timer = clock.setTimeout(() => reject(new Error(message)), ms) })]).finally(() => clock.clearTimeout(timer))
       } } : req(name) }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context, { filename: file })
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
   const auto: any = { ...context.module.exports, cfg: { lowHealth: 8 }, lastHp: hp + 1, bodyBusy: () => true,
     session: { mcData: data, current: { name: 'fight' }, bus: { emit: (type, detail) => events.push({ type, ...detail }) }, journal: { append () {} } } }
   async function run (work = () => auto.freeIfBuried(bot, { ctl, force: true })) {

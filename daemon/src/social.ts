@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const cfg = require('./config')
-const { canSeePoint } = require('./perception')
+import * as gameClock from './game-clock'
+import * as cfg from './config'
+import { canSeePoint } from './perception'
 
 // Everything the body knows about the people on the server, and the one reflex
 // it is allowed to have about them.
@@ -268,7 +268,7 @@ function players (session, { radius = SCAN, fair }: any = {}) {
   // Куда каждый смотрит сейчас и на что последним указывал долгим взглядом
   // (gestures.js): «вот это», «сюда», «сломай его» без координат в чате.
   // Лениво: gestures.js сам тянет этот файл.
-  const gestures = require('./gestures')
+  const gestures: typeof import('./gestures') = require('./gestures')
   const ap = session.autopilot
   const people = ap && ap.gestureState ? ap.gestureState.people : null
   for (const p of seen) {
@@ -305,7 +305,7 @@ function players (session, { radius = SCAN, fair }: any = {}) {
   }
 }
 
-module.exports = {
+export {
   nearbyPlayers,
   noticePlayers,
   players,

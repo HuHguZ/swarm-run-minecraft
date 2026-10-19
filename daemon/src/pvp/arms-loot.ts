@@ -1,12 +1,12 @@
 import type { Item } from './arms-graph'
 import { cloneWorld, type Position, type WorldState } from '../core/world-state'
 import { powerOf, lootRiskIncrement, ARMS_RISK_PENALTY } from './arms-graph'
-const { itemsByName } = require('minecraft-data')('1.21.11')
-const { pathSeconds, WALK, RUN } = require('../hopgoto')
+const { itemsByName } = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+import { pathSeconds, WALK, RUN } from '../hopgoto'
 
 export type StorageItem = Item & { plain?: boolean }
 export function sampleItems(samples: string[][], rocket3: string): Item[][] {
-  const { parseItem } = require('../../arena-ench')
+  const { parseItem }: typeof import('../../arena/arena-ench') = require('../../arena/arena-ench')
   return samples.map(sample => sample.map(raw => {
     const item = parseItem(raw)
     return { name: item.id, count: Number(item.count) || 1, ench: item.pinned,

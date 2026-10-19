@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { candidates } = require('../src/tactics/state')
-const { TacticalArbiter } = require('../src/tactics/arbiter')
+import { candidates } from '../src/tactics/state'
+import { TacticalArbiter } from '../src/tactics/arbiter'
 
 // Ходячие Ада без золота (агент Ада 14.10, сцена try-lab-ne-piglin): брут, хоглин или двое — нора на 2 вниз (PillarUp/netherHide)
 // выше дуэли, бега и последнего боя; гаст над обрывом — коробка выше щита.
-const make = (changes: Record<string, any> = {}) => ({ at: 0, health: 20, food: 20, armor: 0, weapon: true, shield: true,
+const make = (changes: Record<string, any> = {}): import('../src/tactics/state').TacticalState => ({ at: 0, health: 20, food: 20, armor: 0, weapon: true, shield: true,
   enemies: [{ id: 1, kind: 'piglin_brute', distance: 6, threatening: true, player: false, hit: 13 }],
   incomingProjectiles: 0, burning: false, lava: false, fireResistance: false, explosion: false, dangerousFall: false,
   emergencyController: false, inWater: false, cover: false, portal: false, escapeRoute: true, blocks: 128, water: false,
@@ -44,7 +44,7 @@ test('гаст над обрывом и шар в полёте — коробк�
   assert.notEqual(candidates({ ...state, ghastEdge: false })[0].id, 'BlockOff')
 })
 test('гаст на виду над обрывом — уровень 2 и коробка ещё до первого шара', () => {
-  const { threatLevel } = require('../src/tactics/state')
+  const { threatLevel }: typeof import('../src/tactics/state') = require('../src/tactics/state')
   const calm = make({ enemies: [], ghastEdge: true })
   assert.equal(threatLevel(calm), 2)
   assert.equal(candidates(calm)[0].id, 'BlockOff')

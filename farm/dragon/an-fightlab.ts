@@ -1,8 +1,9 @@
-// Бой + свидетель сервера (02.10, поток dragon): node farm/dragon/an-fightlab.js <тег> [слот-файл events.jsonl для боёв без lab-ev]
+import { REPO_ROOT } from '../../daemon/src/paths'
+// Бой + свидетель сервера (02.10, поток dragon): node dist/farm/dragon/an-fightlab.js <тег> [слот-файл events.jsonl для боёв без lab-ev]
 // Сводит bedDone бота (прогноз: headDist, seenP, bodyDy, ярус) с dd сервера (DragonLab: урон, seen родителя, голова, тело).
 // Печать по взрыву и итог: ошибка прогноза seen, урон по причинам (расстояние/видимость).
-const fs = require('fs'); const path = require('path')
-const L = path.join(__dirname, '..', 'logs')
+import * as fs from 'fs'; import path = require('path')
+const L = path.join(REPO_ROOT, 'farm/logs')
 const tag = process.argv[2]
 const root = path.join(L, 'trace-' + tag)
 const q = (xs, p) => { const v = xs.filter(x => x != null && !Number.isNaN(x)).sort((a, b) => a - b); return v.length ? Math.round(v[Math.min(v.length - 1, Math.floor((v.length - 1) * p + 0.5))] * 1000) / 1000 : '-' }
@@ -13,7 +14,7 @@ try { for (const l of fs.readFileSync(path.join(L, tag + '-seeds.txt'), 'utf8').
 for (const s of fs.readdirSync(root)) {
   const d = path.join(root, s); if (!fs.statSync(d).isDirectory()) continue
   let evf = path.join(d, 'lab-ev.jsonl')
-  if (!fs.existsSync(evf) && slotOf[s]) evf = path.join(__dirname, '..', 'server-' + slotOf[s], 'plugins', 'DragonLab', 'events.jsonl')
+  if (!fs.existsSync(evf) && slotOf[s]) evf = path.join(REPO_ROOT, 'farm', 'server-' + slotOf[s], 'plugins', 'DragonLab', 'events.jsonl')
   if (!fs.existsSync(evf)) continue
   const dd = fs.readFileSync(evf, 'utf8').split('\n').filter(l => l.includes('"t":"dd"') && l.includes('bad_respawn_point')).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
   for (const f of fs.readdirSync(d).filter(f => /^dragon-/.test(f))) {

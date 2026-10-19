@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
+import { cjsContext } from './cjs-context'
 
-const { Vec3 } = require('vec3')
+import { Vec3 } from 'vec3'
+import { bodySource } from './source-fixture'
 
 function blockedSearch () {
   const file = path.resolve(__dirname, '../src/fortress.js')
@@ -23,11 +24,11 @@ function blockedSearch () {
       return { ok: false, error: 'застрял; штрек: у забоя lava' }
     }
   }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
+  vm.runInNewContext(bodySource(file) + `
     keepBlocks = async () => null;
     legTo = (...args) => leg(...args);
     module.exports.sweepForTest = sweep;
-  `, context)
+  `, cjsContext(context))
   const state: any = { fortressSearch: { world: 'the_nether', origin: { x: 6, z: -11 }, region: [0, -1], done: [],
     wps: [{ x: -16, z: -128 }, { x: 384, z: -128 }, { x: 384, z: -256 },
       { x: -16, z: -256 }, { x: -16, z: -384 }, { x: 384, z: -384 }], i: 2 } }

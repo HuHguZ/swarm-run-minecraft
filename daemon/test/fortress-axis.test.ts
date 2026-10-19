@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const { axisLeg } = require('../src/fortress')
+import { Vec3 } from 'vec3'
+import { axisLeg } from '../src/fortress'
 
 test('on a fortress bridge the tour walks along the bridge, away from earlier stops', () => {
   const bridge = [-6, -3, 0, 3, 6].map(x => new Vec3(x, 73, 0))

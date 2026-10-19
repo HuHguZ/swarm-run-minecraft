@@ -1,11 +1,12 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 async function hunt ({ name = 'cow', distance = 14, dead = true, clearArea }: any = {} as Record<string, any>) {
   const file = path.join(__dirname, '../src/combat.js')
@@ -28,6 +29,9 @@ async function hunt ({ name = 'cow', distance = 14, dead = true, clearArea }: an
         calls.clearArea = p.clearArea
         return { kills: dead ? [name] : [] }
       } }
+      // Части боя (combat/foes, combat/corridor): подмены цели, счёта врагов и формы штрека — в их модулях.
+      if (n === './combat/foes') return { ...actual, findTarget: () => entity, countHostiles: () => 0 }
+      if (n === './combat/corridor') return { ...actual, corridorShape: () => ({ corridor: false }) }
       if (n === './actions') return { ...actual, collectNearbyDrops: async (_b, _c, p) => {
         assert.equal(p.canContinue(), true, 'isolated safe pickup must honour the continuation contract')
         calls.loot++; calls.radius = p.radius
@@ -36,11 +40,9 @@ async function hunt ({ name = 'cow', distance = 14, dead = true, clearArea }: an
       return actual
     }, entity }
   vm.runInNewContext(fs.readFileSync(file, 'utf8') + `
-    findTarget = () => entity;
-    dressForFight = async () => ({}); countHostiles = () => 0;
-    corridorShape = () => ({ corridor: false });
+    dressForFight = async () => ({});
     module.exports.testFight = fightBody;
-  `, context)
+  `, cjsContext(context))
   const result = await context.module.exports.testFight({ bot }, { aborted: false }, { target: name, clearArea },
     // Эти тесты изолируют подбор; решение о риске проверяется отдельно.
     { watch () {}, sawMobs () {}, wear: async () => {}, safety: { check: () => ({ action: 'fight', threats: [] }) } })

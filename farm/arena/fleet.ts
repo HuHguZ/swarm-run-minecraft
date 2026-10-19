@@ -1,11 +1,12 @@
 'use strict'
 // Демоны бойцов: доп. бойцы слота (поднять, погасить), RPC к демону и проверка порта.
 import { ROOT, sleep, log } from './context'
+import { codeDir as slotCodeDir } from '../code-dir'
 import { LAN } from './server'
-const fs = require('fs')
-const path = require('path')
-const net = require('net')
-const { spawn, execFileSync } = require('child_process')
+import * as fs from 'fs'
+import path = require('path')
+import * as net from 'net'
+import { spawn, execFileSync } from 'child_process'
 const WebSocket = require(path.join(ROOT, 'daemon', 'node_modules', 'ws'))
 
 // До 24 бойцов на слот буквами c..z, дальше — двумя буквами aa..cz (10.10: «30 на 30», затем «40 на 40» — до 102 сверх <i> и <i>b).
@@ -34,7 +35,7 @@ export function client (url) {
 function codeDir (i) {
   let code = process.env.FFA_CODE || null
   if (!code) try { code = JSON.parse(fs.readFileSync(path.join(ROOT, 'farm', 'slots.json'), 'utf8')).slots?.[i]?.code || null } catch {}
-  return code ? path.join(ROOT, '.daemon-' + code) : path.join(ROOT, 'daemon')
+  return slotCodeDir(code)
 }
 export async function up (i, n) {
   const cwd = codeDir(i)
@@ -46,7 +47,7 @@ export async function up (i, n) {
     const env = { ...process.env, ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(LAN || 25600 + i), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem }
     const p = spawn(process.execPath, ['src/index.js'], { cwd, env, detached: true, stdio: ['ignore', out, out], windowsHide: true })
     p.unref()
-    try { require('os').setPriority(p.pid, require('os').constants.priority.PRIORITY_BELOW_NORMAL) } catch {}
+    try { (require('os') as typeof import('os')).setPriority(p.pid, (require('os') as typeof import('os')).constants.priority.PRIORITY_BELOW_NORMAL) } catch {}
     for (let t = 0; t < 30 && !(await portOpen(s.ws)); t++) await sleep(1000)
     log(`${s.name}: демон ${s.ws} ${await portOpen(s.ws) ? '✓' : 'НЕ поднялся'} (${path.basename(cwd)})`)
   }

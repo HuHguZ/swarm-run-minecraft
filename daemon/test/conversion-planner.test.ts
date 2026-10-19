@@ -5,7 +5,7 @@ import { guaranteedDrops, conversionRecipes, conversionProvenance } from '../src
 import { craftConverted, craftStepMismatch } from '../src/conversions/runtime'
 import { EventEmitter } from 'node:events'
 
-const mc = require('minecraft-data')('1.21.11')
+const mc = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const harvestTools = Object.fromEntries(Object.entries(mc.blocksByName).map(([name, block]: [string, any]) => [name, Object.keys(block.harvestTools ?? {}).map(id => mc.items[id].name)]))
 
 test('runtime crafting witness rejects duplicated ingredients even when output looks sufficient', () => {
@@ -16,10 +16,10 @@ test('runtime crafting witness rejects duplicated ingredients even when output l
 })
 
 test('a real own collect receipt preserves exact crafting consumption without concealing output duplication', () => {
-  const drops = require('../src/drops')
+  const drops: typeof import('../src/drops') = require('../src/drops')
   const bot: any = new EventEmitter()
   bot._client = new EventEmitter(); bot.registry = mc; bot.entity = { id: 1 }
-  bot.entities = { 10: { id: 10, name: 'item', position: new (require('vec3'))(0, 0, 0), getDroppedItem: () => ({ name: 'blackstone', count: 10 }) } }
+  bot.entities = { 10: { id: 10, name: 'item', position: new ((require('vec3') as typeof import('vec3').Vec3))(0, 0, 0), getDroppedItem: () => ({ name: 'blackstone', count: 10 }) } }
   const mark = drops.pickupMark(bot)
   bot._client.emit('collect', { collectorEntityId: 1, collectedEntityId: 10, pickupItemCount: 10 })
   const step = planConversion({ blackstone: 64, stick: 2, crafting_table: 1 }, 'stone_pickaxe', 1, { table: true }).steps[0]
@@ -34,11 +34,11 @@ test('a real own collect receipt preserves exact crafting consumption without co
 })
 
 test('the runtime accounts for witnessed ingredient pickup and exposes the receipt range in its existing result', async t => {
-  const Item = require('prismarine-item')(mc)
-  const windows = require('prismarine-windows')(mc)
-  const Vec3 = require('vec3')
-  t.mock.method(require('../src/invsync'), 'refresh', async () => true)
-  t.mock.method(require('../src/actions'), 'craft', async (session: any) => {
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(mc)
+  const windows = (require('prismarine-windows') as typeof import('prismarine-windows').default)(mc as any)
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  t.mock.method((require('../src/invsync') as typeof import('../src/invsync')), 'refresh', async () => true)
+  t.mock.method((require('../src/actions/craft') as typeof import('../src/actions/craft')), 'craft', async (session: any) => {
     const bot = session.bot
     bot.inventory.updateSlot(9, new Item(mc.itemsByName.blackstone.id, 61))
     bot.inventory.updateSlot(11, null)
@@ -70,11 +70,11 @@ test('the runtime accounts for witnessed ingredient pickup and exposes the recei
 })
 
 test('conversion baseline includes items returned by the confirmed inventory close', async t => {
-  const Item = require('prismarine-item')(mc)
-  const windows = require('prismarine-windows')(mc)
-  const sync = require('../src/invsync')
+  const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(mc)
+  const windows = (require('prismarine-windows') as typeof import('prismarine-windows').default)(mc as any)
+  const sync: typeof import('../src/invsync') = require('../src/invsync')
   let crafts = 0
-  t.mock.method(require('../src/actions'), 'craft', async (session: any) => {
+  t.mock.method((require('../src/actions/craft') as typeof import('../src/actions/craft')), 'craft', async (session: any) => {
     assert.equal(await sync.refresh(session.bot, 1000, true), true)
     const inventory = session.bot.inventory
     inventory.updateSlot(10, null); inventory.updateSlot(11, null)

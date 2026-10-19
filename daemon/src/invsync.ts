@@ -1,9 +1,9 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 const menuStates = new WeakMap<object, Map<number, number>>()
 
 function sameStack(bot, a, b) {
-  const Item = require('prismarine-item')(bot.registry)
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
   return Item.equal(a, b, false) && JSON.stringify(a?.components ?? []) === JSON.stringify(b?.components ?? [])
     && JSON.stringify(a?.removedComponents ?? []) === JSON.stringify(b?.removedComponents ?? [])
 }
@@ -28,7 +28,7 @@ function sameStack(bot, a, b) {
 function install (bot) {
   if (bot.__ndInvSync) return
   bot.__ndInvSync = true
-  const Item = require('prismarine-item')(bot.registry)
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
   const states = new Map<number, number>()
   menuStates.set(bot, states)
   if (bot.version === '1.21.11') {
@@ -98,7 +98,7 @@ function install (bot) {
 function resync (bot, afterCraft = false, closedInventory = false) {
   if (!bot || !bot._client || bot.currentWindow || bot.inventory?.selectedItem && !closedInventory || bot._ndCrafting && !afterCraft) return false
   try {
-    const Item = require('prismarine-item')(bot.registry)
+    const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
     bot._client.write('window_click', {
       windowId: 0,
       stateId: -2,
@@ -117,7 +117,7 @@ function resync (bot, afterCraft = false, closedInventory = false) {
 async function refresh (bot, timeoutMs = 2000, closeGrid = false) {
   if (!bot?._client || bot.currentWindow || bot.inventory?.selectedItem && !closeGrid) return false
   install(bot)
-  const Item = closeGrid ? require('prismarine-item')(bot.registry) : null
+  const Item = closeGrid ? (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry) : null
   return new Promise<boolean>(resolve => {
     let timer
     const finish = (ok: boolean) => { gameClock.wall.clearTimeout(timer); bot._client.removeListener('window_items', onItems); bot.removeListener('end', onEnd); resolve(ok) }
@@ -145,7 +145,7 @@ async function confirmedClick(bot, slot: number, mouseButton = 0, mode = 0, time
   const window = bot.currentWindow || bot.inventory
   if (!Number.isInteger(slot) || slot < 0 && slot !== -999 || slot >= window.slots.length) throw new Error('confirmed inventory click needs a real slot or the outside drop slot')
   if (mode !== 0 || ![0, 1].includes(mouseButton)) throw new Error('confirmed inventory click supports ordinary left/right clicks')
-  const Item = require('prismarine-item')(bot.registry)
+  const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
   const carried = window.selectedItem
   const current = window.slots[slot]
   const expected = (item, count: number) => count > 0 ? { item, count } : null
@@ -230,4 +230,4 @@ function flushGrid (bot) {
   }
 }
 
-module.exports = { install, resync, refresh, flushGrid, confirmedClick, sameStack }
+export { install, resync, refresh, flushGrid, confirmedClick, sameStack }

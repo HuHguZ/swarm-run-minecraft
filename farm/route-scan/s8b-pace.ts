@@ -1,7 +1,9 @@
 'use strict'
+import { REPO_ROOT } from '../../daemon/src/paths'
 // S8b: средний темп серии — игровые тики / реальные секунды (от batch.json до итоговой строки сцены).
-const fs = require('fs'), path = require('path')
-const RES = path.join(__dirname, '..', 'results')
+import * as fs from 'fs'
+import path = require('path')
+const RES = path.join(REPO_ROOT, 'farm/results')
 for (const prefix of process.argv.slice(2)) {
   let ticks = 0, wall = 0, n = 0
   for (const d of fs.readdirSync(RES).filter(x => x.startsWith(prefix + '-') && /-\d+$/.test(x))) {

@@ -1,13 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { load, ready } = require('./campaign-seams-fixture')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { load, ready } from './campaign-seams-fixture'
 
 test('E2E death stops before another gameplay intention, even with retained inventory', () => {
   const state = ready()
   const c = load(state, undefined, { ND_E2E: '1' })
   assert.throws(() => c.acceptResult({ state, by: { type: 'death', at: 123 } }),
-    e => e.stopCampaign && e.code === 'E2E_DEATH')
+    (e: any) => e.stopCampaign && e.code === 'E2E_DEATH')
   assert.equal(c.calls.length, 0)
 })
 

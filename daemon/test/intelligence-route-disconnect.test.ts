@@ -1,12 +1,12 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const { createRequire } = require('node:module')
-const { Vec3 } = require('vec3')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import { createRequire } from 'node:module'
+import { Vec3 } from 'vec3'
 
 test('a dig receipt after disconnect cannot continue an old route or write into the new bot cost history', async () => {
-  const registry = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')(registry)
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry as any)
   const bot = {
     version: '1.21.11', game: { dimension: 'the_nether' }, registry,
     entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true },

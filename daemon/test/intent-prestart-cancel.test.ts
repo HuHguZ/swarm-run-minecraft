@@ -1,11 +1,11 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { EventEmitter } = require('node:events')
-const { Session } = require('../src/session')
-const { EventBus } = require('../src/events')
-const clock = require('../src/game-clock')
-const reflexLock = require('../src/reflex-lock')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { EventEmitter } from 'node:events'
+import { Session } from '../src/session'
+import { EventBus } from '../src/events'
+import * as clock from '../src/game-clock'
+import reflexLock = require('../src/reflex-lock')
 
 function deferred () {
   let resolve
@@ -25,7 +25,7 @@ function fixture () {
   const game = clock.activate(new clock.GameClock({ manual: true }))
   game.setState({ is_frozen: true })
   const session = new Session({}, new EventBus(), { state: {}, append () {} })
-  session.tactics = { enabled: () => false }
+  session.tactics = { enabled: () => false } as any
   session.state = () => ({ connected: true, busy: session.current?.name || null, clock: game.snapshot() })
   return { session, game }
 }
@@ -38,7 +38,7 @@ for (const waiting of ['tactics', 'dodge', 'emergency']) {
     const { session, game } = fixture()
     const gate = deferred()
     let started = 0
-    if (waiting === 'tactics') session.tactics = { enabled: () => true, waitForRelease: () => gate.promise }
+    if (waiting === 'tactics') session.tactics = { enabled: () => true, waitForRelease: () => gate.promise } as any
     if (waiting === 'dodge') session.current = current('wind_leap', gate.promise)
     if (waiting === 'emergency') {
       const bot: any = session.bot = new EventEmitter()

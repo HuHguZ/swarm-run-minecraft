@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const { escapeFire } = require('../src/director')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import { escapeFire } from '../src/director'
 
 async function contact(name: string, sealed = false) {
   const timer = clock.activate(new clock.GameClock({ manual: true, epoch: 0 }))
@@ -45,7 +45,7 @@ test('a sealed berry cell is a failed rescue, not a successful zero-distance esc
 })
 
 test('pathfinding prices berry contact at feet and head without forbidding the route', () => {
-  const { tuneMovements } = require('../src/worlds')
+  const { tuneMovements }: typeof import('../src/worlds') = require('../src/worlds')
   let hazardY = 64, hazardX = 0
   const bot: any = { entity: { position: new Vec3(.5, 64, .5) }, game: { dimension: 'overworld' },
     registry: { blocksByName: { magma_block: { id: 1 } }, itemsByName: {} },

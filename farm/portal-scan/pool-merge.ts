@@ -1,6 +1,7 @@
 'use strict'
+import { REPO_ROOT, DIST_ROOT } from '../../daemon/src/paths'
 // Пул хороших сидов + лава из скана → farm/seeds/good-v2.json (агент G, 02.10.2026).
-//   node farm/portal-scan/pool-merge.js            — взять good-v1.json и results-pool/*.json
+//   node dist/farm/portal-scan/pool-merge.js            — взять good-v1.json и results-pool/*.json
 // Поля сида (новые):
 //   lava       — до ближайшей годной лавы, м по горизонтали от спавна (быстрейшая по оценке пути); false — в 200 м
 //                годной нет; null — сид не сканирован
@@ -14,14 +15,14 @@
 //   sky        — {d, cls, at, src}: ближайшая годная лава, видимая сверху (surface или rp с глубиной ≤ 3); null — нет в
 //                квадрате скана. Подсказка portal-natural.js (hintFor, режим run с seed/hint)
 // Годная лава — тело ≥ 10 источников (cast.js льёт 10 клеток по ведру). Скан — farm/portal-scan/scan.js (half 224).
-const fs = require('fs')
-const path = require('path')
-const ROOT = path.join(__dirname, '..', '..')
+import * as fs from 'fs'
+import path = require('path')
+const ROOT = REPO_ROOT
 const V1 = path.join(ROOT, 'farm', 'seeds', 'good-v1.json')
 const V2 = path.join(ROOT, 'farm', 'seeds', 'good-v2.json')
-const DIR = path.join(__dirname, 'results-pool')
+const DIR = path.join(REPO_ROOT, 'farm/portal-scan/results-pool')
 const R = 200
-const { skyOfScan } = require(path.join(ROOT, 'daemon', 'src', 'portal-natural'))
+const { skyOfScan } = require(path.join(DIST_ROOT, 'daemon', 'src', 'portal-natural'))
 
 const v1 = JSON.parse(fs.readFileSync(V1, 'utf8'))
 let scanned = 0

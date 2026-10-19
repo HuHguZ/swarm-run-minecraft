@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { digUp } = require('../src/build')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { digUp } from '../src/build'
 
 for (const [label, lavaAt, ceiling] of [
   ['жидкость вместо потолка', [0, 2, 0], false],

@@ -1,10 +1,10 @@
 import { planConversion, type ConversionPlan, type ConversionStep } from './planner'
 import { conversionProvenance, guaranteedDrops } from './registry'
 
-const clock = require('../game-clock')
-const { countItems, countOf } = require('../items')
-const pick = require('../pick')
-const Vec3 = require('vec3')
+import * as clock from '../game-clock'
+import { countItems, countOf } from '../items'
+import pick = require('../pick')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 export function craftStepMismatch(before: Record<string, number>, after: Record<string, number>, step: ConversionStep, pickups: Record<string, number> | null = null): string | null {
   for (const item of new Set([...Object.keys(step.inputs), step.output.item])) {
@@ -16,8 +16,8 @@ export function craftStepMismatch(before: Record<string, number>, after: Record<
 }
 
 const toolFacts = (bot: any, item: any) => ({ item: item.name, durabilityLeft: item.maxDurability - (item.durabilityUsed ?? 0), enchantments: {
-  silk_touch: require('../read').enchLevel(bot, item, 'silk_touch'),
-  fortune: require('../read').enchLevel(bot, item, 'fortune')
+  silk_touch: (require('../read') as typeof import('../read')).enchLevel(bot, item, 'silk_touch'),
+  fortune: (require('../read') as typeof import('../read')).enchLevel(bot, item, 'fortune')
 } })
 
 export function planFor(session: any, item: string, count = 1): ConversionPlan {
@@ -28,7 +28,7 @@ export function planFor(session: any, item: string, count = 1): ConversionPlan {
     .sort((a: any, b: any) => b.enchantments.silk_touch - a.enchantments.silk_touch)
   const harvestTools = Object.fromEntries(Object.entries(mc.blocksByName).map(([name, block]: [string, any]) => [name,
     Object.keys(block.harvestTools ?? {}).map(id => mc.items[id]?.name).filter(Boolean)]))
-  const containers = require('../containers')
+  const containers: typeof import('../containers') = require('../containers')
   const fuels = containers.conversionFuels(bot)
   const table = !!bot.findBlock({ matching: mc.blocksByName.crafting_table.id, maxDistance: 3 })
   const furnace = !!bot.findBlock({ matching: mc.blocksByName.furnace.id, maxDistance: 3 })
@@ -44,8 +44,8 @@ function blockUnderAim(bot: any, block: any) {
 }
 async function placeAndHarvest(session: any, ctl: any, step: ConversionStep) {
   const bot = session.bot
-  const { placeBlockAt, withTimeout } = require('../build')
-  const actions = require('../actions')
+  const { placeBlockAt, withTimeout }: typeof import('../build') = require('../build')
+  const actions: typeof import('../actions') = require('../actions')
   const perBlock = step.output.count / step.times
   let tool: any = null
   if (step.tool) {
@@ -74,7 +74,7 @@ async function placeAndHarvest(session: any, ctl: any, step: ConversionStep) {
     if (ctl.aborted || !blockUnderAim(bot, block)) throw new Error('преобразование прервано до разрушения')
     await bot.lookAt(block.position.offset(.5, .5, .5), true)
     const receipt = bot.version === '1.21.11' && bot._client
-      ? require('../environments/dig-receipt').watchDigReceipt(bot, pos, () => ctl.aborted) : null
+      ? (require('../environments/dig-receipt') as typeof import('../environments/dig-receipt')).watchDigReceipt(bot, pos, () => ctl.aborted) : null
     try {
       await withTimeout(bot.dig(block, false), 12000, 'блок не разрушен')
       if (receipt && await receipt.settle() !== 'confirmed') throw new Error('сервер не подтвердил разрушение блока преобразования')
@@ -84,7 +84,8 @@ async function placeAndHarvest(session: any, ctl: any, step: ConversionStep) {
     if (countOf(bot, step.output.item) < before + perBlock) throw new Error(`drop ${step.output.item} не подтверждён инвентарём: ${JSON.stringify({
       held: bot.heldItem?.name, block: bot.blockAt(pos)?.name, position: bot.entity.position,
       collect: bot._ndLastCollect, nearby: (Object.values(bot.entities) as any[]).filter(e => e.name === 'item' && e.position?.distanceTo(pos) < 5)
-        .map(e => ({ id: e.id, position: e.position, stack: require('../drops').stackOf?.(bot, e) }))
+        // @ts-expect-error drops не экспортирует stackOf (и он берёт одну сущность): stack всегда undefined; поведение не трогаю.
+        .map(e => ({ id: e.id, position: e.position, stack: (require('../drops') as typeof import('../drops')).stackOf?.(bot, e) }))
     })}`)
   }
 }
@@ -92,7 +93,7 @@ async function placeAndHarvest(session: any, ctl: any, step: ConversionStep) {
 export async function craftConverted(session: any, ctl: any, params: any): Promise<any | null> {
   if (!params.planOnly && session.bot.version === '1.21.11') {
     if (ctl.aborted) throw new Error('цепочка преобразования прервана')
-    if (!(await require('../invsync').refresh(session.bot, 2000, true))) throw new Error('сервер не подтвердил инвентарь перед преобразованием')
+    if (!(await (require('../invsync') as typeof import('../invsync')).refresh(session.bot, 2000, true))) throw new Error('сервер не подтвердил инвентарь перед преобразованием')
   }
   const plan = planFor(session, params.item, params.count ?? 1)
   if (params.planOnly) return { conversionPlan: plan, provenance: conversionProvenance }
@@ -102,13 +103,13 @@ export async function craftConverted(session: any, ctl: any, params: any): Promi
   for (const step of plan.steps) {
     if (ctl.aborted) throw new Error('цепочка преобразования прервана')
     const before = countItems(session.bot)
-    const pickupBaseline = step.mechanism === 'craft' ? require('../drops').pickupMark(session.bot) : null
+    const pickupBaseline = step.mechanism === 'craft' ? (require('../drops') as typeof import('../drops')).pickupMark(session.bot) : null
     const ownedBeforeSlots = [5, 6, 7, 8, 45].reduce((sum, slot) => sum + (session.bot.inventory.slots[slot]?.name === step.output.item ? session.bot.inventory.slots[slot].count : 0), 0)
     for (const [name, count] of Object.entries(step.inputs)) if ((before[name] ?? 0) < count) throw new Error(`инвентарь изменился: для ${step.id} нужно ${name}×${count}`)
     if (step.mechanism === 'place-dig') { await placeAndHarvest(session, ctl, step); last = { item: step.output.item, made: step.output.count } }
-    else if (step.mechanism === 'smelt') last = await require('../containers').smelt(session, ctl,
+    else if (step.mechanism === 'smelt') last = await (require('../containers') as typeof import('../containers')).smelt(session, ctl,
       { item: Object.keys(step.inputs).find(name => name !== step.fuel), count: step.times, fuel: step.fuel, timeoutSeconds: Math.min(600, step.times * 10 + 30) })
-    else last = await require('../actions').craft(session, ctl, { item: step.output.item, count: step.output.count,
+    else last = await (require('../actions') as typeof import('../actions')).craft(session, ctl, { item: step.output.item, count: step.output.count,
       spendReserve: params.spendReserve, conversionStep: true, conversionInputs: step.inputs, conversionTimes: step.times })
     const after = countItems(session.bot)
     let ownedAfter = after[step.output.item] ?? 0
@@ -117,7 +118,7 @@ export async function craftConverted(session: any, ctl: any, params: any): Promi
     if (ownedAfter < ownedBefore + step.output.count) throw new Error(`результат ${step.id} не подтверждён: ожидал +${step.output.count} ${step.output.item}`)
     let pickups: Record<string, number> | null = null
     if (step.mechanism === 'craft') {
-      pickups = require('../drops').pickupDelta(session.bot, pickupBaseline)
+      pickups = (require('../drops') as typeof import('../drops')).pickupDelta(session.bot, pickupBaseline)
       const mismatch = craftStepMismatch({ ...before, [step.output.item]: ownedBefore }, { ...after, [step.output.item]: ownedAfter }, step,
         pickups)
       if (mismatch) throw new Error(`расход ${step.id} не подтверждён: ${mismatch}`)

@@ -8,7 +8,7 @@ HALF=${2:-160}
 SLOTS=$(node -e "const s=process.argv[1];const o=[];for(const p of s.split(',')){const m=/^(\d+)(?:-(\d+))?$/.exec(p);if(!m)continue;for(let i=+m[1];i<=+(m[2]||m[1]);i++)o.push(i)}console.log(o.join(' '))" "$SPEC")
 mkdir -p farm/route-scan/logs
 for S in $SLOTS; do
-  ( node farm/route-scan/scan.js gen $S $HALF > farm/route-scan/logs/gen-$S.log 2>&1 && \
+  ( node dist/farm/route-scan/scan.js gen $S $HALF > farm/route-scan/logs/gen-$S.log 2>&1 && \
     node --max-old-space-size=4096 farm/route-scan/scan.js scan $S $HALF > farm/route-scan/logs/scan-$S.log 2>&1; \
     echo "слот $S: $(tail -c 300 farm/route-scan/logs/scan-$S.log)" ) &
   sleep 2

@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const { findNearestLand, findSwimRoute } = require('../src/movement')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { findNearestLand, findSwimRoute } from '../src/movement'
 
 // Known pond, four blocks deep, with a roof over the starting cell only.
 // The bank is five blocks above the bottom; no mining is needed to reach it.

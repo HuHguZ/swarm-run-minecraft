@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Спидраннерские ходы блоками как ходы pathfinder'а (TODO.md «Спидраннерское перемещение блоками», шаги 2–4;
 // поток movement, 02.10.2026). Включается ND_BRIDGE=1 (по умолчанию — выкл. до замера на ферме).
 //
@@ -26,7 +26,7 @@ const gameClock = require('./game-clock')
 //
 // Сорвалось (отказ, нет грани) — тело падает, а там уже сторож падения: блочный клатч (clutch.js) и ведро.
 
-const { Vec3 } = require('vec3')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 // Ход pathfinder'а — один раз, не require() на каждый ход моста/спуска внутри A* (S9).
 let MoveCls
 const MoveOf = () => MoveCls || (MoveCls = require('mineflayer-pathfinder/lib/move'))
@@ -303,10 +303,10 @@ function decide ({ pos, onGround, ref, dir, cellSolid, refSolid, pending, eye = 
 function install (session, deps: any = {}) {
   const bot = session.bot
   if (!bot || bot._ndBridgeExec) return bot && bot._ndBridgeExec
-  const faceAim = deps.faceAim || require('./pick').faceAim
+  const faceAim = deps.faceAim || (require('./pick') as typeof import('./pick')).faceAim
   const now = deps.now || gameClock.now
   const hand = deps.hand || bot._ndHandLock || { hold () {}, on: () => false, as: fn => fn() }
-  const bodyClear = require('./navigation/geometry').bodyClear
+  const bodyClear = (require('./navigation/geometry') as typeof import('./navigation/geometry')).bodyClear
   const log = deps.log || ((m, o) => console.log('[bridge] ' + m, o ? JSON.stringify(o) : ''))
   const stats: any = { placed: 0, confirmed: 0, denied: 0, timeout: 0, noFace: 0, stale: 0, noItem: 0, segments: 0, fell: 0 }
   const pending = new Map()
@@ -581,7 +581,7 @@ function install (session, deps: any = {}) {
       // (mv-cliff-dbg6: три «stuck» на обрыве 20, 26 с вместо 10). Пройденные ступени — долой, первой — метка в точке
       // тела: исполнитель засчитает её на следующем тике (тело стоит) и пойдёт к следующей ступени.
       if (k > 0) {
-        const m = new Vec3(e.position.x, e.position.y, e.position.z)
+        const m: any = new Vec3(e.position.x, e.position.y, e.position.z)
         m.toBreak = []; m.toPlace = []; m.parkour = false; m.cost = 0; m.remainingBlocks = (ns[0] && ns[0].remainingBlocks) || 0; m.ndKeep = true
         ns.splice(0, k, m)
         stats.descMarks = (stats.descMarks || 0) + 1
@@ -761,3 +761,7 @@ function steerTo (bot, e, dest, sneak) {
 }
 
 module.exports = { steerTo, replanSig, replanCount, goalKey, on, addBridge, bridgeMove, scarceCost, cellOf, fixPath, geometry, decide, install, below, fullCube, replaceable, REPLACE, FILLER }
+export {
+  steerTo, replanSig, replanCount, goalKey, on, addBridge, bridgeMove, scarceCost, cellOf, fixPath, geometry,
+  decide, install, below, fullCube, replaceable, REPLACE, FILLER
+}

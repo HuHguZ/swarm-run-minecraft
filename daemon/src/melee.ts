@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 // Ядро ближнего боя (просьба 2026-09-26: «все приёмы про-игроков, по максимуму
 // того, что даёт версия»). В арене боты делали 30–60 критов и 0–5 спринт-ударов
 // за раунд и «ездили» от каждого чужого удара. Здесь:
@@ -616,4 +616,4 @@ function axeSlot (bot) {
   return hotbarIndex(bot, i => /_axe$/.test(i.name))
 }
 
-module.exports = { install, guardAngles, fight, cooldownTicks, ticksFor, axeSlot, hotbarIndex, soundName, EYE, FAST_AXE, SWAP_KEEPS_CHARGE }
+export { install, guardAngles, fight, cooldownTicks, ticksFor, axeSlot, hotbarIndex, soundName, EYE, FAST_AXE, SWAP_KEEPS_CHARGE }

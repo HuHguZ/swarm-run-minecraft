@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const edges = require('../src/edges')
-const { Session } = require('../src/session')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import edges = require('../src/edges')
+import { Session } from '../src/session'
 // Тесты ниже — про воду и прежний предел (3 блока без ведра): ND_FREE_DROP=0. Свободный прыжок по хп — в конце файла.
 process.env.ND_FREE_DROP = '0'
 

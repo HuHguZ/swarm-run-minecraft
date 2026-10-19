@@ -1,13 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
-const Vec3 = require('vec3')
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const native = require('../src/tick-plugins').getPhysics()
+import { cjsContext } from './cjs-context'
+import { bodySource } from './source-fixture'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
 
 // Real movement/collision engine, a one-block stair, and lava 23 blocks below it.
 async function stepScene(dx: number, dz: number, offset: number, speed: number) {
@@ -42,7 +43,7 @@ async function stepScene(dx: number, dz: number, offset: number, speed: number) 
   const file = path.resolve(__dirname, '../src/nether.js'), real = createRequire(file)
   const context: any = { module: { exports: {} }, process, console, require: id =>
     id === './game-clock' ? { now: () => ticks * 50, setTimeout: (fn,ms) => { advance(ms); queueMicrotask(fn); return 0 }, clearTimeout () {} } : id === './movement' ? { ...real(id), sleep: async ms => advance(ms) } : real(id) }
-  vm.runInNewContext(fs.readFileSync(file,'utf8'),context)
+  vm.runInNewContext(bodySource(file),cjsContext(context))
   const result = await context.module.exports.bore({ bot, mcData:registry }, { aborted:false,onAbort:[] },
     { x:dx*2,z:dz*2 }, { deadline:2500,maxSteps:1,minY:54 })
   const ok = result.moved === 1

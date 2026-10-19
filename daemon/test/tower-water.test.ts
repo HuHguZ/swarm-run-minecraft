@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 
-const registry = require('prismarine-registry')('1.21.11')
-const Block = require('prismarine-block')(registry)
-const Item = require('prismarine-item')(registry)
-const native = require('../src/tick-plugins').getPhysics()
-const clockMod = require('../src/game-clock')
-const build = require('../src/build')
-const pick = require('../src/pick')
+const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
+const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
+const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
+const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+import * as clockMod from '../src/game-clock'
+import build = require('../src/build')
+import pick = require('../src/pick')
 const IDLE = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 
 function scene({ water = true, arriving = false, receive = true, change = null }: any = {}) {
@@ -56,7 +56,7 @@ function scene({ water = true, arriving = false, receive = true, change = null }
       bot.entity.yaw = Math.atan2(-d.x, -d.z); bot.entity.pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
     }
   })
-  require('../src/swimming').install(bot)
+  ;(require('../src/swimming') as typeof import('../src/swimming')).install(bot)
   const confirmed: Vec3[] = []
   const sent: Vec3[] = []
   let serverPos = bot.entity.position.clone()
@@ -196,7 +196,7 @@ test('climbBack: its report includes confirmed auxiliary support without countin
   s.bot.pathfinder = { setGoal() {} }
   const target = { id: 2, type: 'player', _ndVisible: true, position: new Vec3(10, 4, .5), equipment: [] }
   try {
-    const result = await s.run(() => require('../src/edges').climbBack(s.bot, s.ctl, target, { floorY: 4, maxMs: 15000 }))
+    const result = await s.run(() => (require('../src/edges') as typeof import('../src/edges')).climbBack(s.bot, s.ctl, target, { floorY: 4, maxMs: 15000 }))
     assert.equal(result.ok, true, JSON.stringify(result))
     assert.equal(s.bot.entity.position.y, 4)
     assert.equal(result.placed, s.confirmed.length)

@@ -1,19 +1,19 @@
 
-const gameClock = require('.././game-clock')
+const gameClock: typeof import('.././game-clock') = require('.././game-clock')
 
-const { goals } = require('mineflayer-pathfinder')
+const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
 
-const { Vec3 } = require('vec3')
+const { Vec3 }: typeof import('vec3') = require('vec3')
 
-const { sleep, xyz } = require('.././movement')
+const { sleep, xyz }: typeof import('.././movement') = require('.././movement')
 
-const { visibleOf, seesBlock } = require('.././sight')
+const { visibleOf, seesBlock }: typeof import('.././sight') = require('.././sight')
 
-const { raySees, eyePos } = require('.././perception')
+const { raySees, eyePos }: typeof import('.././perception') = require('.././perception')
 
-const worlds = require('.././worlds')
+const worlds: typeof import('.././worlds') = require('.././worlds')
 
-const BF = require('.././barter-flow')
+const BF: typeof import('.././barter-flow') = require('.././barter-flow')
 
 const PLACE = 'бастион (ад)'
 
@@ -72,7 +72,7 @@ function angerSet (bot, feet = null, sneak = true) {
 }
 
 function nearestTrader (bot, r = 48) {
-  const { walkable } = require('.././walkable')
+  const { walkable }: typeof import('.././walkable') = require('.././walkable')
   const me = bot.entity.position
   const list = mobs(bot, 'piglin', r).filter(e => !isBaby(bot, e) && !aggressive(bot, e)).sort((a: any, c: any) => a.position.distanceTo(me) - c.position.distanceTo(me))
   if (!list.length) return null
@@ -102,7 +102,7 @@ async function armGold (session, ctl) {
   if (await wearGold(bot)) return true
   const has = n => countOf(bot, n)
   if (has('gold_ingot') + 9 * has('gold_block') + Math.floor(has('gold_nugget') / 9) < 4) return false
-  const A = require('.././actions')
+  const A: typeof import('.././actions') = require('.././actions')
   try {
     if (has('gold_ingot') < 4 && has('gold_block')) await A.craft(session, ctl, { item: 'gold_ingot', count: 9 })
     if (has('gold_ingot') < 4 && has('gold_nugget') >= 9) await A.craft(session, ctl, { item: 'gold_ingot', count: Math.floor(has('gold_nugget') / 9) })
@@ -119,14 +119,14 @@ function canReach (bot, pos, reach = 4.4) {
 async function walkGoal (session, ctl, goal, ms, { dig = true }: any = {}) {
   if (ctl.waitReflex) await ctl.waitReflex()
   const bot = session.bot
-  const { guarded } = require('.././nether')
+  const { guarded }: typeof import('.././nether') = require('.././nether')
   const mv = bot.pathfinder && bot.pathfinder.movements
   const was = mv ? { canDig: mv.canDig, scaf: mv.scafoldingBlocks } : null
   if (mv && !dig) { mv.canDig = false; mv.scafoldingBlocks = [] }
   // ND_GUARD=1: идёт ответ стража (столб/коробка) — сперва дождаться его, и ходьбу оборвать, если он начнётся.
-  if (process.env.ND_GUARD !== '0') await require('.././ne-guard').waitIdle(bot)
+  if (process.env.ND_GUARD !== '0') await (require('.././ne-guard') as typeof import('.././ne-guard')).waitIdle(bot)
   return guarded(session, ctl, async sub => {
-    const clock = () => require('.././reflex-lock').clock(session)
+    const clock = () => (require('.././reflex-lock') as typeof import('.././reflex-lock')).clock(session)
     const until = clock() + ms
     let timer = null
     const stop = () => { try { bot.pathfinder.setGoal(null) } catch {} }
@@ -136,7 +136,7 @@ async function walkGoal (session, ctl, goal, ms, { dig = true }: any = {}) {
       await Promise.race([
         bot.pathfinder.goto(goal),
         // Лава под шагом — сразу стоп и прыжок к полу (в Аду ведро не работает).
-        new Promise<any>((_resolve, reject) => { watch = gameClock.setInterval(() => { if (session.reflex) return; if (clock() >= until) reject(new Error('время вышло')); else if (inLava(bot)) reject(new Error('лава')); else if (process.env.ND_GUARD !== '0' && process.env.ND_GUARD_REFLEX === '0' && require('.././ne-guard').busy(bot)) reject(new Error('ответ стража')) }, 100) })
+        new Promise<any>((_resolve, reject) => { watch = gameClock.setInterval(() => { if (session.reflex) return; if (clock() >= until) reject(new Error('время вышло')); else if (inLava(bot)) reject(new Error('лава')); else if (process.env.ND_GUARD !== '0' && process.env.ND_GUARD_REFLEX === '0' && (require('.././ne-guard') as typeof import('.././ne-guard')).busy(bot)) reject(new Error('ответ стража')) }, 100) })
       ])
       // goto (mineflayer-pathfinder 2.4.5, lib/goto.js) «успешно» кончается и
       const f = bot.entity.position.floored()
@@ -186,7 +186,7 @@ function effectOn (bot, name) {
 
 async function drinkFireRes (bot) {
   if (effectOn(bot, 'fire_resistance')) return 'уже'
-  const { potionOf } = require('.././pvp')
+  const { potionOf }: typeof import('.././pvp') = require('.././pvp')
   const pot = bot.inventory.items().find(i => i.name === 'potion' && /fire_resistance$/.test(potionOf(i) || ''))
   const splash = pot ? null : bot.inventory.items().find(i => i.name === 'splash_potion' && /fire_resistance$/.test(potionOf(i) || ''))
   if (!pot && !splash) return null
@@ -229,8 +229,8 @@ async function lavaEscapeDeep (bot) {
 
 async function makeIronPick (session, ctl) {
   const bot = session.bot
-  const A = require('.././actions')
-  const C = require('.././containers')
+  const A: typeof import('.././actions') = require('.././actions')
+  const C: typeof import('.././containers') = require('.././containers')
   const has = n => countOf(bot, n)
   const pick = () => bot.inventory.items().some(i => GOLD_PICK.test(i.name))
   if (pick()) return true
@@ -331,12 +331,12 @@ async function lavaEscape (bot) {
 }
 
 async function pickUp (bot, ctl, radius = 6, ms = 5000) {
-  try { return await require('.././actions').collectNearbyDrops(bot, ctl, { radius, timeoutMs: ms }) } catch { return 0 }
+  try { return await (require('.././actions') as typeof import('.././actions')).collectNearbyDrops(bot, ctl, { radius, timeoutMs: ms }) } catch { return 0 }
 }
 
 async function handIngot (session, ctl, pg, walkMs = 5000) {
   const bot = session.bot
-  const pick = require('.././pick')
+  const pick: typeof import('.././pick') = require('.././pick')
   if (!pg || !bot.entities[pg.id] || admiring(pg)) return false
   if (pg.position.distanceTo(bot.entity.position) > 2.6) {
     await walkGoal(session, ctl, new goals.GoalNear(pg.position.x, pg.position.y, pg.position.z, 1.5), walkMs)
@@ -429,7 +429,7 @@ async function takeGoldBlock (session, ctl, pos, st) {
 
 async function lootChest (session, ctl, pos, st) {
   const bot = session.bot
-  const S = require('.././structures')
+  const S: typeof import('.././structures') = require('.././structures')
   const key = keyOf(pos)
   if (!canReach(bot, pos, 4.2)) {
     await walkGoal(session, ctl, new goals.GoalLookAtBlock(pos, bot.world, { reach: 3.8 }), 20000)
@@ -451,7 +451,7 @@ async function lootChest (session, ctl, pos, st) {
     const r = await S.takeWorth(session, ctl, pos, { kind: 'bastion' })
     st.chests.push({ at: key, took: r.took || {}, stopped: r.stopped })
     if (r.stopped && /видят/.test(r.stopped)) { st.skip.set(key, gameClock.now() + 25000); return 'watched' }
-    if (require('./mining-cycle').confirmedChestLoot(r, pos, ctl.aborted)) {
+    if ((require('./mining-cycle') as typeof import('./mining-cycle')).confirmedChestLoot(r, pos, ctl.aborted)) {
       st.looted.add(key)
       return 'looted'
     }
@@ -471,7 +471,7 @@ async function unpackGold (session, ctl, want) {
   if (!blocks || have >= want) return 0
   const n = Math.min(blocks, Math.ceil((want - have) / 9))
   try {
-    await require('.././actions').craft(session, ctl, { item: 'gold_ingot', count: n * 9 })
+    await (require('.././actions') as typeof import('.././actions')).craft(session, ctl, { item: 'gold_ingot', count: n * 9 })
   } catch (e) { log('слитки', { error: e.message }) }
   return countOf(bot, 'gold_ingot') - have
 }
@@ -479,7 +479,7 @@ async function unpackGold (session, ctl, want) {
 function fireRes (bot) {
   let n = 0
   try {
-    const { potionsOf } = require('.././fightkit')
+    const { potionsOf }: typeof import('.././fightkit') = require('.././fightkit')
     const p = potionsOf(bot)
     n = (p.fire_resistance || 0) + (p.long_fire_resistance || 0) + (p.splash_fire_resistance || 0) + (p.splash_long_fire_resistance || 0)
   } catch {}
@@ -487,7 +487,7 @@ function fireRes (bot) {
 }
 
 function reserveKeeper (bot) {
-  const pack = require('.././pack')
+  const pack: typeof import('.././pack') = require('.././pack')
   const left = pack.reserveLeft(bot)
   return (name, count) => {
     const kind = pack.reserveKind(bot, name)
@@ -579,7 +579,7 @@ function nextTarget (bot, st, kinds = ['gold', 'chest']) {
 
 function inOwnTunnel (bot, S) {
   if (!S || !S.own || !S.own.size) return false
-  const SL = require('.././sealed')
+  const SL: typeof import('.././sealed') = require('.././sealed')
   const f = bot.entity.position.floored()
   return S.own.has(SL.keyV(f)) || S.own.has(SL.keyV(f.offset(0, 1, 0)))
 }
@@ -591,7 +591,7 @@ function fullCover (b) {
 }
 
 function reachSet (bot) {
-  const { walkable } = require('.././walkable')
+  const { walkable }: typeof import('.././walkable') = require('.././walkable')
   const set = new Set()
   try { for (const n of walkable(bot, bot.entity.position, { radius: 24, maxNodes: 5000 })) set.add(keyOf(n.pos)) } catch {}
   return set
@@ -627,3 +627,11 @@ async function centerIn (bot, c, ms = 2500) {
 }
 
 module.exports = { gameClock, goals, Vec3, sleep, xyz, visibleOf, seesBlock, raySees, eyePos, worlds, BF, PLACE, ADMIRE_MS, LOVED, GOLD_ARMOR, ARMOR_DEST, GOLD_PICK, JUNK_KEEP, log, clamp, keyOf, countOf, itemNamed, metaOf, isBaby, aggressive, offhand, admiring, mobs, seesMob, angerSet, nearestTrader, goldWorn, wearGold, armGold,canReach, walkGoal, inLava, lavaFreeCell, effectOn, drinkFireRes, lavaEscapeDeep, makeIronPick, waitWatched, fireStep, lavaEscape, pickUp, handIngot, takeGoldBlock, lootChest, unpackGold, fireRes, reserveKeeper, dropJunk, vantagePoints, centerGuess, survey, nextTarget, inOwnTunnel, fullCover, reachSet, threatens, SIDES4, centerIn }
+export {
+  gameClock, goals, Vec3, sleep, xyz, visibleOf, seesBlock, raySees, eyePos, worlds, BF, PLACE, ADMIRE_MS, LOVED,
+  GOLD_ARMOR, ARMOR_DEST, GOLD_PICK, JUNK_KEEP, log, clamp, keyOf, countOf, itemNamed, metaOf, isBaby, aggressive,
+  offhand, admiring, mobs, seesMob, angerSet, nearestTrader, goldWorn, wearGold, armGold, canReach, walkGoal,
+  inLava, lavaFreeCell, effectOn, drinkFireRes, lavaEscapeDeep, makeIronPick, waitWatched, fireStep, lavaEscape,
+  pickUp, handIngot, takeGoldBlock, lootChest, unpackGold, fireRes, reserveKeeper, dropJunk, vantagePoints,
+  centerGuess, survey, nextTarget, inOwnTunnel, fullCover, reachSet, threatens, SIDES4, centerIn
+}

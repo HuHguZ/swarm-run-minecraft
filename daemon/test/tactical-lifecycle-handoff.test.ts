@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const { TacticalSystem } = require('../src/tactics/minecraft')
-const { runIntent } = require('../src/session/intent-runner')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import { TacticalSystem } from '../src/tactics/minecraft'
+import { runIntent } from '../src/session/intent-runner'
 
 function controller() {
   return { aborted: false, onAbort: [] as Array<() => void>, abort() {
@@ -31,7 +31,7 @@ function fixture() {
     explosion: false, dangerousFall: false, emergencyController: false, inWater: true, drowning,
     cover: false, portal: false, escapeRoute: false, blocks: 24, water: false, edible: false,
     canFight: false, contact: false, shelter: null, protectedEncounter: false })
-  const system = session.tactics = new TacticalSystem(session, { observe: state, record() {},
+  const system: any = session.tactics = new TacticalSystem(session, { observe: state, record() {},
     execute: async () => ({ ok: false, breathing: true }) })
   system.attach(bot)
   return { timer, session, system, state, events, drowning: (value: boolean) => { drowning = value },

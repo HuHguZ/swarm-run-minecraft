@@ -17,7 +17,7 @@ import { bodyClear, containsWater, groundedHazardClear, shapeBoxes, standPositio
 import { landingDamage } from './landing'
 import { executeJump, executePlan, IDLE, type Cancellation, type Control, type JumpPlan, type MovementBot, type State, type Step } from './parkour'
 
-const { PlayerState } = require('../tick-plugins').getPhysics() as { PlayerState: new(bot: MovementBot, control: Control) => State }
+const { PlayerState } = (require('../tick-plugins') as typeof import('../tick-plugins')).getPhysics() as { PlayerState: new(bot: MovementBot, control: Control) => State }
 const controls = (extra: Partial<Control> = {}): Control => ({ ...IDLE, ...extra })
 const flat = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.z - b.z)
 function clone(st: State): State { return Object.assign(Object.create(Object.getPrototypeOf(st)) as State, st, { pos: st.pos.clone(), vel: st.vel.clone(), control: { ...st.control } }) }
@@ -327,7 +327,7 @@ const log = (m: string) => console.log('[descent] ' + m)
 /** Дойти pathfinder'ом до клетки опоры `at` (уже там — сразу). */
 async function walkTo(bot: any, at: Vec3, ms: number): Promise<{ ok: boolean; why?: string }> {
   if (flat(bot.entity.position, at) <= .3 && Math.abs(bot.entity.position.y - at.y) <= .1) return { ok: true }
-  const { goals } = require('mineflayer-pathfinder'); const gameClock = require('../game-clock')
+  const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder'); const gameClock: typeof import('../game-clock') = require('../game-clock')
   let timer: unknown = null
   try {
     await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(Math.floor(at.x), Math.floor(at.y + 1e-6), Math.floor(at.z))),
@@ -345,7 +345,7 @@ export async function waterDrop(session: Session, ctl: Cancellation, option: Wat
   for (const variant of [option.plan.variant, ...DROP_VARIANTS.filter(v => v !== option.plan.variant)]) {
     const plan = planWaterDrop(bot, option.water, variant, 160, option.plan.damage)
     if (!plan) continue
-    if (plan.damage > 0) bot._ndExpectFall = { until: require('../game-clock').now() + plan.ticks * 50 + 3000, max: plan.damage }
+    if (plan.damage > 0) bot._ndExpectFall = { until: (require('../game-clock') as typeof import('../game-clock')).now() + plan.ticks * 50 + 3000, max: plan.damage }
     let r
     try { r = await executePlan(bot, ctl, plan, st => st.isInWater || st.isInWeb || st.onGround) } finally { if (plan.damage > 0) delete bot._ndExpectFall }
     // Выплыть на берег: с глубины pathfinder пути не видит (noPath — узел на дне, до кромки 2 вверх), лестница выхода
@@ -385,7 +385,7 @@ export async function ledgeHops(session: Session, ctl: Cancellation, goal: Point
     for (const target of ledgeOptions(bot, goal, { maxFallDamage }).slice(0, 3)) {
       // Принятый урон падения (гибкость) не должен рвать goto как «урон» (events INTERRUPTING): session.wireHealth молчит
       // о падении в пределах max до until — executeJump сам сверяет квитанцию урона с прогнозом.
-      if (maxFallDamage > 0) bot._ndExpectFall = { until: require('../game-clock').now() + 5000, max: maxFallDamage }
+      if (maxFallDamage > 0) bot._ndExpectFall = { until: (require('../game-clock') as typeof import('../game-clock')).now() + 5000, max: maxFallDamage }
       let r
       try {
         let plan = null
@@ -414,7 +414,7 @@ export async function ledgeHops(session: Session, ctl: Cancellation, goal: Point
  * блок на видимую грань стены, посадка ≤ 3. Урон или нет шага — стоп. Последние ≤ 3 блока — обычный ход pathfinder'а.
  */
 export async function blockSteps(session: Session, ctl: Cancellation, goal: Point, { maxSteps = 40 }: { maxSteps?: number } = {}): Promise<{ steps: number; down: number; placed: number; why?: string }> {
-  const bot = session.bot; const gameClock = require('../game-clock'); const y0 = bot.entity.position.y
+  const bot = session.bot; const gameClock: typeof import('../game-clock') = require('../game-clock'); const y0 = bot.entity.position.y
   const placed0 = bot._ndClutch?.stats?.placed ?? 0; let steps = 0; let last: Vec3 | null = null
   const report = (why?: string) => ({ steps, down: y0 - bot.entity.position.y, placed: (bot._ndClutch?.stats?.placed ?? 0) - placed0, why })
   try { bot.pathfinder?.setGoal(null) } catch {}
@@ -457,8 +457,8 @@ export async function blockSteps(session: Session, ctl: Cancellation, goal: Poin
  * к цели, в падении лодка на видимую верхнюю грань земли под собой и посадка в неё (boat-hop fall), высадка, лодку
  * разбить и подобрать — не расходуется. Жемчуг на спуск не тратится.
  */
-export async function boatDrop(session: Session, ctl: Cancellation, goal: Point): Promise<{ ok: boolean; why?: string; fall: number; hpLost: number; boatBack: boolean; sec: number }> {
-  const bot = session.bot; const clock = require('../game-clock'); const hop = require('../combat/boat-hop')
+export async function boatDrop(session: Session, ctl: Required<Cancellation>, goal: Point): Promise<{ ok: boolean; why?: string; fall: number; hpLost: number; boatBack: boolean; sec: number }> {
+  const bot = session.bot; const clock: typeof import('../game-clock') = require('../game-clock'); const hop: typeof import('../combat/boat-hop') = require('../combat/boat-hop')
   const t0 = clock.now(); const y0 = bot.entity.position.y; const hp0 = bot.health ?? 20; const boats0 = boatCount(bot)
   const report = (ok: boolean, why?: string) => ({ ok, why, fall: Math.round((y0 - bot.entity.position.y) * 10) / 10, hpLost: Math.max(0, hp0 - (bot.health ?? 0)),
     boatBack: boatCount(bot) >= boats0, sec: Math.round((clock.now() - t0) / 100) / 10 })
@@ -480,7 +480,7 @@ export async function boatDrop(session: Session, ctl: Cancellation, goal: Point)
   }
   bot.clearControlStates()
   // Лодка в руке заранее: в падении окно посадки — 1–2 тика (на 20 бл. ~2 бл./тик), смена предмета их съедает.
-  try { const item = require('../combat/boat-placement').boatItem(bot); if (item && bot.heldItem?.name !== item.name) await bot.equip(item, 'hand') } catch {}
+  try { const item = (require('../combat/boat-placement') as typeof import('../combat/boat-placement')).boatItem(bot); if (item && bot.heldItem?.name !== item.name) await bot.equip(item, 'hand') } catch {}
   await bot.look(Math.atan2(-dir.x, -dir.z), 0, true)
   // Невысоко (≤ 24) — с разбега и прыжком: посадка в 3+ бл. от стены, лодке (1.375 в ширину) нужен простор вокруг клетки (у
   // стены на 16 бл. «no visible collision-free boat surface» 6 из 6). Выше — шагом: дольше летит, относит и так, а разбег
@@ -506,12 +506,12 @@ export async function boatDrop(session: Session, ctl: Cancellation, goal: Point)
   // Высадиться, лодку разбить и подобрать (лежит у тела).
   const id = bot.vehicle?.id
   if (id !== undefined) {
-    const ride = require('../ride')
+    const ride: typeof import('../ride') = require('../ride')
     for (let k = 0; k < 3 && bot.vehicle && !ctl.aborted; k++) await ride.dismount(bot, 1500)
     const broke = await hop.breakBoatEntity(session, ctl, id, 2500)
     log(`boat: высадка ${bot.vehicle ? 'НЕ вышла' : 'да'}, лодка ${broke ? 'разбита' : 'цела'}`)
   }
-  try { await require('../actions').collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 2500 }) } catch (e) { log('boat: подбор ' + (e as Error).message) }
+  try { await (require('../actions') as typeof import('../actions')).collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 2500 }) } catch (e) { log('boat: подбор ' + (e as Error).message) }
   return report(!!r.ok && !bot.vehicle, r.ok ? (bot.vehicle ? 'still_mounted' : undefined) : r.why)
 }
 function boatCount(bot: any): number { return (bot.inventory?.items() || []).filter((i: any) => /_(boat|raft)$/.test(i.name) && !/chest/.test(i.name)).reduce((n: number, i: any) => n + i.count, 0) }
@@ -534,7 +534,7 @@ export function boatSeconds(drop: number, hp: number, water: boolean): number {
  * Решение в goto: цель ниже на `minDrop`+ — сравнить пеший путь pathfinder'а с прыжком в воду, уступами и блоками,
  * исполнить лучший, если выигрыш ≥ minGain с (или пешего пути нет). Дальше goto идёт сам от места посадки.
  */
-export async function maybeDescend(session: Session, ctl: Cancellation, goalXYZ: { x: number; y: number | null; z: number }, goal: unknown, opt: Record<string, any> = {}): Promise<Record<string, unknown>> {
+export async function maybeDescend(session: Session, ctl: Required<Cancellation>, goalXYZ: { x: number; y: number | null; z: number }, goal: unknown, opt: Record<string, any> = {}): Promise<Record<string, unknown>> {
   const bot = session.bot; const me = bot.entity?.position
   const minGain = opt.minGain ?? 3; const minDrop = opt.minDrop ?? 6
   if (!me || !bot.entity.onGround || bot.entity.isInWater || bot.entity.isInLava) return { used: null, why: 'не на земле' }
@@ -542,7 +542,7 @@ export async function maybeDescend(session: Session, ctl: Cancellation, goalXYZ:
   const gy = goalXYZ.y ?? surfaceY(bot, goalXYZ.x, goalXYZ.z, me.y)
   if (gy == null || me.y - gy < minDrop) return { used: null, why: 'цель не ниже' }
   const target = { x: goalXYZ.x + .5, y: gy, z: goalXYZ.z + .5 }
-  const drop = me.y - gy; const t0 = performance.now(); const clock = require('../game-clock'); const g0 = clock.now()
+  const drop = me.y - gy; const t0 = performance.now(); const clock: typeof import('../game-clock') = require('../game-clock'); const g0 = clock.now()
   // Сначала дешёвое: есть ли вообще спуск (вода внизу, уступ ≥ 2, стена для блоков); нет — goto без задержки на A*.
   // Уступы и блоки заранее не проверить целиком — оценка по шагам (ниже); блоками — 1.1 с на шаг по 3 бл. вниз.
   const hp = bot.health ?? 20; const flex = opt.maxFallDamage ?? (hp >= 16 ? 2 : 0)
@@ -567,7 +567,7 @@ export async function maybeDescend(session: Session, ctl: Cancellation, goalXYZ:
   // Лаборатория: ND_DESCENT_FORCE=boat — только этот вариант (замер приёма без выбора).
   if (process.env.ND_DESCENT_FORCE) options.splice(0, options.length, ...options.filter(o => o.kind === process.env.ND_DESCENT_FORCE))
   if (!options.length) return { used: null, why: 'нет спуска', planMs: Math.round(performance.now() - t0) }
-  const hopgoto = require('../hopgoto')
+  const hopgoto: typeof import('../hopgoto') = require('../hopgoto')
   // 0.4 с реального на A*: с блоками в рюкзаке поиск раздувается стройкой (try-descent wall: таймаут 1 с = ~235 игровых
   // тиков на lockstep 750, 20 тиков на 20 TPS); неполный путь оценивается (ниже), а не ждётся.
   const walk = await hopgoto.planWalk(bot, goal, { ms: opt.planMs ?? 400, abortIf: () => ctl.aborted })

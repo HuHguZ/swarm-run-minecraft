@@ -1,7 +1,7 @@
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { deathFreeEnd, netherGoalMet, netherPass, bastionMetrics, explicitBarterMetrics, deliveredBarterReceipts, netherStageProgress, netherSupplyProgress } = require('../src/campaign/nether-progress')
-const { emptyWorld, fact } = require('../src/core/world-state')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { deathFreeEnd, netherGoalMet, netherPass, bastionMetrics, explicitBarterMetrics, deliveredBarterReceipts, netherStageProgress, netherSupplyProgress } from '../src/campaign/nether-progress'
+import { emptyWorld, fact } from '../src/core/world-state'
 
 test('Nether completion fails when death arrives in the same observation as End entry', () => {
   assert.equal(deathFreeEnd({ reachedEnd: true, health: 20, deaths: 0 }), true)

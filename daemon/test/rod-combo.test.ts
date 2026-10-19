@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const U = require('../src/utility')
+import { Vec3 } from 'vec3'
+import * as U from '../src/utility'
 
 // s7b 06.10 (просьба пользователя: удочкой подтягивать в комбо, и контрмеры).
 function botAt (items: any[]) {

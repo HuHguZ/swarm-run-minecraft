@@ -15,18 +15,18 @@ for seed in $(echo "$seeds" | tr ',' ' '); do
     t="$tag-$k-s9$arm"
     [ -f "farm/results/$t/slot-$slot.jsonl" ] && { echo "$t уже есть — пропуск"; continue; }
     for try in $(seq 1 1440); do
-      ND_S9=$arm node farm/farm.js up 1 --from "$slot" --seeds "$seed" --fresh --lockstep --reup --code "$code" > "farm/logs/s9-up-$slot.log" 2>&1
+      ND_S9=$arm node dist/farm/farm.js up 1 --from "$slot" --seeds "$seed" --fresh --lockstep --reup --code "$code" > "farm/logs/s9-up-$slot.log" 2>&1
       grep -q "демон .* ✓" "farm/logs/s9-up-$slot.log" && break
       grep -q "лимит" "farm/logs/s9-up-$slot.log" || { echo "[$(date +%H:%M:%S)] up не вышел:"; tail -5 "farm/logs/s9-up-$slot.log"; exit 1; }
       sleep 5
     done
     grep -q "демон .* ✓" "farm/logs/s9-up-$slot.log" || { echo "мира не дали за 2 ч"; exit 1; }
     echo "[$(date +%H:%M:%S)] слот $slot: сид $seed, партия $t, снимок $code, ND_S9=$arm"
-    ND_S9=$arm node farm/farm.js run try-lab-fresh.js --slots "$slot" --tag "$t" UNTIL=nether MINUTES=${MINUTES:-20} DEATHS_MAX=1 "$@" > "farm/results/$t.run.log" 2>&1
+    ND_S9=$arm node dist/farm/farm.js run try-lab-fresh.js --slots "$slot" --tag "$t" UNTIL=nether MINUTES=${MINUTES:-20} DEATHS_MAX=1 "$@" > "farm/results/$t.run.log" 2>&1
     cp "farm/daemon-$slot.out.log" "farm/results/$t/daemon-$slot.out.log" 2>/dev/null
     cp "farm/server-$slot/console.out.log" "farm/results/$t/console-$slot.out.log" 2>/dev/null
     tail -1 "farm/results/$t/slot-$slot.jsonl" 2>/dev/null | cut -c1-300
   done
 done
-node farm/farm.js down "$slot" > /dev/null 2>&1
+node dist/farm/farm.js down "$slot" > /dev/null 2>&1
 echo "[$(date +%H:%M:%S)] слот $slot: серия $tag кончилась"

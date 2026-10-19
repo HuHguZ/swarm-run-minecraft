@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const { equipBestTool } = require('../src/items')
-const tools = require('../src/tools')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import { equipBestTool } from '../src/items'
+import * as tools from '../src/tools'
 const sword = { name: 'stone_sword', type: 1, maxDurability: 131 }
 const log = { name: 'oak_log', type: 2 }
 const shovel = { name: 'stone_shovel', type: 3, maxDurability: 131 }
@@ -76,8 +76,8 @@ for (const [name, mode, worn, expected] of [
 })
 
 test('копка, пережившая смерть, не вешает pathfinder: дальний блок — отказ сразу, смерть обрывает копку, флаг сбрасывается при возрождении', async () => {
-  const { EventEmitter } = require('node:events')
-  const Vec3 = require('vec3')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const bot = Object.assign(new EventEmitter(), botWith([log]))
   bot.entity = { position: new Vec3(0.5, 64, 0.5) }
   let rawCalls = 0

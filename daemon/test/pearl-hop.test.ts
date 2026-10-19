@@ -1,9 +1,9 @@
 'use strict'
 // Решатель броска жемчуга (pearl-hop.js): угол, отказ при стене, пустоте и малом хп.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const hop = require('../src/pearl-hop')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import * as hop from '../src/pearl-hop'
 
 // Мир: остров end_stone радиуса R с верхом y = top, платформа 5×5 обсидиана на y = 48 у (100, 0),
 // extra — Map 'x,y,z' -> имя блока.

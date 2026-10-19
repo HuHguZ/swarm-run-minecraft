@@ -1,7 +1,7 @@
-// Сводка серий try-lab-mv-gap.js (поток movement): node farm/movement/an-mv.js <tag> [tag…]
+// Сводка серий try-lab-mv-gap.js (поток movement): node dist/farm/movement/an-mv.js <tag> [tag…]
 // Сводка серий try-lab-mv-gap: сцена × режим → n, ok, медиана ms (только ok), падения, minHp, блоки, жемчуг.
-const fs = require('fs')
-const path = require('path')
+import * as fs from 'fs'
+import path = require('path')
 const tags = process.argv.slice(2)
 const rows = []
 for (const t of tags) {

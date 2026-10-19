@@ -1,11 +1,11 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const gamedata = require('../src/gamedata')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as gamedata from '../src/gamedata'
 
 test('реестр типов урона — одна копия, сверена с копиями боевых модулей', () => {
   assert.equal(gamedata.DAMAGE_TYPES.length, 50)
-  assert.deepEqual(gamedata.DAMAGE_TYPES, require('../src/dragon').DAMAGE_TYPES)
+  assert.deepEqual(gamedata.DAMAGE_TYPES, (require('../src/dragon') as typeof import('../src/dragon')).DAMAGE_TYPES)
   assert.equal(gamedata.damageTypeName(40), 'starve')
   assert.equal(gamedata.damageTypeName(22), 'in_wall')
   assert.equal(gamedata.damageTypeName(10), 'fall')
@@ -14,7 +14,7 @@ test('реестр типов урона — одна копия, сверена
 })
 
 function fireBot (dimension) {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const calls = []
   const bot = {
     game: { dimension },
@@ -33,7 +33,7 @@ function fireBot (dimension) {
 }
 
 test('escapeFire: в Аду ведро не льёт (вода испаряется) — сразу прыжок к полу', async () => {
-  const { Director } = require('../src/director')
+  const { Director }: typeof import('../src/director') = require('../src/director')
   const { bot, calls } = fireBot('the_nether')
   const d = new Director({ bot, cfg: {} as Record<string, any> })
   const r = await d.escapeFire()
@@ -47,7 +47,7 @@ test('escapeFire: в Аду ведро не льёт (вода испаряет�
 })
 
 test('урон куста, кактуса и падения не рвёт работу, но приезжает с итогом; удар моба рвёт', async () => {
-  const { EventBus } = require('../src/events')
+  const { EventBus }: typeof import('../src/events') = require('../src/events')
   const bus = new EventBus()
   let woke = null
   const p = bus.nextInterrupt()
@@ -69,7 +69,7 @@ test('урон куста, кактуса и падения не рвёт раб
 })
 
 test('директор не запускает шаг, пока идёт аварийный отход (refuge в current или автопилот отпускает руки)', () => {
-  const { Director } = require('../src/director')
+  const { Director }: typeof import('../src/director') = require('../src/director')
   const session: Record<string, any> = { bot: {} as Record<string, any>, cfg: {} as Record<string, any>, current: null, autopilot: { refuging: false } }
   const d = new Director(session)
   assert.equal(d.refugeRuns(), false)
@@ -85,7 +85,7 @@ test('директор не запускает шаг, пока идёт ава�
 })
 
 test('аварийный отход будит ожидание (wait), но не рвёт работу со списком прерываний по умолчанию', async () => {
-  const { EventBus, WAKES } = require('../src/events')
+  const { EventBus, WAKES }: typeof import('../src/events') = require('../src/events')
   const bus = new EventBus()
   let woke = null
   let work = null

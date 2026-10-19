@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
-const flee = require('../src/flee')
+import * as flee from '../src/flee'
 
 function corner(openEast = false) {
   return {

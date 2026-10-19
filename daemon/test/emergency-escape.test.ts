@@ -1,11 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createEmergencyEscape, lavaFallFloor } from '../src/combat/emergency-escape'
-const sky = require('../src/elytra')
-const pearls = require('../src/pearl-hop')
-const projectiles = require('../src/throw')
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
+// Фасад elytra отдаёт имена геттерами — подмены ставятся в частях, где имена определены.
+import skyWorld = require('../src/elytra/physics')
+import skyKit = require('../src/elytra/kit')
+import skyFlight = require('../src/elytra/flight')
+import pearls = require('../src/pearl-hop')
+import projectiles = require('../src/throw')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
 
 test('only a fresh descending lava forecast can start a rescue before contact', () => {
   const from = new Vec3(.5, 120, .5)
@@ -46,16 +49,16 @@ test('the current validated movement endpoint supersedes a competing lava coast 
 })
 
 test('a lava rescue accepts a safe steep arc and stops searching before delaying the emergency throw', async () => {
-  const saved = [sky.worldOf, sky.landingSpot, sky.kit, sky.lavaLaunchClear, pearls.settle, pearls.pearlDamage, projectiles.throwAt]
+  const saved: any[] = [skyWorld.worldOf, skyFlight.landingSpot, skyKit.kit, skyFlight.lavaLaunchClear, pearls.settle, pearls.pearlDamage, projectiles.throwAt]
   const shore = new Vec3(8.5, 105, .5)
   const bot: any = { health: 20, entity: { position: new Vec3(.5, 100, .5), isInLava: true },
     inventory: { items: () => [{ name: 'ender_pearl', count: 8 }] }, blockAt: () => ({ name: 'lava' }) }
   let forecasts = 0
-  sky.worldOf = () => ({})
-  sky.landingSpot = () => shore
-  sky.kit = () => ({ elytra: false, rockets: 0 })
-  sky.lavaLaunchClear = () => true
-  pearls.settle = (_world: any, at: any) => ({ ok: at.x === shore.x, edge1: 0 })
+  skyWorld.worldOf = () => ({})
+  skyFlight.landingSpot = () => shore
+  skyKit.kit = () => ({ elytra: false, rockets: 0 }) as any
+  skyFlight.lavaLaunchClear = () => true
+  pearls.settle = (_world: any, at: any) => ({ ok: at.x === shore.x, edge1: 0 }) as any
   pearls.pearlDamage = () => 5
   projectiles.throwAt = async (_bot: any, _target: any, options: any) => {
     const shot = options.pick({ from: bot.entity.position, landing: (_yaw: number, pitch: number) => {
@@ -65,12 +68,12 @@ test('a lava rescue accepts a safe steep arc and stops searching before delaying
     assert.ok(shot, 'the steep trajectory clears a nearby high wall')
     assert.equal(options.onAim({ land: { tp: shore } }), true)
     bot.entity.position = shore.clone()
-    return { thrown: true }
+    return { thrown: true } as any
   }
   try {
     assert.equal((await createEmergencyEscape(bot).run({ aborted: false }, 'pearl')).ok, true)
     assert.ok(forecasts <= 12, 'the first safe forecast is used immediately in lava')
   } finally {
-    [sky.worldOf, sky.landingSpot, sky.kit, sky.lavaLaunchClear, pearls.settle, pearls.pearlDamage, projectiles.throwAt] = saved
+    [skyWorld.worldOf, skyFlight.landingSpot, skyKit.kit, skyFlight.lavaLaunchClear, pearls.settle, pearls.pearlDamage, projectiles.throwAt] = saved
   }
 })

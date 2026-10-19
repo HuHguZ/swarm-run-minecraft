@@ -4,7 +4,7 @@
 // bot.dig; приём — по кадру стека (файл и функция вызвавшего), успех — подтверждение сервера (blockUpdate в клетке
 // за 400 мс; копка — без исключения и блок исчез), время — от вызова до подтверждения. Ошибки: «поставил не туда»
 // (сервер не подтвердил). errors.ownSupport — старый счётчик попыток подкопа; новый supportDig отделяет намерение и итог.
-const gameClock = require('../game-clock')
+import * as gameClock from '../game-clock'
 
 const r1 = (x) => Math.round(x * 10) / 10
 
@@ -164,4 +164,4 @@ function install (bot) {
   }
 }
 
-module.exports = { install, tagOf }
+export { install, tagOf }

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const C = require('../colosseum')
-const CA = require('../colosseum-arms')
+import * as C from '../arena/colosseum'
+import * as CA from '../arena/colosseum-arms'
 
 // Колизей + раскладка поверх (как в игре: копия постройки, затем команды раскладки) — сетка блоков относительно центра.
 function world (seed: string) {

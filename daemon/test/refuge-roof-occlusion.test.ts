@@ -8,7 +8,7 @@ import Module from 'node:module'
 const sourceDir = path.resolve(__dirname, '../src')
 const sourceRequire = Module.createRequire(path.join(sourceDir, 'fortify.ts'))
 const { Vec3 } = sourceRequire('vec3')
-const esbuild = require('esbuild')
+import * as esbuild from 'esbuild'
 
 function scene(options: any = {}) {
   let ms = 0, hits = 0, placements = 0

@@ -1,5 +1,5 @@
-const edges = require('../edges')
-const tempo = require('../tempo')
+import edges = require('../edges')
+import * as tempo from '../tempo'
 
 // A stationary pathfinder can be doing useful work. Only the heuristic route
 // timers use this; explicit cancellation and combat safety still stop the dig.

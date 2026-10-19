@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { BARTER_WEIGHT, DEFAULT_TIMING, barterPlan, chanceAll, deliveryEstimate, expectedIngots, ingotsFor, learnTiming, meanPerIngot,
   type BarterState } from '../src/core/barter-model'
-const BF = require('../src/barter-flow')
+import * as BF from '../src/barter-flow'
 
 test('1.21.11 table: weight 469, pearls 10/469 × 2–4, fire resistance 16/469', () => {
   assert.equal(BARTER_WEIGHT, 469)

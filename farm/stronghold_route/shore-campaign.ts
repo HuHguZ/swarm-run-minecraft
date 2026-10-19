@@ -1,16 +1,17 @@
 'use strict'
+import { REPO_ROOT, DIST_ROOT } from '../../daemon/src/paths'
 // Короткий контроль дороги, затем продолжение того же прогона при полезном движении.
 // Только ферма; состояние смертей читается с диска, события RPC могут быть уже drained.
-const fs = require('fs')
-const path = require('path')
-const { spawn } = require('child_process')
-const ROOT = path.resolve(__dirname, '../..')
-const DAEMON = path.join(ROOT, 'daemon')
-const { connect, createKit, sleep } = require(path.join(DAEMON, 'scene-kit'))
+import * as fs from 'fs'
+import path = require('path')
+import { spawn } from 'child_process'
+const ROOT = REPO_ROOT
+const DAEMON = path.join(DIST_ROOT, 'daemon')
+const { connect, createKit, sleep } = require(path.join(DAEMON, 'scenes', 'lib', 'scene-kit'))
 const SLOT = Number(process.env.FARM_SLOT || 2)
 if (![2, 5].includes(SLOT)) throw new Error('Этот опыт принадлежит только выделенным слотам 2 и 5')
 const MEM = path.join(ROOT, 'farm', `memory-${SLOT}`, 'state.json')
-const OUT = process.env.LAB_OUT || path.join(__dirname, 'shore-campaign.jsonl')
+const OUT = process.env.LAB_OUT || path.join(REPO_ROOT, 'farm/stronghold_route/shore-campaign.jsonl')
 const LOG = process.env.ND_SERVER_LOG || path.join(ROOT, 'farm', `server-${SLOT}`, 'logs', 'latest.log')
 const TRACE = OUT.replace(/\.jsonl$/, '.trace.jsonl')
 const CLOG = OUT.replace(/\.jsonl$/, '.campaign.log')

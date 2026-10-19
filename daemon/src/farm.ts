@@ -1,11 +1,11 @@
 'use strict'
-const gameClock = require('./game-clock')
-const Vec3 = require('vec3')
-const { goals, Movements } = require('mineflayer-pathfinder')
-const { withTimeout } = require('./build')
-const { countItems, diffItems, equipBestTool, itemNamed, usesLeft } = require('./items')
-const obsidianMod = require('./obsidian')
-const { biomeName } = require('./perception')
+import * as gameClock from './game-clock'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { goals, Movements } from 'mineflayer-pathfinder'
+import { withTimeout } from './build'
+import { countItems, diffItems, equipBestTool, itemNamed, usesLeft } from './items'
+import obsidianMod = require('./obsidian')
+import { biomeName } from './perception'
 
 // Грядки: вспахать, полить, посадить, удобрить, собрать и посадить заново;
 // тростник, бамбук и кактус — срезать верх, корень оставить; арбузы и тыквы —
@@ -232,7 +232,7 @@ async function dig (bot, block) {
 // не начавшись (замер фермы: 1 из 20), — и шёл к позиции, которую mineflayer не
 // двигает, пока предмет летит.
 async function collect (bot, ctl, around, radius = 6, ms = 12000) {
-  return require('./drops').collect(bot, ctl, { radius, timeoutMs: ms, from: around })
+  return (require('./drops') as typeof import('./drops')).collect(bot, ctl, { radius, timeoutMs: ms, from: around })
 }
 
 // ------------------------------------------------------------------ зрение
@@ -774,4 +774,4 @@ function nothingWhy (mode, r) {
   return 'ничего не сделал'
 }
 
-module.exports = { run, survey, SEEDS, CROPS, maxAge, nearWater, waterBeside, isWater, seedName, farmMovements, collect, TILL, CANE_SOIL }
+export { run, survey, SEEDS, CROPS, maxAge, nearWater, waterBeside, isWater, seedName, farmMovements, collect, TILL, CANE_SOIL }

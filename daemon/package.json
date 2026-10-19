@@ -3,20 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "description": "Long-running Minecraft body for NeuroDown. Holds the mineflayer connection and the autopilot; exposes intents over WebSocket.",
-  "main": "src/index.js",
-  "imports": {
-    "#core/*": "./src/core/*.js",
-    "#body/*": "./src/*.js",
-    "#strategy/*": "./src/campaign/*.js",
-    "#tactics/*": "./src/tactics/*.js"
-  },
+  "main": "../dist/daemon/src/index.js",
   "scripts": {
     "build": "npm --prefix .. run build",
     "typecheck": "npm --prefix .. run typecheck",
     "prestart": "npm run build",
-    "start": "node --enable-source-maps src/index.js",
+    "start": "node --enable-source-maps ../dist/daemon/src/index.js",
     "pretest": "npm run build",
-    "test": "node --enable-source-maps --test test/*.test.js"
+    "test": "node --enable-source-maps --test --test-timeout=120000 ../dist/daemon/test/*.test.js"
   },
   "dependencies": {
     "@nxg-org/mineflayer-pathfinder": "^0.0.26",

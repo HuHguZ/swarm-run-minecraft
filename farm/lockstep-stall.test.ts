@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { REPO_ROOT } from '../daemon/src/paths'
 
 test('farm lockstep aborts before a connected stall advances the world; disconnect and healthy clients still work', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-lockstep-test-'))
@@ -78,7 +79,7 @@ public class LockstepStallTest {
   }
   try {
     const source = path.join(temp, 'FarmLockstep.java'), fixture = path.join(temp, 'LockstepStallTest.java')
-    fs.copyFileSync(path.join(__dirname, 'FarmLockstep.java'), source)
+    fs.copyFileSync(path.join(REPO_ROOT, 'farm/FarmLockstep.java'), source)
     fs.writeFileSync(fixture, harness)
     run(['-m', 'jdk.compiler/com.sun.tools.javac.Main', '-proc:none', '-source', '21', '-target', '21',
       '-classpath', temp, '-sourcepath', temp, '-d', temp, source, fixture])

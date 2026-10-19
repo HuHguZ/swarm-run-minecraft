@@ -1,7 +1,7 @@
 'use strict'
-const gameClock = require('./game-clock')
-const afterMovePacket = require('./edges').afterPacket
-const { AsyncResource } = require('node:async_hooks')
+import * as gameClock from './game-clock'
+import { afterPacket as afterMovePacket } from './edges'
+import { AsyncResource } from 'node:async_hooks'
 // Арбалет, фейерверки и выбор стрел (PVP-RESEARCH б.4, б.5, б.14, в.5, в.11;
 // просьба 2026-09-26: «все приёмы про-игроков, по максимуму того, что даёт
 // версия»). Раньше бой искал только лук: арбалет в рюкзаке лежал мёртвым
@@ -43,12 +43,12 @@ const { AsyncResource } = require('node:async_hooks')
 //    12 − (урон стрелы до брони) (LivingEntity.hurtServer: invulnerableTime > 10 —
 //    урон сверх lastHurt); магия мимо брони.
 
-const Vec3 = require('vec3')
-const bowMod = require('./bow')
-const pick = require('./pick')
-const read = require('./read')
-const assess = require('./assess')
-const { sleep } = require('./movement')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import bowMod = require('./bow')
+import pick = require('./pick')
+import * as read from './read'
+import * as assess from './assess'
+import { sleep } from './movement'
 
 const TICK_MS = 50
 const ARROW_SPEED = Math.fround(3.15) // CrossbowItem.getShootingPower returns float.
@@ -549,7 +549,7 @@ function plan (bot, ctx) {
       // (shieldBypassPoint: сырой урон по точке) × 0.7 (pHit.firework).
       const pierceE = pierce && d >= 3.2 ? 9 * 0.6 : 0
       let bp = null
-      if (rocket && d >= 6 && d <= 30) bp = shieldBypassPoint(bot, entity, require('./pick').eyeOf(bot).offset(0, -ROCKET_DROP, 0), rocket.info.stars ?? 3) // pick здесь — локальный выбор арбалета
+      if (rocket && d >= 6 && d <= 30) bp = shieldBypassPoint(bot, entity, (require('./pick') as typeof import('./pick')).eyeOf(bot).offset(0, -ROCKET_DROP, 0), rocket.info.stars ?? 3) // pick здесь — локальный выбор арбалета
       const rocketE = bp ? bp.raw * 0.7 : 0
       if (rocketE > pierceE && bp) return { act: 'fire', item: rocket.item, info: rocket.info, point: bp.point, why: `фейерверк в пол за его щит (${bp.raw} до брони)` }
       if (pierceE > 0) return { act: 'fire', item: pierce.item, info: pierce.info, why: '«Пронзание» сквозь его щит' }
@@ -704,7 +704,7 @@ function guardCrossbow (bot) {
   }
 }
 
-module.exports = {
+export {
   shieldBypassPoint, guardCrossbow,
   plan, step, prepBow, load, fire, readyArrow, pickArrow, firstArrow, arrowKind, tippedPotion, crossbows, crossbowFirst,
   chargeTicks, rocketAim, rocketSafe, expectedDamage, harmDrawMs, bowPower, rocketStars, hotbarOf, toHotbar, afterPacket, rocketsOf,

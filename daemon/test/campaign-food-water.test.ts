@@ -1,11 +1,13 @@
+import { campaignTs } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { cjsContext } from './cjs-context'
 
 function fixture({ water = true, prey = true, hp = 9, surface = true } = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const body = source.slice(source.indexOf('async function foodRun ('), source.indexOf('async function quickHunt ('))
   const calls: Array<{ method: string; params?: any }> = []
   let now = 0, food = 0
@@ -28,7 +30,7 @@ function fixture({ water = true, prey = true, hp = 9, surface = true } = {}) {
       throw new Error('unexpected method ' + method)
     }
   }
-  vm.runInNewContext(body, context)
+  vm.runInNewContext(body, cjsContext(context))
   return { context, calls }
 }
 

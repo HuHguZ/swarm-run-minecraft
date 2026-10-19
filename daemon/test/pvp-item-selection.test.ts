@@ -4,15 +4,16 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { cjsContext } from './cjs-context'
 
-const registry = require('minecraft-data')('1.21.11')
-const Item = require('prismarine-item')(registry)
-const locks = require('../src/reflex-lock')
-const { createEquipment } = require('../src/pvp/equipment')
-const { potionOf } = require('../src/pvp')
+const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
+import locks = require('../src/reflex-lock')
+import { createEquipment } from '../src/pvp/equipment'
+import { potionOf } from '../src/pvp'
 
 function item(name: string, slot: number, components: any[] = []) {
-  const out = new Item(registry.itemsByName[name].id, 1)
+  const out: any = new Item(registry.itemsByName[name].id, 1)
   out.slot = slot
   out.components = components
   out.componentMap = new Map(components.map(c => [c.type, c]))
@@ -31,10 +32,10 @@ test('off-hand returns to shield on current HP and burst margin, without a five-
     totemMod: { wantTotem: () => ctx.wt }, used() {}, findItem: (_bot, predicate) => [shield, totem].find(predicate),
     bot: { inventory: { slots: Object.assign([], { 45: totem }) },
       async equip(chosen, hand) { assert.equal(hand, 'off-hand'); ctx.bot.inventory.slots[45] = chosen } } }
-  await runInNewContext(`(async () => { ${source.slice(a, b)} })()`, ctx)
+  await runInNewContext(`(async () => { ${source.slice(a, b)} })()`, cjsContext(ctx))
   assert.equal(ctx.bot.inventory.slots[45], shield)
   ctx.bot.inventory.slots[45] = totem; ctx.totemAt = 0; ctx.wt.hp = 9
-  await runInNewContext(`(async () => { ${source.slice(a, b)} })()`, ctx)
+  await runInNewContext(`(async () => { ${source.slice(a, b)} })()`, cjsContext(ctx))
   assert.equal(ctx.bot.inventory.slots[45], totem, 'the existing HP hysteresis retains the totem near lethal burst')
 })
 
@@ -42,7 +43,7 @@ function fixture(items: any[], wrapped = false) {
   const bot: any = new EventEmitter()
   const equipped: any[] = []; const used: string[] = []
   bot.registry = registry
-  bot.inventory = require('prismarine-windows')('1.21.11').createWindow(0, 'minecraft:inventory', 'Inventory')
+  bot.inventory = (require('prismarine-windows') as typeof import('prismarine-windows').default)('1.21.11').createWindow(0, 'minecraft:inventory', 'Inventory')
   for (const it of items) bot.inventory.updateSlot(it.slot, it)
   bot.heldItem = items[0]
   bot.equip = async (chosen, hand) => { equipped.push({ item: chosen, hand }); bot.heldItem = chosen }
@@ -152,12 +153,12 @@ test('self splash cannot duplicate a pending use before a matching item receipt'
 })
 
 test('throw rejection belongs to its trajectory, not the next frame or another target', async () => {
-  const { Vec3 } = require('vec3')
+  const { Vec3 }: typeof import('vec3') = require('vec3')
   const harm = potion(37, 'strong_harming'); const f = fixture([harm])
   let attempts = 0
   Object.assign(f.ctx, { entity: { id: 2, position: new Vec3(8, 0, 0) }, EYE: 1.62,
     reachable: () => true, holdItem: async () => true, holdWeapon: async () => {}, leadFn: () => () => f.ctx.entity.position,
-    used() {}, pick: require('../src/pick'), Vec3,
+    used() {}, pick: (require('../src/pick') as typeof import('../src/pick')), Vec3,
     throwMod: { kindOf: () => ({}), aim: () => ({}), throwAt: async () => { attempts++; return { thrown: false, why: 'blocked trajectory' } } } })
   f.bot.entity = { id: 1, position: new Vec3(0, 0, 0), width: .6, height: 1.8 }
   f.bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
@@ -171,7 +172,7 @@ test('throw rejection belongs to its trajectory, not the next frame or another t
 })
 
 test('a failed web placement retries when its visible face opens, without a rest period', async () => {
-  const { Vec3 } = require('vec3'); const web = item('cobweb', 37); const f = fixture([web])
+  const { Vec3 }: typeof import('vec3') = require('vec3'); const web = item('cobweb', 37); const f = fixture([web])
   let face = false, placements = 0, block = 'air'
   const cell = new Vec3(4, 0, 0)
   f.bot.entity = { position: new Vec3(0, 0, 0) }
@@ -190,13 +191,13 @@ test('a failed web placement retries when its visible face opens, without a rest
 
 
 test('own splash danger follows its projectile destruction receipt instead of seven hundred milliseconds', async () => {
-  const { Vec3 } = require('vec3'); const harm = potion(37, 'strong_harming'); const f = fixture([harm])
+  const { Vec3 }: typeof import('vec3') = require('vec3'); const harm = potion(37, 'strong_harming'); const f = fixture([harm])
   let now = 1000
   f.bot._client = new EventEmitter(); f.bot.entity = { id: 1, position: new Vec3(0, 0, 0) }; f.bot.entities = {}
   f.bot.blockAt = () => null
   Object.assign(f.ctx, { entity: { id: 2, position: new Vec3(8, 0, 0) }, EYE: 1.62, Vec3,
     gameClock: { now: () => now }, reachable: () => true, holdItem: async () => true, holdWeapon: async () => {},
-    leadFn: () => () => new Vec3(8, 0, 0), used() {}, pick: require('../src/pick'),
+    leadFn: () => () => new Vec3(8, 0, 0), used() {}, pick: (require('../src/pick') as typeof import('../src/pick')),
     throwMod: { throwAt: async () => {
       f.bot._client.emit('spawn_entity', { entityId: 77, objectData: 1, type: registry.entitiesByName.splash_potion.id })
       return { thrown: true, land: { x: 8, y: 0, z: 0 }, ticks: 20 }
@@ -225,13 +226,13 @@ test('server item cooldown gates the native item and its zero packet permits imm
 
 
 test('a second harmful splash waits for the first projectile even after its item count changed', async () => {
-  const { Vec3 } = require('vec3'); const harm = potion(37, 'strong_harming'); harm.count = 3
+  const { Vec3 }: typeof import('vec3') = require('vec3'); const harm = potion(37, 'strong_harming'); harm.count = 3
   const f = fixture([harm]); let shots = 0
   f.bot._client = new EventEmitter(); f.bot.entity = { id: 1, position: new Vec3(0, 0, 0) }; f.bot.entities = {}
   f.bot.blockAt = () => null
   Object.assign(f.ctx, { entity: { id: 2, position: new Vec3(8, 0, 0) }, EYE: 1.62, Vec3,
     gameClock: { now: () => 1000 }, reachable: () => true, holdItem: async () => true, holdWeapon: async () => {},
-    leadFn: () => () => new Vec3(8, 0, 0), used() {}, pick: require('../src/pick'),
+    leadFn: () => () => new Vec3(8, 0, 0), used() {}, pick: (require('../src/pick') as typeof import('../src/pick')),
     throwMod: { throwAt: async () => {
       shots++; harm.count--
       f.bot._client.emit('spawn_entity', { entityId: 70 + shots, objectData: 1, type: registry.entitiesByName.splash_potion.id })

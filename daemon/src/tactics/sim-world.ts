@@ -20,7 +20,7 @@ import { digDownCost, boxBuildCost, sustainableFight, type ActionId, type Tactic
 const assess: { MOBS: Record<string, { hp: number; dmg: number; every: number; ranged?: boolean; armor?: number }>; afterArmor(dmg: number, armor: number, tough: number): number } = require('../assess')
 const safety: { evaluate(input: Record<string, unknown>): { action: string } } = require('../combat-safety')
 const flee: { DOCTRINE: Record<string, { range?: number; radius?: number }> } = require('../flee')
-const polar = require('../polar-bear')
+import * as polar from '../polar-bear'
 
 export const MECH = {
   safeFall: 3, lavaDamage: 4, lavaIgniteTicks: 300, fireDamage: 1, fireEvery: 20, inWall: 1, drown: 2, airMax: 300,

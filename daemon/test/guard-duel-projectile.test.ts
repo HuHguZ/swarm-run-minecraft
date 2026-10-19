@@ -1,12 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { EventEmitter } = require('node:events')
-const { transformSync } = require('esbuild')
-const { Vec3 } = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { EventEmitter } from 'node:events'
+import { transformSync } from 'esbuild'
+import { Vec3 } from 'vec3'
 
 function fixture ({ distant = false, hidden = false, shield = true, arrives = 0, abortAt = Infinity, walkerAt = Infinity, walkerHidden = false }: any = {}) {
   let now = 10000
@@ -56,14 +57,16 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
   const modules: any = {}
   const load = name => {
     if (modules[name]) return modules[name]
-    const context: any = { module: { exports: {} }, process, console, require: id => {
+    // Спецификатор — от папки загружаемого модуля: части combat/* просят '../game-clock' и соседей './foes'.
+    const context: any = { module: { exports: {} }, process, console, require: raw => {
+      const id = raw.startsWith('.') ? './' + path.posix.join(path.posix.dirname(name), raw) : raw
       if (id === './game-clock') return clock
       if (id === './movement') return movement
-      if (id === 'vec3') return require('vec3')
+      if (id === 'vec3') return (require('vec3') as typeof import('vec3').Vec3)
       if (id === 'mineflayer-pathfinder') return { goals: {} }
       if (id === './perception') return perception
-      if (id === './pvp/last-seen') return require('../src/pvp/last-seen')
-      if (id === './threats' || id === './combat') return load(id.slice(2))
+      if (id === './pvp/last-seen') return (require('../src/pvp/last-seen') as typeof import('../src/pvp/last-seen'))
+      if (id === './threats' || id === './combat' || id.startsWith('./combat/')) return load(id.slice(2))
       if (id === './sealed') return { fillerCount: () => 0 }
       if (id === './pick') return { canHit: () => true, aim: (_bot, e) => walkerHidden && e.id === 3 ? null : ({ point: e.position }) }
       if (id === './moves') return { stepSafe: () => true, keyDir: () => ({ x: 0,z: 1 }) }
@@ -75,7 +78,7 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
       return {}
     } }
     const source = fs.readFileSync(path.join(__dirname,'../src',name + '.ts'),'utf8')
-    vm.runInNewContext(transformSync(source,{ loader: 'ts', format: 'cjs', target: 'node22' }).code,context)
+    vm.runInNewContext(transformSync(source,{ loader: 'ts', format: 'cjs', target: 'node22' }).code,cjsContext(context))
     modules[name] = context.module.exports
     return modules[name]
   }

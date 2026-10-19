@@ -1,9 +1,9 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
+import test = require('node:test')
+import assert = require('node:assert/strict')
 // Режим — правила решения, без сервера и физики. Интеграцию выстрелов
 // отдельно проверяет ферма с настоящим луком и 16 стрелами у каждой пары.
-const { canUseRanged, decideFight, configure } = require('../src/play-policy')
+import { canUseRanged, decideFight, configure } from '../src/play-policy'
 const make = (mode = 'speedrun', inventory: any = {} as Record<string, any>) => ({
   playPolicy: { mode, arrowReserve: 16, foodTarget: 8, resources: { blaze_rod: 7, ender_pearl: 14, string: 3 } },
   bot: { inventory: { items: () => Object.entries<any>(inventory).map(([name, count]: any) => ({ name, count })) } }
@@ -63,7 +63,7 @@ test('переключение в free сохраняет пользовател
 })
 
 test('RPC смены режима сохраняет правила, сообщает их в состоянии и отменяет старое намерение', async () => {
-  const { Session } = require('../src/session')
+  const { Session }: typeof import('../src/session') = require('../src/session')
   const journal = { state: {} as Record<string, any>, patch: fn => fn(journal.state) }
   const s = new Session({} as Record<string, any>, { drain: () => [] }, journal)
   await s.setPlayMode({ mode: 'speedrun' })

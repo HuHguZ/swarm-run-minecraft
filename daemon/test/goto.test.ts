@@ -1,12 +1,13 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const { createRequire } = require('node:module')
-const { EventEmitter } = require('node:events')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture (move?: any, overrides: Record<string, any> = {}) {
   const file = path.join(__dirname, '../src/session.js')
@@ -22,8 +23,8 @@ function fixture (move?: any, overrides: Record<string, any> = {}) {
         unstick: async () => { counts.shakes++ } }
       return actual
     } }
-  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nmodule.exports.roofCost = underRoofCost;', context)
-  const bot = new EventEmitter()
+  vm.runInNewContext(fs.readFileSync(file, 'utf8') + '\nmodule.exports.roofCost = underRoofCost;', cjsContext(context))
+  const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(70.5, 63, -70.5), onGround: true }
   // goto ждёт события pathfinder'а (movement.gotoGoal, по умолчанию с 02.10): setGoal → шаг → path_update с пустым
   // путём (как pathfinder, когда идти некуда или уже пришёл); старый bot.pathfinder.goto — то же самое.

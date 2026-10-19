@@ -1,14 +1,15 @@
 'use strict'
+const { REPO_ROOT }: typeof import('./paths') = require('./paths')
 // Телеметрия навыков — шаг 1 направления «Стратегический граф + навыки + рефлексы + WorldState + телеметрия»
 // (TODO.md, пользователь 05.10). Только запись: поведение бота не меняется. Строка JSONL на каждое выполнение:
 //   level 'stage' — этап кампании (wood … dragon), level 'step' — шаг плана маршрута (будущие стратегии графа:
 //   голем/жила/сундуки/лава…), level 'act' — вызов навыка демона (RPC). Из этих строк потом считаются цены
-//   стратегий (V2) и вероятности исходов (V3): farm/skills-report.js.
+//   стратегий (V2) и вероятности исходов (V3): farm/analysis/skills-report.js.
 // Файл — ND_SKILLS_LOG или рядом с журналом кампании: <журнал без .campaign.log/.log>.skills.jsonl. ND_TELEMETRY=0 — выкл.
-const fs = require('fs')
-const path = require('path')
-const crypto = require('crypto')
-const gameClock = require('./game-clock')
+const fs: typeof import('fs') = require('fs')
+const path: typeof import('path') = require('path')
+const crypto: typeof import('crypto') = require('crypto')
+const gameClock: typeof import('./game-clock') = require('./game-clock')
 
 const on = () => process.env.ND_TELEMETRY !== '0'
 
@@ -98,7 +99,7 @@ let VERSION = null
 // Хеш исходников включает вложенные навыки и не зависит от карт esbuild.
 function version () {
   if (VERSION) return VERSION
-  const root = path.resolve(__dirname, '..', '..')
+  const root = REPO_ROOT
   let git = null
   try {
     const head = fs.readFileSync(path.join(root, '.git', 'HEAD'), 'utf8').trim()
@@ -106,8 +107,18 @@ function version () {
   } catch {}
   const h = crypto.createHash('sha1')
   try { h.update(fs.readFileSync(path.join(__dirname, '..', fs.existsSync(path.join(__dirname, '..', 'campaign.ts')) ? 'campaign.ts' : 'campaign.js'))) } catch {}
+  // Тело кампании — daemon/campaign/**: этапы и навыки живут там, вход campaign.ts только запускает их.
   try {
-    const files: string[] = fs.readdirSync(__dirname, { recursive: true })
+    const body = path.join(__dirname, '..', 'campaign')
+    const parts = fs.readdirSync(body, { recursive: true }) as string[]
+    const extension = parts.some(f => f.endsWith('.ts')) ? '.ts' : '.js'
+    for (const f of parts.filter(f => f.endsWith(extension)).sort()) {
+      h.update('campaign/' + f.replaceAll(path.sep, '/'))
+      h.update(fs.readFileSync(path.join(body, f)))
+    }
+  } catch {}
+  try {
+    const files = fs.readdirSync(__dirname, { recursive: true }) as string[]
     const extension = files.some(f => f.endsWith('.ts')) ? '.ts' : '.js'
     for (const f of files.filter(f => f.endsWith(extension)).sort()) {
       h.update(f.replaceAll(path.sep, '/'))
@@ -122,13 +133,13 @@ function file () {
   if (process.env.ND_SKILLS_LOG) return process.env.ND_SKILLS_LOG
   const log = process.env.ND_CAMPAIGN_LOG
   // Unit tests (node --test sets NODE_TEST_CONTEXT) wrote fake-bot rows with manual clocks into the daemons' shared file.
-  if (!log) return process.env.NODE_TEST_CONTEXT ? path.join(require('os').tmpdir(), 'nd-test-skills.jsonl') : path.join(__dirname, '..', 'skills.jsonl')
+  if (!log) return process.env.NODE_TEST_CONTEXT ? path.join((require('os') as typeof import('os')).tmpdir(), 'nd-test-skills.jsonl') : path.join(REPO_ROOT, 'daemon/skills.jsonl')
   return log.replace(/(\.campaign)?\.log$/, '') + '.skills.jsonl'
 }
 
 const RUN = `${process.pid}-${Date.now().toString(36)}`
 // Уровень знания карты (S10, perception/knowledge): rsg — главная метрика, ssg/scan — отдельные строки.
-function knowledgeLevel () { try { return require('./perception/knowledge').level() } catch { return null } }
+function knowledgeLevel () { try { return (require('./perception/knowledge') as typeof import('./perception/knowledge')).level() } catch { return null } }
 let seq = 0
 function record (rec) {
   if (!on()) return
@@ -151,3 +162,4 @@ function outcome (r) {
 }
 
 module.exports = { on, resources, snapshot, delta, version, file, record, outcome }
+export { on, resources, snapshot, delta, version, file, record, outcome }

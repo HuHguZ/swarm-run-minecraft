@@ -1,5 +1,5 @@
 'use strict'
-const { connect, sleep } = require('../../daemon/scene-kit')
+import { connect, sleep } from '../../daemon/scenes/lib/scene-kit'
 const pid = Number(process.argv[2])
 if (!Number.isInteger(pid) || pid <= 0) throw new Error('Нужен PID сцены выделенного слота 5')
 async function main () {

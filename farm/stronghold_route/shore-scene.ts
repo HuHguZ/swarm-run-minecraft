@@ -1,9 +1,10 @@
 'use strict'
-const fs = require('fs')
-const path = require('path')
-const { connect, createKit, sleep } = require('../../daemon/scene-kit')
-const ROOT = path.resolve(__dirname, '../..')
-const OUT = path.join(__dirname, 'shore-result.jsonl')
+import { REPO_ROOT } from '../../daemon/src/paths'
+import * as fs from 'fs'
+import path = require('path')
+import { connect, createKit, sleep } from '../../daemon/scenes/lib/scene-kit'
+const ROOT = REPO_ROOT
+const OUT = path.join(REPO_ROOT, 'farm/stronghold_route/shore-result.jsonl')
 const MEM = path.join(ROOT, 'farm/memory-2/state.json')
 const conn = connect('ws://127.0.0.1:8802')
 const kit = createKit({ call: conn.call, heard: conn.heard, logFile: path.join(ROOT, 'farm/server-2/logs/latest.log'), player: 'NeuroFarm2' })

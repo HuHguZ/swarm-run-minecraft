@@ -1,17 +1,19 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const vm = require('node:vm')
-const fs = require('node:fs')
-const path = require('node:path')
+import { cjsContext } from './cjs-context'
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as vm from 'node:vm'
+import 'node:fs'
+import * as fs from 'node:fs'
+import path = require('node:path')
 function fixture ({ pos = { x: -73, y: 114, z: 152 }, dimension = 'the_nether', obsidian = 17, lighter = true, flag = '1', pending = false }: any = {} as Record<string, any>) {
-  const { declarationSource } = require('./source-fixture')
+  const { declarationSource }: typeof import('./source-fixture') = require('./source-fixture')
   const entry = path.join(__dirname, '../campaign.js')
   const src = ['shNetherTries', 'atExitTarget', 'canLink'].map(name => declarationSource(entry, name)).join('\n')
   const c = { state: { pos }, known: { stronghold: { x: -585, z: 1274 } }, process: { env: { ND_EXIT_LOCAL_RETRY: flag } },
     Math, dim: () => dimension, lighter: () => lighter, have: item => item === 'obsidian' ? obsidian : 0,
     PICK_DIAMOND: /diamond_pickaxe/, pendingExitFrame: () => pending }
-  vm.runInNewContext(src + '\nthis.allowed = canLink; this.used = () => { shNetherTries++ }', c)
+  vm.runInNewContext(src + '\nthis.allowed = canLink; this.used = () => { shNetherTries++ }', cjsContext(c))
   return c
 }
 test('col04e N2bx23: the third stage can resume at the exit after two failed calls', () => {

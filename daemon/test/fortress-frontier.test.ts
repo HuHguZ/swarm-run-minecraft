@@ -1,12 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { transformSync } from 'esbuild'
-const { Vec3 } = require('vec3')
-const { RaycastIterator } = require('prismarine-world/src/iterators')
+import { cjsContext } from './cjs-context'
+import { Vec3 } from 'vec3'
+import { RaycastIterator } from 'prismarine-world/src/iterators'
+import { bodySource } from './source-fixture'
 
 function scene({ moving = true, blocked = false, enabled = true } = {}) {
   const cells = new Map<string, string>()
@@ -21,7 +22,7 @@ function scene({ moving = true, blocked = false, enabled = true } = {}) {
       const empty = /^(air|lava|water|fire)$/.test(name)
       return { name, position: q, boundingBox: empty ? 'empty' : 'block', shapes: empty ? [] : [[0,0,0,1,1,1]], stateId: name }
     },
-    findBlocks: ({ matching, maxDistance }) => [...cells.keys()].map(k => new Vec3(...k.split(',').map(Number)))
+    findBlocks: ({ matching, maxDistance }) => [...cells.keys()].map(k => new Vec3(...(k.split(',').map(Number) as [number, number, number])))
       .filter(p => p.distanceTo(bot.entity.position) <= maxDistance && matching(bot.blockAt(p))) }
   bot.world = { raycast: (from, direction, distance, match) => {
     const ray = new RaycastIterator(from, direction, distance)
@@ -38,14 +39,14 @@ function scene({ moving = true, blocked = false, enabled = true } = {}) {
   const context: any = { module: { exports: {} }, require: native, console: { log: (...args) => messages.push(args) },
     process: { env: { ND_FORTRESS_FRONTIER: enabled ? '1' : '0' } }, fixtureBot: bot, fixtureBrick: brick,
     fixtureMove: top => { calls.push(top.clone()); if (moving) bot.entity.position = top.offset(.5,1,.5); return { ok: moving, error: moving ? undefined : 'noPath' } } }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code + `
+  vm.runInNewContext(transformSync(bodySource(file), { loader: 'ts', format: 'cjs' }).code + `
     look = () => ({ seen: 1, seenList: [fixtureBrick] });
     keepBlocks = async () => null;
     spawnerHint = () => null;
     climbWalk = async (_s, _c, top) => fixtureMove(top);
     climbTo = legTo = async () => ({ ok: false, error: 'old blocked target' });
     module.exports.testViewLeg = viewLeg;
-  `, context)
+  `, cjsContext(context))
   const session: any = { bot, mcData: {}, journal: { state: { places: { 'крепость (ад)': { x: 13,y:64,z:0,dimension:'the_nether' } } } } }
   return { context, calls, messages, cells, brick, items, bot, session, run: (advance = false, hops = 4) => context.module.exports.tour(session, { aborted: false }, { deadline: Infinity, hops, pie: false, advance }) }
 }
@@ -129,7 +130,7 @@ test('a failed approach without displacement yields to the observation tour inst
     legTo = async () => { approachCalls++; return { ok: false, error: 'no path from this mouth' }; };
     tour = async () => { tourCalls++; return { hops: [], explored: 1 }; };
     module.exports.testBody = toSpawnerBody;
-  `, f.context)
+  `, cjsContext(f.context))
   await f.context.module.exports.testBody(f.session, { aborted: false }, { deadline: Infinity })
   assert.equal(f.context.approachCalls, 1)
   assert.equal(f.context.tourCalls, 1)
@@ -137,7 +138,7 @@ test('a failed approach without displacement yields to the observation tour inst
 
 test('a coarse blaze sound ranks a visible supported view in its direction without exposing a hidden point', async () => {
   const f = scene()
-  vm.runInNewContext("spawnerHint = () => ({ x: -12, z: 0, by: 'слух', dir: 'west', band: 'средне' });", f.context)
+  vm.runInNewContext("spawnerHint = () => ({ x: -12, z: 0, by: 'слух', dir: 'west', band: 'средне' });", cjsContext(f.context))
   const r = await f.context.module.exports.tour(f.session, { aborted: false }, { deadline: Infinity, hops: 1, advance: true, pie: true })
   assert.ok(f.calls[0].x < 0)
   assert.equal(r.hops[0].by, 'слух')
@@ -149,7 +150,7 @@ test('a flipped F3 bearing retains the existing vertical ascent before another g
     towerUp: async (_bot, _ctl, n) => { rises.push(n); return { ok: false, placed: 0 } },
     digUp: async () => ({ dug: 0 })
   } : native(name)
-  vm.runInNewContext("let bearings = 0; spawnerHint = () => ++bearings === 1 ? { x: -12, z: 0, by: 'пирог', yaw: 90 } : { x: 12, z: 0, by: 'пирог', yaw: -90 };", f.context)
+  vm.runInNewContext("let bearings = 0; spawnerHint = () => ++bearings === 1 ? { x: -12, z: 0, by: 'пирог', yaw: 90 } : { x: 12, z: 0, by: 'пирог', yaw: -90 };", cjsContext(f.context))
   const r = await f.context.module.exports.tour(f.session, { aborted: false }, { deadline: Infinity, hops: 2, pie: true })
   assert.ok(rises.length > 0, 'a new visible ground goal cannot hide the reason to climb towards a spawner above or below')
   assert.ok(r.hops.some(h => h.vertical))
@@ -160,7 +161,7 @@ test('the first-spawner clock records a current ray once and never treats a hidd
   f.session.journal.patch = fn => fn(f.session.journal.state)
   f.session.journal.append = () => {}
   f.cells.set('13,64,0', 'spawner')
-  vm.runInNewContext('module.exports.testRemember = rememberSpawner;', f.context)
+  vm.runInNewContext('module.exports.testRemember = rememberSpawner;', cjsContext(f.context))
   const remember = f.context.module.exports.testRemember
   remember(f.session, { x: 13, y: 64, z: 0 })
   remember(f.session, { x: 13, y: 64, z: 0 })

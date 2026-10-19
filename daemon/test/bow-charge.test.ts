@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-const Vec3 = require('vec3')
-const bow = require('../src/bow')
-const ranged = require('../src/ranged')
-const clock = require('../src/game-clock')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import bow = require('../src/bow')
+import * as ranged from '../src/ranged'
+import * as clock from '../src/game-clock'
 
 function actor() {
   const c = new clock.GameClock({ manual: true, epoch: 1000 })
@@ -37,8 +37,8 @@ function actor() {
 
 function installedActor(weapon) {
   const a = actor(); const bot = a.bot
-  const data = require('minecraft-data')('1.21.11')
-  const Block = require('prismarine-block')('1.21.11')
+  const data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
   bot.registry = data; bot.version = '1.21.11'; bot.supportFeature = data.supportFeature
   bot.game = { gameMode: 'survival', minY: -64 }; bot.isAlive = true
   bot.entity.effects = {}; bot.entity.attributes = {}; bot.entity.eyeHeight = 1.62
@@ -53,7 +53,7 @@ function installedActor(weapon) {
     ? bot._client.emit('entity_metadata', { entityId: 1, metadata: [{ key: data.entitiesByName.player.metadataKeys.indexOf('living_entity_flags'), value: 1 }] })
     : bot._client.write('use_item', { hand: 0 })
   bot.deactivateItem = () => bot._client.write('block_dig', { status: 5 })
-  require('../src/tick-plugins').createTickPlugins(a.c).plugins.physics(bot, { physicsEnabled: true })
+  ;(require('../src/tick-plugins') as typeof import('../src/tick-plugins')).createTickPlugins(a.c).plugins.physics(bot, { physicsEnabled: true })
   bot.emit('login')
   bot._client.emit('position', { x: 4103, y: 180, z: 3110, yaw: 0, pitch: 0, flags: {}, teleportId: 1 })
   bot.entity.onGround = false
@@ -66,7 +66,7 @@ for (const weapon of ['bow', 'crossbow', 'iron_spear']) test(`${weapon} confirms
   const raw = Object.assign(a.target, { type: 'player', username: 'Foe' })
   a.bot.blockAt = p => ({ name: 'air', position: p, boundingBox: 'empty', shapes: [] })
   a.bot.look = (yaw, pitch) => { Object.assign(a.bot.entity, { yaw, pitch }); return Promise.resolve() }
-  const vision = require('../src/pvp/last-seen').createLastSeen(a.bot)
+  const vision = (require('../src/pvp/last-seen') as typeof import('../src/pvp/last-seen')).createLastSeen(a.bot)
   const target = vision.observe(raw)
   assert.notStrictEqual(target, raw)
   const item = { name: weapon, slot: 36 }; a.bot.heldItem = item
@@ -75,7 +75,7 @@ for (const weapon of ['bow', 'crossbow', 'iron_spear']) test(`${weapon} confirms
   if (weapon === 'crossbow') process.env.ND_DEBUG_XBOW = '1'
   const logs: any[] = []
   t.mock.method(console, 'log', (...args) => { if (args[0] === '[xshot]') logs.push(JSON.parse(args[1])) })
-  t.mock.method(require('../src/read'), 'crossbowInfo', () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }))
+  t.mock.method((require('../src/read') as typeof import('../src/read')), 'crossbowInfo', () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }))
   let hits = 0
   const onHit = () => { hits++ }
   const ctl = { aborted: false }
@@ -83,7 +83,7 @@ for (const weapon of ['bow', 'crossbow', 'iron_spear']) test(`${weapon} confirms
     const point = () => target.position.offset(0, .9, 0)
     const shooting = weapon === 'bow' ? bow.shoot(a.bot, target, { point, follow: false, onHit })
       : weapon === 'crossbow' ? ranged.fire(a.bot, target, item, { point, onHit })
-        : require('../src/spear').charge(a.bot, ctl, target, { onHit })
+        : (require('../src/spear') as typeof import('../src/spear')).charge(a.bot, ctl, target, { onHit })
     await new Promise(resolve => setImmediate(resolve))
     if (weapon === 'bow') {
       a.age(1001); a.age(1021)
@@ -113,7 +113,7 @@ for (const weapon of ['bow', 'crossbow', 'iron_spear']) test(`${weapon} confirms
 
 for (const weapon of ['bow', 'crossbow']) test(`installed ${weapon} final aim observes Air44 age after slow planning, before movement and use`, async t => {
   const a = installedActor(weapon)
-  const read = require('../src/read')
+  const read: typeof import('../src/read') = require('../src/read')
   t.mock.method(read, 'crossbowInfo', () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }))
   const warnings: string[] = []
   t.mock.method(console, 'warn', message => { warnings.push(String(message)) })
@@ -153,7 +153,7 @@ for (const weapon of ['bow', 'crossbow']) test(`installed ${weapon} final aim ob
 
 for (const weapon of ['bow', 'crossbow']) test(`installed ${weapon} late final aim cancels after planning without a use packet or listener`, async t => {
   const a = installedActor(weapon)
-  const read = require('../src/read')
+  const read: typeof import('../src/read') = require('../src/read')
   t.mock.method(read, 'crossbowInfo', () => ({ loaded: true, ammo: 'arrow', multishot: false, piercing: 0 }))
   t.mock.method(console, 'warn', () => {}) // test-local capture; production warning remains intact
   let stopped = false
@@ -363,8 +363,8 @@ test('legacy clients without native authority cannot claim a full charge', async
 function shootDragon(name, a) {
   // Evaluate the actual TS function, keeping forecasts and network external.
   // No daemon JS rebuild or dragon/module setup runs during a native campaign.
-  const fs = require('node:fs'); const path = require('node:path')
-  const esbuild = require('esbuild')
+  const fs: typeof import('node:fs') = require('node:fs'); const path: typeof import('node:path') = require('node:path')
+  const esbuild: typeof import('esbuild') = require('esbuild')
   const file = name === 'pointBlank' ? 'crystal-shot-spot.ts' : 'station-plan.ts'
   const source = fs.readFileSync(path.join(__dirname, '../src/dragon', file), 'utf8')
   const body = source.match(new RegExp(`async function ${name}\\b[\\s\\S]*?^}`, 'm'))?.[0]

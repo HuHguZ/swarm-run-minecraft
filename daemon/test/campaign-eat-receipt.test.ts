@@ -1,12 +1,14 @@
+import { CAMPAIGN, withSetters } from './campaign-source'
+import { functionSource } from './source-fixture'
+import { cjsContext } from './cjs-context'
 export {}
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const path = require('node:path')
-const vm = require('node:vm')
-const esbuild = require('esbuild')
-const source = fs.readFileSync(path.join(__dirname, '..', 'campaign.ts'), 'utf8')
-const actBody = source.slice(source.indexOf('async function act ('), source.indexOf('let hunting = false'))
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as fs from 'node:fs'
+import path = require('node:path')
+import * as vm from 'node:vm'
+import * as esbuild from 'esbuild'
+const actBody = functionSource(CAMPAIGN, 'act', { ts: true })
 
 async function receipt (detail, method = 'eat') {
   const rows = [], logs = []
@@ -20,7 +22,7 @@ async function receipt (detail, method = 'eat') {
     telemetry: { on: () => true, snapshot: () => ({}), delta: () => ({}), outcome: () => ({ status: result.status }), record: row => rows.push(row) },
     call: async () => result, acceptResult: () => {}, seamSnapshot: () => {}, telParams: JSON.stringify, log: line => logs.push(line)
   }
-  vm.createContext(ctx)
+  vm.createContext(cjsContext(withSetters(ctx)))
   vm.runInContext(esbuild.transformSync(actBody, { loader: 'ts', format: 'cjs' }).code, ctx)
   assert.equal(await ctx.act(method, {}), result, 'logging must preserve the actual body result')
   return { rows, logs }

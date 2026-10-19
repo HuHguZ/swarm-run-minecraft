@@ -1,8 +1,8 @@
 'use strict'
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const NG = require('../src/nether-grid')
-const NR = require('../src/nether-route')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+import * as NG from '../src/nether-grid'
+import NR = require('../src/nether-route')
 const { C } = NG
 const from = { x: 2, y: 4, z: 4 }
 function corridor (n = 160) {

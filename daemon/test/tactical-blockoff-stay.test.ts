@@ -5,8 +5,9 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
-const { transformSync } = require('esbuild')
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+import { transformSync } from 'esbuild'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const previous = process.env.ND_OW_NIGHT_BLOCKOFF
 before(() => { process.env.ND_OW_NIGHT_BLOCKOFF = '1' })
@@ -16,7 +17,7 @@ function load(file: string, overrides: Record<string, any>) {
   const native = createRequire(file), context: any = { module: { exports: {} }, exports: {},
     require: name => Object.prototype.hasOwnProperty.call(overrides, name) ? overrides[name] : native(name),
     process, console: { log() {}, error() {} }, setTimeout, clearTimeout }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context, { filename: file })
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
   return context.module.exports
 }
 

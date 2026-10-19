@@ -40,8 +40,8 @@ class Vision {
     if (!bot) throw new Error('бот не в игре — зрению не на что смотреть')
     if (this.viewerBot === bot) return
 
-    const { mineflayer: mineflayerViewer } = require('prismarine-viewer')
-    mineflayerViewer(require('./viewer-adapter').viewerBot(bot), {
+    const { mineflayer: mineflayerViewer }: typeof import('prismarine-viewer') = require('prismarine-viewer')
+    mineflayerViewer((require('./viewer-adapter') as typeof import('./viewer-adapter')).viewerBot(bot), {
       port: this.port,
       firstPerson: true,
       viewDistance: this.cfg.viewerViewDistance
@@ -99,7 +99,7 @@ class Vision {
     }
 
     // Viewer camera listens to move; a turn in a frozen world produces no physics move event.
-    if (require('./game-clock').snapshot()?.frozen) {
+    if ((require('./game-clock') as typeof import('./game-clock')).snapshot()?.frozen) {
       this.session.bot.emit('move')
       await new Promise(resolve => setTimeout(resolve, 400))
     }
@@ -118,4 +118,4 @@ class Vision {
   }
 }
 
-module.exports = { Vision }
+export { Vision }

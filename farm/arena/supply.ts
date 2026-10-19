@@ -1,11 +1,12 @@
 'use strict'
+import { DIST_ROOT } from '../../daemon/src/paths'
 // Снабжение команды: чего не хватает бойцу и что отдать своим, гонка «лут → каптёр» (передачи, алхимик, апгрейд брони,
 // лаборатория), роли по снаряжению и командный сторож.
 import { ROOT } from './context'
 import { WEAPON, FOOD, ARMOR_SLOT, ALCHEMY, tierOf, KITS } from './gear'
 import type { ArenaContext } from './context'
-const path = require('path')
-const crowd = require(path.join(ROOT, 'daemon', 'src', 'pvp', 'crowd'))
+import path = require('path')
+const crowd = require(path.join(DIST_ROOT, 'daemon', 'src', 'pvp', 'crowd'))
 
 export function installSupply (ctx: ArenaContext) {
   const { i, kit, COLOS_MAP, AL, L, X, Y, Z, bots, pos, busy, labNeed, brewed, alchemist, log, sleep } = ctx

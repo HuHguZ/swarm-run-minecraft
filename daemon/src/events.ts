@@ -1,5 +1,5 @@
 'use strict'
-const gameClock = require('./game-clock')
+import * as gameClock from './game-clock'
 
 // Interrupt policy, decided during design:
 //   INTERRUPTING  - a real player talks to us, we take damage, health gets low,
@@ -134,4 +134,4 @@ class EventBus {
   }
 }
 
-module.exports = { EventBus, INTERRUPTING, WAKES, QUIET_DAMAGE }
+export { EventBus, INTERRUPTING, WAKES, QUIET_DAMAGE }

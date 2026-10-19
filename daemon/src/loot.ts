@@ -13,11 +13,11 @@
 // Вагонетка с сундуком — всегда шахта, это лут.
 // Взятые сундуки записываются в память (state.looted), второй раз не зовут.
 
-const Vec3 = require('vec3')
-const { xyz } = require('./movement')
-const { raySees } = require('./perception')
-const pick = require('./pick')
-const structures = require('./structures')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const { xyz }: typeof import('./movement') = require('./movement')
+const { raySees }: typeof import('./perception') = require('./perception')
+const pick: typeof import('./pick') = require('./pick')
+const structures: typeof import('./structures') = require('./structures')
 
 const CONTAINERS = ['chest', 'trapped_chest', 'barrel']
 
@@ -99,7 +99,7 @@ function lookOwned (bot, pos) {
 // записью «крепость (ад)» считался «рядом с нашей базой».
 function nearKnownPlace (session, pos) {
   const places = (session.journal.state && session.journal.state.places) || {}
-  const skip = require('./structures').STRUCTURE_PLACES
+  const skip = (require('./structures') as typeof import('./structures')).STRUCTURE_PLACES
   const bot = session.bot
   const here = String((bot && bot.game && bot.game.dimension) || 'overworld').replace(/^minecraft:/, '')
   for (const [name, p] of ((Object.entries(places) as [string, any][]) as any)) {
@@ -192,10 +192,11 @@ async function loot (session, ctl, { x, y, z, entityId, force = false, visibleOn
     return { looted: 'вагонетка с сундуком', guess: target.guess, took: r.took, why: r.why, junkLeft: r.left, stopped: r.stopped }
   }
 
-  const deadline = timeoutSeconds === undefined ? undefined : require('./game-clock').now() + timeoutSeconds * 1000
+  const deadline = timeoutSeconds === undefined ? undefined : (require('./game-clock') as typeof import('./game-clock')).now() + timeoutSeconds * 1000
   const r = await structures.takeWorth(session, ctl, target.at, { kind: target.structure, visibleOnly, deadline })
   if (!r.stopped || Object.keys(r.took || {}).length) markLooted(session, keyOf(target.at))
   return { looted: target.kind, guess: target.guess, at: target.at, took: r.took || {}, why: r.why, junkLeft: r.left, left: r.notTaken, stopped: r.stopped }
 }
 
 module.exports = { seen, loot, guessStructure, markLooted }
+export { seen, loot, guessStructure, markLooted }

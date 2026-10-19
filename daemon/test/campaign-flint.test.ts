@@ -1,13 +1,15 @@
+import { functionSource } from './source-fixture'
+import { CAMPAIGN } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
+import { cjsContext } from './cjs-context'
 
 function fixture() {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
-  const body = source.slice(source.indexOf('async function ensureFlint ()'), source.indexOf('let castRuns ='))
+  const body = functionSource(CAMPAIGN, 'ensureFlint', { ts: true })
   const inventory: Record<string, number> = { gravel: 1, iron_ingot: 1 }
   const calls: Array<{ method: string, params: any }> = []
   let attempt = 0
@@ -34,7 +36,7 @@ function fixture() {
       return { status: 'done', detail: { dug: 0, found: method === 'explore' && exploreFound } }
     }
   }
-  vm.createContext(context)
+  vm.createContext(cjsContext(context))
   vm.runInContext(body + '\nthis.ensure = ensureFlint', context)
   return { inventory, calls, durations, ensure: context.ensure, setAttempt: n => { attempt = n }, interrupt: () => { interrupted = true }, interruptMethod: method => { interruptedMethod = method }, findGravel: () => { exploreFound = true } }
 }
@@ -114,7 +116,7 @@ test('flint search keeps visible gravel first and requests a surface route after
 })
 
 test('the flint grinder chooses a new cell after walking onto its previous drop', async () => {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const cells = new Map<string, string>()
   const inventory = { gravel: 1, flint: 0 }
   const placed: number[] = []
@@ -140,7 +142,7 @@ test('the flint grinder chooses a new cell after walking onto its previous drop'
     throw new Error(name)
   } }
   const file = path.join(__dirname, '../src/flint-grind.ts')
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, context)
+  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
   const result = await context.module.exports.flintGrind({ bot }, { aborted: false }, { max: 4 })
   assert.equal(result.ok, true)
   assert.deepEqual(placed, [1, 2])

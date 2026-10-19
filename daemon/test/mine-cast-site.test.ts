@@ -1,15 +1,18 @@
+import { bodySource } from './source-fixture'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
-const Vec3 = require('vec3')
+import { cjsContext } from './cjs-context'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 // Run the complete mine module against the real one-bucket geometry. Only
 // visible candidates, digging and inventory pickup are the environment boundary.
-const code = Object.fromEntries(['actions', 'cast1'].map(name => [name,
-  transformSync(fs.readFileSync(path.join(__dirname, `../src/${name}.ts`), 'utf8'), { loader: 'ts', format: 'cjs' }).code]))
+const code = Object.fromEntries(['actions', 'cast1'].map(name => [name, name === 'actions'
+  ? bodySource(path.join(__dirname, '../src/actions.js')) // фасад + части src/actions/** одной областью видимости
+  : transformSync(fs.readFileSync(path.join(__dirname, `../src/${name}.ts`), 'utf8'), { loader: 'ts', format: 'cjs' }).code]))
 
 function fixture(options: any = {}) {
   const dug: any[] = [], reads: any[] = [], blocks: any[] = [], inventory: Record<string, number> = {}
@@ -33,13 +36,13 @@ function fixture(options: any = {}) {
   const load = name => {
     if (modules[name]) return modules[name].exports
     const module = modules[name] = { exports: {} }
-    vm.runInNewContext(code[name], { module, exports: module.exports, process: { env: {} }, console: { log() {} },
+    vm.runInNewContext(code[name], cjsContext({ module, exports: module.exports, process: { env: {} }, console: { log() {} },
       require(request) {
         if (request === './cast1') return load('cast1')
         if (request in imports) return imports[request]
         throw new Error(`unexpected dependency ${request}`)
       }
-    }, { filename: path.join(__dirname, `../src/${name}.ts`) })
+    }), { filename: path.join(__dirname, `../src/${name}.ts`) })
     return module.exports
   }
   const plan = { axis: options.axis || 'x', side: options.side || 1, origin: { x: 10, y: 64, z: 20 }, dig: [], place: [], dimension: 'overworld' }

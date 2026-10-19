@@ -1,5 +1,5 @@
 'use strict'
-const { EventEmitter } = require('node:events')
+import { EventEmitter } from 'node:events'
 
 // Existing VM policy fixtures advance their own Date or replace their own
 // timers. Route the explicit game-clock port through that fixture boundary;
@@ -28,4 +28,4 @@ function withClockFixture (context) {
   }
   return context
 }
-module.exports = { clockFixture, withClockFixture }
+export { clockFixture, withClockFixture }

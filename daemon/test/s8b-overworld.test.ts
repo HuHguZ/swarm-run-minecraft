@@ -1,8 +1,8 @@
 'use strict'
 // S8b (07.10, верхний мир «новый мир → Ад», продолжение S8).
-const test = require('node:test')
-const assert = require('node:assert')
-const route = require('../src/route')
+import test = require('node:test')
+import assert = require('node:assert')
+import route = require('../src/route')
 
 const book = () => ({ done: new Set<string>(), fails: new Map<string, number>(), avoid: new Set<string>() })
 
@@ -33,7 +33,7 @@ test('bookStep: провалы — food/water мягкие, плавка до т
 
 // Литьё одним ведром (cast1.judge1) на синтетическом озере: ось z, сторона +x; рама x=0, жёлоб x=1, берег x=2, озеро x≥3 на y 64.
 function lakeWorld (lava: Array<[number, number]>, extra: Record<string, string> = {}) {
-  const Vec3 = require('vec3')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
   const set = new Set(lava.map(([x, z]) => `${x},${z}`))
   const mk = (p: any, name: string) => ({ name, boundingBox: /air|lava|water/.test(name) ? 'empty' : 'block', position: p, metadata: 0, getProperties: () => ({ level: 0 }) })
   const read = (p: any) => {
@@ -43,7 +43,7 @@ function lakeWorld (lava: Array<[number, number]>, extra: Record<string, string>
     if (p.y === 64) return mk(p, set.has(`${p.x},${p.z}`) ? 'lava' : 'stone')
     return mk(p, 'air')
   }
-  return { read, g: require('../src/cast1').geom1(new Vec3(0, 65, 0), 'z', 1) }
+  return { read, g: (require('../src/cast1') as typeof import('../src/cast1')).geom1(new Vec3(0, 65, 0), 'z', 1) }
 }
 const withEnv8b = (env: Record<string, string | undefined>, fn: () => void) => {
   const old: Record<string, string | undefined> = {}
@@ -52,7 +52,7 @@ const withEnv8b = (env: Record<string, string | undefined>, fn: () => void) => {
 }
 
 test('cast1: пол берега без блока (не под телом) — в план ставкой блока; ND_CAST1_SHORE=0 — «берег не твёрдый»', () => {
-  const cast1 = require('../src/cast1')
+  const cast1: typeof import('../src/cast1') = require('../src/cast1')
   const lake: Array<[number, number]> = []
   for (let x = 3; x <= 9; x++) for (let z = -6; z <= 7; z++) lake.push([x, z])
   for (const gap of ['air', 'lava']) {
@@ -67,7 +67,7 @@ test('cast1: пол берега без блока (не под телом) — 
 })
 
 test('cast1: верх рамы — и со столба в G(±1): озеро, где из G(0) со столба 2 источника, годится со сдвигом; ND_CAST1_SHIFT=0 — нет', () => {
-  const cast1 = require('../src/cast1')
+  const cast1: typeof import('../src/cast1') = require('../src/cast1')
   const lake: Array<[number, number]> = [[3, -3], [3, 3], [3, 4], [4, -2], [4, 2], [4, 3], [5, -1], [5, 0], [5, 1], [3, 1], [4, 1], [6, 0], [3, -4], [5, 2], [5, 3]]
   const { read, g } = lakeWorld(lake)
   const r = cast1.judge1(read, g, {})
@@ -77,9 +77,9 @@ test('cast1: верх рамы — и со столба в G(±1): озеро, �
 })
 
 test('goto: рефлекс падения (Emergency) снимает цель — после него та же цель снова, без «goal was changed»; чужая смена цели — отказ', async () => {
-  const { EventEmitter } = require('node:events')
-  const { gotoGoal } = require('../src/movement')
-  const RL = require('../src/reflex-lock')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { gotoGoal }: typeof import('../src/movement') = require('../src/movement')
+  const RL: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
   const mkBot = () => {
     const b: any = new EventEmitter()
     b.goals = [] as any[]
@@ -106,7 +106,7 @@ test('goto: рефлекс падения (Emergency) снимает цель �
 })
 
 test('хп маршрута — цена: риск копки (хвост потерь × цена смерти) против лечения; нечем лечиться — копать; хп < 1 — нет', () => {
-  const r = require('../src/route')
+  const r: typeof import('../src/route') = require('../src/route')
   for (let h = 1; h < 13; h++) assert.ok(r.digRiskTicks(h) >= r.digRiskTicks(h + 1), `риск не растёт с хп (${h})`)
   assert.ok(r.digRiskTicks(6) < r.healTicks(6, true), 'хп 6 и еда есть — копать (регенерация идёт и в копке)')
   assert.ok(r.digRiskTicks(2) < r.healTicks(2, false), 'лечиться нечем — копать')
@@ -120,7 +120,7 @@ test('хп маршрута — цена: риск копки (хвост пот
 })
 
 test('вода подо льдом: источники рядом есть, на виду ни одного — сломать лёд и черпнуть; ND_ROUTE_ICE=0 — нет', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const run = async (env: Record<string, string>) => {
     const calls: string[] = []
     let water = false
@@ -150,7 +150,7 @@ test('вода подо льдом: источники рядом есть, на
 })
 
 test('к стволу из скана — клетка рядом на его высоте (не сам ствол: goto поднимал на крону); дошли на высоту ствола — хватит', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const gotos: any[] = []
   let y = 75
   let logs = 0
@@ -171,7 +171,7 @@ test('к стволу из скана — клетка рядом на его в
 })
 
 test('кремень в залежи гравия: копать стенку по 6 (честные броски), рюкзак крутить, только когда стенка кончилась', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const run = async (dugs: number[]) => {
     const calls: string[] = []
     let flint = 0, y = 70, gravel = 0
@@ -199,7 +199,7 @@ test('кремень в залежи гравия: копать стенку п�
 })
 
 test('дерево: кирка уже в рюкзаке и брёвен на топливо ≥ 3 — рощи дальше не ищем (рюкзак отстал от крафта)', async () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const calls: string[] = []
   let pick = 0
   const ctx: any = {
@@ -217,8 +217,8 @@ test('дерево: кирка уже в рюкзаке и брёвен на т�
 })
 
 test('pathfinder: в верхнем мире вода дороже (liquidCost ≥ 3), в Аду — как было; ND_OW_LIQUID=0 — как было', () => {
-  const worlds = require('../src/worlds')
-  const reg = require('minecraft-data')('1.21.11')
+  const worlds: typeof import('../src/worlds') = require('../src/worlds')
+  const reg = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const mk = (dimension: string) => ({ movements: { liquidCost: 1, blocksToAvoid: new Set(), blocksCantBreak: new Set(), getNeighbors: () => [] } as any, bot: { registry: reg, entity: { position: { y: 64 } }, game: { dimension } } as any })
   const ow = mk('overworld'); worlds.tuneMovements(ow.bot, ow.movements)
   assert.strictEqual(ow.movements.liquidCost, 3)
@@ -228,7 +228,7 @@ test('pathfinder: в верхнем мире вода дороже (liquidCost �
 })
 
 test('запас блоков одного ведра: у лавы 16, на этапе камня 12 (добор под землёй дорог)', () => {
-  const { createOverworldRoute } = require('../src/campaign/overworld-route')
+  const { createOverworldRoute }: typeof import('../src/campaign/overworld-route') = require('../src/campaign/overworld-route')
   const ctx: any = { process: { env: { ND_ROUTE: '1' } }, routeMod: { BUCKETS: () => 1 } }
   const r = createOverworldRoute(ctx)
   assert.strictEqual(r.routeBlockTarget(), 16)

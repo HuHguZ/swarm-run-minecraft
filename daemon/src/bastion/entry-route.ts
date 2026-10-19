@@ -1,6 +1,6 @@
 'use strict'
 // A facade supplies hypotheses; a spatially separate new contour confirms the housing wall.
-const bp = require('../bastion-pieces')
+const bp: typeof import('../bastion-pieces') = require('../bastion-pieces')
 const family = s => s === 'G' || s === 'g' ? 'B' : s === 'M' ? 'o' : s
 const bit = { '.': 1, B: 2, b: 4, s: 8, C: 16, L: 32, o: 64 }
 const shapes = new Map()
@@ -139,7 +139,7 @@ function memory (bot) {
   return bot._ndBastionEntry
 }
 function * observeSteps (bot) {
-  const {visibleOf}=require('../sight'),eyes=require('../perception/eyes'),Vec3=require('vec3')
+  const {visibleOf}: typeof import('../sight')=require('../sight'),eyes: typeof import('../perception/eyes')=require('../perception/eyes'),Vec3: typeof import('vec3').Vec3=require('vec3')
   const groups=[[/^(polished_blackstone_bricks|cracked_polished_blackstone_bricks|gilded_blackstone)$/,128],
     [/^(basalt|polished_basalt)$/,64],[/blackstone.*(stairs|slab|wall)$|^(chain|lantern|iron_bars)$/,48],
     [/^gold_block$/,24],[/^(chest|trapped_chest|barrel)$/,16]]
@@ -177,7 +177,7 @@ async function observe (bot,ctl) {
   } finally { steps.return(null) }
 }
 function cause (bot,m,target) {
-  const Vec3=require('vec3'),eyes=require('../perception/eyes'),p=bot.entity.position,origin=m.failedOrigin||p
+  const Vec3: typeof import('vec3').Vec3=require('vec3'),eyes: typeof import('../perception/eyes')=require('../perception/eyes'),p=bot.entity.position,origin=m.failedOrigin||p
   const cells=[]
   for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]) for(let d=1;d<=3;d++) for(let dy=-1;dy<=2;dy++) {
     const q=new Vec3(Math.floor(origin.x)+dx*d,Math.floor(origin.y)+dy,Math.floor(origin.z)+dz*d)
@@ -191,7 +191,7 @@ function cause (bot,m,target) {
 }
 async function approach (session,ctl,st,deadline) {
   if(!session.bot?.entity || !session.bot.world?.getColumn || !session.bot.world?.raycast)return{handled:false,ok:false}
-  const bot=session.bot,Vec3=require('vec3'),SL=require('../sealed'),m=memory(bot)
+  const bot=session.bot,Vec3: typeof import('vec3').Vec3=require('vec3'),SL: typeof import('../sealed')=require('../sealed'),m=memory(bot)
   const last=m.frames[m.frames.length-1],p=bot.entity.position
   // Finish the chosen viewpoint: intermediate scans must not consume its new contour before arrival.
   const res=m.confirmed || m.aim && last && key(p.floored())!==key(m.aim)
@@ -211,9 +211,9 @@ async function approach (session,ctl,st,deadline) {
   if(start && F.y===target.y && Math.hypot(F.x-target.x,F.z-target.z)<=1.5)return{handled:true,ok:true,start,entry:target}
   if(m.failed===cause(bot,m,target))return{handled:true,ok:false,progress:false,why:'entry route unchanged since its physical failure'}
   if(!start) {
-    const eyes=require('../perception/eyes'),y=F.y
+    const eyes: typeof import('../perception/eyes')=require('../perception/eyes'),y=F.y
     const view={blockAt:q=>q.y>=y-1&&q.y<=y+1&&eyes.seesNow(bot,q)?bot.blockAt(q):null}
-    const nodes=require('../walkable').walkable(view,F,{radius:8,maxNodes:240})
+    const nodes=(require('../walkable') as typeof import('../walkable')).walkable(view,F,{radius:8,maxNodes:240})
     const seen=m.frames[m.frames.length-1]?.blocks.filter(b=>/blackstone|basalt|chest/.test(b.name))||[]
     const pivot=seen.length?{x:seen.reduce((s,b)=>s+b.position.x,0)/seen.length,z:seen.reduce((s,b)=>s+b.position.z,0)/seen.length}:target
     let next=m.aim&&nodes.find(n=>key(n.pos)===key(m.aim))
@@ -223,7 +223,7 @@ async function approach (session,ctl,st,deadline) {
       while(next.d>1) { const prev=nodes.find(n=>n.d===next.d-1&&n.pos.y===next.pos.y&&Math.abs(n.pos.x-next.pos.x)+Math.abs(n.pos.z-next.pos.z)===1);if(!prev){next=null;break}next=prev }
       if(next) {
         const before=bot.entity.position.clone()
-        const ok=await require('../endportal-descent').walkInto(bot,ctl,new Vec3(next.pos.x,next.pos.y,next.pos.z),0,true)
+        const ok=await (require('../endportal-descent') as typeof import('../endportal-descent')).walkInto(bot,ctl,new Vec3(next.pos.x,next.pos.y,next.pos.z),0,true)
         const progress=bot.entity.position.distanceTo(before)>.25
         if(!ok&&!progress){m.visited.add(key(at));m.aim=null}
         if(progress)return{handled:true,ok:false,progress,why:'second characteristic view on observed support'}
@@ -233,7 +233,7 @@ async function approach (session,ctl,st,deadline) {
   // A probe follows a hypothesis through verified rock; it does not certify that hypothesis or mine hidden gold.
   const S=st.sealedState||(st.sealedState={own:new Set(),exposed:true,dug:0,moves:0,fills:0,ores:0,bonusBlocks:0,goldPassed:0,plans:0,fails:[],planMs:0,walks:0,honest:true})
   const before=bot.entity.position.clone()
-  const r=await require('../nether-cover').closedBore(session,ctl,target,{deadline,maxSteps:64,minY:Math.min(F.y,target.y)-1,adjacent:true,own:S.own,
+  const r=await (require('../nether-cover') as typeof import('../nether-cover')).closedBore(session,ctl,target,{deadline,maxSteps:64,minY:Math.min(F.y,target.y)-1,adjacent:true,own:S.own,
     onOpen:async()=>{if(!start)await observe(bot,ctl);return{recognized:!!m.confirmed}},stop:v=>!start&&v.recognized})
   S.dug+=r.dug||0;S.moves+=(r.moved||0)+(r.down||0);S.fills+=r.placed||0;S.exposed=!!r.unsealed
   const progress=bot.entity.position.distanceTo(before)>.25||!start&&!!m.confirmed
@@ -244,3 +244,4 @@ async function approach (session,ctl,st,deadline) {
 }
 
 module.exports={assess,assessSteps,agreedStart,entryOf,chooseView,memory,observe,observeSteps,approach}
+export { assess, assessSteps, agreedStart, entryOf, chooseView, memory, observe, observeSteps, approach }

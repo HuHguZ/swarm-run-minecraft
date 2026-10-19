@@ -1,18 +1,20 @@
+import { campaignRequire, campaignTs } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { transformSync } from 'esbuild'
+import { cjsContext } from './cjs-context'
 
 // Лут построек ценой (пользователь 14.10): campaign.lootSeenStructures на заглушках тела.
 function fixture ({ known = [], bag = {} as Record<string, number>, portal = null as any, explore = { status: 'done', detail: { done: true } } }: any = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '../campaign.ts'), 'utf8')
+  const source = campaignTs()
   const fn = source.slice(source.indexOf('// Постройки на виду — лут ценой'), source.indexOf('async function surfaceLavaSurvey'))
   const calls: any[] = []
   const lines: string[] = []
   const facts: Record<string, any> = {}
-  const context: any = { module: { exports: {} }, require, path, __dirname: path.join(__dirname, '..'), process: { env: {} },
+  const context: any = { module: { exports: {} }, require: campaignRequire, path, __dirname: path.join(__dirname, '..'), process: { env: {} },
     state: { pos: { x: 0, y: 64, z: 0 }, inventory: { ...bag } }, known: { portal }, died: false, BEDS_END: 5, PICK_IRON: /^(iron|diamond|netherite)_pickaxe$/,
     gameClock: { now: () => 0 }, dim: () => 'overworld', goldOn: () => false, shieldOn: () => false, lighter: () => !!(bag.flint_and_steel || bag.fire_charge),
     foodUnits: () => bag.bread || 0, have: re => Object.entries(context.state.inventory).filter(([k]) => typeof re === 'string' ? re === k : re.test(k)).reduce((n, [, v]: any) => n + v, 0),
@@ -26,7 +28,7 @@ function fixture ({ known = [], bag = {} as Record<string, number>, portal = nul
       if (method === 'structure' && params.mode === 'explore') { context.state.inventory.flint_and_steel = 1; return explore }
       return { detail: {} }
     } }
-  vm.runInNewContext(transformSync(`${fn}\nmodule.exports = lootSeenStructures`, { loader: 'ts', format: 'cjs' }).code, context)
+  vm.runInNewContext(transformSync(`${fn}\nmodule.exports = lootSeenStructures`, { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
   return { calls, lines, facts, sit: context.sit, run: context.module.exports }
 }
 

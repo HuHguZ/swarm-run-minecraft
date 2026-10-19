@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const mace = require('../src/mace')
+import mace = require('../src/mace')
 
 function botWith (hotbar: string[], foe: any) {
   const slots: any[] = []

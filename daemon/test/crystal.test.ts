@@ -2,11 +2,11 @@
 // Кристаллы Края (crystal.js, 2026-09-30): установка по EndCrystalItem.useOn,
 // урон по формуле ServerExplosion с видимостью, окно неуязвимости, правило
 // «себе больше, чем ему, и свой тотем — никогда», честный прицел.
-const test = require('node:test')
-const assert = require('node:assert/strict')
-const Vec3 = require('vec3')
-const cr = require('../src/crystal')
-const boom = require('../src/boom')
+import test = require('node:test')
+import assert = require('node:assert/strict')
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import cr = require('../src/crystal')
+import boom = require('../src/boom')
 
 // Мир: пол y=-1 (obsidian по умолчанию), остальное воздух; extra — «x,y,z» → имя.
 function world ({ floor = 'obsidian', extra = {} as Record<string, any>, ents = {} as Record<string, any> }: any = {} as Record<string, any>) {
@@ -134,7 +134,7 @@ test('рамка кристалла и расстояние до неё', () => 
 // План целиком на поддельном боте: пол, он в нескольких блоках, у меня
 // кристаллы и обсидиан.
 function duelBot ({ floor = 'obsidian', foeAt = new Vec3(4.5, 0, 0.5), extra = {} as Record<string, any>, inv = null }: any = {} as Record<string, any>) {
-  const registry = require('minecraft-data')('1.21.11')
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const bot = world({ floor, extra })
   bot.registry = registry
   bot.health = 20

@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-const { Vec3 } = require('vec3')
-const clock = require('../src/game-clock')
-const threats = require('../src/threats')
+import { Vec3 } from 'vec3'
+import * as clock from '../src/game-clock'
+import threats = require('../src/threats')
 
 // Local Paper 1.21.11 AbstractHurtingProjectile.tick/applyInertia/getInertia:
 // before moving, velocity = (velocity + normalize(velocity) * .1) * .95.
