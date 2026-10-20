@@ -96,8 +96,21 @@ const wall = f => FAM[f] && FAM[f].wall ? FAM[f].wall : f
 
 // ---------------------------------------------------------------- набор
 
+// B = kit(g): инструменты по группам ниже (основа, стены, круглые формы, крыши, лестницы, мебель) —
+// в порядке прежнего единого тела.
 function kit (g) {
   const B: Record<string, any> = {} as Record<string, any>
+  kitBasics(B, g)
+  kitWalls(B, g)
+  kitRounds(B, g)
+  kitRoofs(B, g)
+  kitStairs(B, g)
+  kitFurniture(B, g)
+  return B
+}
+
+// ---- основа: сетка, клетка, параллелепипеды, столб
+function kitBasics (B, g) {
   B.g = g
   B.S = (x, y, z, s) => g.set(x, y, z, s)
   B.G = (x, y, z) => g.get(x, y, z)
@@ -120,7 +133,9 @@ function kit (g) {
     }
   }
   B.column = (x, z, y0, y1, s) => { for (let y = y0; y <= y1; y++) g.set(x, y, z, s) }
+}
 
+function kitWalls (B, g) {
   // ---- плоскость стены: along — ось вдоль стены ('x' | 'z'), c — координата
   // поперёк, out — наружная сторона. P(a, y, d) → клетка: a — вдоль, d — вглубь
   // (0 — плоскость, +1 — наружу).
@@ -208,7 +223,9 @@ function kit (g) {
       if (i % every === 0) { g.set(x, y, z, f); g.set(x, y + 1, z, slab(f)) } else g.set(x, y, z, slab(f))
     })
   }
+}
 
+function kitRounds (B, g) {
   // ---- круглые формы
   // Клетки кольца r0 < d ≤ r1 от центра (cx, cz) (центр клетки).
   B.disc = (cx, cz, r, fn) => {
@@ -284,7 +301,10 @@ function kit (g) {
     g.set(cx, yt + 2, cz, st('lightning_rod', { facing: 'up', powered: 'false', waterlogged: 'false' }))
     return yt + 2
   }
+}
 
+// ---- крыши
+function kitRoofs (B, g) {
   // Двускатная крыша над прямоугольником стен x0..x1 × z0..z1 (стены — до
   // ye − 1), конёк вдоль оси axis. Скат — ступени к коньку; slope 2 — ступень
   // на блоке (крутая готическая). Свес ov по скатам и торцам; торцевые стены
@@ -344,7 +364,10 @@ function kit (g) {
       }
     }
   }
+}
 
+// ---- лестницы
+function kitStairs (B, g) {
   // Винтовая лестница в круглой башне: центр (cx, cz), внутренний радиус ri
   // (≥ 3.2), столб 3×3; 16 секторов, подъём rev за оборот полублоками,
   // две площадки. Старт — сектор площадки, обращённый к landDir.
@@ -401,7 +424,9 @@ function kit (g) {
     }
     return [x + dx * rise, z + dz * rise]
   }
+}
 
+function kitFurniture (B, g) {
   // ---- мебель и детали
   B.doors = [] // для проверки проходов (castle-walk.js)
   B.door = (x, y, z, facing, mat = 'spruce_door', hinge = 'left') => {
@@ -454,7 +479,6 @@ function kit (g) {
   }
   B.banner = (x, y, z, facing, color = 'red') => g.set(x, y, z, st(`${color}_wall_banner`, { facing }))
   B.pot = (x, y, z, plant = 'red_tulip') => g.set(x, y, z, `potted_${plant}`)
-  return B
 }
 
 // Сторона света по вектору (x — восток, z — юг); inv — от центра наружу.

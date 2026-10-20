@@ -1,30 +1,31 @@
 'use strict'
-const gameClock: typeof import('./game-clock') = require('./game-clock')
-const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
+import * as gameClock from './game-clock'
+import { goals } from 'mineflayer-pathfinder'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { sleep, xyz, standableY, travelXZ, inWater, escapeWater }: typeof import('./movement') = require('./movement')
-const { raySees, eyePos }: typeof import('./perception') = require('./perception')
-const { bestWeapon, itemNamed, countItems, diffItems }: typeof import('./items') = require('./items')
-const { placeBlockAt, towerUp, occupiedByEntity, pickFiller }: typeof import('./build') = require('./build')
-const { collectNearbyDrops }: typeof import('./actions') = require('./actions')
+import { sleep, xyz, standableY, travelXZ, inWater, escapeWater } from './movement'
+import './perception'
+import { bestWeapon, itemNamed, countItems, diffItems } from './items'
+import './build'
+import { collectNearbyDrops } from './actions'
 // Одеться перед боем — не побочное дело combat.js, а его прямое: автопилот
 // не одевается, пока работает намерение, а бой — намерение. Цикла импортов
 // нет: armor.js тянет только ./movement.
-const armor: typeof import('./armor') = require('./armor')
+import * as armor from './armor'
 // One definition of "who is a person", shared with the reflex that watches
 // them: two copies is two things to forget to update, and the routine that
 // turns the head toward a player and the code that refuses to swing at one
 // must never disagree about the same body.
-const { isPlayerEntity }: typeof import('./social') = require('./social')
-const pvp: typeof import('./pvp') = require('./pvp')
-const flee: typeof import('./flee') = require('./flee')
-const { decideFight }: typeof import('./play-policy') = require('./play-policy')
-const survival: typeof import('./combat-safety') = require('./combat-safety')
-// Часть имён выше теперь нужна только частям combat/* — require оставлены, чтобы не менять порядок загрузки модулей.
-const { RANGED, liveAttacker, attackerHint, findTarget, nearestHostile, countHostiles, threatPoint }: typeof import('./combat/foes') = require('./combat/foes')
-const { corridorShape, sealCorridor }: typeof import('./combat/corridor') = require('./combat/corridor')
-const { retreat }: typeof import('./combat/retreat') = require('./combat/retreat')
-const { makeShield }: typeof import('./combat/shield') = require('./combat/shield')
+import { isPlayerEntity } from './social'
+import * as pvp from './pvp'
+import * as flee from './flee'
+import { decideFight } from './play-policy'
+import * as survival from './combat-safety'
+// Часть имён выше теперь нужна только частям combat/* — импорты оставлены (perception и build — без имён), чтобы не
+// менять порядок загрузки модулей.
+import { RANGED, liveAttacker, attackerHint, findTarget, nearestHostile, countHostiles, threatPoint } from './combat/foes'
+import { corridorShape, sealCorridor } from './combat/corridor'
+import { retreat } from './combat/retreat'
+import { makeShield } from './combat/shield'
 
 // One swing of a sword: the cooldown the fight loop paces itself by, and the
 // unit the shield's cost is billed in — a second of block inside sword reach is
@@ -203,6 +204,14 @@ async function fight (session, ctl, opts: any = {}) {
   }
 }
 
+// Один бой — прежние параметры и const тела fightBody, общие для его частей (подготовка, игрок, моб в поле, штрек).
+interface FightCtx {
+  session: any; ctl: any; guard: any; bot: any; entity: any; decision: any; label: string; ranged: boolean
+  retreatAtHealth: number; reach: number; timeoutSeconds: number; calmAfterMs: number; arena: any; allowRanged: any
+  lastStand: boolean; repelLava: boolean; engaged: boolean; roundScope: any; strategicYield: any; targets: any[]; relocateTo: any
+  potionFirst: boolean; wasWet: boolean; weapon: any; collectSafeDrops: (radius: number) => Promise<any>
+}
+
 async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null, targets = [], relocateTo = null, potionFirst = false }: any = {}, guard) {
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
@@ -223,17 +232,30 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
 
   const label = entity.username || entity.name
   const ranged = !!(entity.name && RANGED.has(entity.name))
+  const fb: FightCtx = { session, ctl, guard, bot, entity, decision, label, ranged, retreatAtHealth, reach, timeoutSeconds, calmAfterMs,
+    arena, allowRanged, lastStand, repelLava, engaged, roundScope, strategicYield, targets, relocateTo, potionFirst,
+    wasWet: false, weapon: null, collectSafeDrops }
+  const early = await fightPrepare(fb)
+  if (early) return early
+  if (isPlayerEntity(entity)) return fightPlayer(fb)
+  if (lastStand || repelLava || !corridorShape(bot, threatPoint(entity)).corridor) return fightOpen(fb)
+  const sealed = await fightSealFirst(fb)
+  if (sealed) return sealed
+  return fightCorridor(fb)
+}
 
+// Вода, оружие, броня и щит, затем проверка начала боя: не годится — отход (результат), годится — ничего.
+async function fightPrepare (fb: FightCtx) {
+  const { session, ctl, guard, bot, entity, retreatAtHealth, reach, arena, lastStand, repelLava, engaged } = fb
   // Fighting from the water is not fighting: pathfinder will not swim to the
   // target and the body just floats there being shot.
-  let wasWet = false
   if (inWater(bot) && !lastStand) {
-    wasWet = true
+    fb.wasWet = true
     await escapeWater(bot, ctl, { timeoutMs: 8000 })
   }
 
-  const weapon = bestWeapon(bot)
-  if (weapon) await bot.equip(weapon, 'hand')
+  fb.weapon = bestWeapon(bot)
+  if (fb.weapon) await bot.equip(fb.weapon, 'hand')
 
   // Порядок не случаен: armor.js кладёт щит в свободную левую руку последним
   // шагом своего плана, так что после него guard.wear() чаще всего находит
@@ -263,81 +285,87 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
     const escape = await survival.disengage(session, ctl, () => [entity, ...flee.hostilesAround(bot, 16).map(h => h.e)])
     return { skipped: true, lowHealth: preparation.action === 'recover', stopped: preparation.reason, safety: preparation, escape }
   }
+}
 
-  // Человек — другой бой. Моб идёт по прямой и бьёт, когда достал; человек
-  // отходит в перезарядке, крутится и бьёт в прыжке, и доктрина «подошёл и
-  // махай раз в 650 мс» проигрывает ему всухую (живой прогон 2026-09-24: 12
-  // ударов бота против 20). Вся тактика — в pvp.js.
-  if (isPlayerEntity(entity)) {
-    const r = await pvp.duel(session, ctl, entity, {
-      retreatAtHealth,
-      timeoutSeconds,
-      guard,
-      calmAfterMs: calmAfterMs || 0,
-      allowRanged,
-      lastStand,
-      repelLava,
-      purpose: decision.purpose,
-      roundScope,
-      strategicYield,
-      targets, relocateTo, potionFirst,
-      // Поле арены (arena.js): не уходить с него за соперником, вернуться, если выпал.
-      arena
-    })
-    if (!lastStand && r.lowHealth && !ctl.aborted && (bot.health ?? 0) > 0) {
-      if (FIGHT_NOAVOID()) bot._ndNoMobAvoid = false
-      const how = await retreat(session, ctl, entity)
-      return { ...r, retreated: true, ...how }
-    }
-    return r
+// Человек — другой бой. Моб идёт по прямой и бьёт, когда достал; человек
+// отходит в перезарядке, крутится и бьёт в прыжке, и доктрина «подошёл и
+// махай раз в 650 мс» проигрывает ему всухую (живой прогон 2026-09-24: 12
+// ударов бота против 20). Вся тактика — в pvp.js.
+async function fightPlayer (fb: FightCtx) {
+  const { session, ctl, guard, bot, entity, decision, retreatAtHealth, timeoutSeconds, calmAfterMs, arena, allowRanged, lastStand, repelLava,
+    roundScope, strategicYield, targets, relocateTo, potionFirst } = fb
+  const r = await pvp.duel(session, ctl, entity, {
+    retreatAtHealth,
+    timeoutSeconds,
+    guard,
+    calmAfterMs: calmAfterMs || 0,
+    allowRanged,
+    lastStand,
+    repelLava,
+    purpose: decision.purpose,
+    roundScope,
+    strategicYield,
+    targets, relocateTo, potionFirst,
+    // Поле арены (arena.js): не уходить с него за соперником, вернуться, если выпал.
+    arena
+  })
+  if (!lastStand && r.lowHealth && !ctl.aborted && (bot.health ?? 0) > 0) {
+    if (FIGHT_NOAVOID()) bot._ndNoMobAvoid = false
+    const how = await retreat(session, ctl, entity)
+    return { ...r, retreated: true, ...how }
   }
+  return r
+}
 
-  // Моб на открытом месте — то же микро: зомби достаёт на ~1.4 блока, мы на
-  // 2.9, так что удар с края и шаг назад в перезарядке оставляют его без
-  // ответа; скелету — зигзаг и уклон от стрел; криперу — спринт-удар и отход.
-  // В штреке остаётся старая доктрина ниже: там не отступают и запечатывают.
-  // Здоровье кончилось — отход по доктрине (retreat), как и раньше.
-  if (lastStand || repelLava || !corridorShape(bot, threatPoint(entity)).corridor) {
-    const hunting = /^(cow|pig|sheep|chicken|rabbit|mooshroom)$/.test(entity.name || '')
-    const r = await pvp.duel(session, ctl, entity, {
-      retreatAtHealth,
-      timeoutSeconds,
-      guard,
-      clearArea: decision.clearArea,
-      allowRanged,
-      lastStand,
-      repelLava,
-      purpose: decision.purpose
-    })
-    if (!lastStand && r.lowHealth && !ctl.aborted && (bot.health ?? 0) > 0) {
-      const from = entity.isValid ? entity : nearestHostile(bot, 16)
-      if (FIGHT_NOAVOID()) bot._ndNoMobAvoid = false
-      const how = from ? await retreat(session, ctl, from) : { mode: 'врагов рядом уже нет' }
-      return { ...r, retreated: true, from: from ? (from.name || '?') : undefined, ...how }
-    }
-    // Добыча: мясо с животного, порох с крипера, стрелы со скелета. Бой в
-    // поле (pvp.duel) кончается на смерти цели, а дроп остаётся лежать —
-    // охота за едой приносила ноль свинины (прогон campaign 2026-09-25).
-    // Штрековая ветка ниже подбирает сама; здесь — то же, если цель умерла.
-    if ((r.kills && r.kills.length) || !entity.isValid) {
-      const before = countItems(bot)
-      // Животное могло умереть от стрелы вне прежних восьми блоков. Подбор
-      // должен видеть место смерти, иначе охота тратит стрелы и приносит ноль.
-      const radius = hunting ? Math.max(8, Math.min(24, Math.ceil(entity.position.distanceTo(bot.entity.position)) + 2)) : 8
-      try { await collectSafeDrops(radius) } catch {}
-      r.gained = diffItems(before, countItems(bot))
-      r.picked = (Object.values(r.gained) as any[]).reduce((n: any, count) => n + count, 0)
-    }
-    return r
+// Моб на открытом месте — то же микро: зомби достаёт на ~1.4 блока, мы на
+// 2.9, так что удар с края и шаг назад в перезарядке оставляют его без
+// ответа; скелету — зигзаг и уклон от стрел; криперу — спринт-удар и отход.
+// В штреке остаётся старая доктрина ниже: там не отступают и запечатывают.
+// Здоровье кончилось — отход по доктрине (retreat), как и раньше.
+async function fightOpen (fb: FightCtx) {
+  const { session, ctl, guard, bot, entity, decision, retreatAtHealth, timeoutSeconds, allowRanged, lastStand, repelLava, collectSafeDrops } = fb
+  const hunting = /^(cow|pig|sheep|chicken|rabbit|mooshroom)$/.test(entity.name || '')
+  const r = await pvp.duel(session, ctl, entity, {
+    retreatAtHealth,
+    timeoutSeconds,
+    guard,
+    clearArea: decision.clearArea,
+    allowRanged,
+    lastStand,
+    repelLava,
+    purpose: decision.purpose
+  })
+  if (!lastStand && r.lowHealth && !ctl.aborted && (bot.health ?? 0) > 0) {
+    const from = entity.isValid ? entity : nearestHostile(bot, 16)
+    if (FIGHT_NOAVOID()) bot._ndNoMobAvoid = false
+    const how = from ? await retreat(session, ctl, from) : { mode: 'врагов рядом уже нет' }
+    return { ...r, retreated: true, from: from ? (from.name || '?') : undefined, ...how }
   }
+  // Добыча: мясо с животного, порох с крипера, стрелы со скелета. Бой в
+  // поле (pvp.duel) кончается на смерти цели, а дроп остаётся лежать —
+  // охота за едой приносила ноль свинины (прогон campaign 2026-09-25).
+  // Штрековая ветка ниже подбирает сама; здесь — то же, если цель умерла.
+  if ((r.kills && r.kills.length) || !entity.isValid) {
+    const before = countItems(bot)
+    // Животное могло умереть от стрелы вне прежних восьми блоков. Подбор
+    // должен видеть место смерти, иначе охота тратит стрелы и приносит ноль.
+    const radius = hunting ? Math.max(8, Math.min(24, Math.ceil(entity.position.distanceTo(bot.entity.position)) + 2)) : 8
+    try { await collectSafeDrops(radius) } catch {}
+    r.gained = diffItems(before, countItems(bot))
+    r.picked = (Object.values(r.gained) as any[]).reduce((n: any, count) => n + count, 0)
+  }
+  return r
+}
 
-  // Walking at an archer down a straight drift is the one approach with no
-  // cover at any point of it, and the price is measured, not guessed: run 3b
-  // walked fifteen blocks and went 17 hp to 5 while landing two swings, run 3
-  // walked nine and paid 4. Call it 0.8 hp per block and use the worse of the
-  // two readings, because guessing high costs two blocks of cobblestone and
-  // guessing low costs twelve hp. The wall is the other side of that trade:
-  // run 3 sealed at ten blocks for two blocks and zero damage.
+// Walking at an archer down a straight drift is the one approach with no
+// cover at any point of it, and the price is measured, not guessed: run 3b
+// walked fifteen blocks and went 17 hp to 5 while landing two swings, run 3
+// walked nine and paid 4. Call it 0.8 hp per block and use the worse of the
+// two readings, because guessing high costs two blocks of cobblestone and
+// guessing low costs twelve hp. The wall is the other side of that trade:
+// run 3 sealed at ten blocks for two blocks and zero damage.
+async function fightSealFirst (fb: FightCtx) {
+  const { session, ctl, bot, entity, label, ranged, retreatAtHealth } = fb
   const APPROACH_COST_PER_BLOCK = 0.8
 
   // Decided before the chase starts rather than at the health threshold,
@@ -376,7 +404,11 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       }
     }
   }
+}
 
+// Штрек: старая доктрина — сближение, удар раз в перезарядку, щит против стрелка; отход по порогу хп.
+async function fightCorridor (fb: FightCtx) {
+  const { session, ctl, guard, bot, entity, decision, label, ranged, retreatAtHealth, reach, timeoutSeconds, collectSafeDrops } = fb
   // В режиме замера тело не двигается вовсе: сближение кончается ближним боем,
   // а ближний бой опускает щит и меряет уже не то. Один if вместо арены со рвом.
   const chase = () => {
@@ -402,8 +434,8 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
       return {
         killed: label,
         swings,
-        weapon: weapon ? weapon.name : 'кулаки',
-        wasWet: wasWet || undefined,
+        weapon: fb.weapon ? fb.weapon.name : 'кулаки',
+        wasWet: fb.wasWet || undefined,
         stoodGround: stood || undefined
       }
     }
@@ -412,7 +444,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
     // (fightkit.healInFight — раз в 8 с, только если хп упало до 10 и ниже).
     if ((bot.health ?? 20) <= Math.max(10, retreatAtHealth + 4) && bot.inventory.items().some(i => /golden_apple$/.test(i.name))) {
       await guard.raise(false)
-      if (await (require('./fightkit') as typeof import('./fightkit')).healInFight(session, ctl, { weapon, retreatAtHealth }).catch(() => false)) continue
+      if (await (require('./fightkit') as typeof import('./fightkit')).healInFight(session, ctl, { weapon: fb.weapon, retreatAtHealth }).catch(() => false)) continue
     }
     if (decision.purpose === 'food' && guard.safety.hit() > 0) {
       try { bot.pathfinder.setGoal(null) } catch {}

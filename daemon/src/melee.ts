@@ -261,6 +261,38 @@ function install (bot) {
 // ---------------------------------------------------------------- на бой
 
 function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpOk = null }: any = {}) {
+  const mf = fightState(bot, { target, style, jumpOk })
+  fightListen(mf)
+  fightKnockback(mf)
+  const { st, skill, M } = mf
+  return {
+    st,
+    skill,
+    clock: M,
+    hit: (e, opts?) => meleeHit(mf, e, opts),
+    rearm: () => meleeRearm(mf),
+    override: (keys) => meleeOverride(mf, keys),
+    choose: (ctx) => meleeChoose(mf, ctx),
+    shield: (opts) => meleeShield(mf, opts),
+    planning: () => !!mf.plan,
+    setCounter: (fn) => { mf.counterFn = fn },
+    close: () => meleeClose(mf),
+    report: () => meleeReport(mf)
+  }
+}
+
+// Один ближний бой (прежние let и const замыкания fight): часы удара M, счёт st, характер skill, тиковый план клавиш,
+// ожидание звука крита (pend), размены, серия спринт-ударов, ответный удар (counterFn).
+interface MeleeFight {
+  bot: any; target: any; jumpOk: any; M: any; st: any; HIT_SELECT: boolean; skill: any; kbMeasures: any[]; conv: any
+  plan: any // { steps: [{…клавиши}], i, cur, why }
+  pend: any; lastHurtAt: number; myHitAt: number; swingAt: number; serie: number; counterFn: any
+  applyStep: (s: any) => void; startPlan: (steps: any[], why: string) => void; convMiss: (why: string) => void
+  convResolve: (tail: any) => void; ent: () => any
+  onTick?: () => void; onHurt?: (victim: any, source: any) => void; onMelee?: (kind: string, x: any) => void; onRawVel?: (buf: any) => void
+}
+
+function fightState (bot, { target, style, jumpOk }: any): MeleeFight {
   const M = install(bot)
   const st = {
     swings: 0, sprintTries: 0, sprintHits: 0, crits: 0, strong: 0, weak: 0, sweeps: 0, nodamage: 0,
@@ -280,48 +312,30 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     counter: process.env.ND_HIT_SELECT === '0' ? 0 : style.counter ?? (0.6 + Math.random() * 0.35),
     sprintBias: style.sprintBias ?? (0.25 + Math.random() * 0.2)
   }
+  const mf: MeleeFight = { bot, target, jumpOk, M, st, HIT_SELECT, skill, kbMeasures: null, conv: null, plan: null, pend: null,
+    lastHurtAt: -1e9, myHitAt: -1e9, swingAt: 0, serie: 0, counterFn: null,
+    applyStep: null, startPlan: null, convMiss: null, convResolve: null, ent: null }
   // Тиковый план клавиш: шаг 0 — сейчас, шаг i — на i-м тике физики после;
   // поверх решений цикла (override). cur — шаг, что в силе сейчас: цикл не
   // должен перескочить через отпущенный на тик «вперёд» (иначе STOP и START
   // уйдут в одном тике — так ванильный клиент не умеет).
-  let plan = null // { steps: [{…клавиши}], i, cur, why }
   const applyStep = (s) => { for (const [k, v] of (Object.entries(s) as [string, any][])) { try { bot.setControlState(k, v) } catch {} } }
   const startPlan = (steps, why) => {
-    plan = { steps, i: 1, cur: steps[0], why }
+    mf.plan = { steps, i: 1, cur: steps[0], why }
     applyStep(steps[0])
   }
   // Замер отброса: где были в тик удара, где через 12 тиков, по его направлению.
   const kbMeasures = []
-  const onTick = () => {
-    if (pend && gameClock.now() - pend.t > 400) convResolve(null)
-    if (plan) {
-      if (plan.i >= plan.steps.length) plan = null
-      else {
-        plan.cur = plan.steps[plan.i++]
-        applyStep(plan.cur)
-      }
-    }
-    for (let i = kbMeasures.length - 1; i >= 0; i--) {
-      const m = kbMeasures[i]
-      if (--m.left > 0) continue
-      kbMeasures.splice(i, 1)
-      const p = bot.entity.position
-      const d = (p.x - m.p.x) * m.dx + (p.z - m.p.z) * m.dz
-      ;(m.counter ? st.kbCounter : m.reset ? st.kbReset : st.kbPlain).push(Math.round(d * 100) / 100)
-    }
-  }
-  bot.on('physicsTick', onTick)
 
   // Конверсия крита (2026-09-26: 23 выбора крита — 5 критов по звуку сервера).
   // На каждый удар «критом» — что было в момент пакета (земля, сдвиг последнего
   // пакета позиции, спринт сервера, вода, заряд) и какой звук сервер вернул:
   // причина промаха — по первому нарушенному условию Player.canCriticalAttack.
   const conv = { tries: 0, hits: 0, miss: {} }
-  let pend = null
   const convMiss = (why) => { conv.miss[why] = (conv.miss[why] || 0) + 1 }
   const convResolve = (tail) => {
-    const p = pend
-    pend = null
+    const p = mf.pend
+    mf.pend = null
     if (!p) return
     if (tail === 'crit') { conv.hits++; return }
     if (tail === 'nodamage') return convMiss('не прошёл (щит, кадры)')
@@ -337,9 +351,33 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
 
   // Попадание и серия: наши удары подряд без его ответа.
   const ent = () => { try { return typeof target === 'function' ? target() : target } catch { return null } }
-  let lastHurtAt = -1e9
-  let myHitAt = -1e9
-  let swingAt = 0
+  Object.assign(mf, { kbMeasures, conv, applyStep, startPlan, convMiss, convResolve, ent })
+  return mf
+}
+
+// Слушатели боя: тик (план клавиш, замер отброса, звук крита не пришёл), попадания сторон, звуки удара сервера.
+function fightListen (mf: MeleeFight) {
+  const { bot, M, st, kbMeasures, applyStep, convResolve, ent } = mf
+  const onTick = () => {
+    if (mf.pend && gameClock.now() - mf.pend.t > 400) convResolve(null)
+    if (mf.plan) {
+      if (mf.plan.i >= mf.plan.steps.length) mf.plan = null
+      else {
+        mf.plan.cur = mf.plan.steps[mf.plan.i++]
+        applyStep(mf.plan.cur)
+      }
+    }
+    for (let i = kbMeasures.length - 1; i >= 0; i--) {
+      const m = kbMeasures[i]
+      if (--m.left > 0) continue
+      kbMeasures.splice(i, 1)
+      const p = bot.entity.position
+      const d = (p.x - m.p.x) * m.dx + (p.z - m.p.z) * m.dz
+      ;(m.counter ? st.kbCounter : m.reset ? st.kbReset : st.kbPlain).push(Math.round(d * 100) / 100)
+    }
+  }
+  bot.on('physicsTick', onTick)
+
   const onHurt = (victim, source) => {
     const e = ent()
     if (!e || !victim) return
@@ -347,9 +385,9 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     const his = victim === bot.entity && source && source.id === e.id
     if (mine || his) {
       const now = gameClock.now()
-      if (now - lastHurtAt > 1500) { st.ex.n++; if (mine) st.ex.first++ }
-      lastHurtAt = now
-      if (mine) { st.ex.mine++; myHitAt = now; swingAt = 0 } else st.ex.his++
+      if (now - mf.lastHurtAt > 1500) { st.ex.n++; if (mine) st.ex.first++ }
+      mf.lastHurtAt = now
+      if (mine) { st.ex.mine++; mf.myHitAt = now; mf.swingAt = 0 } else st.ex.his++
     }
     if (mine) st.combo++
     if (victim === bot.entity && source && source.id === e.id) {
@@ -369,7 +407,7 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
       if (/item\.shield\.break/.test(x.n)) { if (his) st.shieldBreaks++; return }
       if (/item\.totem/.test(x.n)) return
       if (mine) {
-        if (pend && gameClock.now() - pend.t < 400) convResolve(tail)
+        if (mf.pend && gameClock.now() - mf.pend.t < 400) convResolve(tail)
         if (tail === 'knockback') { st.sprintHits++; M.srvSprint = false } else if (tail === 'crit') st.crits++
         else if (tail === 'strong') st.strong++
         else if (tail === 'weak') st.weak++
@@ -384,131 +422,17 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     }
   }
   M.listeners.add(onMelee)
+  Object.assign(mf, { onTick, onHurt, onMelee })
+}
 
-  // ---------------------------------------------------------------- удар
+// ---------------------------------------------------------------- отброс
 
-  // Удар сейчас: свап (топор по щиту), ×0.6 себе после спринт-удара по игроку,
-  // тиковый план после удара. opts.swapTo — индекс хотбара предмета Б.
-  const hit = (e, { swapTo = -1, after = null, kind = null, diag = null }: any = {}) => {
-    if (!e || !bot.entity) return null
-    const c = M.charge(0)
-    const local = bot.getControlState('sprint')
-    const srv = M.srvSprint
-    const back = bot.quickBarSlot
-    let swapped = false
-    if (swapTo >= 0 && swapTo !== back && bot.inventory.slots[36 + swapTo]) {
-      bot.setQuickBarSlot(swapTo)
-      swapped = true
-    }
-    try { bot.attack(e) } catch {}
-    {
-      const now = gameClock.now()
-      if (swingAt && now - swingAt > 300) st.empty++ // прошлый взмах так и не попал
-      swingAt = now
-      if (now - myHitAt < 500) st.iframeSwings++
-    }
-    if (kind === 'crit') {
-      if (pend) convResolve(null)
-      conv.tries++
-      pend = { t: gameClock.now(), c, srv, ground: !!bot.entity.onGround, dy: M.dy, water: !!bot.entity.isInWater, web: !!bot.entity.isInWeb, diag }
-    }
-    if (swapped) { bot.setQuickBarSlot(back); st.swaps++ }
-    st.swings++
-    if (srv && c > 0.9) st.sprintTries++
-    if (kind) st.choice[kind] = (st.choice[kind] || 0) + 1
-    if (!srv && local && c > 0.9 && !bot.entity.onGround) st.sprintCrit++
-    // Player.causeExtraKnockback на клиенте: сила > 0 (спринт при c > 0.9 —
-    // клиент судит по своему спринту) — ×0.6 себе и спринт клиента снят.
-    if (isPlayer(e) && local && c > 0.9) {
-      const v = bot.entity.velocity
-      v.x *= 0.6; v.z *= 0.6
-      st.slow06++
-    }
-    if (after === 'wtap') { st.wtaps++; startPlan([{ forward: false, sprint: false }, { forward: true, sprint: true }], 'wtap') } else if (after === 'stap') { st.staps++; startPlan([{ forward: false, sprint: false, back: true }, { back: true }, { back: false }], 'stap') }
-    return { c, srv, local, swapped }
-  }
-
-  // Перевзвести спринт сервера (STOP, тик, START) — если он снят чужим
-  // (нашим спринт-ударом), а спринт-удар нужен: ванильный клиент шлёт не больше
-  // одного из них за тик (LocalPlayer.sendIsSprintingIfNeeded).
-  const rearm = () => {
-    if (plan) return false
-    st.rearms++
-    startPlan([{ sprint: false }, { sprint: true, forward: true }], 'rearm')
-    return true
-  }
-
-  // Клавиши цикла — поверх них тиковый план (W-tap, S-tap, прыжок-сброс).
-  const override = (keys) => {
-    if (!plan) return keys
-    const s = plan.cur || {}
-    const out = { ...keys }
-    for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) if (k in s) out[k] = s[k]
-    return out
-  }
-
-  // ---------------------------------------------------------------- выбор
-
-  // Спринт-удар или крит (Tutorial:PvP; PVP-RESEARCH в.4 п.1). Спринт-удар —
-  // когда отброс решает: первый удар, толчок к краю, он бежит на нас, я слабее
-  // (уйти из размена), ответ на его удар, продолжение серии. Крит — когда он
-  // беззащитен (урон ×1.5 важнее отброса) и в остальных случаях по характеру.
-  // «Бежит на нас» — рывок издалека (d > 3.2), а не колебание сближения в
-  // размене вплотную: первая арена с этим правилом дала 90% спринт-ударов и
-  // ни одного крита. Серия спринт-ударов — не длиннее трёх: дальше крит.
-  let serie = 0
-  const choose = (ctx) => {
-    let k = 'crit'
-    if (ctx.meInWeb) k = 'plain'
-    else if (ctx.creeper || ctx.defenseless) k = 'crit'
-    else if (ctx.edgeSprint || ctx.first || ctx.counter) k = 'sprint'
-    // Окно для крита в прыжке — пока его удар не готов (вершина на 6-м тике,
-    // падение с 7-го): он не успеет ответить, пока мы в воздухе. Готов —
-    // прыжок дарит ему первый удар. Крит падает на него через тик-два после
-    // нашей готовности (прыжок за 6 тиков до неё, спуск с 7-го тика) — его
-    // удар должен быть не готов и тогда.
-    // Готов раньше, и он достаёт — крита не будет: бить придётся на подъёме в
-    // гонке (арена 2026-09-26: 27 из 36 промахов крита — удар на подъёме в
-    // гонке). Спринт-удар: кто первый, тот с отбросом.
-    else if (ctx.hisReadyMs != null && ctx.hisReadyMs > (ctx.myReadyMs || 0) + 2 * M.msPerTick) k = 'crit'
-    else if (ctx.hisReadyMs != null && ctx.close) k = 'sprint'
-    else if (ctx.charging && serie < 2) k = 'sprint'
-    else if (ctx.weaker && serie < 2 && Math.random() < 0.6) k = 'sprint'
-    else if (serie === 1 && ctx.comboOn) k = 'sprint'
-    else k = Math.random() < skill.sprintBias ? 'sprint' : 'crit'
-    serie = k === 'sprint' ? serie + 1 : 0
-    return k
-  }
-
-  // ---------------------------------------------------------------- щит
-
-  // Поднять за ≥ 5 тиков (blockDelayTicks) до того, как его удар может
-  // прийти: он в досягаемости (или войдёт в неё за это время) и его заряд
-  // будет готов; опустить, когда бьём сами или его удара не будет.
-  // Топор у него в руке (S7d, пункт H): по jar удар топором по поднятому щиту гасится ЦЕЛИКОМ (blocks_attacks), а щит
-  // выключается на 5 с (weapon.disable_blocking_for_seconds). Прежде — запрет «под топором щит не поднимать»: в «топор
-  // против щита» щит не поднимался ни разу, сторона с топором — 20 из 20 (s7d-b-27, s7d-p-27). Теперь — цена: щит не
-  // держится заранее (подъём ровно на задержку блока, 5 т, и сразу вниз после его взмаха), взмах топора гасится, его
-  // ход — 5 с без щита, мой — без его урона топором. ND_SHIELD_AXE=0 — прежний запрет.
-  const shield = ({ theirR, closing = 0, hisReadyMs = 0, hisHand = '', myLeftMs = 999, inMyReach = false }: any) => {
-    const axe = /_axe$/.test(hisHand)
-    if (axe && process.env.ND_SHIELD_AXE === '0') return 'lower'
-    // Запас 6 тиков и против топора (ревью Codex: 5 т задержки блока + доставка пакета и шаг цикла).
-    const leadMs = 6 * M.msPerTick
-    const soon = theirR <= 3.3 + Math.max(0, closing) * (leadMs / TICK_MS)
-    if (inMyReach && myLeftMs <= M.msPerTick) return 'lower'
-    if (soon && hisReadyMs <= leadMs) return 'raise'
-    if (theirR > 4.8 || hisReadyMs > leadMs + (axe ? 1 : 4) * M.msPerTick) return 'lower'
-    return null
-  }
-
-  // ---------------------------------------------------------------- отброс
-
-  // Его удар пришёл (скорость себе в пакете; edges.fixSelfKnockback уже
-  // поставил её верно — слушаем после него): jump-reset и ответный удар.
-  // counterFn(e) — решает бой (заряд, досягаемость, щит): вернуть true, если
-  // ударил.
-  let counterFn = null
+// Его удар пришёл (скорость себе в пакете; edges.fixSelfKnockback уже
+// поставил её верно — слушаем после него): jump-reset и ответный удар.
+// counterFn(e) — решает бой (заряд, досягаемость, щит): вернуть true, если
+// ударил.
+function fightKnockback (mf: MeleeFight) {
+  const { bot, jumpOk, st, HIT_SELECT, skill, kbMeasures, startPlan, ent } = mf
   const onVel = () => {
     try {
       const e = ent()
@@ -535,8 +459,8 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
       kbMeasures.push(kb)
       // Ответный удар (hit-select): наш спринт-удар в этот же тик — ×0.6
       // гасит 40% его толчка, а он получает полный.
-      if (HIT_SELECT && counterFn && Math.random() < skill.counter) {
-        if (counterFn(e)) { st.counterHits++; kb.counter = true }
+      if (HIT_SELECT && mf.counterFn && Math.random() < skill.counter) {
+        if (mf.counterFn(e)) { st.counterHits++; kb.counter = true }
       }
     } catch {}
   }
@@ -552,18 +476,144 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     } catch {}
   }
   bot._client.on('raw.entity_velocity', onRawVel)
+  mf.onRawVel = onRawVel
+}
 
-  const close = () => {
-    bot._client.removeListener('raw.entity_velocity', onRawVel)
-    bot.removeListener('physicsTick', onTick)
-    bot.removeListener('entityHurt', onHurt)
-    M.listeners.delete(onMelee)
-    counterFn = null
-    plan = null
-    if (st.combo) { st.combos.push(st.combo); st.combo = 0 }
+// ---------------------------------------------------------------- удар
+
+// Удар сейчас: свап (топор по щиту), ×0.6 себе после спринт-удара по игроку,
+// тиковый план после удара. opts.swapTo — индекс хотбара предмета Б.
+function meleeHit (mf: MeleeFight, e, { swapTo = -1, after = null, kind = null, diag = null }: any = {}) {
+  const { bot, M, st, conv, startPlan, convResolve } = mf
+  if (!e || !bot.entity) return null
+  const c = M.charge(0)
+  const local = bot.getControlState('sprint')
+  const srv = M.srvSprint
+  const back = bot.quickBarSlot
+  let swapped = false
+  if (swapTo >= 0 && swapTo !== back && bot.inventory.slots[36 + swapTo]) {
+    bot.setQuickBarSlot(swapTo)
+    swapped = true
   }
+  try { bot.attack(e) } catch {}
+  {
+    const now = gameClock.now()
+    if (mf.swingAt && now - mf.swingAt > 300) st.empty++ // прошлый взмах так и не попал
+    mf.swingAt = now
+    if (now - mf.myHitAt < 500) st.iframeSwings++
+  }
+  if (kind === 'crit') {
+    if (mf.pend) convResolve(null)
+    conv.tries++
+    mf.pend = { t: gameClock.now(), c, srv, ground: !!bot.entity.onGround, dy: M.dy, water: !!bot.entity.isInWater, web: !!bot.entity.isInWeb, diag }
+  }
+  if (swapped) { bot.setQuickBarSlot(back); st.swaps++ }
+  st.swings++
+  if (srv && c > 0.9) st.sprintTries++
+  if (kind) st.choice[kind] = (st.choice[kind] || 0) + 1
+  if (!srv && local && c > 0.9 && !bot.entity.onGround) st.sprintCrit++
+  // Player.causeExtraKnockback на клиенте: сила > 0 (спринт при c > 0.9 —
+  // клиент судит по своему спринту) — ×0.6 себе и спринт клиента снят.
+  if (isPlayer(e) && local && c > 0.9) {
+    const v = bot.entity.velocity
+    v.x *= 0.6; v.z *= 0.6
+    st.slow06++
+  }
+  if (after === 'wtap') { st.wtaps++; startPlan([{ forward: false, sprint: false }, { forward: true, sprint: true }], 'wtap') } else if (after === 'stap') { st.staps++; startPlan([{ forward: false, sprint: false, back: true }, { back: true }, { back: false }], 'stap') }
+  return { c, srv, local, swapped }
+}
+
+// Перевзвести спринт сервера (STOP, тик, START) — если он снят чужим
+// (нашим спринт-ударом), а спринт-удар нужен: ванильный клиент шлёт не больше
+// одного из них за тик (LocalPlayer.sendIsSprintingIfNeeded).
+function meleeRearm (mf: MeleeFight) {
+  const { st, startPlan } = mf
+  if (mf.plan) return false
+  st.rearms++
+  startPlan([{ sprint: false }, { sprint: true, forward: true }], 'rearm')
+  return true
+}
+
+// Клавиши цикла — поверх них тиковый план (W-tap, S-tap, прыжок-сброс).
+function meleeOverride (mf: MeleeFight, keys) {
+  if (!mf.plan) return keys
+  const s = mf.plan.cur || {}
+  const out = { ...keys }
+  for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) if (k in s) out[k] = s[k]
+  return out
+}
+
+// ---------------------------------------------------------------- выбор
+
+// Спринт-удар или крит (Tutorial:PvP; PVP-RESEARCH в.4 п.1). Спринт-удар —
+// когда отброс решает: первый удар, толчок к краю, он бежит на нас, я слабее
+// (уйти из размена), ответ на его удар, продолжение серии. Крит — когда он
+// беззащитен (урон ×1.5 важнее отброса) и в остальных случаях по характеру.
+// «Бежит на нас» — рывок издалека (d > 3.2), а не колебание сближения в
+// размене вплотную: первая арена с этим правилом дала 90% спринт-ударов и
+// ни одного крита. Серия спринт-ударов — не длиннее трёх: дальше крит.
+function meleeChoose (mf: MeleeFight, ctx) {
+  const { M, skill } = mf
+  let k = 'crit'
+  if (ctx.meInWeb) k = 'plain'
+  else if (ctx.creeper || ctx.defenseless) k = 'crit'
+  else if (ctx.edgeSprint || ctx.first || ctx.counter) k = 'sprint'
+  // Окно для крита в прыжке — пока его удар не готов (вершина на 6-м тике,
+  // падение с 7-го): он не успеет ответить, пока мы в воздухе. Готов —
+  // прыжок дарит ему первый удар. Крит падает на него через тик-два после
+  // нашей готовности (прыжок за 6 тиков до неё, спуск с 7-го тика) — его
+  // удар должен быть не готов и тогда.
+  // Готов раньше, и он достаёт — крита не будет: бить придётся на подъёме в
+  // гонке (арена 2026-09-26: 27 из 36 промахов крита — удар на подъёме в
+  // гонке). Спринт-удар: кто первый, тот с отбросом.
+  else if (ctx.hisReadyMs != null && ctx.hisReadyMs > (ctx.myReadyMs || 0) + 2 * M.msPerTick) k = 'crit'
+  else if (ctx.hisReadyMs != null && ctx.close) k = 'sprint'
+  else if (ctx.charging && mf.serie < 2) k = 'sprint'
+  else if (ctx.weaker && mf.serie < 2 && Math.random() < 0.6) k = 'sprint'
+  else if (mf.serie === 1 && ctx.comboOn) k = 'sprint'
+  else k = Math.random() < skill.sprintBias ? 'sprint' : 'crit'
+  mf.serie = k === 'sprint' ? mf.serie + 1 : 0
+  return k
+}
+
+// ---------------------------------------------------------------- щит
+
+// Поднять за ≥ 5 тиков (blockDelayTicks) до того, как его удар может
+// прийти: он в досягаемости (или войдёт в неё за это время) и его заряд
+// будет готов; опустить, когда бьём сами или его удара не будет.
+// Топор у него в руке (S7d, пункт H): по jar удар топором по поднятому щиту гасится ЦЕЛИКОМ (blocks_attacks), а щит
+// выключается на 5 с (weapon.disable_blocking_for_seconds). Прежде — запрет «под топором щит не поднимать»: в «топор
+// против щита» щит не поднимался ни разу, сторона с топором — 20 из 20 (s7d-b-27, s7d-p-27). Теперь — цена: щит не
+// держится заранее (подъём ровно на задержку блока, 5 т, и сразу вниз после его взмаха), взмах топора гасится, его
+// ход — 5 с без щита, мой — без его урона топором. ND_SHIELD_AXE=0 — прежний запрет.
+function meleeShield (mf: MeleeFight, { theirR, closing = 0, hisReadyMs = 0, hisHand = '', myLeftMs = 999, inMyReach = false }: any) {
+  const { M } = mf
+  const axe = /_axe$/.test(hisHand)
+  if (axe && process.env.ND_SHIELD_AXE === '0') return 'lower'
+  // Запас 6 тиков и против топора (ревью Codex: 5 т задержки блока + доставка пакета и шаг цикла).
+  const leadMs = 6 * M.msPerTick
+  const soon = theirR <= 3.3 + Math.max(0, closing) * (leadMs / TICK_MS)
+  if (inMyReach && myLeftMs <= M.msPerTick) return 'lower'
+  if (soon && hisReadyMs <= leadMs) return 'raise'
+  if (theirR > 4.8 || hisReadyMs > leadMs + (axe ? 1 : 4) * M.msPerTick) return 'lower'
+  return null
+}
+
+function meleeClose (mf: MeleeFight) {
+  const { bot, M, st, onTick, onHurt, onMelee, onRawVel } = mf
+  bot._client.removeListener('raw.entity_velocity', onRawVel)
+  bot.removeListener('physicsTick', onTick)
+  bot.removeListener('entityHurt', onHurt)
+  M.listeners.delete(onMelee)
+  mf.counterFn = null
+  mf.plan = null
+  if (st.combo) { st.combos.push(st.combo); st.combo = 0 }
+}
+
+function meleeReport (mf: MeleeFight) {
+  const { st, HIT_SELECT, skill, conv } = mf
   const avg = (a) => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 100) / 100 : undefined
-  const report = () => ({
+  return {
     swings: st.swings,
     sprintHits: st.sprintHits,
     sprintTries: st.sprintTries,
@@ -594,20 +644,6 @@ function fight (bot, { target, style = {}, stepSafe = null, keyDir = null, jumpO
     hsWait: HIT_SELECT && process.env.ND_HS_WAIT !== '0',
     his: st.his,
     skill: { jumpReset: Math.round(skill.jumpReset * 100) / 100, counter: Math.round(skill.counter * 100) / 100, sprintBias: Math.round(skill.sprintBias * 100) / 100 }
-  })
-  return {
-    st,
-    skill,
-    clock: M,
-    hit,
-    rearm,
-    override,
-    choose,
-    shield,
-    planning: () => !!plan,
-    setCounter: (fn) => { counterFn = fn },
-    close,
-    report
   }
 }
 

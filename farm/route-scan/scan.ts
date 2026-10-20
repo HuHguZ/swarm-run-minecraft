@@ -205,7 +205,14 @@ function woodGroups (cells, structs, spawn) {
   }
   return [...groups.values()].filter(g => g.logs * 4 + g.planks >= 9).sort((a, b) => a.d - b.d).slice(0, 120)
 }
-async function cmdScan (slot, half) {
+
+// Скан по шагам (cmdScan): g — сетка копии мира у спавна и то, что легло при чтении чанков; geo — верх столбов,
+// открытый воздух и геометрия по ним (луч от глаз, клетка «где стоять»). Шаги возвращают свои находки.
+type RouteGrid = Awaited<ReturnType<typeof scanBase>>
+type RouteGeo = ReturnType<typeof scanGeometry>
+type RouteFound = ReturnType<typeof scanVeins> & { water: ReturnType<typeof scanWater>, trees: ReturnType<typeof scanTrees>, lavaBodies: ReturnType<typeof scanLava> }
+
+async function scanBase (slot, half) {
   const s = slotInfo(slot)
   const worldDir = path.join(s.dir, 'world')
   const lvl = await readLevel(s.dir)
@@ -220,7 +227,6 @@ async function cmdScan (slot, half) {
   const grid = new Uint8Array(W * W * H)
   const ground = new Int16Array(W * W).fill(-1) // MOTION_BLOCKING_NO_LEAVES − 1: верх рельефа без листвы
   const at = (x, y, z) => (y * W + z) * W + x
-  let missing = 0
   const chests = []
   const structs = []
   const mobs = []
@@ -229,13 +235,19 @@ async function cmdScan (slot, half) {
   const beds = []
   const tmp = new Uint16Array(4096)
   const t0 = Date.now()
+  return { worldDir, spawn, seed, half, cx0, cz0, NC, W, X0, Z0, grid, ground, at, missing: 0, chests, structs, mobs, animals, woodCells, beds, tmp, t0 }
+}
+
+// Чанки квадрата → сетка кодов клеток и верх рельефа; сундуки, кровати, постройки, сущности при генерации.
+function readChunks (g: RouteGrid) {
+  const { worldDir, cx0, cz0, NC, W, grid, ground, at, chests, structs, mobs, animals, woodCells, beds, tmp } = g
   for (let i = 0; i < NC; i++) {
     for (let k = 0; k < NC; k++) {
       const raw = readChunkNbtRaw(worldDir, cx0 + i, cz0 + k)
-      if (!raw) { missing++; continue }
+      if (!raw) { g.missing++; continue }
       const v = nbt.parseUncompressed(raw).value
       const status = v.Status ? v.Status.value : '?'
-      if (!/full/.test(status)) { missing++; continue }
+      if (!/full/.test(status)) { g.missing++; continue }
       for (const sec of (v.sections ? v.sections.value.value : [])) {
         const ys = sec.Y.value * 16 - MIN_Y
         if (ys < 0 || ys >= H) continue
@@ -294,9 +306,18 @@ async function cmdScan (slot, half) {
       }
     }
   }
+}
+
+function columnTops (g: RouteGrid) {
+  const { W, grid, at } = g
   // Верх столба (первая сверху не-воздушная клетка, листва — тоже верх: над ней небо).
   const top = new Int16Array(W * W).fill(-1)
   for (let z = 0; z < W; z++) for (let x = 0; x < W; x++) for (let y = H - 1; y >= 0; y--) { if (grid[at(x, y, z)] !== C.AIR) { top[z * W + x] = y; break } }
+  return top
+}
+
+function surfaceAir (g: RouteGrid, top: Int16Array) {
+  const { W, grid, at } = g
   // Воздух, связанный с поверхностью (BFS от клетки над верхом столба по воздуху и мягким блокам); значение — шагов от
   // поверхности + 1 (сколько идти пещерой, не копая), 0 — закрытый воздух.
   const openAir = new Uint16Array(grid.length)
@@ -327,6 +348,11 @@ async function cmdScan (slot, half) {
       }
     }
   }
+  return openAir
+}
+
+function scanGeometry (g: RouteGrid, top: Int16Array, openAir: Uint16Array) {
+  const { W, grid, at, spawn, X0, Z0 } = g
   const top0 = (x, z) => top[z * W + x]
   const sx = spawn.x - X0; const sz = spawn.z - Z0
   const hdist = (x, z) => Math.round(Math.hypot(x - sx, z - sz))
@@ -370,6 +396,12 @@ async function cmdScan (slot, half) {
     }
     return best
   }
+  return { top, openAir, top0, sx, sz, hdist, nb6, inb, openFace, passable, losTo, standNear }
+}
+
+function scanVeins (g: RouteGrid, geo: RouteGeo) {
+  const { W, grid, ground, at, X0, Z0 } = g
+  const { top, openAir, hdist, nb6, inb, openFace, standNear } = geo
   // Жилы железа (6-связность, вместе со скрытыми клетками), у которых хоть одна клетка у открытого воздуха.
   const seen = new Uint8Array(grid.length)
   const stack = new Int32Array(1 << 20)
@@ -446,6 +478,12 @@ async function cmdScan (slot, half) {
       }
     }
   }
+  return { stack, veins, buriedIron, buriedGravel }
+}
+
+function scanWater (g: RouteGrid, geo: RouteGeo) {
+  const { W, grid, ground, at, X0, Z0 } = g
+  const { top, openAir, hdist, standNear } = geo
   // Вода: источники с открытым воздухом сверху (черпак сверху) и берегом рядом, ближние к спавну.
   const water = []
   for (let z = 0; z < W; z += 1) {
@@ -462,6 +500,13 @@ async function cmdScan (slot, half) {
     }
   }
   water.sort((a, b) => a.d - b.d)
+  return water
+}
+
+// stack — тот же буфер, что у жил (scanVeins): лава обходится им после них.
+function scanLava (g: RouteGrid, geo: RouteGeo, stack: Int32Array) {
+  const { W, grid, ground, at, X0, Z0 } = g
+  const { openAir, top0, hdist, nb6, inb } = geo
   // Лава: тела (6-связность по лаве), источники с воздухом сверху (черпак), глубина верхнего такого источника под
   // рельефом, связан ли воздух над ним с поверхностью (open — войти без копки), ближний к спавну такой источник.
   const lavaBodies = []
@@ -509,6 +554,12 @@ async function cmdScan (slot, half) {
     }
   }
   lavaBodies.sort((a, b) => (a.d + a.depth * 2.5) - (b.d + b.depth * 2.5))
+  return lavaBodies
+}
+
+function scanTrees (g: RouteGrid, geo: RouteGeo) {
+  const { W, grid, ground, at, X0, Z0 } = g
+  const { top, hdist } = geo
   // Деревья: брёвна над рельефом (выше верха земли без листвы — ствол стоит на поверхности), по клеткам 8×8.
   const cellsT = new Map()
   for (let z = 0; z < W; z++) {
@@ -529,6 +580,13 @@ async function cmdScan (slot, half) {
     const x = Math.round(c.x / c.n); const z = Math.round(c.z / c.n)
     return { x: x + X0, y: Math.round(c.y / c.n) + MIN_Y, z: z + Z0, n: c.n, d: hdist(x, z) }
   }).sort((a, b) => a.d - b.d)
+  return trees
+}
+
+function scanOut (g: RouteGrid, geo: RouteGeo, found: RouteFound) {
+  const { seed, spawn, half, missing, t0, W, grid, ground, at, X0, Z0, chests, structs, mobs, animals, woodCells, beds } = g
+  const { inb, standNear } = geo
+  const { veins, buriedIron, buriedGravel, water, trees, lavaBodies } = found
   const sortIron = a => a.sort((p, q) => (p.d + p.depth * 2 - Math.min(p.n, 8) * 6) - (q.d + q.depth * 2 - Math.min(q.n, 8) * 6))
   const out = {
     seed,
@@ -578,6 +636,21 @@ async function cmdScan (slot, half) {
       return { ...b, in: t ? t.name : null, d: Math.round(Math.hypot(b.x - spawn.x, b.z - spawn.z)) }
     }).sort((a, b) => a.d - b.d).slice(0, 60)
   }
+  return out
+}
+
+async function cmdScan (slot, half) {
+  const g = await scanBase(slot, half)
+  readChunks(g)
+  const top = columnTops(g)
+  const openAir = surfaceAir(g, top)
+  const geo = scanGeometry(g, top, openAir)
+  const ore = scanVeins(g, geo)
+  const water = scanWater(g, geo)
+  const lavaBodies = scanLava(g, geo, ore.stack)
+  const trees = scanTrees(g, geo)
+  const out = scanOut(g, geo, { ...ore, water, trees, lavaBodies })
+  const { seed, missing } = g
   fs.writeFileSync(path.join(OUT, `${seed}.json`), JSON.stringify(out))
   console.log(JSON.stringify({ seed, missing, seconds: out.seconds, iron: out.iron.length, ironAll: out.ironAll, ironNear: out.iron.filter(v => v.d <= 100).length, water: water.length, nearWater: water[0] && water[0].d, trees: trees.length, nearTree: trees[0] && trees[0].d, lava: lavaBodies.length, lava0: lavaBodies[0] ? `${lavaBodies[0].d}м/глуб${lavaBodies[0].depth}/${lavaBodies[0].top}` : null, chests: out.chests.length, structures: out.structures.map(t => `${t.name}:${t.d}`).slice(0, 8).join(' '), golems: out.golems.length }))
 }

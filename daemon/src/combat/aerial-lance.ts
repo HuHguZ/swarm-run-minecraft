@@ -14,10 +14,10 @@
 //    выбивает (Weapon(1), без disableBlocking) — против поднятого щита таран не планируем;
 //  * ракету и копьё одной рукой разом не «используют» (клиент игры, пока держит «использовать», второй не начинает):
 //    ракета — до копья, во время разгона — нет.
-const clock: typeof import('../game-clock') = require('../game-clock')
+import * as clock from '../game-clock'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const sky: typeof import('../elytra') = require('../elytra')
-const spear: typeof import('../spear') = require('../spear')
+import * as sky from '../elytra'
+import * as spear from '../spear'
 
 const EYE_FLY = 0.4
 const MIN_R = 2.0
@@ -165,6 +165,45 @@ function healthOf (bot: any, e: any): number | null {
 // Таран: взлёт → набор высоты и отход на разбег → заход (ракета, затем копьё «использовать») → касание → выход
 // вверх → повтор (до passes) → посадка без кругов и нагрудник назад. stats — общая статистика элитр (report()).
 export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 45000, passes = 8, arena = null as any, telemetryHp = e => ehpTele(bot, e) }: any = {}) {
+  const ln = lanceContext(bot, ctl, e, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp })
+  const { t0, out, valid, sp, onHurt, stopUse } = ln
+  if (!sp) { out.note = 'таран: копья нет'; return out }
+  const name = sp.item.name
+  const spec = spear.SPEARS[name]
+  const delayMs = Math.round(spec.delay * 20) * 50
+  Object.assign(ln, { name, spec, delayMs })
+  const early = await lanceMount(ln)
+  if (early) return early
+  stats.lances = (stats.lances || 0) + 1
+  used('элитры: таран копьём — разбег')
+  try { bot._client.on('damage_event', onHurt) } catch {}
+  try {
+    while (valid() && out.passes < passes && clock.now() - t0 < maxMs && sky.gliding(bot.entity)) {
+      if (sky.rocketCount(bot) < 1 || (bot.health ?? 0) < 6) break
+      const climb = await lanceRunUp(ln)
+      if (climb.why !== 'разбег' && climb.why !== 'долго') break
+      if (!valid() || !sky.gliding(bot.entity)) break
+      const res = await lanceApproach(ln)
+      if (!valid() || !sky.gliding(bot.entity)) break
+      await lanceExit(ln, res)
+    }
+  } finally {
+    stopUse()
+    try { bot._client.removeListener('damage_event', onHurt) } catch {}
+  }
+  return lanceLand(ln)
+}
+
+// Один таран — прежние параметры и const тела lance; using/useAt/hitAt — копьё «в деле» и время его касания.
+interface LanceCtx {
+  bot: any; ctl: { aborted: boolean }; e: any; vel: () => any; stats: any; used: (s: string) => void; allow: any; maxMs: number; passes: number
+  arena: any; telemetryHp: (e: any) => number | null; W: any; S: any; t0: number; out: any; hp0: number; hisHp0: number | null
+  valid: () => any; sp: any; name: string; spec: any; delayMs: number
+  foe: () => any; hisH: () => number; hv: () => any; footAt: (t: number) => any; ceilY: () => number; cruiseY: () => number
+  using: boolean; useAt: number; hitAt: number; onHurt: (pk: any) => void; stopUse: () => void
+}
+
+function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp }: any): LanceCtx {
   const W = sky.worldOf(bot)
   const S = sky.install(bot)
   const t0 = clock.now()
@@ -173,10 +212,30 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
   const hisHp0 = telemetryHp(e)
   const valid = () => !ctl.aborted && (bot.health ?? 0) > 0 && e && e.isValid !== false && e.position
   const sp = spear.spearOf(bot)
-  if (!sp) { out.note = 'таран: копья нет'; return out }
-  const name = sp.item.name
-  const spec = spear.SPEARS[name]
-  const delayMs = Math.round(spec.delay * 20) * 50
+  const foe = () => e.position
+  const hisH = () => sky.gliding(e) ? 0.6 : 1.8
+  // Его скорость — без NaN (bow.trackTarget изредка отдаёт NaN, s7 р.1): нечисло = 0.
+  // И не больше 2 б/т по оси (рывок от удара/телепорт давали «план 230 урона, 237 бл/с» в s7f).
+  const hv = () => { const v = vel() || {}; const n = (x: any) => Number.isFinite(x) ? Math.max(-2, Math.min(2, x)) : 0; return { x: n(v.x), y: n(v.y), z: n(v.z) } }
+  const footAt = (t: number) => sky.gliding(e) ? sky.predictGlider(e, hv(), t) : (() => { const f = foe(); const v = hv(); return new Vec3(f.x + v.x * t, f.y, f.z + v.z * t) })()
+  const ceilY = () => sky.arenaAround(bot, W, bot.entity.position).ceilY - 1.8 - 1.4
+  const cruiseY = () => Math.min(ceilY(), foe().y + 7)
+  const ln: LanceCtx = { bot, ctl, e, vel, stats, used, allow, maxMs, passes, arena, telemetryHp, W, S, t0, out, hp0, hisHp0, valid, sp,
+    name: null, spec: null, delayMs: 0, foe, hisH, hv, footAt, ceilY, cruiseY, using: false, useAt: 0, hitAt: 0, onHurt: null, stopUse: null }
+  // Попадание — его damage_event, причина которого — я (sourceCauseId = мой id + 1), пока копьё «в деле».
+  // entityHurt без источника (падение, кинетическая, его кристалл) касанием не считается (замечание проверки S7b в).
+  const onHurt = (pk: any) => {
+    if (!ln.using || !bot.entity || !ownHit(pk, bot.entity.id, e.id)) return
+    ln.hitAt = clock.now()
+  }
+  const stopUse = () => { if (ln.using) { ln.using = false; try { bot.deactivateItem() } catch {} } }
+  Object.assign(ln, { onHurt, stopUse })
+  return ln
+}
+
+// Земля: элитры, ракеты, копьё; не в полёте — взлёт. Не вышло — итог (out) с причиной, вышло — ничего.
+async function lanceMount (ln: LanceCtx) {
+  const { bot, ctl, stats, allow, arena, out, sp, name, foe } = ln
   // Земля: элитры на тело (правой), ракеты — в левую, копьё — в правую.
   if (!sky.wearingElytra(bot)) {
     const sw = await sky.swapChest(bot, 'elytra', { hand: 'main' })
@@ -190,196 +249,183 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
     return out
   }
   if (allow) allow()
-  const foe = () => e.position
-  const hisH = () => sky.gliding(e) ? 0.6 : 1.8
-  // Его скорость — без NaN (bow.trackTarget изредка отдаёт NaN, s7 р.1): нечисло = 0.
-  // И не больше 2 б/т по оси (рывок от удара/телепорт давали «план 230 урона, 237 бл/с» в s7f).
-  const hv = () => { const v = vel() || {}; const n = (x: any) => Number.isFinite(x) ? Math.max(-2, Math.min(2, x)) : 0; return { x: n(v.x), y: n(v.y), z: n(v.z) } }
-  const footAt = (t: number) => sky.gliding(e) ? sky.predictGlider(e, hv(), t) : (() => { const f = foe(); const v = hv(); return new Vec3(f.x + v.x * t, f.y, f.z + v.z * t) })()
-  const ceilY = () => sky.arenaAround(bot, W, bot.entity.position).ceilY - 1.8 - 1.4
-  const cruiseY = () => Math.min(ceilY(), foe().y + 7)
   if (!sky.gliding(bot.entity)) {
     const away = yawTo(foe(), bot.entity.position)
     const to = await sky.takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats, arena })
     if (!to.ok) { await sky.chestDown(bot, ctl, { stats, arena }); out.note = 'таран: не взлетел — ' + to.why; return out }
   }
-  stats.lances = (stats.lances || 0) + 1
-  used('элитры: таран копьём — разбег')
-  // Попадание — его damage_event, причина которого — я (sourceCauseId = мой id + 1), пока копьё «в деле».
-  // entityHurt без источника (падение, кинетическая, его кристалл) касанием не считается (замечание проверки S7b в).
-  let using = false
-  let useAt = 0
-  let hitAt = 0
-  const onHurt = (pk: any) => {
-    if (!using || !bot.entity || !ownHit(pk, bot.entity.id, e.id)) return
-    hitAt = clock.now()
-  }
-  try { bot._client.on('damage_event', onHurt) } catch {}
-  const stopUse = () => { if (using) { using = false; try { bot.deactivateItem() } catch {} } }
-  try {
-    while (valid() && out.passes < passes && clock.now() - t0 < maxMs && sky.gliding(bot.entity)) {
-      if (sky.rocketCount(bot) < 1 || (bot.health ?? 0) < 6) break
-      // 1) Разбег: точка на его стороне от нас за 17 бл., высота cruiseY. (s7h/s7j: копьё «использовать» уже на
-      // развороте к нему дало касаний 15 % и 8 % против 30 % в s7f — откатил; копьё — в заходе, по времени до касания.)
-      // Клещи (командный бой, 10.10): напарник заходит на ту же цель — разбег на противоположной от него стороне,
-      // увернувшись от одного, цель подставится второму. Подсказку даёт свой (assist pincer), живёт 6 с.
-      const pin = bot._ndPincer
-      const pinFrom = pin && pin.until > Date.now() && pin.target === (e.username || e.name) ? pin.from : null
-      const side = pinFrom ? yawTo(foe(), { x: 2 * foe().x - pinFrom.x, y: 0, z: 2 * foe().z - pinFrom.z }) : yawTo(foe(), bot.entity.position)
-      if (pinFrom) stats.pincers = (stats.pincers || 0) + 1
-      const runUp = () => { const f = foe(); const L = sky.lookVec(side, 0); return new Vec3(f.x + L.x * 17, cruiseY(), f.z + L.z * 17) }
-      const inside = (p: any) => !arena || (Math.abs(p.x - arena.x) <= arena.r - 3 && Math.abs(p.z - arena.z) <= arena.r - 3)
-      // Показ 09.10: у стены точка разбега ужата до ~10 бл., а разворот ждал 13 — бот кружил до «долго» (4 с).
-      // Разворот — по фактической длине разбега (не дальше 13).
-      let runR = 13
-      const climb = await sky.fly(bot, ctl, { arena,
-        maxMs: 4000, stats, phase: 'таран: разбег',
-        goal: () => { const P = runUp(); const f = foe(); if (!inside(P)) { P.x = f.x + (P.x - f.x) * 0.6; P.z = f.z + (P.z - f.z) * 0.6 } runR = Math.min(13, Math.hypot(P.x - f.x, P.z - f.z) - 1.5); return { kind: 'point', at: P, reach: true, minY: foe().y + 3, maxY: ceilY(), gap: 3, speedMin: 0.5 } },
-        rocketIf: (s: any) => (s.p.y < foe().y + 4 || Math.hypot(s.v.x, s.v.z) < 0.5) ? true : null,
-        noRocket: () => sky.rocketCount(bot) <= 1,
-        onTick: () => {
-          if (allow) allow()
-          // Показ 09.10: заход ~10 т, задержка железного копья 13 т — пролёт в 1.3 бл. над ним «копьё 11 т», мимо.
-          // Копьё — в конце разбега (≥ 10 бл. от него, ~5 т до разворота): к касанию готово, окно урона 11 с.
-          const me = bot.entity.position; const f = foe()
-          if (!using && bot.heldItem?.name === name && Math.hypot(me.x - f.x, me.z - f.z) >= 10) {
-            bot.activateItem(); using = true; useAt = clock.now(); used('элитры: копьё к тарану (в конце разбега)')
-          }
-        },
-        until: () => {
-          if (!valid()) return 'цель пропала'
-          const me = bot.entity.position; const f = foe()
-          const dh = Math.hypot(me.x - f.x, me.z - f.z)
-          // Выше него на 3.5 — если потолок пускает; он под потолком — хватит высоты потолка (иначе круги до «долго»).
-          return dh >= runR && me.y >= Math.min(f.y + 3.5, ceilY() - 1) ? 'разбег' : null
-        }
-      })
-      if (climb.why !== 'разбег' && climb.why !== 'долго') break
-      if (!valid() || !sky.gliding(bot.entity)) break
-      // 2) Заход: к нему (ракета, если медленно), затем «использовать» копьё; взгляд — chooseLance.
-      out.passes++
-      stats.lancePasses = (stats.lancePasses || 0) + 1
-      const hp1 = telemetryHp(e)
-      hitAt = 0
-      S.phase = 'таран: заход'
-      const res: any = await new Promise<any>(resolve => {
-        let done = false
-        let rocket = (!using && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 1.1 && sky.rocketCount(bot) > 1 && !(bot.fireworkRocketDuration > 0)) ? 'нужна' : 'нет'
-        let minD = Infinity; let growing = 0
-        const tR = clock.now()
-        let best: any = null
-        let close: any = null
-        let planned = 0
-        S.driving = (S.driving || 0) + 1
-        const fin = (why: string) => { if (done) return; done = true; S.driving = Math.max(0, (S.driving || 1) - 1); bot.removeListener('physicsTick', onT); resolve({ why, best, close, planned }) }
-        const onT = () => {
-          if (done) return
-          try {
-            // Попадание — раньше «прервали»: таран, убивший его, обрывает бой в тот же тик (s7e р.1: «прервали» при смерти цели).
-            if (hitAt) return fin('попал')
-            if (!valid()) return fin(e && e.isValid === false && using ? 'цель пропала' : 'прервали')
-            const b = bot.entity
-            if (b.onGround) return fin('сел')
-            if (!b.elytraFlying && clock.now() - S.startedAt > 400) return fin('полёт кончился')
-            if (allow) allow()
-            if (clock.now() - tR > 4500) return fin('долго')
-            const f = foe()
-            // Его копьё «на изготовке» и смотрит на нас: встречный разгон — отн. скорость = моя + его, урон обоим
-            // (KineticWeapon: rel = взгляд·его − взгляд·моя для него); s7e р.4 — таран в его копьё: себе −15.
-            if (spearBraced(bot, e) && facing(e, b.position) > 0.6 && Math.hypot(f.x - b.position.x, f.z - b.position.z) < 14) return fin('его копьё на изготовке')
-            const eye = b.position.offset(0, EYE_FLY, 0)
-            const dist = Math.hypot(f.x - eye.x, f.y + hisH() / 2 - eye.y, f.z - eye.z)
-            if (dist < minD - 0.05) {
-              minD = dist; growing = 0
-              const v = b.velocity
-              close = { d: r2(dist), dy: r2(b.position.y - f.y), sp: r2(Math.hypot(v.x, v.y, v.z)), use: using ? Math.round((clock.now() - useAt) / 50) : -1, plan: best ? best.hitT : null }
-            } else if (++growing >= 4 && minD < 8) return fin('мимо')
-            const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
-            const readyIn = using ? Math.max(0, Math.round(spec.delay * 20) + 1 - Math.round((clock.now() - useAt) / 50)) : Math.round(spec.delay * 20) + 1
-            const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn })
-            // Касание раньше конца задержки копья урона не даст — только считаем (s7h: отказ от таких планов уронил
-            // касания 30 % → 15 %: без плана проход шёл «над головой» мимо; задержку решает ранний старт копья).
-            const delayT = Math.round(spec.delay * 20) + 1
-            if (pl && (!using || (clock.now() - useAt) / 50 + pl.hitT < delayT)) stats.lanceEarly = (stats.lanceEarly || 0) + 1
-            let look: any
-            if (pl) { best = pl; planned++; look = pl } else {
-              // Не достаём из этих взглядов — к точке над его головой (с упреждением), не ниже пола + 2.
-              look = sky.choose(W, st, { kind: 'point', at: (t: number) => footAt(t).offset(0, hisH() + 0.8, 0), reach: true, gap: 2, speedMin: 0.8 })
-            }
-            // Страховка: этот взгляд за 6 тиков — в стену с уроном или в пол с высотой падения > 3 — выйти сейчас.
-            const ahead = sky.rollout(W, st.p, st.v, look.yaw, look.pitch, st.boost, 6, { fd: st.fd })
-            // Пол раньше касания копьём — выход; касание раньше пола — заход по стоящему на земле (показ 09.10: по
-            // человеку на земле 3 из 6 заходов бросались за 9 бл., бот кружил). Пик у пола страхует «пол близко» ниже.
-            const floorFirst = ahead.kind === 'floor' && ahead.fd > 3 && !(pl && pl.hitT <= ahead.t)
-            if ((ahead.kind === 'wall' && ahead.dmg >= 1) || floorFirst) { stats.lanceBail = (stats.lanceBail || 0) + 1; return fin('опасно: ' + (ahead.kind === 'wall' ? 'стена' : 'пол')) }
-            sky.steer(bot, look.yaw, look.pitch)
-            if (rocket === 'нужна') {
-              // Ракета уходит с взглядом этого тика (после пакета).
-              rocket = 'была'
-              spear.afterPacket(bot, () => { const fr = sky.fireRocket(bot); if (fr.ok) stats.rockets = (stats.rockets || 0) + 1 })
-              return
-            }
-            // Копьё — после ракеты, так, чтобы задержка кончилась до касания (≈ дистанция / скорость тиков).
-            const sp1 = Math.hypot(b.velocity.x, b.velocity.y, b.velocity.z)
-            const eta = (dist - 3) / Math.max(0.3, sp1) * 50
-            if (!using && eta < delayMs + 4000) {
-              if (bot.heldItem?.name === name) { bot.activateItem(); using = true; useAt = clock.now(); used('элитры: копьё к тарану') }
-            }
-            // Пол близко на пике — выйти, иначе удар о землю.
-            const fl = W.floorBelow(b.position.x, b.position.y, b.position.z, 6)
-            if (fl && b.position.y - fl.top < 1.2 && b.velocity.y < -0.45) return fin('пол близко')
-            void useAt
-          } catch (err: any) { fin('ошибка: ' + err.message) }
-        }
-        bot.on('physicsTick', onT)
-      })
-      stopUse()
-      if (res.why === 'попал') {
-        out.hits++
-        stats.lanceHits = (stats.lanceHits || 0) + 1
-        // Сколько снял (телеметрия, метаданные): хп приходит позже события удара — минимум за 0.5 с.
-        let hpMin = telemetryHp(e)
-        const tH = clock.now()
-        // Убил (сущность снята — с do_immediate_respawn раньше метаданных с хп 0) — снял всё, что было (hp1);
-        // раньше hpMin оставался равен hp1 и убийство писалось «снял 0» (замечание проверки S7b в).
-        const onH = () => { const h = telemetryHp(e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = e.isValid === false && hp1 != null ? hp1 : (hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
-        bot.on('physicsTick', onH)
-        used(`элитры: таран копьём — попал${res.best ? ` (план ${res.best.dmg}, ${res.best.rel} бл/с)` : ''}`)
-      } else used(`элитры: таран — ${res.why}`)
-      // Разбор захода (s7b): ближе всего (до его середины), высота над ним, скорость б/т, тиков «использования»
-      // копья к этому мигу (−1 — не начато), был ли план касания и сколько тиков из захода.
-      const tr = stats.lanceTrace || (stats.lanceTrace = [])
-      if (tr.length < 12) tr.push(`${res.why}: ближе ${res.close ? res.close.d : '?'} (dy ${res.close ? res.close.dy : '?'}, ${res.close ? res.close.sp : '?'} б/т, копьё ${res.close ? res.close.use : '?'} т), план ${res.planned} т`)
-      if (!valid() || !sky.gliding(bot.entity)) break
-      // 3) Выход вверх и прочь от стен: точка впереди по ходу на cruiseY.
-      await sky.fly(bot, ctl, { arena,
-        maxMs: 1500, stats, phase: 'таран: выход',
-        // Отказ от захода (его копьё на изготовке, опасный выход) — прочь от него, а не «по ходу» (по ходу — в его
-        // копьё: s7j р.1 «таран — мимо, себе −20», встречный разгон убил тараном его копья).
-        // Его копьё на изготовке (S7d, ревью Codex №5: один встречный таран на 33–49 бл/с решает бой, а отказ уходил
-        // «прочь» по его же линии, без ракеты): уход дугой вбок от линии его захода (в сторону, противоположную его
-        // боковому ходу), ракета — по цене (rocketChoice), если скорость мала.
-        goal: () => {
-          const b = bot.entity; const f = foe()
-          let away = /копьё на изготовке|опасно/.test(res.why) ? yawTo(f, b.position) : Math.atan2(-b.velocity.x, -b.velocity.z)
-          if (/копьё на изготовке/.test(res.why)) {
-            const v = hv(); const rx = b.position.x - f.x; const rz = b.position.z - f.z
-            const side = (v.x * rz - v.z * rx) >= 0 ? -1 : 1
-            away += side * 1.0
-          }
-          const L = sky.lookVec(away, 0)
-          return { kind: 'point', at: new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), minY: f.y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4, away: f, awayR: 6 }
-        },
-        noRocket: () => !/копьё на изготовке/.test(res.why),
-        rocketIf: (st: any) => Math.hypot(st.v.x, st.v.z) < 1.0 ? true : null,
-        onTick: () => { if (allow) allow() },
-        until: () => bot.entity.position.y >= foe().y + 3 && bot.entity.velocity.y < 0.3 ? 'вышел' : null
-      })
+}
+
+async function lanceRunUp (ln: LanceCtx) {
+  const { bot, ctl, e, stats, used, allow, arena, valid, name, foe, ceilY, cruiseY } = ln
+  // 1) Разбег: точка на его стороне от нас за 17 бл., высота cruiseY. (s7h/s7j: копьё «использовать» уже на
+  // развороте к нему дало касаний 15 % и 8 % против 30 % в s7f — откатил; копьё — в заходе, по времени до касания.)
+  // Клещи (командный бой, 10.10): напарник заходит на ту же цель — разбег на противоположной от него стороне,
+  // увернувшись от одного, цель подставится второму. Подсказку даёт свой (assist pincer), живёт 6 с.
+  const pin = bot._ndPincer
+  const pinFrom = pin && pin.until > Date.now() && pin.target === (e.username || e.name) ? pin.from : null
+  const side = pinFrom ? yawTo(foe(), { x: 2 * foe().x - pinFrom.x, y: 0, z: 2 * foe().z - pinFrom.z }) : yawTo(foe(), bot.entity.position)
+  if (pinFrom) stats.pincers = (stats.pincers || 0) + 1
+  const runUp = () => { const f = foe(); const L = sky.lookVec(side, 0); return new Vec3(f.x + L.x * 17, cruiseY(), f.z + L.z * 17) }
+  const inside = (p: any) => !arena || (Math.abs(p.x - arena.x) <= arena.r - 3 && Math.abs(p.z - arena.z) <= arena.r - 3)
+  // Показ 09.10: у стены точка разбега ужата до ~10 бл., а разворот ждал 13 — бот кружил до «долго» (4 с).
+  // Разворот — по фактической длине разбега (не дальше 13).
+  let runR = 13
+  const climb = await sky.fly(bot, ctl, { arena,
+    maxMs: 4000, stats, phase: 'таран: разбег',
+    goal: () => { const P = runUp(); const f = foe(); if (!inside(P)) { P.x = f.x + (P.x - f.x) * 0.6; P.z = f.z + (P.z - f.z) * 0.6 } runR = Math.min(13, Math.hypot(P.x - f.x, P.z - f.z) - 1.5); return { kind: 'point', at: P, reach: true, minY: foe().y + 3, maxY: ceilY(), gap: 3, speedMin: 0.5 } },
+    rocketIf: (s: any) => (s.p.y < foe().y + 4 || Math.hypot(s.v.x, s.v.z) < 0.5) ? true : null,
+    noRocket: () => sky.rocketCount(bot) <= 1,
+    onTick: () => {
+      if (allow) allow()
+      // Показ 09.10: заход ~10 т, задержка железного копья 13 т — пролёт в 1.3 бл. над ним «копьё 11 т», мимо.
+      // Копьё — в конце разбега (≥ 10 бл. от него, ~5 т до разворота): к касанию готово, окно урона 11 с.
+      const me = bot.entity.position; const f = foe()
+      if (!ln.using && bot.heldItem?.name === name && Math.hypot(me.x - f.x, me.z - f.z) >= 10) {
+        bot.activateItem(); ln.using = true; ln.useAt = clock.now(); used('элитры: копьё к тарану (в конце разбега)')
+      }
+    },
+    until: () => {
+      if (!valid()) return 'цель пропала'
+      const me = bot.entity.position; const f = foe()
+      const dh = Math.hypot(me.x - f.x, me.z - f.z)
+      // Выше него на 3.5 — если потолок пускает; он под потолком — хватит высоты потолка (иначе круги до «долго»).
+      return dh >= runR && me.y >= Math.min(f.y + 3.5, ceilY() - 1) ? 'разбег' : null
     }
-  } finally {
-    stopUse()
-    try { bot._client.removeListener('damage_event', onHurt) } catch {}
-  }
+  })
+  return climb
+}
+
+// Заход до касания или отказа и его разбор: попадание, снятое хп, след захода (lanceTrace).
+async function lanceApproach (ln: LanceCtx) {
+  const { bot, e, stats, used, allow, telemetryHp, W, S, out, valid, name, spec, delayMs, foe, hisH, hv, footAt, stopUse } = ln
+  // 2) Заход: к нему (ракета, если медленно), затем «использовать» копьё; взгляд — chooseLance.
+  out.passes++
+  stats.lancePasses = (stats.lancePasses || 0) + 1
+  const hp1 = telemetryHp(e)
+  ln.hitAt = 0
+  S.phase = 'таран: заход'
+  const res: any = await new Promise<any>(resolve => {
+    let done = false
+    let rocket = (!ln.using && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 1.1 && sky.rocketCount(bot) > 1 && !(bot.fireworkRocketDuration > 0)) ? 'нужна' : 'нет'
+    let minD = Infinity; let growing = 0
+    const tR = clock.now()
+    let best: any = null
+    let close: any = null
+    let planned = 0
+    S.driving = (S.driving || 0) + 1
+    const fin = (why: string) => { if (done) return; done = true; S.driving = Math.max(0, (S.driving || 1) - 1); bot.removeListener('physicsTick', onT); resolve({ why, best, close, planned }) }
+    const onT = () => {
+      if (done) return
+      try {
+        // Попадание — раньше «прервали»: таран, убивший его, обрывает бой в тот же тик (s7e р.1: «прервали» при смерти цели).
+        if (ln.hitAt) return fin('попал')
+        if (!valid()) return fin(e && e.isValid === false && ln.using ? 'цель пропала' : 'прервали')
+        const b = bot.entity
+        if (b.onGround) return fin('сел')
+        if (!b.elytraFlying && clock.now() - S.startedAt > 400) return fin('полёт кончился')
+        if (allow) allow()
+        if (clock.now() - tR > 4500) return fin('долго')
+        const f = foe()
+        // Его копьё «на изготовке» и смотрит на нас: встречный разгон — отн. скорость = моя + его, урон обоим
+        // (KineticWeapon: rel = взгляд·его − взгляд·моя для него); s7e р.4 — таран в его копьё: себе −15.
+        if (spearBraced(bot, e) && facing(e, b.position) > 0.6 && Math.hypot(f.x - b.position.x, f.z - b.position.z) < 14) return fin('его копьё на изготовке')
+        const eye = b.position.offset(0, EYE_FLY, 0)
+        const dist = Math.hypot(f.x - eye.x, f.y + hisH() / 2 - eye.y, f.z - eye.z)
+        if (dist < minD - 0.05) {
+          minD = dist; growing = 0
+          const v = b.velocity
+          close = { d: r2(dist), dy: r2(b.position.y - f.y), sp: r2(Math.hypot(v.x, v.y, v.z)), use: ln.using ? Math.round((clock.now() - ln.useAt) / 50) : -1, plan: best ? best.hitT : null }
+        } else if (++growing >= 4 && minD < 8) return fin('мимо')
+        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
+        const readyIn = ln.using ? Math.max(0, Math.round(spec.delay * 20) + 1 - Math.round((clock.now() - ln.useAt) / 50)) : Math.round(spec.delay * 20) + 1
+        const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn })
+        // Касание раньше конца задержки копья урона не даст — только считаем (s7h: отказ от таких планов уронил
+        // касания 30 % → 15 %: без плана проход шёл «над головой» мимо; задержку решает ранний старт копья).
+        const delayT = Math.round(spec.delay * 20) + 1
+        if (pl && (!ln.using || (clock.now() - ln.useAt) / 50 + pl.hitT < delayT)) stats.lanceEarly = (stats.lanceEarly || 0) + 1
+        let look: any
+        if (pl) { best = pl; planned++; look = pl } else {
+          // Не достаём из этих взглядов — к точке над его головой (с упреждением), не ниже пола + 2.
+          look = sky.choose(W, st, { kind: 'point', at: (t: number) => footAt(t).offset(0, hisH() + 0.8, 0), reach: true, gap: 2, speedMin: 0.8 })
+        }
+        // Страховка: этот взгляд за 6 тиков — в стену с уроном или в пол с высотой падения > 3 — выйти сейчас.
+        const ahead = sky.rollout(W, st.p, st.v, look.yaw, look.pitch, st.boost, 6, { fd: st.fd })
+        // Пол раньше касания копьём — выход; касание раньше пола — заход по стоящему на земле (показ 09.10: по
+        // человеку на земле 3 из 6 заходов бросались за 9 бл., бот кружил). Пик у пола страхует «пол близко» ниже.
+        const floorFirst = ahead.kind === 'floor' && ahead.fd > 3 && !(pl && pl.hitT <= ahead.t)
+        if ((ahead.kind === 'wall' && ahead.dmg >= 1) || floorFirst) { stats.lanceBail = (stats.lanceBail || 0) + 1; return fin('опасно: ' + (ahead.kind === 'wall' ? 'стена' : 'пол')) }
+        sky.steer(bot, look.yaw, look.pitch)
+        if (rocket === 'нужна') {
+          // Ракета уходит с взглядом этого тика (после пакета).
+          rocket = 'была'
+          spear.afterPacket(bot, () => { const fr = sky.fireRocket(bot); if (fr.ok) stats.rockets = (stats.rockets || 0) + 1 })
+          return
+        }
+        // Копьё — после ракеты, так, чтобы задержка кончилась до касания (≈ дистанция / скорость тиков).
+        const sp1 = Math.hypot(b.velocity.x, b.velocity.y, b.velocity.z)
+        const eta = (dist - 3) / Math.max(0.3, sp1) * 50
+        if (!ln.using && eta < delayMs + 4000) {
+          if (bot.heldItem?.name === name) { bot.activateItem(); ln.using = true; ln.useAt = clock.now(); used('элитры: копьё к тарану') }
+        }
+        // Пол близко на пике — выйти, иначе удар о землю.
+        const fl = W.floorBelow(b.position.x, b.position.y, b.position.z, 6)
+        if (fl && b.position.y - fl.top < 1.2 && b.velocity.y < -0.45) return fin('пол близко')
+        void ln.useAt
+      } catch (err: any) { fin('ошибка: ' + err.message) }
+    }
+    bot.on('physicsTick', onT)
+  })
+  stopUse()
+  if (res.why === 'попал') {
+    out.hits++
+    stats.lanceHits = (stats.lanceHits || 0) + 1
+    // Сколько снял (телеметрия, метаданные): хп приходит позже события удара — минимум за 0.5 с.
+    let hpMin = telemetryHp(e)
+    const tH = clock.now()
+    // Убил (сущность снята — с do_immediate_respawn раньше метаданных с хп 0) — снял всё, что было (hp1);
+    // раньше hpMin оставался равен hp1 и убийство писалось «снял 0» (замечание проверки S7b в).
+    const onH = () => { const h = telemetryHp(e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = e.isValid === false && hp1 != null ? hp1 : (hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
+    bot.on('physicsTick', onH)
+    used(`элитры: таран копьём — попал${res.best ? ` (план ${res.best.dmg}, ${res.best.rel} бл/с)` : ''}`)
+  } else used(`элитры: таран — ${res.why}`)
+  // Разбор захода (s7b): ближе всего (до его середины), высота над ним, скорость б/т, тиков «использования»
+  // копья к этому мигу (−1 — не начато), был ли план касания и сколько тиков из захода.
+  const tr = stats.lanceTrace || (stats.lanceTrace = [])
+  if (tr.length < 12) tr.push(`${res.why}: ближе ${res.close ? res.close.d : '?'} (dy ${res.close ? res.close.dy : '?'}, ${res.close ? res.close.sp : '?'} б/т, копьё ${res.close ? res.close.use : '?'} т), план ${res.planned} т`)
+  return res
+}
+
+async function lanceExit (ln: LanceCtx, res: any) {
+  const { bot, ctl, stats, allow, arena, foe, hv, ceilY, cruiseY } = ln
+  // 3) Выход вверх и прочь от стен: точка впереди по ходу на cruiseY.
+  await sky.fly(bot, ctl, { arena,
+    maxMs: 1500, stats, phase: 'таран: выход',
+    // Отказ от захода (его копьё на изготовке, опасный выход) — прочь от него, а не «по ходу» (по ходу — в его
+    // копьё: s7j р.1 «таран — мимо, себе −20», встречный разгон убил тараном его копья).
+    // Его копьё на изготовке (S7d, ревью Codex №5: один встречный таран на 33–49 бл/с решает бой, а отказ уходил
+    // «прочь» по его же линии, без ракеты): уход дугой вбок от линии его захода (в сторону, противоположную его
+    // боковому ходу), ракета — по цене (rocketChoice), если скорость мала.
+    goal: () => {
+      const b = bot.entity; const f = foe()
+      let away = /копьё на изготовке|опасно/.test(res.why) ? yawTo(f, b.position) : Math.atan2(-b.velocity.x, -b.velocity.z)
+      if (/копьё на изготовке/.test(res.why)) {
+        const v = hv(); const rx = b.position.x - f.x; const rz = b.position.z - f.z
+        const side = (v.x * rz - v.z * rx) >= 0 ? -1 : 1
+        away += side * 1.0
+      }
+      const L = sky.lookVec(away, 0)
+      return { kind: 'point', at: new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), minY: f.y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4, away: f, awayR: 6 }
+    },
+    noRocket: () => !/копьё на изготовке/.test(res.why),
+    rocketIf: (st: any) => Math.hypot(st.v.x, st.v.z) < 1.0 ? true : null,
+    onTick: () => { if (allow) allow() },
+    until: () => bot.entity.position.y >= foe().y + 3 && bot.entity.velocity.y < 0.3 ? 'вышел' : null
+  })
+}
+
+async function lanceLand (ln: LanceCtx) {
+  const { bot, ctl, e, stats, arena, telemetryHp, W, t0, out, hp0, hisHp0, foe } = ln
   // 4) Посадка подальше от него, нагрудник назад.
   // Сесть — всегда, даже если бой уже кончился (убил в воздухе) или его прервали: элитры без руля — хуже любого
   // перехвата (тактика летать не умеет). Прерывает посадку только смерть. Бой кончился (ctl прерван) — посадка

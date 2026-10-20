@@ -1,12 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { cjsContext } from './cjs-context'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
-import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
 
 async function climb(cap: string, count = 2) {
   const file = path.join(__dirname, '../src/survival/surface-body.ts')
@@ -33,12 +32,13 @@ async function climb(cap: string, count = 2) {
       return actual
     }, moves, bot
   }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8') + `
+  // surface-body — ES-модуль: bodySource превращает импорты в require (заглушки по spec выше), подмена stairStep — той же областью.
+  vm.runInNewContext(bodySource(file) + `
     stairStep = async (_bot, _data, _ctl, feet, dir) => {
       moves.stairs++; bot.entity.position = feet.plus(dir).offset(.5, 1, .5);
       return { ok: true, dug: 3 };
     };
-  `, { loader: 'ts' }).code, cjsContext(context))
+  `, cjsContext(context))
   const result = await context.module.exports.surface({ bot, mcData: {}, journal: { append() {} } }, { aborted: false, onAbort: [] }, { preferPillar: true, targetY: 60, timeoutSeconds: 10 })
   return { moves, result }
 }

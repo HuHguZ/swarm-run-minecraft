@@ -1,13 +1,14 @@
 import { campaignTs, withSetters } from './campaign-source'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { cjsContext } from './cjs-context'
 import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const source = fs.readFileSync(path.join(__dirname, '../src/survival/refuge-body.ts'), 'utf8')
+// refuge-body — ES-модуль: bodySource превращает импорты в require (заглушки ниже — по spec).
+const source = bodySource(path.join(__dirname, '../src/survival/refuge-body.ts'))
 
 function fixture({ kind = 'box', mode = 'speedrun', held = 'no_food', sealed = true, pocket = 2, untilDawn = false } = {}) {
   let now = 1000
@@ -31,7 +32,7 @@ function fixture({ kind = 'box', mode = 'speedrun', held = 'no_food', sealed = t
     if (name === '.././fortify') return { landed: async () => {}, enclosure: () => ({ sealed }) }
     throw new Error('Unexpected dependency ' + name)
   } }
-  vm.runInNewContext(transformSync(source, { loader: 'ts' }).code, cjsContext(context))
+  vm.runInNewContext(source, cjsContext(context))
   return { calls, run: () => exported.exports.refugeBody(session, { aborted: false }, { t0: 1000, minHp: 16, deadline: 121000,
     out: { how: 'none', code: 'OK', hp0: 12, steps: [], untilDawn }, step: () => {}, hurts: [] }) }
 }

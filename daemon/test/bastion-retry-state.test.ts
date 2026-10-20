@@ -1,20 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
 import vm from 'node:vm'
 import { cjsContext } from './cjs-context'
 import { declSource } from './source-fixture'
-// routeRetryAt и sealedGold — в bastion/sealed-gold.ts (рядом, в этом порядке); шаг «отложенное золото» цикла bastion() —
-// stepDeferred в bastion/run-loop.ts.
-const sealedSource=fs.readFileSync(path.join(__dirname,'../src/bastion/sealed-gold.js'),'utf8')
+// routeRetryAt — часть тела bastion/sealed-gold.ts (sealed-gold/state.ts), по имени; шаг «отложенное золото» цикла
+// bastion() — stepDeferred в bastion/run-loop.ts.
+const sealedSource=declSource(require.resolve('../src/bastion/sealed-gold'),'routeRetryAt')
 
 test('a failed gold route stays deferred within its RPC despite elapsed time; the disabled switch keeps the former deadlines',()=>{
-  const start=sealedSource.indexOf('function routeRetryAt('),end=sealedSource.indexOf('async function sealedGold(',start)
-  assert.ok(start>=0&&end>start)
+  assert.ok(sealedSource.includes('function routeRetryAt('))
   let now=0
   const ctx:any={process:{env:{ND_NE_RECOVER:'1'}},gameClock:{now:()=>now}}
-  const retry=vm.runInNewContext(sealedSource.slice(start,end)+'\nrouteRetryAt',cjsContext(ctx))
+  const retry=vm.runInNewContext(sealedSource+'\nrouteRetryAt',cjsContext(ctx))
   assert.equal(retry(60000),Infinity)
   now=86400000;assert.equal(retry(60000),Infinity)
   ctx.process.env.ND_NE_RECOVER='0';assert.equal(retry(60000),now+60000)

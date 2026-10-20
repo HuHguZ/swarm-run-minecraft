@@ -196,7 +196,13 @@ function codeOf (state) {
   return C.OTHER
 }
 
-async function cmdScan (slot, half, worldDirArg) {
+// Скан по шагам (cmdScan): g — сетка копии мира у спавна с биомами, дном океана и руинами портала из чтения чанков;
+// geo — верх столбов, открытый воздух и геометрия по ним. Шаги возвращают свои находки, итог собирает scanResult.
+type LavaGrid = Awaited<ReturnType<typeof scanBase>>
+type LavaGeo = ReturnType<typeof scanGeometry>
+type LavaFound = ReturnType<typeof lavaClusters> & ReturnType<typeof oceanRavines> & ReturnType<typeof magmaAndRuins> & { tRead: number, biomeArea: ReturnType<typeof surfaceBiomes> }
+
+async function scanBase (slot, half, worldDirArg) {
   const s: any = worldDirArg ? { dir: worldDirArg } : slotInfo(slot)
   const worldDir = path.join(s.dir, 'world')
   const lvl = await readLevel(s.dir)
@@ -214,19 +220,24 @@ async function cmdScan (slot, half, worldDirArg) {
   const at = (x, y, z) => (y * W + z) * W + x
   const rps = []
   const structCount: Record<string, any> = {} as Record<string, any>
-  let missingChunks = 0
   const tmp = new Uint16Array(4096)
   const tmpB = new Uint8Array(64)
   const t0 = Date.now()
+  return { worldDir, spawn, seed, cx0, cz0, NC, W, X0, Z0, grid, biome, oceanFloor, at, rps, structCount, missingChunks: 0, tmp, tmpB, t0 }
+}
+
+// Чанки квадрата → сетка кодов клеток, биомы, дно океана (OCEAN_FLOOR), постройки и руины портала.
+function readChunks (g: LavaGrid) {
+  const { worldDir, cx0, cz0, NC, W, grid, biome, oceanFloor, at, rps, structCount, tmp, tmpB } = g
   for (let i = 0; i < NC; i++) {
     for (let k = 0; k < NC; k++) {
       const cx = cx0 + i; const cz = cz0 + k
       const raw = readChunkNbtRaw(worldDir, cx, cz)
-      if (!raw) { missingChunks++; continue }
+      if (!raw) { g.missingChunks++; continue }
       const root = nbt.parseUncompressed(raw)
       const v = root.value
       const status = v.Status ? v.Status.value : '?'
-      if (!/full/.test(status)) { missingChunks++; continue }
+      if (!/full/.test(status)) { g.missingChunks++; continue }
       for (const sec of (v.sections ? v.sections.value.value : [])) {
         const sy = sec.Y.value
         const ys = (sy * 16 - MIN_Y)
@@ -272,12 +283,10 @@ async function cmdScan (slot, half, worldDirArg) {
       }
     }
   }
-  const tRead = Date.now() - t0
-  const biomeAt = (x, y, z) => {
-    const i = x >> 4; const k = z >> 4
-    const b = biome[((i * NC + k) * 24 + (y >> 4)) * 64 + ((((y & 15) >> 2) * 16) + (((z & 15) >> 2) * 4) + ((x & 15) >> 2))]
-    return b || '?'
-  }
+}
+
+function columnTops (g: LavaGrid) {
+  const { W, grid, at } = g
   // Верх столба (первая сверху не-воздушная клетка) и верх «твёрдого или жидкого».
   const top = new Int16Array(W * W).fill(-1)
   for (let z = 0; z < W; z++) {
@@ -285,6 +294,11 @@ async function cmdScan (slot, half, worldDirArg) {
       for (let y = H - 1; y >= 0; y--) { const c = grid[at(x, y, z)]; if (c !== C.AIR) { top[z * W + x] = y; break } }
     }
   }
+  return top
+}
+
+function surfaceAir (g: LavaGrid, top: Int16Array) {
+  const { W, grid, at } = g
   // Воздух, связанный с поверхностью (пещеры и обрывы, куда можно войти не копая): BFS от клетки над верхом столба
   // вниз и вбок по воздуху и мягким блокам. Вода не проводит (вход под водой не считаем).
   const openAir = new Uint8Array(grid.length)
@@ -315,13 +329,15 @@ async function cmdScan (slot, half, worldDirArg) {
       }
     }
   }
-  // Площадь биомов по поверхности (биом клетки верха столба) — знаменатель для «где чаще поверхностная лава».
-  const biomeArea: Record<string, any> = {} as Record<string, any>
-  for (let z = 0; z < W; z += 2) {
-    for (let x = 0; x < W; x += 2) {
-      const ty = top[z * W + x]; if (ty < 0) continue
-      const b = biomeAt(x, ty, z); biomeArea[b] = (biomeArea[b] || 0) + 4
-    }
+  return openAir
+}
+
+function scanGeometry (g: LavaGrid, top: Int16Array, openAir: Uint8Array) {
+  const { NC, W, grid, at, biome, spawn, X0, Z0, rps } = g
+  const biomeAt = (x, y, z) => {
+    const i = x >> 4; const k = z >> 4
+    const b = biome[((i * NC + k) * 24 + (y >> 4)) * 64 + ((((y & 15) >> 2) * 16) + (((z & 15) >> 2) * 4) + ((x & 15) >> 2))]
+    return b || '?'
   }
   const sx = spawn.x - X0; const sz = spawn.z - Z0
   const hdist = (x, z) => Math.round(Math.hypot(x - sx, z - sz))
@@ -350,6 +366,26 @@ async function cmdScan (slot, half, worldDirArg) {
     }
     return null
   }
+  return { top, openAir, biomeAt, sx, sz, hdist, waterDist, inRp }
+}
+
+function surfaceBiomes (g: LavaGrid, geo: LavaGeo) {
+  const { W } = g
+  const { top, biomeAt } = geo
+  // Площадь биомов по поверхности (биом клетки верха столба) — знаменатель для «где чаще поверхностная лава».
+  const biomeArea: Record<string, any> = {} as Record<string, any>
+  for (let z = 0; z < W; z += 2) {
+    for (let x = 0; x < W; x += 2) {
+      const ty = top[z * W + x]; if (ty < 0) continue
+      const b = biomeAt(x, ty, z); biomeArea[b] = (biomeArea[b] || 0) + 4
+    }
+  }
+  return biomeArea
+}
+
+function lavaClusters (g: LavaGrid, geo: LavaGeo) {
+  const { W, grid, at, oceanFloor, X0, Z0 } = g
+  const { top, openAir, biomeAt, hdist, waterDist, inRp } = geo
   // Кластеры лавы (источники и текущая), 6-связность, отдельно: верх (y ≥ −54) и низ.
   const seen = new Uint8Array(grid.length)
   const clusters = []
@@ -441,6 +477,12 @@ async function cmdScan (slot, half, worldDirArg) {
       }
     }
   }
+  return { clusters, counts, magmaSpots, obsOutsideRp }
+}
+
+function oceanRavines (g: LavaGrid, geo: LavaGeo) {
+  const { W, grid, at, oceanFloor, X0, Z0 } = g
+  const { top, biomeAt, hdist } = geo
   // Подводные «овраги»: столбы, где вода уходит на 10+ ниже медианы дна вокруг (радиус 8). Дно — OCEAN_FLOOR.
   const ravineCols = []
   for (let z = 8; z < W - 8; z += 1) {
@@ -481,6 +523,12 @@ async function cmdScan (slot, half, worldDirArg) {
       ravineNear.push({ d: hdist(x, z), at: [x + X0, of, z + Z0], floor: of, magma: m, lava: l }); ravineNear.sort((a, b) => a.d - b.d); if (ravineNear.length > 3) ravineNear.pop()
     }
   }
+  return { ravineCols, ravineMagma, ravineLava, ravineMinFloor, ravineNear }
+}
+
+function magmaAndRuins (g: LavaGrid, geo: LavaGeo, magmaSpots) {
+  const { W, grid, at, rps, spawn, X0, Z0 } = g
+  const { biomeAt } = geo
   // Магма: где (биом, под водой, высота).
   const magmaBy: Record<string, any> = {} as Record<string, any>
   for (const [x, y, z, w] of magmaSpots) {
@@ -506,6 +554,13 @@ async function cmdScan (slot, half, worldDirArg) {
     const cxw = b ? (b[0] + b[3]) / 2 : 0; const czw = b ? (b[2] + b[5]) / 2 : 0
     return { template: (r.template || '').replace('minecraft:ruined_portal/', ''), placement: r.placement, at: b ? [Math.round(cxw), b[1], Math.round(czw)] : null, d: b ? Math.round(Math.hypot(cxw - spawn.x, czw - spawn.z)) : null, obsidian: obs, crying: cry, lavaSrc: lava, magma }
   }).sort((a, b) => a.d - b.d)
+  return { magmaBy, rpInfo }
+}
+
+function scanResult (g: LavaGrid, geo: LavaGeo, found: LavaFound) {
+  const { seed, spawn, NC, W, X0, Z0, missingChunks, structCount } = g
+  const { top, biomeAt, sx, sz } = geo
+  const { tRead, biomeArea, clusters, counts, obsOutsideRp, ravineCols, ravineMagma, ravineLava, ravineMinFloor, ravineNear, magmaBy, rpInfo } = found
   // Сводки по классам кластеров (верх, y ≥ −54).
   const up = clusters.filter(c => !c.deep)
   const cls = c => c.rp ? 'rp' : c.sky > 0 ? 'surface' : c.open > 0 ? 'open-cave' : c.airFace > 0 ? 'closed-cave' : 'enclosed'
@@ -554,6 +609,22 @@ async function cmdScan (slot, half, worldDirArg) {
     surfaceLakes: up.filter(c => c.sky > 0 && !c.rp).map(c => ({ src: c.src, near: c.near, at: c.nearAt, biome: c.biome, water: c.water, y: [c.minY, c.maxY] })),
     clustersUpper: up.length
   }
+  return res
+}
+
+async function cmdScan (slot, half, worldDirArg) {
+  const g = await scanBase(slot, half, worldDirArg)
+  readChunks(g)
+  const tRead = Date.now() - g.t0
+  const top = columnTops(g)
+  const openAir = surfaceAir(g, top)
+  const geo = scanGeometry(g, top, openAir)
+  const biomeArea = surfaceBiomes(g, geo)
+  const lava = lavaClusters(g, geo)
+  const ravines = oceanRavines(g, geo)
+  const ruins = magmaAndRuins(g, geo, lava.magmaSpots)
+  const res = scanResult(g, geo, { ...lava, ...ravines, ...ruins, tRead, biomeArea })
+  const { seed, t0, missingChunks } = g
   fs.mkdirSync(OUT, { recursive: true })
   const file = path.join(OUT, `${seed}.json`)
   fs.writeFileSync(file, JSON.stringify(res, null, 1))

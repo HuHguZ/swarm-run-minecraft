@@ -20,7 +20,32 @@ function rng (seed) {
   return () => { h = (h * 1664525 + 1013904223) >>> 0; return h / 4294967296 }
 }
 
+// Камеры под подиумом и лестницы на террасу (углы, °): их места обходят и укрытия на песке.
+const CAMERAS = [25, 55, 125, 155, 205, 235, 305, 335]
+const STAIRS = [45, 135, 225, 315]
+
+// Раскладка — части по порядку (номера разделов — в комментариях частей; зерно rnd тянется в том же порядке).
 function generate (seed = 'colos') {
+  const ac = armsContext(seed)
+  const { p, R, out } = ac
+  armsCameras(ac)
+  const lab = armsHalls(ac)
+  armsStairs(ac)
+  armsGalleries(ac)
+  armsCover(ac)
+  armsField(ac)
+  const spawnRooms = armsSpawnRooms(ac)
+
+  return {
+    seed: String(seed), version: 1, map: 'colosseum', half: Math.ceil(p.outA + 3), y0: -4, y1: 40, R,
+    chests: out.chests, rooms: out.rooms, secret: out.secret, areas: out.areas, set: out.set, field: out.field,
+    spawns: [{ x: -36, y: 0, z: 0, yaw: -90 }, { x: 36, y: 0, z: 0, yaw: 90 }], spawnRooms,
+    lab, facade: FACADE, under: UNDER
+  }
+}
+
+// Общее для частей раскладки: эллипс колизея, зерно, сбор блоков и сундуков (прежние const тела generate).
+function armsContext (seed) {
   const p = C.params({})
   const { A1, B1, R } = p
   const rnd = rng(seed)
@@ -53,9 +78,14 @@ function generate (seed = 'colos') {
     out.chests.push({ id: `c${++nid}`, x, y, z, facing, room, kind, tier, ...(cover ? { cover } : {}) })
     S(x, y, z, `chest[facing=${facing}]`)
   }
+  return { p, A1, B1, R, rnd, E, Nt, Tt, out, S, band, at, inward, outward, chest }
+}
 
+type ArmsCtx = ReturnType<typeof armsContext>
+
+function armsCameras (ac: ArmsCtx) {
+  const { out, S, band, at, inward, chest } = ac
   // ---- 1. Камеры под подиумом (k 0..7): дверь 3×2 в подиуме, зал 6 бл. шириной, свет в потолке.
-  const CAMERAS = [25, 55, 125, 155, 205, 235, 305, 335]
   CAMERAS.forEach((d, j) => {
     const t = deg(d); const id = `камера${j + 1}`
     for (const c of band(t, 0, 8, 2.6)) {
@@ -79,7 +109,10 @@ function generate (seed = 'colos') {
       out.secret.push(`${id}-тайник`)
     }
   })
+}
 
+function armsHalls (ac: ArmsCtx) {
+  const { B1, out, S, chest } = ac
   // ---- 2. Лаборатория (север, под ложей) и оружейная (юг, под пульвинаром): |x| ≤ 5, k 0..7.
   const hall = (sgn, id) => {
     const zIn = sgn * (B1 + 0); const zBack = sgn * (B1 + 7)
@@ -106,9 +139,12 @@ function generate (seed = 'colos') {
   const za = hall(1, 'оружейная')
   for (const x of [-4, -2, 2, 4]) chest(x, 0, za, 'north', 'оружейная', 'armory', 3)
   S(0, 0, za, 'smithing_table')
+  return lab
+}
 
+function armsStairs (ac: ArmsCtx) {
+  const { out, S, band, at, outward } = ac
   // ---- 3. Лестницы с песка на террасу (диагонали): ступени n −4..−1 (ноги 0→4), парапет над ними снят.
-  const STAIRS = [45, 135, 225, 315]
   for (const d of STAIRS) {
     const t = deg(d); const up = outward(t)
     for (const c of band(t, -4, 1, 1.2)) {
@@ -121,7 +157,10 @@ function generate (seed = 'colos') {
     const q = at(t, -6)
     out.areas.push({ id: `лестница${d}`, x: q.x, y: 0, z: q.z })
   }
+}
 
+function armsGalleries (ac: ArmsCtx) {
+  const { A1, B1, out, S, at, inward, outward, chest } = ac
   // ---- 4. Галереи: сундук у внутренней стены (k 22) на ярусах 0/8/16; на первом ярусе — 2 тайника в стене рядов.
   // Нижний ярус — вдвое гуще (10.10: «больше сундуков и нычек — замес»).
   const G = [[0, [20, 40, 55, 70, 110, 125, 140, 160, 200, 220, 235, 250, 290, 305, 320, 340]], [8, [30, 150, 210, 330]], [16, [60, 120, 240, 300]]]
@@ -156,7 +195,10 @@ function generate (seed = 'colos') {
       out.areas.push({ id: `${id}-${d}`, x: c.x, y, z: c.z })
     }
   }
+}
 
+function armsCover (ac: ArmsCtx) {
+  const { R, rnd, Tt, S, at } = ac
   // ---- 5. Укрытия на песке: обломки колонн (1–3) и стенки 3×2 по касательной; не на дороге, лестницах, у дверей и лож.
   const avoid = [...CAMERAS, ...STAIRS, 0, 90, 180, 270, 10, 170, 190, 350].map(deg) // 10/170/190/350 — боковые порталы комнат спавна
   const angDist = (a, b) => { const v = Math.abs(((a - b) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI); return v }
@@ -179,6 +221,10 @@ function generate (seed = 'colos') {
     }
     placed++
   }
+}
+
+function armsField (ac: ArmsCtx) {
+  const { R, rnd, out, at, chest } = ac
   // Поле — рельеф по зерну (пользователь 10.10: «мало ям с лавой, куда скидывать друг друга, рельеф ровный — разнообразнее»):
   // холмы-конусы и площадки с пандусом (высота карты h ≥ 0), у их подножия — ямы с лавой (h = −1, лава вровень с полом, под
   // ней песчаник, край — магма), между ними — колонны-укрытия. Центр (|x|,|z| < 4) ровный: там сходятся.
@@ -245,7 +291,10 @@ function generate (seed = 'colos') {
   }
   for (const [sx, sz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) out.areas.push({ id: `поле${sx}${sz}`, x: 12 * sx, y: 0, z: 12 * sz })
   for (const d of [20, 160, 200, 340]) { const q = at(deg(d), -5); out.areas.push({ id: `песок${d}`, x: q.x, y: 0, z: q.z }) }
+}
 
+function armsSpawnRooms (ac: ArmsCtx) {
+  const { A1, B1, S, chest } = ac
   // ---- 6. Комнаты спавна людей (пользователь 14.10: «комнаты закрытые с освещением для спавна игроков, интегрировать в
   // колизей, чтобы красиво; сундуки с лутом с некоторой вероятностью»; затем: «проход только широкий — узкий не для толпы
   // ботов; двери не надо, сквозной»): по две у каждых ворот, по бокам тоннеля, в засыпке под рядами (кольца 6..16, |z| 3..9,
@@ -303,13 +352,7 @@ function generate (seed = 'colos') {
       spawnRooms.push({ id, team, spot: { x: X(6), y: 0, z: Zv(7), yaw: front === 'north' ? 180 : 0 } })
     }
   }
-
-  return {
-    seed: String(seed), version: 1, map: 'colosseum', half: Math.ceil(p.outA + 3), y0: -4, y1: 40, R,
-    chests: out.chests, rooms: out.rooms, secret: out.secret, areas: out.areas, set: out.set, field: out.field,
-    spawns: [{ x: -36, y: 0, z: 0, yaw: -90 }, { x: 36, y: 0, z: 0, yaw: 90 }], spawnRooms,
-    lab, facade: FACADE, under: UNDER
-  }
+  return spawnRooms
 }
 
 // Команды: поле открыть (барьер — воздух), затем блоки поверх колизея. Сундуки — пустыми (набивает ffa по раунду).

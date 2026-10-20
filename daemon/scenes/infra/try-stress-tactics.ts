@@ -27,6 +27,35 @@ const wallSleep = (milliseconds: number) => new Promise<void>(resolve => setTime
 const DEATH = /^(was |fell |died|drowned|burned|went up|went off|blew up|hit the ground|tried to swim|walked into|suffocated|starved|froze|experienced|withered|discovered|didn't want|left the confines|squashed|is |got finished)/
 
 async function main(): Promise<void> {
+  const sc = await stressStand()
+  stressResets(sc)
+  const results = await stressPhases(sc)
+  const { slot, connection, save, deathCount, deathLines } = sc
+  // Deaths after the last phase settled (none expected: no spawns, day) - still counted.
+  await wallSleep(1500)
+  let after = 0
+  try { after = await deathCount() - sc.total } catch {}
+  const tail = deathLines(sc.betweenFrom)
+  connection.close()
+  save({ slot, summary: true, ok: results.every(Boolean) && sc.between === 0 && after === 0, phases: results.length, between: sc.between, after, tail })
+  assert.ok(results.every(Boolean), 'a stress phase failed (see rows)')
+}
+
+type PhaseOptions = { start?: { x: number; z: number }; walk?: { x: number; z: number }; nether?: boolean }
+
+// One run of the stand (the former consts and lets of main): slot, connection, kit, the server's death witnesses
+// (deathCount, death lines since a mark), the death counters between phases.
+interface Stand {
+  slot: number; player: string; connection: any; call: (method: string, params?: Record<string, unknown>) => Promise<any>; kit: any
+  save: (row: Record<string, unknown>) => void; command: (text: string, confirm?: boolean) => Promise<void>; status: () => Promise<State>
+  X: number; Y: number; Z: number; NX: number; NY: number; NZ: number; KIT: string; PHASE_TICKS: number
+  lifeMark: number; total: number; betweenFrom: number; between: number
+  alive: () => Promise<void>; deathCount: () => Promise<number>; deathLines: (from: number) => string[]
+  equip?: (retry?: boolean) => Promise<void>; resetBridge?: () => Promise<void>; reset?: (at?: { x: number; z: number }) => Promise<void>
+  busy?: (to?: { x: number; z: number }) => void
+}
+
+async function stressStand(): Promise<Stand> {
   const slot = Number(process.env.FARM_SLOT)
   const player = process.env.MC_USERNAME ?? `NeuroFarm${slot}`
   assert.ok(slot >= 1 && slot <= 32 && process.env.ND_WS === `ws://127.0.0.1:${8800 + slot}`, 'farm only; explicit slot and matching WS required')
@@ -52,10 +81,11 @@ async function main(): Promise<void> {
   const PHASE_TICKS = Number(process.env.PHASE_TICKS || 1200)
   // status rounds health: a body at 0.24 hp reads 0 (s4d-ab B-iron-1: "did not respawn" while alive). Dead = 0 AND a death
   // line of the server log since the last check.
-  let lifeMark = 0
+  const sc: Stand = { slot, player, connection, call, kit, save, command, status, X, Y, Z, NX, NY, NZ, KIT, PHASE_TICKS,
+    lifeMark: 0, total: 0, betweenFrom: 0, between: 0, alive: null, deathCount: null, deathLines: null }
   const alive = async () => {
     for (const started = Date.now(); Date.now() < started + 30000;) {
-      if ((await status()).health > 0 || Date.now() - started > 2000 && !deathLines(lifeMark).length) { lifeMark = kit.serverLog.mark(); return }
+      if ((await status()).health > 0 || Date.now() - started > 2000 && !deathLines(sc.lifeMark).length) { sc.lifeMark = kit.serverLog.mark(); return }
       await wallSleep(200)
     }
     throw new Error('the bot did not respawn')
@@ -75,6 +105,13 @@ async function main(): Promise<void> {
     .map((l: { text: string }) => /^\[\d\d:\d\d:\d\d\] \[[^\]]+\]: (.*)$/.exec(l.text)?.[1] ?? '')
     .filter((body: string) => body.startsWith(player + ' ') && DEATH.test(body.slice(player.length + 1)))
     .map((body: string) => body.slice(player.length + 1))
+  Object.assign(sc, { alive, deathCount, deathLines })
+  return sc
+}
+
+// Kit, the platform and the bridge rebuilt before each phase; the long distracting skill.
+function stressResets(sc: Stand) {
+  const { call, kit, command, status, X, Y, Z, NX, NY, NZ, KIT, alive } = sc
   // The client's inventory must show the kit before the phase: a /clear landing in the middle of eating left the body with
   // the server's 16 bread and none on its own side (s4d-ab2: no 'edible', combat.fight "нет запаса еды" in every Fight).
   const equip = async (retry = true): Promise<void> => {
@@ -132,62 +169,68 @@ async function main(): Promise<void> {
   }
   // A long skill to distract: walk back and forth along the platform.
   const busy = (to = { x: X + 12, z: Z + .5 }) => { void call('goto', { x: to.x, y: Y, z: to.z, timeoutSeconds: 120 }).catch(() => {}) }
-  let total = 0
-  let betweenFrom = 0
-  let between = 0
-  const phase = async (name: string, prepare: () => Promise<void>, expect: (actions: Selected[]) => boolean,
-    { start, walk, nether = false }: { start?: { x: number; z: number }; walk?: { x: number; z: number }; nether?: boolean } = {}) => {
-    if (nether) await resetBridge(); else await reset(start)
-    // Deaths since the last phase settled (reset, the idle body between runs) belong to no phase - reported, not hidden.
-    const counted = await deathCount()
-    between += counted - total
-    total = counted
-    const before = await status()
-    const mark = connection.heard.length
-    const logMark = kit.serverLog.mark()
-    const wall0 = Date.now()
-    if (nether) void call('goto', { x: NX + .5, y: NY, z: NZ + 20.5, timeoutSeconds: 120 }).catch(() => {}); else busy(walk)
-    await wallSleep(300)
-    await prepare()
-    const t0 = before.clock?.ticks ?? 0
-    let state = before, minHp = before.health, lowest = before.pos.y, dead = false
-    for (const capped = Date.now() + Math.max(60000, PHASE_TICKS * 10); Date.now() < capped;) {
-      state = await status()
-      minHp = Math.min(minHp, state.health)
-      // Only the first life: a respawn at the world spawn (overworld, y ~70) is no fall from the platform or the bridge.
-      dead ||= state.health <= 0
-      if (!dead) lowest = Math.min(lowest, state.pos.y)
-      if ((state.clock?.ticks ?? 0) - t0 >= PHASE_TICKS) break
-      await wallSleep(50)
-    }
-    try { await call('stop') } catch {}
-    // Settle: a body in the air lands (or dies) before the count; then both witnesses are read.
-    for (const until = Date.now() + 3000; Date.now() < until;) {
-      const s = await status()
-      if (s.health <= 0 || Math.abs(s.pos.y - Math.round(s.pos.y)) < .01) break
-      await wallSleep(100)
-    }
-    await wallSleep(1500)
-    await alive()
-    const counted2 = await deathCount()
-    const deaths = counted2 - total
-    total = counted2
-    const causes = deathLines(logMark)
-    betweenFrom = kit.serverLog.mark()
-    const heard = (connection.heard as Event[]).slice(mark)
-    for (const event of heard) if (event.type === 'tactical_finished' && typeof event.hp === 'number') minHp = Math.min(minHp, event.hp)
-    const actions: Selected[] = heard.filter(event => event.type === 'tactical_selected').map(event => ({ action: event.action, level: event.threatLevel, t: event.gameAt }))
-    // A>B>A within 2 game seconds at one threat level (round 2: Fight<->LastStand every sample at four blazes).
-    const swaps = actions.filter((a, i) => i >= 2 && a.action === actions[i - 2].action && a.action !== actions[i - 1].action &&
-      a.level === actions[i - 1].level && (a.t === undefined || actions[i - 2].t === undefined || a.t - actions[i - 2].t! < 2000)).length
-    const died = deaths > 0 || causes.length > 0
-    const ok = !died && swaps === 0 && expect(actions)
-    const ticks = (state.clock?.ticks ?? 0) - t0
-    const physics = ticks > 0 ? Math.round(((state.physicsTicks ?? 0) - (before.physicsTicks ?? 0)) / ticks * 100) / 100 : null
-    save({ slot, phase: name, ok, died, deaths, causes, swaps, actions, hp0: before.health, minHp, hp: state.health, pos: state.pos,
-      fell: lowest < (nether ? NY : Y) - 2, kit: KIT, ticks, wallMs: Date.now() - wall0, physics, tickRate: state.clock?.tickRate })
-    return ok
+  Object.assign(sc, { equip, resetBridge, reset, busy })
+}
+
+async function stressPhase(sc: Stand, name: string, prepare: () => Promise<void>, expect: (actions: Selected[]) => boolean,
+  { start, walk, nether = false }: PhaseOptions = {}) {
+  const { slot, connection, call, kit, save, status, Y, NX, NY, NZ, KIT, PHASE_TICKS, alive, deathCount, deathLines, resetBridge, reset, busy } = sc
+  if (nether) await resetBridge(); else await reset(start)
+  // Deaths since the last phase settled (reset, the idle body between runs) belong to no phase - reported, not hidden.
+  const counted = await deathCount()
+  sc.between += counted - sc.total
+  sc.total = counted
+  const before = await status()
+  const mark = connection.heard.length
+  const logMark = kit.serverLog.mark()
+  const wall0 = Date.now()
+  if (nether) void call('goto', { x: NX + .5, y: NY, z: NZ + 20.5, timeoutSeconds: 120 }).catch(() => {}); else busy(walk)
+  await wallSleep(300)
+  await prepare()
+  const t0 = before.clock?.ticks ?? 0
+  let state = before, minHp = before.health, lowest = before.pos.y, dead = false
+  for (const capped = Date.now() + Math.max(60000, PHASE_TICKS * 10); Date.now() < capped;) {
+    state = await status()
+    minHp = Math.min(minHp, state.health)
+    // Only the first life: a respawn at the world spawn (overworld, y ~70) is no fall from the platform or the bridge.
+    dead ||= state.health <= 0
+    if (!dead) lowest = Math.min(lowest, state.pos.y)
+    if ((state.clock?.ticks ?? 0) - t0 >= PHASE_TICKS) break
+    await wallSleep(50)
   }
+  try { await call('stop') } catch {}
+  // Settle: a body in the air lands (or dies) before the count; then both witnesses are read.
+  for (const until = Date.now() + 3000; Date.now() < until;) {
+    const s = await status()
+    if (s.health <= 0 || Math.abs(s.pos.y - Math.round(s.pos.y)) < .01) break
+    await wallSleep(100)
+  }
+  await wallSleep(1500)
+  await alive()
+  const counted2 = await deathCount()
+  const deaths = counted2 - sc.total
+  sc.total = counted2
+  const causes = deathLines(logMark)
+  sc.betweenFrom = kit.serverLog.mark()
+  const heard = (connection.heard as Event[]).slice(mark)
+  for (const event of heard) if (event.type === 'tactical_finished' && typeof event.hp === 'number') minHp = Math.min(minHp, event.hp)
+  const actions: Selected[] = heard.filter(event => event.type === 'tactical_selected').map(event => ({ action: event.action, level: event.threatLevel, t: event.gameAt }))
+  // A>B>A within 2 game seconds at one threat level (round 2: Fight<->LastStand every sample at four blazes).
+  const swaps = actions.filter((a, i) => i >= 2 && a.action === actions[i - 2].action && a.action !== actions[i - 1].action &&
+    a.level === actions[i - 1].level && (a.t === undefined || actions[i - 2].t === undefined || a.t - actions[i - 2].t! < 2000)).length
+  const died = deaths > 0 || causes.length > 0
+  const ok = !died && swaps === 0 && expect(actions)
+  const ticks = (state.clock?.ticks ?? 0) - t0
+  const physics = ticks > 0 ? Math.round(((state.physicsTicks ?? 0) - (before.physicsTicks ?? 0)) / ticks * 100) / 100 : null
+  save({ slot, phase: name, ok, died, deaths, causes, swaps, actions, hp0: before.health, minHp, hp: state.health, pos: state.pos,
+    fell: lowest < (nether ? NY : Y) - 2, kit: KIT, ticks, wallMs: Date.now() - wall0, physics, tickRate: state.clock?.tickRate })
+  return ok
+}
+
+async function stressPhases(sc: Stand): Promise<boolean[]> {
+  const { call, kit, command, status, X, Y, Z, NX, NY, NZ } = sc
+  const phase = (name: string, prepare: () => Promise<void>, expect: (actions: Selected[]) => boolean, options?: PhaseOptions) =>
+    stressPhase(sc, name, prepare, expect, options)
   const results: boolean[] = []
   const wanted = (process.env.PHASES || 'zombie-melee,blaze-crowd,blaze-edge,tnt,charged-creeper,diamond-zombie,crowd,wither-skeleton').split(',').filter(Boolean)
   const want = (name: string) => wanted.includes(name)
@@ -203,7 +246,7 @@ async function main(): Promise<void> {
     await command('/time set midnight')
     await command('/scoreboard objectives add nd_deaths deathCount', false)
     await command('/scoreboard players set @s nd_deaths 0', false)
-    betweenFrom = kit.serverLog.mark()
+    sc.betweenFrom = kit.serverLog.mark()
     if (want('zombie-melee')) results.push(await phase('zombie-melee', () => command(`/summon minecraft:zombie ${X + 4.5} ${Y} ${Z + .5}`), noFlap))
     if (want('blaze-crowd')) results.push(await phase('blaze-crowd', async () => {
       await command('/effect give @s minecraft:fire_resistance 600 0 true')
@@ -271,13 +314,6 @@ async function main(): Promise<void> {
     try { await call('stop') } catch {}
     try { await command('/kill @e[type=!minecraft:player,distance=..60]', false) } catch {}
   }
-  // Deaths after the last phase settled (none expected: no spawns, day) - still counted.
-  await wallSleep(1500)
-  let after = 0
-  try { after = await deathCount() - total } catch {}
-  const tail = deathLines(betweenFrom)
-  connection.close()
-  save({ slot, summary: true, ok: results.every(Boolean) && between === 0 && after === 0, phases: results.length, between, after, tail })
-  assert.ok(results.every(Boolean), 'a stress phase failed (see rows)')
+  return results
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exit(1) })

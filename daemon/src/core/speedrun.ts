@@ -100,7 +100,8 @@ function bastionSiteChanged(failed: WorldState, current: WorldState): boolean {
   const counter = (state: WorldState) => state.facts.bastion_site?.status === 'known' ? Number(state.facts.bastion_site.value) : null
   return current.dimension === 'the_nether' && counter(current) !== null && counter(current) !== (counter(failed) ?? 0)
 }
-export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistry {
+/** Numbers and predicates the stage builders share: one registry, the `add` shorthand and the state tests. */
+function speedrunContext(options: SpeedrunOptions) {
   const eyes = Math.max(1, options.eyes ?? 12)
   const beds = Math.max(1, options.beds ?? 7)
   const buckets = options.portalBuckets ?? 1
@@ -151,6 +152,14 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     }
     return result
   }
+  return { options, eyes, beds, buckets, structureBudgetMs, registry, ow, nether, readyToBuild, portalIron, ironTarget, pearlsNeeded,
+    rodsNeeded, eyesOwed, toolsUnavailable, blazeAllowed, fireResHeld, healthExposure, blazeRisk, barsNeeded, structureAvailable, add, has,
+    achieved, meal }
+}
+type SpeedrunContext = ReturnType<typeof speedrunContext>
+/** Overworld basics: wood, stone tools, bread, food, eating and healing. */
+function addOverworldBasics(ctx: SpeedrunContext): void {
+  const { options, ow, pearlsNeeded, rodsNeeded, toolsUnavailable, add, has, meal } = ctx
   add('AcquireWood', 'wood', s => ow(s) && !amount(s, 'stone_tool') && !amount(s, 'wood'), { atLeast: { wood: 5 } }, 90, has('wood', 5))
   add('RecoverNetherWood', 'wood', s => ow(s) && knows(s, 'portal') && toolsUnavailable(s) && woodPlanks(s) < 8 &&
     (s.inventory.crafting_table ?? 0) >= 1 && s.facts.nether_pick_swings?.status === 'known' &&
@@ -176,6 +185,10 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     (before, after) => after.hunger > before.hunger, 0,
     { estimateCost: s => meal(s).ticks, modelCost: true })
   add('Heal', 'heal', s => s.health < 18 && amount(s, 'food') >= 1, { health: 18, hunger: 20 }, 40, (_b, a) => a.health >= 18, 0)
+}
+/** Iron for the portal kit: structure loot first, mining after the search budget, then the bucket and the lighter. */
+function addIronStrategies(ctx: SpeedrunContext): void {
+  const { options, buckets, structureBudgetMs, registry, ow, readyToBuild, portalIron, ironTarget, barsNeeded, structureAvailable, add } = ctx
   add('ScoutStructures', 'scoutStructures', s => barsNeeded(s) && s.structureSearchMs < structureBudgetMs &&
     !['village', 'shipwreck', 'treasure'].some(name => structureAvailable(s, name)) &&
     ['village', 'shipwreck', 'treasure'].some(name => unknown(s, name)),
@@ -206,6 +219,10 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
         const needed = item === 'iron_ingot' ? portalIron(before) : 1
         return Math.min(needed, after.inventory[item] ?? 0) > Math.min(needed, before.inventory[item] ?? 0)
       }) })
+}
+/** The Nether portal: lava pool cast, ruined portal or obsidian, then the Nether prep and entry. */
+function addPortalStrategies(ctx: SpeedrunContext): void {
+  const { eyes, registry, ow, readyToBuild, pearlsNeeded, eyesOwed, structureAvailable, add, has, achieved } = ctx
   add('GetWater', 'water', s => readyToBuild(s) && !amount(s, 'water') && amount(s, 'obsidian') < 10, { atLeast: { water: 1 } }, 40, has('water'), 0.015)
   add('ScoutLava', 'scoutLava', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && unknown(s, 'lava'), { facts: { lava: true } }, 60, achieved('lava'), 0.02)
   add('LavaPoolPortal', 'cast', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && knows(s, 'lava'), { facts: { portal: true } }, 120, achieved('portal'), 0.04)
@@ -227,6 +244,10 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
     { estimateCost: s => 90 * 20 + (amount(s, 'food') < 8 ? registry.get('FindFood')!.estimateCost(s) : 0), modelCost: true })
   add('EnterNether', 'enterNether', s => ow(s) && knows(s, 'portal') && knows(s, 'nether_ready') && (pearlsNeeded(s) || amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes),
     { dimension: 'the_nether', facts: { entered_nether: true } }, 30, (_b, a) => a.dimension === 'the_nether', 0.01)
+}
+/** Pearls in the Nether: bastions, barter (with the gold economy when enabled) and the endermen hunt. */
+function addPearlStrategies(ctx: SpeedrunContext): void {
+  const { options, eyes, nether, pearlsNeeded, toolsUnavailable, add } = ctx
   const economy = options.economy === true
   const barter = (s: WorldState) => cachedBarterPlan(barterSituation(s, eyes))
   const goldLeft = (s: WorldState) => barterSituation(s, eyes).here?.gold ?? 0
@@ -305,6 +326,10 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
       s => ({ facts: { bastion: true, bastions_exhausted: false, bastion_gold_left: BASTION_GOLD, bastion_searches: searches(s) + 1, bastion_site: site(s) } }),
       300, (b, a) => bastionSiteChanged(b, a) || goldLeft(a) > goldLeft(b), 0.05)
   }
+}
+/** Blaze rods and eyes: Nether tools, fire resistance, the fortress, crafting the eyes and leaving. */
+function addBlazeStrategies(ctx: SpeedrunContext): void {
+  const { eyes, nether, pearlsNeeded, rodsNeeded, toolsUnavailable, blazeAllowed, fireResHeld, blazeRisk, add, has, achieved } = ctx
   add('AcquireNetherTools', 'netherTools', s => nether(s) &&
     (rodsNeeded(s) || pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted')) && toolsUnavailable(s) && s.health >= 12 &&
     !(pearlsNeeded(s) && amount(s, 'gold') >= 8),
@@ -326,6 +351,10 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   add('CraftEyes', 'eyes', s => amount(s, 'eyes') < eyes && amount(s, 'pearls') >= eyes - amount(s, 'eyes') && amount(s, 'rods') * 2 + amount(s, 'powder') >= eyes - amount(s, 'eyes'),
     s => ({ resources: { pearls: -(eyes - amount(s, 'eyes')), rods: -Math.ceil(Math.max(0, eyes - amount(s, 'eyes') - amount(s, 'powder')) / 2) }, atLeast: { eyes } }), 10, has('eyes', eyes), 0)
   add('LeaveNether', 'leaveNether', s => nether(s) && amount(s, 'eyes') >= eyes, { dimension: 'overworld' }, 60, (_b, a) => a.dimension === 'overworld', 0.015)
+}
+/** The End: preparation, the stronghold, entry and the dragon. */
+function addEndStrategies(ctx: SpeedrunContext): void {
+  const { options, eyes, beds, ow, add, achieved } = ctx
   add('PrepareEnd', 'endkit', s => ow(s) && (amount(s, 'eyes') >= eyes || options.endPrepPrice === true && knows(s, 'end_portal')) && !knows(s, 'end_ready'),
     options.endPrepPrice ? { facts: { end_ready: true } } : { atLeast: { beds, water: 1, blocks: 128 }, facts: { end_ready: true } },
     120, achieved('end_ready'), 0.02, options.endPrepPrice ? {
@@ -350,6 +379,16 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
       { facts: { dragon_dead: true } }, 420, achieved('dragon_dead'), 0.2,
       { version: 0, successChance: () => 0.5, command: () => ({ skill: 'dragon', strategy: 'KillDragonMelee', params: { mode: 'melee' } }) })
   }
+}
+export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistry {
+  const ctx = speedrunContext(options)
+  const { registry } = ctx
+  addOverworldBasics(ctx)
+  addIronStrategies(ctx)
+  addPortalStrategies(ctx)
+  addPearlStrategies(ctx)
+  addBlazeStrategies(ctx)
+  addEndStrategies(ctx)
   if (options.costs) applyCosts(registry, options.costs)
   return registry
 }

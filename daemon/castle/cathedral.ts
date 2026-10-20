@@ -5,7 +5,8 @@ import { st, stairs, slab, hash, OPP, dirTo, CAT_PAL, ZC, CAT } from './common'
 
 // -------------------------------------------------------------------- собор
 
-function buildCathedral (ctx) {
+// Общее для частей собора: камень палитры, мерки и формы (прежние const тела buildCathedral).
+function cathedralContext (ctx) {
   const { B } = ctx
   const F = CAT.F
   const zc = ZC
@@ -17,7 +18,34 @@ function buildCathedral (ctx) {
   const glassAisle = (a, y) => (y >= F + 7 ? 'yellow_stained_glass_pane' : ((a + y) % 3 === 0 ? 'red_stained_glass_pane' : 'blue_stained_glass_pane'))
   const glassWin = (y0, h) => (a, y) => (y >= y0 + h - 1 ? 'yellow_stained_glass_pane' : ((a + y) % 3 === 0 ? 'red_stained_glass_pane' : 'blue_stained_glass_pane'))
   const glassHigh = (a, y) => (y >= 51 ? 'purple_stained_glass_pane' : ((a * 3 + y) % 4 === 0 ? 'red_stained_glass_pane' : (a + y) % 4 === 1 ? 'light_blue_stained_glass_pane' : 'blue_stained_glass_pane'))
+  const naveTop = 56
+  const pierXs = [...CAT.piers, CAT.xC0, CAT.xC1, 16, CAT.ax]
+  const apseAng = []
+  for (let k = -3; k <= 3; k++) apseAng.push(k * Math.PI / 7)
+  const vaultProfile = { 5: 50, 4: 52, 3: 53, 2: 54, 1: 55, 0: 55 }
+  const roofE = naveTop + 1
+  return { B, F, zc, T, TP, TC, TCB, TW, TPW, dzOf, inApse, glassAisle, glassWin, glassHigh, naveTop, pierXs, apseAng, vaultProfile, roofE }
+}
 
+type CathedralCtx = ReturnType<typeof cathedralContext>
+
+// Собор — части по порядку (номера разделов — в комментариях частей).
+function buildCathedral (ctx) {
+  const cc = cathedralContext(ctx)
+  catBase(cc)
+  catAisles(cc)
+  catArcade(cc)
+  catVaults(cc)
+  catButtresses(cc)
+  catWestTowers(cc)
+  catWestFront(cc)
+  catTranseptEnds(cc)
+  catCrossing(cc)
+  catOculus(cc)
+}
+
+function catBase (cc: CathedralCtx) {
+  const { B, F, zc, dzOf, inApse } = cc
   // ---- 1. Основание: цоколь и пол (весь план собора).
   const planX0 = CAT.xW - 2; const planX1 = CAT.ax + 15
   for (let x = planX0; x <= planX1; x++) {
@@ -32,7 +60,10 @@ function buildCathedral (ctx) {
       B.S(x, F - 1, z, (x + z) % 2 ? 'polished_andesite' : 'smooth_stone')
     }
   }
+}
 
+function catAisles (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, dzOf } = cc
   // ---- 2. Стены приделов (|dz| = 11) и обхода, приделы внутри — воздух.
   const aisleTop = F + 11 // верх стены придела (y 41)
   for (let x = CAT.xT + 1; x <= CAT.ax; x++) {
@@ -80,14 +111,15 @@ function buildCathedral (ctx) {
     if (x >= CAT.xC0 && x <= CAT.xC1) continue
     for (const s of [-1, 1]) { B.S(x, F + 12, zc + s * 12, stairs('deepslate_tiles', s < 0 ? 'south' : 'north')); B.S(x, F + 11, zc + s * 12, stairs(T, s < 0 ? 'south' : 'north', 'top')) }
   }
+}
 
+function catArcade (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, TC, glassAisle, glassHigh, naveTop, pierXs, apseAng } = cc
   // ---- 3. Аркада и стены нефа (|dz| = 6) с трифорием и верхними окнами.
-  const naveTop = 56
   const arcade = (x, z, along, isPier) => {
     for (let y = F; y <= naveTop; y++) B.S(x, y, z, T)
     if (isPier) { B.S(x, F, z, TP); B.S(x, F + 8, z, TC); return }
   }
-  const pierXs = [...CAT.piers, CAT.xC0, CAT.xC1, 16, CAT.ax]
   for (let x = CAT.xT + 1; x <= CAT.ax; x++) {
     if (x > CAT.xC0 && x < CAT.xC1) continue
     for (const s of [-1, 1]) {
@@ -124,8 +156,6 @@ function buildCathedral (ctx) {
     }
   }
   // Апсида: кольцо опор r 6 (стена до верха нефа), проёмы аркады, окна.
-  const apseAng = []
-  for (let k = -3; k <= 3; k++) apseAng.push(k * Math.PI / 7)
   for (let x = CAT.ax + 1; x <= CAT.ax + 7; x++) {
     for (let z = zc - 7; z <= zc + 7; z++) {
       const r = Math.hypot(x - CAT.ax, z - zc)
@@ -154,9 +184,11 @@ function buildCathedral (ctx) {
       for (let y = F + 2; y <= F + 7; y++) B.S(ex, y, ez, glassAisle(ex + ez, y))
     }
   }
+}
 
+function catVaults (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, TW, dzOf, naveTop, pierXs, vaultProfile, roofE } = cc
   // ---- 4. Свод нефа, хора и трансепта; крыша.
-  const vaultProfile = { 5: 50, 4: 52, 3: 53, 2: 54, 1: 55, 0: 55 }
   const vaultCell = (x, z, dz, along, ribs) => {
     const yv = vaultProfile[dz]
     for (let y = yv; y <= naveTop; y++) B.S(x, y, z, T)
@@ -230,7 +262,6 @@ function buildCathedral (ctx) {
     }
   }
   // Крыша нефа и хора: 2:1, конёк ~67; трансепт поперёк; апсида — полуконус.
-  const roofE = naveTop + 1
   for (let x = CAT.xW + 1; x <= CAT.ax; x++) for (const s of [-1, 1]) { B.S(x, roofE, zc + s * 6, TW) }
   B.gable(CAT.xW + 1, CAT.ax, zc - 5, zc + 5, 'x', roofE, { f: 'deepslate_tiles', slope: 2, gable: T, ov: 0, ends: false })
   B.gable(CAT.xC0 + 1, CAT.xC1 - 1, zc - 17, zc + 17, 'z', roofE, { f: 'deepslate_tiles', slope: 2, gable: T, ov: 0 })
@@ -244,7 +275,10 @@ function buildCathedral (ctx) {
       B.S(x, yt, z, r < 0.7 ? 'deepslate_tiles' : stairs('deepslate_tiles', dirTo(CAT.ax - x, zc - z, true)))
     }
   }
+}
 
+function catButtresses (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, apseAng } = cc
   // ---- 5. Контрфорсы с пинаклями и аркбутаны.
   const buttress = (x, s) => {
     for (let dzz = 12; dzz <= 14; dzz++) {
@@ -292,7 +326,10 @@ function buildCathedral (ctx) {
       B.S(x, yt - 1, z, T)
     }
   }
+}
 
+function catWestTowers (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, TCB, TW, glassWin } = cc
   // ---- 6. Западный фасад: две башни, портал, галерея, роза, фронтон.
   const towerTop = 72
   for (const s of [-1, 1]) {
@@ -379,6 +416,10 @@ function buildCathedral (ctx) {
     // Шпилёк.
     B.spire((tx0 + tx1) / 2, zc0, 3.6, towerTop + 1, 14, { f: 'oxidized_cut_copper', grate: 'oxidized_copper_grate', crocket: true, every: 4, cross: 'z' })
   }
+}
+
+function catWestFront (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, TC, TCB, TW, TPW, naveTop } = cc
   // Центр фасада между башнями: стена x = xW от F до 64.
   const PW = B.plane('z', CAT.xW, 'west')
   for (let z = zc - 6; z <= zc + 6; z++) for (let y = F; y <= 66; y++) B.S(CAT.xW, y, z, T)
@@ -431,7 +472,10 @@ function buildCathedral (ctx) {
   }
   for (const y of [68, 69]) B.S(CAT.xW, y, zc, 'glass_pane')
   B.pinnacle(CAT.xW - 1, 73, zc, T, 3)
+}
 
+function catTranseptEnds (cc: CathedralCtx) {
+  const { B, F, zc, T, TP, TC, TCB, glassAisle } = cc
   // ---- 7. Торцы трансепта: портал, роза, фронтон, башенки по углам.
   for (const s of [-1, 1]) {
     const z = zc + s * 18
@@ -464,7 +508,10 @@ function buildCathedral (ctx) {
       B.pinnacle(cx, 58, z + s, T, 2)
     }
   }
+}
 
+function catCrossing (cc: CathedralCtx) {
+  const { B, zc, T, TP, TW, roofE } = cc
   // ---- 8. Башня средокрестия и шпиль.
   const ctop = 73
   const tx0 = CAT.xC0; const tx1 = CAT.xC1; const tz0 = zc - 6; const tz1 = zc + 6
@@ -515,7 +562,10 @@ function buildCathedral (ctx) {
   for (const [Pl, a0] of [[B.plane('x', tz0, 'north'), tx0], [B.plane('x', tz1, 'south'), tx0], [B.plane('z', tx0, 'west'), tz0], [B.plane('z', tx1, 'east'), tz0]]) {
     for (const off of [2, 8]) B.lancet(Pl, a0 + off, 61, 3, 8, { famName: T, glass: lantGlass, mullion: true, frame: TP, sill: false })
   }
+}
 
+function catOculus (cc: CathedralCtx) {
+  const { B, zc, TP, vaultProfile } = cc
   // ---- 10. Окулюс над алтарём: в полукуполе апсиды и кровле — колодец с
   // жёлтым стеклом наверху; из него к престолу свисают лучи.
   const ox = CAT.ax + 2

@@ -1,5 +1,63 @@
-const { deathPos, worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, gameClock, DESPAWN_MINUTES, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, descentPlan, BLOCKS_PER_SECOND, SECONDS_PER_LEVEL, PICKUP_RESERVE_MS, digStairs, ledgerOf, isDrop, spot, WRITTEN_OFF_MS, sweepDrops, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, AROUND, stackWord, SWEEP_HOP_MS, leftWhy, stackLabel, Vec3, SIDES, canSeePoint, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity }: typeof import('./enter-shelter') = require('./enter-shelter')
+import { deathPos, worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, gameClock, DESPAWN_MINUTES, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, descentPlan, BLOCKS_PER_SECOND, SECONDS_PER_LEVEL, PICKUP_RESERVE_MS, digStairs, ledgerOf, isDrop, spot, WRITTEN_OFF_MS, sweepDrops, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, AROUND, stackWord, SWEEP_HOP_MS, leftWhy, stackLabel, Vec3, SIDES, canSeePoint, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity } from './enter-shelter'
+// Поход за вещами (recoverLoot): цель, цена дороги, спуск лесенкой, обход кучи и ответ — по шагам; общие значения шагов
+// (прежние const и `let` тела) — поля объекта lr (LootRun), прежние внутренние стрелки (away, hurt, refuse) — функции с lr.
+interface LootRun {
+  session: any
+  ctl: any
+  bot: any
+  deaths: any[]
+  target: any
+  slot: any
+  diedAt: any
+  ageSeconds?: number | null
+  ageMinutes?: number | null
+  ticked?: any
+  leftSeconds?: number | null
+  budgetSeconds?: number
+  deadline?: number
+  reach?: number
+  before?: any
+  plan?: any
+  walkBlocks?: number
+  walkSeconds?: number
+  digSeconds?: number
+  etaSeconds?: number
+  road?: any
+  picks?: number
+  trip?: any
+  stairs?: any
+  health?: any
+  ledged?: boolean
+  arrived?: boolean
+  ledger?: any
+  carried?: any[]
+  sweptFrom?: any
+  sweep?: any
+  guard?: any
+}
+
 async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, timeoutSeconds = 90, force = false, maxFallHp = 0 }: any = {}) {
+  const lr = lootTarget(session, ctl, { x, y, z, index })
+  const other = otherWorld(lr)
+  if (other) return other
+  lootRoad(lr, { radius, timeoutSeconds })
+
+  if (force !== true) {
+    const refused = lootRefusal(lr)
+    if (refused) return refused
+  }
+
+  await lootTrip(lr, { maxFallHp })
+  await lootSweep(lr)
+
+  await sleep(500) // the last stack lands in the inventory a tick or two after the walk
+  const tally = lootTally(lr)
+  const { note, ledgeStop } = lootNote(lr, tally)
+  return lootResult(lr, tally, note, ledgeStop)
+}
+
+// Куда идти: явные координаты, смерть по номеру или последняя незабранная.
+function lootTarget (session, ctl, { x, y, z, index }): LootRun {
   const bot = session.bot
   const deaths = Array.isArray(session.journal.state.deaths) ? session.journal.state.deaths : []
 
@@ -32,7 +90,11 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
     }
     if (!target) throw new Error('идти не за чем: незабранных смертей с координатами в памяти нет')
   }
+  return { session, ctl, bot, deaths, target, slot, diedAt }
+}
 
+function otherWorld (lr: LootRun) {
+  const { bot, deaths, target, slot } = lr
   // Смерть в другом мире (worlds.js): ни шага. Pathfinder пошёл бы к тем же
   if (slot !== null && deaths[slot]) {
     const other = worlds.refuseOtherWorld(bot, { ...target, dimension: deaths[slot].dimension }, `Смерть №${slot}`)
@@ -48,7 +110,12 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
       }
     }
   }
+  return null
+}
 
+// Сроки кучи и цена всей дороги — до первого шага.
+function lootRoad (lr: LootRun, { radius, timeoutSeconds }) {
+  const { bot, deaths, target, slot, diedAt } = lr
   // The oldest death records carry x and z and no y at all, and Math.round of
   if (!Number.isFinite(target.y)) target.y = Math.floor(bot.entity.position.y)
 
@@ -64,10 +131,6 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   // Same reason clampDepth guards against null: a null radius sails through the
   const reach = Math.max(1, Math.min(24, Math.round(Number(radius)) || 6))
   const before = countItems(bot)
-  const away = () => Math.round(Math.hypot(bot.entity.position.x - target.x, bot.entity.position.z - target.z))
-
-  // A loot run no longer stops on `damage` (session.js), and it must not: this
-  const hurt = () => Math.round(bot.health ?? 20) < 6
 
   // Cost the whole trip before taking a single step. Walking two hundred
   const feetNow = bot.entity.position.floored()
@@ -78,56 +141,70 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   const etaSeconds = walkSeconds + digSeconds
   const road: any = { walk: walkBlocks, down: plan.down, walkSeconds, digSeconds, etaSeconds, leftSeconds }
   const picks = toolBudget(bot, 'pickaxe')
+  Object.assign(lr, { ageSeconds, ageMinutes, ticked, leftSeconds, budgetSeconds, deadline, reach, before, plan, walkBlocks, walkSeconds, digSeconds, etaSeconds, road, picks })
+}
 
-  const refuse = (why) => {
-    const note = `${why}. Идти ${walkBlocks} блоков (~${walkSeconds}с)` +
-      (digSeconds ? `, потом вниз ${plan.down} уровней (~${digSeconds}с)` : '') +
-      (leftSeconds !== null ? `; вещам лежать ещё ${Math.max(0, leftSeconds)}с` : '')
-    session.journal.append('лут',
-      `не пошёл за вещами на ${target.x},${target.y},${target.z}: ${note}`, bot.entity.position)
-    return {
-      at: xyz(bot.entity.position),
-      target,
-      death: slot === null ? undefined : slot,
-      ageMinutes,
-      picked: 0,
-      gained: {},
-      arrived: false,
-      went: false,
-      road,
-      note,
-      stopped: why
-    }
+const away = (lr: LootRun) => Math.round(Math.hypot(lr.bot.entity.position.x - lr.target.x, lr.bot.entity.position.z - lr.target.z))
+
+// A loot run no longer stops on `damage` (session.js), and it must not: this
+const hurt = (lr: LootRun) => Math.round(lr.bot.health ?? 20) < 6
+
+const refuse = (lr: LootRun, why) => {
+  const { session, bot, target, slot, ageMinutes, road, plan, walkBlocks, walkSeconds, digSeconds, leftSeconds } = lr
+  const note = `${why}. Идти ${walkBlocks} блоков (~${walkSeconds}с)` +
+    (digSeconds ? `, потом вниз ${plan.down} уровней (~${digSeconds}с)` : '') +
+    (leftSeconds !== null ? `; вещам лежать ещё ${Math.max(0, leftSeconds)}с` : '')
+  session.journal.append('лут',
+    `не пошёл за вещами на ${target.x},${target.y},${target.z}: ${note}`, bot.entity.position)
+  return {
+    at: xyz(bot.entity.position),
+    target,
+    death: slot === null ? undefined : slot,
+    ageMinutes,
+    picked: 0,
+    gained: {},
+    arrived: false,
+    went: false,
+    road,
+    note,
+    stopped: why
   }
+}
 
-  if (force !== true) {
-    if (leftSeconds !== null && leftSeconds <= 0) {
-      // Not a guess: the five minutes are up. Write the death off so the next
-      if (slot !== null) {
-        session.journal.patch(s => {
-          const d = s.deaths[slot]
-          if (d) { d.recovered = true; d.lost = 'пролежало 5 минут и пропало' }
-        })
-      }
-      return refuse(`умер ${ageMinutes} мин назад, куча тикала ${ticked ?? ageSeconds} с из ${DESPAWN_MINUTES * 60} — вещей там уже нет, списал эту смерть`)
+// Без force: куча уже пропала, кирки нет на спуск, не успеть до исчезновения или в срок вызова — отказ до первого шага.
+function lootRefusal (lr: LootRun) {
+  const { session, slot, ageSeconds, ageMinutes, ticked, leftSeconds, budgetSeconds, plan, walkBlocks, digSeconds, etaSeconds, picks } = lr
+  if (leftSeconds !== null && leftSeconds <= 0) {
+    // Not a guess: the five minutes are up. Write the death off so the next
+    if (slot !== null) {
+      session.journal.patch(s => {
+        const d = s.deaths[slot]
+        if (d) { d.recovered = true; d.lost = 'пролежало 5 минут и пропало' }
+      })
     }
-    if (plan.down >= 2 && !(picks > 0)) {
-      // The usual state after a death: respawned with an empty backpack. There
-      // is no point walking anywhere first.
-      return refuse(`до кучи вниз ${plan.down} уровней, а кирки нет — прокопаться нечем`)
-    }
-    // Куча стареет, только пока её чанк тикает (lootclock.js): вдали от неё
-    const tickingEta = ticked !== null
-      ? Math.round(Math.min(walkBlocks, (require('.././lootclock') as typeof import('.././lootclock')).SIM * 16) / BLOCKS_PER_SECOND) + digSeconds
-      : etaSeconds
-    if (leftSeconds !== null && tickingEta > leftSeconds) {
-      return refuse(`не успею: дорога ~${etaSeconds}с (из них у кучи ~${tickingEta}с), а вещи пропадут через ${leftSeconds}с`)
-    }
-    if (etaSeconds > budgetSeconds) {
-      return refuse(`за ${budgetSeconds}с не успею, дорога ~${etaSeconds}с — дай timeoutSeconds побольше`)
-    }
+    return refuse(lr, `умер ${ageMinutes} мин назад, куча тикала ${ticked ?? ageSeconds} с из ${DESPAWN_MINUTES * 60} — вещей там уже нет, списал эту смерть`)
   }
+  if (plan.down >= 2 && !(picks > 0)) {
+    // The usual state after a death: respawned with an empty backpack. There
+    // is no point walking anywhere first.
+    return refuse(lr, `до кучи вниз ${plan.down} уровней, а кирки нет — прокопаться нечем`)
+  }
+  // Куча стареет, только пока её чанк тикает (lootclock.js): вдали от неё
+  const tickingEta = ticked !== null
+    ? Math.round(Math.min(walkBlocks, (require('.././lootclock') as typeof import('.././lootclock')).SIM * 16) / BLOCKS_PER_SECOND) + digSeconds
+    : etaSeconds
+  if (leftSeconds !== null && tickingEta > leftSeconds) {
+    return refuse(lr, `не успею: дорога ~${etaSeconds}с (из них у кучи ~${tickingEta}с), а вещи пропадут через ${leftSeconds}с`)
+  }
+  if (etaSeconds > budgetSeconds) {
+    return refuse(lr, `за ${budgetSeconds}с не успею, дорога ~${etaSeconds}с — дай timeoutSeconds побольше`)
+  }
+  return null
+}
 
+// Дорога: дойти к началу спуска, лесенкой вниз к куче, добрать остаток сверху.
+async function lootTrip (lr: LootRun, { maxFallHp }) {
+  const { session, ctl, bot, target, slot, deadline, reach, plan, digSeconds, road } = lr
   ctl.onAbort.push(() => {
     try { bot.pathfinder.setGoal(null) } catch {}
     try { bot.clearControlStates() } catch {}
@@ -141,7 +218,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   // Phase two: the hole. Pathfinder never goes down a hundred blocks on its own
   let stairs = null
   let health = null
-  if (plan.down >= 2 && !ctl.aborted && hurt()) {
+  if (plan.down >= 2 && !ctl.aborted && hurt(lr)) {
     // Going down a fresh staircase on four hearts is how the trip becomes the
     // second death and the second pile.
     health = `здоровья ${Math.round(bot.health ?? 20)} — вниз за вещами не полезу`
@@ -169,14 +246,19 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   const ledged = !!(stairs && stairs.ledge)
 
   // A staircase lands short often enough to plan for it: the ground at its head
-  if (stairs && !ledged && !ctl.aborted && away() > 2 && gameClock.now() < deadline - 12000) {
+  if (stairs && !ledged && !ctl.aborted && away(lr) > 2 && gameClock.now() < deadline - 12000) {
     // Ends ten seconds before the deadline, not five: the sweep still has to
     const leg = Math.min(deadline - 10000, gameClock.now() + 12000)
     await travelXZ(bot, ctl, target.x, target.z, { range: 2, retries: 0, deadline: leg })
   }
+  Object.assign(lr, { trip, stairs, health, ledged })
+}
 
+// Подбор: обход кучи (и клеток вокруг на открытом месте), с учётом списанного прошлыми заходами.
+async function lootSweep (lr: LootRun) {
+  const { session, ctl, bot, target, deadline, reach, plan, trip, stairs, ledged } = lr
   // Pathfinder calls a stop short of the goal a failure; for picking things up
-  const arrived = !ledged && (away() <= reach || (trip.ok && plan.down < 2))
+  const arrived = !ledged && (away(lr) <= reach || (trip.ok && plan.down < 2))
 
   // The weapon the preflight put in hand at the door is not in hand here: the
   const rearm = () => (require('.././preflight') as typeof import('.././preflight')).rearm(session, ctl).catch(() => null)
@@ -216,7 +298,7 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   if (arrived && !stairs) {
     for (const [dx, dz] of AROUND) {
       if (ctl.aborted || gameClock.now() >= deadline - 12000) break
-      if (hurt()) { health = `здоровья ${Math.round(bot.health ?? 20)} — дальше по куче не хожу`; break }
+      if (hurt(lr)) { lr.health = `здоровья ${Math.round(bot.health ?? 20)} — дальше по куче не хожу`; break }
       // travelXZ hands a single leg the whole remaining budget, and pathfinder
       const leg = Math.min(deadline - 6000, gameClock.now() + 8000)
       await travelXZ(bot, ctl, target.x + dx, target.z + dz, { range: 1, retries: 0, deadline: leg })
@@ -226,8 +308,12 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
   }
   // Every walk of the sweep is pathfinder with a pickaxe — the hops above, and
   await rearm()
+  Object.assign(lr, { arrived, ledger, carried, sweptFrom, sweep, guard })
+}
 
-  await sleep(500) // the last stack lands in the inventory a tick or two after the walk
+// Что взял и что осталось лежать — по миру, а не по счёту обхода.
+function lootTally (lr: LootRun) {
+  const { session, bot, slot, before, reach, arrived, carried, sweptFrom, sweep } = lr
   const picked = sweep.walked
   // Written off at one point of the sweep and walked over at another is taken,
   // not left: only what is still in the world goes into the report.
@@ -260,12 +346,17 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
       if (d) d.recovered = true
     })
   }
+  return { picked, lost, left, skipped, unvisited, lyingNow, strays, didNotFit, cut, gained, got }
+}
 
+// Записка: почему кончилось, что осталось и как добрать.
+function lootNote (lr: LootRun, { picked, left, skipped, unvisited, lyingNow, strays, didNotFit, cut, got }) {
+  const { bot, target, ageMinutes, ticked, budgetSeconds, reach, road, trip, stairs, health, ledged, arrived, sweep, guard } = lr
   // Stopped on a lip, the staircase's refusal is the reason — «время вышло»
   const ledgeStop = ledged ? stairs.stopped || 'лесенка встала над пещерой' : null
   const parts = []
   if (!arrived) {
-    parts.push(`не дошёл (${ledged ? 'лесенка встала над пещерой' : trip.error || 'время вышло'}), до места ещё ${away()} блоков`)
+    parts.push(`не дошёл (${ledged ? 'лесенка встала над пещерой' : trip.error || 'время вышло'}), до места ещё ${away(lr)} блоков`)
   }
   if (stairs) parts.push(`спустился лесенкой на ${stairs.steps}${stairs.stopped ? ` (${stairs.stopped})` : ''}`)
   if (health) parts.push(health)
@@ -324,7 +415,12 @@ async function recoverLoot (session, ctl, { x, y, z, index = null, radius = 6, t
     parts.push(`в ${reach} бл. от меня больше ничего не лежит — подбор кончен`)
   }
   const note = parts.length ? parts.join('; ') : 'забрал всё, что лежало'
+  return { note, ledgeStop }
+}
 
+// Списанное этим заходом — в журнал стаков, запись похода и ответ.
+function lootResult (lr: LootRun, { picked, lost, left, skipped, unvisited, strays, cut, gained, got }, note, ledgeStop) {
+  const { session, bot, target, slot, ageMinutes, road, trip, stairs, health, arrived, ledger, sweep, guard } = lr
   // Written off by this call, stamped at its end. Skipped stacks keep their old
   // stamp: a call that did not try a stack does not buy it more time off.
   for (const l of lost) {
@@ -679,7 +775,6 @@ async function screenOff (session, ctl, mob, deadline) {
   return { ok: false, built: total, cell: last && last.cell, why: `заслон не закрыл его (${total.placed} бл.)${total.why.length ? ': ' + total.why.join('; ') : ''}` }
 }
 
-module.exports = { recoverLoot, TOUCHING, flat, hazardNear, hazardLine, wet, FALLS, LOOSE_REACH, LOOSE_LIMIT, looseOver, looseLine, worldTop, openSky, PIT_REACH, STEP_UP, STEPS, walkAway, end, pitCheck, SECONDS_PER_CLIMB_LEVEL, levelWord, legLevels, MOB_WATCH, seenBy, threatEye, NEAR_SLACK, shutOut, behindWall, WALL_LIMIT, WALL_BLOCKS, CONTACT, WALL_BUDGET_MS, putBlock, buildColumn, wallRecord, sealDrift, screenOff }
 export {
   recoverLoot, TOUCHING, flat, hazardNear, hazardLine, wet, FALLS, LOOSE_REACH, LOOSE_LIMIT, looseOver, looseLine,
   worldTop, openSky, PIT_REACH, STEP_UP, STEPS, walkAway, end, pitCheck, SECONDS_PER_CLIMB_LEVEL, levelWord,

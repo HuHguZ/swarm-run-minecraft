@@ -1,11 +1,13 @@
 'use strict'
 // Бой с драконом (dragon/pillar-run.ts): насест: кровать в голову, уход спереди, подход к насесту, удар по голове.
-const { gameClock, Vec3, overlap, playerBox, inflate, findItem, FILLER_RE, cloudsOf, DEBUG, dbg, sleep, CENTER, isSolid, yieldTick, stepTo, dragonOf, phaseOf, PHASE, items, build, EYE, SITTING, partsOf, clearControls, PHASE_RU, hpOf, fireballsOf, pvp, BREATH_R, boxDist, PART, cloudHits, HEAD_AHEAD, BREATH_AHEAD, zonesOf }: typeof import('../dig-down-to') = require('../dig-down-to')
-const { hunters, doing, inClouds, pickSpot, nearPillar, r1, podiumTop, HOLE_TOP, duckPlan, duck, breathOf, standY, hasEffect, sight, takeoffBoxes, STAY_R, awayFromHead, hitBy, straightWalkable, usePotion }: typeof import('../fall-guard') = require('../fall-guard')
-const { dangerAt, countOf, evade, noteNear, sneakPlace, lookAtSafe, segPoint2, SCAN_RANGE, bedPlan, takeoffSidestep }: typeof import('../evade-raw') = require('../evade-raw')
-const { meleeSpot }: typeof import('../pillar-plan') = require('../pillar-plan')
+// perchAttack — оркестр насеста: состояние — объект pa (PerchAttack), фазы до удара и шаги цикла удара — ниже.
+import { gameClock, Vec3, overlap, playerBox, inflate, findItem, FILLER_RE, cloudsOf, DEBUG, dbg, sleep, CENTER, isSolid, yieldTick, stepTo, dragonOf, phaseOf, PHASE, items, build, EYE, SITTING, partsOf, clearControls, PHASE_RU, hpOf, fireballsOf, pvp, BREATH_R, boxDist, PART, cloudHits, HEAD_AHEAD, BREATH_AHEAD, zonesOf } from '../dig-down-to'
+import { hunters, doing, inClouds, pickSpot, nearPillar, r1, podiumTop, HOLE_TOP, duckPlan, duck, breathOf, standY, hasEffect, sight, takeoffBoxes, STAY_R, awayFromHead, hitBy, straightWalkable, usePotion } from '../fall-guard'
+import { dangerAt, countOf, evade, noteNear, sneakPlace, lookAtSafe, segPoint2, SCAN_RANGE, bedPlan, takeoffSidestep } from '../evade-raw'
+import { meleeSpot } from '../pillar-plan'
 import { sitRec, sightKey, sitState, blindKnown, takeoffOnHit, hazardNow } from './sight-zones'
 import { walkTo, heal } from './walk'
+
 
 async function bedBlast (session, ctl, rep, stats, track) {
   const bot = session.bot
@@ -208,126 +210,176 @@ async function keepInScan (session, ctl, stats, d, parts) {
   return w.ok
 }
 
-async function perchAttack (session, ctl, rep, stats, track) {
-  const bot = session.bot
+type Turn = 'next' | 'stop' | undefined
+
+// Насест — состояние захода (прежние let и стрелки замыкания perchAttack).
+interface PerchAttack {
+  session: any
+  ctl: any
+  rep: any
+  stats: any
+  track: any
+  bot: any
+  d: any
+  parts: any
+  rec: any
+  spot: any
+  through: boolean
+  perch: any
+  hz: any
+  me: any
+  standing: () => boolean
+  nearHead: () => boolean
+  blindNow: () => boolean
+  weapon: any
+  nextReady: number
+  lastSwing: number
+  lastHp: number
+  t0: number
+}
+
+// Значения одного оборота цикла удара (прежние const тела while, нужные нескольким шагам).
+interface PerchTick {
+  ph?: any
+  rc?: any
+  feet?: any
+  reach?: number
+}
+
+// Насест (perchAttack): фазы до удара — что делает сидящий, хп и кровати, место у головы, подход, подставка.
+// Фаза возвращает 'stop' (прежний return из perchAttack) или ничего (дальше по фазам).
+async function perchSeen (pa: PerchAttack): Promise<Turn> {
+  const { bot, ctl, session, stats, track } = pa
   doing(ctl, 'perch')
-  let d = dragonOf(bot)
-  if (!d) return
-  let parts = partsOf(bot, d, track)
+  pa.d = dragonOf(bot)
+  if (!pa.d) return 'stop'
+  pa.parts = partsOf(bot, pa.d, track)
   // Посадка (2026-09-30). Видящий (ревёт на 25-м тике) сидит до четырёх огней
-  const rec = sitState(d, phaseOf(bot, d), gameClock.now())
+  pa.rec = sitState(pa.d, phaseOf(bot, pa.d), gameClock.now())
   // Дракон бил нас в эту посадку (где угодно: у кровати, на подходе) — к голове
   // больше не лезть.
-  const hitAt0 = hitBy.get(d.id)
-  if (rec && hitAt0 && hitAt0 > rec.t0 && !rec.hitBack) rec.hitBack = hitAt0
+  const hitAt0 = hitBy.get(pa.d.id)
+  if (pa.rec && hitAt0 && hitAt0 > pa.rec.t0 && !pa.rec.hitBack) pa.rec.hitBack = hitAt0
   // Подставки не было, а видящий ревёт или дышит — к голове не идти до «высматривает».
-  if (rec && rec.noPedestal && rec.roared && (phaseOf(bot, d) === PHASE.ROARING || phaseOf(bot, d) === PHASE.FLAMING) && countOf(bot, FILLER_RE) < 1) {
+  if (pa.rec && pa.rec.noPedestal && pa.rec.roared && (phaseOf(bot, pa.d) === PHASE.ROARING || phaseOf(bot, pa.d) === PHASE.FLAMING) && countOf(bot, FILLER_RE) < 1) {
     doing(ctl, 'perch:wait-flame')
     const bad = hazardNow(bot)
     if (bad) await evade(bot, ctl, stats, bad)
-    else { await lookAtSafe(bot, parts.headC); await sleep(150) }
-    return
+    else { await lookAtSafe(bot, pa.parts.headC); await sleep(150) }
+    return 'stop'
   }
   // Видящий высматривает (25 тиков каждого круга) — голова поворачивается к нам
-  if (rec) noteNear(rec, d, bot, gameClock.now())
+  if (pa.rec) noteNear(pa.rec, pa.d, bot, gameClock.now())
   // Видящий (или пока не ясно) высматривает, а мы дальше STAY_R — ближе, в
   // сторону от морды: иначе через 100 тиков таран (см. SCAN_RANGE).
-  if (rec && phaseOf(bot, d) === PHASE.SCANNING && !blindKnown(rec) && bot.entity.position.distanceTo(d.position) > STAY_R + 0.5) {
-    await keepInScan(session, ctl, stats, d, parts)
-    return
+  if (pa.rec && phaseOf(bot, pa.d) === PHASE.SCANNING && !blindKnown(pa.rec) && bot.entity.position.distanceTo(pa.d.position) > STAY_R + 0.5) {
+    await keepInScan(session, ctl, stats, pa.d, pa.parts)
+    return 'stop'
   }
   {
-    const phNow = phaseOf(bot, d)
-    if (rec && phNow === PHASE.SCANNING && (rec.roared || !blindKnown(rec))) {
+    const phNow = phaseOf(bot, pa.d)
+    if (pa.rec && phNow === PHASE.SCANNING && (pa.rec.roared || !blindKnown(pa.rec))) {
       doing(ctl, 'perch:scan')
-      const bad = hazardNow(bot, { parts })
+      const bad = hazardNow(bot, { parts: pa.parts })
       if (bad) await evade(bot, ctl, stats, bad)
       else {
-        const rx = bot.entity.position.x - d.position.x; const rz = bot.entity.position.z - d.position.z
-        const inPit = bot.entity.position.y <= d.position.y - HOLE_TOP + 0.05
-        if (Math.hypot(rx, rz) < HEAD_AHEAD + 3.5 && !inPit) await stepTo(bot, ctl, awayFromHead(d, parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 })
-        else { await lookAtSafe(bot, parts.headC); await sleep(100) }
+        const rx = bot.entity.position.x - pa.d.position.x; const rz = bot.entity.position.z - pa.d.position.z
+        const inPit = bot.entity.position.y <= pa.d.position.y - HOLE_TOP + 0.05
+        if (Math.hypot(rx, rz) < HEAD_AHEAD + 3.5 && !inPit) await stepTo(bot, ctl, awayFromHead(pa.d, pa.parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 })
+        else { await lookAtSafe(bot, pa.parts.headC); await sleep(100) }
       }
-      return
+      return 'stop'
     }
   }
   // Нырнули до взлёта слепого — сидеть в яме до конца посадки.
-  if (rec && rec.ducked) { doing(ctl, 'perch:ducked'); await lookAtSafe(bot, parts.headC); await sleep(150); return }
-  if (rec && (rec.flames >= 4 || (rec.dmg || 0) >= 44 || rec.hitBack)) {
-    await leaveFront(session, ctl, stats, d, rec)
-    return
+  if (pa.rec && pa.rec.ducked) { doing(ctl, 'perch:ducked'); await lookAtSafe(bot, pa.parts.headC); await sleep(150); return 'stop' }
+  if (pa.rec && (pa.rec.flames >= 4 || (pa.rec.dmg || 0) >= 44 || pa.rec.hitBack)) {
+    await leaveFront(session, ctl, stats, pa.d, pa.rec)
+    return 'stop'
   }
+}
+
+async function perchHealBeds (pa: PerchAttack): Promise<Turn> {
+  const { bot, ctl, session, rep, stats, track } = pa
   // С малым хп к голове не идти: сидячий огонь — 3 магией в секунду сквозь
   if (bot.health < 16 && findItem(bot, /golden_apple$/) && !hasEffect(bot, 'absorption') &&
-      bot.entity.position.distanceTo(d.position) > HEAD_AHEAD + 3) {
+      bot.entity.position.distanceTo(pa.d.position) > HEAD_AHEAD + 3) {
     await heal(session, ctl, rep, stats, { hard: true })
   }
   if (bot.health < 12) {
     await heal(session, ctl, rep, stats, { hard: true })
-    if (bot.health < 10) { stats.skippedPerch = (stats.skippedPerch || 0) + 1; await sleep(300); return }
+    if (bot.health < 10) { stats.skippedPerch = (stats.skippedPerch || 0) + 1; await sleep(300); return 'stop' }
   }
   // Удар может поднять его на взлёт (накопленный сидячий урон у 50), а у головы
   // мы в коридоре взлёта: голова и крылья — до 11 хп. Только с запасом хп.
   if (takeoffOnHit() && bot.health < 16) {
     await heal(session, ctl, rep, stats, { hard: true })
-    if (bot.health < 16) { stats.skippedPerch = (stats.skippedPerch || 0) + 1; await sleep(300); return }
+    if (bot.health < 16) { stats.skippedPerch = (stats.skippedPerch || 0) + 1; await sleep(300); return 'stop' }
   }
   // Кровати с собой — сперва они (урон сразу, у головы не стоять). Не вышло
   // трижды подряд без единого взрыва — дальше только меч.
-  const ph0 = phaseOf(bot, d)
+  const ph0 = phaseOf(bot, pa.d)
   // Слепому (посадка 5 с) — не кровать: поставить её, заслон и щёлкнуть к взлёту не
   // успеть, а стоим с ней по оси морды — в коридоре взлёта. Меч быстрее.
-  if (ctl.beds && !blindKnown(rec) && countOf(bot, /_bed$/) > 0 && bot.health >= 12 && !((stats.bedTried || 0) >= 3 && !stats.bedsUsed)) {
-    const soonFlame = ph0 === PHASE.ROARING ? breathOf(bot, d, parts) : null
-    const plan = bedPlan(bot, d, parts, { brave: bot.health >= 19 || (hasEffect(bot, 'absorption') && bot.health >= 14) })
+  if (ctl.beds && !blindKnown(pa.rec) && countOf(bot, /_bed$/) > 0 && bot.health >= 12 && !((stats.bedTried || 0) >= 3 && !stats.bedsUsed)) {
+    const soonFlame = ph0 === PHASE.ROARING ? breathOf(bot, pa.d, pa.parts) : null
+    const plan = bedPlan(bot, pa.d, pa.parts, { brave: bot.health >= 19 || (hasEffect(bot, 'absorption') && bot.health >= 14) })
     if (!plan) { stats.bedNoPlan = stats.bedNoPlan || {}; for (const [k, v] of (Object.entries(bedPlan.why || {}) as [string, any][])) stats.bedNoPlan[k] = (stats.bedNoPlan[k] || 0) + v; if (DEBUG && gameClock.now() - (stats.bedPlanLog || 0) > 2000) { stats.bedPlanLog = gameClock.now(); dbg('bed plan', PHASE_RU[ph0], JSON.stringify(bedPlan.why)) } }
     if (plan && !(soonFlame && cloudHits(soonFlame, plan.feet, 0.8))) {
       stats.bedTried = (stats.bedTried || 0) + 1
       const b = await bedBlast(session, ctl, rep, stats, track)
-      if (b && b.beds) return
+      if (b && b.beds) return 'stop'
     }
   }
-  const spot = meleeSpot(bot, d, parts, { blind: blindKnown(rec) })
-  if (!spot) { stats.noSpot++; return }
+}
+
+async function perchSpot (pa: PerchAttack): Promise<Turn> {
+  const { bot, ctl, stats } = pa
+  pa.spot = meleeSpot(bot, pa.d, pa.parts, { blind: blindKnown(pa.rec) })
+  if (!pa.spot) { stats.noSpot++; return 'stop' }
   // Облака фаерболов у фонтана (живут 30 с, растут до 7) — к голове сквозь
   {
-    const fb = cloudsOf(bot).filter(c => c.r < BREATH_R - 0.3 || c.pos.distanceTo(parts.headC) > BREATH_AHEAD + 3)
+    const fb = cloudsOf(bot).filter(c => c.r < BREATH_R - 0.3 || c.pos.distanceTo(pa.parts.headC) > BREATH_AHEAD + 3)
     const me1 = bot.entity.position
-    if (inClouds(fb, spot.ground, 1) || !straightWalkable(bot, me1, spot.ground, zonesOf(fb))) {
+    if (inClouds(fb, pa.spot.ground, 1) || !straightWalkable(bot, me1, pa.spot.ground, zonesOf(fb))) {
       stats.perchCloudy = (stats.perchCloudy || 0) + 1
       doing(ctl, 'perch:cloudy')
       const bad = hazardNow(bot)
       if (bad) await evade(bot, ctl, stats, bad)
       else await sleep(200)
-      return
+      return 'stop'
     }
   }
   // Огонь уже лежит — к голове идти сквозь него (подставка ставится на месте,
-  const onSpot = Math.hypot(bot.entity.position.x - spot.ground.x, bot.entity.position.z - spot.ground.z) < 0.8 && bot.entity.position.y >= spot.feet.y - 0.01
-  const flame = cloudsOf(bot).find(c => c.pos.distanceTo(parts.headC) < BREATH_AHEAD + 3 && c.r >= BREATH_R - 0.5)
-  let through = false
-  if (flame && !onSpot && Math.hypot(spot.ground.x - flame.pos.x, spot.ground.z - flame.pos.z) < flame.r + 1) {
+  const onSpot = Math.hypot(bot.entity.position.x - pa.spot.ground.x, bot.entity.position.z - pa.spot.ground.z) < 0.8 && bot.entity.position.y >= pa.spot.feet.y - 0.01
+  const flame = cloudsOf(bot).find(c => c.pos.distanceTo(pa.parts.headC) < BREATH_AHEAD + 3 && c.r >= BREATH_R - 0.5)
+  pa.through = false
+  if (flame && !onSpot && Math.hypot(pa.spot.ground.x - flame.pos.x, pa.spot.ground.z - flame.pos.z) < flame.r + 1) {
     // Облако огня живёт 10 с, а огонь повторяется каждые ~13 с: ждать его
     const brave = (bot.health >= 19 || (hasEffect(bot, 'absorption') && bot.health >= 16)) && !(ctl.beds && countOf(bot, /_bed$/) > 0) &&
-      bot.entity.position.distanceTo(spot.ground) < 9 && countOf(bot, FILLER_RE) >= spot.lift
+      bot.entity.position.distanceTo(pa.spot.ground) < 9 && countOf(bot, FILLER_RE) >= pa.spot.lift
     if (!brave) {
       stats.waitedFlame = (stats.waitedFlame || 0) + 1
       await sleep(300)
-      return
+      return 'stop'
     }
-    through = true
+    pa.through = true
   }
-  const perch: any = { at: Math.round(hpOf(bot, d)), hits: 0, dmg: 0, head: 0, body: 0 }
+  pa.perch = { at: Math.round(hpOf(bot, pa.d)), hits: 0, dmg: 0, head: 0, body: 0 }
   doing(ctl, 'perch:approach')
-  if (through) perch.throughFlame = true
-  stats.perches.push(perch)
-  const hz = through ? 'noclouds' : true
+  if (pa.through) pa.perch.throughFlame = true
+  stats.perches.push(pa.perch)
+  pa.hz = pa.through ? 'noclouds' : true
+}
+
+async function perchWalk (pa: PerchAttack): Promise<Turn> {
+  const { bot, ctl, session, track } = pa
   // Подойти к клетке у головы: по прямой, если близко и путь ровный, иначе
   // pathfinder (между ботом и головой часто чаша портала и столб).
-  let me = bot.entity.position
-  const standing = () => SITTING.has(phaseOf(bot, dragonOf(bot))) || phaseOf(bot, dragonOf(bot)) === PHASE.LANDING
+  pa.me = bot.entity.position
+  pa.standing = () => SITTING.has(phaseOf(bot, dragonOf(bot))) || phaseOf(bot, dragonOf(bot)) === PHASE.LANDING
   // Шаг к подставке — не в голову и не в шею: пока идём, дракон доворачивает
-  const nearHead = () => {
+  pa.nearHead = () => {
     const dd = dragonOf(bot)
     if (!dd) return false
     const pp = partsOf(bot, dd, track)
@@ -337,175 +389,215 @@ async function perchAttack (session, ctl, rep, stats, track) {
   // Сбоку к голове не подходить — её дуга (см. dangerAt, sweep): сначала выйти
   // на ось морды подальше, потом шагнуть к ней спереди.
   {
-    const rx = me.x - d.position.x; const rz = me.z - d.position.z
+    const rx = pa.me.x - pa.d.position.x; const rz = pa.me.z - pa.d.position.z
     const h = Math.hypot(rx, rz)
-    const ang = h > 0.1 ? Math.acos(Math.max(-1, Math.min(1, (rx * parts.dir.x + rz * parts.dir.z) / h))) : Math.PI
+    const ang = h > 0.1 ? Math.acos(Math.max(-1, Math.min(1, (rx * pa.parts.dir.x + rz * pa.parts.dir.z) / h))) : Math.PI
     // Слепому голову не поворачивать — к месту сбоку напрямую.
-    if (!blindKnown(rec) && (ang > 0.45 || h < HEAD_AHEAD)) {
-      const front = d.position.offset(parts.dir.x * (HEAD_AHEAD + 5), 0, parts.dir.z * (HEAD_AHEAD + 5))
-      const fy = standY(bot, front.x, front.z, spot.ground.y, 4, 6)
+    if (!blindKnown(pa.rec) && (ang > 0.45 || h < HEAD_AHEAD)) {
+      const front = pa.d.position.offset(pa.parts.dir.x * (HEAD_AHEAD + 5), 0, pa.parts.dir.z * (HEAD_AHEAD + 5))
+      const fy = standY(bot, front.x, front.z, pa.spot.ground.y, 4, 6)
       if (fy != null) {
-        perch.viaFront = true
-        await walkTo(session, ctl, new Vec3(front.x, fy, front.z), { range: 1.5, timeoutMs: 8000, hazards: hz })
-        me = bot.entity.position
+        pa.perch.viaFront = true
+        await walkTo(session, ctl, new Vec3(front.x, fy, front.z), { range: 1.5, timeoutMs: 8000, hazards: pa.hz })
+        pa.me = bot.entity.position
       }
     }
   }
-  if (Math.hypot(me.x - spot.ground.x, me.z - spot.ground.z) > 0.6) {
-    let r: any = me.distanceTo(spot.ground) < 5 ? await stepTo(bot, ctl, spot.ground, { ms: 2000, stopAt: 0.25, sprint: false, clouds: !through, stop: () => !standing() || nearHead() || (!through && !!inClouds(cloudsOf(bot), bot.entity.position, 0.3)) }) : { ok: false }
-    if (nearHead()) { perch.why = 'шея довернулась к нам'; await stepTo(bot, ctl, awayFromHead(d, parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 }); return }
-    if (!r.ok && standing()) r = await walkTo(session, ctl, spot.ground, { range: 0, timeoutMs: 9000, hazards: hz })
-    if (!r.ok && Math.hypot(bot.entity.position.x - spot.ground.x, bot.entity.position.z - spot.ground.z) > 0.8) { perch.why = r.why; return }
-    await stepTo(bot, ctl, spot.ground, { ms: 800, sprint: false, stopAt: 0.12, stop: nearHead, clouds: !through })
+  if (Math.hypot(pa.me.x - pa.spot.ground.x, pa.me.z - pa.spot.ground.z) > 0.6) {
+    let r: any = pa.me.distanceTo(pa.spot.ground) < 5 ? await stepTo(bot, ctl, pa.spot.ground, { ms: 2000, stopAt: 0.25, sprint: false, clouds: !pa.through, stop: () => !pa.standing() || pa.nearHead() || (!pa.through && !!inClouds(cloudsOf(bot), bot.entity.position, 0.3)) }) : { ok: false }
+    if (pa.nearHead()) { pa.perch.why = 'шея довернулась к нам'; await stepTo(bot, ctl, awayFromHead(pa.d, pa.parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 }); return 'stop' }
+    if (!r.ok && pa.standing()) r = await walkTo(session, ctl, pa.spot.ground, { range: 0, timeoutMs: 9000, hazards: pa.hz })
+    if (!r.ok && Math.hypot(bot.entity.position.x - pa.spot.ground.x, bot.entity.position.z - pa.spot.ground.z) > 0.8) { pa.perch.why = r.why; return 'stop' }
+    await stepTo(bot, ctl, pa.spot.ground, { ms: 800, sprint: false, stopAt: 0.12, stop: pa.nearHead, clouds: !pa.through })
   }
-  perch.reached = true
+}
+
+async function perchMount (pa: PerchAttack): Promise<void> {
+  const { bot, ctl } = pa
+  pa.perch.reached = true
   doing(ctl, 'perch:melee')
   // Блок (или два) под себя — стоять над облаком огня.
-  const blindNow = () => blindKnown(rec)
-  for (let tries = 0; tries < 2 && !blindNow() && countOf(bot, FILLER_RE) >= spot.lift && Math.floor(bot.entity.position.y + 0.01) < spot.feet.y; tries++) {
-    const t = await build.towerUp(bot, ctl, Math.max(1, spot.feet.y - Math.floor(bot.entity.position.y + 0.01)))
-    perch.pedestal = (perch.pedestal || 0) + t.placed
+  pa.blindNow = () => blindKnown(pa.rec)
+  for (let tries = 0; tries < 2 && !pa.blindNow() && countOf(bot, FILLER_RE) >= pa.spot.lift && Math.floor(bot.entity.position.y + 0.01) < pa.spot.feet.y; tries++) {
+    const t = await build.towerUp(bot, ctl, Math.max(1, pa.spot.feet.y - Math.floor(bot.entity.position.y + 0.01)))
+    pa.perch.pedestal = (pa.perch.pedestal || 0) + t.placed
   }
   // Подставка не встала: пока дракон дышит, облако ляжет прямо под ноги — стоять
   // рядом с головой можно только до огня.
-  perch.low = Math.floor(bot.entity.position.y + 0.01) < spot.feet.y
-  const weapon = items.bestWeapon(bot)
-  if (weapon) await bot.equip(weapon, 'hand').catch(() => {})
-  let nextReady = gameClock.now() + 100
-  let lastSwing = 0
-  let lastHp = hpOf(bot, d)
-  const t0 = gameClock.now()
-  while (!ctl.aborted && gameClock.now() - t0 < 30000) {
-    await yieldTick()
-    d = track.tick()
-    if (!d) break
-    const ph = phaseOf(bot, d)
-    if (!SITTING.has(ph)) {
-      // Взлёт от нашего удара (сидячий урон перевалил за 50 — он копится на все
-      if (ph === PHASE.TAKEOFF) { perch.left = 'взлёт — вбок'; await takeoffSidestep(bot, ctl, d, 'взлёт от удара') }
-      break
-    }
-    const rc = sitState(d, ph, gameClock.now())
-    // Подставки нет (кончились блоки), а видящий ревёт или дышит — облако огня
-    if (perch.low && !blindNow() && (ph === PHASE.ROARING || ph === PHASE.FLAMING)) { perch.left = 'огонь, подставки нет'; if (rc) rc.noPedestal = gameClock.now(); break }
-    // Видящий снова высматривает — голова пойдёт по дуге: отойти до рёва.
-    if (ph === PHASE.SCANNING && rc && rc.roared) { perch.left = 'высматривает — отойти'; await stepTo(bot, ctl, awayFromHead(d, parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 }); break }
-    // Четвёртый огонь или ≥ 44 за посадку — уходить от морды до взлёта.
-    if (rc && (rc.flames >= 4 || (rc.dmg || 0) >= 44)) { perch.left = rc.flames >= 4 ? 'четвёртый огонь' : 'снято 44'; break }
-    // Слепой взлетит на ~4.6 с — к 3.4 с нырнуть (или уйти, если не копается).
-    if (rc && !rc.roared && gameClock.now() - rc.t0 > 3400) {
-      clearControls(bot)
-      const F = Math.floor(d.position.y - HOLE_TOP - 0.15)
-      perch.ducked = duckPlan(bot, F) ? await duck(bot, ctl, F) : false
-      if (perch.ducked) rc.ducked = true
-      else rc.hitBack = gameClock.now()
-      perch.left = perch.ducked ? 'нырнул до взлёта' : 'взлёт скоро, нырнуть нельзя'
-      break
-    }
-    parts = partsOf(bot, d, track)
-    const feet = bot.entity.position
-    const eye = feet.offset(0, EYE, 0)
-    // Облако уже под ногами или голова наехала — сойти.
-    const ctx = { clouds: cloudsOf(bot), fireballs: fireballsOf(bot).filter(f => f.ticks < 30), parts, breath: null }
-    const bad = dangerAt(bot, feet, ctx)
-    if (bad) { perch.left = bad.kind; break }
-    // Ударил сам дракон (голова, шея — наша оценка их коробок разошлась с
-    const hitAt = hitBy.get(d.id)
-    if (hitAt && hitAt > t0) {
-      perch.left = 'ударил дракон'
-      if (rc) rc.hitBack = gameClock.now()
-      clearControls(bot)
-      await stepTo(bot, ctl, awayFromHead(d, parts, feet, 4), { ms: 1200, stopAt: 0.4 })
-      break
-    }
-    const reach = boxDist(eye, parts.head)
-    // Дракон довернул голову — раздутые голова и шея уже рядом: отступить
-    // сразу, по оси морды назад, и выбрать место заново.
-    const pbNow = playerBox(feet)
-    if (overlap(pbNow, inflate(parts.head, 1.2)) || overlap(pbNow, inflate(parts.neck, 1.2))) {
-      perch.backed = (perch.backed || 0) + 1
-      clearControls(bot)
-      const back = awayFromHead(d, parts, feet, 3)
-      await stepTo(bot, ctl, back, { ms: 900, stopAt: 0.4 })
-      if (perch.backed > 3) break
-      continue
-    }
-    if (DEBUG && (!perch.dbgAt || gameClock.now() - perch.dbgAt > 1000)) {
-      perch.dbgAt = gameClock.now()
-      dbg('perch', 'phase', PHASE_RU[ph], 'head', parts.headC.toString(), 'me', feet.toString(), 'reach', reach.toFixed(2), 'hp', hpOf(bot, d), 'yaw', d.yaw.toFixed(2))
-    }
-    if (reach > 3.4) {
-      // Дракон повернулся: переставиться.
-      perch.moved = (perch.moved || 0) + 1
-      if (perch.moved > 3) break
-      const again = meleeSpot(bot, d, parts)
-      if (!again) break
-      // Голова ушла далеко (довернулся) — не бегать за ней вокруг дракона сквозь
-      if (Math.hypot(again.ground.x - feet.x, again.ground.z - feet.z) > 3 || inClouds(cloudsOf(bot), again.ground, 1)) { perch.left = 'голова ушла далеко'; break }
-      clearControls(bot)
-      await stepTo(bot, ctl, again.ground, { ms: 2500, stopAt: 0.2, stop: () => (hitBy.get(d.id) || 0) > t0 })
-      if (countOf(bot, FILLER_RE) > 0) await build.towerUp(bot, ctl, 1)
-      continue
-    }
-    // Злой эндермен вплотную посреди посадки: ударить его в перезарядку головы,
-    // не сходя с места (его 7 урона за удар против окна посадки).
-    const pest: any = hunters(bot, 3.2)[0]
-    if (pest && gameClock.now() >= nextReady) {
-      await bot.lookAt(pest.position.offset(0, 1.5, 0), true).catch(() => {})
-      bot.attack(pest)
-      perch.pests = (perch.pests || 0) + 1
-      nextReady = gameClock.now() + pvp.cooldownMs(bot.heldItem)
-      await sleep(50)
-      continue
-    }
-    await lookAtSafe(bot, parts.headC)
-    // Крита по дракону НЕТ: Player.canCriticalAttack требует, чтобы цель была
-    // LivingEntity, а часть дракона — EnderDragonPart (сверено по байткоду;
-    const now = gameClock.now()
-    const hp = hpOf(bot, d)
-    if (hp != null && lastHp != null && hp < lastHp) {
-      const lost = lastHp - hp
-      perch.dmg += lost
-      stats.dmg += lost
-      if (sitRec && sitRec.id === d.id && !sitRec.ended) sitRec.dmg = (sitRec.dmg || 0) + lost
-      lastHp = hp
-    }
-    if (now >= nextReady - 350 && bot.entity.onGround) bot.setControlState('jump', true)
-    else bot.setControlState('jump', false)
-    const airborne = !bot.entity.onGround
-    if (now >= nextReady && (airborne || now >= nextReady + 300)) {
-      // Столб под ноги (переставились) берёт в руку булыжник — и удар
-      const w = items.bestWeapon(bot)
-      if (w && (!bot.heldItem || bot.heldItem.name !== w.name)) {
-        await bot.equip(w, 'hand').catch(() => {})
-        nextReady = gameClock.now() + pvp.cooldownMs(w)
-        await sleep(50)
-        continue
-      }
-      if (reach <= 3.0) {
-        bot.attack({ id: d.id + PART.head })
-        perch.hits++
-        stats.melee++
-        nextReady = now + pvp.cooldownMs(bot.heldItem)
-        // Урон головой или телом — по тому, на сколько упало здоровье.
-        const before = hpOf(bot, d)
-        gameClock.setTimeout(() => {
-          const dd = dragonOf(bot)
-          const after = dd ? hpOf(bot, dd) : null
-          if (before != null && after != null) {
-            const lost = before - after
-            if (lost >= 4) perch.head++
-            else if (lost > 0) perch.body++
-            if (DEBUG) dbg('hit', 'lost', lost.toFixed(2), 'air', airborne, 'reach', reach.toFixed(2), 'held', bot.heldItem && bot.heldItem.name)
-          }
-        }, 250)
-        lastSwing = now
-      }
-    }
+  pa.perch.low = Math.floor(bot.entity.position.y + 0.01) < pa.spot.feet.y
+  pa.weapon = items.bestWeapon(bot)
+  if (pa.weapon) await bot.equip(pa.weapon, 'hand').catch(() => {})
+  pa.nextReady = gameClock.now() + 100
+  pa.lastSwing = 0
+  pa.lastHp = hpOf(bot, pa.d)
+  pa.t0 = gameClock.now()
+}
+
+// Насест: шаги оборота цикла удара по голове (прежнее тело while): 'next' — прежний continue, 'stop' — break.
+async function perchHitTrack (pa: PerchAttack, tk: PerchTick): Promise<Turn> {
+  const { bot, ctl, track } = pa
+  await yieldTick()
+  pa.d = track.tick()
+  if (!pa.d) return 'stop'
+  tk.ph = phaseOf(bot, pa.d)
+  if (!SITTING.has(tk.ph)) {
+    // Взлёт от нашего удара (сидячий урон перевалил за 50 — он копится на все
+    if (tk.ph === PHASE.TAKEOFF) { pa.perch.left = 'взлёт — вбок'; await takeoffSidestep(bot, ctl, pa.d, 'взлёт от удара') }
+    return 'stop'
+  }
+  tk.rc = sitState(pa.d, tk.ph, gameClock.now())
+  // Подставки нет (кончились блоки), а видящий ревёт или дышит — облако огня
+  if (pa.perch.low && !pa.blindNow() && (tk.ph === PHASE.ROARING || tk.ph === PHASE.FLAMING)) { pa.perch.left = 'огонь, подставки нет'; if (tk.rc) tk.rc.noPedestal = gameClock.now(); return 'stop' }
+  // Видящий снова высматривает — голова пойдёт по дуге: отойти до рёва.
+  if (tk.ph === PHASE.SCANNING && tk.rc && tk.rc.roared) { pa.perch.left = 'высматривает — отойти'; await stepTo(bot, ctl, awayFromHead(pa.d, pa.parts, bot.entity.position, 3), { ms: 900, stopAt: 0.4 }); return 'stop' }
+  // Четвёртый огонь или ≥ 44 за посадку — уходить от морды до взлёта.
+  if (tk.rc && (tk.rc.flames >= 4 || (tk.rc.dmg || 0) >= 44)) { pa.perch.left = tk.rc.flames >= 4 ? 'четвёртый огонь' : 'снято 44'; return 'stop' }
+  // Слепой взлетит на ~4.6 с — к 3.4 с нырнуть (или уйти, если не копается).
+  if (tk.rc && !tk.rc.roared && gameClock.now() - tk.rc.t0 > 3400) {
+    clearControls(bot)
+    const F = Math.floor(pa.d.position.y - HOLE_TOP - 0.15)
+    pa.perch.ducked = duckPlan(bot, F) ? await duck(bot, ctl, F) : false
+    if (pa.perch.ducked) tk.rc.ducked = true
+    else tk.rc.hitBack = gameClock.now()
+    pa.perch.left = pa.perch.ducked ? 'нырнул до взлёта' : 'взлёт скоро, нырнуть нельзя'
+    return 'stop'
+  }
+}
+
+async function perchHitGuard (pa: PerchAttack, tk: PerchTick): Promise<Turn> {
+  const { bot, ctl, track } = pa
+  pa.parts = partsOf(bot, pa.d, track)
+  tk.feet = bot.entity.position
+  const eye = tk.feet.offset(0, EYE, 0)
+  // Облако уже под ногами или голова наехала — сойти.
+  const ctx = { clouds: cloudsOf(bot), fireballs: fireballsOf(bot).filter(f => f.ticks < 30), parts: pa.parts, breath: null }
+  const bad = dangerAt(bot, tk.feet, ctx)
+  if (bad) { pa.perch.left = bad.kind; return 'stop' }
+  // Ударил сам дракон (голова, шея — наша оценка их коробок разошлась с
+  const hitAt = hitBy.get(pa.d.id)
+  if (hitAt && hitAt > pa.t0) {
+    pa.perch.left = 'ударил дракон'
+    if (tk.rc) tk.rc.hitBack = gameClock.now()
+    clearControls(bot)
+    await stepTo(bot, ctl, awayFromHead(pa.d, pa.parts, tk.feet, 4), { ms: 1200, stopAt: 0.4 })
+    return 'stop'
+  }
+  tk.reach = boxDist(eye, pa.parts.head)
+  // Дракон довернул голову — раздутые голова и шея уже рядом: отступить
+  // сразу, по оси морды назад, и выбрать место заново.
+  const pbNow = playerBox(tk.feet)
+  if (overlap(pbNow, inflate(pa.parts.head, 1.2)) || overlap(pbNow, inflate(pa.parts.neck, 1.2))) {
+    pa.perch.backed = (pa.perch.backed || 0) + 1
+    clearControls(bot)
+    const back = awayFromHead(pa.d, pa.parts, tk.feet, 3)
+    await stepTo(bot, ctl, back, { ms: 900, stopAt: 0.4 })
+    if (pa.perch.backed > 3) return 'stop'
+    return 'next'
+  }
+}
+
+async function perchHitMove (pa: PerchAttack, tk: PerchTick): Promise<Turn> {
+  const { bot, ctl } = pa
+  if (DEBUG && (!pa.perch.dbgAt || gameClock.now() - pa.perch.dbgAt > 1000)) {
+    pa.perch.dbgAt = gameClock.now()
+    dbg('perch', 'phase', PHASE_RU[tk.ph], 'head', pa.parts.headC.toString(), 'me', tk.feet.toString(), 'reach', tk.reach.toFixed(2), 'hp', hpOf(bot, pa.d), 'yaw', pa.d.yaw.toFixed(2))
+  }
+  if (tk.reach > 3.4) {
+    // Дракон повернулся: переставиться.
+    pa.perch.moved = (pa.perch.moved || 0) + 1
+    if (pa.perch.moved > 3) return 'stop'
+    const again = meleeSpot(bot, pa.d, pa.parts)
+    if (!again) return 'stop'
+    // Голова ушла далеко (довернулся) — не бегать за ней вокруг дракона сквозь
+    if (Math.hypot(again.ground.x - tk.feet.x, again.ground.z - tk.feet.z) > 3 || inClouds(cloudsOf(bot), again.ground, 1)) { pa.perch.left = 'голова ушла далеко'; return 'stop' }
+    clearControls(bot)
+    await stepTo(bot, ctl, again.ground, { ms: 2500, stopAt: 0.2, stop: () => (hitBy.get(pa.d.id) || 0) > pa.t0 })
+    if (countOf(bot, FILLER_RE) > 0) await build.towerUp(bot, ctl, 1)
+    return 'next'
+  }
+}
+
+async function perchHitPest (pa: PerchAttack): Promise<Turn> {
+  const { bot } = pa
+  // Злой эндермен вплотную посреди посадки: ударить его в перезарядку головы,
+  // не сходя с места (его 7 урона за удар против окна посадки).
+  const pest: any = hunters(bot, 3.2)[0]
+  if (pest && gameClock.now() >= pa.nextReady) {
+    await bot.lookAt(pest.position.offset(0, 1.5, 0), true).catch(() => {})
+    bot.attack(pest)
+    pa.perch.pests = (pa.perch.pests || 0) + 1
+    pa.nextReady = gameClock.now() + pvp.cooldownMs(bot.heldItem)
     await sleep(50)
+    return 'next'
+  }
+}
+
+async function perchHitSwing (pa: PerchAttack, tk: PerchTick): Promise<Turn> {
+  const { bot, stats } = pa
+  await lookAtSafe(bot, pa.parts.headC)
+  // Крита по дракону НЕТ: Player.canCriticalAttack требует, чтобы цель была
+  // LivingEntity, а часть дракона — EnderDragonPart (сверено по байткоду;
+  const now = gameClock.now()
+  const hp = hpOf(bot, pa.d)
+  if (hp != null && pa.lastHp != null && hp < pa.lastHp) {
+    const lost = pa.lastHp - hp
+    pa.perch.dmg += lost
+    stats.dmg += lost
+    if (sitRec && sitRec.id === pa.d.id && !sitRec.ended) sitRec.dmg = (sitRec.dmg || 0) + lost
+    pa.lastHp = hp
+  }
+  if (now >= pa.nextReady - 350 && bot.entity.onGround) bot.setControlState('jump', true)
+  else bot.setControlState('jump', false)
+  const airborne = !bot.entity.onGround
+  if (now >= pa.nextReady && (airborne || now >= pa.nextReady + 300)) {
+    // Столб под ноги (переставились) берёт в руку булыжник — и удар
+    const w = items.bestWeapon(bot)
+    if (w && (!bot.heldItem || bot.heldItem.name !== w.name)) {
+      await bot.equip(w, 'hand').catch(() => {})
+      pa.nextReady = gameClock.now() + pvp.cooldownMs(w)
+      await sleep(50)
+      return 'next'
+    }
+    if (tk.reach <= 3.0) {
+      bot.attack({ id: pa.d.id + PART.head })
+      pa.perch.hits++
+      stats.melee++
+      pa.nextReady = now + pvp.cooldownMs(bot.heldItem)
+      // Урон головой или телом — по тому, на сколько упало здоровье.
+      const before = hpOf(bot, pa.d)
+      gameClock.setTimeout(() => {
+        const dd = dragonOf(bot)
+        const after = dd ? hpOf(bot, dd) : null
+        if (before != null && after != null) {
+          const lost = before - after
+          if (lost >= 4) pa.perch.head++
+          else if (lost > 0) pa.perch.body++
+          if (DEBUG) dbg('hit', 'lost', lost.toFixed(2), 'air', airborne, 'reach', tk.reach.toFixed(2), 'held', bot.heldItem && bot.heldItem.name)
+        }
+      }, 250)
+      pa.lastSwing = now
+    }
+  }
+  await sleep(50)
+}
+// Порядок фаз до удара и шагов цикла удара — порядок прежнего тела perchAttack.
+const PERCH_PHASES: ((pa: PerchAttack) => Promise<Turn | void>)[] = [perchSeen, perchHealBeds, perchSpot, perchWalk, perchMount]
+const PERCH_STEPS: ((pa: PerchAttack, tk: PerchTick) => Promise<Turn>)[] = [perchHitTrack, perchHitGuard, perchHitMove, perchHitPest, perchHitSwing]
+
+async function perchAttack (session, ctl, rep, stats, track) {
+  const pa = { session, ctl, rep, stats, track, bot: session.bot } as PerchAttack
+  const { bot } = pa
+  for (const phase of PERCH_PHASES) if (await phase(pa) === 'stop') return
+  turn: while (!ctl.aborted && gameClock.now() - pa.t0 < 30000) {
+    const tk: PerchTick = {}
+    for (const step of PERCH_STEPS) {
+      const r = await step(pa, tk)
+      if (r === 'stop') break turn
+      if (r === 'next') continue turn
+    }
   }
   clearControls(bot)
-  perch.hpAfter = d ? Math.round(hpOf(bot, d) ?? 0) : 0
+  pa.perch.hpAfter = pa.d ? Math.round(hpOf(bot, pa.d) ?? 0) : 0
 }
 
 export {

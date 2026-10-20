@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { cjsContext } from './cjs-context'
+import { declSource } from './source-fixture'
 
-const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
-const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
+// Класс ArmsEnv — объявлением из исходника arms-run (declSource: без импортов и сетевого bootstrap сцены).
+const body = declSource(join(__dirname, '../arena/arms-run.js'), 'ArmsEnv')
 import * as AG from '../src/pvp/arms-graph'
 const key = p => `${p.x},${p.y},${p.z}`
 const pos = x => ({ x, y: 0, z: 0 })

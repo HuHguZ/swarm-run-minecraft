@@ -1,6 +1,6 @@
-const { standTop, grounded, refugeFoe, refugeLook, lookLine, toShore, chooseRefuge, planksFromLogs, outrun, buildMsOf, takeNiche, takeBox, holdOut, sitTight, waitClear, leaveBox, SIT_CAP_MS }: typeof import('./hold-out') = require('./hold-out')
-const { PILLAR, holePlan, HOLE_DEPTH, surface, REFUGE_FLEE_MS } = require('./surface-body')
-const { worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, enterShelter, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, exitShelter, sitOn, gameClock, Vec3 }: typeof import('./enter-shelter') = require('./enter-shelter')
+import { standTop, grounded, refugeFoe, refugeLook, lookLine, toShore, chooseRefuge, planksFromLogs, outrun, buildMsOf, takeNiche, takeBox, holdOut, sitTight, waitClear, leaveBox, SIT_CAP_MS } from './hold-out'
+import { PILLAR, holePlan, HOLE_DEPTH, surface, REFUGE_FLEE_MS } from './surface-body'
+import { worlds, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, enterShelter, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, exitShelter, sitOn, gameClock, Vec3 } from './enter-shelter'
 async function refuge (session, ctl, p: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
@@ -63,23 +63,69 @@ async function refuge (session, ctl, p: any = {}) {
   }
 }
 
+// Отход (refugeBody): прежние `let` (оценка a, выбор pick, сидение hold, выход exitRes, first) и параметры — поля объекта
+// rf (RefugeRun), прежняя стрелка spiderFirst — функция с rf. Способы укрытия по порядку — tryRefuge: 'next' — следующий
+// способ (прежний continue), 'stop' — конец перебора (прежний break).
+interface RefugeRun {
+  session: any
+  ctl: any
+  bot: any
+  flee: typeof import('.././flee')
+  t0: number
+  minHp: number
+  deadline: number
+  out: any
+  step: (s: string) => void
+  hurts: any[]
+  a: any
+  pick: any
+  hold: any
+  exitRes: any
+  first: boolean
+}
+type RefugeTurn = 'next' | 'stop' | undefined
+
 async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts }: any) {
   const bot = session.bot
   const flee: typeof import('.././flee') = require('.././flee')
+  const rf: RefugeRun = { session, ctl, bot, flee, t0, minHp, deadline, out, step, hurts, a: null, pick: null, hold: null, exitRes: null, first: true }
+  await lookAround(rf)
+  rf.pick = chooseRefuge(rf.a)
+  await spiderFirst(rf)
+  await planksFirst(rf)
+  await breakAway(rf)
+  out.choice = rf.pick.why
+
+  // Способ, за ним откаты. Не встал первый, а ходячий уже рядом (≤ 8 бл.) — сразу
+  const alt = [rf.a.niche ? 'niche' : null, rf.a.cell && rf.a.canBreakOut ? 'box' : null, rf.a.hole && !rf.a.shooters ? 'hole' : null, rf.a.pillar ? 'pillar' : null].filter(Boolean)
+  const order = rf.pick.how === 'flee' || rf.pick.how === 'pocket'
+    ? [rf.pick.how, 'flee']
+    : [rf.pick.how, ...alt.filter(h => h !== rf.pick.how), 'flee']
+  for (const how of order) {
+    if (await tryRefuge(rf, how) === 'stop') break
+  }
+
+  await fleeAfterExit(rf)
+  return refugeOutcome(rf)
+}
+
+// Где стоим: оценка места; в огне — вон из него, в воде — к берегу или на сушу.
+async function lookAround (rf: RefugeRun) {
+  const { session, ctl, bot, out, step } = rf
   // Клетка ног — с пола: в прыжке floored-клетка на блок выше, и вся оценка
   // (клетка коробки, нора) съезжает на уровень.
   try { bot.pathfinder.setGoal(null) } catch {}
   await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
-  let a: any = refugeLook(session)
-  out.look = lookLine(a)
-  out.lookMs = a.ms
+  rf.a = refugeLook(session)
+  out.look = lookLine(rf.a)
+  out.lookMs = rf.a.ms
 
-  if (a.lava && !ctl.aborted) {
+  if (rf.a.lava && !ctl.aborted) {
     step('в огне — вон из него')
     try { if (session.director && typeof session.director.escapeFire === 'function') await session.director.escapeFire() } catch {}
-    a = refugeLook(session)
+    rf.a = refugeLook(session)
   }
-  if (a.water && !ctl.aborted && process.env.ND_REFUGE_SHORE !== '0') {
+  if (rf.a.water && !ctl.aborted && process.env.ND_REFUGE_SHORE !== '0') {
     // Из воды — на берег подальше от утопленников (toShore), а не «всплыть»: тело оставалось в воде.
     step('в воде — плыву к берегу')
     try {
@@ -87,227 +133,247 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       step(`берег: ${r.ok ? 'на суше' : 'не вышел'} за ${r.seconds} с`)
     } catch (e) { step(`берег: ${e.message}`) }
     await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
-    a = refugeLook(session)
+    rf.a = refugeLook(session)
   }
-  if (a.water && !ctl.aborted) {
+  if (rf.a.water && !ctl.aborted) {
     // Из воды — к суше, как campaign.rest: открытый воздух важнее норы.
     step('в воде — выхожу на сушу')
     try {
       const r = await surface(session, ctl, { targetY: Math.floor(bot.entity.position.y) + 2, timeoutSeconds: 25, preferPillar: false })
       if (r && r.stopped) step(`суша: ${r.stopped}`)
     } catch (e) { step(`суша: ${e.message}`) }
-    a = refugeLook(session)
+    rf.a = refugeLook(session)
   }
-  let pick = chooseRefuge(a)
-  // Паук вплотную, а с ним не больше одного ходячего — сперва бой (ND_REFUGE_SPIDER=1): от паука не оторваться в
-  const spiderFirst = async () => {
-    if (process.env.ND_REFUGE_SPIDER === '0' || ctl.aborted || (bot.health ?? 0) < 8 || !(require('.././items') as typeof import('.././items')).bestWeapon(bot)) return false
-    const hs = flee.hostilesAround(bot, 10).filter(h => refugeFoe(bot, h.e, session))
-    // Паук в 6 бл. — дойдёт за 1.5 с (3.9 бл/с, прыжок с 2–4): от него не оторваться и коробку при нём не закрыть.
-    const sp = hs.find(h => /^(spider|cave_spider)$/.test(h.e.name) && h.d <= 6 && Math.abs(h.e.position.y - bot.entity.position.y) <= 3)
-    // Только один на один: с зомби рядом бой с пауком тянется 7–8 с под его ударами (trap3/4: 12 → 0).
-    const others = hs.filter(h => h !== sp && (h.doc.radius > 0 || h.doc.range) && h.d <= 8).length
-    if (!sp || others > 0 || a.creeper) return false
-    {
-      step(`${sp.e.name} вплотную (${sp.d.toFixed(1)} бл.) — сперва бой`)
-      let r = null
-      try { r = await (require('.././combat') as typeof import('.././combat')).fight(session, ctl, { target: '#' + sp.e.id, timeoutSeconds: 12, retreatAtHealth: 5, purpose: 'defense' }) } catch (e) { r = { error: e.message } }
-      step(`паук: ${r && (r.killed || (r.kills && r.kills.length)) ? 'убит' : String((r && (r.stopped || r.error)) || 'бой кончился').slice(0, 60)}, хп ${Math.round(bot.health ?? 0)}`)
-      await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
-      a = refugeLook(session)
-      pick = chooseRefuge(a)
-      return true
-    }
+}
+
+// Паук вплотную, а с ним не больше одного ходячего — сперва бой (ND_REFUGE_SPIDER=1): от паука не оторваться в
+async function spiderFirst (rf: RefugeRun) {
+  const { session, ctl, bot, flee, step } = rf
+  if (process.env.ND_REFUGE_SPIDER === '0' || ctl.aborted || (bot.health ?? 0) < 8 || !(require('.././items') as typeof import('.././items')).bestWeapon(bot)) return false
+  const hs = flee.hostilesAround(bot, 10).filter(h => refugeFoe(bot, h.e, session))
+  // Паук в 6 бл. — дойдёт за 1.5 с (3.9 бл/с, прыжок с 2–4): от него не оторваться и коробку при нём не закрыть.
+  const sp = hs.find(h => /^(spider|cave_spider)$/.test(h.e.name) && h.d <= 6 && Math.abs(h.e.position.y - bot.entity.position.y) <= 3)
+  // Только один на один: с зомби рядом бой с пауком тянется 7–8 с под его ударами (trap3/4: 12 → 0).
+  const others = hs.filter(h => h !== sp && (h.doc.radius > 0 || h.doc.range) && h.d <= 8).length
+  if (!sp || others > 0 || rf.a.creeper) return false
+  {
+    step(`${sp.e.name} вплотную (${sp.d.toFixed(1)} бл.) — сперва бой`)
+    let r = null
+    try { r = await (require('.././combat') as typeof import('.././combat')).fight(session, ctl, { target: '#' + sp.e.id, timeoutSeconds: 12, retreatAtHealth: 5, purpose: 'defense' }) } catch (e) { r = { error: e.message } }
+    step(`паук: ${r && (r.killed || (r.kills && r.kills.length)) ? 'убит' : String((r && (r.stopped || r.error)) || 'бой кончился').slice(0, 60)}, хп ${Math.round(bot.health ?? 0)}`)
+    await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
+    rf.a = refugeLook(session)
+    rf.pick = chooseRefuge(rf.a)
+    return true
   }
-  await spiderFirst()
-  // Блоков мало, а брёвна есть (начало игры: после дерева, до камня) — доски из брёвен в сетке 2×2 (~0.5 с на
-  if (process.env.ND_REFUGE_PLANKS !== '0' && !ctl.aborted && a.blocks < 8 && !a.nether &&
-    (pick.code === 'NO_BLOCKS' || a.foeClose || (pick.how === 'box' && a.cell && a.cell.blocks > a.blocks))) {
-    const made = await planksFromLogs(session, ctl, Math.ceil((8 - a.blocks) / 4))
+}
+
+// Блоков мало, а брёвна есть (начало игры: после дерева, до камня) — доски из брёвен в сетке 2×2 (~0.5 с на
+async function planksFirst (rf: RefugeRun) {
+  const { session, ctl, step } = rf
+  if (process.env.ND_REFUGE_PLANKS !== '0' && !ctl.aborted && rf.a.blocks < 8 && !rf.a.nether &&
+    (rf.pick.code === 'NO_BLOCKS' || rf.a.foeClose || (rf.pick.how === 'box' && rf.a.cell && rf.a.cell.blocks > rf.a.blocks))) {
+    const made = await planksFromLogs(session, ctl, Math.ceil((8 - rf.a.blocks) / 4))
     if (made) {
       step(`доски из брёвен: +${made}`)
-      a = refugeLook(session)
-      pick = chooseRefuge(a)
+      rf.a = refugeLook(session)
+      rf.pick = chooseRefuge(rf.a)
     }
   }
+}
 
-  // Он дойдёт раньше, чем встанут стены, — сперва оторваться: зомби 2.3 бл/с,
-  // мы спринтом 5.6. Два коротких рывка, потом строиться где стоим.
-  for (let k = 0; k < 2 && !ctl.aborted && outrun(a, pick.how); k++) {
+// Он дойдёт раньше, чем встанут стены, — сперва оторваться: зомби 2.3 бл/с,
+// мы спринтом 5.6. Два коротких рывка, потом строиться где стоим.
+async function breakAway (rf: RefugeRun) {
+  const { session, ctl, bot, flee, out, step } = rf
+  for (let k = 0; k < 2 && !ctl.aborted && outrun(rf.a, rf.pick.how); k++) {
     // От паука не оторваться — с ним бой (если он один на один), а не рывок.
-    if (process.env.ND_REFUGE_SPIDER !== '0' && /^(spider|cave_spider)$/.test(a.nearest.name) && await spiderFirst()) continue
-    step(`${a.nearest.name} в ${a.nearest.d} бл. дойдёт за ${(a.nearest.etaMs / 1000).toFixed(1)} с, стройка ~${(buildMsOf(a, pick.how) / 1000).toFixed(1)} с — сперва отрываюсь`)
+    if (process.env.ND_REFUGE_SPIDER !== '0' && /^(spider|cave_spider)$/.test(rf.a.nearest.name) && await spiderFirst(rf)) continue
+    step(`${rf.a.nearest.name} в ${rf.a.nearest.d} бл. дойдёт за ${(rf.a.nearest.etaMs / 1000).toFixed(1)} с, стройка ~${(buildMsOf(rf.a, rf.pick.how) / 1000).toFixed(1)} с — сперва отрываюсь`)
     const p0 = bot.entity.position.clone()
     const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
     const moved = bot.entity.position.distanceTo(p0)
     out.ran = (out.ran || 0) + Math.round(moved)
     await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
-    a = refugeLook(session)
-    pick = chooseRefuge(a)
+    rf.a = refugeLook(session)
+    rf.pick = chooseRefuge(rf.a)
     if (f.cornered) { step('прижали — строюсь где стою'); break }
     // Рывок не сдвинул (лесенка шириной в клетку, тупик штрека): второй такой же — ещё 2.5 с под ударами
     // (trap0 02.10: два рывка по 0 бл. и смерть). Строиться здесь, отталкивая ударом (refugeBox — shove).
     if (moved < 2) { step(`рывок не сдвинул (${moved.toFixed(1)} бл.) — строюсь где стою`); break }
   }
-  out.choice = pick.why
+}
 
-  let hold = null
-  let exitRes = null
-  // Способ, за ним откаты. Не встал первый, а ходячий уже рядом (≤ 8 бл.) — сразу
-  const alt = [a.niche ? 'niche' : null, a.cell && a.canBreakOut ? 'box' : null, a.hole && !a.shooters ? 'hole' : null, a.pillar ? 'pillar' : null].filter(Boolean)
-  const order = pick.how === 'flee' || pick.how === 'pocket'
-    ? [pick.how, 'flee']
-    : [pick.how, ...alt.filter(h => h !== pick.how), 'flee']
-  let first = true
-  for (const how of order) {
-    if (ctl.aborted || (bot.health ?? 0) <= 0) break
-    // Откат (коробка не встала): место и мобы уже другие — если ходячий дойдёт
-    if (!first && (how === 'hole' || how === 'pillar')) {
-      await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
-      a = refugeLook(session)
-      if (a.nearest && a.nearest.d <= 8) { step(`${how}: ${a.nearest.name} в ${a.nearest.d} бл. — не успеть, бегство`); continue }
-      if (outrun(a, how)) {
-        step(`${how}: ${a.nearest.name} в ${a.nearest.d} бл. — сперва рывок`)
-        const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
-        out.ran = (out.ran || 0) + (f.ran || 0)
-        await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
-        a = refugeLook(session)
-        if ((how === 'hole' && !a.hole) || (how === 'pillar' && !a.pillar)) continue
-      }
-    }
-    first = false
-    if (how === 'box' || how === 'niche') {
-      // U2: Fight took the hands at the last roof block and jumped into the unfinished box. Only this bounded build owns
-      // ordinary defence; healing/exit and urgent hazards retain normal arbitration. A replaced intent cannot keep it.
-      let b
-      session._refugeBuild = ctl
-      try { b = how === 'niche' ? await takeNiche(session, ctl, a, step) : await takeBox(session, ctl, a, step, box => { out.box = box }) }
-      finally { if (session._refugeBuild === ctl) delete session._refugeBuild }
-      if (!b) { a = refugeLook(session); continue }
-      out.how = how
-      out.cell = xyz(b.cell)
-      out.placed = b.placed
-      if (b.intruder) {
-        // This box encloses its attacker too. Release construction first, then
-        // use the existing physical wall exit and flight, without eating here.
-        out.how = 'flee'
-        out.breached = b.intruder
-        out.code = 'CORNERED'
-        exitRes = await leaveBox(session, ctl, b, { why: 'breached' }, step)
-        if (exitRes?.ok && !ctl.aborted && (bot.health ?? 0) > 0 && gameClock.now() < deadline) {
-          const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(6000, deadline - gameClock.now()), safeDist: 12 })
-          out.ran = (out.ran || 0) + (f.ran || 0)
-          step(`из занятой коробки: ${f.mode}`)
-          if (!ctl.aborted && f.mode === 'оторвался') out.code = 'OK'
-        }
-        break
-      }
-      hold = await holdOut(session, ctl, { kind: 'box', box: b, minHp, deadline, note: step })
-      // No food means no healing. Return behind the confirmed walls so the
-      // speedrun caller can choose work or food without reopening to the shooter.
-      const noFoodWork = session.playPolicy?.mode === 'speedrun' && !out.untilDawn && hold.why === 'no_food'
-      if ((out.stayIn || noFoodWork) && hold.why !== 'breached' && hold.why !== 'died' && !ctl.aborted && (bot.health ?? 0) > 0 &&
-        (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
-        step('остаюсь в коробке — дальше вниз из неё')
-        out.stayed = true
-        break
-      }
-      // Снаружи опасно, а коробка цела — сидеть (NO_FOOD/срок не повод выходить к ним).
-      if ((sitOn() || out.untilDawn) && hold.why !== 'breached' && hold.why !== 'died' && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
-        const st = await sitTight(session, ctl, { at: b.cell, t0, box: b, step, untilDawn: out.untilDawn })
-        if (st.sat) out.sat = Math.round(st.sat / 1000)
-      }
-      // Вскрыли — не ждать у дыры, выходить с дальней стороны.
-      if (hold.why !== 'breached' && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
-        const clear = await waitClear(session, ctl, b.cell, { deadline: Math.min(deadline + 20000, gameClock.now() + 30000), reach: 4, step })
-        // Срок вышел и хп полное — не повод вскрывать целую коробку к толпе (как у норы ниже; Codex ne-deaths №4:
-        // VR25-3 — вышел к 10 ифритам, VR26-1 — к эндерменам). Дальше — вниз/вбок из коробки, как stayIn.
-        if (!clear && sitOn() && !ctl.aborted && (bot.health ?? 0) > 0 && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
-          step('у выхода враги — коробку не вскрываю, остаюсь')
-          out.stayed = true
-          break
-        }
-      }
-      exitRes = await leaveBox(session, ctl, b, hold, step)
-      break
-    }
-    if (how === 'pillar') {
-      const pl = await takePillar(session, ctl, step)
-      if (!pl) { a = refugeLook(session); continue }
-      out.how = 'pillar'
-      out.height = pl.height
-      hold = await holdOut(session, ctl, { kind: 'pillar', minHp, deadline, note: step, topY: Math.floor(bot.entity.position.y) })
-      exitRes = await leavePillar(session, ctl, step)
-      break
-    }
-    if (how === 'hole') {
-      const h = await takeHole(session, ctl, step)
-      if (!h) { a = refugeLook(session); continue }
-      out.how = 'hole'
-      out.depth = h.depth
-      hold = await holdOut(session, ctl, { kind: 'hole', minHp, deadline, note: step })
-      if (process.env.ND_NIGHT_WORK !== '0' && out.stayIn && !out.untilDawn && !h.open &&
-          !/^(breached|died)$/.test(hold.why) && !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
-        step('остаюсь в закрытой норе — дальше работа')
-        out.stayed = true
-        break
-      }
-      if ((sitOn() || out.untilDawn) && !h.open && hold.why !== 'breached' && hold.why !== 'died') {
-        const st = await sitTight(session, ctl, { at: bot.entity.position.floored(), t0, step, untilDawn: out.untilDawn })
-        if (st.sat) out.sat = Math.round(st.sat / 1000)
-      }
-      // Вылезать столбом, пока у края стоит ходячий, — голова выходит ему под руку
-      const top = bot.entity.position.floored().offset(0, h.depth, 0)
-      const clear = await waitClear(session, ctl, top, { deadline: Math.min(deadline + 30000, gameClock.now() + 30000), reach: 4, step })
-      // Не ушли от края — наверх не лезть (ND_REFUGE_SIT): pool1 02.10 слот 18 — нора в штреке, «у выхода ждал 30 с —
-      if (!clear && sitOn() && !h.open && hold.why !== 'breached' && !ctl.aborted && (bot.health ?? 0) > 0) {
-        step('у выхода ждут — наверх не лезу, остаюсь внизу')
-        out.stayed = true
-      } else if (!(hold.why === 'breached' && (bot.health ?? 0) <= 4)) {
-        exitRes = await exitShelter(session, ctl, { depth: h.depth })
-        if (exitRes && exitRes.stopped) step(`выход из норы: ${exitRes.stopped}`)
-      }
-      break
-    }
-    if (how === 'pocket') {
-      out.how = 'pocket'
-      step(`сижу в замкнутом кармане (${a.pocket} кл.)`)
-      hold = await holdOut(session, ctl, { kind: 'pocket', minHp, deadline, note: step })
-      if (process.env.ND_NIGHT_WORK !== '0' && out.stayIn && !out.untilDawn &&
-          !/^(breached|died)$/.test(hold.why) && !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
-        step('остаюсь в кармане — дальше работа')
-        out.stayed = true
-        break
-      }
-      if ((process.env.ND_OW_NIGHT_BLOCKOFF === '1' && out.stayIn || session.playPolicy?.mode === 'speedrun') && !out.untilDawn && hold.why === 'no_food' &&
-        !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
-        step('остаюсь в кармане — дальше работа или еда')
-        out.stayed = true
-        break
-      }
-      if ((sitOn() || out.untilDawn) && hold.why !== 'breached' && hold.why !== 'died') {
-        const st = await sitTight(session, ctl, { at: bot.entity.position.floored(), t0, step, untilDawn: out.untilDawn })
-        if (st.sat) out.sat = Math.round(st.sat / 1000)
-      }
-      break
-    }
-    // Бегство: оторваться, в тихом месте поесть; подошли — снова.
-    out.how = 'flee'
-    if (pick.code) out.code = pick.code
-    // Круги «оторваться — поесть»: зомби 2.3 бл/с, кусок 1.6 с — на круг один-два куска.
-    for (let k = 0; k < 10 && !ctl.aborted && gameClock.now() < deadline && (bot.health ?? 0) > 0; k++) {
-      const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(15000, Math.max(3000, deadline - gameClock.now())), safeDist: 16 })
+// Один способ укрытия из перебора: откат на нору/столб — с новой оценкой места, дальше сам способ.
+async function tryRefuge (rf: RefugeRun, how): Promise<RefugeTurn> {
+  const { session, ctl, bot, flee, out, step } = rf
+  if (ctl.aborted || (bot.health ?? 0) <= 0) return 'stop'
+  // Откат (коробка не встала): место и мобы уже другие — если ходячий дойдёт
+  if (!rf.first && (how === 'hole' || how === 'pillar')) {
+    await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
+    rf.a = refugeLook(session)
+    if (rf.a.nearest && rf.a.nearest.d <= 8) { step(`${how}: ${rf.a.nearest.name} в ${rf.a.nearest.d} бл. — не успеть, бегство`); return 'next' }
+    if (outrun(rf.a, how)) {
+      step(`${how}: ${rf.a.nearest.name} в ${rf.a.nearest.d} бл. — сперва рывок`)
+      const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
       out.ran = (out.ran || 0) + (f.ran || 0)
-      step(`бегство: ${f.mode}`)
-      if (f.cornered) { out.code = 'CORNERED'; break }
-      hold = await holdOut(session, ctl, { kind: 'open', minHp, deadline, note: step })
-      if (hold.why !== 'contact') break
+      await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)
+      rf.a = refugeLook(session)
+      if ((how === 'hole' && !rf.a.hole) || (how === 'pillar' && !rf.a.pillar)) return 'next'
     }
-    break
   }
+  rf.first = false
+  if (how === 'box' || how === 'niche') return boxRefuge(rf, how)
+  if (how === 'pillar') return pillarRefuge(rf)
+  if (how === 'hole') return holeRefuge(rf)
+  if (how === 'pocket') return pocketRefuge(rf)
+  return fleeRefuge(rf)
+}
 
-  // Вышел, а ходячие ждут у стен (ночью зомби не расходятся: H — 4 из 6 смертей
-  if (exitRes && out.how !== 'flee' && !ctl.aborted && (bot.health ?? 0) > 0) {
+async function boxRefuge (rf: RefugeRun, how): Promise<RefugeTurn> {
+  const { session, ctl, bot, flee, t0, minHp, deadline, out, step } = rf
+  // U2: Fight took the hands at the last roof block and jumped into the unfinished box. Only this bounded build owns
+  // ordinary defence; healing/exit and urgent hazards retain normal arbitration. A replaced intent cannot keep it.
+  let b
+  session._refugeBuild = ctl
+  try { b = how === 'niche' ? await takeNiche(session, ctl, rf.a, step) : await takeBox(session, ctl, rf.a, step, box => { out.box = box }) }
+  finally { if (session._refugeBuild === ctl) delete session._refugeBuild }
+  if (!b) { rf.a = refugeLook(session); return 'next' }
+  out.how = how
+  out.cell = xyz(b.cell)
+  out.placed = b.placed
+  if (b.intruder) {
+    // This box encloses its attacker too. Release construction first, then
+    // use the existing physical wall exit and flight, without eating here.
+    out.how = 'flee'
+    out.breached = b.intruder
+    out.code = 'CORNERED'
+    rf.exitRes = await leaveBox(session, ctl, b, { why: 'breached' }, step)
+    if (rf.exitRes?.ok && !ctl.aborted && (bot.health ?? 0) > 0 && gameClock.now() < deadline) {
+      const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(6000, deadline - gameClock.now()), safeDist: 12 })
+      out.ran = (out.ran || 0) + (f.ran || 0)
+      step(`из занятой коробки: ${f.mode}`)
+      if (!ctl.aborted && f.mode === 'оторвался') out.code = 'OK'
+    }
+    return 'stop'
+  }
+  rf.hold = await holdOut(session, ctl, { kind: 'box', box: b, minHp, deadline, note: step })
+  // No food means no healing. Return behind the confirmed walls so the
+  // speedrun caller can choose work or food without reopening to the shooter.
+  const noFoodWork = session.playPolicy?.mode === 'speedrun' && !out.untilDawn && rf.hold.why === 'no_food'
+  if ((out.stayIn || noFoodWork) && rf.hold.why !== 'breached' && rf.hold.why !== 'died' && !ctl.aborted && (bot.health ?? 0) > 0 &&
+    (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
+    step('остаюсь в коробке — дальше вниз из неё')
+    out.stayed = true
+    return 'stop'
+  }
+  // Снаружи опасно, а коробка цела — сидеть (NO_FOOD/срок не повод выходить к ним).
+  if ((sitOn() || out.untilDawn) && rf.hold.why !== 'breached' && rf.hold.why !== 'died' && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
+    const st = await sitTight(session, ctl, { at: b.cell, t0, box: b, step, untilDawn: out.untilDawn })
+    if (st.sat) out.sat = Math.round(st.sat / 1000)
+  }
+  // Вскрыли — не ждать у дыры, выходить с дальней стороны.
+  if (rf.hold.why !== 'breached' && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
+    const clear = await waitClear(session, ctl, b.cell, { deadline: Math.min(deadline + 20000, gameClock.now() + 30000), reach: 4, step })
+    // Срок вышел и хп полное — не повод вскрывать целую коробку к толпе (как у норы ниже; Codex ne-deaths №4:
+    // VR25-3 — вышел к 10 ифритам, VR26-1 — к эндерменам). Дальше — вниз/вбок из коробки, как stayIn.
+    if (!clear && sitOn() && !ctl.aborted && (bot.health ?? 0) > 0 && (require('.././fortify') as typeof import('.././fortify')).enclosure(bot, b.cell).sealed) {
+      step('у выхода враги — коробку не вскрываю, остаюсь')
+      out.stayed = true
+      return 'stop'
+    }
+  }
+  rf.exitRes = await leaveBox(session, ctl, b, rf.hold, step)
+  return 'stop'
+}
+
+async function pillarRefuge (rf: RefugeRun): Promise<RefugeTurn> {
+  const { session, ctl, bot, minHp, deadline, out, step } = rf
+  const pl = await takePillar(session, ctl, step)
+  if (!pl) { rf.a = refugeLook(session); return 'next' }
+  out.how = 'pillar'
+  out.height = pl.height
+  rf.hold = await holdOut(session, ctl, { kind: 'pillar', minHp, deadline, note: step, topY: Math.floor(bot.entity.position.y) })
+  rf.exitRes = await leavePillar(session, ctl, step)
+  return 'stop'
+}
+
+async function holeRefuge (rf: RefugeRun): Promise<RefugeTurn> {
+  const { session, ctl, bot, t0, minHp, deadline, out, step } = rf
+  const h = await takeHole(session, ctl, step)
+  if (!h) { rf.a = refugeLook(session); return 'next' }
+  out.how = 'hole'
+  out.depth = h.depth
+  rf.hold = await holdOut(session, ctl, { kind: 'hole', minHp, deadline, note: step })
+  if (process.env.ND_NIGHT_WORK !== '0' && out.stayIn && !out.untilDawn && !h.open &&
+      !/^(breached|died)$/.test(rf.hold.why) && !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
+    step('остаюсь в закрытой норе — дальше работа')
+    out.stayed = true
+    return 'stop'
+  }
+  if ((sitOn() || out.untilDawn) && !h.open && rf.hold.why !== 'breached' && rf.hold.why !== 'died') {
+    const st = await sitTight(session, ctl, { at: bot.entity.position.floored(), t0, step, untilDawn: out.untilDawn })
+    if (st.sat) out.sat = Math.round(st.sat / 1000)
+  }
+  // Вылезать столбом, пока у края стоит ходячий, — голова выходит ему под руку
+  const top = bot.entity.position.floored().offset(0, h.depth, 0)
+  const clear = await waitClear(session, ctl, top, { deadline: Math.min(deadline + 30000, gameClock.now() + 30000), reach: 4, step })
+  // Не ушли от края — наверх не лезть (ND_REFUGE_SIT): pool1 02.10 слот 18 — нора в штреке, «у выхода ждал 30 с —
+  if (!clear && sitOn() && !h.open && rf.hold.why !== 'breached' && !ctl.aborted && (bot.health ?? 0) > 0) {
+    step('у выхода ждут — наверх не лезу, остаюсь внизу')
+    out.stayed = true
+  } else if (!(rf.hold.why === 'breached' && (bot.health ?? 0) <= 4)) {
+    rf.exitRes = await exitShelter(session, ctl, { depth: h.depth })
+    if (rf.exitRes && rf.exitRes.stopped) step(`выход из норы: ${rf.exitRes.stopped}`)
+  }
+  return 'stop'
+}
+
+async function pocketRefuge (rf: RefugeRun): Promise<RefugeTurn> {
+  const { session, ctl, bot, t0, minHp, deadline, out, step } = rf
+  out.how = 'pocket'
+  step(`сижу в замкнутом кармане (${rf.a.pocket} кл.)`)
+  rf.hold = await holdOut(session, ctl, { kind: 'pocket', minHp, deadline, note: step })
+  if (process.env.ND_NIGHT_WORK !== '0' && out.stayIn && !out.untilDawn &&
+      !/^(breached|died)$/.test(rf.hold.why) && !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
+    step('остаюсь в кармане — дальше работа')
+    out.stayed = true
+    return 'stop'
+  }
+  if ((process.env.ND_OW_NIGHT_BLOCKOFF === '1' && out.stayIn || session.playPolicy?.mode === 'speedrun') && !out.untilDawn && rf.hold.why === 'no_food' &&
+    !ctl.aborted && (bot.health ?? 0) > 0 && refugeLook(session).pocket) {
+    step('остаюсь в кармане — дальше работа или еда')
+    out.stayed = true
+    return 'stop'
+  }
+  if ((sitOn() || out.untilDawn) && rf.hold.why !== 'breached' && rf.hold.why !== 'died') {
+    const st = await sitTight(session, ctl, { at: bot.entity.position.floored(), t0, step, untilDawn: out.untilDawn })
+    if (st.sat) out.sat = Math.round(st.sat / 1000)
+  }
+  return 'stop'
+}
+
+// Бегство: оторваться, в тихом месте поесть; подошли — снова.
+async function fleeRefuge (rf: RefugeRun): Promise<RefugeTurn> {
+  const { session, ctl, bot, flee, minHp, deadline, out, step } = rf
+  out.how = 'flee'
+  if (rf.pick.code) out.code = rf.pick.code
+  // Круги «оторваться — поесть»: зомби 2.3 бл/с, кусок 1.6 с — на круг один-два куска.
+  for (let k = 0; k < 10 && !ctl.aborted && gameClock.now() < deadline && (bot.health ?? 0) > 0; k++) {
+    const f = await flee.smartFlee(session, ctl, { timeoutMs: Math.min(15000, Math.max(3000, deadline - gameClock.now())), safeDist: 16 })
+    out.ran = (out.ran || 0) + (f.ran || 0)
+    step(`бегство: ${f.mode}`)
+    if (f.cornered) { out.code = 'CORNERED'; break }
+    rf.hold = await holdOut(session, ctl, { kind: 'open', minHp, deadline, note: step })
+    if (rf.hold.why !== 'contact') break
+  }
+  return 'stop'
+}
+
+// Вышел, а ходячие ждут у стен (ночью зомби не расходятся: H — 4 из 6 смертей
+async function fleeAfterExit (rf: RefugeRun) {
+  const { session, ctl, bot, flee, out, step } = rf
+  if (rf.exitRes && out.how !== 'flee' && !ctl.aborted && (bot.health ?? 0) > 0) {
     const near = flee.hostilesAround(bot, 8).filter(h => refugeFoe(bot, h.e, session) && h.doc.radius > 0)
     if (near.length) {
       const f = await flee.smartFlee(session, ctl, { timeoutMs: 6000, safeDist: 12 })
@@ -315,8 +381,11 @@ async function refugeBody (session, ctl, { t0, minHp, deadline, out, step, hurts
       step(`после выхода (${near.length} рядом): ${f.mode}`)
     }
   }
+}
 
-  // Итог.
+// Итог.
+function refugeOutcome (rf: RefugeRun) {
+  const { session, ctl, bot, t0, minHp, out, hurts, hold, exitRes } = rf
   const hp = Math.round(bot.health ?? 0)
   out.hp = hp
   out.healed = hp >= minHp
@@ -550,4 +619,4 @@ function runRefuge (session, p: any = {}) {
   }, { timeoutMs: (Math.max(secs, sitOn() || p.untilDawn ? SIT_CAP_MS / 1000 : 0) + 60) * 1000, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] })
 }
 
-module.exports = { refuge, refugeBody, takeHole, takePillar, leavePillar, dodgeCreeper, runDodgeCreeper, runRefuge }
+export { refuge, refugeBody, takeHole, takePillar, leavePillar, dodgeCreeper, runDodgeCreeper, runRefuge }

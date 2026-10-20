@@ -1,5 +1,5 @@
 'use strict'
-const { REPO_ROOT }: typeof import('../src/paths') = require('../src/paths')
+import { REPO_ROOT } from '../src/paths'
 // «Гонка вооружений», первая версия на ферме (s7 2026-10-06; TODO «PvP Гонка вооружений» п.1–9).
 // Раскладка arms-layout (seed) строится на сервере слота по RCON; два бойца — NeuroFarm<i> (ws 88xx) и
 // NeuroFarm<i>b (ws 89xx, farm/crystal/bside.js) — стартуют пустыми. У каждого свой StrategicDirector над
@@ -11,17 +11,17 @@ const { REPO_ROOT }: typeof import('../src/paths') = require('../src/paths')
 //   node dist/farm/farm.js run arms-run.js --slots 27 --tag s7-arms01 ROUNDS=4 SEED=1
 // env: ROUNDS (2), SEED ('demo'), ARMS_POS ("2000 100 2000"), LOOT_S (240 — срок лута, игровые с),
 //      ARMS_MAX_S (600), PREP_RATE (20), FIGHT_RATE (750); стороны меняются каждый раунд.
-const fs: typeof import('fs') = require('fs')
-const path: typeof import('path') = require('path')
-const net: typeof import('net') = require('net')
-const gameClock: typeof import('../src/game-clock') = require('../src/game-clock')
-const { connect }: typeof import('../scenes/lib/scene-kit') = require('../scenes/lib/scene-kit')
-const guard: typeof import('../scenes/lib/arms-guard') = require('../scenes/lib/arms-guard')
-const AL: typeof import('./arms-layout') = require('./arms-layout')
-const { StrategicDirector }: typeof import('../src/core/strategy') = require('../src/core/strategy')
-const { emptyWorld, fact }: typeof import('../src/core/world-state') = require('../src/core/world-state')
-const AG: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
-const Loot: typeof import('../src/pvp/arms-loot') = require('../src/pvp/arms-loot')
+import * as fs from 'fs'
+import * as path from 'path'
+import * as net from 'net'
+import * as gameClock from '../src/game-clock'
+import { connect } from '../scenes/lib/scene-kit'
+import * as guard from '../scenes/lib/arms-guard'
+import * as AL from './arms-layout'
+import { StrategicDirector } from '../src/core/strategy'
+import { emptyWorld, fact } from '../src/core/world-state'
+import * as AG from '../src/pvp/arms-graph'
+import * as Loot from '../src/pvp/arms-loot'
 const LOOT_PRIOR = Loot.sampleItems(AL.publicLootSamples(), AL.ROCKET3)
 
 const WS_A = process.env.ND_WS || process.env.ARMS_A
@@ -137,6 +137,14 @@ function makeSide (name, ws) {
 
 function freshStats () {
   return { firstWeapon: null, firstArmor: null, chests: 0, caches: 0, crafted: [], lab: null, ambushes: 0, ambushSeen: 0, fights: 0, fightWhy: {}, decisions: [], inv0: null, plan: [], hpLost: 0, near: 0, retreats: 0, engages: 0, killed: false, died: false, powerAtEngage: null, firstEngage: null, fightEvents: [] }
+}
+
+type ExecResult = import('../src/core/environment').ExecutionResult
+// Один вызов ArmsEnv.execute: команда, сигнал, сторона и её знание, события, общий RPC; finished — передача (сундук,
+// бой) закончена или навык завершён: сторож больше не переоценивает.
+interface ArmsExec {
+  command: any; signal: AbortSignal; side: any; k: any; ev: any[]; finished: boolean
+  rpc: (m: string, p: any) => Promise<any>; here: () => Promise<any>; near: (p: any, list: any[]) => any[]
 }
 
 class ArmsEnv {
@@ -283,14 +291,40 @@ class ArmsEnv {
     return { preparation, quoteEvidence, before: direct.cost, after: better.cost }
   }
 
-  async execute (command, signal): Promise<import('../src/core/environment').ExecutionResult> {
+  async execute (command, signal): Promise<ExecResult> {
     const side = this.side
     const k = side.know
     if (k.strategicReturn) {
       if (command.skill === 'arms.engage') k.yieldBlocked = k.strategicReturn.quoteEvidence
       k.strategicReturn = null
     }
-    const ev = []
+    const x = this.execContext(command, signal)
+    const watch = this.execWatch(x)
+    try {
+      const me = (await x.here()) || W(L.spawns[0])
+      if (command.skill === 'arms.scout') return await this.execScout(x, me)
+      if (command.skill === 'arms.loot') return await this.execLoot(x, me)
+      if (command.skill === 'arms.cache') return await this.execCache(x, me)
+      if (command.skill === 'arms.craft') return await this.execCraft(x)
+      if (command.skill === 'arms.lab') return await this.execLab(x)
+      if (command.skill === 'arms.heal') return await this.execHeal(x, me)
+      if (command.skill === 'arms.ambush') return await this.execAmbush(x)
+      if (command.skill === 'arms.retreat') return await this.execRetreat(x)
+      if (command.skill === 'arms.engage') return await this.execEngage(x)
+      return { outcome: 'FAILURE', reason: `нет навыка ${command.skill}`, events: x.ev }
+    } finally {
+      x.finished = true
+      if (watch) gameClock.clearInterval(watch)
+    }
+  }
+
+  // Общее одного вызова execute: RPC с квитанцией пути (traversals, lootInteractions) и прерываниями, своя позиция,
+  // ближние по списку.
+  execContext (command, signal): ArmsExec {
+    const side = this.side
+    const k = side.know
+    const x: ArmsExec = { command, signal, side, k, ev: [], finished: false, rpc: null, here: null, near: null }
+    const { ev } = x
     const rpc = async (m, p) => {
       if (signal.aborted) return { status: 'interrupted' }
       const from = m === 'goto' || m === 'chest_take' ? await here() : null
@@ -309,7 +343,7 @@ class ArmsEnv {
         if (sample) gameClock.clearInterval(sample)
         // The transfer is settled. Its watcher must not re-price the now empty
         // chest during route receipts, armor or the following look.
-        if (m === 'chest_take' || m === 'fight') finished = true
+        if (m === 'chest_take' || m === 'fight') x.finished = true
       }
       if (from) {
         const to = await here()
@@ -329,15 +363,22 @@ class ArmsEnv {
     }
     const here = async () => { const st = await side.call('status').catch(() => null); return (st && st.state && st.state.pos) || null }
     const near = (p, list) => list.sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))
+    Object.assign(x, { rpc, here, near })
+    return x
+  }
+
+  // Сторож навыка (кроме боя, отхода и засады): враг рядом или сундук стал дороже боя — прервать директором.
+  execWatch (x: ArmsExec) {
+    const { command, signal, side, k } = x
     // Для конкретного сундука пересчитываем оставшийся подход и открытие; близость сама по себе не запрет.
-    let watching = false, finished = false
+    let watching = false
     const watch = command.skill === 'arms.engage' || command.skill === 'arms.retreat' || command.skill === 'arms.ambush' ? null : every(500, async () => {
-      if (signal.aborted || this.round.over || watching || finished) return
+      if (signal.aborted || this.round.over || watching || x.finished) return
       watching = true
       try {
         if (command.skill === 'arms.loot') {
           const state = await this.observe(), f = k.foe
-          if (finished || signal.aborted || this.round.over) return
+          if (x.finished || signal.aborted || this.round.over) return
           const chest = k.chests.get(command.params?.chestId)
           if (!chest || !f || gameClock.now() - f.at >= 600) return
           const quote = this.lootQuote(state, chest), engage = AG.armsRegistry().get('Engage')
@@ -347,230 +388,242 @@ class ArmsEnv {
           if (interrupted) side.director.interrupt(`loot ${chest.id}: continue ${Math.round(quote.totalWithFight)} > engage ${Math.round(engageTicks)}`)
         } else {
           const f = await this.foe()
-          if (finished || signal.aborted || this.round.over) return
+          if (x.finished || signal.aborted || this.round.over) return
           if (f && gameClock.now() - f.at < 600 && f.dist < 12) { side.stats.near++; side.director.interrupt('enemy near') }
         }
       } catch {} finally { watching = false }
     })
-    try {
-      const me = (await here()) || W(L.spawns[0])
-      if (command.skill === 'arms.scout') {
-        // Ближнее неразведанное, но подальше от врага (последнее наблюдение за 30 с): иначе оба идут в центр и
-        // встречаются с пустыми руками (s7-arms06 — кулачный бой на старте).
-        const foeAt = k.foe && k.foe.pos && gameClock.now() - k.foe.at < 30000 ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : null
-        // Крыши — в последнюю очередь (+40): спуск с них при 750 TPS часто не укладывался в 40 с (s7-arms13…16).
-        const score = (a) => Math.hypot(a.x - (me.x - X), a.z - (me.z - Z)) - (foeAt ? 0.7 * Math.hypot(a.x - foeAt.x, a.z - foeAt.z) : 0) + (a.y > 0 ? 40 : 0)
-        const area = k.areas.filter(a => !k.scouted.has(a.id)).sort((a, b) => score(a) - score(b))[0]
-        if (!area) return { outcome: 'FAILURE', reason: 'всё разведано', events: ev }
-        const p = W(area)
-        const r = await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 1, timeoutSeconds: 60 })
-        if (signal.aborted) return { outcome: 'INTERRUPTED', reason: 'enemy near', events: ev }
-        // Разведано — только если дошёл (ревью Codex: неудачный путь записывался «комната изучена»); две неудачи — бросить.
-        if (r.status === 'done' || (area.tries = (area.tries || 0) + 1) >= 2) k.scouted.add(area.id)
-        await this.look(area.r)
-        return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev, detail: { area: area.id } }
-      }
-      if (command.skill === 'arms.loot') {
-        const chest = command.params?.roundScope === this.round.roundScope && k.chests.get(command.params?.chestId)
-        if (!chest || chest.looted || chest.attempt?.abandoned) return { outcome: 'FAILURE', reason: 'stale loot target', events: ev }
-        const quote = k.lootQuote?.chestId === chest.id ? k.lootQuote : null
-        k.lootWatch = null
-        const started = gameClock.now()
-        const r = await rpc('chest_take', { item: 'all', x: chest.x, y: chest.y, z: chest.z })
-        const receipt: import('../src/pvp/arms-loot').LootReceipt = Loot.lootReceipt(chest, r)
-        const moved = Object.values(receipt.moved).reduce((sum: number, n: number) => sum + n, 0)
-        const learned = receipt.opened && (!chest.opened || JSON.stringify(chest.contents) !== JSON.stringify(receipt.contents))
-        if (receipt.opened) { chest.opened = true; chest.contents = receipt.contents }
-        if (learned) chest.evidenceRevision = (chest.evidenceRevision || 0) + 1
-        chest.taken = (chest.taken || 0) + moved
-        if (moved > 0 || learned) k.lootProgress = (k.lootProgress || 0) + 1
-        if (receipt.emptied) {
-          chest.looted = true
-          if (chest.taken > 0) side.stats.chests++
-        }
-        const interrupted = signal.aborted || receipt.interrupted
-        const outcome = interrupted ? 'INTERRUPTED' : receipt.emptied && chest.taken > 0 ? 'SUCCESS' : moved > 0 || learned ? 'PARTIAL' : 'FAILURE'
-        if (outcome === 'FAILURE') {
-          const from = Loot.cellKey(me), reason = receipt.reason || 'no confirmed transfer'
-          const revision = chest.evidenceRevision || 0
-          const same = chest.attempt?.from === from && chest.attempt.reason === reason && chest.attempt.evidenceRevision === revision
-          const failures = (same ? chest.attempt.failures : 0) + 1
-          chest.attempt = { from, reason, failures, spentTicks: (same ? chest.attempt.spentTicks : 0) + (gameClock.now() - started) / 50, abandoned: failures >= 2, evidenceRevision: revision }
-          if (chest.attempt.abandoned) side.stats.chestFails = (side.stats.chestFails || 0) + 1
-        } else if (moved > 0 || learned) chest.attempt = null
-        k.lastLoot = { chestId: chest.id, quote, receipt, outcome, abandoned: !!chest.attempt?.abandoned, comparison: k.lootWatch || null }
-        await rpc('armor', {})
-        await this.look(12)
-        return { outcome, reason: receipt.emptied && !chest.taken ? 'observed empty' : receipt.reason, events: ev,
-          detail: { chestId: command.params.chestId, receipt, abandoned: !!chest.attempt?.abandoned } }
-      }
-      if (command.skill === 'arms.cache') {
-        const cv = near({ x: me.x, z: me.z }, [...k.caches.values()].filter(c => !c.opened))[0]
-        if (!cv) return { outcome: 'FAILURE', reason: 'нет облицовки', events: ev }
-        // Вернуться туда, откуда её видел (оттуда грань точно видна), и подойти: mine смотрит честно.
-        if (cv.from) await rpc('goto', { x: cv.from.x, y: cv.from.y, z: cv.from.z, range: 1, timeoutSeconds: 30 })
-        const r = await rpc('mine', { block: cv.block, at: { x: cv.x, y: cv.y, z: cv.z }, collect: false, timeoutSeconds: 40 })
-        // Вскрыт — только по подтверждённой копке; две неудачи — бросил (ревью Codex: отказ шёл «вскрыт»).
-        if (r.status === 'done') cv.opened = true
-        else if ((cv.tries = (cv.tries || 0) + 1) >= 2) { cv.opened = true; cv.gaveUp = true; side.stats.cacheFails = (side.stats.cacheFails || 0) + 1 }
-        // Облицовка двери — в два блока: нижний и верхний вместе, чтобы пройти.
-        for (const dy of [1, -1]) { const o = k.caches.get(key({ x: cv.x, y: cv.y + dy, z: cv.z })); if (o && !o.opened) { const r2 = await rpc('mine', { block: o.block, at: { x: o.x, y: o.y, z: o.z }, collect: false, timeoutSeconds: 40 }); if (r2.status === 'done' || (o.tries = (o.tries || 0) + 1) >= 2) o.opened = true } }
-        if (r.status === 'done') side.stats.caches++
-        await this.look(10)
-        return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev }
-      }
-      if (command.skill === 'arms.craft') {
-        const c = k.craft
-        if (!c) return { outcome: 'FAILURE', reason: 'нечего делать', events: ev }
-        const r = await rpc('craft', { item: c.item, count: 1, timeoutSeconds: 40 })
-        await rpc('armor', {})
-        if (r.status === 'done') side.stats.crafted.push(c.item)
-        return { outcome: r.status === 'done' ? 'SUCCESS' : 'FAILURE', reason: r.error, events: ev, detail: { item: c.item } }
-      }
-      if (command.skill === 'arms.lab') {
-        // Лаборатория N2: стол (0,0,−22), подойти на 2 бл. к югу; бутылки под ноги, затем стол (enchant сам подойдёт).
-        // Лаборатория «использована» — только после улучшения; не дошёл — не тратить попытку (ревью Codex).
-        const t = W({ x: L.lab.table.x, y: 0, z: L.lab.table.z + 2 })
-        const arrived = await rpc('goto', { x: t.x, y: t.y, z: t.z, range: 1, timeoutSeconds: 40 })
-        if (arrived.status !== 'done') return { outcome: arrived.status === 'interrupted' ? 'INTERRUPTED' : 'FAILURE', reason: arrived.error, events: ev }
-        const xp = await rpc('xp_bottles', {})
-        // Сперва наковальня (книга — дешевле), остаток уровней — на стол.
-        const anvil = await rpc('enchant', { mode: 'anvil' })
-        const table = await rpc('enchant', {})
-        await rpc('armor', {})
-        const got = [...(anvil.status === 'done' && anvil.detail && !anvil.detail.skipped ? ['наковальня'] : []),
-          ...((table.detail && table.detail.enchanted) || []).filter(e => e.got).map(e => e.item)]
-        const why = [anvil.error || (anvil.detail && anvil.detail.skipped), table.error || (table.detail && table.detail.stopped)].filter(Boolean).join('; ')
-        side.stats.lab = { level: xp.detail && xp.detail.level, got, why: why || undefined }
-        k.labDone = got.length > 0 || (k.labTries = (k.labTries || 0) + 1) >= 2
-        return { outcome: got.length ? 'SUCCESS' : 'FAILURE', reason: why, events: ev }
-      }
-      if (command.skill === 'arms.heal') {
-        const before = (((await side.call('status').catch(() => null)) || {}).state) || {}
-        if (!Number.isFinite(before.health) || !Number.isFinite(before.food)) return { outcome: 'FAILURE', reason: 'нет наблюдения здоровья/сытости', events: ev }
-        if (before.food < 18 && !AG.recoveryFood(before.inventory || {}).count) return { outcome: 'FAILURE', reason: 'нет еды и сытости для регенерации', events: ev }
-        // Подальше от последнего места врага — к ближнему углу комплекса со своей стороны; съесть (eat выберет лучшее),
-        // затем ждать регенерацию до 18 хп или 15 с; сторож прерывает, если враг показался.
-        const f = k.foe && k.foe.pos ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : null
-        if (f && Math.hypot(me.x - X - f.x, me.z - Z - f.z) < 10) {
-          const away = k.areas.slice().sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z) + 0.5 * (Math.hypot(a.x - (me.x - X), a.z - (me.z - Z)) - Math.hypot(b.x - (me.x - X), b.z - (me.z - Z))))[0]
-          if (away) { const p = W(away); await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 10 }) }
-        }
-        const ate = await rpc('eat', {})
-        if (signal.aborted || ate.status === 'interrupted') return { outcome: 'INTERRUPTED', reason: ate.error || 'поедание прервано', events: ev }
-        const until = gameClock.now() + 15000
-        const eaten = ate.detail?.spent > 0 ? ate.detail.ate : null
-        const regenUntil = gameClock.now() + AG.recoveryRegenMs(eaten)
-        let after = before
-        while (!signal.aborted && !this.round.over) {
-          after = (((await side.call('status').catch(() => null)) || {}).state) || {}
-          if (!Number.isFinite(after.health) || !Number.isFinite(after.food)) return { outcome: 'FAILURE', reason: 'нет подтверждения здоровья/сытости', events: ev }
-          if (after.health >= 18 || after.health < before.health || (after.food < 18 && gameClock.now() >= regenUntil) || gameClock.now() >= until) break
-          await pace(500)
-        }
-        const hpGain = after.health - before.health, foodGain = after.food - before.food
-        if (hpGain > 0) side.stats.heals = (side.stats.heals || 0) + 1
-        return { outcome: signal.aborted || this.round.over ? 'INTERRUPTED' : hpGain > 0 ? 'SUCCESS' : foodGain > 0 ? 'PARTIAL' : 'FAILURE',
-          reason: hpGain > 0 || foodGain > 0 ? undefined : 'нет подтверждённого восстановления', events: ev,
-          detail: { hpBefore: before.health, hp: after.health, foodBefore: before.food, food: after.food, hpGain, foodGain, ate: eaten || null } }
-      }
-      if (command.skill === 'arms.ambush') {
-        // Точка — середина поля со своей стороны (x = ±5): чужой обход идёт через центр; ждать до 25 с, пока не покажется.
-        k.ambushed = true
-        side.stats.ambushes++
-        const p = W({ x: side.spawn.x < 0 ? -5 : 5, y: 0, z: 0 })
-        await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 1, timeoutSeconds: 20 })
-        const until = gameClock.now() + 25000
-        while (!signal.aborted && gameClock.now() < until) {
-          const f = await this.foe()
-          if (f && gameClock.now() - f.at < 600) { side.stats.ambushSeen++; return { outcome: 'SUCCESS', events: ev } }
-          await pace(400)
-        }
-        return { outcome: 'PARTIAL', reason: 'не пришёл', events: ev }
-      }
-      if (command.skill === 'arms.retreat') {
-        side.stats.retreats++
-        const f = k.foe && k.foe.pos ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : { x: 0, z: 0 }
-        const far = k.areas.filter(a => !k.scouted.has(a.id)).concat(k.areas).sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z))[0]
-        const p = W(far)
-        const r = await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 12 })
-        // Ушёл — по факту пути и нового взгляда на врага (ревью Codex: угроза стиралась и успех писался всегда).
-        await this.foe()
-        return { outcome: signal.aborted || r.status === 'interrupted' ? 'INTERRUPTED' : r.status === 'done' ? 'SUCCESS' : 'FAILURE', reason: r.error, events: ev }
-      }
-      if (command.skill === 'arms.engage') {
-        k.lastYield = null
-        side.stats.engages++
-        if (side.stats.firstEngage == null) side.stats.firstEngage = Math.round((gameClock.now() - side.t0) / 1000)
-        if (side.stats.powerAtEngage === null) side.stats.powerAtEngage = k.power
-        await rpc('armor', {})
-        const fresh = (f) => f && gameClock.now() - f.at < 1500
-        if (!fresh(await this.foe())) {
-          // Не видно: к последнему наблюдению, иначе обход — центр поля (оттуда видно поле и двери), затем
-          // кольцевой коридор; путь рвётся, как только враг показался (s7: без обхода оба искали 200 с и не встретились).
-          const last = k.foe && k.foe.pos && gameClock.now() - k.foe.at < 30000 ? k.foe.pos : null
-          if (k.foe) k.foe.pos = null
-          // Обход зеркален по сторонам: первым — коридор со стороны врага (s7-arms09…12: общий порядок «сперва запад»
-          // давал восточному старту 17 побед из 22 — он шёл навстречу, западный — от врага).
-          const h = HUNT[(k.hunt = (k.hunt ?? -1) + 1) % HUNT.length]
-          const target = last || W({ ...h, x: h.x * (side.spawn.x < 0 ? -1 : 1) })
-          let seen = false
-          const go = rpc('goto', { x: target.x, y: target.y, z: target.z, range: 2, timeoutSeconds: 25 })
-          const poll = every(400, async () => { if (!seen && fresh(await this.foe())) { seen = true; side.call('stop').catch(() => {}) } })
-          try { await go } finally { gameClock.clearInterval(poll) }
-          if (!seen && !fresh(await this.foe())) return { outcome: 'PARTIAL', reason: 'не нашёл', events: ev }
-        }
-        const t1 = gameClock.now()
-        const roundScope = this.round.roundScope, fightId = `${roundScope}:${k.fightSeq = (k.fightSeq || 0) + 1}`
-        k.activeFightId = fightId
-        let polling = false, pending = null, requestSeq = 0
-        const issued = new Map()
-        const current = () => !finished && !signal.aborted && !this.round.over && side.know === k && k.activeFightId === fightId
-        const watchYield = every(500, async () => {
-          if (!current() || polling) return
-          polling = true
-          try {
-            const state = await this.observe(current)
-            if (!current() || !state) return
-            const choice = this.preparation(state)
-            if (choice && choice.quoteEvidence !== k.yieldBlocked) {
-              const request = { ...choice, requestId: pending?.quoteEvidence === choice.quoteEvidence ? pending.requestId : `${fightId}:${++requestSeq}` }
-              pending = request
-              k.yieldWatch = { ...request, enemyHp: Object.fromEntries(['lo', 'hi', 'mean', 'conf'].map(b => [b, state.facts['enemy_hp_' + b]?.value])) }
-              issued.set(request.requestId, k.yieldWatch)
-              await side.call('fight_yield', { roundScope, fightId, target: side.foe, request })
-            } else if (pending) {
-              pending = null
-              await side.call('fight_yield', { roundScope, fightId, target: side.foe, request: null })
-            }
-          } catch {} finally { polling = false }
-        })
-        // arena — весь комплекс (|x|,|z| ≤ 25 от центра, пол y=0): дуэль не уходит по сытости/оружию (arenaStay), стены держат поле.
-        let r
-        try { r = await rpc('fight', { target: side.foe, allowPlayer: true, allowStrategicYield: true, fightId,
-          timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', roundScope, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } }) }
-        finally { gameClock.clearInterval(watchYield); if (k.activeFightId === fightId) k.activeFightId = null }
-        const d = (r && r.detail) || {}
-        const sent = issued.get(d.strategicYield?.requestId)
-        const strategicYield = sent && sent.quoteEvidence === d.strategicYield.quoteEvidence && sent.preparation === d.strategicYield.preparation ? d.strategicYield : null
-        if (strategicYield) k.strategicReturn = k.lastYield = { ...strategicYield, fightId, roundScope, enemyHp: sent.enemyHp }
-        if (side.stats.fightEvents.length < 40) side.stats.fightEvents.push({ t: Math.round((t1 - side.t0) / 1000), s: Math.round((gameClock.now() - t1) / 1000), status: r.status, by: r.by && r.by.type, stopped: d.stopped, sw: d.swings, hit: d.landed,
-          ...(strategicYield ? { strategicYield: k.lastYield } : {}) })
-        if (d.killed && String(d.killed).split(', ').includes(side.foe)) side.stats.killed = true
-        side.stats.fights++
-        const why = `fight ${r.status}${r.error ? ': ' + r.error : ''}${d.skipped ? ' skip ' + (d.stopped || d.purpose || '') : ''}${d.stopped && !d.skipped ? ' stop ' + d.stopped : ''} sw ${d.swings ?? '-'}`.slice(0, 90)
-        const kind = why.replace(/sw \d+$/, 'sw #')
-        side.stats.fightWhy[kind] = (side.stats.fightWhy[kind] || 0) + 1
-        // Мгновенный возврат без боя — не крутить: пауза, иначе тысячи вызовов за раунд (s7-arms02: 3996).
-        if (gameClock.now() - t1 < 1000 && !side.stats.killed && !strategicYield) await sleep(1000)
-        return { outcome: side.stats.killed ? 'SUCCESS' : 'PARTIAL', reason: why, events: ev,
-          detail: { swings: d.swings, landed: d.landed, ...(strategicYield ? { strategicYield: k.lastYield } : {}) } }
-      }
-      return { outcome: 'FAILURE', reason: `нет навыка ${command.skill}`, events: ev }
-    } finally {
-      finished = true
-      if (watch) gameClock.clearInterval(watch)
+    return watch
+  }
+
+  async execScout (x: ArmsExec, me): Promise<ExecResult> {
+    const { signal, k, ev, rpc } = x
+    // Ближнее неразведанное, но подальше от врага (последнее наблюдение за 30 с): иначе оба идут в центр и
+    // встречаются с пустыми руками (s7-arms06 — кулачный бой на старте).
+    const foeAt = k.foe && k.foe.pos && gameClock.now() - k.foe.at < 30000 ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : null
+    // Крыши — в последнюю очередь (+40): спуск с них при 750 TPS часто не укладывался в 40 с (s7-arms13…16).
+    const score = (a) => Math.hypot(a.x - (me.x - X), a.z - (me.z - Z)) - (foeAt ? 0.7 * Math.hypot(a.x - foeAt.x, a.z - foeAt.z) : 0) + (a.y > 0 ? 40 : 0)
+    const area = k.areas.filter(a => !k.scouted.has(a.id)).sort((a, b) => score(a) - score(b))[0]
+    if (!area) return { outcome: 'FAILURE', reason: 'всё разведано', events: ev }
+    const p = W(area)
+    const r = await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 1, timeoutSeconds: 60 })
+    if (signal.aborted) return { outcome: 'INTERRUPTED', reason: 'enemy near', events: ev }
+    // Разведано — только если дошёл (ревью Codex: неудачный путь записывался «комната изучена»); две неудачи — бросить.
+    if (r.status === 'done' || (area.tries = (area.tries || 0) + 1) >= 2) k.scouted.add(area.id)
+    await this.look(area.r)
+    return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev, detail: { area: area.id } }
+  }
+
+  async execLoot (x: ArmsExec, me): Promise<ExecResult> {
+    const { command, signal, side, k, ev, rpc } = x
+    const chest = command.params?.roundScope === this.round.roundScope && k.chests.get(command.params?.chestId)
+    if (!chest || chest.looted || chest.attempt?.abandoned) return { outcome: 'FAILURE', reason: 'stale loot target', events: ev }
+    const quote = k.lootQuote?.chestId === chest.id ? k.lootQuote : null
+    k.lootWatch = null
+    const started = gameClock.now()
+    const r = await rpc('chest_take', { item: 'all', x: chest.x, y: chest.y, z: chest.z })
+    const receipt: import('../src/pvp/arms-loot').LootReceipt = Loot.lootReceipt(chest, r)
+    const moved = Object.values(receipt.moved).reduce((sum: number, n: number) => sum + n, 0)
+    const learned = receipt.opened && (!chest.opened || JSON.stringify(chest.contents) !== JSON.stringify(receipt.contents))
+    if (receipt.opened) { chest.opened = true; chest.contents = receipt.contents }
+    if (learned) chest.evidenceRevision = (chest.evidenceRevision || 0) + 1
+    chest.taken = (chest.taken || 0) + moved
+    if (moved > 0 || learned) k.lootProgress = (k.lootProgress || 0) + 1
+    if (receipt.emptied) {
+      chest.looted = true
+      if (chest.taken > 0) side.stats.chests++
     }
+    const interrupted = signal.aborted || receipt.interrupted
+    const outcome = interrupted ? 'INTERRUPTED' : receipt.emptied && chest.taken > 0 ? 'SUCCESS' : moved > 0 || learned ? 'PARTIAL' : 'FAILURE'
+    if (outcome === 'FAILURE') {
+      const from = Loot.cellKey(me), reason = receipt.reason || 'no confirmed transfer'
+      const revision = chest.evidenceRevision || 0
+      const same = chest.attempt?.from === from && chest.attempt.reason === reason && chest.attempt.evidenceRevision === revision
+      const failures = (same ? chest.attempt.failures : 0) + 1
+      chest.attempt = { from, reason, failures, spentTicks: (same ? chest.attempt.spentTicks : 0) + (gameClock.now() - started) / 50, abandoned: failures >= 2, evidenceRevision: revision }
+      if (chest.attempt.abandoned) side.stats.chestFails = (side.stats.chestFails || 0) + 1
+    } else if (moved > 0 || learned) chest.attempt = null
+    k.lastLoot = { chestId: chest.id, quote, receipt, outcome, abandoned: !!chest.attempt?.abandoned, comparison: k.lootWatch || null }
+    await rpc('armor', {})
+    await this.look(12)
+    return { outcome, reason: receipt.emptied && !chest.taken ? 'observed empty' : receipt.reason, events: ev,
+      detail: { chestId: command.params.chestId, receipt, abandoned: !!chest.attempt?.abandoned } }
+  }
+
+  async execCache (x: ArmsExec, me): Promise<ExecResult> {
+    const { side, k, ev, rpc, near } = x
+    const cv = near({ x: me.x, z: me.z }, [...k.caches.values()].filter(c => !c.opened))[0]
+    if (!cv) return { outcome: 'FAILURE', reason: 'нет облицовки', events: ev }
+    // Вернуться туда, откуда её видел (оттуда грань точно видна), и подойти: mine смотрит честно.
+    if (cv.from) await rpc('goto', { x: cv.from.x, y: cv.from.y, z: cv.from.z, range: 1, timeoutSeconds: 30 })
+    const r = await rpc('mine', { block: cv.block, at: { x: cv.x, y: cv.y, z: cv.z }, collect: false, timeoutSeconds: 40 })
+    // Вскрыт — только по подтверждённой копке; две неудачи — бросил (ревью Codex: отказ шёл «вскрыт»).
+    if (r.status === 'done') cv.opened = true
+    else if ((cv.tries = (cv.tries || 0) + 1) >= 2) { cv.opened = true; cv.gaveUp = true; side.stats.cacheFails = (side.stats.cacheFails || 0) + 1 }
+    // Облицовка двери — в два блока: нижний и верхний вместе, чтобы пройти.
+    for (const dy of [1, -1]) { const o = k.caches.get(key({ x: cv.x, y: cv.y + dy, z: cv.z })); if (o && !o.opened) { const r2 = await rpc('mine', { block: o.block, at: { x: o.x, y: o.y, z: o.z }, collect: false, timeoutSeconds: 40 }); if (r2.status === 'done' || (o.tries = (o.tries || 0) + 1) >= 2) o.opened = true } }
+    if (r.status === 'done') side.stats.caches++
+    await this.look(10)
+    return { outcome: r.status === 'done' ? 'SUCCESS' : 'PARTIAL', reason: r.error, events: ev }
+  }
+
+  async execCraft (x: ArmsExec): Promise<ExecResult> {
+    const { side, k, ev, rpc } = x
+    const c = k.craft
+    if (!c) return { outcome: 'FAILURE', reason: 'нечего делать', events: ev }
+    const r = await rpc('craft', { item: c.item, count: 1, timeoutSeconds: 40 })
+    await rpc('armor', {})
+    if (r.status === 'done') side.stats.crafted.push(c.item)
+    return { outcome: r.status === 'done' ? 'SUCCESS' : 'FAILURE', reason: r.error, events: ev, detail: { item: c.item } }
+  }
+
+  async execLab (x: ArmsExec): Promise<ExecResult> {
+    const { side, k, ev, rpc } = x
+    // Лаборатория N2: стол (0,0,−22), подойти на 2 бл. к югу; бутылки под ноги, затем стол (enchant сам подойдёт).
+    // Лаборатория «использована» — только после улучшения; не дошёл — не тратить попытку (ревью Codex).
+    const t = W({ x: L.lab.table.x, y: 0, z: L.lab.table.z + 2 })
+    const arrived = await rpc('goto', { x: t.x, y: t.y, z: t.z, range: 1, timeoutSeconds: 40 })
+    if (arrived.status !== 'done') return { outcome: arrived.status === 'interrupted' ? 'INTERRUPTED' : 'FAILURE', reason: arrived.error, events: ev }
+    const xp = await rpc('xp_bottles', {})
+    // Сперва наковальня (книга — дешевле), остаток уровней — на стол.
+    const anvil = await rpc('enchant', { mode: 'anvil' })
+    const table = await rpc('enchant', {})
+    await rpc('armor', {})
+    const got = [...(anvil.status === 'done' && anvil.detail && !anvil.detail.skipped ? ['наковальня'] : []),
+      ...((table.detail && table.detail.enchanted) || []).filter(e => e.got).map(e => e.item)]
+    const why = [anvil.error || (anvil.detail && anvil.detail.skipped), table.error || (table.detail && table.detail.stopped)].filter(Boolean).join('; ')
+    side.stats.lab = { level: xp.detail && xp.detail.level, got, why: why || undefined }
+    k.labDone = got.length > 0 || (k.labTries = (k.labTries || 0) + 1) >= 2
+    return { outcome: got.length ? 'SUCCESS' : 'FAILURE', reason: why, events: ev }
+  }
+
+  async execHeal (x: ArmsExec, me): Promise<ExecResult> {
+    const { signal, side, k, ev, rpc } = x
+    const before = (((await side.call('status').catch(() => null)) || {}).state) || {}
+    if (!Number.isFinite(before.health) || !Number.isFinite(before.food)) return { outcome: 'FAILURE', reason: 'нет наблюдения здоровья/сытости', events: ev }
+    if (before.food < 18 && !AG.recoveryFood(before.inventory || {}).count) return { outcome: 'FAILURE', reason: 'нет еды и сытости для регенерации', events: ev }
+    // Подальше от последнего места врага — к ближнему углу комплекса со своей стороны; съесть (eat выберет лучшее),
+    // затем ждать регенерацию до 18 хп или 15 с; сторож прерывает, если враг показался.
+    const f = k.foe && k.foe.pos ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : null
+    if (f && Math.hypot(me.x - X - f.x, me.z - Z - f.z) < 10) {
+      const away = k.areas.slice().sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z) + 0.5 * (Math.hypot(a.x - (me.x - X), a.z - (me.z - Z)) - Math.hypot(b.x - (me.x - X), b.z - (me.z - Z))))[0]
+      if (away) { const p = W(away); await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 10 }) }
+    }
+    const ate = await rpc('eat', {})
+    if (signal.aborted || ate.status === 'interrupted') return { outcome: 'INTERRUPTED', reason: ate.error || 'поедание прервано', events: ev }
+    const until = gameClock.now() + 15000
+    const eaten = ate.detail?.spent > 0 ? ate.detail.ate : null
+    const regenUntil = gameClock.now() + AG.recoveryRegenMs(eaten)
+    let after = before
+    while (!signal.aborted && !this.round.over) {
+      after = (((await side.call('status').catch(() => null)) || {}).state) || {}
+      if (!Number.isFinite(after.health) || !Number.isFinite(after.food)) return { outcome: 'FAILURE', reason: 'нет подтверждения здоровья/сытости', events: ev }
+      if (after.health >= 18 || after.health < before.health || (after.food < 18 && gameClock.now() >= regenUntil) || gameClock.now() >= until) break
+      await pace(500)
+    }
+    const hpGain = after.health - before.health, foodGain = after.food - before.food
+    if (hpGain > 0) side.stats.heals = (side.stats.heals || 0) + 1
+    return { outcome: signal.aborted || this.round.over ? 'INTERRUPTED' : hpGain > 0 ? 'SUCCESS' : foodGain > 0 ? 'PARTIAL' : 'FAILURE',
+      reason: hpGain > 0 || foodGain > 0 ? undefined : 'нет подтверждённого восстановления', events: ev,
+      detail: { hpBefore: before.health, hp: after.health, foodBefore: before.food, food: after.food, hpGain, foodGain, ate: eaten || null } }
+  }
+
+  async execAmbush (x: ArmsExec): Promise<ExecResult> {
+    const { signal, side, k, ev, rpc } = x
+    // Точка — середина поля со своей стороны (x = ±5): чужой обход идёт через центр; ждать до 25 с, пока не покажется.
+    k.ambushed = true
+    side.stats.ambushes++
+    const p = W({ x: side.spawn.x < 0 ? -5 : 5, y: 0, z: 0 })
+    await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 1, timeoutSeconds: 20 })
+    const until = gameClock.now() + 25000
+    while (!signal.aborted && gameClock.now() < until) {
+      const f = await this.foe()
+      if (f && gameClock.now() - f.at < 600) { side.stats.ambushSeen++; return { outcome: 'SUCCESS', events: ev } }
+      await pace(400)
+    }
+    return { outcome: 'PARTIAL', reason: 'не пришёл', events: ev }
+  }
+
+  async execRetreat (x: ArmsExec): Promise<ExecResult> {
+    const { signal, side, k, ev, rpc } = x
+    side.stats.retreats++
+    const f = k.foe && k.foe.pos ? { x: k.foe.pos.x - X, z: k.foe.pos.z - Z } : { x: 0, z: 0 }
+    const far = k.areas.filter(a => !k.scouted.has(a.id)).concat(k.areas).sort((a, b) => Math.hypot(b.x - f.x, b.z - f.z) - Math.hypot(a.x - f.x, a.z - f.z))[0]
+    const p = W(far)
+    const r = await rpc('goto', { x: p.x, y: p.y, z: p.z, range: 2, timeoutSeconds: 12 })
+    // Ушёл — по факту пути и нового взгляда на врага (ревью Codex: угроза стиралась и успех писался всегда).
+    await this.foe()
+    return { outcome: signal.aborted || r.status === 'interrupted' ? 'INTERRUPTED' : r.status === 'done' ? 'SUCCESS' : 'FAILURE', reason: r.error, events: ev }
+  }
+
+  async execEngage (x: ArmsExec): Promise<ExecResult> {
+    const { signal, side, k, ev, rpc } = x
+    k.lastYield = null
+    side.stats.engages++
+    if (side.stats.firstEngage == null) side.stats.firstEngage = Math.round((gameClock.now() - side.t0) / 1000)
+    if (side.stats.powerAtEngage === null) side.stats.powerAtEngage = k.power
+    await rpc('armor', {})
+    const fresh = (f) => f && gameClock.now() - f.at < 1500
+    if (!fresh(await this.foe())) {
+      // Не видно: к последнему наблюдению, иначе обход — центр поля (оттуда видно поле и двери), затем
+      // кольцевой коридор; путь рвётся, как только враг показался (s7: без обхода оба искали 200 с и не встретились).
+      const last = k.foe && k.foe.pos && gameClock.now() - k.foe.at < 30000 ? k.foe.pos : null
+      if (k.foe) k.foe.pos = null
+      // Обход зеркален по сторонам: первым — коридор со стороны врага (s7-arms09…12: общий порядок «сперва запад»
+      // давал восточному старту 17 побед из 22 — он шёл навстречу, западный — от врага).
+      const h = HUNT[(k.hunt = (k.hunt ?? -1) + 1) % HUNT.length]
+      const target = last || W({ ...h, x: h.x * (side.spawn.x < 0 ? -1 : 1) })
+      let seen = false
+      const go = rpc('goto', { x: target.x, y: target.y, z: target.z, range: 2, timeoutSeconds: 25 })
+      const poll = every(400, async () => { if (!seen && fresh(await this.foe())) { seen = true; side.call('stop').catch(() => {}) } })
+      try { await go } finally { gameClock.clearInterval(poll) }
+      if (!seen && !fresh(await this.foe())) return { outcome: 'PARTIAL', reason: 'не нашёл', events: ev }
+    }
+    const t1 = gameClock.now()
+    const roundScope = this.round.roundScope, fightId = `${roundScope}:${k.fightSeq = (k.fightSeq || 0) + 1}`
+    k.activeFightId = fightId
+    let polling = false, pending = null, requestSeq = 0
+    const issued = new Map()
+    const current = () => !x.finished && !signal.aborted && !this.round.over && side.know === k && k.activeFightId === fightId
+    const watchYield = every(500, async () => {
+      if (!current() || polling) return
+      polling = true
+      try {
+        const state = await this.observe(current)
+        if (!current() || !state) return
+        const choice = this.preparation(state)
+        if (choice && choice.quoteEvidence !== k.yieldBlocked) {
+          const request = { ...choice, requestId: pending?.quoteEvidence === choice.quoteEvidence ? pending.requestId : `${fightId}:${++requestSeq}` }
+          pending = request
+          k.yieldWatch = { ...request, enemyHp: Object.fromEntries(['lo', 'hi', 'mean', 'conf'].map(b => [b, state.facts['enemy_hp_' + b]?.value])) }
+          issued.set(request.requestId, k.yieldWatch)
+          await side.call('fight_yield', { roundScope, fightId, target: side.foe, request })
+        } else if (pending) {
+          pending = null
+          await side.call('fight_yield', { roundScope, fightId, target: side.foe, request: null })
+        }
+      } catch {} finally { polling = false }
+    })
+    // arena — весь комплекс (|x|,|z| ≤ 25 от центра, пол y=0): дуэль не уходит по сытости/оружию (arenaStay), стены держат поле.
+    let r
+    try { r = await rpc('fight', { target: side.foe, allowPlayer: true, allowStrategicYield: true, fightId,
+      timeoutSeconds: 120, retreatAtHealth: 3, purpose: 'defense', roundScope, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: 25 } }) }
+    finally { gameClock.clearInterval(watchYield); if (k.activeFightId === fightId) k.activeFightId = null }
+    const d = (r && r.detail) || {}
+    const sent = issued.get(d.strategicYield?.requestId)
+    const strategicYield = sent && sent.quoteEvidence === d.strategicYield.quoteEvidence && sent.preparation === d.strategicYield.preparation ? d.strategicYield : null
+    if (strategicYield) k.strategicReturn = k.lastYield = { ...strategicYield, fightId, roundScope, enemyHp: sent.enemyHp }
+    if (side.stats.fightEvents.length < 40) side.stats.fightEvents.push({ t: Math.round((t1 - side.t0) / 1000), s: Math.round((gameClock.now() - t1) / 1000), status: r.status, by: r.by && r.by.type, stopped: d.stopped, sw: d.swings, hit: d.landed,
+      ...(strategicYield ? { strategicYield: k.lastYield } : {}) })
+    if (d.killed && String(d.killed).split(', ').includes(side.foe)) side.stats.killed = true
+    side.stats.fights++
+    const why = `fight ${r.status}${r.error ? ': ' + r.error : ''}${d.skipped ? ' skip ' + (d.stopped || d.purpose || '') : ''}${d.stopped && !d.skipped ? ' stop ' + d.stopped : ''} sw ${d.swings ?? '-'}`.slice(0, 90)
+    const kind = why.replace(/sw \d+$/, 'sw #')
+    side.stats.fightWhy[kind] = (side.stats.fightWhy[kind] || 0) + 1
+    // Мгновенный возврат без боя — не крутить: пауза, иначе тысячи вызовов за раунд (s7-arms02: 3996).
+    if (gameClock.now() - t1 < 1000 && !side.stats.killed && !strategicYield) await sleep(1000)
+    return { outcome: side.stats.killed ? 'SUCCESS' : 'PARTIAL', reason: why, events: ev,
+      detail: { swings: d.swings, landed: d.landed, ...(strategicYield ? { strategicYield: k.lastYield } : {}) } }
   }
 }
 

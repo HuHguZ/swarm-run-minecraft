@@ -12,7 +12,8 @@ import { onceSignEditor, writeSign } from './signs'
 
 // ---------------------------------------------------------------- execute
 
-async function execute (session, ctl, job, cells, { deadline }: any) {
+// Всё, с чем работает один вызов execute(): ctx для рук, учёт клеток и то, что меняет цикл (поля, а не let).
+function startExecute (session, ctl, job, cells, deadline) {
   const bot = session.bot
   const t0 = gameClock.now()
   const byKey = new Map(cells.map(c => [c.key, c]))
@@ -25,11 +26,9 @@ async function execute (session, ctl, job, cells, { deadline }: any) {
   const tries = new Map()
   const missing = new Set()
   const crooked = new Set()
-  let unloaded = 0
   const hardSkip = new Set()
   const towerTries = new Map()
   const walkedTo = new Map()
-  let focus = null
   const ctx: any = {
     byKey,
     box,
@@ -40,7 +39,6 @@ async function execute (session, ctl, job, cells, { deadline }: any) {
     towers: job.towers || (job.towers = []),
     saveTowers: () => saveJob(session, job)
   }
-  let stopped = null
 
   bot.pathfinder.setMovements(buildMovements(bot))
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {}; try { bot.setControlState('sneak', false) } catch {} })
@@ -53,30 +51,6 @@ async function execute (session, ctl, job, cells, { deadline }: any) {
     if (hard) hardSkip.add(c.key)
     const at = bot.entity.position
     console.log(`[build] ${c.key} ${c.name} #${n}: ${why} (я ${at.x.toFixed(1)},${at.y.toFixed(1)},${at.z.toFixed(1)})`)
-  }
-
-  // Прошлый вызов оборвался на лесах — сначала слезть и прибрать.
-  for (const t of [...ctx.towers]) {
-    if (onTower(bot, t)) await descend(bot, t, ctx)
-    else await sweepTower(bot, t, ctx)
-  }
-  let tower = null
-
-  // Своя дверь уже стоит (прошлый вызов дошёл до неё), а работы ещё есть —
-  // снять её: pathfinder дверей не открывает. В конце она встанет снова.
-  let reopened = 0
-  const leftWork = cells.some(c => c.kind !== 'door' && c.kind !== 'part' && !isDone(bot, c))
-  for (const d of cells.filter(c => c.kind === 'door' && isDone(bot, c))) {
-    if (!leftWork || ctl.aborted) break
-    if (!inReach(bot, d)) await walk(bot, new goals.GoalNear(d.pos.x, d.pos.y, d.pos.z, 2), 12000)
-    if (inReach(bot, d)) {
-      const r = await digAt(bot, d.pos)
-      if (r.ok) reopened++
-      // Верхнюю половину сервер снимает отдельным обновлением, чуть позже нижней:
-      // карта «куда дойду», снятая раньше, видит проём закрытым.
-      const up = d.pos.offset(0, 1, 0)
-      for (let i = 0; i < 30 && !AIR.has((bot.blockAt(up) || {}).name); i++) await sleep(50)
-    }
   }
 
   const refresh = () => {
@@ -115,179 +89,224 @@ async function execute (session, ctl, job, cells, { deadline }: any) {
       return (c.kind === 'wall' || c.kind === 'floor' || c.kind === 'lantern') ? holds(c, n) : isSolid(n)
     })
   }
+  return { session, ctl, cells, deadline, bot, t0, box, byKey, stats, clock, timed, skipped, tries, missing, crooked, hardSkip, towerTries,
+    walkedTo, ctx, fail, refresh, ready, unloaded: 0, focus: null, stopped: null, tower: null, reopened: 0 }
+}
+type ExecuteRun = ReturnType<typeof startExecute>
 
-  while (!ctl.aborted) {
-    if (gameClock.now() > deadline - (tower ? 9000 : 2500)) { stopped = 'время вышло'; break }
-    const pending = refresh()
-    if (!pending.length) break
-    const phase = Math.min(...pending.map(c => c.phase))
-    const layer = pending.filter(c => c.phase === phase)
-    const workable = layer.filter(c => ready(c) && !missing.has(c.item))
+async function resumeLeftovers (run: ExecuteRun) {
+  const { bot, ctx, cells, ctl } = run
+  // Прошлый вызов оборвался на лесах — сначала слезть и прибрать.
+  for (const t of [...ctx.towers]) {
+    if (onTower(bot, t)) await descend(bot, t, ctx)
+    else await sweepTower(bot, t, ctx)
+  }
+
+  // Своя дверь уже стоит (прошлый вызов дошёл до неё), а работы ещё есть —
+  // снять её: pathfinder дверей не открывает. В конце она встанет снова.
+  const leftWork = cells.some(c => c.kind !== 'door' && c.kind !== 'part' && !isDone(bot, c))
+  for (const d of cells.filter(c => c.kind === 'door' && isDone(bot, c))) {
+    if (!leftWork || ctl.aborted) break
+    if (!inReach(bot, d)) await walk(bot, new goals.GoalNear(d.pos.x, d.pos.y, d.pos.z, 2), 12000)
+    if (inReach(bot, d)) {
+      const r = await digAt(bot, d.pos)
+      if (r.ok) run.reopened++
+      // Верхнюю половину сервер снимает отдельным обновлением, чуть позже нижней:
+      // карта «куда дойду», снятая раньше, видит проём закрытым.
+      const up = d.pos.offset(0, 1, 0)
+      for (let i = 0; i < 30 && !AIR.has((bot.blockAt(up) || {}).name); i++) await sleep(50)
+    }
+  }
+}
+
+type Layer = { pending: any[], phase: number, layer: any[], workable: any[] }
+// Нижняя недоделанная фаза и что из неё можно делать сейчас; 'stop' — конец цикла, 'next' — следующий круг.
+async function nextLayer (run: ExecuteRun): Promise<'stop' | 'next' | Layer> {
+  const { deadline, refresh, ready, missing, skipped, hardSkip, byKey, bot } = run
+  if (gameClock.now() > deadline - (run.tower ? 9000 : 2500)) { run.stopped = 'время вышло'; return 'stop' }
+  const pending = refresh()
+  if (!pending.length) return 'stop'
+  const phase = Math.min(...pending.map(c => c.phase))
+  const layer = pending.filter(c => c.phase === phase)
+  const workable = layer.filter(c => ready(c) && !missing.has(c.item))
+  for (const c of layer) {
+    if (c.kind !== 'air' && missing.has(c.item)) { skipped.set(c.key, `нет ${c.item}`); hardSkip.add(c.key) }
+  }
+  // Дверь — последней и только когда внутри доделано: pathfinder дверей не
+  // открывает, и с дверью на месте следующий вызов внутрь уже не войдёт.
+  if (phase === bp.PHASE.door) {
+    const unfinished = [...skipped.keys()].filter(k => !hardSkip.has(k) && byKey.get(k) && (byKey.get(k) as any).phase < bp.PHASE.door)
+    if (unfinished.length) {
+      for (const c of layer) skipped.set(c.key, `дверь не ставлю: не достроено ${unfinished.length} клеток, проём оставил, чтобы войти`)
+      return 'next'
+    }
+  }
+  if (!workable.length) {
+    // Чанк выгрузился (ушли далеко на леса или за угол) — подождать, а не списывать.
+    if (layer.some(c => !bot.blockAt(c.pos)) && (run.unloaded++ < 20)) { await sleep(500); return 'next' }
     for (const c of layer) {
-      if (c.kind !== 'air' && missing.has(c.item)) { skipped.set(c.key, `нет ${c.item}`); hardSkip.add(c.key) }
+      if (skipped.has(c.key)) continue
+      skipped.set(c.key, c.kind === 'wall' ? 'опоры для неё нет' : 'висит в воздухе: прислонить не к чему')
+      hardSkip.add(c.key)
     }
-    // Дверь — последней и только когда внутри доделано: pathfinder дверей не
-    // открывает, и с дверью на месте следующий вызов внутрь уже не войдёт.
-    if (phase === bp.PHASE.door) {
-      const unfinished = [...skipped.keys()].filter(k => !hardSkip.has(k) && byKey.get(k) && (byKey.get(k) as any).phase < bp.PHASE.door)
-      if (unfinished.length) {
-        for (const c of layer) skipped.set(c.key, `дверь не ставлю: не достроено ${unfinished.length} клеток, проём оставил, чтобы войти`)
-        continue
-      }
-    }
-    if (!workable.length) {
-      // Чанк выгрузился (ушли далеко на леса или за угол) — подождать, а не списывать.
-      if (layer.some(c => !bot.blockAt(c.pos)) && (unloaded++ < 20)) { await sleep(500); continue }
-      for (const c of layer) {
-        if (skipped.has(c.key)) continue
-        skipped.set(c.key, c.kind === 'wall' ? 'опоры для неё нет' : 'висит в воздухе: прислонить не к чему')
-        hardSkip.add(c.key)
-      }
-      continue
-    }
+    return 'next'
+  }
+  return { pending, phase, layer, workable }
+}
 
-    // Порядок: копать сверху вниз (осыпь падает в уже пустое), ставить снизу
-    // вверх полосой в три ряда — чтобы с одного места ложилась вся колонка.
-    let band
-    if (phase === bp.PHASE.clear) {
-      const top = Math.max(...workable.map(c => c.pos.y))
-      band = workable.filter(c => c.pos.y >= top - 2)
-    } else {
-      const low = Math.min(...workable.map(c => c.pos.y))
-      band = workable.filter(c => c.pos.y <= low + 2)
-    }
-    const me = bot.entity.position
-    const byDist = (a, b) => (phase === bp.PHASE.clear ? b.pos.y - a.pos.y : a.pos.y - b.pos.y) || centre(a.pos).distanceTo(me) - centre(b.pos).distanceTo(me)
-    const reachable = c => inReach(bot, c) && !bodyInCell(bot, c.pos) &&
-      !(c.pair && byKey.get(c.pair) && bodyInCell(bot, (byKey.get(c.pair) as any).pos)) &&
-      !(bot.entity.position.floored().offset(0, -1, 0).equals(c.pos))
-    // Сначала то, что уже в руке: смена предмета — это клик по окну и круг до сервера.
-    const held = bot.heldItem ? bot.heldItem.name : null
-    const inHand = (a, b) => ((b.item === held) as any) - ((a.item === held) as any)
-    let target = null
-    // Леса ставились под конкретную клетку — её и первой, не перебирая заново.
-    if (focus) {
-      const f = pending.find(c => c.key === focus)
-      if (f && reachable(f)) target = f
-      else if (f) console.log(`[build] под ${f.key} встал на леса, а не достаю: до глаз ${eyeOf(bot).distanceTo(centre(f.pos)).toFixed(2)}, тело ${bodyInCell(bot, f.pos)}`)
-      focus = null
-    }
-    if (!target) target = band.filter(reachable).sort((a, b) => (phase === bp.PHASE.clear ? 0 : inHand(a, b)) || byDist(a, b))[0]
-    if (!target && tower) target = workable.filter(reachable).sort(byDist)[0]
+// Клетка, которую брать отсюда: та, под которую ставились леса, иначе ближняя из полосы.
+function pickTarget (run: ExecuteRun, { pending, phase, workable }: Layer) {
+  const { bot, byKey } = run
+  // Порядок: копать сверху вниз (осыпь падает в уже пустое), ставить снизу
+  // вверх полосой в три ряда — чтобы с одного места ложилась вся колонка.
+  let band
+  if (phase === bp.PHASE.clear) {
+    const top = Math.max(...workable.map(c => c.pos.y))
+    band = workable.filter(c => c.pos.y >= top - 2)
+  } else {
+    const low = Math.min(...workable.map(c => c.pos.y))
+    band = workable.filter(c => c.pos.y <= low + 2)
+  }
+  const me = bot.entity.position
+  const byDist = (a, b) => (phase === bp.PHASE.clear ? b.pos.y - a.pos.y : a.pos.y - b.pos.y) || centre(a.pos).distanceTo(me) - centre(b.pos).distanceTo(me)
+  const reachable = c => inReach(bot, c) && !bodyInCell(bot, c.pos) &&
+    !(c.pair && byKey.get(c.pair) && bodyInCell(bot, (byKey.get(c.pair) as any).pos)) &&
+    !(bot.entity.position.floored().offset(0, -1, 0).equals(c.pos))
+  // Сначала то, что уже в руке: смена предмета — это клик по окну и круг до сервера.
+  const held = bot.heldItem ? bot.heldItem.name : null
+  const inHand = (a, b) => ((b.item === held) as any) - ((a.item === held) as any)
+  let target = null
+  // Леса ставились под конкретную клетку — её и первой, не перебирая заново.
+  if (run.focus) {
+    const f = pending.find(c => c.key === run.focus)
+    if (f && reachable(f)) target = f
+    else if (f) console.log(`[build] под ${f.key} встал на леса, а не достаю: до глаз ${eyeOf(bot).distanceTo(centre(f.pos)).toFixed(2)}, тело ${bodyInCell(bot, f.pos)}`)
+    run.focus = null
+  }
+  if (!target) target = band.filter(reachable).sort((a, b) => (phase === bp.PHASE.clear ? 0 : inHand(a, b)) || byDist(a, b))[0]
+  if (!target && run.tower) target = workable.filter(reachable).sort(byDist)[0]
+  return { band, me, byDist, reachable, target }
+}
 
-    if (!target) {
-      if (tower) {
-        const b0 = band[0]
-        const e = bot.entity.position
-        console.log(`[build] с лесов ${tower.x},${tower.top},${tower.z} больше не достать: в полосе ${band.length} (${b0.key} до глаз ${eyeOf(bot).distanceTo(centre(b0.pos)).toFixed(2)}, тело в клетке ${bodyInCell(bot, b0.pos)}), готовых ${workable.length}, я ${e.x.toFixed(2)},${e.y.toFixed(2)},${e.z.toFixed(2)}`)
-        await descend(bot, tower, ctx); tower = null; continue
-      }
-      const near = (a, b) => centre(a.pos).distanceTo(me) - centre(b.pos).distanceTo(me)
-      const goal = band.slice().sort((a, b) => (tries.get(a.key) || 0) - (tries.get(b.key) || 0) || near(a, b))[0]
+// Отсюда ничего не достать: дойти до места, откуда достать, поставить леса или списать клетку с причиной.
+async function approach (run: ExecuteRun, { workable }: Layer, { band, me, reachable }) {
+  const { bot, ctx, ctl, box, tries, clock, timed, walkedTo, towerTries, fail } = run
+  if (run.tower) {
+    const b0 = band[0]
+    const e = bot.entity.position
+    console.log(`[build] с лесов ${run.tower.x},${run.tower.top},${run.tower.z} больше не достать: в полосе ${band.length} (${b0.key} до глаз ${eyeOf(bot).distanceTo(centre(b0.pos)).toFixed(2)}, тело в клетке ${bodyInCell(bot, b0.pos)}), готовых ${workable.length}, я ${e.x.toFixed(2)},${e.y.toFixed(2)},${e.z.toFixed(2)}`)
+    await descend(bot, run.tower, ctx); run.tower = null; return
+  }
+  const near = (a, b) => centre(a.pos).distanceTo(me) - centre(b.pos).distanceTo(me)
+  const goal = band.slice().sort((a, b) => (tries.get(a.key) || 0) - (tries.get(b.key) || 0) || near(a, b))[0]
+  ctx.reach = reachMap(bot, box)
+  const spots = standSpots(bot, goal, ctx, { band })
+  let there = false
+  for (const s of spots.slice(0, 3)) {
+    if (ctl.aborted) break
+    clock.walks++
+    await timed('walk', () => walk(bot, new goals.GoalBlock(s.p.x, s.p.y, s.p.z), 12000))
+    if (reachable(goal)) { there = true; break }
+  }
+  if (ctl.aborted) return
+  if (there) { walkedTo.set(goal.key, (walkedTo.get(goal.key) || 0) + 1); if (walkedTo.get(goal.key) > 3) fail(goal, 'дохожу, а взять не выходит', true); return }
+  // Леса — только когда клетка правда высоко. Низкая, до которой не
+  // дошли, — это дорога, а не рост, и столб её не решит.
+  if (spots.length && goal.pos.y - bot.entity.position.floored().y < 4) {
+    fail(goal, 'не дошёл до места, откуда достать')
+    return
+  }
+  const up = await towerFor(bot, ctl, goal, ctx)
+  if (up.ok) {
+    run.tower = up.tower
+    run.focus = goal.key
+    const n = (towerTries.get(goal.key) || 0) + 1
+    towerTries.set(goal.key, n)
+    // Леса под одну и ту же клетку в третий раз — дело не в высоте.
+    if (n > 2) fail(goal, 'и с лесов не выходит поставить', true)
+    return
+  }
+  fail(goal, spots.length ? `не дошёл, куда встать (${up.why})` : `встать некуда: ${up.why}`)
+}
+
+// --- работа над клеткой
+async function workCell (run: ExecuteRun, target) {
+  const { bot, ctx, byKey, box, stats, timed, missing, crooked, skipped, fail } = run
+  const c = target
+  if (c.kind === 'air') {
+    const r = await timed('dig', () => digAt(bot, c.pos))
+    if (r.ok) { if (!r.already) stats.dug++ } else fail(c, r.why, r.hard)
+    return
+  }
+  const who = squatter(bot, c.pos)
+  if (who) { fail(c, `в клетке стоит ${who}`); await sleep(400); return }
+
+  // Чужой блок на месте — убрать. Заделку (seal) твёрдое устраивает всегда.
+  const w = bot.blockAt(c.pos)
+  if (w && !AIR.has(w.name)) {
+    if (FLUID.test(w.name)) { fail(c, `в клетке ${w.name}`, true); return }
+    const r = await timed('dig', () => digAt(bot, c.pos))
+    if (!r.ok) { fail(c, `мешает ${w.name}: ${r.why}`, r.hard); return }
+    if (w.name === c.name) stats.redo++
+  }
+  if (c.pair) {
+    const pc: any = byKey.get(c.pair)
+    const pw = pc && bot.blockAt(pc.pos)
+    if (pw && !AIR.has(pw.name)) {
+      const r = await digAt(bot, pc.pos)
+      if (!r.ok) { fail(c, `вторая клетка занята ${pw.name}`, r.hard); return }
+    }
+  }
+  // Не замуровать себя: пока тело внутри, после этого блока выход должен остаться.
+  const feet = bot.entity.position.floored()
+  // Выход закрывают только клетки на уровне ног и головы (и та, что над ней,
+  // — для прыжка): поиск пути наружу — десятки мс, и на крышу его не тратим.
+  // Факел, табличка, фонарь, лестница проход не закрывают — их не проверяем.
+  const blocks = !(c.kind === 'wall' || c.kind === 'floor' || c.kind === 'lantern')
+  if (blocks && insideBox(feet, box) && c.pos.y >= feet.y - 1 && c.pos.y <= feet.y + 2) {
+    const extra = new Set([c.key])
+    if (c.pair) extra.add(c.pair)
+    if (!canWalkOut(bot, box, extra)) {
+      // Стою на своих лесах — сперва слезть: столб в клетке за проёмом сам
+      // закрывает выход (так и было: леса под конёк встали прямо за дверью).
+      if (run.tower) { await descend(bot, run.tower, ctx); run.tower = null; return }
       ctx.reach = reachMap(bot, box)
-      const spots = standSpots(bot, goal, ctx, { band })
-      let there = false
-      for (const s of spots.slice(0, 3)) {
-        if (ctl.aborted) break
-        clock.walks++
-        await timed('walk', () => walk(bot, new goals.GoalBlock(s.p.x, s.p.y, s.p.z), 12000))
-        if (reachable(goal)) { there = true; break }
+      const out = standSpots(bot, c, ctx, { outside: box })
+      let moved = false
+      for (const s of out.slice(0, 3)) {
+        await walk(bot, new goals.GoalBlock(s.p.x, s.p.y, s.p.z), 15000)
+        if (!insideBox(bot.entity.position.floored(), box) && inReach(bot, c)) { moved = true; break }
       }
-      if (ctl.aborted) continue
-      if (there) { walkedTo.set(goal.key, (walkedTo.get(goal.key) || 0) + 1); if (walkedTo.get(goal.key) > 3) fail(goal, 'дохожу, а взять не выходит', true); continue }
-      // Леса — только когда клетка правда высоко. Низкая, до которой не
-      // дошли, — это дорога, а не рост, и столб её не решит.
-      if (spots.length && goal.pos.y - bot.entity.position.floored().y < 4) {
-        fail(goal, 'не дошёл до места, откуда достать')
-        continue
-      }
-      const up = await towerFor(bot, ctl, goal, ctx)
-      if (up.ok) {
-        tower = up.tower
-        focus = goal.key
-        const n = (towerTries.get(goal.key) || 0) + 1
-        towerTries.set(goal.key, n)
-        // Леса под одну и ту же клетку в третий раз — дело не в высоте.
-        if (n > 2) fail(goal, 'и с лесов не выходит поставить', true)
-        continue
-      }
-      fail(goal, spots.length ? `не дошёл, куда встать (${up.why})` : `встать некуда: ${up.why}`)
-      continue
-    }
-
-    // --- работа над клеткой
-    const c = target
-    if (c.kind === 'air') {
-      const r = await timed('dig', () => digAt(bot, c.pos))
-      if (r.ok) { if (!r.already) stats.dug++ } else fail(c, r.why, r.hard)
-      continue
-    }
-    const who = squatter(bot, c.pos)
-    if (who) { fail(c, `в клетке стоит ${who}`); await sleep(400); continue }
-
-    // Чужой блок на месте — убрать. Заделку (seal) твёрдое устраивает всегда.
-    const w = bot.blockAt(c.pos)
-    if (w && !AIR.has(w.name)) {
-      if (FLUID.test(w.name)) { fail(c, `в клетке ${w.name}`, true); continue }
-      const r = await timed('dig', () => digAt(bot, c.pos))
-      if (!r.ok) { fail(c, `мешает ${w.name}: ${r.why}`, r.hard); continue }
-      if (w.name === c.name) stats.redo++
-    }
-    if (c.pair) {
-      const pc: any = byKey.get(c.pair)
-      const pw = pc && bot.blockAt(pc.pos)
-      if (pw && !AIR.has(pw.name)) {
-        const r = await digAt(bot, pc.pos)
-        if (!r.ok) { fail(c, `вторая клетка занята ${pw.name}`, r.hard); continue }
-      }
-    }
-    // Не замуровать себя: пока тело внутри, после этого блока выход должен остаться.
-    const feet = bot.entity.position.floored()
-    // Выход закрывают только клетки на уровне ног и головы (и та, что над ней,
-    // — для прыжка): поиск пути наружу — десятки мс, и на крышу его не тратим.
-    // Факел, табличка, фонарь, лестница проход не закрывают — их не проверяем.
-    const blocks = !(c.kind === 'wall' || c.kind === 'floor' || c.kind === 'lantern')
-    if (blocks && insideBox(feet, box) && c.pos.y >= feet.y - 1 && c.pos.y <= feet.y + 2) {
-      const extra = new Set([c.key])
-      if (c.pair) extra.add(c.pair)
-      if (!canWalkOut(bot, box, extra)) {
-        // Стою на своих лесах — сперва слезть: столб в клетке за проёмом сам
-        // закрывает выход (так и было: леса под конёк встали прямо за дверью).
-        if (tower) { await descend(bot, tower, ctx); tower = null; continue }
-        ctx.reach = reachMap(bot, box)
-        const out = standSpots(bot, c, ctx, { outside: box })
-        let moved = false
-        for (const s of out.slice(0, 3)) {
-          await walk(bot, new goals.GoalBlock(s.p.x, s.p.y, s.p.z), 15000)
-          if (!insideBox(bot.entity.position.floored(), box) && inReach(bot, c)) { moved = true; break }
-        }
-        if (!moved) { fail(c, 'замуровал бы себя изнутри: снаружи до клетки не дотянуться'); continue }
-      }
-    }
-
-    const sign: any = c.text && c.text.length ? onceSignEditor(bot, 2500) : null
-    const r = await timed('place', () => putCell(bot, c, { onSign: sign ? () => sign : null }))
-    if (!r.ok) {
-      if (sign) sign.cancel()
-      if (r.noItem) { missing.add(c.item); fail(c, r.why, true) } else fail(c, r.why)
-      continue
-    }
-    stats.placed++
-    if (!r.match) {
-      // Встал, но не тем боком. Один повтор (следующий круг выкопает и
-      // поставит снова), потом — как есть, с причиной: иначе круг вечный.
-      const got = JSON.stringify(propsOf(bot.blockAt(c.pos)))
-      if (crooked.has(c.key)) skipped.set(c.key, `встал не тем боком: ${got}`)
-      else { crooked.add(c.key); c.lastWhy = `встал не тем боком: ${got}` }
-      continue
-    }
-    if (sign) {
-      const s = await writeSign(bot, c.pos, c.text, { opened: sign })
-      if (!s.ok) c.signWhy = s.why
-      else stats.signs = (stats.signs || 0) + 1
+      if (!moved) { fail(c, 'замуровал бы себя изнутри: снаружи до клетки не дотянуться'); return }
     }
   }
 
+  const sign: any = c.text && c.text.length ? onceSignEditor(bot, 2500) : null
+  const r = await timed('place', () => putCell(bot, c, { onSign: sign ? () => sign : null }))
+  if (!r.ok) {
+    if (sign) sign.cancel()
+    if (r.noItem) { missing.add(c.item); fail(c, r.why, true) } else fail(c, r.why)
+    return
+  }
+  stats.placed++
+  if (!r.match) {
+    // Встал, но не тем боком. Один повтор (следующий круг выкопает и
+    // поставит снова), потом — как есть, с причиной: иначе круг вечный.
+    const got = JSON.stringify(propsOf(bot.blockAt(c.pos)))
+    if (crooked.has(c.key)) skipped.set(c.key, `встал не тем боком: ${got}`)
+    else { crooked.add(c.key); c.lastWhy = `встал не тем боком: ${got}` }
+    return
+  }
+  if (sign) {
+    const s = await writeSign(bot, c.pos, c.text, { opened: sign })
+    if (!s.ok) c.signWhy = s.why
+    else stats.signs = (stats.signs || 0) + 1
+  }
+}
+
+// Слезть с лесов, вернуть движения и отчёт: что осталось и почему, чего не хватило, куда ушло время.
+async function finishExecute (run: ExecuteRun) {
+  const { session, ctl, cells, bot, t0, box, stats, clock, skipped, missing, ctx, tower, reopened, stopped } = run
   if (tower && !ctl.aborted) await descend(bot, tower, ctx)
   try { session.updateMovements(true) } catch {}
 
@@ -327,6 +346,22 @@ async function execute (session, ctl, job, cells, { deadline }: any) {
     seconds: Math.round((gameClock.now() - t0) / 1000),
     timing: { walk: Math.round(clock.walk / 1000), walks: clock.walks, place: Math.round(clock.place / 1000), dig: Math.round(clock.dig / 1000) }
   }
+}
+
+async function execute (session, ctl, job, cells, { deadline }: any) {
+  const run = startExecute(session, ctl, job, cells, deadline)
+  await resumeLeftovers(run)
+
+  while (!ctl.aborted) {
+    const layer = await nextLayer(run)
+    if (layer === 'stop') break
+    if (layer === 'next') continue
+    const pick = pickTarget(run, layer)
+    if (!pick.target) { await approach(run, layer, pick); continue }
+    await workCell(run, pick.target)
+  }
+
+  return finishExecute(run)
 }
 
 export { execute }

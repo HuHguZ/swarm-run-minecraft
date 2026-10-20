@@ -1,12 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { cjsContext } from './cjs-context'
 import { Vec3 } from 'vec3'
-import { transformSync } from 'esbuild'
+import { bodySource } from './source-fixture'
 
 async function receipt({ sky = true, openSides = 2, targetY = null, pitExit = false } = {}) {
   const file = path.join(__dirname, '../src/survival/surface-body.ts'), realRequire = createRequire(file)
@@ -26,7 +25,8 @@ async function receipt({ sky = true, openSides = 2, targetY = null, pitExit = fa
     if (name === './recover-loot') return { ...actual, pitCheck: () => ({ out: pitExit, free: false, sky }), openSky: () => sky }
     return actual
   } }
-  vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts' }).code, cjsContext(context))
+  // surface-body — ES-модуль: bodySource превращает импорты в require (заглушки по spec выше).
+  vm.runInNewContext(bodySource(file), cjsContext(context))
   return context.module.exports.surface({ bot, mcData: {}, journal: { append() {} } },
     { aborted: !sky && targetY === null || openSides < 2 && !pitExit, onAbort: [] }, { targetY })
 }

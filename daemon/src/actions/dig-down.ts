@@ -6,10 +6,10 @@ import { hazardAt, FREE_FALL, floorBelow, groundUnder, judgeDrop, dropFields, se
 import { STAIR_DIRS, facingDir, dirName, STAIR_DIR_LIST, canFootStep, shaftWayOut, ledgeReport, stepForward,
   standingCell, walkOff, placeTorch } from './stair-steps'
 import { descentGuard } from './descent-guard'
-const gameClock: typeof import('../game-clock') = require('../game-clock')
-const { sleep, xyz }: typeof import('../movement') = require('../movement')
-const { equipBestTool, missingHarvestTool, countItems, diffItems, toolShortfall, toolStatus, SWINGS_PER_LEVEL }: typeof import('../items') = require('../items')
-const { withTimeout, placeBlockAt, pickFiller }: typeof import('../build') = require('../build')
+import * as gameClock from '../game-clock'
+import { sleep, xyz } from '../movement'
+import { equipBestTool, missingHarvestTool, countItems, diffItems, toolShortfall, toolStatus, SWINGS_PER_LEVEL } from '../items'
+import { withTimeout, placeBlockAt, pickFiller } from '../build'
 // Stone does not lie around on the surface; getting to it means going down.
 // Straight down is how players die to lava, so check two blocks ahead before
 // every swing and refuse rather than gamble.
@@ -119,9 +119,40 @@ async function finishDig (bot, ctl, before, dug, stopped, { drops = [], ledge = 
 // `call` is how the caller's own tool is named in a refusal: mc_recover digs
 // with this same staircase, and «прыгну, если позовёшь mc_dig_down» sent from
 // inside it would name a sixteen-level dig past the pile instead of the retry.
+//
+// По шагам: startStairs ставит контекст sc — всё, что было замыканием digStairs (бывшие let — поля sc);
+// уровень — три ступени над кадром lv (клетки ступени, прыжок, ночная работа): stairsFooting (проверки и опора),
+// stairsCut (вырубка клеток), stairsDescend (шаг вниз, счёт уровней, факел, подбор); ответ 'stop' — прежний
+// break. stairsReport — итог.
+interface StairsCtx {
+  session: any; ctl: any; bot: any; mcData: any; dir: any; dx: any; dz: any; want: any; deadline: any; again: any;
+  before: any; from: any; drops: any; guard: any; torchEvery: any; maxFallHp: any; nightWork: any;
+  cut: any; stalls: any; torches: any; stopped: any; noFooting: any; bridged: any; propped: any; underside: any;
+  spent: any; ledge: any
+}
+
+interface StairsLevel { feet: any; head: any; mid: any; low: any; land: any; drop: any; jump: any; work: any }
+
 async function digStairs (session, ctl, {
   depth = 16, direction = null, torchEvery = 6, timeoutSeconds = 240, maxFallHp = 0, call = null, nightWork = false
 }: any = {}) {
+  const sc = startStairs(session, ctl, { depth, direction, torchEvery, timeoutSeconds, maxFallHp, call, nightWork })
+  const { want } = sc
+
+  // Loop on levels delivered, not swings taken: the caller asked for a depth,
+  // and a lip-stop that costs an iteration should not cost a metre of descent.
+  // The iteration cap is only a runaway guard.
+  for (let i = 0; sc.cut < want && i < want * 3 && !ctl.aborted; i++) {
+    const lv = {} as StairsLevel
+    if (await stairsFooting(sc, lv) === 'stop') break
+    if (await stairsCut(sc, lv) === 'stop') break
+    if (await stairsDescend(sc, lv) === 'stop') break
+  }
+
+  return stairsReport(sc)
+}
+
+function startStairs (session, ctl, { depth, direction, torchEvery, timeoutSeconds, maxFallHp, call, nightWork }): StairsCtx {
   const bot = session.bot
   const mcData = session.mcData
   const dir = direction && STAIR_DIRS[direction] ? STAIR_DIRS[direction] : facingDir(bot)
@@ -152,216 +183,236 @@ async function digStairs (session, ctl, {
   const guard = descentGuard(session, { dir, again, own: !call })
 
   ctl.onAbort.push(() => { try { bot.clearControlStates() } catch {} })
+  return {
+    session, ctl, bot, mcData, dir, dx, dz, want, deadline, again, before, from, drops, guard, torchEvery, maxFallHp, nightWork,
+    cut, stalls, torches, stopped, noFooting, bridged, propped, underside, spent, ledge
+  }
+}
 
-  // Loop on levels delivered, not swings taken: the caller asked for a depth,
-  // and a lip-stop that costs an iteration should not cost a metre of descent.
-  // The iteration cap is only a runaway guard.
-  for (let i = 0; cut < want && i < want * 3 && !ctl.aborted; i++) {
-    if (gameClock.now() >= deadline) { stopped = `время вышло на ${cut}-й ступеньке`; break }
-    const hp = bot.health ?? 20
-    if (hp < 6) { stopped = `здоровья ${Math.round(hp)} — дальше не копаю`; break }
+// Начало уровня: время, здоровье, кирка, взгляд, клетки ступени, опасность, опора над пещерой или прыжок в неё.
+async function stairsFooting (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | undefined> {
+  const { session, bot, mcData, dir, dx, dz, deadline, again, guard, maxFallHp } = sc
+  if (gameClock.now() >= deadline) { sc.stopped = `время вышло на ${sc.cut}-й ступеньке`; return 'stop' }
+  const hp = bot.health ?? 20
+  if (hp < 6) { sc.stopped = `здоровья ${Math.round(hp)} — дальше не копаю`; return 'stop' }
 
-    // Ten levels of pickaxe left is the line, not zero. Measured on the descent
-    // that stranded the bot at y=-58: forty levels cost 166 swings and then 182,
-    // so a level is four, and running out at depth is not a setback but the end
-    // of the run — it could neither dig on nor cut a staircase home, carrying
-    // 208 cobblestone the whole time. Asked every level, so the same line is
-    // also the up-front refusal when the bag is already under it.
-    const worn = toolShortfall(bot, mcData, { need: SWINGS_PER_LEVEL })
-    if (worn) { stopped = worn; break }
+  // Ten levels of pickaxe left is the line, not zero. Measured on the descent
+  // that stranded the bot at y=-58: forty levels cost 166 swings and then 182,
+  // so a level is four, and running out at depth is not a setback but the end
+  // of the run — it could neither dig on nor cut a staircase home, carrying
+  // 208 cobblestone the whole time. Asked every level, so the same line is
+  // also the up-front refusal when the bag is already under it.
+  const worn = toolShortfall(bot, mcData, { need: SWINGS_PER_LEVEL })
+  if (worn) { sc.stopped = worn; return 'stop' }
 
-    // Once at the top of every level and again before every swing below: a
-    // step is three cells of rock, several seconds, and a zombie covers the
-    // whole watch radius inside one step (the climb measured that as eight hits
-    // and no wall, survival.js stairStep).
-    const alarm = await guard.check()
-    if (alarm) { stopped = alarm; break }
+  // Once at the top of every level and again before every swing below: a
+  // step is three cells of rock, several seconds, and a zombie covers the
+  // whole watch radius inside one step (the climb measured that as eight hits
+  // and no wall, survival.js stairStep).
+  const alarm = await guard.check()
+  if (alarm) { sc.stopped = alarm; return 'stop' }
 
-    const feet = standingCell(bot)
-    // Stepping from feet down to (dir, -1): the body walks through the two
-    // cells at its own height and drops into the one below them.
-    const head = feet.offset(dx, 1, dz)
-    const mid = feet.offset(dx, 0, dz)
-    const low = feet.offset(dx, -1, dz)
-    const land = feet.offset(dx, -2, dz)
+  const feet = standingCell(bot)
+  // Stepping from feet down to (dir, -1): the body walks through the two
+  // cells at its own height and drops into the one below them.
+  const head = feet.offset(dx, 1, dz)
+  const mid = feet.offset(dx, 0, dz)
+  const low = feet.offset(dx, -1, dz)
+  const land = feet.offset(dx, -2, dz)
 
-    const hz = hazardAt(bot, [head, mid, low])
-    if (hz) { stopped = `${hz} — дальше не копаю`; break }
-    const lowBlock = bot.blockAt(low)
-    if (lowBlock && lowBlock.name === 'bedrock') { stopped = 'бедрок — ниже не пройти'; break }
+  const hz = hazardAt(bot, [head, mid, low])
+  if (hz) { sc.stopped = `${hz} — дальше не копаю`; return 'stop' }
+  const lowBlock = bot.blockAt(low)
+  if (lowBlock && lowBlock.name === 'bedrock') { sc.stopped = 'бедрок — ниже не пройти'; return 'stop' }
 
-    // Nothing to land on means a cave under the step. Bridging keeps the
-    // staircase walkable both ways, but a block can only be placed against a
-    // solid neighbour and over open cave there frequently is none — that is
-    // exactly where the first real descent stopped, at y=-27 with four
-    // directions all refusing. A cave is not an obstacle on the way down, it is
-    // a free thirty blocks, so drop into it when the floor is close enough to
-    // land on unhurt, and only bridge when it is not.
-    //
-    // Order, and why: free drop, then support, then a paid drop, then refuse.
-    // Support comes BEFORE any cutting: the cell under the step has no face of
-    // its own over a cave, but until the step is cut the step block is a face
-    // (its underside), and when the step cell is already open — the run of
-    // 2026-09-15 stopped on exactly that lip, eight legs at 160,40,120 and down —
-    // a prop in it against the side of our own floor makes one. The prop is cut
-    // out again as the step itself, so the staircase keeps its shape and costs
-    // one block per level over the cave. Health comes after blocks because
-    // health is the resource whose shortage ends the trip, and every step gives
-    // back two or three cobblestone.
-    const under = bot.blockAt(land)
-    let drop = 1
-    let jump = null
-    if (!under || under.boundingBox !== 'block') {
-      const reach = floorBelow(bot, low, FREE_FALL)
-      if (reach !== null) {
-        drop = reach
+  // Nothing to land on means a cave under the step. Bridging keeps the
+  // staircase walkable both ways, but a block can only be placed against a
+  // solid neighbour and over open cave there frequently is none — that is
+  // exactly where the first real descent stopped, at y=-27 with four
+  // directions all refusing. A cave is not an obstacle on the way down, it is
+  // a free thirty blocks, so drop into it when the floor is close enough to
+  // land on unhurt, and only bridge when it is not.
+  //
+  // Order, and why: free drop, then support, then a paid drop, then refuse.
+  // Support comes BEFORE any cutting: the cell under the step has no face of
+  // its own over a cave, but until the step is cut the step block is a face
+  // (its underside), and when the step cell is already open — the run of
+  // 2026-09-15 stopped on exactly that lip, eight legs at 160,40,120 and down —
+  // a prop in it against the side of our own floor makes one. The prop is cut
+  // out again as the step itself, so the staircase keeps its shape and costs
+  // one block per level over the cave. Health comes after blocks because
+  // health is the resource whose shortage ends the trip, and every step gives
+  // back two or three cobblestone.
+  const under = bot.blockAt(land)
+  let drop = 1
+  let jump = null
+  if (!under || under.boundingBox !== 'block') {
+    const reach = floorBelow(bot, low, FREE_FALL)
+    if (reach !== null) {
+      drop = reach
+    } else {
+      const put = await placeBlockAt(bot, land, { steady: true, prop: low })
+      if (put.ok) {
+        sc.bridged++
+        if (put.prop) sc.propped++
+        if (put.face === 'bottom') sc.underside++
       } else {
-        const put = await placeBlockAt(bot, land, { steady: true, prop: low })
-        if (put.ok) {
-          bridged++
-          if (put.prop) propped++
-          if (put.face === 'bottom') underside++
+        const verdict: any = judgeDrop(session, bot, mid, groundUnder(bot, mid, 32, [low]), maxFallHp, sc.spent, again)
+        if (verdict.ok) {
+          drop = verdict.fall
+          jump = { verdict, hp: bot.health ?? 20 }
         } else {
-          const verdict: any = judgeDrop(session, bot, mid, groundUnder(bot, mid, 32, [low]), maxFallHp, spent, again)
-          if (verdict.ok) {
-            drop = verdict.fall
-            jump = { verdict, hp: bot.health ?? 20 }
-          } else {
-            // Asked before the answer is written rather than after: whether the
-            // other three directions are worth a leg of the trip is the one thing
-            // the caller cannot work out from the words on its own.
-            const canBuild = !!pickFiller(bot, { steady: true })
-            const other = STAIR_DIR_LIST
-              .filter(d => d[0] !== dx || d[1] !== dz)
-              .find(d => canFootStep(bot, feet, d[0], d[1], canBuild))
-            noFooting = !other && !canFootStep(bot, feet, dx, dz, canBuild)
-            ;({ stopped, ledge } = ledgeReport(bot, feet, dir, put, other, noFooting, verdict, { canBuild, call: again }))
-            break
-          }
+          // Asked before the answer is written rather than after: whether the
+          // other three directions are worth a leg of the trip is the one thing
+          // the caller cannot work out from the words on its own.
+          const canBuild = !!pickFiller(bot, { steady: true })
+          const other = STAIR_DIR_LIST
+            .filter(d => d[0] !== dx || d[1] !== dz)
+            .find(d => canFootStep(bot, feet, d[0], d[1], canBuild))
+          sc.noFooting = !other && !canFootStep(bot, feet, dx, dz, canBuild)
+          ;({ stopped: sc.stopped, ledge: sc.ledge } = ledgeReport(bot, feet, dir, put, other, sc.noFooting, verdict, { canBuild, call: again }))
+          return 'stop'
         }
       }
     }
+  }
+  Object.assign(lv, { feet, head, mid, low, land, drop, jump })
+}
 
-    let refused = null
-    for (const cell of [head, mid, low]) {
-      if (ctl.aborted) break
-      const b = bot.blockAt(cell)
-      if (!b || b.boundingBox === 'empty') continue
-      const seen = await guard.check()
-      if (seen) { refused = seen; break }
-      const problem = missingHarvestTool(bot, b, mcData)
-      if (problem) { refused = problem; break }
+// Вырубить клетки ступени (и убедиться, что блок и правда ушёл), взгляд после, ночная работа.
+async function stairsCut (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | undefined> {
+  const { ctl, bot, mcData, guard, nightWork } = sc
+  const { feet, head, mid, low } = lv
+  let refused = null
+  for (const cell of [head, mid, low]) {
+    if (ctl.aborted) break
+    const b = bot.blockAt(cell)
+    if (!b || b.boundingBox === 'empty') continue
+    const seen = await guard.check()
+    if (seen) { refused = seen; break }
+    const problem = missingHarvestTool(bot, b, mcData)
+    if (problem) { refused = problem; break }
+    try {
+      await equipBestTool(bot, b)
+      await withTimeout(bot.dig(b), 20000, 'блок не ломается')
+    } catch (e) {
+      refused = e.message
+      break
+    }
+    // Verify rather than trust. Gravel refills the slot as fast as we empty
+    // it, and a swing the server quietly refuses returns without error and
+    // leaves the block standing — the bot then walks onto the step instead of
+    // into it, and the staircase flattens. One retry, then give up honestly.
+    const left = bot.blockAt(cell)
+    if (left && left.boundingBox !== 'empty') {
       try {
-        await equipBestTool(bot, b)
-        await withTimeout(bot.dig(b), 20000, 'блок не ломается')
+        await equipBestTool(bot, left)
+        await withTimeout(bot.dig(left), 20000, 'блок не ломается')
       } catch (e) {
         refused = e.message
         break
       }
-      // Verify rather than trust. Gravel refills the slot as fast as we empty
-      // it, and a swing the server quietly refuses returns without error and
-      // leaves the block standing — the bot then walks onto the step instead of
-      // into it, and the staircase flattens. One retry, then give up honestly.
-      const left = bot.blockAt(cell)
-      if (left && left.boundingBox !== 'empty') {
-        try {
-          await equipBestTool(bot, left)
-          await withTimeout(bot.dig(left), 20000, 'блок не ломается')
-        } catch (e) {
-          refused = e.message
-          break
-        }
-        const still = bot.blockAt(cell)
-        if (still && still.boundingBox !== 'empty') {
-          refused = `${still.name} на ${cell.x},${cell.y},${cell.z} не ломается`
-          break
-        }
+      const still = bot.blockAt(cell)
+      if (still && still.boundingBox !== 'empty') {
+        refused = `${still.name} на ${cell.x},${cell.y},${cell.z} не ломается`
+        break
       }
     }
-    if (refused) { stopped = refused; break }
-    // The last cell cut is the one most likely to have opened a cave, and the
-    // step itself is the next second or so.
-    const opened = await guard.check()
-    if (opened) { stopped = opened; break }
-    const work = nightWork ? (require('../night-work') as typeof import('../night-work')).step(bot, low, feet, 3.25, undefined, 3) : null
-    if (work?.stopped) {
-      const cover = await (require('../night-work') as typeof import('../night-work')).closeBehind(bot, ctl, mid)
-      stopped = `${work.stopped}; ${cover || 'проход закрыт перед собой'}`
-      break
-    }
+  }
+  if (refused) { sc.stopped = refused; return 'stop' }
+  // The last cell cut is the one most likely to have opened a cave, and the
+  // step itself is the next second or so.
+  const opened = await guard.check()
+  if (opened) { sc.stopped = opened; return 'stop' }
+  const work = nightWork ? (require('../night-work') as typeof import('../night-work')).step(bot, low, feet, 3.25, undefined, 3) : null
+  if (work?.stopped) {
+    const cover = await (require('../night-work') as typeof import('../night-work')).closeBehind(bot, ctl, mid)
+    sc.stopped = `${work.stopped}; ${cover || 'проход закрыт перед собой'}`
+    return 'stop'
+  }
+  lv.work = work
+}
 
-    // Into a drop the body goes by walkOff, which lands it in the column the
-    // drop was judged on; a free three-block drop that drifts onto a deeper
-    // floor next door is a paid one nobody agreed to.
-    if (drop > 1) {
-      if (!await walkOff(bot, ctl, low, dir, feet.y)) { stopped = 'не смог сойти с уступа в пещеру'; break }
-    } else if (!await stepForward(bot, ctl, low)) { stopped = 'не смог шагнуть на ступеньку'; break }
+// Шаг на ступень (или с уступа в пещеру), дождаться высоты, счёт уровней, взгляд, факел, подбор.
+async function stairsDescend (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | undefined> {
+  const { ctl, bot, dir, dx, dz, drops, guard, torchEvery } = sc
+  const { feet, low, drop, jump, work } = lv
+  // Into a drop the body goes by walkOff, which lands it in the column the
+  // drop was judged on; a free three-block drop that drifts onto a deeper
+  // floor next door is a paid one nobody agreed to.
+  if (drop > 1) {
+    if (!await walkOff(bot, ctl, low, dir, feet.y)) { sc.stopped = 'не смог сойти с уступа в пещеру'; return 'stop' }
+  } else if (!await stepForward(bot, ctl, low)) { sc.stopped = 'не смог шагнуть на ступеньку'; return 'stop' }
 
-    // Confirm the body is standing IN the step, not on its lip. Planning the
-    // next cut from the old level flattens the staircase into a corridor —
-    // measured: 20 steps for 13 levels. Waiting for onGround alone is not
-    // enough, because standing on the edge is also "on ground"; the height has
-    // to have actually changed.
-    // A long drop needs a long wait: twelve blocks take most of a second in the
-    // air, and reading the height mid-fall counts a stall.
-    const settleFor = drop > 1 ? 1500 + drop * 150 : 1200
-    let settle = gameClock.now() + settleFor
+  // Confirm the body is standing IN the step, not on its lip. Planning the
+  // next cut from the old level flattens the staircase into a corridor —
+  // measured: 20 steps for 13 levels. Waiting for onGround alone is not
+  // enough, because standing on the edge is also "on ground"; the height has
+  // to have actually changed.
+  // A long drop needs a long wait: twelve blocks take most of a second in the
+  // air, and reading the height mid-fall counts a stall.
+  const settleFor = drop > 1 ? 1500 + drop * 150 : 1200
+  let settle = gameClock.now() + settleFor
+  while (gameClock.now() < settle && !ctl.aborted) {
+    if (bot.entity.position.floored().y <= low.y && bot.entity.onGround) break
+    if (drop > 1 && bot.entity.position.floored().y < feet.y && bot.entity.onGround) break
+    await sleep(60)
+  }
+  // Still on the lip. The second push used to aim at the same column centre,
+  // and stepForward counts half a block short of that as arrived — so it
+  // returned without a tick of walking, from exactly the spot where a body
+  // whose hitbox still overhangs the edge stands on it. That is the flattened
+  // staircase above, and over a cave it is also a decided drop not taken.
+  // Aim past the centre: in rock the uncut wall ahead stops the body anyway,
+  // on a bridged step the landing block is still under it at +0.4.
+  if (bot.entity.position.floored().y >= feet.y && !ctl.aborted) {
+    await stepForward(bot, ctl, low.offset(dx * 0.4, 0, dz * 0.4), 900)
+    settle = gameClock.now() + settleFor
     while (gameClock.now() < settle && !ctl.aborted) {
-      if (bot.entity.position.floored().y <= low.y && bot.entity.onGround) break
-      if (drop > 1 && bot.entity.position.floored().y < feet.y && bot.entity.onGround) break
+      if (bot.entity.position.floored().y < feet.y && bot.entity.onGround) break
       await sleep(60)
     }
-    // Still on the lip. The second push used to aim at the same column centre,
-    // and stepForward counts half a block short of that as arrived — so it
-    // returned without a tick of walking, from exactly the spot where a body
-    // whose hitbox still overhangs the edge stands on it. That is the flattened
-    // staircase above, and over a cave it is also a decided drop not taken.
-    // Aim past the centre: in rock the uncut wall ahead stops the body anyway,
-    // on a bridged step the landing block is still under it at +0.4.
-    if (bot.entity.position.floored().y >= feet.y && !ctl.aborted) {
-      await stepForward(bot, ctl, low.offset(dx * 0.4, 0, dz * 0.4), 900)
-      settle = gameClock.now() + settleFor
-      while (gameClock.now() < settle && !ctl.aborted) {
-        if (bot.entity.position.floored().y < feet.y && bot.entity.onGround) break
-        await sleep(60)
-      }
-    }
-    if (jump) {
-      await sleep(400) // fall damage lands on the landing tick, update_health a packet later
-      const fell = feet.y - bot.entity.position.floored().y
-      if (fell > 0) spent += recordDrop(drops, bot, feet, fell, jump)
-    }
-
-    // Count levels actually gained, not swings taken. A step that cut its cells
-    // but left the body at the same height is not progress, and three of those
-    // in a row means something is in the way that another lap will not move.
-    const gainedLevels = feet.y - bot.entity.position.floored().y
-    if (gainedLevels > 0) {
-      // A step into a cave can be worth several levels at once, and the caller
-      // asked for depth, not for swings.
-      cut += gainedLevels
-      stalls = 0
-    } else if (++stalls >= 3) {
-      stopped = 'ступенька не углубляется — что-то мешает'
-      break
-    }
-    // Before the torch and the pickup: the pickup walks for up to two and a half
-    // seconds every fourth level, the longest stretch of a level with no look.
-    const landed = await guard.check()
-    if (landed) { stopped = landed; break }
-    if (work?.close) {
-      stopped = await (require('../night-work') as typeof import('../night-work')).closeBehind(bot, ctl, feet)
-      if (stopped) break
-    }
-    // Light the step we just left. An unlit staircase is a mob spawner pointed
-    // at our own back — the run that died at depth was killed by something that
-    // spawned in the dark behind it, not by anything it dug into.
-    if (!work?.close && torchEvery > 0 && cut % torchEvery === 0 && await placeTorch(bot, feet)) torches++
-
-    // Collecting after every step costs more than the cobblestone is worth.
-    if (!work?.close && cut % 4 === 0) await collectNearbyDrops(bot, ctl, { radius: 3, timeoutMs: 2500 })
+  }
+  if (jump) {
+    await sleep(400) // fall damage lands on the landing tick, update_health a packet later
+    const fell = feet.y - bot.entity.position.floored().y
+    if (fell > 0) sc.spent += recordDrop(drops, bot, feet, fell, jump)
   }
 
+  // Count levels actually gained, not swings taken. A step that cut its cells
+  // but left the body at the same height is not progress, and three of those
+  // in a row means something is in the way that another lap will not move.
+  const gainedLevels = feet.y - bot.entity.position.floored().y
+  if (gainedLevels > 0) {
+    // A step into a cave can be worth several levels at once, and the caller
+    // asked for depth, not for swings.
+    sc.cut += gainedLevels
+    sc.stalls = 0
+  } else if (++sc.stalls >= 3) {
+    sc.stopped = 'ступенька не углубляется — что-то мешает'
+    return 'stop'
+  }
+  // Before the torch and the pickup: the pickup walks for up to two and a half
+  // seconds every fourth level, the longest stretch of a level with no look.
+  const landed = await guard.check()
+  if (landed) { sc.stopped = landed; return 'stop' }
+  if (work?.close) {
+    sc.stopped = await (require('../night-work') as typeof import('../night-work')).closeBehind(bot, ctl, feet)
+    if (sc.stopped) return 'stop'
+  }
+  // Light the step we just left. An unlit staircase is a mob spawner pointed
+  // at our own back — the run that died at depth was killed by something that
+  // spawned in the dark behind it, not by anything it dug into.
+  if (!work?.close && torchEvery > 0 && sc.cut % torchEvery === 0 && await placeTorch(bot, feet)) sc.torches++
+
+  // Collecting after every step costs more than the cobblestone is worth.
+  if (!work?.close && sc.cut % 4 === 0) await collectNearbyDrops(bot, ctl, { radius: 3, timeoutMs: 2500 })
+}
+
+// Итог лестницы. После цикла sc больше не меняется.
+async function stairsReport (sc: StairsCtx) {
+  const { ctl, bot, dir, from, before, drops, guard, nightWork, cut, torches, bridged, propped, underside, noFooting, ledge,
+    stopped } = sc
   if (!nightWork) await collectNearbyDrops(bot, ctl, { radius: 4, timeoutMs: 4000 })
   // Swings left matters more the deeper we are: the climb home is three digs a
   // level, so the brain has to be able to turn back while it still can.

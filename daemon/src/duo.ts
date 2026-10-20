@@ -61,6 +61,46 @@ function angleOf (a, b) { return Math.acos(Math.max(-1, Math.min(1, a.x * b.x + 
 const BAD = /lava|fire|magma|cactus|campfire|sweet_berry|powder_snow|cobweb/
 
 function create (bot, { target, attackers = new Map(), dead = new Set(), used = () => {}, tt = null, clock = null, observe = e => e, holdWeapon = async () => {}, setAim = () => {}, potionOf = () => null }: any = {}) {
+  const ds = duoState(bot, { target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf })
+  duoListen(ds)
+  duoKnow(ds)
+  const { st, foes, rest } = ds
+  return {
+    ON,
+    active: () => ON && !ds.closed && foes().length >= 2,
+    foes,
+    decide: (ctx) => duoDecide(ds, ctx),
+    switched: (from, to, why) => duoSwitched(ds, from, to, why),
+    runReset: (ctl, plan) => duoRunReset(ds, ctl, plan),
+    webSecond: (e) => duoWebSecond(ds, e),
+    steer: (keys, ctx) => duoSteer(ds, keys, ctx),
+    burst: (ctx?) => duoBurst(ds, ctx),
+    // Бросок не состоялся (облако легло бы на нас, нечем) — не пробовать 1.5 с.
+    burstFailed: (kind) => rest(kind === 'harm' ? 'burstHarm' : 'burstSmash', 1500),
+    secondThreat: () => duoSecondThreat(ds),
+    focusId: () => (ds.focus ? ds.focus.id : null),
+    stats: st,
+    close: () => duoClose(ds)
+  }
+}
+
+// Бой одного против двоих (прежние параметры, let и const замыкания create): память обидчиков между кусками боя,
+// счёт st, паузы приёмов (ready/rest), добиваемый (focus) и разворот на второго (turned), клетка для боя (spot).
+interface DuoState {
+  bot: any; target: () => any; attackers: Map<any, any>; dead: Set<any>; used: (s: string) => void; tt: any; observe: (e: any) => any
+  holdWeapon: () => Promise<any>; setAim: (mode: string) => void; potionOf: (item: any) => any
+  mem: any; st: any; cd: any; ready: (k: string) => boolean; rest: (k: string, ms: number) => void; note: (what: string, ms?: number) => void
+  lastSwitch: number; prevTarget: any
+  focus: any // { id, at }
+  turned: any // { from, at } — разворот на второго
+  focusStats: any; spot: any; spotAt: number; failedResets: number; closed: boolean; hpLast: number; two: boolean; burstStats: any
+  lookDead: (e: any) => boolean; foes: () => any[]
+  onHurt?: (victim: any, source: any) => void; onHealth?: () => void; onTick?: () => void
+  co?: typeof import('./pvp/combat-observe'); hpTrackers?: Map<any, any>; ehpOf?: (e: any) => number; info?: (e: any) => any
+  shieldAtUs?: (e: any) => boolean; pushable?: (e: any) => boolean; score?: (x: any, hasAxe: any) => number
+}
+
+function duoState (bot, { target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf }: any): DuoState {
   if (!bot._ndDuo) bot._ndDuo = { seen: new Map() }
   const mem = bot._ndDuo
   const st: any = {
@@ -73,22 +113,20 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
   // Одна надпись на приём раз в ms — чтобы лог читался, а счёт шёл.
   const note = (what, ms = 3000) => { if (ready('note:' + what)) { rest('note:' + what, ms); used(what) } }
-  let lastSwitch = 0
-  let prevTarget = null
+  const ds: DuoState = { bot, target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf, mem, st, cd, ready, rest, note,
+    lastSwitch: 0, prevTarget: null, focus: null, turned: null, focusStats: null, spot: null, spotAt: 0, failedResets: 0, closed: false,
+    hpLast: bot.health ?? 20, two: false, burstStats: null, lookDead: null, foes: null }
   // Фокус до смерти (2026-09-26, try-duo 8 раундов: жил дольше и снимал
   // больше, но ни одного убийства — «попал по NeuroDown2 5, NeuroBuild 4»:
   // урон размазан по двоим, а сытый регенерирует 1 хп за 10 тиков
   // (FoodData.tick: насыщение и полная сытость). Один — «добиваемый»: его и
   // бить, пока не умрёт; второй — только разворотом, когда добиваемый вне руки,
   // а наш заряд готов (иначе заряд пропадёт), и сразу обратно.
-  let focus = null // { id, at }
-  let turned = null // { from, at } — разворот на второго
   const focusStats: any = { commits: 0, backs: 0, holdReset: 0 }
   st.focus = focusStats
-  let spot = null
-  let spotAt = 0
-  let failedResets = 0
-  let closed = false
+  const burstStats = { harm: 0, smash: 0 }
+  st.burst = burstStats
+  Object.assign(ds, { focusStats, burstStats })
 
   const lookDead = (e) => { const h = read.healthRaw(bot, e); return typeof h === 'number' && h <= 0 }
   // Враги этого боя: цель, кто бил последние 10 с, кто бил нас минуту назад (прошлый кусок).
@@ -109,7 +147,12 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     return [...out.values()].map(e => observe(e)).filter(e => e && e.isValid !== false && isPlayer(e) && e.id !== bot.entity.id &&
       e.username !== bot.username && !lookDead(e) && e.position.distanceTo(me) < RADIUS)
   }
+  Object.assign(ds, { lookDead, foes })
+  return ds
+}
 
+function duoListen (ds: DuoState) {
+  const { bot, mem, st, foes } = ds
   // Кто бьёт нас — в память (и между кусками боя); сколько раз за 2.5 с.
   const onHurt = (victim, source) => {
     try {
@@ -124,12 +167,10 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
       }
     } catch {}
   }
-  let hpLast = bot.health ?? 20
-  let two = false
   const onHealth = () => {
     const h = bot.health ?? 20
-    if (two && h < hpLast) st.dmg2 += hpLast - h
-    hpLast = h
+    if (ds.two && h < ds.hpLast) st.dmg2 += ds.hpLast - h
+    ds.hpLast = h
   }
   // Счёт по тикам: сколько времени их двое рядом, оба достают, клещи, линия.
   const onTick = () => {
@@ -137,8 +178,8 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
       const fs = foes()
       const me = bot.entity.position
       const near = fs.filter(e => Math.hypot(e.position.x - me.x, e.position.z - me.z) < 10)
-      two = near.length >= 2
-      if (!two) return
+      ds.two = near.length >= 2
+      if (!ds.two) return
       st.ticks2++
       const [a, b] = near
       const ua = unit(a.position.x - me.x, a.position.z - me.z)
@@ -156,7 +197,12 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
   bot.on('entityHurt', onHurt)
   bot.on('health', onHealth)
   bot.on('physicsTick', onTick)
+  Object.assign(ds, { onHurt, onHealth, onTick })
+}
 
+// Что знаем о каждом из двоих: здоровье (оценкой у игрока), занятость, руки, щит к нам, можно ли столкнуть, цена цели.
+function duoKnow (ds: DuoState) {
+  const { bot, tt, observe } = ds
   // Хп игрока — оценкой (правило пользователя 06.10, pvp/combat-observe.trackFoe), мобам — точное. Трекер на
   // каждого врага-игрока этого боя, снимается в close().
   const co: typeof import('./pvp/combat-observe') = require('./pvp/combat-observe')
@@ -216,437 +262,432 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     s += Math.max(0, x.r - HIT_REACH) * 2.5
     return s
   }
+  Object.assign(ds, { co, hpTrackers, ehpOf, info, shieldAtUs, pushable, score })
+}
 
-  // ------------------------------------------------------------ решение цикла
-  //
-  // ctx: { entity, charge, justSwung, hp, hasAxe, meInWeb, perch, fort, cooldownLeft }
-  // Возвращает { kind: 'focus', e, why } | { kind: 'reset', ms, why } | { kind: 'web', e, why } | null.
-  const decide = (ctx) => {
-    if (!ON || closed || !bot.entity) return null
-    const fs = foes()
-    if (fs.length < 2) return null
-    const now = gameClock.now()
-    const cur = ctx.entity
-    const xs = fs.map(info)
-    const curX = xs.find(x => x.e.id === (cur && cur.id)) || null
-    const others = xs.filter(x => x !== curX)
-    // Добиваемый: слабейший по score (здоровье с поглощением, занят, у края);
-    // держим, пока жив и рядом; сменить — только если другой слабее на 6+ хп.
-    let fx = focus ? xs.find(x => x.e.id === focus.id) || null : null
-    const weakest = xs.slice().sort((a, b) => score(a, ctx.hasAxe) - score(b, ctx.hasAxe))[0]
-    if (weakest && (!fx || (weakest.e.id !== fx.e.id && weakest.ehp <= fx.ehp - 6))) {
-      focus = { id: weakest.e.id, at: now }
-      fx = weakest
-      focusStats.commits++
+// ------------------------------------------------------------ решение цикла
+//
+// ctx: { entity, charge, justSwung, hp, hasAxe, meInWeb, perch, fort, cooldownLeft }
+// Возвращает { kind: 'focus', e, why } | { kind: 'reset', ms, why } | { kind: 'web', e, why } | null.
+function duoDecide (ds: DuoState, ctx) {
+  const { bot, used, st, ready, rest, focusStats, foes, info, score } = ds
+  if (!ON || ds.closed || !bot.entity) return null
+  const fs = foes()
+  if (fs.length < 2) return null
+  const now = gameClock.now()
+  const cur = ctx.entity
+  const xs = fs.map(info)
+  const curX = xs.find(x => x.e.id === (cur && cur.id)) || null
+  const others = xs.filter(x => x !== curX)
+  // Добиваемый: слабейший по score (здоровье с поглощением, занят, у края);
+  // держим, пока жив и рядом; сменить — только если другой слабее на 6+ хп.
+  let fx = ds.focus ? xs.find(x => x.e.id === ds.focus.id) || null : null
+  const weakest = xs.slice().sort((a, b) => score(a, ctx.hasAxe) - score(b, ctx.hasAxe))[0]
+  if (weakest && (!fx || (weakest.e.id !== fx.e.id && weakest.ehp <= fx.ehp - 6))) {
+    ds.focus = { id: weakest.e.id, at: now }
+    fx = weakest
+    focusStats.commits++
+  }
+  // Оба на нём: оба достают, и бьют (два удара за 2.5 с) или оба заряжены.
+  const both = xs.filter(x => x.theirR <= FOE_REACH + 0.2)
+  const recentHits = st.hurt.filter(t => now - t < 2500).length
+  // Добиваемый ослаб (≤ 12 хп с поглощением, в 5 бл.) и мы не при смерти —
+  // не рвать контакт: рывок прочь — 1.1–1.6 с его регенерации (до 3 хп).
+  const finishing = (curX && curX.ehp <= 6 && curX.r <= HIT_REACH && ctx.charge >= 0.9) ||
+    (fx && fx.ehp <= 12 && fx.d <= 5 && (ctx.hp ?? 20) > 6)
+  if (both.length >= 2 && !ctx.meInWeb && !ctx.perch && !ctx.fort && ready('reset') &&
+      (recentHits >= 2 || both.every(x => x.readyMs <= 100))) {
+    if (finishing) {
+      if (ready('holdResetNote')) { rest('holdResetNote', 3000); focusStats.holdReset++; used(`1 против 2: не рву контакт — добиваю (${Math.round(fx ? fx.ehp : curX.ehp)} хп)`) }
+    } else {
+      rest('reset', ds.failedResets >= 2 ? 9000 : 4000)
+      return { kind: 'reset', ms: 1100 + Math.random() * 500, why: recentHits >= 2 ? `оба бьют (${recentHits} удара за 2.5 с)` : 'оба рядом и заряжены' }
     }
-    // Оба на нём: оба достают, и бьют (два удара за 2.5 с) или оба заряжены.
-    const both = xs.filter(x => x.theirR <= FOE_REACH + 0.2)
-    const recentHits = st.hurt.filter(t => now - t < 2500).length
-    // Добиваемый ослаб (≤ 12 хп с поглощением, в 5 бл.) и мы не при смерти —
-    // не рвать контакт: рывок прочь — 1.1–1.6 с его регенерации (до 3 хп).
-    const finishing = (curX && curX.ehp <= 6 && curX.r <= HIT_REACH && ctx.charge >= 0.9) ||
-      (fx && fx.ehp <= 12 && fx.d <= 5 && (ctx.hp ?? 20) > 6)
-    if (both.length >= 2 && !ctx.meInWeb && !ctx.perch && !ctx.fort && ready('reset') &&
-        (recentHits >= 2 || both.every(x => x.readyMs <= 100))) {
-      if (finishing) {
-        if (ready('holdResetNote')) { rest('holdResetNote', 3000); focusStats.holdReset++; used(`1 против 2: не рву контакт — добиваю (${Math.round(fx ? fx.ehp : curX.ehp)} хп)`) }
-      } else {
-        rest('reset', failedResets >= 2 ? 9000 : 4000)
-        return { kind: 'reset', ms: 1100 + Math.random() * 500, why: recentHits >= 2 ? `оба бьют (${recentHits} удара за 2.5 с)` : 'оба рядом и заряжены' }
-      }
+  }
+  // Разворот «ударил одного — развернулся — ударил второго»: текущий вне руки,
+  // второй в руке, наш заряд готов — бить второго сейчас, заряд не пропадает.
+  // После удара — обратно к добиваемому (ниже). Добиваемый ослаб (≤ 10 хп) и
+  // в полутора блоках от руки — заряд ждёт его (try-duo 2026-09-26: разворот
+  // при «чуть вне руки» делил удары 5 на 5, а сытый добиваемый отлечивался —
+  // 1 хп за 10 тиков, пока есть насыщение, FoodData.tick; но и держать заряд
+  // всегда — минус четверть урона: 18 хп за раунд против 24).
+  // Качели (2026-09-26, try-duo без насыщения, раунд 6: «смен цели 1963047»
+  // за 76 с): разворот брал второго при добиваемом дальше 3.1, а возврат —
+  // при добиваемом ближе 3.4; в полосе 3.1–3.4 решение переключалось каждый
+  // проход цикла без единого тика между ними — цикл боя не отдавал ход
+  // событиям, демон молчал. Теперь: разворот — не чаще раза в 700 мс, и после
+  // него — к добиваемому, только когда ударили, второй ушёл, добиваемый уже в
+  // руке (≤ 2.9, а не «почти») или прошло 1.5 с: полосы «разворот» (> 3.1) и
+  // «назад» (≤ 2.9) больше не перекрываются. (Порог разворота 3.5 вместо 3.1
+  // срезал удары по второму: iron 8 раундов — 11.3 хп против 16.7.)
+  const farFocus = !fx || !curX || curX.e.id !== fx.e.id || fx.r > HIT_REACH + 1.5 || fx.ehp > 10
+  if (curX && curX.r > HIT_REACH + 0.2 && ctx.charge >= 0.9 && farFocus && ready('turn')) {
+    const opp = others.filter(x => x.r <= HIT_REACH && !x.shield).sort((a, b) => a.r - b.r)[0]
+    if (opp) { rest('turn', 700); ds.turned = { from: fx ? fx.e.id : null, at: now }; return { kind: 'focus', e: opp.e, why: 'разворот: второй в руке, удар заряжен' } }
+  }
+  // К добиваемому: сразу после своего удара по второму (разворот — заряд
+  // пуст), или добиваемый снова в руке, или второй ушёл из руки.
+  if (fx && curX && curX.e.id !== fx.e.id) {
+    // Добиваемый ест или пьёт в 8 бл. — это окно его лечения: к нему, даже
+    // если второй в руке (рывок на занятого — pvp.js, темп).
+    const regen = fx.busy && fx.busy !== 'в паутине' && fx.d < 8
+    // Свежий разворот ради заряженного удара: назад — только когда удар
+    // ушёл, второй вышел из руки или добиваемый уже в руке (не «почти»).
+    const fresh = ds.turned && now - ds.turned.at < 1500 && !ctx.justSwung
+    const backNear = fresh ? fx.r <= HIT_REACH : fx.r <= HIT_REACH + 0.5
+    if (ctx.justSwung || backNear || curX.r > HIT_REACH + 1.5 || regen || (ds.turned && now - ds.turned.at > 1500)) {
+      focusStats.backs++
+      if (regen) focusStats.regen = (focusStats.regen || 0) + 1
+      ds.turned = null
+      return { kind: 'focus', e: fx.e, why: regen ? `добиваю ${fx.e.username || 'его'}: ${fx.busy}` : `добиваю ${fx.e.username || 'его'} (${Math.round(fx.ehp)} хп)` }
     }
-    // Разворот «ударил одного — развернулся — ударил второго»: текущий вне руки,
-    // второй в руке, наш заряд готов — бить второго сейчас, заряд не пропадает.
-    // После удара — обратно к добиваемому (ниже). Добиваемый ослаб (≤ 10 хп) и
-    // в полутора блоках от руки — заряд ждёт его (try-duo 2026-09-26: разворот
-    // при «чуть вне руки» делил удары 5 на 5, а сытый добиваемый отлечивался —
-    // 1 хп за 10 тиков, пока есть насыщение, FoodData.tick; но и держать заряд
-    // всегда — минус четверть урона: 18 хп за раунд против 24).
-    // Качели (2026-09-26, try-duo без насыщения, раунд 6: «смен цели 1963047»
-    // за 76 с): разворот брал второго при добиваемом дальше 3.1, а возврат —
-    // при добиваемом ближе 3.4; в полосе 3.1–3.4 решение переключалось каждый
-    // проход цикла без единого тика между ними — цикл боя не отдавал ход
-    // событиям, демон молчал. Теперь: разворот — не чаще раза в 700 мс, и после
-    // него — к добиваемому, только когда ударили, второй ушёл, добиваемый уже в
-    // руке (≤ 2.9, а не «почти») или прошло 1.5 с: полосы «разворот» (> 3.1) и
-    // «назад» (≤ 2.9) больше не перекрываются. (Порог разворота 3.5 вместо 3.1
-    // срезал удары по второму: iron 8 раундов — 11.3 хп против 16.7.)
-    const farFocus = !fx || !curX || curX.e.id !== fx.e.id || fx.r > HIT_REACH + 1.5 || fx.ehp > 10
-    if (curX && curX.r > HIT_REACH + 0.2 && ctx.charge >= 0.9 && farFocus && ready('turn')) {
-      const opp = others.filter(x => x.r <= HIT_REACH && !x.shield).sort((a, b) => a.r - b.r)[0]
-      if (opp) { rest('turn', 700); turned = { from: fx ? fx.e.id : null, at: now }; return { kind: 'focus', e: opp.e, why: 'разворот: второй в руке, удар заряжен' } }
-    }
-    // К добиваемому: сразу после своего удара по второму (разворот — заряд
-    // пуст), или добиваемый снова в руке, или второй ушёл из руки.
-    if (fx && curX && curX.e.id !== fx.e.id) {
-      // Добиваемый ест или пьёт в 8 бл. — это окно его лечения: к нему, даже
-      // если второй в руке (рывок на занятого — pvp.js, темп).
-      const regen = fx.busy && fx.busy !== 'в паутине' && fx.d < 8
-      // Свежий разворот ради заряженного удара: назад — только когда удар
-      // ушёл, второй вышел из руки или добиваемый уже в руке (не «почти»).
-      const fresh = turned && now - turned.at < 1500 && !ctx.justSwung
-      const backNear = fresh ? fx.r <= HIT_REACH : fx.r <= HIT_REACH + 0.5
-      if (ctx.justSwung || backNear || curX.r > HIT_REACH + 1.5 || regen || (turned && now - turned.at > 1500)) {
-        focusStats.backs++
-        if (regen) focusStats.regen = (focusStats.regen || 0) + 1
-        turned = null
-        return { kind: 'focus', e: fx.e, why: regen ? `добиваю ${fx.e.username || 'его'}: ${fx.busy}` : `добиваю ${fx.e.username || 'его'} (${Math.round(fx.ehp)} хп)` }
-      }
-      return null
-    }
-    // Паутина под второго: он подходит (2.8–5.5 бл.), первый рядом со мной, свой
-    // заряд почти пуст (смена предмета обнуляет заряд — терять нечего). Не когда
-    // добиваем: смена предмета — лишний тик без удара.
-    if (!finishing && curX && ready('web') && ctx.cooldownLeft > 300 && bot.inventory.items().some(i => i.name === 'cobweb')) {
-      const far = others.find(x => x.d > 2.8 && x.d < 5.5 && !x.busy && x.theirR > FOE_REACH)
-      if (far && curX.d < far.d - 1 && webSpot(far.e)) {
-        rest('web', 6000)
-        return { kind: 'web', e: far.e, why: 'паутина под второго — пусть отстанет' }
-      }
-    }
-    // Текущий не из двоих (или его нет) — к добиваемому. Прежняя смена «по
-    // выгоде» (score на 4+) — теперь выбор добиваемого выше: цель меняется
-    // только на того, кто слабее на 6+ хп, и не туда-обратно.
-    if (!curX) return fx ? { kind: 'focus', e: fx.e, why: 'цель — добиваемый из двоих' } : null
-    void prevTarget
     return null
   }
-  const switched = (from, to, why) => {
-    lastSwitch = gameClock.now()
-    prevTarget = from ? from.id : null
-    const k = why.replace(/ \(.*$/, '')
-    st.switches[k] = (st.switches[k] || 0) + 1
-    note('1 против 2: ' + why, 1500)
-  }
-
-  // ------------------------------------------------------------ рывок из-под двоих
-  //
-  // Бегом прочь (tempo.kite: мимо стен, обрывов, лавы) до ms, пока они не
-  // растянутся: ближний на 3 бл. ближе дальнего, или оба отстали на 6+. Потом —
-  // ближнего один на один. Два рывка подряд без растяжки — драться (не бегать по
-  // кругу): решение выше ставит паузу 9 с.
-  const runReset = async (ctl, plan) => {
-    st.resets++
-    note('1 против 2: оба на мне — рву контакт (' + plan.why + ')', 1500)
-    setAim('free')
-    const fsNow = () => foes()
-    const split = () => {
-      const me = bot.entity.position
-      const ds = fsNow().map(e => Math.hypot(e.position.x - me.x, e.position.z - me.z)).sort((a, b) => a - b)
-      if (ds.length < 2) return true
-      return ds[1] - ds[0] >= 3 || ds[0] >= 6
+  // Паутина под второго: он подходит (2.8–5.5 бл.), первый рядом со мной, свой
+  // заряд почти пуст (смена предмета обнуляет заряд — терять нечего). Не когда
+  // добиваем: смена предмета — лишний тик без удара.
+  if (!finishing && curX && ready('web') && ctx.cooldownLeft > 300 && bot.inventory.items().some(i => i.name === 'cobweb')) {
+    const far = others.find(x => x.d > 2.8 && x.d < 5.5 && !x.busy && x.theirR > FOE_REACH)
+    if (far && curX.d < far.d - 1 && duoWebSpot(ds, far.e)) {
+      rest('web', 6000)
+      return { kind: 'web', e: far.e, why: 'паутина под второго — пусть отстанет' }
     }
-    let how = 'время'
-    try {
-      how = await tempo.kite(bot, ctl, fsNow, { ms: plan.ms, until: split })
-    } catch {}
-    setAim('target')
-    const ok = how === 'оторвался' || split()
-    if (ok) { st.splits++; failedResets = 0; note('1 против 2: растянул их — беру первого', 1500) } else failedResets++
-    const me = bot.entity.position
-    const all = fsNow()
-    // После рывка — добиваемого, если он в 8 бл. (растянул — он и отстаёт или
-    // догоняет первым); иначе ближнего.
-    const fe = focus ? all.find(e => e.id === focus.id && e.position.distanceTo(me) < 8) : null
-    const near = fe || all.sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
-    await holdWeapon()
-    return { ok, pick: near, how }
   }
+  // Текущий не из двоих (или его нет) — к добиваемому. Прежняя смена «по
+  // выгоде» (score на 4+) — теперь выбор добиваемого выше: цель меняется
+  // только на того, кто слабее на 6+ хп, и не туда-обратно.
+  if (!curX) return fx ? { kind: 'focus', e: fx.e, why: 'цель — добиваемый из двоих' } : null
+  void ds.prevTarget
+  return null
+}
 
-  // ------------------------------------------------------------ паутина под второго
-  const webSpot = (e) => {
-    const cell = e.position.floored()
-    const below = bot.blockAt(cell.offset(0, -1, 0))
-    const here = bot.blockAt(cell)
-    if (!below || below.boundingBox !== 'block' || !here || here.name !== 'air') return null
-    const eye = bot.entity.position.offset(0, EYE, 0)
-    const face = below.position.offset(0.5, 1, 0.5)
-    if (face.distanceTo(eye) > 4.4) return null
-    return below
-  }
-  const webSecond = async (e) => {
-    const below = webSpot(e)
-    const web = bot.inventory.items().find(i => i.name === 'cobweb')
-    if (!below || !web) return false
-    setAim('free')
-    let ok = false
-    try {
-      await bot.equip(web, 'hand')
-      await bot.lookAt(below.position.offset(0.5, 1, 0.5), true)
-      await Promise.race([bot.placeBlock(below, new Vec3(0, 1, 0)), new Promise<any>((resolve, reject) => gameClock.setTimeout(() => reject(new Error('timeout')), 600))])
-    } catch {}
-    const b = bot.blockAt(below.position.offset(0, 1, 0))
-    ok = !!(b && b.name === 'cobweb')
-    setAim('target')
-    await holdWeapon()
-    if (ok) { st.webs++; note('1 против 2: паутина под второго', 1500) }
-    return ok
-  }
+function duoSwitched (ds: DuoState, from, to, why) {
+  const { st, note } = ds
+  ds.lastSwitch = gameClock.now()
+  ds.prevTarget = from ? from.id : null
+  const k = why.replace(/ \(.*$/, '')
+  st.switches[k] = (st.switches[k] || 0) + 1
+  note('1 против 2: ' + why, 1500)
+}
 
-  // ------------------------------------------------------------ движение
-  //
-  // Клещи (угол > 100°, кто-то ближе 6) — наружу: прочь от обоих по биссектрисе,
-  // а если они строго напротив друг друга — вбок от их линии, туда, где от края
-  // дальше. Иначе — к лучшей клетке рядом (bestSpot): оба спереди, ближний
-  // закрывает дальнего, спина к стене без обрыва, столб между мной и вторым.
-  // Удар не трогаем: ход — пока свой заряд копится или цель вне руки.
-  const steer = (keys, ctx) => {
-    if (!ON || closed || !bot.entity) return keys
-    const fs = foes()
-    if (fs.length < 2) return keys
+// ------------------------------------------------------------ рывок из-под двоих
+//
+// Бегом прочь (tempo.kite: мимо стен, обрывов, лавы) до ms, пока они не
+// растянутся: ближний на 3 бл. ближе дальнего, или оба отстали на 6+. Потом —
+// ближнего один на один. Два рывка подряд без растяжки — драться (не бегать по
+// кругу): решение выше ставит паузу 9 с.
+async function duoRunReset (ds: DuoState, ctl, plan) {
+  const { bot, holdWeapon, setAim, st, note, foes } = ds
+  st.resets++
+  note('1 против 2: оба на мне — рву контакт (' + plan.why + ')', 1500)
+  setAim('free')
+  const fsNow = () => foes()
+  const split = () => {
     const me = bot.entity.position
-    const cur = ctx.entity
-    const t = fs.find(e => e.id === (cur && cur.id)) || fs[0]
-    const o = fs.filter(e => e !== t).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
-    if (!o) return keys
-    const ua = unit(t.position.x - me.x, t.position.z - me.z)
-    const ub = unit(o.position.x - me.x, o.position.z - me.z)
-    const da = Math.hypot(t.position.x - me.x, t.position.z - me.z)
-    const db = Math.hypot(o.position.x - me.x, o.position.z - me.z)
-    if (Math.max(da, db) > 12) return keys
-    const th = angleOf(ua, ub)
-    let w = null
-    let strong = false
-    if (th > PINCER && Math.min(da, db) < 6) {
-      const sx = -(ua.x + ub.x); const sz = -(ua.z + ub.z)
-      if (Math.hypot(sx, sz) > 0.35) w = unit(sx, sz)
-      else {
-        // Строго напротив: вбок от их линии — где от края дальше.
-        const n1 = unit(-(o.position.z - t.position.z), o.position.x - t.position.x)
-        const n2 = { x: -n1.x, z: -n1.z }
-        const cache = new Map()
-        const c1 = edges.clearance(bot, me.offset(n1.x * 1.5, 0, n1.z * 1.5), 2.5, cache)
-        const c2 = edges.clearance(bot, me.offset(n2.x * 1.5, 0, n2.z * 1.5), 2.5, cache)
-        w = c1 >= c2 ? n1 : n2
-      }
-      strong = true
-      if (ready('pincerNote')) { rest('pincerNote', 3000); st.escapes++; used('1 против 2: ухожу из клещей') }
-    } else if (ctx.cooldownLeft > 150 || ctx.r > HIT_REACH + 0.5) {
-      const now = gameClock.now()
-      if (now >= spotAt) { spotAt = now + 400; spot = bestSpot(t, o) }
-      if (spot && Math.hypot(spot.x - me.x, spot.z - me.z) > 0.6) {
-        w = unit(spot.x - me.x, spot.z - me.z)
-        if (spot.why && ready('spotNote:' + spot.why)) { rest('spotNote:' + spot.why, 4000); st.spots++; used('1 против 2: ' + spot.why) }
-      }
+    const ds = fsNow().map(e => Math.hypot(e.position.x - me.x, e.position.z - me.z)).sort((a, b) => a - b)
+    if (ds.length < 2) return true
+    return ds[1] - ds[0] >= 3 || ds[0] >= 6
+  }
+  let how = 'время'
+  try {
+    how = await tempo.kite(bot, ctl, fsNow, { ms: plan.ms, until: split })
+  } catch {}
+  setAim('target')
+  const ok = how === 'оторвался' || split()
+  if (ok) { st.splits++; ds.failedResets = 0; note('1 против 2: растянул их — беру первого', 1500) } else ds.failedResets++
+  const me = bot.entity.position
+  const all = fsNow()
+  // После рывка — добиваемого, если он в 8 бл. (растянул — он и отстаёт или
+  // догоняет первым); иначе ближнего.
+  const fe = ds.focus ? all.find(e => e.id === ds.focus.id && e.position.distanceTo(me) < 8) : null
+  const near = fe || all.sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null
+  await holdWeapon()
+  return { ok, pick: near, how }
+}
+
+// ------------------------------------------------------------ паутина под второго
+function duoWebSpot (ds: DuoState, e) {
+  const { bot } = ds
+  const cell = e.position.floored()
+  const below = bot.blockAt(cell.offset(0, -1, 0))
+  const here = bot.blockAt(cell)
+  if (!below || below.boundingBox !== 'block' || !here || here.name !== 'air') return null
+  const eye = bot.entity.position.offset(0, EYE, 0)
+  const face = below.position.offset(0.5, 1, 0.5)
+  if (face.distanceTo(eye) > 4.4) return null
+  return below
+}
+
+async function duoWebSecond (ds: DuoState, e) {
+  const { bot, holdWeapon, setAim, st, note } = ds
+  const below = duoWebSpot(ds, e)
+  const web = bot.inventory.items().find(i => i.name === 'cobweb')
+  if (!below || !web) return false
+  setAim('free')
+  let ok = false
+  try {
+    await bot.equip(web, 'hand')
+    await bot.lookAt(below.position.offset(0.5, 1, 0.5), true)
+    await Promise.race([bot.placeBlock(below, new Vec3(0, 1, 0)), new Promise<any>((resolve, reject) => gameClock.setTimeout(() => reject(new Error('timeout')), 600))])
+  } catch {}
+  const b = bot.blockAt(below.position.offset(0, 1, 0))
+  ok = !!(b && b.name === 'cobweb')
+  setAim('target')
+  await holdWeapon()
+  if (ok) { st.webs++; note('1 против 2: паутина под второго', 1500) }
+  return ok
+}
+
+// ------------------------------------------------------------ движение
+//
+// Клещи (угол > 100°, кто-то ближе 6) — наружу: прочь от обоих по биссектрисе,
+// а если они строго напротив друг друга — вбок от их линии, туда, где от края
+// дальше. Иначе — к лучшей клетке рядом (bestSpot): оба спереди, ближний
+// закрывает дальнего, спина к стене без обрыва, столб между мной и вторым.
+// Удар не трогаем: ход — пока свой заряд копится или цель вне руки.
+function duoSteer (ds: DuoState, keys, ctx) {
+  const { bot, used, st, ready, rest, foes } = ds
+  if (!ON || ds.closed || !bot.entity) return keys
+  const fs = foes()
+  if (fs.length < 2) return keys
+  const me = bot.entity.position
+  const cur = ctx.entity
+  const t = fs.find(e => e.id === (cur && cur.id)) || fs[0]
+  const o = fs.filter(e => e !== t).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
+  if (!o) return keys
+  const ua = unit(t.position.x - me.x, t.position.z - me.z)
+  const ub = unit(o.position.x - me.x, o.position.z - me.z)
+  const da = Math.hypot(t.position.x - me.x, t.position.z - me.z)
+  const db = Math.hypot(o.position.x - me.x, o.position.z - me.z)
+  if (Math.max(da, db) > 12) return keys
+  const th = angleOf(ua, ub)
+  let w = null
+  let strong = false
+  if (th > PINCER && Math.min(da, db) < 6) {
+    const sx = -(ua.x + ub.x); const sz = -(ua.z + ub.z)
+    if (Math.hypot(sx, sz) > 0.35) w = unit(sx, sz)
+    else {
+      // Строго напротив: вбок от их линии — где от края дальше.
+      const n1 = unit(-(o.position.z - t.position.z), o.position.x - t.position.x)
+      const n2 = { x: -n1.x, z: -n1.z }
+      const cache = new Map()
+      const c1 = edges.clearance(bot, me.offset(n1.x * 1.5, 0, n1.z * 1.5), 2.5, cache)
+      const c2 = edges.clearance(bot, me.offset(n2.x * 1.5, 0, n2.z * 1.5), 2.5, cache)
+      w = c1 >= c2 ? n1 : n2
     }
-    if (!w) return keys
-    const f = keyDir(bot, 'forward'); const r = keyDir(bot, 'right')
-    const fd = w.x * f.x + w.z * f.z
-    const rd = w.x * r.x + w.z * r.z
-    const out = { ...keys }
-    // Удар готов и цель почти в руке — вперёд не отнимаем (подойти и ударить).
-    const wantsHit = ctx.cooldownLeft <= 150 && keys.forward
-    if (fd > 0.35) { out.forward = true; out.back = false } else if (fd < -0.35 && !wantsHit) { out.forward = false; out.back = true } else if (strong && !wantsHit) { out.forward = false; out.back = false }
-    if (Math.abs(rd) > 0.3) out.strafe = rd > 0 ? 'right' : 'left'
-    else if (strong) out.strafe = null
-    out.sprint = !!out.forward && (keys.sprint || strong)
-    if (out.forward && !stepSafe(bot, keyDir(bot, 'forward'))) out.forward = keys.forward && stepSafe(bot, keyDir(bot, 'forward'))
-    if (out.back && !stepSafe(bot, keyDir(bot, 'back'))) out.back = false
-    if (out.strafe && !stepSafe(bot, keyDir(bot, out.strafe))) out.strafe = keys.strafe
-    return out
+    strong = true
+    if (ready('pincerNote')) { rest('pincerNote', 3000); st.escapes++; used('1 против 2: ухожу из клещей') }
+  } else if (ctx.cooldownLeft > 150 || ctx.r > HIT_REACH + 0.5) {
+    const now = gameClock.now()
+    if (now >= ds.spotAt) { ds.spotAt = now + 400; ds.spot = duoBestSpot(ds, t, o) }
+    if (ds.spot && Math.hypot(ds.spot.x - me.x, ds.spot.z - me.z) > 0.6) {
+      w = unit(ds.spot.x - me.x, ds.spot.z - me.z)
+      if (ds.spot.why && ready('spotNote:' + ds.spot.why)) { rest('spotNote:' + ds.spot.why, 4000); st.spots++; used('1 против 2: ' + ds.spot.why) }
+    }
   }
+  if (!w) return keys
+  const f = keyDir(bot, 'forward'); const r = keyDir(bot, 'right')
+  const fd = w.x * f.x + w.z * f.z
+  const rd = w.x * r.x + w.z * r.z
+  const out = { ...keys }
+  // Удар готов и цель почти в руке — вперёд не отнимаем (подойти и ударить).
+  const wantsHit = ctx.cooldownLeft <= 150 && keys.forward
+  if (fd > 0.35) { out.forward = true; out.back = false } else if (fd < -0.35 && !wantsHit) { out.forward = false; out.back = true } else if (strong && !wantsHit) { out.forward = false; out.back = false }
+  if (Math.abs(rd) > 0.3) out.strafe = rd > 0 ? 'right' : 'left'
+  else if (strong) out.strafe = null
+  out.sprint = !!out.forward && (keys.sprint || strong)
+  if (out.forward && !stepSafe(bot, keyDir(bot, 'forward'))) out.forward = keys.forward && stepSafe(bot, keyDir(bot, 'forward'))
+  if (out.back && !stepSafe(bot, keyDir(bot, 'back'))) out.back = false
+  if (out.strafe && !stepSafe(bot, keyDir(bot, out.strafe))) out.strafe = keys.strafe
+  return out
+}
 
-  // Клетка рядом (до 3 бл.), где с двоими удобнее всего. Оценка:
-  //  · угол между ними оттуда: больше 100° — клещи (штраф), меньше — лучше;
-  //  · дальний за ближним (угол < 30°) или за блоком (луча нет) — он не
-  //    достаёт и должен обходить: столб, узкое место;
-  //  · до цели 2.6–3.6 (край своей руки), до второго не ближе 2.6;
-  //  · спина к стене — плюс, но только если до обрыва от клетки не меньше 1.5;
-  //  · свободных мест, откуда можно ударить, меньше — лучше (угол, проход);
-  //  · путь — минус 0.8 за блок.
+// Клетка рядом (до 3 бл.), где с двоими удобнее всего. Оценка:
+//  · угол между ними оттуда: больше 100° — клещи (штраф), меньше — лучше;
+//  · дальний за ближним (угол < 30°) или за блоком (луча нет) — он не
+//    достаёт и должен обходить: столб, узкое место;
+//  · до цели 2.6–3.6 (край своей руки), до второго не ближе 2.6;
+//  · спина к стене — плюс, но только если до обрыва от клетки не меньше 1.5;
+//  · свободных мест, откуда можно ударить, меньше — лучше (угол, проход);
+//  · путь — минус 0.8 за блок.
+function duoBestSpot (ds: DuoState, t, o) {
+  const { bot } = ds
   const standable = (c) => {
     const f = bot.blockAt(c); const h = bot.blockAt(c.offset(0, 1, 0)); const g = bot.blockAt(c.offset(0, -1, 0))
     if (!f || !h || !g) return false
     if (f.boundingBox !== 'empty' || h.boundingBox !== 'empty' || g.boundingBox !== 'block') return false
     return !BAD.test(f.name) && !BAD.test(h.name) && !BAD.test(g.name)
   }
-  const bestSpot = (t, o) => {
-    const me = bot.entity.position
-    const base = me.floored()
-    const cache = new Map()
-    const evalAt = (S, travel) => {
-      const dN = Math.hypot(t.position.x - S.x, t.position.z - S.z)
-      const dF = Math.hypot(o.position.x - S.x, o.position.z - S.z)
-      if (dN < 2.2 || dF < 2.6) return null
-      const clr = edges.clearance(bot, S, 1.6, cache)
-      if (clr < 0.5) return null
-      const uN = unit(t.position.x - S.x, t.position.z - S.z)
-      const uF = unit(o.position.x - S.x, o.position.z - S.z)
-      const th = angleOf(uN, uF)
-      let s = 0
-      const why = []
-      if (th > PINCER) s -= 8 + (th - PINCER) * 4
-      else s += (PINCER - th) / PINCER * 3
-      if (dF > dN && th < LINE) { s += 3; why.push('в линию') }
-      const eye = S.offset(0, EYE, 0)
-      if (!raySees(bot, eye, o.position.offset(0, 1.2, 0)) && raySees(bot, eye, t.position.offset(0, 1.2, 0))) { s += 3.5; why.push('второй за блоком') }
-      s -= Math.abs(dN - 3.1) * 1.2
-      if (clr < 1.5) s -= (1.5 - clr) * 4
-      else {
-        // Спина к стене: блоки за спиной (от обоих) на уровне ног или головы.
-        const bx = -(uN.x + uF.x); const bz = -(uN.z + uF.z)
-        const bu = unit(bx, bz)
-        let wall = 0
-        for (const [ox, oz] of [[bu.x, bu.z], [bu.x - bu.z * 0.7, bu.z + bu.x * 0.7], [bu.x + bu.z * 0.7, bu.z - bu.x * 0.7]]) {
-          const c = new Vec3(Math.floor(S.x + ox), Math.floor(S.y), Math.floor(S.z + oz))
-          if (solid(bot, c) || solid(bot, c.offset(0, 1, 0))) wall++
-        }
-        if (wall) { s += Math.min(3, wall * 1.2); if (wall >= 2) why.push('спина к стене') }
+  const me = bot.entity.position
+  const base = me.floored()
+  const cache = new Map()
+  const evalAt = (S, travel) => {
+    const dN = Math.hypot(t.position.x - S.x, t.position.z - S.z)
+    const dF = Math.hypot(o.position.x - S.x, o.position.z - S.z)
+    if (dN < 2.2 || dF < 2.6) return null
+    const clr = edges.clearance(bot, S, 1.6, cache)
+    if (clr < 0.5) return null
+    const uN = unit(t.position.x - S.x, t.position.z - S.z)
+    const uF = unit(o.position.x - S.x, o.position.z - S.z)
+    const th = angleOf(uN, uF)
+    let s = 0
+    const why = []
+    if (th > PINCER) s -= 8 + (th - PINCER) * 4
+    else s += (PINCER - th) / PINCER * 3
+    if (dF > dN && th < LINE) { s += 3; why.push('в линию') }
+    const eye = S.offset(0, EYE, 0)
+    if (!raySees(bot, eye, o.position.offset(0, 1.2, 0)) && raySees(bot, eye, t.position.offset(0, 1.2, 0))) { s += 3.5; why.push('второй за блоком') }
+    s -= Math.abs(dN - 3.1) * 1.2
+    if (clr < 1.5) s -= (1.5 - clr) * 4
+    else {
+      // Спина к стене: блоки за спиной (от обоих) на уровне ног или головы.
+      const bx = -(uN.x + uF.x); const bz = -(uN.z + uF.z)
+      const bu = unit(bx, bz)
+      let wall = 0
+      for (const [ox, oz] of [[bu.x, bu.z], [bu.x - bu.z * 0.7, bu.z + bu.x * 0.7], [bu.x + bu.z * 0.7, bu.z - bu.x * 0.7]]) {
+        const c = new Vec3(Math.floor(S.x + ox), Math.floor(S.y), Math.floor(S.z + oz))
+        if (solid(bot, c) || solid(bot, c.offset(0, 1, 0))) wall++
       }
-      // Сколько мест вокруг, откуда можно ударить (на 2 бл., 8 сторон).
-      let open = 0
-      for (let k = 0; k < 8; k++) {
-        const a = k * Math.PI / 4
-        const c = new Vec3(Math.floor(S.x + Math.cos(a) * 2), Math.floor(S.y), Math.floor(S.z + Math.sin(a) * 2))
-        if (standable(c)) open++
-      }
-      s -= open * 0.4
-      if (open <= 4 && !why.includes('спина к стене')) why.push('узкое место')
-      s -= travel * 0.8
-      return { s, why }
+      if (wall) { s += Math.min(3, wall * 1.2); if (wall >= 2) why.push('спина к стене') }
     }
-    const here = evalAt(me, 0)
-    let best = null
-    for (let dx = -3; dx <= 3; dx++) {
-      for (let dz = -3; dz <= 3; dz++) {
-        if (!dx && !dz) continue
-        if (dx * dx + dz * dz > 10) continue
-        let c = null
-        for (const dy of [0, 1, -1]) { const q = base.offset(dx, dy, dz); if (standable(q)) { c = q; break } }
-        if (!c) continue
-        const S = new Vec3(c.x + 0.5, c.y, c.z + 0.5)
-        const travel = Math.hypot(S.x - me.x, S.z - me.z)
-        // Дойти по прямой: середина пути проходима, стены на уровне колен нет.
-        const mid = new Vec3(Math.floor((S.x + me.x) / 2), Math.floor(me.y), Math.floor((S.z + me.z) / 2))
-        if (!standable(mid) && !standable(mid.offset(0, 1, 0)) && !standable(mid.offset(0, -1, 0))) continue
-        const v = evalAt(S, travel)
-        if (v && (!best || v.s > best.s)) best = { x: S.x, y: S.y, z: S.z, s: v.s, why: v.why }
-      }
+    // Сколько мест вокруг, откуда можно ударить (на 2 бл., 8 сторон).
+    let open = 0
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4
+      const c = new Vec3(Math.floor(S.x + Math.cos(a) * 2), Math.floor(S.y), Math.floor(S.z + Math.sin(a) * 2))
+      if (standable(c)) open++
     }
-    if (!best) return null
-    if (here && best.s < here.s + 1.5) return null
-    return { x: best.x, y: best.y, z: best.z, why: best.why.length ? best.why.join(', ') : null }
+    s -= open * 0.4
+    if (open <= 4 && !why.includes('спина к стене')) why.push('узкое место')
+    s -= travel * 0.8
+    return { s, why }
   }
+  const here = evalAt(me, 0)
+  let best = null
+  for (let dx = -3; dx <= 3; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      if (!dx && !dz) continue
+      if (dx * dx + dz * dz > 10) continue
+      let c = null
+      for (const dy of [0, 1, -1]) { const q = base.offset(dx, dy, dz); if (standable(q)) { c = q; break } }
+      if (!c) continue
+      const S = new Vec3(c.x + 0.5, c.y, c.z + 0.5)
+      const travel = Math.hypot(S.x - me.x, S.z - me.z)
+      // Дойти по прямой: середина пути проходима, стены на уровне колен нет.
+      const mid = new Vec3(Math.floor((S.x + me.x) / 2), Math.floor(me.y), Math.floor((S.z + me.z) / 2))
+      if (!standable(mid) && !standable(mid.offset(0, 1, 0)) && !standable(mid.offset(0, -1, 0))) continue
+      const v = evalAt(S, travel)
+      if (v && (!best || v.s > best.s)) best = { x: S.x, y: S.y, z: S.z, s: v.s, why: v.why }
+    }
+  }
+  if (!best) return null
+  if (here && best.s < here.s + 1.5) return null
+  return { x: best.x, y: best.y, z: best.z, why: best.why.length ? best.why.join(', ') : null }
+}
 
-  // ------------------------------------------------------------ всплеск в добиваемого
-  //
-  // Урон размазан по двоим — убийства нет (try-duo 2026-09-26: 8 раундов по
-  // 15–31 хп, 0 убийств). Добить — только всплеском в одного:
-  //  * вред II броском — 12 магией мимо брони (HealOrHarmMobEffect: 6 << уровень;
-  //    прямое попадание ×1, рядом ×(1 − √d/4) — AbstractThrownPotion.applySplash),
-  //    два подряд — 24, но второй не раньше 10 тиков (LivingEntity.hurtServer:
-  //    пока invulnerableTime > 10, проходит лишь разница с lastHurt) — пауза
-  //    600 мс; бросок — с 3.3–5.2 бл. (дальше не долетит, ближе облако бьёт нас);
-  //  * булава с падения (mace.smashPlan): по железу ≈ 30 после брони — броня
-  //    15 против удара 39 режет только до armor/5 (CombatRules.
-  //    getDamageAfterAbsorb) — убийство с полного; взлёт ~10 тиков у земли, и
-  //    удар второго в эти тики срезает подъём (LivingEntity.knockback) — только
-  //    когда второй не достанет или его удар не готов;
-  //  * заряженный арбалет добивает сам (ranged.plan, «добиваю»).
-  // Возвращает { kind: 'harm', e, item, why } | { kind: 'smash', e, why } | null.
-  const HARM = { strong_harming: 12, harming: 6 }
+// ------------------------------------------------------------ всплеск в добиваемого
+//
+// Урон размазан по двоим — убийства нет (try-duo 2026-09-26: 8 раундов по
+// 15–31 хп, 0 убийств). Добить — только всплеском в одного:
+//  * вред II броском — 12 магией мимо брони (HealOrHarmMobEffect: 6 << уровень;
+//    прямое попадание ×1, рядом ×(1 − √d/4) — AbstractThrownPotion.applySplash),
+//    два подряд — 24, но второй не раньше 10 тиков (LivingEntity.hurtServer:
+//    пока invulnerableTime > 10, проходит лишь разница с lastHurt) — пауза
+//    600 мс; бросок — с 3.3–5.2 бл. (дальше не долетит, ближе облако бьёт нас);
+//  * булава с падения (mace.smashPlan): по железу ≈ 30 после брони — броня
+//    15 против удара 39 режет только до armor/5 (CombatRules.
+//    getDamageAfterAbsorb) — убийство с полного; взлёт ~10 тиков у земли, и
+//    удар второго в эти тики срезает подъём (LivingEntity.knockback) — только
+//    когда второй не достанет или его удар не готов;
+//  * заряженный арбалет добивает сам (ranged.plan, «добиваю»).
+// Возвращает { kind: 'harm', e, item, why } | { kind: 'smash', e, why } | null.
+const HARM = { strong_harming: 12, harming: 6 }
+// Второй (не добиваемый): достанет ли нас за время приёма и готов ли его удар.
+function secondBusy (fx, xs, lead = 0.8) {
+  const o = xs.filter(x => x !== fx).sort((a, b) => a.theirR - b.theirR)[0]
+  if (!o) return false
+  const soon = o.theirR <= FOE_REACH + lead
+  return soon && o.readyMs < 700
+}
+
+function duoBurst (ds: DuoState, ctx: any = {}) {
+  const { bot, potionOf, ready, rest, burstStats, foes, info } = ds
   const harmsOf = () => bot.inventory.items()
     .filter(i => i.name === 'splash_potion' && HARM[potionOf(i)])
     .map(i => ({ item: i, dmg: HARM[potionOf(i)] }))
     .sort((a, b) => b.dmg - a.dmg)
-  const burstStats = { harm: 0, smash: 0 }
-  st.burst = burstStats
-  const secondBusy = (fx, xs, lead = 0.8) => {
-    // Второй (не добиваемый): достанет ли нас за время приёма и готов ли его удар.
-    const o = xs.filter(x => x !== fx).sort((a, b) => a.theirR - b.theirR)[0]
-    if (!o) return false
-    const soon = o.theirR <= FOE_REACH + lead
-    return soon && o.readyMs < 700
+  if (!ON || ds.closed || !bot.entity) return null
+  const fs = foes()
+  if (fs.length < 2) return null
+  const xs = fs.map(info)
+  const fx = ds.focus ? xs.find(x => x.e.id === ds.focus.id) : null
+  if (!fx) return null
+  const eye = bot.entity.position.offset(0, EYE, 0)
+  const sees = raySees(bot, eye, fx.e.position.offset(0, (fx.e.height || 1.8) * 0.55, 0))
+  // Вред: сколько снимут все броски, что есть (по два за окно).
+  const hs = harmsOf()
+  // Окно броска — 3.3–5.2 бл.: зелье до середины его тела долетает лишь на
+  // ~4.5 (throw.aim; 0.5 бл/тик, −20°, тяжесть 0.05), а облако ближе 3.3 к
+  // нам бьёт и нас (pvp.throwAt minLand). Прежнее окно 4.6–8 почти всегда
+  // было «не долетит» (after-burst: «вред 10» решений — 1 бросок).
+  if (hs.length && sees && ready('burstHarm') && fx.d >= 3.3 && fx.d <= 5.2 && !ctx.meInWeb) {
+    const total = hs.slice(0, 2).reduce((s, h) => s + h.dmg, 0)
+    if (fx.ehp <= total + 1) {
+      rest('burstHarm', 600)
+      burstStats.harm++
+      return { kind: 'harm', e: fx.e, item: hs[0].item, why: `вред в добиваемого ${fx.e.username || ''} (${Math.round(fx.ehp)} хп, снимет до ${total})` }
+    }
   }
-  const burst = (ctx: any = {}) => {
-    if (!ON || closed || !bot.entity) return null
-    const fs = foes()
-    if (fs.length < 2) return null
-    const xs = fs.map(info)
-    const fx = focus ? xs.find(x => x.e.id === focus.id) : null
-    if (!fx) return null
-    const eye = bot.entity.position.offset(0, EYE, 0)
-    const sees = raySees(bot, eye, fx.e.position.offset(0, (fx.e.height || 1.8) * 0.55, 0))
-    // Вред: сколько снимут все броски, что есть (по два за окно).
-    const hs = harmsOf()
-    // Окно броска — 3.3–5.2 бл.: зелье до середины его тела долетает лишь на
-    // ~4.5 (throw.aim; 0.5 бл/тик, −20°, тяжесть 0.05), а облако ближе 3.3 к
-    // нам бьёт и нас (pvp.throwAt minLand). Прежнее окно 4.6–8 почти всегда
-    // было «не долетит» (after-burst: «вред 10» решений — 1 бросок).
-    if (hs.length && sees && ready('burstHarm') && fx.d >= 3.3 && fx.d <= 5.2 && !ctx.meInWeb) {
-      const total = hs.slice(0, 2).reduce((s, h) => s + h.dmg, 0)
-      if (fx.ehp <= total + 1) {
-        rest('burstHarm', 600)
-        burstStats.harm++
-        return { kind: 'harm', e: fx.e, item: hs[0].item, why: `вред в добиваемого ${fx.e.username || ''} (${Math.round(fx.ehp)} хп, снимет до ${total})` }
+  // Булава: взлёт на добиваемого, пока второй не мешает.
+  if (!ctx.meInWeb && !ctx.perch && !ctx.fort && (ctx.hp ?? 20) > 6 && ready('burstSmash')) {
+    let sp = null
+    try { sp = mace.smashPlan(bot, fx.e) } catch {}
+    if (sp) {
+      const g = assess.gearOf(((fx.e.equipment) || []).slice(2))
+      const exp = assess.afterArmor(sp.expect, g.armor, g.tough)
+      // Второй не должен успеть: за заряд булавы и взлёт (~12 тиков) он
+      // пробегает ~3 бл. — его рука дальше 3 + 3.2 (after-burst: «передумал»
+      // ×4 — каждый отказ стоил смены предмета).
+      if (fx.ehp <= exp + 2 && !fx.shield && !secondBusy(fx, xs, 3.2) && !(fx.theirR <= FOE_REACH && fx.readyMs < 100)) {
+        rest('burstSmash', 2500)
+        burstStats.smash++
+        return { kind: 'smash', e: fx.e, why: `булава в добиваемого ${fx.e.username || ''} (${Math.round(fx.ehp)} хп, жду ~${Math.round(exp)})` }
       }
     }
-    // Булава: взлёт на добиваемого, пока второй не мешает.
-    if (!ctx.meInWeb && !ctx.perch && !ctx.fort && (ctx.hp ?? 20) > 6 && ready('burstSmash')) {
-      let sp = null
-      try { sp = mace.smashPlan(bot, fx.e) } catch {}
-      if (sp) {
-        const g = assess.gearOf(((fx.e.equipment) || []).slice(2))
-        const exp = assess.afterArmor(sp.expect, g.armor, g.tough)
-        // Второй не должен успеть: за заряд булавы и взлёт (~12 тиков) он
-        // пробегает ~3 бл. — его рука дальше 3 + 3.2 (after-burst: «передумал»
-        // ×4 — каждый отказ стоил смены предмета).
-        if (fx.ehp <= exp + 2 && !fx.shield && !secondBusy(fx, xs, 3.2) && !(fx.theirR <= FOE_REACH && fx.readyMs < 100)) {
-          rest('burstSmash', 2500)
-          burstStats.smash++
-          return { kind: 'smash', e: fx.e, why: `булава в добиваемого ${fx.e.username || ''} (${Math.round(fx.ehp)} хп, жду ~${Math.round(exp)})` }
-        }
-      }
-    }
-    return null
   }
-  // Удар второго придёт в тики взлёта булавы (для общего блока булавы в pvp.js).
-  const secondThreat = () => {
-    if (!ON || closed || !bot.entity) return false
-    const fs = foes()
-    if (fs.length < 2) return false
-    const xs = fs.map(info)
-    const cur = target()
-    const fx = xs.find(x => x.e.id === (cur && cur.id)) || xs[0]
-    return secondBusy(fx, xs)
-  }
+  return null
+}
 
-  const close = () => {
-    if (closed) return
-    closed = true
-    for (const t of hpTrackers.values()) { try { t.stop() } catch {} }
-    hpTrackers.clear()
-    bot.removeListener('entityHurt', onHurt)
-    bot.removeListener('health', onHealth)
-    bot.removeListener('physicsTick', onTick)
-    if (!st.ticks2) return
-    const pct = n => Math.round(n / st.ticks2 * 100)
-    used(`1 против 2${ON ? '' : ' (выкл)'}: двое рядом ${Math.round(st.ticks2 / 20)} с — оба достают ${pct(st.tBoth)}%, клещи ${pct(st.tPincer)}%, в линию ${pct(st.tLine)}%, урон от двоих ${Math.round(st.dmg2)}`)
-    const sw = (Object.entries(st.switches) as [string, any][]).map(([k, v]) => `${k}×${v}`).join(', ')
-    if (ON && (sw || st.resets || st.webs)) used(`1 против 2: смен цели ${(Object.values(st.switches) as any[]).reduce((a: any, b) => a + b, 0)}${sw ? ' (' + sw + ')' : ''}, рывков ${st.resets} (растянул ${st.splits}), паутина под второго ${st.webs}`)
-    const hits = (Object.entries(st.hitsOn) as [string, any][]).map(([k, v]) => `${k} ${v}`).join(', ')
-    if (hits) used('1 против 2: попал по ' + hits)
-    if (ON && focusStats.commits) used(`1 против 2: добиваемых ${focusStats.commits}, обратно к нему ${focusStats.backs} (он лечился ${focusStats.regen || 0}), не рвал контакт ради добивания ${focusStats.holdReset}`)
-    if (ON && (burstStats.harm || burstStats.smash)) used(`1 против 2: всплеск в добиваемого — вред ${burstStats.harm}, булава ${burstStats.smash}`)
-  }
+// Удар второго придёт в тики взлёта булавы (для общего блока булавы в pvp.js).
+function duoSecondThreat (ds: DuoState) {
+  const { bot, target, foes, info } = ds
+  if (!ON || ds.closed || !bot.entity) return false
+  const fs = foes()
+  if (fs.length < 2) return false
+  const xs = fs.map(info)
+  const cur = target()
+  const fx = xs.find(x => x.e.id === (cur && cur.id)) || xs[0]
+  return secondBusy(fx, xs)
+}
 
-  return {
-    ON,
-    active: () => ON && !closed && foes().length >= 2,
-    foes,
-    decide,
-    switched,
-    runReset,
-    webSecond,
-    steer,
-    burst,
-    // Бросок не состоялся (облако легло бы на нас, нечем) — не пробовать 1.5 с.
-    burstFailed: (kind) => rest(kind === 'harm' ? 'burstHarm' : 'burstSmash', 1500),
-    secondThreat,
-    focusId: () => (focus ? focus.id : null),
-    stats: st,
-    close
-  }
+function duoClose (ds: DuoState) {
+  const { bot, used, st, focusStats, burstStats, onHurt, onHealth, onTick, hpTrackers } = ds
+  if (ds.closed) return
+  ds.closed = true
+  for (const t of hpTrackers.values()) { try { t.stop() } catch {} }
+  hpTrackers.clear()
+  bot.removeListener('entityHurt', onHurt)
+  bot.removeListener('health', onHealth)
+  bot.removeListener('physicsTick', onTick)
+  if (!st.ticks2) return
+  const pct = n => Math.round(n / st.ticks2 * 100)
+  used(`1 против 2${ON ? '' : ' (выкл)'}: двое рядом ${Math.round(st.ticks2 / 20)} с — оба достают ${pct(st.tBoth)}%, клещи ${pct(st.tPincer)}%, в линию ${pct(st.tLine)}%, урон от двоих ${Math.round(st.dmg2)}`)
+  const sw = (Object.entries(st.switches) as [string, any][]).map(([k, v]) => `${k}×${v}`).join(', ')
+  if (ON && (sw || st.resets || st.webs)) used(`1 против 2: смен цели ${(Object.values(st.switches) as any[]).reduce((a: any, b) => a + b, 0)}${sw ? ' (' + sw + ')' : ''}, рывков ${st.resets} (растянул ${st.splits}), паутина под второго ${st.webs}`)
+  const hits = (Object.entries(st.hitsOn) as [string, any][]).map(([k, v]) => `${k} ${v}`).join(', ')
+  if (hits) used('1 против 2: попал по ' + hits)
+  if (ON && focusStats.commits) used(`1 против 2: добиваемых ${focusStats.commits}, обратно к нему ${focusStats.backs} (он лечился ${focusStats.regen || 0}), не рвал контакт ради добивания ${focusStats.holdReset}`)
+  if (ON && (burstStats.harm || burstStats.smash)) used(`1 против 2: всплеск в добиваемого — вред ${burstStats.harm}, булава ${burstStats.smash}`)
 }
 
 export { create, ON }

@@ -191,6 +191,24 @@ async function pickUp (session, bot, item, ms = 7000) {
 function hook (ap, bot) {
   if (ap.gestureBot === bot) return
   ap.gestureBot = bot
+  const gs = gestureState(ap, bot)
+  gestureSummon(gs)
+  gestureBody(gs)
+  gestureFriendHurt(gs)
+  gestureThrows(gs)
+  gestureWatch(gs)
+}
+
+// Слежка одного тела (прежние let и const замыкания hook): люди по имени, жест не чаще раза в окно, событие мозгу,
+// рефлекс телом (reflexBusy — он идёт), настроение сессии, зов.
+interface GestureState {
+  ap: any; bot: any; session: any; people: Map<string, any>; rec: (name: string) => any
+  fresh: (r: any, kind: string, ms?: number) => boolean; emit: (name: string, kind: string, text: string, extra?: any) => void
+  reflexBusy: boolean; reflex: (fn: any, signal?: SocialSignal, name?: string | null) => boolean; mood: any
+  trySummon?: (name: string, opts?: any) => void
+}
+
+function gestureState (ap, bot): GestureState {
   const session = ap.session
   const people = new Map()
   const rec = (name) => {
@@ -224,34 +242,39 @@ function hook (ap, bot) {
     }
     session.bus.emit('gesture', { name, kind, text, ...extra })
   }
+  const gs: GestureState = { ap, bot, session, people, rec, fresh, emit, reflexBusy: false, reflex: null, mood: null }
   // Рефлекс в стороне от автопилота: не держать его тик.
-  let reflexBusy = false
   const reflex = (fn, signal: SocialSignal = 'look', name = null) => {
-    if (reflexBusy || !idle(session, bot)) return false
+    if (gs.reflexBusy || !idle(session, bot)) return false
     const decision = evaluateSocial({ signal, mood: mood.state.mood, affinity: name ? mood.affinity(name) : 50,
       health: bot.health ?? 20, threatLevel: session.tactics?.snapshot()?.threatLevel ?? 0,
       bodyBusy: false, airborne: !!bot.entity?.elytraFlying, interrupted: false, distance: 3 })
     session.socialDecision = decision
     if (!decision.gesture || (signal === 'crouch' && decision.gesture !== 'crouch')) return false
-    reflexBusy = true
+    gs.reflexBusy = true
     controlLock.start(session, async ctl => {
       const allowed = () => !ctl.aborted && (session.tactics?.snapshot()?.threatLevel ?? 0) === 0
         && !(session.current && session.current.name !== 'wait') && !bot.entity?.elytraFlying
       if (allowed()) await fn(allowed)
-    }, { owner: 'Skill', priority: 1, source: 'social-gesture' }).catch(() => {}).finally(() => { reflexBusy = false })
+    }, { owner: 'Skill', priority: 1, source: 'social-gesture' }).catch(() => {}).finally(() => { gs.reflexBusy = false })
     return true
   }
-  ap.gestureState = { people, reflexBusy: () => reflexBusy }
+  ap.gestureState = { people, reflexBusy: () => gs.reflexBusy }
 
   // Настроение и отношение к людям за сессию (mood.js). Одно на сессию —
   // переживает переподключение тела.
   const mood = session.mood || (session.mood = new Mood(session, session.cfg && session.cfg.memoryDir))
+  Object.assign(gs, { reflex, mood })
+  return gs
+}
 
-  // --------------------------------------------------------------- зов
-  // «Иди сюда, покажу», присел или прыгает издалека, глядя на меня. Прибежать
-  // ли — решает настроение (mood.decideCome): отношение к нему, как часто
-  // зовёт, сам ли ранен и голоден, далеко ли. Добежав — посмотреть туда, куда
-  // смотрит он: «смотреть, что показывают» — это и есть зачем звали.
+// --------------------------------------------------------------- зов
+// «Иди сюда, покажу», присел или прыгает издалека, глядя на меня. Прибежать
+// ли — решает настроение (mood.decideCome): отношение к нему, как часто
+// зовёт, сам ли ранен и голоден, далеко ли. Добежав — посмотреть туда, куда
+// смотрит он: «смотреть, что показывают» — это и есть зачем звали.
+function gestureSummon (gs: GestureState) {
+  const { bot, session, rec, emit, mood } = gs
   const summon = { active: null }
   const freeForSummon = () => {
     if (session.reflex || (session.tactics?.snapshot()?.threatLevel ?? 0) > 0 || bot.entity?.elytraFlying || bot._ndDescend) return false
@@ -345,7 +368,12 @@ function hook (ap, bot) {
   }
   bot.on('chat', onChat)
   bot.on('whisper', onChat)
+  gs.trySummon = trySummon
+}
 
+// Настроение от того, что с нами делают, и жесты телом: присед, взмах рукой, сон.
+function gestureBody (gs: GestureState) {
+  const { bot, rec, fresh, emit, reflex, mood, trySummon } = gs
   // Настроение от того, что с нами делают: удар человека, своя смерть.
   bot.on('entityHurt', (victim, source) => {
     if (victim !== bot.entity || !source || !social.isPlayerEntity(source)) return
@@ -405,12 +433,15 @@ function hook (ap, bot) {
     emit(p.username, 'спит', `${p.username} лёг спать${night ? ' — ночь пропустится, только если лягу и я (mc_sleep)' : ''}`,
       { dist: Math.round(distTo(bot, p)), night })
   })
+}
 
-  // Друга бьёт моб. Урон приходит пакетом damage_event с виновником
-  // (mineflayer: entityHurt(victim, source)); для стрелы виновник — стрелок.
-  // Живой напарник оборачивается и вступается: бьём именно этого моба, если
-  // тело свободно, хп хватает и характер позволяет (session.temper.defend).
-  // Человек, ударивший человека, — не наше дело: только мобы.
+// Друга бьёт моб. Урон приходит пакетом damage_event с виновником
+// (mineflayer: entityHurt(victim, source)); для стрелы виновник — стрелок.
+// Живой напарник оборачивается и вступается: бьём именно этого моба, если
+// тело свободно, хп хватает и характер позволяет (session.temper.defend).
+// Человек, ударивший человека, — не наше дело: только мобы.
+function gestureFriendHurt (gs: GestureState) {
+  const { bot, session, rec, fresh, mood } = gs
   bot.on('entityHurt', (victim, source) => {
     const p = playerEnt(bot, victim)
     if (!p || !source || social.isPlayerEntity(source)) return
@@ -450,9 +481,12 @@ function hook (ap, bot) {
         .catch(() => {})
     }
   })
+}
 
-  // Брошенный предмет. Спавн запоминаем сразу — itemDrop приходит позже, с
-  // метаданными, и предмет к тому времени уже пролетел тик-другой.
+// Брошенный предмет. Спавн запоминаем сразу — itemDrop приходит позже, с
+// метаданными, и предмет к тому времени уже пролетел тик-другой.
+function gestureThrows (gs: GestureState) {
+  const { bot, session, emit, reflex, mood } = gs
   const spawned = new Map()
   bot.on('entitySpawn', (e) => {
     if (e && (e.name === 'item' || e.displayName === 'Item')) spawned.set(e.id, { at: gameClock.now(), pos: e.position.clone(), vel: e.velocity ? e.velocity.clone() : null })
@@ -510,7 +544,7 @@ function hook (ap, bot) {
         const what = t.items.map(i => `${i.name}×${i.count}`).join(', ')
         const ents = live.map(x => x.e)
         if (t.toMe) mood.bump(key, 'подарок', 6, 4)
-        const willPick = t.toMe && idle(session, bot) && !reflexBusy
+        const willPick = t.toMe && idle(session, bot) && !gs.reflexBusy
         emit(key, t.toMe ? 'кинул мне' : 'выбросил',
           t.toMe
             ? `${key} кинул мне ${what}${willPick ? ' — подбираю' : ''}`
@@ -537,9 +571,12 @@ function hook (ap, bot) {
     t.ents.push(item)
     t.toMe = t.toMe || toMe
   })
+}
 
-  // Прыжки и взгляды — по таймеру: позиции чужих игроков приходят каждый тик,
-  // а решать чаще четырёх раз в секунду незачем.
+// Прыжки и взгляды — по таймеру: позиции чужих игроков приходят каждый тик,
+// а решать чаще четырёх раз в секунду незачем.
+function gestureWatch (gs: GestureState) {
+  const { bot, session, people, rec, fresh, emit, reflex, mood, trySummon } = gs
   const timer = gameClock.setInterval(() => {
     if (!bot.entity) return
     const now = gameClock.now()

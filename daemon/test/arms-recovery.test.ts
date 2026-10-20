@@ -1,14 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { runInNewContext } from 'node:vm'
 import { cjsContext } from './cjs-context'
+import { declSource } from './source-fixture'
 
 // Исполняем настоящий ArmsEnv, не сетевой bootstrap сцены внизу arms-run.
-const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
-const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
+// Класс ArmsEnv — объявлением из исходника arms-run (declSource: без импортов и сетевого bootstrap сцены).
+const body = declSource(join(__dirname, '../arena/arms-run.js'), 'ArmsEnv')
 // Настоящий RPC status демона (src/rpc/observation.ts) над тестовой сессией — без bootstrap демона.
 const { observationMethods }: typeof import('../src/rpc/observation') = require('../src/rpc/observation')
 function fixture({ food = 10, inventory = {}, items = null, eat = null, at = null, interrupted = false, foe = null, bot = null, fight = null }: any = {}) {

@@ -226,12 +226,31 @@ async function collectVein (bot, ctl, spots, { waitMs = 1500, budgetMs = 8000 }:
 // from the ledger instead of from the eyes, and that is the only difference
 // that matters — it is also the difference between a bot that walks past its
 // own diamonds and one that goes back for them.
+//
+// По шагам: startErrand — цель из памяти, отказы до хода и дорога; veinStep — один блок жилы (ответ 'stop' —
+// прежний break, 'next' — прежний continue); finishErrand — дроп, вычерк из памяти и ответ. ctx — всё, что было
+// замыканием mineSeen (бывшие let — поля ctx; watch и mobStop — те же замыкания, привязанные к ctx).
+interface ErrandCtx {
+  session: any; ctl: any; bot: any; mcData: any; deadline: any; want: any; chosen: any; row: any; first: any;
+  before: any; oreSet: any; scenery: any; travel: any; taken: any; struck: any; gone: any; exposed: any;
+  queue: any; done: any; stopped: any; need: any; threat: any;
+  watch: () => any; mobStop: (alarm: any) => string
+}
+
 async function mineSeen (session, ctl, {
   at: asked = null,
   block = null,
   count = 8,
   timeoutSeconds = 180
 }: any = {}) {
+  const ctx = await startErrand(session, ctl, { asked, block, count, timeoutSeconds })
+  while (ctx.queue.length && ctx.taken.length < ctx.want) {
+    if (await veinStep(ctx) === 'stop') break
+  }
+  return finishErrand(ctx)
+}
+
+async function startErrand (session, ctl, { asked, block, count, timeoutSeconds }): Promise<ErrandCtx> {
   const bot = session.bot
   const mcData = session.mcData
   const deadline = gameClock.now() + clamp(timeoutSeconds, 20, 600, 180) * 1000
@@ -267,32 +286,7 @@ async function mineSeen (session, ctl, {
     try { bot.stopDigging() } catch {}
   })
 
-  // Not the drift's whole mob doctrine — that lives in tunnel() and combat.js
-  // and does not belong to a two-block errand. Just the one question a person
-  // digging in a wall would actually ask: can something close by get at me.
-  // Asked with the drift's own reachOf, because this guard used to be a private
-  // «within 3 blocks, or canSeePoint» and at y=1 it refused three calls in a row
-  // with «zombie в 3 блоках вплотную» — for a zombie in the cave under a
-  // one-block floor, which the drift beside it had already called scenery.
   const scenery = new Map()
-  const watch = () => {
-    const cache = new Map()
-    for (const mob of hostilesWithin(bot, ERRAND_LOOK)) {
-      const r = reachOf(bot, mob, { cache })
-      if (!r.reaches) { scenery.set(mob.id, sceneryOf(mob, r)); continue }
-      scenery.delete(mob.id)
-      return { kind: 'mob', mob, reach: r }
-    }
-    return null
-  }
-  // One sentence for both places the errand can meet it, carrying the words
-  // that tell contact from a way in: «вплотную» is said only when it is true.
-  const mobStop = (alarm) => {
-    const r = alarm.reach
-    threat = { mob: alarm.mob.name, dist: r.dist, at: xyz(alarm.mob.position), where: r.where, how: r.how }
-    if (r.steps !== null) threat.steps = r.steps
-    return `${threat.mob} в ${threat.dist} блоках ${r.where}, ${reachWords(r)} — добор бросил, взято ${taken.length}`
-  }
 
   const travel = await travelTo(session, ctl, first,
     Math.min(90000, Math.max(15000, (deadline - gameClock.now()) * 0.6)))
@@ -314,136 +308,180 @@ async function mineSeen (session, ctl, {
   const queue = [first]
   const done = new Set()
 
-  while (queue.length && taken.length < want) {
-    const pos = queue.shift()
-    if (done.has(posKey(pos))) continue
-    done.add(posKey(pos))
-    if (ctl.aborted) { stopped = `прервано, взято ${taken.length}`; break }
-    if (gameClock.now() >= deadline) { stopped = `время вышло, взято ${taken.length} из ${want}`; break }
+  const ctx: ErrandCtx = {
+    session, ctl, bot, mcData, deadline, want, chosen, row, first, before, oreSet, scenery, travel,
+    taken, struck, gone, exposed, queue, done, stopped, need, threat,
+    watch: () => watchErrand(ctx),
+    mobStop: alarm => errandMobStop(ctx, alarm)
+  }
+  return ctx
+}
 
-    const alarm = watch()
-    if (alarm) { stopped = mobStop(alarm); break }
+// Not the drift's whole mob doctrine — that lives in tunnel() and combat.js
+// and does not belong to a two-block errand. Just the one question a person
+// digging in a wall would actually ask: can something close by get at me.
+// Asked with the drift's own reachOf, because this guard used to be a private
+// «within 3 blocks, or canSeePoint» and at y=1 it refused three calls in a row
+// with «zombie в 3 блоках вплотную» — for a zombie in the cave under a
+// one-block floor, which the drift beside it had already called scenery.
+function watchErrand (ctx: ErrandCtx) {
+  const { bot, scenery } = ctx
+  const cache = new Map()
+  for (const mob of hostilesWithin(bot, ERRAND_LOOK)) {
+    const r = reachOf(bot, mob, { cache })
+    if (!r.reaches) { scenery.set(mob.id, sceneryOf(mob, r)); continue }
+    scenery.delete(mob.id)
+    return { kind: 'mob', mob, reach: r }
+  }
+  return null
+}
 
-    // Memory meets sight, and the order matters: the square is read before the
-    // body is walked toward it, not after. Being close enough to see it is the
-    // whole licence to look at all — from forty blocks away blockAt is reading
-    // the chunk out of client memory, which is the x-ray fairPlay forbids, so
-    // verify() answers «далеко» there and nothing is concluded from it.
-    let seenNow = verify(bot, { name: row.name, x: pos.x, y: pos.y, z: pos.z })
-    if (seenNow.state === 'не прогружено') {
-      stopped = `мир на ${at(pos)} не прогружен — постой рядом и позови ещё раз`
-      break
-    }
-    // The ore is gone and we can already see that it is: answered from where
-    // the body stands, without a pathfind into a wall with nothing behind it.
-    if (seenNow.state === 'нет') {
-      gone.push({ at: xyz(pos), помнил: row.name, сейчас: seenNow.found })
-      struck.push(pos)
-      if (pos.equals(first)) break
-      continue
-    }
+// One sentence for both places the errand can meet it, carrying the words
+// that tell contact from a way in: «вплотную» is said only when it is true.
+function errandMobStop (ctx: ErrandCtx, alarm) {
+  const { taken } = ctx
+  const r = alarm.reach
+  ctx.threat = { mob: alarm.mob.name, dist: r.dist, at: xyz(alarm.mob.position), where: r.where, how: r.how }
+  if (r.steps !== null) ctx.threat.steps = r.steps
+  return `${ctx.threat.mob} в ${ctx.threat.dist} блоках ${r.where}, ${reachWords(r)} — добор бросил, взято ${taken.length}`
+}
 
-    const near = await approach(session, ctl, pos, deadline)
-    if (!near.ok) {
-      // The first block failing is the whole call failing; a vein block failing
-      // is one block left in the wall, and the rest of the vein is still ours.
-      if (!taken.length) {
-        // When the road itself never arrived, the road's reason is the true one:
-        // "до X не дотянуться" would blame the wall for a corridor that is
-        // blocked thirty blocks back.
-        stopped = travel.error && travel.left > VERIFY_RANGE
-          ? `не дошёл до ${at(pos)}: ${travel.error} (осталось ${travel.left})`
-          : near.reason
-        need = near.need || null
-        break
-      }
-      continue
-    }
+// Один блок жилы: взгляд, сверка памяти с глазами, подход, лава, удар, грани вскрытой клетки.
+async function veinStep (ctx: ErrandCtx): Promise<'stop' | 'next' | undefined> {
+  const { session, ctl, bot, mcData, deadline, want, row, first, oreSet, travel, taken, struck, gone, exposed, queue, done,
+    watch, mobStop } = ctx
+  const pos = queue.shift()
+  if (done.has(posKey(pos))) return 'next'
+  done.add(posKey(pos))
+  if (ctl.aborted) { ctx.stopped = `прервано, взято ${taken.length}`; return 'stop' }
+  if (gameClock.now() >= deadline) { ctx.stopped = `время вышло, взято ${taken.length} из ${want}`; return 'stop' }
 
-    // The walk took a second or two, and a square can change in one. This is
-    // the read that decides, and it happens with the body within reach.
-    seenNow = verify(bot, { name: row.name, x: pos.x, y: pos.y, z: pos.z })
-    // Could not look, as opposed to looked and found nothing. approach() only
-    // returns ok when canDigBlock passes, so this is close to impossible — but
-    // the two outcomes strike the row off and the difference between them is
-    // losing a live vein for good, so they do not share a branch.
-    if (seenNow.state === 'далеко' || seenNow.state === 'не прогружено') {
-      if (!taken.length) { stopped = `не разглядел ${at(pos)} вблизи (${seenNow.state})`; break }
-      continue
-    }
-    const here = seenNow.block
-    if (seenNow.state !== 'на месте' || !here || !oreSet.has(here.type)) {
-      // Honest, and this is the whole of case (в): the coordinate is right, the
-      // ore is not. "добыл" here, or a throw, would both be worse than simply
-      // saying what is in the square now.
-      gone.push({
-        at: xyz(pos),
-        помнил: row.name,
-        сейчас: seenNow.found || (here ? here.name : 'не прогружено')
-      })
-      struck.push(pos)
-      if (pos.equals(first)) break
-      continue
-    }
+  const alarm = watch()
+  if (alarm) { ctx.stopped = mobStop(alarm); return 'stop' }
 
-    // Lava behind the vein, asked before the swing rather than felt after it.
-    // Same probe, same wording, same one-way rule as every other cell this file
-    // cuts: danger() may refuse and may never point at anything worth having.
-    const me = bot.entity.position.floored()
-    const toward = Math.abs(pos.x - me.x) >= Math.abs(pos.z - me.z)
-      ? (pos.x - me.x >= 0 ? DIRS.east : DIRS.west)
-      : (pos.z - me.z >= 0 ? DIRS.south : DIRS.north)
-    const risk = danger(bot, me, pos, 1, toward)
-    if (risk) {
-      stopped = risk
-      if (!taken.length) break
-      continue
-    }
-
-    const name = here.name
-    const cut = await digColumn(bot, mcData, ctl, pos, 1, Math.min(deadline, gameClock.now() + 30000), watch)
-    if (cut.alarm) { stopped = mobStop(cut.alarm); break }
-    if (!cut.dug) {
-      if (!taken.length) { stopped = cut.stopped; need = cut.need || null; break }
-      continue
-    }
-    taken.push({ name, at: xyz(pos) })
+  // Memory meets sight, and the order matters: the square is read before the
+  // body is walked toward it, not after. Being close enough to see it is the
+  // whole licence to look at all — from forty blocks away blockAt is reading
+  // the chunk out of client memory, which is the x-ray fairPlay forbids, so
+  // verify() answers «далеко» there and nothing is concluded from it.
+  let seenNow = verify(bot, { name: row.name, x: pos.x, y: pos.y, z: pos.z })
+  if (seenNow.state === 'не прогружено') {
+    ctx.stopped = `мир на ${at(pos)} не прогружен — постой рядом и позови ещё раз`
+    return 'stop'
+  }
+  // The ore is gone and we can already see that it is: answered from where
+  // the body stands, without a pathfind into a wall with nothing behind it.
+  if (seenNow.state === 'нет') {
+    gone.push({ at: xyz(pos), помнил: row.name, сейчас: seenNow.found })
     struck.push(pos)
-
-    // The cell is empty now, so its six faces are open — the same instant
-    // noteExposedOre is written for. Ore of our kind joins the vein; ore of
-    // another kind is not ours to dig on this call, but it IS now genuinely
-    // seen, so it goes into the ledger for the next one.
-    const opened = []
-    for (const face of FACES) {
-      const nb = bot.blockAt(pos.plus(face))
-      if (!nb || !oreSet.has(nb.type)) continue
-      if (nb.name === name) {
-        if (!done.has(posKey(nb.position))) queue.push(nb.position)
-      } else {
-        opened.push({
-          name: nb.name,
-          x: nb.position.x,
-          y: nb.position.y,
-          z: nb.position.z,
-          seen: stamp(),
-          why: 'вскрыл жилу'
-        })
-        exposed.push({ name: nb.name, at: xyz(nb.position) })
-      }
-    }
-    if (opened.length) rememberOre(session, opened)
-
-    // Lava that flowed in after the block came out. digColumn refuses to swing
-    // into lava but cannot know what was behind the block it just removed.
-    const spill = FACES.map(f => bot.blockAt(pos.plus(f))).find(isLava)
-    if (spill) {
-      stopped = `за рудой на ${at(pos)} оказалась лава (${at(spill.position)}) — взял ${taken.length}, ` +
-        'дальше не лезу; заткни (mc_place) или обходи с другой стороны'
-      break
-    }
+    if (pos.equals(first)) return 'stop'
+    return 'next'
   }
 
+  const near = await approach(session, ctl, pos, deadline)
+  if (!near.ok) {
+    // The first block failing is the whole call failing; a vein block failing
+    // is one block left in the wall, and the rest of the vein is still ours.
+    if (!taken.length) {
+      // When the road itself never arrived, the road's reason is the true one:
+      // "до X не дотянуться" would blame the wall for a corridor that is
+      // blocked thirty blocks back.
+      ctx.stopped = travel.error && travel.left > VERIFY_RANGE
+        ? `не дошёл до ${at(pos)}: ${travel.error} (осталось ${travel.left})`
+        : near.reason
+      ctx.need = near.need || null
+      return 'stop'
+    }
+    return 'next'
+  }
+
+  // The walk took a second or two, and a square can change in one. This is
+  // the read that decides, and it happens with the body within reach.
+  seenNow = verify(bot, { name: row.name, x: pos.x, y: pos.y, z: pos.z })
+  // Could not look, as opposed to looked and found nothing. approach() only
+  // returns ok when canDigBlock passes, so this is close to impossible — but
+  // the two outcomes strike the row off and the difference between them is
+  // losing a live vein for good, so they do not share a branch.
+  if (seenNow.state === 'далеко' || seenNow.state === 'не прогружено') {
+    if (!taken.length) { ctx.stopped = `не разглядел ${at(pos)} вблизи (${seenNow.state})`; return 'stop' }
+    return 'next'
+  }
+  const here = seenNow.block
+  if (seenNow.state !== 'на месте' || !here || !oreSet.has(here.type)) {
+    // Honest, and this is the whole of case (в): the coordinate is right, the
+    // ore is not. "добыл" here, or a throw, would both be worse than simply
+    // saying what is in the square now.
+    gone.push({
+      at: xyz(pos),
+      помнил: row.name,
+      сейчас: seenNow.found || (here ? here.name : 'не прогружено')
+    })
+    struck.push(pos)
+    if (pos.equals(first)) return 'stop'
+    return 'next'
+  }
+
+  // Lava behind the vein, asked before the swing rather than felt after it.
+  // Same probe, same wording, same one-way rule as every other cell this file
+  // cuts: danger() may refuse and may never point at anything worth having.
+  const me = bot.entity.position.floored()
+  const toward = Math.abs(pos.x - me.x) >= Math.abs(pos.z - me.z)
+    ? (pos.x - me.x >= 0 ? DIRS.east : DIRS.west)
+    : (pos.z - me.z >= 0 ? DIRS.south : DIRS.north)
+  const risk = danger(bot, me, pos, 1, toward)
+  if (risk) {
+    ctx.stopped = risk
+    if (!taken.length) return 'stop'
+    return 'next'
+  }
+
+  const name = here.name
+  const cut = await digColumn(bot, mcData, ctl, pos, 1, Math.min(deadline, gameClock.now() + 30000), watch)
+  if (cut.alarm) { ctx.stopped = mobStop(cut.alarm); return 'stop' }
+  if (!cut.dug) {
+    if (!taken.length) { ctx.stopped = cut.stopped; ctx.need = cut.need || null; return 'stop' }
+    return 'next'
+  }
+  taken.push({ name, at: xyz(pos) })
+  struck.push(pos)
+
+  // The cell is empty now, so its six faces are open — the same instant
+  // noteExposedOre is written for. Ore of our kind joins the vein; ore of
+  // another kind is not ours to dig on this call, but it IS now genuinely
+  // seen, so it goes into the ledger for the next one.
+  const opened = []
+  for (const face of FACES) {
+    const nb = bot.blockAt(pos.plus(face))
+    if (!nb || !oreSet.has(nb.type)) continue
+    if (nb.name === name) {
+      if (!done.has(posKey(nb.position))) queue.push(nb.position)
+    } else {
+      opened.push({
+        name: nb.name,
+        x: nb.position.x,
+        y: nb.position.y,
+        z: nb.position.z,
+        seen: stamp(),
+        why: 'вскрыл жилу'
+      })
+      exposed.push({ name: nb.name, at: xyz(nb.position) })
+    }
+  }
+  if (opened.length) rememberOre(session, opened)
+
+  // Lava that flowed in after the block came out. digColumn refuses to swing
+  // into lava but cannot know what was behind the block it just removed.
+  const spill = FACES.map(f => bot.blockAt(pos.plus(f))).find(isLava)
+  if (spill) {
+    ctx.stopped = `за рудой на ${at(pos)} оказалась лава (${at(spill.position)}) — взял ${taken.length}, ` +
+      'дальше не лезу; заткни (mc_place) или обходи с другой стороны'
+    return 'stop'
+  }
+}
+
+// Итог добора: дроп, вычерк из памяти, подсказка, журнал, ответ. После жилы ctx больше не меняется.
+async function finishErrand (ctx: ErrandCtx) {
+  const { session, ctl, bot, row, chosen, before, travel, taken, struck, gone, exposed, scenery, stopped, need, threat } = ctx
   // The drops, judged against the squares we actually opened rather than
   // against whatever happens to be lying near the body.
   let leftDrops = []

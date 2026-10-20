@@ -174,7 +174,9 @@ for (const [mode, why] of [['initial-deadline', /время вышло/], ['init
 
 for (const [height, aborted, climbs] of [[5, false, 1], [0, false, 0], [5, true, 0]] as Array<[number, boolean, number]>) {
   test(`подход к порогу: высота ${height}, отмена ${aborted}, подъёмов ${climbs}`, async () => {
-    const { functionSource }: typeof import('./source-fixture') = require('./source-fixture')
+    // enter — оркестр фаз перехода (nether/enter.ts: состояние en и фазы enGate…enReport), по именам из тела nether.
+    const { declSource }: typeof import('./source-fixture') = require('./source-fixture')
+    const ENTER = ['enter', 'EN_PHASES', 'enOpen', 'enGate', 'enFind', 'enThreshold', 'enHold', 'enArrive', 'enExit', 'enReport']
     const ctl = { aborted, onAbort: [] }
     const target = new Vec3(0, 64 + height, 0)
     const bot = { entity: { position: new Vec3(.5, 64, .5), velocity: new Vec3(0, 0, 0), onGround: true }, health: 20 }
@@ -186,7 +188,7 @@ for (const [height, aborted, climbs] of [[5, false, 1], [0, false, 0], [5, true,
       walkNear: async () => ({ ok: false }), walkToward: async (_s, _c, to, _d, options) => { moves.push(options); bot.entity.position = to; return { ok: true } },
       sameCell: () => bot.entity.position === target, portalChanged: () => false, insidePortal: () => false,
       xyz: p => ({ x: p.x, y: p.y, z: p.z }), sleep: async () => {}, stepTo: async () => { ctl.aborted = true } }
-    vm.runInNewContext(sourceCode(functionSource(sourceFile, 'enter') + ';this.run = enter'), cjsContext(context))
+    vm.runInNewContext(sourceCode(declSource(sourceFile, ...ENTER) + ';this.run = enter'), cjsContext(context))
     const result = await context.run({ bot, mcData: {}, journal: { state: {} } }, ctl, { timeoutSeconds: 30 })
     assert.equal(moves.length, climbs)
     if (climbs) assert.equal(moves[0].range, 0)

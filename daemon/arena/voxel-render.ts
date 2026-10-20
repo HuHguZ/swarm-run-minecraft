@@ -257,8 +257,34 @@ function stateGeometry (s) {
 
 // --------------------------------------------------------------- рендер
 
+// Один рендер: параметры, сцена, атлас, буферы. Поля заполняют фазы render по порядку (прежние const тела render).
+interface RenderCtx {
+  g: any; opt: any; az: number; el: number; ss: number; scale: number; sunAz: number; sunEl: number; night: boolean; skirt: boolean; mcData: any
+  keep: any; geo: any[]; missing: any[]; emit: Uint8Array; at: (x: number, y: number, z: number) => any; opaqueAt: (x: number, y: number, z: number) => boolean
+  L: any; cam: any; sun: any; toSun: number[]; proj: (b: any, p: any) => number[]; frame: (b: any, sc: number, pad: number) => any
+  AW?: number; AH?: number; A?: any; sampleAlpha?: (u: number, v: number, tile: any) => number
+  walk?: (viewF: any, cb: any, wantTranslucent?: any) => void; waterTex?: any
+  SH?: any; sdepth?: Float32Array; inShadow?: (wx: number, wy: number, wz: number) => number
+  FR?: any; W?: number; H?: number; depth?: Float32Array; col?: Float32Array
+  shade?: (q: any, x: number, y: number, z: number, v: any, cornerAO?: any) => any; translucent?: any[]
+}
+
 async function render (g, opt: any = {} as Record<string, any>) {
   const { createCanvas, loadImage }: typeof import('canvas') = require('canvas')
+  const R = renderScene(g, opt)
+  Object.assign(R, await loadAtlas(createCanvas, loadImage))
+  Object.assign(R, sceneWalker(R))
+  Object.assign(R, shadowMap(R))
+  Object.assign(R, mainFrame(R))
+  R.shade = shader(R)
+  R.translucent = opaquePass(R)
+  seaPlane(R)
+  translucentPass(R)
+  return encodePng(R, createCanvas)
+}
+
+// Сцена: параметры кадра, отбор клеток, палитра, ночной свет, камера, габарит кадра.
+function renderScene (g, opt): RenderCtx {
   const az = (opt.az ?? 35) * Math.PI / 180
   const el = (opt.el ?? 30) * Math.PI / 180
   const ss = opt.ss || 1
@@ -341,13 +367,28 @@ async function render (g, opt: any = {} as Record<string, any>) {
     for (const p of corners) { const q = proj(b, p); if (q[0] < a0) a0 = q[0]; if (q[0] > a1) a1 = q[0]; if (q[1] < c0) c0 = q[1]; if (q[1] > c1) c1 = q[1] }
     return { ox: -a0 * sc + pad, oy: -c0 * sc + pad, W: Math.ceil((a1 - a0) * sc + 2 * pad), H: Math.ceil((c1 - c0) * sc + 2 * pad), sc }
   }
+  return { g, opt, az, el, ss, scale, sunAz, sunEl, night, skirt, mcData, keep, geo, missing, emit, at, opaqueAt, L, cam, sun, toSun, proj, frame }
+}
 
+// Атлас текстур и выборка тексела в пределах плитки.
+async function loadAtlas (createCanvas, loadImage) {
   const atlasImg = await loadImage(ATLAS)
   const ac = createCanvas(atlasImg.width, atlasImg.height)
   ac.getContext('2d').drawImage(atlasImg, 0, 0)
   const AW = atlasImg.width; const AH = atlasImg.height
   const A = ac.getContext('2d').getImageData(0, 0, AW, AH).data
+  const sampleAlpha = (u, v, tile) => {
+    let tx = Math.floor(u * AW); let ty = Math.floor(v * AH)
+    const t0 = Math.floor(tile[0] * AW + 1e-6); const t1 = Math.ceil(tile[2] * AW - 1e-6) - 1
+    const s0 = Math.floor(tile[1] * AH + 1e-6); const s1 = Math.ceil(tile[3] * AH - 1e-6) - 1
+    if (tx < t0) tx = t0; if (tx > t1) tx = t1; if (ty < s0) ty = s0; if (ty > s1) ty = s1
+    return (ty * AW + tx) * 4
+  }
+  return { AW, AH, A, sampleAlpha }
+}
 
+function sceneWalker (R: RenderCtx) {
+  const { g, geo, keep, skirt, at } = R
   // Обход сцены: для каждой видимой грани — cb(quad мировой, v, клетка).
   const walk = (viewF, cb, wantTranslucent?: any) => {
     for (let y = g.y0; y <= g.y1; y++) {
@@ -405,40 +446,38 @@ async function render (g, opt: any = {} as Record<string, any>) {
       cb(waterQuads[fn], x, y, z, v)
     }
   }
+  return { walk, waterTex }
+}
 
+// Растеризация треугольника: p — [sx, sy, depth] ×3, attrs — по вершинам,
+// frag(px, py, depth, w0, w1, w2).
+const tri = (W, H, a, b, c, frag) => {
+  const minX = Math.max(0, Math.floor(Math.min(a[0], b[0], c[0]))); const maxX = Math.min(W - 1, Math.ceil(Math.max(a[0], b[0], c[0])))
+  const minY = Math.max(0, Math.floor(Math.min(a[1], b[1], c[1]))); const maxY = Math.min(H - 1, Math.ceil(Math.max(a[1], b[1], c[1])))
+  const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+  if (Math.abs(area) < 1e-9) return
+  const inv = 1 / area
+  const eps = -1e-4
+  for (let py = minY; py <= maxY; py++) {
+    const y = py + 0.5
+    for (let px = minX; px <= maxX; px++) {
+      const x = px + 0.5
+      let w0 = ((b[0] - x) * (c[1] - y) - (b[1] - y) * (c[0] - x)) * inv
+      let w1 = ((c[0] - x) * (a[1] - y) - (c[1] - y) * (a[0] - x)) * inv
+      let w2 = 1 - w0 - w1
+      if (w0 < eps || w1 < eps || w2 < eps) continue
+      if (w0 < 0) w0 = 0; if (w1 < 0) w1 = 0; if (w2 < 0) w2 = 0
+      frag(px, py, a[2] * w0 + b[2] * w1 + c[2] * w2, w0, w1, w2)
+    }
+  }
+}
+const TRI = [[0, 1, 2], [2, 1, 3]]
+
+function shadowMap (R: RenderCtx) {
+  const { opt, ss, sun, proj, frame, A, sampleAlpha, walk } = R
   // ---- карта теней
   const SH = frame(sun, (opt.shadowScale || 4) * Math.max(1, ss / 2), 4)
   const sdepth = new Float32Array(SH.W * SH.H).fill(Infinity)
-  const sampleAlpha = (u, v, tile) => {
-    let tx = Math.floor(u * AW); let ty = Math.floor(v * AH)
-    const t0 = Math.floor(tile[0] * AW + 1e-6); const t1 = Math.ceil(tile[2] * AW - 1e-6) - 1
-    const s0 = Math.floor(tile[1] * AH + 1e-6); const s1 = Math.ceil(tile[3] * AH - 1e-6) - 1
-    if (tx < t0) tx = t0; if (tx > t1) tx = t1; if (ty < s0) ty = s0; if (ty > s1) ty = s1
-    return (ty * AW + tx) * 4
-  }
-  // Растеризация треугольника: p — [sx, sy, depth] ×3, attrs — по вершинам,
-  // frag(px, py, depth, w0, w1, w2).
-  const tri = (W, H, a, b, c, frag) => {
-    const minX = Math.max(0, Math.floor(Math.min(a[0], b[0], c[0]))); const maxX = Math.min(W - 1, Math.ceil(Math.max(a[0], b[0], c[0])))
-    const minY = Math.max(0, Math.floor(Math.min(a[1], b[1], c[1]))); const maxY = Math.min(H - 1, Math.ceil(Math.max(a[1], b[1], c[1])))
-    const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-    if (Math.abs(area) < 1e-9) return
-    const inv = 1 / area
-    const eps = -1e-4
-    for (let py = minY; py <= maxY; py++) {
-      const y = py + 0.5
-      for (let px = minX; px <= maxX; px++) {
-        const x = px + 0.5
-        let w0 = ((b[0] - x) * (c[1] - y) - (b[1] - y) * (c[0] - x)) * inv
-        let w1 = ((c[0] - x) * (a[1] - y) - (c[1] - y) * (a[0] - x)) * inv
-        let w2 = 1 - w0 - w1
-        if (w0 < eps || w1 < eps || w2 < eps) continue
-        if (w0 < 0) w0 = 0; if (w1 < 0) w1 = 0; if (w2 < 0) w2 = 0
-        frag(px, py, a[2] * w0 + b[2] * w1 + c[2] * w2, w0, w1, w2)
-      }
-    }
-  }
-  const TRI = [[0, 1, 2], [2, 1, 3]]
   {
     const P = new Array(4)
     walk(sun.f, (q, x, y, z) => {
@@ -467,7 +506,11 @@ async function render (g, opt: any = {} as Record<string, any>) {
     }
     return 1 - lit / n
   }
+  return { SH, sdepth, inShadow }
+}
 
+function mainFrame (R: RenderCtx) {
+  const { night, scale, ss, cam, frame } = R
   // ---- основной проход
   const FR = frame(cam, scale, 20 * ss)
   const W = FR.W; const H = FR.H
@@ -479,6 +522,12 @@ async function render (g, opt: any = {} as Record<string, any>) {
     const c = night ? [0.04 + 0.03 * t, 0.06 + 0.04 * t, 0.13 + 0.06 * t] : [0.5 + 0.31 * t, 0.69 + 0.2 * t, 0.88 + 0.08 * t]
     for (let px = 0; px < W; px++) { const k = (py * W + px) * 3; col[k] = c[0]; col[k + 1] = c[1]; col[k + 2] = c[2] }
   }
+  return { FR, W, H, depth, col }
+}
+
+// Яркость грани: заливка по нормали, ночью — блочный свет.
+function shader (R: RenderCtx) {
+  const { g, night, geo, emit, L } = R
   const faceShade = n => n[0] * n[0] * 0.6 + n[1] * n[1] * (n[1] > 0 ? 1 : 0.5) + n[2] * n[2] * 0.8
   const lightCurve = l => Math.pow(0.76, 15 - l)
   const shade = (q, x, y, z, v, cornerAO?: any) => {
@@ -500,6 +549,12 @@ async function render (g, opt: any = {} as Record<string, any>) {
     }
     return { fs, lightK, warm }
   }
+  return shade
+}
+
+// Непрозрачное — z-буфер, тень, AO; полупрозрачное — в список для второго прохода.
+function opaquePass (R: RenderCtx) {
+  const { night, geo, opaqueAt, cam, toSun, proj, A, sampleAlpha, walk, inShadow, FR, W, H, depth, col, shade } = R
   const translucent = []
   {
     const P = new Array(4); const Wp = new Array(4); const AOv = [1, 1, 1, 1]
@@ -557,6 +612,11 @@ async function render (g, opt: any = {} as Record<string, any>) {
       }
     })
   }
+  return translucent
+}
+
+function seaPlane (R: RenderCtx) {
+  const { opt, night, cam, A, sampleAlpha, waterTex, FR, W, H, depth, col } = R
   // ---- море до горизонта (плоскость y = seaY за краем модели)
   if (opt.sea !== undefined && opt.sea !== null) {
     const hy = Number(opt.sea) + 14 / 16
@@ -585,6 +645,10 @@ async function render (g, opt: any = {} as Record<string, any>) {
       }
     }
   }
+}
+
+function translucentPass (R: RenderCtx) {
+  const { night, A, sampleAlpha, W, H, depth, col, translucent } = R
   // ---- полупрозрачное: от дальнего к ближнему, без записи глубины
   translucent.sort((a, b) => b.d - a.d)
   for (const t of translucent) {
@@ -617,6 +681,10 @@ async function render (g, opt: any = {} as Record<string, any>) {
     }
     void v
   }
+}
+
+function encodePng (R: RenderCtx, createCanvas) {
+  const { ss, missing, W, H, col } = R
   // ---- вывод (со сглаживанием ss×ss)
   const OW = Math.floor(W / ss); const OH = Math.floor(H / ss)
   const cv = createCanvas(OW, OH)

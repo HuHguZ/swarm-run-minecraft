@@ -197,188 +197,230 @@ function surroundings (bot, mcData) {
   return { lava: lava.length, nearestLava, hostiles }
 }
 
-// Один вызов — один переход: дойти до портала своего мира, шагнуть, дождаться
-// смены мира (свидетель — трекер worlds.js, а не «постоял»), выйти из портала
-// прибытия, осмотреться и записать пару порталов, каждый под ключом своего мира
-// и со ссылкой leadsTo на другой.
-async function enter (session, ctl, p: any = {}) {
+// Вход в портал (enter) — состояние вызова. Прежние let замыкания enter — поля объекта en (EnterRun). Фаза возвращает
+// итог вызова (конец) или ничего (дальше по фазам); порядок — EN_PHASES.
+interface EnterRun {
+  session: any
+  ctl: any
+  p: any
+  bot: any
+  mcData: any
+  read: any
+  from: any
+  scan: number
+  deadline: number
+  base: any
+  key: string
+  rec: any
+  door: any
+  lit: any
+  spot: any
+  seq0: number
+  heldSeconds: number
+  wc: any
+  to: any
+  departure: any
+  arrival: any
+  out: any
+  stillInside: boolean
+}
+
+function enOpen (session, ctl, p: any = {}): EnterRun {
   const bot = session.bot
   const mcData = session.mcData
-  const read = reader(bot)
-  const from = worlds.worldOf(bot)
-  const scan = Math.max(4, Math.min(32, p.scan ?? 16))
-  const deadline = gameClock.now() + Math.max(20, Math.min(600, p.timeoutSeconds ?? 90)) * 1000 - 3000
-  const base: any = { mode: 'enter', world: from }
+  const en = { session, ctl, p, bot, mcData } as EnterRun
+  en.read = reader(bot)
+  en.from = worlds.worldOf(bot)
+  en.scan = Math.max(4, Math.min(32, p.scan ?? 16))
+  en.deadline = gameClock.now() + Math.max(20, Math.min(600, p.timeoutSeconds ?? 90)) * 1000 - 3000
+  en.base = { mode: 'enter', world: en.from }
+  return en
+}
 
+// Хп и огниво: без них в портал не шагать.
+function enGate (en: EnterRun) {
+  const { bot, p } = en
   const hp = Math.round(bot.health ?? 0)
   // Домой из Ада без еды — лечиться здесь нечем, ожидание хп не прибавит (b3-5-2 14.10: хп 8 в 1 бл. от портала домой,
   // «в портал не шагаю» ×сотни ходов до конца кампании). Наверху — еда и свой портал; порог — только в Ад.
   const foodless = () => !(bot.inventory?.items?.() || []).some(i => /^(cooked_|bread$|baked_potato$|golden_carrot$|apple$|carrot$|melon_slice$|sweet_berries$|pumpkin_pie$|beef$|porkchop$|mutton$|chicken$|rabbit$|cod$|salmon$|potato$|beetroot$|dried_kelp$|cookie$|mushroom_stew$|beetroot_soup$|rabbit_stew$|golden_apple$|enchanted_golden_apple$)/.test(i.name))
   if (hp < MIN_ENTER_HP && !(worlds.worldOf(bot) === 'the_nether' && hp >= 4 && foodless())) {
     return {
-      ...base,
+      ...en.base,
       went: false,
       stopped: `На ${hp} хп в портал не шагаю: по ту сторону может быть лава, гаст или толпа у портала, а ` +
         `назад — снова стоять в портале. Поешь и подожди до ${MIN_ENTER_HP}+ (mc_eat, mc_wait), потом зови снова.`
     }
   }
-  if (from === 'overworld' && !IGNITERS.some(n => itemNamed(bot, n)) && !p.noIgniter) {
+  if (en.from === 'overworld' && !IGNITERS.some(n => itemNamed(bot, n)) && !p.noIgniter) {
     const s = igniterShortfall(bot)
     return {
-      ...base,
+      ...en.base,
       went: false,
       need: s.need,
       stopped: 'В Ад без огнива не пойду: гаст взрывом гасит портал, и без огнива дорога домой закрыта. ' + s.stopped
     }
   }
+}
 
+async function enFind (en: EnterRun) {
+  const { bot, session, ctl, p, mcData } = en
   // --- 1. Портал своего мира: горящий рядом, иначе из памяти, иначе рама без огня.
   const places = (session.journal.state && session.journal.state.places) || {}
-  const key = worlds.portalKey(from)
-  const rec = places[key] && worlds.worldOfRecord(places[key]) === from ? places[key] : null
+  en.key = worlds.portalKey(en.from)
+  en.rec = places[en.key] && worlds.worldOfRecord(places[en.key]) === en.from ? places[en.key] : null
   // Горящий портал не наш (S1d: 7777… s1c-H-2/F-3/I-2 — чужой портал у маршрута к бастиону увёл тело в верхний мир к
   // −579,68,43, петля EnterNether): при записи своего портала в этом мире — сперва он, ближайший — только без записи.
-  const recV = rec ? new Vec3(rec.x, rec.y, rec.z) : null
+  const recV = en.rec ? new Vec3(en.rec.x, en.rec.y, en.rec.z) : null
   const ours = d => !d || !recV || p.anyPortal || notForeign(d, recV)
-  let door = findLitPortal(bot, mcData, scan)
-  if (!ours(door)) { base.foreignPortal = xyzOf(door.origin); door = null }
+  en.door = findLitPortal(bot, mcData, en.scan)
+  if (!ours(en.door)) { en.base.foreignPortal = xyzOf(en.door.origin); en.door = null }
   let walked = null
-  if (!door && rec) {
-    const target = new Vec3(rec.x, rec.y, rec.z)
-    if (bot.entity.position.distanceTo(target) > scan - 2) {
-      walked = await walkToward(session, ctl, target, deadline)
-      if (ctl.aborted) return { ...base, went: false, stopped: 'прервано по дороге к порталу' }
+  if (!en.door && en.rec) {
+    const target = new Vec3(en.rec.x, en.rec.y, en.rec.z)
+    if (bot.entity.position.distanceTo(target) > en.scan - 2) {
+      walked = await walkToward(session, ctl, target, en.deadline)
+      if (ctl.aborted) return { ...en.base, went: false, stopped: 'прервано по дороге к порталу' }
       if (!walked.ok) {
         return {
-          ...base,
+          ...en.base,
           went: false,
           walked,
           awayBlocks: Math.round(bot.entity.position.distanceTo(target)),
-          stopped: `до портала из памяти («${key}» на ${rec.x},${rec.y},${rec.z}) не дошёл: ${walked.error}. ` +
+          stopped: `до портала из памяти («${en.key}» на ${en.rec.x},${en.rec.y},${en.rec.z}) не дошёл: ${walked.error}. ` +
             'Подойди ближе mc_goto и позови снова.'
         }
       }
     }
-    door = findLitPortal(bot, mcData, scan, recV)
-    if (!ours(door)) { base.foreignPortal = xyzOf(door.origin); door = null }
+    en.door = findLitPortal(bot, mcData, en.scan, recV)
+    if (!ours(en.door)) { en.base.foreignPortal = xyzOf(en.door.origin); en.door = null }
   }
-  let lit = null
-  if (!door) {
-    const obs = bot.findBlocks({ matching: [mcData.blocksByName[FRAME_BLOCK].id], maxDistance: scan, count: 64 })
-    const frames = findFrames(read, obs)
+  en.lit = null
+  if (!en.door) {
+    const obs = bot.findBlocks({ matching: [mcData.blocksByName[FRAME_BLOCK].id], maxDistance: en.scan, count: 64 })
+    const frames = findFrames(en.read, obs)
     if (frames.some(f => !f.lit) && IGNITERS.some(n => itemNamed(bot, n))) {
-      lit = await portal(session, ctl, { scan, timeoutSeconds: Math.max(20, Math.round((deadline - gameClock.now()) / 1000)) })
-      door = findLitPortal(bot, mcData, scan)
+      en.lit = await portal(session, ctl, { scan: en.scan, timeoutSeconds: Math.max(20, Math.round((en.deadline - gameClock.now()) / 1000)) })
+      en.door = findLitPortal(bot, mcData, en.scan)
     }
   }
-  if (!door) {
+  if (!en.door) {
     return {
-      ...base,
+      ...en.base,
       went: false,
-      lit: lit ? { stopped: lit.stopped, portalBlocks: lit.portalBlocks } : undefined,
-      stopped: `ПЕРЕХОДА НЕТ: горящего портала в ${scan} блоках не вижу` +
-        (rec ? ` (в памяти «${key}» на ${rec.x},${rec.y},${rec.z})` : `, и «${key}» в памяти нет`) +
-        (from === 'overworld' ? '. Построить: mc_portal mode=build.' : '. Портал прибытия мог погаснуть от гаста — зажечь огнивом: mc_portal mode=build рядом с рамой.')
+      lit: en.lit ? { stopped: en.lit.stopped, portalBlocks: en.lit.portalBlocks } : undefined,
+      stopped: `ПЕРЕХОДА НЕТ: горящего портала в ${en.scan} блоках не вижу` +
+        (en.rec ? ` (в памяти «${en.key}» на ${en.rec.x},${en.rec.y},${en.rec.z})` : `, и «${en.key}» в памяти нет`) +
+        (en.from === 'overworld' ? '. Построить: mc_portal mode=build.' : '. Портал прибытия мог погаснуть от гаста — зажечь огнивом: mc_portal mode=build рядом с рамой.')
     }
   }
+}
 
+async function enThreshold (en: EnterRun) {
+  const { bot, session, ctl } = en
   // --- 2. На порог.
   const me = bot.entity.position
-  let spots = doorways(door).filter(d => clearStand(read, d.pos))
+  let spots = doorways(en.door).filter(d => clearStand(en.read, d.pos))
     .sort((a, b) => a.pos.distanceTo(me) - b.pos.distanceTo(me))
   if (!spots.length) {
-    base.access = await prepareDoorway(session, ctl, door, Math.min(deadline, gameClock.now() + 30000))
-    spots = doorways(door).filter(d => clearStand(read, d.pos))
+    en.base.access = await prepareDoorway(session, ctl, en.door, Math.min(en.deadline, gameClock.now() + 30000))
+    spots = doorways(en.door).filter(d => clearStand(en.read, d.pos))
       .sort((a, b) => a.pos.distanceTo(bot.entity.position) - b.pos.distanceTo(bot.entity.position))
   }
   if (!spots.length) {
     return {
-      ...base,
+      ...en.base,
       went: false,
-      portal: { inner: xyz(door.origin), axis: door.axis, blocks: door.cells.length },
+      portal: { inner: xyz(en.door.origin), axis: en.door.axis, blocks: en.door.cells.length },
       stopped: 'К порталу не подойти: ни с одной стороны нижнего ряда нет клетки, где встать (пол, ноги и голова свободны). ' +
-        (base.access?.stopped || 'Безопасно восстановить порог не удалось.')
+        (en.base.access?.stopped || 'Безопасно восстановить порог не удалось.')
     }
   }
-  let spot = null
+  en.spot = null
   let climbTried = false
   for (const s of spots.slice(0, 4)) {
-    if (ctl.aborted || gameClock.now() > deadline) break
+    if (ctl.aborted || gameClock.now() > en.deadline) break
     const approach = await walkNear(session, ctl, s.pos, 0)
     if (!approach.ok && !climbTried && s.pos.y - bot.entity.position.y > 3 && !ctl.aborted) {
       climbTried = true
-      base.approach = await walkToward(session, ctl, s.pos, deadline, { range: 0 })
+      en.base.approach = await walkToward(session, ctl, s.pos, en.deadline, { range: 0 })
     }
-    if (sameCell(bot.entity.position, s.pos)) { spot = s; break }
+    if (sameCell(bot.entity.position, s.pos)) { en.spot = s; break }
   }
-  if (!spot) {
+  if (!en.spot) {
     return {
-      ...base,
+      ...en.base,
       went: false,
       awayBlocks: Math.round(bot.entity.position.distanceTo(spots[0].pos)),
       stopped: ctl.aborted ? 'прервано у портала' : 'до порога портала не дошёл ни с одной стороны — позови ещё раз или подойди mc_goto'
     }
   }
+}
 
+async function enHold (en: EnterRun) {
+  const { bot, session, ctl } = en
   // --- 3. Шаг внутрь и стояние. Переход засчитывается только по смене мира.
-  const seq0 = session.worldChange ? session.worldChange.seq : 0
-  const changed = () => portalChanged(session, bot, from, seq0)
-  const centre = spot.cell.offset(0.5, 0, 0.5)
+  en.seq0 = session.worldChange ? session.worldChange.seq : 0
+  const changed = () => portalChanged(session, bot, en.from, en.seq0)
+  const centre = en.spot.cell.offset(0.5, 0, 0.5)
   const t0 = gameClock.now()
   let inAt = null
   let steps = 0
   while (!changed()) {
-    if (ctl.aborted || gameClock.now() > deadline || gameClock.now() - t0 > HOLD_LIMIT_MS) break
-    if (!insidePortal(bot, door)) {
+    if (ctl.aborted || gameClock.now() > en.deadline || gameClock.now() - t0 > HOLD_LIMIT_MS) break
+    if (!insidePortal(bot, en.door)) {
       if (steps >= 4) break
       steps++
       await stepTo(bot, ctl, centre, { ms: 2500 })
     }
-    if (inAt === null && insidePortal(bot, door)) inAt = gameClock.now()
+    if (inAt === null && insidePortal(bot, en.door)) inAt = gameClock.now()
     await sleep(100, ctl)
   }
-  const heldSeconds = inAt ? Math.round((gameClock.now() - inAt) / 100) / 10 : 0
+  en.heldSeconds = inAt ? Math.round((gameClock.now() - inAt) / 100) / 10 : 0
   if (!changed()) {
     // Обрыв или «сервер не пустил»: из портала — назад на порог.
-    if (insidePortal(bot, door)) await stepTo(bot, { aborted: false }, spot.pos.offset(0.5, 0, 0.5), { ms: 1500 })
+    if (insidePortal(bot, en.door)) await stepTo(bot, { aborted: false }, en.spot.pos.offset(0.5, 0, 0.5), { ms: 1500 })
     return {
-      ...base,
+      ...en.base,
       went: false,
-      heldSeconds,
+      heldSeconds: en.heldSeconds,
       steps,
-      out: !insidePortal(bot, door),
+      out: !insidePortal(bot, en.door),
       stopped: ctl.aborted
-        ? `прервано: простоял в портале ${heldSeconds}с, мир тот же — вышел обратно на порог`
-        : `ПЕРЕХОДА НЕТ: простоял в портале ${heldSeconds}с, мир тот же — сервер не пускает или портал не рабочий. ` +
+        ? `прервано: простоял в портале ${en.heldSeconds}с, мир тот же — вышел обратно на порог`
+        : `ПЕРЕХОДА НЕТ: простоял в портале ${en.heldSeconds}с, мир тот же — сервер не пускает или портал не рабочий. ` +
           'Проверь правило allow_entering_nether_using_portals и что внутри рамы 6 клеток портала (mc_observe).'
     }
   }
+}
 
+async function enArrive (en: EnterRun) {
+  const { bot, session, ctl, mcData } = en
   // --- 4. Прибытие: ждём «устроился» от трекера.
   const t1 = gameClock.now()
-  const arrivalReady = () => session.worldChange && session.worldChange.seq > seq0 &&
-    session.worldChange.from === from && session.worldChange.to === worlds.worldOf(bot) && session.worldChange.ready
+  const arrivalReady = () => session.worldChange && session.worldChange.seq > en.seq0 &&
+    session.worldChange.from === en.from && session.worldChange.to === worlds.worldOf(bot) && session.worldChange.ready
   while (!arrivalReady() && gameClock.now() - t1 < SETTLE_MS && !ctl.aborted) await sleep(100)
-  const wc = session.worldChange
-  const to = worlds.worldOf(bot)
-  const departure = { world: from, ...xyz(spot.pos) }
+  en.wc = session.worldChange
+  en.to = worlds.worldOf(bot)
+  en.departure = { world: en.from, ...xyz(en.spot.pos) }
   // Портал прибытия — в память сразу, только чтением блоков: шаги ниже рвёт тактика (s1-post08 06.10: Shield прервал вход
   // сразу после смены мира, «портал (ад)» не записался, и LeaveNether с 10 очами стоял «ПЕРЕХОДА НЕТ» в 150 бл. от портала).
-  if (to !== from) {
+  if (en.to !== en.from) {
     try {
       const early = findLitPortal(bot, mcData, 4)
-      if (early) rememberPortal(session, { ...xyz(bot.entity.position.floored()), dimension: to, axis: early.axis, inner: xyz(early.origin), lit: true, mine: false, leadsTo: departure })
+      if (early) rememberPortal(session, { ...xyz(bot.entity.position.floored()), dimension: en.to, axis: early.axis, inner: xyz(early.origin), lit: true, mine: false, leadsTo: en.departure })
     } catch {}
   }
   if (!arrivalReady()) {
     return {
-      ...base,
+      ...en.base,
       went: true,
       ready: false,
-      from: departure,
-      to: { world: to },
-      heldSeconds,
-      stopped: `Мир сменился (${worlds.worldName(from)} → ${worlds.worldName(to)}), но тело не устроилось за ${SETTLE_MS / 1000}с: ` +
+      from: en.departure,
+      to: { world: en.to },
+      heldSeconds: en.heldSeconds,
+      stopped: `Мир сменился (${worlds.worldName(en.from)} → ${worlds.worldName(en.to)}), но тело не устроилось за ${SETTLE_MS / 1000}с: ` +
         'позиции от сервера нет или мир под ногами не прогружен. Подожди mc_wait 5 и посмотри mc_observe.'
     }
   }
@@ -389,99 +431,120 @@ async function enter (session, ctl, p: any = {}) {
     await sleep(100)
   }
   await sleep(250)
+}
 
+async function enExit (en: EnterRun) {
+  const { bot, session, ctl, mcData } = en
   // --- 5. Из портала прибытия — на порог.
-  let arrival = null
+  en.arrival = null
   const feet = bot.entity.position.floored()
   for (const c of [feet, feet.offset(0, 1, 0)]) {
     const b = bot.blockAt(c)
-    if (b && b.name === 'nether_portal') { arrival = describePortal(bot, c); break }
+    if (b && b.name === 'nether_portal') { en.arrival = describePortal(bot, c); break }
   }
-  if (!arrival) arrival = findLitPortal(bot, mcData, 4)
-  let out = null
-  if (arrival) {
+  if (!en.arrival) en.arrival = findLitPortal(bot, mcData, 4)
+  en.out = null
+  if (en.arrival) {
     const here = bot.entity.position
-    const exits = doorways(arrival).filter(d => clearStand(read, d.pos))
+    const exits = doorways(en.arrival).filter(d => clearStand(en.read, d.pos))
       .sort((a, b) => a.pos.distanceTo(here) - b.pos.distanceTo(here))
     for (const e of exits.slice(0, 4)) {
       await stepTo(bot, { aborted: false }, e.pos.offset(0.5, 0, 0.5), { ms: 2500 })
-      if (!insidePortal(bot, arrival)) { out = bot.entity.position.floored(); break }
+      if (!insidePortal(bot, en.arrival)) { en.out = bot.entity.position.floored(); break }
     }
-    if (!out && !insidePortal(bot, arrival)) out = bot.entity.position.floored()
+    if (!en.out && !insidePortal(bot, en.arrival)) en.out = bot.entity.position.floored()
     // Чистого порога у портала прибытия нет (камень, обрыв без пола): расчистить ближний, как у портала ухода
     // (prepareDoorway: пол заложить, камень выкопать, у жидкости не трогать) — neF-map23-2 02.10: тело осталось в
     // портале прибытия, и штрек, и ноги к бастиону и спавнеру отказали на месте 6 раз подряд.
-    if (!out && insidePortal(bot, arrival)) {
-      const pd: any = await prepareDoorway(session, ctl, arrival, gameClock.now() + 15000).catch(e => ({ ok: false, stopped: e.message }))
+    if (!en.out && insidePortal(bot, en.arrival)) {
+      const pd: any = await prepareDoorway(session, ctl, en.arrival, gameClock.now() + 15000).catch(e => ({ ok: false, stopped: e.message }))
       if (pd.ok && pd.at) {
         await stepTo(bot, { aborted: false }, new Vec3(pd.at.x + 0.5, pd.at.y, pd.at.z + 0.5), { ms: 2500 })
-        if (!insidePortal(bot, arrival)) out = bot.entity.position.floored()
+        if (!insidePortal(bot, en.arrival)) en.out = bot.entity.position.floored()
       }
     }
   } else {
-    out = bot.entity.position.floored()
+    en.out = bot.entity.position.floored()
   }
-  const stillInside = arrival ? insidePortal(bot, arrival) : false
+  en.stillInside = en.arrival ? insidePortal(bot, en.arrival) : false
+}
 
+function enReport (en: EnterRun) {
+  const { bot, session, mcData } = en
   // --- 6. Осмотр и память: пара порталов, каждый в своём мире.
   const around = surroundings(bot, mcData)
-  const standAt = out || bot.entity.position.floored()
-  const arrivalPlace = arrival
+  const standAt = en.out || bot.entity.position.floored()
+  const arrivalPlace = en.arrival
     ? rememberPortal(session, {
       ...xyz(standAt),
-      dimension: to,
-      axis: arrival.axis,
-      inner: xyz(arrival.origin),
+      dimension: en.to,
+      axis: en.arrival.axis,
+      inner: xyz(en.arrival.origin),
       lit: true,
       mine: false,
-      leadsTo: departure
+      leadsTo: en.departure
     })
     : null
-  const sameAsRecord = rec && Math.abs(rec.x - spot.pos.x) <= 4 && Math.abs(rec.y - spot.pos.y) <= 4 && Math.abs(rec.z - spot.pos.z) <= 4
+  const sameAsRecord = en.rec && Math.abs(en.rec.x - en.spot.pos.x) <= 4 && Math.abs(en.rec.y - en.spot.pos.y) <= 4 && Math.abs(en.rec.z - en.spot.pos.z) <= 4
   const departurePlace = rememberPortal(session, {
-    ...xyz(spot.pos),
-    dimension: from,
-    axis: door.axis,
-    inner: xyz(door.origin),
+    ...xyz(en.spot.pos),
+    dimension: en.from,
+    axis: en.door.axis,
+    inner: xyz(en.door.origin),
     lit: true,
-    mine: sameAsRecord ? rec.mine : false,
-    leadsTo: { world: to, ...xyz(standAt) }
+    mine: sameAsRecord ? en.rec.mine : false,
+    leadsTo: { world: en.to, ...xyz(standAt) }
   })
-  const ratio = worlds.scaleOf(from) / worlds.scaleOf(to)
-  const predicted = { x: Math.floor(spot.pos.x * ratio), z: Math.floor(spot.pos.z * ratio) }
-  const toKey = worlds.portalKey(to)
-  const home = arrival ? Math.round(standAt.distanceTo(arrival.bottom[0])) : null
+  const ratio = worlds.scaleOf(en.from) / worlds.scaleOf(en.to)
+  const predicted = { x: Math.floor(en.spot.pos.x * ratio), z: Math.floor(en.spot.pos.z * ratio) }
+  const toKey = worlds.portalKey(en.to)
+  const home = en.arrival ? Math.round(standAt.distanceTo(en.arrival.bottom[0])) : null
 
   const detail: any = {
-    ...base,
+    ...en.base,
     went: true,
     ready: true,
-    from: departure,
-    to: { world: to, ...xyz(bot.entity.position) },
-    heldSeconds,
-    settledMs: wc.ms,
-    out: out ? xyz(out) : null,
-    inPortal: stillInside || undefined,
-    arrivalPortal: arrival ? { inner: xyz(arrival.origin), axis: arrival.axis, blocks: arrival.cells.length } : null,
+    from: en.departure,
+    to: { world: en.to, ...xyz(bot.entity.position) },
+    heldSeconds: en.heldSeconds,
+    settledMs: en.wc.ms,
+    out: en.out ? xyz(en.out) : null,
+    inPortal: en.stillInside || undefined,
+    arrivalPortal: en.arrival ? { inner: xyz(en.arrival.origin), axis: en.arrival.axis, blocks: en.arrival.cells.length } : null,
     predicted,
     place: arrivalPlace ? { key: toKey, x: arrivalPlace.x, y: arrivalPlace.y, z: arrivalPlace.z, leadsTo: arrivalPlace.leadsTo } : null,
-    departure: { key, leadsTo: departurePlace.leadsTo },
+    departure: { key: en.key, leadsTo: departurePlace.leadsTo },
     around,
-    lit: lit ? { portalBlocks: lit.portalBlocks, built: lit.built } : undefined,
+    lit: en.lit ? { portalBlocks: en.lit.portalBlocks, built: en.lit.built } : undefined,
     gear: { flint_and_steel: countOf(bot, 'flint_and_steel'), obsidian: countOf(bot, FRAME_BLOCK) }
   }
   const danger = []
   if (around.nearestLava !== null && around.nearestLava <= 3) danger.push(`лава в ${around.nearestLava} бл.`)
   if (around.hostiles.length) danger.push('вижу: ' + around.hostiles.slice(0, 4).map(h => `${h.name} ${h.dist}`).join(', '))
-  if (stillInside || !out) {
-    detail.stopped = `Я ${worlds.inWorld(to)}, но из портала прибытия не вышел: вокруг нет клетки, где встать. ` +
+  if (en.stillInside || !en.out) {
+    detail.stopped = `Я ${worlds.inWorld(en.to)}, но из портала прибытия не вышел: вокруг нет клетки, где встать. ` +
       'Постою — и портал вернёт обратно. Выйти руками: mc_goto на 2 блока в сторону.'
   }
-  detail.note = `Я ${worlds.inWorld(to)} на ${detail.to.x},${detail.to.y},${detail.to.z}. Простоял в портале ${heldSeconds}с. ` +
-    (arrival ? `Портал домой в ${home} бл., записал как «${toKey}» (ведёт к «${key}»). ` : 'Портала прибытия рядом не нашёл — запиши место сам. ') +
-    `Координаты ${worlds.ofWorld(from)} здесь не действуют — обратно тем же вызовом.` +
+  detail.note = `Я ${worlds.inWorld(en.to)} на ${detail.to.x},${detail.to.y},${detail.to.z}. Простоял в портале ${en.heldSeconds}с. ` +
+    (en.arrival ? `Портал домой в ${home} бл., записал как «${toKey}» (ведёт к «${en.key}»). ` : 'Портала прибытия рядом не нашёл — запиши место сам. ') +
+    `Координаты ${worlds.ofWorld(en.from)} здесь не действуют — обратно тем же вызовом.` +
     (danger.length ? ` Осторожно: ${danger.join('; ')}.` : '')
   return detail
+}
+
+// Фазы перехода по порядку прежнего тела enter.
+const EN_PHASES: ((en: EnterRun) => any)[] = [enGate, enFind, enThreshold, enHold, enArrive, enExit, enReport]
+
+// Один вызов — один переход: дойти до портала своего мира, шагнуть, дождаться
+// смены мира (свидетель — трекер worlds.js, а не «постоял»), выйти из портала
+// прибытия, осмотреться и записать пару порталов, каждый под ключом своего мира
+// и со ссылкой leadsTo на другой.
+async function enter (session, ctl, p: any = {}) {
+  const en = enOpen(session, ctl, p)
+  for (const phase of EN_PHASES) {
+    const r = await phase(en)
+    if (r !== undefined) return r
+  }
 }
 
 export {

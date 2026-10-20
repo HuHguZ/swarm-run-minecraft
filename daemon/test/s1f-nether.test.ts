@@ -242,9 +242,8 @@ test('штрек бастиона: тело на песке душ (y N.88) — 
   const SL: typeof import('../src/sealed') = require('../src/sealed')
   const bot: any = { entity: { position: new Vec3(-85.5, 51.875, -44.5), onGround: true } }
   assert.deepEqual(SL.bodyCells(bot)[0].toArray(), [-86, 52, -45], 'ноги — над песком душ')
-  const fs: typeof import('fs') = require('fs')
-  // план штрека (sealedGold) — в bastion/sealed-gold.ts.
-  const src = fs.readFileSync((require('path') as typeof import('path')).join(__dirname, '..', 'src', 'bastion', 'sealed-gold.ts'), 'utf8')
+  // план штрека (sealedGold) — шаг sgRoute тела bastion/sealed-gold.ts (sealed-gold/route.ts): текст модуля с частями.
+  const src = (require('./source-fixture') as typeof import('./source-fixture')).moduleSourceTs((require('path') as typeof import('path')).join(__dirname, '..', 'src', 'bastion', 'sealed-gold.js'))
   assert.match(src, /const me = feet\(\)/, 'старт плана — feet()')
   assert.match(src, /SL\.bodyCells\(bot\)\[0\]/)
 })

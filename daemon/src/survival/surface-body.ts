@@ -1,6 +1,6 @@
-const { SIDES, gameClock, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, spot, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, Vec3 }: typeof import('./enter-shelter') = require('./enter-shelter')
-const { flat, looseOver, wet, looseLine, worldTop, pitCheck, openSky, seenBy, MOB_WATCH, shutOut, WALL_LIMIT, WALL_BLOCKS, behindWall, legLevels, FALLS, levelWord, hazardNear, hazardLine }: typeof import('./recover-loot') = require('./recover-loot')
-const { stepUpInto, dangerousNow, wallOff, whereToFight, WET_LIMIT, waterStop, outOfWater, ASIDE_LIMIT, eyeWet, waterNext, AGAIN_WONT_HELP }: typeof import('./out-of-water') = require('./out-of-water')
+import { SIDES, gameClock, itemNamed, countItems, diffItems, equipBestTool, missingHarvestTool, toolBudget, toolShortfall, SWINGS_PER_LEVEL, spot, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, nearestHostile, HOSTILES, corridorShape, openSides, liveAttacker, RANGED, Vec3 } from './enter-shelter'
+import { flat, looseOver, wet, looseLine, worldTop, pitCheck, openSky, seenBy, MOB_WATCH, shutOut, WALL_LIMIT, WALL_BLOCKS, behindWall, legLevels, FALLS, levelWord, hazardNear, hazardLine } from './recover-loot'
+import { stepUpInto, dangerousNow, wallOff, whereToFight, WET_LIMIT, waterStop, outOfWater, ASIDE_LIMIT, eyeWet, waterNext, AGAIN_WONT_HELP } from './out-of-water'
 let handClimb = false
 
 function handBreaks (bot, b) {
@@ -157,7 +157,58 @@ async function surface (session, ctl, p: any = {}) {
   try { return await surfaceBody(session, ctl, p) } finally { handClimb = false }
 }
 
+// Подъём (surfaceBody): прежние `let` и константы вызова — поля объекта c (Climb), прежние внутренние стрелки
+// (arrived, watch, dealWith) — функции с c первым аргументом. Уровень подъёма — climbLevel (шаги по порядку прежнего
+// тела цикла: 'next' — следующий уровень, 'stop' — конец подъёма), ответ — climbReport.
+interface Climb {
+  session: any
+  ctl: any
+  bot: any
+  mcData: any
+  top: number
+  wantY: number | null
+  budgetSeconds: number
+  deadline: number
+  preferPillar: boolean
+  from: any
+  startY: number
+  before: any
+  stairs: number
+  pillar: number
+  aside: number
+  dug: number
+  stopped: any
+  dir: any
+  walls: any[]
+  noGo: any
+  met: any[]
+  trail: any[]
+  passed: Set<any>
+  outflanked: any
+  standingUseless: any
+  worn: any
+  wetMoves: number
+  wetRun: number
+  plugs: any[]
+  swum: number
+}
+type Turn = 'next' | 'stop' | undefined
+
 async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240, preferPillar = false }: any = {}) {
+  const c = openClimb(session, ctl, { targetY, timeoutSeconds, preferPillar })
+  const { bot } = c
+  ctl.onAbort.push(() => {
+    try { bot.clearControlStates() } catch {}
+    try { bot.stopDigging() } catch {}
+  })
+  // The world is 384 blocks tall. Past that this is not a climb any more, it is
+  for (let level = 0; level < 400 && (!arrived(c) || inWater(bot)); level++) {
+    if (await climbLevel(c) === 'stop') break
+  }
+  return climbReport(c)
+}
+
+function openClimb (session, ctl, { targetY, timeoutSeconds, preferPillar }): Climb {
   const bot = session.bot
   const mcData = session.mcData
   const top = worldTop(bot)
@@ -170,287 +221,322 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
   const from = xyz(bot.entity.position)
   const startY = bot.entity.position.y
   const before = countItems(bot)
-  // Out of the hole ends the climb whatever targetY said. The brain passes
-  const arrived = () => {
-    const feet = bot.entity.position.floored()
-    if (pitCheck(bot, feet, top).out) return true
-    // Небо над головой и не меньше двух открытых сторон (пусто и на уровне ног,
-    if (openSky(bot, feet, top)) {
-      let open = 0
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const a = bot.blockAt(feet.offset(dx, 0, dz))
-        const b = bot.blockAt(feet.offset(dx, 1, dz))
-        if (a && b && a.boundingBox === 'empty' && b.boundingBox === 'empty' && !/lava/.test(a.name)) open++
-      }
-      if (open >= 2) return true
-    }
-    return wantY !== null && feet.y >= wantY
+  return {
+    session, ctl, bot, mcData, top, wantY, budgetSeconds, deadline, preferPillar, from, startY, before,
+    stairs: 0, pillar: 0, aside: 0, dug: 0, stopped: null, dir: null,
+    // Walls this call built, and the bearing they stand on. Both outlive the
+    walls: [], noGo: null,
+    // Every mob this call had to answer for, and what the answer was. walls says
+    met: [],
+    // The cells the body stood in before each successful step, newest last. Four
+    trail: [],
+    // Ids of creatures this call looked at, could not wall off, and walked past
+    passed: new Set(),
+    // The screen that the creature which stopped this call walked round, if it
+    outflanked: null,
+    // The same mistake the other way round: blocks of the failed wall that went
+    standingUseless: null,
+    // The tool refusal has to reach the note: it is not AGAIN_WONT_HELP (a craft
+    worn: null,
+    // What the water cost this call, for the answer: moves made, cells plugged
+    wetMoves: 0,
+    // Moves since the last level gained. The limit is on these: a long climb that
+    // cuts into three separate leaks and shuts each one has not been refused once.
+    wetRun: 0, plugs: [], swum: 0
   }
+}
 
-  ctl.onAbort.push(() => {
-    try { bot.clearControlStates() } catch {}
-    try { bot.stopDigging() } catch {}
-  })
-
-  let stairs = 0
-  let pillar = 0
-  let aside = 0
-  let dug = 0
-  let stopped = null
-  let dir = null
-  // Walls this call built, and the bearing they stand on. Both outlive the
-  const walls = []
-  let noGo = null
-
-  // Every mob this call had to answer for, and what the answer was. walls says
-  const met = []
-
-  // The cells the body stood in before each successful step, newest last. Four
-  const trail = []
-
-  // Ids of creatures this call looked at, could not wall off, and walked past
-  const passed = new Set()
-  const stillScenery = (e) => {
-    if (!passed.has(e.id)) return false
-    return !dangerousNow(session, { who: e, dist: e.position.distanceTo(bot.entity.position) })
+// Out of the hole ends the climb whatever targetY said. The brain passes
+const arrived = (c: Climb) => {
+  const { bot, top, wantY } = c
+  const feet = bot.entity.position.floored()
+  if (pitCheck(bot, feet, top).out) return true
+  // Небо над головой и не меньше двух открытых сторон (пусто и на уровне ног,
+  if (openSky(bot, feet, top)) {
+    let open = 0
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const a = bot.blockAt(feet.offset(dx, 0, dz))
+      const b = bot.blockAt(feet.offset(dx, 1, dz))
+      if (a && b && a.boundingBox === 'empty' && b.boundingBox === 'empty' && !/lava/.test(a.name)) open++
+    }
+    if (open >= 2) return true
   }
+  return wantY !== null && feet.y >= wantY
+}
 
-  // One question, asked from three places: the top of the level, between the
-  const watch = () => seenBy(bot, MOB_WATCH,
-    e => stillScenery(e) || walls.some(w => shutOut(bot, w, e)))
+const stillScenery = (c: Climb, e) => {
+  const { session, bot, passed } = c
+  if (!passed.has(e.id)) return false
+  return !dangerousNow(session, { who: e, dist: e.position.distanceTo(bot.entity.position) })
+}
 
-  // The screen that the creature which stopped this call walked round, if it
-  let outflanked = null
-  // The same mistake the other way round: blocks of the failed wall that went
-  let standingUseless = null
+// One question, asked from three places: the top of the level, between the
+const watch = (c: Climb) => seenBy(c.bot, MOB_WATCH,
+  e => stillScenery(c, e) || c.walls.some(w => shutOut(c.bot, w, e)))
 
-  // Everything that happens when the watch answers. Lives out here because the
-  const dealWith = async (mob) => {
-    // Two numbers, and the second is the one that decides. combat measured the
-    const seen: any = {
-      who: mob.who.name,
-      dist: Math.round(mob.dist),
-      y: Math.floor(bot.entity.position.y),
-      seen: mob.seen || 1,
-      reach: openSides(bot, 2).length
-    }
-    met.push(seen)
-    const spent = walls.reduce((n, w) => n + w.blocks, 0)
-    const wall: any = walls.length >= WALL_LIMIT || spent >= WALL_BLOCKS
-      ? { ok: false, why: `за этот вызов я уже поставил ${walls.length} стены (${spent} бл.), а он всё равно меня видит — дальше это просто пустой рюкзак` }
-      : await wallOff(session, ctl, mob)
-    // A wall that did not close the line is still blocks in the world — on the
-    if (!wall.ok && wall.placed) seen.built = { blocks: wall.placed, at: wall.cells.map(xyz) }
-    if (!wall.ok) {
-      // The wall is gone as an option; now the question is whether this thing
-      const danger = dangerousNow(session, mob)
-      if (!danger) {
-        seen.what = 'мимо'
-        seen.why = wall.why
-        passed.add(mob.who.id)
-        return true
-      }
-      seen.danger = danger
-      seen.what = 'не закрылся'
-      // The reason, not just the verdict. «не закрылся» on its own cost a whole
-      const round = walls.find(w => w.id === mob.who.id && /заслон/.test(w.kind) && !behindWall(bot, w, mob.who))
-      if (round) outflanked = round
-      if (seen.built) standingUseless = seen.built
-      // «Вокруг открыто» only where it is: once the climb is on its own
-      seen.why = round
-        ? `обошёл мой ${round.kind} на ${spot(round.cell)}: заслон закрывает линию, а не дорогу` +
-          `${seen.reach >= 2 ? `, а вокруг открыто, сторон ${seen.reach}` : ''}; ${wall.why}`
-        : wall.why
-      stopped = `${mob.who.name} в ${Math.round(mob.dist)} блоках и видит меня — спиной к нему на лестницу не полезу; ${seen.why}. ` +
-        `Вижу таких ${seen.seen}, дотянуться разом могут ${seen.reach}. ${whereToFight(trail, seen.reach, seen.seen, mob.who.name)}`
-      return false
-    }
-    seen.what = wall.wall.kind
-    walls.push(wall.wall)
-    // A staircase cuts the square ahead of it before anything else, so the
-    noGo = new Vec3(wall.wall.step.dx, 0, wall.wall.step.dz)
-    if (dir && dir.equals(noGo)) dir = null
-    return true
+// Everything that happens when the watch answers. Lives out here because the
+const dealWith = async (c: Climb, mob) => {
+  const { session, ctl, bot, walls, met, passed, trail } = c
+  // Two numbers, and the second is the one that decides. combat measured the
+  const seen: any = {
+    who: mob.who.name,
+    dist: Math.round(mob.dist),
+    y: Math.floor(bot.entity.position.y),
+    seen: mob.seen || 1,
+    reach: openSides(bot, 2).length
   }
-
-  // The tool refusal has to reach the note: it is not AGAIN_WONT_HELP (a craft
-  let worn = null
-
-  // What the water cost this call, for the answer: moves made, cells plugged
-  let wetMoves = 0
-  // Moves since the last level gained. The limit is on these: a long climb that
-  // cuts into three separate leaks and shuts each one has not been refused once.
-  let wetRun = 0
-  const plugs = []
-  let swum = 0
-
-  // The world is 384 blocks tall. Past that this is not a climb any more, it is
-  for (let level = 0; level < 400 && (!arrived() || inWater(bot)); level++) {
-    if (ctl.aborted) { stopped = 'прервано'; break }
-    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
-
-    // Ahead of health, ahead of the pickaxe and ahead of the mob — and this
-    if (inWater(bot)) {
-      if (wetRun >= WET_LIMIT) {
-        stopped = waterStop(bot, [`вылезал из воды ${wetRun} раза подряд, не поднявшись ни на уровень, а она снова на мне`])
-        break
-      }
-      wetMoves++
-      wetRun++
-      const w = await outOfWater(bot, ctl, deadline)
-      plugs.push(...(w.plugged || []))
-      swum += w.swam || 0
-      if (w.ok) continue
-      if (ctl.aborted) { stopped = 'прервано'; break }
-      if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
-      stopped = waterStop(bot, w.tried)
-      break
+  met.push(seen)
+  const spent = walls.reduce((n, w) => n + w.blocks, 0)
+  const wall: any = walls.length >= WALL_LIMIT || spent >= WALL_BLOCKS
+    ? { ok: false, why: `за этот вызов я уже поставил ${walls.length} стены (${spent} бл.), а он всё равно меня видит — дальше это просто пустой рюкзак` }
+    : await wallOff(session, ctl, mob)
+  // A wall that did not close the line is still blocks in the world — on the
+  if (!wall.ok && wall.placed) seen.built = { blocks: wall.placed, at: wall.cells.map(xyz) }
+  if (!wall.ok) {
+    // The wall is gone as an option; now the question is whether this thing
+    const danger = dangerousNow(session, mob)
+    if (!danger) {
+      seen.what = 'мимо'
+      seen.why = wall.why
+      passed.add(mob.who.id)
+      return true
     }
+    seen.danger = danger
+    seen.what = 'не закрылся'
+    // The reason, not just the verdict. «не закрылся» on its own cost a whole
+    const round = walls.find(w => w.id === mob.who.id && /заслон/.test(w.kind) && !behindWall(bot, w, mob.who))
+    if (round) c.outflanked = round
+    if (seen.built) c.standingUseless = seen.built
+    // «Вокруг открыто» only where it is: once the climb is on its own
+    seen.why = round
+      ? `обошёл мой ${round.kind} на ${spot(round.cell)}: заслон закрывает линию, а не дорогу` +
+        `${seen.reach >= 2 ? `, а вокруг открыто, сторон ${seen.reach}` : ''}; ${wall.why}`
+      : wall.why
+    c.stopped = `${mob.who.name} в ${Math.round(mob.dist)} блоках и видит меня — спиной к нему на лестницу не полезу; ${seen.why}. ` +
+      `Вижу таких ${seen.seen}, дотянуться разом могут ${seen.reach}. ${whereToFight(trail, seen.reach, seen.seen, mob.who.name)}`
+    return false
+  }
+  seen.what = wall.wall.kind
+  walls.push(wall.wall)
+  // A staircase cuts the square ahead of it before anything else, so the
+  c.noGo = new Vec3(wall.wall.step.dx, 0, wall.wall.step.dz)
+  if (c.dir && c.dir.equals(c.noGo)) c.dir = null
+  return true
+}
 
-    const health = Math.round(bot.health ?? 20)
-    // Стоять внизу на малом хп имеет смысл, только если оно вернётся: сытость
-    const canHeal = (bot.food ?? 20) >= 18 || !!(session.mcData && (require('.././actions') as typeof import('.././actions')).bestFood(bot, session.mcData))
-    if (health < 6 && canHeal) { stopped = `здоровья ${health} — дальше не лезу`; break }
+// Один уровень подъёма — шаги по порядку прежнего тела цикла.
+async function climbLevel (c: Climb): Promise<Turn> {
+  const { session, ctl, bot, deadline } = c
+  if (ctl.aborted) { c.stopped = 'прервано'; return 'stop' }
+  if (gameClock.now() >= deadline) { c.stopped = 'время вышло'; return 'stop' }
 
-    // The climb is what the reserve exists for, so nothing is held back here:
-    const feetY = bot.entity.position.floored().y
-    const legWant = legLevels(deadline, wantY, feetY)
-    const column = bot.entity.position.floored()
-    const fastPillar = preferPillar && !noGo && pickFiller(bot, { steady: true }) &&
-      !wet(bot, column.offset(0, 2, 0)) && !wet(bot, column.offset(0, 3, 0)) &&
-      !looseOver(bot, column.offset(0, 2, 0)) && !looseOver(bot, column.offset(0, 3, 0)) &&
-      // digUp also removes feet+3 for the jump. Even one falling block on that
-      // support drops into our own head; stairs clear the future square instead.
-      !FALLS.has(bot.blockAt(column.offset(0, 4, 0))?.name) &&
-      [2, 3].every(h => {
-        const b = bot.blockAt(column.offset(0, h, 0))
-        return b && b.name !== 'bedrock' && !FALLS.has(b.name)
-      })
-    const swingsPerLevel = fastPillar ? 1 : SWINGS_PER_LEVEL
-    const short = toolShortfall(bot, mcData, {
-      need: legWant * swingsPerLevel + (fastPillar ? 1 : 0),
-      reserve: 0,
-      onlyIfFixable: true
+  // Ahead of health, ahead of the pickaxe and ahead of the mob — and this
+  if (inWater(bot)) return wetLevel(c)
+
+  const health = Math.round(bot.health ?? 20)
+  // Стоять внизу на малом хп имеет смысл, только если оно вернётся: сытость
+  const canHeal = (bot.food ?? 20) >= 18 || !!(session.mcData && (require('.././actions') as typeof import('.././actions')).bestFood(bot, session.mcData))
+  if (health < 6 && canHeal) { c.stopped = `здоровья ${health} — дальше не лезу`; return 'stop' }
+
+  const leg = toolLeg(c)
+  if (!leg) return 'stop'
+  const { fastPillar } = leg
+  const mob = watch(c)
+  if (mob) {
+    if (!(await dealWith(c, mob))) return 'stop'
+    return 'next'
+  }
+  // Быстрый выход из одноразовой шахты: один новый блок над головой вместо
+  if (fastPillar) {
+    const turn = await fastPillarUp(c)
+    if (turn) return turn
+  }
+  const { turn, why } = await stairsUp(c)
+  if (turn) return turn
+  // Four directions of swinging can eat the rest of the budget on their own,
+  // and the pillar below would then spend it twice over.
+  if (ctl.aborted) { c.stopped = 'прервано'; return 'stop' }
+  if (gameClock.now() >= deadline) { c.stopped = 'время вышло'; return 'stop' }
+
+  // Nowhere to cut a step. The pillar costs a block a level and any hit
+  const blocked = why.find(w => /лава|вода/.test(w)) || why.find(w => /сыплется/.test(w)) || why[0] || 'некуда'
+  const feet = bot.entity.position.floored()
+  const aside = await stepAside(c, blocked, feet)
+  if (aside) return aside
+  return pillarUp(c, blocked, feet)
+}
+
+// В воде: выбраться — и дальше подъём; вылезал слишком часто без подъёма — стоп.
+async function wetLevel (c: Climb): Promise<Turn> {
+  const { ctl, bot, deadline, plugs } = c
+  if (c.wetRun >= WET_LIMIT) {
+    c.stopped = waterStop(bot, [`вылезал из воды ${c.wetRun} раза подряд, не поднявшись ни на уровень, а она снова на мне`])
+    return 'stop'
+  }
+  c.wetMoves++
+  c.wetRun++
+  const w = await outOfWater(bot, ctl, deadline)
+  plugs.push(...(w.plugged || []))
+  c.swum += w.swam || 0
+  if (w.ok) return 'next'
+  if (ctl.aborted) { c.stopped = 'прервано'; return 'stop' }
+  if (gameClock.now() >= deadline) { c.stopped = 'время вышло'; return 'stop' }
+  c.stopped = waterStop(bot, w.tried)
+  return 'stop'
+}
+
+// Кирка на этот отрезок: быстрый столб или лестница; не хватит — стоп (итог null), иначе — быстрый ли столб.
+function toolLeg (c: Climb): { fastPillar: any } | null {
+  const { bot, mcData, deadline, wantY, preferPillar, noGo } = c
+  // The climb is what the reserve exists for, so nothing is held back here:
+  const feetY = bot.entity.position.floored().y
+  const legWant = legLevels(deadline, wantY, feetY)
+  const column = bot.entity.position.floored()
+  const fastPillar = preferPillar && !noGo && pickFiller(bot, { steady: true }) &&
+    !wet(bot, column.offset(0, 2, 0)) && !wet(bot, column.offset(0, 3, 0)) &&
+    !looseOver(bot, column.offset(0, 2, 0)) && !looseOver(bot, column.offset(0, 3, 0)) &&
+    // digUp also removes feet+3 for the jump. Even one falling block on that
+    // support drops into our own head; stairs clear the future square instead.
+    !FALLS.has(bot.blockAt(column.offset(0, 4, 0))?.name) &&
+    [2, 3].every(h => {
+      const b = bot.blockAt(column.offset(0, h, 0))
+      return b && b.name !== 'bedrock' && !FALLS.has(b.name)
     })
-    if (short) {
-      // «Останавливаюсь заранее» is right and it is not enough. Measured twice:
-      const left = toolBudget(bot, 'pickaxe')
-      const afford = Number.isFinite(left) ? Math.floor(Math.max(0, left) / swingsPerLevel) : 0
-      stopped = afford > 0
-        ? `${short} Но встать намертво тоже нельзя: на остатке я пройду ещё ~${afford} ${levelWord(afford)} из ${legWant} — позови mc_surface с targetY=${feetY + afford}, столько я вырублю без починки.`
-        : `${short} На подъём не осталось ни одного уровня — без новой кирки я отсюда не сдвинусь вообще.`
-      worn = stopped
-      break
-    }
-    const mob = watch()
-    if (mob) {
-      if (!(await dealWith(mob))) break
-      continue
-    }
-    // Быстрый выход из одноразовой шахты: один новый блок над головой вместо
-    if (fastPillar) {
-      const was = bot.entity.position.y
-      const up = await digUp(bot, ctl, { blocks: 1, mcData, tower: true, guard: watch })
-      dug += up.dug
-      if (bot.entity.position.y - was >= 0.9) { pillar++; wetRun = 0; continue }
-      if (ctl.aborted) { stopped = 'прервано'; break }
-      if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
-    }
-    // Stick to the direction that worked last time: a staircase that changes
-    let usable = SIDES
-    if (noGo) {
-      // Picked out of SIDES rather than negated, so every bearing in the list
-      const away = SIDES.find(d => d.x === -noGo.x && d.z === -noGo.z)
-      usable = [away, ...SIDES.filter(d => !d.equals(noGo) && d !== away)]
-    }
-    const order = dir && usable.some(d => d.equals(dir))
-      ? [dir, ...usable.filter(d => !d.equals(dir))]
-      : usable
-    const why = []
-    let moved = false
-    let intruder = null
+  const swingsPerLevel = fastPillar ? 1 : SWINGS_PER_LEVEL
+  const short = toolShortfall(bot, mcData, {
+    need: legWant * swingsPerLevel + (fastPillar ? 1 : 0),
+    reserve: 0,
+    onlyIfFixable: true
+  })
+  if (short) {
+    // «Останавливаюсь заранее» is right and it is not enough. Measured twice:
+    const left = toolBudget(bot, 'pickaxe')
+    const afford = Number.isFinite(left) ? Math.floor(Math.max(0, left) / swingsPerLevel) : 0
+    c.stopped = afford > 0
+      ? `${short} Но встать намертво тоже нельзя: на остатке я пройду ещё ~${afford} ${levelWord(afford)} из ${legWant} — позови mc_surface с targetY=${feetY + afford}, столько я вырублю без починки.`
+      : `${short} На подъём не осталось ни одного уровня — без новой кирки я отсюда не сдвинусь вообще.`
+    c.worn = c.stopped
+    return null
+  }
+  return { fastPillar }
+}
 
-    for (const d of order) {
-      if (ctl.aborted || gameClock.now() >= deadline) break
-      // The body is read again for every direction. A step that failed held
-      const step = await stairStep(bot, mcData, ctl, bot.entity.position.floored(), d, deadline, watch)
-      dug += step.dug
-      if (step.ok) {
-        trail.push(bot.entity.position.floored().offset(-d.x, -1, -d.z))
-        if (trail.length > 4) trail.shift()
-        dir = d; stairs++; wetRun = 0; moved = true; break
-      }
-      // A step dropped because something walked into view is not a bearing that
-      if (step.mob) { intruder = step.mob; break }
-      why.push(step.reason)
+async function fastPillarUp (c: Climb): Promise<Turn> {
+  const { ctl, bot, mcData, deadline } = c
+  const was = bot.entity.position.y
+  const up = await digUp(bot, ctl, { blocks: 1, mcData, tower: true, guard: () => watch(c) })
+  c.dug += up.dug
+  if (bot.entity.position.y - was >= 0.9) { c.pillar++; c.wetRun = 0; return 'next' }
+  if (ctl.aborted) { c.stopped = 'прервано'; return 'stop' }
+  if (gameClock.now() >= deadline) { c.stopped = 'время вышло'; return 'stop' }
+  return undefined
+}
+
+// Ступенька по сторонам света; итог — 'next'/'stop' или почему ни одна не вышла.
+async function stairsUp (c: Climb): Promise<{ turn: Turn, why: any[] }> {
+  const { ctl, bot, mcData, deadline, noGo, trail } = c
+  // Stick to the direction that worked last time: a staircase that changes
+  let usable = SIDES
+  if (noGo) {
+    // Picked out of SIDES rather than negated, so every bearing in the list
+    const away = SIDES.find(d => d.x === -noGo.x && d.z === -noGo.z)
+    usable = [away, ...SIDES.filter(d => !d.equals(noGo) && d !== away)]
+  }
+  const dir = c.dir
+  const order = dir && usable.some(d => d.equals(dir))
+    ? [dir, ...usable.filter(d => !d.equals(dir))]
+    : usable
+  const why = []
+  let moved = false
+  let intruder = null
+
+  for (const d of order) {
+    if (ctl.aborted || gameClock.now() >= deadline) break
+    // The body is read again for every direction. A step that failed held
+    const step = await stairStep(bot, mcData, ctl, bot.entity.position.floored(), d, deadline, () => watch(c))
+    c.dug += step.dug
+    if (step.ok) {
+      trail.push(bot.entity.position.floored().offset(-d.x, -1, -d.z))
+      if (trail.length > 4) trail.shift()
+      c.dir = d; c.stairs++; c.wetRun = 0; moved = true; break
     }
-    if (intruder) {
-      if (!(await dealWith(intruder))) break
-      continue
+    // A step dropped because something walked into view is not a bearing that
+    if (step.mob) { intruder = step.mob; break }
+    why.push(step.reason)
+  }
+  if (intruder) {
+    if (!(await dealWith(c, intruder))) return { turn: 'stop', why }
+    return { turn: 'next', why }
+  }
+  if (moved) return { turn: 'next', why }
+  return { turn: undefined, why }
+}
+
+// Ступеньки не вышли из-за лавы/воды или сыплющегося сверху — шаг в сторону от опасного места.
+async function stepAside (c: Climb, blocked, feet): Promise<Turn> {
+  const { ctl, bot, mcData, deadline } = c
+  // Refused up by a hazard on every bearing AND on the pillar means the block
+  const hazard = /лава|вода/.test(blocked)
+    ? (hazardNear(bot, feet.offset(0, 2, 0)) || hazardNear(bot, feet.offset(0, 3, 0)))
+    : null
+  if (hazard) {
+    if (c.aside >= ASIDE_LIMIT) {
+      c.stopped = `${hazardLine(hazard)}; отошёл на ${c.aside} и всё равно упираюсь`
+      return 'stop'
     }
-    if (moved) continue
-    // Four directions of swinging can eat the rest of the budget on their own,
-    // and the pillar below would then spend it twice over.
-    if (ctl.aborted) { stopped = 'прервано'; break }
-    if (gameClock.now() >= deadline) { stopped = 'время вышло'; break }
-
-    // Nowhere to cut a step. The pillar costs a block a level and any hit
-    const blocked = why.find(w => /лава|вода/.test(w)) || why.find(w => /сыплется/.test(w)) || why[0] || 'некуда'
-    const feet = bot.entity.position.floored()
-
-    // Refused up by a hazard on every bearing AND on the pillar means the block
-    const hazard = /лава|вода/.test(blocked)
-      ? (hazardNear(bot, feet.offset(0, 2, 0)) || hazardNear(bot, feet.offset(0, 3, 0)))
-      : null
-    if (hazard) {
-      if (aside >= ASIDE_LIMIT) {
-        stopped = `${hazardLine(hazard)}; отошёл на ${aside} и всё равно упираюсь`
-        break
-      }
-      const off = await sideStep(bot, mcData, ctl, deadline, hazard.position)
-      dug += off.dug
-      if (!off.ok) { stopped = `${hazardLine(hazard)}, и в сторону не отойти`; break }
-      aside++
-      dir = null // the bearing that worked under the old column means nothing here
-      continue
-    }
-
-    // Loose overhead is the lava case with a different material and exactly the
-    const loose = looseOver(bot, feet.offset(0, 2, 0)) || looseOver(bot, feet.offset(0, 3, 0))
-    if (loose) {
-      if (aside >= ASIDE_LIMIT) {
-        stopped = `${looseLine(loose)}; отошёл на ${aside} и всё ещё под сыпучим — уведи меня mc_goto блоков на ${ASIDE_LIMIT + 2} в сторону и зови подъём оттуда`
-        break
-      }
-      // Away from our own square: a column directly overhead has no direction
-      const off = await sideStep(bot, mcData, ctl, deadline, feet)
-      dug += off.dug
-      if (!off.ok) {
-        stopped = `${looseLine(loose)}, и в сторону не отойти: ` +
-          (pickFiller(bot)
-            ? `вокруг то же сыпучее или шагнуть некуда — уведи меня mc_goto блоков на ${ASIDE_LIMIT + 2} в сторону и зови оттуда`
-            : 'и блоков нет — ни отойти, ни подпереть')
-        break
-      }
-      aside++
-      dir = null // the bearing that worked under the old column means nothing here
-      continue
-    }
-
-    const risk = wet(bot, feet.offset(0, 2, 0)) || wet(bot, feet.offset(0, 3, 0))
-    if (risk) { stopped = risk; break }
-    if (!pickFiller(bot)) { stopped = `столб строить нечем, а лестницу не вырубить: ${blocked}`; break }
-
-    const was = bot.entity.position.y
-    const up = await digUp(bot, ctl, { blocks: 1, mcData, tower: true })
-    dug += up.dug
-    if (bot.entity.position.y - was >= 0.9) { pillar++; wetRun = 0 }
-    else { stopped = `${up.stopped || 'столб не встал'}; лестница — ${blocked}`; break }
+    const off = await sideStep(bot, mcData, ctl, deadline, hazard.position)
+    c.dug += off.dug
+    if (!off.ok) { c.stopped = `${hazardLine(hazard)}, и в сторону не отойти`; return 'stop' }
+    c.aside++
+    c.dir = null // the bearing that worked under the old column means nothing here
+    return 'next'
   }
 
+  // Loose overhead is the lava case with a different material and exactly the
+  const loose = looseOver(bot, feet.offset(0, 2, 0)) || looseOver(bot, feet.offset(0, 3, 0))
+  if (loose) {
+    if (c.aside >= ASIDE_LIMIT) {
+      c.stopped = `${looseLine(loose)}; отошёл на ${c.aside} и всё ещё под сыпучим — уведи меня mc_goto блоков на ${ASIDE_LIMIT + 2} в сторону и зови подъём оттуда`
+      return 'stop'
+    }
+    // Away from our own square: a column directly overhead has no direction
+    const off = await sideStep(bot, mcData, ctl, deadline, feet)
+    c.dug += off.dug
+    if (!off.ok) {
+      c.stopped = `${looseLine(loose)}, и в сторону не отойти: ` +
+        (pickFiller(bot)
+          ? `вокруг то же сыпучее или шагнуть некуда — уведи меня mc_goto блоков на ${ASIDE_LIMIT + 2} в сторону и зови оттуда`
+          : 'и блоков нет — ни отойти, ни подпереть')
+      return 'stop'
+    }
+    c.aside++
+    c.dir = null // the bearing that worked under the old column means nothing here
+    return 'next'
+  }
+  return undefined
+}
+
+// Последний способ — столб на блок.
+async function pillarUp (c: Climb, blocked, feet): Promise<Turn> {
+  const { ctl, bot, mcData } = c
+  const risk = wet(bot, feet.offset(0, 2, 0)) || wet(bot, feet.offset(0, 3, 0))
+  if (risk) { c.stopped = risk; return 'stop' }
+  if (!pickFiller(bot)) { c.stopped = `столб строить нечем, а лестницу не вырубить: ${blocked}`; return 'stop' }
+
+  const was = bot.entity.position.y
+  const up = await digUp(bot, ctl, { blocks: 1, mcData, tower: true })
+  c.dug += up.dug
+  if (bot.entity.position.y - was >= 0.9) { c.pillar++; c.wetRun = 0 }
+  else { c.stopped = `${up.stopped || 'столб не встал'}; лестница — ${blocked}`; return 'stop' }
+  return undefined
+}
+
+// Ответ подъёма: где встал, чем и почему, что осталось от кирки, стены и мобы по дороге.
+function climbReport (c: Climb) {
+  const { session, bot, top, wantY, budgetSeconds, preferPillar, from, startY, before, stairs, pillar, aside, dug, met, wetMoves, plugs, swum } = c
   const here = pitCheck(bot, bot.entity.position.floored(), top)
   const nowY = Math.floor(bot.entity.position.y)
-  const out = arrived()
+  const out = arrived(c)
   // The full remainder, which the per-leg check above deliberately does not
   const swings = toolBudget(bot, 'pickaxe')
   const toTop = wantY === null ? null : Math.max(0, wantY - nowY)
@@ -464,10 +550,52 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
         toTop: toTop === null ? undefined : Math.ceil(toTop * estimate)
       }
     : undefined
-  if (!out && !stopped) stopped = 'подъём встал на месте'
+  if (!out && !c.stopped) c.stopped = 'подъём встал на месте'
+  const stopped = c.stopped
   const climbed = Math.round(bot.entity.position.y - startY)
   const mode = stairs && pillar ? 'смешанный' : pillar ? 'столб' : 'лестница'
 
+  const { note, walled } = climbNotes(c, { here, nowY, out, climbed, pickaxe, toTop })
+
+  if (climbed) {
+    session.journal.append('подъём',
+      `вверх на ${climbed} (${mode}: ступеней ${stairs}, столб ${pillar}) — ${note}`,
+      bot.entity.position)
+  }
+
+  return {
+    from,
+    at: xyz(bot.entity.position),
+    climbed,
+    mode,
+    stairs,
+    pillar,
+    aside,
+    dug,
+    // Undefined and not an empty array on purpose: «стен не строил» is the
+    // normal climb, and a field that is always there stops being read.
+    walls: walled.length ? walled : undefined,
+    met: met.length ? met : undefined,
+    // Same rule as walls: absent on a dry climb. `plugged` are blocks now
+    // standing where water ran, `dry` whether the body ended the call out of it.
+    water: wetMoves
+      ? { moves: wetMoves, plugged: plugs.length ? plugs : undefined, swam: swum || undefined, dry: !inWater(bot) }
+      : undefined,
+    pickaxe,
+    // A default climb also exits through open sky and two sides; report its actual arrival proof.
+    out: here.out || wantY === null && out,
+    sky: here.sky,
+    // «я больше не в яме» and «я на поверхности» are separate decisions: the
+    pit: !here.free,
+    gained: diffItems(before, countItems(bot)),
+    note,
+    stopped: stopped || undefined
+  }
+}
+
+// Записка ответа: итог подъёма и что дальше, мимо кого полез, чем закрылся, хватит ли кирки.
+function climbNotes (c: Climb, { here, nowY, out, climbed, pickaxe, toTop }) {
+  const { bot, wantY, aside, walls, met, outflanked, standingUseless, worn, stopped } = c
   let note = `поднялся на ${climbed} — позови ещё раз, полезу дальше отсюда`
   // Ahead of every other branch, «пришёл» included. Reproduced offline in a 1x1
   if (stopped && (/из воды сам не выбраться/.test(stopped) || inWater(bot))) {
@@ -557,41 +685,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
   if (pickaxe && pickaxe.toTop && pickaxe.left < pickaxe.toTop && !out) {
     note += `; кирки хватит примерно на ${pickaxe.levels} ${levelWord(pickaxe.levels)} из ${toTop}`
   }
-
-  if (climbed) {
-    session.journal.append('подъём',
-      `вверх на ${climbed} (${mode}: ступеней ${stairs}, столб ${pillar}) — ${note}`,
-      bot.entity.position)
-  }
-
-  return {
-    from,
-    at: xyz(bot.entity.position),
-    climbed,
-    mode,
-    stairs,
-    pillar,
-    aside,
-    dug,
-    // Undefined and not an empty array on purpose: «стен не строил» is the
-    // normal climb, and a field that is always there stops being read.
-    walls: walled.length ? walled : undefined,
-    met: met.length ? met : undefined,
-    // Same rule as walls: absent on a dry climb. `plugged` are blocks now
-    // standing where water ran, `dry` whether the body ended the call out of it.
-    water: wetMoves
-      ? { moves: wetMoves, plugged: plugs.length ? plugs : undefined, swam: swum || undefined, dry: !inWater(bot) }
-      : undefined,
-    pickaxe,
-    // A default climb also exits through open sky and two sides; report its actual arrival proof.
-    out: here.out || wantY === null && out,
-    sky: here.sky,
-    // «я больше не в яме» and «я на поверхности» are separate decisions: the
-    pit: !here.free,
-    gained: diffItems(before, countItems(bot)),
-    note,
-    stopped: stopped || undefined
-  }
+  return { note, walled }
 }
 
 const REFUGE_NEUTRAL = /^(enderman|piglin|zombified_piglin)$/
@@ -661,4 +755,7 @@ const PILLAR = 4
 
 const CLIMBERS = /^(spider|cave_spider|drowned)$/
 
-module.exports = { handClimb, handBreaks, breakAt, stairStep, sideStep, surface, surfaceBody, REFUGE_NEUTRAL, MOB_SPEED, chaseBps, MOB_REACH, HOLE_DEPTH, REFUGE_FLEE_MS, HOT_CELL, holePlan, pocketOf, PILLAR, CLIMBERS }
+export {
+  handClimb, handBreaks, breakAt, stairStep, sideStep, surface, surfaceBody, REFUGE_NEUTRAL, MOB_SPEED, chaseBps,
+  MOB_REACH, HOLE_DEPTH, REFUGE_FLEE_MS, HOT_CELL, holePlan, pocketOf, PILLAR, CLIMBERS
+}

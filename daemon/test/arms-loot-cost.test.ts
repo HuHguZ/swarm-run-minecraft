@@ -1,15 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { cjsContext } from './cjs-context'
+import { declSource } from './source-fixture'
 
 import * as AG from '../src/pvp/arms-graph'
 import * as Loot from '../src/pvp/arms-loot'
 import { emptyWorld, fact } from '../src/core/world-state'
-const source = readFileSync(join(__dirname, '../arena/arms-run.js'), 'utf8')
-const body = source.slice(source.indexOf('class ArmsEnv {'), source.indexOf('async function brain('))
+// Класс ArmsEnv — объявлением из исходника arms-run (declSource: без импортов и сетевого bootstrap сцены).
+const body = declSource(join(__dirname, '../arena/arms-run.js'), 'ArmsEnv')
 const at = { x: 1, y: 0, z: 0 }, here = { x: 0, y: 0, z: 0 }
 const remaining = ['iron_sword', 'bow', 'arrow', 'iron_pickaxe', 'iron_axe', 'cooked_beef', 'cobblestone'].map(name => ({ name, count: 1 }))
 const room = () => Array(36).fill(null)

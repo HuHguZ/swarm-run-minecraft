@@ -164,17 +164,24 @@ async function setup () {
   await call('armor', {} as Record<string, any>).catch(() => null)
 }
 
-async function main () {
-  await conn.ready
-  await farmBootstrap(call, WS, PLAYER)
-  await call('stop')
-  const t0 = gameClock.now()
+// Сцена по фазам (прежнее тело main): подготовка тела и портала, карта и сетка копии мира, место входа и проверка готовности,
+// вход в Ад, короткая диагностика маршрута, запуск и надзор кампании, итог. Прежние let тела main — поля объекта nr.
+interface NeRun {
+  t0: number; reuseEntry: any; pr: any; map: any; mapPlaces: any; shMap: any; gridInfo: any; preparedEntry: any
+  releasedHold: Record<string, any> | null; preparedHealth: any; preparedSupply: any; size: number; viaTp: boolean; entry: any
+  clog: string; tc: number; wallTc: number; startClock: any; child: any; exited: any; truth: any; stoppedBy: string; ok: boolean
+  reachedAt: any; lastCheck: number; best: any; marks: Record<string, any>; mark: (k: string) => void; lastDim: string
+  UNTIL_NETHER: boolean; eyesNeed: () => number; netherPassAt: any; until: number; wallSeen: { game: number; wall: number }
+}
+
+// Тело живо, творческий режим подготовки, место повторного мира, набор, портал верхнего мира.
+async function nrBody (nr: NeRun) {
   await kit.cmd('/gamemode spectator')
   await kit.must('/gamemode creative', /^Set own game mode to Creative Mode$/, 'режим подготовки creative')
   const respawnDeadline = gameClock.wall.now() + 15000
   while ((await status()).health <= 0 && gameClock.wall.now() < respawnDeadline) await gameClock.wall.sleep(250)
   if (!((await status()).health > 0)) throw new Error('тело не возродилось до операторской подготовки')
-  let reuseEntry = null
+  nr.reuseEntry = null
   if (process.env.REUSE_ENTRY === '1') {
     const slot = Number(process.env.FARM_SLOT)
     const connected = await call('status')
@@ -185,20 +192,24 @@ async function main () {
     if (!portal || (portal.dimension || 'overworld') !== 'overworld' || ![portal.x, portal.y, portal.z].every(Number.isFinite)) {
       throw new Error('REUSE_ENTRY: фактического портала верхнего мира в памяти нет')
     }
-    reuseEntry = { x: portal.x, y: portal.y, z: portal.z, source: 'observed portal memory' }
+    nr.reuseEntry = { x: portal.x, y: portal.y, z: portal.z, source: 'observed portal memory' }
     await kit.ensureWorld('overworld', { tp: `${Math.floor(portal.x) + 0.5} ${portal.y} ${Math.floor(portal.z) + 0.5}` })
   }
   await setup()
   // Портал верхнего мира — сам (этап portal кампании: тот же RPC), кровать у него — точка возрождения (этап prep).
-  let pr = null
+  nr.pr = null
   for (let k = 0; k < 3; k++) {
-    pr = await call('portal', { timeoutSeconds: 240 }).catch(e => ({ status: 'failed', error: e.message }))
+    nr.pr = await call('portal', { timeoutSeconds: 240 }).catch(e => ({ status: 'failed', error: e.message }))
     const st = await status()
-    if ((pr.detail && (pr.detail.lit || pr.detail.built)) || /горит/.test(JSON.stringify(pr))) break
+    if ((nr.pr.detail && (nr.pr.detail.lit || nr.pr.detail.built)) || /горит/.test(JSON.stringify(nr.pr))) break
     if (st.dimension !== 'overworld') break
     // «Обсидиан принеси» (рама начата, обсидиан ушёл в неё/выпал: neF-B10f23-1 03.10) — подготовка: выдать ещё.
-    if (/обсидиан принеси|нет обсидиана|не хватает обсидиана/.test(JSON.stringify(pr))) { await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await sleep(800) }
+    if (/обсидиан принеси|нет обсидиана|не хватает обсидиана/.test(JSON.stringify(nr.pr))) { await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await sleep(800) }
   }
+}
+
+// Точка возрождения, карта Ада и крепости Края из копии мира, сетка маршрута — до входа.
+async function nrMaps (nr: NeRun) {
   // Точка возрождения у портала — командой (этап prep ставит туда кровать; 02.10 кровать встала в проходе портала на
   // 2 слотах из 6, и enter не дошёл до порога — это отдельная беда bedtime.js, не этой сцены).
   await kit.cmd('/spawnpoint @s')
@@ -207,13 +218,13 @@ async function main () {
   // погасшего портала — кампания стартовала в верхнем мире).
   const sOw = await status()
   const est = sOw.pos ? { x: Math.floor(sOw.pos.x / 8), y: 70, z: Math.floor(sOw.pos.z / 8) } : null
-  let map = null
-  let mapPlaces = null
+  nr.map = null
+  nr.mapPlaces = null
   if (process.env.MAP === '1' && est && process.env.FARM_SLOT) {
     const tm = gameClock.now()
     const m: Record<string, any> = await (require('../lib/try-lab-ne-map') as typeof import('../lib/try-lab-ne-map')).netherMap(Number(process.env.FARM_SLOT), est, { bastions: Number(process.env.MAP_BASTIONS || 2) }).catch(e => ({ error: e.message, places: {} as Record<string, any> }))
-    mapPlaces = m.places
-    map = { seconds: Math.round((gameClock.now() - tm) / 1000), est, error: m.error,
+    nr.mapPlaces = m.places
+    nr.map = { seconds: Math.round((gameClock.now() - tm) / 1000), est, error: m.error,
       bastions: (m.bastions || []).map(b => ({ x: b.x, z: b.z, dist: b.dist, type: b.type, gold: (b.gold || []).length, bb: b.bbAll || undefined })), fortressBB: (m.fortress && m.fortress.bbAll) || undefined,
       fortress: m.fortress ? { x: m.fortress.x, z: m.fortress.z, dist: m.fortress.dist, spawner: m.fortress.spawner } : null, route: m.route || null }
     // Искажённый лес — где в Аду эндермены (добор жемчуга после всех бастионов, правило пользователя): ближайший по копии мира
@@ -223,72 +234,76 @@ async function main () {
       const out = rcon(`execute in minecraft:the_nether positioned ${est.x} 70 ${est.z} run locate biome minecraft:warped_forest`)
       const w = /\[(-?\d+), (-?\d+), (-?\d+)\] \((\d+) blocks/.exec(out)
       if (w) {
-        mapPlaces = { ...(mapPlaces || {}), 'искажённый лес (ад)': { x: Number(w[1]), y: Number(w[2]), z: Number(w[3]), dimension: 'the_nether', note: 'по карте копии мира' } }
-        map.warped = { x: Number(w[1]), y: Number(w[2]), z: Number(w[3]), dist: Number(w[4]) }
+        nr.mapPlaces = { ...(nr.mapPlaces || {}), 'искажённый лес (ад)': { x: Number(w[1]), y: Number(w[2]), z: Number(w[3]), dimension: 'the_nether', note: 'по карте копии мира' } }
+        nr.map.warped = { x: Number(w[1]), y: Number(w[2]), z: Number(w[3]), dist: Number(w[4]) }
       }
     }
-    console.log('карта', JSON.stringify(map))
+    console.log('карта', JSON.stringify(nr.map))
     // Карта не прочиталась (s1c-D-1 06.10: крепость null, у всех бастионов золото 0, 2375 игр. с под нагрузкой фермы) — прогон без
     // карты не сравним с остальными: стоп подготовки (MAP_STRICT=0 — идти вслепую).
-    if (process.env.MAP_STRICT !== '0' && !(map.ssg = !!m.ssg) && (!map.fortress || !(map.bastions || []).some(b => b.gold > 0))) throw new Error('SETUP_FAIL: карта копии не прочиталась (крепость или золото бастионов)')
+    if (process.env.MAP_STRICT !== '0' && !(nr.map.ssg = !!m.ssg) && (!nr.map.fortress || !(nr.map.bastions || []).some(b => b.gold > 0))) throw new Error('SETUP_FAIL: карта копии не прочиталась (крепость или золото бастионов)')
   }
   // MAP_SH=1 — и крепость Края из той же копии мира (комната портала, сколько рамок пусто): запись «крепость» у стены
   // комнаты (refined, без бросков find), очей нужно — по пустым рамкам (ND_EYES_NEED, если EYES не задан).
-  let shMap = null
+  nr.shMap = null
   if (process.env.MAP_SH === '1' && sOw.pos && process.env.FARM_SLOT) {
     const sm: Awaited<ReturnType<typeof import('../lib/try-lab-ne-map').strongholdMap>> = await (require('../lib/try-lab-ne-map') as typeof import('../lib/try-lab-ne-map')).strongholdMap(Number(process.env.FARM_SLOT), { x: Math.round(sOw.pos.x), z: Math.round(sOw.pos.z) }).catch(e => ({ error: e.message }))
-    shMap = { start: sm.start, room: sm.room && sm.room.center, frames: sm.frames, eyes: sm.eyes, need: sm.need, error: sm.error }
-    if (sm.place) { mapPlaces = { ...(mapPlaces || {} as Record<string, any>), крепость: sm.place }; if (!map) map = {} as Record<string, any> }
+    nr.shMap = { start: sm.start, room: sm.room && sm.room.center, frames: sm.frames, eyes: sm.eyes, need: sm.need, error: sm.error }
+    if (sm.place) { nr.mapPlaces = { ...(nr.mapPlaces || {} as Record<string, any>), крепость: sm.place }; if (!nr.map) nr.map = {} as Record<string, any> }
     if (sm.need && !process.env.EYES) process.env.EYES = String(sm.need)
-    console.log('крепость Края', JSON.stringify(shMap))
+    console.log('крепость Края', JSON.stringify(nr.shMap))
   }
   // GRID=1 (при MAP=1) — сетка Ада по коридорам маршрута «из копии мира» (try-lab-ne-map.netherGrid): портал (оценка) →
   // бастион → спавнер → выход у крепости Края (/8), плюс коробки бастиона и крепости целиком. Тело ходит по ней
   // (nether-route, ND_NE_ROUTE=1 в CENV/окружении демона). Снимается до входа в Ад, как и карта.
-  let gridInfo = null
-  if (process.env.GRID === '1' && process.env.FARM_SLOT && est && mapPlaces) {
+  nr.gridInfo = null
+  if (process.env.GRID === '1' && process.env.FARM_SLOT && est && nr.mapPlaces) {
     const tg = gameClock.wall.now()
     try {
       const M: typeof import('../lib/try-lab-ne-map') = require('../lib/try-lab-ne-map')
       const pts: { x: number; z: number; y?: number }[] = [est]
-      const bs = (map && map.bastions) || []
-      const keyB = mapPlaces['бастион (ад)']
+      const bs = (nr.map && nr.map.bastions) || []
+      const keyB = nr.mapPlaces['бастион (ад)']
       if (keyB) pts.push({ x: keyB.x, z: keyB.z })
-      const sp = mapPlaces['спавнер блейзов']
+      const sp = nr.mapPlaces['спавнер блейзов']
       if (sp) pts.push({ x: sp.x, z: sp.z })
-      if (shMap && shMap.room) pts.push({ x: Math.floor(shMap.room.x / 8), z: Math.floor(shMap.room.z / 8) })
-      else if (shMap && shMap.start) pts.push({ x: Math.floor(shMap.start.x / 8), z: Math.floor(shMap.start.z / 8) })
+      if (nr.shMap && nr.shMap.room) pts.push({ x: Math.floor(nr.shMap.room.x / 8), z: Math.floor(nr.shMap.room.z / 8) })
+      else if (nr.shMap && nr.shMap.start) pts.push({ x: Math.floor(nr.shMap.start.x / 8), z: Math.floor(nr.shMap.start.z / 8) })
       const rects = M.corridorRects(pts, 40)
       // Каждый выбранный бастион получает коридоры к первому и спавнеру.
-      const keyB2 = mapPlaces['бастион 2 (ад)']
+      const keyB2 = nr.mapPlaces['бастион 2 (ад)']
       // NEAR_B2=1: бастион 2 вне сетки (дальше 350 от входа) телу не давать — от него к спавнеру ни сетки, ни пути (B2-30 03.10:
       // 13 жемчуга, ко второму за 400 бл., оттуда «путь длиной 0» ×35 к спавнеру в 563 бл., паузы, время).
-      if (process.env.NEAR_B2 === '1' && keyB2 && Math.hypot(keyB2.x - est.x, keyB2.z - est.z) >= 350) { delete mapPlaces['бастион 2 (ад)']; console.log('бастион 2 вне сетки — телу не даю', JSON.stringify({ x: keyB2.x, z: keyB2.z })) }
-      if (keyB2 && mapPlaces['бастион 2 (ад)'] && keyB) {
+      if (process.env.NEAR_B2 === '1' && keyB2 && Math.hypot(keyB2.x - est.x, keyB2.z - est.z) >= 350) { delete nr.mapPlaces['бастион 2 (ад)']; console.log('бастион 2 вне сетки — телу не даю', JSON.stringify({ x: keyB2.x, z: keyB2.z })) }
+      if (keyB2 && nr.mapPlaces['бастион 2 (ад)'] && keyB) {
         rects.push(...M.corridorRects([{ x: keyB.x, z: keyB.z }, { x: keyB2.x, z: keyB2.z }], 40))
         if (sp) rects.push(...M.corridorRects([{ x: keyB2.x, z: keyB2.z }, { x: sp.x, z: sp.z }], 40))
       }
       // Коробки — только выбранного бастиона (его запись в памяти внутри коробки) и крепости; дальние бастионы карты —
       // нет (сетка 91 млн клеток на слоте 25 03.10 — память и время плана).
       const near = (bb, q) => q && q.x >= bb[0] - 16 && q.x <= bb[3] + 16 && q.z >= bb[2] - 16 && q.z <= bb[5] + 16
-      const chosen = bs.filter(b => b.bb && (near(b.bb, mapPlaces['бастион (ад)']) || near(b.bb, mapPlaces['бастион 2 (ад)'])))
-      for (const bb of [map && map.fortressBB, ...chosen.map(b => b.bb)].filter(Boolean)) rects.push([bb[0] - 8, bb[2] - 8, bb[3] + 8, bb[5] + 8])
+      const chosen = bs.filter(b => b.bb && (near(b.bb, nr.mapPlaces['бастион (ад)']) || near(b.bb, nr.mapPlaces['бастион 2 (ад)'])))
+      for (const bb of [nr.map && nr.map.fortressBB, ...chosen.map(b => b.bb)].filter(Boolean)) rects.push([bb[0] - 8, bb[2] - 8, bb[3] + 8, bb[5] + 8])
       const r = await M.netherGrid(Number(process.env.FARM_SLOT), rects, {} as Record<string, any>)
       const NG: typeof import('../../src/nether-grid') = require('../../src/nether-grid')
       NG.save(path.join(REPO_ROOT, 'farm', `memory-${process.env.FARM_SLOT}`), r.grid, { pts, rects: rects.length })
-      gridInfo = { seconds: Math.round((gameClock.wall.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, box: r.box, cells: r.grid.data.length, pts,
+      nr.gridInfo = { seconds: Math.round((gameClock.wall.now() - tg) / 1000), chunks: r.chunks, loaded: r.loaded, box: r.box, cells: r.grid.data.length, pts,
         bastions: chosen.map(b => ({ x: b.x, z: b.z, bb: b.bb })) }
-    } catch (e) { gridInfo = { error: e.message } }
-    console.log('сетка', JSON.stringify(gridInfo))
+    } catch (e) { nr.gridInfo = { error: e.message } }
+    console.log('сетка', JSON.stringify(nr.gridInfo))
   }
-  const preparedEntry = await prepareOverworldEntry({ call, state: status,
+}
+
+// Место входа, живые правила, выживание, подтверждение здоровья и запаса.
+async function nrEntry (nr: NeRun) {
+  nr.preparedEntry = await prepareOverworldEntry({ call, state: status,
     now: () => gameClock.wall.now(), sleep: () => gameClock.wall.sleep(100),
     creative: async () => { await kit.cmd('/gamemode spectator'); await kit.must('/gamemode creative', /^Set own game mode to Creative Mode$/, 'creative перед возвратом к входу') },
     returnToOverworld: async point => { await kit.ensureWorld('overworld', { tp: `${point.x} ${point.y} ${point.z}` }) }
   })
-  console.log('подготовленное место входа', JSON.stringify(preparedEntry))
-  const cleanedThreats = await cleanupPreparationThreats(preparedEntry, async text => rcon(text))
-  console.log('очистка только подготовительных OW угроз', JSON.stringify({ dimension: 'overworld', at: preparedEntry, radius: 16, beforeMeasurement: true, receipts: cleanedThreats }))
+  console.log('подготовленное место входа', JSON.stringify(nr.preparedEntry))
+  const cleanedThreats = await cleanupPreparationThreats(nr.preparedEntry, async text => rcon(text))
+  console.log('очистка только подготовительных OW угроз', JSON.stringify({ dimension: 'overworld', at: nr.preparedEntry, radius: 16, beforeMeasurement: true, receipts: cleanedThreats }))
   await kit.setDifficulty('normal')
   await kit.must('/time set 1000', /^Set the time to 1000$/, 'утро перед измерением')
   for (const d of ['overworld', 'the_nether', 'the_end']) {
@@ -303,10 +318,9 @@ async function main () {
   const healthSamples = []
   const heardFrom = conn.heard.length
   const preparationHold = call('wait', { seconds: 300, holdPosition: true }).catch(error => ({ error: error.message }))
-  let releasedHold: Record<string, any> | null = null
-  let preparedHealth
+  nr.releasedHold = null
   try {
-    preparedHealth = await confirmSurvivalReadiness({
+    nr.preparedHealth = await confirmSurvivalReadiness({
       now: () => gameClock.wall.now(), sleep: () => gameClock.wall.sleep(25),
       heal: async () => {
         await kit.cmd('/effect give @s minecraft:instant_health 1 10 true')
@@ -330,20 +344,24 @@ async function main () {
     })
   } finally {
     await call('stop').catch(() => null)
-    releasedHold = await Promise.race([preparationHold, gameClock.wall.sleep(1500).then(() => null)])
+    nr.releasedHold = await Promise.race([preparationHold, gameClock.wall.sleep(1500).then(() => null)])
     const afterHold = await status()
-    console.log('освобождение управления подготовки', JSON.stringify({ receipt: releasedHold, after: afterHold }))
+    console.log('освобождение управления подготовки', JSON.stringify({ receipt: nr.releasedHold, after: afterHold }))
     console.log('подтверждение здоровья подготовки', JSON.stringify({ samples: healthSamples,
       damage: conn.heard.slice(heardFrom).filter(event => event.type === 'damage' || event.type === 'death') }))
-    if (!releasedHold || afterHold.busy === 'hold_position') throw new Error('подготовка: ожидание позиции не завершилось после stop; вход не запускаю')
+    if (!nr.releasedHold || afterHold.busy === 'hold_position') throw new Error('подготовка: ожидание позиции не завершилось после stop; вход не запускаю')
   }
   const supplyObservation = await call('situation')
-  const preparedSupply = { dimension: ready.dimension, health: ready.health, inventory: ready.inventory || {},
+  nr.preparedSupply = { dimension: ready.dimension, health: ready.health, inventory: ready.inventory || {},
     pickSwings: supplyObservation.detail?.pickLeft ?? 0 }
-  if (!netherToolsReady(preparedSupply)) throw new Error('фактический запас для входа в Ад не подтверждён: ' + JSON.stringify(preparedSupply))
-  console.log('подготовленный запас', JSON.stringify(preparedSupply))
+  if (!netherToolsReady(nr.preparedSupply)) throw new Error('фактический запас для входа в Ад не подтверждён: ' + JSON.stringify(nr.preparedSupply))
+  console.log('подготовленный запас', JSON.stringify(nr.preparedSupply))
+}
+
+// Вход в Ад (до 3 попыток, телепорт в портал на подготовке); смерть или неудача — итог и выход.
+async function nrEnter (nr: NeRun) {
   // Смерти считаются с этой точки (вход в Ад и всё после него).
-  const size = logSize()
+  nr.size = logSize()
   await call('connect', { bootstrapPaused: false })
   let en = null
   const entryAttempts: Record<string, any>[] = []
@@ -354,35 +372,39 @@ async function main () {
     if (k > 0) await call('portal', { timeoutSeconds: 120 }).catch(() => null)
     const before = await status()
     en = await call('portal', { mode: 'enter', timeoutSeconds: 180 }).catch(e => ({ status: 'failed', error: e.message }))
-    for (let w = 0; w < 10; w++) { s0 = await status(); if (s0.dimension === 'the_nether' || entryDied(s0, en, deathLines(size).length)) break; await sleep(1000) }
+    for (let w = 0; w < 10; w++) { s0 = await status(); if (s0.dimension === 'the_nether' || entryDied(s0, en, deathLines(nr.size).length)) break; await sleep(1000) }
     const attempt = { attempt: k + 1, before, receipt: en, after: s0 }
     entryAttempts.push(attempt)
     console.log('фактический вход через портал', JSON.stringify(attempt))
-    if (entryDied(s0, en, deathLines(size).length)) break
+    if (entryDied(s0, en, deathLines(nr.size).length)) break
   }
   // Портал горит, а войти тело не смогло (рама на круче, у нижнего ряда негде встать: neF-A0f22-1 03.10) — подготовка
   // ещё не мерится: тело в клетку портала командой (ферма).
-  let viaTp = false
-  if (!entryDied(s0, en, deathLines(size).length) && s0.dimension !== 'the_nether' && pr && pr.detail && pr.detail.inner) {
-    viaTp = await (require('../lib/try-lab-ne-util') as typeof import('../lib/try-lab-ne-util')).portalTp(kit, status, pr.detail.inner, call)
-    if (viaTp) s0 = await status()
+  nr.viaTp = false
+  if (!entryDied(s0, en, deathLines(nr.size).length) && s0.dimension !== 'the_nether' && nr.pr && nr.pr.detail && nr.pr.detail.inner) {
+    nr.viaTp = await (require('../lib/try-lab-ne-util') as typeof import('../lib/try-lab-ne-util')).portalTp(kit, status, nr.pr.detail.inner, call)
+    if (nr.viaTp) s0 = await status()
   }
-  const entryDeaths = deathLines(size)
+  const entryDeaths = deathLines(nr.size)
   const diedEntering = entryDied(s0, en, entryDeaths.length)
   if (diedEntering || s0.dimension !== 'the_nether' || !(s0.health > 0)) {
-    const rec: Record<string, any> = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: !diedEntering, stoppedBy: diedEntering ? 'смерть при входе в Ад' : 'в Ад не вошёл живым на подготовке', deathCount: Math.max(entryDeaths.length, diedEntering ? 1 : 0), deaths: entryDeaths, hp: s0.health, dimension: s0.dimension, portal: String(pr && (pr.error || (pr.detail && pr.detail.note)) || '').slice(0, 200), enter: String(en && (en.error || (en.detail && (en.detail.note || en.detail.stopped))) || '').slice(0, 200), releasedHold, entryAttempts }
+    const rec: Record<string, any> = { at: new Date().toISOString(), seed: seedOf(), kit: KIT_NAME, ok: false, setupFail: !diedEntering, stoppedBy: diedEntering ? 'смерть при входе в Ад' : 'в Ад не вошёл живым на подготовке', deathCount: Math.max(entryDeaths.length, diedEntering ? 1 : 0), deaths: entryDeaths, hp: s0.health, dimension: s0.dimension, portal: String(nr.pr && (nr.pr.error || (nr.pr.detail && nr.pr.detail.note)) || '').slice(0, 200), enter: String(en && (en.error || (en.detail && (en.detail.note || en.detail.stopped))) || '').slice(0, 200), releasedHold: nr.releasedHold, entryAttempts }
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
     console.log(JSON.stringify(rec))
     try { await Promise.race([call('disconnect', { reason: 'сцена окончена' }), gameClock.wall.sleep(10000)]) } catch {}
     process.exit(0)
   }
-  const entry = s0.pos ? { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) } : null
-  if (mapPlaces) {
-    const w = await call('fortress', { mode: 'map', places: mapPlaces, timeoutSeconds: 30 }).catch(e => ({ error: e.message }))
-    map.mapped = (w.detail && w.detail.mapped) || w.error || null
+  nr.entry = s0.pos ? { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) } : null
+}
+
+// Карта в память тела; ROUTE_DIAGNOSTIC — один ход к бастиону и выход.
+async function nrDiagnostic (nr: NeRun) {
+  if (nr.mapPlaces) {
+    const w = await call('fortress', { mode: 'map', places: nr.mapPlaces, timeoutSeconds: 30 }).catch(e => ({ error: e.message }))
+    nr.map.mapped = (w.detail && w.detail.mapped) || w.error || null
   }
   if (process.env.ROUTE_DIAGNOSTIC === '1') {
-    const recalled = mapPlaces || (await call('recall', { lines: 1 })).detail?.state?.places || {}
+    const recalled = nr.mapPlaces || (await call('recall', { lines: 1 })).detail?.state?.places || {}
     const destination = recalled['бастион (ад)']
     if (!destination || ![destination.x, destination.y, destination.z].every(Number.isFinite)) throw new Error('route diagnostic: известной точки бастиона нет')
     const target = { x: destination.x, y: destination.y, z: destination.z }
@@ -400,7 +422,7 @@ async function main () {
       let released = false
       while (gameClock.now() < deadline) {
         const live = await status()
-        if (!(live.health > 0) || deathLines(size).length > 0 || live.dimension !== 'the_nether') break
+        if (!(live.health > 0) || deathLines(nr.size).length > 0 || live.dimension !== 'the_nether') break
         const tactics = live.tactics
         if (tactics && tactics.threatLevel < 2 && tactics.owner !== 'Tactical' && tactics.owner !== 'Emergency') {
           await call('observe', { radius: 48 })
@@ -413,155 +435,167 @@ async function main () {
     }
     await call('stop')
     const final = await status()
-    const deaths = deathLines(size)
+    const deaths = deathLines(nr.size)
     const distance = final.pos ? Math.hypot(final.pos.x - target.x, final.pos.z - target.z) : null
-    const result = { at: new Date().toISOString(), diagnostic: 'single native Nether route', worldState: 'reused', reuseEntry,
+    const result = { at: new Date().toISOString(), diagnostic: 'single native Nether route', worldState: 'reused', reuseEntry: nr.reuseEntry,
       seed: seedOf(), ok: route.detail?.ok === true && final.health > 0 && deaths.length === 0 && distance !== null && distance <= 3 && Math.abs(final.pos.y - target.y) <= 2,
-      seconds: (gameClock.now() - started) / 1000, budget: { timeoutSeconds, maxPlans }, entry, target, distance, deathCount: deaths.length, deaths,
-      hp: final.health, dimension: final.dimension, pos: final.pos, route, attempts, map, grid: gridInfo }
+      seconds: (gameClock.now() - started) / 1000, budget: { timeoutSeconds, maxPlans }, entry: nr.entry, target, distance, deathCount: deaths.length, deaths,
+      hp: final.health, dimension: final.dimension, pos: final.pos, route, attempts, map: nr.map, grid: nr.gridInfo }
     fs.appendFileSync(OUT, JSON.stringify(result) + '\n')
     console.log(JSON.stringify(result))
     try { await Promise.race([call('disconnect', { reason: 'короткая диагностика маршрута окончена' }), gameClock.wall.sleep(10000)]) } catch {}
     process.exit(0)
   }
-  const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
-  try { fs.writeFileSync(clog, '') } catch {}
-  const tc = gameClock.now()
-  const wallTc = gameClock.wall.now()
-  const startClock = gameClock.snapshot()
-  const child = spawn(process.execPath, [CAMPAIGN, ...(process.env.STAGES ? [process.env.STAGES] : [])], {
+}
+
+// Запуск кампании и правда для разбора (после старта: тело не ждёт RCON у портала).
+async function nrStart (nr: NeRun) {
+  nr.clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
+  try { fs.writeFileSync(nr.clog, '') } catch {}
+  nr.tc = gameClock.now()
+  nr.wallTc = gameClock.wall.now()
+  nr.startClock = gameClock.snapshot()
+  nr.child = spawn(process.execPath, [CAMPAIGN, ...(process.env.STAGES ? [process.env.STAGES] : [])], {
     cwd: path.join(__dirname, '..', '..'),
-    env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: clog, ...(ENDERMEN === '1' ? { ND_ENDERMEN: '1' } : {} as Record<string, any>), ...(process.env.ENDKIT === '1' ? {} as Record<string, any> : { ND_ENDKIT: '0' }), ND_WATCHDOG_MIN: String(MINUTES + 5), ...(process.env.EYES ? { ND_EYES_NEED: process.env.EYES } : {} as Record<string, any>), ...CENV },
+    env: { ...process.env, ND_WS: WS, ND_CAMPAIGN_LOG: nr.clog, ...(ENDERMEN === '1' ? { ND_ENDERMEN: '1' } : {} as Record<string, any>), ...(process.env.ENDKIT === '1' ? {} as Record<string, any> : { ND_ENDKIT: '0' }), ND_WATCHDOG_MIN: String(MINUTES + 5), ...(process.env.EYES ? { ND_EYES_NEED: process.env.EYES } : {} as Record<string, any>), ...CENV },
     stdio: 'ignore'
   })
-  let exited = null
-  child.on('exit', code => { exited = code })
+  nr.exited = null
+  nr.child.on('exit', code => { nr.exited = code })
   // Правда для разбора (телу не передаётся) — уже после старта кампании: тело не ждёт RCON у портала.
-  const truth = entry ? {
-    bastion: locate('bastion_remnant', 'the_nether', entry),
-    fortress: locate('fortress', 'the_nether', entry),
-    stronghold: locate('stronghold', 'overworld', { x: entry.x * 8, z: entry.z * 8 })
+  nr.truth = nr.entry ? {
+    bastion: locate('bastion_remnant', 'the_nether', nr.entry),
+    fortress: locate('fortress', 'the_nether', nr.entry),
+    stronghold: locate('stronghold', 'overworld', { x: nr.entry.x * 8, z: nr.entry.z * 8 })
   } : null
-  let stoppedBy = 'время'
-  let ok = false
-  let reachedAt = null
-  let lastCheck = 0
-  let best = { pearls: 0, eyes: 0, rods: 0, fireResistancePotions: 0, fireResistanceObserved: false }
+  nr.stoppedBy = 'время'
+  nr.ok = false
+  nr.reachedAt = null
+  nr.lastCheck = 0
+  nr.best = { pearls: 0, eyes: 0, rods: 0, fireResistancePotions: 0, fireResistanceObserved: false }
   // Отметки кусков (минуты от входа в Ад): увидел крепость/бастион, золото, стержни, жемчуг, очи, выход наверх,
   // крепость Края, комната — по памяти тела и рюкзаку раз в 20 с.
-  const marks: Record<string, any> = {} as Record<string, any>
-  const mark = k => { if (marks[k] == null) marks[k] = Math.round((gameClock.now() - tc) / 6000) / 10 }
-  let lastDim = 'the_nether'
-  const UNTIL_NETHER = process.env.UNTIL === 'nether'
-  const eyesNeed = () => Math.max(1, Math.min(12, Number(process.env.EYES) || 12))
-  let netherPassAt = null
-  const until = tc + MINUTES * 60000
+  nr.marks = {} as Record<string, any>
+  nr.mark = k => { if (nr.marks[k] == null) nr.marks[k] = Math.round((gameClock.now() - nr.tc) / 6000) / 10 }
+  nr.lastDim = 'the_nether'
+  nr.UNTIL_NETHER = process.env.UNTIL === 'nether'
+  nr.eyesNeed = () => Math.max(1, Math.min(12, Number(process.env.EYES) || 12))
+  nr.netherPassAt = null
+  nr.until = nr.tc + MINUTES * 60000
   // Стража по РЕАЛЬНОМУ времени: бот выкинут с сервера (s1-full49 06.10: «Invalid move player packet» — часы демона встали,
   // sleep(5000) по игровым часам не кончался, сцена висела 4+ мин). Ни отклика status, ни хода игровых часов 90 с — стоп.
-  let wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
-  while (gameClock.now() < until) {
+  nr.wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
+}
+
+// Надзор: раз в 20 с — вехи по рюкзаку и памяти, Nether PASS, Энд; стоп по смертям, БЛОКЕРу, выходу кампании.
+async function nrWatch (nr: NeRun) {
+  while (gameClock.now() < nr.until) {
     await Promise.race([sleep(5000), gameClock.wall.sleep(15000)])
-    if (gameClock.now() > wallSeen.game) wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
-    else if (gameClock.wall.now() - wallSeen.wall > 90000) {
+    if (gameClock.now() > nr.wallSeen.game) nr.wallSeen = { game: gameClock.now(), wall: gameClock.wall.now() }
+    else if (gameClock.wall.now() - nr.wallSeen.wall > 90000) {
       const s = await Promise.race([status(), gameClock.wall.sleep(10000).then(() => ({} as Record<string, any>))])
-      stoppedBy = s.connected === false ? 'бот отключён от сервера' : 'игровые часы стоят 90 с реального времени'
+      nr.stoppedBy = s.connected === false ? 'бот отключён от сервера' : 'игровые часы стоят 90 с реального времени'
       break
     }
     let text = ''
-    try { text = fs.readFileSync(clog, 'utf8') } catch {}
-    if (gameClock.now() - lastCheck > 20000 || exited !== null) {
-      lastCheck = gameClock.now()
+    try { text = fs.readFileSync(nr.clog, 'utf8') } catch {}
+    if (gameClock.now() - nr.lastCheck > 20000 || nr.exited !== null) {
+      nr.lastCheck = gameClock.now()
       const s = await status()
       const inv = s.inventory || {} as Record<string, any>
-      best = {
-        pearls: Math.max(best.pearls, cnt(inv, /^ender_pearl$/) + cnt(inv, /^ender_eye$/)),
-        eyes: Math.max(best.eyes, cnt(inv, /^ender_eye$/)),
-        rods: Math.max(best.rods, cnt(inv, /^blaze_rod$/) + Math.floor(cnt(inv, /^blaze_powder$/) / 2) + Math.floor(cnt(inv, /^ender_eye$/) / 2)),
-        fireResistancePotions: Math.max(best.fireResistancePotions, cnt(s.potions, /fire_resistance$/)),
-        fireResistanceObserved: best.fireResistanceObserved || s.fireResistance === true
+      nr.best = {
+        pearls: Math.max(nr.best.pearls, cnt(inv, /^ender_pearl$/) + cnt(inv, /^ender_eye$/)),
+        eyes: Math.max(nr.best.eyes, cnt(inv, /^ender_eye$/)),
+        rods: Math.max(nr.best.rods, cnt(inv, /^blaze_rod$/) + Math.floor(cnt(inv, /^blaze_powder$/) / 2) + Math.floor(cnt(inv, /^ender_eye$/) / 2)),
+        fireResistancePotions: Math.max(nr.best.fireResistancePotions, cnt(s.potions, /fire_resistance$/)),
+        fireResistanceObserved: nr.best.fireResistanceObserved || s.fireResistance === true
       }
-      if (cnt(inv, /^gold_block$/) || cnt(inv, /^gold_ingot$/) >= 9) mark('gold')
-      if (best.rods >= 7) mark('rods7')
-      if (best.pearls >= 10) mark('pearls10')
-      if (best.eyes >= 10) mark('eyes10')
-      if (best.fireResistancePotions > 0 || best.fireResistanceObserved) mark('fireResistance')
-      if (s.dimension && s.dimension !== lastDim) { mark(lastDim + '->' + s.dimension); lastDim = s.dimension }
+      if (cnt(inv, /^gold_block$/) || cnt(inv, /^gold_ingot$/) >= 9) nr.mark('gold')
+      if (nr.best.rods >= 7) nr.mark('rods7')
+      if (nr.best.pearls >= 10) nr.mark('pearls10')
+      if (nr.best.eyes >= 10) nr.mark('eyes10')
+      if (nr.best.fireResistancePotions > 0 || nr.best.fireResistanceObserved) nr.mark('fireResistance')
+      if (s.dimension && s.dimension !== nr.lastDim) { nr.mark(nr.lastDim + '->' + s.dimension); nr.lastDim = s.dimension }
       const rc: any = await wallCap(call('recall', { lines: 1 }).catch(() => null), 10000)
       const pl = (rc && rc.detail && rc.detail.state && rc.detail.state.places) || {} as Record<string, any>
-      if (pl['крепость (ад)']) mark('fortressSeen')
-      if (pl['бастион (ад)']) mark('bastionSeen')
-      if (pl['спавнер блейзов']) mark('spawner')
-      if (pl['крепость']) mark('stronghold')
-      if (pl['портал в Край']) mark('room')
-      if (netherPassAt === null && netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deathLines(size).length, inventory: inv, eyesNeed: eyesNeed() })) {
-        netherPassAt = Math.round((gameClock.now() - tc) / 6000) / 10
-        mark('netherPass')
-        if (UNTIL_NETHER) { stoppedBy = 'Nether PASS'; break }
+      if (pl['крепость (ад)']) nr.mark('fortressSeen')
+      if (pl['бастион (ад)']) nr.mark('bastionSeen')
+      if (pl['спавнер блейзов']) nr.mark('spawner')
+      if (pl['крепость']) nr.mark('stronghold')
+      if (pl['портал в Край']) nr.mark('room')
+      if (nr.netherPassAt === null && netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deathLines(nr.size).length, inventory: inv, eyesNeed: nr.eyesNeed() })) {
+        nr.netherPassAt = Math.round((gameClock.now() - nr.tc) / 6000) / 10
+        nr.mark('netherPass')
+        if (nr.UNTIL_NETHER) { nr.stoppedBy = 'Nether PASS'; break }
       }
       if (s.dimension === 'the_end') {
-        const deaths = deathLines(size)
-        ok = deathFreeEnd({ reachedEnd: true, health: s.health ?? 0, deaths: deaths.length })
-        reachedAt = Math.round((gameClock.now() - tc) / 6000) / 10
-        stoppedBy = ok ? 'в Энде' : `смертей ${deaths.length}, здоровье ${s.health ?? 0}`
+        const deaths = deathLines(nr.size)
+        nr.ok = deathFreeEnd({ reachedEnd: true, health: s.health ?? 0, deaths: deaths.length })
+        nr.reachedAt = Math.round((gameClock.now() - nr.tc) / 6000) / 10
+        nr.stoppedBy = nr.ok ? 'в Энде' : `смертей ${deaths.length}, здоровье ${s.health ?? 0}`
         break
       }
     }
-    if (exited !== null) { stoppedBy = `кампания вышла (${exited})`; break }
-    const deaths = deathLines(size)
-    if (deaths.length >= DEATHS_MAX) { stoppedBy = `смертей ${deaths.length}`; break }
-    if (/БЛОКЕР/.test(text)) { stoppedBy = (text.match(/БЛОКЕР[^\n]{0,160}/) || ['БЛОКЕР'])[0]; break }
+    if (nr.exited !== null) { nr.stoppedBy = `кампания вышла (${nr.exited})`; break }
+    const deaths = deathLines(nr.size)
+    if (deaths.length >= DEATHS_MAX) { nr.stoppedBy = `смертей ${deaths.length}`; break }
+    if (/БЛОКЕР/.test(text)) { nr.stoppedBy = (text.match(/БЛОКЕР[^\n]{0,160}/) || ['БЛОКЕР'])[0]; break }
   }
-  if (exited === null) { try { child.kill() } catch {} }
+}
+
+// Итог сцены: строка JSON в LAB_OUT.
+async function nrFinish (nr: NeRun) {
+  if (nr.exited === null) { try { nr.child.kill() } catch {} }
   // Бот вне игры — stop и пауза по игровым часам не кончаются (s1c-F-17 06.10: сцена висела 27 мин после выхода кампании).
   try { await wallCap(call('stop'), 10000) } catch {}
   await Promise.race([sleep(1500), gameClock.wall.sleep(1500)])
   const s = await status()
   let text = ''
-  try { text = fs.readFileSync(clog, 'utf8') } catch {}
+  try { text = fs.readFileSync(nr.clog, 'utf8') } catch {}
   const facts = campaignFacts(text)
   const inv = s.inventory || {} as Record<string, any>
-  const deaths = deathLines(size)
-  ok = deathFreeEnd({ reachedEnd: ok, health: s.health ?? 0, deaths: deaths.length })
+  const deaths = deathLines(nr.size)
+  nr.ok = deathFreeEnd({ reachedEnd: nr.ok, health: s.health ?? 0, deaths: deaths.length })
   // PASS — снимок в цикле (netherPassAt) и ни одной смерти до конца сцены; при UNTIL=nether ещё и итоговый снимок.
-  const passFinal = netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deaths.length, inventory: inv, eyesNeed: eyesNeed() })
-  const passNow = netherPassAt !== null && deaths.length === 0 && (!UNTIL_NETHER || passFinal)
-  if (UNTIL_NETHER) ok = passNow
-  if (deaths.length) stoppedBy = `смертей ${deaths.length}`
+  const passFinal = netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deaths.length, inventory: inv, eyesNeed: nr.eyesNeed() })
+  const passNow = nr.netherPassAt !== null && deaths.length === 0 && (!nr.UNTIL_NETHER || passFinal)
+  if (nr.UNTIL_NETHER) nr.ok = passNow
+  if (deaths.length) nr.stoppedBy = `смертей ${deaths.length}`
   const bastions = bastionMetrics(text)
   let explicitBarters = []
   try {
-    const samples = fs.readFileSync(clog.replace(/(\.campaign)?\.log$/, '') + '.skills.jsonl', 'utf8').split('\n')
+    const samples = fs.readFileSync(nr.clog.replace(/(\.campaign)?\.log$/, '') + '.skills.jsonl', 'utf8').split('\n')
       .flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
     explicitBarters = explicitBarterMetrics(samples)
   } catch {}
   const rec: Record<string, any> = {
     at: new Date().toISOString(),
-    worldState: reuseEntry ? 'reused' : 'fixture',
-    reuseEntry,
+    worldState: nr.reuseEntry ? 'reused' : 'fixture',
+    reuseEntry: nr.reuseEntry,
     seed: seedOf(),
     kit: KIT_NAME,
-    ok,
-    minutes: Math.round((gameClock.now() - tc) / 6000) / 10,
-    wallSeconds: (gameClock.wall.now() - wallTc) / 1000,
+    ok: nr.ok,
+    minutes: Math.round((gameClock.now() - nr.tc) / 6000) / 10,
+    wallSeconds: (gameClock.wall.now() - nr.wallTc) / 1000,
     health: typeof s.health === 'number' ? s.health : null,
     food: typeof s.food === 'number' ? s.food : null,
     inventory: inv,
-    measuredClock: { start: startClock, final: s.clock || gameClock.snapshot() },
-    reachedAt,
+    measuredClock: { start: nr.startClock, final: s.clock || gameClock.snapshot() },
+    reachedAt: nr.reachedAt,
     netherPass: passNow,
-    netherPassAt,
+    netherPassAt: nr.netherPassAt,
     rngSalt,
-    stoppedBy,
-    exitCode: exited,
+    stoppedBy: nr.stoppedBy,
+    exitCode: nr.exited,
     deathCount: deaths.length,
     deaths,
-    entry,
-    truth,
-    map,
-    shMap,
-    eyesNeed: eyesNeed(),
-    best,
-    marks,
+    entry: nr.entry,
+    truth: nr.truth,
+    map: nr.map,
+    shMap: nr.shMap,
+    eyesNeed: nr.eyesNeed(),
+    best: nr.best,
+    marks: nr.marks,
     pearls: cnt(inv, /^ender_pearl$/),
     eyes: cnt(inv, /^ender_eye$/),
     rods: cnt(inv, /^blaze_rod$/),
@@ -575,13 +609,13 @@ async function main () {
     dimension: s.dimension || null,
     pos: s.pos || null,
     bag: Object.entries<any>(inv).map(([k, v]: any) => `${k}×${v}`).join(' '),
-    campaignLog: path.basename(clog),
-    setupSeconds: Math.round((tc - t0) / 1000),
-    preparedSupply,
-    preparedEntry,
-    preparedHealth,
-    viaTp,
-    grid: gridInfo
+    campaignLog: path.basename(nr.clog),
+    setupSeconds: Math.round((nr.tc - nr.t0) / 1000),
+    preparedSupply: nr.preparedSupply,
+    preparedEntry: nr.preparedEntry,
+    preparedHealth: nr.preparedHealth,
+    viaTp: nr.viaTp,
+    grid: nr.gridInfo
   }
   rec.class = classify({ ...rec, deathsMax: DEATHS_MAX }, text)
   rec.tail = text.split('\n').filter(l => /ВЕХА|БЛОКЕР|итог этапа|этап упал|умер|прогон упал|РИСК|сторож|нет доступного|выработан|стержней:|жемчуг:|бастион|крепост/.test(l)).slice(-16).map(l => l.slice(0, 220))
@@ -589,6 +623,17 @@ async function main () {
   console.log(JSON.stringify(rec))
   try { await Promise.race([call('disconnect', { reason: 'сцена try-lab-ne-run окончена' }), gameClock.wall.sleep(10000)]) } catch {}
   process.exit(0)
+}
+
+const NR_PHASES: ((nr: NeRun) => Promise<void>)[] = [nrBody, nrMaps, nrEntry, nrEnter, nrDiagnostic, nrStart, nrWatch, nrFinish]
+
+async function main () {
+  await conn.ready
+  await farmBootstrap(call, WS, PLAYER)
+  await call('stop')
+  const t0 = gameClock.now()
+  const nr = { t0 } as NeRun
+  for (const phase of NR_PHASES) await phase(nr)
 }
 main().catch(async e => {
   console.error(e)

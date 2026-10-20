@@ -139,6 +139,20 @@ function inWebAt (bot, pos) {
 // взмах руки, блоки, урон) и на тике физики: реакция не ждёт цикла решений,
 // который бывает занят луком или зельем по секунде.
 function track (bot, { threats, reactMs = 150 }: any = {}) {
+  const tk = trackState(bot, threats, reactMs)
+  trackListen(tk)
+  trackReads(tk)
+  trackConsume(tk)
+  return tk.T
+}
+
+// Слежка за врагами одного боя: T — объект, который получает бой (прежний T), foes — что известно о каждом,
+// foeList — враги сейчас, S(e) — запись врага.
+interface TrackCtx {
+  bot: any; T: any; foes: Map<any, any>; stats: any; foeList: () => any[]; isFoe: (e: any) => boolean; S: (e: any) => any
+}
+
+function trackState (bot, threats, reactMs): TrackCtx {
   const foes = new Map()
   const stats = {
     consumes: 0, pressured: 0, aborted: 0, desperate: 0, refused: 0,
@@ -157,7 +171,12 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
     }
     return s
   }
+  return { bot, T, foes, stats, foeList, isFoe, S }
+}
 
+// Слушатели: его глоток/натяжка (метаданные), взмах, постройка, копание, урон, скорость по тикам; T.close снимает их.
+function trackListen (tk: TrackCtx) {
+  const { bot, T, stats, foeList, isFoe, S } = tk
   const onUpdate = (e) => {
     if (!isFoe(e)) return
     e = foeList().find(t => t.id === e.id)
@@ -274,7 +293,11 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('physicsTick', onTick)
   }
+}
 
+// Чем он занят, через сколько достанет, безопасно ли занять руки (T.state, busy, eta, safe).
+function trackReads (tk: TrackCtx) {
+  const { bot, T, foeList, S } = tk
   // Чем он занят сейчас. left — сколько ещё мс он будет занят (оценка).
   T.state = (e) => {
     if (!e || !e.position) return {}
@@ -365,7 +388,11 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
     }
     return { ok: true, eta: worst ? worst.eta : Infinity }
   }
+}
 
+// Глоток под сторожем, учёт и как наказать то, чем он занят (T.guard, noteConsume, punished, punish).
+function trackConsume (tk: TrackCtx) {
+  const { bot, T, stats } = tk
   // Сторож глотка: зовётся каждый тик, пока едим; true — бросать. Считает по
   // оставшемуся времени, а не по полному.
   T.guard = (name, opts: any = {}) => {
@@ -438,7 +465,6 @@ function track (bot, { threats, reactMs = 150 }: any = {}) {
     if (b.swung && b.swung.left > 200 && r < 4.5) return { kind: 'step', why: 'он только что махнул', left: b.swung.left }
     return null
   }
-  return T
 }
 
 // ------------------------------------------------------------------ начало

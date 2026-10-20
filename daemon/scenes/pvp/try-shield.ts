@@ -331,290 +331,13 @@ const WALKER = { target: 'zombie', retreatAtHealth: 3, timeoutSeconds: 45 }
 ws.on('open', async () => {
   try {
     await call('connect')
-
-    // --- (а) стрелки, щита нет вовсе: контроль ----------------------------
-    // Одного прогона хватает: (а) больше не половина сравнения, а проверка
-    // того, что без щита код не врёт. Само сравнение теперь живёт внутри (б).
-    const bare = []
-    for (let i = 1; i <= 1; i++) {
-      bare.push(await bout(`а${i}. стрелок 15с, щита в рюкзаке нет`, {
-        kind: 'range', mob: 'skeleton', at: ARCHERS_AT, shield: false,
-        postSummon: [ARCHERS_IMMORTAL], params: ARCHER
-      }))
-    }
-    for (const b of bare) {
-      check(`а: без щита отчёт честен (${b.label})`, b.s.worn === false, b.s.note)
-      check(`а: бой не сломался (${b.label})`, b.r.status !== 'failed', b.r.error || '')
-    }
-
-    // --- (б) тот же стрелок, щит есть -------------------------------------
-    const armed = []
-    for (let i = 1; i <= 5; i++) {
-      armed.push(await bout(`б${i}. стрелок 15с, щит фазами по 3с`, {
-        kind: 'range', mob: 'skeleton', at: ARCHERS_AT, shield: true,
-        postSummon: [ARCHERS_IMMORTAL], params: ARCHER
-      }))
-    }
-    for (const b of armed) {
-      check(`б: щит доехал до off-hand (${b.label})`, b.s.worn === true, b.s.why || '')
-      // confirmed считает сэмплер, который слушает весь бой, а не окно
-      // ожидания внутри raise(). Поэтому ноль здесь означает «сервер молчал»,
-      // а не «мы перестали слушать» — это разные диагнозы, и один из них
-      // сегодня уже стоил нам ложного вывода на постановке блока.
-      check(`б: сервер подтвердил подъём (${b.label})`,
-        b.s.raises > 0 && b.s.confirmed > 0, `${b.s.raises}/${b.s.confirmed}`)
-      // Факт мира, а не переход. Проверка «был в рюкзаке, потом пропал»
-      // сломалась о собственную правку armor.js: автопилот теперь надевает щит
-      // сам раз в 15 секунд и успевает сделать это, пока сцена строит арену, —
-      // к отметке замера рюкзак уже пуст, и переход ловить нечего.
-      // Смотрим состояние ДО боя, а не после: после смерти левая рука пуста
-      // всегда, и проверка «щит на руке» превращалась в проверку «бот выжил».
-      // Пять null подряд в прошлом прогоне не отличали «щит не надет» от
-      // «щит потерян вместе с телом» — а это разные поломки.
-      check(`б: щит был на левой руке к началу боя (${b.label})`,
-        offHandIs(b.before, 'shield'),
-        `до боя ${JSON.stringify(b.before.offHand ?? null)}, после ${JSON.stringify(b.after.offHand ?? null)}`)
-    }
-    // Тот самый поводок: SHIELD_CONFIRM_MS в combat.js стоит 600мс, и это
-    // догадка до тех пор, пока её не измерили. Здесь она измерена — если
-    // lateConfirms не ноль, окно надо расширять, а не считать щит сломанным.
-    const worstLag = Math.max(0, ...armed.map(b => b.s.confirmMs || 0))
-    const late = armed.reduce((n, b) => n + (b.s.lateConfirms || 0), 0)
-    report('б: сколько сервер думал над подъёмом',
-      `худшая задержка ${worstLag}мс при окне 600мс, опоздавших подтверждений ${late}`)
-
-    const upTotal = armed.reduce((n, b) => n + (b.s.upSeconds || 0), 0)
-    const faceTotal = armed.reduce((n, b) => n + (b.s.facingSeconds || 0), 0)
-    report('б: щит стоял и куда смотрел',
-      `поднят ${Math.round(upTotal * 10) / 10}с всего, из них лицом к цели ${Math.round(faceTotal * 10) / 10}с`)
-
-    const blockedTotal = armed.reduce((n, b) => n + (b.s.blocked || 0), 0)
-    const soundsTotal = armed.reduce((n, b) => n + (b.s.soundsHeard || 0), 0)
-
-    // Свидетель по звуку — тот, которого может не быть. Прогон 2026-09-01: щит
-    // поднят и подтверждён за 43мс, урон резал, звуков item.shield.block ноль.
-    // В jar всё на месте (у щита выставлен block_sound, onBlocked играет его с
-    // aconst_null, то есть всем; плагин sound в mineflayer загружен), но факт
-    // сильнее вывода из исходников. Поэтому это ЦИФРА, а не приговор: сцена,
-    // которая краснеет на ненадёжном свидетеле, перестаёт читаться.
-    report('б: погашено по звуку', `${blockedTotal} при ${soundsTotal} услышанных звуках всего`)
-    // Раньше эта ветка смотрела на hurtBare — урон в ПРОГОНАХ БЕЗ ЩИТА, — и
-    // порог 3 был подобран под мягкую арену. На злой арене она объявила «скелет
-    // почти не попадал» при 29 услышанных звуках и 13 потерянных хп: число, по
-    // которому она выбирала ветку, никогда и не было про то, было ли что гасить
-    // в прогонах СО щитом. Считаем теперь ровно то, о чём вопрос — сколько
-    // урона вообще прилетело в бои со щитом, обе фазы вместе.
-    const measurable = armed.reduce((n, b) =>
-      n + (b.s.hpUnderShield || 0) + (b.s.hpOpen || 0), 0)
-    // Одна стрела это ~2 хп, и на двух стрелах за прогон гасить действительно
-    // нечего. Порог в четыре — это две стрелы, ниже которых любая ветка
-    // диагностики говорила бы о шуме.
-    const NOTHING_TO_BLOCK = 4
-    if (!blockedTotal) {
-      report('б: почему ноль погашенных', !soundsTotal
-        ? 'за бой не долетело НИ ОДНОГО звука — дело не в щите, а в звуковом канале целиком'
-        : measurable < NOTHING_TO_BLOCK
-          ? `в бои со щитом прилетело всего ${Math.round(measurable * 10) / 10} хп — гасить было нечего, арену надо злее`
-          : faceTotal < upTotal * 0.5
-            ? 'щит стоял, но бот был к цели боком: блок гасит только спереди'
-            : `прилетело ${Math.round(measurable * 10) / 10} хп, звуков ${soundsTotal}, бот лицом — значит именно ` +
-              'item.shield.block до нас не доходит. Прогнать раз с ND_SHIELD_SOUNDS=1: в отчёт попадёт перепись имён')
-    }
-
-    // --- (б') та же поклажа, но щит запрещён: разница именно в щите --------
-    const muzzled = await bout("б'. стрелок 15с, щит есть, но shield: 'never'", {
-      kind: 'range', mob: 'skeleton', at: ARCHERS_AT, shield: true,
-      postSummon: [ARCHERS_IMMORTAL],
-      // shield: 'never' — это не режим замера, значит бой ПРЕСЛЕДУЕТ. Резист на
-      // стрелках здесь не роскошь, а условие: иначе бот их зарубит за десяток
-      // секунд и окно окажется вдвое короче, чем у плеча со щитом.
-      params: { ...ARCHER, shield: 'never' }
-    })
-    // Надет он или нет — теперь решает автопилот, а не сцена: щит из набора он
-    // наденет за время подготовки. Проверяем то единственное, что здесь наше:
-    // поднят не был ни разу. Надетый, но ни разу не поднятый щит в ванили не
-    // гасит ничего — то есть это даже более честный контроль, чем пустая рука.
-    check("б': запрет соблюдён — щит не поднимался ни разу",
-      !muzzled.s.raises && !muzzled.s.blocked, JSON.stringify(muzzled.s))
-
-    // Сравнение между прогонами осталось как цифра, но не как приговор: именно
-    // оно тонуло в разбросе арены три захода подряд.
-    const open = bare.concat(muzzled)
-    const rateBare = mean(open, rate)
-    const rateArmed = mean(armed, rate)
-    report('а против б: потеряно хп', `без щита ${mean(open, b => b.lost)}, со щитом ${mean(armed, b => b.lost)}`)
-    report('а против б: хп в секунду (так честно при обрезанных окнах)',
-      `без щита ${rateBare}, со щитом ${rateArmed}`)
-    report('б: между прогонами (справочно, тонет в разбросе арены)',
-      `${rateBare} -> ${rateArmed} хп/сек`)
-
-    // Тот же вопрос, но внутри одного боя и без контрфактики: пока блок стоял
-    // против того времени, пока он был опущен. Это и есть замена сломанному
-    // счётчику погашенных — свидетель, который есть всегда, потому что считается
-    // из хп, а хп видно.
-    // ГЛАВНОЕ СРАВНЕНИЕ. Парное, внутри одного боя, под одними стрелами.
-    const underRate = mean(armed, b => b.s.hpPerSecUnder)
-    const openRate = mean(armed, b => b.s.hpPerSecOpen)
-    // Погибший прогон в статистику не идёт: смерть обрывает фазу на случайном
-    // месте, а после возрождения левая рука пуста — то есть у такого боя и
-    // колонки обрезаны, и щита на второй половине не было вовсе.
-    const paired = armed.filter(b => !b.died &&
-      typeof b.s.hpPerSecUnder === 'number' && typeof b.s.hpPerSecOpen === 'number')
-    const deaths = armed.filter(b => b.died).length
-    if (deaths) report('б: прогонов выброшено из-за смерти', String(deaths))
-    const wins = paired.filter(b => b.s.hpPerSecUnder < b.s.hpPerSecOpen).length
-    report('б: урон в секунду под щитом против опущенного (в одном бою)',
-      `${underRate} против ${openRate}, боёв с обеими фазами ${paired.length} из ${armed.length}`)
-    report('б: сколько урона вообще было, чем меряем',
-      `под щитом ${mean(armed, b => b.s.hpUnderShield)} хп за ${mean(armed, b => b.s.upSeconds)}с, ` +
-      `без щита ${mean(armed, b => b.s.hpOpen)} хп за ${mean(armed, b => b.s.openSeconds)}с`)
-
-    // Обе фазы обязаны набраться, иначе сравнивать нечего и красное здесь —
-    // про арену, а не про щит.
-    check('б: в бою набрались обе фазы, есть что сравнивать', paired.length === armed.length,
-      `${paired.length} из ${armed.length}` + (deaths ? `, погибших ${deaths}` : ''))
-    // Вердикт несёт свою выборку прямо в строке — и не только СКОЛЬКО боёв, но
-    // и КАКИХ: «3 из 5, погибших 2» честно по числу и при этом означает один
-    // чистый бой. Отдельно от него — проверка, и она красная только на том, что
-    // действительно поломка. «Разницы не нашли» поломкой не является: это
-    // результат, и печатать его красным значит приучать читателя листать мимо.
-    const cut = paired.length ? Math.round((1 - underRate / (openRate || 1)) * 100) : null
-    report('б: ВЕРДИКТ по щиту против стрелка', !paired.length
-      ? `чистых боёв нет вовсе (${armed.length} прогонов, погибших ${deaths}) — вывода нет`
-      : paired.length < 3
-        ? `чистых боёв всего ${paired.length} из ${armed.length} (погибших ${deaths}) — для вывода мало`
-        : wins > paired.length / 2 && cut >= 15
-          ? `щит режет урон примерно на ${cut}% — ${underRate}/с под щитом против ${openRate}/с без, ` +
-            `${wins} чистых боёв из ${paired.length} в одну сторону`
-          : wins < paired.length / 2 && cut <= -15
-            ? `под щитом урон ВЫШЕ (${underRate}/с против ${openRate}/с) в ${paired.length - wins} боях ` +
-              `из ${paired.length} — так быть не должно, это поломка, а не результат`
-            : `на ${paired.length} чистых боях разницы не видно ни в одну сторону: ${underRate}/с под щитом ` +
-              `против ${openRate}/с без, в пользу щита ${wins} боёв из ${paired.length}`)
-
-    // Красное — только если щит делает ХУЖЕ. Это единственный исход, который
-    // означает ошибку в коде, а не свойство мира.
-    if (paired.length >= 3) {
-      check('б: щит не делает хуже', !(wins < paired.length / 2 && cut <= -15),
-        `${underRate}/с под щитом против ${openRate}/с без, выборка ${paired.length}`)
-    }
-
-    // --- (в) щит против зомби вплотную ------------------------------------
-    // По три прогона на плечо, а не по два. Первый заход дал 6.3с против 8.9с
-    // и 0 против 0 по хп — это уже похоже на приговор ближнему щиту, но на
-    // выборке в два боя с зомби так же выглядит и обычный разброс.
-    const meleeOpen = []
-    for (let i = 1; i <= 3; i++) {
-      meleeOpen.push(await bout(`в${i}. зомби вплотную, без щита`, {
-        kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: true,
-        params: { ...WALKER, shield: 'never' }
-      }))
-    }
-    const meleeShield = []
-    for (let i = 1; i <= 3; i++) {
-      meleeShield.push(await bout(`в${i}. зомби вплотную, щит между ударами`, {
-        kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: true,
-        params: { ...WALKER, shield: 'always' }
-      }))
-    }
-    for (const b of meleeShield) {
-      check(`в: со щитом бот всё равно бьёт (${b.label})`, b.swings > 0, `ударов ${b.swings}`)
-      check(`в: со щитом зомби всё равно умер (${b.label})`, b.killed || b.r.status === 'timeout',
-        b.r.status)
-    }
-    report('в: время убийства зомби',
-      `без щита ${mean(meleeOpen, b => b.seconds)}с, со щитом ${mean(meleeShield, b => b.seconds)}с`)
-    report('в: потеряно хп',
-      `без щита ${mean(meleeOpen, b => b.lost)}, со щитом ${mean(meleeShield, b => b.lost)}`)
-    report('в: секунд контакта на удар',
-      `без щита ${mean(meleeOpen, b => b.s.secondsPerSwing)}, ` +
-      `со щитом ${mean(meleeShield, b => b.s.secondsPerSwing)}`)
-    report('в: погашено ударов щитом', String(mean(meleeShield, b => b.s.blocked)))
-
-    // Тот самый вывод, ради которого затевалось: если щит между ударами удлиняет
-    // бой и не экономит хп, он в ближнем бою убыточен, и это надо записать в
-    // описание mc_fight, а не оставлять мозгу гадать. Сцена печатает приговор
-    // сама, чтобы он не выводился заново каждым читателем лога.
-    const tOpen = mean(meleeOpen, b => b.seconds)
-    const tShield = mean(meleeShield, b => b.seconds)
-    const hOpen = mean(meleeOpen, b => b.lost)
-    const hShield = mean(meleeShield, b => b.lost)
-    const slower = tOpen !== null && tShield !== null && tShield > tOpen * 1.15
-    const saves = hOpen !== null && hShield !== null && hShield < hOpen - 0.5
-    const n = meleeOpen.length + meleeShield.length
-    report('в: ВЕРДИКТ по ближнему щиту',
-      slower && !saves
-        ? `убыточен: бой длиннее (${tOpen}с -> ${tShield}с), хп не экономит (${hOpen} -> ${hShield}), ` +
-          `боёв ${n}. Значит always против ходячих не советовать`
-        : saves
-          ? `платит за себя: хп ${hOpen} -> ${hShield} ценой ${tOpen}с -> ${tShield}с, боёв ${n} — решать мозгу`
-          // Не «выборки мало» — на ${n} боях НЕ подтверждается ни то, ни это, и
-          // это самостоятельный результат, а не отсутствие результата. Две
-          // гипотезы («щит удлиняет бой» и «щит спасает хп») проверены и обе
-          // не выдержали; писать в описание инструмента нечего, и это надо
-          // говорить именно так, а не «данных не хватило».
-          : `на ${n} боях разницы не видно ни в одну сторону: ${tOpen}с/${hOpen} хп без щита против ` +
-            `${tShield}с/${hShield} хп со щитом. Ни «удлиняет», ни «спасает» не подтвердилось`)
-
-    // --- (г) КОНТРОЛЬ: щита нет, код не врёт и не роняет бой ---------------
-    const control: any = await bout('г. КОНТРОЛЬ: зомби, щита в рюкзаке нет', {
-      kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: false, params: WALKER
-    })
-    check('г: код не сказал, что поднял щит', control.s.worn === false && !control.s.confirmed,
-      JSON.stringify(control.s))
-    check('г: отчёт называет причину словами', /щит/.test(control.s.note || ''), control.s.note)
-    check('г: бой не сломался и не завис', control.r.status !== 'failed' && !control.died,
-      control.r.error || control.r.status)
-    check('г: бот всё равно махал', control.swings > 0, `ударов ${control.swings}`)
-
-    // --- (д) щит в руке мешает работать? ----------------------------------
-    console.log('\n=== д. после боя со щитом: копать и строить ===')
-    const work = await bout('д. зомби, щит надет, дальше работа', {
-      kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: true, pickaxe: true, params: WALKER
-    })
-    check('д: щит на руке после боя', work.s.worn === true, JSON.stringify(work.s.worn))
-    check('д: шапка состояния показывает щит в левой руке', offHandIs(work.after, 'shield'),
-      `offHand: ${JSON.stringify(work.after.offHand ?? null)}`)
-    // Проверка держится на том, что арена теперь одевает бота явным mc_armor.
-    // Если здесь снова пусто — значит сломалось одевание, а не поле шапки.
-    check('д: шапка состояния показывает и броню', !!(work.after.armor && work.after.armor.torso),
-      `armor: ${JSON.stringify(work.after.armor ?? null)}, defense: ${work.after.defense}`)
-    // Арена одевает бота явным mc_armor, поэтому предполётный шаг боя обязан
-    // сказать «уже одет» и не тратить кликов. Если он вдруг что-то надевает —
-    // значит одевание в подготовке не сработало, и красное здесь правильное.
-    // Правильных ответов здесь два, и оба означают одно: кликов не было.
-    // already — «уже одет, менять нечего»; skipped «вплотную» — «моб в трёх
-    // блоках, переодеваться поздно». Прошлая версия ждала только первый и
-    // краснела на втором, хотя код отвечал верно, просто по другой причине.
-    const noClicks = !work.pre.put || !work.pre.put.length
-    const goodAnswer = work.pre.already === true || /вплотную/.test(work.pre.skipped || '')
-    check('д: перед боем бот не переодевался зря', noClicks && goodAnswer,
-      JSON.stringify(work.pre))
-    check('д: надетое НЕ подмешано в рюкзак шапки', !has(work.after, 'shield'),
-      'inventory должен оставаться «что можно потратить»')
-
-    await cmd('/give @s minecraft:cobblestone 16')
-    await sleep(800)
-    const place: any = await call('place', { block: 'cobblestone' }).catch(e => ({ status: 'RPC', error: e.message }))
-    console.log(`  поставить блок: ${place.status} ${JSON.stringify(place.detail ?? null)}` +
-      (place.error ? ' ← ' + place.error : ''))
-    check('д: со щитом в off-hand блок ставится', place.status === 'done', place.error || '')
-
-    const mine: any = await call('mine', { block: 'cobblestone', count: 1, radius: 6 })
-      .catch(e => ({ status: 'RPC', error: e.message }))
-    console.log(`  копать: ${mine.status} ${JSON.stringify(mine.detail ?? null)}` +
-      (mine.error ? ' ← ' + mine.error : ''))
-    check('д: со щитом в off-hand копается', mine.status === 'done', mine.error || '')
-
-    // Раньше здесь стояла косвенная проверка «пропал из рюкзака» и строка о
-    // том, что в шапке щита не видно. Обе устарели: perception.js отдаёт
-    // offHand отдельным полем через armor.readOffHand, так что спрашивать
-    // можно прямо.
-    check('д: после работы щит всё ещё на руке', offHandIs(mine.state, 'shield'),
-      `offHand: ${JSON.stringify((mine.state && mine.state.offHand) ?? null)}`)
-
-    await cmd('/kill @e[type=!player,type=!item]')
-    await cmd('/effect clear @s')
+    const bare = await caseBare()
+    const armed = await caseArmed()
+    const muzzled = await caseMuzzled()
+    compareShield(bare, muzzled, armed)
+    await caseMelee()
+    await caseControl()
+    await caseWork()
   } catch (e) {
     console.error('FAILED:', e.message)
     failures++
@@ -624,4 +347,306 @@ ws.on('open', async () => {
     ws.close()
   }
 })
+
+// --- (а) стрелки, щита нет вовсе: контроль ----------------------------
+async function caseBare () {
+  // Одного прогона хватает: (а) больше не половина сравнения, а проверка
+  // того, что без щита код не врёт. Само сравнение теперь живёт внутри (б).
+  const bare = []
+  for (let i = 1; i <= 1; i++) {
+    bare.push(await bout(`а${i}. стрелок 15с, щита в рюкзаке нет`, {
+      kind: 'range', mob: 'skeleton', at: ARCHERS_AT, shield: false,
+      postSummon: [ARCHERS_IMMORTAL], params: ARCHER
+    }))
+  }
+  for (const b of bare) {
+    check(`а: без щита отчёт честен (${b.label})`, b.s.worn === false, b.s.note)
+    check(`а: бой не сломался (${b.label})`, b.r.status !== 'failed', b.r.error || '')
+  }
+  return bare
+}
+
+// --- (б) тот же стрелок, щит есть -------------------------------------
+async function caseArmed () {
+  const armed = []
+  for (let i = 1; i <= 5; i++) {
+    armed.push(await bout(`б${i}. стрелок 15с, щит фазами по 3с`, {
+      kind: 'range', mob: 'skeleton', at: ARCHERS_AT, shield: true,
+      postSummon: [ARCHERS_IMMORTAL], params: ARCHER
+    }))
+  }
+  for (const b of armed) {
+    check(`б: щит доехал до off-hand (${b.label})`, b.s.worn === true, b.s.why || '')
+    // confirmed считает сэмплер, который слушает весь бой, а не окно
+    // ожидания внутри raise(). Поэтому ноль здесь означает «сервер молчал»,
+    // а не «мы перестали слушать» — это разные диагнозы, и один из них
+    // сегодня уже стоил нам ложного вывода на постановке блока.
+    check(`б: сервер подтвердил подъём (${b.label})`,
+      b.s.raises > 0 && b.s.confirmed > 0, `${b.s.raises}/${b.s.confirmed}`)
+    // Факт мира, а не переход. Проверка «был в рюкзаке, потом пропал»
+    // сломалась о собственную правку armor.js: автопилот теперь надевает щит
+    // сам раз в 15 секунд и успевает сделать это, пока сцена строит арену, —
+    // к отметке замера рюкзак уже пуст, и переход ловить нечего.
+    // Смотрим состояние ДО боя, а не после: после смерти левая рука пуста
+    // всегда, и проверка «щит на руке» превращалась в проверку «бот выжил».
+    // Пять null подряд в прошлом прогоне не отличали «щит не надет» от
+    // «щит потерян вместе с телом» — а это разные поломки.
+    check(`б: щит был на левой руке к началу боя (${b.label})`,
+      offHandIs(b.before, 'shield'),
+      `до боя ${JSON.stringify(b.before.offHand ?? null)}, после ${JSON.stringify(b.after.offHand ?? null)}`)
+  }
+  // Тот самый поводок: SHIELD_CONFIRM_MS в combat.js стоит 600мс, и это
+  // догадка до тех пор, пока её не измерили. Здесь она измерена — если
+  // lateConfirms не ноль, окно надо расширять, а не считать щит сломанным.
+  const worstLag = Math.max(0, ...armed.map(b => b.s.confirmMs || 0))
+  const late = armed.reduce((n, b) => n + (b.s.lateConfirms || 0), 0)
+  report('б: сколько сервер думал над подъёмом',
+    `худшая задержка ${worstLag}мс при окне 600мс, опоздавших подтверждений ${late}`)
+
+  const upTotal = armed.reduce((n, b) => n + (b.s.upSeconds || 0), 0)
+  const faceTotal = armed.reduce((n, b) => n + (b.s.facingSeconds || 0), 0)
+  report('б: щит стоял и куда смотрел',
+    `поднят ${Math.round(upTotal * 10) / 10}с всего, из них лицом к цели ${Math.round(faceTotal * 10) / 10}с`)
+
+  const blockedTotal = armed.reduce((n, b) => n + (b.s.blocked || 0), 0)
+  const soundsTotal = armed.reduce((n, b) => n + (b.s.soundsHeard || 0), 0)
+
+  // Свидетель по звуку — тот, которого может не быть. Прогон 2026-09-01: щит
+  // поднят и подтверждён за 43мс, урон резал, звуков item.shield.block ноль.
+  // В jar всё на месте (у щита выставлен block_sound, onBlocked играет его с
+  // aconst_null, то есть всем; плагин sound в mineflayer загружен), но факт
+  // сильнее вывода из исходников. Поэтому это ЦИФРА, а не приговор: сцена,
+  // которая краснеет на ненадёжном свидетеле, перестаёт читаться.
+  report('б: погашено по звуку', `${blockedTotal} при ${soundsTotal} услышанных звуках всего`)
+  // Раньше эта ветка смотрела на hurtBare — урон в ПРОГОНАХ БЕЗ ЩИТА, — и
+  // порог 3 был подобран под мягкую арену. На злой арене она объявила «скелет
+  // почти не попадал» при 29 услышанных звуках и 13 потерянных хп: число, по
+  // которому она выбирала ветку, никогда и не было про то, было ли что гасить
+  // в прогонах СО щитом. Считаем теперь ровно то, о чём вопрос — сколько
+  // урона вообще прилетело в бои со щитом, обе фазы вместе.
+  const measurable = armed.reduce((n, b) =>
+    n + (b.s.hpUnderShield || 0) + (b.s.hpOpen || 0), 0)
+  // Одна стрела это ~2 хп, и на двух стрелах за прогон гасить действительно
+  // нечего. Порог в четыре — это две стрелы, ниже которых любая ветка
+  // диагностики говорила бы о шуме.
+  const NOTHING_TO_BLOCK = 4
+  if (!blockedTotal) {
+    report('б: почему ноль погашенных', !soundsTotal
+      ? 'за бой не долетело НИ ОДНОГО звука — дело не в щите, а в звуковом канале целиком'
+      : measurable < NOTHING_TO_BLOCK
+        ? `в бои со щитом прилетело всего ${Math.round(measurable * 10) / 10} хп — гасить было нечего, арену надо злее`
+        : faceTotal < upTotal * 0.5
+          ? 'щит стоял, но бот был к цели боком: блок гасит только спереди'
+          : `прилетело ${Math.round(measurable * 10) / 10} хп, звуков ${soundsTotal}, бот лицом — значит именно ` +
+            'item.shield.block до нас не доходит. Прогнать раз с ND_SHIELD_SOUNDS=1: в отчёт попадёт перепись имён')
+  }
+  return armed
+}
+
+// --- (б') та же поклажа, но щит запрещён: разница именно в щите --------
+async function caseMuzzled () {
+  const muzzled = await bout("б'. стрелок 15с, щит есть, но shield: 'never'", {
+    kind: 'range', mob: 'skeleton', at: ARCHERS_AT, shield: true,
+    postSummon: [ARCHERS_IMMORTAL],
+    // shield: 'never' — это не режим замера, значит бой ПРЕСЛЕДУЕТ. Резист на
+    // стрелках здесь не роскошь, а условие: иначе бот их зарубит за десяток
+    // секунд и окно окажется вдвое короче, чем у плеча со щитом.
+    params: { ...ARCHER, shield: 'never' }
+  })
+  // Надет он или нет — теперь решает автопилот, а не сцена: щит из набора он
+  // наденет за время подготовки. Проверяем то единственное, что здесь наше:
+  // поднят не был ни разу. Надетый, но ни разу не поднятый щит в ванили не
+  // гасит ничего — то есть это даже более честный контроль, чем пустая рука.
+  check("б': запрет соблюдён — щит не поднимался ни разу",
+    !muzzled.s.raises && !muzzled.s.blocked, JSON.stringify(muzzled.s))
+  return muzzled
+}
+
+// (а) и (б') против (б): между прогонами и внутри одного боя; вердикт по щиту против стрелка.
+function compareShield (bare, muzzled, armed) {
+  // Сравнение между прогонами осталось как цифра, но не как приговор: именно
+  // оно тонуло в разбросе арены три захода подряд.
+  const open = bare.concat(muzzled)
+  const rateBare = mean(open, rate)
+  const rateArmed = mean(armed, rate)
+  report('а против б: потеряно хп', `без щита ${mean(open, b => b.lost)}, со щитом ${mean(armed, b => b.lost)}`)
+  report('а против б: хп в секунду (так честно при обрезанных окнах)',
+    `без щита ${rateBare}, со щитом ${rateArmed}`)
+  report('б: между прогонами (справочно, тонет в разбросе арены)',
+    `${rateBare} -> ${rateArmed} хп/сек`)
+
+  // Тот же вопрос, но внутри одного боя и без контрфактики: пока блок стоял
+  // против того времени, пока он был опущен. Это и есть замена сломанному
+  // счётчику погашенных — свидетель, который есть всегда, потому что считается
+  // из хп, а хп видно.
+  // ГЛАВНОЕ СРАВНЕНИЕ. Парное, внутри одного боя, под одними стрелами.
+  const underRate = mean(armed, b => b.s.hpPerSecUnder)
+  const openRate = mean(armed, b => b.s.hpPerSecOpen)
+  // Погибший прогон в статистику не идёт: смерть обрывает фазу на случайном
+  // месте, а после возрождения левая рука пуста — то есть у такого боя и
+  // колонки обрезаны, и щита на второй половине не было вовсе.
+  const paired = armed.filter(b => !b.died &&
+    typeof b.s.hpPerSecUnder === 'number' && typeof b.s.hpPerSecOpen === 'number')
+  const deaths = armed.filter(b => b.died).length
+  if (deaths) report('б: прогонов выброшено из-за смерти', String(deaths))
+  const wins = paired.filter(b => b.s.hpPerSecUnder < b.s.hpPerSecOpen).length
+  report('б: урон в секунду под щитом против опущенного (в одном бою)',
+    `${underRate} против ${openRate}, боёв с обеими фазами ${paired.length} из ${armed.length}`)
+  report('б: сколько урона вообще было, чем меряем',
+    `под щитом ${mean(armed, b => b.s.hpUnderShield)} хп за ${mean(armed, b => b.s.upSeconds)}с, ` +
+    `без щита ${mean(armed, b => b.s.hpOpen)} хп за ${mean(armed, b => b.s.openSeconds)}с`)
+
+  // Обе фазы обязаны набраться, иначе сравнивать нечего и красное здесь —
+  // про арену, а не про щит.
+  check('б: в бою набрались обе фазы, есть что сравнивать', paired.length === armed.length,
+    `${paired.length} из ${armed.length}` + (deaths ? `, погибших ${deaths}` : ''))
+  // Вердикт несёт свою выборку прямо в строке — и не только СКОЛЬКО боёв, но
+  // и КАКИХ: «3 из 5, погибших 2» честно по числу и при этом означает один
+  // чистый бой. Отдельно от него — проверка, и она красная только на том, что
+  // действительно поломка. «Разницы не нашли» поломкой не является: это
+  // результат, и печатать его красным значит приучать читателя листать мимо.
+  const cut = paired.length ? Math.round((1 - underRate / (openRate || 1)) * 100) : null
+  report('б: ВЕРДИКТ по щиту против стрелка', !paired.length
+    ? `чистых боёв нет вовсе (${armed.length} прогонов, погибших ${deaths}) — вывода нет`
+    : paired.length < 3
+      ? `чистых боёв всего ${paired.length} из ${armed.length} (погибших ${deaths}) — для вывода мало`
+      : wins > paired.length / 2 && cut >= 15
+        ? `щит режет урон примерно на ${cut}% — ${underRate}/с под щитом против ${openRate}/с без, ` +
+          `${wins} чистых боёв из ${paired.length} в одну сторону`
+        : wins < paired.length / 2 && cut <= -15
+          ? `под щитом урон ВЫШЕ (${underRate}/с против ${openRate}/с) в ${paired.length - wins} боях ` +
+            `из ${paired.length} — так быть не должно, это поломка, а не результат`
+          : `на ${paired.length} чистых боях разницы не видно ни в одну сторону: ${underRate}/с под щитом ` +
+            `против ${openRate}/с без, в пользу щита ${wins} боёв из ${paired.length}`)
+
+  // Красное — только если щит делает ХУЖЕ. Это единственный исход, который
+  // означает ошибку в коде, а не свойство мира.
+  if (paired.length >= 3) {
+    check('б: щит не делает хуже', !(wins < paired.length / 2 && cut <= -15),
+      `${underRate}/с под щитом против ${openRate}/с без, выборка ${paired.length}`)
+  }
+}
+
+// --- (в) щит против зомби вплотную ------------------------------------
+async function caseMelee () {
+  // По три прогона на плечо, а не по два. Первый заход дал 6.3с против 8.9с
+  // и 0 против 0 по хп — это уже похоже на приговор ближнему щиту, но на
+  // выборке в два боя с зомби так же выглядит и обычный разброс.
+  const meleeOpen = []
+  for (let i = 1; i <= 3; i++) {
+    meleeOpen.push(await bout(`в${i}. зомби вплотную, без щита`, {
+      kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: true,
+      params: { ...WALKER, shield: 'never' }
+    }))
+  }
+  const meleeShield = []
+  for (let i = 1; i <= 3; i++) {
+    meleeShield.push(await bout(`в${i}. зомби вплотную, щит между ударами`, {
+      kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: true,
+      params: { ...WALKER, shield: 'always' }
+    }))
+  }
+  for (const b of meleeShield) {
+    check(`в: со щитом бот всё равно бьёт (${b.label})`, b.swings > 0, `ударов ${b.swings}`)
+    check(`в: со щитом зомби всё равно умер (${b.label})`, b.killed || b.r.status === 'timeout',
+      b.r.status)
+  }
+  report('в: время убийства зомби',
+    `без щита ${mean(meleeOpen, b => b.seconds)}с, со щитом ${mean(meleeShield, b => b.seconds)}с`)
+  report('в: потеряно хп',
+    `без щита ${mean(meleeOpen, b => b.lost)}, со щитом ${mean(meleeShield, b => b.lost)}`)
+  report('в: секунд контакта на удар',
+    `без щита ${mean(meleeOpen, b => b.s.secondsPerSwing)}, ` +
+    `со щитом ${mean(meleeShield, b => b.s.secondsPerSwing)}`)
+  report('в: погашено ударов щитом', String(mean(meleeShield, b => b.s.blocked)))
+
+  // Тот самый вывод, ради которого затевалось: если щит между ударами удлиняет
+  // бой и не экономит хп, он в ближнем бою убыточен, и это надо записать в
+  // описание mc_fight, а не оставлять мозгу гадать. Сцена печатает приговор
+  // сама, чтобы он не выводился заново каждым читателем лога.
+  const tOpen = mean(meleeOpen, b => b.seconds)
+  const tShield = mean(meleeShield, b => b.seconds)
+  const hOpen = mean(meleeOpen, b => b.lost)
+  const hShield = mean(meleeShield, b => b.lost)
+  const slower = tOpen !== null && tShield !== null && tShield > tOpen * 1.15
+  const saves = hOpen !== null && hShield !== null && hShield < hOpen - 0.5
+  const n = meleeOpen.length + meleeShield.length
+  report('в: ВЕРДИКТ по ближнему щиту',
+    slower && !saves
+      ? `убыточен: бой длиннее (${tOpen}с -> ${tShield}с), хп не экономит (${hOpen} -> ${hShield}), ` +
+        `боёв ${n}. Значит always против ходячих не советовать`
+      : saves
+        ? `платит за себя: хп ${hOpen} -> ${hShield} ценой ${tOpen}с -> ${tShield}с, боёв ${n} — решать мозгу`
+        // Не «выборки мало» — на ${n} боях НЕ подтверждается ни то, ни это, и
+        // это самостоятельный результат, а не отсутствие результата. Две
+        // гипотезы («щит удлиняет бой» и «щит спасает хп») проверены и обе
+        // не выдержали; писать в описание инструмента нечего, и это надо
+        // говорить именно так, а не «данных не хватило».
+        : `на ${n} боях разницы не видно ни в одну сторону: ${tOpen}с/${hOpen} хп без щита против ` +
+          `${tShield}с/${hShield} хп со щитом. Ни «удлиняет», ни «спасает» не подтвердилось`)
+}
+
+// --- (г) КОНТРОЛЬ: щита нет, код не врёт и не роняет бой ---------------
+async function caseControl () {
+  const control: any = await bout('г. КОНТРОЛЬ: зомби, щита в рюкзаке нет', {
+    kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: false, params: WALKER
+  })
+  check('г: код не сказал, что поднял щит', control.s.worn === false && !control.s.confirmed,
+    JSON.stringify(control.s))
+  check('г: отчёт называет причину словами', /щит/.test(control.s.note || ''), control.s.note)
+  check('г: бой не сломался и не завис', control.r.status !== 'failed' && !control.died,
+    control.r.error || control.r.status)
+  check('г: бот всё равно махал', control.swings > 0, `ударов ${control.swings}`)
+}
+
+// --- (д) щит в руке мешает работать? ----------------------------------
+async function caseWork () {
+  console.log('\n=== д. после боя со щитом: копать и строить ===')
+  const work = await bout('д. зомби, щит надет, дальше работа', {
+    kind: 'flat', mob: 'zombie', at: WALKER_AT, shield: true, pickaxe: true, params: WALKER
+  })
+  check('д: щит на руке после боя', work.s.worn === true, JSON.stringify(work.s.worn))
+  check('д: шапка состояния показывает щит в левой руке', offHandIs(work.after, 'shield'),
+    `offHand: ${JSON.stringify(work.after.offHand ?? null)}`)
+  // Проверка держится на том, что арена теперь одевает бота явным mc_armor.
+  // Если здесь снова пусто — значит сломалось одевание, а не поле шапки.
+  check('д: шапка состояния показывает и броню', !!(work.after.armor && work.after.armor.torso),
+    `armor: ${JSON.stringify(work.after.armor ?? null)}, defense: ${work.after.defense}`)
+  // Арена одевает бота явным mc_armor, поэтому предполётный шаг боя обязан
+  // сказать «уже одет» и не тратить кликов. Если он вдруг что-то надевает —
+  // значит одевание в подготовке не сработало, и красное здесь правильное.
+  // Правильных ответов здесь два, и оба означают одно: кликов не было.
+  // already — «уже одет, менять нечего»; skipped «вплотную» — «моб в трёх
+  // блоках, переодеваться поздно». Прошлая версия ждала только первый и
+  // краснела на втором, хотя код отвечал верно, просто по другой причине.
+  const noClicks = !work.pre.put || !work.pre.put.length
+  const goodAnswer = work.pre.already === true || /вплотную/.test(work.pre.skipped || '')
+  check('д: перед боем бот не переодевался зря', noClicks && goodAnswer,
+    JSON.stringify(work.pre))
+  check('д: надетое НЕ подмешано в рюкзак шапки', !has(work.after, 'shield'),
+    'inventory должен оставаться «что можно потратить»')
+
+  await cmd('/give @s minecraft:cobblestone 16')
+  await sleep(800)
+  const place: any = await call('place', { block: 'cobblestone' }).catch(e => ({ status: 'RPC', error: e.message }))
+  console.log(`  поставить блок: ${place.status} ${JSON.stringify(place.detail ?? null)}` +
+    (place.error ? ' ← ' + place.error : ''))
+  check('д: со щитом в off-hand блок ставится', place.status === 'done', place.error || '')
+
+  const mine: any = await call('mine', { block: 'cobblestone', count: 1, radius: 6 })
+    .catch(e => ({ status: 'RPC', error: e.message }))
+  console.log(`  копать: ${mine.status} ${JSON.stringify(mine.detail ?? null)}` +
+    (mine.error ? ' ← ' + mine.error : ''))
+  check('д: со щитом в off-hand копается', mine.status === 'done', mine.error || '')
+
+  // Раньше здесь стояла косвенная проверка «пропал из рюкзака» и строка о
+  // том, что в шапке щита не видно. Обе устарели: perception.js отдаёт
+  // offHand отдельным полем через armor.readOffHand, так что спрашивать
+  // можно прямо.
+  check('д: после работы щит всё ещё на руке', offHandIs(mine.state, 'shield'),
+    `offHand: ${JSON.stringify((mine.state && mine.state.offHand) ?? null)}`)
+
+  await cmd('/kill @e[type=!player,type=!item]')
+  await cmd('/effect clear @s')
+}
 ws.on('error', e => { console.error('ws:', e.message); process.exitCode = 1 })

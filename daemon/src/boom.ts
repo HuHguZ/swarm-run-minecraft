@@ -1,5 +1,5 @@
 'use strict'
-const gameClock: typeof import('./game-clock') = require('./game-clock')
+import * as gameClock from './game-clock'
 // «Динамит» на арене (просьба 2026-09-26: «про-игроки динамитом выстреливают и
 // убивают им, очень быстро, механизм какой-то»). Это cart PvP 1.21: рельс под
 // ноги, на него вагонетка с TNT, и горящая стрела из лука с «Огнём» — взрыв в
@@ -448,10 +448,34 @@ async function backOff (bot, ctl, from, { ms = 900, until = null, stepSafe = nul
 // (null — нечего), run() держит тело до выстрела; threat() — его взрывчатка
 // рядом со мной, defend() — ответ на неё.
 function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryHp = e => healthOf(bot, e) }: any = {}) {
+  const bm = boomState(bot, { enemy, used, crystals, telemetryHp })
+  const { st, close } = bm
+  return {
+    st,
+    // Стоит ли что-то взорвать или заминировать сейчас.
+    plan (ctx: any = {}) { return boomPlan(bm, ctx) },
+    async run (ctl, p, ctx: any = {}) { return boomRun(bm, ctl, p, ctx) },
+    // Его взрывчатка у меня: вагонетка в руке — разобрать ударом; кристалл
+    // ближе к нему, чем ко мне, и урон ему больше — ударить первым; иначе —
+    // отойти, пока прогноз не станет терпимым.
+    threat () { return boomThreat(bm) },
+    async defend (ctl, t, ctx: any = {}) { return boomDefend(bm, ctl, t, ctx) },
+    report () { return boomReport(bm) },
+    close () { close(); if (bm.hpWatch) { /* пусть досчитает */ } }
+  }
+}
+
+// Взрывчатка одного боя (прежние let и const замыкания create): счёт st, своя взрывчатка (mine), сторож урона по его хп.
+interface BoomState {
+  bot: any; enemy: () => any; used: (s: string) => void; crystals: boolean; telemetryHp: (e: any) => number | null
+  st: any; mine: Set<number>; hpWatch: any; close: () => void; watchHp: (e: any, why: string) => void
+}
+
+function boomState (bot, { enemy, used, crystals, telemetryHp }: any): BoomState {
   // crystals: false — кристаллы ведёт crystal.js (2026-09-30), здесь только вагонетки.
   const st: any = { placed: {}, shots: 0, booms: 0, dealt: [], self: 0, kills: 0, defuse: 0, dodges: 0, counter: 0, broken: 0, holes: 0 }
   const mine = new Set<number>() // id своей взрывчатки
-  let hpWatch = null
+  const bm: BoomState = { bot, enemy, used, crystals, telemetryHp, st, mine, hpWatch: null, close: null, watchHp: null }
   // Взрывы: сколько блоков выбито (светокамень, стекло) — по blockUpdate рядом
   // с центром в тот же тик.
   const onExplosion = (pkt) => {
@@ -489,240 +513,242 @@ function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryH
         if (DEBUG) console.log('[boom] итог взрыва', why, JSON.stringify({ dealt: dealt == null ? null : r2(dealt), self: r2(Math.max(0, my0 - (bot.health ?? 20))) }))
       }
     }, 50)
-    hpWatch = iv
+    bm.hpWatch = iv
   }
-
-  return {
-    st,
-    // Стоит ли что-то взорвать или заминировать сейчас.
-    plan (ctx: any = {}) {
-      if (!ON || !bot.entity) return null
-      const e = enemy()
-      if (!e || !e.position || e.isValid === false) return null
-      const k = kitOf(bot)
-      if (!k.bow || !k.arrows) {
-        if (!(k.crystals > 0) || !crystals) return null
-      }
-      const me = bot.entity.position
-      const d = me.distanceTo(e.position)
-      const cache = new Map()
-      const totem = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'totem_of_undying')
-      // 1. Уже стоящая взрывчатка у него: стрелой (вагонку — горящей).
-      for (const ex of explosives(bot, e.position, 7)) {
-        if (ex.name === 'end_crystal' && !crystals) continue
-        if (ex.name === 'tnt_minecart' && !k.flame) continue
-        if (!k.bow || !k.arrows) continue
-        const P = ex.name === 'end_crystal' ? CRYSTAL_P : CART_P_AVG
-        const j = judge(bot, e, centerOf(ex), P, { cache })
-        const jw = ex.name === 'end_crystal' ? j : judge(bot, e, centerOf(ex), CART_P_MAX, { cache })
-        if (worth(j, { totem }) && worth({ ...jw, him: j.him, kill: j.kill }, { totem })) return { kind: 'shoot', ex, j }
-      }
-      // 2. Кристалл рядом с ним, ударить рукой (2–3 тика), если себе терпимо.
-      if (crystals && k.crystals > 0 && d < 6 && ctx.onObsidian !== false) {
-        const spots = spotsNear(bot, e.position, { crystal: true, foe: e, maxR: 2 })
-        let best = null
-        for (const s of spots) {
-          const j = judge(bot, e, s.center, CRYSTAL_P, { cache })
-          // Ударить сможем: рамка кристалла 2×2×2 над клеткой, рука 3.
-          const eye = me.offset(0, EYE, 0)
-          const cx = clamp(eye.x, s.center.x - 1, s.center.x + 1); const cy = clamp(eye.y, s.center.y, s.center.y + 2); const cz = clamp(eye.z, s.center.z - 1, s.center.z + 1)
-          if (Math.hypot(eye.x - cx, eye.y - cy, eye.z - cz) > REACH - 0.2) continue
-          if (!worth(j, { totem })) continue
-          const sc = j.him.dmg - j.mine.dmg * 1.5 + (j.kill ? 30 : 0)
-          if (!best || sc > best.sc) best = { sc, s, j }
-        }
-        if (best) return { kind: 'crystal-hit', spot: best.s, j: best.j }
-      }
-      // 3. Мина: он идёт на нас (или стоит), между нами клетка — рельс и
-      //    вагонетка (или кристалл), отходим; взорвём, когда он рядом с ней
-      //    (ветка 1 на следующих проходах цикла).
-      const closing = ctx.closing || 0
-      const busy = !!ctx.busy
-      const mineUp = [...mine].some(id => bot.entities[id] && bot.entities[id].isValid !== false)
-      if (!mineUp && d > 2.5 && d < 9 && (closing > 0.05 || busy) && k.bow && k.arrows) {
-        const mid = me.plus(e.position.minus(me).scaled(busy ? 0.75 : 0.35))
-        // Только вагонетка: её рамка 0.7 — стрелы в него идут выше; кристалл
-        // (2×2×2) на линии «я → он» ловит свою же стрелу — оба насмерть (замер
-        // try-boom «кристалл» 2026-09-26: мина-кристалл между нами, моя стрела
-        // в него, 20→0 у обоих).
-        const wantCart = k.carts > 0 && k.rails > 0 && k.flame
-        const wantCrystal = false
-        if (wantCart || wantCrystal) {
-          const spots = spotsNear(bot, mid, { crystal: wantCrystal, foe: e, maxR: 1 })
-          // Ближе к линии «я → он» и подальше от меня.
-          spots.sort((a, b) => b.center.distanceTo(me) - a.center.distanceTo(me))
-          const s = spots[0]
-          if (s) return { kind: wantCart ? 'mine-cart' : 'mine-crystal', spot: s }
-        }
-      }
-      return null
-    },
-    async run (ctl, p, ctx: any = {}) {
-      const e = enemy()
-      const out = { ok: false, note: '' }
-      if (p.kind === 'shoot') {
-        const r = await shootAt(bot, ctl, p.ex, { shouldStop: () => ctx.stop && ctx.stop() })
-        out.ok = !!r.shot
-        if (r.shot) { st.shots++; watchHp(e, p.ex.name) }
-        out.note = r.shot ? `взрывчатка: стрела в ${p.ex.name === 'end_crystal' ? 'кристалл' : 'вагонетку с TNT'} у него (прогноз ему ${p.j.him.dmg}, себе ${p.j.mine.dmg}${p.j.off ? ', толчок в яму' : ''})` : `взрывчатка: не выстрелил (${r.why || '?'})`
-        return out
-      }
-      if (p.kind === 'crystal-hit') {
-        const pc: any = await placeCrystal(bot, p.spot)
-        if (!pc.ok) { out.note = 'кристалл: ' + pc.why; return out }
-        st.placed.crystal = (st.placed.crystal || 0) + 1
-        // Удар в тот же тик, как появился: честно — в прицеле (pick.canHit).
-        let hit = false
-        const t0 = gameClock.now()
-        while (gameClock.now() - t0 < 250 && !hit) {
-          if (pc.crystal.isValid === false) break
-          if (hitReach(bot, pc.crystal) <= REACH) {
-            await bot.lookAt(pc.crystal.position.offset(0, 1, 0), true).catch(() => {})
-            try { bot.attack(pc.crystal) } catch {}
-            hit = true
-          } else await sleep(TICK_MS)
-        }
-        if (hit) { st.shots++; watchHp(e, 'end_crystal') }
-        out.ok = hit
-        out.note = hit ? `кристалл у его ног и удар (прогноз ему ${p.j.him.dmg}, себе ${p.j.mine.dmg}${p.j.off ? ', толчок в яму' : ''})` : 'кристалл поставил, ударить не успел'
-        if (!hit) mine.add(pc.crystal.id)
-        return out
-      }
-      if (p.kind === 'mine-cart' || p.kind === 'mine-crystal') {
-        const pr: any = p.kind === 'mine-cart' ? await placeCart(bot, p.spot) : await placeCrystal(bot, p.spot)
-        if (!pr.ok) { out.note = 'мина: ' + pr.why; return out }
-        const ex = pr.cart || pr.crystal
-        mine.add(ex.id)
-        st.placed[p.kind === 'mine-cart' ? 'cart' : 'crystal'] = (st.placed[p.kind === 'mine-cart' ? 'cart' : 'crystal'] || 0) + 1
-        // Отойти от мины, пока он идёт к ней; выйти, как только прогноз
-        // говорит «стоит взрывать» (ветка 1 в следующем проходе цикла).
-        const P = ex.name === 'end_crystal' ? CRYSTAL_P : CART_P_MAX
-        await backOff(bot, ctl, ex.position, {
-          ms: 1400,
-          stepSafe: ctx.stepSafe,
-          until: () => {
-            if (!e || e.isValid === false) return true
-            const j = judge(bot, e, centerOf(ex), P, {})
-            return bot.entity.position.distanceTo(ex.position) > 6.5 && worth(j, {})
-          }
-        })
-        out.ok = true
-        out.note = `мина: ${ex.name === 'end_crystal' ? 'кристалл' : 'рельс и вагонетка с TNT'} между нами, отошёл`
-        return out
-      }
-      return out
-    },
-    // Его взрывчатка у меня: вагонетка в руке — разобрать ударом; кристалл
-    // ближе к нему, чем ко мне, и урон ему больше — ударить первым; иначе —
-    // отойти, пока прогноз не станет терпимым.
-    threat () {
-      if (!bot.entity) return null
-      const e = enemy()
-      const me = bot.entity.position
-      let worst = null
-      for (const ex of explosives(bot, me, 12)) {
-        if (mine.has(ex.id)) continue
-        if (ex.name === 'end_crystal' && !crystals) continue
-        const P = BOOMS[ex.name]
-        const my = blast(bot, centerOf(ex), P, me, { def: defenseOf(bot, bot.entity) })
-        if (my.dmg < 3) continue
-        if (!worst || my.dmg > worst.my.dmg) worst = { ex, my, P }
-      }
-      if (!worst) return null
-      if (e && e.position) {
-        worst.his = blast(bot, centerOf(worst.ex), worst.P, e.position, { def: defenseOf(bot, e) })
-      }
-      return worst
-    },
-    async defend (ctl, t, ctx: any = {}) {
-      const ex = t.ex
-      const reach = hitReach(bot, ex)
-      if (ex.name === 'tnt_minecart' && reach <= REACH - 0.1) {
-        await bot.lookAt(ex.position.offset(0, 0.35, 0), true).catch(() => {})
-        try { bot.attack(ex) } catch {}
-        st.defuse++
-        return 'разобрал его вагонетку с TNT ударом'
-      }
-      const myHp = (bot.health ?? 20) + absorptionOf(bot, bot.entity)
-      // Вагонетка дальше руки, а лук есть: простая стрела её разбирает
-      // (урон стрелы ×10 > 40 → destroy, стрела не горит — предметом); лук с
-      // «Огнём» — взрывает: только если ему от этого больнее, чем мне.
-      if (ex.name === 'tnt_minecart' && findItem(bot, 'bow') && arrowsIn(bot) && bot.entity.position.distanceTo(ex.position) < 24) {
-        const fl = !!flameBow(bot)
-        const ok = !fl || (t.his && t.his.dmg > t.my.dmg + 4 && t.my.dmg < myHp - 4)
-        const plain = bot.inventory.items().find(i => i.name === 'bow' && (require('./read') as typeof import('./read')).enchLevel(bot, i, 'flame') === 0)
-        if (ok || plain) {
-          const useBow = (plain && !(fl && ok)) ? plain : (flameBow(bot) || plain)
-          try { if (useBow && bot.heldItem !== useBow) await bot.equip(useBow, 'hand') } catch {}
-          const r = await shootAt(bot, ctl, ex, { drawMs: 700, anyBow: true })
-          if (r.shot) { if (fl && ok && !plain) { st.counter++; const e = enemy(); if (e) watchHp(e, 'counter') } else st.defuse++ }
-          if (r.shot) return fl && ok && !plain ? 'стрелой взорвал его вагонетку — ему ближе' : 'сбил его вагонетку стрелой'
-        }
-      }
-      if (ex.name === 'end_crystal' && reach <= REACH - 0.1 && t.his && t.his.dmg > t.my.dmg + 4 && t.my.dmg < myHp - 4) {
-        await bot.lookAt(ex.position.offset(0, 1, 0), true).catch(() => {})
-        try { bot.attack(ex) } catch {}
-        st.counter++
-        const e = enemy()
-        if (e) watchHp(e, 'counter')
-        return 'ударил его кристалл первым — ему больнее'
-      }
-      // Уходить — только если он может взорвать сейчас: лук или арбалет в руке
-      // (вагонетку — горящей стрелой), у кристалла — ещё и рукой, если достаёт.
-      // Иначе вагонетку рядом — подойти и разобрать ударом; кристалл — не
-      // трогать (бой идёт дальше). Раньше уходил от любой (замер try-boom
-      // «мина»: 25 уходов за раунд, стоял в стороне, пока в него стреляли).
-      const e = enemy()
-      const hand = e && e.equipment && e.equipment[0] ? e.equipment[0].name : ''
-      const canShoot = /^(bow|crossbow)$/.test(hand)
-      const canHit = ex.name === 'end_crystal' && e && e.position && e.position.distanceTo(ex.position) < 4.2
-      const hurts = t.my.dmg >= Math.max(4, myHp * 0.3)
-      if (!(canShoot || canHit) || !hurts) {
-        const dd = bot.entity.position.distanceTo(ex.position)
-        if (ex.name === 'tnt_minecart' && dd < 6) {
-          const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
-          await bot.lookAt(ex.position.offset(0, 0.35, 0), true).catch(() => {})
-          set('forward', !ctx.stepSafe || ctx.stepSafe({ x: -Math.sin(bot.entity.yaw), z: -Math.cos(bot.entity.yaw) }))
-          await sleep(TICK_MS * 2)
-          set('forward', false)
-          if (hitReach(bot, ex) <= REACH - 0.1) { try { bot.attack(ex) } catch {} st.defuse++; return 'подошёл и разобрал его вагонетку с TNT' }
-          return 'иду разобрать его вагонетку с TNT'
-        }
-        return null
-      }
-      await backOff(bot, ctl, ex.position, {
-        ms: 600,
-        stepSafe: ctx.stepSafe,
-        until: () => blast(bot, centerOf(ex), t.P, bot.entity.position, { def: defenseOf(bot, bot.entity) }).dmg < 2.5
-      })
-      st.dodges++
-      return `ухожу от его ${ex.name === 'end_crystal' ? 'кристалла' : 'взрывчатки'} (прогноз ${t.my.dmg})`
-    },
-    report () {
-      const avg = st.dealt.length ? r2(st.dealt.reduce((s, x) => s + x, 0) / st.dealt.length) : undefined
-      const out = {
-        placed: Object.keys(st.placed).length ? st.placed : undefined,
-        shots: st.shots || undefined,
-        booms: st.booms || undefined,
-        dealt: st.dealt.length ? st.dealt : undefined,
-        avg,
-        self: st.self || undefined,
-        kills: st.kills || undefined,
-        defuse: st.defuse || undefined,
-        counter: st.counter || undefined,
-        dodges: st.dodges || undefined,
-        broken: st.broken || undefined,
-        holes: st.holes || undefined
-      }
-      // Взрывы без взрывчатки (заряды ветра тоже шлют explosion) — не в отчёт.
-      const active = out.placed || out.shots || out.defuse || out.counter || out.dodges || out.kills
-      return active ? out : undefined
-    },
-    close () { close(); if (hpWatch) { /* пусть досчитает */ } }
-  }
+  Object.assign(bm, { close, watchHp })
+  return bm
 }
 
-module.exports = { ON, create, blast, seenPercent, segmentBlocked, defenseOf, judge, worth, spotsNear, explosives, kitOf, hasBoom, placeCart, placeCrystal, shootAt, CRYSTAL_P, CART_P_MAX, CART_P_AVG }
+function boomPlan (bm: BoomState, ctx: any = {}) {
+  const { bot, enemy, crystals, mine } = bm
+  if (!ON || !bot.entity) return null
+  const e = enemy()
+  if (!e || !e.position || e.isValid === false) return null
+  const k = kitOf(bot)
+  if (!k.bow || !k.arrows) {
+    if (!(k.crystals > 0) || !crystals) return null
+  }
+  const me = bot.entity.position
+  const d = me.distanceTo(e.position)
+  const cache = new Map()
+  const totem = !!(bot.inventory.slots[45] && bot.inventory.slots[45].name === 'totem_of_undying')
+  // 1. Уже стоящая взрывчатка у него: стрелой (вагонку — горящей).
+  for (const ex of explosives(bot, e.position, 7)) {
+    if (ex.name === 'end_crystal' && !crystals) continue
+    if (ex.name === 'tnt_minecart' && !k.flame) continue
+    if (!k.bow || !k.arrows) continue
+    const P = ex.name === 'end_crystal' ? CRYSTAL_P : CART_P_AVG
+    const j = judge(bot, e, centerOf(ex), P, { cache })
+    const jw = ex.name === 'end_crystal' ? j : judge(bot, e, centerOf(ex), CART_P_MAX, { cache })
+    if (worth(j, { totem }) && worth({ ...jw, him: j.him, kill: j.kill }, { totem })) return { kind: 'shoot', ex, j }
+  }
+  // 2. Кристалл рядом с ним, ударить рукой (2–3 тика), если себе терпимо.
+  if (crystals && k.crystals > 0 && d < 6 && ctx.onObsidian !== false) {
+    const spots = spotsNear(bot, e.position, { crystal: true, foe: e, maxR: 2 })
+    let best = null
+    for (const s of spots) {
+      const j = judge(bot, e, s.center, CRYSTAL_P, { cache })
+      // Ударить сможем: рамка кристалла 2×2×2 над клеткой, рука 3.
+      const eye = me.offset(0, EYE, 0)
+      const cx = clamp(eye.x, s.center.x - 1, s.center.x + 1); const cy = clamp(eye.y, s.center.y, s.center.y + 2); const cz = clamp(eye.z, s.center.z - 1, s.center.z + 1)
+      if (Math.hypot(eye.x - cx, eye.y - cy, eye.z - cz) > REACH - 0.2) continue
+      if (!worth(j, { totem })) continue
+      const sc = j.him.dmg - j.mine.dmg * 1.5 + (j.kill ? 30 : 0)
+      if (!best || sc > best.sc) best = { sc, s, j }
+    }
+    if (best) return { kind: 'crystal-hit', spot: best.s, j: best.j }
+  }
+  // 3. Мина: он идёт на нас (или стоит), между нами клетка — рельс и
+  //    вагонетка (или кристалл), отходим; взорвём, когда он рядом с ней
+  //    (ветка 1 на следующих проходах цикла).
+  const closing = ctx.closing || 0
+  const busy = !!ctx.busy
+  const mineUp = [...mine].some(id => bot.entities[id] && bot.entities[id].isValid !== false)
+  if (!mineUp && d > 2.5 && d < 9 && (closing > 0.05 || busy) && k.bow && k.arrows) {
+    const mid = me.plus(e.position.minus(me).scaled(busy ? 0.75 : 0.35))
+    // Только вагонетка: её рамка 0.7 — стрелы в него идут выше; кристалл
+    // (2×2×2) на линии «я → он» ловит свою же стрелу — оба насмерть (замер
+    // try-boom «кристалл» 2026-09-26: мина-кристалл между нами, моя стрела
+    // в него, 20→0 у обоих).
+    const wantCart = k.carts > 0 && k.rails > 0 && k.flame
+    const wantCrystal = false
+    if (wantCart || wantCrystal) {
+      const spots = spotsNear(bot, mid, { crystal: wantCrystal, foe: e, maxR: 1 })
+      // Ближе к линии «я → он» и подальше от меня.
+      spots.sort((a, b) => b.center.distanceTo(me) - a.center.distanceTo(me))
+      const s = spots[0]
+      if (s) return { kind: wantCart ? 'mine-cart' : 'mine-crystal', spot: s }
+    }
+  }
+  return null
+}
+
+async function boomRun (bm: BoomState, ctl, p, ctx: any = {}) {
+  const { bot, enemy, st, mine, watchHp } = bm
+  const e = enemy()
+  const out = { ok: false, note: '' }
+  if (p.kind === 'shoot') {
+    const r = await shootAt(bot, ctl, p.ex, { shouldStop: () => ctx.stop && ctx.stop() })
+    out.ok = !!r.shot
+    if (r.shot) { st.shots++; watchHp(e, p.ex.name) }
+    out.note = r.shot ? `взрывчатка: стрела в ${p.ex.name === 'end_crystal' ? 'кристалл' : 'вагонетку с TNT'} у него (прогноз ему ${p.j.him.dmg}, себе ${p.j.mine.dmg}${p.j.off ? ', толчок в яму' : ''})` : `взрывчатка: не выстрелил (${r.why || '?'})`
+    return out
+  }
+  if (p.kind === 'crystal-hit') {
+    const pc: any = await placeCrystal(bot, p.spot)
+    if (!pc.ok) { out.note = 'кристалл: ' + pc.why; return out }
+    st.placed.crystal = (st.placed.crystal || 0) + 1
+    // Удар в тот же тик, как появился: честно — в прицеле (pick.canHit).
+    let hit = false
+    const t0 = gameClock.now()
+    while (gameClock.now() - t0 < 250 && !hit) {
+      if (pc.crystal.isValid === false) break
+      if (hitReach(bot, pc.crystal) <= REACH) {
+        await bot.lookAt(pc.crystal.position.offset(0, 1, 0), true).catch(() => {})
+        try { bot.attack(pc.crystal) } catch {}
+        hit = true
+      } else await sleep(TICK_MS)
+    }
+    if (hit) { st.shots++; watchHp(e, 'end_crystal') }
+    out.ok = hit
+    out.note = hit ? `кристалл у его ног и удар (прогноз ему ${p.j.him.dmg}, себе ${p.j.mine.dmg}${p.j.off ? ', толчок в яму' : ''})` : 'кристалл поставил, ударить не успел'
+    if (!hit) mine.add(pc.crystal.id)
+    return out
+  }
+  if (p.kind === 'mine-cart' || p.kind === 'mine-crystal') {
+    const pr: any = p.kind === 'mine-cart' ? await placeCart(bot, p.spot) : await placeCrystal(bot, p.spot)
+    if (!pr.ok) { out.note = 'мина: ' + pr.why; return out }
+    const ex = pr.cart || pr.crystal
+    mine.add(ex.id)
+    st.placed[p.kind === 'mine-cart' ? 'cart' : 'crystal'] = (st.placed[p.kind === 'mine-cart' ? 'cart' : 'crystal'] || 0) + 1
+    // Отойти от мины, пока он идёт к ней; выйти, как только прогноз
+    // говорит «стоит взрывать» (ветка 1 в следующем проходе цикла).
+    const P = ex.name === 'end_crystal' ? CRYSTAL_P : CART_P_MAX
+    await backOff(bot, ctl, ex.position, {
+      ms: 1400,
+      stepSafe: ctx.stepSafe,
+      until: () => {
+        if (!e || e.isValid === false) return true
+        const j = judge(bot, e, centerOf(ex), P, {})
+        return bot.entity.position.distanceTo(ex.position) > 6.5 && worth(j, {})
+      }
+    })
+    out.ok = true
+    out.note = `мина: ${ex.name === 'end_crystal' ? 'кристалл' : 'рельс и вагонетка с TNT'} между нами, отошёл`
+    return out
+  }
+  return out
+}
+
+function boomThreat (bm: BoomState) {
+  const { bot, enemy, crystals, mine } = bm
+  if (!bot.entity) return null
+  const e = enemy()
+  const me = bot.entity.position
+  let worst = null
+  for (const ex of explosives(bot, me, 12)) {
+    if (mine.has(ex.id)) continue
+    if (ex.name === 'end_crystal' && !crystals) continue
+    const P = BOOMS[ex.name]
+    const my = blast(bot, centerOf(ex), P, me, { def: defenseOf(bot, bot.entity) })
+    if (my.dmg < 3) continue
+    if (!worst || my.dmg > worst.my.dmg) worst = { ex, my, P }
+  }
+  if (!worst) return null
+  if (e && e.position) {
+    worst.his = blast(bot, centerOf(worst.ex), worst.P, e.position, { def: defenseOf(bot, e) })
+  }
+  return worst
+}
+
+async function boomDefend (bm: BoomState, ctl, t, ctx: any = {}) {
+  const { bot, enemy, st, watchHp } = bm
+  const ex = t.ex
+  const reach = hitReach(bot, ex)
+  if (ex.name === 'tnt_minecart' && reach <= REACH - 0.1) {
+    await bot.lookAt(ex.position.offset(0, 0.35, 0), true).catch(() => {})
+    try { bot.attack(ex) } catch {}
+    st.defuse++
+    return 'разобрал его вагонетку с TNT ударом'
+  }
+  const myHp = (bot.health ?? 20) + absorptionOf(bot, bot.entity)
+  // Вагонетка дальше руки, а лук есть: простая стрела её разбирает
+  // (урон стрелы ×10 > 40 → destroy, стрела не горит — предметом); лук с
+  // «Огнём» — взрывает: только если ему от этого больнее, чем мне.
+  if (ex.name === 'tnt_minecart' && findItem(bot, 'bow') && arrowsIn(bot) && bot.entity.position.distanceTo(ex.position) < 24) {
+    const fl = !!flameBow(bot)
+    const ok = !fl || (t.his && t.his.dmg > t.my.dmg + 4 && t.my.dmg < myHp - 4)
+    const plain = bot.inventory.items().find(i => i.name === 'bow' && (require('./read') as typeof import('./read')).enchLevel(bot, i, 'flame') === 0)
+    if (ok || plain) {
+      const useBow = (plain && !(fl && ok)) ? plain : (flameBow(bot) || plain)
+      try { if (useBow && bot.heldItem !== useBow) await bot.equip(useBow, 'hand') } catch {}
+      const r = await shootAt(bot, ctl, ex, { drawMs: 700, anyBow: true })
+      if (r.shot) { if (fl && ok && !plain) { st.counter++; const e = enemy(); if (e) watchHp(e, 'counter') } else st.defuse++ }
+      if (r.shot) return fl && ok && !plain ? 'стрелой взорвал его вагонетку — ему ближе' : 'сбил его вагонетку стрелой'
+    }
+  }
+  if (ex.name === 'end_crystal' && reach <= REACH - 0.1 && t.his && t.his.dmg > t.my.dmg + 4 && t.my.dmg < myHp - 4) {
+    await bot.lookAt(ex.position.offset(0, 1, 0), true).catch(() => {})
+    try { bot.attack(ex) } catch {}
+    st.counter++
+    const e = enemy()
+    if (e) watchHp(e, 'counter')
+    return 'ударил его кристалл первым — ему больнее'
+  }
+  // Уходить — только если он может взорвать сейчас: лук или арбалет в руке
+  // (вагонетку — горящей стрелой), у кристалла — ещё и рукой, если достаёт.
+  // Иначе вагонетку рядом — подойти и разобрать ударом; кристалл — не
+  // трогать (бой идёт дальше). Раньше уходил от любой (замер try-boom
+  // «мина»: 25 уходов за раунд, стоял в стороне, пока в него стреляли).
+  const e = enemy()
+  const hand = e && e.equipment && e.equipment[0] ? e.equipment[0].name : ''
+  const canShoot = /^(bow|crossbow)$/.test(hand)
+  const canHit = ex.name === 'end_crystal' && e && e.position && e.position.distanceTo(ex.position) < 4.2
+  const hurts = t.my.dmg >= Math.max(4, myHp * 0.3)
+  if (!(canShoot || canHit) || !hurts) {
+    const dd = bot.entity.position.distanceTo(ex.position)
+    if (ex.name === 'tnt_minecart' && dd < 6) {
+      const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
+      await bot.lookAt(ex.position.offset(0, 0.35, 0), true).catch(() => {})
+      set('forward', !ctx.stepSafe || ctx.stepSafe({ x: -Math.sin(bot.entity.yaw), z: -Math.cos(bot.entity.yaw) }))
+      await sleep(TICK_MS * 2)
+      set('forward', false)
+      if (hitReach(bot, ex) <= REACH - 0.1) { try { bot.attack(ex) } catch {} st.defuse++; return 'подошёл и разобрал его вагонетку с TNT' }
+      return 'иду разобрать его вагонетку с TNT'
+    }
+    return null
+  }
+  await backOff(bot, ctl, ex.position, {
+    ms: 600,
+    stepSafe: ctx.stepSafe,
+    until: () => blast(bot, centerOf(ex), t.P, bot.entity.position, { def: defenseOf(bot, bot.entity) }).dmg < 2.5
+  })
+  st.dodges++
+  return `ухожу от его ${ex.name === 'end_crystal' ? 'кристалла' : 'взрывчатки'} (прогноз ${t.my.dmg})`
+}
+
+function boomReport (bm: BoomState) {
+  const { st } = bm
+  const avg = st.dealt.length ? r2(st.dealt.reduce((s, x) => s + x, 0) / st.dealt.length) : undefined
+  const out = {
+    placed: Object.keys(st.placed).length ? st.placed : undefined,
+    shots: st.shots || undefined,
+    booms: st.booms || undefined,
+    dealt: st.dealt.length ? st.dealt : undefined,
+    avg,
+    self: st.self || undefined,
+    kills: st.kills || undefined,
+    defuse: st.defuse || undefined,
+    counter: st.counter || undefined,
+    dodges: st.dodges || undefined,
+    broken: st.broken || undefined,
+    holes: st.holes || undefined
+  }
+  // Взрывы без взрывчатки (заряды ветра тоже шлют explosion) — не в отчёт.
+  const active = out.placed || out.shots || out.defuse || out.counter || out.dodges || out.kills
+  return active ? out : undefined
+}
+
 export {
   ON, create, blast, seenPercent, segmentBlocked, defenseOf, judge, worth, spotsNear, explosives, kitOf, hasBoom,
   placeCart, placeCrystal, shootAt, CRYSTAL_P, CART_P_MAX, CART_P_AVG

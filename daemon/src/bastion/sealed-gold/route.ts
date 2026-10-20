@@ -1,0 +1,132 @@
+'use strict'
+// Штрек к золоту бастиона (sealedGold) — план штрека к целям оборота и ход по нему: старт из своего хода или снаружи,
+// вход со вскрытием, закапывание, путь ко входу ногами, исполнение плана. Порядок — SG_STEPS в bastion/sealed-gold.ts.
+import { log, sleep, xyz, mobs, goals, gameClock, angerSet, Vec3 } from '../take-gold-block'
+import { walkUnlessBrute } from '../booth-trade'
+import { burrow, sealBody } from '../defense'
+import { type SealedRun, type SealTick, type Turn, routeRetryAt } from './state'
+
+// План штрека: вслепую — мир по шаблону гипотез (видимое — как есть, скрытое — символ куска), иначе — живой мир.
+function planView (bot, st) {
+  if (!(require('../../nether-cover') as typeof import('../../nether-cover')).blind()) return (require('../../sealed') as typeof import('../../sealed')).worldView(bot)
+  const TV: typeof import('../template-view') = require('../template-view')
+  return TV.templateView(bot, TV.piecesOf(st))
+}
+
+export async function sgRoute (sg: SealedRun, tk: SealTick): Promise<Turn> {
+  const { bot, session, ctl, st, S, SL } = sg
+  const view = planView(bot, st)
+  S.view = S.honest ? view : null
+  // S1f: клетка ног — с поправкой на песок душ (высота 0.875: на нём floored() — клетка самого песка). План от floored() начинался
+  // внутри пола: «не шагнул vdown/up … (я …,N.88,…) пол soul_sand» — 50 из 61 остановок штрека во вслепую сериях S1e/S1f, заход с 0
+  // золота при верном шаблоне. ND_SOUL_FEET=0 — прежнее.
+  const feet = () => process.env.ND_SOUL_FEET === '0' ? bot.entity.position.floored() : SL.bodyCells(bot)[0]
+  tk.feet = feet
+  const me = feet()
+  let starts
+  const inTunnel = S.own.has(SL.keyV(me)) && !S.exposed
+  if (inTunnel) starts = [{ x: me.x, y: me.y, z: me.z, g: 0 }]
+  else {
+    // Из открытого: клетки заливки; у брута и хоглина (10 блоков) — дороже.
+    const danger = [...mobs(bot, 'piglin_brute', 40), ...mobs(bot, 'hoglin', 40)].map((e : any) => e.position)
+    starts = []
+    for (const n of SL.reachCells(view, process.env.ND_SOUL_FEET === '0' ? bot.entity.position : me, { radius: 28, maxNodes: 5000 })) {
+      if (S.badStarts && S.badStarts.has(SL.key(n.x, n.y, n.z))) continue
+      let g = n.d * 4
+      for (const d of danger) { const dd = d.distanceTo(new Vec3(n.x, n.y, n.z)); if (dd < 10) g += (10 - dd) * 4 }
+      starts.push({ x: n.x, y: n.y, z: n.z, g })
+    }
+    if (S.own.has(SL.keyV(me))) starts.push({ x: me.x, y: me.y, z: me.z, g: 0 })
+  }
+  tk.tgGoals = tk.tg.map(t => ({ t, rank: tk.minRank, g: SL.adjacentGoal(t.pos, view.cls), h: SL.manhattan(t.pos) }))
+  if (!st.predAll) st.predAll = [...st.pred.values()].map(v => ({ rank: v.rank || 0, pos: v.pos.clone() }))
+  const xs = [...starts.map(s => s.x), ...tk.tg.map(t => t.pos.x)]
+  const ys = [...starts.map(s => s.y), ...tk.tg.map(t => t.pos.y)]
+  const zs = [...starts.map(s => s.z), ...tk.tg.map(t => t.pos.z)]
+  const box = { x0: Math.min(...xs) - 14, x1: Math.max(...xs) + 14, y0: Math.max(5, Math.min(...ys) - 8), y1: Math.min(120, Math.max(...ys) + 12), z0: Math.min(...zs) - 14, z1: Math.max(...zs) + 14 }
+  const t0 = gameClock.wall.now()
+  const planO = {
+    cls: view.cls, dig: view.dig, own: S.own, starts, box, maxNodes: inTunnel ? 60000 : 160000,
+    goal: (x, y, z) => tk.tgGoals.some(q => q.g(x, y, z)),
+    h: (x, y, z) => Math.min(...tk.tgGoals.map(q => q.h(x, y, z))),
+    targets: new Set(tk.tg.filter((t : any) => !t.chest).map(t => t.k)), vup: SL.fillerCount(bot) >= 6, vdown: !S.honest
+  }
+  let r = await SL.plan(planO)
+  // Вход из открытой пещеры: первая клетка в толще почти всегда касается воздуха пещеры сбоку (неровная стена), и
+  let entryBreach = null
+  // ND_ANGER_SAFE=1: золото сломано меньше 30 с назад (злость пиглинов — 600 тиков), злые в 16 — не вскрывать ход во двор,
+  // а переждать заложившись (D7s9c-31 03.10: золото в закрытом ходе, следом «вход со вскрытием» — пиглины, смерть).
+  if (!r.ok && st.breach && process.env.ND_ANGER_SAFE === '1' && st.lastBreak && gameClock.now() - st.lastBreak < 30000 && angerSet(bot, null, false).length) {
+    log('штрек: злость после золота — вскрытие подожду', { s: Math.round((gameClock.now() - st.lastBreak) / 1000), n: angerSet(bot, null, false).length })
+    await sealBody(bot, S).catch(() => null)
+    while (!ctl.aborted && gameClock.now() - st.lastBreak < 31000) await sleep(500)
+  }
+  if (!r.ok && st.breach && (starts.length || tk.tg.length)) {
+    const near = new Set()
+    const around = (p, dyLo, dyHi) => { for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) if (Math.abs(dx) + Math.abs(dz) <= 2) for (let dy = dyLo; dy <= dyHi; dy++) near.add(SL.key(p.x + dx, p.y + dy, p.z + dz)) }
+    if (!inTunnel) for (const st0 of starts.slice().sort((a, b) => a.g - b.g).slice(0, 300)) around(st0, -1, 3)
+    for (const t of (tk.tg as any)) if (!t.chest) around(t.pos, -2, 2)
+    entryBreach = ck => near.has(ck)
+    const r2 = await SL.plan({ ...planO, breachOk: (ck) => entryBreach(ck), breachCost: 8 })
+    log('штрек: вход из открытого со вскрытием', { ok: r2.ok, nodes: r2.nodes, why: r2.ok ? undefined : r2.why, starts: starts.length, from: inTunnel ? 'штрек' : 'снаружи' })
+    if (r2.ok) r = r2
+    else entryBreach = null
+  }
+  S.plans++
+  S.planMs += gameClock.wall.now() - t0
+  // Снаружи пути нет (все входы касаются чужого воздуха) — закопаться и планировать из своего кармана.
+  if (!r.ok && !inTunnel && (st.burrowsSG || 0) < 2 && process.env.ND_BURROW !== '0') {
+    st.burrowsSG = (st.burrowsSG || 0) + 1
+    const bw = await burrow(session, ctl, st, 'штрек к золоту снаружи не начался')
+    if (bw.ok) { S.exposed = SL.exposure(bot, S.own).length > 0; return 'next' }
+    log('закопаться не вышло', { why: bw.why })
+  }
+  if (!r.ok) {
+    log('штрек: пути нет', { targets: tk.tg.length, rank: tk.minRank, nodes: r.nodes, why: r.why, from: inTunnel ? 'штрек' : 'снаружи', ms: gameClock.wall.now() - t0 })
+    // Нет пути ни к одной цели этого ранга — отложить их; из штрека попробовать снаружи.
+    for (const t of tk.tg) st.skip.set(t.k, routeRetryAt(10 * 60000))
+    if (++sg.noPlan >= 3) return 'stop'
+    return 'next'
+  }
+  log('штрек: план', { from: r.start, moves: r.path.length, dig: r.path.reduce((n, m) => n + m.clear.length, 0), cost: Math.round(r.cost), nodes: r.nodes, ms: gameClock.wall.now() - t0 })
+  // Без золотой брони ко входу по открытому не идти (пиглины видят — бьют): закопаться здесь и планировать из своего кармана.
+  if (!inTunnel && st.goldless && !(me.x === r.start.x && me.y === r.start.y && me.z === r.start.z) && (st.burrowsSG || 0) < 2 && process.env.ND_BURROW !== '0') {
+    st.burrowsSG = (st.burrowsSG || 0) + 1
+    const bw = await burrow(session, ctl, st, 'без золотой брони ко входу штрека по открытому не иду')
+    if (bw.ok) { S.exposed = SL.exposure(bot, S.own).length > 0; return 'next' }
+    log('закопаться не вышло', { why: bw.why })
+  }
+  // Вход из открытого — сперва дойти ногами (без копки) до клетки входа.
+  if (!inTunnel && !(me.x === r.start.x && me.y === r.start.y && me.z === r.start.z)) {
+    S.walks++
+    // Пол Ада для pathfinder (worlds: не ниже min(40, где стоишь)) — опустить до входа, иначе «пустой путь».
+    const floor0 = bot._ndNetherFloor
+    bot._ndNetherFloor = Math.min(floor0 ?? 40, r.start.y - 2)
+    let w
+    try { w = await walkUnlessBrute(session, ctl, new goals.GoalBlock(r.start.x, r.start.y, r.start.z), 30000, { dig: false }) } finally { bot._ndNetherFloor = floor0 }
+    const f = feet()
+    if (!(f.x === r.start.x && f.y === r.start.y && f.z === r.start.z)) {
+      // Этот вход ногами не взять — в следующих планах его нет (sealed booth-1: 15 раз «пустой путь» к одной клетке).
+      (S.badStarts || (S.badStarts = new Set())).add(SL.key(r.start.x, r.start.y, r.start.z))
+      S.fails.push(`ко входу: ${(w && w.error) || 'не дошёл'}`); if (S.fails.length > 14) return 'stop'
+      // Пешком не выйти ни к одной клетке входа (тело в яме после спуска со столба, у злых пиглинов
+      S.walkFails = (S.walkFails || 0) + 1
+      if (S.walkFails >= 2) { for (const v of [f, f.offset(0, 1, 0)]) S.own.add(SL.keyV(v)); S.exposed = true }
+      return 'next'
+    }
+    S.exposed = true
+  }
+  if (!inTunnel) S.entry = { x: r.start.x, y: r.start.y, z: r.start.z }
+  const prevBreach = S.breachOk
+  if (entryBreach) S.breachOk = (k, nk) => entryBreach(k) || !!(prevBreach && prevBreach(k, nk))
+  let ex
+  try { ex = await SL.execute(session, ctl, r.path, S) } finally { if (entryBreach) S.breachOk = prevBreach }
+  if (!ex.ok) {
+    S.fails.push(ex.why)
+    log('штрек: стоп', { why: ex.why, done: ex.done, of: r.path.length, at: xyz(bot.entity.position.floored()) })
+    if (S.fails.length > 14) return 'stop'
+    return 'next'
+  }
+}
+
+export { planView }

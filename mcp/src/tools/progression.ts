@@ -2,7 +2,10 @@
 import { z } from 'zod'
 import type { Toolkit } from '../toolkit.js'
 
-function register ({ tool }: Toolkit): void {
+type Tool = Toolkit['tool']
+
+// Путь к Краю: око эндера и крепость, дракон.
+function registerEnd (tool: Tool): void {
   tool(
     'mc_stronghold',
     'Око эндера: найти крепость (портал в Энд). mode=find (по умолчанию) — бросок, отход на sideways блоков (24) ' +
@@ -98,7 +101,10 @@ function register ({ tool }: Toolkit): void {
     },
     'dragon'
   )
+}
 
+// Ад: жемчуг, крепость Ада, ифриты.
+function registerNether (tool: Tool): void {
   tool(
     'mc_pearls',
     'Жемчуг эндера (на око: жемчуг + огненный порошок). Прибыль — по рюкзаку, не по убийствам и броскам.\n' +
@@ -200,7 +206,10 @@ function register ({ tool }: Toolkit): void {
     },
     'blaze'
   )
+}
 
+// Директор — тактический слой в теле.
+function registerDirector (tool: Tool): void {
   tool(
     'mc_director',
     'Директор — тактический слой в теле: раз в секунду оценивает обстановку и сам выбирает следующий шаг к цели, ' +
@@ -220,7 +229,10 @@ function register ({ tool }: Toolkit): void {
     },
     'director'
   )
+}
 
+// Портал в Ад: стройка, переход, литьё, связанный портал.
+function registerPortal (tool: Tool): void {
   tool(
     'mc_portal',
     'Портал в Ад: построить, зажечь и пройти (mode=enter, ниже). Ставит минимальную раму 4x5 — ровно 10 обсидиана: четыре угла игра не ' +
@@ -284,6 +296,13 @@ function register ({ tool }: Toolkit): void {
     },
     'portal'
   )
+}
+
+function register ({ tool }: Toolkit): void {
+  registerEnd(tool)
+  registerNether(tool)
+  registerDirector(tool)
+  registerPortal(tool)
 }
 
 export { register }

@@ -5,6 +5,7 @@ import * as fs from 'node:fs'
 import path = require('node:path')
 import * as vm from 'node:vm'
 import * as esbuild from 'esbuild'
+import { functionSource } from './source-fixture'
 import { Vec3 } from 'vec3'
 import { EventEmitter } from 'node:events'
 type Vector = import('vec3').Vec3
@@ -21,11 +22,9 @@ const realSealed = sealedModule.exports as {
 }
 
 function goldAttempt(options: { threat?: boolean; noDrop?: boolean; fullBag?: boolean; foreign?: boolean; abort?: boolean; takeover?: boolean; opens?: boolean; emptyOwn?: boolean; unknownBody?: boolean; unsafeFloor?: boolean } = {}) {
-  // sealedGold живёт в bastion/sealed-gold.ts.
-  const source = fs.readFileSync(path.join(__dirname, '../src/bastion/sealed-gold.ts'), 'utf8')
-  const start = source.indexOf("    const had = countOf(bot, 'gold_block')", source.indexOf('async function sealedGold'))
-  const end = source.indexOf("    log('штрек: золото',", start)
-  assert.ok(start >= 0 && end > start)
+  // Ломка и подбор золота цикла sealedGold — шаг sgTake (bastion/sealed-gold/gold.ts), по имени.
+  const take = functionSource(path.join(__dirname, '../src/bastion/sealed-gold.js'), 'sgTake', { ts: true })
+  assert.ok(take.includes("const had = countOf(bot, 'gold_block')") && take.includes("log('штрек: золото',"))
   const events: string[] = []; let slept = 0; let gold = 0; let collected = 0
   const ctl = { aborted: false }
   const target = new Vec3(1002, 63, 1002)
@@ -70,10 +69,10 @@ function goldAttempt(options: { threat?: boolean; noDrop?: boolean; fullBag?: bo
     sleep: async (ms: number) => { slept += ms }, pickUp: async () => { throw new Error('unrestricted pickup') },
     hunker: async () => false, log() {},
     require: (name: string) => {
-      if (name === '.././drops') return drops
-      if (name === '.././pack') return { fits: () => !options.fullBag }
-      if (name === '.././ne-guard') return { hot: () => options.threat ? { why: 'brute' } : null }
-      if (name === '.././sealed') return sealed
+      if (name === '../drops') return drops
+      if (name === '../pack') return { fits: () => !options.fullBag }
+      if (name === '../ne-guard') return { hot: () => options.threat ? { why: 'brute' } : null }
+      if (name === '../sealed') return sealed
       throw new Error('unexpected dependency: ' + name)
     }
   }
@@ -83,7 +82,7 @@ function goldAttempt(options: { threat?: boolean; noDrop?: boolean; fullBag?: bo
   const coverStart = sharedSource.indexOf('function fullCover (')
   const coverEnd = sharedSource.indexOf('\n}', coverStart) + 2
   assert.ok(ownStart >= 0 && coverStart >= 0)
-  const body = `${sharedSource.slice(ownStart, ownEnd)}\n${sharedSource.slice(coverStart, coverEnd)}\nasync function attempt() { for (let attempt = 0; attempt < 1; attempt++) { ${source.slice(start, end)} } } attempt()`
+  const body = `${sharedSource.slice(ownStart, ownEnd)}\n${sharedSource.slice(coverStart, coverEnd)}\n${take}\nasync function attempt() { await sgTake({ bot, session, ctl, st, S, SL, dimension }, { t, hit, opens }) } attempt()`
   const run = () => vm.runInNewContext(esbuild.transformSync(body, { loader: 'ts', format: 'cjs', target: 'node24' }).code, cjsContext(context))
   return { run, events, slept: () => slept, gold: () => gold, S, ctl }
 }
