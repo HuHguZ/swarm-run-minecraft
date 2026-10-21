@@ -3,23 +3,33 @@
 import { OW_DEEP } from './flags'
 import { state, sit, died, known, foodSpentMs, huntWool, wantBeds, setHunting } from './state'
 import { log } from './log'
-import { have, y, dim, COBBLE, RAW, FOOD, netherFoodHave, planksFor } from './queries'
+import { have, y, dim, LOGS, COBBLE, RAW, FOOD, netherFoodHave, planksFor } from './queries'
 import { sense, refresh } from './observe'
 import { weakAndHungry, netherFoodNeed, nightWork, FOOD_CAP_MS, entrySupplies, foodShort } from './stages/table'
 import { act } from './act'
 import { nightGuard, recoverGuard } from './guards'
 import { walkAway } from './travel'
-import { craft, unclutter, smeltAll } from './kit'
+import { craft, unclutter, smeltAll, ensurePick } from './kit'
 import { toSurface } from './underground'
 import { ROUTE_COOKED_HUNGER, routeCookedHunger } from './route-wiring'
 import * as gameClock from '../src/game-clock'
 async function foodRun () {
+  // S: a cancelled wood action may already have delivered the recipe. Buy the carried pick before a food walk;
+  // do not search for extra wood or fund an optional reserve from this food step.
+  if (process.env.ND_OW_STARTER === '1' && dim() === 'overworld' && state.playPolicy?.mode === 'speedrun' &&
+      !known.portal && !died && !have(/_pickaxe$/) && have(LOGS) * 4 + have(/_planks$/) >=
+      (have('crafting_table') ? 0 : 4) + 3 + 2 * Math.ceil(Math.max(0, 2 - have('stick')) / 4)) {
+    await ensurePick()
+    if (died) return
+  }
   await cook()
   await makeBed()
   const woolMax = () => Math.max(0, ...Object.entries(state.inventory || {}).filter(([k]) => /_wool$/.test(k)).map(([, v]) => Number(v)))
   const wantWool = () => !entrySupplies() && (huntWool || !have(/_bed$/)) && have(/_bed$/) + Math.floor(woolMax() / 3) < wantBeds
   if (!foodShort() && !wantWool()) return
   await sense()
+  if (process.env.ND_OW_FOOD_VISIBLE === '1' && !known.portal && dim() === 'overworld' && !sit.surface && (state.food ?? 20) >= 8 &&
+      !weakAndHungry() && !(have(/bucket$/) && have(/^(flint_and_steel|fire_charge)$/))) { log('еда: до набора портала с глубины за охотой не поднимаюсь — сытость хватает'); return }
   if (OW_DEEP && known.portal && !sit.surface && y() < 40 && netherFoodHave() >= netherFoodNeed()) { log(`еды ${netherFoodHave()} — на вход в Ад хватает, с глубины за запасом не поднимаюсь`); return }
   // В спидране охоту уже выбрал граф по цене; старый общий бюджет не отменяет его шаг без действий.
   const deepEarly = OW_DEEP && !known.portal && state.playPolicy?.mode !== 'speedrun'
@@ -73,6 +83,14 @@ async function foodRun () {
         if (have(FOOD) && (state.food ?? 20) < 20) await act('eat')
       }
     } else {
+      // ND_OW_PREP_NEAR=1: портал горит — звери только в поле зрения у портала, без ходов по 64 бл. (owC1-03: после литья на 21-й мин
+      // сборы еды увели на 400 бл. от портала, сумерки, ночь — в Ад не вошёл до 40-й мин). Вход — по READY.nether с ценой голода.
+      // Пустая охота засчитывается этапом food (foodHuntEmpty) — READY.nether её видит.
+      if (typeof process !== 'undefined' && process.env.ND_OW_PREP_NEAR === '1' && known.portal && dim() === 'overworld') break
+      // ND_OW_FOOD_VISIBLE=1: до набора портала (ведро и огниво) — только видимые звери, без ходов по 64 бл. за едой при сытости ≥ 8
+      // (до вехи iron этап food — 3.1 игр. мин на прогон, C12/R32/R37/D0, 90 прогонов; owR37-10: 5 мин овец и хода на 100 бл. до шахты).
+      if (process.env.ND_OW_FOOD_VISIBLE === '1' && !known.portal && dim() === 'overworld' && (state.food ?? 20) >= 8 && !weakAndHungry() &&
+          !(have(/bucket$/) && have(/^(flint_and_steel|fire_charge)$/))) break
       if (!(await toSurface(4, deadline))) break
       const y0 = y()
       const w = await walkAway(64, blocked || climbing ? Math.PI / 2 : 0)

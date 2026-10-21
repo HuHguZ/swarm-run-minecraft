@@ -8,7 +8,7 @@ import { guardCount } from './shelter'
 
 // Сидеть в яме/на столбе, пока ближние рядом (≤ ms), есть, если голодно. Сверху (столб) — мечом по видимым.
 let lastSitSwing = 0
-export async function sit (session, ctl, ms, { swing = false, hitStop = false }: any = {}) {
+export async function sit (session, ctl, ms, { swing = false, hitStop = false, safeWhile = null }: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
   let quiet = 0
@@ -23,7 +23,11 @@ export async function sit (session, ctl, ms, { swing = false, hitStop = false }:
       // Бьют сквозь «коробку» (диагональ, щель) — сидеть дальше нельзя (V2-1 03.10: брут на (−1,+1,−1) — 3 удара за 13 с, смерть).
       if (hitStop && g && g.hits.some(h => h.t > t0 + 300 && gameClock.now() - h.t < 1500 && meleeName(h.name || ''))) return { s: Math.round((gameClock.now() - t0) / 1000), swings, hit: true, left: meleeFoes(bot, 6).length }
       const foes = meleeFoes(bot, 6)
-      if (!foes.length) { if (!quiet) quiet = gameClock.now(); if (gameClock.now() - quiet > 3000) break } else quiet = 0
+      if (safeWhile && !safeWhile()) return { s: Math.round((gameClock.now() - t0) / 1000), swings, danger: true, left: foes.length }
+      const memory: typeof import('../brute-memory') | null = process.env.ND_BRUTE_MEMORY === '1' ? require('../brute-memory') : null
+      memory?.observe(bot)
+      const remembered = memory?.riskNear(bot).count || 0
+      if (!foes.length && !remembered) { if (!quiet) quiet = gameClock.now(); if (gameClock.now() - quiet > 3000) break } else quiet = 0
       if (swing && foes.length) {
         const pick: typeof import('../pick') = require('../pick')
         const e: any = foes[0]
@@ -51,7 +55,9 @@ export async function sit (session, ctl, ms, { swing = false, hitStop = false }:
       await sleep(250)
     }
   } finally { shield?.close() }
-  return { s: Math.round((gameClock.now() - t0) / 1000), swings, left: meleeFoes(bot, 6).length }
+  const remembered = process.env.ND_BRUTE_MEMORY === '1' ? (require('../brute-memory') as typeof import('../brute-memory')).riskNear(bot) : null
+  return { s: Math.round((gameClock.now() - t0) / 1000), swings, left: meleeFoes(bot, 6).length,
+    ...(remembered?.count ? { bruteMemory: remembered, requiresExitPlan: true } : {}) }
 }
 
 // в прицеле (pick) — щит вниз, удар, щит снова. Враг дальше 3.2 и виден дольше 2 с — шаг к нему (щит поднят: арбалет).

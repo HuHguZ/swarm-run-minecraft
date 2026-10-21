@@ -1,5 +1,6 @@
 'use strict'
 import * as gameClock from '../game-clock'
+import * as lavaNav from '../lava-nav'
 import { goals } from 'mineflayer-pathfinder'
 import { xyz, stuckGuard, unstick, gotoPath } from '../movement'
 import { placeBlockAt, withTimeout } from '../build'
@@ -112,6 +113,7 @@ const BRICK = /^nether_brick/
 async function bore (session, ctl, target, { deadline = gameClock.now() + 60000, maxSteps = 24, minY = null, maxY = null, throughBricks = false }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
+  const bruteMemory = process.env.ND_BRUTE_MEMORY === '1' ? (require('../brute-memory') as typeof import('../brute-memory')) : null
   let dug = 0
   let moved = 0
   let placed = 0
@@ -125,6 +127,14 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
     return null
   }
   const out = (ok, extra: any = {}) => ({ ok, dug, moved, placed, lava: lava || undefined, at: xyz(bot.entity.position), ...extra })
+  const bruteStep = async p => {
+    if (!bruteMemory) return null
+    bruteMemory.observe(bot, true)
+    if (!bruteMemory.riskNear(bot, p).count) return null
+    // Open manual stairs cannot spend eight seconds waiting in melee range.
+    // Compare a closed detour with the finite price of proceeding exposed.
+    return (require('../brute-shelter') as typeof import('../brute-shelter')).ensureShelterExit(session, ctl, p, { exposed: true, exit: p })
+  }
   const settle = async c => {
     // dig() рисует local air раньше сервера. Видимый падающий блок ещё может
     // заполнить клетку; дождаться оседания и перечитать, не шагать в прогноз.
@@ -142,6 +152,13 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
   for (let s = 0; s < maxSteps; s++) {
     if (ctl.aborted) return out(false, { why: 'прервано' })
     if (gameClock.now() > deadline) return out(false, { why: 'время вышло' })
+    if (bruteMemory) {
+      bruteMemory.observe(bot)
+      // Manual stairs bypass A*: do not drill out of a guarded shelter before evaluating its exit.
+      const exit = await (require('../brute-shelter') as typeof import('../brute-shelter')).ensureShelterExit(session, ctl, target)
+      if (exit) return out(false, { why: exit.stopped || 'память брута: выход переоценён', bruteExit: exit })
+      if (ctl.aborted) return out(false, { why: 'прервано' })
+    }
     const f = bot.entity.position.floored()
     // On a low collision floor (soul sand), floored feet name the support
     // itself. Start the tunnel above its actual top instead of digging it out.
@@ -156,6 +173,11 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
     // Ступенькой вниз, пока выше minY; вверх — пока ниже maxY (дорога домой
     // к порталу на y=116 из крепости на y=47).
     const dys = minY !== null && f.y > minY ? [-1, 0] : maxY !== null && f.y < maxY ? [1, 0] : [0]
+    if (bruteMemory) {
+      // Finite price, no hidden block/entity scan. Ties preserve the previous order.
+      const cost = ([sx, sz]: number[]) => Math.min(...dys.map(dy => bruteMemory.penalty(bot, f.offset(sx, dy, sz))))
+      axes.sort((a, b) => cost(a) - cost(b))
+    }
     let stepped = false
     let why = null
     for (const [sx, sz] of axes) {
@@ -176,6 +198,8 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
         // Разведке кирпич — ответ; дороге домой — просто стена (прогон 12:
         // из коридора крепости штрек «находил» её на каждом шаге и не шёл).
         if (brick && !throughBricks) return out(true, { bricks: { name: brick.name, at: xyz(brick.position) } })
+        const beforeExit = await bruteStep(feet)
+        if (beforeExit) return out(false, { why: 'память брута: закрытый обход', bruteExit: beforeExit })
         let err = null
         for (const c of cells) {
           // Гравий сыплется сверху — до четырёх раз в ту же клетку.
@@ -195,6 +219,13 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
             if (/^infested_/.test(b.name)) { err = `${b.name} — там чешуйница`; break }
             const cut = await clearCells(session, ctl, [c])
             dug += cut.dug
+            if (lavaNav.on(session) && await lavaNav.sealOpened(session, ctl, cells)) {
+              lava++
+              lavaNav.rewind(session)
+              return out(false, { why: 'lava-nav: visible lava opened; forward step cancelled' })
+            }
+            const openedExit = await bruteStep(feet)
+            if (openedExit) return out(false, { why: 'память брута: вскрыт опасный выход', bruteExit: openedExit })
             await sleep(60, ctl)
             err = await settle(c)
             if (err) break
@@ -221,6 +252,9 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
           if (!r.ok) { why = `пол забоя не заложить: ${r.reason}`; continue }
           placed++
         }
+        const exit = await bruteStep(feet)
+        if (exit) return out(false, { why: 'память брута: шаг требует закрытого обхода', bruteExit: exit })
+        const brutePrice = bruteMemory?.penalty(bot, feet) || 0
         const t0 = gameClock.now(), from = bot.entity.position.clone()
         const landed = () => {
           const p = bot.entity.position, v = bot.entity.velocity || { x: 0, z: 0 }
@@ -228,6 +262,11 @@ async function bore (session, ctl, target, { deadline = gameClock.now() + 60000,
         }
         try {
           while (!ctl.aborted && gameClock.now() - t0 < 1800 && !landed()) {
+            if (lavaNav.hazard(session)) { lavaNav.rewind(session); break }
+            if (bruteMemory) {
+              bruteMemory.observe(bot)
+              if (bruteMemory.penalty(bot, feet) > brutePrice + 1) break
+            }
             if (dy <= 0 && bot.entity.position.y < feet.y - .2) break
             const steer = (require('../blockmoves') as typeof import('../blockmoves')).steerTo(bot, bot.entity, { x: feet.x + .5, z: feet.z + .5 }, false)
             await bot.look(steer.yaw, 0, true)

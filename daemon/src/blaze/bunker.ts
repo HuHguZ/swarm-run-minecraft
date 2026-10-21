@@ -35,14 +35,14 @@ function boxSpot (bot, not) {
   return null
 }
 
-async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardMs = maxMs, onPhase = () => {}, threat = null }: any = {}) {
+async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardMs = maxMs, onPhase = () => {}, threat = null, minimumBlocks = REST_BLOCKS }: any = {}) {
   const bot = session.bot
   const fortify: typeof import('../fortify') = require('../fortify')
   const actions: typeof import('../actions') = require('../actions')
   const { pickFiller }: typeof import('../build') = require('../build')
   const filler = pickFiller(bot)
   const blocks = bot.inventory.items().filter(i => /^(cobblestone|cobbled_deepslate|netherrack|stone|dirt|blackstone|basalt|nether_bricks|soul_soil|andesite|diorite|granite|tuff|deepslate)$/.test(i.name)).reduce((n, i) => n + i.count, 0)
-  if (!filler || blocks < REST_BLOCKS) return { rested: false, why: `блоков на коробку мало (${blocks} из ${REST_BLOCKS})` }
+  if (!filler || blocks < minimumBlocks) return { rested: false, why: `блоков на коробку мало (${blocks} из ${minimumBlocks})` }
   const hp0 = Math.round(bot.health ?? 0)
   try { bot.pathfinder.setGoal(null) } catch {}
   bot.clearControlStates()
@@ -129,7 +129,8 @@ async function boxRest (session, ctl, { toward, until = 19, maxMs = 60000, hardM
 // ниже его центра на 3 и не выше на 2, дверь (сосед к спавнеру, ноги и
 // голова) свободна, спавнер виден из глаз через дверь не дальше 40° от её
 // оси, стены ставятся с пола (край моста — нет).
-function planBunker (bot, spawner, have) {
+function planBunker (bot, spawner, have, { hMin=2.5,hMax=9,hBest=4,fullWalls=false,openOnly=false }: any = {}) {
+  const solid = fullWalls ? b => !!b && b.shapes?.length === 1 && b.shapes[0].every((v,i)=>v===(i<3?0:1)) : solidB
   const c = spawner.offset(0.5, 0.5, 0.5)
   const lava = bot.registry.blocksByName.lava.id
   const nodes = walkable(bot, bot.entity.position, { radius: 18, maxNodes: 3000 })
@@ -139,7 +140,8 @@ function planBunker (bot, spawner, have) {
     tried.n++
     const h = Math.hypot(pos.x + 0.5 - c.x, pos.z + 0.5 - c.z)
     const dyEye = c.y - (pos.y + 1.62)
-    if (h < 2.5 || h > 9 || dyEye < -2.5 || dyEye > 3.5 || pos.offset(0.5, 1.62, 0.5).distanceTo(c) > 13) { tried.far++; continue }
+    if (fullWalls && Math.abs(pos.y-spawner.y)>1) { tried.far++; continue }
+    if (h < hMin || h > hMax || dyEye < -2.5 || dyEye > 3.5 || pos.offset(0.5, 1.62, 0.5).distanceTo(c) > 13) { tried.far++; continue }
     const vx = c.x - (pos.x + 0.5); const vz = c.z - (pos.z + 0.5)
     const front = Math.abs(vx) >= Math.abs(vz) ? new Vec3(Math.sign(vx), 0, 0) : new Vec3(0, 0, Math.sign(vz))
     const ang = Math.acos(Math.max(-1, Math.min(1, (vx * front.x + vz * front.z) / (Math.hypot(vx, vz) || 1))))
@@ -149,8 +151,9 @@ function planBunker (bot, spawner, have) {
     const winCell = pos.plus(front).offset(0, 1, 0)
     const win = bot.blockAt(winCell)
     const sill = bot.blockAt(pos.plus(front))
-    const digWin = solidB(win) && /nether_brick|netherrack|cobblestone|stone|blackstone|basalt|soul|gravel|dirt/.test(win.name) && !/spawner|chest/.test(win.name)
-    if (!(airB(win) || digWin) || !(airB(sill) || solidB(sill))) { tried.door++; continue }
+    const digWin = solid(win) && /nether_brick|netherrack|cobblestone|stone|blackstone|basalt|soul|gravel|dirt/.test(win.name) && !/spawner|chest/.test(win.name)
+    if (openOnly && (digWin || !airB(sill))) { tried.door++; continue }
+    if (!(airB(win) || digWin) || !(airB(sill) || solid(sill))) { tried.door++; continue }
     const eye = pos.offset(0.5, 1.62, 0.5)
     let hot = false
     for (let x = -2; x <= 2 && !hot; x++) for (let y = -1; y <= 2 && !hot; y++) for (let z = -2; z <= 2 && !hot; z++) {
@@ -166,11 +169,11 @@ function planBunker (bot, spawner, have) {
       for (const y of [0, 1]) {
         const q = pos.plus(s).offset(0, y, 0)
         const b = bot.blockAt(q)
-        if (solidB(b)) continue
+        if (solid(b)) continue
         if (!airB(b)) { bad = true; break }
         // Ноги стены ставятся на пол под ней (или к соседу по стене);
         // голова — на ноги.
-        if (y === 0 && !solidB(bot.blockAt(q.offset(0, -1, 0)))) { bad = true; break }
+        if (y === 0 && !solid(bot.blockAt(q.offset(0, -1, 0)))) { bad = true; break }
         walls.push(q)
       }
       if (bad) break
@@ -178,11 +181,11 @@ function planBunker (bot, spawner, have) {
     if (bad) { tried.edge++; continue }
     const roof = pos.offset(0, 2, 0)
     let roofNeed = []
-    if (!solidB(bot.blockAt(roof))) {
+    if (!solid(bot.blockAt(roof))) {
       // Крыше опереться: блок над стеной сзади (back+2) — на её голову.
       const back = front.scaled(-1)
       const sup = pos.plus(back).offset(0, 2, 0)
-      roofNeed = solidB(bot.blockAt(sup)) ? [roof] : [sup, roof]
+      roofNeed = solid(bot.blockAt(sup)) ? [roof] : [sup, roof]
       if (!airB(bot.blockAt(roof))) { tried.edge++; continue }
     }
     const need = walls.length + roofNeed.length
@@ -197,8 +200,8 @@ function planBunker (bot, spawner, have) {
       if (losClearBut(bot, eye, q, digWin ? [winCell] : [])) seen++
     }
     if (seen < 3) { tried.los++; continue }
-    const score = seen * 1.2 - need * 0.8 - (digWin ? 1 : 0) - Math.abs(h - 4) * 1.2 - Math.abs(dyEye - 0.5) * 0.7 - d * 0.05
-    if (!best || score > best.score) best = { cell: pos, front, walls, roof: roofNeed, need, digWin: digWin ? winCell : null, sill: solidB(sill), h: Math.round(h * 10) / 10, seen, score }
+    const score = seen * 1.2 - need * 0.8 - (digWin ? 1 : 0) - Math.abs(h - hBest) * 1.2 - Math.abs(dyEye - 0.5) * 0.7 - d * 0.05
+    if (!best || score > best.score) best = { cell: pos, front, walls, roof: roofNeed, need, digWin: digWin ? winCell : null, sill: solid(sill), h: Math.round(h * 10) / 10, seen, score }
   }
   if (best) best.tried = tried
   return best || { none: true, tried }
@@ -207,12 +210,15 @@ function planBunker (bot, spawner, have) {
 // Блок на верх соседнего блока, чья верхняя грань выше глаз: из клетки 1x2
 // её не видно (честная стройка — только по видимым граням, pick.faceAim), а в
 // прыжке глаза на 1.25 выше — видно. Так ставится опора крыши на заднюю стену.
-async function jumpPlaceTop (bot, below, timeoutMs = 900) {
+async function jumpPlaceTop (bot, below, timeoutMs = 900, { ctl=null,stopIf=null }: any = {}) {
+  const stopped=()=>!!ctl?.aborted||!!stopIf?.()
+  if(stopped()) return {ok:false,why:"прервано"}
   const { pickFiller, withTimeout }: typeof import('../build') = require('../build')
   const { faceAim }: typeof import('../pick') = require('../pick')
   const stack = pickFiller(bot)
   if (!stack) return { ok: false, why: 'нечем строить' }
   if (!bot.heldItem || bot.heldItem.type !== stack.type) { try { await bot.equip(stack, 'hand') } catch (e) { return { ok: false, why: e.message } } }
+  if(stopped()) return {ok:false,why:"прервано"}
   const ref = bot.blockAt(below)
   if (!solidB(ref)) return { ok: false, why: 'опоры нет' }
   const up = new Vec3(0, 1, 0)
@@ -220,14 +226,15 @@ async function jumpPlaceTop (bot, below, timeoutMs = 900) {
   const t0 = gameClock.now()
   let seen = false
   try {
-    while (gameClock.now() - t0 < 900) {
+    while (!stopped() && gameClock.now() - t0 < 900) {
       await sleep(20)
       if (bot.entity.position.y + 1.62 > below.y + 1.2 && faceAim(bot, below, up)) { seen = true; break }
     }
   } finally { bot.setControlState('jump', false) }
-  if (!seen) return { ok: false, why: 'верхнюю грань не увидел и в прыжке' }
+  if (stopped() || !seen) return { ok: false, why: 'прервано или не увидел верхнюю грань' }
   try {
     await bot.lookAt(below.offset(0.5, 1, 0.5), true)
+    if(stopped()) return {ok:false,why:"прервано"}
     await withTimeout(bot.placeBlock(ref, up), timeoutMs)
   } catch {}
   await sleep(200)
@@ -320,35 +327,39 @@ function planKillBox (bot, spawner, have, { hMin = 3, hMax = 7.5, hBest = 5, low
   return best || { none: true, tried }
 }
 
-async function buildBunker (session, ctl, plan, setPhase) {
+async function buildBunker (session, ctl, plan, setPhase, { stopIf=null,maxPlacements=Infinity }: any = {}) {
   const bot = session.bot
   const { placeBlockAt }: typeof import('../build') = require('../build')
   const fortify: typeof import('../fortify') = require('../fortify')
   setPhase('к шалашу')
-  const w = await walkNear(bot, ctl, plan.cell, 0, 15000)
+  if (stopIf && (ctl.aborted || stopIf())) return { ok:false,placed:0,why:'обстановка изменилась' }
+  const w = await walkNear(bot, ctl, plan.cell, 0, 15000, {stopIf})
   if (!bot.entity.position.floored().equals(plan.cell)) {
     // Ещё шаг: pathfinder «дошёл» в соседнюю клетку.
-    await walkNear(bot, ctl, plan.cell, 0, 5000)
+    if (!stopIf?.()) await walkNear(bot, ctl, plan.cell, 0, 5000, {stopIf})
   }
   if (!bot.entity.position.floored().equals(plan.cell)) return { ok: false, why: `до клетки шалаша не дошёл (${w.error || 'встал рядом'})` }
-  await fortify.centerInCell(bot)
+  await fortify.centerInCell(bot,700,null,stopIf?ctl:null)
+  if(stopIf && (ctl.aborted||stopIf())) return {ok:false,placed:0,why:"прервано при центровке"}
   setPhase('стройка шалаша')
   let placed = 0
   const failed = []
+  const workAt=gameClock.now()
   for (const q of [...plan.walls, ...plan.roof]) {
-    if (ctl.aborted) break
-    let r = await placeBlockAt(bot, q, { timeoutMs: 900, honest: true }).catch(e => ({ ok: false, reason: e.message }))
+    if (ctl.aborted || stopIf?.() || placed>=maxPlacements) break
+    let r = await placeBlockAt(bot, q, { timeoutMs: 900, honest: true,...(stopIf?{steady:true,ctl}:{}) }).catch(e => ({ ok: false, reason: e.message }))
     // Опора крыши на задней стене: её верх выше глаз — в прыжке.
-    if (!r.ok && solidB(bot.blockAt(q.offset(0, -1, 0)))) {
-      await fortify.centerInCell(bot)
-      const j = await jumpPlaceTop(bot, q.offset(0, -1, 0))
+    if (!r.ok && !stopIf?.() && solidB(bot.blockAt(q.offset(0, -1, 0)))) {
+      await fortify.centerInCell(bot,700,null,stopIf?ctl:null)
+      if(stopIf && (ctl.aborted||stopIf())) break
+      const j = await jumpPlaceTop(bot, q.offset(0, -1, 0),900,{ctl:stopIf?ctl:null,stopIf})
       await sleep(300)
       r = j.ok ? { ok: true } : { ok: false, reason: `${r.reason}; в прыжке: ${j.why || 'не встал'}` }
     }
     if (r.ok && !r.already) placed++
     else if (!r.ok) failed.push(`${q.x},${q.y},${q.z}: ${r.reason}`)
   }
-  if (plan.digWin && solidB(bot.blockAt(plan.digWin))) {
+  if ((!stopIf || !ctl.aborted && !stopIf()) && placed<maxPlacements && plan.digWin && solidB(bot.blockAt(plan.digWin))) {
     try { await (require('../tools') as typeof import('../tools')).breakFast(bot, plan.digWin, { maxMs: 4000 }) } catch {}
   }
   const cell = plan.cell
@@ -358,7 +369,7 @@ async function buildBunker (session, ctl, plan, setPhase) {
     for (const y of [0, 1]) if (!solidB(bot.blockAt(cell.plus(s).offset(0, y, 0)))) open++
   }
   const roofed = solidB(bot.blockAt(cell.offset(0, 2, 0)))
-  return { ok: open === 0 && roofed, placed, open, roofed, failed: failed.length ? failed.slice(0, 4) : undefined }
+  return { ok: open === 0 && roofed, placed, open, roofed,workMs:gameClock.now()-workAt, failed: failed.length ? failed.slice(0, 4) : undefined }
 }
 
 // Дверь заложить (отдых) и открыть снова.

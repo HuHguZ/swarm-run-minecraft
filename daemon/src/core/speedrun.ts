@@ -3,13 +3,18 @@ import { StrategyRegistry, type Strategy } from './strategy'
 import { applyCosts, type CostModel } from './cost-model'
 import { barterPlan, chanceAll, DEFAULT_TIMING, expectedIngots, meanPerIngot, perIngot, type BarterDecision, type BarterState } from './barter-model'
 import { carriedBread } from '../campaign/bread'
+import { deepLavaPrice, lavaSearchSeconds } from '../campaign/deep-lava'
 import { endPrepOffers } from '../campaign/end-prep'
 import { foodMeal, foodUnits, foodPoints } from '../play-policy'
 
 export interface SpeedrunOptions {
   eyes?: number; beds?: number; iron?: number; structureBudgetMs?: number; costs?: CostModel[]
+  /** Blind structure scouting budget (ScoutStructures; MineIron waits for it); visible structures keep structureBudgetMs. */
+  scoutBudgetMs?: number
   portalBuckets?: 1 | 2
   endPrepPrice?: boolean
+  /** Blind staircase-to-lava alternative; campaign ND_OW_DEEP_LAVA=1, default OFF. */
+  deepLava?: boolean
   /** Barter economy: gold as a resource (AcquireGold), next bastion, partial barter effects.
    *  Off by default, нужна ферма: the campaign enables it with ND_GRAPH_ECONOMY=1 once S1 wires the skills bastionGold/bastionMove.
    *  Simulator (sim-explore, 1000 worlds, telemetry-calibrated): win from Nether entry 7.4 % → 37.4 % (log 06.10 20:15, research/claude-1006/s3-strategist-log.md). */
@@ -128,7 +133,10 @@ function speedrunContext(options: SpeedrunOptions) {
    *  stage 10/27 with FR at the first call, 9/13 without — 0.35 / 0.7; no shield +0.04. */
   // shortcut: scale exposure by remaining health until mortality samples distinguish more than two HP groups.
   const healthExposure = (s: WorldState) => 20 / Math.max(1, Math.min(20, s.health))
-  const blazeRisk = (s: WorldState) => Math.min(1, ((fireResHeld(s) ? 0.35 : 0.7) + (amount(s, 'shield') >= 1 ? 0 : 0.04)) * healthExposure(s))
+  // ND_BLZ_RISK_NOFR=<доля> (blz 21.10, координатор): без FR — по замеру потока blz: 0 доставленных стержней из ~33 сцен у спавнера без FR,
+  // ~30 смертей (s21/blz NOTES 01:38–02:07) — 0.9 и выше; тогда граф сам ставит бастион (бартер даёт FR) раньше ифритов. Без переменной — 0.7.
+  const riskNoFr = Number(process.env.ND_BLZ_RISK_NOFR) > 0 ? Math.min(1, Number(process.env.ND_BLZ_RISK_NOFR)) : 0.7
+  const blazeRisk = (s: WorldState) => Math.min(1, ((fireResHeld(s) ? 0.35 : riskNoFr) + (amount(s, 'shield') >= 1 ? 0 : 0.04)) * healthExposure(s))
   const barsNeeded = (s: WorldState) => ow(s) && !knows(s, 'portal') && amount(s, 'iron') < ironTarget(s) &&
     (amount(s, 'bucket') < buckets || amount(s, 'lighter') < 1) && amount(s, 'stone_tool') >= 1
   const structureAvailable = (s: WorldState, name: string) => knows(s, name) && !knows(s, `${name}_exhausted`) && s.structureSearchMs < structureBudgetMs
@@ -189,7 +197,8 @@ function addOverworldBasics(ctx: SpeedrunContext): void {
 /** Iron for the portal kit: structure loot first, mining after the search budget, then the bucket and the lighter. */
 function addIronStrategies(ctx: SpeedrunContext): void {
   const { options, buckets, structureBudgetMs, registry, ow, readyToBuild, portalIron, ironTarget, barsNeeded, structureAvailable, add } = ctx
-  add('ScoutStructures', 'scoutStructures', s => barsNeeded(s) && s.structureSearchMs < structureBudgetMs &&
+  const scoutMs = Math.min(structureBudgetMs, options.scoutBudgetMs ?? structureBudgetMs)
+  add('ScoutStructures', 'scoutStructures', s => barsNeeded(s) && s.structureSearchMs < scoutMs &&
     !['village', 'shipwreck', 'treasure'].some(name => structureAvailable(s, name)) &&
     ['village', 'shipwreck', 'treasure'].some(name => unknown(s, name)),
     s => ({ structureSearchMs: Math.max(0, structureBudgetMs - s.structureSearchMs) }),
@@ -205,7 +214,7 @@ function addIronStrategies(ctx: SpeedrunContext): void {
           Math.hypot(after.position.x - at.x, after.position.z - at.z) < Math.hypot(before.position.x - at.x, before.position.z - at.z)
       }
     })
-  add('MineIron', 'iron', s => barsNeeded(s) && (s.structureSearchMs >= structureBudgetMs ||
+  add('MineIron', 'iron', s => barsNeeded(s) && (s.structureSearchMs >= scoutMs ||
     ['village', 'shipwreck', 'treasure'].every(name => !structureAvailable(s, name) && !unknown(s, name))), s => ({ atLeast: { iron: ironTarget(s) } }), 180,
     (before, after) => amount(after, 'iron') >= ironTarget(before) || (!(options.iron! > 0) && readyToBuild(after)), 0.04)
   add('CraftPortalKit', 'portalKit', s => ow(s) && !knows(s, 'portal') && amount(s, 'iron') >= portalIron(s) && (amount(s, 'bucket') < buckets || !amount(s, 'lighter')),
@@ -222,9 +231,19 @@ function addIronStrategies(ctx: SpeedrunContext): void {
 }
 /** The Nether portal: lava pool cast, ruined portal or obsidian, then the Nether prep and entry. */
 function addPortalStrategies(ctx: SpeedrunContext): void {
-  const { eyes, registry, ow, readyToBuild, pearlsNeeded, eyesOwed, structureAvailable, add, has, achieved } = ctx
+  const { options, eyes, registry, ow, readyToBuild, pearlsNeeded, eyesOwed, structureAvailable, add, has, achieved } = ctx
   add('GetWater', 'water', s => readyToBuild(s) && !amount(s, 'water') && amount(s, 'obsidian') < 10, { atLeast: { water: 1 } }, 40, has('water'), 0.015)
-  add('ScoutLava', 'scoutLava', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && unknown(s, 'lava'), { facts: { lava: true } }, 60, achieved('lava'), 0.02)
+  add('ScoutLava', 'scoutLava', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && unknown(s, 'lava'), { facts: { lava: true } }, 60, achieved('lava'), 0.02,
+    options.deepLava ? { estimateCost: s => lavaSearchSeconds(s) * 20, modelCost: true } : {})
+  if (options.deepLava) add('DeepLavaPortal', 'deepLavaCast', s => readyToBuild(s) && eyesOwed(s) &&
+    amount(s, 'stone_tool') > 0 && !knows(s, 'lava'), { facts: { portal: true } }, 600, achieved('portal'), 0.06,
+    { estimateCost: s => deepLavaPrice(s).seconds * 20, modelCost: true, timeoutMs: 960000,
+      estimateRisk: s => Math.min(1, (.06 + (amount(s, 'water') ? 0 : .015)) * 20 / Math.max(1, Math.min(20, s.health))),
+      command: s => ({ skill: 'deepLavaCast', strategy: 'DeepLavaPortal', params: { budgetSeconds: Math.min(900, Math.ceil(deepLavaPrice(s).seconds * 1.5)) } }),
+      progressCondition: (a, b) => !!a.position && !!b.position && b.position.y < a.position.y - 4 || amount(b, 'water') > amount(a, 'water'),
+      retryCondition: (a, b) => a.dimension === b.dimension && (!!a.position && !!b.position &&
+        Math.hypot(b.position.x-a.position.x, b.position.y-a.position.y, b.position.z-a.position.z) >= 8 ||
+        ['torch', 'stone_pickaxe', 'iron_pickaxe', 'water_bucket'].some(k => (b.inventory[k] || 0) > (a.inventory[k] || 0))) })
   add('LavaPoolPortal', 'cast', s => readyToBuild(s) && eyesOwed(s) && amount(s, 'water') >= 1 && knows(s, 'lava'), { facts: { portal: true } }, 120, achieved('portal'), 0.04)
   add('RuinedPortal', 'ruinedPortal', s => ow(s) && !knows(s, 'portal') && structureAvailable(s, 'ruined_portal') && amount(s, 'stone_tool') >= 1,
     { facts: { portal: true, ruined_portal_exhausted: true } }, 100, achieved('portal'), 0.025)

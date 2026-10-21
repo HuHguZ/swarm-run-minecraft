@@ -135,6 +135,7 @@ export async function refineByEye (gx: GoRun) {
 // --- 3. вниз у лестничной башни старта — или сразу у портальной комнаты, если её спавнер виден «пирогом» F3 с поверхности
 // (как спидраннеры: pie-ray). Два пеленга (здесь и в 10 бл. вбок) → пересечение; в 80 бл. от лестницы — шахта в 5 бл. от оценки
 // в сторону лестницы (не в лаву под рамками). Дальний спавнер (заброшенная шахта, данж) — мимо. ND_PIE_DIG=0 — у лестницы.
+const PIE_Y_MAX = 52
 export async function chooseShaft (gx: GoRun) {
   const { session, ctl, bot, deadline, corner, walks, seaAround } = gx
   const sky0 = skyAbove(bot)
@@ -165,7 +166,11 @@ export async function chooseShaft (gx: GoRun) {
           const pick = pickDryShaft(bot, est, stairs, session._wetAvoid || [])
           const k = off > 6 ? 5 / off : 0
           gx.shaft = pick || { x: Math.round(est.x + (gx.shaft.x - est.x) * k), z: Math.round(est.z + (gx.shaft.z - est.z) * k) }
-          session._pieDig = { key: pieKey, shaft: gx.shaft, est, y: el ? el.y : null }
+          // Крепость целиком ниже уровня моря − 10 (StrongholdStructure: moveBelowSeaLevel(seaLevel, minY, random, 10) — верх рамки < 53):
+          // наклон «пирога» выше — не спавнер комнаты или промах оценки (eb01-s17 21.10: y 79 → «ниже уровня комнаты (61 < 80)» по кругу).
+          // ND_PIE_YCAP=1 — такую высоту не брать: спуск до кирпича.
+          const pieY = el && !(process.env.ND_PIE_YCAP === '1' && el.y > PIE_Y_MAX) ? el.y : null
+          session._pieDig = { key: pieKey, shaft: gx.shaft, est, y: pieY }
           walks.push({ pie: { est: { x: est.x, z: est.z }, y: el && el.y, shaft: gx.shaft, dry: !!pick } })
           log('«пирог» с поверхности: копаю у оценки', { est: { x: est.x, z: est.z }, y: el && el.y, shaft: gx.shaft, dry: !!pick })
         }

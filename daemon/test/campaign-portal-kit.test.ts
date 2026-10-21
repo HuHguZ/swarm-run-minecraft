@@ -39,7 +39,7 @@ function fixture(extra: Record<string, number> = {}, env: Record<string, string>
   Object.assign(context, { castRuns: 0, died: false, strategyInterrupted: false, stairEntrance: null, surfaceShaft: null,
     intelligence: { environment: { observe: async () => ({}) }, registry: { get: () => ({ estimateCost: () => 1200, estimateRisk: () => 0.02 }) } },
     structureValue: { SECONDS: { iron: 152 } }, nightHold: () => false, sit: { surface: true, night: false }, PICK_STONE: /_pickaxe$/,
-    sense: async () => {}, weakAndHungry: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null, lavaAtSeenRuins: async () => false, lootSeenStructures: async () => false, lavaSourceKnown: false, castSiteFails: new Map(), lavaBadSites: [], lavaBad: () => false,
+    sense: async () => {}, weakAndHungry: () => false, owFastTrack: () => false, readMemory: async () => {}, ensureFlint: async () => {}, skyLavaLook: async () => null, lavaAtSeenRuins: async () => false, lootSeenStructures: async () => false, lavaSourceKnown: false, castSiteFails: new Map(), lavaBadSites: [], lavaBad: () => false,
     dayLavaStep: async () => false, recoverGuard: async () => {}, unclutter: async () => {}, dim: () => 'overworld', y: () => 64,
     walkAway: async () => { calls.push({ method: 'walkAway', params: {} }) } })
   vm.createContext(cjsContext(withSetters(context)))
@@ -52,6 +52,18 @@ test('seven ingots fund one bucket, ignition and shield before spare combat gear
   assert.equal(f.inventory.bucket, 1)
   assert.equal(f.inventory.flint_and_steel, 1)
   assert.equal(f.inventory.shield, 1)
+})
+test('ND_OW_KIT_PICK: seven ingots fund bucket, ignition and the iron pickaxe before the shield', async () => {
+  const f = fixture({}, { ND_OW_KIT_PICK: '1' }); await f.context.spend()
+  assert.equal(f.inventory.bucket, 1)
+  assert.equal(f.inventory.flint_and_steel, 1)
+  assert.equal(f.inventory.iron_pickaxe, 1)
+  assert.equal(f.inventory.iron_ingot, 0)
+})
+test('ND_OW_KIT_PICK + 8 ingots (ND_OW_KIT_SHIELD target): bucket, ignition, iron pickaxe and the shield', async () => {
+  const f = fixture({ iron_ingot: 8 }, { ND_OW_KIT_PICK: '1' }); await f.context.spend()
+  for (const item of ['bucket', 'flint_and_steel', 'iron_pickaxe', 'shield']) assert.equal(f.inventory[item], 1, item)
+  assert.equal(f.inventory.iron_ingot, 0)
 })
 test('smelting prices the selected missing buckets, lighter and shield', () => {
   const f = fixture({ iron_ingot: 0, water_bucket: 1, fire_charge: 1, shield: 1 })

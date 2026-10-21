@@ -5,6 +5,14 @@ import type { RpcContext } from './context'
 
 function terrainMethods ({ session }: RpcContext) {
   return {
+    ne_recover: async (p: any = {}) => {
+      if (process.env.ND_NE_NO_GIVEUP !== '1') return { disabled: true }
+      return session.runIntent('ne_recover', ctl => {
+        session.require()
+        return (require('../nether-no-giveup') as typeof import('../nether-no-giveup')).recoverNether(session, ctl, p)
+      }, { timeoutMs: (Math.max(1, Math.min(600, p.timeoutSeconds ?? 90)) + 5) * 1000,
+        interruptOn: ['chat', 'damage', 'death', 'kicked', 'disconnected'], params: p })
+    },
     // Приставная лестница на стену снизу доверху (src/ladder.ts): общий подъём для команды.
     ladder_up: async (p: any = {}) => session.runIntent('ladder_up', ctl => require('../ladder').ladderUp(session, ctl, p), { timeoutMs: ((p.timeoutSeconds ?? 40) + 10) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Динамит у точки at (src/tnt.ts): поставить по видимой грани и поджечь; отбежать — дело вызывающего.

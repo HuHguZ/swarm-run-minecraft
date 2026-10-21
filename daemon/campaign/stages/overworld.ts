@@ -2,15 +2,15 @@
 // Этапы верхнего мира: wood, stone, food, iron, water, cast, diamond, obsidian, portal.
 import { OW_DEEP, OW_HEAR } from '../flags'
 import { stage, strategyInterrupted, state, sit, died, known, fightGearWanted, foodHuntEmpty, foodSpentMs,
-  waterSearchView, castSurfaceFailed, deepLava, skyLavaSeen, naturalTried, shaftWaterSeen, setCastSurfaceFailed,
+  waterSearchView, knownWater, lavaSourceKnown, castSurfaceFailed, deepLava, skyLavaSeen, naturalTried, shaftWaterSeen, setCastSurfaceFailed,
   setDeepLava, setFoodHuntEmpty, setFoodSpentMs, setHunting, setLavaSourceKnown, setShaftWaterSeen, setSkyLookAt,
   setWaterDeepFailAt, setWaterSearchFailedView } from '../state'
 import { log } from '../log'
 import { have, y, dim, LOGS, COBBLE, FOOD, foodUnits, PICK_STONE, PICK_IRON, PICK_DIAMOND, planksFor, woodNow,
   portalBuckets, rodsNow, goldOn, shieldOn, lighter } from '../queries'
-import { sense, readMemory, lavaBadSites } from '../observe'
+import { sense, readMemory, lavaBadSites, refresh } from '../observe'
 import { canWorkAtNight, nightHold, weakAndHungry, fightReady, defStage, FOOD_STOCK, foodShort, near3,
-  surfaceLavaNear } from './table'
+  surfaceLavaNear, owFastTrack } from './table'
 import { act } from '../act'
 import { awayFromWater, leaveWater, mobInTheWay } from '../danger'
 import { nightGuard, recoverGuard } from '../guards'
@@ -20,9 +20,9 @@ import { craft, sticks, spares, lumber, unclutter, bucketOnTheWay, mineSeenAll, 
 import { descend, toSurface } from '../underground'
 import { spendIron, ARMOR_COST, ARMOR_SLOT, gearWorth, worn } from '../gear'
 import { foodRun, quickHunt, cook } from '../food'
-import { castForKit, kitWaterHere, waterSearchDirection, ensureFlint } from '../portal-kit'
+import { castForKit, kitWaterHere, waterSearchDirection, ensureFlint, earlyFlint } from '../portal-kit'
 import { NATURAL, dayLavaStep, skyLavaLook, castSiteFails, castSiteFailAt, lavaAtSeenRuins, lootSeenStructures,
-  surfaceLavaSurvey, naturalCast } from '../scout'
+  surfaceLavaSurvey, naturalCast, lavaLookout } from '../scout'
 import { deepBad, listenForLava, deepCast, surfaceShaftNear, waterViaShaft, deepWater, approachCastLava } from '../deep-cast'
 import { wearGold } from '../nether-trip'
 import * as gameClock from '../../src/game-clock'
@@ -32,23 +32,32 @@ const ironBlocked = new Set() // «x,z:сторона» — штрек отсю�
 
 let woodRoofed = 0
 defStage('wood', () => !have(/_pickaxe$/) ||
-  (!!known.portal && rodsNow() < 7 && woodNow() < 4 && ((!shieldOn() && have('iron_ingot') > 0) || have(/_pickaxe$/) <= 2)), async (bootstrap = null) => {
+  (!!known.portal && !owFastTrack() && rodsNow() < 7 && woodNow() < 4 && ((!shieldOn() && have('iron_ingot') > 0) || have(/_pickaxe$/) <= 2)), async (bootstrap = null) => {
   const recovering = !!known.portal
+  // S: the first pick unlocks stone work. Stock for fuel/shield/spares keeps its existing replenishment price;
+  // it is not a prerequisite for crafting a physically affordable pick now.
+  const firstPick = process.env.ND_OW_STARTER === '1' && dim() === 'overworld' &&
+    state.playPolicy?.mode === 'speedrun' && !recovering && !have(/_pickaxe$/)
+  const starterPlanks = () => (have('crafting_table') ? 0 : 4) + 3 +
+    2 * Math.ceil(Math.max(0, 2 - have('stick')) / 4)
   const starter = process.env.ND_ROUTE === '1' && !recovering && process.env.ND_ROUTE_WOOD_ONCE !== '0' &&
     have(/_pickaxe$/) && have('crafting_table') && have('stick') >= 2
   const stock = () => starter ? have(LOGS) : woodNow()
   // Спидран: 6 брёвен на старте хватает на верстак, кирки и палки, остальное — reserve() по ходу; 14 гоняли по редколесью
   // 15 мин до первой ночи (cl-u 14.10: 4 бревна, ещё 10 искал — смерть от утопленника на 15-й мин).
   const want = bootstrap ?? (starter ? 5 : recovering ? 4 : (process.env.ND_ROUTE === '1' && !known.portal ? (Number(process.env.ND_ROUTE_WOODN) > 0 ? Number(process.env.ND_ROUTE_WOODN) : 6) : state.playPolicy?.mode === 'speedrun' ? 6 : 14))
+  const missingLogs = () => firstPick
+    ? have(/_pickaxe$/) ? 0 : Math.ceil(Math.max(0, starterPlanks() - have(/_planks$/) - 4 * have(LOGS)) / 4)
+    : want - stock()
   await sense()
-  if (!sit.surface && !sit.night) await act('shelter', { mode: 'exit' })
-  for (let i = 0; i < 10 && stock() < want; i++) {
+  if (!firstPick && !sit.surface && !sit.night) await act('shelter', { mode: 'exit' })
+  for (let i = 0; i < 10 && missingLogs() > 0; i++) {
     await nightGuard()
     await recoverGuard()
     await sense()
     // Наверх не вышло (кирки нет, свод скалы/навес над головой — s8b-a1-7: роща карты под навесом, «лезу рукой» отказ → дерево
     // брошено, камень с пустым рюкзаком, пещера на y −23, зомби): брёвна по видимости и в сторону по поверхности, до 3 раз.
-    if (!sit.surface && (!sit.night || canWorkAtNight()) && dim() === 'overworld' && !(await toSurface())) {
+    if (!firstPick && !sit.surface && (!sit.night || canWorkAtNight()) && dim() === 'overworld' && !(await toSurface())) {
       if (process.env.ND_ROUTE === '1' && process.env.ND_WOOD_ROOFED !== '0' && !have(/_pickaxe$/) && ++woodRoofed <= 3 && !died) {
         log(`дерево: наверх не выйти — брёвна на виду, потом в сторону (${woodRoofed}/3)`)
         const m0 = await act('mine', { block: 'any_log', count: want - stock(), radius: 32, timeoutSeconds: 90 })
@@ -57,28 +66,30 @@ defStage('wood', () => !have(/_pickaxe$/) ||
       }
       break
     }
-    const m = await act('mine', { block: 'any_log', count: want - stock(), radius: 48, timeoutSeconds: 240 })
-    if (stock() >= want) break
+    const m = await act('mine', { block: 'any_log', count: missingLogs(), radius: 48, timeoutSeconds: firstPick ? 60 : 240 })
+    if (missingLogs() <= 0) break
     if (m.status !== 'done' || !(m.detail && m.detail.dug)) {
       if (!/не вижу/.test(String(m.error || ''))) { await walkAway(20, Math.PI / 2); continue }
       // Дерево видно дальше 48 (прорисовка фермы 128): пустыня и степь — деревья у горизонта (cl-c/cl-d 14.10: 8–18 мин без
       // единого бревна). Видимое — дойти до него, потом рубить.
-      const e = await act('explore', { block: 'any_log', radius: 96, stepDistance: 80, timeoutSeconds: 120 })
+      const e = await act('explore', { block: 'any_log', radius: firstPick ? 128 : 96, stepDistance: 80,
+        timeoutSeconds: firstPick ? 60 : 120, ...(firstPick ? { surface: true, dry: true } : {}) })
       const at = e.detail && e.detail.found && e.detail.at
       if (at && state.pos && Math.hypot(at.x - state.pos.x, at.z - state.pos.z) > 40) await act('goto', { x: at.x, z: at.z, range: 8, timeoutSeconds: 90, surface: 'strict' })
       else if (!at) await walkAway(60, Math.PI / 3)
     }
   }
-  if (recovering && have(/_pickaxe$/)) return
-  if (starter && stock() >= want) {
+  if ((recovering || firstPick) && have(/_pickaxe$/)) return
+  if (!firstPick && starter && stock() >= want) {
     if (!known.lava) await act('observe', { radius: 48 })
     return
   }
-  const planks = planksFor()
+  const planks = planksFor() || (firstPick ? Object.keys(state.inventory || {}).find(k => /_planks$/.test(k) && have(k)) : null)
   if (!planks) throw new Error('брёвен нет')
-  if (have(/_planks$/) < 12) await craft(planks, 12 - have(/_planks$/))
+  const boards = firstPick ? starterPlanks() : 12
+  if (have(/_planks$/) < boards) await craft(planks, boards - have(/_planks$/))
   if (!have('crafting_table')) await craft('crafting_table')
-  await sticks(6)
+  await sticks(firstPick ? 2 : 6)
   await craft('wooden_pickaxe')
   if (!known.lava && !known.portal) await act('observe', { radius: 48 })
 })
@@ -87,7 +98,7 @@ defStage('stone', () => !have(PICK_STONE) || !have(/_sword$/), async () => {
   // Маршрут (ND_ROUTE_STONETUN=0 — выкл.): в этапе камня — только кирка и меч (5 булыжника); печь — по нужде у жилы под землёй
   // (routeStep ore) или routeFurnaceSupply: «mine stone 13» у поверхности — 83–100 с ходьбы (s8-r1-1, s8-r2-1), а железо из
   // сундуков и голема печи не требует.
-  const light = process.env.ND_ROUTE === '1' && process.env.ND_ROUTE_STONETUN !== '0' && !known.portal
+  const light = (process.env.ND_ROUTE === '1' || process.env.ND_OW_FAST === '1') && process.env.ND_ROUTE_STONETUN !== '0' && !known.portal
   // Сколько булыжника ещё нужно сейчас: в лёгком режиме — 3 на кирку, пока её нет, и 2 на меч, пока его нет.
   let want = light ? 5 : OW_DEEP ? 13 : 24
   const wantNow = () => light ? (have(PICK_STONE) ? 0 : 3) + (have(/_sword$/) ? 0 : 2) : want
@@ -120,8 +131,10 @@ defStage('stone', () => !have(PICK_STONE) || !have(/_sword$/), async () => {
       if ((Array.isArray(ob.detail && ob.detail.blocks) ? ob.detail.blocks : []).some(b => b && b.name === 'water')) { log('камень: вода рядом — лесенку копаю подальше от неё'); await awayFromWater(24); await sense(); if (sit.inWater) await leaveWater() }
     }
     const d = await act('dig_down', { mode: 'stairs', depth: firstPick ? 3 : 10, torchEvery: 0, timeoutSeconds: 180 })
-    const dWet = /вода у (-?\d+),(-?\d+),(-?\d+)/.exec(String((d.detail && d.detail.stopped) || ''))
-    if (dWet && !(d.detail && d.detail.steps >= 3)) { await awayFrom({ x: +dWet[1], z: +dWet[3] }, 20).catch(() => null); continue }
+    const dWet = /вода (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String((d.detail && d.detail.stopped) || ''))
+    // Вода в своей же клетке (стою в луже) — «прочь от точки» не сдвигает: от видимой воды на сушу (owC2-03: 20 отказов на месте).
+    const ownWet = dWet && state.pos && Math.hypot(+dWet[1] + 0.5 - state.pos.x, +dWet[3] + 0.5 - state.pos.z) < 1.5
+    if (dWet && !(d.detail && d.detail.steps >= 3)) { if (ownWet) await awayFromWater(24); else await awayFrom({ x: +dWet[1], z: +dWet[3] }, 20).catch(() => null); continue }
     if (d.detail && d.detail.steps) continue
     // «Digging aborted» — копку на первом же блоке сорвал крафт автопилота (деревянный меч, s8-base-2/4: +wooden_sword в том
     // же ответе), а не порода: ещё раз здесь же, а не разведка камня за 60 м (там — вода и ночь).
@@ -133,6 +146,18 @@ defStage('stone', () => !have(PICK_STONE) || !have(/_sword$/), async () => {
     }
     const e = await act('explore', { block: 'stone', radius: 48, stepDistance: 60, timeoutSeconds: 120 })
     if (!(e.detail && e.detail.found) || /уже видно/.test(String((e.detail && e.detail.note) || ''))) await walkAway(40, Math.PI / 2)
+  }
+  // Тупик дерева: булыжник есть, а палок нет и досок не хватает ни на палки, ни на верстак (верстак остался у старой лестницы) —
+  // ни один этап больше дерева не берёт (кирка деревянная есть — этап wood не нужен). owE2-01 21.10: 35 мин на этапе stone с
+  // «не трачу последние доски (их 3): 4 держу на верстак». Два бревна — и кирка.
+  if (!have(PICK_STONE) && have(COBBLE) >= 3 && have('stick') < 2 && !have(LOGS) && have(/_planks$/) < (have('crafting_table') ? 2 : 6)) {
+    await sense()
+    if (!sit.night && dim() === 'overworld') {
+      log('камень есть, палок и досок нет — за двумя брёвнами на кирку')
+      if (!sit.surface) await toSurface()
+      await sense()
+      if (sit.surface) await lumber(2)
+    }
   }
   await sticks(5)
   if (!have(PICK_STONE)) await craft('stone_pickaxe')
@@ -150,34 +175,65 @@ defStage('food', () => foodShort() > 0, async () => {
   else if (!died && setFoodHuntEmpty(foodHuntEmpty + 1) === 2) log('охота пуста дважды подряд — железо пойдёт и при сытости ≥ 8 (в горах оно на склонах)')
 })
 
+// A failed approach is unavailable until its observed origin/source changes.
+const fastIronAnchorFailed = new Set<string>()
+async function fastIronAnchor () {
+  if (process.env.ND_OW_FAST_DESCENT !== '1' || known.portal || dim() !== 'overworld' ||
+      !sit.surface || nightHold() || !lavaSourceKnown || !surfaceLavaNear() || !state.pos || (known.lava.y ?? -64) < 50) return
+  const q = known.lava, from = state.pos, distance = Math.hypot(q.x - from.x, q.z - from.z)
+  // Surface strict owns footing/lava avoidance. Stop well before the remembered fluid cell.
+  const walk = Math.max(0, distance - 12) / 2.5
+  // Heuristic: relocate the shaft toward a proved lake before mining. This is
+  // not a demonstrated net time saving; the strict route can still refuse it.
+  if (distance <= 14) return
+  const key = JSON.stringify([q, knownWater, Math.floor(from.x / 16), Math.floor(from.z / 16)])
+  if (fastIronAnchorFailed.has(key)) return
+  log(`быстрый спуск: эвристика у виденного озера, подход ≈ ${Math.round(walk)} с; сухая кромка перед шахтой`)
+  const r = await act('goto', { x: q.x, z: q.z, range: 12, surface: 'strict',
+    timeoutSeconds: Math.min(60, Math.max(10, Math.ceil(walk * 2))) })
+  if (r.status === 'interrupted' || died || strategyInterrupted) return false
+  await sense()
+  if (r.status !== 'done' || !state.pos || Math.hypot(q.x - state.pos.x, q.z - state.pos.z) > 16) fastIronAnchorFailed.add(key)
+}
+
 defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
   (!!known.portal && rodsNow() >= 7 && !have(PICK_IRON)) ||
   (!!known.portal && fightGearWanted && rodsNow() < 7 && !fightReady() && ironRuns < 8) ||
   (!known.portal && castSurfaceFailed && !have(PICK_IRON)) ||
   (!known.portal && !have(/bucket$/)), async (portalOnly = false) => {
   ironRuns++
+  const fastKit = process.env.ND_OW_FAST_KIT === '1' && !known.portal
+  // ND_OW_KIT_PICK=1 (координатор/ne 21.10): набор Ада — 7 железа (ведро 3 + огниво 1 + кирка 3): золотые блоки бастиона берёт только
+  // железная кирка (minecraft-data 1.21.11 gold_block harvestTools), без неё бастион — лишь сундуки (~2.5 слитка), жемчуга нет. С колодцем
+  // 3 слитка — минуты, этап железа их добирает в том же спуске, кирка — сразу (spendIron: кирка раньше щита).
+  const kitPick = process.env.ND_OW_KIT_PICK === '1' && !known.portal && dim() === 'overworld' && !have(PICK_IRON)
+  // ND_OW_KIT_SHIELD=1 (blz 21.10): +1 слиток на щит (6 досок) — без щита иссушители крепости: 7 смертей на 60 прогонов, со щитом 0 из 8.
+  // Восьмым слитком после кирки (кирка важнее: золотые блоки бастиона); по цене — минута-две добычи в том же спуске.
+  const kitShield = process.env.ND_OW_KIT_SHIELD === '1' && !known.portal && dim() === 'overworld' && !have('shield') && !shieldOn()
   if (!known.portal && have('raw_iron')) {
     const buckets = have(/bucket$/)
     await smeltAll('raw_iron', 'iron_ingot', { fetchCoal: true, max: ironToSmelt() })
     await spendIron()
-    if (!(castSurfaceFailed && !have(PICK_IRON)) && (have(/bucket$/) > buckets || (have(/bucket$/) && lighter()))) return
+    if (!(castSurfaceFailed && !have(PICK_IRON)) && !(kitPick && !have(PICK_IRON)) && !(kitShield && !have('shield') && !shieldOn()) &&
+        (have(/bucket$/) > buckets || (have(/bucket$/) && lighter()))) return
   }
   const ironBase = known.portal
     ? Math.max(3, (have(PICK_IRON) ? 0 : 3) + ((have(/bucket$/) || have('water_bucket')) ? 0 : 3) +
       (fightGearWanted ? (worn('torso') ? 0 : 8) + (worn('legs') ? 0 : 7) + (worn('head') ? 0 : 5) + (shieldOn() ? 0 : 1) : 0))
-    : 3 * portalBuckets() + 1 + ((castSurfaceFailed && !have(PICK_IRON)) ? 3 : 0)
+    : 3 * portalBuckets() + 1 + ((castSurfaceFailed && !have(PICK_IRON)) || kitPick ? 3 : 0) + (kitShield ? 1 : 0)
   let want = ironBase
-  if (!portalOnly) for (const item of ['iron_chestplate', 'iron_leggings', 'iron_helmet', 'iron_boots']) {
+  if (!portalOnly && !fastKit) for (const item of ['iron_chestplate', 'iron_leggings', 'iron_helmet', 'iron_boots']) {
     if (worn(ARMOR_SLOT[item.split('_').pop()])) continue
     const g = gearWorth(item)
     if (g.missing) { log(g.line); if (g.take) want += ARMOR_COST[item] }
   }
   const ironNow = () => have(/^(raw_iron|iron_ingot)$/) + Math.floor(have('iron_nugget') / 9) + 9 * have('iron_block') + 9 * have('raw_iron_block') +
-    (!known.portal ? 3 * Math.min(portalBuckets(), have(/bucket$/)) + (lighter() ? 1 : 0) : 0)
+    (!known.portal ? 3 * Math.min(portalBuckets(), have(/bucket$/)) + (lighter() ? 1 : 0) : 0) +
+    (kitShield && (have('shield') || shieldOn()) ? 1 : 0) + (kitPick && have(PICK_IRON) ? 3 : 0)
   const useMemory = process.env.ND_OW_IRON_MEMORY !== '0' && dim() === 'overworld'
   await sense()
   if (weakAndHungry()) { log(`хп ${Math.round(state.health ?? 0)} и еды нет — вниз не иду, сначала охота`); return }
-  await cook()
+  if (!owFastTrack()) await cook()
   if ((state.food ?? 20) < 18 && have(FOOD)) await act('eat')
   if (useMemory) {
     await mineSeenAll('iron_ore,deepslate_iron_ore', 24, () => want - ironNow())
@@ -196,13 +252,15 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
       if (m.detail && m.detail.dug) continue
       await sense()
       if (sit.night) break
+      // ND_OW_IRON_WANDER=0 — поверху только видимая руда, без слепых 120-секундных ходов (21.10 3292…: 2 мин впустую, потом штрек).
+      if (process.env.ND_OW_IRON_WANDER === '0') break
       const e = await act('explore', { block: 'iron_ore', radius: 48, stepDistance: 60, timeoutSeconds: 120 })
       if (!(e.detail && e.detail.found)) break
     }
     if (have(/^(coal|charcoal)$/) < 4) await act('mine', { block: 'coal_ore', count: 6, radius: 32, timeoutSeconds: 90 })
   }
   if (died) return
-  if (ironNow() < want && y() > 24 && have(/_bed$/)) {
+  if (!owFastTrack() && ironNow() < want && y() > 24 && have(/_bed$/)) {
     await sense()
     await readMemory()
     const sb = known.spawnBed
@@ -212,9 +270,9 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
   }
   // Дерева на глубину: маршруту хватает 4 (плавка ~5 слитков — 4 доски, палки на кирку/факелы — одно бревно); s8c-g: лесоповал перед
   // спуском при 4–5 брёвнах — 43 с/прогон. ND_ROUTE_IRONWOOD=0 — прежние 6.
-  const woodFloor = process.env.ND_ROUTE === '1' && stage === 'route' && process.env.ND_ROUTE_IRONWOOD !== '0' ? 4 : 6
-  if (ironNow() < want && y() > 24 && !(OW_DEEP && woodNow() >= woodFloor)) { await sense(); if (sit.surface && !sit.night) await lumber(8) }
-  if (OW_DEEP && !known.portal && ironNow() < want && y() > 24 && foodUnits() < FOOD_STOCK + 2) await quickHunt()
+  const woodFloor = fastKit ? 4 : process.env.ND_ROUTE === '1' && stage === 'route' && process.env.ND_ROUTE_IRONWOOD !== '0' ? 4 : 6
+  if (ironNow() < want && y() > 24 && (fastKit ? woodNow() < woodFloor : !(OW_DEEP && woodNow() >= woodFloor))) { await sense(); if (sit.surface && !sit.night) await lumber(fastKit ? woodFloor : 8) }
+  if (!owFastTrack() && OW_DEEP && !known.portal && ironNow() < want && y() > 24 && foodUnits() < FOOD_STOCK + 2) await quickHunt()
   if (OW_DEEP && !known.portal && ironNow() < want && y() > 24 && !skyLavaSeen) await surfaceLavaSurvey()
   if (OW_DEEP && !known.portal && ironNow() < want && y() > 24 && !have('water_bucket')) {
     await sense()
@@ -224,10 +282,21 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
       setShaftWaterSeen(w ? w.nearest : null)
     }
   }
+  // Mine visible and remembered iron before choosing a new shaft. No seed/hidden-ore input.
+  if (ironNow() < want && y() > 24) {
+    const anchor = await fastIronAnchor()
+    if (anchor === false || died || strategyInterrupted) return
+  }
+  if (ironNow() < want && y() > 24 && (await earlyFlint() === false || died || strategyInterrupted)) return
   const visibleLegs = process.env.ND_IRON_VISIBLE_LEGS === '1' && !known.portal && dim() === 'overworld'
-  if (ironNow() < want && y() > 24) await descend(16, { wetCluster: dim() === 'overworld',
+  const ironLook = process.env.ND_OW_IRON_LOOK === '1' && dim() === 'overworld' ? () => want - ironNow() : null
+  if (ironNow() < want && y() > 24) await descend(16, { wetCluster: dim() === 'overworld', ironLook,
     ...(visibleLegs ? { oreRemaining: () => want - ironNow() } : {}) })
   if (died) return
+  if (ironLook && ironLook() > 0 && y() < 56) {
+    await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: Math.min(8, ironLook()), radius: 32, dry: true, timeoutSeconds: 120 })
+    if (died || strategyInterrupted) return
+  }
   if (OW_DEEP && OW_HEAR && !known.portal && y() < 40) await listenForLava('низ колодца')
   if (OW_DEEP && ironNow() < want) await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: want - ironNow(), radius: process.env.ND_IRON_WIDE !== '0' ? 24 : 14, timeoutSeconds: 120 })
   if (died) return
@@ -235,7 +304,12 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
   const ironDir = n => ['north', 'east', 'south', 'west'][n % 4]
   // Штрек 32 оставлял раннюю виденную руду за радиусом добора 24; между короткими частями — mineSeenAll.
   const ironLegLength = visibleLegs ? 16 : 32
-  for (let i = 0; i < 14 * 32 / ironLegLength && ironNow() < want; i++) {
+  let boxedLegs = 0
+  // ND_OW_IRON_SNAKE=1: змейка вместо квадрата. Север, восток, юг, запад по 32 возвращали тело в начало, и пятое колено шло по своему
+  // же штреку (owR37-10: «восток 32» второй раз — 0 руды, 0 вскрытого); змейка — север 32, восток 3, юг 32, восток 3…: каждое колено
+  // по новой породе, параллельные штреки через 2 блока — стены между ними видны из обоих.
+  const snake = process.env.ND_OW_IRON_SNAKE === '1'
+  for (let i = 0; i < (snake ? 28 : 14 * 32 / ironLegLength) && ironNow() < want; i++) {
     await recoverGuard()
     if (died) return
     if (useMemory) {
@@ -254,13 +328,24 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
       break
     }
     // Две части по 16 сохраняют прежний поворот через 32 блока и область поиска.
-    let tdir = ironDir(Math.floor(ironLeg++ * ironLegLength / 32))
+    const legNo = ironLeg++
+    let tdir = snake ? (legNo % 2 ? 'east' : Math.floor(legNo / 2) % 2 ? 'south' : 'north') : ironDir(Math.floor(legNo * ironLegLength / 32))
+    const legLength = snake && legNo % 2 ? 3 : ironLegLength
     if (state.pos) {
       const here = `${Math.floor(state.pos.x)},${Math.floor(state.pos.z)}`
       for (let k = 0; k < 4 && ironBlocked.has(`${here}:${tdir}`); k++) tdir = ['north', 'east', 'south', 'west'][(['north', 'east', 'south', 'west'].indexOf(tdir) + 1) % 4]
+      // ND_OW_TUNNEL_BRIDGE=1: из этой клетки не пошёл ни один из четырёх штреков (D0-04: вода со всех сторон, 14 пустых колен
+      // за минуту) — подняться на 3 и вести штреки оттуда; дважды не вышло — этап кончаю, а не кручу те же отказы.
+      if (process.env.ND_OW_TUNNEL_BRIDGE === '1' && ironBlocked.has(`${here}:${tdir}`)) {
+        if (++boxedLegs > 2) { log('штреки: из этой клетки все четыре стороны отказали — этап железа здесь кончаю'); break }
+        log('штреки: все четыре стороны отказали — поднимаюсь на 3 и веду оттуда')
+        await act('tunnel', { direction: 'up', length: 3, timeoutSeconds: 30 })
+        if (died || strategyInterrupted) return
+        continue
+      }
     }
     const tFrom = state.pos ? `${Math.floor(state.pos.x)},${Math.floor(state.pos.z)}` : ''
-    const t = await act('tunnel', { direction: tdir, length: ironLegLength, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 300 })
+    const t = await act('tunnel', { direction: tdir, length: legLength, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 300 })
     if (t.detail && t.detail.stopped && !(t.detail.walked > 0)) ironBlocked.add(`${tFrom}:${tdir}`)
     if (await mobInTheWay(t)) continue
     if (OW_DEEP && OW_HEAR && !known.portal) await listenForLava('штрек за железом')
@@ -311,6 +396,16 @@ defStage('water', () => have(/^bucket$/) > 0 && !have('water_bucket') && !known.
     await nightGuard()
     const r2 = await act('bucket', { fluid: 'water', radius: 32 })
     if (have('water_bucket') || (r2.detail && r2.detail.need)) break
+    // ND_OW_WATER_MEMORY=1: вода, увиденная раньше (knownWater — ближайшая из обзоров), — сперва к ней, а не слепой разведкой
+    // (owC2-05: после набора на +15 вода не нашлась до +40 — 150-секундные разведки с новой точки, озеро у спавна осталось позади).
+    if (process.env.ND_OW_WATER_MEMORY === '1' && knownWater && state.pos && !waterMemoryTried.has(`${knownWater.x},${knownWater.z}`) &&
+        Math.hypot(knownWater.x - state.pos.x, knownWater.z - state.pos.z) > 20 && Math.hypot(knownWater.x - state.pos.x, knownWater.z - state.pos.z) < 320) {
+      waterMemoryTried.add(`${knownWater.x},${knownWater.z}`)
+      log(`вода: видел у ${knownWater.x},${knownWater.y},${knownWater.z} — иду туда`)
+      await act('goto', { x: knownWater.x, z: knownWater.z, range: 6, surface: 'strict', timeoutSeconds: 120 })
+      if (died || strategyInterrupted) return
+      continue
+    }
     const direction = await waterSearchDirection()
     if (died || strategyInterrupted || direction === undefined) return
     const from = state.pos && { ...state.pos }
@@ -333,6 +428,7 @@ defStage('water', () => have(/^bucket$/) > 0 && !have('water_bucket') && !known.
 let castRuns = 0
 
 let waterDeepFails = 0
+const waterMemoryTried = new Set<string>()
 
 // Литьё без воды в ведре невозможно (портал из лавы и воды; «одно ведро: вода с собой»): этап cast без water_bucket падал сразу
 // «нет воды в ведре», дважды — пауза, а вода сама в паузе (ocr0-fp1-s11-1-kit-941 16.10: 7-я–24-я мин без шага). ND_CAST_NEEDS_WATER=0 — прежнее.
@@ -350,10 +446,31 @@ defStage('cast', () => !known.portal && (process.env.ND_CAST_NEEDS_WATER === '0'
   }
   if (await dayLavaStep()) return
   if (process.env.ND_OW_KIT_LAVA !== '0') await readMemory()
+  // ND_OW_SKY_LAVA_FIRST=1: днём увиденное с вышки озеро под небом (проверенный источник) важнее неподтверждённой пещерной лавы, которой
+  // перезаписалась память: owC12c-13 — озеро в 20 бл. от спавна с 0-й мин, ночью память сменила лава штрека y14 и y−54, днём 11 отказов
+  // «не вижу лавы-источника» внизу до конца прогона. Спидраннер идёт к озеру, которое видел.
+  if (process.env.ND_OW_SKY_LAVA_FIRST === '1' && dim() === 'overworld' && !sit.night && skyLavaSeen && !skyLavaSeen.hint && known.lava &&
+      !lavaSourceKnown && Number.isFinite(skyLavaSeen.x) && (known.lava.x !== skyLavaSeen.x || known.lava.z !== skyLavaSeen.z) &&
+      !lavaBadSites.some(b => Math.hypot(b.x - skyLavaSeen.x, b.z - skyLavaSeen.z) < 8)) {
+    log(`литьё: пещерная лава ${known.lava.x},${known.lava.y},${known.lava.z} не подтверждена — к озеру под небом ${skyLavaSeen.x},${skyLavaSeen.y},${skyLavaSeen.z}`)
+    known.lava = { x: skyLavaSeen.x, y: skyLavaSeen.y, z: skyLavaSeen.z }
+    setLavaSourceKnown(true)
+    if (!sit.surface) { await toSurface(); await sense(); if (died || strategyInterrupted) return }
+  }
   if (!sit.surface && dim() === 'overworld' && !sit.night &&
       (process.env.ND_OW_KIT_LAVA === '0' || !known.lava)) await act('shelter', { mode: 'exit' })
   if (process.env.ND_OW_KIT_LAVA === '0') await readMemory()
   await skyLavaLook()
+  // ND_OW_CAST_LOOK=1: литьё поверху, а проверенного источника нет (в памяти — пещерная лава штрека) — вышка обзора с этого места
+  // (раз на клетку), а не только взгляд с земли: owN0-owC12-07 (−2642) — с y55 у оврага «лавы под небом не видно», озеро в 57 бл. за
+  // рельефом, 8 мин литья у неподтверждённой пещерной лавы y15.
+  // Пещерная лава в памяти глубоко под ногами (ниже на 16+) — тоже: с вершины горы виден лавовый пруд в 100 бл., а литьё шло в пещеру на
+  // 106 бл. ниже (owN2-owC5-05, 5730: y112 над лавой y6, «не вижу лавы-источника в 24 блоках» до конца дня).
+  const deepMemory = !!known.lava && (known.lava.y ?? 64) < y() - 16
+  if (process.env.ND_OW_CAST_LOOK === '1' && (!lavaSourceKnown || deepMemory) && sit.surface && !died) {
+    if (deepMemory) { setSkyLookAt(null); await skyLavaLook() }
+    await lavaLookout(deepMemory); await refresh()
+  }
   if (!known.lava) await act('observe', { radius: 48 })
   if (known.lava && state.pos && Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) > 16) await goToward(known.lava, 8)
   // Лава у руин (класс rp пула good-v2) — их сундук в двух шагах: огниво, обсидиан — до литья, если окупается.

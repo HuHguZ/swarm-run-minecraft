@@ -22,6 +22,9 @@ import { countOf } from './items'
 // ------------------------------------------------------------ мелочи
 
 function hasEffect (bot, name) {
+  // Огнестойкость своего тела клиент не видит (entity.effects пуст) — выпитая телом считается по часам (blaze/potions frByClock):
+  // без этого «горю» под действующей FR — новое зелье каждые 4 с (cn11-s19-1 21.10).
+  if (name === 'fire_resistance' && bot._ndFrUntil && gameClock.now() < bot._ndFrUntil) return true
   try {
     const pascal = String(name).split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('')
     const eff = bot.registry.effectsByName[name] || bot.registry.effectsByName[pascal]
@@ -60,17 +63,28 @@ async function consume (bot, item, effect, ms = 3500) {
   const { consumeInOffhand, restoreOffhand }: typeof import('./consumable-hands') = require('./consumable-hands')
   const offHand = consumeInOffhand(bot)
   const previousOff = bot.inventory.slots?.[45]
-  const had = countOf(bot, item.name)
+  // Флаконы во всех слотах (левая рука тоже): выпитое зелье оставляет флакон там, где пили.
+  const bottles = () => (bot.inventory.slots || []).reduce((n, i) => n + (i && i.name === 'glass_bottle' ? i.count : 0), 0)
+  const had = countOf(bot, item.name), bottles0 = bottles()
   let ok = false
   try {
     await bot.equip(item, offHand ? 'off-hand' : 'hand')
     const eating = (offHand ? Promise.resolve().then(() => bot.activateItem(true)) : bot.consume()).catch(() => {})
     const t0 = gameClock.now()
     while (gameClock.now() - t0 < ms) {
-      if ((effect && hasEffect(bot, effect)) || countOf(bot, item.name) < had) { ok = true; break }
+      if ((effect && hasEffect(bot, effect)) || countOf(bot, item.name) < had) {
+        if (effect === 'fire_resistance' && bottles() > bottles0) bot._ndFrUntil = gameClock.now() + 3600 * 50 - 2000
+        ok = true; break
+      }
       await sleep(100)
     }
     await Promise.race([eating, sleep(300)])
+    // Флакон приходит отдельным пакетом и позже эффекта: часы FR — и тогда (pA12-s17-1: FR от лавы выпита, часов нет — этап считал
+    // её бесконечной, «999 с», и пошёл к трону на исходе).
+    if (ok && effect === 'fire_resistance' && !(bot._ndFrUntil > gameClock.now() + 170000)) {
+      for (let i = 0; i < 10 && bottles() <= bottles0; i++) await sleep(50)
+      if (bottles() > bottles0) bot._ndFrUntil = gameClock.now() + 3600 * 50 - 2500
+    }
   } catch {}
   if (offHand) { try { bot.deactivateItem(); await restoreOffhand(bot, previousOff, item) } catch {} }
   else if (previous && previous.name !== item.name) {
@@ -103,7 +117,9 @@ async function autoUse (autopilot, bot) {
   const hot = b => b && /^(fire|soul_fire|lava|campfire|soul_campfire|magma_block)$/.test(b.name)
   if (bot.entity.isInLava || hot(feet) || hot(head)) autopilot.kitHotAt = now
   const burning = onFire(bot) || now - (autopilot.kitHotAt || 0) < 8000
-  if (burning && !hasEffect(bot, 'fire_resistance') && now > (autopilot.kitFireAt || 0) && !bot.currentWindow) {
+  // ND_BLZ_FR_BUDGET=1: последнее зелье FR — бою у трона, не первому огню (blaze/potions.frSpendOk).
+  if (burning && !hasEffect(bot, 'fire_resistance') && now > (autopilot.kitFireAt || 0) && !bot.currentWindow &&
+      (require('./blaze/potions') as typeof import('./blaze/potions')).frSpendOk(bot)) {
     // Темп (2026-09-25): в бою с человеком (pvp.js держит session.tempo) пить
     // 1.6 с со скоростью ×0.2 — только если он не успеет добежать или
     // дострелить; взрывное под ноги — мгновенно, его можно всегда.

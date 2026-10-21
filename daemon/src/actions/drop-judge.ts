@@ -5,6 +5,10 @@ const { sleep, xyz }: typeof import('../movement') = require('../movement')
 // Same "feel the heat" probe digDown uses, applied to a whole step. It looks
 // through solid stone, which is only ever allowed to REFUSE a dig — never to
 // find anything.
+// Модуль K (затычка воды) грузится только под ND_DIG_PLUG_WATER=1: песочницы тестов actions (vm с заглушками require) без него.
+// Имена — свои: bodySource склеивает actions/* в одну область (в dig-down.ts — тот же фасад).
+const judgePlugOn = () => typeof process !== 'undefined' && process.env.ND_DIG_PLUG_WATER === '1'
+const judgeLiquidSeen = (bot, b) => (require('../mining/dig-water') as typeof import('../mining/dig-water')).liquidSeen(bot, b)
 const AROUND_CELL = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]]
 
 function hazardAt (bot, cells) {
@@ -12,6 +16,9 @@ function hazardAt (bot, cells) {
     for (const [dx, dy, dz] of AROUND_CELL) {
       const b = bot.blockAt(c.offset(dx, dy, dz))
       if (!b) continue
+      // Лава за камнем — по-прежнему отказ (чутьё безопасности): без него ND_DIG_PLUG_WATER вскрывал невидимую лаву (owKP-owA1-05
+      // 21.10: штрек в лаву на y16, смерть на 9.7 мин). Затычка — только для воды.
+      if (judgePlugOn() && b.name === 'water' && !judgeLiquidSeen(bot, b)) continue
       if (/lava/.test(b.name)) return `лава у ${c.x + dx},${c.y + dy},${c.z + dz}`
       if (b.name === 'water') return `вода у ${c.x + dx},${c.y + dy},${c.z + dz}`
     }
@@ -37,7 +44,7 @@ const FREE_FALL = 3
 function floorBelow (bot, pos, maxDrop = FREE_FALL) {
   for (let d = 1; d <= maxDrop; d++) {
     const b = bot.blockAt(pos.offset(0, -d, 0))
-    if (!b) return null
+    if (!b || (judgePlugOn() && !judgeLiquidSeen(bot, b))) return null
     if (/lava|water/.test(b.name)) return null
     if (b.boundingBox === 'block') return d
   }
@@ -62,7 +69,7 @@ function groundUnder (bot, from, maxDrop = 32, open: any = []) {
     const at = from.offset(0, -d, 0)
     if (cut(at)) continue
     const b = bot.blockAt(at)
-    if (!b) return null
+    if (!b || (judgePlugOn() && !judgeLiquidSeen(bot, b))) return null
     if (/lava/.test(b.name)) return { fall: d - 1, lava: true }
     if (/water/.test(b.name)) return { fall: d - 1, water: true }
     if (b.boundingBox === 'block') return { fall: d - 1, name: b.name }

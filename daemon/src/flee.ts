@@ -85,13 +85,31 @@ function playerDoctrine (e) {
   return { radius: 10, weight: 8, fast: true, ...(/(^|_)bow$|crossbow|trident/.test(held) ? { range: 48 } : {}) }
 }
 
+// ND_PIGLIN_GOLD_NEUTRAL (поток ne 21.10; вкл. по умолчанию с 03:50 — открытый торг 0.4–3.5 → 14–22 сделки/мин; =0 — выкл.): в золотой броне пиглин нейтрален, пока у него нет цели атаки — флаг aggressive
+// виден (PiglinAi.updateActivity: setAggressive(hasMemoryValue(ATTACK_TARGET)), jar 1.21.11). Обход торговцев как врагов
+// (radius 7 у каждого) делал путь к ним копкой пола и уводил бегство/укрытие от мирной толпы бастиона.
+function calmPiglin (bot, e) {
+  if (e.name !== 'piglin' || process.env.ND_PIGLIN_GOLD_NEUTRAL === '0') return false
+  if (![5, 6, 7, 8].some(i => /^golden_/.test(bot.inventory?.slots?.[i]?.name || ''))) return false
+  try { return !((Number(e.metadata[bot.registry.entitiesByName.piglin.metadataKeys.indexOf('mob_flags')]) || 0) & 4) } catch { return false }
+}
+
 // Взвешенные враги вокруг: только те, о ком есть доктрина, и напавшие игроки из foes (id сущностей).
 function hostilesAround (bot, radius = 32, foes: number[] = []) {
+  let seenBrutes: Set<number> | null = null
+  if (process.env.ND_BRUTE_MEMORY === '1') {
+    seenBrutes = new Set()
+    try { for (const e of (require('./perception/eyes') as typeof import('./perception/eyes')).entities(bot, { radius, rememberMs: 0, hearMs: 0 })) {
+      if (e.seen && e.name === 'piglin_brute') seenBrutes.add(e.id)
+    } } catch {}
+  }
   const me = bot.entity.position
   const out = []
   const bears = (require('./polar-bear') as typeof import('./polar-bear')).enabled() ? (require('./polar-bear') as typeof import('./polar-bear')).risks(bot) : null
   for (const e of ((Object.values(bot.entities) as any[]) as any)) {
     if (!e || e === bot.entity || !e.position || !e.name) continue
+    if (seenBrutes && e.name === 'piglin_brute' && !seenBrutes.has(e.id)) continue
+    if (calmPiglin(bot, e)) continue
     const bear = e.name === 'polar_bear' ? bears?.find(h => h.e.id === e.id) : null
     if (e.name === 'polar_bear' && bears && !bear) continue
     const doc = bear ? { ...DOCTRINE.polar_bear, radius: bear.avoiding ? (require('./polar-bear') as typeof import('./polar-bear')).MECH.followMax : (require('./polar-bear') as typeof import('./polar-bear')).MECH.cubMax + (require('./polar-bear') as typeof import('./polar-bear')).MECH.reach } : e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
@@ -526,7 +544,7 @@ function mobAvoidance (bot) {
     if (bot._ndNoMobAvoid) return 0
     const now = gameClock.now()
     if (now - cache.at > 500) {
-      cache = { at: now, list: bot.entity ? hostilesAround(bot, 40).map(h => ({ p: h.e.position, doc: h.doc, swelling: h.swelling, name: h.e.name })) : [] }
+      cache = { at: now, list: bot.entity ? hostilesAround(bot, 40).filter(h => process.env.ND_BRUTE_MEMORY !== '1' || h.e.name !== 'piglin_brute').map(h => ({ p: h.e.position, doc: h.doc, swelling: h.swelling, name: h.e.name })) : [] }
     }
     if (!cache.list.length) return 0
     let cost = 0

@@ -28,15 +28,16 @@ async function lavaWatched (bot, ctl, fn) {
   return r
 }
 
-async function barterRound (session, ctl, st, count, deadline) {
+async function barterRound (session, ctl, st, count, deadline, options: any = {}) {
   const bot = session.bot
   const pearls: typeof import('.././pearls') = require('.././pearls')
   const secs = Math.max(20, Math.min(180, Math.round((deadline - gameClock.now()) / 1000) - 5))
-  const r = await pearls.barter(session, ctl, { count, timeoutSeconds: secs, force: !BF.enabled() })
+  const r = await pearls.barter(session, ctl, { ...options, count, timeoutSeconds: secs, force: options.openSite ? false : !BF.enabled() })
+  if (options.openSite) r.accepted = (r.handed || 0) + (options.acceptedGold?.() || 0)
   st.traded += r.spent || 0
   for (const [k, v] of (Object.entries(r.gained || {}) as [string, any][])) st.gained[k] = (st.gained[k] || 0) + v
-  st.barters.push({ spent: r.spent || 0, stopped: r.stopped, pearls: r.pearls || 0 })
-  const tossed = await dropJunk(bot)
+  st.barters.push({ spent: r.spent || 0, stopped: r.stopped, pearls: r.pearls || 0, ...(options.openSite ? {site:"open",accepted:r.accepted,seconds:r.seconds} : {}) })
+  const tossed = options.openSite ? [] : await dropJunk(bot)
   if (tossed.length) st.tossed.push(...tossed)
   return r
 }
@@ -198,9 +199,25 @@ function boothAt (view, own, O, d) {
   return { O, C, W, F, d, p: [px, pz], wide }
 }
 
+// Remember observed adults before closing cover; never refresh hidden coordinates.
+function barterTraders (bot, radius = 64) {
+  if (process.env.ND_BARTER_TRADER_MEMORY === '1') return (require('./trader-memory') as typeof import('./trader-memory')).traders(bot,radius)
+  if (process.env.ND_BARTER_VISIBLE_TRADERS !== '1') return mobs(bot, 'piglin', radius)
+  if (!bot._ndBarterSeen || bot._ndBarterSeen.world !== bot.world) bot._ndBarterSeen = { world: bot.world, adults: new Map() }
+  const seen = bot._ndBarterSeen.adults
+  const now = gameClock.now()
+  for (const pg of mobs(bot, 'piglin', radius)) {
+    if (!seesMob(bot, pg)) continue
+    if (isBaby(bot, pg)) { seen.delete(pg.id); continue }
+    seen.set(pg.id, { t: now, e: { ...pg, position: pg.position.clone(), metadata: Array.isArray(pg.metadata) ? pg.metadata.slice() : pg.metadata } })
+  }
+  for (const [id, rec] of seen) if (now < rec.t || now - rec.t > 90000) seen.delete(id)
+  return [...seen.values()].map(rec => rec.e).filter(pg => pg.position.distanceTo(bot.entity.position) <= radius)
+}
+
 function boothCandidates (bot, view, own, radius = 40) {
   const me = bot.entity.position
-  const pigs = mobs(bot, 'piglin', radius).filter(e => !isBaby(bot, e))
+  const pigs = barterTraders(bot, radius).filter(e => !isBaby(bot, e))
   const seen = new Set()
   const out = []
   for (const pg of (pigs as any)) {
@@ -292,13 +309,14 @@ function pitAt (view, own, O, d) {
 
 function pitCandidates (bot, view, own, radius = 40) {
   const me = bot.entity.position
-  const pigs = mobs(bot, 'piglin', radius).filter(e => !isBaby(bot, e))
+  const pigs = barterTraders(bot, radius).filter(e => !isBaby(bot, e))
   const seen = new Set()
   const out = []
   for (const pg of (pigs as any)) {
     const p = pg.position.floored()
-    for (let dx = -3; dx <= 3; dx++) {
-      for (let dz = -3; dz <= 3; dz++) {
+    const span = process.env.ND_BARTER_TRADER_MEMORY === '1' && gameClock.now()-pg.seenAt>90000 ? 8 : 3
+    for (let dx = -span; dx <= span; dx++) {
+      for (let dz = -span; dz <= span; dz++) {
         const O = { x: p.x + dx, y: p.y, z: p.z + dz }
         for (const d of SIDES4) {
           const k = `${O.x},${O.y},${O.z}|${d}`
@@ -307,8 +325,9 @@ function pitCandidates (bot, view, own, radius = 40) {
           const b: any = pitAt(view, own, O, d)
           if (!b) continue
           const center = new Vec3(O.x + 0.5, O.y, O.z + 0.5)
-          b.pigs = pigs.filter((e : any) => e.position.distanceTo(center) <= 7 && Math.abs(e.position.y - O.y) < 0.6).length
-          b.brutes = mobs(bot, 'piglin_brute', 7, center).length
+          b.pigs = pigs.filter((e : any) => e.position.distanceTo(center) <= (process.env.ND_BARTER_TRADER_MEMORY === '1' ? 15 : 7) && Math.abs(e.position.y - O.y) < 0.6).length
+          b.brutes = process.env.ND_BARTER_TRADER_MEMORY === '1' ? (require('./trader-memory') as typeof import('./trader-memory')).visible(bot).filter(e=>e.name==='piglin_brute' && new Vec3(e.pos.x,e.pos.y,e.pos.z).distanceTo(center)<=7).length : mobs(bot, 'piglin_brute', 7, center).length
+          if(process.env.ND_BARTER_TRADER_MEMORY === '1') b.estimatedTraders = true
           b.d0 = center.distanceTo(me)
           out.push(b)
         }
@@ -318,15 +337,17 @@ function pitCandidates (bot, view, own, radius = 40) {
   const pre = out.filter(b => b.pigs >= (BF.enabled() ? 1 : 2) && (!BF.enabled() || !b.brutes)).sort((a, b) => (Number(!!b.dump) - Number(!!a.dump)) || (b.pigs - a.pigs) || (a.d0 - b.d0)).slice(0, 24)
   // Место улова: сколько клеток пола у рта, откуда пиглин нас видит, до него дотянемся, и его
   // бросок (расчёт полёта) ляжет к нам. pit-real 29.09: рот у тесной лестницы — 70–89% добычи.
-  for (const b of pre) b.catch = catchScore(bot, b)
+  for (const b of pre) b.catch = catchScore(bot, b, process.env.ND_BARTER_TRADER_MEMORY === '1' ? view : null)
   return pre.filter(b => b.catch >= 2).sort((a, b) => (Number(!!b.dump) - Number(!!a.dump)) || (b.catch - a.catch) || (b.pigs - a.pigs) || (a.d0 - b.d0))
 }
 
-function catchScore (bot, bo) {
-  const base = (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
+function catchScore (bot, bo, view = null) {
+  const SL: typeof import('../sealed') = require('../sealed')
+  const base = view ? (x,y,z) => { const c=view.cls(x,y,z); return c===SL.AIR ? { name:'air',shapes:[],boundingBox:'empty' } : [SL.SOLID,SL.HARD,SL.GUARD].includes(c) ? { name:'stone',shapes:[[0,0,0,1,1,1]],boundingBox:'block' } : null } : (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
   const openK = new Set([bo.M, bo.H, bo.P].map(c => `${c.x},${c.y},${c.z}`))
   const AIRB = { name: 'air', shapes: [], boundingBox: 'empty' }
-  const getBlock = (x, y, z) => openK.has(`${x},${y},${z}`) ? AIRB : base(x, y, z)
+  let unknown = false
+  const getBlock = (x, y, z) => { const b=openK.has(`${x},${y},${z}`) ? AIRB : base(x,y,z); if(view && !b)unknown=true; return b }
   const feet = new Vec3(bo.P.x + 0.5, bo.P.y, bo.P.z + 0.5)
   const eye = feet.offset(0, 1.62, 0)
   const empty = q => q && q.boundingBox === 'empty' && !/lava|water|fire/.test(q.name)
@@ -335,11 +356,12 @@ function catchScore (bot, bo) {
     for (let dz = -3; dz <= 3; dz++) {
       const x = bo.M.x + dx; const z = bo.M.z + dz; const y = bo.M.y
       if (openK.has(`${x},${y},${z}`) || Math.hypot(dx, dz) > 3.2) continue
+      unknown = false
       const f = getBlock(x, y - 1, z)
       if (!empty(getBlock(x, y, z)) || !empty(getBlock(x, y + 1, z)) || !f || f.boundingBox !== 'block') continue
       const from = new Vec3(x + 0.5, y, z + 0.5)
       if (!rayClear(getBlock, from.offset(0, PIGLIN_EYE, 0), eye)) continue
-      if (throwLands(bot, from, feet, getBlock).ok) n++
+      if (throwLands(bot, from, feet, getBlock).ok && !unknown) n++
     }
   }
   return n
@@ -403,7 +425,7 @@ function trapAt (view, own, O, d) {
 
 function trapCandidates (bot, view, own, radius = 40) {
   const me = bot.entity.position
-  const pigs = mobs(bot, 'piglin', radius).filter(e => !isBaby(bot, e))
+  const pigs = barterTraders(bot, radius).filter(e => !isBaby(bot, e))
   const seen = new Set()
   const out = []
   for (const pg of (pigs as any)) {
@@ -447,6 +469,11 @@ async function tradeExecute (session, ctl, path, S, local = null) {
 async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () => false, settle = true }: any = {}) {
   const bot = session.bot
   const t0 = gameClock.now()
+  const observed = () => bo.wall ? bo.seen() : Object.values(bot.entities)
+  const tradeMobs = (_bot, name, radius, from = bot.entity.position) => bo.wall
+    ? observed().filter((e:any)=>e.name===name && e.position && e.isValid!==false && e.position.distanceTo(from)<=radius)
+    : mobs(_bot,name,radius,from)
+  const wallStop = () => bo.wall && (bo.threat() || !bo.intact())
   let lastToss = 0
   let lures = null
   let lastLure = null
@@ -461,8 +488,8 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   if (BF.enabled()) { try { (require('.././ne-guard') as typeof import('.././ne-guard')).attach(session) } catch {} }
   const badCells = new Map()
   const onSpawn = p => {
-    if (p.type !== itemType) return
-    const pg: any = mobs(bot, 'piglin', 24).find((e : any) => !isBaby(bot, e) && Math.hypot(e.position.x - p.x, e.position.z - p.z) < 0.35 && Math.abs(e.position.y + 1.79 - 0.3 - p.y) < 0.15)
+    if (p.type !== itemType || bo.wall && !observed().some((e:any)=>e.id===p.entityId)) return
+    const pg: any = tradeMobs(bot, 'piglin', 24).find((e : any) => !isBaby(bot, e) && Math.hypot(e.position.x - p.x, e.position.z - p.z) < 0.35 && Math.abs(e.position.y + 1.79 - 0.3 - p.y) < 0.15)
     if (!pg) return
     // Чья сделка: вручённая нами (в 12 с до броска) или приманка; где стоял пиглин относительно нас.
     const me = bot.entity.position
@@ -478,7 +505,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   bot.on('playerCollect', onCollect)
   const onMeta = p => {
     const t = throws.get(p.entityId)
-    if (!t || t.name) return
+    if (!t || t.name || bo.wall && !observed().some((e:any)=>e.id===p.entityId)) return
     try { const it = bot.entities[p.entityId] && bot.entities[p.entityId].getDroppedItem(); if (it) { t.name = it.name; t.count = it.count } } catch {}
   }
   bot._client.on('spawn_entity', onSpawn)
@@ -486,18 +513,20 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   // Перед торгом — место в рюкзаке: штрек набил его чернокамнем, гравием, добычей сундуков.
   if (pitLike(bo)) await junkOut(bot, bo, r.junked)
   try {
-  while (!ctl.aborted && gameClock.now() < until - 3000) {
+  while (!ctl.aborted && gameClock.now() < until - (bo.wall ? BF.ADMIRE_MS + 2500 : 3000)) {
+    if (wallStop()) { r.stopped = 'окно стены: угроза или изменился кожух'; break }
+    if (bo.wall && (bot.health ?? 20) < 12) { r.stopped = 'окно стены: лечиться в закрытом'; break }
     if (done()) { r.stopped = 'цель'; break }
     if (BF.enabled()) {
       const G: typeof import('.././ne-guard') = require('.././ne-guard')
       // Guard may move the body while a trade loop is waiting. Never reuse the old mouth.
-      if (G.busy(bot) || G.hot(bot)) { await G.react(session, ctl); r.stopped = 'страж изменил место'; break }
+      if (G.busy(bot) || !bo.wall && G.hot(bot)) { if (bo.wall) await bo.close(); else await G.react(session, ctl); r.stopped = 'страж изменил место'; break }
       if (bot.entity.position.distanceTo(new Vec3(bo.F.x + 0.5, bo.F.y, bo.F.z + 0.5)) > 0.9) { r.stopped = 'ушёл из места бартера'; break }
     }
     if ((bot.health ?? 20) < 12) await eatIfHungry(session, ctl)
     if ((bot.health ?? 20) < 8) { r.stopped = `хп ${Math.round(bot.health)}`; break }
     // Брут у окна — мечом, пока стоит (злость пиглинов от удара — 30 с, переждём).
-    if (st.hitBrutes && await hitThroughWindow(bot)) { r.hits++; st.lastBreak = gameClock.now(); idleSince = gameClock.now(); continue }
+    if (!bo.wall && st.hitBrutes && await hitThroughWindow(bot)) { r.hits++; st.lastBreak = gameClock.now(); idleSince = gameClock.now(); continue }
     const cool = lastGoldBreak(st) + 33000 - gameClock.now()
     if (cool > 0) { r.waitedAnger += Math.min(cool, 1000); await sleep(Math.min(cool, 1000)); continue }
     // Стопка при перекладке в руку на миг вне inventory.items() — пересчёт через паузу (s2b-alt03 k=5).
@@ -511,7 +540,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     // Рюкзак почти полон — хлам в свалку: в полный рюкзак добыча не идёт и копится у ног.
     if (bot.inventory.emptySlotCount() < 3) await junkOut(bot, bo, r.junked)
     // Подоконник из песка душ: блок стены под окном (C) меняем на песок душ (высота 0.875).
-    if (!bo.sill && countOf(bot, 'soul_sand') > 0 && !mobs(bot, 'piglin_brute', 4, O).length && !mobs(bot, 'hoglin', 4, O).length) {
+    if (!bo.wall && !bo.sill && countOf(bot, 'soul_sand') > 0 && !tradeMobs(bot, 'piglin_brute', 4, O).length && !tradeMobs(bot, 'hoglin', 4, O).length) {
       bo.sill = await makeSill(bot, bo)
       r.sill = bo.sill
     }
@@ -530,34 +559,38 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     // Золото в руке держим только на миг вручения: с ним в руке пиглин к нам не подходит.
     if (await unholdGold(bot)) r.unheld = (r.unheld || 0) + 1
     const eye = bot.entity.position.offset(0, 1.62, 0)
-    const pigs = mobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && !aggressive(bot, e) && !admiring(e) && (!BF.enabled() || BF.ready(bot, e, busyUntil)))
+    const pigs = tradeMobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && !aggressive(bot, e) && !admiring(e) && (!BF.enabled() || BF.ready(bot, e, busyUntil)))
       .sort((a, b) => distToBox(eye, a) - distToBox(eye, b))
     let handed = false
     // Вручать тому, кто видит нас глаз в глаз сквозь окно: только он бросит добычу к нам
-    const eyeSees = pg => raySees(bot, eye, pg.position.offset(0, (pg.height || 1.95) * 0.92, 0))
+    const eyeSees = pg => bo.wall ? bo.eyeSees(pg) : raySees(bot, eye, pg.position.offset(0, (pg.height || 1.95) * 0.92, 0))
     const getBlock = pitLike(bo) ? (require('.././drops') as typeof import('.././drops')).blockGetter(bot) : null
     let firstLureBudget = 0
     for (const pg of (pigs as any)) {
+      if (bo.wall && !observed().some((e:any)=>e.id===pg.id)) continue
       if (distToBox(eye, pg) > 2.9) break
       // Яма: вручать только тому, кто нас видит и чей бросок (расчёт полёта) ляжет к нам —
       // иначе добыча остаётся у рта (pit-real 29.09: без этого в рюкзаке 70–89% сделок).
       if (pitLike(bo) || BF.enabled()) {
         if ((badCells.get(Math.floor(pg.position.x) + ',' + Math.floor(pg.position.y) + ',' + Math.floor(pg.position.z)) || 0) >= 2) { r.badCellSkip = (r.badCellSkip || 0) + 1; continue }
         if (!eyeSees(pg)) { r.unseen = (r.unseen || 0) + 1; continue }
-        if (!throwLands(bot, pg.position, bot.entity.position, getBlock).ok) { r.wontLand = (r.wontLand || 0) + 1; continue }
+        if (!bo.wall && !throwLands(bot, pg.position, bot.entity.position, getBlock).ok) { r.wontLand = (r.wontLand || 0) + 1; continue }
       } else if (!eyeSees(pg) && gameClock.now() - (r.lastSeenHand || t0) < 15000) { r.unseen = (r.unseen || 0) + 1; continue }
-      if (await handNoWalk(bot, pg)) {
+      if (bo.wall && (wallStop() || ctl.aborted)) break
+      if (await handNoWalk(bot, pg, bo.wall ? () => !ctl.aborted && !wallStop() && observed().some((e:any)=>e.id===pg.id) && eyeSees(pg) : null)) {
         handedAt.set(pg.id, gameClock.now())
         if (BF.enabled()) busyUntil.set(pg.id, gameClock.now() + BF.ADMIRE_MS + 150)
-        r.handed++; st.traded++; handed = true; idleSince = gameClock.now(); r.lastHandT = gameClock.now(); if (eyeSees(pg)) r.lastSeenHand = gameClock.now()
+        r.handed++; st.traded++; handed = true; idleSince = gameClock.now(); r.lastHandT = gameClock.now(); if ((!bo.wall || observed().some((e:any)=>e.id===pg.id)) && eyeSees(pg)) r.lastSeenHand = gameClock.now()
         // Кривая жемчуга по сделкам (опыты: последовательность бартера у мира одна — random_sequence).
         if (r.handed % 32 === 0) { r.curve = r.curve || []; r.curve.push([r.handed + r.tossed, countOf(bot, 'ender_pearl')]) }
         break
       }
     }
+    if (wallStop()) { r.stopped = 'окно стены: угроза или изменился кожух'; break }
     if (!handed) {
-      const near = pigs.filter((e : any) => e.position.distanceTo(O) <= 8)
-      const lying = (Object.values(bot.entities) as any[]).filter((e : any) => e.name === 'item' && e.position && e.position.distanceTo(O) < 3 &&
+      const near = (bo.wall ? tradeMobs(bot,'piglin',16).filter(e=>!isBaby(bot,e) && !aggressive(bot,e) && !admiring(e) && BF.ready(bot,e,busyUntil)) : pigs)
+        .filter((e : any) => e.position.distanceTo(O) <= 8 && (!bo.wall || eyeSees(e)))
+      const lying = (observed() as any[]).filter((e : any) => e.name === 'item' && e.position && e.position.distanceTo(O) < 3 &&
         (() => { try { const d = e.getDroppedItem && e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } })()).length
       // Брошенный слиток лежит и его не берут дольше 10 с — бросить ещё (booth-3: 2 слитка легли, торг встал).
       let tossOk = !pitLike(bo)
@@ -567,8 +600,8 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
         // Манить в камеру: в ней нет свободного взрослого и слиток там не лежит; слиток ляжет в
         // клетку камеры дальше нашей рамки подбора (иначе вернётся к нам через 2 с).
         const inTrap = e => [bo.C0, bo.C2].filter(Boolean).some(T => Math.floor(e.position.x) === T.x && Math.floor(e.position.z) === T.z && Math.abs(e.position.y - T.y) < 0.6)
-        const caught = mobs(bot, 'piglin', 8).filter(e => !isBaby(bot, e) && inTrap(e))
-        const baitThere = (Object.values(bot.entities) as any[]).some((e : any) => e.name === 'item' && e.position && inTrap(e) && (() => { try { const d = e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } })())
+        const caught = tradeMobs(bot, 'piglin', 8).filter(e => !isBaby(bot, e) && inTrap(e))
+        const baitThere = (observed() as any[]).some((e : any) => e.name === 'item' && e.position && inTrap(e) && (() => { try { const d = e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } })())
         const at = tossLands(bot, aimOut(bo))
         const me0 = bot.entity.position
         tossOk = !caught.length && !baitThere && inTrap({ position: new Vec3(at.x, at.y, at.z) }) && Math.hypot(at.x - me0.x, at.z - me0.z) >= 1.6
@@ -586,12 +619,12 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
         const need = r.tossed >= 12 ? 99 : quiet > 70000 ? 3 : quiet > 50000 ? 5 : quiet > 30000 ? 7 : 99
         // Прошлую приманку не взяли за 25 с (лежит у места посадки) — это место не годится.
         if (lastLure && gameClock.now() - lastLure.t > 25000 && !lastLure.L.bad) {
-          const still = (Object.values(bot.entities) as any[]).some((e : any) => e.name === 'item' && e.position && Math.hypot(e.position.x - lastLure.L.at.x, e.position.z - lastLure.L.at.z) < 1 && Math.abs(e.position.y - lastLure.L.at.y) < 1 &&
+          const still = (observed() as any[]).some((e : any) => e.name === 'item' && e.position && Math.hypot(e.position.x - lastLure.L.at.x, e.position.z - lastLure.L.at.z) < 1 && Math.abs(e.position.y - lastLure.L.at.y) < 1 &&
             (() => { try { const d = e.getDroppedItem(); return d && d.name === 'gold_ingot' } catch { return false } })())
           if (still) { lastLure.L.bad = true; r.lureBad = (r.lureBad || 0) + 1 }
         }
         const gbl = (require('.././drops') as typeof import('.././drops')).blockGetter(bot)
-        const adults = mobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && !aggressive(bot, e))
+        const adults = tradeMobs(bot, 'piglin', 16).filter(e => !isBaby(bot, e) && !aggressive(bot, e))
         const reachableLures = lures.filter(x => {
           if (x.bad || x.score < 3) return false
           if (!x.region) x.region = floorRegion(gbl, Math.floor(x.at.x), Math.floor(x.at.z), bo.M.y)
@@ -608,8 +641,9 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
         if (L) { r.lureScores = [...(r.lureScores || []).slice(-40), L.score]; pendingLure = L }
         if (!tossOk) r.tossHeld = (r.tossHeld || 0) + 1
       }
-      if (tossOk && near.length && (lying < 1 || gameClock.now() - lastToss > 10000) && gameClock.now() - lastToss > 2500) {
-        if (await tossOut(bot, bo, 'gold_ingot', 1, lureAim)) { r.tossed++; st.traded++; lastToss = gameClock.now(); if (!BF.enabled()) idleSince = gameClock.now(); if (pendingLure) lastLure = { L: pendingLure, t: gameClock.now() } }
+      if (bo.wall) tossOk = tossOk && r.tossed < 6 && gameClock.now() - lastToss > BF.ADMIRE_MS + 2500 && !wallStop()
+      if ((!bo.wall || !ctl.aborted) && tossOk && near.length && (lying < 1 || gameClock.now() - lastToss > 10000) && gameClock.now() - lastToss > 2500) {
+        if (await tossOut(bot, bo, 'gold_ingot', 1, lureAim, bo.wall ? () => !ctl.aborted && !wallStop() : null)) { r.tossed++; st.traded++; lastToss = gameClock.now(); if (!BF.enabled()) idleSince = gameClock.now(); if (pendingLure) lastLure = { L: pendingLure, t: gameClock.now() } }
       }
     }
     // Яма не работает — не жечь золото: приманки не берут или 150 с ни одного броска пиглина.
@@ -625,12 +659,18 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
     await sleep(300)
   }
   // Последние сделки: добыча разглядывающих прилетит через ~6 с.
-  for (let i = 0; settle && i < 16 && !ctl.aborted && gameClock.now() < until; i++) {
-    if (!mobs(bot, 'piglin', 12).some(e => admiring(e))) break
-    await sleep(500)
+  for (let i = 0; settle && i < (bo.wall ? 80 : 16) && !ctl.aborted && gameClock.now() < until; i++) {
+    if (wallStop() || !tradeMobs(bot, 'piglin', 12).some(e => admiring(e))) break
+    await sleep(bo.wall ? 100 : 500)
   }
-  if (settle) await sleep(2500) // задержка подбора и полёт последних бросков
-  } finally { bot._client.removeListener('spawn_entity', onSpawn); bot._client.removeListener('entity_metadata', onMeta); bot.removeListener('playerCollect', onCollect) }
+  if (settle && bo.wall) {
+    for (let t=0;t<2500 && !ctl.aborted;t+=100) { if (wallStop()) break; await sleep(100) }
+  } else if (settle) await sleep(2500) // automatic server pickup in the wall branch
+  } finally {
+    try { if (bo.wall) r.windowClosed = await bo.close() } finally {
+      bot._client.removeListener('spawn_entity', onSpawn); bot._client.removeListener('entity_metadata', onMeta); bot.removeListener('playerCollect', onCollect)
+    }
+  }
   const thrown = {}
   for (const t of throws.values()) if (t.name) thrown[t.name] = (thrown[t.name] || 0) + t.count
   r.thrown = thrown
@@ -656,7 +696,7 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   const dumped = {}
   const where = []
   const ref = pitLike(bo) ? bo.M : bo.W
-  for (const e of ((Object.values(bot.entities) as any[]) as any)) {
+  for (const e of ((observed() as any[]) as any)) {
     if (e.name !== 'item' || !e.position || e.position.distanceTo(O) > 10) continue
     const inDump = bo.dump && Math.floor(e.position.x) === bo.dump.D2.x && Math.floor(e.position.z) === bo.dump.D2.z && e.position.y < bo.P.y
     try {
@@ -682,6 +722,12 @@ async function boothTrade (session, ctl, st, bo, until, { keep = 8, done = () =>
   for (const [n, c] of (Object.entries(r.thrown || {}) as [string, any][])) { tSum += c; dSum += Math.min(c, got[n] || 0) }
   // Доставка по штукам: что из брошенного пиглинами пришло к нам (с выброшенным в свалку).
   r.delivery = tSum ? +(dSum / tSum).toFixed(3) : undefined
+  if (bo.wall) {
+    // Visible-at-spawn receipts are censored: do not train the all-trades delivery model on them.
+    r.observedReceipts = r.barterReceipts; r.observedDelivered = r.barterDelivered
+    r.receiptsPartial = true
+    delete r.barterReceipts; delete r.barterDelivered; delete r.delivery
+  }
   return r
 }
 
@@ -691,9 +737,9 @@ function exitReserveReady (bot, p: any = {}) {
   return process.env.ND_EXIT_KIT === '0' || !(p.obsidian >= 10) || (require('.././nether') as typeof import('.././nether')).exitKit(bot).ready
 }
 
-module.exports = { ownTunnelAt, lavaWatched, barterRound, nextToBlock, bruteComing, walkUnlessBrute, stepCell, tunnelTo, DAMAGE_TYPES, boothAt, boothCandidates, currentPit, pitAt, pitCandidates, catchScore, trapAt, trapCandidates, tradeBreach, tradeExecute, boothTrade, MEMO, exitReserveReady }
+module.exports = { ownTunnelAt, lavaWatched, barterRound, nextToBlock, bruteComing, walkUnlessBrute, stepCell, tunnelTo, DAMAGE_TYPES, boothAt, barterTraders, boothCandidates, currentPit, pitAt, pitCandidates, catchScore, trapAt, trapCandidates, tradeBreach, tradeExecute, boothTrade, MEMO, exitReserveReady }
 export {
   ownTunnelAt, lavaWatched, barterRound, nextToBlock, bruteComing, walkUnlessBrute, stepCell, tunnelTo,
-  DAMAGE_TYPES, boothAt, boothCandidates, currentPit, pitAt, pitCandidates, catchScore, trapAt, trapCandidates,
+  DAMAGE_TYPES, boothAt, barterTraders, boothCandidates, currentPit, pitAt, pitCandidates, catchScore, trapAt, trapCandidates,
   tradeBreach, tradeExecute, boothTrade, MEMO, exitReserveReady
 }

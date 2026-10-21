@@ -1,14 +1,14 @@
 #!/bin/sh
 # Codex сам ведёт проект (пользователь 09.10): полные права, ферма, субагенты; задача — codex-lab/auto-task.md.
 # Ход за ходом продолжает одну сессию (resume), пока нет codex-lab/AUTO-STOP или AUTO-DONE.
-# Только gpt-6.1-sol на max (пользователь 14.10); лимитов нет.
+# Только gpt-6.1-sol на ultra (пользователь 21.10); лимитов нет.
 #   запуск в фоне: см. HANDOFF; стоп: touch codex-lab/AUTO-STOP (ход доработает до конца)
 #   замечание в следующий ход: написать в codex-lab/auto-inbox.md
 P=C:/Users/user/Desktop/work/minecraft-claude
 cd "$P" || exit 1
 L=codex-lab/auto; mkdir -p $L
 OPTS="--skip-git-repo-check -m gpt-6.1-sol --color never --dangerously-bypass-approvals-and-sandbox -C $P"
-OPTS="$OPTS -c model_reasoning_effort=max --enable multi_agent"
+OPTS="$OPTS -c model_reasoning_effort=ultra --enable multi_agent"
 log () { echo "$(date '+%m-%d %H:%M:%S') $*" >> $L/driver.log; }
 # в конце работы драйвера — ферма не должна оставаться поднятой
 farmdown () {

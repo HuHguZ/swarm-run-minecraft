@@ -14,7 +14,7 @@ const NAMES = [
   'look_at', 'emote', 'observe', 'perceive', 'players', 'look', 'mine', 'explore', 'dig_down', 'craft', 'place',
   'flint_grind', 'fight', 'assist', 'team_hint', 'fight_yield', 'temper', 'play_mode', 'flee', 'stronghold',
   'bucket', 'obsidian', 'pack', 'cache', 'animals', 'golem', 'wool', 'trade', 'blaze', 'fortress', 'pearls',
-  'bastion', 'nether_tunnel', 'ne_burrow', 'pen', 'ne_route', 'unstuck', 'dragon', 'shoot', 'throw', 'prep',
+  'bastion', 'nether_tunnel', 'ne_burrow', 'ne_gold_first', 'ne_recover', 'pen', 'ne_route', 'unstuck', 'dragon', 'shoot', 'throw', 'prep',
   'enchant', 'brew', 'kit', 'loot', 'structure', 'auto_loot', 'xp_bottles', 'loot_seen', 'assess', 'ask',
   'slice', 'blocks_around', 'dig_time', 'tunnel', 'mine_seen', 'smelt', 'furnace_take', 'chest_put',
   'chest_take', 'chest_list', 'base', 'stash', 'armor', 'shelter', 'refuge', 'surface', 'recover', 'portal',
@@ -24,7 +24,7 @@ const NAMES = [
 ]
 
 test('daemon RPC: every method name survives the split into rpc/*.ts, each exactly once', () => {
-  assert.equal(new Set(NAMES).size, 139)
+  assert.equal(new Set(NAMES).size, 141)
   const methods = createMethods({ session: {}, cfg: {}, bus: {}, vision: {}, director: {}, gameClock: {}, state: { dangerWatch: null } })
   assert.deepEqual(Object.keys(methods).sort(), [...NAMES].sort())
   for (const name of NAMES) assert.equal(typeof methods[name], 'function', name)

@@ -101,7 +101,7 @@ test('iron memory is consumed before descent or a new drift; MEMORY=0 restores t
     const context:any={process:{env:{ND_OW_IRON_MEMORY:off?'0':undefined}},known:{},state:{inventory:bag,pos:{x:0,y:36,z:0},health:20,food:20},sit:{surface:false,night:false},
       died:false,strategyInterrupted:false,OW_DEEP:false,OW_HEAR:false,ironRuns:0,ironLeg:0,ironBlocked:new Set(),castSurfaceFailed:false,
       PICK_IRON:/iron_pickaxe/,PICK_STONE:/stone_pickaxe/,LOGS:/_log$/,FOOD:/bread/,ARMOR_POINTS:{},ARMOR_SLOT:{},ARMOR_COST:{},fightGearWanted:false,
-      have:counter(bag),portalBuckets:()=>1,lighter:()=>false,weakAndHungry:()=>false,y:()=>36,dim:()=> 'overworld',gearWorth:()=>({missing:false}),
+      have:counter(bag),portalBuckets:()=>1,lighter:()=>false,weakAndHungry:()=>false,owFastTrack:()=>false,fastIronAnchor:async()=>{},earlyFlint:async()=>{},y:()=>36,dim:()=> 'overworld',gearWorth:()=>({missing:false}),
       sense:noop,cook:noop,refresh:noop,recoverGuard:noop,unclutter:noop,spares:noop,lightUp:noop,torches:noop,log(){},woodNow:()=>0,
       smeltAll:async()=>{bag.iron_ingot+=(bag.raw_iron||0);bag.raw_iron=0},spendIron:noop,ironToSmelt:()=>4,
       descend:async()=>{calls.push('descend');throw dig},mobInTheWay:async()=>false,

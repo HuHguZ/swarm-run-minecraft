@@ -1,4 +1,5 @@
 'use strict'
+import { owAirEmergency, owDeathWaterOn, inWater } from './movement/water'
 const gameClock: typeof import('./game-clock') = require('./game-clock')
 // One session owns the hands. AsyncLocalStorage distinguishes a suspended worker,
 // its late continuations, and the reflex, including callbacks created before takeover.
@@ -26,6 +27,31 @@ function clock (s) {
   const st = state(s)
   const owner = context.getStore()?.reflex === st.active && st.active
   return gameClock.now() - st.pausedMs - (st.active && !owner ? gameClock.now() - st.active.startedAt : 0)
+}
+// ND_MAGMA_ESCAPE=1: a passive Shift constraint, never a second movement owner.
+// Narrow exception: only the physical support block and the protective key.
+function magmaSupport (s) {
+  const b = s.bot
+  if (owAirEmergency(b) || owDeathWaterOn(b) && inWater(b) && state(s).active?.source === 'Surface') return false
+  return process.env.ND_MAGMA_ESCAPE === '1' && (b?.health ?? 0) > 0 && !b.vehicle &&
+    b.entity?.onGround && !b.entity.isInLava && b.supportFeature?.('newPlayerInputPacket') &&
+    b.blockAt(b.entity.position.offset(0, -.01, 0))?.name === 'magma_block'
+}
+function keepMagmaSneak (s) {
+  if (!magmaSupport(s)) return false
+  const b = s.bot
+  // The timer may carry an aborted skill context. Borrow only the CURRENT lease
+  // for this one key; ordinary stale actions and packets remain fenced.
+  context.run({ session: s, reflex: state(s).active }, () => {
+    b.setControlState('sneak', true)
+    // Local=true does not prove server Shift. Resend a complete input snapshot.
+    b._client.write('player_input', { inputs: {
+      forward: b.getControlState('forward'), backward: b.getControlState('back'),
+      left: b.getControlState('left'), right: b.getControlState('right'),
+      jump: b.getControlState('jump'), shift: true, sprint: b.getControlState('sprint')
+    } })
+  })
+  return true
 }
 function allowed (s) {
   const st = state(s); const c = context.getStore()
@@ -286,11 +312,13 @@ function install (s) {
         if (process.env.ND_DROP_LOG && name !== 'position' && name !== 'position_look' && name !== 'look' && name !== 'flying') console.log(`[reflex-drop] ${name} — руки у ${state(s).active?.source ?? '-'}${c.op && c.op.epoch !== state(s).epoch ? ', старая эпоха' : ''}${c.ctl?.aborted ? ', навык прерван' : ''}`)
         return
       }
+      // A permitted cleanup/vehicle input must not release server Shift on magma.
+      if (name === 'player_input' && magmaSupport(s)) data = { ...data, inputs: { ...data?.inputs, shift: true } }
       const out = raw.call(this, name, data)
       if (name === 'block_place' && c?.reflex && data?.location) mark(s, 'place')
       return out
     }
   }
 }
-module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb }
-export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb }
+module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, keepMagmaSneak }
+export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, keepMagmaSneak }

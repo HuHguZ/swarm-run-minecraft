@@ -183,8 +183,12 @@ export function lavaSources (bot, radius = 24) {
   // Только источник, открытый сверху (воздух над ним): луч зрения проходит сквозь лаву (у неё пустая коробка), и
   // «видимым» оказывался источник под потолком за первым — черпать его неоткуда (ow-M1 02.10: «видно 1» — источник
   // в 3 клетках за окном под камнем, «не дошёл»).
-  return visibleOf(bot, [id], radius, { max: 80, rays: 1500 })
-    .filter(b => b && levelOf(b) === 0 && isAir(bot.blockAt(b.position.plus(UP))))
+  // ND_CAST_SRC_SKIP=1 — текущая лава и источник под крышей отсеиваются до потолка max/rays: 80 ближних видимых клеток текущей
+  // лавы (лавопад, край озера) иначе вытесняли дальний открытый источник (Codex A 21.10: «не вижу лавы-источника» ×134).
+  const usable = b => b && levelOf(b) === 0 && isAir(bot.blockAt(b.position.plus(UP)))
+  const skip = process.env.ND_CAST_SRC_SKIP === '1' ? p => !usable(bot.blockAt(p)) : null
+  return visibleOf(bot, [id], radius, { max: 80, rays: 1500, skip })
+    .filter(usable)
     .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))
 }
 

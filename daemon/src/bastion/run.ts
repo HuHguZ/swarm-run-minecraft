@@ -5,6 +5,7 @@
 import { log, mobs, seesMob, gameClock, countOf, Vec3, isBaby, BF, clamp, fireRes, worlds, unpackGold, armGold } from './take-gold-block'
 import { MEMO, exitReserveReady, barterRound, DAMAGE_TYPES } from './booth-trade'
 import { goldMode } from './gold-mode'
+import * as HF from './hyp-focus'
 
 export interface BastionRun {
   session: any
@@ -35,6 +36,7 @@ export interface BastionRun {
   vantage?: number
   barterWalks?: number
   minedSinceRetry?: boolean
+  rescanned?: boolean
   // Итог вызова, найденный внутри цикла добычи (прежний return out(…) из while).
   ret?: any
 }
@@ -49,6 +51,9 @@ export function openRun (session, ctl, p: any): BastionRun {
   try { (require('.././ne-guard') as typeof import('.././ne-guard')).attach(session) } catch {}
   goldMode.fastSafe = p.fastSafe === true || process.env.ND_GOLD_FAST_SAFE === '1'
   const t0 = gameClock.now()
+  // ND_BASTION_HYP_FOCUS: откуда тело пришло к бастиону (первый вызов в этом мире) — выход к торговцам вне бастиона для seek
+  // (nbf54-5408: выход штрека — комната стены у брутов, seek «прочь от врагов» и 127 «не сдвинуться»; nbk34-5408 — seek снаружи: 13 жемчуга).
+  if (process.env.ND_BASTION_HYP_FOCUS !== '0' && bot.entity && (bot._ndBastionOrigin?.world !== bot.world)) bot._ndBastionOrigin = { world: bot.world, at: bot.entity.position.floored() }
   const deadline = t0 + clamp(p.timeoutSeconds ?? 400, 30, 1800) * 1000 - 5000
   const mode = p.mode || 'auto'
   const wantPearls = p.pearls ?? 12
@@ -102,6 +107,7 @@ export function report (bx: BastionRun, stopped = null) {
     goldNuggets: countOf(bot, 'gold_nugget') || undefined,
     pit: st.pit || undefined,
     pitTrade: st.pitTrade || undefined,
+    ...(process.env.ND_BARTER_OPEN_SITE === '1' ? {openReturn:st.openReturn,openTiming:st.openTiming,siteChoices:st.siteChoices?.slice(-8),sitePrices:st.sitePrices} : {}),
     barterRetry: BF.enabled() && st.barterRetry ? st.barterRetry : undefined,
     barterPlans: st.plans && st.plans.length ? st.plans.slice(-6) : undefined,
     hurts: st.hurts && st.hurts.length ? st.hurts : undefined,
@@ -128,7 +134,11 @@ export function memoSave (bx: BastionRun) {
   const old = memo || { pred: new Map(), mined: new Set() }
   for (const [k, v] of st.pred) old.pred.set(k, { rank: v.rank, piece: v.piece, pos: { x: v.pos.x, y: v.pos.y, z: v.pos.z } })
   for (const [k] of old.pred) if (!st.pred.has(k)) { const b = bot.blockAt(new Vec3(...(k.split(',').map(Number) as [number, number, number]))); if (b && b.name !== 'gold_block') old.mined.add(k) }
-  MEMO.set(memoKey, { pred: old.pred, mined: old.mined, looted: new Set(st.looted), owner: bot, dimension: worlds.worldOf(bot), own: st.sealedState.own, filled: st.sealedState.filled, exposed: st.sealedState.exposed, entry: st.sealedState.entry, t: gameClock.now() })
+  const S = st.sealedState
+  const openingMemory = process.env.ND_SEALED_OPENING_MEMORY === '1' ? {
+    openings: S.openings, openingFacts: S.openingFacts, openingRetry: S.openingRetry, openingSkips: S.openingSkips
+  } : {}
+  MEMO.set(memoKey, { pred: old.pred, mined: old.mined, looted: new Set(st.looted), owner: bot, dimension: worlds.worldOf(bot), own: S.own, filled: S.filled, exposed: S.exposed, entry: S.entry, ...openingMemory, t: gameClock.now() })
   const CM: typeof import('./cover-memory') = require('./cover-memory')
   const feet = bot.entity.position.floored()
   const current = st.sealedState.own.has(`${feet.x},${feet.y},${feet.z}`) &&
@@ -140,7 +150,19 @@ export function memoSave (bx: BastionRun) {
 export function spare (bx: BastionRun) { return countOf(bx.bot, 'gold_ingot') + 9 * countOf(bx.bot, 'gold_block') - bx.keep }
 // Огнестойкость — плюс, не цель копки (решение пользователя 06.10 22:33): за неё отдаётся уже добытое золото (оно оплачено),
 // но ни копки, ни ожидания ради неё (барьер-модель: слиток стоит 2.4 с торга + 2.5 с копки, FR даёт 0.034 на слиток).
-export function done (bx: BastionRun) { const { bot, p } = bx; return countOf(bot, 'ender_pearl') >= bx.wantPearls && (fireRes(bot) >= bx.wantFire || spare(bx) <= 0) && countOf(bot, 'obsidian') >= bx.wantObs && exitReserveReady(bot, p) }
+export function done (bx: BastionRun) {
+  const { bot, p, st } = bx
+  if (countOf(bot, 'ender_pearl') < bx.wantPearls || countOf(bot, 'obsidian') < bx.wantObs || !exitReserveReady(bot, p)) return false
+  if (fireRes(bot) >= bx.wantFire || spare(bx) <= 0) return true
+  if (process.env.ND_BARTER_FR_PRICE !== '1') return false
+  const tr = st.pitTrade || {}
+  // FR is a priced bonus; neither mine nor move just to fill its target.
+  return BF.plan({ pearls: countOf(bot, 'ender_pearl'), required: bx.wantPearls,
+    gold: Math.max(0, spare(bx)), siteIngots: null,
+    delivered: tr.barterDelivered, thrown: tr.barterReceipts,
+    ...(process.env.ND_BARTER_OPEN_SITE === '1' && st.tradeTiming?.ingots > 0 ? { traded: st.tradeTiming } : tr.barterReceipts > 0 && tr.seconds > 0 ? { traded: { ingots: tr.barterReceipts, seconds: tr.seconds } } : {}),
+    fireRes: { have: fireRes(bot), want: bx.wantFire, valueSeconds: 120 } }).action !== 'trade'
+}
 // Сколько слитков нужно на цели (таблица бартера 1.21.11): жемчуг 0.064 на
 export function goldTarget (bx: BastionRun) {
   const { bot, p, wantPearls, wantObs } = bx
@@ -161,7 +183,7 @@ export function batch (bx: BastionRun) {
   const tr = st.pitTrade || {}
   const d = BF.plan({ pearls: countOf(bot, 'ender_pearl'), required: wantPearls, gold: 0, siteIngots: st.pred.size * 9,
     delivered: tr.barterDelivered, thrown: tr.barterReceipts,
-    ...(st.traded ? { traded: { ingots: st.traded, seconds: tr.seconds || 0 } } : {}),
+    ...(process.env.ND_BARTER_OPEN_SITE === '1' && st.tradeTiming?.ingots > 0 ? { traded: st.tradeTiming } : st.traded ? { traded: { ingots: st.traded, seconds: tr.seconds || 0 } } : {}),
     fireRes: { have: fireRes(bot), want: wantFire, valueSeconds: 120 } })
   st.batch = d.action === 'mine' ? Math.max(9, d.batch) : 9
   ;(st.plans ||= []).push({ round: st.round, action: d.action, batch: d.batch, eSeconds: Math.round(d.eSeconds), pReach: Math.round(d.pReach * 100) / 100, why: d.why })
@@ -171,10 +193,20 @@ export function batch (bx: BastionRun) {
 
 // Пакет копки, конец фазы золота и счётчик бартера — перед заходом (прежние let batchRound/goldPhaseEnd/barterNext).
 export function planGold (bx: BastionRun) {
-  const { p, st, mode, deadline, t0 } = bx
+  const { p, st, mode, deadline, t0, bot } = bx
   st.round = 0
   bx.batchRound = -1
-  st.stopMining = () => mode !== 'gold' && spare(bx) >= (BF.enabled() && st.pred.size && p.gold == null ? batch(bx) : BF.enabled() ? Math.min(144, goldTarget(bx)) : goldTarget(bx))
+  st.stopMining = () => {
+    if (mode === 'gold') return false
+    // ND_BASTION_HYP_FOCUS: золото гипотезы в 16 бл. от тела (гнёзда стены: 12 + 5 блоков в 14 бл. друг от друга) — добрать, а не к торговцам после
+    // первых двух (nbf47-5408: 2 блока к 4.7 мин, потом 20 мин бартера «ни ямы, ни окна» при 12 блоках рядом).
+    if (HF.on() && HF.clusterLeft(bot, st, 16) > 0) return false
+    const target = BF.enabled() && st.pred.size && p.gold == null ? batch(bx) : BF.enabled() ? Math.min(144, goldTarget(bx)) : goldTarget(bx)
+    // Experiment: buy the first trader/delivery observation with two blocks.
+    // При фокусе гипотезы первого пакета (2 блока) нет: торг из штрека встаёт, а ход за торговцами уводит от золота (nbf48-5974).
+    const first = process.env.ND_BARTER_FIRST_BATCH === '1' && !HF.on() && st.sealed && !st.pitTrade && p.gold == null
+    return spare(bx) >= (first ? Math.min(18, target) : target)
+  }
   if (BF.enabled()) st.fastSafe = true
   // Золоту — не больше 60% вызова: остальное — бартер (прогон 2 лаборатории
   // ходил по точкам обзора все 500 с, и на обмен не осталось ни секунды).
@@ -250,6 +282,10 @@ export function closeRun (bx: BastionRun) {
   // Свои клетки бастиона (штрек к золоту и сундукам, яма) — в общую память штреков (и на диск): обратный путь
   // к порталу идёт по ним, а не вскрытием двора (разбор Codex 30.09: 2 смерти на обратном штреке у бастиона).
   try { if (st.sealedState && st.sealedState.own) (require('.././tunnel') as typeof import('.././tunnel')).rememberOwn(session, st.sealedState.own) } catch {}
+  // ND_BASTION_HYP_FOCUS: вход своего штрека (клетка из открытого) — выход к торговцам для pearls seek (nbf50-5408: 108 слитков в
+  // гнезде стены на y35, seek «не сдвинуться с места» ×200 — из закрытого штрека pathfinder наружу не выводил).
+  if (HF.on() && st.sealedState?.entry) bot._ndBastionExit = { world: bot.world, at: { ...st.sealedState.entry } }
+  if (HF.on()) log('выход штрека', { entry: st.sealedState?.entry || null, kept: bot._ndBastionExit?.at || null })
   try { memoSave(bx) } catch {}
 }
 

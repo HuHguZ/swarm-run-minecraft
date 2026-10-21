@@ -187,7 +187,16 @@ function addBridge (mv, opts: any = {}) {
     fwd.call(this, node, dir, neighbors)
     let m = null
     try { m = bridgeMove(this, node, dir, opts) } catch { m = null }
-    if (!m) return
+    if (!m) {
+      // Custom rejected this bridge: do not retain the stock building move that it replaces.
+      if (process.env.ND_LAVA_NAV_GUARD === '1' && /nether/.test(String(this.bot?.game?.dimension))) {
+        for (let i = neighbors.length - 1; i >= n0; i--) {
+          // useOne opens a gate; it does not place a support block.
+          if (neighbors[i].toPlace?.some(p => !p.useOne)) neighbors.splice(i, 1)
+        }
+      }
+      return
+    }
     for (let i = neighbors.length - 1; i >= n0; i--) {
       const o = neighbors[i]
       if (o.x === m.x && o.y === m.y && o.z === m.z) neighbors.splice(i, 1)

@@ -5,7 +5,7 @@ import {
   log, mobs, xyz, goals, walkGoal, gameClock, GOLD_PICK, countOf, Vec3, fullCover, isBaby, clamp, worlds, PLACE, unpackGold,
   keyOf, centerGuess, vantagePoints, goldWorn, armGold
 } from './take-gold-block'
-import { tunnelTo, boothTrade, MEMO, barterRound, lavaWatched } from './booth-trade'
+import { tunnelTo, boothTrade, MEMO, barterRound, lavaWatched, barterTraders } from './booth-trade'
 import { rememberStarts } from './sealed-gold'
 import { buildTrap, prepareBarterCover } from './barter-site'
 import { type BastionRun, report, memoSave } from './run'
@@ -71,6 +71,7 @@ export async function debugRun (bx: BastionRun) {
 // (сундук, блок): броня из него — armGold, торг — после неё. Бартер с принесённым золотом без брони — прежний отказ.
 export async function checkGear (bx: BastionRun) {
   const { session, ctl, p, bot, st, mode } = bx
+  if (process.env.ND_BARTER_TRADER_MEMORY === '1') (require('./trader-memory') as typeof import('./trader-memory')).install(bot)
   if (!(await armGold(session, ctl))) {
     if (mode === 'barter' || !st.sealed) {
       return { ...report(bx, 'без золотой брони пиглины нападают сами (PiglinAi.isWearingSafeArmor: хватит одной вещи) — золотой шлем: 5 слитков'), need: { what: 'golden_helmet', count: 1, have: 0 } }
@@ -95,6 +96,8 @@ export function restoreMemo (bx: BastionRun) {
   // Память между вызовами (кампания зовёт bastion несколько раз): узнанные стены,
   const memoKey = bx.memoKey = rec ? `${Math.round(rec.x)},${Math.round(rec.z)}` : null
   let memo = bx.memo = memoKey && MEMO.get(memoKey)
+  if ((process.env.ND_BASTION_TERRAIN_MEMORY === '1' || process.env.ND_SEALED_OPENING_MEMORY === '1') && memo &&
+      (memo.owner !== bot || memo.dimension !== worlds.worldOf(bot))) memo = bx.memo = null
   if (memo && memo.owner === bot && memo.dimension === worlds.worldOf(bot)) {
     for (const key of memo.looted || []) st.looted.add(key)
   }
@@ -121,6 +124,11 @@ export function restoreMemo (bx: BastionRun) {
     for (const [k, v] of memo.pred) if (!memo.mined.has(k)) st.pred.set(k, { ...v, pos: new Vec3(v.pos.x, v.pos.y, v.pos.z) })
     st.towered = 2
     st.sealedState = { own: memo.own, filled: memo.filled, exposed: memo.exposed, entry: memo.entry, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0 }
+    if (process.env.ND_SEALED_OPENING_MEMORY === '1') {
+      Object.assign(st.sealedState, { openings: memo.openings, openingFacts: memo.openingFacts,
+        openingRetry: memo.openingRetry, openingSkips: memo.openingSkips })
+      for (const [k, until] of memo.openingSkips || []) if (until > gameClock.now()) st.skip.set(k, Math.max(st.skip.get(k) || 0, until))
+    }
     const tradeOwn = mode === 'barter' && memo.own?.size > 0 && memo.entry &&
       bot.entity.position.distanceTo(new Vec3(rec.x, rec.y, rec.z)) < 96
     if (!st.pred.size || tradeOwn) st.sealedDone = true
@@ -160,6 +168,7 @@ export async function barterOnly (bx: BastionRun) {
     }
     near = bot.entity.position.distanceTo(new Vec3(rec.x, rec.y, rec.z)) < 96
   }
+  if (process.env.ND_BARTER_VISIBLE_TRADERS === '1') barterTraders(bot, 64)
   const restored = near && await prepareBarterCover(session, ctl, st, Math.min(deadline - 85000, gameClock.now() + 60000))
   if (!restored || !restored.ok) {
     const refused = restored && restored.ok === false ? restored : undefined
@@ -184,7 +193,7 @@ export async function barterOnly (bx: BastionRun) {
 
 // Золото и сундуки по памяти (карта копии мира — p.knownGold), гипотезы стартов обзора, план точек обзора.
 export function loadMemory (bx: BastionRun) {
-  const { p, bot, st, rec } = bx
+  const { p, bot, st, rec, mode } = bx
   if ((p.knownGold || []).length && !st.knownLoaded) {
     st.knownLoaded = true
     for (const [x, y, z] of p.knownGold) { const v = new Vec3(x, y, z); const b = bot.blockAt(v); if (b && b.name !== 'gold_block' && b.boundingBox === 'empty') continue; const k = keyOf(v); if (!st.pred.has(k)) st.pred.set(k, { pos: v, piece: 'память', rank: 0 }) }
@@ -196,7 +205,8 @@ export function loadMemory (bx: BastionRun) {
   if (st.sealed && !st.noPick && !st.startsRemembered) {
     st.startsRemembered = true
     rememberStarts(bot, st, p.starts || rec?.starts)
-    if (st.pred.size || st.chestSeen.size) st.sealedDone = false
+    // Carried-gold mode must keep the cover confirmed by barterOnly.
+    if ((process.env.ND_BARTER_CARRIED_PHASE !== '1' || mode !== 'barter') && (st.pred.size || st.chestSeen.size)) st.sealedDone = false
   }
   const center = bx.center = rec ? centerGuess(bot, rec) : bot.entity.position.floored()
   const points = bx.points = rec ? vantagePoints(center, center.box) : []

@@ -201,25 +201,57 @@ async function reactBody (session, ctl, opts, h) {
   }
   const step = async work => { const result = await work; active(); return result }
   active()
+  // Also capture the ray before a direct guard call closes the hole (tactics can be off).
+  if (process.env.ND_BRUTE_MEMORY === '1') (require('../brute-memory') as typeof import('../brute-memory')).observe(bot, true)
   const t0 = gameClock.now()
   const hp0 = Math.round(bot.health ?? 0)
   try { bot.pathfinder && bot.pathfinder.setGoal(null) } catch {}
   bot.clearControlStates()
   const foes = meleeFoes(bot, 6)
   const e = h.e
+  const bruteGuard = process.env.ND_BRUTE_GUARD === '1' && e.name === 'piglin_brute'
+  const rest = (options: any) => sit(session, ctl, opts.sitMs ?? 25000, { ...options,
+    ...(bruteGuard ? { swing: false, hitStop: true, safeWhile: () => {
+      const near = meleeFoes(bot, 12)
+      return near.length === 0 || above(bot, near)
+    } } : {}) })
   // Видимые (луч) и тот, кто бьёт: за стеной сущность игроку не видна (AGENTS.md, без рентгена).
   const big = !!opts.hide || bigMelee(bot, meleeFoes(bot, 8).filter((f: any) => f === e || sees(bot, f)), e)
   const out: any = { acted: true, why: h.why, foe: e.name, foes: foes.length, hp0 }
   // Уже на своём столбе над ними (2.5+): рукой не достают — сидеть и бить сверху, а не строить второй столб.
   if (big && above(bot, foes)) {
     out.how = 'столб (уже)'
-    out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { swing: true }))
-    out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
-    log('ответ', out)
-    return out
+    out.sat = await step(rest({ swing: true }))
+    if (!out.sat.danger && !out.sat.hit) {
+      out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
+      log('ответ', out)
+      return out
+    }
   }
   if (big) {
     const f0 = bot.entity.position.floored()
+    // From sight, before native aggro: four blocks take about 40 ticks. Never the answer after a melee hit.
+    if (bruteGuard && e.position.distanceTo(bot.entity.position) >= 15.5 && e.position.y <= bot.entity.position.y + .1 && pillarFits(bot)) {
+      const y0 = bot.entity.position.y
+      const tower = await step((require('../build') as typeof import('../build')).towerUp(bot, ctl, 4,
+        { sneak: true, fast: true, item: guardItem(bot), maxDigMs: 0 }))
+      const near = meleeFoes(bot, 16)
+      if (tower.ok && bot.entity.position.y >= y0 + 3.9 && (!near.length || above(bot, near))) {
+        out.how = 'столб заранее'
+        out.sat = await step(rest({ swing: false }))
+        if (!out.sat.danger && !out.sat.hit) return { ...out, hp: Math.round(bot.health ?? 0) }
+      }
+    }
+    // A melee hit leaves only the next axe cooldown: close physical walls before another jump-place.
+    if (bruteGuard && e.position.distanceTo(bot.entity.position) <= 4.5) {
+      out.box = await step(boxIn(bot, e, { ctl }).catch(err => ({ ok: false, why: err.message })))
+      if (out.box.ok) {
+        out.how = 'коробка от брута'
+        out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { hitStop: true }))
+        if (!out.sat.hit) return { ...out, hp: Math.round(bot.health ?? 0) }
+      }
+      return { ...out, failed: true, reason: 'брут вплотную: укрытие не подтверждено', how: 'укрытие не удержало' }
+    }
     // Нора на 2 вниз в толще — быстрее столба (netherrack железной киркой — доли секунды на клетку) и не рвётся отбрасыванием:
     // с глубины 2 ходячий нас рукой не достаёт, а мы бьём его по ногам с края; третья клетка и пробка — от арбалета. Сцена
     // try-lab-ne-piglin 14.10: столб под ударами «не подпрыгнул» (отбросило из клетки), брут убивал за 3 с в 7 из 8 попыток.
@@ -230,20 +262,22 @@ async function reactBody (session, ctl, opts, h) {
       if (hd.ok) {
         if (opts.onOwn && hd.cells) { try { opts.onOwn(hd.cells) } catch {} }
         out.how = 'нора'
-        out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { swing: !hd.capped }))
+        out.sat = await step(rest({ swing: !hd.capped }))
+        if (bruteGuard && (out.sat.danger || out.sat.hit)) return { ...out, failed: true, reason: 'нора не держит брута' }
         out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
         log('ответ', out)
         return out
       }
     }
     const PH = pillarHeight()
-    if (pillarFits(bot)) {
+    if (!bruteGuard && pillarFits(bot)) {
       const y0 = bot.entity.position.y
       const ti = guardItem(bot)
-      const tw = await step((require('../build') as typeof import('../build')).towerUp(bot, ctl, PH, { sneak: true, ...(ti ? { item: ti } : {}) }).catch(err => ({ ok: false, reason: err.message })))
+      const tw = await step((require('../build') as typeof import('../build')).towerUp(bot, ctl, PH, { sneak: true, ...(bruteGuard ? { fast: true, maxDigMs: 0 } : {}), ...(ti ? { item: ti } : {}) }).catch(err => ({ ok: false, reason: err.message })))
       if (bot.entity.position.y >= y0 + PH - 0.1) {
         out.how = 'столб'
-        out.sat = await step(sit(session, ctl, opts.sitMs ?? 25000, { swing: true }))
+        out.sat = await step(rest({ swing: true }))
+        if (bruteGuard && (out.sat.danger || out.sat.hit)) return { ...out, failed: true, reason: 'столб не держит брута' }
         bot.setControlState('sneak', false)
         // Врагов в 8 нет — слезть (копать столб под собой), иначе дальше план со столба.
         if (!meleeFoes(bot, 8).length && !ctl.aborted) { try { out.down = (await step((require('../pearls') as typeof import('../pearls')).pillarDown(bot, ctl, session.mcData, f0))).ok } catch {} }
@@ -276,6 +310,7 @@ async function reactBody (session, ctl, opts, h) {
         const bd = await step(boxIn(bot, e, { diag: true, ctl }).catch(err => ({ ok: false, why: err.message })))
         out.boxDiag = bd
         if (bd.ok) out.sat2 = await step(sit(session, ctl, opts.sitMs ?? 25000, { hitStop: true }))
+        if (bruteGuard && (!bd.ok || out.sat2?.hit)) return { ...out, failed: true, reason: 'коробка не держит брута' }
         if ((!bd.ok || out.sat2?.hit) && !ctl.aborted) { out.last = await step(duel(session, ctl, e, 20000, { crowdOk: true, lastStand: true }).catch(err => ({ error: err.message }))); out.how = 'коробка → бой' }
       }
       out.hp = Math.round(bot.health ?? 0); out.s = Math.round((gameClock.now() - t0) / 1000)
@@ -283,6 +318,7 @@ async function reactBody (session, ctl, opts, h) {
       return out
     }
   }
+  if (bruteGuard) return { ...out, failed: true, reason: 'от брута нет подтверждённого укрытия', how: 'укрыться не вышло' }
   out.how = 'бой'
   const f: any = await step(duel(session, ctl, e, opts.duelMs ?? 15000, { crowdOk: big }).catch(err => ({ error: err.message })))
   out.duel = f

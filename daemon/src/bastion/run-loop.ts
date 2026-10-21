@@ -13,6 +13,7 @@ import { bruteDefense, hunker, answerAttack } from './defense'
 import { rememberStarts, sealedGold, digToPredicted } from './sealed-gold'
 import { type BastionRun, type Turn, report, spare, done, goldTarget, goldReady, tryBarter, miningSnapshot } from './run'
 import { stepTunnelBarter } from './run-trade'
+import * as HF from './hyp-focus'
 
 const MINE_STEPS: ((bx: BastionRun) => Turn | Promise<Turn>)[] = [
   stepSafe, stepEntry, stepTunnelBarter, stepBarterBetween, stepGoldOver, stepSealed,
@@ -22,6 +23,7 @@ const MINE_STEPS: ((bx: BastionRun) => Turn | Promise<Turn>)[] = [
 export async function mineLoop (bx: BastionRun) {
   const { ctl, deadline } = bx
   turn: while (!ctl.aborted && gameClock.now() < deadline - 12000) {
+    await new Promise<void>(resolve => setImmediate(resolve)) // оборот без ввода-вывода не держит пакеты (см. sealedGold)
     for (const step of MINE_STEPS) {
       const r = await step(bx)
       if (r === 'stop') break turn
@@ -45,16 +47,39 @@ async function stepSafe (bx: BastionRun): Promise<Turn> {
 async function stepEntry (bx: BastionRun): Promise<Turn> {
   const { session, ctl, bot, st, mode, deadline } = bx
   if (st.sealed && mode !== 'barter' && (require('.././nether-cover') as typeof import('.././nether-cover')).blind() && !st.entryDone) {
+    // ND_BASTION_HYP_FOCUS: старт подтверждён двумя видами — сразу цели этой гипотезы планом штрека (без хода к метке E нижней
+    // стены: nbs41-5408 — 40 вызовов «пол забоя не встал»/«устье в пещеру» на шве стен при верном старте).
+    const confirmed = HF.on() && (require('./entry-route') as typeof import('./entry-route')).memory(bot).confirmed
+    if (confirmed && !HF.refutedOf(bot).hyps.has(HF.hypKey(confirmed))) {
+      st.entryDone = true
+      st.pred.clear(); st.pieces = []
+      for (const [k, c] of st.chestSeen) if (c.pred) st.chestSeen.delete(k)
+      rememberStarts(bot, st, [confirmed])
+      st.entryRoute = { ok: false, start: confirmed, why: 'старт подтверждён — к целям гипотезы' }
+      st.sealedDone = false
+      return
+    }
     const entry = await (require('./entry-route') as typeof import('./entry-route')).approach(session, ctl, st, deadline)
     if (entry.handled) {
       st.entryRoute = { ok: entry.ok, start: entry.start, entry: entry.entry, why: entry.why }
-      if (entry.ok && entry.start) {
+      if ('recognized' in entry && entry.recognized) {
+        st.entryDone = true
+        st.pred.clear(); st.pieces = []
+        for (const [k,c] of st.chestSeen) if (c.pred) st.chestSeen.delete(k)
+        rememberStarts(bot, st, [entry.recognized])
+        st.entryRoute = { ok: false, start: entry.recognized, why: entry.why }
+        st.sealedDone = false
+      } else if (entry.ok && entry.start) {
         st.entryDone = true
         st.pred.clear(); st.pieces = []
         for (const [k,c] of st.chestSeen) if (c.pred) st.chestSeen.delete(k)
         rememberStarts(bot, st, [entry.start])
         st.sealedDone = false
       } else if (entry.progress) return 'next'
+      // ND_BASTION_ENTRY_ON=1: вход по второму виду не вышел без продвижения («на открытом: ни вниз, ни в стену» — 6 вызовов 16.10,
+      // ne01-s13 21.10: весь заход кончался за 0 с, граф уходил к эндерменам) — не конец захода, а дальше по шагам: закрытый
+      // штрек к гипотезам, двор в золоте, вышка-обзор, точки обзора.
+      else if (process.env.ND_BASTION_ENTRY_ON === '1') { st.entryDone = true; log('вход по второму виду не вышел — дальше другими шагами', { why: entry.why }) }
       else { bx.ret = report(bx, entry.why || 'housing: второго вида или закрытого пути к стене пока нет'); return 'stop' }
     }
   }
@@ -112,11 +137,14 @@ async function stepSealed (bx: BastionRun): Promise<Turn> {
     if (blind && !st.pred.size && !st.chestSeen.size) {
       const pg = await predictGoldAsync(bot, 56, ctl)
       rememberStarts(bot, st, pg.start?.all)
-      for (const g of pg.gold) { const k = keyOf(g.pos); if (!st.pred.has(k)) st.pred.set(k, { pos: g.pos, piece: g.piece, rank: g.rank, wall: g.wall }) }
+      if (!HF.on()) for (const g of pg.gold) { const k = keyOf(g.pos); if (!st.pred.has(k)) st.pred.set(k, { pos: g.pos, piece: g.piece, rank: g.rank, wall: g.wall }) }
     }
     const chestsLeft = st.lootChests && [...st.chestSeen.keys()].some(k => !st.looted.has(k))
     const goldLeft = !st.chestsOnly && (st.pred.size > 0 || st.gold.size > 0)
-    if (!blind && !goldLeft && !chestsLeft && st.towered < 3 &&
+    // ND_BASTION_BLIND_TOWER=1: вслепую в золоте — тоже вышка-обзор (как человек: подняться и посмотреть на бастион сверху), если
+    // брута не видно в 16; без неё вслепую «бастион не узнан» с 1 бл. от стены (nbs07e 21.10: hypotheses 0, заход кончился).
+    const blindTower = blind && process.env.ND_BASTION_BLIND_TOWER === '1' && goldWorn(bot) && !mobs(bot, 'piglin_brute', 16).some(e => seesMob(bot, e))
+    if ((!blind || blindTower) && !goldLeft && !chestsLeft && st.towered < 3 &&
         (!st.lastTower || st.lastTower.distanceTo(bot.entity.position) >= 4)) {
       st.towered++
       await towerScan(session, ctl, st)
@@ -142,6 +170,13 @@ async function stepSealed (bx: BastionRun): Promise<Turn> {
       // Золото карты осталось — ходом по сетке к каждому (ND_GOLD_ROUTE=1).
       if (!(require('.././nether-cover') as typeof import('.././nether-cover')).blind() && process.env.ND_GOLD_ROUTE === '1' && st.pred.size && !ctl.aborted) st.routeGold = await routeGold(session, ctl, st, mode === 'gold' ? deadline : Math.max(gameClock.now() + 60000, deadline - 200000))
       bx.minedSinceRetry = miningCycle.miningProgress(beforeMining, miningSnapshot(bx))
+      // ND_BASTION_HYP_FOCUS: штрек встал (стопы, кирки), а гнездо золота гипотезы в 16 бл. — ещё заход штрека (до 3 за вызов),
+      // а не конец фазы золота и бартер с первыми блоками.
+      if (HF.on() && !ctl.aborted && HF.clusterLeft(bot, st, 16) > 0 && (st.reentered = (st.reentered || 0) + 1) <= 3) {
+        if (st.sealedState) st.sealedState.fails = []
+        log('штрек: гнездо золота рядом — ещё заход', { left: HF.clusterLeft(bot, st, 16), n: st.reentered, mined: bx.minedSinceRetry })
+        return 'next'
+      }
       st.sealedDone = true
       bx.goldPhaseEnd = gameClock.now()
       return 'next'
@@ -248,7 +283,8 @@ async function stepTower (bx: BastionRun): Promise<Turn> {
 
 async function stepPredicted (bx: BastionRun): Promise<Turn> {
   const { session, ctl, bot, st } = bx
-  const pt = [...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now())
+  if (HF.on()) HF.focus(st)
+  const pt = [...st.pred.entries()].filter(([k, v]) => (st.skip.get(k) || 0) < gameClock.now() && HF.predAllowed(st, v))
     .map(([k, v]) => ({ k, pos: v.pos, rank: v.rank || 0, d: v.pos.distanceTo(bot.entity.position) })).sort((a, c) => (a.rank - c.rank) || (a.d - c.d))[0]
   if (pt) {
     bx.idle = 0

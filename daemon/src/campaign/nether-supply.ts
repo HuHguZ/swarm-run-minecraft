@@ -31,7 +31,19 @@ const woodWithSticks = (state: NetherSupplyState): number => wood(state) + Math.
 // Доски и верстак нужны для пополнения, а не для использования уже готовых кирок.
 // Когда фактический запас взмахов покрывает задачу, будущий крафт не задерживает путь.
 export function netherToolsReady(state: NetherSupplyState): boolean {
-  return pick(state) && state.pickSwings >= 260
+  if (!pick(state)) return false
+  if (state.pickSwings >= 260) return true
+  // ND_NE_TOOLS_SOFT=1 (поток ne 21.10, выкл.): 260 взмахов — запас, а не ворота (правило гибкости). Кирку из принесённого не сделать
+  // (нет палок/досок, верстака или камня), а взмахов ≥ 100 — готово: поход за стеблями по открытому Аду крутил этап AcquireNetherTools
+  // до конца прогона (c94-int16-s22: 246/260, 67 mine + 35 explore за 45 мин; b86-int6-s20 47 ходов, int11-s22 42, int4-s22 31).
+  return process.env.ND_NE_TOOLS_SOFT === '1' && state.pickSwings >= 100 && !pickCraftable(state)
+}
+// Кирка крафтится из принесённого сейчас, без похода за деревом: палки (или доска на палки), камень/железо, верстак (или 4 доски).
+function pickCraftable(state: NetherSupplyState): boolean {
+  const sticks = quantity(state, /^stick$/) >= 2 || planks(state) >= 1
+  const head = stone(state) >= 3 || quantity(state, /^iron_ingot$/) >= 3
+  const table = quantity(state, /^crafting_table$/) > 0 || planks(state) >= 4 + (quantity(state, /^stick$/) >= 2 ? 0 : 1)
+  return sticks && head && table
 }
 
 export async function replenishNetherTools(port: NetherSupplyPort): Promise<NetherSupplyResult> {

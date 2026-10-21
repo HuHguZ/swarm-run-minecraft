@@ -20,6 +20,8 @@ const gameClock: typeof import('../../src/game-clock') = require('../../src/game
 //   MAP=1 — знание карты Ада «из копии этого же мира» (как у основного тела, AGENTS.md): бастионы с золотом и сундуками,
 //   крепость и спавнер — в память тела (fortress mode=map) до старта часов; снимает try-lab-ne-map.js с правды фермы.
 //   MAP_BASTIONS=2 — сколько ближних бастионов дать (порядок: сокровищница последней).
+//   UNTIL=rods (поток blz, 21.10) — кусок «вход в Ад → стержни на EYES очей → живой наверху» (с STAGES=nether: после стержней
+//   кампания сама идёт домой через портал и кончает запуск); ok = стержней ≥ ⌈EYES/2⌉, ни одной смерти, тело в верхнем мире.
 //   STAGES=nether — только эти этапы кампании (кусок «крепость» от портала); KIT=post — std + то, что даёт бартер моста
 //   (лук, 64 стрелы, 3 зелья огнестойкости, 11 жемчуга) — набор «после бастиона».
 //   REUSE_ENTRY=1 — подготовка повторного мира у фактического портала памяти; ROUTE_DIAGNOSTIC=1 — один ход к бастиону, 240 с.
@@ -82,7 +84,32 @@ const KITS = {
   contract: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'cooked_mutton 8',
     'cobblestone 64', 'crafting_table'],
   contractgold: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
-    'cooked_mutton 8', 'cobblestone 64', 'crafting_table']
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table'],
+  // contractgoldfr — то же + 2 зелья огнестойкости (бартер бастиона удался — FR бонус): мерка остального куска крепости (поиск, подход,
+  // возврат), когда бой у спавнера идёт с FR (поток blz 21.10: с FR 7 стержней за 88 с, без — 0 из 33 сцен).
+  contractgoldfr: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 2'],
+  // contractgoldfrst — contractgoldfr + 4 палки (2 доски верхнего мира): 2 каменные кирки из булыжника набора (+262 взмаха) — мерка
+  // цены «кирки кончились» в поиске крепости (blz 21.10: кирки съедены в 5 из 9 провалов bz09/bz11).
+  contractgoldfrst: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table', 'stick 4', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 2'],
+  // contractgoldfrst8 — то же с 8 палками: ND_OW_NETHER_STICKS (по умолчанию с 21.10 06:30, speedrun-defaults) кладёт в набор Ада 8 палок
+  // (1 бревно) — 4 каменные кирки из булыжника набора (blz 21.10).
+  contractgoldfrst8: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table', 'stick 8', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 2'],
+  // postbastion / postbastion2 — настоящий вход в Ад полного прохода (координатор 21.10, int7-s20-1: ведро воды, каменные кирка/топор/меч,
+  // огниво, булыжник 107, палки 11, еда 8, верстак) после бастиона ne: + золотые ботинки и 1 или 2 зелья FR с бартера. Без железа и щита.
+  // Каменных кирок 2: сцена требует на входе ≥ 260 взмахов (netherToolsReady), одна каменная — 131.
+  postbastion: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_mutton 8',
+    'crafting_table', 'golden_boots', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 1'],
+  postbastion2: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_mutton 8',
+    'crafting_table', 'golden_boots', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 2'],
+  // postbastionsh — postbastion + щит (1 слиток + 6 досок верхнего мира, blz 21.10): цена щита в наборе против иссушителей и шаров.
+  postbastionsh: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_mutton 8',
+    'crafting_table', 'golden_boots', 'shield', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 1'],
+  // contractarmor — contractgold + железные шлем и нагрудник (13 слитков верхнего мира), без FR: бой у спавнера в броне забега (blz 21.10).
+  contractarmor: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'iron_helmet', 'iron_chestplate', 'cooked_mutton 8', 'cobblestone 64', 'crafting_table']
 }
 const KIT = KITS[KIT_NAME]
 if (!KIT) { console.error(`KIT=${KIT_NAME}: жду ${Object.keys(KITS).join(', ')}`); process.exit(1) }
@@ -198,13 +225,23 @@ async function nrBody (nr: NeRun) {
   await setup()
   // Портал верхнего мира — сам (этап portal кампании: тот же RPC), кровать у него — точка возрождения (этап prep).
   nr.pr = null
-  for (let k = 0; k < 3; k++) {
+  const p0 = (await status()).pos || { x: 0, z: 0 }
+  let moves = 0
+  for (let k = 0; k < 5; k++) {
     nr.pr = await call('portal', { timeoutSeconds: 240 }).catch(e => ({ status: 'failed', error: e.message }))
     const st = await status()
-    if ((nr.pr.detail && (nr.pr.detail.lit || nr.pr.detail.built)) || /горит/.test(JSON.stringify(nr.pr))) break
+    console.log('портал подготовки, попытка', k + 1, JSON.stringify(nr.pr).slice(0, 240))
+    if ((nr.pr.detail && nr.pr.detail.lit) || /горит/.test(JSON.stringify(nr.pr))) break
     if (st.dimension !== 'overworld') break
     // «Обсидиан принеси» (рама начата, обсидиан ушёл в неё/выпал: neF-B10f23-1 03.10) — подготовка: выдать ещё.
-    if (/обсидиан принеси|нет обсидиана|не хватает обсидиана/.test(JSON.stringify(nr.pr))) { await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await sleep(800) }
+    if (/обсидиан принеси|нет обсидиана|не хватает обсидиана/.test(JSON.stringify(nr.pr))) { await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await sleep(800); continue }
+    // Место у спавна не годится под раму (лес, песок — bz01-s18-1 21.10: «портала с безопасным местом нет», сцена кончилась кодом 1) —
+    // постановка: другое место на поверхности в 12 бл., как у try-lab-end.
+    moves++
+    console.log('портал подготовки не встал:', JSON.stringify(nr.pr).slice(0, 240), '— другое место')
+    await kit.cmd(`/spreadplayers ${Math.round(p0.x + 12 * Math.sin(moves * 2.1))} ${Math.round(p0.z + 12 * Math.cos(moves * 2.1))} 0 4 false @s`)
+    await sleep(2500)
+    await kit.cmd('/give @s minecraft:obsidian 10'); await kit.cmd('/give @s minecraft:flint_and_steel'); await sleep(800)
   }
 }
 
@@ -512,6 +549,7 @@ async function nrWatch (nr: NeRun) {
       }
       if (cnt(inv, /^gold_block$/) || cnt(inv, /^gold_ingot$/) >= 9) nr.mark('gold')
       if (nr.best.rods >= 7) nr.mark('rods7')
+      if (nr.best.rods >= Math.ceil(nr.eyesNeed() / 2)) nr.mark('rodsNeed')
       if (nr.best.pearls >= 10) nr.mark('pearls10')
       if (nr.best.eyes >= 10) nr.mark('eyes10')
       if (nr.best.fireResistancePotions > 0 || nr.best.fireResistanceObserved) nr.mark('fireResistance')
@@ -549,7 +587,13 @@ async function nrFinish (nr: NeRun) {
   // Бот вне игры — stop и пауза по игровым часам не кончаются (s1c-F-17 06.10: сцена висела 27 мин после выхода кампании).
   try { await wallCap(call('stop'), 10000) } catch {}
   await Promise.race([sleep(1500), gameClock.wall.sleep(1500)])
-  const s = await status()
+  let s = await status()
+  // Кампания в конце сама отключает тело («кампания завершена — бот отключён») — итог читается по снова подключённому телу:
+  // рюкзак и место хранит сервер (bz09-s17-1 21.10: 7 стержней дома, а итог «стержни 0», статус пуст).
+  if (!s.dimension) {
+    await wallCap(call('connect', { bootstrapPaused: true }).catch(() => null), 20000)
+    for (let i = 0; i < 10 && !s.dimension; i++) { await gameClock.wall.sleep(500); s = await status() }
+  }
   let text = ''
   try { text = fs.readFileSync(nr.clog, 'utf8') } catch {}
   const facts = campaignFacts(text)
@@ -560,6 +604,8 @@ async function nrFinish (nr: NeRun) {
   const passFinal = netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deaths.length, inventory: inv, eyesNeed: nr.eyesNeed() })
   const passNow = nr.netherPassAt !== null && deaths.length === 0 && (!nr.UNTIL_NETHER || passFinal)
   if (nr.UNTIL_NETHER) nr.ok = passNow
+  if (process.env.UNTIL === 'rods') nr.ok = deaths.length === 0 && (s.health ?? 0) > 0 && s.dimension === 'overworld' &&
+    cnt(inv, /^blaze_rod$/) + Math.floor(cnt(inv, /^blaze_powder$/) / 2) >= Math.ceil(nr.eyesNeed() / 2)
   if (deaths.length) nr.stoppedBy = `смертей ${deaths.length}`
   const bastions = bastionMetrics(text)
   let explicitBarters = []

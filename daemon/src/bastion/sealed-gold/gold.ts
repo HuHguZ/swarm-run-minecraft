@@ -2,6 +2,8 @@
 // Штрек к золоту бастиона (sealedGold) — у цели: что под рукой (сундук, не золото), можно ли ломать (окно 1×1, кто видит),
 // ломка, подбор и заделка. Порядок — SG_STEPS в bastion/sealed-gold.ts.
 import { foesNear } from '../tower-scan'
+import * as goldEvidence from '../gold-evidence'
+import * as HF from '../hyp-focus'
 import { log, sleep, mobs, seesMob, gameClock, angerSet, countOf, fullCover, isBaby, raySees, pickUp } from '../take-gold-block'
 import * as miningCycle from '../mining-cycle'
 import { goldWindowOk } from '../brute-risk'
@@ -18,9 +20,21 @@ export async function sgArrive (sg: SealedRun, tk: SealTick): Promise<Turn> {
 export async function sgChest (sg: SealedRun, tk: SealTick): Promise<Turn> {
   const { session, ctl, st } = sg
   if (tk.t.chest) {
+    const guarded = process.env.ND_SEALED_FLUID_GUARD === '1'
+    if (guarded) {
+      const eyes: typeof import('../../perception/eyes') = require('../../perception/eyes')
+      const seen = eyes.seesNow(sg.bot, tk.t.pos)
+      const chest = seen ? sg.bot.blockAt(tk.t.pos, false) : null
+      if (!chest || !/^(chest|trapped_chest|barrel)$/.test(chest.name)) {
+        if (seen) { HF.judgeChest(sg.bot, st, st.chestSeen.get(tk.t.k), chest?.name || 'air'); st.chestSeen.delete(tk.t.k) }
+        else st.skip.set(tk.t.k, routeRetryAt(60000))
+        log('штрек: сундук не подтверждён — крышу не вскрываю', { at: tk.t.k, block: chest?.name || 'не виден' })
+        return 'next'
+      }
+    }
     // Сундук из штрека: нас не видит никто — открыть не злит (ChestBlock: злит видящих).
     let took = null
-    try { took = await (require('../../structures') as typeof import('../../structures')).takeWorth(session, ctl, tk.t.pos, { kind: 'bastion' }) } catch (e) { took = { error: e.message } }
+    try { took = await (require('../../structures') as typeof import('../../structures')).takeWorth(session, ctl, tk.t.pos, { kind: 'bastion', ...(guarded ? { visibleOnly: true, stay: true } : {}) }) } catch (e) { took = { error: e.message } }
     if (miningCycle.confirmedChestLoot(took, tk.t.pos, ctl.aborted)) st.looted.add(tk.t.k)
     else st.skip.set(tk.t.k, routeRetryAt(60000))
     st.chests.push({ at: tk.t.k, took: (took && took.took) || {}, stopped: took && (took.stopped || took.error) })
@@ -37,9 +51,12 @@ export async function sgMissing (sg: SealedRun, tk: SealTick): Promise<Turn> {
   if (!b || b.name !== 'gold_block') {
     // Стоим вплотную и видим: не золото — промах гипотезы этого ранга.
     const rank = (st.pred.get(tk.t.k) || {}).rank
+    if (goldEvidence.on() && b && b.boundingBox === 'block' &&
+        (require('../../perception/eyes') as typeof import('../../perception/eyes')).seesNow(bot, tk.t.pos)) goldEvidence.observedGold(st, tk.t.k, b.name)
+    if (b && (require('../../perception/eyes') as typeof import('../../perception/eyes')).seesNow(bot, tk.t.pos)) HF.judgeGold(bot, st, st.pred.get(tk.t.k), b.name)
     st.pred.delete(tk.t.k)
     st.predWrong = (st.predWrong || 0) + 1
-    if (b && b.boundingBox === 'block') {
+    if (!goldEvidence.on() && b && b.boundingBox === 'block') {
       st.rankMiss = st.rankMiss || {}
       st.rankMiss[rank] = (st.rankMiss[rank] || 0) + 1
       if (st.rankMiss[rank] >= 2) for (const [k, v] of [...st.pred.entries()]) if (v.rank === rank || (rank >= 100 && rank % 100 === 0 && Math.floor((v.rank || 0) / 100) === rank / 100)) st.pred.delete(k)
@@ -116,6 +133,8 @@ export async function sgWindow (sg: SealedRun, tk: SealTick): Promise<Turn> {
 export async function sgTake (sg: SealedRun, tk: SealTick): Promise<Turn> {
   const { bot, session, ctl, st, S, SL, dimension } = sg
   const had = countOf(bot, 'gold_block')
+  const observed = goldEvidence.on() && bot.blockAt(tk.t.pos)?.name === 'gold_block' &&
+    (require('../../perception/eyes') as typeof import('../../perception/eyes')).seesNow(bot, tk.t.pos)
   const Drops: typeof import('../../drops') = require('../../drops')
   const pickupMark = st.fastSafe ? Drops.pickupMark(bot) : null
   bot.setControlState('sneak', true)
@@ -123,18 +142,21 @@ export async function sgTake (sg: SealedRun, tk: SealTick): Promise<Turn> {
   try { dr = await SL.digCell(bot, tk.t.pos, { allowGuard: true }) } finally { bot.setControlState('sneak', false) }
   if (dr !== 'ok') { st.skip.set(tk.t.k, routeRetryAt(60000)); log('штрек: золото не ломается', { at: tk.t.k, r: dr }); return 'next' }
   S.own.add(tk.t.k)
+  if (observed) goldEvidence.observedGold(st, tk.t.k, 'gold_block')
   st.pred.delete(tk.t.k)
   st.blocks++
-  st.lastBreak = gameClock.now()
+  st.lastBreak = bot._ndGoldBreakAt = gameClock.now()
   // Гипотеза подтверждена (3 золота на местах шаблона) — соседние гипотезы
   // других рангов (та же стена со сдвигом на блок) снять.
   const rk = tk.hit.rank ?? 0
   st.rankHit = st.rankHit || {}
-  st.rankHit[rk] = (st.rankHit[rk] || 0) + 1
-  if (st.rankHit[rk] >= 3) {
+  if (!goldEvidence.on()) st.rankHit[rk] = (st.rankHit[rk] || 0) + 1
+  if (!goldEvidence.on() && st.rankHit[rk] >= 3) {
     const mine = [...(st.predAll || [])].filter(q => q.rank === rk)
     for (const [k, v] of [...st.pred.entries()]) if (v.rank !== rk && mine.some(q => q.pos.distanceTo(v.pos) <= 2.5)) st.pred.delete(k)
   }
+  // Тот же сторож — и для повторного подбора после заплатки (угроза, тело не в воздухе или без опоры — не подбирать).
+  let pickupSafe = () => false
   if (st.fastSafe) {
     const Pack: typeof import('../../pack') = require('../../pack')
     const safePickup = () => {
@@ -143,11 +165,21 @@ export async function sgTake (sg: SealedRun, tk: SealTick): Promise<Turn> {
       const body = SL.bodyCells(bot)
       if (body.some(cell => SL.classOf(bot.blockAt(cell)) !== SL.AIR) ||
         !fullCover(bot.blockAt(body[0].offset(0, -1, 0)))) return false
-      return !(require('../../ne-guard') as typeof import('../../ne-guard')).hot(bot, { near: 6 }) && !foesNear(bot, 6).length
+      // Злые пиглины — не повод бросать слиток у тела: ломка золота злит всех в 16 (PiglinAi.angerNearbyPiglins), и подбор обрывался
+      // сразу после ломки (c92-int10-s21: 12 «не подтверждён», 0 из 15 блоков; сцена nbp96 — окно y49 при пиглинах рядом, гнездо y35 без
+      // них — 8 из 9). Подбор — без шага, дыра 1×1 под заплатку: мечник через клетку не достаёт. Злой пиглин вплотную (≤ 2.5) и бруты/
+      // хоглины в 6 — по-прежнему стоп.
+      const me = bot.entity.position
+      return !(require('../../ne-guard') as typeof import('../../ne-guard')).hot(bot, { near: 6 }) &&
+        !foesNear(bot, 6).some((e: any) => e.name !== 'piglin' || e.position.distanceTo(me) <= 2.5)
     }
+    pickupSafe = safePickup
     const match = (_entity, stack) => stack?.name === 'gold_block'
     const candidates = Drops.lying(bot, { from: tk.t.pos, radius: 3, match })
-    const receipt = { at: tk.t.k, picked: 0, received: 0, gained: 0, why: '' }
+    const me0 = bot.entity.position
+    const near0 = candidates.map(it => Math.round(Math.hypot(it.rest.x - me0.x, it.rest.z - me0.z) * 10) / 10)
+    const receipt: any = { at: tk.t.k, picked: 0, received: 0, gained: 0, why: '', free: bot.inventory?.emptySlotCount?.(), stacks: candidates.length, d: near0.slice(0, 3),
+      inFrame: candidates.filter(it => Drops.inPickup(me0, it.rest)).length }
     if (!safePickup()) receipt.why = 'подбор отложен: угроза или текущая клетка без подтверждённого воздуха и опоры'
     else if (!candidates.some(it => Drops.inPickup(bot.entity.position, it.rest))) receipt.why = 'подбор: нет подтверждённой стопки в рамке тела'
     else {
@@ -173,6 +205,13 @@ export async function sgTake (sg: SealedRun, tk: SealTick): Promise<Turn> {
     }
     S.own.delete(tk.t.k); S.fills++; (S.filled || (S.filled = new Set())).add(tk.t.k)
     S.exposed = SL.exposure(bot, S.own).length > 0
+    // Слиток не взят до заплатки — заплатка выталкивает предмет из клетки в ближайшую свободную (Entity.moveTowardsClosestSpace), часто
+    // в наш штрек: подобрать ещё раз (c92-int10-s21: 15 блоков сломано, 12 «подбор не подтверждён», в рюкзаке 0).
+    const goldMatch = (_e, stack) => stack?.name === 'gold_block'
+    if (countOf(bot, 'gold_block') <= had && !ctl.aborted && pickupSafe() && Drops.lying(bot, { from: tk.t.pos, radius: 3, match: goldMatch }).length) {
+      const again = await Drops.collect(bot, ctl, { from: tk.t.pos, radius: 3, match: goldMatch, appearMs: 0, timeoutMs: 1500, allowMovement: false, canContinue: pickupSafe }).catch(() => 0)
+      log('штрек: подбор после заплатки', { at: tk.t.k, picked: again, gained: Math.max(0, countOf(bot, 'gold_block') - had) })
+    }
   }
   if (!st.fastSafe) {
     for (let i = 0; i < 15 && countOf(bot, 'gold_block') <= had; i++) await sleep(100)

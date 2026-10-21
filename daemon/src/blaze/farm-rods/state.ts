@@ -42,6 +42,7 @@ export interface RodsFarm {
   bail: boolean
   fled: any
   dugIn: any
+  retrace?: any
   radius: number
   rods0: number
   short: number

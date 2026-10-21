@@ -2,11 +2,12 @@
 // Штрек к золоту бастиона (sealedGold) — шаги оборота до плана: тело, лава, удары, хп и еда, золотая броня, страж Ада,
 // кирки; цели оборота (предсказанное золото и сундуки). Порядок — SG_STEPS в bastion/sealed-gold.ts.
 import { foesNear, FOES_RE } from '../tower-scan'
-import { log, gameClock, inLava, lavaEscape, lavaEscapeDeep, inOwnTunnel, GOLD_PICK, makeIronPick, countOf, armGold } from '../take-gold-block'
+import { log, mobs, seesMob, gameClock, inLava, lavaEscape, lavaEscapeDeep, inOwnTunnel, GOLD_PICK, makeIronPick, countOf, armGold } from '../take-gold-block'
 import { eatIfHungry } from '../predict-gold'
 import { targetsByBruteHome } from '../brute-risk'
-import { hunker, answerAttack } from '../defense'
+import { hunker, answerAttack, bruteDefense } from '../defense'
 import { type SealedRun, type SealTick, type Turn, chestTargets } from './state'
+import * as HF from '../hyp-focus'
 
 const GOLD_ARMOR_RE = /\bgolden_(helmet|chestplate|leggings|boots)\b/
 
@@ -17,9 +18,14 @@ export async function sgVitals (sg: SealedRun): Promise<Turn> {
   if (inLava(bot)) { if (!(await lavaEscape(bot))) await lavaEscapeDeep(bot); return 'next' }
   // Злые пиглины у вскрытого хода (золото касалось двора): сперва ответить — neF-map23-3 02.10: 4 удара и стрела
   // за 5 с, тело планировало следующий ход, 20 → 0 хп («slain by Piglin»). Брут — bruteDefense (столб).
-  if (await answerAttack(session, ctl, st)) return 'next'
+  const ta = gameClock.now()
+  // Ответ вернулся сразу (бой с недостижимым стрелком): не крутить тот же ответ без паузы — кольцо без хода часов (nbf55-3818).
+  if (await answerAttack(session, ctl, st)) { if (gameClock.now() - ta < 50) await gameClock.sleep(250); return 'next' }
   // Штрек вскрыт, а брут/хоглин уже в 6 бл. — заложиться до удара (удар брута 7+, трёх хватает на 20 хп).
   if (S.exposed && inOwnTunnel(bot, S) && foesNear(bot, 6).some((e : any) => FOES_RE.test(e.name || '')) && await hunker(session, ctl, st, 'враг у пролома')) return 'next'
+  // ND_BASTION_HYP_FOCUS: на открытом (план и подход к входу штрека) брут идёт к нам — столб/коробка сейчас, а не после удара:
+  // nbf52-5974 — брут виден 10 с, шёл с 12 бл., тело планировало штреки с поверхности конюшен; 12.9 + 9.1, смерть на 2.4 мин.
+  if (HF.on() && (!inOwnTunnel(bot, S) || S.exposed) && mobs(bot, 'piglin_brute', 16).some(e => seesMob(bot, e)) && await bruteDefense(session, ctl, st)) return 'next'
   if ((bot.health ?? 20) < 8) { await eatIfHungry(session, ctl); if ((bot.health ?? 20) < 8) { S.fails.push('хп'); return 'stop' } }
   await eatIfHungry(session, ctl)
   // Без золотой брони: первое золото (сундук, блок) — сразу в броню, пока тело в закрытом штреке (верстак встаёт внутри), а не
@@ -69,12 +75,28 @@ export async function sgTargets (sg: SealedRun, tk: SealTick): Promise<Turn> {
   // Без железной кирки (st.chestsOnly) — только сундуки: золото ей не взять, а железо в сундуках есть.
   // Цели в 6 бл. от дома брута копии — не трогать (S1d s1d-N-2: сундук у брута, 2 удара за секунду, смерть на 7-й мин).
   const BH6 = (require('../../nether-route') as typeof import('../../nether-route')).bruteSpots(session)
+  // ND_NE_BRUTE_POSTS=1 (поток ne 21.10, выкл.): посты брутов, увиденные глазами (brute-memory: где видел и где увидел впервые), — тоже
+  // дома брутов; цели в 10 бл. от них — последними (b86-int2-s21: брут на валу 36,74,22 виден с прибытия, штрек к целям рядом — 13 + 9).
+  let postsFar = (list, _posOf) => list
+  if (process.env.ND_NE_BRUTE_POSTS === '1') {
+    const BM: typeof import('../../brute-memory') = require('../../brute-memory')
+    const posts = BM.spots(bot).flatMap(b => [[b.x, b.y, b.z], [b.assumedPatrolAnchor.x, b.assumedPatrolAnchor.y, b.assumedPatrolAnchor.z]])
+    // И посты шаблона (маркеры брутов кусков гипотезы в фокусе): b86-int1-s22 — сундук стены 35,35,28, маркер брута 35,35,30, брут не был виден
+    // до удара (13 + 9). Без фокуса — всех гипотез.
+    const bp: typeof import('../../bastion-pieces') = require('../../bastion-pieces')
+    const fh = HF.on() ? HF.focus(st) : null
+    for (const c of st.pieces || []) if (!fh || !c.hyp || c.hyp === fh) for (const v of bp.brutesOf(c)) posts.push([v.x, v.y, v.z])
+    if (!(st.pieces || []).length) for (const v of HF.brutePosts(bot)) posts.push([v.x, v.y, v.z])
+    const near = (p) => (require('../brute-risk') as typeof import('../brute-risk')).nearBruteHome(p, posts, 10)
+    postsFar = (list, posOf) => { const f = list.filter(t => !near(posOf(t))); return f.length ? f : list }
+  }
   const gear6 = (require('../../assess') as typeof import('../../assess')).gearOf((bot.inventory.slots || []).slice(5, 9))
-  const preds = st.chestsOnly ? [] : targetsByBruteHome([...st.pred.entries()].filter(([k]) => (st.skip.get(k) || 0) < gameClock.now()), ([, v]) => v.pos, BH6, bot.health ?? 20, gear6)
-  const chestsT = chestTargets(st)
+  if (HF.on()) HF.focus(st)
+  const preds = st.chestsOnly ? [] : targetsByBruteHome(postsFar([...st.pred.entries()].filter(([k, v]) => (st.skip.get(k) || 0) < gameClock.now() && HF.predAllowed(st, v)), ([, v]) => v.pos), ([, v]) => v.pos, BH6, bot.health ?? 20, gear6)
+  const chestsT = postsFar(chestTargets(st).filter(c => HF.chestAllowed(st, st.chestSeen.get(c.k))), c => c.pos)
   if (!preds.length && !chestsT.length) return 'stop'
   const chestsOk = targetsByBruteHome(chestsT, c => c.pos, BH6, bot.health ?? 20, gear6)
   if (!preds.length && !chestsOk.length) return 'stop'
   tk.minRank = preds.length ? Math.min(...preds.map(([, v]) => v.rank || 0)) : 0
-  tk.tg = [...preds.map(([k, v]) => ({ k, pos: v.pos })), ...chestsOk]
+  tk.tg = [...preds.map(([k, v]) => ({ k, pos: v.pos, ...(process.env.ND_BASTION_GOLD_EVIDENCE === '1' ? { rank: v.rank || 0 } : {}) })), ...chestsOk]
 }

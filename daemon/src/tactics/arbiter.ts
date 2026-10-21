@@ -84,7 +84,7 @@ export class TacticalArbiter {
     else if (currentScore) selected = currentScore
     else if (invalid && level > 0) selected = null
     // Airborne rescue belongs to the existing tick controller; no path or shelter action may race it.
-    const falling = !state.embedded && (state.dangerousFall || state.emergencyController)
+    const falling = !state.embedded && (state.dangerousFall || state.emergencyController && !state.waterEmergency)
     if (falling) selected = null
     this.node = falling ? 'EmergencyController' : 'Strategic'
     // A residual fire tick crossing level 3 must not cancel and restart the same 32-tick bite. Nor the Nether hole half dug: the
@@ -92,7 +92,7 @@ export class TacticalArbiter {
     // PillarUp", the piglins in the shaft before the plug).
     const change = selected?.id !== this.current?.id || escalated && !!selected && !(selected.id === 'Eat' && burnRecovery(state)) &&
       !(selected.id === 'Surface' && state.waterEscape) &&
-      !(process.env.ND_OW_NIGHT_BLOCKOFF === '1' && level === 3 && !newFoe && SHELTERS.has(selected.id)) &&
+      !((process.env.ND_OW_NIGHT_BLOCKOFF === '1' || state.owRangedApproachHp !== undefined) && level === 3 && !newFoe && SHELTERS.has(selected.id)) &&
       !(selected.id === 'PillarUp' && (!!state.netherHide || state.polarBear?.action === 'PillarUp'))
     if (this.current && selected?.id !== this.current.id && level > 0) this.left.add(this.current.id)
     this.current = selected

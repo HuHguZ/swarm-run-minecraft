@@ -201,6 +201,11 @@ function stepsToMe (bot, mob, spec, read) {
     }
     return true
   }
+  // ND_OW_SPIDER_WIDTH=1 (owC7-12: паук за ходом в клетку «дойдёт за 6 шаг.» 7 игр. мин стопорил спуск, бой — 0 взмахов):
+  // тело шире клетки (паук 1.4) проходит только там, где открыт квадрат 2×2 вокруг клетки; уже стоящую клетку не пересчитываем.
+  const wide = spec.half > 0.5 && typeof process !== 'undefined' && process.env.ND_OW_SPIDER_WIDTH === '1'
+  const square = (x, y, z) => [[1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => open(x + a, y, z) && open(x, y, z + b) && open(x + a, y, z + b))
+  const walk = (x, y, z) => open(x, y, z) && (!wide || square(x, y, z))
   const floor = (x, y, z) => { const c = read(x, y - 1, z); return c === SOLID || c === CLIMB }
   const wallBeside = (x, y, z) => DIRS4.some(([dx, dz]) => read(x + dx, y, z + dz) === SOLID)
   const canClimb = (x, y, z) => read(x, y, z) === CLIMB || (spec.climber && wallBeside(x, y, z))
@@ -263,7 +268,7 @@ function stepsToMe (bot, mob, spec, read) {
     for (const [dx, dz] of DIRS4) {
       const nx = x + dx
       const nz = z + dz
-      if (open(nx, y, nz)) {
+      if (walk(nx, y, nz)) {
         if (holds(nx, y, nz)) push(nx, y, nz, d + 1)
         else {
           for (let k = 1; k <= MAX_DROP; k++) {
@@ -275,7 +280,7 @@ function stepsToMe (bot, mob, spec, read) {
         }
       }
       // One block up needs the cell over our own head to jump into first.
-      if (headroom && open(nx, y + 1, nz) && floor(nx, y + 1, nz)) push(nx, y + 1, nz, d + 1)
+      if (headroom && walk(nx, y + 1, nz) && floor(nx, y + 1, nz)) push(nx, y + 1, nz, d + 1)
     }
     if (headroom && (canClimb(x, y, z) || canClimb(x, y + 1, z))) push(x, y + 1, z, d + 1)
   }

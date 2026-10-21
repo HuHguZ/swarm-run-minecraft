@@ -30,6 +30,7 @@ async function scout (session, ctl, p: any = {}) {
   // Базальтовые дельты — и для крепости: тонкие колонны над лавой, падение в 26 бл. (b14-6-3 14.10: поиск крепости по базальту, y 56 → лава).
   const deltas0 = bot._ndAvoidDeltas
   bot._ndAvoidDeltas = true
+  bot._ndDeltaPasses = 0
   try {
     return await scoutBody(session, ctl, p)
   } finally {

@@ -154,7 +154,15 @@ async function sideStep (bot, mcData, ctl, deadline, away) {
 
 async function surface (session, ctl, p: any = {}) {
   handClimb = !!p.hand
-  try { return await surfaceBody(session, ctl, p) } finally { handClimb = false }
+  const bot = session.bot
+  const previous = bot._ndOwSurfaceRecovering
+  const recovering = !!p.recover && process.env.ND_OW_SURFACE_RECOVER === '1' &&
+    String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') === 'overworld'
+  if (recovering) bot._ndOwSurfaceRecovering = true
+  try { return await surfaceBody(session, ctl, p) } finally {
+    handClimb = false
+    if (recovering) bot._ndOwSurfaceRecovering = previous
+  }
 }
 
 // Подъём (surfaceBody): прежние `let` и константы вызова — поля объекта c (Climb), прежние внутренние стрелки
@@ -170,6 +178,7 @@ interface Climb {
   budgetSeconds: number
   deadline: number
   preferPillar: boolean
+  recover: boolean
   from: any
   startY: number
   before: any
@@ -194,8 +203,8 @@ interface Climb {
 }
 type Turn = 'next' | 'stop' | undefined
 
-async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240, preferPillar = false }: any = {}) {
-  const c = openClimb(session, ctl, { targetY, timeoutSeconds, preferPillar })
+async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240, preferPillar = false, recover = false }: any = {}) {
+  const c = openClimb(session, ctl, { targetY, timeoutSeconds, preferPillar, recover })
   const { bot } = c
   ctl.onAbort.push(() => {
     try { bot.clearControlStates() } catch {}
@@ -208,7 +217,7 @@ async function surfaceBody (session, ctl, { targetY = null, timeoutSeconds = 240
   return climbReport(c)
 }
 
-function openClimb (session, ctl, { targetY, timeoutSeconds, preferPillar }): Climb {
+function openClimb (session, ctl, { targetY, timeoutSeconds, preferPillar, recover }): Climb {
   const bot = session.bot
   const mcData = session.mcData
   const top = worldTop(bot)
@@ -223,6 +232,8 @@ function openClimb (session, ctl, { targetY, timeoutSeconds, preferPillar }): Cl
   const before = countItems(bot)
   return {
     session, ctl, bot, mcData, top, wantY, budgetSeconds, deadline, preferPillar, from, startY, before,
+    recover: !!recover && process.env.ND_OW_SURFACE_RECOVER === '1' &&
+      String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') === 'overworld',
     stairs: 0, pillar: 0, aside: 0, dug: 0, stopped: null, dir: null,
     // Walls this call built, and the bearing they stand on. Both outlive the
     walls: [], noGo: null,
@@ -250,6 +261,9 @@ function openClimb (session, ctl, { targetY, timeoutSeconds, preferPillar }): Cl
 const arrived = (c: Climb) => {
   const { bot, top, wantY } = c
   const feet = bot.entity.position.floored()
+  // Дно оврага тоже видит небо и имеет две открытые стороны. Автовыход идёт
+  // до ранее наблюдённого местного яруса, переданного вызывающим в targetY.
+  if (c.recover && wantY !== null) return feet.y >= wantY
   if (pitCheck(bot, feet, top).out) return true
   // Небо над головой и не меньше двух открытых сторон (пусто и на уровне ног,
   if (openSky(bot, feet, top)) {
@@ -338,6 +352,19 @@ async function climbLevel (c: Climb): Promise<Turn> {
   const canHeal = (bot.food ?? 20) >= 18 || !!(session.mcData && (require('.././actions') as typeof import('.././actions')).bestFood(bot, session.mcData))
   if (health < 6 && canHeal) { c.stopped = `здоровья ${health} — дальше не лезу`; return 'stop' }
 
+  if (c.recover) {
+    const mob = watch(c)
+    if (mob) return await dealWith(c, mob) ? 'next' : 'stop'
+    const step = visibleSurfaceStep(bot)
+    const was = bot.entity.position.y
+    if (step && await stepUpInto(bot, ctl, step)) {
+      if (bot.entity.position.y - was >= .9) { c.stairs++; c.wetRun = 0 }
+      return 'next'
+    }
+    if (ctl.aborted) { c.stopped = 'прервано'; return 'stop' }
+    if (gameClock.now() >= deadline) { c.stopped = 'время вышло'; return 'stop' }
+  }
+
   const leg = toolLeg(c)
   if (!leg) return 'stop'
   const { fastPillar } = leg
@@ -364,6 +391,34 @@ async function climbLevel (c: Climb): Promise<Turn> {
   const aside = await stepAside(c, blocked, feet)
   if (aside) return aside
   return pillarUp(c, blocked, feet)
+}
+
+// Только уже видимые опоры: короткая ровная площадка перед естественной
+// ступенью дешевле расхода блоков столбом. Клетки за стеной в поиск не входят.
+function visibleSurfaceStep (bot) {
+  const { bodyClear, supportAt }: typeof import('../navigation/geometry') = require('../navigation/geometry')
+  const { visibleLanding }: typeof import('../navigation/parkour/model') = require('../navigation/parkour/model')
+  const start = bot.entity.position.floored()
+  const queue: Array<{ cell: any; first: any }> = [{ cell: start, first: null }]
+  const seen = new Set([`${start.x},${start.z}`])
+  for (let i = 0; i < queue.length && i < 64; i++) {
+    const { cell, first } = queue[i]
+    for (const dir of SIDES) {
+      for (const dy of [1, 0]) {
+        const to = cell.plus(dir).offset(0, dy, 0)
+        const key = `${to.x},${to.z}`
+        if (seen.has(key) || flat(to, start) > 6) continue
+        const centre = to.offset(.5, 0, .5)
+        if (!supportAt(bot, centre, .04) || !bodyClear(bot, centre) || !visibleLanding(bot, centre)) continue
+        if (dy && !bodyClear(bot, cell.offset(.5, 1, .5))) continue
+        const next = first || to
+        if (to.y > start.y) return next
+        seen.add(key)
+        queue.push({ cell: to, first: next })
+      }
+    }
+  }
+  return null
 }
 
 // В воде: выбраться — и дальше подъём; вылезал слишком часто без подъёма — стоп.
@@ -402,6 +457,9 @@ function toolLeg (c: Climb): { fastPillar: any } | null {
       const b = bot.blockAt(column.offset(0, h, 0))
       return b && b.name !== 'bedrock' && !FALLS.has(b.name)
     })
+  // Открытая колонна не требует кирки: под ногами есть собственный блок,
+  // а пустой просвет уже проверен. На следующий уровень геометрия читается снова.
+  if (c.recover && fastPillar && [2, 3].every(h => bot.blockAt(column.offset(0, h, 0))?.boundingBox === 'empty')) return { fastPillar }
   const swingsPerLevel = fastPillar ? 1 : SWINGS_PER_LEVEL
   const short = toolShortfall(bot, mcData, {
     need: legWant * swingsPerLevel + (fastPillar ? 1 : 0),

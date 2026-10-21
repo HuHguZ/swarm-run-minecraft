@@ -34,10 +34,11 @@ function fixture(cancel = false) {
     run: () => mod.exports.rememberBastionForTest(session, { nearest: { x: 10, y: 64, z: 20 }, seen: 24 }, ctl) }
 }
 
+// 21.10 (поток ne): место пишется ДО узнавания шаблона — прерванное узнавание (TACTICAL) больше не теряет находку.
 test('live fortress discovery awaits cooperative recognition and stores actual starts', async () => {
   const f = fixture()
   await f.run()
-  assert.deepEqual(f.calls, ['recognize', 'remember'])
+  assert.deepEqual(f.calls, ['remember', 'recognize'])
   assert.deepEqual(f.state.places['бастион (ад)'].starts, [{ type: 'bridge', r: 1 }])
 })
 
@@ -45,14 +46,15 @@ test('cancellation in live fortress recognition propagates rather than starting 
   const f = fixture(true)
   await assert.rejects(f.run(), /прерван/)
   assert.equal(f.ctl.aborted, true)
-  assert.equal(f.state.places['бастион (ад)'], undefined)
+  assert.ok(f.state.places['бастион (ад)'])
+  assert.equal(f.state.places['бастион (ад)'].starts, undefined)
 })
 
 for (const mode of ['look', 'bastion']) test(`${mode} search awaits recognition before returning a discovered structure`, async () => {
   const f = fixture()
   const result = await f.scout(mode)
   assert.equal(result.found, true)
-  assert.deepEqual(f.calls, ['recognize', 'remember', 'remember'])
+  assert.deepEqual(f.calls, ['remember', 'recognize', 'remember'])
   assert.ok(f.state.places['бастион (ад)'].starts)
 })
 

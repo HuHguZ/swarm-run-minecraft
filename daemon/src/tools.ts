@@ -11,7 +11,7 @@
 // укрытие и какой блок в нём самый слабый.
 
 import { withTimeout } from './build'
-import { conserveTool } from './items'
+import { conserveTool, toolKindFor } from './items'
 
 const TOOL = /_(pickaxe|axe|shovel|hoe|sword)$|^shears$/
 
@@ -112,7 +112,7 @@ async function equipFastest (bot, block) {
   }
   const held = bot.heldItem
   if (held && held.slot === plan.item.slot) return held
-  if (held && conserveTool(bot, block, held) === held && !/_sword$/.test(held.name) && digMs(bot, block, held) <= plan.ms) return held
+  if (held && (!bot._ndBastionSearchReserve || !bot._ndToolFilter || bot._ndToolFilter(held, block)) && conserveTool(bot, block, held) === held && !/_sword$/.test(held.name) && digMs(bot, block, held) <= plan.ms) return held
   await bot.equip(plan.item, 'hand')
   return plan.item
 }
@@ -137,6 +137,10 @@ function install (bot) {
       throw new Error(`Digging aborted: блок ${block.position} вне досягаемости`)
     }
     if (ctl?.aborted) throw new Error('прервано')
+    // A covered search may walk an already open passage, but must return for supply before a slow hand dig.
+    if (bot._ndBastionSearchReserve && breakable(block) && toolKindFor(block.name) === 'pickaxe' && !bestFor(bot, block).item) {
+      throw new Error(`BASTION_SEARCH_SUPPLY: no expendable tool for visible ${block.name}; preserve the gold-harvesting pick`)
+    }
     try { await equipFastest(bot, block) } catch {}
     if (ctl?.aborted) throw new Error('прервано')
     let onDeath = null

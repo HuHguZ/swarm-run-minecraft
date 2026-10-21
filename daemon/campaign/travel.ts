@@ -75,9 +75,13 @@ function netherVia (from, to) {
 }
 
 let bastionWalkRefusals = 0
-async function goToward (p, range = 6, frKeep = 1) {
+async function goToward (p, range = 6, frKeep = 1, sealedFrom: number | null = null) {
   const fromWorld = dim()
   const fromRevision = tacticalRevision
+  const receipt = fromWorld === 'the_nether' && process.env.ND_BASTION_WALK_RECEIPT === '1'
+  // F3/body position is the receipt. A completed RPC may still report "не дошёл".
+  const distanceTo = target => state.pos ? Math.hypot(target.x - state.pos.x,
+    receipt && typeof target.y === 'number' ? target.y - state.pos.y : 0, target.z - state.pos.z) : Infinity
   const interrupted = r => tacticalRevision !== fromRevision || r.status === 'interrupted' || r.code === 'TACTICAL' ||
     /^(tactical|damage|low_health|emergency)$/.test(r.by?.type || '')
   if (fromWorld === 'the_nether' && process.env.ND_NE_ROUTE === '1' && state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) > range + 2 && !died) {
@@ -88,11 +92,11 @@ async function goToward (p, range = 6, frKeep = 1) {
     await refresh()
     if (died || dim() !== fromWorld) return false
     if (interrupted(r)) { log('переход прерван — возвращаю управление для нового наблюдения'); return false }
-    if (state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) <= range + 2) return true
+    if (distanceTo(p) <= range + 2) return true
     log(`по сетке не довёл: ${(r.detail && r.detail.why) || r.error || '?'} — дальше штреком`)
   }
   // Без золотой вещи — штреком уже с 16 бл.: поверху пиглины бьют на виду (b11-6-1 14.10: к порталу в 28 бл. поверху — смерть).
-  if (fromWorld === 'the_nether' && state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) > (goldOn() ? 60 : 16) && !died) {
+  if (fromWorld === 'the_nether' && state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) > (sealedFrom ?? (goldOn() ? 60 : 16)) && !died) {
     const far = Math.hypot(p.x - state.pos.x, p.z - state.pos.z)
     const via = netherVia(state.pos, p)
     const tArgs = () => ({ x: p.x, y: p.y, z: p.z, radius: Math.max(range, 5), ...(via.length ? { via } : {}), ironOk: !nextBastion() || (process.env.ND_NE_STAY === '1' && pearlsNow() >= eyesWant()), timeoutSeconds: Math.min(via.length ? 2700 : 1800, Math.round(120 + far * (via.length ? 3 : 1.6))) })
@@ -100,7 +104,7 @@ async function goToward (p, range = 6, frKeep = 1) {
     await refresh()
     if (died || dim() !== fromWorld) return false
     if (interrupted(t)) { log('штрек прерван — возвращаю управление для нового наблюдения'); return false }
-    if (state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) <= range + 2) return true
+    if (distanceTo(p) <= range + 2) return true
     const td0 = t.detail || {}
     if (!td0.ok && !td0.segs && !td0.dug && process.env.ND_BURROW !== '0') {
       const bw = await act('ne_burrow', { why: 'штрек по Аду не начался' })
@@ -112,7 +116,7 @@ async function goToward (p, range = 6, frKeep = 1) {
         await refresh()
         if (died || dim() !== fromWorld) return false
         if (interrupted(t)) return false
-        if (state.pos && Math.hypot(p.x - state.pos.x, p.z - state.pos.z) <= range + 2) return true
+        if (distanceTo(p) <= range + 2) return true
       }
     }
     // S1f: от бастиона — пешком можно (путь уводит от ближнего бастиона), и третий отказ подряд — тоже: стоять у бастиона
@@ -150,7 +154,7 @@ async function goToward (p, range = 6, frKeep = 1) {
     const dx = p.x - state.pos.x
     const dz = p.z - state.pos.z
     const far = Math.hypot(dx, dz)
-    if (far <= range + 2) return true
+    if (distanceTo(p) <= range + 2) return true
     if (dim() === 'overworld' && far > 24) {
       await sense()
       if (!sit.surface && !surfaceTried && typeof p.y !== 'number') {
@@ -174,9 +178,18 @@ async function goToward (p, range = 6, frKeep = 1) {
     } else leg = { x: p.x, z: p.z }
     const direct = far <= LEG + 8 && !turn
     // В Аду — без быстрого спуска со скалы (S1d s1d-G21-2: descent «ledges → no_ledge, down 25» — в лавовое море, смерть).
+    const beforeDistance = receipt ? distanceTo(p) : 0
     const r = await act('goto', { x: leg.x, ...(direct && typeof p.y === 'number' ? { y: p.y } : {}), z: leg.z, range: direct ? range :Math.min(range, 8), timeoutSeconds: 120, ...(dim() === 'the_nether' ? { descent: false } : dim() === 'overworld' && typeof p.y !== 'number' ? { surface: true } : {}) })
     if (interrupted(r)) { log('ход прерван — возвращаю управление для нового наблюдения'); return false }
-    turn = r.status === 'done' ? 0 : turn + 1
+    if (receipt) {
+      await refresh()
+      if (died || dim() !== fromWorld || tacticalRevision !== fromRevision) return false
+      const target = direct && typeof p.y === 'number' ? { ...leg, y: p.y } : leg
+      const arrived = distanceTo(target) <= (direct ? range : Math.min(range, 8)) + 2
+      const nearer = distanceTo(p) < beforeDistance
+      turn = r.status === 'done' && arrived && nearer ? 0 : turn + 1
+      if (r.status === 'done' && (!arrived || !nearer)) log('ход завершён без достижения отрезка или приближения к цели — следующий обход')
+    } else turn = r.status === 'done' ? 0 : turn + 1
     if (turn >= detour.length) return false
   }
   return false

@@ -4,11 +4,11 @@ import { died, state, sit, known, lavaSourceKnown, quickHuntAt, setQuickHuntAt, 
 import { log } from '../log'
 import { have, dim, LOGS, foodUnits, planksFor, shieldOn } from '../queries'
 import { sense, refresh } from '../observe'
-import { STAGES, castNear, stageProgress, stageRun } from '../stages/table'
+import { STAGES, castNear, stageProgress, stageRun, owFastTrack } from '../stages/table'
 import { act } from '../act'
 import { craft } from '../kit'
 import { quickHunt } from '../food'
-import { dayLavaActive, lavaLookout, skyLavaLook, lootSeenStructures } from '../scout'
+import { dayLavaActive, earlyLavaLookout, lavaLookout, skyLavaLook, lootSeenStructures } from '../scout'
 import type { CampaignTurn } from './turn'
 import * as gameClock from '../../src/game-clock'
 let foodSearchAt = 0
@@ -44,7 +44,9 @@ async function loopChores (loop: CampaignTurn): Promise<void> {
       await skyLavaLook()
       // С земли озеро часто закрыто рельефом и деревьями (замер слота 1 14.10: 5 открытых клеток озера в 54 бл., ни одна не видна
       // с земли): раз-два за прогон — столб на 10 вверх своими блоками, осмотр, спуск (как игрок с вышки). Блоки — после камня.
-      if (!lavaSourceKnown && !dayLavaActive()) await lavaLookout()
+      // E: полный набор не отменяет дешёвый обзор с высоты; OFF сохраняет прежний порядок.
+      const early = await earlyLavaLookout()
+      if (!early && !lavaSourceKnown && (!dayLavaActive() || process.env.ND_OW_LAVA_LOOK === '1')) await lavaLookout()
     } catch (e) { if (e.stopCampaign) throw e }
   }
   // Постройки на виду — раз в минуту днём поверху: лут, если выгода больше пути (lootSeenStructures, числа в журнале).
@@ -54,7 +56,7 @@ async function loopChores (loop: CampaignTurn): Promise<void> {
   }
   // Еда по пути, как у игрока: днём, звери на виду, запас мал — добыть сейчас (quickHunt: только видимые в 24 бл., ≤ 60 с).
   // Граф ставит FindFood перед входом в Ад; cl-a/cl-c 14.10: первые 15–18 мин без еды, урон не лечится, смерть ночью.
-  if (dim() === 'overworld' && !died && foodUnits() < 4 && gameClock.now() >= quickHuntAt && (state.tactics?.threatLevel ?? 0) < 1 &&
+  if (!owFastTrack() && dim() === 'overworld' && !died && foodUnits() < 4 && gameClock.now() >= quickHuntAt && (state.tactics?.threatLevel ?? 0) < 1 &&
       (state.health ?? 20) >= 8 && process.env.ND_QUICK_HUNT !== '0') {
     setQuickHuntAt(gameClock.now() + 90000)
     await sense()

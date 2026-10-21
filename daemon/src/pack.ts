@@ -30,7 +30,7 @@ const RESERVE = Object.freeze({ build: 16, pickaxe: 1, food: 2 })
 // что pickFiller берёт на стены. Песка, гравия и песка душ нет: крыша из них
 // падает на голову, а песок душ не целый блок.
 const BUILD_OVER = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'blackstone', 'basalt']
-const BUILD_NETHER = ['polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'end_stone', 'mossy_cobblestone', 'soul_soil', 'warped_wart_block', 'nether_wart_block']
+const BUILD_NETHER = [...(process.env.ND_BLZ_BRICK_FILL === '1' ? ['nether_bricks'] : []), 'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'end_stone', 'mossy_cobblestone', 'soul_soil', 'warped_wart_block', 'nether_wart_block']
 const isBuild = (name, dim = null) => /_planks$/.test(name) || BUILD_OVER.includes(name) ||
   (dim !== 'overworld' && dim !== 'the_end' && BUILD_NETHER.includes(name))
 // Еда в запас — то, что лечит, а не травит (combat-safety RISKY).

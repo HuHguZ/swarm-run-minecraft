@@ -124,6 +124,8 @@ async function scene () {
     // Утро: мир поднят за минуты до прогона, сутки — 20 минут.
     await kit.cmd('/time set 1000')
   }
+  // SCENE_TIME=<тики>: время суток сцены со снимка (ночные снимки набора: скамья ночных веток, поток ow 21.10).
+  if (process.env.SCENE_TIME) await kit.cmd(`/time set ${Number(process.env.SCENE_TIME)}`)
   if (KEEP_STATE && KIT_REPLACE) await kit.cmd('/clear @s')
   for (const g of KIT) await kit.cmd(`/give @s minecraft:${g}`)
   if (KIT_REPLACE) {

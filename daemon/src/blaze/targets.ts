@@ -72,7 +72,12 @@ function droppedRods (bot, radius = 12, { reachable = false }: any = {}) {
   let n = 0
   for (const e of ents(bot)) {
     if (!e || e.name !== 'item' || !e.position || e.position.distanceTo(me) > radius) continue
-    if (reachable && (e.position.y < me.y - 3 || lavaNear(bot, e.position))) continue
+    // reachable — по той же точке, что берёт collectRods (где стержень ЛЯЖЕТ, drops.restOf), а не где он висит сейчас: по
+    // разным точкам «есть что собрать» и «собирать нечего» расходились, и meleeCamp крутил сбор без единого ожидания —
+    // демон занимал ядро, lockstep вставал (bf04-s17-2 21.10: 16 мин, стек meleeCamp → collectRods → restOf / droppedRods).
+    let p = e.position
+    if (reachable) { try { p = (require('../drops') as typeof import('../drops')).restOf(bot, e) } catch {} }
+    if (reachable && (p.y < me.y - 3 || lavaNear(bot, p))) continue
     try {
       const it = e.getDroppedItem && e.getDroppedItem()
       if (it && it.name === 'blaze_rod') n += it.count

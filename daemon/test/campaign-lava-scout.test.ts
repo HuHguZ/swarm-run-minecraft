@@ -9,20 +9,20 @@ import { createCampaignIntelligence } from '../src/campaign/intelligence'
 import { emptyWorld, fact } from '../src/core/world-state'
 import { cjsContext } from './cjs-context'
 
-function fixture() {
+function fixture(deepLava = false) {
   const source = campaignTs()
   const branch = source.slice(source.indexOf("} else if (skill === 'scoutLava') {") + "} else if (skill === 'scoutLava') {".length,
     source.indexOf("} else if (skill === 'ruinedPortal') {"))
   const facts: Record<string, number> = {}
   const calls: Array<{ method: string, params: any }> = []
   let destination = { x: 0, y: 64, z: 0 }
-  const context: any = { module: { exports: {} }, state: { pos: { ...destination } }, known: {},
+  const context: any = { process: { env: { ND_OW_DEEP_LAVA: deepLava ? '1' : '0' } }, lavaEmptySearches: 0, died: false, strategyInterrupted: false, module: { exports: {} }, state: { pos: { ...destination } }, known: {},
     lavaScoutCells: new Set(), lavaScoutViews: 0, dim: () => 'overworld', dayLavaStep: async () => false, skyLavaLook: async () => null, lavaLookout: async () => null, lavaAtSeenRuins: async () => false, lavaSourceKnown: false,
     graphFact: (name, value) => { facts[name] = value },
     act: async (method, params) => { calls.push({ method, params }); if (method === 'explore') context.state.pos = { ...destination } }
   }
   vm.runInNewContext(transformSync(`module.exports = async () => { ${branch} }`, { loader: 'ts', format: 'cjs' }).code, cjsContext(context))
-  return { calls, facts, run: context.module.exports, destination: p => { destination = p } }
+  return { calls, facts, interrupted: value => { context.strategyInterrupted = value }, run: context.module.exports, destination: p => { destination = p } }
 }
 
 test('lava scouting credits newly observed sections, preserving the deadline and surface route', async () => {
@@ -68,4 +68,17 @@ test('the actual director continues useful lava-search legs without its five-min
   assert.equal(brain.director.verify(strategy, previous, previous, { outcome: 'SUCCESS', events: [] }), 'FAILURE')
   assert.equal(brain.director.verify(strategy, previous, previous, { outcome: 'SUCCESS', events: [] }), 'FAILURE')
   assert.deepEqual(brain.director.exhaustedStrategies(), ['ScoutLava'])
+})
+
+test('P empty lava searches count only a new observed section without interruption', async () => {
+  const f = fixture(true)
+  await f.run()
+  assert.equal(f.facts.lava_empty_searches, undefined)
+  f.destination({ x: 60, y: 64, z: 0 }); await f.run()
+  assert.equal(f.facts.lava_empty_searches, 1)
+  await f.run()
+  assert.equal(f.facts.lava_empty_searches, 1)
+  f.interrupted(true)
+  f.destination({ x: 120, y: 64, z: 0 }); await f.run()
+  assert.equal(f.facts.lava_empty_searches, 1)
 })

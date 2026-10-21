@@ -676,6 +676,10 @@ async function leaveSealedCell (session, ctl, toward) {
   if (!bot || typeof bot.blockAt !== 'function' || !bot.entity) return false
   const cell = feetCell(bot)
   if (!enclosure(bot, cell).sealed) return false
+  if (process.env.ND_BRUTE_MEMORY === '1') {
+    const memory = await (require('./brute-shelter') as typeof import('./brute-shelter')).ensureShelterExit(session, ctl, toward, { knownShelter: true })
+    if (memory) throw Object.assign(new Error('brute memory: covered exit requires replan'), { code: 'BRUTE_MEMORY_REPLAN', bruteMemory: memory })
+  }
   const out = await breakOut(bot, cell, { toward })
   if (ctl.aborted) throw new Error('прервано')
   const up = out.ok ? null : await (require('./survival/enter-shelter') as typeof import('./survival/enter-shelter')).exitShelter(session, ctl, { depth: 3 })

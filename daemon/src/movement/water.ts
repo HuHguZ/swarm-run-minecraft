@@ -66,6 +66,12 @@ export function airTicks (bot) {
   return Number.isFinite(air) ? air : Math.max(0, (bot.oxygenLevel ?? 20) * 15 - 7)
 }
 
+// J: eight bubbles of air in native ticks, using air_supply when present.
+// Physical air debt remains real while a different intent owns the body.
+export const owDeathWaterOn = bot => typeof process !== 'undefined' && process.env.ND_OW_DEATH_WATER === '1' &&
+  String(bot?.game?.dimension || '').replace(/^minecraft:/, '') === 'overworld'
+export const owAirEmergency = bot => owDeathWaterOn(bot) && (bot.health ?? 20) > 0 && inWater(bot) && airTicks(bot) <= 8 * 15
+
 // LivingEntity.jumpInLiquid / travelInWater: +.04, vertical drag .8, gravity .005.
 export function swimUpTicks (height, velocity = 0) {
   let y = 0, ticks = 0

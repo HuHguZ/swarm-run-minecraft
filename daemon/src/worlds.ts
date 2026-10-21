@@ -126,6 +126,7 @@ function wrapPlaceBlock (bot) {
 }
 
 function tuneMovements (bot, movements) {
+  if (process.env.ND_BRUTE_MEMORY === '1') (require('./brute-memory') as typeof import('./brute-memory')).tuneMovements(bot, movements)
   const reg = bot.registry
   const defAt = fastblocks.defReader(bot)
   wrapPlaceBlock(bot)
@@ -157,6 +158,10 @@ function tuneMovements (bot, movements) {
   // Верхний мир: вода дороже (S8b 07.10: в s8b-c 3 смерти из 9 — в воде: утопленник с трезубцем на 3.5 мин на пути через
   // реку, утопленник и страж ночью; плыть ещё и медленнее идти). Переплыть, где обхода нет, можно. ND_OW_LIQUID=0 — как было.
   if (worldOf(bot) === 'overworld' && process.env.ND_OW_LIQUID !== '0') movements.liquidCost = Math.max(movements.liquidCost ?? 1, 3)
+  // ND_BLZ_DIG_PRICE=1 (поток blz 21.10): в Аду взмах кирки — запас (381 взмах набора, без палок новых кирок нет), а не 1.3 шага:
+  // pathfinder прокапывал незерак насквозь (bz09-s17-3: кирки кончились к 15-й мин поиска, дальше «из ямы вылез на 0»).
+  // Цена взмаха ≈ 1.5 с пополнения против 0.23 с шага → digCost 5: обход до ~6 шагов на блок дешевле копки.
+  if (worldOf(bot) === 'the_nether' && process.env.ND_BLZ_DIG_PRICE === '1') movements.digCost = Math.max(movements.digCost ?? 1, 5)
   // Порошковый снег — тоже пусто по форме (minecraft-data: boundingBox 'empty'): pathfinder вёл сквозь него, тело вязло и
   // замерзало (s8-f1-11: «froze to death» на 8.9 мин по пути к воде в снежных горах).
   const avoid = ['nether_portal', 'end_portal', 'end_gateway', 'soul_fire', 'powder_snow']

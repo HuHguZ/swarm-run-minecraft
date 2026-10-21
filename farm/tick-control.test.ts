@@ -266,3 +266,19 @@ test('farm profile supplies the default TPS for startup and scenes while explici
   await api.cmdUp({ _: ['1'], 'tick-rate': '20' })
   assert.equal(events.find(event => event.command?.startsWith('tick rate ')).command, 'tick rate 20')
 })
+
+test('M snapshot clock: opted-in KEEP_STATE preserves phase before every resumed scene', async () => {
+  const { api, events } = farmHarness()
+  await api.cmdRun({ _: ['try-lab-fresh.js'], slots: '23-24', tag: 'M-night', env: ['KEEP_STATE=1', 'ND_NIGHT_KIT_SNAPSHOT=1'], 'tick-rate': '750' }, [])
+  assert.equal(events.some(event => event.kind === 'rcon' && event.command === 'time set 1000'), false)
+  assert.equal(events.filter(event => event.kind === 'spawn').length, 2)
+  assert.ok(events.filter(event => event.kind === 'spawn').every(event => event.env.KEEP_STATE === '1' && event.env.ND_NIGHT_KIT_SNAPSHOT === '1'))
+})
+
+test('M snapshot clock: OFF and fresh starts retain the old morning preparation', async () => {
+  for (const env of [['KEEP_STATE=1'], ['ND_NIGHT_KIT_SNAPSHOT=1'], ['KEEP_STATE=1', 'ND_NIGHT_KIT_SNAPSHOT=0']]) {
+    const { api, events } = farmHarness()
+    await api.cmdRun({ _: ['try-lab-fresh.js'], slots: '23', tag: 'M-control', env, 'tick-rate': '750' }, [])
+    assert.ok(events.some(event => event.kind === 'rcon' && event.command === 'time set 1000'))
+  }
+})

@@ -245,6 +245,14 @@ function bridgeKeys (x: BridgeExec, t: Tick, n, br, ref, dir, cell) {
     return { stop: true }
   }
   const d = decide({ pos: e.position, onGround: e.onGround, ref, dir, cellSolid, refSolid, pending: pending.has(key(cell)) })
+  // At the placement window, no visible face means stop before walking off the last real support.
+  if (process.env.ND_LAVA_NAV_GUARD === '1' && /nether/.test(String(bot.game?.dimension)) &&
+      !cellSolid && d.place && !pending.has(key(cell)) &&
+      !x.faceAim(bot, ref, new Vec3(dir.x, 0, dir.z), { eye: e.position.offset(0, EYE, 0), range: 4.5 })) {
+    stats.noFace++
+    replan(x, 'lava-nav: bridge face not visible', { cell: [cell.x, cell.y, cell.z] })
+    return hold(x)
+  }
   bot.look(d.yaw, d.pitch, true)?.catch?.(() => {})
   if (!going) {
     // Путь кончился на узле-мосте или сброшен посреди моста (block_updated, chunk_loaded, goal_moved: clearStates=false

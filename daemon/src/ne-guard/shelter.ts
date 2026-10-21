@@ -5,7 +5,7 @@ import * as gameClock from '../game-clock'
 import { meleeFoes } from './foes'
 
 // Высота столба: проба 03.10 (2 брута) — с +2 брут достаёт (удары по ногам на y+2.00 от брута на y+0.00), берём +3.
-export function pillarHeight () { return Math.max(2, Math.min(4, Number(process.env.ND_GUARD_PILLAR || 3))) }
+export function pillarHeight () { return Math.max(process.env.ND_BRUTE_GUARD === '1' ? 4 : 2, Math.min(4, Number(process.env.ND_GUARD_PILLAR || 3))) }
 // Столб на месте встаёт: над головой PH+1 воздуха, блоков хватает, и только на открытом (хотя бы 2 стороны у ног —
 // воздух): из ямы бартера столб выводил к бруту у её рта (B1-3 03.10: брут во рту ямы бил сверху, +2 — достаёт).
 export function pillarFits (bot) {
@@ -21,7 +21,12 @@ export function pillarFits (bot) {
 // его ног — Mob.getAttackBoundingBox раздувает только по горизонтали).
 export function above (bot, foes) {
   const y = bot.entity.position.y
-  return foes.length > 0 && foes.every((f: any) => y - f.position.y >= 2.5 || f.position.y - y >= 2)
+  return foes.length > 0 && foes.every((f: any) => {
+    const brute = process.env.ND_BRUTE_GUARD === '1' && f.name === 'piglin_brute'
+    // A higher enemy can walk or fall down. Only an actual sealed pocket keeps it above us (s15, 21.10).
+    // 1.95 body + 1.252 jump reaches above a three-block pillar; four is the flat-ground reserve.
+    return y - f.position.y >= (brute ? 4 : 2.5) || f.position.y - y >= 2 && (!brute || sealedAt(bot, bot.entity.position.floored()))
+  })
 }
 // Нора на месте копается: толща на 2 вниз, пол и стенки твёрдые, под полом не лава, и есть кирка.
 export function holeFits (bot) {
@@ -121,7 +126,7 @@ async function guardFill (bot, v) {
   if (b && SL.classOf(b) !== SL.AIR && SL.classOf(b) !== SL.PARTIAL) return sealOn() ? fullWall(b) : true
   const item = guardItem(bot)
   if (!item) return false
-  try { const r = await (require('../build') as typeof import('../build')).placeBlockAt(bot, v, { item, timeoutMs: 1500 }); return !!(r && r.ok) } catch { return false }
+  try { const r = await (require('../build') as typeof import('../build')).placeBlockAt(bot, v, { item, timeoutMs: 1500, honest: process.env.ND_BRUTE_GUARD === '1' }); return !!(r && r.ok) } catch { return false }
 }
 
 // Коробка вокруг тела: блоки в открытые клетки у ног и головы (4 стороны) и над головой, ближние к врагу — первыми.

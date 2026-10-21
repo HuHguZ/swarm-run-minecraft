@@ -55,6 +55,7 @@ function connect (this: Session, { bootstrapPaused }: any = {}): Promise<any> {
       // Имена атрибутов в пакете (скорость и прочее) — gamedata.js.
       bot.once('inject_allowed', () => { try { gamedata.fixAttributes(bot) } catch {} })
       bot.once('inject_allowed', () => { try { gamedata.fixBreath(bot) } catch {} })
+      if (process.env.ND_SLIME_SIZE === '1') bot.once('inject_allowed', () => { try { gamedata.fixSlimeSize(bot) } catch {} })
       bot.loadPlugin(pathfinder)
 
       let settled = false

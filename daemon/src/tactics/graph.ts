@@ -26,7 +26,7 @@ for (const action of actions) {
   edge(action, 'ClimbOut', state => (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
   edge(action, 'LastStand', state => state.contact && deadEnd(state) && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat)
   for (const immediate of ['Dodge', 'UseWater'] as const) edge(action, immediate, state => immediate === 'Dodge' ? state.explosion : state.burning && state.water)
-  edge(action, 'Surface', state => !!state.drowning)
+  edge(action, 'Surface', state => !!(state.drowning || state.waterEmergency))
   edge(action, 'Flee', state => !!state.hotFloor && !state.dangerousFall && !state.emergencyController)
   for (const shelter of refuge) edge(action, shelter, state => threatLevel(state) >= 2 && (!state.canFight || state.health < 12 || action === 'Fight' || shelter === 'BlockOff' && piglinNiche(state) || shelter === 'PillarUp' && !!state.netherHide || shelter === 'BlockOff' && !!state.ghastEdge))
   edge(action, 'Heal', state => state.cover && state.health < 16 && state.edible)
@@ -36,6 +36,7 @@ for (const action of actions) {
 }
 edge('EmergencyController', 'Strategic', state => !state.dangerousFall && !state.emergencyController && threatLevel(state) === 0)
 edge('EmergencyController', 'FreeEmbedded', state => !!state.embedded)
+edge('EmergencyController', 'Surface', state => !!state.waterEmergency && !state.dangerousFall)
 
 export class TacticalGraph {
   readonly transitions = edges

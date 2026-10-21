@@ -12,7 +12,8 @@ import { legTo, keepBlocks, climbTo, climbWalk } from './legs'
 function spawnerHint (bot, { leg = 20, skipYaws = [] }: any = {}) {
   const S: typeof import('../perception/senses') = require('../perception/senses')
   const me = bot.entity.position
-  const arc = S.pieArcs(bot, 'spawner', { fov: 30 }).find(a => a.center !== null && !skipYaws.some(y => Math.abs(((a.center - y + 540) % 360) - 180) < 20))
+  const range = 64 // дальность отрисовки блок-сущностей клиента: дальше «пирог» спавнера не показывает
+  const arc = S.pieArcs(bot, 'spawner', { range, fov: 30 }).find(a => a.center !== null && !skipYaws.some(y => Math.abs(((a.center - y + 540) % 360) - 180) < 20))
   if (arc) { const v = S.vecOf(arc.center); return { x: Math.round(me.x + v.x * leg), z: Math.round(me.z + v.z * leg), by: 'пирог', yaw: arc.center, width: arc.width } }
   const h = S.heard(bot, { sinceMs: 6000, match: /blaze/ })[0]
   if (h) { const p = S.hearPoint(bot, h); if (p) return { x: Math.round(p.x), z: Math.round(p.z), by: 'слух', dir: h.dir8, band: h.band } }
@@ -34,7 +35,7 @@ function axisLeg (pool, feet, visited, len = 24) {
 // Один кирпич памяти не задаёт ось моста. От закрытого взгляда сначала шаг
 // на видимый пол с местом для тела, затем новый взгляд: никаких целей за стеной.
 // One observed adjacent deck cell at a time; memory is committed only after actual arrival.
-function deckLeg (bot, state: any) {
+function deckLeg (bot, state: any, toward: any = null) {
   if (typeof bot.blockAt !== 'function') return null // макет без мира (тест прогресса обхода) — прежний подъём/обзор
   const at = bot.entity.position.floored()
   const key = p => [p.x, p.y, p.z].join(',')
@@ -55,7 +56,10 @@ function deckLeg (bot, state: any) {
   if (!deck(at)) return null
   state.seen.add(key(at))
   let to = null, back = false
-  for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+  const directions = [[1, 0], [0, 1], [-1, 0], [0, -1]]
+  // The bearing only ranks equally short visible steps; deck() still checks each ray.
+  if (toward) directions.sort((a, b) => (b[0] - a[0]) * (toward.x - at.x) + (b[1] - a[1]) * (toward.z - at.z))
+  for (const [dx, dz] of directions) {
     for (const dy of [0, 1, -1]) {
       const q = at.offset(dx, dy, dz)
       if (state.seen.has(key(q)) || state.blocked.has(key(q)) || !deck(q)) continue
@@ -73,6 +77,67 @@ function deckLeg (bot, state: any) {
   return { floor: to.offset(0, -1, 0), back }
 }
 
+// ND_BLZ_SEEK2=1 (поток blz 21.10): ход по палубе крепости длинными отрезками, как игрок бежит по мосту. deckLeg шагал по одной
+// клетке (шаг + взгляд на 64), обходил в глубину каждую ветку и не выбирал направление (bz06-s19-2: 323 шага палубы, 164 клетки — спавнер
+// не найден). Здесь: обход в ширину по клеткам палубы, видимым сейчас или раньше (кирпичный пол, верхняя грань в прицеле; ноги и голова —
+// пусто, без лавы/огня), цель — дальняя новая клетка: ново (от прежних взглядов), ближе к подсказке (пирог F3, видимые ифриты, слух),
+// край видимого (дальше палуба не видна) — плюс, длина хода — минус. Один ход — до 64 бл. обычным путём по видимому полу.
+function deckLong (bot, state: any, views, hint) {
+  if (typeof bot.blockAt !== 'function') return null
+  const { blockSeen }: typeof import('../pick') = require('../pick')
+  const key = p => `${p.x},${p.y},${p.z}`
+  state.floors ||= new Set(); state.notFloor ||= new Set()
+  let rays = 0
+  const empty = b => !!b && b.boundingBox === 'empty' && !/lava|water|fire/.test(b.name)
+  const floorOk = c => {
+    const f = c.offset(0, -1, 0), k = key(f)
+    if (state.notFloor.has(k)) return false
+    const b = bot.blockAt(f)
+    if (!b || !/^nether_brick/.test(b.name) || b.boundingBox !== 'block') return false
+    if (!state.floors.has(k)) {
+      if (rays >= 700) return null // луч не проверен — край известного
+      rays++
+      if (!blockSeen(bot, f, { range: 64 })) return null
+      state.floors.add(k)
+    }
+    return empty(bot.blockAt(c)) && empty(bot.blockAt(c.offset(0, 1, 0)))
+  }
+  const start = bot.entity.position.floored()
+  if (floorOk(start) !== true) return null
+  const me = bot.entity.position
+  const seen = new Map([[key(start), { c: start, L: 0 }]])
+  const queue = [start], cells = []
+  while (queue.length && seen.size < 1600) {
+    const c = queue.shift(), L = seen.get(key(c)).L
+    let edge = false
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      for (const dy of [0, 1, -1]) {
+        const q = c.offset(dx, dy, dz)
+        if (seen.has(key(q))) break
+        if (Math.hypot(q.x - start.x, q.z - start.z) > 64) continue
+        if (dy === 1 && !empty(bot.blockAt(c.offset(0, 2, 0)))) continue
+        const ok = floorOk(q)
+        if (ok === null) { edge = true; continue }
+        if (!ok) continue
+        seen.set(key(q), { c: q, L: L + 1 }); queue.push(q); break
+      }
+    }
+    cells.push({ c, L, edge })
+  }
+  let best = null, bestScore = -Infinity
+  for (const { c, L, edge } of cells) {
+    if (L < 4) continue
+    const feet = c.offset(0.5, 0, 0.5)
+    const novel = Math.min(40, ...views.map(v => Math.hypot(v.x - feet.x, v.z - feet.z)))
+    if (novel < 5) continue
+    const gain = hint ? Math.hypot(hint.x - me.x, hint.z - me.z) - Math.hypot(hint.x - feet.x, hint.z - feet.z) : 0
+    const score = novel + gain + (edge ? 4 : 0) - 0.15 * L
+    if (score > bestScore) { bestScore = score; best = { floor: c.offset(0, -1, 0), L, novel: Math.round(novel), gain: Math.round(gain), edge } }
+  }
+  if (best) best.cells = cells.length
+  return best
+}
+
 function continuationSupply (bot) {
   const picks: Record<string,number> = {}
   for (const i of bot.inventory?.items() || []) if (/pickaxe$/.test(i.name)) {
@@ -86,6 +151,7 @@ function continuationSupply (bot) {
 // bridge row can justify opening the next section, never its hidden contents.
 function continuationPlan (session, v: any = {}) {
   if (process.env.ND_FORTRESS_CONTINUE === '0') return null
+  const contCause = process.env.ND_BLZ_CONT_CAUSE !== '0'
   const bot = session.bot, me = bot.entity.position, here = worlds.worldOf(bot)
   const frontier = session._ndFortressFrontier
   if (here !== 'the_nether' || frontier?.world !== here) return null
@@ -94,7 +160,8 @@ function continuationPlan (session, v: any = {}) {
   const views = session._ndTourVisited?.world === here ? session._ndTourVisited.views || [me] : [me]
   const { blocks,picks } = continuationSupply(bot)
   const nearest = Math.min(v.blazes?.nearest ?? Infinity, v.routeThreat ?? Infinity)
-  const covered = !!v.boxed || nearest <= (session._ndFortressContinue?.covered ? 32 : 24)
+  // ND_BLZ_CONT_CAUSE=1: своя коробка (seal после отказа штрека) — не угроза; иначе «boxed → covered → штрек → коробка» по кругу.
+  const covered = (!contCause && !!v.boxed) || nearest <= (session._ndFortressContinue?.covered ? 32 : 24)
   const threat = JSON.stringify([covered, nearest <= 16])
   const routes = session._ndFortressContinue?.world === here ? session._ndFortressContinue.routes : new Map()
   const candidates = new Map()
@@ -103,7 +170,9 @@ function continuationPlan (session, v: any = {}) {
     const novel = Math.min(...views.map(p => p.distanceTo(feet)))
     if (distance > 48 || novel < 8 || to.y + 1 < me.y - 1) return
     const key = to.toString(), mark = routes.get(key)
-    if (mark && mark.revision === frontier.bricks.size && me.distanceTo(mark.origin) < 8 &&
+    // ND_BLZ_CONT_CAUSE=1: отказ помнится по причине (место тела, снабжение, угроза), а не по числу увиденного кирпича: каждый взгляд
+    // добавлял кирпич, и все отказанные цели снова считались новыми (bz08-s17-1: 565 вызовов continue за 510 с, кирки съедены).
+    if (mark && (contCause || mark.revision === frontier.bricks.size) && me.distanceTo(mark.origin) < 8 &&
         blocks <= mark.blocks && Object.entries(picks).every(([name,left]) => left <= (mark.picks[name] || 0)) && threat === mark.threat) return
     // shortcut: prior ETA for two brick cuts and one floor (three cover blocks)
     // per step; replace with continuation receipts when enough native legs exist.
@@ -133,7 +202,12 @@ function continuationPlan (session, v: any = {}) {
       }
     }
   }
-  return [...candidates.values()].sort((a,b) => a.seconds-b.seconds)[0] || null
+  // ND_BLZ_CONT_CAUSE: отсюда ход того же рода (штрек/поверху) уже не сдвинул тело — другие цели того же рода ту же причину не
+  // меняют (bz13-s17-3: 220 вызовов continue с одной клетки, каждый к новому кирпичу, штрек «на открытом» не начинался).
+  const stuck = contCause && session._ndFortressContinue?.world === here ? session._ndFortressContinue.stuck : null
+  const stuckSame = c => !!stuck && me.distanceTo(stuck.origin) < 2 && stuck.covered === c.covered && stuck.blocks >= blocks &&
+    Object.entries(picks).every(([name,left]) => left <= (stuck.picks[name] || 0)) && stuck.threat === threat
+  return [...candidates.values()].filter(c => !stuckSame(c)).sort((a,b) => a.seconds-b.seconds)[0] || null
 }
 
 async function continueFortress (session, ctl, { deadline, planOnly = false, planKey = null, maxCostSeconds = Infinity }: any = {}) {
@@ -161,16 +235,23 @@ async function continueFortress (session, ctl, { deadline, planOnly = false, pla
   if (!plan || v.spawners?.length || ctl.aborted) return out({ advanced:false, continuationTried:0, frontierExhausted:!plan })
   if ((planKey && planKey !== plan.key) || plan.seconds > maxCostSeconds) return out({ advanced:false, continuationTried:0, changed:true })
   const bore = () => (require('../nether-cover') as typeof import('../nether-cover')).closedBore(session,ctl,plan.to,{ deadline,maxSteps:24,adjacent:true,minY:Math.floor(start.y),onOpen:observe })
-  let w = await (plan.covered ? bore() : climbTo(session,ctl,plan.to,deadline)).catch(e => ({ ok:false,error:e.message }))
-  if (!plan.covered && !w.ok && !w.fought && !ctl.aborted && gameClock.now()<deadline) w = await bore().catch(e=>({ok:false,error:e.message}))
+  // ND_BLZ_CONT_CAUSE=1: на палубе крепости (видимый кирпичный пол под ногами) — ход по мосту, угроза — цена, а не штрек: штрек с моста
+  // не начинается («на открытом: ни вниз, ни в стену» → коробка на месте → откопка → снова), кирки и блоки уходят впустую.
+  const floor = process.env.ND_BLZ_CONT_CAUSE !== '0' ? bot.blockAt?.(bot.entity.position.floored().offset(0,-1,0)) : null
+  const onDeck = !!floor && /^nether_brick/.test(floor.name) && seesBlock(bot, floor)
+  let w = await (plan.covered && !onDeck ? bore() : climbTo(session,ctl,plan.to,deadline)).catch(e => ({ ok:false,error:e.message }))
+  if (!plan.covered && !onDeck && !w.ok && !w.fought && !ctl.aborted && gameClock.now()<deadline) w = await bore().catch(e=>({ok:false,error:e.message}))
   v = observe()
-  const advanced = bot.entity.position.distanceTo(start) >= 8 || frontier.bricks.size > revision
+  // ND_BLZ_CONT_CAUSE=1: новый кирпич в глазах без шага тела — не продвижение (Codex D1).
+  const advanced = bot.entity.position.distanceTo(start) >= 8 || process.env.ND_BLZ_CONT_CAUSE === '0' && frontier.bricks.size > revision
   if (!session._ndTourVisited || session._ndTourVisited.world !== here) session._ndTourVisited = { world:here,points:[],views:[] }
   const visited = session._ndTourVisited
   if (visited.points.every(p => p.distanceTo(bot.entity.position)>=8)) visited.points.push(bot.entity.position.clone())
   visited.views ||= []
   if (visited.views.every(p => p.distanceTo(bot.entity.position)>=.8)) visited.views.push(bot.entity.position.clone())
   // Record the resulting cause: our own spent blocks cannot reopen this refusal.
+  if (process.env.ND_BLZ_CONT_CAUSE !== '0') session._ndFortressContinue.stuck = bot.entity.position.distanceTo(start) < 1
+    ? { origin: start.clone(), covered: !!plan.covered, ...continuationSupply(bot), threat: plan.threat } : null
   session._ndFortressContinue.routes.set(plan.key,{ origin:bot.entity.position.clone(),revision:frontier.bricks.size,
     ...continuationSupply(bot),
     threat:JSON.stringify([!!v.boxed || Math.min(v.blazes?.nearest ?? Infinity,v.routeThreat ?? Infinity) <= (plan.covered ? 32 : 24),
@@ -219,6 +300,7 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false, advance = 
   let verticals = 0
   let stuckAt = null
   let deckSteps = 0
+  let farHops = 0
   if (session._ndDeckTour?.world !== here) session._ndDeckTour = { world: here }
   const deck = session._ndDeckTour
   const activeFrontier = process.env.ND_FORTRESS_FRONTIER !== '0' && typeof bot.findBlocks === 'function' && typeof bot.blockAt === 'function'
@@ -256,7 +338,29 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false, advance = 
     if (pie && process.env.ND_TOUR_STOP !== '0' && ((v.blazes && v.blazes.nearest <= 16) || (bot.health ?? 20) < 14)) { path.push({ handover: true, blazes: v.blazes, hp: Math.round(bot.health ?? 0) }); break }
     await keepBlocks(session, ctl)
     if (visited.every(p => p.distanceTo(me) >= 8)) visited.push(me.clone())
-    const adjacent = deckLeg(bot, deck)
+    const overhead = (v.seenList || []).filter(p => p.y >= me.y + 2 && Math.hypot(p.x - me.x, p.z - me.z) <= 2)
+      .sort((a, b) => a.y - b.y)[0]
+    const lead = process.env.ND_BLZ_DECK_BEARING === '1' && !overhead && pie && hinted < 6 && process.env.ND_TOUR_PIE !== '0' ? spawnerHint(bot) : null
+    if (process.env.ND_BLZ_SEEK2 === '1' && !overhead) {
+      // Подсказка хода по палубе: пирог/слух (spawnerHint), иначе видимые ифриты (висят у спавнера ±4).
+      const far = (v.blazeList || []).filter(b => b.distanceTo(me) > 6).sort((a, b) => a.distanceTo(me) - b.distanceTo(me))[0]
+      const hint = lead || (pie ? spawnerHint(bot) : null) || (far ? { x: far.x, z: far.z, by: 'ифрит' } : null)
+      const long = deckLong(bot, deck, views.length ? views : [me], hint)
+      if (long) {
+        const before = me.clone()
+        const w = await climbWalk(session, ctl, long.floor, deadline, { exact: true })
+        const moved = Math.round(bot.entity.position.distanceTo(before) * 10) / 10
+        path.push({ deckLong: true, to: xyz(long.floor), L: long.L, novel: long.novel, gain: long.gain, edge: long.edge, by: hint?.by, ok: w.ok, moved, error: w.ok ? undefined : w.error })
+        log('палуба: ход', { to: xyz(long.floor), L: long.L, cells: long.cells, novel: long.novel, gain: long.gain, edge: long.edge, by: hint?.by, ok: w.ok, moved, error: w.ok ? undefined : w.error })
+        // Не дошёл и не сдвинулся — клетка-цель не годится до нового взгляда (иначе тот же ход по кругу).
+        if (!w.ok && moved < 1) deck.notFloor.add(`${long.floor.x},${long.floor.y},${long.floor.z}`)
+        if (w.ok || moved >= 1) deckSteps += long.L
+        v = lookNow()
+        continue
+      }
+    }
+    // SEEK2: длинный ход по палубе ничего нового не дал — пошаговый обход в глубину (deckLeg) его не найдёт, дальше — точки обзора.
+    const adjacent = process.env.ND_BLZ_SEEK2 === '1' ? null : deckLeg(bot, deck, lead)
     if (adjacent) {
       const w = await climbWalk(session, ctl, adjacent.floor, deadline, { exact: true })
       path.push({ deck: true, back: adjacent.back, to: xyz(adjacent.floor), ok: w.ok, error: w.ok ? undefined : w.error })
@@ -267,9 +371,7 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false, advance = 
       continue
     }
     // S1f (вслепую): «пирог» F3 показывает спавнер в прорисовке или ифрит слышен — сперва туда, отрезком по пеленгу (до 6 раз).
-    const overhead = (v.seenList || []).filter(p => p.y >= me.y + 2 && Math.hypot(p.x - me.x, p.z - me.z) <= 2)
-      .sort((a, b) => a.y - b.y)[0]
-    const hint = !overhead && pie && hinted < 6 && process.env.ND_TOUR_PIE !== '0' ? spawnerHint(bot) : null
+    const hint = !overhead && pie && hinted < (process.env.ND_BLZ_SEEK2 === '1' ? 16 : 6) && process.env.ND_TOUR_PIE !== '0' ? lead || spawnerHint(bot) : null
     // Пеленг «пирога» развернулся (> 110°) после короткого отрезка — спавнер почти над/под нами (s1f-A2-3, сид 7777…: тело на y 50–52
     // ходило туда-сюда под тронным залом, спавнер −85,77,60 — в 3–5 бл. по горизонтали и 25 выше). Тронный зал — наверху крепости
     // (палубы 48–90): столбом вверх к палубе и взгляд, а не новый отрезок по пеленгу.
@@ -297,7 +399,32 @@ async function tour (session, ctl, { deadline, hops = 8, pie = false, advance = 
       v = lookNow()
       continue
     }
-    if (activeFrontier && !overhead) {
+    // SEEK2: пирога нет — к дальнему от портала видимому кирпичу (новому для обхода), длинным ходом: при первом взгляде трон обычно ещё
+    // в 60–160 бл. (правда d1-world по 21 прогону, медиана ~105), а точки обзора в 16 бл. кружили у первого кирпича. Дальше — снова
+    // взгляд: крепость открывается по мере хода, пирог загорается в 64 бл. от спавнера.
+    if (process.env.ND_BLZ_SEEK2 === '1' && !overhead && !hint && !(v.blazeList || []).length) {
+      const portal = placeOf(session, worlds.portalKey('the_nether'))
+      const P = portal && worlds.worldOfRecord(portal) === here ? portal : start
+      const fresh = (v.seenList || []).filter(p => p.distanceTo(me) > 10 && visited.every(q => Math.hypot(p.x - q.x, p.z - q.z) >= 12))
+      const far = fresh.sort((a, b) => Math.hypot(b.x - P.x, b.z - P.z) - Math.hypot(a.x - P.x, a.z - P.z))[0]
+      if (far && farHops < 8) {
+        farHops++
+        const at0 = me.clone()
+        let w = await climbTo(session, ctl, far, deadline)
+        if (!w.ok && !w.fought && bot.entity.position.distanceTo(at0) < 4) w = await legTo(session, ctl, far.x, far.z, deadline)
+        const moved = Math.round(bot.entity.position.distanceTo(at0))
+        path.push({ far: true, to: xyz(far), ok: w.ok, moved, error: w.ok ? undefined : w.error })
+        log('обход: к дальнему кирпичу', { to: xyz(far), from: xyz(at0), moved, ok: w.ok, error: w.ok ? undefined : w.error })
+        v = lookNow()
+        continue
+      }
+    }
+    // SEEK2: пирог F3 показал спавнер (в 64 бл.) — сразу отрезком по пеленгу (ветка подсказки ниже), а не точками обзора в 16 бл.:
+    // они кружили в 15×15 бл. в 35 бл. от трона (bz13-s17-1: 3 обхода по 14 остановок, спавнер так и «не виден»).
+    // SEEK2: видимые ифриты дальше 12 бл. (висят у спавнера) — к ним веткой ниже, а не точками обзора (bz13-s17-1: ифрит в 52 бл.
+    // при первом взгляде, обход остался у первого кирпича).
+    const blazeLead = process.env.ND_BLZ_SEEK2 === '1' && (v.blazeList || []).some(b => b.distanceTo(me) > 12)
+    if (activeFrontier && !overhead && !(process.env.ND_BLZ_SEEK2 === '1' && hint?.by === 'пирог') && !blazeLead) {
       // Новый вариант пути не повторяет свой noPath до изменения наблюдений, тела или снабжения.
       const supplies = (bot.inventory?.items() || []).filter(i => /pickaxe$|^(cobblestone|blackstone|netherrack|nether_bricks)$/.test(i.name))
         .map(i => [i.name, i.count, i.durabilityUsed || 0]).sort()

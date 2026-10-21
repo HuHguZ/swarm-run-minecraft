@@ -56,6 +56,7 @@ async function huntStyled (session, ctl, p: any = {}) {
 }
 
 async function huntLegacy (session, ctl, p: any = {}) {
+  if (process.env.ND_HUNT_OPEN_GROUND === '1' && worlds.worldOf(session.bot) === 'the_nether' && (!p.style || p.style === 'foxhole' || p.style === 'tunnel')) return huntTunnel(session, ctl, p)
   if (p.style === 'duel') return huntDuel(session, ctl, p)
   if (p.style === 'foxhole') return huntFoxhole(session, ctl, p)
   if (p.style === 'pillar') return huntPillar(session, ctl, p)

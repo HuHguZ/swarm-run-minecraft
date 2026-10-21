@@ -25,7 +25,7 @@ test('lava survey cache admits a new elevated view at the same horizontal positi
 test('a new lava lookout remains available after two old attempts; poor health raises its price', async () => {
   let height = 64
   const calls: string[] = []
-  const globals: any = { dim: () => 'overworld', known: {}, sense: async () => {}, sit: { surface: true, inWater: false },
+  const globals: any = { dim: () => 'overworld', known: {}, process: { env: {} }, sense: async () => {}, sit: { surface: true, inWater: false },
     state: { pos: { x: 0, y: 64, z: 0 }, health: 2 }, died: false, strategyInterrupted: false, lavaSourceKnown: false,
     lavaLookoutCells: new Set(), y: () => height, skyLookAt: null,
     have: (re: any) => typeof re === 'string' ? re === 'dirt' ? 16 : 0 : 1, COBBLE: /^cobblestone$/, log: () => {},

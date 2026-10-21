@@ -4,27 +4,51 @@ import { only, EYES_NEED } from '../flags'
 import { state, sit, memorySnapshot, died, known, fightGearWanted, homeForGearState, blazeDugInAt, setBlazeDugInAt,
   setHomeForGearState, setStage } from '../state'
 import { log } from '../log'
-import { have, dim, pearlsNow } from '../queries'
+import { refresh } from '../observe'
+import { have, dim, pearlsNow, foodUnits } from '../queries'
 import { STAGES, OTHER_WORLD, weakAndHungry, READY, netherLack, fightReady, fightLack, stageRun } from '../stages/table'
 import { eyesWant, bastionPearlsPending, rodsWanted, netherRetryState } from '../nether-plan'
 import { act } from '../act'
 import { leaveWater } from '../danger'
 import { returnFromNether } from '../travel'
 import { craft, ensurePick } from '../kit'
-import { continueFortressChoice } from '../nether-trip'
+import { continueFortressChoice, replenishNetherSupply } from '../nether-trip'
 import { intelligence } from '../strategy-bridge'
 import type { CampaignTurn, TurnFlow } from './turn'
 import * as gameClock from '../../src/game-clock'
 
+let homeWaits = 0
 async function loopSelect (loop: CampaignTurn): Promise<TurnFlow | { need: any[], s: any }> {
   const { fails, failureKey, cooling } = loop
   if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { setStage('-'); await ensurePick() }
   const need = STAGES.filter(s => !(only && !only.includes(s.name)) && s.needed() && (dim() === 'overworld' || OTHER_WORLD.has(s.name)))
-  const selection = only ? null : await intelligence.select(need, cooling)
+  const selection = only ? null : await intelligence.select(need, cooling, name => cooling({ name }))
+  if (selection) homeWaits = 0
   if (await continueFortressChoice(selection, fails.get(failureKey('nether')))) return 'continue'
   if (!selection && dim() === 'the_nether' && !bastionPearlsPending() && need.some(s => s.name === 'nether') && (!READY.nether() || (fightGearWanted && !fightReady())) &&
       homeForGearState?.observed !== netherRetryState(homeForGearState?.origin)) {
     setStage('-')
+    // ND_NE_HOME_PRICE=1 (поток ne 21.10, выкл.): «домой за недостающим» — ход по цене, а не ворота (правило гибкости). 0 кирок — сперва
+    // кирка в Аду (стебли → доски → палки, блэкстоун/булыжник: nether-supply); не хватает только еды «на ифритов» (порог 6 ед., не
+    // физика), а жемчуг ещё нужен — дело в Аду по графу, наверх не идти (17 прогонов b86/c92/c94/d94 уходили наверх на 3–13-й мин,
+    // наверху — смерть на этапе wood).
+    if (process.env.ND_NE_HOME_PRICE === '1') {
+      const PICK = /^(stone|iron|diamond|netherite)_pickaxe$/
+      if (!have(PICK) && (state.health ?? 20) >= 12) {
+        log('кирок нет — сперва кирка из того, что есть в Аду (стебли, блэкстоун), домой — только если не выйдет')
+        const supply = await replenishNetherSupply()
+        await refresh()
+        if (died || dim() !== 'the_nether') return 'continue'
+        if (have(PICK)) { log(`кирка в Аду: ${supply.ready ? 'запас пополнен' : supply.reason || 'есть'} — домой не иду`); return 'continue' }
+      }
+      // Не вечно: 6 ожиданий подряд без выбора графа (≈ 30 с и больше) — прежний ход домой.
+      if (have(PICK) && pearlsNow() < eyesWant() && (state.health ?? 20) >= 10 && foodUnits() >= 1 && homeWaits++ < 6) {
+        log(`на ифритов не хватает ${netherLack()}, но жемчуг нужен (${pearlsNow()}/${eyesWant()}) и хп ${Math.round(state.health ?? 0)} — домой не иду, дело в Аду`)
+        await act('ne_burrow', { why: 'граф молчит — жду смены причины в толще' })
+        await act('wait', { seconds: 5 })
+        return 'continue'
+      }
+    }
     log(`для ифритов не хватает ${fightGearWanted ? fightLack() : netherLack()} — домой за недостающим`)
     await returnFromNether()
     if (dim() === 'the_nether') {
@@ -49,7 +73,8 @@ async function loopSelect (loop: CampaignTurn): Promise<TurnFlow | { need: any[]
     return 'continue'
   }
   const foodFail = fails.get('food')
-  const urgentOk = x => !cooling(x) || !foodFail || gameClock.now() - (foodFail.at || 0) > 90000
+  const urgentOk = x => !cooling(x) || ((process.env.ND_OW_PAUSE_CAUSE !== '1' || dim() !== 'overworld') &&
+    (!foodFail || gameClock.now() - (foodFail.at || 0) > 90000))
   const urgent = weakAndHungry() ? need.find(x => x.name === 'food' && urgentOk(x) && x.ready() && !x.defer()) : null
   const legacy = only && (urgent || need.find(x => !cooling(x) && x.ready() && !x.defer()))
   const s = legacy ? (only ? legacy : intelligence.wrap(legacy)) : selection?.stage
@@ -72,7 +97,7 @@ async function loopNetherThreat (loop: CampaignTurn): Promise<void> {
   const spMem = memorySnapshot?.places?.['спавнер блейзов']
   const nearSpawner = !!(spMem && state.pos && dim() === 'the_nether' && Math.hypot(spMem.x - state.pos.x, spMem.z - state.pos.z) <= 24 && Math.abs(spMem.y - state.pos.y) <= 24)
   const blazes = (sit.fight?.order || []).some(o => o && o.name === 'blaze') || nearSpawner
-  if (blazes && rodsWanted() && !bastionPearlsPending() && known.fortress && fightReady()) {
+  if (blazes && rodsWanted() && !bastionPearlsPending() && known.fortress && fightReady() && !(require('../stages/nether') as typeof import('../stages/nether')).blazeFrPaused()) {
     log('ифриты рядом, стержни нужны — бой у спавнера, а не путь домой')
     setStage('nether')
     try { await stageRun('nether')() } catch (e) { if (e.stopCampaign) throw e; log(`бой у спавнера: ${e.message}`) }

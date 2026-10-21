@@ -168,7 +168,17 @@ async function walkToward (session, ctl, target, deadline, { range = 3, xz = fal
     const f = bot.entity.position.floored()
     const up = Math.ceil(target.y - f.y)
     const tries = []
-    for (const [sx, sz] of [[Math.sign(f.x - target.x) || 1, 0], [0, Math.sign(f.z - target.z) || 1], [-(Math.sign(f.x - target.x) || 1), 0], [0, -(Math.sign(f.z - target.z) || 1)]]) {
+    const directions = [[Math.sign(f.x - target.x) || 1, 0], [0, Math.sign(f.z - target.z) || 1], [-(Math.sign(f.x - target.x) || 1), 0], [0, -(Math.sign(f.z - target.z) || 1)]]
+    if (process.env.ND_BRUTE_MEMORY === '1') {
+      const memory: typeof import('../brute-memory') = require('../brute-memory')
+      memory.observe(bot)
+      // The old fixed order could climb toward a remembered brute after a noPath.
+      // Only price hypothetical stairs here; terrain is still checked by bore one step at a time.
+      const price = ([sx, sz]: number[]) => Array.from({ length: Math.min(up, 8) }, (_, i) =>
+        memory.penalty(bot, f.offset(sx * (i + 1), i + 1, sz * (i + 1)))).reduce((a, b) => a + b, 0)
+      directions.sort((a, b) => price(a) - price(b))
+    }
+    for (const [sx, sz] of directions) {
       if (ctl.aborted || bot.entity.position.y >= target.y - 1) break
       const b = await bore(session, ctl, { x: f.x + sx * (up + 12), z: f.z + sz * (up + 12) }, {
         deadline: Math.min(deadline - 5000, gameClock.now() + 60000), maxSteps: up + 4, maxY: Math.floor(target.y), throughBricks: true

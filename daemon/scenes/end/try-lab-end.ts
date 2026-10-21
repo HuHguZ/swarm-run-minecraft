@@ -10,7 +10,8 @@ import * as gameClock from '../../src/game-clock'
 //   MAP_SH=1 — крепость Края из копии этого же мира (место у стены комнаты; очей — по пустым рамкам): знание карты,
 //   пишется в главной метрике (AGENTS.md). Без него — вслепую (броски ока), отдельной строкой.
 //   GRID=1 (при MAP_SH) — сетка Ада копии по коридору спавн → крепость /8 (ход ne_route; CENV ND_NE_ROUTE=1).
-//   UNTIL=end (умолч.) | dragon; MINUTES (40); EYES — очей (умолч. пустые рамки + 2, вслепую 14); PEARLS (2); BEDS (5);
+//   UNTIL=end (умолч.) | dragon; MINUTES (40); EYES — очей (умолч. пустые рамки + 2, вслепую 14); EYES_RAW=1 — вместо очей
+//   жемчуг и стержни на них; PEARLS (2); BEDS (5);
 //   KEEPINV=false; DEATHS_MAX=1; CAMPAIGN=campaign.js; CENV='{"ND_X":"1"}' — env кампании; EXTRA — добавка к набору.
 // Итог — строка JSON в LAB_OUT: ok, отметки (минуты: крепость в памяти, комната, Энд, дракон), очей потрачено, смерти,
 // средний темп (игровые тики демона / реальные секунды).
@@ -32,10 +33,16 @@ const MAP_SH = process.env.MAP_SH === '1'
 let CENV: Record<string, any> = {}
 try { CENV = JSON.parse(process.env.CENV || '{}') } catch {}
 
-const KIT = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
+// KIT_SET=real — что реально выносит Ад после бартера (поток ne 21.10: брони нет, кроме золотых ботинок; каменный меч, кирка
+// железная; обсидиан бартера OBS (умолч. 10; 0 — без бартера), одно ведро воды; кроватей и лодки нет — их собирает этап endkit).
+const KIT = [...(process.env.KIT_SET === 'real'
+  ? ['golden_boots', 'shield', 'stone_sword', 'stone_axe', 'iron_pickaxe', 'stone_pickaxe', 'water_bucket', 'flint_and_steel',
+    'cooked_porkchop 8', 'cobblestone 64', 'netherrack 64', 'crafting_table', 'oak_planks 8', 'stick 4',
+    `obsidian ${process.env.OBS ?? 10}`, 'string 6', 'spectral_arrow 12', 'fire_charge 3', 'gold_ingot 6', `ender_pearl ${process.env.PEARLS || 0}`]
+  : ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'golden_boots', 'shield', 'iron_sword', 'iron_pickaxe',
   'stone_pickaxe 2', 'water_bucket 2', 'flint_and_steel', 'cooked_beef 16', 'cobblestone 64', 'cobbled_deepslate 64',
   'crafting_table', 'oak_planks 16', 'stick 8', `white_bed ${process.env.BEDS || 5}`, 'obsidian 4', 'oak_boat',
-  'bow', 'spectral_arrow 64', 'torch 16', `ender_pearl ${process.env.PEARLS || 2}`,
+  'bow', 'spectral_arrow 64', 'torch 16', `ender_pearl ${process.env.PEARLS || 2}`]),
   // EXTRA="obsidian 10,flint_and_steel" — что ещё принёс Ад (обсидиан бартера на раму выхода у крепости: CENV ND_SH_NETHER=1).
   ...String(process.env.EXTRA || '').split(',').map(x => x.trim()).filter(Boolean)]
 
@@ -148,7 +155,9 @@ async function main () {
   const eyes = Number(process.env.EYES || (MAP_SH ? need + 2 : 14))
   // Портал строился в creative (блоки не тратятся) — остаток обсидиана/огнива убрать: набор ровно «после Ада».
   await kit.cmd('/clear @s')
-  for (const g of [...KIT, `ender_eye ${eyes}`]) { const [item, n] = g.split(' '); await kit.cmd(`/give @s minecraft:${item}${n ? ' ' + n : ''}`) }
+  // EYES_RAW=1 — очи не готовые, а «набор на очи», как выносит Ад: жемчуг и стержни (крафт — этап eyes кампании).
+  const eyeKit = process.env.EYES_RAW === '1' ? [`ender_pearl ${eyes}`, `blaze_rod ${Math.ceil(eyes / 2)}`] : [`ender_eye ${eyes}`]
+  for (const g of [...KIT, ...eyeKit]) { const [item, n] = g.split(' '); await kit.cmd(`/give @s minecraft:${item}${n ? ' ' + n : ''}`) }
   await kit.cmd('/gamemode survival')
   await kit.cmd('/effect give @s minecraft:instant_health 1 5 true'); await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
   await sleep(1500)
@@ -158,7 +167,7 @@ async function main () {
   await kit.cmd('/time set 1000')
   const truth = (() => { const m = /\[(-?\d+), [^,]+, (-?\d+)\] \((\d+) blocks/.exec(rcon(`execute in minecraft:overworld positioned ${start.x} 70 ${start.z} run locate structure minecraft:stronghold`)); return m ? { x: +m[1], z: +m[2], dist: +m[3] } : null })()
   const inv0 = (await status()).inventory || {}
-  const eyes0 = cnt(inv0, /^ender_eye$/)
+  const eyes0 = process.env.EYES_RAW === '1' ? eyes : cnt(inv0, /^ender_eye$/)
 
   const clog = OUT.replace(/\.jsonl$/, '') + '-' + new Date().toISOString().slice(11, 19).replace(/:/g, '') + '.campaign.log'
   try { fs.writeFileSync(clog, '') } catch {}

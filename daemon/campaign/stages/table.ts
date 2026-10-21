@@ -1,6 +1,6 @@
 'use strict'
 // Таблица этапов: STAGES, defStage, готовность READY/DEFER/DONE и пороги, которые они читают.
-import { NIGHT_DOWN2, OW_DEEP } from '../flags'
+import { NIGHT_DOWN2, OW_DEEP, EYES_NEED } from '../flags'
 import { stage, state, sit, known, netherExplored, netherViewRevision, foodHuntEmpty, foodSpentMs, nightHeld,
   castSurfaceFailed, lavaSourceKnown, waterDeepFailAt, wantBeds, ironChestTried } from '../state'
 import { have, y, dim, LOGS, COBBLE, RAW, FOOD, foodUnits, netherFoodHave, PICK_STONE, PICK_IRON, PICK_DIAMOND,
@@ -30,28 +30,50 @@ const castNear = () => !!known.lava && !!state.pos && ((lavaSourceKnown && Math.
 // после темноты, пока искалось сухое место; cl-z: паук на 9.8).
 // И после литья портала: сборы (еда, кровать) ночью поверху — смерть от скелета на 173-й мин (cl-af 14.10). С порталом ночь
 // уходит в Ад, если готов, иначе — та же нора/коробка/работа внизу.
+// Конец игры (ND_END_NIGHT=1): очи на руках или крепость/портал Края известны — ночь не пережидать: до рассвета ~8 игр. мин
+// против хода к крепости под бой тактики (eb01 21.10: 3 из 3 прогонов стояли ночь в коробке у моря и у самой крепости).
+const endgameNight = () => process.env.ND_END_NIGHT === '1' && (have('ender_eye') >= Math.min(10, EYES_NEED) || !!known.stronghold || !!known.endPortal)
 const nightHold = () => dim() === 'overworld' && (!!sit.night || !!sit.dusk) && state.playPolicy?.mode === 'speedrun' &&
-  armorPointsNow() < 15 && (have(/_pickaxe$/) > 0 || (process.env.ND_NIGHT_WORK !== '0' && nightHeld && !sit.surface)) && process.env.ND_NIGHT_DIG !== '0'
+  armorPointsNow() < 15 && !endgameNight() && (have(/_pickaxe$/) > 0 || (process.env.ND_NIGHT_WORK !== '0' && nightHeld && !sit.surface)) && process.env.ND_NIGHT_DIG !== '0'
 // Копать ночью вниз — только с деревом на сменные кирки: каменной хватает на один спуск лестницей (131 удар), без палок она
 // ломалась внизу, подъём рукой сквозь камень — 8 мин (cl-q 14.10). Без дерева ночь — в норе или коробке.
 const nightDigWood = () => have(LOGS) > 0 || have(/_planks$/) >= 2 || have('stick') >= 2
 // Ночью без еды наверх за охотой не иду, пока хп хватает на работу внизу (≥ 6): охота ночью — главная из смертей серии.
 const weakAndHungry = () => (state.health ?? 20) < (process.env.ND_OW_DEEP === '1' && !known.portal && (state.dimension || 'overworld') === 'overworld' ? 6 : 12) &&
   !have(FOOD) && !have(RAW) && (state.food ?? 20) < 18 && (!sit.night || state.playPolicy?.mode === 'speedrun') && !((state.health ?? 20) >= 6 && nightHold())
+// O: те же запасы/сытость, что уже допускают этап iron (fed(3,15)), без нового порога.
+// Обычная срочная еда и тактический контроль остаются. Здоровье 16 — существующая граница canWorkAtNight,
+// только для сокращённых сборов: ниже остаются обычные еда/лечение/вход со своей оценкой цены.
+// Только подтверждённая наземная лава или близкий портал.
+const owFastTrack = () => process.env.ND_OW_FAST === '1' && dim() === 'overworld' &&
+  state.playPolicy?.mode === 'speedrun' && rodsNow() < 7 && (state.health ?? 0) >= 16 && !weakAndHungry() && fed(3, 15) && !sit.foes &&
+  (!!known.portal ? near3(known.portal, 48) : lavaSourceKnown && surfaceLavaNear() && (known.lava.y ?? 64) >= 50)
 const READY = {
   stone: () => have(/_pickaxe$/) > 0,
-  iron: () => have(PICK_STONE) > 0 && (fed(3, 15) || (foodHuntEmpty >= 2 && (state.food ?? 20) >= 8)),
+  // ND_OW_FOOD_VISIBLE=1: до набора портала железо не ждёт охоты при сытости ≥ 8 (у спидраннера — железо первым, еда попутно).
+  iron: () => have(PICK_STONE) > 0 && (fed(3, 15) || (foodHuntEmpty >= 2 && (state.food ?? 20) >= 8) ||
+    (process.env.ND_OW_FOOD_VISIBLE === '1' && !known.portal && dim() === 'overworld' && (state.food ?? 20) >= 8)),
   cast: () => have(/bucket$/) >= portalBuckets() && (have('flint_and_steel') || have('fire_charge') || have('iron_ingot')) > 0,
-  diamond: () => have(PICK_IRON) > 0 && fed(5, 19),
+  // ND_OW_KIT_PICK=1: железная кирка набора Ада — не повод для алмазов (owG2-01: «legacy recovery: diamond» 15 мин алмазов при паузе литья);
+  // алмазный путь — только запасной, когда поверху лавы нет (castSurfaceFailed).
+  diamond: () => have(PICK_IRON) > 0 && fed(5, 19) && !(process.env.ND_OW_KIT_PICK === '1' && !castSurfaceFailed && dim() === 'overworld'),
   obsidian: () => have(PICK_DIAMOND) > 0 && have(/bucket$/) > 0,
   portal: () => have('obsidian') >= 10,
   prep: () => have(PICK_STONE) > 0,
-  nether: () => have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 && (dim() === 'the_nether' || netherFoodHave() >= netherFoodNeed()),
+  // ND_OW_PREP_NEAR=1: у горящего портала охота рядом уже пуста (или ночь: в Аду ночи нет, охота поверху — риск), а сытость ≥ 12 — вход
+  // с тем, что есть (голод в Аду — цена, не ворота; owC4-05: портал на 31-й ночью, вместо входа ночная работа копала вниз).
+  // ND_OW_PREP_NEAR_FOOD — порог сытости (по умолчанию 12; owC15-13: портал на 29-й, сытость 11 — 11 мин ночью у портала без входа).
+  nether: () => have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0 && (dim() === 'the_nether' || netherFoodHave() >= netherFoodNeed() ||
+    owFastTrack() || (process.env.ND_OW_PREP_NEAR === '1' && !!known.portal && (foodHuntEmpty >= 1 || !!sit.night || !!sit.dusk) && (state.food ?? 20) >= Number(process.env.ND_OW_PREP_NEAR_FOOD || 12))),
   pearls: () => (have(PICK_IRON) > 0 || have(/^(iron|diamond|netherite)_sword$/) > 0),
   bastion: () => (have(PICK_IRON) > 0 || (!ironChestTried && dim() === 'the_nether' && have('iron_ingot') + have('raw_iron') + have('iron_nugget') / 9 >= 1)) && (foodUnits() >= 6 || (state.food ?? 0) >= 18)
 }
 function netherFoodNeed () {
   const base = rodsNow() >= 5 ? 3 : 6
+  // ND_OW_PREP_FOOD=<n>: первый вход (верхний мир, стержней нет) — запас n порций, а не 6: голод в Аду — цена, не ворота (owN2-owE1-02,
+  // owN5-owC5-09: портал на 16–17-й мин, еды 4 из 6 — охота prep до конца прогона).
+  const prepFood = Number(process.env.ND_OW_PREP_FOOD)
+  if (prepFood > 0 && dim() === 'overworld' && rodsNow() < 1) return Math.min(base, prepFood)
   if (process.env.ND_ROUTE === '1' && process.env.ND_ROUTE_FOOD2 !== '0') return Math.min(base, 2)
   // Ночь у горящего портала: в Аду ночи нет, поверху — тоже 3 порции (fp1-s13-1 16.10: портал на 29 мин, 3 свиных котлеты,
   // поверху «еды мало» — 17 мин ночных штреков вместо входа). ND_NIGHT_PORTAL_SURFACE=0 — прежнее «только снизу».
@@ -70,7 +92,7 @@ const netherLack = () => [
 const fightReady = () => READY.nether()
 const fightLack = netherLack
 const DEFER = {
-  food: () => nightWork() || (!sit.surface && have(FOOD) >= 6 && (state.food ?? 20) >= 14) ||
+  food: () => owFastTrack() || nightWork() || (!sit.surface && have(FOOD) >= 6 && (state.food ?? 20) >= 14) ||
     (OW_DEEP && !known.portal && foodHuntEmpty >= 2 && !weakAndHungry()) ||
     (OW_DEEP && !known.portal && foodSpentMs >= FOOD_CAP_MS && foodUnits() >= 3 && !weakAndHungry()) ||
     (OW_DEEP && !!known.portal && (known.portal.y ?? 64) < 40 && near3(known.portal, 48) && !sit.surface && y() < 40 && (sit.night || READY.nether()) && !weakAndHungry()) ||
@@ -131,6 +153,6 @@ function assertStageOrder () {
   if (names !== STAGE_ORDER.join(',')) throw new Error(`кампания: порядок этапов ${names}, ожидался ${STAGE_ORDER.join(',')}`)
 }
 
-export { canWorkAtNight, STAGES, OTHER_WORLD, castNear, nightHold, nightDigWood, weakAndHungry, READY, netherFoodNeed,
+export { owFastTrack, canWorkAtNight, STAGES, OTHER_WORLD, castNear, nightHold, nightDigWood, weakAndHungry, READY, netherFoodNeed,
   netherLack, fightReady, fightLack, DONE, defStage, stageProgress, nightWork, FOOD_STOCK, FOOD_CAP_MS, entrySupplies,
   foodShort, near3, lavaApproachSeconds, surfaceLavaNear, stageRun, assertStageOrder }

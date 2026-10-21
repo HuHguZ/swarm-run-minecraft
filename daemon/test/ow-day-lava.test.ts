@@ -170,3 +170,21 @@ test('legacy cast asks the daylight scout before a blind attempt; the actual opt
   await ctx.run();assert.deepEqual(calls,[enabled?'day-scout':'blind-cast'])
  }
 })
+
+test('ND_OW_LAVA_DOWN_CONTINUE: a descent that only walked its own stairs continues down from their bottom', async () => {
+  for (const on of [true, false]) {
+    const f = stepFixture(), digs: number[] = []
+    f.ctx.process.env = on ? { ND_OW_LAVA_DOWN_CONTINUE: '1' } : {}
+    f.ctx.dayLavaQuotes = () => [{ id: 'down:north', kind: 'down', direction: 'north', depth: 8, price: 100 }]
+    const base = f.ctx.act
+    f.ctx.act = async (m, p) => {
+      if (m !== 'dig_down') return base(m, p)
+      digs.push(f.ctx.state.pos.y)
+      f.ctx.state.pos.y -= p.depth
+      // Первый спуск — по своей лестнице (dug 0), дальше — новая порода.
+      return { status: 'done', detail: { dug: digs.length === 1 ? 0 : 24 } }
+    }
+    await fn('dayLavaStep', f.ctx)()
+    assert.deepEqual(digs, on ? [70, 62] : [70], on ? 'own stairs, then new stairs from y62' : 'flag off: one descent per step')
+  }
+})

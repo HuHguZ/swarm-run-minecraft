@@ -118,7 +118,7 @@ function roomPieLure (rx: RoomRun, me) {
         // Высота — «пирогом» по вертикали (наклон камеры) при известной горизонтальной дальности (s5e-Q-2: комната на 3 бл. выше
         // штрека — 4 штрека «за 24 шагов не дошёл»).
         let ly = me.y
-        if (pieLurePrecise) { const el = (require('../endportal-descent') as typeof import('../endportal-descent')).pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z)); if (el) ly = el.y }
+        if (pieLurePrecise) { const el = (require('../endportal-descent') as typeof import('../endportal-descent')).pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z)); if (el) ly = el.y; if (process.env.ND_PIE_YCAP === '1') ly = Math.min(ly, 52) }
         if (pieLurePrecise) pieLure = new Vec3(est.x, ly, est.z)
         else { const v = S.vecOf(arcs[0].center); pieLure = new Vec3(me.x + v.x * 24, me.y, me.z + v.z * 24) }
         // Дошёл до оценки, а рамок не видно — спавнер выше/ниже: эту точку не повторять (дальше звук лавы и обход).

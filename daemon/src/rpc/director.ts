@@ -11,6 +11,7 @@ function directorMethods ({ session, director }: RpcContext) {
     // Только чтение: тело не двигается, текущее намерение не рвётся.
     situation: async () => session.immediate(async () => {
       const bot = session.require()
+      if (process.env.ND_NE_NO_GIVEUP === '1') (require('../nether-no-giveup') as typeof import('../nether-no-giveup')).trackNetherBody(bot)
       const s = require('../director').situation(director)
       const f = s.fight
       // Удары кирок: шапка состояния даёт штуки, а две стёртые кирки — это не

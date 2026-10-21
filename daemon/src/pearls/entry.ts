@@ -11,6 +11,7 @@ import { barter } from './barter'
 async function pearls (session, ctl, p: any = {}) {
   if (p.mode === 'barter') return barter(session, ctl, p)
   if (p.mode === 'hunt') return hunt(session, ctl, p)
+  if (p.mode === 'seek') return (require('./seek') as typeof import('./seek')).seek(session, ctl, p)
   const bot = session.bot
   const me = bot.entity.position
   const seen = (name, r) => (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === name && e.position &&

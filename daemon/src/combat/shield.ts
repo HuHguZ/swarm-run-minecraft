@@ -177,6 +177,11 @@ function makeShield (session, ctl, { shield: policy = 'ranged' }: any = {}) {
     },
     blocking,
     nativeUse () { return sh.charge?.snapshot() ?? { useConfirmed: false, confirmedTicks: null } },
+    traceState () { return { want: sh.want, metadataUp: shieldUp(bot), lastAsk: sh.lastAsk,
+      disabledUntil: Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0),
+      target: sh.target ? { id: sh.target.id ?? null, name: sh.target.name ?? null,
+        p: sh.target.position ? [sh.target.position.x, sh.target.position.y, sh.target.position.z] : null,
+        valid: sh.target.isValid, facingCos: sh.target.position ? facingCos(bot, sh.target.position) : null } : null } },
     failure () { return sh.charge?.why() || (gameClock.now() < Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0) ? 'shield_cooldown' : null) },
     get cancelled () { return sh.charge?.cancelled },
 
@@ -227,6 +232,7 @@ function shieldState (session, ctl, policy): ShieldState {
     upMs: 0,
     openMs: 0,
     facingMs: 0,
+    facingMeasuredMs: 0,
     idleMs: 0,
     reachMs: 0,
     swings: 0,
@@ -335,7 +341,10 @@ function shieldListen (sh: ShieldState) {
     if (nowUp) {
       st.upMs += dt
       if (close) st.idleMs += dt
-      if (sh.target && sh.target.isValid && facingCos(bot, sh.target.position) > 0) st.facingMs += dt
+      if (sh.target && sh.target.isValid) {
+        st.facingMeasuredMs += dt
+        if (facingCos(bot, sh.target.position) > 0) st.facingMs += dt
+      }
     } else {
       // Знаменатель для второй колонки урона. Без него hpUnderShield и hpOpen
       // сравнивать нельзя: 3 хп за секунду и 3 хп за минуту — это одно число.
@@ -400,6 +409,8 @@ async function shieldRaise (sh: ShieldState, raised) {
   if (!raised) {
     if (!sh.want) return false
     sh.want = false
+    if (process.env.ND_BLAZE_SHIELD_TRACE === '1') bot.emit('nd_blazeShieldUse', { action: 'lower', t: gameClock.now() })
+    shieldRememberNativeUse(sh)
     sh.charge?.close(); sh.charge = null
     try { bot.deactivateItem() } catch {}
     // Close the edge here rather than waiting for the sampler to notice.
@@ -427,7 +438,9 @@ async function shieldRaise (sh: ShieldState, raised) {
   sh.want = true
   sh.lastAsk = gameClock.now()
   st.raises++
+  if (process.env.ND_BLAZE_SHIELD_TRACE === '1') bot.emit('nd_blazeShieldUse', { action: 'raise', t: sh.lastAsk })
   try {
+    shieldRememberNativeUse(sh)
     sh.charge?.close()
     sh.charge = (require('../bow') as typeof import('../bow')).observeCharge(bot, { item: 'shield', hand: 'off-hand' })
     if (!sh.charge.start()) { sh.why = sh.charge.why() || 'shield_native_use_not_started'; return false }
@@ -455,8 +468,18 @@ async function shieldRaise (sh: ShieldState, raised) {
   return false
 }
 
+// Preserve history separately from nativeUse(), whose answer is about the CURRENT raise only.
+function shieldRememberNativeUse (sh: ShieldState) {
+  if (process.env.ND_BLAZE_SHIELD_METRICS !== '1') return
+  const last = sh.charge?.snapshot()
+  if (!last) return
+  sh.st.lastNativeUse = last
+  sh.st.anyUseConfirmed = !!sh.st.anyUseConfirmed || !!last.useConfirmed
+}
+
 function shieldReport (sh: ShieldState, guard) {
   const { policy, st, census, blocking } = sh
+  shieldRememberNativeUse(sh)
   if (!st.have && !st.raises && policy !== 'never') {
     const bare: any = { policy, worn: false, why: sh.why || 'щита нет' }
     bare.note = shieldNote(bare)
@@ -483,7 +506,13 @@ function shieldReport (sh: ShieldState, guard) {
     ...guard.nativeUse(),
     blocking: blocking(),
     upSeconds: sec(st.upMs),
-    facingSeconds: sec(st.facingMs),
+    facingSeconds: process.env.ND_BLAZE_SHIELD_METRICS === '1' && !st.facingMeasuredMs ? null : sec(st.facingMs),
+    ...(process.env.ND_BLAZE_SHIELD_METRICS === '1' ? {
+      facingMeasuredSeconds: sec(st.facingMeasuredMs),
+      anyUseConfirmed: !!st.anyUseConfirmed,
+      lastUseConfirmed: st.lastNativeUse?.useConfirmed ?? false,
+      lastConfirmedTicks: st.lastNativeUse?.confirmedTicks ?? null
+    } : {}),
     // Time the block was up while the mob was inside sword reach: the only
     // stretch where holding it could have cost anything at all.
     closedSeconds: sec(st.idleMs),
@@ -511,6 +540,7 @@ function shieldClose (sh: ShieldState) {
   const { bot, timer, onRawSound, onHealth, onCooldown } = sh
   if (sh.closed) return
   sh.closed = true
+  shieldRememberNativeUse(sh)
   sh.charge?.close(); sh.charge = null
   gameClock.clearInterval(timer)
   try { bot._client.removeListener('sound_effect', onRawSound) } catch {}
@@ -548,7 +578,7 @@ function shieldNote (s) {
       ? 'по звуку сервер о блоках молчит, но урон под щитом ниже — щит работает'
       : 'погашенных нет и урон не ниже — щит тут не помог')
   }
-  if (s.upSeconds > 0 && s.facingSeconds < s.upSeconds * 0.6) {
+  if ((s.facingMeasuredSeconds ?? s.upSeconds) > 0 && s.facingSeconds !== null && s.facingSeconds < (s.facingMeasuredSeconds ?? s.upSeconds) * 0.6) {
     bits.push(`но лицом к цели только ${s.facingSeconds}с — блок гасит только спереди`)
   }
   if (s.closedSeconds > 0) {

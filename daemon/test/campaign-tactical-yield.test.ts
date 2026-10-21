@@ -56,7 +56,7 @@ test('ordinary mining still completes and legacy campaign still answers an unhan
 
 for (const only of [null, ['food']]) test(`campaign stage entry leaves recovery to the graph unless stages were explicitly selected: ${only}`, async () => {
   const source = campaignTs()
-  const entry = source.indexOf('const attemptedKey = failureKey(s.name)')
+  const entry = source.indexOf('const attemptedKey = failureKey(')
   assert.ok(entry >= 0)
   const start = source.indexOf('try {', entry) + 'try {'.length
   const end = source.indexOf('} catch (e)', start)

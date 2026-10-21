@@ -582,7 +582,9 @@ async function cmdRun (args, sceneArgs) {
   for (const i of ids) {
     await ensurePacketLimiter(slot(i))
     // В 750 TPS ожидание подключения успевало сменить сутки; ночь не входит в подготовку свежего старта.
-    if (path.basename(scene) === 'try-lab-fresh.js') checkedReply('time set 1000', await slotRcon(slot(i), 'time set 1000'))
+    const keepPhase = (extra.ND_NIGHT_KIT_SNAPSHOT ?? process.env.ND_NIGHT_KIT_SNAPSHOT) === '1' &&
+      (extra.KEEP_STATE ?? process.env.KEEP_STATE) === '1'
+    if (path.basename(scene) === 'try-lab-fresh.js' && !keepPhase) checkedReply('time set 1000', await slotRcon(slot(i), 'time set 1000'))
     const ticks = await configureTick(command => slotRcon(slot(i), command), rate)
     const st = readState()
     if (st.slots?.[i]) { st.slots[i].tickRate = rate; writeState(st) }
@@ -745,7 +747,7 @@ if (typeof module !== 'undefined') module.exports = { reupPlan } // фиксту
     else if (cmd === 'kill-runs') cmdKillRuns(a)
     else if (cmd === 'uuid') console.log(offlineUuid(a._[0]))
     else if (cmd === 'snapshot') cmdSnapshot(a)
-    else console.log(fs.readFileSync(__filename.replace(/\.js$/, '.ts'), 'utf8').split(/\r?\nconst fs/)[0].split(/\r?\n/).slice(1).map(l => l.replace(/^\/\/ ?/, '')).join('\n'))
+    else console.log(fs.readFileSync(__filename.replace(/\.js$/, '.ts'), 'utf8').split(/\r?\nconst fs/)[0].split(/\r?\n/).filter(l => l.startsWith('//')).map(l => l.replace(/^\/\/ ?/, '')).join('\n'))
   } catch (e) {
     console.error('ОШИБКА', e.stack || e.message)
     process.exitCode = 1

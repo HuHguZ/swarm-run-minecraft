@@ -11,7 +11,7 @@ import { log, bastionNear } from './look'
 // видно 0. Поэтому, пока тело выше 80, отрезок целится на 12 ниже (до 64):
 // pathfinder сам ищет спуск и копает — ломать блок у жидкости он не станет
 // (Movements.dontCreateFlow). Не вышло вниз — тот же отрезок по горизонтали.
-async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = null }: any = {}) {
+async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = null, cover = false, strictCover = false }: any = {}) {
   const nether: typeof import('../nether') = require('../nether')
   // Без золотой вещи — закрытым штреком (nether-cover, план координатора 14.10): в толще не видят пиглины, гасты и скелеты,
   // под ногами нет обрыва; устье в пещеру — окно (onOpen — взгляд поиска). Не вышло — как прежде (поверху — цена).
@@ -19,14 +19,65 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
   // С золотом — тоже штреком у бастиона (48 бл.: бруты бьют при любом золоте, g4-5-1: брут и хоглин у бастиона, смерть за 1.5 с;
   // дальше — к крепости — поверху: штрек над лавовым морем застревал, g7-6-1) и при
   // видимых брутах, хоглинах, гастах.
-  const coverNeeded = () => !(require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot) || bastionNear(session, bot.entity.position, 48) ||
-    (() => { try { return (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 40 }).some(e => e.seen && /^(piglin_brute|hoglin|zoglin|ghast)$/.test(e.name)) } catch { return false } })()
-  if (process.env.ND_NE_COVER !== '0' && worlds.worldOf(bot) === 'the_nether' && coverNeeded() && gameClock.now() < deadline) {
+  // cover — отрезок явно штреком (вызывающий знает причину).
+  const coverNeeded = () => cover || !(require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot) || bastionNear(session, bot.entity.position, 48) ||
+    // ND_BLZ_WALK_LEGS=1 (поток blz 21.10): видимый гаст — не повод штрека (шар отбивает ne-guard swat; штрек ест кирки: bz02 —
+    // 216 незерака и обе кирки к 9-й мин поиска крепости). Бруты/хоглины/бастион/без золота — штрек как прежде. Слепой вид (blind) не трогает.
+    (() => { try { return (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 40 }).some(e => e.seen && (process.env.ND_BLZ_WALK_LEGS === '1' ? /^(piglin_brute|hoglin|zoglin)$/ : /^(piglin_brute|hoglin|zoglin|ghast)$/).test(e.name)) } catch { return false } })()
+  // ND_BLZ_BASTION_DETOUR=1 (поток blz 21.10): бастион рядом — единственная причина штрека (золото надето, брутов/хоглинов не видно) — не
+  // копать 1×2 (bz11-s18-1: 6 штреков у бастиона за минуту — 343 блока, кирки съедены, обвал на 22), а обойти: отрезок поверху с точкой,
+  // отведённой от бастиона на 40+ бл. (брут видит на 16, пиглины в золоте нейтральны). Тело уже в 32 от бастиона — сперва прочь от него.
+  const T0 = { x: tx, z: tz }
+  if (process.env.ND_BLZ_BASTION_DETOUR === '1' && !cover && !strictCover && worlds.worldOf(bot) === 'the_nether' &&
+      (require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot) && bastionNear(session, bot.entity.position, 48)) {
+    const seenBrute = (() => { try { return (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 40 }).some(e => e.seen && /^(piglin_brute|hoglin|zoglin)$/.test(e.name)) } catch { return true } })()
+    const places = (session.journal.state && session.journal.state.places) || {}
+    const me = bot.entity.position
+    const B = (Object.entries(places) as [string, any][]).filter(([k, v]: any) => /бастион/.test(k) && v && worlds.worldOfRecord(v) === 'the_nether')
+      .map(([, v]) => v).sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(b.x - me.x, b.z - me.z))[0]
+    if (!seenBrute && B) {
+      const dB = Math.hypot(me.x - B.x, me.z - B.z)
+      let wx = tx, wz = tz
+      if (dB < 32) { const ux = (me.x - B.x) / (dB || 1), uz = (me.z - B.z) / (dB || 1); wx = B.x + ux * 44; wz = B.z + uz * 44 }
+      else {
+        // Отрезок к цели, ближайшая к бастиону точка — ближе 40: конец отрезка поворачивается от бастиона, пока не отойдёт.
+        const leg = Math.min(16, Math.hypot(tx - me.x, tz - me.z)) || 1
+        let a = Math.atan2(tz - me.z, tx - me.x)
+        const side = Math.sign((tx - me.x) * (B.z - me.z) - (tz - me.z) * (B.x - me.x)) || 1
+        for (let k = 0; k < 6; k++) {
+          const ex = me.x + Math.cos(a) * leg, ez = me.z + Math.sin(a) * leg
+          if (Math.hypot(ex - B.x, ez - B.z) >= 40) { wx = ex; wz = ez; break }
+          a -= side * Math.PI / 8
+        }
+      }
+      const w = await nether.guarded(session, ctl, sub => walkLeg(session.bot, sub, Math.round(wx), Math.round(wz), deadline))
+      log('обход бастиона поверху', { bastion: { x: B.x, z: B.z }, dB: Math.round(dB), to: T0, via: { x: Math.round(wx), z: Math.round(wz) }, ok: w.ok, error: w.ok ? undefined : w.error })
+      if (w.fought || w.ok || ctl.aborted || gameClock.now() > deadline) return w
+      // Поверху не прошёл (bz13-s18-1: «застрял … за 8 с» в 16 из 20 обходов) — прямым открытым штреком к той же точке обхода: 2 взмаха
+      // на шаг и только в толще, без заделки устьев закрытого (closedBore там же копал 25–70 блоков на отрезок и кружил).
+      const b = await nether.bore(session, ctl, { x: Math.round(wx), z: Math.round(wz) }, { deadline: Math.min(deadline, gameClock.now() + 30000), maxSteps: 16, minY: 40 })
+      log('обход бастиона штреком', { via: { x: Math.round(wx), z: Math.round(wz) }, ok: b.ok, moved: b.moved, dug: b.dug, why: b.why })
+      if (b.ok || b.moved >= 6 || ctl.aborted) return { ok: !!(b.ok || b.moved >= 6), bored: b.dug, error: b.why }
+    }
+  }
+  if ((strictCover || process.env.ND_NE_COVER !== '0') && worlds.worldOf(bot) === 'the_nether' && (strictCover || coverNeeded()) && gameClock.now() < deadline) {
     await keepPicks(session, ctl)
     const d0 = Math.hypot(tx - bot.entity.position.x, tz - bot.entity.position.z)
-    const c = await (require('../nether-cover') as typeof import('../nether-cover')).closedBore(session, ctl, { x: tx, z: tz }, {
-      deadline: Math.min(deadline, gameClock.now() + 60000), maxSteps: 24, onOpen, stop, goldOk: () => !piglinsAround(bot), minY: 40
-    })
+    // ND_BASTION_SEARCH_RESERVE=1: preserve the gold-harvesting pick during covered search, as tunnelTo already does.
+    const filter0 = bot._ndToolFilter
+    const reserve0 = bot._ndBastionSearchReserve
+    let c
+    try {
+      if (process.env.ND_BASTION_SEARCH_RESERVE === '1') {
+        bot._ndBastionSearchReserve = true
+        const filter = (require('../tunnel') as typeof import('../tunnel')).makeToolFilter(bot)
+        bot._ndToolFilter = (item, block) => (!filter0 || filter0(item, block)) && filter(item, block)
+      }
+      c = await (require('../nether-cover') as typeof import('../nether-cover')).closedBore(session, ctl, { x: tx, z: tz }, {
+        deadline: Math.min(deadline, gameClock.now() + 60000), maxSteps: 24, onOpen, stop, goldOk: () => !piglinsAround(bot), minY: 40
+      })
+    } finally { bot._ndToolFilter = filter0; bot._ndBastionSearchReserve = reserve0 }
+    if (c.why?.includes('BASTION_SEARCH_SUPPLY:')) throw Object.assign(new Error(c.why), { code: 'BASTION_SEARCH_SUPPLY', supplyNeeded: true })
     log('закрытый штрек', { to: { x: tx, z: tz }, ok: c.ok, moved: c.moved, dug: c.dug, placed: c.placed, mouths: c.mouths, corridor: c.corridor || undefined, gold: c.gold || undefined, down: c.down || undefined, unsealed: c.unsealed || undefined, why: c.why, at: c.at, view: c.view ? { seen: c.view.seen, bastion: !!c.view.bastion } : undefined })
     // Руда из стен штрека — «золото по пути»: как хватит на 4 слитка, сразу ботинки (верстак — из рюкзака, в штреке).
     if (c.gold && !ctl.aborted) { try { if (await (require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).armGold(session, ctl)) log('золото из стен штрека: броня надета', {}) } catch {} }
@@ -35,7 +86,7 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
     if (c.ok || gain >= 8 || (c.view && stop && stop(c.view))) return { ok: true, bored: c.dug, covered: true, view: c.view }
     if (ctl.aborted) return { ok: false, error: 'прервано' }
     // Поверху без золотой вещи не идём (d5-5-1, d7-6-1: отрезок ногами — уступ над лавовым морем, падение): отрезок закрыт.
-    if (process.env.ND_NE_COVER_WALK !== '1') return { ok: false, error: `закрытый штрек: ${c.why}`, bored: c.dug, covered: true, view: c.view }
+    if (strictCover || process.env.ND_NE_COVER_WALK !== '1') return { ok: false, error: `закрытый штрек: ${c.why}`, bored: c.dug, covered: true, view: c.view }
   }
   // Без нашего золота пиглины бьют всё, что видят (NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD — сенсор с лучом): видны в 24 бл.
   // или слышны ближе 16 — отрезок штреком, а не поверху (b11-6-2 14.10: поиск бастиона поверху, смерть через минуту). Штрек
@@ -166,6 +217,64 @@ async function goldOnTheWay (session, ctl) {
   return r
 }
 
+// ND_BLZ_WOOD_WAY=1 (blz 21.10): дерево Ада по пути — на палки к каменным киркам (булыжника в наборе 40–60, палок 4–8): поиск крепости
+// стирает 600–900 взмахов за 10–25 мин (n53–n60: кирки кончились — БЛОКЕР «для ифритов не хватает кирки»). Стебель = 4 доски = 8 палок =
+// 4 каменные кирки (524 взмаха). Палок с досками меньше 12, стебель виден в 10 бл., пиглинов и хоглинов в 24 не видно — срубить 2
+// (рукой ~3 с), не чаще раза в игровую минуту. Распакует и скуёт keepPicks/restockPicks, когда кирки кончатся.
+async function woodOnTheWay (session, ctl) {
+  const bot = session.bot
+  if (process.env.ND_BLZ_WOOD_WAY !== '1' || !bot.inventory || !bot.registry?.blocksByName || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted ||
+    gameClock.now() < (bot._ndWoodWayAt || 0)) return null
+  const count = (re: RegExp) => bot.inventory.items().filter(i => re.test(i.name)).reduce((s, i) => s + i.count, 0)
+  const sticks = count(/^stick$/) + 2 * count(/_planks$/) + 8 * count(/_(stem|hyphae|log)$/)
+  if (sticks >= 12) return null
+  const ids = ['warped_stem', 'crimson_stem'].map(n => bot.registry.blocksByName[n]?.id).filter(Boolean)
+  const seen = (require('../sight') as typeof import('../sight')).visibleOf(bot, ids, 10, { max: 4 })
+  if (!seen.length) return null
+  bot._ndWoodWayAt = gameClock.now() + 60000
+  const foes = (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 24 }).filter(e => e.seen && /^(hoglin|zoglin|piglin|piglin_brute)$/.test(e.name))
+  if (foes.length) { log('дерево по пути: рядом ' + foes[0].name + ' — не рублю', { sticks }); return null }
+  const before = count(/_(stem|hyphae)$/)
+  let r: any = null
+  try { r = await (require('../actions') as typeof import('../actions')).mine(session, ctl, { block: 'warped_stem,crimson_stem', count: 2, radius: 10 }) } catch (e) { r = { error: e.message } }
+  log('дерево по пути', { sticks, got: count(/_(stem|hyphae)$/) - before, stopped: (r && (r.stopped || r.error)) || undefined })
+  return r
+}
+
+// ND_BLZ_RETRACE=1 (blz 21.10): домой от трона — по своему следу (nether-no-giveup.netherTrail: клетки ног, петли сняты), как игрок
+// идёт назад той же дорогой, а не закрытым штреком наугад (bzQ2-s18-1, 5730: 7 стержней на 7-й мин, 126 бл. до портала закрытым штреком —
+// 30 игр. мин, «время вышло» ×3, кирки кончились на обратном пути). Точки — каждые 10 клеток следа назад от ближней к телу, ход обычным
+// путём (guarded climbWalk: ударили — бой), до stopNear от портала; три промаха подряд — конец, дальше выход кампании.
+async function retraceHome (session, ctl, { deadline = gameClock.now() + 180000, stopNear = 20 }: any = {}) {
+  const bot = session.bot
+  if (process.env.ND_BLZ_RETRACE !== '1' || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted) return null
+  const portal = ((session.journal?.state && session.journal.state.places) || {})[worlds.portalKey('the_nether')]
+  if (!portal || worlds.worldOfRecord(portal) !== 'the_nether') return { ok: false, why: 'портала в памяти нет' }
+  const trail = (require('../nether-no-giveup') as typeof import('../nether-no-giveup')).netherTrail(bot)
+  if (trail.length < 8) return { ok: false, why: 'следа нет' }
+  const far = () => Math.hypot(portal.x - bot.entity.position.x, portal.z - bot.entity.position.z)
+  const me = bot.entity.position
+  let k = 0
+  for (let i = 1; i < trail.length; i++) if (Math.hypot(trail[i].x - me.x, trail[i].y - me.y, trail[i].z - me.z) < Math.hypot(trail[k].x - me.x, trail[k].y - me.y, trail[k].z - me.z)) k = i
+  const out: any = { from: k, of: trail.length, legs: 0, fails: 0, far0: Math.round(far()) }
+  for (let i = k - 10; !ctl.aborted && gameClock.now() < deadline && far() > stopNear; i -= 10) {
+    const c = trail[Math.max(0, i)]
+    // Только ближе к порталу, чем тело сейчас: след после трона (яма, штрек от трона) назад к трону не ведёт.
+    if (Math.hypot(portal.x - c.x, portal.z - c.z) >= far() - 4) { if (i <= 0) break; continue }
+    const w = await climbWalk(session, ctl, new Vec3(c.x, c.y - 1, c.z), deadline)
+    out.legs++
+    if (w.ok) out.fails = 0
+    // Промах (застрял у клетки следа) — дальше по следу через 10 клеток; пять подряд — конец (bB2-s18-2: три промаха у первой точки,
+    // «застрял на air у blackstone», потом штрек кампании под тактикой у лавы — смерть).
+    else if (++out.fails >= 5) { out.why = w.error; break } else i -= 10
+    if (i <= 0) break
+  }
+  out.far = Math.round(far())
+  out.ok = out.far <= stopNear + 4
+  log('домой по следу', out)
+  return out
+}
+
 // Тронный зал по видимому кирпичу: подойти к видимому кирпичу, оглядеться,
 // следующий — самый далёкий от уже пройденных мест, пока не увиден спавнер
 // или не кончились шаги. Для blaze.js, когда крепость найдена, а спавнера
@@ -225,4 +334,4 @@ async function climbWalk (session, ctl, top, deadline, { exact = false }: any = 
   })
 }
 
-export { legTo, walkLeg, keepBlocks, goldOnTheWay, climbTo, climbWalk }
+export { legTo, walkLeg, keepBlocks, goldOnTheWay, woodOnTheWay, retraceHome, climbTo, climbWalk }

@@ -79,7 +79,7 @@ function pearls (this: any, p: any = {}) {
     }, {
       timeoutMs: (budget + 20) * 1000,
       params: p,
-      interruptOn: p.mode === 'barter'
+      interruptOn: p.mode === 'barter' || p.mode === 'seek'
         ? ['chat', 'low_health', 'death', 'kicked', 'disconnected']
         : ['chat', 'death', 'kicked', 'disconnected']
     })

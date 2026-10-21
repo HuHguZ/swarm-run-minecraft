@@ -2,7 +2,8 @@
 import * as gameClock from '../game-clock'
 import { sleep } from '../movement'
 import { equipBestTool, missingHarvestTool } from '../items'
-import { withTimeout, FILLER, occupiedByEntity } from '../build'
+import { withTimeout, FILLER, FALLING, occupiedByEntity } from '../build'
+import { plugWaterEnabled, liquidSeen, plugBudget, plugVisibleLiquids, digVisibleBlock } from './dig-water'
 
 // Same mapping as COMPASS in actions.js: north is -z.
 const DIRS: any = {
@@ -92,7 +93,10 @@ function bearing (from, dir, pos) {
 // Feeling the heat. This is the one place the bot looks through solid stone,
 // and it may only ever say "no" — breaking sideways into a lava pocket is how
 // a strip mine ends. Never used to find anything.
-function danger (bot, from, cell, height, dir) {
+// bridgeFloor (ND_OW_TUNNEL_BRIDGE=1, только штрек): вода — пол следующей клетки (затопленная пещера, лужа впереди внизу). Вверх в
+// штрек она не течёт, а пол штрек и так кладёт блоком перед шагом (мост, как у игрока). Лава и вода сбоку/сверху — прежний отказ.
+// D0-04 21.10: тело на камне посреди затопленного пола y13, «вода … в 1 впереди снизу» во все четыре стороны — 7 мин без работы.
+function danger (bot, from, cell, height, dir, bridgeFloor = false) {
   for (let h = 0; h < height; h++) {
     const pos = cell.offset(0, h, 0)
     const here = bot.blockAt(pos)
@@ -108,6 +112,8 @@ function danger (bot, from, cell, height, dir) {
       bot.blockAt(pos.offset(dir.dx, 0, dir.dz))
     ]
     for (const b of around) {
+      if (bridgeFloor && h === 0 && b === around[2] && isWater(b)) continue
+      if (plugWaterEnabled() && isWater(b) && !liquidSeen(bot, b)) continue // невидимая лава — всегда отказ (owKP-owA1-05)
       // Naming which way the water or lava is turns "не копаю" into a choice:
       // a pocket on the left is dodged by going right, one straight ahead is
       // dodged by changing direction or height.
@@ -174,7 +180,7 @@ function walkableCell (bot, cell) {
 // columns, because one block of deepslate is under a second of digging but a
 // column that keeps refusing burns the full 20s dig timeout six times over —
 // and a zombie covers six blocks in three seconds.
-async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null) {
+async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null, plugs = plugBudget()) {
   let dug = 0
   // Top down: the head slot is where falling gravel lands, and clearing it
   // first means the body never stands under a live column.
@@ -191,6 +197,8 @@ async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null
       const alarm = watch && watch()
       if (alarm) return { dug, alarm }
 
+      const wet = await plugVisibleLiquids(bot, ctl, Array.from({ length: height }, (_, y) => cell.offset(0, y, 0)), deadline, plugs)
+      if (wet) return { dug, stopped: wet }
       const block = bot.blockAt(pos)
       if (!block) return { dug, stopped: `мир на ${at(pos)} не прогружен — постой рядом и позови ещё раз` }
       if (isLava(block) || isWater(block)) return { dug, stopped: `${block.name} в забое на ${at(pos)} — дальше не копаю` }
@@ -200,10 +208,14 @@ async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null
       const problem = quickBreak(bot, block) ? null : missingHarvestTool(bot, block, mcData)
       if (problem) return { dug, stopped: problem, need: { what: `кирка под ${block.name}`, count: 1, have: 0 } }
 
+      // ND_OW_GRAVEL_SETTLE=1 (owC9-08): over the cell a sand/gravel block — after the dig the column needs 2 ticks of
+      // FallingBlock delay + ~7 ticks to fall one block + landing (1.21.11) before the slot is really filled; 120 ms of game
+      // time is 2.4 ticks, the slot reads as air, the body steps in and the column lands in its head.
+      const settle = typeof process !== 'undefined' && process.env.ND_OW_GRAVEL_SETTLE === '1' && FALLING.has(bot.blockAt(pos.offset(0, 1, 0))?.name)
       try {
         await equipBestTool(bot, block)
         // A dig whose block update never arrives would eat the whole intent.
-        await withTimeout(bot.dig(block), 20000, `${block.name} не ломается`)
+        await withTimeout(digVisibleBlock(bot, block, ctl), 20000, `${block.name} не ломается`)
         dug++
       } catch (e) {
         lastError = e
@@ -211,7 +223,7 @@ async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null
         // running and targetDigBlock set until the block update finally lands.
         try { bot.stopDigging() } catch {}
       }
-      await sleep(120) // let a falling column settle before re-reading it
+      await sleep(settle ? 600 : 120) // let a falling column settle before re-reading it
     }
 
     const left = bot.blockAt(pos)
@@ -222,7 +234,8 @@ async function digColumn (bot, mcData, ctl, cell, height, deadline, watch = null
       return { dug, stopped: why + (lastError ? `: ${lastError.message}` : '') }
     }
   }
-  return { dug, stopped: null }
+  const wet = await plugVisibleLiquids(bot, ctl, Array.from({ length: height }, (_, y) => cell.offset(0, y, 0)), deadline, plugs)
+  return { dug, stopped: wet }
 }
 
 // A block or so of walking on manual controls. Pathfinder re-plans the whole

@@ -74,7 +74,10 @@ async function towerScan (session, ctl, st) {
   log('вышка', { from: xyz(base), to: xyz(top), blind: st.blindTower || undefined, basalt: pg.basalt, chests: pg.chests, walls: pg.walls.map(w => ({ at: xyz(w.wall.t), r: w.wall.r, score: Math.round(w.score), from: w.from.length })), direct: pg.direct.map(c => c.piece), gold: pg.gold.length, start: pg.start ? { type: pg.start.type, score: Math.round(pg.start.score * 10) / 10, pieces: pg.start.pieces } : undefined, votes: pg.debug && pg.debug[0] })
   // Две лучшие гипотезы стен (ранг 0 и 1): вал над connected_wall тоже бывает
   const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
-  pg.walls.slice(0, 2).forEach((w, rank) => {
+  // ND_BASTION_HYP_FOCUS: цели — только гипотезы старта на сетке (rememberStarts, у каждой цели — её гипотеза).
+  const focus = process.env.ND_BASTION_HYP_FOCUS !== '0'
+  if (focus) (require('./sealed-gold') as typeof import('./sealed-gold')).rememberStarts(bot, st, pg.start?.all)
+  if (!focus) pg.walls.slice(0, 2).forEach((w, rank) => {
     for (const c of [w.wall, w.conn]) {
       for (const v of bp.goldOf(c)) {
         const k = keyOf(v)
@@ -82,11 +85,11 @@ async function towerScan (session, ctl, st) {
       }
     }
   })
-  for (const g of pg.gold.filter(x => x.src === 'сундук')) {
+  if (!focus) for (const g of pg.gold.filter(x => x.src === 'сундук')) {
     const k = keyOf(g.pos)
     if (!st.pred.has(k) && !st.gold.has(k)) st.pred.set(k, { pos: g.pos, piece: g.piece, rank: 0 })
   }
-  for (const g of pg.gold.filter(x => x.src === 'старт')) {
+  if (!focus) for (const g of pg.gold.filter(x => x.src === 'старт')) {
     const k = keyOf(g.pos)
     if (!st.pred.has(k) && !st.gold.has(k)) st.pred.set(k, { pos: g.pos, piece: g.piece, rank: g.rank, wall: g.wall })
   }
@@ -94,7 +97,7 @@ async function towerScan (session, ctl, st) {
   // С вышки видно золото и сундуки двора — их тоже в цели (закрытый штрек).
   try { survey(bot, st, 56) } catch {}
   const w0 = pg.walls[0]
-  if (w0) for (const c of [w0.wall, w0.conn]) { const P = bp.lib()[c.piece]; for (const [x, y, z] of (P.chests || [])) { const v = bp.toWorld(c, x, y, z); const k = keyOf(v); if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos: v, seen: gameClock.now(), pred: true }) } }
+  if (w0 && !focus) for (const c of [w0.wall, w0.conn]) { const P = bp.lib()[c.piece]; for (const [x, y, z] of (P.chests || [])) { const v = bp.toWorld(c, x, y, z); const k = keyOf(v); if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos: v, seen: gameClock.now(), pred: true }) } }
   // Вниз — свой столб из-под ног (блоки вернутся), не прыжком.
   for (let i = 0; i < 30 && !ctl.aborted; i++) {
     const f = bot.entity.position.floored()
@@ -286,7 +289,133 @@ async function routeGold (session, ctl, st, until) {
   return out
 }
 
+// Local head window: discover through ONE observed block, not a room from raw chunks.
+async function digWallBooth (session, ctl, st, until, { peekOnly = false }: any = {}) {
+  const bot = session.bot
+  const SL: typeof import('../sealed') = require('../sealed')
+  const E: typeof import('../perception/eyes') = require('../perception/eyes')
+  const P: typeof import('../pick') = require('../pick')
+  const { fullCover, isBaby }: typeof import('./take-gold-block') = require('./take-gold-block')
+  const S = st.sealedState
+  if (!S || ctl.aborted || !bot.entity.onGround || SL.fillerCount(bot) < 1) return null
+  const F = SL.bodyCells(bot)[0]; const world = bot.world
+  const sameBody = () => session.bot === bot && bot.world === world && (bot.health ?? 0) > 0
+  const home = () => sameBody() &&
+    bot.entity.onGround && SL.bodyCells(bot)[0].equals(F)
+  const seen = () => E.entities(bot, { radius: 16, rememberMs: 0, hearMs: 0 }).filter(e => e.seen)
+    .map(e => bot.entities[e.id]).filter(Boolean)
+  const read = v => v.equals(F.offset(0, -1, 0)) || E.seesNow(bot, v) ? bot.blockAt(v, false) : null
+  const firm = v => { const b = read(v); return fullCover(b) && [SL.SOLID, SL.HARD, SL.GUARD].includes(SL.classOf(b)) }
+  const trustedOwn = new Set(process.env.ND_BARTER_TRADER_MEMORY === '1' && S.exposed === false ? S.own : [])
+  const enclosed = v => firm(v) || v.y>=F.y && v.y<=F.y+1 && trustedOwn.has(SL.keyV(v)) && SL.classOf(read(v))===SL.AIR
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  const shell = [F.offset(0, -1, 0), F.offset(0, 2, 0), ...dirs.flatMap(([x,z]) => [F.offset(x,0,z), F.offset(x,1,z)])]
+  if (!home() || !shell.every(enclosed)) { log('окно стены: кожух не замкнут', { at: xyz(F) }); return null }
+  if (!bot._ndWallBoothTried || bot._ndWallBoothTried.world !== world) bot._ndWallBoothTried = { world, cells: new Map() }
+  const tried = bot._ndWallBoothTried.cells
+  for (const [k,t] of tried) if (gameClock.now()<t || gameClock.now()-t>=30000) tried.delete(k)
+  const TM: typeof import('./trader-memory') | null = process.env.ND_BARTER_TRADER_MEMORY === '1' ? require('./trader-memory') : null
+  const hints = TM ? TM.hints(bot) : []
+  const candidates = dirs.map(([x,z]) => ({ d: [x,z], W: F.offset(x,1,z) }))
+    .sort((a,b) => (TM ? TM.score(F,b.d,hints)-TM.score(F,a.d,hints) : 0) || Number(/blackstone|basalt/.test(read(b.W)?.name || '')) - Number(/blackstone|basalt/.test(read(a.W)?.name || '')))
+  for (const { d, W } of candidates) {
+    if (!home() || ctl.aborted || gameClock.now() > until - 12000) break
+    if (gameClock.now() - (tried.get(SL.keyV(W)) ?? -Infinity) < 30000 || SL.classOf(read(W)) !== SL.SOLID) continue
+    const face = new Vec3(-d[0],0,-d[1]); const aim = P.faceAim(bot,W,face)
+    if (!aim) continue
+    const close = async () => {
+      S.exposed = true
+      const G: typeof import('../ne-guard') = require('../ne-guard')
+      if (G.busy(bot)) {
+        await Promise.race([G.waitIdle(bot,1500), sleep(2000)])
+        if (G.busy(bot)) return false
+      }
+      if (!sameBody() || !E.seesNow(bot,W)) return false
+      await SL.fillCell(bot,W) // bounded cleanup also when the trade controller was cancelled
+      const closed = firm(W)
+      S.exposed = !closed || !home() || !shell.every(enclosed)
+      log('окно стены: закрыто', { at: xyz(W), closed })
+      return closed
+    }
+    let handedOff = false; let discovered = false
+    try {
+      st.doing = 'окно стены: проба'
+      const dr = await SL.digCell(bot,W,{face,aim,interrupted:()=>ctl.aborted || !home()})
+      if (!['ok','air'].includes(dr)) continue
+      S.exposed = true
+      if (S.filled) S.filled.delete(SL.keyV(W))
+      await sleep(150)
+      const threat = () => seen().find(e => /^(piglin_brute|hoglin|zoglin)$/.test(e.name) ||
+        e.name === 'piglin' && (aggressive(bot,e) || isBaby(bot,e)) && e.position.distanceTo(bot.entity.position) < 4)
+      if (threat()) { log('окно стены: угроза', {}); return null }
+      if (ctl.aborted || !home() || !seen().some(e => e.name === 'piglin' && !isBaby(bot,e))) continue
+      const eyeSees = pg => {
+        const eye = P.eyeOf(bot); const delta = pg.position.offset(0,1.79,0).minus(eye); const n = delta.norm()
+        return n > 0 && !P.blockOnRay(bot,eye,delta.scaled(1/n),n)
+      }
+      const intact = () => home() && shell.filter(q=>!q.equals(W)).every(enclosed) && SL.classOf(read(W)) === SL.AIR
+      if (!intact()) continue
+      log('окно стены: взрослые видны', { at: xyz(W), pigs: seen().filter(e=>e.name==='piglin' && !isBaby(bot,e)).length })
+      discovered = true
+      if (TM) TM.traders(bot,64) // freeze the observation while the aperture is still open
+      if (peekOnly) return { peeked:true, adults:seen().filter(e=>e.name==='piglin' && !isBaby(bot,e)).length }
+      handedOff = true
+      return { kind:'wall', wall:true, F:xyz(F), W:xyz(W), C:xyz(W.offset(0,-1,0)),
+        O:xyz(F.offset(2*d[0],0,2*d[1])), d, p:[d[1],d[0]], sill:true, seen, threat, eyeSees, intact, close }
+    } finally {
+      if (!handedOff) {
+        if (!discovered) tried.set(SL.keyV(W),gameClock.now())
+        if (!(await close()) && home()) throw new Error('окно стены не закрылось')
+      }
+    }
+  }
+  return null
+}
+
+// Bounded reconnaissance in already dug, same-floor tunnel; no path into inferred sound coordinates.
+async function peekTraders (session,ctl,st,until) {
+  if(process.env.ND_BARTER_TRADER_MEMORY!=='1')return null
+  const bot=session.bot, S=st.sealedState
+  const TM: typeof import('./trader-memory')=require('./trader-memory')
+  const SL: typeof import('../sealed')=require('../sealed')
+  const G: typeof import('../ne-guard')=require('../ne-guard')
+  const { isBaby, aggressive }: typeof import('./take-gold-block')=require('./take-gold-block')
+  const hints=TM.hints(bot), world=bot.world, now=gameClock.now()
+  const last=bot._ndTraderPeekAt??-Infinity
+  if(!S || !hints.length || ctl.aborted || G.busy(bot) || now>=until || now>=last && now-last<15000)return null
+  bot._ndTraderPeekAt=now
+  const start=SL.bodyCells(bot)[0], q=[{v:start,path:[]}], visited=new Set([SL.keyV(start)])
+  const own=v=>S.own.has(SL.keyV(v)) && S.own.has(SL.keyV(v.offset(0,1,0)))
+  for(let i=0;i<q.length && q.length<256;i++) {
+    const r=q[i]; if(r.path.length>=8)continue
+    for(const [x,z] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const v=r.v.offset(x,0,z), k=SL.keyV(v)
+      if(visited.has(k) || !own(v))continue
+      visited.add(k);q.push({v,path:[...r.path,v]})
+    }
+  }
+  const cost=r=>Math.min(...hints.map(h=>Math.hypot(h.position.x-r.v.x,h.position.z-r.v.z)))+r.path.length*.25
+  const safe=()=>!ctl.aborted && session.bot===bot && bot.world===world && (bot.health??0)>0 && gameClock.now()<until && !G.busy(bot) &&
+    !TM.visible(bot).some(e=>/^(piglin_brute|hoglin|zoglin)$/.test(e.name) || e.name==='piglin' &&
+      new Vec3(e.pos.x,e.pos.y,e.pos.z).distanceTo(bot.entity.position)<4 && (aggressive(bot,bot.entities[e.id]) || isBaby(bot,bot.entities[e.id])))
+  // Paths were rooted at start. Try one station per call, preserving a known route and bounded cost.
+  const target=q.sort((a,b)=>cost(a)-cost(b))[0]
+  for(const to of target.path) {
+    if(!safe())return null
+    const at=SL.bodyCells(bot)[0]
+    const read=v=>(require('../perception/eyes') as typeof import('../perception/eyes')).seesNow(bot,v)?bot.blockAt(v,false):null
+    if(!own(to) || at.y!==to.y || Math.abs(at.x-to.x)+Math.abs(at.z-to.z)!==1 || SL.classOf(read(to))!==SL.AIR || SL.classOf(read(to.offset(0,1,0)))!==SL.AIR ||
+      ![SL.SOLID,SL.HARD,SL.GUARD].includes(SL.classOf(read(to.offset(0,-1,0)))))return null
+    if(!(await SL.stepMove(bot,ctl,{kind:'walk',to},safe)))return null
+  }
+  if(!safe())return null
+  const r=await digWallBooth(session,ctl,st,until,{peekOnly:true})
+  log('бартер: разведка торговцев',{station:xyz(target.v),steps:target.path.length,peeked:!!r,...TM.stats(bot)})
+  return r
+}
+
 async function digBooth (session, ctl, st, until) {
+  if (process.env.ND_BARTER_WALL_BOOTH === '1') return digWallBooth(session, ctl, st, until)
   const bot = session.bot
   const SL: typeof import('.././sealed') = require('.././sealed')
   const S = st.sealedState
@@ -401,8 +530,8 @@ async function exitTunnel (session, ctl, st, until) {
   return { ok: ex.ok, why: ex.why, moves: r.path.length }
 }
 
-module.exports = { FOES_RE, foesNear, towerScan, approachWallTop, approachWallSide, routeGold, digBooth, pocketOpen, mergeTrades, exitTunnel }
+module.exports = { FOES_RE, foesNear, towerScan, approachWallTop, approachWallSide, routeGold, digBooth, peekTraders, pocketOpen, mergeTrades, exitTunnel }
 export {
-  FOES_RE, foesNear, towerScan, approachWallTop, approachWallSide, routeGold, digBooth, pocketOpen, mergeTrades,
+  FOES_RE, foesNear, towerScan, approachWallTop, approachWallSide, routeGold, digBooth, peekTraders, pocketOpen, mergeTrades,
   exitTunnel
 }

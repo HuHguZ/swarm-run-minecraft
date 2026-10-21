@@ -10,6 +10,14 @@ const MELEE = /^(piglin|piglin_brute|hoglin|zoglin|zombified_piglin|wither_skele
 // with the ranged/fire handler. Protect crafting and walking after farmRods too.
 export const meleeName = n => MELEE.test(n || '') || (process.env.ND_GUARD_BLAZE !== '0' && n === 'blaze')
 export const HIDE_FROM = /^(piglin_brute|hoglin|zoglin)$/
+// ND_WITHER_HIDE=1 (blz 21.10): без щита иссушитель — тоже «не дуэль»: удар 7.9 + иссушение, каменный меч бьёт 5 (4 удара), дуэль —
+// минус 16–24 хп; в норе на 2 вниз он рукой не достаёт (рамка удара раздута только вширь), а меч бьёт его по ногам с края.
+// Настоящий набор (без щита): fB11-s19-1 и jA11-s17-1 — 6 стержней и смерть от иссушителя по дороге домой.
+export function hideFrom (bot, name: string) {
+  if (HIDE_FROM.test(name || '')) return true
+  if (process.env.ND_WITHER_HIDE !== '1' || name !== 'wither_skeleton') return false
+  try { return !(bot.inventory.slots[45]?.name === 'shield' || bot.heldItem?.name === 'shield') } catch { return false }
+}
 
 function metaOf (bot, e, key) {
   try { const keys = bot.registry.entitiesByName[e.name].metadataKeys; const i = keys.indexOf(key); return i >= 0 ? e.metadata[i] : undefined } catch { return undefined }
@@ -62,7 +70,7 @@ function angryAtUs (bot) {
 export function bigMelee (bot, foes = meleeFoes(bot, 8), e = null, { lowHp = true, walkers = false }: any = {}) {
   const crowd = walkers ? foes.filter((f: any) => !/^(blaze|magma_cube)$/.test(f.name || '')) : foes
   const wsk = foes.filter((f : any) => f.name === 'wither_skeleton').length
-  return HIDE_FROM.test((e && e.name) || '') || foes.some((f : any) => HIDE_FROM.test(f.name || '')) || crowd.length >= 3 || wsk >= 2 || lowHp && (bot.health ?? 20) < 9
+  return hideFrom(bot, (e && e.name) || '') || foes.some((f : any) => hideFrom(bot, f.name || '')) || crowd.length >= 3 || wsk >= 2 || lowHp && (bot.health ?? 20) < 9
 }
 // Ближайший видимый стрелок в 24 бл.: пиглин с арбалетом, ифрит, гаст, скелет (иссушитель с мечом — не стрелок).
 export function shooterNear (bot) {

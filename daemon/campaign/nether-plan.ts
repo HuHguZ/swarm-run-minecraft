@@ -5,11 +5,12 @@ import { state, sit, memorySnapshot, known, netherExplored, netherViewRevision, 
   bastionDry, barterZero, bastionSearchRuns, bastionSearchSeconds, bastionPausedUntil, lastBastionGoldLeft,
   supplyBlockedAt, supplyBlockedState, setBastionDry } from './state'
 import { log } from './log'
-import { have, dim, foodUnits, PICK_DIAMOND, lighter, fireResReady, pearlsNow } from './queries'
+import { have, dim, foodUnits, PICK_DIAMOND, lighter, fireResReady, fireResNow, pearlsNow } from './queries'
 import { bState } from './observe'
 import { READY } from './stages/table'
 import * as path from 'path'
 import * as gameClock from '../src/game-clock'
+import { overworldPauseCause } from '../src/campaign/overworld-pause'
 const EXIT_KIT = process.env.ND_EXIT_KIT !== '0' && process.env.ND_SH_NETHER === '1'
 const exitKitNow = () => require('../src/nether').exitKit(state.inventory || {})
 const pendingExitFrame = () => !!exitFrameTarget && dim() === 'the_nether' && lighter() && !!state.pos && Math.hypot(state.pos.x - Math.floor(exitFrameTarget.x / 8), state.pos.z - Math.floor(exitFrameTarget.z / 8)) <= 12
@@ -18,8 +19,15 @@ const pendingExitFrame = () => !!exitFrameTarget && dim() === 'the_nether' && li
 const obsShort = () => !known.endPortal && dim() === 'the_nether' && (EXIT_KIT ? !pendingExitFrame() && !exitKitNow().ready : process.env.ND_OBS_EXIT === '1' && process.env.ND_SH_NETHER === '1' && !have(PICK_DIAMOND) && have('obsidian') < 10)
 // Очей нужно — пустых рамок: после комнаты/частичной вставки — 12 минус уже вставленные (S5e 07.10, s5e-G-1: вставил 7 из 12, fill
 // оборвала лава, у тела 7 очей на 5 пустых рамок, а граф по «12 очей» увёл в legacy-этап nether из крепости). ND_EYES_FRAMES=0 — прежнее.
-const eyesWant = () => known.endPortal && Number.isFinite(known.portalEyes) && process.env.ND_EYES_FRAMES !== '0'
-  ? Math.max(0, EYES_NEED - known.portalEyes) : EYES_NEED + (known.stronghold ? 0 : 2)
+// До комнаты (поток ne 21.10, решение координатора): цель 13 (12 + 1 на броски), уход с 11–12 — ценой (src/campaign/eyes-price.ts):
+// ожидаемый добор, который снимет ещё одна жемчужина, против её цены сейчас. ND_EYES_PRICE=0 — прежние 12 + 2.
+const eyesWant = () => {
+  if (known.endPortal && Number.isFinite(known.portalEyes) && process.env.ND_EYES_FRAMES !== '0') return Math.max(0, EYES_NEED - known.portalEyes)
+  if (process.env.ND_EYES_PRICE === '0' || EYES_NEED < 12) return EYES_NEED + (known.stronghold ? 0 : 2)
+  const EP: typeof import('../src/campaign/eyes-price') = require('../src/campaign/eyes-price')
+  const pace = EP.paceMin({ goldCarried: have('gold_ingot') + 9 * have('gold_block'), goldLeft: lastBastionGoldLeft || 0 })
+  return EP.eyesTarget({ base: EYES_NEED + (known.stronghold ? 0 : 1), throws: known.stronghold ? 1 : 3, paceMin: pace })
+}
 const notePortalEyes = r => { const d = r && r.detail; const w = d && (Number.isFinite(d.withEye) ? d.withEye : d.room && d.room.withEye); if (Number.isFinite(w)) known.portalEyes = w }
 import * as barterFlow from '../src/barter-flow'
 function deferBastionMining (b) {
@@ -92,7 +100,15 @@ const bastionPearlsPending = () => process.env.ND_NE_RECOVER !== '1' && BASTION_
   pauseWaitPays() && READY.bastion() && !bastionSupplyBlocked() && bastionDry < 3 &&
   (!!activeBastion() || (have('gold_block') * 9 + have('gold_ingot') >= 8 && !barterExhausted()))
 const rodsShort = () => Math.max(0, Math.ceil((eyesWant() - have('ender_eye') - have('blaze_powder')) / 2) - have('blaze_rod'))
-const rodsWanted = () => rodsShort() > 0 && (have('ender_eye') < Math.min(10, EYES_NEED) || have('ender_pearl') > 2 * have('blaze_rod') + have('blaze_powder'))
+// ND_BLZ_SPARE=1 (blz 21.10): стержни сверх рамки (+2 ока на броски) — бонус по цене: только в Аду с зельем огнестойкости в запасе (остаток
+// действующего не известен — бой его дожигает) и в силе (хп ≥ 10 или еда); иначе хватает рамки — домой, и сверху за ними не возвращаться (abU1-s17-4: 6 стержней, хп 4 без еды и FR — 14 мин за 7-м, смерть).
+const spareRodsOnly = () => Math.ceil((Math.min(eyesWant(), EYES_NEED) - have('ender_eye') - have('blaze_powder')) / 2) <= have('blaze_rod')
+const spareRodsWorth = () => dim() === 'the_nether' && fireResNow() > 0 && ((state.health ?? 20) >= 10 || foodUnits() >= 2)
+const rodsWanted = () => rodsShort() > 0 && (have('ender_eye') < Math.min(10, EYES_NEED) || have('ender_pearl') > 2 * have('blaze_rod') + have('blaze_powder')) &&
+  !(process.env.ND_BLZ_SPARE === '1' && spareRodsOnly() && !spareRodsWorth())
+// q11: receipt of a physical recovery, independent of fortress frontier revisions.
+let netherRecoveryRevision = 0
+const noteNetherRecovery = () => { netherRecoveryRevision++ }
 // Only changes to the failed search/supply/path can reopen a Nether attempt.
 function netherRetryState (origin = null) {
   const p = state.pos
@@ -102,7 +118,8 @@ function netherRetryState (origin = null) {
     have(/^(stone|iron|diamond|netherite)_pickaxe$/) > 0, netherSupply.netherToolsReady(netherSupplyState()),
     have('obsidian') >= 10 && !!lighter(), state.tactics?.threatLevel ?? 0,
     process.env.ND_FORTRESS_FRONTIER === '0' ? null : [state.tactics?.action, have(/^(cobblestone|blackstone|netherrack|nether_bricks)$/)],
-    [...new Set((sit.fight?.order || []).map(e => e.name))].sort()])
+    [...new Set((sit.fight?.order || []).map(e => e.name))].sort(),
+    ...(process.env.ND_NE_NO_GIVEUP === '1' ? [netherRecoveryRevision] : [])])
 }
 function netherFailureName (name) {
   if (/^(FindFortress|GetBlazeRods)$/.test(name)) return 'nether'
@@ -127,6 +144,8 @@ function netherFailureState (name, origin = null) {
 function overworldFailureState (origin = null) {
   const p = state.pos, o = origin
   const moved = !!(p && o && Math.hypot(p.x - o.x, p.z - o.z) >= 16)
+  if (process.env.ND_OW_PAUSE_CAUSE === '1') return JSON.stringify([moved, !!(p && o && Math.abs(p.y - o.y) >= 8),
+    lavaSourceKnown, overworldPauseCause({ state, situation: sit, known })])
   return JSON.stringify([dim(), moved, !!sit.night, known.water ? [known.water.x, known.water.z] : null, known.lava ? [known.lava.x, known.lava.z] : null,
     lavaSourceKnown, have('bucket'), have('water_bucket'), !!lighter(), foodUnits(), Math.floor((state.health ?? 20) / 7), state.tactics?.threatLevel ?? 0])
 }
@@ -154,6 +173,15 @@ function endermenSecondsPerPearl () {
   const prior = forestToHunt() ? 240 : 900
   return (pearlTrips.seconds + prior * 2) / (pearlTrips.pearls + 2)
 }
+// Reuse the loot model; unseen gold remains unknown, so blind discovery keeps its own budget.
+function bastionPriceChoice (b = nextBastion()) {
+  if (process.env.ND_BASTION_PRICE !== '1') return null
+  const gold = barterFlow.stock(state.inventory || {})
+  const siteIngots = Array.isArray(b?.gold) && b.gold.length > 0 ? b.gold.length * 9 : null
+  if (gold <= 0 && siteIngots === null) return null
+  return barterFlow.plan({ pearls: pearlsNow(), required: eyesWant(), gold, siteIngots,
+    endermenSecondsPerPearl: endermenSecondsPerPearl() })
+}
 import * as netherSupply from '../src/campaign/nether-supply'
 const netherSupplyState = () => ({ dimension: dim(), health: state.health ?? 20, inventory: state.inventory || {}, pickSwings: sit.pickLeft ?? 0, woodAt: netherWoodSeen() })
 // Стебли, увиденные глазами (nether-forest.js), — в 200 бл. по горизонтали (S1e).
@@ -163,8 +191,8 @@ function netherWoodSeen () {
   return Math.hypot(w.x - state.pos.x, w.z - state.pos.z) <= 200 ? { x: w.x, y: w.y, z: w.z } : null
 }
 
-export { EXIT_KIT, exitKitNow, pendingExitFrame, obsShort, eyesWant, notePortalEyes, barterFlow, deferBastionMining,
+export { noteNetherRecovery, EXIT_KIT, exitKitNow, pendingExitFrame, obsShort, eyesWant, notePortalEyes, barterFlow, deferBastionMining,
   bastionBlocked, nextBastion, activeBastion, barterExhausted, barterSite, BASTION_SEARCH_S, bastionSearchWanted,
   BASTION_FIRST, bastionPearlsPending, rodsShort, rodsWanted, netherRetryState, netherFailureName, netherFailureState,
   overworldFailureState, PEARL_STYLE, pearlTrips, emptyForests, failedHuntSites, forestEmpty, forestToHunt,
-  endermenSecondsPerPearl, netherSupply, netherSupplyState }
+  endermenSecondsPerPearl, bastionPriceChoice, netherSupply, netherSupplyState }

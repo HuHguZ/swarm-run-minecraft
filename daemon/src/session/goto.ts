@@ -11,6 +11,8 @@ import { escapePit } from '../build'
 import * as blockmoves from '../blockmoves'
 import * as hopgoto from '../hopgoto'
 import { skyLightAt, HOLDING } from './shared'
+import { surfaceWalkOn, startSurfaceWalk, stopSurfaceWalk, surfaceDropGuard, recoverSurface } from './surface-walk'
+import { startWaterRoute, stopWaterRoute, recordWaterRouteFailure, waterRouteRefusal } from './water-route'
 
 // Ленивые модули (загрузка при первом вызове, как было), запомненные: require из папки части не попадает в быстрый кеш
 // Node по (папка, spec), и в горячем цикле (клетка A*, физический тик) каждый вызов разбирал бы путь заново.
@@ -25,7 +27,7 @@ const lazyBoatMoves = (): typeof import('../navigation/boat-moves') => (boatMove
 let descentLoaded: typeof import('../navigation/descent') | undefined
 const lazyDescent = (): typeof import('../navigation/descent') => (descentLoaded ??= require('../navigation/descent'))
 
-type Pit = { wasInPit: boolean; climbed?: number; stopped?: string }
+type Pit = { wasInPit: boolean; climbed?: number; stopped?: string; memory?: unknown }
 
 // Граница арены на время goto: проверка следующего физического шага каждый тик и возврат прежних настроек пути.
 interface GotoBounds {
@@ -40,7 +42,7 @@ interface GotoRun {
   ctl: any
   // параметры goto
   x: any; y: any; z: any; range: number; surface: any; bridge: any; pathWait: any; pearl: any; sprint: any; sprintJump: any
-  descent: any; unstuckWanted: any; climb: any; exactY: any
+  descent: any; unstuckWanted: any; climb: any; exactY: any; walkOnly: boolean
   secs: number
   boundedArena: any
   avoiding: boolean
@@ -57,6 +59,7 @@ interface GotoRun {
   goal?: any
   resolvedTo?: any
   surfaceWalk?: boolean
+  waterRoute?: ReturnType<typeof startWaterRoute>
   // gotoPreMoves
   pearlRun?: any
   descentRuns?: any[]
@@ -67,7 +70,7 @@ interface GotoRun {
 }
 
 // runIntent's clock ran out, and on an abort it throws — so the report was
-function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena, climb, exactY }: any): Promise<any> {
+function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena, climb, exactY, walkOnly = false }: any): Promise<any> {
   // Validate before runIntent can cancel another action or change its movement settings.
   let boundedArena
   if (arena !== undefined) {
@@ -86,15 +89,44 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
   return this.runIntent('goto', async (ctl) => {
     const bot = this.require()
     const bounds = gotoArenaBounds.call(this, bot, ctl, boundedArena, avoiding, climb)
-    const run: GotoRun = { bot, ctl, x, y, z, range, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuckWanted, climb, exactY,
+    const run: GotoRun = { bot, ctl, x, y, z, range, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuckWanted, climb, exactY, walkOnly,
       secs, boundedArena, avoiding, bounds }
+    let surfaceScope
+    const stopSurface = () => stopSurfaceWalk(bot, surfaceScope)
+    ctl.onAbort.push(stopSurface)
+    let recordedWaterFailure = false
+    let stoppedWaterRoute = false
+    const rememberWaterFailure = () => {
+      if (recordedWaterFailure || !run.waterRoute || !ctl.aborted || ctl.interruptedBy?.type !== 'tactical' || !inWater(bot)) return
+      recordedWaterFailure = true
+      recordWaterRouteFailure(bot, run.waterRoute, ctl.interruptedBy)
+    }
+    const stopWater = () => {
+      if (stoppedWaterRoute || !run.waterRoute) return
+      stoppedWaterRoute = true
+      stopWaterRoute(bot, run.waterRoute)
+    }
+    const abortWater = () => { rememberWaterFailure(); stopWater() }
+    // Тактика ставит причину до abort(). Сохранить мокрую трассу синхронно,
+    // пока остальные onAbort/finally ещё не сняли текущие настройки пути.
+    ctl.onAbort.unshift(abortWater)
     try {
       bounds.check()
       if (bounds.error) throw bounds.error
+      if (!boundedArena) run.waterRoute = startWaterRoute(bot, { x, y, z, range })
       await gotoPrepare.call(this, run)
+      // Явная цель ниже тела — намеренный спуск; контекст разведки ему не навязываем.
+      if (run.surfaceWalk && !boundedArena && (y == null || Number(y) >= bot.entity.position.y - 2)) surfaceScope = startSurfaceWalk(bot)
       await gotoPreMoves.call(this, run)
       return await gotoLoop.call(this, run)
-    } finally { bounds.restore() }
+    } finally {
+      if (!stoppedWaterRoute) rememberWaterFailure()
+      stopWater()
+      const waterOff = ctl.onAbort.indexOf(abortWater); if (waterOff >= 0) ctl.onAbort.splice(waterOff, 1)
+      stopSurface()
+      const off = ctl.onAbort.indexOf(stopSurface); if (off >= 0) ctl.onAbort.splice(off, 1)
+      bounds.restore()
+    }
   }, { timeoutMs: (secs + 15) * 1000, params: { climb: !!climb }, ...(climb ? { interruptOn: HOLDING } : {}) })
 }
 
@@ -138,12 +170,12 @@ function gotoArenaBounds (this: Session, bot, ctl, boundedArena, avoiding: boole
 
 // Настройки пути на этот переход, выход из воды и ямы, цель (с высотой или без), ходьба поверху.
 async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
-  const { bot, ctl, x, y, z, range, surface, bridge, pathWait, pearl, sprint, sprintJump, unstuckWanted, climb, exactY, secs, boundedArena, avoiding } = run
+  const { bot, ctl, x, y, z, range, surface, bridge, pathWait, pearl, sprint, sprintJump, unstuckWanted, climb, exactY, secs, boundedArena, avoiding, walkOnly } = run
   const deadline = gameClock.now() + secs * 1000
-  const strict = surface === 'strict' || !!boundedArena && !climb
+  const strict = walkOnly || surface === 'strict' || !!boundedArena && !climb
   // Мост на ходу на этот переход (сцены A/B на одном демоне): bridge true/false поверх ND_BRIDGE; не задан —
   // как в окружении. Держится до следующего goto.
-  this.bridgeWanted = typeof bridge === 'boolean' ? bridge : undefined
+  this.bridgeWanted = walkOnly ? false : typeof bridge === 'boolean' ? bridge : undefined
   this.sprintWanted = typeof sprint === 'boolean' ? sprint : undefined
   // Бег вприпрыжку на этот переход (A/B в одном сеансе, try-parkour-sprint): поверх ND_SPRINT_JUMP.
   bot._ndSprintJumpWanted = typeof sprintJump === 'boolean' ? sprintJump : undefined
@@ -162,10 +194,16 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   // обходил по 25 с впустую (try-lab-stuck pond, us-pilot1) — оттуда выводит ступенька/лесенка лестницы.
   if (!strict && inWater(bot) && !(un && !lazyUnstuck().landBySwim(bot))) await escapeWater(bot, ctl)
   const goalBelow = () => waitPartial && y != null && Number.isFinite(Number(y)) && Number(y) < bot.entity.position.y - 2
-  const pit: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
+  let pit: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
+  // ND_BRUTE_MEMORY: «hold» — по цене сейчас дешевле переждать (8 с за вызов, цена ожидания растёт со временем), а не отказ goto:
+  // без этого каждый goto бросал BRUTE_MEMORY_REPLAN, вызывающие не переспрашивали (nbt24a 21.10: 7 отказов за 2 с, БЛОКЕР).
+  while ((pit.memory as any)?.mode === 'hold' && !ctl.aborted && gameClock.now() < deadline - 2000) {
+    pit = await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
+  }
+  if (pit.memory) throw Object.assign(new Error('brute memory: covered exit requires replan'), { code: 'BRUTE_MEMORY_REPLAN', bruteMemory: pit.memory })
   const bx = Math.floor(x)
   const bz = Math.floor(z)
-  if (strict && !boundedArena) await lazyFortify().leaveSealedCell(this, ctl, { x: bx + 0.5, z: bz + 0.5 })
+  if (strict && !boundedArena && !walkOnly) await lazyFortify().leaveSealedCell(this, ctl, { x: bx + 0.5, z: bz + 0.5 })
   let goal
   let resolvedTo
   if (y === undefined || y === null) {
@@ -193,7 +231,8 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   // Снимается только штраф крыши; запрет копки strict остаётся как до правки.
   const goalSky = resolvedTo.y == null ? null : skyLightAt(bot, new Vec3(bx, Math.floor(resolvedTo.y), bz))
   const overSurface = surface !== false && (surface === true || this.underSky())
-  const surfaceWalk = overSurface && !(goalSky !== null && goalSky <= 7)
+  const surfaceWalk = !walkOnly && ((overSurface && !(goalSky !== null && goalSky <= 7)) ||
+    (surfaceWalkOn(bot) && surface === 'strict' && !boundedArena))
 
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
   Object.assign(run, { deadline, strict, waitPartial, un, goalBelow, pit, bx, bz, goal, resolvedTo, surfaceWalk })
@@ -201,7 +240,9 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
 
 // Ходы до pathfinder'а: жемчуг, быстрый спуск, подъём на лодке; сторож края обрыва на время попыток.
 async function gotoPreMoves (this: Session, run: GotoRun): Promise<void> {
-  const { bot, ctl, pearl, descent, boundedArena, bx, bz, goal, resolvedTo } = run
+  const { bot, ctl, pearl, descent, boundedArena, bx, bz, goal, resolvedTo, walkOnly } = run
+  // An existing stair route is a walk; do not replace it with a new shaft or a boat.
+  if (walkOnly) { run.pearlRun = null; run.descentRuns = []; run.descentWatch = null; return }
   // Жемчуг как ход (hopgoto.js): пеший путь по A* долгий (обход) — бросок к цели, дальше пешком.
   // pearl: true | { reserve, … } или ND_PEARL_GOTO=1; резерв по умолчанию 12 (очи Края).
   let pearlRun = null
@@ -243,6 +284,7 @@ async function gotoDescendNow (this: Session, run: GotoRun): Promise<any> {
 async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
   const { bot, ctl, un, strict, surfaceWalk, avoiding, waitPartial, boundedArena, climb, bounds } = run
   // С лестницей выхода сторож — последняя страховка: застревание раньше ловит и лечит unstuck.
+  const dropGuard = surfaceDropGuard(bot)
   const guard = stuckGuard(bot, ctl, un && !un.exhausted() ? 45000 : 8000)
   const mv = bot.pathfinder.movements
   const dug = mv ? mv.canDig : undefined
@@ -262,16 +304,22 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
     // Исчерпан поиск — нет пути в обход; «timeout» с частичным путём — идти по нему (соседи уже вне зоны врага): со срезом
     // 250 мс и отказом на timeout лутающие стояли — путь по колизею в 40 бл. не находился (стенд 15.10: 11–18 сбросов сторожа).
     if (avoiding && (r?.status === 'noPath' || r?.status === 'timeout' && !r.path?.length)) failPlace(Object.assign(new Error('no route outside enemy clearance: ' + r.status), { code: 'AVOID_NO_PATH' }))
+    // Частичный префикс ещё может ответвиться: память оценивает только
+    // законченный маршрут после того, как A* уже получил новые цены клеток.
+    if (run.waterRoute && r?.status === 'success' && r.path?.length) {
+      const refusal = waterRouteRefusal(bot, run.waterRoute, r.path)
+      if (refusal) failPlace(Object.assign(new Error(refusal), { code: 'WATER_ROUTE_UNCHANGED' }))
+    }
   }
   bot.on('path_reset', onReset)
-  if (avoiding) bot.on('path_update', onPath)
+  if (avoiding || run.waterRoute) bot.on('path_update', onPath)
   let pathRequest
   const cancelPath = () => pathRequest?.cancel?.()
   ctl.onAbort.push(cancelPath)
   try {
     pathRequest = waitPartial ? gotoGoal(bot, g, { unstuck: un }) : bot.pathfinder.goto(g)
     if (ctl.aborted) cancelPath()
-    await Promise.race([pathRequest, guard.promise, placeGuard, descentGuard, ...(boundedArena ? [bounds.failure] : [])])
+    await Promise.race([pathRequest, guard.promise, dropGuard.promise, placeGuard, descentGuard, ...(boundedArena ? [bounds.failure] : [])])
     if (bounds.error) throw bounds.error
     // goto резолвит и пустой partial-путь. Достигнутая цель определяется
     // координатами тела, включая высоту для 3D-плана.
@@ -285,18 +333,18 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
     if (index >= 0) ctl.onAbort.splice(index, 1)
     run.failDescent = null
     bot.removeListener('path_reset', onReset)
-    if (avoiding) bot.removeListener('path_update', onPath)
+    if (avoiding || run.waterRoute) bot.removeListener('path_update', onPath)
     this.surfaceWalk = false
     this.pathGoalY = null
     this.surfaceStrict = !!boundedArena && !climb
     if (strict && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
-    guard.stop()
+    dropGuard.stop(); guard.stop()
   }
 }
 
 // План (цель с высотой, затем по XZ) и повторы попыток: спуск у края, прогресс, пустой маршрут, яма, встряска.
 async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
-  const { bot, ctl, y, range, secs, boundedArena, avoiding, climb, exactY, bounds, deadline, strict, waitPartial, un, goalBelow, pit, bx, bz, goal, resolvedTo, surfaceWalk, pearlRun, descentRuns, descentWatch } = run
+  const { bot, ctl, y, range, secs, boundedArena, avoiding, climb, exactY, bounds, deadline, strict, waitPartial, un, goalBelow, pit, bx, bz, goal, resolvedTo, surfaceWalk, pearlRun, descentRuns, descentWatch, walkOnly } = run
   const plan = [{ goal, mode: resolvedTo.mode }]
   if (resolvedTo.mode === 'near' && !strict && !(exactY && climb)) {
     plan.push({ goal: new goals.GoalNearXZ(bx, bz, Math.max(2, range)), mode: 'xz' })
@@ -314,6 +362,7 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
     tried: tried.length ? tried : undefined,
     awayBlocks: away(),
     stopped: why,
+    ...(walkOnly ? { code: 'ROUTE_BLOCKED' } : {}),
     climbedOut: pit.wasInPit ? pit.climbed : undefined
   })
   const ranOut = () => report(
@@ -346,6 +395,11 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
       } catch (err) {
         if (bounds.error) throw bounds.error
         if (ctl.aborted) throw err
+        if (err.code === 'WATER_ROUTE_UNCHANGED') {
+          try { bot.pathfinder.setGoal(null); bot.clearControlStates() } catch {}
+          tried.push(`${step.mode}: ${err.message}`)
+          return { ...report(err.message), code: err.code }
+        }
         if (avoiding) {
           try { bot.pathfinder.setGoal(null); bot.clearControlStates() } catch {}
           throw Object.assign(err, { code: err.code || 'AVOID_NO_PATH' })
@@ -360,6 +414,13 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
           if (++descentChecks >= 6 && descentWatch) descentWatch.stop()
           retry--
           continue
+        }
+        if (err.surfaceDrop && !boundedArena) {
+          try { bot.pathfinder.setGoal(null); bot.clearControlStates() } catch {}
+          const recovered = await recoverSurface(this, ctl, deadline)
+          tried.push('выход к видимому берегу: ' + (recovered ? 'поднялся' : 'не вышел'))
+          if (recovered) { retry--; continue }
+          return report(err.message)
         }
         lastError = err
         tried.push(`${step.mode}#${retry + 1}: ${err.message}`)
@@ -377,7 +438,7 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
           try { bot.pathfinder.setGoal(null) } catch {}
           // Поверху без копки из кармана ни шагу (своя лестница под крышей, верх своего столба — cl-l/cl-n 14.10: 5–35 мин
           // «pathfinder закончил путь» на месте, потом смерть): один короткий отрезок к цели с копкой, дальше снова поверху.
-          if (strict && !boundedArena && !strictEscaped && away0 - away() < 1 && !outOfTime()) {
+          if (strict && !boundedArena && !walkOnly && !strictEscaped && away0 - away() < 1 && !outOfTime()) {
             strictEscaped = true
             const was = bot.entity.position.clone()
             const ex = bx + .5 - was.x, ez = bz + .5 - was.z, n = Math.hypot(ex, ez) || 1
@@ -409,7 +470,9 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
         }
         // exactly how the answer used to turn into a bare clock: the abort
         if (outOfTime()) return ranOut()
-        const out: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24 })
+        let out: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
+        while ((out.memory as any)?.mode === 'hold' && !ctl.aborted && !outOfTime()) out = await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
+        if (out.memory) throw Object.assign(new Error('brute memory: covered exit requires replan'), { code: 'BRUTE_MEMORY_REPLAN', bruteMemory: out.memory })
         if (out.wasInPit) tried.push(`вылез из ямы на ${out.climbed}${out.stopped ? ' (' + out.stopped + ')' : ''}`)
         if (!strict) await unstick(bot)
       }
@@ -417,6 +480,7 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
   }
   } finally { if (descentWatch) descentWatch.stop() }
   if (un) console.log('[unstuck] goto', JSON.stringify(un.report()))
+  if (walkOnly) return report(lastError?.message || 'existing route is blocked')
   throw new Error(
     `не дошёл (${tried.length} попытки)${pit.wasInPit ? `, из ямы вылез на ${pit.climbed}${pit.stopped ? ' — ' + pit.stopped : ''}` : ''}. ` +
     `Последняя: ${lastError.message}`)

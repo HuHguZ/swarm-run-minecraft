@@ -44,7 +44,7 @@ function campaignFixture(interrupted = false, conversion = true, goldLeft = 17, 
     module.exports.deferMining = () => { for (const b of known.bastions) deferBastionMining(b) };
     module.exports.active = () => activeBastion();
   `, { socket, wrap: withClockFixture, globals: { AbortController, fixtureState: state },
-    env: { ND_NE_RECOVER: '0', ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: endermen } }) // прежний путь (J2 сам включает ND_NE_RECOVER)
+    env: { ND_BASTION_HYP_FOCUS: '0', ND_NE_RECOVER: '0', ND_NE_ROUTE: '1', ND_NE_STAY: '1', ND_GOLD_FAST_SAFE: '1', ND_GOLD_ROUTE: '1', ND_ENDERMEN: endermen } }) // прежний путь (J2 сам включает ND_NE_RECOVER)
   return { context, state, calls, requests }
 }
 

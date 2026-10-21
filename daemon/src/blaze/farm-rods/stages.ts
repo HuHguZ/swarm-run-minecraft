@@ -8,7 +8,7 @@ import { seesBlock } from '../../sight'
 import * as worlds from '../../worlds'
 import * as survival from '../../combat-safety'
 import { SPAWNER_PLACE, clamp, log, nearestBlaze, visibleSpawner, liveBlazes, watchers, witherClose } from '../targets'
-import { hasEffect, drinkFireResistance } from '../potions'
+import { hasEffect, drinkFireResistance, frSpendOk } from '../potions'
 import { collectRods, canApproachSpawner, walkNear } from '../approach'
 import { seesMe } from '../radar'
 import { pitFrom, digInNear } from '../post'
@@ -116,7 +116,10 @@ export async function rodsPrepare (fr: RodsFarm) {
   const { bot, ctl, session } = fr
   // Место под стержни — до боя (рюкзак после хода по Аду бывает полон: стержень рядом не подбирается — B16f21 03.10).
   if (process.env.ND_NE_ROUTE !== '0') { try { await (require('../../nether-route') as typeof import('../../nether-route')).makeRoom(bot, 6) } catch {} }
-  fr.potion = await drinkFireResistance(bot)
+  // ND_BLAZE_FR_LATE: зелье — когда бой есть (ифрит с лучом к нам в 16 бл.), а не на старте навыка: bzI1-s17-3 21.10 — навык начат в 30 бл.
+  // от трона по двум дальним ифритам, оба зелья выпиты за 6 мин без убийства, у спавнера потом — без FR, смерть. Иначе пьёт бой (meleeCamp).
+  const fightNow = (process.env.ND_BLAZE_FR_LATE !== '1' || liveBlazes(bot, fr.dead, 16).some(e => seesMe(bot, e))) && frSpendOk(bot, fr.dead)
+  fr.potion = fightNow ? await drinkFireResistance(bot) : 'позже: боя ещё нет'
   // Эффект приходит отдельным пакетом после глотка — до него «зелья нет», и
   // первый же шаг цикла уходил прятаться.
   if (fr.potion === 'выпил fire_resistance') {
@@ -149,7 +152,9 @@ export async function rodsEngage (fr: RodsFarm) {
   if (fr.camp && fr.camp.inHole) { fr.stopped = fr.stopped || fr.camp.stopped; fr.bail = true }
   // ND_BLAZE_MELEE=1 — бой «мечом по месту» (blaze-melee.ts) вместо holdSpawner: бить того, кто в досягаемости, подходить к
   // видимому на высоте глаз, без коробки с окном; отлёжка — только когда вплотную никого.
-  if (!fr.bail && !p.legacy && fr.spawner && !fr.camp && process.env.ND_BLAZE_MELEE !== '0') {
+  // STANCE: спавнер не увиден (тело под троном, ифриты видны) — тоже меч: старый holdSpawner без спавнера кружил щитом и коробками
+  // (abS1-s17-1 21.10: в 4 бл. под троном, 377 с, FR не выпит, шары — смерть).
+  if (!fr.bail && !p.legacy && (fr.spawner || process.env.ND_BLAZE_STANCE !== '0') && !fr.camp && process.env.ND_BLAZE_MELEE !== '0') {
     fr.phase = 'бой мечом у спавнера'
     fr.held = await (require('../../blaze-melee') as typeof import('../../blaze-melee')).meleeCamp(session, ctl, { spawner: fr.spawner, want: fr.want, deadline: fr.deadline, dead: fr.dead, setPhase: s => { fr.phase = s } })
     log('бой мечом', fr.held)
@@ -176,9 +181,59 @@ export async function rodsEngage (fr: RodsFarm) {
 
 export async function rodsLeave (fr: RodsFarm) {
   const { bot, ctl, session } = fr
+  // ND_BLZ_EXIT_TACTICS=1 (blz 21.10): бой мечом кончился — руки больше не его: иначе тактика считает встречу защищённой (observe.ts
+  // protectedEncounter: blaze + _blazeCombatCtl, иссушитель и магмовый куб — «их бьёт цикл боя») и на выходе на иссушителя не отвечает
+  // никто (fB11-s19-1: 13 убийств, 6 стержней, «домой по следу» — иссушитель 7.9 × 3 за 2 с, смерть с 6 стержнями).
+  if (process.env.ND_BLZ_EXIT_TACTICS === '1' && session._blazeCombatCtl === ctl) delete session._blazeCombatCtl
   // Бросая бой, не стоять под шарами: намерение кончится, а автопилот уводит
   // тело только ниже своего порога (autopilot fleeIfDying). Бег с оглядкой на
   // всех, кто рядом (flee.js smartFlee), до 12 с.
+  // ND_BLZ_EXIT_FR=1 (blz 21.10): уход от трона под ифритами без FR — шары на выходе (fa11-s19-1: 7 стержней, FR кончилась, зелье в
+  // рюкзаке, «домой 44 бл.» — сгорел через 2 с). Ифрит с лучом в 24 бл., FR нет или < 30 с, зелье есть — выпить до ухода.
+  if (process.env.ND_BLZ_EXIT_FR === '1' && !ctl.aborted && fr.here === 'the_nether' && (bot.health ?? 0) > 0 &&
+      (!hasEffect(bot, 'fire_resistance') || (bot._ndFrUntil && bot._ndFrUntil - gameClock.now() < 30000)) && liveBlazes(bot, fr.dead, 24).some(e => seesMe(bot, e))) {
+    const d = await drinkFireResistance(bot, { renew: hasEffect(bot, 'fire_resistance') })
+    log('выход: огнестойкость', { d })
+  }
+  // ND_BLZ_EXIT_UNDER=1 (blz 21.10): без FR ифриты с лучом в 24 бл. — уход под землёй: яма с крышкой на месте (digInNear), из неё
+  // закрытый штрек к порталу на 24 шага (nether-cover.closedBore — устья заделываются): ход поверху от трона под шарами без FR убивал
+  // через 1–2 с (fa11-s19-1: 7 стержней, «домой 44 бл.», сгорел; bzL1-s17-2: штрек домой с открытого места под ударами вплотную).
+  // ND_BLZ_ROD_SWEEP=1: стержней меньше нужного, а рядом лежат (и ниже помоста — упали с трона) — собрать до ямы и ухода, пока FR
+  // ещё жжёт шары впустую (≥ 18 с) или ни один ифрит нас не видит; до 15 с и не дольше остатка FR без 10 с.
+  {
+    const items: typeof import('../../items') = require('../../items')
+    const frLeft = bot._ndFrUntil ? bot._ndFrUntil - gameClock.now() : 0
+    const safe = frLeft >= 18000 || !liveBlazes(bot, fr.dead, 16).some(e => seesMe(bot, e))
+    if (process.env.ND_BLZ_ROD_SWEEP === '1' && !ctl.aborted && fr.here === 'the_nether' && (bot.health ?? 0) > 6 && safe &&
+        items.countOf(bot, 'blaze_rod') < fr.want && (require('../targets') as typeof import('../targets')).droppedRods(bot, 16) > 0) {
+      const r0 = items.countOf(bot, 'blaze_rod')
+      fr.phase = 'сбор стержней перед уходом'
+      await collectRods(bot, ctl, 16, Math.max(3000, Math.min(15000, frLeft >= 18000 ? frLeft - 10000 : 15000)), { deep: true }).catch(() => 0)
+      log('сбор перед уходом', { got: items.countOf(bot, 'blaze_rod') - r0, frLeft: Math.round(frLeft / 1000) })
+    }
+  }
+  // ND_BLZ_FR_RESERVE: бой брошен за 25 с до конца последнего FR (frExit) — та же яма и штрек, но под FR, пока шары не жгут.
+  const frExit = !!fr.held?.frExit
+  if (process.env.ND_BLZ_EXIT_UNDER === '1' && !ctl.aborted && !fr.dugIn && fr.here === 'the_nether' && (bot.health ?? 0) > 0 &&
+      (!hasEffect(bot, 'fire_resistance') || frExit || process.env.ND_BLZ_EXIT_BORE === '1' && (require('../../items') as typeof import('../../items')).countOf(bot, 'blaze_rod') >= fr.want) &&
+      liveBlazes(bot, fr.dead, 24).some(e => seesMe(bot, e) || (frExit || process.env.ND_BLZ_EXIT_BORE === '1') && e.position.distanceTo(bot.entity.position) < 12)) {
+    fr.phase = 'под землю от трона'
+    fr.dugIn = await digInNear(bot, ctl).catch(e => ({ ok: false, why: e.message }))
+    const portal = (session.journal?.state?.places || {})[worlds.portalKey('the_nether')]
+    let away: any = null
+    // Яма не встала (помост тонкий: «лава/пусто у ямы» — nS11-s19-1, hC11-s18-1), а FR ещё есть — сразу закрытым штреком: он сам
+    // начинает «в толщу пола» с открытого места (nether-cover.closedBore), глубже на 4 — в опору трона.
+    if ((fr.dugIn?.ok || frExit) && portal && worlds.worldOfRecord(portal) === 'the_nether' && !ctl.aborted) {
+      away = await (require('../../nether-cover') as typeof import('../../nether-cover')).closedBore(session, ctl, { x: portal.x, z: portal.z },
+        // ND_BLZ_EXIT_BORE=1 (blz 21.10): закрытым штреком до самого портала (в 96 бл.), а не 24 шага: с середины пути тело шло поверху
+        // без FR под шарами ифритов крепости и добивал иссушитель (qS13-s19-1: 5 стержней, 20 огня + 20 шаров на «портал/goto»).
+        { ...(process.env.ND_BLZ_EXIT_BORE === '1' && Math.hypot(portal.x - bot.entity.position.x, portal.z - bot.entity.position.z) <= 96
+          ? { deadline: gameClock.now() + 120000, maxSteps: Math.ceil(Math.hypot(portal.x - bot.entity.position.x, portal.z - bot.entity.position.z)) + 8 }
+          : { deadline: gameClock.now() + 40000, maxSteps: 24 }), minY: Math.floor(bot.entity.position.y) - (fr.dugIn?.ok ? 2 : 4) }).catch(e => ({ ok: false, why: e.message }))
+      if (!fr.dugIn?.ok && away?.ok) fr.dugIn = { ok: true, sealed: true, bored: true, at: xyz(bot.entity.position) }
+    }
+    log('выход под землёй', { dugIn: fr.dugIn, away: away && { ok: away.ok, moved: away.moved, dug: away.dug, why: away.why } })
+  }
   // Набрал или бросаю бой, а ифриты с лучом рядом — в толщу на месте, а не бег под шарами.
   if (!ctl.aborted && !fr.dugIn && fr.here === 'the_nether' && (bot.health ?? 0) > 0 && liveBlazes(bot, fr.dead, 10).some(e => seesMe(bot, e))) {
     fr.phase = 'в толщу на месте'
@@ -193,4 +248,11 @@ export async function rodsLeave (fr: RodsFarm) {
     } catch (e) { fr.fled = { error: e.message } }
   }
   if (!ctl.aborted && !fr.bail && !(fr.dugIn && fr.dugIn.ok)) await collectRods(bot, ctl, 12, 5000)
+  // ND_BLZ_RETRACE: набрал — домой по своему следу (fortress/legs.retraceHome), пока не в 20 бл. от портала или срок навыка.
+  // ND_BLZ_FR_RESERVE: ушёл от трона под последним FR (яма не встала или штрек короток) — тоже домой по следу, при любом числе стержней.
+  if (process.env.ND_BLZ_RETRACE === '1' && !ctl.aborted && fr.here === 'the_nether' && (bot.health ?? 0) > 0 &&
+      ((require('../../items') as typeof import('../../items')).countOf(bot, 'blaze_rod') >= fr.want || frExit && !(fr.dugIn?.ok && fr.dugIn?.sealed))) {
+    fr.phase = 'домой по следу'
+    try { fr.retrace = await (require('../../fortress/legs') as typeof import('../../fortress/legs')).retraceHome(session, ctl, { deadline: Math.max(gameClock.now() + 30000, fr.deadline) }) } catch (e) { fr.retrace = { ok: false, why: e.message } }
+  }
 }

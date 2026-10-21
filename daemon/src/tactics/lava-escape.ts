@@ -76,7 +76,43 @@ export function lavaCapabilities(session: Body): { potion: boolean; climb: boole
   const route = unstuck.fluidRoute(bot, lavaBlock, { radius: 10 })
   const wall = build.pickFiller(bot, { steady: true }) ? wallExit(bot) : null
   const exit = route?.target || wall?.at
+  // ND_BLZ_LAVA_FAR: под FR и без ближнего выхода — всё равно выход (farOut: всплыть и вплавь к дальнему берегу), а не ждать конца FR.
+  if (!exit && farOn() && kit.hasEffect(bot, 'fire_resistance')) return { potion, climb: true, exit: 'far' }
   return { potion, climb: !!exit, exit: exit ? `${Math.floor(exit.x)},${Math.floor(exit.y)},${Math.floor(exit.z)}` : '' }
+}
+
+// ND_BLZ_LAVA_FAR=1 (blz 21.10): лавовое море под FR, берега в 10 нет (bzL2-s18-2: шар гаста сбросил с y83, тело на дне y22 3 мин
+// «угроза — жду», FR кончилась — смерть). Как игрок: всплыть (прыжок в лаве: +0.04/тик к скорости, ход ~0.8 бл/с), потом вплавь по
+// поверхности к ближнему берегу в 32 (fluidRoute раз в секунду), до 2 мин и пока действует FR. Вышел — сухо; нет — дальше ступени стены.
+const farOn = () => process.env.ND_BLZ_LAVA_FAR === '1'
+async function farOut(session: Body, ctl: Controller): Promise<Result> {
+  const bot = session.bot
+  const t0 = clock.now()
+  const headIn = () => lavaBlock(bot.blockAt(bot.entity.position.offset(0, 1.62, 0)))
+  const live = () => !ctl.aborted && bot.health > 0 && kit.hasEffect(bot, 'fire_resistance')
+  try {
+    bot.pathfinder?.setGoal(null)
+    bot.clearControlStates()
+    bot.setControlState('jump', true)
+    while (live() && headIn() && clock.now() - t0 < 20000) await clock.sleep(100)
+    let route: Body | null = null, routeAt = -Infinity, best = Infinity, bestAt = clock.now()
+    while (live() && inLava(bot) && clock.now() - t0 < 120000) {
+      if (clock.now() - routeAt > 1000) { route = unstuck.fluidRoute(bot, lavaBlock, { radius: 32, rise: 4 }) || route; routeAt = clock.now() }
+      if (!route) break
+      const me = bot.entity.position, cells = [...route.path, route.target]
+      let k = 0
+      for (let i = 1; i < cells.length; i++) if (cells[i].offset(.5, 0, .5).distanceTo(me) < cells[k].offset(.5, 0, .5).distanceTo(me)) k = i
+      const next = cells[Math.min(k + 1, cells.length - 1)]
+      const d = me.distanceTo(route.target.offset(.5, 0, .5))
+      if (d < best - .5) { best = d; bestAt = clock.now() } else if (clock.now() - bestAt > 6000) break
+      await bot.lookAt(next.offset(.5, 1.6, .5), true)
+      bot.setControlState('forward', Math.hypot(next.x + .5 - me.x, next.z + .5 - me.z) > .2)
+      bot.setControlState('jump', true)
+      await clock.sleep(150)
+    }
+  } finally { try { bot.clearControlStates() } catch {} }
+  const dry = !inLava(bot)
+  return dry ? { ok: true, method: 'far shore swim', at: bot.entity.position.clone() } : { ok: false, why: 'far: shore not reached', at: bot.entity.position.clone() }
 }
 
 export async function drinkFireResistance(session: Body, ctl: Controller): Promise<Result> {
@@ -121,6 +157,7 @@ export async function climbFromLava(session: Body, ctl: Controller): Promise<Res
   const route = activeGoal ? null : unstuck.fluidRoute(bot, lavaBlock, { radius: 10 })
   const wall = activeGoal ? { at: activeGoal.at } : wallExit(bot)
   const target = activeGoal?.at || route?.target || wall?.at
+  if (!target && farOn()) return farOut(session, ctl)
   if (!target) return { ok: false, why: 'no loaded shore or usable wall with building blocks' }
   const startY = activeGoal?.startY ?? bot.entity.position.y
   const goal = activeGoal || { at: target, deadline: clock.now() + 12000, startY, placed: 0 }

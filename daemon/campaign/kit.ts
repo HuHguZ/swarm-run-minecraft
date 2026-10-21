@@ -2,14 +2,15 @@
 // Снаряжение: еда, верстак и крафт, палки, запасные кирки, наполнители, переплавка, факелы.
 import { OW_DEEP } from './flags'
 import { call, sleep } from './rpc'
-import { strategyInterrupted, state, sit, died, known, castSurfaceFailed, knownWater } from './state'
+import { strategyInterrupted, state, sit, died, known, castSurfaceFailed, knownWater, stairEntrance } from './state'
 import { log } from './log'
 import { have, y, dim, LOGS, COBBLE, RAW, FOOD, PICK_IRON, planksFor, portalFar, fillersNow, nearBastion, woodNow,
-  portalBuckets, lighter } from './queries'
+  portalBuckets, lighter, shieldOn } from './queries'
 import { sense, refresh } from './observe'
 import { canWorkAtNight } from './stages/table'
 import { act } from './act'
 import * as gameClock from '../src/game-clock'
+import { SWINGS_PER_LEVEL } from '../src/items'
 async function eatTo (target = 18, interrupted = () => false) {
   // Each iteration must confirm a rising bar or a spent item; delayed slot ACKs are not extra bites.
   while (!died && !interrupted() && (state.food ?? 20) < target && (have(FOOD) || have(RAW))) {
@@ -31,6 +32,13 @@ async function ensureTable () {
     if (have('crafting_table')) return true
   }
   if (have(/_planks$/) < 4) { const p = planksFor(); if (p) await act('craft', { item: p, count: 4 }) }
+  // ND_OW_TABLE_WOOD=1 (owC9-07: 3 слитка, огниво, 227 булыжника, 2 доски и ни бревна — 19 игр. мин набор и кирка «НЕ ГОТОВ» без
+  // похода за деревом): верстаку не хватает досок — одно бревно (lumber сам решает, можно ли рубить: поверху, не ночью без защиты).
+  if (typeof process !== 'undefined' && process.env.ND_OW_TABLE_WOOD === '1' && have(/_planks$/) < 4 && !have(LOGS) && dim() === 'overworld') {
+    await lumber(1)
+    if (died || strategyInterrupted) return false
+    if (have(/_planks$/) < 4) { const p = planksFor(); if (p) await act('craft', { item: p, count: 4 }) }
+  }
   if (have(/_planks$/) < 4) return false
   for (let k = 0; k < 3 && !have('crafting_table'); k++) {
     const r = await act('craft', { item: 'crafting_table', count: 1 })
@@ -78,9 +86,10 @@ async function sticks (n) {
 
 async function sticksReserve () {
   await refresh()
-  if (have('stick') < 12) {
+  const stickWant = 12
+  if (have('stick') < stickWant) {
     if (have(/_planks$/) < 6 && !have(LOGS)) { await sense(); if (dim() === 'overworld' && sit.surface && !sit.night) await lumber(4) }
-    await sticks(12)
+    await sticks(stickWant)
   }
   if (have(COBBLE) < 24 && known.portal && portalFar() < 48) await act('chest_take', { item: 'cobblestone', count: 32 })
 }
@@ -123,6 +132,7 @@ async function netherFillers (min = 24, want = 48) {
 
 async function lumber (want = 10) {
   await refresh()
+  if (want <= 0) return
   if (have(LOGS) + Math.floor(have(/_planks$/) / 4) >= want) return
   for (let i = 0; i < 3 && have(LOGS) + Math.floor(have(/_planks$/) / 4) < want; i++) {
     await sense()
@@ -150,7 +160,10 @@ async function unclutter () {
 async function reserve () {
   await sense()
   if ((!sit.surface && y() < 50) || sit.night || dim() !== 'overworld') return
-  if (woodNow() < (OW_DEEP ? 4 : 8)) await lumber(OW_DEEP ? 6 : 10)
+  if (typeof process !== 'undefined' && process.env.ND_OW_FAST_KIT === '1' && !known.portal) {
+    // O: запас дерева на набор — тот же woodFloor 4, что у этапа iron; спуск (descend → reserve) рубил до 10 (owC7-01: 8 брёвен, 2 игр. мин).
+    if (woodNow() < 4) await lumber(4)
+  } else if (woodNow() < (OW_DEEP ? 4 : 8)) await lumber(OW_DEEP ? 6 : 10)
   await refresh()
   if (!have('crafting_table')) await ensureTable()
 }
@@ -219,8 +232,8 @@ async function mineSeenAll (block, maxDist = 24, remaining = null) {
 }
 
 const ironToSmelt = () => {
-  if (!(OW_DEEP && !known.portal)) return Infinity
-  const noShield = !have('shield') && !(state.offHand && /shield/.test(JSON.stringify(state.offHand)))
+  if (!((OW_DEEP || process.env.ND_OW_FAST_KIT === '1' && dim() === 'overworld') && !known.portal)) return Infinity
+  const noShield = process.env.ND_OW_FAST_KIT !== '1' && !have('shield') && !(state.offHand && /shield/.test(JSON.stringify(state.offHand)))
   const wantB = portalBuckets()
   const need = 3 * Math.max(0, wantB - have(/bucket$/)) + (lighter() ? 0 : 1) + (noShield ? 1 : 0) + (castSurfaceFailed && !have(PICK_IRON) ? 3 : 0)
   return Math.max(0, need - have('iron_ingot'))
@@ -307,9 +320,12 @@ async function lightUp () {
 
 async function torches () {
   await refresh()
-  if (have('torch') >= 16 || have(/^(coal|charcoal)$/) < 2) return
-  await sticks(2)
-  await craft('torch', 8)
+  const materials = process.env.ND_OW_TORCH_MATERIALS === '1' && dim() === 'overworld'
+  const fuel = have(/^(coal|charcoal)$/)
+  if (have('torch') >= 16 || fuel < (materials ? 1 : 2)) return
+  await sticks(materials ? Math.min(2, fuel) : 2)
+  const count = materials ? 4 * Math.min(2, have('stick'), have(/^(coal|charcoal)$/)) : 8
+  if (count) await craft('torch', count)
 }
 
 export { eatTo, ensureTable, craft, sticks, sticksReserve, spares, netherFillers, lumber, unclutter, reserve,

@@ -66,8 +66,16 @@ function digSecondsOf (b, pickSpeed = 4) {
   return pick ? Math.max(0.05, h * 1.5 / pickSpeed) : Math.max(0.1, h * 1.5 / 1.5)
 }
 
+// A failed plug is a routing obstacle, not a claim that the air became rock.
+// Check before own-air and cached template predictions can admit this cut again.
+function openingClass (state, x, y, z) {
+  if (process.env.ND_SEALED_OPENING_MEMORY !== '1') return undefined
+  const k = key(x, y, z)
+  return state?.openings?.has(k) ? UNKNOWN : state?.openingFacts?.get(k)
+}
+
 // Классификатор живого мира с кешем по клетке (одно планирование — один кеш).
-function worldView (bot) {
+function worldView (bot, state: any = null) {
   const cache = new Map()
   const bestPick = () => {
     let s = 1
@@ -85,7 +93,7 @@ function worldView (bot) {
     return v
   }
   return {
-    cls: (x, y, z) => get(x, y, z).c,
+    cls: (x, y, z) => openingClass(state, x, y, z) ?? get(x, y, z).c,
     dig: (x, y, z) => get(x, y, z).s,
     name: (x, y, z) => get(x, y, z).name,
     forget: () => cache.clear()
@@ -397,20 +405,23 @@ async function digCell (bot, v, { allowGuard = false, interrupted = () => false,
   } finally { receipt?.close() }
 }
 
-async function fillCell (bot, v) {
+async function fillCell (bot, v, ctl = null) {
+  if (ctl?.aborted) return false
   const { placeBlockAt }: typeof import('./build') = require('./build')
   const b = bot.blockAt(v)
-  if (b && classOf(b) !== AIR && classOf(b) !== PARTIAL) return true
+  if (b && classOf(b) !== AIR && classOf(b) !== PARTIAL &&
+      !(process.env.ND_SEALED_FLUID_GUARD === '1' && classOf(b) === FLUID)) return true
   const item = fillerName(bot)
   if (!item) return false
   try {
-    const r = await placeBlockAt(bot, v, { item, timeoutMs: 1500, honest: true })
-    return !!(r && r.ok)
+    const r = await placeBlockAt(bot, v, { item, timeoutMs: 1500, honest: true, ctl })
+    return !!(r && r.ok) && (process.env.ND_SEALED_FLUID_GUARD !== '1' || liveCls(bot, v) !== FLUID)
   } catch { return false }
 }
 
-async function stepMove (bot, ctl, mv) {
+async function stepMove (bot, ctl, mv, canMove = null) {
   if (ctl.waitReflex) await ctl.waitReflex()
+  if (canMove && !canMove()) return false
   const to = vec(mv.to)
   const at = () => feetCell(bot)
   if (mv.kind === 'vdown') {
@@ -448,6 +459,7 @@ async function stepMove (bot, ctl, mv) {
   const t0 = (require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession)
   try {
     while ((require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession) - t0 < 3000 && !ctl.aborted) {
+      if (canMove && !canMove()) return false
       if (at().equals(to) && bot.entity.onGround) break
       if (ctl.waitReflex) await ctl.waitReflex()
       const p = bot.entity.position
@@ -460,11 +472,13 @@ async function stepMove (bot, ctl, mv) {
   await sleep(120)
   // Не дошёл (зацепился за край; ферма 29.09: «я 74.49,29.00,106.69», клетки впереди пусты) —
   // шаг назад и снова вперёд с прыжком.
+  if (canMove && !canMove()) return false
   if (!at().equals(to) && !ctl.aborted) {
     try {
       bot.setControlState('back', true); await sleep(180); bot.setControlState('back', false)
       const t1 = (require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession)
       while ((require('./reflex-lock') as typeof import('./reflex-lock')).clock(bot._ndReflexSession) - t1 < 1600 && !(at().equals(to) && bot.entity.onGround)) {
+        if (canMove && !canMove()) return false
         if (ctl.waitReflex) await ctl.waitReflex()
       const p = bot.entity.position
         await bot.lookAt(new Vec3(to.x + 0.5, p.y + 1.6, to.z + 0.5), true)
@@ -506,6 +520,36 @@ async function bonusGold (bot, S, ctl = { aborted: false }) {
   return got
 }
 
+// ND_SEALED_FLUID_GUARD=1: шаблон разрешил копку, но за снятым блоком может оказаться
+// другой мир. Сверка после КАЖДОГО блока и во время шага — только с видимыми клетками.
+// Сразу закрываем последнюю свою грань, прежде чем следующий блок/ноги откроют проём шире.
+function freshOpening (bot, clear, S) {
+  const eyes: typeof import('./perception/eyes') = require('./perception/eyes')
+  const body = new Set(bodyCells(bot).map(keyV))
+  const moving = new Set(clear.map(keyV))
+  for (const c of clear) {
+    if (!S.own.has(keyV(c))) continue
+    for (const [dx, dy, dz] of FACES) {
+      const p = vec(c).offset(dx, dy, dz)
+      if (!eyes.seesNow(bot, p)) continue
+      const nk = keyV(p), cls = classOf(bot.blockAt(p, false))
+      const fluid = cls === FLUID
+      if (!fluid && (!(cls === AIR || cls === PARTIAL) || S.own.has(nk) || body.has(nk) || moving.has(nk) || S.breachOk?.(keyV(c), nk))) continue
+      // Сохранить именно увиденное: после закладки луча уже не будет, но память
+      // открывшегося воздуха/лавы должна остановить повтор того же плана.
+      if (process.env.ND_SEALED_OPENING_MEMORY === '1') {
+        // This class was just ray-observed. Do not ask the bounded template
+        // reader to rediscover it, and never retain the mutable live Block.
+        ;(S.openingFacts || (S.openingFacts = new Map())).set(nk, cls)
+      }
+      S.view?.forget?.()
+      S.view?.cls?.(p.x, p.y, p.z)
+      return { cut: vec(c), at: nk, why: fluid ? 'жидкость' : 'новый проём' }
+    }
+  }
+  return null
+}
+
 // Исполнить путь плана. S: { own, exposed, deadline, targets:Set, breachOk(k,nk),
 // onThreat(), dug, moves, fills, ores, bonusBlocks }.
 async function execute (session, ctl, path, S) {
@@ -513,6 +557,29 @@ async function execute (session, ctl, path, S) {
   for (let i = 0; i < path.length; i++) {
     if (ctl.waitReflex) await ctl.waitReflex()
     const mv = path[i]
+    let opening = null
+    const canMove = process.env.ND_SEALED_FLUID_GUARD === '1' || process.env.ND_SEALED_OPENING_MEMORY === '1'
+      ? () => !(opening ||= freshOpening(bot, mv.clear, S)) : null
+    const closeOpening = async () => {
+      if (ctl.aborted) return { ok: false, why: 'прервано до закладки', done: i }
+      let sealed = await fillCell(bot, opening.cut, ctl)
+      if (process.env.ND_SEALED_OPENING_MEMORY === '1') {
+        const eyes: typeof import('./perception/eyes') = require('./perception/eyes')
+        const cutKey = keyV(opening.cut)
+        // A positive placement receipt alone cannot certify a closed passage.
+        sealed = !!sealed && eyes.seesNow(bot, opening.cut) && [SOLID, HARD, GUARD, HOT].includes(liveCls(bot, opening.cut))
+        const blocked = S.openings || (S.openings = new Set())
+        if (sealed) blocked.delete(cutKey)
+        else blocked.add(cutKey)
+      }
+      if (sealed) {
+        S.own.delete(keyV(opening.cut)); S.fills++
+        ;(S.filled || (S.filled = new Set())).add(keyV(opening.cut))
+      }
+      S.view?.forget?.()
+      S.exposed = true
+      return { ok: false, why: `${opening.why} после вскрытия у ${opening.at}; закладка ${sealed ? 'да' : 'нет'}`, done: i }
+    }
     if (ctl.aborted) return { ok: false, why: 'прервано', done: i }
     if (gameClock.now() > S.deadline) return { ok: false, why: 'время', done: i }
     for (const q of bodyCells(bot)) { const b = bot.blockAt(q); if (b && /lava|fire/.test(b.name)) return { ok: false, why: 'огонь или лава в клетке тела', done: i } }
@@ -543,7 +610,7 @@ async function execute (session, ctl, path, S) {
       const v = vec(c)
       const k = keyV(c)
       const b = bot.blockAt(v, false)
-      const cc = S.honest && S.view ? S.view.cls(v.x, v.y, v.z) : classOf(b)
+      const cc = openingClass(S, v.x, v.y, v.z) ?? (S.honest && S.view ? S.view.cls(v.x, v.y, v.z) : classOf(b))
       if (cc === FLUID || cc === HARD || cc === UNKNOWN) return { ok: false, why: `${b ? b.name : '?'} на пути ${k}`, done: i }
       if (cc === AIR) { if (!S.own.has(k) && !body.includes(k) && !(S.openOk && S.openOk.has(k))) return { ok: false, why: `чужой воздух ${k}`, done: i }; continue }
       for (const [dx, dy, dz] of FACES) {
@@ -576,13 +643,15 @@ async function execute (session, ctl, path, S) {
       }
       S.own.add(k)
       if (S.honest) S.view?.forget?.()
+      if (canMove && !canMove()) return await closeOpening()
     }
     if (S.honest && mv.floor) {
       const fc = live(vec(mv.floor))
       if (!(fc === SOLID || fc === HARD || fc === GUARD)) return { ok: false, why: `после копки пол хода ${keyV(mv.floor)} ненадёжен`, done: i }
     }
     const before = bodyCells(bot)
-    const ok = await stepMove(bot, ctl, mv)
+    const ok = await stepMove(bot, ctl, mv, canMove)
+    if (opening) return await closeOpening()
     for (const v of bodyCells(bot)) S.own.add(keyV(v))
     if (!ok) {
       const p = bot.entity.position
@@ -610,9 +679,9 @@ async function execute (session, ctl, path, S) {
   return { ok: true, done: path.length }
 }
 
-module.exports = { localAir, bodyCells, FILL_NAMES: FILL, reachCells, AIR, SOLID, FLUID, HARD, GUARD, FALL, PARTIAL, HOT, UNKNOWN, CLS_NAMES, FACES, classOf, digSecondsOf, worldView, plan, adjacentGoal, manhattan, key, keyV, exposure, digCell, fillCell, stepMove, bonusGold, execute, fillerName, fillerCount }
+module.exports = { localAir, bodyCells, FILL_NAMES: FILL, reachCells, AIR, SOLID, FLUID, HARD, GUARD, FALL, PARTIAL, HOT, UNKNOWN, CLS_NAMES, FACES, classOf, digSecondsOf, openingClass, worldView, plan, adjacentGoal, manhattan, key, keyV, exposure, digCell, fillCell, stepMove, bonusGold, execute, fillerName, fillerCount }
 export {
   localAir, bodyCells, FILL as FILL_NAMES, reachCells, AIR, SOLID, FLUID, HARD, GUARD, FALL, PARTIAL, HOT,
-  UNKNOWN, CLS_NAMES, FACES, classOf, digSecondsOf, worldView, plan, adjacentGoal, manhattan, key, keyV, exposure,
+  UNKNOWN, CLS_NAMES, FACES, classOf, digSecondsOf, openingClass, worldView, plan, adjacentGoal, manhattan, key, keyV, exposure,
   digCell, fillCell, stepMove, bonusGold, execute, fillerName, fillerCount
 }

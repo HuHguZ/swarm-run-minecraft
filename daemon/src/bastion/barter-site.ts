@@ -236,7 +236,7 @@ async function digPit (session, ctl, st, until) {
     // Яма — не у дома брута из копии (S1d s1d-AB-4 B: план ямы в 39 ходах к 92,59,−87, в 7 бл. от брута 85,58,−88 — два удара на пути, смерть).
     const BH = (require('.././nether-route') as typeof import('.././nether-route')).bruteSpots(session)
     const cands = pitsAwayFromBrutes(pitCandidates(bot, view, S.own, BF.enabled() ? 64 : 40).filter(b => !(S.badPits && S.badPits.has(SL.key(b.M.x, b.M.y, b.M.z)))), BH).slice(0, 16)
-    if (!cands.length) { log('яма: места у пиглинов нет', { pigs: mobs(bot, 'piglin', 40).length }); return null }
+    if (!cands.length) { log('яма: места у пиглинов нет', { pigs: mobs(bot, 'piglin', 40).length, ...(process.env.ND_BARTER_TRADER_MEMORY === '1' ? { traders:(require('./trader-memory') as typeof import('./trader-memory')).stats(bot) } : {}) }); return null }
     const me = bot.entity.position.floored()
     const goalMap = new Map(cands.map(b => [SL.key(b.P.x, b.P.y, b.P.z), b]))
     const xs = [me.x, ...cands.map(b => b.P.x)]; const ys = [me.y, ...cands.map(b => b.P.y)]; const zs = [me.z, ...cands.map(b => b.P.z)]
@@ -354,7 +354,7 @@ async function moveBarterSite (session, ctl, st, p, until) {
     const why = await waitWatched(session, ctl, Math.min(33000, lastGoldBreak(st) + 33000 - gameClock.now()))
     if (why || ctl.aborted) return false
   }
-  const view = SL.worldView(bot); const me = bot.entity.position
+  const view = process.env.ND_BARTER_TRADER_MEMORY === '1' ? planView(bot,st) : SL.worldView(bot); const me = bot.entity.position
   const seen = st.flowVisited || (st.flowVisited = new Set())
   const pits = pitsAwayFromBrutes(pitCandidates(bot, view, st.sealedState.own, 64), (require('.././nether-route') as typeof import('.././nether-route')).bruteSpots(session))
     .filter(b => !b.brutes && !(st.sealedState.badPits && st.sealedState.badPits.has(SL.key(b.M.x, b.M.y, b.M.z))))

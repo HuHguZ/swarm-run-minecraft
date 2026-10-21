@@ -275,6 +275,26 @@ async function swTour (sb: SpawnerWalk) {
     if (!sb.sp) sb.sp = sb.spawnerNear()
     sb.legs.push({ ok: !!sb.sp, tour: (sb.toured.hops || []).length, deckSteps: sb.toured.deckSteps, deckVisited: sb.toured.deckVisited, at: xyz(bot.entity.position) })
   }
+  // ND_BLZ_NO_THRONE=1 (blz 21.10): крепость без трона бывает (тронный зал — необязательная часть; 3292: крепость C у 112,16 — 111 кусков,
+  // ни одного MonsterThrone): три обхода подряд у этой крепости, а пирог/слух ни разу не подсказали спавнер и ифритов не видно — как
+  // спидраннер, бросить её: забыть «крепость (ад)», регион — в «крепости без трона» (обход осями его не считает), и искать другую
+  // (bzT2-s18-1: 30 мин обхода крепости C, 0 подсказок). Новая найдена — следующий вызов mode=spawner идёт к ней.
+  if (!sb.sp && sb.fort && sb.toured && process.env.ND_BLZ_NO_THRONE === '1' && !ctl.aborted && gameClock.now() < deadline - 30000) {
+    const { regionOf }: typeof import('./sweep') = require('./sweep')
+    const reg = regionOf(sb.fort.x, sb.fort.z), key = reg.join(',')
+    const acc = ((session._ndThroneTours ||= {})[key] ||= { tours: 0, hints: 0, blazes: 0 })
+    acc.tours++
+    acc.hints += (sb.toured.hops || []).filter(h => h.hint || h.blaze || (h.by && h.by !== 'кирпич')).length
+    acc.blazes += sb.toured.blazes?.seen || 0
+    log('крепость: обход без трона', { region: reg, ...acc })
+    if (acc.tours >= 3 && !acc.hints && !acc.blazes) {
+      session.journal.patch(st => { if (st.places) delete st.places[PLACE]; (st.thronelessRegions ||= []).push(reg) })
+      bot._ndSkipFortRegions = [...(bot._ndSkipFortRegions || []), reg]
+      log('крепость без трона — ищу другую', { region: reg, fort: { x: sb.fort.x, z: sb.fort.z } })
+      const r: any = await (require('./scout') as typeof import('./scout')).scout(session, ctl, { timeoutSeconds: Math.max(20, Math.round((deadline - gameClock.now()) / 1000) - 10), high: true })
+      return { found: false, throneless: { region: reg }, search: r?.found ? { found: true, fortress: r.fortress } : { found: false, stopped: r?.stopped }, stopped: `крепость без трона (регион ${key}) — ${r?.found ? 'нашёл другую' : 'другой пока не нашёл'}`, legs: sb.legs }
+    }
+  }
   if (!sb.sp) return { found: false, explored: sb.toured?.explored, frontierRevision: sb.toured?.frontierRevision, stopped: sb.fort ? `у крепости спавнера в прогруженных чанках не видно${sb.toured ? ` (обход ${(sb.toured.hops || []).length} остановок)` : ''}` : 'крепости в памяти нет — сперва найти (fortress без mode)', legs: sb.legs, ...(sb.toured && sb.toured.blazes ? { blazes: sb.toured.blazes } : {}) }
 }
 
@@ -380,6 +400,16 @@ async function swWither (sb: SpawnerWalk, tk: SpawnerTick) {
 
 async function swDrink (sb: SpawnerWalk, tk: SpawnerTick) {
   const { bot, tunnel } = sb
+  // ND_BLAZE_FR_LATE: бой начался (ифрит с лучом к нам в 16 бл.) — зелье сейчас при любом запасе: вход в зал — уже бой (bzG2-s18-1 21.10:
+  // два зелья в рюкзаке, подход вошёл к трону без FR — ближний и шары, смерть за 3 с).
+  if (process.env.ND_BLAZE_FR_LATE === '1' && sb.frCount() >= 1 && !(require('../blaze') as typeof import('../blaze')).hasEffect(bot, 'fire_resistance')) {
+    const { liveBlazes }: typeof import('../blaze/targets') = require('../blaze/targets')
+    const { seesMe }: typeof import('../blaze/radar') = require('../blaze/radar')
+    if (liveBlazes(bot, new Set(), 16).some(e => seesMe(bot, e))) {
+      const d = await (require('../blaze') as typeof import('../blaze')).drinkFireResistance(bot).catch(e => e.message)
+      console.log('[fortress] бой у зала: огнестойкость', JSON.stringify({ d, left: sb.frCount(), flat: Math.round(tk.flat ?? -1) }))
+    }
+  }
   // У крепости (≤ 64 бл.) — под огнестойкостью: мосты над лавовым морем, блейзы и бой с откидыванием (neF-S26-1 02.10:
   // бой с блейзом на мосту y 74, тело слетело к лаве на y 24 после конца зелья — «tried to swim in lava»).
   if (tunnel && tk.flat <= 64 && sb.nearDrinks < 2 && sb.frCount() >= 3 && !(require('../blaze') as typeof import('../blaze')).hasEffect(bot, 'fire_resistance')) {

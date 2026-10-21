@@ -16,6 +16,7 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { sleep, xyz }: typeof import('./movement') = require('./movement')
 const { equipBestTool, missingHarvestTool }: typeof import('./items') = require('./items')
 const eyes: typeof import('./perception/eyes') = require('./perception/eyes')
+const geometry: typeof import('./navigation/geometry') = require('./navigation/geometry')
 
 const LIQUID = /^(water|lava|bubble_column)$/
 const HAZARD_FLOOR = /lava|magma|pointed_dripstone|powder_snow|cactus|campfire|fire/
@@ -109,6 +110,22 @@ function judgeStep (bot, F, d, { bricks = null, careful = false, hp = 20, throug
   return { act: 'bridge', cell: land, why: drop.bottom ? `пустота ${fall === null ? '?' : fall} бл. на ${drop.bottom.name}` : 'дна не видно' }
 }
 
+// noDrop judges the future stair only AFTER digging. A toe can still stand on
+// N-1 while floor(position) names the next air cell: do not cut that sole support.
+function cutsOnlySupport (bot, block) {
+  if (process.env.ND_LAVA_FALL_GUARD !== '1' || !/nether/.test(String(bot.game?.dimension || ''))) return false
+  const p = bot.entity?.position
+  if (!p || !block?.position) return false
+  const body = geometry.bodyBox(bot, p), eps = 1e-7
+  const holds = geometry.shapeBoxes(block).some(b => b.maxY <= p.y + eps && p.y - b.maxY <= .04 + eps &&
+    Math.min(body.maxX, b.maxX) - Math.max(body.minX, b.minX) > eps &&
+    Math.min(body.maxZ, b.maxZ) - Math.max(body.minZ, b.minZ) > eps)
+  if (!holds) return false
+  const remaining = { physics: bot.physics, entity: bot.entity,
+    blockAt: q => q.equals(block.position) ? null : seen(bot, q) }
+  return !geometry.supportAt(remaining, p, .04)
+}
+
 async function digCell (bot, mcData, cell) {
   for (let pass = 0; pass < 6; pass++) {
     const b = bot.blockAt(cell)
@@ -118,16 +135,20 @@ async function digCell (bot, mcData, cell) {
     let t = Infinity
     try { t = bot.digTime(b) } catch {}
     if (problem && t > 10000) return { ok: false, why: problem }
-    try { await equipBestTool(bot, b); await bot.dig(b, true) } catch (e) { return { ok: false, why: `не сломал ${b.name}: ${e.message}` } }
+    try {
+      await equipBestTool(bot, b)
+      if (cutsOnlySupport(bot, b)) return { ok: false, why: 'LAVA_FALL_GUARD: единственная опора под телом — сначала отойти на твёрдый пол' }
+      await bot.dig(b, true)
+    } catch (e) { return { ok: false, why: `не сломал ${b.name}: ${e.message}` } }
     // Гравий/песок над клеткой падает за 1–2 тика: подождать их и проверить снова (больше ждать нечего — 2 игр. тика на блок).
     if (/gravel|sand|powder/.test(String((bot.blockAt(cell.offset(0, 1, 0)) || {}).name))) await sleep(150); else await sleep(50)
   }
   return { ok: false, why: 'сыплется (гравий/песок) — 6 раз' }
 }
 
-async function placeAt (bot, cell) {
+async function placeAt (bot, cell, ctl = null) {
   const { placeBlockAt }: typeof import('./build') = require('./build')
-  try { const r = await placeBlockAt(bot, cell, { timeoutMs: 2000, steady: true, honest: true }); return !!(r && r.ok) } catch { return false }
+  try { const r = await placeBlockAt(bot, cell, { timeoutMs: 2000, steady: true, honest: true, ctl }); return !!(r && r.ok) } catch { return false }
 }
 
 // early — торможение тем же рулём, что у спуска блоками; шаг подтверждается опорой на своей ступени, не входом в колонну.
@@ -186,13 +207,24 @@ async function stairStep (session, ctl, k, o: any = {}) {
     const d = SPIRAL[(k + t) % 4]
     // only(d) — разрешённые стороны (nether-cover.descend: ступень только в видимую породу, не к устью пещеры).
     if (o.only && !o.only(d)) { why = why || 'сторона закрыта'; continue }
-    let j = null
+    let j = null,blocked=null
+    const guard=async()=>o.guard?await o.guard(F,d):null
+    const move=async(goal,fall,early=false)=>{
+      const moveCtl=o.threat?{get aborted(){return ctl.aborted||o.threat()}}:ctl
+      const ok=await walkInto(bot,moveCtl,goal,fall,early)
+      blocked=await guard()
+      return ok&&!blocked
+    }
+    blocked=await guard()
+    if(blocked)return{moved:false,k,dug,placed,...blocked}
     for (let a = 0; a < 10 && !ctl.aborted; a++) {
       j = judgeStep(bot, F, d, { ...o, wetOk, hp: bot.health ?? 20 })
       if (j.act === 'dig') {
         const r = await digCell(bot, session.mcData, j.cell)
         if (!r.ok) { j = { act: 'turn', why: r.why }; break }
         dug++
+        blocked=await guard()
+        if(blocked)return{moved:false,k,dug,placed,...blocked}
         continue
       }
       if (j.act === 'plug') {
@@ -215,20 +247,26 @@ async function stairStep (session, ctl, k, o: any = {}) {
         const N = F.offset(d[0], 0, d[1])
         if (j.act === 'bridge' && (await placeAt(bot, N.offset(0, -1, 0)))) {
           placed++
-          if (await walkInto(bot, ctl, N, 0)) return { moved: true, flat: true, k: (k + t + 1) % 4, fall: 0, dug, placed }
+          // noDrop (укрытие Ада): ровный шаг по своему же вернутому блоку над пустотой — не укрытие, а риск: dbg37b-3818 —
+          // уступ толщиной в блок над лавовым морем, два «ровных шага» по вернутым блокам, на втором опоры не оказалось — с y79 в
+          // лаву y31. Блок вернули — ступень закрыта, дальше другая сторона.
+          if (o.noDrop) { j = { act: 'turn', why: 'под ступенью пустота — ступень вернул, по уступу не иду' }; break }
+          if (await move(N, 0)) return { moved: true, flat: true, k: (k + t + 1) % 4, fall: 0, dug, placed }
         }
         j = { act: 'turn', why: j.act === 'seal' ? `${j.name} не заложил` : `мост не встал (${j.why})` }
         break
       }
       break
     }
+    if(blocked)return{moved:false,k,dug,placed,...blocked}
     if (!j || ctl.aborted) return { moved: false, k, why: 'прервано', dug, placed }
     if (j.act === 'brick') return { moved: false, k, found: j.name, at: j.cell, room: j.room || undefined, dug, placed }
     if (j.act === 'turn') { why = j.why; continue }
     if (j.act === 'step') {
       // Зигзаг 2×1 (следующая ступень — обратно): клетка головы следующей ступени — ноги этой, уже воздух: 2 блока на уровень
       // вместо 3 у спирали 2×2 (s5e-M-1: 80 ступеней по ~3.1 игр. с). Пол следующей ступени так же виден в проём до шага.
-      if (await walkInto(bot, ctl, F.offset(d[0], -1, d[1]), j.fall, !!o.early)) return { moved: true, k: (k + t + (process.env.ND_STAIR_SPIRAL === '1' ? 1 : 2)) % 4, fall: j.fall, dug, placed }
+      if (await move(F.offset(d[0], -1, d[1]), j.fall, !!o.early)) return { moved: true, k: (k + t + (process.env.ND_STAIR_SPIRAL === '1' ? 1 : 2)) % 4, fall: j.fall, dug, placed }
+      if(blocked)return{moved:false,k,dug,placed,...blocked}
       if (!bot.entity.position.floored().equals(F)) return { moved: false, k, why: 'после шага клетка изменилась — нужен новый обзор', dug, placed }
       why = 'не шагнул на ступень'
     }

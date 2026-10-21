@@ -159,15 +159,22 @@ function run (bot, base, control, { hold = 2, max = 18, groundY, cache, safe = S
   const sim = simOf(bot)
   const st = cloneState(base, control)
   let held = true
+  // OW: a jump's downward arc starts at its apex, not at the departure floor.
+  const arc = process.env.ND_OW_FALL_ARC === '1' &&
+    String(bot.game?.dimension || '').replace(/^minecraft:/, '') === 'overworld'
+  let fallTop = Math.max(groundY, base.pos.y)
   for (let t = 0; t < max; t++) {
     if (t === hold) { st.control = { ...IDLE }; held = false }
     sim(st, world)
     if (st.isInLava) return { fall: true, lava: true, t, at: st.pos }
-    if (!st.onGround && st.pos.y < groundY - 0.4) {
+    if (arc) fallTop = st.isInWater || st.isInWeb ? st.pos.y : Math.max(fallTop, st.pos.y)
+    const fromY = arc ? fallTop : groundY
+    if ((arc || !st.onGround) && st.pos.y < fromY - 0.4) {
       const s = support(bot, st.pos, cache)
       const top = st.pos.y - s.drop
-      if (s.lava || (!s.water && groundY - top > safe)) return { fall: true, t, at: st.pos }
+      if (s.lava || (!s.water && fromY - top > safe)) return { fall: true, t, at: st.pos }
     }
+    if (arc && st.onGround) fallTop = st.pos.y
     if (land && held && st.onGround) { st.control = { ...IDLE }; held = false }
     if (st.onGround && !held && Math.hypot(st.vel.x, st.vel.z) < 0.003) return { fall: false, rest: st.pos, t }
   }

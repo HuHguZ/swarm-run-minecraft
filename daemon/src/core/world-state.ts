@@ -21,6 +21,8 @@ export interface WorldState {
   structureSearchMs: number
   threatLevel: number
   revision: number
+  /** Physical retry metadata, deliberately excluded from stateKey/usefulProgress. */
+  retryContext?: string
   alive: boolean
 }
 export function fact<T extends FactValue>(value: T | null, source: FactSource, at: number, confidence = 1): Fact<T> {

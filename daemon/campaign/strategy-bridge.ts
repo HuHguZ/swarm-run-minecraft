@@ -3,7 +3,7 @@
 import { EYES_NEED, BEDS_END, END_PREP_PRICE } from './flags'
 import { call, sleep } from './rpc'
 import { T0, stage, strategyInterrupted, state, sit, died, known, netherExplored, quickHuntAt, lavaSourceKnown,
-  routeStructureSeconds, bastionGoldDug, bastionIngotsTraded, barterZero, setBarterZero, setBastionIngotsTraded,
+  routeDeadline, routeStructureSeconds, bastionGoldDug, bastionIngotsTraded, barterZero, setBarterZero, setBastionIngotsTraded,
   setQuickHuntAt, setRouteDeadline, setRouteStructureSeconds, setStage, setStrategyExecuting, setStrategyInterrupted,
   setStrategyTail } from './state'
 import { telemetry, log } from './log'
@@ -11,7 +11,7 @@ import { have, dim, foodUnits, lighter, fireResNow, fireResReady } from './queri
 import { sense, refresh, readMemory } from './observe'
 import { STAGES, READY, DONE, stageRun } from './stages/table'
 import { EXIT_KIT, pendingExitFrame, obsShort, eyesWant, nextBastion, activeBastion, barterExhausted, barterSite,
-  bastionSearchWanted, bastionPearlsPending, netherRetryState, endermenSecondsPerPearl, netherSupply,
+  bastionSearchWanted, bastionPearlsPending, netherRetryState, endermenSecondsPerPearl, bastionPriceChoice, netherSupply,
   netherSupplyState } from './nether-plan'
 import { act } from './act'
 import { rest } from './guards'
@@ -19,7 +19,9 @@ import { returnFromNether } from './travel'
 import { eatTo, craft } from './kit'
 import { spendIron } from './gear'
 import { quickHunt } from './food'
-import { ensureFlint } from './portal-kit'
+import { ensureFlint, castForKit } from './portal-kit'
+import { spares } from './kit'
+import { runDeepLava } from '../src/campaign/deep-lava'
 import { dayLavaStep, lavaLookout, skyLavaLook, lavaAtSeenRuins, structureValue, dayLeft } from './scout'
 import { routeMod, routeStep } from './route-wiring'
 import { enterNether, replenishNetherSupply } from './nether-trip'
@@ -40,10 +42,11 @@ async function intelligenceObservation () {
   await sense()
   await readMemory()
   graphFact('nether_ready', READY.nether())
+  if (process.env.ND_OW_DEEP_LAVA === '1') graphFact('deep_lava_pick_swings', sit.pickLeft ?? 0)
   graphFact('nether_tools_ready', netherSupply.netherToolsReady(netherSupplyState()))
   graphFact('nether_pick_swings', sit.pickLeft ?? 0)
   graphFact('fortress_explored', netherExplored)
-  if (process.env.ND_NE_RECOVER === '1') graphFact('nether_search_state', netherRetryState())
+  if (process.env.ND_NE_RECOVER === '1' || process.env.ND_NE_NO_GIVEUP === '1') graphFact('nether_search_state', netherRetryState())
   graphFact('fire_resistance_count', fireResNow())
   graphFact('fire_resistance_active', state.fireResistance === true || state.tactics?.state?.fireResistance === true)
   graphFact('bastion_gold_dug', bastionGoldDug)
@@ -64,6 +67,7 @@ async function intelligenceObservation () {
 }
 const lavaScoutCells = new Set<string>()
 let lavaScoutViews = 0
+let lavaEmptySearches = 0
 async function executeStrategy (command, signal) {
   if (signal.aborted) return { outcome: 'INTERRUPTED', reason: String(signal.reason), events: [] }
   setStrategyExecuting(true)
@@ -141,7 +145,21 @@ async function executeStrategy (command, signal) {
       await spendIron()
       if (!have(/bucket$/) && have('iron_ingot') >= 3) await craft('bucket')
       if (!lighter()) await ensureFlint()
+    } else if (skill === 'deepLavaCast' && process.env.ND_OW_DEEP_LAVA === '1') {
+      const s = await intelligence.environment.observe()
+      const deep = intelligence.registry.get('DeepLavaPortal'), scout = intelligence.registry.get('ScoutLava')
+      log(`глубокая лава: путь ≈ ${Math.round(deep.estimateCost(s) / 20)} с против поиска+литья ≈ ${Math.round(scout.estimateCost(s) / 20 + 120)} с; лестница к −54, вода ${have('water_bucket') ? 'с собой' : 'по виду/слуху'}`)
+      const previous = routeDeadline, previousStage = stage, budget = Math.min(900, Math.max(1, Number(command.params?.budgetSeconds) || 600))
+      setStage('cast')
+      setRouteDeadline(gameClock.now() + budget * 1000)
+      try {
+        const result = await runDeepLava({ now: () => gameClock.now(), stopped: () => died || strategyInterrupted || signal.aborted,
+          position: () => state.pos, portal: () => !!known.portal, water: () => have('water_bucket') > 0, prepare: spares, act, hear: process.env.ND_OW_HEAR !== '0',
+          cast: async params => { const r = await castForKit(params); await readMemory(); return r } }, budget)
+        log(`глубокая лава: ${result}`)
+      } finally { setRouteDeadline(previous); setStage(previousStage) }
     } else if (skill === 'scoutLava') {
+      const scoutViewsBefore = lavaScoutViews
       const cell = () => state.pos && [dim(), ...['x', 'y', 'z'].map(axis => Math.floor(state.pos[axis] / 16))].join(':')
       if (cell()) lavaScoutCells.add(cell())
       if (!(await dayLavaStep())) {
@@ -154,6 +172,10 @@ async function executeStrategy (command, signal) {
       const viewed = cell()
       if (viewed && !lavaScoutCells.has(viewed)) { lavaScoutCells.add(viewed); lavaScoutViews++ }
       graphFact('lava_scout_views', lavaScoutViews)
+      if (process.env.ND_OW_DEEP_LAVA === '1' && lavaScoutViews > scoutViewsBefore && !known.lava && !died && !strategyInterrupted) {
+        lavaEmptySearches++
+        graphFact('lava_empty_searches', lavaEmptySearches)
+      }
     } else if (skill === 'ruinedPortal') {
       const at = campaignMap()?.rp
       if (!at) return { outcome: 'FAILURE', reason: 'руины без известного места', events: [] }
@@ -176,12 +198,31 @@ async function executeStrategy (command, signal) {
       if (!bread || !(await craft('bread', bread.count))) return { outcome: 'FAILURE', reason: 'хлеб из принесённых ингредиентов не подтверждён', events: [] }
     }
     else if (skill === 'piglinBarter') {
+      const price = bastionPriceChoice()
+      if (price) log(price.line)
+      if (price?.action === 'endermen') await stageRun('pearls')()
+      else {
       if (have('gold_block') && have('gold_ingot') < 8) await craft('gold_ingot', 9 * have('gold_block'))
       if (have('gold_ingot') < 8) return { outcome: 'FAILURE', reason: 'сервер не подтвердил восемь слитков для бартера', events: [] }
-      const barter = await act('bastion', { ...barterSite(), mode: 'barter', pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: 1,
+      // ND_BARTER_SEEK (по умолчанию): торг принесённым — сперва у видимых пиглинов на открытом (pearls seek), как этап bastion. Граф звал
+      // только защищённый бартер бастиона, а он при фокусе отвечает «торг — на открытом (seek)» и не торгует: b86-int5-s20 — 36 слитков,
+      // ~17 вызовов bastion↔explore за 38 мин, 0 сделок.
+      if (process.env.ND_BARTER_SEEK !== '0' && dim() === 'the_nether') {
+        const b = nextBastion() || activeBastion()
+        const sk = await act('pearls', { mode: 'seek', pearls: Math.max(0, eyesWant() - have('ender_eye')), timeoutSeconds: 360, ...(b ? { avoid: { x: b.x, z: b.z, r: 20 } } : {}) })
+        await refresh()
+        setBastionIngotsTraded(bastionIngotsTraded + (Number(sk.detail?.spent) || 0))
+        log(`бартер графа: торг на открытом — слитков ${sk.detail?.spent ?? 0}, жемчуг +${sk.detail?.pearls ?? 0}; ${sk.detail?.stopped || sk.error || sk.status}`)
+        if ((Number(sk.detail?.spent) || 0) > 0 || sk.status === 'interrupted' || died || dim() !== 'the_nether' || have('gold_ingot') + 9 * have('gold_block') < 8) {
+          setBarterZero((Number(sk.detail?.spent) || 0) > 0 ? 0 : barterZero + 1)
+          return { outcome: strategyInterrupted ? 'INTERRUPTED' : 'SUCCESS', events: [] }
+        }
+      }
+      const barter = await act('bastion', { ...barterSite(), mode: 'barter', pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: process.env.ND_BASTION_PRICE === '1' ? 0 : 1,
         ...(process.env.ND_SH_NETHER === '1' ? { obsidian: 10 } : {}), ...(EXIT_KIT ? { exit: false } : {}), sealed: true, timeoutSeconds: 540 })
       setBastionIngotsTraded(bastionIngotsTraded + (Number(barter.detail?.ingotsTraded) || 0))
       setBarterZero((Number(barter.detail?.ingotsTraded) || 0) > 0 ? 0 : barterZero + 1)
+      }
     }
     else if (skill === 'findBastions') {
       const r = await act('structure', { mode: 'scan', radius: 96 })

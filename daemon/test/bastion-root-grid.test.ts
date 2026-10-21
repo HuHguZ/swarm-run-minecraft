@@ -10,8 +10,9 @@ import B = require('../src/bastion/bastion')
 const data=JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'daemon/test/fixtures/bastion-p7-b-102-starts.json'),'utf8'))
 
 function predict(starts,enabled){
-  const old={ND_BASTION_ROOT_GRID:process.env.ND_BASTION_ROOT_GRID,ND_KNOWLEDGE:process.env.ND_KNOWLEDGE}
-  process.env.ND_BASTION_ROOT_GRID=enabled;process.env.ND_KNOWLEDGE='rsg'
+  const old={ND_BASTION_ROOT_GRID:process.env.ND_BASTION_ROOT_GRID,ND_KNOWLEDGE:process.env.ND_KNOWLEDGE,ND_BASTION_HYP_FOCUS:process.env.ND_BASTION_HYP_FOCUS}
+  // ND_BASTION_HYP_FOCUS (по умолчанию вкл.) включает ту же сетку — «до» меряется без него.
+  process.env.ND_BASTION_ROOT_GRID=enabled;process.env.ND_KNOWLEDGE='rsg';process.env.ND_BASTION_HYP_FOCUS=enabled==='0'?'0':'1'
   try{
     const st:any={pred:new Map(),gold:new Map(),chestSeen:new Map(),looted:new Set(),pieces:[]}
     B.rememberStarts({blockAt(){assert.fail('the generator constraint must not read the world')}},st,starts)

@@ -150,6 +150,15 @@ test('iron forks obey building-first search budget and replan to mining after ex
   world.structureSearchMs = 180000
   assert.equal(plan(registry, world, goal).steps[0].id, 'MineIron')
 })
+test('zero blind scouting budget mines at once but still loots a seen village', () => {
+  const registry = speedrunRegistry({ scoutBudgetMs: 0 })
+  const world = emptyWorld(); world.resources = { stone_tool: 1, food: 6 }
+  const goal = (s: WorldState) => amount(s, 'iron') >= 4
+  assert.equal(registry.get('ScoutStructures')!.preconditions(world), false)
+  assert.equal(plan(registry, world, goal).steps[0].id, 'MineIron')
+  world.facts.village = fact(true, 'observed', 0)
+  assert.equal(registry.get('VillageIron')!.preconditions(world), true)
+})
 test('bounded scouting preserves known structures and spends only the remaining search budget', () => {
   const world = emptyWorld(); world.resources = { stone_tool: 1, food: 6 }; world.structureSearchMs = 120000
   const scout = speedrunRegistry().get('ScoutStructures')!

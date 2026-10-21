@@ -22,6 +22,11 @@ function fire (g: ClutchGuard, plan, snapshot, decision) {
   const point = faceAim(bot, plan.ref, plan.face, { eye, range: 4.5, avoid: others })
   const item = available(g)
   if (!item || !replaceable(cell) || !blockReference(rb) || !point || intersects(plan.cell, snapshot) || occupied(plan.cell, others)) return
+  // ND_BLZ_DRINK_HOLD: посреди глотка FR клатч на малом падении (≤ 4 бл. — урона ≤ 1) не ставит: выбор слота глоток заглушает, и блок
+  // ставился рукой с зельем — сервер начинал глоток заново (de01-s19-1: held 25, muted 9 — FR не выпита). Большое падение — ставить,
+  // слот — мимо обёртки глотка.
+  const drink = bot._ndDrinkHold?.depth > 0 ? bot._ndDrinkHold : null
+  if (drink && !(plan.fall > 4)) { emit(g, 'drink_skip', { fall: plan.fall }); return }
   const def = bot.registry.blocksByName[item.name]
   if (!def) return
   const virtualBlock = makeBlock(plan.cell, def.defaultState)
@@ -39,7 +44,7 @@ function fire (g: ClutchGuard, plan, snapshot, decision) {
     bot.look(yaw, pitch, true)?.catch?.(() => {})
     bot._client.write('look', { yaw: 180 - yaw * 180 / Math.PI, pitch: -pitch * 180 / Math.PI,
       onGround: !!bot.entity.onGround, flags: { onGround: !!bot.entity.onGround, hasHorizontalCollision: !!bot.entity.isCollidedHorizontally } })
-    if (bot.quickBarSlot !== item.slot - 36) bot.setQuickBarSlot(item.slot - 36)
+    if (bot.quickBarSlot !== item.slot - 36) (drink?.orig?.setQuickBarSlot || bot.setQuickBarSlot).call(bot, item.slot - 36)
     pending.set(k, record)
     g.reservations.push(record)
     spent.set(item.slot, (spent.get(item.slot) || 0) + 1)

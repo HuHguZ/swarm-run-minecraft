@@ -3,7 +3,7 @@
 import { OW_DEEP } from './flags'
 import { call } from './rpc'
 import { stage, strategyExecuting, strategyInterrupted, state, sit, hunting, restIdleUntil, died, resting, fighting,
-  dangerZone, known, netherExplored, netherViewRevision, lavaSourceKnown, knownWater, routeSleeping, routeDeadline,
+  dangerZone, stairEntrance, known, netherExplored, netherViewRevision, lavaSourceKnown, knownWater, routeSleeping, routeDeadline,
   routeStepNow, setFighting, setKnownWater, setLavaSourceKnown, setManualControl, setNetherExplored,
   setNetherViewRevision, setRouteEntered, setRouteSleeping, setStairEntrance } from './state'
 import { telemetry, telParams, seamSnapshot, log } from './log'
@@ -23,6 +23,7 @@ const REFUGE_PASS = new Set(['status', 'situation', 'recall', 'remember', 'stop'
 const NO_REPEAT = new Set(['wait', 'flee', 'fight', 'refuge', 'shelter', 'sleep', 'eat', 'escape_fire', 'surface'])
 
 async function act (method, params: any = {}, again = 0) {
+  const wallEmergency = method === 'unstuck' && params.cause === 'in_wall' && process.env.ND_OW_BURIAL_STEP === '1' && dim() === 'overworld'
   const safeNight = stage === 'nightWork' && process.env.ND_NIGHT_WORK_SAFE !== '0'
   if (safeNight) {
     if (method === 'dig_down' || method === 'tunnel') params = { ...params, nightWork: true }
@@ -41,13 +42,17 @@ async function act (method, params: any = {}, again = 0) {
   // начинаю — назад в главный цикл, там ночь идёт под землёй (nightHold). cl-m 14.10: MineIron/вода в болоте ещё 2 мин после
   // темноты, хп 20 → 1 и смерть утром.
   if (sit.surface && (/^(goto|explore|loot|mine|structure)$/.test(method) || (method === 'fight' && /^(food|resource)$/.test(params.purpose || ''))) &&
-      stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && !(/^(cast|nightWork)$/.test(stage) && castNear() && method !== 'explore') && nightHold()) {
+      !params.netherWood && stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && !(/^(cast|nightWork)$/.test(stage) && castNear() && method !== 'explore') && nightHold()) {
     throw Object.assign(new Error(`ночь, брони нет — наверху ${method} не начинаю, работа под землёй`), { strategyInterrupted: true })
   }
   // Вход своей лестницы с поверхности: наверх потом — ею, без копки нового колодца (cl-q 14.10: подъём столбом с y 16 съел
   // последнюю кирку, 8 мин рукой сквозь камень).
   if (/^(goto|explore|mine|loot|structure)$/.test(method)) await earlyShield()
-  if (method === 'dig_down' && params.mode === 'stairs' && sit.surface && state.pos && dim() === 'overworld') setStairEntrance({ x: Math.floor(state.pos.x), y: Math.floor(state.pos.y), z: Math.floor(state.pos.z), dim: dim() })
+  // ND_OW_STAIR_HOME=1: вход лестницы и без открытого неба над головой (под кроной, в ложбине), если выше прежнего входа — иначе
+  // подъём «столбом» через песок/дно озера (Codex G 21.10: owB1-04 5/5 спусков с surface=false, своя лестница потеряна).
+  const stairHome = process.env.ND_OW_STAIR_HOME === '1' && !sit.surface && state.pos && y() >= 55 && (!stairEntrance || stairEntrance.dim !== dim() || y() > stairEntrance.y + 2 ||
+    Math.hypot(stairEntrance.x - state.pos.x, stairEntrance.z - state.pos.z) > 96)
+  if (method === 'dig_down' && params.mode === 'stairs' && (sit.surface || stairHome) && state.pos && dim() === 'overworld') setStairEntrance({ x: Math.floor(state.pos.x), y: Math.floor(state.pos.y), z: Math.floor(state.pos.z), dim: dim() })
   // Блок под водой (вода прямо над ним) — не цель: подход вплавь, тактика всплывает и рвёт добычу, этап зовёт её снова
   // (cl-o/cl-q 14.10: камень и железо со дна озера — круги «из воды на берег» по 20+ мин).
   if (method === 'mine' && params.dry === undefined && dim() === 'overworld') params = { ...params, dry: true }
@@ -61,7 +66,7 @@ async function act (method, params: any = {}, again = 0) {
     const away = awayFromDanger()
     if (away) { log(`разведка — прочь от места нападения (${dangerZone.why}): ${away}`); params = { ...params, direction: away } }
   }
-  if (!REFUGE_PASS.has(method) && refugeRunning() && !died) {
+  if (!REFUGE_PASS.has(method) && !wallEmergency && refugeRunning() && !died) {
     await awaitRefuge()
     if (strategyExecuting && strategyInterrupted) throw Object.assign(new Error('STRATEGY_INTERRUPTED: отход завершён, нужно наблюдение и новый план'), { strategyInterrupted: true })
     if (!died && !fighting) await afterRefuge()
@@ -81,7 +86,7 @@ async function act (method, params: any = {}, again = 0) {
       try { await routeSleep('перед переходом') } finally { setRouteSleeping(false) }
     }
   }
-  const routeSafety = REFUGE_PASS.has(method) || /^(observe|eat|flee|refuge|shelter|sleep|escape_fire|surface|wait)$/.test(method) ||
+  const routeSafety = wallEmergency || REFUGE_PASS.has(method) || /^(observe|eat|flee|refuge|shelter|sleep|escape_fire|surface|wait)$/.test(method) ||
     (method === 'fight' && !/^(food|resource)$/.test(params.purpose || '')) ||
     // Злой голем (ударен, не убит) — уже защита, не добыча: бюджет шага его не обрывает (S8c, s8c-a-v1-1: голем жив после 2 ударов
     // по бюджету построек 73 с, тело ушло копать — убито им через 2 с).
@@ -89,7 +94,9 @@ async function act (method, params: any = {}, again = 0) {
     // злого голема (goto retreat вне бюджета), а бой с ним — в бюджете шага. ND_ROUTE_GOLEM_FREE=1 — прежнее.
     (method === 'golem' && params.angry === true && process.env.ND_ROUTE_GOLEM_FREE === '1') ||
     (method === 'goto' && params.retreat === true)
-  if (stage === 'route' && routeDeadline && process.env.ND_ROUTE_DEADLINE !== '0' && !routeSafety) {
+  const deepBudget = stage === 'cast' && process.env.ND_OW_DEEP_LAVA === '1'
+  // stage проверяется первым: песочницы тестов act() без routeDeadline (campaign-eat-receipt, night-recovery).
+  if ((deepBudget || (stage === 'route' && process.env.ND_ROUTE_DEADLINE !== '0')) && routeDeadline && !routeSafety) {
     const left = Math.floor((routeDeadline - gameClock.now()) / 1000)
     if (left < 1) throw Object.assign(new Error(`ROUTE_BUDGET: шаг вышел за бюджет (${method})`), { routeBudget: true })
     params = { ...params, timeoutSeconds: Math.min(params.timeoutSeconds ?? left, left) }
@@ -191,7 +198,7 @@ async function act (method, params: any = {}, again = 0) {
   if (died && stage !== '-' && method !== 'stop') throw new Error('умер — этап прерван, следующий шаг выбираю после возрождения')
   // The tactical body keeps protecting us; return its interruption before legacy recovery takes over.
   if (strategyExecuting && strategyInterrupted) throw Object.assign(new Error('STRATEGY_INTERRUPTED: обстановка изменилась, нужно наблюдение и новый план'), { strategyInterrupted: true })
-  const cut = !REFUGE_PASS.has(method) && method !== 'refuge' && ((r.by && r.by.type === 'emergency') || state.busy === 'refuge')
+  const cut = !wallEmergency && !REFUGE_PASS.has(method) && method !== 'refuge' && ((r.by && r.by.type === 'emergency') || state.busy === 'refuge')
   if (cut) {
     const ref = await awaitRefuge(r.by && r.by.type === 'emergency' ? (r.by.why || r.by.from || '') : '')
     if (!died && !fighting && !(await tunnelAway(ref && ref.code))) await afterRefuge()
@@ -234,8 +241,26 @@ async function act (method, params: any = {}, again = 0) {
     if ((OW_DEEP || process.env.ND_OW_KIT_WATER !== '0') && !known.portal) {
       const wet = /вода (?:у|на) (-?\d+),(-?\d+),(-?\d+)/.exec(String(r.detail.stopped || ''))
       const seenW = (Array.isArray(r.detail.blocks) ? r.detail.blocks : []).find(b => b && b.name === 'water' && b.nearest)
-      const q = wet ? { x: +wet[1], y: +wet[2], z: +wet[3] } : seenW ? seenW.nearest : null
-      if (q && state.pos && !have('water_bucket') && (y() < 60 || process.env.ND_OW_KIT_WATER !== '0') && (!knownWater || Math.hypot(q.x - state.pos.x, q.y - state.pos.y, q.z - state.pos.z) < Math.hypot(knownWater.x - state.pos.x, knownWater.y - state.pos.y, knownWater.z - state.pos.z))) setKnownWater(q)
+      // M's route may pursue only seen water: hazardAt's hidden-liquid veto is not a map.
+      const roundtrip = process.env.ND_OW_WATER_ROUNDTRIP === '1'
+      // Rank the whole known route, not just the distance to the next bucket fill.
+      // Same travel priors as lavaApproachSeconds; no new source or safe path is inferred.
+      const waterPrice = p => roundtrip && lavaSourceKnown && known.lava
+        ? Math.hypot(p.x - state.pos.x, p.z - state.pos.z) / 2.5 + Math.abs(p.y - y()) * 2 +
+          Math.hypot(p.x - known.lava.x, p.z - known.lava.z) / 2.5 + Math.abs(p.y - (known.lava.y ?? y())) * 2
+        : Math.hypot(p.x - state.pos.x, p.y - state.pos.y, p.z - state.pos.z)
+      const lookout = process.env.ND_OW_LAKE_WATER_LOOK === '1'
+      const surveyWater = lookout && method === 'portal_natural' && params.mode === 'survey' && Array.isArray(r.detail.waterSources)
+        ? r.detail.waterSources : []
+      const candidates = [seenW?.nearest, ...surveyWater].filter(p => p && ['x', 'y', 'z'].every(k => Number.isFinite(p[k])))
+      const q = roundtrip || lookout ? state.pos && candidates.sort((a, b) => waterPrice(a) - waterPrice(b))[0]
+        : process.env.ND_NIGHT_KIT_ROUTE === '1' ? seenW?.nearest
+        : wet ? { x: +wet[1], y: +wet[2], z: +wet[3] } : seenW ? seenW.nearest : null
+      if (q && state.pos && !have('water_bucket') && (y() < 60 || process.env.ND_OW_KIT_WATER !== '0') &&
+          (!knownWater || waterPrice(q) < waterPrice(knownWater))) {
+        setKnownWater(q)
+        if (roundtrip || lookout) log(`вода для литья: видел ${q.x},${q.y},${q.z}${roundtrip && lavaSourceKnown && known.lava ? `; путь через воду к лаве ≈ ${Math.round(waterPrice(q))} с` : ''}`)
+      }
     }
   }
   if (!died && !fighting && (r.events || []).some(e => /^(buried|digging_out|still_buried)$/.test(e.type))) {

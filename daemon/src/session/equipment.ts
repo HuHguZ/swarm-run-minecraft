@@ -51,7 +51,8 @@ function bucket (this: any, p: any = {}) {
     return this.runIntent('bucket', ctl => {
       this.require()
       this.updateMovements()
-      return obsidianMod.fillBucket(this, ctl, { fluid: p.fluid === 'lava' ? 'lava' : 'water', radius: p.radius ?? 24 })
+      return obsidianMod.fillBucket(this, ctl, { fluid: p.fluid === 'lava' ? 'lava' : 'water', radius: p.radius ?? 24,
+        walk: process.env.ND_NIGHT_KIT_ROUTE === '1' ? p.walk !== false : true, nightKitWater: p.nightKitWater })
     }, { timeoutMs: 60000, interruptOn: ['chat', 'low_health', 'death', 'kicked', 'disconnected'] })
   }
 

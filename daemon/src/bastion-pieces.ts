@@ -182,6 +182,12 @@ function goldOf (c) {
   const P = lib()[c.piece]
   return P.gold.map(([x, y, z]) => toWorld(c, x, y, z))
 }
+// Посты брутов шаблона: маркеры jigsaw пула bastion/mobs/piglin_melee (jar 1.21.11: брут 6/7, мечник 1/7) — моб встаёт в клетку перед
+// маркером (farm/results/claude-sim/s21/ne/tools/jig-mobs.js). Знание шаблона, как у спидраннера: у сундуков стен и валов стоит брут.
+function brutesOf (c) {
+  const P = lib()[c.piece]
+  return (P.mobs || []).filter(m => m[3] === 'piglin_melee').map(([x, y, z]) => toWorld(c, x, y, z))
+}
 // Тип бастиона по куску: bridge, hoglin_stable, treasure, units.
 function typeOf (c) { return lib()[c.piece].type }
 
@@ -416,9 +422,9 @@ function * voteBySteps (bot, seen, pieces, sym, { top = 12, minMatch = 15, maxMi
 const BASALT_ANCHORS = ['bridge/bridge_pieces/bridge', 'bridge/starting_pieces/entrance', 'hoglin_stable/ramparts/ramparts_1', 'hoglin_stable/ramparts/ramparts_2', 'hoglin_stable/ramparts/ramparts_3', 'treasure/ramparts/mid_wall_main', 'treasure/ramparts/mid_wall_side', 'treasure/ramparts/top_wall']
 const GOLD_ANCHORS = ['bridge/bridge_pieces/bridge', 'treasure/bases/centers/center_0', 'treasure/bases/centers/center_1', 'treasure/bases/centers/center_2', 'treasure/bases/centers/center_3']
 
-module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL, startFitsGenerator, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS, GOLD_ANCHORS }
+module.exports = { lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, brutesOf, typeOf, cellOf, unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL, startFitsGenerator, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS, GOLD_ANCHORS }
 export {
-  lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, typeOf, cellOf,
+  lib, symOf, rot, rotFacing, toWorld, toTemplate, candidatesFromChests, verify, locate, goldOf, brutesOf, typeOf, cellOf,
   unitsWallsFromRampart, RAMPART_SHAPES, voteByBasalt, voteByBasaltSteps, surfaceCells, START_REL,
   startFitsGenerator, startsFrom, piecesFromStart, goldPiecesFromStart, voteBy, voteBySteps, BASALT_ANCHORS,
   GOLD_ANCHORS

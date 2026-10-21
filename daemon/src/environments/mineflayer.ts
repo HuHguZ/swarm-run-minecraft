@@ -1,6 +1,7 @@
 import type { Environment, EnvironmentEvent, ExecutionResult, SkillCommand } from '../core/environment'
 import { emptyWorld, fact, type Dimension, type Fact, type Position, type WorldState } from '../core/world-state'
 import { foodUnits, foodPoints } from '../play-policy'
+import { overworldPauseCause } from '../campaign/overworld-pause'
 
 export interface Observation {
   state: Record<string, unknown>
@@ -34,6 +35,7 @@ export function worldFromObservation(observation: Observation, now: number): Wor
   const tactics = record(raw.tactics)
   result.threatLevel = numeric(tactics.threatLevel)
   result.revision = numeric(raw.replanRevision, numeric(tactics.replanRevision))
+  if (process.env.ND_OW_PAUSE_CAUSE === '1' && result.dimension === 'overworld') result.retryContext = overworldPauseCause(observation)
   result.alive = result.health > 0 && raw.alive !== false
   result.resources = {
     wood: count(/_(log|stem|planks)$/), stone_tool: count(/^(stone|iron|diamond|netherite)_pickaxe$/),

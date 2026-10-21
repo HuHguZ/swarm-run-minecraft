@@ -194,6 +194,7 @@ function makeRadar (bot) {
   const idx = flagsIndex(bot)
   const charge = new Map() // id -> { on, since (мс|null — встал до нас), off }
   const balls = new Map() // entityId -> { p0, dir, t0 }
+  const traceBalls = process.env.ND_BLAZE_SHIELD_TRACE === '1' ? new Map<number, any>() : null
   const stats: any = { balls: 0 }
   let fbType = null
   try { fbType = bot.registry.entitiesByName.small_fireball.id } catch {}
@@ -214,6 +215,10 @@ function makeRadar (bot) {
       const n = Math.hypot(v.x, v.y, v.z)
       if (n < 1e-6) return
       balls.set(r.entityId, { p0: new Vec3(r.pos.x, r.pos.y, r.pos.z), dir: new Vec3(v.x / n, v.y / n, v.z / n), t0: gameClock.now() })
+      if (traceBalls) {
+        traceBalls.set(r.entityId, { ...balls.get(r.entityId) })
+        if (traceBalls.size > 64) traceBalls.delete(traceBalls.keys().next().value)
+      }
       stats.balls++
       // Разбор: куда метил шар (промах мимо тела в миг вылета).
       try {
@@ -227,12 +232,32 @@ function makeRadar (bot) {
       if (balls.size > 64) for (const [k, b] of balls) if (gameClock.now() - b.t0 > 5000) balls.delete(k)
     } catch {}
   }
-  const onGone = e => { if (e) { charge.delete(e.id); balls.delete(e.id) } }
+  const onGone = e => { if (e) {
+    const b = traceBalls?.get(e.id)
+    if (b) { b.goneAt = gameClock.now(); b.lastSeen = e.position?.clone() ?? null }
+    charge.delete(e.id); balls.delete(e.id)
+  } }
   bot.on('entityUpdate', onUpd)
   bot.on('entityGone', onGone)
   bot._client.on('raw.spawn_entity', onRaw)
   return {
     stats,
+    // Diagnostics retains a gone projectile briefly; native current and modelled positions stay distinct.
+    trace (now = gameClock.now()) {
+      if (!traceBalls) return []
+      const rows = []
+      const body = bot.entity.position.offset(0, .9, 0)
+      const vec = p => p ? [p.x,p.y,p.z] : null
+      for (const [id,b] of traceBalls) {
+        if (now-b.t0>5000) { traceBalls.delete(id); continue }
+        const age = (now-b.t0)/50, flown = FB_PATH[Math.min(FB_PATH.length-1,Math.max(0,Math.floor(age)))] || 0
+        const s = body.minus(b.p0).dot(b.dir)
+        rows.push({ id, p0:vec(b.p0), dir:vec(b.dir), t0:b.t0, ageTicks:age,
+          current:vec(bot.entities[id]?.position), modeledCurrent:vec(b.p0.plus(b.dir.scaled(flown))),
+          lastSeen:vec(b.lastSeen), goneAt:b.goneAt ?? null, eta:Math.max(0,(fbTicksTo(s)-age)*50) })
+      }
+      return rows
+    },
     stop () {
       bot.removeListener('entityUpdate', onUpd)
       bot.removeListener('entityGone', onGone)
@@ -261,14 +286,22 @@ function makeRadar (bot) {
       // выстрелит, как только увидит.
       return 0
     },
+    // Lower bound to the FIRST NEW shot, not the arrival time of balls already in flight.
+    // Falling charged also means goal.stop(): metadata alone cannot prove the 160-tick cooldown+charge.
+    // An uncharged blaze must enter a new 60-tick charge. Recheck this bound on every step.
+    quietFor (e, now = gameClock.now()) {
+      const c = charge.get(e.id)
+      if (!(c ? c.on : chargedNow(bot, e, idx))) return CHARGE_MS
+      return !c || c.since === null ? 0 : Math.max(0, CHARGE_MS - (now - c.since))
+    },
     charged (e) { const c = charge.get(e.id); return c ? c.on : chargedNow(bot, e, idx) },
     // Шары, чья прямая проходит у нашего тела и ещё не прилетели: [{ from, eta }].
-    incoming (now = gameClock.now()) {
+    incoming (now = gameClock.now(), readOnly = false) {
       const out = []
       const body = bot.entity.position.offset(0, 0.9, 0)
       for (const [id, b] of balls) {
         const age = (now - b.t0) / 50
-        if (age > 60) { balls.delete(id); continue }
+        if (age > 60) { if (!readOnly) balls.delete(id); continue }
         const r = body.minus(b.p0)
         const s = r.x * b.dir.x + r.y * b.dir.y + r.z * b.dir.z
         if (s < -0.5) continue
@@ -279,7 +312,7 @@ function makeRadar (bot) {
         if (flown > s + 1) continue
         // Стена между шаром и нами — не долетит.
         if (!losClear(bot, b.p0.plus(b.dir.scaled(Math.max(0, flown))), body)) continue
-        out.push({ from: b.p0, eta: Math.max(0, (fbTicksTo(s) - age) * 50), id })
+        out.push({ from: b.p0, dir: b.dir, eta: Math.max(0, (fbTicksTo(s) - age) * 50), id, ...(traceBalls ? { p0: b.p0.clone(), dir: b.dir.clone(), current: bot.entities[id]?.position?.clone() ?? null, modeledCurrent: b.p0.plus(b.dir.scaled(Math.max(0, flown))), ageTicks: age } : {}) })
       }
       return out
     }

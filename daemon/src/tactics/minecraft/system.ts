@@ -15,6 +15,7 @@ import * as guard from '../../ne-guard'
 import * as movement from '../../movement'
 import * as pick from '../../pick'
 import { Vec3 } from 'vec3'
+import * as lavaNav from '../../lava-nav'
 import * as polarBear from '../../polar-bear'
 import { minecraftPorts, EXHAUSTION_HOLD_MS, FIGHT_RECOVERY_HP, stateSnapshot, commandedEscape, shieldCanContinue, IDLE_COOLED, rememberUnreachable, dropBehind, FLEE_SAFE_DISTANCE, foodActions, observeTactics } from './observe'
 import type { TacticalPorts, MinecraftEntity, Episode, Controller, MinecraftSession, TacticalSnapshot } from './observe'
@@ -39,15 +40,16 @@ export class TacticalSystem {
   private observationError: string | undefined
   private pending: Promise<unknown> | null = null
   private incident: { at: number; hp: number; threat: ThreatLevel; actions: Set<string>; chain: string[]; state: Record<string, unknown>; intent?: Controller } | null = null
-  private readonly onTick = () => this.update()
+  private readonly onTick = () => { lavaNav.sample(this.session); this.update() }
   private readonly onDamage = (packet?: MinecraftEntity) => {
+    lavaNav.hit(this.session, packet)
     if (packet?.entityId === this.bot?.entity?.id && packet?.sourceTypeId === 22) {
       this.session._tacticalInWallAt = clock.now()
       this.session._tacticalInWallDimension = String(this.bot?.game?.dimension || '')
     }
     this.update(true)
   }
-  private readonly onForcedMove = () => { this.session._tacticalTeleportAt = clock.now(); this.update(true) }
+  private readonly onForcedMove = () => { lavaNav.reset(this.session); this.session._tacticalTeleportAt = clock.now(); this.update(true) }
   private readonly onEnd = () => this.detach()
 
   constructor(private readonly session: MinecraftSession, ports: Partial<TacticalPorts> = {}) { this.ports = { ...minecraftPorts, ...ports } }
@@ -138,7 +140,7 @@ export class TacticalSystem {
     this.level = decision.level
     // An arena duel (pvp.duel with tempo, fight { arena }) is to the death by design: a retreat at level 3 only interrupted
     // the losing side's fight (S7 20:08, arms race). Lava, a fall, a blast, a wall or water stay with the tactics.
-    const hazard = state.lava || state.lavaAhead || state.dangerousFall || state.embedded || state.explosion || state.drowning || state.waterEscape
+    const hazard = state.waterEmergency || state.lava || state.lavaAhead || state.dangerousFall || state.embedded || state.explosion || state.drowning || state.waterEscape
     const arena = state.protectedEncounter && !!this.session.current?.params?.arena && !hazard
     // The blaze skill under fire resistance keeps level 3 too (S1 21:01): at the spawner a crowd of 3+ blazes makes hp < 12
     // level 3, and the takeover (BlockOff/Flee off the platform) died in at least 35 of 66 such episodes in S1's farm
@@ -170,7 +172,7 @@ export class TacticalSystem {
     // Уворот/побег по приказу (арена 12.10: рывок от зелья и булавы, джук от лука, ветер, жемчуг, элитры, укрытие) — это уже
     // ответ на угрозу: щит/бой тактики рвали его («reflex: действие прервано», mace-5: булава сверху — угроза 3-го уровня,
     // и рывок обрывался щитом). Пока он идёт — тактика не вмешивается; аварии (падение, лава) — свой рефлекс Emergency.
-    if (commandedEscape(this.session)) return
+    if (commandedEscape(this.session) && !state.waterEmergency) return
     if ((decision.level >= 3 || state.waterEscape) && !fallOnly) this.interruptSkill(decision.level)
     // A fireball disappears on impact, before its later hurt sample. The observed shooter remains: cancelling the
     // started guard here dropped offhand use before the native five-tick ACK (sr1011-b ghast scene). Keep its existing
@@ -189,6 +191,7 @@ export class TacticalSystem {
       return
     }
     if (decision.release) {
+      if (locks.owner(this.session)?.source === 'lava-nav') return // a dry central cell is not the lava packet's all-clear
       if (this.episode && (decision.level === 0 || locks.owner(this.session)?.owner !== 'Emergency')) locks.cancel(this.session)
       if (decision.level === 0) this.release('safe')
       return
@@ -203,13 +206,13 @@ export class TacticalSystem {
     const active = locks.owner(this.session)
     const repelDuringClimb = active?.source === 'ClimbOut' && decision.selected.id === 'Fight' && canRepelLavaAttacker(state)
     const fluidHandoff = active?.source === 'fall-controller' && state.lava
-    if (active?.owner === 'Emergency' && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb && !fluidHandoff) return
+    if (active?.owner === 'Emergency' && !state.waterEmergency && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb && !fluidHandoff) return
     this.begin(decision.selected, decision.candidates, state, decision.level)
   }
 
   private interruptSkill(level: ThreatLevel): void {
     const current = this.session.current
-    if (!current?.ctl || current.ctl.aborted || commandedEscape(this.session)) return
+    if (!current?.ctl || current.ctl.aborted || commandedEscape(this.session) && !this.state?.waterEmergency) return
     current.ctl.interruptedBy = { type: 'tactical', threatLevel: level, requireObservation: true }
     current.ctl.abort()
   }
@@ -436,9 +439,11 @@ export class TacticalSystem {
             }
           }
           const nightBlockOff = process.env.ND_OW_NIGHT_BLOCKOFF === '1'
+          const paidRangedBox = state.owRangedApproachHp !== undefined && String(bot.game?.dimension || '').replace(/^minecraft:/, '') === 'overworld'
+          const committedBox = nightBlockOff || paidRangedBox
           // The selected shelter was already priced against flight; its executor must build before generic recovery.
-          if (action.id === 'BlockOff' && (piglinNiche(state) || nightBlockOff && /overworld/.test(String(bot.game?.dimension || ''))) &&
-              (!nightBlockOff || !survival.refugeLook(session).pocket)) {
+          if (action.id === 'BlockOff' && (piglinNiche(state) || committedBox && /overworld/.test(String(bot.game?.dimension || ''))) &&
+              (!committedBox || !survival.refugeLook(session).pocket)) {
             const site = survival.refugeLook(session)
             const how = piglinNiche(state) ? 'niche' : survival.chooseRefuge(site).how
             if (how !== 'box' && how !== 'niche') return { failed: true, reason: 'selected box geometry changed before construction' }
@@ -450,7 +455,7 @@ export class TacticalSystem {
               entry = await (how === 'niche' ? hold.takeNiche : hold.takeBox)(session, ctl, site, () => {})
             } finally { if (session._refugeBuild === ctl) session._refugeBuild = previous }
             if (ctl.aborted) return { cancelled: true, entry }
-            if (!entry || nightBlockOff && entry.intruder || !survival.refugeLook(session).pocket) return nightBlockOff
+            if (!entry || committedBox && entry.intruder || !survival.refugeLook(session).pocket) return committedBox
               ? { failed: true, entry, reason: 'selected box was not sealed or is occupied' }
               : { failed: true, reason: 'piglin niche was not sealed or is occupied' }
           }
@@ -587,6 +592,7 @@ export class TacticalSystem {
     if (!bot) return
     locks.cancel(this.session)
     this.release('disconnected')
+    lavaNav.reset(this.session)
     bot.removeListener('physicsTick', this.onTick)
     bot.removeListener('health', this.onDamage)
     bot.removeListener('forcedMove', this.onForcedMove)

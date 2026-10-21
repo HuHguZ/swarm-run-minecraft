@@ -5,7 +5,7 @@ import { sleep } from '../rpc'
 import { T0, manualControl, strategyExecuting, strategyTail, state, sit, died, barterRetryPending, setBarterRetryPending,
   setStage } from '../state'
 import { telemetry, log } from '../log'
-import { bag } from '../queries'
+import { bag, dim } from '../queries'
 import { sense, refresh, readMemory } from '../observe'
 import { stageProgress } from '../stages/table'
 import { barterFlow } from '../nether-plan'
@@ -19,7 +19,8 @@ async function loopStage (loop: CampaignTurn, s: any, turn: number): Promise<Tur
   setStage(s.name)
   loop.lastStage = s.name
   log(`ход ${turn}: начинаю; рюкзак: ${bag()}`)
-  const attemptedKey = failureKey(s.name)
+  const pauseName = process.env.ND_OW_PAUSE_CAUSE === '1' && dim() === 'overworld' ? s.pauseKey || s.name : s.name
+  const attemptedKey = failureKey(pauseName)
   const before = stageProgress(s.name)
   const telStage = telemetry.on() ? { t0: gameClock.now(), wallT0: gameClock.wall.now(), before: telemetry.snapshot(state, sit), dead: died } : null
   let telStageErr = null
@@ -44,7 +45,11 @@ async function loopStage (loop: CampaignTurn, s: any, turn: number): Promise<Tur
   const ok = off && s.done()
   const after = stageProgress(s.name)
   const progressed = s.progressed ? s.progressed() : Object.entries(after).some(([key, value]) => value > (before[key] || 0))
-  if (attemptInterrupted || s.interrupted?.()) { log('навык прерван — новое наблюдение и план'); return 'continue' }
+  if (attemptInterrupted || s.interrupted?.()) {
+    log('навык прерван — новое наблюдение и план')
+    if (process.env.ND_OW_PAUSE_CAUSE === '1' && dim() === 'overworld' && !off && !progressed && !died) failStage(pauseName, attemptedKey)
+    return 'continue'
+  }
   if (telStage) {
     const snap = telemetry.snapshot(state, sit)
     telemetry.record({ level: 'stage', stage: s.name, turn, sec: Math.round((gameClock.now() - telStage.t0) / 100) / 10, wallSec: (gameClock.wall.now() - telStage.wallT0) / 1000, ok, off, progressed,
@@ -72,7 +77,7 @@ async function loopStage (loop: CampaignTurn, s: any, turn: number): Promise<Tur
     log('бартер: золото есть — 15 с в закрытом укрытии и другой поиск, FR-гейт сохраняю')
     await act('ne_burrow', { why: 'бартер: смена торговцев' })
     await sleep(15000)
-  } else failStage(s.name, attemptedKey)
+  } else failStage(pauseName, attemptedKey)
   if (died) { log('умер — проверяю, какие ресурсы действительно потеряны'); resetPauses('смерть') }
 }
 

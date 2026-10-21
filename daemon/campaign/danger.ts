@@ -2,7 +2,7 @@
 // Угрозы: аварийный отход автопилота, ответ на угрозу, бой или уход, вода и мобы на пути.
 import { call, sleep } from './rpc'
 import { state, sit, refugeSeenAt, lastRefuge, died, fighting, dangerZone, setDangerZone, setFighting, setLastRefuge,
-  setRefugeSeenAt } from './state'
+  setRefugeSeenAt, strategyInterrupted } from './state'
 import { log } from './log'
 import { have, y, dim, RAW, FOOD } from './queries'
 import { acceptResult, sense, nearWalkers } from './observe'
@@ -10,6 +10,7 @@ import { act } from './act'
 import { closedShelter } from './guards'
 import { walkAway, awayFrom } from './travel'
 import { eatTo, ensurePick } from './kit'
+import { toSurface } from './underground'
 import * as gameClock from '../src/game-clock'
 const refugeRunning = () => state.busy === 'refuge' || refugeSeenAt > 0
 async function awaitRefuge (why = '') {
@@ -112,11 +113,31 @@ function hurtSource (r) {
   return (evs.reverse().find(e => e.source) || {}).source || null
 }
 
-async function awayFromWater (dist = 20) {
-  const o = await act('observe', { radius: 16 })
+function inlandWaterOrigin (o, at) {
+  if (!at || o.detail?.fair !== true) return null
+  const wet = (Array.isArray(o.detail?.blocks) ? o.detail.blocks : []).find(b => b?.name === 'water' && !b.remembered)
+  const points = (Array.isArray(wet?.seen) && wet.seen.length ? wet.seen : [wet?.nearest])
+    .filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.z))
+  if (!points.length) return null
+  const origin = { x: points.reduce((n, p) => n + p.x, 0) / points.length,
+    z: points.reduce((n, p) => n + p.z, 0) / points.length }
+  // A symmetric pool does not identify a landward direction. Do not invent one.
+  return Math.hypot(origin.x - at.x, origin.z - at.z) >= 0.5 ? origin : null
+}
+async function awayFromWater (dist = 20, visibleOnly = false) {
+  const shore = process.env.ND_DIG_PLUG_WATER === '1' && process.env.ND_DIG_PLUG_WATER_SHORE !== '0'
+  if (shore) {
+    await sense()
+    if (died || strategyInterrupted) return null
+    if (!sit.surface && dim() === 'overworld' && !(await toSurface(2))) return null
+    if (died || strategyInterrupted) return null
+  }
+  const o = await act('observe', { radius: 16, ...(shore ? { fair: true } : {}) })
   const wet = (Array.isArray(o.detail && o.detail.blocks) ? o.detail.blocks : []).find(b => b && b.name === 'water')
-  if (died) return
-  try { await awayFrom(wet && wet.nearest ? wet.nearest : null, dist) } catch (e) { log(`от воды не ушёл: ${e.message}`) }
+  if (died || (shore && strategyInterrupted)) return
+  const origin = shore ? inlandWaterOrigin(o, state.pos) : wet?.nearest || null
+  if (visibleOnly && !origin) return null
+  try { return await awayFrom(origin, dist) } catch (e) { log(`от воды не ушёл: ${e.message}`); return null }
 }
 function markDanger (why) {
   if (state.pos) setDangerZone({ x: state.pos.x, z: state.pos.z, until: gameClock.now() + 300000, why })
@@ -130,7 +151,19 @@ function awayFromDanger () {
 }
 async function answerThreat (cause = 'unknown', source = null) {
   await sense()
-  if (sit.buried) { await waitDugOut(); return }
+  if (process.env.ND_OW_ENV_RESCUE === '1' && dim() === 'overworld' && cause === 'freeze') {
+    // LivingEntity.aiStep (1.21.11): fully frozen loses 1 HP per 40 ticks.
+    // Pay for breaking the visible snow before a long wait; leave one pulse in reserve.
+    const seconds = Math.max(0.1, Math.min(6, ((state.health ?? 20) - 1) * 2))
+    log(`замерзаю: вместо ожидания убираю видимый рыхлый снег, бюджет ${seconds} с`)
+    const was = fighting
+    setFighting(true)
+    try { await act('mine', { block: 'powder_snow', count: 2, radius: 3, fair: true, collect: false, timeoutSeconds: seconds }) }
+    finally { setFighting(was) }
+    return
+  }
+  if (process.env.ND_OW_DEATH_WATER === '1' && dim() === 'overworld' && sit.inWater && (cause === 'drown' || sit.buried)) { await leaveWater(); return }
+  if (sit.buried || cause === 'in_wall' && process.env.ND_OW_BURIAL_STEP === '1' && dim() === 'overworld') { await waitDugOut(); return }
   if (sit.inLava || sit.onFire) {
     await act('escape_fire')
     await sense()
@@ -262,7 +295,13 @@ async function leaveWater () {
     if (process.env.ND_REFUGE_SHORE !== '0') await act('refuge', { shore: true, minHp: 16, maxSeconds: 25, why: 'из воды на берег' })
     else await act('surface', { targetY: y() + 2, timeoutSeconds: 20, preferPillar: false })
     await sense()
-    for (let k = 0; k < 2 && sit.inWater && !died && state.pos; k++) {
+    // ND_OW_WATER_UP=1: под землёй в затопленной пещере берега нет, а отход поверху (walkAway — goto strict) там бессмыслен: столб вверх
+    // своими блоками из воды (owE2-04: y11, 3 мин «берег: в воде» и goto strict по кругу — утонул; owE1-04: 35 мин в водяной яме).
+    if (process.env.ND_OW_WATER_UP === '1' && sit.inWater && !sit.surface && !died && dim() === 'overworld') {
+      await act('tunnel', { direction: 'up', length: 3, timeoutSeconds: 20 })
+      await sense()
+    }
+    for (let k = 0; k < 2 && sit.inWater && !died && state.pos && (process.env.ND_OW_WATER_UP !== '1' || sit.surface); k++) {
       await walkAway(12, k ? 1.2 : 0)
       await sense()
     }
@@ -276,6 +315,14 @@ async function waterNear (r = 6) {
 }
 
 async function waitDugOut () {
+  if (process.env.ND_OW_DEATH_WATER === '1' && dim() === 'overworld' && sit.inWater && !died) { await leaveWater(); return }
+  if (process.env.ND_OW_BURIAL_STEP === '1' && dim() === 'overworld') {
+    log('in_wall — сразу освобождаюсь: видимая копка или физический шаг')
+    const was = fighting
+    setFighting(true)
+    try { await act('unstuck', { cause: 'in_wall' }); await sense() } finally { setFighting(was) }
+    return
+  }
   log('завалило — не копаю, жду, пока автопилот откопает')
   const was = fighting
   setFighting(true)
@@ -284,6 +331,7 @@ async function waitDugOut () {
       await act('wait', { seconds: 2 })
       await sense()
       if (!sit.buried) return
+      if (process.env.ND_OW_DEATH_WATER === '1' && dim() === 'overworld' && sit.inWater) { await leaveWater(); return }
     }
   } finally { setFighting(was) }
 }
@@ -311,5 +359,5 @@ function cavesFoes (o) {
   return f.length ? f.map(e => e.name).slice(0, 4).join(', ') : ''
 }
 
-export { refugeRunning, awaitRefuge, afterRefuge, refugeRun, tunnelAway, hurtCause, hurtSource, awayFromWater,
+export { refugeRunning, awaitRefuge, afterRefuge, refugeRun, tunnelAway, hurtCause, hurtSource, awayFromWater, inlandWaterOrigin,
   awayFromDanger, answerThreat, leaveWater, waitDugOut, MOB_BLOCKED, mobInTheWay, CAVE_FOES, cavesFoes }

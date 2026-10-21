@@ -138,3 +138,19 @@ test('confirmed stable height progress renews the rescue budget beyond twelve ga
     assert.equal(session._tacticalLavaClimbGoal, undefined)
   } finally { build.towerUp = previous; c.dispose() }
 })
+
+// ND_BLZ_LAVA_FAR: под FR берега в 10 и стены нет — выход всё равно есть (farOut), а не «ждать конца FR».
+test('far lava: with fire resistance and no near exit the climb stays available under ND_BLZ_LAVA_FAR', () => {
+  const unstuck: typeof import('../src/unstuck/tools') = require('../src/unstuck/tools')
+  const previous = unstuck.fluidRoute, flag = process.env.ND_BLZ_LAVA_FAR
+  const bot: any = { health: 20, entity: { position: new Vec3(.5, 22, .5), isInLava: true, effects: { 12: { amplifier: 0 } } },
+    registry: { effectsByName: { fire_resistance: { id: 12 } } }, inventory: { items: () => [] },
+    blockAt: () => ({ name: 'lava', boundingBox: 'empty' }) }
+  unstuck.fluidRoute = () => null as any
+  try {
+    delete process.env.ND_BLZ_LAVA_FAR
+    assert.equal(lavaCapabilities({ bot }).climb, false)
+    process.env.ND_BLZ_LAVA_FAR = '1'
+    assert.deepEqual(lavaCapabilities({ bot }), { potion: false, climb: true, exit: 'far' })
+  } finally { unstuck.fluidRoute = previous; if (flag === undefined) delete process.env.ND_BLZ_LAVA_FAR; else process.env.ND_BLZ_LAVA_FAR = flag }
+})

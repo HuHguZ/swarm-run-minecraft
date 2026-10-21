@@ -13,6 +13,8 @@ import * as fastblocks from '../fastblocks'
 import * as edges from '../edges'
 import * as blockmoves from '../blockmoves'
 import { freeDrop, underRoofCost, LAVA_AROUND, CLIFF_SIDES } from './shared'
+import { surfaceWalkOn, priceSurfaceMoves } from './surface-walk'
+import { waterRouteOn, priceWaterMoves } from './water-route'
 
 function updateMovements (this: Session, force = false): void {
     const bot = this.bot
@@ -40,7 +42,7 @@ function updateMovements (this: Session, force = false): void {
     const swampy = (p) => { if (!p) return false; try { return /swamp|mangrove/.test(biomeName(bot, p) || '') } catch { return false } }
     const marsh = this.sprintWanted === undefined && (swampy(bot.entity && bot.entity.position) || swampy(this.gotoTarget))
     const sprint = !!(this.sprintWanted ?? sprintOn(worlds.worldOf(bot))) && (bot.food ?? 20) > 6 && fed && !marsh
-    const signature = `${canDig}:${towers}:${worlds.worldOf(bot)}:${mlg.ok}:${bridge ? 1 : 0}:${sprint ? 1 : 0}:${this.surfaceStrict ? 1 : 0}:${JSON.stringify(this.gotoArena ?? null)}:${arenaScaffold ? [...new Set(items.filter(i => (require('../build') as typeof import('../build')).ARENA_FILLER.test(i.name)).map(i => i.name))].sort().join() : ''}`
+    const signature = `${canDig}:${towers}:${worlds.worldOf(bot)}:${mlg.ok}:${bridge ? 1 : 0}:${sprint ? 1 : 0}:${this.surfaceStrict ? 1 : 0}:${JSON.stringify(this.gotoArena ?? null)}:${arenaScaffold ? [...new Set(items.filter(i => (require('../build') as typeof import('../build')).ARENA_FILLER.test(i.name)).map(i => i.name))].sort().join() : ''}:${bot._ndLavaWork ? 1 : 0}`
     if (!force && signature === this.movementsSignature) return
     this.movementsSignature = signature
 
@@ -67,11 +69,14 @@ function updateMovements (this: Session, force = false): void {
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk ? underRoofCost(bot, block, this.surfaceStrict) : 0)
     // Разведка поверху не спускается в овраг: клетка на 10+ ниже начала отрезка — дороже (не запрет: спуск с горы остаётся);
     // cl-ae 14.10: отрезок разведки построек ушёл с y 74 на 50 в пещеру со скелетом, зомби и крипером — смерть на 5-й мин, днём.
-    if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk && typeof this.scoutFromY === 'number' && block?.position && block.position.y < this.scoutFromY - 10 ? 10 : 0)
+    // Флаги слоёв C/C2 читаются раз на сборку движений, не на каждую клетку A* (s9-perf).
+    const surfaceLayer = surfaceWalkOn(bot), waterLayer = waterRouteOn(bot)
+    if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => !surfaceLayer && this.surfaceWalk && typeof this.scoutFromY === 'number' && block?.position && block.position.y < this.scoutFromY - 10 ? 10 : 0)
     // Путь по дну водоёма: воздух кончается за ~9 с, тактика всплывает и рвёт goto, кампания зовёт тот же путь снова
     // (cl-e 14.10: 20 кругов «к деревне по дну озера» → Surface → берег за 3 мин). Клетка воды под водой — ещё цена воды
     // сверху (liquidCost), чтобы путь плыл поверху или шёл в обход.
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => {
+      if (waterLayer && bot._ndOwWaterRoute) return 0
       if (process.env.ND_WATER_ESCAPE_BUDGET !== '0') return Math.max(waterStepCost(bot, block),
         block?.position && waterCell(block) && waterCell(bot.blockAt(block.position.offset(0, 1, 0), false)) ? (movements.liquidCost ?? 1) : 0)
       if (!block || block.name !== 'water' || !block.position) return 0
@@ -94,12 +99,22 @@ function updateMovements (this: Session, force = false): void {
         return v
       })
     }
+    const lavaEdge = process.env.ND_BLZ_EDGE_LAVA === '1'
+    // ND_OW_LAVA_EDGE=1: в верхнем мире край лавы — почти запрет (200, как strict), угол лавы по диагонали — 40. Шаг вдоль озера
+    // стоил 8: explore за деревом со спавна шёл кромкой озера, срывался в лаву — 15 с горения без воды (int8-s22-1, owE2-02: хп 16→7).
+    const owEdge = process.env.ND_OW_LAVA_EDGE === '1' && worlds.worldOf(bot) === 'overworld' && !bot._ndLavaWork
     function lavaStepCost (p, strict) {
       for (const [dx, dy, dz] of LAVA_AROUND) {
         const b = defAt(p.x + dx, p.y + dy, p.z + dz)
         // _ndLavaStrict (бастион над лавовым морем: две смерти «tried to swim
         // in lava» на подходе к стене, ферма 29.09) — обходить почти любой ценой.
-        if (b && b.name === 'lava') return strict ? 200 : 8
+        if (b && b.name === 'lava') return strict || owEdge ? 200 : 8
+      }
+      if (owEdge && !strict) {
+        for (const dx of [-1, 1]) for (const dz of [-1, 1]) for (const dy of [0, -1]) {
+          const b = defAt(p.x + dx, p.y + dy, p.z + dz)
+          if (b && b.name === 'lava') return 40
+        }
       }
       if (strict) {
         for (let d = 1; d <= 14; d++) {
@@ -115,7 +130,15 @@ function updateMovements (this: Session, force = false): void {
           if (!n || n.boundingBox !== 'empty') continue
           let floor = false
           for (let d = 1; d <= 3 && !floor; d++) { const b = defAt(p.x + dx, p.y - d, p.z + dz); floor = !b || b.boundingBox === 'block' }
-          if (!floor) return 30
+          if (floor) continue
+          // ND_BLZ_EDGE_LAVA=1 (blz 21.10): под краем — лава (до 48 вниз без опоры) — почти запрет: 4 из 10 сквозных blz сорвались с края
+          // y64–70 в лавовое море y30 (bzC1-s17-2/-4, bzC2-s18-2, bzC5-s18-2).
+          if (lavaEdge) for (let d = 4; d <= 48; d++) {
+            const b = defAt(p.x + dx, p.y - d, p.z + dz)
+            if (!b || b.boundingBox === 'block') break
+            if (b.name === 'lava') return 300
+          }
+          return 30
         }
       }
       return 0
@@ -141,7 +164,15 @@ function updateMovements (this: Session, force = false): void {
     edges.priceDrops(movements, () => this.surfaceWalk && this.pathGoalY == null)
     // Мост над смертельной высотой не строим ни в одном мире: срыв или отказ сервера = смерть (Ад S1f; верхний мир cl-f 14.10:
     // мост над оврагом 58 бл. на y 16 за железом, no_face — падение 58, смерть). Над водой — можно.
-    if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
+    // ND_BLZ_RESERVE=1 (blz 21.10): в Аду и штатные ходы со стройкой (мост, ступень, столб) не трогают резерв блоков — иначе стоковый
+    // мост по цене 1 доедал запас до 0 и тело стояло на своём мосту в 11 бл. от крепости без блоков (bzJ1-s17-2 → БЛОКЕР). Счёт
+    // pathfinder'а — сверх резерва, свой мост — reserve 0 (резерв уже вычтен).
+    const reserveNether = process.env.ND_BLZ_RESERVE === '1' && worlds.worldOf(bot) === 'the_nether'
+    if (reserveNether) {
+      const count = movements.countScaffoldingItems
+      movements.countScaffoldingItems = function () { return Math.max(0, count.call(this) - packMod.RESERVE.build) }
+    }
+    if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: reserveNether ? 0 : packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
     if (this.surfaceStrict) { movements.canDig = false; movements.allow1by1towers = false; movements.scafoldingBlocks = [] }
     if (this.gotoArena) {
       const arena = this.gotoArena, within = (require('../navigation/parkour') as typeof import('../navigation/parkour')).withinArena
@@ -156,6 +187,8 @@ function updateMovements (this: Session, force = false): void {
         return neighbors(node).filter(n => within(bot, { x: n.x + .5, y: n.y, z: n.z + .5 }, arena, from))
       }
     }
+    if (waterLayer) priceWaterMoves(bot, movements)
+    if (surfaceLayer) priceSurfaceMoves(bot, movements)
     movements.exclusionAreasStep.push(blk => this.stuckPenalty(blk))
     bot.pathfinder.setMovements(movements)
     this.movements = this.gotoArena ? { canDig: movements.canDig, towers: movements.allow1by1towers, mlg: mlg.ok, bridge: false } : { canDig, towers, mlg: mlg.ok, bridge }

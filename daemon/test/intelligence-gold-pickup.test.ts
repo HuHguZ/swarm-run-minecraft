@@ -63,6 +63,7 @@ function goldAttempt(options: { threat?: boolean; noDrop?: boolean; fullBag?: bo
     async digCell() { events.push('dig'); spawned = true; return 'ok' },
     async fillCell() { events.push('fill'); filled = true; return true } }
   const context = { bot, session, ctl, st, S, t: { k: keyV(target), pos: target }, hit: { rank: 0 }, SL: sealed,
+    goldEvidence: { on: () => false, observedGold() {} }, // ND_BASTION_GOLD_EVIDENCE (q3b) выключен
     opens: options.opens !== false, dimension: 'the_nether',
     gameClock: { now: () => 1000 }, countOf: () => gold,
     foesNear: () => options.threat ? [{ name: 'piglin_brute' }] : [],

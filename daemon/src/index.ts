@@ -1,4 +1,5 @@
 'use strict'
+require('./speedrun-defaults') // умолчания флагов спидрана — раньше любых чтений env
 require('./require-cache')
 const gameClock = require('./game-clock')
 // 03.10: require('./src/index') ради проверки загрузки поднимал демон на 8765 (порт арены) → 25565 — дважды за день.

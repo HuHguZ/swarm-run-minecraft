@@ -320,9 +320,9 @@ test('a health refusal is reconsidered after actual healing, not after a clock j
 })
 
 test('losing the last pick underground does not send a held night into surface hunting', () => {
-  const start = source.indexOf('const nightHold ='), end = source.indexOf('\n//', start)
+  const start = source.indexOf('const endgameNight ='), end = source.indexOf('\n//', source.indexOf('const nightHold ='))
   const ctx: any = { dim: () => 'overworld', sit: { night: true, surface: false }, state: { playPolicy: { mode: 'speedrun' } },
-    armorPointsNow: () => 0, have: () => 0, nightHeld: true, process: { env: {} } }
+    armorPointsNow: () => 0, have: () => 0, nightHeld: true, EYES_NEED: 12, known: {}, process: { env: {} } }
   vm.runInNewContext(source.slice(start, end) + '\nthis.hold=nightHold', cjsContext(withSetters(ctx)))
   assert.equal(ctx.hold(), true)
   ctx.process.env.ND_NIGHT_WORK = '0'; assert.equal(ctx.hold(), false)
@@ -336,4 +336,266 @@ test('the main night loop calls the worker before the old timed branch', () => {
   assert.ok(main.indexOf('await nightWorkStep()') >= 0)
   assert.ok(main.indexOf('await nightWorkStep()') < main.indexOf('gameClock.now() >= nightCastAt'))
   assert.match(main, /nightWorkEnabled[\s\S]*if \(worked\)[\s\S]*continue/)
+})
+
+function mouthReceipt(view = {}, standing = {}) {
+  const cell = { walls: 0, roof: true, floor: true, sealed: false, block: 0, sky: 0, night: true }
+  return { from: { x: 48, y: 16, z: -58 }, target: { x: 48, y: 16, z: -59 }, seconds: 2,
+    closeSeconds: .66, corridor: false, view: { ...cell, ...view }, standing: { ...cell, walls: 3, ...standing } }
+}
+
+test('D2: closing our own cave mouth does not readmit north; an alternative gets the next turn', async () => {
+  for (const flag of ['0', '1']) {
+    const f = fixture({ ND_NIGHT_WORK_SAFE: '1', ND_NIGHT_FAIL_KEY: flag, ND_NIGHT_STEP_MARGINAL: '1' })
+    delete f.inventory.water_bucket; delete f.inventory.flint_and_steel
+    f.ctx.state.pos = { x: 48, y: 16, z: -58 }; f.ctx.state.health = 19; f.ctx.state.food = 17
+    f.inventory.cobblestone = 90
+    f.ctx.sit.work = { floor: true, roof: true, walls: 4, sealed: true, block: 0, sky: 0, coverSeconds: .66 }
+    f.ctx.sit.fight = { order: [] }
+    const receipt = mouthReceipt({ roof: false })
+    f.ctx.act = async (method, params) => {
+      f.calls.push({ method, params })
+      if (method === 'shelter') { f.ctx.sit.work.walls = 4; f.ctx.sit.work.sealed = true; f.inventory.cobblestone--; return { detail: { sealed: true } } }
+      if (method === 'tunnel' && params.direction === 'north') {
+        f.ctx.sit.work.walls = 3; f.ctx.sit.work.sealed = false; f.inventory.cobblestone++
+        return { detail: { stopped: 'NIGHT_RISK: открытая тёмная пещера', dug: 2, nightRefusal: receipt } }
+      }
+      if (method === 'tunnel') { f.ctx.state.pos.x++; return { detail: { walked: 1 } } }
+      return { detail: {} }
+    }
+    await f.ctx.work(); await f.ctx.work(); await f.ctx.work()
+    assert.equal(f.calls.filter(c => c.method === 'tunnel' && c.params.direction === 'north').length, flag === '1' ? 1 : 2)
+    assert.equal(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'east'), flag === '1')
+  }
+})
+
+test('D2: a mouth refusal tracks price feasibility and lighting, not rubble counts, food or small healing', async () => {
+  const f = fixture({ ND_NIGHT_WORK_SAFE: '1', ND_NIGHT_FAIL_KEY: '1', ND_NIGHT_STEP_MARGINAL: '1' })
+  delete f.inventory.water_bucket; delete f.inventory.flint_and_steel
+  f.ctx.state.pos = { x: 48, y: 16, z: -58 }; f.ctx.state.health = 10; f.ctx.state.food = 17
+  f.ctx.sit.work = { floor: true, walls: 4, roof: true, sealed: true, block: 0, sky: 0 }; f.ctx.sit.fight = { order: [] }
+  const mouth = mouthReceipt({ walls: 3 }, { sealed: true, walls: 4 })
+  f.ctx.act = async (method, params) => ({ detail: method === 'tunnel' ? { stopped: 'NIGHT_RISK', dug: 1, nightRefusal: mouth } : {} })
+  await f.ctx.work()
+  const failure = f.ctx.failures.get('tunnel:north')
+  assert.ok(failure, 'the native refusal must be recorded by the worker')
+  assert.equal(f.ctx.blocked('tunnel:north', failure.cause), true)
+  f.inventory.cobblestone += 20; f.ctx.state.food = 7; f.ctx.state.health = 11; f.ctx.sit.work.walls = 3; f.ctx.sit.work.sealed = false
+  f.ctx.gameClock.now = () => 999999999
+  assert.equal(f.ctx.blocked('tunnel:north', failure.cause), true)
+  f.ctx.state.health = 20
+  assert.equal(f.ctx.blocked('tunnel:north', failure.cause), false, 'healing that actually makes the priced step feasible')
+  f.ctx.state.health = 10; f.inventory.torch = 1
+  assert.equal(f.ctx.blocked('tunnel:north', failure.cause), false, 'a newly acquired torch enables a physical attempt')
+  delete f.inventory.torch; f.ctx.sit.work.block = 12
+  assert.equal(f.ctx.blocked('tunnel:north', failure.cause), false, 'new observed light')
+  f.ctx.sit.work.block = 0; f.ctx.state.pos.x++
+  assert.equal(f.ctx.blocked('tunnel:north', failure.cause), false, 'a different cell is a different mouth')
+})
+
+function nightKitFixture(env = {}) {
+  const f = fixture({ ND_NIGHT_WORK_SAFE: '1', ND_NIGHT_KIT_ROUTE: '1', ...env })
+  f.ctx.sit.tod = 22500
+  f.ctx.sit.work = { sealed: true, floor: true, walls: 4, roof: true, block: 0, sky: 0 }
+  f.ctx.sit.fight = { order: [] }
+  f.ctx.known.lava = { x: 24, y: 63, z: 0 }
+  f.ctx.lavaSourceKnown = true
+  const act = f.ctx.act
+  f.ctx.act = async (method, params) => {
+    if (method === 'tunnel') {
+      f.calls.push({ method, params })
+      if (params.direction === 'up') f.ctx.state.pos.y += params.length
+      else {
+        const delta = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] }[params.direction]
+        f.ctx.state.pos.x += delta[0] * params.length; f.ctx.state.pos.z += delta[1] * params.length
+      }
+      return { status: 'done', detail: { dug: params.length } }
+    }
+    return act(method, params)
+  }
+  return f
+}
+
+test('M: late-night kit buys a covered ascent toward remembered shore water', async () => {
+  const f = nightKitFixture(); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.knownWater = { x: 20, y: 63, z: 0 }
+  await f.ctx.work()
+  const leg = f.calls.find(c => c.method === 'tunnel')
+  assert.equal(leg.params.direction, 'up')
+  assert.equal(leg.params.toY, 61)
+  assert.equal(leg.params.length, 8)
+  assert.equal(f.calls.some(c => /goto|kitWaterHere/.test(c.method)), false)
+})
+
+test('M: disabled flag preserves the old horizontal water leg', async () => {
+  const f = nightKitFixture({ ND_NIGHT_KIT_ROUTE: '0' }); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.knownWater = { x: 100, y: 63, z: 0 }
+  await f.ctx.work()
+  assert.equal(f.calls.find(c => c.method === 'tunnel').params.direction, 'east')
+})
+
+test('M: close remembered water buys one stationary visible-face intake, no automatic surface walk', async () => {
+  const f = nightKitFixture(); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.state.pos.y = 61; f.ctx.knownWater = { x: 2, y: 63, z: 0 }
+  f.ctx.act = async (method, params) => {
+    f.calls.push({ method, params })
+    if (method === 'bucket' && params.nightKitWater) { delete f.inventory.bucket; f.inventory.water_bucket = 1 }
+    return { status: 'done', detail: {} }
+  }
+  assert.equal((await f.ctx.work()).progress, true)
+  const intake = f.calls.find(c => c.method === 'bucket')
+  assert.deepEqual(JSON.parse(JSON.stringify(intake.params.nightKitWater)), f.ctx.knownWater)
+  assert.equal(intake.params.walk, false)
+  assert.equal(f.calls.some(c => /goto|tunnel|dig_down|portal/.test(c.method)), false)
+})
+
+test('M: horizontal shore legs cap the chosen axis, rather than overshooting a diagonal target', async () => {
+  const f = nightKitFixture(); f.ctx.state.pos.y = 61
+  f.ctx.known.lava = { x: 7, y: 63, z: 7 }
+  // 3-D near-cast threshold is 12; use water to exercise the path before intake.
+  delete f.inventory.water_bucket; f.inventory.bucket = 1; f.ctx.knownWater = { x: 7, y: 63, z: 7 }
+  await f.ctx.work()
+  const leg = f.calls.find(c => c.method === 'tunnel')
+  assert.equal(leg.params.length, 5)
+  assert.ok(['east', 'south'].includes(leg.params.direction))
+})
+
+test('M: early-night exposed shore cast loses to the full deep-lava alternative', async () => {
+  const f = nightKitFixture(); f.ctx.sit.tod = 13000
+  await f.ctx.work()
+  assert.ok(f.calls.some(c => c.method === 'dig_down'))
+  assert.equal(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'up'), false)
+})
+
+test('M: after sheltered travel reaches dawn, shore lava beats deep search without an arbitrary night veto', async () => {
+  const f = nightKitFixture()
+  await f.ctx.work()
+  assert.ok(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'up'))
+  assert.equal(f.calls.some(c => c.method === 'dig_down'), false)
+})
+
+test('M: a far shore still loses by cost; the flag is not a hard surface preference', async () => {
+  const f = nightKitFixture(); f.ctx.known.lava.x = 1000
+  await f.ctx.work()
+  assert.ok(f.calls.some(c => c.method === 'dig_down'))
+})
+
+test('M: expensive known water does not borrow the cheap price of a different deep search', async () => {
+  const f = nightKitFixture(); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.knownWater = { x: 1000, y: 63, z: 0 }
+  await f.ctx.work()
+  assert.equal(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'up'), false)
+  assert.ok(f.calls.some(c => c.method === 'tunnel' && c.params.length === 16))
+})
+
+test('M: a nearby exposed cast keeps a priced underground alternative in the candidate set', async () => {
+  const f = nightKitFixture(); f.ctx.state.pos.y = 61; f.ctx.known.lava.x = 2; f.ctx.sit.tod = 13000
+  await f.ctx.work()
+  assert.ok(f.calls.some(c => c.method === 'dig_down'))
+  assert.equal(f.calls.some(c => c.method === 'castForKit'), false)
+})
+
+test('M: refusal is retained instead of repeatedly reopening a flooded or risky shore', async () => {
+  const f = nightKitFixture(); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.knownWater = { x: 20, y: 63, z: 0 }
+  f.ctx.act = async (method, params) => { f.calls.push({ method, params }); return { status: 'done', detail: /bucket|tunnel|dig_down/.test(method) ? { stopped: 'вода под потолком' } : {} } }
+  await f.ctx.work()
+  const n = f.calls.filter(c => c.method === 'tunnel' && c.params.direction === 'up').length
+  assert.equal(n, 1)
+  await f.ctx.work()
+  assert.equal(f.calls.filter(c => c.method === 'tunnel' && c.params.direction === 'up').length, n)
+})
+
+test('M: dawn continuity admits only a priced known route, without inventing missing water', () => {
+  const f = nightKitFixture(); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.knownWater = { x: 20, y: 63, z: 0 }; f.ctx.sit.night = false
+  assert.equal(!!f.ctx.here(), true)
+  f.ctx.knownWater = null
+  assert.equal(!!f.ctx.here(), false)
+})
+
+test('M: shore approach reaches an actual upper-bank view before starting cast', async () => {
+  const f = nightKitFixture(); let casts = 0
+  f.ctx.castForKit = async () => {
+    casts++
+    if (f.ctx.state.pos.y < 64 || Math.hypot(f.ctx.state.pos.x - 24, f.ctx.state.pos.z) > 3) {
+      return { detail: { stopped: 'не вижу лавы-источника' } }
+    }
+    f.ctx.known.portal = { x: 24, y: 64, z: 0 }
+    return { detail: { lit: true } }
+  }
+  for (let i = 0; i < 16 && !f.ctx.known.portal; i++) await f.ctx.work()
+  assert.ok(f.ctx.known.portal, 'near3(12) cannot terminate a covered approach below the bank')
+  assert.equal(casts, 1)
+})
+
+test('M: a failed scoop through a distant bank wall can still buy the last dry step', async () => {
+  const f = nightKitFixture(); delete f.inventory.water_bucket; f.inventory.bucket = 1
+  f.ctx.state.pos.y = 61; f.ctx.knownWater = { x: 3, y: 63, z: 0 }
+  await f.ctx.work()
+  assert.ok(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'east' && c.params.length === 1))
+})
+
+test('M: lit shore cast charges the remaining night once, not the old prior as well', async () => {
+  const f = nightKitFixture(); f.ctx.state.pos.y = 64; f.ctx.known.lava.x = 2; f.ctx.sit.tod = 23260
+  f.ctx.sit.work = { sealed: false, floor: true, walls: 0, roof: false, block: 12, sky: 15 }
+  f.ctx.castForKit = async () => { f.calls.push({ method: 'castForKit' }); f.ctx.known.portal = { x: 2, y: 64, z: 0 }; return { detail: { lit: true } } }
+  await f.ctx.work()
+  assert.ok(f.logs.some(s => /cast, цена ≈ 162 с/.test(s)))
+})
+
+test('M: a water ceiling above the current column buys the horizontal shore leg before abandoning the route', async () => {
+  const f = nightKitFixture(), act = f.ctx.act
+  f.ctx.act = async (method, params) => {
+    if (method === 'tunnel' && params.direction === 'up') {
+      f.calls.push({ method, params }); return { status: 'done', detail: { stopped: 'вода за потолком' } }
+    }
+    return act(method, params)
+  }
+  assert.equal((await f.ctx.work()).progress, true)
+  assert.ok(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'east'))
+  assert.equal(f.calls.some(c => c.method === 'dig_down'), false)
+})
+
+test('M: the real bucket RPC passes stationary mode and remembered hint only when opted in', async () => {
+  const equipment = fs.readFileSync(path.join(__dirname, '../src/session/equipment.ts'), 'utf8')
+  const text = equipment.slice(equipment.indexOf('function bucket ('), equipment.indexOf('\nfunction pack ('))
+  for (const flag of ['0', '1']) {
+    let received: any
+    const ctx: any = { process: { env: { ND_NIGHT_KIT_ROUTE: flag } }, obsidianMod: { fillBucket: async (_s, _c, params) => { received = params; return {} } } }
+    vm.runInNewContext(transformSync(text + '\nthis.run=bucket', { loader: 'ts' }).code, cjsContext(ctx))
+    const hint = { x: 2, y: 63, z: 0 }
+    await ctx.run.call({ require() {}, updateMovements() {}, runIntent: (_name, run) => run({ aborted: false }) }, { walk: false, nightKitWater: hint })
+    assert.equal(received.walk, flag === '0')
+    if (flag === '1') assert.deepEqual(received.nightKitWater, hint)
+  }
+})
+
+test('M: an actually visible nearby lava view admits casting without an arbitrary upper-bank height gate', async () => {
+  const f = nightKitFixture(), act = f.ctx.act
+  f.ctx.known.lava = { x: 2, y: 16, z: 0 }; f.ctx.sit.tod = 23260
+  f.ctx.act = async (method, params) => method === 'observe'
+    ? { status: 'done', detail: { blocks: [{ name: 'lava', nearest: f.ctx.known.lava, count: 20 }] } }
+    : act(method, params)
+  f.ctx.castForKit = async () => { f.calls.push({ method: 'castForKit' }); f.ctx.known.portal = { x: 2, y: 16, z: 0 }; return { detail: { lit: true } } }
+  await f.ctx.work()
+  assert.ok(f.calls.some(c => c.method === 'castForKit'))
+  assert.equal(f.calls.some(c => c.method === 'tunnel' && c.params.direction === 'up'), false)
+})
+test('ND_NIGHT_OWN_TUNNEL: a night tunnel along its own corridor (dug 0, nothing gained) is not progress; refusal kept at the start cell', async () => {
+  for (const on of [true, false]) {
+    const f = fixture(on ? { ND_NIGHT_OWN_TUNNEL: '1' } : {})
+    delete f.inventory.water_bucket; delete f.inventory.flint_and_steel
+    f.ctx.act = async (method, params) => {
+      f.calls.push({ method, params })
+      if (method === 'tunnel') { f.ctx.state.pos.z -= params.length; return { status: 'done', detail: { dug: 0, walked: params.length } } }
+      return { status: 'done', detail: {} }
+    }
+    const r = await f.ctx.work()
+    if (!on) { assert.equal(r.progress, true, 'flag off: moving 16 blocks still counts'); continue }
+    assert.equal(r.progress, false)
+    const fail = f.ctx.failures.get('tunnel:north')
+    assert.equal(fail.why, 'свой ход: новых блоков 0')
+    assert.deepEqual([fail.at.x, fail.at.z], [0, 0], 'refusal at the start cell, not at the corridor end')
+  }
 })

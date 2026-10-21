@@ -4,7 +4,7 @@ import { sleep } from '../movement'
 import { itemNamed, countOf, countItems, diffItems } from '../items'
 import * as worlds from '../worlds'
 import * as BF from '../barter-flow'
-import { clamp, meta, seesMob, walkTo, pickUp } from './common'
+import { clamp, meta, seesMob, walkTo, pickUp, log } from './common'
 
 const GOLD_ARMOR = ['golden_helmet', 'golden_chestplate', 'golden_leggings', 'golden_boots']
 const ARMOR_SLOT = { golden_helmet: 5, golden_chestplate: 6, golden_leggings: 7, golden_boots: 8 }
@@ -57,8 +57,19 @@ function reachable (set, pos) {
   return false
 }
 
+// A per-call override, restored even when an open-site round throws.
 async function barter (session, ctl, p: any = {}) {
+  const bot=session.bot, previous=bot._ndMobAvoidOnly
+  if (p.neutralPath === true || process.env.ND_BARTER_NEUTRAL_PATH === '1') {
+    const {DOCTRINE}: typeof import('../flee')=require('../flee')
+    bot._ndMobAvoidOnly=new Set(Object.keys(DOCTRINE).filter(n=>n!=='piglin'))
+  }
+  try { return await barterBody(session,ctl,p) } finally {bot._ndMobAvoidOnly=previous}
+}
+async function barterBody (session, ctl, p: any = {}) {
   const bot = session.bot
+  const move = (target, range, ms) => p.move ? p.move(target, range, ms) : walkTo(bot, ctl, target, range, ms)
+  const collect = (radius, ms) => p.collect ? p.collect(radius, ms) : pickUp(bot, ctl, radius, ms)
   const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 180, 20, 600) * 1000 - 4000
   if (worlds.worldOf(bot) !== 'the_nether') {
@@ -79,7 +90,7 @@ async function barter (session, ctl, p: any = {}) {
     try { await bot.equip(spare, DEST[spare.name]) } catch (e) { return { mode: 'barter', traded: 0, stopped: `не надел ${spare.name}: ${e.message}` } }
     gold = spare.name
   }
-  const threats0 = bastionThreats(bot)
+  const threats0 = p.adults ? [] : bastionThreats(bot)
   if (threats0.length && !p.force) {
     return { mode: 'barter', traded: 0, threats: threats0, stopped: `рядом ${threats0.map(t => `${t.name} в ${t.dist}`).join(', ')} — эти бьют при любом золоте; отойти от них (или force:true)` }
   }
@@ -101,24 +112,25 @@ async function barter (session, ctl, p: any = {}) {
   // не берёт, и подбор добычи возвращает его нам (первый прогон: брошено 6,
   // в рюкзаке снова 2). Такой слиток бросается ещё раз.
   const spent = () => ingots0 - countOf(bot, 'gold_ingot')
-  while (!ctl.aborted && gameClock.now() < deadline && spent() < toTrade && thrown < toTrade * 3) {
+  while (!ctl.aborted && !stopped && gameClock.now() < deadline && spent() < toTrade && thrown < toTrade * 3) {
     const me = bot.entity.position
     if (BF.enabled()) {
       const G: typeof import('../ne-guard') = require('../ne-guard')
-      if (G.busy(bot) || G.hot(bot)) { await G.react(session, ctl); stopped = 'страж прервал бартер'; break }
+      if (G.busy(bot) || G.hot(bot)) { if (!p.openSite) await G.react(session, ctl); stopped = 'страж прервал бартер'; break }
     }
     // Только те, до кого дойти ногами (заливка walkable): в бастионе пиглины
     // за стенами и на других этажах — к ним walkTo не доходил, слиток летел
     // броском, и его никто не брал (лаборатория бастиона, 2026-09-28: 188 с,
     // 20 бросков, 3 сделки). И не «рукой через стену»: пиглин в загоне за
     // стеной взял 17 слитков, а добыча легла у его ног в загоне (прогон 9).
-    const reach = reachCells(bot)
-    const piglins = (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'piglin' && e.position && e.isValid !== false &&
+    if (p.stop?.()) { stopped = "открытое место: угроза"; break }
+    const reach = p.adults ? null : reachCells(bot)
+    const piglins = (p.adults ? p.adults().map(e=>bot.entities[e.id]).filter(Boolean) : Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'piglin' && e.position && e.isValid !== false &&
       !meta(bot, e, 'baby') && e.position.distanceTo(me) <= 16 && seesMob(bot, e) && (busy.get(e.id) || 0) < gameClock.now() &&
-      reachable(reach, e.position) && (!BF.enabled() || BF.ready(bot, e, busy)))
+      (p.adults || reachable(reach, e.position)) && (!BF.enabled() || BF.ready(bot, e, busy)))
       .sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))
     if (!piglins.length) {
-      const anyone = (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'piglin' && e.position && e.position.distanceTo(me) <= 16)
+      const anyone = p.adults ? p.adults().length > 0 || [...busy.values()].some(t=>t>gameClock.now()) : (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'piglin' && e.position && e.position.distanceTo(me) <= 16)
       if (!anyone) { stopped = 'взрослых пиглинов в 16 блоках не вижу'; break }
       // Есть, но ни до кого не дойти (за стеной, на другом этаже), а сделок в
       // работе нет — не ждать до конца срока (лаборатория: 176 с впустую).
@@ -126,14 +138,14 @@ async function barter (session, ctl, p: any = {}) {
       const trading = [...busy.values()].some(t => t > gameClock.now() && t - gameClock.now() < ADMIRE_MS + 1600)
       if (!trading && gameClock.now() - nobodySince > 10000) { stopped = 'пиглины рядом есть, но ни до одного не дойти (стены, другой этаж)'; break }
       // Все заняты разглядыванием — собрать то, что уже бросили к нам.
-      const loot = (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'item' && e.position && e.position.distanceTo(me) <= 8)
-      if (loot && !BF.enabled()) picked += await pickUp(bot, ctl, 8, 2500)
+      const loot = p.visible ? p.visible().some(e=>e.name==='item' && e.dist<=8) : (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'item' && e.position && e.position.distanceTo(me) <= 8)
+      if (loot && (!BF.enabled() || p.collect)) picked += await collect(8, 2500)
       else await sleep(500)
       continue
     }
     nobodySince = 0
     const pg: any = piglins[0]
-    const threats = bastionThreats(bot)
+    const threats = p.adults ? [] : bastionThreats(bot)
     if (threats.length && !p.force) { stopped = `подошли ${threats.map(t => `${t.name} в ${t.dist}`).join(', ')} — бросаю сделки`; break }
     const ingot = itemNamed(bot, 'gold_ingot')
     if (!ingot) break
@@ -144,15 +156,17 @@ async function barter (session, ctl, p: any = {}) {
     // Досягаемость по сущности — 3 блока (entity_interaction_range).
     if (p.how !== 'toss') {
       if (pg.position.distanceTo(bot.entity.position) > 2.6) {
-        await walkTo(bot, ctl, pg.position.floored(), 1, Math.min(8000, deadline - gameClock.now()))
+        await move(pg.position.floored(), 1, Math.min(8000, deadline - gameClock.now()))
       }
+      if (ctl.aborted || p.stop?.()) { stopped = "открытое место: угроза"; break }
       if (pg.isValid !== false && bot.entities[pg.id] && pg.position.distanceTo(bot.entity.position) <= 3.2) {
         const had = countOf(bot, 'gold_ingot')
         try {
           await bot.equip(ingot, 'hand')
-          const aim = BF.enabled() ? (require('../pick') as typeof import('../pick')).aim(bot, pg) : null
-          if (BF.enabled() && (!aim || !aim.point)) { busy.set(pg.id, gameClock.now() + 1000); continue }
+          const aim = BF.enabled() || p.openSite ? (require('../pick') as typeof import('../pick')).aim(bot, pg) : null
+          if ((BF.enabled() || p.openSite) && (!aim || !aim.point)) { busy.set(pg.id, gameClock.now() + 1000); continue }
           await bot.lookAt(aim ? aim.point : pg.position.offset(0, 1.2, 0), true)
+          if (ctl.aborted || p.stop?.()) { stopped = 'открытое место: угроза'; break }
           await bot.activateEntity(pg)
         } catch (e) { stopped = `слиток не вручил: ${e.message}`; break }
         await sleep(350)
@@ -167,7 +181,7 @@ async function barter (session, ctl, p: any = {}) {
         }
         if (BF.enabled() || piglins.length > 1) continue
         await sleep(ADMIRE_MS)
-        picked += await pickUp(bot, ctl, 8, 4000)
+        picked += await collect(8, 4000)
         continue
       }
     }
@@ -177,8 +191,9 @@ async function barter (session, ctl, p: any = {}) {
     // блоков не бросать (слиток лежал, пиглин стоял за стеной).
     if (p.how !== 'toss' && pg.position.distanceTo(bot.entity.position) > 6) { busy.set(pg.id, gameClock.now() + 8000); continue }
     if (pg.position.distanceTo(bot.entity.position) > 4) {
-      await walkTo(bot, ctl, pg.position.floored(), 3, Math.min(10000, deadline - gameClock.now()))
+      await move(pg.position.floored(), 3, Math.min(10000, deadline - gameClock.now()))
     }
+    if (ctl.aborted || p.stop?.()) { stopped = "открытое место: угроза"; break }
     try {
       await bot.lookAt(pg.position.offset(0, 0.2, 0), true)
       await bot.toss(ingot.type, null, 1)
@@ -194,12 +209,12 @@ async function barter (session, ctl, p: any = {}) {
     if (piglins.length > 1) continue
     // Один — ждать его сделки и подобрать то, что он бросил к нам.
     await sleep(ADMIRE_MS)
-    picked += await pickUp(bot, ctl, 8, 4000)
+    picked += await collect(8, 4000)
   }
   // Последние сделки ещё идут — дождаться и подобрать.
   if (thrown && !ctl.aborted) {
     await sleep(Math.min(ADMIRE_MS + 1500, Math.max(0, deadline - gameClock.now())))
-    picked += await pickUp(bot, ctl, 8, 6000)
+    picked += await collect(8, 6000)
   }
   const got = diffItems(before, countItems(bot))
   const gained: any = {}

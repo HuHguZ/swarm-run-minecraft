@@ -27,6 +27,8 @@ async function runMiningLoop(firstProgress: boolean, mode = 'auto') {
   const bx = { st, mode, deadline: 1_200_000, goldPhaseEnd: 1_200_000, barterWalks: 0, minedSinceRetry: false, idle: 0, vantage: 0,
     bot: { health: 20 }, ctl: { aborted: false }, session: {}, p: { exit: false }, keep: 0 }
   const context = { bx,
+    // Открытый торг (q10, ND_BARTER_OPEN_SITE) выключен: заглушки модуля open-site.
+    stoppedReturn: () => false, OpenSite: { enabled: () => false },
     gameClock: { now: () => 1000 }, BF: { enabled: () => true }, miningCycle: { miningProgress },
     inLava: () => false, eatIfHungry: async () => {}, answerAttack: async () => false,
     bruteDefense: async () => false, done: () => false, spare: () => 0, goldReady: async () => true,
@@ -35,7 +37,8 @@ async function runMiningLoop(firstProgress: boolean, mode = 'auto') {
       if (++mined > 3) throw new Error('unbounded no-progress mining loop')
       if (firstProgress && mined === 1) { st.sealedState.dug++; own.add('24,52,50') }
     },
-    process: { env: { ND_GOLD_ROUTE: '0' } }, require: createRequire(filename),
+    HF: { on: () => false, focus () {}, predAllowed: () => true, chestAllowed: () => true, clusterLeft: () => 0 }, setImmediate,
+    process: { env: { ND_GOLD_ROUTE: '0', ND_BASTION_HYP_FOCUS: '0' } }, require: createRequire(filename),
     out: () => ({ mined, retry: st.barterRetry, remaining: st.pred.size }) }
   return await runInNewContext('(async () => {\n' + source + '\n await mineLoop(bx)\n return out() })()', cjsContext(context))
 }

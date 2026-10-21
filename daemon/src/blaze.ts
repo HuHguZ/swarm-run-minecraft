@@ -35,7 +35,7 @@ export {
   droppedRods, liveBlazes, sweepRisk, rodsShort, bystanderOnLine, reachTo, nearestBlaze, visibleSpawner,
   EYES_WANTED, SPAWNER_PLACE
 } from './blaze/targets'
-export { drinkable, drinkFireResistance, hasEffect } from './blaze/potions'
+export { drinkable, drinkFireResistance, hasEffect, frSpendOk, frCount } from './blaze/potions'
 export { collectRods, canApproachSpawner, walkNear } from './blaze/approach'
 export { makeRadar, blazeEye, seesMe } from './blaze/radar'
 export { floorUnder, fightMoves, digInPlace, digInNear, pitWhyAt, choosePost, windowForPost } from './blaze/post'

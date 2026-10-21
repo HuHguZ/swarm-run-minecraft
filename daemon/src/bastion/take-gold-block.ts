@@ -421,7 +421,7 @@ async function takeGoldBlock (session, ctl, pos, st) {
   st.gold.delete(key)
   st.pred.delete(key)
   st.blocks++
-  st.lastBreak = gameClock.now()
+  st.lastBreak = session.bot._ndGoldBreakAt = gameClock.now()
   // Блок — любимое пиглинов: подобрать раньше них.
   await pickUp(bot, ctl, 5, 3500)
   return 'dug'

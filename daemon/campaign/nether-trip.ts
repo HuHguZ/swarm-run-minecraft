@@ -4,20 +4,21 @@ import { only } from './flags'
 import { strategyInterrupted, state, sit, died, known, fightGearWanted, netherSearchFailure, homeForGearState,
   setHomeForGearState } from './state'
 import { log } from './log'
-import { have, dim, RAW, planksFor, goldOn, shieldOn, lighter, fireResReady } from './queries'
+import { have, dim, RAW, LOGS, planksFor, goldOn, shieldOn, lighter, fireResReady } from './queries'
 import { sense, refresh, readMemory } from './observe'
-import { READY, fightReady } from './stages/table'
-import { rodsWanted, netherRetryState, netherFailureState, netherSupply, netherSupplyState } from './nether-plan'
+import { READY, fightReady, owFastTrack } from './stages/table'
+import { noteNetherRecovery, rodsWanted, netherRetryState, netherFailureState, netherSupply, netherSupplyState } from './nether-plan'
 import { act } from './act'
 import { goToward, returnFromNether } from './travel'
-import { eatTo, craft } from './kit'
+import { eatTo, craft, sticks, smeltAll } from './kit'
 import { cook } from './food'
 import { intelligence } from './strategy-bridge'
 import * as gameClock from '../src/game-clock'
 async function enterNether () {
   if (!lighter()) log('огнива нет и сделать не из чего — вхожу без него (погасший портал = возврат через кровать)')
   await refresh()
-  if (process.env.ND_NETHER_COOK === '1' && dim() === 'overworld' && !died && !sit.foes && have(RAW)) {
+  const fastEntry = owFastTrack() && !!known.portal && lighter()
+  if (!fastEntry && process.env.ND_NETHER_COOK === '1' && dim() === 'overworld' && !died && !sit.foes && have(RAW)) {
     await cook()
     await refresh()
     if (died || strategyInterrupted) return { status: 'interrupted', detail: { went: false } }
@@ -30,13 +31,36 @@ async function enterNether () {
   }
   // Дешёвое снаряжение на Ад до входа: щит (слиток + доски) и золото, если есть из чего (cl-ab 14.10: вход на 25-й мин без щита
   // при слитке в рюкзаке — у бастиона «нет брони», у крепости «нет щита», обратно домой через 7 мин).
-  if (dim() === 'overworld' && !died) {
+  if (!fastEntry && dim() === 'overworld' && !died) {
     if (!shieldOn() && !have('shield') && have('iron_ingot') >= 1) {
       if (have(/_planks$/) < 6) { const p = planksFor(); if (p) await craft(p, 8) }
       if (have(/_planks$/) >= 6 && await craft('shield')) await act('armor')
     }
     if (!goldOn() && have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
     if (!goldOn() && have('gold_ingot') >= 4) await wearGold()
+  }
+  // ND_OW_NETHER_STICKS=1 (просьба ne 21.10): в Аду кирки стираются за 3–5 мин (195 незерака), а nether-supply куёт каменную кирку
+  // из булыжника/блэкстоуна только при ≥ 2 палках (иначе ждёт стебли 14–17 мин). С собой — железная кирка, если есть 3 слитка
+  // (вдвое прочнее каменной), и 8 палок (1 бревно = 4 доски = 8 палок). Только крафт из рюкзака, без походов за деревом.
+  if (typeof process !== 'undefined' && process.env.ND_OW_NETHER_STICKS === '1' && dim() === 'overworld' && !died) {
+    // Сырое железо набора — в слитки (≈10 с за слиток в печи): минуты прочности кирки в Аду дороже.
+    if (!have(/^(iron|diamond|netherite)_pickaxe$/) && have('iron_ingot') < 3 && have('iron_ingot') + have('raw_iron') >= 3) {
+      await smeltAll('raw_iron', 'iron_ingot', { max: 3 - have('iron_ingot') })
+    }
+    if (have('iron_ingot') >= 3 && !have(/^(iron|diamond|netherite)_pickaxe$/)) {
+      await sticks(2)
+      if (have('stick') >= 2 && await craft('iron_pickaxe')) log('в Ад: железная кирка из слитков набора')
+    }
+    // ND_OW_NETHER_WOOD=1 (ne 21.10): в Аду кирки стираются к 3–13-й мин, а палок без дерева не сделать (у снимков 5730 stick×1, ни бревна) —
+    // затем «домой за недостающим» и гибель наверху (17 прогонов). 8 палок или их дерево (бревно = 8 палок) — нет ни того, ни другого: крюк к
+    // видимому дереву в 24 бл. (2 бревна, ≤ 40 с): палки и бревно в запас.
+    if (process.env.ND_OW_NETHER_WOOD === '1' && !died && have('stick') < 8 && have(LOGS) === 0 && have(/_planks$/) < 4) {
+      log('в Ад: палок мало, дерева нет — крюк к видимому дереву у портала')
+      await act('mine', { block: 'any_log', count: 2, radius: 24, dry: true, timeoutSeconds: 40, netherWood: true })
+      await refresh()
+    }
+    if (!died && have('stick') < 8) await sticks(8)
+    await refresh()
   }
   return act('portal', { mode: 'enter', timeoutSeconds: 120, ...(lighter() ? {} : { noIgniter: true }) })
 }
@@ -59,6 +83,8 @@ async function netherArrival () {
   // Без золотой вещи — сразу в укрытие (план координатора 14.10): вслепую ne_burrow закрывает видимые проёмы у тела или уводит
   // ступенями в толщу (nether-cover.coverHere); дальше поиск идёт закрытым штреком из этой клетки.
   // И с золотыми ботинками: бруты, хоглины и гасты бьют при любом золоте (h1: брут на 1.7 мин у портала, ботинки на ногах).
+  // ND_NE_GOLD_FIRST: до укрытия — оглядеться (руда на стенах видна только снаружи кармана), дальше золото — по памяти глаз.
+  if (process.env.ND_NE_GOLD_FIRST === '1' && !goldOn()) await act('ne_gold_first', { look: true, timeoutSeconds: 10 })
   if (process.env.ND_NE_COVER !== '0') {
     const c = await act('ne_burrow', { why: 'прибытие: сразу в укрытие' })
     await refresh()
@@ -75,7 +101,7 @@ async function netherArrival () {
     if (n === 'ghast') return d <= 40
     return false
   })
-  if (!foes.length || !state.pos) return
+  if (!foes.length || !state.pos) { await goldFirstStep(); return }
   log(`опасное прибытие: ${foes.map(e => `${nm(e)} ${Math.round(e.dist)}`).join(', ')} — в толщу и штреком прочь`)
   await act('ne_burrow', { why: 'опасное прибытие' })
   await refresh()
@@ -86,6 +112,17 @@ async function netherArrival () {
   const t = await act('nether_tunnel', { x: to.x, z: to.z, radius: 4, timeoutSeconds: 120 })
   await refresh()
   log(`прибытие: штрек прочь к ${to.x},${to.z} — ${(t.detail && t.detail.note) || t.error || t.status}`)
+  await goldFirstStep()
+}
+
+// ND_NE_GOLD_FIRST=1 (поток ne 21.10, выкл.): без золота на теле — сперва золотые ботинки из видимой руды Ада закрытым штреком
+// (ne_gold_first). Полный проход приносит каменную кирку без золота и брони: пиглины бьют с первой секунды (int7: 4 из 10 смертей).
+async function goldFirstStep () {
+  if (process.env.ND_NE_GOLD_FIRST !== '1' || died || dim() !== 'the_nether' || goldOn()) return
+  if (have('gold_ingot') + 9 * have('gold_block') + Math.floor(have('gold_nugget') / 9) >= 4) { await wearGold(); await refresh(); if (goldOn()) return }
+  const g = await act('ne_gold_first', { timeoutSeconds: 480 })
+  await refresh()
+  log(`прибытие: золото первым — ${(g.detail && g.detail.note) || g.error || g.status}`)
 }
 
 // Золото Ада — по пути, не отдельной фазой (пользователь 14.10: «можно по пути накопать, пока идёшь к нужным структурам в аду»):
@@ -146,7 +183,44 @@ async function continueFortressChoice (selection, blocked) {
   return true
 }
 const netherRecoveryActions = new Map()
-async function changeNetherCause () {
+// q11: физические действия тела сравниваются до повторного большого поиска/пути домой.
+// Неизвестность, noPath и прерывание не являются доказательством невозможности.
+let netherRecoverySeconds = 90
+const recoveryTrail: Array<{ x: number, y: number, z: number, t: number }> = []
+async function noGiveupNether (onProgress = (_why: string) => {}) {
+  const r = await act('ne_recover', { portal: known.netherPortal || null, timeoutSeconds: netherRecoverySeconds })
+  await refresh(); await readMemory()
+  if (died || dim() !== 'the_nether') return true
+  const d = r.detail || {}
+  netherRecoverySeconds = Number.isFinite(d.requiredSeconds) ? Math.max(90, Math.min(600, d.requiredSeconds)) : 90
+  log('RECOVERY_SNAPSHOT ' + JSON.stringify({ pos: state.pos, hp: state.health, inventory: state.inventory,
+    candidates: d.candidates, chosen: d.chosen, progressed: d.progressed, interrupted: d.interrupted, proof: d.proof }))
+  log(`восстановление Ада: ${d.chosen?.kind || 'наблюдение'} — ${d.why || r.error || r.status}`)
+  if (r.status === 'done' && d.impossible === true && d.proof === 'sealed-unbreakable') {
+    log(`БЛОКЕР: Ад — доказана физическая невозможность: ${d.why}`)
+    process.exitCode = 2
+    return false
+  }
+  // Изменение на месте (копка туда-обратно на 1 бл., nbs35-5974: 2012 вызовов ne_recover за 9 игр. мин между (15,62,-17) и
+  // (14,62,-17); nbs33-6185 — 1016, nbs32-5408 — 1726) — не прогресс: паузы этапов не снимать, переждать 10 с в своей клетке.
+  const here = state.pos && { x: state.pos.x, y: state.pos.y, z: state.pos.z, t: gameClock.now() }
+  if (here) recoveryTrail.push(here)
+  while (recoveryTrail.length > 6) recoveryTrail.shift()
+  const churn = here && recoveryTrail.filter(p => here.t - p.t < 60000 && Math.hypot(p.x - here.x, p.y - here.y, p.z - here.z) <= 3).length >= 5
+  if (churn) {
+    log('восстановление Ада: изменения на месте (5 из 6 в 3 бл. за минуту) — не прогресс, жду 10 с')
+    await act('wait', { seconds: 10 })
+    recoveryTrail.length = 0
+    return true
+  }
+  if (d.progressed) {
+    noteNetherRecovery()
+    onProgress('восстановление Ада: подтверждённое изменение тела или снабжения')
+  }
+  return true
+}
+async function changeNetherCause (onProgress = (_why: string) => {}) {
+  if (process.env.ND_NE_NO_GIVEUP === '1' && dim() === 'the_nether' && !died) return noGiveupNether(onProgress)
   if (process.env.ND_NE_RECOVER !== '1' || dim() !== 'the_nether' || died) return false
   if ((state.tactics?.threatLevel ?? 0) >= 2) {
     const cover = netherRecoveryActions.get('threatCover')

@@ -4,13 +4,15 @@ import { sleep } from '../movement'
 import { equipBestTool, missingHarvestTool } from '../items'
 import { withTimeout } from '../build'
 let unstuck: any
+const wallRescue = bot => process.env.ND_OW_BURIAL_STEP === '1' && bot.game?.dimension === 'overworld'
 const WALL_STEP_MS = 10 * 50
 // in_wall deals one HP per damage-immunity window (10 ticks). Leave one HP for the next pulse.
 const exitBudget = (bot, digMs = Infinity) => {
   if (!Number.isFinite(digMs)) digMs = Infinity
   const lifeMs = Math.max(0, (bot.health ?? 20) - 1) * 500
   // If mining still fits, leave its time available after unsuccessful probes.
-  return Math.max(50, Math.min(digMs, digMs < lifeMs ? lifeMs - digMs : lifeMs))
+  const probeMs = wallRescue(bot) ? Math.max(digMs, WALL_STEP_MS / Math.max(.01, bot.physics?.sneakSpeed ?? .3) + WALL_STEP_MS + 50) : digMs
+  return Math.max(50, Math.min(probeMs, digMs < lifeMs ? lifeMs - digMs : lifeMs))
 }
 const FALLS = new Set([
   'gravel', 'suspicious_gravel', 'sand', 'red_sand', 'suspicious_sand',
@@ -58,6 +60,13 @@ function buriedBy (this: any, bot) {
     }
     const head = bot.blockAt(bot.entity.position.offset(0, 1.2, 0))
     if (head && suffocating(head) && (unstuck ??= (require('../unstuck') as typeof import('../unstuck'))).overlapsBody(bot, head)) return { name: head.name, block: head }
+    // A server in_wall packet is an observation even when a predicted dig left local air.
+    // It permits a physical exit, never excavation of an unseen neighbouring cell.
+    if (wallRescue(bot)) {
+      this.syncDamageContext?.(bot)
+      const hit = Math.max(this.inWallAt || -Infinity, this.session?._tacticalInWallAt ?? -Infinity)
+      if (gameClock.now() - hit < 2000) return { name: 'in_wall', block: null }
+    }
     if (!this.announced) return null
     const above = bot.blockAt(bot.entity.position.offset(0, 2.2, 0))
     if (above && above.boundingBox === 'block' && FALLS.has(above.name)) {
@@ -123,11 +132,19 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
         const now = this.buriedBy(bot)
         if (!now) break
         if (!now.block) {
+          if (wallRescue(bot)) {
+            why = await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot) }) ? null : 'in_wall: выход не подтверждён движением'
+            break
+          }
           await sleep(200)
           continue
         }
         const cell = now.block
-        if (!this.visibleBurialBlock(bot, cell)) { why = 'блок вне видимого прицела'; break }
+        if (!this.visibleBurialBlock(bot, cell)) {
+          if (wallRescue(bot) && await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot) })) break
+          why = 'блок вне видимого прицела'
+          break
+        }
         // Не ломается (бедрок, барьер колизея — digTime Infinity): копать бесполезно — шаг в соседнюю свободную клетку
         // (S7d, ревью Codex №4: 28b в барьере поля копал его 12 с до «suffocated in a wall»).
         let infinite = cell.name === 'bedrock' || cell.name === 'barrier'
@@ -159,6 +176,11 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
           const column = FALLS.has(cell.name) && FALLS.has(bot.blockAt(cell.position.offset(0, 1, 0))?.name || '')
           if ((column || !Number.isFinite(toolMs) || toolMs > WALL_STEP_MS) && await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, toolMs) })) break
           if (ctl?.aborted) break
+          // A failed/short physical probe may still have moved us. Revalidate its old dig target.
+          if (wallRescue(bot)) {
+            const contact = this.buriedBy(bot)?.block
+            if (!contact || !contact.position.equals(cell.position) || !this.visibleBurialBlock(bot, contact)) continue
+          }
           await withTimeout(bot.dig(cell), Math.max(8000, (handMs || 0) + 1500, Number.isFinite(toolMs) ? toolMs + 1500 : 0), `${cell.name} не ломается`)
           this.dugTotal++
           why = null
@@ -166,7 +188,8 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
           why = String((e && e.message) || e)
           try { bot.stopDigging() } catch {}
         }
-        await sleep(400)
+        // Mineflayer locally predicts air before a server receipt. Observe the next in_wall pulse.
+        await sleep(wallRescue(bot) ? WALL_STEP_MS + 50 : 400)
       }
       const feet = bot.blockAt(bot.entity.position)
       const footProblem = feet && this.session.mcData
@@ -179,6 +202,7 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
           try { toolMs = bot.digTime(feet) } catch {}
           await withTimeout(bot.dig(feet), Math.max(8000, Number.isFinite(toolMs) ? toolMs + 1500 : 0), `${feet.name} не ломается`)
           this.dugTotal++
+          if (wallRescue(bot)) await sleep(WALL_STEP_MS + 50)
         } catch (e) {
           why = String((e && e.message) || e)
           try { bot.stopDigging() } catch {}
@@ -191,6 +215,8 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
       this.freeing = false
     }
     const left = this.buriedBy(bot)
+    if (wallRescue(bot)) console.log('[suffocation]', JSON.stringify({ head: head.name, at: head.block?.position,
+      left: left?.name || null, dug: this.dugTotal || 0, hp: bot.health, why }))
     this.stuck = !!left
     if (!this.stuck) { const dug = this.dugTotal || 0; this.freed(bot, during); return { freed: true, dug } }
     const now = gameClock.now()
@@ -264,6 +290,7 @@ async function stepOutOfWall (this: any, bot, { ctl = null, maxMs = Infinity }: 
       if (ctl?.aborted) break
       try { bot.setControlState('sneak', true); bot.setControlState('forward', true) } catch {}
       const end = Math.min(until, gameClock.now() + probeMs)
+      let clearSince = null
       while (!ctl?.aborted && gameClock.now() < end) {
         await new Promise<void>(resolve => {
           const timer = gameClock.setTimeout(done, 50)
@@ -271,7 +298,19 @@ async function stepOutOfWall (this: any, bot, { ctl = null, maxMs = Infinity }: 
           wake = done
         })
         if (ctl?.aborted) break
-        if (!buriedBy.call(this, bot)?.block) return true
+        const clear = !buriedBy.call(this, bot)?.block
+        if (!wallRescue(bot)) { if (clear) return true; continue }
+        const moved = Math.hypot(bot.entity.position.x - at.x, bot.entity.position.z - at.z) >= (bot.entity.width || .6) / 2
+        if (!clear || !moved) { clearSince = null; continue }
+        if (clearSince === null) clearSince = gameClock.now()
+        // A predicted dig can leave local air while the server still suffocates us.
+        // Require horizontal progress AND a full damage-immunity window plus one tick
+        // without another in_wall packet; fresh damage during the probe resets the receipt.
+        const hit = Math.max(this.inWallAt || -Infinity, this.session?._tacticalInWallAt ?? -Infinity)
+        if (gameClock.now() - Math.max(clearSince, hit) < WALL_STEP_MS + 50) continue
+        this.inWallAt = 0
+        if (this.session) { this.session._tacticalInWallAt = -Infinity; this.session._tacticalEmbedded = false }
+        return true
       }
       try { bot.setControlState('forward', false) } catch {}
     }

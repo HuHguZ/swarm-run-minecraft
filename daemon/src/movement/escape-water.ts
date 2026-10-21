@@ -6,6 +6,7 @@ import * as geometry from '../navigation/geometry'
 import { sleep, xyz } from './basics'
 import { inWater, findSwimRoute, headWet, dryFooting, airTicks, idleBreath, airAbove, swimUpTicks, waterCell, breathCell } from './water'
 import { lazyBuild, lazyItems, lazyPick } from './lazy'
+import { recoveryTarget } from '../session/surface-walk'
 
 // Follow the connected swim route with manual controls: the old direct line to
 // the bank could point through a wall while jump stayed stuck under a roof.
@@ -40,6 +41,8 @@ export async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = 
     let opened = false
     let wide = null, wideAt = 0, diveTo = null
     while (gameClock.now() < deadline && !ctl.aborted && !dryFooting(bot)) {
+      // Вернуть управление разведке: продолжать грести в водопад не выход на берег.
+      if (!bot._ndOwSurfaceRecovering && process.env.ND_OW_SURFACE_RECOVER === '1' && recoveryTarget(bot)) { exit = 'surface-drop'; break }
       if (waterToward && Math.hypot(waterToward.x + .5 - bot.entity.position.x, waterToward.z + .5 - bot.entity.position.z) <= .35 && bot.entity.position.y >= waterToward.y) waterToward = null
       if (budget && !headWet(bot) && airTicks(bot) < 270) {
         // Recover breath before the bank route can send us below another overhang.
@@ -195,6 +198,7 @@ export async function escapeWater (bot, ctl, { timeoutMs = 25000, visibleOnly = 
     wasInWater: true,
     target: target ? xyz(target) : null,
     // Почему кончилось (разбор утоплений 15.10: «не нашёл пути» при найденной цели): выход цикла, вид маршрута, клетки глаз/ног.
+    surfaceDrop: exit === 'surface-drop' || undefined,
     exit, loops, kind, eye: head ? head.name : null, feet: feet ? feet.name : null, air: bot.oxygenLevel ?? null,
     ...(budget ? { breathBudget, etaTicks: Number.isFinite(etaTicks) ? etaTicks : null } : {}),
     error: out ? undefined : breathing ? 'голова в воздухе, но на сухой берег не вышел' : 'не нашёл доступного пути из воды'

@@ -1,6 +1,8 @@
 'use strict'
 // Автопилот: класс Autopilot — тик рефлексов, урон и обида, вода и огонь, крипер, авария, бегство, еда, броня, инструменты.
 import * as gameClock from '../game-clock'
+import { owAirEmergency } from '../movement/water'
+import * as waterLocks from '../reflex-lock'
 import { escapeWater, inWater, sleep } from '../movement'
 import { toolPlan, toolBudget, itemNamed, plankCount } from '../items'
 import { HOSTILES, retreat, nearestHostile } from '../combat'
@@ -301,6 +303,14 @@ export class Autopilot {
 
   // death the autopilot exists to prevent. Only runs when no intent is active,
   async escapeWaterIfIdle (bot) {
+    if (owAirEmergency(bot)) {
+      if (this.session.tactics?.enabled()) this.session.tactics.update(true)
+      else {
+        this.session.current?.ctl?.abort()
+        await waterLocks.start(this.session, ctl => escapeWater(bot, ctl), { source: 'Surface', owner: 'Emergency', priority: 3, preempt: true })
+      }
+      return
+    }
     const busy = this.bodyBusy()
     if (!inWater(bot) || busy) {
       this.wetSince = null
@@ -609,10 +619,18 @@ export class Autopilot {
         // Sticks first and separately: they come out of the 2x2 grid with no
         // table at all, and at depth the bag holds planks and never sticks.
         for (const pre of job.pre) await craft(this.session, ctl, { item: pre, count: 1 })
+        const tableId = mcData.blocksByName.crafting_table.id
+        const hadTable = !!bot.findBlock({ matching: [tableId], maxDistance: 3 })
         if (!await this.tableUnderfoot(bot, ctl)) {
           throw new Error('верстак не поставить: ни стола рядом, ни досок на новый')
         }
         await craft(this.session, ctl, { item: job.item, count: 1 })
+        // ND_NETHER_TABLE_BACK=1 (blz 21.10): в Аду поставленный здесь верстак — забрать: дерева на новый нет (базальтовые дельты), а
+        // брошенный стол — конец кирок (gC12-s18-1, 5730: «нет безопасного дерева на крафт (8 досок)» — 30 мин без кирки у крепости,
+        // 11 палок и 90 булыжника в рюкзаке).
+        if (process.env.ND_NETHER_TABLE_BACK === '1' && !hadTable && /nether/.test(String(bot.game?.dimension || ''))) {
+          try { await (require('../actions') as typeof import('../actions')).mine(this.session, ctl, { block: 'crafting_table', count: 1, radius: 3, fair: true, timeoutSeconds: 10 }) } catch {}
+        }
       })
     } catch (err) {
       // Whatever lost the race is still running inside mineflayer; stop it

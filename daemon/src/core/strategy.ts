@@ -99,6 +99,8 @@ export interface DirectorOptions extends PlanOptions {
   retryAfterMs?: number
   /** Consecutive INTERRUPTED outcomes without progress that count as one FAILURE (tactics keep stopping the skill). */
   maxInterrupts?: number
+  /** Domain override: true reopens, false waits for a physical cause; undefined keeps native retry behavior. */
+  retryCondition?(failed: WorldState, current: WorldState): boolean | undefined
 }
 export class StrategicDirector {
   private readonly failures = new Map<string, number>()
@@ -129,6 +131,8 @@ export class StrategicDirector {
     let wake: number | null = null
     for (const [id, mark] of this.exhaustedAt) {
       const strategy = this.registry.get(id)
+      const failed = this.failedAt.get(id)
+      if (failed && this.options.retryCondition?.(failed, failed) !== undefined) continue
       if (!this.exhausted(id) || (strategy?.retryCondition && !strategy.timeRetry)) continue
       const at = mark.at + (this.options.retryAfterMs ?? 300000) * 2 ** (mark.rounds - 1)
       wake = wake === null ? at : Math.min(wake, at)
@@ -138,7 +142,8 @@ export class StrategicDirector {
   private fail(strategy: Strategy, before: WorldState, after: WorldState): void {
     const failures = (this.failures.get(strategy.id) ?? 0) + 1
     this.failures.set(strategy.id, failures)
-    this.failedAt.set(strategy.id, cloneWorld(strategy.retryCondition?.(before, after) ? before : after))
+    const physical = this.options.retryCondition?.(before, after)
+    this.failedAt.set(strategy.id, cloneWorld(physical === undefined && strategy.retryCondition?.(before, after) ? before : after))
     this.penalties.set(strategy.id, (this.penalties.get(strategy.id) ?? 0) + Math.max(1200, strategy.estimateCost(before)))
     if (failures === (this.options.maxFailures ?? 2)) this.exhaustedAt.set(strategy.id,
       { at: this.environment.now(), progress: this.progressCount, rounds: (this.exhaustedAt.get(strategy.id)?.rounds ?? 0) + 1 })
@@ -152,10 +157,11 @@ export class StrategicDirector {
     for (const [id, failed] of this.failedAt) {
       const strategy = this.registry.get(id)
       if (!strategy) continue
-      if (strategy.retryCondition?.(failed, state)) {
+      const physical = this.options.retryCondition?.(failed, state)
+      if (physical ?? strategy.retryCondition?.(failed, state)) {
         // An explicit retryCondition is domain knowledge (a new bastion site, more gold): a clean slate.
         this.failures.delete(id); this.penalties.delete(id); this.failedAt.delete(id); this.exhaustedAt.delete(id)
-      } else if ((!strategy.retryCondition || strategy.timeRetry) && this.cooledDown(id)) {
+      } else if (physical === undefined && (!strategy.retryCondition || strategy.timeRetry) && this.cooledDown(id)) {
         // Penalties stay: alternatives remain preferred, but a lone path is no longer lost for the whole run.
         this.failures.delete(id); this.failedAt.delete(id)
       }

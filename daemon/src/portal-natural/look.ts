@@ -148,12 +148,12 @@ function seesTop (bot, block, { leaves = 2 }: any = {}) {
   return false
 }
 
-function skyLava (bot, radius, { up = 40, down = 48, rays = 1500 }: any = {}) {
+function skyLava (bot, radius, { up = 40, down = 48, rays = 1500, fluid = 'lava' }: any = {}) {
   const reg = bot.registry
-  const lava = reg.blocksByName.lava
+  const lava = reg.blocksByName[fluid]
   const airIds = new Set()
   for (const n of ['air', 'cave_air', 'void_air']) { const b = reg.blocksByName[n]; if (b) for (let s = b.minStateId; s <= b.maxStateId; s++) airIds.add(s) }
-  const lavaSrc = lava.minStateId // level=0 — первое состояние лавы
+  const lavaSrc = lava.minStateId // level=0 — первое состояние выбранной жидкости
   const minY = bot.game.minY
   const maxY = minY + bot.game.height - 1
   const c = bot.entity.position.floored()
@@ -191,11 +191,14 @@ function skyLava (bot, radius, { up = 40, down = 48, rays = 1500 }: any = {}) {
   let cast = 0
   // Одно тело — много клеток: луч в каждую не нужен, хватит первой видимой из тела (тело считает lavaBody).
   const taken = []
-  for (const h of hits) {
+  // Dense hidden water along the nearest bank must not consume every ray before the farther visible bank.
+  const stride = fluid === 'water' ? Math.max(1, Math.ceil(hits.length / Math.max(1, rays))) : 1
+  for (let i = 0; i < hits.length; i += stride) {
+    const h = hits[i]
     if (taken.some(t => Math.abs(t.x - h.x) <= 6 && Math.abs(t.z - h.z) <= 6 && Math.abs(t.y - h.y) <= 3)) continue
     if (cast++ >= rays) break
     const b = bot.blockAt(new Vec3(h.x, h.y, h.z))
-    if (!b || !(seesTop(bot, b) || seesBlock(bot, b))) continue
+    if (!b || b.name !== fluid || levelOf(b) !== 0 || !(seesTop(bot, b) || seesBlock(bot, b))) continue
     out.push(b)
     taken.push(h)
   }
@@ -245,6 +248,10 @@ export function survey (bot, { radius = 128, rays = 3000, need = NEED, terrain =
   const sky = skyLava(bot, radius, { rays: Math.round(rays / 2) })
   const near = visibleOf(bot, [reg.blocksByName.lava.id], Math.min(40, radius), { max: 200, rays: Math.round(rays / 2) }).filter(isLavaSrc)
   const lavaSeen = [...sky.blocks, ...near]
+  // Same loaded-column/top-face sight, source state and visibility proof as lava; no seed map.
+  const waterSources = process.env.ND_OW_LAKE_WATER_LOOK === '1' &&
+    String(bot.game?.dimension || '').replace(/^minecraft:/, '') === 'overworld'
+    ? skyLava(bot, radius, { fluid: 'water', rays: Math.round(rays / 2) }).blocks.slice(0, 8).map(b => xyz(b.position)) : null
   const seen = new Set()
   const sites = []
   for (const b of lavaSeen) {
@@ -291,6 +298,7 @@ export function survey (bot, { radius = 128, rays = 3000, need = NEED, terrain =
     best: usable[0] || null,
     sites: [...usable, ...sites.filter(s => !s.usable).sort((a, b) => a.dist - b.dist)].slice(0, 8),
     ruins: ruins.sort((a, b) => a.dist - b.dist).slice(0, 4),
+    ...(waterSources ? { waterSources } : {}),
     ...(terrain ? { terrain: terrainView(bot) } : {})
   }
 }

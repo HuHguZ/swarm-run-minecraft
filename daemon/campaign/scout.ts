@@ -10,6 +10,7 @@ import { sense, refresh, readMemory, lavaBad } from './observe'
 import { lavaApproachSeconds } from './stages/table'
 import { act } from './act'
 import { goToward } from './travel'
+import { leaveWater } from './danger'
 import { craft, spares } from './kit'
 import { graphFact, intelligence } from './strategy-bridge'
 import * as gameClock from '../src/game-clock'
@@ -25,8 +26,13 @@ function dayLavaQuotes (view: any) {
     ['southeast', 1, 1], ['southwest', -1, 1], ['northwest', -1, -1], ['northeast', 1, -1]]
   const route = to => Math.hypot(to.x - pos.x, to.z - pos.z) / 4.317 + Math.abs((to.y ?? pos.y) - pos.y) * 2
   const levelSeconds = n => 3 * n + Math.SQRT2 / 4.317
-  const down = y => Math.max(0, y) * levelSeconds(terrain.stoneSeconds) +
-    Math.max(0, Math.min(y, 0) + 54) * levelSeconds(terrain.deepslateSeconds) + view.searchSeconds
+  // ND_OW_LAVA_SHAFT=1: вниз за лавой — колодцем (блок на уровень и падение, ~1.2 с), а не лестницей по 8 (3 блока на уровень): у −9170
+  // лавы под небом у спавна нет, а у бедрока (y −56…−64) в R48 — ~970 клеток лавы (оракул 21.10); лестницей это ~560 с, «фронтир» дешевле
+  // и уводил по поверхности на 13 мин впустую (owG1-06).
+  const shaftLevel = n => n + 0.6
+  const down = y => process.env.ND_OW_LAVA_SHAFT === '1'
+    ? Math.max(0, y) * shaftLevel(terrain.stoneSeconds) + Math.max(0, Math.min(y, 0) + 54) * shaftLevel(terrain.deepslateSeconds) + view.searchSeconds
+    : Math.max(0, y) * levelSeconds(terrain.stoneSeconds) + Math.max(0, Math.min(y, 0) + 54) * levelSeconds(terrain.deepslateSeconds) + view.searchSeconds
   const add = (id, kind, seconds, mine, extra: any = {}) => {
     const hazard = mine ? view.mineHazard : view.scoutHazard
     jobs.push({ id, kind, seconds, price: seconds - Math.expm1(-hazard * seconds) * view.deathSeconds, ...extra })
@@ -64,7 +70,7 @@ function dayLavaQuotes (view: any) {
     add(`frontier:${direction}`, 'frontier', exit + (64 / 4.317 + 1) / chance(to, horizon), false, { to, direction })
   }
   for (const direction of ['north', 'east', 'south', 'west']) {
-    if (pos.y > -54) add(`down:${direction}`, 'down', down(pos.y), true, { direction, depth: Math.min(8, Math.ceil(pos.y + 54)) })
+    if (pos.y > -54) add(`down:${direction}`, 'down', down(pos.y), true, { direction, depth: Math.min(process.env.ND_OW_LAVA_SHAFT === '1' ? 64 : 8, Math.ceil(pos.y + 54)) })
     else add(`drift:${direction}`, 'drift', view.searchSeconds, true, { direction })
   }
   return jobs.filter(j => Number.isFinite(j.price)).sort((a, b) => a.price - b.price)
@@ -121,7 +127,19 @@ async function dayLavaStep () {
     if (died || strategyInterrupted) return true
     await sense()
     if (!dayLavaActive() || strategyInterrupted || Math.hypot(state.pos.x - before.x, state.pos.y - before.y, state.pos.z - before.z) >= 0.5) return true
-    r = await act('dig_down', { mode: 'stairs', depth: job.depth, direction: job.direction, maxFallHp: 0, torchEvery: 0, timeoutSeconds: 90 })
+    r = process.env.ND_OW_LAVA_SHAFT === '1' && job.kind === 'down'
+      ? await act('tunnel', { direction: 'down', length: job.depth, timeoutSeconds: 240 })
+      : await act('dig_down', { mode: 'stairs', depth: job.depth, direction: job.direction, maxFallHp: 0, torchEvery: 0, timeoutSeconds: 90 })
+    // Колодец встал (пещера, вода снизу) — осмотреться: лава в пещере видна сверху.
+    if (process.env.ND_OW_LAVA_SHAFT === '1' && job.kind === 'down' && !died && !strategyInterrupted && r.status !== 'interrupted') await act('observe', { radius: 48 })
+    // ND_OW_LAVA_DOWN_CONTINUE=1 (owC12-11): лестница была своя — тело сошло по ней, не вскрыв ни блока; новый спуск — от её низа,
+    // иначе цикл «вниз по своей лестнице → пустой заход → наверх к новому обзору → снова вниз» шёл 19 игр. мин.
+    for (let k = 0; k < 2 && process.env.ND_OW_LAVA_DOWN_CONTINUE === '1' && r.status === 'done' && !(r.detail?.dug > 0) && !r.detail?.stopped &&
+      state.pos.y <= before.y - 4 && state.pos.y > -54 && !died && !strategyInterrupted; k++) {
+      log(`день: поиск лавы — своя лестница до y ${Math.round(state.pos.y)}, продолжаю вниз отсюда`)
+      r = await act('dig_down', { mode: 'stairs', depth: Math.min(8, Math.ceil(state.pos.y + 54)), direction: job.direction, maxFallHp: 0, torchEvery: 0, timeoutSeconds: 90 })
+      if (died || strategyInterrupted || r.status === 'interrupted') return true
+    }
   } else if (job.kind === 'drift' || job.kind === 'sound') {
     r = await act('tunnel', { direction: job.above ? 'up' : job.direction, length: job.depth || 8, torchEvery: 0, timeoutSeconds: 90 })
   } else {
@@ -134,24 +152,58 @@ async function dayLavaStep () {
   if (!died && !strategyInterrupted && moved >= 0.5) await act('observe', { radius: 32 })
   return true
 }
+let lavaStartTried = false
+async function earlyLavaLookout () {
+  if (process.env.ND_OW_LAVA_LOOK_EARLY !== '1' || lavaStartTried) return false
+  lavaStartTried = true
+  await sense()
+  if (dim() !== 'overworld' || known.portal || lavaSourceKnown || !sit.surface || sit.night || sit.inWater ||
+      died || strategyInterrupted || !state.pos || 55 * 20 / Math.max(1, state.health ?? 20) > 90) return true
+  const base = { ...state.pos }
+  // Без кирки годится земля: pickFiller выбирает имеющийся булыжник раньше неё.
+  if (!have(/_pickaxe$/) && have(COBBLE)) return true
+  // Ранняя вышка — из 10 блоков земли (owG1-02: при ND_OW_LAVA_TOWER=20 двадцати блоков земли в 8 бл. за 30 с не набралось — ранний
+  // обзор пропущен, озеро 5730 в 45 бл. не увидено за весь прогон); выше — уже из булыжника (lavaLookout берёт сколько есть).
+  const need = 10 - have(COBBLE) - have('dirt')
+  if (need > 0) await act('mine', { block: 'dirt,grass_block', count: need, radius: 8, dry: true, timeoutSeconds: 20, minY: Math.floor(state.pos.y) - 1 })
+  if (died || strategyInterrupted) return true
+  await sense()
+  if (!state.pos || have(COBBLE) + have('dirt') < 10) return true
+  const moved = () => Math.hypot(state.pos.x - base.x, state.pos.y - base.y, state.pos.z - base.z)
+  // Вышка — там, где стою после добычи (21.10 owB4-05: возврат на 0.5 бл. к исходной точке из своей ямки «не дошёл» — обзор пропущен);
+  // возврат только если ушёл далеко от исходного вида (> 8 бл.).
+  if (moved() > 8) await act('goto', { ...base, range: 2, surface: 'strict', timeoutSeconds: 15 })
+  if (died || strategyInterrupted) return true
+  await sense()
+  if (!state.pos || moved() > 10 || !sit.surface || sit.inWater) return true
+  log('ранний обзор лавы: свои 10 блоков, вышка у стартового обзора; бюджеты добыча/возврат/подъём/спуск 20/15/25/30 с')
+  await lavaLookout()
+  return true
+}
 let surveyDone = false
 const lavaLookoutCells = new Set()
-async function lavaLookout () {
+async function lavaLookout (force = false) {
   await sense()
-  if (dim() !== 'overworld' || known.portal || lavaSourceKnown || !sit.surface || sit.inWater || died || !state.pos ||
-      !have(/_pickaxe$/) || have(COBBLE) + have('dirt') < 10) return
+  if (dim() !== 'overworld' || known.portal || (lavaSourceKnown && !force) || !sit.surface || sit.inWater || died || !state.pos ||
+      (!have(/_pickaxe$/) && !((process.env.ND_OW_LAVA_LOOK === '1' || process.env.ND_OW_LAVA_LOOK_EARLY === '1') && !have(COBBLE) && have('dirt') >= 10)) ||
+      have(COBBLE) + have('dirt') < 10) return
   // Existing command budgets: 25 s up + 30 s down versus a 90 s surface search; wounds raise the tower's price.
   if (55 * 20 / Math.max(1, state.health ?? 20) > 90) return
   const key = [state.pos.x, state.pos.y, state.pos.z].map(Math.floor).join(':')
   if (lavaLookoutCells.has(key)) return
   lavaLookoutCells.add(key)
   const y0 = y()
+  // Шахта вверх/вниз не ставит факелы (mining/drift.ts); preflight не должен требовать их для вышки.
+  const light = process.env.ND_OW_LAVA_LOOK === '1' || process.env.ND_OW_LAVA_LOOK_EARLY === '1' ? { torchEvery: 0 } : {}
   try {
-    await act('tunnel', { direction: 'up', length: 10, timeoutSeconds: 25 })
+    // ND_OW_LAVA_TOWER=<бл.> (по умолч. 10): в лесу озеро на холме за кронами с 10 не видно (owE1-01: озеро −2642 в 30 бл. на 6 выше,
+    // «лавы под небом не видно» трижды за прогон).
+    const tower = Math.max(4, Math.min(32, Number(process.env.ND_OW_LAVA_TOWER) || 10, have(COBBLE) + have('dirt')))
+    await act('tunnel', { direction: 'up', length: tower, timeoutSeconds: Math.round(tower * 2.5), ...light })
     if (y() - y0 >= 4 && !died) await skyLavaLook()
   } finally {
     const climbed = Math.round(y() - y0)
-    if (climbed > 0 && !died && !strategyInterrupted) await act('tunnel', { direction: 'down', length: climbed, timeoutSeconds: 30 })
+    if (climbed > 0 && !died && !strategyInterrupted) await act('tunnel', { direction: 'down', length: climbed, timeoutSeconds: 30, ...light })
   }
 }
 async function skyLavaLook () {
@@ -164,6 +216,11 @@ async function skyLavaLook () {
   const sv = await act('portal_natural', { mode: 'survey', radius: 128 })
   const best = sv.detail && [sv.detail.best, ...(sv.detail.sites || [])].find(site => site && site.usable !== false && site.at && !lavaBad(site.at))
   if (!best || !best.at || !state.pos) { log('обзор вдаль: лавы под небом в 128 бл. не видно'); return null }
+  // ND_OW_SKY_LAVA_FIRST=1: увиденное озеро под небом держится отдельно (skyLavaSeen) — пещерная лава штреков перезаписывает known.lava.
+  if (process.env.ND_OW_SKY_LAVA_FIRST === '1' && /surface|rp/.test(best.kind || '') && !lavaBad(best.at) &&
+      (!skyLavaSeen || skyLavaSeen.hint || Math.hypot(best.at.x - state.pos.x, best.at.z - state.pos.z) < Math.hypot(skyLavaSeen.x - state.pos.x, skyLavaSeen.z - state.pos.z))) {
+    setSkyLavaSeen({ ...best.at, kind: best.kind, open: best.open })
+  }
   const far = q => Math.hypot(q.x - state.pos.x, q.z - state.pos.z)
   if (!known.lava || (process.env.ND_OW_KIT_LAVA !== '0'
     ? lavaApproachSeconds(best.at, true) < lavaApproachSeconds(known.lava, lavaSourceKnown)
@@ -251,7 +308,12 @@ async function lootSeenStructures (radius = 160) {
   if (!(best.w.net > 0)) return false
   // В воде к сухой постройке не начинать: тактика рвёт заход сразу (ферма 14.10, cs-3: дважды «1 с, прервано» с поверхности моря).
   await sense()
-  if (sit.inWater && !sunk(best.x) && !/^(shipwreck|ocean_ruin)$/.test(best.x.kind)) { log(`постройка ${best.x.name || best.x.kind}: я в воде — сперва на берег`); return false }
+  if (sit.inWater && !sunk(best.x) && !/^(shipwreck|ocean_ruin)$/.test(best.x.kind)) {
+    log(`постройка ${best.x.name || best.x.kind}: я в воде — сперва на берег`)
+    if (process.env.ND_OW_DESERT_SHORE !== '1' || !(await leaveWater()) || died) return false
+    // Re-price from the actual shore next turn; don't mark this structure tried while escaping.
+    return false
+  }
   structLootTried.add(keyOf(best.x))
   // Глубоко под водой (сундуки ниже y 52 — больше 10 бл. воды) — двери на карманы воздуха, пока на суше: 6 досок → 3 двери.
   const deepest = Math.min(...((best.x.fit && best.x.fit.chests) || []).map(c => Number.isFinite(c.y) ? c.y : 99), Number.isFinite(best.x.at.y) ? best.x.at.y : 99)
@@ -356,6 +418,6 @@ async function naturalCast () {
   return false
 }
 
-export { NATURAL, dayLavaActive, dayLavaStep, lavaLookout, skyLavaLook, castSiteFails, castSiteFailAt,
+export { NATURAL, dayLavaActive, dayLavaStep, earlyLavaLookout, lavaLookout, skyLavaLook, castSiteFails, castSiteFailAt,
   lavaAtSeenRuins, structureValue, dayLeft, lootSeenStructures, surfaceLavaSurvey, toShaftColumn, climbOwnShaft,
   naturalCast }

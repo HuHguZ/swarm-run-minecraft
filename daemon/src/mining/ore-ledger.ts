@@ -184,7 +184,20 @@ function forgetOre (session, positions) {
 // tempting to blockAt() every row and mark the stale ones, and that is exactly
 // the x-ray — freshness is only ever established by walking there, which is why
 // every row goes out with the warning attached.
+// ND_OW_EYES_IRON=1: руда, увиденная глазами (perception/eyes: луч из глаз в открытую грань — пещера на спуске, стена оврага), —
+// в память добора. Иначе mine_seen знал только стены своих штреков: жила в стене пещеры, мимо которой прошла лестница, оставалась
+// позади (скамья KI/KN/E1: из mine 32 по видимой руде — 7 сырого железа на 115, остальное — стены штреков).
+function absorbEyes (session) {
+  if (typeof process === 'undefined' || process.env.ND_OW_EYES_IRON !== '1') return
+  const bot = session && session.bot
+  if (!bot || !bot._ndEyes) return
+  let seen = []
+  try { seen = (require('../perception/eyes') as typeof import('../perception/eyes')).nearest(bot, /^(deepslate_)?(iron|coal)_ore$/, { max: 24, maxDist: 48 }) } catch { return }
+  if (seen.length) rememberOre(session, seen.map(r => ({ name: r.name, x: r.x, y: r.y, z: r.z, seen: stamp(), why: 'в прямой видимости' })))
+}
+
 function recallOre (session, { block = null, limit = 12 }: any = {}) {
+  absorbEyes(session)
   const bot = session.bot
   const me = bot && bot.entity ? bot.entity.position : null
   const want = block ? String(block).trim().toLowerCase() : null
@@ -232,6 +245,7 @@ function noSuchMemory (session, asked, name) {
 // the only candidates that exist, so the worst this can do is aim at something
 // the bot has already seen.
 function pickTarget (session, asked, name) {
+  absorbEyes(session)
   const rows = ledgerOf(session)
   if (!rows.length) return null
   if (asked) {

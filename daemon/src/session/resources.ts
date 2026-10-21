@@ -193,11 +193,16 @@ function wakeUp (this: any, ) {
 function portal (this: any, p: any = {}) {
     const mode = String(p.mode || 'build').trim().toLowerCase()
     if (mode === 'where' || mode === 'forget') return this.immediate(() => nether.portalNow(this, p))
+    // Работа у лавы (литьё, вход, рама): ND_OW_LAVA_EDGE не должен уводить тело с кромки — колонна берега и рама стоят у самой лавы.
+    const lavaWork = async (fn) => {
+      const bot = this.bot
+      if (bot) bot._ndLavaWork = true
+      try { this.updateMovements(); return await fn() } finally { if (bot) { bot._ndLavaWork = false; try { this.updateMovements() } catch {} } }
+    }
     if (mode === 'enter') {
       return this.runIntent('portal', ctl => {
         this.require()
-        this.updateMovements()
-        return nether.enter(this, ctl, p)
+        return lavaWork(() => nether.enter(this, ctl, p))
       }, {
         timeoutMs: (Math.min(600, p.timeoutSeconds ?? 90) + 20) * 1000,
         params: p,
@@ -207,11 +212,12 @@ function portal (this: any, p: any = {}) {
     if (mode === 'cast') {
       return this.runIntent('portal', async ctl => {
         this.require()
-        this.updateMovements()
-        const r = await (require('../cast') as typeof import('../cast')).castPortal(this, ctl, p)
-        if (!r.built || ctl.aborted) return r
-        const lit = await nether.portal(this, ctl, { mode: 'build', timeoutSeconds: 60 })
-        return { ...r, lit: !!(lit && lit.lit), light: lit }
+        return lavaWork(async () => {
+          const r = await (require('../cast') as typeof import('../cast')).castPortal(this, ctl, p)
+          if (!r.built || ctl.aborted) return r
+          const lit = await nether.portal(this, ctl, { mode: 'build', timeoutSeconds: 60 })
+          return { ...r, lit: !!(lit && lit.lit), light: lit }
+        })
       }, {
         timeoutMs: (Math.min(600, p.timeoutSeconds ?? 540) + 90) * 1000,
         params: p,
@@ -220,8 +226,7 @@ function portal (this: any, p: any = {}) {
     }
     return this.runIntent('portal', ctl => {
       this.require()
-      this.updateMovements()
-      return nether.portal(this, ctl, p)
+      return lavaWork(() => nether.portal(this, ctl, p))
     }, {
       timeoutMs: (Math.min(600, p.timeoutSeconds ?? 150) + 20) * 1000,
       params: p,

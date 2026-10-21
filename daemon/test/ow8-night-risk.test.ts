@@ -64,3 +64,42 @@ test('closing checks cancellation, actual placement and keeps the native honest 
     assert.match(await W.closeBehind(bot, ctl, new Vec3(3, 40, 0)), /нет опоры/)
   } finally { B.placeBlockAt = original }
 })
+
+test('marginal night step credits ambient exposure, preserves attacks and requires a floor', () => {
+  const saved = process.env.ND_NIGHT_STEP_MARGINAL, holes = new Set<string>(), k = p => p.x + ',' + p.y + ',' + p.z
+  const bot: any = { health: 20, entity: { position: new Vec3(.5, 64, .5), onGround: true },
+    game: { dimension: 'overworld' }, time: { timeOfDay: 18000 }, inventory: { items: () => [] },
+    blockAt: p => ({ name: p.y < 64 && !holes.has(k(p)) ? 'stone' : 'air',
+      boundingBox: p.y < 64 && !holes.has(k(p)) ? 'block' : 'empty', light: 0, skyLight: 15 }) }
+  for (const y of [63, 64, 65]) holes.add('1,' + y + ',0')
+  const here = new Vec3(0, 64, 0), next = new Vec3(1, 63, 0), fight = { order: [] } as any
+  try {
+    assert.equal(W.profile(bot, here).roof, false)
+    assert.equal(W.profile(bot, next, 3).roof, false)
+    process.env.ND_NIGHT_STEP_MARGINAL = '0'
+    assert.match(W.step(bot, next, here, 3.25, fight, 3).stopped, /NIGHT_RISK/)
+    process.env.ND_NIGHT_STEP_MARGINAL = '1'
+    assert.equal(W.step(bot, next, here, 3.25, fight, 3).extra, 0)
+    const armed = { order: [{ dist: 12, ranged: true, hit: 4, dps: 2 }] } as any
+    assert.match(W.step(bot, next, here, 3.25, armed, 3).stopped, /NIGHT_RISK/)
+    holes.add('1,62,0')
+    const capped = { order: [{ dist: 1, hit: 20, dps: 20 }] } as any
+    assert.match(W.step(bot, next, here, 3.25, capped, 3).stopped, /NIGHT_RISK/)
+  } finally {
+    if (saved === undefined) delete process.env.ND_NIGHT_STEP_MARGINAL
+    else process.env.ND_NIGHT_STEP_MARGINAL = saved
+  }
+})
+
+test('ND_NIGHT_CLOSE_LOW_FIRST: the rear passage is closed bottom-up (floor first), off keeps top-first', async () => {
+  const B: typeof import('../src/build') = require('../src/build'), original = B.placeBlockAt
+  try {
+    for (const on of [true, false]) {
+      const { bot, world } = body(), ys: number[] = []
+      B.placeBlockAt = async (b, p) => { ys.push(p.y); world.set(key(p), 'stone'); return { ok: true } }
+      if (on) process.env.ND_NIGHT_CLOSE_LOW_FIRST = '1'; else delete process.env.ND_NIGHT_CLOSE_LOW_FIRST
+      assert.equal(await W.closeBehind(bot, { aborted: false }, new Vec3(0, 40, 0)), null)
+      assert.deepEqual(ys, on ? [40, 41] : [41, 40])
+    }
+  } finally { B.placeBlockAt = original; delete process.env.ND_NIGHT_CLOSE_LOW_FIRST }
+})

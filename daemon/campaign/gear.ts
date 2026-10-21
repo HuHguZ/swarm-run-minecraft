@@ -11,8 +11,12 @@ let earlyShieldFailed = null
 async function earlyShield () {
   if (process.env.ND_OW_SHIELD === '0' || earlyShieldBusy || died || fighting || resting || strategyInterrupted || state.connected === false || state.playPolicy?.mode === 'free' || dim() !== 'overworld' || have('iron_ingot') < 1 || shieldOn()) return false
   const quote = () => require('../src/ow-shield').price({ inventory: state.inventory, shield: shieldOn(), hp: state.health ?? 20,
-    night: !!sit.night, surface: sit.surface !== false, kitIron: 3 * Math.max(0, portalBuckets() - have(/bucket$/)) + (lighter() ? 0 : 1),
-    exposedDps: (sit.fight?.order || []).reduce((n, f) => n + (f.dps || 0), 0) })
+    night: !!sit.night, surface: sit.surface !== false, kitIron: 3 * Math.max(0, portalBuckets() - have(/bucket$/)) + (lighter() ? 0 : 1) +
+      (process.env.ND_OW_KIT_PICK === '1' && !known.portal && !have(PICK_IRON) ? 3 : 0),
+    exposedDps: (sit.fight?.order || []).reduce((n, f) => n + (f.dps || 0), 0),
+    // ND_OW_SHIELD_KIT=1: слиток набора портала на щит — замена железа не 66 с, а заход за жилой (owC2-09: щит из слитка огнива на
+    // 12-й мин ночью, огниво только на 31-й). 600 с — цена отсрочки портала, не запрет щита из лишнего железа.
+    ...((process.env.ND_OW_SHIELD_KIT === '1' || process.env.ND_OW_FAST_KIT === '1') && !known.portal ? { ironS: 600 } : {}) })
   if (!quote().take) return false
   await refresh(); await sense()
   const p = quote(), cause = JSON.stringify([state.pos && [Math.floor(state.pos.x), Math.floor(state.pos.y), Math.floor(state.pos.z)],
@@ -49,6 +53,8 @@ async function spendIron () {
     ['bucket', 3, () => have(/bucket$/) < 1],
     ['flint_and_steel', 1, () => !lighter() && have('flint') > 0],
     ['bucket', 3, () => have(/bucket$/) < portalBuckets()],
+    // ND_OW_KIT_PICK=1: кирка — раньше щита (золотые блоки бастиона — только железной киркой).
+    ...(process.env.ND_OW_KIT_PICK === '1' ? [['iron_pickaxe', 3, () => !have(PICK_IRON)]] : []),
     ['shield', 1, noShield],
     ['iron_pickaxe', 3, () => !have(PICK_IRON)],
     ['iron_chestplate', 8, () => !worn('torso')],

@@ -197,7 +197,15 @@ export function findWaterDrop(bot: MovementBot, goal: Point, { radius = 6, budge
   }
   // Бюджет — на прогнозы (скан колонн и опор выше не в счёт: под нагрузкой фермы он один съедал 30 мс, s6c-desc-ridge4).
   let best: WaterOption | null = null; const t0 = performance.now()
+  // ND_OW_SOFT_MARGIN=1: прыжок, промах которого смертелен (урон посадки мимо ≥ хп − 2), — только в пятно мягкого шире клетки (3 из 4
+  // соседей той же высоты — вода или мягкое): owF1-08 (5730) — прыжок 26 бл. в порошковый снег, посадка рядом, урон 18.5 при хп 18.
+  const margin = typeof process !== 'undefined' && process.env.ND_OW_SOFT_MARGIN === '1'
+  const softAt = (x: number, y: number, z: number) => { const b = bot.blockAt(new Vec3(x, y, z), false); return !!b && (containsWater(b) || SOFT.test(b.name)) }
+  const wide = (w: WaterColumn) => [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) =>
+    [0, 1, -1].some(dy => softAt(w.x + dx, w.top + dy, w.z + dz))).length >= 3
+  const lethalMiss = (w: WaterColumn) => Math.max(0, Math.floor(me.y + 1e-6) - w.top - 3) >= (bot.health ?? 20) - 2
   for (const water of waters) {
+    if (margin && lethalMiss(water) && !wide(water)) continue
     const wc = { x: water.x + .5, y: water.top, z: water.z + .5 }
     const near = stands.filter(s => flat(s, wc) <= 9).sort((a, b) => flat(a, wc) - flat(b, wc) || flat(a, me) - flat(b, me)).slice(0, 4)
     for (const takeoff of near) {
@@ -372,6 +380,12 @@ export async function waterDrop(session: Session, ctl: Cancellation, option: Wat
         }
       } finally { bot.setControlState('jump', false); bot.setControlState('forward', false) }
     }
+    // Snow absorbs fall damage; contact alone does not complete the priced exit.
+    // owC5-17 returned ok while the body remained frozen in the landing cell.
+    if (process.env.ND_OW_SOFT_EXIT === '1' && option.water.kind === 'powder_snow' && r.ok &&
+      String(bot.game?.dimension || '').replace(/^minecraft:/, '') === 'overworld' &&
+      !bodyClear(bot, bot.entity.position, { water: true, web: true }))
+      return { ok: false, why: 'powder_snow_exit_unconfirmed', ticks: r.ticks, fall: plan.drop, surfaced }
     return { ok: r.ok, why: r.why, ticks: r.ticks, fall: plan.drop, surfaced }
   }
   return { ok: false, why: 'no_water_plan_from_takeoff', ticks: 0 }

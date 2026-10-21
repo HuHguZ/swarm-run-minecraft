@@ -237,7 +237,7 @@ function startTunnel (session, ctl, target, opts): TunnelCtx {
   const deadline = opts.deadline ?? gameClock.now() + 15 * 60000
   const segLen = opts.seg ?? 18
   const nb = opts.noBreachNear || null
-  const S: any = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0, noBonus: true, deadline }
+  const S: any = { own: new Set(), exposed: true, dug: 0, moves: 0, fills: 0, ores: 0, bonusBlocks: 0, goldPassed: 0, plans: 0, fails: [], planMs: 0, walks: 0, noBonus: !opts.bonus, deadline } // bonus — добор золотой руды в стенах (ne-gold-first, ND_NE_GOLD_FIRST)
   const body = () => { const f = feetNow(); return [f, f.offset(0, 1, 0)] }
   // Прежние штреки — свои, если клетка и сейчас воздух (проверка по живому миру).
   const V3 = (require('vec3') as typeof import('vec3')).Vec3
@@ -267,7 +267,7 @@ function startTunnel (session, ctl, target, opts): TunnelCtx {
   const out = (ok, why?: any) => {
     // Запомнить штрек для обратного пути.
     rememberOwn(session, S.own)
-    return { ok, why, ...st, viaDone: tc.wi, dug: S.dug, moves: S.moves, fills: S.fills, own: S.own, exposed: SL.exposure(bot, S.own).length > 0, at: (() => { const p = bot.entity.position; return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } })() }
+    return { ok, why, ...st, viaDone: tc.wi, dug: S.dug, moves: S.moves, fills: S.fills, ores: S.ores, own: S.own, exposed: SL.exposure(bot, S.own).length > 0, at: (() => { const p = bot.entity.position; return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } })() }
   }
   return Object.assign(tc, {
     session, ctl, target, opts, bot, SL, feetNow, log, band0, via, legOf, radius, deadline, segLen, nb, S, body, adoptPrev, st,

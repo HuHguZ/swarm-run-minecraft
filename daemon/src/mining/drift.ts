@@ -3,6 +3,7 @@ import * as gameClock from '../game-clock'
 import { xyz, describeStall } from '../movement'
 import { missingHarvestTool, itemNamed, countItems, diffItems, resolveBlockIds, toolBudget, toolShortfall, SWINGS_PER_CELL } from '../items'
 import { placeBlockAt } from '../build'
+import { plugWaterEnabled, plugBudget, plugVisibleLiquids } from './dig-water'
 import { reachOf, sceneryOf } from '../reach'
 import { MAX_LENGTH, MOB_RADIUS, MOB_RADIUS_HURT, LOW_HEALTH, at, flatDist, clamp, resolveDirection, danger, firstSolidAhead, fillerCount, digColumn, walkTo, axisLine, axisSign, sweepDrops, quickBreak } from './dig-core'
 import { hostilesWithin, mobVerdict, freeDirections, nearestScenery, reachWords, throughWallsCounter, sealOff, inDrift } from './seal'
@@ -39,7 +40,7 @@ interface DriftCtx {
   useFair: any; nightWork: any; from: any; mouth: any; onLine: any; before: any; oreIds: any; oreSet: any;
   seen: any; groups: any; why: any; abandoned: any; scenery: any;
   cursor: any; dug: any; walked: any; torches: any; offAxis: any; lastTorch: any; stopped: any; need: any;
-  threat: any; note: any;
+  threat: any; note: any; nightRefusal?: any; plugs: ReturnType<typeof plugBudget>;
   holdAxis: () => Promise<boolean>; watch: () => any; answerAlarm: (alarm: any) => Promise<string>
 }
 
@@ -139,7 +140,7 @@ function startDrift (session, ctl, { direction, length, height, torchEvery, time
   const ctx: DriftCtx = {
     session, ctl, bot, mcData, dir, len, tall, every, deadline, useFair, nightWork, from, mouth, onLine, before,
     oreIds, oreSet, seen, groups, why, abandoned, scenery,
-    cursor, dug, walked, torches, offAxis, lastTorch, stopped, need, threat, note,
+    cursor, dug, walked, torches, offAxis, lastTorch, stopped, need, threat, note, plugs: plugBudget(),
     holdAxis: () => holdDriftAxis(ctx),
     watch: () => watchDrift(ctx),
     answerAlarm: alarm => answerDriftAlarm(ctx, alarm)
@@ -317,10 +318,12 @@ async function driftStep (ctx: DriftCtx, step: number): Promise<'stop' | undefin
   }
 
   const cell = ctx.cursor.offset(dir.dx, 0, dir.dz)
-  const risk = danger(bot, ctx.cursor, cell, tall, dir)
+  const wet = await plugVisibleLiquids(bot, ctl, Array.from({ length: tall }, (_, y) => cell.offset(0, y, 0)), deadline, ctx.plugs)
+  if (wet) { ctx.stopped = wet; return 'stop' }
+  const risk = danger(bot, ctx.cursor, cell, tall, dir, process.env.ND_OW_TUNNEL_BRIDGE === '1')
   if (risk) { ctx.stopped = risk; return 'stop' }
 
-  const cut = await digColumn(bot, mcData, ctl, cell, tall, deadline, watch)
+  const cut = await digColumn(bot, mcData, ctl, cell, tall, deadline, watch, ctx.plugs)
   ctx.dug += cut.dug
   // Before the break, not after it: a column that only opened halfway still
   // opened, and the wall it uncovered is the reason we came down here.
@@ -348,8 +351,13 @@ async function driftStep (ctx: DriftCtx, step: number): Promise<'stop' | undefin
   }
 
   const behind = ctx.cursor
-  const work = nightWork ? (require('../night-work') as typeof import('../night-work')).step(bot, cell, behind, 2, undefined, tall) : null
+  const nightSafety = nightWork ? require('../night-work') as typeof import('../night-work') : null
+  const work = nightSafety ? (process.env.ND_NIGHT_FAIL_KEY === '1'
+    ? await nightSafety.prepareStep(bot, ctl, cell, behind, 2, tall)
+    : { ...nightSafety.step(bot, cell, behind, 2, undefined, tall), torchPlaced: false, nightRefusal: undefined }) : null
+  if (work?.torchPlaced) { ctx.torches++; ctx.lastTorch = cell }
   if (work?.stopped) {
+    ctx.nightRefusal = work.nightRefusal
     const cover = await (require('../night-work') as typeof import('../night-work')).closeBehind(bot, ctl, cell)
     ctx.stopped = `${work.stopped}; ${cover || 'проход закрыт перед собой'}`
     return 'stop'
@@ -385,7 +393,9 @@ async function driftStep (ctx: DriftCtx, step: number): Promise<'stop' | undefin
     if (await placeTorch(bot, behind)) { ctx.torches++; ctx.lastTorch = behind }
   }
 
-  scanOres(bot, oreIds, useFair, seen, groups, 4, why)
+  // ND_OW_ORE_EYES=<бл.> (выкл. = 4): руда в прямой видимости дальше стены — через пещеру, в которую вышел штрек; в журнал штрека и
+  // память руды (mineSeenAll берёт её до 24 бл.). Конец колена смотрит только из своей клетки, середина пещеры оставалась позади.
+  scanOres(bot, oreIds, useFair, seen, groups, Number(process.env.ND_OW_ORE_EYES) || 4, why)
 }
 
 // Итог штрека: последний возврат на ось, обзор руды, память, журнал, ответ.
@@ -400,7 +410,7 @@ async function driftReport (ctx: DriftCtx) {
   const { dug, walked, torches, offAxis, lastTorch, stopped, need, threat } = ctx
   let { note } = ctx
 
-  scanOres(bot, oreIds, useFair, seen, groups, 6, why)
+  scanOres(bot, oreIds, useFair, seen, groups, Math.max(6, Number(process.env.ND_OW_ORE_EYES) || 0), why)
   const here = bot.entity.position
   const round1 = d => Math.round(d * 10) / 10
   // Two distances, because they answer two different questions: fromHere is
@@ -471,6 +481,7 @@ async function driftReport (ctx: DriftCtx) {
     walked,
     remaining: Math.max(0, len - walked),
     torches,
+    ...(plugWaterEnabled() ? { liquidPlugs: ctx.plugs.placed } : {}),
     offAxis,
     leftBehind: abandoned.size,
     lastTorch: lastTorch ? xyz(lastTorch) : undefined,
@@ -483,6 +494,7 @@ async function driftReport (ctx: DriftCtx) {
     threat: threat || undefined,
     behindRock: nearestScenery(bot, scenery),
     need: need || undefined,
+    nightRefusal: ctx.nightRefusal,
     stopped: stopped || undefined,
     note: note || undefined
   }

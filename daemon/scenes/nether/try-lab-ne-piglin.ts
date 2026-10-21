@@ -9,7 +9,7 @@ import * as gameClock from '../../src/game-clock'
 //
 //   ND_WS=… MC_USERNAME=NeuroFarmN ND_SERVER_LOG=… LAB_OUT=… FARM_SLOT=N node try-lab-ne-piglin.js
 //   FOES=piglin:sword,piglin:crossbow (тип:оружие, через запятую; *3 — повтор: piglin:sword*3) TRIALS=6 DIST=7 SECONDS=40
-//   KIT=ls|lsgold
+//   KIT=ls|lsgold|real|realgold
 import * as fs from 'fs'
 import path = require('path')
 import { execFileSync } from 'child_process'
@@ -24,7 +24,9 @@ const DIST = Number(process.env.DIST || 7)
 const SECONDS = Number(process.env.SECONDS || 40)
 const BASE = ['iron_sword', 'shield', 'iron_pickaxe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'bucket',
   'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4']
-const KITS = { ls: BASE, lsgold: [...BASE, 'golden_boots'] }
+// real — набор настоящего входа полного прохода (snaps/int*-nether): каменные меч/кирка/топор, без щита и брони, булыжник, мало еды.
+const REAL = ['stone_sword', 'stone_pickaxe 2', 'stone_axe', 'flint_and_steel', 'water_bucket', 'cooked_mutton 4', 'cobblestone 96', 'crafting_table', 'stick 6']
+const KITS = { ls: BASE, lsgold: [...BASE, 'golden_boots'], real: REAL, realgold: [...REAL, 'golden_boots'] }
 const KIT_NAME = process.env.KIT || 'ls'
 const KIT = KITS[KIT_NAME]
 if (!KIT) { console.error(`KIT=${KIT_NAME}: жду ${Object.keys(KITS).join(', ')}`); process.exit(1) }

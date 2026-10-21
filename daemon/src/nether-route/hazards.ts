@@ -128,6 +128,17 @@ export function spawnerHot (session, goal, fireproof) {
 // Места брутов из копии мира + (ND_GUARD=1) живые бруты/хоглины рядом: открытое в 12 бл. от живого +40 за шаг (ревью Codex
 // ne-deaths.md №1: штраф +10 A* брал, если обход дороже; 12 смертей от брутов на открытом ходе).
 export function liveDangers (session) {
+  if (process.env.ND_BRUTE_MEMORY === '1') {
+    const memory: typeof import('../brute-memory') = require('../brute-memory')
+    const bot = session.bot
+    memory.install(bot)
+    const out = memory.routeZones(bot)
+    // In the blind mode neither copy-world brutes nor hidden live mobs are facts.
+    try { for (const e of (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 64, rememberMs: 0, hearMs: 0 })) {
+      if (e.seen && /^(hoglin|zoglin)$/.test(e.name || '') && e.pos) out.push([e.pos.x, e.pos.y, e.pos.z, 40])
+    } } catch {}
+    return out
+  }
   // Дом брута из копии — +30 за открытый шаг в 12 бл. (было 10: s1d-F22b-3 — подход к гуще золота −7739… прошёл мимо брута, смерть на 2.4 мин).
   const out = bruteSpots(session).map(b => [b[0], b[1], b[2], 30])
   if (process.env.ND_GUARD === '0') return out

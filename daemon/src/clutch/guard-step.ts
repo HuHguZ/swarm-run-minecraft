@@ -6,6 +6,32 @@ import { type ClutchGuard, eyeHeight, controls, climbing, emit, releaseSteering,
 import { context, waterStep } from './guard-forecast'
 import { fire, ladderState, fireLadder } from './guard-fire'
 
+// ND_BLZ_LAVA_FR=1 (blz 21.10): падаем, а под ногами лава без опоры — огнестойкость сейчас: глоток 32 тика, падение 30+ бл. ~30 тиков;
+// в лавовом море Ада с FR — выплыть или столбом наверх, без неё — 4 урона за полсекунды и горение (bzC1-s17-2/-4, bzC2-s18-2, bzC5-s18-2:
+// срыв с края y64–70 в лаву y30). Один раз за полёт.
+function lavaFallFr (g: ClutchGuard, e) {
+  const { bot, st } = g
+  if (process.env.ND_BLZ_LAVA_FR !== '1' || e.onGround || st.lavaFr || !(e.velocity.y < -0.4)) return
+  const y = Math.floor(e.position.y)
+  // Все четыре угла рамки (±0.3): край блока под одним углом — посадка на него, а не в лаву (nC24-s18-1: «лава внизу» над краем,
+  // посадка на блок y77 без урона — единственное FR набора выпито зря у портала).
+  const corners = process.env.ND_BLZ_FR_BUDGET === '1' ? [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]] : [[0, 0]]
+  for (const [ox, oz] of corners) {
+    const x = Math.floor(e.position.x + ox), z = Math.floor(e.position.z + oz)
+    for (let d = 1; d <= 64; d++) {
+      const b = bot.blockAt(new (require('vec3').Vec3)(x, y - d, z))
+      if (!b) return
+      if (/^lava$/.test(b.name)) break
+      if (b.boundingBox === 'block' || /water/.test(b.name)) return
+      if (d === 64) return
+    }
+  }
+  const P: typeof import('../blaze/potions') = require('../blaze/potions')
+  if (P.hasEffect(bot, 'fire_resistance') || !P.drinkable(bot)) return
+  st.lavaFr = true
+  P.drinkFireResistance(bot).then(r => console.log('[clutch] лава внизу — огнестойкость', JSON.stringify({ r, y: Math.round(bot.entity.position.y) }))).catch(() => {})
+}
+
 // На земле: итог прошлого полёта (спасён / ранен) и высота отсчёта падения; в воздухе — пик.
 function trackFlight (g: ClutchGuard, e) {
   const { bot, st, stats, world, pending, now } = g
@@ -21,7 +47,7 @@ function trackFlight (g: ClutchGuard, e) {
         st.flight = null; st.blocks = 0; st.steering = null; st.ladderPlaced = false
       }
     } else { st.blocks = 0; st.ladderPlaced = false }
-    st.peak = e.position.y; prepare(g)
+    st.peak = e.position.y; st.lavaFr = false; prepare(g)
   } else st.peak = Math.max(st.peak ?? bot._ndFallGuard?.peak ?? e.position.y, e.position.y)
 }
 
@@ -79,6 +105,7 @@ function step (g: ClutchGuard) {
   if (e.onGround && !st.waterPlan) { releaseSteering(g); st.waterAttempted = false }
   const s = new PlayerState(bot, controls(g))
   trackFlight(g, e)
+  lavaFallFr(g, e)
   // Лестница, лоза, леса, паутина сбрасывают падение (LivingEntity.onClimbable →
   // resetFallDistance, makeStuckInBlock) — считать его заново от этой высоты.
   if (!e.onGround && climbing(g, e.position)) st.peak = e.position.y

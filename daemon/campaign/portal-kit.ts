@@ -2,9 +2,9 @@
 // Набор на портал: литьё для набора, вода рядом, кремень.
 import { OW_HEAR } from './flags'
 import { strategyInterrupted, state, sit, died, known, stairEntrance, waterSearchFailedView, waterSearchView,
-  surfaceShaft, knownWater, setKnownWater, setWaterSearchView } from './state'
+  surfaceShaft, knownWater, lavaSourceKnown, setKnownWater, setWaterSearchView } from './state'
 import { log } from './log'
-import { have, y, dim, portalFar, portalBuckets } from './queries'
+import { have, y, dim, portalFar, portalBuckets, lighter } from './queries'
 import { refresh } from './observe'
 import { act } from './act'
 import { craft, smeltAll } from './kit'
@@ -12,10 +12,27 @@ import { structureValue } from './scout'
 import { graphFact, intelligence } from './strategy-bridge'
 import * as gameClock from '../src/game-clock'
 let castKitSupplyFailure = ''
+let castSourceRecoveryFailure = ''
 // A carried second bucket costs no extra iron; it can rescue a shore the one-bucket geometry cannot use.
 async function castForKit (params) {
   const one = portalBuckets() === 1
-  const r = await act('portal', { ...params, ...(one ? { one: true, hint: undefined } : {}) })
+  const args = { ...params, ...(one ? { one: true, hint: undefined } : {}) }
+  let r = await act('portal', args)
+  // Nearby remembered lava can be a flow or hidden from this view; distance alone cannot admit another cast.
+  if (process.env.ND_CAST_SOURCE_RECOVER === '1' && known.lava && r.status !== 'interrupted' && !died && !strategyInterrupted &&
+      /^не вижу лавы-источника/.test(String(r.detail?.stopped || ''))) {
+    const viewKey = () => JSON.stringify([state.dimension, state.pos && ['x', 'y', 'z'].map(axis => Math.floor(state.pos[axis])), known.lava, sit.work])
+    if (castSourceRecoveryFailure === viewKey()) return { ...r, detail: { ...r.detail, retryBlocked: true } }
+    log('литьё: лава в памяти, источника отсюда нет — новая точка обзора, бюджет 30 с')
+    const view = await act('explore', { block: 'lava', lavaSource: true, newView: true, radius: 24,
+      stepDistance: 8, surface: !!sit.surface, timeoutSeconds: 30 })
+    if (view.status === 'interrupted' || died || strategyInterrupted) return view
+    if (view.detail?.found === 'lava') {
+      castSourceRecoveryFailure = ''
+      r = await act('portal', args)
+    }
+    if (r.status !== 'interrupted' && !died && !strategyInterrupted && /^не вижу лавы-источника/.test(String(r.detail?.stopped || ''))) castSourceRecoveryFailure = viewKey()
+  }
   if (process.env.ND_OW_KIT_FRAME !== '0' && one && r.status !== 'interrupted' && !died && !strategyInterrupted &&
       /места на берегу нет|лавы со столба не достать|лавы в досягаемости нет/.test(String(r.detail?.stopped || ''))) {
     const supplyKey = () => JSON.stringify([state.pos, have('iron_ingot'), have('raw_iron'), have(/bucket$/), r.detail?.site, r.detail?.stopped])
@@ -65,7 +82,9 @@ async function kitWaterHere () {
       if (Math.hypot(flat, q.y - y()) > 4 && interrupted(await act('goto', { ...q, range: 3, surface: false, descent: false, timeoutSeconds: 45 }))) return null
       if (interrupted(await act('portal', { mode: 'cast', waterHint: q, timeoutSeconds: 120 }))) return null
       if (have('water_bucket')) return true
-      setKnownWater(null)
+      // Забыть воду — только если дошёл до неё: подход по тайм-ауту (owG3-10: goto 45 с встал на полпути) не делает увиденное озеро
+      // ложным, а без него ночной подъём к озеру и литьё (NIGHT_SKY_CAST) не начинались — 8 мин поиска воды под землёй.
+      if (!state.pos || Math.hypot(q.x - state.pos.x, (q.y ?? y()) - state.pos.y, q.z - state.pos.z) <= 8) setKnownWater(null)
     }
   }
   if (!OW_HEAR || sit.surface || died || strategyInterrupted) return false
@@ -104,6 +123,37 @@ async function waterSearchDirection () {
   setWaterSearchView(JSON.stringify([['x', 'y', 'z'].map(k => Math.floor(state.pos[k])), hits]))
   if (waterSearchView === waterSearchFailedView) return undefined
   return direction
+}
+
+// O: one cheap visible dry gravel block before the deep shaft. The existing
+// ensureFlint can recycle that carried block later; no ore, map or hidden-cell input.
+const earlyFlintSeen = new Set<string>()
+async function earlyFlint () {
+  // ND_OW_GRAVEL_EARLY=1: гравий на виду поверху до спуска за железом — 6 блоков (≈ 47 % кремня сразу, остальное — помол), без условия
+  // «лава известна»: после набора поиск гравия поверху шёл до 11 мин (owG3-07: ведро 19, огниво 30; owG3-01: ведро на 10-й, огнива нет до 40-й).
+  if (process.env.ND_OW_GRAVEL_EARLY === '1' && dim() === 'overworld' && !known.portal && state.playPolicy?.mode === 'speedrun' &&
+      sit.surface && !sit.night && !sit.foes && (state.health ?? 20) >= 12 && state.pos && !lighter() && !have('flint') && have('gravel') < 6) {
+    const key = JSON.stringify(['g', Math.floor(state.pos.x / 16), Math.floor(state.pos.z / 16)])
+    if (earlyFlintSeen.has(key)) return true
+    earlyFlintSeen.add(key)
+    log('ранний гравий: видимый сухой гравий рядом до спуска — до 6 блоков, бюджет 25 с')
+    const r = await act('mine', { block: 'gravel', count: 6 - have('gravel'), radius: 24, dry: true, fair: true, timeoutSeconds: 25 })
+    await refresh()
+    return r.status !== 'interrupted' && !died && !strategyInterrupted
+  }
+  if (process.env.ND_OW_FAST_FLINT !== '1' || dim() !== 'overworld' || known.portal ||
+      state.playPolicy?.mode !== 'speedrun' || !sit.surface || sit.night || sit.dusk || sit.foes ||
+      (state.health ?? 20) < 12 || !lavaSourceKnown || !known.lava || !state.pos ||
+      (known.lava.y ?? -64) < 50 || Math.hypot(known.lava.x - state.pos.x, known.lava.z - state.pos.z) > 96 ||
+      have('flint') || have('gravel') || have('flint_and_steel') || have('fire_charge')) return true
+  if (died || strategyInterrupted) return false
+  const key = JSON.stringify([known.lava, Math.floor(state.pos.x / 16), Math.floor(state.pos.z / 16)])
+  if (earlyFlintSeen.has(key)) return true
+  earlyFlintSeen.add(key)
+  log('ранний гравий: один видимый сухой блок рядом, бюджет 12 с; отказ — сразу к железу')
+  const r = await act('mine', { block: 'gravel', count: 1, radius: 12, dry: true, fair: true, timeoutSeconds: 12 })
+  await refresh()
+  return r.status !== 'interrupted' && !died && !strategyInterrupted
 }
 
 const flintSearchSeen = new Set<string>()
@@ -146,4 +196,4 @@ async function ensureFlint () {
   return have('flint_and_steel') > 0
 }
 
-export { castForKit, kitWaterHere, waterSearchDirection, ensureFlint }
+export { castForKit, kitWaterHere, waterSearchDirection, ensureFlint, earlyFlint }

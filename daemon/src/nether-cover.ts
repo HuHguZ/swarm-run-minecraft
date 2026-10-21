@@ -13,6 +13,7 @@ import * as gameClock from './game-clock'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import D = require('./endportal-descent')
 import { sleep, xyz } from './movement'
+import * as lavaNav from './lava-nav'
 
 const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map(([x, y, z]) => new Vec3(x, y, z))
 const SPIRAL = D.SPIRAL
@@ -65,18 +66,70 @@ async function seal (bot, cells, except, out) {
   return left
 }
 
+// Stop at the first newly visible melee threat, before observation or another swing.
+const mouthThreat = bot => {
+  if(process.env.ND_COVER_MOUTH_GUARD!=='1'&&process.env.ND_BRUTE_MEMORY!=='1')return null
+  try{
+    const foe=(require('./perception/eyes') as typeof import('./perception/eyes')).entities(bot,{radius:24})
+      .find(e=>e.seen&&e.dist!=null&&e.dist<=24&&/^(piglin_brute|hoglin|zoglin)$/.test(e.name))||null
+    // This ray contact can vanish as soon as the opening is plugged, before the next sampler tick.
+    if(foe&&process.env.ND_BRUTE_MEMORY==='1')(require('./brute-memory') as typeof import('./brute-memory')).observe(bot,true)
+    return foe
+  }catch{return null}
+}
+function stairGuard (session,ctl,out) {
+  if(process.env.ND_COVER_MOUTH_GUARD!=='1'&&process.env.ND_BRUTE_MEMORY!=='1')return{}
+  return{threat:()=>!!mouthThreat(session.bot),guard:async(F,d)=>closeThreat(session,ctl,F,F.offset(d[0],0,d[1]),out)}
+}
+async function closeThreat (session,ctl,F,N,out) {
+  const bot=session.bot,foe=mouthThreat(bot)
+  if(!foe)return null
+  const result={danger:true,mouth:true,why:`${foe.name}: stopped at a newly visible opening`}
+  out.danger=result.why
+  out.unsealed=Math.max(1,out.unsealed||0)
+  if(out.mouthSet)out.mouthSet.add(key(N))
+  // An interrupted body belongs to its new intent. Do not place or fake a retreat under that intent.
+  if(ctl.aborted)return result
+  try{bot.setControlState('forward',false);bot.setControlState('back',false)}catch{}
+  // If a movement was interrupted, return only to this step's actual previous cell on observed support.
+  if(!feetCell(bot).equals(F)) {
+    const floor=D.seen(bot,F.offset(0,-1,0))
+    out.retreat='no observed level return'
+    const now=feetCell(bot)
+    if(now.y===F.y&&Math.abs(now.x-F.x)+Math.abs(now.z-F.z)===1&&floor&&floor.boundingBox==='block'&&!BAD_FLOOR.test(floor.name)&&
+        bodyOf(F).every(p=>airish(D.seen(bot,p))))out.retreat=await D.walkInto(bot,ctl,F,0,true)?'confirmed':'attempt failed'
+  }
+  for(const p of [N,N.offset(0,1,0),N.offset(0,-1,0)]) {
+    if(ctl.aborted)break
+    const b=D.seen(bot,p)
+    if(b&&airish(b)&&await D.placeAt(bot,p,ctl))out.placed++
+  }
+  // This is a collision barrier, not a claim that cached LOS or a hit already in flight was cancelled.
+  return result
+}
+
 // Шаг штрека из клетки ног в сторону d. { ok } | { mouth, why } | { why }.
 async function closedStep (session, ctl, d, opts, out) {
   const bot = session.bot
   const F = feetCell(bot)
   const N = F.offset(d[0], 0, d[1])
   const cells = [N.offset(0, 1, 0), N]
+  const breach = async () => {
+    if (!lavaNav.on(session)) return null
+    if (lavaNav.hazard(session)) lavaNav.rewind(session)
+    if (!await lavaNav.sealOpened(session, ctl, cells)) return null
+    out.danger = 'lava-nav: visible lava opened; forward step cancelled'
+    lavaNav.rewind(session)
+    return { danger: true, why: out.danger }
+  }
   const refill = async () => { for (const c of [N, N.offset(0, 1, 0)]) if (await D.placeAt(bot, c)) out.placed++ }
   // Устье, вскрытое и заложенное в этом же ходе, второй раз не вскрывать (d5-6-2: одно устье ×3 — пиглины заметили). Память — на
   // вызов закрытого хода: общая на сессию запирала тело навсегда (d9: «устье (уже видел)» ×2576, 90 мин у портала).
   const mouths = opts.mouths || new Set()
   if (mouths.has(key(N)) && !opts.corridor) return { mouth: true, why: 'устье (уже видел)' }
   for (const c of cells) {
+    const danger=await closeThreat(session,ctl,F,N,out)
+    if(danger)return danger
     const b = D.seen(bot, c)
     if (!b) return { why: 'забой не виден' }
     if (LIQUID.test(b.name)) { if (await D.placeAt(bot, c)) out.placed++; return { why: `${b.name} в забое — заткнул` } }
@@ -85,7 +138,13 @@ async function closedStep (session, ctl, d, opts, out) {
     const r = await D.digCell(bot, session.mcData, c)
     if (!r.ok) return { why: r.why }
     out.dug++
+    const fluid = await breach(); if (fluid) return fluid
+    const exposed=await closeThreat(session,ctl,F,N,out)
+    if(exposed)return exposed
   }
+  const fluid = await breach(); if (fluid) return fluid
+  const danger=await closeThreat(session,ctl,F,N,out)
+  if(danger)return danger
   if (ctl.aborted) return { why: 'прервано' }
   const a = around(bot, cells, bodyOf(F))
   const front = cells.map(c => c.offset(d[0], 0, d[1]))
@@ -110,7 +169,12 @@ async function closedStep (session, ctl, d, opts, out) {
       const sides = a.open.filter(q => q.y <= N.y + 1 && q.y >= N.y && !front.some(f => f.equals(q)))
       let ok = true
       for (const q of sides) { if (await D.placeAt(bot, q)) out.placed++; else { ok = false; break } }
-      if (ok && await D.walkInto(bot, ctl, N, 0)) {
+      const moveCtl=(lavaNav.on(session)||process.env.ND_COVER_MOUTH_GUARD==='1'||process.env.ND_BRUTE_MEMORY==='1')?{get aborted(){return ctl.aborted||lavaNav.hazard(session)||!!mouthThreat(bot)}}:ctl
+      const moved=ok&&await D.walkInto(bot,moveCtl,N,0)
+      const fluid = await breach(); if (fluid) return fluid
+      const danger=await closeThreat(session,ctl,F,N,out)
+      if(danger)return danger
+      if (moved) {
         out.moved++
         out.corridor = (out.corridor || 0) + 1
         const roof = N.offset(0, 2, 0)
@@ -135,7 +199,12 @@ async function closedStep (session, ctl, d, opts, out) {
     out.placed++
   }
   // Не шагнул (угол, низкий потолок) — забой заложить: открытый проём у тела следующий старт считал «открытым» (d8-7-1).
-  if (!(await D.walkInto(bot, ctl, N, 0))) { if (!ctl.aborted) await refill(); return { why: 'в забой не шагнул' } }
+  const moveCtl=(lavaNav.on(session)||process.env.ND_COVER_MOUTH_GUARD==='1'||process.env.ND_BRUTE_MEMORY==='1')?{get aborted(){return ctl.aborted||lavaNav.hazard(session)||!!mouthThreat(bot)}}:ctl
+  const moved=await D.walkInto(bot,moveCtl,N,0)
+  const movedFluid = await breach(); if (movedFluid) return movedFluid
+  const afterMove=await closeThreat(session,ctl,F,N,out)
+  if(afterMove)return afterMove
+  if (!moved) { if (!ctl.aborted) await refill(); return { why: 'в забой не шагнул' } }
   out.moved++
   out.unsealed += await seal(bot, cells, bodyOf(F), out)
   // Золото в стенах: самородки падают в штрек (подбор — рамка тела +1 бл.); вскрытое за рудой — закрыть.
@@ -166,15 +235,16 @@ async function descend (session, ctl, n, d, out, minY) {
     // уносило вниз (d7-7-1).
     const F = feetCell(bot)
     const only = d => { const b = D.seen(bot, F.offset(d[0], -1, d[1])); return !!b && b.boundingBox === 'block' && !(out.mouthSet && out.mouthSet.has(key(F.offset(d[0], 0, d[1])))) }
-    const r = await D.stairStep(session, ctl, k, { careful: true, noDrop: true, early: true, only })
+    const r = await D.stairStep(session, ctl, k, { careful: true, noDrop: true, early: true, only, ...stairGuard(session,ctl,out) })
     out.dug += r.dug || 0
     out.placed += r.placed || 0
+    if(r.danger){out.danger=r.why;out.downWhy=r.why;break}
     if (!r.moved) { out.downWhy = r.why; break }
     k = r.k
     went++
   }
   out.down += went
-  if (went) out.unsealed += await seal(bot, bodyOf(feetCell(bot)), [], out)
+  if (went&&!out.danger) out.unsealed += await seal(bot, bodyOf(feetCell(bot)), [], out)
   return went
 }
 
@@ -218,22 +288,30 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
   // Старт: на открытом — в толщу пола; иначе закрыть то, что видно вокруг тела.
   const a0 = around(bot, bodyOf(feetCell(bot)))
   if (a0.open.length > 3 && !(await descend(session, ctl, 3, toward()[0] || [1, 0], out, minY))) {
+    if(out.danger)return done(false,out.danger)
     // Вниз нельзя (обрыв за ступенью, лава, низко) — в стену рядом: шаг туда, где забой — видимая порода (не воздух).
     const { main, side } = axesNow()
     const F = feetCell(bot)
     const rock = d => [F.offset(d[0], 0, d[1]), F.offset(d[0], 1, d[1])].every(c => { const b = D.seen(bot, c); return !!b && b.boundingBox === 'block' })
     let entered = false
     for (const d of [main, side, [-side[0], -side[1]], [-main[0], -main[1]]].filter(rock)) {
-      if ((await closedStep(session, ctl, d, { onOpen, goldOk, mouths: mouthSet }, out)).ok) { entered = true; break }
+      const r:any=await closedStep(session,ctl,d,{onOpen,goldOk,mouths:mouthSet},out)
+      if(r.danger)return done(false,r.why)
+      if(r.ok){entered=true;break}
     }
     // Ни вниз, ни в стену (площадка портала в пещере, d11-5-1) — коридором по полу к цели.
-    if (!entered && (await closedStep(session, ctl, main, { onOpen, goldOk, mouths: mouthSet, corridor: true, stop }, out)).ok) { entered = true; corridorDir = main }
+    if(!entered) {
+      const r:any=await closedStep(session,ctl,main,{onOpen,goldOk,mouths:mouthSet,corridor:true,stop},out)
+      if(r.danger)return done(false,r.why)
+      if(r.ok){entered=true;corridorDir=main}
+    }
     if (!entered) {
       // На открытом без хода в толщу — закрыться на месте (коробка из видимых проёмов), не идти поверху (d7-6-1: уступ, падение).
       out.unsealed += await seal(bot, bodyOf(feetCell(bot)), [], out)
       return done(false, `на открытом: ни вниз (${out.downWhy || 'ступени нет'}), ни в стену — закрылся на месте`)
     }
-  } else out.unsealed += await seal(bot, bodyOf(feetCell(bot)), [], out)
+  } else if(!out.danger)out.unsealed += await seal(bot, bodyOf(feetCell(bot)), [], out)
+  if(out.danger)return done(false,out.danger)
   let downs = 0
   for (let s = 0; s < maxSteps; s++) {
     // Тело в своём закрытом ходе: тактика не бежит из него (бег из хода 1×2 — к устьям, в пещеру: d12-5-2 Flee → лава), а бьётся
@@ -251,8 +329,9 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
         const protectsTarget = d => [F.offset(d[0], 0, d[1]), F.offset(d[0], 1, d[1]), F.offset(d[0], -1, d[1])].some(p => p.equals(target))
         let moved = false
         if (target.y < F.y) {
-          const r = await D.stairStep(session, ctl, k, { careful: true, noDrop: true, early: true, bricks: STOP, throughBricks: false, only: d => !protectsTarget(d) })
+          const r = await D.stairStep(session, ctl, k, { careful: true, noDrop: true, early: true, bricks: STOP, throughBricks: false, only: d => !protectsTarget(d), ...stairGuard(session,ctl,out) })
           out.dug += r.dug || 0; out.placed += r.placed || 0; moved = !!r.moved
+          if(r.danger)return done(false,r.why)
           if (moved) out.down++
           else out.downWhy = r.why
         } else {
@@ -272,6 +351,7 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
     if (corridorDir) {
       const rc: any = await closedStep(session, ctl, corridorDir, { onOpen, goldOk, mouths: mouthSet, corridor: true, stop }, out)
       if (out.view && stop && stop(out.view)) return done(false, 'постройка видна из коридора')
+      if(rc.danger)return done(false,rc.why)
       if (rc.ok) { last = corridorDir; if (!rc.corridor) corridorDir = null; continue }
       corridorDir = null
     }
@@ -281,6 +361,7 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
     let mainFailed = false
     for (const d of order()) {
       const r: any = await closedStep(session, ctl, d, { onOpen, goldOk, mouths: mouthSet }, out)
+      if(r.danger)return done(false,r.why)
       if (r.ok) {
         visited.add(key(feetCell(bot)))
         if (same(d, main)) { detour = null; skipMain = 0 } else { detour = d; skipMain = mainFailed ? 3 : Math.max(0, skipMain - 1) }
@@ -298,11 +379,13 @@ async function closedBore (session, ctl, target, { deadline = gameClock.now() + 
     {
       const m = axesNow().main
       const rc: any = await closedStep(session, ctl, m, { onOpen, goldOk, mouths: mouthSet, corridor: true, stop }, out)
+      if(rc.danger)return done(false,rc.why)
       if (rc.ok) { last = m; if (rc.corridor) corridorDir = m; continue }
       if (out.view && stop && stop(out.view)) return done(false, 'постройка видна из устья')
     }
     // Обе оси — устья или стена: под пол пещеры (по 2 ступени, до 3 раз за вызов).
-    if (downs < 3 && (await descend(session, ctl, 2, toward()[0] || [1, 0], out, minY))) { downs++; continue }
+    if (downs < 3 && (await descend(session, ctl, 2, toward()[0] || [1, 0], out, minY))) { if(out.danger)return done(false,out.danger);downs++;continue }
+    if(out.danger)return done(false,out.danger)
     return done(false, why || 'штрек не пошёл')
   }
   return done(false, `за ${maxSteps} шагов не дошёл`)

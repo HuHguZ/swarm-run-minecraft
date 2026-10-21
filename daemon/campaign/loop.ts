@@ -14,7 +14,7 @@ import { barterFlow, deferBastionMining, bastionBlocked, nextBastion, netherRetr
   overworldFailureState } from './nether-plan'
 import { act } from './act'
 import { recoverGuard } from './guards'
-import { netherArrival } from './nether-trip'
+import { netherArrival, changeNetherCause } from './nether-trip'
 import { loopChores } from './loop/chores'
 import { loopNight } from './loop/night'
 import { loopSelect } from './loop/select'
@@ -41,6 +41,7 @@ async function runCampaign () {
     }
     const cooling = s => {
       const f = fails.get(failureKey(s.name))
+      if (f?.owPause) return dim() === 'overworld' && f.observed === overworldFailureState(f.origin)
       if (f?.ow) return dim() === 'overworld' && f.observed === overworldFailureState(f.origin)
       if (f?.observed !== undefined) return dim() === 'the_nether' && f.observed === (f.kind ? netherFailureState(f.kind, f.origin) : netherRetryState(f.origin))
       if (process.env.ND_NE_RECOVER === '1' && netherFailureName(s.name) === 'bastion') { const b = nextBastion(); if (b && bastionBlocked(b)) return true }
@@ -56,6 +57,13 @@ async function runCampaign () {
       if (name === 'nether' && dim() === 'the_nether') {
         fails.set(key, { observed: netherRetryState(), origin: state.pos && { ...state.pos }, until: Infinity })
         log('поиск крепости не продвинулся — повтор после нового обзора, пути, снабжения или смены угрозы')
+        return
+      }
+      if (process.env.ND_OW_PAUSE_CAUSE === '1' && dim() === 'overworld') {
+        // Snapshot after the refusal: movement within the failed attempt does not reopen it.
+        const origin = state.pos && { ...state.pos }
+        fails.set(key, { owPause: true, observed: overworldFailureState(origin), origin, until: Infinity })
+        log(`этап ${name}: пустой заход — пауза до смены причины; дальше другой шаг по цене или новый обзор`)
         return
       }
       if (process.env.ND_OW_CAUSE_RETRY === '1' && dim() === 'overworld') {
@@ -93,7 +101,7 @@ async function runCampaign () {
     let lastDim = dim()
     let arrivalPending = dim() === 'the_nether'
     let wasNight = !!sit.night
-    for (let turn = 1; turn <= 5000; turn++) {
+    for (let turn = 1; turn <= 5000 || (process.env.ND_NE_NO_GIVEUP === '1' && dim() === 'the_nether' && !died); turn++) {
       await refresh()
       await sense()
       if (state.playPolicy?.mode === 'free') { log('режим free — кампания уступает управление игроку'); break }
@@ -115,10 +123,15 @@ async function runCampaign () {
       }
       if (gameClock.now() - loop.lastProgressAt >= WATCHDOG_MIN * 60000) {
         setStage('-')
+        if (process.env.ND_NE_NO_GIVEUP === '1' && dim() === 'the_nether' && !died) {
+          if (!await changeNetherCause(why => { resetPauses(why); loop.lastProgressAt = gameClock.now() })) break
+          // New observations may reopen a strategy even without a physical receipt: run the normal selector below.
+        } else {
         log(`БЛОКЕР: сторож — ${Math.round((gameClock.now() - loop.lastProgressAt) / 60000)} мин без прогресса ни в одном этапе (последний этап ${loop.lastStage}); останавливаю кампанию`)
         await act('stop')
         process.exitCode = 2
         break
+        }
       }
       const turnStart = gameClock.now()
       await loopChores(loop)

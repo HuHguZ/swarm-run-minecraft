@@ -25,12 +25,62 @@ function bearingWords (dx, dz) {
   return names[Math.round(a / 45) % 8]
 }
 
+// Eight eye rays, first hit only. Unknown cells end the observed horizon.
+// This is visibility, never proof of a floor or a walkable corridor.
+// Чистая дальность луча от глаз по направлению dir (до reach): первый блок с формой, лава/вода/огонь — стоп.
+function rayClear (bot, eye, dir, reach = 64) {
+  const { RaycastIterator } = (require('prismarine-world') as typeof import('prismarine-world')).iterators
+  const cube: [number, number, number, number, number, number][] = [[0, 0, 0, 1, 1, 1]]
+  const ray = new RaycastIterator(eye, dir, reach)
+  let p = eye.floored(), clear = reach
+  try {
+    while (p) {
+      const entry = ray.intersect(cube, p)
+      const at = Math.max(0, Math.min(reach, entry ? entry.pos.minus(eye).dot(dir) : 0))
+      const b = bot.blockAt(p)
+      if (!b) { clear = at; break }
+      const hit = ray.intersect(b.shapes || (b.boundingBox === 'block' ? cube : []), p)
+      if (hit || /^(lava|water|fire|soul_fire)$/.test(b.name)) {
+        clear = hit ? Math.max(0, Math.min(reach, hit.pos.minus(eye).dot(dir))) : at
+        break
+      }
+      const next = ray.next()
+      p = next ? new Vec3(next.x, next.y, next.z) : null
+    }
+  } catch { clear = 0 }
+  return clear
+}
+function openDirections (bot) {
+  const eye = (require('../pick') as typeof import('../pick')).eyeOf(bot)
+  return Array.from({ length: 8 }, (_, k) => {
+    const a = k * Math.PI / 4
+    return { k, clear: rayClear(bot, eye, new Vec3(Math.cos(a), 0, Math.sin(a)), 64) }
+  })
+}
+
 // Один взгляд вокруг: для каждого вида — свой findBlocks и свой бюджет лучей.
+// ND_BASTION_TOUCH (поток ne 21.10): свою копку тело знает как игрок — сломанный кирпич бастиона. Изнутри штрека видно 4–10 граней,
+// порога 24 видимых нет никогда (nbt24a: 7–12 кирпичей в рюкзаке, «bastion 0», 3 захода поиска, 572 с). Руины портала — ~10
+// кирпичей и сквозь них не копают; 6 своих в 24 бл. — бастион.
+function touchInstall (bot) {
+  if (bot._ndBastionTouch) return bot._ndBastionTouch
+  const dug = bot._ndBastionTouch = []
+  // diggingCompleted отдаёт уже воздух — смотрим смену блока в досягаемости тела (5 бл.): кирпич → воздух = своя копка.
+  bot.on('blockUpdate', (o, n) => {
+    if (!o || !n || n.type !== 0 || !BASTION_BLOCKS.includes(o.name) || !o.position || !bot.entity || o.position.distanceTo(bot.entity.position) > 5) return
+    dug.push(o.position.clone()); if (dug.length > 64) dug.shift()
+  })
+  return dug
+}
 function look (bot, mcData, { radius = 64, perKind = 400, rayBudget = 500 }: any = {}) {
+  const touched = process.env.ND_BASTION_TOUCH === '1' ? touchInstall(bot) : null
   const me = bot.entity.position
   const ids = FORTRESS_BLOCKS.map(n => mcData.blocksByName[n]).filter(Boolean).map(b => b.id)
   let candidates = []
   for (const id of ids) candidates.push(...bot.findBlocks({ matching: [id], maxDistance: radius, count: perKind }))
+  // ND_BLZ_NO_THRONE: кирпич крепости без трона (регион брошен после обходов) — не «вижу крепость» снова.
+  const skip = bot._ndSkipFortRegions
+  if (skip?.length) candidates = candidates.filter(p => !skip.some(r => r[0] === Math.floor(p.x / 432) && r[1] === Math.floor(p.z / 432)))
   candidates.sort((a, b) => a.distanceTo(me) - b.distanceTo(me))
   const found = candidates.length
   // Лучи — поровну ближним и дальним: крепость видно с края, а ближние
@@ -81,6 +131,22 @@ function look (bot, mcData, { radius = 64, perKind = 400, rayBudget = 500 }: any
     else out.bastion = { seen: bSeen.length, nearest: xyz(bSeen[0]), dist: Math.round(bSeen[0].distanceTo(me)), bearing: bearingWords(bSeen[0].x - me.x, bSeen[0].z - me.z) }
   }
   if (housing && out.bastion) { out.bastion.type = 'units'; out.bastion.hypotheses = housing.hypotheses.length }
+  // ND_BASTION_BRUTE_SIGN: брут рождается только в бастионе и держится своего HOME (PiglinBruteAi) — видимый брут = бастион здесь.
+  if (process.env.ND_BASTION_BRUTE_SIGN === '1' && !out.bastion && !out.ruins) {
+    const brute = (Object.values(bot.entities) as any[]).filter((e: any) => e && e.name === 'piglin_brute' && e.position && e.isValid !== false &&
+      e.position.distanceTo(me) <= radius && canSeePoint(bot, e.position.offset(0, 1.2, 0))).sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
+    if (brute) {
+      const n = brute.position.floored()
+      out.bastion = { seen: 1, brute: true, nearest: xyz(n), dist: Math.round(n.distanceTo(me)), bearing: bearingWords(n.x - me.x, n.z - me.z) }
+    }
+  }
+  if (touched && !out.bastion && !out.ruins) {
+    const mine = touched.filter(p => p.distanceTo(me) <= 24)
+    if (mine.length >= 6) {
+      const n = mine[mine.length - 1]
+      out.bastion = { seen: mine.length, touched: true, nearest: xyz(n), dist: Math.round(n.distanceTo(me)), bearing: bearingWords(n.x - me.x, n.z - me.z) }
+    }
+  }
   if (seen.length) {
     const near = seen[0]
     out.nearest = xyz(near)
@@ -132,12 +198,16 @@ async function rememberBastion (session, b, ctl) {
   if (bastionSpentNear(session, b.nearest)) return
   const key = BASTION_KEYS_ALL.find(k => !places[k])
   if (!key) return
-  const starts = await recognizeFar(session, ctl)
+  const note = 'похоже на бастион (блэкстоун-кирпич): пиглины и золото — бартер жемчуга (mc_pearls mode=barter), золотая броня обязательна; крепости в этом регионе нет'
+  // Сперва запись места, потом узнавание шаблона: узнавание с ctl рвалось тактикой (TACTICAL) и бросало — увиденный бастион не
+  // попадал в память вовсе (Codex q6: nbs13-25 21.10 — «подтвердил 40 блоков, находка не сохранилась», 20 мин поиска впустую).
   session.journal.patch(s => {
     if (!s.places) s.places = {}
-    s.places[key] = { ...b.nearest, dimension: 'the_nether', ...(starts ? { starts } : {}), note: 'похоже на бастион (блэкстоун-кирпич): пиглины и золото — бартер жемчуга (mc_pearls mode=barter), золотая броня обязательна; крепости в этом регионе нет' }
+    s.places[key] = { ...b.nearest, dimension: 'the_nether', note }
   })
   session.journal.append(key, `похоже на бастион: ${b.seen} видимых блоков блэкстоун-кирпича, ближайший ${b.nearest.x},${b.nearest.y},${b.nearest.z}`, new Vec3(b.nearest.x, b.nearest.y, b.nearest.z))
+  const starts = await recognizeFar(session, ctl)
+  if (starts) session.journal.patch(s => { if (s.places?.[key]) s.places[key] = { ...s.places[key], starts } })
 }
 
 function rememberSpawner (session, sp) {
@@ -163,10 +233,12 @@ function rememberSpawner (session, sp) {
 // Взгляд сверху (как игрок с вышки): столб до +20 (под потолком Ада не выше 118), взгляд, вниз — разбирая свой столб.
 // Мост крепости (y 48–70) и вал бастиона над лавовым морем с высоты видны через полкарты, с земли — нет: на новых мирах
 // 02.10 разведка 5 мин «кирпича не видно» в 4 мирах из 6 (крепость в 250–415 бл.). Только где над головой открыто ≥ 8.
-async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
+async function highLook (session, ctl, glance, { up = 20, walkBlocks = null }: any = {}): Promise<{ skipped?: string; price?: any; up?: number; placed?: number; seen?: number; bastion?: boolean; v?: any; shot?: boolean }> {
   const bot = session.bot
   const { towerUp }: typeof import('../build') = require('../build')
   const base = bot.entity.position.floored()
+  const priced = process.env.ND_BLZ_PRICED_LOOK === '1' && Number.isFinite(walkBlocks)
+  if (priced) up = Math.min(up, 12)
   // На столбе тело не уходит и не прячется: стрелки рядом (пиглины без нашего золота — арбалеты, скелеты, ифриты, гаст) — не
   // строить (b5-5-1 14.10: столб 12 бл. у пиглинов, хп 20 → 0 за 2 с, «slain by Piglin»).
   const goldWorn = [5, 6, 7, 8].some(s => /^golden_/.test(bot.inventory.slots[s]?.name || ''))
@@ -180,15 +252,34 @@ async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
   // Гаста слышно (его звук громкий — Ghast.getSoundVolume 5, сервер шлёт в 16·5 = 80 бл.; senses.heard — сторона и полоса, как
   // субтитры) — столб под ним не строить (b5-7-3 14.10: вышка y 84 → 91 сразу у портала, шары, смерть за 30 с).
   const ghastHeard = (require('../perception/senses') as typeof import('../perception/senses')).heard(bot, { sinceMs: 15000, match: /ghast/ }).length > 0
-  if (ghastHeard && process.env.ND_TOWER_SHOOTERS !== '0') return { skipped: 'гаста слышно — вышку не строю' }
+  if (!priced && ghastHeard && process.env.ND_TOWER_SHOOTERS !== '0') return { skipped: 'гаста слышно — вышку не строю' }
   let free = 0
   for (let y = 2; y <= up + 2; y++) { const b = bot.blockAt(base.offset(0, y, 0)); if (!b || b.boundingBox !== 'empty' || /lava/.test(b.name)) break; free++ }
   const n = Math.min(up, free - 1, 118 - base.y)
   if (n < 8) return { skipped: `над головой открыто ${free}` }
+  let price = null
+  const hp0 = bot.health ?? 20
+  if (priced) {
+    const filler = (require('../build') as typeof import('../build')).pickFiller(bot)
+    if (!filler || filler.count < n) return { skipped: 'нет блоков на пробную вышку' }
+    const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
+    const state = bot.registry.blocksByName[filler.name]?.defaultState
+    const remove = state == null ? Infinity : (require('../tools') as typeof import('../tools')).bestFor(bot, Block.fromStateId(state, 0)).ms / 1000
+    // Prior: towerUp ~0.7 s/block + descent dig time and 0.25 s wait. Not a measured survival probability.
+    const seconds = n * (0.7 + remove + 0.25) + 1
+    const configuredSpeed = Number(process.env.ND_BLZ_LOOK_WALK_SPEED ?? 2.3)
+    const walkSpeed = Number.isFinite(configuredSpeed) && configuredSpeed > 0 ? configuredSpeed : 2.3
+    // A heard ghast buys the cost of one aborted attempt; no invented hit probability or shield discount.
+    const abortBudget = ghastHeard ? seconds : 0
+    price = { blocks: n, seconds, abortBudget, walkSeconds: Math.max(0, walkBlocks) / walkSpeed, walkSpeed,
+      heard: ghastHeard, hp: hp0, shieldPresent: bot.inventory.slots[45]?.name === 'shield', swatAttached: !!bot._ndSwat }
+    log('вышка: цена', price)
+    if (!Number.isFinite(seconds) || seconds + abortBudget >= price.walkSeconds) return { skipped: 'вышка дороже следующего хода', price }
+  }
   // Стрелки показались, пока столб рос (c19-5-1: вышка 20 бл., арбалеты пиглинов сбили с верха, падение 19 бл.) — стоп и вниз,
   // как в bastion/tower-scan.ts.
   const t: any = await towerUp(bot, ctl, n, {
-    sneak: true, abortIf: () => process.env.ND_TOWER_SHOOTERS !== '0' && (shootersNow().length || (require('../perception/senses') as typeof import('../perception/senses')).heard(bot, { sinceMs: 15000, match: /ghast/ }).length) ? 'стрелки рядом' : null
+    sneak: true, abortIf: () => process.env.ND_TOWER_SHOOTERS !== '0' && (shootersNow().length || (!priced && (require('../perception/senses') as typeof import('../perception/senses')).heard(bot, { sinceMs: 15000, match: /ghast/ }).length) || (priced && (bot.health ?? 20) < hp0)) ? 'стрелки рядом' : null
   }).catch(e => ({ ok: false, reason: e.message }))
   const top = bot.entity.position.floored()
   const shot = !!t && (t.why || []).includes('стрелки рядом')
@@ -201,7 +292,7 @@ async function highLook (session, ctl, glance, { up = 20 }: any = {}) {
     try { await bot.dig(below, true) } catch { break }
     await sleep(250)
   }
-  return { up: top.y - base.y, placed: t && t.placed, seen: v.seen, bastion: !!(v as any).bastion, v: shot ? undefined : v, shot: shot || undefined }
+  return { up: top.y - base.y, placed: t && t.placed, seen: v.seen, bastion: !!(v as any).bastion, v: shot ? undefined : v, shot: shot || undefined, ...(price ? { price } : {}) }
 }
 
 function placeOf (session, key) {
@@ -210,6 +301,6 @@ function placeOf (session, key) {
 }
 
 export {
-  PLACE, SPAWNER_PLACE, FORTRESS_BLOCKS, BASTION_BLOCKS, BASTION_PLACE, DIRS, WORDS, log, clamp, look, remember,
-  BASTION_KEYS_ALL, bastionNear, bastionSpentNear, rememberBastion, rememberSpawner, highLook, placeOf
+  rayClear, PLACE, SPAWNER_PLACE, FORTRESS_BLOCKS, BASTION_BLOCKS, BASTION_PLACE, DIRS, WORDS, log, clamp, look, remember,
+  BASTION_KEYS_ALL, bastionNear, bastionSpentNear, rememberBastion, rememberSpawner, highLook, placeOf, openDirections
 }

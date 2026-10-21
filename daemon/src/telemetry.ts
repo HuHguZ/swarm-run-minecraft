@@ -71,7 +71,7 @@ function snapshot (state: any = {}, sit: any = {}) {
     hp: state.health != null ? Math.round(state.health) : null,
     food: state.food ?? null,
     armor,
-    res: resources(state.inventory),
+    res: { ...resources(state.inventory), ...(Number.isFinite(sit.pickLeft) ? { swings: sit.pickLeft } : {}) },
     tod: sit.tod ?? null,
     night: sit.night ?? null,
     surface: sit.surface ?? null,

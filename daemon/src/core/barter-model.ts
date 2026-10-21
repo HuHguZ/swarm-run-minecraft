@@ -150,6 +150,8 @@ export interface BarterState {
   timing: BarterTiming
   /** Enderman hunting rate (game s per pearl); undefined when not allowed yet. */
   endermenSecondsPerPearl?: number
+  /** Compare hunting now with trading carried gold first; opt-in campaign experiment. */
+  directHunt?: boolean
   /** Secondary goods with marginal value in game seconds (trade or mine for them only when it pays). */
   wants?: Partial<Record<Exclude<Good, 'ender_pearl'>, { have: number; want: number; valueSeconds: number }>>
   /** Cost of ending without enough pearls (run lost). */
@@ -231,11 +233,12 @@ export function barterPlan(s: BarterState): BarterDecision {
     options.push({ action: 'move', eSeconds: there.seconds + t.switchSeconds, pReach: there.p, batch: there.batch, site: index })
   })
   if (s.endermenSecondsPerPearl !== undefined) {
-    const hunt = siteOutcome(deficit, s.gold, { gold: 0, travelSeconds: 0 }, s, endermen)
+    const hunt = s.directHunt ? { seconds: deficit * s.endermenSecondsPerPearl, p: 1 }
+      : siteOutcome(deficit, s.gold, { gold: 0, travelSeconds: 0 }, s, endermen)
     options.push({ action: 'endermen', eSeconds: hunt.seconds, pReach: hunt.p, batch: 0 })
   }
   options.sort((a, b) => a.eSeconds - b.eSeconds)
-  if (s.gold > 0) {
+  if (s.gold > 0 && !(s.directHunt && options[0]?.action === 'endermen')) {
     const best = options[0]!
     return { action: 'trade', batch: s.gold, eSeconds: best.eSeconds, pReach: best.pReach, deficit, options,
       why: `pearls short by ${deficit}: carried gold is already paid for; then ${options.find(o => o.action !== 'trade')?.action ?? 'nothing'}` }

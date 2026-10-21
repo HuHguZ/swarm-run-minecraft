@@ -112,14 +112,33 @@ async function waitHeld (bot, name, ms = 1500) {
 // ------------------------------------------------------------------ ведро
 
 // Набрать ведро воды или лавы из видимого источника.
-async function fillBucket (session, ctl, { fluid = 'water', radius = 24, walk: approach = true }: any = {}) {
+async function fillBucket (session, ctl, { fluid = 'water', radius = 24, walk: approach = true, nightKitWater = null }: any = {}) {
   const bot = session.bot
   const full = `${fluid}_bucket`
   if (countOf(bot, full) > 0) return { already: true, have: full }
   if (countOf(bot, 'bucket') === 0) {
     return { filled: false, need: { what: 'bucket', count: 1, have: 0 }, stopped: 'нет пустого ведра (3 железа на верстаке)' }
   }
-  const sources = visibleSources(bot, fluid, radius)
+  if (ctl.aborted) return { filled: false, stopped: 'прервано' }
+  let sources = visibleSources(bot, fluid, radius)
+  if (!sources.length && process.env.ND_NIGHT_KIT_ROUTE === '1' && fluid === 'water' && !approach &&
+      nightKitWater && ['x', 'y', 'z'].every(k => Number.isFinite(nightKitWater[k]))) {
+    const q = new Vec3(nightKitWater.x, nightKitWater.y, nightKitWater.z)
+    // The target is remembered, not scanned. Only the first actually visible wall may be dug.
+    if (q.offset(.5, .85, .5).distanceTo(eye(bot)) <= REACH - .3) {
+      const opened = await breachWall(bot, ctl, q)
+      if (ctl.aborted) return { filled: false, stopped: 'прервано' }
+      if (opened === true) { await sleep(400, ctl); sources = visibleSources(bot, fluid, radius) }
+      else if (opened) return { filled: false, stopped: String(opened) }
+    }
+  }
+  if (ctl.aborted) return { filled: false, stopped: 'прервано' }
+  // ND_OW_ICE_WATER=1: снежные биомы — вода подо льдом (−9170: в 64 бл. от снимков набора 6–15 тыс. льда поверху, открытой воды 0). Лёд,
+  // разбитый без шёлкового касания над блоком или жидкостью, становится источником воды (IceBlock.playerDestroy, 1.21.11) — как спидраннер.
+  if (!sources.length && fluid === 'water' && process.env.ND_OW_ICE_WATER === '1' && await iceWater(bot, ctl, radius, approach)) {
+    sources = visibleSources(bot, fluid, radius)
+  }
+  if (ctl.aborted) return { filled: false, stopped: 'прервано' }
   if (!sources.length) {
     return { filled: false, stopped: `не вижу источника ${fluid === 'water' ? 'воды' : 'лавы'} в ${radius} блоках (текущая не годится: ведро берёт только источник)${sourceCensus(bot, fluid, radius)}` }
   }
@@ -163,6 +182,37 @@ async function fillBucket (session, ctl, { fluid = 'water', radius = 24, walk: a
     why.push(`${tag}: черпак мимо (${firstOnRay(bot, p.offset(0.5, 0.85, 0.5))})`)
   }
   return { filled: false, stopped: `ведро не набралось ни из одного из ${Math.min(6, sources.length)} источников (не дотянулся или луч упёрся в блок): ${why.join('; ').slice(0, 300)}` }
+}
+
+// Видимый лёд над твёрдым блоком или жидкостью (не под ногами) — разбить: на его месте источник воды. true — вода появилась.
+async function iceWater (bot, ctl, radius, approach) {
+  const id = bot.registry.blocksByName.ice?.id
+  if (id === undefined) return false
+  const me = bot.entity.position, feet = me.floored()
+  const ice = (require('./sight') as typeof import('./sight')).visibleOf(bot, [id], Math.min(radius, 32), { max: 24, rays: 1500 })
+    .filter(b => b && seen(bot, b.position) && !(b.position.x === feet.x && b.position.z === feet.z))
+    .filter(b => { const below = bot.blockAt(b.position.offset(0, -1, 0)); return !!below && (below.boundingBox === 'block' || /water/.test(below.name)) })
+    .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))
+  for (const b of ice.slice(0, 3)) {
+    if (ctl.aborted) return false
+    const p = b.position
+    if (p.offset(0.5, 0.5, 0.5).distanceTo(eye(bot)) > REACH - 0.3) {
+      if (!approach || !(await walk(bot, ctl, new goals.GoalNear(p.x, p.y + 1, p.z, 2)))) continue
+    }
+    const here = bot.blockAt(p)
+    if (!here || here.name !== 'ice') continue
+    let aim = null
+    for (const f of [new Vec3(0, 1, 0), ...SIDES.map(([x, z]) => new Vec3(x, 0, z))]) { aim = pick.faceAim(bot, p, f, { range: REACH }); if (aim) break }
+    if (!aim) continue
+    try {
+      await tools.equipFastest(bot, here)
+      await bot.lookAt(aim, true)
+      await withTimeout(bot.dig(here, 'ignore'), 6000, 'лёд не колется')
+    } catch { try { bot.stopDigging() } catch {}; continue }
+    await sleep(300, ctl)
+    if (/water/.test(bot.blockAt(p)?.name || '')) { console.log('[bucket] лёд разбит — вода на', p.x, p.y, p.z); return true }
+  }
+  return false
 }
 
 // Сломать стенку между глазами и источником воды: true — сломана, строка — почему нельзя, null — стенки нет.

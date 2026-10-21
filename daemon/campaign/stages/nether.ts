@@ -5,18 +5,18 @@ import { strategyInterrupted, state, sit, memorySnapshot, died, known, bastionDr
   bastionIngotsTraded, barterZero, bastionSearchRuns, bastionSearchSeconds, blazeDugInAt, netherSearchFailure,
   setBarterRetryPending, setBarterZero, setBastionDry, setBastionGoldDug, setBastionIngotsTraded,
   setBastionSearchRuns, setBastionSearchSeconds, setBlazeDugInAt, setBlazeDugInPos, setHuntWool, setIronChestTried,
-  setLastBastionGoldLeft, setNetherSearchFailure, setSupplyBlockedAt, setSupplyBlockedState } from '../state'
+  setLastBastionGoldLeft, lastBastionGoldLeft, setNetherSearchFailure, setSupplyBlockedAt, setSupplyBlockedState } from '../state'
 import { log } from '../log'
 import { have, dim, LOGS, FOOD, foodUnits, netherFoodHave, planksFor, portalFar, rodsNow, goldOn, shieldOn, shieldLow,
   spawnAtPortal, lighter, fireResNow, fireResReady, pearlsNow } from '../queries'
 import { sense, refresh, readMemory, bState } from '../observe'
-import { READY, netherFoodNeed, fightReady, fightLack, defStage, entrySupplies, foodShort, near3, stageRun } from './table'
+import { READY, netherFoodNeed, fightReady, fightLack, defStage, entrySupplies, foodShort, near3, stageRun, owFastTrack } from './table'
 import { EXIT_KIT, obsShort, eyesWant, barterFlow, deferBastionMining, nextBastion, activeBastion, barterExhausted,
   BASTION_SEARCH_S, bastionSearchWanted, BASTION_FIRST, bastionPearlsPending, rodsShort, rodsWanted, netherRetryState,
-  netherFailureState, netherSupply, netherSupplyState } from '../nether-plan'
+  netherFailureState, bastionPriceChoice, netherSupply, netherSupplyState } from '../nether-plan'
 import { act } from '../act'
 import { nightGuard, recoverGuard, baseDeposit } from '../guards'
-import { netherVia, goToward } from '../travel'
+import { netherVia, goToward, returnFromNether } from '../travel'
 import { ensureTable, craft, sticks, sticksReserve, spares, netherFillers, lumber, mineSeenAll, smeltAll } from '../kit'
 import { makeBed, cook } from '../food'
 import { ensureFlint } from '../portal-kit'
@@ -27,6 +27,7 @@ defStage('prep', () => !!known.portal && dim() === 'overworld' && rodsNow() < 7 
   (!lighter() || foodShort() > 0 || (!shieldOn() && have('iron_ingot') > 0)), async () => {
   prepRuns++
   await sense()
+  if (owFastTrack() && lighter()) { log('OW_FAST: портал готов; сборы >=90с + охота против входа ~30с — вхожу, запас пополню в укрытии Ада'); return }
   if (entrySupplies() && READY.nether() && lighter()) { log('сборы: еды на вход хватает — без охоты за шерстью и дальнего сбора щита'); return }
   if (OW_DEEP && known.portal && near3(known.portal, 48) && lighter() && netherFoodHave() >= netherFoodNeed()) {
     log(`сборы: портал в ${Math.round(portalFar())} бл., огниво есть, еды ${foodUnits()} — в Ад без сборов`)
@@ -84,6 +85,10 @@ defStage('prep', () => !!known.portal && dim() === 'overworld' && rodsNow() < 7 
 })
 const SCOUT_HIGH = process.env.ND_SCOUT_HIGH === '1'
 let rodsFirstSkips = 0 // не больше 3 отказов бастиона ради стержней: путь к спавнеру тоже может не открыться
+// Бастион сам отдал торг на открытое («торг — на открытом (seek)»: закрытый проход кончился, путей к остальному золоту нет) — следующий
+// оборот торгует принесённым, даже если слитков < 90 и шаблон обещает ещё золото: иначе livelock bastion ↔ pearls без копки и торга
+// (sG85-int3-s20: 32 слитка, ~40 вызовов «торг — на открытом» за минуту, потом explore — брут).
+let bastionWantsSeek = false
 defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWanted()) && bastionDry < 3 && !known.endPortal &&
   (BASTION_FIRST || rodsNow() >= 7) && (pearlsNow() < eyesWant() || obsShort()), async (searchOnly = false) => {
   if (dim() !== 'the_nether') {
@@ -139,11 +144,40 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     // Нести слитки к ДАЛЁКОМУ бастиону в режиме бартера — потерять его золото (S1d s1d-AB-1 слот 22: 9 слитков, бастион 2 в 170 бл.,
     // barter 540 с «подход к защищённому бартеру не завершён» → «два бартера без слитка» → бастион отложен, к ифритам с 0 жемчуга).
     // Далёкий бастион — обычным заходом: копка и торг всего, включая принесённое.
-    const carriedTrade = barterFlow.enabled() && pearlsNow() < eyesWant() && have('gold_ingot') + 9 * have('gold_block') >= 8 &&
+    // ND_BASTION_HYP_FOCUS: золото верной гипотезы ещё в стенах — добрать до ~90 слитков, торг потом (поток ne 21.10, nbf47/48).
+    const carriedGold = have('gold_ingot') + 9 * have('gold_block')
+    const carriedTrade = barterFlow.enabled() && pearlsNow() < eyesWant() && carriedGold >= 8 &&
+      (process.env.ND_BASTION_HYP_FOCUS === '0' || carriedGold >= 90 || !lastBastionGoldLeft || bastionIngotsTraded > 0 || bastionWantsSeek) &&
       (!state.pos || Math.hypot(b.x - state.pos.x, b.z - state.pos.z) <= 64)
+    const price = bastionPriceChoice(b)
+    if (price) log(price.line)
+    if (price?.action === 'endermen') { await stageRun('pearls')(); return }
+    // ND_BARTER_SEEK (по умолчанию вкл., =0 — выкл.): золото на руках — сперва к видимым пиглинам на открытом без брутов рядом (pearls mode=seek), как спидраннер
+    // в золотой броне; защищённое место бастиона (яма/окно) — только если так не вышло ни слитка (nbs32-5974: 27 слитков, «ни ямы, ни окна»).
+    if (carriedTrade && process.env.ND_BARTER_SEEK !== '0') {
+      bastionWantsSeek = false
+      const sk = await act('pearls', { mode: 'seek', pearls: Math.max(0, eyesWant() - have('ender_eye')), timeoutSeconds: 360, avoid: { x: b.x, z: b.z, r: 20 } })
+      await refresh()
+      const sd = sk.detail || {}
+      setBastionIngotsTraded(bastionIngotsTraded + (Number(sd.spent) || 0))
+      log(`${b.key}: торг на открытом — слитков ${sd.spent ?? 0}, жемчуг +${sd.pearls ?? 0} (${pearlsNow()}/${eyesWant()}); ${sd.stopped || sk.error || sk.status}`)
+      if (died || dim() !== 'the_nether') return
+      if (pearlsNow() >= eyesWant() || have('gold_ingot') + 9 * have('gold_block') < 8) break
+      if ((Number(sd.spent) || 0) > 0) { setBarterZero(0); continue }
+      // Прервала тактика (гаст, куб магмы) — после неё снова к торговцам, а не в долгий защищённый бартер бастиона.
+      if (sk.status === 'interrupted' || sk.code === 'TACTICAL') continue
+      // ND_SEEK_AGAIN=1 (поток ne 21.10, выкл.): торговцев не нашёл — снова seek с нового места (оборот цикла), а не бартер bastion: при
+      // FOCUS он сразу «торг — на открытом» → пауза этапа и ne_recover/wait до конца с золотом в рюкзаке (nlo78c: 105 слитков).
+      if (process.env.ND_SEEK_AGAIN === '1' && /пиглинов не нашёл/.test(String(sd.stopped || ''))) continue
+    }
     if (!carriedTrade && !netherSupply.netherToolsReady(netherSupplyState())) {
       const supply = await replenishNetherSupply()
-      if (!supply.ready) { setSupplyBlockedAt(gameClock.now()); setSupplyBlockedState({ observed: netherFailureState('netherTools'), origin: state.pos && { ...state.pos } }); log(`копку и путь к бастиону откладываю до пополнения инструментов: ${supply.reason}`); return }
+      // ND_BASTION_TOOLS_PRICE=1: 260 взмахов — запас на весь поход, а не допуск в бастион. Железная кирка есть и взмахов хватает
+      // на первый пакет (штрек ~20 копок + блоки золота) — идти, пополнение — потом (nbs07d 21.10: бастион в 27 бл., 136/96/87
+      // взмахов, «откладываю до пополнения» ×4 — дерева Ада не видно, 30 мин без захода).
+      const bastionPick = process.env.ND_BASTION_TOOLS_PRICE === '1' && have(/^(iron|diamond|netherite)_pickaxe$/) > 0 && (sit.pickLeft ?? 0) >= 40
+      if (!supply.ready && bastionPick) log(`РИСК: инструменты не пополнены (${supply.reason}), взмахов ${sit.pickLeft} — на первый пакет золота хватит, иду`)
+      else if (!supply.ready) { setSupplyBlockedAt(gameClock.now()); setSupplyBlockedState({ observed: netherFailureState('netherTools'), origin: state.pos && { ...state.pos } }); log(`копку и путь к бастиону откладываю до пополнения инструментов: ${supply.reason}`); return }
     }
     const bs = bState(b)
     bs.runs++
@@ -168,15 +202,18 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     if (!(b.gold && b.gold.length) && goldOn() && state.pos && Math.hypot(b.x - state.pos.x, b.z - state.pos.z) > 28 && (bs.blindApproach || 0) < 3 && dim() === 'the_nether') {
       bs.blindApproach = (bs.blindApproach || 0) + 1
       log(`${b.key}: золото не известно, до него ${Math.round(Math.hypot(b.x - state.pos.x, b.z - state.pos.z))} бл. — сперва подхожу (${bs.blindApproach}/3)`)
-      await goToward({ x: b.x, y: b.y ?? 64, z: b.z }, 20)
+      // ND_NE_SEALED_APPROACH=1 (поток ne 21.10, выкл.): и в золотых ботинках — штреком: точка бастиона — первый увиденный блок, обычно верх
+      // вала, где посты брутов; пешком на 57 бл. к валу в ботинках — брут с вала (c87-int2-s20: 12.9 + 7.1 на 5-й мин).
+      await goToward({ x: b.x, y: b.y ?? 64, z: b.z }, 20, 1, process.env.ND_NE_SEALED_APPROACH === '1' ? 16 : null)
       await refresh()
       if (died || dim() !== 'the_nether') return
     }
     const far = state.pos ? Math.hypot(b.x - state.pos.x, b.z - state.pos.z) : 0
     const beforeApproach = state.pos ? { ...state.pos } : null
     const r = await act('bastion', { x: b.x, y: b.y, z: b.z, vantage: b.vantage, knownGold: b.gold, knownChests: b.chests, starts: b.starts,
-      ...(carriedTrade ? { mode: 'barter' } : {}), timeoutSeconds: carriedTrade ? 540 : process.env.ND_GOLD_FAST_SAFE === '1' ? 720 : 1200 + Math.min(600, Math.round(far)), tripSeconds: far > 200 ? Math.min(480, Math.round(far / 1.3)) : 0, pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: 3, ...(process.env.ND_SH_NETHER === '1' ? { obsidian: 10 } : {}), ...(EXIT_KIT ? { exit: false } : {}), sealed: !bs.openNext, ...(process.env.ND_SEALED_BREACH === '1' ? { breach: true } : {}), ...(process.env.ND_GOLD_FAST_SAFE === '1' ? { fastSafe: true } : {}) })
+      ...(carriedTrade ? { mode: 'barter' } : {}), timeoutSeconds: carriedTrade ? 540 : process.env.ND_GOLD_FAST_SAFE === '1' ? 720 : 1200 + Math.min(600, Math.round(far)), tripSeconds: far > 200 ? Math.min(480, Math.round(far / 1.3)) : 0, pearls: Math.max(0, eyesWant() - have('ender_eye')), fireRes: process.env.ND_BASTION_PRICE === '1' ? 0 : 3, ...(process.env.ND_SH_NETHER === '1' ? { obsidian: 10 } : {}), ...(EXIT_KIT ? { exit: false } : {}), sealed: !bs.openNext, ...(process.env.ND_SEALED_BREACH === '1' ? { breach: true } : {}), ...(process.env.ND_GOLD_FAST_SAFE === '1' ? { fastSafe: true } : {}) })
     const d = r.detail || {}
+    if (/торг — на открытом \(seek\)/.test(String(d.stopped || ''))) bastionWantsSeek = true
     setLastBastionGoldLeft(Math.max(0, Number(d.knownGoldLeft ?? d.predLeft) || 0))
     setBastionGoldDug(bastionGoldDug + (Number(d.goldBlocksDug) || 0))
     setBastionIngotsTraded(bastionIngotsTraded + (Number(d.ingotsTraded) || 0))
@@ -266,7 +303,7 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     await refresh()
   }
 })
-defStage('nether', () => !!known.portal && rodsWanted(), async () => {
+defStage('nether', () => !!known.portal && rodsWanted() && !blazeFrPaused(), async () => {
   if (bastionPearlsPending()) {
     log(`к крепости пока не иду: жемчуга ${pearlsNow()}/${eyesWant()}, сперва бартер имеющегося золота и известные бастионы`)
     return
@@ -304,6 +341,19 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
   for (let i = 0; i < 3 && rodsWanted() && known.fortress; i++) {
     await recoverGuard()
     if (died || dim() !== 'the_nether') return
+    // ND_BLZ_FR_RESERVE (blz 21.10): последнее FR ушло на бой у трона, зелья нет — обратно к трону без FR не идти: открытый бой без FR
+    // — смерть (0 доставленных стержней из ~33 сцен; di-s19-3: 5 стержней, к спавнеру без FR — сгорел). Пауза до зелья (бартер/сток).
+    // Остаток FR < 60 с без зелий — тоже: новый подход к трону кончится без FR посреди ифритов (gB11-s19-1: бой прерван на 8 убийствах,
+    // нора, «к спавнеру» с остатком FR — сгорел у трона).
+    // Ждать у трона под шарами нечего (mS11-s19-1, hC12-s18-1: «жду зелья» в 5–7 бл. от ифритов — сгорел): домой с тем, что есть;
+    // этап снова — когда появится зелье (blazeFrPaused снимается).
+    if (process.env.ND_BLZ_FR_RESERVE === '1' && fireResNow() === 0) log(`FR перед подходом: зелий 0, эффект ${state.fireResistance ? 'да' : 'нет'}, ${state.fireResistanceSec ?? '?'} с, бой с FR был ${blazeFrSpentAt ? 'да' : 'нет'}`)
+    if (process.env.ND_BLZ_FR_RESERVE === '1' && process.env.ND_BLZ_DODGE !== '1' && (blazeFrSpentAt || fireResNow() === 0 && (state.fireResistance || have('glass_bottle') > 0)) && fireResNow() === 0 && (!state.fireResistance || (state.fireResistanceSec ?? 999) < 60)) {
+      if (!blazeFrSpentAt) blazeFrSpentAt = gameClock.now()
+      log(`к трону без огнестойкости не иду: зелий нет${state.fireResistance ? `, FR на ${state.fireResistanceSec} с` : ''} — домой со стержнями: ${have('blaze_rod')}`)
+      await returnFromNether()
+      return
+    }
     if (!have(/^(stone|iron|diamond|netherite)_pickaxe$/)) await spares(200)
     if (!fightReady()) {
       log(`бой у спавнера: не хватает ${fightLack()} — сохраняю добытые стержни`)
@@ -311,8 +361,25 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     }
     if (!(await fedForBlazes())) { log('сытость не восстановилась — путь к спавнеру не начинаю'); return }
     if (!netherSupply.netherToolsReady(netherSupplyState())) {
-      const supply = await replenishNetherSupply()
-      if (!supply.ready) { log(`путь к спавнеру отложен: ${supply.reason}`); return }
+      // Запас 260 взмахов — цена, а не ворота (ND_BLZ_TOOLS_PRICE=1; bz04-s19-1 21.10: у крепости 74 взмаха, «нет безопасного дерева
+      // на крафт» ×N — к спавнеру в 30 бл. не пошёл). Хватает на ход к крепости и домой с запасом — пополнение (до 240 с) не жду.
+      const sw = netherSupplyState().pickSwings || 0
+      const P = known.netherPortal
+      const fortFar = known.fortress && known.fortress.x != null && state.pos ? Math.hypot(known.fortress.x - state.pos.x, known.fortress.z - state.pos.z) : 64
+      const homeFar = P && known.fortress && known.fortress.x != null ? Math.hypot(known.fortress.x - P.x, known.fortress.z - P.z) : fortFar
+      // ND_BLZ_TOOLS_NEAR=1: спавнер увиден в 48 бл. — до боя взмахов почти не нужно (бой — меч), домой — своим ходом/следом: цена пути
+      // 30, а не 40 + до крепости + домой (bz12-s18-3 21.10: спавнер в 10 бл., 130 взмахов — ушёл искать стебли на кирки, шары ×3, смерть).
+      // Иначе путь по видимому — полвзмаха на блок (обход дешевле копки, ND_BLZ_DIG_PRICE).
+      const spSeen = memorySnapshot?.places?.['спавнер блейзов']
+      const spDist = spSeen && state.pos ? Math.hypot(spSeen.x - state.pos.x, spSeen.z - state.pos.z) : Infinity
+      const swNeed = process.env.ND_BLZ_TOOLS_NEAR === '1'
+        ? (spDist <= 48 ? 30 : Math.min(260, Math.round(20 + 0.5 * (fortFar + homeFar))))
+        : Math.min(260, Math.round(40 + fortFar + homeFar))
+      if (process.env.ND_BLZ_TOOLS_PRICE === '1' && sw >= swNeed) log(`инструменты Ада: ${sw} взмахов при цене пути ${swNeed} (к крепости ${Math.round(fortFar)} + домой ${Math.round(homeFar)}) — к спавнеру без пополнения`)
+      else {
+        const supply = await replenishNetherSupply()
+        if (!supply.ready) { log(`путь к спавнеру отложен: ${supply.reason}`); return }
+      }
     }
     await spares(200)
     await netherFillers()
@@ -333,7 +400,14 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     }
     const needsView = process.env.ND_FORTRESS_FRONTIER !== '0' && netherSearchFailure && netherSearchFailure.observed === netherRetryState(netherSearchFailure.origin)
     if (!atSpawner && needsView && netherSearchFailure.exhausted) throw new Error('крепость: видимые выходы исчерпаны, нужен новый путь или обзор')
+    // ND_BLZ_SEEN_FIGHT=1 (blz 21.10): ифриты уже видны рядом (2+ в 20 бл. или один в 12) — бой отсюда сразу, без обхода крепости
+    // под их шарами: обход «у крепости спавнера не видно» рвала тактика, тело стояло у подножия трона без боя и без зелья до смерти
+    // (nS15-s19-1: 5 ифритов в 5–15 бл., 0 боёв за 10 мин; nA11-s17-1). Навык blaze сам лезет на помост к ним.
+    if (process.env.ND_BLZ_SEEN_FIGHT === '1' && !atSpawner && !needsView) await sense()
+    const seenBz = process.env.ND_BLZ_SEEN_FIGHT === '1' && !atSpawner && !needsView ? (sit.fight?.order || []).filter(o => o && o.name === 'blaze' && o.dist <= 20) : []
+    const seenNearest = seenBz.length ? Math.round(Math.min(...seenBz.map(o => o.dist))) : 99
     const s = atSpawner ? { detail: { reached: true, spawner: { x: spHere.x, y: spHere.y, z: spHere.z }, dist: 0 } } as any
+      : (seenBz.length >= 2 || seenNearest <= 12) ? { detail: { blazes: { seen: seenBz.length, nearest: seenNearest } }, stopped: 'ифриты видны рядом' } as any
       : await act('fortress', needsView ? { mode: 'advance', timeoutSeconds: 90 }
         : { mode: 'spawner', timeoutSeconds: Math.min(600, 300 + Math.round(spFar / 2)), ...(process.env.ND_SPAWNER_TUNNEL === '1' ? { tunnel: true } : {}) })
     if (!atSpawner && needsView) {
@@ -349,7 +423,12 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     // S1f (вслепую): спавнер не увиден, но обход крепости видел ифритов рядом (≤ 24 бл.) — бой с ними отсюда: ифриты держатся у спавнера,
     // навык blaze бьёт видимых и сам ищет спавнер (s1f-A2-3: тело под тронным залом, ифриты били — смерть без боя на 19-й мин).
     // ND_BLAZE_SEEN=0 — прежнее (только у спавнера).
-    const blazesNear = process.env.ND_BLAZE_SEEN !== '0' && !!(s.detail && s.detail.blazes && s.detail.blazes.seen > 0 && s.detail.blazes.nearest <= 24)
+    // ND_BLZ_FR_BUDGET: последнее зелье FR — бою у трона: 1–2 дальних бродячих ифрита без спавнера — не бой отсюда (di-s19-2: «ифриты
+    // видны (1, в 22 бл.)» у портала — зелье выпито, иссушитель и шары, смерть), а дальше к спавнеру; ближний (≤ 16) или 2+ — бой (nA11-s17-1:
+    // ифриты в 12–16 бл. били с трона, а бой не начинался — 5 мин под шарами).
+    const bzSeen = s.detail?.blazes
+    const budget = process.env.ND_BLZ_FR_BUDGET === '1' && fireResNow() <= 1 && !state.fireResistance
+    const blazesNear = process.env.ND_BLAZE_SEEN !== '0' && !!(bzSeen && bzSeen.seen > 0 && bzSeen.nearest <= 24 && (!budget || bzSeen.nearest <= 16 || bzSeen.seen >= 2))
     if (!(s.detail && s.detail.reached) && !spNear && !blazesNear) {
       if (process.env.ND_FORTRESS_FRONTIER !== '0') setNetherSearchFailure({ observed: netherRetryState(), origin: state.pos && { ...state.pos }, exhausted: false })
       log(`к спавнеру не дошёл: ${String((s.detail && s.detail.stopped) || s.error || '').slice(0, 120)}`); break
@@ -369,6 +448,7 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
     // тело на 4 бл. ниже помоста) — после двух таких подряд заново к спавнеру штреком со вскрытием стены зала (fortress tunnel+breach),
     // а не тот же вызов с того же места.
     const bzd = (bz && bz.detail) || {}
+    if (fireResNow() === 0 && (/огнестойкость (на исходе|кончилась)/.test(String(bzd.stopped || bz?.error || '')) || state.fireResistance || Number(bzd.kills) > 0)) blazeFrSpentAt = gameClock.now()
     if (bzd.clearing?.length) log(`расчистка спавнера: ${bzd.clearing.filter(r => r.ok).length}/${bzd.clearing.length}, прогноз экономии ${Math.round(bzd.clearing.reduce((s, r) => s + (r.ok ? r.savedSeconds - r.costSeconds : 0), 0))}с; результат — по стержням и урону`)
     blazeNoView = /доступной точки обзора нет/.test(String(bzd.stopped || '')) && !(Number(bzd.kills) > 0) ? blazeNoView + 1 : 0
     if (blazeNoView >= 2 && rodsWanted() && dim() === 'the_nether' && !died) {
@@ -395,3 +475,9 @@ defStage('nether', () => !!known.portal && rodsWanted(), async () => {
   }
 })
 let blazeNoView = 0
+let blazeFrSpentAt = 0
+// ND_BLZ_FR_RESERVE: последнее FR ушло на бой, зелья нет — этап ифритов на паузе до зелья (бартер/сток); loop/select не зовёт его
+// «боем у спавнера» по угрозе.
+export function blazeFrPaused () {
+  return process.env.ND_BLZ_FR_RESERVE === '1' && process.env.ND_BLZ_DODGE !== '1' && !!blazeFrSpentAt && fireResNow() === 0 && (!state.fireResistance || (state.fireResistanceSec ?? 999) < 60)
+}

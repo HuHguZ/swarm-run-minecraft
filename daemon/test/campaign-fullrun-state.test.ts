@@ -87,7 +87,7 @@ async function enter(env: any, options: any = {}) {
   const state: any = { dimension: options.dimension || 'overworld', inventory: options.inventory || { beef: 8 } }
   const calls: string[] = []
   const ctx: any = { state, process: { env }, sit: { foes: options.foes || 0 }, known: {}, died: false, strategyInterrupted: false,
-    dim: () => state.dimension, have: quantity(state.inventory), RAW: /^beef$/, lighter: () => true,
+    dim: () => state.dimension, have: quantity(state.inventory), RAW: /^beef$/, lighter: () => true, owFastTrack: () => false,
     log: () => {}, refresh: async () => {}, shieldOn: () => true, goldOn: () => true,
     cook: async () => { calls.push('cook'); if (options.interrupt) ctx.strategyInterrupted = true },
     act: async (method: string) => { calls.push(method); return { status: 'done', detail: { went: true } } }
@@ -105,4 +105,24 @@ test('entry cooking does not start under hostiles, without raw meat, or in the N
     assert.deepEqual(await enter({ ND_NETHER_COOK: '1' }, options), ['portal'])
   }
   assert.deepEqual(await enter({ ND_NETHER_COOK: '1' }, { interrupt: true }), ['cook'])
+})
+
+test('ND_OW_NETHER_STICKS: an iron pick from carried iron and eight sticks are crafted before the portal; off changes nothing', async () => {
+  for (const on of [true, false]) {
+    const inv: any = { iron_ingot: 1, raw_iron: 2, oak_log: 1, oak_planks: 2, stick: 1, cobblestone: 20 }
+    const calls: string[] = []
+    const ctx: any = { state: { dimension: 'overworld', inventory: inv }, process: { env: on ? { ND_OW_NETHER_STICKS: '1' } : {} }, sit: { foes: 0 },
+      known: {}, died: false, strategyInterrupted: false, dim: () => 'overworld', have: quantity(inv), RAW: /^beef$/, lighter: () => true,
+      owFastTrack: () => false, log: () => {}, refresh: async () => {}, shieldOn: () => true, goldOn: () => true, cook: async () => {},
+      smeltAll: async (from, into, { max }) => { calls.push('smelt'); const n = Math.min(inv[from], max); inv[from] -= n; inv[into] += n },
+      sticks: async n => { calls.push(`sticks${n}`); while (inv.stick < n && (inv.oak_planks >= 2 || inv.oak_log)) { if (inv.oak_planks < 2) { inv.oak_log--; inv.oak_planks += 4 } inv.oak_planks -= 2; inv.stick += 4 } },
+      craft: async item => { calls.push(item); if (item === 'iron_pickaxe') { inv.iron_ingot -= 3; inv.stick -= 2; inv.iron_pickaxe = 1 } return true },
+      act: async (method: string) => { calls.push(method); return { status: 'done', detail: { went: true } } } }
+    run(declarationsOf(source, 'enterNether'), ctx)
+    await ctx.enterNether()
+    if (!on) { assert.deepEqual(calls, ['portal']); continue }
+    assert.deepEqual(calls, ['smelt', 'sticks2', 'iron_pickaxe', 'sticks8', 'portal'])
+    assert.equal(inv.iron_pickaxe, 1)
+    assert.ok(inv.stick >= 8, `sticks ${inv.stick}`)
+  }
 })

@@ -290,14 +290,21 @@ function hearLavaPoint (bot, { radius = 32, maxDy = 12, skip = null }: any = {})
 // Найти блок-сущность type ходом, как люди: пеленг отсюда, шаг поперёк на base бл., второй пеленг, пересечение;
 // ближе к нему — третий пеленг и уточнение. Итог — оценка места (x, z, разброс) и чанк; клетка не известна:
 // дальше — глазами/копкой (клад: BuriedTreasure ставит сундук в клетку чанка 9,9 — treasure).
-async function pieSeek (session, ctl, { type = 'chest', base = 24, fov = 30, timeoutSeconds = 120, near = 10 }: any = {}) {
+async function pieSeek (session, ctl, { type = 'chest', base = 24, fov = 30, timeoutSeconds = 120, near = 10, move = null, until = null, stop = null }: any = {}) {
   const bot = session.bot
   const { travelXZ }: typeof import('../movement') = require('../movement')
-  const deadline = gameClock.now() + Math.max(20, Math.min(600, timeoutSeconds)) * 1000
+  const deadline = Math.min(until ?? Infinity, gameClock.now() + Math.max(20, Math.min(600, timeoutSeconds)) * 1000)
   const here = () => ({ x: bot.entity.position.x, z: bot.entity.position.z })
   const samples = []
   const legs = []
-  const walk = async (x, z) => { const r = await travelXZ(bot, ctl, x, z, { range: 3, deadline }); legs.push({ to: { x: Math.round(x), z: Math.round(z) }, ok: !!r.ok, error: r.error }); return r.ok }
+  // Caller may keep both the baseline and the approach in a covered tunnel.
+  const stopped = () => ctl.aborted || gameClock.now() >= deadline || !!stop?.()
+  const walk = async (x, z) => {
+    if (stopped()) return false
+    const r = move ? await move(x, z, deadline) : await travelXZ(bot, ctl, x, z, { range: 3, deadline })
+    legs.push({ to: { x: Math.round(x), z: Math.round(z) }, ok: !!r.ok, error: r.error })
+    return r.ok
+  }
   // Пеленг отсюда, согласованный с прежними: дуга, при которой пересечение впереди всех и разброс меньше.
   const sample = () => {
     const arcs = pieArcs(bot, type, { fov })
@@ -319,13 +326,13 @@ async function pieSeek (session, ctl, { type = 'chest', base = 24, fov = 30, tim
   samples.push(s1)
   const d = vecOf(s1.yaw)
   for (const side of [1, -1]) {
-    if (ctl.aborted || gameClock.now() > deadline) break
+    if (stopped()) break
     if (await walk(s1.x - d.z * base * side, s1.z + d.x * base * side)) break
   }
   const s2 = sample()
   if (s2) samples.push(s2)
   let est = triangulate(samples)
-  if (est && !ctl.aborted && gameClock.now() < deadline) {
+  if (est && !stopped()) {
     const p = here()
     const L = Math.hypot(est.x - p.x, est.z - p.z)
     if (L > near) {

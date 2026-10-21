@@ -147,6 +147,12 @@ function conserveTool (bot, block, tool) {
   return bot.inventory.items().find(i => i.name === 'stone_pickaxe' && usesLeft(i) > 8) || tool
 }
 async function equipBestTool (bot, block) {
+  // Оставшееся открытым окно печи/сундука: bot.equip кликает слот хотбара в нём (у печи inventoryEnd 39) — assert «invalid operation»
+  // в prismarine-windows, и каждая копка дальше падала (owN3-owE1-06: после плавки — 9 отказов «не поддаётся: invalid operation»).
+  if (bot.currentWindow && bot.currentWindow !== bot.inventory) {
+    console.log('[equip] открыто окно', bot.currentWindow.type, '— закрываю перед инструментом')
+    try { await (require('./containers/window') as typeof import('./containers/window')).closeStray(bot) } catch {}
+  }
   const tool = conserveTool(bot, block, bestOfKind(bot, toolKindFor(block.name)))
   if (tool && (!bot.heldItem || bot.heldItem.type !== tool.type)) {
     await bot.equip(tool, 'hand')
@@ -420,7 +426,16 @@ function toolPlan (bot, mcData) {
   return wantTool(bot, mcData, 'pickaxe', TOOL_RESERVE) ||
     // Only after the pickaxe: the last three rubble belong to the tool that
     // gets the bot out, not to the one that makes the fight shorter.
-    wantTool(bot, mcData, 'sword', WEAPON_RESERVE)
+    swordPlan(bot, mcData)
+}
+// ND_OW_SWORD_KEEP_STICKS=1, и всегда при ND_OW_STARTER=1 (без него STARTER вреден, owC10-02/08): the same rule for wood — before the stone pick the last planks and the stick
+// belong to its handle; a wooden sword made of them left the bot 40 min without a stone pick. The stone sword comes
+// with the first rubble.
+function swordPlan (bot, mcData) {
+  const job = wantTool(bot, mcData, 'sword', WEAPON_RESERVE)
+  if (job?.item === 'wooden_sword' && typeof process !== 'undefined' && (process.env.ND_OW_SWORD_KEEP_STICKS === '1' || process.env.ND_OW_STARTER === '1') &&
+      !bot.inventory.items().some(i => /^(stone|iron|diamond|netherite)_pickaxe$/.test(i.name))) return null
+  return job
 }
 
 // null when this kind is fine. Otherwise `item` is what to craft, or null when

@@ -3,6 +3,7 @@ import * as gameClock from '../game-clock'
 import { goals } from 'mineflayer-pathfinder'
 import { xyz } from '../movement'
 import * as pack from '../pack'
+import { raceOpen } from '../containers/window'
 import { sleep, dimOf, flat, v3, keyOf, withTimeout } from './common'
 import { CONTAINER_NAMES, KINDS, STRUCTURE_PLACES } from './kinds'
 import { lootedSet, markLooted } from './memory'
@@ -101,7 +102,13 @@ async function takeCart (session, ctl, cart) {
   while (!ctl.aborted && gameClock.now() - t0 < 30000 && cart.isValid !== false && cart.position.distanceTo(bot.entity.position) > 3) await sleep(200)
   bot.pathfinder.setGoal(null)
   if (cart.position.distanceTo(bot.entity.position) > 3.5) return { stopped: 'не дошёл до вагонетки', took: {} }
-  const win = await withTimeout(bot.openContainer(cart), 6000, 'вагонетка не открылась')
+  if (ctl.aborted) return { stopped: 'прервано', took: {} }
+  const win = await raceOpen(bot, bot.openContainer(cart), 6000, 'вагонетка не открылась', ctl)
+  win.ndOwned = true
+  // A cancelled cart worker must never close or copy a newer inventory/menu.
+  const shut = () => { if (bot.currentWindow === win) { try { win.close() } catch {} } }
+  if (ctl.aborted) shut(); else ctl.onAbort.push(shut)
+  let stopped = null
   const took = {}
   const why = {}
   const left = {}
@@ -109,13 +116,18 @@ async function takeCart (session, ctl, cart) {
     const ctx = {}
     const items = win.containerItems().map(it => ({ it, d: decide(bot, it, ctx) })).sort((a, b) => b.d.prio - a.d.prio)
     for (const { it, d } of items) {
+      if (ctl.aborted || bot.currentWindow !== win) { stopped = ctl.aborted ? 'прервано' : 'вагонетка закрылась'; break }
       if (!d.take) { left[it.name] = (left[it.name] || 0) + it.count; continue }
       try { await bot.clickWindow(it.slot, 0, 1); took[it.name] = (took[it.name] || 0) + it.count; why[it.name] = d.why } catch {}
-      await sleep(120)
+      await sleep(120, ctl)
     }
-  } finally { try { win.close() } catch {} }
-  markLooted(session, `cart:${cart.id}`)
-  return { at: xyz(cart.position), kind: 'chest_minecart', took, why, left }
+  } finally {
+    shut()
+    const i = ctl.onAbort.indexOf(shut); if (i >= 0) ctl.onAbort.splice(i, 1)
+  }
+  stopped ||= ctl.aborted ? 'прервано' : null
+  if (!stopped) markLooted(session, `cart:${cart.id}`)
+  return { at: xyz(cart.position), kind: 'chest_minecart', took, why, left, stopped: stopped || undefined }
 }
 
 async function lootAll (session, ctl, rec, out, p) {

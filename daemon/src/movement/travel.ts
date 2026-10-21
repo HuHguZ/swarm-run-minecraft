@@ -6,6 +6,7 @@ import { sleep, stuckGuard, unstick } from './basics'
 import { inWater } from './water'
 import { escapeWater } from './escape-water'
 import { gotoPath } from './goto'
+import { surfaceDropGuard } from '../session/surface-walk'
 
 // Walk toward a column, guarded. Used by exploration, where a failed leg just
 // means "try another direction" rather than "the intent failed".
@@ -20,9 +21,10 @@ export async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadli
       const esc = await escapeWater(bot, ctl, { timeoutMs: deadline ? Math.max(1, deadline - gameClock.now()) : 25000 })
       // Отказ без единого таймера (нет пути из воды) — тик игрового времени, иначе цикл вызывающего крутится микрозадачами
       // и вешает демон (s5c-f4-4 06.10: explore, 100 % CPU, часы стоят).
-      if (!esc.ok) { await sleep(50); return { ok: false, error: esc.error } }
+      if (!esc.ok) { await sleep(50); return { ok: false, error: esc.error, surfaceDrop: esc.surfaceDrop } }
     }
 
+    const dropGuard = surfaceDropGuard(bot)
     const guard = stuckGuard(bot, ctl)
     const goal = Number.isFinite(y)
       ? new goals.GoalNear(Math.floor(x), Math.floor(y), Math.floor(z), range)
@@ -42,7 +44,8 @@ export async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadli
     const racers = [
       path,
       guard.promise,
-      wet
+      wet,
+      dropGuard.promise
     ]
     // A single leg must not outlive the caller's budget: the guard only fires
     // when the bot stops moving, and a bot walking the wrong way forever is
@@ -59,7 +62,7 @@ export async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadli
       if (released) return
       released = true
       const cancelled = path.cancel?.(); cancelled?.catch?.(() => {})
-      guard.stop(); bot.removeListener('physicsTick', onWet)
+      dropGuard.stop(); guard.stop(); bot.removeListener('physicsTick', onWet)
       if (timer) gameClock.clearTimeout(timer)
     }
 
@@ -73,7 +76,7 @@ export async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadli
         bot.pathfinder.setGoal(null)
         if (ctl.aborted || activeOther()) return { ok: false, error: 'прервано' }
         const esc = await escapeWater(bot, ctl, { timeoutMs: deadline ? Math.max(1, deadline - gameClock.now()) : 25000 })
-        if (!esc.ok) return { ok: false, error: esc.error }
+        if (!esc.ok) return { ok: false, error: esc.error, surfaceDrop: esc.surfaceDrop }
         if (ctl.aborted || activeOther() || bot.pathfinder.goal !== null) return { ok: false, error: 'путь передан другому действию или прерван' }
         if (goal.isEnd(bot.entity.position.floored())) return { ok: true }
         // A successful change of transport resumes this same leg, even when
@@ -100,6 +103,7 @@ export async function travelXZ (bot, ctl, x, z, { range = 4, retries = 2, deadli
       if (bot.pathfinder.goal !== goal || activeOther()) return { ok: false, error: err.message }
       try { bot.pathfinder.setGoal(null) } catch {}
       if (ctl.aborted) return { ok: false, error: err.message }
+      if (err.surfaceDrop) { bot.clearControlStates(); return { ok: false, error: err.message, surfaceDrop: true } }
       // Пути нет вовсе — тело и не застревало: рывок назад тут не лечит, а у
       // обрыва в Аду убивает (падение насмерть, try-nether-trip 2026-09-25).
       if (err.noStep) {

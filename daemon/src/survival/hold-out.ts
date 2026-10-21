@@ -1,4 +1,4 @@
-const { PILLAR, CLIMBERS, REFUGE_NEUTRAL, HOT_CELL, MOB_REACH, chaseBps, holePlan, pocketOf } = require('./surface-body')
+const { PILLAR, CLIMBERS, REFUGE_NEUTRAL, HOT_CELL, MOB_REACH, REFUGE_FLEE_MS, chaseBps, holePlan, pocketOf } = require('./surface-body')
 const { gameClock, worlds, placeBlockAt, digUp, pickFiller, withTimeout, occupiedByEntity, sleep, xyz, travelXZ, inWater, findNearestLand, findSwimRoute, escapeWater, Vec3, exitShelter }: typeof import('./enter-shelter') = require('./enter-shelter')
 function pillarPlan (bot, blocks, foes, shooters) {
   if (blocks < PILLAR || shooters.length) return null
@@ -110,7 +110,9 @@ function refugeLook (session, { radius = 16 }: any = {}) {
     // Как будто стоим на полу: оценка бывает в прыжке после рывка, а копка в
     // воздухе впятеро дольше (digTime notOnGround) — «не выломаться» было ложным.
     canBreakOut: filler ? fortify.canBreakOut(grounded(bot), filler) : false,
-    hole: nether ? null : holePlan(grounded(bot), session.mcData, feet),
+    // ND_NE_REFUGE_HOLE=1 (поток ne 21.10, выкл.): в Аду нора — тоже укрытие (незерак копается за 0.15 с каменной киркой); без неё бегство
+    // от брута/пиглина вплотную — смерть (b86-int12-s22, b86-int2-s21). Лава в стенках/под дном — те же проверки holePlan, что наверху.
+    hole: nether && !neHole() ? null : holePlan(grounded(bot), session.mcData, feet),
     pillar: pillarPlan(bot, blocks, foes, shooters),
     pocket: 0,
     cell: cell || null
@@ -125,11 +127,22 @@ function refugeLook (session, { radius = 16 }: any = {}) {
       if (np) a.niche = { side: np.side, cell: np.cell, digMs: np.digMs, ms: np.digMs + 300 + 2 * 180 + 300 }
     } catch {}
   }
+  if (process.env.ND_OW_DEATH_RANGED === '1' && dim.replace(/^minecraft:/, '') === 'overworld' && !session.tempo &&
+      !(Object.values(bot.entities || {}) as any[]).some(e => e !== bot.entity && e?.username && (require('../pick') as typeof import('../pick')).aim(bot, e, { range: 16 })?.point) &&
+      !(bot.inventory.slots[45]?.name === 'shield' && gameClock.now() >= (bot._ndShieldDisabledUntil || 0))) {
+    const gear = assess.gearOf([5, 6, 7, 8].map(i => bot.inventory.slots[i]))
+    const bows = shooters.filter(h => /^(skeleton|stray|bogged|parched)$/.test(h.e.name) && assess.sizeUp(bot, h.e, gear)?.ranged)
+    if (bows.length) a.owRanged = { health: bot.health ?? 0,
+      shots: bows.map(h => ({ hit: assess.afterArmor(assess.MOBS[h.e.name].dmg, gear.armor, gear.tough), everyMs: assess.MOBS[h.e.name].every * 1000 })),
+      meleeEtaMs: Math.min(...walkers.filter(h => !bows.includes(h)).map(h =>
+        Math.max(0, Math.hypot(h.e.position.x - me.x, h.e.position.z - me.z) - MOB_REACH) / chaseBps(h.e.name) * 1000)) }
+  }
   a.ms = gameClock.now() - t0
   return a
 }
 
 const nicheOn = () => process.env.ND_REFUGE_NICHE !== '0'
+const neHole = () => process.env.ND_NE_REFUGE_HOLE === '1'
 
 function chooseRefuge (a) {
   if (a.lava) return { how: 'flee', code: 'LAVA', why: 'в лаве или огне — не место для укрытия' }
@@ -142,7 +155,8 @@ function chooseRefuge (a) {
   const box = !!a.cell && a.canBreakOut
   // Под стрелком нору не копать: 3 с на месте под прицелом — 3–4 стрелы (C:
   // скелет в 1.5 бл., хп 10 → 0 в недокопанной норе). Сперва из-под прицела.
-  const hole = !!a.hole && !a.nether && !a.shooters
+  // Ад (ND_NE_REFUGE_HOLE): нора быстрая (≤ 1.5 с) — и под стрелком: две копки быстрее коробки, а со дна арбалет не достаёт.
+  const hole = !!a.hole && (!a.nether || neHole()) && (!a.shooters || (a.nether && neHole() && a.hole.ms <= 1500))
   const boxWhy = () => `коробка: ${a.cell.walls ? `стен готовых ${a.cell.walls}, ` : ''}${a.cell.blocks} бл. из ${a.blocks}` +
     (a.cell.dist ? `, клетка в ${a.cell.dist} бл.` : '')
   const pillar = !!a.pillar
@@ -150,6 +164,8 @@ function chooseRefuge (a) {
   // Ниша быстрее коробки (пещера, склон) или коробки нет — в нишу.
   const boxMs = box ? (require('.././fortify') as typeof import('.././fortify')).refugeBuildMs(a.cell) + (a.cell.dist || 0) / 4.3 * 1000 : Infinity
   const nicheWhy = () => `ниша в стене: копать ~${(a.niche.digMs / 1000).toFixed(1)} с, заложить 2 бл.`
+  // Ад: враг вплотную, нора копается быстрее коробки — нора (рука брута/пиглина ниже его ног не опускается).
+  if (a.foeClose && hole && a.nether && a.hole.ms * 2 / 3 < Math.min(boxMs, a.niche ? a.niche.ms : Infinity)) return { how: 'hole', why: `нора вниз на ${a.hole.depth} (~${(a.hole.ms / 1000).toFixed(1)} с) быстрее коробки` }
   if (a.foeClose && a.niche && a.niche.ms < boxMs && (a.blocks >= 2)) return { how: 'niche', why: nicheWhy() }
   if (a.foeClose && box) return { how: 'box', why: boxWhy() }
   if (a.foeClose && pillar) return { how: 'pillar', why: pillarWhy }
@@ -177,8 +193,16 @@ function buildMsOf (a, how) {
 }
 
 function outrun (a, how) {
-  if (!a.nearest || (how !== 'box' && how !== 'hole' && how !== 'pillar' && how !== 'niche')) return false
-  return a.nearest.etaMs < buildMsOf(a, how)
+  if (how !== 'box' && how !== 'hole' && how !== 'pillar' && how !== 'niche') return false
+  const buildMs = buildMsOf(a, how)
+  if (a.owRanged && (how === 'box' || how === 'niche')) {
+    // A bow fires before its owner walks up. Compare the exposed intervals, rather than treating its ETA as melee.
+    // Native attack-phase state is unknown; the existing assess interval prices the next shot conservatively.
+    const cost = (ms: number) => a.owRanged.shots.reduce((hp: number, shot: { hit: number; everyMs: number }) =>
+      hp + shot.hit * Math.ceil(ms / shot.everyMs), 0)
+    return !(cost(buildMs) < a.owRanged.health && cost(buildMs) <= cost(REFUGE_FLEE_MS) && a.owRanged.meleeEtaMs >= buildMs)
+  }
+  return !!a.nearest && a.nearest.etaMs < buildMs
 }
 
 function lookLine (a) {

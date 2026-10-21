@@ -75,7 +75,8 @@ function sealedFixture(results: GuardResult[]) {
   const code = source('BASTION')
   assert.ok(code.includes('async function sealedGold('))
   const context = {
-    process, gameClock: { now: () => 1000 }, GOLD_PICK: /iron_pickaxe/,
+    process, setImmediate, gameClock: { now: () => 1000, sleep: async () => {} }, GOLD_PICK: /iron_pickaxe/,
+    HF: { on: () => false, focus () {}, predAllowed: () => true, chestAllowed: () => true }, mobs: () => [], seesMob: () => false, bruteDefense: async () => false,
     inLava: () => false, answerAttack: async () => false, inOwnTunnel: () => false,
     eatIfHungry: async () => {}, log: (message: string) => logs.push(message), nearBruteHome: () => false, targetsByBruteHome: (list: any[]) => list,
     require: (name: string) => {

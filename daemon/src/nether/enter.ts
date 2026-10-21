@@ -244,7 +244,10 @@ function enGate (en: EnterRun) {
   // Домой из Ада без еды — лечиться здесь нечем, ожидание хп не прибавит (b3-5-2 14.10: хп 8 в 1 бл. от портала домой,
   // «в портал не шагаю» ×сотни ходов до конца кампании). Наверху — еда и свой портал; порог — только в Ад.
   const foodless = () => !(bot.inventory?.items?.() || []).some(i => /^(cooked_|bread$|baked_potato$|golden_carrot$|apple$|carrot$|melon_slice$|sweet_berries$|pumpkin_pie$|beef$|porkchop$|mutton$|chicken$|rabbit$|cod$|salmon$|potato$|beetroot$|dried_kelp$|cookie$|mushroom_stew$|beetroot_soup$|rabbit_stew$|golden_apple$|enchanted_golden_apple$)/.test(i.name))
-  if (hp < MIN_ENTER_HP && !(worlds.worldOf(bot) === 'the_nether' && hp >= 4 && foodless())) {
+  // ND_OW_ENTER_LOWHP=1: и в Ад из верхнего мира без еды при сытости < 18 — лечиться нечем и здесь, ожидание хп не прибавит, а ночная охота
+  // с 9 хп дороже входа (прибытие сразу в укрытие). owN4-owC12-07: портал на 4-й мин, «на 9 хп в портал не шагаю» до конца прогона.
+  const noHeal = process.env.ND_OW_ENTER_LOWHP === '1' && worlds.worldOf(bot) === 'overworld' && hp >= 6 && foodless() && (bot.food ?? 20) < 18
+  if (hp < MIN_ENTER_HP && !noHeal && !(process.env.ND_NE_NO_GIVEUP === '1' && p.noGiveupReturn === true && en.from === 'the_nether') && !(worlds.worldOf(bot) === 'the_nether' && hp >= 4 && foodless())) {
     return {
       ...en.base,
       went: false,

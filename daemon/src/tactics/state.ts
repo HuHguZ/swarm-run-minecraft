@@ -20,6 +20,7 @@ export interface TacticalEnemy {
 export const S4D = (): boolean => process.env.ND_S4D !== '0'
 
 export interface TacticalState {
+  dimension?: string
   polarBear?: { id: number; action: string; cost: number; seconds: number; loss: number; top: number; signature: string } | null
   at: number
   health: number
@@ -31,6 +32,8 @@ export interface TacticalState {
   incomingProjectiles: number
   /** Present only for the overworld shield policy; null means the visible shot/draw has ended. */
   owGuard?: import('../ow-shield').GuardPoint | null
+  /** Opt-in OW archers without a usable shield: HP exposed while closing to sword reach. */
+  owRangedApproachHp?: number
   burning: boolean
   hotFloor?: boolean
   lava: boolean
@@ -44,6 +47,8 @@ export interface TacticalState {
   inWater: boolean
   /** submerged with air at or below 8 of 20 bubbles (stress stand: drowning was invisible to the tactics) */
   drowning?: boolean
+  /** Flagged OW physical air rescue; unlike a failed walk, breathing cannot be deferred. */
+  waterEmergency?: boolean
   /** Submerged work was hit; retain defence until safe footing/pocket or recovered air without contact. */
   waterEscape?: boolean
   /** adult piglins in sight: hitting a brute broadcasts its anger to them (PiglinBruteAi.wasHurtBy -> PiglinAi.maybeRetaliate) */
@@ -156,7 +161,12 @@ export function sustainableFight(verdict: { action?: string; cheap?: boolean; tr
 export const creeperWalksUp = (state: TacticalState): boolean =>
   state.enemies.some(enemy => enemy.threatening && enemy.kind === 'creeper' && enemy.distance <= 12)
 
-export const frWorth = (state: TacticalState): boolean => state.lava || !!state.hotFloor && !state.explosion || state.burning && state.health <= 10
+// ND_BLZ_FR_KEEP (поток blz 21.10, вкл. по умолчанию; =0 — выкл.): горячий пол (магма) без лавы при 11+ хп и с сухим выходом — шаг
+// с него (Flee), а не зелье: зелья уходили на магму по дороге, к бою у спавнера огнестойкости не оставалось (bz06-s17-1, bz12-s18-3).
+// Сухого выхода нет — сойти некуда, зелье.
+export const frWorth = (state: TacticalState): boolean => state.lava ||
+  !!state.hotFloor && !state.explosion && (process.env.ND_BLZ_FR_KEEP === '0' || state.health <= 10 || !state.escapeRoute) ||
+  state.burning && state.health <= 10
 // H2: after the lava exit at food 17, running cannot extinguish the residual burn.
 // A 32-tick bite restores food 20 and saturation for fast regeneration. Use the
 // existing healing price: a dry run cannot extinguish this fire or restore health.
@@ -166,6 +176,7 @@ export const burnRecovery = (state: TacticalState): boolean => state.burning && 
 
 export function threatLevel(state: TacticalState): ThreatLevel {
   if (state.health <= 0) return 0
+  if (state.waterEmergency) return 4
   if (state.embedded || state.emergencyController || state.dangerousFall || state.lavaAhead || state.lava && !state.fireResistance || state.explosion) return 4
   if (state.hotFloor) return 3
   const foes = state.enemies.filter(enemy => enemy.threatening && enemy.distance <= 12)
@@ -203,7 +214,12 @@ export const KEEP_WORKING = 30
 export function candidates(state: TacticalState, level = threatLevel(state)): Candidate[] {
   if (level === 0) return []
   const result: Candidate[] = []
-  const failedRetreat = process.env.ND_OW_NIGHT_FLEE === '1' && !!state.escapeExhausted && hasObservedTarget(state) && !outpaced(state) &&
+  // A failed run is evidence against that run, not against an untried local refuge (J OW death audit).
+  // Reuse the existing pressure/HP price and executors; the flag is opt-in and never changes Nether or PvP alone.
+  const deathMelee = process.env.ND_OW_DEATH_MELEE === '1' && String(state.dimension || '').replace(/^minecraft:/, '') === 'overworld' &&
+    !state.enemies.some(enemy => enemy.threatening && enemy.player) &&
+    state.enemies.some(enemy => enemy.threatening && !enemy.player && /^(zombie|husk|zombie_villager|spider|cave_spider)$/.test(enemy.kind))
+  const failedRetreat = (process.env.ND_OW_NIGHT_FLEE === '1' || deathMelee) && !!state.escapeExhausted && hasObservedTarget(state) && !outpaced(state) &&
     !state.lava && !state.lavaEscapePending && !state.hotFloor && !state.inWater && !state.drowning
   // Below level 3 an action is weighed against keeping the skill going (KEEP_WORKING): a run priced down by a pursuer that
   // keeps up (a lone blaze in sight at full health: Flee 19.5) is not worth the interrupted work (stand fuzz2/fuzz-2601:
@@ -212,7 +228,7 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // discounted run must compete with the risky hole, not disappear below the "keep working" price.
   const floor = level >= 3 || state.contact && (failedRetreat || state.enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')) ? -Infinity : KEEP_WORKING
   const add = (id: ActionId, score: number, reason: string, available: boolean) => {
-    if (available && !state.failedEscapes?.includes(id) && Number.isFinite(score) && score >= floor) result.push({ id, score, reason })
+    if (available && (id === 'Surface' && state.waterEmergency || !state.failedEscapes?.includes(id)) && Number.isFinite(score) && score >= floor) result.push({ id, score, reason })
   }
   const critical = level >= 3
   const contact = state.contact
@@ -278,8 +294,8 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('UseFireResistance', 156, 'available fire resistance before climbing', frWorth(state) && !state.fireResistance && !!state.fireResistancePotion)
   add('BoatLavaHop', 154, 'existing expendable boats and a visible collision-free lava route', state.lava && !!state.boatLavaHop)
   add('ClimbOut', 140, 'fire resistant swimming or visible wall steps', (state.lava || !!state.lavaEscapePending) && state.fireResistance && !!state.lavaClimb)
-  add('Surface', state.drowning || critical || !state.canFight ? 148 : 85,
-    state.waterEscape ? 'hurt during underwater work; reach dry ground' : 'air running out under water', !!(state.drowning || state.waterEscape) && !state.dangerousFall)
+  add('Surface', state.waterEmergency ? 190 : state.drowning || critical || !state.canFight ? 148 : 85,
+    state.waterEscape ? 'hurt during underwater work; reach dry ground' : 'air running out under water', !!(state.waterEmergency || state.drowning || state.waterEscape) && !state.dangerousFall)
   add('Flee', 142, 'leave damaging magma', !!state.hotFloor && !state.dangerousFall && !state.emergencyController)
   add('UseWater', 145, 'fire', state.water && state.burning && !state.fireResistance && !state.lava)
   add('Dodge', 150, 'explosion', state.explosion)
@@ -296,7 +312,8 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   add('LastStand', standScore, 'observed escape attempts exhausted; defend until a new exit opens', level >= 2 && observedTarget && atBody && contact && escapeExhausted && !provokes && !state.explosion && !state.blast && !state.lava && !state.lavaEscapePending && !state.dangerousFall && !state.embedded && !state.aerialCombat && !state.drowning && !state.inWater)
   const repel = canRepelLavaAttacker(state)
   // Closing on the selected creeper starts its fuse; a distant creeper behind a nearer walker is not that fight's price.
-  const fightScore = process.env.ND_OW_NIGHT_CREEPER === '1' && target?.kind === 'creeper' && !target.player ? 90 / (1 + (target.hit ?? 0) / state.health) : 90
+  const fightScore = (process.env.ND_OW_NIGHT_CREEPER === '1' && target?.kind === 'creeper' && !target.player ? 90 / (1 + (target.hit ?? 0) / state.health) : 90) /
+    (1 + (state.owRangedApproachHp ?? 0) / state.health)
   add('Fight', repel ? 157 : critical ? -100 : fightScore, repel ? 'repel a close attacker before resuming the fire resistant escape' : 'favorable fight', repel || level >= 2 && observedTarget && melee && state.canFight && state.weapon && contact && !state.blast && !state.protectedEncounter && !provokes && !state.lava && !state.lavaEscapePending && !escapeExhausted)
   // The Nether guard's answer to a brute, a hoglin or three walkers near is its hole two down (their reach stops at their feet) and
   // strikes from it: a run from a brute is two axe blows in a second (c2-5-2, c2-6-3 14.10: CreateDistance "does not get away",
@@ -317,7 +334,9 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // A ghast over a ledge: the box beats the shield and the swat - one missed fireball throws the body into the lava sea.
   const ghastBox = !!state.ghastEdge && state.shelter === 'BlockOff'
   // Half the existing eight-HP exchange floor is the reserve after construction.
-  const shelterScore = (ghastBox ? 130 : niche ? 110 : exposedBuild ? 60 : critical ? 120 : armed ? 45 : 95) *
+  // A roof/niche competes with the HP paid while approaching the bow. A close fight or an expensive build can still win.
+  const cheaperRangedCover = state.owRangedApproachHp !== undefined && (state.buildCostHp ?? 0) < state.owRangedApproachHp
+  const shelterScore = (ghastBox ? 130 : niche ? 110 : exposedBuild ? 60 : critical ? 120 : armed && !cheaperRangedCover ? 45 : 95) *
     (buildReserve === undefined ? 1 : Math.max(0, Math.min(1, buildReserve / 4))) *
     (state.shelter === 'DigDown' && state.digDownCostHp !== undefined ? Math.max(0, 1 - state.digDownCostHp / state.health) : 1)
   // A validated shaft supplies its own closing block as it is dug; an existing pocket needs no construction.

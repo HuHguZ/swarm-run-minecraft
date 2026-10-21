@@ -8,17 +8,22 @@ import { cjsContext } from './cjs-context'
 import { Vec3 } from 'vec3'
 import { bodySource } from './source-fixture'
 
-function fixture({ enabled = '1', covered = false, move = false } = {}) {
+function fixture({ enabled = '1', covered = false, move = false, cause = '0' } = {}) {
   const file = path.resolve(__dirname, '../src/fortress.ts'), native = createRequire(file)
   const items: any[] = [{ name: 'iron_pickaxe', count: 1, durabilityUsed:0, maxDurability:250 }, { name: 'cobblestone', count: 64 }]
   const bot: any = { game: { dimension: 'the_nether' }, entity: { position: new Vec3(.5,64,.5) }, entities:{}, health: 20,
-    inventory: { items: () => items }, blockAt: () => assert.fail('a continuation quote must use observations, never hidden blocks') }
+    inventory: { items: () => items }, blockAt: p => {
+      // ND_BLZ_CONT_CAUSE: исполнение смотрит только на пол под своими ногами (палуба или нет) — его тело знает.
+      const f = bot.entity.position.floored()
+      if (cause === '1' && p && p.x === f.x && p.y === f.y - 1 && p.z === f.z) return { name: 'netherrack', boundingBox: 'block', position: p }
+      return assert.fail('a continuation quote must use observations, never hidden blocks')
+    } }
   const bricks = new Set(['20,63,0'])
   const session: any = { bot, mcData: {}, _ndFortressFrontier: { world: 'the_nether', bricks },
     _ndTourVisited: { world: 'the_nether', points: [bot.entity.position.clone()], views: [bot.entity.position.clone()] },
     journal: { state: { places: {} }, patch: fn => fn(session.journal.state), append() {} } }
   const calls: any[] = [], view: any = { seen: 0, seenList: [], ...(covered ? { blazes: { seen: 1, nearest: 24 } } : {}) }
-  const context: any = { module: { exports: {} }, process: { env: { ND_FORTRESS_CONTINUE: enabled } }, console: { log() {} },
+  const context: any = { module: { exports: {} }, process: { env: { ND_FORTRESS_CONTINUE: enabled, ND_BLZ_CONT_CAUSE: cause } }, console: { log() {} },
     fixtureView: view, fixtureCalls: calls, fixtureMove: (kind, goal, opts) => {
       calls.push({ kind, goal: { ...goal }, opts })
       if (move) bot.entity.position = new Vec3(goal.x+.5, goal.y+1, goal.z+.5)
@@ -166,4 +171,23 @@ test('the continuation switch leaves the previous frontier implementation availa
   const f=fixture({enabled:'0'})
   assert.equal(f.plan(),null)
   await f.run();assert.equal(f.calls.length,0)
+})
+
+// ND_BLZ_CONT_CAUSE (Codex D1, 21.10): отказ помнится по причине, а не по числу увиденного кирпича.
+test('cause retry: unrelated newly seen brick cannot reopen the same unmoved refusal', async () => {
+  const f=fixture({cause:'1'});await f.run();const n=f.calls.length
+  f.bricks.add('1,63,0') // too close to be a new destination, but increments revision
+  await f.run()
+  assert.equal(f.calls.length,n)
+  f.bot.entity.position.x+=8
+  await f.run()
+  assert.ok(f.calls.length>n,'a changed physical approach can retry')
+})
+
+test('cause progress: seeing more brick while stationary is not physical advancement', async () => {
+  const f=fixture({cause:'1'});let x=0
+  Object.defineProperty(f.view,'seenList',{get:()=>[new Vec3(++x,63,0)]})
+  const r=await f.run()
+  assert.equal(r.advanced,false)
+  assert.equal(r.continuationTried,1)
 })

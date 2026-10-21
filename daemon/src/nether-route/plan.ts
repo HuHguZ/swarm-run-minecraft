@@ -231,7 +231,19 @@ async function planFull (g, from, goal, opts: any = {}) {
   const DG = Array.isArray(opts.dangers) ? opts.dangers.filter(d => Math.hypot(d[0] - (from.x + GX) / 2, d[2] - (from.z + GZ) / 2) < Math.hypot(from.x - GX, from.z - GZ) / 2 + 60) : []
   // Горячие коробки [x0,y0,z0,x1,y1,z1,цена] — открытое в них дороже (помост открытого тронного зала: иссушители, D6-26).
   const HOT = Array.isArray(opts.hot) ? opts.hot.filter(b => Array.isArray(b) && b.length === 7) : []
-  const danger = (x, y, z, ex) => { for (let i = 0; i < DG.length; i++) { const d = DG[i]; if (Math.abs(d[1] - y) <= 6 && (d[0] - x) * (d[0] - x) + (d[2] - z) * (d[2] - z) < 144) return ex ? (d[3] ?? 10) : 1.5 } return 0 }
+  const rememberedBrutes = process.env.ND_BRUTE_MEMORY === '1'
+  const danger = (x, y, z, ex) => {
+    let cost = 0
+    for (const d of DG) {
+      if (Math.abs(d[1] - y) > (rememberedBrutes ? 8 : 6)) continue
+      const distance = Math.hypot(d[0] - x, d[2] - z)
+      if (distance >= (rememberedBrutes ? 16 : 12)) continue
+      if (!rememberedBrutes) return ex ? (d[3] ?? 10) : 1.5
+      const weight = distance <= 13 ? 1 : (16 - distance) / 3
+      cost = Math.max(cost, weight * (ex ? (d[3] ?? 16) : 1.5))
+    }
+    return cost
+  }
   if (bounded) {
     const col = await columnPotential({ x0, x1, z0, z1, sx, sz, y0, sy, GX, GZ, gr, get, pass, floorGood, open, edge, danger,
       blocks, EXPO, OPEN_W, ZS, ZX, HOT, DG, digWaitSeconds, from }, opts, deadline, lastYield)

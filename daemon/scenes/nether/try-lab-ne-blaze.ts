@@ -32,7 +32,16 @@ const KITS = {
   bow: [...BASE, 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 3', 'bow', 'arrow 64'],
   // ls — набор слепого входа (try-lab-ne-run KIT=lightshield): брони нет, щит — бой у спавнера без брони (агент Ада 14.10).
   ls: ['shield', 'iron_sword', 'iron_pickaxe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'bucket',
-    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4']
+    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4'],
+  // nofr / nofri — настоящий вход без огнестойкости (blz 21.10, бой без FR как спидраннер): каменный / железный меч, без брони и щита.
+  nofr: ['stone_sword', 'stone_axe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'golden_boots', 'cooked_mutton 8',
+    'cobblestone 107', 'stick 11', 'crafting_table'],
+  nofri: ['iron_sword', 'stone_axe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'golden_boots', 'cooked_mutton 8',
+    'cobblestone 107', 'stick 11', 'crafting_table'],
+  // lsfr — ls + 2 зелья огнестойкости (бартер бастиона удался: FR — бонус, поток blz 21.10).
+  lsfr: ['shield', 'iron_sword', 'iron_pickaxe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'bucket',
+    'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
+    'potion[potion_contents={potion:"minecraft:fire_resistance"}] 2']
 }
 const KIT = KITS[KIT_NAME]
 if (!KIT) { console.error(`KIT=${KIT_NAME}: жду ${Object.keys(KITS).join(', ')}`); process.exit(1) }
@@ -97,6 +106,24 @@ function hallCell (sl, sp) {
   }
   return out.sort((a, b) => Math.abs(a.h - 3.5) - Math.abs(b.h - 3.5))[0] || null
 }
+// UNDER=1 (blz 21.10): клетка ПОД помостом, как приходит тело с SEEK2 — на 5..14 ниже спавнера, в 3..12 сбоку, в 15 бл. (спавнер
+// работает), над головой открыто до уровня спавнера, без лавы рядом.
+function underCell (sl, sp) {
+  const at = (x, y, z) => { const L = sl.layers[y]; if (!L) return '?'; const row = L[z - sl.z0]; return row ? row[x - sl.x0] || '?' : '?' }
+  const out = []
+  for (let dy = -5; dy >= -14; dy--) for (let dx = -12; dx <= 12; dx++) for (let dz = -12; dz <= 12; dz++) {
+    const h = Math.hypot(dx, dz), x = sp.x + dx, y = sp.y + dy, z = sp.z + dz
+    if (h < 3 || h > 12 || Math.hypot(h, dy) > 15) continue
+    if (!SOLID.has(at(x, y - 1, z))) continue
+    let open = true
+    for (let yy = y; yy <= sp.y && open; yy++) if (at(x, yy, z) !== '.') open = false
+    if (!open) continue
+    let lava = false
+    for (let a = -2; a <= 2 && !lava; a++) for (let b = -2; b <= 1 && !lava; b++) for (let c = -2; c <= 2 && !lava; c++) if (at(x + a, y + b, z + c) === 'L') lava = true
+    if (!lava) out.push({ x, y, z, h, dy })
+  }
+  return out.sort((a, b) => Math.abs(a.dy + 9) + Math.abs(a.h - 6) - Math.abs(b.dy + 9) - Math.abs(b.h - 6))[0] || null
+}
 
 async function main () {
   await conn.ready
@@ -139,26 +166,52 @@ async function main () {
     const sl = await call('slice', { x0: sp.x - 8, x1: sp.x + 8, y0: sp.y - 4, y1: sp.y + 4, z0: sp.z - 8, z1: sp.z + 8 }).catch(() => null)
     const S = (sl && sl.detail) || sl
     place = S && S.layers ? hallCell(S, sp) : null
-    if (!place) { fail(`пола зала у спавнера ${sp.x},${sp.y},${sp.z} не нашёл`); process.exit(0) }
+    if (process.env.UNDER === '1') {
+      const su = await call('slice', { x0: sp.x - 12, x1: sp.x + 12, y0: sp.y - 15, y1: sp.y, z0: sp.z - 12, z1: sp.z + 12 }).catch(() => null)
+      const U = (su && su.detail) || su
+      place = U && U.layers ? underCell(U, sp) : null
+    }
+    if (!place) { fail(`${process.env.UNDER === '1' ? 'клетки под помостом' : 'пола зала'} у спавнера ${sp.x},${sp.y},${sp.z} не нашёл`); process.exit(0) }
     await kit.cmd(`/execute in minecraft:the_nether run tp @s ${place.x + 0.5} ${place.y} ${place.z + 0.5}`)
   }
   for (const g of KIT) {
     const m = /^(\S+)(?: (\d+))?$/.exec(g)
     await kit.cmd(`/give @s minecraft:${m[1]}${m[2] ? ' ' + m[2] : ''}`)
   }
-  await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
-  await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
-  await kit.cmd('/gamemode survival')
+  // Набор надет и взгляд — ещё в творческом (bf01-s19-2 21.10: в выживании ифриты били тело ещё до навыка — тактика строила коробку,
+  // и взгляд из закрытой коробки не видел ни кирпича). Взгляд глазами на месте (mode=look, без хода): память пуста, а в кампании
+  // крепость и спавнер записывает обход (nbz02b/03c/03d: «ифритов и спавнера не видно» с 3 бл.). Ифриты, налетевшие за постановку, —
+  // командой (постановка); новые идут от спавнера сами (задержка 10–40 с).
   await sleep(1500)
   await call('armor', {} as Record<string, any>).catch(() => null)
   if ((await status()).dimension !== 'the_nether') { fail('тело не в Аду перед боем (постановка)'); process.exit(0) }
+  if (!process.env.APPROACH) {
+    if (place) await kit.cmd(`/execute in minecraft:the_nether run tp @s ${place.x + 0.5} ${place.y} ${place.z + 0.5}`)
+    await sleep(800)
+    const lk = await call('fortress', { mode: 'look', timeoutSeconds: 20 }).catch(e => ({ error: e.message }))
+    console.log('взгляд на месте', JSON.stringify({ seen: lk.detail?.fortress?.seen, spawners: (lk.detail?.spawners || []).length, error: lk.error }))
+    // UNDER: ифриты зала остаются — тело приходит к трону, где они уже висят (кампания: «ифриты видны — бой отсюда»).
+    for (const t of process.env.UNDER === '1' ? ['wither_skeleton', 'skeleton', 'magma_cube'] : ['blaze', 'wither_skeleton', 'skeleton', 'magma_cube']) await kit.cmd(`/execute in minecraft:the_nether run kill @e[type=minecraft:${t},x=${sp.x},y=${sp.y},z=${sp.z},distance=..24]`)
+  }
+  await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
+  await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
+  await kit.cmd('/gamemode survival')
+  await sleep(300)
   const size = logSize()
   const tc = gameClock.now()
   const steps = []
   let approach = null
   if (process.env.APPROACH) {
-    const a = await call('fortress', { mode: 'spawner', timeoutSeconds: 300 }).catch(e => ({ error: e.message }))
-    approach = { reached: !!(a.detail && a.detail.reached), dist: a.detail && a.detail.dist, stopped: a.detail && a.detail.stopped, s: Math.round((gameClock.now() - tc) / 1000) }
+    // Как кампания (blz 21.10): сперва взгляд-поиск (крепость в память по видимому кирпичу), потом до 3 подходов к спавнеру.
+    const f = await call('fortress', { timeoutSeconds: 120 }).catch(e => ({ error: e.message }))
+    let a: any = null
+    for (let k = 0; k < 3 && !(a && a.detail && a.detail.reached); k++) {
+      a = await call('fortress', { mode: 'spawner', timeoutSeconds: 300 }).catch(e => ({ error: e.message }))
+      if ((await status()).dimension !== 'the_nether' || deathLines(size).length) break
+    }
+    approach = { found: !!(f.detail && f.detail.found), reached: !!(a && a.detail && a.detail.reached), dist: a && a.detail && a.detail.dist,
+      stopped: a && a.detail && a.detail.stopped, s: Math.round((gameClock.now() - tc) / 1000) }
+    console.log('подход', JSON.stringify(approach))
   }
   for (let k = 0; k < TRIES; k++) {
     const s0 = await status()
@@ -166,12 +219,19 @@ async function main () {
     if ((s0.food ?? 20) < 18) await call('eat', {} as Record<string, any>).catch(() => null)
     const t = gameClock.now()
     // Как кампания: без огнестойкости навык сам строит коробку с окном; BOX=0 — открытый бой (прежняя сцена).
-    const r = await call('blaze', { rods: 7, timeoutSeconds: 400, ...(process.env.LOW === '1' ? { lowWindow: true } : {}), ...(process.env.BOX === '0' ? { box: false } : {}), ...(process.env.LEGACY === '1' ? { legacy: true } : {}) }).catch(e => ({ error: e.message }))
+    // Потолок по реальному времени: демон завис (игровые часы стоят — bf04-s17-2 21.10: 16 мин) — сцена не ждёт вечно.
+    const r: any = await Promise.race([
+      call('blaze', { rods: 7, timeoutSeconds: 400, ...(process.env.LOW === '1' ? { lowWindow: true } : {}), ...(process.env.BOX === '0' ? { box: false } : {}), ...(process.env.LEGACY === '1' ? { legacy: true } : {}) }).catch(e => ({ error: e.message })),
+      gameClock.wall.sleep(300000).then(() => ({ error: 'ЗАВИС: blaze не ответил за 300 с реального времени', hung: true }))])
     const d = r.detail || {} as Record<string, any>
-    steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType })
+    steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType, climb: d.camp && d.camp.climb, at: d.camp && d.camp.at, spawnerSeen: d.camp && d.camp.spawnerSeen })
+    if (r.hung) break
     const s1 = await status()
     if (s1.dimension !== 'the_nether') break
     if (deathLines(size).length >= 1) break
+    // Как кампания: навык сам ушёл «набрал на очи» (FR на исходе/кончилась, стержней на рамку хватает) — дальше не бой, а дорога домой
+    // (co03-s19-1 21.10: 6 стержней и стоп под FR, следующий вызов сцены — бой без FR и смерть).
+    if (/^набрал на очи/.test(String(d.stopped || '')) && cnt(s1.inventory, /^blaze_rod$/) >= 6) break
   }
   try { await call('stop') } catch {}
   const s = await status()
@@ -183,8 +243,9 @@ async function main () {
     approach,
     fortress: F,
     spawner: sp,
+    under: process.env.UNDER === '1',
     place,
-    ok: cnt(s.inventory, /^blaze_rod$/) >= 7,
+    ok: cnt(s.inventory, /^blaze_rod$/) >= 6 && deaths.length === 0,
     rods: cnt(s.inventory, /^blaze_rod$/),
     seconds: Math.round((gameClock.now() - tc) / 1000),
     deathCount: deaths.length,

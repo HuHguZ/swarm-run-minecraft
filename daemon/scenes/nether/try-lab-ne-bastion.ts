@@ -39,7 +39,17 @@ const KITS = {
   // ls — набор слепого входа (try-lab-ne-run KIT=lightshield): брони и золота нет — золото бастиона на ботинки и бартер (агент Ада 14.10).
   ls: ['iron_pickaxe', 'stone_pickaxe 2', 'iron_sword', 'shield', 'water_bucket', 'bucket', 'flint_and_steel',
     'cooked_mutton 8', 'cobblestone 64', 'cobbled_deepslate 64', 'crafting_table', 'oak_planks 8', 'stick 4',
-    'white_bed', 'obsidian 10', 'iron_ingot 1']
+    'white_bed', 'obsidian 10', 'iron_ingot 1'],
+  // cg — набор входа по договору с верхним миром (try-lab-ne-run KIT=contractgold): брони нет, золотые ботинки, щит (ne 21.10).
+  cg: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table'],
+  // cgs — cg + 8 палок: каменная кирка из булыжника на верстаке в Аду (nether-supply carriedRecipe), без похода за стеблями —
+  // nbs39-5408: железная и каменная кирки стёрты к 5-й мин (195 незерака), «нет безопасного дерева» → 17 мин ожидания (ne 21.10).
+  cgs: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table', 'stick 8'],
+  // cg16 — cg + 16 блоков золота (144 слитка, P(≥12 жемчуга) ≈ 31 %): замер одного бартера у бастиона, без добычи (ne 21.10).
+  cg16: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
+    'cooked_mutton 8', 'cobblestone 64', 'crafting_table', 'gold_block 16']
 }
 const KIT = KITS[process.env.KIT || 'std'] || KITS.std
 const KIT_AFTER = ['blaze_rod 7']
@@ -80,9 +90,9 @@ function locate (what, dim, at) {
 }
 async function status () {
   for (let i = 0; i < 3; i++) {
-    const st = await call('status', {} as Record<string, any>).catch(() => null)
+    const st: any = await Promise.race([call('status', {} as Record<string, any>).catch(() => null), gameClock.wall.sleep(10000).then(() => null)])
     if (st && st.state && st.state.dimension) return st.state
-    await sleep(1500)
+    await Promise.race([sleep(1500), gameClock.wall.sleep(1500)])
   }
   return {} as Record<string, any>
 }
@@ -133,6 +143,9 @@ async function main () {
   await kit.cmd('/effect clear @s')
   await kit.cmd('/time set 1000')
   await give(KIT)
+  // Набор без обсидиана (cg) — рама портала подготовки командой, после входа обсидиан убрать (как try-lab-ne-run).
+  const fixtureObsidian = !KIT.some(g => /^obsidian\b/.test(g))
+  if (fixtureObsidian) await give(['obsidian 10'])
   await sleep(1000)
   await call('armor', {} as Record<string, any>).catch(() => null)
   let pr = null
@@ -140,28 +153,65 @@ async function main () {
     pr = await call('portal', { timeoutSeconds: 240 }).catch(e => ({ status: 'failed', error: e.message }))
     if ((pr.detail && (pr.detail.lit || pr.detail.built)) || /горит/.test(JSON.stringify(pr))) break
   }
+  // Рама телом не встала (nbt17b 21.10: «рама ещё не тронута, обсидиан цел» ×3) — подготовка, не замер: рама командой в 3 бл. от
+  // тела (плоскость x, внутренность 2×3), огонь в нижнюю клетку; дальше вход тем же mc_portal mode=enter.
+  if (!((pr && pr.detail && (pr.detail.lit || pr.detail.built)) || /горит/.test(JSON.stringify(pr || {})))) {
+    const st0 = await status()
+    if (st0.pos) {
+      const x = Math.floor(st0.pos.x) + 3, y = Math.floor(st0.pos.y), z = Math.floor(st0.pos.z)
+      await kit.cmd(`/fill ${x - 1} ${y} ${z - 1} ${x + 4} ${y + 4} ${z + 1} minecraft:air`)
+      await kit.cmd(`/fill ${x - 1} ${y - 1} ${z - 1} ${x + 4} ${y - 1} ${z + 1} minecraft:netherrack`)
+      await kit.cmd(`/fill ${x} ${y - 1} ${z} ${x + 3} ${y + 4} ${z} minecraft:obsidian`)
+      await kit.cmd(`/fill ${x + 1} ${y} ${z} ${x + 2} ${y + 2} ${z} minecraft:air`)
+      await kit.cmd(`/setblock ${x + 1} ${y} ${z} minecraft:fire`)
+      await sleep(1000)
+      pr = { detail: { lit: true, inner: { x: x + 1, y, z } }, note: 'рама командой (подготовка)' }
+    }
+  }
   await kit.cmd('/spawnpoint @s')
   let s0: Record<string, any> = {} as Record<string, any>
-  for (let k = 0; k < 2 && s0.dimension !== 'the_nether'; k++) {
+  // Как try-lab-ne-run nrEnter: рама цела, портал погас — поджечь заново и снова войти (nbs07a/nbs08a 21.10: «в Ад не вошёл
+  // на подготовке» при раме под ногами).
+  for (let k = 0; k < 3 && s0.dimension !== 'the_nether'; k++) {
+    if (k > 0) await call('portal', { timeoutSeconds: 120 }).catch(() => null)
     await call('portal', { mode: 'enter', timeoutSeconds: 180 }).catch(() => null)
     for (let w = 0; w < 10; w++) { s0 = await status(); if (s0.dimension === 'the_nether') break; await sleep(1000) }
   }
   // Портал горит, а войти не смогло (подготовка, ферма) — в клетку портала командой (try-lab-ne-util.portalTp).
   if (s0.dimension !== 'the_nether' && pr && pr.detail && pr.detail.inner && await (require('../lib/try-lab-ne-util') as typeof import('../lib/try-lab-ne-util')).portalTp(kit, status, pr.detail.inner, call)) s0 = await status()
   const fail = why => {
-    const rec: Record<string, any> = { at: new Date().toISOString(), seed: seedOf(), ok: false, setupFail: true, stoppedBy: why }
+    const rec: Record<string, any> = { at: new Date().toISOString(), seed: seedOf(), ok: false, setupFail: true, stoppedBy: why,
+      portal: String((pr && (pr.error || (pr.detail && (pr.detail.note || pr.detail.stopped)))) || '').slice(0, 300), dimension: s0.dimension || null, pos: s0.pos || null }
     fs.appendFileSync(OUT, JSON.stringify(rec) + '\n')
     console.log(JSON.stringify(rec))
   }
   if (s0.dimension !== 'the_nether') { fail('в Ад не вошёл на подготовке'); try { await Promise.race([call('disconnect', {} as Record<string, any>), gameClock.wall.sleep(8000)]) } catch {} process.exit(0) }
+  if (fixtureObsidian) await kit.cmd('/clear @s minecraft:obsidian')
   const entry = { x: Math.round(s0.pos.x), y: Math.round(s0.pos.y), z: Math.round(s0.pos.z) }
   const B = locate('bastion_remnant', 'the_nether', entry)
   if (!B) { fail('бастиона /locate не нашёл'); process.exit(0) }
   if (process.env.NEAR === '1') {
     const d = Math.hypot(B.x - entry.x, B.z - entry.z) || 1
-    const x = Math.round(B.x - (B.x - entry.x) / d * 40); const z = Math.round(B.z - (B.z - entry.z) / d * 40)
-    const r = await kit.cmd(`/execute in minecraft:the_nether run spreadplayers ${x} ${z} 0 8 under 80 false @s`, { reply: /Spread|Could not/, ms: 30000 })
-    if (!r.ok || /Could not/.test(r.reply || '')) { fail('spreadplayers у бастиона не вышел'); process.exit(0) }
+    // Точка постановки — не в дельтах базальта (ne 21.10: сид 3292…6185 — тело в дельтах, кубы магмы ×4 на 1–6-й мин; в честном
+    // проходе тело идёт от портала и дельты обходит): 40 бл. от бастиона к порталу, иначе 30/50/24/60 и в стороны на 25°.
+    let placed = false
+    for (const [dd, ang] of [[40, 0], [30, 0], [50, 0], [40, 25], [40, -25], [24, 0], [60, 0], [30, 45], [30, -45]]) {
+      const a = Math.atan2(entry.z - B.z, entry.x - B.x) + ang * Math.PI / 180
+      const x = Math.round(B.x + Math.cos(a) * Math.min(dd, d)); const z = Math.round(B.z + Math.sin(a) * Math.min(dd, d))
+      const r = await kit.cmd(`/execute in minecraft:the_nether run spreadplayers ${x} ${z} 0 8 under 80 false @s`, { reply: /Spread|Could not/, ms: 30000 })
+      if (!r.ok || /Could not/.test(r.reply || '')) continue
+      await sleep(500)
+      const p = (await status()).pos
+      if (!p) continue
+      const deltas = /passed/i.test(rcon(`execute in minecraft:the_nether if biome ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)} minecraft:basalt_deltas`))
+      console.log('постановка у бастиона', JSON.stringify({ dd, ang, at: [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)], deltas }))
+      if (!deltas) { placed = true; break }
+    }
+    // Вокруг бастиона всё в дельтах (6185: 9 точек из 9) — честное прибытие: тело обратно к порталу, дорогу идёт само.
+    if (!placed) {
+      await kit.cmd(`/execute in minecraft:the_nether run tp @s ${entry.x} ${entry.y} ${entry.z}`)
+      console.log('постановка у бастиона: вокруг дельты — тело у портала', JSON.stringify(entry))
+    }
   }
   await give(KIT_AFTER)
   let map = null
@@ -207,8 +257,13 @@ async function main () {
   const marks: Record<string, any> = {} as Record<string, any>
   let lastCheck = 0
   const until = tc + MINUTES * 60000
+  // Стража по реальному времени, как try-lab-ne-run: бот вне игры (brain detached) — игровые часы стоят, sleep не кончается
+  // (nbs07f 21.10: сцена висела 25 мин после отключения тела).
+  let seen = { game: gameClock.now(), wall: gameClock.wall.now() }
   while (gameClock.now() < until) {
-    await sleep(5000)
+    await Promise.race([sleep(5000), gameClock.wall.sleep(15000)])
+    if (gameClock.now() > seen.game) seen = { game: gameClock.now(), wall: gameClock.wall.now() }
+    else if (gameClock.wall.now() - seen.wall > 90000) { stoppedBy = 'игровые часы стоят 90 с реального времени'; break }
     let text = ''
     try { text = fs.readFileSync(clog, 'utf8') } catch {}
     if (gameClock.now() - lastCheck > (METRICS ? 4500 : 20000)) {
@@ -223,9 +278,9 @@ async function main () {
     if (/БЛОКЕР/.test(text)) { stoppedBy = (text.match(/БЛОКЕР[^\n]{0,160}/) || ['БЛОКЕР'])[0]; break }
   }
   if (exited === null) { try { child.kill() } catch {} }
-  try { await call('stop') } catch {}
-  await sleep(1500)
-  const s = await status()
+  try { await Promise.race([call('stop'), gameClock.wall.sleep(10000)]) } catch {}
+  await Promise.race([sleep(1500), gameClock.wall.sleep(1500)])
+  const s: Record<string, any> = await Promise.race([status(), gameClock.wall.sleep(20000).then(() => ({} as Record<string, any>))])
   let text = ''
   try { text = fs.readFileSync(clog, 'utf8') } catch {}
   const tt = await truthType().catch(e => ({ type: 'ошибка', error: e.message }))

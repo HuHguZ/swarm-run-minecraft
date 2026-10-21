@@ -4,7 +4,8 @@
 // (blockmoves/exec*.ts).
 
 const REPLACE = /^(air|cave_air|void_air|water|short_grass|tall_grass|fern|large_fern|dead_bush|snow)$/
-const FILLER = /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|basalt|[a-z_]+_planks)$/
+const FILLER = process.env.ND_BLZ_BRICK_FILL === '1' ? /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|basalt|nether_bricks|[a-z_]+_planks)$/
+  : /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|basalt|[a-z_]+_planks)$/
 const EYE = 1.62
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
 

@@ -48,7 +48,7 @@ async function predictGoldAsync (bot, radius = 56, ctl: any = {}) {
 
 function * predictGoldSteps (bot, radius = 56) {
   const bp: typeof import('.././bastion-pieces') = require('.././bastion-pieces')
-  const rootGrid = process.env.ND_BASTION_ROOT_GRID === '1' && (require('.././nether-cover') as typeof import('.././nether-cover')).blind()
+  const rootGrid = (process.env.ND_BASTION_ROOT_GRID === '1' || process.env.ND_BASTION_HYP_FOCUS !== '0') && (require('.././nether-cover') as typeof import('.././nether-cover')).blind()
   const R = bot.registry.blocksByName
   const cids = [R.chest && R.chest.id, R.trapped_chest && R.trapped_chest.id, R.barrel && R.barrel.id].filter(Boolean)
   const chests = visibleOf(bot, cids, radius, { max: 40, rays: 3000 }).map(b => ({ pos: b.position, block: b }))
@@ -211,7 +211,7 @@ function distToBox (p, e) {
   return Math.hypot(dx, dy, dz)
 }
 
-async function handNoWalk (bot, pg) {
+async function handNoWalk (bot, pg, canContinue: (() => boolean) | null = null) {
   const pick: typeof import('.././pick') = require('.././pick')
   if (!bot.entities[pg.id] || admiring(pg)) return false
   const a = pick.aim(bot, pg)
@@ -221,7 +221,11 @@ async function handNoWalk (bot, pg) {
   const had = countOf(bot, 'gold_ingot')
   try {
     await bot.equip(ingot, 'hand')
-    await bot.lookAt(a.point, true)
+    if (canContinue && !canContinue()) return false
+    const fresh = canContinue ? pick.aim(bot, pg) : a
+    if (!fresh || !fresh.point) return false
+    await bot.lookAt(fresh.point, true)
+    if (canContinue && (!canContinue() || !pick.aim(bot, pg)?.point)) return false
     await bot.activateEntity(pg)
   } catch { return false }
   for (let i = 0; i < 8 && countOf(bot, 'gold_ingot') >= had; i++) await sleep(60)
@@ -238,12 +242,13 @@ function aimOut (bo) {
   return new Vec3(bo.W.x + 0.5 + bo.d[0] * 0.5, bo.W.y + 0.55, bo.W.z + 0.5 + bo.d[1] * 0.5)
 }
 
-async function tossOut (bot, bo, name, count = 1, aim = null) {
+async function tossOut (bot, bo, name, count = 1, aim = null, canContinue: (() => boolean) | null = null) {
   const it = itemNamed(bot, name)
   if (!it) return false
   try {
     await bot.lookAt(aim || aimOut(bo), true)
     await sleep(80) // взгляд уходит на сервер следующим тиком, бросок — сразу
+    if (canContinue && !canContinue()) return false
     await bot.toss(it.type, null, Math.min(count, it.count))
     return true
   } catch { return false }

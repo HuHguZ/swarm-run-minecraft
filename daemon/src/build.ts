@@ -42,10 +42,13 @@ const scaffoldAny = () => process.env.ND_SCAFFOLD_ANY === '1'
 // В Аду — незерак первым: булыжник там — запасные кирки (см. worlds.tuneMovements).
 // Кирпич бастиона и соул-сэнд — тоже стройка (после бастиона незерака в рюкзаке бывало 0, а кирпича 20+:
 // окоп эндерменов стоял «нечем строить», chain6-15 30.09). Соул-сэнд — последним: на нём тело вязнет.
-const FILLER_NETHER = ['netherrack', 'dirt', 'basalt', 'blackstone', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'cobblestone', 'deepslate', 'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'end_stone', 'mossy_cobblestone', 'soul_soil', 'warped_wart_block', 'nether_wart_block', 'sand', 'gravel', 'soul_sand']
+// ND_BLZ_BRICK_FILL=1 (blz 21.10): кирпич крепости — тоже блок стройки (полный, стойкость 6): на мостах крепости незерака нет, а кирпича
+// из своих штреков 100+ (bzC2-s18-1, bzC5-s18-4: «нечем строить» → БЛОКЕР).
+const BRICK_FILL = process.env.ND_BLZ_BRICK_FILL === '1' ? ['nether_bricks'] : []
+const FILLER_NETHER = ['netherrack', 'dirt', 'basalt', 'blackstone', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'cobblestone', 'deepslate', ...BRICK_FILL, 'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'end_stone', 'mossy_cobblestone', 'soul_soil', 'warped_wart_block', 'nether_wart_block', 'sand', 'gravel', 'soul_sand']
 // Гаст на виду (64) или слышен (15 с) — сперва взрывостойкое: шар (сила 1) рвёт незерак (стойкость 0.4) и коробку из него,
 // булыжник и чернокамень (6), базальт (4.2) — нет (Codex q8, jar 1.21.11). Касается и мостов: «гаст → лава» — пол из незерака.
-const BLAST_NETHER = ['cobblestone', 'cobbled_deepslate', 'blackstone', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff',
+const BLAST_NETHER = ['cobblestone', 'cobbled_deepslate', 'blackstone', ...BRICK_FILL, 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff',
   'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'polished_blackstone', 'mossy_cobblestone', 'end_stone', 'basalt', ...FILLER_NETHER]
 function ghastThreat (bot) {
   if (process.env.ND_BLAST_FILLER === '0') return false
@@ -169,7 +172,7 @@ const isNeighbour = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.a
 //
 // `steady` keeps sand and gravel out of the hand: a block meant to hang over
 // air must not be one that falls.
-async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady = false, prop = null, honest = false, ctl = null }: any = {}) {
+async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady = false, prop = null, honest = false, exactAim = false, ctl = null }: any = {}) {
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   const target = bot.blockAt(pos)
   if (!target) return { ok: false, reason: 'блок вне прогруженного мира' }
@@ -184,7 +187,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   if (cannot) return { ok: false, reason: cannot }
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
 
-  const first = await againstFaces(bot, pos, timeoutMs, { honest, ctl })
+  const first = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl })
   if (first.ok) return first
   if (first.refs) return { ok: false, refused: first.refused, reason: first.reason }
   // Open air on all six sides. Nothing about the bag, the tool or the server:
@@ -194,7 +197,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   if (!prop || !isNeighbour(pos, prop)) return { ok: false, noFooting: true, reason: NO_FACE }
 
   const at = xyz(prop)
-  const under = await placeBlockAt(bot, prop, { item, timeoutMs, steady, honest, ctl })
+  const under = await placeBlockAt(bot, prop, { item, timeoutMs, steady, honest, exactAim, ctl })
   if (!under.ok) {
     return {
       ok: false,
@@ -206,7 +209,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   const propped = { at, placed: under.placed || under.already, face: under.face }
   const again = await holdFiller(bot, item, steady)
   if (again) return { ok: false, prop: propped, reason: `подпорку поставил, а на сам блок: ${again}` }
-  const second = await againstFaces(bot, pos, timeoutMs, { honest, ctl })
+  const second = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl })
   if (second.ok) return { ...second, prop: propped }
   return { ok: false, prop: propped, refused: second.refused, reason: second.reason }
 }
@@ -220,7 +223,8 @@ const faceKind = f => (f.y < 0 ? 'bottom' : f.y > 0 ? 'top' : 'side')
 // honest — только грани, которые видно из глаз (pick.faceAim): блок у
 // противника (ловушка, опора наковальни) не ставится сквозь стенку, за которой
 // грани не видно, — клиент игры так не может (2026-09-26, «чит WH»).
-async function againstFaces (bot, pos, timeoutMs, { honest = false, ctl = null }: any = {}) {
+async function againstFaces (bot, pos, timeoutMs, { honest = false, exactAim = false, ctl = null }: any = {}) {
+  const until = exactAim ? gameClock.now() + timeoutMs : Infinity
   const torch = bot.heldItem?.name === 'torch'
   const expected = bot.heldItem?.name
   const appeared = b => b && (b.boundingBox !== 'empty' || b.name === expected || (torch && /^(wall_)?torch$/.test(b.name)))
@@ -236,12 +240,15 @@ async function againstFaces (bot, pos, timeoutMs, { honest = false, ctl = null }
   // face» and «that face never came up» read the same.
   const refused = []
   for (const face of FACES) {
+    if (exactAim && gameClock.now() >= until) return { ok: false, refs, reason: 'время на видимые грани вышло' }
     if (ctl?.aborted) return { ok: false, refs, reason: 'прервано' }
     if (torch && face.y < 0) continue // обычный факел не крепится снизу к потолку
     const ref = bot.blockAt(pos.minus(face))
     if (!ref || ref.boundingBox !== 'block' && ref.name !== 'cobweb') continue
     if (/water|lava/.test(ref.name)) continue
-    if (honest && !(require('./pick') as typeof import('./pick')).faceAim(bot, ref.position, face)) continue
+    const hit = honest || exactAim ? (require('./pick') as typeof import('./pick')).faceAim(bot, ref.position, face) : null
+    if ((honest || exactAim) && !hit) continue
+    if (exactAim && !bot._placeBlockWithOptions) continue
     refs++
     try {
       // Целимся туда же, куда прицелится сам placeBlock, а не в центр клетки.
@@ -254,14 +261,14 @@ async function againstFaces (bot, pos, timeoutMs, { honest = false, ctl = null }
       // десятки градусов и несколько тиков ожидания внутри нашего же поводка.
       // Прицел в ту же точку делает второй взгляд пустым: yawChange === 0 и
       // ранний return.
-      const aim = ref.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5)
+      const aim = exactAim ? hit : ref.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5)
       await bot.lookAt(aim, true)
       if (ctl?.aborted) return { ok: false, refs, reason: 'прервано' }
       // A cancellable call has already aimed; avoid another async look inside
       // generic_place between the cancellation check and the actual packet.
-      await withTimeout(ctl && bot._placeBlockWithOptions
-        ? bot._placeBlockWithOptions(ref, face, { forceLook: 'ignore', swingArm: 'right' })
-        : bot.placeBlock(ref, face), timeoutMs)
+      await withTimeout((ctl || exactAim) && bot._placeBlockWithOptions
+        ? bot._placeBlockWithOptions(ref, face, { forceLook: 'ignore', swingArm: 'right', ...(exactAim ? { delta: aim.minus(ref.position) } : {}) })
+        : bot.placeBlock(ref, face), exactAim ? Math.max(1, until - gameClock.now()) : timeoutMs)
       const now = bot.blockAt(pos)
       if (appeared(now)) return { ok: true, placed: now.name, face: faceKind(face) }
       last = new Error('блок не появился')
@@ -446,7 +453,10 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
       // refuses it. We are already looking straight down, so the look is the
       // part we can afford to drop. Then verify rather than trust.
       await bot._genericPlace(below, new Vec3(0, 1, 0), { forceLook: 'ignore', swingArm: 'right' })
-      if (await waitForBlock(bot, feet, 900)) placed++
+      if (await waitForBlock(bot, feet, 900)) {
+        placed++
+        if (process.env.ND_NE_NO_GIVEUP === '1') (require('./nether-no-giveup') as typeof import('./nether-no-giveup')).recordOwnSupport(bot, feet)
+      }
       else why.push(`сервер не поставил блок под ноги (${(bot.blockAt(feet) || {}).name})`)
     } catch (e) {
       // A missed jump-place is normal; the loop just tries again from wherever
@@ -473,7 +483,7 @@ async function towerUp (bot, ctl, blocks = 1, { sneak = true, item = null, maxDi
 // Break the ceiling straight overhead and climb into the gap. Sand and gravel
 // pour into the shaft the moment they are unsupported, so the block above is
 // re-read every swing instead of trusting a plan made three swings ago.
-async function digUp (bot, ctl, { blocks = 3, mcData = null, tower = true, guard = null }: any = {}) {
+async function digUp (bot, ctl, { blocks = 3, mcData = null, tower = true, guard = null, handSandstone = false }: any = {}) {
   let dug = 0
   let stopped = null
   const threatened = () => {
@@ -501,13 +511,26 @@ async function digUp (bot, ctl, { blocks = 3, mcData = null, tower = true, guard
     if (above.name === 'bedrock') { if (required) stopped = 'сверху бедрок'; return false }
     if (mcData) {
       const problem = missingHarvestTool(bot, above, mcData)
-      if (problem) { if (required) stopped = problem; return false }
+      if (problem && !(handSandstone && /^(sandstone|red_sandstone)$/.test(above.name))) { if (required) stopped = problem; return false }
     }
     try {
       await equipBestTool(bot, above)
       await bot.dig(above)
       dug++
       await sleep(150)
+      // ND_OW_GRAVEL_SETTLE=1: над вскрытой клеткой сыпучее — колонна падает в неё (2 тика задержки FallingBlock + полёт, 1.21.11);
+      // прыжок столба раньше кладёт голову в гравий (owN0/N1/N2-owC12-04: камень 33, гравий 34–38 — удушье во всех плечах).
+      // Ждать и перекапывать, пока клетка пуста и над ней не сыпучее; 8 раз не хватило — подъём здесь не веду.
+      if (typeof process !== 'undefined' && process.env.ND_OW_GRAVEL_SETTLE === '1') {
+        for (let k = 0; ; k++) {
+          const over = bot.blockAt(above.position.offset(0, 1, 0))
+          if (!(over && FALLING.has(over.name)) && bot.blockAt(above.position)?.boundingBox === 'empty') break
+          if (k >= 8 || (ctl && ctl.aborted)) { if (required) stopped = `сверху сыплется ${over?.name || 'гравий'} — столб здесь не веду`; return false }
+          await sleep(600)
+          const cell = bot.blockAt(above.position)
+          if (cell && cell.boundingBox === 'block' && FALLING.has(cell.name)) { await equipBestTool(bot, cell); await bot.dig(cell); dug++; await sleep(150) }
+        }
+      }
       return true
     } catch (e) {
       if (required) stopped = e.message
@@ -559,12 +582,17 @@ function inPit (bot) {
 // and the stuck guard fires. Measured during the first descent — goto out of a
 // three-block shaft failed with "застрял на air у air", and the bot then sat
 // there suffocating. Climbing out first turns that into an ordinary walk.
-async function escapePit (bot, ctl, { maxClimb = 24, mcData = null }: any = {}) {
+async function escapePit (bot, ctl, { maxClimb = 24, mcData = null, session = null, toward = null }: any = {}) {
   if (!inPit(bot)) return { wasInPit: false, climbed: 0 }
   const startY = bot.entity.position.y
 
   for (let i = 0; i < maxClimb && !(ctl && ctl.aborted); i++) {
     if (!inPit(bot)) break
+    if (process.env.ND_BRUTE_MEMORY === '1') {
+      const owner = session || (bot._ndGuard?.session?.bot === bot ? bot._ndGuard.session : { bot, mcData })
+      const memory = await (require('./brute-shelter') as typeof import('./brute-shelter')).ensureShelterExit(owner, ctl, toward, { knownShelter: true })
+      if (memory) return { wasInPit: true, climbed: Math.round(bot.entity.position.y - startY), stopped: 'brute memory: replan covered exit', memory }
+    }
     const before = bot.entity.position.y
     const r = await digUp(bot, ctl, { blocks: 1, mcData, tower: true })
     if (bot.entity.position.y - before < 0.5) {
@@ -575,10 +603,10 @@ async function escapePit (bot, ctl, { maxClimb = 24, mcData = null }: any = {}) 
 }
 
 module.exports = {
-  FACES, FILLER, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
+  FACES, FILLER, FALLING, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
   isFree, occupiedByEntity, inPit, escapePit
 }
 export {
-  FACES, FILLER, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
+  FACES, FILLER, FALLING, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
   isFree, occupiedByEntity, inPit, escapePit
 }

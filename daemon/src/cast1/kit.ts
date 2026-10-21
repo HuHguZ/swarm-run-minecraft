@@ -235,6 +235,9 @@ export async function climb (ox: OneCast, want) {
     report.placed += t.placed || 0
     await sleep(120)
     syncH(ox)
+    // Тело не на колонне столба (ox.h считается только над ox.pc): столб рос бы без предела — owM0-owC5b-08 поднялся с y80 до y290.
+    const at = bot.entity.position.floored()
+    if (at.x !== ox.pc.x || at.z !== ox.pc.z || at.y > ox.pc.y + want + 1) return `столб не на колонне ${ox.pc.x},${ox.pc.z} (тело ${at.x},${at.y},${at.z})`
     if (t.placed) continue
     const why = (t.why || []).join('; ') || t.reason || '?'
     if (++fails >= 3) return `столб не вырос (${why})`

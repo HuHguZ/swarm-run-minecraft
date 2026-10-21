@@ -65,7 +65,7 @@ defStage('pearls', () => !!known.portal && have('ender_pearl') + have('ender_eye
     if (fillersNow() < 6) { log(`блоков на окоп нет (${fillersNow()}) — охоту не начинаю`); break }
     const p0 = have('ender_pearl')
     const tHunt = gameClock.now()
-    const h = await act('pearls', { count: eyesWant() - have('ender_eye') - have('ender_pearl'), timeoutSeconds: 400, style: PEARL_STYLE })
+    const h = await act('pearls', { ...(process.env.ND_BASTION_PRICE === '1' ? { mode: 'hunt' } : {}), count: eyesWant() - have('ender_eye') - have('ender_pearl'), timeoutSeconds: 400, style: PEARL_STYLE })
     await refresh()
     const hd = (h && h.detail) || {}
     if (process.env.ND_EM_PRICE_RECEIPTS !== '1') {

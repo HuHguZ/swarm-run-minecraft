@@ -152,6 +152,11 @@ function stateSummary (bot, extra: any = {}) {
     health: (bot.health ?? 0) > 0 ? Math.max(1, Math.round(bot.health)) : 0,
     food: Math.round(bot.food ?? 0),
     fireResistance: (require('./blaze') as typeof import('./blaze')).hasEffect(bot, 'fire_resistance'),
+    // Остаток выпитой FR по часам глотка (blaze/potions: эффект своего тела клиент не видит) — этапу: хватит ли на новый подход к трону.
+    // Срок неизвестен (выпито мимо часов, а эффект виден) — 999: не «кончилась» (nS01-s19-1: FR от огня выпита, «FR на 0 с» — домой).
+    fireResistanceSec: bot._ndFrUntil && bot._ndFrUntil > (require('./game-clock') as typeof import('./game-clock')).now()
+      ? Math.round((bot._ndFrUntil - (require('./game-clock') as typeof import('./game-clock')).now()) / 1000)
+      : (require('./blaze') as typeof import('./blaze')).hasEffect(bot, 'fire_resistance') ? 999 : 0,
     time: timeLabel(bot),
     isRaining: raining(bot),
     held,
@@ -231,6 +236,7 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
     // блоках до луча не доходила вовсе — та же болезнь, что у mine (2026-09-26).
     const found = (require('./sight') as typeof import('./sight')).visibleOf(bot, ids, radius, { max: maxBlocks, fair, rays: 1500 })
     const groups = new Map()
+    const shore = fair && process.env.ND_DIG_PLUG_WATER === '1' && process.env.ND_DIG_PLUG_WATER_SHORE !== '0'
     for (const block of found) {
       if (!block) continue
       const pos = block.position
@@ -241,6 +247,11 @@ function observe (bot, mcData, { radius = 24, fair = true, maxBlocks = 300 }: an
       } else {
         g.count++
         if (dist < g.dist) { g.dist = Math.round(dist * 10) / 10; g.nearest = round(pos) }
+      }
+      // Preserve the visible water front, not only its nearest corner. No extra world reads.
+      if (shore && block.name === 'water') {
+        const water = groups.get('water')
+        ;(water.seen ||= []).push(round(pos))
       }
     }
     // Память увиденного (perception/eyes, S10): что тело видело раньше и сейчас отсюда не видно — тоже «знаю», с пометкой

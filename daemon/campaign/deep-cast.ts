@@ -287,6 +287,14 @@ async function approachCastLava () {
   // Each repetition requires a shorter three-dimensional route, including actual descent.
   while (!died && !strategyInterrupted && distance() > 4) {
     const before = distance()
+    // ND_OW_CAST_SHAFT=1: лава глубоко под ногами (8+) и рядом по горизонтали — колодцем вниз (блок на уровень, чутьё лавы и воды под ногами
+    // и сбоку), а не goto с копкой (int9-s22-1: 8 мин «вниз по 4 блока в минуту» к лаве на 55 ниже).
+    const deep = y() - (q.y ?? y())
+    if (process.env.ND_OW_CAST_SHAFT === '1' && deep > 8 && Math.hypot(q.x - state.pos.x, q.z - state.pos.z) <= 16) {
+      const sh = await act('tunnel', { direction: 'down', length: Math.min(64, Math.round(deep - 3)), timeoutSeconds: 180 })
+      if (sh.status === 'interrupted' || died || strategyInterrupted) return false
+      if (distance() < before - 1) continue
+    }
     const r = await act('goto', { x: q.x, y: (q.y ?? y()) + 1, z: q.z, range: 3, surface: false, descent: false, timeoutSeconds: 60 })
     if (r.status === 'interrupted' || died || strategyInterrupted) return false
     const dx = q.x - state.pos.x, dz = q.z - state.pos.z, lower = y() - q.y

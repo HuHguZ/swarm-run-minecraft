@@ -6,10 +6,22 @@ import { hazardAt, FREE_FALL, floorBelow, groundUnder, judgeDrop, dropFields, se
 import { STAIR_DIRS, facingDir, dirName, STAIR_DIR_LIST, canFootStep, shaftWayOut, ledgeReport, stepForward,
   standingCell, walkOff, placeTorch } from './stair-steps'
 import { descentGuard } from './descent-guard'
+// Модуль K (затычка воды) грузится только под ND_DIG_PLUG_WATER=1: песочницы тестов actions (vm с заглушками require) без него.
+const plugOn = () => typeof process !== 'undefined' && process.env.ND_DIG_PLUG_WATER === '1'
+const digWater = () => require('../mining/dig-water') as typeof import('../mining/dig-water')
+const plugWaterEnabled = plugOn
+const liquidSeen = (bot, b) => digWater().liquidSeen(bot, b)
+const plugBudget = (): ReturnType<typeof import('../mining/dig-water').plugBudget> => plugOn() ? digWater().plugBudget() : { limit: 0, placed: [], tries: new Map() }
+const plugVisibleLiquids = (bot, ctl, cells, deadline, budget) => plugOn() ? digWater().plugVisibleLiquids(bot, ctl, cells, deadline, budget) : Promise.resolve(null)
+const digVisibleBlock = (bot, block, ctl) => plugOn() ? digWater().digVisibleBlock(bot, block, ctl) : bot.dig(block)
 import * as gameClock from '../game-clock'
 import { sleep, xyz } from '../movement'
 import { equipBestTool, missingHarvestTool, countItems, diffItems, toolShortfall, toolStatus, SWINGS_PER_LEVEL } from '../items'
-import { withTimeout, placeBlockAt, pickFiller } from '../build'
+import { withTimeout, placeBlockAt, pickFiller, FALLING } from '../build'
+// ND_OW_STAIR_QUICKBREAK=1: ступень ломает быстрые блоки без инструмента добычи, как штрек (dig-core quickBreak): снег на склоне
+// стопорил спуск «snow_block голыми руками не ломается» (C12/C5b: 16 дневных остановок). Ленивый require — песочницы actions.
+const stairQuickBreak = (bot, b) => typeof process !== 'undefined' && process.env.ND_OW_STAIR_QUICKBREAK === '1' &&
+  (require('../mining/dig-core') as typeof import('../mining/dig-core')).quickBreak(bot, b)
 // Stone does not lie around on the surface; getting to it means going down.
 // Straight down is how players die to lava, so check two blocks ahead before
 // every swing and refuse rather than gamble.
@@ -128,7 +140,7 @@ interface StairsCtx {
   session: any; ctl: any; bot: any; mcData: any; dir: any; dx: any; dz: any; want: any; deadline: any; again: any;
   before: any; from: any; drops: any; guard: any; torchEvery: any; maxFallHp: any; nightWork: any;
   cut: any; stalls: any; torches: any; stopped: any; noFooting: any; bridged: any; propped: any; underside: any;
-  spent: any; ledge: any
+  spent: any; ledge: any; nightRefusal?: any; plugs: ReturnType<typeof plugBudget>
 }
 
 interface StairsLevel { feet: any; head: any; mid: any; low: any; land: any; drop: any; jump: any; work: any }
@@ -185,23 +197,17 @@ function startStairs (session, ctl, { depth, direction, torchEvery, timeoutSecon
   ctl.onAbort.push(() => { try { bot.clearControlStates() } catch {} })
   return {
     session, ctl, bot, mcData, dir, dx, dz, want, deadline, again, before, from, drops, guard, torchEvery, maxFallHp, nightWork,
-    cut, stalls, torches, stopped, noFooting, bridged, propped, underside, spent, ledge
+    cut, stalls, torches, stopped, noFooting, bridged, propped, underside, spent, ledge, plugs: plugBudget()
   }
 }
 
 // Начало уровня: время, здоровье, кирка, взгляд, клетки ступени, опасность, опора над пещерой или прыжок в неё.
-async function stairsFooting (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | undefined> {
+async function stairsFooting (sc: StairsCtx, lv: StairsLevel, opened = false): Promise<'stop' | undefined> {
   const { session, bot, mcData, dir, dx, dz, deadline, again, guard, maxFallHp } = sc
   if (gameClock.now() >= deadline) { sc.stopped = `время вышло на ${sc.cut}-й ступеньке`; return 'stop' }
   const hp = bot.health ?? 20
   if (hp < 6) { sc.stopped = `здоровья ${Math.round(hp)} — дальше не копаю`; return 'stop' }
 
-  // Ten levels of pickaxe left is the line, not zero. Measured on the descent
-  // that stranded the bot at y=-58: forty levels cost 166 swings and then 182,
-  // so a level is four, and running out at depth is not a setback but the end
-  // of the run — it could neither dig on nor cut a staircase home, carrying
-  // 208 cobblestone the whole time. Asked every level, so the same line is
-  // also the up-front refusal when the bag is already under it.
   const worn = toolShortfall(bot, mcData, { need: SWINGS_PER_LEVEL })
   if (worn) { sc.stopped = worn; return 'stop' }
 
@@ -213,6 +219,7 @@ async function stairsFooting (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | 
   if (alarm) { sc.stopped = alarm; return 'stop' }
 
   const feet = standingCell(bot)
+  if (opened && !feet.equals(lv.feet)) { sc.stopped = 'сбило со ступени во время копки — заново оцени проход'; return 'stop' }
   // Stepping from feet down to (dir, -1): the body walks through the two
   // cells at its own height and drops into the one below them.
   const head = feet.offset(dx, 1, dz)
@@ -220,6 +227,8 @@ async function stairsFooting (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | 
   const low = feet.offset(dx, -1, dz)
   const land = feet.offset(dx, -2, dz)
 
+  const wet = await plugVisibleLiquids(bot, sc.ctl, [head, mid, low], deadline, sc.plugs)
+  if (wet) { sc.stopped = wet; return 'stop' }
   const hz = hazardAt(bot, [head, mid, low])
   if (hz) { sc.stopped = `${hz} — дальше не копаю`; return 'stop' }
   const lowBlock = bot.blockAt(low)
@@ -243,6 +252,10 @@ async function stairsFooting (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | 
   // one block per level over the cave. Health comes after blocks because
   // health is the resource whose shortage ends the trip, and every step gives
   // back two or three cobblestone.
+  if (plugWaterEnabled() && !opened) {
+    Object.assign(lv, { feet, head, mid, low, land, drop: 1, jump: null })
+    return
+  }
   const under = bot.blockAt(land)
   let drop = 1
   let jump = null
@@ -251,7 +264,7 @@ async function stairsFooting (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | 
     if (reach !== null) {
       drop = reach
     } else {
-      const put = await placeBlockAt(bot, land, { steady: true, prop: low })
+      const put = await placeBlockAt(bot, land, { steady: true, prop: low, ...(plugWaterEnabled() ? { honest: true, exactAim: true, ctl: sc.ctl } : {}) })
       if (put.ok) {
         sc.bridged++
         if (put.prop) sc.propped++
@@ -286,28 +299,36 @@ async function stairsCut (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | unde
   let refused = null
   for (const cell of [head, mid, low]) {
     if (ctl.aborted) break
+    const wet = await plugVisibleLiquids(bot, ctl, [head, mid, low], sc.deadline, sc.plugs)
+    if (wet) { refused = wet; break }
     const b = bot.blockAt(cell)
     if (!b || b.boundingBox === 'empty') continue
     const seen = await guard.check()
     if (seen) { refused = seen; break }
-    const problem = missingHarvestTool(bot, b, mcData)
+    const problem = stairQuickBreak(bot, b) ? null : missingHarvestTool(bot, b, mcData)
     if (problem) { refused = problem; break }
+    // ND_OW_GRAVEL_SETTLE=1: песок/гравий над клеткой падает через ~10 тиков после вскрытия (2 тика задержки + падение блока);
+    // перечитать клетку сразу — увидеть воздух и шагнуть под колонну (удушья C2–C9).
+    const settle = typeof process !== 'undefined' && process.env.ND_OW_GRAVEL_SETTLE === '1' && FALLING.has(bot.blockAt(cell.offset(0, 1, 0))?.name)
     try {
       await equipBestTool(bot, b)
-      await withTimeout(bot.dig(b), 20000, 'блок не ломается')
+      await withTimeout(digVisibleBlock(bot, b, ctl), 20000, 'блок не ломается')
     } catch (e) {
       refused = e.message
       break
     }
+    if (settle) await sleep(600)
     // Verify rather than trust. Gravel refills the slot as fast as we empty
     // it, and a swing the server quietly refuses returns without error and
     // leaves the block standing — the bot then walks onto the step instead of
     // into it, and the staircase flattens. One retry, then give up honestly.
+    const wetAfter = await plugVisibleLiquids(bot, ctl, [head, mid, low], sc.deadline, sc.plugs)
+    if (wetAfter) { refused = wetAfter; break }
     const left = bot.blockAt(cell)
     if (left && left.boundingBox !== 'empty') {
       try {
         await equipBestTool(bot, left)
-        await withTimeout(bot.dig(left), 20000, 'блок не ломается')
+        await withTimeout(digVisibleBlock(bot, left, ctl), 20000, 'блок не ломается')
       } catch (e) {
         refused = e.message
         break
@@ -320,12 +341,20 @@ async function stairsCut (sc: StairsCtx, lv: StairsLevel): Promise<'stop' | unde
     }
   }
   if (refused) { sc.stopped = refused; return 'stop' }
+  const wetFinal = await plugVisibleLiquids(bot, ctl, [head, mid, low], sc.deadline, sc.plugs)
+  if (wetFinal) { sc.stopped = wetFinal; return 'stop' }
   // The last cell cut is the one most likely to have opened a cave, and the
   // step itself is the next second or so.
   const opened = await guard.check()
   if (opened) { sc.stopped = opened; return 'stop' }
-  const work = nightWork ? (require('../night-work') as typeof import('../night-work')).step(bot, low, feet, 3.25, undefined, 3) : null
+  if (plugWaterEnabled() && await stairsFooting(sc, lv, true) === 'stop') return 'stop'
+  const nightSafety = nightWork ? require('../night-work') as typeof import('../night-work') : null
+  const work = nightSafety ? (process.env.ND_NIGHT_FAIL_KEY === '1'
+    ? await nightSafety.prepareStep(bot, ctl, low, feet, 3.25, 3)
+    : { ...nightSafety.step(bot, low, feet, 3.25, undefined, 3), torchPlaced: false, nightRefusal: undefined }) : null
+  if (work?.torchPlaced) sc.torches++
   if (work?.stopped) {
+    sc.nightRefusal = work.nightRefusal
     const cover = await (require('../night-work') as typeof import('../night-work')).closeBehind(bot, ctl, mid)
     sc.stopped = `${work.stopped}; ${cover || 'проход закрыт перед собой'}`
     return 'stop'
@@ -418,6 +447,7 @@ async function stairsReport (sc: StairsCtx) {
   // level, so the brain has to be able to turn back while it still can.
   const picks = toolStatus(bot, 'pickaxe')
   return {
+    ...(plugWaterEnabled() ? { liquidPlugs: sc.plugs.placed } : {}),
     mode: 'лестница',
     direction: dirName(dir),
     from,
@@ -438,6 +468,7 @@ async function stairsReport (sc: StairsCtx) {
     directionWontHelp: noFooting || undefined,
     ...guard.report(),
     ledge: ledge || undefined,
+    nightRefusal: sc.nightRefusal,
     stopped: stopped || undefined
   }
 }

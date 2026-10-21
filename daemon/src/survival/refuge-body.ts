@@ -186,6 +186,8 @@ async function planksFirst (rf: RefugeRun) {
 // мы спринтом 5.6. Два коротких рывка, потом строиться где стоим.
 async function breakAway (rf: RefugeRun) {
   const { session, ctl, bot, flee, out, step } = rf
+  // Ад, нора (ND_NE_REFUGE_HOLE): от брута/пиглина не оторваться — копать сразу, удар-другой до дна дешевле бега под ударами.
+  if (rf.a.nether && rf.pick.how === 'hole' && process.env.ND_NE_REFUGE_HOLE === '1') return
   for (let k = 0; k < 2 && !ctl.aborted && outrun(rf.a, rf.pick.how); k++) {
     // От паука не оторваться — с ним бой (если он один на один), а не рывок.
     if (process.env.ND_REFUGE_SPIDER !== '0' && /^(spider|cave_spider)$/.test(rf.a.nearest.name) && await spiderFirst(rf)) continue

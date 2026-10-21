@@ -10,7 +10,10 @@ import { raySees } from '../perception'
 import { seesMob, ents, isRod, lavaNear, arrowsOnFloor, liveBlazes, watchers } from './targets'
 import { hasEffect } from './potions'
 
-async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, stopIf = null }: any = {}) {
+// deep (ND_BLZ_ROD_SWEEP, blz 21.10): и стержни ниже ног до 12 бл. (упали с помоста трона на землю под ним), у лавы — только если
+// лава в самой клетке или вплотную (1 бл.), а не в 3: стержни лежали «ещё N рядом» после боя в 1 из 3 боёв (убил 21 — подобрано 6,
+// ещё 6 лежат; убил 9 — 0 и ещё 4), доля подобранных — 38 % вместо 50 % выпадения.
+async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, stopIf = null, deep = false }: any = {}) {
   const t0 = gameClock.now()
   let walks = 0
   const skip = new Set()
@@ -31,7 +34,7 @@ async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, 
     const at = e => { try { return drops.restOf(bot, e) } catch { return e.position } }
     let rod: any = ents(bot)
       .filter((e : any) => e && e.name === 'item' && e.position && at(e).distanceTo(me) <= radius && isRod(e) && !skip.has(e.id))
-      .filter((e : any) => { const p = at(e); if (p.y < me.y - 3 || lavaNear(bot, p)) { skip.add(e.id); return false } return true })
+      .filter((e : any) => { const p = at(e); if (p.y < me.y - (deep ? 12 : 3) || lavaNear(bot, p, deep ? 1 : 3)) { skip.add(e.id); return false } return true })
       .sort((a, b) => at(a).distanceTo(me) - at(b).distanceTo(me))[0]
     if (!rod && arrows) rod = arrowsOnFloor(bot, radius).filter((e : any) => !skip.has(e.id)).sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
     if (rod && rod.name === 'arrow') skip.add(rod.id)
@@ -59,7 +62,7 @@ async function collectRods (bot, ctl, radius = 12, ms = 6000, { arrows = false, 
         m.allow1by1towers = false
         m.allowParkour = false
         m.allowSprinting = false
-        m.maxDropDown = 3
+        m.maxDropDown = deep ? 4 : 3
         try { (require('../worlds') as typeof import('../worlds')).tuneMovements(bot, m) } catch {}
         bot.pathfinder.setMovements(m)
         const ok2 = await go(Math.min(6000, left()))

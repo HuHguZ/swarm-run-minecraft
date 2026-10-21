@@ -9,14 +9,33 @@ import { trade as penTrade } from './pen-trap'
 import { eatIfHungry } from './predict-gold'
 import { burrow } from './defense'
 import { digTrap, digPit, moveBarterSite } from './barter-site'
+import * as OpenSite from './open-site'
 import { type BastionRun, type Turn, spare, done, goldReady } from './run'
+import * as HF from './hyp-focus'
 
 // Закрытый путь: после золота — торговое окно из штрека, потом штреком назад.
 export async function stepTunnelBarter (bx: BastionRun): Promise<Turn> {
   const { session, ctl, p, bot, st, mode, deadline } = bx
   if (st.sealed && st.sealedState && st.sealedDone && !st.pitDone) {
+    // Закрытый проход прошлого вызова кончился без добычи (sealedDone из памяти), торговать нечем и целей нет — не стоп за 1 с,
+    // а один новый обзор за вызов (stepSealed: вышка, зонд штреком к центру; не вышло — «не узнан», и кампания отложит бастион):
+    // nbs39-5974 — 349 вызовов подряд «золото кончилось: видимых блоков больше нет» с одного места.
+    if (mode !== 'barter' && !bx.rescanned && spare(bx) <= 0 && !countOf(bot, 'gold_block') && !st.pred.size && !st.gold.size &&
+        ![...st.chestSeen.keys()].some(k => !st.looted.has(k))) { bx.rescanned = true; st.sealedDone = false; return 'next' }
     st.pitDone = true
-    if (mode !== 'gold' && !done(bx) && (spare(bx) > 0 || countOf(bot, 'gold_block')) && await goldReady(bx)) await barterAtSite(bx)
+    // ND_BASTION_HYP_FOCUS: торговое место из штрека в стене не встаёт ни разу («ни ямы, ни окна» во всех nbf46–53), а яма у пола
+    // бастиона вскрыла море лавы (nbf53-5408, смерть с 108 слитками) — торг только на открытом (pearls seek: выход по своему штреку).
+    // Меньше 8 слитков — не торг: кампания на открытое с ними не идёт (carriedTrade ≥ 8), и «торг — на открытом» крутил bastion ↔ этапы
+    // без копки (c91-int1-s22: 1 слиток, 3 вызова подряд «бартер встал», потом ход к крепости — ифриты).
+    if (HF.on() && mode !== 'gold' && !done(bx) && spare(bx) > 0 && spare(bx) < 8 && !countOf(bot, 'gold_block')) st.lastBarter = `золота на торг мало (${spare(bx)} сл.)`
+    else if (HF.on() && mode !== 'gold' && !done(bx) && (spare(bx) > 0 || countOf(bot, 'gold_block'))) { st.lastBarter = 'торг — на открытом (seek)'; st.barterRetry = 'сменить место у торговцев с сохранённым золотом' }
+    else if (mode !== 'gold' && !done(bx) && (spare(bx) > 0 || countOf(bot, 'gold_block')) && await goldReady(bx)) await barterAtSite(bx)
+    // ND_SEEK_OWN_EXIT=1 (поток ne 21.10, выкл.): к торговцам — выйти своим закрытым штреком ко входу (exitTunnel: план по своим клеткам,
+    // закладки за спиной копаются), а не ходьбой seek с копкой напрямик: nl71b/nlo74b-5408 — путь сквозь комнаты стены, брут 12.9 + 8.3.
+    if (process.env.ND_SEEK_OWN_EXIT === '1' && st.lastBarter === 'торг — на открытом (seek)' && (bot.health ?? 20) >= 14 && !ctl.aborted) {
+      st.exit = await exitTunnel(session, ctl, st, deadline).catch(e => ({ ok: false, why: e.message })); log('выход к торговцам', st.exit)
+    }
+    if (stoppedReturn(bx)) return 'stop'
     // Лечиться — здесь, в замкнутой яме/штреке, а не снаружи: кампания после захода с хп 6 искала
     // нору в Аду, нора не закрылась — «БЛОКЕР», тело отключено (ферма 30.09, camp-10).
     if ((bot.health ?? 20) < 14 && !ctl.aborted) {
@@ -61,16 +80,40 @@ export async function stepTunnelBarter (bx: BastionRun): Promise<Turn> {
 // Яма со ртом (добыча падает к нам); не вышла — окно в стене. Бартер на месте, жемчуг мимо ямы.
 async function barterAtSite (bx: BastionRun) {
   const { ctl } = bx
+  const started = gameClock.now()
   const bo = await chooseSite(bx)
-  if (bo) await tradeAtSite(bx, bo)
-  else await noSite(bx)
+  if (stoppedReturn(bx)) return
+  const setupSeconds = (gameClock.now() - started) / 1000
+  if (bo?.kind === 'open') {
+    await OpenSite.tradeOpen(bx, bo)
+    if (stoppedReturn(bx)) return
+    if (bo.nextKind && !ctl.aborted) {
+      const t = gameClock.now(), protectedSite = await chooseSite(bx, false)
+      const protectedSetup = (gameClock.now()-t)/1000
+      if (protectedSite) { await tradeAtSite(bx, protectedSite); OpenSite.rememberProtected(bx.st, protectedSite, protectedSetup) }
+      else await noSite(bx)
+    }
+  }
+  else if (bo) { await tradeAtSite(bx, bo); if (OpenSite.enabled()) OpenSite.rememberProtected(bx.st, bo, setupSeconds) }
+  else { if (OpenSite.enabled()) OpenSite.rememberProtected(bx.st, null, setupSeconds); await noSite(bx) }
   // ND_PEARL_PICK=1: жемчуг, брошенный мимо ямы (D6-21 03.10: 108 слитков, брошено 4 жемчуга, доставка 0.58 — в
   // рюкзаке 0), — ходом по сетке (двор втридорога, брут в 10 — бросить) к каждому в 14 бл. и подобрать.
-  if (bo && process.env.ND_PEARL_PICK === '1' && !ctl.aborted) await pickStrayPearls(bx)
+  if (bo && bo.kind !== 'open' && process.env.ND_PEARL_PICK === '1' && !ctl.aborted) await pickStrayPearls(bx)
 }
 
-async function chooseSite (bx: BastionRun) {
+function stoppedReturn (bx: BastionRun) { return OpenSite.enabled() && bx.st.openReturn?.ok === false }
+
+async function chooseSite (bx: BastionRun, considerOpen = true) {
   const { session, ctl, p, bot, st, deadline } = bx
+  if (considerOpen && OpenSite.enabled() && process.env.ND_BARTER_TRADER_MEMORY === '1') await (require('./tower-scan') as typeof import('./tower-scan')).peekTraders(session,ctl,st,Math.min(deadline-90000,gameClock.now()+20000))
+  if (considerOpen && OpenSite.enabled()) {
+    const open = await OpenSite.chooseOpen(bx)
+    if (open) return open
+    if (stoppedReturn(bx)) return null
+  }
+  if (!OpenSite.enabled() && process.env.ND_BARTER_TRADER_MEMORY === '1') await (require('./tower-scan') as typeof import('./tower-scan')).peekTraders(session,ctl,st,Math.min(deadline-90000,gameClock.now()+20000))
+  // The local probe needs no already-seen trader or copy grid.
+  if (process.env.ND_BARTER_WALL_BOOTH === '1' && (!p.trade || p.trade === 'booth')) return digBooth(session, ctl, st, deadline - 85000)
   let bo = null
   for (let tryN = 0; tryN < (BF.enabled() ? 2 : 6) && !bo && !ctl.aborted && gameClock.now() < deadline - 90000; tryN++) {
     if (tryN && BF.enabled()) {
@@ -127,7 +170,7 @@ async function noSite (bx: BastionRun) {
   if (BF.enabled()) st.barterRetry = 'нет защищённого места у торговцев'
   // ND_OPEN_BARTER=1: ни ямы, ни окна, а золото есть — бартер на открытом, как у спидраннеров (золотая броня, брутов и
   // хоглинов в 24 нет): D7b-32 03.10 — 15 золотых блоков, 0 сделок, бастион «выработан».
-  if (!BF.enabled() && process.env.ND_OPEN_BARTER === '1' && !ctl.aborted && goldWorn(bot) && countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') >= 9 &&
+  if (!OpenSite.enabled() && !BF.enabled() && process.env.ND_OPEN_BARTER === '1' && !ctl.aborted && goldWorn(bot) && countOf(bot, 'gold_ingot') + 9 * countOf(bot, 'gold_block') >= 9 &&
     ![...mobs(bot, 'piglin_brute', 24), ...mobs(bot, 'hoglin', 24)].length && gameClock.now() < deadline - 60000) {
     await unpackGold(session, ctl, 9 * countOf(bot, 'gold_block') + countOf(bot, 'gold_ingot'))
     const n = countOf(bot, 'gold_ingot')

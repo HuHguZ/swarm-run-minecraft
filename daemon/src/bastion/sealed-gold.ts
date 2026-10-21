@@ -2,6 +2,8 @@
 // Золото бастиона штреком: sealedGold — оркестр захода (состояние — sealed-gold/state.ts, объект sg; шаги оборота —
 // sealed-gold/steps.ts, route.ts, gold.ts), гипотезы шаблона (rememberStarts), подход к предсказанному золоту (digToPredicted).
 import { approachWallSide, approachWallTop } from './tower-scan'
+import * as goldEvidence from './gold-evidence'
+import * as HF from './hyp-focus'
 import { log, xyz, mobs, seesMob, goals, walkGoal, gameClock, seesBlock, reachSet, angerSet, threatens, takeGoldBlock, keyOf } from './take-gold-block'
 import { walkUnlessBrute, bruteComing, tunnelTo } from './booth-trade'
 import { bruteDefense } from './defense'
@@ -18,30 +20,57 @@ const SG_STEPS: ((sg: SealedRun, tk: SealTick) => Promise<Turn>)[] = [
 // Координаты ниже — гипотезы шаблона из наблюдения fortress, не прочитанные клетки мира.
 function rememberStarts (bot, st, starts) {
   const bp: typeof import('../bastion-pieces') = require('../bastion-pieces')
-  const list = Array.isArray(starts) ? starts : []
-  const possible = process.env.ND_BASTION_ROOT_GRID === '1' && (require('../nether-cover') as typeof import('../nether-cover')).blind() ? list.filter(bp.startFitsGenerator) : list
+  const focus = HF.on()
+  // При фокусе к гипотезам обзора (predictGold: якоря — сундуки, базальт, видимое золото, валы) — гипотезы сетки по всем видимым
+  // блокам бастиона (entry-route.assess: маска кусков START_REL, кирпич стен тоже): nbf50-5974 — тело у боковой стены конюшен
+  // (12 золота), якорей нет, гипотез 0 за 30 мин.
+  const er = focus ? ((require('./entry-route') as typeof import('./entry-route')).memory(bot).assessment?.hypotheses || []).slice(0, 3)
+    .map(h => ({ type: h.type, r: h.r, t: h.t, score: h.score, from: ['сетка'] })) : []
+  const list = [...(Array.isArray(starts) ? starts : []), ...er]
+  const grid = (process.env.ND_BASTION_ROOT_GRID === '1' || focus) && (require('../nether-cover') as typeof import('../nether-cover')).blind()
+  const refuted = HF.refutedOf(bot)
+  // При фокусе гипотезы помнит тело (HF.remember): изнутри стены обзор их не даёт, а MEMO хранит цели без кусков.
+  const possible = (focus ? HF.remember(bot, grid ? list.filter(bp.startFitsGenerator) : list) : grid ? list.filter(bp.startFitsGenerator) : list)
+    .filter(s => !focus || !refuted.hyps.has(HF.hypKey(s)))
+  if (focus) {
+    // Цели памяти прошлого вызова без куска (MEMO хранит только ранг) — заново из гипотез: иначе вид плана пуст, а фокус слеп.
+    for (const [k, v] of [...st.pred.entries()]) if (!v.wall && /\//.test(v.piece || '')) st.pred.delete(k)
+    st.hypOrder = new Map()
+  }
   for (const [i, s] of possible.slice(0, 4).entries()) {
     if (!bp.START_REL[s?.type] || !Number.isInteger(s.r) || s.r < 0 || s.r > 3 ||
         !s.t || !['x', 'y', 'z'].every(k => Number.isFinite(s.t[k]))) continue
+    const hyp = HF.hypKey(s)
+    if (focus) st.hypOrder.set(hyp, i)
     for (const c of bp.piecesFromStart(s)) {
-      ;(st.pieces ||= []).push(c)
       const rank = 100 * (i + 1) + c.slot + 1
+      if (goldEvidence.on() && st.goldRejected?.has(goldEvidence.pieceKey(c))) continue
+      if (focus) { c.hyp = hyp; if (refuted.pieces.has(HF.pieceKey(c))) continue }
+      ;(st.pieces ||= []).push(c)
       for (const pos of bp.goldOf(c)) {
         const k = keyOf(pos)
-        if (!st.pred.has(k) && !st.gold.has(k)) st.pred.set(k, { pos, piece: c.piece, rank, wall: c })
+        if (goldEvidence.on()) goldEvidence.claimGold(st, pos, c, rank)
+        else if (!st.pred.has(k) && !st.gold.has(k)) st.pred.set(k, { pos, piece: c.piece, rank, wall: c })
       }
       for (const [x, y, z] of bp.lib()[c.piece].chests) {
         const pos = bp.toWorld(c, x, y, z); const k = keyOf(pos)
-        if (!st.chestSeen.has(k) && !st.looted.has(k)) st.chestSeen.set(k, { pos, pred: true, rank })
+        if (st.looted.has(k)) continue
+        const old = st.chestSeen.get(k)
+        if (focus && (!old || old.pred && !old.hyp)) st.chestSeen.set(k, { pos, pred: true, rank, wall: c, hyp })
+        else if (!old) st.chestSeen.set(k, { pos, pred: true, rank })
       }
     }
   }
+  if (focus) log('гипотезы бастиона', { all: possible.slice(0, 4).map(HF.hypKey), dropped: list.length - possible.length, focus: HF.focus(st), gold: st.pred.size })
 }
 
 async function sealedGold (session, ctl, st, until) {
   const sg = sgOpen(session, ctl, st, until)
   const { S } = sg
   turn: while (!ctl.aborted && gameClock.now() < until - 10000) {
+    // Оборот без ввода-вывода (шаг ответил 'next' на уже решённых промисах: answerAttack → fight вернулся сразу) крутился в
+    // микрозадачах: пакеты и keepalive не читались, часы игры стояли — nbf55-3818: «lost connection: Timed out», демон 2.5 ГБ.
+    await new Promise<void>(resolve => setImmediate(resolve))
     const tk: SealTick = {}
     for (const step of SG_STEPS) {
       const r = await step(sg, tk)
@@ -129,6 +158,7 @@ async function digToPredictedBody (session, ctl, st, t) {
   if (!b || b.name !== 'gold_block') {
     // Видим клетку, а золота нет — гипотеза этого ранга неверна целиком.
     const rank = (st.pred.get(t.k) || {}).rank
+    if (b && seesBlock(bot, b)) HF.judgeGold(bot, st, st.pred.get(t.k), b.name)
     st.pred.delete(t.k)
     st.predWrong = (st.predWrong || 0) + 1
     // Два промаха одного ранга (процессор generic превращает 30% золота в

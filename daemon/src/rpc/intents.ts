@@ -59,6 +59,8 @@ function intentMethods ({ session, bus, vision }: RpcContext) {
     pearls: async (p) => session.pearls(p || {}),
     bastion: async (p) => session.bastion(p || {}),
     nether_tunnel: async (p) => session.netherTunnel(p || {}),
+    // Поток ne (21.10, ND_NE_GOLD_FIRST): золотые ботинки из видимой руды Ада закрытым штреком (ne-gold-first.goldFirst: timeoutSeconds).
+    ne_gold_first: async (p) => session.runIntent('ne_gold_first', ctl => { session.require(); session.updateMovements(); return require('../ne-gold-first').goldFirst(session, ctl, p || {}) }, { timeoutMs: (Math.min(600, Number(p && p.timeoutSeconds) || 300) + 30) * 1000, params: p || {}, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }),
     // Поток nether-end: закопаться в толщу (bastion.burrowIntent) — штрек по Аду с открытого места не начинается.
     ne_burrow: async (p) => session.runIntent('ne_burrow', ctl => require('../bastion').burrowIntent(session, ctl, p || {}), { timeoutMs: 60000, params: p || {}, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }),
     // Поток S2 (06.10): загон пиглинов «люк за окном» из ямы со ртом (bastion/pen-trap.penIntent: mode pen|pit, timeoutSeconds, pearls, want, lanes).
@@ -66,7 +68,17 @@ function intentMethods ({ session, bus, vision }: RpcContext) {
     // Поток nether (03.10): ход по Аду по сетке копии мира (nether-route.routeTo: {x,y,z,r,dy,timeoutSeconds}).
     ne_route: async (p) => { p = p || {}; const s = Math.min(1500, Number(p.timeoutSeconds) || 600); return session.runIntent('ne_route', async ctl => { session.updateMovements(); return require('../nether-route').routeTo(session, ctl, { ...p, timeoutSeconds: s }) }, { timeoutMs: (s + 20) * 1000, params: p, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }) },
     // Поток unstuck: лестница выхода из застревания здесь и сейчас (unstuck.freeHere; {x,y,z} — куда надо, необязательно).
-    unstuck: async (p) => session.runIntent('unstuck', ctl => require('../unstuck').freeHere(session, ctl, { toward: p && p.x != null && p.z != null ? new (require('vec3'))(Number(p.x) + 0.5, p.y != null ? Number(p.y) : session.bot.entity.position.y, Number(p.z) + 0.5) : null }), { timeoutMs: 45000, params: p || {}, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] }),
+    unstuck: async (p) => {
+      if (p?.cause === 'in_wall' && process.env.ND_OW_BURIAL_STEP === '1' && session.bot?.game?.dimension === 'overworld') {
+        if (session.tactics?.enabled()) {
+          await session.tactics.requestGuard()
+          return session.immediate(async () => ({ freed: !session.autopilot?.buriedBy(session.require()) }))
+        }
+        return session.runIntent('unstuck', ctl => session.autopilot.freeIfBuried(session.require(), { ctl, force: true }),
+          { timeoutMs: 12000, params: p, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] })
+      }
+      return session.runIntent('unstuck', ctl => require('../unstuck').freeHere(session, ctl, { toward: p && p.x != null && p.z != null ? new (require('vec3'))(Number(p.x) + 0.5, p.y != null ? Number(p.y) : session.bot.entity.position.y, Number(p.z) + 0.5) : null }), { timeoutMs: 45000, params: p || {}, interruptOn: ['chat', 'death', 'kicked', 'disconnected'] })
+    },
     dragon: async (p) => session.dragon(p || {}),
     shoot: async (p) => session.shoot(p || {}),
     throw: async (p) => session.throwTest(p || {}),

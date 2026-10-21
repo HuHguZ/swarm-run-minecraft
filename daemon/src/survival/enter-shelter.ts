@@ -70,7 +70,7 @@ async function lightNiche (bot, ctl) {
   return false
 }
 
-async function sinkOne (bot, mcData) {
+async function sinkOne (bot, mcData, handSandstone = false) {
   const feet = bot.entity.position.floored()
   const below = bot.blockAt(feet.offset(0, -1, 0))
   const under = bot.blockAt(feet.offset(0, -2, 0))
@@ -96,7 +96,7 @@ async function sinkOne (bot, mcData) {
   }
 
   const noHarvest = missingHarvestTool(bot, below, mcData)
-  if (noHarvest) return { stopped: noHarvest }
+  if (noHarvest && !(handSandstone && /^(sandstone|red_sandstone)$/.test(below.name))) return { stopped: noHarvest }
 
   try {
     await equipBestTool(bot, below)
@@ -108,11 +108,11 @@ async function sinkOne (bot, mcData) {
   return { ok: true }
 }
 
-async function sealAbove (bot, ctl) {
+async function sealAbove (bot, ctl, steady = false) {
   let last = null
   for (let attempt = 0; attempt < 2 && !ctl.aborted; attempt++) {
     if (attempt) await sleep(700) // the body is usually still settling into the shaft
-    const r = await placeBlockAt(bot, bot.entity.position.floored().offset(0, 2, 0))
+    const r = await placeBlockAt(bot, bot.entity.position.floored().offset(0, 2, 0), { steady, ...(steady ? { honest: true, ctl } : {}) })
     if (r.ok) return r
     last = r
   }
@@ -125,7 +125,7 @@ async function shelter (session, ctl, { mode = 'enter', depth = 2, torch = true 
   const how = mode === null || mode === undefined ? 'enter' : String(mode).trim().toLowerCase()
   if (how === 'enter') return enterShelter(session, ctl, { depth, torch: torch !== false })
   if (how === 'exit') return exitShelter(session, ctl, { depth })
-  if (how === 'box') return await boxShelter(session, ctl) || { stopped: 'не удалось закрыться на месте', sealed: false }
+  if (how === 'box') return await boxShelter(session, ctl, true) || { stopped: 'не удалось закрыться на месте', sealed: false }
   if (how === 'light') return { torch: await lightNiche(session.bot, ctl) }
   // Digging a hole because the mode was misspelled is the worst possible
   // reading of an unclear order.
@@ -142,8 +142,16 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
 
   const ground = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0))
   if (!ground) throw new Error('подо мной мир не прогружен — копать нечего')
+  const handDesert = process.env.ND_OW_DESERT_HAND_SHELTER === '1' && worlds.worldOf(bot) === 'overworld' &&
+    !bot.inventory.items().some(i => /_pickaxe$/.test(i.name)) && /^(sand|sandstone|red_sandstone)$/.test(ground.name)
   const noTool = missingHarvestTool(bot, ground, mcData)
-  if (noTool) throw new Error(noTool)
+  if (noTool && !(handDesert && /^(sandstone|red_sandstone)$/.test(ground.name))) throw new Error(noTool)
+  if (handDesert) {
+    let ready = false
+    try { ready = await (require('../actions/desert') as typeof import('../actions/desert')).desertRoof(session, ctl) } catch {}
+    if (ctl.aborted) return { mode: 'enter', sealed: false, stopped: 'прервано' }
+    if (!ready) return { mode: 'enter', sealed: false, stopped: 'desert shelter: stable roof and three exit blocks unavailable' }
+  }
 
   // Dusk is short; a shaft that is not finished in a minute is not a shelter.
   const deadline = gameClock.now() + 60000
@@ -159,7 +167,7 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
   while (depthNow() < want && swings < swingCap && !ctl.aborted && gameClock.now() < deadline) {
     // center (refuge): тело, сдвинутое к краю клетки (толкнул моб), стоит и на
     const was = depthNow()
-    const step = await sinkOne(bot, mcData)
+    const step = await sinkOne(bot, mcData, handDesert)
     swings++
     if (step.stopped) { stopped = step.stopped; break }
     if (center && depthNow() === was) { try { await (require('.././fortify') as typeof import('.././fortify')).centerInCell(bot, 500) } catch {} await sleep(250) }
@@ -197,14 +205,14 @@ async function enterShelter (session, ctl, { depth, torch, box = true, maxSwings
     try { await escapeWater(bot, ctl, { timeoutMs: 15000 }) } catch {}
     return { mode: 'enter', at: xyz(bot.entity.position), depth: dug, sealed: false, torch: false, note, stopped: 'вода в норе' }
   }
-  let seal = await sealAbove(bot, ctl)
+  let seal = await sealAbove(bot, ctl, handDesert)
   // Two deep leaves the roof hanging in the air above the surface with no
   if (!seal.ok && dug < 3 && !stopped && !ctl.aborted && gameClock.now() < deadline) {
-    const step = await sinkOne(bot, mcData)
+    const step = await sinkOne(bot, mcData, handDesert)
     if (step.stopped) stopped = step.stopped
     if (depthNow() > dug) {
       dug = depthNow()
-      seal = await sealAbove(bot, ctl)
+      seal = await sealAbove(bot, ctl, handDesert)
     }
   }
 
@@ -351,22 +359,28 @@ function nearestPlayerName (bot, radius) {
   return best ? best.name : null
 }
 
-async function boxShelter (session, ctl) {
+async function boxShelter (session, ctl, explain = false) {
   const bot = session.bot
   const fortify: typeof import('.././fortify') = require('.././fortify')
   try {
     const box = await fortify.boxIn(bot, { roof: true, ctl, timeoutMs: 800, hard: false })
     if (!ctl.aborted && !box.sealed && box.plan) await fortify.patch(bot, box.plan, { timeoutMs: 800, ctl }).catch(() => 0)
-    if (!box.cell || !fortify.enclosure(bot, box.cell).sealed) return null
+    if (!box.cell || !fortify.enclosure(bot, box.cell).sealed) return explain
+      ? { stopped: `не удалось закрыться на месте: ${box.why || box.failed?.join('; ') || 'остались открытые стены или крыша'}`, sealed: false }
+      : null
     session.shelterBox = box.cell
     const note = 'закрылся коробкой из блоков на месте'
     session.journal.append('убежище', note, bot.entity.position)
     return { mode: 'enter', at: xyz(bot.entity.position), depth: 0, sealed: true, box: true, torch: false, note }
-  } catch { return null }
+  } catch (e) { return explain ? { stopped: `не удалось закрыться на месте: ${e.message}`, sealed: false } : null }
 }
 
 async function exitShelter (session, ctl, { depth }: any) {
   const bot = session.bot
+  if (process.env.ND_BRUTE_MEMORY === '1') {
+    const memory = await (require('../brute-shelter') as typeof import('../brute-shelter')).ensureShelterExit(session, ctl)
+    if (memory) return { mode: 'exit', at: xyz(bot.entity.position), out: false, climbed: 0, stopped: 'brute memory: replan covered exit', bruteMemory: memory }
+  }
   // Сами ломаем потолок — караул не должен закладывать его обратно.
   if (session.shelterGuard) session.shelterGuard.disarm()
   // Коробка вместо норы (boxShelter): выход сбоку, как из коробки ифритов,
@@ -387,8 +401,13 @@ async function exitShelter (session, ctl, { depth }: any) {
 
   for (let i = 0; i < limit && !ctl.aborted && gameClock.now() < deadline; i++) {
     if (canStepOut(bot)) break
+    if (process.env.ND_BRUTE_MEMORY === '1') {
+      const memory = await (require('../brute-shelter') as typeof import('../brute-shelter')).ensureShelterExit(session, ctl, undefined, { knownShelter: true })
+      if (memory) return { mode: 'exit', at: xyz(bot.entity.position), out: false, climbed: Math.round(bot.entity.position.y - from), stopped: 'brute memory: replan covered exit', bruteMemory: memory }
+    }
     const was = bot.entity.position.y
-    const r = await digUp(bot, ctl, { blocks: 1, mcData: session.mcData, tower: true })
+    const r = await digUp(bot, ctl, { blocks: 1, mcData: session.mcData, tower: true,
+      handSandstone: process.env.ND_OW_DESERT_HAND_SHELTER === '1' && worlds.worldOf(bot) === 'overworld' })
     if (r.stopped) { stopped = r.stopped; break }
     // Nothing broken and no height gained: no pick for the ceiling, or nothing
     // left to build the pillar from. Another lap would only repeat it.

@@ -2,9 +2,74 @@
 import * as gameClock from '../game-clock'
 import { sleep, xyz } from '../movement'
 import { countOf, missingHarvestTool, bestWeapon } from '../items'
-import { SWING_MS, clamp, log, meta, ents, walkTo, CARDINAL, digCell, stepInto } from './common'
+import { SWING_MS, clamp, log, meta, ents, walkTo, CARDINAL, digCell, stepInto as legacyStepInto } from './common'
 import { clearRay, eyesSeen, reachTo, lavaAround } from './aim'
 import { trappedEm } from './shelter'
+import * as pick from '../pick'
+import { setHuntCover } from './hunt-cover'
+import * as worlds from '../worlds'
+import { equipBestTool } from '../items'
+
+const openGround = () => process.env.ND_HUNT_OPEN_GROUND === '1'
+// Completed own geometry survives a skill/reflex boundary, never a new bot/world.
+const savedBooths = new WeakMap<object, any>()
+const groundPlants = /^(warped_roots|crimson_roots|warped_fungus|crimson_fungus|nether_sprouts|twisting_vines(?:_plant)?|weeping_vines(?:_plant)?|warped_wart_block|nether_wart_block)$/
+// Blocks 1.21.11: roots/sprouts are replaceable; fungi and vines are not.
+const groundReplaceable = /^(warped_roots|crimson_roots|nether_sprouts)$/
+const groundAir = b => !!b && /^(air|cave_air|void_air)$/.test(b.name)
+const groundClearable = b => groundAir(b) || !!b && groundPlants.test(b.name)
+const groundPassable = b => groundAir(b) || !!b && b.boundingBox === 'empty' && groundPlants.test(b.name)
+const passage = plan => [plan.P, plan.P.offset(0, 1, 0), plan.c1, plan.c1.offset(0, 1, 0), plan.S, plan.S.offset(0, 1, 0), plan.S.offset(0, 2, 0)]
+async function huntStep (bot, ctl, cell) {
+  if (!openGround()) return legacyStepInto(bot, cell)
+  if (ctl.aborted) return false
+  const { centerInCell }: typeof import('../fortify') = require('../fortify')
+  const centered = await centerInCell(bot, 2000, cell, ctl)
+  return !ctl.aborted && centered && bot.entity.position.floored().equals(cell)
+}
+async function clearBoothPassage (bot, ctl, mcData, cells, unseal = false) {
+  const { FILLER }: typeof import('../build') = require('../build')
+  // Only plants or a filler seal in our reserved passage. No arbitrary wall mining.
+  for (let pass = 0; pass < cells.length && !ctl.aborted; pass++) {
+    let changed = false
+    for (const c of cells) {
+      const b = bot.blockAt(c)
+      if (groundPassable(b)) continue
+      if (!b || !(groundPlants.test(b.name) || unseal && FILLER.includes(b.name)) || missingHarvestTool(bot, b, mcData)) return false
+      const a = pick.blockAim(bot, c, { range: 4.5, seeThrough: null })
+      if (!a) continue // The next visible block may expose this one.
+      if (!bot.canDigBlock(b) || ctl.aborted) return false
+      await equipBestTool(bot, b)
+      if (ctl.aborted) return false
+      await bot.lookAt(a, true)
+      if (ctl.aborted || !pick.blockAim(bot, c, { range: 4.5, seeThrough: null })) return false
+      await bot.dig(b, 'ignore')
+      if (!groundAir(bot.blockAt(c))) return false
+      changed = true
+    }
+    if (cells.every(c => groundPassable(bot.blockAt(c)))) return !ctl.aborted
+    if (!changed) return false
+  }
+  return false
+}
+async function restoreBooth (bot, ctl, mcData) {
+  if (!openGround() || ctl.aborted) return null
+  const saved = savedBooths.get(bot)
+  if (!saved) return null
+  const { tun, plan, dimension } = saved
+  const solid = c => { const b = bot.blockAt(c); return !!b && b.boundingBox === 'block' && !/lava|water|magma|fire/.test(b.name) }
+  if (dimension !== worlds.worldOf(bot) || bot.entity.position.distanceTo(tun.stand) > 6 ||
+      !plan.order.every(solid) || ![plan.P, plan.c1, plan.S].every(c => solid(c.offset(0, -1, 0)))) {
+    savedBooths.delete(bot)
+    return null
+  }
+  const ok = await clearBoothPassage(bot, ctl, mcData, passage(plan), true)
+  log('открытый лес: свой проход', { ok, stand: xyz(tun.stand) })
+  if (!ok || ctl.aborted) return null
+  if (!bot.entity.position.floored().equals(tun.stand) && !(await huntStep(bot, ctl, tun.stand))) return null
+  return tun
+}
+
 
 // ------------------------------------------------------------ hunt: штрек
 // Штрек 1x2 в стене (style: 'tunnel', по умолчанию). Лаборатория 2026-09-27:
@@ -66,7 +131,7 @@ async function digTunnel (bot, ctl, mcData, { radius = 28, exclude = [] }: any =
   if (!spot) {
     if (!n) return { ok: false, why: 'стены для штрека (2 блока высотой, потолок, без лавы) рядом нет' }
     await walkTo(bot, ctl, n.pos, 0, 20000)
-    if (!bot.entity.position.floored().equals(n.pos)) await stepInto(bot, n.pos)
+    if (!bot.entity.position.floored().equals(n.pos)) await huntStep(bot, ctl, n.pos)
     spot = tunnelSpot(bot, mcData, bot.entity.position.floored())
     if (!spot) return { ok: false, why: 'до места штрека не дошёл' }
   }
@@ -77,7 +142,7 @@ async function digTunnel (bot, ctl, mcData, { radius = 28, exclude = [] }: any =
     const err = await digCell(bot, mcData, c)
     if (err) return { ok: false, why: err }
   }
-  if (!(await stepInto(bot, c1)) || !(await stepInto(bot, c2))) return { ok: false, why: 'в штрек не шагнул' }
+  if (!(await huntStep(bot, ctl, c1)) || !(await huntStep(bot, ctl, c2))) return { ok: false, why: 'в штрек не шагнул' }
   try { await bot.lookAt(spot.mouth.offset(0.5, 1.2, 0.5), true) } catch {}
   return { ok: true, mouth: spot.mouth, c1, stand: c2, dir: spot.dir }
 }
@@ -91,6 +156,9 @@ async function digTunnel (bot, ctl, mcData, { radius = 28, exclude = [] }: any =
 // удара +0.83 по горизонтали достаёт соседнюю клетку наискосок), крыша над c2
 // и c1. До 17 блоков. Из c2 до S — 2 блока: он не достаёт, меч достаёт (1.7).
 function safeGround (bot, f) {
+  // The booth already checks its three supporting floor cells. Nearby lava or
+  // a drop beyond its closed sides is a travel cost, not a reason to reject it.
+  if (openGround()) return true
   for (let dx = -2; dx <= 2; dx++) {
     for (let dz = -2; dz <= 2; dz++) {
       let depth = 0
@@ -110,8 +178,8 @@ function safeGround (bot, f) {
 function boothSite (bot, P, d) {
   const [dx, dz] = d
   const sx = -dz; const sz = dx
-  const air = q => { const b = bot.blockAt(q); return !!b && b.boundingBox === 'empty' && !/water|lava|fire/.test(b.name) }
-  const solid = q => { const b = bot.blockAt(q); return !!b && b.boundingBox === 'block' }
+  const air = q => { const b = bot.blockAt(q); return openGround() ? groundClearable(b) : !!b && b.boundingBox === 'empty' && !/water|lava|fire/.test(b.name) }
+  const solid = q => { const b = bot.blockAt(q); return !!b && b.boundingBox === 'block' && (!openGround() || !/magma|fire|campfire/.test(b.name)) }
   const c1 = P.offset(dx, 0, dz)
   const S = P.offset(2 * dx, 0, 2 * dz)
   if (!solid(P.offset(0, -1, 0)) || !solid(c1.offset(0, -1, 0)) || !solid(S.offset(0, -1, 0))) return null
@@ -131,6 +199,7 @@ function boothSite (bot, P, d) {
   for (const c of order) {
     const b = bot.blockAt(c)
     if (!b || /water|lava/.test(b.name)) return null
+    if (openGround() && b.boundingBox === 'empty' && !groundAir(b) && !groundReplaceable.test(b.name)) return null
     if (b.boundingBox !== 'block') need++
   }
   return { P, c1, S, dir: d, order, need, critical: [back, back.offset(0, 1, 0), ...sides2, ...sides2.map(w => w.offset(0, 1, 0)), ...sides1, ...sides1.map(w => w.offset(0, 1, 0)), ...corners, P.offset(0, 2, 0), c1.offset(0, 2, 0)] }
@@ -141,7 +210,7 @@ function boothPlan (bot, { radius = 32, exclude = [] }: any = {}) {
   const nodes = walkable(bot, bot.entity.position, { radius, maxNodes: 6000 })
   let best = null
   let checked = 0
-  for (let i = 0; i < nodes.length && checked < 300; i += 2) {
+  for (let i = 0; i < nodes.length && checked < 300; i += openGround() ? 1 : 2) {
     const n = nodes[i]
     if (exclude.some(m => m.distanceTo(n.pos) < 8)) continue
     for (const d of CARDINAL) {
@@ -159,6 +228,7 @@ function boothPlan (bot, { radius = 32, exclude = [] }: any = {}) {
   return best
 }
 async function buildBooth (bot, ctl, mcData, { radius = 32, exclude = [] }: any = {}) {
+  if (openGround() && ctl.aborted) return { ok: false, why: 'прервано' }
   const { placeBlockAt, FILLER }: typeof import('../build') = require('../build')
   const plan = boothPlan(bot, { radius, exclude })
   if (!plan) return { ok: false, why: 'места под будку (ровно, S на 3 воздуха, без лавы и обрыва) нет' }
@@ -166,29 +236,39 @@ async function buildBooth (bot, ctl, mcData, { radius = 32, exclude = [] }: any 
   const have = bot.inventory.items().filter(i => FILLER.includes(i.name) && !/sand|gravel/.test(i.name)).reduce((n, i) => n + i.count, 0)
   if (plan.need > have) return { ok: false, why: `на будку нужно ${plan.need} блоков, есть ${have}` }
   await walkTo(bot, ctl, plan.P, 0, 20000)
-  if (!bot.entity.position.floored().equals(plan.P)) await stepInto(bot, plan.P)
+  if (openGround() && ctl.aborted) return { ok: false, why: 'прервано' }
+  if (!bot.entity.position.floored().equals(plan.P)) await huntStep(bot, ctl, plan.P)
   if (!bot.entity.position.floored().equals(plan.P)) return { ok: false, why: 'до места будки не дошёл' }
-  try { await (require('../fortify') as typeof import('../fortify')).centerInCell(bot, 700) } catch {}
+  try { await (require('../fortify') as typeof import('../fortify')).centerInCell(bot, 700, null, openGround() ? ctl : null) } catch {}
+  if (openGround() && !(await clearBoothPassage(bot, ctl, mcData, passage(plan)))) return { ok: false, why: 'проход будки не расчистил видимыми ударами' }
   let placed = 0
   const failed = []
   for (const c of plan.order) {
     if (ctl.aborted) break
     const b = bot.blockAt(c)
     if (b && b.boundingBox === 'block') continue
-    if (b && b.name !== 'air' && b.name !== 'cave_air') { try { await bot.dig(b) } catch {} }
+    if (b && b.name !== 'air' && b.name !== 'cave_air') {
+      if (openGround()) { if (!(await clearBoothPassage(bot, ctl, mcData, [c]))) return { ok: false, why: 'мешает невидимый блок будки' } }
+      else { try { await bot.dig(b) } catch {} }
+    }
     let r = null
-    for (let k = 0; k < 2 && !(r && r.ok); k++) r = await placeBlockAt(bot, c, { timeoutMs: 1500 }).catch(e => ({ ok: false, reason: e.message }))
+    for (let k = 0; k < 2 && !(r && r.ok); k++) r = await placeBlockAt(bot, c, { timeoutMs: 1500, ...(openGround() ? { steady: true, honest: true, exactAim: true, ctl } : {}) }).catch(e => ({ ok: false, reason: e.message }))
     if (r && r.ok) { if (!r.already) placed++ } else failed.push(`${c.x},${c.y},${c.z}:${r ? r.reason : '?'}`)
   }
-  const holes = plan.critical.filter(c => { const b = bot.blockAt(c); return !b || b.boundingBox !== 'block' })
+  const holes = (openGround() ? plan.order : plan.critical).filter(c => { const b = bot.blockAt(c); return !b || b.boundingBox !== 'block' })
   if (holes.length) return { ok: false, why: `будка не достроена: дыр ${holes.length}`, failed: failed.slice(0, 4), placed }
   try { await bot.lookAt(plan.S.offset(0.5, 1.2, 0.5), true) } catch {}
-  return { ok: true, mouth: plan.S, c1: plan.c1, stand: plan.P, dir: plan.dir, booth: true, placed, seen: plan.seen }
+  if (openGround() && ctl.aborted) return { ok: false, why: 'прервано' }
+  const tun = { ok: true, mouth: plan.S, c1: plan.c1, stand: plan.P, dir: plan.dir, booth: true, placed, seen: plan.seen }
+  if (openGround()) savedBooths.set(bot, { tun, plan, dimension: worlds.worldOf(bot) })
+  return tun
 }
 
 async function huntTunnel (session, ctl, p: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
+  if (openGround()) setHuntCover(session, ctl, false)
+  const retreatAt = clamp(p.retreatAtHealth ?? 8, 3, 16)
   const t0 = gameClock.now()
   const deadline = t0 + clamp(p.timeoutSeconds ?? 240, 30, 600) * 1000 - 4000
   const pearls0 = countOf(bot, 'ender_pearl')
@@ -200,7 +280,7 @@ async function huntTunnel (session, ctl, p: any = {}) {
   const onHurt = e => { if (e && e.name === 'enderman') hurtAt.set(e.id, gameClock.now()) }
   const onDead = (e, how) => {
     if (!e || e.name !== 'enderman' || !e.position || e.position.distanceTo(bot.entity.position) > 12) return
-    if (how === 'gone' && !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000)) return
+    if (how === 'gone' && (openGround() || !(gameClock.now() - (hurtAt.get(e.id) || 0) < 3000))) return
     dead.add(e.id)
   }
   const onGone = e => onDead(e, 'gone')
@@ -228,7 +308,7 @@ async function huntTunnel (session, ctl, p: any = {}) {
   const nearMouth = r => endermen().some((e : any) => meta(bot, e, 'creepy') && !ignored(e) && e.position.distanceTo(tun.mouth.offset(0.5, 0, 0.5)) < r)
   const stare = async (target, ms) => {
     const tS = gameClock.now()
-    while (!ctl.aborted && gameClock.now() - tS < ms && !meta(bot, target, 'creepy') && target.isValid !== false) {
+    while (!ctl.aborted && gameClock.now() - tS < ms && !meta(bot, target, 'creepy') && target.isValid !== false && (!openGround() || target.position.distanceTo(bot.entity.position) >= 5)) {
       if (eyesSeen(bot, target)) await bot.lookAt(target.position.offset(0, 2.55, 0), true).catch(() => {})
       await sleep(100)
     }
@@ -242,25 +322,28 @@ async function huntTunnel (session, ctl, p: any = {}) {
     .filter(e => eyesSeen(bot, e))
     .sort((a: any, b: any) => a.position.distanceTo(me) - b.position.distanceTo(me))
   const home = async () => {
+    if (openGround() && ctl.aborted) return
     const f = bot.entity.position.floored()
-    if (f.equals(tun.stand)) return
+    if (f.equals(tun.stand)) { if (openGround()) await huntStep(bot, ctl, tun.stand); return }
     if (!f.equals(tun.c1) && !f.equals(tun.mouth)) await walkTo(bot, ctl, tun.mouth, 0, 8000)
-    if (!bot.entity.position.floored().equals(tun.c1)) await stepInto(bot, tun.c1)
-    await stepInto(bot, tun.stand)
+    if (!bot.entity.position.floored().equals(tun.c1)) await huntStep(bot, ctl, tun.c1)
+    await huntStep(bot, ctl, tun.stand)
     try { await bot.lookAt(tun.mouth.offset(0.5, 0.8, 0.5), true) } catch {}
   }
   // Лут падает там, где он умер (у входа): шаг в c1 подбирает всё у входа
   // (подбор — коробка тела +1). Откатился дальше — дойти, если злых нет.
   const collect = async (at) => {
+    if (openGround() && (ctl.aborted || bot.health <= retreatAt)) return { stopped: 'отмена или мало хп' }
     const items = () => (Object.values(bot.entities) as any[]).filter((e : any) => e && e.name === 'item' && e.position && isPearl(e) && e.position.distanceTo(at) < 8 && !lavaAround(bot, e.position))
     await sleep(900)
     let seen = items()
     if (!seen.length) { await sleep(1200); seen = items() }
     const res: any = { drop: seen.length }
+    if (openGround() && ctl.aborted) return res
     if (!seen.length) return res
     drops++
     const had = countOf(bot, 'ender_pearl')
-    if (!endermen().some(e => reachTo(bot, e) <= 3.2)) { await stepInto(bot, tun.c1); await sleep(700) }
+    if (!endermen().some(e => reachTo(bot, e) <= 3.2)) { await huntStep(bot, ctl, tun.c1); await sleep(700) }
     for (const it of (items() as any)) {
       if (countOf(bot, 'ender_pearl') > had || nearMouth(10) || ctl.aborted) break
       await walkTo(bot, ctl, it.position.floored(), 0, 5000)
@@ -273,14 +356,21 @@ async function huntTunnel (session, ctl, p: any = {}) {
   let lastChance = gameClock.now()
   try {
     // Будка на месте с обзором; не вышла — штрек в стене.
-    tun = p.booth === false ? { ok: false } : await buildBooth(bot, ctl, mcData, { radius: 32 })
-    if (!tun.ok) { log('будка', tun); tun = await digTunnel(bot, ctl, mcData, { radius: 40 }) }
+    tun = await restoreBooth(bot, ctl, mcData)
+    if (!tun && !(openGround() && ctl.aborted)) tun = p.booth === false ? { ok: false } : await buildBooth(bot, ctl, mcData, { radius: 32 })
+    tun ||= { ok: false, why: 'прервано' }
+    if (!tun.ok && !(openGround() && ctl.aborted)) { log('будка', tun); tun = await digTunnel(bot, ctl, mcData, { radius: 40 }) }
+    // Avoid thousands of synchronous retries of the same sealed/unsuitable site.
+    if (!tun.ok && openGround() && !ctl.aborted) await sleep(1000)
     log('штрек', tun.ok ? { mouth: xyz(tun.mouth), stand: xyz(tun.stand), booth: !!tun.booth, seen: tun.seen, placed: tun.placed } : tun)
     if (!tun.ok) { stopped = tun.why; tun = null }
+    if (openGround() && tun?.ok && !ctl.aborted) setHuntCover(session, ctl, true)
     while (tun && !ctl.aborted) {
+      if (openGround() && bot.health <= retreatAt) { stopped = 'мало хп — остаюсь под потолком'; await home(); break }
       if (countOf(bot, 'ender_pearl') >= want) break
       if (gameClock.now() > deadline) { stopped = 'время вышло'; break }
-      if (!bot.entity.position.floored().equals(tun.stand)) await home()
+      if (openGround() || !bot.entity.position.floored().equals(tun.stand)) await home()
+      if (openGround() && ctl.aborted) break
       const all = endermen()
       // Злой 25 с и не у входа — застрял: не ждать его.
       for (const e of (all as any)) {
@@ -297,9 +387,16 @@ async function huntTunnel (session, ctl, p: any = {}) {
         let last = 0
         const tA = gameClock.now()
         while (!ctl.aborted && gameClock.now() - tA < 20000 && near.isValid !== false && !dead.has(near.id)) {
+          if (openGround() && bot.health <= retreatAt) break
           if (reachTo(bot, near) > 3.2) { await sleep(100); if (gameClock.now() - tA > 6000) break; continue }
           try { await bot.lookAt(near.position.offset(0, 1.0, 0), true) } catch {}
-          if (gameClock.now() - last >= SWING_MS) { try { bot.attack(near); r.swings++; last = gameClock.now() } catch {} }
+          if (gameClock.now() - last >= SWING_MS) {
+            const a = openGround() ? pick.aim(bot, near) : null
+            if (!openGround() || a?.point) {
+              if (a?.point) await bot.lookAt(a.point, true)
+              if (!ctl.aborted && (!openGround() || pick.aim(bot, near)?.point)) { try { bot.attack(near); r.swings++; last = gameClock.now() } catch {} }
+            }
+          }
           await sleep(60)
         }
         await sleep(200)
@@ -339,8 +436,8 @@ async function huntTunnel (session, ctl, p: any = {}) {
           .sort((a: any, b: any) => a.position.distanceTo(mouthC) - b.position.distanceTo(mouthC))[0]
         if (calm) {
           const pk: any = { id: calm.id, from: Math.round(calm.position.distanceTo(mouthC)) }
-          await stepInto(bot, tun.c1)
-          await stepInto(bot, tun.mouth)
+          await huntStep(bot, ctl, tun.c1)
+          await huntStep(bot, ctl, tun.mouth)
           const pick: typeof import('../pick') = require('../pick')
           const cap = () => { if (bot.entity && bot.entity.pitch > -0.45) bot.entity.pitch = -0.45 }
           bot.on('physicsTick', cap)
@@ -352,8 +449,8 @@ async function huntTunnel (session, ctl, p: any = {}) {
                 const a = pick.aim(bot, calm)
                 if (a && a.point) {
                   if (weapon && (!bot.heldItem || bot.heldItem.name !== weapon.name)) { try { await bot.equip(weapon, 'hand') } catch {} }
-                  try { await bot.lookAt(calm.position.offset(0, 0.6, 0), true) } catch {}
-                  try { bot.attack(calm); pk.hit = true } catch {}
+                  try { await bot.lookAt(openGround() ? a.point : calm.position.offset(0, 0.6, 0), true) } catch {}
+                  if (!ctl.aborted && (!openGround() || pick.aim(bot, calm)?.point)) { try { bot.attack(calm); pk.hit = true } catch {} }
                   break
                 }
               }
@@ -373,8 +470,8 @@ async function huntTunnel (session, ctl, p: any = {}) {
       }
       // 4. Выйти ко входу (злых у входа в 10 нет): злить до двух подряд, назад.
       if (!nearMouth(10)) {
-        await stepInto(bot, tun.c1)
-        await stepInto(bot, tun.mouth)
+        await huntStep(bot, ctl, tun.c1)
+        await huntStep(bot, ctl, tun.mouth)
         const out = targetsFrom(bot.entity.position)
         if (out.length) lastChance = gameClock.now()
         let n = 0
@@ -384,8 +481,8 @@ async function huntTunnel (session, ctl, p: any = {}) {
           if (await stare(t, 4000)) n++
         }
         if (n) log('штрек: разозлил у входа', { n, seen: out.length })
-        await stepInto(bot, tun.c1)
-        await stepInto(bot, tun.stand)
+        await huntStep(bot, ctl, tun.c1)
+        await huntStep(bot, ctl, tun.stand)
         try { await bot.lookAt(tun.mouth.offset(0.5, 0.8, 0.5), true) } catch {}
         if (!n) await sleep(700)
       } else await sleep(300)
@@ -394,28 +491,32 @@ async function huntTunnel (session, ctl, p: any = {}) {
         moves++
         mouths.push(tun.mouth)
         const old = tun
-        await stepInto(bot, tun.c1)
-        await stepInto(bot, tun.mouth)
+        await huntStep(bot, ctl, tun.c1)
+        await huntStep(bot, ctl, tun.mouth)
+        if (openGround()) setHuntCover(session, ctl, false)
         let t2: any = p.booth === false ? { ok: false } : await buildBooth(bot, ctl, mcData, { radius: 32, exclude: mouths })
-        if (!t2.ok) t2 = await digTunnel(bot, ctl, mcData, { radius: 40, exclude: mouths })
+        if (!t2.ok && !(openGround() && ctl.aborted)) t2 = await digTunnel(bot, ctl, mcData, { radius: 40, exclude: mouths })
         log('штрек: новое место', t2.ok ? { mouth: xyz(t2.mouth), n: moves } : t2)
         if (t2.ok) tun = t2
-        else { tun = old; await home() }
+        else { tun = old; if (!openGround() || !ctl.aborted) await home() }
+        if (openGround() && !ctl.aborted) setHuntCover(session, ctl, true)
         lastChance = gameClock.now()
       }
     }
   } finally {
+    if (openGround()) setHuntCover(session, ctl, false)
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('entityDead', onDead)
     bot.removeListener('entityGone', onGone)
   }
   // Из штрека — наружу (к входу).
-  if (tun) { await stepInto(bot, tun.c1).catch(() => false); await stepInto(bot, tun.mouth).catch(() => false) }
+  if (tun && (!openGround() || !ctl.aborted && bot.health > retreatAt)) { await huntStep(bot, ctl, tun.c1).catch(() => false); await huntStep(bot, ctl, tun.mouth).catch(() => false) }
   const pearls = countOf(bot, 'ender_pearl')
   const secs = Math.round((gameClock.now() - t0) / 1000)
   const detail: any = {
     mode: 'hunt',
     style: 'штрек',
+    ...(openGround() ? { prepared: !!tun, interrupted: !!ctl.aborted, secondsPerPearlModel: (secs + 480) / (Math.max(0, pearls - pearls0) + 2) } : {}),
     pearls: { before: pearls0, now: pearls, gained: pearls - pearls0, want },
     kills,
     aggros,

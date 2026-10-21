@@ -278,4 +278,16 @@ function bodySnapshot (bot, local = false) {
   return out
 }
 
-export { bodySnapshot, fixMaterials, fixPlanks, fixWhiteWool, fixAttributes, fixProtocol, fixEnchants, fixBreath, DAMAGE_TYPES, damageTypeName }
+// ND_SLIME_SIZE=1 (blz 21.10): рамка слизня и магмового куба — по размеру из метаданных (Slime.ID_SIZE, индекс 16; размеры
+// EntityType 0.52 × 0.52, Slime.getDefaultDimensions — scale(size)): minecraft-data даёт 0.52 на любой размер, и большой куб (2.08)
+// для глаз и прицела — кубик у земли: «бьёт невидимый (magma_cube)», бой «ни одного удара за 4 с» — смерть (gC11-s18-1, bE2-s18-2).
+function fixSlimeSize (bot) {
+  const fix = e => {
+    if (!e || !/^(slime|magma_cube)$/.test(e.name || '')) return
+    const size = Number(e.metadata?.[16])
+    if (size > 0 && size <= 127) { const d = Math.fround(0.52 * size); e.width = d; e.height = d }
+  }
+  bot.on('entitySpawn', fix)
+  bot.on('entityUpdate', fix)
+}
+export { bodySnapshot, fixMaterials, fixPlanks, fixWhiteWool, fixAttributes, fixProtocol, fixEnchants, fixBreath, fixSlimeSize, DAMAGE_TYPES, damageTypeName }

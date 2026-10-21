@@ -1,3 +1,4 @@
+import { ownsHuntCover } from '../../pearls/hunt-cover'
 // Тактика: типы порта Minecraft, снимок состояния для телеметрии, наблюдение угроз и выходов (observeTactics).
 import { S4D, digDownCost, boxBuildCost, threatLevel, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from '../state'
 import { lavaCapabilities, inLava } from '../lava-escape'
@@ -26,7 +27,7 @@ export interface Episode { action: Candidate; at: number; hp: number; level: Thr
 
 // What the arbiter saw when it chose (telemetry, farm/analysis/tactics-report): enough to replay a death on the stress stand.
 export function stateSnapshot(state: TacticalState, bot?: MinecraftEntity): Record<string, unknown> {
-  const flags = ['lava', 'burning', 'hotFloor', 'fireResistance', 'explosion', 'dangerousFall', 'inWater', 'drowning', 'waterEscape', 'cover', 'escapeRoute', 'contact',
+  const flags = ['lava', 'burning', 'hotFloor', 'fireResistance', 'explosion', 'dangerousFall', 'inWater', 'drowning', 'waterEmergency', 'waterEscape', 'cover', 'escapeRoute', 'contact',
     'canFight', 'weapon', 'shield', 'edible', 'water', 'embedded', 'airborne', 'lavaAhead', 'lavaEscapePending', 'escapeExhausted',
     'piglinWitnesses', 'protectedEncounter', 'niche', 'netherHide', 'ghastEdge', 'pearlEscape', 'flightEscape', 'fireResistancePotion'] as const
   return { ...(bot ? { body: (require('../../gamedata') as typeof import('../../gamedata')).bodySnapshot(bot) } : {}), hp: Math.round(state.health * 10) / 10, food: state.food, armor: state.armor, blocks: state.blocks, shelter: state.shelter,
@@ -160,6 +161,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if ((bot.health ?? 0) <= 0 || preparation) return null
   const at: number = clock.now()
   const items: MinecraftEntity[] = bot.inventory.items()
+  const shield = bot.inventory.slots[45]?.name === 'shield' && at >= (bot._ndShieldDisabledUntil || 0)
   const weapon = items.some(item => /_(sword|axe)$|^trident$|^mace$|_spear$/.test(item.name) && (itemTools ??= (require('../../items') as typeof import('../../items'))).usesLeft(item) >= 4)
   const targetName = session.current?.target || session.current?.params?.target
   const target = targetName ? (Object.values(bot.entities || {}) as MinecraftEntity[]).find(entity =>
@@ -226,6 +228,13 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
       enemies.push({ id: h.e.id, kind: h.e.name, distance: h.d, player: false, threatening: true })
     }
   }
+  const MOBS = (require('../../assess') as typeof import('../../assess')).MOBS
+  // Only line-of-sight enemies already admitted above; no hidden source coordinates or PvP policy changes.
+  const rangedApproach = process.env.ND_OW_DEATH_RANGED === '1' && dimension.replace(/^minecraft:/, '') === 'overworld' && !shield && !enemies.some(e => e.player)
+    ? enemies.filter(e => e.threatening && !e.unseen && /^(skeleton|stray|bogged|parched)$/.test(e.kind) &&
+      !Object.hasOwn((require('../../assess') as typeof import('../../assess')).WEAPON, String(bot.entities[e.id]?.equipment?.[0]?.name || ''))) : []
+  const owRangedApproachHp = rangedApproach.length ? rangedApproach.reduce((hp, e) => hp +
+    (e.hit ?? MOBS[e.kind].dmg) * Math.ceil(Math.max(0, e.distance - 3) / 4.3 / MOBS[e.kind].every), 0) : undefined
   const dryMountedBoat = mountedBoatDry(bot)
   const lava = !dryMountedBoat && inLava(bot)
   const lavaEscapePending = !!(session._tacticalLavaClimbGoal && !session._tacticalLavaClimbGoal.failed && at < session._tacticalLavaClimbGoal.deadline)
@@ -239,7 +248,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const ghastEdge = /nether/.test(dimension) && process.env.ND_GHAST_EDGE !== '0' && (Object.values(bot.entities || {}) as MinecraftEntity[]).some(entity =>
     entity?.name === 'ghast' && entity.position && entity.isValid !== false && entity.position.distanceTo(bot.entity.position) <= 64 &&
     dropBehind(bot, entity.position) && !!pick.aim(bot, entity, { range: 66 })?.point)
-  if (!lava && !lavaEscapePending && (process.env.ND_TACTICS_WATER_HURT === '1' && session._tacticalWaterEscape && bot.entity.onGround || ghastEdge || enemies.some(enemy => enemy.threatening) && (bot.health < 16 || inspected.action !== 'fight' || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')))) {
+  if (!lava && !lavaEscapePending && (process.env.ND_TACTICS_WATER_HURT === '1' && session._tacticalWaterEscape && bot.entity.onGround || ghastEdge || enemies.some(enemy => enemy.threatening) && (bot.health < 16 || inspected.action !== 'fight' || owRangedApproachHp !== undefined || !weapon && enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')))) {
     try { refuge = survival.refugeLook(session, { radius: 16 }) } catch {}
   }
   let fireResistance = false
@@ -274,8 +283,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if (/nether/.test(dimension) && process.env.ND_NETHER_HIDE !== '0') {
     try {
       // Only the ones in sight (pick ray): an entity behind a wall is not known to a player (AGENTS.md, no x-ray).
-      const near = (guard.meleeFoes(bot, 12) as MinecraftEntity[]).filter(entity => !/^(blaze|magma_cube)$/.test(entity.name || '') && !unreachable(entity) &&
+      const near = (guard.meleeFoes(bot, process.env.ND_BRUTE_GUARD === '1' ? 16 : 12) as MinecraftEntity[]).filter(entity => !/^(blaze|magma_cube)$/.test(entity.name || '') && !unreachable(entity) &&
+        (entity.position.distanceTo(bot.entity.position) <= 12 || process.env.ND_BRUTE_GUARD === '1' && entity.name === 'piglin_brute') &&
         !!pick.aim(bot, entity, { range: 16 })?.point)
+      // Capture the observed brute before the tactic seals away the eye ray.
+      if (process.env.ND_BRUTE_MEMORY === '1' && near.some(entity => entity.name === 'piglin_brute')) (require('../../brute-memory') as typeof import('../../brute-memory')).observe(bot, true)
       const gold = [5, 6, 7, 8].some(slot => /^golden_/.test(bot.inventory.slots[slot]?.name || ''))
       // The hole goes down before they arrive: dug with a walker at the body it lets them into the shaft before the plug (c10:
       // three piglins at 3 blocks, the plug failed in 6 of 8 holes, 8 deaths). At the body the shield duel and the run stay.
@@ -284,16 +296,19 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
       // A brute or a hoglin is met from 12 blocks (c15-7-2 14.10: a box against a hoglin at 11, 12 -> 0); a crowd counts in 8.
       const distance = (entity: MinecraftEntity) => entity.position.distanceTo(bot.entity.position)
       const nearest = Math.min(...near.map(distance))
-      const heavy = near.some(entity => guard.HIDE_FROM.test(entity.name || ''))
+      const heavy = near.some(entity => guard.hideFrom(bot, entity.name || ''))
       const crowd = near.filter(entity => distance(entity) <= 8)
-      netherHide = near.length > 0 && (heavy || crowd.length > 0 && guard.bigMelee(bot, crowd, null, { lowHp: false, walkers: true })) && !(gold && piglinWitnesses) &&
-        (guard.above(bot, near) || nearest > (heavy ? 3.5 : 6) && guard.holeFits(bot)) ||
+      const bruteGuard = process.env.ND_BRUTE_GUARD === '1' && near.some(entity => entity.name === 'piglin_brute')
+      netherHide = near.length > 0 && (heavy || crowd.length > 0 && guard.bigMelee(bot, crowd, null, { lowHp: false, walkers: true })) && (!(gold && piglinWitnesses) || bruteGuard) &&
+        (guard.above(bot, near) || nearest > (heavy ? 3.5 : 6) && (guard.holeFits(bot) || bruteGuard &&
+          (guard.pillarFits(bot) || !!refuge?.cell && refuge.canBreakOut))) ||
         !!session._ndHideCtl && !session._ndHideCtl.aborted
     } catch {}
   }
   const recentHit = sameWorld && at - incident.at < 1500 && incident.byMob && incident.at > (session._tacticalRetreatSafeAt ?? -Infinity)
   const current = session.current?.name || ''
-  const waterSafety = process.env.ND_TACTICS_WATER_HURT === '1'
+  const owWater = movement.owDeathWaterOn(bot)
+  const waterSafety = process.env.ND_TACTICS_WATER_HURT === '1' || owWater
   const wetBody = waterSafety ? !dryMountedBoat && movement.inWater(bot) : !!bot.entity.isInWater
   const breathBlock = waterSafety ? bot.blockAt(pick.eyeOf(bot)) : null
   const breathing = !!breathBlock && breathBlock.boundingBox === 'empty' && (!movement.waterCell(breathBlock) || breathBlock.name === 'bubble_column')
@@ -301,7 +316,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const clearAir = breathing && (bot.oxygenLevel ?? 20) >= 18 && !hot && !recentHit && !enemies.some(enemy => enemy.threatening)
   if (!waterSafety || safeSupport || clearAir || session._tacticalWaterWorld !== dimension) session._tacticalWaterEscape = false
   session._tacticalWaterWorld = dimension
-  if (waterSafety && wetBody && !safeSupport && recentHit && /^(structure|mine|explore)$/.test(current)) session._tacticalWaterEscape = true
+  if (waterSafety && wetBody && !safeSupport && recentHit && (owWater || /^(structure|mine|explore)$/.test(current))) session._tacticalWaterEscape = true
   const hostile = enemies.filter(enemy => enemy.threatening)
   const contact = !!hot || !!recentHit || hostile.some(enemy => enemy.distance <= 4.5 || (flee.DOCTRINE[enemy.kind]?.range || 0) >= enemy.distance)
   const fall = !lava && !dryMountedBoat && (bot._ndClutch?.lastDecision?.action === 'clutch' || bot._ndClutch?.lastDecision?.action === 'water' || !!bot._ndFallGuard?.placed)
@@ -334,7 +349,6 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   // three-block shaft admits an Enderman until its roof closes: with one near, the supported roof is part of the dig.
   const enderman = enemies.some(enemy => enemy.threatening && enemy.kind === 'enderman')
   const digDownMs = shelter === 'DigDown' && refuge?.hole ? refuge.hole.ms + (enderman ? (require('../../fortify') as typeof import('../../fortify')).refugeBuildMs({ blocks: 1, roofSolid: false, leans: true }) : 0) : 0
-  const MOBS = (require('../../assess') as typeof import('../../assess')).MOBS
   const buildMs = shelter === 'BlockOff' ? survival.buildMsOf(refuge, choice!.how) : 0
   // The attack phase is unknown: a visible shooter can release its next shot during this construction interval.
   const buildCostHp = shelter === 'BlockOff' && /overworld/.test(dimension) && Number.isFinite(buildMs) ? boxBuildCost(enemies.filter(enemy => enemy.threatening)
@@ -358,11 +372,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if (current === 'stronghold' && process.env.ND_SHAFT_STAND !== '0' && /overworld/.test(dimension) && !lava && !burning) {
     try { const here = bot.blockAt(bot.entity.position.floored()); shaftStand = !!here && here.skyLight === 0 } catch {}
   }
-  return { at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0, polarBear: polarBear.plan(session, bears),
-    weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0),
+  return { dimension, at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0, polarBear: polarBear.plan(session, bears),
+    weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0), owRangedApproachHp,
     enemies, incomingProjectiles, owGuard: rangedGuard(bot, enemies), burning, hotFloor, lava, lavaAhead, fireResistance,
     explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
-    inWater: wetBody, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), waterEscape: !!session._tacticalWaterEscape, piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
+    waterEmergency: movement.owAirEmergency(bot), inWater: wetBody, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), waterEscape: !!session._tacticalWaterEscape, piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
     blocks: refuge?.blocks ?? (pack ??= (require('../../pack') as typeof import('../../pack'))).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
     water: !/nether/.test(dimension) && items.some(item => item.name === 'water_bucket'),
     edible: !!foodActions.bestFood(bot, session.mcData ?? bot.registry), canFight: hostile.length > 0 && (sustainableFight(inspected, bot.health ?? 0) || repel), contact,
@@ -389,7 +403,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // ифриты): ход навыка к бастиону на них не отвечает — 6 стрел за 5 с, 20 → 0 хп без щита (b2-5-1 14.10).
     niche: /nether/.test(dimension) && !!refuge?.niche && refuge.blocks >= 2, netherHide, ghastEdge,
     buildCostHp,
-    shelter, digDownCostHp, protectedEncounter: !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && !!session.current?.params?.style && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && (process.env.ND_BLAZE_WORLD_STATE === '0' || !!session._blazeCombatCtl && session._blazeCombatCtl === session.current?.ctl) && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !(process.env.ND_BLAZE_MELEE !== '0' && /^(wither_skeleton|magma_cube)$/.test(enemy.kind)) && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
+    shelter, digDownCostHp, protectedEncounter: !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && (process.env.ND_HUNT_OPEN_GROUND === '1' && (!session.current?.params?.style || ['foxhole', 'tunnel'].includes(session.current.params.style)) ? ownsHuntCover(session) : !!session.current?.params?.style) && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && (process.env.ND_BLAZE_WORLD_STATE === '0' || !!session._blazeCombatCtl && session._blazeCombatCtl === session.current?.ctl) && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !(process.env.ND_BLAZE_MELEE !== '0' && /^(wither_skeleton|magma_cube)$/.test(enemy.kind)) && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' && !(process.env.ND_WITHER_HIDE === '1' && hostile.some(enemy => enemy.kind === 'wither_skeleton' && enemy.distance <= 10)) || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
       // Бой на арене с игроком (fight с arena): лечение, отход, щит ведёт сам PvP — тактика тело не отбирает (колизей 10.10:
       // «прервано (tactical)» каждые 1–3 с при 20 хп — бот метался и не бил).
       current === 'fight' && !!session.current?.params?.arena && hostile.some(enemy => enemy.player), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,

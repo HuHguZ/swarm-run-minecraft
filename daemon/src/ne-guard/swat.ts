@@ -169,6 +169,18 @@ export function swatInstall (bot) {
         if (!best || d < best.d) best = { s, n, d }
       }
       if (!best) return
+      // Шар уже в радиусе взрыва (LargeFireball explosionPower 1 → урон сущностям в 2 бл., ServerExplosion radius·2), а щит поднят
+      // и смотрит на шар — держать щит: он берёт и удар шара, и взрыв спереди; удар по шару в 1.3–1.8 бл. стоил −7.6 хп (blz
+      // bz11-s17-1). Щит не поднят — бить, как прежде: прямое попадание (6 + взрыв вплотную) дороже. ND_SWAT_SHIELD_NEAR=0 — прежнее.
+      if (process.env.ND_SWAT_SHIELD_NEAR !== '0') {
+        const cd = Math.hypot(best.n.x - me.x, best.n.y + 0.5 - (me.y + 0.9), best.n.z - me.z)
+        const SH: typeof import('../combat/shield') = require('../combat/shield')
+        if (cd < 2.5 && SH.shieldUp(bot) && SH.facingCos(bot, new Vec3(best.n.x, best.n.y, best.n.z)) > 0.3) {
+          best.s.hitAt = -4
+          log('шар гаста: близко — держу щит', { cd: +cd.toFixed(2) })
+          return
+        }
+      }
       const c = new Vec3(best.n.x, best.n.y + 0.5, best.n.z)
       let aimAt = c, ghastId = null
       for (const g of ghasts) {
@@ -177,6 +189,16 @@ export function swatInstall (bot) {
         const velocity = age <= 10 ? motion.velocity : new Vec3(0, 0, 0)
         const aim = fbReturnAim(bot, best.n, g, velocity, 1 + age)
         if (aim) { aimAt = aim; ghastId = g.id; break }
+      }
+      // К гасту чистого пути нет — отбитый шар летит по взгляду и рвётся о ближнюю стену: взрыв «от игрока» злит зомби-пиглинов и
+      // пиглинов рядом (c94-int3-s20: «отбит 4 из 5», шар NeuroFarm9 −6, орда зомби-пиглинов 8 + 8 + 4). Есть мирные свиночеловеки
+      // в 16 — отбить вверх, в небо (сервер берёт удар по досягаемости, направление — взгляд: ProjectileDeflection.AIM_DEFLECT).
+      // ND_SWAT_UP=1 (поток ne 21.10, выкл.).
+      if (ghastId == null && process.env.ND_SWAT_UP === '1' && (Object.values(bot.entities || {}) as any[]).some((e: any) => e && e.position &&
+          /^(zombified_piglin|piglin)$/.test(e.name || '') && e.position.distanceTo(me) <= 16)) {
+        const pick: typeof import('../pick') = require('../pick')
+        const eye = pick.eyeOf(bot), h = Math.hypot(c.x - eye.x, c.z - eye.z) || 1
+        aimAt = eye.offset((c.x - eye.x) / h, 4, (c.z - eye.z) / h)
       }
       st.pend = { id: best.s.id, ghast: ghastId != null, ghastId, aim: aimAt, looked: false }
     } catch {}

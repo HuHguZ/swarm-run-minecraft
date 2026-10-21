@@ -12,7 +12,8 @@ test('duel runs the slot snapshot harness with the requested arena and swaps bot
   const slash = value => value.replaceAll('\\', '/')
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'"
   const git = process.platform === 'win32' ? spawnSync('where.exe', ['git.exe'], { encoding: 'utf8' }).stdout.trim().split(/\r?\n/)[0] : null
-  const shell = git ? path.resolve(path.dirname(git), '../bin/sh.exe') : 'sh'
+  // git.exe бывает и в Git\cmd, и в Git\mingw64\bin (PATH из git bash) — sh.exe лежит в Git\bin.
+  const shell = git ? ['../bin/sh.exe', '../../bin/sh.exe'].map(p => path.resolve(path.dirname(git), p)).find(p => fs.existsSync(p)) ?? 'sh' : 'sh'
   try {
     for (const child of ['bin', 'farm/crystal', '.daemon-fixed/arena', 'daemon/arena']) fs.mkdirSync(path.join(dir, child), { recursive: true })
     fs.copyFileSync(path.join(REPO_ROOT, 'farm/crystal/duel.sh'), path.join(dir, 'farm/crystal/duel.sh'))

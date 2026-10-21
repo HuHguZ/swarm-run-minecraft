@@ -116,7 +116,7 @@ function priceResources (bot, candidates) {
   return candidates.sort((a, b) => prices.get(a) - prices.get(b))
 }
 
-async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, at = null, collect = true, dry = false, avoidPiglinAggro = false }: any = {}) {
+async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, at = null, collect = true, dry = false, avoidPiglinAggro = false, minY = null }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   const wantedIds = resolveBlockIds(name, mcData)
@@ -180,7 +180,8 @@ async function mine (session, ctl, { block: name, count = 1, radius = 32, fair, 
     const visible = visibleOf(bot, wantedIds, radius, {
       max: 12,
       fair: useFair,
-      skip: p => (targetPos && !targetPos.equals(p)) || floor.some(f => f.equals(p)) ||
+      // minY — не ниже этой высоты (земля для вышки обзора: без ямы под собой, owC2-09: 10 земли — тело в яме на 5 ниже, обзор сорван).
+      skip: p => (targetPos && !targetPos.equals(p)) || floor.some(f => f.equals(p)) || (Number.isFinite(minY) && p.y < minY) ||
         castSite?.has(`${p.x},${p.y},${p.z}`) ||
         unreachable.has(`${p.x},${p.y},${p.z}`) || lavaBeside(p) || (dry && underWater(bot, p))
     })
@@ -335,14 +336,24 @@ async function explore (session, ctl, {
   // Разведка из-под неба верхнего мира — поверху (session.underSky,
   // underRoofCost): отрезок «по прямой» иначе уходил в пещеры.
   const walkTop = (surface && (require('../worlds') as typeof import('../worlds')).worldOf(bot) === 'overworld') || (typeof session.underSky === 'function' && session.underSky())
-  const walk = async (x, z, options) => {
+  // Слой C грузится только под флагом: песочницы тестов explore (vm с заглушками) без него.
+  const sw = walkTop && process.env.ND_OW_SURFACE_WALK === '1' ? (require('../session/surface-walk') as typeof import('../session/surface-walk')) : null
+  const surfaceScope = sw ? sw.startSurfaceWalk(bot) : null
+  const stopSurface = () => sw?.stopSurfaceWalk(bot, surfaceScope)
+  ctl.onAbort?.push(stopSurface)
+  try {
+  const walk = async (x, z, options): Promise<any> => {
     session.surfaceWalk = walkTop
     session.scoutFromY = walkTop && bot.entity ? bot.entity.position.y : null
     const mv = bot.pathfinder.movements
     const dug = mv ? mv.canDig : undefined
     const scaffold = mv ? mv.scafoldingBlocks : undefined
     if (walkTop && mv) { mv.canDig = false; mv.scafoldingBlocks = [] }
-    try { return await travelXZ(bot, ctl, x, z, { ...options, retries: 1, deadline }) }
+    try {
+      const result = await travelXZ(bot, ctl, x, z, { ...options, retries: 1, deadline })
+      if (result.surfaceDrop && sw) return { ...result, recovered: await sw.recoverSurface(session, ctl, deadline) }
+      return result
+    }
     finally {
       session.surfaceWalk = false
       session.scoutFromY = null
@@ -354,11 +365,24 @@ async function explore (session, ctl, {
   let escaped = false
   // Своя запертая клетка (коробка тактики): поверху без копки из неё пути нет ни в одну сторону (cl-j 14.10: 22 мин «пути нет»).
   if (walkTop) await (require('../fortify') as typeof import('../fortify')).leaveSealedCell(session, ctl, null)
+  if (block === 'any_log' && process.env.ND_OW_DESERT_LOOK === '1') {
+    const look = await (require('./desert') as typeof import('./desert')).desertTreeLook(session, ctl, walk, deadline)
+    if (look?.stopped) return { found: null, from, now: xyz(bot.entity.position), legs, note: look.stopped }
+    if (look?.tree && !ctl.aborted) {
+      // A visible canopy supplies a direction, not a fictitious log. Approach, then re-observe.
+      const tree = look.tree
+      await walk(tree.pos.x, tree.pos.z, { range: 6 })
+      hit = findHit()
+      if (hit) return { found: hit.name, at: xyz(hit.position), from, now: xyz(bot.entity.position), legs, note: 'desert: visible tree approached' }
+      legs.push(`desert canopy ${tree.name} ${tree.pos.x},${tree.pos.z}; raised ${look.raised}`)
+    }
+  }
   while (gameClock.now() < deadline && !ctl.aborted) {
     const mem = remembered()
     if (mem) {
       memTried.add(`${mem.x},${mem.y},${mem.z}`)
-      const r = await walk(mem.x, mem.z, { y: mem.y, range: 4 })
+      const r = await walk(mem.x, mem.z, { y: surfaceScope ? null : mem.y, range: 4 })
+      if (r.surfaceDrop && !r.recovered) return { found: null, from, now: xyz(bot.entity.position), legs, note: r.error }
       legs.push(`память ${mem.name} ${mem.x},${mem.y},${mem.z}${r.ok ? '' : ' ✗ ' + r.error}`)
       console.log('[eyes] explore: к увиденному раньше', JSON.stringify({ name: mem.name, at: [mem.x, mem.y, mem.z], dist: mem.dist, ago: mem.ago, ok: !!r.ok }))
       if (!r.ok) await sleep(250)
@@ -372,6 +396,7 @@ async function explore (session, ctl, {
     // И без копки: разведка — это взгляд с поверхности, а не штрек сквозь
     // гору (session.goto surface:'strict'). Нет пути поверху — следующий луч.
     const r = await walk(here.x + dx * stepDistance * spread, here.z + dz * stepDistance * spread, { range: 6 })
+    if (r.surfaceDrop && !r.recovered) return { found: null, from, now: xyz(bot.entity.position), legs, note: r.error }
     legs.push(`${dx},${dz}${r.ok ? '' : ' ✗ ' + r.error}`)
     i++
     // S8d (S9: explore на льду — 551 noPath за прогон, каждый отрезок отказывал сразу, цикл крутил стороны до срока): все 8 сторон
@@ -410,6 +435,11 @@ async function explore (session, ctl, {
     now: xyz(bot.entity.position),
     legs,
     note: 'не нашёл за отведённое время — позови ещё раз, поиск продолжится с текущего места'
+  }
+  } finally {
+    stopSurface()
+    const off = ctl.onAbort?.indexOf(stopSurface) ?? -1
+    if (off >= 0) ctl.onAbort.splice(off, 1)
   }
 }
 const posKey = p => `${p.x},${p.y},${p.z}`

@@ -47,7 +47,9 @@ function chance(sp, blocks, removed = new Set()) {
   return Math.max(0, Math.min(1, answer))
 }
 function rate(p) { return 4800 * p / (1 + 499.5 * (1 - (1 - p) ** 4)) }
-function price(gain, rods, costSeconds, horizon = Infinity, beforeChance = 1 - gain) {
+function price(gain, rods, costSeconds, horizon = Infinity, beforeChance = 1 - gain, recoverySeconds = 0) {
+  if (!Number.isFinite(recoverySeconds) || recoverySeconds < 0) return null
+  costSeconds += recoverySeconds
   if (![gain, rods, costSeconds, beforeChance].every(Number.isFinite) || gain <= 0 || gain >= 1 || rods <= 0 || costSeconds < 0 || beforeChance < 0 || beforeChance + gain > 1 + Number.EPSILON * 8 || !(horizon > costSeconds)) return null
   // T(p)-T(p+gain) decreases as p increases. Use the largest p consistent with OBSERVED solids;
   // unknown cells are air only in this upper bound, and solid in the separately proved gain.
@@ -136,6 +138,9 @@ function plan(bot, sp, { rods, protectedCells = [], horizon = Infinity, windowMs
   // A 1.8-high blaze can need a pair; all three above-platform cells can free both upper foot levels together.
   // Keep the collection floor and price only a column reachable from the current post.
   const overheadMs = Math.max((require('./game-clock') as typeof import('./game-clock')).TICK_MS, bot._ndBlazeClearOverheadMs || 0)
+  // Returning to sword resets its attack ticker; shield delay overlaps that recovery.
+  const recoverySeconds = process.env.ND_BLAZE_CLEAR_PRICE === '1'
+    ? Math.max(250, (require('./pvp') as typeof import('./pvp')).cooldownMs((require('./items') as typeof import('./items')).bestWeapon(bot))) / 1000 : 0
   for (const b of candidates) {
     const above = candidates.find(c => c.position.equals(b.position.offset(0, 1, 0)))
     const top = above && candidates.find(c => c.position.equals(b.position.offset(0, 2, 0)))
@@ -143,7 +148,7 @@ function plan(bot, sp, { rods, protectedCells = [], horizon = Infinity, windowMs
       const gain = chance(sp, blocks, new Set(cut.map(b => key(b.position)))) - before
       const targets = cut.map(b => { const digSeconds = tools.bestFor(bot, b).ms / 1000; return { pos: b.position, stateId: b.stateId, digSeconds, costSeconds: digSeconds + overheadMs / 1000 } })
       const cost = targets.reduce((n, t) => n + t.costSeconds, 0)
-      const paid = cost * 1000 <= windowMs ? price(gain, rods, cost, horizon, beforeUpper) : null
+      const paid = (cost + recoverySeconds) * 1000 <= windowMs ? price(gain, rods, cost, horizon, beforeUpper, recoverySeconds) : null
       if (paid && (!best || paid.netSeconds > best.netSeconds)) best = { mode: 'pick', ...targets[0], targets, gain, beforeUpper, ...paid, protectedCells: keep }
     }
   }

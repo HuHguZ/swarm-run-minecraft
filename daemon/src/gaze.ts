@@ -17,7 +17,9 @@ function install (session, bot) {
       if (session.bot !== bot || !bot.entity || bot.targetDigBlock || bot.usingHeldItem || bot.currentWindow) return
       if (bot._ndHandLock && bot._ndHandLock.on && bot._ndHandLock.on()) return
       const cur = session.current && session.current.name
-      if (cur && OWN_GAZE.test(cur)) return
+      // pearls mode=barter/seek — торг с пиглинами, взгляд эндермену в глаза там не нужен (nbk34-0528: смерть от эндермена в
+      // искажённом лесу на поиске торговцев — сторож был выключен на всём навыке pearls).
+      if (cur && OWN_GAZE.test(cur) && !(cur === 'pearls' && /^(barter|seek)$/.test(String(session.current.params?.mode || '')))) return
       const e = starer(bot, bot.entity.yaw, bot.entity.pitch)
       if (!e || e.position.distanceTo(bot.entity.position) < 6) return
       // force — в пакет этого же тика (позиция уходит после physicsTick); плавный поворот дотянул бы взгляд через тики.

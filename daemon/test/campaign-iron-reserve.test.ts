@@ -32,7 +32,7 @@ function fixture (extra: Record<string, number> = {}, known = {}, water = false)
     log: () => {}, refresh: noop, sense: noop, cook: noop, recoverGuard: noop, unclutter: noop, spares: noop, earlyShield: noop,
     lightUp: noop, mineSeenAll: noop, sticks: noop, readMemory: noop, torches: noop, bucketOnTheWay: noop,
     gearWorth: () => ({ missing: true, take: false }), worn: () => false, goldOn: () => true,
-    planksFor: () => null, woodNow: () => 0, mobInTheWay: async () => false, weakAndHungry: () => false,
+    planksFor: () => null, woodNow: () => 0, mobInTheWay: async () => false, weakAndHungry: () => false, owFastTrack: () => false,
     have: (item: string | RegExp) => typeof item === 'string' ? (inventory[item] || 0) : Object.entries(inventory).reduce((sum, [name, n]) => sum + (item.test(name) ? n : 0), 0),
     lighter: () => !!(inventory.flint_and_steel || inventory.fire_charge), y: () => context.state.pos.y, dim: () => 'overworld',
     smeltAll: async () => { if (inventory.raw_iron) { inventory.iron_ingot += inventory.raw_iron; inventory.raw_iron = 0 } },
