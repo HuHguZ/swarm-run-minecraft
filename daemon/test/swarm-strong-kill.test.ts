@@ -1,0 +1,82 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { SwarmBoard, planPvp, type SwarmMember } from '../src/swarm'
+import { shoveValue, SHOVE } from '../src/swarm/shove'
+import { MELEE_CAP } from '../src/swarm/race'
+import { harmWait, WINDOW_MS } from '../src/pvp/strike-order'
+
+// Рой против сильного одиночки (стенд 21.10, чемпион в незерите с Защитой IV и Шипами III): убивают булава с падения,
+// зелья вреда и сброс в пустоту — ближний бой толпой только кормит его шипы и меч.
+const p = (x = 0, y = 64, z = 0) => ({ x, y, z })
+const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+const NETHERITE = ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots']
+const CHAMP = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
+const blue = (id: string, k: number, extra: Partial<SwarmMember> = {}): SwarmMember => ({ id, team: 'blue', position: p(8, 64, k * 2 - 7), health: 20, strength: 60 - k,
+  role: 'fighter', weapon: 'diamond_sword', armor: IRON, ench: {}, inventory: { diamond_sword: 1 }, ...extra })
+function scene(members: SwarmMember[], foe = CHAMP) {
+  let time = 1000
+  const board = new SwarmBoard('blue', () => time, 3000)
+  board.setMembers(members)
+  const see = () => { for (const m of members) board.observe(m.id, time, { id: 'champ', position: p(0), visible: true, ...foe }) }
+  see()
+  return { board, members, next: () => { time += 500; see() } }
+}
+// Он убил двоих наших и жив — сильное меньшинство (race.ts strongFew), бой «как против человека».
+const STRONG = { foesLeft: 1, quorum: 2, killsBy: { champ: 2 } }
+const onHim = (plan: Map<string, any>) => [...plan.values()].filter(t => t.kind === 'fight' && t.data?.target === 'champ')
+
+test('strong foe: two swords take every invulnerability window, the rest of the melee stays off; mace and harming always go', () => {
+  assert.equal(MELEE_CAP, 2, 'a sword charges in 12 ticks, the window is 10: two swords fill it')
+  const team = [...Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k)),
+    blue('mace', 6, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 4 } }),
+    blue('harm', 7, { inventory: { diamond_sword: 1, splash_potion: 2 }, potions: { splash_strong_harming: 2 } })]
+  const f = scene(team)
+  const plan = planPvp(f.board, team, STRONG)
+  const fight = onHim(plan)
+  const melee = fight.filter(t => !['pvp:mace', 'pvp:harm'].includes(t.id))
+  assert.equal(melee.length, MELEE_CAP, `swords on him: ${fight.map(t => t.id).join(',')}`)
+  assert.deepEqual(melee.map(t => t.id).sort(), ['pvp:s0', 'pvp:s1'], 'the two strongest swords')
+  assert.ok(plan.get('mace')!.kind === 'fight' && plan.get('mace')!.data!.smash, 'the mace with a wind charge strikes from the air')
+  assert.equal(plan.get('harm')!.kind, 'fight', 'harming potions go past his armour')
+  for (const id of ['s2', 's3', 's4', 's5']) assert.notEqual(plan.get(id)!.kind, 'fight', `${id}: a third sword adds nothing but thorns`)
+})
+
+test('strong foe at a void edge: every sword in reach shoves, the far edge is wind work only', () => {
+  const team = Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k, k === 5 ? { inventory: { diamond_sword: 1, wind_charge: 3 } } : {}))
+  const edge = scene(team)
+  const close = planPvp(edge.board, team, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 1 }) })
+  assert.equal(onHim(close).length, 6, 'a sprint hit from the far side drops him: all of them')
+  assert.ok(onHim(close).every(t => t.data!.shove && Math.cos(t.data!.slot * Math.PI / 4) > 0), 'from the side away from the void')
+  const far = scene(team.map(m => ({ ...m })))
+  const plan = planPvp(far.board, far.members, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 4 }) })
+  assert.ok(plan.get('s5')!.data!.shove && plan.get('s5')!.data!.push, 'four blocks to the edge: the wind charge reaches')
+  assert.equal(onHim(plan).filter(t => !t.data!.push).length, MELEE_CAP, 'a hit does not throw him four blocks: swords stay capped')
+})
+
+test('lava kills the naked, not netherite with Protection IV: no shove into a pit he walks out of', () => {
+  const pit = { x: 1, z: 0, drop: Infinity, lava: true, at: 1 }
+  assert.ok(shoveValue(CHAMP, pit) < SHOVE, `champion in lava: ${shoveValue(CHAMP, pit).toFixed(2)} of his hp`)
+  assert.equal(shoveValue({ equipment: { armor: [] } }, pit), 1, 'naked: dead in the pit')
+  assert.equal(shoveValue(CHAMP, { x: 1, z: 0, at: 2 }), 1, 'the void kills anyone')
+})
+
+test('a fight task that turns into a shove reaches the board, not the old task without the flag', () => {
+  const team = [blue('a', 0, { inventory: { diamond_sword: 1, wind_charge: 2 } })]
+  const f = scene(team, { equipment: { weapon: 'iron_sword', armor: [] } } as any)
+  // Мелкий край с той же стороны: то же место в кольце (slot), только без сброса — по месту задача «та же».
+  planPvp(f.board, team, { quorum: 1, aggressive: true, edgeOf: () => ({ x: -1, z: 0, drop: 5, at: 1 }) })
+  const before = f.board.tasks().find(t => t.id === 'pvp:a')!
+  assert.ok(!before.data!.shove)
+  assert.ok(f.board.claim('pvp:a', 'a', 10000), 'the driver holds its task')
+  f.next()
+  planPvp(f.board, team, { quorum: 1, aggressive: true, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 1 }) })
+  const t = f.board.tasks().find(t => t.id === 'pvp:a')!
+  assert.equal(t.data!.slot, before.data!.slot, 'same ring slot as before')
+  assert.ok(t.data!.shove && t.data!.push, `the board carries the shove: ${JSON.stringify(t.data)}`)
+})
+
+test('harming in invulnerability windows: the cloud lands after the window of the last hit on him', () => {
+  assert.equal(harmWait(1000, null, 10), 0, 'nobody hit him: throw')
+  assert.equal(harmWait(1000, 1000, 4), WINDOW_MS - 200, 'just hit, 4 ticks of flight: wait out the rest')
+  assert.equal(harmWait(1000, 1000, 10), 0, 'the flight itself outlasts the window')
+})

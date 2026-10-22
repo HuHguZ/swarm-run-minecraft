@@ -2,6 +2,7 @@
 // боя по доске (fledAt, pvpMemory): владелец — этот модуль, очищает их resetRound.
 import type { SwarmMember, SwarmTask, SharedEnemy, SwarmFact, Doctrine, ClaimedTask, SwarmReceipt, EnemyObservation } from './types'
 import type { SwarmTeamFight } from './fight'
+import type { Retreat } from './retreat'
 import { validPosition, position, cellKey, copy, doctrines, kinds, threats, roles } from './common'
 
 export class SwarmBoard {
@@ -35,6 +36,7 @@ export class SwarmBoard {
       this.releaseOwner(id); fledAt.get(this)?.delete(id)
       const state = pvpMemory.get(this)
       if (state?.assault?.roster.has(id)) state.assault.lost.add(id)
+      state?.retreats.delete(id)
     }
     this.members = next
     for (const task of this.work.values()) if ((task.assignedTo && !this.alive(task.assignedTo)) || task.participants?.some(id => !this.alive(id))) this.work.delete(task.id)
@@ -167,9 +169,32 @@ export type PvpMemory = {
   failed: Map<string, AssaultBalance>
   equipment: Map<string, NonNullable<SharedEnemy['equipment']>>
   assault?: { balance: AssaultBalance; roster: Set<string>; lost: Set<string>; lostAtHit: number; hp: number }
+  // Начатые отходы (retreat.ts): держатся, пока мир их не кончит.
+  retreats: Map<string, Retreat>
+  // Сильное меньшинство (race.ts strongFew): последняя оценка, пока врагов не видно.
+  strongFew?: boolean
+  // Всё оружие, что видели у врага за раунд (в руке бывает лук, а меч — в хотбаре): человек помнит, чем его били.
+  arsenal: Map<string, Set<string>>
+  // Эпизод схватки (doctrine.ts): с первого контакта до пропажи врагов из виду — обманки выключены.
+  brawl?: boolean
+  // Ранг линии на смене (doctrine.lineDuty).
+  lineDuty?: number
 }
 export const pvpMemory = new WeakMap<SwarmBoard, PvpMemory>()
 export function pvpState(board: SwarmBoard) {
-  if (!pvpMemory.has(board)) pvpMemory.set(board, { failed: new Map(), equipment: new Map() })
+  if (!pvpMemory.has(board)) pvpMemory.set(board, { failed: new Map(), equipment: new Map(), retreats: new Map(), arsenal: new Map() })
   return pvpMemory.get(board)!
+}
+// Враги доски с памятью их снаряжения за раунд: пропуск поля не доказывает, что враг снял прежнюю броню или чары (15.10).
+// Один взгляд для плана и мгновенной паники драйвера: паника считала по сырым врагам, и «залп» мигал против плана
+// (стенд 15×15, 21.10: 184 «⚡ залп» за раунд при задании плана goto/recover).
+export function knownEnemies(board: SwarmBoard): SharedEnemy[] {
+  const state = pvpState(board)
+  return board.enemies().map(e => {
+    const equipment = { ...state.equipment.get(e.id), ...e.equipment }
+    if (e.equipment?.armor && e.equipment.unknownArmorSlots === undefined) delete equipment.unknownArmorSlots
+    state.equipment.set(e.id, copy(equipment))
+    if (equipment.weapon) state.arsenal.set(e.id, (state.arsenal.get(e.id) || new Set()).add(equipment.weapon))
+    return { ...e, equipment }
+  })
 }

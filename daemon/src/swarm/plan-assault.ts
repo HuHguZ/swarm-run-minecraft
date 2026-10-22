@@ -34,8 +34,16 @@ export function pvpAssault(S: PvpPlan): void {
   // Повтор и после того, как отошедшие подлечились: все выжившие из проваленного штурма снова с хп ≥ 90 % (пользователь 14.10:
   // «рои добивают друг друга до конца, отходят только ненадолго подлечиться»; стенд 15.10: только «сильнее, чем было» — штурм
   // провален за 16 с, дальше до конца прогона 102 «проигрываем — прячусь»).
-  const healed = (old: AssaultBalance) => !!old.voters?.length && old.voters.map(id => team.find(m => m.id === id)).every(m => !m || ratio(m) >= .9)
-  const improved = (b: AssaultBalance, old: AssaultBalance) => b.ready > old.ready || b.hp < old.hp || b.force < old.force || old.enchanted && !b.enchanted ||
+  // Погибшие голосовавшие — не «подлечились»: большинство легло — провал от его силы, а не от ран (стенд 21.10, чемпион: семеро
+  // штурмовали, четверо легли, остальные целы — и в ту же секунду новый штурм).
+  const healed = (old: AssaultBalance) => { const back = (old.voters || []).map(id => team.find(m => m.id === id)).filter(Boolean) as SwarmMember[]; return back.length * 2 >= (old.voters?.length || Infinity) && back.every(m => ratio(m) >= .9) }
+  // Провал без подтверждённого урона по цели (оценка хп не сдвинулась) — та же сила снова ничего не даст: повтор только вдвое
+  // большим числом, в полтора раза большим уроном, лучшим снаряжением или по ослабшей цели; «подлечились» и «на одного больше»
+  // — не довод (стенд 21.10, чемпион: штурм 92 с, 5 потерь, ему ноль — и в ту же секунду новый штурм теми же силами).
+  const unscathed = (old: AssaultBalance) => old.hp >= 20
+  const improved = (b: AssaultBalance, old: AssaultBalance) => unscathed(old)
+    ? b.ready >= 2 * old.ready || b.attack >= 1.5 * old.attack || b.hp < old.hp || b.force < old.force || old.enchanted && !b.enchanted || b.ready >= old.ready && (b.attack > old.attack || b.armor > old.armor || b.tough > old.tough || b.prot > old.prot)
+    : b.ready > old.ready || b.hp < old.hp || b.force < old.force || old.enchanted && !b.enchanted ||
     b.ready >= old.ready && (b.attack > old.attack || b.armor > old.armor || b.tough > old.tough || b.prot > old.prot) || healed(old)
   let assault = aggressive ? board.assault : null
   if (!aggressive) { board.assault = null; delete state.assault }
@@ -44,10 +52,9 @@ export function pvpAssault(S: PvpPlan): void {
     const episode = state.assault, foe = enemies.find(e => e.id === assault!.target)
     for (const id of episode.roster) if (!board.alive(id)) episode.lost.add(id)
     const lost = episode.lost.size
-    if (foe?.hpEstimate !== undefined) {
-      if (foe.hpEstimate < episode.hp) episode.lostAtHit = lost
-      episode.hp = foe.hpEstimate
-    }
+    // Успех штурма — новый минимум оценки его хп, а не любое снижение: лечащийся (яблоки) ходит 20 → 19 → 20 → 19, и каждый
+    // такой «урон» обнулял счёт потерь — штурм на чемпиона шёл 155 с и стоил восьми (стенд 21.10).
+    if (foe?.hpEstimate !== undefined && foe.hpEstimate < episode.hp) { episode.lostAtHit = lost; episode.hp = foe.hpEstimate }
     // Пропажа sightings не доказывает исход; дальнюю цель подтверждает свежий обзор (15.10).
     const outOfReach = foe && tNow - foe.seenAt <= 500 && assault.voters.every(id => !board.alive(id) || distance(team.find(m => m.id === id)!.position, foe.position) > 40)
     // Проигрываем — потери с последнего подтверждённого урона по цели: не меньше трёх и 40 % голосовавших (первая же потеря
@@ -55,7 +62,8 @@ export function pvpAssault(S: PvpPlan): void {
     const losing = lost - episode.lostAtHit >= Math.max(3, Math.ceil(assault.voters.length * .4))
     if (losing || outOfReach) {
       board.assaultEnded = { at: tNow, why: losing ? 'проигрываем' : 'вне досягаемости', lost, target: assault.target, seconds: Math.round((tNow - assault.since) / 1000) }
-      state.failed.set(assault.target, { ...episode.balance, hp: foe?.hpEstimate ?? episode.hp, voters: assault.voters })
+      // Хп провала — его нынешняя оценка (вылечился к концу — полное: без своей оценки сводка видит его целым), а не минимум за штурм.
+      state.failed.set(assault.target, { ...episode.balance, hp: foe ? foe.hpEstimate ?? 20 : episode.hp, voters: assault.voters })
       board.assault = assault = null
       delete state.assault; ended = true
     }
@@ -75,8 +83,6 @@ export function pvpAssault(S: PvpPlan): void {
   // на шифте; подошёл ближе — бой, ослаб — ва-банк.
   // Проигрываем — только при видимом враге (Codex 15.10: последние 1–3 без врага прятались, а не лутали).
   const losing = aggressive && !assault && (regroup || enemies.length > 0 && team.length <= 3 * enemies.length)
-  // S05: возвращаем 30 с подготовки для проверки регресса на крыше (15.10).
-  if (hopeless.size) board.recordFact(team[0].id, board.now(), { id: 'outmatched', kind: 'mark', position: { ...center } }, 30000)
   // Для журнала — счёт всей команды и держит ли бой большинство.
   const score = enemies.length ? assessTeamFight(team, enemies) : null
   board.teamFight = score && { ...score, engage: hopeless.size * 2 < team.length }

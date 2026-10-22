@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { SwarmBoard, planPvp, type SwarmMember } from '../src/swarm'
+import { shoveValue } from '../src/swarm/shove'
 
 const p = (x = 0, y = 64, z = 0) => ({ x, y, z })
 const NETHERITE = ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots']
@@ -20,6 +21,9 @@ test('line: the off-duty rank leaves even a close contact, the on-duty rank take
   const first = planPvp(f.board, team, { doctrine: 'line', quorum: 2 })
   assert.equal(first.get('a')!.kind, 'fight', 'rank 0 is on duty in the first shift')
   f.at(1000 + 22500); f.see('foe', p(4))
+  assert.equal(planPvp(f.board, team, { doctrine: 'line', quorum: 2 }).get('a')!.kind, 'fight', 'no rotation by the clock: rank 0 is fresh')
+  team[0].health = 11.5
+  f.at(1000 + 23000); f.see('foe', p(4))
   const next = planPvp(f.board, team, { doctrine: 'line', quorum: 2 })
   assert.equal(next.get('a')!.kind, 'goto', 'the old front is in contact (1 block) and still rotates out')
   assert.equal(next.get('a')!.data!.line, 0)
@@ -146,17 +150,98 @@ test('false weakness: until the trap springs the rest of the team stays passive 
   assert.ok(['x', 'y'].every(id => sprung.get(id)!.data!.feintGuard !== true), 'once sprung, the rest joins the fight')
 })
 
-test('panic: a flee holds for three game seconds while the risk estimate flickers at its threshold', () => {
+test('retreat: a started retreat is ended by the world (healed, caught, away), not by a timer', () => {
   // Враг в 14 бл. — дальше местного боя (12 бл.): решает личная оценка, и липкость видна в чистом виде.
+  const foe = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
   const hurt = member('a', { health: 3 })
   const f = scene([hurt], 1000)
-  f.see('foe', p(14), { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } })
+  f.see('foe', p(14), foe)
   assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'three hearts against an enchanted netherite sword')
-  hurt.health = 20
-  f.at(1500); f.see('foe', p(14))
-  assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'the next estimate is safe, but the flee is not cut after 0.5 s')
-  f.at(4500); f.see('foe', p(14))
-  assert.notEqual(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'after 3 s of safe estimates the flee ends')
+  hurt.health = 8
+  f.at(60000); f.see('foe', p(14), foe)
+  assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'a minute later, still wounded and still chased: the retreat holds')
+  hurt.health = 13
+  f.at(61000); f.see('foe', p(14), foe)
+  assert.notEqual(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'healed past 60 %: the retreat ends at once')
+  const caught = member('b', { health: 3 })
+  const g = scene([caught], 1000)
+  g.see('foe', p(14), foe)
+  assert.equal(planPvp(g.board, g.members).get('b')!.kind, 'flee')
+  g.at(2000); g.see('foe', p(2), foe)
+  assert.notEqual(planPvp(g.board, g.members).get('b')!.kind, 'flee', 'caught alone at 2 blocks: turning to fight beats taking hits in the back')
+})
+
+test('retreat: a lone bot backs off a stronger foe to its group and holds until it is with them; the last one standing does not hide', () => {
+  const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+  const lone = member('a', { weapon: 'stone_sword', armor: [], ench: {}, inventory: { stone_sword: 1 } })
+  const mates = ['b', 'c'].map((id, k) => member(id, { position: p(-40, 64, k * 2) }))
+  const f = scene([lone, ...mates], 1000)
+  const foe = { equipment: { weapon: 'diamond_sword', armor: IRON } }
+  f.see('foe', p(10), foe)
+  const first = planPvp(f.board, f.members).get('a')!
+  assert.equal(first.kind, 'flee', 'alone, stone sword and no armor against iron and diamond')
+  assert.ok(first.data!.regroup && first.position.x < -30, 'toward its own group, not just away from him')
+  for (const [t, x] of [[2000, 20], [3000, 30], [4000, 14]] as const) {
+    f.at(t); f.see('foe', p(x), foe)
+    assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', `at ${x} blocks the reason is the same: no walking back to him alone`)
+  }
+  lone.position = p(-34)
+  f.at(5000); f.see('foe', p(-20), foe)
+  assert.notEqual(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'with its group: the retreat ends')
+  const last = member('z', { weapon: 'stone_sword', armor: [], ench: {}, inventory: { stone_sword: 1 } })
+  const g = scene([last], 1000)
+  g.see('foe', p(10), foe)
+  assert.notEqual(planPvp(g.board, g.members).get('z')!.kind, 'flee', 'nobody to run to: no hiding from the fight')
+})
+
+test('race: the under-geared loot while the enemy is far, the out-geared rush him, contact is always a fight', () => {
+  const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+  const foe = { equipment: { weapon: 'iron_sword', armor: IRON } }
+  const naked = member('n', { weapon: 'wooden_sword', armor: [], ench: {}, inventory: { wooden_sword: 1 }, position: p(0, 64, 1) })
+  const strong = member('s', { position: p(0, 64, -1) })
+  const f = scene([naked, strong], 1000)
+  f.see('foe', p(20), foe)
+  const plan = planPvp(f.board, f.members)
+  assert.equal(plan.get('n')!.kind, 'loot', 'a wooden sword without armor against iron 20 blocks away: loot first')
+  assert.ok(plan.get('n')!.data!.race)
+  assert.ok(['fight', 'goto'].includes(plan.get('s')!.kind), 'netherite against iron: go and kill before he catches up')
+  f.at(2000); f.see('foe', p(0, 64, 4), foe)
+  assert.notEqual(planPvp(f.board, f.members).get('n')!.data?.race, true, 'he is at 3 blocks: no turning the back to go looting')
+})
+
+test('finishing: a fleeing last enemy is encircled by everyone from separate sectors, not chased by a pack with a reserve', () => {
+  const team = Array.from({ length: 6 }, (_, i) => member('r' + i, { position: p(0, 64, i * 2 - 5) }))
+  const f = scene(team, 1000)
+  f.see('runner', p(14), { velocity: { x: .28, y: 0, z: 0 }, equipment: { weapon: 'iron_sword', armor: [] } })
+  const plan = [...planPvp(f.board, team, { quorum: 2 }).values()]
+  assert.ok(plan.every(t => !t.data?.reserve), 'nobody waits in reserve while he runs')
+  const slots = new Set(plan.map(t => t.data?.slot).filter(k => k !== undefined))
+  assert.ok(slots.size >= 4, `sectors around him: ${[...slots].join(',')}`)
+})
+
+test('search: hunters fan out over the ring he could have run to, not all to the one spot he was last seen', () => {
+  const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+  const team = Array.from({ length: 5 }, (_, i) => member('h' + i, { position: p(-20, 64, i * 2), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))
+  const f = scene(team, 1000)
+  f.see('hider', p(20), { equipment: { weapon: 'iron_sword', armor: IRON } })
+  planPvp(f.board, team, { quorum: 2 })
+  f.at(1000 + 5000)
+  const tasks = [...planPvp(f.board, team, { quorum: 2 }).values()].filter(t => t.data?.search)
+  assert.ok(tasks.length >= 4, 'unseen for 5 s: everyone armed searches')
+  assert.ok(tasks.every(t => t.data!.enemyPosition.x === 20), 'the last known place is kept')
+  const spots = new Set(tasks.map(t => `${Math.round(t.data!.searchAt.x)},${Math.round(t.data!.searchAt.z)}`))
+  assert.ok(spots.size >= 4, `separate search points: ${[...spots].join(' ')}`)
+  assert.ok(tasks.every(t => Math.hypot(t.data!.searchAt.x - 20, t.data!.searchAt.z) <= 28.1), 'within the run he could make in 5 s')
+})
+
+test('retreat: no flight from an equal fight in contact, nor from a held TNT or a far archer', () => {
+  const naked = (id: string, x = 0) => member(id, { position: p(x), weapon: 'iron_sword', armor: [], ench: {}, inventory: { iron_sword: 1 } })
+  for (const [what, extra] of [['TNT in hand', { equipment: { weapon: 'tnt', armor: [] } }], ['an enchanted bow at 6 blocks', { equipment: { weapon: 'bow', armor: [], enchanted: true }, threat: 'bow' }],
+    ['a diamond sword in contact', { equipment: { weapon: 'diamond_sword', armor: [], enchanted: true } }]] as const) {
+    const f = scene([naked('a')], 1000)
+    f.see('foe', p(what.includes('contact') ? 3 : 6), extra)
+    assert.notEqual(planPvp(f.board, f.members).get('a')!.kind, 'flee', what)
+  }
 })
 
 test('risk: allies who can arrive in time count as helpers even if only one of them sees the foes', () => {
@@ -209,7 +294,11 @@ test('fight to the finish: equal or slightly fewer fight on, a crushed group reg
     assert.ok([...plan.values()].every(t => t.kind !== 'flee'), `${n} against ${foes}: the swarm fights instead of hiding`)
   }
   const { f, plan } = against(3, 6)
-  assert.ok([...plan.values()].every(t => t.kind === 'flee'), 'three against six would be wiped while six keep three: regroup')
+  assert.ok([...plan.values()].every(t => t.kind !== 'flee'), 'three against six with nobody to run to: the last stand, not hide-and-seek')
+  const far = scene([...side(3), ...['g0', 'g1', 'g2'].map((id, i) => member(id, { position: p(-40, 64, i * 1.5), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))])
+  for (let i = 0; i < 6; i++) far.see('r' + i, p(5, 64, i * 1.5), gear)
+  const regroup = planPvp(far.board, far.members, { quorum: 2 })
+  assert.ok(['b0', 'b1', 'b2'].every(id => regroup.get(id)!.kind === 'flee'), 'three against six with own group 40 blocks off: regroup there')
   // Враги пропали из вида: свои идут туда, где их видели последним, а не лутают и не стоят дозором.
   const hunt = scene(side(4))
   hunt.see('r0', p(20, 64, 0), gear)
@@ -220,13 +309,18 @@ test('fight to the finish: equal or slightly fewer fight on, a crushed group reg
   void f
   // Одиночка против двоих, а свои — в стороне: бежит к своим (перегруппировка), а не прочь от врага.
   const crowd = [member('lone', { position: p(0), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }),
-    ...Array.from({ length: 4 }, (_, i) => member('g' + i, { position: p(-20, 64, i), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))]
+    ...Array.from({ length: 4 }, (_, i) => member('g' + i, { position: p(-30, 64, i), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))]
   const g = scene(crowd)
   for (const [i, z] of [-1, 1].entries()) g.see('r' + i, p(4, 64, z), gear)
   const lone = planPvp(g.board, crowd, { quorum: 2 }).get('lone')!
   assert.equal(lone.kind, 'flee')
   assert.equal(lone.data!.regroup, true, 'outnumbered alone: regroup')
-  assert.ok(lone.position!.x < -15, 'toward the allies, not just away from the foes')
+  assert.ok(lone.position!.x < -25, 'toward the allies, not just away from the foes')
+  // Свои в 20 бл. (подойдут за 3–4 с, REINFORCE_LINK) — держит бой до них, а не бегает туда-сюда.
+  const near = crowd.map(m => m.id === 'lone' ? m : { ...m, position: p(-20, 64, m.position.z) })
+  const h = scene(near)
+  for (const [i, z] of [-1, 1].entries()) h.see('r' + i, p(4, 64, z), gear)
+  assert.notEqual(planPvp(h.board, near, { quorum: 2 }).get('lone')!.kind, 'flee', 'help 20 blocks off: hold until it arrives')
 })
 
 test('hp estimate: the board keeps the lowest honest upper bound across allies, and the team fight uses it', () => {
@@ -565,7 +659,23 @@ test('assault: losses without modeled damage abort; a hit buys continuation, not
   assert.equal(f.board.assaultEnded!.why, 'проигрываем')
 })
 
-test('assault: after a failure the swarm retries once the survivors have healed, not after 40 seconds', () => {
+test('assault: a healer bouncing back between our hits is no progress — only a new low of his hp buys continuation', () => {
+  const f = assaultScene()
+  f.at(1500); f.see('human', p(10), { ...f.human, hpEstimate: 18 })
+  planPvp(f.board, f.members.slice(1), f.options)
+  for (const [k, hp] of [[2, 19.5], [3, 19], [4, 19.5], [5, 18.5]] as const) {
+    f.at(1500 + k * 500); f.see('human', p(10), { ...f.human, hpEstimate: hp })
+    planPvp(f.board, f.members.slice(k), f.options)
+  }
+  assert.equal(f.board.assault, null, 'gapples undo every hit: four more of ours lost since his low of 18 — the exchange is lost')
+  const fresh = [...f.members.slice(5), ...['r0', 'r1', 'r2'].map((id, i) => member(id, { position: p(-i, 64, 3) }))]
+  f.board.setMembers(fresh)
+  f.at(4500); for (const m of fresh) f.board.observe(m.id, 4500, { id: 'human', position: p(10), visible: true, ...f.human })
+  planPvp(f.board, fresh, f.options)
+  assert.equal(f.board.assault, null, 'five of eight voters dead: three survivors and three newcomers do not storm him again at once')
+})
+
+test('assault: after a failure that did him no harm the swarm waits for his wounds or more force, not for a clock or its own healing', () => {
   const f = assaultScene()
   const survivors = f.members.slice(4)
   for (const m of survivors) m.health = 13
@@ -579,7 +689,10 @@ test('assault: after a failure the swarm retries once the survivors have healed,
   for (const m of survivors) m.health = 20
   f.see('human', p(10), f.human)
   planPvp(f.board, survivors, f.options)
-  assert.ok(f.board.assault, 'healed survivors return to the fight (пользователь 14.10: до конца, отход — подлечиться)')
+  assert.equal(f.board.assault, null, 'the failure did him no harm: half the force healed is the same failure (21.10: «не умирали как дурачки»)')
+  f.see('human', p(10), { ...f.human, hpEstimate: 14 })
+  planPvp(f.board, survivors, f.options)
+  assert.ok(f.board.assault, 'healed survivors return once he is hurt (пользователь 14.10: до конца, отход — подлечиться)')
 })
 
 test('assault: a weaker target, improved equipment or another target permit a new attempt immediately', () => {
@@ -705,7 +818,7 @@ test('assault: a recorded departure remains a loss after the same member returns
   assert.equal(f.board.assaultEnded!.why, 'проигрываем')
 })
 
-test('outmatched: preparation lasts thirty seconds, then the old hunt resumes', () => {
+test('outmatched: preparation lasts until the gear catches up with what was seen on him, not thirty seconds', () => {
   const team = [member('a', { weapon: 'stone_sword', armor: ['leather_helmet', 'leather_chestplate'], inventory: { stone_sword: 1 }, ench: {} }),
     ...['b', 'c', 'd'].map((id, i) => member(id, { position: p(-80 - i * 5) }))]
   const f = scene(team), options = { aggressive: true, quorum: 1 }
@@ -714,7 +827,100 @@ test('outmatched: preparation lasts thirty seconds, then the old hunt resumes', 
   f.at(10000); f.board.cancel('pvp:a')
   assert.equal(planPvp(f.board, team, options).get('a')!.kind, 'loot')
   f.at(31000); f.board.cancel('pvp:a')
+  assert.equal(planPvp(f.board, team, options).get('a')!.kind, 'loot', 'no upgrade yet: still behind the netherite he saw')
+  Object.assign(team[0], { weapon: 'netherite_sword', armor: NETHERITE, inventory: { netherite_sword: 1 }, ench: { protection: 16, sharpness: 5 } })
+  f.at(32000); f.board.cancel('pvp:a')
   const resumed = planPvp(f.board, team, options).get('a')!
-  assert.equal(resumed.kind, 'goto', 'the former thirty-second refusal expires without a gear upgrade')
+  assert.equal(resumed.kind, 'goto', 'geared up to his level: the hunt resumes')
   assert.equal(resumed.data!.hunt, true)
+})
+
+test('shove: a foe at a deadly edge is attacked from the far side by everyone, wind charges first; a shallow ledge is just a fight', () => {
+  assert.equal(shoveValue({}, { x: 1, z: 0 }), 1, 'lava or void: deadly')
+  assert.equal(shoveValue({ hpEstimate: 20 }, { x: 1, z: 0, drop: 5 }), .1, 'a 5-block fall is 2 hearts of 20')
+  assert.equal(shoveValue({ hpEstimate: 4 }, { x: 1, z: 0, drop: 7 }), 1, 'the same 7-block fall kills a foe on 4 hp')
+  const team = ['a', 'b', 'c'].map((id, k) => member(id, { position: p(6, 64, k * 2 - 2), inventory: { netherite_sword: 1, ...(id === 'a' ? { wind_charge: 3 } : {}) } }))
+  const lava = scene(team)
+  lava.see('foe', p(0), { equipment: { weapon: 'iron_sword', armor: [] } })
+  const plan = planPvp(lava.board, team, { edgeOf: () => ({ x: 1, z: 0, drop: Infinity }) })
+  for (const m of team) {
+    const t = plan.get(m.id)!
+    assert.equal(t.kind, 'fight', m.id)
+    assert.ok(t.data!.shove, `${m.id}: a shove`)
+    assert.ok(Math.cos(t.data!.slot * Math.PI / 4) < 0, `${m.id}: from the side away from the lava (slot ${t.data!.slot})`)
+  }
+  assert.ok(plan.get('a')!.data!.push, 'the wind charge goes first')
+  assert.ok(!plan.get('b')!.data!.push, 'no charge, no wind push')
+  const ledge = scene(team.map(m => ({ ...m })))
+  ledge.see('foe', p(0), { equipment: { weapon: 'iron_sword', armor: [] } })
+  const flat = planPvp(ledge.board, ledge.members, { edgeOf: () => ({ x: 1, z: 0, drop: 5 }) })
+  assert.ok(!flat.get('a')!.data!.shove, 'a 5-block drop is not worth bending the ring for')
+})
+
+test('retreat: out of sight a beaten pair keeps going to its group instead of walking back to the same foes', () => {
+  const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'], gear = { equipment: { weapon: 'iron_sword', armor: IRON } }
+  const pair = ['a', 'b'].map((id, i) => member(id, { position: p(0, 64, i * 1.5), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))
+  const group = ['c', 'd', 'e', 'f'].map((id, i) => member(id, { position: p(-40, 64, i * 1.5), weapon: 'iron_sword', armor: IRON, ench: {}, inventory: { iron_sword: 1 } }))
+  const f = scene([...pair, ...group])
+  for (let i = 0; i < 6; i++) f.see('r' + i, p(10, 64, i * 1.5), gear)
+  const first = planPvp(f.board, f.members, { quorum: 2 }).get('a')!
+  assert.equal(first.kind, 'flee', 'two against six: away to the group')
+  f.at(20000)
+  const unseen = planPvp(f.board, f.members, { quorum: 2 }).get('a')!
+  assert.equal(unseen.kind, 'flee', 'they are out of sight, the reason is not gone: still to the group')
+  assert.ok(unseen.data!.regroup && unseen.position!.x < -30, 'toward the group, not back to the last place of the foes')
+  for (const m of pair) m.position = p(-36, 64, m.position.z)
+  f.at(21000)
+  assert.notEqual(planPvp(f.board, f.members, { quorum: 2 }).get('a')!.kind, 'flee', 'with the group: the retreat is over')
+})
+
+test('endgame: against the last foe left (kill feed) everyone goes for him, up his pillar too; nobody builds or loots', () => {
+  const team = ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => member(id, { position: p(i * 2 - 5, 64, 6), role: i < 2 ? 'miner-builder' : 'fighter', weapon: 'stone_sword', armor: [], ench: {}, inventory: { stone_sword: 1, cobblestone: 64 } }))
+  const f = scene(team)
+  f.see('last', p(0, 72, 0), { equipment: { weapon: 'diamond_sword', armor: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'] } })
+  const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2 })
+  for (const m of team) {
+    const t = plan.get(m.id)!
+    assert.equal(t.kind, 'fight', `${m.id}: at him, not ${t.kind}`)
+    assert.ok(t.data!.finishing, `${m.id}: finishing (climb and breach allowed)`)
+    assert.ok(!t.data!.buildKind, `${m.id}: no walls in the endgame`)
+  }
+  const early = planPvp(scene(team).board, team, { foesLeft: 15, quorum: 2 })
+  assert.ok([...early.values()].every(t => !t.data?.finishing), 'fifteen left: not an endgame')
+})
+
+test('kill feed: the last foe who already killed two of ours is not rushed, whatever the gear model says', () => {
+  const team = ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => member(id, { position: p(i * 2 - 5, 64, 6), weapon: 'stone_sword', armor: [], ench: {}, inventory: { stone_sword: 1 } }))
+  const f = scene(team)
+  f.see('last', p(0, 64, 0), { equipment: { weapon: 'diamond_sword', armor: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'] } })
+  const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2, killsBy: { last: 2 } })
+  assert.ok([...plan.values()].every(t => !t.data?.finishing), 'two of ours dead and he lives: the trade is already worse than three for one')
+})
+
+test('endgame is strength, not count: twelve naked against one netherite champion do not rush him, they gear up', () => {
+  const team = Array.from({ length: 12 }, (_, i) => member(`n${i}`, { position: p(i * 2 - 11, 64, 30), strength: 20, weapon: null, armor: [], ench: {}, inventory: {} }))
+  const f = scene(team)
+  f.see('champ', p(0, 64, 0), { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } })
+  const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2 })
+  assert.ok([...plan.values()].every(t => !t.data?.finishing), 'one netherite against twelve naked: no all-in')
+  assert.ok([...plan.values()].every(t => t.kind !== 'fight'), `nobody walks into him naked: ${[...plan.values()].map(t => t.kind).join(',')}`)
+})
+
+test('strong few: against a champion with a bow the naked go behind cover, not across the open', () => {
+  const team = Array.from({ length: 12 }, (_, i) => member(`n${i}`, { position: p(i * 2 - 11, 64, 20), strength: 20, weapon: null, armor: [], ench: {}, inventory: {} }))
+  const f = scene(team)
+  f.see('champ', p(0, 64, 0), { threat: 'bow', equipment: { weapon: 'bow', armor: NETHERITE, enchanted: true } })
+  const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2, hideouts: [p(0, 64, 50), p(30, 64, 40)] })
+  const hid = [...plan.values()].filter(t => t.kind === 'flee' && t.data!.hide)
+  assert.ok(hid.length >= 2, `behind cover from the archer: ${[...plan.values()].map(t => `${t.kind}:${t.data!.reason}`).join(' | ')}`)
+  assert.ok([...plan.values()].every(t => t.kind !== 'fight'), 'nobody walks into him naked')
+})
+
+test('blast: a crystal at arm length is run from, never fought, even when the trade looks safe', () => {
+  const a = member('a')
+  const f = scene([a])
+  f.see('crystal', p(2), { threat: 'blast', equipment: { weapon: 'end_crystal' } })
+  assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'netherite at full hp, crystal 2 blocks off: away from it')
+  f.at(2000); f.see('crystal', p(1.5), { threat: 'blast', equipment: { weapon: 'end_crystal' } })
+  assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'closer still: not "caught, turn and fight"')
 })

@@ -85,6 +85,11 @@ export function outclassed(S: PvpPlan, m: SwarmMember, foe: SharedEnemy | undefi
   }
   return !victories.has(foe.id)
 }
+// Лучник (в руке или в арсенале раунда — что видели): бьёт издалека, и бег по открытому — тир (стенд 21.10, чемпион с луком
+// «Сила V»: 9 из 15 синих убиты стрелами на бегу в 11–14 бл.). Слабому от него — дальше держаться и уходить за укрытие.
+export function archer(S: PvpPlan, e: SharedEnemy): boolean { return e.threat === 'bow' || [...(S.state.arsenal.get(e.id) || [])].some(w => /^(bow|crossbow)$/.test(w)) }
+// Докуда враг опасен слабому: ближний бой — 16 бл. (догонит, пока лутаешь), лучник — 32 (стрела «Силы» добивает голого).
+export function threatReach(S: PvpPlan, e: SharedEnemy): number { return archer(S, e) ? 32 : 16 }
 export function weak(S: PvpPlan, m: SwarmMember): boolean { return !!m.inventory && (!Object.keys(m.inventory).some(n => count(m.inventory, n) > 0 && damage.isMeleeWeapon(n)) || ownDefense(m).armor < 3 || S.improvementOf(m) > 7) }
 // Насколько боту нужен лут: оружие слабее незеритового меча и недостающая броня (0 — экипирован).
 export function improvementOf(S: PvpPlan, m: SwarmMember): number {

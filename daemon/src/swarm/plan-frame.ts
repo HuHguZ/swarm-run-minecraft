@@ -3,11 +3,14 @@
 // и дописывают своё. Оценки plan-judges привязываются к нему здесь.
 import type { SwarmPosition, SwarmMember, SharedEnemy, SwarmFact, SwarmTask, SwarmKind, Doctrine } from './types'
 import type { SwarmBoard, PvpMemory } from './board'
-import { groupOf, groupVerdict } from './fight'
-import { formation } from './doctrine'
-import { hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost } from './plan-judges'
+import type { Edge } from './shove'
+import { groupOf, groupVerdict, TEAM_LINK, REINFORCE_LINK } from './fight'
+import { formation, lineDuty } from './doctrine'
+import { hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } from './plan-judges'
 
-export type PvpOptions = { doctrine?: Doctrine; quorum?: number; leaseMs?: number; aggressive?: boolean; hideouts?: SwarmPosition[]; perches?: SwarmPosition[]; gather?: { item: string; deficit: number; spot: SwarmPosition }; edgeOf?: (p: SwarmPosition) => { x: number; z: number } | null; digSites?: (p: SwarmPosition) => SwarmPosition[]; campSpots?: SwarmPosition[]; ladderSites?: { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }[] }
+// foesLeft — сколько врагов живо (лента смертей в чате — открытое знание, не зрение); нет — неизвестно (соло против людей).
+// killsBy — та же лента: сколько наших убил каждый враг за раунд.
+export type PvpOptions = { foesLeft?: number; killsBy?: Record<string, number>; doctrine?: Doctrine; quorum?: number; leaseMs?: number; aggressive?: boolean; hideouts?: SwarmPosition[]; perches?: SwarmPosition[]; gather?: { item: string; deficit: number; spot: SwarmPosition }; edgeOf?: (p: SwarmPosition) => Edge | null; digSites?: (p: SwarmPosition) => SwarmPosition[]; campSpots?: SwarmPosition[]; ladderSites?: { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }[] }
 type LadderSite = { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }
 
 export interface PvpPlan {
@@ -25,7 +28,7 @@ export interface PvpPlan {
   foeCenter: { x: number; z: number }
   forward: SwarmPosition
   committed: boolean
-  lineClock: number
+  lineDuty: number
   spots: Map<string, SwarmPosition>
   put: (m: SwarmMember, kind: SwarmKind, data: Record<string, any>, at?: SwarmPosition) => void
   perched: Map<number, number>
@@ -34,6 +37,8 @@ export interface PvpPlan {
   futile: Set<string>
   outnumbered: Set<string>
   hopeless: Set<string>
+  // Добивание (рой на рой): живых врагов по ленте смертей втрое меньше нас — все на них, с подъёмом и прокопом к цели.
+  endgame: boolean
   // штурм (pvpAssault)
   assault: SwarmBoard['assault']
   regroup: boolean
@@ -52,6 +57,8 @@ export interface PvpPlan {
   meanStrength: number
   hidden: Map<number, number>
   sectorOf: (m: SwarmMember, foe: SharedEnemy) => number
+  shoveOf: (foe: SharedEnemy) => number
+  edgeAt: (foe: SharedEnemy) => Edge | null
   ringAt: (foe: SharedEnemy, k: number, r: number) => SwarmPosition
   gatherers: Set<string>
   lastEnemy: SwarmFact | undefined
@@ -61,6 +68,8 @@ export interface PvpPlan {
   campers: Map<string, SwarmPosition>
   // оценки plan-judges, привязанные к этому вызову
   hideoutFor: (m: SwarmMember) => SwarmPosition | null
+  archer: (e: SharedEnemy) => boolean
+  threatReach: (e: SharedEnemy) => number
   perchFor: (m: SwarmMember) => SwarmPosition | null
   rallyFor: (m: SwarmMember, foe: SharedEnemy) => SwarmPosition | null
   outclassed: (m: SwarmMember, foe: SharedEnemy | undefined) => boolean
@@ -74,6 +83,8 @@ export interface PvpPlan {
 export function pvpFrame(S: PvpPlan): PvpPlan {
   const { board, options, team, enemies, aggressive, doctrine, plan } = S
   S.hideoutFor = m => hideoutFor(S, m)
+  S.archer = e => archer(S, e)
+  S.threatReach = e => threatReach(S, e)
   S.perchFor = m => perchFor(S, m)
   S.rallyFor = (m, foe) => rallyFor(S, m, foe)
   S.outclassed = (m, foe) => outclassed(S, m, foe)
@@ -95,21 +106,16 @@ export function pvpFrame(S: PvpPlan): PvpPlan {
   // Натиск: цель, которую видит хоть один свой, — общая (доска), ждать второго наблюдателя незачем.
   const committed = observers.size >= quorum || team.length < 3 || !!options.aggressive
   const formationCenter = doctrine === 'cocoon' && enemies[0] ? enemies[0].position : center
-  // Смена линий — такт от начала приёма, а не от эпохи (первая смена выпадала через случайные 0–22 с).
-  let lineClock = board.now()
-  if (doctrine === 'line' && enemies.length && team.length) {
-    let start = board.facts().find(f => f.id === 'line-start')
-    if (!start) { board.recordFact(team[0].id, board.now(), { id: 'line-start', kind: 'mark', position: { ...center } }, 600000); start = board.facts().find(f => f.id === 'line-start') }
-    if (start) lineClock = board.now() - start.seenAt
-  }
-  const spots = new Map(team.map((m, i) => [m.id, formation(m, i, team, formationCenter, forward, doctrine, lineClock)]))
+  // Ранг на смене — в памяти раунда; меняется по усталости рангов (doctrine.lineDuty), не по часам.
+  const lineDutyNow = doctrine === 'line' && enemies.length && team.length ? (S.state.lineDuty = lineDuty(team, S.state.lineDuty ?? 0)) : S.state.lineDuty ?? 0
+  const spots = new Map(team.map((m, i) => [m.id, formation(m, i, team, formationCenter, forward, doctrine, lineDutyNow)]))
   const put = (m: SwarmMember, kind: SwarmKind, data: Record<string, any>, at = spots.get(m.id)!) => {
     const alarm = enemies.some(e => e.threat === 'blast') ? 'scatter' : enemies.some(e => e.threat === 'aerial') ? 'above' : enemies.some(e => e.threat === 'bow') ? 'cover' : null
     const task: SwarmTask = { id: `pvp:${m.id}`, kind, assignedTo: m.id, position: at, priority: kind === 'flee' ? 120 : kind === 'recover' ? 100 : kind === 'heal' ? 90 : data.cover ? 80 : 50, data: { ...data, doctrine, role: m.role, committed, alarm } }
     plan.set(m.id, task)
   }
-  // Занятые насесты (perchFor): двое на один не летят.
-  const perched = new Map<number, number>()
+  // Занятые насесты (perchFor) и укрытия (hideoutFor — и в фазе бегства): двое на один не идут.
+  const perched = new Map<number, number>(), hidden = new Map<number, number>()
   // Бой держат всей командой (assessTeamFight), если поле остаётся за нами (наших в конце не меньше, чем их) и размен
   // не хуже ровного (наши потери не больше их). Одно поле — мало: девять голых за одного незеритового «выигрывают» поле
   // (тест Codex); один размен — мало: трое против шестерых меняются 3 на 3 и проигрывают поле. Начатый бой держится с
@@ -117,15 +123,19 @@ export function pvpFrame(S: PvpPlan): PvpPlan {
   // «держим / не держим» каждые полсекунды (арена 14.10; в равной мясорубке «у них остался один» — монетка).
   // Приговор каждой группы своих (groupVerdict); остальное — бой: «врага нужно уничтожить любой ценой» (14.10).
   const groups: SwarmMember[][] = []
-  for (const m of team) if (!groups.some(g => g.includes(m))) groups.push(groupOf(team, m))
+  const link = aggressive ? undefined : TEAM_LINK
+  for (const m of team) if (!groups.some(g => g.includes(m))) groups.push(groupOf(team, m, link))
   const groupVictories = new Map<SwarmMember[], Set<string>>()
   const futile = new Set<string>(), outnumbered = new Set<string>()
   // Натиск: размен не считается — группа не бросает бой и не уходит готовиться (бегут только раненые).
   if (!aggressive) for (const group of groups) {
-    const verdict = groupVerdict(group, enemies)
+    const verdict = groupVerdict(groupOf(team, group[0], REINFORCE_LINK), enemies, link)
     for (const a of group) if (verdict.futile) futile.add(a.id); else if (verdict.outnumbered) outnumbered.add(a.id)
   }
   const hopeless = new Set([...futile, ...outnumbered])
-  Object.assign(S, { center, foeCenter, forward, committed, lineClock, spots, put, perched, groups, groupVictories, futile, outnumbered, hopeless })
+  // Добивание — по силе, а не по числу: навалиться всей командой против сильного меньшинства — пустой размен (race.ts
+  // strongFew, он же натиск): «втрое больше» гнало голых на одного в незерите (пользователь 21.10: 13 смертей за 4 мин).
+  const endgame = !aggressive && options.foesLeft !== undefined && options.foesLeft > 0 && team.length >= 3 * options.foesLeft
+  Object.assign(S, { endgame, center, foeCenter, forward, committed, lineDuty: lineDutyNow, spots, put, perched, hidden, groups, groupVictories, futile, outnumbered, hopeless })
   return S
 }

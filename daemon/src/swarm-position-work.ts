@@ -102,9 +102,13 @@ function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true }: {
 // Стойка на месте: присед и взгляд на видимого врага (часовой, засада). shield: true — стойка кольца: щит поднят,
 // лицом к видимому врагу снаружи кольца, а нет такого — наружу, на точку face; стрелы в щит стойку не рвут, рвёт только
 // ближний бой и здоровье ниже healthFloor (6).
+// whileSmash: имя врага с булавой — стойка держится, пока датчик тела видит его удар сверху (threats.smashes: в воздухе над
+// нами с булавой, сядет в 5 бл. от нас), и кончается, когда угрозы нет 3 проверки подряд (он сел или ушёл). Не по часам:
+// по первой оценке посадки щит опускался между его прыжками на заряде ветра, и подъём за 1–2 т до удара уже не держал
+// (игра пользователя 22.10: «пока видит, что опасность есть, — прикрывается щитом»). seconds — только предохранитель (до 20).
 async function swarmHold(session, ctl, p: any = {}) {
   const bot = session.bot, seconds = p.seconds ?? p.timeoutSeconds ?? 3
-  if (!bot?.entity || !Number.isFinite(seconds) || seconds <= 0 || seconds > 5 || !inside(bot.entity.position, p.arena) ||
+  if (!bot?.entity || !Number.isFinite(seconds) || seconds <= 0 || seconds > (p.whileSmash ? 20 : 5) || !inside(bot.entity.position, p.arena) ||
       p.allies && (!Array.isArray(p.allies) || p.allies.length > 128 || p.allies.some(n => typeof n !== 'string')) ||
       p.enemies && (!Array.isArray(p.enemies) || p.enemies.length > 128 || p.enemies.some(n => !['string', 'number'].includes(typeof n))) ||
       p.face !== undefined && !finite(p.face) || p.healthFloor !== undefined && !Number.isFinite(p.healthFloor)) return { ok: false, why: 'invalid_hold' }
@@ -119,8 +123,15 @@ async function swarmHold(session, ctl, p: any = {}) {
     }
     if (g.active) { bot.clearControlStates(); bot.setControlState('sneak', !shieldMode && p.sneak !== false) }
     const face = p.face ? new Vec3(p.face.x, p.face.y, p.face.z) : null
+    let calm = 0
+    const smashGone = () => {
+      if (!p.whileSmash) return false
+      const threats: typeof import('./threats') = require('./threats')
+      calm = threats.smashes(bot, [String(p.whileSmash)]).length ? 0 : calm + 1
+      return calm >= 3
+    }
     const watch = async () => {
-      while (g.active && clock.now() - g.start < seconds * 1000) {
+      while (g.active && clock.now() - g.start < seconds * 1000 && !smashGone()) {
         const me = bot.entity.position
         const outward = face ? face.minus(me) : null
         const visible = (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity &&

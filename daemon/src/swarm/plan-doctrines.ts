@@ -30,10 +30,15 @@ export function ringShields(S: PvpPlan): void {
 
 export function pvpBuilders(S: PvpPlan): void {
   const { board, doctrine, primary, committed, now, available, plan, aggressive, assault, forward, untouchable, put, weak, outclassed } = S
-  if (primary && committed && ['cocoon', 'hunt'].includes(doctrine) && now - primary.seenAt <= 500) {
+  // Добивание: кокон — нет (стоящего добивают все), отсечка бегущего — двумя строителями, остальные бьют (стенд 15×15,
+  // 21.10: стенка держала всех строителей, пока 13 добивали двоих; DeepSeek, разбор погони: отсечку не выключать целиком).
+  if (primary && committed && !(S.endgame && doctrine === 'cocoon') && ['cocoon', 'hunt'].includes(doctrine) && now - primary.seenAt <= 500) {
     // Натиск: строитель рядом с целью (6 бл.) — дерётся, а не кладёт стенку у неё под мечом.
     // Слабый и переигранный стенку у него не кладут (стенд rush 15.10: 6 из 7 первых смертей — строители «загона» у незеритового).
-    const builders = available.filter(m => !plan.has(m.id) && m.role === 'miner-builder' && buildBlock(m) && !(aggressive && (assault || distance(m.position, primary.position) <= 6 || weak(m) || outclassed(m, primary))))
+    // Проигрываем (losing: штурм провален или нас мало) — не строить: строитель получал стенку, пока цель видна ≤ 0.5 с, а
+    // иначе — «проигрываем — прячусь», и на трибуне (цель то видна, то нет) дело менялось каждую секунду со стопом —
+    // бот стоял «афк» (игра пользователя 22.10: «афкшников всё равно вижу», 57 смен «прячусь ↔ строю» за 7 мин).
+    const builders = available.filter(m => !plan.has(m.id) && m.role === 'miner-builder' && buildBlock(m) && !(aggressive && (assault || S.losing || distance(m.position, primary.position) <= 6 || weak(m) || outclassed(m, primary)))).slice(0, S.endgame ? 2 : undefined)
     if (builders.length) {
       // Загон впереди бегущей цели (14.10): стенка в 3 бл. от неё не успевала — на спринте (5.6 бл/с) цель пробегала место
       // раньше, чем строители клали клетки (лаборатория, run9 и run12). Бежит — упреждение на 1.5 с пути (3–9 бл.) и стенка

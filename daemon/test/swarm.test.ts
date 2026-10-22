@@ -54,7 +54,7 @@ test('all ten doctrines have a natural winning context without forced selection 
     { doctrine: 'wave', team: withRoles([], { inventory: { wind_charge: 8 } }), foe: { position: p(8, 69), threat: 'aerial' } },
     { doctrine: 'hunt', team: withRoles(['miner-builder', 'miner-builder', 'flank', 'flank'], { inventory: { cobblestone: 64 } }), foe: { velocity: p(.09, 0, 0), equipment: { weapon: 'bow' }, threat: 'bow' } },
     { doctrine: 'false-weakness', team: withRoles(['healer', 'flank', 'flank', 'flank'], { canHeal: true }), foe: {} },
-    { doctrine: 'false-retreat', team: base, foe: { velocity: p(.2, 0, 0) } }
+    { doctrine: 'false-retreat', team: base, foe: { velocity: p(-.2, 0, 0) } }
   ]
   for (const { doctrine, team, foe } of contexts) {
     const f = scene(team)
@@ -78,8 +78,12 @@ test('all ten doctrines assign executable construction, push, bait and rotating-
   f.see('a', 'enemy', p(8), { equipment }); f.see('b', 'enemy', p(8), { equipment })
   const first = planPvp(f.board, team, { doctrine: 'line', quorum: 2 })
   assert.equal(first.get('d').kind, 'fight')
-  f.advance(22500); f.see('a', 'enemy', p(8), { equipment }); f.see('b', 'enemy', p(8), { equipment })
-  const next = planPvp(f.board, team, { doctrine: 'line', quorum: 2 })
+  // Смена линий — по усталости ранга, не по часам: передний ранг (a, d) на 57 % хп, следующий свежий.
+  f.advance(1000); f.see('a', 'enemy', p(8), { equipment }); f.see('b', 'enemy', p(8), { equipment })
+  assert.equal(planPvp(f.board, team, { doctrine: 'line', quorum: 2 }).get('d').kind, 'fight', 'a fresh front rank holds however long it has stood')
+  const tired = team.map(m => ['a', 'd'].includes(m.id) ? { ...m, health: 11.5 } : m)
+  f.advance(1000); f.see('a', 'enemy', p(8), { equipment }); f.see('b', 'enemy', p(8), { equipment })
+  const next = planPvp(f.board, tired, { doctrine: 'line', quorum: 2 })
   assert.equal(next.get('d').kind, 'goto')
   assert.equal(next.get('e').kind, 'fight')
   const poor = scene([member('a')]); poor.see('a', 'enemy', p(3), { equipment: { weapon: 'netherite_sword', armor: team[0].armor, enchanted: true } })
@@ -411,7 +415,11 @@ test('swarm causal combat: isolated parity loses to local numerical pressure; bl
   for (const [i, z] of [-2, 0, 2].entries()) f.see('a', 'e' + i, p(4, 64, z), { equipment: { weapon: 'iron_sword', armor: armor('iron') } })
   const risk = assessSwarmFight(m, f.board.enemies(), [m])
   assert.equal(risk.unsafe, true)
-  assert.equal(planPvp(f.board, [m]).get('a')!.kind, 'flee')
+  assert.notEqual(planPvp(f.board, [m]).get('a')!.kind, 'flee', 'alone with nowhere to go and no gear to fetch: the last stand')
+  const mates = [m, ...['b', 'c'].map((id, i) => member(id, { position: p(-40, 64, i * 2), weapon: 'iron_sword', inventory: { iron_sword: 1 }, armor: armor('iron') }))]
+  const h = scene(mates)
+  for (const [i, z] of [-2, 0, 2].entries()) h.see('a', 'e' + i, p(4, 64, z), { equipment: { weapon: 'iron_sword', armor: armor('iron') } })
+  assert.equal(planPvp(h.board, mates).get('a')!.kind, 'flee', 'with own group to run to: regroup')
   const naked = [member('a', { inventory: {}, position: p() }), member('b', { inventory: {}, position: p(0, 64, 1) }), member('c', { inventory: {}, position: p(1) })]
   const g = scene(naked)
   for (const ally of naked) g.see(ally.id, 'crystal', p(5), { threat: 'blast', equipment: { weapon: 'end_crystal' } })

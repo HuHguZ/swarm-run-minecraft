@@ -1,8 +1,8 @@
 // Рой (swarm.ts): план боя команды — оркестратор. Фазы (plan-*.ts) по порядку читают и дописывают общее состояние
 // одного вызова (PvpPlan, plan-frame); порядок фаз — порядок прежнего тела: доска (prune, факты) читается в том же порядке.
 import type { SwarmMember, SwarmTask } from './types'
-import { type SwarmBoard, liveMembers, pvpState } from './board'
-import { copy, doctrines } from './common'
+import { type SwarmBoard, liveMembers, pvpState, knownEnemies } from './board'
+import { doctrines } from './common'
 import { keepDoctrine } from './doctrine'
 import { type PvpOptions, type PvpPlan, pvpFrame } from './plan-frame'
 import { pvpAssault } from './plan-assault'
@@ -10,20 +10,16 @@ import { pvpFlee, pvpRecover } from './plan-flee'
 import { pvpTargets, ringShields, pvpBuilders, falseWeakness, falseRetreat, fountain } from './plan-doctrines'
 import { pvpSectors, pvpGather, coverHurt, pvpDiggers, pvpLadders, pvpCampers } from './plan-jobs'
 import { assignFighters, commitPlan } from './plan-assign'
+import { strongFew } from './race'
 
 export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpOptions = {}): Map<string, SwarmTask> {
   board.setMembers(members)
   const team = liveMembers(board, members).sort((a, b) => a.id.localeCompare(b.id))
   const state = pvpState(board)
-  // Пропуск поля не доказывает, что враг снял прежнюю броню или чары (15.10).
-  const enemies = board.enemies().map(e => {
-    const equipment = { ...state.equipment.get(e.id), ...e.equipment }
-    if (e.equipment?.armor && e.equipment.unknownArmorSlots === undefined) delete equipment.unknownArmorSlots
-    state.equipment.set(e.id, copy(equipment))
-    return { ...e, equipment }
-  })
+  const enemies = knownEnemies(board)
 
-  const aggressive = !!options.aggressive
+  // Натиск — против людей (соло) и против сильного меньшинства (race.ts strongFew): мир решает, как играть.
+  const aggressive = !!options.aggressive || strongFew(state, team, enemies, options.foesLeft, options.killsBy)
   const doctrine = options.doctrine ?? keepDoctrine(board, team, aggressive)
   if (!doctrines.includes(doctrine)) throw new Error('Invalid doctrine')
   const plan = new Map<string, SwarmTask>()

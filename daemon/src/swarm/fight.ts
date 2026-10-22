@@ -2,7 +2,8 @@
 // приговор (groupOf, groupVerdict), политика бегства (mustFlee).
 import * as damage from '../pvp/damage-model'
 import type { SwarmPosition, SwarmMember, SharedEnemy } from './types'
-import { distance, ratio, count, sharpWeapon } from './common'
+import { distance, count, sharpWeapon } from './common'
+import { retreatWhy } from './retreat'
 
 // Та же шкала снаряжения, что power в ферме; неизвестное здоровье — консервативные 20, не HP из сущности.
 export function visibleForce(enemy: SharedEnemy): number {
@@ -24,6 +25,12 @@ export interface SwarmFightRisk {
   enemyProtection: [number, number]
   // Первый залп убивает раньше, чем убьём мы: бежать при любом размене сторон.
   lethal?: boolean
+  // Их первый залп вплотную убивает (без гонки «кто раньше добежит»): им держится начатый отход от залпа (retreat.ts).
+  burst?: boolean
+  // Та же схватка без подхода (от первых ударов): решение «один против сильного» не должно зависеть от расстояния —
+  // издалека «выжить» длиннее на время его подхода, и бот шёл на врага, от которого у 16 бл. снова бежал (стенд 15×15).
+  duelKillSeconds?: number
+  duelSurvivalSeconds?: number
   reason: string
 }
 export function ownDefense(m: SwarmMember) {
@@ -69,22 +76,48 @@ function enemyAttack(e: SharedEnemy, m: SwarmMember) {
   const weapon = e.equipment?.weapon
   const glint = !!e.equipment?.enchanted
   let raw: number; let kind = 'melee'; let interval: number
-  if (e.threat === 'blast' || /^(end_crystal|respawn_anchor)$/.test(weapon || '')) {
+  // Взрыв — только кристалл и якорь: их ставят и рвут за пару тиков. Динамит в руке — не взрыв (поставить, поджечь, 4 с
+  // фитиля): «выжить 0.0 с» от любого с динамитом в руке гнало от него всю команду (стенд 15×15, 21.10). Горящий динамит
+  // в мире — дело уворота тела (tactics/blast.ts) и факта tnt драйвера.
+  if (/^(end_crystal|respawn_anchor)$/.test(weapon || '')) {
     kind = 'explosion'
     raw = damage.explosionRaw({ power: weapon === 'respawn_anchor' ? damage.ANCHOR_POWER : damage.CRYSTAL_POWER, dist: distance(e.position, m.position), seen: 1 })
     interval = damage.IFRAME_TICKS
   } else if (/^(bow|crossbow)$/.test(weapon || '')) {
     kind = 'projectile'
     const outcomes = damage.arrowOutcomes({ speed: damage.arrowSpeedAt(weapon === 'bow' ? 3 : damage.CROSSBOW_ARROW_SPEED, distance(e.position, m.position)), power: glint && weapon === 'bow' ? 5 : 0, crit: true })
-    raw = Math.max(...outcomes.map((o: { raw: number }) => o.raw))
+    // Средняя стрела, как у своих (combatProfile): худшая из критов Силы V (23) у голого на 20 хп — «залп» от любого лука.
+    raw = outcomes.reduce((s: number, o: { raw: number; p: number }) => s + o.raw * o.p, 0)
     interval = weapon === 'bow' ? damage.BOW_FULL_TICKS : damage.crossbowChargeTicks(glint ? 3 : 0)
   } else {
-    raw = damage.meleeRaw({ weapon, sharpness: glint && sharpWeapon(weapon) ? 5 : 0, crit: damage.isMeleeWeapon(weapon) || (e.velocity?.y || 0) < 0, fall: weapon === 'mace' && (e.velocity?.y || 0) < 0 ? Math.max(0, e.position.y - m.position.y) : 0, density: glint ? 5 : 0 })
+    // Удар булавы с падения — только когда он падает почти над головой (≤ 3 бл. по горизонтали): прыжок на уступе в 6 бл.
+    // давал «залп» на высоту уступа.
+    const smash = weapon === 'mace' && (e.velocity?.y || 0) < 0 && Math.hypot(e.position.x - m.position.x, e.position.z - m.position.z) <= 3
+    raw = damage.meleeRaw({ weapon, sharpness: glint && sharpWeapon(weapon) ? 5 : 0, crit: damage.isMeleeWeapon(weapon) || (e.velocity?.y || 0) < 0, fall: smash ? Math.max(0, e.position.y - m.position.y) : 0, density: glint ? 5 : 0 })
     interval = Math.max(damage.IFRAME_TICKS, damage.ticksToCharge(weapon))
   }
   const radial = e.velocity ? Math.max(0, (e.velocity.x * (m.position.x - e.position.x) + e.velocity.z * (m.position.z - e.position.z)) / Math.max(0.1, Math.hypot(m.position.x - e.position.x, m.position.z - e.position.z)) * 20) : 0
   const arrival = kind === 'projectile' ? distance(e.position, m.position) / ((weapon === 'crossbow' ? damage.CROSSBOW_ARROW_SPEED : 3) * 20) : kind === 'explosion' ? 0 : Math.max(0, distance(e.position, m.position) - 3) / Math.max(5.6, radial)
   return { raw, kind, interval, arrival: Math.ceil(arrival * 20), breach: glint && weapon === 'mace' ? 4 : 0 }
+}
+// Сколько проживу под этими ударами (без своих ответов), с общим окном неуязвимости: двое синхронных лучников не дают
+// двух полных стрел в одно окно. Бой кончился раньше нашей смерти — выживание всё равно меряется, а не берётся формулой
+// «хп / сумма урона в секунду» (она складывала синхронные удары, 21.10). null — живу дольше 30 с.
+function survivalUnder(incoming: Array<{ raw: number; kind: string; interval: number; arrival: number; breach: number }>, health: number, defense: any): number | null {
+  let hp = health, last: any = null
+  const next = incoming.map(a => a.arrival)
+  for (let tick = 0; tick <= 600; tick++) {
+    if (last) last = { ...last, ago: last.ago + 1 }
+    for (const [i, a] of incoming.entries()) {
+      if (tick < next[i]) continue
+      next[i] += a.interval
+      const hit = damage.throughIframes(a.raw, last)
+      last = hit.last
+      hp -= damage.afterDefense(hit.raw, a.kind, defense, { breach: a.breach })
+      if (hp <= 0) return tick / 20
+    }
+  }
+  return null
 }
 // Pure event simulation: full-charge hits, armor/enchantment reduction and the shared 10-tick player hit window.
 export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], members: SwarmMember[]): SwarmFightRisk {
@@ -95,14 +128,18 @@ export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], me
   const incomingHits = incoming.map(e => damage.afterDefense(e.raw, e.kind, defense, { breach: e.breach }))
   const incomingDps = Math.min(incoming.reduce((s, e, i) => s + incomingHits[i] * 20 / e.interval, 0), Math.max(...incomingHits) * 20 / damage.IFRAME_TICKS)
   const firstTick = Math.min(...incoming.map(e => e.arrival)), firstArrival = firstTick / 20
-  let initialHit = 0, openingLast: any = null, openingTick = firstTick
+  // Смертельный первый удар — только ближний и взрыв: от стрелы бег по открытому не спасает (лучник стреляет в спину),
+  // от неё — укрытие и щит (тревога cover, уворот тела).
+  let initialHit = 0, closeHit = 0, openingLast: any = null, openingTick = firstTick
   // Simultaneous attackers share the victim's hurt window; later stronger hits only add the raw difference.
   for (const attack of [...incoming].sort((a, b) => a.arrival - b.arrival)) {
     if (attack.arrival >= firstTick + damage.IFRAME_TICKS) break
     if (openingLast) openingLast = { ...openingLast, ago: openingLast.ago + attack.arrival - openingTick }
     const hit = damage.throughIframes(attack.raw, openingLast)
     openingLast = hit.last; openingTick = attack.arrival
-    initialHit += damage.afterDefense(hit.raw, attack.kind, defense, { breach: attack.breach })
+    const dealt = damage.afterDefense(hit.raw, attack.kind, defense, { breach: attack.breach })
+    initialHit += dealt
+    if (attack.kind !== 'projectile') closeHit += dealt
   }
   const exposure = firstArrival + member.health / Math.max(0.1, incomingDps)
   const profiles = members.filter(m => m.team === member.team && m.health > 0).map(m => {
@@ -149,7 +186,7 @@ export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], me
   const period = Math.max(...incoming.map(e => e.interval)) / 20
   const nominalDps = Math.max(0.01, ...actors.map(a => a.hit * 20 / a.interval))
   const baseKill = Number.isFinite(kill) ? kill : Math.min(...actors.map(a => a.arrival)) / 20 + (foe.hpEstimate ?? 20) / nominalDps
-  const survivalSeconds = Number.isFinite(survival) ? survival : firstArrival + member.health / Math.max(0.01, incomingDps)
+  const survivalSeconds = Number.isFinite(survival) ? survival : survivalUnder(incoming, member.health, defense) ?? Math.max(30, firstArrival + member.health / Math.max(0.01, incomingDps))
   const localEnemies = incoming.filter(e => e.arrival / 20 <= Math.min(baseKill, survivalSeconds)).length
   const killSeconds = baseKill * Math.max(1, localEnemies / Math.max(1, profiles.length))
   const myActor = actors.find(a => a.member.id === member.id)
@@ -159,11 +196,13 @@ export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], me
   // чей удар ранит цель (от полусердца после брони): голые против незерита — не смена, а потери.
   const able = profiles.filter(a => a.hit >= 1).length
   const teamSurvival = survivalSeconds * Math.max(1, able / Math.max(1, localEnemies))
-  const lethal = initialHit >= member.health && firstArrival <= killSeconds
+  const lethal = closeHit >= member.health && firstArrival <= killSeconds
   const unsafe = killSeconds > teamSurvival + period || lethal
   const slots = foe.equipment?.armor?.length || 0
   const protectionUpper = (foe.equipment?.enchanted ? slots * 4 : 0) + Math.min(4 - slots, foe.equipment?.unknownArmorSlots || 0) * 4
-  return { unsafe, lethal, target: foe.id, killSeconds, survivalSeconds, damage: loss, ready: profiles.length, contactSlots: melee.length, enemySharpness: foe.equipment?.enchanted && sharpWeapon(foe.equipment.weapon) ? [0, 5] : [0, 0], enemyProtection: [0, protectionUpper], reason: `убить≈${killSeconds.toFixed(1)}с, выжить≈${survivalSeconds.toFixed(1)}с, контакт ${melee.length}, готово ${profiles.length}, врагов ${localEnemies}, хп ${Math.round(member.health)}` }
+  const duelKillSeconds = Math.max(0.05, killSeconds - Math.min(...actors.map(a => a.arrival)) / 20)
+  const duelSurvivalSeconds = Math.max(0.05, survivalSeconds - firstArrival)
+  return { unsafe, lethal, burst: closeHit >= member.health, target: foe.id, killSeconds, survivalSeconds, duelKillSeconds, duelSurvivalSeconds, damage: loss, ready: profiles.length, contactSlots: melee.length, enemySharpness: foe.equipment?.enchanted && sharpWeapon(foe.equipment.weapon) ? [0, 5] : [0, 0], enemyProtection: [0, protectionUpper], reason: `убить≈${killSeconds.toFixed(1)}с, выжить≈${survivalSeconds.toFixed(1)}с, контакт ${melee.length}, готово ${profiles.length}, врагов ${localEnemies}, хп ${Math.round(member.health)}` }
 }
 export interface SwarmTeamFight { engage: boolean; ourLoss: number; theirLoss: number; wipedUs: boolean; wipedThem: boolean; seconds: number; ours: number; theirs: number }
 // Командный счёт боя (14.10): стороны целиком, а не «выживу ли я, если бьют все». Личная оценка (assessSwarmFight) при
@@ -221,18 +260,26 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
   const loss = (side: 0 | 1) => units.filter(u => u.side === side).reduce((sum, u) => sum + (u.hp <= 0 ? 1 : (u.start - u.hp) / 20), 0)
   return { ourLoss: loss(0), theirLoss: loss(1), wipedUs: !alive(0), wipedThem: !alive(1), seconds: tick / 20, ours: units.filter(u => u.side === 0).length, theirs: enemies.length }
 }
-// Группа своих вокруг m: связные в 10 бл. (свой рядом со своим рядом с m).
-export function groupOf(team: SwarmMember[], m: SwarmMember): SwarmMember[] {
+// Группа своих вокруг m: связные в link бл. (свой рядом со своим рядом с m). В командной свалке — 16 (TEAM_LINK): с 10 кучки
+// по 2–6 сливались и распадались каждые полсекунды, приговор «безнадёжно ↔ держим» мигал вместе с ними (стенд 15×15, 21.10:
+// бег ↔ бой 218 раз за раунд). Натиск против людей — прежние 10/12.
+export const TEAM_LINK = 16
+// Приговор группе (groupVerdict) — вместе со своими, что подойдут за пару секунд (24 бл.): пара в 17–24 бл. от толпы своих
+// судилась отдельно, «нас меньше» — шаг к толпе, слилась — бой, и так по кругу (стенд 15×15, 21.10: 12 миганий за 100 с).
+// Конец отхода — слияние в TEAM_LINK: начало дальше конца, гистерезис по месту.
+export const REINFORCE_LINK = 24
+export function groupOf(team: SwarmMember[], m: SwarmMember, link = 10): SwarmMember[] {
   const group = [m]
-  for (let grew = true; grew;) { grew = false; for (const a of team) if (!group.includes(a) && group.some(g => distance(g.position, a.position) <= 10)) { group.push(a); grew = true } }
+  for (let grew = true; grew;) { grew = false; for (const a of team) if (!group.includes(a) && group.some(g => distance(g.position, a.position) <= link)) { group.push(a); grew = true } }
   return group
 }
 // Приговор группы против врагов в 12 бл. от неё (assessTeamFight): futile — пустой размен, больше трёх своих за одного
 // врага (десять голых против незерита — тест Codex) или нас выносят, а мы не снимаем с них и четверти (голый одиночка
 // против брони); outnumbered — нас выносят, а у них остаётся не меньше тел, чем было нас (один против трёх, трое против
 // шести: это не бой роя, а отход к своим). Одна мера для планировщика и для мгновенной паники драйвера.
-export function groupVerdict(group: SwarmMember[], enemies: SharedEnemy[]): { futile: boolean; outnumbered: boolean } {
-  const foes = enemies.filter(e => group.some(a => distance(a.position, e.position) <= 12))
+// radius — Infinity для отхода, начатого от этих врагов (retreat.ts): его повод не зависит от расстояния.
+export function groupVerdict(group: SwarmMember[], enemies: SharedEnemy[], radius = 12): { futile: boolean; outnumbered: boolean } {
+  const foes = enemies.filter(e => group.some(a => distance(a.position, e.position) <= radius))
   if (!foes.length) return { futile: false, outnumbered: false }
   const score = assessTeamFight(group, foes)
   const futile = score.ourLoss > 3 * Math.max(score.theirLoss, .5) || score.wipedUs && score.theirLoss < score.theirs / 4
@@ -248,7 +295,7 @@ export function groupVerdict(group: SwarmMember[], enemies: SharedEnemy[]): { fu
 // в незерите любой размен «пустой» и любой удар «залп» — рой бежал 438 раз на 55 боёв. Там бегут только на хилку (< 35 %)
 // и только не из схватки: contact здесь — враг в 8 бл. (человек со Скоростью II быстрее спринта бота — бегство из
 // рукопашной подставляло спину: «убегать не умеют», 9 из 10 смертей — на бегу или за едой у него под носом).
-export function mustFlee(m: SwarmMember, risk: Pick<SwarmFightRisk, 'unsafe' | 'lethal' | 'killSeconds' | 'survivalSeconds' | 'ready'>, contact: boolean, verdict: { futile: boolean; outnumbered: boolean }, aggressive = false): boolean {
-  if (aggressive) return !contact && !!risk.unsafe && ratio(m) < .35
-  return !!risk.lethal || !!risk.unsafe && (ratio(m) < .35 || verdict.futile || !contact && verdict.outnumbered || risk.ready <= 1 && risk.killSeconds > 3 * Math.max(1, risk.survivalSeconds))
+// Правило — retreat.ts (21.10): в схватке не бегут, кроме раненого, у которого рядом свои.
+export function mustFlee(m: SwarmMember, risk: Pick<SwarmFightRisk, 'unsafe' | 'lethal' | 'killSeconds' | 'survivalSeconds' | 'ready'>, contact: boolean, verdict: { futile: boolean; outnumbered: boolean }, aggressive = false, allies = false): boolean {
+  return !!retreatWhy(m, risk, { contact, allies, ...verdict, aggressive })
 }

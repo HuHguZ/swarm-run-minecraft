@@ -20,8 +20,13 @@ export function planTransfers(board: SwarmBoard, members: SwarmMember[], canTran
   })
   const busy = new Set(active.flatMap(t => t.participants || []))
   const candidates: { donor: SwarmMember; recipient: SwarmMember; item: string; amount: number; cost: number }[] = []
-  for (const recipient of team) for (const item of Object.keys(recipient.needs || {})) {
-    const deficit = count(recipient.needs, item) - count(recipient.inventory, item)
+  // Жемчуг — каждому по одному (пользователь 21.10: «нашёл жемчуги — говорит всем, каждому по одному, каждый закидывает
+  // на самый верх»): у кого лишний (больше своего одного), тот раздаёт тем, у кого нет ни одного.
+  const spare = (m: SwarmMember, item: string) => count(m.inventory, item) - Math.max(count(m.reserve, item), count(m.needs, item))
+  const pearlShare = team.some(m => spare(m, 'ender_pearl') > 0)
+  const needOf = (m: SwarmMember, item: string) => item === 'ender_pearl' && pearlShare ? Math.max(1, count(m.needs, item)) : count(m.needs, item)
+  for (const recipient of team) for (const item of new Set([...Object.keys(recipient.needs || {}), ...(pearlShare ? ['ender_pearl'] : [])])) {
+    const deficit = needOf(recipient, item) - count(recipient.inventory, item)
     if (deficit <= 0) continue
     for (const donor of team) {
       if (donor === recipient || canTransfer?.(donor, recipient, item) === false) continue

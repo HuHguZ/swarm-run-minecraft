@@ -4,11 +4,11 @@ import { aimingAt } from '../pvp/crowd'
 import type { SwarmPosition, SwarmMember, SharedEnemy } from './types'
 import type { PvpPlan } from './plan-frame'
 import { distance, cellKey, count } from './common'
+import { shoveValue, SHOVE, type Edge } from './shove'
 
 export function pvpSectors(S: PvpPlan): void {
   const { team, options } = S
   const meanStrength = team.reduce((s, m) => s + m.strength, 0) / team.length || 1
-  const hidden = new Map<number, number>()
   // Окружение (пользователь 14.10: «окружать по всей карте — делиться на части, заходить с разных сторон, сужаться и
   // добивать»; «кучкуются в точке, когда пытаются ко мне пройти, — зельями и молнией их толпой»): у каждого, кто идёт на
   // цель, свой из 8 секторов вокруг неё — ближайший к его пеленгу свободный (занятый — дороже), так кольцо ровное и маршруты
@@ -17,24 +17,28 @@ export function pvpSectors(S: PvpPlan): void {
   // всегда пытаться скинуть, это приоритетный способ убить»).
   const SECTORS = 8
   const sectorsTaken = new Map<string, number[]>()
-  const edges = new Map<string, { x: number; z: number } | null>()
+  const edges = new Map<string, Edge | null>()
+  const edgeAt = (foe: SharedEnemy) => { if (!edges.has(foe.id)) edges.set(foe.id, options.edgeOf?.(foe.position) ?? null); return edges.get(foe.id)! }
+  // Смертельный обрыв (shove.ts) тянет бьющих на другую сторону сильнее: втрое против прежнего веса «просто край».
+  const shoveOf = (foe: SharedEnemy) => shoveValue(foe, edgeAt(foe))
   function sectorOf(m: SwarmMember, foe: SharedEnemy): number {
     const own = sectorsTaken.get(foe.id) || []; sectorsTaken.set(foe.id, own)
-    if (!edges.has(foe.id)) edges.set(foe.id, options.edgeOf?.(foe.position) ?? null)
-    const edge = edges.get(foe.id)
+    const edge = edgeAt(foe), pull = 4 + 12 * shoveOf(foe), shove = shoveOf(foe) >= SHOVE
     const bearing = Math.atan2(m.position.z - foe.position.z, m.position.x - foe.position.x)
     let best = 0, bestCost = Infinity
     for (let k = 0; k < SECTORS; k++) {
       const a = k * 2 * Math.PI / SECTORS
       const turn = Math.abs(((a - bearing) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI)
-      const cost = turn + (edge ? (Math.cos(a) * edge.x + Math.sin(a) * edge.z) * 4 : 0) + own.filter(x => x === k).length * 3
+      const toward = edge ? Math.cos(a) * edge.x + Math.sin(a) * edge.z : 0
+      // Сброс: со стороны обрыва не бить вовсе — удар оттуда отбрасывает его от края (DeepSeek, разбор сброса 21.10).
+      const cost = turn + toward * pull + (shove && toward > -.5 ? 100 : 0) + own.filter(x => x === k).length * 3
       if (cost < bestCost) { bestCost = cost; best = k }
     }
     own.push(best)
     return best
   }
   const ringAt = (foe: SharedEnemy, k: number, r: number): SwarmPosition => ({ x: foe.position.x + Math.cos(k * 2 * Math.PI / SECTORS) * r, y: foe.position.y, z: foe.position.z + Math.sin(k * 2 * Math.PI / SECTORS) * r })
-  Object.assign(S, { meanStrength, hidden, sectorOf, ringAt })
+  Object.assign(S, { meanStrength, sectorOf, ringAt, shoveOf, edgeAt })
 }
 
 export function pvpGather(S: PvpPlan): void {
@@ -90,9 +94,12 @@ export function pvpDiggers(S: PvpPlan): void {
   // Цели — свежие, быстрые первыми; по 1–2 копателя на цель (несколько целей), ямы впереди его хода, разнос 3 бл. (Codex 15.10:
   // все копатели доставались первой цели — 4/0/0 вместо 1/1/2).
   const diggers = new Map<string, { site: SwarmPosition; foe: SharedEnemy }>()
-  if (aggressive && options.digSites) {
+  // Рой на рой — ямы под тем, на кого навалились (наших у него вдвое больше, чем его своих): групповой сброс одного
+  // (пользователь 21.10: «включая поломку блоков под ногами врага»); против человека (натиск) — под любым.
+  const ganged = (e: SharedEnemy) => team.filter(m => distance(m.position, e.position) <= 12).length >= 2 * Math.max(1, enemies.filter(o => distance(o.position, e.position) <= 12).length)
+  if (options.digSites && (aggressive || enemies.some(ganged))) {
     const speed = (e: SharedEnemy) => Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0)
-    const goals = enemies.filter(e => board.now() - e.seenAt < 5000).sort((a, b) => speed(b) - speed(a) || b.seenAt - a.seenAt || a.id.localeCompare(b.id))
+    const goals = enemies.filter(e => board.now() - e.seenAt < 5000 && (aggressive || ganged(e))).sort((a, b) => speed(b) - speed(a) || b.seenAt - a.seenAt || a.id.localeCompare(b.id))
     const pickTier = (m: SwarmMember) => Math.max(0, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0).map(n => n === 'netherite_pickaxe' ? 3 : n === 'diamond_pickaxe' ? 2 : /_pickaxe$/.test(n) ? 1 : 0))
     // Кирки у многих (пользователь 15.10: «выдай всем незеритовые кирки — больше ям») — до четырёх копателей.
     const limit = Math.min(4, 2 + Math.floor(team.filter(m => pickTier(m) > 0).length / 10))
@@ -146,8 +153,12 @@ export function pvpLadders(S: PvpPlan): void {
         const sticks = count(m.inventory, 'stick') + 4 * Math.floor(Math.max(0, planks - (count(m.inventory, 'crafting_table') ? 0 : 4)) / 2)
         return count(m.inventory, 'ladder') + 3 * Math.floor(sticks / 7) >= need
       }
+      // Не под его прицелом: бот видит его сейчас (sources — кто видит) — значит, и он видит бота. Лестница у него на виду —
+      // мишень: с яруса выше человек стрелял в ставящих лестницу, а они кричали «прикройте!» и ставили дальше (игра
+      // пользователя 22.10: «в дырочку с лука прострелил — даже не смотрел на это»).
+      const exposed = (a: SwarmMember) => enemies.some(e => S.archer(e) && board.now() - e.seenAt < 1500 && (e.sources || []).includes(a.id) && distance(e.position, a.position) <= 40)
       const m = team.filter(a => !plan.has(a.id) && enough(a) && Math.abs(a.position.y - site.y) <= 1.5 && !diggers.has(a.id) && !ladderers.has(a.id) && ![...ladderers.values()].some(l => l.key === site.key) &&
-        enemies.every(e => distance(e.position, a.position) > 6)).sort((a, c) => distance(a.position, site) - distance(c.position, site))[0]
+        enemies.every(e => distance(e.position, a.position) > 6) && !exposed(a)).sort((a, c) => distance(a.position, site) - distance(c.position, site))[0]
       if (m) ladderers.set(m.id, site)
     }
   }
@@ -178,4 +189,57 @@ export function pvpCampers(S: PvpPlan): void {
     }
   }
   S.campers = campers
+}
+
+// Тайники в толще (пользователь 21.10: «в стенах Колизея спрятано 2–3 тайника»; модель — cache-model, копка — драйвер
+// swarm-driver/caches). Кто копает — числами: копка стоит rate (тайников в секунду по модели: вероятность в открытом ходом
+// на секунду дороги и копки) × CACHE_VALUE за минуту; против — бой (враг виден рядом) и лут (недобор снаряжения). Копателей
+// не больше половины команды, пока враг недавно виден (бой не бросаем), и все, кроме одного, — если врага не видно 30 с.
+// Уже копающий держится, пока копка стоит хотя бы 0.6 альтернативы (без мигания «копаю ↔ лут»).
+export const CACHE_VALUE = 14 // тайник: незерит с защитой 20+ и оружие с чарами 20+ — сильнее любого набора сундуков
+export const CHEST_VALUE = 1.5 // невиданный обычный сундук (комната, галерея): «пирог» ведёт и к нему — это тоже лут
+// fighting — план ведёт его в бой (задача fight), но враг от него дальше 16 бл.: копка против его доли в общем бою.
+export type CacheCandidate = { id: string; position: SwarmPosition; health: number; gear: number; canDig: boolean; fighting?: boolean }
+// rate — невиданных сундуков в секунду копки; share — доля тайников среди них (модель: тайников 2–3 из всех невиданных).
+export type CacheOffer = { rate: number; from: SwarmPosition; to: SwarmPosition; share?: number }
+export type CacheJob = { offer: CacheOffer; dig: number; alt: number; reason: string }
+// Цена боя для незанятого бойца (враг дальше 16 бл., бой команды — где-то ещё): его доля в общем бою; каждый уже копающий
+// товарищ ослабляет бой ещё на FIGHT_EACH (координатор 21.10: «1–2 незанятых копают, пока команда бьётся — ценой, не
+// запретом»; бой 15×15 и 4 на 4 не кончается, и свободных ботов для копки иначе нет).
+// Подбор по стенду 21.10 (4 на 4, r21–r22): при 6/3 копало в среднем 0.2–0.3 бота на команду — лучшие ходы стоили 4–14 в
+// минуту, а бой «где-то ещё» почти всегда в 24–48 бл.; при 3/2 — первый копает с 3, второй с 5.
+export const FIGHT_SHARE = 3
+export const FIGHT_EACH = 2
+export function cacheJobs (team: CacheCandidate[], enemies: SharedEnemy[], offers: Map<string, CacheOffer | null>, now: number, current: Set<string> = new Set()): Map<string, CacheJob> {
+  const fresh = enemies.filter(e => now - e.seenAt < 30000)
+  const limit = fresh.length ? Math.ceil(team.length / 2) : Math.max(1, team.length - 1)
+  const scored: { m: CacheCandidate; offer: CacheOffer; dig: number; alt: number; why: string; share: number }[] = []
+  for (const m of team) {
+    const offer = offers.get(m.id)
+    if (!m.canDig || !offer || offer.rate <= 0 || m.health < 8) continue
+    const near = Math.min(Infinity, ...fresh.map(e => distance(e.position, m.position) + (now - e.seenAt) / 1000))
+    // Альтернатива в тех же единицах (ценность за минуту): враг в 16 бл. — бой (10 и ещё 2 за каждый блок ближе 24: в 12 бл. —
+    // 34, вплотную — 58; ход в стену спиной к нему — смерть, бой важнее), в 16–48 — готовность (4), у бойца — его доля в бою
+    // команды (FIGHT_SHARE: бой где-то ещё, координатор 21.10: «нет врага в ~16 — пусть копает»); иначе лут —
+    // тем больше, чем хуже одет (gear 0 — голый, 1 — полный набор), или охота — тем больше, чем лучше одет (одетому лут
+    // ничего не даёт, а враг сам не придёт). Боец, которого ждёт бой где-то ещё, — не меньше FIGHT_SHARE.
+    const loot = (1 - m.gear) * 3, hunt = m.gear * 2
+    const alt = near < 16 ? 10 + 2 * (24 - near) : m.fighting ? FIGHT_SHARE : near < 48 ? 4 : Math.max(loot, hunt)
+    const share = offer.share ?? 1
+    const dig = offer.rate * 60 * (share * CACHE_VALUE + (1 - share) * CHEST_VALUE)
+    const why = near >= 16 && m.fighting ? 'бой команды' : near < 48 ? `враг в ${Math.round(near)} бл.` : loot >= hunt ? 'лут' : 'охота'
+    scored.push({ m, offer, dig, alt, why, share })
+  }
+  scored.sort((a, b) => Number(current.has(b.m.id)) - Number(current.has(a.m.id)) || (b.dig - b.alt) - (a.dig - a.alt) || a.m.id.localeCompare(b.m.id))
+  // По очереди: бойцу каждый уже взятый копатель дорожает бой на FIGHT_EACH (пока враг виден); уже копающий держится до 0.6.
+  const out = new Map<string, CacheJob>()
+  let fightersOut = 0
+  for (const s of scored) {
+    if (out.size >= limit) break
+    const alt = s.alt + (s.m.fighting && fresh.length ? FIGHT_EACH * fightersOut : 0)
+    if (s.dig <= alt * (current.has(s.m.id) ? 0.6 : 1)) continue
+    if (s.m.fighting) fightersOut++
+    out.set(s.m.id, { offer: s.offer, dig: s.dig, alt, reason: `тайник: ${(s.offer.rate * 60).toFixed(3)}/мин × (${s.share.toFixed(2)}·${CACHE_VALUE} + ${(1 - s.share).toFixed(2)}·${CHEST_VALUE}) = ${s.dig.toFixed(2)} > ${alt.toFixed(2)} (${s.why})` })
+  }
+  return out
 }

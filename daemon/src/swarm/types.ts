@@ -14,6 +14,8 @@ export interface SwarmMember {
   role: SwarmRole
   canHeal?: boolean
   inventory?: Record<string, number>
+  /** Зелья по виду (splash_strong_harming…): в inventory они одним именем splash_potion. */
+  potions?: Record<string, number>
   reserve?: Record<string, number>
   needs?: Record<string, number>
   armor?: string[] | Record<string, string>
