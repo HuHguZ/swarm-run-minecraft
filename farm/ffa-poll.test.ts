@@ -240,6 +240,39 @@ test('тревога прерывает копателя с _hunt в конта�
   assert.ok(f.calls.some(c => c.name === b.name && c.method === 'stop'))
 })
 
+test('тревога рвёт поход к старому месту человека и поход, когда он уже рядом, но не погоню, подъём и отход', t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.teamOf = () => b.team
+  f.context.enemiesOf = () => [{ n: 'Tester', d: 4, spd: 6, human: true }]
+  let seen = { x: 4, y: 64, z: 0 }
+  f.context.swarmDriver.enemies = () => [{ id: 'Tester', position: seen, seenAt: Date.now() }]
+  let tick: any
+  t.mock.method(globalThis, 'setInterval', fn => { tick = fn; return 1 as any })
+  watchAlarm(f.context)
+  const stops = () => f.calls.filter(c => c.name === b.name && c.method === 'stop').length
+  b.last = { m: 'goto', at: Date.now(), p: { x: 0, y: 70, z: 20, _hunt: true } }
+  tick()
+  assert.equal(stops(), 1, 'лез к месту, где его уже нет, — стоп')
+  seen = { x: 1, y: 70, z: 19 }
+  b.last = { m: 'goto', at: Date.now(), p: { x: 0, y: 70, z: 20, _hunt: true } }
+  tick()
+  assert.equal(stops(), 1, 'он там, куда иду, — погоня, не рвать')
+  seen = { x: 4, y: 64, z: 0 }
+  b.swarmTask = { kind: 'flee' }
+  b.last = { m: 'goto', at: Date.now(), p: { x: 0, y: 64, z: -12, _hunt: true } }
+  tick()
+  assert.equal(stops(), 1, 'отход — не погоня')
+  b.swarmTask = { kind: 'goto' }
+  seen = { x: 2, y: 62, z: 0 }
+  b.last = { m: 'goto', at: Date.now(), p: { x: 2, y: 62, z: 0, _hunt: true } }
+  tick()
+  assert.equal(stops(), 2, 'он рядом, в яме ниже, — бой, а не поход')
+  seen = { x: 2, y: 68, z: 0 }
+  b.last = { m: 'goto', at: Date.now(), p: { x: 2, y: 68, z: 0, _hunt: true } }
+  tick()
+  assert.equal(stops(), 2, 'он рядом, но наверху — подъём к нему не рвать')
+})
+
 test('alarm cancels each current action once, including old actions and immediate new danger work', t => {
   const f = fixture(t), b = f.bots[0]
   f.context.teamOf = () => b.team

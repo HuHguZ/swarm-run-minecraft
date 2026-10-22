@@ -13,6 +13,16 @@ const dist3 = (a, c) => Math.hypot(a.x - c.x, a.y - c.y, a.z - c.z)
 export function watchAlarm (ctx: ArenaContext) {
   const { teams, bots, names, pos, busy, teamOf } = ctx
   const cancelled = new WeakMap<object, { round: number, action: any }>()
+  // Поход к человеку кончился: он виден (1.5 с) и либо уже рядом (3.5 бл. по горизонтали, не выше на 1.5 — дальше решает
+  // бой: в 2–3 бл. от человека в яме бот 4 с «шёл к нему»), либо не там, куда иду (дальше 4 бл. от цели похода и ближе
+  // ко мне, чем она). Отход — не погоня.
+  const huntOver = (b, me) => {
+    const g = b.last?.p
+    if (!g || !Number.isFinite(g.x) || !Number.isFinite(g.z) || /^(flee|recover)$/.test(b.swarmTask?.kind || '')) return false
+    const goal = { x: g.x, y: Number.isFinite(g.y) ? g.y : me.y, z: g.z }, far = dist3(goal, me)
+    return (ctx.swarmDriver?.enemies(b) || []).some(e => Date.now() - e.seenAt < 1500 && !names.includes(e.id) &&
+      (Math.hypot(e.position.x - me.x, e.position.z - me.z) <= 3.5 && e.position.y - me.y < 1.5 || dist3(e.position, goal) > 4 && dist3(e.position, me) < far))
+  }
   // Тревога (10.10: «подбегаю быстро — тупят, не реагируют, как будто не успевают; должны понимать, что я быстрый»):
   // раз в 250 мс у каждого бойца не в бою — кто доберётся до меня быстрее чем за 2 с (по его скорости, а не по блокам:
   // игрок со «Скоростью V» — 10+ бл/с), тот рвёт текущее дело (лут, путь, крафт); цикл бойца решит заново — бежать,
@@ -25,7 +35,9 @@ export function watchAlarm (ctx: ArenaContext) {
       // Рывок/заливка/полёт (busy) — тоже ответ на угрозу (12.10, замер лучником: тревога гасила каждый стрейф через доли секунды).
       // Идёт к человеку (погоня, спуск к нему — _hunt) — это и есть ответ: не рвать (13.10: «скопились наверху» — тревога
       // обрывала спуск к нему каждые 5 с).
-      if (b.last?.p?._hunt && !b.swarmTask?.data?.dig) continue
+      // Но поход к его старому месту, когда он уже в другом и ближе цели похода (вбежал в комнату, спрыгнул), или когда он
+      // уже рядом — не ответ: рвать (стенд бота-противника 22.10: лез ко мне наверх 5 с, а я стоял в 5 бл. от него).
+      if (b.last?.p?._hunt && !b.swarmTask?.data?.dig && !huntOver(b, m.p)) continue
       // Кемпер выходит из коробки (ранен) — не рвать выход (Codex 15.10).
       if (b.campReacting) continue
       if (busy.has(b.name) || (!b.looting && (/^(fight|drink_buffs|pearl_to|wind_jump|burrow|flee|block_behind|evade|douse_lava|fly_to|peek_shot|wind_leap|juke|take_cover|undercut)$/.test(b.last?.m || '') || b.waiting))) continue

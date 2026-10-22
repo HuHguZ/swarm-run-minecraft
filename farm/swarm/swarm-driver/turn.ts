@@ -34,7 +34,10 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     if (burning(b)) return
     const context = refresh(b), { board, member, task } = context, round = sw.generation
     if (!member || !task) return
-    if (board.tasks().some(t => t.status === 'claimed' && t.claim.owner !== b.name && t.participants?.includes(b.name))) return
+    // Участник чужого дела (ждёт передачу, подброс ветром) стоит, пока дело занято (до 15 с), — но не под врагом: стенд
+    // бота-противника 22.10, бот с лутом 6 с стоял «вне хода» в 5 бл. от человека.
+    const threat = !!pos[b.name] && board.enemies().some(e => now() - e.seenAt < 1500 && distance(e.position, pos[b.name].p) < 8)
+    if (!threat && board.tasks().some(t => t.status === 'claimed' && t.claim.owner !== b.name && t.participants?.includes(b.name))) return
     if (phase(task) !== phase(b.swarmTask)) b.swarmTaskAt = now()
     b.swarmTask = task
     say(b, task)
