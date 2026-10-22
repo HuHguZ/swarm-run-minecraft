@@ -26,32 +26,37 @@ function boxedIn (bot, e) {
   return walls >= 3
 }
 
-export function smashPlan (bot, e, { minRoom = 5 }: any = {}) {
+// Почему нет (why) или план взлёта: причина отказа — в журнал боя (стенд 21.10: у булавников по одной попытке за раунд,
+// а отказ молчал).
+export function smashCheck (bot, e, { minRoom = 5 }: any = {}): { plan?: { dh: number; room: number; h: number; expect: number }; why?: string } {
   const b = bot.entity
-  if (!b || !b.onGround || b.isInWater || b.isInLava) return null
-  if (boxedIn(bot, e)) return null
+  if (!b || !b.onGround || b.isInWater || b.isInLava) return { why: 'не на земле' }
+  if (boxedIn(bot, e)) return { why: 'он в коробке' }
   // В паутине всплеск не поднимет (webOnBody ниже, 2026-09-26).
-  if (webOnBody(bot)) return null
-  if (!findItem(bot, 'mace') || !windReady(bot)) return null
+  if (webOnBody(bot)) return { why: 'я в паутине' }
+  if (!findItem(bot, 'mace') || !windReady(bot)) return { why: 'нет булавы или заряда' }
   const me = b.position
   const dh = Math.hypot(e.position.x - me.x, e.position.z - me.z)
   const dy = e.position.y - me.y
-  if (dh < 0.6 || dh > 4.2 || Math.abs(dy) > 1.0) return null
-  if (shieldAtUs(bot, e)) return null
+  if (dh < 0.6 || dh > 4.2) return { why: `до него ${dh.toFixed(1)} бл. по горизонтали` }
+  if (Math.abs(dy) > 1.0) return { why: `он на ${dy.toFixed(1)} по высоте` }
+  if (shieldAtUs(bot, e)) return { why: 'его щит на меня' }
   const room = headroom(bot, me, 12)
-  if (room < minRoom) return null
+  if (room < minRoom) return { why: `потолок в ${Math.floor(room)} бл.` }
   try {
     const cache = new Map()
-    if (edges.hazardAround(bot, me, 3, cache) || edges.hazardAround(bot, e.position, 3, cache)) return null
+    if (edges.hazardAround(bot, me, 3, cache)) return { why: 'край или лава у меня' }
+    if (edges.hazardAround(bot, e.position, 3, cache)) return { why: 'край или лава у него' }
   } catch {}
-  if (burnNear(bot, me) || burnNear(bot, e.position)) return null
+  if (burnNear(bot, me) || burnNear(bot, e.position)) return { why: 'огонь рядом' }
   // Вершина (замер probe-mace 2026-09-26): стоя 6.1 бл., с прыжком 8.3–11.2;
   // потолок срезает. Удар — у самой земли, падение ≈ вершина. Булава к удару
   // заряжена (windSmash держит её с запасом) — крит.
   const top = Math.min(8, room - 0.2)
   const h = Math.max(0, top - 0.3)
-  return { dh, room, h, expect: Math.round(smashDamage(h, { base: SWAP ? 7 : MACE_BASE, charge: 1, density: densityOf(bot) })) }
+  return { plan: { dh, room, h, expect: Math.round(smashDamage(h, { base: SWAP ? 7 : MACE_BASE, charge: 1, density: densityOf(bot) })) } }
 }
+export function smashPlan (bot, e, opts: any = {}) { return smashCheck(bot, e, opts).plan ?? null }
 
 // varint с позиции off (сырой пакет: номер пакета впереди или нет).
 function readVarIntAt (buf, off) {

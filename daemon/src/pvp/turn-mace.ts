@@ -1,4 +1,5 @@
 import * as gameClock from '../game-clock'
+import { looksAtBody } from '../gestures'
 import * as mace from '../mace'
 import { keyDir } from '../moves'
 import * as pick from '../pick'
@@ -127,11 +128,16 @@ export async function smashTurn (ctx: DuelCtx, turn: TurnFrame) {
     const fsM = tt.foes.get(ctx.entity.id)
     const handM = ctx.entity.equipment && ctx.entity.equipment[0] ? ctx.entity.equipment[0].name : ''
     const readyM = fsM && fsM.swungAt ? Math.max(0, fsM.swungAt + tempo.swingCooldownMs(handM) - now) : 0
-    const hitSoon = (theirR <= tempo.PLAYER_REACH && readyM < 2 * TICK_MS) || theyBow || !!aimedCb || (duo.active() && duo.secondThreat())
+    // Его удар и лук собьют взлёт, только если они в меня: в толпе (рой на сильного, стенд 21.10) он бьёт и целится в другого,
+    // а взлёт отменялся по любому его взмаху и натянутому луку — «не взлетаю» 31 раз за шесть раундов, удар с падения — дважды.
+    const atMe = looksAtBody(bot, ctx.entity, 0.8)
+    const hitSoon = atMe && ((theirR <= tempo.PLAYER_REACH && readyM < 2 * TICK_MS) || theyBow) || !!aimedCb || (duo.active() && duo.secondThreat())
     const sp0 = hitSoon ? null : mace.smashPlan(bot, ctx.entity)
     // Взлёт с булавой — если граф (калькулятор: булава с падения против удара/топора/копья) его не отверг.
     const sp = sp0 && gate('smash') ? sp0 : null
     if (hitSoon && ready('smashWaitNote') && mace.smashPlan(bot, ctx.entity)) { rest('smashWaitNote', 4000); used('булава: не взлетаю — его удар или выстрел собьёт взлёт') }
+    // Булава и заряд есть, а взлёта нет — почему (smashCheck), раз в 4 с: отказ молчал, и взлётов за раунд было по одному.
+    else if (!sp0 && ready('smashWhyNote') && findItem(bot, i => i.name === 'mace')) { const why = mace.smashCheck?.(bot, ctx.entity)?.why; if (why) { rest('smashWhyNote', 4000); used('булава: не взлетаю — ' + why) } }
     if (sp && (!ctx.failedSmash || ctx.failedSmash.inputs !== windInputs(ctx.failedSmash.native))) {
       const first = maceChain.choose(bot.entity.position.y, true)
       if (first) maceChain.onTarget(first)

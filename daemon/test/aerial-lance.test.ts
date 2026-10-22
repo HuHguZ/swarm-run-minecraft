@@ -72,6 +72,10 @@ test('таран: план годен с элитрами, ракетами, к�
   assert.equal(L.lancePlan(bot, e, { d: 10, hp: 6 }), null)
   items[1].count = 2
   assert.equal(L.lancePlan(bot, e, { d: 10, hp: 20 }), null, 'ракет < 3')
+  // Голый с элитрами, копьём и ракетами — тоже таран (стенд 21.10: требование нагрудника не пускало синих на таран).
+  items[1].count = 8
+  items.pop()
+  assert.ok(L.lancePlan(bot, e, { d: 10, hp: 20 }), 'без нагрудника')
 })
 
 test('касание тарана — только damage_event цели с причиной «я» (S7c, замечание проверки S7b в)', () => {

@@ -68,7 +68,8 @@ export async function utilTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function showmanTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, hm, otherAttacker } = ctx
   const { aimedCb, blocking, busyFoe, cbShield, cooldownLeft, d, dy, hp, inc, meInWeb, now, pressing, r, seesBody, theirHp, theirR, theyBow } = turn
-  if (hm && ctx.prof.player && bot.entity.onGround && !bot.entity.elytraFlying && (await hm.pre({
+  // Толпа (turn-crowd): жест или финт на публику против троих и больше — удар в спину от остальных.
+  if (hm && ctx.prof.player && !ctx.crowd?.on && bot.entity.onGround && !bot.entity.elytraFlying && (await hm.pre({
     now, d, dy, r, theirR, hp, theirHp, theyBow, blocking, seesBody, busyFoe, meInWeb, cooldownLeft,
     perch: !!ctx.perch, fort: !!ctx.fort, incoming: inc.length, vel: ctx.track.vel(), others: !!otherAttacker(),
     openRush: ctx.rushActive, punRush: turn.punRush, cbAimed: !!aimedCb || cbShield, press: pressing

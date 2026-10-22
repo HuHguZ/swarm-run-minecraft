@@ -16,6 +16,7 @@ async function pre (H: Showman, c) {
   if (bot.entity?.elytraFlying || bot._ndDescend) { release(H); return false }
   const now = gameClock.now()
   const dt = Math.min(100, now - H.lastTick)
+  if (H.foeKey) bot._ndShowMet?.set(H.foeKey, now)
   tickPhase(H, c)
   readGestures(H, c)
   const closing = closingOf(H, c)

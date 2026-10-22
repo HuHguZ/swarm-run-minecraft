@@ -7,7 +7,7 @@ import { type DuelCtx } from './turn'
 
 // Начало боя: план против мобов, оружие, щит, дебют по темпу.
 export async function openDuel (ctx: DuelCtx) {
-  const { bot, buildHot, clearArea, fortOut, fortPossible, guard, healItem, heldName, holdItem, holdWeapon, leadFn, pickWeaponFor, pvpSkills, rangedAllowed, retarget, st, style, tt, used } = ctx
+  const { bot, buildHot, clearArea, fortOut, fortPossible, guard, healItem, heldName, holdItem, holdWeapon, leadFn, opts, pickWeaponFor, pvpSkills, rangedAllowed, retarget, st, style, tt, used } = ctx
   if (!ctx.prof.player) {
     try {
       const p = assess.plan(bot, { radius: clearArea || 16 })
@@ -26,7 +26,8 @@ export async function openDuel (ctx: DuelCtx) {
 
   const buffUp = ctx.buffUp = (...args: any[]) => pvpSkills.buffUp(...args)
   if (tempo.ON && ctx.prof.player && !ctx.lastStand) {
-    await ctx.sleep(style.openDelayMs)
+    // Арена зовёт бой кусками по 3 с: пауза дебюта (до 1.2 с) против толпы — стоять под ударами в начале каждого куска.
+    if (!(require('./turn-crowd').ON && (opts.targets || []).length >= 3)) await ctx.sleep(style.openDelayMs)
     const drinkable = k => findItem(bot, i => i.name === 'potion' && (potionOf(i) || '').replace(/^(long|strong)_/, '') === k)
     const d0 = ctx.entity.position.distanceTo(bot.entity.position)
     const plan = tempo.pickOpening({

@@ -9,11 +9,30 @@ import * as owShield from '../ow-shield'
 import * as read from '../read'
 import * as tempo from '../tempo'
 import * as totemMod from '../totem'
-import { creeperSwelling, onFire, stepSafe } from './body'
+import { creeperSwelling, edgeBurns, noteWindThrowers, onFire, reachFrom, stepSafe } from './body'
 import { findItem } from './potions'
 import { CRIT_ANY_RISE, FIX, HIT_REACH, REACH_MARGIN, TICK_MS, cooldownMs, ticksToFall } from './rules'
 import { Vec3 } from './vec3'
+import { crowdSteer } from './turn-crowd'
+import { strikeSlot, strikeWait } from './strike-order'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+
+// Моё место в очереди ударов по цели (раз в 250 мс): очередь — из fight RPC (strikeOrder: имена или { цель: имена };
+// combat.fight пока не передаёт её в бой — беру из параметров текущего намерения), присутствующие — видимые игроки
+// очереди в 6 бл. от цели.
+function strikeSlotOf (ctx: DuelCtx, now: number) {
+  if (now < (ctx.strikeSlotAt || 0)) return ctx.strikeSlot || 0
+  ctx.strikeSlotAt = now + 250
+  const order = ctx.opts.strikeOrder ?? ctx.session?.current?.params?.strikeOrder
+  if (!order || !ctx.prof.player) return (ctx.strikeSlot = 0)
+  const tp = ctx.entity.position
+  const present = new Set<string>()
+  for (const pl of Object.values(ctx.bot.players || {}) as any[]) {
+    const e = pl && pl.entity
+    if (e && e.position && e.username !== ctx.bot.username && e.position.distanceTo(tp) <= 6 && ctx.vision.visible(e)) present.add(e.username)
+  }
+  return (ctx.strikeSlot = strikeSlot(order, ctx.bot.username, ctx.entity.username || '', present, ctx.targetHurtBy))
+}
 
 // Ближний бой: щит, удар готов ли, вперёд или назад.
 export function meleeIntentTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -21,7 +40,8 @@ export function meleeIntentTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { blocking, cooldownLeft, d, inSight, inWeb, me, now, r, seesBody, theirR, theyBow, theyEat, theyUp } = turn
   const axe = turn.axe = findItem(bot, i => /_axe$/.test(i.name))
 
-  const iframes = turn.iframes = Math.max(0, ctx.targetHurtAt + 500 - now)
+  // Окно неуязвимости цели (10 тиков) и моё место в очереди ударов роя (strike-order: fight RPC strikeOrder).
+  const iframes = turn.iframes = strikeWait(now, ctx.targetHurtAt, strikeSlotOf(ctx, now))
   if (blocking) ctx.shieldUpAt = now
   else if (ctx.shieldUpAt && !ctx.shieldDownAt) ctx.shieldDownAt = now
   if (blocking) ctx.shieldDownAt = 0
@@ -113,13 +133,14 @@ export function steerTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
   if (punish && r > HIT_REACH - 0.3) { turn.forward = true; turn.back = false }
   if (ctx.dodgeKey && ctx.dodgeLine) { turn.strafe = ctx.dodgeKey; turn.back = false }
-  if (hm && ctx.prof.player && !theyUp) {
+  if (hm && ctx.prof.player && !theyUp && !ctx.crowd?.on) {
     ({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint } = hm.steer({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint }, {
       r, theirR, d, hp, theirHp, cooldownLeft, blocking, vulnerable, rush,
       dodging: !!(ctx.dodgeKey && ctx.dodgeLine), flank: blocking && !axe, press: pressing
     }))
   }
-  if (ctx.prof.player && !theyUp && duo.active()) ({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint } = duo.steer({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint }, { entity: ctx.entity, r, cooldownLeft }))
+  if (ctx.prof.player && !theyUp && ctx.crowd?.on) ({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint } = crowdSteer(ctx, { forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint }, { r, cooldownLeft }))
+  else if (ctx.prof.player && !theyUp && duo.active()) ({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint } = duo.steer({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint }, { entity: ctx.entity, r, cooldownLeft }))
 }
 
 // Край и опасности: толкнуть его, не стоять спиной к яме или стене.
@@ -180,30 +201,82 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (ready('pushNote')) { rest('pushNote', 4000); used('захожу, чтобы столкнуть') }
     }
   }
-  const behind = ctx.nearMe.find(h => {
+  // Опасность за спиной по линии удара — от каждого, кто меня достаёт (цель и другие в 4.5 бл.), а не только от цели:
+  // удар отбрасывает на ~1 бл., спринт-удар и серия — до 3 (стенд 15×15 a24 21.10: 3 из 6 первых смертей — «tried to swim
+  // in lava» после серии ударов у ямы лавы вровень с полом Колизея). Лава — до 3 бл., яма и паутина — до 2.2. Лава за
+  // спиной важнее, чем столкнуть его самому (turn.pushing): шаг в сторону от ямы, по своему ходу.
+  // ND_LAVA_BEHIND=0 — как было (только цель, 2.2 бл., столкнуть важнее): замер «до».
+  const LB = process.env.ND_LAVA_BEHIND !== '0'
+  const hitters = [ctx.entity, ...(LB ? ctx.duo.foes().filter(e => e && e !== ctx.entity && e.position && reachFrom(e.position.offset(0, 1.62, 0), bot.entity) <= 4.5) : [])]
+  let behind = null
+  for (const h of ctx.nearMe) {
     const bx = h.pos.x + 0.5 - me.x
     const bz = h.pos.z + 0.5 - me.z
     const bd = Math.hypot(bx, bz)
-    if (bd > 2.2) return false
-    const ax = me.x - ctx.entity.position.x
-    const az = me.z - ctx.entity.position.z
-    return (bx * ax + bz * az) / ((Math.hypot(ax, az) || 1) * (bd || 1)) > 0.5
-  })
-  if (behind && !turn.pushing) {
-    turn.back = false
-    const yaw = bot.entity.yaw
-    const right = (behind.pos.x + 0.5 - me.x) * Math.cos(yaw) + (behind.pos.z + 0.5 - me.z) * -Math.sin(yaw)
-    turn.strafe = right > 0 ? 'left' : 'right'
-    if (ready('backNote')) { rest('backNote', 4000); used(`не стою спиной к ${behind.kind === 'лава' ? 'лаве' : behind.kind === 'паутина' ? 'паутине' : 'яме'}`) }
+    if (bd > (h.kind === 'лава' && LB ? 3.0 : 2.2)) continue
+    const from = hitters.find(e => {
+      const ax = me.x - e.position.x
+      const az = me.z - e.position.z
+      return (bx * ax + bz * az) / ((Math.hypot(ax, az) || 1) * (bd || 1)) > 0.5
+    })
+    if (from && (!behind || bd < behind.bd)) behind = { ...h, bd, from }
   }
-  if (!turn.pushing && theirR < 5.5) {
-    if (now >= ctx.backAt) { ctx.backAt = now + 200; try { ctx.behindDrop = edges.backToDrop(bot, ctx.entity.position, { kb: ctx.entity.equipment && ctx.entity.equipment[0] ? read.enchLevel(bot, ctx.entity.equipment[0], 'knockback') : 0 }) } catch { ctx.behindDrop = null } }
-  } else ctx.behindDrop = null
+  if (behind && (!turn.pushing || (LB && behind.kind === 'лава'))) {
+    turn.pushing = false
+    turn.back = false
+    const hx = me.x - behind.pos.x - 0.5; const hz = me.z - behind.pos.z - 0.5; const hn = Math.hypot(hx, hz) || 1
+    const away = k => { const v = keyDir(bot, k); return (v.x * hx + v.z * hz) / hn }
+    const keys = ['left', 'right', 'forward'].filter(k => away(k) > 0.25 && stepSafe(bot, keyDir(bot, k))).sort((a, b) => away(b) - away(a))
+    if (keys[0] === 'forward') { turn.forward = true; turn.strafe = null } else if (keys[0]) { turn.strafe = keys[0]; if (away('forward') < -0.2) turn.forward = false } else {
+      const yaw = bot.entity.yaw
+      const right = (behind.pos.x + 0.5 - me.x) * Math.cos(yaw) + (behind.pos.z + 0.5 - me.z) * -Math.sin(yaw)
+      turn.strafe = right > 0 ? 'left' : 'right'
+    }
+    if (ready('backNote')) { rest('backNote', 4000); used(`не стою спиной к ${behind.kind === 'лава' ? 'лаве' : behind.kind === 'паутина' ? 'паутине' : 'яме'}${behind.from !== ctx.entity ? ' (бьёт ' + (behind.from.username || 'другой') + ')' : ''}`) }
+  }
+  // Обрыв за спиной по линии толчка — от каждого, кто толкнёт (пользователь 21.10: «рой скидывает нарочно, и каждый
+  // знает, что скинут его»): удар — от всех в 5.5 бл. (edges.backToDrop: прогон физики отброса), заряд ветра в руке —
+  // в 10 бл. (взрыв ветра бьёт мимо неуязвимости и щита: обрыв по линии от него на 5 бл., edges.dropAlong). Не только
+  // цель боя: в толпе толкает тот, кто бьёт. Своя безопасность — раньше, чем «столкнуть его» (turn.pushing).
+  // ND_EDGE_ALL=0 — как было (только цель, без зарядов ветра).
+  const EDGE_ALL = process.env.ND_EDGE_ALL !== '0'
+  if (now >= ctx.backAt && (EDGE_ALL || (!turn.pushing && theirR < 5.5))) {
+    ctx.backAt = now + 200
+    ctx.behindDrop = null
+    const pushers = EDGE_ALL ? [ctx.entity, ...ctx.duo.foes().filter(e => e && e !== ctx.entity)] : [ctx.entity]
+    // Кто бросает заряды ветра: в руке заряд держат миг броска (сцена edge: 30 взрывов ветра, «в руке» — ни разу), поэтому
+    // помню бросок — видимый заряд ветра (сущность) в 2.5 бл. от него — на 10 с.
+    if (EDGE_ALL) noteWindThrowers(bot, pushers, now)
+    let n = 0
+    for (const e of pushers) {
+      if (!e.position) continue
+      const dh = Math.hypot(e.position.x - me.x, e.position.z - me.z)
+      const held = e.equipment && e.equipment[0] ? e.equipment[0].name : null
+      const wind = EDGE_ALL && (held === 'wind_charge' || now - (bot._ndWindBy?.get(e.id) || -1e9) < 10000) && dh <= 10
+      // Удочка в руке, видит меня, в 30 бл.: тянет к себе (edges.pullDrop) — яма между нами опасна спереди.
+      const rod = EDGE_ALL && held === 'fishing_rod' && dh <= 30 && ctx.vision.visible(e)
+      if (dh > 5.5 && !wind && !rod) continue
+      let drop = null
+      try {
+        if (dh <= 5.5) drop = edges.backToDrop(bot, e.position, { kb: held ? read.enchLevel(bot, e.equipment[0], 'knockback') : 0 })
+        if (!drop && wind && edges.dropAlong(bot, e.position, 5)) drop = { fall: true, wind: true }
+        if (!drop && rod) { const p = edges.pullDrop(bot, e.position); if (p) drop = { ...p, rod: true } }
+      } catch {}
+      if (drop) { n++; if (!ctx.behindDrop) ctx.behindDrop = { ...drop, from: e } }
+    }
+    if (ctx.behindDrop) ctx.behindDrop.n = n
+  } else if (!EDGE_ALL && (turn.pushing || theirR >= 5.5)) ctx.behindDrop = null
   if (ctx.behindDrop) {
     turn.back = false
-    const side = ['left', 'right'].map(k => { const v = keyDir(bot, k); return { k, c: edges.clearance(bot, me.offset(v.x * 1.2, 0, v.z * 1.2), 2.5) } })
-    turn.strafe = side[0].c >= side[1].c ? side[0].k : side[1].k
-    if (ready('backNote')) { rest('backNote', 4000); used('не стою спиной к яме (его удар кинул бы)') }
+    turn.pushing = false
+    // Сойти с линии: туда, где до края дальше (вбок или вперёд — к нему), по безопасному шагу.
+    // От удочки — не к рыболову (тянет к нему, яма впереди): ход с линии вбок или прочь.
+    const toward = (k) => { const f = ctx.behindDrop.rod && ctx.behindDrop.from?.position; if (!f) return 0; const v = keyDir(bot, k); const fx = f.x - me.x; const fz = f.z - me.z; return (v.x * fx + v.z * fz) / (Math.hypot(fx, fz) || 1) }
+    const keys = (EDGE_ALL ? (ctx.behindDrop.rod ? ['left', 'right', 'back'] : ['left', 'right', 'forward']) : ['left', 'right']).map(k => { const v = keyDir(bot, k); return { k, c: stepSafe(bot, v) && toward(k) < 0.3 ? edges.clearance(bot, me.offset(v.x * 1.2, 0, v.z * 1.2), 2.5) : -1 } })
+      .sort((a, b) => b.c - a.c)
+    if (keys[0].k === 'forward') { turn.forward = true; turn.strafe = null } else if (keys[0].k === 'back') { turn.back = keys[0].c >= 0; turn.forward = false; turn.strafe = null } else { turn.strafe = keys[0].k; const fw = keys.find(x => x.k === 'forward'); if (EDGE_ALL && (!fw || fw.c < 0.5)) turn.forward = false }
+    const bd = ctx.behindDrop
+    if (ready('backNote')) { rest('backNote', 4000); used(`${bd.rod ? 'не стою за ямой от удочки' : 'не стою спиной к яме'} (${bd.rod ? 'удочка у ' : bd.wind ? 'заряд ветра у ' : 'удар '}${bd.from && bd.from !== ctx.entity ? (bd.from.username || 'другого') : 'его'}${bd.n > 1 ? `, толкнут ${bd.n}` : ''} кинул бы)`) }
   }
   // Спиной к стене (пользователь 14.10: «у стен стоят, не убегают в сторону от меня, а вперёд ко мне идут — я мечом
   // забиваю их в прыжке»): отбросу некуда, и он бьёт крит за критом. Стена в шаге за спиной (по линии от него), он
@@ -379,6 +452,21 @@ export function controlsTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
   if (ctx.hitKind === 'crit' && !bot.entity.onGround && !meInWeb) turn.sprint = turn.sprint && bot.getControlState('sprint') && !mf.clock.srvSprint
   const kk = mf.override({ forward: turn.forward, back: turn.back, left: turn.strafe === 'left', right: turn.strafe === 'right', sprint: turn.sprint && (bot.food ?? 20) > 6, jump: turn.jump })
+  // Последнее слово — безопасность шага (DeepSeek t3 21.10: план удара mf.override ставит W/S-tap поверх отменённых
+  // клавиш; вперёд+вбок — диагональ, которую по отдельности никто не проверял; прыжок несёт на 1.5–2.5 бл.).
+  for (const k of ['forward', 'back', 'left', 'right']) if (kk[k] && !stepSafe(bot, keyDir(bot, k))) kk[k] = false
+  if ((kk.forward || kk.back) && (kk.left || kk.right)) {
+    const a = keyDir(bot, kk.forward ? 'forward' : 'back'); const b = keyDir(bot, kk.left ? 'left' : 'right')
+    const n = Math.hypot(a.x + b.x, a.z + b.z) || 1
+    if (!stepSafe(bot, new Vec3((a.x + b.x) / n, 0, (a.z + b.z) / n))) { kk.left = false; kk.right = false }
+  }
+  if (kk.jump && (kk.forward || kk.back || kk.left || kk.right)) {
+    const k = kk.forward ? 'forward' : kk.back ? 'back' : kk.left ? 'left' : 'right'
+    const far = kk.sprint ? 2.6 : 1.8
+    // Ступенька прямо перед ногами (wantsJump) — прыжок на неё, не дальний: его не режу.
+    if (!wantsJump(bot, keyDir(bot, k)) && (!stepSafeRaw(bot, keyDir(bot, k), { water: onFire(bot), reach: far }) || edgeBurns(bot, keyDir(bot, k), far))) kk.jump = false
+  }
+  kk.sprint = kk.sprint && kk.forward
   set('forward', kk.forward)
   set('back', kk.back)
   set('left', kk.left)
@@ -404,7 +492,8 @@ export async function strikeTurn (ctx: DuelCtx, turn: TurnFrame) {
   // Хит-селект = (1) ответный удар в тик его отброса (melee.counterFn: свой спринт-удар ×0.6 гасит часть его толчка —
   // Player.causeExtraKnockback) и (2) ожидание его удара до 3 тиков. ND_HS_WAIT=0 — без (2): по jar выигрыш даёт только
   // отброс (1), а ожидание отдаёт ему первый удар (A/B s7d-e-28-hsb: выключенный хит-селект 7 : 3).
-  const selectWait = ctx.prof.player && race && closing > 0.1 && !turn.pushing && theirR < 3.0 && mf.skill.counter > 0.7 && process.env.ND_HIT_SELECT !== '0' && process.env.ND_HS_WAIT !== '0'
+  // В толпе не жду ничьего удара: пока жду одного, бьют остальные.
+  const selectWait = ctx.prof.player && !ctx.crowd?.on && race && closing > 0.1 && !turn.pushing && theirR < 3.0 && mf.skill.counter > 0.7 && process.env.ND_HIT_SELECT !== '0' && process.env.ND_HS_WAIT !== '0'
   if (selectWait) { if (!ctx.selectSince) ctx.selectSince = now } else ctx.selectSince = 0
   const holdForSelect = selectWait && now - ctx.selectSince < 3 * mf.clock.msPerTick
   if (holdForSelect && ready('selectNote')) { rest('selectNote', 4000); used('жду его удара, чтобы ответить (hit-select)') }

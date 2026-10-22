@@ -111,13 +111,15 @@ export function ownHit (pk: any, myId: number, foeId: number): boolean {
   return !!pk && pk.entityId === foeId && pk.sourceCauseId === myId + 1
 }
 
-// Годится ли таран сейчас (на земле или уже в полёте): элитры, ≥3 простых ракет, копьё, нагрудник для возврата,
-// хп, место над собой и над ним, его щит не в деле.
+// Годится ли таран сейчас (на земле или уже в полёте): элитры, ≥3 простых ракет, копьё, хп, место над собой и над ним,
+// его щит не в деле. Нагрудник не нужен: есть — после посадки вернётся на тело (lanceLand), нет — элитры на теле ничего
+// не отнимают. Требование нагрудника не пускало на таран голых с элитрами, копьём и ракетами (стенд 21.10, ARMS_AIR=1:
+// у 29 синих — ни одного тарана, у чемпиона в незерите — 4 убийства копьём за 2 минуты).
 export function lancePlan (bot: any, e: any, { d, hp, hisShield = false }: any = {}) {
   if (!sky.ON || hisShield) return null
   const k = sky.kit(bot)
   const sp = spear.spearOf(bot)
-  if (!k.elytra || k.rockets < 3 || !sp || !k.chest) return null
+  if (!k.elytra || k.rockets < 3 || !sp) return null
   if (!bot.entity || bot.entity.isInWater || !e || !e.position) return null
   if (hp < 8 || !(d >= 3) || d > 40) return null
   const W = sky.worldOf(bot)

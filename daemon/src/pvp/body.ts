@@ -44,8 +44,23 @@ function onFire (bot) {
   try { return (bot.entity.metadata[0] & 0x01) !== 0 } catch { return false }
 }
 
+// Края рамки тела (ширина 0.6) по ходу — не над лавой и огнём: центр шага на камне, а край над ямой — и толчок или
+// срезанный угол кидает в лаву (стенд 15×15, раунд a8 21.10: 4 смерти «tried to swim in lava» без чужого удара; на поле
+// Колизея лава — ямы на −1 у холмов, края — магма). Свой шаг в лаву — нет; сбил его удар — законно.
+const BURNS = /^(lava|fire|soul_fire)$/
+function edgeBurns (bot, dir, reach = 0.9) {
+  const me = bot.entity.position
+  for (const s of [-0.3, 0.3]) {
+    const p = me.offset(dir.x * reach - dir.z * s, 0, dir.z * reach + dir.x * s)
+    for (const dy of [0, -1]) {
+      const b = bot.blockAt(p.offset(0, dy, 0).floored())
+      if (b && BURNS.test(b.name)) return true
+    }
+  }
+  return false
+}
 function stepSafe (bot, dir) {
-  return stepSafeRaw(bot, dir, { water: onFire(bot) || !!(bot.entity && bot.entity.isInWater) })
+  return stepSafeRaw(bot, dir, { water: onFire(bot) || !!(bot.entity && bot.entity.isInWater) }) && !edgeBurns(bot, dir)
 }
 function makeTracker (entity) {
   return require('../bow').trackTarget(entity)
@@ -88,4 +103,14 @@ function creeperSwelling (bot, e) {
   } catch { return false }
 }
 
-export { hasEffect, clamp, reachFrom, livingFlags, usingItem, onFire, stepSafe, makeTracker, yawTo, nextFoe, healthOf, lookDead, creeperSwelling }
+// Бросившие заряд ветра (bot._ndWindBy: id → когда): заряд-сущность рядом с ним — его бросок.
+function noteWindThrowers (bot, foes, now) {
+  const by = bot._ndWindBy || (bot._ndWindBy = new Map())
+  for (const w of Object.values(bot.entities || {}) as any[]) {
+    if (!w || !/wind_charge/.test(w.name || '') || !w.position) continue
+    for (const f of foes) if (f && f.position && f.position.distanceTo(w.position) < 2.5) by.set(f.id, now)
+  }
+  return by
+}
+
+export { hasEffect, clamp, reachFrom, livingFlags, usingItem, onFire, stepSafe, edgeBurns, noteWindThrowers, makeTracker, yawTo, nextFoe, healthOf, lookDead, creeperSwelling }

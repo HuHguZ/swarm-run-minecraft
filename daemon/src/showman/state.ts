@@ -64,6 +64,7 @@ type Showman = {
   baitRolled: boolean
   retreat: any
   pauseUntil: number
+  foeKey: string | null
   pauseRolledAt: number
   lastSteer: number
   // Победа и отчёт.

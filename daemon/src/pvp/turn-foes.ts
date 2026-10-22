@@ -5,6 +5,7 @@ import * as pick from '../pick'
 import { reachFrom } from './body'
 import { findItem } from './potions'
 import { HIT_REACH } from './rules'
+import { crowdTurn } from './turn-crowd'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 
 // Моб бьёт или идёт на меня — сперва его.
@@ -29,6 +30,9 @@ export async function mobDetourTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function duoTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, ctl, duo, guard, holdWeapon, maceChain, mc, mf, pathTo, retarget, st, telemetryHp, throwAt, used, windInputs } = ctx
   const { hp, me, now } = turn
+  // Трое и больше — бой против толпы (turn-crowd): цель, зелье в кучу, уход из клещей; приёмы двоих — не здесь.
+  const crowd = await crowdTurn(ctx, turn)
+  if (crowd || ctx.crowd?.on) return crowd
   if (ctx.prof.player && duo.active()) {
     const dz = duo.decide({ entity: ctx.entity, charge: mf.clock.charge(0), justSwung: now - ctx.lastSwing < 250, hp, hasAxe: !!findItem(bot, i => /_axe$/.test(i.name)), meInWeb: blockName(bot, me.floored()) === 'cobweb', perch: !!ctx.perch, fort: !!ctx.fort, cooldownLeft: mf.clock.leftMs(1) })
     if (dz && dz.kind === 'focus' && dz.e !== ctx.entity) { duo.switched(ctx.entity, dz.e, dz.why); retarget(dz.e); await holdWeapon(); await new Promise<any>(resolve => setImmediate(resolve)); return NEXT }

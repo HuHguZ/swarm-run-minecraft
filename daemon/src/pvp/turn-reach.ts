@@ -106,6 +106,8 @@ export async function climbToHimTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function hiddenFoeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { after, bot, clear, digWatch, holdWeapon, maceNow, mc, miningProgress, noticed, pathTo, punchThrough, ready, rest, routeInputs, style, throwAt, tt, used } = ctx
   const { d, hidden, me, now, r, theyEat, theyUp } = turn
+  // Толпа «держит место»: к скрытой цели не пробиваюсь — бью тех, кто вошёл в руку.
+  if (ctx.crowd?.hold) return
   if (hidden && !ctx.perch && !ctx.reposition && after('hidden', true) && ctx.punches < style.punchLimit) {
     if (await punchThrough()) { ctx.punches++; return NEXT }
   }
@@ -349,7 +351,8 @@ export function stuckTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function hopTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { HOP, bot, clear, ctl, hazardOnLine, miningProgress, pathTo, routeInputs, st, used } = ctx
   const { d, dy, meInWeb, r } = turn
-  if (HOP && ctx.prof.player && !ctx.perch && !ctx.fort && !meInWeb && bot.entity.onGround && !bot.entity.isInWater && r > HIT_REACH && d < 9 &&
+  // Толпа «держит место» (turn-crowd: цель в куче) — прыжок к цели не нужен (c5f: 3 прыжка за раунд, 1.3 с).
+  if (HOP && ctx.prof.player && !ctx.crowd?.hold && !ctx.perch && !ctx.fort && !meInWeb && bot.entity.onGround && !bot.entity.isInWater && r > HIT_REACH && d < 9 &&
       !miningProgress() && (!ctx.failedHop || ctx.failedHop.inputs !== routeInputs()) && (bot.entity.isCollidedHorizontally ||
         (dy > 0.6 && dy < 2.6 && d < 5) || !!hazardOnLine() || !!ctx.failedReposition || !!ctx.failedFlank)) {
     const me0 = bot.entity.position.clone()

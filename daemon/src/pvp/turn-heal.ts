@@ -120,7 +120,12 @@ export async function healTurn (ctx: DuelCtx, turn: TurnFrame) {
           ? { wide: true, what: 'стенка 3×2 от лучника перед едой' }
           : { what: 'колонка перед едой' })
       }
-      if (tempo.ON && ctx.prof.player && !desperate && !tt.safe(tempo.consumeMs(pick.name)).ok) {
+      // Толпа: оторваться от троих поесть не выйдет — бег под ударами всех (try-crowd b5: «не ем под ударами —
+      // отрываюсь» ×5 за раунд, 0–2 удара за 20 с). Золотое яблоко и зелье — есть под ударами: за 1.6 с толпа снимает ~3,
+      // яблоко даёт ~8 (поглощение 4 + регенерация II 5 с; L5c без яблок жил 10.9 с против 20.3 у «до», который ел).
+      // Простая еда под ударами — нет: бьюсь.
+      if (ctx.crowd?.on && !desperate && !tt.safe(tempo.consumeMs(pick.name)).ok && !/golden_apple|potion/.test(pick.name)) { tt.stats.refused++; return }
+      if (tempo.ON && ctx.prof.player && !desperate && !ctx.crowd?.on && !tt.safe(tempo.consumeMs(pick.name)).ok) {
         tt.stats.refused++
         if (ready('refuseNote')) { rest('refuseNote', 3000); used('не ем под ударами — отрываюсь') }
         let how = 'в паутине'

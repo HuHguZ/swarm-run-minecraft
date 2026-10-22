@@ -38,7 +38,10 @@ export function installServices (ctx: DuelCtx) {
       const webId = bot.registry.blocksByName.cobweb && bot.registry.blocksByName.cobweb.id
       if (on && mv && mv.blocksToAvoid && webId != null) mv.blocksToAvoid.add(webId)
       if (on && !goal && ctx.holdGoal) goal = ctx.holdGoal
-      if (on) bot.pathfinder.setGoal(goal || new goals.GoalFollow(ctx.entity, 2), !goal)
+      // Он ниже (в яме, под уступом): клетки у края — в sqrt(1 + dy²) от его ног, «в 2 бл.» туда не попадает, и поиск пути шёл
+      // тысячами узлов, пока бот стоял в 2.5–3 бл. над ним (стенд бота-противника 22.10: 31 с). С края по нему достаёт удар.
+      const below = bot.entity && ctx.entity?.position ? bot.entity.position.y - ctx.entity.position.y : 0
+      if (on) bot.pathfinder.setGoal(goal || new goals.GoalFollow(ctx.entity, below > 1 ? Math.min(3, Math.hypot(1, below)) + 0.1 : 2), !goal)
       else bot.pathfinder.setGoal(null)
     } catch {}
   }

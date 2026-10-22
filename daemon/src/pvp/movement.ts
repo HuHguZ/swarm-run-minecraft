@@ -20,6 +20,23 @@ export function createPathMiningProgress (bot, now) {
   }
 }
 
+// Цена шага пути у лавы и огня (mineflayer-pathfinder exclusionAreasStep: блок ног узла → прибавка): над лавой или огнём
+// (лава вровень с полом — яма Колизея: pathfinder с запасом блоков «мостит» её поставкой, и неудачная поставка — шаг
+// в лаву) — 100, нельзя; рядом (3×3, ноги и пол) — 30, в обход, если обход есть. Годится и для goto (session movements).
+export function burnStepCost (bot) {
+  const BURN = /^(lava|fire|soul_fire)$/
+  return b => {
+    const p = b && b.position
+    if (!p) return 0
+    for (const dy of [0, -1]) { const n = bot.blockAt(p.offset(0, dy, 0)); if (n && BURN.test(n.name)) return 100 }
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const dy of [0, -1]) {
+      const n = bot.blockAt(p.offset(dx, dy, dz))
+      if (n && BURN.test(n.name)) return 30
+    }
+    return 0
+  }
+}
+
 // Acquisition and the duel must use the same route constraints, including intermediate nodes.
 export function combatMovement (bot, arena = null) {
   const mv = bot.pathfinder?.movements
@@ -28,6 +45,11 @@ export function combatMovement (bot, arena = null) {
   if (!mv) return { arena: arenaOk, onField, restore: () => {} }
   const before = { canDig: mv.canDig, allow1by1towers: mv.allow1by1towers, scafoldingBlocks: mv.scafoldingBlocks,
     allowParkour: mv.allowParkour, maxDropDown: mv.maxDropDown, digCost: mv.digCost, getNeighbors: mv.getNeighbors }
+  // Путь в бою — не вплотную к лаве и огню (стенд 15×15 a8 21.10: погоня по краю ямы с лавой, срезанный угол на спринте —
+  // 4 смерти «tried to swim in lava» без чужого удара). Клетка у лавы (на уровне ног или пола, вкл. диагональ) — дорого,
+  // в обход, если обход есть; сама лава — уже не клетка пути (pathfinder blocksToAvoid).
+  const nearBurn = Array.isArray(mv.exclusionAreasStep) ? burnStepCost(bot) : null
+  if (nearBurn) mv.exclusionAreasStep.push(nearBurn)
   mv.allow1by1towers = false; mv.scafoldingBlocks = []; mv.allowParkour = false
   // Pathfinder compares feet Y to the solid support's block Y, one below landing feet.
   mv.maxDropDown = edges.SAFE_FALL + 1
@@ -44,6 +66,7 @@ export function combatMovement (bot, arena = null) {
   }
   return { arena: arenaOk, onField, restore () {
     Object.assign(mv, before)
+    if (nearBurn) { const i = mv.exclusionAreasStep.indexOf(nearBurn); if (i >= 0) mv.exclusionAreasStep.splice(i, 1) }
     if (floorGuard) { const i = mv.exclusionAreasBreak.indexOf(floorGuard); if (i >= 0) mv.exclusionAreasBreak.splice(i, 1) }
   } }
 }

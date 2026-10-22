@@ -148,14 +148,26 @@ export async function pickup (bot: any, name: string | null, maxD = 6, arena?: a
   // Нет на земле, а в рюкзаке есть — уже подобрал сам по дороге (до проверки).
   if (!it) return (name && bot.inventory.items().some((i: any) => i.name === name)) ? { ok: true, why: `уже подобрал ${name}` } : { ok: false, why: 'не вижу вещи' }
   const before = bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
-  const at = it.position.clone(), support = supportAt(bot, at)
-  if (!support) return { ok: false, why: 'у вещи нет безопасной опоры' }
-  at.y = support.top
-  const move = await executeJump(bot, ctl, at, { allowWalk: true, maxFallDamage: 0, arena, maxTicks: 60, maxFrames: ROUTE_FRAMES }).catch((e: any) => ({ ok: false, why: e.message }))
-  for (let t = 0; move.ok && t < 50 && !ctl.aborted && it.isValid !== false && bot.entities[it.id]; t++) await bot.waitForTicks(1)
+  // Подбор — тело в блоке от вещи (рамка игрока + 1 бл.), так что цель — середина её клетки: вещь у стены лежит там, где
+  // тело не встанет (unsupported_or_obstructed_target). Старт — с земли: получатель после отмены дела ещё в прыжке
+  // (invalid_native_start). Вещь катится — второй подход к её новому месту (стенд 15×15, 21.10: передач дошло 6 из 28).
+  const there = () => { const d = it.position.minus(bot.entity.position); return Math.hypot(d.x, d.z) < 1 && Math.abs(d.y) < 1.5 }
+  const gone = () => it.isValid === false || !bot.entities[it.id]
+  let why = 'не подобрал'
+  for (let tries = 0; tries < 2 && !ctl.aborted && !gone(); tries++) {
+    for (let t = 0; t < 10 && !bot.entity.onGround && !ctl.aborted; t++) await bot.waitForTicks(1)
+    if (!there()) {
+      const at = it.position.floored().offset(.5, 0, .5), support = supportAt(bot, at)
+      if (!support) { why = 'у вещи нет безопасной опоры'; break }
+      at.y = support.top
+      const move = await executeJump(bot, ctl, at, { allowWalk: true, maxFallDamage: 0, arena, maxTicks: 60, maxFrames: ROUTE_FRAMES }).catch((e: any) => ({ ok: false, why: e.message }))
+      if (!move.ok) why = move.why || why
+    }
+    for (let t = 0; t < 45 && there() && !ctl.aborted && !gone(); t++) await bot.waitForTicks(1)
+  }
   if (ctl.aborted) return { ok: false, why: 'прервано' }
   const after = bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
-  return { ok: after > before, why: after > before ? `подобрал ${name || 'вещь'}` : move.why || 'не подобрал' }
+  return { ok: after > before, why: after > before ? `подобрал ${name || 'вещь'}` : why }
 }
 
 // Уничтожить чужой лут на земле (гонка 10.10: «вещи врага, что нам не нужны, — в лаву или сжечь, чтобы не достались им»):

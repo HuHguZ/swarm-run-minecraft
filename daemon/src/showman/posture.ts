@@ -5,6 +5,16 @@ import * as gameClock from '../game-clock'
 import { CHAT, THEIR_REACH, clamp, between, pick, weighted, ACTS, ACT_LABEL } from './consts'
 import { tally, tgt, lookAtHim } from './body'
 import type { Showman } from './state'
+import { visiblePower } from '../pvp/arms-graph'
+
+// Видимое снаряжение (руки и броня — пакеты equipment, как видит человек) не слабее моего: с таким не красуются.
+function stronger (H: Showman) {
+  const e = tgt(H), bot = H.bot
+  if (!e || !Array.isArray(e.equipment)) return false
+  const theirs = visiblePower(e.equipment.filter(Boolean).map(i => i.name))
+  const mine = visiblePower([bot.heldItem, ...[5, 6, 7, 8].map(k => bot.inventory?.slots?.[k])].filter(Boolean).map(i => i.name))
+  return theirs >= mine * 0.9
+}
 
 // Реплики — редко, коротко, в характере (PERSONA.md: «свой пацан»). Не больше
 // одной за бой и не чаще раза в минуту на бота: пользователь не любит спам.
@@ -71,7 +81,10 @@ function unsafeWhy (H: Showman, c, closing) {
   if (c.theirHp != null && c.theirHp > c.hp + 6) return 'проигрываю'
   if (gameClock.now() - (tt ? tt.myHurtAt : 0) < 1200) return 'по мне попали'
   if (c.theirR < THEIR_REACH + 1.3) return 'он близко'
-  if (closing > 0.17) return 'он идёт в атаку'
+  // Пользователь 22.10: «убрать вообще, если противник сильный и идёт на тебя — потеря времени и потенциальная смерть». Идёт —
+  // любое сближение (было: быстрее 3.4 бл/с), сильный — не слабее меня по видимому.
+  if (closing > 0.05) return 'он идёт на меня'
+  if (stronger(H)) return 'он не слабее'
   if (Math.abs(c.dy) > 2.5) return 'разная высота'
   if (!c.seesBody) return 'не вижу'
   if (c.busyFoe) return 'не время'

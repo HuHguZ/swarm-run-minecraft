@@ -1,3 +1,4 @@
+import { goals } from 'mineflayer-pathfinder'
 import { shoot as bowShoot } from '../bow'
 import * as gameClock from '../game-clock'
 import { blockName, keyDir } from '../moves'
@@ -159,12 +160,14 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
 }
 
-// Он на элитрах: стрелять или ждать посадки.
+// Он на элитрах: стрелять, бежать под него, если улетает, или ждать посадки, если кружит рядом.
 export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, ctl, guard, heldName, holdWeapon, maceNow, pathTo, rangedAllowed, ready, rest, set, shotInputs, sky, st, strafeStep, switched, used } = ctx
   const { me, meInWeb, r, seesBody } = turn
   if (ctx.prof.player && sky.gliding() && !meInWeb && r > HIT_REACH) {
-    if (ctx.pathing) { pathTo(false); ctx.pathing = false }
+    const halt = () => { if (ctx.pathing) { pathTo(false); ctx.pathing = false } }
+    const chase = glideChaseGoal(me, ctx.entity.position, sky.fl.vel(), t => sky.fl.at(t), ctx.arena)
+    if (!chase) halt()
     const bowA = findItem(bot, i => i.name === 'bow')
     const arrA = findItem(bot, i => /arrow$/.test(i.name))
     const d3 = me.distanceTo(ctx.entity.position)
@@ -173,6 +176,7 @@ export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
     const airCrossbow = ranged.crossbows(bot).find(x => x.info.loaded && x.info.ammo !== 'firework')
     if (rangedAllowed() && airCrossbow && d3 >= 4 && d3 < 48 && seesBody && !stopAirShot() &&
         (!ctx.failedAirXbow || ctx.failedAirXbow.inputs !== shotInputs())) {
+      halt()
       if (guard) await guard.raise(false)
       ctx.aim = 'free'
       const airShot = await ranged.fire(bot, ctx.entity, airCrossbow.item, { point: airPoint, shouldStop: stopAirShot,
@@ -183,6 +187,7 @@ export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
     }
     if (rangedAllowed() && bowA && arrA && d3 >= 4 && d3 < 48 && seesBody && !stopAirShot() &&
         (!ctx.failedAirBow || ctx.failedAirBow.inputs !== shotInputs())) {
+      halt()
       if (guard) await guard.raise(false)
       clear()
       ctx.aim = 'free'
@@ -206,12 +211,39 @@ export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
       await holdWeapon()
       return NEXT
     }
+    if (chase) {
+      // Цель пути — заново, только если точка ушла дальше 3 бл. (иначе путь пересчитывался бы каждый тик).
+      if (!ctx.pathing || !ctx.glideChase || Math.hypot(ctx.glideChase.x - chase.x, ctx.glideChase.z - chase.z) > 3) {
+        ctx.glideChase = chase
+        pathTo(true, new goals.GoalNearXZ(chase.x, chase.z, 2)); ctx.pathing = true
+      }
+      st.glideChase = (st.glideChase || 0) + 1
+      if (ready('skyChaseNote')) { rest('skyChaseNote', 5000); used('он улетает на элитрах — бегу под него') }
+      await ctx.sleep(TICK_MS)
+      return NEXT
+    }
     strafeStep()
     set('forward', false); set('back', false); set('jump', false); set('sprint', false)
     set('left', ctx.strafeKey === 'left' && stepSafe(bot, keyDir(bot, 'left')))
     set('right', ctx.strafeKey === 'right' && stepSafe(bot, keyDir(bot, 'right')))
-    if (ready('skyWaitNote')) { rest('skyWaitNote', 5000); used('он на элитрах — не гонюсь, жду посадки') }
+    if (ready('skyWaitNote')) { rest('skyWaitNote', 5000); used('он кружит на элитрах рядом — жду посадки') }
     await ctx.sleep(TICK_MS)
     return NEXT
   }
+}
+
+// Куда бежать за летуном. Раньше бот стоял («не гонюсь, жду посадки»), пока человек улетал на элитрах. Пользователь
+// 21.10: «преследования игроков, которые убегают элитрами». Улетает — значит, его ход от нас быстрее 0.2 б/т или он
+// дальше 16 бл. по земле. Бежим к земле под точкой, где он будет через секунду (его же физика полёта, track.at) — так
+// ближе к месту посадки. Цель держим внутри арены: путь за край не строится. Кружит рядом — null: пике на нас ловит
+// skyDefenseTurn.
+export function glideChaseGoal (me: { x: number; z: number }, his: { x: number; z: number }, vel: { x: number; z: number },
+  at: (t: number) => { x: number; z: number } | null, arena?: { x: number; z: number; r: number } | null) {
+  const rx = his.x - me.x, rz = his.z - me.z
+  const flat = Math.hypot(rx, rz) || 1
+  if ((vel.x * rx + vel.z * rz) / flat <= 0.2 && flat <= 16) return null
+  const p = at(20) || his
+  if (!arena) return { x: p.x, z: p.z }
+  const k = Math.min(1, (arena.r - 2) / Math.max(Math.abs(p.x - arena.x), Math.abs(p.z - arena.z), 1e-6))
+  return { x: arena.x + (p.x - arena.x) * k, z: arena.z + (p.z - arena.z) * k }
 }

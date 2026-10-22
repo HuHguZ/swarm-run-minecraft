@@ -61,10 +61,26 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
       if (graph.index === index) { stop = flight.why; break }
     }
     const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: landing, maxMs: 12000, stats: statistics, arena: params.arena }) : { ok: false, why: 'interrupted' }
+    if (ctl.aborted && sky.gliding(bot.entity)) landAnyway(bot, params.arena, statistics)
     const position = bot.entity.position
     return { ok: graph.complete && landed.ok && !ctl.aborted, stopped: stop ?? (!graph.complete ? 'route incomplete' : !landed.ok ? landed.why : null),
       crossings: graph.crossings, expectedGates: graph.gates.length, collisionTicks, rockets: rocketBefore - sky.rocketCount(bot),
       gameMs: clock.now() - started, hpBefore, hp: bot.health,
       landing: { ...position }, landingError: position.distanceTo(landing), statistics, trace }
   } finally { bot.removeListener('physicsTick', observe) }
+}
+
+// Полёт прервали в воздухе — всё равно сесть, как после тарана (aerial-lance, lanceLand). Элитры без руля уносили бота за
+// Колизей: стенд 21.10, слот 30 — за раунд 77 из 103 перелётов синих на насест прерваны, 50 вылетов за арену и смерть «как
+// упавший». Садимся на ближайшую площадку внутри арены, а не на насест; прерывает посадку только смерть; потом нагрудник
+// назад. Посадка идёт фоном: отчёт полёта возвращается сразу, его ждёт драйвер.
+function landAnyway (bot: any, arena: any, stats: Record<string, number>) {
+  const ctl = { get aborted () { return (bot.health ?? 0) <= 0 } }
+  const inside = arena ? (x: number, z: number) => Math.abs(x - arena.x) <= arena.r - 1 && Math.abs(z - arena.z) <= arena.r - 1 : null
+  const W = sky.worldOf(bot, { observed: !!arena })
+  const at = sky.landingSpot(bot, W, { near: bot.entity.position, radius: 16, inside })
+  stats.landAnyway = (stats.landAnyway || 0) + 1
+  sky.land(bot, ctl, { at, stats, arena })
+    .then(() => (bot.health ?? 0) > 0 && !bot.entity.elytraFlying && sky.wearingElytra(bot) ? sky.chestDown(bot, ctl, { stats, arena }) : null)
+    .catch(() => {})
 }

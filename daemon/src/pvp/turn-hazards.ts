@@ -1,13 +1,14 @@
 import { goals } from 'mineflayer-pathfinder'
 import * as gameClock from '../game-clock'
 import * as hazards from '../hazards'
-import { blockName, keyDir, solid, wantsJump } from '../moves'
+import { blockName, keyDir, wantsJump } from '../moves'
 import * as read from '../read'
 import * as tools from '../tools'
 import * as totemMod from '../totem'
 import { hasEffect, onFire, stepSafe } from './body'
 import { findItem } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
+import { escapeBurn, lavaExit } from './lava-exit'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 
 // Ямы и опасности рядом, паутина на нём, перезарядка, успокоился ли он.
@@ -19,7 +20,8 @@ export function terrainTurn (ctx: DuelCtx, turn: TurnFrame) {
     ctx.myPit = hazards.pitTrap(bot, me)
     ctx.theirPit = dy < -1.5 ? hazards.pitTrap(bot, ctx.entity.position) : null
     ctx.nearFoe = hazards.hazardsNear(bot, ctx.entity.position, 3)
-    ctx.nearMe = hazards.hazardsNear(bot, me, 2)
+    // 3 бл.: серия ударов отбрасывает до 3 (лава вровень с полом — edgeTurn «не стою спиной к лаве»).
+    ctx.nearMe = hazards.hazardsNear(bot, me, process.env.ND_LAVA_BEHIND !== '0' ? 3 : 2)
   }
   turn.inWeb = blockName(bot, ctx.entity.position.floored()) === 'cobweb' ||
     blockName(bot, ctx.entity.position.floored().offset(0, 1, 0)) === 'cobweb'
@@ -134,9 +136,11 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
 // Огонь и лава под ногами, бег к воде.
 export async function fireTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, ctl, holdWeapon, pathTo, routeInputs, scoop, set, useOnGroundAt, used } = ctx
-  const { me, meInWeb, webSafe } = turn
+  const { me, meInWeb, webSafe, r } = turn
   const water = findItem(bot, i => i.name === 'water_bucket')
-  if (water && onFire(bot) && !meInWeb && !bot.entity.isInWater) {
+  // Вплотную (его меч в 4 бл.) — не выливать: горение снимает 1 в секунду, а вода, которую не успел забрать под его ударами,
+  // держит в узкой комнате (игра пользователя 22.10: «вода мешает им убегать — забиваю»).
+  if (water && onFire(bot) && !meInWeb && !bot.entity.isInWater && !(ctx.prof.player && r <= 4)) {
     const cell = me.floored()
     await useOnGroundAt(water, cell, 'вода: потушился')
     await ctx.sleep(250)
@@ -146,28 +150,16 @@ export async function fireTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
   const feetName = blockName(bot, me.floored())
   if (/^(lava|fire|soul_fire)$/.test(feetName) && (!ctx.failedOutOfFire || ctx.failedOutOfFire.inputs !== routeInputs())) {
-    const cell = me.floored()
-    let best = null
-    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
-      const c = cell.offset(x, 0, z)
-      const n = blockName(bot, c)
-      const head = blockName(bot, c.offset(0, 1, 0))
-      if (!(n === 'air' || n === 'cave_air') || !(head === 'air' || head === 'cave_air')) continue
-      if (!solid(bot, c.offset(0, -1, 0)) || /lava|fire|magma/.test(blockName(bot, c.offset(0, -1, 0)) || '')) continue
-      const away = Math.hypot(c.x + 0.5 - ctx.entity.position.x, c.z + 0.5 - ctx.entity.position.z)
-      if (!best || away > best.away) best = { c, away }
-    }
-    if (best) {
+    // Ближайшая клетка поля (на уровне ног или на блок выше — край ямы вровень с полом), до 3 бл.; не останавливаться на
+    // кольце магмы (lava-exit: escapeBurn — пока под ногами горит).
+    if (lavaExit(bot, me, ctx.entity.position)) {
       ctx.aim = 'free'
-      await bot.lookAt(best.c.offset(0.5, 1, 0.5), true).catch(() => {})
       clear()
-      set('forward', true); set('jump', true); set('sprint', true)
-      const t0 = gameClock.now()
-      while (gameClock.now() - t0 < 500 && /^(lava|fire|soul_fire)$/.test(blockName(bot, bot.entity.position.floored())) && !ctl.aborted) await ctx.sleep(TICK_MS)
+      const r = await escapeBurn(bot, { limitMs: 1500, foe: ctx.entity.position, aborted: () => ctl.aborted, sleep: ms => ctx.sleep(ms), now: () => gameClock.now() })
       clear()
       ctx.aim = 'target'
-      ctx.failedOutOfFire = /^(lava|fire|soul_fire)$/.test(blockName(bot, bot.entity.position.floored())) ? { inputs: routeInputs(), why: 'hazard_not_left' } : null
-      used(feetName === 'lava' ? 'выпрыгнул из лавы' : 'вышел из огня')
+      ctx.failedOutOfFire = r.ok ? null : { inputs: routeInputs(), why: 'hazard_not_left' }
+      used(feetName === 'lava' ? `выпрыгнул из лавы (${r.ms} мс${r.ok ? '' : ', не вышел'})` : 'вышел из огня')
       return NEXT
     }
   }

@@ -47,14 +47,15 @@ export interface DuelCtx {
   failedStandoff: any; failedUnblock: any; failedSky: any; failedSmash: any; failedBoom: any;
   failedBoomDefense: any; failedCrystal: any; failedPearlResponse: any; failedChorus: any; failedDress: any;
   failedStormCover: any; failedArrowRun: any; failedCutWeb: any; failedHisWeb: any; failedOutOfFire: any;
-  failedToWater: any; failedBreakUnder: any; failedSiege: any; failedWindPush: any; failedSpearCharge: any;
+  failedToWater: any; failedBreakUnder: any; failedSiege: any; failedWindPush: any; failedSpearCharge: any; spearBlockedAt?: number | null; spearOffUntil?: number;
   failedHealSpace: any; failedBow: any; failedXbow: any; failedAirBow: any; failedAirXbow: any; shotInputs: any;
   exhaustedPunch: any; windInputs: any; blastRetreat: any; falls: any; edgeTally: any; failedPitExit: any;
   climbOut: any; failedPitLava: any; lavaIntoPit: any; bucketLanding: any; useOnGroundAt: any; scoop: any;
   TOWER_SAFE_DRAW_MS: any; towerShield: any; pendingLava: any; pendingWater: any; hazardOnLine: any;
   unblockPath: any; digWatch: any; punishable: any; eatHeld: any; consumeItem: any; drink: any; escapePearl: any;
-  releaseFightItems: any; strategicRequest: any; finish: any; planText: any; planVerdict: any; replanAt: any;
+  releaseFightItems: any; strategicRequest: any; finish: any; crowd: any; throwWhy: any; targetHurtBy: any; strikeSlotAt: any; strikeSlot: any; planText: any; planVerdict: any; replanAt: any;
   retarget: any; maceChain: any; seesNow: any; buffUp: any; splashFirst: any; spearChargeFar: any; sleep: any;
+  glideChase: any;
 }
 
 export interface TurnFrame {

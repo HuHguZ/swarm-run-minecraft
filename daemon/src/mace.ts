@@ -47,6 +47,6 @@ export { install, fireWind, ensureHotbar, hotbarIndex, windReady, shieldAtUs, sl
 export { headroom, landing, burnAt, fallCost, AIR_KEYS, NO_KEYS } from './mace/world'
 export { track } from './mace/track'
 export { descend } from './mace/descend'
-export { smashPlan, windSmash, fallSmashReady } from './mace/smash'
+export { smashPlan, smashCheck, windSmash, fallSmashReady } from './mace/smash'
 export { knockOff, pushPlan, windPush } from './mace/push'
 export { defend } from './mace/defend'

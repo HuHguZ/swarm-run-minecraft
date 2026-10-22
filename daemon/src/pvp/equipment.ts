@@ -145,33 +145,47 @@ const leadFn = (frac) => (t) => {
     return new ctx.Vec3(p.x, y + (ctx.entity.height || 1.8) * frac, p.z)
   }
 
-const reachable = (item) => {
+// frac — куда в нём целить по высоте (0 — ноги: зелье до середины тела долетает лишь на ~4.6 бл., до ног — на ~5.5;
+// облако с земли у его ног бьёт так же — толпа, turn-crowd).
+// lead — своё упреждение fn(тики) → точка (толпа: ход по своим наблюдениям; свежий трекер цели после смены цели
+// упреждает мимо — L5c/L5k: 70 из 80 отказов «не долетит» при «долетит» по кадру толпы).
+const reachable = (item, frac = 0.5, lead = null) => {
     const k = ctx.throwMod.kindOf(item.name)
     if (!k) return false
     const from = ctx.bot.entity.position.offset(0, ctx.EYE - 0.1, 0)
-    return !!ctx.throwMod.aim(from, ctx.leadFn(0.5), k)
+    return !!ctx.throwMod.aim(from, lead || ctx.leadFn(frac), k)
   }
 
-const throwAt = async (item, what, { minLand = 4.5 }: any = {}) => {
+// clear — зазор рамок до облака (4 — облако не задевает меня; толпа для вреда II при хп ≥ 10 — 3.4: край облака по мне).
+const throwAt = async (item, what, { minLand = 4.5, frac = 0.5, lead = null, clear = 4 }: any = {}) => {
     const previousClearance = throws.get(item.name + ':' + (item.componentMap?.get('potion_contents')?.data?.potionId ?? '') + ':' + ctx.entity.id)?.refusal === 'splash_clearance'
     if (previousClearance && /potion/.test(item.name)) {
       const mine = ctx.pick.hitboxOf(ctx.bot, ctx.bot.entity), target = ctx.pick.hitboxOf(ctx.bot, ctx.entity)
       const gap = Math.hypot(...['x', 'y', 'z'].map(a => Math.max(0, mine.lo[a] - target.hi[a] - .425, target.lo[a] - mine.hi[a] - .425)))
-      if (gap < 4) return false
+      if (gap < clear) { ctx.throwWhy = 'прошлый отказ: облако легло бы на меня'; return false }
     }
     const key = item.name + ':' + (item.componentMap?.get('potion_contents')?.data?.potionId ?? '') + ':' + ctx.entity.id
     const inputs = line() + '|' + stack(item) + '|' + minLand
     const previous = throws.get(key)
-    if (!itemReady(item) || previous?.sent && !previous.resolved || previous?.inputs === inputs && !previous.sent && previous.owner === owner()) return false
-    if (!ctx.reachable(item)) return false
-    if (!(await ctx.holdItem(item))) return false
+    // Почему не бросил — в ctx.throwWhy (толпа пишет в трассу).
+    if (!itemReady(item)) { ctx.throwWhy = 'перезарядка предмета'; return false }
+    if (previous?.sent && !previous.resolved) { ctx.throwWhy = 'прошлое такое же ещё летит'; return false }
+    if (previous?.inputs === inputs && !previous.sent && previous.owner === owner()) { ctx.throwWhy = 'тот же отказ: ' + (previous.refusal || previous.why); return false }
+    if (!ctx.reachable(item, frac, lead)) { ctx.throwWhy = 'не долетит'; return false }
+    // Вред — по окнам неуязвимости (strike-order.harmWait): облако ложится после окна от последнего попадания по нему.
+    if (ctx.targetHurtAt && /potion/.test(item.name) && /harming$/.test((require('./potions') as typeof import('./potions')).potionOf(item) || '')) {
+      const flight = ctx.throwMod.aim?.(ctx.bot.entity.position.offset(0, ctx.EYE - 0.1, 0), lead || ctx.leadFn(frac), ctx.throwMod.kindOf?.(item.name))?.ticks ?? 0
+      const wait = (require('./strike-order') as typeof import('./strike-order')).harmWait(ctx.gameClock?.now() ?? 0, ctx.targetHurtAt, flight)
+      if (wait > 0) { ctx.throwWhy = `окно неуязвимости: вред лёг бы в него (ещё ${wait} мс)`; return false }
+    }
+    if (!(await ctx.holdItem(item))) { ctx.throwWhy = 'не взял в руку'; return false }
     ctx.aim = 'free'
     const attempt: any = { inputs, owner: owner(), why: 'awaiting_projectile', sent: true, id: null,
       name: item.name, target: ctx.entity.position.clone(), started: ctx.gameClock?.now() ?? 0 }
     throws.set(key, attempt)
     let r = null
     try {
-      r = await ctx.throwMod.throwAt(ctx.bot, ctx.leadFn(0.5), {
+      r = await ctx.throwMod.throwAt(ctx.bot, lead || ctx.leadFn(frac), {
         item: ctx.bot.heldItem,
         onAim: (res) => {
           const at = res.land && res.land.at
@@ -183,8 +197,8 @@ const throwAt = async (item, what, { minLand = 4.5 }: any = {}) => {
           // моей рамке — не бросаю.
           const mine = ctx.pick.hitboxOf(ctx.bot, ctx.bot.entity)
           const gap = (box, pad) => Math.hypot(...['x', 'y', 'z'].map(a => Math.max(0, mine.lo[a] - box.hi[a] - pad, box.lo[a] - mine.hi[a] - pad)))
-          if (/potion/.test(item.name) && ctx.entity && ctx.entity.position && gap(ctx.pick.hitboxOf(ctx.bot, ctx.entity), 0.3 + 0.125) < 4) { attempt.refusal = 'splash_clearance'; return false }
-          if (/potion/.test(item.name) && at && gap({ lo: at, hi: at }, 0.125) < 4) { attempt.refusal = 'landing_clearance'; return false }
+          if (/potion/.test(item.name) && ctx.entity && ctx.entity.position && gap(ctx.pick.hitboxOf(ctx.bot, ctx.entity), 0.3 + 0.125) < clear) { attempt.refusal = 'splash_clearance'; return false }
+          if (/potion/.test(item.name) && at && gap({ lo: at, hi: at }, 0.125) < clear) { attempt.refusal = 'landing_clearance'; return false }
           if (!at) return true
           if (at.y < me0.y - 2.3) return true
           return Math.hypot(at.x - me0.x, at.z - me0.z) >= minLand
@@ -197,6 +211,7 @@ const throwAt = async (item, what, { minLand = 4.5 }: any = {}) => {
     attempt.land = r?.land
     attempt.ticks = r?.ticks
     if (r && r.thrown) { ctx.used(what); return true }
+    ctx.throwWhy = attempt.refusal || attempt.why
     await ctx.holdWeapon()
     return false
   }

@@ -19,7 +19,7 @@ import { type DuelCtx } from './turn'
 export function installEvents (ctx: DuelCtx) {
   const { attackers, bot, bowWatch, ctl, dead, mobHits, noteExchange, session, st, swatted, tt, used, vision } = ctx
   const onHurt = ctx.onHurt = (victim, source) => {
-    if (victim?.id === ctx.entity.id) ctx.targetHurtAt = gameClock.now()
+    if (victim?.id === ctx.entity.id) { ctx.targetHurtAt = gameClock.now(); ctx.targetHurtBy = source ? (source.id === bot.entity?.id ? bot.username : source.username || null) : null; ctx.strikeSlotAt = 0 }
     if (source && bot.entity && ((victim?.id === ctx.entity.id && source.id === bot.entity.id) || (victim === bot.entity && source.id === ctx.entity.id))) noteExchange()
     if (victim?.id === ctx.entity.id && source === bot.entity) {
       st.landed++
@@ -89,7 +89,7 @@ export function installEvents (ctx: DuelCtx) {
   ctx.mobCtl = { get aborted () { return ctl.aborted || !!mobThreat() }, onAbort: ctl.onAbort, abort: () => ctl.abort() }
   bot.on('entityHurt', onHurt)
   bot.on('entityDead', onDead)
-  const duo = ctx.duo = duoMod.create(bot, { target: () => ctx.entity, attackers, dead, used, tt, observe: vision.observe, holdWeapon: () => ctx.holdWeapon(), setAim: (m) => { ctx.aim = m }, potionOf })
+  const duo = ctx.duo = duoMod.create(bot, { target: () => ctx.entity, attackers, dead, used, tt, observe: vision.observe, holdWeapon: () => ctx.holdWeapon(), setAim: (m) => { ctx.aim = m }, potionOf, roundScope: ctx.opts.roundScope })
   ctl.onAbort.push(() => duo.close())
   const util = ctx.util = utilityMod.create(bot, { used, tt })
   ctl.onAbort.push(() => util.close())

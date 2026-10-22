@@ -5,9 +5,11 @@ import * as read from '../read'
 import * as spear from '../spear'
 import * as throwMod from '../throw'
 import { healthOf, stepSafe } from './body'
+import { runLength } from '../flee'
 import { foodAnimals, foodIgnitionAllowed } from './food-fire'
 import { findItem, potionOf, potionRole } from './potions'
 import { FAR, HIT_REACH, TICK_MS } from './rules'
+import { strikeWait } from './strike-order'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 
 // Летун: шаг вбок, не гнаться.
@@ -78,6 +80,18 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
       await ctx.sleep(TICK_MS)
       return NEXT
     }
+    // Видно его, и до него ровная дорога — бежать прямо, без A*: GoalFollow ищет путь с нуля, как только цель ушла на 2 бл.
+    // (человек со Скоростью — каждые 3–4 тика), и пока поиск идёт, бот стоит (стенд бота-противника 22.10: поиск дольше 1 с
+    // у трети походов). Обрыв, лава, стена, ступень выше блока — как раньше, путём.
+    const to = ctx.entity.position, me = bot.entity.position, flat = Math.hypot(to.x - me.x, to.z - me.z)
+    if (seesBody && flat < 32 && Math.abs(to.y - me.y) < 1.5 && runLength(bot, { x: (to.x - me.x) / flat, z: (to.z - me.z) / flat }, Math.ceil(flat), 1, ctx.AR).len >= Math.floor(flat) - 1) {
+      if (ctx.pathing) { pathTo(false); ctx.pathing = false }
+      set('forward', stepSafe(bot, f)); set('back', false); set('left', false); set('right', false)
+      set('sprint', (bot.food ?? 20) > 6)
+      set('jump', wantsJump(bot, f))
+      await ctx.sleep(TICK_MS)
+      return NEXT
+    }
     if (!ctx.pathing && (ctx.failedReposition?.inputs === routeInputs() || ctx.failedFlank?.inputs === routeInputs())) {
       strafeStep(); clear()
       set(ctx.strafeKey, stepSafe(bot, keyDir(bot, ctx.strafeKey)))
@@ -96,7 +110,8 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function debuffTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, duo, fireTerrainSafe, foeGrounded, foodFire, holdWeapon, opts, pendingLava, placeUnder, session, throwAt, useOnGroundAt } = ctx
   const { d, dy, hp, inWeb, r, seesBody } = turn
-  if ((d > 2.5 || ctx.theirPit) && d < 7) {
+  // Толпа: зелья бросает turn-crowd (в кучу, к ногам, с 5.1–5.5 бл.); здесь — в одного, и каждая неудача — смена предмета.
+  if ((d > 2.5 || ctx.theirPit) && d < 7 && !ctx.crowd?.on) {
     const effNow = read.effectsOf(bot, ctx.entity)
     const duoOn = ctx.prof.player && duo.active()
     const fits = i => {
@@ -158,7 +173,7 @@ export async function debuffTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, ctl, foe, gate, guard, holdItem, holdWeapon, maceNow, mf, ready, rest, routeInputs, set, st, strafeStep, used, vision } = ctx
   const { blocking, d, me, meInWeb, now, r, seesBody, theyUp } = turn
-  const spearIt = ctx.prof.player && !theyUp && !ctx.perch && !ctx.fort && !meInWeb ? spear.spearOf(bot) : null
+  const spearIt = ctx.prof.player && !theyUp && !ctx.perch && !ctx.fort && !meInWeb && !(ctx.spearOffUntil > now) ? spear.spearOf(bot) : null
   let spearTurn = !!spearIt
   if (spearIt) {
     const sName = spearIt.item.name
@@ -227,7 +242,7 @@ export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
       await holdWeapon()
       return NEXT
     }
-    if (sj.ok && sReady === 0 && ctx.targetHurtAt + 500 <= now) {
+    if (sj.ok && sReady === 0 && strikeWait(now, ctx.targetHurtAt, ctx.strikeSlot || 0) === 0) {
       if (guard) await guard.raise(false)
       ctx.aim = 'free'
       const j = await spear.jab(bot, ctx.entity)
@@ -236,6 +251,18 @@ export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
       await ctx.sleep(TICK_MS)
       return NEXT
     }
+    // Укол не проходит (край ямы или блок между нами — он ниже): держать его копьём на 3.4–4.5 бессмысленно — бот стоял над ямой
+    // по 6–15 с без удара (стенд бота-противника 22.10). Секунда без пути укола — копьё в сторону на 5 с: ближе другим оружием
+    // (подъём, спуск, столб — у остальных веток).
+    if (!sj.ok && !sj.far && !sj.close) {
+      ctx.spearBlockedAt ??= now
+      if (now - ctx.spearBlockedAt > 1000) {
+        ctx.spearOffUntil = now + 5000; ctx.spearBlockedAt = null
+        if (bestWeapon(bot)) await holdWeapon()
+        used(`копьё в сторону: укол не проходит (${sj.why || '?'})`)
+        return NEXT
+      }
+    } else ctx.spearBlockedAt = null
     const wantR = sReady < 250 ? 3.8 : 4.2
     const fwdS = r > wantR && stepSafe(bot, keyDir(bot, 'forward'))
     const backS = r < 3.4 && stepSafe(bot, keyDir(bot, 'back'))

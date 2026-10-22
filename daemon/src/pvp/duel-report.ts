@@ -118,6 +118,7 @@ export function installReport (ctx: DuelCtx) {
       xbow: st.xbow && Object.keys(st.xbow).length ? st.xbow : undefined,
       rod: util.stats && (util.stats.rod || util.stats.hookedOnMe || util.stats.pulledMe) ? { casts: util.stats.rod, hooked: util.stats.rodHooked, hookedOnMe: util.stats.hookedOnMe, counter: util.stats.rodCounter, pulledMe: util.stats.pulledMe } : undefined,
       mace: mc.report(),
+      crowd: ctx.crowd && ctx.crowd.st.ticks ? ctx.crowd.st : undefined,
       elytra: sky.report(),
       pearlResponse: pearlResponse.report(),
       recoveryNodes: st.recoveryNodes,

@@ -42,7 +42,13 @@ function create (opts) {
   H.driving = false
   H.lease = 0
   H.posture = null // { budgetUntil, act }
-  H.engaged = false
+  // Стойка перед боем — раз на встречу, а не на каждый вызов боя: рой зовёт бой заново каждые 3–12 с и после каждого уворота,
+  // и бот снова по 3 с красовался в 5 бл. от человека — стоял под его мечом (стенд бота-противника 22.10: стойка 3000 мс из
+  // 9050 мс боя). Встреча — тот же противник в последние 30 игровых с (pre продлевает её, пока бой идёт).
+  H.foeKey = me0 ? String(me0.username || me0.id) : null
+  const met = bot._ndShowMet || (bot._ndShowMet = new Map())
+  H.engaged = !!H.foeKey && gameClock.now() - (met.get(H.foeKey) ?? -Infinity) < 30000
+  if (H.foeKey) met.set(H.foeKey, gameClock.now())
   H.lullRolled = false
   H.lastTick = gameClock.now()
   H.rushSwings = 0

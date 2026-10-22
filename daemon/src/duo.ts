@@ -60,8 +60,8 @@ function unit (x, z) { const n = Math.hypot(x, z) || 1; return { x: x / n, z: z 
 function angleOf (a, b) { return Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.z * b.z))) }
 const BAD = /lava|fire|magma|cactus|campfire|sweet_berry|powder_snow|cobweb/
 
-function create (bot, { target, attackers = new Map(), dead = new Set(), used = () => {}, tt = null, clock = null, observe = e => e, holdWeapon = async () => {}, setAim = () => {}, potionOf = () => null }: any = {}) {
-  const ds = duoState(bot, { target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf })
+function create (bot, { target, attackers = new Map(), dead = new Set(), used = () => {}, tt = null, clock = null, observe = e => e, holdWeapon = async () => {}, setAim = () => {}, potionOf = () => null, roundScope = null }: any = {}) {
+  const ds = duoState(bot, { target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf, roundScope })
   duoListen(ds)
   duoKnow(ds)
   const { st, foes, rest } = ds
@@ -78,6 +78,9 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
     // Бросок не состоялся (облако легло бы на нас, нечем) — не пробовать 1.5 с.
     burstFailed: (kind) => rest(kind === 'harm' ? 'burstHarm' : 'burstSmash', 1500),
     secondThreat: () => duoSecondThreat(ds),
+    // Оценка хп (с поглощением) и щит к нам — толпе (pvp/turn-crowd): те же трекеры, что у двоих.
+    ehp: (e) => ds.ehpOf(e),
+    shieldAtUs: (e) => ds.shieldAtUs(e),
     focusId: () => (ds.focus ? ds.focus.id : null),
     stats: st,
     close: () => duoClose(ds)
@@ -87,7 +90,7 @@ function create (bot, { target, attackers = new Map(), dead = new Set(), used = 
 // Бой одного против двоих (прежние параметры, let и const замыкания create): память обидчиков между кусками боя,
 // счёт st, паузы приёмов (ready/rest), добиваемый (focus) и разворот на второго (turned), клетка для боя (spot).
 interface DuoState {
-  bot: any; target: () => any; attackers: Map<any, any>; dead: Set<any>; used: (s: string) => void; tt: any; observe: (e: any) => any
+  bot: any; target: () => any; attackers: Map<any, any>; dead: Set<any>; used: (s: string) => void; tt: any; observe: (e: any) => any; roundScope?: string | null
   holdWeapon: () => Promise<any>; setAim: (mode: string) => void; potionOf: (item: any) => any
   mem: any; st: any; cd: any; ready: (k: string) => boolean; rest: (k: string, ms: number) => void; note: (what: string, ms?: number) => void
   lastSwitch: number; prevTarget: any
@@ -100,7 +103,7 @@ interface DuoState {
   shieldAtUs?: (e: any) => boolean; pushable?: (e: any) => boolean; score?: (x: any, hasAxe: any) => number
 }
 
-function duoState (bot, { target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf }: any): DuoState {
+function duoState (bot, { target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf, roundScope }: any): DuoState {
   if (!bot._ndDuo) bot._ndDuo = { seen: new Map() }
   const mem = bot._ndDuo
   const st: any = {
@@ -113,7 +116,7 @@ function duoState (bot, { target, attackers, dead, used, tt, observe, holdWeapon
   const rest = (k, ms) => { cd[k] = gameClock.now() + ms }
   // Одна надпись на приём раз в ms — чтобы лог читался, а счёт шёл.
   const note = (what, ms = 3000) => { if (ready('note:' + what)) { rest('note:' + what, ms); used(what) } }
-  const ds: DuoState = { bot, target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf, mem, st, cd, ready, rest, note,
+  const ds: DuoState = { bot, target, attackers, dead, used, tt, observe, holdWeapon, setAim, potionOf, roundScope, mem, st, cd, ready, rest, note,
     lastSwitch: 0, prevTarget: null, focus: null, turned: null, focusStats: null, spot: null, spotAt: 0, failedResets: 0, closed: false,
     hpLast: bot.health ?? 20, two: false, burstStats: null, lookDead: null, foes: null }
   // Фокус до смерти (2026-09-26, try-duo 8 раундов: жил дольше и снимал
@@ -209,6 +212,9 @@ function duoKnow (ds: DuoState) {
   const hpTrackers = new Map()
   const ehpOf = (e) => {
     if (!co.isPlayer(e)) { const hp = read.healthRaw(bot, e); return (hp == null ? 20 : hp) + read.absorptionOf(bot, e) }
+    // Знание раунда (roundScope арены): мои попадания по нему за прошлые куски боя по 3 с — трекер цели боя пишет их в
+    // память раунда; свой трекер здесь начинал бы с 20 каждый кусок (try-crowd c5c: «добиваемый 20 хп» после 3 ударов).
+    if (ds.roundScope && e.username) { const s = co.readFoeEstimate(bot, { roundScope: ds.roundScope, target: e.username }); if (s) return s.mean }
     let t = hpTrackers.get(e.id)
     if (!t || t.entity !== e) { if (t) t.stop(); t = co.trackFoe(bot, e, { honest: true, visible: e => observe(e)?._ndVisible ?? true }); hpTrackers.set(e.id, t) }
     return t.hp.snapshot().mean

@@ -370,11 +370,27 @@ test('a failed smash does not repeat on the same launch; a changed available tra
     maceChain: { choose: () => null }, failedSmash: null, windInputs: (native = true) => trajectory + (native ? nativeReady : ''), guard: null,
     bot: { entity: { position: new Vec3(0, 0, 0) } }, clear() {}, aim: 'target', st: {}, mc: { st: {} },
     track: { vel: () => new Vec3(0, 0, 0) }, telemetryHp: () => null, used() {}, holdWeapon: async () => {},
-    process: { env: {} }, console: { log() {} }, ctl: { aborted: false } }
+    process: { env: {} }, console: { log() {} }, ctl: { aborted: false }, looksAtBody: () => true }
   const { smashTurn } = parts(ctx, ['smashTurn'])
   ctx.poll = async () => { await smashTurn(ctx, ctx) }
   await ctx.poll(); ctx.now += 60000; nativeReady = true; await ctx.poll(); assert.equal(attempts, 1)
   trajectory = 'new safe landing'; await ctx.poll(); assert.equal(attempts, 2)
+})
+
+test('his swing and his bow at another bot do not cancel my mace launch; at me they do', async () => {
+  let attempts = 0, atMe = false
+  const ctx: any = { prof: { player: true }, perch: null, fort: null, meInWeb: false, hp: 20, pendingLava: [],
+    smashSetup: false, ready: () => true, rest() {}, entity: { id: 2, position: new Vec3(2, 0, 0), equipment: [{ name: 'netherite_sword' }] },
+    tt: { foes: new Map([[2, { swungAt: 1000 }]]) }, tempo: { PLAYER_REACH: 3.4, swingCooldownMs: () => 625 }, now: 1600, TICK_MS: 50,
+    theirR: 2, theyBow: true, aimedCb: null, duo: { active: () => false }, gate: () => true,
+    mace: { smashPlan: () => ({}), windSmash: async () => { attempts++; return { hit: true, launched: true } } },
+    maceChain: { choose: () => null }, failedSmash: null, windInputs: () => 'x', guard: null,
+    bot: { entity: { position: new Vec3(0, 0, 0) } }, clear() {}, aim: 'target', st: {}, mc: { st: {} },
+    track: { vel: () => new Vec3(0, 0, 0) }, telemetryHp: () => null, used() {}, holdWeapon: async () => {},
+    process: { env: {} }, console: { log() {} }, ctl: { aborted: false }, looksAtBody: () => atMe }
+  const { smashTurn } = parts(ctx, ['smashTurn'])
+  atMe = true; await smashTurn(ctx, ctx); assert.equal(attempts, 0, 'his ready swing and drawn bow at me: wait')
+  atMe = false; await smashTurn(ctx, ctx); assert.equal(attempts, 1, 'he swings and aims at another of the crowd: up and smash')
 })
 
 function flankScene() {
