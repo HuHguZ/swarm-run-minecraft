@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
-import { fireToPunch } from '../src/fire-punch'
+import { fireToPunch, aimedAt } from '../src/fire-punch'
 
 function field(fires: number[][], walls: number[][] = [], goal: any = null) {
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`
@@ -24,4 +24,13 @@ test('fire at the feet and on the way to the goal is punched; fire behind or beh
   assert.equal(fireToPunch(field([[3, 64, 0]], [[2, 64, 0], [2, 65, 0]], { x: 10, y: 64, z: 0 })), null, 'behind a wall: the crosshair does not reach it')
   const b = field([[1, 64, 0]]) as any; b.targetDigBlock = {}
   assert.equal(fireToPunch(b), null, 'already digging something')
+})
+
+test('the punch goes only while the crosshair is still on the fire: the duel turning the head to the foe cancels it', () => {
+  const b = field([[1, 64, 0]]) as any
+  const eye = new Vec3(0.5, 64 + 1.62, 0.5), at = new Vec3(1.5, 64.03, 0.5), d = at.minus(eye)
+  b.entity.yaw = Math.atan2(-d.x, -d.z); b.entity.pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+  assert.ok(aimedAt(b, new Vec3(1, 64, 0)), 'looking at the fire plate')
+  b.entity.pitch = 0
+  assert.ok(!aimedAt(b, new Vec3(1, 64, 0)), 'looking at the foe at eye level: no punch')
 })

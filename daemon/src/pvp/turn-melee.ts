@@ -34,6 +34,14 @@ function strikeSlotOf (ctx: DuelCtx, now: number) {
   return (ctx.strikeSlot = strikeSlot(order, ctx.bot.username, ctx.entity.username || '', present, ctx.targetHurtBy))
 }
 
+// Топор по поднятому на меня щиту — сразу, без заряда меча и окна неуязвимости: любой удар топором выключает щит на 5 с
+// (сила удара не важна), а пока жду заряд, удар булавы своего упрётся в щит (пользователь 22.10: «паутина под него, топор
+// выбивает щит, сразу удар булавой с высоты»). Не в окне подъёма (первые 4 тика щит не держит — туда бьёт меч), не со спины
+// (щит держит переднюю полусферу) и не по уже выбитому.
+export function axeTapNow ({ axe, blocking, shieldFresh, facingMe, r, inSight, shieldOffMs = 0 }: { axe: unknown; blocking: boolean; shieldFresh: boolean; facingMe: boolean; r: number; inSight: boolean; shieldOffMs?: number }) {
+  return !!axe && !!blocking && !shieldFresh && facingMe && r <= HIT_REACH && !!inSight && !(shieldOffMs > 300)
+}
+
 // Ближний бой: щит, удар готов ли, вперёд или назад.
 export function meleeIntentTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { after, bot, foe, guard, mf, ready, rest, roll, strafeStep, style, tt, used } = ctx
@@ -45,7 +53,8 @@ export function meleeIntentTurn (ctx: DuelCtx, turn: TurnFrame) {
   if (blocking) ctx.shieldUpAt = now
   else if (ctx.shieldUpAt && !ctx.shieldDownAt) ctx.shieldDownAt = now
   if (blocking) ctx.shieldDownAt = 0
-  const fYaw = ctx.entity.yaw || 0
+  // Щит закрывает то, куда он смотрит (взгляд — голова; тело отстаёт): BlocksAttacks по вектору взгляда.
+  const fYaw = typeof ctx.entity.headYaw === 'number' ? ctx.entity.headYaw : (ctx.entity.yaw || 0)
   const fx = -Math.sin(fYaw); const fz = -Math.cos(fYaw)
   const tx = me.x - ctx.entity.position.x; const tz = me.z - ctx.entity.position.z
   const tn = Math.hypot(tx, tz) || 1
@@ -63,7 +72,8 @@ export function meleeIntentTurn (ctx: DuelCtx, turn: TurnFrame) {
   const race = turn.race = ctx.prof.player && theirR <= tempo.PLAYER_REACH && hisReadyMs <= TICK_MS
   const cdHit = turn.cdHit = race ? mf.clock.leftMs(0.91) : cooldownLeft
   const owMelee = turn.owMelee = guard?.stats?.worn && gameClock.now() >= (bot._ndShieldDisabledUntil || 0) ? owShield.meleeGuard(bot, ctx.entity, fsH?.swungAt || 0, guard.blocking?.() || false) : null
-  turn.canHit = cdHit === 0 && iframes === 0 && r <= HIT_REACH && !intoShield && inSight && owMelee !== true && !ctx.owShot
+  const axeTap = turn.axeTap = axeTapNow({ axe, blocking, shieldFresh, facingMe, r, inSight, shieldOffMs: ctx.prof.player ? foe.shieldOff(ctx.entity) : 0 })
+  turn.canHit = (cdHit === 0 && iframes === 0 || axeTap) && r <= HIT_REACH && !intoShield && inSight && owMelee !== true && !ctx.owShot
   turn.forward = false
   turn.back = false
   turn.strafe = null
@@ -497,13 +507,13 @@ export async function strikeTurn (ctx: DuelCtx, turn: TurnFrame) {
   // В толпе не жду ничьего удара: пока жду одного, бьют остальные.
   const selectWait = ctx.prof.player && !ctx.crowd?.on && race && closing > 0.1 && !turn.pushing && theirR < 3.0 && mf.skill.counter > 0.7 && process.env.ND_HIT_SELECT !== '0' && process.env.ND_HS_WAIT !== '0'
   if (selectWait) { if (!ctx.selectSince) ctx.selectSince = now } else ctx.selectSince = 0
-  const holdForSelect = selectWait && now - ctx.selectSince < 3 * mf.clock.msPerTick
+  const holdForSelect = selectWait && !turn.axeTap && now - ctx.selectSince < 3 * mf.clock.msPerTick
   if (holdForSelect && ready('selectNote')) { rest('selectNote', 4000); used('жду его удара, чтобы ответить (hit-select)') }
   if ((canHit && !holdForSelect) || edgeSpam) {
     const falling = mf.clock.critNow()
     const rising = !bot.entity.onGround && !falling
     const upTicks = rising ? ticksToFall(bot.entity.velocity.y) : 0
-    const critWait = rising && !edgeSpam && (ctx.jumpedForCrit || (ctx.hitKind === 'crit' && CRIT_ANY_RISE)) &&
+    const critWait = rising && !edgeSpam && !turn.axeTap && (ctx.jumpedForCrit || (ctx.hitKind === 'crit' && CRIT_ANY_RISE)) &&
       upTicks <= 7 && !(race && theirR <= 2.6 && upTicks > 2 && r > 2.2) && !bot.entity.isInWater && !meInWeb
     if (critWait && !ctx.jumpedForCrit && ready('pcritNote')) { rest('pcritNote', 4000); used('жду спуска для крита (подбросило)') }
     if (!critWait) {

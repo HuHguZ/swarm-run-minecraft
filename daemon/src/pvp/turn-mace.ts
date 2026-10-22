@@ -141,6 +141,8 @@ export async function smashTurn (ctx: DuelCtx, turn: TurnFrame) {
     if (sp && (!ctx.failedSmash || ctx.failedSmash.inputs !== windInputs(ctx.failedSmash.native))) {
       const first = maceChain.choose(bot.entity.position.y, true)
       if (first) maceChain.onTarget(first)
+      // Связка (22.10): топор своего выбил его щит на 5 с — взлёт и удар в это окно; в журнал — сколько раз так.
+      if ((ctx.foe?.shieldOff?.(ctx.entity) ?? 0) > 300) used('булава: его щит выбит — взлетаю')
       if (guard) await guard.raise(false)
       clear()
       ctx.aim = 'free'

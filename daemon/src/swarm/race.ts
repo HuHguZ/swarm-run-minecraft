@@ -71,10 +71,10 @@ export function strongFew(state: PvpMemory, team: SwarmMember[], enemies: Shared
 // Чем убить сильного, кроме ближнего боя (DeepSeek t7, стенд 21.10: оба убийства чемпиона — булава с падения и сброс в
 // пустоту; удар по незериту с Защитой IV — 0.5–1.3 хп, а Шипы III отвечают каждому): булава с зарядом ветра (взлёт и удар
 // с падения ~25 хп), зелья вреда (магия мимо брони, 4.3 хп за вред II), заряды ветра (сброс у края).
-export function killMeans(m: SwarmMember): { smash: boolean; harm: number; wind: number } {
+export function killMeans(m: SwarmMember): { smash: boolean; harm: number; wind: number; axe: boolean } {
   const wind = count(m.inventory, 'wind_charge')
   const harm = Object.entries(m.potions || {}).filter(([k]) => /^splash_(strong_)?harming$/.test(k)).reduce((s, [, n]) => s + (Number(n) || 0), 0)
-  return { smash: count(m.inventory, 'mace') > 0 && wind > 0, harm, wind }
+  return { smash: count(m.inventory, 'mace') > 0 && wind > 0, harm, wind, axe: Object.keys(m.inventory || {}).some(n => /_axe$/.test(n) && count(m.inventory, n) > 0) }
 }
 // Ближний бой по одной цели: окно неуязвимости (10 тиков) пропускает два удара в секунду на всю команду, и двух мечей
 // (зарядка 12 тиков) хватает занять каждое окно; третий и дальше урона не добавляют, а платят шипами и его мечом

@@ -21,11 +21,14 @@ export function assignFighters(S: PvpPlan): void {
   let searchers = 0
   // Сколько бьют в упор каждую цель (без булавы и зелий вреда) — для MELEE_CAP против сильного.
   const meleeOn = new Map<string, number>()
+  // Связка против сильного (пользователь 22.10: «паутина под него, топор выбивает щит, сразу удар булавой с высоты»): есть
+  // свой с булавой и зарядом — топоры в упор без предела MELEE_CAP: щит, поднятый против булавы, выбивают на 5 с.
+  const comboMace = !!S.state.strongFew && S.team.some(a => killMeans(a).smash)
   const runner = (e: SharedEnemy) => { const v = e.velocity || { x: 0, y: 0, z: 0 }, sp = Math.hypot(v.x, v.z), dx = e.position.x - S.center.x, dz = e.position.z - S.center.z, d = Math.hypot(dx, dz) || 1
     return sp > .15 && (v.x * dx + v.z * dz) / (sp * d) > .5 }
   const { board, team, enemies, plan, options, aggressive, doctrine, committed, center, forward, lineDuty, spots, put, assault, regroup, losing, prey, hunting, untouchable, loads, meanStrength, sectorOf, ringAt, shoveOf, gatherers, lastEnemy, diggers, ladderers, campers, hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } = S
   for (const m of team.filter(m => !plan.has(m.id)).sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
-    if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), blocks: (s as any).blocks, stands: (s as any).stands, target: foe.id, enemyPosition: foe.position, reason: 'копаю яму-ловушку' }, s); continue }
+    if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), blocks: (s as any).blocks, stands: (s as any).stands, drop: (s as any).drop, target: foe.id, enemyPosition: foe.position, reason: (s as any).drop === Infinity ? 'подкоп: под ним пустота' : 'копаю яму-ловушку' }, s); continue }
     if (ladderers.has(m.id)) { const s = ladderers.get(m.id)!; put(m, 'goto', { ladder: s.key, reason: 'ставлю лестницу для своих' }, { x: s.x, y: s.y, z: s.z }); continue }
     if (campers.has(m.id)) { put(m, 'goto', { hold: 'ambush', camp: cellKey(campers.get(m.id)!), reason: 'засада в углу' }, campers.get(m.id)!); continue }
     // Цель держится, пока жива и видна, а новая не дешевле с запасом (4 — как 4 бл. пути): иначе цель менялась почти
@@ -76,7 +79,7 @@ export function assignFighters(S: PvpPlan): void {
     // бьёт иначе — булава с взлёта, зелья вреда; у края — все, кто достаёт. Остальные — как переигранные: лут, укрытие, к своим
     // (вплотную — бой). Стенд 21.10: оба убийства чемпиона — булава с падения и сброс; ближним боем — ни одного.
     const means = aggressive && S.state.strongFew ? killMeans(m) : null
-    const melee = !!means && !means.smash && !means.harm
+    const melee = !!means && !means.smash && !means.harm && !(means.axe && comboMace)
     const surplus = melee && !deadly && !(foe === prey && hunting(m)) && (meleeOn.get(foe.id) || 0) >= MELEE_CAP
     if (aggressive && !(foe === prey && hunting(m)) && (weak(m) || surplus || outclassed(m, [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]) || regroup && !assault)) {
       const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0], gap = distance(m.position, near.position)
@@ -158,7 +161,8 @@ export function assignFighters(S: PvpPlan): void {
     // у кого он есть (иначе — только «волна» с запасом зарядов и без булавы).
     const shove = !search && deadly
     const slot = (aggressive || finishing || shove) && !search ? sectorOf(m, foe) : undefined
-    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > 0 && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true } : {}), ...(finishing ? { finishing: true } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
+    // Булавник толкает ветром только сверх двух зарядов: они — на взлёт (стенд 22.10: «нет заряда» — 59 отказов за 3 раунда).
+    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > (count(m.inventory, 'mace') ? 2 : 0) && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true } : {}), ...(finishing ? { finishing: true } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
     loads.set(foe.id, (loads.get(foe.id) || 0) + m.strength / meanStrength)
     if (melee) meleeOn.set(foe.id, (meleeOn.get(foe.id) || 0) + 1)
   }
@@ -170,7 +174,7 @@ export function commitPlan(S: PvpPlan): Map<string, SwarmTask> {
   for (const old of previous) if (![...plan.values()].some(t => t.id === old.id)) board.cancel(old.id)
   for (const [id, task] of plan) {
     const old = previous.find(t => t.id === task.id)
-    const unchanged = old?.claim && old.kind === task.kind && ['target', 'ally', 'cover', 'doctrine', 'role', 'committed', 'search', 'reserve', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'gather', 'slot', 'dig', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash'].every(key => old.data?.[key] === task.data?.[key])
+    const unchanged = old?.claim && old.kind === task.kind && ['target', 'ally', 'cover', 'doctrine', 'role', 'committed', 'search', 'reserve', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'gather', 'slot', 'dig', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe'].every(key => old.data?.[key] === task.data?.[key])
     if (unchanged) { plan.set(id, old); continue }
     if (old?.status === 'done') board.cancel(old.id)
     plan.set(id, board.upsert(task))

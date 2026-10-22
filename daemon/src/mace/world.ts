@@ -26,6 +26,13 @@ export function floorTop (bot, pos) {
   } catch { return -Infinity }
 }
 
+// Вот-вот на земле: в вершине прыжка или падает, и до опоры не больше блока — сядет за ~5 тиков (windSmash ждёт землю до
+// 300 мс). Бойцы роя прыгают за критом — стенд 22.10: 66 отказов взлёта «не на земле» за 3 раунда.
+export function landingSoon (bot) {
+  const b = bot.entity
+  return !!b && (!!b.onGround || (b.velocity?.y ?? 1) <= 0.1 && b.position.y - floorTop(bot, b.position) <= 1)
+}
+
 // Стоит ли он на чём-то: mineflayer onGround чужих сущностей не ведёт вовсе
 // (entities.js его не пишет — поле всегда undefined), поэтому по опоре под
 // рамкой (edges.support) и по вертикальной скорости.

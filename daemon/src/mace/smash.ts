@@ -5,7 +5,7 @@ import * as edges from '../edges'
 import * as pick from '../pick'
 import { MACE_BASE, SWAP, KEYS, LAUNCH_BACK, yawTo, smashDamage } from './consts'
 import { densityOf, findItem, shieldAtUs, nextTick, install, offWind, windCount, windReady, ensureHotbar, fireWind, healthOf } from './hands'
-import { burnNear, webOnBody, headroom } from './world'
+import { burnNear, webOnBody, headroom, landingSoon } from './world'
 import { descend } from './descend'
 
 // ---------------------------------------------------------------- удар
@@ -30,7 +30,7 @@ function boxedIn (bot, e) {
 // а отказ молчал).
 export function smashCheck (bot, e, { minRoom = 5 }: any = {}): { plan?: { dh: number; room: number; h: number; expect: number }; why?: string } {
   const b = bot.entity
-  if (!b || !b.onGround || b.isInWater || b.isInLava) return { why: 'не на земле' }
+  if (!b || !landingSoon(bot) || b.isInWater || b.isInLava) return { why: 'не на земле' }
   if (boxedIn(bot, e)) return { why: 'он в коробке' }
   // В паутине всплеск не поднимет (webOnBody ниже, 2026-09-26).
   if (webOnBody(bot)) return { why: 'я в паутине' }

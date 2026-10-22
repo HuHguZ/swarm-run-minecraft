@@ -66,7 +66,7 @@ export interface TurnFrame {
   cooldownLeft: any; webPlan: any; webSafe: any; archer: any; calmHeal: any; canHeal: any; inc: any; aimedCb: any;
   hisCb: any; bolt: any; cbShield: any; punRush: any; punStep: any; punBow: any; meleeDmg: any; blockedLong: any;
   arrowsWeak: any; noMelee: any; bowItem: any; arrowItem: any; sees: any; pillarNeeded: any; bowShield: any;
-  closing: any; smashSetup: any; axe: any; iframes: any; shieldFresh: any; intoShield: any; punish: any;
+  closing: any; smashSetup: any; axe: any; axeTap: any; iframes: any; shieldFresh: any; intoShield: any; punish: any;
   hisHand: any; hisReadyMs: any; race: any; cdHit: any; owMelee: any; canHit: any; forward: any; back: any;
   strafe: any; sprint: any; vulnerable: any; rush: any; pushing: any; edgeHit: any; intoHazard: any; jump: any;
 }

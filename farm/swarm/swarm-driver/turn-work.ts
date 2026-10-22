@@ -32,7 +32,9 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
         }
         const r = detail(reply)
         if (r.ok) { dug++; continue }
-        const stand = !stepped && /occluded|reach/.test(r.why || '') && [...(task.data.stands || [])].sort((a, c) => distance(a, p) - distance(c, p))[0]
+        // Стойка — не вскрытая яма (под землёй за полем пустота: шаг туда — смерть).
+        const open = new Set(holes.map(cellKey))
+        const stand = !stepped && /occluded|reach/.test(r.why || '') && [...(task.data.stands || [])].filter(a => !open.has(cellKey({ x: Math.floor(a.x), y: Math.ceil(a.y) - 1, z: Math.floor(a.z) }))).sort((a, c) => distance(a, p) - distance(c, p))[0]
         if (!stand) { why = r.why || reply.error || reply.status || 'no_receipt'; break }
         stepped = true
         const at = (await b.c.call('status').catch(() => null))?.state?.pos || p
@@ -46,11 +48,11 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     } finally { b.climbing = false }
     const need = (task.data.blocks || [0, 1]).length
     if (dug >= need) {
-      holes.push({ x: s.x, y: s.y, z: s.z, feetY: (s as any).feetY ?? s.y + 1, at: now() })
-      say2(`🕳 ${b.name.replace(/^NeuroFarm/, '')}: яма-ловушка у ${String(task.data.target).replace(/^NeuroFarm/, '')} — толкайте туда!`, 'gold', true)
+      holes.push({ x: s.x, y: s.y, z: s.z, feetY: (s as any).feetY ?? s.y + 1, drop: task.data.drop, at: now() })
+      say2(`🕳 ${b.name.replace(/^NeuroFarm/, '')}: ${task.data.drop === Infinity ? 'подкоп — пустота' : 'яма-ловушка'} у ${String(task.data.target).replace(/^NeuroFarm/, '')} — толкайте туда!`, 'gold', true)
     } else sw.siteFailed(b, 'hole:' + key)
     planned.delete(teamOf(b))
-    log(`🕳 ${b.name}: яма у ${task.data.target} (${s.x} ${s.y} ${s.z}) — вскрыл ${dug}${why ? ` (${String(why).slice(0, 70)})` : ''}`)
+    log(`🕳 ${b.name}: ${task.data.drop === Infinity ? 'подкоп' : 'яма'} у ${task.data.target} (${s.x} ${s.y} ${s.z}) — вскрыл ${dug}${why ? ` (${String(why).slice(0, 70)})` : ''}`)
     return
   }
 
@@ -189,7 +191,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     b.noReach = (reply?.status === 'done' || reply?.status === 'timeout') && result.landed === 0 && gapAfter < 10 && foe.position.y - (pos[b.name]?.p?.y ?? 0) < 2.5 ? (b.noReach || 0) + 1 : 0
     // Итог боя в журнал (арена 14.10: убийств почти нет — видно, чем кончается схватка: попадания, хп, причина конца).
     // Чем бил (пользователь 14.10: «булавой, копьём, элитрами не атакуют») — выбор графа боя и приёмы особого оружия.
-    const special = Object.keys(result.tricks || {}).filter(k => /булав|копь|элитр|пике|таран|трезуб|удочк|молни|заряд|зель|щит|опор|яму|столкн|вод|потуш|огн/.test(k)).slice(0, 5)
+    const special = Object.keys(result.tricks || {}).filter(k => /булав|копь|элитр|пике|таран|трезуб|удочк|молни|заряд|зель|щит|опор|яму|столкн|вод|потуш|огн|паутин/.test(k)).slice(0, 5)
     // Сломать опору под ним (pvp.ts breakUnder): попыток/сломал/упал — видно, работает ли сброс на краю.
     if (result.breakUnder?.tries) special.unshift(`опора ${result.breakUnder.ok}/${result.breakUnder.tries}${result.breakUnder.fell ? `, упал ${result.breakUnder.fell}` : ''}`)
     log(`⚔ ${b.name} → ${foe.id}: попаданий ${result.landed ?? '?'}/${result.swings ?? '?'}, хп ${result.hp ?? '?'}${result.killed || result.kills?.length ? ', убил' : ''}${result.stopped || result.why ? ' — ' + String(result.stopped || result.why).slice(0, 70) : ''}${result.calc?.picks ? ` | граф ${Object.entries(result.calc.picks).map(([k, n]) => `${k}:${n}`).join(',')}` : ''}${special.length ? ` | ${special.join('; ')}` : ''}${reply?.status === 'interrupted' ? ` | interrupted ${JSON.stringify(reply.by)}` : ''}`)

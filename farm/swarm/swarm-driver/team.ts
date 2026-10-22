@@ -65,7 +65,8 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     if (offHand === 'shield') reserve.shield = 1
     // Заряды ветра — к булаве (пользователь 14.10: «грозу ветра сливают, просто стреляют в игрока ей, хотя надо с булавой
     // комбинировать»): у кого булава, тот свои держит и просит ещё — подброс и удар сверху; у прочих один — на выход из ямы.
-    if (inv.mace) { reserve.wind_charge = inv.wind_charge || 0; needs.wind_charge = 8 }
+    // И паутину (22.10: «паутиной и булавой добивание»): прижать его перед ударом (smashSetupTurn) — у прочих её берут передачи.
+    if (inv.mace) { reserve.wind_charge = inv.wind_charge || 0; needs.wind_charge = 8; needs.cobweb = 2 }
     return { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench }
   }
   // seenAt — когда спросили (наблюдение не старше запроса статуса), без него — сейчас.
@@ -132,11 +133,11 @@ export function swarmTeam (sw: SwarmDriverCtx) {
   const say = (b, task) => {
     // Сброс и удар с взлёта — в ключе строки: без них «🫸сброс» печатался только при смене дела или цели (стенд 21.10: шесть
     // строк за шесть раундов — по ним решили, что сброс не включается).
-    const identity = `${task.kind}:${task.data?.target || task.data?.ally || task.data?.blueprint || ''}:${task.data?.doctrine || ''}:${task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || ''}:${task.data?.shove ? 'shove' : ''}:${task.data?.smash ? 'smash' : ''}`
+    const identity = `${task.kind}:${task.data?.target || task.data?.ally || task.data?.blueprint || ''}:${task.data?.doctrine || ''}:${task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || ''}:${task.data?.shove ? 'shove' : ''}:${task.data?.smash ? 'smash' : ''}:${task.data?.axe ? 'axe' : ''}`
     if (b.swarmSaid === identity) return
     b.swarmSaid = identity
     if (task.data?.doctrine) b.swarmDoctrine = task.data.doctrine
-    log(`🐜 ${b.name} [${task.data?.role || ''}/${task.data?.doctrine || ''}]: ${task.kind}${task.data?.target ? ' → ' + task.data.target : ''}${task.data?.ally ? ' для ' + task.data.ally : ''}${task.data?.shove ? ' 🫸сброс' : ''}${task.kind === 'fight' ? ['finishing', 'cover', 'ambush', 'turned', 'fountain', 'cordon', 'assault', 'smash'].filter(k => task.data?.[k]).map(k => ' #' + k).join('') : ''}${(task.data?.panic || task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || task.kind === 'loot') && task.data.reason ? ` (${task.data.reason})` : ''}`)
+    log(`🐜 ${b.name} [${task.data?.role || ''}/${task.data?.doctrine || ''}]: ${task.kind}${task.data?.target ? ' → ' + task.data.target : ''}${task.data?.ally ? ' для ' + task.data.ally : ''}${task.data?.shove ? ' 🫸сброс' : ''}${task.kind === 'fight' ? ['finishing', 'cover', 'ambush', 'turned', 'fountain', 'cordon', 'assault', 'smash', 'axe'].filter(k => task.data?.[k]).map(k => ' #' + k).join('') : ''}${(task.data?.panic || task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || task.kind === 'loot') && task.data.reason ? ` (${task.data.reason})` : ''}`)
   }
   // Натиск: против людей (соло) или по оценке плана команды — сильное меньшинство (race.ts strongFew).
   const onslaught = b => aggressive || !!pvpState(boardOf(b)).strongFew

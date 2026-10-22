@@ -105,20 +105,24 @@ export function installSight (ctx: ArenaContext) {
       return best ? { x: Math.cos(best.k * Math.PI / 4), z: Math.sin(best.k * Math.PI / 4), drop: best.drop, ...(best.burns ? { lava: true } : {}), at: best.t } : null
     }
     // Места для ям-ловушек: клетка пола этажа (галереи dy 8/16/24, крыша-терраса 31), под ней 2 блока, ниже — пустота 4+
-    // (этаж ниже): вскрыть 2 — дыра с падением 6–8 бл.
+    // (этаж ниже): вскрыть 2 — дыра с падением 6–8 бл. И земля за полем (dy 0): песок или песчаник на обсидиане фундамента
+    // (dy −2), под ним пустота — вскрыть 2 под сильным или рядом с ним — насмерть (пользователь 22.10: «сильного, что не ходит
+    // у обрыва, только подкопом быстрым можно убить и столкнуть»). drop — глубина падения (Infinity — пустота), tier —
+    // какая кирка нужна (обсидиан — алмазная и лучше).
     const holeCells: any[] = []
     const mc = (require('../../daemon/node_modules/minecraft-data') as typeof import('../../daemon/node_modules/minecraft-data'))('1.21.11')
     const floorTop = (x, y, z) => { const b = g.get(x, y, z); if (C.sturdyFace(b, 'up')) return y + 1; return C.isSlab(b) && C.parse(b).props?.type === 'bottom' ? y + .5 : null }
     const handMs = b => { const d = b && mc.blocksByName[C.parse(b).name]; return !d || d.diggable === false || d.hardness < 0 ? Infinity : Math.ceil(d.hardness * (d.harvestTools ? 100 : 30)) * 50 }
-    for (let x = -L.half; x <= L.half; x++) for (let z = -L.half; z <= L.half; z++) for (const F of [8, 16, 24, 31]) {
+    const tierOf = b => { const d = b && mc.blocksByName[C.parse(b).name]; return d?.harvestTools && !Object.keys(d.harvestTools).some(id => /^(wooden|stone|iron|golden)_pickaxe$/.test(mc.items[id]?.name || '')) ? 2 : 0 }
+    for (let x = -L.half; x <= L.half; x++) for (let z = -L.half; z <= L.half; z++) for (const F of [0, 8, 16, 24, 31]) {
       if (!solid(x, F - 1, z) || solid(x, F, z) || solid(x, F + 1, z) || !solid(x, F - 2, z)) continue
-      let air = 0; for (let y = F - 3; y >= F - 9 && !solid(x, y, z); y--) air++
-      if (air < 4) continue
+      let y = F - 3; while (y >= F - 64 && !solid(x, y, z)) y--
+      if (F - 3 - y < 4) continue
       const feet = floorTop(x, F - 1, z); if (feet == null) continue
       const stands = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => floorTop(x + dx, F - 1, z + dz) === feet && !solid(x + dx, F, z + dz) && !solid(x + dx, F + 1, z + dz))
         .map(([dx, dz]) => ({ x: X + x + dx + .5, y: Y + feet, z: Z + z + dz + .5 }))
-      const blocks = [g.get(x, F - 1, z), g.get(x, F - 2, z)]
-      if (stands.length) holeCells.push({ x, y: F - 1, z, F, feetY: Y + feet, stands, blocks, handMs: blocks.reduce((n, b) => n + handMs(b), 0) })
+      const blocks = [g.get(x, F - 1, z), g.get(x, F - 2, z)], tier = Math.max(...blocks.map(tierOf))
+      if (stands.length) holeCells.push({ x, y: F - 1, z, F, feetY: Y + feet, stands, blocks, handMs: blocks.reduce((n, b) => n + handMs(b), 0), drop: y < F - 64 ? Infinity : feet - (y + 1), ...(tier ? { tier } : {}) })
     }
     // Все места у цели; досягаемость копателю и разнос проверяет планировщик.
     digSites = p => {
@@ -130,7 +134,7 @@ export function installSight (ctx: ArenaContext) {
       }
       return out
     }
-    log(`ямы-ловушки: мест в полах этажей ${holeCells.length}`)
+    log(`ямы-ловушки: мест в полах этажей ${holeCells.filter(c => c.F).length}, на земле над пустотой ${holeCells.filter(c => !c.F).length}`)
     const inside = (x, z) => Math.abs(x) <= L.half && Math.abs(z) <= L.half
     for (let x = -L.half; x <= L.half; x++) for (let z = -L.half; z <= L.half; z++) for (let F = 0; F <= 40; F++) {
       if (!C.sturdyFace(g.get(x, F - 1, z), 'up') || g.get(x, F, z) || g.get(x, F + 1, z)) continue

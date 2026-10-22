@@ -51,6 +51,10 @@ test('strong foe at a void edge: every sword in reach shoves, the far edge is wi
   const plan = planPvp(far.board, far.members, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 4 }) })
   assert.ok(plan.get('s5')!.data!.shove && plan.get('s5')!.data!.push, 'four blocks to the edge: the wind charge reaches')
   assert.equal(onHim(plan).filter(t => !t.data!.push).length, MELEE_CAP, 'a hit does not throw him four blocks: swords stay capped')
+  const maceMan = [blue('mace', 0, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 2 } }), blue('m3', 1, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 3 } }), ...Array.from({ length: 4 }, (_, k) => blue(`c${k}`, k + 2))]
+  const g = scene(maceMan)
+  const pm = planPvp(g.board, maceMan, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 4 }) })
+  assert.ok(!pm.get('mace')!.data!.push && pm.get('m3')!.data!.push, 'a mace keeps two charges for its launch; the third may push')
 })
 
 test('lava kills the naked, not netherite with Protection IV: no shove into a pit he walks out of', () => {
@@ -73,6 +77,35 @@ test('a fight task that turns into a shove reaches the board, not the old task w
   const t = f.board.tasks().find(t => t.id === 'pvp:a')!
   assert.equal(t.data!.slot, before.data!.slot, 'same ring slot as before')
   assert.ok(t.data!.shove && t.data!.push, `the board carries the shove: ${JSON.stringify(t.data)}`)
+})
+
+test('undermining the strong foe: the hole over the void goes first, obsidian waits for a diamond pickaxe', () => {
+  // Земля за полем: песок на обсидиане фундамента, под ним пустота (watch.ts holeCells, F = 0); галерея — падение 7 бл.
+  const cell = (x: number, z: number, more: any) => ({ x, y: 63, z, feetY: 64, blocks: ['sand', 'obsidian'], stands: [], handMs: 250750, ...more })
+  const voidHole = cell(2, 1, { drop: Infinity, tier: 2 }), gallery = cell(-1, 1, { drop: 7, blocks: ['sandstone', 'sandstone'], handMs: 8000 })
+  const digSites = () => [gallery, voidHole]
+  const crowd = () => Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k + 1))
+  const pick = [blue('pick', 0, { position: p(0.5, 64, 4.5), inventory: { diamond_sword: 1, diamond_pickaxe: 1 } }), ...crowd()]
+  const f = scene(pick)
+  const t = planPvp(f.board, pick, { ...STRONG, digSites }).get('pick')!
+  assert.equal(t.data!.dig, '2,63,1', `the gallery is nearer to him, the void kills: ${JSON.stringify(t.data)}`)
+  assert.equal(t.data!.drop, Infinity, 'the driver knows the hole is lethal (edgeNear → shove)')
+  const iron = [blue('iron', 0, { position: p(3, 64, 3.5), inventory: { diamond_sword: 1, iron_pickaxe: 1 } }), ...crowd()]
+  const g = scene(iron)
+  assert.notEqual(planPvp(g.board, iron, { ...STRONG, digSites: () => [voidHole] }).get('iron')!.data?.dig, '2,63,1', 'iron does not cut obsidian in time')
+})
+
+test('web, axe, mace: with a mace on the team the axes go in to break his shield; without one they stay capped', () => {
+  const swords = () => Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k))
+  const axes = () => [7, 8].map(k => blue(`axe${k}`, k, { inventory: { diamond_sword: 1, diamond_axe: 1 } }))
+  const combo = [...swords(), blue('mace', 6, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 4 } }), ...axes()]
+  const f = scene(combo)
+  const plan = planPvp(f.board, combo, STRONG)
+  for (const id of ['axe7', 'axe8']) assert.ok(plan.get(id)!.kind === 'fight' && plan.get(id)!.data!.axe, `${id}: the shield he raises against the mace goes down`)
+  const alone = [...swords(), ...axes()]
+  const g = scene(alone)
+  const solo = planPvp(g.board, alone, STRONG)
+  for (const id of ['axe7', 'axe8']) assert.notEqual(solo.get(id)!.kind, 'fight', `${id}: no mace to follow up — a third blade adds thorns only`)
 })
 
 test('harming in invulnerability windows: the cloud lands after the window of the last hit on him', () => {

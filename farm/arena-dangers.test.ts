@@ -317,6 +317,16 @@ test('mace from above: the shield in the off hand is a shield — hold it on any
   assert.equal(f.calls.length, 1, 'the running hold is kept')
 })
 
+test('a shield raised against a mace stays up when an arrow comes: no dodge out from under the smash', t => {
+  const f = fixture(t)
+  f.ctx.pos.A.offHand = { item: 'shield', durability: 100 }
+  f.report({ smashes: [{ name: 'Foe', ticks: 16, at: f.p }] })
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0].method, 'swarm_hold')
+  f.report({ arrows: [{ name: 'arrow', from: { x: 10, y: 64, z: 1 }, at: f.p, ticks: 10, side: { x: 1, z: 0 } }] })
+  assert.equal(f.calls.length, 1, 'the arrow hits the shield; a step aside would take the smash')
+})
+
 test('floor taken from under the feet while a foe is near: step off at once, no drop, before a mace reaction', t => {
   // Пользователь 22.10: «ломаю блоки под ними — они в дырки улетают, ничего не делают».
   const f = fixture(t)
