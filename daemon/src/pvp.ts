@@ -47,6 +47,16 @@ const TURN: Array<(ctx: DuelCtx, turn: TurnFrame) => any> = [
   unblockTurn, exitTurn, hitKindTurn, floorEscapeTurn, controlsTurn, strikeTurn
 ]
 
+// Кадр хода раз в 500 мс (ND_TRACE_PVP): чья ступень закончила ход и замеры — разбор «машет мимо», «стоит у ямы».
+function traceFrame (ctx: DuelCtx, turn: TurnFrame, by: string) {
+  const now = gameClock.now()
+  if (now - (ctx.frameAt || 0) < 500) return
+  ctx.frameAt = now
+  const f = (n: any) => typeof n === 'number' ? n.toFixed(1) : '-'
+  const keys = ['forward', 'back', 'left', 'right', 'jump', 'sprint'].filter(c => ctx.bot.getControlState(c)).join('+') || '—'
+  ctx.trace(`кадр ${by}: r=${f(turn.r)} d=${f(turn.d)} dy=${f(turn.dy)} прицел=${turn.inSight ? 1 : 0} вижу=${turn.seesBody ? 1 : 0} скрыт=${turn.hidden ? 1 : 0} рука=${ctx.bot.heldItem?.name || '-'} клавиши=${keys} путь=${ctx.pathing ? 1 : 0} мимо=${ctx.bot._ndBlockedHits || 0}`)
+}
+
 async function duel (session, ctl, entity, opts: any = {}) {
   const safety = opts.guard?.safety || require('./combat-safety').watch(session.bot)
   const vision = createLastSeen(session.bot)
@@ -107,11 +117,13 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
     setImmediate(markLoopYield)
     const turn = {} as TurnFrame
     let out
+    let by = 'конец'
     for (const stage of TURN) {
       out = stage(ctx, turn)
       if (out && typeof out.then === 'function') out = await out
-      if (out) break
+      if (out) { by = stage.name; break }
     }
+    if (ctx.TRACE) traceFrame(ctx, turn, by)
     if (out === NEXT) continue
     if (out) return out.end
     await sleep(TICK_MS)

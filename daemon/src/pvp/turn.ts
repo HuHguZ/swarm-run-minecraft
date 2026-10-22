@@ -19,7 +19,7 @@ export interface DuelCtx {
   swellPlanAt: any; seenAt: any; unseen: any; reposition: any; failedReposition: any; stuckTicks: any;
   bracing: any; HOP: any; st: any; traceT0: any; co: any; telemetryHp: any; calc: any; foeEst: any;
   foeHpDecide: any; fg: any; GRAPH: any; combo: any; blk: any; gp: any; noteGate: any; gate: any; skyOver: any;
-  shelterNear: any; TRACE: any; myHpT: any; trace: any; losGoal: any; foeSeenPos: any; losSpot: any; AR: any;
+  shelterNear: any; TRACE: any; frameAt?: number; myHpT: any; trace: any; losGoal: any; foeSeenPos: any; losSpot: any; AR: any;
   onField: any; routeInputs: any; lastTrick: any; shieldHitAt: any; foeHp: any; onTickDmg: any; used: any;
   quiet: any; noteExchange: any; ovl: any; style: any; exchangeStart: any; tt: any; attackers: any; foe: any;
   fortSealed: any; fort: any; noticed: any; after: any; rolls: any; roll: any; punches: any; weapon: any;
