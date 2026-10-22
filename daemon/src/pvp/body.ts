@@ -3,6 +3,7 @@
 // healthOf — точное хп из метаданных: только мобам и телеметрии; игроки — через pvp/combat-observe.trackFoe (оценка).
 
 import { stepSafe as stepSafeRaw } from '../moves'
+import * as gameClock from '../game-clock'
 import * as assess from '../assess'
 import * as read from '../read'
 import { FOES } from './rules'
@@ -60,7 +61,8 @@ function edgeBurns (bot, dir, reach = 0.9) {
   return false
 }
 function stepSafe (bot, dir) {
-  return stepSafeRaw(bot, dir, { water: onFire(bot) || !!(bot.entity && bot.entity.isInWater) }) && !edgeBurns(bot, dir)
+  const swim = (bot._ndSwimUntil || 0) > gameClock.now()
+  return stepSafeRaw(bot, dir, { water: swim || onFire(bot) || !!(bot.entity && bot.entity.isInWater) }) && !edgeBurns(bot, dir)
 }
 function makeTracker (entity) {
   return require('../bow').trackTarget(entity)

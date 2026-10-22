@@ -467,6 +467,8 @@ export function controlsTurn (ctx: DuelCtx, turn: TurnFrame) {
     if (!wantsJump(bot, keyDir(bot, k)) && (!stepSafeRaw(bot, keyDir(bot, k), { water: onFire(bot), reach: far }) || edgeBurns(bot, keyDir(bot, k), far))) kk.jump = false
   }
   kk.sprint = kk.sprint && kk.forward
+  // В воде с ходом — «прыжок» держать: тело всплывает, у бортика вылезает на берег (как игрок).
+  if (bot.entity.isInWater && (kk.forward || kk.back || kk.left || kk.right)) kk.jump = true
   set('forward', kk.forward)
   set('back', kk.back)
   set('left', kk.left)

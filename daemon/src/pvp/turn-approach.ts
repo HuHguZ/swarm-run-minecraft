@@ -82,9 +82,11 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
     }
     // Видно его, и до него ровная дорога — бежать прямо, без A*: GoalFollow ищет путь с нуля, как только цель ушла на 2 бл.
     // (человек со Скоростью — каждые 3–4 тика), и пока поиск идёт, бот стоит (стенд бота-противника 22.10: поиск дольше 1 с
-    // у трети походов). Обрыв, лава, стена, ступень выше блока — как раньше, путём.
+    // у трети походов). Обрыв, лава, стена, ступень выше блока, вода — как раньше, путём (бег по прямой плыл через ров:
+    // пользователь — «плывут по воде вместо прыжков по блокам»; путь мостит воду блоками).
     const to = ctx.entity.position, me = bot.entity.position, flat = Math.hypot(to.x - me.x, to.z - me.z)
-    if (seesBody && flat < 32 && Math.abs(to.y - me.y) < 1.5 && runLength(bot, { x: (to.x - me.x) / flat, z: (to.z - me.z) / flat }, Math.ceil(flat), 1, ctx.AR).len >= Math.floor(flat) - 1) {
+    const run = seesBody && flat < 32 && Math.abs(to.y - me.y) < 1.5 ? runLength(bot, { x: (to.x - me.x) / flat, z: (to.z - me.z) / flat }, Math.ceil(flat), 1, ctx.AR) : null
+    if (run && run.len >= Math.floor(flat) - 1 && !run.wet) {
       if (ctx.pathing) { pathTo(false); ctx.pathing = false }
       set('forward', stepSafe(bot, f)); set('back', false); set('left', false); set('right', false)
       set('sprint', (bot.food ?? 20) > 6)

@@ -336,6 +336,14 @@ test('A*: река 8 (глубина 5) — мост по воде дешевл�
   assert.ok(br.every(n => n.ndBridge.water))
 })
 
+test('A*: арена по поверхности (waterOnly) — мост по воде есть, над провалом нет', () => {
+  const river = p => (p.x >= 1 && p.x <= 4 && p.y >= 62 && p.y <= 63) ? 'water' : (p.y === 63 || p.y === 61) ? 'stone' : 'air'
+  const r = plan(bm.addBridge(moves(world(river)), { waterOnly: true, descend: false }), new Vec3(0, 64, 0), new goals.GoalBlock(7, 64, 0), 32)
+  assert.equal(r.status, 'success')
+  assert.equal(r.path.filter(n => n.ndBridge?.water).length, 4)
+  assert.notEqual(plan(bm.addBridge(moves(world(gap())), { waterOnly: true, descend: false }), new Vec3(0, 64, 0), new goals.GoalBlock(8, 64, 0)).status, 'success')
+})
+
 test('A*: мост над пустотой — не длиннее 8 клеток (в открытом небе поиск не расползается)', () => {
   const ok = plan(bm.addBridge(moves(world(gap(1, 8)))), new Vec3(0, 64, 0), new goals.GoalBlock(11, 64, 0), 32)
   assert.equal(ok.status, 'success')

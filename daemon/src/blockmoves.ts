@@ -97,6 +97,8 @@ function bridgeMove (mv, node, dir, opts: any = {}) {
   const chain = (node.ndBridge ? node.ndBridge.n || 1 : 0) + 1
   const u = below((x, y, z) => mv.bot.blockAt(new Vec3(x, y, z), false), D.position.x, D.position.y, D.position.z, opts.depthMax ?? 24)
   if (u.lava || u.unknown) return null
+  // Арена по поверхности (session.updateMovements, surfaceStrict): только мост над водой — над ямами и обрывами нет.
+  if (opts.waterOnly && !u.water) return null
   // Мелкая яма (твёрдое в 1–2 под клеткой) — шагнуть вниз и вверх дешевле блока, а лишние ходы над каждым склоном
   // раздувают поиск на холмах: на рельефе A* с мостами искал в 1.5 раза дольше (ферма 02.10, mv-terr-2: 4.5 с против
   // 2.9, 11.8 против 7.3). Мост — только над провалом от 3 (обрыв, овраг, пустота) и над водой.

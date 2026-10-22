@@ -330,6 +330,9 @@ const hazardOnLine = () => {
       const floor = feet.offset(0, -1, 0)
       const fl = ctx.bot.blockAt(floor)
       if (fl && (fl.name === 'lava' || (fl.boundingBox === 'empty' && !/water|cobweb/.test(fl.name)))) return { cell: floor, kind: fl.name === 'lava' ? 'lava' : 'pit' }
+      // Арена: глубокая вода (2+ бл.) между нами — тоже помеха: бот у кромки стоял, шаг в воду запрещён, обход не находился
+      // (пользователь: «плывут по воде вместо прыжков по блокам»; стенд бота-противника 22.10, остров во рву).
+      if (fl?.name === 'water' && ctx.bot.blockAt(floor.offset(0, -1, 0))?.name === 'water' && ctx.process.env.ND_SCAFFOLD_ANY === '1') return { cell: floor, kind: 'water' }
     }
     return null
   }
@@ -347,6 +350,22 @@ const unblockPath = async () => {
       await ctx.scoop(h.cell)
       await ctx.holdWeapon()
       if (ctx.blockName(ctx.bot, h.cell) !== 'lava') { ctx.used('лава между нами — зачерпнул ведром'); return true }
+    }
+    // Вода: мост на бегу к нему (water-bridge, как в бегстве: бег к краю, присед, блок к передней грани опоры — её видно,
+    // только когда глаза за краем); не вышло или блоков нет — вплавь, а не стоять у кромки (шаг в воду на 3 с, pvp/body).
+    if (h.kind === 'water') {
+      if (ctx.pickFiller(ctx.bot)) {
+        const wb: typeof import('../water-bridge') = require('../water-bridge')
+        const me0 = ctx.bot.entity.position, to = ctx.entity.position, yaw = Math.atan2(-(to.x - me0.x), -(to.z - me0.z))
+        ctx.aim = 'free'
+        const br = await wb.waterBridge(ctx.bot, ctx.ctl, yaw, { maxBlocks: 24 }).catch(() => ({ placed: 0 }))
+        ctx.aim = 'target'
+        await ctx.holdWeapon()
+        if (br.placed) { ctx.used(`вода между нами — мост (${br.placed} бл.)`); return true }
+      }
+      ctx.bot._ndSwimUntil = ctx.gameClock.now() + 3000
+      ctx.used('вода между нами — вплавь')
+      return true
     }
     if (ctx.pickFiller(ctx.bot)) {
       const r = await ctx.placeBlockAt(ctx.bot, h.cell, { timeoutMs: 700, honest: true }).catch(() => ({ ok: false }))

@@ -64,6 +64,9 @@ function updateMovements (this: Session, force = false): void {
     if (arenaScaffold) movements.scafoldingBlocks = [...new Set([...(movements.scafoldingBlocks || []), ...items.filter(i => (require('../build') as typeof import('../build')).ARENA_FILLER.test(i.name)).map(i => i.type)])]
     movements.maxDropDown = dropDown
     movements.allowSprinting = sprint
+    // Арена: воду — мостом, а не вплавь (пользователь 21.10: «плывут по воде вместо прыжков по блокам»): в воде бот медленный
+    // и открыт для ударов, а клетка моста — доли секунды. Есть блоки на мост — клетка в воде дороже клетки моста вчетверо.
+    if (arenaScaffold && towers) movements.liquidCost = 4
     // чем моб опаснее (flee.js DOCTRINE). Раньше маршрут шёл сквозь толпу, и
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(flee.mobAvoidance(bot))
     if (Array.isArray(movements.exclusionAreasStep)) movements.exclusionAreasStep.push(block => this.surfaceWalk ? underRoofCost(bot, block, this.surfaceStrict) : 0)
@@ -187,7 +190,17 @@ function updateMovements (this: Session, force = false): void {
       movements.countScaffoldingItems = function () { return Math.max(0, count.call(this) - packMod.RESERVE.build) }
     }
     if (bridge && !this.surfaceStrict) { blockmoves.addBridge(movements, { reserve: reserveNether ? 0 : packMod.RESERVE.build, depthMax: worlds.worldOf(bot) === 'the_nether' ? 64 : 24, voidOk: worlds.worldOf(bot) !== 'the_end', goalY: () => this.pathGoalY, ...(process.env.ND_BRIDGE_LETHAL !== '0' ? { lethalDepth: 20 } : {}) }); blockmoves.install(this) }
-    if (this.surfaceStrict) { movements.canDig = false; movements.allow1by1towers = false; movements.scafoldingBlocks = [] }
+    if (this.surfaceStrict) {
+      movements.canDig = false; movements.allow1by1towers = false
+      // Арена по поверхности: блок ставится только мостом над водой. Без этого путь к цели за рвом плыл (стенд
+      // бота-противника 22.10, остров во рву: 0 блоков в ров, по 8–18 пловцов); столбы и мосты над ямами — нет.
+      // Мост — спидраннерский на ходу (blockmoves), постановки самого pathfinder'а — нет (посреди воды он искал опору и не
+      // находил: «не к чему прислонить блок»).
+      if (arenaScaffold && this.gotoArena && towers && bridge) {
+        movements.exclusionAreasPlace.push(() => 100)
+        blockmoves.addBridge(movements, { reserve: 0, waterOnly: true, descend: false, goalY: () => this.pathGoalY }); blockmoves.install(this)
+      } else movements.scafoldingBlocks = []
+    }
     if (this.gotoArena) {
       const arena = this.gotoArena, within = (require('../navigation/parkour') as typeof import('../navigation/parkour')).withinArena
       const cost = block => { const p = block?.position; return p && within(bot, { x: p.x + .5, y: p.y, z: p.z + .5 }, arena) ? 0 : Infinity }

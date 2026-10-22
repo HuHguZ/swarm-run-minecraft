@@ -37,7 +37,10 @@ export async function arenaClimbTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { AR, badShafts, bot, bowWatch, buildDone, buildGuard, clear, columnInputs, ctl, guardCtl, holdWeapon, mobCtl, mobThreat, pathTo, routeInputs, st, towerShield, used } = ctx
   const { me, meBelow, now } = turn
   const arenaClimbInputs = AR && columnInputs(Math.max(0, Math.ceil(AR.y - me.y))) + '|' + routeInputs()
-  if (meBelow && ctx.prof.player && !edges.falling(bot) && (!ctx.failedClimb || ctx.failedClimb.inputs !== arenaClimbInputs)) {
+  // Во рву у цели (она рядом на уровне поля) — плыть к ней и вылезать у неё, а не искать берег спасением из воды (стенд
+  // бота-противника 22.10, остров во рву: «выплыл из ямы на берег, 24 с» в 4 бл. от цели).
+  const swimToHim = !!AR && !!bot.entity.isInWater && turn.d < 8 && Math.abs(ctx.entity.position.y - AR.y) < 1.5
+  if (meBelow && !swimToHim && ctx.prof.player && !edges.falling(bot) && (!ctx.failedClimb || ctx.failedClimb.inputs !== arenaClimbInputs)) {
     if (ctx.pathing) { pathTo(false); ctx.pathing = false }
     clear()
     ctx.aim = 'free'
