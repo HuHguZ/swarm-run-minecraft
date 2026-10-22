@@ -23,6 +23,41 @@ function fuseOf(bot: Bot, entity: Bot): number | null {
   return typeof value === 'number' ? value : null
 }
 
+// Charges about to blow: every primed TNT (the fuse hiss is heard, no sight needed) and the TNT blocks its blast will light in a
+// chain - TntBlock.wasExploded primes them with a 10-29 tick fuse, a power-4 blast takes a zero-resistance block ~4 blocks
+// out. A block only when seen (no x-ray); its fuse is the lighter's plus the shortest chain fuse. User 22.10: "I lay TNT in
+// a chain behind him - he does not turn aside from the blocks that blow next".
+export interface Charge { position: Bot; fuse: number; primed: boolean; id?: number }
+export function tntCharges(bot: Bot, near: Bot = bot.entity?.position, r = 12): Charge[] {
+  const out: Charge[] = []
+  if (!near) return out
+  for (const e of Object.values(bot.entities || {}) as Bot[])
+    if (e?.name === 'tnt' && e.position && e.isValid !== false && e.position.distanceTo(near) <= r + 12) out.push({ position: e.position, fuse: fuseOf(bot, e) ?? 80, primed: true, id: e.id })
+  const id = bot.registry?.blocksByName?.tnt?.id
+  if (!out.length || id == null || typeof bot.findBlocks !== 'function') return out
+  // Блок — когда видна его грань (pick.blockSeen, как прицел клиента). Прежняя проверка лучами «как к игроку» упиралась в сам
+  // динамит — цепочку не видел ни один бот (стенд 22.10: «в цепочке 0» в 232 реакциях из 232).
+  const seen = (require('../pick') as typeof import('../pick')).blockSeen
+  let left: Bot[] = bot.findBlocks({ point: near, matching: id, maxDistance: r, count: 64 }).filter((c: Bot) => seen(bot, c)).map((c: Bot) => c.offset(0.5, 0, 0.5))
+  for (let k = 0; k < out.length && left.length; k++) {
+    const from = out[k]
+    left = left.filter(c => { if (c.distanceTo(from.position) > 4.5) return true; out.push({ position: c, fuse: from.fuse + 10, primed: false }); return false })
+  }
+  return out
+}
+
+// Where I will be when each charge blows: sprint ~0.26 b/t along the run, standing at its end past it. Against a chain laid
+// along my path the run along it stays in reach of the next block - aside it leaves the line.
+export function blastExposure(me: Bot, run: { dir: { x: number; z: number }; run: number }, charges: Charge[]): number {
+  let cost = 0
+  for (const c of charges) {
+    const s = Math.min(run.run, 0.26 * Math.max(0, c.fuse - 2))
+    const d = Math.hypot(me.x + run.dir.x * s - c.position.x, me.y - c.position.y, me.z + run.dir.z * s - c.position.z)
+    if (d < TNT_REACH) cost += 60 * (1 - d / TNT_REACH)
+  }
+  return cost
+}
+
 // margin: the dodge runs 2 blocks past the alarm distance, so a flight from a mob does not re-enter it at once.
 // A charged creeper (powered: blast radius 6, entity damage out to 12 blocks) is a blast too: survival.dodgeCreeper stops
 // at 8-9 blocks (farm s4-stress-1, 750 TPS: Dodge selected, death); alarm when it swells or stands at the body.
@@ -124,20 +159,24 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
   let last: Blast | null = null
   let prevYaw: number | null = null
   let cornered = false
+  let steps = 0
   try {
     while (!ctl.aborted && gameClock.now() < until && (bot.health ?? 0) > 0) {
-      const blast = blastNear(bot, 2)
-      // A calm charged creeper nearby is no reason to keep running once nothing alarms.
-      if (!blast || blast.kind === 'charged_creeper' && !blast.alarm && last?.kind !== 'charged_creeper') break
-      if (until === Infinity) until = start + blastBound(bot, bot.entities[blast.id])
-      last = blast
+      steps++
       const me = bot.entity.position
-      const source = { e: bot.entities[blast.id], doc: { radius: blast.reach, weight: 10, blast: blast.reach }, d: blast.distance, swelling: true }
-      // Every primed TNT steers the run, not only the deepest: the second one on the other side was run into (arena 16.10).
-      const others = (Object.values(bot.entities || {}) as Bot[]).filter(e => e?.name === 'tnt' && e.id !== blast.id && e.isValid !== false &&
-        e.position && e.position.distanceTo(me) <= TNT_REACH + 3)
-        .map(e => ({ e, doc: { radius: TNT_REACH + 3, weight: 10, blast: TNT_REACH + 3 }, d: e.position.distanceTo(me), swelling: true }))
-      const plan: { yaw: number; dir: { x: number; z: number } } | null = flee.pickDirection(bot, [source, ...others, ...flee.hostilesAround(bot, 16)], prevYaw)
+      const blast = blastNear(bot, 2)
+      const charges = tntCharges(bot, me)
+      const inReach = charges.filter(c => c.position.distanceTo(me) <= TNT_REACH + 3)
+      // A calm charged creeper nearby is no reason to keep running once nothing alarms.
+      if ((!blast || blast.kind === 'charged_creeper' && !blast.alarm && last?.kind !== 'charged_creeper') && !inReach.length) break
+      if (until === Infinity) until = start + (inReach.length ? Math.max(...inReach.map(c => c.fuse)) * 50 + 1000 : blastBound(bot, bot.entities[blast!.id]))
+      if (blast) last = blast
+      const source = blast && blast.kind !== 'tnt' ? [{ e: bot.entities[blast.id], doc: { radius: blast.reach, weight: 10, blast: blast.reach }, d: blast.distance, swelling: true }] : []
+      // Every charge steers the run, not only the deepest: the second one on the other side was run into (arena 16.10); a
+      // chain block counts before it is lit.
+      const others = inReach.map(c => ({ e: { position: c.position }, doc: { radius: TNT_REACH + 3, weight: 10, blast: TNT_REACH + 3 }, d: c.position.distanceTo(me), swelling: true }))
+      const plan: { yaw: number; dir: { x: number; z: number } } | null = flee.pickDirection(bot, [...source, ...others, ...flee.hostilesAround(bot, 16)], prevYaw, [], null,
+        o => blastExposure(me, o, inReach))
       if (!plan) { cornered = true; stop(); break }
       prevYaw = plan.yaw
       await bot.look(plan.yaw, 0, true)
@@ -150,6 +189,7 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
     }
   } finally { stop() }
   const remaining = blastNear(bot)
+  const ended = ctl.aborted ? 'aborted' : cornered ? 'cornered' : (bot.health ?? 0) <= 0 ? 'dead' : gameClock.now() >= until ? 'fuse-bound' : 'clear'
   return { how: 'dodge-blast', kind: last?.kind ?? null, clear: !remaining, ...(cornered ? { cornered } : {}), distance: remaining ? Math.round(remaining.distance * 10) / 10 : null,
-    seconds: Math.round((gameClock.now() - start) / 100) / 10 }
+    seconds: Math.round((gameClock.now() - start) / 100) / 10, ended, steps }
 }

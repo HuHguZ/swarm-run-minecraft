@@ -20,11 +20,17 @@ const NAMES = [
   'chest_take', 'chest_list', 'base', 'stash', 'armor', 'shelter', 'refuge', 'surface', 'recover', 'portal',
   'portal_natural', 'build', 'sort', 'sign', 'farm', 'ride', 'mechanism', 'sleep', 'wake', 'phys', 'profile',
   'equip', 'eat', 'burrow', 'wind_jump', 'pearl_to', 'block_behind', 'mobs', 'drink_buffs', 'drop', 'set_goal',
-  'remember', 'recall', 'situation', 'escape_fire', 'director'
+  'remember', 'recall', 'situation', 'escape_fire', 'director',
+  // гонка вооружений (поток «тайники», 21.10): скан глаз и «пирога», бросок жемчуга наверх (rpc/caches.ts)
+  'cache_scan', 'pearl_plan', 'pearl_up',
+  // выход из лавовой ямы вне боя (поток «окружение», 21.10: rpc/pvp-escape.ts)
+  'lava_escape',
+  // уход от горящего динамита и его цепочки (22.10: rpc/hazards.ts)
+  'dodge_blast', 'clear_web'
 ]
 
 test('daemon RPC: every method name survives the split into rpc/*.ts, each exactly once', () => {
-  assert.equal(new Set(NAMES).size, 141)
+  assert.equal(new Set(NAMES).size, 147)
   const methods = createMethods({ session: {}, cfg: {}, bus: {}, vision: {}, director: {}, gameClock: {}, state: { dangerWatch: null } })
   assert.deepEqual(Object.keys(methods).sort(), [...NAMES].sort())
   for (const name of NAMES) assert.equal(typeof methods[name], 'function', name)

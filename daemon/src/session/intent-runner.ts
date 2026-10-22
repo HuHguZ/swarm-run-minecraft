@@ -9,7 +9,7 @@ const chatOff = process.env.ND_CHAT_INTERRUPT === '0'
 // Уворот не перебивается обычным приказом (12.10, арена: бой, баф, лут драйвера рвали рывок от зелья и стрел — бот
 // стоял под брызгами): новый ждёт конца уворота (он короткий: рывок ≤ 1.5 с, джук ≤ 4 с), stop — рвёт как раньше.
 // Тот же набор, что reflex-lock COMMANDED_ESCAPE: ветер/жемчуг/элитры тоже рвались боем драйвера до старта (roof-free-1).
-const DODGES = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
+const DODGES = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
 
 async function runIntent (this: any, name, worker, { exclusive = true, interruptible = true, timeoutMs = 120000, interruptOn = null, params = null }: any = {}) {
     // Уворот не ждёт тактики (12.10: «ест/пьёт зелье — булавой ваншотаю, ноль реакции»; mace-6: рывок стоял в очереди за

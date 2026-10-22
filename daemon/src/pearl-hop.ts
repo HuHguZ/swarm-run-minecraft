@@ -387,10 +387,13 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
   return { plan: null, tries, why, cands: cands.length }
 }
 
+// mustArrive — цель, куда пешком не дойти (крыша, венец: оценка «пешком» по прямой там врёт): годится только цепочка, что
+// кончается в arriveR от цели (поток «тайники» 21.10: с одним жемчугом выбиралась посадка на рядах «а дальше пешком»).
 function planRoute (world, feet, goal, opts: any = {}) {
-  const { pearls = 0, reserve = 12, hp = 20, hpMin = 12, dmg = 5, hpSec = 1, maxHops = 4, speed = 4.3 } = opts
+  const { pearls = 0, reserve = 12, hp = 20, hpMin = 12, dmg = 5, hpSec = 1, maxHops = 4, speed = 4.3, mustArrive = false, arriveR = 4 } = opts
   const limit = Math.max(0, Math.min(4, Math.floor(maxHops), pearls - reserve, Math.floor((hp - hpMin) / Math.max(0.01, dmg))))
-  let best: any = { plans: [], seconds: walkEstimate(world, feet, goal, { speed }).sec, damage: 0 }
+  const arrived = (p) => Math.hypot(goal.x - p.x, goal.y - p.y, goal.z - p.z) <= arriveR + 1
+  let best: any = { plans: [], seconds: mustArrive ? Infinity : walkEstimate(world, feet, goal, { speed }).sec, damage: 0 }
   let frontier: any[] = [{ feet, plans: [], cost: 0 }]
   const seen = new Map()
   // ponytail: four-hop beam bounds geometry work; increase only with measured navigation failures.
@@ -410,7 +413,7 @@ function planRoute (world, feet, goal, opts: any = {}) {
         seen.set(key, cost)
         const plans = [...node.plans, plan]
         const seconds = cost + walkEstimate(world, plan.feet, goal, { speed }).sec
-        if (seconds < best.seconds) best = { plans, seconds, damage: plans.length * dmg }
+        if (seconds < best.seconds && (!mustArrive || arrived(plan.feet))) best = { plans, seconds, damage: plans.length * dmg }
         next.push({ feet: plan.feet, plans, cost, seconds })
       }
     }

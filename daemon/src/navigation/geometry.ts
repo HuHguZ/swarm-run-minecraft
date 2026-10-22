@@ -31,6 +31,9 @@ export function intersects(a: Box, b: Box): boolean {
   return a.minX < b.maxX - EPS && a.maxX > b.minX + EPS && a.minY < b.maxY - EPS && a.maxY > b.minY + EPS && a.minZ < b.maxZ - EPS && a.maxZ > b.minZ + EPS
 }
 /** `powder`: a native forecast may pass through powder snow (modelled stuck motion); never a resting body. */
+// Поиск модуля — раз, а не на каждую клетку тела (bodyClear зовут тысячи раз за пересчёт бега).
+let movementMod: typeof import('../movement') | null = null
+const waterCell = () => (movementMod ??= require('../movement') as typeof import('../movement')).waterCell
 export function bodyClear(world: CollisionWorld, pos: Point, { web = false, water = false, powder = false }: { web?: boolean; water?: boolean; powder?: boolean } = {}): boolean {
   const body = bodyBox(world, pos)
   for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) {
@@ -39,7 +42,7 @@ export function bodyClear(world: CollisionWorld, pos: Point, { web = false, wate
         const block = world.blockAt(new Vec3(x, y, z), false)
         if (!block) return false
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
-        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && (require('../movement') as typeof import('../movement')).waterCell?.(block))) return false
+        if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && waterCell()?.(block))) return false
         if (shapeBoxes(block, { x, y, z }).some(box => intersects(body, box))) return false
       }
     }

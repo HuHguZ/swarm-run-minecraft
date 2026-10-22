@@ -518,9 +518,14 @@ export class TacticalSystem {
         await bot.equip(bucket, 'hand')
         if (ctl.aborted) return { cancelled: true }
         await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+        const feet = bot.entity.position.floored()
         bot.activateItem()
         await movement.sleep(200)
-        return { extinguished: !!bot.entity.isInWater }
+        const extinguished = !!bot.entity.isInWater
+        // Воду — назад в ведро, как бой (pvp fireTurn: потушился и зачерпнул): иначе к следующему поджогу ведро пустое
+        // (стенд 21.10: меч чемпиона с Огненным аспектом поджигал синих раз за разом).
+        if (extinguished && !ctl.aborted) await (require('../../obsidian') as typeof import('../../obsidian')).scoopWater(bot, feet).catch(() => false)
+        return { extinguished }
       }
       case 'Surface': return movement.escapeWater(bot, ctl, { timeoutMs: 15000, visibleOnly: true })
       case 'EnterPortal': return (require('../../nether') as typeof import('../../nether')).enter(session, ctl, { scan: 4, timeoutSeconds: 20, noIgniter: true })

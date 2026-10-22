@@ -73,6 +73,25 @@ function backToDrop (bot, foePos, { sprint = true, kb = 0 }: any = {}) {
   return r.fall ? { fall: true, at: r.at, t: r.t } : null
 }
 
+// Удочка тянет к рыболову (1.21.11 FishingHook.retrieve → pullEntity): к скорости прибавляется (рыболов − крючок) × 0.1
+// — с 10 бл. это 1 бл/т к нему. Яма между мной и им — угроза спереди, «спиной к яме» её не видит (DeepSeek t2, 21.10).
+// Крючок — на мне (середина тела); запас 10%, как у backToDrop; встречного хода нет (тянет внезапно). null — не в яму.
+function pullDrop (bot, fisherPos) {
+  const me = bot.entity
+  if (!me || !fisherPos) return null
+  const cache = new Map()
+  const dist = Math.hypot(fisherPos.x - me.position.x, fisherPos.z - me.position.z)
+  if (dist < 1 || !hazardAround(bot, me.position, Math.min(8, Math.ceil(dist * 0.6) + 2), cache)) return null
+  const base = stateOf(bot)
+  const hookY = me.position.y + (me.height || 1.8) / 2
+  const v = (me.velocity || new Vec3(0, 0, 0)).clone()
+  v.x += (fisherPos.x - me.position.x) * 0.1 * 1.1
+  v.y += (fisherPos.y - hookY) * 0.1
+  v.z += (fisherPos.z - me.position.z) * 0.1 * 1.1
+  const r = knockRun(bot, base, me.position, v, me.onGround, yawFrom(me.position, fisherPos), false, cache)
+  return r.fall ? { fall: true, at: r.at, t: r.t } : null
+}
+
 // Яма по линии толчка (2026-09-26): от точки from через нас на dist блоков —
 // под рамкой пусто глубже SAFE_FALL или лава (lethalAt). Для «не прыгать у
 // края»: его спринт-удар (0.4 + 0.5, LivingEntity.knockback и
@@ -88,6 +107,8 @@ function dropAlong (bot, from, dist = 4.5) {
   const n = Math.hypot(dx, dz)
   if (n < 1e-3) return hazardAround(bot, me, 2, cache)
   dx /= n; dz /= n
+  // Запас 10 %, как в backToDrop: его позицию видим с опозданием, для себя — худший случай.
+  dist *= 1.1
   for (let t = 0.25; t <= dist + 1e-6; t += 0.25) {
     if (lethalAt(bot, new Vec3(me.x + dx * t, me.y, me.z + dz * t), cache)) return true
   }
@@ -206,4 +227,4 @@ function fixSelfKnockback (bot) {
   })
 }
 
-export { resistOf, knockback, hitVelocity, knockRun, backToDrop, dropAlong, pushPlan, fixSelfKnockback }
+export { resistOf, knockback, hitVelocity, knockRun, backToDrop, pullDrop, dropAlong, pushPlan, fixSelfKnockback }

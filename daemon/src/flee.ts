@@ -161,7 +161,20 @@ const HURTS = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'cactus', 'sw
 // Сколько блоков можно пробежать по направлению без обрыва (>3), лавы и
 // стены выше прыжка. Возвращает длину и точку прибытия.
 // maxDrop — спуск за шаг (по умолчанию 3: без заметного урона; уворот от зелья/булавы — до 6, падение дешевле удара).
+// Чтение клеток в расчётах бега — из кеша тела (fastblocks, S9), а не bot.blockAt (новый Block на каждый вызов): пересчёт
+// бегства раз в 300 мс трогал десятки тысяч клеток — pickDirection 50 мс и escapeRoute 130 мс синхронно, физика тела стояла
+// (стенд бота-противника 22.10: «flee…» и скорость 0 у человека в 5 бл.). Только чтение: вид не пишет в тело.
+function cells (bot) {
+  const fb = bot && bot._ndFastBlocks
+  if (!fb || bot._ndCells) return bot
+  const v = Object.create(bot)
+  v._ndCells = true
+  v.blockAt = p => fb.block(p.x, p.y, p.z)
+  return v
+}
+
 function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
+  bot = cells(bot)
   const DYS = [0, 1]; for (let k = 1; k <= maxDrop; k++) DYS.push(-k)
   const me = bot.entity.position
   let y = Math.floor(me.y)
@@ -192,6 +205,12 @@ function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
       }
     }
     if (found === null || found === 'bad') break
+    // Край рамки (±0.3 поперёк хода) над лавой или огнём на уровне ног или пола — дальше не бег: срезанный угол или
+    // толчок — и в яме (стенд 15×15 a8 21.10: ямы лавы на −1 у холмов Колизея, 4 смерти «tried to swim in lava»).
+    if ([-0.3, 0.3].some(sd => [found, found - 1].some(yy => {
+      const b = bot.blockAt(new Vec3(Math.floor(me.x + dir.x * s - dir.z * sd), yy, Math.floor(me.z + dir.z * s + dir.x * sd)))
+      return !!b && /^(lava|fire|soul_fire)$/.test(b.name)
+    }))) break
     // Free endpoint cells can still squeeze the body's width through touching wall corners.
     if ([.25, .5, .75, 1].some(t => {
       const p = new Vec3(me.x + dir.x * (s - 1 + t), Math.max(y, found), me.z + dir.z * (s - 1 + t))
@@ -211,6 +230,7 @@ function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
 // можно стоять, на 5 шагов от точки (до 90 клеток) и сколько из них дальше 4 бл. по прямой (выходы наружу). Комната с одним
 // проходом, ниша, тупик коридора — мало клеток и выходов; поле — много. Цена: 0 на открытом, растёт к тупику.
 function enclosure (bot, E) {
+  bot = cells(bot)
   const open = b => b && b.boundingBox === 'empty' && b.name !== 'cobweb' && !HURTS.has(b.name)
   const stand = (x, y, z) => { const g = bot.blockAt(new Vec3(x, y - 1, z)); return open(bot.blockAt(new Vec3(x, y, z))) && open(bot.blockAt(new Vec3(x, y + 1, z))) && !!g && !HURTS.has(g.name) && (g.boundingBox === 'block' || g.name === 'water') }
   const s0 = { x: Math.floor(E.x), y: Math.floor(E.y), z: Math.floor(E.z), d: 0 }
@@ -233,6 +253,7 @@ function enclosure (bot, E) {
 // тело (S4c 07.10, нативный A/B s4c-ab: 4 смерти «fell from a high place / doomed to fall» в фазе wither-skeleton из 8).
 const EDGE_RING = [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2], [1, 1], [1, -1], [-1, 1], [-1, -1]]
 function edgeRisk (bot, E) {
+  bot = cells(bot)
   const x0 = Math.floor(E.x); const y0 = Math.floor(E.y); const z0 = Math.floor(E.z)
   let risk = 0
   for (const [dx, dz] of EDGE_RING) {
@@ -250,10 +271,21 @@ function edgeRisk (bot, E) {
 
 // Лучшее направление бегства сейчас. prevYaw — чтобы не дёргаться между
 // почти равными вариантами.
+// Можно ли мостом по оси yaw: вода сразу впереди, берег в 24 бл., блоков хватает (water-bridge.bridgeWorth).
+function bridgeable (bot, yaw) {
+  if (process.env.ND_WATER_BRIDGE === '0' || !bot.entity || !bot.inventory) return false
+  const wb: typeof import('./water-bridge') = require('./water-bridge')
+  const p = bot.entity.position
+  const support = new Vec3(Math.floor(p.x), Math.floor(p.y) - 1, Math.floor(p.z))
+  const ahead = wb.waterAhead(bot, support, wb.axisOf(yaw))
+  const blocks = require('./edges').fillerCount(bot)
+  return wb.bridgeWorth({ ...ahead, blocks })
+}
 function insideArena(p, arena) {
   return !arena || Math.abs(p.x - arena.x) + .3 <= arena.r && Math.abs(p.z - arena.z) + .3 <= arena.r && p.y > (arena.killY ?? -64)
 }
-function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null) {
+function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null, extra: ((o: { dir: { x: number, z: number }, run: number, end: any }) => number) | null = null) {
+  bot = cells(bot)
   const me = bot.entity.position
   let best = null
   const options = []
@@ -274,11 +306,15 @@ function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [
       if (h.doc.blast && pass < h.doc.blast) cost += (h.swelling ? 40 : 8) * (h.doc.blast - pass) / h.doc.blast
     }
     cost += goalPull(E, goals)
+    // Своя цена вызывающего (динамит: где я буду, когда рванёт каждый заряд).
+    if (extra) cost += extra({ dir, run: run.len, end: E })
     // Короткий пробег — это тупик впереди.
     cost += (10 - run.len) * 1.5
     // Бег в воду — с суши: в воде тело ~2 бл/с (втрое медленнее спринта), там утопленники, нора и коробка не
     // строятся (trap0 02.10, ночь: отход убежал в озеро, «IN_WATER», утопленник добил). Уже в воде — не штраф.
-    if (run.wet && !wetStart) cost += run.wet * 2.5
+    // Мост по воде (water-bridge: блок к грани опоры у края, бег по своим блокам) — блоков хватает и берег есть:
+    // вода почти не дороже суши (ND_WATER_BRIDGE=0 — без моста).
+    if (run.wet && !wetStart) cost += run.wet * (bridgeable(bot, yaw) ? 0.5 : 2.5)
     if (prevYaw !== null) {
       let dy = Math.abs(yaw - prevYaw) % (Math.PI * 2)
       if (dy > Math.PI) dy = Math.PI * 2 - dy
@@ -299,6 +335,7 @@ function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [
 // только если я там раньше любого ходячего (его путь — по прямой, скорость — доля моего спринта). Цель — клетка с
 // наименьшей опасностью от всех разом и дальше всех от ближайшего; идти — на клетку пути в 3–4 шагах. null — выхода нет.
 function escapeRoute (bot, hs, maxNodes = 1500, radius = 20, goals: any[] = [], arena = null) {
+  bot = cells(bot)
   const me = bot.entity.position
   const walkers = hs.filter(h => h.doc.radius > 0 && h.d < 32)
   const start = { x: Math.floor(me.x), y: Math.floor(me.y + 0.01), z: Math.floor(me.z) }
@@ -395,7 +432,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   let dodgeUntil = 0
   let dodgeKey = null
   let cornered = 0
-  let jukeNext = 0; let jukeUntil = 0; let jukeYaw = 0; let jukes = 0
+  let jukeNext = 0; let jukeUntil = 0; let jukeYaw = 0; let jukes = 0; let lunges = 0; let bridges = 0
   // S4d (07.10; ND_S4D=0 — прежний бег до срока): бег, за которым ходячий держится в 5 бл., не отрывает — так и сказать
   // через 3 игр. с, а не бежать 12 с к краю. Спринт 5.6 бл/с против зомби ~2.3, иссушителя ~2.75 (скорость моба ~ квадрат
   // атрибута .23/.25, javap) и паука ~4: на открытом месте за 3 с отрыв 5–10 бл.; держится рядом — значит площадка
@@ -430,7 +467,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
           from: [...fromNames],
           at: xyz(bot.entity.position),
           ran: Math.round(bot.entity.position.distanceTo(new Vec3(start.x, start.y, start.z))),
-          dodges: dodges || undefined, jukes: jukes || undefined
+          dodges: dodges || undefined, jukes: jukes || undefined, lunges: lunges || undefined, bridged: bridges || undefined
         }
       }
 
@@ -477,6 +514,20 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
         }
         if (!fastNear) jukeNext = 0
         bot.look(now < jukeUntil ? jukeYaw : plan.yaw, pitch, true).catch(() => {})
+        // Копьё с «Выпадом» (pvp/lunge): укол по ходу бега — рывок 0.458·уровень бл/т, когда погоня в 8 бл. и сытости хватает.
+        if (now >= jukeUntil && walker) {
+          const y = plan.yaw
+          const lj = await require('./pvp/lunge').lungeFlee(bot, y, { chaseD: walker.d, clear: n => runLength(bot, { x: -Math.sin(y), z: -Math.cos(y) }, n, 3, arena).len >= n })
+          if (lj === 'jab') lunges++
+        }
+        // Вода прямо по ходу и мост выгоден — мост (water-bridge), потом бег дальше.
+        if (now >= jukeUntil && !inWater(bot) && bot.entity.onGround && bridgeable(bot, plan.yaw)) {
+          const wb: typeof import('./water-bridge') = require('./water-bridge')
+          const p0 = bot.entity.position
+          const ahead = wb.waterAhead(bot, new Vec3(Math.floor(p0.x), Math.floor(p0.y) - 1, Math.floor(p0.z)), wb.axisOf(plan.yaw))
+          const br = await wb.waterBridge(bot, ctl, plan.yaw, { maxBlocks: ahead.water })
+          bridges = (bridges || 0) + br.placed
+        }
         const f = keyDir(bot, 'forward')
         const wet = inWater(bot)
         set('forward', (stepSafe(bot, f) || wet) && insideArena(bot.entity.position.offset(f.x, 0, f.z), arena))
@@ -502,7 +553,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
     stop()
     edgeGuard.stop()
   }
-  return { mode: 'бежал до конца срока', from: [...fromNames], at: xyz(bot.entity.position), dodges: dodges || undefined, jukes: jukes || undefined, reason: reason || undefined }
+  return { mode: 'бежал до конца срока', from: [...fromNames], at: xyz(bot.entity.position), dodges: dodges || undefined, jukes: jukes || undefined, lunges: lunges || undefined, bridged: bridges || undefined, reason: reason || undefined }
 }
 
 // Жемчуг туда, где безопаснее всего. Точка переноса считается честно

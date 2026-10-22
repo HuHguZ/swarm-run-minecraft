@@ -22,6 +22,6 @@
 export { SAFE_FALL, KB_HIT, KB_SPRINT, column, support, lethalAt, clearance, hazardAround, run, stateOf, worldOf,
   simOf, cloneState, IDLE } from './edges/forecast'
 export { guard } from './edges/reflex'
-export { knockback, hitVelocity, knockRun, backToDrop, pushPlan, resistOf, dropAlong, fixSelfKnockback } from './edges/knockback'
+export { knockback, hitVelocity, knockRun, backToDrop, pullDrop, pushPlan, resistOf, dropAlong, fixSelfKnockback } from './edges/knockback'
 export { installFallGuard, afterPacket, mlgDrop, priceDrops, mlgLandingBad, waterloggable, falling } from './edges/mlg'
 export { findShaft, climbBack, fillerCount, gatherBlocks } from './edges/climb'

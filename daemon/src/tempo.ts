@@ -17,6 +17,7 @@ import * as gameClock from './game-clock'
 
 import { raySees } from './perception'
 import { blockName, stepSafe, keyDir, wantsJump } from './moves'
+import { edgeBurns } from './pvp/body'
 import { sleep } from './movement'
 
 const ON = process.env.ND_TEMPO !== '0'
@@ -514,12 +515,13 @@ async function kite (bot, ctl, threats, { ms = 1500, until = null, stop = null }
       if (!plan) { out = 'некуда'; break }
       await bot.look(plan.yaw, 0, true).catch(() => {})
       const f = keyDir(bot, 'forward')
-      const go = stepSafe(bot, f, { water: false })
+      // Край рамки над лавой или огнём — не шаг (поток «окружение» 21.10: центр шага на камне, край — над ямой с лавой).
+      const go = stepSafe(bot, f, { water: false }) && !edgeBurns(bot, f)
       bot.setControlState('forward', go)
       bot.setControlState('sprint', go && (bot.food ?? 20) > 6)
       // Спринт с прыжками быстрее спринта (прыжок со спринтом даёт +0.2 по ходу,
       // LivingEntity.jumpFromGround) — если приземление по ходу безопасно.
-      const hop = go && bot.entity.onGround && stepSafe(bot, f, { water: false, reach: 2.6 })
+      const hop = go && bot.entity.onGround && stepSafe(bot, f, { water: false, reach: 2.6 }) && !edgeBurns(bot, f, 2.6)
       bot.setControlState('jump', wantsJump(bot, f) || hop)
       await sleep(TICK_MS)
     }

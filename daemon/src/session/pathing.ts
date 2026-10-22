@@ -83,6 +83,20 @@ function updateMovements (this: Session, force = false): void {
       const above = bot.blockAt(block.position.offset(0, 1, 0), false)
       return above && above.name === 'water' ? (movements.liquidCost ?? 1) : 0
     })
+    // Арена (goto с arena): узел над лавой и клетка у неё — дорого (pvp/movement.burnStepCost). Ямы колизея — лава вровень
+    // с полом: путь с запасом блоков «мостил» её, неудачная поставка — шаг в лаву (поток enc, стенд 15×15, 21.10). Только на
+    // арене — мост через лаву в Аду спидрану нужен.
+    // Цена — по памяти на Block из кеша, как у лавы ниже (fastblocks: версия растёт на любом сбросе кеша): без неё 18 клеток
+    // на узел у 30 ботов разом — поход «стоит 5 с» (стенд 15×15, 21.10: 🧊 goto 16 → 45 за раунд).
+    if (this.gotoArena && Array.isArray(movements.exclusionAreasStep)) {
+      const burn = (require('../pvp/movement') as typeof import('../pvp/movement')).burnStepCost(bot), fbm = bot._ndFastBlocks
+      movements.exclusionAreasStep.push((block: any) => {
+        if (fbm && fbm.live && block && block._ndBurnVer === fbm.ver) return block._ndBurnV
+        const v = burn(block)
+        if (fbm && fbm.live && block) { block._ndBurnVer = fbm.ver; block._ndBurnV = v }
+        return v
+      })
+    }
     if (Array.isArray(movements.exclusionAreasStep)) {
       const fbm = bot._ndFastBlocks
       // На Block из кеша — память цены лавы (версия кеша fastblocks, флаг строгости, цена).

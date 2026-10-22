@@ -24,7 +24,7 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
           if (shot) box.shot = { from: { ...shot.from }, at: gameClock.now() }
           d.potions = []; d.arrows = []; d.aims = []
         }
-        if (d.potions.length || d.clouds.length || d.smashes.length || d.arrows.length || d.aims.length || d.lava.length) ws.send(JSON.stringify({ type: 'danger', dangers: { potions: d.potions, clouds: d.clouds, smashes: d.smashes, arrows: d.arrows, aims: d.aims, lava: d.lava }, pos: session.bot.entity.position }))
+        if (d.potions.length || d.clouds.length || d.smashes.length || d.arrows.length || d.aims.length || d.lava.length || d.floor.length || d.blasts.length || d.web.length) ws.send(JSON.stringify({ type: 'danger', dangers: { potions: d.potions, clouds: d.clouds, smashes: d.smashes, arrows: d.arrows, aims: d.aims, lava: d.lava, floor: d.floor, blasts: d.blasts, web: d.web }, pos: session.bot.entity.position }))
       } catch {}
     }
     let sourceClock

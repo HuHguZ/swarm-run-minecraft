@@ -12,14 +12,20 @@ import { swarmMethods } from './swarm'
 import { intentMethods } from './intents'
 import { worldTruthMethods } from './world-truth'
 import { directorMethods } from './director'
+import { cacheMethods } from './caches'
+import { pvpEscapeMethods } from './pvp-escape'
 
 function createMethods (ctx: RpcContext): Record<string, Method> {
   const methods: Record<string, Method> = {}
-  for (const part of [observationMethods(ctx), hazardMethods(ctx), hazardCoverMethods(ctx), aerialMethods(ctx), terrainMethods(ctx), terrainCoverMethods(ctx), swarmMethods(ctx), intentMethods(ctx), worldTruthMethods(ctx), directorMethods(ctx)]) {
+  for (const part of [observationMethods(ctx), hazardMethods(ctx), hazardCoverMethods(ctx), aerialMethods(ctx), terrainMethods(ctx), terrainCoverMethods(ctx), swarmMethods(ctx), intentMethods(ctx), worldTruthMethods(ctx), directorMethods(ctx), cacheMethods(ctx)]) {
     for (const [name, fn] of Object.entries(part)) {
       if (Object.prototype.hasOwnProperty.call(methods, name)) throw new Error(`RPC: метод ${name} объявлен дважды`)
       methods[name] = fn as Method
     }
+  }
+  for (const [name, fn] of Object.entries(pvpEscapeMethods(ctx))) {
+    if (Object.prototype.hasOwnProperty.call(methods, name)) throw new Error(`RPC: метод ${name} объявлен дважды`)
+    methods[name] = fn as Method
   }
   return methods
 }

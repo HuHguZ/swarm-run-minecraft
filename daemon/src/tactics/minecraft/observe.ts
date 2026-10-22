@@ -428,5 +428,7 @@ export function shieldCanContinue(state: TacticalState | null): state is Tactica
       enemy.threatening && !enemy.unseen && (flee.DOCTRINE[enemy.kind]?.range || 0) >= enemy.distance))
 }
 
-const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap)$/
+// lava_escape (rpc/pvp-escape, поток «окружение» 21.10): выход из лавы без pathfinder'а — тактика его не перебивает
+// (a39: «прервано (tactical)» и своё бегство вместо выхода — 4 смерти «tried to swim in lava» из 17).
+const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|lava_escape|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
 export function commandedEscape(session: any): boolean { const c = session.current; return !!c && !c.ctl?.aborted && (COMMANDED_ESCAPE.test(c.name || '') || locks.protectedClimb(session)) }

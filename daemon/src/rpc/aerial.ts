@@ -137,6 +137,8 @@ function aerialMethods ({ session }: RpcContext) {
       try {
         const e = sight.observe(bot.players?.[p.target]?.entity)
         if (!e || !sight.visible(e)) return { ok: false, fired: false, why: 'цель не видна' }
+        // Всплеск — 2.4 бл. от точки у его ног: свой рядом с целью улетит вместе с ней (DeepSeek, разбор сброса 21.10).
+        if ((p.allies || []).some((n: string) => { const a = bot.players?.[n]?.entity; return a && a.position.distanceTo(e.position) < 3 })) return { ok: false, fired: false, why: 'свой у цели' }
         const mace = require('../mace')
         if (!p.force && !mace.pushPlan(bot, e, { sees: true, theyUp: e.position.y > bot.entity.position.y + 2 })) return { ok: false, fired: false, why: 'толкать сейчас невыгодно' }
         const result = await mace.windPush(bot, e, { vel: () => sight.observe(e)?.velocity || { x: 0, y: 0, z: 0 } })

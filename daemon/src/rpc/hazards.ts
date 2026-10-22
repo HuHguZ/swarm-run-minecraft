@@ -42,6 +42,32 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
       const w = await mv.escapeWater(bot, ctl, { timeoutMs: 3000 }).catch(() => null)
       return { ok: !!w?.ok, how: w?.ok ? 'выплыл из воды' : `в воде: источника ${sources.length ? 'не убрать' : 'не видно'}, не выплыл` }
     }, { timeoutMs: 6000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Динамит рядом (датчик threats: горящий и его цепочка): бег прочь от всех зарядов разом, пока они в досягаемости
+    // (tactics/blast.dodgeBlast — конец по миру, не по сроку); бежать некуда, а щит есть — щит к заряду.
+    dodge_blast: async (p: any = {}) => session.runIntent('dodge_blast', async (ctl) => {
+      const B = require('../tactics/blast')
+      const bot = session.require(), me = bot.entity.position
+      // Не успеть: спринт ~0.26 бл/т за остаток фитиля не выводит из 8 бл. — щит к заряду (взрыв в bypasses_shield нет),
+      // а не спина под взрыв (стенд бота-противника 22.10: фитиль 1 с у ног — убежал на 3 бл. и погиб).
+      const late = B.tntCharges(bot, me).some(c => c.primed && c.position.distanceTo(me) + 0.26 * c.fuse < B.TNT_REACH)
+      if (late && B.shieldableBlast(bot) && bot.inventory.items().some(i => i.name === 'shield')) return { late: true, ...await B.shieldBlast(session, ctl) }
+      const ran = await B.dodgeBlast(session, ctl)
+      return ran.cornered && !ctl.aborted && B.shieldableBlast(session.require()) ? { ...ran, shield: await B.shieldBlast(session, ctl) } : ran
+    }, { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Паутина на теле: срезать мечом или ножницами (8 т на клетку) — голову, потом ноги; рукой — 20 с, нечем — не браться.
+    clear_web: async (p: any = {}) => session.runIntent('clear_web', async () => {
+      const bot = session.require()
+      const feet = bot.entity.position.floored()
+      const webs = [feet.offset(0, 1, 0), feet].map(c => bot.blockAt(c)).filter(b => b?.name === 'cobweb')
+      if (!webs.length) return { ok: true, cut: 0, why: 'не в паутине' }
+      const items = bot.inventory.items()
+      const tool = items.find(i => i.name === 'shears') || items.find(i => /_sword$/.test(i.name))
+      if (!tool) return { ok: false, cut: 0, why: 'нечем срезать' }
+      if (bot.heldItem?.name !== tool.name) await bot.equip(tool, 'hand')
+      let cut = 0
+      for (const w of webs) { try { await bot.dig(w, true); cut++ } catch {} }
+      return { ok: cut === webs.length, cut, tool: tool.name }
+    }, { timeoutMs: 4000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Рывок уворота (12.10: «уворачиваясь — бегать и прыгать, а не шагать»): развернуться в сторону ухода, спринт и прыжки
     // ticks тиков, без поиска пути. Перед рывком — 3 клетки по ходу: без лавы/огня и с полом не глубже 4 бл.; опасно —
     // назад или вбок.

@@ -311,8 +311,58 @@ function aims (bot, foes: string[] | null, scope: string | null) {
   }
   return out
 }
-function dangers (bot, { radius = 12, foes = null as string[] | null } = {}) {
-  if (!bot || !bot.entity) return { potions: [], holders: [], clouds: [], smashes: [], arrows: [], aims: [], lava: [] }
+// Пол уходит из-под ног (игра пользователя 22.10: «ломаю блоки под ними — в дырки улетают, ничего не делают, смотрят, как
+// скидываю на дно»): опора в 1.8 бл. от ног по горизонтали и на 1–3 ниже исчезла (стала воздухом) или трескается (чужие
+// трещины) — видно глазами, как игроку. Свою копку не считаем. События живут 0.8 с.
+function floorTracker (bot) {
+  if (bot._ndFloor) return bot._ndFloor
+  const ev: any[] = []
+  bot._ndFloor = ev
+  const near = (p) => {
+    const me = bot.entity?.position
+    return !!me && Math.abs(p.x + .5 - me.x) <= 1.8 && Math.abs(p.z + .5 - me.z) <= 1.8 && p.y < me.y && p.y >= Math.floor(me.y) - 3
+  }
+  const mine = (p) => !!bot.targetDigBlock?.position && bot.targetDigBlock.position.equals(p)
+  bot.on('blockUpdate', (oldB, newB) => {
+    try { if (oldB?.boundingBox === 'block' && newB && newB.boundingBox !== 'block' && near(newB.position) && !mine(newB.position)) ev.push({ at: newB.position.clone(), t: gameClock.now() }) } catch {}
+  })
+  bot.on('blockBreakProgressObserved', (block, stage, breaker) => {
+    try { if (block?.position && breaker?.id !== bot.entity?.id && near(block.position)) ev.push({ at: block.position.clone(), t: gameClock.now() }) } catch {}
+  })
+  return ev
+}
+function floorDanger (bot, foes: string[] | null, scope: string | null) {
+  const F = floorTracker(bot)
+  const now = gameClock.now()
+  while (F.length && now - F[0].t > 800) F.shift()
+  if (!F.length || !bot.entity) return []
+  const me = bot.entity.position
+  // Враг рядом (8 бл.) — иначе пол ломает свой или само (вода, гравий): не дёргаться.
+  let foe = null
+  for (const raw of Object.values(bot.entities) as any[]) {
+    if (!raw || raw === bot.entity || raw.type !== 'player' || (foes !== null && !foes.includes(raw.username)) || !raw.position || raw.position.distanceTo(me) > 8) continue
+    const e = visiblePlayer(bot, raw, scope); if (e && (!foe || e.position.distanceTo(me) < foe.position.distanceTo(me))) foe = e
+  }
+  if (!foe) return []
+  const at = { x: F.reduce((s, e) => s + e.at.x + .5, 0) / F.length, y: Math.floor(me.y) - 1, z: F.reduce((s, e) => s + e.at.z + .5, 0) / F.length }
+  return [{ name: foe.username, at, from: { x: foe.position.x, y: foe.position.y, z: foe.position.z }, ticks: 0, holes: F.length }]
+}
+// Один расчёт на игровой тик (стенд 22.10: опрос состояния драйвера 4 раза в секунду считал опасности заново, хотя рассылка
+// уже посчитала их в этом тике, — 6 % процессора тела). Копия верхнего уровня: вызывающий может переназначить поле.
+const dangerMemo = new WeakMap<object, { key: string, value: any }>()
+function dangers (bot, opts: { radius?: number, foes?: string[] | null } = {}) {
+  const tick = bot?.ndClock?.ticks
+  if (!Number.isSafeInteger(tick) || !bot.entity) return dangersNow(bot, opts)
+  const foes = opts.foes == null ? null : [...new Set(Array.isArray(opts.foes) ? opts.foes.filter(n => typeof n === 'string') : [])].sort()
+  const key = `${tick}|${opts.radius ?? 12}|${foes === null ? '*' : foes.join(',')}`
+  const hit = dangerMemo.get(bot)
+  if (hit?.key === key) return { ...hit.value }
+  const value = dangersNow(bot, opts)
+  dangerMemo.set(bot, { key, value })
+  return { ...value }
+}
+function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) {
+  if (!bot || !bot.entity) return { potions: [], holders: [], clouds: [], smashes: [], arrows: [], aims: [], lava: [], floor: [], blasts: [], web: [] }
   // An explicit empty team list differs from the legacy unfiltered observation.
   foes = foes === null ? null : [...new Set(Array.isArray(foes) ? foes.filter(name => typeof name === 'string') : [])].sort()
   const scope = foes === null ? null : JSON.stringify(foes)
@@ -387,8 +437,16 @@ function dangers (bot, { radius = 12, foes = null as string[] | null } = {}) {
     if (b && b.name === 'lava' && seesPlayer(bot, { position: b.position.offset(.5, 0, .5), height: 1, width: 1 })) lava.push({ at: { x: b.position.x, y: b.position.y, z: b.position.z }, d: Math.hypot(dx, dz) })
   }
   lava.sort((a, b) => a.d - b.d)
-  return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1) }
+  // Динамит: горящий и блоки, которые он подожжёт цепочкой (tactics/blast.tntCharges), в досягаемости взрыва с запасом.
+  const B: typeof import('./tactics/blast') = require('./tactics/blast')
+  const blasts = B.tntCharges(bot, me).filter(c => c.position.distanceTo(me) <= B.TNT_REACH + 2)
+    .map(c => ({ at: { x: c.position.x, y: c.position.y, z: c.position.z }, fuse: c.fuse, primed: c.primed, ...(c.id != null ? { id: c.id } : {}) }))
+  // Паутина на теле (клетка ног или головы): в ней шаг вчетверо медленнее — ни уйти, ни догнать (стенд бота-противника 22.10:
+  // паутина на боте — 10 с на месте под ударами).
+  const webs = [f0, f0.offset(0, 1, 0)].filter(c => bot.blockAt(c)?.name === 'cobweb')
+  const web = webs.length ? [{ at: { x: webs[0].x, y: webs[0].y, z: webs[0].z }, cells: webs.length }] : []
+  return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1), floor: floorDanger(bot, foes, scope), blasts, web }
 }
 
 module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers }
-export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers }
+export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, smashes }
