@@ -5,7 +5,7 @@
 // креативе, цепочку динамита за убегающим, булаву сверху, лук издали, паутину на бота. Всё время считает стояние: бот ближе
 // 7 бл. ко мне секунду и дольше не двигается, не бьёт, не держит щит и не ест — «стоит» (время — для лога драйвера).
 // Итог сценария — строка «📋 {json}», общий — «📊 {json}».
-//   node dist/farm/arena/adversary.js <слот> [rush,undermine,tnt,mace,bow,web] [минут] [имя]
+//   node dist/farm/arena/adversary.js <слот> [rush,undermine,tnt,mace,bow,web,idle,pit,tntlate,moat,room] [минут] [имя]
 import * as path from 'path'
 import { REPO_ROOT } from '../../daemon/src/paths'
 import { rcon } from './server'
@@ -51,7 +51,8 @@ let scene = 'старт'
 let tick = 0
 const hurt = new Map<string, number>()
 const dead = new Map<string, number>()
-bot.on('entitySwingArm', (e: any) => { const w = watch.get(e.username); if (w) w.swing = tick })
+const swings = new Map<string, number>()
+bot.on('entitySwingArm', (e: any) => { const w = watch.get(e.username); if (w) w.swing = tick; if (e.username) swings.set(e.username, (swings.get(e.username) || 0) + 1) })
 bot.on('entityHurt', (e: any) => { if (e.username) hurt.set(e.username, (hurt.get(e.username) || 0) + 1) })
 bot.on('entityDead', (e: any) => { if (e.username) dead.set(e.username, tick) })
 bot.on('physicsTick', () => {
@@ -63,6 +64,7 @@ bot.on('physicsTick', () => {
     const dv = e.position.minus(w.p)
     w.v = w.v.scaled(0.5).plus(dv.scaled(0.5)); w.p = e.position.clone()
     const d = dist(e)
+    if (d <= 16) w.nearAt = tick
     const moved = Math.hypot(dv.x, dv.z) > 0.03 || Math.abs(dv.y) > 0.08
     if (d <= 7 && !moved && tick - w.swing >= 12 && !handActive(e)) { if (!w.still) w.from = stamp(); w.still++; w.d = d }
     else {
@@ -270,19 +272,20 @@ async function idle () {
 // Замер: сколько раз меня ударили, кто стоял. Яму потом засыпаю тем, что было.
 async function pit () {
   await setMode('survival'); await immortal(); await hold('netherite_sword')
-  const t = nearest(e => dist(e) < 40 && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block')
-  if (!t) return { skip: 'нет целей на полу' }
-  const base = t.position.floored()
   const solid = (c: any) => bot.blockAt(c)?.boundingBox === 'block' && !/lava|water/.test(bot.blockAt(c)?.name || '')
   const air = (c: any) => bot.blockAt(c)?.boundingBox === 'empty'
-  const cell = [[2, 0], [-2, 0], [0, 2], [0, -2]].map(([dx, dz]) => base.offset(dx, 0, dz)).find(c => air(c) && air(c.offset(0, 1, 0)) && solid(c.offset(0, -1, 0)) && solid(c.offset(0, -2, 0)) && solid(c.offset(0, -3, 0)))
-  if (!cell) return { skip: 'нет места для ямы' }
+  const spot = (e: any) => [[2, 0], [-2, 0], [0, 2], [0, -2]].map(([dx, dz]) => e.position.floored().offset(dx, 0, dz)).find(c => air(c) && air(c.offset(0, 1, 0)) && solid(c.offset(0, -1, 0)) && solid(c.offset(0, -2, 0)) && solid(c.offset(0, -3, 0)))
+  const t = foes().filter(e => dist(e) < 60 && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block' && spot(e)).sort((a, b) => dist(a) - dist(b))[0]
+  if (!t) return { skip: 'нет места для ямы' }
+  const cell = spot(t)
   const was = [1, 2].map(k => bot.blockAt(cell.offset(0, -k, 0))?.name || 'stone')
   for (const k of [1, 2]) await cmd(`setblock ${cell.x} ${cell.y - k} ${cell.z} minecraft:air`)
   await cmd(`tp ${NAME} ${cell.x + .5} ${cell.y - 2} ${cell.z + .5}`); await sleep(300)
-  const me0 = hurt.get(NAME) || 0, t0 = Date.now(), f0 = freezes.length, swing0 = watch.get(t.username)?.swing ?? -99
+  if (bot.entity.position.y > cell.y - 1.5) say(`яма не вышла: я на ${bot.entity.position.y.toFixed(1)}, край ${cell.y}`)
+  const me0 = hurt.get(NAME) || 0, t0 = Date.now(), f0 = freezes.length, sw0 = swings.get(t.username) || 0
+  say(`🕳 я в яме у ${t.username}`)
   while (Date.now() - t0 < 10000) await sleep(100)
-  const swung = (watch.get(t.username)?.swing ?? -99) > swing0
+  const swung = (swings.get(t.username) || 0) - sw0
   await cmd(`tp ${NAME} ${cell.x + .5} ${cell.y} ${cell.z + .5}`); await sleep(200)
   for (const k of [2, 1]) await cmd(`setblock ${cell.x} ${cell.y - k} ${cell.z} minecraft:${was[k - 1]}`)
   return { name: t.username, hitMe: (hurt.get(NAME) || 0) - me0, swung, stands: freezes.slice(f0).filter(f => f.who === t.username).reduce((a, f) => a + f.s, 0) }
@@ -306,31 +309,84 @@ async function tntlate () {
   return { name, shield, hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.has(name) }
 }
 
-// Ров: вода 4 бл. шириной между вооружённым ботом и мной. Пользователь: «плывут по воде вместо прыжков по блокам». Замер:
-// сколько тиков бот провёл в воде за 15 с, дошёл ли до меня (ближе 3 бл.), сколько блоков положил в ров.
+// Остров во рву: я на 3×3 посреди кольца воды 4 бл. шириной и 2 глубиной на поле Колизея (пользователь: «плывут по воде
+// вместо прыжков по блокам»). Боты видят меня и идут сами. Пол сохраняю clone под потолок мира и возвращаю. Замер — 15 с
+// с подхода первого бота на 10 бл.: кто первым дошёл до острова (ближе 2.5 бл. по горизонтали, на моей высоте) и через
+// сколько после подхода, тиков ботов в воде, клеток рва, заложенных блоками, ударов по мне.
 async function moat () {
   await setMode('survival'); await immortal(); await hold('netherite_sword')
-  const t = nearest(e => dist(e) < 40 && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block')
-  if (!t) return { skip: 'нет целей на полу' }
-  const name = t.username, b0 = t.position.floored(), y = b0.y - 1
-  const floor = bot.blockAt(b0.offset(0, -1, 0))?.name || 'stone'
-  await cmd(`item replace entity ${name} weapon.mainhand with minecraft:iron_sword`); await cmd(`give ${name} minecraft:cobblestone 32`)
-  // Ров по x от +2 до +5, по z ±4; стою за ним на +8.
-  await cmd(`fill ${b0.x + 2} ${y} ${b0.z - 4} ${b0.x + 5} ${y} ${b0.z + 4} minecraft:water replace ${floor}`)
-  await cmd(`tp ${NAME} ${b0.x + 8.5} ${b0.y} ${b0.z + .5}`); await sleep(300)
-  const t0 = Date.now(); let wet = 0, reached: number | null = null
-  while (Date.now() - t0 < 15000 && bot.entities[t.id] && !dead.has(name)) {
+  const [X, Y, Z] = (process.env.ARMS_POS || '600 120 600').split(/\s+/).map(Number)
+  // Блоки на мост у ботов рядом (обычно они есть — проверяем «есть блоки → мост, а не вплавь»).
+  if (process.env.ADV_MOAT_BLOCKS !== '0') for (const e of foes().filter(e => dist(e) < 40)) await cmd(`give ${e.username} minecraft:cobblestone 32`)
+  // Центр поля: столбы, ямы и мосты ботов за раунд — площадку 13×13 расчищаю сам (объём с полом — в копию под потолок мира).
+  const c = new Vec3(X, Y, Z), lo = c.offset(-6, -3, -6), hi = c.offset(6, 3, 6)
+  await cmd(`clone ${lo.x} ${lo.y} ${lo.z} ${hi.x} ${hi.y} ${hi.z} ${lo.x} 300 ${lo.z}`)
+  await cmd(`fill ${c.x - 6} ${c.y} ${c.z - 6} ${c.x + 6} ${c.y + 3} ${c.z + 6} minecraft:air`)
+  await cmd(`fill ${lo.x} ${lo.y} ${lo.z} ${hi.x} ${c.y - 1} ${hi.z} minecraft:stone`)
+  await cmd(`fill ${c.x - 5} ${c.y - 2} ${c.z - 5} ${c.x + 5} ${c.y - 1} ${c.z + 5} minecraft:water`)
+  await cmd(`fill ${c.x - 1} ${c.y - 2} ${c.z - 1} ${c.x + 1} ${c.y - 1} ${c.z + 1} minecraft:stone`)
+  await cmd(`tp ${NAME} ${c.x + .5} ${c.y} ${c.z + .5}`); await sleep(300)
+  const ring = (x: number, z: number) => Math.max(Math.abs(x - c.x), Math.abs(z - c.z)) >= 2
+  const t0 = Date.now(), me0 = hurt.get(NAME) || 0, wet = new Map<string, number>()
+  // Кто стоял на площадке, когда я её строил, — не в счёт «дошёл первым».
+  const inside = new Set(foes().filter(e => Math.max(Math.abs(e.position.x - c.x - .5), Math.abs(e.position.z - c.z - .5)) < 7).map(e => e.username))
+  let first: any = null, near: number | null = null
+  // Рой в начале раунда лутает галереи — замер идёт с подхода первого бота на 10 бл. (15 с), не дольше 45 с всего.
+  while (Date.now() - t0 < 45000 && !(near != null && Date.now() - near > 15000)) {
     await sleep(50)
-    if (/water/.test(bot.blockAt(t.position.floored())?.name || '')) wet++
-    if (reached == null && dist(t) < 3) reached = Date.now() - t0
+    for (const e of foes()) {
+      if (dist(e) > 24) continue
+      if (near == null && !inside.has(e.username) && dist(e) < 10) near = Date.now()
+      if (/water/.test(bot.blockAt(e.position.floored())?.name || '')) wet.set(e.username, (wet.get(e.username) || 0) + 1)
+      if (!first && !inside.has(e.username) && Math.hypot(e.position.x - c.x - .5, e.position.z - c.z - .5) < 2.5 && Math.abs(e.position.y - c.y) < 1.5) first = { who: e.username, ms: Date.now() - t0, wet: wet.get(e.username) || 0 }
+    }
   }
   let placed = 0
-  for (let x = b0.x + 2; x <= b0.x + 5; x++) for (let z = b0.z - 4; z <= b0.z + 4; z++) if (!/water|air/.test(bot.blockAt(new Vec3(x, y, z))?.name || 'water')) placed++
-  await cmd(`fill ${b0.x + 2} ${y} ${b0.z - 4} ${b0.x + 5} ${y} ${b0.z + 4} minecraft:${floor} replace minecraft:water`)
-  return { name, wetTicks: wet, reachedMs: reached, placed }
+  for (let x = c.x - 5; x <= c.x + 5; x++) for (let z = c.z - 5; z <= c.z + 5; z++) if (ring(x, z) && !/water|air/.test(bot.blockAt(new Vec3(x, c.y - 1, z))?.name || 'water')) placed++
+  await cmd(`clone ${lo.x} 300 ${lo.z} ${hi.x} 306 ${hi.z} ${lo.x} ${lo.y} ${lo.z}`)
+  await cmd(`fill ${lo.x} 300 ${lo.z} ${hi.x} 306 ${hi.z} minecraft:air`)
+  const swimmers = [...wet].filter(([, n]) => n >= 10)
+  return { at: `${c.x},${c.z}`, nearMs: near && near - t0, first: first && { ...first, ms: first.ms - (near ?? t0) + t0 }, swimmers: swimmers.length, wetTicks: [...wet.values()].reduce((a, n) => a + n, 0), placed, hitMe: (hurt.get(NAME) || 0) - me0 }
 }
 
-const SCENES: Record<string, () => Promise<any>> = { rush, undermine, tnt, mace, bow, web, idle, pit, tntlate, moat }
+// Вбегаю в комнату (пользователь: «поздно замечают человека, забежавшего в комнату»): бот под крышей, я — в 5–8 бл. от него
+// на виду. Замер за 8 с: когда повернулся ко мне (взгляд в 30°), когда двинулся (ко мне или прочь на 1.5 бл.), когда меня
+// ударили; чем был занят — по логу драйвера в это время.
+async function room () {
+  await setMode('survival'); await immortal(); await hold('netherite_sword')
+  const roofed = (e: any) => { for (let k = 2; k <= 6; k++) if (bot.blockAt(e.position.offset(0, k, 0))?.boundingBox === 'block') return true; return false }
+  // Не тот, кто уже бьётся со мной: последние 10 с не был ближе 16 бл. ко мне.
+  const fresh = (e: any) => tick - (watch.get(e.username)?.nearAt ?? -1e9) > 200
+  const t = nearest(e => dist(e) < 80 && fresh(e) && roofed(e) && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block')
+  if (!t) return { skip: 'никого свежего под крышей' }
+  const name = t.username, base = t.position.floored()
+  const free = (c: any) => bot.blockAt(c)?.boundingBox === 'empty' && bot.blockAt(c.offset(0, 1, 0))?.boundingBox === 'empty' &&
+    bot.blockAt(c.offset(0, -1, 0))?.boundingBox === 'block' && !/lava|fire|cobweb|water/.test((bot.blockAt(c)?.name || '') + bot.blockAt(c.offset(0, -1, 0))?.name)
+  const clear = (c: any) => { const o = c.offset(.5, 1.62, .5), to = t.position.offset(0, 1.2, 0), dv = to.minus(o), n = dv.norm(); return !bot.world.raycast(o, dv.scaled(1 / n), n) }
+  let spot: any = null
+  for (let r = 5; r <= 8 && !spot; r++) for (let k = 0; k < 16 && !spot; k++) {
+    const a = k / 16 * Math.PI * 2
+    for (const dy of [0, 1, -1]) { const c = base.offset(Math.round(Math.cos(a) * r), dy, Math.round(Math.sin(a) * r)); if (free(c) && clear(c)) { spot = c; break } }
+  }
+  if (!spot) return { skip: 'нет места на виду' }
+  await cmd(`tp ${NAME} ${spot.x + .5} ${spot.y} ${spot.z + .5}`)
+  // Отсчёт — когда клиент уже стоит на месте (ответ сервера о телепорте приходит не сразу).
+  for (let k = 0; k < 40 && bot.entity.position.distanceTo(spot.offset(.5, 0, .5)) > 1; k++) await sleep(25)
+  const t0 = Date.now(), p0 = t.position.clone(), d0 = dist(t), me0 = hurt.get(NAME) || 0
+  let lookMs: number | null = null, moveMs: number | null = null, moved = 0, hitMs: number | null = null
+  say(`🚪 вбежал к ${name} (${d0.toFixed(1)} бл.)`)
+  while (Date.now() - t0 < 8000 && bot.entities[t.id] && !dead.has(name)) {
+    await sleep(50)
+    const ms = Date.now() - t0, to = bot.entity.position.minus(t.position), yaw = t.headYaw ?? t.yaw
+    const cos = (-Math.sin(yaw) * to.x - Math.cos(yaw) * to.z) / (Math.hypot(to.x, to.z) || 1)
+    if (lookMs == null && cos > Math.cos(Math.PI / 6)) lookMs = ms
+    if (moveMs == null && t.position.distanceTo(p0) > 1.5) { moveMs = ms; moved = +(d0 - dist(t)).toFixed(1) }
+    if (hitMs == null && (hurt.get(NAME) || 0) > me0) hitMs = ms
+  }
+  return { name, d0: +d0.toFixed(1), lookMs, moveMs, moved, hitMs }
+}
+
+const SCENES: Record<string, () => Promise<any>> = { rush, undermine, tnt, mace, bow, web, idle, pit, tntlate, moat, room }
 const results: any[] = []
 bot.once('spawn', async () => {
   // Креатив ломает сразу; расчёт времени mineflayer падал на зачарованиях предмета в руке («enchantments.concat»).
