@@ -1,14 +1,16 @@
 // Рой: стройка по чертежу, копка вверх к врагу, динамит.
 import { type BlueprintCell, addBlueprint, nextBuild } from '../../../daemon/src/swarm'
 import { swarmBlueprint } from '../../../daemon/src/swarm-work'
-import { BLOCK, distance, cellKey } from './common'
+import { BLOCK, blockCount, distance, cellKey } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmBuild (sw: SwarmDriverCtx) {
   const { now, pos, home, arena, log, bots, alive, cooldown, blueprints, telemetry, placed, detail, say, renew, buildGo, teamOf, ownProtection, boardOf, say2, go } = sw
   async function buildStep(b, context, request: any = {}) {
     // Пауза после отказа клетки — для всех путей стройки (31ao, выступ 15.10: «не к чему прислонить» 13 раз за 25 с по задаче build).
-    if ((cooldown.get(`work:${b.name}`) || 0) > now()) return false
+    // Клетка не легла (нет блока, далеко, занято, не к чему прислонить) — с того же места и с тем же запасом снова не браться:
+    // повтор, когда принесли блоки или бот ушёл (retry.ts), а не через 2/15 с.
+    if (sw.blocked(b, `work:${b.name}`, String(blockCount(pos[b.name]?.inv)))) return false
     const { board, member } = context, m = pos[b.name]
     let item = Object.keys(m.inv || {}).find(n => BLOCK.test(n) && m.inv[n] > 0)
     if (!item) return false
@@ -104,8 +106,10 @@ export function swarmBuild (sw: SwarmDriverCtx) {
       // Крыша кокона над целью и над щелью кладётся только сверху: грани соседних клеток крыши смотрят внутрь, с земли и в
       // прыжке их не видно («не к чему прислонить» — лаборатория 14.10, 21/23). Столб в 3 блока у угла кокона (по
       // диагонали: места у щелей держит оцепление) и кладка с его верха.
-      if (!r.done && !r.aborted && blueprint.kind === 'cocoon' && cell.position.y === blueprint.origin.y + 2 && (cooldown.get(`roof:${b.name}`) || 0) <= now()) {
-        cooldown.set(`roof:${b.name}`, now() + 15000)
+      // Столб к крыше не вышел — к той же крыше с того же места и с теми же блоками не повторять (retry.ts), а не 15 с.
+      const roofSig = `${cellKey(blueprint.origin)}:${blockCount(pos[b.name]?.inv)}`
+      if (!r.done && !r.aborted && blueprint.kind === 'cocoon' && cell.position.y === blueprint.origin.y + 2 && !sw.blocked(b, `roof:${b.name}`, roofSig)) {
+        sw.failed(b, `roof:${b.name}`, roofSig)
         const o = blueprint.origin
         const corners = [[2, 2], [2, -2], [-2, 2], [-2, -2]].map(([dx, dz]) => ({ x: o.x + dx + .5, y: o.y, z: o.z + dz + .5 }))
           .sort((a, c) => distance(a, cell.position) - distance(c, cell.position))
@@ -131,14 +135,14 @@ export function swarmBuild (sw: SwarmDriverCtx) {
         if (board.release(cell.id, b.name, cell.claim.token)) board.upsert({ ...cell, priority: (cell.priority || 60) - 1 })
         // Нет блока плана в рюкзаке («нет oak_planks» каждые 2 с, арена 40) — 15 с не браться: принесут передачи или возьмёт другой.
         // Клетка вне прорисовки (unloaded_cell — далеко) — тоже 15 с: каждые 2 с тот же отказ (крыша s28: 13 раз за 20 с).
-        cooldown.set(`work:${b.name}`, now() + (/в инвентаре|unloaded_cell|occupied_cell|не к чему прислонить|нет видимой опоры/.test(r.why || '') ? 15000 : 2000)); log(`🧱 ${b.name}: ${r.why || 'клетка не подтверждена'}`)
+        sw.failed(b, `work:${b.name}`, String(blockCount(pos[b.name]?.inv))); log(`🧱 ${b.name}: ${r.why || 'клетка не подтверждена'}`)
       }
       return true
     } finally { if (cell) board.release(cell.id, b.name, cell.claim.token) }
   }
   async function mineStep(b, context, foe) {
-    if ((cooldown.get(`mine:${b.name}`) || 0) > now()) return false
-    cooldown.set(`mine:${b.name}`, now() + 3000)
+    // Нечего копать отсюда — с этого места снова не искать (retry.ts), а не раз в 3 с.
+    if (sw.blocked(b, `mine:${b.name}`)) return false
     const m = pos[b.name], protectedCells = ownProtection(context.board)
     if (foe) await b.c.call('look_at', { ...foe.position, y: foe.position.y + 1 })
     for (const name of ['smooth_sandstone', 'cobblestone', 'stone', 'oak_planks']) {
@@ -157,6 +161,7 @@ export function swarmBuild (sw: SwarmDriverCtx) {
         return true
       } finally { context.board.release(id, b.name, claim.claim.token) }
     }
+    sw.failed(b, `mine:${b.name}`)
     return false
   }
   // Прокоп к цели (натиск, пользователь 14.10: «человек в укрытии — кирками раскопать и забивать, и все пройдут к нему»):
@@ -171,14 +176,15 @@ export function swarmBuild (sw: SwarmDriverCtx) {
   // факт tnt (4.5 с — фитиль 4 с): свои рядом отходят (turn), сам — на 7 бл. прочь.
   async function blast(b, at, why) {
     const inv = pos[b.name]?.inv || {}
-    if (!inv.tnt || !(inv.flint_and_steel || inv.fire_charge) || (cooldown.get(`tnt:${b.name}`) || 0) > now()) return false
+    // Не вышло поставить или поджечь у этой точки — с того же места к ней не повторять (retry.ts), а не 6 с; горящий — факт tnt.
+    const spot = cellKey({ x: Math.floor(at.x), y: Math.floor(at.y), z: Math.floor(at.z) })
+    if (!inv.tnt || !(inv.flint_and_steel || inv.fire_charge) || sw.blocked(b, `tnt:${b.name}`, spot)) return false
     if (bots.some(o => o !== b && teamOf(o) === teamOf(b) && alive(o.name) && pos[o.name]?.p && distance(pos[o.name].p, at) < 5)) return false
     // Один динамит у цели за раз (горящий в 6 бл. от точки — ждать).
     if (boardOf(b).facts().some(f => f.id.startsWith('tnt:') && f.position && distance(f.position, at) < 6)) return false
-    cooldown.set(`tnt:${b.name}`, now() + 6000)
     const r = detail(await b.c.call('tnt_at', { at }).catch(e => ({ why: e.message })))
     log(`💣 ${b.name}: динамит ${why} — ${r.lit ? 'горит' : String(r.why || 'нет').slice(0, 60)}`)
-    if (!r.lit || !r.placed) return false
+    if (!r.lit || !r.placed) { sw.failed(b, `tnt:${b.name}`, spot); return false }
     boardOf(b).recordFact(b.name, now(), { id: `tnt:${cellKey(r.placed)}`, kind: 'mark', position: r.placed }, 4500)
     say2(`💣 ${b.name.replace(/^NeuroFarm/, '')}: динамит ${why} — все назад!`, 'red')
     const me = pos[b.name].p, d = Math.hypot(me.x - r.placed.x, me.z - r.placed.z) || 1

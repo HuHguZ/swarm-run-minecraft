@@ -3,7 +3,7 @@ import { blockCount, distance, cellKey } from './common'
 import type { SwarmDriverCtx, TurnCtx } from './common'
 
 export function swarmTurnTasks (sw: SwarmDriverCtx) {
-  const { now, alive, log, pos, arena, cooldown, boxed, boxTries, execute, reactCamp, go, loot, detail, rangedAdvantage, positionStep, search, buildStep } = sw
+  const { now, alive, log, pos, arena, cooldown, boxed, boxTries, execute, reactCamp, go, loot, detail, rangedAdvantage, positionStep, search, buildStep, bounded } = sw
   async function turnFlee (tc: TurnCtx) {
     const { b, context, board, task, round, m, enemies } = tc
     // Насест на элитрах (perch, пользователь 14.10: «могут наверх улетать и там сидеть, кемперить или с лука палить»):
@@ -11,11 +11,13 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // из-за своей стенки в прыжке (peek_shot, с места не сходит), без лука — есть и сидеть на шифте.
     if (task.data?.perch) {
       if (distance(m.p, task.position) > 3) {
-        if ((cooldown.get(`fly:${b.name}`) || 0) <= now()) {
-          cooldown.set(`fly:${b.name}`, now() + 8000)
+        // Не долетел — к тому же насесту с того же места снова не лететь (повтор по причине, а не через 8 с).
+        const perch = cellKey({ x: Math.floor(task.position.x), y: Math.floor(task.position.y), z: Math.floor(task.position.z) })
+        if (!sw.blocked(b, `fly:${b.name}`, perch)) {
           const r = detail(await b.c.call('fly_to', { at: task.position, timeoutSeconds: 15, arena }))
-          log(`🪽 ${b.name}: на насест ${cellKey({ x: Math.floor(task.position.x), y: Math.floor(task.position.y), z: Math.floor(task.position.z) })} — ${r.ok ? 'долетел' : r.why || '?'}`)
+          log(`🪽 ${b.name}: на насест ${perch} — ${r.ok ? 'долетел' : r.why || r.error || r.status || '?'}`)
           if (r.ok) return
+          sw.failed(b, `fly:${b.name}`, perch)
         }
       } else {
         const foe = enemies.find(e => e.id === task.data.target)
@@ -28,6 +30,10 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // Укрытие без своих (пользователь 14.10: «если своих нет — прятаться в колизее, в блоках или на высоте, и шифт
     // зажимать, чтобы мы не видели его»): дошёл — сидеть на шифте, ник за блоками не виден.
     if ((task.data?.hide || task.data?.regroup) && !enemies.length && distance(m.p, task.position) >= 3) { await go(b, task.position, 2); return }
+    // Нашёл в укрытии — не сидеть на шифте у него под мечом (игра пользователя 21.10: «афк бота просто убил»): враг в виду
+    // ближе 6 бл. — отвечать ему.
+    const atMe = task.data?.hide && enemies.find(e => now() - e.seenAt < 1000 && distance(e.position, m.p) < 6)
+    if (atMe) { await b.c.call('fight', { target: atMe.id, allowPlayer: true, allowRanged: true, lastStand: true, timeoutSeconds: 3, retreatAtHealth: 0, arena }); return }
     if (task.data?.hide && distance(m.p, task.position) < 3) { await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3, arena }); return }
     if (rangedAdvantage(b)) { await b.c.call('fight', { target: task.data.target, targets: enemies.map(e => e.id), allowPlayer: true, allowRanged: true, timeoutSeconds: 3, retreatAtHealth: 8, arena }); return }
     // Погоня (kite): отрыв по открытому без точки (smartFlee сам обходит тупики), до 22 бл.; к своим — к ним.
@@ -38,11 +44,21 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       await b.c.call('fight', { target: task.data.target, allowPlayer: true, allowRanged: true, lastStand: true, timeoutSeconds: 3, retreatAtHealth: 0, arena })
     } else if (outcome.mode === 'оторвался') {
       if (outcome.at) m.p = outcome.at
+      // «Оторвался», не сделав шага: тело его не видит (стена, яма), а доска видела его рядом только что — бег смотрит только
+      // на видимых и сразу отпускал, и бот стоял в 3 бл. от человека 39 с (стенд бота-противника 22.10). Уйти от места, где его
+      // видели, как лут с отходом.
+      const foe = enemies.filter(e => now() - e.seenAt < 3000).sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
+      if (!(outcome.ran >= 1) && foe && distance(foe.position, m.p) < 14) {
+        const d = Math.hypot(m.p.x - foe.position.x, m.p.z - foe.position.z) || 1
+        await go(b, bounded({ x: m.p.x + (m.p.x - foe.position.x) / d * 8, y: m.p.y, z: m.p.z + (m.p.z - foe.position.z) / d * 8 }), 3, 4)
+        return
+      }
       // Оторвался от погони — дальше решает планировщик (лут за 22 бл.), а не поход к группе или лут исполнителя.
       if (task.data?.kite) return
       if (task.data?.hide || task.data?.regroup) { await go(b, task.position, 2); return }
-      b.swarmPreparingUntil = now() + 7000
-      if (!await loot(b, board) && !await positionStep(b, context, m.inv?.bow ? 'ranged' : 'escape')) await search(b, context)
+      // Готовится (лут, позиция) — пока это его дело: паника не рвёт его, пока враги дальше 14 и без луков (safety.ts).
+      b.swarmPreparing = true
+      if (!await loot(b, board) && !await positionStep(b, context, m.inv?.bow ? 'ranged' : 'escape')) await search(b, context, enemies)
     }
     return
   }
@@ -67,15 +83,16 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     if (distance(m.p, task.position) > range + .4) {
       const before = distance(m.p, task.position)
       const walked = detail(await go(b, task.position, range).catch(e => ({ why: e.message })))
-      if (task.data.camp && !walked.arrived && distance(pos[b.name]?.p || m.p, task.position) > before - 1) cooldown.set('camp:' + task.data.camp, now() + 15000)
+      if (task.data.camp && !walked.arrived && distance(pos[b.name]?.p || m.p, task.position) > before - 1) sw.siteFailed(b, 'camp:' + task.data.camp)
       return
     }
     // Кемпер на месте — замуроваться (стены и крыша); раскопают — увидит врага в упор, и контакт поднимет бой.
-    if (task.data.camp && !boxed.has(`${b.name}:${task.data.camp}`) && (cooldown.get(`box:${b.name}`) || 0) <= now() && blockCount(m.inv) >= 10) {
+    // Не замуровался — снова, когда пришли блоки или он на другом месте (retry.ts), а не через 10 с.
+    if (task.data.camp && !boxed.has(`${b.name}:${task.data.camp}`) && !sw.blocked(b, `box:${b.name}`, String(blockCount(m.inv))) && blockCount(m.inv) >= 10) {
       const r = detail(await b.c.call('box_in', {}).catch(e => ({ why: e.message })))
       if (round !== sw.generation || !alive(b.name)) return
       const tries = (boxTries.get(`${b.name}:${task.data.camp}`) || 0) + 1; boxTries.set(`${b.name}:${task.data.camp}`, tries)
-      if (r.sealed || tries >= 2) boxed.add(`${b.name}:${task.data.camp}`); else cooldown.set(`box:${b.name}`, now() + 10000)
+      if (r.sealed || tries >= 2) boxed.add(`${b.name}:${task.data.camp}`); else sw.failed(b, `box:${b.name}`, String(blockCount(pos[b.name]?.inv || m.inv)))
       if (r.sealed) b.boxedCamp = task.data.camp
       log(`🧱 ${b.name}: кемпер замуровался у ${task.data.camp} — ${r.sealed ? `готово (${r.placed} бл., ${r.material || '?'})` : String(r.why || `стен ${r.walls ?? '?'}`).slice(0, 60)}`)
       return

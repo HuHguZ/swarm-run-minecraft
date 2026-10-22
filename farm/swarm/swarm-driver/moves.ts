@@ -58,7 +58,8 @@ export function swarmMoves (sw: SwarmDriverCtx) {
       log(`🧱 ${b.name}: урон в коробке ${camp}${r.away ? ' (летело с ' + [r.away.x, r.away.z].map(v => Math.round(v)).join(',') + ')' : ''} — ${out.left ? 'вышел' : out.why || 'не вышел'}`)
       if (!out.left) return true
       forgetCamp(b)
-      cooldown.set(`camp:${camp}`, now() + 15000)
+      // Засада раскрыта — закрыта, пока у неё враг (retry.ts siteOpen), а не 15 с.
+      sw.siteFailed(b, `camp:${camp}`, (() => { const [x, y, z] = String(camp).split(',').map(Number); return { x, y, z } })())
       plannedAt.delete(teamOf(b))
       delete b.campReacting
       const heal = await execute(b, 'assist', { mode: 'heal', at: out.at })

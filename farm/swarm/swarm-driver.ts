@@ -13,11 +13,13 @@ import { swarmTurnTasks } from './swarm-driver/turn-tasks'
 import { swarmTurnWork } from './swarm-driver/turn-work'
 import { swarmTurn } from './swarm-driver/turn'
 import { swarmLifecycle } from './swarm-driver/lifecycle'
+import { swarmRetry } from './swarm-driver/retry'
 
 // This adapter sees own bodies and allied reports; enemy daemon snapshots never enter the board.
 // now — часы решений: в ffa это подменённый Date.now (игровое время при ускорении), в лаборатории — свои игровые часы.
 export function createSwarmDriver (opts: any) {
   const sw = createDriverState(opts)
+  Object.assign(sw, swarmRetry(sw))
   Object.assign(sw, swarmTeam(sw))
   Object.assign(sw, swarmMoves(sw))
   Object.assign(sw, swarmBuild(sw))

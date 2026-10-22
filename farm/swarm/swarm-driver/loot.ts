@@ -1,9 +1,12 @@
 // Рой: лут — безопасность сцены, обход сундуков, пополнение, сундук под рукой.
 import { WEAPON, blockCount, distance, cellKey } from './common'
 import type { SwarmDriverCtx } from './common'
+import { swarmCaches } from './caches'
 
 export function swarmLoot (sw: SwarmDriverCtx) {
   const { now, pos, hideouts, chestTops, log, arms, arena, drops, alive, toured, cooldown, tourBad, emptyChests, knownChests, fullFor, blockedRoutes, lootThreat, weakLoot, teamOf, detail, bounded, lootArena, go, renew } = sw
+  // Тайники в толще (21.10, caches.ts): сканы глаз — с каждого хода (chestAtHand), копка — из лута, если планировщик выбрал.
+  const caches = swarmCaches(sw)
   // За ним идёт человек (враг в 14 бл., виден за 2 с) — не к сундукам и не в комнаты (пользователь 14.10: «лазают в пустые
   // сундуки в комнате, когда мы туда забежали бота убивать; не должны в замкнутые пространства бежать, когда игрок рядом»).
   const chased = (board, p) => !!p && board.enemies().some(e => now() - e.seenAt < 2000 && distance(e.position, p) < 14)
@@ -30,15 +33,21 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     const foes = board.enemies().filter(e => now() - e.seenAt < 10000)
     // Сундуки крыши и венца (climbFrom — докуда пешком) — тому, у кого блоков на столб оттуда; подъём не штрафуется ×4.
     const blocks = blockCount(pos[b.name]?.inv || {})
-    // Уже наверху — блоки не нужны (Codex 15.10: на крыше без запаса цель исключалась).
-    const need = h => h.climbFrom === undefined || me.y >= h.y - 1 ? 0 : Math.max(0, h.y - Math.max(me.y, h.climbFrom)) + 3
+    // Уже наверху — блоки не нужны (Codex 15.10: на крыше без запаса цель исключалась). С жемчугом — тоже (бросок наверх, 21.10).
+    const pearls = pos[b.name]?.inv?.ender_pearl || 0
+    const need = h => h.climbFrom === undefined || me.y >= h.y - 1 || pearls > 0 ? 0 : Math.max(0, h.y - Math.max(me.y, h.climbFrom)) + 3
+    // Неудачи подъёма и похода — повтор по причине (retry.ts): с того же места (2 бл.) и с теми же запасами — нет.
+    const upSig = `${blocks}|${pearls}`
     // Голый или слабый при свежем враге ближе 22 — не наверх (подъём долгий, стоп не прервёт его до 6 бл.; Codex 15.10).
     const naked = !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n)) || !!b.swarmTask?.data?.weak
     const exposed = naked && foes.some(e => now() - e.seenAt < 3000 && distance(e.position, me) < 22)
     // Цена — путь, делённый на ярус (лучший лут наверху; Codex 15.10: верхний был 21-м в очереди).
-    const cost = h => (distance(h, me) + (h.climbFrom === undefined ? 4 * Math.max(0, h.y - me.y - 1) : Math.max(0, h.y - me.y))) / (1 + (h.tier || 0))
+    // Ближе к врагу — дороже (стенд 21.10, чемпион с луком: слабые шли за сундуком через полкарты к нему — «лут к врагу 85 → 47
+    // бл.» — и гибли от стрел): каждый блок ближе 40 к свежему врагу — четверть блока пути.
+    const danger = h => foes.reduce((s, e) => s + Math.max(0, 40 - distance(h, e.position)) / 4, 0)
+    const cost = h => (distance(h, me) + (h.climbFrom === undefined ? 4 * Math.max(0, h.y - me.y - 1) : Math.max(0, h.y - me.y))) / (1 + (h.tier || 0)) + danger(h)
     const options = [...hideouts, ...chestTops].map((h, k) => ({ h, k, mark: marks.get(k) }))
-      .filter(({ h, k, mark }) => blocks >= need(h) && !(h.climbFrom !== undefined && (exposed || (cooldown.get(`tourUp:${b.name}`) || 0) > now())) && (!mark || mark.by === b.name && !mark.done || now() - mark.at > 45000) && !((tourBad.get(`${b.name}:${k}`) || 0) > now()) && foes.every(e => distance(e.position, h) >= 22) && lootSafe(b, h, true))
+      .filter(({ h, k, mark }) => blocks >= need(h) && !(h.climbFrom !== undefined && (exposed || sw.blocked(b, `tourUp:${b.name}`, upSig))) && (!mark || mark.by === b.name && !mark.done || now() - mark.at > 45000) && !sw.blocked(b, `tourBad:${b.name}:${k}`, upSig) && foes.every(e => distance(e.position, h) >= 22) && lootSafe(b, h, true))
       // Своя незавершённая цель — только при равной цене: после бегства старая (в 40 бл. за врагом) вела назад (Codex 15.10).
       .sort((a, c) => cost(a.h) - cost(c.h) || Number(c.mark?.by === b.name && !c.mark?.done) - Number(a.mark?.by === b.name && !a.mark?.done))
     const pick = options[0]; if (!pick) return false
@@ -47,19 +56,23 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     if (pick.mark?.by !== b.name || pick.mark?.done) marks.set(pick.k, { by: b.name, at: now() })
     const from = { ...me }
     let approach
-    if (pick.h.climbFrom !== undefined && pick.h.y - me.y > 1) {
+    // Наверх с жемчугом — бросок по расчёту (climb.pearlUp); идёт к месту броска — ход окончен, бросит следующий.
+    const up = pick.h.climbFrom !== undefined && pick.h.y - me.y > 3 ? await sw.pearlUp(b, pick.h) : null
+    if (up?.moved) return true
+    if (up) approach = up
+    else if (pick.h.climbFrom !== undefined && pick.h.y - me.y > 1) {
       b.climbing = true
       const r = detail(await b.c.call('goto', { ...bounded(pick.h), range: 1, timeoutSeconds: 20, arena: lootArena(b), climb: true, exactY: true, _hunt: true, _climb: true }).catch(e => ({ why: e.message })).finally(() => { b.climbing = false }))
       log(`🧰 ${b.name}: к сундукам наверху (+${Math.round(pick.h.y - me.y)}, блоков ${blocks}) — ${r.arrived ? 'дошёл' : String(r.why || r.stopped || 'не дошёл').slice(0, 60)}`)
       // Не поднялся — минуту ни к каким верхним (31aj: перебирал 12 сундуков крыши по очереди, 10 отказов за 51 с).
       approach = r
-      const up = (pos[b.name]?.p?.y ?? me.y) - me.y
-      if (!r.arrived && up < 2) cooldown.set(`tourUp:${b.name}`, now() + 60000)
+      const rise = (pos[b.name]?.p?.y ?? me.y) - me.y
+      if (!r.arrived && rise < 2) sw.failed(b, `tourUp:${b.name}`, upSig)
     } else approach = detail(await go(b, pick.h, 2, 6, lootArena(b)).catch(e => ({ why: e.message })))
     const end = pos[b.name]?.p
     if (end && distance(end, pick.h) < 4 && end.y >= pick.h.y - 1) marks.set(pick.k, { by: b.name, at: now(), done: true })
     // Не приблизился (стоял или ушёл вбок) — место ему плохое на минуту (Codex 15.10: «вбок на 3 бл.» держало приоритет навсегда).
-    else if (!approach.arrived || !end || distance(end, pick.h) >= distance(from, pick.h) - 1) { tourBad.set(`${b.name}:${pick.k}`, now() + 60000); marks.delete(pick.k) }
+    else if (!approach.arrived || !end || distance(end, pick.h) >= distance(from, pick.h) - 1) { sw.failed(b, `tourBad:${b.name}:${pick.k}`, upSig); marks.delete(pick.k) }
     return true
   }
   const packOf = b => JSON.stringify(pos[b.name]?.inv || {})
@@ -67,16 +80,20 @@ export function swarmLoot (sw: SwarmDriverCtx) {
   const chestAtHand = b => {
     const me = pos[b.name]?.p
     if (!me) return false
+    caches.cacheObserve(b)
     const tops = chestTops.map(c => { const at = { x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) }; return ['chest:' + cellKey(at), at] })
     return [...knownChests.entries(), ...tops].some(([id, at]) => Math.abs(at.y - me.y) < 3 && Math.hypot(at.x + .5 - me.x, at.z + .5 - me.z) < 5 &&
       !emptyChests.has(id) && fullFor.get(`${b.name}:${id}`) !== packOf(b) && !sameScene(b, blockedRoutes.get(`lootPath:${b.name}:${id}`)))
   }
   async function loot(b, board, atHand = false) {
+    // Копатель тайников (plan-jobs.cacheJobs: копка дороже лута и боя) — копает, а не обходит сундуки.
+    if (arms && !atHand && await caches.cacheTurn(b, board)) return true
     // Под рукой — без паузы опроса: пауза 4 с от прошлого похода отпускала бота к приказу мимо сундука.
     if (!arms || !atHand && (cooldown.get(`loot:${b.name}`) || 0) > now() || chased(board, pos[b.name]?.p)) return false
     cooldown.set(`loot:${b.name}`, now() + 4000)
     const chests = detail(await b.c.call('blocks_around', { find: 'chest', seen: true, radius: 16, count: 8 })).found || []
     for (const at of chests) knownChests.set('chest:' + cellKey(at), at)
+    caches.cacheSeen(b, chests)
     // Угроза дороже лута (пользователь 14.10: «подбегают лутаться, даже если я рядом; у кого ничего нет — тем более»): голому
     // — сундук не ближе 20 бл. к врагу (видели за 10 с), остальным — 14 (за 3 с).
     // Слабый (лут из бегства) — как голый: сундук у врага ближе 22 бл. снова гнал к нему («лут ↔ бегство», поле s12).
@@ -98,6 +115,7 @@ export function swarmLoot (sw: SwarmDriverCtx) {
         if (!renew(board, b, claim)) return false
         const r = await b.c.call('chest_take', { item: 'all', x: at.x, y: at.y, z: at.z, timeoutSeconds: 8, visibleOnly: true, stay: true })
         const d = detail(r), moved = Object.values(d.took || d.moved || {}).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
+        if (d.contents) caches.cacheOpened(b, at) // открыт своими — копатель его повторно не берёт
         if (Number(moved) > 0 || d.at && d.contents) board.ack(id, b.name, { token: claim.claim.token, confirmed: true })
         if (d.contents && !Object.keys(d.contents).length) emptyChests.add(id)
         else if (!Number(moved) && d.contents) fullFor.set(`${b.name}:${id}`, packOf(b))
@@ -112,21 +130,25 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     // (предмет исчезает), к ней идёт один; подбор с земли по вещи, пока видно, потом надеть лучшее.
     const me = pos[b.name]?.p
     // Погибший в падении за край (последняя позиция в 3 бл. над смертельной высотой) вещей не оставил: они ушли вниз с ним.
-    const pile = me && drops().filter(d => d.p && now() - d.at < 280000 && (d.retryAt ?? 0) <= now() && distance(d.p, me) < 48 && d.p.y > (arena.killY ?? -64) + 3 && !risky({ x: Math.floor(d.p.x), y: Math.floor(d.p.y), z: Math.floor(d.p.z) }) && lootSafe(b, d.p, true))
+    // Куча — пока не разобрана (подход дал «пусто») и пока у неё никто; не дошёл — снова, когда сам ушёл с места (retry.ts),
+    // а не через 30 с (21.10).
+    const pileKey = d => 'pile:' + cellKey({ x: Math.floor(d.p.x), y: Math.floor(d.p.y), z: Math.floor(d.p.z) })
+    const pile = me && drops().filter(d => d.p && now() - d.at < 280000 && !d.busy && !d.empty && !sw.blocked(b, pileKey(d)) && distance(d.p, me) < 48 && d.p.y > (arena.killY ?? -64) + 3 && !risky({ x: Math.floor(d.p.x), y: Math.floor(d.p.y), z: Math.floor(d.p.z) }) && lootSafe(b, d.p, true))
       .sort((p, q) => distance(p.p, me) - distance(q.p, me))[0]
     if (!pile) return false
-    pile.retryAt = Infinity // одна попытка может длиться дольше 30 с
+    pile.busy = true
     try {
       if (distance(me, pile.p) > 2) {
         const approach = await go(b, pile.p, 1, 8, lootArena(b)).catch(() => null)
-        if (approach?.status !== 'done' || !detail(approach).arrived) return false
+        if (approach?.status !== 'done' || !detail(approach).arrived) { sw.failed(b, pileKey(pile)); return false }
       }
       let got = 0
       for (let k = 0; k < 8 && alive(b.name) && !chased(board, pos[b.name]?.p); k++) { const r = detail(await b.c.call('assist', { mode: 'pickup', maxD: 6, arena: lootArena(b) }).catch(() => ({}))); if (!r.ok) break; got++ }
       if (got) await b.c.call('armor').catch(() => {})
       log(`🪦 ${b.name}: вещи погибшего у ${cellKey({ x: Math.floor(pile.p.x), y: Math.floor(pile.p.y), z: Math.floor(pile.p.z) })} — ${got ? `подобрал ${got}` : 'пусто'}`)
+      if (!got) pile.empty = true
       return got > 0
-    } finally { pile.retryAt = now() + 30000 }
+    } finally { pile.busy = false }
   }
-  return { chased, sceneOf, sameScene, lootSafe, tour, packOf, refill, chestAtHand, loot }
+  return { chased, sceneOf, sameScene, lootSafe, tour, packOf, refill, chestAtHand, loot, ...caches }
 }

@@ -16,6 +16,9 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, log
   const transfers = new Map<string, any>()
   const planned = new Map<string, Map<string, any>>()
   const plannedAt = new Map<string, number>()
+  const plannedFoes = new Map<string, Set<string>>()
+  // Кто сколько наших убил в прошлых раундах матча (lifecycle.reset): команда → враг → число.
+  const pastKills = new Map<string, Record<string, number>>()
   const visited = new Map<string, Map<string, number>>()
   const cooldown = new Map<string, number>()
   const telemetry = { observed: 0, built: 0, dug: 0, transfers: 0, searches: 0 }
@@ -48,5 +51,5 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, log
   // Оценка «не вытяну» — симуляция боя на 600 тиков; на каждый ответ статуса (40 тел — ~160/с) её не пересчитывать: 250 мс.
   const unsafeCache = new Map<string, { at: number; v: boolean }>()
   return { bots, pos, alive, arena, home, hostile, log, arms, aggressive, hideouts, chestTops, perches, drops, announce, sandSpot, edgeOf, digSites, surfaceY, ladderSites, now,
-    boards, holes, walls, ladderRoutes, boxed, boxTries, blueprints, transfers, planned, plannedAt, visited, cooldown, telemetry, generation, positionQueries, saidAt, placed, toured, tourBad, blockedRoutes, emptyChests, fullFor, knownChests, unsafeCache }
+    boards, holes, walls, ladderRoutes, boxed, boxTries, blueprints, transfers, planned, plannedAt, plannedFoes, pastKills, visited, cooldown, telemetry, generation, positionQueries, saidAt, placed, toured, tourBad, blockedRoutes, emptyChests, fullFor, knownChests, unsafeCache }
 }

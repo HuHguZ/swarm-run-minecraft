@@ -115,7 +115,7 @@ test('a chest found empty is skipped until refilled; a naked bot then picks up a
     assert.equal(takes(), 2, 'found empty twice — not reopened')
     assert.equal(pickups(), 4, 'three items picked up, the fourth call sees nothing')
     assert.ok(calls.some(c => c.method === 'goto' && Math.abs(c.params.x - 20) < 1.5), 'walked to the pile')
-    assert.equal(pile.retryAt, now + 30000)
+    assert.ok(!(pile as any).busy && !(pile as any).empty, 'released, and not empty: three items came off it')
   } finally { Date.now = priorNow }
 })
 function lootReceiptFixture({ chest = null, pile = null, aggressive = false }: any = {}) {
@@ -154,26 +154,32 @@ test('a chest requires a completed approach receipt and stays under a visible st
   assert.equal(take.params.stay, true)
   assert.equal(take.params.visibleOnly, true)
 })
-test('a failed pile approach releases a 30 second retry for every bot, including previously looted piles', async () => {
+test('a failed pile approach is retried from a new place, not after 30 seconds; a pile that gives nothing is done', async () => {
   const pile: any = { p: { x: 20, y: 64, z: 5 }, at: 900, looted: new Set() }
   const f = lootReceiptFixture({ pile })
+  const toPile = (who: string) => f.calls.filter(c => c.who === who && c.method === 'goto' && c.params.x === 20).length
   f.move = async () => ({ status: 'failed' })
   await f.driver.turn(f.bots[0])
-  assert.equal(f.calls.filter(c => c.method === 'assist').length, 0)
-  assert.equal(pile.retryAt, 31000)
-  f.now = 30999
+  assert.equal(toPile('A'), 1)
+  f.now += 60000
   await f.driver.turn(f.bots[0])
-  assert.equal(f.calls.filter(c => c.method === 'assist').length, 0)
-  f.now = 31000
+  assert.equal(toPile('A'), 1, 'from the same spot the same way fails again, however long ago it was')
+  f.pos.A.p = { x: 3, y: 64, z: 0 }
+  f.now += 5000 // пауза опроса сундуков (4 с) — не повтор кучи
   f.move = async (_name, p) => ({ status: 'done', detail: { arrived: p } })
-  pile.looted.add('A')
   let remaining = 1
   f.pickup = async () => ({ detail: { ok: remaining-- > 0 } })
+  await f.driver.turn(f.bots[0])
+  assert.equal(f.calls.filter(c => c.who === 'A' && c.method === 'assist').length, 2, 'moved off: a new approach, one item taken')
+  f.pos.B.p = { x: 3, y: 64, z: 2 }
   await f.driver.turn(f.bots[1])
-  assert.equal(f.calls.filter(c => c.who === 'B' && c.method === 'assist').length, 2)
-  assert.equal(pile.retryAt, 61000)
+  assert.equal(f.calls.filter(c => c.who === 'B' && c.method === 'assist').length, 1)
+  assert.ok(pile.empty, 'nothing left: the pile is done')
+  f.now += 5000
+  await f.driver.turn(f.bots[0])
+  assert.equal(f.calls.filter(c => c.who === 'A' && c.method === 'assist').length, 2)
 })
-test('a pile stays reserved until the current attempt finishes, even after 30 seconds', async () => {
+test('a pile stays reserved until the current attempt finishes, however long it takes', async () => {
   const pile: any = { p: { x: 20, y: 64, z: 5 }, at: 900, looted: new Set() }
   const f = lootReceiptFixture({ pile })
   let release: any
@@ -185,12 +191,12 @@ test('a pile stays reserved until the current attempt finishes, even after 30 se
   const pending = f.driver.turn(f.bots[0])
   try {
     await new Promise(resolve => setImmediate(resolve))
-    assert.equal(pile.retryAt, Infinity)
+    assert.equal(pile.busy, true)
     f.now += 31000
     await f.driver.turn(f.bots[1])
     assert.equal(f.calls.filter(c => c.who === 'B' && c.method === 'assist').length, 0)
   } finally { release(); await pending }
-  assert.equal(pile.retryAt, f.now + 30000)
+  assert.equal(pile.busy, false)
 })
 for (const received of [false, true]) test('grab waits for pickup and requires its own inventory delta: ' + received, async () => {
   const f = lootReceiptFixture({ aggressive: true })
@@ -355,7 +361,7 @@ test('a chest at hand is opened before the order: the bot on the roof takes the 
   try {
     for (const b of bots) driver.observe(b, [foe])
     await driver.turn(bots[0])
-    const first = calls.find(c => c.who === 'A' && c.method !== 'blocks_around' && c.method !== 'armor')
+    const first = calls.find(c => c.who === 'A' && c.method !== 'blocks_around' && c.method !== 'armor' && c.method !== 'cache_scan')
     assert.equal(first?.method, 'chest_take', `the chest at hand first, not ${first?.method}`)
     calls.length = 0
     now += 1000; for (const b of bots) driver.observe(b, [foe])

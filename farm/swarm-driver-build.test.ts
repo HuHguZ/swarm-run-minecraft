@@ -141,7 +141,7 @@ test('an idle cocoon builder steps out of the box instead of holding in a slit u
     assert.ok(out.params.x > 3, 'outward, past the ring of the cocoon')
   } finally { Date.now = priorNow; if (priorDoctrine === undefined) delete process.env.SWARM_DOCTRINE; else process.env.SWARM_DOCTRINE = priorDoctrine }
 })
-test('a bot standing in water clears the source (or swims out) before anything else, once per cooldown', async () => {
+test('a bot standing in water clears the source (or swims out) before anything else, once per place', async () => {
   const priorNow = Date.now
   let now = 1000
   Date.now = () => now
@@ -153,10 +153,12 @@ test('a bot standing in water clears the source (or swims out) before anything e
   try {
     for (const b of bots) driver.observe(b, [])
     await driver.turn(bots[0])
-    assert.deepEqual(calls.filter(c => c.who === 'A').map(c => c.method), ['clear_water'], 'water first, the turn ends on success')
+    assert.deepEqual(calls.filter(c => c.who === 'A' && c.method !== 'cache_scan').map(c => c.method), ['clear_water'], 'water first, the turn ends on success')
     assert.ok(lines.some(l => /💧 A: убрал воду/.test(l)))
     now += 1000; await driver.turn(bots[0])
-    assert.equal(calls.filter(c => c.method === 'clear_water').length, 1, 'not again within the cooldown')
+    assert.equal(calls.filter(c => c.method === 'clear_water').length, 1, 'not again from the same place')
+    pos.A.p = { x: 3, y: 64, z: 0 }; now += 1000; await driver.turn(bots[0])
+    assert.equal(calls.filter(c => c.method === 'clear_water').length, 2, 'moved 3 blocks and still in water: try again')
     await driver.turn(bots[1])
     assert.ok(!calls.some(c => c.who === 'B' && c.method === 'clear_water'), 'a dry bot does not call it')
   } finally { Date.now = priorNow }

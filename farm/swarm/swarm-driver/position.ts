@@ -4,12 +4,13 @@ import { distance, cellKey } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmPosition (sw: SwarmDriverCtx) {
-  const { now, bots, pos, arena, log, alive, transfers, cooldown, telemetry, visited, teamOf, fighting, lootSafe, go, renew, detail, execute, buildGo, buildStep, boardOf } = sw
+  const { now, bots, pos, arena, log, alive, transfers, telemetry, visited, teamOf, fighting, lootSafe, go, renew, detail, execute, buildGo, buildStep, boardOf } = sw
   const panic = (...a: any[]) => sw.panic(...a)
   async function transfer(b, context) {
     const task = (transfers.get(teamOf(b)) || []).find(t => t.assignedTo === b.name && t.status !== 'done')
-    if (!task || (cooldown.get(task.id) || 0) > now()) return false
-    const recipient = bots.find(o => o.name === task.data.recipient)
+    const recipient = task && bots.find(o => o.name === task.data.recipient)
+    // Неудавшаяся передача — снова, когда пара на новом месте (получатель ушёл с места неудачи), а не через 30 с (21.10).
+    if (!task || recipient && sw.blocked(recipient, `transfer:${task.id}`, task.data.item)) return false
     // Получатель в бою или бегстве — не выдёргивать его подбором (ревью 13.10): обмен подождёт.
     if (!recipient || fighting(recipient)) return false
     if (recipient.swarmReserved) return false
@@ -34,8 +35,10 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       if (have - task.data.reserve < task.data.count) return false
       if (distance(pos[b.name].p, pos[recipient.name].p) > 3) return false
       if (!renew(context.board, b, claim)) return false
-      const r = detail(await b.c.call('assist', { mode: 'toss', ally: recipient.name, item: task.data.item, count: task.data.count, arena }))
-      const pu = r.ok && !fighting(recipient) ? detail(await recipient.c.call('assist', { mode: 'pickup', item: task.data.item, arena }).catch(e => ({ why: e.message }))) : null
+      const r = detail(await b.c.call('assist', { mode: 'toss', ally: recipient.name, item: task.data.item, count: task.data.count, arena }).catch(e => ({ why: e.message })))
+      // Брошено — подобрать в любом случае: начатый бой получателя подождёт 2–3 с, а вещь на земле — потеря (жемчуг донора
+      // уже потрачен; DeepSeek, ревью тайников 21.10).
+      const pu = r.ok && alive(recipient.name) ? detail(await recipient.c.call('assist', { mode: 'pickup', item: task.data.item, arena }).catch(e => ({ why: e.message }))) : null
       const result = await recipient.c.call('status')
       const received = ownedCount(result?.state || {}, task.data.item) - before >= task.data.count
       if (result?.state?.inventory && pos[recipient.name]) pos[recipient.name].inv = result.state.inventory
@@ -48,24 +51,27 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       ok = received
       return true
     } finally {
-      // Не вышло (не дошёл, далеко, не подобрал) — эта пара 30 с отдыхает (Codex 15.10: 40 отказов «далеко 5.0» за 3 мин).
-      cooldown.set(task.id, now() + (ok ? 4000 : 30000))
+      // Не вышло (не дошёл, далеко, не подобрал) — пара ждёт нового места (Codex 15.10: 40 отказов «далеко 5.0» за 3 мин).
+      if (ok) sw.cleared(`transfer:${task.id}`); else sw.failed(recipient, `transfer:${task.id}`, task.data.item)
       delete recipient.swarmReserved; context.board.release(task.id, b.name, claim.claim.token)
     }
   }
-  async function search(b, context) {
+  // away — враги, от которых он отходит: обход только в их противоположную полусферу (оторвавшийся «искал» прямо к ним).
+  async function search(b, context, away: { position: { x: number; z: number } }[] = []) {
     const team = teamOf(b), marks = visited.get(team) || new Map()
     visited.set(team, marks)
     const m = pos[b.name], index = context.members.findIndex(o => o.id === b.name)
-    const candidates = []
+    const candidates = [], behind = []
     for (let k = 0; k < 8; k++) {
       const a = (k + index) * Math.PI / 4, r = 8
       const at = { x: Math.max(arena.x - arena.r + 3, Math.min(arena.x + arena.r - 3, m.p.x + Math.cos(a) * r)), y: m.p.y, z: Math.max(arena.z - arena.r + 3, Math.min(arena.z + arena.r - 3, m.p.z + Math.sin(a) * r)) }
       const key = `${Math.round(at.x / 4)},${Math.round(at.z / 4)}`
       if (distance(at, m.p) < 3) continue
-      candidates.push({ at, key, seen: marks.get(key) || 0 })
+      const toward = away.filter(e => (at.x - m.p.x) * (e.position.x - m.p.x) + (at.z - m.p.z) * (e.position.z - m.p.z) > 0).length
+      ;(toward ? behind : candidates).push({ at, key, seen: marks.get(key) || 0, toward })
     }
-    const chosen = candidates.sort((a, c) => a.seen - c.seen)[0]
+    // Враги с двух сторон — все направления к кому-то: наименее плохое (к меньшему числу), а не стоять (DeepSeek, ревью 21.10).
+    const chosen = candidates.sort((a, c) => a.seen - c.seen)[0] ?? behind.sort((a, c) => a.toward - c.toward || a.seen - c.seen)[0]
     if (!chosen) return
     marks.set(chosen.key, now())
     if (marks.size > 256) marks.delete(marks.keys().next().value)
@@ -105,9 +111,13 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       return ok ? receive : false
     } finally { delete thrower.swarmReserved; board.release(id, b.name, claim.claim.token); board.cancel(id) }
   }
+  // Запрос позиции — по миру, а не раз в 20 с (21.10): занятая позиция держится, пока бот на ней, цель та же и враги те же;
+  // неудача — до ухода бота с места или смены врагов (retry.ts). Не больше двух тяжёлых запросов разом — бюджет ЦП.
   async function positionStep(b, context, purpose) {
-    if (sw.positionQueries >= 2 || (cooldown.get(`position:${b.name}`) || 0) > now()) return false
-    cooldown.set(`position:${b.name}`, now() + 20000)
+    const scene = `${purpose}:${context.board.enemies().map(e => e.id).sort().join(',')}`, me = pos[b.name]?.p
+    const holding = !!me && b.swarmPosition?.purpose === purpose && b.swarmPosition.scene === scene && distance(me, b.swarmPosition.at) < 1.5
+    if (sw.positionQueries >= 2 || holding || sw.blocked(b, `position:${b.name}`, scene)) return false
+    sw.failed(b, `position:${b.name}`, scene)
     sw.positionQueries++; b.swarmBusyUntil = now() + 20000
     const round = sw.generation
     try {
@@ -115,7 +125,8 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       const query = await execute(b, 'swarm_position', { purpose, arena, enemies: board.enemies().map(e => ({ id: e.id })), radius: 12, limit: 6, reserve: context.member.reserve, budgetMs: 1500 })
       if (round !== sw.generation || !alive(b.name)) return false
       const candidates = query.observed ? query.candidates || [] : []
-      for (const choice of candidates.filter(c => c.score > 0 && distance(c.at, m.p) > 2 && !(b.badSpots || []).some(p => p.until > now() && distance(p, c.at) < 1))) {
+      // Место, куда не вышло, — плохое, пока бот там же, откуда пробовал (сторож арены так же: watch.ts).
+      for (const choice of candidates.filter(c => c.score > 0 && distance(c.at, m.p) > 2 && !(b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, c.at) < 1))) {
         const method = [...choice.methods].sort((a, c) => a.cost - c.cost)[0]
         if (!method) continue
         let ok = false, actual
@@ -157,10 +168,10 @@ export function swarmPosition (sw: SwarmDriverCtx) {
           const s = await b.c.call('status', { physics: true }); actual = s?.state?.pos || s?.detail?.physics?.pos
           ok = !!actual && distance(actual, choice.at) < .6
         }
-        if (!ok) { (b.badSpots ||= []).push({ ...choice.at, until: now() + 15000 }); b.badSpots = b.badSpots.filter(p => p.until > now()).slice(-32); continue }
-        b.swarmPosition = { ...choice, purpose, placedAt: now() }
+        if (!ok) { (b.badSpots ||= []).push({ ...choice.at, from: { ...m.p } }); b.badSpots = b.badSpots.slice(-32); continue }
+        b.swarmPosition = { ...choice, purpose, scene, placedAt: now() }
         m.p = { ...actual }
-        b.swarmHoldUntil = now() + 5000
+        sw.cleared(`position:${b.name}`)
         board.recordFact(b.name, now(), { id: `rally:${b.name}`, kind: 'mark', position: choice.at }, 30000)
         log(`🏔 ${b.name}: ${purpose} → ${cellKey(choice.at)} (${method.kind})`)
         return true

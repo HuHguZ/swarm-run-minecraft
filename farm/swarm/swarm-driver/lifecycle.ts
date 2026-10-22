@@ -5,12 +5,15 @@ export function swarmLifecycle (sw: SwarmDriverCtx) {
   const { bots, ladderSites, now, alive, boards, holes, walls, ladderRoutes, boxed, boxTries, tourBad, blockedRoutes, blueprints, transfers, planned, plannedAt, visited, cooldown, placed, toured, emptyChests, fullFor, knownChests, telemetry, teamOf, turn } = sw
   function reset() {
     sw.generation++
+    // Память матча: кто сколько наших убил в прошлых раундах (лента смертей; доска раунда её стирает) — сила врага не забывается
+    // за смену раунда (стенд 21.10: чемпион убил шестерых, а в новом раунде рой снова шёл на него «втрое больше» до двух смертей).
+    for (const d of sw.drops()) if (d.team && d.by) { const t = sw.pastKills.get(d.team) || {}; t[d.by] = (t[d.by] || 0) + 1; sw.pastKills.set(d.team, t) }
     for (const board of boards.values()) board.resetRound()
-    for (const b of bots) { delete b.swarmPosition; delete b.swarmHoldUntil; delete b.swarmPreparingUntil; delete b.swarmReserved; delete b.swarmTask; delete b.swarmTaskAt; delete b.swarmFightReply; delete b.noReach }
+    for (const b of bots) { delete b.swarmPosition; delete b.swarmPreparing; delete b.swarmReserved; delete b.swarmTask; delete b.swarmTaskAt; delete b.swarmFightReply; delete b.noReach }
     holes.length = 0; walls.clear(); for (const w of ladderSites) walls.set(w.key, { ...w }); ladderRoutes.length = 0; boxed.clear(); boxTries.clear()
     for (const b of bots) { b.boxedCamp = null; b.boxOutTries = 0; delete b.campReacting }
     tourBad.clear(); blockedRoutes.clear()
-    blueprints.clear(); transfers.clear(); planned.clear(); plannedAt.clear(); visited.clear(); cooldown.clear(); placed.clear(); toured.clear(); emptyChests.clear(); fullFor.clear(); knownChests.clear()
+    blueprints.clear(); transfers.clear(); planned.clear(); plannedAt.clear(); sw.plannedFoes.clear(); visited.clear(); cooldown.clear(); placed.clear(); toured.clear(); emptyChests.clear(); fullFor.clear(); knownChests.clear(); sw.retries.clear(); sw.sites.clear()
     for (const b of bots) Promise.resolve(b.c?.call('swarm_keep', { clear: true })).catch(() => {})
   }
   const snapshot = () => Object.fromEntries([...boards].map(([team, board]) => [team, { enemies: board.enemies(), tasks: board.tasks(), stats: { ...telemetry }, learning: board.tacticStats() }]))

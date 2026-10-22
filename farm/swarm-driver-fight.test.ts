@@ -164,7 +164,8 @@ test('a line rotation stops the old front mid-fight instead of letting its long 
     const running = driver.turn(bots[0])
     await new Promise(r => setImmediate(r))
     assert.ok(calls.some(c => c.who === 'A' && c.method === 'fight'), 'the on-duty front engages')
-    now += 23500
+    // Смена — по усталости ранга (A на 57 % хп, B свежий), не через 22.5 с.
+    now += 1000; pos.A.hp = 11.5
     for (const b of bots) driver.observe(b, [seen])
     assert.ok(calls.some(c => c.who === 'A' && c.method === 'stop'), 'the shift change interrupts the old front')
     release({ detail: {} }); await running
@@ -251,13 +252,13 @@ test('an old-round interrupted fight cannot pause the new round', async () => {
   await f.turn()
   assert.equal(f.calls.filter(c => c.method === 'fight').length, 2)
 })
-test('погоня: последний бой только при физическом зажатии', async () => {
-  for (const cornered of [false, true]) {
+test('погоня: последний бой только при физическом зажатии; «оторвался» без шага — отход от места, где его видели', async () => {
+  for (const cornered of [false, true, 'still']) {
     const calls: any[] = []
     const b = { name: 'A', team: 'blue', c: { async call(method, params) {
       calls.push({ method, params })
       return { status: 'done', detail: method === 'flee'
-        ? cornered ? { cornered: true } : { mode: 'оторвался' } : {} }
+        ? cornered === true ? { cornered: true } : { mode: 'оторвался', ran: cornered === 'still' ? 0 : 9 } : {} }
     } } }
     const pos = { A: { p: { x: 0, y: 64, z: 0 }, hp: 20, inv: {}, armor: {} } }
     const driver = createSwarmDriver({ bots: [b], pos, alive: () => true,
@@ -269,8 +270,23 @@ test('погоня: последний бой только при физичес
         'netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'
       ] } }])
     await driver.turn(b)
-    assert.deepEqual(calls.map(c => c.method), cornered ? ['flee', 'fight'] : ['flee'])
+    assert.deepEqual(calls.map(c => c.method), cornered === true ? ['flee', 'fight'] : cornered === 'still' ? ['flee', 'goto'] : ['flee'])
+    if (cornered === 'still') assert.ok(calls[1].params.x < -6, 'away from the foe at x=4')
     assert.deepEqual(calls[0].params.toward, [])
     assert.equal(calls[0].params.safeDist, 22)
+  }
+})
+
+// Стенд бота-противника 22.10: резерв в 6 бл. от человека сидел на шифте 32 с. В досягаемости его секунды бега — бой; дальше — к месту.
+test('armed sentries within the foe one-second reach engage instead of holding; farther ones walk to their spots', async () => {
+  for (const [gap, fights] of [[6, true], [14, false]] as const) {
+    const foe = { x: .5 + gap, y: 64, z: .5 }
+    const bots: any[] = ['A', 'B', 'C', 'D'].map(name => ({ name, team: 'blue', calls: [] as string[] }))
+    const pos: any = Object.fromEntries(bots.map((b, k) => [b.name, { p: { x: .5, y: 64, z: .5 + k }, hp: 20, inv: { iron_sword: 1 }, armor: {} }]))
+    for (const b of bots) b.c = { async call(method, params) { b.calls.push(method); if (method === 'goto') pos[b.name].p = { x: params.x, y: params.y, z: params.z }; return { detail: { arrived: pos[b.name].p } } } }
+    const driver = createSwarmDriver({ bots, pos, alive: () => true, arena: { x: 0, y: 64, z: 0, r: 40 }, home: () => pos.A.p, hostile: (_, id) => id === 'Foe', log: () => {} })
+    for (let k = 0; k < 3; k++) for (const b of bots) { driver.observe(b, [{ id: 'Foe', visible: true, position: foe, equipment: { weapon: 'netherite_sword' } }]); await driver.turn(b) }
+    assert.ok(bots.every(b => b.swarmTask?.data?.sentry), 'the plan keeps them as sentries')
+    assert.equal(bots.every(b => b.calls.includes('fight') && !b.calls.includes('swarm_hold')), fights, `gap ${gap}`)
   }
 })
