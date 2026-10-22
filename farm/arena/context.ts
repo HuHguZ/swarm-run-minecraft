@@ -12,6 +12,9 @@ export const SEG_S = Number(process.env.FFA_SEG_S || 30)
 // Один против всех (12.10: «всех ботов синими против меня, я один красный — жёсткое месиво»): боты — одна синяя команда,
 // человек — красный, усиленный набор; рой оценивает преимущество и расходится за лутом, когда бой невыгоден.
 export const SOLO = process.env.ARMS_SOLO === '1'
+// Чемпион (пользователь 21.10: «1 красного сильного бота, жёсткого как человек, которому ты вещи выдаёшь, остальных — за
+// синих»): первый бот — красный, набор и баффы человека соло, бой — дуэльным движком демона; 29 синих — рой как есть.
+export const CHAMP = process.env.ARMS_CHAMP === '1'
 
 type Fn = (...a: any[]) => any
 export interface ArenaContext {
@@ -36,7 +39,7 @@ export interface ArenaContext {
   radio: Record<string, any>; humans: Record<string, any>; rel: Record<string, Record<string, number>>
   perches: any[]
   // изменяемое между частями — только через ctx.<поле>
-  between: boolean; round: number; stop: boolean; roundT0: number; lastKillAt: number; logAt: number
+  between: boolean; round: number; stop: boolean; roundT0: number; lastKillAt: number; logAt: number; logBorn?: number
   // выбывшие до конца раунда люди (соло: раунд синих, когда выбыли все)
   humanNames: string[]; humanOut: Set<string>; spawnAt: any
   stockChests: (round: number, only?: any[] | null) => Promise<void>
@@ -45,7 +48,7 @@ export interface ArenaContext {
   // supply — kitHas … labTask; radio — tell … callout; dangers — dodgeAway; watch — swarmDriver, enemiesOf
   home: Fn; place: Fn; armsHome: Fn
   readDeaths: Fn; board: Fn; reset: Fn; roundKit: Fn; giveBlue: Fn; spreadBots: Fn; endRound: Fn
-  kitHuman: Fn; humanStart: Fn; humanHome: Fn; humanOutWatch: Fn; emote: Fn; eyeOf: Fn; relSay: Fn; hostile: Fn
+  kitHuman: Fn; kitStrong: Fn; humanStart: Fn; humanHome: Fn; humanOutWatch: Fn; emote: Fn; eyeOf: Fn; relSay: Fn; hostile: Fn
   kitHas: Fn; needOf: Fn; spare: Fn; armsPrep: Fn; brewTask: Fn; labTask: Fn
   tell: Fn; short: Fn; alive: Fn; radioSay: Fn; callout: Fn
   dodgeAway: Fn

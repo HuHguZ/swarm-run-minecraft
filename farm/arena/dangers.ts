@@ -119,6 +119,9 @@ function onDanger (dz: DangerCtx, b, m) {
   const { ctx, pos, busy, out, deadNow, log, reactions, observations, failures, distance } = dz
   if (ctx.between || out.has(b.name) || deadNow.has(b.name)) { observations.delete(b); failures.delete(b); return }
   if (!m.pos) return
+  // На элитрах уворот клавишами пуст, а его вызов обрывает таран и перелёт (стенд 21.10, слот 30: «cancelled by evade»
+  // в воздухе); от стрел и зелий в полёте уходит само тело (руль тарана).
+  if (pos[b.name]?.gliding) return
   const d = m.dangers || {}
   let seen = observations.get(b)
   if (!seen || seen.round !== ctx.round) { if (seen) failures.delete(b); seen = { round: ctx.round, at: -Infinity, episodes: new Map() }; observations.set(b, seen) }
@@ -126,7 +129,7 @@ function onDanger (dz: DangerCtx, b, m) {
   if (at < seen.at) return
   seen.at = at
   const episodes = new Map<string, any>()
-  for (const [kind, sources] of [['sm', d.smashes], ['pt', d.potions], ['ar', d.arrows], ['am', d.aims], ['lv', d.lava?.filter(v => v.d <= 1.5)], ['cl', d.clouds]] as const) for (const src of sources || []) {
+  for (const [kind, sources] of [['fl', d.floor], ['tn', d.blasts], ['wb', d.web], ['sm', d.smashes], ['pt', d.potions], ['ar', d.arrows], ['am', d.aims], ['lv', d.lava?.filter(v => v.d <= 1.5)], ['cl', d.clouds]] as const) for (const src of sources || []) {
     // shortcut: wire danger has no projectile ID; launch position plus reset flight ETA distinguishes repeated throws until the protocol includes IDs.
     const key = `${kind}:${src.id ?? src.entityId ?? (kind === 'am' || kind === 'sm' ? src.name + ':' + (src.weapon || '') : JSON.stringify([src.name, src.from || src.at]))}`
     const old = seen.episodes.get(key)
@@ -134,28 +137,83 @@ function onDanger (dz: DangerCtx, b, m) {
     episode.src = src; episodes.set(key, episode)
   }
   seen.episodes = episodes
-  const ready = kind => [...episodes.values()].find(e => e.kind === kind && !e.queued && (!e.handled || !reactions.has(b) && (distance(e.from, m.pos) >= 1.5 || m.status && kind === 'am' && failures.get(b)?.size)))
-  const smE = ready('sm'), ptE = ready('pt'), arE = ready('ar'), amE = ready('am'), lvE = ready('lv'), clE = ready('cl')
-  const sm = smE?.src, pt = ptE?.src, ar = arE?.src, am = amE?.src, lv = lvE?.src, cl = clE?.src
-  const src = sm || pt || ar || am || lv || cl
+  // Ноги всё ещё в лаве и выход кончился «не вышел» — снова выход, где бы ни стоял (иначе тот же эпизод ждёт сдвига на 1.5 бл.).
+  // Только по ответу выхода: датчик даёт d = 0 и стоящему на краю ямы (рамка тела над лавой, ноги на полу) — выход отвечал
+  // «вышел» сразу, и повтор шёл до 48 раз в секунду, срывая бои (стенд 15×15, a41 21.10: 1981 «🌋 0.0» у одного бота за минуту).
+  const ready = kind => [...episodes.values()].find(e => e.kind === kind && !e.queued && (!e.handled || !reactions.has(b) && (distance(e.from, m.pos) >= 1.5 || kind === 'lv' && e.src.d < 0.5 && b.lavaStuck || m.status && kind === 'am' && failures.get(b)?.size)))
+  const flE = ready('fl'), smE = ready('sm'), ptE = ready('pt'), arE = ready('ar'), amE = ready('am'), lvE = ready('lv'), clE = ready('cl')
+  const fl = flE?.src, sm = smE?.src, pt = ptE?.src, ar = arE?.src, am = amE?.src, lv = lvE?.src, cl = clE?.src
+  // Горящий динамит или блоки его цепочки рядом (датчик threats.blasts) — бег прочь от всех зарядов разом, пока они в
+  // досягаемости (dodge_blast: конец по миру). Раньше арена динамит не видела вовсе: уходил только бой, и то от вагонетки
+  // (пользователь 22.10: «взрываю динамит цепочкой, ставлю за ним — он не сворачивает вбок»). Идущий уход новые заряды
+  // видит сам — его не перезапускать.
+  const tnE = ready('tn')
+  const blastBusy = !!b.blastRun && reactions.get(b) === b.blastRun
+  if (tnE && !(lv && lv.d < 0.5) && !blastBusy) {
+    for (const e of episodes.values()) if (e.kind === 'tn') { e.handled = true; e.from = { ...m.pos } }
+    const all = d.blasts || []
+    log(`💣 ${b.name}: динамит рядом (горит ${all.filter(c => c.primed).length}, в цепочке ${all.filter(c => !c.primed).length}, ближний фитиль ${Math.min(...all.map(c => c.fuse))} т) — ухожу от всех`)
+    const token = dz.beginReaction(b); b.blastRun = token
+    b.c.call('dodge_blast', {}).then(r => { const x = r?.detail || r; if (dz.ownsReaction(b, token) && x && !x.clear) log(`💣 ${b.name}: от динамита не ушёл — ${x.cornered ? 'некуда' : x.distance != null ? `в ${x.distance} бл. (${x.ended}, ${x.seconds} с)` : `${r?.status} ${JSON.stringify(r?.by || r?.error || '')}`}`) })
+      .catch(() => {}).finally(() => { dz.endReaction(b, token); if (b.blastRun === token) b.blastRun = null })
+    return
+  }
+  // Уход от динамита идёт — его не рвать: воронки от взрыва он обходит сам (stepSafe), прочее подождёт.
+  if (blastBusy && !(lv && lv.d < 0.5)) return
+  // Паутина на теле — срезать (clear_web): в ней шаг вчетверо медленнее, ни уйти, ни догнать, а прочие реакции бесполезны
+  // (стенд бота-противника 22.10: паутина на боте — 10 с на месте под ударами, «бой ↔ бегство» каждую секунду). Пока
+  // режет — не перезапускать; нечем (ни меча, ни ножниц) — не браться.
+  const wb = [...episodes.values()].find(e => e.kind === 'wb')?.src
+  const inv = pos[b.name]?.inv || {}
+  if (wb && !(lv && lv.d < 0.5) && !(b.webRun && reactions.get(b) === b.webRun) && Object.keys(inv).some(k => inv[k] > 0 && /_sword$|^shears$/.test(k))) {
+    log(`🕸 ${b.name}: в паутине (${wb.cells} кл.) — срезаю`)
+    const token = dz.beginReaction(b); b.webRun = token
+    b.c.call('clear_web', {}).then(r => { const x = r?.detail || r; if (dz.ownsReaction(b, token) && x && !x.ok) log(`🕸 ${b.name}: паутину не срезал — ${x.why || `${x.cut} из ${wb.cells}`}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`) })
+      .catch(() => {}).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
+    return
+  }
+  if (b.webRun && reactions.get(b) === b.webRun) return
+  // Пол уходит из-под ног при враге рядом (датчик тела threats.floorDanger: опора исчезла или трескается) — сойти сразу,
+  // раньше всего, кроме выхода из лавы: в дыру летят за тик (игра пользователя 22.10: «ломаю блоки под ними — они в дырки
+  // улетают, ничего не делают»).
+  if (fl && !(lv && lv.d < 0.5)) {
+    flE.handled = true; flE.from = { ...m.pos }
+    log(`🕳 ${b.name}: пол уходит (${fl.holes} бл.), рядом ${fl.name} — схожу`)
+    // Прочь от дыры, без спуска и копки: вниз — это и есть его ловушка.
+    ctx.dodgeAway(b, m.pos, fl.at, 3, null, null, false, false)
+    return
+  }
+  // Ноги в лаве (d < 0.5) — выход раньше всего: уворот от зелья, стрейф от прицела и шаг от стрелы, пока тело горит, —
+  // смерть (a39: «🌋 0.0 → 🧪↯ рывок → ☠ tried to swim in lava»). Пока выход идёт (lavaBusy), других реакций не начинаю.
+  const inLava = !!lv && lv.d < 0.5
+  if (b.lavaBusy && reactions.has(b)) return
+  const src = inLava ? lv : sm || pt || ar || am || lv || cl
   // Повтор той же опасности уже отсеян эпизодом; другая лава/облако тоже могут потребовать нового выхода.
   if (!src) return
   if (src === am && (busy.has(b.name) || seen.checking)) return
   if (reactions.has(b) && /^(pearl_to|fly_to|wind_jump)$/.test(b.last?.m || '') && !sm && !pt && !cl && !lv) return
   if (b.juking && !sm && !pt && !cl && !lv) return
   // Лезет к цели (столб, прокоп): от прицела и стрелы не дёргаться — рывок со столба хуже попадания; зелье и булава — да.
-  if (b.climbing && !sm && !pt && !cl) return
+  if (b.climbing && !sm && !pt && !cl && !inLava) return
   const st = b.dodgeStyle || (b.dodgeStyle = { delay: 40 + Math.random() * 160, skip: 0.05 + Math.random() * 0.15, jumpy: 0.5 + Math.random() * 0.5 })
-  const episode = smE || ptE || arE || amE || lvE || clE
-  const shieldNow = (pos[b.name]?.inv?.shield || 0) > 0 || /shield/.test(String(pos[b.name]?.offHand?.name ?? pos[b.name]?.offHand ?? ''))
+  const episode = inLava ? lvE : smE || ptE || arE || amE || lvE || clE
+  // Вторая рука в состоянии тела — { item, durability } (armor.readOffHand). Чтение .name давало «нет щита», как только щит
+  // надет: первая реакция на булаву поднимала щит, следующая — рывок (пользователь 21.10: «в последний момент вместо щита
+  // убегать начинают — достаю и ваншот»; 31 смерть от булавы за 15 мин).
+  const hand2 = pos[b.name]?.offHand
+  const shieldNow = (pos[b.name]?.inv?.shield || 0) > 0 || /shield/.test(String(typeof hand2 === 'string' ? hand2 : hand2?.item ?? hand2?.name ?? ''))
   // В рукопашной (бой и враг ближе 4.5 бл.) от прицела и стрел не стрейфить: уворот рвёт бой (арена 14.10: один лучник
   // прицелился — трое бросили свои схватки, ни одного удара; пользователь: «рои вырезают друг друга до конца»).
   if ((src === am || src === ar) && b.last?.m === 'fight' && ctx.enemiesOf(b, m.pos).some(e => e.d <= 4.5 && !e.mob)) return
+  // Штурм, добивание, сброс — идущий в атаку не бросает её ради уворота от прицела и стрелы: бой сам держит щит и шаг (стенд
+  // 21.10, чемпион с луком: за 4 мин штурма 139 боёв синих оборвали evade/juke/wind_jump/peek_shot — урона ему ноль).
+  const t = b.swarmTask
+  if ((src === am || src === ar) && b.last?.m === 'fight' && t?.kind === 'fight' && (t.data?.assault || t.data?.finishing || t.data?.shove)) return
   // Вплотную — бить; недоступный выход запоминается отдельно от других способов реакции.
   if (src === am && (Math.random() < st.skip * 0.5 || distance(am.at, m.pos) <= 3)) return
   const recheck = episode.handled && distance(episode.from, m.pos) < 1.5
   episode.handled = true; episode.from = { ...m.pos }
-  log(sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${sm.ticks >= 6 && shieldNow ? 'щит к нему' : 'рывок'}` : pt ? `🧪↯ ${b.name}: летит ${pt.name}${pt.role ? ' (' + pt.role + ')' : ''}, ляжет через ${pt.ticks} т — рывок` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : am ? `🎯↔ ${b.name}: ${am.name} целится в меня (${am.weapon}) — стрейф` : ar ? `🏹↯ ${b.name}: летит ${ar.name}, через ${ar.ticks} т — шаг поперёк` : `🧪☁ ${b.name}: облако зелья — выхожу`)
+  log(inLava ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — выхожу (lava_escape)` : sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${shieldNow ? 'щит к нему' : 'рывок'}` : pt ? `🧪↯ ${b.name}: летит ${pt.name}${pt.role ? ' (' + pt.role + ')' : ''}, ляжет через ${pt.ticks} т — рывок` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : am ? `🎯↔ ${b.name}: ${am.name} целится в меня (${am.weapon}) — стрейф` : ar ? `🏹↯ ${b.name}: летит ${ar.name}, через ${ar.ticks} т — шаг поперёк` : `🧪☁ ${b.name}: облако зелья — выхожу`)
   // Стрела — шаг поперёк её полёта (side от тела), на 3 бл.
   // Целится — зигзаг: шаг поперёк его линии, каждый раз в другую сторону (12.10: «стрейфить заранее, как только нацеливаюсь»).
   // Лава рядом (12.10: «лаву водой — заранее»): ведро воды есть — залить и забрать воду, нет — отойти. Только соседняя клетка
@@ -167,33 +225,50 @@ function onDanger (dz: DangerCtx, b, m) {
   // Булава сверху, а щит есть (14.10: «друг с булавой спокойно их убил в полёте, они даже не смотрели» — рывок за 15 т, а он
   // правит полёт и добивает через секунду: 71 удар замечен, рывки не спасли). mace_smash нет в bypasses_shield (jar 1.21.11):
   // лицом к падающему и щит до посадки, потом бить его же. Щит встаёт за 5 т — позже, или щита нет, — рывок, как прежде.
-  if (sm && sm.ticks >= 6 && shieldNow) { dangerShieldSmash(dz, b, m, sm); return }
+  // Щит есть — держать его, пока его удар сверху виден (стойка whileSmash): рывок за 6–16 т его не уводит (правит полёт), а
+  // щит держит и удар прямо сверху. Уже держу — не перезапускать: новый подъём — ещё 5 т без блока. Поздно (< 6 т) и идёт
+  // бой — не рвать его: бой сам держит щит против булавы (mace/defend).
+  if (sm && shieldNow) {
+    if (b.shieldHold && reactions.get(b) === b.shieldHold || sm.ticks < 6 && b.last?.m === 'fight') return
+    dangerShieldSmash(dz, b, m, sm); return
+  }
   // Брызги ложатся в радиусе 4 (ThrownSplashPotion.applySplash), удар булавой — в 3.5: уйти надо на 4.5+ от точки. Ляжет
   // скоро (≤ 12 тиков) — спринт лицом по ходу (спиной вперёд — шагом, замер potion-above-3: 56 % зелий в цель); есть
   // время — пятиться, глядя на угрозу. От булавы — бежать, пока он не сел (mace-4: бой после рывка вёл назад под удар).
   const off = Math.hypot(m.pos.x - src.at.x, m.pos.z - src.at.z)
+  // Без щита от булавы — бежать, только пока успеваем выйти из его досягаемости: 5 бл. от точки посадки спринтом 0.28 б/т
+  // и 4 т на разгон. В последний миг рывок не уводит — он правит полёт и бьёт в спину (игра пользователя 22.10: «либо
+  // убегать, но сразу, пока я ещё вверху»). Не успеваем — не дёргаться: идущий бой продолжается.
+  if (sm && sm.ticks < Math.max(0, 5 - off) / 0.28 + 4) return
   const urgent = !!sm || (src.ticks ?? 99) <= 12
   ctx.dodgeAway(b, m.pos, src.at, src === cl ? cl.r + 2 : Math.max(2.5, 4.8 - off, sm ? (sm.ticks + 3) * 0.3 : 0) + Math.random(), sm ? () => { if (geared(pos[b.name])) b.cur = sm.name } : null, urgent ? null : sm ? sm.from : pt ? pt.at : null, !!(sm || pt), true)
 }
 
 function dangerLava (dz: DangerCtx, b, m, lv) {
-  const { pos, beginReaction, endReaction } = dz
+  const { ctx, pos, beginReaction, endReaction } = dz
   // Уже в лаве (яма поля, 1 бл. глубиной): рывок по ровному «некуда» — край ямы на блок выше; путь pathfinder'а
   // выпрыгивает сам (арена 40: 31an 20 с в лаве — «рывок не вышел»).
   // Рывок у ям лавы поля часто «некуда» (край ямы, стены рядов) — и так каждые 1.5 с (ворота s13: 11 раз за 21 с); путь
   // pathfinder'а на 3 бл. прочь от лавы лаву обходит и выпрыгивает из неё.
-  if (lv.d >= 0.5 && (pos[b.name]?.inv?.water_bucket || 0) > 0) { const token = beginReaction(b); b.lavaBusy = true; b.c.call('douse_lava', { at: lv.at }).catch(() => {}).finally(() => endReaction(b, token)) }
-  else {
-    const ax = m.pos.x - (lv.at.x + .5), az = m.pos.z - (lv.at.z + .5), L = Math.hypot(ax, az)
-    const a = L > .3 ? Math.atan2(az, ax) : Math.random() * 2 * Math.PI
+  // Поток «окружение», 21.10 (DeepSeek t3, a27: 5 из 16 смертей в лаве; «goto на 3 бл.» — A* и запуск пути, пока лава
+  // снимает 4 хп за 0.5 с, и отмена боя на кромке): в лаве (d < 0.5) или на кольце магмы (d ≤ 1.2) — быстрый выход демона
+  // lava_escape (pvp/lava-exit: к ближайшей клетке поля, вперёд + прыжок + спринт, пока под ногами горит, без pathfinder'а);
+  // в бою и дальше кромки — ничего: бой сам не шагает к лаве и не стоит к ней спиной (pvp/turn-melee edgeTurn, body.stepSafe).
+  // Вода заранее — только вне боя (douse_lava отменяет бой: by "douse_lava").
+  const fighting = b.last?.m === 'fight'
+  // Враг рядом (16 бл.) — не заливать: прерванный залив оставляет воду, и в узкой комнате она держит бота под его мечом
+  // (игра пользователя 22.10: «выливают воду в узком пространстве и не могут убежать из комнаты»).
+  const foeNear = ctx.enemiesOf(b, m.pos).some(e => e.d < 16 && !e.mob)
+  if (lv.d > 1.2 && !fighting && !foeNear && (pos[b.name]?.inv?.water_bucket || 0) > 0) { const token = beginReaction(b); b.lavaBusy = true; b.c.call('douse_lava', { at: lv.at }).catch(() => {}).finally(() => endReaction(b, token)) }
+  else if (lv.d < 0.5 || (lv.d <= 1.2 && !fighting)) {
     const token = beginReaction(b); b.lavaBusy = true
-    b.c.call('goto', { x: m.pos.x + Math.cos(a) * 3, y: m.pos.y + (lv.d < 0.5 ? 1 : 0), z: m.pos.z + Math.sin(a) * 3, range: 1.5, timeoutSeconds: 3 }).catch(() => {}).finally(() => endReaction(b, token))
+    b.c.call('lava_escape', { limitMs: 2500 }).then(r => { const d = r?.detail || r; b.lavaStuck = d?.ok === false }).catch(() => { b.lavaStuck = false }).finally(() => endReaction(b, token))
   }
   return
 }
 
 function dangerAim (dz: DangerCtx, b, m, { am, st, seen, episode, recheck }) {
-  const { ctx, arms, pos, busy, out, deadNow, X, Y, Z, R, L, log, failures, retry, remember, beginReaction, ownsReaction, endReaction } = dz
+  const { ctx, arms, bots, pos, busy, out, deadNow, X, Y, Z, R, L, log, failures, retry, remember, beginReaction, ownsReaction, endReaction } = dz
   b.strafe = Math.random() < 0.7 ? -(b.strafe || (Math.random() < 0.5 ? 1 : -1)) : (b.strafe || 1)
   // Под обстрелом без ответа: уход определяется доступностью стрелка и оценкой боя.
   const ranged = Object.keys(pos[b.name]?.inv || {}).some(n => /^(bow|crossbow)$/.test(n)) && (pos[b.name]?.inv?.arrow || 0) > 0
@@ -264,10 +339,19 @@ function dangerAim (dz: DangerCtx, b, m, { am, st, seen, episode, recheck }) {
     if ((inv.elytra || me.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 4 && dist > 14) opts.push({ k: 'fly', w: 1.5 + (above > 6 ? 1.5 : 0) })
     // Против людей (соло) ветер — только вверх к нему: рывок вбок от трезубца уводил из боя (стенд 14.10, поле: 39 рывков,
     // контакт 18 % времени); уворот — зигзагом на него (juke advance).
-    if ((inv.wind_charge || 0) > 0 && (!SOLO || above > 2 && above < 8 && dH < 10)) opts.push({ k: 'wind', w: above > 2 && above < 8 && dH < 10 ? 4 : 1.5 })
+    // У булавы заряды — на взлёт и удар с падения (стенд 21.10, чемпион: «не взлетаю — нет булавы или заряда», а заряды ушли
+    // на уворот от прицела): уворот ветром — только из лишних, сверх двух на взлёт с повтором.
+    if ((inv.wind_charge || 0) > (inv.mace ? 2 : 0) && (!SOLO || above > 2 && above < 8 && dH < 10)) opts.push({ k: 'wind', w: above > 2 && above < 8 && dH < 10 ? 4 : 1.5 })
     if (above > 3 || !ranged && !SOLO) opts.push({ k: 'cover', w: above > 3 ? 3.5 : 1.5 })
     // Есть лук — ответить из-за стенки в прыжке (13.10: «ставит блоки, прыгает и стреляет — очень крутой приём»).
     if (ranged && dist >= 8 && dist <= 35) opts.push({ k: 'peek', w: 3 })
+    // Щит к нему (DeepSeek t7, стенд 21.10: стрелы — главный убийца синих, 60 из 131): стрела без Пронзания в щит не проходит
+    // целиком (damage-model shieldBlocks), а зигзаг с 8 бл. ловил 80 % выстрелов. Щит встаёт за 5 т — до выстрела успевает.
+    // Вплотную (≤ 6 бл.) — не стойка со щитом: он с луком в упор переключается на меч, а бот стоял под ударами и только
+    // после них бежал (игра пользователя 22.10: «просто стоят, когда их атакуют, чего-то ждут»; 18 боёв за 2 раунда
+    // оборвал «щит к нему»). Вторая рука в состоянии тела — { item }.
+    const shield = (inv.shield || 0) > 0 || /shield/.test(String(me.offHand?.item ?? me.offHand?.name ?? me.offHand ?? ''))
+    if (shield && dist > 6) opts.push({ k: 'shield', w: 6 })
     if (failures.get(b)?.size) {
       seen.checking = true
       const action = b.last
@@ -291,6 +375,7 @@ function dangerAim (dz: DangerCtx, b, m, { am, st, seen, episode, recheck }) {
       act('wind', '💨', () => b.c.call('wind_jump', up ? { up: true, toward: to } : { toward: to }), d => (d.used || 0) > 0, up ? fightHim : null)
     } else if (pick.k === 'cover') act('cover', '🧱', () => b.c.call('take_cover', { from: am.name, maxRun: 7 }), d => !!d.ok, null)
     else if (pick.k === 'peek') act('peek', '🏹🧱', () => b.c.call('peek_shot', { target: am.name, shots: 2 }), d => !!d.ok, null)
+    else if (pick.k === 'shield') act('shield', '🛡', () => b.c.call('swarm_hold', { shield: true, requireShield: true, enemies: [am.name], allies: bots.filter(o => o.team === b.team).map(o => o.name), seconds: 1.5 }), d => d.ok !== false && (d.shield?.blockingSeconds ?? 0) > 0, null)
     else juke()
   }
   episode.queued = true
@@ -301,8 +386,13 @@ function dangerAim (dz: DangerCtx, b, m, { am, st, seen, episode, recheck }) {
 function dangerShieldSmash (dz: DangerCtx, b, m, sm) {
   const { ctx, bots, pos, beginReaction, ownsReaction, endReaction } = dz
   const token = beginReaction(b)
-  b.c.call('swarm_hold', { shield: true, requireShield: true, enemies: [sm.name], allies: bots.filter(o => o.team === b.team).map(o => o.name), seconds: Math.min(5, (sm.ticks + 10) / 20) })
-    .then(r => { if (!ownsReaction(b, token)) return; const d = r?.detail || r; if (d?.ok === false) ctx.dodgeAway(b, m.pos, sm.at, 3.5, null, null, true, true); else if (geared(pos[b.name])) b.cur = sm.name })
-    .catch(() => {}).finally(() => endReaction(b, token))
+  b.shieldHold = token
+  // Держать, пока тело видит его удар сверху (whileSmash — датчик threats.smashes), а не по первой оценке посадки: он
+  // подскакивает снова (заряд ветра, «Порыв ветра»), щит опускался между прыжками, новый подъём за 1–2 т до удара не держит
+  // (5 т задержки), и бот в просвет бежал (игра пользователя 22.10: «до конца щитом прикрываться, пока я не упаду»).
+  // seconds — только предохранитель.
+  b.c.call('swarm_hold', { shield: true, requireShield: true, enemies: [sm.name], allies: bots.filter(o => o.team === b.team).map(o => o.name), whileSmash: sm.name, seconds: 20 })
+    .then(r => { if (!ownsReaction(b, token)) return; const d = r?.detail || r; if (d?.ok === false && sm.ticks >= 12) ctx.dodgeAway(b, m.pos, sm.at, 3.5, null, null, true, true); else if (geared(pos[b.name])) b.cur = sm.name })
+    .catch(() => {}).finally(() => { if (b.shieldHold === token) b.shieldHold = null; endReaction(b, token) })
   return
 }

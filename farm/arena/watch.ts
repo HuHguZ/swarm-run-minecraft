@@ -3,6 +3,7 @@
 // демона, опрос состояния, сторож зависаний, мобы глазами, счёт и уборка.
 import { ROOT, SOLO } from './context'
 import { SPRINT, power, MOB_SPD, worthOf } from './gear'
+import { teamOfHuman } from './humans'
 import type { ArenaContext } from './context'
 import * as fs from 'fs'
 import path = require('path')
@@ -65,17 +66,31 @@ export function installSight (ctx: ArenaContext) {
     edgeOf = p => {
       const rx = Math.floor(p.x - X), ry = Math.floor(p.y - Y), rz = Math.floor(p.z - Z)
       // Ближний обрыв, до которого тело долетит: стена на пути (ноги или голова) — не обрыв (Codex 15.10: бил «в обрыв» сквозь стену).
+      // До 5 бл. (21.10, чемпион): за 3 бл. удар не докинет, но заряд ветра — да, и бьющим пора заходить с дальней стороны.
       let best = null
-      for (let k = 0; k < 8; k++) for (let t = 1; t <= 3; t++) {
+      for (let k = 0; k < 8; k++) for (let t = 1; t <= 5; t++) {
         const dx = Math.round(Math.cos(k * Math.PI / 4) * t), dz = Math.round(Math.sin(k * Math.PI / 4) * t)
         // Стена — твёрдое выше его ног (нижняя плита пола под ногами — не стена; Codex 15.10).
         const wall = (x, y, z) => solid(x, y, z) && (floorTop(x, y, z) == null || floorTop(x, y, z) > p.y - Y + 1e-3)
         if (wall(rx + dx, ry, rz + dz) || wall(rx + dx, ry + 1, rz + dz)) break
+        // Лава ямы вровень с полом — тоже обрыв (ваншот, пользователь 21.10: «скинул — и он умер сразу»): под ней песчаник,
+        // и он считался полом — рой не заходил так, чтобы удар отправлял в яму.
+        const lava = [ry - 1, ry].some(y => /lava/.test(g.get(rx + dx, y, rz + dz) || ''))
         let floor = false
-        for (let y = ry - 1; y >= ry - 4 && !floor; y--) floor = solid(rx + dx, y, rz + dz)
-        if (!floor) { if (!best || t < best.t) best = { t, k }; break }
+        for (let y = ry - 1; y >= ry - 4 && !floor && !lava; y--) floor = solid(rx + dx, y, rz + dz)
+        if (!floor) {
+          // Глубина падения (shove.ts — убьёт ли): до первого пола ниже; пола нет — пустота (Infinity); лава вровень или на дне —
+          // lava (насмерть ли — решает shove.ts по его броне: незерит с Защитой IV из ямы выходит, 21.10).
+          let drop = Infinity, burns = lava
+          if (!lava) for (let y = ry - 5; y >= ry - 64; y--) if (solid(rx + dx, y, rz + dz) || /lava/.test(g.get(rx + dx, y, rz + dz) || '')) { burns = /lava/.test(g.get(rx + dx, y, rz + dz) || ''); drop = burns ? Infinity : ry - (y + 1); break }
+          // Смертельный в досягаемости важнее ближнего мелкого (DeepSeek, ревью 21.10): пустота, потом глубже 20, потом лава,
+          // потом ближе.
+          const rank = burns ? 1 : drop >= 20 ? 2 + (Number.isFinite(drop) ? 0 : 1) : 0
+          if (!best || rank > best.rank || rank === best.rank && t < best.t) best = { t, k, drop, rank, burns }
+          break
+        }
       }
-      return best ? { x: Math.cos(best.k * Math.PI / 4), z: Math.sin(best.k * Math.PI / 4) } : null
+      return best ? { x: Math.cos(best.k * Math.PI / 4), z: Math.sin(best.k * Math.PI / 4), drop: best.drop, ...(best.burns ? { lava: true } : {}), at: best.t } : null
     }
     // Места для ям-ловушек: клетка пола этажа (галереи dy 8/16/24, крыша-терраса 31), под ней 2 блока, ниже — пустота 4+
     // (этаж ниже): вскрыть 2 — дыра с падением 6–8 бл.
@@ -96,7 +111,9 @@ export function installSight (ctx: ArenaContext) {
     // Все места у цели; досягаемость копателю и разнос проверяет планировщик.
     digSites = p => {
       const rx = p.x - X, ry = p.y - Y, rz = p.z - Z, out: any[] = []
-      for (const c of holeCells.filter(c => Math.abs(c.F - ry) < 1.6).map(c => ({ c, d: Math.hypot(c.x + .5 - rx, c.z + .5 - rz) })).filter(o => o.d >= 2 && o.d <= 6).sort((a, b) => a.d - b.d)) {
+      // С самой клетки у него под ногами (пользователь 21.10: «включая поломку блоков под ногами врага») до 6 бл.: стоящему —
+      // пол из-под ног, бегущему — яма впереди (порядок задаёт plan-jobs по его ходу).
+      for (const c of holeCells.filter(c => Math.abs(c.F - ry) < 1.6).map(c => ({ c, d: Math.hypot(c.x + .5 - rx, c.z + .5 - rz) })).filter(o => o.d <= 6).sort((a, b) => a.d - b.d)) {
         out.push({ ...c.c, x: X + c.c.x, y: Y + c.c.y, z: Z + c.c.z })
       }
       return out
@@ -143,7 +160,9 @@ export function installSight (ctx: ArenaContext) {
   // Человек ворвался (ближе 6 бл.) — подъём/подкоп уже не главное (13.10: «бот строит, я врываюсь — должен видеть меня и
   // решать: драться тем, что есть, или уходить, отбиваясь»): тревога рвёт дело, цикл выбирает бой или отход.
   const humanClose = (b) => { const p = pos[b.name]?.p; return !!p && !!ctx.swarmDriver && ctx.swarmDriver.enemies(b).some(e => Date.now() - e.seenAt < 1500 && !names.includes(e.id) && Math.hypot(e.position.x - p.x, e.position.y - p.y, e.position.z - p.z) < 6) }
-  const CLIMB_OK = /^(status|emote|look_at|armor|team_hint|mobs|rescue_config|wind_leap|dig_to|undercut|watch_dangers|evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|mine)$/
+  // Выход из лавы, уход от динамита и срез паутины — тоже ответ на угрозу: «лезу к цели» глушил их (стенд 22.10: «от динамита не
+  // ушёл — skipped» у пятерых лезущих разом).
+  const CLIMB_OK = /^(status|emote|look_at|armor|team_hint|mobs|rescue_config|wind_leap|dig_to|undercut|watch_dangers|evade|juke|take_cover|douse_lava|lava_escape|dodge_blast|clear_web|wind_jump|pearl_to|fly_to|mine|cache_scan)$/
   // Открытый сундук — в opened: по нему таймер пополнения (ARMS_LOOT_X) знает, что пополнять. Раньше его отмечал старый
   // лут ffa, после роя — никто, и пополнение не работало вовсе (14.10). Ключ — как у L.chests (от центра карты), вторая
   // половина двойного — по pair.
@@ -152,7 +171,7 @@ export function installSight (ctx: ArenaContext) {
   for (const b of bots) { const raw = b.c.call.bind(b.c); b.c.call = (m, p) => {
     p = { ...p, arena: p?.arena || arena }
     // Мгновенные запросы (items_near, blocks_around) — не дело: перекрывали настоящее последнее, и сторож «сбрасывал items_near».
-    const action = /^(status|observe|swarm_pose|swarm_position|emote|look_at|armor|team_hint|stop|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around)$/.test(m) ? null : (b.last = { m, at: Date.now(), p, pending: true })
+    const action = /^(status|observe|swarm_pose|swarm_position|emote|look_at|armor|team_hint|stop|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around|cache_scan|pearl_plan)$/.test(m) ? null : (b.last = { m, at: Date.now(), p, pending: true })
     const out = raw(m, p)
     if (action) Promise.resolve(out).then(() => { action.pending = false }, () => { action.pending = false })
     if (m === 'chest_take') Promise.resolve(out).then(r => markOpened(r?.detail?.at || (Number.isFinite(p.x) ? { x: p.x, y: p.y, z: p.z } : null)), () => {})
@@ -189,7 +208,7 @@ export function watchStatus (ctx: ArenaContext) {
     for (const b of bots) {
       const m = pos[b.name]
       if (m?.p) {
-        b.badSpots = (b.badSpots || []).filter(s => !s.from || s.round === ctx.round && dist3(s.from, m.p) < 2).slice(-32)
+        b.badSpots = (b.badSpots || []).filter(s => !s.from || (s.round === undefined || s.round === ctx.round) && dist3(s.from, m.p) < 2).slice(-32)
         if (b.frozen && (b.frozen.round !== ctx.round || dist3(b.frozen.p, m.p) >= 2)) delete b.frozen
       }
       // Стойка на месте (засада кемпера, кольцо щитов, оцепление) — её дело и есть стоять (кемпер в коробке: «стоит 6 с — сброс»).
@@ -242,6 +261,18 @@ export function watchStatus (ctx: ArenaContext) {
       b.anchor = { p: { ...m.p }, at: Date.now() }
     }
   }, 2000)
+  // Разбор стояний у человека (ARENA_TRACE_NEAR=1, стенд бота-противника 22.10): раз в секунду — кто в 8 бл. от человека и чем занят.
+  if (process.env.ARENA_TRACE_NEAR) setInterval(() => {
+    if (ctx.between) return
+    for (const b of bots) {
+      const m = pos[b.name]
+      if (!m?.p || !ctx.alive(b.name)) continue
+      const h = (ctx.swarmDriver?.enemies(b) || []).filter(e => !names.includes(e.id) && Date.now() - e.seenAt < 1500).map(e => [e.id, dist3(e.position, m.p)] as [string, number]).sort((a, c) => a[1] - c[1])[0]
+      if (!h || h[1] > 8) continue
+      const L0 = b.last || {}, t = b.swarmTask
+      log(`🔎 ${b.name} ${h[1].toFixed(1)} бл.: ${L0.m || '-'}${L0.pending ? '…' : ''} ${L0.at ? ((Date.now() - L0.at) / 1000).toFixed(1) + 'с' : ''} | ${t ? t.kind + (t.data?.hold ? '/' + t.data.hold : '') + (t.data?.target ? '→' + t.data.target : '') : '-'}${busy.has(b.name) ? ' busy' : ''}${b.climbing ? ' climb' : ''}${b.swarmExecuting ? '' : ' вне хода'}${b.swarmFightReply?.status === 'interrupted' ? ' перебит' : ''} v=${(Math.hypot(m.v.x, m.v.z) * 20).toFixed(1)}`)
+    }
+  }, 1000)
   // Позиции всех — раз в секунду (цель — ближайший живой).
   const statusPolling = new Set<string>()
   const poll = setInterval(() => {
@@ -268,7 +299,10 @@ export function watchStatus (ctx: ArenaContext) {
       const dz = s.detail?.dangers
       if (dz && ctx.alive(b.name) && !out.has(b.name)) {
         const holder = (dz.holders || []).find(hd => teams ? teamOf(hd.name) !== b.team && !(rel[b.team][hd.name] > 0) : true)
-        const mate = holder && names.find(n => n !== b.name && teamOf(n) === b.team && ctx.alive(n) && pos[n]?.p && Math.hypot(pos[n].p.x - p.x, pos[n].p.z - p.z) <= 2.5)
+        // В рукопашной (враг в 3.5 бл.) не расходиться: отход на 4 бл. дарит ему удары, а бой рвался — каждый четвёртый
+        // оборванный бой стенда 15×15 был «расходимся» (21.10: 24 из 94).
+        const melee = (s.detail?.sightings || []).some(e => e.id !== b.name && teamOf(e.id) !== b.team && dist3(e.position, p) <= 3.5)
+        const mate = holder && !melee && names.find(n => n !== b.name && teamOf(n) === b.team && ctx.alive(n) && pos[n]?.p && Math.hypot(pos[n].p.x - p.x, pos[n].p.z - p.z) <= 2.5)
         const old = spreading.get(b)
         if (!holder || old && (!pos[old.mate]?.p || dist3(pos[old.mate].p, p) >= 4)) spreading.delete(b)
         if (mate && !busy.has(b.name) && !(b.last?.pending !== false && /^(evade|juke|flee)$/.test(b.last?.m || '')) && (!spreading.has(b) || old.round !== ctx.round || old.holder !== holder.name || old.mate !== mate || old.action !== b.last)) {
@@ -289,7 +323,7 @@ export function watchStatus (ctx: ArenaContext) {
         const botFoeNear = (s.detail?.sightings || []).some(e => names.includes(e.id) && teamOf(e.id) !== b.team && dist3(e.position, p) <= 4.5)
         // Свой человек (ARMS_HUMAN_TEAM, огонь по своим выключен) ранить не может — урон рядом с ним не его (10.10: стрелы, падение
         // и взрывы записывались ему — «враг: красные все на него», и свои стреляли в него).
-        if (hNear.length && s.state.health < was.hp - 0.5 && !botFoeNear && !(HUMAN_TEAM && b.team === HUMAN_TEAM)) ctx.relSay(b.team, hNear[0], -3, `ударил ${b.name}`)
+        if (hNear.length && s.state.health < was.hp - 0.5 && !botFoeNear && !(HUMAN_TEAM && b.team === teamOfHuman(hNear[0], HUMAN_TEAM))) ctx.relSay(b.team, hNear[0], -3, `ударил ${b.name}`)
         const cnt = (inv) => Object.values(inv || {}).reduce((a: number, n: any) => a + (Number(n) || 0), 0) as number
         const nearChest = arms && L.chests.some(c => Math.hypot(X + c.x - p.x, Y + c.y - p.y, Z + c.z - p.z) < 4)
         const gNear = visibleHumans.filter(e => dist3(e.position, p) <= 8).map(e => e.id)
@@ -304,14 +338,17 @@ export function watchStatus (ctx: ArenaContext) {
       }
       const now = Date.now(), frame = s.state.physicsTicks ?? tick, clockId = s.state.clock?.id
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
-      pos[b.name] = { p, v, hp: s.state.health, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: s.state.inventory || {}, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
+      pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: s.state.inventory || {}, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
       if (dz) b.c.onDanger?.({ pos: p, dangers: dz, observedAt: asked, status: true })
       ctx.swarmDriver.observe(b, s.detail?.sightings || [], asked)
       const panic = ctx.swarmDriver.panic(b), oldPanic = panicStops.get(b)
       if (!panic) panicStops.delete(b)
-      if (!ctx.between && ctx.alive(b.name) && !/^(flee|evade|juke)$/.test(b.last?.m || '') && b.swarmTask?.kind !== 'flee' && panic && (!oldPanic || oldPanic.round !== ctx.round || oldPanic.action !== b.last)) {
+      // Рефлекс опасности (выход из лавы, рывок от зелья и булавы — busy) паника не рвёт: «стоп» посреди выхода из лавы
+      // оставлял тело в ней (стенд 15×15, 21.10: 5 из 16 смертей — «🌋 отхожу», «⚡ стоп», «в лаве»).
+      if (!ctx.between && ctx.alive(b.name) && !busy.has(b.name) && !/^(flee|evade|juke)$/.test(b.last?.m || '') && b.swarmTask?.kind !== 'flee' && panic && (!oldPanic || oldPanic.round !== ctx.round || oldPanic.action !== b.last)) {
         panicStops.set(b, { round: ctx.round, action: b.last })
         ctx.swarmDriver.release(b)
+        log(`⚡ ${b.name}: паника (${b.panicWhy || '?'}) — стоп ${b.last?.m || '?'}`)
         b.c.call('stop').catch(() => {})
       }
     }).catch(() => {}).finally(() => statusPolling.delete(b.name))

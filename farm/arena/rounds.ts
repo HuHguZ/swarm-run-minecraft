@@ -2,6 +2,8 @@
 // Ход раундов: смерти по журналу сервера и счёт, старт (сброс, наборы на раунд, разнос по точкам, мобы), конец
 // раунда гонки и цикл бойца.
 import { SOLO } from './context'
+import { champTurn } from './champion'
+import { teamOfHuman } from './humans'
 import { dress } from './gear'
 import { LAN, lanCmd } from './server'
 import type { ArenaContext } from './context'
@@ -14,7 +16,12 @@ export function installRounds (ctx: ArenaContext) {
   // Смерти и убийства — по журналу сервера (кто кого: «X was slain/speared by Y»).
   ctx.readDeaths = () => {
     try {
-      const st = fs.statSync(LOGF); if (st.size <= ctx.logAt) return
+      const st = fs.statSync(LOGF)
+      // Paper в полночь заводит новый latest.log: читать его с начала. Прежнее место — в старом файле, и после 00:00 драйвер
+      // не видел ни смертей, ни «рестарт» (игра пользователя 22.10: «никита умер — раунд не кончается, рестарт не работает»).
+      if (st.size < ctx.logAt || ctx.logBorn && st.birthtimeMs !== ctx.logBorn) ctx.logAt = 0
+      ctx.logBorn = st.birthtimeMs
+      if (st.size <= ctx.logAt) return
       const fd = fs.openSync(LOGF, 'r'); const buf = Buffer.alloc(st.size - ctx.logAt); fs.readSync(fd, buf, 0, buf.length, ctx.logAt); fs.closeSync(fd); ctx.logAt = st.size
       if (ctx.between) return
       for (const line of buf.toString('utf8').split(/\r?\n/)) {
@@ -38,7 +45,7 @@ export function installRounds (ctx: ArenaContext) {
         if (byH && teams) ctx.relSay(teamOf(m[1]), byH, -5, `убил ${m[1]}`)
         deadNow.add(m[1])
         killGaps.push(Date.now() - ctx.lastKillAt); ctx.lastKillAt = Date.now()
-        if (pos[m[1]]?.p) deathAt[m[1]] = { p: pos[m[1]].p, at: Date.now(), looted: new Set<string>(), inv: pos[m[1]].inv || {}, armor: pos[m[1]].armor || {}, team: teamOf(m[1]), byMob: !by && !byH && / by /.test(m[2]) }
+        if (pos[m[1]]?.p) deathAt[m[1]] = { p: pos[m[1]].p, at: Date.now(), looted: new Set<string>(), inv: pos[m[1]].inv || {}, armor: pos[m[1]].armor || {}, team: teamOf(m[1]), by: by || byH || null, byMob: !by && !byH && / by /.test(m[2]) }
         log(`☠ ${m[1]} ${m[2]}`)
       }
     } catch {}
@@ -46,10 +53,11 @@ export function installRounds (ctx: ArenaContext) {
   ctx.board = () => names.map(n => `${teams ? (teamOf(n) === 'red' ? '🟥' : '🟦') : ''}${n.replace(`NeuroFarm${i}`, '#') || '#'}: ${kills[n] || 0}/${deaths[n] || 0}`).join('  ') +
     (teams ? `  | 🟥 ${names.filter(n => teamOf(n) === 'red').reduce((a, n) => a + (kills[n] || 0), 0)} : ${names.filter(n => teamOf(n) === 'blue').reduce((a, n) => a + (kills[n] || 0), 0)} 🟦` : '')
   ctx.reset = async (name) => { for (const c of [`gamemode spectator ${name}`, `clear ${name}`, `effect clear ${name}`, `effect give ${name} minecraft:instant_health 1 10 true`, `effect give ${name} minecraft:saturation 1 20 true`]) await rcon(i, c).catch(() => {}) }
-  // Раздача на раунд по флагам: ARMS_AIR=1 — элитры, ракеты, копьё; ARMS_CRYSTAL=1 — кристаллы Края и обсидиан
-  // (10.10: «жёсткая баталия на взрывах»), тотем и поножи от взрывов.
+  // Раздача на раунд по флагам: ARMS_AIR=1 — элитры, ракеты, копьё (ARMS_AIR=champ — только чемпиону: погоня пешком за
+  // улетающим); ARMS_CRYSTAL=1 — кристаллы Края и обсидиан (10.10: «жёсткая баталия на взрывах»), тотем и поножи от взрывов.
   ctx.roundKit = async (b) => {
-    const list = [...(process.env.ARMS_AIR === '1' ? ['elytra 1', 'firework_rocket 48', 'diamond_spear[enchantments={sharpness:3,knockback:1}] 1',
+    if (b.champ) await ctx.kitStrong(b.name)
+    const list = [...(process.env.ARMS_AIR === '1' || process.env.ARMS_AIR === 'champ' && b.champ ? ['elytra 1', 'firework_rocket 48', 'diamond_spear[enchantments={sharpness:3,knockback:1}] 1',
       // Булава с «Порывом ветра» и заряды (10.10: «летающее месиво — и булавы всем чарованные с ветром»).
       'mace[enchantments={density:3,breach:2,wind_burst:3}] 1', 'wind_charge 16'] : []),
       ...(process.env.ARMS_CRYSTAL === '1' ? ['end_crystal 64', 'end_crystal 64', 'obsidian 64', 'obsidian 64', 'totem_of_undying 1', 'diamond_leggings[enchantments={blast_protection:4}] 1'] : []),
@@ -76,8 +84,9 @@ export function installRounds (ctx: ArenaContext) {
   ctx.endRound = async function endRound (timeout = false, forced: string | null = null) {
     if (!arms || ctx.between) return
     // Люди в соло: живые — онлайн и не выбывшие; пока никого нет онлайн — считаю одного (раунд ждёт людей, а не кончается).
-    const humansIn = () => ctx.humanNames.length ? ctx.humanNames.filter(h => !ctx.humanOut.has(h)).length : 1
-    const alive = (t) => bots.filter(b => b.team === t && !out.has(b.name)).length + (SOLO && t === HUMAN_TEAM ? humansIn() : 0)
+    // Люди своей команды в игре (ARMS_HUMAN_TEAMS — у каждого своя); людей нет — команда людей не пустеет.
+    const humansIn = (t) => ctx.humanNames.length ? ctx.humanNames.filter(h => !ctx.humanOut.has(h) && teamOfHuman(h, HUMAN_TEAM) === t).length : t === HUMAN_TEAM ? 1 : 0
+    const alive = (t) => bots.filter(b => b.team === t && !out.has(b.name)).length + (SOLO ? humansIn(t) : 0)
     let win = alive('red') === 0 ? 'blue' : alive('blue') === 0 ? 'red' : null
     if (!win && timeout) {
       const kt = (t) => names.filter(n => teamOf(n) === t).reduce((a, n) => a + (kills[n] || 0), 0)
@@ -234,7 +243,7 @@ export async function fighterLoop (ctx: ArenaContext, b) {
     // Ход, вернувшийся без обращения к демону (занят чужой задачей, нет задачи), — пауза: иначе цикл крутится на готовых
     // обещаниях и Node не доходит до таймеров и сокетов (ревью 13.10: вся арена вставала, напарник ждал вечно).
     const turnAt = Date.now()
-    try { await ctx.swarmDriver.turn(b) }
+    try { await (b.champ ? champTurn(ctx, b) : ctx.swarmDriver.turn(b)) }
     catch (e: any) { log(`🐜 ${b.name}: ${e.message}`); await sleep(500) }
     if (Date.now() - turnAt < 50) await sleep(100)
   }

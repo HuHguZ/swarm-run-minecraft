@@ -1,7 +1,7 @@
 'use strict'
 // Живые игроки: набор человеку и его старт в своей команде, отношения команд к людям (враг, союзник), кто онлайн и кто
 // кому враг, подарки.
-import { SOLO } from './context'
+import { SOLO, CHAMP } from './context'
 import { LAN_NAME } from './server'
 import type { ArenaContext } from './context'
 import * as fs from 'fs'
@@ -9,6 +9,11 @@ import * as fs from 'fs'
 // Человек в команде (ARMS_HUMAN_TEAM=red|blue, 10.10: «сделай меня красным, спавни вместе с ними — буду бегать за лутом»):
 // своя команда — союзник (не бьют, прикрывают), чужая — враг; на старте раунда — пустой, со своими на их точке.
 export const humanTeam = (teams) => teams && /^(red|blue)$/.test(process.env.ARMS_HUMAN_TEAM || (SOLO ? 'red' : '')) ? process.env.ARMS_HUMAN_TEAM || 'red' : null
+// Человеку — своя команда: ARMS_HUMAN_TEAMS="HuHguZ:blue,…" (пользователь 21.10: «меня перекинь за синих — буду помогать
+// нашим со шмотками»); кого нет в списке — общая ARMS_HUMAN_TEAM.
+const HUMAN_TEAMS: Record<string, string> = Object.fromEntries((process.env.ARMS_HUMAN_TEAMS || '').split(',')
+  .map(s => s.split(':').map(x => x.trim())).filter(([n, t]) => n && /^(red|blue)$/.test(t || '')))
+export const teamOfHuman = (h: string, fallback: string | null) => HUMAN_TEAMS[h] || fallback
 
 export function installHumanKit (ctx: ArenaContext) {
   const { i, L, X, Y, Z, bots, rel, HUMAN_TEAM, rcon, log, sleep } = ctx
@@ -16,7 +21,7 @@ export function installHumanKit (ctx: ArenaContext) {
   // рядом через 2 бл. вдоль неё. Нет комнат (другая карта) — null, как было.
   const seat = new Map<string, number>()
   ctx.humanHome = (h) => {
-    const rooms = (L?.spawnRooms || []).filter(r => r.team === HUMAN_TEAM)
+    const rooms = (L?.spawnRooms || []).filter(r => r.team === teamOfHuman(h, HUMAN_TEAM))
     if (!rooms.length) return null
     if (!seat.has(h)) seat.set(h, seat.size)
     const k = seat.get(h) as number; const r = rooms[k % rooms.length]
@@ -36,16 +41,29 @@ export function installHumanKit (ctx: ArenaContext) {
   // Набор живому игроку после смерти (пользователь 10.10: «после смерти выдавай всё снова и скорость»): силач против толпы.
   // ARMS_HUMAN_KIT=0 — выкл. Вещи погибшего остаются на земле — их лутают боты.
   const E = 'enchantments={'
-  const HUMAN_KIT = [`netherite_sword[${E}sharpness:${SOLO ? 5 : 30},fire_aspect:3,knockback:1,looting:3,sweeping_edge:3,unbreaking:3,mending:1}] 1`, `mace[${E}density:5,wind_burst:3,unbreaking:3}] 1`,
-    `bow[${E}power:5,punch:2,flame:1,infinity:1}] 1`, 'arrow 1', `shield[${E}unbreaking:3}] 1`, 'golden_apple 16', 'enchanted_golden_apple 2', ...(SOLO ? [] : ['totem_of_undying 2']),
+  // Сильный набор соло (человек против роя) — и у чемпиона (ARMS_CHAMP): тот же человек, только бот.
+  const ONE = SOLO || CHAMP
+  const HUMAN_KIT = [`netherite_sword[${E}sharpness:${ONE ? 5 : 30},fire_aspect:3,knockback:1,looting:3,sweeping_edge:3,unbreaking:3,mending:1}] 1`, `mace[${E}density:5,wind_burst:3,unbreaking:3}] 1`,
+    `bow[${E}power:5,punch:2,flame:1,infinity:1}] 1`, 'arrow 1', `shield[${E}unbreaking:3}] 1`, 'golden_apple 16', 'enchanted_golden_apple 2', ...(ONE ? [] : ['totem_of_undying 2']),
     'wind_charge 64', 'ender_pearl 16', 'cooked_beef 32',
     // Кирка (12.10: «выдавай кирку — не могу ломать блоки»).
     `netherite_pickaxe[${E}efficiency:5,unbreaking:3}] 1`,
-    ...(SOLO ? ['splash_potion[potion_contents={custom_effects:[{id:"minecraft:instant_damage",amplifier:1,duration:1}]}] 8',
+    ...(ONE ? ['splash_potion[potion_contents={custom_effects:[{id:"minecraft:instant_damage",amplifier:1,duration:1}]}] 8',
       'lingering_potion[potion_contents={custom_effects:[{id:"minecraft:instant_damage",amplifier:0,duration:1}]}] 4', 'cobweb 32', 'obsidian 64', 'water_bucket 1'] : [])]
-  const TH = SOLO ? 'thorns:3,' : ''
+  const TH = ONE ? 'thorns:3,' : ''
   const HUMAN_ARMOR = [['armor.head', `netherite_helmet[${E}${TH}protection:4,unbreaking:3,mending:1}]`], ['armor.chest', `netherite_chestplate[${E}${TH}protection:4,unbreaking:3,mending:1}]`],
     ['armor.legs', `netherite_leggings[${E}${TH}protection:4,unbreaking:3,mending:1}]`], ['armor.feet', `netherite_boots[${E}${TH}protection:4,feather_falling:4,unbreaking:3,mending:1}]`]]
+  ctx.kitStrong = async (h) => {
+    for (const [slot, it] of HUMAN_ARMOR) await rcon(i, `item replace entity ${h} ${slot} with minecraft:${it}`).catch(() => {})
+    for (const it of HUMAN_KIT) { const [n, c] = it.split(/ (?=\d+$)/); await rcon(i, `give ${h} minecraft:${n} ${c || 1}`).catch(() => {}) }
+    await rcon(i, `effect give ${h} minecraft:speed infinite ${ONE ? 1 : 4} true`).catch(() => {})
+    if (!ONE) await rcon(i, `effect give ${h} minecraft:strength infinite 1 true`).catch(() => {})
+    await rcon(i, `effect give ${h} minecraft:resistance 4 4 true`).catch(() => {})
+    // Соло: +8 хп, сытость — бессрочно; без Силы и регенерации (12.10: «слишком легко»), без огнестойкости (14.10: «огнестойкость
+    // убери, навсегда не будет») и без бессрочного Сопротивления (14.10: «сопротивление навсегда убирай, оно слишком усилило нас»).
+    if (ONE) for (const fx of ['health_boost infinite 1', 'saturation infinite 0', 'instant_health 1 10'])
+      await rcon(i, `effect give ${h} minecraft:${fx} true`).catch(() => {})
+  }
   ctx.kitHuman = async (h) => {
     if (process.env.ARMS_HUMAN_KIT === '0') return
     // Дождаться живого (экран смерти — выданное мёртвому пропадает при возрождении): хп > 0 два опроса подряд.
@@ -60,32 +78,25 @@ export function installHumanKit (ctx: ArenaContext) {
     else if (SOLO && L) { const s0 = ctx.armsHome({ team: 'red' }, 0); await rcon(i, `spreadplayers ${Math.floor(s0.x)} ${Math.floor(s0.z)} 0 3 under ${Y + 3} false ${h}`).catch(() => {}) }
     // Уже в наборе (зашёл с ним, раунд сменился) — не дублировать.
     if (/passed/i.test(String(await rcon(i, `execute if items entity ${h} container.* minecraft:netherite_sword if items entity ${h} armor.chest minecraft:netherite_chestplate`).catch(() => '')))) return
-    for (const [slot, it] of HUMAN_ARMOR) await rcon(i, `item replace entity ${h} ${slot} with minecraft:${it}`).catch(() => {})
-    for (const it of HUMAN_KIT) { const [n, c] = it.split(/ (?=\d+$)/); await rcon(i, `give ${h} minecraft:${n} ${c || 1}`).catch(() => {}) }
-    await rcon(i, `effect give ${h} minecraft:speed infinite ${SOLO ? 1 : 4} true`).catch(() => {})
-    if (!SOLO) await rcon(i, `effect give ${h} minecraft:strength infinite 1 true`).catch(() => {})
-    await rcon(i, `effect give ${h} minecraft:resistance 4 4 true`).catch(() => {})
-    // Соло: +8 хп, сытость — бессрочно; без Силы и регенерации (12.10: «слишком легко»), без огнестойкости (14.10: «огнестойкость
-    // убери, навсегда не будет») и без бессрочного Сопротивления (14.10: «сопротивление навсегда убирай, оно слишком усилило нас»).
-    if (SOLO) for (const fx of ['health_boost infinite 1', 'saturation infinite 0', 'instant_health 1 10'])
-      await rcon(i, `effect give ${h} minecraft:${fx} true`).catch(() => {})
+    await ctx.kitStrong(h)
     log(`🎽 ${h} возродился — набор и «Скорость V» выданы`)
   }
   ctx.humanStart = async (h) => {
-    const other = HUMAN_TEAM === 'red' ? 'blue' : 'red'
-    rel[HUMAN_TEAM][h] = 20; rel[other][h] = -20
-    const mate = bots.find(b => b.team === HUMAN_TEAM)
+    const T = teamOfHuman(h, HUMAN_TEAM) as string
+    const other = T === 'red' ? 'blue' : 'red'
+    rel[T][h] = 20; rel[other][h] = -20
+    const mate = bots.find(b => b.team === T)
     // Комната спавна (колизей) — старт и точка возрождения; иначе — к своим, как было.
     const home = ctx.humanHome(h)
-    const at = home || (mate ? ctx.armsHome(mate, bots.indexOf(mate)) : SOLO ? ctx.armsHome({ team: HUMAN_TEAM }, 0) : null)
+    const at = home || (mate ? ctx.armsHome(mate, bots.indexOf(mate)) : SOLO ? ctx.armsHome({ team: T }, 0) : null)
     const res: string[] = []
-    for (const c of [`team join ${HUMAN_TEAM} ${h}`, `gamemode survival ${h}`, `clear ${h}`, `effect clear ${h}`, `effect give ${h} minecraft:instant_health 1 10 true`,
+    for (const c of [`team join ${T} ${h}`, `gamemode survival ${h}`, `clear ${h}`, `effect clear ${h}`, `effect give ${h} minecraft:instant_health 1 10 true`,
       `effect give ${h} minecraft:saturation 1 20 true`, ...(at ? [`tp ${h} ${at.x} ${at.y} ${at.z}${home ? ` ${home.yaw} 0` : ''}`] : []),
       // Поворот точки в 1.21.11 — два числа (yaw pitch): с одним команда не проходила («Incomplete»), точки не было (14.10).
       ...(home ? [`spawnpoint ${h} ${Math.floor(home.x)} ${Math.floor(home.y)} ${Math.floor(home.z)} ${home.yaw} 0`] : [])]) res.push(String(await rcon(i, c, 15000).catch(e => 'ошибка: ' + e.message)).slice(0, 40))
     // Набор — в фоне: после смерти он на экране возрождения, а сброс раунда ждать его не должен.
     if (SOLO) ctx.kitHuman(h).catch(() => {})
-    log(`🧍 ${h} — в ${HUMAN_TEAM === 'red' ? 'красных' : 'синих'}, на старт ${home ? `${home.room} ` : ''}${at ? `${Math.round(at.x)} ${Math.round(at.y)} ${Math.round(at.z)}` : '?'}: ${res.filter(r => /ошибка|Unknown|Incorrect|No player|not found/i.test(r)).join('; ') || 'ок'}`)
+    log(`🧍 ${h} — в ${T === 'red' ? 'красных' : 'синих'}, на старт ${home ? `${home.room} ` : ''}${at ? `${Math.round(at.x)} ${Math.round(at.y)} ${Math.round(at.z)}` : '?'}: ${res.filter(r => /ошибка|Unknown|Incorrect|No player|not found/i.test(r)).join('; ') || 'ок'}`)
   }
 }
 
@@ -118,7 +129,7 @@ export function watchHumans (ctx: ArenaContext) {
   let humanBusy = false
   let humanErrAt = 0
   // Выбывший человек (соло: наблюдатель до конца раунда) — не цель: рой лез и копал к нему, летающему над ареной (15.10).
-  ctx.hostile = (b, name) => names.includes(name) ? name !== b.name && (!teams || teamOf(name) !== b.team) : !ctx.humanOut?.has(name) && (!teams || (HUMAN_TEAM ? HUMAN_TEAM !== b.team : (rel[b.team]?.[name] || 0) < 0))
+  ctx.hostile = (b, name) => names.includes(name) ? name !== b.name && (!teams || teamOf(name) !== b.team) : !ctx.humanOut?.has(name) && (!teams || (HUMAN_TEAM ? teamOfHuman(name, HUMAN_TEAM) !== b.team : (rel[b.team]?.[name] || 0) < 0))
   const watchedFoes = new Map<string, string>()
   const humanT = setInterval(async () => {
     if (humanBusy) return

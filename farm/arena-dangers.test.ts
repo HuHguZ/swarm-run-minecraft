@@ -43,7 +43,7 @@ for (const kind of ['act-ok', 'act-fail', 'act-error', 'dodge', 'dig', 'juke', '
       if (kind === 'dig') { f.calls[0].reply({ ok: false, why: 'некуда' }); await turn() }
     } else if (kind === 'lava') {
       f.ctx.pos.A.inv.water_bucket = 1
-      f.b.c.onDanger({ pos: f.p, dangers: { lava: [{ d: 1, at: { x: 1, y: 64, z: 0 } }] } })
+      f.b.c.onDanger({ pos: f.p, dangers: { lava: [{ d: 1.4, at: { x: 1, y: 64, z: 0 } }] } })
     } else if (kind === 'shield') {
       f.ctx.pos.A.inv.shield = 1
       f.b.c.onDanger({ pos: f.p, dangers: { smashes: [{ name: 'Foe', ticks: 10, at: f.p }] } })
@@ -210,13 +210,17 @@ test('failed juke chooses another exit instead of repeating the same impossible 
   assert.equal(f.calls.at(-1).method, 'take_cover')
 })
 
-test('a different lava cell or a cloud can interrupt an escape from an older hazard', async t => {
+// Выход из лавы (lava_escape, pvp/lava-exit) сам пересчитывает клетку выхода раз в 300 мс: другая клетка лавы его не
+// перезапускает (перезапуск — отмена намерения и стоп клавиш; a39 — 🌋 ×5 за 3 с и смерть в яме). После выхода —
+// реакции как прежде.
+test('a lava escape is not restarted by another lava cell; after it, aim and cloud react as before', async t => {
   const f = fixture(t)
   f.ctx.pos.A.inv.water_bucket = 1
   const lava = x => ({ d: 1, at: { x, y: 64, z: 0 } })
   f.report({ lava: [lava(1)] }); f.report({ lava: [lava(2)] })
-  assert.equal(f.calls.length, 2)
-  f.calls[1].reply({ ok: true }); await turn()
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0].method, 'lava_escape')
+  f.calls[0].reply({ ok: true }); await turn()
   f.b.swarmTask = { kind: 'flee' }; f.aim()
   assert.equal(f.calls.at(-1).method, 'juke')
   f.report({ clouds: [{ at: f.p, r: 3 }] })
@@ -260,4 +264,65 @@ test('an aim observed during another owned operation reacts as soon as that owne
   assert.equal(f.calls.length, 0)
   f.ctx.busy.delete('A'); f.report({ aims: [aim] }); f.flush()
   assert.equal(f.calls[0]?.method, 'pearl_to')
+})
+
+// Ноги в лаве — выход раньше уворота от зелья и стрейфа от прицела (a39: «🌋 0.0 → 🧪↯ рывок → ☠ в лаве»).
+test('feet in lava: lava_escape goes before a potion dodge or an aim strafe', t => {
+  const f = fixture(t)
+  f.report({ potions: [{ name: 'splash_potion', at: f.p, ticks: 8 }], aims: [{ name: 'Foe', weapon: 'bow', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }],
+    lava: [{ d: 0, at: { x: f.p.x, y: 63, z: f.p.z } }] })
+  f.flush()
+  assert.deepEqual(f.calls.map(c => c.method), ['lava_escape'])
+})
+
+// Датчик даёт d = 0 и стоящему на краю ямы (рамка над лавой, ноги на полу): выход отвечает «не горит» — повтор только после
+// сдвига, а не каждый опрос (a41 21.10: 1981 «🌋 0.0» у одного бота за минуту, бои срывались). Не вышел — снова сразу.
+test('feet over lava but not burning: no instant re-run; a failed escape re-runs at once', async t => {
+  const f = fixture(t)
+  const over = { lava: [{ d: 0, at: { x: f.p.x, y: 63, z: f.p.z } }] }
+  f.report(over); f.flush()
+  assert.equal(f.calls.length, 1)
+  f.calls[0].reply({ ok: true, why: 'не горит' }); await turn()
+  f.report(over); f.flush(); f.report(over); f.flush()
+  assert.equal(f.calls.length, 1, 'standing on the rim, not burning: the same episode waits for a move')
+  const g = fixture(t)
+  g.report(over); g.flush()
+  g.calls[0].reply({ ok: false, why: 'не вышел' }); await turn()
+  g.report(over); g.flush()
+  assert.equal(g.calls.length, 2, 'still burning after the escape: again at once, wherever it stands')
+})
+
+test('a shield faces the drawn bow: an arrow without Piercing does not pass it (strafing caught 80 %)', t => {
+  const f = fixture(t)
+  f.ctx.pos.A.inv = { shield: 1 }
+  f.aim()
+  assert.equal(f.calls[0].method, 'swarm_hold')
+  assert.ok(f.calls[0].params.shield && f.calls[0].params.requireShield, 'shield up, not a sneak hold')
+  assert.deepEqual(f.calls[0].params.enemies, ['Foe'])
+})
+
+test('mace from above: the shield in the off hand is a shield — hold it on any lead, never a late dash, never re-raise', t => {
+  // Пользователь 21.10: «в последний момент вместо щита убегать начинают — достаю и ваншот». Вторая рука в состоянии тела —
+  // { item }, а не { name }: надетый щит читался как «нет щита», и вторая реакция была рывком.
+  const f = fixture(t)
+  f.ctx.pos.A.inv = {}
+  f.ctx.pos.A.offHand = { item: 'shield', durability: 100 }
+  f.report({ smashes: [{ name: 'Foe', ticks: 3, at: f.p }] })
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0].method, 'swarm_hold', 'late, but a dash would not take it out of his reach either')
+  assert.ok(f.calls[0].params.shield && f.calls[0].params.requireShield)
+  // «Порыв ветра» подкинул его снова — новая оценка посадки, а щит уже поднят: не перезапускать (5 т без блока).
+  f.report({ smashes: [{ name: 'Foe', ticks: 30, at: f.p }] })
+  f.report({ smashes: [{ name: 'Foe', ticks: 8, at: f.p }] })
+  assert.equal(f.calls.length, 1, 'the running hold is kept')
+})
+
+test('floor taken from under the feet while a foe is near: step off at once, no drop, before a mace reaction', t => {
+  // Пользователь 22.10: «ломаю блоки под ними — они в дырки улетают, ничего не делают».
+  const f = fixture(t)
+  f.ctx.pos.A.inv = { shield: 1 }
+  f.report({ floor: [{ name: 'Foe', at: { x: 0.5, y: 63, z: 0.5 }, from: { x: 3, y: 64, z: 0 }, ticks: 0, holes: 2 }],
+    smashes: [{ name: 'Foe', ticks: 10, at: f.p }] })
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0].method, 'evade', 'off the cracked floor first')
 })

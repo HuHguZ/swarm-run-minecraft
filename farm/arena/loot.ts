@@ -2,6 +2,7 @@
 // Лут гонки: набивка сундуков на раунд (зерно — seed карты и номер раунда) и пополнение открытых по числу бойцов.
 import { SOLO } from './context'
 import type { ArenaContext } from './context'
+import { pickCaches } from '../../daemon/arena/colosseum-caches'
 
 // Зелья реестра 1.21.11 (Potions, server-1.21.11.jar) без воды, «странного», «густого», «неуклюжего».
 const ALL_POTIONS = ['night_vision', 'long_night_vision', 'invisibility', 'long_invisibility', 'leaping', 'long_leaping', 'strong_leaping',
@@ -31,7 +32,23 @@ const TIERS = [
 // каптёру есть что делить. ARMS_LOOT=layout — как было.
 export function makeStockChests (ctx: ArenaContext) {
   const { i, L, X, Y, Z, rcon, log, sleep } = ctx
+  // Тайники в толще Колизея (пользователь 21.10; daemon/arena/colosseum-caches): прежние — обратно камнем стены (без копии
+  // Колизея, ARMS_RESET=0, они бы остались), новые — по зерну карты и раунда. Где они — знает только журнал арены (замер);
+  // рою — ни слова: ищет сам, вскрывая толщу. ARMS_CACHES=0 — без тайников.
+  let caches: any[] = []
+  const placeCaches = async (round: number) => {
+    if (L.map !== 'colosseum' || process.env.ARMS_CACHES === '0') return
+    for (const c of caches) await rcon(i, `setblock ${X + c.x} ${Y + c.y} ${Z + c.z} minecraft:${c.was}`).catch(() => {})
+    caches = pickCaches(L, round)
+    for (const c of caches) {
+      const p = { x: X + c.x, y: Y + c.y, z: Z + c.z }
+      await rcon(i, `setblock ${p.x} ${p.y} ${p.z} minecraft:chest[facing=${c.facing}]`).catch(() => {})
+      for (const [k, it] of c.items.entries()) { const [n, cnt] = it.split(/ (?=\d+$)/); await rcon(i, `item replace block ${p.x} ${p.y} ${p.z} container.${k} with minecraft:${n} ${cnt || 1}`).catch(() => {}) }
+    }
+    log(`🗝 тайники раунда ${round}: ${caches.map(c => `${X + c.x},${Y + c.y},${Z + c.z} (dy ${c.y}: ${c.items.map(s => s.replace(/\[.*\]/, '*').replace(/ \d+$/, '')).join(', ')})`).join(' | ')}`)
+  }
   return async (round: number, only: any[] | null = null) => {
+    if (!only) await placeCaches(round)
     if (process.env.ARMS_LOOT === 'layout') return
     let seed = [...(String(L.seed) + ':' + round)].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7)
     const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 }

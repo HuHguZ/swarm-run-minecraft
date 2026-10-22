@@ -55,7 +55,9 @@ export async function setupArmsMap (ctx: ArenaContext) {
     if (room) for (const c of [`setworldspawn ${X + room.spot.x} ${Y + room.spot.y} ${Z + room.spot.z}`, 'gamerule respawn_radius 0']) await rcon(i, c).catch(() => {})
     ctx.spawnAt = { x: X, y: sy, z: Z }
   }
-  for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`)
+  // catch: при первой постройке сервер занят генерацией, а часы драйвера шлют запрос раз в секунду — RCON закрывается
+  // (21.10, слот 30: «rcon closed» ронял запуск); следующая команда переподключится.
+  for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`).catch(() => {})
   await ctx.restoreArena()
   await rcon(i, `kill @e[type=!minecraft:player,x=${X - L.half},y=${Y + L.y0},z=${Z - L.half},dx=${2 * L.half},dy=${L.y1 - L.y0},dz=${2 * L.half}]`).catch(() => {})
   // Насесты (10.10: «жемчуг высоко на Колизей — никто не достанет»): клетки, где можно стоять, на крышах ярусов и

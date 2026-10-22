@@ -10,11 +10,11 @@
 //   node dist/farm/arena/ffa.js down 31          погасить поднятых этой командой
 // Только ферма: команды — RCON слота, бойцы — снимок кода из farm/slots.json (FFA_CODE — свой).
 // Части боя — farm/arena/: общий контекст боя (context.ts) создаёт run() ниже и раздаёт частям в том же порядке, что и раньше.
-import { ROOT, sleep, log, SEG_S, SOLO } from './context'
+import { ROOT, sleep, log, SEG_S, SOLO, CHAMP } from './context'
 import { DIST_ROOT } from '../../daemon/src/paths'
 import type { ArenaContext } from './context'
 import { LAN, LAN_LOG, rcon, buildLan, gameClock } from './server'
-import { EXTRA, extra, portOpen, client, up, down } from './fleet'
+import { EXTRA, extra, portOpen, client, up, down, boost } from './fleet'
 import { setupArmsMap, installPlaces, guardFalls } from './map'
 import { startRefills } from './loot'
 import { installRounds, placeFighters, startMobs, fighterLoop } from './rounds'
@@ -40,7 +40,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   const PERS = Object.keys(crowd.PERSONAS)
   bots.forEach((b, k) => { b.persona = process.env.FFA_PERSONA || PERS[k % PERS.length] })
   // Команды (6 на 6): красные и синие через одного, цветные ники, без урона по своим.
-  if (teams) bots.forEach((b, k) => { b.team = SOLO || k % 2 ? 'blue' : 'red' })
+  if (teams) bots.forEach((b, k) => { b.team = CHAMP ? (k ? 'blue' : 'red') : SOLO || k % 2 ? 'blue' : 'red'; b.champ = CHAMP && !k })
   const teamOf = n => bots.find(b => b.name === n)?.team
   // Центр поля: Колизей (600 120 600); гонка вооружений — своя карта arms-layout (ARMS_POS, по умолчанию 2000 100 2000).
   let X = 600; let Y = 120; let Z = 600; let R = 24
@@ -121,6 +121,16 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   installHumans(ctx)
   installDangers(ctx)
   const { humanT, giftT } = watchHumans(ctx)
+  // Человек на арене — боты на обычном приоритете и всех ядрах (fleet.boost); раз в минуту повтор: перезапущенный демон
+  // родится снова «ниже обычного». ARENA_BOOST=0 — не трогать (стенд бота-противника: «человек» там — свой тестовый бот).
+  let boosted = false, boostAt = 0
+  const boostT = setInterval(() => {
+    const want = process.env.ARENA_BOOST !== '0' && ctx.humanNames.length > 0
+    if (want === boosted && !(want && Date.now() - boostAt > 60000)) return
+    const fresh = want !== boosted
+    boosted = want; boostAt = Date.now()
+    boost(i, want).then(n => { if (fresh) log(want ? `🚀 на арене ${ctx.humanNames.join(', ')} — ботам обычный приоритет и все ядра (процессов ${n})` : `🐢 людей на арене нет — ботам снова щадящий режим (процессов ${n})`) }).catch(() => {})
+  }, 5000)
   const lootWatch = watchAlarm(ctx)
   installSight(ctx)
   const { mobPollT, frozenT, poll } = watchStatus(ctx)
@@ -128,7 +138,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   if (arms) { ctx.roundT0 = Date.now(); if (process.env.ARMS_PHASES === '1') await ctx.armsPrep() }
   const { rolesT, tactT } = await startTactics(ctx)
   await Promise.all(bots.map(b => fighterLoop(ctx, b)))
-  clearInterval(poll); if (refillT) clearInterval(refillT); if (fallT) clearInterval(fallT); if (rescueT) clearInterval(rescueT); clearInterval(frozenT); if (mobPollT) clearInterval(mobPollT); if (mobT) clearInterval(mobT); clearInterval(humanT); clearInterval(lootWatch); clearInterval(giftT); clearInterval(boardT); clearInterval(announce); clearInterval(rolesT); clearInterval(tactT)
+  clearInterval(poll); if (refillT) clearInterval(refillT); if (fallT) clearInterval(fallT); if (rescueT) clearInterval(rescueT); clearInterval(frozenT); if (mobPollT) clearInterval(mobPollT); if (mobT) clearInterval(mobT); clearInterval(humanT); clearInterval(boostT); clearInterval(lootWatch); clearInterval(giftT); clearInterval(boardT); clearInterval(announce); clearInterval(rolesT); clearInterval(tactT)
   for (const b of bots) await b.c.call('stop').catch(() => {})
   log('итог (убил/умер) ' + ctx.board())
   process.exit(0)
