@@ -171,8 +171,15 @@ function trackTarget (entity, nowOf = null) {
     if (freshReceipt) lastReceipt = receipt
     const relative = receipt?.kind === 'rel_entity_move' || receipt?.kind === 'entity_move_look'
     const nextFlying = (require('../elytra') as typeof import('../elytra')).gliding(entity)
-    if (receipts && receipt?.kind && (nextFlying !== flying || (nextFlying &&
-      (entity.yaw !== yaw || entity.pitch !== pitch || !!entity._ndGlideBoosted !== boosted || (entity._ndGlideRevision || 0) !== revision)))) {
+    // A steering glider changes look every receipt: that cancels the physical endpoint fit and its confidence, but
+    // the positional estimate stays (try-lance 23.10: a full rebaseline kept a steering glider's velocity at 0 —
+    // the lance aimed at where it was, 0.02 hits per pass on a turning target).
+    const steered = receipts && receipt?.kind && nextFlying === flying && nextFlying &&
+      (entity.yaw !== yaw || entity.pitch !== pitch || !!entity._ndGlideBoosted !== boosted || (entity._ndGlideRevision || 0) !== revision)
+    if (steered && process.env.ND_GLIDE_KEEP !== '0') {
+      yaw = entity.yaw; pitch = entity.pitch; boosted = !!entity._ndGlideBoosted; revision = entity._ndGlideRevision || 0
+      velocityMeasured = false; glideDelta = null
+    } else if (receipts && receipt?.kind && (nextFlying !== flying || steered)) {
       // A motion change can straddle the last old-phase step (Air35).
       // Rebaseline it; a fresh zero displacement remains a measured stop.
       flying = nextFlying; yaw = entity.yaw; pitch = entity.pitch; boosted = !!entity._ndGlideBoosted; revision = entity._ndGlideRevision || 0; phasePending = true

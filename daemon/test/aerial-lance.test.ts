@@ -285,3 +285,27 @@ test('offhand ракета сохраняет локальный флаг use п
     assert.equal(bot.usingHeldItem, active)
   }
 })
+
+test('летун: взгляд от будущих глаз покрывает касание между узлами сетки', () => {
+  const st = { p: { x: 0, y: 199.9, z: 10 }, v: { x: 0, y: -.1, z: -1.5 }, boost: 0, fd: 0 }
+  const hisV = { x: Math.sin(2) * 1.6, y: -.03, z: -Math.cos(2) * 1.6 }
+  const feet = [{ x: 0, y: 200, z: 0 }]
+  const p = { ...feet[0] }, v = { ...hisV }
+  for (let t = 1; t <= 16; t++) { sky.glideStep(p, v, -2, 0, false); feet.push({ ...p }) }
+  let calls = 0
+  const W = flatWorld()
+  const pl = L.chooseLance(W, st, t => { calls++; return feet[t] }, { h: .6, hisV, readyIn: 0 })
+  assert.ok(pl?.ready && pl.dmg > 0)
+  assert.equal(calls, 17, 'цель прогнозируется один раз на каждый целый тик')
+  const r = sky.rollout(W, st.p, st.v, pl.yaw, pl.pitch, 0, pl.hitT + 1, { keepPath: true })
+  const q = r.path[pl.hitT]
+  assert.equal(L.lanceHits({ x: q.x, y: q.y + .4, z: q.z }, sky.lookVec(pl.yaw, pl.pitch),
+    { x: q.vx, y: q.vy, z: q.vz }, feet[pl.hitT + 1], .6), true)
+})
+
+test('летун: урон требует относительной скорости в момент касания', () => {
+  const st = { p: { x: 0, y: 200, z: 4 }, v: { x: 0, y: 0, z: -1.5 }, boost: 0, fd: 0 }
+  const foot = t => ({ x: 0, y: 200, z: -1.4 * t })
+  assert.equal(L.chooseLance(flatWorld(), st, foot, { h: .6, hisV: { x: 0, y: 0, z: 0 }, readyIn: 0 }), null,
+    'догон 0.1 б/т не даёт порог 4.6 б/с')
+})

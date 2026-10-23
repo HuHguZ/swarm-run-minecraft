@@ -97,3 +97,14 @@ test('ambiguous physical glide counts retain an estimate without claiming a meas
   assert.equal(tracker.hasVelocity(), false)
   assert.ok(Number.isFinite(tracker.vel().x))
 })
+
+test('a glider steering every receipt keeps a positional velocity estimate (try-lance: it stayed 0)', () => {
+  const { entity, tracker, move } = actor(new Vec3(0, 100, 0))
+  for (let i = 1; i <= 6; i++) {
+    entity.yaw = -Math.PI / 2 + i * .05
+    move(entity.position.offset(1.6, -.05, 0), 100)
+  }
+  assert.equal(tracker.hasVelocity(), false, 'a steered glide is not a physical endpoint')
+  const v = tracker.vel()
+  assert.ok(Math.abs(v.x - .8) < .05, `vx ${v.x}: 1.6 blocks per 2-tick player update`)
+})

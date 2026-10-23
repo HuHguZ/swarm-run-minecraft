@@ -73,15 +73,30 @@ const PITCHES = [-1.0, -0.8, -0.62, -0.48, -0.36, -0.26, -0.17, -0.09, 0, 0.09, 
 // hitT — тики до касания: 0 — следующий отправленный шаг (сервер проверяет копьё в позиции после хода с новым взглядом;
 // c40–c41: отсчёт «от текущего, уже отправленного» давал ложное «касание сейчас» — попаданий на заход 0.42 → 0.17).
 export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16, readyIn = 0, arena = null }: any = {}) {
-  const f0 = foot(0)
+  const feet = Array.from({ length: H + 1 }, (_, t) => foot(t))
+  const f0 = feet[0]
   const bearing = yawTo(st.p, f0)
   const hs = Math.hypot(st.v.x, st.v.z)
   const heading = hs > 0.2 ? Math.atan2(-st.v.x, -st.v.z) : bearing
   const yaws = new Set<number>()
   for (const o of YAW_OFF) { yaws.add(wrap(bearing + o)); yaws.add(wrap(heading + o)) }
+  const looks = new Map<number, number[]>([...yaws].map(yaw => [yaw, PITCHES]))
+  // Летун (рамка 0.6, Codex 23.10): взгляд на каждый будущий тик — от своих будущих глаз в середину его рамки, три уточнения.
+  const pair = h <= 0.6 && process.env.ND_LANCE_PAIR !== '0'
+  if (pair) for (let t = 1; t <= H; t++) {
+    let yaw = bearing; let pitch = 0
+    // ponytail: три уточнения прицела; не хватит — добавить затравки.
+    for (let i = 0; i < 3; i++) {
+      const r = sky.rollout(W, st.p, st.v, yaw, pitch, st.boost, t, { fd: st.fd, arena })
+      const f = feet[t]
+      yaw = yawTo(r.p, f)
+      pitch = Math.atan2(f.y + h / 2 - r.p.y - EYE_FLY, Math.hypot(f.x - r.p.x, f.z - r.p.z))
+    }
+    looks.set(yaw, [...(looks.get(yaw) || []), pitch])
+  }
   let best: any = null
-  for (const yaw of yaws) {
-    for (const pitch of PITCHES) {
+  for (const [yaw, pitches] of looks) {
+    for (const pitch of pitches) {
       const r = sky.rollout(W, st.p, st.v, yaw, pitch, st.boost, H, { fd: st.fd, keepPath: true, arena })
       const L = sky.lookVec(yaw, pitch)
       const path = r.path || []
@@ -90,8 +105,11 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
       for (let t = 0; t < path.length && !hit; t++) {
         const q = path[t]
         const v = { x: q.vx, y: q.vy, z: q.vz }
-        if (!lanceHits({ x: q.x, y: q.y + EYE_FLY, z: q.z }, L, v, foot(t + 1), h)) continue
-        const dm = lanceDamage(name, L, v, hisV)
+        if (!lanceHits({ x: q.x, y: q.y + EYE_FLY, z: q.z }, L, v, feet[t + 1], h)) continue
+        const a = feet[t], b = feet[t + 1]
+        // Его скорость в миг касания — по тому же прогнозу (у летуна постоянная hisV давала планы без урона).
+        const hitV = pair ? { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z } : hisV
+        const dm = lanceDamage(name, L, v, hitV)
         if (dm.dmg > 0) {
           const contact = { t, q, ...dm }
           if (t + 1 >= readyIn) hit = contact
@@ -267,8 +285,8 @@ function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats
   const foe = () => e.position
   const hisH = () => hitboxOf(bot, e).h
   // Его скорость — без NaN (bow.trackTarget изредка отдаёт NaN, s7 р.1): нечисло = 0.
-  // И не больше 2 б/т по оси (рывок от удара/телепорт давали «план 230 урона, 237 бл/с» в s7f).
-  const hv = () => { const v = vel() || {}; const n = (x: any) => Number.isFinite(x) ? Math.max(-2, Math.min(2, x)) : 0; return { x: n(v.x), y: n(v.y), z: n(v.z), ageTicks: Number.isFinite(v.ageTicks) ? Math.max(0, v.ageTicks) : 0 } }
+  // И не больше 3 б/т по оси (рывок от удара/телепорт давали «план 230 урона, 237 бл/с» в s7f; летун с ракетой — до ~2.2).
+  const hv = () => { const v = vel() || {}; const n = (x: any) => Number.isFinite(x) ? Math.max(-3, Math.min(3, x)) : 0; return { x: n(v.x), y: n(v.y), z: n(v.z), ageTicks: Number.isFinite(v.ageTicks) ? Math.max(0, v.ageTicks) : 0 } }
   const footAt = leadTarget(e, hv, bot, 0)
   const ceilY = () => sky.arenaAround(bot, W, bot.entity.position).ceilY - 1.8 - 1.4
   const cruiseY = () => Math.min(ceilY(), foe().y + 7)
@@ -425,7 +443,10 @@ async function lanceApproach (ln: LanceCtx) {
         let look: any
         if (pl) { best = pl; planned++; look = pl } else {
           // Не достаём из этих взглядов — к точке над его головой (с упреждением), не ниже пола + 2.
-          look = sky.choose(W, st, { kind: 'point', at: (t: number) => footAt(t).offset(0, hisH() + 0.8, 0), reach: true, gap: 2, speedMin: 0.8, arena })
+          // Летун (рамка 0.6): глаза — в середину рамки; «над головой +0.8» проносило над ним (try-lance 23.10: без плана
+          // 241 промах из 280, dy +0.7). Стоящему — как было: копьё с высоты глаз проходит через рамку 1.8.
+          const aimY = sky.gliding(e) && process.env.ND_LANCE_MID !== '0' ? hisH() / 2 - EYE_FLY : hisH() + 0.8
+          look = sky.choose(W, st, { kind: 'point', at: (t: number) => footAt(t).offset(0, aimY, 0), reach: true, gap: 2, speedMin: 0.8, arena })
         }
         // Страховка: этот взгляд за 6 тиков — в стену с уроном или в пол с высотой падения > 3 — выйти сейчас.
         if (!look) return fin('граница арены')

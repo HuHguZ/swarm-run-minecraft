@@ -8,7 +8,7 @@ import { createMethods } from '../src/rpc/methods'
 const NAMES = [
   'status', 'peek', 'douse_lava', 'clear_water', 'evade', 'juke', 'take_cover', 'fly_to', 'swarm_work',
   'items_near', 'ladder_up', 'tnt_at', 'center_in', 'box_in', 'box_out', 'swarm_hold', 'swarm_pillar',
-  'swarm_keep', 'swarm_pose', 'swarm_position', 'ledge_to', 'wind_receive', 'wind_boost', 'dig_to', 'wind_leap',
+  'swarm_keep', 'swarm_pose', 'swarm_position', 'ledge_to', 'lance', 'wind_receive', 'wind_boost', 'dig_to', 'wind_leap',
   'undercut', 'peek_shot', 'rescue_config', 'wind_push', 'watch_dangers', 'connect', 'disconnect', 'say', 'goto',
   'flight_route', 'boat_hop', 'boat_climb', 'parkour', 'follow', 'escort', 'give', 'take', 'stop', 'wait',
   'look_at', 'emote', 'observe', 'perceive', 'players', 'look', 'mine', 'explore', 'dig_down', 'craft', 'place',
@@ -26,11 +26,12 @@ const NAMES = [
   // выход из лавовой ямы вне боя (поток «окружение», 21.10: rpc/pvp-escape.ts)
   'lava_escape',
   // уход от горящего динамита и его цепочки (22.10: rpc/hazards.ts)
+  // таран копьём по приказу (23.10: rpc/aerial.ts lance, сцена pvp/try-lance)
   'dodge_blast', 'clear_web'
 ]
 
 test('daemon RPC: every method name survives the split into rpc/*.ts, each exactly once', () => {
-  assert.equal(new Set(NAMES).size, 147)
+  assert.equal(new Set(NAMES).size, 148)
   const methods = createMethods({ session: {}, cfg: {}, bus: {}, vision: {}, director: {}, gameClock: {}, state: { dangerWatch: null } })
   assert.deepEqual(Object.keys(methods).sort(), [...NAMES].sort())
   for (const name of NAMES) assert.equal(typeof methods[name], 'function', name)

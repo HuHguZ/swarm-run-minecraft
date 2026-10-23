@@ -147,6 +147,28 @@ function aerialMethods ({ session }: RpcContext) {
       // Дальше пешком — боем драйвера (fight сам идёт к цели); goto отсюда ждал бы конца этого же полёта.
       return { ok: !!r?.ok, walkIn, why: r?.stopped || null, landing, ridge: Math.round(ridge.y), cruise: Math.round(cruise), hp: r?.hpBefore != null ? Math.round(r.hpBefore - r.hp) : null }
     }, { timeoutMs: ((p.timeoutSeconds ?? 20) + 10) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Только таран копьём по игроку target (сцена pvp/try-lance: точность захода без выбора хода боя): passes заходов,
+    // итог каждого — по used(), касания — его damage_event с причиной «я» за весь таран (не только пока копьё в деле).
+    lance: async (p: any = {}) => session.runIntent('lance', async (ctl) => {
+      const bot = session.require()
+      // После телепорта сущность цели приходит не сразу — ждать до 40 тиков.
+      let e = bot.players?.[p.target]?.entity
+      for (let i = 0; !e && i < 40 && !ctl.aborted; i++) { await bot.waitForTicks(1); e = bot.players?.[p.target]?.entity }
+      if (!e) return { ok: false, why: 'цели не видно' }
+      const L = require('../combat/aerial-lance')
+      const track = require('../bow').trackTarget(e)
+      const stats: any = {}
+      const passes: string[] = []
+      const hurts: number[] = []
+      const clock = require('../game-clock')
+      const onHurt = (pk: any) => { if (bot.entity && L.ownHit(pk, bot.entity.id, e.id)) hurts.push(clock.now()) }
+      bot._client.on('damage_event', onHurt)
+      const used = (s: string) => { const m = /^элитры: таран(?: копьём)? — (.+?)(?: \(план.*)?$/.exec(s); if (m && m[1] !== 'разбег') passes.push(m[1]) }
+      try {
+        const out = await L.lance(bot, ctl, e, { vel: () => track.vel(), stats, used, passes: p.passes ?? 8, maxMs: (p.maxSeconds ?? 60) * 1000, arena: p.arena || null })
+        return { ...out, results: passes, hurts, stats: { lanceEarly: stats.lanceEarly, lanceBail: stats.lanceBail, lanceTrace: stats.lanceTrace, rockets: stats.rockets } }
+      } finally { bot._client.removeListener('damage_event', onHurt) }
+    }, { timeoutMs: ((p.maxSeconds ?? 60) + 20) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     ledge_to: async (p: any = {}) => session.runIntent('ledge_to', ctl => require('../navigation/parkour').ledgeTo(session, ctl, p), { timeoutMs: Math.max(1, Math.min(20, p.timeoutSeconds ?? 8)) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_receive: async (p: any = {}) => session.runIntent('wind_receive', ctl => require('../combat/team-wind').windReceive(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_boost: async (p: any = {}) => session.runIntent('wind_boost', ctl => require('../combat/team-wind').windBoost(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),

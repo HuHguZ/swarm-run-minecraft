@@ -103,7 +103,8 @@ function take (s) {
 // на угрозу. Неаварийный рефлекс (щит и бой тактики, жест, сторож) посреди него отбирал руки и ноги: рывок вставал
 // (mace-7: «reflex: действие прервано», бот под булавой не сдвинулся). Аварийный (падение, лава) — как раньше. Уход от
 // динамита и срез паутины — тоже (стенд бота-противника 22.10: тактика рвала уход от горящего заряда через 0.1–0.3 с).
-const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|clear_water|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
+// Таран по приказу (RPC lance, сцена try-lance 23.10): щит тактики рвал 10 таранов из 12 ещё на взлёте.
+const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|clear_water|wind_jump|pearl_to|fly_to|lance|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
 // Подъём к цели (goto climb, Codex 15.10): щит и бой тактики от летящего трезубца не отбирают ноги — «лезу к RedTest1 —
 // The goal was changed» на каждом броске. Аварии (падение, лава, мало хп, застрял в блоке, взрыв) — как раньше.
 function protectedClimb (s) {
