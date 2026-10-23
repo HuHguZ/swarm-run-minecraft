@@ -31,7 +31,7 @@ import { arrowPickupTurn, crossbowTurn, bowTurn } from './pvp/turn-ranged'
 import { terrainTurn, scoopTurn, webTurn, fireTurn, pitTurn } from './pvp/turn-hazards'
 import { incomingTurn, dodgeTurn, shieldsTurn } from './pvp/turn-projectiles'
 import { punishTurn, potionFirstTurn, utilTurn, showmanTurn } from './pvp/turn-tempo'
-import { flyerTurn, farApproachTurn, debuffTurn, spearTurn } from './pvp/turn-approach'
+import { flyerTurn, farApproachTurn, debuffTurn, spearTurn, lanceWebTurn } from './pvp/turn-approach'
 import { meleeIntentTurn, creeperFleeTurn, steerTurn, edgeTurn, unblockTurn, exitTurn, hitKindTurn, floorEscapeTurn, controlsTurn, strikeTurn } from './pvp/turn-melee'
 
 // Ход боя — ступени по порядку (pvp/turn.ts: протокол ответа ступени).
@@ -40,7 +40,7 @@ const TURN: Array<(ctx: DuelCtx, turn: TurnFrame) => any> = [
   pearlResponseTurn, flightTurn, recoverTurn, foeReadTurn, fightGraphTurn, noteSightTurn, postureTurn, holdArenaTurn,
   mobDetourTurn, arenaClimbTurn, maceDefenseTurn, boomDefenseTurn, crystalTurn, dressTurn, rebuffTurn, duoTurn,
   backAttackerTurn, arrowPickupTurn, terrainTurn, scoopTurn, webTurn, fireTurn, offhandTurn, fortTurn, healTurn,
-  lowHpTurn, perchTurn, incomingTurn, dodgeTurn, pitTurn, climbToHimTurn, punishTurn, windPushTurn, glideShotTurn,
+  lowHpTurn, perchTurn, incomingTurn, dodgeTurn, pitTurn, lanceWebTurn, climbToHimTurn, punishTurn, windPushTurn, glideShotTurn,
   potionFirstTurn, boomOffenseTurn, crossbowTurn, bowTurn, utilTurn, showmanTurn, hiddenFoeTurn, breakUnderTurn,
   counterPillarTurn, standoffTurn, stuckTurn, hopTurn, repositionTurn, flyerTurn, shieldsTurn, farApproachTurn,
   smashSetupTurn, smashTurn, debuffTurn, spearTurn, meleeIntentTurn, creeperFleeTurn, steerTurn, edgeTurn,

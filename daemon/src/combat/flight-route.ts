@@ -7,6 +7,7 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 export interface FlightRouteRequest { gates: FlightGate[]; landing: Position; timeoutSeconds?: number; gateSeconds?: number; rocketReserve?: number; arena?: import('./team-wind').WindArena }
 export async function runFlightRoute(session: any, ctl: { aborted: boolean }, params: FlightRouteRequest) {
   const bot = session.bot
+  ctl = sky.flightControl(bot, ctl)
   const graph = new FlightRouteGraph(params.gates)
   if (!Object.values(params.landing).every(Number.isFinite)) throw new Error('Flight route needs a finite landing point')
   const landing = new Vec3(params.landing.x, params.landing.y, params.landing.z)
@@ -60,8 +61,8 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
       })
       if (graph.index === index) { stop = flight.why; break }
     }
-    const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: landing, maxMs: 12000, stats: statistics, arena: params.arena }) : { ok: false, why: 'interrupted' }
-    if (ctl.aborted && sky.gliding(bot.entity)) landAnyway(bot, params.arena, statistics)
+    const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: graph.complete ? landing : null, maxMs: 12000, stats: statistics, arena: params.arena }) : { ok: false, why: 'interrupted' }
+    if (ctl.aborted && sky.gliding(bot.entity)) landAnyway(bot, ctl, params.arena, statistics)
     const position = bot.entity.position
     return { ok: graph.complete && landed.ok && !ctl.aborted, stopped: stop ?? (!graph.complete ? 'route incomplete' : !landed.ok ? landed.why : null),
       crossings: graph.crossings, expectedGates: graph.gates.length, collisionTicks, rockets: rocketBefore - sky.rocketCount(bot),
@@ -74,13 +75,14 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
 // Колизей: стенд 21.10, слот 30 — за раунд 77 из 103 перелётов синих на насест прерваны, 50 вылетов за арену и смерть «как
 // упавший». Садимся на ближайшую площадку внутри арены, а не на насест; прерывает посадку только смерть; потом нагрудник
 // назад. Посадка идёт фоном: отчёт полёта возвращается сразу, его ждёт драйвер.
-function landAnyway (bot: any, arena: any, stats: Record<string, number>) {
-  const ctl = { get aborted () { return (bot.health ?? 0) <= 0 } }
+function landAnyway (bot: any, parentCtl: any, arena: any, stats: Record<string, number>) {
+  const ctl = sky.flightControl(bot, parentCtl, true)
+  if (ctl.aborted) return
   const inside = arena ? (x: number, z: number) => Math.abs(x - arena.x) <= arena.r - 1 && Math.abs(z - arena.z) <= arena.r - 1 : null
   const W = sky.worldOf(bot, { observed: !!arena })
   const at = sky.landingSpot(bot, W, { near: bot.entity.position, radius: 16, inside })
   stats.landAnyway = (stats.landAnyway || 0) + 1
   sky.land(bot, ctl, { at, stats, arena })
-    .then(() => (bot.health ?? 0) > 0 && !bot.entity.elytraFlying && sky.wearingElytra(bot) ? sky.chestDown(bot, ctl, { stats, arena }) : null)
+    .then(() => !ctl.aborted && !bot.entity.elytraFlying && sky.wearingElytra(bot) ? sky.chestDown(bot, ctl, { stats, arena }) : null)
     .catch(() => {})
 }

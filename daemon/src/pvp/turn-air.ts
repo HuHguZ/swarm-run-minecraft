@@ -10,6 +10,7 @@ import { stepSafe } from './body'
 import { findItem, findPotion } from './potions'
 import { FIX, HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+import { lanceWebRequest } from './turn-approach'
 
 // Паутина на мне, его пике с элитр.
 export function skySenseTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -136,6 +137,8 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
     const sp0 = sky.decide({ hp, healAt, heal: !!airHeal(), eatSafe, d, dy, foeGrounded: foeGrounded(), hisShield })
     // Взлёт ради тарана/пике — только если граф боя не нашёл на земле приёма заметно лучше (в воздухе — не мешаем).
     const sp = sp0 && /^(lance|dive)$/.test(sp0.kind) && !bot.entity.elytraFlying && !gate(sp0.kind) ? null : sp0
+    // Поддержка — после защит; уход лечиться сохраняет приоритет.
+    if (sp && /^(lance|dive)$/.test(sp.kind) && lanceWebRequest(ctx, turn)) return
     if (sp) {
       const crash0 = (bot._ndElytra?.crashes || []).length
       pathTo(false); ctx.pathing = false

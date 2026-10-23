@@ -354,7 +354,7 @@ export function watchStatus (ctx: ArenaContext) {
       }
       const now = Date.now(), frame = s.state.physicsTicks ?? tick, clockId = s.state.clock?.id
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
-      pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: s.state.inventory || {}, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
+      pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: s.state.inventory || {}, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
       if (dz) b.c.onDanger?.({ pos: p, dangers: dz, observedAt: asked, status: true })
       ctx.swarmDriver.observe(b, s.detail?.sightings || [], asked)
       const panic = ctx.swarmDriver.panic(b), oldPanic = panicStops.get(b)

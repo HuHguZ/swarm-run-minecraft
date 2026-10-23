@@ -69,12 +69,71 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     if (inv.mace) { reserve.wind_charge = inv.wind_charge || 0; needs.wind_charge = 8; needs.cobweb = 2 }
     return { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench }
   }
+  const pincerSent = new Map<string, { key: string; at: number }>()
+  const lanceWebSent = new Map<string, { key: string; at: number }>()
+  const lanceWebTrace = new Map<string, string>()
+  const webSight = new Map<string, { target: string | null; at: number }>()
+  const pincerTarget = o => o.last?.m === 'fight' && o.last.pending === true ? o.last.p?.target : null
+  const pincerKit = o => {
+    const m = pos[o.name]
+    return !!m?.p && (m.inv?.elytra > 0 || m.armor?.torso === 'elytra') &&
+      Object.entries(m.inv || {}).some(([name, count]) => /_spear$/.test(name) && Number(count) > 0)
+  }
   // seenAt — когда спросили (наблюдение не старше запроса статуса), без него — сейчас.
   const observe = (b, sightings, seenAt?: number) => {
     const board = boardOf(b), at = Number.isFinite(seenAt) ? Math.min(seenAt!, now()) : now()
     board.setMembers(membersOf(b))
     for (const e of sightings || []) if (hostile(b, e.id) && board.observe(b.name, at, e)) telemetry.observed++
     preempt(b)
+    const target = pincerTarget(b)
+    webSight.set(b.name, { target: sightings?.some(e => e.id === target && e.visible === true) ? target : null, at })
+    const pair = target ? bots.filter(o => alive(o.name) && teamOf(o) === teamOf(b) &&
+      pincerTarget(o) === target && pincerKit(o)).sort((a, c) => a.name.localeCompare(c.name)).slice(0, 2) : []
+    const leader = pair.length === 2 && pair[1] === b ? pair[0] : null
+    const key = leader ? sw.generation + ':' + target + ':' + leader.name : ''
+    const sent = pincerSent.get(b.name)
+    if ((key && (sent?.key !== key || at - sent.at >= 1000)) || (!key && sent?.key)) {
+      pincerSent.set(b.name, { key, at })
+      void b.c.call('team_hint', leader ? { target, from: { ...pos[leader.name].p } } : {})
+        .catch(() => pincerSent.delete(b.name))
+    }
+    const foe = target && board.enemies().find(e => e.id === target && at - e.seenAt < 1000)
+    const fresh = o => !!pos[o.name]?.p && alive(o.name) && at - (pos[o.name].observedAt ?? -Infinity) < 1000
+    const lancer = target && bots.some(o => o !== b && teamOf(o) === teamOf(b) && fresh(o) &&
+      pincerTarget(o) === target && pos[o.name].gliding && pos[o.name].lance?.target === target &&
+      /^(таран: разбег|таран: заход)$/.test(pos[o.name].lance.phase))
+    const helpers = foe && lancer ? bots.filter(o => teamOf(o) === teamOf(b) && fresh(o) &&
+      !pos[o.name].gliding && pincerTarget(o) === target && pos[o.name].inv?.cobweb > 0 &&
+      webSight.get(o.name)?.target === target && at - webSight.get(o.name)!.at < 1000 &&
+      distance(pos[o.name].p, foe.position) < 12)
+      .sort((a, c) => distance(pos[a.name].p, foe.position) - distance(pos[c.name].p, foe.position) ||
+        a.name.localeCompare(c.name)) : []
+    const webKey = helpers[0] === b ? sw.generation + ':' + target : ''
+    if (process.env.ND_LANCE_WEB_TRACE === '1' && target && pos[b.name]?.inv?.cobweb > 0) {
+      const reason = !foe ? 'no_fresh_target' : !lancer ? 'no_allied_lance' : !helpers.length ? 'no_eligible_helper' : helpers[0] === b ? 'selected' : 'other_helper'
+      const visible = webSight.get(b.name)?.target === target, gliding = !!pos[b.name]?.gliding
+      const key = [sw.generation, target, reason, visible, gliding, ...helpers.map(o => o.name)].join(':')
+      if (lanceWebTrace.get(b.name) !== key) {
+        lanceWebTrace.set(b.name, key)
+        log('[lance-web] ' + JSON.stringify({ stage: 'decision', where: 'driver', at, helper: b.name, target, reason, lancer: !!lancer, visible, gliding,
+          distance: foe ? Math.round(distance(pos[b.name].p, foe.position) * 10) / 10 : null, helpers: helpers.map(o => o.name) }))
+      }
+    }
+    const webSent = lanceWebSent.get(b.name)
+    if ((webKey && (webSent?.key !== webKey || at - webSent.at >= 250)) || (!webKey && webSent?.key)) {
+      lanceWebSent.set(b.name, { key: webKey, at })
+      if (process.env.ND_LANCE_WEB_TRACE === '1')
+        log('[lance-web] ' + JSON.stringify({ stage: 'send', helper: b.name, target: webKey ? target : null }))
+      void b.c.call('team_hint', { lanceWeb: webKey ? { target } : null })
+        .then(reply => {
+          if (process.env.ND_LANCE_WEB_TRACE === '1')
+            log('[lance-web] ' + JSON.stringify({ stage: 'ack', helper: b.name, status: reply?.status, accepted: reply?.detail?.lanceWeb ?? null }))
+        })
+        .catch(() => {
+          lanceWebSent.delete(b.name)
+          if (process.env.ND_LANCE_WEB_TRACE === '1') log('[lance-web] ' + JSON.stringify({ stage: 'send_failed', helper: b.name, target: webKey ? target : null }))
+        })
+    }
   }
   const refresh = (b) => {
     const board = boardOf(b), team = teamOf(b), members = membersOf(b)

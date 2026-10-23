@@ -1,6 +1,6 @@
 'use strict'
 // Элитры (elytra.ts): управление — выбор взгляда перебором и цена прогона.
-const { EYE, REACH, SAFE_FALL, LAND_FD, yawTo, wrap }: typeof import('./consts') = require('./consts')
+const { EYE, REACH, SAFE_FALL, LAND_FD, HALF, yawTo, wrap }: typeof import('./consts') = require('./consts')
 const { fallStep, rollout, reachFromBox }: typeof import('./physics') = require('./physics')
 
 // ---------------------------------------------------------------- управление
@@ -14,6 +14,12 @@ const YAW_OFF = [0, 0.12, -0.12, 0.3, -0.3, 0.55, -0.55, 0.9, -0.9, 1.35, -1.35,
 //  { kind: 'land', at: Vec3 (точка пола), away: Vec3 }
 //  { kind: 'strike', at: (t)→Vec3, within }
 function choose (W, st, goal, { H = 18, rocketNow = false }: any = {}) {
+  if (goal.kind === 'land' && typeof goal.at !== 'function') {
+    const planned = (require('./landing') as typeof import('./landing')).landingPlan(W,
+      { ...st, boost: Math.max(0, st.boost || 0) + (rocketNow ? 26 : 0) }, goal,
+      r => ({ c: cost(W, st, goal, () => goal.at, r, 0, 0), safe: landingRisk(W, goal, r) === 0 }), H)
+    if (planned) return planned
+  }
   const at = typeof goal.at === 'function' ? goal.at : () => goal.at
   const tgt0 = at(0)
   const hs0 = Math.hypot(st.v.x, st.v.z)
@@ -34,6 +40,35 @@ function choose (W, st, goal, { H = 18, rocketNow = false }: any = {}) {
   return best
 }
 
+function landingRisk (W, goal, r) {
+  let c = 0
+  const f = W.floorBelow(r.p.x, r.p.y + 0.5, r.p.z, 3)
+  if (!f || f.lava || f.water) c += 5000
+  if (f && !f.lava && !f.water) {
+    // First floor contact does not end the horizontal motion of this tick or the ground skid.
+    const hs = Math.hypot(r.v.x, r.v.z)
+    const drag = W.groundInertia ? W.groundInertia({ x: r.p.x, y: f.top, z: r.p.z }) : 0.6 * 0.91
+    // Touchdown sets vy=0; native's next zero-Y move clears onGround for one tick.
+    const tail = 1 + drag + drag * (W.airborneInertia ?? 0.91) / (1 - drag)
+    const dx = (r.remainingMove?.x || 0) + r.v.x * tail; const dz = (r.remainingMove?.z || 0) + r.v.z * tail
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.45))
+    for (let i = 0; i <= steps; i++) {
+      const p = { x: r.p.x + dx * i / steps, y: f.top, z: r.p.z + dz * i / steps }
+      const ground = W.floorBelow(p.x, p.y + 0.5, p.z, 3)
+      if (!ground || ground.lava || ground.water) { c += 5000; break }
+      p.y = ground.top
+      if (goal.arena && !(require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(p, goal.arena, HALF)) { c += 5000; break }
+      if (W.landingSafe && !W.landingSafe(p)) { c += 5000; break }
+      // The friction tail assumes continuous support at the touchdown height.
+      if (ground.top !== f.top) { c += 5000; break }
+      if (!W.boxHit(p.x, p.y, p.z)) continue
+      c += 400 + Math.max(0, hs * 10 - 3) * 40
+      break
+    }
+  }
+  return c
+}
+
 function cost (W, st, goal, at, r, yaw, pitch) {
   let c = 0
   const end = r.p
@@ -45,8 +80,7 @@ function cost (W, st, goal, at, r, yaw, pitch) {
       // Сели: высота падения по правилам сервера, пустота/лава под точкой.
       const fall = Math.max(0, r.fd - SAFE_FALL)
       c += fall * 60
-      const f = W.floorBelow(r.p.x, r.p.y + 0.5, r.p.z, 3)
-      if (!f || f.lava) c += 5000
+      c += landingRisk(W, goal, r)
       c += Math.hypot(r.p.x - goal.at.x, r.p.z - goal.at.z) * 1.5
       if (goal.away) c -= Math.min(20, Math.hypot(r.p.x - goal.away.x, r.p.z - goal.away.z)) * 0.5
       // Край рядом: скольжение после касания (трение 0.546) — до ~2 блоков.
@@ -121,6 +155,11 @@ function cost (W, st, goal, at, r, yaw, pitch) {
   return c
 }
 
+// Возврат из-за границы: проверяем геометрию, допускаем инерцию снаружи.
+function returnInside (W, st, arena) {
+  return choose(W, st, { kind: 'point', at: { x: arena.x, y: st.p.y, z: arena.z }, gap: 3 })
+}
+
 export {
-  PITCHES, YAW_OFF, choose, cost
+  PITCHES, YAW_OFF, choose, cost, returnInside
 }

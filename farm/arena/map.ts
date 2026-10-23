@@ -94,7 +94,7 @@ export function guardFalls (ctx: ArenaContext) {
   // Упал с Колизея — сразу смерть (12.10: «упал — лень подниматься наверх»): ниже нижнего яруса постройки на 3 бл., раз в секунду,
   // кроме зрителей; дальше обычный ход смерти (боец — в зрители, человек — набор и на свою сторону).
   // Спасение из пропасти (тело: rescue_config) — куда лететь и где смерть; раз в 20 с всем (переподключённым тоже).
-  const rescueT = arms ? setInterval(() => { for (const b of bots) b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3 }).catch(() => {}) }, 20000) : null
+  const rescueT = arms ? setInterval(() => { for (const b of bots) b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3, arena: { x: X, z: Z, r: L.half } }).catch(() => {}) }, 20000) : null
   // Улетел за Колизей (элитры, заряд, жемчуг) дальше 8 бл. за границу арены — как упавший: оттуда путь в арену не строится
   // (стенд 15.10, 31ad на x 370: «точка подъёма вне арены» по кругу).
   const fallT = arms ? setInterval(() => {

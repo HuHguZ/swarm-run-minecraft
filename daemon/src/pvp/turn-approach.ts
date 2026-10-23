@@ -2,6 +2,7 @@ import * as gameClock from '../game-clock'
 import { bestWeapon } from '../items'
 import { blockName, keyDir, wantsJump } from '../moves'
 import * as read from '../read'
+import * as pick from '../pick'
 import * as spear from '../spear'
 import * as throwMod from '../throw'
 import { healthOf, stepSafe } from './body'
@@ -11,6 +12,62 @@ import { findItem, potionOf, potionRole } from './potions'
 import { FAR, HIT_REACH, TICK_MS } from './rules'
 import { strikeWait } from './strike-order'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+
+// Диагностика связки: одна запись причины в игровую секунду, повтор hint её не сбрасывает.
+function traceLanceWeb (bot: any, stage: string, data: any) {
+  if (process.env.ND_LANCE_WEB_TRACE !== '1') return
+  const at = gameClock.now(), key = [stage, data.target || '', data.reason || ''].join(':')
+  const sent: Map<string, number> = bot._ndLanceWebTrace || (bot._ndLanceWebTrace = new Map())
+  if (at - (sent.get(key) ?? -Infinity) < 1000) return
+  sent.set(key, at)
+  console.log('[lance-web]', JSON.stringify({ stage, at, helper: bot.username, ...data }))
+}
+
+// Радиус координации шире руки; реальный клик проверяется отдельно.
+export function lanceWebRequest (ctx: DuelCtx, turn: TurnFrame) {
+  const { bot, entity, vision } = ctx, hint = bot._ndLanceWeb
+  if (!hint) return null
+  const refuse = (reason: string) => { traceLanceWeb(bot, 'decision', { target: hint.target, reason }); return null }
+  if (hint.until <= gameClock.now()) return refuse('expired')
+  if (hint.target !== (entity.username || entity.name)) return refuse('wrong_target')
+  if (ctx.ctl.aborted || !ctx.prof.player || ctx.prof.webImmune || turn.meInWeb) return refuse('helper_unavailable')
+  if (bot.entity.elytraFlying || bot._ndElytra?.driving) return refuse('flight_active')
+  if (bot.entity.position.distanceTo(entity.position) >= 12) return refuse('outside_coordination')
+  if (!vision.visible(entity)) return refuse('hidden_target')
+  const cell = entity.position.floored(), below = cell.offset(0, -1, 0)
+  if (!pick.blockSeen(bot, below)) return refuse('hidden_support')
+  if (bot.blockAt(below)?.boundingBox !== 'block') return refuse('unsupported_target')
+  if ([cell, cell.offset(0, 1, 0)].some(p => pick.blockSeen(bot, p) && bot.blockAt(p)?.name === 'cobweb')) return refuse('already_webbed')
+  const web = findItem(bot, i => i.name === 'cobweb')
+  if (!web) return refuse('no_web')
+  traceLanceWeb(bot, 'decision', { target: hint.target, reason: 'approach' })
+  return web
+}
+
+export function lanceWebItem (ctx: DuelCtx, turn: TurnFrame) {
+  const web = lanceWebRequest(ctx, turn)
+  if (!web) return null
+  const below = ctx.entity.position.floored().offset(0, -1, 0)
+  if (!pick.faceAim(ctx.bot, below, { x: 0, y: 1, z: 0 })) {
+    traceLanceWeb(ctx.bot, 'decision', { target: ctx.bot._ndLanceWeb.target, reason: 'no_legal_face_in_reach' })
+    return null
+  }
+  traceLanceWeb(ctx.bot, 'decision', { target: ctx.bot._ndLanceWeb.target, reason: 'ready' })
+  return web
+}
+
+export async function lanceWebTurn (ctx: DuelCtx, turn: TurnFrame) {
+  const web = lanceWebItem(ctx, turn)
+  if (!web) return
+  delete ctx.bot._ndLanceWeb
+  if (ctx.pathing) { ctx.pathTo(false); ctx.pathing = false }
+  ctx.clear()
+  try {
+    const ok = await ctx.placeUnder(web, 'команда: паутина к тарану')
+    traceLanceWeb(ctx.bot, 'use', { target: ctx.entity.username || ctx.entity.name, reason: ok ? 'placed' : 'placement_refused', ok })
+    if (ok) return NEXT
+  } finally { await ctx.holdWeapon() }
+}
 
 // Летун: шаг вбок, не гнаться.
 export async function flyerTurn (ctx: DuelCtx, turn: TurnFrame) {

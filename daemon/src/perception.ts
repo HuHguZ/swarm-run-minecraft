@@ -148,6 +148,8 @@ function stateSummary (bot, extra: any = {}) {
     pos: round(p),
     // На элитрах — драйвер арены не обрывает дело в воздухе (таран, перелёт): оборванный полёт садится сам, а дело — нет.
     ...(bot.entity.elytraFlying ? { gliding: true } : {}),
+    ...(bot.entity.elytraFlying && bot._ndElytra?.lance && /^(таран: разбег|таран: заход)$/.test(bot._ndElytra.phase)
+      ? { lance: { target: bot._ndElytra.lance.target, phase: bot._ndElytra.phase } } : {}),
     dimension: bot.game ? bot.game.dimension : null,
     biome,
     // Живой с 0.24 хп — не «0»: арена (where) читала 0 как смерть и обрывала раунд (S7d, s7d-p-27 р.3 swap).

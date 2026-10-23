@@ -184,6 +184,7 @@ for (const [method, inv, random] of [
   f.ctx.pos.A.inv = { ...inv }
   t.mock.method(Math, 'random', () => random)
   f.aim(); assert.equal(f.calls[0].method, method)
+  if (method === 'fly_to') assert.ok(f.calls[0].params.arena, 'the flight keeps to the colosseum: out of it the driver kills as fallen')
   f.calls[0].reply({ ok: false, used: 0, why: 'потолок в 3 бл.' }); await turn()
   f.calls.at(-1).reply({ ok: true, segments: 2 }); await turn()
   f.advance(3600000); f.ctx.pos.A.inv.bread = 4; f.report({}); f.aim(); await turn()

@@ -181,6 +181,7 @@ test('aerial lance confirms its own event independently of exact telemetry and p
     f.bot.inventory.items = () => [rocket, spear]
     const state = { fd: 0, startedAt: 1000, driving: 0 }
     const sky = { worldOf: () => ({ floorBelow: () => null }), install: () => state,
+      flightControl: (_b, ctl) => ({ ...ctl, _ndFlightOwner: { active: true }, get aborted () { return ctl.aborted } }),
       wearingElytra: () => true, plainRocket: it => it?.name === 'firework_rocket', gliding: e => !!e.elytraFlying,
       rocketCount: () => 8, lookVec: () => ({ x: 0, y: 0, z: -1 }),
       fly: async () => ({ why: 'разбег' }), rollout: () => ({ path: [], kind: null }),

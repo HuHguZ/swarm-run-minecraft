@@ -370,7 +370,8 @@ function dangerAim (dz: DangerCtx, b, m, { am, st, seen, episode, recheck }) {
     let r = Math.random() * sum; const pick = opts.find(o => (r -= o.w) <= 0) || opts[0]
     const at = { x: am.at.x, y: am.at.y, z: am.at.z }
     if (pick.k === 'pearl') act('pearl', '🟣', () => b.c.call('pearl_to', { to: at, edgeOk: true, yTop: 45 }), d => !!d.ok, fightHim)
-    else if (pick.k === 'fly') act('fly', '🪽', () => b.c.call('fly_to', { at, timeoutSeconds: 20 }), d => !!d.ok, fightHim)
+    // Полёт — в границах Колизея (стенд 22.10, 15×15 на элитрах: 15 из 71 смерти — «за пределами Колизея», улёт без arena).
+    else if (pick.k === 'fly') act('fly', '🪽', () => b.c.call('fly_to', { at, timeoutSeconds: 20, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: R, killY: arms ? Y + L.y0 - 3 : undefined } }), d => !!d.ok, fightHim)
     else if (pick.k === 'wind') {
       const up = above > 2 && above < 8 && dH < 10
       const sd = Math.random() < 0.5 ? 1 : -1

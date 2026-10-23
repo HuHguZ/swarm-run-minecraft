@@ -86,6 +86,7 @@ function worldOf (bot, { observed = false }: any = {}) {
   })
   const W = {
     at,
+    airborneInertia: bot.physics?.airborneInertia ?? 0.91,
     solid: (x, y, z) => at(x, y, z) === 1,
     // Рамка (полуширина HALF, высота h) в точке задевает твёрдое или жидкость.
     boxHit (x, y, z, h = BODY_H) {
@@ -105,6 +106,29 @@ function worldOf (bot, { observed = false }: any = {}) {
         if (v === 3) return { top: Y + 1, water: true }
       }
       return null
+    },
+    // Check the complete standing footprint, including the support and non-solid hazards.
+    // Same observed source as collisions; do not approve an unknown landing cell.
+    landingSafe (p) {
+      for (let X = Math.floor(p.x - HALF); X <= Math.floor(p.x + HALF - 1e-9); X++)
+        for (let Y = Math.floor(p.y - 1e-6); Y <= Math.floor(p.y + BODY_H - 1e-9); Y++)
+          for (let Z = Math.floor(p.z - HALF); Z <= Math.floor(p.z + HALF - 1e-9); Z++) {
+            let b = null
+            try { b = source.blockAt(new Vec3(X, Y, Z), false) } catch {}
+            // Existing edges/mlg bad-floor list, plus fire and the wither flower.
+            if (!b || /^(lava|water|bubble_column|fire|soul_fire|cactus|magma_block|campfire|soul_campfire|pointed_dripstone|sweet_berry_bush|powder_snow|wither_rose)$/.test(b.name)) return false
+          }
+      return true
+    },
+    // prismarine-physics: ground inertia = block slipperiness * airborneInertia.
+    groundInertia (p) {
+      let b = null
+      try { b = source.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y - 1e-6), Math.floor(p.z)), false) } catch {}
+      const air = bot.physics?.airborneInertia ?? 0.91
+      if (!b) return air
+      const slip = b.name === 'blue_ice' ? 0.989 : /^(ice|packed_ice|frosted_ice)$/.test(b.name) ? 0.98
+        : /^(slime_block|slime)$/.test(b.name) ? 0.8 : bot.physics?.defaultSlipperiness ?? 0.6
+      return slip * air
     },
     clear: () => cells.clear()
   }
@@ -136,10 +160,11 @@ function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false, a
     let hitAt = 0
     for (let k = 1; k <= steps && !hitAt; k++) if (W.boxHit(px + (p.x - px) * k / steps, py + (p.y - py) * k / steps, pz + (p.z - pz) * k / steps)) hitAt = k
     if (hitAt) {
+      const endX = p.x; const endZ = p.z
       if (hitAt < steps) { p.x = px + (p.x - px) * hitAt / steps; p.y = py + (p.y - py) * hitAt / steps; p.z = pz + (p.z - pz) * hitAt / steps }
       const vert = W.boxHit(px, p.y, pz)
       const hs = Math.hypot(v.x, v.z)
-      if (vert && p.y < py) return { t, kind: 'floor', p, v, fd, vyHit: v.y, path, minFloorGap: 0 }
+      if (vert && p.y < py) return { t, kind: 'floor', p, v, fd, vyHit: v.y, remainingMove: { x: endX - p.x, z: endZ - p.z }, path, minFloorGap: 0 }
       if (vert && p.y > py) return { t, kind: 'ceil', p, v, fd, path, minFloorGap }
       return { t, kind: 'wall', p, v, fd, dmg: Math.max(0, hs * 10 - 3), path, minFloorGap }
     }

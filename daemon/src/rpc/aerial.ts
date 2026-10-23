@@ -14,20 +14,77 @@ function aerialMethods ({ session }: RpcContext) {
       const Vec3 = require('vec3')
       if (!p.at) throw new Error('нужна точка at')
       const k = sky.kit(bot)
-      if (!k.elytra || k.rockets < 2) return { ok: false, why: 'нет элитр или ракет' }
+      if (!k.elytra || (!p.rescue && k.rockets < 2)) return { ok: false, why: 'нет элитр или ракет' }
       const W = sky.worldOf(bot, { observed: !!p.arena })
       const t = new Vec3(p.at.x, p.at.y, p.at.z)
       const inside = at => require('../combat/team-wind').windInside(at, p.arena)
-      if (!inside(t) || !inside(bot.entity.position)) return { ok: false, why: 'outside_arena' }
-      // Спасение из пропасти: элитры на тело, раскрыть и ракету вверх к цели — сразу, до расчёта гребня и посадки (до смертельной
-      // высоты арены 7 бл.; rescue → fly_to погибал на y 110, не раскрывшись).
-      if (p.rescue && !bot.entity.onGround) {
-        if (!sky.wearingElytra(bot) && !(await sky.swapChest(bot, 'elytra', { hand: 'main' })).ok) { await bot.waitForTicks(1); await sky.swapChest(bot, 'elytra', { hand: 'main' }) }
-        if (sky.wearingElytra(bot) && sky.startGlide(bot)) {
-          const at0 = bot.entity.position
-          await bot.look(Math.atan2(-(t.x - at0.x), -(t.z - at0.z)), Math.PI / 4, true).catch(() => {})
-          sky.fireRocket(bot)
+      if (!inside(t) || (!p.rescue && !inside(bot.entity.position))) return { ok: false, why: 'outside_arena' }
+      // В спасении важна ближайшая площадка; прямой маршрут к центру через гребень не нужен.
+      if (p.rescue) {
+        const hpBefore = bot.health
+        const minFloorY = Number.isFinite(p.killY) ? p.killY + 1 : -Infinity
+        const rescueCtl = sky.flightControl(bot, ctl)
+        const pickLanding = () => sky.landingSpot(bot, W, {
+          near: bot.entity.position, floorY: Math.max(bot.entity.position.y, t.y), depth: 80, minFloorY,
+          inside: (x, z) => inside({ x, y: bot.entity.position.y, z })
+        })
+        if (!bot.entity.onGround && !sky.wearingElytra(bot)) {
+          let sw = await sky.swapChest(bot, 'elytra', { hand: 'main', ctl: rescueCtl })
+          if (!sw.ok && !rescueCtl.aborted) { await bot.waitForTicks(1); sw = await sky.swapChest(bot, 'elytra', { hand: 'main', ctl: rescueCtl }) }
+          if (!sw.ok) return { ok: false, why: 'элитры: ' + sw.why }
         }
+        // Раскрытие не требует ракет и свободного потолка для прыжка.
+        if (!bot.entity.onGround && !sky.gliding(bot.entity) && !sky.startGlide(bot)) return { ok: false, why: 'не раскрыл элитры' }
+        if (!sky.plainRocket(bot.inventory.slots[45]) && k.rockets > 0) await sky.toHotbar(bot, sky.plainRocket)
+        let landing = pickLanding()
+        let probes = 0
+        const flight = await sky.fly(bot, rescueCtl, {
+          arena: p.arena, maxMs: (p.timeoutSeconds ?? 15) * 1000,
+          phase: 'спасение', noRocket: () => false,
+          goal: () => {
+            if (!landing && ++probes % 20 === 0) landing = pickLanding()
+            const me = bot.entity.position
+            const at = landing
+              ? new Vec3(landing.x, landing.y + Math.min(4, sky.headroom(W, landing, 6) - 1), landing.z)
+              : new Vec3(p.arena ? Math.max(p.arena.x - p.arena.r + 3, Math.min(p.arena.x + p.arena.r - 3, me.x)) : me.x,
+                Math.max(me.y + 4, t.y + 4, minFloorY),
+                p.arena ? Math.max(p.arena.z - p.arena.r + 3, Math.min(p.arena.z + p.arena.r - 3, me.z)) : me.z)
+            return { kind: 'point', at, minY: landing ? landing.y : minFloorY }
+          },
+          rocketIf: s => !landing || s.p.y < landing.y || s.v.y < -0.5,
+          until: () => landing && bot.entity.position.y >= landing.y && bot.entity.velocity.y > -0.5 &&
+            Math.hypot(bot.entity.position.x - landing.x, bot.entity.position.z - landing.z) < 2 ? 'над площадкой' : null
+        })
+        const inspectTouch = at => {
+          const inArena = !!at && inside(at)
+          const minY = !!at && at.y >= minFloorY
+          const f = inArena && minY ? W.floorBelow(at.x, at.y + 0.5, at.z, 2) : null
+          const dry = !!f && !f.lava && !f.water
+          const support = !!f && Math.abs(f.top - at.y) <= 1
+          return { ok: inArena && minY && dry && support, at: at ? { x: at.x, y: at.y, z: at.z } : null,
+            inside: inArena, minY, minFloorY, floor: f || null, dry, support }
+        }
+        const safeTouch = at => inspectTouch(at).ok
+        const safeGround = () => bot.entity.onGround && safeTouch(bot.entity.position)
+        const beforeTouch = inspectTouch(bot.entity.position)
+        const flightTouch = inspectTouch(flight.ground)
+        const onGroundBefore = !!bot.entity.onGround
+        const landed = onGroundBefore && beforeTouch.ok || flightTouch.ok ? { ok: true, ground: flight.ground } : landing && flight.why === 'над площадкой' && !rescueCtl.aborted
+          ? await sky.land(bot, rescueCtl, { at: landing, arena: p.arena }) : { ok: false, why: flight.why }
+        if (safeGround() && sky.wearingElytra(bot)) await sky.chestDown(bot, rescueCtl, { arena: p.arena })
+        // Report the completed touchdown, not a later onGround sample after an awaited chest swap.
+        const landedTouch = inspectTouch(landed.ground)
+        const currentTouch = inspectTouch(bot.entity.position)
+        const alive = (bot.health ?? 0) > 0
+        const active = !rescueCtl.aborted
+        const touchdown = !!landed.ok || landedTouch.ok
+        const ok = touchdown && currentTouch.ok && alive && active
+        const why = ok ? null : !alive ? 'death' : !active ? 'flight_superseded'
+          : landed.why === 'сел' || flight.why === 'сел' ? 'unsafe_contact' : landed.why || 'не сел безопасно'
+        const contact = ok ? undefined : { flightWhy: flight.why, landedWhy: landed.why, onGroundBefore,
+          before: beforeTouch, flight: flightTouch, landed: landedTouch, current: currentTouch,
+          touchdown, alive, active, onGround: !!bot.entity.onGround }
+        return { ok, why, landing, hp: Math.round(hpBefore - bot.health), contact }
       }
       // Гребень на линии полёта (13.10: «летят ко мне сквозь стену Колизея, бьются, получают урон и уходят — облёт надо
       // считать»): верх твёрдого в колонках вдоль прямой (шаг 1 бл., без 2 бл. у старта и у цели; непрогруженное — твёрдое).
@@ -104,27 +161,37 @@ function aerialMethods ({ session }: RpcContext) {
     // (v.y < −0.5), а пола выше смертельной высоты killY подо мной в 80 бл. нет — элитры (из рюкзака на тело в воздухе) и
     // ракеты есть: раскрыть и лететь к safe (fly_to: над гребнем, посадка с открытым небом). Конфиг — от драйвера арены.
     rescue_config: async (p: any = {}) => {
-      session._rescue = p.off ? null : { safe: p.safe, killY: Number(p.killY) }
+      session._rescue = p.off ? null : { safe: p.safe, killY: Number(p.killY), arena: p.arena }
       const bot = session.bot
       if (bot && !bot._ndRescue) {
+        require('../elytra').install(bot)
         bot._ndRescue = true
         let busyRescue = false
         bot.on('physicsTick', () => {
           const cfg = session._rescue; const b = bot.entity
-          // Порог −0.25 б/т, а не −0.5 (14.10: «их легко в обрыв скидывать — не пытаются спастись»): смертельная высота арены — 7 бл.
-          // под полем, на −0.5 тело уже в 2–3 бл. над ней, и спасение не успевало; ложный прыжок отсекает пол ниже (f.top).
-          if (!cfg || busyRescue || !b || b.onGround || b.isInWater || b.elytraFlying || b.velocity.y > -0.25 || (bot.health ?? 0) <= 0) return
+          if (!cfg || busyRescue || !b || b.onGround || b.isInWater || (bot.health ?? 0) <= 0) return
+          // Медленное планирование тоже пересекает зону смерти (c31: vy=-0.086).
+          const killSoon = b.velocity.y < 0 && b.position.y + b.velocity.y * 8 <= cfg.killY + 1
+          if (b.velocity.y > -0.25 && !killSoon) return
           const sky = require('../elytra')
-          const f = sky.worldOf(bot).floorBelow(b.position.x, b.position.y, b.position.z, 80)
-          // Внизу смертельная высота, лава — или само падение больше хп (+3): раскрыть. Раньше — только «внизу пусто»: бот
-          // летел вдоль гребня, под ним мелькали уступы, и спасение включалось уже в зоне смерти (y 112 при killY 113).
-          const fall = f ? b.position.y - f.top : Infinity
-          if (f && f.top >= cfg.killY + 1 && !f.lava && fall <= (bot.health ?? 20) + 3) return
+          const S = sky.install(bot)
+          const W = sky.worldOf(bot, { observed: !!cfg.arena })
+          const f = W.floorBelow(b.position.x, b.position.y, b.position.z, 80)
+          const fd = S.fd + Math.max(0, (S.lastY ?? b.position.y) - b.position.y)
+          if (b.elytraFlying) {
+            // Обычный управляемый полёт не перебиваем; авария — смертельное касание или зона смерти в прогнозе.
+            const r = sky.rollout(W, b.position, b.velocity, b.yaw, b.pitch, bot.fireworkRocketDuration || 0, 8, { fd, arena: cfg.arena })
+            const lethal = r.kind === 'floor' && Math.max(0, Math.floor(r.fd + 1e-6 - 3)) >= bot.health
+            if (!lethal && r.p.y > cfg.killY + 1) return
+          }
+          const fall = f ? fd + Math.max(0, b.position.y - f.top) : Infinity
+          const damage = Math.max(0, Math.floor(fall + 1e-6 - 3))
+          if (!b.elytraFlying && f && f.top >= cfg.killY + 1 && !f.lava && (f.water || damage < bot.health)) return
           const k = sky.kit(bot)
-          if (!k.elytra || k.rockets < 1) return
+          if (!k.elytra) return
           busyRescue = true
-          console.log('[rescue] падаю в пропасть — элитры', JSON.stringify({ y: Math.round(b.position.y), floor: f ? f.top : null, killY: cfg.killY }))
-          methods.fly_to({ at: cfg.safe, timeoutSeconds: 15, rescue: true }).then(r => console.log('[rescue]', JSON.stringify(r?.detail || r).slice(0, 200))).catch(() => {}).finally(() => { busyRescue = false })
+          console.log('[rescue] падаю в пропасть — элитры', JSON.stringify({ at: require('../game-clock').now(), wallAt: require('../game-clock').wall.now(), y: Math.round(b.position.y), vy: b.velocity.y, fd, hp: bot.health, rockets: k.rockets, floor: f ? f.top : null, killY: cfg.killY }))
+          methods.fly_to({ at: cfg.safe, killY: cfg.killY, arena: cfg.arena, timeoutSeconds: 15, rescue: true }).then(r => console.log('[rescue]', JSON.stringify(r?.detail || r))).catch(() => {}).finally(() => { busyRescue = false })
         })
       }
       return { status: 'done', detail: { on: !!session._rescue } }

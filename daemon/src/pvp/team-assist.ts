@@ -4,6 +4,7 @@
 // на видимую грань опоры (pick.faceAim, как кристалл и лодка), не сквозь стену.
 import { Vec3 } from './vec3'
 import * as pick from '../pick'
+import * as gameClock from '../game-clock'
 // Отход дарителя и подбор — честным шагом с проверкой опоры, границ арены и killY (Codex 15.10: «назад 8 тиков» и сырой
 // pathfinder.goto уводили в дыры и за упавшей вниз вещью).
 import { executeJump, ROUTE_FRAMES } from '../navigation/parkour'
@@ -230,6 +231,14 @@ export async function assist (session: any, p: any = {}, ctl = { aborted: false 
 // RPC team_hint (не прерывает бой): клещи в воздухе — напарник бьёт ту же цель из from, таран заходит с другой стороны.
 export function hint (session: any, p: any = {}) {
   const bot = session.require()
-  bot._ndPincer = p.target && p.from ? { target: p.target, from: p.from, until: Date.now() + 6000 } : null
-  return { pincer: !!bot._ndPincer }
+  if (!Object.hasOwn(p, 'lanceWeb') || Object.hasOwn(p, 'target') || Object.hasOwn(p, 'from')) {
+    bot._ndPincer = p.target && p.from ? { target: p.target, from: p.from, until: gameClock.now() + 6000 } : null
+  }
+  if (Object.hasOwn(p, 'lanceWeb')) {
+    const target = p.lanceWeb?.target, previous = bot._ndLanceWeb?.target ?? null
+    bot._ndLanceWeb = typeof target === 'string' && target ? { target, until: gameClock.now() + 2000 } : null
+    if (process.env.ND_LANCE_WEB_TRACE === '1' && previous !== (bot._ndLanceWeb?.target ?? null))
+      console.log('[lance-web]', JSON.stringify({ stage: 'receive', helper: bot.username, target: bot._ndLanceWeb?.target ?? null }))
+  }
+  return { pincer: !!bot._ndPincer, lanceWeb: !!bot._ndLanceWeb }
 }

@@ -59,7 +59,9 @@ export function installRounds (ctx: ArenaContext) {
     if (b.champ) await ctx.kitStrong(b.name)
     const list = [...(process.env.ARMS_AIR === '1' || process.env.ARMS_AIR === 'champ' && b.champ ? ['elytra 1', 'firework_rocket 48', 'diamond_spear[enchantments={sharpness:3,knockback:1}] 1',
       // Булава с «Порывом ветра» и заряды (10.10: «летающее месиво — и булавы всем чарованные с ветром»).
-      'mace[enchantments={density:3,breach:2,wind_burst:3}] 1', 'wind_charge 16'] : []),
+      'mace[enchantments={density:3,breach:2,wind_burst:3}] 1', 'wind_charge 16',
+      // Паутина под цель к тарану товарища (team_hint lanceWeb): в c33 из сундуков её почти не было — связка ни разу.
+      'cobweb 4'] : []),
       ...(process.env.ARMS_CRYSTAL === '1' ? ['end_crystal 64', 'end_crystal 64', 'obsidian 64', 'obsidian 64', 'totem_of_undying 1', 'diamond_leggings[enchantments={blast_protection:4}] 1'] : []),
       // ARMS_TNT=1 (10.10: «раунд с кучей динамита — пусть взрывают всё вокруг как психи»): вагонетки с TNT, рельсы и лук
       // с огнём (бой умеет: рельс у врага, вагонетка, горящая стрела — boom.ts).
@@ -127,7 +129,9 @@ export function installRounds (ctx: ArenaContext) {
       await ctx.roundKit(b)
     }
     // По списку онлайн, а не по карте humans: под нагрузкой сброса раунда чтение Pos у неё отваливается (10.10: «не телепортировало»).
-    await ctx.spreadBots()
+    // Разнос не подтвердился (spreadplayers: «Could not spread», молчание сервера) — раунд всё равно начинается: иначе between
+    // оставался true навсегда и бой не шёл (стенд 22.10, c30: 15 минут стояния после «сундуки набиты»).
+    await ctx.spreadBots().catch(e => log(`⚠ разнос ботов: ${String(e?.message || e).slice(0, 120)}`))
     ctx.readDeaths()
     out.clear(); deadNow.clear(); ctx.humanOut.clear()
     for (const b of bots) await rcon(i, `gamemode survival ${b.name}`)

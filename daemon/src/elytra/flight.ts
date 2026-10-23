@@ -5,8 +5,8 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { TICK_MS, HALF, ROCKET_MAX_TICKS, KEYS, DEBUG, sleep, wrap, r2, nextTick }: typeof import('./consts') = require('./consts')
 const { worldOf, rollout, headroom }: typeof import('./physics') = require('./physics')
 const { offName, chestName, rocketCount, plainRocket, wearingElytra, toHotbar, swapChest }: typeof import('./kit') = require('./kit')
-const { choose }: typeof import('./control') = require('./control')
-const { install, steer, startGlide, fireRocket }: typeof import('./install') = require('./install')
+const { choose, returnInside }: typeof import('./control') = require('./control')
+const { flightControl, install, steer, startGlide, fireRocket }: typeof import('./install') = require('./install')
 
 // ---------------------------------------------------------------- полёт
 
@@ -33,6 +33,8 @@ function rocketChoice (W, st, g, pl, want): any {
 function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, onTick = null, stats = null, noRocket = null, phase = null, arena = null }: any = {}) {
   const W = worldOf(bot, { observed: !!arena })
   const S = install(bot)
+  ctl = flightControl(bot, ctl)
+  S.arenaBounds = arena
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
     let done = false
@@ -44,36 +46,40 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
       done = true
       S.driving = Math.max(0, (S.driving || 1) - 1)
       bot.removeListener('physicsTick', onT)
-      resolve({ why, ms: gameClock.now() - t0, ticks, planMs: ticks ? r2(planMs / ticks) : 0 })
+      // Latch the actual contact: onGround may clear on the next zero-Y move.
+      const ground = why === 'сел' && bot.entity?.onGround ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null
+      resolve({ why, ground, ms: gameClock.now() - t0, ticks, planMs: ticks ? r2(planMs / ticks) : 0 })
     }
     const onT = () => {
       if (done) return
       try {
         const b = bot.entity
         if (ctl.aborted || !b || (bot.health ?? 0) <= 0) return finish('прервали')
-        if (arena && !(require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(b.position, arena, HALF)) return finish('outside_arena')
+        const inside = !arena || (require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(b.position, arena, HALF)
         if (b.onGround) return finish('сел')
         if (b.isInWater) return finish('в воде')
         if (!b.elytraFlying && gameClock.now() - S.startedAt > 400) return finish('полёт кончился')
         if (gameClock.now() - t0 > maxMs) return finish('долго')
-        if (until) { const u = until(); if (u) return finish(u) }
+        if (until && inside) { const u = until(); if (u) return finish(u) }
         ticks++
         let g = typeof goal === 'function' ? goal() : goal
         if (!g) return finish('цели нет')
         if (arena) g = { ...g, arena }
         S.phase = phase || g.kind
-        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
+        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: g.kind === 'land' ? Math.max(S.fd, S.moveFd || 0) : S.fd }
         const tp = gameClock.wall.now()
-        const pl = choose(W, st, g)
+        let pl = inside ? choose(W, st, g) : null
+        const returning = !pl && !!arena
+        if (returning) { pl = returnInside(W, st, arena); S.phase = 'возврат в арену' }
         if (!pl) return finish('no_safe_arena_trajectory')
         let fire = false
-        if (!(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > 0) {
+        if (!returning && !(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > 0) {
           const want = rocketIf ? rocketIf(st, pl, g) : false
           const rc = rocketChoice(W, st, g, pl, want)
           if (rc.fire) { fire = true; pl.yaw = rc.yaw; pl.pitch = rc.pitch; pl.c = rc.c } else if (rc.veto && stats) stats.rocketVeto = (stats.rocketVeto || 0) + 1
         }
         planMs += gameClock.wall.now() - tp
-        S.lastPlan = { c: r2(pl.c), k: pl.r.kind, t: pl.r.t, gx: r2(typeof g.at === 'function' ? g.at(0).x : g.at.x), gz: r2(typeof g.at === 'function' ? g.at(0).z : g.at.z) }
+        S.lastPlan = { c: r2(pl.c), k: pl.r.kind, t: pl.r.t, fd: r2(pl.r.fd), vyHit: pl.r.vyHit == null ? null : r2(pl.r.vyHit), gx: r2(typeof g.at === 'function' ? g.at(0).x : g.at.x), gz: r2(typeof g.at === 'function' ? g.at(0).z : g.at.z) }
         // Диагностика S7d: план без события, а стена по ходу в ≤ 4 бл. — входы плана целиком в лог (повтор офлайн).
         if (!pl.r.kind && (S.planMiss || 0) < 6) {
           const hs = Math.hypot(b.velocity.x, b.velocity.z)
@@ -93,7 +99,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
           const fr = fireRocket(bot)
           if (fr.ok && stats) stats.rockets = (stats.rockets || 0) + 1
         }
-        if (onTick) onTick(pl, st)
+        if (onTick && !returning) onTick(pl, st)
         if (DEBUG && ticks % 5 === 0) console.log('[elytra]', JSON.stringify({ t: ticks, kind: g.kind, p: [r2(b.position.x), r2(b.position.y), r2(b.position.z)], v: [r2(b.velocity.x), r2(b.velocity.y), r2(b.velocity.z)], yaw: r2(pl.yaw), pitch: r2(pl.pitch), c: r2(pl.c), ev: pl.r.kind, fw: bot.fireworkRocketDuration, fd: r2(S.fd) }))
       } catch (e) { finish('ошибка: ' + e.message) }
     }
@@ -127,17 +133,19 @@ function launchLook (W, p, yaw0, pitch0, v = null, arena = null) {
 // Взлёт: элитры на теле, прыжок, в воздухе — «раскрыть», взгляд вверх и
 // фейерверк. Отказ — с причиной (потолок, воды, нет ракет).
 async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liquidStart = false, arena = null }: any = {}) {
+  ctl = flightControl(bot, ctl)
+  if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
   const W = worldOf(bot, { observed: !!arena })
-  install(bot)
+  install(bot).arenaBounds = arena
   const b = bot.entity
   if (!b) return { ok: false, why: 'нет тела' }
   if (arena && !(require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(b.position, arena, HALF)) return { ok: false, why: 'outside_arena' }
   if (b.isInWater) return { ok: false, why: 'в воде' }
   const fromLava = liquidStart && !!b.isInLava
-  if (fromLava ? !lavaLaunchClear(bot) : headroom(W, b.position, 6) < 4) return { ok: false, why: 'над головой блок' }
+  if (fromLava ? !lavaLaunchClear(bot) : b.onGround && headroom(W, b.position, 6) < 4) return { ok: false, why: 'над головой блок' }
   if (!rocketCount(bot)) return { ok: false, why: 'фейерверков нет' }
   if (!wearingElytra(bot)) {
-    const s = await swapChest(bot, 'elytra', { hand: offName(bot) === 'elytra' ? 'off' : 'main' })
+    const s = await swapChest(bot, 'elytra', { hand: offName(bot) === 'elytra' ? 'off' : 'main', ctl })
     if (!s.ok) return { ok: false, why: 'элитры не надел: ' + s.why }
   }
   // Взгляд взлёта — по прогону (launchLook): заказанный, если он чист.
@@ -205,9 +213,9 @@ function lavaLaunchClear(bot) {
   return air >= 4
 }
 
-// Точка посадки: твёрдый пол 3×3 без пустоты рядом, как можно ближе к near и
+// Точка посадки: твёрдый пол 5×5 без пустоты рядом, как можно ближе к near и
 // дальше от away. Перебор по кольцам вокруг near.
-function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, minFromAway = 0, inside = null }: any = {}) {
+function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, minFromAway = 0, inside = null, depth = 14, minFloorY = -Infinity }: any = {}) {
   let best = null
   const y0 = floorY != null ? floorY : near.y
   for (let r = 0; r <= radius; r += 2) {
@@ -217,13 +225,13 @@ function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, m
       const x = Math.floor(near.x + Math.sin(a) * r) + 0.5
       const z = Math.floor(near.z + Math.cos(a) * r) + 0.5
       if (inside && !inside(x, z)) continue
-      const f = W.floorBelow(x, y0 + 6, z, 14)
-      if (!f || f.lava || f.water) continue
+      const f = W.floorBelow(x, y0 + 6, z, depth)
+      if (!f || f.lava || f.water || f.top < minFloorY) continue
       let ok = true
       for (let dx = -2; dx <= 2 && ok; dx++) {
         for (let dz = -2; dz <= 2 && ok; dz++) {
           const g = W.floorBelow(x + dx, f.top + 0.5, z + dz, 4)
-          if (!g || g.lava || Math.abs(g.top - f.top) > 1) ok = false
+          if (!g || g.lava || g.water || g.top < minFloorY || Math.abs(g.top - f.top) > 1) ok = false
         }
       }
       if (!ok || W.boxHit(x, f.top, z) || headroom(W, new Vec3(x, f.top, z), 4) < 3) continue
@@ -240,9 +248,17 @@ function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, m
 // Посадка: планирование к точке пола, касание с v.y > −0.5 (высота падения ≤ 1
 // — без урона), не в пустоту и не у самого края. Ракеты — нет.
 async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = null, arena = null }: any = {}) {
+  ctl = flightControl(bot, ctl)
+  if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
   const W = worldOf(bot, { observed: !!arena })
   const b = bot.entity
-  if (b && arena && !(require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(b.position, arena, HALF)) return { ok: false, why: 'outside_arena' }
+  const inside = () => !arena || (require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(bot.entity.position, arena, HALF)
+  if (b && !inside()) {
+    if (b.elytraFlying) await fly(bot, ctl, { arena, stats, maxMs, noRocket: () => true,
+      goal: () => ({ kind: 'point', at: new Vec3(arena.x, bot.entity.position.y, arena.z), gap: 3 }),
+      until: () => inside() ? 'вернулся' : null })
+    if (!inside()) return { ok: false, why: 'outside_arena' }
+  }
   if (!b || !b.elytraFlying) return { ok: !!(b && b.onGround), why: 'не лечу' }
   let spot = at || landingSpot(bot, W, { near: b.position, away, floorY: null, inside: arena ? (x, z) => Math.abs(x - arena.x) + HALF <= arena.r && Math.abs(z - arena.z) + HALF <= arena.r : null })
   if (!spot) {
@@ -271,7 +287,8 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
   await sleep(150)
   const lost = Math.max(0, hp0 - (bot.health ?? 20))
   if (stats) { stats.landings = (stats.landings || 0) + 1; if (lost > 0.5) stats.landDmg = r2((stats.landDmg || 0) + lost) }
-  return { ok: !!bot.entity.onGround && (!arena || (require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(bot.entity.position, arena, HALF)), why: r.why, lost: r2(lost), at: spot }
+  return { ok: !!(bot.entity.onGround || r.ground) && inside() && !ctl.aborted && (bot.health ?? 0) > 0,
+    why: r.why, ground: r.ground, lost: r2(lost), at: spot }
 }
 
 // Нагрудник назад — только внизу (S7c, а): свап в воздухе гасит полёт, и тело падает с высоты («fell from a
@@ -286,18 +303,18 @@ async function chestDown (bot, ctl, { stats = null, away = null, at = null, aren
     const f = W.floorBelow(b.position.x, b.position.y, b.position.z, 6)
     return !!f && b.position.y - f.top < 1.2 && b.velocity.y > -0.5
   }
-  const landCtl = { get aborted () { return (bot.health ?? 0) <= 0 } }
-  for (let i = 0; i < 3 && (bot.health ?? 0) > 0 && !low(); i++) {
+  const landCtl = flightControl(bot, ctl, true)
+  for (let i = 0; i < 3 && !landCtl.aborted && !low(); i++) {
     if (bot.entity.elytraFlying) { await land(bot, landCtl, { at: i === 0 ? at : null, away, stats, arena }); continue }
     const f = W.floorBelow(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z, 40)
     if (f && bot.entity.position.y - f.top > 3.5 && wearingElytra(bot) && startGlide(bot)) { if (stats) stats.reglide = (stats.reglide || 0) + 1; continue }
     const t0 = gameClock.now()
-    while (!low() && (bot.health ?? 0) > 0 && gameClock.now() - t0 < 3000) await sleep(TICK_MS)
+    while (!low() && !landCtl.aborted && gameClock.now() - t0 < 3000) await sleep(TICK_MS)
   }
-  if ((bot.health ?? 0) <= 0) return { ok: false, why: 'погиб' }
+  if (landCtl.aborted) return { ok: false, why: 'flight_superseded' }
   if (/_chestplate$/.test(chestName(bot) || '')) return { ok: true, already: true }
   if (!low()) { if (stats) stats.chestAir = (stats.chestAir || 0) + 1; return { ok: false, why: 'не сел — нагрудник не меняю в воздухе' } }
-  return swapChest(bot, 'chest', { hand: /_chestplate$/.test(offName(bot) || '') ? 'off' : 'main' })
+  return swapChest(bot, 'chest', { hand: /_chestplate$/.test(offName(bot) || '') ? 'off' : 'main', ctl: landCtl })
 }
 
 export {

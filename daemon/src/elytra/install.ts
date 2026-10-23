@@ -5,14 +5,14 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { BODY_H, ROCKET_MAX_TICKS, GUARD, r2 }: typeof import('./consts') = require('./consts')
 const { lookVec, worldOf, rollout, headroom }: typeof import('./physics') = require('./physics')
 const { plainRocket, wearingElytra }: typeof import('./kit') = require('./kit')
-const { choose }: typeof import('./control') = require('./control')
+const { choose, returnInside }: typeof import('./control') = require('./control')
 
 // Установка на бота (раз): фейерверк тянет, пока его сущность жива (как у
 // клиента игры), высота падения по правилам сервера (для прогноза посадки),
 // сторож ведра не льёт воду в полёте.
 function install (bot) {
   if (bot._ndElytra) return bot._ndElytra
-  const S: any = { rocketIds: new Set(), fd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0, phase: null, box: [], crashes: [], groundT: 0 }
+  const S: any = { rocketIds: new Set(), fd: 0, moveFd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0, phase: null, box: [], crashes: [], groundT: 0 }
   bot._ndElytra = S
   // Кто повернул взгляд в полёте (S7d: в чёрном ящике s7c5 скорость под ракетой разворачивалась на 180° за тик —
   // похоже на двух рулевых): в полёте каждый bot.look/lookAt помечается первым кадром стека вне mineflayer/elytra.
@@ -40,7 +40,7 @@ function install (bot) {
         try {
           if (bot.entity && bot.entity.elytraFlying) {
             const who = tag()
-            if (S.driving > 0 && !S.steering) {
+            if ((S.driving > 0 || S.boundaryReturn) && !S.steering) {
               S.blockedLooks = (S.blockedLooks || 0) + 1
               S.blockedBy[who] = (S.blockedBy[who] || 0) + 1
               if (LOCK) return Promise.resolve()
@@ -83,14 +83,16 @@ function install (bot) {
       // Рефлекс столкновения (S7c, а): летит, а рулит никто (между вызовами fly — удар копьём в воздухе, выстрел,
       // жемчуг, решение боя) — нынешний взгляд за 8 тиков ведёт в стену с уроном или в пол с высотой падения > 3:
       // этот тик — безопасный взгляд (choose: прямо по ходу на 12 бл., выше пола на 3).
+      S.boundaryReturn = false
       if (b.elytraFlying && !S.driving && GUARD) {
-        const W = worldOf(bot)
+        const W = worldOf(bot, { observed: !!S.arenaBounds })
         const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
-        const r = rollout(W, b.position, b.velocity, b.yaw, b.pitch, st.boost, 8, { fd: S.fd })
-        if ((r.kind === 'wall' && r.dmg >= 1) || (r.kind === 'floor' && r.fd > 3)) {
+        const r = rollout(W, b.position, b.velocity, b.yaw, b.pitch, st.boost, 8, { fd: S.fd, arena: S.arenaBounds })
+        S.boundaryReturn = r.kind === 'outside'
+        if (S.boundaryReturn || (r.kind === 'wall' && r.dmg >= 1) || (r.kind === 'floor' && r.fd > 3)) {
           const h = Math.hypot(b.velocity.x, b.velocity.z) > 0.2 ? Math.atan2(-b.velocity.x, -b.velocity.z) : b.yaw
           const L = lookVec(h, 0)
-          const pl = choose(W, st, { kind: 'point', at: new Vec3(b.position.x + L.x * 12, b.position.y + 2, b.position.z + L.z * 12), gap: 3, speedMin: 0.3 })
+          const pl = choose(W, st, { kind: 'point', at: new Vec3(b.position.x + L.x * 12, b.position.y + 2, b.position.z + L.z * 12), gap: 3, speedMin: 0.3, arena: S.arenaBounds }) || (S.arenaBounds ? returnInside(W, st, S.arenaBounds) : null)
           if (pl) { steer(bot, pl.yaw, pl.pitch); S.guardSaves = (S.guardSaves || 0) + 1; S.phase = S.phase || 'рефлекс' }
         }
       }
@@ -112,7 +114,7 @@ function install (bot) {
         }
       } catch {}
       const pl = S.lastPlan && S.lastPlan.tick === S.box.length ? S.lastPlan : S.lastPlan
-      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0, bst: bot.fireworkRocketDuration || 0, yaw: r2(b.yaw), pitch: r2(b.pitch), by: S.lookBy || null, dr: S.driving || 0, pc: pl ? pl.c : null, pk: pl ? pl.k : null, pt: pl ? pl.t : null, wallW, wallF })
+      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), fdMove: r2(S.moveFd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0, bst: bot.fireworkRocketDuration || 0, yaw: r2(b.yaw), pitch: r2(b.pitch), by: S.lookBy || null, dr: S.driving || 0, pc: pl ? pl.c : null, pk: pl ? pl.k : null, pt: pl ? pl.t : null, pfd: pl ? pl.fd : null, pvyHit: pl ? pl.vyHit : null, wallW, wallF })
       S.lastPlan = null
       S.lookBy = null
       if (S.box.length > 30) S.box.shift()
@@ -126,7 +128,7 @@ function install (bot) {
         if (type !== 'fly_into_wall' && type !== 'fall') return
         if (!S.box.length) return
         const hp0 = bot.health ?? 20
-        const rec: any = { kind: type === 'fly_into_wall' ? 'стена' : 'пол', phase: S.phase || S.box[S.box.length - 1].ph || null, at: gameClock.now(), ticks: S.box.slice(type === 'fall' ? -30 : -12) }
+        const rec: any = { kind: type === 'fly_into_wall' ? 'стена' : 'пол', phase: S.phase || S.box[S.box.length - 1].ph || null, at: gameClock.now(), wallAt: gameClock.wall.now(), ticks: S.box.slice(type === 'fall' ? -30 : -12) }
         S.boxHold = true
         // В список — сразу (отчёт погибшего собирается раньше 100 мс), урон и смерть — когда придёт хп.
         rec.dmg = null
@@ -156,6 +158,10 @@ function install (bot) {
       const b = bot.entity
       if (!b) return
       const y = b.position.y
+      // ServerPlayer accepts position packets; its deltaMovement is not the client's simulated velocity.
+      // A positive accepted Y delta resets fallDistance in handleMovePlayer. Ignore unobserved slow-fall resets.
+      if (b.onGround || b.isInWater || (S.lastY != null && y > S.lastY)) S.moveFd = 0
+      else if (S.lastY != null) S.moveFd += Math.max(0, S.lastY - y)
       if (b.onGround || b.isInWater) S.fd = 0
       else {
         if (b.elytraFlying && b.velocity.y > -0.5 && S.fd > 1) S.fd = 1
@@ -213,8 +219,9 @@ function fireRocket (bot) {
   if (!bot.entity || !bot.entity.elytraFlying) return { ok: false, why: 'не лечу' }
   if (gameClock.now() - S.lastRocketAt < 250) return { ok: false, why: 'только что' }
   if (plainRocket(bot.inventory.slots[45])) {
+    const usingHeldItem = bot.usingHeldItem
     bot.activateItem(true)
-    bot.usingHeldItem = false
+    bot.usingHeldItem = usingHeldItem // server mainhand use от offhand ракеты не прекращается
     S.lastRocketAt = gameClock.now()
     return { ok: true, hand: 'off' }
   }
@@ -252,6 +259,18 @@ function arenaAround (bot, W, at, { reach = 48 }: any = {}) {
   return v
 }
 
+// Фоновая посадка наследует владельца исходного действия.
+function flightControl (bot, ctl, emergency = false) {
+  const S = install(bot)
+  if (!ctl._ndFlightOwner) {
+    if (S.flightOwner) S.flightOwner.active = false
+    S.flightOwner = ctl._ndFlightOwner = { active: true }
+  }
+  const owner = ctl._ndFlightOwner
+  return { ...ctl, _ndFlightOwner: owner,
+    get aborted () { return !owner.active || (!emergency && ctl.aborted) || (bot.health ?? 0) <= 0 } }
+}
+
 export {
-  install, steer, startGlide, fireRocket, arenaAround
+  flightControl, install, steer, startGlide, fireRocket, arenaAround
 }

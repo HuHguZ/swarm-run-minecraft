@@ -62,7 +62,16 @@ async function toHotbar (bot, pred) {
 // Элитры ↔ нагрудник одним «использовать» (Equippable.swapWithEquipmentSlot):
 // предмет в руке встаёт на тело, снятое — в ту же руку. hand 'off' — левой:
 // заряд оружия в правой не сбрасывается. Ждём подтверждения сервера (слот 6).
-async function swapChest (bot, want, { hand = 'main', waitMs = 400 }: any = {}) {
+async function swapChest (bot, want, { hand = 'main', waitMs = 400, ctl = null }: any = {}) {
+  const trace = stage => {
+    if (process.env.ND_ELYTRA_EQUIP_TRACE === '1') console.log('[elytra-equip]', JSON.stringify({
+      stage, at: gameClock.now(), wallAt: gameClock.wall.now(), want, hand, aborted: !!ctl?.aborted,
+      chest: chestName(bot), held: bot.heldItem?.name || null, off: offName(bot), slot: bot.quickBarSlot,
+      onGround: !!bot.entity?.onGround, vy: bot.entity?.velocity?.y, phase: bot._ndElytra?.phase
+    }))
+  }
+  trace('begin')
+  if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
   const isWanted = (n) => want === 'elytra' ? n === 'elytra' : /_chestplate$/.test(n || '')
   if (isWanted(chestName(bot))) return { ok: true, already: true }
   const item = want === 'elytra' ? (offName(bot) === 'elytra' ? bot.inventory.slots[45] : findItem(bot, 'elytra')) : (/_chestplate$/.test(offName(bot) || '') ? bot.inventory.slots[45] : bestChest(bot))
@@ -70,16 +79,23 @@ async function swapChest (bot, want, { hand = 'main', waitMs = 400 }: any = {}) 
   try {
     if (hand === 'off') {
       if (bot.inventory.slots[45] !== item) await bot.equip(item, 'off-hand')
+      if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
+      trace('use')
       bot.activateItem(true)
     } else {
       const idx = await toHotbar(bot, (it) => !!it && it.name === item.name)
+      if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
       if (idx < 0) { await bot.equip(item, 'hand') } else if (bot.quickBarSlot !== idx) bot.setQuickBarSlot(idx)
+      if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
+      trace('use')
       bot.activateItem()
     }
     bot.usingHeldItem = false
   } catch (e) { return { ok: false, why: e.message } }
   const t0 = gameClock.now()
-  while (gameClock.now() - t0 < waitMs && !isWanted(chestName(bot))) await sleep(25)
+  while (gameClock.now() - t0 < waitMs && !ctl?.aborted && !isWanted(chestName(bot))) await sleep(25)
+  if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
+  trace(isWanted(chestName(bot)) ? 'ack' : 'timeout')
   return isWanted(chestName(bot)) ? { ok: true, ms: gameClock.now() - t0 } : { ok: false, why: 'сервер не надел' }
 }
 
