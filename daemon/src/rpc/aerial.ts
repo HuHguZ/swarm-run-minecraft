@@ -3,6 +3,7 @@
 // Фабрика методов над контекстом демона (rpc/context.ts); обработчики перенесены из src/index.ts.
 import type { RpcContext } from './context'
 import { LAUNCH_BACK } from '../mace/consts'
+import * as gameClock from '../game-clock'
 
 function aerialMethods ({ session }: RpcContext) {
   const methods = {
@@ -191,6 +192,35 @@ function aerialMethods ({ session }: RpcContext) {
     wind_boost: async (p: any = {}) => session.runIntent('wind_boost', ctl => require('../combat/team-wind').windBoost(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_report: async (p: any = {}) => ({ status: 'done', detail: p.pairProgress ? await require('../combat/team-wind').windPairProgress(session, p) : require('../combat/enemy-wind-execute').enemyWindReport(session, p), events: [], state: session.state() }),
     enemy_wind_plan: async (p: any = {}) => ({ status: 'done', detail: await require('../combat/enemy-wind-execute').enemyWindPlan(session, p), events: [], state: session.state() }),
+    // Засада на жемчуг врага (combat/pearl-ambush): к точке приземления любым способом и взлёт булавой к его появлению.
+    pearl_ambush: async (p: any = {}) => session.runIntent('pearl_ambush', ctl => require('../combat/pearl-ambush').pearlAmbush(session, ctl, p), { timeoutMs: 9000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Ловушка или подкоп в точке жемчуга (combat/pearl-trap): лава / паутина в клетку появления или вскрыть блок удара.
+    pearl_trap: async (p: any = {}) => session.runIntent('pearl_trap', ctl => require('../combat/pearl-trap').pearlTrap(session, ctl, p), { timeoutMs: 9000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Испытание (пользователь 24.10: «пусть некоторые боты тестово кидают жемчуг тупо вверх»): бросок прямо вверх с места и
+    // бег прочь на runMs — ошибка человека, которую рой должен наказать (засада, ловушка, подкоп).
+    pearl_test_up: async (p: any = {}) => session.runIntent('pearl_test_up', async () => {
+      const bot = session.require(), pearl = bot.inventory.items().find((i: any) => i.name === 'ender_pearl')
+      if (!pearl) return { ok: false, why: 'нет жемчуга' }
+      await bot.equip(pearl, 'hand')
+      await bot.look(bot.entity.yaw, Math.PI / 2 - .02, true)
+      bot.activateItem()
+      const yaw = Math.random() * Math.PI * 2
+      await bot.look(yaw, 0, true)
+      bot.setControlState('forward', true); bot.setControlState('sprint', true)
+      await gameClock.sleep(Math.min(4000, Number(p.runMs) || 2500))
+      bot.clearControlStates()
+      return { ok: true, from: bot.entity.position.floored() }
+    }, { timeoutMs: 6000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Облёт подброшенного врага на элитрах (combat/wing-orbit): кружить на его высоте, рефлекс сброса бросает заряды.
+    wing_orbit: async (p: any = {}) => session.runIntent('wing_orbit', ctl => require('../combat/wing-orbit').wingOrbit(session, ctl, p), { timeoutMs: ((p.seconds ?? 12) + 15) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Спрыгнуть от врага с высоты (combat/jump-down): from — где он, край — в стороне от него, падение дёшево.
+    jump_down: async (p: any = {}) => session.runIntent('jump_down', ctl => require('../combat/jump-down').jumpDown(session, ctl, p), { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    pearl_potion: async (p: any = {}) => session.runIntent('pearl_potion', ctl => require('../combat/pearl-ambush').pearlPotion(session, ctl, p), { exclusive: false, timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    pearl_pop: async (p: any = {}) => session.runIntent('pearl_pop', ctl => require('../combat/pearl-ambush').pearlPop(session, ctl, p), { exclusive: false, timeoutMs: 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Разгон стрелой (combat/arrow-boost): boost_lance — стоять с копьём на врага foe и ждать толчка; boost_shot — пустить
+    // слабую стрелу «Отдачи» в своего ally, чтобы его бросило к foe (draw — тиков натяжения: второму стрелку больше).
+    boost_lance: async (p: any = {}) => session.runIntent('boost_lance', ctl => require('../combat/arrow-boost').boostLanceRpc(session, ctl, p), { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    boost_shot: async (p: any = {}) => session.runIntent('boost_shot', ctl => require('../combat/arrow-boost').boostShotRpc(session, ctl, p), { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_out: async (p: any = {}) => session.runIntent('wind_out', ctl => require('../combat/enemy-wind-execute').enemyWindExecute(session, ctl, p), { exclusive: false, timeoutMs: 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Прыжок на заряде ветра в точку (wind-leap.ts): to — клетка, куда встать (ноги); dryRun — только план.
     wind_leap: async (p: any = {}) => session.runIntent('wind_leap', async (ctl) => {

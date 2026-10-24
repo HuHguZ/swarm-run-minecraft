@@ -234,6 +234,8 @@ export interface SwarmTeamFight { engage: boolean; ourLoss: number; theirLoss: n
 // ближнего живого противника, не больше двух на одного (так рой и делит цели), удар проходит через окно неуязвимости
 // цели, удары тика — одновременно (без форы своим), у врага 20 хп (его хп не видно), подход — по расстоянию. Итог за 30
 // игровых с — потери сторон в долях бота (погибший — 1, раненый — доля потерянного).
+// ponytail: одна доля на все дистанции; по замерам ближе/дальше — функцией от расстояния и движения цели.
+export const ARROW_HIT = Number(process.env.ND_TEAM_ARROW_HIT) || 0.35
 export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Omit<SwarmTeamFight, 'engage'> {
   type Strike = { raw: number; kind: string; interval: number; ranged: boolean; breach: number }
   type Unit = { side: 0 | 1; position: SwarmPosition; hp: number; start: number; defense: any; last: any; target: number; next: number; strike: Strike | null; seen: SharedEnemy }
@@ -248,9 +250,11 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
     ...team.filter(m => m.health > 0).map(m => { const seen = seenOf(m); return { side: 0 as const, position: m.position, hp: m.health, start: m.health, defense: enemyDefense(seen), last: null, target: -1, next: 0, strike: null, seen } }),
     ...enemies.map(e => ({ side: 1 as const, position: e.position, hp: e.hpEstimate ?? 20, start: e.hpEstimate ?? 20, defense: enemyDefense(e), last: null, target: -1, next: 0, strike: null, seen: e }))
   ]
+  // Стрела — с долей попаданий: «каждая в цель» делало 6 луков сильнее 7 булав (7.0 : 2.3), и группы с булавами бежали
+  // «пустым разменом» от любого держащего лук (бой роя 24.10: 30 луков за раунд — 11 попаданий, 57 хп; бегств 207).
   const strike = (u: Unit, v: Unit): Strike => {
     const a = enemyAttack(u.seen, { position: v.position } as SwarmMember)
-    return { raw: a.raw, kind: a.kind, interval: a.interval, ranged: a.kind !== 'melee', breach: a.breach }
+    return { raw: a.kind === 'projectile' ? a.raw * ARROW_HIT : a.raw, kind: a.kind, interval: a.interval, ranged: a.kind !== 'melee', breach: a.breach }
   }
   const load = (i: number) => units.filter(w => w.hp > 0 && w.target === i).length
   const aim = (u: Unit, tick: number) => {

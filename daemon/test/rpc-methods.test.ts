@@ -10,7 +10,7 @@ const NAMES = [
   'items_near', 'ladder_up', 'tnt_at', 'center_in', 'box_in', 'box_out', 'swarm_hold', 'swarm_pillar',
   'swarm_keep', 'swarm_pose', 'swarm_position', 'ledge_to', 'lance', 'wind_receive', 'wind_boost', 'dig_to', 'wind_leap',
   'undercut', 'peek_shot', 'rescue_config', 'wind_push', 'watch_dangers', 'connect', 'disconnect', 'say', 'goto',
-  'flight_route', 'boat_hop', 'boat_climb', 'parkour', 'follow', 'escort', 'give', 'take', 'stop', 'wait',
+  'flight_route', 'boat_hop', 'boost_lance', 'boost_shot', 'boat_climb', 'parkour', 'follow', 'escort', 'give', 'take', 'stop', 'wait',
   'look_at', 'emote', 'observe', 'perceive', 'players', 'look', 'mine', 'explore', 'dig_down', 'craft', 'place',
   'flint_grind', 'fight', 'assist', 'team_hint', 'fight_yield', 'fight_guard', 'temper', 'play_mode', 'flee', 'stronghold',
   'bucket', 'obsidian', 'pack', 'cache', 'animals', 'golem', 'wool', 'trade', 'blaze', 'fortress', 'pearls',
@@ -27,11 +27,11 @@ const NAMES = [
   'lava_escape',
   // уход от горящего динамита и его цепочки (22.10: rpc/hazards.ts)
   // таран копьём по приказу (23.10: rpc/aerial.ts lance, сцена pvp/try-lance)
-  'dodge_blast', 'clear_web', 'enemy_wind_plan', 'wind_out', 'wind_report'
+  'dodge_blast', 'clear_web', 'enemy_wind_plan', 'wind_out', 'wind_report', 'pearl_ambush', 'pearl_pop', 'pearl_trap', 'pearl_test_up', 'pearl_potion', 'jump_down', 'wing_orbit'
 ]
 
 test('daemon RPC: every method name survives the split into rpc/*.ts, each exactly once', () => {
-  assert.equal(new Set(NAMES).size, 152)
+  assert.equal(new Set(NAMES).size, 161)
   const methods = createMethods({ session: {}, cfg: {}, bus: {}, vision: {}, director: {}, gameClock: {}, state: { dangerWatch: null } })
   assert.deepEqual(Object.keys(methods).sort(), [...NAMES].sort())
   for (const name of NAMES) assert.equal(typeof methods[name], 'function', name)

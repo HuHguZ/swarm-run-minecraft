@@ -128,7 +128,7 @@ export class SwarmBoard {
   }
   observe(source: string, seenAt: number, input: EnemyObservation): boolean {
     const now = this.now()
-    if (!this.alive(source) || input.visible !== true || !input.id || this.members.has(input.id) || !validPosition(input.position) || !Number.isFinite(seenAt) || seenAt > now || seenAt + this.enemyTtlMs <= now) return false
+    if (!this.alive(source) || input.visible !== true && input.nametag !== true || !input.id || this.members.has(input.id) || !validPosition(input.position) || !Number.isFinite(seenAt) || seenAt > now || seenAt + this.enemyTtlMs <= now) return false
     const seen: Omit<SharedEnemy, 'sources'> = { id: input.id, position: position(input.position), seenAt, source }
     if (input.velocity && validPosition(input.velocity)) seen.velocity = position(input.velocity)
     if (input.equipment) {
@@ -145,6 +145,13 @@ export class SwarmBoard {
       (!proof.healing || Number.isFinite(proof.healing.event) && Number.isFinite(proof.healing.ago) && proof.healing.ago >= 0 && Number.isFinite(proof.healing.absorption) && proof.healing.absorption >= 0 && proof.healing.absorption <= absorptionMax) &&
       proof.hits.every(h => Number.isFinite(h.ago) && h.ago >= 0 && h.ago <= 8000 && Number.isFinite(h.damage) && h.damage >= 0 && h.damage <= 1000 && Number.isFinite(h.lowDamage) && h.lowDamage >= 0 && h.lowDamage <= h.damage && (h.minDamage === undefined || Number.isFinite(h.minDamage) && h.minDamage >= 0 && h.minDamage <= h.damage) && Number.isFinite(h.healed) && h.healed >= 0 && h.healed <= proof.healed)) seen.hitProof = copy(proof)
     const sources = this.sightings.get(input.id) ?? new Map()
+    // Ник сквозь стену (swarm-senses): место свежее, а снаряжение и угроза — из последнего прямого наблюдения.
+    if (input.nametag === true) {
+      const last = [...sources.values()].sort((a, b) => b.seenAt - a.seenAt)[0]
+      if (last?.equipment) seen.equipment = last.equipment
+      if (last?.threat) seen.threat = last.threat
+      if (last?.hpEstimate) seen.hpEstimate = last.hpEstimate
+    }
     if ((sources.get(source)?.seenAt ?? -Infinity) > seenAt) return false
     sources.set(source, seen); this.sightings.set(input.id, sources)
     if (seen.hitProof?.healing) {

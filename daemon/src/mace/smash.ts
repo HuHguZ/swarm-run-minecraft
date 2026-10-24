@@ -83,7 +83,7 @@ function diagText (dg) {
 // после посадки. Заряд с земли и сразу прыжок: не наследуем +0.42 вверх.
 // Всплеск в 0.25 над полом, толчок «от центра к глазам» — вверх, дальше рулим к нему.
 // stillOk() — пока копится заряд булавы, он не ушёл и не поднял щит.
-export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e), chain = null }: any = {}) {
+export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e), chain = null, ready = null }: any = {}) {
   const out: any = { launched: false, hit: false, swung: false, note: '' }
   install(bot)
   const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
@@ -196,7 +196,7 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
   if (!launched) { bot._ndWind = null; await restoreOff(); out.note = 'булава: всплеск не поднял (' + diagText(dg) + ')'; out.why = diagText(dg); return out }
   out.launched = true
   if (stats) stats.launched++
-  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp, chain })
+  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp, chain, ready })
   const peak = r.peak - y0
   out.peak = Math.round(peak * 100) / 100
   if (stats) stats.peaks.push(out.peak)

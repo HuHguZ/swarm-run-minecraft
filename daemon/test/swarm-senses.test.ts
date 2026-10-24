@@ -16,15 +16,30 @@ test('swarm sight uses duel rays, never enemy health, inventory or enchantment l
   assert.equal('hp' in seen[0], false)
   wall = true
   enemy.position = new Vec3(3, 64, 2)
+  // За стеной — только ник: место без снаряжения из пакетов и не видимая цель.
+  const tag = swarmSightings(bot)
+  assert.deepEqual(tag.map(e => [e.id, e.visible, e.nametag]), [['Foe', false, true]])
+  assert.deepEqual(tag[0].position, { x: 3, y: 64, z: 2 })
+})
+
+test('a sneaking or invisible player behind a wall shows no nametag', () => {
+  const flags = { 0: 0 }
+  const enemy = { id: 2, username: 'Foe', type: 'player', position: new Vec3(3, 64, 0), metadata: flags, equipment: [] }
+  const bot = { entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: { 2: enemy }, blockAt: () => ({ name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }) }
+  assert.equal(swarmSightings(bot).length, 1)
+  flags[0] = 0x02
+  assert.deepEqual(swarmSightings(bot), [])
+  flags[0] = 0x20
   assert.deepEqual(swarmSightings(bot), [])
 })
 
 test('unknown chunks and failed rays cannot reveal an enemy', () => {
   const enemy = { id: 2, username: 'Foe', type: 'player', position: new Vec3(3, 64, 0) }
   const bot = { entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: { 2: enemy }, blockAt() { return null } }
-  assert.deepEqual(swarmSightings(bot), [])
+  // Неизвестный чанк и сорванный луч не дают прямой видимости — только ник.
+  assert.deepEqual(swarmSightings(bot).filter(e => e.visible), [])
   bot.blockAt = () => { throw new Error('unloaded') }
-  assert.deepEqual(swarmSightings(bot), [])
+  assert.deepEqual(swarmSightings(bot).filter(e => e.visible), [])
 })
 
 test('known swarm allies are excluded before visibility, position or equipment reads while enemies remain observed', () => {

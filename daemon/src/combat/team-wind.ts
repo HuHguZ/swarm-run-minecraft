@@ -309,9 +309,12 @@ async function waitTick(bot: any, ctl: any): Promise<boolean> {
   await bot.waitForTicks(1)
   return !ctl.aborted && !!bot.entity && bot.health > 0
 }
+// Ждущего подброса бьют (стрела, огонь, меч) — ожидание снято: сильный бот 14 с стоял в wind_receive под стрелами с «Огнём»
+// и сгорел (игра пользователя 25.10).
 async function waitStart(bot: any, ctl: any, tick: number) {
   if (!Number.isSafeInteger(tick) || worldTick(bot) === null || worldTick(bot)! >= tick) return false
-  while (worldTick(bot)! < tick) if (!(await waitTick(bot, ctl))) return false
+  const hp0 = bot.health ?? 20
+  while (worldTick(bot)! < tick) if (!(await waitTick(bot, ctl)) || (bot.health ?? 20) < hp0 - 1) return false
   return worldTick(bot)! <= tick + 1
 }
 

@@ -302,22 +302,22 @@ export function riptideArc(level: number, from: Point, target: Point, maxApex = 
   return riptideArcs(level, from, target, maxApex, [0])[0] ?? null
 }
 /** All acceptable arcs, the course also turned by the given offsets (around allies in the spin path): lowest first per course. */
-export function riptideArcs(level: number, from: Point, target: Point, maxApex = Infinity, turns = [0, .25, -.25, .5, -.5]) {
-  const direct = Math.atan2(-(target.x - from.x), -(target.z - from.z)), out: { yaw: number; pitch: number; miss: number; apex: number }[] = []
+export function riptideArcs(level: number, from: Point, target: Point, maxApex = Infinity, turns = [0, .25, -.25, .5, -.5], minApex = 5.8) {
+  const direct = Math.atan2(-(target.x - from.x), -(target.z - from.z)), out: { yaw: number; pitch: number; miss: number; apex: number; ticks: number }[] = []
   for (const turn of turns) {
     const yaw = direct + turn
-    let best: { yaw: number; pitch: number; miss: number; apex: number } | null = null
-    for (let pitch = 1.4; pitch >= .3; pitch -= .05) {
+    let best: { yaw: number; pitch: number; miss: number; apex: number; ticks: number } | null = null
+    for (let pitch = 1.4; pitch >= .1; pitch -= .05) {
       const v0 = riptideImpulse(level, yaw, pitch)
       if (!v0) continue
-      let p = { x: from.x, y: from.y + 1.2, z: from.z }, v = { x: v0.x, y: v0.y, z: v0.z }, apex = p.y, miss = Infinity
+      let p = { x: from.x, y: from.y + 1.2, z: from.z }, v = { x: v0.x, y: v0.y, z: v0.z }, apex = p.y, miss = Infinity, ticks = 0
       for (let t = 0; t < 80; t++) {
         p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z }; v = { x: v.x * .91, y: (v.y - .08) * .98, z: v.z * .91 }
         apex = Math.max(apex, p.y)
-        if (v.y < 0 && p.y <= target.y + 2.5) { miss = Math.hypot(p.x - target.x, p.z - target.z); break }
+        if (v.y < 0 && p.y <= target.y + 2.5) { miss = Math.hypot(p.x - target.x, p.z - target.z); ticks = t + 1; break }
       }
       const high = apex - target.y
-      if (high >= 5.8 && high <= maxApex && miss <= 2.5 && (!best || high < best.apex)) best = { yaw, pitch, miss, apex: high }
+      if (high >= minApex && high <= maxApex && miss <= 2.5 && (!best || high < best.apex)) best = { yaw, pitch, miss, apex: high, ticks }
     }
     if (best) out.push(best)
   }

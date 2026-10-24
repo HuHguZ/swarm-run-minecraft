@@ -18,7 +18,9 @@ export function pearlLanding(world: { blockAt(p: Vec3): any }, from: Vec3, veloc
     let unknown = false
     const seen = { blockAt(q: Vec3) { const b = world.blockAt(q); if (!b) unknown = true; return b } }
     const hit = pick.blockOnRay(seen, p, v.scaled(1 / len), len)
-    if (hit) return { tick, at: p.plus(v.scaled(hit.t / len)), block: hit.pos, velocity: v }
+    // Владелец появляется в oldPosition() жемчуга — где тот был в начале тика удара (ThrownEnderpearl.onHit 1.21.11, javap
+    // codex-lab/pearl), а не в точке касания: под углом это до шага (~1.5 бл.) раньше и выше. contact — касание блока.
+    if (hit) return { tick, at: p.clone(), contact: p.plus(v.scaled(hit.t / len)), block: hit.pos, velocity: v }
     if (unknown) return null
     p = p.plus(v)
   }
@@ -41,12 +43,14 @@ export function enemyPearls(bot: any) {
         .filter(p => p?.position && p !== own && p.username && p.position.offset(0, 1.62, 0).distanceTo(e.position) <= 3)
         .sort((a, b) => a.position.distanceTo(e.position) - b.position.distanceTo(e.position))[0]
       owner = thrower?.username || ''
-      owners.set(e, owner)
+      // Не угадал хозяина с первого взгляда — пробовать на следующих (кэш '' прятал жемчуг навсегда).
+      if (owner) owners.set(e, owner)
     }
     if (!owner || owner === bot.username || isAlly(bot, owner)) continue
     const land = pearlLanding({ blockAt: p => bot.blockAt(p, false) }, e.position, e.velocity)
     if (land) out.push({ id: e.id, owner, at: { x: +land.at.x.toFixed(2), y: +land.at.y.toFixed(2), z: +land.at.z.toFixed(2) }, eta: land.tick,
-      stasis: pearlStasis({ x: land.at.x, y: land.at.y + 2.99, z: land.at.z }, land.velocity, 3).caught })
+      contact: { x: +land.contact.x.toFixed(2), y: +land.contact.y.toFixed(2), z: +land.contact.z.toFixed(2) }, block: { x: land.block.x, y: land.block.y, z: land.block.z },
+      stasis: pearlStasis({ x: land.contact.x, y: land.contact.y + 2.99, z: land.contact.z }, land.velocity, 3).caught })
   }
   return out
 }

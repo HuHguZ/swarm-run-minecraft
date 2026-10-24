@@ -215,7 +215,11 @@ function jab (bot, e, { abortIf = null }: any = {}) {
 // 2 бл. Когда начинать — chargeWindow ниже; здесь — бросить сразу, как окно
 // упущено: проскочили (ближе 2 без попадания) или он уходит быстрее, чем
 // догоняем (отн. скорость < 4.6 четыре тика подряд).
-async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, vel = null }: any = {}) {
+// stand — стоять с копьём и ждать чужого толчка (стрела «Отдачи» своего, combat/arrow-boost): не бежать — касание с
+// бега даёт слабый урон и 10 тиков перезарядки по нему; проверка «уходит быстрее» — только после толчка (> 0.5 бл/т).
+// Ждать — прыгая на месте: толчок, пойманный на земле, сервер и клиент гасят трением земли 0.546 (замер 24.10: «Отдача II»
+// 1.6 → 0.88 в пакете → 0.48), в воздухе — 0.91.
+async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, vel = null, stand = false }: any = {}) {
   install(bot)
   const held = bot.heldItem
   if (!held || !isSpear(held.name)) return { ok: false, why: 'копья нет в руке' }
@@ -223,6 +227,7 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
   let hit = false
   let why = null
   let slow = 0
+  let vmax = 0
   const onHurt = (victim, src) => { if (victim?.id === e.id && src && bot.entity && src.id === bot.entity.id) { hit = true; if (onHit) { try { onHit() } catch {} } } }
   bot.on('entityHurt', onHurt)
   const t0 = gameClock.now()
@@ -231,16 +236,21 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
   try {
     while (gameClock.now() - t0 < maxMs && !(ctl && ctl.aborted) && e.isValid !== false) {
       const a = aimAt(bot, e)
-      if (!teamSafe(bot, a.yaw, Math.abs(a.pitch) > 0.2 ? a.pitch : 0)) { why = 'союзник на луче копья'; break }
-      await bot.look(a.yaw, Math.abs(a.pitch) > 0.2 ? a.pitch : 0, true).catch(() => {})
-      const f = safe ? safe('forward') : true
+      // В прыжке (stand) — точный наклон: горизонтальный луч из глаз на вершине прыжка идёт над его головой.
+      const pitch = stand || Math.abs(a.pitch) > 0.2 ? a.pitch : 0
+      if (!teamSafe(bot, a.yaw, pitch)) { why = 'союзник на луче копья'; break }
+      await bot.look(a.yaw, pitch, true).catch(() => {})
+      const f = !stand && (safe ? safe('forward') : true)
       bot.setControlState('forward', f)
       bot.setControlState('sprint', f && (bot.food ?? 20) > 6)
       const el = gameClock.now() - t0
+      if (bot.entity) vmax = Math.max(vmax, Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z))
       if (hit && el > delayMs) break
+      if (stand) bot.setControlState('jump', vmax < 0.5)
+      if (stand && vmax < 0.5) { await sleep(TICK_MS); continue }
       if (!hit && el > delayMs + 100 && bot.entity) {
         const eye = bot.entity.position.offset(0, EYE, 0)
-        const bare = rayBox(eye, dirOf(a.yaw, 0), e, 0)
+        const bare = rayBox(eye, dirOf(a.yaw, pitch), e, 0)
         if (!bare || bare.tOut < MIN_R) { why = 'проскочил'; break }
         // Отн. скорость вдоль взгляда (бл/тик): моя минус его.
         const dir = dirOf(a.yaw, 0)
@@ -255,9 +265,10 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
     bot.deactivateItem()
     bot.setControlState('forward', false)
     bot.setControlState('sprint', false)
+    if (stand) bot.setControlState('jump', false)
     bot.removeListener('entityHurt', onHurt)
   }
-  return { ok: true, hit, ms: gameClock.now() - t0, why }
+  return { ok: true, hit, ms: gameClock.now() - t0, why, vmax: Math.round(vmax * 100) / 100 }
 }
 
 // Когда начинать разгон (2026-09-26): рамка его должна войти в луч 2.0–4.5

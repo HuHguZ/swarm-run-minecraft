@@ -55,6 +55,16 @@ function connect (this: Session, { bootstrapPaused }: any = {}): Promise<any> {
       // Имена атрибутов в пакете (скорость и прочее) — gamedata.js.
       bot.once('inject_allowed', () => { try { gamedata.fixAttributes(bot) } catch {} })
       bot.once('inject_allowed', () => { try { gamedata.fixBreath(bot) } catch {} })
+      // Луч с NaN/бесконечностью (скорость тела NaN) — вечный цикл RaycastIterator: сравнения с NaN ложны, дистанция не
+      // кончается (бой роя 24.10: демон крутил pearlOut → throw.landing → raycast 70 минут, тело стояло). Мир заново
+      // создаётся при смене измерения — обёртка на каждом spawn.
+      bot.on('spawn', () => {
+        const w: any = bot.world
+        if (!w || w._ndRayGuard) return
+        const ray = w.raycast.bind(w); w._ndRayGuard = true
+        const ok = (v: any) => v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)
+        w.raycast = (from: any, dir: any, range: number, match?: any) => ok(from) && ok(dir) && Number.isFinite(range) ? ray(from, dir, range, match) : null
+      })
       if (process.env.ND_SLIME_SIZE === '1') bot.once('inject_allowed', () => { try { gamedata.fixSlimeSize(bot) } catch {} })
       bot.loadPlugin(pathfinder)
 
@@ -271,6 +281,9 @@ function wire (this: Session): void {
     try { (require('../sprintjump') as typeof import('../sprintjump')).install(bot) } catch {}
     // Свет чанков — со своей перестановкой x (prismarine-chunk 1.41, lightfix.js).
     ;(require('../lightfix') as typeof import('../lightfix')).install(bot)
+    // Часы удара и фильтр ходов с NaN (melee.install) — сразу, а не с первым боем: без боя тело слало ход с NaN, и Paper
+    // выкидывал «Invalid move player packet received» (бой роя 24.10: 30u, 30r).
+    ;(require('../melee') as typeof import('../melee')).install(bot)
     // Заряженный арбалет — только прицельным выстрелом (ranged.guardCrossbow).
     ;(require('../ranged') as typeof import('../ranged')).guardCrossbow(bot)
     // Install after tool/pick wrappers; attach for ALL intents, including gold,

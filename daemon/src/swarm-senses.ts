@@ -15,9 +15,23 @@ export function swarmSightings(bot: any, allies: string[] = []) {
   const now = clock.now()
   const remembered = gearMemory.get(bot) || new Map()
   for (const e of Object.values(bot.entities || {}) as any[]) {
-    if (e === bot.entity || !e?.username || excluded.has(e.username) || !seesPlayer(bot, e)) continue
+    if (e === bot.entity || !e?.username || excluded.has(e.username)) continue
     const position = { x: e.position.x, y: e.position.y, z: e.position.z }
     if (!Object.values(position).every(Number.isFinite)) continue
+    // Ник игрока виден сквозь стены (клиент рисует его поверх блоков в 64 бл.), если он не крадётся и не невидим — это видит и
+    // человек (пользователь 25.10: «вылезаю с другого этажа — как будто не видят мой ник заранее»). Только место и движение:
+    // снаряжение за стеной не видно, visible: false — не цель для выстрела и броска.
+    if (!seesPlayer(bot, e)) {
+      const flags = Number(e.metadata?.[0]) || 0
+      if (flags & 0x02 || flags & 0x20 || bot.entity.position.distanceTo(e.position) > 64) continue
+      const old = before.get(e.id), ticks = old && old.now < now ? (now - old.now) / 50 : 0
+      const velocity = ticks ? Object.fromEntries(['x', 'y', 'z'].map(k => [k, (position[k] - old.position[k]) / ticks])) : { x: 0, y: 0, z: 0 }
+      const known = remembered.get(e.id)?.raw === e ? remembered.get(e.id).projection?.equipment || [] : []
+      const weapon = known[0]?.name || null
+      sightings.push({ id: e.username, position, velocity, equipment: { weapon, armor: known.slice(2, 6).map(it => it?.name).filter(Boolean) }, threat: /bow|crossbow/.test(weapon || '') ? 'bow' : 'melee', visible: false, nametag: true, seenAt: now })
+      current.set(e.id, { position, now })
+      continue
+    }
     const old = before.get(e.id)
     const ticks = old && old.now < now ? (now - old.now) / 50 : 0
     const velocity = ticks ? Object.fromEntries(['x', 'y', 'z'].map(k => [k, (position[k] - old.position[k]) / ticks])) : { x: 0, y: 0, z: 0 }

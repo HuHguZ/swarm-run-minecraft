@@ -190,7 +190,10 @@ function incoming (bot, { horizonTicks = 24, hitRadius = 0.9 }: any = {}) {
   for (const raw of ((Object.values(bot.entities) as any[]) as any)) {
     if (!raw || !raw.position || !PROJECTILES.has(raw.name)) continue
     const e = projectileView(bot, raw, now)
-    if (!e || bot._ndThrown?.get(raw.id)?.own === true) continue
+    const th = bot._ndThrown?.get(raw.id)
+    if (!e || th?.own === true) continue
+    // Разгон стрелой (combat/arrow-boost): стрела того, чьего толчка жду, — не угроза, уворот её и сорвёт.
+    if (th?.rawOwner && bot._ndBoostFrom?.has(bot.entities[th.rawOwner]?.username)) continue
     if (e.position.distanceTo(me) > 48) continue
     const vel = sample(e, now)
     if (!vel || HARMLESS.has(e.name)) continue
@@ -287,7 +290,8 @@ function thrownTracker (bot) {
     if (!own && !seesPlayer(bot, body)) return
     const owner = bot.entities[Number(data.objectData)]
     const knownOwner = own ? bot.entity.id : owner && seesPlayer(bot, owner) ? owner.id : 0
-    if (v) T.set(data.entityId, { name: types.get(data.type), p: { x: data.x, y: data.y, z: data.z }, v, t0: gameClock.now(), owner: knownOwner, own })
+    // rawOwner — id стрелка без проверки видимости: только чтобы узнать «свою» стрелу разгона (лучник за спиной не виден).
+    if (v) T.set(data.entityId, { name: types.get(data.type), p: { x: data.x, y: data.y, z: data.z }, v, t0: gameClock.now(), owner: knownOwner, rawOwner: Number(data.objectData) || 0, own })
   })
   bot.on('entityGone', e => { if (e) T.delete(e.id) })
   return T

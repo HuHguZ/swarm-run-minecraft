@@ -232,11 +232,25 @@ export async function bowTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (prepB.why) used('стрела: ' + prepB.why)
     }
     let drawnMs = 0
+    // Лук с «Отдачей», он у обрыва (до 3 бл.): держать натянутым до тика, когда попадание сбросит его (combat/punch-out),
+    // не дольше holdMaxMs; щит к нам — держать, как и прежде.
+    const bowItem = findItem(bot, i => i.name === 'bow'), punch = (bowItem?.enchants || []).find((e: any) => e.name === 'punch')?.lvl || 0
+    // Модуль — только при «Отдаче»: тесты-сцены исполняют ступень в vm без require.
+    const po: typeof import('../combat/punch-out') = punch > 0 && ctx.prof.player ? require('../combat/punch-out') : null
+    const edgeAim = !!po && po.nearDrop(bot, ctx.entity)
+    let punchPlan: any = null
+    const punchWait = () => {
+      if (!edgeAim) return false
+      const ba: typeof import('../bow/ballistics') = require('../bow/ballistics')
+      const v = ctx.track.vel(), sol = ba.aim(bot.entity.position.offset(0, EYE - .1, 0), (t: number) => ctx.entity.position.offset(v.x * t, 0, v.z * t))
+      punchPlan = sol ? po.punchDrops(bot, ctx.entity, punch, sol.ticks, v) : null
+      return !punchPlan?.drop
+    }
     const shot = await bowShoot(bot, ctx.entity, {
       velFn: () => ctx.track.vel(),
       follow: false,
       drawMs: prepB.drawMs || undefined,
-      holdWhile: ctx.prof.player ? () => mace.shieldAtUs(bot, ctx.entity) : null,
+      holdWhile: ctx.prof.player ? () => mace.shieldAtUs(bot, ctx.entity) || punchWait() : null,
       onHit: () => { st.arrowHits = (st.arrowHits || 0) + 1 },
       shouldStop: () => ctl.aborted || (closeBow ? !closeBowWorth(Math.max(TICK_MS, (prepB.drawMs || BOW_DRAW_MS) - drawnMs)) : ctx.entity.position.distanceTo(bot.entity.position) < closeAt) ||
         (Object.values(bot.entities) as any[]).some((e : any) => e && e.name === 'fireball' && e.position && e.position.distanceTo(bot.entity.position) < 7) || (theyUp && reachFrom(bot.entity.position.offset(0, EYE, 0), ctx.entity) <= HIT_REACH) || (FIX && maceNow()),
@@ -256,7 +270,7 @@ export async function bowTurn (ctx: DuelCtx, turn: TurnFrame) {
     ctx.aim = 'target'
     switched(before)
     ctx.failedBow = shot.shot || shot.blocked ? null : { inputs: shotInputs(), why: shot.why || 'arrow_unconfirmed' }
-    if (shot.shot) { delete blockedShotTargets.bow; used('выстрел из лука'); st.arrows = (st.arrows || 0) + 1 }
+    if (shot.shot) { delete blockedShotTargets.bow; used(edgeAim ? `лук «Отдача ${punch}»: он у обрыва — ${punchPlan?.drop ? 'выстрел в тик, когда сбросит' : 'не дождался сброса, выстрел'}` : 'выстрел из лука'); st.arrows = (st.arrows || 0) + 1; if (edgeAim && punchPlan?.drop) st.punchOut = (st.punchOut || 0) + 1 }
     bowShotBlocked(ctx, shot)
     await holdWeapon()
     return NEXT

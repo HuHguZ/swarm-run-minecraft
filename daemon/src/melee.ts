@@ -174,7 +174,7 @@ function install (bot) {
     // Ход с NaN/бесконечностью сервер не прощает: Paper кикает «Invalid move player packet received»
     // (s7-arms 06.10: 6 киков за 20 минут гонки вооружений). Не слать и сказать, откуда взялся.
     if ((name === 'position' || name === 'position_look' || name === 'look') && params &&
-        ['x', 'y', 'z', 'yaw', 'pitch'].some(k => k in params && !Number.isFinite(params[k]))) {
+        ['x', 'y', 'z', 'yaw', 'pitch'].some(k => k in params && (!Number.isFinite(params[k]) || k !== 'yaw' && k !== 'pitch' && Math.abs(params[k]) > 3e7))) {
       M.nanDropped = (M.nanDropped || 0) + 1
       if (gameClock.wall.now() - nanAt > 2000) {
         nanAt = gameClock.wall.now()

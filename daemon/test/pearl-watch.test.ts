@@ -20,8 +20,10 @@ test('pearl landing follows the native gravity → drag → move order and stops
   let p = from.clone(), w = v.clone(), tick = 0
   while (true) { tick++; w = new Vec3(w.x, w.y - .03, w.z).scaled(.99); if (p.y + w.y <= 1) break; p = p.plus(w) }
   assert.equal(land.tick, tick)
-  assert.ok(Math.abs(land.at.y - 1) < 1e-6, JSON.stringify(land))
-  assert.ok(land.at.x > p.x && land.at.x < p.x + w.x + 1e-9)
+  assert.ok(Math.abs(land.contact.y - 1) < 1e-6, JSON.stringify(land))
+  assert.ok(land.contact.x > p.x && land.contact.x < p.x + w.x + 1e-9)
+  // Owner appears at the pearl's position at the start of the hit tick (ThrownEnderpearl.onHit → oldPosition()).
+  assert.ok(land.at.distanceTo(p) < 1e-9, JSON.stringify(land))
   // Thrown over the edge into unknown cells: no confident landing.
   assert.equal(pearlLanding(floor, new Vec3(45, 3, 0), new Vec3(2, .4, 0)), null)
 })
@@ -36,7 +38,8 @@ test('only a visible hostile pearl is reported, with its thrower guessed from th
   const seen = enemyPearls(bot)
   assert.equal(seen.length, 1)
   assert.equal(seen[0].owner, 'Red')
-  assert.ok(seen[0].eta > 0 && Math.abs(seen[0].at.y - 1) < .01)
+  // Point of appearance — the pearl one step before touching the floor (oldPosition), so above y = 1 by less than a step.
+  assert.ok(seen[0].eta > 0 && seen[0].at.y >= 1 && seen[0].at.y < 2.6, JSON.stringify(seen[0]))
   const ally: any = { ...bot, _ndSwarmAllies: ['Red'], entities: { 10: { ...pearl, id: 10 } } }
   assert.equal(enemyPearls(ally).length, 0, 'a teammate pearl is not an ambush target')
 })

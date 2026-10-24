@@ -23,10 +23,11 @@ function windSight(bot) {
   }
   return sight
 }
-function busy(session) {
+// flying — рефлекс сброса на подлёте (wind-out RANGE_FLY): полёт на элитрах и fly_to бросок не запрещают.
+function busy(session, flying = false) {
   const c = session.current, d = session.bot?._ndMaceDefense
-  return !!reflex.owner(session) || !!session.bot?.usingHeldItem || !!session.bot?.entity?.elytraFlying ||
-    !!c && !c.ctl?.aborted && (escape.test(c.name) || c.name === 'swarm_hold' && !!(c.params?.whileSmash || c.params?.whileDraw) ||
+  return !!reflex.owner(session) || !!session.bot?.usingHeldItem || !flying && !!session.bot?.entity?.elytraFlying ||
+    !!c && !c.ctl?.aborted && (escape.test(c.name) && !(flying && c.name === 'fly_to') || c.name === 'swarm_hold' && !!(c.params?.whileSmash || c.params?.whileDraw) ||
       c.name === 'fight' && d?.current === c && !d.ctl?.aborted && d.until > clock.now())
 }
 function own(bot): WindReport & { gameTick: number | null } {
@@ -39,7 +40,7 @@ export function enemyWindReport(session, p: any = {}) {
   const bot = session.bot, gameTick = bot?.entity ? worldTick(bot) : null
   if (!bot?.entity || gameTick === null || !(bot.health > 0)) return { ok: false, ready: false, gameTick, why: 'shared_world_tick_required' }
   if (p.target) windSight(bot).observe(bot.players?.[p.target]?.entity)
-  return { ok: true, ready: !busy(session) && hands.windReady(bot), gameTick, report: own(bot) }
+  return { ok: true, ready: !busy(session, !!p.flying && !!bot.entity.elytraFlying) && hands.windReady(bot), gameTick, report: own(bot) }
 }
 const reportsValid = (reports, tick) => Array.isArray(reports) && reports.length <= 32 && reports.every(r =>
   typeof r?.id === 'string' && r.id.length <= 64 && finite(r.position) && finite(r.velocity) && Number.isSafeInteger(r.gameTick) && Math.abs(tick - r.gameTick) <= 20)

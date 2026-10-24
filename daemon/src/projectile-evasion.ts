@@ -12,7 +12,8 @@ export function install (session, free) {
   const wanted = Object.fromEntries(keys.map(k => [k, !!bot.getControlState(k)]))
   const raw = bot.setControlState.bind(bot), activate = bot.activateItem?.bind(bot), deactivate = bot.deactivateItem?.bind(bot)
   let mix: Record<string, boolean> = {}, closed = false, shield: any = null, memo: any = null, stamp = -Infinity, guard: any, ownUse = false
-  const enabled = () => !closed && session.bot === bot && !!bot.entity && (bot.health ?? 20) > 0 && !session.current?.ctl?.aborted && free()
+  // Ждёт толчка стрелой своего (combat/arrow-boost) — сам встал под выстрел: шаг с линии сорвёт разгон.
+  const enabled = () => !closed && session.bot === bot && !!bot.entity && (bot.health ?? 20) > 0 && !session.current?.ctl?.aborted && !bot._ndBoostFrom && free()
   const observe = () => {
     const now = clock.now()
     if (stamp === now && memo) return memo
@@ -65,15 +66,28 @@ export function install (session, free) {
       const d = observe(), shot = [...d.arrows, ...d.potions].filter(p => p.ticks <= 12).sort((a, b) => a.ticks - b.ticks)[0]
       const threat = shot || d.aims[0], now = clock.now(), me = bot.entity.position
       if (shield && (now >= shield.until || shield.charge.why())) release()
+      // На меня натянут лук, а щит в рюкзаке — в левую руку (игра пользователя 25.10: у 7 из 13 живых щит в рюкзаке, рефлекс
+      // ниже его не видел, лук «Сила V» убивал за 2–3 стрелы). Тотем при хп ≤ 16 остаётся (как combat/shield.ts).
+      const off = bot.inventory?.slots?.[45]?.name
+      if (d.aims.length && off !== 'shield' && !(off === 'totem_of_undying' && (bot.health ?? 20) <= 16) && !bot._ndShieldEquip &&
+          !bot.currentWindow && !session.armorBusy && !bot._ndUse?.cur && !bot.usingHeldItem) {
+        const sh = bot.inventory.items().find(i => i.name === 'shield')
+        if (sh) { bot._ndShieldEquip = true; Promise.resolve(bot.equip(sh, 'off-hand')).catch(() => {}).finally(() => { bot._ndShieldEquip = false }) }
+      }
       const shieldShot = d.arrows.find(p => p.blockable && p.ticks <= 12 && p.from &&
         -(p.from.x - me.x) * Math.sin(bot.entity.yaw) - (p.from.z - me.z) * Math.cos(bot.entity.yaw) > 0)
-      if (shieldShot && bot.inventory?.slots?.[45]?.name === 'shield' && now >= (bot._ndShieldDisabledUntil || 0)) {
-        if (shield) shield.until = Math.max(shield.until, now + (shieldShot.ticks + 2) * 50)
+      // Лук натянут на меня спереди — щит заранее и держать, пока целится: подъём щита — 5 тиков, а стрела «Силы V» с 20 бл.
+      // летит 6–7, ответ на летящую не успевал (игра пользователя 25.10). Сзади — уворот, как раньше.
+      const front = q => !!q && -(q.x - me.x) * Math.sin(bot.entity.yaw) - (q.z - me.z) * Math.cos(bot.entity.yaw) > 0
+      const aimed = d.aims.find(a => front(a.at) && Math.hypot(a.at.x - me.x, a.at.z - me.z) <= 40)
+      const guardFor = shieldShot ? shieldShot.ticks + 2 : aimed ? 6 : 0
+      if (guardFor && bot.inventory?.slots?.[45]?.name === 'shield' && now >= (bot._ndShieldDisabledUntil || 0)) {
+        if (shield) shield.until = Math.max(shield.until, now + guardFor * 50)
         else if (activate && !bot._ndUse?.cur && !bot.usingHeldItem && !bot.currentWindow && !session.armorBusy) {
           const charge = observeCharge(bot, { item: 'shield', hand: 'off-hand' })
           ownUse = true
           try {
-            if (charge.start()) shield = { charge, until: now + (shieldShot.ticks + 2) * 50, use: bot._ndUse?.cur }
+            if (charge.start()) shield = { charge, until: now + guardFor * 50, use: bot._ndUse?.cur }
           } finally { ownUse = false; if (shield?.charge !== charge) charge.close() }
         }
       }

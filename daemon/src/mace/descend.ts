@@ -12,7 +12,7 @@ import { reachFrom, floorTop, landing, NO_KEYS, AIR_KEYS, fallCost } from './wor
 // бонус растёт с высотой. Своей скоростью по вертикали и сносом по
 // горизонтали считаем, где окажемся; клавиши — относительно взгляда на него.
 // Без спринта: спринт снимает крит.
-export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null, initialHit = null }: any = {}) {
+export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null, initialHit = null, ready = null }: any = {}) {
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
     let peak = bot.entity.position.y
@@ -158,7 +158,8 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
         if (process.env.ND_DEBUG_MACE) console.log('[mace]', JSON.stringify({ t: gameClock.now() - t0, y: +(p.y - top).toFixed(2), vy: +v.y.toFixed(3), fall: +(peak - p.y).toFixed(2), r: +rNow.toFixed(2), rN: +rNext.toFixed(2), landNext, dh: +dh.toFixed(2), ey: +(ep.y - top).toFixed(2) }))
         // Удар — только если он под прицелом, как у клиента: сквозь крышу его
         // коробки или стенку сервер удар бы принял, а игрок так не может.
-        if (v.y < 0 && fall > SMASH_MIN + 0.1 && rNow <= REACH - 0.05 && (landNext || rNext > REACH - 0.1 || fall > 14) && pick.canHit(bot, e, { eye, range: REACH })) {
+        // ready — цели ещё нет на месте (засада жемчуга: падаем в точку его появления) — рулим, но не бьём.
+        if (v.y < 0 && fall > SMASH_MIN + 0.1 && (!ready || ready()) && rNow <= REACH - 0.05 && (landNext || rNext > REACH - 0.1 || fall > 14) && pick.canHit(bot, e, { eye, range: REACH })) {
           const hp0 = telemetryHp(e)
           hit = { fall: Math.round(fall * 100) / 100, r: Math.round(rNow * 100) / 100, hp0, at: gameClock.now(), charged: !!(bot._ndMaceHeldAt && gameClock.now() - bot._ndMaceHeldAt >= 1550), selfHp: bot.health ?? 20 }
           const doHit = () => {

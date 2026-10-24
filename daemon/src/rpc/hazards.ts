@@ -65,6 +65,7 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
       if (p.allies && (!Array.isArray(p.allies) || p.allies.length > 128 || p.allies.some(n => typeof n !== 'string' || n.length > 32))) return { ok: false, cut: 0, left: webs().length, why: 'invalid_allies' }
       const hp0 = bot.health ?? 20
       const threatened = ms => {
+        if (p.force === true) return ''
         if ((bot.health ?? 20) < hp0 || directThreat(bot, p.allies || [], ms)) return 'direct_threat'
         const foes = (Object.values(bot.entities || {}) as any[]).filter(e => e?.username && !(p.allies || []).includes(e.username)).map(e => e.username)
         const smash = (require('../threats') as typeof import('../threats')).smashes(bot, foes)[0]
@@ -158,7 +159,9 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
         })
         // Тесно (галерея, лестница, гребень Колизея; 13.10: «зелья кидаю — стоят»: 19 раз «некуда» за 3 мин): годится и шаг
         // в 1 бл.; совсем некуда, а dropOk (зелье, булава) — спрыгнуть до 6 бл.: падение дешевле вреда II.
-        let pickFrom = all.filter(o => o.run.len >= 2)
+        // minRun — отскок из-под булавы (dangers): пробег короче — не отскок, а щит; тесных шагов тогда не брать.
+        let pickFrom = all.filter(o => o.run.len >= Math.max(2, p.minRun || 0))
+        if (p.minRun && !pickFrom.length) return { ok: false, why: `некуда отскочить на ${p.minRun} бл.` }
         if (!pickFrom.length) pickFrom = all.filter(o => o.run.len >= 1)
         if (!pickFrom.length && p.dropOk) pickFrom = all.map(o => ({ ...o, run: fl.runLength(bot, o.dir, 6, 6, p.arena) })).filter(o => o.run.len >= 1)
         const cands = pickFrom.sort((a, b) => a.c - b.c)

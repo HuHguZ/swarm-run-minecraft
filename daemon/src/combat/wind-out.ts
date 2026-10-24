@@ -16,7 +16,9 @@ const tw = () => require('./team-wind') as typeof import('./team-wind')
 const seenV = (e: any) => (require('../bow/track') as typeof import('../bow/track')).observedVelocity(e) || e.velocity
 
 // Край, от которого вообще считаем: в воздухе — до 12 бл. до края квадрата арены, на земле — 5 (иначе толчок не вынесет).
-const EDGE_AIR = 12, EDGE_GROUND = 5, RANGE = 16, ALLY_R = 7
+// RANGE_AIR — по подброшенному (пользователь 25.10: «подкидывают хорошо и потом перестают кидать»: подброшенный на 50+ бл. уходил
+// дальше 16 бл. от всех, и цепь вставала; «лимиты на радиусы убирай»). В полёте на элитрах — бросок на подлёте (RANGE_FLY).
+const EDGE_AIR = 12, EDGE_GROUND = 5, RANGE = 24, RANGE_AIR = 48, RANGE_FLY = 16, ALLY_R = 7
 // «Шаг цепи»: бросок не выносит сам, но уводит к краю на столько блоков — следующий добьёт (цена — один заряд).
 const CHAIN_PROGRESS = 2, OUT_PROGRESS = 1
 // Жонглирование (пользователь 24.10: «подлетел высоко — закидывают, чтобы поднялся выше и улетел с арены вниз»): высоко
@@ -50,7 +52,7 @@ export function windOutCandidates(bot: any, arena: WindArena) {
   if (!own) return []
   return (Object.values(bot.players || {}) as any[]).map(pl => pl?.entity).filter(e => e?.position && e !== bot.entity && e.username &&
     e.username !== bot.username && !isAlly(bot, e) && bot.players[e.username]?.gamemode !== 3 && bot.players[e.username]?.gamemode !== 1 &&
-    e.position.distanceTo(own) <= RANGE && (edgeRoom(arena, e.position) <= (e.onGround ? EDGE_GROUND : EDGE_AIR) || !e.onGround && heightAbove(bot, e.position) >= HIGH) && seesPlayer(bot, e))
+    e.position.distanceTo(own) <= (bot.entity.elytraFlying ? RANGE_FLY : e.onGround ? RANGE : RANGE_AIR) && (edgeRoom(arena, e.position) <= (e.onGround ? EDGE_GROUND : EDGE_AIR) || !e.onGround && heightAbove(bot, e.position) >= HIGH) && seesPlayer(bot, e))
     .sort((a, b) => edgeRoom(arena, a.position) - edgeRoom(arena, b.position))
 }
 
@@ -129,7 +131,7 @@ export function trampolineDecide(bot: any, own: WindReport) {
 
 // Выпуск в тот же тик, что и расчёт: поворот едет в самом use_item (1.21.11 ServerGamePacketListenerImpl.handleUseItem →
 // absSnapRotationTo), отдельный пакет взгляда и ожидание тика не нужны — прыгающая цель за 1–2 тика уходила с прицела.
-function release(bot: any, shot: { yaw: number; pitch: number }) {
+export function release(bot: any, shot: { yaw: number; pitch: number }) {
   const off = hands.offWind(bot), slot = hands.hotbarIndex(bot, 'wind_charge')
   if (!off && slot < 0) return false
   const back = bot.quickBarSlot
@@ -189,13 +191,13 @@ export function installWindOut(session: any) {
     const cfg = session._rescue
     if (cfg?.arena && bot.entity && bot.health > 0) tryDescend()
     if (busy || !cfg?.arena || (++tick & 1) || !bot.entity || !(bot.health > 0) || process.env.ND_WIND_OUT === '0') return
-    if (!hands.windReady(bot) || bot.entity.elytraFlying || bot.usingHeldItem) return
+    if (!hands.windReady(bot) || bot.usingHeldItem) return
     const arena: WindArena = { ...cfg.arena, killY: Number.isFinite(cfg.killY) ? cfg.killY : undefined }
     if (!windOutCandidates(bot, arena).length) { tryTrampoline(arena); return }
     // Заряд в рюкзаке — сначала в хотбар (фоном), считать бросок — со следующего раза.
     if (!hands.offWind(bot) && hands.hotbarIndex(bot, 'wind_charge') < 0) { busy = true; hands.ensureHotbar(bot, ['wind_charge']).catch(() => {}).finally(() => { busy = false }); return }
     const ex: typeof import('./enemy-wind-execute') = require('./enemy-wind-execute')
-    const report = ex.enemyWindReport(session)
+    const report = ex.enemyWindReport(session, { flying: true })
     if (!report.ok || !report.ready) return
     const t0 = clock.wall.monotonic()
     // Упреждение на свой расчёт: бросок уходит через planMs после кадра, по которому считан (стенд 24.10 14:06: 90–230 мс —

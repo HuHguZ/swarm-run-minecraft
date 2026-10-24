@@ -126,7 +126,8 @@ function plan (bot, to, { arena = undefined, maxTries = Infinity }: any = {}) {
 }
 
 // Исполнение плана тик в тик. Итог: { ok, plan, land, off }.
-async function leap (session, ctl, to, { dryRun = false, arena = undefined }: any = {}) {
+// handoff() — на спуске отдать полёт вызывающему (засада жемчуга: булавой на точку появления), не доводя посадку.
+async function leap (session, ctl, to, { dryRun = false, arena = undefined, handoff = null }: any = {}) {
   const bot = session.bot
   const T = new Vec3(to.x, to.y, to.z)
   const wc0 = bot.inventory.items().find(i => i.name === 'wind_charge')
@@ -159,6 +160,7 @@ async function leap (session, ctl, to, { dryRun = false, arena = undefined }: an
         boom = t + actual.ticks
         await bot.look(v.yaw, 0, true)
       }
+      if (boom >= 0 && t > boom && handoff && bot.entity.velocity.y < 0 && handoff()) return { ok: true, handedOff: true }
       if (boom >= 0 && t > boom) {
         const pos = bot.entity.position
         const steering = wind.windSteer(bot, edges.stateOf(bot, edges.IDLE), T, arena)

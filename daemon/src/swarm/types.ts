@@ -33,6 +33,8 @@ export type HitProof = { healed: number; healing?: { event: number; ago: number;
 export interface EnemyObservation {
   id: string
   visible: boolean
+  // Ник сквозь стену: место без прямой видимости (swarm-senses).
+  nametag?: boolean
   position: SwarmPosition
   velocity?: SwarmPosition
   equipment?: { weapon?: string; armor?: string[]; enchanted?: boolean; unknownArmorSlots?: number }

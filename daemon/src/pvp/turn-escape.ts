@@ -112,7 +112,11 @@ export async function lowHpTurn (ctx: DuelCtx, turn: TurnFrame) {
     ctx.failedChorus = cr?.ok ? null : { inputs: chorusInputs, why: cr?.why || 'chorus_escape_unavailable' }
     if (cr && cr.ok) { await holdWeapon(); return NEXT }
   }
-  const pearlAt = Math.max(retreatAtHealth, 9)
+  // Порог жемчуга — от его удара: булава снимала 11 за раз (20 → 9), и следующий добивал раньше броска (игра пользователя 25.10).
+  // Самый большой удар этого боя + 2, в пределах 9…16.
+  if (Number.isFinite(st.hpPrev) && hp < st.hpPrev) st.maxHit = Math.max(st.maxHit || 0, st.hpPrev - hp)
+  st.hpPrev = hp
+  const pearlAt = Math.max(retreatAtHealth, 9, Math.min(16, (st.maxHit || 0) + 2))
   const pearlForSpace = tempo.ON && ctx.prof.player && canHeal && !tt.safe(tempo.consumeMs('golden_apple')).ok && !(FIX && (st.pearlSpace || 0) >= 2)
   if (!ctx.lastStand && ctx.prof.player && hp <= pearlAt && hp > 6 && (!canHeal || pearlForSpace)) {
     const pearl = findItem(bot, i => i.name === 'ender_pearl')
