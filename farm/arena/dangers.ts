@@ -81,7 +81,7 @@ function dangerContext (ctx: ArenaContext) {
 // Рывок прочь (ctx.dodgeAway): спринт с прыжками, запертому — прокоп выхода; неудачный выход запоминается.
 function installDodgeAway (dz: DangerCtx) {
   const { ctx, log, failures, retry, remember, beginReaction, ownsReaction, endReaction } = dz
-  ctx.dodgeAway = (o, me, from, dist, then: (() => void) | null = null, look: any = null, dropOk = false, digOk = dropOk, maxDrop = 3) => {
+  ctx.dodgeAway = (o, me, from, dist, then: (() => void) | null = null, look: any = null, dropOk = false, digOk = dropOk, maxDrop = 3, minRun = 0) => {
     let ax = me.x - from.x; let az = me.z - from.z; const L0 = Math.hypot(ax, az)
     if (L0 < 0.5) { const a = Math.random() * 2 * Math.PI; ax = Math.cos(a); az = Math.sin(a) } else { ax /= L0; az /= L0 }
     const to = { x: me.x + ax * dist, y: me.y, z: me.z + az * dist }
@@ -89,7 +89,7 @@ function installDodgeAway (dz: DangerCtx) {
     const run = () => {
       const token = beginReaction(o)
       // Рывок — спринт с прыжками (тело: evade), а не путь до точки (12.10: «бегать и прыгать при увороте»); прыгучесть — своя.
-      const evade = () => o.c.call('evade', { dir: { x: ax, z: az }, ticks: Math.max(4, Math.min(26, dist / 0.33)), jump: Math.random() < (o.dodgeStyle?.jumpy ?? 0.75), look, dropOk, maxDrop })
+      const evade = () => o.c.call('evade', { dir: { x: ax, z: az }, ticks: Math.max(4, Math.min(26, dist / 0.33)), jump: Math.random() < (o.dodgeStyle?.jumpy ?? 0.75), look, dropOk, maxDrop, ...(minRun ? { minRun } : {}) })
       evade().then(async r => {
         if (!ownsReaction(o, token)) return
         let d = r?.detail || r
@@ -181,7 +181,10 @@ function onDanger (dz: DangerCtx, b, m) {
   // webTurn (резка/вода/жемчуг/щит по цене). Игра пользователя 24.10: «застревают в паутине» — clear_web отказывал
   // direct_threat 25 раз подряд, а боя никто не начинал.
   const webFoe = webFoes.filter(e => !e.mob && e.d <= 8).sort((a, c) => a.d - c.d)[0]
-  if (wb && !wbE.handled && !webFight && (webThreat || wbE.threatened) && webFoe && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(b.webRun && reactions.get(b) === b.webRun)) {
+  // Режет паутину, а человек подошёл на удар — резку бросить и драться из паутины: бот 12 с «срезал» силой под булавой и не
+  // отвечал (игра пользователя 24.10).
+  if (wb && webFoe && webFoe.d <= 4.5 && b.last?.m === 'clear_web' && b.last.pending !== false) wbE.handled = false
+  if (wb && !wbE.handled && !webFight && (webThreat || wbE.threatened || webFoe?.d <= 4.5) && webFoe && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(b.webRun && reactions.get(b) === b.webRun && !(b.last?.m === 'clear_web' && webFoe.d <= 4.5))) {
     wbE.handled = true; wbE.threatened = false
     log(`🕸⚔ ${b.name}: в паутине, ${webFoe.n} в ${webFoe.d.toFixed(1)} бл. — выход из боя (webTurn)`)
     const token = dz.beginReaction(b); b.webRun = token
@@ -193,7 +196,9 @@ function onDanger (dz: DangerCtx, b, m) {
     wbE.handled = true; wbE.from = { ...m.pos }
     log(`🕸 ${b.name}: в паутине (${wb.cells} кл.) — срезаю`)
     const token = dz.beginReaction(b); b.webRun = token
-    b.c.call('clear_web', { allies: dz.bots.filter(o => o.team === b.team).map(o => o.name) }).then(r => { const x = r?.detail || r; if (!dz.ownsReaction(b, token)) return; if (r?.status && r.status !== 'done') wbE.handled = false; if (x?.why === 'direct_threat') { wbE.threatened = true; wbE.handled = false }; if (x && !x.ok) log(`🕸 ${b.name}: паутину не срезал — ${x.why || `${x.cut} из ${wb.cells}`}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`) })
+    // Два отказа «direct_threat» подряд без врага в 8 бл. (стрелок издали, огонь) — резать всё равно: стоять в паутине
+    // под стрелами хуже (бой роя 24.10: «срезаю» 217 раз, отказ 211 — висели в паутине).
+    b.c.call('clear_web', { allies: dz.bots.filter(o => o.team === b.team).map(o => o.name), force: (wbE.refused || 0) >= 2 && !webFoe }).then(r => { const x = r?.detail || r; if (!dz.ownsReaction(b, token)) return; if (r?.status && r.status !== 'done') wbE.handled = false; if (x?.why === 'direct_threat') { wbE.threatened = true; wbE.handled = false; wbE.refused = (wbE.refused || 0) + 1 }; if (x && !x.ok) log(`🕸 ${b.name}: паутину не срезал — ${x.why || `${x.cut} из ${wb.cells}`}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`) })
       .catch(() => { if (dz.ownsReaction(b, token)) wbE.handled = false }).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
     return
   }
@@ -220,7 +225,10 @@ function onDanger (dz: DangerCtx, b, m) {
   const episode = inLava ? lvE : smE || lvE || clE
   // Вторая рука в состоянии тела — { item, durability }, а не { name }.
   const hand2 = pos[b.name]?.offHand
-  const shieldNow = (pos[b.name]?.inv?.shield || 0) > 0 || /shield/.test(String(typeof hand2 === 'string' ? hand2 : hand2?.item ?? hand2?.name ?? ''))
+  const offName = String(typeof hand2 === 'string' ? hand2 : hand2?.item ?? hand2?.name ?? '')
+  // Тотем в левой руке при хп ≤ 16 тело на щит не меняет (combat/shield.ts) — щита нет: стойка «щит к нему» без щита стояла
+  // 17 с под его булавой в коридоре (игра пользователя 25.10). Тогда — защита боем.
+  const shieldNow = /shield/.test(offName) || (pos[b.name]?.inv?.shield || 0) > 0 && !(/totem_of_undying/.test(offName) && (pos[b.name]?.hp ?? 20) <= 16)
   episode.handled = true; episode.from = { ...m.pos }
   log(inLava ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — выхожу (lava_escape)` : sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${shieldNow ? 'щит к нему' : inv.cobweb > 0 ? 'паутина и защита' : 'защита в бою'}` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : `🧪☁ ${b.name}: облако зелья — выхожу`)
   if (src === lv) { dangerLava(dz, b, m, lv); return }
@@ -230,6 +238,15 @@ function onDanger (dz: DangerCtx, b, m) {
   // Щит есть — держать его, пока его удар сверху виден (стойка whileSmash): рывок за 6–16 т его не уводит (правит полёт), а
   // щит держит и удар прямо сверху. Уже держу — не перезапускать: новый подъём — ещё 5 т без блока. Поздно (< 6 т) и идёт
   // бой — не рвать его: maceBusy выше сохраняет ответ тела (mace/defend).
+  // До его посадки 10+ тиков и место есть — отскочить от точки удара (пользователь 25.10: «стоял у стен, когда я с булавой летел,
+  // а там открытое место — мог отойти»): рывок тела выбирает направление по стенам, нужен чистый пробег ≥ 3 бл. и успеть
+  // уйти на 4 бл. от точки. Некуда или не вышло — щит, если удар ещё летит. Поздно (< 10 т) или щит уже поднят — щит, как было.
+  const away0 = sm?.at ? Math.hypot(m.pos.x - sm.at.x, m.pos.z - sm.at.z) : 0
+  if (sm && sm.ticks >= 10 && sm.at && away0 + sm.ticks * .25 >= 4 && !(b.shieldHold && reactions.get(b) === b.shieldHold)) {
+    const late = () => { if (b.maceDefense?.until > Date.now() && ctx.alive?.(b.name) !== false && (shieldNow || inv.cobweb > 0)) dangerShieldSmash(dz, b, sm, shieldNow) }
+    ctx.dodgeAway(b, m.pos, sm.at, 5, late, null, false, false, 0, 3)
+    return
+  }
   if (sm && (shieldNow || inv.cobweb > 0)) {
     if (b.shieldHold && reactions.get(b) === b.shieldHold || b.smashWeb && reactions.get(b) === b.smashWeb) return
     dangerShieldSmash(dz, b, sm, shieldNow); return

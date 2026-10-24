@@ -90,7 +90,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   const ctx = base as ArenaContext
   if (arms) await setupArmsMap(ctx)
   log(`${teams ? 'команды' : 'дезматч'}: ${N} бойцов (${bots.map(b => `${b.name} — ${b.persona}`).join(', ')}), набор ${kit}, цель — по толпе (pvp/crowd), пересмотр ≤ ${SEG_S} с`)
-  for (const b of bots) { b.c = client(`ws://127.0.0.1:${b.ws}`); await b.c.ready; await b.c.call('connect').catch(() => {}); if (arms) await rcon(i, `gamemode spectator ${b.name}`); await b.c.call('temper', { enabled: false }).catch(() => {}); await b.c.call('play_mode', { mode: 'free' }).catch(() => {}) }
+  for (const b of bots) { b.c = client(`ws://127.0.0.1:${b.ws}`); if (!await b.c.ready.then(() => true, e => { log(`⚠ ${b.name}: ${e.message} — без него`); return false })) continue; await b.c.call('connect').catch(() => {}); if (arms) await rcon(i, `gamemode spectator ${b.name}`).catch(e => log(`⚠ ${b.name}: зрителем не перевёл — ${e.message}`)); await b.c.call('temper', { enabled: false }).catch(() => {}); await b.c.call('play_mode', { mode: 'free' }).catch(() => {}) }
   if (teams) {
     for (const [t, color] of [['red', 'red'], ['blue', 'blue']]) {
       await rcon(i, `team add ${t}`).catch(() => {})

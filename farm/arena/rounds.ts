@@ -77,13 +77,19 @@ export function installRounds (ctx: ArenaContext) {
   // ARMS_GIVE="elytra 1,firework_rocket 64" — через запятую «предмет число», после разноса.
   // Запятые внутри [] и {} — часть предмета (чары трезубца: {loyalty:3,channeling:1}), не разделитель.
   const GIVE = (process.env.ARMS_GIVE || '').split(/,(?![^{[]*[}\]])/).map(x => x.trim()).filter(Boolean)
-  ctx.giveBlue = async () => { for (const g of GIVE) await rcon(i, `give @a[team=blue,gamemode=survival] minecraft:${g}`).catch(() => {}); if (GIVE.length) log(`🎒 синим выдано: ${GIVE.join(', ')}`) }
+  // ARMS_GIVE_ALL=1 — обеим командам (пользователь 24.10: «предметы все сразу ботам выдавать, чтобы быстрее тесты прошли»).
+  const GIVE_TO = process.env.ARMS_GIVE_ALL === '1' ? '@a[gamemode=survival]' : '@a[team=blue,gamemode=survival]'
+  ctx.giveBlue = async () => { for (const g of GIVE) await rcon(i, `give ${GIVE_TO} minecraft:${g}`).catch(() => {}); if (GIVE.length) log(`🎒 ${process.env.ARMS_GIVE_ALL === '1' ? 'всем' : 'синим'} выдано: ${GIVE.join(', ')}`) }
   ctx.spreadBots = async () => {
     for (const [k, b] of bots.entries()) {
       const h = ctx.armsHome(b, k)
       const command = `spreadplayers ${Math.floor(h.x)} ${Math.floor(h.z)} 0 3 under ${Math.max(Y + 3, h.y + 3)} false ${b.name}`
-      const receipt = String(await (LAN ? lanCmd(command, 20000, /^(Spread |Could not spread|Invalid maxHeight|No (?:player|entity))/) : rcon(i, command, 20000))).trim()
-      if (!/^Spread 1 entity\/entities\b/.test(receipt)) throw new Error(`safe placement ${b.name}: ${receipt || 'no server receipt'}`)
+      const spread = async () => String(await (LAN ? lanCmd(command, 20000, /^(Spread |Could not spread|Invalid maxHeight|No (?:player|entity))/) : rcon(i, command, 20000))).trim()
+      let receipt = await spread().catch(e => String(e?.message || e))
+      // Тела нет в мире (отвалилось) — переподключить и ещё раз; не вышло — без него, а не вся арена (бой роя 24.10: «No
+      // entity was found» у одного ронял драйвер на старте).
+      if (/^No (player|entity)/.test(receipt)) { await b.c.call('connect').catch(() => {}); await sleep(1500); receipt = await spread().catch(e => String(e?.message || e)) }
+      if (!/^Spread 1 entity\/entities\b/.test(receipt)) log(`⚠ разнос ${b.name}: ${receipt || 'сервер молчит'}`)
     }
   }
   // Конец раунда: команда без живых — победа другой; пауза, уборка, новые сундуки, все на старт, снова лут и бой.
@@ -212,6 +218,19 @@ export async function startMobs (ctx: ArenaContext) {
 // Цикл бойца: смерть (гонка — зритель до конца раунда; иначе — набор и снова на поле), ход роя.
 export async function fighterLoop (ctx: ArenaContext, b) {
   const { i, kit, arms, bots, N, X, Y, Z, pos, deadNow, out, busy, rcon, log, sleep } = ctx
+  // Тело не в игре (отвалилось, выкинуто) — переподключить; новое — только когда прежнее кончилось: без этого оно числилось
+  // живым до конца раунда, команда не пустела и раунд кончался по времени (бой роя 24.10: трое, 1600 ходов впустую).
+  const reconnect = async (b) => {
+    if (b.reconnecting) return
+    b.reconnecting = true
+    try {
+      const st = await b.c.call('status').catch(() => null)
+      if (st?.state?.pos) return
+      const r = await b.c.call('connect').catch(x => ({ why: x.message }))
+      log(`🔌 ${b.name}: тело не в игре — переподключаю: ${r?.why || (r?.already ? 'уже в игре' : 'ok')}`)
+      if (ctx.arms && out.has(b.name)) await rcon(i, `gamemode spectator ${b.name}`).catch(() => {})
+    } finally { b.reconnecting = false }
+  }
   while (!ctx.stop) {
     if (arms && ctx.between) { await sleep(500); continue }
     if (arms && (ctx.between || out.has(b.name)) && !deadNow.has(b.name)) { await sleep(500); continue }
@@ -248,12 +267,18 @@ export async function fighterLoop (ctx: ArenaContext, b) {
       await sleep(1000)
       continue
     }
-    if (!pos[b.name]?.p) { await sleep(250); continue }
+    if (!pos[b.name]?.p) { await reconnect(b); await sleep(250); continue }
     // Ход, вернувшийся без обращения к демону (занят чужой задачей, нет задачи), — пауза: иначе цикл крутится на готовых
     // обещаниях и Node не доходит до таймеров и сокетов (ревью 13.10: вся арена вставала, напарник ждал вечно).
     const turnAt = Date.now()
     try { await (b.champ ? champTurn(ctx, b) : ctx.swarmDriver.turn(b)) }
-    catch (e: any) { log(`🐜 ${b.name}: ${e.message}`); await sleep(500) }
+    catch (e: any) {
+      // Тело отвалилось (client timed out под нагрузкой) — переподключить, раз в 5 с: без этого «не в игре» шло до конца
+      // раунда, а команда не пустела и раунд кончался по времени (бой роя 24.10: трое, 1600 ходов впустую).
+      if (/не в игре/.test(e.message)) await reconnect(b)
+      else log(`🐜 ${b.name}: ${e.message}`)
+      await sleep(500)
+    }
     if (Date.now() - turnAt < 50) await sleep(100)
   }
 }

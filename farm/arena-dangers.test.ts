@@ -206,7 +206,7 @@ test('mace from above: the shield in the off hand is a shield — hold it on any
 test('a shield raised against a mace stays up when an arrow comes: no dodge out from under the smash', t => {
   const f = fixture(t)
   f.ctx.pos.A.offHand = { item: 'shield', durability: 100 }
-  f.report({ smashes: [{ name: 'Foe', ticks: 16, at: f.p }] })
+  f.report({ smashes: [{ name: 'Foe', ticks: 8, at: f.p }] })
   assert.equal(f.calls.length, 1)
   assert.equal(f.calls[0].method, 'swarm_hold')
   f.report({ arrows: [{ name: 'arrow', from: { x: 10, y: 64, z: 1 }, at: f.p, ticks: 10, side: { x: 1, z: 0 } }] })
@@ -214,14 +214,14 @@ test('a shield raised against a mace stays up when an arrow comes: no dodge out 
 })
 
 test('landing web shares the mace hold, leaves fights and raised shields alone, then hands fresh defense to fight', async t => {
-  const smash = { name: 'OtherSwarmBot', ticks: 30, at: { x: 1, y: 64, z: 0 } }
+  const smash = { name: 'OtherSwarmBot', ticks: 8, at: { x: 1, y: 64, z: 0 } }
   const f = fixture(t)
   f.ctx.pos.A.inv = { shield: 1, cobweb: 1 }
   f.report({ smashes: [smash] })
   assert.equal(f.calls[0].method, 'swarm_hold')
   assert.equal(f.calls[0].params.webSmash, smash.name)
   assert.equal(f.calls[0].params.shield, true)
-  f.report({ smashes: [{ ...smash, ticks: 32 }] })
+  f.report({ smashes: [{ ...smash, ticks: 9 }] })
   assert.equal(f.calls.length, 1, 'a new jump does not release the existing shield')
   f.calls[0].reply({ ok: true }); await turn()
 
@@ -231,7 +231,7 @@ test('landing web shares the mace hold, leaves fights and raised shields alone, 
   fight.report({ smashes: [smash] })
   assert.equal(fight.calls.length, 0, 'the fight owns its web and shield')
   fight.b.last.p.target = 'AnotherFoe'
-  fight.report({ smashes: [{ ...smash, ticks: 31 }] })
+  fight.report({ smashes: [{ ...smash, ticks: 9 }] })
   assert.equal(fight.calls[0].params.whileSmash, smash.name, 'a third enemy can smash during the duel')
   fight.calls[0].reply({ ok: true }); await turn()
 
@@ -281,9 +281,9 @@ test('a shield raised against a mace stays up when the floor cracks: a step off 
   // Игра пользователя 22.10: «пол уходит — схожу» 12 раз за секунду, щит опускался, убит булавой.
   const f = fixture(t)
   f.ctx.pos.A.offHand = { item: 'shield', durability: 100 }
-  f.report({ smashes: [{ name: 'Foe', ticks: 16, at: f.p }] })
+  f.report({ smashes: [{ name: 'Foe', ticks: 8, at: f.p }] })
   assert.equal(f.calls[0].method, 'swarm_hold')
-  f.report({ floor: [{ name: 'Foe', at: { x: 0.5, y: 63, z: 0.5 }, from: { x: 3, y: 64, z: 0 }, ticks: 0, holes: 1 }], smashes: [{ name: 'Foe', ticks: 10, at: f.p }] })
+  f.report({ floor: [{ name: 'Foe', at: { x: 0.5, y: 63, z: 0.5 }, from: { x: 3, y: 64, z: 0 }, ticks: 0, holes: 1 }], smashes: [{ name: 'Foe', ticks: 9, at: f.p }] })
   assert.equal(f.calls.length, 1, 'the hold is kept')
 })
 
@@ -336,7 +336,7 @@ test('a pending evade is one mace response across ETA growth; completion hands c
   f.report({ smashes: [{ ...smash, ticks: 8 }] })
   assert.equal(f.calls[1]?.method, 'fight', 'handled episode still gets a continuous body response')
   assert.equal(f.calls[1].params.target, 'Foe')
-  f.report({ smashes: [{ ...smash, ticks: 32 }] })
+  f.report({ smashes: [{ ...smash, ticks: 9 }] })
   assert.equal(f.calls.length, 2, 'the fight is kept through another wind jump')
   f.calls[1].reply({}); await turn()
 })
@@ -377,4 +377,15 @@ test('driver reset clears a mace response before the next round can take a turn'
   sw.retries = new Map(); sw.sites = new Map()
   swarmLifecycle(sw).reset()
   assert.equal(f.b.maceDefense, undefined)
+})
+
+test('mace with lead and room: dash off the landing point first, shield if the dash fails while the smash still comes', async t => {
+  // Пользователь 25.10: «стоял у стен, когда я с булавой летел, а там открытое место — мог отойти».
+  const f = fixture(t)
+  f.ctx.pos.A.offHand = { item: 'shield', durability: 100 }
+  f.report({ smashes: [{ name: 'Foe', ticks: 16, at: f.p }] })
+  assert.equal(f.calls[0].method, 'evade', 'enough lead: run, the body picks the open direction')
+  assert.equal(f.calls[0].params.minRun, 3)
+  f.calls[0].reply({ ok: false, why: 'некуда отскочить на 3 бл.' }); await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r))
+  assert.equal(f.calls.at(-1).method, 'swarm_hold', 'no room — the shield still goes up')
 })

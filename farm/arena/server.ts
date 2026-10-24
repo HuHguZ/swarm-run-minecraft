@@ -74,7 +74,12 @@ export async function lanCmd (cmd, timeoutMs = 3000, re: RegExp | null = null) {
     setTimeout(() => { const k = lanWait.indexOf(w); if (k >= 0) { lanWait.splice(k, 1); resolve('') } }, timeoutMs)
   })
 }
+// Сокет закрылся или сервер не ответил (под нагрузкой 30 ботов) — ещё раз по новому соединению: без повтора первая же
+// осечка на старте роняла драйвер (бой роя 24.10: «rcon timeout», «rcon closed» — по 10 минут простоя).
 export function rcon (i, cmd, timeoutMs = 8000) {
+  return rconOnce(i, cmd, timeoutMs).catch(e => /rcon (closed|timeout)|ECONNRESET|EPIPE/.test(String(e?.message)) ? rconOnce(i, cmd, timeoutMs) : Promise.reject(e))
+}
+function rconOnce (i, cmd, timeoutMs) {
   if (LAN) return lanCmd(cmd, Math.min(timeoutMs, 3000))
   return rconConn(i).then((s: any) => new Promise<any>((resolve, reject) => {
     const id = ++s.id

@@ -27,6 +27,15 @@ const hpOf = async (n: string) => { const m = /([\d.]+)f/.exec(await cmd(`data g
 
 const bot = mf.createBot({ host: '127.0.0.1', port: 25600 + slot, username: NAME, version: '1.21.11', auth: 'offline' })
 bot.loadPlugin(pathfinder)
+// mineflayer читает скорость 1.21.11 (LpVec3) делением на 8000 и отброс к себе не применяет: Tester не отлетал ни от удара,
+// ни от стрелы (только от взрывов — у них свой пакет), а живой игрок отлетает (сцена try-punch-edge 24.10). Точная скорость
+// из сырых байтов — как у ботов демона (tick-plugins nativeVelocity).
+const drops: typeof import('../../daemon/src/drops') = require('../../daemon/src/drops')
+bot._client.on('packet', (pk: any, meta: any, bytes: any) => {
+  if (meta?.name !== 'entity_velocity' || pk?.entityId !== bot.entity?.id) return
+  const v = drops.velocityFromRaw(bytes, 'velocity')
+  if (v) pk.velocity = { x: v.x * 8000, y: v.y * 8000, z: v.z * 8000 }
+})
 bot.on('kicked', (r: any) => { say('выкинут', JSON.stringify(r)); process.exit(1) })
 bot.on('error', (e: any) => say('ошибка', e.message))
 

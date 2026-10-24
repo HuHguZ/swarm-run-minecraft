@@ -256,6 +256,12 @@ export function installSight (ctx: ArenaContext) {
     // Прицел не отбирает успешный подъём; аварийный evade, лава и взрыв проходят как прежде.
     const aim = /^(juke|take_cover)$/.test(m) || m === 'swarm_hold' && p?.whileDraw
     const own = !p?._climb && aim && ascentActive(b, pos[b.name])
+    // Засада, ловушка, разгон к жемчугу идут до его появления — мелкие приказы их не рвут (бой роя 24.10: «прервали (бег)»
+    // 11 из 50 засад — новый ход, реакция или stop за секунду до удара); проходят аварийные и запросы.
+    // Враг вплотную (≤ 6 бл.) — засада уступает: бот стоял 5 с в «засаде», пока человек его рубил (игра пользователя 24.10).
+    const punish = b.last?.pending !== false && /^(pearl_ambush|pearl_trap|boost_lance|boost_shot|wing_orbit)$/.test(b.last?.m || '') && !humanClose(b)
+    if (punish && !/^(status|observe|fight_guard|wind_report|enemy_wind_plan|swarm_pose|emote|look_at|armor|team_hint|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around|cache_scan|pearl_plan|pearl_pop|pearl_potion|lava_escape|dodge_blast|evade|clear_web|douse_lava)$/.test(m) && !(m === 'stop' && ctx.between))
+      return Promise.resolve({ status: 'skipped', detail: { why: `занят: ${b.last.m}` } })
     return own || b.climbing && !b.grabbing && !p?._climb && !CLIMB_OK.test(m) && !(m === 'swarm_hold' && p?.whileSmash) && !(m === 'stop' && ctx.between) && !humanClose(b)
       ? Promise.resolve({ status: 'skipped', detail: { why: 'лезу к цели' } }) : raw0(m, p)
   } }
@@ -380,6 +386,9 @@ export function watchStatus (ctx: ArenaContext) {
       swarm: true, dangers: arms,
       swarmAllies: teams ? bots.filter(o => o.team === b.team).map(o => o.name) : []
     }).then(s => {
+      // Ответил без тела (выкинут сервером: «Invalid move player packet») — забыть старое место: иначе рой водил его по
+      // стухшей позиции до конца раунда (бой роя 24.10, NeuroFarm30u), а цикл бойца ждёт pos и переподключает.
+      if (s && !s.state?.pos && !ctx.between) delete pos[b.name]
       if (ctx.between || ctx.round !== observedRound || !s?.state?.pos) return
       const was = pos[b.name]; const p = s.detail?.at || s.state.pos
       // Зелья (12.10: «кидаю зелья — стоят со щитом и помирают; видно же, что я взял зелье»): щит брызги не держит. Летит
@@ -390,7 +399,10 @@ export function watchStatus (ctx: ArenaContext) {
         const holder = (dz.holders || []).find(hd => teams ? teamOf(hd.name) !== b.team && !(rel[b.team][hd.name] > 0) : true)
         // В рукопашной (враг в 3.5 бл.) не расходиться: отход на 4 бл. дарит ему удары, а бой рвался — каждый четвёртый
         // оборванный бой стенда 15×15 был «расходимся» (21.10: 24 из 94).
-        const melee = (s.detail?.sightings || []).some(e => e.id !== b.name && teamOf(e.id) !== b.team && dist3(e.position, p) <= 3.5)
+        // Идущий бой — тоже: человек держит зелье в руке не бросая, и «расходимся» рвал подход каждые 1–2 с (игра пользователя
+        // 24.10: 61 из 65 боёв прерваны, 9 попаданий). От брошенного уходит рывок по точке падения выше.
+        const melee = b.last?.m === 'fight' && b.last.pending !== false ||
+          (s.detail?.sightings || []).some(e => e.id !== b.name && teamOf(e.id) !== b.team && dist3(e.position, p) <= 3.5)
         const mate = holder && !melee && names.find(n => n !== b.name && teamOf(n) === b.team && ctx.alive(n) && pos[n]?.p && Math.hypot(pos[n].p.x - p.x, pos[n].p.z - p.z) <= 2.5)
         const old = spreading.get(b)
         if (!holder || old && (!pos[old.mate]?.p || dist3(pos[old.mate].p, p) >= 4)) spreading.delete(b)

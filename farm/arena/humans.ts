@@ -50,7 +50,8 @@ export function installHumanKit (ctx: ArenaContext) {
     `netherite_pickaxe[${E}efficiency:5,unbreaking:3}] 1`,
     ...(ONE ? ['splash_potion[potion_contents={custom_effects:[{id:"minecraft:instant_damage",amplifier:1,duration:1}]}] 8',
       'lingering_potion[potion_contents={custom_effects:[{id:"minecraft:instant_damage",amplifier:0,duration:1}]}] 4', 'cobweb 32', 'obsidian 64', 'water_bucket 1'] : [])]
-  const TH = ONE ? 'thorns:3,' : ''
+  // Набор человека — без «Шипов» (пользователь 25.10: «убери ответный урон при ударе по моей броне»); в луте и тайниках остаются.
+  const TH = ''
   const HUMAN_ARMOR = [['armor.head', `netherite_helmet[${E}${TH}protection:4,unbreaking:3,mending:1}]`], ['armor.chest', `netherite_chestplate[${E}${TH}protection:4,unbreaking:3,mending:1}]`],
     ['armor.legs', `netherite_leggings[${E}${TH}protection:4,unbreaking:3,mending:1}]`], ['armor.feet', `netherite_boots[${E}${TH}protection:4,feather_falling:4,unbreaking:3,mending:1}]`]]
   ctx.kitStrong = async (h) => {
@@ -79,7 +80,7 @@ export function installHumanKit (ctx: ArenaContext) {
     // Уже в наборе (зашёл с ним, раунд сменился) — не дублировать.
     if (/passed/i.test(String(await rcon(i, `execute if items entity ${h} container.* minecraft:netherite_sword if items entity ${h} armor.chest minecraft:netherite_chestplate`).catch(() => '')))) return
     await ctx.kitStrong(h)
-    log(`🎽 ${h} возродился — набор и «Скорость V» выданы`)
+    log(`🎽 ${h} возродился — набор и «Скорость ${ONE ? 'II' : 'V'}» выданы`)
   }
   ctx.humanStart = async (h) => {
     const T = teamOfHuman(h, HUMAN_TEAM) as string

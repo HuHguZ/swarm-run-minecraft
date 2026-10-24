@@ -11,12 +11,23 @@ import path = require('path')
 
 // Гонка: карта у центра поля (ARMS_POS), Колизей из чистой копии, раскладка, насесты; первая набивка сундуков.
 export async function setupArmsMap (ctx: ArenaContext) {
-  const { i, COLOS_MAP, AL, L, X, Y, Z, bots, perches, rcon, log } = ctx
+  const { i, COLOS_MAP, AL, L, X, Y, Z, bots, perches, rcon, log, sleep } = ctx
   await rcon(i, `forceload add ${X - L.half} ${Z - L.half} ${X + L.half} ${Z + L.half}`).catch(() => {})
   // Колизей — заново каждый раунд (10.10: «скидывай все блоки каждый раунд, а то засирается»): чистая копия постройки
   // лежит в стороне (X+400, снята один раз после полной перестройки), раунд — clone копии на место + раскладка (поле,
   // сундуки) поверх. Копия — слоями по 1 блоку (clone ≤ 32768 блоков). ARMS_RESET=0 — без копии, как было.
   let bad = 0
+  // clone молча не шёл, пока чанки копии не прогружены после forceload (игра пользователя 24.10: копия пустая, флаг «снята»
+  // стоял, песок поля осыпался в пустоту, сундуки висели) — повторять, пока сервер не ответит «Successfully».
+  const clone = async (c) => {
+    for (let k = 0; k < 40; k++) {
+      const r = String(await rcon(i, c, 20000).catch(e => String(e)))
+      if (/Successfully|No blocks/.test(r)) return true
+      if (!/not loaded|timeout|closed/i.test(r)) { log(`гонка: ${c} — ${r.slice(0, 120)}`); return false }
+      await sleep(250)
+    }
+    return false
+  }
   ctx.restoreArena = async () => {
     const SX = 400; const h = L.half; const y0 = Y + L.y0; const y1 = Y + L.y1
     if (COLOS_MAP && process.env.ARMS_RESET !== '0') {
@@ -29,18 +40,22 @@ export async function setupArmsMap (ctx: ArenaContext) {
         const CZB = require(path.join(DIST_ROOT, 'daemon', 'arena', 'build-colosseum'))
         const P = CZB.plan({ X, Y, Z, R: 24, ceilH: 16 })
         for (const c of [...P.clear, ...P.cmds, ...P.field]) await rcon(i, c.replace(/^\//, ''), 20000).catch(() => {})
-        for (let y = y0; y <= y1; y++) await rcon(i, `clone ${X - h} ${y} ${Z - h} ${X + h} ${y} ${Z + h} ${X + SX - h} ${y} ${Z - h}`, 20000).catch(() => {})
-        fs.writeFileSync(flagF, JSON.stringify({ at: want, builtAt: new Date().toISOString() }))
+        let ok = true
+        for (let y = y0; y <= y1; y++) ok = await clone(`clone ${X - h} ${y} ${Z - h} ${X + h} ${y} ${Z + h} ${X + SX - h} ${y} ${Z - h}`) && ok
+        if (ok) fs.writeFileSync(flagF, JSON.stringify({ at: want, builtAt: new Date().toISOString() }))
         log(`гонка: Колизей перестроен целиком и снят в копию (${P.cmds.length} команд, ${Math.round((Date.now() - t0) / 1000)} с)`)
       }
       const t1 = Date.now()
-      for (let y = y0; y <= y1; y++) await rcon(i, `clone ${X + SX - h} ${y} ${Z - h} ${X + SX + h} ${y} ${Z + h} ${X - h} ${y} ${Z - h}`, 20000).catch(() => {})
+      for (let y = y0; y <= y1; y++) await clone(`clone ${X + SX - h} ${y} ${Z - h} ${X + SX + h} ${y} ${Z + h} ${X - h} ${y} ${Z - h}`)
       // Выше копии — воздух до потолка мира (пользователь 23.10: «сверху блоки остаются, которые боты ставят, высоко очень»):
       // копия кончается на y1, гребень постройки — +42, выше столбы и насесты ботов жили вечно. Слой 161×161 — одна fill.
       for (let y = Y + 43; y <= 319; y++) await rcon(i, `fill ${X - h} ${y} ${Z - h} ${X + h} ${y} ${Z + h} minecraft:air`, 20000).catch(() => {})
       log(`гонка: Колизей восстановлен из копии за ${((Date.now() - t1) / 1000).toFixed(1)} с`)
     }
     bad = 0
+    // Под песком поля (Y−1) постройка ничего не кладёт — держит естественный грунт; в мире слота 30 он в центре на Y−4, и песок
+    // осыпался в пустоту, сундуки рельефа висели (игра пользователя 24.10). Опора — пустоты под полем до Y−8.
+    if (COLOS_MAP) await rcon(i, `fill ${X - 24} ${Y - 8} ${Z - 24} ${X + 24} ${Y - 2} ${Z + 24} minecraft:sandstone replace minecraft:air`, 20000).catch(() => {})
     for (const c of AL.commands(L, { X, Y, Z })) { const r = await rcon(i, c, 20000).catch(e => String(e)); if (/Unknown|Incorrect|Expected|not loaded|Too many|timeout/i.test(r)) bad++ }
     // Точка возрождения людей — в центре поля на земле (10.10: «точка возрождения сломалась»: рельеф поля каждый раунд
     // новый, и старая точка оказалась в блоке — сервер сбросил её на спавн мира). Ищу 2 клетки воздуха над опорой.
