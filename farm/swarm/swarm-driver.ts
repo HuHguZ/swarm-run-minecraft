@@ -15,6 +15,7 @@ import { swarmTurnWork } from './swarm-driver/turn-work'
 import { swarmTurn } from './swarm-driver/turn'
 import { swarmLifecycle } from './swarm-driver/lifecycle'
 import { swarmRetry } from './swarm-driver/retry'
+import { swarmCommand } from './swarm-driver/command'
 
 // This adapter sees own bodies and allied reports; enemy daemon snapshots never enter the board.
 // now — часы решений: в ffa это подменённый Date.now (игровое время при ускорении), в лаборатории — свои игровые часы.
@@ -22,6 +23,10 @@ export function createSwarmDriver (opts: any) {
   const sw = createDriverState(opts)
   Object.assign(sw, swarmRetry(sw))
   Object.assign(sw, swarmTeam(sw))
+  // Приказы командира (command.ts) — поверх плана команды: части ниже берут уже обёрнутые refresh и turn.
+  Object.assign(sw, swarmCommand(sw))
+  const plan = sw.refresh
+  sw.refresh = b => { const c = plan(b), t = c.member && sw.commanded(b, c); return t ? { ...c, task: t } : c }
   Object.assign(sw, swarmMoves(sw))
   Object.assign(sw, swarmBuild(sw))
   Object.assign(sw, swarmLoot(sw))
@@ -32,6 +37,8 @@ export function createSwarmDriver (opts: any) {
   Object.assign(sw, swarmTurnTasks(sw))
   Object.assign(sw, swarmTurnWork(sw))
   Object.assign(sw, swarmTurn(sw))
+  const auto = sw.turn
+  sw.turn = async b => { if (!(await sw.commandTurn(b))) await auto(b) }
   Object.assign(sw, swarmLifecycle(sw))
   const { observe, guardedTurn, release, reset, snapshot, panic, canEngage, refill, boardOf, pearlObserve } = sw
   return { observe, pearlObserve, turn: guardedTurn, release, reset, snapshot, panic, canEngage, refill, enemies: b => boardOf(b).enemies() }

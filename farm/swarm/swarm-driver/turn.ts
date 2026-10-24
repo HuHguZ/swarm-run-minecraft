@@ -123,6 +123,25 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       }, reject).finally(() => { fight.pending = false })
       return false
     }
+    // Идёт рукопашная и цель в досягаемости — не рвём её сменой цели, толчка или клетки: бой роя 24.10 — 33 из 35 боёв
+    // «прервано» пересчётом плана, попаданий 14 на 35 боёв. Обрывает только отход, щит или копка.
+    if (running.kind === 'fight' && task.kind === 'fight' && !task.data?.commanded && b.last?.m === 'fight' && b.last.pending !== false &&
+        !/retreat|dig:/.test(after) && after.split('|')[1] === before.split('|')[1]) {
+      const foe = context.board?.enemies().find(e => e.id === running.data?.target), m = pos[b.name]?.p
+      if (foe && m && now() - foe.seenAt < 1500 && distance(foe.position, m) <= 4.5) return false
+    }
+    // Тот же поход, стойка сдвинулась меньше чем на 0.5 бл. — не рвать: пересчёт сдвигал её на доли блока каждую секунду, и рой
+    // топтался (игра пользователя 25.10: 240 обрывов goto → goto за 3 мин).
+    const s0 = running.data?.swarmStand, s1 = task.data?.swarmStand
+    if (running.kind === 'goto' && task.kind === 'goto' && !targetChanged && s0 && s1 && distance(s0, s1) < .5 &&
+        phase({ ...running, data: { ...running.data, swarmStand: s1 } }, pos[b.name]?.p) === after) { b.swarmTask = task; return false }
+    // Сменилась только стойка (тот же род дела, цель, отход/щит/копка/толчок): смена приёма переназначала стойки всем разом и
+    // рвала 29 дел за секунду, человек бил стоящих (игра пользователя 25.10). Враг уже в 6 бл. — дело идёт, стойка подождёт.
+    const noStand = (ph: string) => ph.replace(/vacate:[^|]*/, '')
+    if (running.kind === task.kind && /^(fight|goto)$/.test(task.kind) && !targetChanged && s0 && s1 && noStand(before) === noStand(after)) {
+      const foe = context.board?.enemies().find(e => e.id === task.data?.target), me = pos[b.name]?.p
+      if (foe && me && now() - foe.seenAt < 1500 && distance(foe.position, me) <= 6) { b.swarmTask = task; return false }
+    }
     if (after === before && !targetChanged) return false
     stopForTask(b, running, task, before, after)
     return true
@@ -167,9 +186,9 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // Свой горящий динамит рядом (факт tnt, 4.5 с): отойти на 7+ бл., всё остальное подождёт.
     const boom = board.facts().find(f => f.id.startsWith('tnt:') && f.position && distance(f.position, m.p) < 6)
     if (boom) { const d = Math.hypot(m.p.x - boom.position.x, m.p.z - boom.position.z) || 1; await go(b, { x: m.p.x + (m.p.x - boom.position.x) / d * 7, y: m.p.y, z: m.p.z + (m.p.z - boom.position.z) / d * 7 }, 1.5, 3); return }
-    if (!/^(flee|recover)$/.test(task.kind) && chestAtHand(b) && await loot(b, board, true)) return
+    if (!/^(flee|recover)$/.test(task.kind) && !task.data?.commanded && chestAtHand(b) && await loot(b, board, true)) return
     const onslaught = sw.onslaught(b)
-    if (onslaught && task.kind !== 'flee' && !task.data?.dig && !task.data?.ladder && await grab(b, enemies)) return
+    if (onslaught && task.kind !== 'flee' && !task.data?.commanded && !task.data?.dig && !task.data?.ladder && await grab(b, enemies)) return
     if (task.kind === 'flee') {
       await turnFlee(tc)
       return
@@ -210,13 +229,13 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // Тайники в толще (поток «тайники», swarm-driver/caches.ts): копатель, выбранный числами (plan-jobs.cacheJobs: копка
     // дороже боя/лута/охоты), копает, если не в схватке и задача — не бой и не приём строя. false — обычный ход дальше.
     // Боец тоже может копать тайник, когда враг дальше 16 бл. — цену против боя считает cacheJobs, отказ — сам cacheTurn.
-    if (!contact && !exposed && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
+    if (!contact && !exposed && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.commanded && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
     // Манёвр приёма (линия, фонтан, засада, кольцо, приманка, оцепление, стройка) важнее ролевых привычек: обмен, сундуки,
     // поиск позиции, маяки и укрытия его не перебивают (разбор 13.10: строитель кокона уходил класть маяк, часовой без лука
     // по 10 с искал позицию для стрельбы).
     // Добивание и сброс — тоже манёвр команды: обмен, лут, позиция лучника и стройка строителя их не перебивают (DeepSeek,
     // разбор погони 21.10: половина команды при 13 против 2 делала ролевые привычки).
-    const maneuver = !!(task.data?.fountain || task.data?.ambush || task.data?.hold || task.data?.line !== undefined || task.data?.bait || task.data?.cordon || task.data?.buildKind || task.data?.dig || task.data?.ladder || task.data?.finishing || task.data?.shove)
+    const maneuver = !!(task.data?.commanded || task.data?.fountain || task.data?.ambush || task.data?.hold || task.data?.line !== undefined || task.data?.bait || task.data?.cordon || task.data?.buildKind || task.data?.dig || task.data?.ladder || task.data?.finishing || task.data?.shove)
     tc.maneuver = maneuver
     const armed = Object.keys(m.inv || {}).some(n => WEAPON.test(n))
     const engage = () => task.data?.digAvoid?.length ? turnFight({ ...tc, foe: nearest, task: { ...task, kind: 'fight', data: { ...task.data, target: nearest.id, committed: true } } }) :

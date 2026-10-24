@@ -6,6 +6,39 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
   const { now, alive, log, pos, arena, cooldown, boxed, boxTries, execute, reactCamp, go, loot, detail, rangedAdvantage, positionStep, search, buildStep, bounded } = sw
   async function turnFlee (tc: TurnCtx) {
     const { b, context, board, task, round, m, enemies } = tc
+    // Наверху (ярус, крыша, насест), а человек пришёл на мой уровень в 8 бл. — вниз: край с дешёвым падением (jump_down), нет —
+    // на элитрах к полю прочь от него (пользователь 25.10: «не спрыгивают сверху — легко умирают»). С этого места уже пробовал —
+    // снова только с другого (повтор по месту, retry.ts).
+    const close = enemies.filter(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 8 && e.position.y > m.p.y - 3)
+      .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
+    if (close && m.p.y > arena.y + 4 && sw.blocked && !sw.blocked(b, `jump:${b.name}`)) {
+      const r = detail(await b.c.call('jump_down', { from: close.position, arena }).catch(e => ({ why: e.message })))
+      if (round !== sw.generation || !alive(b.name)) return
+      let how = r.ok ? `спрыгнул ${r.drop} бл.${r.mlg ? ' (ведро)' : ''}, хп ${r.hp}` : r.why || r.error || '?'
+      if (!r.ok && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 2) {
+        const d = Math.hypot(m.p.x - close.position.x, m.p.z - close.position.z) || 1
+        const at = bounded({ x: m.p.x + (m.p.x - close.position.x) / d * 14, y: arena.y, z: m.p.z + (m.p.z - close.position.z) / d * 14 })
+        const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
+        how += `; элитры к полю — ${f.ok ? 'сел' : f.why || f.error || '?'}`
+        if (f.ok) r.ok = true
+      }
+      log(`🪂 ${b.name}: ${close.id} в ${distance(close.position, m.p).toFixed(1)} бл. наверху (+${Math.round(m.p.y - arena.y)}) — ${how}`)
+      if (r.ok) return
+      sw.failed(b, `jump:${b.name}`)
+    }
+    // Отход с элитрами и ракетами, враг в 12 бл. — улететь на 30 бл. от него, а не бежать «за укрытие» (пользователь 25.10:
+    // «убил, хотя у него элитры и фейерверки» — пешком от «Скорости II» не уйти). С этого места не вышло — пешком, как раньше.
+    const chaser = enemies.filter(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 12)
+      .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
+    if (chaser && !task.data?.perch && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 2 && sw.blocked && !sw.blocked(b, `airflee:${b.name}`)) {
+      const d = Math.hypot(m.p.x - chaser.position.x, m.p.z - chaser.position.z) || 1
+      const at = bounded({ x: m.p.x + (m.p.x - chaser.position.x) / d * 30, y: arena.y, z: m.p.z + (m.p.z - chaser.position.z) / d * 30 })
+      const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
+      if (round !== sw.generation || !alive(b.name)) return
+      log(`🪽↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — улетаю на 30 бл. — ${f.ok ? 'сел' : f.why || f.error || '?'}`)
+      if (f.ok) return
+      sw.failed(b, `airflee:${b.name}`)
+    }
     // Колонна в двух секундах хода дешевле далёкого насеста; луч и путь проверяет само тело.
     const archer = !enemies.some(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 6) && enemies.filter(e => e.threat === 'bow' && now() - e.seenAt < 1000)
       .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]

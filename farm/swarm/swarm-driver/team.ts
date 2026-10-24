@@ -106,6 +106,10 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     for (const e of sightings || []) if (hostile(b, e.id) && board.observe(b.name, at, e)) telemetry.observed++
     preempt(b)
     sw.windFlank?.(b, sightings)
+    sw.windWing?.(b, sightings)
+    sw.sentries?.(b, sightings)
+    sw.arrowBoost?.(b, sightings)
+    sw.pearlUpTest?.(b, sightings)
     void sw.windObserve?.(b, sightings, at).catch(e => log(`🌬 ${b.name}: ${String(e.message).slice(0, 100)}`))
     const target = pincerTarget(b)
     webSight.set(b.name, { target: sightings?.some(e => e.id === target && e.visible === true) ? target : null, at })

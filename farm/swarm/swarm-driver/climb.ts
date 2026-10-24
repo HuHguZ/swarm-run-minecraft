@@ -115,7 +115,8 @@ export function swarmClimb (sw: SwarmDriverCtx) {
       if (raw.ascentStalled && await leaveArrows(b, foe)) return true
     }
     // Жемчуг поднимается на 15–18 бл. (бросок 1.5 бл/т, гравитация 0.03): выше +16 — сперва лезть, бросать с яруса.
-    if ((inv.ender_pearl || 0) > 0 && dy <= 16 && distance(m.p, foe.position) < 40 && !blocked(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)) {
+    // Жемчуг — 5 хп (ThrownEnderpearl.onHit, без брони): раненый им не лезет (бой роя 24.10: бросок с 7.4 хп → 2.4).
+    if ((inv.ender_pearl || 0) > 0 && (m.hp ?? 20) > 10 && dy <= 16 && distance(m.p, foe.position) < 40 && !blocked(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)) {
       const raw = await ascend(b, at, 'pearl_to', { to: at, edgeOk: true, yTop: 45 }), r = detail(raw)
       if (waitTactics(b, raw)) return true
       if (!r.ok) failed(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)
@@ -229,7 +230,7 @@ export function swarmClimb (sw: SwarmDriverCtx) {
   // Ответ: { arrived } — долетел; { moved } — идёт к месту броска; { arrived: false, why } — бросок не удался.
   async function pearlUp (b, h) {
     const inv = pos[b.name]?.inv || {}, me = pos[b.name]?.p
-    if (!me || !((inv.ender_pearl || 0) > 0)) return null
+    if (!me || !((inv.ender_pearl || 0) > 0) || (pos[b.name]?.hp ?? 20) <= 10) return null
     // Неудача — для всех верхних целей с этого места (не вышел бросок к одной — к соседней на той же крыше тоже не выйдет).
     const to = { x: h.x, y: h.y, z: h.z }, key = `pearlUp:${b.name}`, sig = `${inv.ender_pearl}`
     if (blocked(b, key, sig)) return null
